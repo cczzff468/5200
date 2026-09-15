@@ -4047,3 +4047,30 @@ Stage Summary:
 - 「一行就是一条消息」：回复条数>1 时，无论 AI 用 &&& 还是换行分隔、或在一条消息里写了多行，都会被切成独立单行气泡逐条连发（各自入库、各自 createdAt、气泡间打字中+停顿节奏）；单条模式行为不变
 - 条数灵活化：提示词改为「最多 N 条、可少发、不要硬凑」，没话可说时 AI 自然少发
 - 涉及文件：src/lib/reply-count.ts、src/lib/chat-stream-store.ts、src/components/apps/{qq,wechat,chat}.tsx
+
+---
+Task ID: reply-count-sentence-pacing
+Agent: Z.ai Code (main)
+Task: 「让他一句一句的发出来」—— 修复消息划分（句末标点也是消息边界）+ 连发节奏贯穿到底（流结束后剩余消息继续逐条弹出，不再一口气全出）+ 提示词软化不硬凑条数
+
+Work Log:
+- 用户反馈：「划分有问题，实在是没话说，也不用非要发到规定的那个数字」+「让他一句一句的发出来」
+- 根因定位：①上一轮只按「&&&/换行」切分，AI 把多句话写在同一行（无标记无换行）时整段挤进一个气泡；②连发节奏器的停顿（600~1100ms）常常长于整条流的接收时长（短回复几百 ms 就收完），旧 pacer.end() 在流结束瞬间 flushAll 全部放出 —— 用户看到的是「最后一次性弹出全部」，而不是一句一句出现
+- reply-count.ts 重写三处：
+  ①消息边界扩为「&&& 标记 / 换行 / 句末标点」（BOUNDARY_SRC = &{3,}|\n|[。！？!?…]+[收尾引号括号]*）：splitReplySegments（multi）与 splitReplyRender（multi）共用 splitByBoundaryRaw —— 句末标点保留在气泡文本里（「你好！」不会丢「！」），连续标点（！！！/？！/……）算一个边界不切碎，引号收尾（他说“走吧！”）整体留在前一条；单条模式（条数=1）沿用旧行为只按 &&& 切，完全不变
+  ②createReplyPacer 重写：end() 改为返回 Promise —— 流数据接收结束后，剩余未放出的消息【继续按停顿节奏逐条完整弹出】，全部放完才 resolve；flushNext 在流结束后对无边界收尾的最后半条整体放出；immediate=true（失败路径）立刻 flush 全部；runStream 落盘收尾 await 它 —— 短回复也是一句一句出现
+  ③buildReplyCountPrompt 软化重写：「一句一条、最多 N 条」「条数只是上限、不是必须发满的目标……少发几条甚至只发一条都完全可以；千万不要硬凑条数」；删除「&&& 分隔」硬性约定（切分器仍兼容该标记）
+- chat-stream-store.ts：runStream 成功路径 await pacer.end()（节奏放完再 status done + finalize）、失败路径 await pacer.end({ immediate: true })（错误信息马上可见）；其余（退出页面继续接收、角色隔离、maxTokens 抬升）不变
+- wechat.tsx / qq.tsx / chat.tsx / chat-settings.tsx：注释同步（按边界「标记/换行/句末标点，一句一条」；ChatReplyCountPage 文案说明）
+- 逻辑验证（bun -e 内联，不留测试文件）：一行多句/&&&/换行/混合/引号收尾/连续标点/结尾无标点/无标点整段/空内容兜底/单条模式旧行为/splitReplyRender pending 与半截 && 全部 PASS；节奏器模拟（4ms/字流完 31 字）：流 124ms 结束后消息仍在 425/725/1025ms 逐条弹出、间隔>=300ms、无半截泄漏、最终完整
+- E2E（agent-browser 393×852，seed IndexedDB 小艾/晴晴 + localStorage chat-reply-counts + eval 注入 fetch stub 逐字流式返回「一行多句」回复）：
+  ①微信（条数 3）：时间线 116ms 气泡0「哟。」+打字中 → 1.8s 气泡1完整弹出 → 2.4s 气泡2 → 3.0s 收尾 saved 6→10（4 条独立消息各自 id -0..-3）；截图确认 4 个独立气泡一句一条；请求体 replyCount=3、system 含「条数只是上限…千万不要硬凑条数」
+  ②QQ（条数 5）：187ms「在忙呢。」→ 1.29s「咋啦突然想我了？」→ 2.29s 收尾落盘 3 条独立消息；replyCount=5 ✓
+  ③退出重进/刷新后消息持久化正常；console 无错误、dev.log 无应用错误（既有 /api/chat 502 为用户未配置上游 API 的预期现象，走浏览器直连兜底，与本次改动无关）；lint + tsc 0 问题
+- 测试数据仅存在于 agent-browser 隔离档案（IndexedDB/localStorage），未污染用户数据与仓库
+
+Stage Summary:
+- 一句一条：无论 AI 用 &&&、换行还是把多句话写在同一行（句末标点），回复条数>1 时都会被切成独立单句气泡，标点保留在气泡里
+- 一句一句弹出：连发节奏贯穿到流结束之后 —— 剩余消息按停顿节奏逐条【完整】弹出（打字中→弹出），短回复不再一口气全出；落盘收尾等节奏放完；失败路径立即显示
+- 不硬凑条数：提示词改弹性上限（最多 N 条、可只发一条、不要硬凑），切分按 AI 实际产出不按配置条数
+- 涉及文件：src/lib/reply-count.ts、src/lib/chat-stream-store.ts、src/components/apps/{qq,wechat,chat,chat-settings}.tsx（后四者仅注释）

@@ -5,8 +5,8 @@
  * - ChatSettingsPage：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
  *   回复条数入口（进入独立二级页 ChatReplyCountPage）、查找聊天记录入口、聊天背景入口
  *   （进入独立二级页 ChatBgPage）
- * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条，AI 按选定条数像真人一样
- *   连发多条消息（&&& 分隔标记，由 @/lib/reply-count 切分与节奏控制）
+ * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条（上限，可少发），AI 像
+ *   真人一样一句一句连发多条消息（一句一条，由 @/lib/reply-count 切分与节奏控制）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数持久化在

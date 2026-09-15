@@ -133,7 +133,8 @@ function patchState(rt: StreamRuntime, patch: Partial<ChatStreamState>): void {
 async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promise<void> {
   const { apiConfig, messages } = opts;
   const acc = () => rt.state.content;
-  // 连发节奏器（回复条数 > 1 时启用）：分隔标记后先停顿再放出下一条，流结束立刻放出全部剩余
+  // 连发节奏器（回复条数 > 1 时启用）：分隔/句末边界后先停顿再放出下一条，
+  // 流数据接收结束后剩余消息也继续按节奏逐条放出（end 返回 Promise，全部放完才 resolve）
   const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
   const pacer = multi ? createReplyPacer((shown) => patchState(rt, { content: shown })) : null;
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
@@ -191,12 +192,13 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
         onDelta(decoder.decode(value, { stream: true }));
       }
     }
-    // 流结束：节奏器立刻放出全部剩余内容（finalize 拿到的是完整内容）
-    pacer?.end();
+    // 流数据接收结束：剩余未放出的消息继续按连发节奏逐条放出（每条完整弹出、间隔停顿），
+    // 全部放完后才收尾落盘 —— 短回复也是一句一句出现，不会在流结束瞬间全部弹出
+    await pacer?.end();
     patchState(rt, { status: 'done' });
   } catch (err) {
-    // 失败同样放出已收内容（各 App 错误时按自己的文案落盘，不丢已到手的正文）
-    pacer?.end();
+    // 失败立刻放出已收内容（错误信息要马上可见；各 App 错误时按自己的文案落盘，不丢已到手的正文）
+    await pacer?.end({ immediate: true });
     patchState(rt, {
       status: 'error',
       error: err instanceof Error && err.message ? err.message : '消息没有送达，请稍后重试',
