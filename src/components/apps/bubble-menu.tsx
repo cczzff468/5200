@@ -30,6 +30,8 @@ export interface BubbleMenuItem {
   icon: LucideIcon;
   /** 危险动作（删除）红色显示 */
   danger?: boolean;
+  /** 图标填色（收藏：已收藏后五角星填满） */
+  filled?: boolean;
 }
 
 /** 三端统一的动作图标（菜单项从这里取，避免各 App 重复引图标） */
@@ -148,7 +150,7 @@ export function BubbleActionMenu({
                       i > 0 ? 'border-l border-white/10' : ''
                     } ${item.danger ? 'text-[#FF8B78]' : ''}`}
                   >
-                    <item.icon className="h-[19px] w-[19px]" strokeWidth={1.7} aria-hidden="true" />
+                    <item.icon className="h-[19px] w-[19px]" strokeWidth={1.7} fill={item.filled ? 'currentColor' : 'none'} aria-hidden="true" />
                     <span className="whitespace-nowrap text-[10.5px] leading-none">{item.label}</span>
                   </button>
                 ))}

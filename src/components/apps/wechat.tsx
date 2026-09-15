@@ -59,7 +59,7 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
-import { ForwardSheet, fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetItem, type FwdSheetTarget } from './forward-sheet';
+import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
 import {
   beginChatStream,
   clearChatStream,
@@ -213,7 +213,7 @@ interface WxMsg {
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
-  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; time: number }[] };
+  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number }[] };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -254,6 +254,12 @@ const lsMsgsKey = (contactId: string) => `wx-chat-msgs:${contactId}`;
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
+
+/** 当前正在查看的微信聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
+let wxActiveChatId: string | null = null;
+
+/** 当前正在查看的微信聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
+let wxActiveChatId: string | null = null;
 
 function loadMsgs(contactId: string): WxMsg[] {
   try {
@@ -320,6 +326,8 @@ function loadMsgs(contactId: string): WxMsg[] {
               receivedAt: typeof m.tr.receivedAt === 'number' ? m.tr.receivedAt : undefined,
               status: m.tr.status === 'returned' || m.tr.status === 'rejected' ? m.tr.status : undefined,
               cid: typeof m.tr.cid === 'string' ? m.tr.cid : undefined,
+              // 收款方向标记（详情页文案「你已收款 / ××已收款」）：必须在规范化中保留，否则落盘回读后丢失
+              receiptOf: m.tr.receiptOf === 'me' || m.tr.receiptOf === 'peer' ? m.tr.receiptOf : undefined,
             },
           };
         }
@@ -3313,6 +3321,13 @@ function ChatPage({
   useEffect(() => {
     setPendingDispatch(hasPendingBatch(sessionKey));
   }, [sessionKey]);
+  /** 登记当前正在查看的聊天：AI 回复落盘时按此决定是否计未读角标（退出聊天页后 AI 回复 → 角标 +1） */
+  useEffect(() => {
+    wxActiveChatId = peer.id;
+    return () => {
+      if (wxActiveChatId === peer.id) wxActiveChatId = null;
+    };
+  }, [peer.id]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 气泡长按菜单（微信/QQ 同款横向弹窗）：消息 + 容器内坐标 */
@@ -3325,8 +3340,9 @@ function ChatPage({
   /** 多选模式：勾选消息批量删除/转发/收藏 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  /** 转发弹层：待转发消息 id 集合（非空 = 弹层打开；弹层内可增删历史消息、选逐条/合并、选目标） */
-  const [fwdSheetIds, setFwdSheetIds] = useState<string[] | null>(null);
+  /** 转发流程：'choose'=在聊天里勾选消息（顶部计数栏 + 底部逐条/合并/取消）；'target'=选目标会话；null=未进行中 */
+  const [fwdFlow, setFwdFlow] = useState<'choose' | 'target' | null>(null);
+  const [fwdMode, setFwdMode] = useState<FwdMode>('each');
   /** 合并转发「聊天记录」卡片详情（点卡片打开） */
   const [fwdDetailId, setFwdDetailId] = useState<string | null>(null);
   /** 聊天页根元素（长按菜单定位参照） */
@@ -3566,6 +3582,8 @@ function ChatPage({
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
         saveMsgs(peer.id, [...cur, ...all]);
+        // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：回到会话列表/主屏都能看到未读角标
+        if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -3679,7 +3697,7 @@ function ChatPage({
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
-    items.push({ key: 'fav', label: isMsgFavorited('wx', m.id) ? '已收藏' : '收藏', icon: B.fav });
+    items.push({ key: 'fav', label: isMsgFavorited('wx', m.id) ? '已收藏' : '收藏', icon: B.fav, filled: isMsgFavorited('wx', m.id) });
     if (m.role === 'peer') items.push({ key: 'regen', label: '重新生成', icon: B.regen });
     return items;
   };
@@ -3694,10 +3712,11 @@ function ChatPage({
     setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
   }, !selectMode);
 
-  /** 退出多选模式 */
+  /** 退出多选模式（同时退出转发流程） */
   const exitSelect = useCallback(() => {
     setSelectMode(false);
     setSelectedIds([]);
+    setFwdFlow(null);
   }, []);
 
   const toggleSelect = (id: string) =>
@@ -3758,23 +3777,6 @@ function ChatPage({
     return self ? [self, ...list] : list;
   }, [contacts, peer.id, me.id]);
 
-  /** 转发弹层条目（全部可选历史消息：我的 + 对方的） */
-  const fwdSheetItems: FwdSheetItem[] = useMemo(
-    () =>
-      msgs
-        .filter((m) => isSelectable(m))
-        .map((m) => ({
-          id: m.id,
-          role: m.role,
-          name: m.role === 'me' ? me.name : peer.name,
-          time: m.time,
-          text: quoteContentOf(m),
-          imgSrc: m.kind === 'image' ? m.img?.src : undefined,
-          stkUrl: m.kind === 'sticker' ? m.stk?.url : undefined,
-        })),
-    [msgs, me.name, peer.name]
-  );
-
   /** 执行转发（逐条/合并）：写入目标会话存储 + 未读角标 + 给目标 AI 排感知事件（打开会话即触发 AI 回应） */
   const doForward = (mode: FwdMode, ids: string[], target: FwdSheetTarget) => {
     const list = msgs.filter((m) => ids.includes(m.id));
@@ -3796,7 +3798,13 @@ function ChatPage({
           from: peer.name,
           merged: true,
           title,
-          records: list.map((m) => ({ name: nameOf(m), role: m.role, text: quoteContentOf(m), time: m.time })),
+          records: list.map((m) => ({
+            name: nameOf(m),
+            role: m.role,
+            text: quoteContentOf(m),
+            quote: m.quote ? `${m.quote.name}：${m.quote.content}` : undefined,
+            time: m.time,
+          })),
         },
       };
       saveMsgs(target.id, [...loadMsgs(target.id), card]);
@@ -3809,8 +3817,8 @@ function ChatPage({
         `（系统事件：用户把来自「${peer.name}」聊天记录的 ${list.length} 条消息${mode === 'merge' ? '合并转发' : '逐条转发'}给你了：${lines}。请用符合人设的一两句话自然回应这条转发。）`
       );
     }
-    setFwdSheetIds(null);
-    if (selectMode) exitSelect();
+    setFwdFlow(null);
+    exitSelect();
     onToast(target.id === me.id ? '已转发给自己' : `已转发给 ${target.name}`);
   };
 
@@ -3853,7 +3861,10 @@ function ChatPage({
         break;
       }
       case 'forward':
-        setFwdSheetIds([m.id]);
+        // 与原生微信一致：转发 → 进入聊天内多选勾选（该条预选），底部出现 逐条/合并/取消
+        setSelectMode(true);
+        setSelectedIds([m.id]);
+        setFwdFlow('choose');
         break;
       case 'fav':
         if (isMsgFavorited('wx', m.id)) {
@@ -3914,10 +3925,10 @@ function ChatPage({
     exitSelect();
   };
 
-  /** 多选批量转发（打开转发弹层，可继续增删、选逐条/合并） */
+  /** 多选批量转发（进入聊天内勾选模式，可继续增删、选逐条/合并） */
   const batchForward = () => {
     if (selectedIds.length === 0) return;
-    setFwdSheetIds(selectedIds);
+    setFwdFlow('choose');
   };
 
   const selfChat = peer.id === me.id;
@@ -4203,6 +4214,31 @@ function ChatPage({
       {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏 */}
       <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
         {selectMode ? (
+          fwdFlow === 'choose' ? (
+            /* 转发勾选模式顶栏（对照原生微信多选转发：取消 + 已选择计数 + 搜索） */
+            <div className="flex h-11 items-center px-2">
+              <button
+                type="button"
+                data-testid="wx-select-cancel"
+                onClick={exitSelect}
+                className="flex items-center px-1 text-[16px] active:opacity-50"
+              >
+                取消
+              </button>
+              <div className="flex flex-1 items-center justify-center">
+                <span data-testid="wx-select-count" className="text-[17px] font-medium">已选择 {selectedIds.length} 条消息</span>
+              </div>
+              <button
+                type="button"
+                aria-label="搜索"
+                data-testid="wx-fwd-search"
+                onClick={() => onToast('搜索转发消息暂未开放')}
+                className="flex w-[68px] justify-end px-2 active:opacity-50"
+              >
+                <Search className="h-[19px] w-[19px]" strokeWidth={2} />
+              </button>
+            </div>
+          ) : (
           <div className="flex h-11 items-center px-2">
             <button
               type="button"
@@ -4217,6 +4253,7 @@ function ChatPage({
             </div>
             <div className="w-[68px]" />
           </div>
+          )
         ) : (
         <div className="flex h-11 items-center px-2">
           <button
@@ -4298,11 +4335,13 @@ function ChatPage({
             ) : (
             <div className={`flex items-start gap-2 py-1.5 ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
               {selectMode && isSelectable(m) && (
-                /* 多选模式勾选圈（我的消息在行右侧、对方在行左侧） */
+                /* 多选模式勾选圈（我的消息在行右侧、对方在行左侧；转发勾选模式全部放左侧，对照原生微信） */
                 <span
                   aria-hidden="true"
                   data-testid={`wx-select-${m.id}`}
                   className={`mt-2 flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full border ${
+                    fwdFlow === 'choose' && m.role === 'me' ? 'order-last' : ''
+                  } ${
                     selectedIds.includes(m.id) ? 'border-[#07C160] bg-[#07C160] text-white' : 'border-black/25 dark:border-white/35'
                   }`}
                 >
@@ -4372,18 +4411,14 @@ function ChatPage({
                   />
                 </div>
               ) : m.kind === 'forward' && m.fwd?.merged ? (
-                /* 合并转发「聊天记录」卡片：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
+                /* 合并转发「聊天记录」卡片（原生微信同款：两面都白底）：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
                 <div
                   {...bubblePress}
                   data-testid="wx-forward-bubble"
                   onClick={() => {
                     if (!selectMode) setFwdDetailId(m.id);
                   }}
-                  className={`relative w-fit max-w-[calc(100%-92px)] select-none rounded-[5px] px-3 py-2 ${
-                    m.role === 'me'
-                      ? 'bg-[#95EC69] text-black dark:bg-[#3EB575]'
-                      : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
-                  }`}
+                  className="relative w-fit max-w-[calc(100%-92px)] select-none rounded-[5px] bg-white px-3 py-2 text-black dark:bg-[#1E1E1E] dark:text-white"
                 >
                   <p className="text-[15.5px] font-semibold leading-[1.35]">{m.fwd.title ?? m.content}</p>
                   <div className="mt-1 space-y-[1px] text-[13.5px] leading-[1.5] text-black/55 dark:text-white/60">
@@ -4518,6 +4553,47 @@ function ChatPage({
       {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方）；多选模式下变为批量删除/转发/收藏操作栏 */}
       <div className="relative z-10 shrink-0 bg-[#EDEDED] dark:bg-[#111111]">
         {selectMode ? (
+          fwdFlow === 'choose' ? (
+            /* 转发勾选模式底栏（对照原生微信：逐条转发 / 合并转发 / 取消 三行全宽白底） */
+            <div className="overflow-hidden rounded-t-[14px] bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.08)] dark:bg-[#2C2C2C]" data-testid="wx-fwd-choose-bar">
+              <button
+                type="button"
+                data-testid="wx-fwd-each"
+                disabled={selectedIds.length === 0}
+                onClick={() => {
+                  setFwdMode('each');
+                  setFwdFlow('target');
+                }}
+                className={`w-full py-[15px] text-center text-[17px] ${
+                  selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-black active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+                }`}
+              >
+                逐条转发
+              </button>
+              <button
+                type="button"
+                data-testid="wx-fwd-merge"
+                disabled={selectedIds.length === 0}
+                onClick={() => {
+                  setFwdMode('merge');
+                  setFwdFlow('target');
+                }}
+                className={`w-full border-t border-black/[0.06] py-[15px] text-center text-[17px] dark:border-white/[0.08] ${
+                  selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-black active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+                }`}
+              >
+                合并转发
+              </button>
+              <button
+                type="button"
+                data-testid="wx-fwd-cancel"
+                onClick={exitSelect}
+                className="w-full border-t border-black/[0.06] bg-[#F7F7F7] py-[15px] text-center text-[17px] text-black active:bg-black/[0.04] dark:border-white/[0.08] dark:bg-[#242424] dark:text-white dark:active:bg-white/[0.06]"
+              >
+                取消
+              </button>
+            </div>
+          ) : (
           <div className="flex items-center justify-around px-6 pb-[26px] pt-3" data-testid="wx-select-bar">
             <button
               type="button"
@@ -4550,6 +4626,7 @@ function ChatPage({
               收藏
             </button>
           </div>
+          )
         ) : (
         <>
         {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
@@ -4836,12 +4913,15 @@ function ChatPage({
           received={detailMsg.tr.received}
           receivedAt={detailMsg.tr.receivedAt}
           receiverIsMe={(() => {
-            // 收款人是否为「我」：receiptOf 精准标记优先；旧数据按角色兑底——
-            // 我的卡片（receiptOf 缺失）只会是「我发出的原卡（对方收）」；对方卡片且已收款的只会是「我收的旧凭据」
+            // 收款人是否为「我」：receiptOf 精准标记优先；
+            // 旧数据（receiptOf 被旧版规范化丢弃）兑底：对方已收款卡片，若此前有我发的同额同言且已收款的转账 →
+            // 它是 AI 收我转账后生成的「已收款」接收凭据卡（对方收）；否则是 AI 发给我的原卡被我收（我收）
             const t = detailMsg.tr;
             if (t.receiptOf) return t.receiptOf === 'peer';
             if (detailMsg.role === 'me') return false;
-            return t.received === true;
+            if (t.received !== true) return false;
+            const idx = msgs.findIndex((x) => x.id === detailMsg.id);
+            return !msgs.slice(0, Math.max(idx, 0)).some((x) => x.role === 'me' && x.tr && x.tr.received === true && x.tr.amount === t.amount && (x.tr.note || '') === (t.note || ''));
           })()}
           onBack={() => setDetailId(null)}
           onToast={onToast}
@@ -4940,17 +5020,40 @@ function ChatPage({
         </div>
       )}
 
-      {/* 转发弹层（长按菜单「转发」/多选批量转发）：勾选历史消息 → 逐条/合并 → 选目标 */}
-      {fwdSheetIds && (
-        <ForwardSheet
-          items={fwdSheetItems}
-          initialIds={fwdSheetIds}
-          targets={forwardTargets.map((c) => ({ id: c.id, name: c.name, avatar: c.avatar, self: c.id === me.id }))}
-          onExecute={doForward}
-          onClose={() => setFwdSheetIds(null)}
-          testPrefix="wx-fwd"
-          renderAvatar={(src, name, size) => <WxAvatar src={src} alt={name} size={size} />}
-        />
+      {/* 转发目标选择（转发流程第二步：聊天内勾选完 → 逐条/合并 → 选会话；对照原生微信选人页） */}
+      {fwdFlow === 'target' && (
+        <div
+          className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/40"
+          data-testid="wx-fwd-target-layer"
+        >
+          <div className="mx-2 mb-3 overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#1E1E1E]" onClick={(e) => e.stopPropagation()}>
+            <p className="border-b border-black/[0.06] py-3 text-center text-[15px] font-medium dark:border-white/[0.08]">
+              {fwdMode === 'merge' ? '合并转发给' : '逐条转发给'}
+            </p>
+            <div className="max-h-[46vh] overflow-y-auto">
+              {forwardTargets.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`wx-fwd-target-${c.id}`}
+                  onClick={() => doForward(fwdMode, selectedIds, { id: c.id, name: c.name, avatar: c.avatar, self: c.id === me.id })}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <WxAvatar src={c.avatar} alt={c.name} size={38} />
+                  <span className="min-w-0 flex-1 truncate text-[15.5px]">{c.id === me.id ? `${c.name}（我自己）` : c.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              data-testid="wx-fwd-back"
+              onClick={() => setFwdFlow('choose')}
+              className="w-full border-t border-black/[0.06] py-3 text-center text-[15px] text-black/55 active:bg-black/5 dark:border-white/[0.08] dark:text-white/55 dark:active:bg-white/10"
+            >
+              上一步
+            </button>
+          </div>
+        </div>
       )}
 
       {/* 合并转发「聊天记录」详情页（点卡片打开；对照微信合并转发详情） */}
@@ -4972,13 +5075,19 @@ function ChatPage({
               <p className="py-3 text-center text-[13px] text-black/40 dark:text-white/40">{fwdRecordDate(records[0]?.time ?? d.time)}</p>
               <div className="space-y-4">
                 {records.map((r, i) => (
-                  <div key={i} className={`flex items-start gap-2 ${r.role === 'me' ? 'flex-row-reverse' : ''}`}>
+                  <div key={i} className="flex items-start gap-2">
                     <WxAvatar src={r.role === 'me' ? me.avatar : peer.avatar} alt={r.name} size={34} />
-                    <div className={`min-w-0 max-w-[70%] ${r.role === 'me' ? 'items-end text-right' : ''} flex flex-col`}>
-                      <p className="mb-0.5 text-[11.5px] text-black/40 dark:text-white/40">{r.name}</p>
+                    <div className="min-w-0 flex-1">
+                      {/* 名字在左、时间顶到最右（对照原生微信聊天记录详情） */}
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="truncate text-[11.5px] text-black/40 dark:text-white/40">{r.name}</p>
+                        <span className="shrink-0 text-[10.5px] text-black/30 dark:text-white/30">{fwdRecordTime(r.time)}</span>
+                      </div>
                       <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.4]">{r.text}</p>
+                      {r.quote && (
+                        <p className="mt-0.5 line-clamp-2 border-l-2 border-black/15 pl-1.5 text-[12px] leading-[1.35] text-black/45 dark:border-white/20 dark:text-white/50">{r.quote}</p>
+                      )}
                     </div>
-                    <span className="mt-0.5 shrink-0 text-[10.5px] text-black/30 dark:text-white/30">{fwdRecordTime(r.time)}</span>
                   </div>
                 ))}
               </div>

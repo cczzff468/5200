@@ -173,7 +173,7 @@ import {
 } from './chat-settings';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, type MsgFavorite } from '@/lib/msg-favorites';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
-import { ForwardSheet, fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetItem, type FwdSheetTarget } from './forward-sheet';
+import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -208,7 +208,7 @@ interface QQMsg {
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
-  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; time: number }[] };
+  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number }[] };
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -535,6 +535,9 @@ function uid(): string {
 function nextCid(prefix: 'rp' | 'tr' | 'fam'): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
 }
+
+/** 当前正在查看的 QQ 聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
+let qqActiveChatId: string | null = null;
 
 function loadMsgs(contactId: string): QQMsg[] {
   try {
@@ -1799,6 +1802,13 @@ function ChatPage({
   useEffect(() => {
     setPendingDispatch(hasPendingBatch(sessionKey));
   }, [sessionKey]);
+  /** 登记当前正在查看的聊天：AI 回复落盘时按此决定是否计未读角标（退出聊天页后 AI 回复 → 角标 +1） */
+  useEffect(() => {
+    qqActiveChatId = peer.id;
+    return () => {
+      if (qqActiveChatId === peer.id) qqActiveChatId = null;
+    };
+  }, [peer.id]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 气泡长按菜单（横向弹窗）：消息 + 容器内坐标 */
@@ -1811,8 +1821,9 @@ function ChatPage({
   /** 多选模式：勾选消息批量删除/转发/收藏 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  /** 转发：待转发消息 id 集合（非空 = 弹层打开；弹层内可增删历史消息、选逐条/合并、选目标） */
-  const [fwdSheetIds, setFwdSheetIds] = useState<string[] | null>(null);
+  /** 转发流程：'choose'=在聊天里勾选消息（顶部计数栏 + 底部逐条/合并/取消）；'target'=选目标会话；null=未进行中 */
+  const [fwdFlow, setFwdFlow] = useState<'choose' | 'target' | null>(null);
+  const [fwdMode, setFwdMode] = useState<FwdMode>('each');
   /** 合并转发「聊天记录」卡片详情（点卡片打开） */
   const [fwdDetailId, setFwdDetailId] = useState<string | null>(null);
   /** 聊天页根元素（长按菜单定位参照） */
@@ -2301,7 +2312,7 @@ function ChatPage({
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
-    items.push({ key: 'fav', label: isMsgFavorited('qq', m.id) ? '已收藏' : '收藏', icon: B.fav });
+    items.push({ key: 'fav', label: isMsgFavorited('qq', m.id) ? '已收藏' : '收藏', icon: B.fav, filled: isMsgFavorited('qq', m.id) });
     if (m.role === 'peer') items.push({ key: 'regen', label: '重新生成', icon: B.regen });
     return items;
   };
@@ -2316,10 +2327,11 @@ function ChatPage({
     setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
   }, !selectMode);
 
-  /** 退出多选模式 */
+  /** 退出多选模式（同时退出转发流程） */
   const exitSelect = useCallback(() => {
     setSelectMode(false);
     setSelectedIds([]);
+    setFwdFlow(null);
   }, []);
 
   const toggleSelect = (id: string) =>
@@ -2380,22 +2392,6 @@ function ChatPage({
     return self ? [self, ...list] : list;
   }, [contacts, peer.id, me.id]);
 
-  /** 转发弹层条目（全部可选历史消息：我的 + 对方的） */
-  const fwdSheetItems: FwdSheetItem[] = useMemo(
-    () =>
-      msgs
-        .filter((m) => isSelectable(m))
-        .map((m) => ({
-          id: m.id,
-          role: m.role,
-          name: m.role === 'me' ? me.name : peer.name,
-          time: m.time,
-          text: quoteContentOf(m),
-          imgSrc: m.kind === 'image' ? m.content : undefined,
-          stkUrl: m.kind === 'sticker' ? m.stk?.url : undefined,
-        })),
-    [msgs, me.name, peer.name]
-  );
 
   /** 执行转发（逐条/合并）：写入目标会话存储 + 未读角标 + 给目标 AI 排感知事件（打开会话即触发 AI 回应） */
   const doForward = (mode: FwdMode, ids: string[], target: FwdSheetTarget) => {
@@ -2418,7 +2414,13 @@ function ChatPage({
           from: peer.name,
           merged: true,
           title,
-          records: list.map((m) => ({ name: nameOf(m), role: m.role, text: quoteContentOf(m), time: m.time })),
+          records: list.map((m) => ({
+            name: nameOf(m),
+            role: m.role,
+            text: quoteContentOf(m),
+            quote: m.quote ? `${m.quote.name}：${m.quote.content}` : undefined,
+            time: m.time,
+          })),
         },
       };
       saveMsgs(target.id, [...loadMsgs(target.id), card]);
@@ -2431,8 +2433,8 @@ function ChatPage({
         `（系统事件：用户把来自「${peer.name}」聊天记录的 ${list.length} 条消息${mode === 'merge' ? '合并转发' : '逐条转发'}给你了：${lines}。请用符合人设的一两句话自然回应这条转发。）`
       );
     }
-    setFwdSheetIds(null);
-    if (selectMode) exitSelect();
+    setFwdFlow(null);
+    exitSelect();
     onToast(target.id === me.id ? '已转发给自己' : `已转发给 ${target.name}`);
   };
 
@@ -2475,7 +2477,10 @@ function ChatPage({
         break;
       }
       case 'forward':
-        setFwdSheetIds([m.id]);
+        // 与原生 QQ 一致：转发 → 进入聊天内多选勾选（该条预选），底部出现 逐条/合并/取消
+        setSelectMode(true);
+        setSelectedIds([m.id]);
+        setFwdFlow('choose');
         break;
       case 'fav':
         if (isMsgFavorited('qq', m.id)) {
@@ -2536,10 +2541,10 @@ function ChatPage({
     exitSelect();
   };
 
-  /** 多选批量转发（打开转发弹层，可继续增删、选逐条/合并） */
+  /** 多选批量转发（进入聊天内勾选模式，可继续增删、选逐条/合并） */
   const batchForward = () => {
     if (selectedIds.length === 0) return;
-    setFwdSheetIds(selectedIds);
+    setFwdFlow('choose');
   };
 
   /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；自己会话除外） */
@@ -2697,6 +2702,17 @@ function ChatPage({
           多选模式下变为「取消 + 已选计数」操作栏 */}
       <div className="relative z-10 shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
         {selectMode ? (
+          fwdFlow === 'choose' ? (
+            /* 转发勾选模式顶栏：取消 + 已选择计数（对照原生） */
+            <div className="flex h-12 items-center gap-1 px-3">
+              <button type="button" data-testid="qq-select-cancel" onClick={exitSelect} className="-ml-1 rounded-full p-1.5 text-[15px] active:bg-black/5">
+                取消
+              </button>
+              <div className="ml-1 min-w-0 flex-1">
+                <span data-testid="qq-select-count" className="text-[17px] font-semibold leading-tight">已选择 {selectedIds.length} 条消息</span>
+              </div>
+            </div>
+          ) : (
           <div className="flex h-12 items-center gap-1 px-3">
             <button type="button" data-testid="qq-select-cancel" onClick={exitSelect} className="-ml-1 rounded-full p-1.5 text-[15px] active:bg-black/5">
               取消
@@ -2705,6 +2721,7 @@ function ChatPage({
               <span data-testid="qq-select-count" className="text-[17px] font-semibold leading-tight">已选 {selectedIds.length} 条消息</span>
             </div>
           </div>
+          )
         ) : (
         <div className="flex h-12 items-center gap-1 px-3">
         <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
@@ -2869,18 +2886,17 @@ function ChatPage({
                     </button>
                   </div>
                 ) : m.kind === 'forward' && m.fwd?.merged ? (
-                  /* 合并转发「聊天记录」卡片：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
+                  /* 合并转发「聊天记录」卡片（原生同款：两面都白底）：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
                   <div
                     {...bubblePress}
                     data-testid="qq-forward-bubble"
                     onClick={() => {
                       if (!selectMode) setFwdDetailId(m.id);
                     }}
-                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] px-3.5 py-[9px] text-white"
-                    style={{ backgroundColor: '#0099FF' }}
+                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
                   >
                     <p className="text-[15.5px] font-semibold leading-[1.35]">{m.fwd.title ?? m.content}</p>
-                    <div className="mt-1 space-y-[1px] text-[13.5px] leading-[1.5] text-white/80">
+                    <div className="mt-1 space-y-[1px] text-[13.5px] leading-[1.5] text-[#1F2329]/55 dark:text-white/60">
                       {(m.fwd.records ?? []).slice(0, 4).map((r, i) => (
                         <p key={i} className="break-all">
                           {r.name}：{r.text}
@@ -2888,7 +2904,7 @@ function ChatPage({
                       ))}
                       {(m.fwd.records?.length ?? 0) > 4 && <p>…</p>}
                     </div>
-                    <p className="mt-2 border-t border-white/20 pt-1.5 text-[11px] text-white/65">聊天记录</p>
+                    <p className="mt-2 border-t border-black/10 pt-1.5 text-[11px] text-black/40 dark:border-white/15 dark:text-white/45">聊天记录</p>
                   </div>
                 ) : m.kind === 'forward' && m.fwd ? (
                   /* 转发卡片：内嵌原消息内容 + 「转发自」来源说明 */
@@ -2947,11 +2963,13 @@ function ChatPage({
                 )}
                 {mine && <QqAvatar src={me.avatar} alt={me.name} size={40} />}
                 {selectMode && isSelectable(m) && mine && (
-                  /* 多选模式勾选圈（我的消息在行右侧） */
+                  /* 多选模式勾选圈（我的消息在行右侧；转发勾选模式移到最左侧，对照原生） */
                   <span
                     aria-hidden="true"
                     data-testid={`qq-select-${m.id}`}
                     className={`grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                      fwdFlow === 'choose' ? 'order-first' : ''
+                    } ${
                       selectedIds.includes(m.id) ? 'border-[#0099FF] bg-[#0099FF] text-white' : 'border-black/25 dark:border-white/35'
                     }`}
                   >
@@ -3008,6 +3026,47 @@ function ChatPage({
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮）；多选模式下变为批量操作栏 */}
       <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
         {selectMode ? (
+          fwdFlow === 'choose' ? (
+            /* 转发勾选模式底栏：逐条转发 / 合并转发 / 取消 三行全宽白底 */
+            <div className="overflow-hidden rounded-t-[14px] bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.08)] dark:bg-[#2C2C2C]" data-testid="qq-fwd-choose-bar">
+              <button
+                type="button"
+                data-testid="qq-fwd-each"
+                disabled={selectedIds.length === 0}
+                onClick={() => {
+                  setFwdMode('each');
+                  setFwdFlow('target');
+                }}
+                className={`w-full py-[15px] text-center text-[17px] ${
+                  selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-[#1F2329] active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+                }`}
+              >
+                逐条转发
+              </button>
+              <button
+                type="button"
+                data-testid="qq-fwd-merge"
+                disabled={selectedIds.length === 0}
+                onClick={() => {
+                  setFwdMode('merge');
+                  setFwdFlow('target');
+                }}
+                className={`w-full border-t border-black/[0.06] py-[15px] text-center text-[17px] dark:border-white/[0.08] ${
+                  selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-[#1F2329] active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+                }`}
+              >
+                合并转发
+              </button>
+              <button
+                type="button"
+                data-testid="qq-fwd-cancel"
+                onClick={exitSelect}
+                className="w-full border-t border-black/[0.06] bg-[#F7F7F7] py-[15px] text-center text-[17px] text-[#1F2329] active:bg-black/[0.04] dark:border-white/[0.08] dark:bg-[#242424] dark:text-white dark:active:bg-white/[0.06]"
+              >
+                取消
+              </button>
+            </div>
+          ) : (
           <div className="flex items-center justify-around px-6 pb-[22px] pt-3" data-testid="qq-select-bar">
             <button
               type="button"
@@ -3040,6 +3099,7 @@ function ChatPage({
               收藏
             </button>
           </div>
+          )
         ) : (
         <>
         {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
@@ -3486,17 +3546,37 @@ function ChatPage({
         </div>
       )}
 
-      {/* 转发弹层（长按菜单「转发」/多选批量转发）：勾选历史消息 → 逐条/合并 → 选目标 */}
-      {fwdSheetIds && (
-        <ForwardSheet
-          items={fwdSheetItems}
-          initialIds={fwdSheetIds}
-          targets={forwardTargets.map((c) => ({ id: c.id, name: c.name, avatar: c.avatar, self: c.id === me.id }))}
-          onExecute={doForward}
-          onClose={() => setFwdSheetIds(null)}
-          testPrefix="qq-fwd"
-          renderAvatar={(src, name, size) => <QqAvatar src={src} alt={name} size={size} />}
-        />
+      {/* 转发目标选择（转发流程第二步：聊天内勾选完 → 逐条/合并 → 选会话） */}
+      {fwdFlow === 'target' && (
+        <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/40" data-testid="qq-fwd-target-layer">
+          <div className="mx-2 mb-3 overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#1E1E1E]" onClick={(e) => e.stopPropagation()}>
+            <p className="border-b border-black/[0.06] py-3 text-center text-[15px] font-medium dark:border-white/[0.08]">
+              {fwdMode === 'merge' ? '合并转发给' : '逐条转发给'}
+            </p>
+            <div className="max-h-[46vh] overflow-y-auto">
+              {forwardTargets.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`qq-fwd-target-${c.id}`}
+                  onClick={() => doForward(fwdMode, selectedIds, { id: c.id, name: c.name, avatar: c.avatar, self: c.id === me.id })}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <QqAvatar src={c.avatar} alt={c.name} size={38} />
+                  <span className="min-w-0 flex-1 truncate text-[15.5px]">{c.id === me.id ? `${c.name}（我自己）` : c.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              data-testid="qq-fwd-back"
+              onClick={() => setFwdFlow('choose')}
+              className="w-full border-t border-black/[0.06] py-3 text-center text-[15px] text-black/55 active:bg-black/5 dark:border-white/[0.08] dark:text-white/55 dark:active:bg-white/10"
+            >
+              上一步
+            </button>
+          </div>
+        </div>
       )}
 
       {/* 合并转发「聊天记录」详情页（点卡片打开） */}
@@ -3518,13 +3598,19 @@ function ChatPage({
               <p className="py-3 text-center text-[13px] text-black/40 dark:text-white/40">{fwdRecordDate(records[0]?.time ?? d.time)}</p>
               <div className="space-y-4">
                 {records.map((r, i) => (
-                  <div key={i} className={`flex items-start gap-2 ${r.role === 'me' ? 'flex-row-reverse' : ''}`}>
+                  <div key={i} className="flex items-start gap-2">
                     <QqAvatar src={r.role === 'me' ? me.avatar : peer.avatar} alt={r.name} size={34} />
-                    <div className={`flex min-w-0 max-w-[70%] flex-col ${r.role === 'me' ? 'items-end text-right' : ''}`}>
-                      <p className="mb-0.5 text-[11.5px] text-black/40 dark:text-white/40">{r.name}</p>
+                    <div className="min-w-0 flex-1">
+                      {/* 名字在左、时间顶到最右 */}
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="truncate text-[11.5px] text-black/40 dark:text-white/40">{r.name}</p>
+                        <span className="shrink-0 text-[10.5px] text-black/30 dark:text-white/30">{fwdRecordTime(r.time)}</span>
+                      </div>
                       <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.4]">{r.text}</p>
+                      {r.quote && (
+                        <p className="mt-0.5 line-clamp-2 border-l-2 border-black/15 pl-1.5 text-[12px] leading-[1.35] text-black/45 dark:border-white/20 dark:text-white/50">{r.quote}</p>
+                      )}
                     </div>
-                    <span className="mt-0.5 shrink-0 text-[10.5px] text-black/30 dark:text-white/30">{fwdRecordTime(r.time)}</span>
                   </div>
                 ))}
               </div>
