@@ -72,6 +72,7 @@ import type { Sticker } from '@/lib/ios/stickers';
 import { useUnreadMap, wxUnreads as wxUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, wxChatFlags as wxChatFlagsStore } from '@/lib/chat-flags';
 import {
+  ChatBgPage,
   ChatSearchPage,
   ChatSettingsPage,
   chatBgLayerStyle,
@@ -2827,6 +2828,8 @@ function ChatPage({
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 查找聊天记录页 */
   const [searchOpen, setSearchOpen] = useState(false);
+  /** 聊天背景页（设置页「聊天背景」进入的独立二级页） */
+  const [bgOpen, setBgOpen] = useState(false);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
@@ -3228,8 +3231,15 @@ function ChatPage({
               {otherUnread > 99 ? '99+' : otherUnread}
             </span>
           )}
-          <div className="flex-1 truncate text-center text-[17px] font-medium" data-testid="wx-chat-peer-name">
-            {streaming ? '正在输入中…' : peer.name}
+          <div className="flex flex-1 items-center justify-center gap-1.5" data-testid="wx-chat-peer-name">
+            <span className="truncate text-[17px] font-medium">{streaming ? '正在输入中…' : peer.name}</span>
+            {flags.muted === true && (
+              <BellOff
+                className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                strokeWidth={2}
+                aria-label="消息免打扰"
+              />
+            )}
           </div>
           <button
             type="button"
@@ -3490,11 +3500,22 @@ function ChatPage({
           muted={flags.muted === true}
           bg={bg}
           bgImageUrl={bgImageUrl}
-          uploading={uploadingBg}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => wxChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
           onOpenSearch={() => setSearchOpen(true)}
+          onOpenBg={() => setBgOpen(true)}
+        />
+      )}
+
+      {/* 聊天背景页（聊天设置二级页）：预览卡片 + 从手机相册上传 + 内置纯色壁纸 */}
+      {bgOpen && (
+        <ChatBgPage
+          variant="wx"
+          bg={bg}
+          bgImageUrl={bgImageUrl}
+          uploading={uploadingBg}
+          onBack={() => setBgOpen(false)}
           onPickColor={handlePickBgColor}
           onPickImageFile={(f) => void handleUploadBg(f)}
           onResetBg={handleResetBg}

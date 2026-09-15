@@ -1,15 +1,16 @@
 'use client';
 
 /**
- * 聊天设置页 + 查找聊天记录页（微信 / QQ 共用，variant 区分主题）：
+ * 聊天设置页 + 聊天背景页 + 查找聊天记录页（微信 / QQ 共用，variant 区分主题）：
  * - ChatSettingsPage：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
- *   查找聊天记录入口、聊天背景（预览卡片 + 从手机相册上传 + 内置纯色壁纸）
+ *   查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
+ * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），背景图片本体在
  *   IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { BellOff, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Pin, Search } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 
 export type ChatSettingsVariant = 'wx' | 'qq';
@@ -110,14 +111,11 @@ export function ChatSettingsPage({
   muted,
   bg,
   bgImageUrl,
-  uploading,
   onBack,
   onTogglePinned,
   onToggleMuted,
   onOpenSearch,
-  onPickColor,
-  onPickImageFile,
-  onResetBg,
+  onOpenBg,
 }: {
   variant: ChatSettingsVariant;
   /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
@@ -132,18 +130,14 @@ export function ChatSettingsPage({
   pinned: boolean;
   muted: boolean;
   bg: ChatSettingsBg;
-  /** mode === 'image' 时已加载的图片 data URL（未加载完为 null） */
+  /** mode === 'image' 时已加载的图片 data URL（未加载完为 null；入口行迷你预览用） */
   bgImageUrl: string | null;
-  uploading: boolean;
   onBack: () => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
   onOpenSearch: () => void;
-  onPickColor: (color: string) => void;
-  onPickImageFile: (file: File) => void;
-  onResetBg: () => void;
+  onOpenBg: () => void;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
   const wx = variant === 'wx';
 
   // 主题 token（微信灰白 / QQ 冷灰白）
@@ -153,14 +147,12 @@ export function ChatSettingsPage({
   const rowCls = wx
     ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
     : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
-  const accent = wx ? '#07C160' : '#26C84D';
+  // 开关选中色：微信绿 / QQ 蓝
+  const accent = wx ? '#07C160' : '#0099FF';
   const defaultBg = wx ? WX_CHAT_BG_DEFAULT : QQ_CHAT_BG_DEFAULT;
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
   const headerH = wx ? 'h-11' : 'h-12';
   const testPrefix = variant;
-
-  // 「默认」色块当前选中 = 背景为默认模式
-  const isDefault = bg.mode === 'default';
 
   return (
     <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
@@ -195,13 +187,10 @@ export function ChatSettingsPage({
           </div>
         </div>
 
-        {/* 置顶 / 免打扰开关 */}
+        {/* 置顶 / 免打扰开关（纯文字行，无图标） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
           <div className={`flex items-center justify-between ${rowCls}`}>
-            <span className="flex items-center gap-2.5">
-              <Pin className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-              置顶聊天
-            </span>
+            <span>置顶聊天</span>
             <ChatToggle
               on={pinned}
               onChange={onTogglePinned}
@@ -212,10 +201,7 @@ export function ChatSettingsPage({
           </div>
           <div className={`border-t ${dividerCls}`} />
           <div className={`flex items-center justify-between ${rowCls}`}>
-            <span className="flex items-center gap-2.5">
-              <BellOff className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-              消息免打扰
-            </span>
+            <span>消息免打扰</span>
             <ChatToggle
               on={muted}
               onChange={onToggleMuted}
@@ -237,10 +223,84 @@ export function ChatSettingsPage({
           </button>
         </div>
 
-        {/* 聊天背景 */}
-        <p className="px-1 pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">聊天背景</p>
+        {/* 聊天背景：二级页入口行（右侧当前背景迷你预览） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <button type="button" data-testid={`${testPrefix}-settings-bg`} onClick={onOpenBg} className={rowCls}>
+            <span>聊天背景</span>
+            <span className="flex shrink-0 items-center gap-2">
+              <span
+                aria-hidden="true"
+                className="h-[22px] w-[22px] rounded-[5px] border border-black/10 bg-cover bg-center dark:border-white/15"
+                style={chatBgLayerStyle(bg, bgImageUrl) ?? { backgroundColor: defaultBg }}
+              />
+              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 聊天背景页（聊天设置二级页）：顶部预览卡片 → 从手机相册上传 → 内置纯色壁纸 */
+
+export function ChatBgPage({
+  variant,
+  bg,
+  bgImageUrl,
+  uploading,
+  onBack,
+  onPickColor,
+  onPickImageFile,
+  onResetBg,
+}: {
+  variant: ChatSettingsVariant;
+  bg: ChatSettingsBg;
+  /** mode === 'image' 时已加载的图片 data URL（未加载完为 null） */
+  bgImageUrl: string | null;
+  uploading: boolean;
+  onBack: () => void;
+  onPickColor: (color: string) => void;
+  onPickImageFile: (file: File) => void;
+  onResetBg: () => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const wx = variant === 'wx';
+
+  // 主题 token（与 ChatSettingsPage 一致）
+  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  // 选中/勾色：微信绿 / QQ 蓝
+  const accent = wx ? '#07C160' : '#0099FF';
+  const defaultBg = wx ? WX_CHAT_BG_DEFAULT : QQ_CHAT_BG_DEFAULT;
+  const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
+  const headerH = wx ? 'h-11' : 'h-12';
+  const testPrefix = variant;
+
+  // 「默认」色块当前选中 = 背景为默认模式
+  const isDefault = bg.mode === 'default';
+
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className={`flex ${headerH} items-center px-2`}>
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid={`${testPrefix}-bg-page-back`}
+            onClick={onBack}
+            className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}
+          >
+            <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+          </button>
+          <div className={`flex-1 pr-8 text-center ${titleCls}`}>聊天背景</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
         <div className={`${cardCls} overflow-hidden p-4`}>
-          {/* 预览卡片（9:16 竖版，模拟聊天效果） */}
+          {/* 预览卡片（9:16 竖版，模拟聊天效果，即时反映当前选择） */}
           <div
             data-testid={`${testPrefix}-bg-preview`}
             className="relative mx-auto w-full max-w-[248px] overflow-hidden rounded-[14px] border border-black/10 shadow-[0_2px_12px_rgba(0,0,0,0.08)] dark:border-white/10"
@@ -424,7 +484,6 @@ export function ChatSearchPage({
 
   const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
   const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
-  const accent = wx ? '#07C160' : '#26C84D';
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
   const headerH = wx ? 'h-11' : 'h-12';
   const testPrefix = variant;

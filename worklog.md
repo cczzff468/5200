@@ -3972,3 +3972,18 @@ Stage Summary:
 - 聊天设置页（微信「聊天信息」/ QQ「聊天设置」）双 App 落地，全部用户要求项齐备且真机浏览器验证通过
 - 数据层：flags（置顶/免打扰/背景模式）走 localStorage 总线，背景图片走 IndexedDB；删除会话时 reset 清理
 - lint 通过、dev.log 无错误、无控制台报错（AI 403 为未配置 API 的预期现象，与本次功能无关）
+---
+Task ID: chat-settings-2
+Agent: Z.ai Code (main)
+Task: 聊天设置四项改进：①聊天背景拆为独立二级页 ②设置页置顶/免打扰行删除前置图标 ③QQ 开关改蓝色 ④聊天页标题右侧显示免打扰铃铛
+
+Work Log:
+- chat-settings.tsx：新增 ChatBgPage（z-50 独立页：顶栏返回+「聊天背景」标题 → 顶部 9:16 预览卡片（实时反映当前选择）→ 「从手机相册上传」按钮+隐藏 input → 内置纯色壁纸网格（默认+14 色，选中勾色随 variant））；ChatSettingsPage 聊天背景区块整体替换为入口行（右侧 22px 当前背景迷你预览缩略 + ChevronRight），props 相应调整（移除 uploading/onPickColor/onPickImageFile/onResetBg，新增 onOpenBg；bgImageUrl 保留供迷你预览）；置顶/免打扰两行删除 Pin/BellOff 图标改纯文字行；ChatToggle/QQ accent 由 #26C84D 改 #0099FF（QQ 蓝）；顺带删除 ChatSearchPage 未使用的 accent 变量
+- wechat.tsx：新增 bgOpen state + 渲染 ChatBgPage（onBack 逐级返回设置页）；ChatSettingsPage props 换血；聊天页标题区改造（flex 居中 + flags.muted 时 BellOff h-4 图标显示在名字右侧，aria-label=消息免打扰）
+- qq.tsx：同套改造（bgOpen+ChatBgPage+标题铃铛）；左滑手势守卫追加 bgOpen（浮层打开时不触发互动标识页手势）；钱包支付密码开关（qq-pay-toggle）同步改 bg-[#0099FF]——「QQ 里面的开关」全量变蓝
+- 校验：bunx tsc --noEmit 0 错误、bun run lint 0 告警、dev.log 无应用错误
+- E2E（agent-browser 393×852，晴晴会话沿用上会话种子数据）：①微信设置页两开关行图标已删（svg 探测 false/false）、聊天背景入口行存在；②进背景独立页：预览/上传/14 色齐备，选 #BAD5E8 预览即时变蓝+localStorage bgMode=color 持久化；③逐级返回（背景页→设置页→聊天页）状态正确，聊天页背景层 rgb(186,213,232) 生效；④免打扰开关关→标题铃铛消失、开→铃铛实时回归；⑤QQ 设置页：开启的免打扰开关 computed color=rgb(0,153,255)（蓝）、置顶开启后同为蓝色、两行无图标、背景页结构齐备、选 #A8D8B9 即时预览+聊天页生效；⑥QQ 标题右侧铃铛显示（muted 持久化）；⑦QQ 钱包→支付设置页 qq-pay-toggle computed color=rgb(0,153,255)（种 qq-pay-pwd 数据验证后清除恢复 null）；⑧测试后恢复 flags 原状态（wx/qq bgMode=image、qq pinned 移除）
+- 经验：①消息页 QQ 头像 onAvatar=closeApp 是有意设计（点头像退出 QQ），进抽屉需走联系人 tab 头像；②agent-browser eval 顶层 const 会污染页面全局作用域（后续 eval 报 Identifier already declared），eval 脚本一律 IIFE 包裹；③多步导航中陈旧 ref 点击会点错元素，跨命令导航优先 find role click --name 或 eval 查活 DOM
+Stage Summary:
+- 聊天背景从设置页内嵌区块升级为独立二级页（微信/QQ 双端：预览卡片→从手机相册上传→内置纯色壁纸），设置页保留「聊天背景」入口行带当前背景迷你预览；设置页置顶/免打扰行图标删除；QQ 全部开关（聊天设置置顶/免打扰 + 钱包支付密码）统一 QQ 蓝 #0099FF；微信/QQ 聊天页标题右侧免打扰铃铛随 flags.muted 实时显隐且与列表页/设置页三方联动
+- 涉及文件：src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

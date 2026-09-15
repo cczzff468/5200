@@ -145,6 +145,7 @@ import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, qqChatFlags as qqChatFlagsStore } from '@/lib/chat-flags';
 import {
+  ChatBgPage,
   ChatSearchPage,
   ChatSettingsPage,
   chatBgLayerStyle,
@@ -1472,6 +1473,8 @@ function ChatPage({
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 查找聊天记录页 */
   const [searchOpen, setSearchOpen] = useState(false);
+  /** 聊天背景页（设置页「聊天背景」进入的独立二级页） */
+  const [bgOpen, setBgOpen] = useState(false);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
@@ -1610,8 +1613,8 @@ function ChatPage({
   // 左滑手势：页面任意位置（表单控件/按钮除外）水平左滑 → 好友互动标识页
   const swipe = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   const onSwipeStart = (e: React.PointerEvent) => {
-    // 聊天设置/查找记录/红包等浮层打开时不触发手势，避免滑动误入互动标识页
-    if (settingsOpen || searchOpen || layer) return;
+    // 聊天设置/聊天背景/查找记录/红包等浮层打开时不触发手势，避免滑动误入互动标识页
+    if (settingsOpen || searchOpen || bgOpen || layer) return;
     const el = e.target as HTMLElement;
     // 输入框/按钮不触发手势，避免影响输入与点击
     if (el.closest('input, textarea, button')) return;
@@ -1898,6 +1901,13 @@ function ChatPage({
             >
               {streaming ? '正在输入中…' : peer.name}
             </span>
+            {flags.muted === true && (
+              <BellOff
+                className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                strokeWidth={2}
+                aria-label="消息免打扰"
+              />
+            )}
           </div>
           <button
             type="button"
@@ -2220,11 +2230,22 @@ function ChatPage({
           muted={flags.muted === true}
           bg={bg}
           bgImageUrl={bgImageUrl}
-          uploading={uploadingBg}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
           onOpenSearch={() => setSearchOpen(true)}
+          onOpenBg={() => setBgOpen(true)}
+        />
+      ) : null}
+
+      {/* 聊天背景页（聊天设置二级页）：预览卡片 + 从手机相册上传 + 内置纯色壁纸 */}
+      {bgOpen ? (
+        <ChatBgPage
+          variant="qq"
+          bg={bg}
+          bgImageUrl={bgImageUrl}
+          uploading={uploadingBg}
+          onBack={() => setBgOpen(false)}
           onPickColor={handlePickBgColor}
           onPickImageFile={(f) => void handleUploadBg(f)}
           onResetBg={handleResetBg}
@@ -3150,7 +3171,7 @@ function PaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
                 setErrKey(0);
                 setFlow(enabled ? { mode: 'verify-off' } : { mode: 'set' });
               }}
-              className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${enabled ? 'bg-[#26C84D]' : 'bg-black/20 dark:bg-white/25'}`}
+              className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${enabled ? 'bg-[#0099FF]' : 'bg-black/20 dark:bg-white/25'}`}
             >
               <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${enabled ? 'left-[22px]' : 'left-0.5'}`} aria-hidden="true" />
             </button>
