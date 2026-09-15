@@ -4300,3 +4300,20 @@ Stage Summary:
 - 微信「聊天 → 联系人详细 → 朋友圈」导航栈修复：朋友圈页（自己的/好友的/发布页）现在优先于残留的 chatPeer 渲染，进朋友圈直接显示朋友圈，退出按 联系人详细 → 聊天 原链返回
 - 同族修复：通讯录进入的联系人详细页「发消息」现在能正常进聊天
 - 详情页 fromChat/detailFromChat 冗余状态清理；聊天、回复条数、红包/转账/亲属卡、表情包等既有功能未触碰
+
+---
+Task ID: push-github
+Agent: main (Z.ai Code)
+Task: 将项目推送到 GitHub (cczzff468/5200)
+
+Work Log:
+- 检查本地仓库状态：已初始化、main 分支、工作树干净（全部变更已提交）
+- 添加 origin 远程并使用用户提供的 PAT 认证
+- 首次推送被拒（远程有旧历史：环境重置前的备份）
+- 对比远程与本地文件树：远程无独有文件，本地 351 文件 ⊇ 远程 330 文件，且本地提交更新
+- 使用 --force-with-lease 安全覆盖推送成功
+- 验证：remote main = local main (20a5126)，upstream 已设置
+
+Stage Summary:
+- 项目已推送至 https://github.com/cczzff468/5200 （main 分支，含 Task O 删除感谢语机制的全部代码）
+- 注意：token 已存入 .git/config（本地），建议用户之后在 GitHub 轮换该 PAT
