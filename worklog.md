@@ -4074,3 +4074,24 @@ Stage Summary:
 - 一句一句弹出：连发节奏贯穿到流结束之后 —— 剩余消息按停顿节奏逐条【完整】弹出（打字中→弹出），短回复不再一口气全出；落盘收尾等节奏放完；失败路径立即显示
 - 不硬凑条数：提示词改弹性上限（最多 N 条、可只发一条、不要硬凑），切分按 AI 实际产出不按配置条数
 - 涉及文件：src/lib/reply-count.ts、src/lib/chat-stream-store.ts、src/components/apps/{qq,wechat,chat,chat-settings}.tsx（后四者仅注释）
+---
+Task ID: translate-sentence-send
+Agent: Z.ai Code (main)
+Task: 三端（微信/QQ/信息）聊天设置新增「翻译」（气泡下方多语言译文）与「分句发送」（连续发送 AI 不回复，输入框为空再点一次发送才触发整批回复）；信息 App 补建聊天设置页
+
+Work Log:
+- 新增 src/lib/chat-translate.ts：翻译配置按 sessionKey 隔离（chat-translate-cfg，on+langs 多选）+ 译文缓存（chat-translate-cache，FIFO 300 条，key=lang|text 全局复用）+ requestTranslation（并发闸 3、在途去重、失败 60s 冷却防轰炸）；8 种可选语言（英/日/韩/法/德/西/俄/繁中）；服务器不可达/directOnly/内网地址时回退浏览器直连（directChatStream 兼容非流式解析）
+- 新增 src/lib/sentence-send.ts：分句发送开关（chat-sentence-send）与「待 AI 回复批次」标记（chat-sentence-pending）均按 sessionKey 隔离持久化，跨页面切换不丢
+- 新增 src/app/api/translate/route.ts：与 /api/chat 完全同路径（stream:true SSE + 候选端点 + 400 换参兼容 + 内网 directOnly 标记），服务端聚合 SSE 后返回 { translation }；初版用 stream:false 在部分网关上不可用，改为与聊天一致的流式路径
+- chat-settings.tsx：ChatSettingsPage 新增「翻译」入口行（右侧摘要：未开启/已选语言）与「分句发送」开关行（带说明文案）；新增三端共用 ChatTranslatePage（总开关 + 目标语言多选，variant=wx|qq|sms 三套主题；开启且未选语言自动补英语，取消最后一个语言自动关闭）与 SmsChatSettingsPage（信息 App 聊天设置页：信息卡 + 翻译入口 + 分句发送，iOS 蓝 #34C759 开关）
+- wechat.tsx / qq.tsx：翻译 effect（最近 60 条文字消息 × 已选语言，结果写组件状态，失败标记防重试）；renderTranslations 在文字气泡下方渲染译文（多语言逐行带语言名前缀，气泡列布局 items-end/items-start 对齐随角色）；runAiTurn 支持 userMsg=null（批次触发，消息早已入列）；send() 分句分支（只入列 + markPendingBatch）；dispatchBatch（清标记 + runAiTurn(null)）；canDispatch 时空输入仍显示发送按钮、点击触发批次、输入栏上方显示提示行；设置页接线 + ChatTranslatePage 渲染；关闭分句发送时清除待回复标记
+- chat.tsx（信息）：ChatPeer 加 name；顶栏新增聊天设置齿轮按钮（Video 旁）；startAiTurn(userMsg|null) 重构；同套翻译/分句逻辑（iMessage 气泡列内插译文行，颜色用 muted-foreground）；SmsChatSettingsPage + ChatTranslatePage(variant=sms) 渲染；表单 onSubmit 空输入走 dispatchBatch
+- 修复实测发现的译文请求轰炸：用户实时预览中开启翻译且上游 502，每次热更新重挂载都重发全部失败请求（133 次）→ 加失败 60s 冷却
+- E2E（agent-browser 393×852，种子 e2e-user/e2e-char-qing + fetch stub）：①微信设置页翻译「未开启」+分句发送行渲染；②翻译页 8 语言多选，开启自动补英语、加日语，返回摘要「英语、日语」；③发消息：AI 回复 3 个独立气泡，每条气泡（含我方绿色气泡）下方显示「英语：…」「日语：…」译文（22 次翻译请求、30 行译文）；④分句发送：两句连发 AI 零调用 + 提示行出现 + 空输入发送按钮保持可见 → 空输入点击发送 → /api/chat 一次调用且 history 含两句 → 提示消失、pending 标记清除；⑤刷新重进：译文从缓存渲染（0 次新请求）、开关与语言选择持久；⑥QQ 设置页同套且与微信隔离（翻译未开启、回复条数 5 条）；QQ 分句流同样验证通过（含 AI 按批次回复两个气泡）；⑦信息 App：齿轮入口 → iOS 风格聊天设置页（信息卡/翻译/分句发送）→ 翻译 iOS 蓝主题 → 分句流通过、气泡下方译文+已送达正常；⑧console 无错误、dev.log 无应用错误（/api/chat 502 为用户上游 403 地区限制的预期现象）
+- 测试数据仅存在于 agent-browser 隔离档案（IndexedDB/localStorage），未污染用户数据与仓库
+
+Stage Summary:
+- 翻译：三端聊天设置新增翻译入口（独立二级页，总开关+8 语言多选），开启后每条文字消息气泡下方按所选语言逐行显示译文（带语言名前缀），译文按内容缓存全局复用、按会话隔离配置；走与聊天相同的上游流式路径（兼容性最好），服务器不可达自动浏览器直连
+- 分句发送：三端聊天设置新增开关；开启后连续发送的消息 AI 都不回复（批次标记持久化），输入框为空时再点一次「发送」才把整批消息交给 AI 统一回复；待回复期间输入栏上方有提示、发送按钮保持可见；关闭开关清除批次恢复即时回复
+- 信息 App 补建聊天设置页（此前无）：右上角齿轮进入，含翻译入口与分句发送
+- 涉及文件：src/lib/chat-translate.ts（新）、src/lib/sentence-send.ts（新）、src/app/api/translate/route.ts（新）、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx

@@ -1,24 +1,29 @@
 'use client';
 
 /**
- * 聊天设置页 + 聊天背景页 + 回复条数页 + 查找聊天记录页（微信 / QQ 共用，variant 区分主题）：
- * - ChatSettingsPage：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
- *   回复条数入口（进入独立二级页 ChatReplyCountPage）、查找聊天记录入口、聊天背景入口
- *   （进入独立二级页 ChatBgPage）
+ * 聊天设置页 + 聊天背景页 + 回复条数页 + 翻译页 + 查找聊天记录页 + 信息端聊天设置页
+ * （微信 / QQ / 信息三端，variant 区分主题）：
+ * - ChatSettingsPage（微信/QQ）：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
+ *   回复条数入口（进入独立二级页 ChatReplyCountPage）、翻译入口（进入 ChatTranslatePage）、
+ *   分句发送开关、查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
  * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条（上限，可少发），AI 像
  *   真人一样一句一句连发多条消息（一句一条，由 @/lib/reply-count 切分与节奏控制）
+ * - ChatTranslatePage：翻译设置页（三端共用）—— 总开关 + 目标语言多选（每条消息气泡下方
+ *   显示全部已选语言的译文，由 @/lib/chat-translate 请求与缓存）
+ * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
- * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数持久化在
- *   @/lib/reply-count（localStorage，按会话键隔离），背景图片本体在
- *   IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
+ * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
+ *   @/lib/reply-count / @/lib/chat-translate / @/lib/sentence-send（localStorage，按会话键隔离），
+ *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
+import { TRANSLATE_LANGS } from '@/lib/chat-translate';
 
-export type ChatSettingsVariant = 'wx' | 'qq';
+export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
 
 /** 当前聊天背景状态（从 chat-flags 取） */
 export interface ChatSettingsBg {
@@ -117,10 +122,14 @@ export function ChatSettingsPage({
   bg,
   bgImageUrl,
   replyCount,
+  translateSummary,
+  sentenceSend,
   onBack,
   onTogglePinned,
   onToggleMuted,
   onOpenReplyCount,
+  onOpenTranslate,
+  onToggleSentenceSend,
   onOpenSearch,
   onOpenBg,
 }: {
@@ -141,10 +150,16 @@ export function ChatSettingsPage({
   bgImageUrl: string | null;
   /** 当前会话的回复条数（AI 连发多条消息） */
   replyCount: number;
+  /** 翻译入口行右侧摘要：未开启 / 已选语言列表 / 未选择语言 */
+  translateSummary: string;
+  /** 分句发送开关状态（开启后连续发消息 AI 不回复，输入框为空再点发送才触发回复） */
+  sentenceSend: boolean;
   onBack: () => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
   onOpenReplyCount: () => void;
+  onOpenTranslate: () => void;
+  onToggleSentenceSend: (v: boolean) => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
 }) {
@@ -239,6 +254,44 @@ export function ChatSettingsPage({
             </span>
           </button>
         </div>
+
+        {/* 翻译：气泡下方多语言翻译（独立二级页选语言，三端共用 ChatTranslatePage） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <button
+            type="button"
+            data-testid={`${testPrefix}-settings-translate`}
+            onClick={onOpenTranslate}
+            className={rowCls}
+          >
+            <span>翻译</span>
+            <span className="flex shrink-0 items-center gap-2">
+              <span
+                data-testid={`${testPrefix}-translate-summary`}
+                className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40"
+              >
+                {translateSummary}
+              </span>
+              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+
+        {/* 分句发送：开启后连续发的消息对方不回复，输入框为空时再点一次「发送」才触发回复 */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <div className={`flex items-center justify-between ${rowCls}`}>
+            <span>分句发送</span>
+            <ChatToggle
+              on={sentenceSend}
+              onChange={onToggleSentenceSend}
+              accent={accent}
+              testId={`${testPrefix}-settings-sentence`}
+              label="分句发送"
+            />
+          </div>
+        </div>
+        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+          开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
+        </p>
 
         {/* 查找聊天记录 */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -518,7 +571,7 @@ export function ChatBgPage({
   );
 }
 
-/** 设置页头像（微信圆角方 / QQ 圆形，首字母兜底同各 App 风格） */
+/** 设置页头像（微信圆角方 / QQ、信息圆形，首字母兜底同各 App 风格） */
 function ChatSettingsAvatar({ variant, src, alt, size }: { variant: ChatSettingsVariant; src: string | null; alt: string; size: number }) {
   const wx = variant === 'wx';
   const style: CSSProperties = { width: size, height: size };
@@ -537,7 +590,7 @@ function ChatSettingsAvatar({ variant, src, alt, size }: { variant: ChatSettings
     <div
       aria-hidden="true"
       className={`flex shrink-0 items-center justify-center font-semibold text-white ${
-        wx ? 'rounded-[7px] bg-[#C9C9CE] dark:bg-[#3C3C42]' : 'rounded-full bg-[#B9D9F3]'
+        wx ? 'rounded-[7px] bg-[#C9C9CE] dark:bg-[#3C3C42]' : variant === 'sms' ? 'rounded-full bg-[#C7C7CC] dark:bg-[#3A3A3C]' : 'rounded-full bg-[#B9D9F3]'
       }`}
       style={{ ...style, fontSize: Math.round(size * 0.42) }}
     >
@@ -712,6 +765,236 @@ export function ChatSearchPage({
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 翻译设置页（三端共用二级页） ----------------
+
+/** 翻译页主题 token（微信灰白 / QQ 冷灰白 / 信息 iOS 风） */
+function translateTokens(variant: ChatSettingsVariant) {
+  const wx = variant === 'wx';
+  const sms = variant === 'sms';
+  return {
+    wx,
+    sms,
+    pageCls: sms
+      ? 'bg-background text-foreground'
+      : wx
+        ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
+        : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white',
+    cardCls: sms
+      ? 'overflow-hidden rounded-[14px] bg-black/[0.045] dark:bg-white/[0.08]'
+      : wx
+        ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]'
+        : 'rounded-[14px] bg-white dark:bg-[#232529]',
+    dividerCls: sms
+      ? 'border-border/60'
+      : wx
+        ? 'border-black/5 dark:border-white/10'
+        : 'border-black/[0.04] dark:border-white/[0.06]',
+    rowCls: sms
+      ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[15.5px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+      : wx
+        ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+        : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]',
+    accent: sms ? '#007AFF' : wx ? '#07C160' : '#0099FF',
+    titleCls: wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold',
+    headerH: wx ? 'h-11' : 'h-12',
+    captionCls: sms
+      ? 'px-1 pt-2.5 text-[12.5px] leading-[1.6] text-muted-foreground'
+      : 'px-1 pt-2.5 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40',
+  };
+}
+
+/**
+ * 翻译设置页（聊天设置二级页，微信 / QQ / 信息三端共用）：
+ * 总开关 + 目标语言多选（每条文字消息气泡下方按顺序显示全部已选语言的译文）。
+ * 开关打开且未选语言时由调用方自动补默认语言；取消最后一个语言时由调用方自动关闭开关。
+ */
+export function ChatTranslatePage({
+  variant,
+  on,
+  langs,
+  onBack,
+  onToggle,
+  onToggleLang,
+}: {
+  variant: ChatSettingsVariant;
+  /** 翻译总开关 */
+  on: boolean;
+  /** 已选语言代码列表（多选） */
+  langs: string[];
+  onBack: () => void;
+  onToggle: (v: boolean) => void;
+  onToggleLang: (code: string) => void;
+}) {
+  const t = translateTokens(variant);
+  const testPrefix = variant;
+
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className={`flex ${t.headerH} items-center px-2`}>
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid={`${testPrefix}-translate-back`}
+            onClick={onBack}
+            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
+          >
+            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+          </button>
+          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>翻译</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        {/* 总开关 */}
+        <div className={`${t.cardCls}`}>
+          <div className={`flex items-center justify-between ${t.rowCls}`}>
+            <span>翻译</span>
+            <ChatToggle
+              on={on}
+              onChange={onToggle}
+              accent={t.accent}
+              testId={`${testPrefix}-translate-switch`}
+              label="翻译"
+            />
+          </div>
+        </div>
+        <p className={t.captionCls}>开启后，聊天中的文字消息会在气泡下方显示所选语言的翻译。</p>
+
+        {/* 目标语言多选 */}
+        <p className="px-1 pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">目标语言（可多选）</p>
+        <div className={`${t.cardCls}`}>
+          {TRANSLATE_LANGS.map((l, i) => {
+            const selected = langs.includes(l.code);
+            return (
+              <div key={l.code}>
+                {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+                <button
+                  type="button"
+                  data-testid={`${testPrefix}-translate-lang-${l.code}`}
+                  aria-pressed={selected}
+                  aria-label={`翻译成${l.label}`}
+                  onClick={() => onToggleLang(l.code)}
+                  className={t.rowCls}
+                >
+                  <span className="flex items-baseline gap-2">
+                    <span>{l.label}</span>
+                    <span className="text-[12.5px] text-black/35 dark:text-white/35">{l.native}</span>
+                  </span>
+                  {selected && (
+                    <span className="grid place-items-center" style={{ color: t.accent }} aria-label="已选中">
+                      <Check className="h-5 w-5" strokeWidth={2.4} />
+                    </span>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <p className={t.captionCls}>
+          可多选：每条消息下方将按顺序显示所有已选语言的译文；换一个聊天对象需要单独设置。
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 信息 App 聊天设置页（iOS 风格） ----------------
+
+/**
+ * 信息 App 的聊天设置页（聊天页右上角进入）：
+ * 对方信息卡片 + 翻译入口（ChatTranslatePage，variant=sms）+ 分句发送开关。
+ */
+export function SmsChatSettingsPage({
+  peerName,
+  peerAvatar,
+  phone,
+  translateSummary,
+  sentenceSend,
+  onBack,
+  onOpenTranslate,
+  onToggleSentenceSend,
+}: {
+  peerName: string;
+  peerAvatar: string | null;
+  /** 信息卡第二行：手机号（可为空） */
+  phone: string;
+  translateSummary: string;
+  sentenceSend: boolean;
+  onBack: () => void;
+  onOpenTranslate: () => void;
+  onToggleSentenceSend: (v: boolean) => void;
+}) {
+  const t = translateTokens('sms');
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className="relative flex h-12 items-center px-2">
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid="sms-chat-settings-back"
+            onClick={onBack}
+            className="flex items-center rounded-full p-1 active:opacity-50"
+          >
+            <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+          </button>
+          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">
+            聊天设置
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-3">
+        {/* 对方信息卡片 */}
+        <div className={`${t.cardCls}`}>
+          <div className="flex items-center gap-3 px-4 py-3.5">
+            <ChatSettingsAvatar variant="sms" src={peerAvatar} alt={peerName} size={52} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[16px] font-semibold">{peerName}</p>
+              {phone && (
+                <p className="mt-0.5 truncate text-[13px] tabular-nums text-muted-foreground">{phone}</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 翻译入口 */}
+        <div className={`${t.cardCls} mt-3`}>
+          <button type="button" data-testid="sms-settings-translate" onClick={onOpenTranslate} className={t.rowCls}>
+            <span>翻译</span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span data-testid="sms-translate-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+                {translateSummary}
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+
+        {/* 分句发送 */}
+        <div className={`${t.cardCls} mt-3`}>
+          <div className={`flex items-center justify-between ${t.rowCls}`}>
+            <span>分句发送</span>
+            <ChatToggle
+              on={sentenceSend}
+              onChange={onToggleSentenceSend}
+              accent="#34C759"
+              testId="sms-settings-sentence"
+              label="分句发送"
+            />
+          </div>
+        </div>
+        <p className={t.captionCls}>
+          开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
+        </p>
       </div>
     </div>
   );

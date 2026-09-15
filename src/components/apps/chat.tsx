@@ -16,6 +16,7 @@ import {
   PinOff,
   Plus,
   Search,
+  Settings,
   Trash2,
   UserPlus,
   Video,
@@ -37,6 +38,9 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
+import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, type ChatTranslateCfg } from '@/lib/chat-translate';
+import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
@@ -400,6 +404,8 @@ function IOSConfirmDialog({
 interface ChatPeer {
   title: string;
   avatarSrc: string | null;
+  /** 对方名字（聊天设置页信息卡用；信息 App 内为昵称） */
+  name?: string;
 }
 
 /** 当前聊天会话：'assistant' | 'c:<contactId>' */
@@ -440,6 +446,28 @@ function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   // 用户自己的 OpenAI 兼容接口配置（设置 › API 配置），聊天全部走该配置
   const apiConfig = useSettings((s) => s.apiConfig);
+  /** 聊天设置页（右上角进入）：翻译入口 + 分句发送开关 */
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
+  const [translateOpen, setTranslateOpen] = useState(false);
+  /** 当前会话的翻译配置（开启后文字消息气泡下方显示所选语言的译文） */
+  const [transCfg, setTransCfgState] = useState<ChatTranslateCfg>(() => getTranslateCfg(sessionKey));
+  useEffect(() => {
+    setTransCfgState(getTranslateCfg(sessionKey));
+  }, [sessionKey]);
+  /** 译文缓存（key = `${msgId}|${langCode}`）与失败标记（避免每帧重试） */
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [trFailed, setTrFailed] = useState<Record<string, boolean>>({});
+  /** 分句发送开关（开启后连续发消息 AI 不回复，输入框为空再点一次发送才触发回复） */
+  const [sentenceSend, setSentenceSendState] = useState(() => getSentenceSend(sessionKey));
+  useEffect(() => {
+    setSentenceSendState(getSentenceSend(sessionKey));
+  }, [sessionKey]);
+  /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
+  const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
+  useEffect(() => {
+    setPendingDispatch(hasPendingBatch(sessionKey));
+  }, [sessionKey]);
   const onMsgsChangeRef = useRef(onMsgsChange);
   // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）
   useEffect(() => {
@@ -462,6 +490,52 @@ function ChatView({
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs, stream]);
 
+  // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）逐条请求所选语言的译文。
+  // 缓存、并发闸、在途去重都在 @/lib/chat-translate 内部，这里只负责把结果写入组件状态
+  useEffect(() => {
+    if (!transCfg.on || transCfg.langs.length === 0) return;
+    const targets = msgs
+      .filter((m) => !m.error && m.content.trim() && !m.content.startsWith('（AI'))
+      .slice(-60);
+    if (targets.length === 0) return;
+    let alive = true;
+    for (const m of targets) {
+      for (const code of transCfg.langs) {
+        const key = `${m.id}|${code}`;
+        if (translations[key] !== undefined || trFailed[key]) continue;
+        requestTranslation({ text: m.content, lang: code, apiConfig })
+          .then((text) => {
+            if (alive) setTranslations((prev) => (prev[key] === text ? prev : { ...prev, [key]: text }));
+          })
+          .catch(() => {
+            if (alive) setTrFailed((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+          });
+      }
+    }
+    return () => {
+      alive = false;
+    };
+  }, [msgs, transCfg, translations, trFailed, apiConfig]);
+
+  /** 气泡下方译文行（翻译开启且该消息已有所选语言的译文时显示；多语言逐行并带语言名前缀） */
+  const renderTranslations = (msgId: string, content: string, error?: boolean) => {
+    if (error || !transCfg.on || transCfg.langs.length === 0) return null;
+    if (!content.trim() || content.startsWith('（AI')) return null;
+    const rows = transCfg.langs
+      .map((code) => {
+        const text = translations[`${msgId}|${code}`];
+        return typeof text === 'string' && text ? { code, text } : null;
+      })
+      .filter((x): x is { code: string; text: string } => x !== null);
+    if (rows.length === 0) return null;
+    const multi = rows.length > 1;
+    return rows.map(({ code, text }) => (
+      <p key={code} className="mt-1 max-w-full whitespace-pre-wrap break-words text-[12.5px] leading-[1.45] text-muted-foreground">
+        {multi ? `${translateLangLabel(code)}：${text}` : text}
+      </p>
+    ));
+  };
+
   /** 全局流结束（成功/失败）：finalize 已把最终消息落盘，把落盘后的完整记录并回本地并清理流状态。
    *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑 */
   useLayoutEffect(() => {
@@ -478,13 +552,12 @@ function ChatView({
     });
   }, [stream, sessionKey, storageKey]);
 
-  const send = () => {
-    const text = input.trim();
-    if (!text || isChatStreaming(sessionKey)) return;
-
-    const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
+  /** AI 回合：把整轮流式请求交给全局 store（userMsg 为 null = 分句发送批次触发，消息早已入列）。
+   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
+  const startAiTurn = (userMsg: ChatMsg | null) => {
+    const base = userMsg ? [...msgs, userMsg] : msgs;
     // 上下文：只带有效消息最近 20 条
-    const history = [...msgs, userMsg]
+    const history = base
       .filter((m) => !m.error && m.content)
       .slice(-20)
       .map((m) => ({ role: m.role, content: m.content }));
@@ -492,8 +565,7 @@ function ChatView({
     const aiId = uid();
     // 用户消息立即入列并落盘；AI 回复交给全局 store 流式接收（退出聊天页不中断），
     // 结束/失败后由 finalize 写入本会话聊天记录（与页面是否存活无关）
-    setMsgs((prev) => [...prev, userMsg]);
-    setInput('');
+    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
     // 回复条数（本会话独立设置；信息端未提供设置入口，未设置时保持 1 条的现状）
@@ -537,8 +609,35 @@ function ChatView({
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
-    if (!started) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+    if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
   };
+
+  const send = () => {
+    const text = input.trim();
+    if (!text || isChatStreaming(sessionKey)) return;
+
+    const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
+    setInput('');
+    // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
+    if (sentenceSend) {
+      setMsgs((prev) => [...prev, userMsg]);
+      setPendingDispatch(true);
+      markPendingBatch(sessionKey, true);
+      return;
+    }
+    startAiTurn(userMsg);
+  };
+
+  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
+  const dispatchBatch = () => {
+    if (!pendingDispatch || isChatStreaming(sessionKey)) return;
+    setPendingDispatch(false);
+    markPendingBatch(sessionKey, false);
+    startAiTurn(null);
+  };
+
+  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次） */
+  const canDispatch = sentenceSend && pendingDispatch && !streaming;
 
   // iMessage 语义：「已送达」挂在最后一条己方消息下方
   const lastUserIdx = msgs.reduce((acc, m, idx) => (m.role === 'user' ? idx : acc), -1);
@@ -560,8 +659,19 @@ function ChatView({
               <ChevronRight className="h-3 w-3 text-muted-foreground/70" strokeWidth={2.5} aria-hidden="true" />
             </div>
           </div>
-          <div aria-hidden="true" className="ml-auto flex h-9 w-9 items-center justify-center text-foreground">
-            <Video className="h-[22px] w-[22px]" strokeWidth={1.8} />
+          <div className="ml-auto flex items-center">
+            <div aria-hidden="true" className="flex h-9 w-9 items-center justify-center text-foreground">
+              <Video className="h-[22px] w-[22px]" strokeWidth={1.8} />
+            </div>
+            <button
+              type="button"
+              aria-label="聊天设置"
+              data-testid="sms-chat-settings-entry"
+              onClick={() => setSettingsOpen(true)}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-foreground active:bg-black/5"
+            >
+              <Settings className="h-[20px] w-[20px]" strokeWidth={1.8} />
+            </button>
           </div>
         </div>
       </div>
@@ -624,6 +734,8 @@ function ChatView({
                       )}
                       <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
                     </div>
+                  {/* 翻译开启时在气泡下方显示所选语言的译文 */}
+                  {renderTranslations(m.id, m.content, m.error && !mine)}
                   {/* iMessage：已送达挂在气泡下沿、小尾巴另一侧（气泡左下角，与气泡左缘对齐） */}
                   {mine && i === lastUserIdx && !m.error && (
                     <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
@@ -695,11 +807,19 @@ function ChatView({
         <div aria-hidden="true" className="h-1" />
       </div>
 
+      {/* 分句发送待回复提示：空输入时点「发送」才会触发对方回复 */}
+      {canDispatch && (
+        <p data-testid="sms-sentence-hint" className="z-20 shrink-0 px-4 pb-1 text-center text-[11px] leading-none text-muted-foreground">
+          分句发送：再点一次「发送」，对方才会回复
+        </p>
+      )}
+
       {/* 输入栏：+ 圆钮 / iMessage输入框（麦克风↔发送） */}
       <form
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
-          void send();
+          if (input.trim()) void send();
+          else dispatchBatch();
         }}
         className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-2.5 pb-[30px] pt-2 backdrop-blur-xl"
       >
@@ -717,10 +837,10 @@ function ChatView({
             aria-label="消息输入框"
             className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
           />
-          {input.trim() ? (
+          {(input.trim() || canDispatch) ? (
             <button
               type="submit"
-              aria-label="发送"
+              aria-label={input.trim() ? '发送' : '发送（让对方回复）'}
               disabled={streaming}
               className="flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90 disabled:opacity-40"
               style={{ backgroundColor: SELF_BLUE }}
@@ -736,6 +856,58 @@ function ChatView({
           )}
         </div>
       </form>
+
+      {/* 聊天设置页（右上角进入）：翻译入口 + 分句发送开关 */}
+      {settingsOpen && (
+        <SmsChatSettingsPage
+          peerName={peer.name ?? peer.title}
+          peerAvatar={peer.avatarSrc}
+          phone={peer.title}
+          translateSummary={
+            transCfg.on
+              ? transCfg.langs.length > 0
+                ? transCfg.langs.map(translateLangLabel).join('、')
+                : '未选择语言'
+              : '未开启'
+          }
+          sentenceSend={sentenceSend}
+          onBack={() => setSettingsOpen(false)}
+          onOpenTranslate={() => setTranslateOpen(true)}
+          onToggleSentenceSend={(v) => {
+            saveSentenceSend(sessionKey, v);
+            setSentenceSendState(v);
+            if (!v) {
+              // 关闭分句发送：清除待回复批次标记，后续发送恢复原有的即时回复行为
+              markPendingBatch(sessionKey, false);
+              setPendingDispatch(false);
+            }
+          }}
+        />
+      )}
+
+      {/* 翻译页（聊天设置二级页）：总开关 + 目标语言多选（按会话隔离保存） */}
+      {translateOpen && (
+        <ChatTranslatePage
+          variant="sms"
+          on={transCfg.on}
+          langs={transCfg.langs}
+          onBack={() => setTranslateOpen(false)}
+          onToggle={(v) => {
+            // 开启且未选语言时自动补英语；关闭不影响已选语言
+            const next = normalizeTranslateCfg({ on: v, langs: v && transCfg.langs.length === 0 ? ['en'] : transCfg.langs });
+            saveTranslateCfg(sessionKey, next);
+            setTransCfgState(next);
+          }}
+          onToggleLang={(code) => {
+            const has = transCfg.langs.includes(code);
+            const langs = has ? transCfg.langs.filter((c) => c !== code) : [...transCfg.langs, code];
+            // 取消最后一个语言时自动关闭翻译
+            const next = normalizeTranslateCfg({ on: langs.length > 0 ? transCfg.on : false, langs });
+            saveTranslateCfg(sessionKey, next);
+            setTransCfgState(next);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -1327,7 +1499,7 @@ export default function ChatApp() {
     }
     // 已删除/隐藏的会话重新进入即恢复显示
     setHidden(false);
-    setChatSession({ key: 'assistant', peer: { title: ASSISTANT.phone, avatarSrc: null }, systemPrompt: null });
+    setChatSession({ key: 'assistant', peer: { title: ASSISTANT.phone, avatarSrc: null, name: ASSISTANT.name }, systemPrompt: null });
     setView('chat');
   };
 
@@ -1336,7 +1508,7 @@ export default function ChatApp() {
     const ownerName = c.ownerId ? contacts.find((o) => o.id === c.ownerId)?.name ?? null : null;
     setChatSession({
       key: `c:${c.id}`,
-      peer: { title: c.phone || c.name, avatarSrc: c.avatar },
+      peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name },
       systemPrompt: buildPersonaPrompt(c, ownerName),
     });
     setView('chat');

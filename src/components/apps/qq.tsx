@@ -136,6 +136,8 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
+import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, type ChatTranslateCfg } from '@/lib/chat-translate';
+import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -150,6 +152,7 @@ import {
   ChatReplyCountPage,
   ChatSearchPage,
   ChatSettingsPage,
+  ChatTranslatePage,
   chatBgLayerStyle,
   type ChatSearchItem,
   type ChatSettingsBg,
@@ -1484,6 +1487,26 @@ function ChatPage({
   useEffect(() => {
     setReplyCountState(getReplyCount(sessionKey));
   }, [sessionKey]);
+  /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
+  const [translateOpen, setTranslateOpen] = useState(false);
+  /** 当前会话的翻译配置（开启后文字消息气泡下方显示所选语言的译文；切换角色随 sessionKey 重读） */
+  const [transCfg, setTransCfgState] = useState<ChatTranslateCfg>(() => getTranslateCfg(sessionKey));
+  useEffect(() => {
+    setTransCfgState(getTranslateCfg(sessionKey));
+  }, [sessionKey]);
+  /** 译文缓存（key = `${msgId}|${langCode}`）与失败标记（避免每帧重试） */
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [trFailed, setTrFailed] = useState<Record<string, boolean>>({});
+  /** 分句发送开关（开启后连续发消息 AI 不回复，输入框为空再点一次发送才触发回复） */
+  const [sentenceSend, setSentenceSendState] = useState(() => getSentenceSend(sessionKey));
+  useEffect(() => {
+    setSentenceSendState(getSentenceSend(sessionKey));
+  }, [sessionKey]);
+  /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
+  const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
+  useEffect(() => {
+    setPendingDispatch(hasPendingBatch(sessionKey));
+  }, [sessionKey]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
@@ -1665,6 +1688,54 @@ function ChatPage({
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs, stream]);
 
+  // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）逐条请求所选语言的译文。
+  // 缓存、并发闸、在途去重都在 @/lib/chat-translate 内部，这里只负责把结果写入组件状态
+  useEffect(() => {
+    if (!transCfg.on || transCfg.langs.length === 0) return;
+    const isErrText = (s: string) => s.startsWith('（消息发送失败') || s.startsWith('（AI') || s.startsWith('（对方暂时');
+    const targets = msgs.filter((m) => !m.kind && m.content.trim() && !isErrText(m.content)).slice(-60);
+    if (targets.length === 0) return;
+    let alive = true;
+    for (const m of targets) {
+      for (const code of transCfg.langs) {
+        const key = `${m.id}|${code}`;
+        if (translations[key] !== undefined || trFailed[key]) continue;
+        requestTranslation({ text: m.content, lang: code, apiConfig })
+          .then((text) => {
+            if (alive) setTranslations((prev) => (prev[key] === text ? prev : { ...prev, [key]: text }));
+          })
+          .catch(() => {
+            if (alive) setTrFailed((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+          });
+      }
+    }
+    return () => {
+      alive = false;
+    };
+  }, [msgs, transCfg, translations, trFailed, apiConfig]);
+
+  /** 气泡下方译文行（翻译开启且该消息已有所选语言的译文时显示；多语言逐行并带语言名前缀） */
+  const renderTranslations = (msgId: string, content: string) => {
+    if (!transCfg.on || transCfg.langs.length === 0) return null;
+    if (!content.trim() || content.startsWith('（消息发送失败') || content.startsWith('（AI') || content.startsWith('（对方暂时')) return null;
+    const rows = transCfg.langs
+      .map((code) => {
+        const text = translations[`${msgId}|${code}`];
+        return typeof text === 'string' && text ? { code, text } : null;
+      })
+      .filter((x): x is { code: string; text: string } => x !== null);
+    if (rows.length === 0) return null;
+    const multi = rows.length > 1;
+    return rows.map(({ code, text }) => (
+      <p
+        key={code}
+        className="mt-1 max-w-full whitespace-pre-wrap break-words text-[12.5px] leading-[1.45] text-black/45 dark:text-white/45"
+      >
+        {multi ? `${translateLangLabel(code)}：${text}` : text}
+      </p>
+    ));
+  };
+
   /** 全局流结束（成功/失败）：finalize 已把最终消息落盘，把落盘后的完整记录并回本地并清理流状态。
    *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑 */
   useLayoutEffect(() => {
@@ -1683,10 +1754,11 @@ function ChatPage({
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
   const runAiTurn = useCallback(
-    (userMsg: QQMsg) => {
-    // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）
+    (userMsg: QQMsg | null) => {
+    // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）；批次触发（null）同样计一轮互动
     addBondPoints(peer.id, BOND_MSG_POINTS);
-    const history = [...msgs, userMsg]
+    const base = userMsg ? [...msgs, userMsg] : msgs;
+    const history = base
       .filter(
         (m) =>
           ((!m.kind || m.kind === 'sticker') && (m.content || m.kind === 'sticker') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
@@ -1699,8 +1771,9 @@ function ChatPage({
 
     const aiId = uid();
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
-    // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）
-    setMsgs((prev) => [...prev, userMsg]);
+    // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）。
+    // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）
+    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令
     const replyCount = getReplyCount(sessionKey);
@@ -1743,7 +1816,7 @@ function ChatPage({
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
-    if (!started) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+    if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     },
     [msgs, peer, me, apiConfig, ownerName, sessionKey]
   );
@@ -1758,8 +1831,26 @@ function ChatPage({
       setMsgs((prev) => [...prev, userMsg]);
       return;
     }
+    // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
+    if (sentenceSend) {
+      setMsgs((prev) => [...prev, userMsg]);
+      setPendingDispatch(true);
+      markPendingBatch(sessionKey, true);
+      return;
+    }
     runAiTurn(userMsg);
-  }, [input, me.id, peer.id, runAiTurn, sessionKey]);
+  }, [input, me.id, peer.id, runAiTurn, sessionKey, sentenceSend]);
+
+  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
+  const dispatchBatch = useCallback(() => {
+    if (!pendingDispatch || isChatStreaming(sessionKey)) return;
+    setPendingDispatch(false);
+    markPendingBatch(sessionKey, false);
+    runAiTurn(null);
+  }, [pendingDispatch, runAiTurn, sessionKey]);
+
+  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；自己会话除外） */
+  const canDispatch = sentenceSend && pendingDispatch && !streaming && peer.id !== me.id;
 
   // 发送表情消息（表情面板点选；AI 通过 stk.meaning 理解表情含义并据此回复）
   const sendSticker = useCallback(
@@ -2022,24 +2113,28 @@ function ChatPage({
                     />
                   </button>
                 ) : (
-                  <div
-                    className={`max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
-                      mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
-                    }`}
-                    style={mine ? { backgroundColor: '#0099FF' } : undefined}
-                  >
-                    {m.content || (
-                      <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
-                        {[0, 1, 2].map((d) => (
-                          <span
-                            key={d}
-                            aria-hidden="true"
-                            className="h-[7px] w-[7px] rounded-full bg-black/35 dark:bg-white/45"
-                            style={{ animation: `qqTypingDot 1.1s ${d * 0.16}s ease-in-out infinite` }}
-                          />
-                        ))}
-                      </span>
-                    )}
+                  <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div
+                      className={`w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                        mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
+                      }`}
+                      style={mine ? { backgroundColor: '#0099FF' } : undefined}
+                    >
+                      {m.content || (
+                        <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
+                          {[0, 1, 2].map((d) => (
+                            <span
+                              key={d}
+                              aria-hidden="true"
+                              className="h-[7px] w-[7px] rounded-full bg-black/35 dark:bg-white/45"
+                              style={{ animation: `qqTypingDot 1.1s ${d * 0.16}s ease-in-out infinite` }}
+                            />
+                          ))}
+                        </span>
+                      )}
+                    </div>
+                    {/* 翻译开启时在气泡下方显示所选语言的译文 */}
+                    {renderTranslations(m.id, m.content)}
                   </div>
                 )}
                 {mine && <QqAvatar src={me.avatar} alt={me.name} size={40} />}
@@ -2092,6 +2187,12 @@ function ChatPage({
 
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮） */}
       <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
+        {/* 分句发送待回复提示：空输入时点「发送」才会触发对方回复 */}
+        {canDispatch && (
+          <p data-testid="qq-sentence-hint" className="px-4 pt-2 text-center text-[11px] leading-none text-black/40 dark:text-white/40">
+            分句发送：再点一次「发送」，{peer.name} 才会回复
+          </p>
+        )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
           <input
             data-testid="qq-chat-input"
@@ -2106,13 +2207,16 @@ function ChatPage({
           <button
             type="button"
             data-testid="qq-chat-send"
-            aria-label="发送"
-            disabled={!input.trim() || streaming}
-            onClick={() => void send()}
+            aria-label={input.trim() ? '发送' : '发送（让对方回复）'}
+            disabled={(!input.trim() && !canDispatch) || streaming}
+            onClick={() => {
+              if (input.trim()) void send();
+              else dispatchBatch();
+            }}
             className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white ${
-              input.trim() && !streaming ? 'active:brightness-95' : 'opacity-90'
+              (input.trim() || canDispatch) && !streaming ? 'active:brightness-95' : 'opacity-90'
             }`}
-            style={{ backgroundColor: input.trim() && !streaming ? QQ_BLUE : '#8AD4F7' }}
+            style={{ backgroundColor: (input.trim() || canDispatch) && !streaming ? QQ_BLUE : '#8AD4F7' }}
           >
             发送
           </button>
@@ -2273,12 +2377,54 @@ function ChatPage({
           bg={bg}
           bgImageUrl={bgImageUrl}
           replyCount={replyCount}
+          translateSummary={
+            transCfg.on
+              ? transCfg.langs.length > 0
+                ? transCfg.langs.map(translateLangLabel).join('、')
+                : '未选择语言'
+              : '未开启'
+          }
+          sentenceSend={sentenceSend}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
           onOpenReplyCount={() => setReplyOpen(true)}
+          onOpenTranslate={() => setTranslateOpen(true)}
+          onToggleSentenceSend={(v) => {
+            saveSentenceSend(sessionKey, v);
+            setSentenceSendState(v);
+            if (!v) {
+              // 关闭分句发送：清除待回复批次标记，后续发送恢复原有的即时回复行为
+              markPendingBatch(sessionKey, false);
+              setPendingDispatch(false);
+            }
+          }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
+        />
+      ) : null}
+
+      {/* 翻译页（聊天设置二级页）：总开关 + 目标语言多选（按会话隔离保存） */}
+      {translateOpen ? (
+        <ChatTranslatePage
+          variant="qq"
+          on={transCfg.on}
+          langs={transCfg.langs}
+          onBack={() => setTranslateOpen(false)}
+          onToggle={(v) => {
+            // 开启且未选语言时自动补英语；关闭不影响已选语言
+            const next = normalizeTranslateCfg({ on: v, langs: v && transCfg.langs.length === 0 ? ['en'] : transCfg.langs });
+            saveTranslateCfg(sessionKey, next);
+            setTransCfgState(next);
+          }}
+          onToggleLang={(code) => {
+            const has = transCfg.langs.includes(code);
+            const langs = has ? transCfg.langs.filter((c) => c !== code) : [...transCfg.langs, code];
+            // 取消最后一个语言时自动关闭翻译
+            const next = normalizeTranslateCfg({ on: langs.length > 0 ? transCfg.on : false, langs });
+            saveTranslateCfg(sessionKey, next);
+            setTransCfgState(next);
+          }}
         />
       ) : null}
 
