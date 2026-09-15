@@ -4,8 +4,11 @@
  * 聊天翻译（微信 / QQ / 信息三端共用）：
  *
  * - 每个会话独立保存翻译配置（sessionKey = wx:<contactId> / qq:<contactId> / sms:<storageKey>，
- *   天然按角色/App 隔离），localStorage 单键 JSON map 持久化；开启后聊天中的文字消息
- *   会在气泡下方显示所选语言的翻译，可多选多种语言（每条消息下方逐行显示全部已选语言）；
+ *   天然按角色/App 隔离），localStorage 单键 JSON map 持久化；配置为「一对语言」（左 ⇄ 右，
+ *   两侧都可自由选择），开启后每条文字消息按检测到的语言翻译成另一侧：
+ *   左侧是中文、右侧是英语时，中文消息气泡下方显示英文译文，英文消息则显示中文译文；
+ * - 语言检测 detectMessageLang：按文字体系（假名/谚文/西里尔/阿拉伯/泰文/汉字简繁/拉丁字母
+ *   停用词打分）判断消息属于哪一侧；检测不出时默认按「消息是左侧语言」处理（左侧通常为用户母语）；
  * - 译文缓存：localStorage 单键（容量上限 FIFO），key = `<语言>|<原文>`（与具体会话无关，
  *   同样的原文+目标语言全局复用），组件内存里另有一份运行时 Map 避免反复读盘；
  * - requestTranslation：带并发闸（最多 3 个同时在途）+ 在途去重（同 key 复用同一 Promise）；
@@ -26,17 +29,30 @@ export interface TranslateLang {
   native: string;
 }
 
-/** 可选翻译语言（可多选） */
-export const TRANSLATE_LANGS: readonly TranslateLang[] = [
+/** 常用语言（翻译语言页第一组） */
+export const COMMON_TRANSLATE_LANGS: readonly TranslateLang[] = [
+  { code: 'zh-Hans', label: '中文简体', native: '简体中文' },
   { code: 'en', label: '英语', native: 'English' },
   { code: 'ja', label: '日语', native: '日本語' },
   { code: 'ko', label: '韩语', native: '한국어' },
   { code: 'fr', label: '法语', native: 'Français' },
-  { code: 'de', label: '德语', native: 'Deutsch' },
-  { code: 'es', label: '西班牙语', native: 'Español' },
   { code: 'ru', label: '俄语', native: 'Русский' },
-  { code: 'zh-Hant', label: '繁体中文', native: '繁體中文' },
+  { code: 'es', label: '西班牙语', native: 'Español' },
+  { code: 'ar', label: '阿拉伯语', native: 'العربية' },
+  { code: 'de', label: '德语', native: 'Deutsch' },
 ];
+
+/** 更多语言（翻译语言页第二组） */
+export const MORE_TRANSLATE_LANGS: readonly TranslateLang[] = [
+  { code: 'zh-Hant', label: '繁体中文', native: '繁體中文' },
+  { code: 'it', label: '意大利语', native: 'Italiano' },
+  { code: 'pt', label: '葡萄牙语', native: 'Português' },
+  { code: 'th', label: '泰语', native: 'ไทย' },
+  { code: 'vi', label: '越南语', native: 'Tiếng Việt' },
+];
+
+/** 全部可选翻译语言（两侧均可从中任选） */
+export const TRANSLATE_LANGS: readonly TranslateLang[] = [...COMMON_TRANSLATE_LANGS, ...MORE_TRANSLATE_LANGS];
 
 const LANG_CODES = new Set(TRANSLATE_LANGS.map((l) => l.code));
 
@@ -50,22 +66,37 @@ export function translateLangLabel(code: string): string {
 export interface ChatTranslateCfg {
   /** 是否开启翻译 */
   on: boolean;
-  /** 已选目标语言代码列表（多选；顺序即译文显示顺序） */
-  langs: string[];
+  /** 左侧语言代码（通常为用户母语；消息是左侧语言时译成右侧） */
+  left: string;
+  /** 右侧语言代码（消息是右侧语言时译成左侧） */
+  right: string;
 }
 
-export const DEFAULT_TRANSLATE_CFG: ChatTranslateCfg = { on: false, langs: [] };
+export const DEFAULT_TRANSLATE_CFG: ChatTranslateCfg = { on: false, left: 'zh-Hans', right: 'en' };
 
 const CFG_KEY = 'chat-translate-cfg';
 
-/** 把任意值收窄为合法配置（非法字段丢弃/回退默认） */
+/** 左右两侧兜底：优先英语，左侧已是英语时回退中文简体 */
+function fallbackOther(code: string): string {
+  return code === 'en' ? 'zh-Hans' : 'en';
+}
+
+/** 把任意值收窄为合法配置（非法字段丢弃/回退默认；兼容旧版 { on, langs[] } 多选结构 → 取第一个目标语言） */
 export function normalizeTranslateCfg(raw: unknown): ChatTranslateCfg {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULT_TRANSLATE_CFG };
-  const rec = raw as { on?: unknown; langs?: unknown };
-  const langs = Array.isArray(rec.langs)
-    ? [...new Set(rec.langs.filter((c): c is string => typeof c === 'string' && LANG_CODES.has(c)))]
-    : [];
-  return { on: rec.on === true, langs };
+  const valid = (v: unknown): string | null => (typeof v === 'string' && LANG_CODES.has(v) ? v : null);
+  const def = { ...DEFAULT_TRANSLATE_CFG };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return def;
+  const rec = raw as { on?: unknown; left?: unknown; right?: unknown; langs?: unknown };
+  // 旧版多选结构迁移：左=中文简体，右=旧目标语言列表的第一个
+  if (rec.left === undefined && rec.right === undefined && Array.isArray(rec.langs)) {
+    const first = rec.langs.map(valid).find((c): c is string => c !== null);
+    const right = first ?? def.right;
+    return { on: rec.on === true, left: def.left, right: right === def.left ? fallbackOther(def.left) : right };
+  }
+  const left = valid(rec.left) ?? def.left;
+  let right = valid(rec.right) ?? def.right;
+  if (right === left) right = fallbackOther(left);
+  return { on: rec.on === true, left, right };
 }
 
 function loadCfgMap(): Record<string, ChatTranslateCfg> {
@@ -78,7 +109,8 @@ function loadCfgMap(): Record<string, ChatTranslateCfg> {
     const out: Record<string, ChatTranslateCfg> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       const cfg = normalizeTranslateCfg(v);
-      if (cfg.on || cfg.langs.length > 0) out[k] = cfg;
+      const untouched = cfg.left === DEFAULT_TRANSLATE_CFG.left && cfg.right === DEFAULT_TRANSLATE_CFG.right;
+      if (cfg.on || !untouched) out[k] = cfg;
     }
     return out;
   } catch {
@@ -96,13 +128,89 @@ export function saveTranslateCfg(sessionKey: string, cfg: ChatTranslateCfg): voi
   if (typeof window === 'undefined') return;
   const map = loadCfgMap();
   const next = normalizeTranslateCfg(cfg);
-  if (next.on || next.langs.length > 0) map[sessionKey] = next;
-  else delete map[sessionKey];
+  const untouched = !next.on && next.left === DEFAULT_TRANSLATE_CFG.left && next.right === DEFAULT_TRANSLATE_CFG.right;
+  if (untouched) delete map[sessionKey];
+  else map[sessionKey] = next;
   try {
     window.localStorage.setItem(CFG_KEY, JSON.stringify(map));
   } catch {
     // 持久化失败忽略（本次会话内存态仍然生效）
   }
+}
+
+// ---------------- 消息语言检测（双向翻译的方向判断） ----------------
+
+/** 仅繁体使用的汉字抽样（简体文本不会出现）：命中即判为繁体中文 */
+const TRADITIONAL_ONLY_RE =
+  /[們個來對時說話學會體國門東車馬鳥語書長開關問間陽雲電氣飛萬與專業務動區醫廠歷聽寫讀賣買錢銀園圍圖遠運這讓認識誰隨難頭餓無發愛覺親兒兩頁風樂點還計網路機碼]/;
+
+/** 拉丁字母语言的停用词打分表（同属拉丁字母的语言之间粗分方向用） */
+const LATIN_STOPWORDS: ReadonlyArray<readonly [string, string[]]> = [
+  ['en', ['the', 'and', "i'm", "don't", "it's", 'you', 'is', 'are', 'what', 'this', 'that', 'not', 'have', 'just', 'like', 'okay', 'hey', 'hello', 'yeah', 'sorry', 'please', 'thanks']],
+  ['fr', ['je', 'tu', 'il', 'elle', 'nous', 'vous', 'et', 'pas', 'les', 'une', 'des', 'oui', 'ça', "c'est", 'bonjour', 'merci', 'pourquoi', 'quoi', 'avec', 'être']],
+  ['de', ['ich', 'du', 'nicht', 'ist', 'und', 'das', 'die', 'der', 'ein', 'eine', 'hallo', 'danke', 'warum', 'nicht', 'auch', 'aber', 'gut']],
+  ['es', ['los', 'las', 'una', 'que', 'yo', 'tú', 'hola', 'gracias', 'por', 'qué', 'cómo', 'sí', 'pero', 'muy', 'está', 'bueno', 'día']],
+  ['it', ['gli', 'che', 'non', 'sono', 'ciao', 'grazie', 'perché', 'come', 'molto', 'ma', 'anche', 'per', 'sono', 'buongiorno', 'cosa']],
+  ['pt', ['os', 'as', 'um', 'uma', 'não', 'você', 'olá', 'obrigado', 'porque', 'como', 'muito', 'mas', 'para', 'tudo', 'bom', 'oi']],
+];
+
+/**
+ * 检测一段文本的语言（返回 TRANSLATE_LANGS 中的代码；检测不出返回空串）：
+ * 优先按文字体系判断（假名→日语、谚文→韩语、西里尔→俄语、阿拉伯字母→阿拉伯语、泰文→泰语、
+ * 越南语声调字母、汉字→简/繁），拉丁字母之间按停用词与特征字母打分。
+ */
+export function detectMessageLang(text: string): string {
+  const t = text.trim();
+  if (!t) return '';
+  if (/[\u3040-\u30FF]/.test(t)) return 'ja'; // 平假名/片假名
+  if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(t)) return 'ko'; // 谚文
+  if (/[\u0400-\u04FF]/.test(t)) return 'ru'; // 西里尔字母
+  if (/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(t)) return 'ar'; // 阿拉伯字母
+  if (/[\u0E00-\u0E7F]/.test(t)) return 'th'; // 泰文
+  if (/[ăâđêôơư]|[ằắẳẵặầấẩẫậềếểễệờớởỡợừứửữự]/i.test(t) && /[A-Za-z]/.test(t)) return 'vi'; // 越南语声调字母
+  if (/[\u4E00-\u9FFF]/.test(t)) return TRADITIONAL_ONLY_RE.test(t) ? 'zh-Hant' : 'zh-Hans'; // 汉字（简/繁）
+  // 拉丁字母：停用词打分 + 特征字母加权
+  const padded = ` ${t.toLowerCase()} `;
+  const countWord = (w: string): number => {
+    const pat = ` ${w}`;
+    let i = 0;
+    let n = 0;
+    while ((i = padded.indexOf(pat, i)) !== -1) {
+      n += 1;
+      i += pat.length;
+    }
+    return n;
+  };
+  const scores: Record<string, number> = {};
+  for (const [code, words] of LATIN_STOPWORDS) scores[code] = words.reduce((n, w) => n + countWord(w), 0);
+  const bonus = (re: RegExp): number => (t.match(re) ?? []).length;
+  scores.fr += bonus(/[éèêàçùûôîï]/g);
+  scores.de += bonus(/[äöüß]/g) * 1.5;
+  scores.es += bonus(/[ñ¿¡]/g) * 2;
+  scores.pt += bonus(/[ãõ]/g) * 2;
+  scores.it += bonus(/[àèìòù]/g) * 0.5;
+  let best = '';
+  let bestScore = 0;
+  for (const [code, score] of Object.entries(scores)) {
+    if (score > bestScore) {
+      best = code;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : '';
+}
+
+/**
+ * 计算一条消息的翻译目标语言（双向翻译的方向判断）：
+ * - 消息语言 = 左侧 → 译成右侧；消息语言 = 右侧 → 译成左侧（「中文翻译成英文，也可以英文翻译成中文」）；
+ * - 检测不出或两侧都不是（如第三种语言）：默认译成左侧（左侧通常为用户母语，看译文更有用）。
+ */
+export function detectTranslateTarget(text: string, left: string, right: string): string {
+  const det = detectMessageLang(text);
+  if (!det) return left;
+  if (det === left) return right;
+  if (det === right) return left;
+  return left;
 }
 
 // ---------------- 译文缓存 ----------------

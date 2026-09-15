@@ -136,7 +136,7 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
-import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, type ChatTranslateCfg } from '@/lib/chat-translate';
+import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
@@ -1688,52 +1688,47 @@ function ChatPage({
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs, stream]);
 
-  // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）逐条请求所选语言的译文。
-  // 缓存、并发闸、在途去重都在 @/lib/chat-translate 内部，这里只负责把结果写入组件状态
+  // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）按检测到的语言双向翻译成另一侧
+  // （左侧语言的消息译成右侧，右侧语言的消息译成左侧）。缓存、并发闸、在途去重都在
+  // @/lib/chat-translate 内部，这里只负责把结果写入组件状态
   useEffect(() => {
-    if (!transCfg.on || transCfg.langs.length === 0) return;
+    if (!transCfg.on) return;
     const isErrText = (s: string) => s.startsWith('（消息发送失败') || s.startsWith('（AI') || s.startsWith('（对方暂时');
     const targets = msgs.filter((m) => !m.kind && m.content.trim() && !isErrText(m.content)).slice(-60);
     if (targets.length === 0) return;
     let alive = true;
     for (const m of targets) {
-      for (const code of transCfg.langs) {
-        const key = `${m.id}|${code}`;
-        if (translations[key] !== undefined || trFailed[key]) continue;
-        requestTranslation({ text: m.content, lang: code, apiConfig })
-          .then((text) => {
-            if (alive) setTranslations((prev) => (prev[key] === text ? prev : { ...prev, [key]: text }));
-          })
-          .catch(() => {
-            if (alive) setTrFailed((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
-          });
-      }
+      const code = detectTranslateTarget(m.content, transCfg.left, transCfg.right);
+      const key = `${m.id}|${code}`;
+      if (translations[key] !== undefined || trFailed[key]) continue;
+      requestTranslation({ text: m.content, lang: code, apiConfig })
+        .then((text) => {
+          if (alive) setTranslations((prev) => (prev[key] === text ? prev : { ...prev, [key]: text }));
+        })
+        .catch(() => {
+          if (alive) setTrFailed((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+        });
     }
     return () => {
       alive = false;
     };
   }, [msgs, transCfg, translations, trFailed, apiConfig]);
 
-  /** 气泡下方译文行（翻译开启且该消息已有所选语言的译文时显示；多语言逐行并带语言名前缀） */
+  /** 气泡下方译文行（翻译开启时按消息语言显示对侧语言的译文，带语言名前缀） */
   const renderTranslations = (msgId: string, content: string) => {
-    if (!transCfg.on || transCfg.langs.length === 0) return null;
+    if (!transCfg.on) return null;
     if (!content.trim() || content.startsWith('（消息发送失败') || content.startsWith('（AI') || content.startsWith('（对方暂时')) return null;
-    const rows = transCfg.langs
-      .map((code) => {
-        const text = translations[`${msgId}|${code}`];
-        return typeof text === 'string' && text ? { code, text } : null;
-      })
-      .filter((x): x is { code: string; text: string } => x !== null);
-    if (rows.length === 0) return null;
-    const multi = rows.length > 1;
-    return rows.map(({ code, text }) => (
+    const code = detectTranslateTarget(content, transCfg.left, transCfg.right);
+    const text = translations[`${msgId}|${code}`];
+    if (typeof text !== 'string' || !text) return null;
+    return (
       <p
-        key={code}
+        data-testid="qq-translate-row"
         className="mt-1 max-w-full whitespace-pre-wrap break-words text-[12.5px] leading-[1.45] text-black/45 dark:text-white/45"
       >
-        {multi ? `${translateLangLabel(code)}：${text}` : text}
+        {`${translateLangLabel(code)}：${text}`}
       </p>
-    ));
+    );
   };
 
   /** 全局流结束（成功/失败）：finalize 已把最终消息落盘，把落盘后的完整记录并回本地并清理流状态。
@@ -2379,9 +2374,7 @@ function ChatPage({
           replyCount={replyCount}
           translateSummary={
             transCfg.on
-              ? transCfg.langs.length > 0
-                ? transCfg.langs.map(translateLangLabel).join('、')
-                : '未选择语言'
+              ? `${translateLangLabel(transCfg.left)} ⇄ ${translateLangLabel(transCfg.right)}`
               : '未开启'
           }
           sentenceSend={sentenceSend}
@@ -2404,26 +2397,16 @@ function ChatPage({
         />
       ) : null}
 
-      {/* 翻译页（聊天设置二级页）：总开关 + 目标语言多选（按会话隔离保存） */}
+      {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}
       {translateOpen ? (
         <ChatTranslatePage
           variant="qq"
-          on={transCfg.on}
-          langs={transCfg.langs}
+          cfg={transCfg}
           onBack={() => setTranslateOpen(false)}
-          onToggle={(v) => {
-            // 开启且未选语言时自动补英语；关闭不影响已选语言
-            const next = normalizeTranslateCfg({ on: v, langs: v && transCfg.langs.length === 0 ? ['en'] : transCfg.langs });
-            saveTranslateCfg(sessionKey, next);
-            setTransCfgState(next);
-          }}
-          onToggleLang={(code) => {
-            const has = transCfg.langs.includes(code);
-            const langs = has ? transCfg.langs.filter((c) => c !== code) : [...transCfg.langs, code];
-            // 取消最后一个语言时自动关闭翻译
-            const next = normalizeTranslateCfg({ on: langs.length > 0 ? transCfg.on : false, langs });
-            saveTranslateCfg(sessionKey, next);
-            setTransCfgState(next);
+          onChange={(next) => {
+            const n = normalizeTranslateCfg(next);
+            saveTranslateCfg(sessionKey, n);
+            setTransCfgState(n);
           }}
         />
       ) : null}

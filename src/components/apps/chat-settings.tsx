@@ -8,8 +8,9 @@
  *   分句发送开关、查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
  * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条（上限，可少发），AI 像
  *   真人一样一句一句连发多条消息（一句一条，由 @/lib/reply-count 切分与节奏控制）
- * - ChatTranslatePage：翻译设置页（三端共用）—— 总开关 + 目标语言多选（每条消息气泡下方
- *   显示全部已选语言的译文，由 @/lib/chat-translate 请求与缓存）
+ * - ChatTranslatePage：翻译语言页（三端共用，参考 iOS 翻译语言页）—— 总开关 + 语言对选择：
+ *   上方左右两个语言槽可点选（点一侧再在下方列表选语言），中间 ⇄ 一键互换；
+ *   聊天中按消息语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧
  * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
@@ -18,10 +19,10 @@
  *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
+import { ArrowLeftRight, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
-import { TRANSLATE_LANGS } from '@/lib/chat-translate';
+import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
 
@@ -770,7 +771,7 @@ export function ChatSearchPage({
   );
 }
 
-// ---------------- 翻译设置页（三端共用二级页） ----------------
+// ---------------- 翻译语言页（三端共用二级页） ----------------
 
 /** 翻译页主题 token（微信灰白 / QQ 冷灰白 / 信息 iOS 风） */
 function translateTokens(variant: ChatSettingsVariant) {
@@ -809,29 +810,92 @@ function translateTokens(variant: ChatSettingsVariant) {
 }
 
 /**
- * 翻译设置页（聊天设置二级页，微信 / QQ / 信息三端共用）：
- * 总开关 + 目标语言多选（每条文字消息气泡下方按顺序显示全部已选语言的译文）。
- * 开关打开且未选语言时由调用方自动补默认语言；取消最后一个语言时由调用方自动关闭开关。
+ * 翻译语言页（聊天设置二级页，微信 / QQ / 信息三端共用，参考 iOS 翻译语言页）：
+ * 总开关 + 语言对选择 —— 上方左右两个语言槽都可点选（点一侧设为待选侧，再在下方列表中
+ * 选择该侧语言），中间 ⇄ 一键互换两侧语言；下方「常用语言 / 更多语言」分组列表，
+ * 两侧已占用的语言灰显。聊天中按消息语言双向翻译：左侧语言的消息译成右侧，反之亦然
+ * （如「中文简体 ⇄ 英语」：中文消息显示英文译文，英文消息显示中文译文）。
  */
 export function ChatTranslatePage({
   variant,
-  on,
-  langs,
+  cfg,
   onBack,
-  onToggle,
-  onToggleLang,
+  onChange,
 }: {
   variant: ChatSettingsVariant;
-  /** 翻译总开关 */
-  on: boolean;
-  /** 已选语言代码列表（多选） */
-  langs: string[];
+  /** 当前会话的翻译配置（on + 语言对） */
+  cfg: ChatTranslateCfg;
   onBack: () => void;
-  onToggle: (v: boolean) => void;
-  onToggleLang: (code: string) => void;
+  /** 开关 / 选语言 / 互换 都统一回传新配置，由调用方持久化（按会话隔离） */
+  onChange: (next: ChatTranslateCfg) => void;
 }) {
   const t = translateTokens(variant);
   const testPrefix = variant;
+  // 当前待设置的一侧（点上方一侧切换；默认左侧）
+  const [side, setSide] = useState<'left' | 'right'>('left');
+
+  /** 列表点选：把语言设到待选侧；选到另一侧正在用的语言时直接互换两侧（不会出现两侧同语言） */
+  const pick = (code: string) => {
+    const other = side === 'left' ? cfg.right : cfg.left;
+    if (code === other) {
+      onChange({ ...cfg, left: cfg.right, right: cfg.left });
+      return;
+    }
+    onChange(side === 'left' ? { ...cfg, left: code } : { ...cfg, right: code });
+  };
+
+  /** 语言槽（左右各一）：待选侧加浅色胶囊底，点击切换待选侧 */
+  const renderSlot = (sideKey: 'left' | 'right', code: string) => {
+    const active = side === sideKey;
+    return (
+      <button
+        type="button"
+        data-testid={`${testPrefix}-translate-side-${sideKey}`}
+        aria-label={`选择${sideKey === 'left' ? '左' : '右'}侧语言，当前 ${translateLangLabel(code)}`}
+        onClick={() => setSide(sideKey)}
+        className={`max-w-[38%] truncate rounded-[12px] px-3.5 py-1.5 text-[20px] font-semibold transition-colors ${
+          active ? 'bg-black/[0.06] dark:bg-white/[0.12]' : 'active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+        }`}
+      >
+        {translateLangLabel(code)}
+      </button>
+    );
+  };
+
+  /** 分组语言列表：两侧已占用的语言灰显；✓ 标记待选侧当前语言 */
+  const renderGroup = (langs: readonly TranslateLang[], groupLabel: string) => (
+    <>
+      <p className="px-1 pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">{groupLabel}</p>
+      <div className={`${t.cardCls} overflow-hidden`}>
+        {langs.map((l, i) => {
+          const activeLang = (side === 'left' ? cfg.left : cfg.right) === l.code;
+          const used = cfg.left === l.code || cfg.right === l.code;
+          return (
+            <div key={l.code}>
+              {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+              <button
+                type="button"
+                data-testid={`${testPrefix}-translate-lang-${l.code}`}
+                aria-label={`把${side === 'left' ? '左' : '右'}侧语言设为${l.label}`}
+                onClick={() => pick(l.code)}
+                className={t.rowCls}
+              >
+                <span className={used ? 'text-black/35 dark:text-white/35' : ''}>{l.label}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {activeLang && (
+                    <span className="grid place-items-center" style={{ color: t.accent }} aria-label="当前语言">
+                      <Check className="h-5 w-5" strokeWidth={2.4} />
+                    </span>
+                  )}
+                  <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+                </span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
 
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
@@ -847,7 +911,7 @@ export function ChatTranslatePage({
           >
             <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
           </button>
-          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>翻译</div>
+          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>翻译语言</div>
         </div>
       </div>
 
@@ -857,49 +921,39 @@ export function ChatTranslatePage({
           <div className={`flex items-center justify-between ${t.rowCls}`}>
             <span>翻译</span>
             <ChatToggle
-              on={on}
-              onChange={onToggle}
+              on={cfg.on}
+              onChange={(v) => onChange({ ...cfg, on: v })}
               accent={t.accent}
               testId={`${testPrefix}-translate-switch`}
               label="翻译"
             />
           </div>
         </div>
-        <p className={t.captionCls}>开启后，聊天中的文字消息会在气泡下方显示所选语言的翻译。</p>
+        <p className={t.captionCls}>开启后，消息会按语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧，译文显示在气泡下方。</p>
 
-        {/* 目标语言多选 */}
-        <p className="px-1 pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">目标语言（可多选）</p>
-        <div className={`${t.cardCls}`}>
-          {TRANSLATE_LANGS.map((l, i) => {
-            const selected = langs.includes(l.code);
-            return (
-              <div key={l.code}>
-                {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
-                <button
-                  type="button"
-                  data-testid={`${testPrefix}-translate-lang-${l.code}`}
-                  aria-pressed={selected}
-                  aria-label={`翻译成${l.label}`}
-                  onClick={() => onToggleLang(l.code)}
-                  className={t.rowCls}
-                >
-                  <span className="flex items-baseline gap-2">
-                    <span>{l.label}</span>
-                    <span className="text-[12.5px] text-black/35 dark:text-white/35">{l.native}</span>
-                  </span>
-                  {selected && (
-                    <span className="grid place-items-center" style={{ color: t.accent }} aria-label="已选中">
-                      <Check className="h-5 w-5" strokeWidth={2.4} />
-                    </span>
-                  )}
-                </button>
-              </div>
-            );
-          })}
+        {/* 语言对选择器：左右两个语言槽 + 中间互换按钮 */}
+        <div className="flex items-center justify-center gap-2 pb-1 pt-4">
+          {renderSlot('left', cfg.left)}
+          <button
+            type="button"
+            data-testid={`${testPrefix}-translate-swap`}
+            aria-label="互换两侧语言"
+            onClick={() => onChange({ ...cfg, left: cfg.right, right: cfg.left })}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-black/55 active:bg-black/[0.05] dark:text-white/55 dark:active:bg-white/[0.08]"
+          >
+            <ArrowLeftRight className="h-[19px] w-[19px]" strokeWidth={2} aria-hidden="true" />
+          </button>
+          {renderSlot('right', cfg.right)}
         </div>
-        <p className={t.captionCls}>
-          可多选：每条消息下方将按顺序显示所有已选语言的译文；换一个聊天对象需要单独设置。
+        <p className="px-1 pb-1 pt-1 text-center text-[13.5px] text-black/40 dark:text-white/40">
+          点击上方一侧，再在下方列表中选择该侧语言
         </p>
+
+        {/* 语言列表：常用语言 / 更多语言 */}
+        {renderGroup(COMMON_TRANSLATE_LANGS, '常用语言')}
+        {renderGroup(MORE_TRANSLATE_LANGS, '更多语言')}
+
+        <p className={t.captionCls}>换一个聊天对象需要单独设置。</p>
       </div>
     </div>
   );
@@ -908,7 +962,7 @@ export function ChatTranslatePage({
 // ---------------- 信息 App 聊天设置页（iOS 风格） ----------------
 
 /**
- * 信息 App 的聊天设置页（聊天页右上角进入）：
+ * 信息 App 的聊天设置页（聊天页顶栏摄像机图标进入）：
  * 对方信息卡片 + 翻译入口（ChatTranslatePage，variant=sms）+ 分句发送开关。
  */
 export function SmsChatSettingsPage({

@@ -4095,3 +4095,21 @@ Stage Summary:
 - 分句发送：三端聊天设置新增开关；开启后连续发送的消息 AI 都不回复（批次标记持久化），输入框为空时再点一次「发送」才把整批消息交给 AI 统一回复；待回复期间输入栏上方有提示、发送按钮保持可见；关闭开关清除批次恢复即时回复
 - 信息 App 补建聊天设置页（此前无）：右上角齿轮进入，含翻译入口与分句发送
 - 涉及文件：src/lib/chat-translate.ts（新）、src/lib/sentence-send.ts（新）、src/app/api/translate/route.ts（新）、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx
+---
+Task ID: translate-bidirectional-sms-camera
+Agent: Z.ai Code (main)
+Task: 翻译功能改版为「语言对双向翻译」（语言两边都可以选择：中文⇄英文 亦可 英文⇄中文，参考用户截图的 iOS 翻译语言页）；信息 App 聊天界面删除右上角设置齿轮，改为点击顶栏摄像机（Video）图标进入聊天设置
+
+Work Log:
+- src/lib/chat-translate.ts 重写：①配置模型由 { on, langs[] 多选 } 改为 { on, left, right } 语言对（默认 中文简体 ⇄ 英语），normalizeTranslateCfg 兼容旧结构迁移（右=旧目标语言列表第一个，两侧同语言自动兜底）并校验合法性；②语言清单扩为 常用语言 9 个（中文简体/英语/日语/韩语/法语/俄语/西班牙语/阿拉伯语/德语）+ 更多语言 5 个（繁体中文/意大利语/葡萄牙语/泰语/越南语），TRANSLATE_LANGS=两组合集；③新增 detectMessageLang（按文字体系：假名→日/谚文→韩/西里尔→俄/阿拉伯字母→阿/泰文→泰/越南语声调字母/汉字简繁判定（繁体特征字正则），拉丁字母间按停用词+特征字母打分）与 detectTranslateTarget（消息=左侧→译右侧，=右侧→译左侧，检测不出或第三种语言→译左侧母语），实现「中文翻译成英文，也可以英文翻译成中文」的双向方向判定；缓存 key=<语言>|<原文> 与并发闸/在途去重/失败冷却沿用
+- src/components/apps/chat-settings.tsx：ChatTranslatePage 重写为「翻译语言」页（参考用户截图）：总开关 + 上方左右两个语言槽（点击设为待选侧，待选侧加浅色胶囊底）+ 中间 ⇄ 互换按钮（一键交换两侧语言）+ 提示「点击上方一侧，再在下方列表中选择该侧语言」+ 常用语言/更多语言分组列表（两侧已占用语言灰显，✓ 标记待选侧当前语言；选到另一侧正在用的语言时自动互换）；Props 改为 cfg+onChange(next)，三端通用（variant=wx|qq|sms 三套主题）
+- wechat.tsx / qq.tsx / chat.tsx 三端：翻译 effect 改为每条消息按 detectTranslateTarget 求单目标语言（不再多语言循环）；renderTranslations 改为单行译文「<语言名>：<译文>」（方向可变故始终带语言名前缀）；设置页翻译摘要改为「中文简体 ⇄ 英语」形式；ChatTranslatePage 新 Props 接线（onChange 内 normalize+save+setState）；测试锚点 wx/qq/sms-translate-row
+- chat.tsx（信息）：顶栏右侧删除 Settings 齿轮按钮，原 Video 摄像机图标改为聊天设置入口按钮（aria-label=聊天设置，testid 沿用 sms-chat-settings-entry），点击进入 SmsChatSettingsPage；Settings 图标 import 移除；注释同步
+- 逻辑验证（bun 直接 import 真实模块）：中文→右侧/英文→左侧/第三语言（日语）→左侧母语/简繁互译/法德西方向判定全部 PASS；旧配置迁移 {on,langs:['ja']}→{left:zh-Hans,right:ja}、两侧同语言兜底 PASS
+- E2E（agent-browser 393×852，seed IndexedDB 小艾/晴晴(friendWx/Qq/Sms) + 登录态 + fetch stub（/api/chat 纯文本流 + /api/translate 字典 JSON））：①微信聊天设置「翻译 未开启」→ 翻译语言页渲染与截图一致（中文简体胶囊⇄英语、绿✓、占用灰显）；②开关→点右侧槽选日语（配置 {left:zh-Hans,right:ja} 持久化、日语✓）→⇄互换（日语⇄中文简体，✓ 随活动侧移动）→点另一侧语言自动互换→重置为 中文简体⇄英语；③发「你好」→气泡下「英语：Hello」，AI 回复 "I'm fine, thanks"→「中文简体：我很好，谢谢」（反向翻译成立），第二条「今天心情怎么样？」→英语译文；④设置摘要「翻译 中文简体 ⇄ 英语」；⑤信息 App：顶栏仅剩摄像机图标（无齿轮）→点击进入 iOS 风格聊天设置→翻译语言页（蓝勾主题）→开启后「你好」→「英语：Hello」（缓存复用 0 新请求）+ AI 回复→中文译文、已送达正常；⑥QQ：翻译「未开启」与微信隔离→翻译语言页蓝勾主题→开启后同套双向翻译与三端独立配置（localStorage 三条 wx/sms/qq 记录互不影响）；⑦QQ 空输入禁用发送按钮为既有逻辑非本次引入；⑧console 无错误、dev.log 无应用错误（502 为用户未配置上游 API 的预期现象，stub 接管后链路正常）；lint + tsc 0 问题
+- 测试数据仅存在于 agent-browser 隔离档案（IndexedDB/localStorage），未污染用户数据与仓库
+
+Stage Summary:
+- 翻译改为「语言对」模型：翻译语言页左右两个语言槽均可自由选择（点击一侧→下方列表选语言），⇄ 一键互换，支持双向翻译——左侧语言的消息气泡下方显示右侧语言译文，右侧语言的消息显示左侧语言译文（中文⇄英文两个方向都成立），第三种语言默认译成左侧母语；语言检测按文字体系+停用词打分，配置按会话（角色+App）隔离持久化，旧多选配置自动迁移
+- 信息 App 聊天界面：右上角设置齿轮已删除，点击顶栏摄像机图标进入聊天设置（翻译入口+分句发送）
+- 涉及文件：src/lib/chat-translate.ts、src/components/apps/chat-settings.tsx、src/components/apps/{wechat,qq,chat}.tsx
