@@ -37,7 +37,7 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
-import type { ContactRecord } from '@/lib/contacts';
+import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 
 // ---------------- 类型与常量 ----------------
@@ -732,7 +732,7 @@ function AddFriendView({
   const [justDeleted, setJustDeleted] = useState<string | null>(null);
 
   const pending = useMemo(
-    () => contacts.filter((c) => c.kind !== 'user' && !c.isFriend),
+    () => contacts.filter((c) => c.kind !== 'user' && !isFriendIn(c, 'sms')),
     [contacts]
   );
   /** 只有输入手机号才搜索（名字搜不到）：必须凭手机号才能找到待添加的好友 */
@@ -761,10 +761,10 @@ function AddFriendView({
     setAddingId(c.id);
     setError('');
     try {
-      const updated = await updateContact(c.id, { isFriend: true });
+      const updated = await updateContact(c.id, { friendSms: true });
       if (!updated) throw new Error('联系人不存在');
       onAddFriend(updated);
-      setJustAdded(updated.name);
+      setJustAdded(displayNameOf(updated));
     } catch (err) {
       setError(err instanceof Error ? err.message : '添加失败，请重试');
     } finally {
@@ -1034,8 +1034,8 @@ function ContactsPanel({
     [c.name, c.phone, c.wechatId, c.occupation, c.region, c.relation].some(
       (v) => typeof v === 'string' && v.toLowerCase().includes(q)
     );
-  const charList = contacts.filter((c) => c.kind === 'char' && c.isFriend && match(c));
-  const npcList = contacts.filter((c) => c.kind === 'npc' && c.isFriend && match(c));
+  const charList = contacts.filter((c) => c.kind === 'char' && isFriendIn(c, 'sms') && match(c));
+  const npcList = contacts.filter((c) => c.kind === 'npc' && isFriendIn(c, 'sms') && match(c));
   const friendList = [...charList, ...npcList];
 
   return (
@@ -1123,7 +1123,7 @@ interface ContactSessionPreview {
 function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[] {
   const out: ContactSessionPreview[] = [];
   for (const c of contacts) {
-    if (c.kind === 'user' || !c.isFriend) continue;
+    if (c.kind === 'user' || !isFriendIn(c, 'sms')) continue;
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
     const last = msgs[msgs.length - 1];
@@ -1320,7 +1320,8 @@ export default function ChatApp() {
   const loadContacts = useCallback(async () => {
     setContactState('loading');
     try {
-      setContacts(await listContacts());
+      // 信息 App 内显示昵称（昵称优先于真实名字，与 QQ/微信一致）
+      setContacts(withDisplayNames(await listContacts()));
       setContactState('ready');
     } catch {
       setContactState('error');
@@ -1331,13 +1332,14 @@ export default function ChatApp() {
     void loadContacts();
   }, [loadContacts]);
 
-  /** 添加好友后同步联系人数据（列表/面板/会话即时生效） */
+  /** 添加好友后同步联系人数据（列表/面板/会话即时生效；落库记录带真实名字，展示层统一换成昵称） */
   const upsertContact = useCallback((c: ContactRecord) => {
+    const shown = withDisplayNames([c])[0];
     setContacts((prev) => {
       const i = prev.findIndex((x) => x.id === c.id);
-      if (i === -1) return [c, ...prev];
+      if (i === -1) return [shown, ...prev];
       const next = [...prev];
-      next[i] = c;
+      next[i] = shown;
       return next;
     });
   }, []);

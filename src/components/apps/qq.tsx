@@ -136,7 +136,7 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
-import { displayNameOf, withDisplayNames } from '@/lib/contacts';
+import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
@@ -1863,7 +1863,7 @@ function ChatPage({
 
   return (
     <div
-      className="relative flex h-full w-full flex-col overflow-hidden bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]"
+      className="relative flex h-full w-full flex-col overflow-hidden bg-[#F5F6F7] dark:bg-[#111214]"
       onPointerDown={onSwipeStart}
       onPointerMove={onSwipeMove}
       onPointerCancel={() => {
@@ -1879,8 +1879,10 @@ function ChatPage({
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
-      {/* 顶栏：返回 + 名字/徽章/在线 + 企鹅 + 菜单（对照 QQ 真机；对方回复中名字变「正在输入中…」） */}
-      <div className="relative z-10 flex h-12 shrink-0 items-center gap-1 bg-[#F5F6F7] px-3 dark:bg-[#111214]">
+      {/* 顶栏：返回 + 名字/徽章/在线 + 企鹅 + 菜单（对照 QQ 真机；对方回复中名字变「正在输入中…」）。
+          状态栏预留收进顶栏内（与顶栏同色同层）：自定义聊天背景不再透到状态栏区域（与微信聊天页同套结构） */}
+      <div className="relative z-10 shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
+        <div className="flex h-12 items-center gap-1 px-3">
         <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
           <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
         </button>
@@ -1936,6 +1938,7 @@ function ChatPage({
         >
           <Menu className="h-[22px] w-[22px] text-black/70 dark:text-white/70" strokeWidth={2.2} />
         </button>
+        </div>
       </div>
 
       {/* 消息流（页面任意位置左滑 → 好友互动标识页；自定义聊天背景时透出背景层） */}
@@ -3875,7 +3878,7 @@ function MessagesPage({
   /** 全量会话（未套搜索过滤）：幽灵未读清理必须以全量列表为准，否则搜索时会把列表外会话的未读误删 */
   const baseConversations = useMemo(() => {
     const list = contacts.filter(
-      (c) => ((c.isFriend && c.kind !== 'user') || c.id === me.id) && !(hiddenSet.has(c.id) && loadMsgs(c.id).length === 0)
+      (c) => ((isFriendIn(c, 'qq') && c.kind !== 'user') || c.id === me.id) && !(hiddenSet.has(c.id) && loadMsgs(c.id).length === 0)
     );
     const withPreview = list.map((c) => {
       const msgs = loadMsgs(c.id);
@@ -4174,7 +4177,7 @@ function ContactsPage({
   const [expandSpecial, setExpandSpecial] = useState(false);
   const [expandFriends, setExpandFriends] = useState(true);
 
-  const friends = useMemo(() => contacts.filter((c) => c.isFriend && c.kind !== 'user'), [contacts]);
+  const friends = useMemo(() => contacts.filter((c) => isFriendIn(c, 'qq') && c.kind !== 'user'), [contacts]);
   const special = useMemo(() => friends.filter((c) => c.relation?.includes('特别') || c.relation?.includes('关心')), [friends]);
   const normalFriends = useMemo(() => friends.filter((c) => !special.includes(c)), [friends, special]);
 
@@ -5024,8 +5027,8 @@ function AddFriendPage({
   const [tab, setTab] = useState<'找人' | '找群'>('找人');
   const [adding, setAdding] = useState<string | null>(null);
 
-  // 推荐：未加好友的人（char/npc，排除自己）
-  const suggestions = useMemo(() => contacts.filter((c) => !c.isFriend && c.id !== me.id).slice(0, 8), [contacts, me.id]);
+  // 推荐：未加 QQ 好友的人（char/npc，排除自己；QQ 好友独立，微信/信息里加过的不算）
+  const suggestions = useMemo(() => contacts.filter((c) => !isFriendIn(c, 'qq') && c.id !== me.id).slice(0, 8), [contacts, me.id]);
   // 搜索：仅按 QQ 号匹配（输入 QQ 号才出现联系人）
   const results = useMemo(() => {
     const k = kw.trim();
@@ -5037,7 +5040,7 @@ function AddFriendPage({
     if (adding) return;
     setAdding(c.id);
     try {
-      await updateContact(c.id, { isFriend: true });
+      await updateContact(c.id, { friendQq: true });
       onContactsChanged();
       onToast(`已添加 ${c.name} 为好友`);
     } catch {
@@ -5073,7 +5076,7 @@ function AddFriendPage({
 
   const resultRows = (list: ContactRecord[]) =>
     list.map((c) =>
-      c.isFriend ? (
+      isFriendIn(c, 'qq') ? (
         <div key={c.id} className="flex items-center gap-3 px-4 py-3">
           <QqAvatar src={c.avatar} alt={c.name} size={56} />
           <div className="min-w-0 flex-1">
@@ -5227,14 +5230,14 @@ function NewFriendsPage({
   const [adding, setAdding] = useState<string | null>(null);
   const [showSync, setShowSync] = useState(true);
 
-  // 推荐：未加好友的人（char/npc，排除自己）
-  const suggestions = useMemo(() => contacts.filter((c) => !c.isFriend && c.id !== me.id).slice(0, 8), [contacts, me.id]);
+  // 推荐：未加 QQ 好友的人（char/npc，排除自己；QQ 好友独立，微信/信息里加过的不算）
+  const suggestions = useMemo(() => contacts.filter((c) => !isFriendIn(c, 'qq') && c.id !== me.id).slice(0, 8), [contacts, me.id]);
 
   const addFriend = async (c: ContactRecord) => {
     if (adding) return;
     setAdding(c.id);
     try {
-      await updateContact(c.id, { isFriend: true });
+      await updateContact(c.id, { friendQq: true });
       onContactsChanged();
       onToast(`已添加 ${c.name} 为好友`);
     } catch {

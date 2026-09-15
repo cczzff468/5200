@@ -35,8 +35,14 @@ export interface ContactRecord {
   qqId: string | null;
   qqPassword: string | null;
   avatar: string | null;
-  /** 是否已添加为好友（CHAR/NPC 创建后默认 false；USER 恒为 true） */
+  /** 是否已添加为好友（手机级状态：联系人/电话 App 用；CHAR/NPC 创建后默认 false；USER 恒为 true） */
   isFriend: boolean;
+  /** 微信好友标记（QQ/微信/信息好友相互独立；缺省 = 沿用旧全局 isFriend） */
+  friendWx?: boolean;
+  /** QQ 好友标记（缺省 = 沿用旧全局 isFriend） */
+  friendQq?: boolean;
+  /** 信息 App 好友标记（缺省 = 沿用旧全局 isFriend） */
+  friendSms?: boolean;
   createdAt: string;
 }
 
@@ -64,6 +70,9 @@ export interface ContactPayload {
   qqPassword?: string | null;
   avatar?: string | null;
   isFriend?: boolean;
+  friendWx?: boolean;
+  friendQq?: boolean;
+  friendSms?: boolean;
 }
 
 function randInt(min: number, max: number): number {
@@ -79,9 +88,27 @@ export function displayNameOf(c: Pick<ContactRecord, 'name' | 'nickname'>): stri
   return nick ? nick : c.name;
 }
 
-/** 把一组联系人的 name 替换成昵称展示名（仅供 QQ/微信等 App 内部显示用，真实名字不变） */
+/** 把一组联系人的 name 替换成昵称展示名（仅供 QQ/微信/信息等 App 内部显示用，真实名字不变） */
 export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
   return list.map((c) => (c.nickname?.trim() ? { ...c, name: displayNameOf(c) } : c));
+}
+
+/** 拥有独立好友状态的社交 App（QQ / 微信 / 信息：一个 App 添加好友不影响其他 App） */
+export type FriendApp = 'wx' | 'qq' | 'sms';
+
+/**
+ * 某 App 内是否已添加好友：
+ * - USER 恒为好友（自己的账号）
+ * - 分 App 标记（friendWx/friendQq/friendSms）已设置时以标记为准
+ * - 标记缺省（历史数据）回退到全局 isFriend，老好友保持原状
+ */
+export function isFriendIn(
+  c: Pick<ContactRecord, 'kind' | 'isFriend' | 'friendWx' | 'friendQq' | 'friendSms'>,
+  app: FriendApp
+): boolean {
+  if (c.kind === 'user') return true;
+  const v = app === 'wx' ? c.friendWx : app === 'qq' ? c.friendQq : c.friendSms;
+  return typeof v === 'boolean' ? v : !!c.isFriend;
 }
 
 function pick(chars: string): string {

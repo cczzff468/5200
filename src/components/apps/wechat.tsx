@@ -5,7 +5,7 @@
  * - 登录：账号数据来自「联系人 App」中 kind = user 的联系人
  *   ① 手机号 + 微信密码 ② 微信号 / QQ 号 + 对应密码（本地 IndexedDB 联系人校验，不调服务端）
  * - 登录后：微信 / 通讯录 / 发现 / 我 四个 tab + 好友 AI 聊天 + 朋友圈（发布/点赞/评论）+ 好友朋友圈 + 添加朋友 + 设置（退出登录）
- * - 通讯录与「信息」App 一致：只有添加过的好友（isFriend）才显示；首次登录只有「我」自己
+ * - 通讯录与「信息」App 一致：只有添加过的微信好友（friendWx，独立于 QQ/信息）才显示；首次登录只有「我」自己
  * - char / npc 账号暂不支持登录（本地校验拦截）
  */
 
@@ -65,7 +65,7 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, updateContact } from '@/lib/ios/contacts-store';
-import { displayNameOf, withDisplayNames } from '@/lib/contacts';
+import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
@@ -4338,11 +4338,11 @@ function AddFriendPage({
     setAddingId(c.id);
     setErr('');
     try {
-      const updated = await updateContact(c.id, { isFriend: true });
+      const updated = await updateContact(c.id, { friendWx: true });
       if (!updated) throw new Error('联系人不存在');
       setAddedIds((prev) => new Set(prev).add(c.id));
       onAdded(updated);
-      onToast(`已添加「${updated.name}」`);
+      onToast(`已添加「${displayNameOf(updated)}」`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '添加失败，请重试');
     } finally {
@@ -4413,7 +4413,7 @@ function AddFriendPage({
           ) : (
             <div>
               {results.map((c) => {
-                const added = c.isFriend || addedIds.has(c.id);
+                const added = isFriendIn(c, 'wx') || addedIds.has(c.id);
                 return (
                   <div
                     key={c.id}
@@ -4816,9 +4816,9 @@ function MainScreen({
     setChatPeer(null);
   };
 
-  /** 好友（可聊天对象）：CHAR / NPC 中已添加好友的 */
+  /** 好友（可聊天对象）：CHAR / NPC 中已添加微信好友的（微信好友独立，QQ/信息里添加的不算） */
   const friends = useMemo(
-    () => contacts.filter((c) => c.kind !== 'user' && c.isFriend),
+    () => contacts.filter((c) => c.kind !== 'user' && isFriendIn(c, 'wx')),
     [contacts]
   );
 
@@ -5043,7 +5043,7 @@ function MainScreen({
     (c: ContactRecord) => {
       const entry: WxFriendReq = {
         id: c.id,
-        name: c.name,
+        name: displayNameOf(c),
         avatar: c.avatar,
         message: `我是${me.name}，加个好友吧`,
         time: Date.now(),

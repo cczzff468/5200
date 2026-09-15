@@ -153,6 +153,10 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if (typeof patch.isFriend === 'boolean') {
     next.isFriend = existing.kind === 'user' ? true : patch.isFriend;
   }
+  // 分 App 好友标记（QQ/微信/信息相互独立，一个 App 添加不影响其他 App）
+  if (typeof patch.friendWx === 'boolean') next.friendWx = existing.kind === 'user' ? true : patch.friendWx;
+  if (typeof patch.friendQq === 'boolean') next.friendQq = existing.kind === 'user' ? true : patch.friendQq;
+  if (typeof patch.friendSms === 'boolean') next.friendSms = existing.kind === 'user' ? true : patch.friendSms;
 
   await localDB.put('contacts', next);
   return next;

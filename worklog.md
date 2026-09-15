@@ -3987,3 +3987,23 @@ Work Log:
 Stage Summary:
 - 聊天背景从设置页内嵌区块升级为独立二级页（微信/QQ 双端：预览卡片→从手机相册上传→内置纯色壁纸），设置页保留「聊天背景」入口行带当前背景迷你预览；设置页置顶/免打扰行图标删除；QQ 全部开关（聊天设置置顶/免打扰 + 钱包支付密码）统一 QQ 蓝 #0099FF；微信/QQ 聊天页标题右侧免打扰铃铛随 flags.muted 实时显隐且与列表页/设置页三方联动
 - 涉及文件：src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: qq-statusbar-friends
+Agent: Z.ai Code (main)
+Task: ①QQ 聊天页状态栏修复 ②QQ/微信/信息好友相互独立（一个 App 添加不再全局生效）③信息 App 显示昵称
+
+Work Log:
+- 状态栏修复（qq.tsx ChatPage）：根因是页面根容器自带 pt-[54px]，自定义聊天背景层（absolute inset-0 z-0）因此透到状态栏区域，而顶栏（h-12 自带 #F5F6F7 底色）从 54px 才开始 → 出现「状态栏一条聊天背景色、顶栏另一色」的断层（用户截图现象）。改为与微信聊天页同套结构：根容器去掉 pt-[54px]，顶栏外层包一层 `shrink-0 bg-[#F5F6F7] pt-[54px] z-10`，状态栏+顶栏同色同层盖住背景层，背景只在消息区透出
+- 好友独立化数据层（lib/contacts.ts + lib/ios/contacts-store.ts）：ContactRecord 新增可选字段 friendWx/friendQq/friendSms；新增 `isFriendIn(c, app)`（user 恒 true；分 App 标记优先，缺省回退旧全局 isFriend —— 历史好友保持原状、零迁移）；updateContact 支持三个布尔补丁。联系人 App/电话 App 仍用全局 isFriend（手机级通讯录语义不变，导入即好友不变）
+- wechat.tsx：好友列表/添加按钮态判定改 isFriendIn(c,'wx')（friends 过滤、添加朋友页 added 判定）；添加动作改写 { friendWx: true }；「新的朋友」通知条目名字改 displayNameOf；文件头注释同步
+- qq.tsx：会话列表/联系人 tab 好友/添加好友页推荐/新朋友页推荐/结果行好友判定 全部改 isFriendIn(c,'qq')；两处 addFriend 改写 { friendQq: true }
+- chat.tsx（信息）：AddFriendView 待添加列表/联系人面板/会话扫描改 isFriendIn(c,'sms')；添加动作改写 { friendSms: true }；loadContacts 应用 withDisplayNames（信息 App 全量昵称化，与 QQ/微信一致）；upsertContact 补 withDisplayNames（修 E2E 中发现的「添加后列表回退显示真实名字」bug）；添加成功提示用 displayNameOf
+- E2E（agent-browser 393×852）：注入测试联系人王测试(昵称小测, isFriend=false) → QQ 新朋友页显示「小测」→ 添加成功且 DB 仅 friendQq=true → 微信通讯录/会话无此人、搜索后按钮为「添加到通讯录」→ 添加后 DB wx=true qq=true sms 缺省 → 信息联系人面板无此人、凭手机号搜索可见并添加 → 信息面板显示「小测」（发现并修复 upsert 覆盖昵称 bug 后复验通过）→ QQ 聊天页选 #BAD5E8 蓝背景：elementFromPoint 实测状态栏区(y=20)=#F5F6F7 顶栏同色、消息区透出蓝色，截图确认断层消失；晴晴免打扰铃铛/蓝色开关回归正常
+- 清理：测试联系人删除（剩余 2 条原数据）、qq-chat-flags 恢复 bgMode=image、wx-friend-reqs 清空；bun run lint + bunx tsc --noEmit 0 错误；dev.log 无应用错误
+
+Stage Summary:
+- QQ 聊天页状态栏与顶栏颜色断层修复（背景层不再透到状态栏，与微信同构）
+- 好友系统按 App 独立：QQ(friendQq)/微信(friendWx)/信息(friendSms) 各自维护，一个 App 添加好友不再波及其他 App；旧数据经 isFriend 回退保持兼容；联系人/电话 App 仍走手机级 isFriend
+- 信息 App 全面显示昵称（列表/面板/添加页/提示），添加后即时刷新也不再回退真实名字
+- 涉及文件：src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/components/apps/{qq,wechat,chat}.tsx
