@@ -4138,3 +4138,21 @@ Stage Summary:
 - 聊天设置信息卡片成为联系人详细界面入口：微信→好友详情页（含「朋友资料」→联系人App编辑）、QQ→好友资料页（含「编辑资料」→联系人App编辑）
 - QQ 好友资料页「送礼物」替换为「编辑资料」；「朋友资料」「编辑资料」均经 pendingContactEdit 跨 App 直达联系人 App 对应联系人的编辑页（预填完整表单），编辑保存后数据即时同步回三端（会话列表昵称等）
 - 涉及文件：src/lib/ios/store.ts、src/components/apps/chat-settings.tsx、src/components/apps/{qq,wechat,chat,contacts}.tsx
+---
+Task ID: reply-count-continue-topup
+Agent: Z.ai Code (main)
+Task: 修复「AI 一直只发 3 条消息，设了更大的回复条数也不多发」的问题
+
+Work Log:
+- 根因定位：①buildReplyCountPrompt 措辞是宽松上限（「最多 N 条…少发几条甚至只发一条都完全可以；千万不要硬凑条数」），模型对这种措辞天然偷懒，实测无论设 5/7/15/20/30 都只回两三条；②客户端对「模型没发够条数」没有任何兜底机制。
+- src/lib/reply-count.ts：①buildReplyCountPrompt 重写为【目标条数】导向（「这次要发 N 条左右」），n≥7 时追加「怎么自然铺开」的具体思路（细节/感受/吐槽/提问/描述动作状态/聊相关新话题），要求每条有实际内容、不重复啰嗦、不用客套凑数；②新增 buildContinueReplyPrompt(remaining, total)——补发指令（不给模型「少发也行」的退路，写明还差几条/总共几条）；③新增 endsWithReplyBoundary(text)——判断文本是否以消息边界（换行/&&&/句末标点+收尾引号）收尾。
+- src/lib/chat-stream-store.ts（三端共用的全局流总线，一处改三端生效）：①抽出 streamOnce(roundMessages) 单轮流请求助手（服务器代理 + directOnly/内网浏览器直连回退，原逻辑平移）；②新增连发补发循环——首轮流结束后按 splitReplySegments(raw,true) 切分计数，未达目标条数时把已发内容作为 assistant 消息附回 + user 角色追加「继续连发」指令自动追发，直到凑够条数/达到 MAX_REPLY_ROUNDS=6 轮上限/无新内容；③补发前用 endsWithReplyBoundary 检查，上轮末尾没打完先补一个换行边界（避免补发内容黏进上一条气泡）；④补发轮失败仅停止补发、保留已收内容正常收尾（不打断已显示的消息，不整条流报错）；⑤补发轮增量继续进同一个连发节奏器，界面一句一句逐条连发的节奏与退出页面继续接收均不受影响；⑥新增 raw 累计上游原始内容（计数用，与节奏器展示前缀分离）。
+- 模块级验证（bun 直跑真实模块 + stub fetch，临时脚本已删）：场景A 目标15、上游3条/轮 → 自动补发 5 轮、15 条独立消息、各自分句正确、补发轮请求体 roles=[system,user,assistant,user] 且剩余条数计算正确（12/9/6/3）；场景B 上轮不以边界收尾 → 补换行修复生效、无黏连；场景C 上游每轮只回1条、目标30 → 6 轮上限处停止、无无限请求、正常收尾。
+- E2E（agent-browser 隔离会话，393×852，seed IndexedDB 小艾/晴晴酱(friendWx/Qq/Sms) + localStorage 会话/回复条数 + window.fetch stub 上游每次只回 3 条纯文本流）：①微信 replyCount=15 → 精确 5 次请求、落盘 15 条 peer 消息（第1句~第15句各自独立、15 个不同时间戳）、DOM 16 行、流气泡清理、截图确认 15 个连续气泡逐条显示；②QQ replyCount=20 → 6 次请求（轮数上限生效）、18 条 peer 消息、最后一轮剩余条数=5 计算正确；③全程 console 0 错误、dev.log 无应用错误；④测试数据仅存在于 agent-browser 隔离档案并已清库，未污染用户数据与仓库；lint + tsc 0 问题。
+- 说明：信息 App（chat.tsx）与微信/QQ 共用 beginChatStream，补发机制自动生效；电话语音功能与三端既有逻辑、角色隔离均未改动。
+
+Stage Summary:
+- 回复条数从「宽松上限」改为「目标条数」：提示词直接要求发 N 条左右并给出大条数自然铺开的写法
+- 新增三端共用的连发补发兜底：模型一轮没发够就自动带着已发内容追加「继续连发」请求，最多补发 5 次（共 6 轮），凑够条数为止；补发内容不黏连、逐条连发节奏不变、补发失败不影响已收消息、页面退出照常接收
+- 上限保护：无论模型多「固执」，单次回复最多 6 轮请求，不会无限烧 API
+- 涉及文件：src/lib/reply-count.ts、src/lib/chat-stream-store.ts
