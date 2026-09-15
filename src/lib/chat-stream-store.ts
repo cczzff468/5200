@@ -17,14 +17,7 @@
  * 6. 角色隔离：以 sessionKey（如 wx:<contactId> / qq:<contactId> / sms:<storageKey>）为键，
  *    每个会话同一时刻最多一条流（isChatStreaming 防重入），不同角色 / 不同 App 的流互不影响；
  *    人设 system 消息仍由各 App 在发送时组装后随 messages 传入（本模块原样透传，不感知人设）。
- * 7. 连发补发（回复条数 > 1）：模型对条数指令天然偷懒（实测无论设多大都只回两三条），
- *    首轮流结束后若按边界切出的条数未达目标，自动把已发内容附回并追加「继续连发」
- *    指令再请求，直到凑够条数 / 达到轮数上限 / 无新内容；补发轮的增量继续进同一个
- *    节奏器，界面上一句一句连发的节奏不受影响，补发轮失败则保留已收内容正常收尾。
- * 7. 连发补发（回复条数 > 1）：模型对条数指令天然偷懒（实测无论设多大都只回两三条），
- *    首轮流结束后若按边界切出的条数未达目标，自动把已发内容附回并追加「继续连发」
- *    指令再请求，直到凑够条数 / 达到轮数上限 / 无新内容；补发轮的增量继续进同一个
- *    节奏器，界面上一句一句连发的节奏不受影响，补发轮失败则保留已收内容正常收尾。
+ * 7. 回复条数：条数指令由各 App 注入人设 system 消息，一轮发完、不做补发；
  *
  * 响应格式：/api/chat 返回 text/plain 纯文本增量流（服务端已把上游 SSE 解析为纯文本），
  * 客户端按「字节累积 = 已收内容」处理；上游不可达 / directOnly 时回退浏览器直连
@@ -34,16 +27,7 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ApiConfig } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
-import {
-  buildContinueReplyPrompt,
-  createReplyPacer,
-  endsWithReplyBoundary,
-  splitReplySegments,
-} from '@/lib/reply-count';
-
-/** 单次回复最多发起的请求轮数（首轮 + 最多 5 次补发）：防止模型死活凑不够时无限请求 */
-const MAX_REPLY_ROUNDS = 6;
-
+import { createReplyPacer } from '@/lib/reply-count';
 // ---------------- 公开类型 ----------------
 
 export type ChatStreamStatus = 'streaming' | 'done' | 'error';
@@ -152,25 +136,20 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   // 连发节奏器（回复条数 > 1 时启用）：分隔/句末边界后先停顿再放出下一条，
   // 流数据接收结束后剩余消息也继续按节奏逐条放出（end 返回 Promise，全部放完才 resolve）
   const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
-  const target = multi && opts.replyCount ? opts.replyCount : 0;
   const pacer = multi ? createReplyPacer((shown) => patchState(rt, { content: shown })) : null;
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
   const effConfig =
     multi && opts.replyCount
       ? { ...apiConfig, maxTokens: Math.max(apiConfig.maxTokens, opts.replyCount * 120) }
       : apiConfig;
-  /** 上游原始内容的累计（连发补发轮的条数切分计数用它；节奏器放出的展示内容只是其前缀） */
-  let raw = '';
   /** 增量统一入口：多条模式进节奏器，单条模式直接透传 */
   const onDelta = (delta: string): void => {
-    raw += delta;
     if (pacer) pacer.push(delta);
     else patchState(rt, { content: acc() + delta });
   };
   /**
    * 发起一轮流式请求并读完整条流（增量统一交给 onDelta）。
-   * 服务器代理失败 / directOnly / 内网地址时回退浏览器直连（SSE 解析）；
-   * 抛错交给调用方：首轮抛错 = 整条流失败；补发轮抛错被补发循环吞掉（保留已有内容）。
+   * 服务器代理失败 / directOnly / 内网地址时回退浏览器直连（SSE 解析）；抛错交给调用方。
    */
   const streamOnce = async (roundMessages: ChatPayloadMessage[]): Promise<void> => {
     const res = await fetch('/api/chat', {
@@ -179,7 +158,6 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
       body: JSON.stringify({
         messages: roundMessages,
         config: effConfig,
-        ...(multi ? { replyCount: opts.replyCount } : {}),
       }),
     });
     if (!res.ok || !res.body) {
@@ -224,31 +202,8 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   };
 
   try {
-    // 首轮：按各 App 组装的消息发起请求
+    // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）
     await streamOnce(messages);
-    // 连发补发（回复条数 > 1）：模型习惯性少发（常只回两三条），一次没发够目标条数时
-    // 把已发内容附回并追加「继续连发」指令自动追发，直到凑够条数 / 轮数上限 / 无新内容；
-    // 补发轮的增量继续进同一个节奏器，界面上一句一句连发的节奏不受影响，页面退出也不受影响
-    if (multi && target > 0) {
-      for (let round = 1; round < MAX_REPLY_ROUNDS && raw.trim().length > 0; round++) {
-        const segCount = splitReplySegments(raw, true).length;
-        if (segCount >= target) break;
-        // 上轮内容没以边界收尾（最后一条没打完）：先补一个换行让它成为完整一条，
-        // 否则补发的内容会黏进上一条消息（换行不改变已切出的条数）
-        if (!endsWithReplyBoundary(raw)) onDelta('\n');
-        const before = raw.length;
-        try {
-          await streamOnce([
-            ...messages,
-            { role: 'assistant', content: raw },
-            { role: 'user', content: buildContinueReplyPrompt(target - segCount, target) },
-          ]);
-        } catch {
-          break; // 补发轮失败：保留已收到的内容正常收尾（已显示的消息不受影响）
-        }
-        if (raw.length === before) break; // 本轮没有新内容：停止补发
-      }
-    }
     // 流数据接收结束：剩余未放出的消息继续按连发节奏逐条放出（每条完整弹出、间隔停顿），
     // 全部放完后才收尾落盘 —— 短回复也是一句一句出现，不会在流结束瞬间全部弹出
     await pacer?.end();

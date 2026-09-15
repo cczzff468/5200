@@ -4156,3 +4156,20 @@ Stage Summary:
 - 新增三端共用的连发补发兜底：模型一轮没发够就自动带着已发内容追加「继续连发」请求，最多补发 5 次（共 6 轮），凑够条数为止；补发内容不黏连、逐条连发节奏不变、补发失败不影响已收消息、页面退出照常接收
 - 上限保护：无论模型多「固执」，单次回复最多 6 轮请求，不会无限烧 API
 - 涉及文件：src/lib/reply-count.ts、src/lib/chat-stream-store.ts
+
+---
+Task ID: J-1
+Agent: Z.ai Code (main)
+Task: 按用户要求删除「教模型怎么自然铺开」的提示词引导和「继续连发」补发指令，改为只根据人设发消息
+
+Work Log:
+- 探索定位回复条数链路：src/lib/reply-count.ts（提示词构建+切分）、src/lib/chat-stream-store.ts（流式总线+补发循环）
+- reply-count.ts：buildReplyCountPrompt 简化为两行纯格式约定（按人设连发N条左右、一句一条单独占行、不用分隔标记），删除 n>=7 时的"自然铺开/说细节谈感受/不许客套话凑数"说教分支；整个删除 buildContinueReplyPrompt（继续连发补发指令）和 endsWithReplyBoundary
+- chat-stream-store.ts：删除补发循环（MAX_REPLY_ROUNDS=6 的 for 循环）、target/raw 变量、对 /api/chat 的冗余 replyCount 传参；更新头注释
+- Agent Browser 端到端验证（信息APP + 联系人"乐乐" + mock /api/chat）：回复条数=5 时 mock 返回5行 → 5个独立气泡逐条显示；mock 只返回2行 → 就发2条且仅1次 POST /api/chat（无补发请求）；hook fetch 捕获请求体确认 system 提示词 = 人设 + 简化后的两行条数指令
+- bun run lint 通过；dev.log 无编译/运行错误
+
+Stage Summary:
+- 回复条数提示词现在只约定条数与格式，说什么内容完全由角色人设自由发挥
+- 补发机制彻底移除：AI 发几条算几条，不再自动追加"继续连发"请求凑数
+- 三端（QQ/微信/信息）共用该实现，改动自动生效；切分/节奏器/入库逻辑未动
