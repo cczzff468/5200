@@ -69,7 +69,7 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegment
 import {
   buildRichRules,
   buildActionRules,
-  extractRichActions,
+  extractRichActionParts,
   actionVerb,
   mergeRichSegments,
   parseRichParts,
@@ -767,18 +767,20 @@ function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
 
 /**
  * 应用 AI 的处理动作（领取/退回/拒收我发的红包/转账/收下/拒收亲属卡）：只处理「待处理」状态的目标（幂等），
- * 返回更新后的消息数组 + 需要落盘的通知行与感谢语/理由文字消息。纯本地模拟：
+ * 返回更新后的消息数组 + 动作产生的通知行/接收凭据卡（extras）/感谢语/理由文字消息，由调用方按
+ * 流式输出顺序插在动作发生位置。纯本地模拟：
  * 领取 → 记入领取人；退回 → 金额退回零钱（写账单）；亲属卡收下 → claimed + 存入「我收到的亲属卡」由调用方处理（这里只标记状态）。
  */
 function wxApplyAiActions(
   actions: RichAction[],
   msgs: WxMsg[],
-  peer: ContactRecord
-): { msgs: WxMsg[]; notices: WxMsg[]; notes: WxMsg[] } {
+  peer: ContactRecord,
+  timeBase = Date.now()
+): { msgs: WxMsg[]; notices: WxMsg[]; extras: WxMsg[]; notes: WxMsg[] } {
   const next = msgs.map((m) => ({ ...m }));
   const notices: WxMsg[] = [];
+  const extras: WxMsg[] = [];
   const notes: WxMsg[] = [];
-  const now = Date.now();
   const matchIdx = (a: RichAction): number =>
     next.findIndex(
       (m) =>
@@ -793,7 +795,7 @@ function wxApplyAiActions(
     const m = next[idx];
     if (wxCardIsFinal(m)) continue; // 只处理待处理状态
     const verb = actionVerb(a.kind);
-    const time = now + notices.length + notes.length;
+    const time = timeBase + notices.length + extras.length + notes.length;
     if (m.kind === 'redpacket' && m.rp) {
       const rp = m.rp;
       if (verb === 'claim') {
@@ -810,9 +812,10 @@ function wxApplyAiActions(
     } else if (m.kind === 'transfer' && m.tr) {
       const tr = m.tr;
       if (verb === 'claim') {
-        // AI 收款：原卡标记已收款 + 追加「已收款」接收凭据卡（receiptOf=me，详情页显示「XX已收款」）
+        // AI 收款：原卡标记已收款 + 「已收款」接收凭据卡（receiptOf=me，详情页显示「XX已收款」）——
+        // 凭据卡放 extras，由调用方插在动作发生位置（而不是旧代码里永远排在所有新消息之前）
         next[idx] = { ...m, content: '[转账]（已收款）', tr: { ...tr, received: true, receivedAt: Date.now() } };
-        next.push({ id: uid(), role: 'peer', content: '', time, kind: 'transfer', tr: { amount: tr.amount, note: tr.note, received: true, receivedAt: Date.now(), receiptOf: 'me' } });
+        extras.push({ id: uid(), role: 'peer', content: '', time, kind: 'transfer', tr: { amount: tr.amount, note: tr.note, received: true, receivedAt: Date.now(), receiptOf: 'me' } });
       } else if (verb === 'return') {
         next[idx] = { ...m, content: '[转账]（已退回）', tr: { ...tr, status: 'returned' } };
         wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
@@ -851,9 +854,9 @@ function wxApplyAiActions(
       continue;
     }
     // 感谢语/理由转成 AI 文字消息（紧跟通知行）
-    if (a.note) notes.push({ id: uid(), role: 'peer', content: a.note, time: now + notices.length + notes.length });
+    if (a.note) notes.push({ id: uid(), role: 'peer', content: a.note, time: timeBase + notices.length + extras.length + notes.length });
   }
-  return { msgs: next, notices, notes };
+  return { msgs: next, notices, extras, notes };
 }
 
 /** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL */
@@ -3387,36 +3390,44 @@ function ChatPage({
           ]);
           return;
         }
-        // 1) 先提取处理动作标记（[领取红包:ID:感谢语] 等）：目标是我发的待处理卡片时应用状态流转，
-        //    生成通知行（XX领取了你的红包 / XX退回了你的转账 / XX收下了你的亲属卡…）+ 感谢语/理由转文字消息；
-        // 2) 剩余正文按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
+        // 1) 把回复按出现顺序切成「文字块 + 处理动作」交错片段：动作标记就地应用（状态流转 +
+        //    通知行/接收凭据卡 + 感谢语/理由转文字消息），保证落盘顺序与流式期间用户看到的顺序一致
+        //    （正文先输出的先落盘，通知行/感谢语跟随其后的动作位置，而不是永远堆在正文前）；
+        // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
         //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
         //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
-        const { actions, cleaned } = extractRichActions(content);
         const latest = loadMsgs(peer.id);
-        const applied = actions.length > 0 ? wxApplyAiActions(actions, latest, peer) : { msgs: latest, notices: [] as WxMsg[], notes: [] as WxMsg[] };
-        const segs = mergeRichSegments(splitReplySegments(cleaned, replyCount > 1));
+        const parts = extractRichActionParts(content);
+        let cur = latest;
+        const all: WxMsg[] = [];
         let t = startedAt;
-        const saved: WxMsg[] = [];
         let idx = 0;
-        for (const seg of segs) {
-          for (const part of parseRichParts(seg, stickers)) {
-            const id = idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`;
-            if (part.type === 'text') {
-              saved.push({ id, role: 'peer', content: part.text, time: t });
-            } else {
-              saved.push(richToWxMsg(part.rich, id, t, peer));
+        for (const part of parts) {
+          if (part.type === 'action') {
+            const applied = wxApplyAiActions([part.action], cur, peer, t);
+            cur = applied.msgs;
+            all.push(...applied.notices, ...applied.extras, ...applied.notes);
+            continue;
+          }
+          const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
+          for (const seg of segs) {
+            for (const p of parseRichParts(seg, stickers)) {
+              const id = idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`;
+              if (p.type === 'text') {
+                all.push({ id, role: 'peer', content: p.text, time: t });
+              } else {
+                all.push(richToWxMsg(p.rich, id, t, peer));
+              }
+              idx++;
+              t += 600 + Math.floor(Math.random() * 600);
             }
-            idx++;
-            t += 600 + Math.floor(Math.random() * 600);
           }
         }
-        // 动作通知行/感谢语放正文前（先看到「XX领取了你的红包」，再看到感谢的话）；整段空白且有动作时不算空回复
-        const all: WxMsg[] = [...applied.notices, ...applied.notes, ...saved];
+        // 整段空白且没有任何动作产出时不算有效回复，给兜底文案
         if (all.length === 0) {
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
-        saveMsgs(peer.id, [...applied.msgs, ...all]);
+        saveMsgs(peer.id, [...cur, ...all]);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

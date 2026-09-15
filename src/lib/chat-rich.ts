@@ -12,9 +12,9 @@
  * - prettifyRichText：流式渲染期把完整标记换成简短占位文字（[红包]/[转账]/…）、截掉还没输出完的
  *   半截标记，避免原始标记文本在气泡里闪现（流结束落盘后即为真实卡片消息）；
  * - buildRichRules：追加到角色人设 system 提示词的约定规则（含当前可用的表情包 ID 清单）；
- * - AI 处理动作（用户发给 AI 的红包/转账/亲属卡）：extractRichActions 提取 [领取红包:ID:感谢语]
- *   等动作标记，buildActionRules 在有待处理卡片时注入规则与清单；红包/转账/亲属卡标记缺金额时
- *   兜底默认金额，避免 AI 裸写 [红包] 变成干巴巴的文字。
+ * - AI 处理动作（用户发给 AI 的红包/转账/亲属卡）：extractRichActionParts 把回复按出现顺序切成
+ *   「文字块 + 动作标记」交错片段，buildActionRules 在有待处理卡片时注入规则与清单；红包/转账/亲属卡
+ *   标记缺金额时兜底默认金额，避免 AI 裸写 [红包] 变成干巴巴的文字。
  */
 
 import type { Sticker } from './ios/stickers';
@@ -64,8 +64,8 @@ export type RichPart = { type: 'text'; text: string } | { type: 'rich'; rich: Ri
  * - [领取红包:红包ID:感谢语] / [退回红包:红包ID:理由] / [拒收红包:红包ID:理由]
  * - [收款转账:转账ID:感谢语] / [退回转账:转账ID:理由] / [拒收转账:转账ID:理由]
  * - [收下亲属卡:亲属卡ID:感谢语] / [拒收亲属卡:亲属卡ID:理由]
- * 动作标记不是消息：落盘前由 extractRichActions 从回复里提取并应用（状态流转 + 通知行 +
- * 感谢语/理由转成普通文字消息），标记本身不会出现在聊天记录里。
+ * 动作标记不是消息：落盘前由 extractRichActionParts 按出现顺序提取（保证通知行/感谢语落盘在
+ * 流式时的真实位置，而不是永远堆在正文前），标记本身不会出现在聊天记录里。
  */
 export type RichActionKind =
   | 'claim-redpacket'
@@ -100,22 +100,30 @@ const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回
 /** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
 export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
 
+/** 回复按出现顺序切开的片段：普通文字块 或 处理动作（两者交错，保持流式输出顺序） */
+export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; action: RichAction };
+
 /**
- * 从 AI 回复里提取全部处理动作标记并返回删除标记后的正文：
- * actions 按出现顺序排列；targetId/note 均已 trim。
+ * 把 AI 回复按出现顺序切成「文字块 + 处理动作」交错片段：
+ * 动作标记前后的文字各自成块（保持原样，调用方再逐块切分/解析），段尾未闭合的半截动作标记截掉。
+ * 这样调用方能按流式输出顺序落盘——正文先出现的先落盘，通知行/感谢语跟随其后的动作位置，
+ * 而不是把通知行/感谢语永远堆在正文前面（否则与流式期间用户看到的顺序相反）。
  */
-export function extractRichActions(text: string): { actions: RichAction[]; cleaned: string } {
-  const actions: RichAction[] = [];
-  const cleaned = text
-    .replace(ACTION_RE, (_all, label: string, rest?: string) => {
-      const segs = (rest ?? '').split(/[:：]/);
-      const targetId = (segs[0] ?? '').trim();
-      const note = segs.slice(1).join(':').trim();
-      if (targetId) actions.push({ kind: ACTION_LABELS[label], targetId, note });
-      return '';
-    })
-    .replace(ACTION_TAIL_RE, '');
-  return { actions, cleaned };
+export function extractRichActionParts(text: string): RichActionPart[] {
+  const parts: RichActionPart[] = [];
+  let last = 0;
+  for (const m of text.matchAll(ACTION_RE)) {
+    const before = text.slice(last, m.index);
+    if (before.trim()) parts.push({ type: 'text', text: before });
+    const segs = (m[2] ?? '').split(/[:：]/);
+    const targetId = (segs[0] ?? '').trim();
+    const note = segs.slice(1).join(':').trim();
+    if (targetId) parts.push({ type: 'action', action: { kind: ACTION_LABELS[m[1]], targetId, note } });
+    last = m.index + m[0].length;
+  }
+  const tail = text.slice(last).replace(ACTION_TAIL_RE, '');
+  if (tail.trim()) parts.push({ type: 'text', text: tail });
+  return parts;
 }
 
 // ---------------- AI 动作的应用结果（各 App 按自己的消息结构落地） ----------------
@@ -339,6 +347,7 @@ export function buildActionRules(pending: PendingCardInfo[]): string[] {
       '收下亲属卡 [收下亲属卡:亲属卡ID:感谢语]；拒收亲属卡 [拒收亲属卡:亲属卡ID:理由]。' +
       '注意：ID 必须从下面的待处理清单里原样抄写；只有待处理的才能处理，处理过的（或不在清单里的）不要重复处理；' +
       '感谢语/理由写在标记第三段即可（简短口语，别在正文里再说一遍同样的话）；收不收、怎么回应都按你的人设和你们的关系来定，拒绝时理由要符合你的性格。',
+    '【动作与说话要一致】你的处理动作和前后说的话绝对不能打架：收下了（领取/收款/收下）就别再抱怨金额少、别质问对方“就这点？”之类的话——想吐槽金额就把吐槽直接写进感谢语里（比如 [领取红包:红包ID:你这0.01是认真的吗，行吧一分也是爱]）；退回/拒收了就不要再说什么谢谢、收下了、我的心意到了之类收下的话。整个回复围绕同一个态度展开。',
     `【待处理清单】${lines.join('；')}`,
   ];
 }
