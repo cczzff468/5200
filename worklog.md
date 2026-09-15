@@ -4113,3 +4113,28 @@ Stage Summary:
 - 翻译改为「语言对」模型：翻译语言页左右两个语言槽均可自由选择（点击一侧→下方列表选语言），⇄ 一键互换，支持双向翻译——左侧语言的消息气泡下方显示右侧语言译文，右侧语言的消息显示左侧语言译文（中文⇄英文两个方向都成立），第三种语言默认译成左侧母语；语言检测按文字体系+停用词打分，配置按会话（角色+App）隔离持久化，旧多选配置自动迁移
 - 信息 App 聊天界面：右上角设置齿轮已删除，点击顶栏摄像机图标进入聊天设置（翻译入口+分句发送）
 - 涉及文件：src/lib/chat-translate.ts、src/components/apps/chat-settings.tsx、src/components/apps/{wechat,qq,chat}.tsx
+---
+Task ID: hint-remove-profile-edit-links
+Agent: Z.ai Code (main)
+Task: ①删除三端分句发送模式下输入框上方的「分句发送：再点一次『发送』，XX 才会回复」提示行；②QQ/微信聊天设置页信息卡片点击进入联系人详细界面；③QQ 好友资料页底部「送礼物」改为「编辑资料」并跳转联系人 App 对应联系人编辑界面；④微信好友详情页「朋友资料」跳转联系人 App 对应联系人编辑界面
+
+Work Log:
+- src/lib/ios/store.ts：新增跨 App 跳转通道 pendingContactEdit/setPendingContactEdit（与 pendingChatContact 同模式：写入联系人 id + switchToApp('contacts')，目标 App 挂载时消费）
+- qq.tsx / wechat.tsx / chat.tsx：删除三端分句发送待回复提示行（qq-sentence-hint / wx-sentence-hint / sms-sentence-hint 共 3 处 <p>）；canDispatch 双态发送逻辑完整保留（分句模式下有文本=仅发送不触发 AI、空输入=发送按钮保持可见且点击触发批次回复，E2E 复验通过）
+- chat-settings.tsx：ChatSettingsPage 新增可选 prop onOpenPeerProfile——信息卡片在传入时渲染为 button（testid=wx/qq-chat-settings-card，右侧淡色 ChevronRight，active 按压反馈，aria-label=查看XX的资料），不传保持原 div（信息端 SmsChatSettingsPage 不受影响）
+- qq.tsx：ChatPage 新增 prop onOpenFriendProfile → ChatSettingsPage onOpenPeerProfile 接线；MainScreen 聊天页传 () => setRoute({ page: 'friend-profile', contactId: chatPeer.id })——聊天设置信息卡片点击进入 QQ 好友资料页（route friend-profile 由 contacts.find 找不到时自然 fallthrough，与既有打开路径共用）；FriendProfilePage 底部「送礼物」按钮改为「编辑资料」（testid=qq-fprofile-edit）：写入 pendingContactEdit(peer.id) + switchToApp('contacts')
+- wechat.tsx：ChatPage 新增 prop onOpenFriendDetail(c) → onOpenPeerProfile={() => onOpenFriendDetail(peer)}；MainScreen 渲染顺序调整——page==='friendDetail' && detail 判断提前到 chatPeer 之前（从聊天设置进详情页时可覆盖聊天页，从通讯录进入路径行为不变）；新增 detailFromChat 标记 + openFriendDetail(c, fromChat) helper：详情页「发消息」在 detailFromChat=true 时先 setPage('main') 再 setChatPeer（直接回聊天页），false 时保持旧行为；FriendDetailPage「朋友资料」按钮（testid=wx-fdetail-edit）改为写入 pendingContactEdit(friend.id) + switchToApp('contacts')；通讯录「我」与好友行改走 openFriendDetail(c, false)
+- contacts.tsx：import useUI；挂载时惰性读取 pendingContactEdit 并立即清空 store 字段（防残留误跳）；联系人载入完成（loading=false）后消费——找到则 setTab(target.kind) + setView({ mode:'edit', id })（直达该联系人编辑页，表单各字段预填），找不到（已被删/载入失败）静默留在列表；编辑页保存后进详情页、取消回详情页（既有行为不变）
+- E2E（agent-browser 393×852，seed IndexedDB 小艾(user)+王晴晴(char, friendWx/Qq/Sms) + localStorage wx/qq-session-user-id + fetch stub /api/chat 纯文本流「收到啦，我是晴晴酱！&&& 今天天气不错。&&& 出去玩吗？」）：
+  ①微信：晴晴聊天 → ··· → 聊天信息 → 点信息卡片（wx-chat-settings-card）→ 好友详情页；点「朋友资料」→ 联系人 App 直达「编辑CHAR」编辑页（昵称/名字/年龄/职业/地区/人设/手机号/微信号/QQ号全部预填）
+  ②编辑昵称改「晴晴酱」保存 → 详情页显示新昵称；重进微信会话列表显示「晴晴酱」（数据联动）
+  ③QQ：晴晴聊天 → ≡ → 聊天设置 → 点信息卡片（qq-chat-settings-card）→ 个人资料页（QQ:100864）；底部按钮=音视频通话/编辑资料/发消息，无「送礼物」；点「编辑资料」→ 联系人 App 直达编辑页
+  ④分句发送提示行删除：微信+QQ+信息三端开启分句发送，发消息 AI 零调用、页面无「分句发送：再点一次」文本、空输入时发送按钮保持可见；空输入点发送 → /api/chat 一次调用且 lastUser=批次最后一条 → AI 回复逐条弹出（微信/QQ/信息均 3 个独立气泡）；待回复期间三端均无提示行
+  ⑤console 无错误、dev.log 无应用错误、lint + tsc 0 问题
+- 测试数据仅存在于 agent-browser 隔离档案（IndexedDB/localStorage），未污染用户数据与仓库
+
+Stage Summary:
+- 分句发送的输入栏提示行已从三端删除，双态发送交互保留（有文本仅发送、空输入点发送触发整批回复），用户在无提示下依然可按原逻辑触发 AI
+- 聊天设置信息卡片成为联系人详细界面入口：微信→好友详情页（含「朋友资料」→联系人App编辑）、QQ→好友资料页（含「编辑资料」→联系人App编辑）
+- QQ 好友资料页「送礼物」替换为「编辑资料」；「朋友资料」「编辑资料」均经 pendingContactEdit 跨 App 直达联系人 App 对应联系人的编辑页（预填完整表单），编辑保存后数据即时同步回三端（会话列表昵称等）
+- 涉及文件：src/lib/ios/store.ts、src/components/apps/chat-settings.tsx、src/components/apps/{qq,wechat,chat,contacts}.tsx

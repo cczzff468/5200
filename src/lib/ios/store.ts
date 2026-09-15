@@ -737,6 +737,9 @@ interface UIState {
   /** 跨 App 跳转：电话 App 联系人详情点「信息」→ 打开信息 App 后自动进入该联系人会话（相当于添加好友），消费后置回 null */
   pendingChatContact: string | null;
   setPendingChatContact: (id: string | null) => void;
+  /** 跨 App 跳转：QQ 好友资料页「编辑资料」/ 微信好友详情页「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页，消费后置回 null */
+  pendingContactEdit: string | null;
+  setPendingContactEdit: (id: string | null) => void;
 }
 
 export const useUI = create<UIState>((set, get) => ({
@@ -754,6 +757,10 @@ export const useUI = create<UIState>((set, get) => ({
   pendingChatContact: null,
   setPendingChatContact: (v) => {
     set({ pendingChatContact: v });
+  },
+  pendingContactEdit: null,
+  setPendingContactEdit: (v) => {
+    set({ pendingContactEdit: v });
   },
   openApp: (id) => {
     if (get().locked) return; // 锁屏时禁止打开 App（锁屏直达相机走 lockCameraOpen）

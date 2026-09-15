@@ -1445,6 +1445,7 @@ function ChatPage({
   otherUnread,
   onBack,
   onOpenBond,
+  onOpenFriendProfile,
   onToast,
 }: {
   me: QQUser;
@@ -1454,6 +1455,8 @@ function ChatPage({
   otherUnread: number;
   onBack: () => void;
   onOpenBond: () => void;
+  /** 聊天设置页点信息卡片 → 进入好友资料页 */
+  onOpenFriendProfile: () => void;
   onToast: (m: string) => void;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -2182,12 +2185,6 @@ function ChatPage({
 
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮） */}
       <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
-        {/* 分句发送待回复提示：空输入时点「发送」才会触发对方回复 */}
-        {canDispatch && (
-          <p data-testid="qq-sentence-hint" className="px-4 pt-2 text-center text-[11px] leading-none text-black/40 dark:text-white/40">
-            分句发送：再点一次「发送」，{peer.name} 才会回复
-          </p>
-        )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
           <input
             data-testid="qq-chat-input"
@@ -2394,6 +2391,7 @@ function ChatPage({
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
+          onOpenPeerProfile={onOpenFriendProfile}
         />
       ) : null}
 
@@ -3844,6 +3842,9 @@ function FriendProfilePage({
   onOpenBond: () => void;
   onToast: (m: string) => void;
 }) {
+  // 跨 App 跳转：点「编辑资料」→ 打开联系人 App 后直接进入该联系人的编辑页
+  const switchToApp = useUI((s) => s.switchToApp);
+  const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
   // 点赞数：本地持久化，点击 +1（对照 QQ 资料卡点赞）
   const [likes, setLikes] = useState<number>(() => {
     try {
@@ -3943,7 +3944,7 @@ function FriendProfilePage({
         </button>
       </div>
 
-      {/* 底部三按钮：音视频通话 / 送礼物 / 发消息 */}
+      {/* 底部三按钮：音视频通话 / 编辑资料（跳联系人 App 编辑页）/ 发消息 */}
       <div className="flex shrink-0 gap-3 bg-white px-4 pb-[40px] pt-3 dark:bg-[#111214]">
         <button
           type="button"
@@ -3954,10 +3955,14 @@ function FriendProfilePage({
         </button>
         <button
           type="button"
-          onClick={() => onToast('送礼物暂未开放')}
+          data-testid="qq-fprofile-edit"
+          onClick={() => {
+            setPendingContactEdit(peer.id);
+            switchToApp('contacts');
+          }}
           className="h-11 flex-1 rounded-[12px] border border-black/15 text-[15px] active:bg-black/5 dark:border-white/25"
         >
-          送礼物
+          编辑资料
         </button>
         <button
           type="button"
@@ -7865,6 +7870,7 @@ function MainScreen({
           otherUnread={chatOtherUnread}
           onBack={() => openTabs('消息')}
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
+          onOpenFriendProfile={() => setRoute({ page: 'friend-profile', contactId: chatPeer.id })}
           onToast={showToast}
         />
       ) : route.page === 'bond' && chatPeer ? (

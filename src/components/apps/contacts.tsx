@@ -32,6 +32,7 @@ import {
   type ContactKind,
   type ContactRecord,
 } from '@/lib/contacts';
+import { useUI } from '@/lib/ios/store';
 
 /**
  * 联系人 App：
@@ -391,6 +392,8 @@ export default function ContactsApp() {
   const [loadError, setLoadError] = useState('');
   const [tab, setTab] = useState<ContactKind>('char');
   const [view, setView] = useState<View>({ mode: 'list' });
+  /** 跨 App 跳转：QQ「编辑资料」/ 微信「朋友资料」带来的联系人 id（挂载时消费，等载入后直接进编辑页） */
+  const [pendingEdit, setPendingEdit] = useState<string | null>(() => useUI.getState().pendingContactEdit);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -407,6 +410,23 @@ export default function ContactsApp() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 挂载即消费跨 App 请求（避免失败时残留导致以后误跳）
+  useEffect(() => {
+    if (useUI.getState().pendingContactEdit) useUI.getState().setPendingContactEdit(null);
+  }, []);
+
+  // QQ/微信跳转过来的：联系人载入后直接进入对应联系人的编辑页；
+  // 找不到（已被删）或载入失败则静默留在联系人列表
+  useEffect(() => {
+    if (!pendingEdit || loading) return;
+    const target = contacts.find((x) => x.id === pendingEdit);
+    setPendingEdit(null);
+    if (target) {
+      setTab(target.kind);
+      setView({ mode: 'edit', id: target.id });
+    }
+  }, [pendingEdit, loading, contacts]);
 
   /** 新建或更新本地联系人（编辑/添加好友后同步） */
   const upsert = useCallback((c: ContactRecord) => {

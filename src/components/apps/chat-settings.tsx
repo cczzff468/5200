@@ -133,6 +133,7 @@ export function ChatSettingsPage({
   onToggleSentenceSend,
   onOpenSearch,
   onOpenBg,
+  onOpenPeerProfile,
 }: {
   variant: ChatSettingsVariant;
   /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
@@ -163,6 +164,8 @@ export function ChatSettingsPage({
   onToggleSentenceSend: (v: boolean) => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
+  /** 点击信息卡片 → 进入联系人详细界面（QQ 好友资料页 / 微信好友详情页）；不传则卡片不可点 */
+  onOpenPeerProfile?: () => void;
 }) {
   const wx = variant === 'wx';
 
@@ -199,18 +202,37 @@ export function ChatSettingsPage({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
-        {/* 信息卡片 */}
+        {/* 信息卡片（点击进入联系人详细界面：QQ 好友资料页 / 微信好友详情页） */}
         <div className={`${cardCls} overflow-hidden`}>
-          <div className={`flex items-center gap-3 px-4 ${wx ? 'py-4' : 'py-3.5'}`}>
-            <ChatSettingsAvatar variant={variant} src={peerAvatar} alt={peerName} size={56} />
-            <div className="min-w-0 flex-1">
-              <p className={`truncate ${wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold'}`}>{peerName}</p>
-              <p className="mt-1 truncate text-[13px] text-black/45 dark:text-white/45">
-                {idLabel}：{idValue}
-              </p>
-              {metaLine && <p className="mt-0.5 truncate text-[13px] text-black/45 dark:text-white/45">{metaLine}</p>}
-            </div>
-          </div>
+          {(() => {
+            const inner = (
+              <>
+                <ChatSettingsAvatar variant={variant} src={peerAvatar} alt={peerName} size={56} />
+                <div className="min-w-0 flex-1">
+                  <p className={`truncate ${wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold'}`}>{peerName}</p>
+                  <p className="mt-1 truncate text-[13px] text-black/45 dark:text-white/45">
+                    {idLabel}：{idValue}
+                  </p>
+                  {metaLine && <p className="mt-0.5 truncate text-[13px] text-black/45 dark:text-white/45">{metaLine}</p>}
+                </div>
+              </>
+            );
+            if (!onOpenPeerProfile) {
+              return <div className={`flex items-center gap-3 px-4 ${wx ? 'py-4' : 'py-3.5'}`}>{inner}</div>;
+            }
+            return (
+              <button
+                type="button"
+                data-testid={`${testPrefix}-chat-settings-card`}
+                onClick={onOpenPeerProfile}
+                aria-label={`查看${peerName}的资料`}
+                className={`flex w-full items-center gap-3 px-4 text-left transition-colors active:bg-black/[0.04] dark:active:bg-white/[0.06] ${wx ? 'py-4' : 'py-3.5'}`}
+              >
+                {inner}
+                <ChevronRight className="h-5 w-5 shrink-0 text-black/20 dark:text-white/25" aria-hidden="true" />
+              </button>
+            );
+          })()}
         </div>
 
         {/* 置顶 / 免打扰开关（纯文字行，无图标） */}

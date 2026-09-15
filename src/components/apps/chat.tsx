@@ -801,13 +801,6 @@ function ChatView({
         <div aria-hidden="true" className="h-1" />
       </div>
 
-      {/* 分句发送待回复提示：空输入时点「发送」才会触发对方回复 */}
-      {canDispatch && (
-        <p data-testid="sms-sentence-hint" className="z-20 shrink-0 px-4 pb-1 text-center text-[11px] leading-none text-muted-foreground">
-          分句发送：再点一次「发送」，对方才会回复
-        </p>
-      )}
-
       {/* 输入栏：+ 圆钮 / iMessage输入框（麦克风↔发送） */}
       <form
         onSubmit={(e: FormEvent) => {

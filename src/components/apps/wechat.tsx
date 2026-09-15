@@ -2792,6 +2792,7 @@ function ChatPage({
   ownerName,
   otherUnread,
   onBack,
+  onOpenFriendDetail,
   onToast,
 }: {
   me: WxUser;
@@ -2800,6 +2801,8 @@ function ChatPage({
   /** 除当前会话外的未读总数（他人在你聊天时来信 → 返回键旁灰圆数字） */
   otherUnread: number;
   onBack: () => void;
+  /** 聊天设置页点信息卡片 → 进入该好友的详情页 */
+  onOpenFriendDetail: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -3510,12 +3513,6 @@ function ChatPage({
       {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方） */}
       <div className="relative z-10 shrink-0 bg-[#EDEDED] dark:bg-[#111111]">
         <div className="px-2.5 pb-[18px] pt-2">
-          {/* 分句发送待回复提示：空输入时点「发送」才会触发对方回复 */}
-          {canDispatch && (
-            <p data-testid="wx-sentence-hint" className="pb-1.5 text-center text-[11.5px] leading-none text-black/40 dark:text-white/40">
-              分句发送：再点一次「发送」，{peer.name} 才会回复
-            </p>
-          )}
           <div className="flex items-center gap-2.5">
             <button
               type="button"
@@ -3664,6 +3661,7 @@ function ChatPage({
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
+          onOpenPeerProfile={() => onOpenFriendDetail(peer)}
         />
       )}
 
@@ -4693,6 +4691,9 @@ function FriendDetailPage({
   onOpenMoments: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
+  // 跨 App 跳转：点「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页
+  const switchToApp = useUI((s) => s.switchToApp);
+  const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
       {/* 顶栏：返回 + ··· */}
@@ -4741,11 +4742,15 @@ function FriendDetailPage({
           </div>
         </div>
 
-        {/* 朋友资料 */}
+        {/* 朋友资料（点击 → 联系人 App 对应联系人的编辑界面） */}
         <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
           <button
             type="button"
-            onClick={() => onToast('朋友资料暂未开放')}
+            data-testid="wx-fdetail-edit"
+            onClick={() => {
+              setPendingContactEdit(friend.id);
+              switchToApp('contacts');
+            }}
             className="flex w-full items-center gap-3 px-4 py-3.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
           >
             <span className="min-w-0 flex-1">
@@ -4958,6 +4963,8 @@ function MainScreen({
   const [tab, setTab] = useState<Tab>('chats');
   const [chatPeer, setChatPeer] = useState<ContactRecord | null>(null);
   const [detail, setDetail] = useState<ContactRecord | null>(null);
+  /** 详情页来源：true = 从聊天设置页信息卡片进入（点「发消息」直接回聊天；返回也回聊天页） */
+  const [detailFromChat, setDetailFromChat] = useState(false);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */
   const [friendMoments, setFriendMoments] = useState<ContactRecord | null>(null);
   const [page, setPage] = useState<Page>('main');
@@ -5242,6 +5249,36 @@ function MainScreen({
     [me.name, reloadContacts, reqs]
   );
 
+  /** 打开好友详情页（fromChat：从聊天设置信息卡片进入） */
+  const openFriendDetail = useCallback((c: ContactRecord, fromChat: boolean) => {
+    setDetail(c);
+    setDetailFromChat(fromChat);
+    setPage('friendDetail');
+  }, []);
+
+  if (page === 'friendDetail' && detail) {
+    return (
+      <FriendDetailPage
+        friend={detail}
+        onBack={() => {
+          // 从聊天设置进入：chatPeer 仍保留，回到聊天页；否则回主列表
+          setDetail(null);
+          setPage('main');
+        }}
+        onOpenChat={(c) => {
+          // 从聊天进入的详情页：直接回聊天页（page 退回，chatPeer 已是此人）
+          if (detailFromChat) setPage('main');
+          setChatPeer(c);
+        }}
+        onOpenMoments={(c) => {
+          // 自己的详情页：「朋友圈」进自己的朋友圈；好友才自动补示例动态
+          if (c.id === me.id) setPage('moments');
+          else openFriendMoments(c);
+        }}
+        onToast={showToast}
+      />
+    );
+  }
   if (chatPeer) {
     return (
       <ChatPage
@@ -5251,6 +5288,7 @@ function MainScreen({
         ownerName={ownerName(chatPeer)}
         otherUnread={chatOtherUnread}
         onBack={backToList}
+        onOpenFriendDetail={(c) => openFriendDetail(c, true)}
         onToast={showToast}
       />
     );
@@ -5289,24 +5327,6 @@ function MainScreen({
         onBack={() => setPage('main')}
         onAdded={handleFriendAdded}
         onOpenChat={(c) => setChatPeer(c)}
-        onToast={showToast}
-      />
-    );
-  }
-  if (page === 'friendDetail' && detail) {
-    return (
-      <FriendDetailPage
-        friend={detail}
-        onBack={() => {
-          setDetail(null);
-          setPage('main');
-        }}
-        onOpenChat={(c) => setChatPeer(c)}
-        onOpenMoments={(c) => {
-          // 自己的详情页：「朋友圈」进自己的朋友圈；好友才自动补示例动态
-          if (c.id === me.id) setPage('moments');
-          else openFriendMoments(c);
-        }}
         onToast={showToast}
       />
     );
@@ -5567,8 +5587,7 @@ function MainScreen({
                 label={me.name}
                 testId="wx-contact-me"
                 onClick={() => {
-                  setDetail(contacts.find((c) => c.id === me.id) ?? meAsContact(me));
-                  setPage('friendDetail');
+                  openFriendDetail(contacts.find((c) => c.id === me.id) ?? meAsContact(me), false);
                 }}
                 icon={<WxAvatar src={me.avatar} alt={me.name} size={38} />}
               />
@@ -5594,10 +5613,7 @@ function MainScreen({
                           key={c.id}
                           type="button"
                           data-testid={`wx-contact-${c.name}`}
-                          onClick={() => {
-                            setDetail(c);
-                            setPage('friendDetail');
-                          }}
+                          onClick={() => openFriendDetail(c, false)}
                           className="flex w-full items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5"
                         >
                           <WxAvatar src={c.avatar} alt={c.name} size={40} />
