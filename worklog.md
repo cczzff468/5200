@@ -4026,3 +4026,4 @@ Work Log:
 Stage Summary:
 - 「回复条数」功能全链路落地：设置页入口+二级页选择（默认 5）→ 按角色/App 隔离持久化 → 发送时 system 注入指定原句与「&&&」分隔约定 → 流式期按标记实时多气泡+连发停顿节奏（打字中气泡）→ finalize 按标记切成 N 条独立消息（各自 id/createdAt）入库渲染 → 解析失败兜底第一条 → 1 条保持现有行为 → 退出页面继续接收不变 → 电话语音未动、三端角色隔离未破坏
 - 涉及文件：src/lib/reply-count.ts（新）、src/lib/chat-stream-store.ts、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx
+- 注意：本地提交 eccd216 完成，但 git push 失败——沙箱回收后 origin 远程与 PAT 丢失（git remote 无 origin）。若后续会话需要推 GitHub，需先重新配置 remote（remote add origin https://<PAT>@github.com/<user>/<repo>）。本地仓库包含全部历史与本次改动
