@@ -4189,3 +4189,29 @@ Stage Summary:
 - Agent Browser 端到端验证通过（微信+QQ 双端、mock /api/chat）：AI 回复中的标记全部落盘为真实卡片——红包（開→领取→¥5.20 入账→领取记录）、转账（微信打开即收款；QQ 待收款→收款→入钱包余额+toast）、亲属卡（QQ 新增：金卡气泡→详情→领取→状态/领取时间）、位置（地点+坐标+假地图卡片）、表情包（本地 ID 命中渲染图片；ID 无效时回退"[表情包]"文字——实测跨 App ID 不匹配正确回退）
 - 流式期间显示 [红包]/[转账]/[亲属卡]/[位置]/[表情包] 占位文字，落盘后变真实卡片，无原始标记闪现
 - 回复条数连发兼容：文本与特殊消息混排逐条独立气泡；标记被句末标点切碎时跨段自动合并；lint/tsc 通过
+
+---
+Task ID: L
+Agent: Z.ai Code (main)
+Task: 需求K修复轮：AI表情包总发文字、QQ转账收款页/领取卡片、详情页"XX已收款"文案、红包弹窗化美化、领取提示行、卡片领取后变灰
+
+Work Log:
+- chat-rich.ts 表情宽容解析：新增 STICKER_LOOSE_RE（匹配 AI 仿写用户格式的 [发送了表情：XX]/[表情：XX]/【表情包：XX】等变体）+ resolveSticker 三级匹配（ID精确→意思精确→意思互相包含）；parseRichParts 文字段二次扫描变体标记，命中转表情消息、未命中保留原文；parseMarker 表情包走同套匹配；prettifyRichText 流式期同样占位；OPEN_TAIL_RE 含变体防切碎
+- chat-rich.ts buildRichRules 强化：新增【发表情包·格式强调】段——明确「[发送了表情：XX]」只是对方发表情的存档记录、禁止模仿，自己发表情必须输出 [表情包:表情ID]（ID 只能从清单选，并举反例）
+- QQ/微信 AI 表情进历史改格式：stk 增加 sid 字段（richTo*Msg 落盘时记录）；历史映射 AI 自己的表情消息回写为 [表情包:ID]（示范正确格式，意思靠 system 清单反查），我的表情仍用 [发送了表情：意思]——从源头避免 AI 仿写错格式
+- QQ 收款页：新增 TransferReceivePage（蓝圈时钟+待你收款+金额+转账时间/留言+蓝色收款按钮+"1天内未确认，将退还给对方。退还"）；点击 AI 发来的未收款转账进收款页（不再直达交易详情）；收款后原卡标记 received+receiptOf='peer'、金额入钱包、追加我的「已收款」接收卡片（role=me，与 AI 收我转账的凭据卡同款方向相反）、toast、跳交易详情
+- QQ 交易详情 receiverIsMe 重构：TransferDetailPage 改收 receiverIsMe 布尔（调用方推导）——receiptOf 优先，旧数据按「角色+同额同言配对」推导；文案：我收='你已收款，资金已存入钱包余额'，我发=转账成功，AI收我转账凭据卡='XX已收款'（修复用户报告的文案 bug），AI发未收='XX向你转账，待收款'
+- QQ 领红包提示行：rp-open onOpen 领取时追加 QQNoticeRow「你领取了XX的 红包」（居中灰字+红色尾词，与 AI 领取提示同款）
+- QQ 卡片变灰：RedPacketBubble（claims>0）/TransferBubble（received）/FamilyBubble（claimed）加 filter grayscale(0.62) brightness(0.97)
+- 微信 收款页：新增 WxTrReceivePage（对照用户截图：蓝圈时钟+待你收款+金额+转账时间/说明+绿色(#07C160)收款按钮+退还提示）；点击 AI 发来的未收款转账进收款页；acceptTransfer 标记原卡 received+receiptOf='peer'、wxPatchBalance 入零钱、追加我的「已收款」接收卡片、toast、进详情
+- 微信 TrDetailPage receiverIsMe 重构：同 QQ 推导逻辑（receiptOf 优先+旧数据配对），文案 '你已收款，资金已存入零钱' vs 'XX已收款'；openTransferDetail（我发的模拟对方确认）给原卡和凭据卡都标记 receiptOf='me'
+- 微信 领红包提示行：openRedPacket 领取时追加 WxNoticeRow「你领取了XX的 红包」（金色尾词）
+- 微信 RpOpenLayer 弹窗化美化：从全屏红页改为半透明黑遮罩+居中红包封面卡（scale-in 动画、卡内光斑+浮动金点+金色饰线、金圈头像+「XX的红包」+祝福语+底部亮红大弧+金色呼吸光晕「開」钮）+卡片下方金色 X 关闭，对照用户参考截图
+- 微信 卡片变灰：RpBubble(opened)/TrBubble(received)/FamilyBubble(claimed，新增 claimed prop) 同款灰化
+- Agent Browser 端到端验证（IndexedDB 种子联系人/表情包+mock /api/chat，QQ+微信双端）：①mock 返回 [红包]/[转账]/[发送了表情：抱猫]/[表情包:ID] 全部落盘为真实卡片（含宽松变体→贴图，贴图 120x120 渲染）；②QQ 收款页全流程+我的领取卡片+灰色卡片+提示行截图验证；③QQ 详情页 AI 收我转账显示「乐乐已收款」；④微信红包弹窗对照截图验证、收款页绿色按钮版验证、亲属卡领取后变灰、AI 表情贴图渲染；⑤微信 4 张转账卡（AI原卡/我的凭据卡/我发原卡/AI凭据卡）详情文案全部正确（含旧数据兼容）；⑥lint 通过、dev.log 无错误（修复过程中误删 openTransferDetail 尾部代码已即时修复）
+
+Stage Summary:
+- AI 表情包成功率大幅提升：提示词强约束 + 历史示范正确格式 + 解析器宽容匹配（AI 写意思、仿写用户格式都能出图），全失败才回退文字
+- QQ/微信转账收款流程与真实 App 对齐：点击卡片→收款页→收款→双方卡片变灰+「已收款」+我的领取卡片；详情文案按收款人区分「你已收款/XX已收款」（旧数据配对兼容）
+- 微信红包领取页改为弹窗（对照截图美化）；QQ/微信领取红包后聊天界面出现「你领取了XX的红包」提示行
+- 纯本地模拟不变：无真实资金流转、无第三方支付跳转

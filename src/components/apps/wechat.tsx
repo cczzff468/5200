@@ -18,6 +18,7 @@ import {
   Camera,
   Check,
   CirclePlus,
+  Clock,
   Compass,
   EyeOff,
   Gamepad2,
@@ -134,6 +135,8 @@ interface WxTrData {
   /** 对方是否已收款（打开详情时模拟对方确认） */
   received: boolean;
   receivedAt?: number;
+  /** 接收卡片凭据：'me'=这张卡是对方收我转账的凭据；'peer'=这张卡是我收对方转账的凭据（详情页文案按此区分「××已收款 / 你已收款」） */
+  receiptOf?: 'me' | 'peer';
 }
 
 /** 聊天中的系统通知行（对方领取了你的红包）：居中灰字 + 彩色尾词（转账收款改用接收卡片消息，不再用文字行） */
@@ -176,8 +179,8 @@ interface WxMsg {
   fam?: WxFamData;
   img?: { src: string };
   loc?: { name: string; address: string };
-  /** 表情消息（stk.url 图片，stk.meaning 意思——AI 据此理解并回复） */
-  stk?: { url: string; meaning: string };
+  /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
+  stk?: { url: string; meaning: string; sid?: string };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -661,10 +664,10 @@ function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
     case 'location':
       return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: rich.name, address: rich.coords || '地图上的一个位置' } };
     case 'sticker': {
-      // parseRichParts 已保证 ID 能找到；取不到时兜底为文字
+      // parseRichParts 已保证 ID/意思能匹配上；取不到时兜底为文字
       const s = loadStickers('wx').find((x) => x.id === rich.stickerId);
       return s
-        ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning } }
+        ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } }
         : { id, role: 'peer', content: '[表情包]', time };
     }
   }
@@ -1063,14 +1066,16 @@ function FamGlyph({ size = 42 }: { size?: number }) {
   );
 }
 
-/** 亲属卡聊天卡片（图①：白底 + 黄圆图标 + 「给C的亲属卡/待对方领取」+ 右侧淡黄星球轨道装饰 + 左下「亲属卡」） */
-function FamilyBubble({ title, sub, onClick }: { title: string; sub: string; onClick: () => void }) {
+/** 亲属卡聊天卡片（图①：白底 + 黄圆图标 + 「给C的亲属卡/待对方领取」+ 右侧淡黄星球轨道装饰 + 左下「亲属卡」；领取后卡片颜色变灰） */
+function FamilyBubble({ title, sub, claimed, onClick }: { title: string; sub: string; claimed: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       data-testid="wx-fc-bubble"
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[10px] bg-white text-left shadow-sm active:brightness-[0.97] dark:bg-[#1E1E1E]"
+      className="relative block w-[206px] overflow-hidden rounded-[10px] bg-white text-left shadow-sm transition-all duration-300 active:brightness-[0.97] dark:bg-[#1E1E1E]"
+      style={{ filter: claimed ? 'grayscale(0.62) brightness(0.97)' : undefined }}
+      aria-label={`${title}${claimed ? '（已领取）' : ''}`}
     >
       <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-[#FBF0C4] dark:bg-[#3B3722]" />
       <span
@@ -2484,8 +2489,13 @@ function RpBubble({ blessing, opened, onClick }: { blessing: string; opened: boo
       type="button"
       data-testid="wx-rp-bubble"
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm active:brightness-95"
-      style={{ background: 'linear-gradient(135deg, #F2694C, #E94E38)' }}
+      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      style={{
+        background: 'linear-gradient(135deg, #F2694C, #E94E38)',
+        // 领取后卡片颜色变灰（对照真实微信：已领取的红包封面褪色）
+        filter: opened ? 'grayscale(0.62) brightness(0.97)' : undefined,
+      }}
+      aria-label={`红包 ${blessing}${opened ? '（已领取）' : ''}`}
     >
       <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-10 h-24 w-24 rounded-full bg-white/10" />
       <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
@@ -2509,8 +2519,13 @@ function TrBubble({ amount, status, received, fromMe, onClick }: { amount: numbe
       type="button"
       data-testid="wx-tr-bubble"
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm active:brightness-95"
-      style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}
+      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      style={{
+        background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)',
+        // 收款后卡片颜色变灰（对照真实微信：已收款的转账卡褪色）
+        filter: received ? 'grayscale(0.62) brightness(0.97)' : undefined,
+      }}
+      aria-label={`转账 ¥${fmtMoney(amount)}${received ? '（已收款）' : ''}`}
     >
       <span aria-hidden="true" className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 rounded-[2px] bg-[#F2A233] ${fromMe ? '-right-[3px]' : '-left-[3px]'}`} />
       <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
@@ -2558,7 +2573,10 @@ function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr'; pre: string; ac
   );
 }
 
-/** 开红包全屏弹层（美化版：深红渐变底 + 金色描边红包卡 + 浮动金点 + 呼吸光晕「開」钮 + 底部金色 X） */
+/**
+ * 开红包弹窗（对照真实微信：半透明黑底遮罩透出聊天，居中一张圆角红包封面卡，
+ * 金色描边 + 头像/「XX的红包」/祝福语 + 底部亮红大弧上金色呼吸光晕「開」钮，卡片下方金色 X 关闭）
+ */
 function RpOpenLayer({
   senderName,
   senderAvatar,
@@ -2573,88 +2591,80 @@ function RpOpenLayer({
   onClose: () => void;
 }) {
   return (
-    <div
-      className="absolute inset-0 z-50 overflow-hidden"
-      data-testid="wx-rp-open"
-      style={{ background: 'linear-gradient(180deg, #E75541 0%, #D8432F 55%, #C4392A 100%)' }}
-    >
+    <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 px-7 pb-12" role="dialog" aria-label="打开红包" data-testid="wx-rp-open">
       <style>{
-        '@keyframes wxrp-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-14px)}}' +
+        '@keyframes wxrp-in{from{transform:scale(.86);opacity:0}to{transform:scale(1);opacity:1}}' +
+        '@keyframes wxrp-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}' +
         '@keyframes wxrp-glow{0%,100%{box-shadow:0 12px 30px rgba(0,0,0,.25),0 0 0 0 rgba(249,208,120,.5)}70%{box-shadow:0 12px 30px rgba(0,0,0,.25),0 0 0 18px rgba(249,208,120,0)}}'
       }</style>
-      {/* 背景装饰：大光斑 + 底部金色光晕 + 浮动金点 */}
-      <span aria-hidden="true" className="pointer-events-none absolute -left-24 -top-28 h-80 w-80 rounded-full bg-white/[0.07]" />
-      <span aria-hidden="true" className="pointer-events-none absolute -right-28 top-1/4 h-96 w-96 rounded-full bg-white/[0.05]" />
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute -bottom-24 left-1/2 h-[440px] w-[440px] -translate-x-1/2 rounded-full"
-        style={{ background: 'radial-gradient(closest-side, rgba(249,208,120,0.25), transparent)' }}
-      />
-      {[
-        { left: '14%', top: '18%', s: 7, d: '0s' },
-        { left: '82%', top: '26%', s: 5, d: '.6s' },
-        { left: '24%', top: '64%', s: 5, d: '1.1s' },
-        { left: '76%', top: '58%', s: 7, d: '.3s' },
-        { left: '10%', top: '44%', s: 4, d: '1.6s' },
-        { left: '88%', top: '70%', s: 4, d: '.9s' },
-      ].map((p, i) => (
-        <span
-          key={i}
-          aria-hidden="true"
-          className="pointer-events-none absolute rounded-full bg-[#F9D08A]/70"
-          style={{ left: p.left, top: p.top, width: p.s, height: p.s, animation: `wxrp-float 3.2s ease-in-out ${p.d} infinite` }}
-        />
-      ))}
+      <div className="relative w-full max-w-[330px]" style={{ animation: 'wxrp-in 0.26s ease-out' }}>
+        {/* 红包封面卡 */}
+        <div
+          className="relative h-[420px] overflow-hidden rounded-[20px] shadow-[0_24px_60px_rgba(0,0,0,0.4)]"
+          style={{ background: 'linear-gradient(170deg, #F8755C 0%, #EF5340 55%, #E84434 100%)' }}
+        >
+          {/* 封面装饰：卡内光斑 + 浮动金点 + 卡顶金色饰线 */}
+          <span aria-hidden="true" className="pointer-events-none absolute -left-14 -top-16 h-44 w-44 rounded-full bg-white/[0.07]" />
+          <span aria-hidden="true" className="pointer-events-none absolute -right-16 top-1/3 h-52 w-52 rounded-full bg-white/[0.05]" />
+          {[
+            { left: '16%', top: '20%', s: 6, d: '0s' },
+            { left: '80%', top: '28%', s: 5, d: '.6s' },
+            { left: '22%', top: '58%', s: 5, d: '1.1s' },
+            { left: '78%', top: '62%', s: 6, d: '.3s' },
+          ].map((p, i) => (
+            <span
+              key={i}
+              aria-hidden="true"
+              className="pointer-events-none absolute rounded-full bg-[#F9D08A]/70"
+              style={{ left: p.left, top: p.top, width: p.s, height: p.s, animation: `wxrp-float 3.2s ease-in-out ${p.d} infinite` }}
+            />
+          ))}
+          <span aria-hidden="true" className="absolute inset-x-9 top-0 h-[3px] rounded-b bg-gradient-to-r from-transparent via-[#F0C87E]/75 to-transparent" />
 
-      <div className="relative flex h-full w-full flex-col items-center justify-center">
-        <div className="relative w-[76%] max-w-[312px]">
-          <div
-            className="relative rounded-[18px] border border-[#F0C87E]/55 px-6 pb-[108px] pt-10 text-center shadow-[0_24px_60px_rgba(0,0,0,0.32)]"
-            style={{ background: 'linear-gradient(180deg, #F3705A 0%, #EA5340 100%)' }}
-          >
-            {/* 卡顶金色渐变饰线 */}
-            <span aria-hidden="true" className="absolute inset-x-9 top-0 h-[3px] rounded-b bg-gradient-to-r from-transparent via-[#F0C87E]/75 to-transparent" />
-            {/* 卡内左上装饰圆（裁剪） */}
-            <span aria-hidden="true" className="absolute -left-10 -top-12 h-28 w-28 rounded-full bg-white/[0.06]" />
-            <div className="relative flex flex-col items-center">
-              <span className="rounded-full border-2 border-[#F0C87E]/85 p-[3px] shadow-[0_4px_14px_rgba(0,0,0,0.18)]">
-                <WxAvatar src={senderAvatar} alt={senderName} size={46} />
-              </span>
-              <span className="mt-3.5 text-[18px] font-medium tracking-wide text-[#F9DCA8]" data-testid="wx-rp-open-sender">
-                {senderName}的红包
-              </span>
-              <span aria-hidden="true" className="mt-4 h-px w-14 bg-gradient-to-r from-transparent via-[#F0C87E]/60 to-transparent" />
-              <p className="mt-4 text-[21px] leading-relaxed text-[#FFEFDC] drop-shadow-[0_1px_2px_rgba(0,0,0,0.15)]" data-testid="wx-rp-open-blessing">
-                {blessing}
-              </p>
+          <div className="relative flex h-full flex-col items-center">
+            <div className="h-[21%] shrink-0" aria-hidden="true" />
+            <span className="rounded-full border-2 border-[#F0C87E]/85 p-[3px] shadow-[0_4px_14px_rgba(0,0,0,0.18)]">
+              <WxAvatar src={senderAvatar} alt={senderName} size={46} />
+            </span>
+            <p className="mt-3.5 text-[18px] font-medium tracking-wide text-[#F9DCA8]" data-testid="wx-rp-open-sender">
+              {senderName}的红包
+            </p>
+            <p className="mt-7 max-w-[86%] text-center text-[24px] font-medium leading-relaxed text-[#FFF3D6] [text-shadow:0_2px_4px_rgba(170,30,25,0.3)]" data-testid="wx-rp-open-blessing">
+              {blessing}
+            </p>
+            <div className="flex-1" aria-hidden="true" />
+            {/* 底部亮红大弧 + 開 */}
+            <div className="relative h-[150px] w-full shrink-0">
+              <span className="absolute left-1/2 top-[46px] h-[240px] w-[480px] -translate-x-1/2 rounded-[50%]" style={{ backgroundColor: '#FF7A5F' }} aria-hidden="true" />
+              <button
+                type="button"
+                data-testid="wx-rp-open-btn"
+                onClick={onOpen}
+                className="absolute left-1/2 top-[22px] grid h-[92px] w-[92px] -translate-x-1/2 place-items-center rounded-full text-[40px] font-semibold text-[#A8671F] transition-transform active:scale-95"
+                style={{
+                  fontFamily: 'Georgia, serif',
+                  background: 'linear-gradient(180deg, #FCEBC0 0%, #F3CB72 55%, #E0A94C 100%)',
+                  animation: 'wxrp-glow 1.9s ease-out infinite',
+                }}
+                aria-label="开红包"
+              >
+                <span aria-hidden="true" className="pointer-events-none absolute inset-[5px] rounded-full border-[1.5px] border-[#C08A3A]/60" />
+                開
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            data-testid="wx-rp-open-btn"
-            onClick={onOpen}
-            className="absolute -bottom-[44px] left-1/2 flex h-[92px] w-[92px] -translate-x-1/2 items-center justify-center rounded-full text-[38px] font-semibold text-[#A8671F]"
-            style={{
-              fontFamily: 'Georgia, serif',
-              background: 'linear-gradient(180deg, #FCEBC0 0%, #F3CB72 55%, #E0A94C 100%)',
-              animation: 'wxrp-glow 1.9s ease-out infinite',
-            }}
-          >
-            <span aria-hidden="true" className="pointer-events-none absolute inset-[5px] rounded-full border-[1.5px] border-[#C08A3A]/60" />
-            開
-          </button>
         </div>
 
+        {/* 卡片下方金色 X 关闭 */}
         <button
           type="button"
           aria-label="关闭"
           data-testid="wx-rp-open-close"
           onClick={onClose}
-          className="absolute bottom-[52px] left-1/2 flex h-[50px] w-[50px] -translate-x-1/2 items-center justify-center rounded-full border-2 border-[#EFC266]/90 text-[#EFC266] active:opacity-70"
+          className="absolute -bottom-[68px] left-1/2 flex h-[50px] w-[50px] -translate-x-1/2 items-center justify-center rounded-full border-2 border-[#EFC266]/90 text-[#EFC266] active:opacity-70"
         >
           <X className="h-6 w-6" strokeWidth={2} />
         </button>
-        <p className="absolute bottom-[26px] left-0 w-full text-center text-[12px] tracking-widest text-[#F9DCA8]/75">轻点「開」拆开红包</p>
       </div>
     </div>
   );
@@ -2753,6 +2763,78 @@ function RpDetailPage({
   );
 }
 
+/** 收款页（点对方发来的未收款转账进入，对照截图：蓝圈时钟 + 待你收款 + 金额 + 转账时间 + 绿色收款按钮 + 退还提示） */
+function WxTrReceivePage({
+  peerName,
+  amount,
+  note,
+  payTime,
+  onBack,
+  onAccept,
+  onRefund,
+}: {
+  peerName: string;
+  amount: number;
+  note: string;
+  payTime: number;
+  onBack: () => void;
+  onAccept: () => void;
+  onRefund: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-white text-black dark:bg-[#111111] dark:text-white" data-testid="wx-tr-receive">
+      <div className="shrink-0 bg-white pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-tr-receive-back" onClick={onBack} className="active:opacity-60">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-8">
+        <div className="mt-[9vh] flex flex-col items-center">
+          <Clock className="h-[74px] w-[74px] text-[#4D9CF8]" strokeWidth={1.5} aria-hidden="true" />
+          <p className="mt-7 text-[19px]" data-testid="wx-tr-receive-status">
+            {peerName}向你转账，待你收款
+          </p>
+          <p className="mt-4 font-semibold" data-testid="wx-tr-receive-amount">
+            <span className="text-[30px]">¥ </span>
+            <span className="text-[46px] leading-none">{fmtMoney(amount)}</span>
+          </p>
+        </div>
+        <div className="mt-14 w-full border-t border-black/[0.06] pt-5 dark:border-white/[0.08]">
+          <div className="flex items-center justify-between gap-3 py-1.5 text-[15px]">
+            <span className="shrink-0 text-black/45 dark:text-white/45">转账时间</span>
+            <span className="text-right">{fmtFullTime(payTime)}</span>
+          </div>
+          {note ? (
+            <div className="flex items-center justify-between gap-3 py-1.5 text-[15px]">
+              <span className="shrink-0 text-black/45 dark:text-white/45">转账说明</span>
+              <span className="min-w-0 truncate text-right">{note}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="shrink-0 px-14 pb-9">
+        <button
+          type="button"
+          data-testid="wx-tr-receive-accept"
+          onClick={onAccept}
+          className="mx-auto block h-12 w-full rounded-[10px] text-[17px] font-medium text-white active:brightness-95"
+          style={{ backgroundColor: '#07C160' }}
+        >
+          收款
+        </button>
+        <p className="mt-4 text-center text-[13.5px] text-black/45 dark:text-white/45">
+          1天内未确认，将退还给对方。{' '}
+          <button type="button" onClick={onRefund} className="text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]" data-testid="wx-tr-receive-refund">
+            退还
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /** 转账详情页（截图⑥：绿勾大圆 + 已收款 + 金额 + 转账/收款时间 + 账单详情） */
 function TrDetailPage({
   peerName,
@@ -2761,6 +2843,7 @@ function TrDetailPage({
   payTime,
   received,
   receivedAt,
+  receiverIsMe,
   onBack,
   onToast,
 }: {
@@ -2770,6 +2853,8 @@ function TrDetailPage({
   payTime: number;
   received: boolean;
   receivedAt?: number;
+  /** 收款人是否为「我」（原卡按消息角色判断 + 凭据卡按 receiptOf 判断）：文案区分「你已收款 / XX已收款」 */
+  receiverIsMe: boolean;
   onBack: () => void;
   onToast: (m: string) => void;
 }) {
@@ -2790,7 +2875,7 @@ function TrDetailPage({
           <Check className="h-11 w-11 text-white" strokeWidth={3} />
         </span>
         <p className="mt-7 text-[19px]" data-testid="wx-tr-status">
-          {received ? `${peerName}已收款` : '对方确认后到账'}
+          {received ? (receiverIsMe ? '你已收款，资金已存入零钱' : `${peerName}已收款`) : '对方确认后到账'}
         </p>
         <p className="mt-4 font-semibold" data-testid="wx-tr-detail-amount">
           <span className="text-[30px]">¥ </span>
@@ -2862,6 +2947,8 @@ function ChatPage({
   const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; amount: number; blessing?: string; note?: string; methodId: string }>(null);
   /** 正在「開」的红包消息 id */
   const [openingId, setOpeningId] = useState<string | null>(null);
+  /** 待收款的转账消息 id（收款页：时钟 + 待你收款 + 收款按钮） */
+  const [receiveId, setReceiveId] = useState<string | null>(null);
   /** 正在查看详情的红包/转账/亲属卡消息 id */
   const [detailId, setDetailId] = useState<string | null>(null);
   /** 全屏预览的图片（图片/表情消息点击查看） */
@@ -2912,6 +2999,7 @@ function ChatPage({
   const [uploadingBg, setUploadingBg] = useState(false);
 
   const openingMsg = openingId ? msgs.find((m) => m.id === openingId) ?? null : null;
+  const receiveMsg = receiveId ? msgs.find((m) => m.id === receiveId) ?? null : null;
   const detailMsg = detailId ? msgs.find((m) => m.id === detailId) ?? null : null;
   const locViewMsg = locViewId ? msgs.find((m) => m.id === locViewId) ?? null : null;
 
@@ -3009,7 +3097,16 @@ function ChatPage({
       .slice(-20)
       .map((m) => ({
         role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
-        content: m.kind === 'sticker' && m.stk ? `[发送了表情：${m.stk.meaning || '无描述'}]` : m.content,
+        // 我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；AI 自己发的表情回写成 [表情包:ID]
+        // 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
+        content:
+          m.kind === 'sticker' && m.stk
+            ? m.role === 'me'
+              ? `[发送了表情：${m.stk.meaning || '无描述'}]`
+              : m.stk.sid
+                ? `[表情包:${m.stk.sid}]`
+                : `[发送了表情：${m.stk.meaning || '无描述'}]`
+            : m.content,
       }));
 
     const aiId = uid();
@@ -3153,12 +3250,17 @@ function ChatPage({
     setCompose(null);
   };
 
-  /** 領红包（仅限对方发的）：金额存入零钱 + 记收入账单 → 进详情；自己发的红包不能自己领 */
+  /** 領红包（仅限对方发的）：金额存入零钱 + 记收入账单 + 聊天里发「你领取了XX的红包」提示行 → 进详情；自己发的红包不能自己领 */
   const openRedPacket = (id: string) => {
     const m = msgs.find((x) => x.id === id);
     if (!m?.rp || m.rp.opened || m.role !== 'peer') return;
     wxPatchBalance(m.rp.amount, { kind: '红包', amount: m.rp.amount });
-    setMsgs((prev) => prev.map((x) => (x.id === id && x.rp ? { ...x, rp: { ...x.rp, opened: true, openedAt: Date.now(), openedBy: me.name } } : x)));
+    // 领取提示行（居中灰字 + 金色尾词）：与对方领取我的红包同款样式
+    const notice: WxMsg = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `你领取了${peer.name}的`, accent: '红包' } };
+    setMsgs((prev) => [
+      ...prev.map((x) => (x.id === id && x.rp ? { ...x, rp: { ...x.rp, opened: true, openedAt: Date.now(), openedBy: me.name } } : x)),
+      notice,
+    ]);
     setOpeningId(null);
     setDetailId(id);
   };
@@ -3176,24 +3278,50 @@ function ChatPage({
     setDetailId(id);
   };
 
-  /** 打开转账详情：未收款则模拟对方确认收款（持久化，不产生资金变动——钱已从零钱扣出）+ 聊天里追加一张「已收款」接收卡片（接收方发出的转账卡消息） */
+  /** 打开转账详情（我发的 → 模拟对方确认收款；已收款的凭据卡 → 只看详情）：
+   *  模拟确认时持久化 + 追加「已收款」接收卡片（receiptOf=me，详情页显示「XX已收款」），不产生资金变动——钱已从零钱扣出 */
   const openTransferDetail = (id: string) => {
     const m = msgs.find((x) => x.id === id);
-    if (m?.tr && !m.tr.received) {
+    if (m?.tr && m.role === 'me' && !m.tr.received) {
       const receipt: WxMsg = {
         id: uid(),
-        role: m.role === 'me' ? 'peer' : 'me',
+        role: 'peer',
         content: '',
         time: Date.now(),
         kind: 'transfer',
-        tr: { amount: m.tr.amount, note: m.tr.note, received: true, receivedAt: Date.now() },
+        tr: { amount: m.tr.amount, note: m.tr.note, received: true, receivedAt: Date.now(), receiptOf: 'me' },
       };
       setMsgs((prev) => [
-        ...prev.map((x) => (x.id === id && x.tr ? { ...x, tr: { ...x.tr, received: true, receivedAt: Date.now() } } : x)),
+        // 原卡也标记 receiptOf='me'（对方收我的款）：详情页显示「XX已收款」
+        ...prev.map((x) => (x.id === id && x.tr ? { ...x, tr: { ...x.tr, received: true, receivedAt: Date.now(), receiptOf: 'me' as const } } : x)),
         receipt,
       ]);
     }
     setDetailId(id);
+  };
+
+  /** 收款（对方发来的转账，收款页点「收款」）：原卡标记已收款 + 金额入零钱 + 记收入账单
+   *  + 追加我的「已收款」接收卡片（receiptOf=peer，详情页显示「你已收款」）——与 AI 收我转账的凭据卡同款、方向相反 */
+  const acceptTransfer = (id: string) => {
+    const m = msgs.find((x) => x.id === id);
+    if (!m?.tr || m.tr.received) return;
+    wxPatchBalance(m.tr.amount, { kind: '转账', amount: m.tr.amount });
+    const receipt: WxMsg = {
+      id: uid(),
+      role: 'me',
+      content: '',
+      time: Date.now(),
+      kind: 'transfer',
+      tr: { amount: m.tr.amount, note: m.tr.note, received: true, receivedAt: Date.now(), receiptOf: 'peer' },
+    };
+    setMsgs((prev) => [
+      // 原卡也标记 receiptOf='peer'（我收的款）：打开原卡详情显示「你已收款」而非「XX已收款」
+      ...prev.map((x) => (x.id === id && x.tr ? { ...x, tr: { ...x.tr, received: true, receivedAt: Date.now(), receiptOf: 'peer' as const } } : x)),
+      receipt,
+    ]);
+    setReceiveId(null);
+    setDetailId(id);
+    onToast(`已收款 ¥${fmtMoney(m.tr.amount)}`);
   };
 
   /** 原生相机/相册选到的图片发送（压缩 dataURL，最多 9 张；相机拍摄单张也走这里） */
@@ -3459,12 +3587,16 @@ function ChatPage({
                   status={m.tr.received ? '已收款' : m.role === 'me' ? '你发起了一笔转账' : '向你转账'}
                   received={m.tr.received === true}
                   fromMe={m.role === 'me'}
-                  onClick={() => openTransferDetail(m.id)}
+                  onClick={() =>
+                    // 对方发来的未收款转账 → 收款页（时钟+待你收款+收款）；其余 → 交易详情
+                    m.role === 'peer' && m.tr?.received !== true ? setReceiveId(m.id) : openTransferDetail(m.id)
+                  }
                 />
               ) : m.kind === 'family' && m.fam ? (
                 <FamilyBubble
                   title={`给${m.role === 'me' ? peer.name : me.name}的亲属卡`}
                   sub={m.fam.claimed ? (m.role === 'me' ? '对方已领取' : '已领取') : m.role === 'me' ? '待对方领取' : '待你领取'}
+                  claimed={m.fam.claimed === true}
                   onClick={() => (m.role === 'me' ? openFamilyDetail(m.id) : setDetailId(m.id))}
                 />
               ) : m.kind === 'image' && m.img ? (
@@ -3770,6 +3902,22 @@ function ChatPage({
         />
       )}
 
+      {/* 收款页（对方发来的未收款转账） */}
+      {receiveMsg?.tr && (
+        <WxTrReceivePage
+          peerName={peer.name}
+          amount={receiveMsg.tr.amount}
+          note={receiveMsg.tr.note}
+          payTime={receiveMsg.time}
+          onBack={() => setReceiveId(null)}
+          onAccept={() => acceptTransfer(receiveMsg.id)}
+          onRefund={() => {
+            setReceiveId(null);
+            onToast('已退还给对方（模拟，1天内到账）');
+          }}
+        />
+      )}
+
       {/* 開红包弹层 */}
       {openingMsg?.rp && (
         <RpOpenLayer
@@ -3809,6 +3957,19 @@ function ChatPage({
           payTime={detailMsg.time}
           received={detailMsg.tr.received}
           receivedAt={detailMsg.tr.receivedAt}
+          receiverIsMe={(() => {
+            // 收款人是否为「我」：receiptOf 优先；旧数据按角色+同额同言配对推导（兼容历史消息）
+            const t = detailMsg.tr;
+            const idx = msgs.findIndex((x) => x.id === detailMsg.id);
+            const before = msgs.slice(0, Math.max(idx, 0));
+            if (t.receiptOf) return t.receiptOf === 'peer';
+            if (detailMsg.role === 'peer') {
+              // 对方卡片：此前有我发的同额同言转账 → 是对方收款的凭据卡（对方收）；否则是对方发来的原卡（我收）
+              return !before.some((x) => x.role === 'me' && x.tr && x.tr.amount === t.amount && (x.tr.note || '') === (t.note || ''));
+            }
+            // 我的卡片：此前有对方已收款的同额同言原卡 → 是我收款的凭据卡（我收）
+            return before.some((x) => x.role === 'peer' && x.tr?.received === true && x.tr.amount === t.amount && (x.tr.note || '') === (t.note || ''));
+          })()}
           onBack={() => setDetailId(null)}
           onToast={onToast}
         />
