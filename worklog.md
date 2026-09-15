@@ -4007,3 +4007,22 @@ Stage Summary:
 - 好友系统按 App 独立：QQ(friendQq)/微信(friendWx)/信息(friendSms) 各自维护，一个 App 添加好友不再波及其他 App；旧数据经 isFriend 回退保持兼容；联系人/电话 App 仍走手机级 isFriend
 - 信息 App 全面显示昵称（列表/面板/添加页/提示），添加后即时刷新也不再回退真实名字
 - 涉及文件：src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/components/apps/{qq,wechat,chat}.tsx
+---
+Task ID: reply-count
+Agent: Z.ai Code (main)
+Task: 聊天设置新增「回复条数」（1/3/5/7/15/20/25/30，默认 5）：AI 按选定条数像真人一样连续发多条消息，按角色隔离，微信/QQ 设置页落地，信息端管线兼容
+
+Work Log:
+- 新增 src/lib/reply-count.ts：①getReplyCount/saveReplyCount（localStorage 单键 JSON map「chat-reply-counts」，sessionKey=wx:<contactId>/qq:<contactId>/sms:<storageKey>，天然按角色+App 隔离）②buildReplyCountPrompt（含用户指定原句「本次请生成 N 条消息，每条消息独立成段，不要把多条内容合并成一条。」+「&&&」分隔标记约定）③splitReplySegments（流结束按 /&{3,}/ 切多条，切不出时整段兜底为第一条，永不丢内容）④splitReplyRender（流式期实时多气泡切分，末尾半截「&&」不闪现，标记后空段→pending 打字中气泡）⑤createReplyPacer（连发节奏器：标记一凑齐立即放行并挂打字中气泡，下一条首字到达停顿 600~1100ms 再放出，流结束立刻 flush 全部）
+- chat-stream-store.ts：BeginChatStreamOptions 新增 replyCount（>1 启用节奏器并抬高 maxTokens 下限=replyCount*120，代理/浏览器直连共用），增量统一走 onDelta（多条模式经节奏器），结束/失败均先 pacer.end() 保证 finalize 拿到完整内容；退出页面继续接收逻辑不变（节奏器跑在全局单例里）
+- chat-settings.tsx：ChatSettingsPage 新增「回复条数」入口行（右侧当前条数+ChevronRight，置于置顶/免打扰卡之后）+ 新增 ChatReplyCountPage 独立二级页（8 档选项单选，选中勾色微信绿/QQ 蓝，底部说明「换一个聊天对象需要单独设置」）
+- wechat.tsx：runAiTurn 发送现场 getReplyCount(sessionKey)，>1 时人设后追加 buildReplyCountPrompt，beginChatStream 传 replyCount；finalize 按 splitReplySegments 落盘 N 条（id=aiMsgId/aiMsgId-i，time=startedAt 累进 600~1200ms 随机错开=各自 createdAt），错误仍单条原文案；流式区改 splitReplyRender 多气泡（每条带头像，pending 挂打字中气泡）；设置页接线+ChatReplyCountPage 渲染
+- qq.tsx：同微信全套（错误文案保持「（消息发送失败：…）」，密友值改按回复轮次+2 不按条数）；流式多气泡+设置页接线；顺带修复仓库 HEAD 中 qq.tsx 既有损坏行（const ighlightId→const [highlightId）
+- chat.tsx（信息）：管线通用接入但 getReplyCount(sessionKey, 1) 缺省回退 1（无设置入口，保持现有单条行为），systemPrompt 为空的助手会话恒 1 条；流式渲染同样支持多气泡（iMessage 分组尾巴语义）；finalize 多条落盘
+- 工程注意：沙箱文件层出现读写不一致快照（Edit 工具报失败却实际写入/读到陈旧态，HEAD blob 与工作树不一致），全部关键编辑改为 Python 重试循环（写入后重读校验至收敛）+ 去重 idempotent 守卫；tsc/lint 最终全绿
+- E2E（agent-browser 393×852，seed IndexedDB user 小艾/char 晴晴 + stub /api/chat 流）：①微信设置页显示「回复条数 5 条」默认值→二级页 8 档渲染→选 3 勾标移动→localStorage {"wx:e2e-char-qing":3}；②发消息流式期：第一条气泡完成+第二条打字中气泡（停顿节奏可见）→结束后 3 个独立气泡；③localStorage 落盘 3 条独立消息 time 依次 +1047ms/+701ms；④捕获请求体 replyCount=3、system 含指定原句与 &&& 约定；⑤QQ 晴晴设置页显示默认 5 条（与微信 3 条隔离证明）→选 7 蓝勾→发消息 replyCount=7+prompt 含「7 条」→落盘 3 条错时消息；⑥信息端退出页面继续接收：发消息立即退出聊天页→重进后 3 条已落盘渲染；⑦微信改回 1 条+无标记 stub：单条消息落盘、请求无 replyCount 参数、无多条指令、maxTokens 不变=现有行为完全保持；⑧console 无错误、dev.log 无应用错误、lint+tsc 0 问题
+- 测试数据仅存在于 E2E 浏览器（IndexedDB/localStorage），未污染仓库与用户数据
+
+Stage Summary:
+- 「回复条数」功能全链路落地：设置页入口+二级页选择（默认 5）→ 按角色/App 隔离持久化 → 发送时 system 注入指定原句与「&&&」分隔约定 → 流式期按标记实时多气泡+连发停顿节奏（打字中气泡）→ finalize 按标记切成 N 条独立消息（各自 id/createdAt）入库渲染 → 解析失败兜底第一条 → 1 条保持现有行为 → 退出页面继续接收不变 → 电话语音未动、三端角色隔离未破坏
+- 涉及文件：src/lib/reply-count.ts（新）、src/lib/chat-stream-store.ts、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx

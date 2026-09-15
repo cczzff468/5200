@@ -135,6 +135,7 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -146,6 +147,7 @@ import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, qqChatFlags as qqChatFlagsStore } from '@/lib/chat-flags';
 import {
   ChatBgPage,
+  ChatReplyCountPage,
   ChatSearchPage,
   ChatSettingsPage,
   chatBgLayerStyle,
@@ -1469,12 +1471,19 @@ function ChatPage({
   const fileRef = useRef<HTMLInputElement>(null);
   // 原生相机隐藏 input（capture 调起后置摄像头，对齐微信：不再使用自建取景浮层）
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  /** 聊天设置页（右上角菜单进入）：信息卡片/置顶/免打扰/查找聊天记录/聊天背景 */
+  /** 聊天设置页（右上角菜单进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 查找聊天记录页 */
   const [searchOpen, setSearchOpen] = useState(false);
   /** 聊天背景页（设置页「聊天背景」进入的独立二级页） */
   const [bgOpen, setBgOpen] = useState(false);
+  /** 回复条数页（设置页「回复条数」进入的独立二级页，按会话隔离） */
+  const [replyOpen, setReplyOpen] = useState(false);
+  /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
+  const [replyCount, setReplyCountState] = useState(() => getReplyCount(sessionKey));
+  useEffect(() => {
+    setReplyCountState(getReplyCount(sessionKey));
+  }, [sessionKey]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
@@ -1693,9 +1702,11 @@ function ChatPage({
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）
     setMsgs((prev) => [...prev, userMsg]);
 
+    // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令
+    const replyCount = getReplyCount(sessionKey);
     const system = buildPersonaPrompt(peer, me, ownerName);
     const payloadMsgs: ChatPayloadMessage[] = [
-      { role: 'system', content: system },
+      { role: 'system', content: replyCount > 1 ? `${system}\n\n${buildReplyCountPrompt(replyCount)}` : system },
       ...history,
     ];
 
@@ -1704,16 +1715,31 @@ function ChatPage({
       aiMsgId: aiId,
       messages: payloadMsgs,
       apiConfig,
+      replyCount,
       finalize: ({ aiMsgId, content, error, startedAt }) => {
-        const finalMsg: QQMsg = {
-          id: aiMsgId,
-          role: 'peer',
-          content: error ? `（消息发送失败：${error}）` : content || '（对方暂时没有回复，请稍后再试）',
-          time: startedAt,
-        };
-        saveMsgs(peer.id, [...loadMsgs(peer.id), finalMsg]);
-        // 密友值：对方回复一条也算互动 +2（失败不算；与页面是否存活无关）
-        if (!error) addBondPoints(peer.id, BOND_MSG_POINTS);
+        if (error) {
+          saveMsgs(peer.id, [
+            ...loadMsgs(peer.id),
+            { id: aiMsgId, role: 'peer', content: `（消息发送失败：${error}）`, time: startedAt },
+          ]);
+          return;
+        }
+        // 按分隔标记切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
+        const segs = splitReplySegments(content);
+        let t = startedAt;
+        const saved: QQMsg[] = segs.map((seg, i) => {
+          const msg: QQMsg = {
+            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
+            role: 'peer',
+            content: seg || '（对方暂时没有回复，请稍后再试）',
+            time: t,
+          };
+          t += 600 + Math.floor(Math.random() * 600);
+          return msg;
+        });
+        saveMsgs(peer.id, [...loadMsgs(peer.id), ...saved]);
+        // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
+        addBondPoints(peer.id, BOND_MSG_POINTS);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -2022,33 +2048,46 @@ function ChatPage({
             </div>
           );
         })}
-        {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式） */}
-        {stream && stream.status === 'streaming' && (
-          <div key={stream.aiMsgId} data-testid="qq-stream-bubble">
-            {(msgs.length === 0 || stream.startedAt - msgs[msgs.length - 1].time > 5 * 60_000) && (
-              <p className="my-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtChatTime(stream.startedAt)}</p>
-            )}
-            <div className="mb-3 flex items-end justify-start gap-2">
-              <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
-              <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
-                {stream.content ? (
-                  stream.content
-                ) : (
-                  <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
-                    {[0, 1, 2].map((d) => (
-                      <span
-                        key={d}
-                        aria-hidden="true"
-                        className="h-[7px] w-[7px] rounded-full bg-black/35 dark:bg-white/45"
-                        style={{ animation: `qqTypingDot 1.1s ${d * 0.16}s ease-in-out infinite` }}
-                      />
-                    ))}
-                  </span>
+        {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式）。
+            回复条数 > 1 时按分隔标记实时切成多个气泡，新一条开始前显示打字中动画（连发节奏） */}
+        {stream && stream.status === 'streaming' &&
+          (() => {
+            const split = splitReplyRender(stream.content);
+            const showTime = msgs.length === 0 || stream.startedAt - msgs[msgs.length - 1].time > 5 * 60_000;
+            const dots = (
+              <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
+                {[0, 1, 2].map((d) => (
+                  <span
+                    key={d}
+                    aria-hidden="true"
+                    className="h-[7px] w-[7px] rounded-full bg-black/35 dark:bg-white/45"
+                    style={{ animation: `qqTypingDot 1.1s ${d * 0.16}s ease-in-out infinite` }}
+                  />
+                ))}
+              </span>
+            );
+            return (
+              <div key={stream.aiMsgId} data-testid="qq-stream-bubble">
+                {showTime && (
+                  <p className="my-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtChatTime(stream.startedAt)}</p>
+                )}
+                {split.texts.map((t, i) => (
+                  <div className="mb-3 flex items-end justify-start gap-2" key={i} data-testid={`qq-stream-bubble-${i}`}>
+                    <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
+                    <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
+                      {t}
+                    </div>
+                  </div>
+                ))}
+                {(split.pending || split.texts.length === 0) && (
+                  <div className="mb-3 flex items-end justify-start gap-2" data-testid="qq-stream-typing">
+                    <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
+                    <div className="max-w-[calc(100%-96px)] rounded-[18px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">{dots}</div>
+                  </div>
                 )}
               </div>
-            </div>
-          </div>
-        )}
+            );
+          })()}
       </div>
 
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮） */}
@@ -2219,7 +2258,7 @@ function ChatPage({
         />
       ) : null}
 
-      {/* 聊天设置页（右上角菜单进入）：信息卡片/置顶聊天/消息免打扰/查找聊天记录/聊天背景 */}
+      {/* 聊天设置页（右上角菜单进入）：信息卡片/置顶聊天/消息免打扰/回复条数/查找聊天记录/聊天背景 */}
       {settingsOpen ? (
         <ChatSettingsPage
           variant="qq"
@@ -2233,11 +2272,26 @@ function ChatPage({
           muted={flags.muted === true}
           bg={bg}
           bgImageUrl={bgImageUrl}
+          replyCount={replyCount}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
+          onOpenReplyCount={() => setReplyOpen(true)}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
+        />
+      ) : null}
+
+      {/* 回复条数页（聊天设置二级页）：AI 按选定条数连发多条消息（按会话隔离保存） */}
+      {replyOpen ? (
+        <ChatReplyCountPage
+          variant="qq"
+          value={replyCount}
+          onBack={() => setReplyOpen(false)}
+          onSelect={(n) => {
+            saveReplyCount(sessionKey, n);
+            setReplyCountState(n);
+          }}
         />
       ) : null}
 

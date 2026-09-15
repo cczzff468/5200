@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ApiConfig } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
+import { createReplyPacer } from '@/lib/reply-count';
 
 // ---------------- 公开类型 ----------------
 
@@ -68,6 +69,12 @@ export interface BeginChatStreamOptions {
   /** 完整请求消息（system 人设在最前 + 上下文），本模块原样透传给 /api/chat 与浏览器直连 */
   messages: ChatPayloadMessage[];
   apiConfig: ApiConfig;
+  /**
+   * 回复条数（>1 时启用）：本次要求 AI 连发多条消息，本模块会把流式增量经过
+   * 连发节奏器（分隔标记后先停顿片刻再放出下一条）再更新 content，
+   * 并抬高 max_tokens 下限防止多条被截断；条数切分与落盘由各 App 的 finalize 负责。
+   */
+  replyCount?: number;
   /**
    * 流结束（成功或失败，恰好一次）后把最终 AI 消息写入该角色的聊天记录。
    * 由各 App 在发起时提供：内部使用该 App 的 loadMsgs/saveMsgs 与消息类型，
@@ -124,11 +131,24 @@ function patchState(rt: StreamRuntime, patch: Partial<ChatStreamState>): void {
 async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promise<void> {
   const { apiConfig, messages } = opts;
   const acc = () => rt.state.content;
+  // 连发节奏器（回复条数 > 1 时启用）：分隔标记后先停顿再放出下一条，流结束立刻放出全部剩余
+  const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
+  const pacer = multi ? createReplyPacer((shown) => patchState(rt, { content: shown })) : null;
+  // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
+  const effConfig =
+    multi && opts.replyCount
+      ? { ...apiConfig, maxTokens: Math.max(apiConfig.maxTokens, opts.replyCount * 120) }
+      : apiConfig;
+  /** 增量统一入口：多条模式进节奏器，单条模式直接透传 */
+  const onDelta = (delta: string): void => {
+    if (pacer) pacer.push(delta);
+    else patchState(rt, { content: acc() + delta });
+  };
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, config: apiConfig }),
+      body: JSON.stringify({ messages, config: effConfig, ...(multi ? { replyCount: opts.replyCount } : {}) }),
     });
     if (!res.ok || !res.body) {
       let detail = '';
@@ -147,9 +167,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
         // 内网地址 / 服务器建议直连：改用浏览器直连流式请求（SSE 解析）；
         // 空回复不在此处兜底：finalize 由各 App 写入自己的兜底文案
         try {
-          await directChatStream(apiConfig, messages, (delta) =>
-            patchState(rt, { content: acc() + delta })
-          );
+          await directChatStream(effConfig, messages, onDelta);
         } catch (directErr) {
           // 公网地址直连也失败：保留服务器侧原因，便于区分地区限制还是 CORS 问题
           const directMsg = directErr instanceof Error && directErr.message ? directErr.message : '';
@@ -162,19 +180,21 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
         throw new Error(detail || `请求失败（${res.status}）`);
       }
     } else {
-      // 纯文本流（text/plain）：字节累积即已收内容
+      // 纯文本流（text/plain）：字节增量统一交给 onDelta（多条模式经节奏器）
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let text = '';
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        text += decoder.decode(value, { stream: true });
-        patchState(rt, { content: text });
+        onDelta(decoder.decode(value, { stream: true }));
       }
     }
+    // 流结束：节奏器立刻放出全部剩余内容（finalize 拿到的是完整内容）
+    pacer?.end();
     patchState(rt, { status: 'done' });
   } catch (err) {
+    // 失败同样放出已收内容（各 App 错误时按自己的文案落盘，不丢已到手的正文）
+    pacer?.end();
     patchState(rt, {
       status: 'error',
       error: err instanceof Error && err.message ? err.message : '消息没有送达，请稍后重试',

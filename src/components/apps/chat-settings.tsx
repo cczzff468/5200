@@ -1,17 +1,22 @@
 'use client';
 
 /**
- * 聊天设置页 + 聊天背景页 + 查找聊天记录页（微信 / QQ 共用，variant 区分主题）：
+ * 聊天设置页 + 聊天背景页 + 回复条数页 + 查找聊天记录页（微信 / QQ 共用，variant 区分主题）：
  * - ChatSettingsPage：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
- *   查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
+ *   回复条数入口（进入独立二级页 ChatReplyCountPage）、查找聊天记录入口、聊天背景入口
+ *   （进入独立二级页 ChatBgPage）
+ * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条，AI 按选定条数像真人一样
+ *   连发多条消息（&&& 分隔标记，由 @/lib/reply-count 切分与节奏控制）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
- * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），背景图片本体在
+ * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数持久化在
+ *   @/lib/reply-count（localStorage，按会话键隔离），背景图片本体在
  *   IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
+import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 
 export type ChatSettingsVariant = 'wx' | 'qq';
 
@@ -111,9 +116,11 @@ export function ChatSettingsPage({
   muted,
   bg,
   bgImageUrl,
+  replyCount,
   onBack,
   onTogglePinned,
   onToggleMuted,
+  onOpenReplyCount,
   onOpenSearch,
   onOpenBg,
 }: {
@@ -132,9 +139,12 @@ export function ChatSettingsPage({
   bg: ChatSettingsBg;
   /** mode === 'image' 时已加载的图片 data URL（未加载完为 null；入口行迷你预览用） */
   bgImageUrl: string | null;
+  /** 当前会话的回复条数（AI 连发多条消息） */
+  replyCount: number;
   onBack: () => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
+  onOpenReplyCount: () => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
 }) {
@@ -212,6 +222,24 @@ export function ChatSettingsPage({
           </div>
         </div>
 
+        {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <button
+            type="button"
+            data-testid={`${testPrefix}-settings-reply-count`}
+            onClick={onOpenReplyCount}
+            className={rowCls}
+          >
+            <span>回复条数</span>
+            <span className="flex shrink-0 items-center gap-2">
+              <span data-testid={`${testPrefix}-reply-count-value`} className="text-[14px] text-black/40 dark:text-white/40">
+                {replyCount} 条
+              </span>
+              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+
         {/* 查找聊天记录 */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
           <button type="button" data-testid={`${testPrefix}-settings-search`} onClick={onOpenSearch} className={rowCls}>
@@ -237,6 +265,83 @@ export function ChatSettingsPage({
             </span>
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 回复条数选择页（聊天设置二级页）：AI 像真人一样按选定条数连发多条消息 */
+
+export function ChatReplyCountPage({
+  variant,
+  value,
+  onBack,
+  onSelect,
+}: {
+  variant: ChatSettingsVariant;
+  /** 当前会话的回复条数 */
+  value: number;
+  onBack: () => void;
+  onSelect: (n: number) => void;
+}) {
+  const wx = variant === 'wx';
+
+  // 主题 token（与 ChatSettingsPage 一致）
+  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
+  const rowCls = wx
+    ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+    : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+  // 选中勾色：微信绿 / QQ 蓝
+  const accent = wx ? '#07C160' : '#0099FF';
+  const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
+  const headerH = wx ? 'h-11' : 'h-12';
+  const testPrefix = variant;
+
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className={`flex ${headerH} items-center px-2`}>
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid={`${testPrefix}-reply-count-back`}
+            onClick={onBack}
+            className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}
+          >
+            <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+          </button>
+          <div className={`flex-1 pr-8 text-center ${titleCls}`}>回复条数</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        <div className={`${cardCls} overflow-hidden`}>
+          {REPLY_COUNT_OPTIONS.map((n, i) => (
+            <div key={n}>
+              {i > 0 && <div className={`border-t ${dividerCls}`} />}
+              <button
+                type="button"
+                data-testid={`${testPrefix}-reply-count-option-${n}`}
+                aria-label={`回复条数 ${n} 条`}
+                onClick={() => onSelect(n)}
+                className={rowCls}
+              >
+                <span>{n} 条</span>
+                {value === n && (
+                  <span className="grid place-items-center" style={{ color: accent }} aria-label="已选中">
+                    <Check className="h-5 w-5" strokeWidth={2.4} />
+                  </span>
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+        <p className="px-1 pt-3 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+          对方将按选定条数像真人一样连续发送多条消息，每条独立一个气泡；换一个聊天对象需要单独设置。
+        </p>
       </div>
     </div>
   );

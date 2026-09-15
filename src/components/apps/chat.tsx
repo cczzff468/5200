@@ -36,6 +36,7 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
@@ -495,23 +496,44 @@ function ChatView({
     setInput('');
 
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
-    const payload: ChatPayloadMessage[] = systemPrompt
-      ? [{ role: 'system', content: systemPrompt }, ...history]
+    // 回复条数（本会话独立设置；信息端未提供设置入口，未设置时保持 1 条的现状）
+    const replyCount = systemPrompt ? getReplyCount(sessionKey, 1) : 1;
+    const sysContent = systemPrompt
+      ? replyCount > 1
+        ? `${systemPrompt}\n\n${buildReplyCountPrompt(replyCount)}`
+        : systemPrompt
+      : null;
+    const payload: ChatPayloadMessage[] = sysContent
+      ? [{ role: 'system', content: sysContent }, ...history]
       : history;
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
       messages: payload,
       apiConfig,
+      replyCount,
       finalize: ({ aiMsgId, content, error, startedAt }) => {
-        const finalMsg: ChatMsg = {
-          id: aiMsgId,
-          role: 'assistant',
-          content: error ? error : content || '（AI 暂时没有返回内容，稍后再试一次吧）',
-          time: startedAt,
-          ...(error ? { error: true } : {}),
-        };
-        saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), finalMsg]);
+        if (error) {
+          saveMsgs(storageKey, [
+            ...(loadMsgs(storageKey) ?? []),
+            { id: aiMsgId, role: 'assistant', content: error, time: startedAt, error: true },
+          ]);
+          return;
+        }
+        // 按分隔标记切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
+        const segs = splitReplySegments(content);
+        let t = startedAt;
+        const saved: ChatMsg[] = segs.map((seg, i) => {
+          const msg: ChatMsg = {
+            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
+            role: 'assistant',
+            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
+            time: t,
+          };
+          t += 600 + Math.floor(Math.random() * 600);
+          return msg;
+        });
+        saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -612,46 +634,64 @@ function ChatView({
           );
         })}
         {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；
-            iMessage 语义：未收到内容时显示打字中动画，收到后变为流式文本气泡） */}
-        {stream && stream.status === 'streaming' && (
-          <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: 'spring', stiffness: 500, damping: 36 }}
-            className="mt-2.5 flex justify-start"
-            data-testid="sms-stream-bubble"
-          >
-            <div className="flex max-w-[76%] flex-col items-start">
-              {stream.content ? (
-                <div className="relative w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] rounded-bl-[5px] bg-muted px-3.5 py-2 text-[15px] leading-[1.45] text-foreground">
-                  <span
-                    aria-hidden="true"
-                    className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
-                    style={{ clipPath: TAIL_CLIP_LEFT }}
-                  />
-                  <span className="relative">{stream.content}</span>
+            iMessage 语义：未收到内容时显示打字中动画，收到后变为流式文本气泡）。
+            回复条数 > 1 时按分隔标记实时切成多个气泡，新一条开始前显示打字中动画（连发节奏） */}
+        {stream && stream.status === 'streaming' &&
+          (() => {
+            const split = splitReplyRender(stream.content);
+            const dots = (
+              <div className="relative rounded-[18px] rounded-bl-[5px] bg-muted px-4 py-3.5">
+                <span
+                  aria-hidden="true"
+                  className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
+                  style={{ clipPath: TAIL_CLIP_LEFT }}
+                />
+                <div className="flex items-center gap-1">
+                  {[0, 1, 2].map((d) => (
+                    <span
+                      key={d}
+                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
+                      style={{ animationDelay: `${d * 0.15}s` }}
+                    />
+                  ))}
                 </div>
-              ) : (
-                <div className="relative rounded-[18px] rounded-bl-[5px] bg-muted px-4 py-3.5">
-                  <span
-                    aria-hidden="true"
-                    className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
-                    style={{ clipPath: TAIL_CLIP_LEFT }}
-                  />
-                  <div className="flex items-center gap-1">
-                    {[0, 1, 2].map((d) => (
-                      <span
-                        key={d}
-                        className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
-                        style={{ animationDelay: `${d * 0.15}s` }}
-                      />
-                    ))}
-                  </div>
+              </div>
+            );
+            return (
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+                className="mt-2.5 flex justify-start"
+                data-testid="sms-stream-bubble"
+              >
+                <div className="flex max-w-[76%] flex-col items-start">
+                  {split.texts.map((t, i) => {
+                    const lastOfGroup = i === split.texts.length - 1 && !split.pending;
+                    return (
+                      <div
+                        key={i}
+                        data-testid={`sms-stream-bubble-${i}`}
+                        className="relative mb-[3px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-muted px-3.5 py-2 text-[15px] leading-[1.45] text-foreground last:mb-0"
+                      >
+                        {lastOfGroup && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
+                            style={{ clipPath: TAIL_CLIP_LEFT }}
+                          />
+                        )}
+                        <span className="relative">{t}</span>
+                      </div>
+                    );
+                  })}
+                  {(split.pending || split.texts.length === 0) && (
+                    <div data-testid="sms-stream-typing">{dots}</div>
+                  )}
                 </div>
-              )}
-            </div>
-          </motion.div>
-        )}
+              </motion.div>
+            );
+          })()}
         <div aria-hidden="true" className="h-1" />
       </div>
 

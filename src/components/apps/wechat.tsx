@@ -64,6 +64,7 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -73,6 +74,7 @@ import { useUnreadMap, wxUnreads as wxUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, wxChatFlags as wxChatFlagsStore } from '@/lib/chat-flags';
 import {
   ChatBgPage,
+  ChatReplyCountPage,
   ChatSearchPage,
   ChatSettingsPage,
   chatBgLayerStyle,
@@ -2824,12 +2826,19 @@ function ChatPage({
   const [stickerOpen, setStickerOpen] = useState(false);
   /** 正在查看详情的位置消息 id */
   const [locViewId, setLocViewId] = useState<string | null>(null);
-  /** 聊天设置页（右上角 ··· 进入）：信息卡片/置顶/免打扰/查找聊天记录/聊天背景 */
+  /** 聊天设置页（右上角 ··· 进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 查找聊天记录页 */
   const [searchOpen, setSearchOpen] = useState(false);
   /** 聊天背景页（设置页「聊天背景」进入的独立二级页） */
   const [bgOpen, setBgOpen] = useState(false);
+  /** 回复条数页（设置页「回复条数」进入的独立二级页，按会话隔离） */
+  const [replyOpen, setReplyOpen] = useState(false);
+  /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
+  const [replyCount, setReplyCountState] = useState(() => getReplyCount(sessionKey));
+  useEffect(() => {
+    setReplyCountState(getReplyCount(sessionKey));
+  }, [sessionKey]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
@@ -2900,9 +2909,11 @@ function ChatPage({
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）
     setMsgs((prev) => [...prev, userMsg]);
 
+    // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令
+    const replyCount = getReplyCount(sessionKey);
     const system = buildPersonaPrompt(peer, me, ownerName);
     const payloadMsgs: ChatPayloadMessage[] = [
-      { role: 'system', content: system },
+      { role: 'system', content: replyCount > 1 ? `${system}\n\n${buildReplyCountPrompt(replyCount)}` : system },
       ...history,
     ];
 
@@ -2911,14 +2922,29 @@ function ChatPage({
       aiMsgId: aiId,
       messages: payloadMsgs,
       apiConfig,
+      replyCount,
       finalize: ({ aiMsgId, content, error, startedAt }) => {
-        const finalMsg: WxMsg = {
-          id: aiMsgId,
-          role: 'peer',
-          content: error ? `〔${error}〕` : content || '（对方暂时没有回复，请稍后再试）',
-          time: startedAt,
-        };
-        saveMsgs(peer.id, [...loadMsgs(peer.id), finalMsg]);
+        if (error) {
+          saveMsgs(peer.id, [
+            ...loadMsgs(peer.id),
+            { id: aiMsgId, role: 'peer', content: `〔${error}〕`, time: startedAt },
+          ]);
+          return;
+        }
+        // 按分隔标记切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
+        const segs = splitReplySegments(content);
+        let t = startedAt;
+        const saved: WxMsg[] = segs.map((seg, i) => {
+          const msg: WxMsg = {
+            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
+            role: 'peer',
+            content: seg || '（对方暂时没有回复，请稍后再试）',
+            time: t,
+          };
+          t += 600 + Math.floor(Math.random() * 600);
+          return msg;
+        });
+        saveMsgs(peer.id, [...loadMsgs(peer.id), ...saved]);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -3347,32 +3373,48 @@ function ChatPage({
             )}
           </div>
         ))}
-        {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式） */}
-        {stream && stream.status === 'streaming' && (
-          <div key={stream.aiMsgId} data-testid="wx-stream-bubble">
-            {(msgs.length === 0 || stream.startedAt - msgs[msgs.length - 1].time > 5 * 60_000) && (
-              <p className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtChatTime(stream.startedAt)}</p>
-            )}
-            <div className="flex items-start gap-2 py-1.5">
-              <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
-              <div className="relative max-w-[calc(100%-92px)] whitespace-pre-wrap break-words rounded-[5px] bg-white px-3 py-2 text-[16px] leading-[1.45] text-black dark:bg-[#1E1E1E] dark:text-white">
-                <span
-                  aria-hidden="true"
-                  className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]"
-                />
-                {stream.content ? (
-                  stream.content
-                ) : (
-                  <span className="flex h-[23px] items-center gap-1" aria-label="对方正在输入">
-                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
-                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
-                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
-                  </span>
+        {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式）。
+            回复条数 > 1 时按分隔标记实时切成多个气泡，新一条开始前显示打字中动画（连发节奏） */}
+        {stream && stream.status === 'streaming' &&
+          (() => {
+            const split = splitReplyRender(stream.content);
+            const showTime = msgs.length === 0 || stream.startedAt - msgs[msgs.length - 1].time > 5 * 60_000;
+            return (
+              <div key={stream.aiMsgId} data-testid="wx-stream-bubble">
+                {showTime && (
+                  <p className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtChatTime(stream.startedAt)}</p>
+                )}
+                {split.texts.map((t, i) => (
+                  <div className="flex items-start gap-2 py-1.5" key={i} data-testid={`wx-stream-bubble-${i}`}>
+                    <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
+                    <div className="relative max-w-[calc(100%-92px)] whitespace-pre-wrap break-words rounded-[5px] bg-white px-3 py-2 text-[16px] leading-[1.45] text-black dark:bg-[#1E1E1E] dark:text-white">
+                      <span
+                        aria-hidden="true"
+                        className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]"
+                      />
+                      {t}
+                    </div>
+                  </div>
+                ))}
+                {(split.pending || split.texts.length === 0) && (
+                  <div className="flex items-start gap-2 py-1.5" data-testid="wx-stream-typing">
+                    <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
+                    <div className="relative max-w-[calc(100%-92px)] rounded-[5px] bg-white px-3 py-2 dark:bg-[#1E1E1E]">
+                      <span
+                        aria-hidden="true"
+                        className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]"
+                      />
+                      <span className="flex h-[23px] items-center gap-1" aria-label="对方正在输入">
+                        <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
+                        <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
+                        <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
+                      </span>
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
-          </div>
-        )}
+            );
+          })()}
       </div>
 
       {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方） */}
@@ -3486,7 +3528,7 @@ function ChatPage({
         />
       )}
 
-      {/* 聊天设置页（右上角 ··· 进入）：信息卡片/置顶聊天/消息免打扰/查找聊天记录/聊天背景 */}
+      {/* 聊天设置页（右上角 ··· 进入）：信息卡片/置顶聊天/消息免打扰/回复条数/查找聊天记录/聊天背景 */}
       {settingsOpen && (
         <ChatSettingsPage
           variant="wx"
@@ -3500,11 +3542,26 @@ function ChatPage({
           muted={flags.muted === true}
           bg={bg}
           bgImageUrl={bgImageUrl}
+          replyCount={replyCount}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => wxChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
+          onOpenReplyCount={() => setReplyOpen(true)}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
+        />
+      )}
+
+      {/* 回复条数页（聊天设置二级页）：AI 按选定条数连发多条消息（按会话隔离保存） */}
+      {replyOpen && (
+        <ChatReplyCountPage
+          variant="wx"
+          value={replyCount}
+          onBack={() => setReplyOpen(false)}
+          onSelect={(n) => {
+            saveReplyCount(sessionKey, n);
+            setReplyCountState(n);
+          }}
         />
       )}
 
