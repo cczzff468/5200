@@ -2931,8 +2931,8 @@ function ChatPage({
           ]);
           return;
         }
-        // 按分隔标记切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
-        const segs = splitReplySegments(content);
+        // 按边界（分隔标记/换行，一行一条）切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
+        const segs = splitReplySegments(content, replyCount > 1);
         let t = startedAt;
         const saved: WxMsg[] = segs.map((seg, i) => {
           const msg: WxMsg = {
@@ -3374,10 +3374,10 @@ function ChatPage({
           </div>
         ))}
         {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式）。
-            回复条数 > 1 时按分隔标记实时切成多个气泡，新一条开始前显示打字中动画（连发节奏） */}
+            回复条数 > 1 时按边界（标记/换行，一行一条）实时切成多个气泡，新一条开始前显示打字中动画（连发节奏） */}
         {stream && stream.status === 'streaming' &&
           (() => {
-            const split = splitReplyRender(stream.content);
+            const split = splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1);
             const showTime = msgs.length === 0 || stream.startedAt - msgs[msgs.length - 1].time > 5 * 60_000;
             return (
               <div key={stream.aiMsgId} data-testid="wx-stream-bubble">

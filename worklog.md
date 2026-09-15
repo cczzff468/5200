@@ -4027,3 +4027,23 @@ Stage Summary:
 - 「回复条数」功能全链路落地：设置页入口+二级页选择（默认 5）→ 按角色/App 隔离持久化 → 发送时 system 注入指定原句与「&&&」分隔约定 → 流式期按标记实时多气泡+连发停顿节奏（打字中气泡）→ finalize 按标记切成 N 条独立消息（各自 id/createdAt）入库渲染 → 解析失败兜底第一条 → 1 条保持现有行为 → 退出页面继续接收不变 → 电话语音未动、三端角色隔离未破坏
 - 涉及文件：src/lib/reply-count.ts（新）、src/lib/chat-stream-store.ts、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx
 - 注意：本地提交 eccd216 完成，但 git push 失败——沙箱回收后 origin 远程与 PAT 丢失（git remote 无 origin）。若后续会话需要推 GitHub，需先重新配置 remote（remote add origin https://<PAT>@github.com/<user>/<repo>）。本地仓库包含全部历史与本次改动
+
+---
+Task ID: reply-count-split-fix
+Agent: Z.ai Code (main)
+Task: 修复回复条数功能的「消息划分」问题（AI 在一条消息里写多行被挤进同一个气泡）+ 条数灵活化（没话可说时不强制发满 N 条）
+
+Work Log:
+- 用户反馈两张截图：气泡内多行文本（如「哟/这话从你嘴里说出来有点吓人/你是不是有事求我/说吧啥事」挤一个气泡），且 AI 会硬凑满规定条数
+- 根因：splitReplySegments/splitReplyRender 只按「&&&」标记切分，AI 在每条消息内部又输出换行；buildReplyCountPrompt 措辞为「本次请生成 N 条消息」（强制精确条数）
+- reply-count.ts 重写：①消息边界改为「&&& 标记 或 换行」（BOUNDARY_RE），multi（回复条数>1）模式下 splitReplySegments 先按标记切再按换行切（flatMap \n），一行就是一条消息 —— AI 不守「一条一行」约定也能正确划分；单条模式（multi=false）沿用旧行为只按标记切，1 条行为完全不变；②buildReplyCountPrompt 改为「最多 N 条：话题多可以发满，话题简单或实在没话可说时就少发几条（最少 1 条），不要硬凑条数」+「每条消息只写一句简短口语化的话，单独占一行，消息内部绝对不要换行」，保留 &&& 分隔约定；③createReplyPacer 重写为逐条连发节奏器：边界出现立即放出（渲染层挂打字中）→ 停顿 600~1100ms → flushNext 只放出下一条（到它的边界为止）再停顿，修复「&&& 跨增量拼齐漏检」bug（透传时末尾 1-2 个「&」scanned 不越过，否则半截标记永远检不到）；scanned/awaiting 状态机替代旧的 lookback-2 方案
+- chat-stream-store.ts：ChatStreamState 新增 replyCount（记录发起时的条数，渲染层据此判断切分模式，避免流中途改设置导致渲染/落盘不一致）
+- qq.tsx / wechat.tsx / chat.tsx 三端：finalize 改 splitReplySegments(content, replyCount > 1)；流式气泡改 splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1)；注释同步
+- 逻辑验证（bun -e 内联，不留测试文件）：截图同款内容 10 行→10 条独立消息✓；守约定/只换行/标记独占一行/空内容兜底/单条模式旧行为（3 段不按行切）全过；splitReplyRender pending 状态与半截「&&」不闪现✓；节奏器模拟（60ms/字+300ms 停顿）4 条逐条放出、气泡间打字中✓
+- E2E（agent-browser 393×852，seed IndexedDB 小艾/王乐乐(昵称乐乐,friendQq) + apiConfig + eval 注入 window.fetch stub 流式返回「带换行+&&&」的回复）：①QQ 聊天设置页「回复条数 5 条」默认值正确；②发「想你了」流式中途截图：「哟」「这话从你嘴里说出来有点吓人」各自独立气泡+打字中气泡；③结束后 DOM 断言 11 行 data-mid（1 用户+10 peer）、multiLineCount=0；④落盘 localStorage qq-chat-msgs:e2e-char-lele 10 条独立消息、id 依次 -1..-9、time 依次 +700~1100ms（独立 createdAt）；⑤请求体断言 replyCount=5、system 含「最多 5 条/不要硬凑条数/单独占一行/绝对不要换行/&&&」；⑥回复条数二级页 8 档渲染、改 15 持久化 {"qq:e2e-char-lele":15}（会话隔离键）；⑦微信晴晴会话回归：同样 10 条单行气泡✓；⑧console 无错误、dev.log 无应用错误、lint 通过
+- 测试数据仅在 agent-browser 隔离档案（IndexedDB/localStorage），未污染仓库与用户数据
+
+Stage Summary:
+- 「一行就是一条消息」：回复条数>1 时，无论 AI 用 &&& 还是换行分隔、或在一条消息里写了多行，都会被切成独立单行气泡逐条连发（各自入库、各自 createdAt、气泡间打字中+停顿节奏）；单条模式行为不变
+- 条数灵活化：提示词改为「最多 N 条、可少发、不要硬凑」，没话可说时 AI 自然少发
+- 涉及文件：src/lib/reply-count.ts、src/lib/chat-stream-store.ts、src/components/apps/{qq,wechat,chat}.tsx

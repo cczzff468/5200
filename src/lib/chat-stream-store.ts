@@ -45,6 +45,8 @@ export interface ChatStreamState {
   error?: string;
   /** 流开始时间（= 用户消息发出时刻，落盘时作为消息时间） */
   startedAt: number;
+  /** 本次流请求的回复条数（>1 时流式气泡按「一行一条」实时切分渲染） */
+  replyCount?: number;
 }
 
 export interface ChatPayloadMessage {
@@ -71,7 +73,7 @@ export interface BeginChatStreamOptions {
   apiConfig: ApiConfig;
   /**
    * 回复条数（>1 时启用）：本次要求 AI 连发多条消息，本模块会把流式增量经过
-   * 连发节奏器（分隔标记后先停顿片刻再放出下一条）再更新 content，
+   * 连发节奏器（一条消息输出完后先停顿片刻再放出下一条）再更新 content，
    * 并抬高 max_tokens 下限防止多条被截断；条数切分与落盘由各 App 的 finalize 负责。
    */
   replyCount?: number;
@@ -234,6 +236,7 @@ export function beginChatStream(opts: BeginChatStreamOptions): boolean {
       content: '',
       status: 'streaming',
       startedAt: Date.now(),
+      replyCount: opts.replyCount,
     },
     finalized: false,
   };
