@@ -4173,3 +4173,19 @@ Stage Summary:
 - 回复条数提示词现在只约定条数与格式，说什么内容完全由角色人设自由发挥
 - 补发机制彻底移除：AI 发几条算几条，不再自动追加"继续连发"请求凑数
 - 三端（QQ/微信/信息）共用该实现，改动自动生效；切分/节奏器/入库逻辑未动
+
+---
+Task ID: K-1
+Agent: Z.ai Code (main)
+Task: 微信/QQ 聊天支持 AI 发送特殊消息：红包、转账、亲属卡、位置、表情包（用户本地添加的表情包）
+
+Work Log:
+- 新建 src/lib/chat-rich.ts（两端共用）：标记解析 parseRichParts（[红包:金额:祝福语]/[转账:金额:备注]/[亲属卡:额度:留言]/[位置:地点名:经纬度]/[表情包:ID]，中英文冒号兼容、金额校验、标记与文字混排拆分）、mergeRichSegments（修复回复条数连发时句末标点把标记切碎的跨段合并）、prettifyRichText（流式期完整标记→[红包]等占位文字、截断半截标记防闪现）、buildRichRules（system 提示词约定规则+表情包 ID 清单，最多30个）
+- 微信 wechat.tsx：buildPersonaPrompt 注入特殊消息规则；finalize 落盘前 mergeRichSegments+parseRichParts → richToWxMsg 生成 redpacket/transfer/family/location/sticker 消息（content 存摘要进 AI 上下文）；流式气泡 prettifyRichText；表情包按 ID 匹配 wx-stickers，找不到回退"[表情包]"文字
+- QQ qq.tsx：新增 kind:'family' + QQFamData + msgPreview/searchItems 分支；FamilyBubble 金卡气泡 + FamilyDetailPage 详情（关系自动取联系人 relation、每月额度、留言、领取按钮）；TransferDetailPage 新增"待收款+收款"视角（收款入钱包写账单）；其余同微信（qq-stickers）
+- 渲染与交互复用各 App 已有卡片组件：红包开箱/详情、转账详情、位置卡片、表情气泡全兼容 AI 消息；纯本地模拟无真实资金
+
+Stage Summary:
+- Agent Browser 端到端验证通过（微信+QQ 双端、mock /api/chat）：AI 回复中的标记全部落盘为真实卡片——红包（開→领取→¥5.20 入账→领取记录）、转账（微信打开即收款；QQ 待收款→收款→入钱包余额+toast）、亲属卡（QQ 新增：金卡气泡→详情→领取→状态/领取时间）、位置（地点+坐标+假地图卡片）、表情包（本地 ID 命中渲染图片；ID 无效时回退"[表情包]"文字——实测跨 App ID 不匹配正确回退）
+- 流式期间显示 [红包]/[转账]/[亲属卡]/[位置]/[表情包] 占位文字，落盘后变真实卡片，无原始标记闪现
+- 回复条数连发兼容：文本与特殊消息混排逐条独立气泡；标记被句末标点切碎时跨段自动合并；lint/tsc 通过

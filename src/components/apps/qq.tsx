@@ -143,6 +143,7 @@ import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
+import { buildRichRules, mergeRichSegments, parseRichParts, prettifyRichText, type RichMsg } from '@/lib/chat-rich';
 import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
@@ -174,12 +175,14 @@ interface QQMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；notice = 红包领取通知 */
-  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker';
+  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知 */
+  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family';
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
   packet?: MsgPacket;
   /** 位置消息附加数据 */
   loc?: MsgLoc;
+  /** 亲属卡消息附加数据（AI 赠送 / 领取状态） */
+  fam?: QQFamData;
   /** 通知行数据（kind = notice 时有值） */
   notice?: QQNoticeData;
   /** 表情消息（stk.url 图片，stk.meaning 意思——AI 据此理解并回复） */
@@ -200,6 +203,19 @@ interface QQNoticeData {
 interface MsgLoc {
   name: string;
   addr: string;
+}
+
+/** 亲属卡消息数据（AI 赠送；领取后 claimed=true） */
+interface QQFamData {
+  /** 每月消费上限（元） */
+  monthlyLimit: number;
+  /** 关系（好朋友/爸爸…，取自联系人关系） */
+  relation: string;
+  /** 赠卡留言 */
+  message: string;
+  /** 是否已被领取 */
+  claimed: boolean;
+  claimedAt?: number;
 }
 
 interface MsgPacket {
@@ -224,6 +240,7 @@ function msgPreview(m: QQMsg | undefined): string {
   if (!m) return '';
   if (m.kind === 'redpacket') return '[QQ红包]';
   if (m.kind === 'transfer') return '[转账]';
+  if (m.kind === 'family') return '[亲属卡]';
   if (m.kind === 'notice') return m.notice ? `${m.notice.pre}${m.notice.accent}` : '';
   if (m.kind === 'image') return '[图片]';
   if (m.kind === 'location') return '[位置]';
@@ -231,16 +248,50 @@ function msgPreview(m: QQMsg | undefined): string {
   return m.content;
 }
 
-/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、发送位置 */
+/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、亲属卡详情、发送位置 */
 type ChatLayer =
   | null
   | { view: 'redpacket' }
   | { view: 'transfer' }
   | { view: 'location' }
-  | { view: 'rp-open' | 'rp-detail' | 'tr-detail'; msgId: string };
+  | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'fam-detail'; msgId: string };
 
 const LS_SESSION = 'qq-session-user-id';
 const lsMsgsKey = (contactId: string) => `qq-chat-msgs:${contactId}`;
+
+/** AI 特殊消息标记 → QQ 消息记录（红包/转账/亲属卡/位置/表情包；渲染与交互复用用户手动发送的同款卡片）。
+ *  content 存可读摘要：进入 AI 上下文让角色知道自己发过什么；卡片渲染按 kind 走，不显示 content */
+function richToQqMsg(rich: RichMsg, id: string, time: number, peer: ContactRecord): QQMsg {
+  switch (rich.kind) {
+    case 'redpacket':
+      return { id, role: 'peer', content: '[QQ红包]', time, kind: 'redpacket', packet: { type: 'redpacket', amount: rich.amount, note: rich.blessing } };
+    case 'transfer':
+      return { id, role: 'peer', content: '[转账]', time, kind: 'transfer', packet: { type: 'transfer', amount: rich.amount, note: rich.note, received: false } };
+    case 'family':
+      return {
+        id,
+        role: 'peer',
+        content: '[亲属卡]',
+        time,
+        kind: 'family',
+        fam: {
+          monthlyLimit: rich.monthlyLimit,
+          relation: peer.relation?.trim() || '好朋友',
+          message: rich.message || '给你办的亲属卡，每个月都能用',
+          claimed: false,
+        },
+      };
+    case 'location':
+      return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: rich.name, addr: rich.coords || '地图上的一个位置' } };
+    case 'sticker': {
+      // parseRichParts 已保证 ID 能找到；取不到时兑底为文字
+      const s = loadStickers('qq').find((x) => x.id === rich.stickerId);
+      return s
+        ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning } }
+        : { id, role: 'peer', content: '[表情]', time };
+    }
+  }
+}
 
 /** QQ空间：用户发的帖子 / 种子帖点赞状态（localStorage 持久化） */
 const LS_ZONE_POSTS = 'qq-zone-posts';
@@ -498,14 +549,16 @@ function fmtChatTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
-/** 联系人 AI 人设（QQ 聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取 */
-function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null): string {
+/** 联系人 AI 人设（QQ 聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
+ *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入 */
+function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null, stickers: Sticker[]): string {
   return buildPersonaSystemPrompt(peer, {
     channel: 'QQ',
     userName: me.name,
     ownerName,
     extraRules: [
       '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      ...buildRichRules(stickers),
     ],
   });
 }
@@ -1532,6 +1585,14 @@ function ChatPage({
     setMsgs((prev) => prev.map((m) => (m.id === msgId && m.packet ? { ...m, packet: { ...m.packet, ...patch } } : m)));
   }, []);
 
+  /** 领取亲属卡（对方/AI 赠送的卡）：标记已领取 + 时间；纯本地模拟，无资金流转 */
+  const claimFam = useCallback(
+    (msgId: string) => {
+      setMsgs((prev) => prev.map((m) => (m.id === msgId && m.fam && !m.fam.claimed ? { ...m, fam: { ...m.fam, claimed: true, claimedAt: Date.now() } } : m)));
+    },
+    []
+  );
+
   // 发红包消息 + 对方稍后自动领取（普通/专属领全额；拼手气随机拆一）+ 领取后聊天里发「xx领取了你的红包」通知
   const sendRedPacket = useCallback(
     (p: MsgPacket) => {
@@ -1756,10 +1817,12 @@ function ChatPage({
     // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）；批次触发（null）同样计一轮互动
     addBondPoints(peer.id, BOND_MSG_POINTS);
     const base = userMsg ? [...msgs, userMsg] : msgs;
+    // 上下文：卡片消息（红包/转账/亲属卡/位置）content 存了可读摘要，一并进入历史让 AI 知道发过什么；
+    // 图片消息 content 是 dataURL，不入上下文
     const history = base
       .filter(
         (m) =>
-          ((!m.kind || m.kind === 'sticker') && (m.content || m.kind === 'sticker') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+          (m.kind !== 'image' && (m.content || m.kind === 'sticker') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
       )
       .slice(-20)
       .map((m) => ({
@@ -1773,9 +1836,11 @@ function ChatPage({
     // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）
     if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
-    // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令
+    // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
+    // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入
     const replyCount = getReplyCount(sessionKey);
-    const system = buildPersonaPrompt(peer, me, ownerName);
+    const stickers = loadStickers('qq');
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers);
     const payloadMsgs: ChatPayloadMessage[] = [
       { role: 'system', content: replyCount > 1 ? `${system}\n\n${buildReplyCountPrompt(replyCount)}` : system },
       ...history,
@@ -1795,19 +1860,29 @@ function ChatPage({
           ]);
           return;
         }
-        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
-        const segs = splitReplySegments(content, replyCount > 1);
+        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
+        // 再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
+        // （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
+        const segs = mergeRichSegments(splitReplySegments(content, replyCount > 1));
         let t = startedAt;
-        const saved: QQMsg[] = segs.map((seg, i) => {
-          const msg: QQMsg = {
-            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
-            role: 'peer',
-            content: seg || '（对方暂时没有回复，请稍后再试）',
-            time: t,
-          };
-          t += 600 + Math.floor(Math.random() * 600);
-          return msg;
-        });
+        const saved: QQMsg[] = [];
+        let idx = 0;
+        for (const seg of segs) {
+          for (const part of parseRichParts(seg, stickers)) {
+            const id = idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`;
+            if (part.type === 'text') {
+              saved.push({ id, role: 'peer', content: part.text, time: t });
+            } else {
+              saved.push(richToQqMsg(part.rich, id, t, peer));
+            }
+            idx++;
+            t += 600 + Math.floor(Math.random() * 600);
+          }
+        }
+        // 解析后一条都没有（整段回复为空白）：沿用空回复兑底文案
+        if (saved.length === 0) {
+          saved.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
+        }
         saveMsgs(peer.id, [...loadMsgs(peer.id), ...saved]);
         // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
         addBondPoints(peer.id, BOND_MSG_POINTS);
@@ -1953,7 +2028,9 @@ function ChatPage({
                 ? `[QQ红包] ${m.packet.note}`
                 : m.kind === 'transfer' && m.packet
                   ? `[转账] ${m.packet.note}`
-                  : m.kind === 'location' && m.loc
+                  : m.kind === 'family' && m.fam
+                    ? `[亲属卡] 每月额度 ${m.fam.monthlyLimit} 元`
+                    : m.kind === 'location' && m.loc
                     ? `[位置] ${m.loc.name}${m.loc.addr ? ` ${m.loc.addr}` : ''}`
                     : m.kind === 'notice' && m.notice
                       ? `${m.notice.pre}${m.notice.accent}`
@@ -2091,6 +2168,13 @@ function ChatPage({
                   />
                 ) : m.kind === 'transfer' && m.packet ? (
                   <TransferBubble packet={m.packet} received={m.packet.received === true} onClick={() => setLayer({ view: 'tr-detail', msgId: m.id })} />
+                ) : m.kind === 'family' && m.fam ? (
+                  <FamilyBubble
+                    fam={m.fam}
+                    mine={mine}
+                    peerName={peer.name}
+                    onClick={() => setLayer({ view: 'fam-detail', msgId: m.id })}
+                  />
                 ) : m.kind === 'location' && m.loc ? (
                   <LocationBubble loc={m.loc} onClick={() => onToast('位置详情暂未开放')} />
                 ) : m.kind === 'image' ? (
@@ -2168,7 +2252,7 @@ function ChatPage({
                   <div className="mb-3 flex items-end justify-start gap-2" key={i} data-testid={`qq-stream-bubble-${i}`}>
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
                     <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
-                      {t}
+                      {prettifyRichText(t)}
                     </div>
                   </div>
                 ))}
@@ -2328,7 +2412,22 @@ function ChatPage({
       {layer?.view === 'tr-detail'
         ? (() => {
             const m = msgs.find((x) => x.id === layer.msgId);
-            return m?.packet ? <TransferDetailPage me={me} peer={peer} msg={m} onBack={() => setLayer(null)} onToast={onToast} /> : null;
+            return m?.packet ? (
+              <TransferDetailPage
+                me={me}
+                peer={peer}
+                msg={m}
+                onBack={() => setLayer(null)}
+                onToast={onToast}
+                onAccept={(id) => patchPacket(id, { received: true, receivedAt: Date.now() })}
+              />
+            ) : null;
+          })()
+        : null}
+      {layer?.view === 'fam-detail'
+        ? (() => {
+            const m = msgs.find((x) => x.id === layer.msgId);
+            return m?.fam ? <FamilyDetailPage peer={peer} msg={m} onBack={() => setLayer(null)} onToast={onToast} onClaim={claimFam} /> : null;
           })()
         : null}
       {layer?.view === 'location' ? (
@@ -2590,6 +2689,32 @@ function TransferBubble({ packet, received, onClick }: { packet: MsgPacket; rece
         </span>
       </div>
       <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">转账</div>
+    </button>
+  );
+}
+
+/** 聊天中的亲属卡卡片（金卡 礼物图标 + 标题/状态 + 底部「亲属卡」；AI 赠送 / 领取状态展示） */
+function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: boolean; peerName: string; onClick: () => void }) {
+  const status = fam.claimed ? (mine ? '对方已领取' : '已领取') : mine ? '待对方领取' : '待你领取';
+  return (
+    <button
+      type="button"
+      data-testid="qq-family-bubble"
+      onClick={onClick}
+      className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-transform active:scale-[0.97]"
+      style={{ backgroundImage: 'linear-gradient(135deg, #F7D488 0%, #EDB95E 100%)' }}
+      aria-label={`亲属卡 每月额度${fam.monthlyLimit}元`}
+    >
+      <div className="flex items-center gap-2.5 px-3.5 pb-3 pt-3.5">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-white/85" aria-hidden="true">
+          <Gift className="h-5 w-5 text-white" strokeWidth={2.2} />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-[16px] font-semibold leading-tight text-white">{mine ? `给${peerName}的亲属卡` : '收到一张亲属卡'}</span>
+          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-family-bubble-status">{status}</span>
+        </span>
+      </div>
+      <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">亲属卡</div>
     </button>
   );
 }
@@ -2976,11 +3101,12 @@ function RedPacketDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; p
 }
 
 /** 交易详情页（对照截图⑥：蓝圈对勾 + 收款文案 + 金额 + 查看余额 + 留言/时间） */
-function TransferDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; peer: ContactRecord; msg: QQMsg; onBack: () => void; onToast: (m: string) => void }) {
+function TransferDetailPage({ me, peer, msg, onBack, onToast, onAccept }: { me: QQUser; peer: ContactRecord; msg: QQMsg; onBack: () => void; onToast: (m: string) => void; onAccept: (msgId: string) => void }) {
   const p = msg.packet;
   if (!p) return null;
-  // 我发出的转账 / 对方收款后追加的接收卡片 → 展示「转账成功」视角
-  const mine = msg.role === 'me' || p.received === true;
+  // 我发出的转账 → 「转账成功」视角；对方发来的 → 待收款（可点收款入钱包）/ 已收款视角
+  const mine = msg.role === 'me';
+  const incoming = !mine;
   const d = new Date(msg.time);
   const fmtFull = `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
   return (
@@ -2992,15 +3118,32 @@ function TransferDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; pe
             <Check className="h-9 w-9 text-[#12B7F5]" strokeWidth={3} />
           </span>
           <p className="mt-6 text-[17px] text-[#1F2329] dark:text-white" data-testid="qq-tr-detail-line">
-            {mine ? '转账成功，资金已转入好友余额' : '你已收款，资金已存入钱包余额'}
+            {mine ? '转账成功，资金已转入好友余额' : incoming && !p.received ? `${peer.name}向你转账，待收款` : '你已收款，资金已存入钱包余额'}
           </p>
           <p className="mt-5 text-[48px] font-bold leading-none tracking-tight text-[#1F2329] dark:text-white" data-testid="qq-tr-detail-amount">
             <span className="mr-1 text-[26px] font-semibold align-[5px]" aria-hidden="true">¥</span>
             {fmtMoney(p.amount)}
           </p>
-          <button type="button" onClick={() => onToast('余额请前往钱包-余额查看')} className="mt-4 text-[16px] text-[#12B7F5] active:opacity-60">
-            查看余额
-          </button>
+          {incoming && !p.received ? (
+            <button
+              type="button"
+              data-testid="qq-tr-detail-accept"
+              onClick={() => {
+                // 收款：标记 received + 入钱包余额（写账单）；卡片与详情同步更新
+                onAccept(msg.id);
+                gainToWallet(p.amount, '转账收入');
+                onToast(`已收款 ${fmtMoney(p.amount)} 元`);
+              }}
+              className="mt-4 h-10 w-[140px] rounded-full text-[16px] font-medium text-white active:brightness-95"
+              style={{ backgroundColor: QQ_BLUE }}
+            >
+              收款
+            </button>
+          ) : (
+            <button type="button" onClick={() => onToast('余额请前往钱包-余额查看')} className="mt-4 text-[16px] text-[#12B7F5] active:opacity-60">
+              查看余额
+            </button>
+          )}
         </div>
         <div className="mt-10 border-t border-black/[0.08] px-1 dark:border-white/10">
           <div className="flex min-h-[54px] items-center justify-between gap-4">
@@ -3023,6 +3166,89 @@ function TransferDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; pe
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 亲属卡详情页（AI 赠送 / 状态展示）：金卡 + 关系/每月额度/留言 + 领取按钮（对方发的未领取时） */
+function FamilyDetailPage({
+  peer,
+  msg,
+  onBack,
+  onToast,
+  onClaim,
+}: {
+  peer: ContactRecord;
+  msg: QQMsg;
+  onBack: () => void;
+  onToast: (m: string) => void;
+  onClaim: (msgId: string) => void;
+}) {
+  const f = msg.fam;
+  if (!f) return null;
+  const mine = msg.role === 'me';
+  const d = msg.fam?.claimedAt ? new Date(msg.fam.claimedAt) : null;
+  const fmtFull = d
+    ? `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日`
+    : '';
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col bg-white pt-[54px] dark:bg-[#16171A]">
+      <WalletNavHeader title="亲属卡" onBack={onBack} />
+      <div className="flex-1 overflow-y-auto px-5">
+        <div
+          className="mt-8 overflow-hidden rounded-[16px] shadow-lg shadow-black/10"
+          style={{ backgroundImage: 'linear-gradient(150deg, #F7D488 0%, #EDB95E 60%, #E3A94B 100%)' }}
+          data-testid="qq-family-detail-card"
+        >
+          <div className="flex items-center gap-3 px-5 pb-4 pt-5">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full border-2 border-white/85" aria-hidden="true">
+              <Gift className="h-6 w-6 text-white" strokeWidth={2.1} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[17px] font-semibold leading-tight text-white">{mine ? `给${peer.name}的亲属卡` : `${peer.name}送给你的亲属卡`}</p>
+              <p className="mt-0.5 text-[12.5px] text-white/90">关系：{f.relation}</p>
+            </div>
+          </div>
+          <div className="mx-5 mb-4 rounded-[12px] bg-white/22 px-4 py-3">
+            <p className="text-[12.5px] text-white/90">每月消费上限</p>
+            <p className="mt-0.5 text-[30px] font-bold leading-none text-white" data-testid="qq-family-detail-limit">
+              ¥{fmtMoney(f.monthlyLimit)}
+            </p>
+            {f.message && <p className="mt-2 line-clamp-2 text-[13px] leading-snug text-white/95">“{f.message}”</p>}
+          </div>
+          <div className="border-t border-white/25 px-5 py-2 text-[12px] text-white/95">亲属卡 · 消费由赠卡方代付（模拟）</div>
+        </div>
+
+        <div className="mt-5 border-t border-black/[0.08] px-1 dark:border-white/10">
+          <div className="flex min-h-[52px] items-center justify-between gap-4">
+            <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">状态</span>
+            <span className="text-[16px] text-[#1F2329] dark:text-white" data-testid="qq-family-detail-status">
+              {f.claimed ? '已领取' : mine ? '待对方领取' : '待你领取'}
+            </span>
+          </div>
+          {f.claimed && fmtFull && (
+            <div className="flex min-h-[52px] items-center justify-between gap-4">
+              <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">领取时间</span>
+              <span className="text-[16px] text-[#1F2329] dark:text-white">{fmtFull}</span>
+            </div>
+          )}
+        </div>
+
+        {!mine && !f.claimed && (
+          <button
+            type="button"
+            data-testid="qq-family-detail-claim"
+            onClick={() => {
+              onClaim(msg.id);
+              onToast('已领取亲属卡，对方为你买单（模拟）');
+            }}
+            className="mx-auto mt-6 block h-11 w-[180px] rounded-full text-[16px] font-medium text-white active:brightness-95"
+            style={{ backgroundColor: QQ_BLUE }}
+          >
+            领取
+          </button>
+        )}
       </div>
     </div>
   );

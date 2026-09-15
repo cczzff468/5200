@@ -65,6 +65,7 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
+import { buildRichRules, mergeRichSegments, parseRichParts, prettifyRichText, type RichMsg } from '@/lib/chat-rich';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, updateContact } from '@/lib/ios/contacts-store';
@@ -634,14 +635,51 @@ function initialOf(name: string): string {
   return '#';
 }
 
-/** 联系人 AI 人设（微信聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取 */
-function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null): string {
+/** AI 特殊消息标记 → 微信消息记录（红包/转账/亲属卡/位置/表情包；渲染与交互复用用户手动发送的同款卡片）。
+ *  content 存可读摘要：进入 AI 上下文让角色知道自己发过什么；卡片渲染按 kind 走，不显示 content */
+function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecord): WxMsg {
+  switch (rich.kind) {
+    case 'redpacket':
+      return { id, role: 'peer', content: '[微信红包]', time, kind: 'redpacket', rp: { amount: rich.amount, blessing: rich.blessing, opened: false } };
+    case 'transfer':
+      return { id, role: 'peer', content: '[转账]', time, kind: 'transfer', tr: { amount: rich.amount, note: rich.note, received: false } };
+    case 'family':
+      return {
+        id,
+        role: 'peer',
+        content: '[亲属卡]',
+        time,
+        kind: 'family',
+        fam: {
+          monthlyLimit: rich.monthlyLimit,
+          relation: peer.relation?.trim() || '家人',
+          message: rich.message || '我为你准备了亲属卡，你消费我买单',
+          claimed: false,
+          used: 0,
+        },
+      };
+    case 'location':
+      return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: rich.name, address: rich.coords || '地图上的一个位置' } };
+    case 'sticker': {
+      // parseRichParts 已保证 ID 能找到；取不到时兜底为文字
+      const s = loadStickers('wx').find((x) => x.id === rich.stickerId);
+      return s
+        ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning } }
+        : { id, role: 'peer', content: '[表情包]', time };
+    }
+  }
+}
+
+/** 联系人 AI 人设（微信聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
+ *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入 */
+function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[]): string {
   return buildPersonaSystemPrompt(peer, {
     channel: '微信',
     userName: me.name,
     ownerName,
     extraRules: [
       '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      ...buildRichRules(stickers),
     ],
   });
 }
@@ -2980,9 +3018,11 @@ function ChatPage({
     // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）
     if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
-    // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令
+    // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
+    // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入
     const replyCount = getReplyCount(sessionKey);
-    const system = buildPersonaPrompt(peer, me, ownerName);
+    const stickers = loadStickers('wx');
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers);
     const payloadMsgs: ChatPayloadMessage[] = [
       { role: 'system', content: replyCount > 1 ? `${system}\n\n${buildReplyCountPrompt(replyCount)}` : system },
       ...history,
@@ -3002,19 +3042,29 @@ function ChatPage({
           ]);
           return;
         }
-        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
-        const segs = splitReplySegments(content, replyCount > 1);
+        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
+        // 再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
+        // （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
+        const segs = mergeRichSegments(splitReplySegments(content, replyCount > 1));
         let t = startedAt;
-        const saved: WxMsg[] = segs.map((seg, i) => {
-          const msg: WxMsg = {
-            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
-            role: 'peer',
-            content: seg || '（对方暂时没有回复，请稍后再试）',
-            time: t,
-          };
-          t += 600 + Math.floor(Math.random() * 600);
-          return msg;
-        });
+        const saved: WxMsg[] = [];
+        let idx = 0;
+        for (const seg of segs) {
+          for (const part of parseRichParts(seg, stickers)) {
+            const id = idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`;
+            if (part.type === 'text') {
+              saved.push({ id, role: 'peer', content: part.text, time: t });
+            } else {
+              saved.push(richToWxMsg(part.rich, id, t, peer));
+            }
+            idx++;
+            t += 600 + Math.floor(Math.random() * 600);
+          }
+        }
+        // 解析后一条都没有（整段回复为空白）：沿用空回复兜底文案
+        if (saved.length === 0) {
+          saved.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
+        }
         saveMsgs(peer.id, [...loadMsgs(peer.id), ...saved]);
       },
     });
@@ -3485,7 +3535,7 @@ function ChatPage({
                         aria-hidden="true"
                         className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]"
                       />
-                      {t}
+                      {prettifyRichText(t)}
                     </div>
                   </div>
                 ))}
