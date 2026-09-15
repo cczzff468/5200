@@ -20,6 +20,8 @@ export interface MsgFavorite {
   kind: string;
   /** 文本内容或占位描述（[图片] / [表情] xx / [位置] xx / [红包] …） */
   content: string;
+  /** 原消息 id（同一消息只能收藏一次；旧数据无此字段则不去重） */
+  msgId?: string;
   /** 图片消息原图（dataURL） */
   imgSrc?: string;
   /** 表情消息图 */
@@ -71,4 +73,9 @@ export function addFavorite(app: FavApp, item: Omit<MsgFavorite, 'id' | 'app' | 
 
 export function removeFavorite(app: FavApp, id: string): void {
   saveFavorites(app, loadFavorites(app).filter((x) => x.id !== id));
+}
+
+/** 某条消息是否已收藏过（每条消息只能收藏一次；按原消息 id 判断） */
+export function isMsgFavorited(app: FavApp, msgId: string): boolean {
+  return loadFavorites(app).some((x) => x.msgId === msgId);
 }

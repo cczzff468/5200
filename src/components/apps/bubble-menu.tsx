@@ -59,19 +59,31 @@ export interface BubbleMenuPos {
 }
 
 const ITEM_W = 54; // 每项宽度（图标+文字竖排）
-const MENU_H = 62; // 菜单高度估算
+const MENU_H = 62; // 单行菜单高度估算
+const MENU_H2 = 116; // 两行菜单高度估算
 const PAD_X = 10; // 卡片左右内边距
 
-/** 依据气泡矩形与聊天页容器矩形计算弹窗位置（容器内坐标；itemCount 用于估算宽度做水平钳制） */
+/** 菜单行拆分：超过 5 项 → 两行（上下两行均分，如 8 项 4+4、9 项 5+4、6 项 3+3），否则单行 */
+export function splitMenuRows(items: BubbleMenuItem[]): BubbleMenuItem[][] {
+  if (items.length <= 5) return [items];
+  const first = Math.ceil(items.length / 2);
+  return [items.slice(0, first), items.slice(first)];
+}
+
+/** 依据气泡矩形与聊天页容器矩形计算弹窗位置（容器内坐标；itemCount 用于估算宽高做钳制） */
 export function computeBubbleMenuPos(bubble: DOMRect, container: DOMRect | null, itemCount: number): BubbleMenuPos {
   const cw = container?.width ?? (typeof window !== 'undefined' ? window.innerWidth : 393);
   const ch = container?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 852);
   const maxW = Math.max(180, cw - 16);
-  const width = Math.min(itemCount * ITEM_W + PAD_X * 2, maxW);
+  // 两行时每行项目数减半，卡片更窄更接近原生微信/QQ；仍超宽则横向滚动兜底
+  const twoRows = itemCount > 5;
+  const perRow = twoRows ? Math.ceil(itemCount / 2) : itemCount;
+  const menuH = twoRows ? MENU_H2 : MENU_H;
+  const width = Math.min(perRow * ITEM_W + PAD_X * 2, maxW);
   const relTop = container ? bubble.top - container.top : bubble.top;
   const centerX = bubble.left + bubble.width / 2 - (container?.left ?? 0);
-  const below = relTop + bubble.height + MENU_H + 16 <= ch;
-  const top = below ? relTop + bubble.height + 9 : relTop - MENU_H - 9;
+  const below = relTop + bubble.height + menuH + 16 <= ch;
+  const top = below ? relTop + bubble.height + 9 : relTop - menuH - 9;
   let left = centerX - width / 2;
   left = Math.max(8, Math.min(left, cw - width - 8));
   const arrowX = Math.max(10, Math.min(centerX - left - 6, width - 22));
@@ -116,27 +128,31 @@ export function BubbleActionMenu({
             className={`absolute z-0 h-[11px] w-[11px] rotate-45 rounded-[2px] ${pos.flip ? '-bottom-[4.5px]' : '-top-[4.5px]'}`}
             style={{ left: pos.arrowX, backgroundColor: 'rgba(44,44,46,0.97)' }}
           />
-          {/* 选项多时横向滚动（隐藏滚动条），最大宽度适配屏幕 */}
+          {/* 选项多时拆两行（原生微信/QQ 同款）；仍超宽横向滚动兜底（隐藏滚动条） */}
           <div
             role="menu"
             data-testid={`${testPrefix}-card`}
-            className="relative flex max-w-full items-stretch overflow-x-auto overflow-y-hidden rounded-[10px] shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="relative flex max-w-full flex-col items-stretch overflow-x-auto overflow-y-hidden rounded-[10px] shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             style={{ backgroundColor: 'rgba(44,44,46,0.97)', backdropFilter: 'blur(20px)', maxWidth: pos.maxW }}
           >
-            {items.map((item, i) => (
-              <button
-                key={item.key}
-                type="button"
-                role="menuitem"
-                data-testid={`${testPrefix}-${item.key}`}
-                onClick={() => onSelect(item.key)}
-                className={`flex w-[54px] shrink-0 flex-col items-center justify-center gap-[5px] pb-2 pt-[9px] text-white transition-colors active:bg-white/15 ${
-                  i > 0 ? 'border-l border-white/10' : ''
-                } ${item.danger ? 'text-[#FF8B78]' : ''}`}
-              >
-                <item.icon className="h-[19px] w-[19px]" strokeWidth={1.7} aria-hidden="true" />
-                <span className="whitespace-nowrap text-[10.5px] leading-none">{item.label}</span>
-              </button>
+            {splitMenuRows(items).map((row, r) => (
+              <div key={r} role="group" className={`flex items-stretch ${r > 0 ? 'border-t border-white/10' : ''}`}>
+                {row.map((item, i) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="menuitem"
+                    data-testid={`${testPrefix}-${item.key}`}
+                    onClick={() => onSelect(item.key)}
+                    className={`flex w-[54px] shrink-0 flex-col items-center justify-center gap-[5px] pb-2 pt-[9px] text-white transition-colors active:bg-white/15 ${
+                      i > 0 ? 'border-l border-white/10' : ''
+                    } ${item.danger ? 'text-[#FF8B78]' : ''}`}
+                  >
+                    <item.icon className="h-[19px] w-[19px]" strokeWidth={1.7} aria-hidden="true" />
+                    <span className="whitespace-nowrap text-[10.5px] leading-none">{item.label}</span>
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         </div>
