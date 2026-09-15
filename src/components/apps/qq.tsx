@@ -358,8 +358,9 @@ function collectPendingCards(msgs: QQMsg[]): PendingCardInfo[] {
 
 /**
  * 应用 AI 的处理动作（领取/退回/拒收我发的红包/转账）：只处理「待处理」状态的目标（幂等，重复标记忽略），
- * 返回更新后的消息数组 + 动作产生的通知行/接收凭据卡/感谢语/理由文字消息（extras=接收凭据卡等需要
- * 插在动作发生位置的卡片，调用方按流式顺序与通知行/感谢语一起落盘）。纯本地模拟：
+ * 返回更新后的消息数组 + 动作产生的通知行/接收凭据卡（extras=接收凭据卡等需要
+ * 插在动作发生位置的卡片，调用方按流式顺序与通知行一起落盘）。标记不带感谢语/理由，
+ * 回应内容由 AI 人设正文承担。纯本地模拟：
  * 领取 → 记入领取记录；退回 → 金额退回我的钱包（写账单）；拒收 → 仅终态标记。
  */
 function applyAiActions(
@@ -367,18 +368,17 @@ function applyAiActions(
   msgs: QQMsg[],
   peer: ContactRecord,
   timeBase = Date.now()
-): { msgs: QQMsg[]; notices: QQMsg[]; extras: QQMsg[]; notes: QQMsg[] } {
+): { msgs: QQMsg[]; notices: QQMsg[]; extras: QQMsg[] } {
   const next = msgs.map((m) => ({ ...m, packet: m.packet ? { ...m.packet } : undefined }));
   const notices: QQMsg[] = [];
   const extras: QQMsg[] = [];
-  const notes: QQMsg[] = [];
   for (const a of actions) {
     const idx = next.findIndex((m) => m.role === 'me' && (m.packet?.cid === a.targetId || m.id === a.targetId));
     if (idx < 0) continue;
     const m = next[idx];
     if (!m.packet || cardIsFinal(m)) continue; // 只处理待处理状态（已领取/已退回/已拒收的忽略）
     const verb = actionVerb(a.kind);
-    const time = timeBase + notices.length + extras.length + notes.length;
+    const time = timeBase + notices.length + extras.length;
     if (m.kind === 'redpacket') {
       const p = m.packet;
       if (verb === 'claim') {
@@ -419,10 +419,8 @@ function applyAiActions(
     } else {
       continue;
     }
-    // 感谢语/理由转成 AI 文字消息（紧跟通知行，符合人设的明确文案）
-    if (a.note) notes.push({ id: uid(), role: 'peer', content: a.note, time: timeBase + notices.length + extras.length + notes.length });
   }
-  return { msgs: next, notices, extras, notes };
+  return { msgs: next, notices, extras };
 }
 
 /** QQ空间：用户发的帖子 / 种子帖点赞状态（localStorage 持久化） */
@@ -2020,7 +2018,7 @@ function ChatPage({
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
     // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入；
-    // 我发给 AI 的待处理红包/转账 → 注入处理动作规则与待处理清单（AI 用 [领取红包:ID:…] 等标记处理）
+    // 我发给 AI 的待处理红包/转账 → 注入处理动作规则与待处理清单（AI 用 [领取红包:ID] 等标记处理，回应按人设正文说）
     const replyCount = getReplyCount(sessionKey);
     const stickers = loadStickers('qq');
     const system = buildPersonaPrompt(peer, me, ownerName, stickers);
@@ -2047,8 +2045,9 @@ function ChatPage({
           return;
         }
         // 1) 把回复按出现顺序切成「文字块 + 处理动作」交错片段：动作标记就地应用（状态流转 +
-        //    通知行/接收凭据卡 + 感谢语/理由转文字消息），保证落盘顺序与流式期间用户看到的顺序一致
-        //    （正文先输出的先落盘，通知行/感谢语跟随其后的动作位置，而不是永远堆在正文前）；
+        //    通知行/接收凭据卡），保证落盘顺序与流式期间用户看到的顺序一致
+        //    （正文先输出的先落盘，通知行跟随其后的动作位置，而不是永远堆在正文前）；
+        //    标记不带感谢语/理由，回应内容由 AI 人设正文承担
         // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
         //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
         //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
@@ -2062,7 +2061,7 @@ function ChatPage({
           if (part.type === 'action') {
             const applied = applyAiActions([part.action], cur, peer, t);
             cur = applied.msgs;
-            all.push(...applied.notices, ...applied.extras, ...applied.notes);
+            all.push(...applied.notices, ...applied.extras);
             continue;
           }
           const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));

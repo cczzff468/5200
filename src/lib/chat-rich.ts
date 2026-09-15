@@ -61,11 +61,13 @@ export type RichPart = { type: 'text'; text: string } | { type: 'rich'; rich: Ri
 /**
  * AI 对「对方发来的待处理卡片」的处理动作，通过回复里的标记触发（用户发红包后 AI 可以
  * 领取 / 退回 / 拒收，转账、亲属卡同理）：
- * - [领取红包:红包ID:感谢语] / [退回红包:红包ID:理由] / [拒收红包:红包ID:理由]
- * - [收款转账:转账ID:感谢语] / [退回转账:转账ID:理由] / [拒收转账:转账ID:理由]
- * - [收下亲属卡:亲属卡ID:感谢语] / [拒收亲属卡:亲属卡ID:理由]
- * 动作标记不是消息：落盘前由 extractRichActionParts 按出现顺序提取（保证通知行/感谢语落盘在
- * 流式时的真实位置，而不是永远堆在正文前），标记本身不会出现在聊天记录里。
+ * - [领取红包:红包ID] / [退回红包:红包ID] / [拒收红包:红包ID]
+ * - [收款转账:转账ID] / [退回转账:转账ID] / [拒收转账:转账ID]
+ * - [收下亲属卡:亲属卡ID] / [拒收亲属卡:亲属卡ID]
+ * 标记只负责改变卡片状态（通知行由系统生成），不带感谢语/理由——道谢、吐槽、退回/拒收的
+ * 原因等所有想说的话都由 AI 按人设用正文正常说。动作标记不是消息：落盘前由
+ * extractRichActionParts 按出现顺序提取（保证通知行落盘在流式时的真实位置，而不是永远堆在
+ * 正文前），标记本身不会出现在聊天记录里。
  */
 export type RichActionKind =
   | 'claim-redpacket'
@@ -81,8 +83,6 @@ export interface RichAction {
   kind: RichActionKind;
   /** 目标卡片 ID（用户发卡时生成的短 ID，如 rp-x7k2；兼容直接用消息 id 匹配） */
   targetId: string;
-  /** 感谢语（领取/收款/收下）或理由（退回/拒收），由调用方转成 AI 文字消息落盘 */
-  note: string;
 }
 
 const ACTION_LABELS: Record<string, RichActionKind> = {
@@ -106,8 +106,9 @@ export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; 
 /**
  * 把 AI 回复按出现顺序切成「文字块 + 处理动作」交错片段：
  * 动作标记前后的文字各自成块（保持原样，调用方再逐块切分/解析），段尾未闭合的半截动作标记截掉。
- * 这样调用方能按流式输出顺序落盘——正文先出现的先落盘，通知行/感谢语跟随其后的动作位置，
- * 而不是把通知行/感谢语永远堆在正文前面（否则与流式期间用户看到的顺序相反）。
+ * 这样调用方能按流式输出顺序落盘——正文先出现的先落盘，通知行跟随其后的动作位置，
+ * 而不是把通知行永远堆在正文前面（否则与流式期间用户看到的顺序相反）。
+ * 兼容旧写法：标记里多写的第三段（曾经的感谢语/理由）直接丢弃，不再转成消息。
  */
 export function extractRichActionParts(text: string): RichActionPart[] {
   const parts: RichActionPart[] = [];
@@ -115,10 +116,9 @@ export function extractRichActionParts(text: string): RichActionPart[] {
   for (const m of text.matchAll(ACTION_RE)) {
     const before = text.slice(last, m.index);
     if (before.trim()) parts.push({ type: 'text', text: before });
-    const segs = (m[2] ?? '').split(/[:：]/);
-    const targetId = (segs[0] ?? '').trim();
-    const note = segs.slice(1).join(':').trim();
-    if (targetId) parts.push({ type: 'action', action: { kind: ACTION_LABELS[m[1]], targetId, note } });
+    const targetId = (m[2] ?? '').split(/[:：]/)[0].trim();
+    // 第三段及以后（旧版感谢语/理由）直接丢弃：回应内容由 AI 人设正文承担
+    if (targetId) parts.push({ type: 'action', action: { kind: ACTION_LABELS[m[1]], targetId } });
     last = m.index + m[0].length;
   }
   const tail = text.slice(last).replace(ACTION_TAIL_RE, '');
@@ -342,12 +342,12 @@ export function buildActionRules(pending: PendingCardInfo[]): string[] {
   });
   return [
     '【处理对方发来的红包/转账/亲属卡】对方发给你的红包、转账、亲属卡还在待处理状态时，你可以在回复里输出对应标记来处理（标记单独占一行）：' +
-      '领红包 [领取红包:红包ID:感谢语]；退回红包 [退回红包:红包ID:理由]；拒收红包 [拒收红包:红包ID:理由]；' +
-      '收转账 [收款转账:转账ID:感谢语]；退回转账 [退回转账:转账ID:理由]；拒收转账 [拒收转账:转账ID:理由]；' +
-      '收下亲属卡 [收下亲属卡:亲属卡ID:感谢语]；拒收亲属卡 [拒收亲属卡:亲属卡ID:理由]。' +
+      '领红包 [领取红包:红包ID]；退回红包 [退回红包:红包ID]；拒收红包 [拒收红包:红包ID]；' +
+      '收转账 [收款转账:转账ID]；退回转账 [退回转账:转账ID]；拒收转账 [拒收转账:转账ID]；' +
+      '收下亲属卡 [收下亲属卡:亲属卡ID]；拒收亲属卡 [拒收亲属卡:亲属卡ID]。' +
       '注意：ID 必须从下面的待处理清单里原样抄写；只有待处理的才能处理，处理过的（或不在清单里的）不要重复处理；' +
-      '感谢语/理由写在标记第三段即可（简短口语，别在正文里再说一遍同样的话）；收不收、怎么回应都按你的人设和你们的关系来定，拒绝时理由要符合你的性格。',
-    '【动作与说话要一致】你的处理动作和前后说的话绝对不能打架：收下了（领取/收款/收下）就别再抱怨金额少、别质问对方“就这点？”之类的话——想吐槽金额就把吐槽直接写进感谢语里（比如 [领取红包:红包ID:你这0.01是认真的吗，行吧一分也是爱]）；退回/拒收了就不要再说什么谢谢、收下了、我的心意到了之类收下的话。整个回复围绕同一个态度展开。',
+      '标记只是动作、里面不写任何感谢语或理由。收不收、怎么回应都按你的人设和你们的关系来定。',
+    '【动作与说话】标记不带话，所有想说的话都用你自己的语气在正文里正常说（符合你的人设）：领取/收款/收下了就按你的人设自然反应（道谢、吐槽金额、调侃都可以）；退回/拒收了必须在正文里说清楚为什么（理由要符合你的性格和你们的关系），不要说谢谢、收下了之类收下的话。你的处理动作和前后说的话绝对不能打架：收下了就别再质问对方“就这点？”之后又不收，退回/拒收了就别又表现出收下的意思，整个回复围绕同一个态度展开。',
     `【待处理清单】${lines.join('；')}`,
   ];
 }

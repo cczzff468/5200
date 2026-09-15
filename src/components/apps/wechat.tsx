@@ -767,8 +767,8 @@ function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
 
 /**
  * 应用 AI 的处理动作（领取/退回/拒收我发的红包/转账/收下/拒收亲属卡）：只处理「待处理」状态的目标（幂等），
- * 返回更新后的消息数组 + 动作产生的通知行/接收凭据卡（extras）/感谢语/理由文字消息，由调用方按
- * 流式输出顺序插在动作发生位置。纯本地模拟：
+ * 返回更新后的消息数组 + 动作产生的通知行/接收凭据卡（extras），由调用方按
+ * 流式输出顺序插在动作发生位置。标记不带感谢语/理由，回应内容由 AI 人设正文承担。纯本地模拟：
  * 领取 → 记入领取人；退回 → 金额退回零钱（写账单）；亲属卡收下 → claimed + 存入「我收到的亲属卡」由调用方处理（这里只标记状态）。
  */
 function wxApplyAiActions(
@@ -776,11 +776,10 @@ function wxApplyAiActions(
   msgs: WxMsg[],
   peer: ContactRecord,
   timeBase = Date.now()
-): { msgs: WxMsg[]; notices: WxMsg[]; extras: WxMsg[]; notes: WxMsg[] } {
+): { msgs: WxMsg[]; notices: WxMsg[]; extras: WxMsg[] } {
   const next = msgs.map((m) => ({ ...m }));
   const notices: WxMsg[] = [];
   const extras: WxMsg[] = [];
-  const notes: WxMsg[] = [];
   const matchIdx = (a: RichAction): number =>
     next.findIndex(
       (m) =>
@@ -795,7 +794,7 @@ function wxApplyAiActions(
     const m = next[idx];
     if (wxCardIsFinal(m)) continue; // 只处理待处理状态
     const verb = actionVerb(a.kind);
-    const time = timeBase + notices.length + extras.length + notes.length;
+    const time = timeBase + notices.length + extras.length;
     if (m.kind === 'redpacket' && m.rp) {
       const rp = m.rp;
       if (verb === 'claim') {
@@ -853,10 +852,8 @@ function wxApplyAiActions(
     } else {
       continue;
     }
-    // 感谢语/理由转成 AI 文字消息（紧跟通知行）
-    if (a.note) notes.push({ id: uid(), role: 'peer', content: a.note, time: timeBase + notices.length + extras.length + notes.length });
   }
-  return { msgs: next, notices, extras, notes };
+  return { msgs: next, notices, extras };
 }
 
 /** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL */
@@ -3391,8 +3388,9 @@ function ChatPage({
           return;
         }
         // 1) 把回复按出现顺序切成「文字块 + 处理动作」交错片段：动作标记就地应用（状态流转 +
-        //    通知行/接收凭据卡 + 感谢语/理由转文字消息），保证落盘顺序与流式期间用户看到的顺序一致
-        //    （正文先输出的先落盘，通知行/感谢语跟随其后的动作位置，而不是永远堆在正文前）；
+        //    通知行/接收凭据卡），保证落盘顺序与流式期间用户看到的顺序一致
+        //    （正文先输出的先落盘，通知行跟随其后的动作位置，而不是永远堆在正文前）；
+        //    标记不带感谢语/理由，回应内容由 AI 人设正文承担
         // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
         //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
         //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
@@ -3406,7 +3404,7 @@ function ChatPage({
           if (part.type === 'action') {
             const applied = wxApplyAiActions([part.action], cur, peer, t);
             cur = applied.msgs;
-            all.push(...applied.notices, ...applied.extras, ...applied.notes);
+            all.push(...applied.notices, ...applied.extras);
             continue;
           }
           const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
