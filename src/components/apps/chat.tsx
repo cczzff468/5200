@@ -43,6 +43,7 @@ import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
+import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 
 // ---------------- 类型与常量 ----------------
 
@@ -56,6 +57,10 @@ interface ChatMsg {
   time: number;
   /** 请求失败的消息（不参与上下文、红字显示） */
   error?: boolean;
+  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
+  quote?: { name: string; content: string };
+  /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
+  recalled?: boolean;
 }
 
 /** 小助手（内置 AI 联系人，回复由 /api/chat 按用户配置的 OpenAI 兼容接口流式提供） */
@@ -553,11 +558,14 @@ function ChatView({
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
   const startAiTurn = (userMsg: ChatMsg | null) => {
     const base = userMsg ? [...msgs, userMsg] : msgs;
-    // 上下文：只带有效消息最近 20 条
+    // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知）
     const history = base
-      .filter((m) => !m.error && m.content)
+      .filter((m) => !m.error && m.content && !m.recalled)
       .slice(-20)
-      .map((m) => ({ role: m.role, content: m.content }));
+      .map((m) => ({
+        role: m.role,
+        content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${m.content}`,
+      }));
 
     const aiId = uid();
     // 用户消息立即入列并落盘；AI 回复交给全局 store 流式接收（退出聊天页不中断），
@@ -613,8 +621,9 @@ function ChatView({
     const text = input.trim();
     if (!text || isChatStreaming(sessionKey)) return;
 
-    const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
+    const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now(), quote: quote ?? undefined };
     setInput('');
+    setQuote(null);
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
     if (sentenceSend) {
       setMsgs((prev) => [...prev, userMsg]);
@@ -636,11 +645,171 @@ function ChatView({
   /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次） */
   const canDispatch = sentenceSend && pendingDispatch && !streaming;
 
+  // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回（信息端无转发/收藏/重新生成） ----------------
+
+  /** 轻量提示（复制/删除等动作反馈；信息端无全局 toast） */
+  const [toastMsg, setToastMsg] = useState('');
+  const toastTimer = useRef<number | null>(null);
+  const showToast = useCallback((m: string) => {
+    setToastMsg(m);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastMsg(''), 1500);
+  }, []);
+  useEffect(
+    () => () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    },
+    []
+  );
+
+  /** 气泡长按菜单（横向弹窗）：消息 + 容器内坐标 */
+  const [msgMenu, setMsgMenu] = useState<null | { msg: ChatMsg; pos: BubbleMenuPos }>(null);
+  /** 编辑消息弹窗（菜单「编辑」）：原消息 + 草稿 */
+  const [editMsg, setEditMsg] = useState<ChatMsg | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  /** 引用回复（输入框上方条；发送时挂到新消息上） */
+  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
+  /** 多选模式：勾选消息批量删除 */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  /** 聊天页根元素（长按菜单定位参照） */
+  const pageRef = useRef<HTMLDivElement>(null);
+
+  /** 引用人名：我的消息 → 「我」；对方 → 联系人名/手机号 */
+  const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? '我' : peer.name || peer.title);
+
+  /** 按发送方组装长按菜单项（复制 删除 编辑 引用 多选 撤回） */
+  const buildMsgMenuItems = (_m: ChatMsg): BubbleMenuItem[] => {
+    const B = BUBBLE_MENU_ICONS;
+    return [
+      { key: 'copy', label: '复制', icon: B.copy },
+      { key: 'del', label: '删除', icon: B.del, danger: true },
+      { key: 'edit', label: '编辑', icon: B.edit },
+      { key: 'quote', label: '引用', icon: B.quote },
+      { key: 'multi', label: '多选', icon: B.multi },
+      { key: 'recall', label: '撤回', icon: B.recall },
+    ];
+  };
+
+  /** 气泡长按手势（fire 里用 data-mid 反查消息；多选模式下不弹菜单改为点选勾选） */
+  const bubblePress = useBubbleLongPress((el) => {
+    const mid = el.closest('[data-mid]')?.getAttribute('data-mid') ?? null;
+    const msg = mid ? msgs.find((x) => x.id === mid) ?? null : null;
+    if (!msg || msg.recalled) return;
+    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, 6) });
+  }, !selectMode);
+
+  /** 退出多选模式 */
+  const exitSelect = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds([]);
+  }, []);
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  /** 长按菜单动作分发（执行后关闭菜单） */
+  const handleMenuAction = (key: string) => {
+    const m = msgMenu?.msg ?? null;
+    setMsgMenu(null);
+    if (!m) return;
+    switch (key) {
+      case 'copy': {
+        const t = m.content;
+        const done = () => showToast('已拷贝');
+        const fallback = () => {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = t;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            done();
+          } catch {
+            showToast('拷贝失败');
+          }
+        };
+        try {
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(t).then(done).catch(fallback);
+          } else {
+            fallback();
+          }
+        } catch {
+          fallback();
+        }
+        break;
+      }
+      case 'del': {
+        if (isChatStreaming(sessionKey)) {
+          showToast('对方正在回复，请稍后再试');
+          return;
+        }
+        setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+        showToast('已删除');
+        break;
+      }
+      case 'edit':
+        setEditMsg(m);
+        setEditDraft(m.content);
+        break;
+      case 'quote':
+        setQuote({ name: quoteNameOf(m), content: m.content });
+        break;
+      case 'multi':
+        setSelectMode(true);
+        setSelectedIds([m.id]);
+        break;
+      case 'recall': {
+        if (isChatStreaming(sessionKey)) {
+          showToast('对方正在回复，请稍后再试');
+          return;
+        }
+        setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
+        showToast('已撤回');
+        break;
+      }
+    }
+  };
+
+  /** 编辑保存：更新该条消息内容（quote 等字段保留），自动落盘 */
+  const saveEdit = () => {
+    const t = editDraft.trim();
+    if (!editMsg) return;
+    if (!t) {
+      showToast('内容不能为空');
+      return;
+    }
+    if (isChatStreaming(sessionKey)) {
+      showToast('对方正在回复，请稍后再试');
+      return;
+    }
+    setMsgs((prev) => prev.map((x) => (x.id === editMsg.id ? { ...x, content: t } : x)));
+    setEditMsg(null);
+    showToast('已修改');
+  };
+
+  /** 多选批量删除 */
+  const batchDelete = () => {
+    if (selectedIds.length === 0) return;
+    if (isChatStreaming(sessionKey)) {
+      showToast('对方正在回复，请稍后再试');
+      return;
+    }
+    const ids = new Set(selectedIds);
+    setMsgs((prev) => prev.filter((x) => !ids.has(x.id)));
+    showToast(`已删除 ${selectedIds.length} 条消息`);
+    exitSelect();
+  };
+
   // iMessage 语义：「已送达」挂在最后一条己方消息下方
   const lastUserIdx = msgs.reduce((acc, m, idx) => (m.role === 'user' ? idx : acc), -1);
 
   return (
-    <>
+    <div ref={pageRef} className="relative flex h-full min-h-0 flex-col">
       {/* 顶栏：返回箭头 + 居中头像/手机号（不显示名字）+ 摄像机图标（聊天设置入口） */}
       <div className="z-20 shrink-0 border-b border-border/50 bg-background/80 pt-[54px] backdrop-blur-xl">
         <div className="relative flex h-[64px] items-center px-3">
@@ -695,18 +864,50 @@ function ChatView({
           const mine = m.role === 'user';
           const text = m.content.trim();
           return (
-            <div key={m.id}>
+            <div
+              key={m.id}
+              data-mid={m.id}
+              onClickCapture={
+                selectMode && !m.recalled
+                  ? (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleSelect(m.id);
+                    }
+                  : undefined
+              }
+            >
               {newDay && <DaySeparator time={m.time} />}
+              {m.recalled ? (
+                /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
+                <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
+                  <span className="rounded-full bg-black/[0.06] px-3 py-1 text-[12px] text-muted-foreground dark:bg-white/[0.08]">
+                    {mine ? '你撤回一条消息' : '对方撤回一条消息'}
+                  </span>
+                </div>
+              ) : (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ type: 'spring', stiffness: 500, damping: 36 }}
                 className={`flex ${mine ? 'justify-end' : 'justify-start'} ${grouped ? 'mt-[3px]' : 'mt-2.5'}`}
               >
+                {selectMode && !mine && (
+                  <span
+                    aria-hidden="true"
+                    data-testid={`sms-select-${m.id}`}
+                    className={`mr-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                      selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                    }`}
+                  >
+                    {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                  </span>
+                )}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
                 <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                   <div
-                      className={`relative w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 text-[15px] leading-[1.45] ${
+                      {...bubblePress}
+                      className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 text-[15px] leading-[1.45] ${
                         mine
                           ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
                           : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
@@ -726,6 +927,19 @@ function ChatView({
                           style={{ clipPath: TAIL_CLIP_RIGHT }}
                         />
                       )}
+                      {/* 引用块（菜单「引用」发送的消息）：名字 + 内容小字嵌在气泡顶部 */}
+                      {m.quote && (
+                        <div
+                          data-testid="sms-quote-block"
+                          className={`mb-1 max-w-full overflow-hidden rounded-[8px] px-2 py-1 text-[12px] leading-[1.35] ${
+                            mine ? 'bg-white/20 text-white/85' : 'bg-black/[0.06] text-black/55 dark:bg-white/10 dark:text-white/60'
+                          }`}
+                        >
+                          <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                            {m.quote.name}：{m.quote.content}
+                          </p>
+                        </div>
+                      )}
                       <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
                     </div>
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
@@ -735,7 +949,19 @@ function ChatView({
                     <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
                   )}
                 </div>
+                {selectMode && mine && (
+                  <span
+                    aria-hidden="true"
+                    data-testid={`sms-select-${m.id}`}
+                    className={`ml-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                      selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                    }`}
+                  >
+                    {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                  </span>
+                )}
               </motion.div>
+              )}
             </div>
           );
         })}
@@ -801,7 +1027,48 @@ function ChatView({
         <div aria-hidden="true" className="h-1" />
       </div>
 
-      {/* 输入栏：+ 圆钮 / iMessage输入框（麦克风↔发送） */}
+      {/* 输入栏（多选模式下变为批量删除操作栏）：引用条 + 圆钮 / iMessage输入框（麦克风↔发送） */}
+      {selectMode ? (
+        <div
+          className="z-20 flex shrink-0 items-center justify-between border-t border-border/50 bg-background/85 px-6 pb-[30px] pt-2 backdrop-blur-xl"
+          data-testid="sms-select-bar"
+        >
+          <button type="button" data-testid="sms-select-cancel" onClick={exitSelect} className="text-[15px] text-muted-foreground">
+            取消
+          </button>
+          <span className="text-[13px] text-muted-foreground">已选 {selectedIds.length} 条</span>
+          <button
+            type="button"
+            data-testid="sms-select-del"
+            disabled={selectedIds.length === 0}
+            onClick={batchDelete}
+            className="text-[15px] font-medium text-[#FF3B30] disabled:opacity-40"
+          >
+            删除{selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
+          </button>
+        </div>
+      ) : (
+      <>
+      {/* 引用条（长按菜单「引用」后显示在输入栏上方；发送时挂到新消息上） */}
+      {quote && (
+        <div
+          className="z-20 flex shrink-0 items-start gap-2 border-t border-border/50 bg-background/85 px-3 py-1.5 backdrop-blur-xl"
+          data-testid="sms-quote-bar"
+        >
+          <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">
+            引用 {quote.name}：{quote.content}
+          </p>
+          <button
+            type="button"
+            aria-label="取消引用"
+            data-testid="sms-quote-cancel"
+            onClick={() => setQuote(null)}
+            className="shrink-0 text-muted-foreground/70"
+          >
+            <X className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+      )}
       <form
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
@@ -843,6 +1110,8 @@ function ChatView({
           )}
         </div>
       </form>
+      </>
+      )}
 
       {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
       {settingsOpen && (
@@ -883,7 +1152,65 @@ function ChatView({
           }}
         />
       )}
-    </>
+
+      {/* 编辑消息弹窗（长按菜单「编辑」）：修改内容后更新该条消息并落盘 */}
+      {editMsg && (
+        <div className="absolute inset-0 z-[80] flex items-center justify-center bg-black/35 px-8" data-testid="sms-edit-layer" onClick={() => setEditMsg(null)}>
+          <div
+            className="w-full max-w-[280px] overflow-hidden rounded-[14px] bg-[#f4f4f6]/95 shadow-2xl backdrop-blur-2xl dark:bg-[#2a2a2c]/95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="pb-1 pt-4 text-center text-[16px] font-semibold">编辑消息</p>
+            <div className="px-4 pb-3 pt-2">
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={4}
+                maxLength={2000}
+                autoFocus
+                data-testid="sms-edit-input"
+                className="w-full resize-none rounded-[10px] bg-white px-2.5 py-2 text-[15px] leading-[1.45] outline-none dark:bg-black/30"
+              />
+            </div>
+            <div className="flex border-t border-black/10 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setEditMsg(null)}
+                className="h-[44px] flex-1 border-r border-black/10 text-[16px] active:bg-black/5 dark:border-white/10 dark:active:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="sms-edit-save"
+                onClick={saveEdit}
+                className="h-[44px] flex-1 text-[16px] font-semibold text-[#007AFF] active:bg-black/5 dark:active:bg-white/10"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 气泡长按横向菜单（横向深色卡片；点菜单项执行动作，点空白处关闭） */}
+      {msgMenu && (
+        <BubbleActionMenu
+          pos={msgMenu.pos}
+          items={buildMsgMenuItems(msgMenu.msg)}
+          onSelect={handleMenuAction}
+          onClose={() => setMsgMenu(null)}
+          testPrefix="sms-menu"
+        />
+      )}
+
+      {/* 轻量提示（复制/删除等动作反馈） */}
+      {toastMsg && (
+        <div className="pointer-events-none absolute bottom-28 left-1/2 z-[90] -translate-x-1/2" data-testid="sms-toast">
+          <span className="rounded-full bg-black/75 px-3.5 py-1.5 text-[13px] text-white shadow-lg dark:bg-white/85 dark:text-black">{toastMsg}</span>
+        </div>
+      )}
+    </div>
   );
 }
 

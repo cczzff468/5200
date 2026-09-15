@@ -70,6 +70,7 @@ import {
   Flame,
   Flower2,
   Folder,
+  Forward,
   Gamepad2,
   Gem,
   Gift,
@@ -170,6 +171,8 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
+import { addFavorite, loadFavorites, removeFavorite, type MsgFavorite } from '@/lib/msg-favorites';
+import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -187,8 +190,8 @@ interface QQMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知 */
-  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family';
+  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片 */
+  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward';
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
   packet?: MsgPacket;
   /** 位置消息附加数据 */
@@ -199,6 +202,12 @@ interface QQMsg {
   notice?: QQNoticeData;
   /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
   stk?: { url: string; meaning: string; sid?: string };
+  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
+  quote?: { name: string; content: string };
+  /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
+  recalled?: boolean;
+  /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名） */
+  fwd?: { from: string };
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -531,12 +540,23 @@ function loadMsgs(contactId: string): QQMsg[] {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (m): m is QQMsg =>
-        Boolean(m) &&
-        typeof (m as QQMsg).content === 'string' &&
-        ((m as QQMsg).role === 'me' || (m as QQMsg).role === 'peer')
-    );
+    return parsed
+      .filter(
+        (m): m is QQMsg =>
+          Boolean(m) &&
+          typeof (m as QQMsg).content === 'string' &&
+          ((m as QQMsg).role === 'me' || (m as QQMsg).role === 'peer')
+      )
+      // 引用/撤回/转发字段规范化（旧记录无这些字段时补默认值）
+      .map((m) => ({
+        ...m,
+        quote:
+          m.quote && typeof m.quote.name === 'string' && typeof m.quote.content === 'string'
+            ? { name: m.quote.name, content: m.quote.content }
+            : undefined,
+        recalled: m.recalled === true || undefined,
+        fwd: m.fwd && typeof m.fwd.from === 'string' ? { from: m.fwd.from } : undefined,
+      }));
   } catch {
     return [];
   }
@@ -548,6 +568,65 @@ function saveMsgs(contactId: string, msgs: QQMsg[]): void {
   } catch {
     // 持久化失败忽略
   }
+}
+
+// ---------------- 转发感知：目标会话的 AI 事件队列 ----------------
+
+/** 转发消息落到目标会话时，同时给目标 AI 排一条「感知事件」；对方会话被打开时 drain 并触发一次 AI 回合，
+ *  让被分享的 AI 知道收到了什么（与页面是否存活无关） */
+const lsAiEventsKey = (contactId: string) => `qq-ai-events:${contactId}`;
+
+function pushAiEvent(contactId: string, text: string): void {
+  try {
+    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const arr = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    arr.push(text);
+    window.localStorage.setItem(lsAiEventsKey(contactId), JSON.stringify(arr.slice(-10)));
+  } catch {
+    // 忽略
+  }
+}
+
+function drainAiEvents(contactId: string): string[] {
+  try {
+    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
+    if (!raw) return [];
+    window.localStorage.removeItem(lsAiEventsKey(contactId));
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 剪贴板复制（clipboard API 不可用时回退 execCommand） */
+function copyTextWithToast(text: string, onToast: (m: string) => void): void {
+  const done = () => onToast('已复制');
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch {
+      onToast('复制失败');
+    }
+  };
+  try {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+      return;
+    }
+  } catch {
+    // 回退
+  }
+  fallback();
 }
 
 function saveZonePosts(posts: ZonePost[]): void {
@@ -1629,6 +1708,7 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
 function ChatPage({
   me,
   peer,
+  contacts,
   ownerName,
   otherUnread,
   onBack,
@@ -1638,6 +1718,8 @@ function ChatPage({
 }: {
   me: QQUser;
   peer: ContactRecord;
+  /** 全部联系人（长按菜单「转发」选择目标会话用） */
+  contacts: ContactRecord[];
   ownerName: string | null;
   /** 除当前会话外的未读总数（他人在你聊天时来信 → 返回键旁灰圆数字） */
   otherUnread: number;
@@ -1700,6 +1782,20 @@ function ChatPage({
   }, [sessionKey]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  /** 气泡长按菜单（横向弹窗）：消息 + 容器内坐标 */
+  const [msgMenu, setMsgMenu] = useState<null | { msg: QQMsg; pos: BubbleMenuPos }>(null);
+  /** 编辑消息弹窗（菜单「编辑」）：原消息 + 草稿 */
+  const [editMsg, setEditMsg] = useState<QQMsg | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  /** 引用回复（输入框上方条；发送时挂到新消息上） */
+  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
+  /** 多选模式：勾选消息批量删除/转发/收藏 */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  /** 转发：待转发的消息列表 + 目标选择弹层（非空 = 弹层打开） */
+  const [fwdMsgs, setFwdMsgs] = useState<QQMsg[] | null>(null);
+  /** 聊天页根元素（长按菜单定位参照） */
+  const pageRef = useRef<HTMLDivElement>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
   const flags = useChatFlags(qqChatFlagsStore)[peer.id] ?? NO_FLAGS;
   const bg: ChatSettingsBg = { mode: flags.bgMode ?? 'default', color: flags.bgColor ?? '' };
@@ -1722,7 +1818,7 @@ function ChatPage({
 
   /** runAiTurn 的稳定引用：发红包/转账/亲属卡（sendRedPacket 等定义在 runAiTurn 之前）也要触发 AI 回复，
    *  直接引用会产生先定义后声明的循环依赖，用 ref 中转（runAiTurn 定义后回填） */
-  const runAiTurnRef = useRef<((userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string) => void) | null>(null);
+  const runAiTurnRef = useRef<((userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => void) | null>(null);
 
   /** 领取亲属卡（对方/AI 赠送的卡）：标记已领取 + 时间；纯本地模拟，无资金流转 */
   const claimFam = useCallback(
@@ -1885,6 +1981,16 @@ function ChatPage({
     saveMsgs(peer.id, msgs);
   }, [msgs, peer.id]);
 
+  // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）
+  useEffect(() => {
+    const evs = drainAiEvents(peer.id);
+    if (evs.length === 0) return;
+    const t = window.setTimeout(() => {
+      if (!isChatStreaming(sessionKey)) runAiTurnRef.current?.(null, [], evs.join('\n'));
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [peer.id, sessionKey]);
+
   // 聊天背景图片加载（bgMode = image 时从 IndexedDB 读；bgV 变化 = 重新上传，重读）
   useEffect(() => {
     let alive = true;
@@ -1978,24 +2084,30 @@ function ChatPage({
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息（要一并进上下文与待处理清单）。
    *  sysEvent：用户退还 AI 的红包/转账/亲属卡后注入的系统事件说明（只进本轮上下文，不落盘），让 AI 人设化地回应退还 */
   const runAiTurn = useCallback(
-    (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string) => {
+    (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => {
     // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）；批次触发（null）同样计一轮互动
     addBondPoints(peer.id, BOND_MSG_POINTS);
-    const base = [...msgs, ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
     // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
     // 图片消息 content 是 dataURL，不入上下文
     const history = base
       .filter(
         (m) =>
-          (m.kind !== 'image' && (m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+          (!m.recalled && (m.kind !== 'image' && (m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
-      .map((m) => ({
+      .map((m) => {
+        // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话
+        const pre = `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+          m.kind === 'forward' && m.fwd ? `[转发自「${m.fwd.from}」的消息] ` : ''
+        }`;
+        return {
         role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
         // 我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；AI 自己发的表情回写成 [表情包:ID]
         // 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
         content:
-          m.kind === 'sticker' && m.stk
+          pre +
+          (m.kind === 'sticker' && m.stk
             ? m.role === 'me'
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
               : m.stk.sid
@@ -2007,8 +2119,9 @@ function ChatPage({
                 ? `[转账 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount}${m.packet.note ? ` "${m.packet.note}"` : ''}，${cardStateLabel(m)}]`
                 : m.kind === 'family' && m.fam
                   ? `[亲属卡，${cardStateLabel(m)}]`
-                  : m.content,
-      }));
+                  : m.content),
+        };
+      });
 
     const aiId = uid();
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
@@ -2098,8 +2211,9 @@ function ChatPage({
   const send = useCallback(() => {
     const text = input.trim();
     if (!text || isChatStreaming(sessionKey)) return;
-    const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now() };
+    const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
     setInput('');
+    setQuote(null);
     // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
     if (peer.id === me.id) {
       setMsgs((prev) => [...prev, userMsg]);
@@ -2113,7 +2227,7 @@ function ChatPage({
       return;
     }
     runAiTurn(userMsg);
-  }, [input, me.id, peer.id, runAiTurn, sessionKey, sentenceSend]);
+  }, [input, me.id, peer.id, runAiTurn, sessionKey, sentenceSend, quote]);
 
   /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
   const dispatchBatch = useCallback(() => {
@@ -2122,6 +2236,238 @@ function ChatPage({
     markPendingBatch(sessionKey, false);
     runAiTurn(null);
   }, [pendingDispatch, runAiTurn, sessionKey]);
+
+  // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成 ----------------
+
+  /** 消息的可复制/引用文本快照（表情/图片/位置/卡片/转发都有占位描述） */
+  const quoteContentOf = (m: QQMsg): string =>
+    m.kind === 'sticker'
+      ? m.stk?.meaning
+        ? `[表情] ${m.stk.meaning}`
+        : '[表情]'
+      : m.kind === 'image'
+        ? '[图片]'
+        : m.kind === 'location'
+          ? `[位置] ${m.loc?.name ?? ''}`
+          : m.kind === 'redpacket' && m.packet
+            ? `[红包] ¥${m.packet.amount} ${m.packet.note}`
+            : m.kind === 'transfer' && m.packet
+              ? `[转账] ¥${m.packet.amount}${m.packet.note ? ` ${m.packet.note}` : ''}`
+              : m.kind === 'family' && m.fam
+                ? '[亲属卡]'
+                : m.kind === 'forward'
+                  ? `[转发] ${m.content}`
+                  : m.content;
+
+  /** 消息是否可长按弹菜单 / 多选勾选（通知行与已撤回行除外） */
+  const isSelectable = (m: QQMsg): boolean => m.kind !== 'notice' && !m.recalled;
+
+  /** 按发送方与消息类型组装长按菜单项（我的/AI 气泡都可：复制 删除 编辑 引用 多选 撤回 转发 收藏；AI 气泡多一个重新生成） */
+  const buildMsgMenuItems = (m: QQMsg): BubbleMenuItem[] => {
+    const B = BUBBLE_MENU_ICONS;
+    const isText = !m.kind || m.kind === 'text';
+    const items: BubbleMenuItem[] = [{ key: 'copy', label: '复制', icon: B.copy }];
+    items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
+    if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (isText) items.push({ key: 'quote', label: '引用', icon: B.quote });
+    items.push({ key: 'multi', label: '多选', icon: B.multi });
+    items.push({ key: 'recall', label: '撤回', icon: B.recall });
+    items.push({ key: 'forward', label: '转发', icon: B.forward });
+    items.push({ key: 'fav', label: '收藏', icon: B.fav });
+    if (m.role === 'peer') items.push({ key: 'regen', label: '重新生成', icon: B.regen });
+    return items;
+  };
+
+  /** 气泡长按手势（fire 里用 data-mid 反查消息；多选模式下不弹菜单改为点选勾选） */
+  const bubblePress = useBubbleLongPress((el) => {
+    const mid = el.closest('[data-mid]')?.getAttribute('data-mid') ?? null;
+    const msg = mid ? msgs.find((x) => x.id === mid) ?? null : null;
+    if (!msg || !isSelectable(msg)) return;
+    const items = buildMsgMenuItems(msg);
+    if (items.length === 0) return;
+    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
+  }, !selectMode);
+
+  /** 退出多选模式 */
+  const exitSelect = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds([]);
+  }, []);
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  /** 收藏项快照（单条收藏/批量收藏共用） */
+  const favOf = (m: QQMsg): Omit<MsgFavorite, 'id' | 'app' | 'savedAt'> => ({
+    contactId: peer.id,
+    contactName: peer.name,
+    contactAvatar: peer.avatar,
+    msgRole: m.role,
+    kind: m.kind ?? 'text',
+    content: quoteContentOf(m),
+    imgSrc: m.kind === 'image' ? m.content : undefined,
+    stkUrl: m.kind === 'sticker' ? m.stk?.url : undefined,
+    time: m.time,
+  });
+
+  /** 重新生成：删除本轮（最后一条用户消息之后的）所有 AI 回复，重新发起请求（回复条数按本会话设置重新连发） */
+  const regenerate = (m: QQMsg) => {
+    if (isChatStreaming(sessionKey)) {
+      onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    const idx = msgs.findIndex((x) => x.id === m.id);
+    let lastUser = -1;
+    for (let k = msgs.length - 1; k >= 0; k--) {
+      if (msgs[k].role === 'me') {
+        lastUser = k;
+        break;
+      }
+    }
+    if (idx < 0 || idx <= lastUser) {
+      onToast('只能重新生成最新一轮回复');
+      return;
+    }
+    const kept = msgs.slice(0, lastUser + 1);
+    setMsgs(kept);
+    saveMsgs(peer.id, kept); // 立即落盘，避免 finalize 合并时把已删回复带回来
+    window.setTimeout(() => runAiTurnRef.current?.(null, [], undefined, kept), 80);
+  };
+
+  /** 转发克隆：文本 → 转发卡片；表情/图片/位置 → 同类型消息（新 id、role=me、保留引用） */
+  const forwardClone = (m: QQMsg): QQMsg => {
+    const id = uid();
+    if (m.kind === 'sticker' && m.stk) return { id, role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
+    if (m.kind === 'image') return { id, role: 'me', content: m.content, time: Date.now(), kind: 'image' };
+    if (m.kind === 'location' && m.loc) return { id, role: 'me', content: '', time: Date.now(), kind: 'location', loc: { ...m.loc } };
+    return { id, role: 'me', content: m.content, time: Date.now(), kind: 'forward', fwd: { from: peer.name }, quote: m.quote };
+  };
+
+  /** 转发目标：QQ 好友（排除当前会话）+ 自己 */
+  const forwardTargets = useMemo(() => {
+    const list = contacts.filter((c) => c.kind !== 'user' && c.id !== peer.id && isFriendIn(c, 'qq'));
+    const self = contacts.find((c) => c.id === me.id);
+    return self ? [self, ...list] : list;
+  }, [contacts, peer.id, me.id]);
+
+  /** 执行转发：克隆消息写入目标会话存储 + 未读角标 + 给目标 AI 排感知事件（打开会话即触发 AI 回应） */
+  const doForward = (target: ContactRecord) => {
+    const list = fwdMsgs ?? [];
+    if (list.length === 0 || target.id === peer.id) return;
+    saveMsgs(target.id, [...loadMsgs(target.id), ...list.map(forwardClone)]);
+    qqUnreads.bump(target.id);
+    if (target.id !== me.id) {
+      const snippet = list.map(quoteContentOf).join('；').slice(0, 160);
+      pushAiEvent(
+        target.id,
+        `（系统事件：用户把一条来自「${peer.name}」聊天记录的消息转发给你了：「${snippet}」。请用符合人设的一两句话自然回应这条转发。）`
+      );
+    }
+    setFwdMsgs(null);
+    if (selectMode) exitSelect();
+    onToast(target.id === me.id ? '已转发给自己' : `已转发给 ${target.name}`);
+  };
+
+  /** 长按菜单动作分发（执行后关闭菜单） */
+  const handleMenuAction = (key: string) => {
+    const m = msgMenu?.msg ?? null;
+    setMsgMenu(null);
+    if (!m) return;
+    switch (key) {
+      case 'copy':
+        copyTextWithToast(quoteContentOf(m), onToast);
+        break;
+      case 'del': {
+        if (isChatStreaming(sessionKey)) {
+          onToast('对方正在回复，请稍后再试');
+          return;
+        }
+        setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+        onToast('已删除');
+        break;
+      }
+      case 'edit':
+        setEditMsg(m);
+        setEditDraft(m.content);
+        break;
+      case 'quote':
+        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m) });
+        break;
+      case 'multi':
+        setSelectMode(true);
+        setSelectedIds([m.id]);
+        break;
+      case 'recall': {
+        if (isChatStreaming(sessionKey)) {
+          onToast('对方正在回复，请稍后再试');
+          return;
+        }
+        setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
+        onToast('已撤回');
+        break;
+      }
+      case 'forward':
+        setFwdMsgs([m]);
+        break;
+      case 'fav':
+        addFavorite('qq', favOf(m));
+        onToast('已收藏');
+        break;
+      case 'regen':
+        regenerate(m);
+        break;
+    }
+  };
+
+  /** 编辑保存：更新该条消息内容（quote 等字段保留），自动落盘 */
+  const saveEdit = () => {
+    const t = editDraft.trim();
+    if (!editMsg) return;
+    if (!t) {
+      onToast('内容不能为空');
+      return;
+    }
+    if (isChatStreaming(sessionKey)) {
+      onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    setMsgs((prev) => prev.map((x) => (x.id === editMsg.id ? { ...x, content: t } : x)));
+    setEditMsg(null);
+    onToast('已修改');
+  };
+
+  /** 多选批量删除 */
+  const batchDelete = () => {
+    if (selectedIds.length === 0) return;
+    if (isChatStreaming(sessionKey)) {
+      onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    const ids = new Set(selectedIds);
+    setMsgs((prev) => prev.filter((x) => !ids.has(x.id)));
+    onToast(`已删除 ${selectedIds.length} 条消息`);
+    exitSelect();
+  };
+
+  /** 多选批量收藏 */
+  const batchFav = () => {
+    const list = msgs.filter((x) => selectedIds.includes(x.id));
+    if (list.length === 0) return;
+    for (const m of list) addFavorite('qq', favOf(m));
+    onToast(`已收藏 ${list.length} 条消息`);
+    exitSelect();
+  };
+
+  /** 多选批量转发（选中含卡片消息时拦截） */
+  const batchForward = () => {
+    const list = msgs.filter((x) => selectedIds.includes(x.id));
+    if (list.length === 0) return;
+    if (list.some((m) => m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family')) {
+      onToast('红包/转账等卡片暂不支持转发');
+      return;
+    }
+    setFwdMsgs(list);
+  };
 
   /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；自己会话除外） */
   const canDispatch = sentenceSend && pendingDispatch && !streaming && peer.id !== me.id;
@@ -2256,6 +2602,7 @@ function ChatPage({
 
   return (
     <div
+      ref={pageRef}
       className="relative flex h-full w-full flex-col overflow-hidden bg-[#F5F6F7] dark:bg-[#111214]"
       onPointerDown={onSwipeStart}
       onPointerMove={onSwipeMove}
@@ -2273,8 +2620,19 @@ function ChatPage({
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
       {/* 顶栏：返回 + 名字/徽章/在线 + 企鹅 + 菜单（对照 QQ 真机；对方回复中名字变「正在输入中…」）。
-          状态栏预留收进顶栏内（与顶栏同色同层）：自定义聊天背景不再透到状态栏区域（与微信聊天页同套结构） */}
+          状态栏预留收进顶栏内（与顶栏同色同层）：自定义聊天背景不再透到状态栏区域（与微信聊天页同套结构）。
+          多选模式下变为「取消 + 已选计数」操作栏 */}
       <div className="relative z-10 shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
+        {selectMode ? (
+          <div className="flex h-12 items-center gap-1 px-3">
+            <button type="button" data-testid="qq-select-cancel" onClick={exitSelect} className="-ml-1 rounded-full p-1.5 text-[15px] active:bg-black/5">
+              取消
+            </button>
+            <div className="ml-1 min-w-0 flex-1">
+              <span data-testid="qq-select-count" className="text-[17px] font-semibold leading-tight">已选 {selectedIds.length} 条消息</span>
+            </div>
+          </div>
+        ) : (
         <div className="flex h-12 items-center gap-1 px-3">
         <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
           <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
@@ -2332,6 +2690,7 @@ function ChatPage({
           <Menu className="h-[22px] w-[22px] text-black/70 dark:text-white/70" strokeWidth={2.2} />
         </button>
         </div>
+        )}
       </div>
 
       {/* 消息流（页面任意位置左滑 → 好友互动标识页；自定义聊天背景时透出背景层） */}
@@ -2350,6 +2709,15 @@ function ChatPage({
             <div
               key={m.id}
               data-mid={m.id}
+              onClickCapture={
+                selectMode && isSelectable(m)
+                  ? (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleSelect(m.id);
+                    }
+                  : undefined
+              }
               className={`rounded-[12px] transition-colors duration-500 ${
                 highlightId === m.id ? 'bg-[#0099FF]/10 ring-1 ring-[#0099FF]/50' : ''
               }`}
@@ -2357,10 +2725,27 @@ function ChatPage({
               {showTime && (
                 <p className="my-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtChatTime(m.time)}</p>
               )}
-              {m.kind === 'notice' && m.notice ? (
+              {m.recalled ? (
+                /* 已撤回：居中灰字（你撤回一条消息 / 对方撤回一条消息） */
+                <p data-testid="qq-recall-row" className="mb-3 text-center text-[12px] text-black/35 dark:text-white/35">
+                  {m.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息'}
+                </p>
+              ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
               ) : (
               <div className={`mb-3 flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+                {selectMode && isSelectable(m) && !mine && (
+                  /* 多选模式勾选圈（对方消息在行左侧） */
+                  <span
+                    aria-hidden="true"
+                    data-testid={`qq-select-${m.id}`}
+                    className={`grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                      selectedIds.includes(m.id) ? 'border-[#0099FF] bg-[#0099FF] text-white' : 'border-black/25 dark:border-white/35'
+                    }`}
+                  >
+                    {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
+                  </span>
+                )}
                 {!mine && <QqAvatar src={peer.avatar} alt={peer.name} size={40} />}
                 {m.kind === 'redpacket' && m.packet ? (
                   <RedPacketBubble
@@ -2386,32 +2771,68 @@ function ChatPage({
                     onClick={() => setLayer({ view: 'fam-detail', msgId: m.id })}
                   />
                 ) : m.kind === 'location' && m.loc ? (
-                  <LocationBubble loc={m.loc} onClick={() => onToast('位置详情暂未开放')} />
+                  <div {...bubblePress}>
+                    <LocationBubble loc={m.loc} onClick={() => onToast('位置详情暂未开放')} />
+                  </div>
                 ) : m.kind === 'image' ? (
-                  <img src={m.content} alt="图片消息" className="max-h-[240px] max-w-[calc(100%-96px)] rounded-[18px] object-cover" />
+                  <div {...bubblePress}>
+                    <img src={m.content} alt="图片消息" className="max-h-[240px] max-w-[calc(100%-96px)] rounded-[18px] object-cover" />
+                  </div>
                 ) : m.kind === 'sticker' && m.stk ? (
-                  <button
-                    type="button"
-                    data-testid="qq-sticker-bubble"
-                    onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
-                    className="active:opacity-80"
-                    title={m.stk.meaning || '表情'}
+                  <div {...bubblePress}>
+                    <button
+                      type="button"
+                      data-testid="qq-sticker-bubble"
+                      onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
+                      className="active:opacity-80"
+                      title={m.stk.meaning || '表情'}
+                    >
+                      <img
+                        src={m.stk.url}
+                        alt={m.stk.meaning ? `表情：${m.stk.meaning}` : '表情'}
+                        className="max-h-[130px] w-auto max-w-[150px] rounded-[14px] object-contain"
+                        loading="lazy"
+                      />
+                    </button>
+                  </div>
+                ) : m.kind === 'forward' && m.fwd ? (
+                  /* 转发卡片：内嵌原消息内容 + 「转发自」来源说明 */
+                  <div
+                    {...bubblePress}
+                    data-testid="qq-forward-bubble"
+                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] px-3.5 py-[9px] text-white"
+                    style={{ backgroundColor: '#0099FF' }}
                   >
-                    <img
-                      src={m.stk.url}
-                      alt={m.stk.meaning ? `表情：${m.stk.meaning}` : '表情'}
-                      className="max-h-[130px] w-auto max-w-[150px] rounded-[14px] object-contain"
-                      loading="lazy"
-                    />
-                  </button>
+                    <div className="line-clamp-8 whitespace-pre-wrap break-words border-l-2 border-white/40 pl-2 text-[14px] leading-[1.4]">
+                      {m.quote && <span className="mb-0.5 block text-[12px] text-white/75">{m.quote.name}：{m.quote.content}</span>}
+                      {m.content}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-white/70">转发自「{m.fwd.from}」的聊天记录</p>
+                  </div>
                 ) : (
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div
-                      className={`w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                      {...bubblePress}
+                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
+                      {/* 引用块（菜单「引用」发送的消息）：名字 + 内容小字嵌在气泡顶部 */}
+                      {m.quote && (
+                        <div
+                          data-testid="qq-quote-block"
+                          className={`mb-1 max-w-full overflow-hidden rounded-[6px] px-2 py-1 text-[12.5px] leading-[1.35] ${
+                            mine
+                              ? 'bg-white/20 text-white/85'
+                              : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
+                          }`}
+                        >
+                          <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                            {m.quote.name}：{m.quote.content}
+                          </p>
+                        </div>
+                      )}
                       {m.content || (
                         <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
                           {[0, 1, 2].map((d) => (
@@ -2430,6 +2851,18 @@ function ChatPage({
                   </div>
                 )}
                 {mine && <QqAvatar src={me.avatar} alt={me.name} size={40} />}
+                {selectMode && isSelectable(m) && mine && (
+                  /* 多选模式勾选圈（我的消息在行右侧） */
+                  <span
+                    aria-hidden="true"
+                    data-testid={`qq-select-${m.id}`}
+                    className={`grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                      selectedIds.includes(m.id) ? 'border-[#0099FF] bg-[#0099FF] text-white' : 'border-black/25 dark:border-white/35'
+                    }`}
+                  >
+                    {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
+                  </span>
+                )}
               </div>
               )}
             </div>
@@ -2477,8 +2910,62 @@ function ChatPage({
           })()}
       </div>
 
-      {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮） */}
+      {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮）；多选模式下变为批量操作栏 */}
       <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
+        {selectMode ? (
+          <div className="flex items-center justify-around px-6 pb-[22px] pt-3" data-testid="qq-select-bar">
+            <button
+              type="button"
+              data-testid="qq-select-del"
+              disabled={selectedIds.length === 0}
+              onClick={batchDelete}
+              className="flex flex-col items-center gap-1 text-[12px] text-[#F5455C] disabled:opacity-35"
+            >
+              <Trash2 className="h-[21px] w-[21px]" strokeWidth={1.9} />
+              删除
+            </button>
+            <button
+              type="button"
+              data-testid="qq-select-forward"
+              disabled={selectedIds.length === 0}
+              onClick={batchForward}
+              className="flex flex-col items-center gap-1 text-[12px] text-[#1F2329] disabled:opacity-35 dark:text-white/85"
+            >
+              <Forward className="h-[21px] w-[21px]" strokeWidth={1.9} />
+              转发
+            </button>
+            <button
+              type="button"
+              data-testid="qq-select-fav"
+              disabled={selectedIds.length === 0}
+              onClick={batchFav}
+              className="flex flex-col items-center gap-1 text-[12px] text-[#1F2329] disabled:opacity-35 dark:text-white/85"
+            >
+              <Star className="h-[21px] w-[21px]" strokeWidth={1.9} />
+              收藏
+            </button>
+          </div>
+        ) : (
+        <>
+        {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
+        {quote && (
+          <div className="px-3 pb-1 pt-2" data-testid="qq-quote-bar">
+            <div className="flex items-start gap-2 rounded-[10px] bg-black/[0.04] px-2.5 py-1.5 dark:bg-white/[0.07]">
+              <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-black/55 dark:text-white/55">
+                引用 {quote.name}：{quote.content}
+              </p>
+              <button
+                type="button"
+                aria-label="取消引用"
+                data-testid="qq-quote-cancel"
+                onClick={() => setQuote(null)}
+                className="shrink-0 text-black/35 active:opacity-60 dark:text-white/35"
+              >
+                <X className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
           <input
             data-testid="qq-chat-input"
@@ -2569,6 +3056,8 @@ function ChatPage({
             onToast={onToast}
           />
         ) : null}
+        </>
+        )}
       </div>
 
       {/* 浮层：发红包 / 转账 / 红包开箱 / 红包详情 / 交易详情 / 发送位置 */}
@@ -2871,6 +3360,93 @@ function ChatPage({
           e.target.value = '';
         }}
       />
+
+      {/* 编辑消息弹窗（长按菜单「编辑」）：修改内容后更新该条消息并落盘 */}
+      {editMsg && (
+        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/40 px-8" data-testid="qq-edit-layer" onClick={() => setEditMsg(null)}>
+          <div
+            className="w-full max-w-[300px] overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#2A2C31]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="pb-1 pt-4 text-center text-[16px] font-medium">编辑消息</p>
+            <div className="px-4 pb-3 pt-2">
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={4}
+                maxLength={2000}
+                autoFocus
+                data-testid="qq-edit-input"
+                className="w-full resize-none rounded-[8px] border border-black/10 bg-black/[0.03] px-2.5 py-2 text-[15px] leading-[1.45] outline-none focus:border-[#0099FF] dark:border-white/15 dark:bg-white/[0.06]"
+              />
+            </div>
+            <div className="flex border-t border-black/10 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setEditMsg(null)}
+                className="h-11 flex-1 text-[16px] active:bg-black/5 dark:active:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="qq-edit-save"
+                onClick={saveEdit}
+                className="h-11 flex-1 text-[16px] font-medium text-[#1E6FFF] active:bg-black/5 dark:text-[#4AA3FF] dark:active:bg-white/10"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 转发目标选择弹层（长按菜单「转发」/多选批量转发）：好友 + 自己 */}
+      {fwdMsgs && (
+        <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/40" data-testid="qq-forward-layer" onClick={() => setFwdMsgs(null)}>
+          <div
+            className="mx-2 mb-3 overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#1E1E1E]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="border-b border-black/[0.06] py-3 text-center text-[15px] font-medium dark:border-white/[0.08]">
+              转发给
+            </p>
+            <div className="max-h-[46vh] overflow-y-auto">
+              {forwardTargets.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`qq-fwd-target-${c.id}`}
+                  onClick={() => doForward(c)}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <QqAvatar src={c.avatar} alt={c.name} size={38} />
+                  <span className="min-w-0 flex-1 truncate text-[15.5px]">{c.id === me.id ? `${c.name}（我自己）` : c.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              data-testid="qq-fwd-cancel"
+              onClick={() => setFwdMsgs(null)}
+              className="w-full border-t border-black/[0.06] py-3 text-center text-[15px] text-black/55 active:bg-black/5 dark:border-white/[0.08] dark:text-white/55 dark:active:bg-white/10"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 气泡长按横向菜单（横向深色卡片；点菜单项执行动作，点空白处关闭） */}
+      {msgMenu && (
+        <BubbleActionMenu
+          pos={msgMenu.pos}
+          items={buildMsgMenuItems(msgMenu.msg)}
+          onSelect={handleMenuAction}
+          onClose={() => setMsgMenu(null)}
+          testPrefix="qq-menu"
+        />
+      )}
     </div>
   );
 }
@@ -5566,6 +6142,7 @@ function MeDrawer({
   onOpenProfile,
   onOpenWallet,
   onOpenStickers,
+  onOpenFavorites,
   onOpenSettings,
   onSwitchAccount,
   onPatchUser,
@@ -5576,6 +6153,7 @@ function MeDrawer({
   onOpenProfile: () => void;
   onOpenWallet: () => void;
   onOpenStickers: () => void;
+  onOpenFavorites: () => void;
   onOpenSettings: () => void;
   onSwitchAccount: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
@@ -5624,7 +6202,7 @@ function MeDrawer({
 
   const listRows: { icon: React.ReactNode; label: string; hint?: string; onClick: () => void }[] = [
     { icon: <ImageIcon className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '相册', onClick: () => onToast('相册暂未开放') },
-    { icon: <Star className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '收藏', onClick: () => onToast('收藏暂未开放') },
+    { icon: <Star className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '收藏', onClick: () => { close(); window.setTimeout(onOpenFavorites, 240); } },
     { icon: <Smile className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '表情', onClick: () => { close(); window.setTimeout(onOpenStickers, 240); } },
     { icon: <Wallet className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '钱包', onClick: () => { close(); window.setTimeout(onOpenWallet, 240); } },
     { icon: <Crown className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '会员中心', hint: '联会会员买一送一', onClick: () => onToast('会员中心暂未开放') },
@@ -8444,6 +9022,74 @@ function WalletPage({ me, onBack, onToast }: { me: QQUser; onBack: () => void; o
   );
 }
 
+// ---------------- 收藏页（个人抽屉「收藏」入口；数据在 @/lib/msg-favorites） ----------------
+
+function QqFavoritesPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
+  const [list, setList] = useState<MsgFavorite[]>(() => loadFavorites('qq'));
+
+  const del = (id: string) => {
+    removeFavorite('qq', id);
+    setList((prev) => prev.filter((x) => x.id !== id));
+    onToast('已删除收藏');
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-[#F5F6F7] text-[#1F2329] dark:bg-[#111214] dark:text-white">
+      {/* 顶栏（QQ 风格返回 + 标题） */}
+      <div className="shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
+        <div className="flex h-12 items-center gap-1 px-3">
+          <button type="button" aria-label="返回" data-testid="qq-fav-back" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
+            <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
+          </button>
+          <div className="ml-1 flex flex-1 items-center">
+            <span className="text-[17px] font-semibold leading-tight">我的收藏</span>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+        {list.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 pt-24 text-black/35 dark:text-white/35" data-testid="qq-fav-empty">
+            <Star className="h-10 w-10" strokeWidth={1.2} />
+            <p className="text-[13px]">暂无收藏 · 长按聊天消息可收藏</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {list.map((f) => (
+              <div key={f.id} data-testid="qq-fav-item" className="rounded-[12px] bg-white p-3 dark:bg-[#1E1F23]">
+                <div className="flex items-center gap-2">
+                  <QqAvatar src={f.contactAvatar} alt={f.contactName} size={30} />
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/55 dark:text-white/55">{f.contactName}</span>
+                  <span className="shrink-0 text-[11px] text-black/35 dark:text-white/35">
+                    {f.msgRole === 'me' ? '我' : '对方'} · {fmtChatTime(f.time)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="删除收藏"
+                    data-testid="qq-fav-del"
+                    onClick={() => del(f.id)}
+                    className="shrink-0 text-black/30 active:opacity-60 dark:text-white/30"
+                  >
+                    <Trash2 className="h-[16px] w-[16px]" strokeWidth={1.8} />
+                  </button>
+                </div>
+                <div className="mt-2 rounded-[8px] bg-[#F6F7F8] px-2.5 py-2 dark:bg-white/[0.06]">
+                  {f.stkUrl ? (
+                    <img src={f.stkUrl} alt={f.content} className="max-h-[110px] w-auto max-w-full rounded object-contain" />
+                  ) : f.imgSrc ? (
+                    <img src={f.imgSrc} alt="收藏图片" className="max-h-[160px] w-auto max-w-full rounded object-cover" />
+                  ) : (
+                    <p className="whitespace-pre-wrap break-words text-[14.5px] leading-[1.45]">{f.content}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 主界面（三 tab + 路由） ----------------
 
 type MainRoute =
@@ -8459,7 +9105,8 @@ type MainRoute =
   | { page: 'zone-compose' }
   | { page: 'settings' }
   | { page: 'security' }
-  | { page: 'stickers' };
+  | { page: 'stickers' }
+  | { page: 'favorites' };
 
 function MainScreen({
   me,
@@ -8547,6 +9194,7 @@ function MainScreen({
           key={chatPeer.id}
           me={me}
           peer={chatPeer}
+          contacts={contacts}
           ownerName={ownerNameOf(chatPeer)}
           otherUnread={chatOtherUnread}
           onBack={() => openTabs('消息')}
@@ -8614,6 +9262,8 @@ function MainScreen({
         <WalletPage me={me} onBack={() => openTabs('消息')} onToast={showToast} />
       ) : route.page === 'stickers' ? (
         <QqStickersPage onBack={() => openTabs('消息')} onToast={showToast} />
+      ) : route.page === 'favorites' ? (
+        <QqFavoritesPage onBack={() => openTabs('消息')} onToast={showToast} />
       ) : route.page === 'settings' ? (
         <SettingsPage
           me={me}
@@ -8701,6 +9351,7 @@ function MainScreen({
           }}
           onOpenWallet={() => setRoute({ page: 'wallet' })}
           onOpenStickers={() => setRoute({ page: 'stickers' })}
+          onOpenFavorites={() => setRoute({ page: 'favorites' })}
           onOpenSettings={() => {
             setDrawerOpen(false);
             setRoute({ page: 'settings' });

@@ -4317,3 +4317,35 @@ Work Log:
 Stage Summary:
 - 项目已推送至 https://github.com/cczzff468/5200 （main 分支，含 Task O 删除感谢语机制的全部代码）
 - 注意：token 已存入 .git/config（本地），建议用户之后在 GitHub 轮换该 PAT
+
+---
+Task ID: Q
+Agent: Z.ai Code (main)
+Task: 微信/QQ/信息三端聊天气泡长按横向弹窗菜单（复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成）+ 微信「我」收藏页 + QQ 个人抽屉收藏页
+
+Work Log:
+- 新建共享组件 src/components/apps/bubble-menu.tsx：BubbleActionMenu 深色横向卡片菜单（图标+文字、maxWidth 钳制屏幕宽、选项多横向滚动、小箭头指向气泡、下方放不下自动翻到上方、点透明遮罩关闭不执行动作）+ computeBubbleMenuPos 纯函数定位 + useBubbleLongPress 长按手势（480ms 触发、移动>12px 取消、触发后拦截后续 click、同步捕获 currentTarget）
+- 新建共享数据层 src/lib/msg-favorites.ts：wx-favorites / qq-favorites 分端 localStorage，收藏项=原消息快照（文本/表情/图片/位置/卡片摘要）+来源会话信息；addFavorite/removeFavorite/loadFavorites
+- 微信 wechat.tsx：WxMsg 扩展 quote/recalled/fwd + kind 'forward'；loadMsgs 字段规范化；ChatPage 长按菜单（我的 8 项/AI 气泡 9 项含重新生成）、编辑弹窗、引用条+气泡内引用块、多选模式（顶栏计数+勾选圈+批量删除/转发/收藏）、撤回（你撤回一条消息/对方撤回一条消息）、转发目标弹层（好友+自己）+转发卡片（内嵌内容+转发自xx）、重新生成（删最后一轮 AI 回复→runAiTurn 新增 baseMsgs 参数直接用修剪后历史重发，回复条数照常生效）；AI 上下文注入引用前缀/转发前缀、已撤回消息不再进上下文；wx-ai-events:<id> 事件队列（转发时给目标 AI 排感知事件，打开会话自动触发 AI 回合）；「我」页收藏入口接通 → WxFavoritesPage（列表+删除+空态）
+- QQ qq.tsx：同款全套（QQMsg 扩展同字段；qq-ai-events 队列；MeDrawer 收藏行接通 → MainRoute 'favorites' → QqFavoritesPage；抽屉右滑打开→收藏进入）
+- 信息 chat.tsx：ChatMsg 扩展 quote/recalled；菜单仅 6 项（复制/删除/编辑/引用/多选/撤回，无转发/收藏/重新生成）；多选仅批量删除；ChatView 包 relative 根元素；轻量 toast；引用条+引用块+AI 上下文引用前缀；撤回胶囊（你/对方撤回一条消息）
+- 修复过程中发现并解决：菜单卡片初版无 maxWidth 钳制（8 项时 432px 超出 400px 屏），computeBubbleMenuPos 返回 maxW 并下发卡片 style，超宽转为横向滚动
+- Agent Browser 端到端验证（隔离会话 400×860，IndexedDB 种子 3 联系人 + fetch stub 流式回复 + 真实鼠标长按）：
+  ①微信我的气泡菜单=复制/删除/编辑/引用/多选/撤回/转发/收藏（8项），AI 气泡多「重新生成」（9项），QQ 同
+  ②信息菜单恰 6 项（无转发/收藏/重新生成）
+  ③菜单宽 384px 屏内 + scrollWidth>clientWidth（横向滚动生效）；点空白关闭且无副作用（消息数不变）
+  ④编辑：弹窗改文案 → 气泡更新 + localStorage 持久化 ✓
+  ⑤引用：引用条「引用 乐乐：…」→ 发送 → 气泡引用块 + quote 字段落盘 + AI 请求上下文出现「（引用 乐乐：「…」）那说定了哦」前缀 ✓（信息端同验证 ✓）
+  ⑥撤回：微信「你撤回一条消息」/ QQ 同 / 信息（AI气泡）「对方撤回一条消息」，recalled 落盘 ✓
+  ⑦多选：菜单进入→点选 2 条→批量删除（5→2 条）+ 信息端批量删除 ✓
+  ⑧转发：转发卡片落到糖糖会话（content/from=乐乐/role=me）+ 事件队列 1 条 → 打开糖糖聊天队列清零且 AI 自动回复「呀收到转发啦」✓
+  ⑨收藏：气泡收藏 → 微信「我」→收藏页显示条目；QQ 右滑抽屉→收藏→「我的收藏」页显示条目+删除按钮 ✓
+  ⑩重新生成：微信旧 AI 回复删除+新回复落盘；QQ 同 ✓
+  ⑪整页 reload 后：引用/撤回/编辑/重新生成结果全部保持 ✓
+  ⑫console 0 错误、dev.log 无错误；lint + tsc 0 问题
+
+Stage Summary:
+- 三端气泡长按菜单 + 9 类动作全量上线；微信/QQ 收藏体系（气泡收藏、多选批量收藏、独立收藏页、删除收藏）
+- 转发闭环：卡片承载原内容 + 未读角标 + 目标 AI 感知事件（打开会话自动人设化回应）
+- 重新生成不破坏回复条数/流式（baseMsgs 直通历史修剪，isChatStreaming 防重入；破坏性操作流式期间全部拦截）
+- 共享组件三端复用，样式统一深色横向卡片；QQ/微信红包、转账、亲属卡、表情包、分句发送等既有功能零改动

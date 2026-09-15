@@ -21,6 +21,7 @@ import {
   Clock,
   Compass,
   EyeOff,
+  Forward,
   Gamepad2,
   Gift,
   Heart,
@@ -55,7 +56,9 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { addFavorite, loadFavorites, removeFavorite, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import {
   beginChatStream,
   clearChatStream,
@@ -194,8 +197,8 @@ interface WxMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker';
+  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片 */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -204,6 +207,12 @@ interface WxMsg {
   loc?: { name: string; address: string };
   /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
   stk?: { url: string; meaning: string; sid?: string };
+  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
+  quote?: { name: string; content: string };
+  /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
+  recalled?: boolean;
+  /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名） */
+  fwd?: { from: string };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -258,6 +267,16 @@ function loadMsgs(contactId: string): WxMsg[] {
           typeof (m as WxMsg).content === 'string' &&
           ((m as WxMsg).role === 'me' || (m as WxMsg).role === 'peer')
       )
+      // 引用/撤回/转发字段规范化（旧记录无这些字段时补默认值）
+      .map((m) => ({
+        ...m,
+        quote:
+          m.quote && typeof m.quote.name === 'string' && typeof m.quote.content === 'string'
+            ? { name: m.quote.name, content: m.quote.content }
+            : undefined,
+        recalled: m.recalled === true || undefined,
+        fwd: m.fwd && typeof m.fwd.from === 'string' ? { from: m.fwd.from } : undefined,
+      }))
       .map((m) => {
         if (m.kind === 'redpacket' && m.rp && typeof m.rp.amount === 'number') {
           return {
@@ -331,6 +350,65 @@ function saveMsgs(contactId: string, msgs: WxMsg[]): void {
   } catch {
     // 忽略
   }
+}
+
+// ---------------- 转发感知：目标会话的 AI 事件队列 ----------------
+
+/** 转发消息落到目标会话时，同时给目标 AI 排一条「感知事件」；对方会话被打开时 drain 并触发一次 AI 回合，
+ *  让被分享的 AI 知道收到了什么（与页面是否存活无关） */
+const lsAiEventsKey = (contactId: string) => `wx-ai-events:${contactId}`;
+
+function pushAiEvent(contactId: string, text: string): void {
+  try {
+    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const arr = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    arr.push(text);
+    window.localStorage.setItem(lsAiEventsKey(contactId), JSON.stringify(arr.slice(-10)));
+  } catch {
+    // 忽略
+  }
+}
+
+function drainAiEvents(contactId: string): string[] {
+  try {
+    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
+    if (!raw) return [];
+    window.localStorage.removeItem(lsAiEventsKey(contactId));
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 剪贴板复制（clipboard API 不可用时回退 execCommand） */
+function copyTextWithToast(text: string, onToast: (m: string) => void): void {
+  const done = () => onToast('已复制');
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch {
+      onToast('复制失败');
+    }
+  };
+  try {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+      return;
+    }
+  } catch {
+    // 回退
+  }
+  fallback();
 }
 
 /** 聊天列表长按菜单状态（置顶迁移至 @/lib/chat-flags 的 wxChatFlags 表；未读/已隐藏仍存 localStorage） */
@@ -3133,6 +3211,7 @@ function TrDetailPage({
 function ChatPage({
   me,
   peer,
+  contacts,
   ownerName,
   otherUnread,
   onBack,
@@ -3141,6 +3220,8 @@ function ChatPage({
 }: {
   me: WxUser;
   peer: ContactRecord;
+  /** 全部联系人（长按菜单「转发」选择目标会话用） */
+  contacts: ContactRecord[];
   ownerName: string | null;
   /** 除当前会话外的未读总数（他人在你聊天时来信 → 返回键旁灰圆数字） */
   otherUnread: number;
@@ -3179,7 +3260,7 @@ function ChatPage({
   /** 正在查看详情的位置消息 id */
   const [locViewId, setLocViewId] = useState<string | null>(null);
   /** runAiTurn 的稳定引用：发红包/转账（execRedPacket 等定义在 runAiTurn 之前）也要触发 AI 回复，用 ref 中转 */
-  const runAiTurnRef = useRef<((userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string) => void) | null>(null);
+  const runAiTurnRef = useRef<((userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string, baseMsgs?: WxMsg[]) => void) | null>(null);
   /** 聊天设置页（右上角 ··· 进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 查找聊天记录页 */
@@ -3215,6 +3296,20 @@ function ChatPage({
   }, [sessionKey]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  /** 气泡长按菜单（微信/QQ 同款横向弹窗）：消息 + 容器内坐标 */
+  const [msgMenu, setMsgMenu] = useState<null | { msg: WxMsg; pos: BubbleMenuPos }>(null);
+  /** 编辑消息弹窗（菜单「编辑」）：原消息 + 草稿 */
+  const [editMsg, setEditMsg] = useState<WxMsg | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  /** 引用回复（输入框上方条；发送时挂到新消息上） */
+  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
+  /** 多选模式：勾选消息批量删除/转发/收藏 */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  /** 转发：待转发的消息列表 + 目标选择弹层（非空 = 弹层打开） */
+  const [fwdMsgs, setFwdMsgs] = useState<WxMsg[] | null>(null);
+  /** 聊天页根元素（长按菜单定位参照） */
+  const pageRef = useRef<HTMLDivElement>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
   const flags = useChatFlags(wxChatFlagsStore)[peer.id] ?? NO_FLAGS;
   const bg: ChatSettingsBg = { mode: flags.bgMode ?? 'default', color: flags.bgColor ?? '' };
@@ -3230,6 +3325,16 @@ function ChatPage({
   useEffect(() => {
     saveMsgs(peer.id, msgs);
   }, [msgs, peer.id]);
+
+  // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）
+  useEffect(() => {
+    const evs = drainAiEvents(peer.id);
+    if (evs.length === 0) return;
+    const t = window.setTimeout(() => {
+      if (!isChatStreaming(sessionKey)) runAiTurnRef.current?.(null, [], evs.join('\n'));
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [peer.id, sessionKey]);
 
   // 聊天背景图片加载（bgMode = image 时从 IndexedDB 读；bgV 变化 = 重新上传，重读）
   useEffect(() => {
@@ -3325,20 +3430,26 @@ function ChatPage({
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息。
    *  sysEvent：用户退还 AI 的红包/转账/亲属卡后注入的系统事件说明（只进本轮上下文，不落盘） */
   const runAiTurn = useCallback(
-    (userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string) => {
-    const base = [...msgs, ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    (userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string, baseMsgs?: WxMsg[]) => {
+    const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
     const history = base
       .filter(
         (m) =>
-          ((m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
-      .map((m) => ({
+      .map((m) => {
+        // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话
+        const pre = `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+          m.kind === 'forward' && m.fwd ? `[转发自「${m.fwd.from}」的消息] ` : ''
+        }`;
+        return {
         role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
         // 我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；AI 自己发的表情回写成 [表情包:ID]
         // 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
         content:
-          m.kind === 'sticker' && m.stk
+          pre +
+          (m.kind === 'sticker' && m.stk
             ? m.role === 'me'
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
               : m.stk.sid
@@ -3350,8 +3461,9 @@ function ChatPage({
                 ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}，${wxCardStateLabel(m)}]`
                 : m.kind === 'family' && m.fam
                   ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m)}]`
-                  : m.content,
-      }));
+                  : m.content),
+        };
+      });
 
     const aiId = uid();
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
@@ -3475,8 +3587,9 @@ function ChatPage({
   const send = useCallback(() => {
     const text = input.trim();
     if (!text || isChatStreaming(sessionKey)) return;
-    const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now() };
+    const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
     setInput('');
+    setQuote(null);
     // 给自己发消息（「我」详情页「发消息」入口）：只记录，不触发 AI 回复
     if (peer.id === me.id) {
       setMsgs((prev) => [...prev, userMsg]);
@@ -3490,7 +3603,7 @@ function ChatPage({
       return;
     }
     runAiTurn(userMsg);
-  }, [input, me, peer, runAiTurn, sessionKey, sentenceSend]);
+  }, [input, me, peer, runAiTurn, sessionKey, sentenceSend, quote]);
 
   /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
   const dispatchBatch = useCallback(() => {
@@ -3499,6 +3612,238 @@ function ChatPage({
     markPendingBatch(sessionKey, false);
     runAiTurn(null);
   }, [pendingDispatch, runAiTurn, sessionKey]);
+
+  // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成 ----------------
+
+  /** 消息的可复制/引用文本快照（表情/图片/位置/卡片/转发都有占位描述） */
+  const quoteContentOf = (m: WxMsg): string =>
+    m.kind === 'sticker'
+      ? m.stk?.meaning
+        ? `[表情] ${m.stk.meaning}`
+        : '[表情]'
+      : m.kind === 'image'
+        ? '[图片]'
+        : m.kind === 'location'
+          ? `[位置] ${m.loc?.name ?? ''}`
+          : m.kind === 'redpacket' && m.rp
+            ? `[红包] ¥${m.rp.amount} ${m.rp.blessing}`
+            : m.kind === 'transfer' && m.tr
+              ? `[转账] ¥${m.tr.amount}${m.tr.note ? ` ${m.tr.note}` : ''}`
+              : m.kind === 'family' && m.fam
+                ? '[亲属卡]'
+                : m.kind === 'forward'
+                  ? `[转发] ${m.content}`
+                  : m.content;
+
+  /** 消息是否可长按弹菜单 / 多选勾选（通知行与已撤回行除外） */
+  const isSelectable = (m: WxMsg): boolean => m.kind !== 'notice' && !m.recalled;
+
+  /** 按发送方与消息类型组装长按菜单项（我的/AI 气泡都可：复制 删除 编辑 引用 多选 撤回 转发 收藏；AI 气泡多一个重新生成） */
+  const buildMsgMenuItems = (m: WxMsg): BubbleMenuItem[] => {
+    const B = BUBBLE_MENU_ICONS;
+    const isText = !m.kind || m.kind === 'text';
+    const items: BubbleMenuItem[] = [{ key: 'copy', label: '复制', icon: B.copy }];
+    items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
+    if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (isText) items.push({ key: 'quote', label: '引用', icon: B.quote });
+    items.push({ key: 'multi', label: '多选', icon: B.multi });
+    items.push({ key: 'recall', label: '撤回', icon: B.recall });
+    items.push({ key: 'forward', label: '转发', icon: B.forward });
+    items.push({ key: 'fav', label: '收藏', icon: B.fav });
+    if (m.role === 'peer') items.push({ key: 'regen', label: '重新生成', icon: B.regen });
+    return items;
+  };
+
+  /** 气泡长按手势（fire 里用 data-mid 反查消息；多选模式下不弹菜单改为点选勾选） */
+  const bubblePress = useBubbleLongPress((el) => {
+    const mid = el.closest('[data-mid]')?.getAttribute('data-mid') ?? null;
+    const msg = mid ? msgs.find((x) => x.id === mid) ?? null : null;
+    if (!msg || !isSelectable(msg)) return;
+    const items = buildMsgMenuItems(msg);
+    if (items.length === 0) return;
+    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
+  }, !selectMode);
+
+  /** 退出多选模式 */
+  const exitSelect = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds([]);
+  }, []);
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  /** 收藏项快照（单条收藏/批量收藏共用） */
+  const favOf = (m: WxMsg): Omit<MsgFavorite, 'id' | 'app' | 'savedAt'> => ({
+    contactId: peer.id,
+    contactName: peer.name,
+    contactAvatar: peer.avatar,
+    msgRole: m.role,
+    kind: m.kind ?? 'text',
+    content: quoteContentOf(m),
+    imgSrc: m.kind === 'image' ? m.img?.src : undefined,
+    stkUrl: m.kind === 'sticker' ? m.stk?.url : undefined,
+    time: m.time,
+  });
+
+  /** 重新生成：删除本轮（最后一条用户消息之后的）所有 AI 回复，重新发起请求（回复条数按本会话设置重新连发） */
+  const regenerate = (m: WxMsg) => {
+    if (isChatStreaming(sessionKey)) {
+      onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    const idx = msgs.findIndex((x) => x.id === m.id);
+    let lastUser = -1;
+    for (let k = msgs.length - 1; k >= 0; k--) {
+      if (msgs[k].role === 'me') {
+        lastUser = k;
+        break;
+      }
+    }
+    if (idx < 0 || idx <= lastUser) {
+      onToast('只能重新生成最新一轮回复');
+      return;
+    }
+    const kept = msgs.slice(0, lastUser + 1);
+    setMsgs(kept);
+    saveMsgs(peer.id, kept); // 立即落盘，避免 finalize 合并时把已删回复带回来
+    window.setTimeout(() => runAiTurnRef.current?.(null, [], undefined, kept), 80);
+  };
+
+  /** 转发克隆：文本 → 转发卡片；表情/图片/位置 → 同类型消息（新 id、role=me、保留引用） */
+  const forwardClone = (m: WxMsg): WxMsg => {
+    const id = uid();
+    if (m.kind === 'sticker' && m.stk) return { id, role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
+    if (m.kind === 'image' && m.img) return { id, role: 'me', content: '', time: Date.now(), kind: 'image', img: { ...m.img } };
+    if (m.kind === 'location' && m.loc) return { id, role: 'me', content: '', time: Date.now(), kind: 'location', loc: { ...m.loc } };
+    return { id, role: 'me', content: m.content, time: Date.now(), kind: 'forward', fwd: { from: peer.name }, quote: m.quote };
+  };
+
+  /** 转发目标：微信好友（排除当前会话）+ 自己（文件传输助手式入口） */
+  const forwardTargets = useMemo(() => {
+    const list = contacts.filter((c) => c.kind !== 'user' && c.id !== peer.id && isFriendIn(c, 'wx'));
+    const self = contacts.find((c) => c.id === me.id);
+    return self ? [self, ...list] : list;
+  }, [contacts, peer.id, me.id]);
+
+  /** 执行转发：克隆消息写入目标会话存储 + 未读角标 + 给目标 AI 排感知事件（打开会话即触发 AI 回应） */
+  const doForward = (target: ContactRecord) => {
+    const list = fwdMsgs ?? [];
+    if (list.length === 0 || target.id === peer.id) return;
+    saveMsgs(target.id, [...loadMsgs(target.id), ...list.map(forwardClone)]);
+    wxUnreads.bump(target.id);
+    if (target.id !== me.id) {
+      const snippet = list.map(quoteContentOf).join('；').slice(0, 160);
+      pushAiEvent(
+        target.id,
+        `（系统事件：用户把一条来自「${peer.name}」聊天记录的消息转发给你了：「${snippet}」。请用符合人设的一两句话自然回应这条转发。）`
+      );
+    }
+    setFwdMsgs(null);
+    if (selectMode) exitSelect();
+    onToast(target.id === me.id ? '已转发给自己' : `已转发给 ${target.name}`);
+  };
+
+  /** 长按菜单动作分发（执行后关闭菜单） */
+  const handleMenuAction = (key: string) => {
+    const m = msgMenu?.msg ?? null;
+    setMsgMenu(null);
+    if (!m) return;
+    switch (key) {
+      case 'copy':
+        copyTextWithToast(quoteContentOf(m), onToast);
+        break;
+      case 'del': {
+        if (isChatStreaming(sessionKey)) {
+          onToast('对方正在回复，请稍后再试');
+          return;
+        }
+        setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+        onToast('已删除');
+        break;
+      }
+      case 'edit':
+        setEditMsg(m);
+        setEditDraft(m.content);
+        break;
+      case 'quote':
+        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m) });
+        break;
+      case 'multi':
+        setSelectMode(true);
+        setSelectedIds([m.id]);
+        break;
+      case 'recall': {
+        if (isChatStreaming(sessionKey)) {
+          onToast('对方正在回复，请稍后再试');
+          return;
+        }
+        setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
+        onToast('已撤回');
+        break;
+      }
+      case 'forward':
+        setFwdMsgs([m]);
+        break;
+      case 'fav':
+        addFavorite('wx', favOf(m));
+        onToast('已收藏');
+        break;
+      case 'regen':
+        regenerate(m);
+        break;
+    }
+  };
+
+  /** 编辑保存：更新该条消息内容（quote 等字段保留），自动落盘 */
+  const saveEdit = () => {
+    const t = editDraft.trim();
+    if (!editMsg) return;
+    if (!t) {
+      onToast('内容不能为空');
+      return;
+    }
+    if (isChatStreaming(sessionKey)) {
+      onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    setMsgs((prev) => prev.map((x) => (x.id === editMsg.id ? { ...x, content: t } : x)));
+    setEditMsg(null);
+    onToast('已修改');
+  };
+
+  /** 多选批量删除 */
+  const batchDelete = () => {
+    if (selectedIds.length === 0) return;
+    if (isChatStreaming(sessionKey)) {
+      onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    const ids = new Set(selectedIds);
+    setMsgs((prev) => prev.filter((x) => !ids.has(x.id)));
+    onToast(`已删除 ${selectedIds.length} 条消息`);
+    exitSelect();
+  };
+
+  /** 多选批量收藏 */
+  const batchFav = () => {
+    const list = msgs.filter((x) => selectedIds.includes(x.id));
+    if (list.length === 0) return;
+    for (const m of list) addFavorite('wx', favOf(m));
+    onToast(`已收藏 ${list.length} 条消息`);
+    exitSelect();
+  };
+
+  /** 多选批量转发（选中含卡片消息时拦截） */
+  const batchForward = () => {
+    const list = msgs.filter((x) => selectedIds.includes(x.id));
+    if (list.length === 0) return;
+    if (list.some((m) => m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family')) {
+      onToast('红包/转账等卡片暂不支持转发');
+      return;
+    }
+    setFwdMsgs(list);
+  };
 
   const selfChat = peer.id === me.id;
 
@@ -3775,13 +4120,29 @@ function ChatPage({
   }, []);
 
   return (
-    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+    <div ref={pageRef} className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
       {/* 聊天背景层（聊天设置页设置：纯色/图片；顶栏与输入栏自身有底色，不受影响） */}
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
-      {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白） */}
+      {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏 */}
       <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        {selectMode ? (
+          <div className="flex h-11 items-center px-2">
+            <button
+              type="button"
+              data-testid="wx-select-cancel"
+              onClick={exitSelect}
+              className="flex items-center px-1 text-[16px] active:opacity-50"
+            >
+              取消
+            </button>
+            <div className="flex flex-1 items-center justify-center">
+              <span data-testid="wx-select-count" className="text-[17px] font-medium">已选 {selectedIds.length} 条消息</span>
+            </div>
+            <div className="w-[68px]" />
+          </div>
+        ) : (
         <div className="flex h-11 items-center px-2">
           <button
             type="button"
@@ -3821,6 +4182,7 @@ function ChatPage({
             <EllipsisGlyph />
           </button>
         </div>
+        )}
       </div>
 
       {/* 消息列表：浅灰背景（同微信），自定义聊天背景时透出背景层 */}
@@ -3834,6 +4196,15 @@ function ChatPage({
           <div
             key={m.id}
             data-mid={m.id}
+            onClickCapture={
+              selectMode && isSelectable(m)
+                ? (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSelect(m.id);
+                  }
+                : undefined
+            }
             className={`rounded-[10px] transition-colors duration-500 ${
               highlightId === m.id ? 'bg-[#07C160]/15 ring-1 ring-[#07C160]/50' : ''
             }`}
@@ -3842,10 +4213,27 @@ function ChatPage({
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
               <p className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtChatTime(m.time)}</p>
             )}
-            {m.kind === 'notice' && m.notice ? (
+            {m.recalled ? (
+              /* 已撤回：居中灰字（你撤回一条消息 / 对方撤回一条消息） */
+              <p data-testid="wx-recall-row" className="py-1.5 text-center text-[12.5px] text-black/35 dark:text-white/35">
+                {m.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息'}
+              </p>
+            ) : m.kind === 'notice' && m.notice ? (
               <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
             ) : (
             <div className={`flex items-start gap-2 py-1.5 ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
+              {selectMode && isSelectable(m) && (
+                /* 多选模式勾选圈（我的消息在行右侧、对方在行左侧） */
+                <span
+                  aria-hidden="true"
+                  data-testid={`wx-select-${m.id}`}
+                  className={`mt-2 flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full border ${
+                    selectedIds.includes(m.id) ? 'border-[#07C160] bg-[#07C160] text-white' : 'border-black/25 dark:border-white/35'
+                  }`}
+                >
+                  {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
+                </span>
+              )}
               <WxAvatar src={m.role === 'me' ? me.avatar : peer.avatar} alt={m.role === 'me' ? me.name : peer.name} size={38} />
               {m.kind === 'redpacket' && m.rp ? (
                 <RpBubble
@@ -3890,22 +4278,52 @@ function ChatPage({
                   onClick={() => (m.role === 'me' ? openFamilyDetail(m.id) : setDetailId(m.id))}
                 />
               ) : m.kind === 'image' && m.img ? (
-                <ImageMsgBubble src={m.img.src} onClick={() => setViewerSrc(m.img?.src ?? null)} />
+                <div {...bubblePress}>
+                  <ImageMsgBubble src={m.img.src} onClick={() => setViewerSrc(m.img?.src ?? null)} />
+                </div>
               ) : m.kind === 'location' && m.loc ? (
-                <LocBubble name={m.loc.name} address={m.loc.address} onClick={() => setLocViewId(m.id)} />
+                <div {...bubblePress}>
+                  <LocBubble name={m.loc.name} address={m.loc.address} onClick={() => setLocViewId(m.id)} />
+                </div>
               ) : m.kind === 'sticker' && m.stk ? (
-                <StickerMsgBubble
-                  src={m.stk.url}
-                  meaning={m.stk.meaning}
-                  onClick={() => {
-                    setViewerSrc(m.stk?.url ?? null);
-                    if (m.stk?.meaning) onToast(`表情：${m.stk.meaning}`);
-                  }}
-                />
+                <div {...bubblePress}>
+                  <StickerMsgBubble
+                    src={m.stk.url}
+                    meaning={m.stk.meaning}
+                    onClick={() => {
+                      setViewerSrc(m.stk?.url ?? null);
+                      if (m.stk?.meaning) onToast(`表情：${m.stk.meaning}`);
+                    }}
+                  />
+                </div>
+              ) : m.kind === 'forward' && m.fwd ? (
+                /* 转发卡片：内嵌原消息内容 + 「转发自」来源说明 */
+                <div
+                  {...bubblePress}
+                  data-testid="wx-forward-bubble"
+                  className={`relative w-fit max-w-[calc(100%-92px)] select-none rounded-[5px] px-3 py-2 ${
+                    m.role === 'me'
+                      ? 'bg-[#95EC69] text-black dark:bg-[#3EB575]'
+                      : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
+                  }`}
+                >
+                  <div className="line-clamp-8 whitespace-pre-wrap break-words border-l-2 border-black/25 pl-2 text-[14px] leading-[1.4]">
+                    {m.quote && (
+                      <span className="mb-0.5 block text-[12px] text-black/50 dark:text-black/55">
+                        {m.quote.name}：{m.quote.content}
+                      </span>
+                    )}
+                    {m.content}
+                  </div>
+                  <p className="mt-1.5 flex items-center gap-1 text-[11px] text-black/45 dark:text-black/55">
+                    转发自「{m.fwd.from}」的聊天记录
+                  </p>
+                </div>
               ) : (
                 <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
                   <div
-                    className={`relative w-fit max-w-full whitespace-pre-wrap break-words rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
+                    {...bubblePress}
+                    className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
                       m.role === 'me'
                         ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
                         : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
@@ -3920,6 +4338,21 @@ function ChatPage({
                           : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                       }`}
                     />
+                    {/* 引用块（菜单「引用」发送的消息）：名字 + 内容小字嵌在气泡顶部 */}
+                    {m.quote && (
+                      <div
+                        data-testid="wx-quote-block"
+                        className={`mb-1 max-w-full overflow-hidden rounded-[4px] px-2 py-1 text-[12.5px] leading-[1.35] ${
+                          m.role === 'me'
+                            ? 'bg-black/[0.08] text-black/60'
+                            : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
+                        }`}
+                      >
+                        <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                          {m.quote.name}：{m.quote.content}
+                        </p>
+                      </div>
+                    )}
                     {m.content ? (
                       m.content
                     ) : (
@@ -3982,8 +4415,62 @@ function ChatPage({
           })()}
       </div>
 
-      {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方） */}
+      {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方）；多选模式下变为批量删除/转发/收藏操作栏 */}
       <div className="relative z-10 shrink-0 bg-[#EDEDED] dark:bg-[#111111]">
+        {selectMode ? (
+          <div className="flex items-center justify-around px-6 pb-[26px] pt-3" data-testid="wx-select-bar">
+            <button
+              type="button"
+              data-testid="wx-select-del"
+              disabled={selectedIds.length === 0}
+              onClick={batchDelete}
+              className="flex flex-col items-center gap-1 text-[12px] text-[#FA5151] disabled:opacity-35"
+            >
+              <Trash2 className="h-[21px] w-[21px]" strokeWidth={1.9} />
+              删除
+            </button>
+            <button
+              type="button"
+              data-testid="wx-select-forward"
+              disabled={selectedIds.length === 0}
+              onClick={batchForward}
+              className="flex flex-col items-center gap-1 text-[12px] text-black/75 disabled:opacity-35 dark:text-white/75"
+            >
+              <Forward className="h-[21px] w-[21px]" strokeWidth={1.9} />
+              转发
+            </button>
+            <button
+              type="button"
+              data-testid="wx-select-fav"
+              disabled={selectedIds.length === 0}
+              onClick={batchFav}
+              className="flex flex-col items-center gap-1 text-[12px] text-black/75 disabled:opacity-35 dark:text-white/75"
+            >
+              <Star className="h-[21px] w-[21px]" strokeWidth={1.9} />
+              收藏
+            </button>
+          </div>
+        ) : (
+        <>
+        {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
+        {quote && (
+          <div className="px-2.5 pt-2" data-testid="wx-quote-bar">
+            <div className="flex items-start gap-2 rounded-[6px] bg-black/[0.05] px-2.5 py-1.5 dark:bg-white/[0.08]">
+              <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-black/55 dark:text-white/55">
+                引用 {quote.name}：{quote.content}
+              </p>
+              <button
+                type="button"
+                aria-label="取消引用"
+                data-testid="wx-quote-cancel"
+                onClick={() => setQuote(null)}
+                className="shrink-0 text-black/35 active:opacity-60 dark:text-white/35"
+              >
+                <X className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </div>
+          </div>
+        )}
         <div className="px-2.5 pb-[18px] pt-2">
           <div className="flex items-center gap-2.5">
             <button
@@ -4053,6 +4540,8 @@ function ChatPage({
         </div>
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
         {plusOpen && <PlusPanel onAction={handlePlusAction} />}
+        </>
+        )}
       </div>
 
       {/* 红包/转账发送页 + 位置功能页（相机/图片由加号面板直接调起手机原生相机/相册，无自建页面） */}
@@ -4315,6 +4804,93 @@ function ChatPage({
 
       {/* 位置详情页（点聊天位置卡片） */}
       {locViewMsg?.loc && <LocViewLayer name={locViewMsg.loc.name} address={locViewMsg.loc.address} onClose={() => setLocViewId(null)} />}
+
+      {/* 编辑消息弹窗（长按菜单「编辑」）：修改内容后更新该条消息并落盘 */}
+      {editMsg && (
+        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/40 px-8" data-testid="wx-edit-layer" onClick={() => setEditMsg(null)}>
+          <div
+            className="w-full max-w-[300px] overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#2A2A2C]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="pb-1 pt-4 text-center text-[16px] font-medium">编辑消息</p>
+            <div className="px-4 pb-3 pt-2">
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={4}
+                maxLength={2000}
+                autoFocus
+                data-testid="wx-edit-input"
+                className="w-full resize-none rounded-[8px] border border-black/10 bg-black/[0.03] px-2.5 py-2 text-[15px] leading-[1.45] outline-none focus:border-[#07C160] dark:border-white/15 dark:bg-white/[0.06]"
+              />
+            </div>
+            <div className="flex border-t border-black/10 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setEditMsg(null)}
+                className="h-11 flex-1 text-[16px] active:bg-black/5 dark:active:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="wx-edit-save"
+                onClick={saveEdit}
+                className="h-11 flex-1 text-[16px] font-medium text-[#07C160] active:bg-black/5 dark:active:bg-white/10"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 转发目标选择弹层（长按菜单「转发」/多选批量转发）：好友 + 自己 */}
+      {fwdMsgs && (
+        <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/40" data-testid="wx-forward-layer" onClick={() => setFwdMsgs(null)}>
+          <div
+            className="mx-2 mb-3 overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#1E1E1E]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="border-b border-black/[0.06] py-3 text-center text-[15px] font-medium dark:border-white/[0.08]">
+              转发给
+            </p>
+            <div className="max-h-[46vh] overflow-y-auto">
+              {forwardTargets.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`wx-fwd-target-${c.id}`}
+                  onClick={() => doForward(c)}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <WxAvatar src={c.avatar} alt={c.name} size={38} />
+                  <span className="min-w-0 flex-1 truncate text-[15.5px]">{c.id === me.id ? `${c.name}（我自己）` : c.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              data-testid="wx-fwd-cancel"
+              onClick={() => setFwdMsgs(null)}
+              className="w-full border-t border-black/[0.06] py-3 text-center text-[15px] text-black/55 active:bg-black/5 dark:border-white/[0.08] dark:text-white/55 dark:active:bg-white/10"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 气泡长按横向菜单（微信/QQ 同款深色卡片；点菜单项执行动作，点空白处关闭） */}
+      {msgMenu && (
+        <BubbleActionMenu
+          pos={msgMenu.pos}
+          items={buildMsgMenuItems(msgMenu.msg)}
+          onSelect={handleMenuAction}
+          onClose={() => setMsgMenu(null)}
+          testPrefix="wx-menu"
+        />
+      )}
     </div>
   );
 }
@@ -5427,6 +6003,80 @@ function WxSettingsPage({ onBack, onLogout }: { onBack: () => void; onLogout: ()
   );
 }
 
+// ---------------- 收藏页（「我」tab 收藏入口；数据在 @/lib/msg-favorites） ----------------
+
+function WxFavoritesPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
+  const [list, setList] = useState<MsgFavorite[]>(() => loadFavorites('wx'));
+
+  const del = (id: string) => {
+    removeFavorite('wx', id);
+    setList((prev) => prev.filter((x) => x.id !== id));
+    onToast('已删除收藏');
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+      {/* 顶栏（微信灰同聊天页） */}
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid="wx-fav-back"
+            onClick={onBack}
+            className="flex items-center px-1 active:opacity-50"
+          >
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <div className="flex flex-1 items-center justify-center pr-9">
+            <span className="text-[17px] font-medium">收藏</span>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {list.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 pt-24 text-black/35 dark:text-white/35" data-testid="wx-fav-empty">
+            <Star className="h-10 w-10" strokeWidth={1.2} />
+            <p className="text-[13px]">暂无收藏 · 长按聊天消息可收藏</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {list.map((f) => (
+              <div key={f.id} data-testid="wx-fav-item" className="rounded-[10px] bg-white p-3 dark:bg-[#1A1A1A]">
+                <div className="flex items-center gap-2">
+                  <WxAvatar src={f.contactAvatar} alt={f.contactName} size={30} />
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/60 dark:text-white/60">{f.contactName}</span>
+                  <span className="shrink-0 text-[11px] text-black/35 dark:text-white/35">
+                    {f.msgRole === 'me' ? '我' : '对方'} · {fmtChatTime(f.time)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="删除收藏"
+                    data-testid="wx-fav-del"
+                    onClick={() => del(f.id)}
+                    className="shrink-0 text-black/30 active:opacity-60 dark:text-white/30"
+                  >
+                    <Trash2 className="h-[16px] w-[16px]" strokeWidth={1.8} />
+                  </button>
+                </div>
+                <div className="mt-2 rounded-[6px] bg-black/[0.03] px-2.5 py-2 dark:bg-white/[0.05]">
+                  {f.stkUrl ? (
+                    <img src={f.stkUrl} alt={f.content} className="max-h-[110px] w-auto max-w-full rounded object-contain" />
+                  ) : f.imgSrc ? (
+                    <img src={f.imgSrc} alt="收藏图片" className="max-h-[160px] w-auto max-w-full rounded object-cover" />
+                  ) : (
+                    <p className="whitespace-pre-wrap break-words text-[14.5px] leading-[1.45]">{f.content}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 主界面（四 tab） ----------------
 
 type Tab = 'chats' | 'contacts' | 'discover' | 'me';
@@ -5441,7 +6091,8 @@ type Page =
   | 'profile'
   | 'settings'
   | 'services'
-  | 'stickers';
+  | 'stickers'
+  | 'favorites';
 
 function MainScreen({
   me,
@@ -5827,6 +6478,7 @@ function MainScreen({
         key={chatPeer.id}
         me={me}
         peer={chatPeer}
+        contacts={contacts}
         ownerName={ownerName(chatPeer)}
         otherUnread={chatOtherUnread}
         onBack={backToList}
@@ -5855,6 +6507,7 @@ function MainScreen({
   if (page === 'settings') return <WxSettingsPage onBack={() => setPage('main')} onLogout={onLogout} />;
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
+  if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
 
   const TITLES: Record<Tab, string> = { chats: '微信', contacts: '通讯录', discover: '发现', me: '我' };
 
@@ -6285,7 +6938,8 @@ function MainScreen({
               <WxMenuRow
                 first
                 label="收藏"
-                onClick={() => showToast('「收藏」暂未开放')}
+                testId="wx-me-favorites"
+                onClick={() => setPage('favorites')}
                 icon={
                   <WxTileIcon bg="#F5B940">
                     <Star className="h-[21px] w-[21px]" strokeWidth={2} />
