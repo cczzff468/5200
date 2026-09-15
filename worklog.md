@@ -4215,3 +4215,25 @@ Stage Summary:
 - QQ/微信转账收款流程与真实 App 对齐：点击卡片→收款页→收款→双方卡片变灰+「已收款」+我的领取卡片；详情文案按收款人区分「你已收款/XX已收款」（旧数据配对兼容）
 - 微信红包领取页改为弹窗（对照截图美化）；QQ/微信领取红包后聊天界面出现「你领取了XX的红包」提示行
 - 纯本地模拟不变：无真实资金流转、无第三方支付跳转
+
+---
+Task ID: M
+Agent: Z.ai Code (main)
+Task: AI 接收/退还/拒收红包、转账、亲属卡（状态版）+ 用户侧退还入口（红包弹窗/收款页/亲属卡领取页）+ AI 感知退还并回应 + QQ 转账卡片文案修正 + 钱包亲属卡（免赠送可见收到的卡 + 收到的卡可解除）+ AI 发红包兜底
+
+Work Log:
+- chat-rich.ts（三端共用）：新增 AI 处理动作标记体系——[领取红包:ID:感谢语]/[退回红包:ID:理由]/[拒收红包:ID:理由]/[收款转账:ID:感谢语]/[退回转账:ID:理由]/[拒收转账:ID:理由]/[收下亲属卡:ID:感谢语]/[拒收亲属卡:ID:理由]；extractRichActions 在落盘前提取动作标记并从正文剥离（标记不留痕），ACTION_TAIL_RE 并入 OPEN_TAIL_RE 防切碎，prettifyRichText 流式期隐藏动作标记；新增 buildActionRules(pending)——有待处理卡片时注入规则+清单（含短 ID/金额/备注），无则不注入省 token；红包/转账/亲属卡标记缺金额或金额非法时兜底随机/默认金额（红包0.88~20、转账8~88、亲属卡520），AI 裸写 [红包] 不再变文字；buildRichRules 新增【发红包/转账·格式铁律】段
+- QQ（qq.tsx）：MsgPacket 加 status('returned'|'rejected')+cid；QQFamData 加 rejected+cid；QQNoticeData.icon 加 fam；sendRedPacket/sendTransfer 删除 2.6s 自动领取/自动收款，改为生成短 ID（rp-xxx/tr-xxx）并经 runAiTurnRef 立即触发 AI 回复（runAiTurn 加 extra/sysEvent 参数解决定义顺序依赖）；runAiTurn 历史构建把用户发的卡片消息转成带 ID+状态的可读摘要进上下文，payload 注入 buildActionRules(collectPendingCards)，sysEvent 作为 user 消息注入；finalize 先 extractRichActions→applyAiActions（模块级函数：按 cid/id 匹配我发的待处理卡，幂等只处理 pending，红包领取写 claims、退回 gainToWallet('红包退回')、转账领取追加 receiptOf='me' 接收凭据卡、更新 content 摘要回写 AI 上下文，感谢语/理由转 AI 文字消息）→通知行+感谢语在正文前落盘；useLayoutEffect 合并逻辑改为同 id 消息用落盘 packet/fam 覆盖本地（防状态被旧数据覆盖）；cardStateLabel/cardIsFinal/collectPendingCards/applyAiActions 模块级实现
+- QQ UI：TransferBubble 状态文案按角色+状态区分——我发未收「待对方收款」、对方收后「已转入好友余额」（接收完成才显示，修复用户反馈）、对方发未收「待你收款」、退还「已退还」、拒收「已拒收」；RedPacketBubble/FamilyBubble 终态灰化+状态；红包弹窗 RedPacketOpenModal 底部加「退还」按钮（与X并排）；收款页 TransferReceivePage「退还」真正实现（refundPeerCard）；FamilyDetailPage 加「退还」按钮（对方发未领取时，与领取并排）+rejected 状态行；红包详情统计/状态行显示已退回/已拒收
+- 微信（wechat.tsx）：WxRpData/WxTrData 加 status+cid、WxFamData 加 rejected+cid；loadMsgs 规整保留新字段；execRedPacket/execTransfer 生成 cid 并触发 AI 回复；删除 openRedPacketDetail/openTransferDetail/openFamilyDetail 三处模拟对方确认（AI 用动作标记决定）；runAiTurn 改造同 QQ（wxCardStateLabel/wxCollectPendingCards/wxApplyAiActions，亲属卡 claim 时同步 saveFamilyCardsIn 写入"我收到的亲属卡"）；refundPeerCard 实现退还 AI 的红包/转账/亲属卡+通知行+sysEvent 触发 AI 回应；useLayoutEffect 同 id 落盘覆盖；RpOpenLayer 加退还按钮（金色 pill 与 X 并排）；WxTrReceivePage onRefund 接 refundPeerCard；WxFcClaimPage 加 rejected 显示+「退还」按钮（未领取时领取/退还双按钮）；RpBubble 改 sub/settled props（已领取/已退回/已拒收/待领取+灰化）；TrBubble 状态文案（待对方收款/已转入对方零钱/已收款/已退还/已拒收）；FamilyBubble settled 灰化；RpDetailPage 加 statusLabel（已退回/已拒收）；WxNoticeRow 加 fam 分支（Heart 金色）；claimFamily 写入 friendId
+- 微信钱包（wechat-wallet.tsx）：WxFamilyCardIn 加 friendId（loadFamilyCardsIn 规整）；WalletPage 加 familyInCount prop——亲属卡行张数=赠送+收到、有收到的卡也直接进管理页（无需先赠送）；FamilyManagePage 收到的卡可点击→ActionSheet「退还并解除」→onUnbindReceived 从列表移除+同步把对应聊天卡片标记 rejected+追加「你退回了亲属卡」通知行（跨模块直接操作 wx-chat-msgs localStorage）；赠送亲属卡 onGift 写聊天消息时带 cid
+- AI 感知退还：两端 refundPeerCard 后调用 runAiTurn(null,[],sysEvent)——sysEvent 文案如「（系统事件：你发给对方的红包被对方退还了（¥0.05，祝福语"…"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）」只进本轮上下文不落盘，AI 按人设回应退还
+- Agent Browser 端到端验证（QQ+微信双端、mock /api/chat、真实登录流程）：①QQ：AI 领取红包（通知行「乐乐领取了你的红包」+感谢语「爱你哦，拿去买奶茶」+卡片变灰+详情领取记录）；AI 退回红包（通知行+理由落盘+变灰+余额 0.1 退回写账单）；AI 收款转账（原卡变灰显示「已转入好友余额」+追加「已收款」凭据卡+详情「乐乐已收款」）；红包弹窗退还按钮（原卡变灰+「你退回了乐乐的红包」+AI 回应「好吧，那我自己留着买糖吃咯」）；收款页退还（卡片「已退还」+通知行+AI 回应「不收就不收嘛，小气鬼」）；AI 发亲属卡→详情页领取/退还双按钮→退还成功（卡片「已退回」+通知行+AI 回应）②微信：AI 领取红包（通知行+感谢语+变灰）；AI 发亲属卡→领取页（领取+退还双按钮）→领取后钱包「我收到的亲属卡」出现（含 friendId）→钱包亲属卡页无需赠送即可见→点卡片「退还并解除」→列表移除+聊天卡片同步 rejected；AI 收下我送的亲属卡（通知行「乐乐收下了你的亲属卡」+感谢语+卡片「对方已领取」+钱包自动新增收到的卡）③lint/tsc 通过、dev.log 无运行时错误
+
+Stage Summary:
+- 用户发给 AI 的红包/转账/亲属卡现在有完整状态机：待处理→已领取/已收款/已收下 或 已退回/已拒收；唯一短 ID 随消息持久化；AI 只能处理待处理状态（幂等防重复）；状态变更后卡片变灰、通知行+AI 感谢语/理由明确上屏
+- 用户侧三处退还入口全部可用：红包弹窗「退还」（QQ+微信）、转账收款页「退还」链接、亲属卡领取/详情页「退还」按钮（QQ+微信）；退还后 AI 通过 sysEvent 感知并按人设回应，不假装成功
+- 钱包亲属卡：无需先赠送即可看到收到的亲属卡（张数含收到的卡、直接进管理页）；收到的卡可退还并解除（联动聊天卡片置灰+通知行）；AI 收下亲属卡自动进"我收到的亲属卡"可用于支付
+- QQ 转账卡片「已转入好友余额」仅在对方收款完成后显示，之前显示「待对方收款」
+- AI 发红包偶发文字问题双重修复：提示词格式铁律 + 解析兜底金额（裸 [红包] 也出真实红包卡片）
+- 纯本地模拟不变：无真实资金流转、无第三方支付跳转；QQ 红包既有流程未被破坏

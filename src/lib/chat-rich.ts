@@ -11,7 +11,10 @@
  *   （祝福语里的「！」等）会把一个标记切成两段——把含未闭合标记的段与后续段合并，保证解析成功；
  * - prettifyRichText：流式渲染期把完整标记换成简短占位文字（[红包]/[转账]/…）、截掉还没输出完的
  *   半截标记，避免原始标记文本在气泡里闪现（流结束落盘后即为真实卡片消息）；
- * - buildRichRules：追加到角色人设 system 提示词的约定规则（含当前可用的表情包 ID 清单）。
+ * - buildRichRules：追加到角色人设 system 提示词的约定规则（含当前可用的表情包 ID 清单）；
+ * - AI 处理动作（用户发给 AI 的红包/转账/亲属卡）：extractRichActions 提取 [领取红包:ID:感谢语]
+ *   等动作标记，buildActionRules 在有待处理卡片时注入规则与清单；红包/转账/亲属卡标记缺金额时
+ *   兜底默认金额，避免 AI 裸写 [红包] 变成干巴巴的文字。
  */
 
 import type { Sticker } from './ios/stickers';
@@ -53,12 +56,83 @@ export type RichMsg = RichRedpacket | RichTransfer | RichFamily | RichLocation |
 /** 一段回复的解析结果：普通文字 或 富消息标记 */
 export type RichPart = { type: 'text'; text: string } | { type: 'rich'; rich: RichMsg };
 
+// ---------------- AI 处理动作标记（领取/退回/拒收对方发的红包、转账、亲属卡） ----------------
+
+/**
+ * AI 对「对方发来的待处理卡片」的处理动作，通过回复里的标记触发（用户发红包后 AI 可以
+ * 领取 / 退回 / 拒收，转账、亲属卡同理）：
+ * - [领取红包:红包ID:感谢语] / [退回红包:红包ID:理由] / [拒收红包:红包ID:理由]
+ * - [收款转账:转账ID:感谢语] / [退回转账:转账ID:理由] / [拒收转账:转账ID:理由]
+ * - [收下亲属卡:亲属卡ID:感谢语] / [拒收亲属卡:亲属卡ID:理由]
+ * 动作标记不是消息：落盘前由 extractRichActions 从回复里提取并应用（状态流转 + 通知行 +
+ * 感谢语/理由转成普通文字消息），标记本身不会出现在聊天记录里。
+ */
+export type RichActionKind =
+  | 'claim-redpacket'
+  | 'return-redpacket'
+  | 'reject-redpacket'
+  | 'accept-transfer'
+  | 'return-transfer'
+  | 'reject-transfer'
+  | 'claim-family'
+  | 'reject-family';
+
+export interface RichAction {
+  kind: RichActionKind;
+  /** 目标卡片 ID（用户发卡时生成的短 ID，如 rp-x7k2；兼容直接用消息 id 匹配） */
+  targetId: string;
+  /** 感谢语（领取/收款/收下）或理由（退回/拒收），由调用方转成 AI 文字消息落盘 */
+  note: string;
+}
+
+const ACTION_LABELS: Record<string, RichActionKind> = {
+  领取红包: 'claim-redpacket',
+  退回红包: 'return-redpacket',
+  拒收红包: 'reject-redpacket',
+  收款转账: 'accept-transfer',
+  退回转账: 'return-transfer',
+  拒收转账: 'reject-transfer',
+  收下亲属卡: 'claim-family',
+  拒收亲属卡: 'reject-family',
+};
+
+const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：]([^\][]*))?\]/g;
+/** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
+export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
+
+/**
+ * 从 AI 回复里提取全部处理动作标记并返回删除标记后的正文：
+ * actions 按出现顺序排列；targetId/note 均已 trim。
+ */
+export function extractRichActions(text: string): { actions: RichAction[]; cleaned: string } {
+  const actions: RichAction[] = [];
+  const cleaned = text
+    .replace(ACTION_RE, (_all, label: string, rest?: string) => {
+      const segs = (rest ?? '').split(/[:：]/);
+      const targetId = (segs[0] ?? '').trim();
+      const note = segs.slice(1).join(':').trim();
+      if (targetId) actions.push({ kind: ACTION_LABELS[label], targetId, note });
+      return '';
+    })
+    .replace(ACTION_TAIL_RE, '');
+  return { actions, cleaned };
+}
+
+// ---------------- AI 动作的应用结果（各 App 按自己的消息结构落地） ----------------
+
+/** 动作是否合法（调用方校验目标卡片状态为待处理后应用；本函数只做动作→展示语义归类） */
+export function actionVerb(kind: RichActionKind): 'claim' | 'return' | 'reject' {
+  if (kind === 'claim-redpacket' || kind === 'accept-transfer' || kind === 'claim-family') return 'claim';
+  if (kind === 'return-redpacket' || kind === 'return-transfer') return 'return';
+  return 'reject';
+}
+
 // ---------------- 标记正则 ----------------
 
 /** 完整标记（中英文冒号兼容；内容里不允许出现「]」） */
 const RICH_RE = /\[(红包|转账|亲属卡|位置|表情包)(?:[:：]([^\][]*))?\]/g;
-/** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体写法） */
-const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情)(?:[:：][^\][]*)?$/;
+/** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体与处理动作标记） */
+const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
 /**
  * AI 仿写用户记录格式的表情标记变体（聊天历史里用户表情以「[发送了表情：意思]」进入上下文，
  * AI 经常照葫芦画瓢输出同款格式，或把意思当 ID 写成 [表情:XX]）——这些变体在普通文字段里
@@ -69,6 +143,13 @@ const STICKER_LOOSE_RE = /[【\[]\s*(?:发送了表情包|发送了表情|发送
 function parseAmount(v: string | undefined): number {
   const n = Number((v ?? '').trim());
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : NaN;
+}
+
+/** AI 发红包/转账/亲属卡但没写金额（或金额非法）时的兑底：照样出卡片，不让标记变成干巴巴的文字 */
+function fallbackAmount(kind: 'redpacket' | 'transfer' | 'family'): number {
+  const [min, max] = kind === 'redpacket' ? [0.88, 20] : kind === 'transfer' ? [8, 88] : [520, 520];
+  const n = min === max ? min : min + Math.random() * (max - min);
+  return Math.max(0.01, Math.round(n * 100) / 100);
 }
 
 /**
@@ -91,18 +172,16 @@ function parseMarker(kind: string, inner: string, stickers: Sticker[] | null): R
   const segs = inner.split(/[:：]/);
   switch (kind) {
     case '红包': {
-      const amount = parseAmount(segs[0]);
-      if (!Number.isFinite(amount)) return null;
+      // 金额缺失/非法时兑底随机金额：AI 常写成裸的 [红包]，照文字显示会让「AI 发红包」看起来失效
+      const amount = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('redpacket');
       return { kind: 'redpacket', amount, blessing: segs.slice(1).join(':').trim() || '恭喜发财，大吉大利' };
     }
     case '转账': {
-      const amount = parseAmount(segs[0]);
-      if (!Number.isFinite(amount)) return null;
+      const amount = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('transfer');
       return { kind: 'transfer', amount, note: segs.slice(1).join(':').trim() };
     }
     case '亲属卡': {
-      const monthlyLimit = parseAmount(segs[0]);
-      if (!Number.isFinite(monthlyLimit)) return null;
+      const monthlyLimit = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('family');
       return { kind: 'family', monthlyLimit, message: segs.slice(1).join(':').trim() };
     }
     case '位置': {
@@ -191,6 +270,9 @@ export function prettifyRichText(text: string): string {
   return text
     .replace(RICH_RE, (_all, kind: string) => `[${kind}]`)
     .replace(STICKER_LOOSE_RE, '[表情包]')
+    // 处理动作标记不是消息内容：流式期直接隐藏（落盘时转为状态流转 + 通知行，标记本身不留痕）
+    .replace(ACTION_RE, '')
+    .replace(ACTION_TAIL_RE, '')
     .replace(OPEN_TAIL_RE, '');
 }
 
@@ -206,7 +288,9 @@ export function buildRichRules(stickers: Sticker[]): string[] {
       '[红包:金额:祝福语]（如 [红包:8.88:恭喜发财]）；[转账:金额:备注]（如 [转账:66:昨天的饭钱]）；' +
       '[亲属卡:每月额度:留言]（如 [亲属卡:520:给你办的卡，随便花]）；[位置:地点名:经纬度或地址]（如 [位置:上海外滩:121.48,31.23]）' +
       (stickers.length > 0 ? '；[表情包:表情ID]（从我收藏的表情包里选，只能用清单里的 ID）' : '') +
-      '。金额和额度写数字（可带小数）；标记格式不对会发送失败，务必严格照写；没有合适的理由时不要发这些。',
+      '。金额和额度写数字（可带小数）；没有合适的理由时不要发这些。',
+    '【发红包/转账·格式铁律】红包/转账/亲属卡标记里必须写数字金额，例如 [红包:8.88:拿去买奶茶]、[转账:66:上次饭钱]；' +
+      '只输出 [红包] 或 [转账] 不带金额是无效的，你想发钱就务必带金额，不要用单独的 [红包] 当作表情或代称。',
     ...(stickers.length > 0
       ? [
           '【发表情包·格式强调】聊天记录里的「[发送了表情：XX]」只是对方发表情的存档记录，不是你的输出格式，禁止模仿！' +
@@ -225,4 +309,36 @@ export function buildRichRules(stickers: Sticker[]): string[] {
     );
   }
   return rules;
+}
+
+// ---------------- 对方发来的待处理卡片：处理动作规则注入 ----------------
+
+/** 待处理卡片清单条目（各 App 从自己的消息里筛出「我发的、待处理」的卡片生成） */
+export interface PendingCardInfo {
+  id: string;
+  kind: 'redpacket' | 'transfer' | 'family';
+  amount?: number;
+  label: string;
+}
+
+/**
+ * 对方（用户）发来待处理卡片时追加的 system 规则：AI 用动作标记领取/退回/拒收。
+ * pending 为空时不注入（本规则只在有卡可处理时才占 token）。
+ */
+export function buildActionRules(pending: PendingCardInfo[]): string[] {
+  if (pending.length === 0) return [];
+  const kindLabel: Record<PendingCardInfo['kind'], string> = { redpacket: '红包', transfer: '转账', family: '亲属卡' };
+  const lines = pending.map((p) => {
+    const money = typeof p.amount === 'number' ? `，金额¥${p.amount}` : '';
+    return `${kindLabel[p.kind]} ID=${p.id}${money}（${p.label}）`;
+  });
+  return [
+    '【处理对方发来的红包/转账/亲属卡】对方发给你的红包、转账、亲属卡还在待处理状态时，你可以在回复里输出对应标记来处理（标记单独占一行）：' +
+      '领红包 [领取红包:红包ID:感谢语]；退回红包 [退回红包:红包ID:理由]；拒收红包 [拒收红包:红包ID:理由]；' +
+      '收转账 [收款转账:转账ID:感谢语]；退回转账 [退回转账:转账ID:理由]；拒收转账 [拒收转账:转账ID:理由]；' +
+      '收下亲属卡 [收下亲属卡:亲属卡ID:感谢语]；拒收亲属卡 [拒收亲属卡:亲属卡ID:理由]。' +
+      '注意：ID 必须从下面的待处理清单里原样抄写；只有待处理的才能处理，处理过的（或不在清单里的）不要重复处理；' +
+      '感谢语/理由写在标记第三段即可（简短口语，别在正文里再说一遍同样的话）；收不收、怎么回应都按你的人设和你们的关系来定，拒绝时理由要符合你的性格。',
+    `【待处理清单】${lines.join('；')}`,
+  ];
 }

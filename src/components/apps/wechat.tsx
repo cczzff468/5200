@@ -66,7 +66,18 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
-import { buildRichRules, mergeRichSegments, parseRichParts, prettifyRichText, type RichMsg } from '@/lib/chat-rich';
+import {
+  buildRichRules,
+  buildActionRules,
+  extractRichActions,
+  actionVerb,
+  mergeRichSegments,
+  parseRichParts,
+  prettifyRichText,
+  type PendingCardInfo,
+  type RichAction,
+  type RichMsg,
+} from '@/lib/chat-rich';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, updateContact } from '@/lib/ios/contacts-store';
@@ -127,6 +138,10 @@ interface WxRpData {
   openedAt?: number;
   /** 领取人名字（我领 AI 的→我；AI 领我发的→对方）；仅单人群场景 */
   openedBy?: string;
+  /** 退还/拒收终态（我退回 AI 发的红包，或 AI 退回/拒收我发的红包；终态后不能重复处理） */
+  status?: 'returned' | 'rejected';
+  /** AI 处理动作用的短 ID（我发给 AI 的红包才有；AI 在动作标记里引用它） */
+  cid?: string;
 }
 
 interface WxTrData {
@@ -137,15 +152,19 @@ interface WxTrData {
   receivedAt?: number;
   /** 接收卡片凭据：'me'=这张卡是对方收我转账的凭据；'peer'=这张卡是我收对方转账的凭据（详情页文案按此区分「××已收款 / 你已收款」） */
   receiptOf?: 'me' | 'peer';
+  /** 退还/拒收终态（我退回 AI 发的转账，或 AI 退回/拒收我发的转账；终态后不能重复处理） */
+  status?: 'returned' | 'rejected';
+  /** AI 处理动作用的短 ID（我发给 AI 的转账才有） */
+  cid?: string;
 }
 
-/** 聊天中的系统通知行（对方领取了你的红包）：居中灰字 + 彩色尾词（转账收款改用接收卡片消息，不再用文字行） */
+/** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账/亲属卡）：居中灰字 + 彩色尾词 */
 interface WxNoticeData {
-  /** 小图标：rp=红红包 / tr=橙转账 */
-  icon: 'rp' | 'tr';
+  /** 小图标：rp=红红包 / tr=橙转账 / fam=金亲属卡 */
+  icon: 'rp' | 'tr' | 'fam';
   /** 主体文案（不含尾词），如「晚晴宝领取了你的」 */
   pre: string;
-  /** 尾词高亮：「红包」/「转账」 */
+  /** 尾词高亮：「红包」/「转账」/「亲属卡」 */
   accent: string;
 }
 
@@ -164,6 +183,10 @@ interface WxFamData {
   used: number;
   /** 优先扣款方式（我发的卡展示） */
   method?: string;
+  /** 被收卡方退还/拒收（终态，卡片变灰） */
+  rejected?: boolean;
+  /** AI 处理动作用的短 ID（我发给 AI 的亲属卡才有） */
+  cid?: string;
 }
 
 interface WxMsg {
@@ -245,6 +268,8 @@ function loadMsgs(contactId: string): WxMsg[] {
               opened: m.rp.opened === true,
               openedAt: typeof m.rp.openedAt === 'number' ? m.rp.openedAt : undefined,
               openedBy: typeof m.rp.openedBy === 'string' ? m.rp.openedBy : undefined,
+              status: m.rp.status === 'returned' || m.rp.status === 'rejected' ? m.rp.status : undefined,
+              cid: typeof m.rp.cid === 'string' ? m.rp.cid : undefined,
             },
           };
         }
@@ -256,6 +281,8 @@ function loadMsgs(contactId: string): WxMsg[] {
               note: typeof m.tr.note === 'string' ? m.tr.note : '',
               received: m.tr.received === true,
               receivedAt: typeof m.tr.receivedAt === 'number' ? m.tr.receivedAt : undefined,
+              status: m.tr.status === 'returned' || m.tr.status === 'rejected' ? m.tr.status : undefined,
+              cid: typeof m.tr.cid === 'string' ? m.tr.cid : undefined,
             },
           };
         }
@@ -270,6 +297,8 @@ function loadMsgs(contactId: string): WxMsg[] {
               claimedAt: typeof m.fam.claimedAt === 'number' ? m.fam.claimedAt : undefined,
               used: typeof m.fam.used === 'number' ? m.fam.used : 0,
               method: typeof m.fam.method === 'string' ? m.fam.method : '零钱',
+              rejected: m.fam.rejected === true,
+              cid: typeof m.fam.cid === 'string' ? m.fam.cid : undefined,
             },
           };
         }
@@ -687,6 +716,146 @@ function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string |
   });
 }
 
+/** 用户发给 AI 的红包/转账/亲属卡短 ID（AI 动作标记里引用；短小易抄写） */
+function nextWxCid(prefix: 'rp' | 'tr' | 'fam'): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
+}
+
+/** 红包/转账/亲属卡消息的状态标签（卡片文案 + AI 上下文摘要共用） */
+function wxCardStateLabel(m: WxMsg): string {
+  if (m.kind === 'redpacket' && m.rp) {
+    if (m.rp.status === 'returned') return '已退回';
+    if (m.rp.status === 'rejected') return '已拒收';
+    return m.rp.opened ? '已领取' : '待领取';
+  }
+  if (m.kind === 'transfer' && m.tr) {
+    if (m.tr.status === 'returned') return '已退回';
+    if (m.tr.status === 'rejected') return '已拒收';
+    return m.tr.received ? '已收款' : '待收款';
+  }
+  if (m.kind === 'family' && m.fam) {
+    if (m.fam.rejected) return '已退回';
+    return m.fam.claimed ? '已领取' : '待领取';
+  }
+  return '';
+}
+
+/** 卡片是否已到终态（领取/收款/退还/拒收都算；终态后不可重复处理） */
+function wxCardIsFinal(m: WxMsg): boolean {
+  const label = wxCardStateLabel(m);
+  return label !== '待领取' && label !== '待收款';
+}
+
+/** 收集「我发给 AI 的、待处理」的红包/转账/亲属卡（生成 system 待处理清单） */
+function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
+  return msgs
+    .filter((m) => m.role === 'me' && !wxCardIsFinal(m))
+    .map<PendingCardInfo | null>((m) => {
+      if (m.kind === 'redpacket' && m.rp) {
+        return { id: m.rp.cid ?? m.id, kind: 'redpacket', amount: m.rp.amount, label: `祝福语"${m.rp.blessing}"` };
+      }
+      if (m.kind === 'transfer' && m.tr) {
+        return { id: m.tr.cid ?? m.id, kind: 'transfer', amount: m.tr.amount, label: m.tr.note ? `备注"${m.tr.note}"` : '无备注' };
+      }
+      if (m.kind === 'family' && m.fam) {
+        return { id: m.fam.cid ?? m.id, kind: 'family', amount: m.fam.monthlyLimit, label: `每月额度，${m.fam.message || '无留言'}` };
+      }
+      return null;
+    })
+    .filter((x): x is PendingCardInfo => x !== null);
+}
+
+/**
+ * 应用 AI 的处理动作（领取/退回/拒收我发的红包/转账/收下/拒收亲属卡）：只处理「待处理」状态的目标（幂等），
+ * 返回更新后的消息数组 + 需要落盘的通知行与感谢语/理由文字消息。纯本地模拟：
+ * 领取 → 记入领取人；退回 → 金额退回零钱（写账单）；亲属卡收下 → claimed + 存入「我收到的亲属卡」由调用方处理（这里只标记状态）。
+ */
+function wxApplyAiActions(
+  actions: RichAction[],
+  msgs: WxMsg[],
+  peer: ContactRecord
+): { msgs: WxMsg[]; notices: WxMsg[]; notes: WxMsg[] } {
+  const next = msgs.map((m) => ({ ...m }));
+  const notices: WxMsg[] = [];
+  const notes: WxMsg[] = [];
+  const now = Date.now();
+  const matchIdx = (a: RichAction): number =>
+    next.findIndex(
+      (m) =>
+        m.role === 'me' &&
+        ((m.kind === 'redpacket' && (m.rp?.cid === a.targetId || m.id === a.targetId)) ||
+          (m.kind === 'transfer' && (m.tr?.cid === a.targetId || m.id === a.targetId)) ||
+          (m.kind === 'family' && (m.fam?.cid === a.targetId || m.id === a.targetId)))
+    );
+  for (const a of actions) {
+    const idx = matchIdx(a);
+    if (idx < 0) continue;
+    const m = next[idx];
+    if (wxCardIsFinal(m)) continue; // 只处理待处理状态
+    const verb = actionVerb(a.kind);
+    const time = now + notices.length + notes.length;
+    if (m.kind === 'redpacket' && m.rp) {
+      const rp = m.rp;
+      if (verb === 'claim') {
+        next[idx] = { ...m, content: `[微信红包]（${peer.name}已领取）`, rp: { ...rp, opened: true, openedAt: Date.now(), openedBy: peer.name } };
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } });
+      } else if (verb === 'return') {
+        next[idx] = { ...m, content: '[微信红包]（已退回）', rp: { ...rp, status: 'returned' } };
+        wxPatchBalance(rp.amount, { kind: '红包', amount: rp.amount });
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}退回了你的`, accent: '红包' } });
+      } else {
+        next[idx] = { ...m, content: '[微信红包]（已拒收）', rp: { ...rp, status: 'rejected' } };
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}拒收了你的`, accent: '红包' } });
+      }
+    } else if (m.kind === 'transfer' && m.tr) {
+      const tr = m.tr;
+      if (verb === 'claim') {
+        // AI 收款：原卡标记已收款 + 追加「已收款」接收凭据卡（receiptOf=me，详情页显示「XX已收款」）
+        next[idx] = { ...m, content: '[转账]（已收款）', tr: { ...tr, received: true, receivedAt: Date.now() } };
+        next.push({ id: uid(), role: 'peer', content: '', time, kind: 'transfer', tr: { amount: tr.amount, note: tr.note, received: true, receivedAt: Date.now(), receiptOf: 'me' } });
+      } else if (verb === 'return') {
+        next[idx] = { ...m, content: '[转账]（已退回）', tr: { ...tr, status: 'returned' } };
+        wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}退回了你的`, accent: '转账' } });
+      } else {
+        next[idx] = { ...m, content: '[转账]（已拒收）', tr: { ...tr, status: 'rejected' } };
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账' } });
+      }
+    } else if (m.kind === 'family' && m.fam) {
+      const fam = m.fam;
+      if (verb === 'claim') {
+        next[idx] = { ...m, content: `[亲属卡]（${peer.name}已收下）`, fam: { ...fam, claimed: true, claimedAt: Date.now() } };
+        // AI 收下亲属卡 → 同步存入「我收到的亲属卡」（钱包亲属卡页可见；发红包/转账可用它支付）
+        const listIn = loadFamilyCardsIn();
+        if (!listIn.some((f) => f.friendId === peer.id)) {
+          saveFamilyCardsIn([
+            ...listIn,
+            {
+              id: `fcin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+              friendId: peer.id,
+              fromName: peer.name,
+              fromAvatar: peer.avatar,
+              relation: fam.relation,
+              monthlyLimit: fam.monthlyLimit,
+              used: 0,
+              createdAt: Date.now(),
+            },
+          ]);
+        }
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'fam', pre: `${peer.name}收下了你的`, accent: '亲属卡' } });
+      } else {
+        next[idx] = { ...m, content: '[亲属卡]（已退回）', fam: { ...fam, rejected: true } };
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'fam', pre: `${peer.name}拒收了你的`, accent: '亲属卡' } });
+      }
+    } else {
+      continue;
+    }
+    // 感谢语/理由转成 AI 文字消息（紧跟通知行）
+    if (a.note) notes.push({ id: uid(), role: 'peer', content: a.note, time: now + notices.length + notes.length });
+  }
+  return { msgs: next, notices, notes };
+}
+
 /** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL */
 function readImageFile(file: File, max = 720): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -1066,16 +1235,16 @@ function FamGlyph({ size = 42 }: { size?: number }) {
   );
 }
 
-/** 亲属卡聊天卡片（图①：白底 + 黄圆图标 + 「给C的亲属卡/待对方领取」+ 右侧淡黄星球轨道装饰 + 左下「亲属卡」；领取后卡片颜色变灰） */
-function FamilyBubble({ title, sub, claimed, onClick }: { title: string; sub: string; claimed: boolean; onClick: () => void }) {
+/** 亲属卡聊天卡片（图①：白底 + 黄圆图标 + 「给C的亲属卡/待对方领取」+ 右侧淡黄星球轨道装饰 + 左下「亲属卡」；领取/退回后卡片颜色变灰） */
+function FamilyBubble({ title, sub, settled, onClick }: { title: string; sub: string; settled: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       data-testid="wx-fc-bubble"
       onClick={onClick}
       className="relative block w-[206px] overflow-hidden rounded-[10px] bg-white text-left shadow-sm transition-all duration-300 active:brightness-[0.97] dark:bg-[#1E1E1E]"
-      style={{ filter: claimed ? 'grayscale(0.62) brightness(0.97)' : undefined }}
-      aria-label={`${title}${claimed ? '（已领取）' : ''}`}
+      style={{ filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined }}
+      aria-label={`${title}（${sub}）`}
     >
       <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-[#FBF0C4] dark:bg-[#3B3722]" />
       <span
@@ -1814,7 +1983,7 @@ function WxStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
   );
 }
 
-/** 亲属卡领取页（图②：好友发我的——对方名 + 赠语 + 每月额度 + 说明 + 黄卡「X送的亲属卡」 + 对方头像 + 领取按钮 + 财付通脚注） */
+/** 亲属卡领取页（图②：好友发我的——对方名 + 赠语 + 每月额度 + 说明 + 黄卡「X送的亲属卡」 + 对方头像 + 领取/退还按钮 + 财付通脚注） */
 function WxFcClaimPage({
   peerName,
   peerAvatar,
@@ -1822,8 +1991,10 @@ function WxFcClaimPage({
   message,
   claimed,
   claimedAt,
+  rejected,
   onBack,
   onClaim,
+  onRefund,
   onToast,
 }: {
   peerName: string;
@@ -1832,8 +2003,12 @@ function WxFcClaimPage({
   message: string;
   claimed: boolean;
   claimedAt?: number;
+  /** 被退还/拒收（终态，显示已退回） */
+  rejected?: boolean;
   onBack: () => void;
   onClaim: () => void;
+  /** 退还（拒收）该亲属卡 */
+  onRefund: () => void;
   onToast: (m: string) => void;
 }) {
   return (
@@ -1853,11 +2028,13 @@ function WxFcClaimPage({
         <p className="mt-2 text-[16px]" data-testid="wx-fc-claim-limit">
           每月可用额度¥{fmtMoney(limit)}
         </p>
-        {claimed && typeof claimedAt === 'number' && (
+        {rejected ? (
+          <p className="mt-3 text-[13px] text-black/45 dark:text-white/45" data-testid="wx-fc-claim-rejected">已退回该亲属卡</p>
+        ) : claimed && typeof claimedAt === 'number' ? (
           <p className="mt-3 text-[13px] text-[#06AE56]" data-testid="wx-fc-claim-done">
             已于 {fmtFullDate(claimedAt)} 领取
           </p>
-        )}
+        ) : null}
         <p className="mt-6 text-[13px] leading-relaxed text-black/40 dark:text-white/40">
           领取后优先使用该卡支付，赠送方承担费用并收到通知，1天内未领取则自动作废。
           <button type="button" onClick={() => onToast('使用说明暂未开放')} className="text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]">
@@ -1885,19 +2062,33 @@ function WxFcClaimPage({
         </div>
       </div>
       <div className="flex shrink-0 flex-col items-center px-5 pb-7">
-        {claimed ? (
+        {rejected ? (
+          <div className="w-[68%] rounded-[8px] bg-white py-3.5 text-center text-[17px] text-black/30 dark:text-white/30" data-testid="wx-fc-claim-btn">
+            已退回
+          </div>
+        ) : claimed ? (
           <div className="w-[68%] rounded-[8px] bg-white py-3.5 text-center text-[17px] text-black/30 dark:text-white/30" data-testid="wx-fc-claim-btn">
             已领取
           </div>
         ) : (
-          <button
-            type="button"
-            data-testid="wx-fc-claim-btn"
-            onClick={onClaim}
-            className="w-[68%] rounded-[8px] bg-white py-3.5 text-center text-[17px] text-[#06AE56] shadow-sm active:bg-black/[0.03]"
-          >
-            领取
-          </button>
+          <div className="flex w-[68%] flex-col gap-2.5">
+            <button
+              type="button"
+              data-testid="wx-fc-claim-btn"
+              onClick={onClaim}
+              className="rounded-[8px] bg-white py-3.5 text-center text-[17px] text-[#06AE56] shadow-sm active:bg-black/[0.03]"
+            >
+              领取
+            </button>
+            <button
+              type="button"
+              data-testid="wx-fc-refund-btn"
+              onClick={onRefund}
+              className="rounded-[8px] bg-white py-3.5 text-center text-[17px] text-black/55 shadow-sm active:bg-black/[0.03] dark:text-white/60"
+            >
+              退还
+            </button>
+          </div>
         )}
         <p className="mt-8 text-[13px] text-black/30 dark:text-white/30">本服务由财付通提供</p>
       </div>
@@ -2483,7 +2674,7 @@ function TransferCompose({
 }
 
 /** 红包聊天卡片（红橙渐变，底部「红包」条；与转账卡同宽 206px；未领取点击弹「開」，已领取进详情） */
-function RpBubble({ blessing, opened, onClick }: { blessing: string; opened: boolean; onClick: () => void }) {
+function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: string; settled: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -2492,10 +2683,10 @@ function RpBubble({ blessing, opened, onClick }: { blessing: string; opened: boo
       className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm transition-all duration-300 active:brightness-95"
       style={{
         background: 'linear-gradient(135deg, #F2694C, #E94E38)',
-        // 领取后卡片颜色变灰（对照真实微信：已领取的红包封面褪色）
-        filter: opened ? 'grayscale(0.62) brightness(0.97)' : undefined,
+        // 领取/退还/拒收后卡片颜色变灰（对照真实微信：已领取的红包封面褪色）
+        filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
-      aria-label={`红包 ${blessing}${opened ? '（已领取）' : ''}`}
+      aria-label={`红包 ${blessing}（${sub}）`}
     >
       <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-10 h-24 w-24 rounded-full bg-white/10" />
       <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
@@ -2504,7 +2695,7 @@ function RpBubble({ blessing, opened, onClick }: { blessing: string; opened: boo
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[15px] leading-snug text-white">{blessing}</span>
-          {opened && <span className="mt-0.5 block text-[11px] text-white/85">已领取</span>}
+          <span className="mt-0.5 block text-[11px] text-white/85">{sub}</span>
         </span>
       </span>
       <span className="relative block bg-black/[0.08] px-3 py-[5px] text-[12px] text-white/90">红包</span>
@@ -2512,7 +2703,8 @@ function RpBubble({ blessing, opened, onClick }: { blessing: string; opened: boo
   );
 }
 
-/** 转账聊天卡片（橙色渐变 + 白描边圆⇆/已收款对勾 + 金额 + 状态文案 + 左下「转账」+ 朝向角标；紧凑尺寸；自己也作为「已收款」接收卡片复用） */
+/** 转账聊天卡片（橙色渐变 + 白描边圆⇆/已收款对勾 + 金额 + 状态文案 + 左下「转账」+ 朝向角标；紧凑尺寸；自己也作为「已收款」接收卡片复用）。
+ *  状态文案按角色与收款状态区分：接收完成后才显示「已转入零钱」，之前是「待对方收款」 */
 function TrBubble({ amount, status, received, fromMe, onClick }: { amount: number; status: string; received: boolean; fromMe: boolean; onClick: () => void }) {
   return (
     <button
@@ -2545,7 +2737,7 @@ function TrBubble({ amount, status, received, fromMe, onClick }: { amount: numbe
 }
 
 /** 聊天系统通知行（截图参考：居中小图标 + 灰字 + 金色尾词，如「xx领取了你的红包」） */
-function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr'; pre: string; accent: string }) {
+function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
   return (
     <div className="flex justify-center py-1.5" data-testid="wx-notice-row">
       <span className="flex max-w-[86%] items-center gap-1.5 text-[13px] text-black/45 dark:text-white/45">
@@ -2557,13 +2749,21 @@ function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr'; pre: string; ac
           >
             <span className="h-[7px] w-[7px] rounded-full border-[1.5px] border-[#F9DCA8]" />
           </span>
-        ) : (
+        ) : icon === 'tr' ? (
           <span
             aria-hidden="true"
             className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px]"
             style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}
           >
             <ArrowLeftRight className="h-[10px] w-[10px] text-white" strokeWidth={2.6} />
+          </span>
+        ) : (
+          <span
+            aria-hidden="true"
+            className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px]"
+            style={{ background: 'linear-gradient(135deg, #FDF3CE, #FAE7A8)' }}
+          >
+            <Heart className="h-[10px] w-[10px] text-[#E0A94C]" strokeWidth={2.4} />
           </span>
         )}
         <span className="truncate">{pre}</span>
@@ -2583,12 +2783,15 @@ function RpOpenLayer({
   blessing,
   onOpen,
   onClose,
+  onRefund,
 }: {
   senderName: string;
   senderAvatar: string | null;
   blessing: string;
   onOpen: () => void;
   onClose: () => void;
+  /** 退还该红包（仅对方发来的未领取红包传入） */
+  onRefund?: () => void;
 }) {
   return (
     <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 px-7 pb-12" role="dialog" aria-label="打开红包" data-testid="wx-rp-open">
@@ -2655,16 +2858,28 @@ function RpOpenLayer({
           </div>
         </div>
 
-        {/* 卡片下方金色 X 关闭 */}
-        <button
-          type="button"
-          aria-label="关闭"
-          data-testid="wx-rp-open-close"
-          onClick={onClose}
-          className="absolute -bottom-[68px] left-1/2 flex h-[50px] w-[50px] -translate-x-1/2 items-center justify-center rounded-full border-2 border-[#EFC266]/90 text-[#EFC266] active:opacity-70"
-        >
-          <X className="h-6 w-6" strokeWidth={2} />
-        </button>
+        {/* 卡片下方：退还 + 金色 X 关闭（退还可把对方发的红包原路退回） */}
+        <div className="absolute -bottom-[68px] left-1/2 flex -translate-x-1/2 items-center gap-5">
+          {onRefund ? (
+            <button
+              type="button"
+              data-testid="wx-rp-refund"
+              onClick={onRefund}
+              className="flex h-[50px] items-center rounded-full border-2 border-[#EFC266]/90 bg-black/25 px-6 text-[16px] font-medium text-[#EFC266] active:opacity-70"
+            >
+              退还
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label="关闭"
+            data-testid="wx-rp-open-close"
+            onClick={onClose}
+            className="flex h-[50px] w-[50px] items-center justify-center rounded-full border-2 border-[#EFC266]/90 text-[#EFC266] active:opacity-70"
+          >
+            <X className="h-6 w-6" strokeWidth={2} />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2677,6 +2892,7 @@ function RpDetailPage({
   blessing,
   amount,
   opened,
+  statusLabel,
   claimerName,
   claimerAvatar,
   claimedAt,
@@ -2688,6 +2904,8 @@ function RpDetailPage({
   blessing: string;
   amount: number;
   opened: boolean;
+  /** 退还/拒收状态文案（未终态时不传） */
+  statusLabel?: string;
   claimerName: string;
   claimerAvatar: string | null;
   claimedAt?: number;
@@ -2720,6 +2938,9 @@ function RpDetailPage({
           </span>
         </div>
         <p className="mt-2.5 text-[15px] text-black/40 dark:text-white/40">{blessing}</p>
+        {statusLabel ? (
+          <p className="mt-2 text-[13px] text-[#D8A244]" data-testid="wx-rp-detail-status">{statusLabel}</p>
+        ) : null}
         <p className="mt-8 font-semibold text-[#D8A244]" data-testid="wx-rp-detail-amount">
           <span className="text-[46px] leading-none">{fmtMoney(amount)}</span>
           <span className="ml-1.5 text-[20px]">元</span>
@@ -2957,6 +3178,8 @@ function ChatPage({
   const [stickerOpen, setStickerOpen] = useState(false);
   /** 正在查看详情的位置消息 id */
   const [locViewId, setLocViewId] = useState<string | null>(null);
+  /** runAiTurn 的稳定引用：发红包/转账（execRedPacket 等定义在 runAiTurn 之前）也要触发 AI 回复，用 ref 中转 */
+  const runAiTurnRef = useRef<((userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string) => void) | null>(null);
   /** 聊天设置页（右上角 ··· 进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 查找聊天记录页 */
@@ -3070,29 +3293,44 @@ function ChatPage({
   };
 
   /** 全局流结束（成功/失败）：finalize 已把最终消息落盘，把落盘后的完整记录并回本地并清理流状态。
-   *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑 */
+   *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑。
+   *  同 id 消息用落盘的 rp/tr/fam 覆盖本地（finalize 里 AI 领取/退回/拒收动作已更新卡片状态） */
   useLayoutEffect(() => {
     if (!stream || stream.status === 'streaming') return;
     void Promise.resolve().then(() => {
       setMsgs((prev) => {
         const saved = loadMsgs(peer.id);
-        // 按 id 合并：本地消息优先（可能有红包/转账等补丁），落盘新增的只会是 AI 回复
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        const merged = prev.map((m) => {
+          const s = savedMap.get(m.id);
+          if (!s) return m;
+          return {
+            ...m,
+            ...(s.rp ? { rp: s.rp } : {}),
+            ...(s.tr ? { tr: s.tr } : {}),
+            ...(s.fam ? { fam: s.fam } : {}),
+            ...(s.content && !m.content ? { content: s.content } : {}),
+          };
+        });
+        // 按 id 合并：本地新增的保留，落盘新增的只会是 AI 回复
         const ids = new Set(prev.map((m) => m.id));
-        return [...prev, ...saved.filter((m) => !ids.has(m.id))];
+        return [...merged, ...saved.filter((m) => !ids.has(m.id))];
       });
       clearChatStream(sessionKey);
     });
   }, [stream, sessionKey, peer.id]);
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
-   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
+   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
+   *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息。
+   *  sysEvent：用户退还 AI 的红包/转账/亲属卡后注入的系统事件说明（只进本轮上下文，不落盘） */
   const runAiTurn = useCallback(
-    (userMsg: WxMsg | null) => {
-    const base = userMsg ? [...msgs, userMsg] : msgs;
+    (userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string) => {
+    const base = [...msgs, ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
     const history = base
       .filter(
         (m) =>
-          ((m.content || m.kind === 'sticker') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')) as boolean
+          ((m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')) as boolean
       )
       .slice(-20)
       .map((m) => ({
@@ -3106,7 +3344,13 @@ function ChatPage({
               : m.stk.sid
                 ? `[表情包:${m.stk.sid}]`
                 : `[发送了表情：${m.stk.meaning || '无描述'}]`
-            : m.content,
+            : m.kind === 'redpacket' && m.rp
+              ? `[红包 ID:${m.rp.cid ?? m.id} ¥${m.rp.amount} "${m.rp.blessing}"，${wxCardStateLabel(m)}]`
+              : m.kind === 'transfer' && m.tr
+                ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}，${wxCardStateLabel(m)}]`
+                : m.kind === 'family' && m.fam
+                  ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m)}]`
+                  : m.content,
       }));
 
     const aiId = uid();
@@ -3116,14 +3360,18 @@ function ChatPage({
     if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
-    // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入
+    // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入；
+    // 我发给 AI 的待处理红包/转账/亲属卡 → 注入处理动作规则与待处理清单（AI 用 [领取红包:ID:…] 等标记处理）
     const replyCount = getReplyCount(sessionKey);
     const stickers = loadStickers('wx');
     const system = buildPersonaPrompt(peer, me, ownerName, stickers);
+    const actionRules = buildActionRules(wxCollectPendingCards(base));
+    const systemFull = actionRules.length > 0 ? `${system}\n\n${actionRules.join('\n\n')}` : system;
     const payloadMsgs: ChatPayloadMessage[] = [
-      { role: 'system', content: replyCount > 1 ? `${system}\n\n${buildReplyCountPrompt(replyCount)}` : system },
+      { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
       ...history,
     ];
+    if (sysEvent) payloadMsgs.push({ role: 'user', content: sysEvent });
 
     const started = beginChatStream({
       sessionKey,
@@ -3139,10 +3387,15 @@ function ChatPage({
           ]);
           return;
         }
-        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
-        // 再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
-        // （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
-        const segs = mergeRichSegments(splitReplySegments(content, replyCount > 1));
+        // 1) 先提取处理动作标记（[领取红包:ID:感谢语] 等）：目标是我发的待处理卡片时应用状态流转，
+        //    生成通知行（XX领取了你的红包 / XX退回了你的转账 / XX收下了你的亲属卡…）+ 感谢语/理由转文字消息；
+        // 2) 剩余正文按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
+        //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
+        //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
+        const { actions, cleaned } = extractRichActions(content);
+        const latest = loadMsgs(peer.id);
+        const applied = actions.length > 0 ? wxApplyAiActions(actions, latest, peer) : { msgs: latest, notices: [] as WxMsg[], notes: [] as WxMsg[] };
+        const segs = mergeRichSegments(splitReplySegments(cleaned, replyCount > 1));
         let t = startedAt;
         const saved: WxMsg[] = [];
         let idx = 0;
@@ -3158,17 +3411,56 @@ function ChatPage({
             t += 600 + Math.floor(Math.random() * 600);
           }
         }
-        // 解析后一条都没有（整段回复为空白）：沿用空回复兜底文案
-        if (saved.length === 0) {
-          saved.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
+        // 动作通知行/感谢语放正文前（先看到「XX领取了你的红包」，再看到感谢的话）；整段空白且有动作时不算空回复
+        const all: WxMsg[] = [...applied.notices, ...applied.notes, ...saved];
+        if (all.length === 0) {
+          all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
-        saveMsgs(peer.id, [...loadMsgs(peer.id), ...saved]);
+        saveMsgs(peer.id, [...applied.msgs, ...all]);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     },
     [apiConfig, msgs, me, ownerName, peer, sessionKey]
+  );
+  // 发红包/转账时通过 ref 触发（runAiTurn 定义在 execRedPacket 之后，见 runAiTurnRef 注释）
+  runAiTurnRef.current = runAiTurn;
+
+  /** 退还 AI 发来的红包/转账/亲属卡（红包弹窗「退还」、转账收款页「退还」、亲属卡领取页「退还」共用）：
+   *  原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应 */
+  const refundPeerCard = useCallback(
+    (m: WxMsg) => {
+      if (m.kind === 'redpacket' && m.rp) {
+        setMsgs((prev) => [
+          ...prev.map((x) => (x.id === m.id && x.rp ? { ...x, rp: { ...x.rp, status: 'returned' as const } } : x)),
+          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `你退回了${peer.name}的`, accent: '红包' } },
+        ]);
+        setOpeningId(null);
+        setReceiveId(null);
+        setDetailId(null);
+        onToast('红包已退还给对方');
+        runAiTurnRef.current?.(null, [], `（系统事件：你发给对方的红包被对方退还了（¥${m.rp.amount}，祝福语"${m.rp.blessing}"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）`);
+      } else if (m.kind === 'transfer' && m.tr) {
+        setMsgs((prev) => [
+          ...prev.map((x) => (x.id === m.id && x.tr ? { ...x, tr: { ...x.tr, status: 'returned' as const } } : x)),
+          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'tr', pre: `你退回了${peer.name}的`, accent: '转账' } },
+        ]);
+        setReceiveId(null);
+        setDetailId(null);
+        onToast('转账已退还给对方');
+        runAiTurnRef.current?.(null, [], `（系统事件：你发给对方的转账被对方退还了（¥${m.tr.amount}${m.tr.note ? `，备注"${m.tr.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`);
+      } else if (m.kind === 'family' && m.fam) {
+        setMsgs((prev) => [
+          ...prev.map((x) => (x.id === m.id && x.fam ? { ...x, fam: { ...x.fam, rejected: true } } : x)),
+          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'fam', pre: `你退回了${peer.name}的`, accent: '亲属卡' } },
+        ]);
+        setDetailId(null);
+        onToast('亲属卡已退还');
+        runAiTurnRef.current?.(null, [], `（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
+      }
+    },
+    [peer.name, onToast]
   );
 
   const send = useCallback(() => {
@@ -3223,8 +3515,11 @@ function ChatPage({
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
       return;
     }
-    setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'redpacket', rp: { amount, blessing, opened: false } }]);
+    // 生成 AI 可引用的短 ID；发出后立即触发 AI 回复（红包进待处理清单，AI 按人设决定领取/退回/拒收）
+    const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'redpacket', rp: { amount, blessing, opened: false, cid: nextWxCid('rp') } };
+    setMsgs((prev) => [...prev, msg]);
     setCompose(null);
+    if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
   };
 
   /** 发转账提交：校验 → 开启支付密码先验证 → 扣款（按支付方式）并插卡消息；对方打开详情时确认收款 */
@@ -3246,14 +3541,17 @@ function ChatPage({
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
       return;
     }
-    setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'transfer', tr: { amount, note, received: false } }]);
+    // 生成 AI 可引用的短 ID；发出后立即触发 AI 回复（AI 按人设决定收款/退回/拒收）
+    const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'transfer', tr: { amount, note, received: false, cid: nextWxCid('tr') } };
+    setMsgs((prev) => [...prev, msg]);
     setCompose(null);
+    if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
   };
 
   /** 領红包（仅限对方发的）：金额存入零钱 + 记收入账单 + 聊天里发「你领取了XX的红包」提示行 → 进详情；自己发的红包不能自己领 */
   const openRedPacket = (id: string) => {
     const m = msgs.find((x) => x.id === id);
-    if (!m?.rp || m.rp.opened || m.role !== 'peer') return;
+    if (!m?.rp || m.rp.opened || m.rp.status || m.role !== 'peer') return;
     wxPatchBalance(m.rp.amount, { kind: '红包', amount: m.rp.amount });
     // 领取提示行（居中灰字 + 金色尾词）：与对方领取我的红包同款样式
     const notice: WxMsg = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `你领取了${peer.name}的`, accent: '红包' } };
@@ -3265,38 +3563,13 @@ function ChatPage({
     setDetailId(id);
   };
 
-  /** 打开红包详情：自己发的红包由对方领取（模拟对方确认，持久化，不产生资金变动——钱已扣出）+ 聊天里发「xx领取了你的红包」通知 */
+  /** 打开红包详情（我发的红包由 AI 用动作标记处理，这里只看详情） */
   const openRedPacketDetail = (id: string) => {
-    const m = msgs.find((x) => x.id === id);
-    if (m?.rp && m.role === 'me' && !m.rp.opened) {
-      const notice: WxMsg = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } };
-      setMsgs((prev) => [
-        ...prev.map((x) => (x.id === id && x.rp ? { ...x, rp: { ...x.rp, opened: true, openedAt: Date.now(), openedBy: peer.name } } : x)),
-        notice,
-      ]);
-    }
     setDetailId(id);
   };
 
-  /** 打开转账详情（我发的 → 模拟对方确认收款；已收款的凭据卡 → 只看详情）：
-   *  模拟确认时持久化 + 追加「已收款」接收卡片（receiptOf=me，详情页显示「XX已收款」），不产生资金变动——钱已从零钱扣出 */
+  /** 打开转账详情（我发的转账由 AI 用动作标记决定收款/退回/拒收，这里只看详情） */
   const openTransferDetail = (id: string) => {
-    const m = msgs.find((x) => x.id === id);
-    if (m?.tr && m.role === 'me' && !m.tr.received) {
-      const receipt: WxMsg = {
-        id: uid(),
-        role: 'peer',
-        content: '',
-        time: Date.now(),
-        kind: 'transfer',
-        tr: { amount: m.tr.amount, note: m.tr.note, received: true, receivedAt: Date.now(), receiptOf: 'me' },
-      };
-      setMsgs((prev) => [
-        // 原卡也标记 receiptOf='me'（对方收我的款）：详情页显示「XX已收款」
-        ...prev.map((x) => (x.id === id && x.tr ? { ...x, tr: { ...x.tr, received: true, receivedAt: Date.now(), receiptOf: 'me' as const } } : x)),
-        receipt,
-      ]);
-    }
     setDetailId(id);
   };
 
@@ -3354,14 +3627,8 @@ function ChatPage({
     void runAiTurn(msg);
   };
 
-  /** 打开亲属卡详情：我发的卡若未被领取则模拟对方领取（持久化 + 服务页管理列表 pending→active） */
+  /** 打开亲属卡详情（我发的卡由 AI 用动作标记决定收下/拒收，这里只看详情） */
   const openFamilyDetail = (id: string) => {
-    const m = msgs.find((x) => x.id === id);
-    if (m?.fam && m.role === 'me' && !m.fam.claimed) {
-      setMsgs((prev) => prev.map((x) => (x.id === id && x.fam ? { ...x, fam: { ...x.fam, claimed: true, claimedAt: Date.now() } } : x)));
-      const list = loadFamilyCards();
-      saveFamilyCards(list.map((c) => (c.friendId === peer.id && c.status === 'pending' ? { ...c, status: 'active' as const } : c)));
-    }
     setDetailId(id);
   };
 
@@ -3377,6 +3644,7 @@ function ChatPage({
         ...list,
         {
           id: `fcin-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          friendId: peer.id,
           fromName: peer.name,
           fromAvatar: peer.avatar,
           relation: m.fam.relation,
@@ -3573,10 +3841,11 @@ function ChatPage({
               {m.kind === 'redpacket' && m.rp ? (
                 <RpBubble
                   blessing={m.rp.blessing}
-                  opened={m.rp.opened}
+                  sub={m.rp.status === 'returned' ? '已退回' : m.rp.status === 'rejected' ? '已拒收' : m.rp.opened ? '已领取' : '待领取'}
+                  settled={m.rp.opened || Boolean(m.rp.status)}
                   onClick={() => {
-                    // 自己发的红包不能领：直接进详情（对方领取）；对方发的未领取弹「開」
-                    if (m.rp?.opened) setDetailId(m.id);
+                    // 自己发的红包不能领：直接进详情；已到终态进详情；对方发的未处理弹「開」
+                    if (m.rp?.opened || m.rp?.status) setDetailId(m.id);
                     else if (m.role === 'me') openRedPacketDetail(m.id);
                     else setOpeningId(m.id);
                   }}
@@ -3584,19 +3853,31 @@ function ChatPage({
               ) : m.kind === 'transfer' && m.tr ? (
                 <TrBubble
                   amount={m.tr.amount}
-                  status={m.tr.received ? '已收款' : m.role === 'me' ? '你发起了一笔转账' : '向你转账'}
+                  status={
+                    m.tr.status === 'returned'
+                      ? '已退还'
+                      : m.tr.status === 'rejected'
+                        ? '已拒收'
+                        : m.tr.received
+                          ? m.role === 'me'
+                            ? '已转入对方零钱'
+                            : '已收款'
+                          : m.role === 'me'
+                            ? '待对方收款'
+                            : '向你转账'
+                  }
                   received={m.tr.received === true}
                   fromMe={m.role === 'me'}
                   onClick={() =>
-                    // 对方发来的未收款转账 → 收款页（时钟+待你收款+收款）；其余 → 交易详情
-                    m.role === 'peer' && m.tr?.received !== true ? setReceiveId(m.id) : openTransferDetail(m.id)
+                    // 对方发来的未收款且未退还的转账 → 收款页（时钟+待你收款+收款）；其余 → 交易详情
+                    m.role === 'peer' && m.tr?.received !== true && !m.tr?.status ? setReceiveId(m.id) : openTransferDetail(m.id)
                   }
                 />
               ) : m.kind === 'family' && m.fam ? (
                 <FamilyBubble
                   title={`给${m.role === 'me' ? peer.name : me.name}的亲属卡`}
-                  sub={m.fam.claimed ? (m.role === 'me' ? '对方已领取' : '已领取') : m.role === 'me' ? '待对方领取' : '待你领取'}
-                  claimed={m.fam.claimed === true}
+                  sub={m.fam.rejected ? '已退回' : m.fam.claimed ? (m.role === 'me' ? '对方已领取' : '已领取') : m.role === 'me' ? '待对方领取' : '待你领取'}
+                  settled={m.fam.claimed === true || m.fam.rejected === true}
                   onClick={() => (m.role === 'me' ? openFamilyDetail(m.id) : setDetailId(m.id))}
                 />
               ) : m.kind === 'image' && m.img ? (
@@ -3911,10 +4192,7 @@ function ChatPage({
           payTime={receiveMsg.time}
           onBack={() => setReceiveId(null)}
           onAccept={() => acceptTransfer(receiveMsg.id)}
-          onRefund={() => {
-            setReceiveId(null);
-            onToast('已退还给对方（模拟，1天内到账）');
-          }}
+          onRefund={() => refundPeerCard(receiveMsg)}
         />
       )}
 
@@ -3926,6 +4204,7 @@ function ChatPage({
           blessing={openingMsg.rp.blessing}
           onOpen={() => openRedPacket(openingMsg.id)}
           onClose={() => setOpeningId(null)}
+          onRefund={openingMsg.role === 'peer' ? () => refundPeerCard(openingMsg) : undefined}
         />
       )}
 
@@ -3939,6 +4218,7 @@ function ChatPage({
             blessing={detailMsg.rp.blessing}
             amount={detailMsg.rp.amount}
             opened={detailMsg.rp.opened}
+            statusLabel={detailMsg.rp.status === 'returned' ? '该红包已退回，金额已存入零钱' : detailMsg.rp.status === 'rejected' ? '对方拒收了该红包' : undefined}
             claimerName={claimer}
             claimerAvatar={claimer === me.name ? me.avatar : peer.avatar}
             claimedAt={detailMsg.rp.openedAt}
@@ -4006,8 +4286,10 @@ function ChatPage({
           message={detailMsg.fam.message}
           claimed={detailMsg.fam.claimed}
           claimedAt={detailMsg.fam.claimedAt}
+          rejected={detailMsg.fam.rejected}
           onBack={() => setDetailId(null)}
           onClaim={() => claimFamily(detailMsg.id)}
+          onRefund={() => refundPeerCard(detailMsg)}
           onToast={onToast}
         />
       ))}

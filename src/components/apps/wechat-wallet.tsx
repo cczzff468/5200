@@ -156,6 +156,8 @@ function loadLcq(): WxLcq {
 /** 我收到的亲属卡（AI 好友赠送，发红包/转账可用它支付——消费由赠卡人买单，不动我的零钱） */
 export interface WxFamilyCardIn {
   id: string;
+  /** 赠卡人联系人 ID（解除时同步把对应聊天卡片标记已退回；旧数据可能缺失） */
+  friendId?: string;
   fromName: string;
   fromAvatar: string | null;
   relation: string;
@@ -173,6 +175,7 @@ export function loadFamilyCardsIn(): WxFamilyCardIn[] {
     .filter((f) => f && typeof f.fromName === 'string')
     .map((f) => ({
       id: typeof f.id === 'string' ? f.id : uid(),
+      friendId: typeof f.friendId === 'string' ? f.friendId : undefined,
       fromName: f.fromName as string,
       fromAvatar: typeof f.fromAvatar === 'string' ? f.fromAvatar : null,
       relation: typeof f.relation === 'string' ? f.relation : '家人',
@@ -703,6 +706,7 @@ function WalletPage({
   balance,
   cards,
   familyCards,
+  familyInCount,
   onBack,
   onOpen,
   onToast,
@@ -710,6 +714,8 @@ function WalletPage({
   balance: number;
   cards: WxCard[];
   familyCards: WxFamilyCard[];
+  /** 我收到的亲属卡张数（收到的卡也直接进管理页，无需先赠送） */
+  familyInCount: number;
   onBack: () => void;
   onOpen: (v: 'change' | 'lcq' | 'cards' | 'fcIntro' | 'fcManage' | 'paySettings') => void;
   onToast: (m: string) => void;
@@ -774,8 +780,8 @@ function WalletPage({
             <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gradient-to-br from-[#F7B500] to-[#F79C00] text-white" aria-hidden="true">
               <Heart className="h-[17px] w-[17px]" strokeWidth={2} />
             </span>,
-            familyCards.length > 0 ? `${familyCards.length}张` : '未开通',
-            () => onOpen(familyCards.length > 0 ? 'fcManage' : 'fcIntro'),
+            familyCards.length + familyInCount > 0 ? `${familyCards.length + familyInCount}张` : '未开通',
+            () => onOpen(familyCards.length + familyInCount > 0 ? 'fcManage' : 'fcIntro'),
             'wx-wallet-fc'
           )}
           {row(
@@ -1641,6 +1647,7 @@ function FamilyManagePage({
   received,
   onBack,
   onUnbind,
+  onUnbindReceived,
   onSimulateReceive,
   onAdd,
   onToast,
@@ -1649,11 +1656,14 @@ function FamilyManagePage({
   received: WxFamilyCardIn[];
   onBack: () => void;
   onUnbind: (id: string) => void;
+  /** 解除（退回）收到的亲属卡：从列表移除 + 同步把聊天卡片标记已退回 */
+  onUnbindReceived: (id: string) => void;
   onSimulateReceive: () => void;
   onAdd: () => void;
   onToast: (m: string) => void;
 }) {
   const [unbind, setUnbind] = useState<WxFamilyCard | null>(null);
+  const [unbindIn, setUnbindIn] = useState<WxFamilyCardIn | null>(null);
   return (
     <div className="relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-fc-manage">
       <WxNav
@@ -1704,13 +1714,13 @@ function FamilyManagePage({
             <div className="space-y-3">
               {received.map((c) => (
                 <div key={c.id} data-testid="wx-fc-in-card" className="rounded-[12px] bg-white px-4 py-4 dark:bg-[#1A1A1A]">
-                  <div className="flex items-center gap-3">
+                  <button type="button" onClick={() => setUnbindIn(c)} className="flex w-full items-center gap-3 text-left active:opacity-70">
                     <MiniAvatar src={c.fromAvatar} alt={c.fromName} size={38} />
                     <span className="min-w-0 flex-1 truncate text-[17px]">
                       {c.fromName}（{c.relation}）
                     </span>
                     <span className="shrink-0 text-[15px] text-[#07C160]">使用中</span>
-                  </div>
+                  </button>
                   <div className="mt-4 flex items-stretch">
                     <div className="flex-1 text-center">
                       <p className="text-[13px] text-black/45 dark:text-white/45">月额度</p>
@@ -1766,6 +1776,22 @@ function FamilyManagePage({
             },
           ]}
           onClose={() => setUnbind(null)}
+        />
+      )}
+      {unbindIn && (
+        <ActionSheet
+          actions={[
+            {
+              label: `退还并解除 ${unbindIn.fromName}（${unbindIn.relation}）送的亲属卡`,
+              danger: true,
+              onClick: () => {
+                onUnbindReceived(unbindIn.id);
+                setUnbindIn(null);
+                onToast('已退还并解除亲属卡');
+              },
+            },
+          ]}
+          onClose={() => setUnbindIn(null)}
         />
       )}
     </div>
@@ -1949,6 +1975,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
           balance={wallet.balance}
           cards={cards}
           familyCards={familyCards}
+          familyInCount={familyIn.length}
           onBack={() => setView('home')}
           onOpen={(v) => setView(v)}
           onToast={showToast}
@@ -2051,14 +2078,14 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
               createdAt: Date.now(),
             };
             commitFamily([card, ...familyCards]);
-            // 同步向与该好友的微信聊天发送一张亲属卡卡片消息（待对方领取）
+            // 同步向与该好友的微信聊天发送一张亲属卡卡片消息（待对方领取；cid 供 AI 动作标记引用）
             appendWxChatMsg(fcFriend.id, {
               id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
               role: 'me',
               content: '',
               time: Date.now(),
               kind: 'family',
-              fam: { monthlyLimit: amount, relation: fcRelation, message, claimed: false, used: 0, method: '零钱' },
+              fam: { monthlyLimit: amount, relation: fcRelation, message, claimed: false, used: 0, method: '零钱', cid: `fam-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}` },
             });
             showToast('亲属卡已发送到聊天，等待对方领取');
             setView('fcManage');
@@ -2072,6 +2099,43 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
           received={familyIn}
           onBack={() => setView('wallet')}
           onUnbind={(id) => commitFamily(familyCards.filter((c) => c.id !== id))}
+          onUnbindReceived={(id) => {
+            // 解除收到的亲属卡：从列表移除 + 同步把对应聊天卡片标记已退回（卡片变灰、状态行显示已退回）+ 追加通知行
+            const card = familyIn.find((c) => c.id === id);
+            const next = familyIn.filter((c) => c.id !== id);
+            setFamilyIn(next);
+            saveFamilyCardsIn(next);
+            if (card?.friendId) {
+              try {
+                const raw = window.localStorage.getItem(WX_LS_MSGS_PREFIX + card.friendId);
+                const parsed: unknown = raw ? JSON.parse(raw) : [];
+                if (Array.isArray(parsed)) {
+                  const msgs = parsed as Array<Record<string, unknown>>;
+                  const fam = card;
+                  let nowTs = Date.now();
+                  const updated = msgs.map((m) => {
+                    const f = m.fam as Record<string, unknown> | undefined;
+                    if (m.kind === 'family' && f && f.monthlyLimit === fam.monthlyLimit && f.claimed === true && !f.rejected) {
+                      nowTs += 1;
+                      return { ...m, fam: { ...f, rejected: true } };
+                    }
+                    return m;
+                  });
+                  updated.push({
+                    id: `${nowTs.toString(36)}-notice`,
+                    role: 'peer',
+                    content: '',
+                    time: nowTs,
+                    kind: 'notice',
+                    notice: { icon: 'fam', pre: '你退回了', accent: '亲属卡' },
+                  });
+                  window.localStorage.setItem(WX_LS_MSGS_PREFIX + card.friendId, JSON.stringify(updated));
+                }
+              } catch {
+                // 同步失败不影响解除本身
+              }
+            }
+          }}
           onSimulateReceive={() => {
             const from = friends.find((f) => f.kind === 'char') ?? friends[0];
             if (!from) {

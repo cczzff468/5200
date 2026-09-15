@@ -144,7 +144,18 @@ import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
-import { buildRichRules, mergeRichSegments, parseRichParts, prettifyRichText, type RichMsg } from '@/lib/chat-rich';
+import {
+  buildRichRules,
+  buildActionRules,
+  extractRichActions,
+  actionVerb,
+  mergeRichSegments,
+  parseRichParts,
+  prettifyRichText,
+  type PendingCardInfo,
+  type RichAction,
+  type RichMsg,
+} from '@/lib/chat-rich';
 import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
@@ -190,13 +201,13 @@ interface QQMsg {
   stk?: { url: string; meaning: string; sid?: string };
 }
 
-/** 聊天中的系统通知行（对方领取了你的红包；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
+/** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
 interface QQNoticeData {
-  /** 小图标：rp=红红包 / tr=蓝转账 */
-  icon: 'rp' | 'tr';
+  /** 小图标：rp=红红包 / tr=蓝转账 / fam=金亲属卡 */
+  icon: 'rp' | 'tr' | 'fam';
   /** 主体文案（不含尾词），如「晚晴宝领取了你的」 */
   pre: string;
-  /** 尾词高亮：「红包」/「转账」 */
+  /** 尾词高亮：「红包」/「转账」/「亲属卡」 */
   accent: string;
 }
 
@@ -206,7 +217,7 @@ interface MsgLoc {
   addr: string;
 }
 
-/** 亲属卡消息数据（AI 赠送；领取后 claimed=true） */
+/** 亲属卡消息数据（AI 赠送；领取后 claimed=true；被收卡方退还后 rejected=true） */
 interface QQFamData {
   /** 每月消费上限（元） */
   monthlyLimit: number;
@@ -217,6 +228,10 @@ interface QQFamData {
   /** 是否已被领取 */
   claimed: boolean;
   claimedAt?: number;
+  /** 被收卡方退还/拒收（终态，卡片变灰） */
+  rejected?: boolean;
+  /** AI 处理动作用的短 ID（我发给 AI 的卡片才有；格式如 rp-x7k2 / tr-x7k2） */
+  cid?: string;
 }
 
 interface MsgPacket {
@@ -236,6 +251,10 @@ interface MsgPacket {
   receivedAt?: number;
   /** 接收卡片凭据：'me'=这张卡是对方收我转账的凭据；'peer'=这张卡是我收对方转账的凭据（详情页文案按此区分「××已收款 / 你已收款」） */
   receiptOf?: 'me' | 'peer';
+  /** 退还/拒收终态（我发给 AI 的卡被退回/拒收，或我退回 AI 发的卡；终态后不能重复处理） */
+  status?: 'returned' | 'rejected';
+  /** AI 处理动作用的短 ID（我发给 AI 的红包/转账才有；AI 在动作标记里引用它） */
+  cid?: string;
 }
 
 /** 会话列表预览：非文本消息显示摘要 */
@@ -294,6 +313,113 @@ function richToQqMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
         : { id, role: 'peer', content: '[表情]', time };
     }
   }
+}
+
+/** 红包/转账/亲属卡消息的状态标签（卡片文案 + AI 上下文摘要共用） */
+function cardStateLabel(m: QQMsg): string {
+  if (m.kind === 'redpacket' && m.packet) {
+    if (m.packet.status === 'returned') return '已退回';
+    if (m.packet.status === 'rejected') return '已拒收';
+    return (m.packet.claims ?? []).length > 0 ? '已领取' : '待领取';
+  }
+  if (m.kind === 'transfer' && m.packet) {
+    if (m.packet.status === 'returned') return '已退回';
+    if (m.packet.status === 'rejected') return '已拒收';
+    return m.packet.received ? '已收款' : '待收款';
+  }
+  if (m.kind === 'family' && m.fam) {
+    if (m.fam.rejected) return '已退回';
+    return m.fam.claimed ? '已领取' : '待领取';
+  }
+  return '';
+}
+
+/** 卡片是否已到终态（领取/收款/退还/拒收都算；终态后不再出现在待处理清单、不可重复处理） */
+function cardIsFinal(m: QQMsg): boolean {
+  const label = cardStateLabel(m);
+  return label !== '待领取' && label !== '待收款';
+}
+
+/** 收集「我发给 AI 的、待处理」的红包/转账（生成 system 待处理清单，AI 用动作标记处理） */
+function collectPendingCards(msgs: QQMsg[]): PendingCardInfo[] {
+  return msgs
+    .filter((m) => m.role === 'me' && !cardIsFinal(m))
+    .map<PendingCardInfo | null>((m) => {
+      if (m.kind === 'redpacket' && m.packet) {
+        return { id: m.packet.cid ?? m.id, kind: 'redpacket', amount: m.packet.amount, label: `祝福语"${m.packet.note}"` };
+      }
+      if (m.kind === 'transfer' && m.packet) {
+        return { id: m.packet.cid ?? m.id, kind: 'transfer', amount: m.packet.amount, label: m.packet.note ? `备注"${m.packet.note}"` : '无备注' };
+      }
+      return null;
+    })
+    .filter((x): x is PendingCardInfo => x !== null);
+}
+
+/**
+ * 应用 AI 的处理动作（领取/退回/拒收我发的红包/转账）：只处理「待处理」状态的目标（幂等，重复标记忽略），
+ * 返回更新后的消息数组 + 需要落盘的通知行与感谢语/理由文字消息。纯本地模拟：
+ * 领取 → 记入领取记录；退回 → 金额退回我的钱包（写账单）；拒收 → 仅终态标记。
+ */
+function applyAiActions(
+  actions: RichAction[],
+  msgs: QQMsg[],
+  peer: ContactRecord
+): { msgs: QQMsg[]; notices: QQMsg[]; notes: QQMsg[] } {
+  const next = msgs.map((m) => ({ ...m, packet: m.packet ? { ...m.packet } : undefined }));
+  const notices: QQMsg[] = [];
+  const notes: QQMsg[] = [];
+  const now = Date.now();
+  for (const a of actions) {
+    const idx = next.findIndex((m) => m.role === 'me' && (m.packet?.cid === a.targetId || m.id === a.targetId));
+    if (idx < 0) continue;
+    const m = next[idx];
+    if (!m.packet || cardIsFinal(m)) continue; // 只处理待处理状态（已领取/已退回/已拒收的忽略）
+    const verb = actionVerb(a.kind);
+    const time = now + notices.length + notes.length;
+    if (m.kind === 'redpacket') {
+      const p = m.packet;
+      if (verb === 'claim') {
+        // AI 领取：单人群按现有自动领取规则（普通领全额；拼手气随机拆一份），写入领取记录 + 通知行
+        const claims = p.claims ?? [];
+        const count = p.count ?? 1;
+        if (claims.length < count) {
+          const remaining = round2(p.amount - claims.reduce((s, c) => s + c.amount, 0));
+          const amt = p.mode === 'lucky' && count > 1 ? Math.max(0.01, round2(Math.random() * remaining)) : remaining;
+          next[idx] = { ...m, content: `[QQ红包]（${peer.name}已领取）`, packet: { ...p, claims: [...claims, { name: peer.name, avatar: peer.avatar, amount: amt, ts: Date.now() }] } };
+          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } });
+        }
+      } else {
+        next[idx] = { ...m, content: `[QQ红包]（${verb === 'return' ? '已退回' : '已拒收'}）`, packet: { ...p, status: verb === 'return' ? 'returned' : 'rejected' } };
+        if (verb === 'return') {
+          gainToWallet(p.amount, '红包退回');
+          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}退回了你的`, accent: '红包' } });
+        } else {
+          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}拒收了你的`, accent: '红包' } });
+        }
+      }
+    } else if (m.kind === 'transfer') {
+      const p = m.packet;
+      if (verb === 'claim') {
+        // AI 收款：原卡标记已收款 + 追加「已收款」接收凭据卡（receiptOf=me，详情页显示「XX已收款」）
+        next[idx] = { ...m, content: '[转账]（已收款）', packet: { ...p, received: true, receivedAt: Date.now() } };
+        next.push({ id: uid(), role: 'peer', content: '', time, kind: 'transfer', packet: { type: 'transfer', amount: p.amount, note: p.note, received: true, receivedAt: Date.now(), receiptOf: 'me' } });
+      } else {
+        next[idx] = { ...m, content: `[转账]（${verb === 'return' ? '已退回' : '已拒收'}）`, packet: { ...p, status: verb === 'return' ? 'returned' : 'rejected' } };
+        if (verb === 'return') {
+          gainToWallet(p.amount, '转账退回');
+          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}退回了你的`, accent: '转账' } });
+        } else {
+          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账' } });
+        }
+      }
+    } else {
+      continue;
+    }
+    // 感谢语/理由转成 AI 文字消息（紧跟通知行，符合人设的明确文案）
+    if (a.note) notes.push({ id: uid(), role: 'peer', content: a.note, time: now + notices.length + notes.length });
+  }
+  return { msgs: next, notices, notes };
 }
 
 /** QQ空间：用户发的帖子 / 种子帖点赞状态（localStorage 持久化） */
@@ -391,6 +517,11 @@ const TAB_ACTIVE = 'text-[#1E6FFF] dark:text-[#4AA3FF]';
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** 用户发给 AI 的红包/转账短 ID（AI 动作标记里引用；短小易抄写） */
+function nextCid(prefix: 'rp' | 'tr' | 'fam'): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
 }
 
 function loadMsgs(contactId: string): QQMsg[] {
@@ -1588,6 +1719,10 @@ function ChatPage({
     setMsgs((prev) => prev.map((m) => (m.id === msgId && m.packet ? { ...m, packet: { ...m.packet, ...patch } } : m)));
   }, []);
 
+  /** runAiTurn 的稳定引用：发红包/转账/亲属卡（sendRedPacket 等定义在 runAiTurn 之前）也要触发 AI 回复，
+   *  直接引用会产生先定义后声明的循环依赖，用 ref 中转（runAiTurn 定义后回填） */
+  const runAiTurnRef = useRef<((userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string) => void) | null>(null);
+
   /** 领取亲属卡（对方/AI 赠送的卡）：标记已领取 + 时间；纯本地模拟，无资金流转 */
   const claimFam = useCallback(
     (msgId: string) => {
@@ -1596,63 +1731,75 @@ function ChatPage({
     []
   );
 
-  // 发红包消息 + 对方稍后自动领取（普通/专属领全额；拼手气随机拆一）+ 领取后聊天里发「xx领取了你的红包」通知
-  const sendRedPacket = useCallback(
-    (p: MsgPacket) => {
-      const msgId = uid();
-      setMsgs((prev) => [...prev, { id: msgId, role: 'me', content: '', time: Date.now(), kind: 'redpacket', packet: p }]);
-      if (peer.id === me.id) return;
-      window.setTimeout(() => {
-        setMsgs((prev) => {
-          let claimed = false;
-          const next = prev.map((m) => {
-            if (m.id !== msgId || !m.packet) return m;
-            const claims = m.packet.claims ?? [];
-            const count = m.packet.count ?? 1;
-            if (claims.length >= count) return m;
-            const remaining = round2(m.packet.amount - claims.reduce((s, c) => s + c.amount, 0));
-            const amt = m.packet.mode === 'lucky' && count > 1 ? Math.max(0.01, round2(Math.random() * remaining)) : remaining;
-            claimed = true;
-            return { ...m, packet: { ...m.packet, claims: [...claims, { name: peer.name, avatar: peer.avatar, amount: round2(amt), ts: Date.now() }] } };
-          });
-          if (!claimed) return prev;
-          const notice: QQMsg = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } };
-          return [...next, notice];
-        });
-      }, 2600);
+  /**
+   * 退还 AI 发来的红包/转账/亲属卡（红包弹窗「退还」、转账收款页「退还」、亲属卡详情「退还」共用）：
+   * 原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应（AI 能感知退还并自然接话）
+   */
+  const refundPeerCard = useCallback(
+    (m: QQMsg) => {
+      if (m.kind === 'redpacket' && m.packet) {
+        patchPacket(m.id, { status: 'returned' });
+        setMsgs((prev) => [
+          ...prev,
+          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `你退回了${peer.name}的`, accent: '红包' } },
+        ]);
+        setLayer(null);
+        onToast('红包已退还给对方');
+        runAiTurnRef.current?.(
+          null,
+          [],
+          `（系统事件：你发给对方的红包被对方退还了（¥${m.packet.amount}，祝福语"${m.packet.note}"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）`
+        );
+      } else if (m.kind === 'transfer' && m.packet) {
+        patchPacket(m.id, { status: 'returned' });
+        setMsgs((prev) => [
+          ...prev,
+          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'tr', pre: `你退回了${peer.name}的`, accent: '转账' } },
+        ]);
+        setLayer(null);
+        onToast('转账已退还给对方');
+        runAiTurnRef.current?.(
+          null,
+          [],
+          `（系统事件：你发给对方的转账被对方退还了（¥${m.packet.amount}${m.packet.note ? `，备注"${m.packet.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`
+        );
+      } else if (m.kind === 'family' && m.fam) {
+        setMsgs((prev) => prev.map((x) => (x.id === m.id && x.fam ? { ...x, fam: { ...x.fam, rejected: true } } : x)));
+        setMsgs((prev) => [
+          ...prev,
+          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'fam', pre: `你退回了${peer.name}的`, accent: '亲属卡' } },
+        ]);
+        setLayer(null);
+        onToast('亲属卡已退还');
+        runAiTurnRef.current?.(
+          null,
+          [],
+          `（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`
+        );
+      }
     },
-    [peer, me.id]
+    [patchPacket, peer.name, onToast]
   );
 
-  // 发转账消息（卡片即到账凭据，点卡片看交易详情）；对方稍后自动收款 + 聊天里追加一张「已收款」接收卡片（接收方发出的转账卡消息）
+  // 发红包消息（生成 AI 可引用的短 ID）：AI 在回复里用动作标记决定领取/退回/拒收（不再定时自动领取），
+  // 发出后立即触发一轮 AI 回复（红包会进待处理清单，AI 按人设处理）
+  const sendRedPacket = useCallback(
+    (p: MsgPacket) => {
+      const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'redpacket', packet: { ...p, cid: nextCid('rp') } };
+      setMsgs((prev) => [...prev, msg]);
+      if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
+    },
+    [peer.id, me.id]
+  );
+
+  // 发转账消息（生成 AI 可引用的短 ID）：AI 在回复里用动作标记决定收款/退回/拒收，发出后立即触发 AI 回复
   const sendTransfer = useCallback(
     (p: MsgPacket) => {
-      const msgId = uid();
-      setMsgs((prev) => [...prev, { id: msgId, role: 'me', content: '', time: Date.now(), kind: 'transfer', packet: p }]);
-      if (peer.id === me.id) return;
-      window.setTimeout(() => {
-        setMsgs((prev) => {
-          let accepted = false;
-          const next = prev.map((m) => {
-            if (m.id !== msgId || !m.packet || m.packet.received) return m;
-            accepted = true;
-            return { ...m, packet: { ...m.packet, received: true, receivedAt: Date.now() } };
-          });
-          if (!accepted) return prev;
-          // 对方收款后追加一张「已收款」接收卡片（角色为对方，receiptOf=me：详情页显示「XX已收款」）
-          const receipt: QQMsg = {
-            id: uid(),
-            role: 'peer',
-            content: '',
-            time: Date.now(),
-            kind: 'transfer',
-            packet: { type: 'transfer', amount: p.amount, note: p.note, received: true, receivedAt: Date.now(), receiptOf: 'me' },
-          };
-          return [...next, receipt];
-        });
-      }, 2600);
+      const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'transfer', packet: { ...p, cid: nextCid('tr') } };
+      setMsgs((prev) => [...prev, msg]);
+      if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
     },
-    [peer, me.id]
+    [peer.id, me.id]
   );
 
   // 相册选图发送（图片消息，压缩 dataURL，最多 9 张）
@@ -1799,33 +1946,47 @@ function ChatPage({
   };
 
   /** 全局流结束（成功/失败）：finalize 已把最终消息落盘，把落盘后的完整记录并回本地并清理流状态。
-   *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑 */
+   *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑。
+   *  同 id 消息用落盘的 packet/fam 覆盖本地（finalize 里 AI 领取/退回/拒收动作已更新卡片状态） */
   useLayoutEffect(() => {
     if (!stream || stream.status === 'streaming') return;
     void Promise.resolve().then(() => {
       setMsgs((prev) => {
         const saved = loadMsgs(peer.id);
-        // 按 id 合并：本地消息优先（可能有红包/转账等补丁），落盘新增的只会是 AI 回复
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        const merged = prev.map((m) => {
+          const s = savedMap.get(m.id);
+          if (!s) return m;
+          return {
+            ...m,
+            ...(s.packet ? { packet: s.packet } : {}),
+            ...(s.fam ? { fam: s.fam } : {}),
+            ...(s.content && !m.content ? { content: s.content } : {}),
+          };
+        });
+        // 按 id 合并：本地新增的（红包/转账等补丁后的消息）保留，落盘新增的只会是 AI 回复
         const ids = new Set(prev.map((m) => m.id));
-        return [...prev, ...saved.filter((m) => !ids.has(m.id))];
+        return [...merged, ...saved.filter((m) => !ids.has(m.id))];
       });
       clearChatStream(sessionKey);
     });
   }, [stream, sessionKey, peer.id]);
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
-   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
+   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
+   *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息（要一并进上下文与待处理清单）。
+   *  sysEvent：用户退还 AI 的红包/转账/亲属卡后注入的系统事件说明（只进本轮上下文，不落盘），让 AI 人设化地回应退还 */
   const runAiTurn = useCallback(
-    (userMsg: QQMsg | null) => {
+    (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string) => {
     // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）；批次触发（null）同样计一轮互动
     addBondPoints(peer.id, BOND_MSG_POINTS);
-    const base = userMsg ? [...msgs, userMsg] : msgs;
-    // 上下文：卡片消息（红包/转账/亲属卡/位置）content 存了可读摘要，一并进入历史让 AI 知道发过什么；
+    const base = [...msgs, ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
     // 图片消息 content 是 dataURL，不入上下文
     const history = base
       .filter(
         (m) =>
-          (m.kind !== 'image' && (m.content || m.kind === 'sticker') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+          (m.kind !== 'image' && (m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
       )
       .slice(-20)
       .map((m) => ({
@@ -1839,7 +2000,13 @@ function ChatPage({
               : m.stk.sid
                 ? `[表情包:${m.stk.sid}]`
                 : `[发送了表情：${m.stk.meaning || '无描述'}]`
-            : m.content,
+            : m.kind === 'redpacket' && m.packet
+              ? `[红包 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount} "${m.packet.note}"，${cardStateLabel(m)}]`
+              : m.kind === 'transfer' && m.packet
+                ? `[转账 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount}${m.packet.note ? ` "${m.packet.note}"` : ''}，${cardStateLabel(m)}]`
+                : m.kind === 'family' && m.fam
+                  ? `[亲属卡，${cardStateLabel(m)}]`
+                  : m.content,
       }));
 
     const aiId = uid();
@@ -1849,14 +2016,18 @@ function ChatPage({
     if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
-    // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入
+    // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入；
+    // 我发给 AI 的待处理红包/转账 → 注入处理动作规则与待处理清单（AI 用 [领取红包:ID:…] 等标记处理）
     const replyCount = getReplyCount(sessionKey);
     const stickers = loadStickers('qq');
     const system = buildPersonaPrompt(peer, me, ownerName, stickers);
+    const actionRules = buildActionRules(collectPendingCards(base));
+    const systemFull = actionRules.length > 0 ? `${system}\n\n${actionRules.join('\n\n')}` : system;
     const payloadMsgs: ChatPayloadMessage[] = [
-      { role: 'system', content: replyCount > 1 ? `${system}\n\n${buildReplyCountPrompt(replyCount)}` : system },
+      { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
       ...history,
     ];
+    if (sysEvent) payloadMsgs.push({ role: 'user', content: sysEvent });
 
     const started = beginChatStream({
       sessionKey,
@@ -1872,10 +2043,15 @@ function ChatPage({
           ]);
           return;
         }
-        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
-        // 再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
-        // （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
-        const segs = mergeRichSegments(splitReplySegments(content, replyCount > 1));
+        // 1) 先提取处理动作标记（[领取红包:ID:感谢语] 等）：目标是我发的待处理卡片时应用状态流转，
+        //    生成通知行（XX领取了你的红包 / XX退回了你的转账…）+ 把感谢语/理由转成 AI 文字消息；
+        // 2) 剩余正文按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
+        //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
+        //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
+        const { actions, cleaned } = extractRichActions(content);
+        const latest = loadMsgs(peer.id);
+        const applied = actions.length > 0 ? applyAiActions(actions, latest, peer) : { msgs: latest, notices: [] as QQMsg[], notes: [] as QQMsg[] };
+        const segs = mergeRichSegments(splitReplySegments(cleaned, replyCount > 1));
         let t = startedAt;
         const saved: QQMsg[] = [];
         let idx = 0;
@@ -1891,11 +2067,12 @@ function ChatPage({
             t += 600 + Math.floor(Math.random() * 600);
           }
         }
-        // 解析后一条都没有（整段回复为空白）：沿用空回复兑底文案
-        if (saved.length === 0) {
-          saved.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
+        // 动作通知行/感谢语放正文前（先看到「XX领取了你的红包」，再看到感谢的话）；整段空白且有动作时不算空回复
+        const all: QQMsg[] = [...applied.notices, ...applied.notes, ...saved];
+        if (all.length === 0) {
+          all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
-        saveMsgs(peer.id, [...loadMsgs(peer.id), ...saved]);
+        saveMsgs(peer.id, [...applied.msgs, ...all]);
         // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
         addBondPoints(peer.id, BOND_MSG_POINTS);
       },
@@ -1905,6 +2082,8 @@ function ChatPage({
     },
     [msgs, peer, me, apiConfig, ownerName, sessionKey]
   );
+  // 发红包/转账时通过 ref 触发（runAiTurn 定义在 sendRedPacket 之后，见 runAiTurnRef 注释）
+  runAiTurnRef.current = runAiTurn;
 
   const send = useCallback(() => {
     const text = input.trim();
@@ -2155,6 +2334,7 @@ function ChatPage({
         {msgs.map((m, i) => {
           const showTime = i === 0 || m.time - msgs[i - 1].time > 5 * 60_000;
           const mine = m.role === 'me';
+          const rpSettled = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).length > 0 || Boolean(m.packet.status) : false;
           const rpClaimedByMe = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).some((c) => c.name === me.name) : false;
           return (
             <div
@@ -2175,16 +2355,17 @@ function ChatPage({
                 {m.kind === 'redpacket' && m.packet ? (
                   <RedPacketBubble
                     packet={m.packet}
-                    showOpen={!mine && !rpClaimedByMe}
-                    onClick={() => setLayer({ view: !mine && !rpClaimedByMe ? 'rp-open' : 'rp-detail', msgId: m.id })}
+                    showOpen={!mine && !rpSettled && !rpClaimedByMe}
+                    onClick={() => setLayer({ view: !mine && !rpSettled && !rpClaimedByMe ? 'rp-open' : 'rp-detail', msgId: m.id })}
                   />
                 ) : m.kind === 'transfer' && m.packet ? (
                   <TransferBubble
                     packet={m.packet}
+                    mine={mine}
                     received={m.packet.received === true}
                     onClick={() =>
-                      // 对方发来的未收款转账 → 收款页（时钟+待你收款+收款按钮）；其余 → 交易详情
-                      setLayer({ view: !mine && m.packet.received !== true ? 'tr-receive' : 'tr-detail', msgId: m.id })
+                      // 对方发来的未收款且未退还的转账 → 收款页（时钟+待你收款+收款按钮）；其余 → 交易详情
+                      setLayer({ view: !mine && m.packet?.received !== true && !m.packet?.status ? 'tr-receive' : 'tr-detail', msgId: m.id })
                     }
                   />
                 ) : m.kind === 'family' && m.fam ? (
@@ -2410,6 +2591,7 @@ function ChatPage({
                 avatar={peer.avatar}
                 note={m.packet.note}
                 onClose={() => setLayer(null)}
+                onRefund={() => refundPeerCard(m)}
                 onOpen={() => {
                   const claims = m.packet?.claims ?? [];
                   const remaining = round2((m.packet?.amount ?? 0) - claims.reduce((s, c) => s + c.amount, 0));
@@ -2465,8 +2647,8 @@ function ChatPage({
                   setLayer({ view: 'tr-detail', msgId: id });
                 }}
                 onRefund={() => {
-                  setLayer(null);
-                  onToast('已退还给对方（模拟，24小时内到账）');
+                  // 收款页「退还」：原卡标记已退回（变灰）+ 通知行 + AI 人设化回应
+                  refundPeerCard(m);
                 }}
               />
             ) : null;
@@ -2524,7 +2706,16 @@ function ChatPage({
       {layer?.view === 'fam-detail'
         ? (() => {
             const m = msgs.find((x) => x.id === layer.msgId);
-            return m?.fam ? <FamilyDetailPage peer={peer} msg={m} onBack={() => setLayer(null)} onToast={onToast} onClaim={claimFam} /> : null;
+            return m?.fam ? (
+              <FamilyDetailPage
+                peer={peer}
+                msg={m}
+                onBack={() => setLayer(null)}
+                onToast={onToast}
+                onClaim={claimFam}
+                onRefund={m.role !== 'me' ? () => refundPeerCard(m) : undefined}
+              />
+            ) : null;
           })()
         : null}
       {layer?.view === 'location' ? (
@@ -2735,6 +2926,7 @@ function RpCoverPattern() {
 /** 聊天中的红包卡片（对照真机封面：企鹅+QQ字样+祝福语+右侧斜线纹理/圆弧/菱形/企鹅暗纹+底部亮红大弧+開/QQ红包；自己发的点开进详情，对方的先开箱） */
 function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; showOpen: boolean; onClick: () => void }) {
   const claimed = (packet.claims ?? []).length > 0;
+  const settled = claimed || packet.status === 'returned' || packet.status === 'rejected';
   return (
     <button
       type="button"
@@ -2743,10 +2935,10 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
       className="relative block w-[176px] overflow-hidden rounded-[14px] text-left shadow-lg shadow-black/15 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(168deg, #FC8163 0%, #F5455C 55%, #F2394E 100%)',
-        // 领取后卡片颜色变灰（对照真实 QQ：已领取的红包封面褪色）
-        filter: claimed ? 'grayscale(0.62) brightness(0.97)' : undefined,
+        // 领取/退还/拒收后卡片颜色变灰（对照真实 QQ：已领取的红包封面褪色）
+        filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
-      aria-label={`QQ红包 ${packet.note}${claimed ? '（已领取）' : ''}`}
+      aria-label={`QQ红包 ${packet.note}${settled ? '（已处理）' : ''}`}
     >
       {/* 封面纹样 */}
       <RpCoverPattern />
@@ -2770,8 +2962,21 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
   );
 }
 
-/** 聊天中的转账卡片（蓝卡 圈↔/对勾 + ¥金额 + 已收款/已转入好友余额 + 底部「转账」；206px 与微信转账卡同宽；自己也作为「已收款」接收卡片复用） */
-function TransferBubble({ packet, received, onClick }: { packet: MsgPacket; received: boolean; onClick: () => void }) {
+/** 聊天中的转账卡片（蓝卡 圈↔/对勾 + ¥金额 + 状态文案 + 底部「转账」；206px 与微信转账卡同宽；自己也作为「已收款」接收卡片复用）。
+ *  状态文案按角色与收款状态区分：接收完成后才显示「已转入好友余额」，之前是「待对方收款」 */
+function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
+  const status =
+    packet.status === 'returned'
+      ? '已退还'
+      : packet.status === 'rejected'
+        ? '已拒收'
+        : received
+          ? mine
+            ? '已转入好友余额'
+            : '已收款'
+          : mine
+            ? '待对方收款'
+            : '待你收款';
   return (
     <button
       type="button"
@@ -2780,10 +2985,10 @@ function TransferBubble({ packet, received, onClick }: { packet: MsgPacket; rece
       className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(135deg, #29ABF2 0%, #0099FF 100%)',
-        // 收款后卡片颜色变灰（对照真实 QQ：已收款的转账卡褪色）
-        filter: received ? 'grayscale(0.62) brightness(0.97)' : undefined,
+        // 收款/退还/拒收后卡片颜色变灰（对照真实 QQ：已收款的转账卡褪色）
+        filter: received || packet.status ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
-      aria-label={`转账 ${fmtMoney(packet.amount)} 元${received ? '（已收款）' : ''}`}
+      aria-label={`转账 ${fmtMoney(packet.amount)} 元（${status}）`}
     >
       <div className="flex items-center gap-2.5 px-3.5 pb-3 pt-3.5">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-white/85" aria-hidden="true">
@@ -2791,7 +2996,7 @@ function TransferBubble({ packet, received, onClick }: { packet: MsgPacket; rece
         </span>
         <span className="min-w-0">
           <span className="block text-[20px] font-semibold leading-tight text-white">¥{fmtMoney(packet.amount)}</span>
-          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{received ? '已收款' : '已转入好友余额'}</span>
+          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{status}</span>
         </span>
       </div>
       <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">转账</div>
@@ -2801,7 +3006,7 @@ function TransferBubble({ packet, received, onClick }: { packet: MsgPacket; rece
 
 /** 聊天中的亲属卡卡片（金卡 礼物图标 + 标题/状态 + 底部「亲属卡」；AI 赠送 / 领取状态展示） */
 function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: boolean; peerName: string; onClick: () => void }) {
-  const status = fam.claimed ? (mine ? '对方已领取' : '已领取') : mine ? '待对方领取' : '待你领取';
+  const status = fam.rejected ? '已退回' : fam.claimed ? (mine ? '对方已领取' : '已领取') : mine ? '待对方领取' : '待你领取';
   return (
     <button
       type="button"
@@ -2810,10 +3015,10 @@ function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: 
       className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(135deg, #F7D488 0%, #EDB95E 100%)',
-        // 领取后卡片颜色变灰（与微信亲属卡一致）
-        filter: fam.claimed ? 'grayscale(0.62) brightness(0.97)' : undefined,
+        // 领取/退回后卡片颜色变灰（与微信亲属卡一致）
+        filter: fam.claimed || fam.rejected ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
-      aria-label={`亲属卡 每月额度${fam.monthlyLimit}元${fam.claimed ? '（已领取）' : ''}`}
+      aria-label={`亲属卡 每月额度${fam.monthlyLimit}元（${status}）`}
     >
       <div className="flex items-center gap-2.5 px-3.5 pb-3 pt-3.5">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-white/85" aria-hidden="true">
@@ -2830,7 +3035,7 @@ function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: 
 }
 
 /** 聊天系统通知行（居中小图标 + 灰字 + 彩色尾词，如「xx领取了你的红包」） */
-function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr'; pre: string; accent: string }) {
+function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
   return (
     <div className="mb-3 flex justify-center" data-testid="qq-notice-row">
       <span className="flex max-w-[86%] items-center gap-1.5 text-[12.5px] text-black/45 dark:text-white/45">
@@ -2842,7 +3047,7 @@ function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr'; pre: string; ac
           >
             <RpIcon className="h-[11px] w-[11px] text-white" />
           </span>
-        ) : (
+        ) : icon === 'tr' ? (
           <span
             aria-hidden="true"
             className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px]"
@@ -2850,9 +3055,17 @@ function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr'; pre: string; ac
           >
             <ArrowLeftRight className="h-[10px] w-[10px] text-white" strokeWidth={2.6} />
           </span>
+        ) : (
+          <span
+            aria-hidden="true"
+            className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px]"
+            style={{ background: 'linear-gradient(135deg, #F7D488, #EDB95E)' }}
+          >
+            <Gift className="h-[10px] w-[10px] text-white" strokeWidth={2.4} />
+          </span>
         )}
         <span className="truncate">{pre}</span>
-        <span className="shrink-0" style={{ color: icon === 'rp' ? '#F5455C' : '#0099FF' }}>
+        <span className="shrink-0" style={{ color: icon === 'rp' ? '#F5455C' : icon === 'tr' ? '#0099FF' : '#E8912D' }}>
           {accent}
         </span>
       </span>
@@ -3084,7 +3297,7 @@ function TransferCompose({ peer, wallet, cards, onToast, onClose, onSend }: { pe
 }
 
 /** 红包开箱弹窗（对照截图②：近全屏大红卡 + 封面纹样 + 发红包人 + 祝福语 + 大「開」+ 弹窗外关闭） */
-function RedPacketOpenModal({ senderName, avatar, note, onOpen, onClose }: { senderName: string; avatar: string | null; note: string; onOpen: () => void; onClose: () => void }) {
+function RedPacketOpenModal({ senderName, avatar, note, onOpen, onClose, onRefund }: { senderName: string; avatar: string | null; note: string; onOpen: () => void; onClose: () => void; onRefund?: () => void }) {
   return (
     <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 px-7 pb-12" role="dialog" aria-label="打开红包">
       <style>{'@keyframes qqRpModalIn{from{transform:scale(.86);opacity:0}to{transform:scale(1);opacity:1}}'}</style>
@@ -3117,9 +3330,22 @@ function RedPacketOpenModal({ senderName, avatar, note, onOpen, onClose }: { sen
           </div>
         </div>
       </div>
-      <button type="button" aria-label="关闭" data-testid="qq-rp-close" onClick={onClose} className="absolute bottom-9 left-1/2 grid h-11 w-11 -translate-x-1/2 place-items-center rounded-full border-2 border-white/70 text-white/90 active:opacity-60">
-        <X className="h-5 w-5" strokeWidth={2.4} />
-      </button>
+      {/* 卡片下方：退还 + 关闭（退还可把对方发的红包原路退回） */}
+      <div className="absolute bottom-9 left-1/2 flex -translate-x-1/2 items-center gap-4">
+        {onRefund ? (
+          <button
+            type="button"
+            data-testid="qq-rp-refund"
+            onClick={onRefund}
+            className="flex h-11 items-center rounded-full border-2 border-white/70 bg-black/20 px-6 text-[15px] font-medium text-white/90 active:opacity-70"
+          >
+            退还
+          </button>
+        ) : null}
+        <button type="button" aria-label="关闭" data-testid="qq-rp-close" onClick={onClose} className="grid h-11 w-11 place-items-center rounded-full border-2 border-white/70 text-white/90 active:opacity-60">
+          <X className="h-5 w-5" strokeWidth={2.4} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -3173,13 +3399,27 @@ function RedPacketDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; p
             <span className="mt-3 rounded-full bg-[#FBE7B2]/20 px-3.5 py-1.5 text-[14px] text-[#FFE9B8] ring-1 ring-inset ring-[#FBE7B2]/35">收到的红包已存入余额</span>
           ) : mine && claims.length > 0 ? (
             <p className="mt-3 text-[14px] text-[#FFE3C2]/75">好友领取后自动存入其余额</p>
+          ) : p.status === 'returned' ? (
+            <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-refunded">红包已退回，金额已存入钱包余额</p>
+          ) : p.status === 'rejected' ? (
+            <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-rejected">对方拒收了该红包</p>
           ) : null}
         </div>
       </div>
       <div className="relative -mt-10 flex-1 overflow-y-auto px-4 pb-8">
         <div className="rounded-[12px] bg-[#EDEEF0] px-4 py-2.5 dark:bg-white/[0.06]">
           <p className="text-[14px] text-black/45 dark:text-white/45" data-testid="qq-rp-detail-stat">
-            {count}个红包，{claims.length >= count ? '已领完' : claims.length > 0 ? `已领${claims.length}个` : '等待领取'}，共{fmtMoney(claims.length > 0 ? claimedTotal : p.amount)}元
+            {count}个红包，
+            {p.status === 'returned'
+              ? '已退回'
+              : p.status === 'rejected'
+                ? '已拒收'
+                : claims.length >= count
+                  ? '已领完'
+                  : claims.length > 0
+                    ? `已领${claims.length}个`
+                    : '等待领取'}
+            ，共{fmtMoney(claims.length > 0 ? claimedTotal : p.amount)}元
           </p>
         </div>
         <div className="mt-2 overflow-hidden rounded-[14px] bg-white shadow-sm shadow-black/[0.04] dark:bg-[#232529]">
@@ -3360,19 +3600,22 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
   );
 }
 
-/** 亲属卡详情页（AI 赠送 / 状态展示）：金卡 + 关系/每月额度/留言 + 领取按钮（对方发的未领取时） */
+/** 亲属卡详情页（AI 赠送 / 状态展示）：金卡 + 关系/每月额度/留言 + 领取/退还按钮（对方发的未领取时） */
 function FamilyDetailPage({
   peer,
   msg,
   onBack,
   onToast,
   onClaim,
+  onRefund,
 }: {
   peer: ContactRecord;
   msg: QQMsg;
   onBack: () => void;
   onToast: (m: string) => void;
   onClaim: (msgId: string) => void;
+  /** 退还（拒收）对方送的亲属卡（仅对方发的未领取卡片传入） */
+  onRefund?: (msgId: string) => void;
 }) {
   const f = msg.fam;
   if (!f) return null;
@@ -3381,6 +3624,7 @@ function FamilyDetailPage({
   const fmtFull = d
     ? `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日`
     : '';
+  const claimable = !mine && !f.claimed && !f.rejected;
   return (
     <div className="absolute inset-0 z-40 flex flex-col bg-white pt-[54px] dark:bg-[#16171A]">
       <WalletNavHeader title="亲属卡" onBack={onBack} />
@@ -3413,7 +3657,7 @@ function FamilyDetailPage({
           <div className="flex min-h-[52px] items-center justify-between gap-4">
             <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">状态</span>
             <span className="text-[16px] text-[#1F2329] dark:text-white" data-testid="qq-family-detail-status">
-              {f.claimed ? '已领取' : mine ? '待对方领取' : '待你领取'}
+              {f.rejected ? '已退回' : f.claimed ? '已领取' : mine ? '待对方领取' : '待你领取'}
             </span>
           </div>
           {f.claimed && fmtFull && (
@@ -3424,19 +3668,31 @@ function FamilyDetailPage({
           )}
         </div>
 
-        {!mine && !f.claimed && (
-          <button
-            type="button"
-            data-testid="qq-family-detail-claim"
-            onClick={() => {
-              onClaim(msg.id);
-              onToast('已领取亲属卡，对方为你买单（模拟）');
-            }}
-            className="mx-auto mt-6 block h-11 w-[180px] rounded-full text-[16px] font-medium text-white active:brightness-95"
-            style={{ backgroundColor: QQ_BLUE }}
-          >
-            领取
-          </button>
+        {claimable && (
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              data-testid="qq-family-detail-claim"
+              onClick={() => {
+                onClaim(msg.id);
+                onToast('已领取亲属卡，对方为你买单（模拟）');
+              }}
+              className="block h-11 w-[150px] rounded-full text-[16px] font-medium text-white active:brightness-95"
+              style={{ backgroundColor: QQ_BLUE }}
+            >
+              领取
+            </button>
+            {onRefund ? (
+              <button
+                type="button"
+                data-testid="qq-family-detail-refund"
+                onClick={() => onRefund(msg.id)}
+                className="block h-11 w-[150px] rounded-full border border-black/15 bg-white text-[16px] font-medium text-[#1F2329] active:bg-black/[0.04] dark:border-white/15 dark:bg-transparent dark:text-white"
+              >
+                退还
+              </button>
+            ) : null}
+          </div>
         )}
       </div>
     </div>
