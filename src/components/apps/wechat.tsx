@@ -5464,9 +5464,8 @@ function MainScreen({
 }) {
   const [tab, setTab] = useState<Tab>('chats');
   const [chatPeer, setChatPeer] = useState<ContactRecord | null>(null);
+  /** 详情页（联系人详细界面）：从聊天设置信息卡片 / 通讯录进入；返回与朋友圈回退链见渲染分支 */
   const [detail, setDetail] = useState<ContactRecord | null>(null);
-  /** 详情页来源：true = 从聊天设置页信息卡片进入（点「发消息」直接回聊天；返回也回聊天页） */
-  const [detailFromChat, setDetailFromChat] = useState(false);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */
   const [friendMoments, setFriendMoments] = useState<ContactRecord | null>(null);
   const [page, setPage] = useState<Page>('main');
@@ -5751,10 +5750,9 @@ function MainScreen({
     [me.name, reloadContacts, reqs]
   );
 
-  /** 打开好友详情页（fromChat：从聊天设置信息卡片进入） */
-  const openFriendDetail = useCallback((c: ContactRecord, fromChat: boolean) => {
+  /** 打开好友详情页（fromChat 参数仅保留调用点兼容；页面退回逻辑已统一） */
+  const openFriendDetail = useCallback((c: ContactRecord) => {
     setDetail(c);
-    setDetailFromChat(fromChat);
     setPage('friendDetail');
   }, []);
 
@@ -5768,8 +5766,9 @@ function MainScreen({
           setPage('main');
         }}
         onOpenChat={(c) => {
-          // 从聊天进入的详情页：直接回聊天页（page 退回，chatPeer 已是此人）
-          if (detailFromChat) setPage('main');
+          // 详情页发消息：退回 page 并打开聊天（chatPeer 渲染聊天页）。
+          // 从聊天进入的详情页：chatPeer 已是此人，退回 page 即回聊天；从通讯录进入的：直接进聊天。
+          setPage('main');
           setChatPeer(c);
         }}
         onOpenMoments={(c) => {
@@ -5781,26 +5780,15 @@ function MainScreen({
       />
     );
   }
-  if (chatPeer) {
-    return (
-      <ChatPage
-        key={chatPeer.id}
-        me={me}
-        peer={chatPeer}
-        ownerName={ownerName(chatPeer)}
-        otherUnread={chatOtherUnread}
-        onBack={backToList}
-        onOpenFriendDetail={(c) => openFriendDetail(c, true)}
-        onToast={showToast}
-      />
-    );
-  }
+  // 朋友圈三页（自己的朋友圈 / 发布页 / 好友朋友圈）必须渲染在 chat 之前：
+  // 从聊天 → 联系人详情 → 朋友圈进入时 chatPeer 仍保留（返回时还要回聊天），
+  // 若 chat 判断在前会错误地直接渲染聊天页，退出聊天后才看到朋友圈（导航栈错乱）。
   if (page === 'moments') {
     return (
       <MomentsPage
         me={me}
         posts={moments}
-        onBack={() => setPage('main')}
+        onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
         onCompose={() => setPage('compose')}
         onToggleLike={toggleLike}
         onComment={addComment}
@@ -5818,6 +5806,35 @@ function MainScreen({
       />
     );
   }
+  if (page === 'friendMoments' && friendMoments) {
+    return (
+      <MomentsPage
+        me={me}
+        owner={{ name: friendMoments.name, avatar: friendMoments.avatar }}
+        posts={moments.filter((p) => p.authorName === friendMoments.name)}
+        onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
+        onCompose={() => setPage('compose')}
+        onToggleLike={toggleLike}
+        onComment={addComment}
+        onDelete={deleteMoment}
+        onToast={showToast}
+      />
+    );
+  }
+  if (chatPeer) {
+    return (
+      <ChatPage
+        key={chatPeer.id}
+        me={me}
+        peer={chatPeer}
+        ownerName={ownerName(chatPeer)}
+        otherUnread={chatOtherUnread}
+        onBack={backToList}
+        onOpenFriendDetail={(c) => openFriendDetail(c)}
+        onToast={showToast}
+      />
+    );
+  }
   if (page === 'newFriends') {
     return <NewFriendsPage reqs={reqs} onBack={() => setPage('main')} onGoAdd={() => setPage('addFriend')} />;
   }
@@ -5829,21 +5846,6 @@ function MainScreen({
         onBack={() => setPage('main')}
         onAdded={handleFriendAdded}
         onOpenChat={(c) => setChatPeer(c)}
-        onToast={showToast}
-      />
-    );
-  }
-  if (page === 'friendMoments' && friendMoments) {
-    return (
-      <MomentsPage
-        me={me}
-        owner={{ name: friendMoments.name, avatar: friendMoments.avatar }}
-        posts={moments.filter((p) => p.authorName === friendMoments.name)}
-        onBack={() => setPage('friendDetail')}
-        onCompose={() => setPage('compose')}
-        onToggleLike={toggleLike}
-        onComment={addComment}
-        onDelete={deleteMoment}
         onToast={showToast}
       />
     );
@@ -6089,7 +6091,7 @@ function MainScreen({
                 label={me.name}
                 testId="wx-contact-me"
                 onClick={() => {
-                  openFriendDetail(contacts.find((c) => c.id === me.id) ?? meAsContact(me), false);
+                  openFriendDetail(contacts.find((c) => c.id === me.id) ?? meAsContact(me));
                 }}
                 icon={<WxAvatar src={me.avatar} alt={me.name} size={38} />}
               />
@@ -6115,7 +6117,7 @@ function MainScreen({
                           key={c.id}
                           type="button"
                           data-testid={`wx-contact-${c.name}`}
-                          onClick={() => openFriendDetail(c, false)}
+                          onClick={() => openFriendDetail(c)}
                           className="flex w-full items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5"
                         >
                           <WxAvatar src={c.avatar} alt={c.name} size={40} />

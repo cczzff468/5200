@@ -4278,3 +4278,25 @@ Stage Summary:
 - AI 处理动作（领取/收款/收下、退回/拒收）的标记不再携带感谢语/理由，彻底消灭「标记感谢语 + 正文吐槽」两套文案打架的土壤：聊天里出现的每一句人话都来自 AI 的人设正文，卡片状态变化只由事实通知行（XX领取了你的红包等）呈现
 - 旧格式标记（带第三段）仍能正确解析（只取 ID、丢弃多余文字），不会出现残留文字
 - QQ/微信双端动作链路、钱包出入账、幂等状态机、用户侧退还入口均未受影响；QQ 红包既有流程完好
+
+---
+Task ID: P
+Agent: Z.ai Code (main)
+Task: 修复微信导航栈错乱——聊天 → 聊天信息信息卡片 → 联系人详细界面 → 朋友圈，进去的是聊天页、退出聊天才看到朋友圈
+
+Work Log:
+- 根因定位（wechat.tsx WeChatApp 渲染分支优先级）：`if (chatPeer)` 聊天分支排在 `page === 'moments' / 'friendMoments' / 'compose'` 之前。从聊天进入联系人详情时 chatPeer 故意保留（返回要回聊天），此时点「朋友圈」把 page 切成 friendMoments/moments，但 chatPeer 仍在 → 渲染优先命中聊天分支 → 用户看到聊天页；退出聊天（backToList 清 chatPeer）后 page 还是朋友圈 → 才显示朋友圈，与用户描述完全一致
+- 修复：渲染顺序重排为 friendDetail → moments（自己的朋友圈）→ compose（发布页）→ friendMoments（好友朋友圈）→ chatPeer（聊天）→ 其余 page；朋友圈三页的 onBack 改为 `detail ? setPage('friendDetail') : setPage('main')`——从联系人详细进来的回退链恢复为 朋友圈 → 联系人详细 → 聊天；从发现/我 tab 进来的（detail 必为 null）回主列表，行为不变
+- 顺带修复同族潜在 bug：openFriendDetail 的 fromChat 参数与 detailFromChat state 删除；详情页「发消息」onOpenChat 统一 `setPage('main') + setChatPeer(c)`——修复「通讯录 → 联系人详细 → 发消息」点不动（page 停在 friendDetail，聊天分支永远渲染不出来）的旧问题
+- Agent Browser 端到端验证（隔离会话，种子联系人 + 真实微信登录）：
+  ①聊天 → 聊天信息 → 信息卡片（乐乐）→ 联系人详细 → 朋友圈 → 直接显示乐乐的朋友圈（封面+头像+三条动态），不再是聊天页
+  ②朋友圈 → 返回 → 联系人详细 → 返回 → 聊天页（chatPeer 保留链路正确）
+  ③发现 tab → 朋友圈（自己的，带发布相机）→ 返回 → 主列表
+  ④通讯录 → 联系人详细 → 朋友圈 → 返回 → 联系人详细 → 返回 → 通讯录列表
+  ⑤通讯录 → 联系人详细 → 发消息 → 直接进聊天（修复验证）
+  ⑥console 0 错误、dev.log 无应用错误；lint + tsc 0 问题；测试数据仅存在于隔离浏览器会话
+
+Stage Summary:
+- 微信「聊天 → 联系人详细 → 朋友圈」导航栈修复：朋友圈页（自己的/好友的/发布页）现在优先于残留的 chatPeer 渲染，进朋友圈直接显示朋友圈，退出按 联系人详细 → 聊天 原链返回
+- 同族修复：通讯录进入的联系人详细页「发消息」现在能正常进聊天
+- 详情页 fromChat/detailFromChat 冗余状态清理；聊天、回复条数、红包/转账/亲属卡、表情包等既有功能未触碰
