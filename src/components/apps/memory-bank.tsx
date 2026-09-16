@@ -388,12 +388,14 @@ function MemoryDetail({
     [contact.id, rev]
   );
   const name = displayNameOf(contact) || contact.name;
+  /** 联系人真实名字（name 字段，非昵称）：记忆视角统一用它指代 AI，展示层昵称不进记忆 */
+  const realName = contact.name?.trim() || name;
   const apiConfig = useSettings((s) => s.apiConfig);
   /** 机主名字：优先联系人 App「机主(user)」卡片真实名字，无卡片时回退 Apple 账户名 */
   const profileName = useSettings((s) => s.profile.name);
   const owner = ownerName || profileName;
-  /** 双方名字（视角统一）：碎片/总结一律用「机主名字 + 联系人名字」指代，禁「对方/用户/我」 */
-  const memNames = useMemo(() => ({ user: owner, peer: name }), [owner, name]);
+  /** 双方名字（视角统一）：碎片/总结一律用「机主真实名字 + 联系人真实名字」指代（均非昵称），禁「对方/用户/我」 */
+  const memNames = useMemo(() => ({ user: owner, peer: realName }), [owner, realName]);
   // 右上角「立即总结」忙态：碎片页 / 核心页 / 长期页各自独立（互不干扰，同一时间只跑一个）
   const [sumBusy, setSumBusy] = useState<'frag' | 'ltm' | 'long' | null>(null);
 
@@ -536,7 +538,7 @@ function MemoryDetail({
           {tab === 'set' && (
             <SetTab
               contactId={contact.id}
-              contactName={name}
+              contactName={realName}
               ownerName={ownerName}
               refresh={refresh}
               showToast={showToast}
@@ -862,7 +864,7 @@ function SetTab({
   /** 机主名字：优先联系人 App「机主(user)」卡片真实名字，无卡片时回退 Apple 账户名 */
   const profileName = useSettings((s) => s.profile.name);
   const owner = ownerName || profileName;
-  /** 双方名字（视角统一）：总结/修复一律用「机主名字 + 联系人名字」指代 */
+  /** 双方名字（视角统一）：总结/修复一律用「机主真实名字 + 联系人真实名字」指代（均非昵称） */
   const memNames = useMemo(() => ({ user: owner, peer: contactName }), [owner, contactName]);
   const [settings, setSettings] = useState<MemSettings>(() => getMemSettings(contactId));
   const [busy, setBusy] = useState(false);
@@ -1003,7 +1005,7 @@ function SetTab({
                   : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
               }`}
             >
-              {n} 条
+              {n}
             </button>
           ))}
         </div>

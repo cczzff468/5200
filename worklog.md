@@ -5000,3 +5000,23 @@ Stage Summary:
 - 两组频率选项按需求收窄为核心 5/10/15/20/30、长期 3/5/7/10/20，越界存量值自动回落默认 5
 - 「机主名字」权威来源正式改为联系人 App 中 kind='user' 卡片的真实名字（name 字段）：记忆库修复/手动总结/四端自动提取全部一致，Apple 账户名仅作无卡片时的兜底；UI 文案同步更正
 - 检查结论：三层记忆管线（召回顺序/去重/互通/隔离）今日未改动、沿用 AL 审计结论；本次改动经 lint/tsc/浏览器实测无回归
+
+---
+Task ID: AL
+Agent: 主协调者 (Z.ai Code)
+Task: 记忆视角名字来源修正（AI 真实名字非昵称，与机主同源同规则）+ 核心记忆总结频率选项去掉「条」后缀
+
+Work Log:
+- 需求：①AI 角色名字进记忆时用联系人 name 字段（真实名字），非昵称——QQ/微信/信息的展示层 withDisplayNames 会把 name 替换成昵称，昵称污染了提取/总结 prompt 的 peerName；②核心记忆总结频率按钮「5 条/10 条…」去掉「条」，与其他两组频率（10/20/30/40/50、3/5/7/10/20 本就无后缀）统一为纯数字。
+- src/lib/ios/contacts-store.ts：新增 contactRealName(id)——与 ownerRealName() 同源同规则，读联系人原始 name 字段（trim），异常/缺失返回空串由调用方回退。
+- wechat.tsx / qq.tsx：memAfterAiTurn 的 names 由单查 ownerRealName 改为 Promise.all([ownerRealName(), contactRealName(peer.id)])，peer 用 peerReal 优先，displayNameOf/peer.name 仅作联系人被删等极端场景的兜底；注释注明「展示层昵称不进记忆」。
+- chat.tsx（信息）：同改，peer = peerReal || (peer.name ?? peer.title)（注意 || 与 ?? 混用需括号）。
+- phone.tsx（电话）：无需改——联系人列表不经 withDisplayNames，contact.name 本就是真实名字。
+- memory-bank.tsx：档案页新增 realName = contact.name?.trim() || name；memNames.peer 与 SetTab 的 contactName 改传 realName（此前传 displayNameOf 昵称展示名，会污染手动「立即总结/修复视角」的 prompt）；列表/详情的展示名保持昵称不变（仅展示层）。
+- memory-bank.tsx 设置页：核心记忆总结频率按钮文案 {n} 条 → {n}。
+- 验证：bunx tsc --noEmit 0 错误、bun run lint 0 告警、dev.log 无报错。浏览器实测：①记忆库设置页三组频率均纯数字（核心 5/10/15/20/30 默认 5；长期 3/5/7/10/20 默认 5）；②给 c1 设昵称「雅雅」（真实名字仍 小雅）后，记忆库手动「立即总结」触发的 POST /api/memory/extract 请求体捕获为 userName=小晨、peerName=小雅（非雅雅），修复前 peerName 会是昵称；③旧碎片「小晨说阿豪上周帮TA搬家了，小雅说改天请阿豪吃饭」完好；④微信发消息链路正常（AI 回复 403 为沙箱上游地域限制，11:17 起即存在，与本次改动无关）；⑤测试数据已清理（昵称复位 null、测试消息移除）。
+
+Stage Summary:
+- 交付：contacts-store.ts（+contactRealName）、wechat.tsx、qq.tsx、chat.tsx（peer 名改真实名字）、memory-bank.tsx（realName 贯通 + 频率去「条」），共 5 文件。
+- 关键决策：名字来源统一走「联系人原始记录 name 字段」而非展示层（与机主 ownerRealName 同构）；展示昵称仅属 UI 层，任何记忆管道（自动提取/手动总结/视角修复/核心/长期）均不受昵称污染；频率选项三组统一纯数字。
+- 既有链路不受影响：互通开关、角色隔离、核心/长期总结触发、淡化归档、手动四粒度总结均未改动。

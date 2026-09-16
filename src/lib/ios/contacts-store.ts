@@ -78,6 +78,20 @@ export async function ownerRealName(): Promise<string> {
 }
 
 /**
+ * 联系人（AI 角色）的真实名字：记忆视角统一用它指代 AI（取 name 字段，非昵称）。
+ * 与 ownerRealName() 同源同规则——QQ/微信等 App 的展示层会用昵称替换 name（withDisplayNames），
+ * 记忆提取/总结不能被污染；联系人不存在或名字为空返回空串（调用方自行回退）。
+ */
+export async function contactRealName(id: string): Promise<string> {
+  try {
+    const c = await getContact(id);
+    return c?.name?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 新建联系人（行为与旧服务端 POST /api/contacts 一致）：
  * kind/name 校验 → NPC 归属必须存在且非 NPC → 编号留空自动生成 → USER 恒为好友
  */
