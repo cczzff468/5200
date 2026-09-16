@@ -2,8 +2,7 @@
 
 /**
  * 记忆库 App（跨应用记忆互通管理）——「简约水墨」视觉主题：
- * 黑白灰纯色 + 细腻 hairline 描边 + 克制的毛玻璃（顶栏 / Tab 条两处），无渐变。
- * 强调色仅三处：iOS 绿（开关）、红（删除）、App 来源小圆点。
+ * 全灰白单色（无任何彩色/渐变）+ 细腻 hairline 描边 + 克制的毛玻璃（顶栏 / 底部 Tab 条两处）。
  *
  * 功能结构（逻辑与 src/lib/memory.ts 保持一致，本文件只负责呈现）：
  * - 联系人列表（统计总览条 + 每联系人一张档案卡）→ 记忆详情页（三个 Tab）
@@ -25,7 +24,6 @@ import {
   Info,
   Layers,
   Loader2,
-  MessageSquareQuote,
   Pencil,
   Settings2,
   Share2,
@@ -71,8 +69,8 @@ function fmtTime(ts: number): string {
 
 /** 页面底色（微暖中性灰，非冷 iOS 灰） */
 const PAGE_BG = 'bg-[#f4f3f1] dark:bg-[#141312]';
-/** 毛玻璃顶栏（与页面底色同源的半透明） */
-const TOPBAR_GLASS = `${PAGE_BG}/80 backdrop-blur-xl dark:bg-[#141312]/75`;
+/** 毛玻璃顶/底栏（与页面底色同源的半透明） */
+const TOPBAR_GLASS = 'bg-[#f4f3f1]/80 backdrop-blur-xl dark:bg-[#141312]/75';
 
 /** 白卡片：极淡阴影，浮起但不抢眼 */
 const CARD_CLS =
@@ -80,14 +78,6 @@ const CARD_CLS =
 
 /** 选中/强调态：纯黑（暗色反转纯白） */
 const INK = 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900';
-
-/** 来源 App 小圆点色（微信绿 / QQ 暖橙 / 信息 iOS 绿 / 电话灰） */
-const APP_DOT: Record<MemApp, string> = {
-  wx: '#0BC15E',
-  qq: '#E8930C',
-  sms: '#30C46A',
-  phone: '#A2A0A5',
-};
 
 /** 每联系人记忆详情（三 Tab） */
 type MemTab = 'frag' | 'ltm' | 'set';
@@ -252,7 +242,7 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
   );
 }
 
-// ---------------- 记忆详情页（毛玻璃顶栏 + 毛玻璃 Tab 条） ----------------
+// ---------------- 记忆详情页（毛玻璃顶栏 + 底部毛玻璃 Tab 条） ----------------
 
 function MemoryDetail({
   contact,
@@ -289,10 +279,10 @@ function MemoryDetail({
   );
   const name = displayNameOf(contact) || contact.name;
 
-  const tabs: [MemTab, typeof Layers, string, number | null][] = [
-    ['frag', Layers, '记忆碎片', frags.length],
-    ['ltm', Gem, '核心记忆', ltms.length],
-    ['set', Settings2, '设置', null],
+  const tabs: [MemTab, typeof Layers, string][] = [
+    ['frag', Layers, '记忆碎片'],
+    ['ltm', Gem, '核心记忆'],
+    ['set', Settings2, '设置'],
   ];
 
   return (
@@ -315,7 +305,7 @@ function MemoryDetail({
         </div>
       </header>
 
-      <div className="h-full overflow-y-auto overscroll-contain px-4 pb-8 pt-[108px]">
+      <div className="h-full overflow-y-auto overscroll-contain px-4 pb-[108px] pt-[108px]">
         {/* 档案头部：头像 + 统计胶囊 */}
         <div className="flex items-center gap-3">
           <Avatar src={contact.avatar} name={name} size={54} />
@@ -344,45 +334,7 @@ function MemoryDetail({
           </span>
         </div>
 
-        {/* 毛玻璃 Tab 条：悬浮胶囊，选中纯黑 */}
-        <div
-          className="mt-3 grid grid-cols-3 gap-1 rounded-full bg-white/65 p-1 shadow-[0_2px_10px_-4px_rgba(20,18,14,0.12)] ring-1 ring-black/[0.05] backdrop-blur-md dark:bg-[#201f1d]/70 dark:ring-white/[0.08]"
-          role="tablist"
-          aria-label="记忆分类"
-        >
-          {tabs.map(([id, Icon, label, count]) => {
-            const sel = tab === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={sel}
-                data-testid={`mem-tab-${id}`}
-                onClick={() => setTab(id)}
-                className={`flex h-9 items-center justify-center gap-1.5 rounded-full text-[13px] font-medium transition-colors ${
-                  sel ? INK : 'text-black/45 active:text-black/70 dark:text-white/45 dark:active:text-white/70'
-                }`}
-              >
-                <Icon className="h-4 w-4" strokeWidth={sel ? 2.2 : 2} />
-                <span>{label}</span>
-                {count !== null && (
-                  <span
-                    className={`min-w-[17px] rounded-full px-1 text-[10.5px] font-semibold leading-[16px] tabular-nums ${
-                      sel
-                        ? 'bg-white/20 text-white dark:bg-neutral-900/15 dark:text-neutral-900'
-                        : 'bg-black/[0.05] text-black/40 dark:bg-white/[0.08] dark:text-white/40'
-                    }`}
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="pt-3">
+        <div className="pt-4">
           {tab === 'frag' && <FragTab contactId={contact.id} frags={frags} refresh={refresh} showToast={showToast} />}
           {tab === 'ltm' && <LtmTab contactId={contact.id} ltms={ltms} refresh={refresh} showToast={showToast} />}
           {tab === 'set' && (
@@ -395,6 +347,37 @@ function MemoryDetail({
           )}
         </div>
       </div>
+
+      {/* 底部 Tab 条：毛玻璃，内容从其下穿过；仅图标 + 文字，无数字 */}
+      <nav
+        className={`absolute inset-x-0 bottom-0 z-20 border-t border-black/[0.06] pb-[max(env(safe-area-inset-bottom),14px)] pt-1.5 ${TOPBAR_GLASS} dark:border-white/[0.08]`}
+        role="tablist"
+        aria-label="记忆分类"
+      >
+        <div className="grid grid-cols-3">
+          {tabs.map(([id, Icon, label]) => {
+            const sel = tab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={sel}
+                data-testid={`mem-tab-${id}`}
+                onClick={() => setTab(id)}
+                className={`flex flex-col items-center gap-[3px] py-1 transition-colors ${
+                  sel
+                    ? 'text-neutral-900 dark:text-white'
+                    : 'text-black/35 active:text-black/60 dark:text-white/35 dark:active:text-white/60'
+                }`}
+              >
+                <Icon className="h-[22px] w-[22px]" strokeWidth={sel ? 2.2 : 1.8} />
+                <span className="text-[10px] font-medium leading-none">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
@@ -405,7 +388,7 @@ function MemoryDetail({
 function AppBadge({ app }: { app: MemApp }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-black/[0.045] px-1.5 py-[1px] text-[10.5px] font-medium text-black/50 dark:bg-white/[0.07] dark:text-white/50">
-      <i aria-hidden="true" className="h-[7px] w-[7px] rounded-full" style={{ background: APP_DOT[app] }} />
+      <i aria-hidden="true" className="h-[7px] w-[7px] rounded-full bg-neutral-400 dark:bg-neutral-500" />
       {MEM_APP_LABEL[app]}
     </span>
   );
@@ -530,19 +513,9 @@ function LtmTab({
 
 // ---------------- Tab 3：设置 ----------------
 
-/** 设置小节标题（中性图标章） */
-function SetSectionHead({ icon, title }: { icon: React.ReactNode; title: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span
-        aria-hidden="true"
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-black/[0.05] text-black/60 dark:bg-white/[0.08] dark:text-white/60"
-      >
-        {icon}
-      </span>
-      <h3 className="text-[15px] font-semibold">{title}</h3>
-    </div>
-  );
+/** 设置小节标题（纯文字，无图标） */
+function SetSectionHead({ title }: { title: string }) {
+  return <h3 className="text-[15px] font-semibold">{title}</h3>;
 }
 
 function SetTab({
@@ -597,7 +570,7 @@ function SetTab({
     <div className="space-y-3">
       {/* 对话总结频率 */}
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-interval">
-        <SetSectionHead icon={<MessageSquareQuote className="h-4 w-4" />} title="对话总结频率" />
+        <SetSectionHead title="对话总结频率" />
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
           每隔多少轮对话，自动提取一次记忆碎片
         </p>
@@ -623,7 +596,7 @@ function SetTab({
 
       {/* 长期记忆总结频率 */}
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-threshold">
-        <SetSectionHead icon={<Gem className="h-4 w-4" />} title="长期记忆总结频率" />
+        <SetSectionHead title="长期记忆总结频率" />
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
           积累多少条记忆碎片后，自动总结一条核心记忆
         </p>
@@ -651,7 +624,7 @@ function SetTab({
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-share">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <SetSectionHead icon={<Share2 className="h-4 w-4" />} title="跨 App 互通记忆" />
+            <SetSectionHead title="跨 App 互通记忆" />
             <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
               开启后 QQ、微信、信息、电话共享「{contactName}」的记忆；关闭后各 App 记忆互相隔离。不同联系人之间永远隔离。
             </p>
@@ -666,7 +639,7 @@ function SetTab({
 
       {/* 手动总结 */}
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-summary">
-        <SetSectionHead icon={<Sparkles className="h-4 w-4" />} title="手动总结" />
+        <SetSectionHead title="手动总结" />
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
           不用等 N 轮，立刻整理当前对话中的关键信息并一次性存入记忆库（自动区分碎片与长期记忆）。
         </p>
@@ -705,7 +678,7 @@ function SetTab({
 
 // ---------------- 通用小组件 ----------------
 
-/** iOS 风格开关（原生绿 on 态） */
+/** iOS 风格开关（水墨单色：on 纯黑 / 暗色纯白反转） */
 function MemSwitch({ checked, onChange, testid }: { checked: boolean; onChange: (v: boolean) => void; testid: string }) {
   return (
     <button
@@ -715,13 +688,13 @@ function MemSwitch({ checked, onChange, testid }: { checked: boolean; onChange: 
       data-testid={testid}
       onClick={() => onChange(!checked)}
       className={`relative h-[30px] w-[50px] shrink-0 rounded-full transition-colors duration-200 ${
-        checked ? 'bg-[#34C759]' : 'bg-black/15 dark:bg-white/25'
+        checked ? 'bg-neutral-900 dark:bg-white' : 'bg-black/15 dark:bg-white/25'
       }`}
     >
       <span
         aria-hidden="true"
-        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full bg-white shadow transition-all duration-200 ${
-          checked ? 'left-[22px]' : 'left-[2px]'
+        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full shadow transition-all duration-200 ${
+          checked ? 'left-[22px] bg-white dark:bg-neutral-900' : 'left-[2px] bg-white'
         }`}
       />
     </button>
@@ -835,7 +808,7 @@ function MemoryCard({
             <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-black/[0.06] pt-2.5 dark:border-white/[0.08]">
               {confirmDel ? (
                 <>
-                  <span className="mr-auto text-[12.5px] text-red-600 dark:text-red-400">确定删除这条记忆？</span>
+                  <span className="mr-auto text-[12.5px] text-black/55 dark:text-white/55">确定删除这条记忆？</span>
                   <button
                     type="button"
                     onClick={() => setConfirmDel(false)}
@@ -847,7 +820,7 @@ function MemoryCard({
                     type="button"
                     data-testid={`${testid}-del-confirm`}
                     onClick={() => onDelete()}
-                    className="rounded-full bg-red-600 px-3.5 py-1.5 text-[13.5px] font-medium text-white active:brightness-95"
+                    className={`rounded-full px-3.5 py-1.5 text-[13.5px] font-medium active:opacity-80 ${INK}`}
                   >
                     删除
                   </button>
@@ -869,7 +842,7 @@ function MemoryCard({
                     type="button"
                     aria-label="删除记忆"
                     onClick={() => setConfirmDel(true)}
-                    className="flex items-center gap-1 rounded-full bg-red-500/10 px-3 py-1.5 text-[13.5px] font-medium text-red-600 active:bg-red-500/20 dark:text-red-400"
+                    className="flex items-center gap-1 rounded-full bg-black/[0.05] px-3 py-1.5 text-[13.5px] font-medium text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]"
                   >
                     <Trash2 className="h-[13px] w-[13px]" /> 删除
                   </button>
