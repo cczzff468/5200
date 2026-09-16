@@ -125,11 +125,18 @@ function relTime(ts: number): string {
   return `${Math.floor(diff / (30 * DAY))} 个月前`;
 }
 
-/** 时间戳 → datetime-local 输入框值（本地时区） */
+/** 时间戳 → datetime-local 输入框值（北京时间 UTC+8，与注入标签/提取锚点一致，设备时区无关） */
 function toInputValue(ts: number): string {
-  const d = new Date(ts);
+  const d = new Date(ts + 8 * 3_600_000);
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** datetime-local 字符串（北京墙上时间）→ 时间戳；与 toInputValue 互逆 */
+function fromInputValue(s: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s);
+  if (!m) return NaN;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) - 8 * 3_600_000;
 }
 
 /** 编辑保存用：对比原时间与编辑后的时间，只返回变化了的字段（无变化返回 null） */
@@ -1641,8 +1648,8 @@ function MemoryCard({
                 const t = draft.trim();
                 if (t)
                   onSave(t, editWeight, {
-                    eventTime: editEvent ? new Date(editEvent).getTime() : null,
-                    expiresAt: editExpire ? new Date(editExpire).getTime() : null,
+                    eventTime: editEvent ? fromInputValue(editEvent) : null,
+                    expiresAt: editExpire ? fromInputValue(editExpire) : null,
                   });
                 setEditing(false);
               }}

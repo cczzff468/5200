@@ -601,10 +601,10 @@ interface SummarizeApiResult {
 }
 
 /**
- * 模型时间字符串 → 本地时间戳：
- * - "YYYY-MM-DD" → 当地 0 点（仅日期事件，标签不带出无意义的 00:00）
- * - "YYYY-MM-DD HH:mm" → 当地该时刻
- * - 其余（含完整 ISO）→ Date.parse 兜底
+ * 模型时间字符串 → 时间戳（无时区字符串按北京时间解析，与提取锚点/注入标签一致）：
+ * - "YYYY-MM-DD" → 北京时间 0 点（仅日期事件，标签不带出无意义的 00:00）
+ * - "YYYY-MM-DD HH:mm" → 北京时间该时刻
+ * - 其余（含完整 ISO/带偏移）→ Date.parse 兜底
  * 范围距当前 ±MEM_TIME_RANGE_YEARS 年，超出/解析失败返回 null（绝不让幻觉时间入库）。
  */
 function parseMemTime(v: unknown, now: number): number | null {
@@ -614,8 +614,13 @@ function parseMemTime(v: unknown, now: number): number | null {
   let d: Date | null = null;
   const md = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
   const mdt = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::\d{2})?$/.exec(s);
-  if (md) d = new Date(Number(md[1]), Number(md[2]) - 1, Number(md[3]));
-  else if (mdt) d = new Date(Number(mdt[1]), Number(mdt[2]) - 1, Number(mdt[3]), Number(mdt[4]), Number(mdt[5]));
+  // 无时区字符串统一按北京时间（UTC+8）解析 —— 与提取锚点（Asia/Shanghai）、注入标签（bjParts）
+  // 一致，与设备时区无关；带时区/ISO 带偏移的字符串走 Date.parse 原语义
+  if (md) d = new Date(Date.UTC(Number(md[1]), Number(md[2]) - 1, Number(md[3])) - 8 * 3_600_000);
+  else if (mdt)
+    d = new Date(
+      Date.UTC(Number(mdt[1]), Number(mdt[2]) - 1, Number(mdt[3]), Number(mdt[4]), Number(mdt[5])) - 8 * 3_600_000
+    );
   else {
     const t = Date.parse(s);
     if (!Number.isNaN(t)) d = new Date(t);

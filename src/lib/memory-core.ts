@@ -157,22 +157,39 @@ export function isMemExpired(m: { expiresAt?: number }, now: number = Date.now()
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
 /**
+ * 北京时间（UTC+8）下的年月日/时分/星期（与 time-aware 的 toBjTime、提取锚点 Asia/Shanghai
+ * 三处一致，与设备时区无关 —— 设备时区设错也不影响标签正确性）。
+ */
+function bjParts(ms: number): { y: number; mo: number; d: number; h: number; mi: number; w: number } {
+  const u = new Date(ms + 8 * 3_600_000);
+  return {
+    y: u.getUTCFullYear(),
+    mo: u.getUTCMonth() + 1,
+    d: u.getUTCDate(),
+    h: u.getUTCHours(),
+    mi: u.getUTCMinutes(),
+    w: u.getUTCDay(),
+  };
+}
+
+/**
  * 中文时间标签（注入/展示共用）：同年省年份；0点0分视为仅日期（日期型事件时间不带出无意义的 00:00）。
+ * 时区固定北京时间（UTC+8），与注入块头部的当前时间、聊天时间感知块一致。
  * 例：9月20日 / 9月20日 19:30 / 2025年12月31日。
  */
 export function memTimeLabel(ts: number, now: number = Date.now()): string {
-  const d = new Date(ts);
-  const sameYear = new Date(now).getFullYear() === d.getFullYear();
-  const base = `${d.getMonth() + 1}月${d.getDate()}日`;
-  const hm = d.getHours() !== 0 || d.getMinutes() !== 0 ? ` ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
-  return sameYear ? `${base}${hm}` : `${d.getFullYear()}年${base}${hm}`;
+  const b = bjParts(ts);
+  const sameYear = bjParts(now).y === b.y;
+  const base = `${b.mo}月${b.d}日`;
+  const hm = b.h !== 0 || b.mi !== 0 ? ` ${String(b.h).padStart(2, '0')}:${String(b.mi).padStart(2, '0')}` : '';
+  return sameYear ? `${base}${hm}` : `${b.y}年${base}${hm}`;
 }
 
-/** 当前时间标签（注入记忆块头部，供 AI 对比记忆新旧）：2026年9月16日 星期三 14:32 */
+/** 当前时间标签（注入记忆块头部，供 AI 对比记忆新旧）：2026年9月17日 星期四 07:40（北京时间） */
 export function memNowLabel(now: number = Date.now()): string {
-  const d = new Date(now);
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 星期${WEEKDAYS[d.getDay()]} ${hm}`;
+  const b = bjParts(now);
+  const hm = `${String(b.h).padStart(2, '0')}:${String(b.mi).padStart(2, '0')}`;
+  return `${b.y}年${b.mo}月${b.d}日 星期${WEEKDAYS[b.w]} ${hm}`;
 }
 
 /** 记忆提取/总结时双方名字（视角统一：一律用真实名字指代，禁用「对方/用户/我」） */
