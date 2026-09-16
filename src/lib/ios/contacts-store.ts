@@ -64,6 +64,20 @@ export async function getContact(id: string): Promise<ContactRecord | null> {
 }
 
 /**
+ * 机主（kind='user' 联系人）的真实名字：记忆视角统一用它指代用户（取 name 字段，非昵称）。
+ * 记忆文本一律用「机主真实名字 + 联系人名字」指代双方；无 user 联系人或名字为空返回空串
+ * （调用方自行回退，如微信/QQ 账号名、Apple 账户名）。
+ */
+export async function ownerRealName(): Promise<string> {
+  try {
+    const me = (await listContacts()).find((c) => c.kind === 'user');
+    return me?.name?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 新建联系人（行为与旧服务端 POST /api/contacts 一致）：
  * kind/name 校验 → NPC 归属必须存在且非 NPC → 编号留空自动生成 → USER 恒为好友
  */

@@ -41,7 +41,7 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
-import { createContact, deleteContact as deleteContactLocal, listContacts, updateContact } from '@/lib/ios/contacts-store';
+import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -619,18 +619,22 @@ function CallScreen({
           ''
         );
         turns.push({ role: 'peer', text: reply });
-        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        memAfterAiTurn(
-          contact.id,
-          'phone',
-          apiConfig,
-          () => turns,
-          () => {
-            const last = historyBefore[historyBefore.length - 1];
-            return last ? String(last.id) : undefined;
-          },
-          { user: profileName, peer: contact.name }
-        );
+        // names：双方真实名字（机主名取联系人 App「机主」卡片，回退 Apple 账户名），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+        void ownerRealName()
+          .catch(() => '')
+          .then((owner) =>
+            memAfterAiTurn(
+              contact.id,
+              'phone',
+              apiConfig,
+              () => turns,
+              () => {
+                const last = historyBefore[historyBefore.length - 1];
+                return last ? String(last.id) : undefined;
+              },
+              { user: owner || profileName, peer: contact.name }
+            )
+          );
       };
       try {
         // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡；需要全部联系人现场查一次，失败回退无注入）

@@ -17,8 +17,8 @@
  *   被长期记忆收编的核心标记「已入长期」沉底（不再参与总结与召回）
  * - Tab3 长期记忆：K 条核心记忆自动总结出的最稳定画像（层级顶层），支持查看/编辑/删除；
  *   右上角「立即总结」仅把待总结核心凝结为长期记忆（不等阈值）
- * - Tab4 设置：提取频率（10/20/30/40/50 轮）、核心记忆总结频率（3/5/7/10 条）、
- *   长期记忆总结频率（1/3/5/7/10/15/20 条）、失忆程度（快/中/慢/从不）、
+ * - Tab4 设置：提取频率（10/20/30/40/50 轮）、核心记忆总结频率（5/10/15/20/30 条）、
+ *   长期记忆总结频率（3/5/7/10/20 条）、失忆程度（快/中/慢/从不）、
  *   跨 App 互通开关（默认开）、「立即总结」按所选粒度手动执行（碎片/碎片→核心/核心→长期/全部）、
  *   「修复旧记忆视角」（旧版「对方/用户」代称→真实名字）、「整理重复记忆」（相似记忆去重合并）、
  *   「召回预览」（长期→核心→碎片注入顺序预览）；本页全部按钮为长方形（圆角矩形）
@@ -147,16 +147,22 @@ export default function MemoryBankApp() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [toast, showToast] = useLocalToast();
+  /** 机主真实名字（联系人 App 中 kind='user' 卡片的 name）：记忆视角统一用它指代用户 */
+  const [ownerName, setOwnerName] = useState('');
 
-  // 首次加载联系人（排除 user=机主本人）
-  useEffect(() => {
-    void listContacts()
+  // 加载联系人（排除 user=机主本人，不给自己记记忆；另取机主卡片真实名字供视角统一用）
+  const reload = useCallback(() => {
+    return listContacts()
       .then((list) => {
         setContacts(visibleMemContacts(list));
-        setLoaded(true);
+        setOwnerName(list.find((c) => c.kind === 'user')?.name?.trim() ?? '');
       })
-      .catch(() => setLoaded(true));
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    reload().finally(() => setLoaded(true));
+  }, [reload]);
 
   const active = useMemo(() => contacts.find((c) => c.id === activeId) ?? null, [contacts, activeId]);
 
@@ -170,17 +176,18 @@ export default function MemoryBankApp() {
   const handleDeleteContactGone = useCallback(() => {
     // 联系人被删（其它端删除联系人会级联清记忆）：详情页自动退回列表
     setActiveId(null);
-    void listContacts().then(visibleMemContacts).then(setContacts).catch(() => undefined);
-  }, []);
+    void reload();
+  }, [reload]);
 
   return (
     <IOSScreen className={`${PAGE_BG}! text-neutral-900 dark:text-neutral-100`}>
       {active ? (
         <MemoryDetail
           contact={active}
+          ownerName={ownerName}
           onBack={() => {
             setActiveId(null);
-            void listContacts().then(visibleMemContacts).then(setContacts).catch(() => undefined);
+            void reload();
           }}
           onContactGone={handleDeleteContactGone}
           showToast={showToast}
@@ -346,11 +353,13 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
 
 function MemoryDetail({
   contact,
+  ownerName,
   onBack,
   onContactGone,
   showToast,
 }: {
   contact: ContactRecord;
+  ownerName: string;
   onBack: () => void;
   onContactGone: () => void;
   showToast: (m: string) => void;
@@ -380,10 +389,11 @@ function MemoryDetail({
   );
   const name = displayNameOf(contact) || contact.name;
   const apiConfig = useSettings((s) => s.apiConfig);
-  /** 机主名字（手动总结/修复视角用：记忆文本一律用真实名字指代用户） */
+  /** 机主名字：优先联系人 App「机主(user)」卡片真实名字，无卡片时回退 Apple 账户名 */
   const profileName = useSettings((s) => s.profile.name);
+  const owner = ownerName || profileName;
   /** 双方名字（视角统一）：碎片/总结一律用「机主名字 + 联系人名字」指代，禁「对方/用户/我」 */
-  const memNames = useMemo(() => ({ user: profileName, peer: name }), [profileName, name]);
+  const memNames = useMemo(() => ({ user: owner, peer: name }), [owner, name]);
   // 右上角「立即总结」忙态：碎片页 / 核心页 / 长期页各自独立（互不干扰，同一时间只跑一个）
   const [sumBusy, setSumBusy] = useState<'frag' | 'ltm' | 'long' | null>(null);
 
@@ -527,6 +537,7 @@ function MemoryDetail({
             <SetTab
               contactId={contact.id}
               contactName={name}
+              ownerName={ownerName}
               refresh={refresh}
               showToast={showToast}
             />
@@ -837,19 +848,22 @@ function SetSectionHead({ title }: { title: string }) {
 function SetTab({
   contactId,
   contactName,
+  ownerName,
   refresh,
   showToast,
 }: {
   contactId: string;
   contactName: string;
+  ownerName: string;
   refresh: () => void;
   showToast: (m: string) => void;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
-  /** 机主名字（手动总结/修复视角用：记忆文本一律用真实名字指代用户） */
+  /** 机主名字：优先联系人 App「机主(user)」卡片真实名字，无卡片时回退 Apple 账户名 */
   const profileName = useSettings((s) => s.profile.name);
+  const owner = ownerName || profileName;
   /** 双方名字（视角统一）：总结/修复一律用「机主名字 + 联系人名字」指代 */
-  const memNames = useMemo(() => ({ user: profileName, peer: contactName }), [profileName, contactName]);
+  const memNames = useMemo(() => ({ user: owner, peer: contactName }), [owner, contactName]);
   const [settings, setSettings] = useState<MemSettings>(() => getMemSettings(contactId));
   const [busy, setBusy] = useState(false);
   const [dedupeBusy, setDedupeBusy] = useState(false);
@@ -895,7 +909,7 @@ function SetTab({
       showToast(
         total > 0
           ? `修复完成：${r.frags} 条碎片、${r.cores} 条核心、${r.longs} 条长期`
-          : '没有发现需要修复的旧代称（先在设置 › Apple 账户填写名字，修复效果更完整）'
+          : '没有发现需要修复的旧代称（在联系人 App 填写机主卡片的名字，修复效果更完整）'
       );
     }, 350);
   };
@@ -975,7 +989,7 @@ function SetTab({
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
           积累多少条记忆碎片后，自动总结一条核心记忆
         </p>
-        <div className="mt-3 grid grid-cols-4 gap-1.5">
+        <div className="mt-3 grid grid-cols-5 gap-1.5">
           {MEM_THRESHOLD_OPTIONS.map((n) => (
             <button
               key={n}
@@ -1002,7 +1016,7 @@ function SetTab({
           积累多少条（未归档的）核心记忆后，自动总结一条长期记忆；
           总结后参与的核心记忆标记为「已入长期」，不再重复参与总结
         </p>
-        <div className="mt-3 grid grid-cols-7 gap-1">
+        <div className="mt-3 grid grid-cols-5 gap-1.5">
           {MEM_LONG_OPTIONS.map((n) => (
             <button
               key={n}
@@ -1117,7 +1131,7 @@ function SetTab({
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
           旧版本提取的记忆可能混用「对方 / 用户」代称，导致谁对谁分不清；
           一键把它们替换为真实名字（「对方」→ {contactName || '角色名字'}，
-          「用户」→ 机主名字，需在设置 › Apple 账户填写）。
+          「用户」→ 机主真实名字，取联系人 App 中「机主」卡片的名字，而非 Apple 账户名）。
         </p>
         <button
           type="button"

@@ -4975,3 +4975,28 @@ Stage Summary:
 - 视角统一从根因修复：提取与总结两层提示词都锁定「真实名字对」，并经 curl 与浏览器拦截双重实测；旧数据可一键修复（含同义反复清理）
 - 无破坏性变更：memRecallBlock 签名不变、MemConvoTurn 不变、聊天/回复条数/流式/时间感知 untouched；mem-ltm 旧键沿用零迁移
 - 遗留观察（非缺陷）：extract 模型偶发把「小晨明天」合并成「小明天」（名字/日期边界 typo，属模型层噪声，相似合并机制可吸收）；/api/chat 502 为用户配置的 api.openai.com 上游地域封锁（403），与本次改动无关
+
+---
+Task ID: AN
+Agent: Z.ai Code (main)
+Task: 核心记忆总结频率改 5/10/15/20/30、长期记忆总结频率改 3/5/7/10/20；机主名字来源从 Apple 账户名改为联系人 user 卡片真实名字；全链路检查
+
+Work Log:
+- memory-core.ts：MemSettings.threshold 类型与 MEM_THRESHOLD_OPTIONS 改为 5|10|15|20|30；longThreshold 与 MEM_LONG_OPTIONS 改为 3|5|7|10|20（默认均 5，仍在集合内）；getMemSettings 既有越界兜底自动迁移旧存量值（3/7→5、1/15→5），无需数据迁移
+- memory-bank.tsx：两个频率栅格改 grid-cols-5；修复提示与 Toast 文案不再指向「设置›Apple 账户」，改为「联系人 App 机主卡片」；MemoryBankApp 新增 ownerName 状态（listContacts 里取 kind='user' 卡片 name 字段——真实名字非昵称），reload/onBack/联系人被删三处统一刷新；MemoryDetail/SetTab 接收 ownerName，机主名解析改为 ownerName || profileName（无 user 卡片时回退 Apple 账户名）
+- contacts-store.ts：新增 ownerRealName()——读联系人库 kind='user' 卡片的 name（trim，空/无卡片返回空串），供四端运行时实时解析
+- 四端提取名字源切换（wechat/qq/chat/phone 的 memAfterAiTurn 调用点）：改为 void ownerRealName().catch(()=>'').then(owner => ...{ user: owner || 原来源 })，微信/QQ 回退账号名、信息/电话回退 Apple 账户名——保证四端提取的碎片与记忆库修复用同一个机主名字，不再出现 Apple 名/联系人名混用
+- E2E 实测（agent-browser，含锁屏/翻页手势）：
+  · 选项渲染：核心 5/10/15/20/30、长期 3/5/7/10/20 全部出现，栅格 5 列
+  · 旧值兜底：人工写入 mem-settings:np1 {threshold:3, longThreshold:1} → 打开设置页两栏均回落选中 5；点击 10/20 正确写入 localStorage
+  · 修复名字源反证：把 Apple 账户名改为「苹果名测试」后，np1 测试碎片「用户喜欢熬夜/对方是程序员」→「小晨喜欢熬夜/阿豪是程序员」（用的是联系人真名而非 Apple 名）；同义反复核心「用户叫小晨」被正确剥除删除
+  · 提取请求体：fetch 拦截 /api/memory/extract，userName=「小晨」（联系人名）、peerName=「小雅」，而非当时的 Apple 名
+  · 真实数据修复：小雅种子碎片「用户说阿豪上周帮TA搬家了…」→「小晨说阿豪上周帮TA搬家了…」（editedAt 标记，toast 1 条碎片）
+  · 测试数据已清理（np1 三个键恢复原状、profile.name 恢复「小晨」）；c1 真实记忆仅按用户要求完成视角修复
+  · 四端冒烟：微信（含聊天页输入框）/QQ（登录页，预期）/信息/电话全部正常渲染；dev.log 无错误
+- lint + tsc 全绿
+
+Stage Summary:
+- 两组频率选项按需求收窄为核心 5/10/15/20/30、长期 3/5/7/10/20，越界存量值自动回落默认 5
+- 「机主名字」权威来源正式改为联系人 App 中 kind='user' 卡片的真实名字（name 字段）：记忆库修复/手动总结/四端自动提取全部一致，Apple 账户名仅作无卡片时的兜底；UI 文案同步更正
+- 检查结论：三层记忆管线（召回顺序/去重/互通/隔离）今日未改动、沿用 AL 审计结论；本次改动经 lint/tsc/浏览器实测无回归

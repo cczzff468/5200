@@ -144,7 +144,7 @@ import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLab
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
-import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginQQ, listContacts, ownerRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -2309,15 +2309,19 @@ function ChatPage({
         // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
         addBondPoints(peer.id, BOND_MSG_POINTS);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
-        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        memAfterAiTurn(
-          peer.id,
-          'qq',
-          apiConfig,
-          () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-          () => memLastMsgId(loadMsgs(peer.id)),
-          { user: me.name, peer: displayNameOf(peer) || peer.name }
-        );
+        // names：双方真实名字（机主名取联系人 App「机主」卡片，回退 QQ 账号名），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+        void ownerRealName()
+          .catch(() => '')
+          .then((owner) =>
+            memAfterAiTurn(
+              peer.id,
+              'qq',
+              apiConfig,
+              () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
+              () => memLastMsgId(loadMsgs(peer.id)),
+              { user: owner || me.name, peer: displayNameOf(peer) || peer.name }
+            )
+          );
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

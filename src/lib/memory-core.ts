@@ -86,9 +86,9 @@ export interface MemSettings {
   /** 对话总结频率：每隔多少轮对话自动提取一次记忆碎片 */
   interval: 10 | 20 | 30 | 40 | 50;
   /** 核心记忆总结频率：积累多少个（未消费的）记忆碎片后自动触发核心总结 */
-  threshold: 3 | 5 | 7 | 10;
+  threshold: 5 | 10 | 15 | 20 | 30;
   /** 长期记忆总结频率：积累多少条（未归档的）核心记忆后自动触发长期记忆总结；默认 5 */
-  longThreshold: 1 | 3 | 5 | 7 | 10 | 15 | 20;
+  longThreshold: 3 | 5 | 7 | 10 | 20;
   /** 跨 App 互通记忆（默认开）：开=四端共享，关=各 App 只用自己来源的记忆 */
   share: boolean;
   /** 失忆程度（默认中）：过期记忆先淡化后归档，不再参与召回；从不重要的记忆开始 */
@@ -104,8 +104,8 @@ export const DEFAULT_MEM_SETTINGS: MemSettings = {
 };
 
 export const MEM_INTERVAL_OPTIONS: MemSettings['interval'][] = [10, 20, 30, 40, 50];
-export const MEM_THRESHOLD_OPTIONS: MemSettings['threshold'][] = [3, 5, 7, 10];
-export const MEM_LONG_OPTIONS: MemSettings['longThreshold'][] = [1, 3, 5, 7, 10, 15, 20];
+export const MEM_THRESHOLD_OPTIONS: MemSettings['threshold'][] = [5, 10, 15, 20, 30];
+export const MEM_LONG_OPTIONS: MemSettings['longThreshold'][] = [3, 5, 7, 10, 20];
 
 /** 记忆提取/总结时双方名字（视角统一：一律用真实名字指代，禁用「对方/用户/我」） */
 export interface MemNames {

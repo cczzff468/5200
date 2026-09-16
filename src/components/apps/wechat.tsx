@@ -101,7 +101,7 @@ import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLab
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
-import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, updateContact } from '@/lib/ios/contacts-store';
+import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -3698,15 +3698,19 @@ function ChatPage({
         // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
         if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, all.length);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
-        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        memAfterAiTurn(
-          peer.id,
-          'wx',
-          apiConfig,
-          () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-          () => memLastMsgId(loadMsgs(peer.id)),
-          { user: me.name, peer: displayNameOf(peer) || peer.name }
-        );
+        // names：双方真实名字（机主名取联系人 App「机主」卡片，回退微信账号名），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+        void ownerRealName()
+          .catch(() => '')
+          .then((owner) =>
+            memAfterAiTurn(
+              peer.id,
+              'wx',
+              apiConfig,
+              () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
+              () => memLastMsgId(loadMsgs(peer.id)),
+              { user: owner || me.name, peer: displayNameOf(peer) || peer.name }
+            )
+          );
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

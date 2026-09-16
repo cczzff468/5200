@@ -43,7 +43,7 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
-import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
+import { deleteContact, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -646,16 +646,20 @@ function ChatView({
         });
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
-        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+        // names：双方真实名字（机主名取联系人 App「机主」卡片，回退 Apple 账户名），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
         if (memContactId)
-          memAfterAiTurn(
-            memContactId,
-            'sms',
-            apiConfig,
-            () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
-            () => memLastMsgId(loadMsgs(storageKey) ?? []),
-            { user: profileName, peer: peer.name ?? peer.title }
-          );
+          void ownerRealName()
+            .catch(() => '')
+            .then((owner) =>
+              memAfterAiTurn(
+                memContactId,
+                'sms',
+                apiConfig,
+                () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
+                () => memLastMsgId(loadMsgs(storageKey) ?? []),
+                { user: owner || profileName, peer: peer.name ?? peer.title }
+              )
+            );
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
