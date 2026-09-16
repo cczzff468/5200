@@ -1,8 +1,10 @@
 'use client';
 
 /**
- * 记忆库 App（跨应用记忆互通管理）——「简约水墨」视觉主题：
- * 全灰白单色（无任何彩色/渐变）+ 细腻 hairline 描边 + 克制的毛玻璃（顶栏 / 底部 Tab 条两处）。
+ * 记忆库 App（跨应用记忆互通管理）——「简约水墨 · 档案卡」视觉主题：
+ * 全灰白单色（无任何彩色/渐变）+ hairline 与虚线档案分隔 + 克制毛玻璃（顶栏 / 底部悬浮胶囊 Dock）。
+ * 记忆卡：头部时钟时间（碎片）/ 纯黑徽章（核心）+ 右上角常驻编辑/删除图标 + 虚线分隔 + 底部来源徽章；
+ * 列表页：圆角搜索条 + 统计总览 + 联系人档案卡。
  *
  * 功能结构（逻辑与 src/lib/memory.ts 保持一致，本文件只负责呈现）：
  * - 联系人列表（统计总览条 + 每联系人一张档案卡）→ 记忆详情页（三个 Tab）
@@ -20,11 +22,13 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Gem,
   Info,
   Layers,
   Loader2,
   Pencil,
+  Search,
   Settings2,
   Share2,
   Sparkles,
@@ -86,6 +90,7 @@ export default function MemoryBankApp() {
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const [toast, showToast] = useLocalToast();
 
   // 首次加载联系人
@@ -99,6 +104,13 @@ export default function MemoryBankApp() {
   }, []);
 
   const active = useMemo(() => contacts.find((c) => c.id === activeId) ?? null, [contacts, activeId]);
+
+  // 搜索过滤（按显示名，前端即时过滤，不改数据层）
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter((c) => (displayNameOf(c) || c.name).toLowerCase().includes(q));
+  }, [contacts, query]);
 
   const handleDeleteContactGone = useCallback(() => {
     // 联系人被删（其它端删除联系人会级联清记忆）：详情页自动退回列表
@@ -129,7 +141,26 @@ export default function MemoryBankApp() {
             </div>
           </header>
           <div className="h-full overflow-y-auto overscroll-contain px-4 pb-8 pt-[112px]">
-            <HeroCard contacts={contacts} loaded={loaded} />
+            {/* 圆角搜索条 */}
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3.5 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-black/30 dark:text-white/30"
+              />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                data-testid="mem-search"
+                aria-label="搜索联系人"
+                placeholder="搜索联系人"
+                className="h-10 w-full rounded-full bg-black/[0.045] pl-10 pr-4 text-[15px] outline-none ring-1 ring-transparent transition placeholder:text-black/30 focus:bg-white focus:ring-black/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/30 dark:focus:bg-white/[0.1] dark:focus:ring-white/[0.14]"
+              />
+            </div>
+
+            <div className="mt-2.5">
+              <HeroCard contacts={contacts} loaded={loaded} />
+            </div>
             {!loaded ? (
               <div className="grid place-items-center py-14 text-black/35 dark:text-white/35">
                 <Loader2 className="h-6 w-6 animate-spin" />
@@ -141,9 +172,14 @@ export default function MemoryBankApp() {
                 </span>
                 <p className="text-[14px]">还没有联系人，先去添加一个吧</p>
               </div>
+            ) : shown.length === 0 ? (
+              <div className="grid place-items-center gap-3 py-14 text-center text-black/40 dark:text-white/40">
+                <Search className="h-7 w-7" strokeWidth={1.5} />
+                <p className="text-[14px]">没有找到「{query.trim()}」相关的联系人</p>
+              </div>
             ) : (
               <div className="mt-2.5 space-y-2.5" role="list" aria-label="联系人记忆档案">
-                {contacts.map((c) => (
+                {shown.map((c) => (
                   <ContactCard key={c.id} contact={c} onOpen={() => setActiveId(c.id)} />
                 ))}
               </div>
@@ -213,7 +249,7 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
       role="listitem"
       data-testid={`mem-contact-${contact.id}`}
       onClick={onOpen}
-      className={`flex w-full items-center gap-3 rounded-[18px] p-3 text-left transition-transform active:scale-[0.985] ${CARD_CLS}`}
+      className={`flex w-full items-center gap-3 rounded-[20px] p-3.5 text-left transition-transform active:scale-[0.985] ${CARD_CLS}`}
     >
       <Avatar src={contact.avatar} name={name} size={44} />
       <span className="min-w-0 flex-1">
@@ -242,7 +278,7 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
   );
 }
 
-// ---------------- 记忆详情页（毛玻璃顶栏 + 底部毛玻璃 Tab 条） ----------------
+// ---------------- 记忆详情页（毛玻璃顶栏 + 底部悬浮胶囊 Dock） ----------------
 
 function MemoryDetail({
   contact,
@@ -348,35 +384,33 @@ function MemoryDetail({
         </div>
       </div>
 
-      {/* 底部 Tab 条：毛玻璃，内容从其下穿过；仅图标 + 文字，无数字 */}
+      {/* 底部悬浮胶囊 Dock：毛玻璃 + 选中白底浮起；仅图标 + 文字，无数字 */}
       <nav
-        className={`absolute inset-x-0 bottom-0 z-20 border-t border-black/[0.06] pb-[max(env(safe-area-inset-bottom),14px)] pt-1.5 ${TOPBAR_GLASS} dark:border-white/[0.08]`}
+        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-3 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${TOPBAR_GLASS} dark:ring-white/[0.08]`}
         role="tablist"
         aria-label="记忆分类"
       >
-        <div className="grid grid-cols-3">
-          {tabs.map(([id, Icon, label]) => {
-            const sel = tab === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={sel}
-                data-testid={`mem-tab-${id}`}
-                onClick={() => setTab(id)}
-                className={`flex flex-col items-center gap-[3px] py-1 transition-colors ${
-                  sel
-                    ? 'text-neutral-900 dark:text-white'
-                    : 'text-black/35 active:text-black/60 dark:text-white/35 dark:active:text-white/60'
-                }`}
-              >
-                <Icon className="h-[22px] w-[22px]" strokeWidth={sel ? 2.2 : 1.8} />
-                <span className="text-[10px] font-medium leading-none">{label}</span>
-              </button>
-            );
-          })}
-        </div>
+        {tabs.map(([id, Icon, label]) => {
+          const sel = tab === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={sel}
+              data-testid={`mem-tab-${id}`}
+              onClick={() => setTab(id)}
+              className={`flex flex-col items-center gap-[3px] rounded-[20px] py-1.5 transition-colors ${
+                sel
+                  ? 'bg-white text-neutral-900 shadow-[0_1px_5px_rgba(20,18,14,0.1)] dark:bg-white/[0.14] dark:text-white'
+                  : 'text-black/35 active:text-black/60 dark:text-white/35 dark:active:text-white/60'
+              }`}
+            >
+              <Icon className="h-[20px] w-[20px]" strokeWidth={sel ? 2.1 : 1.8} />
+              <span className="text-[10px] font-medium leading-none">{label}</span>
+            </button>
+          );
+        })}
       </nav>
     </div>
   );
@@ -432,10 +466,15 @@ function FragTab({
           variant="frag"
           consumed={Boolean(f.consumedAt)}
           content={f.content}
+          header={
+            <span className="flex items-center gap-1.5 text-[12px] font-medium tabular-nums text-black/40 dark:text-white/40">
+              <Clock className="h-3.5 w-3.5" strokeWidth={1.8} />
+              {fmtTime(f.sourceTime)}
+            </span>
+          }
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
               <AppBadge app={f.app} />
-              <span className="tabular-nums">{fmtTime(f.sourceTime)}</span>
               {f.consumedAt && <ConsumedBadge />}
             </span>
           }
@@ -485,6 +524,12 @@ function LtmTab({
           testid={`mem-ltm-${m.id}`}
           variant="ltm"
           content={m.content}
+          header={
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
+              <Gem aria-hidden="true" className="h-3 w-3" />
+              核心记忆
+            </span>
+          }
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
               <span>来自 {m.fragmentCount} 条碎片</span>
@@ -582,7 +627,7 @@ function SetTab({
               aria-pressed={settings.interval === n}
               data-testid={`mem-interval-${n}`}
               onClick={() => patch({ interval: n })}
-              className={`rounded-[12px] py-2 text-[14px] font-semibold tabular-nums transition-colors ${
+              className={`rounded-full py-2 text-[14px] font-semibold tabular-nums transition-colors ${
                 settings.interval === n
                   ? INK
                   : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
@@ -608,7 +653,7 @@ function SetTab({
               aria-pressed={settings.threshold === n}
               data-testid={`mem-threshold-${n}`}
               onClick={() => patch({ threshold: n })}
-              className={`rounded-[12px] py-2 text-[14px] font-semibold tabular-nums transition-colors ${
+              className={`rounded-full py-2 text-[14px] font-semibold tabular-nums transition-colors ${
                 settings.threshold === n
                   ? INK
                   : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
@@ -716,14 +761,15 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
   );
 }
 
-/** 记忆卡片：点开显示编辑/删除操作。
- * - frag：白卡简约；已入核心的碎片淡显
- * - ltm：白卡 + 纯黑「核心记忆」徽标行，视觉更分明
+/** 记忆卡片（档案风）：头部时间/徽章 + 右上角常驻编辑/删除 + 虚线分隔 + 底部来源徽章。
+ * - frag：头部时钟时间；已入核心的碎片淡显
+ * - ltm：头部纯黑「核心记忆」徽章
  */
 function MemoryCard({
   variant,
   consumed = false,
   content,
+  header,
   meta,
   testid,
   onSave,
@@ -733,12 +779,14 @@ function MemoryCard({
   /** 仅 frag：已被长期记忆总结消费 */
   consumed?: boolean;
   content: string;
+  /** 头部左侧：碎片=时钟时间，核心=黑徽章 */
+  header: React.ReactNode;
+  /** 底部来源徽章 / 元信息 */
   meta: React.ReactNode;
   testid: string;
   onSave: (text: string) => void;
   onDelete: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -746,19 +794,41 @@ function MemoryCard({
   return (
     <div
       data-testid={testid}
-      className={`rounded-[18px] p-3.5 ${CARD_CLS} ${variant === 'frag' && consumed ? 'opacity-[0.75]' : ''}`}
+      className={`rounded-[20px] p-4 ${CARD_CLS} ${variant === 'frag' && consumed ? 'opacity-[0.72]' : ''}`}
     >
-      {/* 核心记忆卡头部徽标行 */}
-      {variant === 'ltm' && !editing && (
-        <div className="mb-1.5 flex items-center gap-1.5">
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
-            <Gem aria-hidden="true" className="h-3 w-3" />
-            核心记忆
-          </span>
-        </div>
-      )}
+      {/* 头部：时间/徽章 + 常驻编辑删除图标 */}
+      <div className="flex min-h-8 items-center justify-between gap-2">
+        {header}
+        {!editing && (
+          <div className="-mr-1.5 flex items-center">
+            <button
+              type="button"
+              aria-label="编辑记忆"
+              onClick={() => {
+                setDraft(content);
+                setEditing(true);
+              }}
+              className="grid h-8 w-8 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
+            >
+              <Pencil className="h-[15px] w-[15px]" strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              aria-label="删除记忆"
+              onClick={() => setConfirmDel(true)}
+              className="grid h-8 w-8 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
+            >
+              <Trash2 className="h-[15px] w-[15px]" strokeWidth={1.8} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 虚线分隔：档案质感 */}
+      <div aria-hidden="true" className="mt-2 border-t border-dashed border-black/[0.12] dark:border-white/[0.14]" />
+
       {editing ? (
-        <div className="space-y-2">
+        <div className="pt-3">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -767,7 +837,7 @@ function MemoryCard({
             aria-label="编辑记忆内容"
             className="w-full resize-none rounded-xl bg-black/[0.04] p-2.5 text-[14.5px] leading-relaxed outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40"
           />
-          <div className="flex justify-end gap-2">
+          <div className="mt-2 flex justify-end gap-2">
             <button
               type="button"
               onClick={() => {
@@ -786,70 +856,43 @@ function MemoryCard({
                 if (t) onSave(t);
                 setEditing(false);
               }}
-              className={`flex items-center gap-1 rounded-full px-3.5 py-1.5 text-[13.5px] font-medium ${INK}`}
+              className={`flex items-center gap-1 rounded-full px-3.5 py-1.5 text-[13.5px] font-medium active:opacity-80 ${INK}`}
             >
               <Check className="h-[14px] w-[14px]" /> 保存
             </button>
           </div>
         </div>
+      ) : confirmDel ? (
+        <div className="flex items-center justify-between gap-2 pt-3">
+          <span className="text-[12.5px] text-black/55 dark:text-white/55">确定删除这条记忆？</span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setConfirmDel(false)}
+              className="rounded-full px-3 py-1.5 text-[13.5px] text-black/50 active:bg-black/5 dark:text-white/50 dark:active:bg-white/10"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              data-testid={`${testid}-del-confirm`}
+              onClick={() => onDelete()}
+              className={`rounded-full px-3.5 py-1.5 text-[13.5px] font-medium active:opacity-80 ${INK}`}
+            >
+              删除
+            </button>
+          </div>
+        </div>
       ) : (
         <>
-          <button type="button" className="block w-full text-left" onClick={() => setOpen((v) => !v)}>
-            <p
-              className={`whitespace-pre-wrap break-words text-[14.5px] leading-relaxed ${
-                variant === 'ltm' ? 'font-medium' : ''
-              }`}
-            >
-              {content}
-            </p>
-            <p className="mt-1.5 text-[11.5px] text-black/40 dark:text-white/40">{meta}</p>
-          </button>
-          {open && (
-            <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-black/[0.06] pt-2.5 dark:border-white/[0.08]">
-              {confirmDel ? (
-                <>
-                  <span className="mr-auto text-[12.5px] text-black/55 dark:text-white/55">确定删除这条记忆？</span>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDel(false)}
-                    className="rounded-full px-3 py-1.5 text-[13.5px] text-black/50 active:bg-black/5 dark:text-white/50 dark:active:bg-white/10"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    data-testid={`${testid}-del-confirm`}
-                    onClick={() => onDelete()}
-                    className={`rounded-full px-3.5 py-1.5 text-[13.5px] font-medium active:opacity-80 ${INK}`}
-                  >
-                    删除
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    aria-label="编辑记忆"
-                    onClick={() => {
-                      setDraft(content);
-                      setEditing(true);
-                    }}
-                    className="flex items-center gap-1 rounded-full bg-black/[0.05] px-3 py-1.5 text-[13.5px] font-medium text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]"
-                  >
-                    <Pencil className="h-[13px] w-[13px]" /> 编辑
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="删除记忆"
-                    onClick={() => setConfirmDel(true)}
-                    className="flex items-center gap-1 rounded-full bg-black/[0.05] px-3 py-1.5 text-[13.5px] font-medium text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]"
-                  >
-                    <Trash2 className="h-[13px] w-[13px]" /> 删除
-                  </button>
-                </>
-              )}
-            </div>
-          )}
+          <p
+            className={`whitespace-pre-wrap break-words pt-3 text-[14.5px] leading-relaxed ${
+              variant === 'ltm' ? 'font-medium' : ''
+            }`}
+          >
+            {content}
+          </p>
+          <div className="mt-2.5 text-[11.5px] text-black/40 dark:text-white/40">{meta}</div>
         </>
       )}
     </div>
