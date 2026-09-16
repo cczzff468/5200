@@ -967,12 +967,19 @@ function wxApplyAiActions(
   return { msgs: next, notices, extras };
 }
 
-/** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL */
+/** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL；
+ *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图） */
 function readImageFile(file: File, max = 720): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('图片读取失败'));
     reader.onload = () => {
+      const result = String(reader.result);
+      // GIF 动图直通：不经 canvas（重绘会只保留第一帧）
+      if (file.type === 'image/gif' || /^data:image\/gif/i.test(result)) {
+        resolve(result);
+        return;
+      }
       const img = new Image();
       img.onerror = () => reject(new Error('图片解析失败'));
       img.onload = () => {
@@ -994,7 +1001,7 @@ function readImageFile(file: File, max = 720): Promise<string> {
           reject(new Error('图片处理失败'));
         }
       };
-      img.src = String(reader.result);
+      img.src = result;
     };
     reader.readAsDataURL(file);
   });
@@ -1396,16 +1403,17 @@ function LocBubble({ name, address, onClick }: { name: string; address: string; 
   );
 }
 
-/** 图片消息气泡（圆角直出，点开全屏预览） */
+/** 图片消息气泡（圆角直出，点开全屏预览）：按原生微信尺寸放大显示。
+ *  img 用固定像素上限（max-w/max-h 均为绝对值，按比例缩放互不冲突；百分比在 flex 包裹层内会循环解析导致尺寸失真） */
 function ImageMsgBubble({ src, onClick }: { src: string; onClick: () => void }) {
   return (
     <button
       type="button"
       data-testid="wx-img-bubble"
       onClick={onClick}
-      className="block max-w-[62%] overflow-hidden rounded-[6px] active:opacity-80"
+      className="block overflow-hidden rounded-[6px] active:opacity-80"
     >
-      <img src={src} alt="图片消息" className="max-h-[260px] w-[186px] object-cover" loading="lazy" />
+      <img src={src} alt="图片消息" className="block max-h-[330px] w-auto min-w-[160px] max-w-[250px] object-cover" loading="lazy" />
     </button>
   );
 }
@@ -1536,7 +1544,7 @@ function StickerMsgBubble({ src, meaning, onClick }: { src: string; meaning: str
       <img
         src={src}
         alt={meaning ? `表情：${meaning}` : '表情'}
-        className="max-h-[130px] w-auto max-w-[150px] rounded-[10px] object-contain"
+        className="max-h-[96px] w-auto max-w-[104px] rounded-[10px] object-contain"
         loading="lazy"
       />
     </button>
@@ -4349,7 +4357,7 @@ function ChatPage({
             ) : m.kind === 'notice' && m.notice ? (
               <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
             ) : (
-            <div className={`flex items-start py-1.5 ${m.kind === 'image' ? 'gap-[3px]' : 'gap-2'} ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex items-start py-1.5 ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
               {selectMode && isSelectable(m) && (
                 /* 多选模式勾选圈（我的消息在行右侧、对方在行左侧；转发勾选模式全部放左侧，对照原生微信） */
                 <span
@@ -5111,7 +5119,7 @@ function ChatPage({
                           src={r.imgSrc}
                           alt={r.stkMeaning ? `表情：${r.stkMeaning}` : '表情'}
                           data-testid="wx-fwd-detail-sticker"
-                          className="mt-0.5 max-h-[110px] w-auto max-w-[150px] rounded-[8px] object-contain"
+                          className="mt-0.5 max-h-[96px] w-auto max-w-[110px] rounded-[8px] object-contain"
                           loading="lazy"
                         />
                       ) : r.kind === 'image' && r.imgSrc ? (

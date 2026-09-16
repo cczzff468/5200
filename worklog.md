@@ -4453,3 +4453,22 @@ Stage Summary:
 - 转发详情页富媒体分级渲染：表情包/图片原图、资金类卡片（红包/转账/亲属卡）与位置只显示文字快照
 - 逐条转发卡片精简为纯内容（无来源标题）；免打扰会话角标按原生微信语义降级为红点
 - 三端（微信/QQ/信息）撤回消息在会话列表预览正确显示「你/对方撤回一条消息」；图片气泡与头像间距收紧至 3px
+---
+Task ID: V
+Agent: Z.ai Code (main)
+Task: 表情包/图片体验四项：①表情包适配 GIF 动图 ②表情包显示小一点 ③发送的图片显示大一点 ④图片与头像距离太远（用户截图：图片小且离头像有大片空隙）
+
+Work Log:
+- GIF 动图直通：微信 readImageFile / QQ compressImageFile 在 FileReader.onload 首行检测 file.type==='image/gif' 或 data:image/gif 前缀 → 直接 resolve 原始 dataURL 不经 canvas（canvas 重绘只保留第一帧变静态 JPEG）；表情上传（240px 档）、聊天图片、朋友圈/说说等全部调用点自动受益；isImageUrl 已接受 data:image/* 无需改；<img> 对 GIF dataURL 原生播放动画
+- 表情包缩小：微信 StickerMsgBubble max-h 130→96 / max-w 150→104；QQ 表情 img 同款；两端合并转发详情页表情 max 110/150→96/110
+- 图片放大 + 贴边修复（核心 bug）：
+  · QQ 图片 img 原为 max-w-[calc(100%-96px)]——百分比 max-width 在 flex 包裹层（div bubblePress 无宽度）内循环解析，实测 480×640 PNG 只显示 137×182 且右缘距头像 153px（正是用户截图「图片小+离头像远」的现象）；改为固定像素 max-w-[240px] max-h-[310px] w-auto → 233×310 比例正确、距头像 3px
+  · 微信 ImageMsgBubble 原 w-[186px] max-h-[260px]（偏小）→ 先试 max-w-[68%] 百分比同样出现 flex 循环（实测 248×224 比例失真）→ 最终固定像素 max-w-[250px] max-h-[330px] min-w-[160px] w-auto → 248×330 比例 0.75 与原图一致
+  · 图片/表情行 gap 统一：两端消息行 gap 对 image|sticker 用 3px、文字 8px（表情与头像也贴紧）
+- 排查记录：QQ 行尾有 {mine && <QqAvatar size={40}/>}（我的消息右侧头像），2861 行 {!mine && <QqAvatar/>} 是对方左侧头像——我的图片/表情贴的是行尾自己的头像
+- Agent Browser 验证：①GIF dataURL 种入表情消息 → src 保留 data:image/gif 原样（不经 canvas），浏览器原生播动画 ✓ ②表情 96×96（原 130+）✓ ③微信 PNG 480×640 → 248×330 ratio 0.75=原图、QQ → 233×310、两者距头像均 3px ✓ ④会话列表 GIF 表情预览仍显示「[表情]」✓ ⑤lint+tsc 0 问题、console 0 错误
+
+Stage Summary:
+- GIF 表情全链路动图保留（上传直通不落 canvas）
+- 表情消息缩小至 96/104px，图片消息放大至约 250×330 且按原图比例显示
+- 根治图片消息 flex 百分比循环解析 bug：所有图片尺寸约束改为固定像素（QQ 修复前 137×182+离头像 153px → 修复后 233×310+3px），图片贴头像问题彻底解决

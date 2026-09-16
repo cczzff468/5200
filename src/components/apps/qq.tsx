@@ -730,7 +730,8 @@ function addBondPoints(contactId: string, n: number): void {
   saveBondStat(contactId, s);
 }
 
-/** 选择说说/背景图片：读文件 → 压缩到最长边 max 的 JPEG dataURL（避免 localStorage 超限，默认 1280，表情用 240） */
+/** 选择说说/背景图片：读文件 → 压缩到最长边 max 的 JPEG dataURL（避免 localStorage 超限，默认 1280，表情用 240）；
+ *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图） */
 function compressImageFile(file: File, max = 1280): Promise<string> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -738,6 +739,11 @@ function compressImageFile(file: File, max = 1280): Promise<string> {
       const raw = typeof reader.result === 'string' ? reader.result : '';
       if (!raw) {
         resolve('');
+        return;
+      }
+      // GIF 动图直通：不经 canvas（重绘会只保留第一帧）
+      if (file.type === 'image/gif' || /^data:image\/gif/i.test(raw)) {
+        resolve(raw);
         return;
       }
       const img = new window.Image();
@@ -2845,7 +2851,7 @@ function ChatPage({
               ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
               ) : (
-              <div className={`mb-3 flex items-end ${m.kind === 'image' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
+              <div className={`mb-3 flex items-end ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
                 {selectMode && isSelectable(m) && !mine && (
                   /* 多选模式勾选圈（对方消息在行左侧） */
                   <span
@@ -2893,8 +2899,9 @@ function ChatPage({
                     <LocationBubble loc={m.loc} onClick={() => onToast('位置详情暂未开放')} />
                   </div>
                 ) : m.kind === 'image' ? (
-                  <div {...bubblePress}>
-                    <img src={m.content} alt="图片消息" className="max-h-[240px] max-w-[calc(100%-96px)] rounded-[18px] object-cover" />
+                  <div {...bubblePress} className="min-w-0">
+                    {/* 固定像素上限（calc 百分比在 flex 包裹层内会循环解析导致图片缩小且不贴边） */}
+                    <img src={m.content} alt="图片消息" className="max-h-[310px] w-auto max-w-[240px] rounded-[18px] object-cover" />
                   </div>
                 ) : m.kind === 'sticker' && m.stk ? (
                   <div {...bubblePress}>
@@ -2908,7 +2915,7 @@ function ChatPage({
                       <img
                         src={m.stk.url}
                         alt={m.stk.meaning ? `表情：${m.stk.meaning}` : '表情'}
-                        className="max-h-[130px] w-auto max-w-[150px] rounded-[14px] object-contain"
+                        className="max-h-[96px] w-auto max-w-[104px] rounded-[14px] object-contain"
                         loading="lazy"
                       />
                     </button>
@@ -3648,7 +3655,7 @@ function ChatPage({
                           src={r.imgSrc}
                           alt={r.stkMeaning ? `表情：${r.stkMeaning}` : '表情'}
                           data-testid="qq-fwd-detail-sticker"
-                          className="mt-0.5 max-h-[110px] w-auto max-w-[150px] rounded-[10px] object-contain"
+                          className="mt-0.5 max-h-[96px] w-auto max-w-[110px] rounded-[10px] object-contain"
                           loading="lazy"
                         />
                       ) : r.kind === 'image' && r.imgSrc ? (
