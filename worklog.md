@@ -5038,3 +5038,21 @@ Stage Summary:
 - 交付：memory-core.ts（时间字段+工具）、/api/memory/extract（时间锚点+判时+矛盾更新+校验）、memory.ts（解析/追加/清扫/召回重构/三处调用）、memory-bank.tsx（徽标+淡显+计数），共 4 文件。
 - 关键决策：①时间判断交给 LLM 但双重校验（服务端 saneTimeStr ±5 年 + 客户端 parseMemTime 本地时区解析），幻觉时间一律置空=永不过期；②矛盾更新优先于相似合并（相似合并会把「不吃辣」并进「爱吃辣」）；③核心/长期不加 expiresAt（默认永不过期），仅带可选 eventTime 供排序标注；④过期归档惰性标记+实时过滤双保险，不依赖定时任务。
 - 不破坏既有功能：三层结构/淡化状态机/权重/互通开关/角色隔离/手动四粒度总结/视角修复/流式聊天均未改动（过滤与排序为增量条件）。
+
+---
+Task ID: AN
+Agent: 主协调者 (Z.ai Code)
+Task: 记忆时间感知·界面层：三层记忆显示事件/过期中文时间 + 手动编辑时间 + 手动设置后不被自动提取覆盖
+
+Work Log:
+- 需求：①记忆库界面每条记忆显示 eventTime/expiresAt 中文可读时间（如「2026年9月17日 过期」）；②允许用户手动修改事件时间/过期时间；③用户手动设置后以此为准则，不被后续提取覆盖。
+- memory-core.ts：MemFragment/MemCore/MemLongTerm 统一增 timeEditedAt?（手动编辑过时间标记，自动流程不得改写）；MemCore/MemLongTerm 增 expiresAt?（此前核心/长期无过期字段，默认永不过期语义不变，现允许用户手动设置）。
+- memory.ts：新增 MemTimePatch 类型（null=清除/恢复永不过期，undefined=不动）与 applyTimePatch 三层通用应用器（写字段+timeEditedAt/editedAt 标记；手动把过期时间改到未来或清除时自动清 expiredAt 救回过期归档碎片）；导出 updateFragmentTime/updateCoreTime/updateLongTermTime。自动流程保护：appendFragments 精确重复与相似合并分支——目标未被手动编辑（无 timeEditedAt）时新提取时间保鲜刷新，手动设置过一律保留；memDedupeNow 正本未手动编辑时从副本补齐缺失时间字段，副本被手动编辑过则时间连同标记一并继承（合并体继续受保护）。召回/总结扩展：memRecallBlock 与 memRecallPreview 的长期/核心过滤增 !isMemExpired（用户手动设置过期的核心/长期不再注入），pendingCoreCount/summarizeCoresIntoLong/memSummarizeLongNow 排除已过期核心（过期核心不再参与长期总结）。头部设计注释补充手动编辑保护说明。
+- memory-bank.tsx：新增 ManualTimeBadge（「手动」徽标）与 toInputValue/diffTimePatch 辅助；三层记忆卡 meta 行显示「事件 X」（EventTimeBadge）、「· X 过期」（memTimeLabel 中文可读，已过期也显示）、「手动」徽标；核心/长期增过期状态（isMemExpired 实时判断）：ExpiredBadge + dim 淡显 + 沉底排序；MemoryCard 增 time prop 与编辑态时间编辑区——「事件时间」「过期时间」两行 datetime-local 输入（回填现有值）+「清除」按钮 + 提示文案「过期时间留空 = 永不过期；手动设置后以这里为准，自动提取不再改写时间」；onSave 签名扩展第三参时间草稿 {eventTime, expiresAt}（null=清除），三个 Tab 的保存回调经 diffTimePatch 只对变化字段调用 updateXxxTime 落库（内容与时间分两次同步写 localStorage，顺序安全）。
+- 过程修复：①MultiEdit 部分应用导致编辑 API 段重复插入——sed 定位删除重复段；②E2E 发现 memRecallPreview 的 longs 漏加过期过滤（已过期长期仍出现在召回预览）——补上并刷新复测通过；③E2E 中同步连续 click 导致 React 受控组件读到旧闭包值——分开点击（真实用户节奏）验证通过，非产品 bug。
+- 验证：tsc 0 错误、lint 0 告警、dev.log 无报错。浏览器全链路（乐乐 n1 档案）：①碎片 f2 编辑设事件 2026-09-26T09:00/过期 2026-10-06T23:59 → 保存后 UI 显示「事件 9月26日 09:00」「手动」「· 10月6日 23:59 过期」，localStorage eventTime/expiresAt/timeEditedAt 正确落库；②保护实测：注入相似碎片（带不同自动时间、无手动标记）→ 设置页「整理重复记忆」→ 合并后 f2 时间保持用户手动值（1790413200000）未被自动时间（1790500000000）覆盖，timeEditedAt 保留；③长期记忆设过期 2026-09-10（过去）→ UI 显示「已过期」+ 淡显 0.55 + 沉底 +「事件 9月1日 10:00」「· 9月10日 过期」，召回预览不再出现该条；④「清除」按钮：编辑态回填现有时间、点清除+保存后 eventTime/expiresAt 字段删除、timeEditedAt 语义保留（手动清除也是编辑，防未来自动写入）；⑤测试数据全部还原（f2 内容/字段复原、长期字段复原、测试碎片已被合并消除）。
+
+Stage Summary:
+- 交付：memory-core.ts（timeEditedAt + 核心/长期 expiresAt）、memory.ts（MemTimePatch + updateXxxTime + 三层手动保护 + 召回/总结过期过滤补全）、memory-bank.tsx（三层时间显示 + 手动徽章 + 编辑态时间编辑/清除），共 3 文件。
+- 关键决策：①timeEditedAt 单标记保护全部时间字段（用户改任一时间即整体受保护），手动清除同样保留标记（清除也是一种设置）；②核心/长期补 expiresAt 字段而非只读展示——「默认永不过期」语义不变，用户可显式设置，召回/预览/长期总结全链路尊重手动过期；③UI 时间编辑用 datetime-local（00:00 值与 memTimeLabel「0点=纯日期」约定天然契合）；④内容与时间分开落库（复用既有 updateXxx 与新增 updateXxxTime），避免重写既有编辑函数签名。
+- 不破坏既有功能：三层结构/淡化状态机/权重/互通/隔离/手动总结/视角修复/流式聊天均未改动；过期过滤为增量条件，时间感知核心（AM）行为不变。

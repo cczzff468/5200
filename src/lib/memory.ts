@@ -30,6 +30,8 @@
  *   空=永不过期）；提取时由模型按当前时间锚点判断（服务端校验 ±5 年防幻觉）；注入时头部带当前
  *   时间、层内按有效时间从新到旧、每条带时间标签，并提示优先参考更近的记忆；过期碎片自动归档
  *   （expiredAt）不再召回；新旧矛盾时模型标注 supersedes，旧记忆标记「已更新」不再召回。
+ *   核心/长期默认永不过期，可被用户手动设置过期；用户手动编辑过的时间（timeEditedAt）以用户
+ *   设置为准，自动流程（提取合并/去重/总结）一律不得覆盖。
  * - 【来源追溯】每条碎片记录来源 App / 来源时间 / 来源消息 ID，回答「你怎么知道的」。
  * - 提取/总结调用 /api/memory/extract 与 /api/memory/summarize（用户 API 配置优先，
  *   服务端 SDK 兜底）；自动提取失败静默（下一窗口重试），手动「立即总结」失败给提示；
@@ -283,12 +285,76 @@ function existingForConflict(contactId: string): { id: string; content: string }
     .map((f) => ({ id: f.id, content: f.content }));
 }
 
-/** 未被长期记忆收编（未归档）的核心记忆数（长期总结触发判断用） */
+/** 未被长期记忆收编且未过期的核心记忆数（长期总结触发判断用；手动设过期的核心不再参与总结） */
 export function pendingCoreCount(contactId: string): number {
-  return readCores(contactId).filter((m) => !m.archivedAt).length;
+  const now = Date.now();
+  return readCores(contactId).filter((m) => !m.archivedAt && !isMemExpired(m, now)).length;
 }
 
 // ---------------- 编辑/删除/回忆（查看=列表，编辑=改内容与权重，删除=单条移除） ----------------
+
+/**
+ * 手动时间编辑入参（时间感知：用户在记忆库手动修改事件/过期时间）：
+ * - eventTime/expiresAt 传 null 表示清除（事件时间清空 / 恢复永不过期），传时间戳表示设置；
+ * - undefined 表示不改动该字段。
+ */
+export interface MemTimePatch {
+  eventTime?: number | null;
+  expiresAt?: number | null;
+}
+
+/**
+ * 三层通用：应用手动时间补丁。被手动编辑过的记忆会带上 timeEditedAt 标记，
+ * 此后自动流程（提取合并/去重/总结）一律以用户设置为准，不得改写其 eventTime/expiresAt。
+ */
+function applyTimePatch<
+  T extends { eventTime?: number; expiresAt?: number; expiredAt?: number; timeEditedAt?: number; editedAt?: number }
+>(rec: T, patch: MemTimePatch, now: number): T {
+  const next = { ...rec };
+  if (patch.eventTime !== undefined) {
+    if (patch.eventTime == null) delete next.eventTime;
+    else if (Number.isFinite(patch.eventTime)) next.eventTime = patch.eventTime;
+  }
+  if (patch.expiresAt !== undefined) {
+    if (patch.expiresAt == null) delete next.expiresAt;
+    else if (Number.isFinite(patch.expiresAt)) next.expiresAt = patch.expiresAt;
+  }
+  next.timeEditedAt = now;
+  next.editedAt = now;
+  // 手动把过期时间改到未来或清除 → 救回已过期归档的碎片（用户意图明确：重新有效）
+  if (next.expiresAt == null || next.expiresAt > now) delete next.expiredAt;
+  return next;
+}
+
+/** 手动修改碎片的事件/过期时间（设置 timeEditedAt，自动流程不再覆盖） */
+export function updateFragmentTime(contactId: string, id: string, patch: MemTimePatch): boolean {
+  const list = readFragments(contactId);
+  const idx = list.findIndex((f) => f.id === id);
+  if (idx < 0) return false;
+  list[idx] = applyTimePatch(list[idx], patch, Date.now());
+  writeJSON(fragKey(contactId), list);
+  return true;
+}
+
+/** 手动修改核心记忆的事件/过期时间（默认永不过期，设置后同样受保护） */
+export function updateCoreTime(contactId: string, id: string, patch: MemTimePatch): boolean {
+  const list = readCores(contactId);
+  const idx = list.findIndex((m) => m.id === id);
+  if (idx < 0) return false;
+  list[idx] = applyTimePatch(list[idx], patch, Date.now());
+  writeJSON(coreKey(contactId), list);
+  return true;
+}
+
+/** 手动修改长期记忆的事件/过期时间（默认永不过期，设置后同样受保护） */
+export function updateLongTermTime(contactId: string, id: string, patch: MemTimePatch): boolean {
+  const list = readLongTerm(contactId);
+  const idx = list.findIndex((m) => m.id === id);
+  if (idx < 0) return false;
+  list[idx] = applyTimePatch(list[idx], patch, Date.now());
+  writeJSON(longKey(contactId), list);
+  return true;
+}
 
 export function updateFragment(contactId: string, id: string, content: string, weight?: MemWeight): boolean {
   const list = readFragments(contactId);
@@ -418,15 +484,16 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
   memSweepExpiry(contactId);
   const { share, forget } = getMemSettings(contactId);
   const now = Date.now();
-  // 长期记忆（顶层画像）：全量注入（安全上限 8 条防失控）
+  // 长期记忆（顶层画像）：全量注入（安全上限 8 条防失控）；用户手动设置过期的长期不再注入
   const longs = listLongTerm(contactId)
-    .filter((m) => share || m.apps.includes(app))
+    .filter((m) => !isMemExpired(m, now) && (share || m.apps.includes(app)))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 8);
-  // 核心记忆：全量注入（安全上限 12 条）；已被长期收编的不再注入（由长期记忆代表）
+  // 核心记忆：全量注入（安全上限 12 条）；已被长期收编的不再注入（由长期记忆代表）；
+  // 用户手动设置过期的核心不再注入（默认永不过期不受影响）
   const cores = listCores(contactId)
-    .filter((m) => !m.archivedAt && (share || m.apps.includes(app)))
+    .filter((m) => !m.archivedAt && !isMemExpired(m, now) && (share || m.apps.includes(app)))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 12);
@@ -489,12 +556,13 @@ export function memRecallPreview(contactId: string): { longs: MemLongTerm[]; cor
   const { forget } = getMemSettings(contactId);
   const now = Date.now();
   const longs = listLongTerm(contactId)
+    .filter((m) => !isMemExpired(m, now))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, '') }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 3)
     .map((x) => x.m);
   const cores = listCores(contactId)
-    .filter((m) => !m.archivedAt)
+    .filter((m) => !m.archivedAt && !isMemExpired(m, now))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, '') }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 3)
@@ -670,6 +738,12 @@ function appendFragments(
         hit.reinforcedAt = now;
         hit.reinforceCount = (hit.reinforceCount ?? 0) + 1;
         hit.weight = higherWeight(hit.weight, item.weight);
+        // 时间感知：未手动编辑过的记忆，重复提及且本次提取带新时间时刷新（事件时间保鲜）；
+        // 用户手动设置过（timeEditedAt）的一律以用户为准，绝不覆盖
+        if (!hit.timeEditedAt) {
+          if (item.eventTime != null) hit.eventTime = item.eventTime;
+          if (item.expiresAt != null) hit.expiresAt = item.expiresAt;
+        }
         merged++;
         continue;
       }
@@ -685,6 +759,11 @@ function appendFragments(
       simHit.reinforcedAt = now;
       simHit.reinforceCount = (simHit.reinforceCount ?? 0) + 1;
       simHit.weight = higherWeight(simHit.weight, item.weight);
+      // 时间感知（与精确重复同规则）：未手动编辑过 → 新时间保鲜；手动设置过 → 用户优先不覆盖
+      if (!simHit.timeEditedAt) {
+        if (item.eventTime != null) simHit.eventTime = item.eventTime;
+        if (item.expiresAt != null) simHit.expiresAt = item.expiresAt;
+      }
       if (!simHit.sourceMsgId && sourceMsgId) simHit.sourceMsgId = sourceMsgId;
       seen.add(normText(simHit.content));
       merged++;
@@ -747,9 +826,10 @@ async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig,
   return core;
 }
 
-/** 把当前未归档的核心记忆总结为一条长期记忆，并标记来源核心已归档（方案A：不重复总结） */
+/** 把当前未归档且未过期的核心记忆总结为一条长期记忆，并标记来源核心已归档（方案A：不重复总结） */
 async function summarizeCoresIntoLong(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<MemLongTerm> {
-  const pending = readCores(contactId).filter((m) => !m.archivedAt);
+  const now = Date.now();
+  const pending = readCores(contactId).filter((m) => !m.archivedAt && !isMemExpired(m, now));
   const { userName, peerName } = namesOf(names);
   const res = await callMemoryApi<SummarizeApiResult>(
     'summarize',
@@ -962,7 +1042,8 @@ export async function memSummarizeLongNow(contactId: string, apiConfig: ApiConfi
   if (inflight.has(guard)) throw new Error('正在总结中，请稍候');
   inflight.add(guard);
   try {
-    const pending = readCores(contactId).filter((m) => !m.archivedAt);
+    const now = Date.now();
+    const pending = readCores(contactId).filter((m) => !m.archivedAt && !isMemExpired(m, now));
     if (pending.length < 2) throw new Error('待总结的核心记忆不足 2 条，先积累一些碎片吧');
     const long = await summarizeCoresIntoLong(contactId, apiConfig, names);
     return { consumed: long.coreCount };
@@ -997,6 +1078,13 @@ export function memDedupeNow(contactId: string): number {
         const drop = keep === a ? b : a;
         if (drop.content.length > keep.content.length) keep.content = drop.content;
         keep.weight = higherWeight(keep.weight, drop.weight);
+        // 时间感知（手动优先）：正本未被手动编辑时从副本补齐缺失的时间字段；
+        // 副本被手动编辑过则把时间连同标记一并继承（合并体继续受用户设置保护）
+        if (!keep.timeEditedAt) {
+          if (keep.eventTime == null && drop.eventTime != null) keep.eventTime = drop.eventTime;
+          if (keep.expiresAt == null && drop.expiresAt != null) keep.expiresAt = drop.expiresAt;
+          if (drop.timeEditedAt) keep.timeEditedAt = drop.timeEditedAt;
+        }
         keep.reinforceCount = (keep.reinforceCount ?? 0) + 1 + (drop.reinforceCount ?? 0);
         keep.reinforcedAt = Math.max(keep.reinforcedAt ?? 0, drop.reinforcedAt ?? 0);
         keep.sourceMsgId = keep.sourceMsgId ?? drop.sourceMsgId;

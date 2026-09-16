@@ -90,8 +90,11 @@ import {
   saveMemSettings,
   supersededFragmentCount,
   updateCore,
+  updateCoreTime,
   updateFragment,
+  updateFragmentTime,
   updateLongTerm,
+  updateLongTermTime,
   type FadeState,
   type MemApp,
   type MemCore,
@@ -99,6 +102,7 @@ import {
   type MemFragment,
   type MemLongTerm,
   type MemSettings,
+  type MemTimePatch,
   type MemWeight,
 } from '@/lib/memory';
 
@@ -119,6 +123,24 @@ function relTime(ts: number): string {
   if (diff < DAY) return `${Math.floor(diff / HOUR)} 小时前`;
   if (diff < 30 * DAY) return `${Math.floor(diff / DAY)} 天前`;
   return `${Math.floor(diff / (30 * DAY))} 个月前`;
+}
+
+/** 时间戳 → datetime-local 输入框值（本地时区） */
+function toInputValue(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 编辑保存用：对比原时间与编辑后的时间，只返回变化了的字段（无变化返回 null） */
+function diffTimePatch(
+  orig: { eventTime?: number; expiresAt?: number },
+  next: { eventTime: number | null; expiresAt: number | null }
+): MemTimePatch | null {
+  const patch: MemTimePatch = {};
+  if (next.eventTime !== (orig.eventTime ?? null)) patch.eventTime = next.eventTime;
+  if (next.expiresAt !== (orig.expiresAt ?? null)) patch.expiresAt = next.expiresAt;
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 // ---------------- 主题常量（简约水墨：黑白灰 + hairline） ----------------
@@ -655,6 +677,16 @@ function ExpiredBadge() {
   );
 }
 
+/** 手动时间徽标（时间感知：用户手动设置过事件/过期时间，自动提取不再改写） */
+function ManualTimeBadge() {
+  return (
+    <span className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium text-black/45 dark:bg-white/[0.08] dark:text-white/45">
+      <Clock className="h-3 w-3" strokeWidth={2} />
+      手动
+    </span>
+  );
+}
+
 /** 已更新徽标（时间感知冲突处理：被矛盾的新记忆替代，不再召回） */
 function SupersededBadge() {
   return (
@@ -728,14 +760,15 @@ function FragTab({
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
               {f.eventTime != null && <EventTimeBadge ts={f.eventTime} />}
+              {f.timeEditedAt != null && <ManualTimeBadge />}
               <WeightBadge weight={f.weight ?? 'normal'} />
               <AppBadge app={f.app} />
               <FadeBadge st={st} />
               {f.consumedAt && <ConsumedBadge />}
               {expired && <ExpiredBadge />}
               {updated && <SupersededBadge />}
-              {f.expiresAt != null && !expired && (
-                <span className="tabular-nums text-black/40 dark:text-white/40">· {memTimeLabel(f.expiresAt)}到期</span>
+              {f.expiresAt != null && (
+                <span className="tabular-nums text-black/40 dark:text-white/40">· {memTimeLabel(f.expiresAt)} 过期</span>
               )}
               <span aria-hidden="true">·</span>
               <span>{relTime(f.reinforcedAt ?? f.sourceTime)}</span>
@@ -744,10 +777,14 @@ function FragTab({
               )}
             </span>
           }
-          onSave={(text, w) => {
-            if (updateFragment(contactId, f.id, text, w)) {
+          time={{ eventTime: f.eventTime, expiresAt: f.expiresAt, timeEdited: f.timeEditedAt != null }}
+          onSave={(text, w, t) => {
+            const tp = diffTimePatch(f, t);
+            const ok = updateFragment(contactId, f.id, text, w);
+            if (tp) updateFragmentTime(contactId, f.id, tp);
+            if (ok || tp) {
               refresh();
-              showToast('碎片已更新');
+              showToast(ok ? '碎片已更新' : '时间已更新（以手动设置为准）');
             }
           }}
           onReinforce={() => {
@@ -780,9 +817,14 @@ function CoreTab({
   refresh: () => void;
   showToast: (m: string) => void;
 }) {
-  // 已入长期（被收编）沉底，其余保持创建时间倒序
+  // 已入长期（被收编）沉底，其次手动设置过期的沉底，其余保持创建时间倒序
+  const now = Date.now();
   const ordered = useMemo(
-    () => [...cores].sort((a, b) => (a.archivedAt ? 1 : 0) - (b.archivedAt ? 1 : 0)),
+    () =>
+      [...cores].sort(
+        (a, b) =>
+          (a.archivedAt ? 2 : isMemExpired(a, now) ? 1 : 0) - (b.archivedAt ? 2 : isMemExpired(b, now) ? 1 : 0)
+      ),
     [cores]
   );
   if (cores.length === 0) {
@@ -795,43 +837,56 @@ function CoreTab({
   }
   return (
     <div className="space-y-2.5">
-      {ordered.map((m) => (
-        <MemoryCard
-          key={m.id}
-          testid={`mem-ltm-${m.id}`}
-          variant="ltm"
-          consumed={Boolean(m.archivedAt)}
-          content={m.content}
-          header={
-            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
-              <Gem aria-hidden="true" className="h-3 w-3" />
-              核心记忆
-            </span>
-          }
-          meta={
-            <span className="flex flex-wrap items-center gap-1.5">
-              {m.eventTime != null && <EventTimeBadge ts={m.eventTime} />}
-              <span>来自 {m.fragmentCount} 条碎片</span>
-              <span>·</span>
-              <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
-              <span>·</span>
-              <span className="tabular-nums">{fmtTime(m.createdAt)} 生成</span>
-              {m.archivedAt && <ConsumedBadge label="已入长期" />}
-            </span>
-          }
-          onSave={(text) => {
-            if (updateCore(contactId, m.id, text)) {
-              refresh();
-              showToast('核心记忆已更新');
+      {ordered.map((m) => {
+        const expired = m.archivedAt == null && isMemExpired(m, now);
+        return (
+          <MemoryCard
+            key={m.id}
+            testid={`mem-ltm-${m.id}`}
+            variant="ltm"
+            consumed={Boolean(m.archivedAt)}
+            dim={expired}
+            content={m.content}
+            header={
+              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
+                <Gem aria-hidden="true" className="h-3 w-3" />
+                核心记忆
+              </span>
             }
-          }}
-          onDelete={() => {
-            deleteCore(contactId, m.id);
-            refresh();
-            showToast('核心记忆已删除');
-          }}
-        />
-      ))}
+            meta={
+              <span className="flex flex-wrap items-center gap-1.5">
+                {m.eventTime != null && <EventTimeBadge ts={m.eventTime} />}
+                {m.timeEditedAt != null && <ManualTimeBadge />}
+                <span>来自 {m.fragmentCount} 条碎片</span>
+                <span>·</span>
+                <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
+                <span>·</span>
+                <span className="tabular-nums">{fmtTime(m.createdAt)} 生成</span>
+                {m.expiresAt != null && (
+                  <span className="tabular-nums text-black/40 dark:text-white/40">· {memTimeLabel(m.expiresAt)} 过期</span>
+                )}
+                {expired && <ExpiredBadge />}
+                {m.archivedAt && <ConsumedBadge label="已入长期" />}
+              </span>
+            }
+            time={{ eventTime: m.eventTime, expiresAt: m.expiresAt, timeEdited: m.timeEditedAt != null }}
+            onSave={(text, _w, t) => {
+              const tp = diffTimePatch(m, t);
+              const ok = updateCore(contactId, m.id, text);
+              if (tp) updateCoreTime(contactId, m.id, tp);
+              if (ok || tp) {
+                refresh();
+                showToast(ok ? '核心记忆已更新' : '时间已更新（以手动设置为准）');
+              }
+            }}
+            onDelete={() => {
+              deleteCore(contactId, m.id);
+              refresh();
+              showToast('核心记忆已删除');
+            }}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -849,6 +904,15 @@ function LongTab({
   refresh: () => void;
   showToast: (m: string) => void;
 }) {
+  // 手动设置过期的沉底，其余保持创建时间倒序
+  const now = Date.now();
+  const ordered = useMemo(
+    () =>
+      [...longs].sort(
+        (a, b) => (isMemExpired(a, now) ? 1 : 0) - (isMemExpired(b, now) ? 1 : 0)
+      ),
+    [longs]
+  );
   if (longs.length === 0) {
     return (
       <EmptyState
@@ -859,41 +923,54 @@ function LongTab({
   }
   return (
     <div className="space-y-2.5">
-      {longs.map((m) => (
-        <MemoryCard
-          key={m.id}
-          testid={`mem-long-${m.id}`}
-          variant="long"
-          content={m.content}
-          header={
-            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
-              <Landmark aria-hidden="true" className="h-3 w-3" />
-              长期记忆
-            </span>
-          }
-          meta={
-            <span className="flex flex-wrap items-center gap-1.5">
-              {m.eventTime != null && <EventTimeBadge ts={m.eventTime} />}
-              <span>来自 {m.coreCount} 条核心记忆</span>
-              <span>·</span>
-              <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
-              <span>·</span>
-              <span className="tabular-nums">{fmtTime(m.createdAt)} 生成</span>
-            </span>
-          }
-          onSave={(text) => {
-            if (updateLongTerm(contactId, m.id, text)) {
-              refresh();
-              showToast('长期记忆已更新');
+      {ordered.map((m) => {
+        const expired = isMemExpired(m, now);
+        return (
+          <MemoryCard
+            key={m.id}
+            testid={`mem-long-${m.id}`}
+            variant="long"
+            dim={expired}
+            content={m.content}
+            header={
+              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
+                <Landmark aria-hidden="true" className="h-3 w-3" />
+                长期记忆
+              </span>
             }
-          }}
-          onDelete={() => {
-            deleteLongTerm(contactId, m.id);
-            refresh();
-            showToast('长期记忆已删除');
-          }}
-        />
-      ))}
+            meta={
+              <span className="flex flex-wrap items-center gap-1.5">
+                {m.eventTime != null && <EventTimeBadge ts={m.eventTime} />}
+                {m.timeEditedAt != null && <ManualTimeBadge />}
+                <span>来自 {m.coreCount} 条核心记忆</span>
+                <span>·</span>
+                <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
+                <span>·</span>
+                <span className="tabular-nums">{fmtTime(m.createdAt)} 生成</span>
+                {m.expiresAt != null && (
+                  <span className="tabular-nums text-black/40 dark:text-white/40">· {memTimeLabel(m.expiresAt)} 过期</span>
+                )}
+                {expired && <ExpiredBadge />}
+              </span>
+            }
+            time={{ eventTime: m.eventTime, expiresAt: m.expiresAt, timeEdited: m.timeEditedAt != null }}
+            onSave={(text, _w, t) => {
+              const tp = diffTimePatch(m, t);
+              const ok = updateLongTerm(contactId, m.id, text);
+              if (tp) updateLongTermTime(contactId, m.id, tp);
+              if (ok || tp) {
+                refresh();
+                showToast(ok ? '长期记忆已更新' : '时间已更新（以手动设置为准）');
+              }
+            }}
+            onDelete={() => {
+              deleteLongTerm(contactId, m.id);
+              refresh();
+              showToast('长期记忆已删除');
+            }}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -1366,6 +1443,7 @@ function MemoryCard({
   header,
   meta,
   testid,
+  time,
   onSave,
   onDelete,
   onReinforce,
@@ -1387,7 +1465,10 @@ function MemoryCard({
   /** 底部来源徽章 / 元信息 */
   meta: React.ReactNode;
   testid: string;
-  onSave: (text: string, weight: MemWeight) => void;
+  /** 时间感知：事件/过期时间（传入后编辑态可手动修改；留空=无事件时间/永不过期） */
+  time?: { eventTime?: number; expiresAt?: number; timeEdited?: boolean };
+  /** 保存：内容 + 权重 + 时间草稿（null=清除事件时间/恢复永不过期；时间有变化时由调用方落库） */
+  onSave: (text: string, weight: MemWeight, time: { eventTime: number | null; expiresAt: number | null }) => void;
   onDelete: () => void;
   /** 仅 frag：淡化中/已归档时显示「回忆一下」 */
   onReinforce?: () => void;
@@ -1396,6 +1477,9 @@ function MemoryCard({
   const [draft, setDraft] = useState(content);
   const [editWeight, setEditWeight] = useState<MemWeight>(weight);
   const [confirmDel, setConfirmDel] = useState(false);
+  /** 编辑态的时间草稿（datetime-local 字符串；空=无事件时间/永不过期） */
+  const [editEvent, setEditEvent] = useState('');
+  const [editExpire, setEditExpire] = useState('');
 
   const dimCls =
     fade === 'faded' || dim
@@ -1436,6 +1520,8 @@ function MemoryCard({
               onClick={() => {
                 setDraft(content);
                 setEditWeight(weight);
+                setEditEvent(time?.eventTime != null ? toInputValue(time.eventTime) : '');
+                setEditExpire(time?.expiresAt != null ? toInputValue(time.expiresAt) : '');
                 setEditing(true);
               }}
               className="grid h-8 w-8 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
@@ -1488,6 +1574,55 @@ function MemoryCard({
               ))}
             </div>
           )}
+          {time && (
+            <div className="mt-2.5 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="w-[52px] shrink-0 text-[11.5px] text-black/40 dark:text-white/40">事件时间</span>
+                <input
+                  type="datetime-local"
+                  value={editEvent}
+                  onChange={(e) => setEditEvent(e.target.value)}
+                  aria-label="设置事件时间"
+                  data-testid={`${testid}-event-time`}
+                  className="h-8 min-w-0 flex-1 rounded-lg bg-black/[0.04] px-2 text-[12.5px] tabular-nums outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40"
+                />
+                {editEvent && (
+                  <button
+                    type="button"
+                    aria-label="清除事件时间"
+                    onClick={() => setEditEvent('')}
+                    className="shrink-0 text-[11.5px] text-black/40 active:opacity-60 dark:text-white/40"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-[52px] shrink-0 text-[11.5px] text-black/40 dark:text-white/40">过期时间</span>
+                <input
+                  type="datetime-local"
+                  value={editExpire}
+                  onChange={(e) => setEditExpire(e.target.value)}
+                  aria-label="设置过期时间"
+                  data-testid={`${testid}-expire-time`}
+                  className="h-8 min-w-0 flex-1 rounded-lg bg-black/[0.04] px-2 text-[12.5px] tabular-nums outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40"
+                />
+                {editExpire && (
+                  <button
+                    type="button"
+                    aria-label="清除过期时间"
+                    onClick={() => setEditExpire('')}
+                    className="shrink-0 text-[11.5px] text-black/40 active:opacity-60 dark:text-white/40"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+              <p className="text-[10.5px] leading-relaxed text-black/30 dark:text-white/30">
+                过期时间留空 = 永不过期；手动设置后以这里为准，自动提取不再改写时间
+              </p>
+            </div>
+          )}
           <div className="mt-2 flex justify-end gap-2">
             <button
               type="button"
@@ -1504,7 +1639,11 @@ function MemoryCard({
               data-testid={`${testid}-save`}
               onClick={() => {
                 const t = draft.trim();
-                if (t) onSave(t, editWeight);
+                if (t)
+                  onSave(t, editWeight, {
+                    eventTime: editEvent ? new Date(editEvent).getTime() : null,
+                    expiresAt: editExpire ? new Date(editExpire).getTime() : null,
+                  });
                 setEditing(false);
               }}
               className={`flex items-center gap-1 rounded-full px-3.5 py-1.5 text-[13.5px] font-medium active:opacity-80 ${INK}`}

@@ -39,6 +39,8 @@ export interface MemFragment {
   eventTime?: number;
   /** 过期时间（空 = 永不过期；到期后碎片自动归档、不再召回） */
   expiresAt?: number;
+  /** 时间被用户手动编辑过的事件：设置后自动流程（提取合并/去重）不得改写 eventTime/expiresAt */
+  timeEditedAt?: number;
   /** 实际过期归档时刻（惰性标记：扫到过期即写入，UI 显示「已过期」） */
   expiredAt?: number;
   /** 被更新标记：新旧记忆矛盾时旧记忆记下更新时刻（不再参与召回/总结，UI 显示「已更新」） */
@@ -73,7 +75,11 @@ export interface MemCore {
   createdAt: number;
   /** 事件时间（来源碎片中带时间信息的最早/代表时间；可选） */
   eventTime?: number;
+  /** 过期时间（空 = 永不过期；默认永不过期，用户可手动设置） */
+  expiresAt?: number;
   editedAt?: number;
+  /** 时间被用户手动编辑过的事件：设置后自动流程不得改写 eventTime/expiresAt */
+  timeEditedAt?: number;
   /** 已被长期记忆总结收编（召回时由长期记忆代表，不再参与后续总结与召回） */
   archivedAt?: number;
 }
@@ -92,7 +98,11 @@ export interface MemLongTerm {
   createdAt: number;
   /** 事件时间（来源核心中带时间信息的代表时间；可选） */
   eventTime?: number;
+  /** 过期时间（空 = 永不过期；默认永不过期，用户可手动设置） */
+  expiresAt?: number;
   editedAt?: number;
+  /** 时间被用户手动编辑过的事件：设置后自动流程不得改写 eventTime/expiresAt */
+  timeEditedAt?: number;
 }
 
 /** 每联系人记忆设置 */
