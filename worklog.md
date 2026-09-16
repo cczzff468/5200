@@ -4856,3 +4856,16 @@ Stage Summary:
 - 四项需求全部落地：经营账户行删除、扫一扫对齐官方「指认手势」造型（8 轮迭代收敛）、看一看外框删除、我页朋友圈 27px
 - 关键教训沉淀：官方图标笔画仅 1.3 单位（48 画布），紧嵌造型照搬必交叉——同形状不同笔宽时须按笔宽重算间距；本地 SVG 预览页（file:// + tab new）比全链路 E2E 迭代快一个数量级
 - commit + push 待执行
+
+---
+Task ID: AJ-3
+Agent: Z.ai Code (main)
+Task: 发现页朋友圈图标缩小一点（与此前我页缩小对齐）
+
+Work Log:
+- wechat.tsx 发现页 testId=wx-moments-entry 处 icon 由 <WxIcMoments /> 改为 <WxIcMoments small />（31px→27px，复用 AJ-2 加的 small prop）
+- lint + tsc 0 问题；E2E 手势链明暗双主题截图验证：发现页朋友圈光圈明显小于邻行图标，行分隔线对齐无位移；console errors 0；浏览器最终停在 light 主题与 storage 一致
+
+Stage Summary:
+- 发现页与我页朋友圈图标统一为 27px small 档，其余发现页图标保持 31px
+- commit + push 完成

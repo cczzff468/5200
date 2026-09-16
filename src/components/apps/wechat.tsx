@@ -7192,7 +7192,7 @@ function MainScreen({
                 label="朋友圈"
                 testId="wx-moments-entry"
                 onClick={() => setPage('moments')}
-                icon={<WxIcMoments />}
+                icon={<WxIcMoments small />}
               />
             </div>
             <div className="bg-white dark:bg-[#1A1A1A]">
