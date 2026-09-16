@@ -8,7 +8,7 @@
  * 列表页：圆角搜索条 + 统计总览 + 联系人档案卡。
  *
  * 功能结构（逻辑与 src/lib/memory.ts 保持一致，本文件只负责呈现）：
- * - 联系人列表（统计总览条 + 每联系人一张档案卡）→ 记忆详情页（三个 Tab）
+ * - 联系人列表（统计总览条 + 每联系人一张档案卡；user=机主本人不显示也不记记忆）→ 记忆详情页（三个 Tab）
  * - Tab1 记忆碎片：每 N 轮对话自动提取（内容/来源时间/所属会话），支持查看/编辑/删除；
  *   右上角「立即总结」仅提取碎片；权重（重要/普通/临时）可调、淡化状态徽标（淡化中→已归档沉底）、
  *   过期可「回忆一下」救回
@@ -121,6 +121,11 @@ const INK =
 /** 每联系人记忆详情（三 Tab） */
 type MemTab = 'frag' | 'ltm' | 'set';
 
+/** 记忆库只管理「别人」的记忆：user 是机主本人，不需要给自己记记忆（列表/统计一并排除） */
+function visibleMemContacts(list: ContactRecord[]): ContactRecord[] {
+  return list.filter((c) => c.kind !== 'user');
+}
+
 export default function MemoryBankApp() {
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -128,11 +133,11 @@ export default function MemoryBankApp() {
   const [query, setQuery] = useState('');
   const [toast, showToast] = useLocalToast();
 
-  // 首次加载联系人
+  // 首次加载联系人（排除 user=机主本人）
   useEffect(() => {
     void listContacts()
       .then((list) => {
-        setContacts(list);
+        setContacts(visibleMemContacts(list));
         setLoaded(true);
       })
       .catch(() => setLoaded(true));
@@ -150,7 +155,7 @@ export default function MemoryBankApp() {
   const handleDeleteContactGone = useCallback(() => {
     // 联系人被删（其它端删除联系人会级联清记忆）：详情页自动退回列表
     setActiveId(null);
-    void listContacts().then(setContacts).catch(() => undefined);
+    void listContacts().then(visibleMemContacts).then(setContacts).catch(() => undefined);
   }, []);
 
   return (
@@ -160,7 +165,7 @@ export default function MemoryBankApp() {
           contact={active}
           onBack={() => {
             setActiveId(null);
-            void listContacts().then(setContacts).catch(() => undefined);
+            void listContacts().then(visibleMemContacts).then(setContacts).catch(() => undefined);
           }}
           onContactGone={handleDeleteContactGone}
           showToast={showToast}
