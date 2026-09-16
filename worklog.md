@@ -4838,3 +4838,21 @@ Stage Summary:
 - 发现页图标与参考图逐行对齐（扫一扫双手形态为最大改进）；钱包页从渐变圆标升级为微信官方同款彩色线稿，并补齐经营账户行与零钱通收益率文案
 - 全部纯代码 SVG，38px/34px 两种槽位保持行分隔线零位移，明暗双主题验证通过
 - commit 待提交
+
+---
+Task ID: AJ-2
+Agent: Z.ai Code (main)
+Task: 四项增量修正——钱包页删「经营账户」行、发现页扫一扫再美化、看一看去外框、我页朋友圈图标缩小
+
+Work Log:
+- 用 image-search 拉取微信官方「发现页管理」截图，PIL 裁剪放大扫一扫/看一看图标并叠加 48 单位坐标网格，精确测量官方几何
+- 扫一扫彻底重绘（wx-icons.tsx）：旧版「矩形掌+四条直线指」废弃；经 8 轮本地 SVG 预览迭代（/tmp/scan-preview.html 对比官方底图），最终定为「指认手势手形剪影」——单条闭合贝塞尔路径（拳 + 上缘连续的长食指 + 深虎口 + 腕尖），SCAN_HAND 常量 + rotate(180 24 24) 点对称互嵌；strokeWidth 3 下双手沿对角线分离避让（官方笔画 1.3 单位可紧嵌，我们的 3 单位需间隙），白填充 fill-white dark:fill-[#1A1A1A] 兜底遮挡
+- 看一看：删除外层六边形框（用户明确要求），保留并放大六角星花结为单条 12 顶点星路径（R=17/r=9.81 真六角星比例，圆角连接）
+- 钱包页 wechat-wallet.tsx：删除「经营账户」行（row 块）+ WxIcBizAccount import；wx-icons.tsx 同步删除 WxIcBizAccount 组件；剩余行：零钱/零钱通/银行卡/亲属卡/支付设置
+- 我页朋友圈缩小：Slot 组件加 svgClass 可选参数，WxIcMoments 加 small prop（31px→27px），wechat.tsx 我页 testId=wx-me-moments 处传 small（发现页保持 31px 不变）
+- lint + tsc 0 问题；E2E 手势链（解锁→双左滑→aria-label 打开微信→发现/我/服务/钱包）明暗双主题截图验证：扫一扫双手造型清晰、看一看纯星无框、我页朋友圈明显小于邻行、钱包页经营账户行消失；console/page errors 0；theme 测试后恢复 light
+
+Stage Summary:
+- 四项需求全部落地：经营账户行删除、扫一扫对齐官方「指认手势」造型（8 轮迭代收敛）、看一看外框删除、我页朋友圈 27px
+- 关键教训沉淀：官方图标笔画仅 1.3 单位（48 画布），紧嵌造型照搬必交叉——同形状不同笔宽时须按笔宽重算间距；本地 SVG 预览页（file:// + tab new）比全链路 E2E 迭代快一个数量级
+- commit + push 待执行

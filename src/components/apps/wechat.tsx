@@ -7297,7 +7297,7 @@ function MainScreen({
                 label="朋友圈"
                 testId="wx-me-moments"
                 onClick={() => setPage('moments')}
-                icon={<WxIcMoments />}
+                icon={<WxIcMoments small />}
               />
               <WxMenuRow
                 label="作品"

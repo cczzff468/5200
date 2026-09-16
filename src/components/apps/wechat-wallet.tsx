@@ -41,7 +41,7 @@ import {
   Wallet as WalletIcon,
   X,
 } from 'lucide-react';
-import { WxIcChange, WxIcBizAccount, WxIcFund, WxIcBankCard, WxIcFamilyCard } from './wx-icons';
+import { WxIcChange, WxIcFund, WxIcBankCard, WxIcFamilyCard } from './wx-icons';
 import type { ContactRecord } from '@/lib/contacts';
 
 // ---------------- 数据层 ----------------
@@ -755,13 +755,6 @@ function WalletPage({
             () => onOpen('change'),
             'wx-wallet-change',
             true
-          )}
-          {row(
-            '经营账户',
-            <WxIcBizAccount />,
-            '',
-            () => onToast('经营账户暂未开放'),
-            'wx-wallet-biz'
           )}
           {row(
             '零钱通',
