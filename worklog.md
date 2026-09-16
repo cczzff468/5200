@@ -4927,3 +4927,27 @@ Stage Summary:
 - 术语映射说明：本实现中「核心记忆」=MemLongTerm（长期记忆，阈值条碎片凝结），「普通记忆」=MemFragment（未消费碎片）；注入顺序=核心(长期)→碎片，消费标记保证核心与碎片不重复
 - 时间感知默认已关闭；可复现测试步骤见 worklog 脚本与浏览器拦截方法
 - commit + push 完成
+
+---
+Task ID: AM
+Agent: Z.ai Code (main)
+Task: NPC 系统完整审查（数据层/提示词层/记忆隔离层/聊天逻辑层/信息流转层 5 维 16 项），发现问题以最小修复落地，附可复现测试步骤
+
+Work Log:
+- 通读 NPC 全部相关代码：contacts.ts（ContactKind 三分/ContactRecord 字段契约）、contacts-store.ts（create/update/delete 级联与校验）、persona.ts（七要素人设 + 配角圈/归属者卡注入）、npc-bond.ts（buildNpcPromptExtra 双视角组装）、memory.ts（mem-* 键隔离/召回过滤/memPurgeContact）、wechat/qq/chat/phone 四 App 发送链、api/phone/turn 服务端路由
+- 浏览器 fetch 拦截实测（/api/chat 请求体，真实种子数据）：
+  · 小雅 c1（CHAR）：【你认识的配角】含阿豪（对 CHAR 关系+对用户关系+人设摘要）✓ 自己记忆（搬家碎片）注入 ✓ 无 np1/n1 私密记忆泄漏 ✓ 反 AI 条款 ✓ NPC 保密条款不进 CHAR prompt（仅 NPC 有）✓
+  · 阿豪 np1（NPC 新模式）：【你了解的小雅】归属者资料卡 ✓【与用户的关系】+【你与小雅的关系】两条独立关系 ✓ 自己记忆（打球碎片）✓ 搬家/出差零泄漏 ✓ 大嘴巴豁免条款在场 ✓
+  · 乐乐 n1（NPC 旧数据无归属）：安全回退为旧角色扮演语义（【与X的关系】朋友），无归属者卡注入 ✓ 自有核心记忆（出差/过敏）✓ 零泄漏 ✓
+  · 互通开关对照实验：给 n1 人工加 QQ 来源碎片「柯基犬」→ share=false 时微信端不注入该碎片（wx 来源照常）✓；share=true 后带「·QQ」来源标签注入 ✓
+  · 跨 App：信息 App 里与阿豪聊天，同一套 NPC 注入结构 + 保密条款 + 零泄漏 ✓（电话 App 走 /api/phone/turn，前端 buildNpcPromptExtra 直传 npcCircle/ownerCard/backgroundNotes，服务端 parseInlineContact+buildPersonaSystemPrompt 同模块，代码链路一致）
+- 死循环排查：grep 全部 runAiTurn/startAiTurn 触发点（微信 10 处/QQ 10 处），全部为用户动作（发送/重发/卡片退还/批量事件），finalize 只落盘+记忆提取，无任何 AI→AI 链，CHAR 与 NPC 结构上不可能自动互聊
+- 发现并修复真实缺陷（最小修复，未重写）：deleteContact 只级联清记忆库（memPurgeContact），聊天痕迹残留 localStorage/IndexedDB 成为孤儿数据 → contacts-store.ts 新增 purgeChatTracesFor()：清 wx-chat-msgs/qq-chat-msgs/ios-chat-msgs:c:/sms-chat-msgs(遗留键) 四类聊天记录、chat-time-aware 与 chat-reply-counts 两张会话 map 的 wx:/qq:/sms:c:/phone: 四键、wxChatFlags/qqChatFlags 走总线 reset（防内存快照写回复活）、IndexedDB chat-bg:wx:/chat-bg:qq: 背景图本体；被删 CHAR/USER 与其名下级联 NPC 逐一清理
+- 删除修复经真实 UI 验证：联系人 App→NPC tab→阿豪→删除联系人（两段确认）→ 复查 IndexedDB contacts 无 np1、localStorage 零 np1 残留键、time-aware/reply-counts/flags 三 map 无条目、chat-bg:wx:np1 已删、mem-frag:np1 已清；测后已按原字段恢复 np1 种子数据与记忆碎片
+- lint + tsc 0 问题
+
+Stage Summary:
+- 检查结论：NPC 系统五层全部落地且隔离正确——kind 三分校验、NPC 独立 id/persona/relation/relationToUser/ownerId（归属校验非 NPC）、记忆/聊天按联系人 ID 键级隔离、NPC↔CHAR 双向了解注入、三方关系两条独立关系线、反 AI + 保密条款（含大嘴巴豁免与用户授权转达豁免）齐备
+- 本次唯一实质缺陷：删除联系人不清理聊天痕迹（已修复+UI 级验证）；互通开关语义为「同一联系人跨 App」而非「跨联系人」，跨联系人之间永不过界（键即边界）
+- 遗留观察（非缺陷）：信息 App 的 systemPrompt 在打开会话时组装（会话中途改人设需重进会话生效；微信/QQ 每轮现场组装不受影响）
+- 可复现测试步骤见对话报告；commit + push 完成

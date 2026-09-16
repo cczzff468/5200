@@ -8,6 +8,7 @@
  */
 import { localDB, genId } from './db';
 import { memPurgeContact } from '@/lib/memory';
+import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
 import { wsHeaders } from './workspace';
 import {
   displayNameOf,
@@ -167,10 +168,56 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   return next;
 }
 
+/**
+ * 删除联系人后清理其全部「聊天痕迹」（NPC 级联删除时对每个被删 id 各调一次）：
+ * - 聊天记录（localStorage）：微信 wx-chat-msgs:<id> / QQ qq-chat-msgs:<id> / 信息 ios-chat-msgs:c:<id>；
+ * - 会话级设置 map 条目：chat-time-aware（时间感知）与 chat-reply-counts（回复条数）里
+ *   该联系人的 wx:<id> / qq:<id> / sms:c:<id> / phone:<id> 四个键；
+ * - 会话标志（置顶/免打扰/背景标记）：wx-chat-flags / qq-chat-flags 里的条目
+ *   （走 chat-flags 总线的 reset，内存快照与 localStorage 同步，避免后续 update 写回复活）；
+ * - 聊天背景图本体（IndexedDB settings store）：chat-bg:wx:<id> / chat-bg:qq:<id>。
+ * 全部尽力而为（单键失败不阻塞删除）；记忆库由 memPurgeContact 负责不在本函数范围。
+ */
+function purgeChatTracesFor(id: string): void {
+  if (!id) return;
+  try {
+    // 聊天记录（三个 App 的 localStorage 键；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫）
+    window.localStorage.removeItem(`wx-chat-msgs:${id}`);
+    window.localStorage.removeItem(`qq-chat-msgs:${id}`);
+    window.localStorage.removeItem(`ios-chat-msgs:c:${id}`);
+    window.localStorage.removeItem(`sms-chat-msgs:${id}`);
+    // 会话级设置 map（时间感知 / 回复条数）：按会话键删除该联系人条目
+    for (const mapKey of ['chat-time-aware', 'chat-reply-counts']) {
+      const raw = window.localStorage.getItem(mapKey);
+      if (!raw) continue;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const obj = parsed as Record<string, unknown>;
+      let changed = false;
+      for (const sk of [`wx:${id}`, `qq:${id}`, `sms:c:${id}`, `phone:${id}`]) {
+        if (sk in obj) {
+          delete obj[sk];
+          changed = true;
+        }
+      }
+      if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
+    }
+  } catch {
+    // 清理失败不阻塞删除
+  }
+  // 会话标志：走总线 reset（内存 + localStorage + 订阅广播同步）
+  wxChatFlags.reset(id);
+  qqChatFlags.reset(id);
+  // 聊天背景图本体（IndexedDB）：异步清理，失败忽略
+  void localDB.delete('settings', `chat-bg:wx:${id}`).catch(() => undefined);
+  void localDB.delete('settings', `chat-bg:qq:${id}`).catch(() => undefined);
+}
+
 /** 删除联系人（归属对象被删时其名下 NPC 一并级联删除，同旧服务端 DELETE）；删除了返回 true */
 export async function deleteContact(id: string): Promise<boolean> {
   const existing = await getContact(id);
   if (!existing) return false;
+  const cascadedNpcIds: string[] = [];
   if (existing.kind !== 'npc') {
     const all = await localDB.getAll('contacts');
     for (const c of all as ContactRecord[]) {
@@ -178,12 +225,16 @@ export async function deleteContact(id: string): Promise<boolean> {
         await localDB.delete('contacts', c.id);
         // 记忆库：级联删除的 NPC 其记忆一并清理（记忆按联系人 ID 隔离，联系人没了记忆也没有归属）
         memPurgeContact(c.id);
+        cascadedNpcIds.push(c.id);
       }
     }
   }
   await localDB.delete('contacts', id);
   // 记忆库：删除联系人时其全部记忆（碎片/长期记忆/设置/轮次计数）一并删除，不留孤儿数据
   memPurgeContact(id);
+  // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/会话标志/背景图一并清理
+  for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId);
+  purgeChatTracesFor(id);
   return true;
 }
 
