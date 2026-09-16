@@ -173,7 +173,7 @@ import {
 } from './chat-settings';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
-import { LocalToast, useLocalToast } from './local-toast';
+import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
 
 // ---------------- 类型 / 常量 / 工具 ----------------

@@ -59,7 +59,7 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
-import { LocalToast, useLocalToast } from './local-toast';
+import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
 import {
   beginChatStream,

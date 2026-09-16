@@ -4408,7 +4408,7 @@ Work Log:
 - 转发流程重构（两端）：长按「转发」/多选底栏只进勾选模式（底栏 删除/分享/收藏 三图标，转发 label 改「分享」）；点「分享」图标才弹出 逐条转发/合并转发 圆角弹层（mask 点外关闭不执行、仍保持多选；上一步回退兼容）
 - 收藏 toggle（两端）：菜单「已收藏」再点 → unfavoriteMsg（msg-favorites.ts 新增，按 msgId 找收藏项删除）+ toast「取消收藏」；首点 toast「收藏成功」；收藏页数据源即 localStorage，天然联动
 - 未读角标按条数：微信 AI 回合 bump(peer.id, all.length)（原 +1）；QQ AI 回合补上缺失的 bump（qqActiveChatId !== peer.id 时 bump(peer.id, all.length)——此前 QQ AI 回复完全不产生未读）；逐条转发 N 条 bump N、合并转发 bump 1；两端 bump 封顶 99
-- 发现并修复「聊天页内 toast 从未显示」的结构性 bug：微信/QQ App 根 toast 在 chatPeer/favorites 提前 return 分支不渲染 → 新建 local-toast.tsx（useLocalToast + LocalToast 浮层 z-80），微信/QQ 聊天页与收藏页各自挂载（收藏成功/取消收藏/已复制/已转发给 xx/已删除收藏 全部可见）；onToast prop 转可选不破坏调用方
+- 发现并修复「聊天页内 toast 从未显示」的结构性 bug：微信/QQ App 根 toast 在 chatPeer/favorites 提前 return 分支不渲染 → 新建 page-toast.tsx（useLocalToast + LocalToast 浮层 z-80），微信/QQ 聊天页与收藏页各自挂载（收藏成功/取消收藏/已复制/已转发给 xx/已删除收藏 全部可见）；onToast prop 转可选不破坏调用方
 - 信息 App 小助手未读布尔改计数：新增 ios-chat-assistant-unread-n localStorage（兼容旧已读布尔，未读至少 1）；useChatStreamFinalized('sms:assistant') 在聊天页外按本轮 assistant 消息条数累计（seenLenRef 已读水位）；会话行角标/主屏图标角标显示真实条数（AssistantRow unreadCount prop，99+ 封顶）；HomeScreen 挂载校准同步改为读计数键
 - Agent Browser 端到端验证（393×852，种 user+2npc 带不同颜色 SVG 头像 + fetch stub 4 句流式回复）：
   ①微信 AI 回 4 条 → 列表角标=4，进聊天清零；聊天页内实时流式 4 气泡（回归✓）
