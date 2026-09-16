@@ -4704,3 +4704,30 @@ Stage Summary:
 - 「你怎么知道的」可答：每条碎片显示来源 App+时间+消息 ID 短码
 - 既有 testid 全保留；新增 testid：mem-forget-{fast|medium|slow|never}、mem-dedupe、mem-recall-preview、mem-weight-{high|normal|low}、{id}-reinforce
 - extract API 返回结构升级为 {text,weight}[]（兼容旧客户端语义）；ui/data 层零迁移成本（旧数据缺字段走默认值）
+
+---
+Task ID: AE
+Agent: Z.ai Code (main)
+Task: 记忆库第四轮 UI 调整——①黑色部分全部改浅灰色 ②碎片/核心页右上角各加独立「立即总结」按钮（设置页保留原入口） ③设置页全部按钮改长方形（圆角矩形）
+
+Work Log:
+- src/lib/memory.ts：抽取 summarizePendingIntoLtm（把待总结碎片交给 LLM 凝结为核心记忆+标记消费，阈值判断交调用方）；maybeAutoSummarize 改为「pendingFragmentCount<阈值→null，否则调它」，行为不变；新增两个手动入口（与设置页 memSummarizeNow 共用 `${contactId}:manual` inflight 互斥）：
+  · memExtractNow(contactId, apiConfig)：仅提取碎片——memMostRecentApp 取最近会话→/api/memory/extract→appendFragments（复用三层去重），不触发核心总结；返回 {added, merged}
+  · memSummarizeLtmNow(contactId, apiConfig)：仅凝结核心——待总结碎片<2 报错提示，否则 summarizePendingIntoLtm 绕过阈值立即总结；返回 {consumed}
+- src/components/apps/memory-bank.tsx：
+  · INK 常量灰化：bg-neutral-900 纯黑 → bg-neutral-200 text-neutral-800 ring-1（暗色 bg-neutral-600 text-neutral-50）；覆盖 互通·开/核心徽章/重要徽标/设置选中项/保存/删除确认/召回预览徽标 全部实心黑块；页内已无纯黑纯白实心色
+  · MemSwitch 开关灰化：on 轨道 bg-neutral-400（暗 neutral-500），旋钮恒白+shadow（原纯黑轨道/暗白反转删除）
+  · 碎片/核心页右上角独立「立即总结」按钮：MemoryDetail 内 sumBusy('frag'|'ltm') 忙态 + summarizeFragNow/summarizeLtmNow；按钮 mem-frag-summarize / mem-ltm-summarize（h-8 白底圆角矩形 rounded-lg，busy 转圈+「正在总结…」，禁用跨页点击）；位于统计胶囊行下方右对齐，仅 frag/ltm 两 Tab 渲染
+  · 设置页「立即总结」（mem-summarize）原样保留=完整流程入口；空态文案改为引导「右上角『立即总结』」
+  · 设置页按钮全部长方形：interval/threshold/forget 选项 rounded-full→rounded-lg（10px），立即总结/整理重复记忆 rounded-full→rounded-xl（14px）；开关本身保持 iOS 圆形（非按钮）
+- lint + tsc 0 问题；Agent Browser E2E（392×812，解锁→双滑→记忆库→种 n1 数据 5 碎片+1 核心+wx 聊天记录）：
+  ①碎片页右上角「立即总结」：busy「正在总结…」→真实 LLM 提取 6 条新碎片（5→11 条），顶部统计联动 ✓
+  ②核心页右上角「立即总结」：10 条待总结碎片→真实 LLM 凝结 1 条核心记忆（1→2 条核心），meta「来自 10 条碎片·微信、QQ、信息」✓
+  ③设置页：mem-summarize 在位；选项按钮 borderRadius=10px、大按钮 14px（计算样式验证）；选中项 bg=neutral-200（lab 90.9）✓
+  ④开关 on 轨道=neutral-400（亮）/neutral-500（暗），无纯黑 ✓
+  ⑤暗色主题全套（frag+set 截图+计算样式 neutral-600 按钮）；console/page errors 0；恢复 light ✓
+
+Stage Summary:
+- 「立即总结」三入口分工明确：碎片页=只提取、核心页=只凝结（不等阈值）、设置页=完整流程（提取+达阈值顺带总结）；共用 inflight 防并发
+- 全页黑块灰化完成（选中/强调=浅灰 neutral-200，暗色 neutral-600），无渐变无彩色保持水墨单色
+- 设置页按钮统一长方形；既有 testid/逻辑零破坏；新增 testid：mem-frag-summarize、mem-ltm-summarize

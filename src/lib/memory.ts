@@ -21,7 +21,9 @@
  * - 【权重优先级】姓名/关系/承诺/健康禁忌 → 高权重（自动分类 + 手动可调）；召回按权重×相关性排序。
  * - 【来源追溯】每条碎片记录来源 App / 来源时间 / 来源消息 ID，回答「你怎么知道的」。
  * - 提取/总结调用 /api/memory/extract 与 /api/memory/summarize（用户 API 配置优先，
- *   服务端 SDK 兜底）；自动提取失败静默（下一窗口重试），手动「立即总结」失败给提示。
+ *   服务端 SDK 兜底）；自动提取失败静默（下一窗口重试），手动「立即总结」失败给提示；
+ *   手动入口共三个且互斥：碎片页右上角（仅提取碎片）、核心页右上角（仅凝结核心记忆）、
+ *   设置页（完整流程：提取碎片 + 达阈值时顺带总结核心）。
  * - 删除联系人时由 contacts-store.deleteContact 调 memPurgeContact 级联清理全部记忆。
  */
 
@@ -450,14 +452,13 @@ function appendFragments(
   return { added, merged };
 }
 
-/** 检查未消费且未归档的碎片是否达到阈值；达到则自动触发核心总结（长期记忆） */
-async function maybeAutoSummarize(contactId: string, apiConfig: ApiConfig): Promise<MemLongTerm | null> {
-  const { threshold, forget } = getMemSettings(contactId);
+/** 把当前未消费且未归档的碎片交给 LLM 总结为核心记忆，并标记来源碎片已消费（阈值判断由调用方负责） */
+async function summarizePendingIntoLtm(contactId: string, apiConfig: ApiConfig): Promise<MemLongTerm> {
+  const { forget } = getMemSettings(contactId);
   const now = Date.now();
   const pending = readFragments(contactId).filter(
     (f) => !f.consumedAt && fadeState(f as FadeInput, forget, now) !== 'faded'
   );
-  if (pending.length < threshold) return null;
   const res = await callMemoryApi<SummarizeApiResult>(
     'summarize',
     {
@@ -485,6 +486,12 @@ async function maybeAutoSummarize(contactId: string, apiConfig: ApiConfig): Prom
     readFragments(contactId).map((f) => (consumedIds.has(f.id) ? { ...f, consumedAt: Date.now() } : f))
   );
   return ltm;
+}
+
+/** 检查未消费且未归档的碎片是否达到阈值；达到则自动触发核心总结（长期记忆） */
+async function maybeAutoSummarize(contactId: string, apiConfig: ApiConfig): Promise<MemLongTerm | null> {
+  if (pendingFragmentCount(contactId) < getMemSettings(contactId).threshold) return null;
+  return summarizePendingIntoLtm(contactId, apiConfig);
 }
 
 /**
@@ -571,6 +578,46 @@ export async function memSummarizeNow(
       ltmCreated = ltm ? 1 : 0;
     }
     return { fragments: added.length, longTerm: ltmCreated, merged };
+  } finally {
+    inflight.delete(guard);
+  }
+}
+
+// ---------------- 手动「立即总结」（碎片页 / 核心页右上角各自独立入口） ----------------
+
+/** 手动提取碎片（碎片页右上角「立即总结」）：只把最近对话整理为记忆碎片入库，不触发核心记忆总结 */
+export async function memExtractNow(contactId: string, apiConfig: ApiConfig): Promise<{ added: number; merged: number }> {
+  const guard = `${contactId}:manual`;
+  if (inflight.has(guard)) throw new Error('正在总结中，请稍候');
+  inflight.add(guard);
+  try {
+    const recent = memMostRecentApp(contactId);
+    if (!recent || recent.convo.length < 2) throw new Error('当前没有可总结的对话，先去和TA聊聊吧');
+    const res = await callMemoryApi<ExtractApiResult>('extract', { conversation: recent.convo, app: recent.app }, apiConfig);
+    const items = normalizeExtract(res);
+    if (items.length === 0) throw new Error('这次对话没有提炼出新的记忆');
+    const { added, merged } = appendFragments(contactId, recent.app, items, Date.now());
+    if (added.length === 0 && merged === 0) throw new Error('提炼出的记忆都已存在，没有新增');
+    return { added: added.length, merged };
+  } finally {
+    inflight.delete(guard);
+  }
+}
+
+/** 手动凝结核心记忆（核心记忆页右上角「立即总结」）：不等阈值，把当前待总结碎片立即总结为核心记忆 */
+export async function memSummarizeLtmNow(contactId: string, apiConfig: ApiConfig): Promise<{ consumed: number }> {
+  const guard = `${contactId}:manual`;
+  if (inflight.has(guard)) throw new Error('正在总结中，请稍候');
+  inflight.add(guard);
+  try {
+    const { forget } = getMemSettings(contactId);
+    const now = Date.now();
+    const pending = readFragments(contactId).filter(
+      (f) => !f.consumedAt && fadeState(f as FadeInput, forget, now) !== 'faded'
+    );
+    if (pending.length < 2) throw new Error('待总结的记忆碎片不足 2 条，先去和TA聊聊吧');
+    const ltm = await summarizePendingIntoLtm(contactId, apiConfig);
+    return { consumed: ltm.fragmentCount };
   } finally {
     inflight.delete(guard);
   }

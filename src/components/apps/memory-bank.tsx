@@ -3,18 +3,20 @@
 /**
  * 记忆库 App（跨应用记忆互通管理）——「简约水墨 · 档案卡」视觉主题：
  * 全灰白单色（无任何彩色/渐变）+ hairline 与虚线档案分隔 + 克制毛玻璃（顶栏 / 底部悬浮胶囊 Dock）。
- * 记忆卡：头部时钟时间（碎片）/ 纯黑徽章（核心）+ 右上角常驻操作图标（回忆/编辑/删除）+ 虚线分隔 +
+ * 记忆卡：头部时钟时间（碎片）/ 浅灰徽章（核心）+ 右上角常驻操作图标（回忆/编辑/删除）+ 虚线分隔 +
  * 底部来源徽章行（权重/来源 App/淡化状态/相对时间/来源消息 ID）；
  * 列表页：圆角搜索条 + 统计总览 + 联系人档案卡。
  *
  * 功能结构（逻辑与 src/lib/memory.ts 保持一致，本文件只负责呈现）：
  * - 联系人列表（统计总览条 + 每联系人一张档案卡）→ 记忆详情页（三个 Tab）
  * - Tab1 记忆碎片：每 N 轮对话自动提取（内容/来源时间/所属会话），支持查看/编辑/删除；
- *   权重（重要/普通/临时）可调、淡化状态徽标（淡化中→已归档沉底）、过期可「回忆一下」救回
- * - Tab2 长期记忆（核心记忆）：M 条碎片自动总结（内容/来源碎片数量/生成时间），支持查看/编辑/删除
+ *   右上角「立即总结」仅提取碎片；权重（重要/普通/临时）可调、淡化状态徽标（淡化中→已归档沉底）、
+ *   过期可「回忆一下」救回
+ * - Tab2 长期记忆（核心记忆）：M 条碎片自动总结（内容/来源碎片数量/生成时间），支持查看/编辑/删除；
+ *   右上角「立即总结」仅把待总结碎片凝结为核心记忆（不等阈值）
  * - Tab3 设置：提取频率（10/20/30/40/50 轮）、总结阈值（3/5/7/10 条）、失忆程度（快/中/慢/从不）、
- *   跨 App 互通开关（默认开）、「立即总结」手动触发、「整理重复记忆」（相似记忆去重合并）、
- *   「召回预览」（按权重×相关性排序的下次注入记忆）
+ *   跨 App 互通开关（默认开）、「立即总结」完整流程手动触发、「整理重复记忆」（相似记忆去重合并）、
+ *   「召回预览」（按权重×相关性排序的下次注入记忆）；本页全部按钮为长方形（圆角矩形）
  * - 数据按联系人 ID 隔离（localStorage 持久化，重启保留）；
  *   互通开 = QQ/微信/信息/电话四端共享该联系人记忆；关 = 各端只用自己来源的记忆
  */
@@ -61,8 +63,10 @@ import {
   listFragments,
   listLongTerm,
   memDedupeNow,
+  memExtractNow,
   memMostRecentApp,
   memRecallPreview,
+  memSummarizeLtmNow,
   memSummarizeNow,
   pendingFragmentCount,
   reinforceFragment,
@@ -110,8 +114,9 @@ const DOCK_GLASS = 'bg-[#f4f3f1]/80 backdrop-blur-xl dark:bg-[#141312]/75';
 const CARD_CLS =
   'bg-white shadow-[0_1px_4px_rgba(20,18,14,0.05)] dark:bg-[#201f1d] dark:shadow-none dark:ring-1 dark:ring-white/[0.06]';
 
-/** 选中/强调态：纯黑（暗色反转纯白） */
-const INK = 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900';
+/** 选中/强调态：浅灰（暗色中灰反转）——全页无纯黑纯白实心块 */
+const INK =
+  'bg-neutral-200 text-neutral-800 ring-1 ring-black/[0.06] dark:bg-neutral-600 dark:text-neutral-50 dark:ring-white/[0.08]';
 
 /** 每联系人记忆详情（三 Tab） */
 type MemTab = 'frag' | 'ltm' | 'set';
@@ -344,6 +349,41 @@ function MemoryDetail({
     [contact.id, rev]
   );
   const name = displayNameOf(contact) || contact.name;
+  const apiConfig = useSettings((s) => s.apiConfig);
+  // 右上角「立即总结」忙态：碎片页 / 核心页各自独立（互不干扰，同一时间只跑一个）
+  const [sumBusy, setSumBusy] = useState<'frag' | 'ltm' | null>(null);
+
+  /** 碎片页右上角「立即总结」：只把最近对话提取为记忆碎片入库（不碰核心记忆） */
+  const summarizeFragNow = async () => {
+    if (sumBusy) return;
+    setSumBusy('frag');
+    try {
+      const res = await memExtractNow(contact.id, apiConfig);
+      const parts = [`新增 ${res.added} 条碎片`];
+      if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
+      showToast(`总结完成：${parts.join('，')}`);
+      refresh();
+    } catch (err) {
+      showToast(err instanceof Error && err.message ? err.message : '总结失败，请稍后再试');
+    } finally {
+      setSumBusy(null);
+    }
+  };
+
+  /** 核心页右上角「立即总结」：不等阈值，把待总结碎片立即凝结为核心记忆 */
+  const summarizeLtmNow = async () => {
+    if (sumBusy) return;
+    setSumBusy('ltm');
+    try {
+      const res = await memSummarizeLtmNow(contact.id, apiConfig);
+      showToast(`总结完成：${res.consumed} 条碎片凝结为 1 条核心记忆`);
+      refresh();
+    } catch (err) {
+      showToast(err instanceof Error && err.message ? err.message : '总结失败，请稍后再试');
+    } finally {
+      setSumBusy(null);
+    }
+  };
 
   const tabs: [MemTab, typeof Layers, string][] = [
     ['frag', Layers, '记忆碎片'],
@@ -400,7 +440,23 @@ function MemoryDetail({
           </span>
         </div>
 
-        <div className="pt-4">
+        {/* 碎片/核心页右上角「立即总结」：两页独立触发，设置页另保留完整流程入口 */}
+        {(tab === 'frag' || tab === 'ltm') && (
+          <div className="flex items-center justify-end pt-3">
+            <button
+              type="button"
+              data-testid={tab === 'frag' ? 'mem-frag-summarize' : 'mem-ltm-summarize'}
+              onClick={() => void (tab === 'frag' ? summarizeFragNow() : summarizeLtmNow())}
+              disabled={sumBusy !== null}
+              className="flex h-8 items-center gap-1.5 rounded-lg bg-white px-3 text-[12.5px] font-medium text-neutral-700 shadow-[0_1px_4px_rgba(20,18,14,0.07)] ring-1 ring-black/[0.06] transition-opacity active:opacity-70 disabled:opacity-50 dark:bg-[#201f1d] dark:text-neutral-200 dark:ring-white/[0.1]"
+            >
+              {sumBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />}
+              {sumBusy === tab ? '正在总结…' : '立即总结'}
+            </button>
+          </div>
+        )}
+
+        <div className="pt-2">
           {tab === 'frag' && (
             <FragTab
               contactId={contact.id}
@@ -476,7 +532,7 @@ function ConsumedBadge() {
   );
 }
 
-/** 权重徽标：重要（纯黑）/ 临时（灰）；普通不显示，减少噪音 */
+/** 权重徽标：重要（浅灰）/ 临时（灰）；普通不显示，减少噪音 */
 function WeightBadge({ weight }: { weight: MemWeight }) {
   if (weight === 'normal') return null;
   if (weight === 'high') {
@@ -528,7 +584,7 @@ function FragTab({
     return (
       <EmptyState
         icon={<Layers className="h-8 w-8" strokeWidth={1.5} />}
-        text="还没有记忆碎片。和TA聊满 N 轮（设置里可调），或在设置里点「立即总结」即可提取。"
+        text="还没有记忆碎片。和TA聊满 N 轮（设置里可调），或点右上角「立即总结」立刻提取。"
       />
     );
   }
@@ -603,7 +659,7 @@ function LtmTab({
     return (
       <EmptyState
         icon={<Gem className="h-8 w-8" strokeWidth={1.5} />}
-        text="还没有核心记忆。积累 M 条记忆碎片后会自动总结（设置里可调），也可点「立即总结」手动触发。"
+        text="还没有核心记忆。积累 M 条记忆碎片后会自动总结（设置里可调），也可点右上角「立即总结」手动凝结。"
       />
     );
   }
@@ -734,7 +790,7 @@ function SetTab({
               aria-pressed={settings.interval === n}
               data-testid={`mem-interval-${n}`}
               onClick={() => patch({ interval: n })}
-              className={`rounded-full py-2 text-[14px] font-semibold tabular-nums transition-colors ${
+              className={`rounded-lg py-2 text-[14px] font-semibold tabular-nums transition-colors ${
                 settings.interval === n
                   ? INK
                   : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
@@ -760,7 +816,7 @@ function SetTab({
               aria-pressed={settings.threshold === n}
               data-testid={`mem-threshold-${n}`}
               onClick={() => patch({ threshold: n })}
-              className={`rounded-full py-2 text-[14px] font-semibold tabular-nums transition-colors ${
+              className={`rounded-lg py-2 text-[14px] font-semibold tabular-nums transition-colors ${
                 settings.threshold === n
                   ? INK
                   : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
@@ -787,7 +843,7 @@ function SetTab({
               aria-pressed={settings.forget === v}
               data-testid={`mem-forget-${v}`}
               onClick={() => patch({ forget: v })}
-              className={`rounded-full py-2 text-[14px] font-semibold transition-colors ${
+              className={`rounded-lg py-2 text-[14px] font-semibold transition-colors ${
                 settings.forget === v
                   ? INK
                   : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
@@ -827,7 +883,7 @@ function SetTab({
           data-testid="mem-summarize"
           onClick={() => void summarizeNow()}
           disabled={busy}
-          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-full text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
+          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
             busy ? 'opacity-50' : ''
           }`}
         >
@@ -847,7 +903,7 @@ function SetTab({
           data-testid="mem-dedupe"
           onClick={dedupe}
           disabled={dedupeBusy}
-          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-full text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
+          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
             dedupeBusy ? 'opacity-50' : ''
           }`}
         >
@@ -921,7 +977,7 @@ function SetTab({
 
 // ---------------- 通用小组件 ----------------
 
-/** iOS 风格开关（水墨单色：on 纯黑 / 暗色纯白反转） */
+/** iOS 风格开关（水墨单色：on 浅灰 / 暗色中灰，全页无纯黑纯白实心块） */
 function MemSwitch({ checked, onChange, testid }: { checked: boolean; onChange: (v: boolean) => void; testid: string }) {
   return (
     <button
@@ -931,13 +987,13 @@ function MemSwitch({ checked, onChange, testid }: { checked: boolean; onChange: 
       data-testid={testid}
       onClick={() => onChange(!checked)}
       className={`relative h-[30px] w-[50px] shrink-0 rounded-full transition-colors duration-200 ${
-        checked ? 'bg-neutral-900 dark:bg-white' : 'bg-black/15 dark:bg-white/25'
+        checked ? 'bg-neutral-400 dark:bg-neutral-500' : 'bg-black/15 dark:bg-white/25'
       }`}
     >
       <span
         aria-hidden="true"
-        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full shadow transition-all duration-200 ${
-          checked ? 'left-[22px] bg-white dark:bg-neutral-900' : 'left-[2px] bg-white'
+        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full bg-white shadow transition-all duration-200 ${
+          checked ? 'left-[22px]' : 'left-[2px]'
         }`}
       />
     </button>
@@ -962,7 +1018,7 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
 /** 记忆卡片（档案风）：头部时间/徽章 + 右上角常驻操作图标 + 虚线分隔 + 底部来源徽章行。
  * - frag：头部时钟时间；权重徽标 + 淡化状态 + 相对时间 + 来源消息 ID；过期可「回忆一下」；
  *   编辑态可调权重（重要/普通/临时）
- * - ltm：头部纯黑「核心记忆」徽章
+ * - ltm：头部浅灰「核心记忆」徽章
  * - 透明度取「淡化/消费」更淡的一档：已归档 0.55 > 淡化中 0.8 > 已入核心 0.72
  */
 function MemoryCard({
