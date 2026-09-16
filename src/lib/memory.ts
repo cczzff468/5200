@@ -275,29 +275,32 @@ function fragRecallScore(f: MemFragment, forget: MemForget, context: string, now
 
 /**
  * 召回该联系人（互通开关限定范围）的记忆，组装为注入 system 的文本块。
- * 排序规则：优先长期记忆，其次记忆碎片；组内按 权重×相关性×淡化 降序；
- * 已归档（过期失效）的碎片不召回，淡化中的降权。
+ * 排序规则：优先核心记忆（长期），其次近期碎片；组内按 权重×相关性×淡化 降序；
+ * 已归档（过期失效）的碎片不召回，淡化中的降权；已消费（被核心总结收编）的碎片不再重复召回。
+ * 核心记忆全量注入（安全上限 12 条防失控）；碎片按相关性取前 5 条。
  * 该联系人没有记忆 / 互通关闭且当前 App 无来源记忆 → 返回空串（正常聊天，不报错）。
  */
 export function memRecallBlock(contactId: string, app: MemApp, contextText: string): string {
   if (!contactId) return '';
   const { share, forget } = getMemSettings(contactId);
   const now = Date.now();
+  // 核心记忆（长期）：全量注入，仅设安全上限防失控（每条核心由阈值数量碎片凝结，正常远达不到）
   const ltm = listLongTerm(contactId)
     .filter((m) => share || m.apps.includes(app))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
-    .slice(0, 4);
+    .slice(0, 12);
+  // 近期记忆碎片：按相关性取前 5 条；已消费的由核心记忆代表，不再重复注入
   const frags = listFragments(contactId)
     .filter((f) => !f.consumedAt && (share || f.app === app))
     .map((f) => ({ f, ...fragRecallScore(f, forget, contextText, now) }))
     .filter((x) => x.st !== 'faded')
     .sort((a, b) => b.s - a.s)
-    .slice(0, 6);
+    .slice(0, 5);
   if (ltm.length === 0 && frags.length === 0) return '';
   const lines: string[] = ['【关于对方的记忆（跨应用记忆库自动整理；聊天时自然运用，不要逐条复述或主动承认看过记忆）】'];
   if (ltm.length > 0) {
-    lines.push('◇ 核心记忆（长期）：');
+    lines.push('◇ 核心记忆（长期；回复时应优先参考这些核心事实，保持前后一致）：');
     ltm.forEach(({ m }, i) => lines.push(`${i + 1}. ${m.content}`));
   }
   if (frags.length > 0) {
@@ -534,9 +537,15 @@ export function memAfterAiTurn(
           const items = normalizeExtract(res);
           if (items.length > 0) appendFragments(contactId, app, items, Date.now(), getSourceMsgId?.());
         }
-        await maybeAutoSummarize(contactId, apiConfig);
       } catch (err) {
         console.warn('[memory] 自动提取失败（下个窗口重试）', err);
+      }
+      // 核心总结与提取相互独立：即使本轮提取失败，只要已积累的未消费碎片达到阈值，
+      // 仍应尝试凝结核心记忆（否则一次提取故障会连带把总结也卡到下个窗口）
+      try {
+        await maybeAutoSummarize(contactId, apiConfig);
+      } catch (err) {
+        console.warn('[memory] 自动总结核心记忆失败（下个窗口重试）', err);
       } finally {
         inflight.delete(guard);
       }

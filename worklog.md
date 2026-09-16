@@ -4897,3 +4897,33 @@ Stage Summary:
 - 时间感知四端全通：开关按会话独立持久化、默认开、立即生效；注入块含当前时间/月份天数表/日期运算/事件时长/营业状态/常见时长/内化协议/节日表/上次聊天间隔九部分；时间戳卡片被协议明确禁止输出
 - 关键设计：北京时间用 UTC+8 偏移换算与设备时区解耦；周规则节日（母亲/父亲/感恩节）动态算任意年份成立；通话场景间隔回退到 call-logs
 - commit + push 完成
+
+---
+Task ID: AL
+Agent: Z.ai Code (main)
+Task: 时间感知默认改关闭 + 「核心记忆+普通记忆」分层方案全项实测审计（6 大检查项）
+
+Work Log:
+- time-aware.ts 默认值 true→false（getTimeAware fallback），头注释同步；实测：无显式记录的会话（小雅 c1）不再注入时间块
+- 审计发现并修复 3 处偏差（小步修，未重写）：
+  · memory.ts memRecallBlock 核心记忆 slice(0,4)→全量注入+安全上限 12（检查项 3a「全量」）
+  · 碎片召回 slice(0,6)→slice(0,5)（检查项 3b「3~5 条」）
+  · memAfterAiTurn：maybeAutoSummarize 从 extract 的 try 内移出独立 try/catch —— extract 失败不再连带跳过阈值触发的核心总结（root cause：一次提取故障会把总结卡到下个窗口）
+  · 核心小节标题补「回复时应优先参考这些核心事实，保持前后一致」（检查项 4b）
+- 实测方式一（bun 驱动脚本 mock localStorage+fetch 直调管线，/tmp/mem-audit*.ts，不入库）：32 项断言全过
+  · 数据层：mem-ltm/mem-frag 分键存储✓ 碎片 consumedAt 消费标记/核心 fragmentCount+apps✓ 键=隔离边界✓ 互通开四端共享✓ 互通关按 app/apps 过滤✓
+  · 提取层：轮次达间隔触发 extract✓ 未达间隔不触发✓ 碎片达阈值自动 summarize✓ 消费标记+核心入库✓ extract 502 后 summarize 仍独立触发✓（修复项）手动 memSummarizeNow/memSummarizeLtmNow 立即入库生效✓ memDedupeNow 相似合并✓
+  · 召回层：核心全量(≤12)✓ 碎片 top5✓ 相关性排序生效✓ 已消费碎片不重复召回✓ 核心在前碎片在后✓ 已归档(faded)不召回✓
+  · 异常：无记忆空串✓ 删碎片/删核心即失效✓ 切角色不串台✓ memPurgeContact 级联清理✓
+- 实测方式二（浏览器真实链路 fetch 拦截 /api/chat 请求体）：
+  · 乐乐 n1（2 核心+11 已消费碎片）：记忆块注入✓ 核心 2 条全量✓ 碎片段 0（消费后由核心代表，去重）✓ 优先参考提示✓
+  · 新造未消费碎片「学吉他」→ 请求立即带上✓；删除该碎片 → 立即消失✓
+  · 小雅 c1：信息端提取的记忆在微信端召回（互通共享活证据）✓ 时间感知默认关闭（无记录 → 不注入）✓
+  · 清理测试遗留：chat-time-aware 恢复 {}（全员默认关），测试碎片已删，真实记忆数据未动
+- lint + tsc 0 问题
+
+Stage Summary:
+- 检查结论：分层方案整体健康——存储分键、召回分层去重、注入顺序正确、异常路径完备；本次修复 3 处与需求口径的偏差（核心全量、碎片 5 条、总结独立于提取）并补注入提示
+- 术语映射说明：本实现中「核心记忆」=MemLongTerm（长期记忆，阈值条碎片凝结），「普通记忆」=MemFragment（未消费碎片）；注入顺序=核心(长期)→碎片，消费标记保证核心与碎片不重复
+- 时间感知默认已关闭；可复现测试步骤见 worklog 脚本与浏览器拦截方法
+- commit + push 完成

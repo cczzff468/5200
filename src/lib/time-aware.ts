@@ -4,7 +4,7 @@
  * 时间感知（聊天 AI 感知当前时间 / 季节 / 节日 / 事件时长 / 上次聊天间隔）：
  *
  * - 开关按会话键独立保存（sessionKey = wx:<contactId> / qq:<contactId> / sms:<storageKey> /
- *   phone:<contactId>），localStorage 单键 JSON map（chat-time-aware）持久化，默认开启；
+ *   phone:<contactId>），localStorage 单键 JSON map（chat-time-aware）持久化，默认关闭；
  *   各 App 在发送现场读取 —— 打开/关闭后立刻影响下一次请求，无需重启 App；
  * - buildTimeAwareBlock：拼装注入 system 的完整时间感知块 —— 当前时间（北京时间 UTC+8）+
  *   月份天数参照表 + 日期运算规则 + 事件时长感知规则 + 场所营业状态 + 常见事件时长参照 +
@@ -34,9 +34,9 @@ function loadMap(): Record<string, boolean> {
   }
 }
 
-/** 读取某会话的时间感知开关（未设置时默认开启） */
+/** 读取某会话的时间感知开关（未设置时默认关闭） */
 export function getTimeAware(sessionKey: string): boolean {
-  return loadMap()[sessionKey] ?? true;
+  return loadMap()[sessionKey] ?? false;
 }
 
 /** 保存某会话的时间感知开关（持久化到 localStorage，按会话键隔离；立即影响下一次请求） */
