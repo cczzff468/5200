@@ -2844,11 +2844,12 @@ function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: 
 
 /** 转账聊天卡片（橙色渐变 + 白描边圆⇆/对勾/退还↩ + 金额 + 状态文案 + 左下「转账」+ 朝向角标；紧凑尺寸；自己也作为「已收款/已退还」接收凭据卡复用）。
  *  状态文案按角色与收款状态区分：接收完成后才显示「已转入零钱」，之前是「待对方收款」；
- *  有转账留言时状态行优先显示留言（没写留言才显示状态文案，对照用户需求）；
+ *  待收款中：有转账留言时状态行优先显示留言（没写留言才显示状态文案）；
+ *  终态（已收款/已退还/已拒收）：不再显示留言，改回显示原状态文案（用户需求：退还接收以后不要显示留言）；
  *  收款/退还/拒收后卡片颜色变灰（对照真实微信：终态卡褪色），退还卡圆图标换成↩ */
-function TrBubble({ amount, status, received, refunded, fromMe, note, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; note?: string; onClick: () => void }) {
-  // 有留言 → 状态行显示留言；没写留言 → 显示状态文案（待对方收款/已收款/已退还等）
-  const line = note && note.trim() ? note : status;
+function TrBubble({ amount, status, received, refunded, fromMe, note, settled, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; note?: string; settled?: boolean; onClick: () => void }) {
+  // 终态（已收款/已退还/已拒收）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
+  const line = !settled && note && note.trim() ? note : status;
   return (
     <button
       type="button"
@@ -4457,6 +4458,7 @@ function ChatPage({
                 <TrBubble
                   amount={m.tr.amount}
                   note={m.tr.note}
+                  settled={m.tr.received === true || Boolean(m.tr.status)}
                   status={
                     m.tr.status === 'returned'
                       ? '已退还'

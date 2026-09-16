@@ -3787,17 +3787,16 @@ function RpCoverPattern() {
 function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; showOpen: boolean; onClick: () => void }) {
   const claimed = (packet.claims ?? []).length > 0;
   const settled = claimed || packet.status === 'returned' || packet.status === 'rejected';
-  // 没写祝福语 → 显示状态文案（待领取/已领取/已退回/已拒收）；有祝福语 → 显示祝福语（与转账卡留言规则一致）
-  const rpNote =
-    packet.note && packet.note.trim()
+  // 终态（已领取/已退回/已拒收）→ 显示原状态文案；待领取中 → 有祝福语显示祝福语、没写祝福语显示「待领取」（与转账卡留言规则一致）
+  const rpNote = settled
+    ? packet.status === 'returned'
+      ? '已退回'
+      : packet.status === 'rejected'
+        ? '已拒收'
+        : '已领取'
+    : packet.note && packet.note.trim()
       ? packet.note
-      : packet.status === 'returned'
-        ? '已退回'
-        : packet.status === 'rejected'
-          ? '已拒收'
-          : claimed
-            ? '已领取'
-            : '待领取';
+      : '待领取';
   return (
     <button
       type="button"
@@ -3835,10 +3834,13 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
 
 /** 聊天中的转账卡片（蓝卡 圈↔/对勾/退还↩ + ¥金额 + 状态文案 + 底部「转账」；206px 与微信转账卡同宽；自己也作为「已收款/已退还」接收凭据卡复用）。
  *  状态文案按角色与收款状态区分：接收完成后才显示「已转入好友余额」，之前是「待对方收款」；
- *  有转账留言时状态行优先显示留言（没写留言才显示状态文案，与微信端同规则）；
+ *  待收款中：有转账留言时状态行优先显示留言（没写留言才显示状态文案，与微信端同规则）；
+ *  终态（已收款/已退还/已拒收）：不再显示留言，改回显示原状态文案（与微信端同规则）；
  *  收款/退还/拒收后卡片颜色变灰（对照真实 QQ：终态卡褪色），退还卡圆图标换成↩ */
 function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
   const refunded = packet.status === 'returned';
+  // 终态（已收款/已退还/已拒收）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
+  const settled = received || Boolean(packet.status);
   const status =
     refunded
       ? '已退还'
@@ -3870,7 +3872,7 @@ function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket
         </span>
         <span className="min-w-0">
           <span className="block text-[20px] font-semibold leading-tight text-white">¥{fmtMoney(packet.amount)}</span>
-          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{packet.note && packet.note.trim() ? packet.note : status}</span>
+          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{!settled && packet.note && packet.note.trim() ? packet.note : status}</span>
         </span>
       </div>
       <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">转账</div>
