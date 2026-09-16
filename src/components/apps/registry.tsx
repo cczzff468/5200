@@ -336,6 +336,7 @@ const APP_DEFS: AppDef[] = [
   {
     id: 'memory',
     name: '记忆库',
+    image: '/icons/memory-helper.png',
     glyph: <BrainCircuit className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: MemoryBankApp,
   },

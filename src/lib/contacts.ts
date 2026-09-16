@@ -28,6 +28,8 @@ export interface ContactRecord {
   occupation: string | null;
   company: string | null;
   region: string | null;
+  /** 生日（几月几号，如「3月5日」；可不带年份） */
+  birthday?: string | null;
   relation: string | null;
   /** 仅 NPC：对机主（USER）的关系（如 网友/同事/用户的朋友/情敌）；relation 是对归属者（CHAR/USER）的关系。
    *  可选字段：历史数据无此键，读取处一律用 ?./?? 兼容 */
@@ -65,6 +67,8 @@ export interface ContactPayload {
   occupation?: string | null;
   company?: string | null;
   region?: string | null;
+  /** 生日（几月几号） */
+  birthday?: string | null;
   relation?: string | null;
   /** 仅 NPC：对机主（USER）的关系 */
   relationToUser?: string | null;

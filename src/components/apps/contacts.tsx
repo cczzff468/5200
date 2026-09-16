@@ -231,7 +231,7 @@ function GenBoxField({
  * 【AI手机联系人】                          ← 区块开标（一个文件可含多个联系人）
  * 名字：乐乐
  * 类型：CHAR                                ← CHAR / USER / NPC
- * 性别：男 / 年龄：22 / 身高 / 体重 / 职业 / 地区 / 关系 / 与用户的关系（仅 NPC）/ 归属（NPC 归属主人名）
+ * 性别：男 / 年龄：22 / 身高 / 体重 / 职业 / 地区 / 生日 / 关系 / 与用户的关系（仅 NPC）/ 归属（NPC 归属主人名）
  * 手机号 / 微信号 / 微信密码 / QQ号 / QQ密码
  * 人设：                                    ← 多行块，到下一个标签或区块结束
  * ……
@@ -248,6 +248,7 @@ interface ParsedContact {
   weight: string;
   occupation: string;
   region: string;
+  birthday: string;
   relation: string;
   relationToUser: string;
   ownerName: string;
@@ -271,6 +272,7 @@ const SINGLE_FIELD_LABELS: Array<[string, keyof ParsedContact]> = [
   ['体重', 'weight'],
   ['职业', 'occupation'],
   ['地区', 'region'],
+  ['生日', 'birthday'],
   ['关系', 'relation'],
   ['与用户的关系', 'relationToUser'],
   ['归属', 'ownerName'],
@@ -292,6 +294,7 @@ function emptyParsed(): ParsedContact {
     weight: '',
     occupation: '',
     region: '',
+    birthday: '',
     relation: '',
     relationToUser: '',
     ownerName: '',
@@ -644,6 +647,7 @@ function ListView({
           region: p.region,
           relation: p.relation,
           relationToUser: p.relationToUser,
+          birthday: p.birthday,
           phone: p.phone,
           wechatId: p.wechatId,
           wechatPassword: p.wechatPassword,
@@ -844,6 +848,7 @@ interface ContactFormState {
   weight: string;
   occupation: string;
   region: string;
+  birthday: string;
   relation: string;
   relationToUser: string;
   persona: string;
@@ -864,6 +869,7 @@ const EMPTY_FORM: ContactFormState = {
   weight: '',
   occupation: '',
   region: '',
+  birthday: '',
   relation: '',
   relationToUser: '',
   persona: '',
@@ -886,6 +892,7 @@ function formFromRecord(c: ContactRecord): ContactFormState {
     weight: pick(c.weight),
     occupation: pick(c.occupation),
     region: pick(c.region),
+    birthday: pick(c.birthday ?? null),
     relation: pick(c.relation),
     relationToUser: pick(c.relationToUser ?? null),
     persona: pick(c.persona),
@@ -1159,6 +1166,9 @@ function ContactFormView({
             <BoxField label="地区">
               <input value={form.region} onChange={(e) => set('region')(e.target.value)} placeholder="如 上海" aria-label="地区" className={boxInputCls} />
             </BoxField>
+            <BoxField label="生日">
+              <input value={form.birthday} onChange={(e) => set('birthday')(e.target.value)} placeholder="几月几号，如 3月5日" aria-label="生日" className={boxInputCls} />
+            </BoxField>
           </FieldGrid>
           <BoxField label={isNpc ? '你们的关系' : '关系'}>
             <input
@@ -1311,6 +1321,7 @@ function DetailView({
       ['体重', contact.weight],
       ['职业', contact.occupation],
       ['地区', contact.region],
+      ['生日', contact.birthday],
       ['关系', contact.relation],
       ...(contact.kind === 'npc' ? [['与用户的关系', contact.relationToUser] as [string, string | null | undefined]] : []),
     ];
@@ -1452,6 +1463,7 @@ function DetailView({
           {contact.weight && <DetailRow label="体重" value={contact.weight} />}
           {contact.occupation && <DetailRow label="职业" value={contact.occupation} />}
           {contact.region && <DetailRow label="地区" value={contact.region} />}
+          {contact.birthday && <DetailRow label="生日" value={contact.birthday} />}
           {contact.relation && (
             <DetailRow label={contact.kind === 'npc' ? '你们的关系' : '关系'} value={contact.relation} />
           )}
@@ -1464,6 +1476,7 @@ function DetailView({
             !contact.weight &&
             !contact.occupation &&
             !contact.region &&
+            !contact.birthday &&
             !contact.relation && (
               <p className="px-4 py-3 text-[13px] text-muted-foreground/60">未填写基础信息</p>
             )}
