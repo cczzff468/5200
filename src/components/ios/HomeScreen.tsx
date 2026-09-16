@@ -646,7 +646,12 @@ export default function HomeScreen() {
   useEffect(() => {
     let alive = true;
     try {
-      chatBadge.set(window.localStorage.getItem('ios-chat-assistant-read') !== '1' ? 1 : 0);
+      // 信息未读校准：优先读未读条数（AI 发了几条角标就是几）；旧数据只有已读布尔 → 未读时至少 1
+      let n = 0;
+      const raw = Number(window.localStorage.getItem('ios-chat-assistant-unread-n'));
+      if (Number.isFinite(raw) && raw > 0) n = Math.min(Math.floor(raw), 99);
+      if (window.localStorage.getItem('ios-chat-assistant-read') !== '1') n = Math.max(n, 1);
+      chatBadge.set(n);
     } catch {
       // 存储不可用时跳过
     }

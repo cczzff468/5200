@@ -84,6 +84,8 @@ const SEED_MSGS: ChatMsg[] = [
 
 /** 本地持久化：小助手沿用旧 key 兼容历史记录；联系人会话按 id 分 key */
 const LS_READ_KEY = 'ios-chat-assistant-read';
+/** 小助手会话未读条数（AI 发了几条消息，主屏角标/会话行角标就是几；0 = 已读） */
+const LS_UNREAD_N_KEY = 'ios-chat-assistant-unread-n';
 const LS_HIDDEN_KEY = 'ios-chat-assistant-hidden';
 const LS_PIN_KEY = 'ios-chat-assistant-pin';
 
@@ -233,14 +235,14 @@ const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 L8 0 Z"
 function AssistantRow({
   preview,
   time,
-  unread,
+  unreadCount,
   pinned,
   onOpen,
   onLongPress,
 }: {
   preview: string;
   time: string;
-  unread: boolean;
+  unreadCount: number;
   pinned: boolean;
   onOpen: () => void;
   onLongPress: (pos: LongPressPos) => void;
@@ -267,9 +269,13 @@ function AssistantRow({
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <p className="truncate text-[13px] leading-snug text-muted-foreground">{preview}</p>
-          {unread && (
-            <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#FF3B30] px-1 text-[11px] font-semibold leading-none text-white">
-              1
+          {unreadCount > 0 && (
+            <span
+              data-testid="sms-unread-badge"
+              aria-label={`${unreadCount} 条未读`}
+              className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#FF3B30] px-1 text-[11px] font-semibold leading-none text-white"
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
         </div>
@@ -1732,7 +1738,11 @@ export default function ChatApp() {
   const [tab, setTab] = useState<TabKey>('chats');
   /** 跨 App 跳转：电话 App 联系人详情点「信息」带来的联系人 id（挂载时消费，等联系人载入后自动进会话） */
   const [pendingJump, setPendingJump] = useState<string | null>(() => useUI.getState().pendingChatContact);
-  const [unread, setUnread] = useState(true);
+  /** 小助手会话未读条数（AI 发了几条消息角标就是几；0 = 已读） */
+  const [unreadN, setUnreadN] = useState(0);
+  const unread = unreadN > 0;
+  /** 已读水位：最后一次「已见」的小助手消息条数（AI 回复落盘时按增量累计未读） */
+  const seenLenRef = useRef(0);
   /** 会话被删除后隐藏（从联系人重新进入聊天即恢复） */
   const [hidden, setHidden] = useState(false);
   /** 置顶 */
@@ -1763,9 +1773,19 @@ export default function ChatApp() {
       if (cancelled) return;
       setHidden(window.localStorage.getItem(LS_HIDDEN_KEY) === '1');
       setPinned(window.localStorage.getItem(LS_PIN_KEY) === '1');
-      setUnread(window.localStorage.getItem(LS_READ_KEY) !== '1');
+      // 未读条数：优先读计数（AI 发了几条就是几）；旧数据只有已读布尔 → 未读时至少 1
+      let n = 0;
+      try {
+        const raw = Number(window.localStorage.getItem(LS_UNREAD_N_KEY));
+        if (Number.isFinite(raw) && raw > 0) n = Math.min(Math.floor(raw), 99);
+        if (window.localStorage.getItem(LS_READ_KEY) !== '1') n = Math.max(n, 1);
+      } catch {
+        // 读取失败按 0
+      }
+      setUnreadN(n);
       const saved = loadMsgs('assistant');
       if (saved && saved.length) setAssistantMsgs(saved);
+      seenLenRef.current = saved ? saved.length : 0;
       setMounted(true);
     });
     return () => {
@@ -1773,11 +1793,36 @@ export default function ChatApp() {
     };
   }, []);
 
-  // 全局流式回复落盘：小助手会话在聊天页外收到 AI 回复时，从存储刷新列表预览
+  // 未读条数变化 → 落盘（同时同步旧版已读布尔键，兼容旧逻辑）
+  useEffect(() => {
+    if (!mounted) return;
+    try {
+      window.localStorage.setItem(LS_UNREAD_N_KEY, String(unreadN));
+      if (unreadN > 0) window.localStorage.removeItem(LS_READ_KEY);
+      else window.localStorage.setItem(LS_READ_KEY, '1');
+    } catch {
+      // 持久化失败忽略
+    }
+  }, [unreadN, mounted]);
+
+  // 全局流式回复落盘：小助手会话在聊天页外收到 AI 回复时，从存储刷新列表预览并按条数累计未读
   // （联系人会话预览由 contactSessions 在进入列表时重算，无需额外订阅）
   useChatStreamFinalized('sms:assistant', () => {
     const saved = loadMsgs('assistant');
-    if (saved && saved.length) setAssistantMsgs(saved);
+    if (!saved || !saved.length) return;
+    setAssistantMsgs(saved);
+    const prevLen = seenLenRef.current;
+    if (view === 'chat' && chatSession?.key === 'assistant') {
+      // 小助手聊天页正开着：消息实时可见，不计未读，只推进已读水位
+      seenLenRef.current = Math.max(prevLen, saved.length);
+      return;
+    }
+    // AI 在聊天页外回复：未读条数按本轮 AI 实际发来的消息条数累加（进聊天即清零）
+    if (saved.length > prevLen) {
+      const fresh = saved.slice(prevLen).filter((m) => m.role === 'assistant').length;
+      seenLenRef.current = saved.length;
+      if (fresh > 0) setUnreadN((n) => Math.min(n + fresh, 99));
+    }
   });
 
   // 置顶 / 删除标记持久化
@@ -1793,12 +1838,9 @@ export default function ChatApp() {
 
   /** 和小助手聊天（空记录时 ChatView 内部重新播种欢迎语） */
   const openAssistantChat = () => {
-    setUnread(false);
-    try {
-      window.localStorage.setItem(LS_READ_KEY, '1');
-    } catch {
-      // 持久化失败忽略
-    }
+    setUnreadN(0);
+    const cur = loadMsgs('assistant');
+    if (cur) seenLenRef.current = cur.length;
     // 已删除/隐藏的会话重新进入即恢复显示
     setHidden(false);
     setChatSession({ key: 'assistant', peer: { title: ASSISTANT.phone, avatarSrc: null, name: ASSISTANT.name }, systemPrompt: null });
@@ -1871,23 +1913,13 @@ export default function ChatApp() {
 
   const togglePin = () => setPinned((v) => !v);
 
-  /** 标为未读/已读（微信语义：会话列表红点，与已读状态同步持久化） */
+  /** 标为未读/已读（微信语义：会话行红点，未读条数同步持久化；标为未读 = 1 条起计） */
   const markUnread = () => {
-    setUnread(true);
-    try {
-      window.localStorage.removeItem(LS_READ_KEY);
-    } catch {
-      // 持久化失败忽略
-    }
+    setUnreadN(1);
   };
 
   const markRead = () => {
-    setUnread(false);
-    try {
-      window.localStorage.setItem(LS_READ_KEY, '1');
-    } catch {
-      // 持久化失败忽略
-    }
+    setUnreadN(0);
   };
 
   /** 不显示该聊天：隐藏会话行但保留聊天记录（从联系人重新进入即恢复）；隐藏后未读无处展示，一并清为已读避免主屏角标卡死 */
@@ -1901,14 +1933,15 @@ export default function ChatApp() {
     setAssistantMsgs([]);
     saveMsgs('assistant', []);
     setHidden(true);
-    setUnread(false);
+    seenLenRef.current = 0;
+    setUnreadN(0);
   };
 
   // 主屏图标红点同步：小助手会话未读 → unread-store 总线（与微信/QQ 主屏角标同款，实时+持久化）
   useEffect(() => {
     if (!mounted) return; // 等本地已读状态载入后再同步，避免默认 true 造成误闪
-    chatBadge.set(unread && !hidden ? 1 : 0);
-  }, [unread, hidden, mounted]);
+    chatBadge.set(unreadN > 0 && !hidden ? Math.min(unreadN, 99) : 0);
+  }, [unreadN, hidden, mounted]);
 
   /** 打开微信风格长按菜单：锚定在会话行下方、水平对齐触点 */
   const openMenuAt = (x: number, rowBottom: number) => {
@@ -2003,7 +2036,7 @@ export default function ChatApp() {
             <AssistantRow
               preview={preview}
               time={listTime}
-              unread={unread}
+              unreadCount={unreadN}
               pinned={pinned}
               onOpen={openAssistantChat}
               onLongPress={({ x, rowBottom }) => openMenuAt(x, rowBottom)}

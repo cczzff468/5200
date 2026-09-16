@@ -171,8 +171,9 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
-import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, type MsgFavorite } from '@/lib/msg-favorites';
+import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
+import { LocalToast, useLocalToast } from './local-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
@@ -208,7 +209,7 @@ interface QQMsg {
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
-  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number }[] };
+  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null }[] };
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -573,7 +574,10 @@ function loadMsgs(contactId: string): QQMsg[] {
                         name: r.name,
                         role: r.role === 'me' ? ('me' as const) : ('peer' as const),
                         text: r.text,
+                        quote: typeof r.quote === 'string' ? r.quote : undefined,
                         time: typeof r.time === 'number' ? r.time : 0,
+                        // 保留记录快照头像（undefined = 旧数据无此字段，详情页回退按角色取）
+                        avatar: typeof r.avatar === 'string' ? r.avatar : r.avatar === null ? null : undefined,
                       }))
                   : undefined,
               }
@@ -1736,7 +1740,6 @@ function ChatPage({
   onBack,
   onOpenBond,
   onOpenFriendProfile,
-  onToast,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -1749,8 +1752,11 @@ function ChatPage({
   onOpenBond: () => void;
   /** 聊天设置页点信息卡片 → 进入好友资料页 */
   onOpenFriendProfile: () => void;
-  onToast: (m: string) => void;
+  /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
+  onToast?: (m: string) => void;
 }) {
+  // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
+  const [chatToast, onToast] = useLocalToast();
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   const [input, setInput] = useState('');
@@ -2233,6 +2239,8 @@ function ChatPage({
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
         saveMsgs(peer.id, [...cur, ...all]);
+        // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
+        if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, all.length);
         // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
         addBondPoints(peer.id, BOND_MSG_POINTS);
       },
@@ -2420,12 +2428,15 @@ function ChatPage({
             text: quoteContentOf(m),
             quote: m.quote ? `${m.quote.name}：${m.quote.content}` : undefined,
             time: m.time,
+            // 记录快照自带头像：定格转发时原说话人的头像，详情页不会错拿转发目标会话的头像
+            avatar: m.role === 'me' ? me.avatar : peer.avatar,
           })),
         },
       };
       saveMsgs(target.id, [...loadMsgs(target.id), card]);
     }
-    qqUnreads.bump(target.id);
+    // 逐条转发 N 条 → 角标 +N；合并转发是 1 张卡片 → 角标 +1
+    qqUnreads.bump(target.id, mode === 'each' ? list.length : 1);
     if (target.id !== me.id) {
       const lines = list.slice(-8).map((m) => `${nameOf(m)}：${quoteContentOf(m)}`).join(' ／ ').slice(0, 240);
       pushAiEvent(
@@ -2477,18 +2488,19 @@ function ChatPage({
         break;
       }
       case 'forward':
-        // 与原生 QQ 一致：转发 → 进入聊天内多选勾选（该条预选），底部出现 逐条/合并/取消
+        // 转发 → 进入聊天内多选勾选（该条预选）；点底栏「分享」图标后才弹出 逐条/合并 转发方式
         setSelectMode(true);
         setSelectedIds([m.id]);
-        setFwdFlow('choose');
         break;
       case 'fav':
+        // 收藏 toggle：首点收藏（toast 收藏成功）；已收藏再点 → 取消收藏（收藏页同步移除）
         if (isMsgFavorited('qq', m.id)) {
-          onToast('已在收藏中');
+          unfavoriteMsg('qq', m.id);
+          onToast('取消收藏');
           break;
         }
         addFavorite('qq', favOf(m));
-        onToast('已收藏');
+        onToast('收藏成功');
         break;
       case 'regen':
         regenerate(m);
@@ -3026,47 +3038,6 @@ function ChatPage({
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮）；多选模式下变为批量操作栏 */}
       <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
         {selectMode ? (
-          fwdFlow === 'choose' ? (
-            /* 转发勾选模式底栏：逐条转发 / 合并转发 / 取消 三行全宽白底 */
-            <div className="overflow-hidden rounded-t-[14px] bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.08)] dark:bg-[#2C2C2C]" data-testid="qq-fwd-choose-bar">
-              <button
-                type="button"
-                data-testid="qq-fwd-each"
-                disabled={selectedIds.length === 0}
-                onClick={() => {
-                  setFwdMode('each');
-                  setFwdFlow('target');
-                }}
-                className={`w-full py-[15px] text-center text-[17px] ${
-                  selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-[#1F2329] active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
-                }`}
-              >
-                逐条转发
-              </button>
-              <button
-                type="button"
-                data-testid="qq-fwd-merge"
-                disabled={selectedIds.length === 0}
-                onClick={() => {
-                  setFwdMode('merge');
-                  setFwdFlow('target');
-                }}
-                className={`w-full border-t border-black/[0.06] py-[15px] text-center text-[17px] dark:border-white/[0.08] ${
-                  selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-[#1F2329] active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
-                }`}
-              >
-                合并转发
-              </button>
-              <button
-                type="button"
-                data-testid="qq-fwd-cancel"
-                onClick={exitSelect}
-                className="w-full border-t border-black/[0.06] bg-[#F7F7F7] py-[15px] text-center text-[17px] text-[#1F2329] active:bg-black/[0.04] dark:border-white/[0.08] dark:bg-[#242424] dark:text-white dark:active:bg-white/[0.06]"
-              >
-                取消
-              </button>
-            </div>
-          ) : (
           <div className="flex items-center justify-around px-6 pb-[22px] pt-3" data-testid="qq-select-bar">
             <button
               type="button"
@@ -3086,7 +3057,7 @@ function ChatPage({
               className="flex flex-col items-center gap-1 text-[12px] text-[#1F2329] disabled:opacity-35 dark:text-white/85"
             >
               <Forward className="h-[21px] w-[21px]" strokeWidth={1.9} />
-              转发
+              分享
             </button>
             <button
               type="button"
@@ -3099,7 +3070,6 @@ function ChatPage({
               收藏
             </button>
           </div>
-          )
         ) : (
         <>
         {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
@@ -3546,6 +3516,46 @@ function ChatPage({
         </div>
       )}
 
+      {/* 转发方式弹层（多选底栏点「分享」图标才弹出：逐条转发 / 合并转发；点弹层以外任意处关闭不执行） */}
+      {selectMode && fwdFlow === 'choose' && (
+        <div className="absolute inset-0 z-[60]" data-testid="qq-fwd-choose-mask" onClick={() => setFwdFlow(null)}>
+          <div
+            className="absolute inset-x-3 bottom-[84px] overflow-hidden rounded-[14px] bg-white shadow-[0_8px_32px_rgba(0,0,0,0.20)] dark:bg-[#2C2C2C]"
+            data-testid="qq-fwd-choose-bar"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              data-testid="qq-fwd-each"
+              disabled={selectedIds.length === 0}
+              onClick={() => {
+                setFwdMode('each');
+                setFwdFlow('target');
+              }}
+              className={`w-full py-[15px] text-center text-[17px] ${
+                selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-[#1F2329] active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+              }`}
+            >
+              逐条转发
+            </button>
+            <button
+              type="button"
+              data-testid="qq-fwd-merge"
+              disabled={selectedIds.length === 0}
+              onClick={() => {
+                setFwdMode('merge');
+                setFwdFlow('target');
+              }}
+              className={`w-full border-t border-black/[0.06] py-[15px] text-center text-[17px] dark:border-white/[0.08] ${
+                selectedIds.length === 0 ? 'text-black/25 dark:text-white/25' : 'text-[#1F2329] active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+              }`}
+            >
+              合并转发
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 转发目标选择（转发流程第二步：聊天内勾选完 → 逐条/合并 → 选会话） */}
       {fwdFlow === 'target' && (
         <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/40" data-testid="qq-fwd-target-layer">
@@ -3596,10 +3606,15 @@ function ChatPage({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
               <p className="py-3 text-center text-[13px] text-black/40 dark:text-white/40">{fwdRecordDate(records[0]?.time ?? d.time)}</p>
-              <div className="space-y-4">
+              {/* 逐条记录：行间分割线 */}
+              <div className="divide-y divide-black/[0.06] dark:divide-white/[0.08]">
                 {records.map((r, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <QqAvatar src={r.role === 'me' ? me.avatar : peer.avatar} alt={r.name} size={34} />
+                  <div key={i} className="flex items-start gap-2 py-3">
+                    <QqAvatar
+                      src={r.avatar !== undefined ? r.avatar : r.role === 'me' ? me.avatar : peer.avatar}
+                      alt={r.name}
+                      size={34}
+                    />
                     <div className="min-w-0 flex-1">
                       {/* 名字在左、时间顶到最右 */}
                       <div className="flex items-baseline justify-between gap-2">
@@ -3630,6 +3645,9 @@ function ChatPage({
           testPrefix="qq-menu"
         />
       )}
+
+      {/* 页内 toast（收藏成功/取消收藏/已复制/已转发给 xx 等操作提示） */}
+      <LocalToast msg={chatToast} />
     </div>
   );
 }
@@ -9213,7 +9231,10 @@ function WalletPage({ me, onBack, onToast }: { me: QQUser; onBack: () => void; o
 
 // ---------------- 收藏页（个人抽屉「收藏」入口；数据在 @/lib/msg-favorites） ----------------
 
-function QqFavoritesPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
+function QqFavoritesPage({ onBack }: { onBack: () => void; onToast?: (m: string) => void }) {
+  // 收藏页在提前 return 的分支里，App 根 toast 不渲染 → 页内自带 toast
+  const [toast, showToast] = useLocalToast();
+  const onToast = showToast;
   const [list, setList] = useState<MsgFavorite[]>(() => loadFavorites('qq'));
 
   const del = (id: string) => {
@@ -9223,7 +9244,7 @@ function QqFavoritesPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F5F6F7] text-[#1F2329] dark:bg-[#111214] dark:text-white">
+    <div className="relative flex h-full flex-col bg-[#F5F6F7] text-[#1F2329] dark:bg-[#111214] dark:text-white">
       {/* 顶栏（QQ 风格返回 + 标题） */}
       <div className="shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
         <div className="flex h-12 items-center gap-1 px-3">
@@ -9275,6 +9296,8 @@ function QqFavoritesPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
           </div>
         )}
       </div>
+      {/* 页内 toast（已删除收藏等提示） */}
+      <LocalToast msg={toast} />
     </div>
   );
 }

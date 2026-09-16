@@ -79,3 +79,12 @@ export function removeFavorite(app: FavApp, id: string): void {
 export function isMsgFavorited(app: FavApp, msgId: string): boolean {
   return loadFavorites(app).some((x) => x.msgId === msgId);
 }
+
+/** 取消收藏某条消息（长按菜单「已收藏」再点一次 → 取消收藏，收藏页同步移除）：
+ *  按原消息 id 找到收藏项后按收藏 id 删除；返回是否真的删除了（未收藏过返回 false） */
+export function unfavoriteMsg(app: FavApp, msgId: string): boolean {
+  const item = loadFavorites(app).find((x) => x.msgId === msgId);
+  if (!item) return false;
+  removeFavorite(app, item.id);
+  return true;
+}

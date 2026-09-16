@@ -4396,3 +4396,31 @@ Work Log:
 Stage Summary:
 - 17aa0ec 重构（页内多选转发 + filled 收藏态）经全量回归确认功能完好；其引入的 wxActiveChatId 重复声明已修复（50d1927）
 - 三端（微信/QQ/信息）长按菜单、逐条/合并转发、收藏去重、重新生成、转账详情方向修复全部浏览器实测通过
+---
+Task ID: T
+Agent: Z.ai Code (main)
+Task: 长按菜单后续五项反馈：①转发底栏分享图标→点开才弹逐条/合并 ②转发详情页AI头像=我头像修复 ③详情页分割线 ④收藏toggle（收藏成功toast/再点取消收藏联动收藏页） ⑤未读角标=AI消息条数
+
+Work Log:
+- forward-sheet.tsx FwdRecord + wechat.tsx/qq.tsx WxMsg/QQMsg.fwd.records 类型新增 avatar?: string|null；doForward 合并转发时快照原说话人头像（me→me.avatar、peer→来源会话 peer.avatar），详情页不再错拿转发目标会话头像
+- 修复 loadMsgs 规范化丢弃 records.avatar/quote 的隐藏 bug（AI 回复落盘 load→save 循环会把字段抹掉，正是头像修复首次验证失败的原因）；两端 loadMsgs records 映射保留 quote+avatar
+- 两端合并转发「聊天记录」详情页：记录行改 divide-y 分割线 + py-3（对照原生微信）
+- 转发流程重构（两端）：长按「转发」/多选底栏只进勾选模式（底栏 删除/分享/收藏 三图标，转发 label 改「分享」）；点「分享」图标才弹出 逐条转发/合并转发 圆角弹层（mask 点外关闭不执行、仍保持多选；上一步回退兼容）
+- 收藏 toggle（两端）：菜单「已收藏」再点 → unfavoriteMsg（msg-favorites.ts 新增，按 msgId 找收藏项删除）+ toast「取消收藏」；首点 toast「收藏成功」；收藏页数据源即 localStorage，天然联动
+- 未读角标按条数：微信 AI 回合 bump(peer.id, all.length)（原 +1）；QQ AI 回合补上缺失的 bump（qqActiveChatId !== peer.id 时 bump(peer.id, all.length)——此前 QQ AI 回复完全不产生未读）；逐条转发 N 条 bump N、合并转发 bump 1；两端 bump 封顶 99
+- 发现并修复「聊天页内 toast 从未显示」的结构性 bug：微信/QQ App 根 toast 在 chatPeer/favorites 提前 return 分支不渲染 → 新建 local-toast.tsx（useLocalToast + LocalToast 浮层 z-80），微信/QQ 聊天页与收藏页各自挂载（收藏成功/取消收藏/已复制/已转发给 xx/已删除收藏 全部可见）；onToast prop 转可选不破坏调用方
+- 信息 App 小助手未读布尔改计数：新增 ios-chat-assistant-unread-n localStorage（兼容旧已读布尔，未读至少 1）；useChatStreamFinalized('sms:assistant') 在聊天页外按本轮 assistant 消息条数累计（seenLenRef 已读水位）；会话行角标/主屏图标角标显示真实条数（AssistantRow unreadCount prop，99+ 封顶）；HomeScreen 挂载校准同步改为读计数键
+- Agent Browser 端到端验证（393×852，种 user+2npc 带不同颜色 SVG 头像 + fetch stub 4 句流式回复）：
+  ①微信 AI 回 4 条 → 列表角标=4，进聊天清零；聊天页内实时流式 4 气泡（回归✓）
+  ②长按→转发→底栏「分享」图标（弹窗不直出）→勾选第2条→点分享→弹层（逐条/合并/mask）→点外关闭仍多选→再开→合并转发→糖糖
+  ③详情页 divide-y 分割线 + 记录头像快照：乐乐→#E85D9E（修复前错显糖糖 #3FA96F）、阿泽→#7A5CFA ✓
+  ④收藏：首点 toast「收藏成功」+落盘；再长按「已收藏」+filled 五角星→点击 toast「取消收藏」+收藏页条目同步消失；收藏页删除 toast「已删除收藏」+空态 ✓
+  ⑤QQ：AI 回 4 条角标=4、主屏 QQ 图标角标=4；收藏 toggle+双 toast；分享弹层 mask 关闭保持多选；逐条转发 2 张「转发自乐乐」卡到糖糖 ✓
+  ⑥信息：聊天页外 finalize 角标=1（单条回复语义）、进聊天清零、主屏角标联动；聊天页内已完成回复不误计（已读语义）✓
+  ⑦lint + tsc 0 问题、console 无运行时错误（仅 HMR 陈旧警告）
+
+Stage Summary:
+- 转发方式选择改为「分享图标→弹层」两级交互（对照原生微信），点外关闭不丢多选
+- 转发详情页头像按记录快照渲染并加分割线；loadMsgs 规范化不再丢 avatar/quote
+- 收藏变为可逆 toggle：收藏成功/取消收藏 toast 可见（顺带修复聊天页 toast 从不显示的结构性缺陷）
+- 三端未读角标全部按 AI 实际消息条数计数（QQ 补上 AI 回合缺失的 bump；信息布尔改计数含主屏图标与旧数据兼容）
