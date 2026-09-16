@@ -35,6 +35,16 @@ export interface MemFragment {
   /** 来源时间：提取时对话最后一条消息的时间 */
   sourceTime: number;
   createdAt: number;
+  /** 事件发生时间（内容所指的时间，如「明天去北京」→明天；无时间信息不写） */
+  eventTime?: number;
+  /** 过期时间（空 = 永不过期；到期后碎片自动归档、不再召回） */
+  expiresAt?: number;
+  /** 实际过期归档时刻（惰性标记：扫到过期即写入，UI 显示「已过期」） */
+  expiredAt?: number;
+  /** 被更新标记：新旧记忆矛盾时旧记忆记下更新时刻（不再参与召回/总结，UI 显示「已更新」） */
+  supersededAt?: number;
+  /** 更新它的新记忆 id（追溯） */
+  supersededBy?: string;
   /** 手动编辑过的时间（编辑后不再被自动流程改写） */
   editedAt?: number;
   /** 已被长期记忆总结消费（召回时由长期记忆代表，避免重复注入） */
@@ -61,6 +71,8 @@ export interface MemCore {
   /** 来源 App 集合（互通关闭时召回过滤用） */
   apps: MemApp[];
   createdAt: number;
+  /** 事件时间（来源碎片中带时间信息的最早/代表时间；可选） */
+  eventTime?: number;
   editedAt?: number;
   /** 已被长期记忆总结收编（召回时由长期记忆代表，不再参与后续总结与召回） */
   archivedAt?: number;
@@ -78,6 +90,8 @@ export interface MemLongTerm {
   /** 来源 App 集合（互通关闭时召回过滤用） */
   apps: MemApp[];
   createdAt: number;
+  /** 事件时间（来源核心中带时间信息的代表时间；可选） */
+  eventTime?: number;
   editedAt?: number;
 }
 
@@ -106,6 +120,50 @@ export const DEFAULT_MEM_SETTINGS: MemSettings = {
 export const MEM_INTERVAL_OPTIONS: MemSettings['interval'][] = [10, 20, 30, 40, 50];
 export const MEM_THRESHOLD_OPTIONS: MemSettings['threshold'][] = [5, 10, 15, 20, 30];
 export const MEM_LONG_OPTIONS: MemSettings['longThreshold'][] = [3, 5, 7, 10, 20];
+
+// ---------------- 时间感知（记忆 × 当前时间联动） ----------------
+
+/** 时间解析/范围校验的边界：距当前 ±5 年，超出视为模型幻觉时间，置空处理 */
+export const MEM_TIME_RANGE_YEARS = 5;
+
+/**
+ * 有效时间（注入排序/标注用）：事件时间优先（内容所指的时间），
+ * 其次加强时间/来源时间（碎片），最后创建时间（核心/长期）。
+ */
+export function memEffectiveTime(m: {
+  eventTime?: number;
+  reinforcedAt?: number;
+  sourceTime?: number;
+  createdAt: number;
+}): number {
+  return m.eventTime ?? m.reinforcedAt ?? m.sourceTime ?? m.createdAt;
+}
+
+/** 是否已过期（expiresAt 空 = 永不过期；核心/长期默认永不过期） */
+export function isMemExpired(m: { expiresAt?: number }, now: number = Date.now()): boolean {
+  return m.expiresAt != null && now > m.expiresAt;
+}
+
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+
+/**
+ * 中文时间标签（注入/展示共用）：同年省年份；0点0分视为仅日期（日期型事件时间不带出无意义的 00:00）。
+ * 例：9月20日 / 9月20日 19:30 / 2025年12月31日。
+ */
+export function memTimeLabel(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  const sameYear = new Date(now).getFullYear() === d.getFullYear();
+  const base = `${d.getMonth() + 1}月${d.getDate()}日`;
+  const hm = d.getHours() !== 0 || d.getMinutes() !== 0 ? ` ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
+  return sameYear ? `${base}${hm}` : `${d.getFullYear()}年${base}${hm}`;
+}
+
+/** 当前时间标签（注入记忆块头部，供 AI 对比记忆新旧）：2026年9月16日 星期三 14:32 */
+export function memNowLabel(now: number = Date.now()): string {
+  const d = new Date(now);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 星期${WEEKDAYS[d.getDay()]} ${hm}`;
+}
 
 /** 记忆提取/总结时双方名字（视角统一：一律用真实名字指代，禁用「对方/用户/我」） */
 export interface MemNames {

@@ -5020,3 +5020,21 @@ Stage Summary:
 - 交付：contacts-store.ts（+contactRealName）、wechat.tsx、qq.tsx、chat.tsx（peer 名改真实名字）、memory-bank.tsx（realName 贯通 + 频率去「条」），共 5 文件。
 - 关键决策：名字来源统一走「联系人原始记录 name 字段」而非展示层（与机主 ownerRealName 同构）；展示昵称仅属 UI 层，任何记忆管道（自动提取/手动总结/视角修复/核心/长期）均不受昵称污染；频率选项三组统一纯数字。
 - 既有链路不受影响：互通开关、角色隔离、核心/长期总结触发、淡化归档、手动四粒度总结均未改动。
+
+---
+Task ID: AM
+Agent: 主协调者 (Z.ai Code)
+Task: 记忆系统时间感知（记忆 × 当前时间联动）：三层时间字段/提取判时/注入排序标注/过期归档/矛盾更新
+
+Work Log:
+- 需求：碎片/核心/长期每条加 createdAt（已有）/eventTime/expiresAt；提取时判断时间信息；注入带时间标签+当前时间+按时间从新到旧+提示优先参考更近记忆；过期碎片自动归档（核心/长期默认永不过期）；新旧矛盾取更近者、旧记忆标记「已更新」不参与召回。
+- memory-core.ts：MemFragment 增 eventTime/expiresAt/expiredAt/supersededAt/supersededBy；MemCore/MemLongTerm 增 eventTime（可选，永不过期）；新增 memEffectiveTime（事件时间优先→加强→来源→创建）、isMemExpired、memTimeLabel（同年省年份/0点视为纯日期）、memNowLabel（当前时间+星期）、MEM_TIME_RANGE_YEARS=5。
+- /api/memory/extract：prompt 增【时间规则】段——当前时间锚点（Intl Asia/Shanghai）+ 相对时间换算指示 + eventTime/expiresAt 语义（一次性安排才设过期；习惯/长期事实 null）+ supersedes 矛盾更新规则；请求增 existing（已有记忆 id+内容，≤30 条）；返回增 eventTime/expiresAt/supersedes，服务端 saneTimeStr 校验（±5 年，非法置空防幻觉）。
+- memory.ts：parseMemTime 客户端二次校验并本地化解析（YYYY-MM-DD→当地0点，YYYY-MM-DD HH:mm→当地时刻，防 UTC 偏移污染标签）；normalizeExtract 解析时间与 supersedes；appendFragments 重写——矛盾更新优先于相似合并（supersededAt/supersededBy 落标，矛盾条不走合并防「不吃辣」被并进「爱吃辣」），新碎片带 eventTime/expiresAt，已更新/已过期不作为合并/加强目标；pendingFragmentCount/archivedFragmentCount 排除已更新/已过期，新增 expiredFragmentCount/supersededFragmentCount；memSweepExpiry 惰性清扫（召回/一轮对话结束/档案页刷新时调用，标 expiredAt）；summarizePendingIntoCore 排除已更新/过期碎片，核心 eventTime 取来源最早事件时间；memRecallBlock 重构——头部注入当前时间+「优先参考时间更近、矛盾以更近为准」指示，层内按有效时间从新到旧，每条带（时间标签）前缀，碎片事件时间优先于来源时间；memRecallPreview 同步过滤；existingForConflict 随三处提取请求发送。
+- memory-bank.tsx：EventTimeBadge/ExpiredBadge/SupersededBadge 徽标，碎片卡显示事件时间/到期时间/已过期/已更新并淡显沉底，核心/长期显示事件时间徽标，MemoryCard 增 dim prop，档案页挂载时 memSweepExpiry，设置页数据行增已过期/已更新计数。
+- 验证：tsc+lint 全绿。①bun 脚本直跑 memory.ts（localStorage 模拟）：注入块头部带「当前时间：2026年9月16日 星期三 13:53」+优先参考指示，碎片按事件时间排前、已过期（减肥）与已更新（爱吃辣）不注入、sweep 标记/计数全对 ✅；②真实提取 API：对话「明天下午3点去北京出差待三天」→ eventTime=2026-09-17 15:00、expiresAt=2026-09-20（相对时间换算正确）；「我以后不吃辣了」+existing[小晨爱吃辣]→ supersedes=[f1] ✅；③浏览器全链路：植入对话+旧碎片→记忆库「立即总结」→ 请求携带 existing，新碎片落库带 eventTime/expiresAt，旧碎片 supersededAt/supersededBy 精确指向「小晨以后不吃辣了」，UI 显示「事件 9月17日 15:00」「9月20日到期」「已更新」徽标且淡显沉底 ✅；④测试数据已还原（对话/碎片备份回写，备份键删除）。
+
+Stage Summary:
+- 交付：memory-core.ts（时间字段+工具）、/api/memory/extract（时间锚点+判时+矛盾更新+校验）、memory.ts（解析/追加/清扫/召回重构/三处调用）、memory-bank.tsx（徽标+淡显+计数），共 4 文件。
+- 关键决策：①时间判断交给 LLM 但双重校验（服务端 saneTimeStr ±5 年 + 客户端 parseMemTime 本地时区解析），幻觉时间一律置空=永不过期；②矛盾更新优先于相似合并（相似合并会把「不吃辣」并进「爱吃辣」）；③核心/长期不加 expiresAt（默认永不过期），仅带可选 eventTime 供排序标注；④过期归档惰性标记+实时过滤双保险，不依赖定时任务。
+- 不破坏既有功能：三层结构/淡化状态机/权重/互通开关/角色隔离/手动四粒度总结/视角修复/流式聊天均未改动（过滤与排序为增量条件）。

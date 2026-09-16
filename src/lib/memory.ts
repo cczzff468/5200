@@ -26,6 +26,10 @@
  *   设置页可手动「整理重复记忆」一次性清理；召回时跨层去重（长期→核心→碎片顺序，后层与已选
  *   内容相似则跳过）。
  * - 【权重优先级】姓名/关系/承诺/健康禁忌 → 高权重（自动分类 + 手动可调）；召回按权重×相关性排序。
+ * - 【时间感知】记忆与当前时间联动：碎片可带 eventTime（事件发生时间）/ expiresAt（过期时间，
+ *   空=永不过期）；提取时由模型按当前时间锚点判断（服务端校验 ±5 年防幻觉）；注入时头部带当前
+ *   时间、层内按有效时间从新到旧、每条带时间标签，并提示优先参考更近的记忆；过期碎片自动归档
+ *   （expiredAt）不再召回；新旧矛盾时模型标注 supersedes，旧记忆标记「已更新」不再召回。
  * - 【来源追溯】每条碎片记录来源 App / 来源时间 / 来源消息 ID，回答「你怎么知道的」。
  * - 提取/总结调用 /api/memory/extract 与 /api/memory/summarize（用户 API 配置优先，
  *   服务端 SDK 兜底）；自动提取失败静默（下一窗口重试），手动「立即总结」失败给提示；
@@ -42,11 +46,16 @@ import {
   MEM_LONG_OPTIONS,
   MEM_STALE_PAT,
   MEM_THRESHOLD_OPTIONS,
+  MEM_TIME_RANGE_YEARS,
   SIMILAR_MERGE_THRESHOLD,
   autoWeight,
   bigrams,
   fadeState,
   higherWeight,
+  isMemExpired,
+  memEffectiveTime,
+  memNowLabel,
+  memTimeLabel,
   normalizeWeight,
   similarity,
   weightFactor,
@@ -71,11 +80,16 @@ export {
   MEM_INTERVAL_OPTIONS,
   MEM_LONG_OPTIONS,
   MEM_THRESHOLD_OPTIONS,
+  MEM_TIME_RANGE_YEARS,
   SIMILAR_MERGE_THRESHOLD,
   autoWeight,
   bigrams,
   fadeState,
   higherWeight,
+  isMemExpired,
+  memEffectiveTime,
+  memNowLabel,
+  memTimeLabel,
   normalizeWeight,
   similarity,
   weightFactor,
@@ -196,20 +210,77 @@ export function listLongTerm(contactId: string): MemLongTerm[] {
   return readLongTerm(contactId).sort((a, b) => b.createdAt - a.createdAt);
 }
 
-/** 未被核心总结消费、且未归档的碎片数（设置页展示/总结触发判断用） */
+/** 未被核心总结消费、且未被更新/过期/归档的碎片数（设置页展示/总结触发判断用） */
 export function pendingFragmentCount(contactId: string): number {
   const { forget } = getMemSettings(contactId);
   const now = Date.now();
   return readFragments(contactId).filter(
-    (f) => !f.consumedAt && fadeState(f as FadeInput, forget, now) !== 'faded'
+    (f) =>
+      !f.consumedAt &&
+      !f.supersededAt &&
+      !isMemExpired(f, now) &&
+      fadeState(f as FadeInput, forget, now) !== 'faded'
   ).length;
 }
 
-/** 已归档（完全失效）的碎片数（数据说明展示用） */
+/** 已归档（淡化到期，完全失效）的碎片数（数据说明展示用） */
 export function archivedFragmentCount(contactId: string): number {
   const { forget } = getMemSettings(contactId);
   const now = Date.now();
-  return readFragments(contactId).filter((f) => fadeState(f as FadeInput, forget, now) === 'faded').length;
+  return readFragments(contactId).filter(
+    (f) => !f.supersededAt && !isMemExpired(f, now) && fadeState(f as FadeInput, forget, now) === 'faded'
+  ).length;
+}
+
+/** 已过期（时间感知到期自动归档）的碎片数（数据说明展示用） */
+export function expiredFragmentCount(contactId: string): number {
+  const now = Date.now();
+  return readFragments(contactId).filter((f) => !f.supersededAt && isMemExpired(f, now)).length;
+}
+
+/** 已更新（被矛盾新记忆替代，不再召回）的碎片数（数据说明展示用） */
+export function supersededFragmentCount(contactId: string): number {
+  return readFragments(contactId).filter((f) => f.supersededAt != null).length;
+}
+
+/**
+ * 时间感知过期清扫：把 expiresAt 已到期的碎片标记 expiredAt（自动归档）。
+ * 惰性执行：召回（memRecallBlock）、一轮对话结束（memAfterAiTurn）、记忆库刷新时调用；
+ * 召回/总结的过滤都按 isMemExpired 实时判断，本清扫只负责落库标记与 UI 展示。
+ * 返回本次标记的条数。
+ */
+export function memSweepExpiry(contactId: string): number {
+  const now = Date.now();
+  const list = readFragments(contactId);
+  let changed = 0;
+  const next = list.map((f) => {
+    if (f.expiresAt != null && now > f.expiresAt && !f.expiredAt && !f.supersededAt) {
+      changed++;
+      return { ...f, expiredAt: now };
+    }
+    return f;
+  });
+  if (changed > 0) writeJSON(fragKey(contactId), next);
+  return changed;
+}
+
+/**
+ * 矛盾更新对比用：当前待总结（未消费/未更新/未过期/未淡化）碎片的 id+内容，最近 30 条。
+ * 随提取请求发给模型，让它判断新信息是否与已有记忆矛盾（supersedes 只接受这些 id）。
+ */
+function existingForConflict(contactId: string): { id: string; content: string }[] {
+  const { forget } = getMemSettings(contactId);
+  const now = Date.now();
+  return readFragments(contactId)
+    .filter(
+      (f) =>
+        !f.consumedAt &&
+        !f.supersededAt &&
+        !isMemExpired(f, now) &&
+        fadeState(f as FadeInput, forget, now) !== 'faded'
+    )
+    .slice(-30)
+    .map((f) => ({ id: f.id, content: f.content }));
 }
 
 /** 未被长期记忆收编（未归档）的核心记忆数（长期总结触发判断用） */
@@ -344,6 +415,7 @@ function fragRecallScore(f: MemFragment, forget: MemForget, context: string, now
  */
 export function memRecallBlock(contactId: string, app: MemApp, contextText: string): string {
   if (!contactId) return '';
+  memSweepExpiry(contactId);
   const { share, forget } = getMemSettings(contactId);
   const now = Date.now();
   // 长期记忆（顶层画像）：全量注入（安全上限 8 条防失控）
@@ -358,9 +430,9 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 12);
-  // 近期记忆碎片：按相关性取前 5 条；已消费的由核心记忆代表，不再重复注入
+  // 近期记忆碎片：按相关性取前 5 条；已消费的由核心记忆代表，已更新/已过期的不召回
   const frags = listFragments(contactId)
-    .filter((f) => !f.consumedAt && (share || f.app === app))
+    .filter((f) => !f.consumedAt && !f.supersededAt && !isMemExpired(f, now) && (share || f.app === app))
     .map((f) => ({ f, ...fragRecallScore(f, forget, contextText, now) }))
     .filter((x) => x.st !== 'faded')
     .sort((a, b) => b.s - a.s)
@@ -385,21 +457,28 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
     return true;
   });
   if (keepLongs.length === 0 && keepCores.length === 0 && keepFrags.length === 0) return '';
-  const lines: string[] = ['【关于对方的记忆（跨应用记忆库自动整理；聊天时自然运用，不要逐条复述或主动承认看过记忆）】'];
+  // 时间感知：层内按有效时间（事件时间优先，其次加强/来源/创建时间）从新到旧排序
+  keepLongs.sort((a, b) => memEffectiveTime(b.m) - memEffectiveTime(a.m));
+  keepCores.sort((a, b) => memEffectiveTime(b.m) - memEffectiveTime(a.m));
+  keepFrags.sort((a, b) => memEffectiveTime(b.f) - memEffectiveTime(a.f));
+  const lines: string[] = [
+    `【关于对方的记忆（跨应用记忆库自动整理；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
+    '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
+  ];
   if (keepLongs.length > 0) {
     lines.push('◇ 长期记忆（最稳定的画像；回复时应始终符合这些事实）：');
-    keepLongs.forEach(({ m }, i) => lines.push(`${i + 1}. ${m.content}`));
+    keepLongs.forEach(({ m }, i) => lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}）${m.content}`));
   }
   if (keepCores.length > 0) {
     lines.push('◇ 核心记忆（长期事实；回复时应优先参考这些核心事实，保持前后一致）：');
-    keepCores.forEach(({ m }, i) => lines.push(`${i + 1}. ${m.content}`));
+    keepCores.forEach(({ m }, i) => lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}）${m.content}`));
   }
   if (keepFrags.length > 0) {
     lines.push('◇ 近期记忆碎片：');
     keepFrags.forEach(({ f }, i) => {
-      const d = new Date(f.sourceTime);
-      const md = `${d.getMonth() + 1}月${d.getDate()}日`;
-      lines.push(`${i + 1}. （${md}·${MEM_APP_LABEL[f.app]}）${f.content}`);
+      // 事件时间优先（内容所指的时间），否则用来源对话时间；碎片额外带来源 App 标注
+      const t = f.eventTime != null ? memTimeLabel(f.eventTime, now) : `${memTimeLabel(f.sourceTime, now)}·${MEM_APP_LABEL[f.app]}`;
+      lines.push(`${i + 1}. （${t}）${f.content}`);
     });
   }
   return lines.join('\n');
@@ -421,7 +500,7 @@ export function memRecallPreview(contactId: string): { longs: MemLongTerm[]; cor
     .slice(0, 3)
     .map((x) => x.m);
   const frags = listFragments(contactId)
-    .filter((f) => !f.consumedAt)
+    .filter((f) => !f.consumedAt && !f.supersededAt && !isMemExpired(f, now))
     .map((f) => ({ f, ...fragRecallScore(f, forget, '', now) }))
     .filter((x) => x.st !== 'faded')
     .sort((a, b) => b.s - a.s)
@@ -435,10 +514,13 @@ export function memRecallPreview(contactId: string): { longs: MemLongTerm[]; cor
 /** 防并发：同一联系人同一 App 正在提取/总结时跳过新触发 */
 const inflight = new Set<string>();
 
-/** extract 接口返回的单条碎片：文本 + 可选权重（LLM 判定，缺失时客户端自动分类兜底） */
+/** extract 接口返回的单条碎片：文本 + 可选权重 + 时间感知（事件/过期时间）+ 矛盾更新目标 */
 interface ExtractItem {
   text: string;
   weight?: MemWeight;
+  eventTime?: number | null;
+  expiresAt?: number | null;
+  supersedes?: string[];
 }
 
 interface ExtractApiResult {
@@ -450,16 +532,57 @@ interface SummarizeApiResult {
   error?: string;
 }
 
-/** 把 extract 接口返回的碎片归一化（字符串/对象混合兼容 + 非法值兜底自动分类） */
+/**
+ * 模型时间字符串 → 本地时间戳：
+ * - "YYYY-MM-DD" → 当地 0 点（仅日期事件，标签不带出无意义的 00:00）
+ * - "YYYY-MM-DD HH:mm" → 当地该时刻
+ * - 其余（含完整 ISO）→ Date.parse 兜底
+ * 范围距当前 ±MEM_TIME_RANGE_YEARS 年，超出/解析失败返回 null（绝不让幻觉时间入库）。
+ */
+function parseMemTime(v: unknown, now: number): number | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s || s === 'null' || s === 'undefined') return null;
+  let d: Date | null = null;
+  const md = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  const mdt = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::\d{2})?$/.exec(s);
+  if (md) d = new Date(Number(md[1]), Number(md[2]) - 1, Number(md[3]));
+  else if (mdt) d = new Date(Number(mdt[1]), Number(mdt[2]) - 1, Number(mdt[3]), Number(mdt[4]), Number(mdt[5]));
+  else {
+    const t = Date.parse(s);
+    if (!Number.isNaN(t)) d = new Date(t);
+  }
+  if (!d) return null;
+  const t = d.getTime();
+  const span = MEM_TIME_RANGE_YEARS * 366 * 86_400_000;
+  if (t < now - span || t > now + span) return null;
+  return t;
+}
+
+/** 把 extract 接口返回的碎片归一化（字符串/对象混合兼容 + 非法值兜底自动分类 + 时间解析/防幻觉） */
 function normalizeExtract(res: ExtractApiResult): ExtractItem[] {
   const raw = Array.isArray(res.fragments) ? res.fragments : [];
+  const now = Date.now();
   const out: ExtractItem[] = [];
   for (const x of raw) {
     if (typeof x === 'string') {
       const t = x.trim();
       if (t) out.push({ text: t, weight: autoWeight(t) });
     } else if (x && typeof x === 'object' && typeof x.text === 'string' && x.text.trim()) {
-      out.push({ text: x.text.trim(), weight: normalizeWeight(x.weight, x.text) });
+      const o = x as { text: string; weight?: unknown; eventTime?: unknown; expiresAt?: unknown; supersedes?: unknown };
+      const item: ExtractItem = { text: o.text.trim(), weight: normalizeWeight(o.weight, o.text) };
+      const et = parseMemTime(o.eventTime, now);
+      const ex = parseMemTime(o.expiresAt, now);
+      if (et != null) item.eventTime = et;
+      if (ex != null) item.expiresAt = ex;
+      if (Array.isArray(o.supersedes)) {
+        const ids = o.supersedes
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          .map((id) => id.trim())
+          .slice(0, 6);
+        if (ids.length > 0) item.supersedes = ids;
+      }
+      out.push(item);
     }
   }
   return out.slice(0, 6);
@@ -484,12 +607,15 @@ async function callMemoryApi<T extends ExtractApiResult & SummarizeApiResult>(
 const normText = (s: string) => s.replace(/\s+/g, '');
 
 /**
- * 追加碎片（三层去重）：
+ * 追加碎片（矛盾更新优先，其次三层去重）：
+ * 0) 矛盾更新（模型标注 supersedes 且目标存在）：旧记忆标记 supersededAt/supersededBy（「已更新」，
+ *    不再参与召回/总结），本条直接新增（事件/过期时间一并入库）；矛盾条目不走相似合并
+ *    （「不吃辣」绝不能被合并进「爱吃辣」）；
  * 1) 精确重复 → 记一次「加强」（reinforcedAt/次数刷新），不新增；
  * 2) 相似（2-gram ≥0.6，同一事实的不同说法）→ 合并进已有条目：内容取更完整的、权重取更高、
- *    加强计时刷新、计数 +1，不新增占位；
+ *    加强计时刷新、计数 +1，不新增占位（已更新/已过期/已消费的旧记忆不作为合并目标）；
  * 3) 全新 → 新建（权重：LLM 判定优先，缺省按关键词自动分类）。
- * 返回 { added: 新增条目; merged: 合并/加强次数 }
+ * 返回 { added: 新增条目; merged: 合并/加强次数; superseded: 矛盾更新条数 }
  */
 function appendFragments(
   contactId: string,
@@ -497,30 +623,61 @@ function appendFragments(
   items: ExtractItem[],
   sourceTime: number,
   sourceMsgId?: string
-): { added: MemFragment[]; merged: number } {
+): { added: MemFragment[]; merged: number; superseded: number } {
   const list = readFragments(contactId);
   const now = Date.now();
-  const seen = new Set(list.map((f) => normText(f.content)));
+  const seen = new Set(list.filter((f) => !f.supersededAt && !isMemExpired(f, now)).map((f) => normText(f.content)));
   const added: MemFragment[] = [];
   let merged = 0;
+  let superseded = 0;
+  const newItem = (content: string, item: ExtractItem, id?: string): MemFragment => ({
+    id: id ?? uid(),
+    contactId,
+    app,
+    content,
+    sourceTime,
+    createdAt: now,
+    eventTime: item.eventTime ?? undefined,
+    expiresAt: item.expiresAt ?? undefined,
+    weight: item.weight ?? autoWeight(content),
+    reinforcedAt: now,
+    reinforceCount: 0,
+    sourceMsgId,
+  });
   for (const item of items) {
     const content = item.text.trim();
     if (!content) continue;
     const key = normText(content);
-    // 1) 精确重复 → 加强已有记忆
+    // 0) 矛盾更新：标记被更正的旧记忆为「已更新」，本条直接新增
+    const targets = (item.supersedes ?? [])
+      .map((id) => list.find((f) => f.id === id))
+      .filter((f): f is MemFragment => f != null && f.supersededAt == null);
+    if (targets.length > 0) {
+      const newId = uid();
+      for (const t of targets) {
+        t.supersededAt = now;
+        t.supersededBy = newId;
+      }
+      superseded += targets.length;
+      seen.add(key);
+      added.push(newItem(content, item, newId));
+      continue;
+    }
+    // 1) 精确重复 → 加强已有记忆（已更新/已过期的旧条目不是目标）
     if (seen.has(key)) {
-      const hit = list.find((f) => normText(f.content) === key);
+      const hit = list.find((f) => normText(f.content) === key && !f.supersededAt && !isMemExpired(f, now));
       if (hit) {
         hit.reinforcedAt = now;
         hit.reinforceCount = (hit.reinforceCount ?? 0) + 1;
         hit.weight = higherWeight(hit.weight, item.weight);
         merged++;
+        continue;
       }
-      continue;
+      // 命中的只是已更新/已过期的旧条目 → 落到下面按新增处理
     }
     // 2) 相似说法 → 合并进已有记忆（优先未消费的；内容保留更完整的一条）
     const simHit = list
-      .filter((f) => f.content.length >= 4 && content.length >= 4)
+      .filter((f) => !f.supersededAt && !isMemExpired(f, now) && f.content.length >= 4 && content.length >= 4)
       .sort((a, b) => Number(Boolean(a.consumedAt)) - Number(Boolean(b.consumedAt)) || a.createdAt - b.createdAt)
       .find((f) => similarity(f.content, content) >= SIMILAR_MERGE_THRESHOLD);
     if (simHit) {
@@ -535,29 +692,22 @@ function appendFragments(
     }
     // 3) 全新记忆
     seen.add(key);
-    added.push({
-      id: uid(),
-      contactId,
-      app,
-      content,
-      sourceTime,
-      createdAt: now,
-      weight: item.weight ?? autoWeight(content),
-      reinforcedAt: now,
-      reinforceCount: 0,
-      sourceMsgId,
-    });
+    added.push(newItem(content, item));
   }
-  if (added.length > 0 || merged > 0) writeJSON(fragKey(contactId), [...list, ...added]);
-  return { added, merged };
+  if (added.length > 0 || merged > 0 || superseded > 0) writeJSON(fragKey(contactId), [...list, ...added]);
+  return { added, merged, superseded };
 }
 
-/** 把当前未消费且未归档的碎片总结为核心记忆，并标记来源碎片已消费（阈值判断由调用方负责） */
+/** 把当前待总结（未被更新/未过期/未消费/未归档）的碎片总结为核心记忆，并标记来源碎片已消费（阈值判断由调用方负责） */
 async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<MemCore> {
   const { forget } = getMemSettings(contactId);
   const now = Date.now();
   const pending = readFragments(contactId).filter(
-    (f) => !f.consumedAt && fadeState(f as FadeInput, forget, now) !== 'faded'
+    (f) =>
+      !f.consumedAt &&
+      !f.supersededAt &&
+      !isMemExpired(f, now) &&
+      fadeState(f as FadeInput, forget, now) !== 'faded'
   );
   const { userName, peerName } = namesOf(names);
   const res = await callMemoryApi<SummarizeApiResult>(
@@ -580,6 +730,11 @@ async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig,
     sourceIds: pending.map((f) => f.id),
     apps: Array.from(new Set(pending.map((f) => f.app))),
     createdAt: Date.now(),
+    // 时间感知：来源碎片中带事件时间的，取最早一条作为核心的事件时间（可选，仅标注用）
+    eventTime: (() => {
+      const ets = pending.map((f) => f.eventTime).filter((t): t is number => t != null);
+      return ets.length > 0 ? Math.min(...ets) : undefined;
+    })(),
   };
   const all = readCores(contactId);
   writeJSON(coreKey(contactId), [...all, core]);
@@ -660,6 +815,8 @@ export function memAfterAiTurn(
 ): void {
   if (!contactId) return;
   try {
+    // 时间感知：先把已到期的碎片标记归档（惰性清扫，召回/总结另有实时过滤兜底）
+    memSweepExpiry(contactId);
     const key = roundKey(contactId, app);
     const count = (readJSON<number>(key) ?? 0) + 1;
     const { interval } = getMemSettings(contactId);
@@ -678,7 +835,7 @@ export function memAfterAiTurn(
         if (convo.length >= 4) {
           const res = await callMemoryApi<ExtractApiResult>(
             'extract',
-            { conversation: convo, app, ...namesOf(names) },
+            { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
             apiConfig
           );
           const items = normalizeExtract(res);
@@ -736,7 +893,7 @@ export async function memSummarizeNow(
     if (convo.length < 2) throw new Error('当前没有足够的对话内容可总结');
     const res = await callMemoryApi<ExtractApiResult>(
       'extract',
-      { conversation: convo, app, ...namesOf(names) },
+      { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
       apiConfig
     );
     const items = normalizeExtract(res);
@@ -767,7 +924,7 @@ export async function memExtractNow(contactId: string, apiConfig: ApiConfig, nam
     if (!recent || recent.convo.length < 2) throw new Error('当前没有可总结的对话，先去和TA聊聊吧');
     const res = await callMemoryApi<ExtractApiResult>(
       'extract',
-      { conversation: recent.convo, app: recent.app, ...namesOf(names) },
+      { conversation: recent.convo, app: recent.app, existing: existingForConflict(contactId), ...namesOf(names) },
       apiConfig
     );
     const items = normalizeExtract(res);

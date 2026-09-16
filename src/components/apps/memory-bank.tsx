@@ -67,11 +67,15 @@ import {
   deleteCore,
   deleteFragment,
   deleteLongTerm,
+  expiredFragmentCount,
   fadeState,
   getMemSettings,
+  isMemExpired,
   listCores,
   listFragments,
   listLongTerm,
+  memSweepExpiry,
+  memTimeLabel,
   memDedupeNow,
   memExtractNow,
   memMostRecentApp,
@@ -84,6 +88,7 @@ import {
   pendingFragmentCount,
   reinforceFragment,
   saveMemSettings,
+  supersededFragmentCount,
   updateCore,
   updateFragment,
   updateLongTerm,
@@ -380,6 +385,11 @@ function MemoryDetail({
     });
   }, [contact.id, onContactGone]);
 
+  // 时间感知：进入档案页/刷新时清扫已过期碎片（标记 expiredAt；有变化则刷新展示）
+  useEffect(() => {
+    if (memSweepExpiry(contact.id) > 0) refresh();
+  }, [contact.id, refresh]);
+
   const frags = useMemo(() => (rev >= 0 ? listFragments(contact.id) : []), [contact.id, rev]);
   const cores = useMemo(() => (rev >= 0 ? listCores(contact.id) : []), [contact.id, rev]);
   const longs = useMemo(() => (rev >= 0 ? listLongTerm(contact.id) : []), [contact.id, rev]);
@@ -626,6 +636,34 @@ function FadeBadge({ st }: { st: FadeState }) {
   );
 }
 
+/** 事件时间徽标（时间感知：内容所指的时间，与当前时间联动） */
+function EventTimeBadge({ ts }: { ts: number }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium tabular-nums text-black/45 dark:bg-white/[0.08] dark:text-white/45">
+      <Clock className="h-3 w-3" strokeWidth={2} />
+      事件 {memTimeLabel(ts)}
+    </span>
+  );
+}
+
+/** 已过期徽标（时间感知：expiresAt 到期自动归档，不再召回） */
+function ExpiredBadge() {
+  return (
+    <span className="rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium text-black/40 dark:bg-white/[0.07] dark:text-white/40">
+      已过期
+    </span>
+  );
+}
+
+/** 已更新徽标（时间感知冲突处理：被矛盾的新记忆替代，不再召回） */
+function SupersededBadge() {
+  return (
+    <span className="rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium text-black/40 dark:bg-white/[0.07] dark:text-white/40">
+      已更新
+    </span>
+  );
+}
+
 function FragTab({
   contactId,
   frags,
@@ -641,12 +679,23 @@ function FragTab({
 }) {
   const now = Date.now();
   const withState = useMemo(
-    () => frags.map((f) => ({ f, st: fadeState(f, forget, now) })),
+    () =>
+      frags.map((f) => ({
+        f,
+        st: fadeState(f, forget, now),
+        expired: f.supersededAt == null && isMemExpired(f, now),
+        updated: f.supersededAt != null,
+      })),
     [frags, forget, now]
   );
-  // 已归档沉底，其余保持创建时间倒序
+  // 已更新/已过期/已归档沉底，其余保持创建时间倒序
   const ordered = useMemo(
-    () => [...withState].sort((a, b) => (a.st === 'faded' ? 1 : 0) - (b.st === 'faded' ? 1 : 0)),
+    () =>
+      [...withState].sort(
+        (a, b) =>
+          (a.updated ? 3 : a.expired ? 2 : a.st === 'faded' ? 1 : 0) -
+          (b.updated ? 3 : b.expired ? 2 : b.st === 'faded' ? 1 : 0)
+      ),
     [withState]
   );
   if (frags.length === 0) {
@@ -659,13 +708,14 @@ function FragTab({
   }
   return (
     <div className="space-y-2.5">
-      {ordered.map(({ f, st }) => (
+      {ordered.map(({ f, st, expired, updated }) => (
         <MemoryCard
           key={f.id}
           testid={`mem-frag-${f.id}`}
           variant="frag"
           consumed={Boolean(f.consumedAt)}
           fade={st}
+          dim={expired || updated}
           weight={f.weight ?? 'normal'}
           showWeight
           content={f.content}
@@ -677,10 +727,16 @@ function FragTab({
           }
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
+              {f.eventTime != null && <EventTimeBadge ts={f.eventTime} />}
               <WeightBadge weight={f.weight ?? 'normal'} />
               <AppBadge app={f.app} />
               <FadeBadge st={st} />
               {f.consumedAt && <ConsumedBadge />}
+              {expired && <ExpiredBadge />}
+              {updated && <SupersededBadge />}
+              {f.expiresAt != null && !expired && (
+                <span className="tabular-nums text-black/40 dark:text-white/40">· {memTimeLabel(f.expiresAt)}到期</span>
+              )}
               <span aria-hidden="true">·</span>
               <span>{relTime(f.reinforcedAt ?? f.sourceTime)}</span>
               {f.sourceMsgId && (
@@ -754,6 +810,7 @@ function CoreTab({
           }
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
+              {m.eventTime != null && <EventTimeBadge ts={m.eventTime} />}
               <span>来自 {m.fragmentCount} 条碎片</span>
               <span>·</span>
               <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
@@ -816,6 +873,7 @@ function LongTab({
           }
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
+              {m.eventTime != null && <EventTimeBadge ts={m.eventTime} />}
               <span>来自 {m.coreCount} 条核心记忆</span>
               <span>·</span>
               <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
@@ -874,6 +932,8 @@ function SetTab({
   const fragCount = listFragments(contactId).length;
   const pending = pendingFragmentCount(contactId);
   const archived = archivedFragmentCount(contactId);
+  const expiredCnt = expiredFragmentCount(contactId);
+  const supersededCnt = supersededFragmentCount(contactId);
   const coreCount = listCores(contactId).length;
   const corePending = pendingCoreCount(contactId);
   const longCount = listLongTerm(contactId).length;
@@ -1233,7 +1293,10 @@ function SetTab({
         <Info aria-hidden="true" className="mt-[1px] h-4 w-4 shrink-0 text-black/30 dark:text-white/30" />
         <div>
           <p>
-            当前联系人：{fragCount} 条碎片（{pending} 条待总结{archived > 0 ? ` · ${archived} 条已归档` : ''}）·{' '}
+            当前联系人：{fragCount} 条碎片（{pending} 条待总结{archived > 0 ? ` · ${archived} 条已归档` : ''}
+            {expiredCnt > 0 ? ` · ${expiredCnt} 条已过期` : ''}
+            {supersededCnt > 0 ? ` · ${supersededCnt} 条已更新` : ''}）·
+            {' '}
             {coreCount} 条核心记忆（{corePending} 条待总结）· {longCount} 条长期记忆
           </p>
           <p className="mt-1">
@@ -1296,6 +1359,7 @@ function MemoryCard({
   variant,
   consumed = false,
   fade = 'fresh',
+  dim = false,
   weight = 'normal',
   showWeight = false,
   content,
@@ -1311,6 +1375,8 @@ function MemoryCard({
   consumed?: boolean;
   /** 淡化状态：fading=淡化中（半淡显），faded=已归档（沉底淡显） */
   fade?: FadeState;
+  /** 额外淡显（时间感知：已过期/已更新，不再参与召回） */
+  dim?: boolean;
   /** 仅 frag：记忆权重（编辑态可调） */
   weight?: MemWeight;
   /** 编辑态是否显示权重选择 */
@@ -1332,7 +1398,7 @@ function MemoryCard({
   const [confirmDel, setConfirmDel] = useState(false);
 
   const dimCls =
-    fade === 'faded'
+    fade === 'faded' || dim
       ? 'opacity-[0.55]'
       : fade === 'fading'
         ? 'opacity-[0.8]'
