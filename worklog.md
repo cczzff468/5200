@@ -4731,3 +4731,18 @@ Stage Summary:
 - 「立即总结」三入口分工明确：碎片页=只提取、核心页=只凝结（不等阈值）、设置页=完整流程（提取+达阈值顺带总结）；共用 inflight 防并发
 - 全页黑块灰化完成（选中/强调=浅灰 neutral-200，暗色 neutral-600），无渐变无彩色保持水墨单色
 - 设置页按钮统一长方形；既有 testid/逻辑零破坏；新增 testid：mem-frag-summarize、mem-ltm-summarize
+
+---
+Task ID: AF
+Agent: Z.ai Code (main)
+Task: 记忆库联系人列表隐藏 user（机主本人）——user 是「我」，不需要给自己记记忆
+
+Work Log:
+- memory-bank.tsx 新增 visibleMemContacts()：filter(c => c.kind !== 'user')（ContactKind = char|user|npc，只排 user，char/npc 保留）
+- 三处联系人加载全部套用过滤：首次 useEffect、handleDeleteContactGone、详情页 onBack 返回列表；HeroCard 统计与搜索过滤基于过滤后列表（统计数字与卡片一致）
+- lint + tsc 0 问题；Agent Browser E2E：IndexedDB 种 kind='user' 联系人「小晨」+ 既有 npc「乐乐」→ 记忆库列表只显示乐乐、统计「1 联系人」（DB 实际 2 人）、页面文本不含「小晨」✓；page errors 0
+- 已提交并推送 ca9ad4d
+
+Stage Summary:
+- 记忆库现在只管理「别人」的记忆：机主本人（kind=user）不出现在列表、不参与统计；NPC/角色不受影响
+- 数据层零改动（存储仍保留 user 记录，仅展示层排除）；testid 无变化
