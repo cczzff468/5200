@@ -2308,13 +2308,15 @@ function ChatPage({
         if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, all.length);
         // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
         addBondPoints(peer.id, BOND_MSG_POINTS);
-        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）
+        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
+        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
         memAfterAiTurn(
           peer.id,
           'qq',
           apiConfig,
           () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-          () => memLastMsgId(loadMsgs(peer.id))
+          () => memLastMsgId(loadMsgs(peer.id)),
+          { user: me.name, peer: displayNameOf(peer) || peer.name }
         );
       },
     });

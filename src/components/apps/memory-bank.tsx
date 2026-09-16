@@ -8,15 +8,20 @@
  * 列表页：圆角搜索条 + 统计总览 + 联系人档案卡。
  *
  * 功能结构（逻辑与 src/lib/memory.ts 保持一致，本文件只负责呈现）：
- * - 联系人列表（统计总览条 + 每联系人一张档案卡；user=机主本人不显示也不记记忆）→ 记忆详情页（三个 Tab）
+ * - 联系人列表（统计总览条 + 每联系人一张档案卡；user=机主本人不显示也不记记忆）→ 记忆详情页（四个 Tab）
  * - Tab1 记忆碎片：每 N 轮对话自动提取（内容/来源时间/所属会话），支持查看/编辑/删除；
  *   右上角「立即总结」仅提取碎片；权重（重要/普通/临时）可调、淡化状态徽标（淡化中→已归档沉底）、
  *   过期可「回忆一下」救回
- * - Tab2 长期记忆（核心记忆）：M 条碎片自动总结（内容/来源碎片数量/生成时间），支持查看/编辑/删除；
- *   右上角「立即总结」仅把待总结碎片凝结为核心记忆（不等阈值）
- * - Tab3 设置：提取频率（10/20/30/40/50 轮）、总结阈值（3/5/7/10 条）、失忆程度（快/中/慢/从不）、
- *   跨 App 互通开关（默认开）、「立即总结」完整流程手动触发、「整理重复记忆」（相似记忆去重合并）、
- *   「召回预览」（按权重×相关性排序的下次注入记忆）；本页全部按钮为长方形（圆角矩形）
+ * - Tab2 核心记忆：M 条碎片自动总结（内容/来源碎片数量/生成时间），支持查看/编辑/删除；
+ *   右上角「立即总结」仅把待总结碎片凝结为核心记忆（不等阈值）；
+ *   被长期记忆收编的核心标记「已入长期」沉底（不再参与总结与召回）
+ * - Tab3 长期记忆：K 条核心记忆自动总结出的最稳定画像（层级顶层），支持查看/编辑/删除；
+ *   右上角「立即总结」仅把待总结核心凝结为长期记忆（不等阈值）
+ * - Tab4 设置：提取频率（10/20/30/40/50 轮）、核心记忆总结频率（3/5/7/10 条）、
+ *   长期记忆总结频率（1/3/5/7/10/15/20 条）、失忆程度（快/中/慢/从不）、
+ *   跨 App 互通开关（默认开）、「立即总结」按所选粒度手动执行（碎片/碎片→核心/核心→长期/全部）、
+ *   「修复旧记忆视角」（旧版「对方/用户」代称→真实名字）、「整理重复记忆」（相似记忆去重合并）、
+ *   「召回预览」（长期→核心→碎片注入顺序预览）；本页全部按钮为长方形（圆角矩形）
  * - 数据按联系人 ID 隔离（localStorage 持久化，重启保留）；
  *   互通开 = QQ/微信/信息/电话四端共享该联系人记忆；关 = 各端只用自己来源的记忆
  */
@@ -31,6 +36,7 @@ import {
   Combine,
   Gem,
   Info,
+  Landmark,
   Layers,
   Loader2,
   Pencil,
@@ -40,6 +46,7 @@ import {
   Share2,
   Sparkles,
   Trash2,
+  Wand2,
 } from 'lucide-react';
 import { IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
@@ -54,27 +61,35 @@ import {
   MEM_FORGET_LABEL,
   MEM_FORGET_OPTIONS,
   MEM_INTERVAL_OPTIONS,
+  MEM_LONG_OPTIONS,
   MEM_THRESHOLD_OPTIONS,
   archivedFragmentCount,
+  deleteCore,
   deleteFragment,
   deleteLongTerm,
   fadeState,
   getMemSettings,
+  listCores,
   listFragments,
   listLongTerm,
   memDedupeNow,
   memExtractNow,
   memMostRecentApp,
   memRecallPreview,
-  memSummarizeLtmNow,
+  memRepairPerspectiveNow,
+  memSummarizeCoreNow,
+  memSummarizeLongNow,
   memSummarizeNow,
+  pendingCoreCount,
   pendingFragmentCount,
   reinforceFragment,
   saveMemSettings,
+  updateCore,
   updateFragment,
   updateLongTerm,
   type FadeState,
   type MemApp,
+  type MemCore,
   type MemForget,
   type MemFragment,
   type MemLongTerm,
@@ -118,8 +133,8 @@ const CARD_CLS =
 const INK =
   'bg-neutral-200 text-neutral-800 ring-1 ring-black/[0.06] dark:bg-neutral-600 dark:text-neutral-50 dark:ring-white/[0.08]';
 
-/** 每联系人记忆详情（三 Tab） */
-type MemTab = 'frag' | 'ltm' | 'set';
+/** 每联系人记忆详情（四 Tab） */
+type MemTab = 'frag' | 'ltm' | 'long' | 'set';
 
 /** 记忆库只管理「别人」的记忆：user 是机主本人，不需要给自己记记忆（列表/统计一并排除） */
 function visibleMemContacts(list: ContactRecord[]): ContactRecord[] {
@@ -236,17 +251,20 @@ export default function MemoryBankApp() {
 
 function HeroCard({ contacts, loaded }: { contacts: ContactRecord[]; loaded: boolean }) {
   let fragTotal = 0;
-  let ltmTotal = 0;
+  let coreTotal = 0;
+  let longTotal = 0;
   if (loaded) {
     for (const c of contacts) {
       fragTotal += listFragments(c.id).length;
-      ltmTotal += listLongTerm(c.id).length;
+      coreTotal += listCores(c.id).length;
+      longTotal += listLongTerm(c.id).length;
     }
   }
   const stats: [string, number][] = [
     ['联系人', contacts.length],
     ['记忆碎片', fragTotal],
-    ['核心记忆', ltmTotal],
+    ['核心记忆', coreTotal],
+    ['长期记忆', longTotal],
   ];
   return (
     <section data-testid="mem-hero" className={`flex items-stretch divide-x divide-black/[0.06] rounded-[18px] p-4 dark:divide-white/[0.08] ${CARD_CLS}`}>
@@ -281,7 +299,8 @@ function Avatar({ src, name, size }: { src?: string | null; name: string; size: 
 function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () => void }) {
   // 读取记忆计数（渲染时同步读 localStorage；数据量小无性能问题）
   const fragCount = listFragments(contact.id).length;
-  const ltmCount = listLongTerm(contact.id).length;
+  const coreCount = listCores(contact.id).length;
+  const longCount = listLongTerm(contact.id).length;
   const name = displayNameOf(contact) || contact.name;
   return (
     <button
@@ -295,14 +314,19 @@ function ContactCard({ contact, onOpen }: { contact: ContactRecord; onOpen: () =
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[16px] font-semibold leading-snug">{name}</span>
         <span className="mt-1 flex flex-wrap items-center gap-1.5">
-          {fragCount > 0 || ltmCount > 0 ? (
+          {fragCount > 0 || coreCount > 0 || longCount > 0 ? (
             <>
               <span className="rounded-full bg-black/[0.05] px-2 py-[2px] text-[11px] font-medium text-black/50 dark:bg-white/[0.08] dark:text-white/50">
                 {fragCount} 碎片
               </span>
-              {ltmCount > 0 && (
+              {coreCount > 0 && (
                 <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-medium ${INK}`}>
-                  <Gem className="h-3 w-3" /> {ltmCount} 核心
+                  <Gem className="h-3 w-3" /> {coreCount} 核心
+                </span>
+              )}
+              {longCount > 0 && (
+                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-medium ${INK}`}>
+                  <Landmark className="h-3 w-3" /> {longCount} 长期
                 </span>
               )}
             </>
@@ -348,22 +372,27 @@ function MemoryDetail({
   }, [contact.id, onContactGone]);
 
   const frags = useMemo(() => (rev >= 0 ? listFragments(contact.id) : []), [contact.id, rev]);
-  const ltms = useMemo(() => (rev >= 0 ? listLongTerm(contact.id) : []), [contact.id, rev]);
+  const cores = useMemo(() => (rev >= 0 ? listCores(contact.id) : []), [contact.id, rev]);
+  const longs = useMemo(() => (rev >= 0 ? listLongTerm(contact.id) : []), [contact.id, rev]);
   const settings = useMemo(
     () => (rev >= 0 ? getMemSettings(contact.id) : DEFAULT_MEM_SETTINGS),
     [contact.id, rev]
   );
   const name = displayNameOf(contact) || contact.name;
   const apiConfig = useSettings((s) => s.apiConfig);
-  // 右上角「立即总结」忙态：碎片页 / 核心页各自独立（互不干扰，同一时间只跑一个）
-  const [sumBusy, setSumBusy] = useState<'frag' | 'ltm' | null>(null);
+  /** 机主名字（手动总结/修复视角用：记忆文本一律用真实名字指代用户） */
+  const profileName = useSettings((s) => s.profile.name);
+  /** 双方名字（视角统一）：碎片/总结一律用「机主名字 + 联系人名字」指代，禁「对方/用户/我」 */
+  const memNames = useMemo(() => ({ user: profileName, peer: name }), [profileName, name]);
+  // 右上角「立即总结」忙态：碎片页 / 核心页 / 长期页各自独立（互不干扰，同一时间只跑一个）
+  const [sumBusy, setSumBusy] = useState<'frag' | 'ltm' | 'long' | null>(null);
 
-  /** 碎片页右上角「立即总结」：只把最近对话提取为记忆碎片入库（不碰核心记忆） */
+  /** 碎片页右上角「立即总结」：只把最近对话提取为记忆碎片入库（不碰核心/长期） */
   const summarizeFragNow = async () => {
     if (sumBusy) return;
     setSumBusy('frag');
     try {
-      const res = await memExtractNow(contact.id, apiConfig);
+      const res = await memExtractNow(contact.id, apiConfig, memNames);
       const parts = [`新增 ${res.added} 条碎片`];
       if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
       showToast(`总结完成：${parts.join('，')}`);
@@ -376,12 +405,27 @@ function MemoryDetail({
   };
 
   /** 核心页右上角「立即总结」：不等阈值，把待总结碎片立即凝结为核心记忆 */
-  const summarizeLtmNow = async () => {
+  const summarizeCoreNow = async () => {
     if (sumBusy) return;
     setSumBusy('ltm');
     try {
-      const res = await memSummarizeLtmNow(contact.id, apiConfig);
+      const res = await memSummarizeCoreNow(contact.id, apiConfig, memNames);
       showToast(`总结完成：${res.consumed} 条碎片凝结为 1 条核心记忆`);
+      refresh();
+    } catch (err) {
+      showToast(err instanceof Error && err.message ? err.message : '总结失败，请稍后再试');
+    } finally {
+      setSumBusy(null);
+    }
+  };
+
+  /** 长期页右上角「立即总结」：不等阈值，把待总结核心立即凝结为长期记忆 */
+  const summarizeLongNow = async () => {
+    if (sumBusy) return;
+    setSumBusy('long');
+    try {
+      const res = await memSummarizeLongNow(contact.id, apiConfig, memNames);
+      showToast(`总结完成：${res.consumed} 条核心记忆凝结为 1 条长期记忆`);
       refresh();
     } catch (err) {
       showToast(err instanceof Error && err.message ? err.message : '总结失败，请稍后再试');
@@ -393,6 +437,7 @@ function MemoryDetail({
   const tabs: [MemTab, typeof Layers, string][] = [
     ['frag', Layers, '记忆碎片'],
     ['ltm', Gem, '核心记忆'],
+    ['long', Landmark, '长期记忆'],
     ['set', Settings2, '设置'],
   ];
 
@@ -431,7 +476,10 @@ function MemoryDetail({
             {frags.length} 条碎片
           </span>
           <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
-            <Gem className="h-3 w-3" /> {ltms.length} 条核心
+            <Gem className="h-3 w-3" /> {cores.length} 条核心
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
+            <Landmark className="h-3 w-3" /> {longs.length} 条长期
           </span>
           <span
             data-testid="mem-share-state"
@@ -445,13 +493,15 @@ function MemoryDetail({
           </span>
         </div>
 
-        {/* 碎片/核心页右上角「立即总结」：两页独立触发，设置页另保留完整流程入口 */}
-        {(tab === 'frag' || tab === 'ltm') && (
+        {/* 碎片/核心/长期页右上角「立即总结」：各页独立触发，设置页另保留按粒度手动执行入口 */}
+        {(tab === 'frag' || tab === 'ltm' || tab === 'long') && (
           <div className="flex items-center justify-end pt-3">
             <button
               type="button"
-              data-testid={tab === 'frag' ? 'mem-frag-summarize' : 'mem-ltm-summarize'}
-              onClick={() => void (tab === 'frag' ? summarizeFragNow() : summarizeLtmNow())}
+              data-testid={`mem-${tab}-summarize`}
+              onClick={() =>
+                void (tab === 'frag' ? summarizeFragNow() : tab === 'ltm' ? summarizeCoreNow() : summarizeLongNow())
+              }
               disabled={sumBusy !== null}
               className="flex h-8 items-center gap-1.5 rounded-lg bg-white px-3 text-[12.5px] font-medium text-neutral-700 shadow-[0_1px_4px_rgba(20,18,14,0.07)] ring-1 ring-black/[0.06] transition-opacity active:opacity-70 disabled:opacity-50 dark:bg-[#201f1d] dark:text-neutral-200 dark:ring-white/[0.1]"
             >
@@ -471,7 +521,8 @@ function MemoryDetail({
               showToast={showToast}
             />
           )}
-          {tab === 'ltm' && <LtmTab contactId={contact.id} ltms={ltms} refresh={refresh} showToast={showToast} />}
+          {tab === 'ltm' && <CoreTab contactId={contact.id} cores={cores} refresh={refresh} showToast={showToast} />}
+          {tab === 'long' && <LongTab contactId={contact.id} longs={longs} refresh={refresh} showToast={showToast} />}
           {tab === 'set' && (
             <SetTab
               contactId={contact.id}
@@ -485,7 +536,7 @@ function MemoryDetail({
 
       {/* 底部悬浮胶囊 Dock：毛玻璃 + 选中白底浮起；仅图标 + 文字，无数字 */}
       <nav
-        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-3 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${DOCK_GLASS} dark:ring-white/[0.08]`}
+        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-4 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${DOCK_GLASS} dark:ring-white/[0.08]`}
         role="tablist"
         aria-label="记忆分类"
       >
@@ -528,11 +579,11 @@ function AppBadge({ app }: { app: MemApp }) {
 }
 
 /** 「已入核心」徽标：该碎片已被长期记忆总结消费 */
-function ConsumedBadge() {
+function ConsumedBadge({ label = '已入核心' }: { label?: string }) {
   return (
     <span className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium text-black/45 dark:bg-white/[0.08] dark:text-white/45">
       <Check className="h-3 w-3" strokeWidth={2.5} />
-      已入核心
+      {label}
     </span>
   );
 }
@@ -647,20 +698,25 @@ function FragTab({
   );
 }
 
-// ---------------- Tab 2：长期记忆（核心记忆） ----------------
+// ---------------- Tab 2：核心记忆 ----------------
 
-function LtmTab({
+function CoreTab({
   contactId,
-  ltms,
+  cores,
   refresh,
   showToast,
 }: {
   contactId: string;
-  ltms: MemLongTerm[];
+  cores: MemCore[];
   refresh: () => void;
   showToast: (m: string) => void;
 }) {
-  if (ltms.length === 0) {
+  // 已入长期（被收编）沉底，其余保持创建时间倒序
+  const ordered = useMemo(
+    () => [...cores].sort((a, b) => (a.archivedAt ? 1 : 0) - (b.archivedAt ? 1 : 0)),
+    [cores]
+  );
+  if (cores.length === 0) {
     return (
       <EmptyState
         icon={<Gem className="h-8 w-8" strokeWidth={1.5} />}
@@ -670,11 +726,12 @@ function LtmTab({
   }
   return (
     <div className="space-y-2.5">
-      {ltms.map((m) => (
+      {ordered.map((m) => (
         <MemoryCard
           key={m.id}
           testid={`mem-ltm-${m.id}`}
           variant="ltm"
+          consumed={Boolean(m.archivedAt)}
           content={m.content}
           header={
             <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
@@ -689,18 +746,80 @@ function LtmTab({
               <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
               <span>·</span>
               <span className="tabular-nums">{fmtTime(m.createdAt)} 生成</span>
+              {m.archivedAt && <ConsumedBadge label="已入长期" />}
             </span>
           }
           onSave={(text) => {
-            if (updateLongTerm(contactId, m.id, text)) {
+            if (updateCore(contactId, m.id, text)) {
               refresh();
               showToast('核心记忆已更新');
             }
           }}
           onDelete={() => {
-            deleteLongTerm(contactId, m.id);
+            deleteCore(contactId, m.id);
             refresh();
             showToast('核心记忆已删除');
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---------------- Tab 3：长期记忆 ----------------
+
+function LongTab({
+  contactId,
+  longs,
+  refresh,
+  showToast,
+}: {
+  contactId: string;
+  longs: MemLongTerm[];
+  refresh: () => void;
+  showToast: (m: string) => void;
+}) {
+  if (longs.length === 0) {
+    return (
+      <EmptyState
+        icon={<Landmark className="h-8 w-8" strokeWidth={1.5} />}
+        text="还没有长期记忆。积累 K 条核心记忆后会自动总结（设置里可调），也可点右上角「立即总结」手动凝结。"
+      />
+    );
+  }
+  return (
+    <div className="space-y-2.5">
+      {longs.map((m) => (
+        <MemoryCard
+          key={m.id}
+          testid={`mem-long-${m.id}`}
+          variant="long"
+          content={m.content}
+          header={
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[11px] font-semibold ${INK}`}>
+              <Landmark aria-hidden="true" className="h-3 w-3" />
+              长期记忆
+            </span>
+          }
+          meta={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span>来自 {m.coreCount} 条核心记忆</span>
+              <span>·</span>
+              <span>{m.apps.map((a) => MEM_APP_LABEL[a]).join('、') || MEM_APP_LABEL.wx}</span>
+              <span>·</span>
+              <span className="tabular-nums">{fmtTime(m.createdAt)} 生成</span>
+            </span>
+          }
+          onSave={(text) => {
+            if (updateLongTerm(contactId, m.id, text)) {
+              refresh();
+              showToast('长期记忆已更新');
+            }
+          }}
+          onDelete={() => {
+            deleteLongTerm(contactId, m.id);
+            refresh();
+            showToast('长期记忆已删除');
           }}
         />
       ))}
@@ -727,13 +846,21 @@ function SetTab({
   showToast: (m: string) => void;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
+  /** 机主名字（手动总结/修复视角用：记忆文本一律用真实名字指代用户） */
+  const profileName = useSettings((s) => s.profile.name);
+  /** 双方名字（视角统一）：总结/修复一律用「机主名字 + 联系人名字」指代 */
+  const memNames = useMemo(() => ({ user: profileName, peer: contactName }), [profileName, contactName]);
   const [settings, setSettings] = useState<MemSettings>(() => getMemSettings(contactId));
   const [busy, setBusy] = useState(false);
   const [dedupeBusy, setDedupeBusy] = useState(false);
+  /** 手动总结粒度：frag=只总结碎片 / core=碎片→核心 / long=核心→长期 / all=全部执行 */
+  const [scope, setScope] = useState<'frag' | 'core' | 'long' | 'all'>('all');
   const fragCount = listFragments(contactId).length;
   const pending = pendingFragmentCount(contactId);
   const archived = archivedFragmentCount(contactId);
-  const ltmCount = listLongTerm(contactId).length;
+  const coreCount = listCores(contactId).length;
+  const corePending = pendingCoreCount(contactId);
+  const longCount = listLongTerm(contactId).length;
   // 召回预览：每次渲染实时重算（父组件每 5s 轻刷，改动设置后 refresh 会触发重渲）
   const preview = memRecallPreview(contactId);
 
@@ -756,21 +883,56 @@ function SetTab({
     }, 350);
   };
 
-  /** 立即总结：不等 N 轮，立刻整理当前对话（自动挑该联系人最近活跃的会话） */
-  const summarizeNow = async () => {
+  /** 修复旧记忆视角：旧版「对方/用户」代称 → 真实名字（碎片/核心/长期三层一次处理） */
+  const repair = () => {
+    if (busy) return;
+    setBusy(true);
+    window.setTimeout(() => {
+      const r = memRepairPerspectiveNow(contactId, memNames);
+      setBusy(false);
+      refresh();
+      const total = r.frags + r.cores + r.longs;
+      showToast(
+        total > 0
+          ? `修复完成：${r.frags} 条碎片、${r.cores} 条核心、${r.longs} 条长期`
+          : '没有发现需要修复的旧代称（先在设置 › Apple 账户填写名字，修复效果更完整）'
+      );
+    }, 350);
+  };
+
+  /** 立即总结：按所选粒度手动执行（不等 N 轮） */
+  const runSummary = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const recent = memMostRecentApp(contactId);
-      if (!recent) {
-        showToast('当前没有可总结的对话，先去和TA聊聊吧');
-        return;
+      if (scope === 'frag') {
+        // 只总结碎片：把最近对话提取为碎片入库，不碰核心/长期
+        const res = await memExtractNow(contactId, apiConfig, memNames);
+        const parts = [`新增 ${res.added} 条碎片`];
+        if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
+        showToast(`总结完成：${parts.join('，')}`);
+      } else if (scope === 'core') {
+        // 碎片→核心：把待总结碎片立即凝结为核心记忆
+        const res = await memSummarizeCoreNow(contactId, apiConfig, memNames);
+        showToast(`总结完成：${res.consumed} 条碎片凝结为 1 条核心记忆`);
+      } else if (scope === 'long') {
+        // 核心→长期：把待总结核心立即凝结为长期记忆
+        const res = await memSummarizeLongNow(contactId, apiConfig, memNames);
+        showToast(`总结完成：${res.consumed} 条核心记忆凝结为 1 条长期记忆`);
+      } else {
+        // 全部执行：提取碎片 + 达阈值时顺带总结核心/长期
+        const recent = memMostRecentApp(contactId);
+        if (!recent) {
+          showToast('当前没有可总结的对话，先去和TA聊聊吧');
+          return;
+        }
+        const res = await memSummarizeNow(contactId, recent.app, apiConfig, recent.convo, memNames);
+        const parts = [`新增 ${res.fragments} 条碎片`];
+        if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
+        if (res.cores > 0) parts.push(`生成 ${res.cores} 条核心记忆`);
+        if (res.longs > 0) parts.push(`生成 ${res.longs} 条长期记忆`);
+        showToast(`总结完成：${parts.join('，')}`);
       }
-      const res = await memSummarizeNow(contactId, recent.app, apiConfig, recent.convo);
-      const parts = [`新增 ${res.fragments} 条碎片`];
-      if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
-      if (res.longTerm > 0) parts.push(`生成 ${res.longTerm} 条长期记忆`);
-      showToast(`总结完成：${parts.join('，')}`);
       refresh();
     } catch (err) {
       showToast(err instanceof Error && err.message ? err.message : '总结失败，请稍后再试');
@@ -807,9 +969,9 @@ function SetTab({
         </div>
       </section>
 
-      {/* 长期记忆总结频率 */}
+      {/* 核心记忆总结频率 */}
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-threshold">
-        <SetSectionHead title="长期记忆总结频率" />
+        <SetSectionHead title="核心记忆总结频率" />
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
           积累多少条记忆碎片后，自动总结一条核心记忆
         </p>
@@ -828,6 +990,33 @@ function SetTab({
               }`}
             >
               {n} 条
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* 长期记忆总结频率 */}
+      <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-long-threshold">
+        <SetSectionHead title="长期记忆总结频率" />
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
+          积累多少条（未归档的）核心记忆后，自动总结一条长期记忆；
+          总结后参与的核心记忆标记为「已入长期」，不再重复参与总结
+        </p>
+        <div className="mt-3 grid grid-cols-7 gap-1">
+          {MEM_LONG_OPTIONS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              aria-pressed={settings.longThreshold === n}
+              data-testid={`mem-long-${n}`}
+              onClick={() => patch({ longThreshold: n })}
+              className={`rounded-lg py-2 text-[13px] font-semibold tabular-nums transition-colors ${
+                settings.longThreshold === n
+                  ? INK
+                  : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
+              }`}
+            >
+              {n}
             </button>
           ))}
         </div>
@@ -877,23 +1066,70 @@ function SetTab({
         </div>
       </section>
 
-      {/* 手动总结 */}
+      {/* 手动总结（按粒度） */}
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-summary">
         <SetSectionHead title="手动总结" />
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
-          不用等 N 轮，立刻整理当前对话中的关键信息并一次性存入记忆库（自动区分碎片与长期记忆）。
+          不用等 N 轮，按所选粒度立刻整理：只提取碎片、把碎片凝结为核心、把核心凝结为长期，或全部执行。
         </p>
+        <div className="mt-3 grid grid-cols-2 gap-1.5">
+          {(
+            [
+              ['frag', '只总结碎片'],
+              ['core', '碎片 → 核心记忆'],
+              ['long', '核心 → 长期记忆'],
+              ['all', '全部执行'],
+            ] as const
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={scope === v}
+              data-testid={`mem-scope-${v}`}
+              onClick={() => setScope(v)}
+              className={`rounded-lg py-2 text-[13.5px] font-medium transition-colors ${
+                scope === v
+                  ? INK
+                  : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           data-testid="mem-summarize"
-          onClick={() => void summarizeNow()}
+          onClick={() => void runSummary()}
           disabled={busy}
-          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
+          className={`mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
             busy ? 'opacity-50' : ''
           }`}
         >
           {busy ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <Sparkles className="h-[18px] w-[18px]" />}
           {busy ? '正在整理记忆…' : '立即总结'}
+        </button>
+      </section>
+
+      {/* 修复旧记忆视角 */}
+      <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-repair">
+        <SetSectionHead title="修复旧记忆视角" />
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
+          旧版本提取的记忆可能混用「对方 / 用户」代称，导致谁对谁分不清；
+          一键把它们替换为真实名字（「对方」→ {contactName || '角色名字'}，
+          「用户」→ 机主名字，需在设置 › Apple 账户填写）。
+        </p>
+        <button
+          type="button"
+          data-testid="mem-repair"
+          onClick={repair}
+          disabled={busy}
+          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
+            busy ? 'opacity-50' : ''
+          }`}
+        >
+          {busy ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <Wand2 className="h-[18px] w-[18px]" />}
+          {busy ? '正在修复…' : '修复旧记忆视角'}
         </button>
       </section>
 
@@ -924,11 +1160,23 @@ function SetTab({
           下次与 TA 聊天时，将按「权重 × 相关性」注入以下记忆（已排除归档；互通关闭时各 App 仅注入自己来源的部分）。
         </p>
         <div className="mt-3 max-h-72 space-y-2 overflow-y-auto" data-testid="mem-recall-preview">
-          {preview.ltm.length === 0 && preview.frags.length === 0 ? (
+          {preview.longs.length === 0 && preview.cores.length === 0 && preview.frags.length === 0 ? (
             <p className="py-4 text-center text-[12.5px] text-black/35 dark:text-white/35">还没有可召回的记忆</p>
           ) : (
             <>
-              {preview.ltm.map((m) => (
+              {preview.longs.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-start gap-2 rounded-xl bg-black/[0.035] px-2.5 py-2 text-[12.5px] leading-relaxed text-black/70 dark:bg-white/[0.06] dark:text-white/70"
+                >
+                  <span className={`mt-[1px] inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-[1px] text-[10px] font-semibold ${INK}`}>
+                    <Landmark aria-hidden="true" className="h-2.5 w-2.5" />
+                    长期
+                  </span>
+                  <span className="min-w-0">{m.content}</span>
+                </div>
+              ))}
+              {preview.cores.map((m) => (
                 <div
                   key={m.id}
                   className="flex items-start gap-2 rounded-xl bg-black/[0.035] px-2.5 py-2 text-[12.5px] leading-relaxed text-black/70 dark:bg-white/[0.06] dark:text-white/70"
@@ -969,10 +1217,12 @@ function SetTab({
         <Info aria-hidden="true" className="mt-[1px] h-4 w-4 shrink-0 text-black/30 dark:text-white/30" />
         <div>
           <p>
-            当前联系人：{fragCount} 条碎片（{pending} 条待总结{archived > 0 ? ` · ${archived} 条已归档` : ''}）· {ltmCount} 条核心记忆
+            当前联系人：{fragCount} 条碎片（{pending} 条待总结{archived > 0 ? ` · ${archived} 条已归档` : ''}）·{' '}
+            {coreCount} 条核心记忆（{corePending} 条待总结）· {longCount} 条长期记忆
           </p>
           <p className="mt-1">
-            记忆按联系人独立存储、跨重启保留；删除联系人时其全部记忆一并删除。默认设置：每 {DEFAULT_MEM_SETTINGS.interval} 轮提取、{DEFAULT_MEM_SETTINGS.threshold} 条碎片总结一次、互通开启、失忆程度「中」。
+            记忆按联系人独立存储、跨重启保留；删除联系人时其全部记忆一并删除。默认设置：每 {DEFAULT_MEM_SETTINGS.interval} 轮提取、
+            {DEFAULT_MEM_SETTINGS.threshold} 条碎片总结一次核心、{DEFAULT_MEM_SETTINGS.longThreshold} 条核心总结一次长期、互通开启、失忆程度「中」。
           </p>
         </div>
       </section>
@@ -1040,7 +1290,7 @@ function MemoryCard({
   onDelete,
   onReinforce,
 }: {
-  variant: 'frag' | 'ltm';
+  variant: 'frag' | 'ltm' | 'long';
   /** 仅 frag：已被长期记忆总结消费 */
   consumed?: boolean;
   /** 淡化状态：fading=淡化中（半淡显），faded=已归档（沉底淡显） */
@@ -1206,7 +1456,7 @@ function MemoryCard({
         <>
           <p
             className={`whitespace-pre-wrap break-words pt-3 text-[14.5px] leading-relaxed ${
-              variant === 'ltm' ? 'font-medium' : ''
+              variant !== 'frag' ? 'font-medium' : ''
             }`}
           >
             {content}

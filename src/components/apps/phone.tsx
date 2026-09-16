@@ -527,6 +527,8 @@ function CallScreen({
   const setCallActive = useUI((s) => s.setCallActive);
   // 设置 App「API 设置」里的 OpenAI 兼容接口配置（通话 AI 对话走该配置）
   const apiConfig = useSettings((s) => s.apiConfig);
+  /** 机主名字（记忆提取视角统一用：碎片一律用真实名字指代用户；设置 › Apple 账户可改） */
+  const profileName = useSettings((s) => s.profile.name);
 
   phaseRef.current = phase;
   bubblesRef.current = bubbles;
@@ -617,10 +619,18 @@ function CallScreen({
           ''
         );
         turns.push({ role: 'peer', text: reply });
-        memAfterAiTurn(contact.id, 'phone', apiConfig, () => turns, () => {
-          const last = historyBefore[historyBefore.length - 1];
-          return last ? String(last.id) : undefined;
-        });
+        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+        memAfterAiTurn(
+          contact.id,
+          'phone',
+          apiConfig,
+          () => turns,
+          () => {
+            const last = historyBefore[historyBefore.length - 1];
+            return last ? String(last.id) : undefined;
+          },
+          { user: profileName, peer: contact.name }
+        );
       };
       try {
         // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡；需要全部联系人现场查一次，失败回退无注入）

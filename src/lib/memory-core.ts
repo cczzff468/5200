@@ -1,10 +1,12 @@
 /**
  * 记忆库 · 纯数据类型与纯逻辑（无浏览器 API，客户端/服务端路由均可安全导入）。
  * 存储与管线在 src/lib/memory.ts；本文件只放「可共享的记忆模型」：
- * - 类型：MemFragment / MemLongTerm / MemSettings / 权重 / 失忆程度
+ * - 类型：MemFragment / MemCore / MemLongTerm / MemSettings / 权重 / 失忆程度
+ * - 三层记忆：碎片（每 N 轮提取）→ 核心记忆（M 条碎片总结）→ 长期记忆（K 条核心总结）
  * - 淡化状态机：fresh（新鲜）→ fading（淡化中，召回降权）→ faded（已归档，不参与召回）
  * - 权重自动分类：姓名/关系/承诺/健康禁忌 → high；临时安排/近期状态 → low；其余 normal
- * - 相似度：字符 2-gram 最短边归一化（「用户喜欢海边」≈「用户很喜欢去海边」可判同）
+ * - 相似度：字符 2-gram 最短边归一化（「X喜欢海边」≈「X很喜欢去海边」可判同）
+ * - 视角统一：记忆文本一律用「用户真实名字 + 角色名字」指代，禁混用「对方/用户/我」
  */
 
 // ---------------- 基础类型 ----------------
@@ -47,8 +49,8 @@ export interface MemFragment {
   sourceMsgId?: string;
 }
 
-/** 长期记忆：M 条碎片自动总结出的一条核心记忆 */
-export interface MemLongTerm {
+/** 核心记忆：M 条碎片自动总结出的一条核心事实（被长期记忆收编后标记 archivedAt） */
+export interface MemCore {
   id: string;
   contactId: string;
   content: string;
@@ -60,24 +62,61 @@ export interface MemLongTerm {
   apps: MemApp[];
   createdAt: number;
   editedAt?: number;
+  /** 已被长期记忆总结收编（召回时由长期记忆代表，不再参与后续总结与召回） */
+  archivedAt?: number;
+}
+
+/** 长期记忆：K 条核心记忆自动总结出的最稳定画像（记忆层级的顶层） */
+export interface MemLongTerm {
+  id: string;
+  contactId: string;
+  content: string;
+  /** 来源核心记忆数量 */
+  coreCount: number;
+  /** 来源核心记忆 id（详情/审计用） */
+  sourceIds: string[];
+  /** 来源 App 集合（互通关闭时召回过滤用） */
+  apps: MemApp[];
+  createdAt: number;
+  editedAt?: number;
 }
 
 /** 每联系人记忆设置 */
 export interface MemSettings {
   /** 对话总结频率：每隔多少轮对话自动提取一次记忆碎片 */
   interval: 10 | 20 | 30 | 40 | 50;
-  /** 长期记忆总结频率：积累多少个（未消费的）记忆碎片后自动触发核心总结 */
+  /** 核心记忆总结频率：积累多少个（未消费的）记忆碎片后自动触发核心总结 */
   threshold: 3 | 5 | 7 | 10;
+  /** 长期记忆总结频率：积累多少条（未归档的）核心记忆后自动触发长期记忆总结；默认 5 */
+  longThreshold: 1 | 3 | 5 | 7 | 10 | 15 | 20;
   /** 跨 App 互通记忆（默认开）：开=四端共享，关=各 App 只用自己来源的记忆 */
   share: boolean;
   /** 失忆程度（默认中）：过期记忆先淡化后归档，不再参与召回；从不重要的记忆开始 */
   forget: MemForget;
 }
 
-export const DEFAULT_MEM_SETTINGS: MemSettings = { interval: 20, threshold: 5, share: true, forget: 'medium' };
+export const DEFAULT_MEM_SETTINGS: MemSettings = {
+  interval: 20,
+  threshold: 5,
+  longThreshold: 5,
+  share: true,
+  forget: 'medium',
+};
 
 export const MEM_INTERVAL_OPTIONS: MemSettings['interval'][] = [10, 20, 30, 40, 50];
 export const MEM_THRESHOLD_OPTIONS: MemSettings['threshold'][] = [3, 5, 7, 10];
+export const MEM_LONG_OPTIONS: MemSettings['longThreshold'][] = [1, 3, 5, 7, 10, 15, 20];
+
+/** 记忆提取/总结时双方名字（视角统一：一律用真实名字指代，禁用「对方/用户/我」） */
+export interface MemNames {
+  /** 用户（机主）真实名字；空 = 提取时回退固定称呼「用户」 */
+  user?: string | null;
+  /** 角色名字（聊天对端 AI 角色）；空 = 回退固定称呼「对方」 */
+  peer?: string | null;
+}
+
+/** 旧版视角代称（修复旧记忆时替换为真实名字） */
+export const MEM_STALE_PAT = /(对方|用户)/g;
 
 /** 对话轮次（供提取器使用的一问一答文本） */
 export interface MemConvoTurn {
@@ -166,5 +205,5 @@ export function similarity(a: string, b: string): number {
   return n / min;
 }
 
-/** 相似合并阈值：例「用户喜欢海边」vs「用户很喜欢去海边」≈0.6 命中；不同事实（北京/上海）≈0.36 不命中 */
+/** 相似合并阈值：例「小晨喜欢海边」vs「小晨很喜欢去海边」≈0.6 命中；不同事实（北京/上海）≈0.36 不命中 */
 export const SIMILAR_MERGE_THRESHOLD = 0.6;

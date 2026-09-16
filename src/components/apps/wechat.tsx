@@ -3697,13 +3697,15 @@ function ChatPage({
         saveMsgs(peer.id, [...cur, ...all]);
         // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
         if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, all.length);
-        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）
+        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
+        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
         memAfterAiTurn(
           peer.id,
           'wx',
           apiConfig,
           () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-          () => memLastMsgId(loadMsgs(peer.id))
+          () => memLastMsgId(loadMsgs(peer.id)),
+          { user: me.name, peer: displayNameOf(peer) || peer.name }
         );
       },
     });

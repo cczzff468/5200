@@ -4951,3 +4951,27 @@ Stage Summary:
 - 本次唯一实质缺陷：删除联系人不清理聊天痕迹（已修复+UI 级验证）；互通开关语义为「同一联系人跨 App」而非「跨联系人」，跨联系人之间永不过界（键即边界）
 - 遗留观察（非缺陷）：信息 App 的 systemPrompt 在打开会话时组装（会话中途改人设需重进会话生效；微信/QQ 每轮现场组装不受影响）
 - 可复现测试步骤见对话报告；commit + push 完成
+
+---
+Task ID: AK
+Agent: Z.ai Code (main)
+Task: 记忆碎片视角统一修复 + 新增「长期记忆」第三层级（K 条核心→1 条长期）+ 总结频率设置 + 手动四粒度总结 + 旧记忆视角修复
+
+Work Log:
+- 定位视角混乱根因（两处）：① extract 路由把对话渲染成「用户：/对方：」且 system 无任何视角约束 → 模型随机用「用户/对方」当主语；② summarize 路由 system 明文要求「第三人称（用「对方/用户」指代）」→ 核心记忆必然混乱
+- 提示词层重写（/api/memory/extract、/api/memory/summarize）：双方真实名字（userName/peerName 请求体传入）渲染对话两侧；新增「视角规则（最高优先级）」段——只允许用两个真实名字指代、严禁「用户/对方/我/你/他/她/TA/彼此」、落笔前先判断信息关于谁、附名字示例；空名字回退固定称呼保证全批一致
+- 数据层（memory-core.ts）：MemLongTerm 更名 MemCore（核心记忆）+新增 archivedAt；新增 MemLongTerm（长期记忆：coreCount/sourceIds/apps）；MemSettings 新增 longThreshold(1|3|5|7|10|15|20，默认 5)；新增 MemNames 类型 + MEM_STALE_PAT
+- 管线层（memory.ts 重写）：三层管线 memAfterAiTurn = 轮次→提取碎片→达 M 阈值总结核心→达 K 阈值总结长期（链式、失败静默下窗口重试）；summarizeCoresIntoLong 归档来源核心（方案A：archivedAt 后不参与后续总结与召回，由长期代表）；存储键 mem-long:<id>（核心沿用 mem-ltm 键免迁移）；召回 memRecallBlock 按 长期→核心→碎片 顺序 + 跨层相似(≥0.6)去重 + 容量上限 8/12/5；memPurgeContact 级联清 mem-long
+- 名字贯通四 App 调用点：微信/QQ 传 me.name+displayNameOf(peer)；信息/电话传 profile.name（设置›Apple 账户）+peer 名；npc/char 一视同仁
+- 手动总结四粒度：memExtractNow（只碎片）/ memSummarizeCoreNow（碎片→核心）/ memSummarizeLongNow（核心→长期，新增）/ memSummarizeNow（全部执行）；设置页新增粒度选择器（frag/core/long/all）
+- 旧记忆修复 memRepairPerspectiveNow：「对方」→角色名、「用户」→机主名（三层一次处理）；同义反复清理（「用户叫小晨」→「小晨叫小晨」剥掉短语，纯同义反复整条删除）；名字缺失时保留代称不产生无主语碎片
+- UI（memory-bank.tsx）：四 Tab Dock（记忆碎片/核心记忆/长期记忆/设置）+ HeroCard 四统计 + 联系人卡长期徽标；核心 Tab「已入长期」徽标沉底淡显；长期 Tab（Landmark 图标）+右上角独立立即总结；设置页：原「长期记忆总结频率」更名「核心记忆总结频率」，新增「长期记忆总结频率」(1/3/5/7/10/15/20)、手动总结粒度选择、「修复旧记忆视角」按钮、召回预览含长期层、数据说明三层数量
+- 实测证据（非理论）：curl 实测 extract（"小晨是上班族/z最近喜欢上打球/z称小晨为唯一交心的朋友"全用真名）、summarize core（旧混合碎片输入→"z是上班族…称小晨为唯一交心的朋友"统一输出）、summarize long（120 字内最稳定画像）；浏览器 fetch 拦截实测 /api/chat 请求体——长期→核心→碎片顺序、与长期重叠的核心(相似0.7)被去重、独立碎片保留、（9月16日·微信）来源标签、NPC 阿豪同链路生效
+- 浏览器 UI 实测：四 Tab 渲染✓、长期阈值默认 5 持久化（改 3→reload→仍 3→恢复 5）✓、修复按钮实测（9 条旧代称→对方全替换；设机主名「小晨」后用户全替换；同义反复正确剥除/删除）✓、核心页立即总结（3 碎片→1 核心+来源已消费）✓、长期页立即总结（3 核心→1 长期+来源全部 archivedAt「已入长期」）✓、自动管线在真实聊天中触发（extract+summarize 双 200）✓
+- 测试数据已清理（np1 测试池清空、n1 移除 test-taut 合成碎片）；lint + tsc 全绿
+
+Stage Summary:
+- 三层记忆（碎片→核心→长期）全部落地：自动链式触发（N 轮/M 碎片/K 核心）、方案A 归档防重复总结、手动四粒度、注入顺序 长期→核心→碎片 + 跨层去重、按联系人隔离 + 互通开关四端共享沿用 apps 过滤
+- 视角统一从根因修复：提取与总结两层提示词都锁定「真实名字对」，并经 curl 与浏览器拦截双重实测；旧数据可一键修复（含同义反复清理）
+- 无破坏性变更：memRecallBlock 签名不变、MemConvoTurn 不变、聊天/回复条数/流式/时间感知 untouched；mem-ltm 旧键沿用零迁移
+- 遗留观察（非缺陷）：extract 模型偶发把「小晨明天」合并成「小明天」（名字/日期边界 typo，属模型层噪声，相似合并机制可吸收）；/api/chat 502 为用户配置的 api.openai.com 上游地域封锁（403），与本次改动无关

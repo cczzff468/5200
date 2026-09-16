@@ -461,6 +461,8 @@ function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   // 用户自己的 OpenAI 兼容接口配置（设置 › API 配置），聊天全部走该配置
   const apiConfig = useSettings((s) => s.apiConfig);
+  /** 机主名字（记忆提取视角统一用：碎片一律用真实名字指代用户；设置 › Apple 账户可改） */
+  const profileName = useSettings((s) => s.profile.name);
   /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
@@ -643,14 +645,16 @@ function ChatView({
           return msg;
         });
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
-        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）
+        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
+        // names：双方真实名字，提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
         if (memContactId)
           memAfterAiTurn(
             memContactId,
             'sms',
             apiConfig,
             () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
-            () => memLastMsgId(loadMsgs(storageKey) ?? [])
+            () => memLastMsgId(loadMsgs(storageKey) ?? []),
+            { user: profileName, peer: peer.name ?? peer.title }
           );
       },
     });
