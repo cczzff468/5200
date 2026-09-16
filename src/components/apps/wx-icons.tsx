@@ -1,18 +1,20 @@
 'use client';
 
 /**
- * 微信「发现 / 我」页彩色线稿图标（对齐微信 8.x 官方风格）：
+ * 微信「发现 / 我 / 钱包」页彩色线稿图标（对齐微信 8.x 官方截图）：
  * 无底色色块，直接用彩色描边 SVG —— 朋友圈彩色光圈、视频号橙色丝带、
- * 扫一扫双手、听一听音符、看一看六边形花、搜一搜红星、游戏宝石、
- * 小程序 S 环、服务绿色气泡勾、收藏立方体、作品双方块、小店门面、表情笑脸、设置齿轮。
+ * 扫一扫双手、听一听音符、看一看六边形花结、搜一搜红星、游戏宝石、
+ * 小程序 S 环、服务绿色气泡勾、收藏立方体、作品双方块、小店门面、表情笑脸、设置齿轮，
+ * 以及钱包页：零钱 ¥ 币、经营账户小店、零钱通钻石、银行卡、亲属卡双卡。
  *
- * 每个组件自带 38×38 槽位（与原 WxTileIcon 同尺寸），保证 WxMenuRow 分隔线对齐不变。
+ * 发现/我页图标自带 38×38 槽位（与原 WxTileIcon 同尺寸，WxMenuRow 分隔线对齐不变）；
+ * 钱包页图标自带 34×34 槽位（与钱包 row 原 34px 圆标同尺寸，分隔线 left-[62px] 对齐不变）。
  */
 
 import type { ReactNode } from 'react';
 import { Settings as SettingsIcon } from 'lucide-react';
 
-/** 38×38 图标槽位 + 48 viewBox 画布 */
+/** 38×38 图标槽位 + 48 viewBox 画布（发现 / 我页用） */
 function Slot({ children }: { children: ReactNode }) {
   return (
     <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center" aria-hidden="true">
@@ -23,8 +25,19 @@ function Slot({ children }: { children: ReactNode }) {
   );
 }
 
-/** 朋友圈：六叶彩色光圈（绿/蓝/橙/红/黄/紫 环形扇叶） */
-const MOMENT_BLADE = 'M28.16 4.44 A20 20 0 0 1 39.76 11.69 L31.49 18.15 A9.5 9.5 0 0 0 25.98 14.71 Z';
+/** 34×34 图标槽位 + 48 viewBox 画布（钱包页用，分隔线 left-[62px] 对齐） */
+function Slot34({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center" aria-hidden="true">
+      <svg viewBox="0 0 48 48" className="h-[32px] w-[32px]" fill="none" strokeLinecap="round" strokeLinejoin="round">
+        {children}
+      </svg>
+    </span>
+  );
+}
+
+/** 朋友圈：六叶彩色光圈（绿/蓝/橙/红/黄/紫 环形扇叶，扇叶宽 50° 缝 10°） */
+const MOMENT_BLADE = 'M27.47 4.30 A20 20 0 0 1 41.32 14 L32.23 19.25 A9.5 9.5 0 0 0 25.65 14.64 Z';
 const MOMENT_COLORS = ['#07C160', '#1B7AF5', '#FA9D3B', '#FA5151', '#FFC300', '#6467F0'];
 
 export function WxIcMoments() {
@@ -37,36 +50,48 @@ export function WxIcMoments() {
   );
 }
 
-/** 视频号：橙色双环丝带（蝴蝶结形 W） */
+/** 视频号：橙色双角丝带（W 形，两支由底部中心向外上卷的号角） */
 export function WxIcChannels() {
   return (
     <Slot>
-      <g stroke="#FA9D3B" strokeWidth={3.4}>
-        <path d="M22.5 24 C17 13.5, 5.5 11.5, 5.5 19 C5.5 26.5, 17 27.5, 22.5 24" />
-        <path d="M25.5 24 C31 13.5, 42.5 11.5, 42.5 19 C42.5 26.5, 31 27.5, 25.5 24" />
+      <g stroke="#FA9D3B" strokeWidth={3.2}>
+        <path d="M23.5 33 C16 32, 8 26, 8.5 17.5 C8.8 13, 13 11.5, 16 14.5 C20 18.5, 22.5 25, 23.5 33" />
+        <path d="M25 33 C33 32.5, 41.5 25, 41 14.5 C40.8 9.8, 35.8 8.6, 32.6 12 C28 17, 25.8 24, 25 33" />
       </g>
     </Slot>
   );
 }
 
-/** 扫一扫：蓝色双手取景手势（左手左上、右手右下，点对称） */
-const SCAN_HAND =
-  'M11 20 A2.6 2.6 0 0 1 16.2 20 A2.6 2.6 0 0 1 21.4 20 A2.6 2.6 0 0 1 26.6 20 ' +
-  'C27.6 20 28.2 20.9 28.2 22 C28.2 26.8 24 29.6 19.2 29.6 L15.2 29.6 C12.7 29.6 11 28 11 25.6 Z';
+/** 扫一扫：蓝色双手取景手势（左上手从左上伸向右下、右下手点对称；掌 + 四指 + 拇指 组合式，指缝清晰） */
+function ScanHand() {
+  return (
+    <g>
+      {/* 掌 */}
+      <rect x="8" y="16" width="12.5" height="13.5" rx="5.2" />
+      {/* 四根手指（从掌右缘伸出，指缝分明） */}
+      <path d="M20.5 17.8 L27.5 17.8" strokeWidth={3.3} />
+      <path d="M20.5 21.6 L28.8 21.6" strokeWidth={3.3} />
+      <path d="M20.5 25.4 L27.8 25.4" strokeWidth={3.3} />
+      <path d="M19.5 29 L24.5 29" strokeWidth={3} />
+      {/* 拇指（从掌顶斜伸向右上） */}
+      <path d="M13.5 15.5 L17.5 11" strokeWidth={3.3} />
+    </g>
+  );
+}
 
 export function WxIcScan() {
   return (
     <Slot>
-      <g stroke="#4D9CF8" strokeWidth={3} fill="none">
-        <g transform="translate(-1.7 -5.2)">
-          <g transform="rotate(115 19.6 23.5)">
-            <path d={SCAN_HAND} />
+      <g stroke="#4D9CF8" fill="none">
+        <g transform="translate(-2.5 -5.5)">
+          <g transform="rotate(38 18 20)">
+            <ScanHand />
           </g>
         </g>
         <g transform="rotate(180 24 24)">
-          <g transform="translate(-1.7 -5.2)">
-            <g transform="rotate(115 19.6 23.5)">
-              <path d={SCAN_HAND} />
+          <g transform="translate(-2.5 -5.5)">
+            <g transform="rotate(38 18 20)">
+              <ScanHand />
             </g>
           </g>
         </g>
@@ -88,29 +113,38 @@ export function WxIcListen() {
   );
 }
 
-/** 看一看：金黄六边形套六边形花结 */
+/** 看一看：金黄六边形 + 内接六角星花结 */
 export function WxIcStories() {
   return (
     <Slot>
-      <g stroke="#FFC300" strokeWidth={3}>
-        <path d="M24 5 L40.5 14.5 L40.5 33.5 L24 43 L7.5 33.5 L7.5 14.5 Z" />
-        <path d="M34.5 24 L29.25 33.09 L18.75 33.09 L13.5 24 L18.75 14.91 L29.25 14.91 Z" />
+      <g stroke="#FFC300">
+        <path d="M24 4.5 L40.9 14.25 L40.9 33.75 L24 43.5 L7.1 33.75 L7.1 14.25 Z" strokeWidth={3} />
+        <path d="M24 12 L34.39 30 L13.61 30 Z" strokeWidth={2.4} />
+        <path d="M24 36 L13.61 18 L34.39 18 Z" strokeWidth={2.4} />
       </g>
     </Slot>
   );
 }
 
-/** 搜一搜：红色五瓣旋涡星（搜索星标） */
+/** 搜一搜：红色五瓣星芒（长短参差 + 旋涡弧度） */
+const SEARCH_RAYS: Array<[number, number]> = [
+  [-88, 12],
+  [-160, 14.5],
+  [-16, 15.5],
+  [118, 13.5],
+  [52, 15],
+];
+
 export function WxIcSearch() {
-  const rays = [0, 72, 144, 216, 288].map((deg) => {
+  const rays = SEARCH_RAYS.map(([deg, len]) => {
     const t = (deg * Math.PI) / 180;
     const pt = (r: number, off: number) =>
       `${(24 + r * Math.cos(t + off)).toFixed(2)} ${(24 + r * Math.sin(t + off)).toFixed(2)}`;
-    return `M${pt(4.5, -0.55)} Q${pt(10.5, 0)} ${pt(16.5, 0.5)}`;
+    return `M${pt(4.2, -0.5)} Q${pt(len * 0.55, 0)} ${pt(len, 0.42)}`;
   });
   return (
     <Slot>
-      <g stroke="#FA5151" strokeWidth={3.2}>
+      <g stroke="#FA5151" strokeWidth={3.4}>
         {rays.map((d) => (
           <path key={d} d={d} />
         ))}
@@ -119,15 +153,15 @@ export function WxIcSearch() {
   );
 }
 
-/** 游戏：六面彩色宝石（红/橙/蓝/绿/黄/青 切面线稿） */
+/** 游戏：六面彩色宝石（红/橙/蓝/绿/黄/青 切面线稿，宽腰带钻石） */
 export function WxIcGames() {
   const facets: Array<[string, string]> = [
-    ['#FA5151', 'M6 19 L15 9 L20 19 Z'],
-    ['#FA9D3B', 'M15 9 L33 9 L28 19 L20 19 Z'],
-    ['#1B7AF5', 'M33 9 L42 19 L28 19 Z'],
-    ['#07C160', 'M6 19 L20 19 L24 39 Z'],
-    ['#FFC300', 'M20 19 L28 19 L24 39 Z'],
-    ['#10AEB5', 'M28 19 L42 19 L24 39 Z'],
+    ['#FA5151', 'M5 19 L15 10 L19 19 Z'],
+    ['#FA9D3B', 'M15 10 L33 10 L29 19 L19 19 Z'],
+    ['#1B7AF5', 'M33 10 L43 19 L29 19 Z'],
+    ['#07C160', 'M5 19 L19 19 L24 40 Z'],
+    ['#FFC300', 'M19 19 L29 19 L24 40 Z'],
+    ['#10AEB5', 'M29 19 L43 19 L24 40 Z'],
   ];
   return (
     <Slot>
@@ -216,5 +250,89 @@ export function WxIcSettings() {
     <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center" aria-hidden="true">
       <SettingsIcon className="h-[30px] w-[30px] text-[#4D9CF8]" strokeWidth={2} />
     </span>
+  );
+}
+
+// ---------------- 钱包页（34×34 槽位） ----------------
+
+/** 零钱：金黄 ¥ 圆币（线圈 + ¥） */
+export function WxIcChange() {
+  return (
+    <Slot34>
+      <g stroke="#FFC300">
+        <circle cx="24" cy="24" r="16" strokeWidth={3} />
+        <path d="M18.5 14.5 L24 22 L29.5 14.5" strokeWidth={2.8} />
+        <path d="M24 22 L24 32" strokeWidth={2.8} />
+        <path d="M18.5 25.5 L29.5 25.5" strokeWidth={2.8} />
+        <path d="M18.5 29.5 L29.5 29.5" strokeWidth={2.8} />
+      </g>
+    </Slot34>
+  );
+}
+
+/** 经营账户：金黄小店（雨棚 + 门体）+ 右下 ¥ 硬币徽章 */
+export function WxIcBizAccount() {
+  return (
+    <Slot34>
+      <g stroke="#F7A500">
+        <path
+          d="M8 13.5 Q8 9.5 12 9.5 L36 9.5 Q40 9.5 40 13.5 L40 16 A4 4 0 0 1 32 16 A4 4 0 0 1 24 16 A4 4 0 0 1 16 16 A4 4 0 0 1 8 16 Z"
+          strokeWidth={2.6}
+        />
+        <path d="M11 19.5 L11 34.5 Q11 38.5 15 38.5 L33 38.5 Q37 38.5 37 34.5 L37 19.5" strokeWidth={2.6} />
+        <circle cx="30.5" cy="31" r="7" strokeWidth={2.4} />
+      </g>
+      <g stroke="#F7A500" strokeWidth={1.8}>
+        <path d="M28.4 28.2 L30.5 31 L32.6 28.2" />
+        <path d="M30.5 31 L30.5 34.4" />
+        <path d="M28.8 32.1 L32.2 32.1" />
+      </g>
+    </Slot34>
+  );
+}
+
+/** 零钱通：金黄钻石（冠部 V 面 + 腰线 + 亭部 V 面） */
+export function WxIcFund() {
+  return (
+    <Slot34>
+      <g stroke="#F7B500">
+        <path d="M15 9.5 L33 9.5 L41 19.5 L24 39 L7 19.5 Z" strokeWidth={2.8} />
+        <path d="M15 9.5 L19.5 19.5 L7 19.5" strokeWidth={2.4} />
+        <path d="M33 9.5 L28.5 19.5 L41 19.5" strokeWidth={2.4} />
+        <path d="M19.5 19.5 L24 39 L28.5 19.5" strokeWidth={2.4} />
+      </g>
+    </Slot34>
+  );
+}
+
+/** 银行卡：蓝色卡片（圆角卡体 + 磁条线） */
+export function WxIcBankCard() {
+  return (
+    <Slot34>
+      <g stroke="#4D9CF8">
+        <rect x="6.5" y="13.5" width="35" height="21.5" rx="4.5" strokeWidth={3} />
+        <path d="M12.5 20.5 L26.5 20.5" strokeWidth={3.2} />
+      </g>
+    </Slot34>
+  );
+}
+
+/** 亲属卡：橙金双卡斜叠（后卡橙、前卡金带底色遮挡） */
+export function WxIcFamilyCard() {
+  return (
+    <Slot34>
+      <rect x="21.5" y="5" width="17" height="24" rx="4.5" stroke="#F7A500" strokeWidth={2.8} transform="rotate(38 30 17)" />
+      <rect
+        x="9.5"
+        y="19"
+        width="17"
+        height="24"
+        rx="4.5"
+        stroke="#F7B500"
+        strokeWidth={2.8}
+        transform="rotate(38 18 31)"
+        className="fill-white dark:fill-[#1A1A1A]"
+      />
+    </Slot34>
   );
 }

@@ -41,6 +41,7 @@ import {
   Wallet as WalletIcon,
   X,
 } from 'lucide-react';
+import { WxIcChange, WxIcBizAccount, WxIcFund, WxIcBankCard, WxIcFamilyCard } from './wx-icons';
 import type { ContactRecord } from '@/lib/contacts';
 
 // ---------------- 数据层 ----------------
@@ -749,45 +750,44 @@ function WalletPage({
         <div className="overflow-hidden rounded-[12px] bg-white dark:bg-[#1A1A1A]">
           {row(
             '零钱',
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gradient-to-br from-[#4D9CF8] to-[#2F7FE0] text-[17px] font-semibold text-white" aria-hidden="true">
-              ¥
-            </span>,
+            <WxIcChange />,
             `¥${fmtMoney(balance)}`,
             () => onOpen('change'),
             'wx-wallet-change',
             true
           )}
           {row(
-            '零钱通',
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gradient-to-br from-[#F7B500] to-[#F79C00] text-white" aria-hidden="true">
-              <Gem className="h-[17px] w-[17px]" strokeWidth={2} />
-            </span>,
+            '经营账户',
+            <WxIcBizAccount />,
             '',
+            () => onToast('经营账户暂未开放'),
+            'wx-wallet-biz'
+          )}
+          {row(
+            '零钱通',
+            <WxIcFund />,
+            <span className="text-[#F7A500]">收益率{(LCQ_RATE * 100).toFixed(4)}%</span>,
             () => onOpen('lcq'),
             'wx-wallet-lcq'
           )}
           {row(
             '银行卡',
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gradient-to-br from-[#5AA9FA] to-[#3D8BE8] text-white" aria-hidden="true">
-              <CreditCard className="h-[17px] w-[17px]" strokeWidth={2} />
-            </span>,
+            <WxIcBankCard />,
             cards.length > 0 ? `${cards.length}张` : '添加',
             () => onOpen('cards'),
             'wx-wallet-cards'
           )}
           {row(
             '亲属卡',
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gradient-to-br from-[#F7B500] to-[#F79C00] text-white" aria-hidden="true">
-              <Heart className="h-[17px] w-[17px]" strokeWidth={2} />
-            </span>,
+            <WxIcFamilyCard />,
             familyCards.length + familyInCount > 0 ? `${familyCards.length + familyInCount}张` : '未开通',
             () => onOpen(familyCards.length + familyInCount > 0 ? 'fcManage' : 'fcIntro'),
             'wx-wallet-fc'
           )}
           {row(
             '支付设置',
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gradient-to-br from-[#6F7B8C] to-[#4E5765] text-white" aria-hidden="true">
-              <ShieldCheck className="h-[17px] w-[17px]" strokeWidth={2} />
+            <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center" aria-hidden="true">
+              <ShieldCheck className="h-[24px] w-[24px] text-[#6F7B8C]" strokeWidth={1.8} />
             </span>,
             wxLoadPayPwd().enabled && wxLoadPayPwd().pwd ? '已开启' : '未开启',
             () => onOpen('paySettings'),
