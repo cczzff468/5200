@@ -327,11 +327,14 @@ export async function POST(req: NextRequest) {
   const peerName = peer.name;
 
   const system = buildCallSystemPrompt(peer, greeting);
+  // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
+  const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
+  const systemFull = memoryBlock ? `${system}\n\n${memoryBlock}` : system;
 
   // 上游要求 messages 必须以 user 消息收尾：
   // - 普通轮次：历史本身以用户刚说的话收尾，直接透传；
   // - 接通问候：补一条 user 消息触发开口。
-  const messages: CallApiMessage[] = [{ role: 'system', content: system }, ...history];
+  const messages: CallApiMessage[] = [{ role: 'system', content: systemFull }, ...history];
   if (greeting && (messages.length === 1 || messages[messages.length - 1].role !== 'user')) {
     messages.push({ role: 'user', content: '（电话已拨通，请先开口打招呼）' });
   } else if (!greeting && messages.length > 1 && messages[messages.length - 1].role === 'assistant') {

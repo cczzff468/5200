@@ -42,6 +42,7 @@ import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, updateContact } from '@/lib/ios/contacts-store';
+import { memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -583,6 +584,18 @@ function CallScreen({
         setBubbles((b) => [...b, historyBefore[historyBefore.length - 1]]);
       }
       setBusy(true);
+      // 记忆库：本轮对话结束后的轮次计数与自动提取（后台异步，失败静默）；
+      // 请求前先召回该联系人（互通开关范围）的记忆注入 system（服务端拼到人设后）
+      const memoryBlock = contact?.id ? memRecallBlock(contact.id, 'phone', userText ?? '') : undefined;
+      const memorizeTurn = (reply: string) => {
+        if (!contact?.id) return;
+        const turns = memConvoFromRaw(
+          historyBefore.map((m) => ({ role: m.role, text: m.text })),
+          ''
+        );
+        turns.push({ role: 'peer', text: reply });
+        memAfterAiTurn(contact.id, 'phone', apiConfig, () => turns);
+      };
       try {
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
@@ -605,6 +618,7 @@ function CallScreen({
             number: target.number,
             greeting: userText === null,
             history: historyBefore.map((m) => ({ role: m.role, content: m.text })),
+            memoryBlock,
             // 设置 App「API 设置」的配置：服务端优先用它调用户自己的 API
             config: apiConfig,
           }),
@@ -639,6 +653,7 @@ function CallScreen({
               return;
             }
             setBubbles((b) => b.map((x) => (x.id === bubbleId ? { ...x, text: reply } : x)));
+            memorizeTurn(reply);
             await speak(reply);
           } catch (err) {
             if (endedRef.current) return;
@@ -655,6 +670,7 @@ function CallScreen({
         }
         const reply = data.reply;
         setBubbles((b) => [...b, { id: genId(), role: 'assistant', text: reply }]);
+        memorizeTurn(reply);
         await speak(reply);
       } catch (err) {
         if (!endedRef.current) {

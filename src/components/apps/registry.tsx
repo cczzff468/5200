@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import {
   AudioLines,
+  BrainCircuit,
   Calculator as CalculatorIcon,
   CalendarDays,
   Camera,
@@ -50,6 +51,7 @@ const PhoneApp = dynamic(() => import('./phone'), { ssr: false });
 const WeChatApp = dynamic(() => import('./wechat'), { ssr: false });
 const QQApp = dynamic(() => import('./qq'), { ssr: false });
 const AppStoreApp = dynamic(() => import('./appstore'), { ssr: false });
+const MemoryBankApp = dynamic(() => import('./memory-bank'), { ssr: false });
 
 export interface AppMeta {
   id: AppId;
@@ -330,6 +332,12 @@ const APP_DEFS: AppDef[] = [
     image: '/icons/appstore.png',
     glyph: <Store className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: AppStoreApp,
+  },
+  {
+    id: 'memory',
+    name: '记忆库',
+    glyph: <BrainCircuit className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    component: MemoryBankApp,
   },
 ];
 

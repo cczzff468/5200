@@ -39,6 +39,7 @@ import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
@@ -581,10 +582,20 @@ function ChatView({
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
     // 回复条数（本会话独立设置；信息端未提供设置入口，未设置时保持 1 条的现状）
     const replyCount = systemPrompt ? getReplyCount(sessionKey, 1) : 1;
-    const sysContent = systemPrompt
+    // 记忆库：联系人会话召回记忆（storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
+    const memContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+    const memoryBlock = memContactId
+      ? memRecallBlock(
+          memContactId,
+          'sms',
+          [userMsg?.content ?? '', ...base.slice(-6).map((m) => m.content)].filter(Boolean).join(' ')
+        )
+      : '';
+    const baseSys = [systemPrompt, memoryBlock].filter(Boolean).join('\n\n');
+    const sysContent = baseSys
       ? replyCount > 1
-        ? `${systemPrompt}\n\n${buildReplyCountPrompt(replyCount)}`
-        : systemPrompt
+        ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
+        : baseSys
       : null;
     const payload: ChatPayloadMessage[] = sysContent
       ? [{ role: 'system', content: sysContent }, ...history]
@@ -617,6 +628,8 @@ function ChatView({
           return msg;
         });
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
+        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）
+        if (memContactId) memAfterAiTurn(memContactId, 'sms', apiConfig, () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''));
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

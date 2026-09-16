@@ -686,7 +686,8 @@ export type AppId =
   | 'recorder'
   | 'contacts'
   | 'settings'
-  | 'appstore';
+  | 'appstore'
+  | 'memory';
 
 export type AppPhase = 'closed' | 'opening' | 'open' | 'closing';
 

@@ -86,6 +86,7 @@ import {
 } from '@/lib/chat-rich';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -3596,7 +3597,15 @@ function ChatPage({
     const stickers = loadStickers('wx');
     const system = buildPersonaPrompt(peer, me, ownerName, stickers);
     const actionRules = buildActionRules(wxCollectPendingCards(base));
-    const systemFull = actionRules.length > 0 ? `${system}\n\n${actionRules.join('\n\n')}` : system;
+    // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
+    // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
+    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
+      .filter((x): x is string => typeof x === 'string' && x.length > 0)
+      .join(' ');
+    const memoryBlock = memRecallBlock(peer.id, 'wx', memContext);
+    const systemFull = [system, memoryBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '']
+      .filter(Boolean)
+      .join('\n\n');
     const payloadMsgs: ChatPayloadMessage[] = [
       { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
       ...history,
@@ -3658,6 +3667,8 @@ function ChatPage({
         saveMsgs(peer.id, [...cur, ...all]);
         // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
         if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, all.length);
+        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）
+        memAfterAiTurn(peer.id, 'wx', apiConfig, () => memConvoFromRaw(loadMsgs(peer.id), peer.name));
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

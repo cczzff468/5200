@@ -4548,3 +4548,40 @@ Work Log:
 Stage Summary:
 - 转账/红包卡片状态行规则终版：**待收款/待领取中** 有留言显示留言、无留言显示状态文案；**终态（已收款/已领取/已退还/已退回/已拒收）** 一律显示原状态文案，不再显示留言；两端四类卡片（微信转账/QQ转账/QQ红包/微信红包）规则一致
 - 已验证 live 收款流（点收款→原卡+凭据卡即时切换为状态文案）与跨重启持久化
+---
+Task ID: Z
+Agent: Z.ai Code (main)
+Task: 新增「记忆库」APP：主界面入口 + 联系人记忆详情（记忆碎片/长期记忆/设置三 Tab）+ QQ/微信/信息/电话四端跨应用记忆互通（每联系人独立开关）+ AI 带记忆聊天 + 手动立即总结
+
+Work Log:
+- 数据层 src/lib/memory.ts（新增，localStorage 持久化，按联系人 ID 隔离）：
+  · mem-frag:<cid> 记忆碎片（id/contactId/app 标记/content/sourceTime/createdAt/editedAt/consumedAt）
+  · mem-ltm:<cid> 长期记忆（content/fragmentCount/sourceIds/apps/createdAt）
+  · mem-settings:<cid> 每联系人设置（interval 10-50 默认20 / threshold 3-10 默认5 / share 默认true）
+  · mem-round:<cid>:<app> 各端对话轮次计数；互通开关只控制「召回范围」（开=四端共享全部记忆，关=各端只召回自己来源的记忆），存储单一池+app 标记，切换无需迁移
+  · 召回 memRecallBlock：长期记忆优先（top4）+ 未消费碎片（top6），组内按相关性（字符2-gram重叠+新近度）排序；无记忆返回空串不报错；提取去重（同内容归一化跳过）
+- 后端（新增）：src/lib/server-llm.ts（用户 API 配置非流式代理 + z-ai-web-dev-sdk 兜底 + 宽松 JSON 解析）；/api/memory/extract（对话→0-6条碎片，只输出 JSON，解析成功为空=如实返回空）；/api/memory/summarize（碎片→一条核心记忆，80字内）
+- 四端接入（每处两行，不破坏流式/回复条数/角色隔离）：
+  · system 注入：微信 wechat.tsx runAiTurn / QQ qq.tsx runAiTurn / 信息 chat.tsx startAiTurn（storageKey c:<id> 解析 contactId，AI 助手会话不参与）/ 电话 phone.tsx → memoryBlock 字段 → /api/phone/turn 附加在人设后
+  · 轮次管线：四端 finalize 成功分支调 memAfterAiTurn（失败不计数）→ 达到间隔后台提取 → 未消费碎片达阈值自动总结长期记忆；in-flight 防并发；失败静默下窗口重试
+- 记忆库 APP（新增 src/components/apps/memory-bank.tsx + registry 'memory' 条目 BrainCircuit 线条图标 + HomeScreen 第3页 + store.ts AppId + appstore 简介/分类）：
+  · 联系人列表（头像/名字/碎片与核心记忆计数/空态）→ 详情页三 Tab（分段控制器）
+  · Tab1 记忆碎片：内容+来源时间+所属会话徽标+已总结标记，点开编辑/删除（两步确认）；Tab2 长期记忆：内容+来源碎片数量+来源App+生成时间，同套编辑/删除
+  · Tab3 设置：提取频率/总结阈值选项组、跨App互通开关（iOS 开关，持久化）、「立即总结」（busy 态+结果 toast，自动挑该联系人最近活跃会话，区分碎片/长期记忆）、数据说明（删除联系人→记忆级联删除）
+- 级联清理：contacts-store.deleteContact 删除联系人（及级联 NPC）时 memPurgeContact 清理其全部记忆键
+- lint + tsc 0 问题；修复两处：extract/summarize 路由 JSON 解析成功但为空时误走按行兜底（此前把 {"fragments":[]} 原文存成碎片）；memory-bank SetTab 缺 contactName prop
+- Agent Browser 端到端验证（393×852，种 u1/n1 + 富文本对话）：
+  ①curl 直测 API：extract 返回 5 条碎片（事实/偏好/承诺），summarize 返回通顺核心记忆 ✓
+  ②主界面第3页出现「记忆库」图标 → 打开显示联系人列表（乐乐/我）→ 详情三 Tab 齐全 ✓
+  ③设置阈值3 → 「立即总结」：提取 6 条碎片（app=wx 正确）→ 未消费 6≥3 → 自动生成 1 条长期记忆（来自6条碎片）✓；碎片 Tab 显示内容/微信徽标/来源时间/已总结标记（截图）✓
+  ④编辑碎片 → 内容更新+toast「碎片已更新」；删除 → 两步确认+toast「碎片已删除」✓
+  ⑤互通开关关→localStorage share:false→reload 持久保留→碎片/长期/设置全部跨重启保留 ✓
+  ⑥【关键链路】mock /api/chat 成功回复：微信发消息 → 拦截请求体实测包含「【关于对方的记忆】◇ 核心记忆（长期）：1. 用户下周六将去北京出差一周…」（长期优先）✓；轮次 19→20 达到默认间隔20 → 自动提取（碎片6→11）→ 未消费5≥3 → 自动总结（长期1→2）→ round 归零 ✓
+  ⑦记忆库列表计数实时反映「乐乐 11 条碎片 · 2 条核心记忆 / 我 暂无记忆」（联系人隔离可见）✓
+  ⑧信息端回归：打开乐乐会话发消息 → 请求体含记忆块（memInjected true）✓；AI 上游失败时错误文案原样渲染、finalize 失败不计数（round null 符合设计）✓
+  ⑨console 0 错误、dev.log 无异常（/api/memory/* 全 200）
+Stage Summary:
+- 「记忆库」APP 全量落地：主界面第3页入口 → 联系人列表 → 三 Tab 详情（碎片/长期/设置），支持查看/编辑/删除、双频率设置、手动立即总结（结果 toast 区分碎片与长期记忆）
+- 跨应用互通：每联系人独立开关（默认开、持久化）；开=QQ/微信/信息/电话四端共享该联系人记忆，关=各端隔离；不同联系人永远隔离；删除联系人记忆级联删除
+- AI 带记忆聊天：四端每次发消息召回（长期优先+相关性排序）注入 system，已通过拦截真实请求体验证；每 N 轮自动提取碎片、积累 M 条自动总结核心记忆、手动立即总结，全链路浏览器实测通过
+- 存储按联系人 localStorage 键隔离、跨重启保留；聊天/流式/回复条数/红包转账等既有功能零改动（仅在 system 拼装与 finalize 成功分支各加一段）

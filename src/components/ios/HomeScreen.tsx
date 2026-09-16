@@ -263,7 +263,7 @@ const PAGE1_APP_IDS: AppId[] = ['weather', 'themes', 'browser', 'notes', 'camera
 /** 第 2 页 App（用户指定顺序；信息卡片/气泡小组件在其上方；音乐/微信移至第 3 页） */
 const PAGE2_APP_IDS: AppId[] = ['reminders', 'recorder', 'calendar', 'clock'];
 /** 第 3 页 App（用户指定：音乐/微信/App Store[在 QQ 左侧]/QQ；网易云小组件在其上方） */
-const PAGE3_APP_IDS: AppId[] = ['music', 'wechat', 'appstore', 'qq'];
+const PAGE3_APP_IDS: AppId[] = ['music', 'wechat', 'appstore', 'qq', 'memory'];
 /** 第三/四页其余小组件（默认收起不显示：写入 hidden，需要时从「+」画廊/主题小组件页找回；
  *  网易云小组件自 v6 起默认上屏第 3 页，不再收起） */
 const DEFAULT_HIDDEN_WIDGETS: WidgetKind[] = ['diary', 'listen', 'dialog', 'vinyl'];

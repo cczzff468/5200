@@ -7,6 +7,7 @@
  *   搬完（全部落库成功后）才通知服务端清空对应数据——先搬后删，中途失败下次重来（put 幂等）
  */
 import { localDB, genId } from './db';
+import { memPurgeContact } from '@/lib/memory';
 import { wsHeaders } from './workspace';
 import {
   displayNameOf,
@@ -169,10 +170,16 @@ export async function deleteContact(id: string): Promise<boolean> {
   if (existing.kind !== 'npc') {
     const all = await localDB.getAll('contacts');
     for (const c of all as ContactRecord[]) {
-      if (c.kind === 'npc' && c.ownerId === id) await localDB.delete('contacts', c.id);
+      if (c.kind === 'npc' && c.ownerId === id) {
+        await localDB.delete('contacts', c.id);
+        // 记忆库：级联删除的 NPC 其记忆一并清理（记忆按联系人 ID 隔离，联系人没了记忆也没有归属）
+        memPurgeContact(c.id);
+      }
     }
   }
   await localDB.delete('contacts', id);
+  // 记忆库：删除联系人时其全部记忆（碎片/长期记忆/设置/轮次计数）一并删除，不留孤儿数据
+  memPurgeContact(id);
   return true;
 }
 

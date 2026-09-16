@@ -64,6 +64,7 @@ const TAGLINES: Record<AppId, string> = {
   music: '音乐播放器',
   camera: '拍照与录像',
   appstore: '发现、安装与恢复 App',
+  memory: '跨应用 AI 记忆互通',
 };
 
 /** 分类（排行榜副标题 & 搜索关键字） */
@@ -88,6 +89,7 @@ const CATEGORY: Record<AppId, string> = {
   music: '音乐',
   camera: '摄影与录像',
   appstore: '商店',
+  memory: '效率',
 };
 
 /** App 标签页分组 */
