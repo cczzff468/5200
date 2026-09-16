@@ -73,8 +73,10 @@ function fmtTime(ts: number): string {
 
 /** 页面底色（微暖中性灰，非冷 iOS 灰） */
 const PAGE_BG = 'bg-[#f4f3f1] dark:bg-[#141312]';
-/** 毛玻璃顶/底栏（与页面底色同源的半透明） */
-const TOPBAR_GLASS = 'bg-[#f4f3f1]/80 backdrop-blur-xl dark:bg-[#141312]/75';
+/** 毛玻璃顶栏（亮色纯白玻璃，标签背后不泛灰；暗色同源深色） */
+const TOP_GLASS = 'bg-white/80 backdrop-blur-xl dark:bg-[#141312]/75';
+/** 底部悬浮 Dock 玻璃（与页面底色同源，衬托选中白胶囊） */
+const DOCK_GLASS = 'bg-[#f4f3f1]/80 backdrop-blur-xl dark:bg-[#141312]/75';
 
 /** 白卡片：极淡阴影，浮起但不抢眼 */
 const CARD_CLS =
@@ -133,7 +135,7 @@ export default function MemoryBankApp() {
       ) : (
         <div className="relative flex-1 overflow-hidden">
           {/* 毛玻璃顶栏：内容从其下穿过 */}
-          <header className={`absolute inset-x-0 top-0 z-20 pt-[54px] ${TOPBAR_GLASS}`}>
+          <header className={`absolute inset-x-0 top-0 z-20 pt-[54px] ${TOP_GLASS}`}>
             <div className="flex h-11 items-center justify-between px-4">
               <BackToHome className="static!" />
               <span className="text-[17px] font-semibold leading-none tracking-tight">记忆库</span>
@@ -324,7 +326,7 @@ function MemoryDetail({
   return (
     <div className="relative flex-1 overflow-hidden">
       {/* 毛玻璃顶栏：返回 + 联系人名 */}
-      <header className={`absolute inset-x-0 top-0 z-20 pt-[54px] ${TOPBAR_GLASS}`}>
+      <header className={`absolute inset-x-0 top-0 z-20 pt-[54px] ${TOP_GLASS}`}>
         <div className="relative flex h-11 items-center px-4">
           <button
             type="button"
@@ -352,10 +354,10 @@ function MemoryDetail({
         </div>
 
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5" aria-label="记忆统计">
-          <span className="rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 ring-1 ring-black/[0.07] dark:bg-white/[0.07] dark:text-white/55 dark:ring-white/[0.1]">
+          <span className="rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
             {frags.length} 条碎片
           </span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 ring-1 ring-black/[0.07] dark:bg-white/[0.07] dark:text-white/55 dark:ring-white/[0.1]">
+          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
             <Gem className="h-3 w-3" /> {ltms.length} 条核心
           </span>
           <span
@@ -386,7 +388,7 @@ function MemoryDetail({
 
       {/* 底部悬浮胶囊 Dock：毛玻璃 + 选中白底浮起；仅图标 + 文字，无数字 */}
       <nav
-        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-3 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${TOPBAR_GLASS} dark:ring-white/[0.08]`}
+        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-3 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${DOCK_GLASS} dark:ring-white/[0.08]`}
         role="tablist"
         aria-label="记忆分类"
       >

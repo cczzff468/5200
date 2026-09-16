@@ -4654,3 +4654,16 @@ Work Log:
 Stage Summary:
 - 记忆库最终视觉定稿「简约水墨·档案卡」：全灰白单色零彩色零渐变；毛玻璃仅顶栏+底部悬浮胶囊 Dock；档案卡=时钟时间/黑徽章头部+虚线分隔+常驻编辑删除图标；列表=搜索条+统计+档案卡
 - testid 全保留（mem-search 新增）；mem-frag-{id} 卡交互从「点开显操作」改为「图标常驻」，aria-label 编辑记忆/删除记忆不变；数据层 memory.ts 零改动
+
+---
+Task ID: AD
+Agent: Z.ai Code (main)
+Task: 记忆库 UI 微调（用户「上面的标签后面的颜色不要灰」）
+
+Work Log:
+- 顶部「记忆库/乐乐」标签背后的毛玻璃条从暖灰（#f4f3f1/80）改为纯白玻璃（bg-white/80 + backdrop-blur-xl，暗色不变）；常量拆分为 TOP_GLASS（顶栏白玻璃）/ DOCK_GLASS（底部 Dock 保持页面同源灰，衬托选中白胶囊的对比度）
+- 顶部统计标签「N 条碎片 / N 条核心」去灰描边（ring-black/[0.07]→淡阴影），暗色半透明灰底（white/[0.07]）改卡片实色 #201f1d
+- lint + tsc 0 问题；E2E 亮/暗双主题截图验证（白玻璃顶栏、标签纯白、暗色 chipBg=rgb(32,31,29)=卡片色）、主题已恢复 light、console 0 错误
+
+Stage Summary:
+- 顶栏区域视觉纯净化：标签背后不再泛灰；Dock 与顶栏玻璃分离定义，选中态对比度不受影响；testid/逻辑零改动
