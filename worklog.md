@@ -4792,3 +4792,26 @@ Stage Summary:
 - 联系人基础信息新增生日（月/日自由文本，导出导入可回环）；记忆库主屏图标换为用户提供的蓝色时钟图标
 - dev server 托管方式升级为双 fork 守护，不再随工具会话回收
 - commit 78ce0ad 之后的本次改动已提交
+
+---
+Task ID: AI
+Agent: Z.ai Code (main)
+Task: 微信「发现 / 我」页图标美化 —— 按用户提供的微信 8.x 官方截图，把色块白图标换成彩色线稿 SVG
+
+Work Log:
+- 新建 src/components/apps/wx-icons.tsx：14 个彩色描边 SVG 图标组件，每个自带 38×38 槽位（与原 WxTileIcon 同尺寸，保证 WxMenuRow 分隔线 left-[66px] 对齐不变），统一 48 viewBox、圆角端点
+  · 发现页：WxIcMoments 六叶彩色光圈（绿/蓝/橙/红/黄/紫 环形扇叶 rotate 复用单一路径）、WxIcChannels 橙色双环丝带、WxIcScan 蓝色双手取景手势（单只手形 3 指圆弧 mitten + rotate115° + rotate180 点对称成对）、WxIcListen 红色八分音符（实心椭圆符头+符杆+弧形符尾）、WxIcStories 金色六边形套六边形花结、WxIcSearch 红色五瓣旋涡星（JS 按角度生成螺旋臂路径）、WxIcGames 六面彩色宝石线稿（红/橙/蓝/绿/黄/青切面）、WxIcMiniProgram 蓝紫圆环+手写 S
+  · 我页：WxIcServices 绿色对话气泡+对勾、WxIcFavorites 三色立方体（蓝顶/橙左/红右）、WxIcWorks 前后双方块（前块 fill-white dark:fill-[#1A1A1A] 遮挡后块）、WxIcShop 红色门面（波浪雨棚+拱门）、WxIcSticker 金黄笑脸、WxIcSettings 蓝色齿轮（lucide Settings 独立槽位渲染，避免嵌套 svg）
+- wechat.tsx：发现页 8 处 + 我页 7 处 icon= 全部换用新组件；清理失用 lucide import（Music2/Gamepad2/SettingsIcon/ShoppingBag），补回被部分应用误删的 MessageCircle；WxTileIcon 保留（二维码页/联系人详情等其他界面仍在用）
+- 教训记录：①本项目 MultiEdit 在中途失败时前面的编辑已生效（原子性不完整）——Gamepad2 被移除但报错，需 grep 实际状态再补编辑；②主屏 App 图标是 div[aria-label=打开xx] 而非 button，find text 点击不稳定，E2E 用 aria-label 选择器 dispatch click；③IndexedDB settings store 的 theme 记录格式是 {key:'theme',value:'light'} 对象而非字符串
+- lint + tsc 0 问题；E2E 明暗双主题验证：
+  · 发现页：八图标全部渲染为彩色线稿，分组与参考图一致（朋友圈|视频号|扫一扫+听一听|看一看+搜一搜|游戏|小程序）
+  · 我页：七图标全部渲染，服务气泡勾/立方体/光圈/双方块遮挡/门面/笑脸/齿轮 均正常
+  · 暗色主题（IndexedDB theme=dark）下彩色图标在 #1A1A1A 卡片上醒目清晰，作品方块 dark fill 遮挡正确
+  · 交互冒烟：发现页点视频号弹「暂未开放」toast、我页进收藏页正常；console/page errors 0
+  · 测试后 IndexedDB theme 已恢复 light；u1 小晨临时写入的 wechatPassword=123456 保留（登录测试账号，无碍）
+
+Stage Summary:
+- 微信发现页与我页图标从「色块+白色 glyph」升级为微信 8.x 官方同款彩色线稿 SVG，明暗双主题均验证通过，行高/分隔线对齐零变化
+- 图标全部为纯代码 SVG（无图片资源），缩放无损、主题无关、零额外依赖
+- commit 待提交

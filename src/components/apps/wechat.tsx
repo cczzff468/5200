@@ -22,7 +22,6 @@ import {
   Compass,
   EyeOff,
   Forward,
-  Gamepad2,
   Gift,
   Heart,
   Image as ImageIcon,
@@ -30,7 +29,6 @@ import {
   MailOpen,
   MapPin,
   MessageCircle,
-  Music2,
   Newspaper,
   Phone,
   Pin,
@@ -40,8 +38,6 @@ import {
   Radar,
   ScanLine,
   Search,
-  Settings as SettingsIcon,
-  ShoppingBag,
   Smartphone,
   Smile,
   Star,
@@ -72,6 +68,22 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
+import {
+  WxIcMoments,
+  WxIcChannels,
+  WxIcScan,
+  WxIcListen,
+  WxIcStories,
+  WxIcSearch,
+  WxIcGames,
+  WxIcMiniProgram,
+  WxIcServices,
+  WxIcFavorites,
+  WxIcWorks,
+  WxIcShop,
+  WxIcSticker,
+  WxIcSettings,
+} from './wx-icons';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import {
   buildRichRules,
@@ -7180,11 +7192,7 @@ function MainScreen({
                 label="朋友圈"
                 testId="wx-moments-entry"
                 onClick={() => setPage('moments')}
-                icon={
-                  <WxTileIcon bg="#4DA5E8">
-                    <Camera className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcMoments />}
               />
             </div>
             <div className="bg-white dark:bg-[#1A1A1A]">
@@ -7192,11 +7200,7 @@ function MainScreen({
                 first
                 label="视频号"
                 onClick={() => showToast('「视频号」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#F0A24B">
-                    <Video className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcChannels />}
               />
             </div>
             <div className="bg-white dark:bg-[#1A1A1A]">
@@ -7204,20 +7208,12 @@ function MainScreen({
                 first
                 label="扫一扫"
                 onClick={() => showToast('「扫一扫」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#4D9CF8">
-                    <ScanLine className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcScan />}
               />
               <WxMenuRow
                 label="听一听"
                 onClick={() => showToast('「听一听」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#F26D6D">
-                    <Music2 className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcListen />}
               />
             </div>
             <div className="bg-white dark:bg-[#1A1A1A]">
@@ -7225,20 +7221,12 @@ function MainScreen({
                 first
                 label="看一看"
                 onClick={() => showToast('「看一看」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#F5B940">
-                    <Star className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcStories />}
               />
               <WxMenuRow
                 label="搜一搜"
                 onClick={() => showToast('「搜一搜」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#F26D6D">
-                    <Search className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcSearch />}
               />
             </div>
             <div className="bg-white dark:bg-[#1A1A1A]">
@@ -7246,11 +7234,7 @@ function MainScreen({
                 first
                 label="游戏"
                 onClick={() => showToast('「游戏」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#4DA5E8">
-                    <Gamepad2 className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcGames />}
               />
             </div>
             <div className="bg-white dark:bg-[#1A1A1A]">
@@ -7258,11 +7242,7 @@ function MainScreen({
                 first
                 label="小程序"
                 onClick={() => showToast('「小程序」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#4D9CF8">
-                    <Smile className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcMiniProgram />}
               />
             </div>
           </div>
@@ -7301,11 +7281,7 @@ function MainScreen({
                 label="服务"
                 testId="wx-services-entry"
                 onClick={() => setPage('services')}
-                icon={
-                  <WxTileIcon bg="#07C160">
-                    <Wallet className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcServices />}
               />
             </div>
 
@@ -7315,49 +7291,29 @@ function MainScreen({
                 label="收藏"
                 testId="wx-me-favorites"
                 onClick={() => setPage('favorites')}
-                icon={
-                  <WxTileIcon bg="#F5B940">
-                    <Star className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcFavorites />}
               />
               <WxMenuRow
                 label="朋友圈"
                 testId="wx-me-moments"
                 onClick={() => setPage('moments')}
-                icon={
-                  <WxTileIcon bg="#4DA5E8">
-                    <Camera className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcMoments />}
               />
               <WxMenuRow
                 label="作品"
                 onClick={() => showToast('「作品」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#4D9CF8">
-                    <Video className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcWorks />}
               />
               <WxMenuRow
                 label="小店与卡包"
                 onClick={() => showToast('「小店与卡包」暂未开放')}
-                icon={
-                  <WxTileIcon bg="#F26D6D">
-                    <ShoppingBag className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcShop />}
               />
               <WxMenuRow
                 label="表情"
                 testId="wx-me-stickers"
                 onClick={() => setPage('stickers')}
-                icon={
-                  <WxTileIcon bg="#F5B940">
-                    <Smile className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcSticker />}
               />
             </div>
 
@@ -7367,11 +7323,7 @@ function MainScreen({
                 label="设置"
                 testId="wx-me-settings"
                 onClick={() => setPage('settings')}
-                icon={
-                  <WxTileIcon bg="#4D9CF8">
-                    <SettingsIcon className="h-[21px] w-[21px]" strokeWidth={2} />
-                  </WxTileIcon>
-                }
+                icon={<WxIcSettings />}
               />
             </div>
           </div>
