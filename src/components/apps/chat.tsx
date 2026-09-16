@@ -36,6 +36,7 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -127,12 +128,14 @@ function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
   }
 }
 
-/** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象 */
-function buildPersonaPrompt(c: ContactRecord, ownerName: string | null): string {
+/** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
+ *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装 */
+function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, npcExtra?: NpcPromptExtra | null): string {
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
     userName: null,
     ownerName,
+    ...npcExtra,
   });
 }
 
@@ -1871,13 +1874,13 @@ export default function ChatApp() {
     setView('chat');
   };
 
-  /** 和联系人（CHAR/NPC）聊天：AI 按人设扮演 */
+  /** 和联系人（CHAR/NPC）聊天：AI 按人设扮演（含配角圈/归属者了解注入） */
   const openContactChat = (c: ContactRecord) => {
-    const ownerName = c.ownerId ? contacts.find((o) => o.id === c.ownerId)?.name ?? null : null;
+    const owner = c.ownerId ? contacts.find((o) => o.id === c.ownerId) : undefined;
     setChatSession({
       key: `c:${c.id}`,
       peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name },
-      systemPrompt: buildPersonaPrompt(c, ownerName),
+      systemPrompt: buildPersonaPrompt(c, owner?.name ?? null, buildNpcPromptExtra(c, contacts)),
     });
     setView('chat');
   };

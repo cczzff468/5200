@@ -4746,3 +4746,33 @@ Work Log:
 Stage Summary:
 - 记忆库现在只管理「别人」的记忆：机主本人（kind=user）不出现在列表、不参与统计；NPC/角色不受影响
 - 数据层零改动（存储仍保留 user 记录，仅展示层排除）；testid 无变化
+
+---
+Task ID: AG
+Agent: Z.ai Code (main)
+Task: 联系人系统 NPC 逻辑完善——双向社交关系（对USER/对CHAR）+ NPC/CHAR 双向提示词注入 + 互动近况背景记忆 + 私密不外传规则
+
+Work Log:
+- 数据模型：ContactRecord/ContactPayload 增 relationToUser（仅 NPC：对机主 USER 的关系，可选字段兼容历史数据）；contacts-store createContact/updateContact 持久化（normalizeText 60 字）
+- persona.ts 语义升级：
+  · NPC 双模式：填了 relationToUser → 新模式（用户=机主本人，无角色扮演注记；【与用户的关系】+【你与{归属者}的关系】两条独立关系）；未填 → 沿用旧扮演语义（用户扮演归属者），零破坏
+  · ctx 扩展：npcCircle（CHAR 的配角圈）/ ownerLabel+ownerCard（NPC 的归属者资料卡）/ backgroundNotes（互动近况）
+  · NPC 禁止事项增「私密不外传」规则：用户私下说的事只记心里，除非用户让转达或人设写了嘴快，否则不说给归属者/其他人
+  · CHAR 侧注入【你认识的配角】（名字+对CHAR关系+对用户关系+一句话人设）+「按关系自然接话」规则；双方注入【最近发生的事（背景记忆）】
+- 新建 src/lib/ios/npc-bond.ts（同步纯函数）：npcCircleFor（名下 NPC≤6 条）/ ownerCardFor（归属者资料卡：基础资料+人设/背景摘要80字）/ bondNotesFor（自己记忆库里提到对方名字的最新碎片≤3条，M月D日格式）/ buildNpcPromptExtra（一站式组装，全空返回 null=与旧 prompt 完全一致）；只读对端自己的记忆库，隔离边界不变
+- 四端接线（全部走 buildPersonaSystemPrompt 共用模块）：chat.tsx openContactChat（contacts 在场同步组装）；wechat.tsx / qq.tsx 发送流程（contacts prop 在场，deps 补 contacts）；phone.tsx runTurn（listContacts 现场查，npcExtra 随 contact 直传）+ /api/phone/turn/route.ts（InlineContact 增 relationToUser/ownerLabel/npcCircle/ownerCard/backgroundNotes 宽松解析，npcCircle≤6条/列表≤4条/各字段截断）
+- contacts.tsx：NPC 表单增「与用户的关系」输入（你们的关系字段之后）；详情页 NPC 增「与用户的关系」DetailRow；导出 txt 增该行（仅 NPC）；导入解析「与用户的关系」标签并回填 createContact
+- lint + tsc 0 问题；E2E（种 CHAR 小雅 + NPC 阿豪[ ownerId=小雅, relation=小雅的高中同学, relationToUser=用户的网友, persona=大嘴巴] + 双方记忆碎片各1条提到对方）：
+  · fetch 捕获 /api/chat 请求体验证 NPC 侧 prompt：【与用户的关系】用户的网友 ✓【你与小雅的关系】小雅的高中同学 ✓【你了解的小雅】资料卡（女，23岁，设计师，上海+性格+背景）✓【最近发生的事】和小雅约好周末打球（来自 NPC 自己记忆）✓ 转达规则 ✓ 无「正在扮演」注记 ✓
+  · CHAR 侧 prompt：【你认识的配角】阿豪：你的小雅的高中同学；与用户：用户的网友（爱运动的大嘴巴）✓ 自然接话规则 ✓ 背景记忆「阿豪上周帮TA搬家」（来自 CHAR 自己记忆）✓ 无 NPC 专属转达规则 ✓
+  · 联系人 App：NPC tab 阿豪副标题「小雅的高中同学·小雅」、详情页「与用户的关系」行、编辑表单字段回显并保存 → IndexedDB relationToUser 持久化 ✓
+  · 修复过程中发现并纠正两处自伤：persona.ts push() 括号误改 ]；原有 NPC 扮演语义与新需求冲突 → 双模式兼容
+  · 真实 AI 回复文本未能 live 验证：测试浏览器配置的第三方 API（DeepSeek 等）对沙箱地区返回 403（该限制影响所有聊天功能，与本改动无关）；prompt 组装已通过请求体捕获 100% 确认
+- 群聊（五）按需求标注为可选，本期未实现（数据模型与 prompt 注入已为其留好口子：npcCircle/ownerCard 即多方上下文的雏形）
+
+Stage Summary:
+- NPC 现在是完整的社交配角：独立聊天/记忆（既有）+ 独立双关系字段 + 知道归属者是谁（资料卡注入）+ 记得与归属者的近况（背景记忆）+ 私密不外传（转达/大嘴巴规则）
+- CHAR 认识自己名下 NPC：聊到他们能按设定自然接话，且带着「最近发生的事」
+- 记忆隔离零破坏：召回仍按联系人 ID 隔离，NPC 读不到 CHAR 的私密记忆，反之亦然
+- 新增字段/逻辑全部向后兼容：旧 NPC 数据（无 relationToUser）走原扮演语义；npcExtra 为空时 prompt 与旧版逐字节一致
+- commit ca9ad4d 之后的本次改动待提交

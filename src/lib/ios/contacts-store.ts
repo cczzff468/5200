@@ -95,6 +95,7 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     company: normalizeText(payload.company, 60),
     region: normalizeText(payload.region, 40),
     relation: normalizeText(payload.relation, 60),
+    relationToUser: normalizeText(payload.relationToUser, 60),
     phone: normalizeText(payload.phone, 20) ?? genPhone(),
     wechatId: normalizeText(payload.wechatId, 40) ?? genWechatId(),
     wechatPassword: normalizeText(payload.wechatPassword, 64),
@@ -134,6 +135,7 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if ('company' in patch) next.company = normalizeText(patch.company, 60);
   if ('region' in patch) next.region = normalizeText(patch.region, 40);
   if ('relation' in patch) next.relation = normalizeText(patch.relation, 60);
+  if ('relationToUser' in patch) next.relationToUser = normalizeText(patch.relationToUser, 60);
   if ('wechatId' in patch) next.wechatId = normalizeText(patch.wechatId, 40);
   if ('wechatPassword' in patch) next.wechatPassword = normalizeText(patch.wechatPassword, 64);
   if ('qqId' in patch) next.qqId = normalizeText(patch.qqId, 16);

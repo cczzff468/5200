@@ -42,6 +42,7 @@ import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, updateContact } from '@/lib/ios/contacts-store';
+import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import type { ContactRecord } from '@/lib/contacts';
 
@@ -600,6 +601,12 @@ function CallScreen({
         });
       };
       try {
+        // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡；需要全部联系人现场查一次，失败回退无注入）
+        const npcExtra = contact
+          ? await listContacts()
+              .then((all) => buildNpcPromptExtra(contact, all))
+              .catch(() => null)
+          : null;
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -614,8 +621,10 @@ function CallScreen({
                   occupation: contact.occupation,
                   region: contact.region,
                   relation: contact.relation,
+                  relationToUser: contact.relationToUser ?? null,
                   persona: contact.persona,
                   background: contact.background,
+                  ...(npcExtra ?? {}),
                 }
               : undefined,
             number: target.number,

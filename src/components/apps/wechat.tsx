@@ -71,6 +71,7 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import {
   buildRichRules,
@@ -826,12 +827,14 @@ function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
 }
 
 /** 联系人 AI 人设（微信聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
- *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入 */
-function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[]): string {
+ *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入；
+ *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况） */
+function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[], npcExtra?: NpcPromptExtra | null): string {
   return buildPersonaSystemPrompt(peer, {
     channel: '微信',
     userName: me.name,
     ownerName,
+    ...npcExtra,
     extraRules: [
       '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
       ...buildRichRules(stickers),
@@ -3595,7 +3598,7 @@ function ChatPage({
     // 我发给 AI 的待处理红包/转账/亲属卡 → 注入处理动作规则与待处理清单（AI 用 [领取红包:ID:…] 等标记处理）
     const replyCount = getReplyCount(sessionKey);
     const stickers = loadStickers('wx');
-    const system = buildPersonaPrompt(peer, me, ownerName, stickers);
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers, buildNpcPromptExtra(peer, contacts));
     const actionRules = buildActionRules(wxCollectPendingCards(base));
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
@@ -3680,7 +3683,7 @@ function ChatPage({
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     },
-    [apiConfig, msgs, me, ownerName, peer, sessionKey]
+    [apiConfig, msgs, me, ownerName, peer, contacts, sessionKey]
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 execRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;

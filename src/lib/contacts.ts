@@ -29,6 +29,9 @@ export interface ContactRecord {
   company: string | null;
   region: string | null;
   relation: string | null;
+  /** 仅 NPC：对机主（USER）的关系（如 网友/同事/用户的朋友/情敌）；relation 是对归属者（CHAR/USER）的关系。
+   *  可选字段：历史数据无此键，读取处一律用 ?./?? 兼容 */
+  relationToUser?: string | null;
   phone: string | null;
   wechatId: string | null;
   wechatPassword: string | null;
@@ -63,6 +66,8 @@ export interface ContactPayload {
   company?: string | null;
   region?: string | null;
   relation?: string | null;
+  /** 仅 NPC：对机主（USER）的关系 */
+  relationToUser?: string | null;
   phone?: string | null;
   wechatId?: string | null;
   wechatPassword?: string | null;

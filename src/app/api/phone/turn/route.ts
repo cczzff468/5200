@@ -227,6 +227,13 @@ interface InlineContact {
   persona: string | null;
   background: string | null;
   relation: string | null;
+  /** 仅 NPC：对机主（USER）的关系 */
+  relationToUser: string | null;
+  /** 配角圈注入（由前端 npc-bond 组装）：认识的配角/归属者资料卡/背景近况 */
+  ownerLabel?: string;
+  npcCircle?: { name: string; relation: string; relationToUser: string; persona: string }[];
+  ownerCard?: string[];
+  backgroundNotes?: string[];
 }
 
 function parseInlineContact(raw: unknown): InlineContact | null {
@@ -243,7 +250,40 @@ function parseInlineContact(raw: unknown): InlineContact | null {
     persona: typeof c.persona === 'string' ? c.persona : null,
     background: typeof c.background === 'string' ? c.background : null,
     relation: typeof c.relation === 'string' ? c.relation : null,
+    relationToUser: typeof c.relationToUser === 'string' ? c.relationToUser : null,
+    ownerLabel: typeof c.ownerLabel === 'string' ? c.ownerLabel : undefined,
+    npcCircle: parseNpcCircle(c.npcCircle),
+    ownerCard: parseStrList(c.ownerCard),
+    backgroundNotes: parseStrList(c.backgroundNotes),
   };
+}
+
+/** 前端直传的配角圈条目（宽松解析，非法条目丢弃，上限 6 条） */
+function parseNpcCircle(raw: unknown): { name: string; relation: string; relationToUser: string; persona: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: { name: string; relation: string; relationToUser: string; persona: string }[] = [];
+  for (const x of raw.slice(0, 6)) {
+    if (!x || typeof x !== 'object') continue;
+    const e = x as Record<string, unknown>;
+    if (typeof e.name !== 'string' || !e.name.trim()) continue;
+    out.push({
+      name: e.name.trim().slice(0, 40),
+      relation: typeof e.relation === 'string' ? e.relation.slice(0, 40) : '',
+      relationToUser: typeof e.relationToUser === 'string' ? e.relationToUser.slice(0, 40) : '',
+      persona: typeof e.persona === 'string' ? e.persona.slice(0, 60) : '',
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** 前端直传的字符串列表（宽松解析，去空，上限 4 条） */
+function parseStrList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .map((x) => x.trim().slice(0, 120))
+    .slice(0, 4);
+  return out.length > 0 ? out : undefined;
 }
 
 /** 陌生号码的随机身份（按号码做种子，保证同人同号） */
@@ -264,10 +304,15 @@ function unknownPersona(number: string): { name: string; persona: string } {
  * 组装通话场景 system prompt：七要素人设（名字/身份/性格/说话风格/背景/与用户的关系/禁止事项）
  * 由全 App 共用模块从联系人数据组装；这里只追加语音通话场景规则。
  */
-function buildCallSystemPrompt(peer: PersonaSource, greeting: boolean): string {
+function buildCallSystemPrompt(
+  peer: PersonaSource,
+  greeting: boolean,
+  npcExtra?: { ownerLabel?: string; npcCircle?: InlineContact['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] }
+): string {
   const base = buildPersonaSystemPrompt(peer, {
     channel: '语音通话',
     userName: null,
+    ...npcExtra,
     extraRules: [
       '这是实时语音通话：用第一人称口语化说话，像真人打电话；每次只说 1-2 句（通常不超过 20 个字），一次只说一件事；',
       '禁止任何表情符号、emoji、引号、括号、列表；只输出要说出口的话；',
@@ -319,6 +364,7 @@ export async function POST(req: NextRequest) {
         persona: inline.persona,
         background: inline.background,
         relation: inline.relation,
+        relationToUser: inline.relationToUser,
       }
     : (() => {
         const p = unknownPersona(number);
@@ -326,7 +372,12 @@ export async function POST(req: NextRequest) {
       })();
   const peerName = peer.name;
 
-  const system = buildCallSystemPrompt(peer, greeting);
+  const system = buildCallSystemPrompt(peer, greeting, {
+    ownerLabel: inline?.ownerLabel,
+    npcCircle: inline?.npcCircle,
+    ownerCard: inline?.ownerCard,
+    backgroundNotes: inline?.backgroundNotes,
+  });
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
   const systemFull = memoryBlock ? `${system}\n\n${memoryBlock}` : system;

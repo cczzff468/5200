@@ -29,6 +29,19 @@ export interface PersonaSource {
   background?: string | null;
   /** 与用户（或 NPC 归属者）的关系 */
   relation?: string | null;
+  /** 仅 NPC：对机主（USER）的关系（如 网友/同事/用户的朋友/情敌） */
+  relationToUser?: string | null;
+}
+
+/** 配角圈条目（CHAR 人设里注入「你认识的配角」用，由 npc-bond 组装） */
+export interface NpcCircleEntry {
+  name: string;
+  /** 对 CHAR（当前聊天角色）的关系，如 CHAR的高中同学 */
+  relation: string;
+  /** 对机主用户的关系，如 网友/同事；空 = 未填 */
+  relationToUser: string;
+  /** 一句话人设（截断摘要） */
+  persona: string;
 }
 
 export interface PersonaPromptCtx {
@@ -40,6 +53,14 @@ export interface PersonaPromptCtx {
   channel: string;
   /** 平台/场景附加规则（表情包语义、语音短句等），追加在禁止事项列表后 */
   extraRules?: string[];
+  /** 配角圈注入（由前端 npc-bond 组装）：认识的配角/归属者资料卡/背景近况 */
+  npcCircle?: NpcCircleEntry[];
+  /** NPC 场景：归属者（CHAR/USER）显示名（npc-bond 传入；无 ctx.ownerName 的场景如电话用） */
+  ownerLabel?: string | null;
+  /** NPC 场景：归属者（CHAR/USER）资料卡行，注入「你了解的X」段；缺省不注入 */
+  ownerCard?: string[];
+  /** 背景/互动近况行（来自双方记忆库里提到对方名字的碎片），注入「最近发生的事」段；缺省不注入 */
+  backgroundNotes?: string[];
 }
 
 function kindLabelOf(kind?: string | null): string {
@@ -63,11 +84,18 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   const persona = clean(peer.persona);
   const background = clean(peer.background);
   const relation = clean(peer.relation);
-  // NPC 的「用户」其实是它归属的角色（聊天中由用户扮演）；其余情况就是聊天对面的用户
-  const relationTo = peer.kind === 'npc' && clean(ctx.ownerName) ? clean(ctx.ownerName) : user;
+  const relationToUser = clean(peer.relationToUser);
+  const ownerName = clean(ctx.ownerName) || clean(ctx.ownerLabel);
+  // NPC 两种语义：
+  // - 新模式（填了「对用户的关系」）：用户就是机主本人，CHAR/归属者是第三方，
+  //   NPC 同时拥有「与用户的关系」和「与归属者的关系」两条独立关系；
+  // - 旧数据（未填）：沿用原角色扮演语义，聊天中的用户扮演归属者，relation 即与归属者的关系。
+  const npcNewMode = peer.kind === 'npc' && !!relationToUser;
+  // NPC 的「用户」：新模式 = 机主本人；旧数据 = 它归属的角色（聊天中由用户扮演）；其余情况就是聊天对面的用户
+  const relationTo = peer.kind === 'npc' ? (npcNewMode ? user : ownerName || user) : user;
   const roleplayNote =
-    peer.kind === 'npc' && clean(ctx.ownerName)
-      ? `（补充：这是角色扮演场景，聊天中的用户正在扮演「${clean(ctx.ownerName)}」。）`
+    peer.kind === 'npc' && !npcNewMode && ownerName
+      ? `（补充：这是角色扮演场景，聊天中的用户正在扮演「${ownerName}」。）`
       : '';
 
   // 身份要素：类型 + 职业 + 公司 + 地区
@@ -98,14 +126,44 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     }`,
   ];
   if (background) lines.push(`【背景】${background}`);
+  if (peer.kind === 'npc' && npcNewMode) {
+    // NPC 新模式：机主用户 + 归属者（第三方 CHAR/USER）两条独立关系
+    lines.push(`【与用户的关系】${relationToUser}`);
+    if (ownerName) lines.push(`【你与${ownerName}的关系】${relation || '认识，普通朋友'}`);
+  } else {
+    lines.push(`【与${relationTo}的关系】${relation || '普通朋友，认识对方，日常闲聊'}`);
+  }
+  // NPC：注入「对归属者的了解」（资料卡由 npc-bond 组装，聊天时能自然聊起 TA）
+  if (peer.kind === 'npc' && ctx.ownerCard && ctx.ownerCard.length > 0) {
+    lines.push(`【你了解的${ownerName || relationTo}】`, ...ctx.ownerCard.map((l) => `- ${l}`));
+  }
+  // CHAR/user：注入认识的配角圈（人设的一部分：聊到他们时能自然接话）
+  if (peer.kind !== 'npc' && ctx.npcCircle && ctx.npcCircle.length > 0) {
+    lines.push('【你认识的配角】');
+    for (const npc of ctx.npcCircle) {
+      const bits = [`- ${npc.name}：你的${npc.relation}`];
+      if (npc.relationToUser) bits.push(`与${user}：${npc.relationToUser}`);
+      if (npc.persona) bits.push(`（${npc.persona}）`);
+      lines.push(bits.join('；'));
+    }
+    lines.push(`（${user}提到这些配角时，按上面的关系自然接话，就当现实里认识他们。）`);
+  }
+  // 背景/互动近况（CHAR：自己记忆里提到配角的事；NPC：自己记忆里提到归属者的事）
+  if (ctx.backgroundNotes && ctx.backgroundNotes.length > 0) {
+    lines.push('【最近发生的事（你亲身经历/听说的背景记忆）】', ...ctx.backgroundNotes.map((l) => `- ${l}`));
+  }
   lines.push(
-    `【与${relationTo}的关系】${relation || '普通朋友，认识对方，日常闲聊'}`,
     '【禁止事项】',
     `- 永远不要说自己是 AI、语言模型、助手或程序，也不要提及「人设」「角色扮演」「prompt」等幕后概念；`,
     `- 不要跳出「${name}」的角色，不要替${user}说话、总结或代答；`,
     `- 资料里没有的信息不要大量编造；`,
     `- 不要输出 markdown、列表、序号、引号或括号舞台说明；`,
-    `- 每次只回复对方刚说的话，简短自然、像真人随手打字。`
+    `- 每次只回复对方刚说的话，简短自然、像真人随手打字。`,
+    ...(peer.kind === 'npc'
+      ? [
+          `- ${user}私下告诉你的事只记在自己心里；除非${user}让你转达、或人设明确写了你嘴快/藏不住话，否则不要主动把这些说给${npcNewMode ? ownerName || '别人' : relationTo}或其他人听；`,
+        ]
+      : []),
   );
   for (const rule of ctx.extraRules ?? []) {
     const r = clean(rule);
