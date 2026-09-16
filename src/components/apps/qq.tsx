@@ -2926,8 +2926,8 @@ function ChatPage({
                   </div>
                 ) : m.kind === 'image' ? (
                   <div {...bubblePress} className="min-w-0">
-                    {/* 固定像素上限（calc 百分比在 flex 包裹层内会循环解析导致图片缩小且不贴边）；中等尺寸（用户反馈过大） */}
-                    <img src={m.content} alt="图片消息" className="max-h-[248px] w-auto max-w-[190px] rounded-[18px] object-cover" />
+                    {/* 固定像素上限（calc 百分比在 flex 包裹层内会循环解析导致图片缩小且不贴边）；再缩小一档（用户反馈仍偏大） */}
+                    <img src={m.content} alt="图片消息" className="max-h-[210px] w-auto max-w-[160px] rounded-[18px] object-cover" />
                   </div>
                 ) : m.kind === 'sticker' && m.stk ? (
                   <div {...bubblePress}>
@@ -2941,7 +2941,7 @@ function ChatPage({
                       <img
                         src={m.stk.url}
                         alt={m.stk.meaning ? `表情：${m.stk.meaning}` : '表情'}
-                        className="max-h-[96px] w-auto max-w-[104px] rounded-[14px] object-contain"
+                        className="max-h-[110px] w-auto max-w-[118px] rounded-[14px] object-contain"
                         loading="lazy"
                       />
                     </button>
@@ -3787,6 +3787,17 @@ function RpCoverPattern() {
 function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; showOpen: boolean; onClick: () => void }) {
   const claimed = (packet.claims ?? []).length > 0;
   const settled = claimed || packet.status === 'returned' || packet.status === 'rejected';
+  // 没写祝福语 → 显示状态文案（待领取/已领取/已退回/已拒收）；有祝福语 → 显示祝福语（与转账卡留言规则一致）
+  const rpNote =
+    packet.note && packet.note.trim()
+      ? packet.note
+      : packet.status === 'returned'
+        ? '已退回'
+        : packet.status === 'rejected'
+          ? '已拒收'
+          : claimed
+            ? '已领取'
+            : '待领取';
   return (
     <button
       type="button"
@@ -3798,14 +3809,14 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
         // 领取/退还/拒收后卡片颜色变灰（对照真实 QQ：已领取的红包封面褪色）
         filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
-      aria-label={`QQ红包 ${packet.note}${settled ? '（已处理）' : ''}`}
+      aria-label={`QQ红包 ${rpNote}${settled ? '（已处理）' : ''}`}
     >
       {/* 封面纹样 */}
       <RpCoverPattern />
       <div className="relative flex flex-col items-center px-3 pt-[18px]">
         <RpPenguin size={34} />
         <span className="mt-0.5 text-[10px] font-semibold tracking-[0.32em] text-[#FBE7B2]/90" aria-hidden="true">QQ</span>
-        <p className="mt-3 line-clamp-2 min-h-[26px] text-center text-[16px] font-medium leading-snug text-[#FFF3D6] [text-shadow:0_1px_2px_rgba(180,30,40,0.28)]">{packet.note}</p>
+        <p className="mt-3 line-clamp-2 min-h-[26px] text-center text-[16px] font-medium leading-snug text-[#FFF3D6] [text-shadow:0_1px_2px_rgba(180,30,40,0.28)]">{rpNote}</p>
       </div>
       {/* 底部亮红大弧形（椭圆上缘成拱）+ 開 / QQ红包 */}
       <div className="relative mt-2 h-[64px]">
@@ -3824,6 +3835,7 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
 
 /** 聊天中的转账卡片（蓝卡 圈↔/对勾/退还↩ + ¥金额 + 状态文案 + 底部「转账」；206px 与微信转账卡同宽；自己也作为「已收款/已退还」接收凭据卡复用）。
  *  状态文案按角色与收款状态区分：接收完成后才显示「已转入好友余额」，之前是「待对方收款」；
+ *  有转账留言时状态行优先显示留言（没写留言才显示状态文案，与微信端同规则）；
  *  收款/退还/拒收后卡片颜色变灰（对照真实 QQ：终态卡褪色），退还卡圆图标换成↩ */
 function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
   const refunded = packet.status === 'returned';
@@ -3858,7 +3870,7 @@ function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket
         </span>
         <span className="min-w-0">
           <span className="block text-[20px] font-semibold leading-tight text-white">¥{fmtMoney(packet.amount)}</span>
-          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{status}</span>
+          <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{packet.note && packet.note.trim() ? packet.note : status}</span>
         </span>
       </div>
       <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">转账</div>

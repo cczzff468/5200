@@ -1433,7 +1433,7 @@ function ImageMsgBubble({ src, onClick }: { src: string; onClick: () => void }) 
       onClick={onClick}
       className="block overflow-hidden rounded-[6px] active:opacity-80"
     >
-      <img src={src} alt="图片消息" className="block max-h-[264px] w-auto min-w-[130px] max-w-[200px] object-cover" loading="lazy" />
+      <img src={src} alt="图片消息" className="block max-h-[220px] w-auto min-w-[110px] max-w-[168px] object-cover" loading="lazy" />
     </button>
   );
 }
@@ -1564,7 +1564,7 @@ function StickerMsgBubble({ src, meaning, onClick }: { src: string; meaning: str
       <img
         src={src}
         alt={meaning ? `表情：${meaning}` : '表情'}
-        className="max-h-[96px] w-auto max-w-[104px] rounded-[10px] object-contain"
+        className="max-h-[110px] w-auto max-w-[118px] rounded-[10px] object-contain"
         loading="lazy"
       />
     </button>
@@ -2844,8 +2844,11 @@ function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: 
 
 /** 转账聊天卡片（橙色渐变 + 白描边圆⇆/对勾/退还↩ + 金额 + 状态文案 + 左下「转账」+ 朝向角标；紧凑尺寸；自己也作为「已收款/已退还」接收凭据卡复用）。
  *  状态文案按角色与收款状态区分：接收完成后才显示「已转入零钱」，之前是「待对方收款」；
+ *  有转账留言时状态行优先显示留言（没写留言才显示状态文案，对照用户需求）；
  *  收款/退还/拒收后卡片颜色变灰（对照真实微信：终态卡褪色），退还卡圆图标换成↩ */
-function TrBubble({ amount, status, received, refunded, fromMe, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; onClick: () => void }) {
+function TrBubble({ amount, status, received, refunded, fromMe, note, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; note?: string; onClick: () => void }) {
+  // 有留言 → 状态行显示留言；没写留言 → 显示状态文案（待对方收款/已收款/已退还等）
+  const line = note && note.trim() ? note : status;
   return (
     <button
       type="button"
@@ -2867,7 +2870,7 @@ function TrBubble({ amount, status, received, refunded, fromMe, onClick }: { amo
         <span className="min-w-0 flex-1">
           <span className="block text-[17px] font-semibold leading-tight text-white">¥{fmtMoney(amount)}</span>
           <span className="mt-0.5 block truncate text-[13px] text-white/95" data-testid="wx-tr-bubble-status">
-            {status}
+            {line}
           </span>
         </span>
       </span>
@@ -4453,6 +4456,7 @@ function ChatPage({
               ) : m.kind === 'transfer' && m.tr ? (
                 <TrBubble
                   amount={m.tr.amount}
+                  note={m.tr.note}
                   status={
                     m.tr.status === 'returned'
                       ? '已退还'
