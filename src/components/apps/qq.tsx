@@ -119,6 +119,7 @@ import {
   ThumbsUp,
   Trash2,
   TrendingUp,
+  Undo2,
   User,
   UserPlus,
   Users,
@@ -264,6 +265,12 @@ interface MsgPacket {
   receiptOf?: 'me' | 'peer';
   /** 退还/拒收终态（我发给 AI 的卡被退回/拒收，或我退回 AI 发的卡；终态后不能重复处理） */
   status?: 'returned' | 'rejected';
+  /** 退款时间（退还后写入；详情页「退款时间」行） */
+  refundedAt?: number;
+  /** 退还凭据卡专用：原转账发生时间（详情页「转账时间」行显示原转账时间） */
+  originTime?: number;
+  /** 退还凭据卡专用：退还人（'me'=我退的→详情显示「你已退还」；'peer'=对方退的→「对方已退还」）；原卡省略时按消息角色反推 */
+  refundedBy?: 'me' | 'peer';
   /** AI 处理动作用的短 ID（我发给 AI 的红包/转账才有；AI 在动作标记里引用它） */
   cid?: string;
 }
@@ -421,14 +428,22 @@ function applyAiActions(
         // 凭据卡放 extras，由调用方插在动作发生位置（而不是旧代码里永远排在所有新消息之前）
         next[idx] = { ...m, content: '[转账]（已收款）', packet: { ...p, received: true, receivedAt: Date.now(), receiptOf: 'me' as const } };
         extras.push({ id: uid(), role: 'peer', content: '', time, kind: 'transfer', packet: { type: 'transfer', amount: p.amount, note: p.note, received: true, receivedAt: Date.now(), receiptOf: 'me' } });
+      } else if (verb === 'return') {
+        // AI 退回我发的转账：原卡标记终态（变灰）+ 「对方」发出的退还凭据卡放 extras（灰卡↩+已退还，详情页「对方已退还」）
+        const refundedAt = Date.now();
+        next[idx] = { ...m, content: '[转账]（已退回）', packet: { ...p, status: 'returned', refundedAt } };
+        gainToWallet(p.amount, '转账退回');
+        extras.push({
+          id: uid(),
+          role: 'peer',
+          content: '',
+          time,
+          kind: 'transfer',
+          packet: { type: 'transfer', amount: p.amount, note: p.note, received: false, status: 'returned' as const, refundedAt, originTime: m.time, refundedBy: 'peer' as const },
+        });
       } else {
-        next[idx] = { ...m, content: `[转账]（${verb === 'return' ? '已退回' : '已拒收'}）`, packet: { ...p, status: verb === 'return' ? 'returned' : 'rejected' } };
-        if (verb === 'return') {
-          gainToWallet(p.amount, '转账退回');
-          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}退回了你的`, accent: '转账' } });
-        } else {
-          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账' } });
-        }
+        next[idx] = { ...m, content: '[转账]（已拒收）', packet: { ...p, status: 'rejected' } };
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账' } });
       }
     } else {
       continue;
@@ -1898,17 +1913,28 @@ function ChatPage({
           `（系统事件：你发给对方的红包被对方退还了（¥${m.packet.amount}，祝福语"${m.packet.note}"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）`
         );
       } else if (m.kind === 'transfer' && m.packet) {
-        patchPacket(m.id, { status: 'returned' });
+        const refundedAt = Date.now();
+        const trAmt = m.packet.amount;
+        const trNote = m.packet.note;
+        // 我退还 AI 发的转账：原卡标记终态（变灰）+ 追加「我」发出的退还凭据卡（灰卡↩+已退还，详情页「你已退还」）
+        patchPacket(m.id, { status: 'returned', refundedAt });
         setMsgs((prev) => [
           ...prev,
-          { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'tr', pre: `你退回了${peer.name}的`, accent: '转账' } },
+          {
+            id: uid(),
+            role: 'me',
+            content: '',
+            time: refundedAt,
+            kind: 'transfer',
+            packet: { type: 'transfer', amount: trAmt, note: trNote, received: false, status: 'returned' as const, refundedAt, originTime: m.time, refundedBy: 'me' as const },
+          },
         ]);
         setLayer(null);
         onToast('转账已退还给对方');
         runAiTurnRef.current?.(
           null,
           [],
-          `（系统事件：你发给对方的转账被对方退还了（¥${m.packet.amount}${m.packet.note ? `，备注"${m.packet.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`
+          `（系统事件：你发给对方的转账被对方退还了（¥${trAmt}${trNote ? `，备注"${trNote}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`
         );
       } else if (m.kind === 'family' && m.fam) {
         setMsgs((prev) => prev.map((x) => (x.id === m.id && x.fam ? { ...x, fam: { ...x.fam, rejected: true } } : x)));
@@ -2900,8 +2926,8 @@ function ChatPage({
                   </div>
                 ) : m.kind === 'image' ? (
                   <div {...bubblePress} className="min-w-0">
-                    {/* 固定像素上限（calc 百分比在 flex 包裹层内会循环解析导致图片缩小且不贴边） */}
-                    <img src={m.content} alt="图片消息" className="max-h-[310px] w-auto max-w-[240px] rounded-[18px] object-cover" />
+                    {/* 固定像素上限（calc 百分比在 flex 包裹层内会循环解析导致图片缩小且不贴边）；中等尺寸（用户反馈过大） */}
+                    <img src={m.content} alt="图片消息" className="max-h-[248px] w-auto max-w-[190px] rounded-[18px] object-cover" />
                   </div>
                 ) : m.kind === 'sticker' && m.stk ? (
                   <div {...bubblePress}>
@@ -3796,11 +3822,13 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
   );
 }
 
-/** 聊天中的转账卡片（蓝卡 圈↔/对勾 + ¥金额 + 状态文案 + 底部「转账」；206px 与微信转账卡同宽；自己也作为「已收款」接收卡片复用）。
- *  状态文案按角色与收款状态区分：接收完成后才显示「已转入好友余额」，之前是「待对方收款」 */
+/** 聊天中的转账卡片（蓝卡 圈↔/对勾/退还↩ + ¥金额 + 状态文案 + 底部「转账」；206px 与微信转账卡同宽；自己也作为「已收款/已退还」接收凭据卡复用）。
+ *  状态文案按角色与收款状态区分：接收完成后才显示「已转入好友余额」，之前是「待对方收款」；
+ *  收款/退还/拒收后卡片颜色变灰（对照真实 QQ：终态卡褪色），退还卡圆图标换成↩ */
 function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
+  const refunded = packet.status === 'returned';
   const status =
-    packet.status === 'returned'
+    refunded
       ? '已退还'
       : packet.status === 'rejected'
         ? '已拒收'
@@ -3819,14 +3847,14 @@ function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket
       className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(135deg, #29ABF2 0%, #0099FF 100%)',
-        // 收款/退还/拒收后卡片颜色变灰（对照真实 QQ：已收款的转账卡褪色）
+        // 收款/退还/拒收后卡片颜色变灰（对照真实 QQ：已收款与已退还的转账卡都褪色）
         filter: received || packet.status ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
       aria-label={`转账 ${fmtMoney(packet.amount)} 元（${status}）`}
     >
       <div className="flex items-center gap-2.5 px-3.5 pb-3 pt-3.5">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-white/85" aria-hidden="true">
-          {received ? <Check className="h-5 w-5 text-white" strokeWidth={2.6} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2.2} />}
+          {refunded ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.4} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.6} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2.2} />}
         </span>
         <span className="min-w-0">
           <span className="block text-[20px] font-semibold leading-tight text-white">¥{fmtMoney(packet.amount)}</span>
@@ -4358,42 +4386,49 @@ function TransferReceivePage({
 }
 
 /** 交易详情页（对照截图⑥：蓝圈对勾 + 收款文案 + 金额 + 查看余额 + 留言/时间）。
- *  receiverIsMe 由调用方按消息角色 + receiptOf + 旧数据配对推导：文案区分「你已收款 / XX已收款」 */
+ *  退还态：琥珀圈↩ + 「你已退还/对方已退还」+ 退款时间行。
+ *  receiverIsMe 由调用方按消息角色 + receiptOf + 旧数据配对推导：文案区分「你已收款 / XX已收款」；
+ *  退还人：退还凭据卡自带 refundedBy，原卡按消息角色反推（我发的→对方退的；对方发的→我退的） */
 function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAccept }: { me: QQUser; peer: ContactRecord; msg: QQMsg; receiverIsMe: boolean; onBack: () => void; onToast: (m: string) => void; onAccept: (msgId: string) => void }) {
   const p = msg.packet;
   if (!p) return null;
   const mine = msg.role === 'me';
   const incoming = !mine;
-  const d = new Date(msg.time);
-  const fmtFull = `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+  const returned = p.status === 'returned';
+  const fmtFull = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+  };
   return (
     <div className="absolute inset-0 z-40 flex flex-col bg-white pt-[54px] dark:bg-[#16171A]">
       <WalletNavHeader title="交易详情" onBack={onBack} />
       <div className="flex-1 overflow-y-auto px-5">
         <div className="mt-14 flex flex-col items-center">
-          <span className="grid h-[72px] w-[72px] place-items-center rounded-full border-[4px] border-[#12B7F5]" aria-hidden="true">
-            <Check className="h-9 w-9 text-[#12B7F5]" strokeWidth={3} />
+          <span className={`grid h-[72px] w-[72px] place-items-center rounded-full border-[4px] ${returned ? 'border-[#F6AC3D]' : 'border-[#12B7F5]'}`} aria-hidden="true">
+            {returned ? <Undo2 className="h-9 w-9 text-[#F6AC3D]" strokeWidth={2.6} /> : <Check className="h-9 w-9 text-[#12B7F5]" strokeWidth={3} />}
           </span>
           <p className="mt-6 text-[17px] text-[#1F2329] dark:text-white" data-testid="qq-tr-detail-line">
-            {receiverIsMe
-              ? '你已收款，资金已存入钱包余额'
-              : mine
-                ? p.status === 'returned'
-                  ? '对方已退回，资金已存入钱包余额'
-                  : p.status === 'rejected'
+            {returned
+              ? (p.refundedBy ?? (mine ? 'peer' : 'me')) === 'peer'
+                ? '对方已退还'
+                : '你已退还'
+              : receiverIsMe
+                ? '你已收款，资金已存入钱包余额'
+                : mine
+                  ? p.status === 'rejected'
                     ? '对方已拒收'
                     : p.received
                       ? `${peer.name}已收款`
                       : '转账成功，等待对方收款'
-                : incoming && !p.received && !p.status
-                  ? `${peer.name}向你转账，待收款`
-                  : `${peer.name}已收款`}
+                  : incoming && !p.received && !p.status
+                    ? `${peer.name}向你转账，待收款`
+                    : `${peer.name}已收款`}
           </p>
           <p className="mt-5 text-[48px] font-bold leading-none tracking-tight text-[#1F2329] dark:text-white" data-testid="qq-tr-detail-amount">
             <span className="mr-1 text-[26px] font-semibold align-[5px]" aria-hidden="true">¥</span>
             {fmtMoney(p.amount)}
           </p>
-          {incoming && !p.received ? (
+          {incoming && !p.received && !p.status ? (
             <button
               type="button"
               data-testid="qq-tr-detail-accept"
@@ -4421,8 +4456,15 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
           </div>
           <div className="flex min-h-[54px] items-center justify-between gap-4">
             <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">转账时间</span>
-            <span className="text-[16px] text-[#1F2329] dark:text-white">{fmtFull}</span>
+            {/* 退还凭据卡显示原转账发生时间（originTime），原卡显示消息自身时间 */}
+            <span className="text-[16px] text-[#1F2329] dark:text-white">{fmtFull(returned ? (p.originTime ?? msg.time) : msg.time)}</span>
           </div>
+          {returned && typeof p.refundedAt === 'number' && (
+            <div className="flex min-h-[54px] items-center justify-between gap-4" data-testid="qq-tr-refund-time-row">
+              <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">退款时间</span>
+              <span className="text-[16px] text-[#1F2329] dark:text-white">{fmtFull(p.refundedAt)}</span>
+            </div>
+          )}
           {!mine ? (
             <div className="flex min-h-[54px] items-center justify-between gap-4">
               <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">对方</span>

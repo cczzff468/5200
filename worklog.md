@@ -4472,3 +4472,31 @@ Stage Summary:
 - GIF 表情全链路动图保留（上传直通不落 canvas）
 - 表情消息缩小至 96/104px，图片消息放大至约 250×330 且按原图比例显示
 - 根治图片消息 flex 百分比循环解析 bug：所有图片尺寸约束改为固定像素（QQ 修复前 137×182+离头像 153px → 修复后 233×310+3px），图片贴头像问题彻底解决
+
+---
+Task ID: W
+Agent: Z.ai Code (main)
+Task: 转账退还四项反馈：①退还后不论我还是 AI 都要在聊天里发一张「退还卡片」 ②AI转账我退还→详情「你已退还」，我转账AI退还→详情「对方已退还」 ③退还后的转账卡片颜色变灰 ④聊天图片太大改小一点
+
+Work Log:
+- 数据模型：WxTrData / QQ MsgPacket 新增 refundedAt（退款时间）/ originTime（原转账时间，凭据卡用）/ refundedBy（退还人，凭据卡自带标记）；微信 tr 规范化（loadMsgs）保留三个新字段（QQ packet 走展开透传无需改）
+- 退还凭据卡机制（对齐既有「已收款」接收凭据卡 receiptOf 模式）：
+  · 我退 AI 的转账（两端 refundPeerCard transfer 分支）：原卡标记 status='returned'+refundedAt（变灰）+ 追加 role='me' 的退还凭据卡（received:false + status:'returned' + refundedAt + originTime=原卡 time + refundedBy:'me'），替换原通知行；toast + AI 系统事件保留
+  · AI 退我发的转账（两端 applyAiActions verb='return' 分支）：原卡标记终态 + extras 推入 role='peer' 的退还凭据卡（refundedBy:'peer'），替换原通知行；wxPatchBalance/gainToWallet 退回金额保留
+  · 凭据卡无 cid 且 status 终态 → wxCardIsFinal/cardIsFinal 判定终态，不会被 AI 动作重复处理，也不会进待处理清单
+- 卡片 UI：微信 TrBubble / QQ TransferBubble 增加 refunded 态——退还/收款后 filter grayscale(0.62)（微信原只对 received 变灰，补齐退还/拒收），圆图标换 Undo2（↩），状态文案「已退还」
+- 详情页退还态：微信 TrDetailPage / QQ TransferDetailPage 新增 returned 分支——琥珀色大圆（QQ 为琥珀描边圆）+ ↩ 图标 + 「你已退还 / 对方已退还」（凭据卡按 refundedBy；原卡按消息角色反推：我发的→对方退的，对方发的→我退的）+ 「退款时间」行 + 转账时间显示原转账时间（originTime 回退 msg.time）；QQ 侧同时修复：incoming 且已退还的卡此前误显示「××已收款」、且不再给已退还的卡渲染「收款」按钮（补 !p.status 守卫）；旧数据（无 refundedAt）优雅降级不显示退款时间行
+- 图片改小：微信 ImageMsgBubble 250×330→200×264（min-w 160→130）；QQ 聊天图片 240×310→190×248；固定像素约束保持，比例不变形
+- lint+tsc 0 问题
+- Agent Browser 端到端验证（393×852，种 u1 我 + n1 乐乐 + 预置退还态/AI待收款转账/480×640 图片）：
+  ①微信原卡（我发，AI退）详情：黄圆↩ +「对方已退还」+ ¥0.01 + 转账时间/退款时间/转账说明 ✓（截图对照用户参考图一致）
+  ②微信 AI 凭据卡详情：「对方已退还」✓；聊天中原卡与凭据卡均 grayscale(0.62)、状态「已退还」，方向 R/L 正确 ✓
+  ③微信 live 退还：收款页「退还」→ toast「转账已退还给对方」→ 原卡变灰 + 我发出的 ¥8.88 凭据卡出现在右侧 → 详情「你已退还」+ 转账时间=原转账时间、退款时间=退还时刻 ✓（截图）
+  ④微信重启持久化：reload 后四张卡状态/灰度/方向全部保留 ✓；退还触发的 AI 感知事件正常发起 AI 回合（沙箱 API 403 为环境限制，链路本身工作）
+  ⑤QQ 同套全过：原卡详情「对方已退还」+ 退款时间行 + 不再误显收款按钮；AI 凭据卡「对方已退还」；live 退还 → 我的凭据卡（R）→ 详情「你已退还」✓（截图）
+  ⑥图片尺寸：微信 480×640 → 渲染 198×264（原 250×330）；QQ → 186×248（原 240×310）✓
+  ⑦console 无错误、dev.log 无异常
+Stage Summary:
+- 退还闭环补全：退还不再是「只标记原卡」，双方都会在聊天里发出一张灰色↩退还卡片（我的在右、AI 的在左），与「已收款」凭据卡机制对称
+- 详情页文案按退还人精准区分（你已退还/对方已退还）并补退款时间行；QQ 修复 incoming 已退还卡误显「××已收款」+ 收款按钮误渲染
+- 转账卡变灰条件补齐退还态；聊天图片按反馈缩小约 20%（微信 200×264 / QQ 190×248 上限）
