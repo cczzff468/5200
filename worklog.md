@@ -4424,3 +4424,32 @@ Stage Summary:
 - 转发详情页头像按记录快照渲染并加分割线；loadMsgs 规范化不再丢 avatar/quote
 - 收藏变为可逆 toggle：收藏成功/取消收藏 toast 可见（顺带修复聊天页 toast 从不显示的结构性缺陷）
 - 三端未读角标全部按 AI 实际消息条数计数（QQ 补上 AI 回合缺失的 bump；信息布尔改计数含主屏图标与旧数据兼容）
+---
+Task ID: U
+Agent: Z.ai Code (main)
+Task: 转发/免打扰/撤回/图片六项反馈：①转发给「我自己」时详情页AI头像错拿我的头像 ②逐条转发卡片删「转发自××的聊天记录」 ③免打扰未读角标变红点 ④转发详情页显示表情包/图片原图、转账红包亲属卡位置只显示文字 ⑤聊天界面图片与头像凑近 ⑥撤回消息在微信/信息联系人列表预览显示撤回文案
+
+Work Log:
+- forward-sheet.tsx FwdRecord 扩展富媒体快照字段 kind('text'|'sticker'|'image')/imgSrc/stkMeaning；两端 WxMsg/QQMsg.fwd.records 本地类型同步扩展
+- 转发详情头像根因与修复：合并转发 records.avatar 快照（Task T）只覆盖新卡片，旧卡片无 avatar 字段时详情页回退 peer.avatar——转发目标选「我自己」时 peer 就是我 → AI 记录错拿我的头像（转发给其他 AI 时至少不是我的头像，与用户描述「转发给其他人没事」完全吻合）。详情页新增 resolveAvatar(r)：快照优先 → 按 r.name 查联系人表（含 me.name 匹配）→ 角色兜底，旧数据也能找回原说话人头像；微信/QQ 详情页同步接入
+- 转发详情富媒体：doForward 合并转发 records 构造时快照 sticker（url+meaning）/image（微信 img.src、QQ content）字段；loadMsgs 规范化保留新字段（两端）；详情页按 kind 渲染——表情包/图片 <img> 原图（data-testid wx/qq-fwd-detail-sticker/-image），红包/转账/亲属卡/位置维持 quoteContentOf 文字
+- 逐条转发卡片删「转发自「××」的聊天记录」来源行（微信 4460 行段 / QQ 2933 行段），卡片只留引用线+内容；AI 感知事件中的 [转发自××的消息] 前缀保留（AI 知晓用，UI 不可见）
+- 免打扰红点：微信会话列表角标 flagsMap[id].muted===true 时改为 h-[9px] 小红点（无数字，aria-label 保留「N 条未读」），QQ 同款 h-[10px]；未开启免打扰仍显示数字角标
+- 撤回预览：微信 readPreview/QQ msgPreview 在所有 kind 判断前加 last.recalled → 「你/对方撤回一条消息」；SMS scanContactSessions（联系人会话）与小助手 preview 同步接入（SMS role 是 'user'|'assistant'）
+- 图片凑近头像：微信/QQ 消息行容器 gap 改条件式——image 行 gap-[3px]，其余 gap-2（实测图片行 3px vs 文字行 8px）
+- 顺手修复既有缺陷：QQ 红包/转账/亲属卡卡片此前未绑定 bubblePress（不能长按弹菜单），统一包 <div {...bubblePress}> 与其他类型对齐
+- Agent Browser 端到端验证（393×852，种 user+2npc 异色 SVG 头像 + 微信/QQ 消息含图片/表情包/转账）：
+  ①微信合并转发（AI文字+图片+表情+转账 4 条）给「测试我」→ 详情页 4 条记录头像全部 #7A5CFA（乐乐紫）而非我的 #E85D9E，图片/表情显示原图、转账显示「[转账] ¥8.88 请你喝奶茶」+行间分割线 ✓
+  ②微信逐条转发 2 条 → 卡片仅原内容，无「转发自」标题（bodyHasTitle=false）✓
+  ③微信/QQ 免打扰会话角标小红点（textContent 空、isDot=true）+ BellOff 图标并存 ✓
+  ④微信撤回 → 列表预览「你撤回一条消息」✓；QQ 撤回 AI 的转账 → 预览「对方撤回一条消息」✓
+  ⑤QQ 合并转发详情页头像/富媒体/转账文字同款通过；QQ 逐条卡片无标题 ✓
+  ⑥微信/QQ 图片行 gap 3px（文字 8px）✓
+  ⑦信息：联系人会话最后一条撤回 → 预览「你撤回一条消息」；小助手会话同款 ✓
+  ⑧lint+tsc 0 问题、console 0 错误
+
+Stage Summary:
+- 转发详情头像修复覆盖新快照（Task T）之外的全部漏洞：旧卡片按说话人名字反查联系人头像，转发给「我自己」不再显示我的头像
+- 转发详情页富媒体分级渲染：表情包/图片原图、资金类卡片（红包/转账/亲属卡）与位置只显示文字快照
+- 逐条转发卡片精简为纯内容（无来源标题）；免打扰会话角标按原生微信语义降级为红点
+- 三端（微信/QQ/信息）撤回消息在会话列表预览正确显示「你/对方撤回一条消息」；图片气泡与头像间距收紧至 3px

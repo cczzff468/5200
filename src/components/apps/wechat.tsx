@@ -60,7 +60,7 @@ import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteM
 import { useSettings, useUI } from '@/lib/ios/store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
-import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
+import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
   beginChatStream,
   clearChatStream,
@@ -214,7 +214,7 @@ interface WxMsg {
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
-  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null }[] };
+  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -297,6 +297,10 @@ function loadMsgs(contactId: string): WxMsg[] {
                         time: typeof r.time === 'number' ? r.time : 0,
                         // 保留记录快照头像（undefined = 旧数据无此字段，详情页回退按角色取）
                         avatar: typeof r.avatar === 'string' ? r.avatar : r.avatar === null ? null : undefined,
+                        // 富媒体快照：表情包/图片详情页显示原图（旧数据无此字段 → 按纯文字渲染）
+                        kind: r.kind === 'sticker' || r.kind === 'image' ? r.kind : undefined,
+                        imgSrc: typeof r.imgSrc === 'string' ? r.imgSrc : undefined,
+                        stkMeaning: typeof r.stkMeaning === 'string' ? r.stkMeaning : undefined,
                       }))
                   : undefined,
               }
@@ -586,11 +590,12 @@ function meAsContact(me: WxUser): ContactRecord {
   };
 }
 
-/** 会话列表预览（最后一条非通知消息 + 时间） */
+/** 会话列表预览（最后一条非通知消息 + 时间）；撤回的消息显示「你/对方撤回一条消息」 */
 function readPreview(contactId: string): { text: string; time: number } {
   const msgs = loadMsgs(contactId);
   const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
   if (!last) return { text: '', time: 0 };
+  if (last.recalled) return { text: last.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息', time: last.time };
   if (last.kind === 'redpacket') return { text: '[微信红包]', time: last.time };
   if (last.kind === 'transfer') return { text: '[转账]', time: last.time };
   if (last.kind === 'family') return { text: '[亲属卡]', time: last.time };
@@ -3809,6 +3814,10 @@ function ChatPage({
             time: m.time,
             // 记录快照自带头像：定格转发时原说话人的头像，详情页不会错拿转发目标会话的头像
             avatar: m.role === 'me' ? me.avatar : peer.avatar,
+            // 富媒体快照：表情包/图片在详情页显示原图；红包/转账/亲属卡/位置只显示文字
+            kind: m.kind === 'sticker' ? ('sticker' as const) : m.kind === 'image' ? ('image' as const) : ('text' as const),
+            imgSrc: m.kind === 'sticker' ? m.stk?.url : m.kind === 'image' ? m.img?.src : undefined,
+            stkMeaning: m.kind === 'sticker' ? m.stk?.meaning : undefined,
           })),
         },
       };
@@ -4340,7 +4349,7 @@ function ChatPage({
             ) : m.kind === 'notice' && m.notice ? (
               <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
             ) : (
-            <div className={`flex items-start gap-2 py-1.5 ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex items-start py-1.5 ${m.kind === 'image' ? 'gap-[3px]' : 'gap-2'} ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
               {selectMode && isSelectable(m) && (
                 /* 多选模式勾选圈（我的消息在行右侧、对方在行左侧；转发勾选模式全部放左侧，对照原生微信） */
                 <span
@@ -4439,7 +4448,7 @@ function ChatPage({
                   <p className="mt-2 border-t border-black/10 pt-1.5 text-[11px] text-black/40 dark:border-white/15 dark:text-white/45">聊天记录</p>
                 </div>
               ) : m.kind === 'forward' && m.fwd ? (
-                /* 转发卡片：内嵌原消息内容 + 「转发自」来源说明 */
+                /* 转发卡片：内嵌原消息内容（来源说明已按需求移除） */
                 <div
                   {...bubblePress}
                   data-testid="wx-forward-bubble"
@@ -4457,9 +4466,6 @@ function ChatPage({
                     )}
                     {m.content}
                   </div>
-                  <p className="mt-1.5 flex items-center gap-1 text-[11px] text-black/45 dark:text-black/55">
-                    转发自「{m.fwd.from}」的聊天记录
-                  </p>
                 </div>
               ) : (
                 <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
@@ -5066,6 +5072,16 @@ function ChatPage({
         const d = fwdDetailId ? msgs.find((x) => x.id === fwdDetailId) ?? null : null;
         if (!d || d.kind !== 'forward' || !d.fwd?.merged) return null;
         const records = d.fwd.records ?? [];
+        /** 记录头像解析：快照优先 → 旧数据按说话人名字查联系人（含自己）→ 角色回退。
+         *  修复「转发给我自己时 AI 记录错拿我的头像」：旧卡片无 avatar 快照时回退 peer.avatar，
+         *  转发目标是我自己则 peer 就是我 → 按名字查联系人才能找回原说话人头像 */
+        const resolveAvatar = (r: FwdRecord): string | null => {
+          if (r.avatar !== undefined) return r.avatar;
+          if (r.name === me.name) return me.avatar;
+          const hit = contacts.find((c) => c.name === r.name);
+          if (hit) return hit.avatar;
+          return r.role === 'me' ? me.avatar : peer.avatar;
+        };
         return (
           <div className="absolute inset-0 z-[65] flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-fwd-detail">
             <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
@@ -5082,18 +5098,33 @@ function ChatPage({
               <div className="divide-y divide-black/[0.06] dark:divide-white/[0.08]">
                 {records.map((r, i) => (
                   <div key={i} className="flex items-start gap-2 py-3">
-                    <WxAvatar
-                      src={r.avatar !== undefined ? r.avatar : r.role === 'me' ? me.avatar : peer.avatar}
-                      alt={r.name}
-                      size={34}
-                    />
+                    <WxAvatar src={resolveAvatar(r)} alt={r.name} size={34} />
                     <div className="min-w-0 flex-1">
                       {/* 名字在左、时间顶到最右（对照原生微信聊天记录详情） */}
                       <div className="flex items-baseline justify-between gap-2">
                         <p className="truncate text-[11.5px] text-black/40 dark:text-white/40">{r.name}</p>
                         <span className="shrink-0 text-[10.5px] text-black/30 dark:text-white/30">{fwdRecordTime(r.time)}</span>
                       </div>
-                      <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.4]">{r.text}</p>
+                      {/* 表情包/图片显示原图；其余类型（文字/红包/转账/亲属卡/位置）显示快照文字 */}
+                      {r.kind === 'sticker' && r.imgSrc ? (
+                        <img
+                          src={r.imgSrc}
+                          alt={r.stkMeaning ? `表情：${r.stkMeaning}` : '表情'}
+                          data-testid="wx-fwd-detail-sticker"
+                          className="mt-0.5 max-h-[110px] w-auto max-w-[150px] rounded-[8px] object-contain"
+                          loading="lazy"
+                        />
+                      ) : r.kind === 'image' && r.imgSrc ? (
+                        <img
+                          src={r.imgSrc}
+                          alt="图片消息"
+                          data-testid="wx-fwd-detail-image"
+                          className="mt-0.5 max-h-[190px] w-auto max-w-[210px] rounded-[8px] object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.4]">{r.text}</p>
+                      )}
                       {r.quote && (
                         <p className="mt-0.5 line-clamp-2 border-l-2 border-black/15 pl-1.5 text-[12px] leading-[1.35] text-black/45 dark:border-white/20 dark:text-white/50">{r.quote}</p>
                       )}
@@ -6892,9 +6923,14 @@ function MainScreen({
                       <span
                         data-testid={`wx-unread-badge-${contact.id}`}
                         aria-label={`${unreadCount} 条未读`}
-                        className="absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]"
+                        className={
+                          flagsMap[contact.id]?.muted === true
+                            ? /* 免打扰：不显示数字，只显示小红点（原生微信同款） */
+                              'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
+                            : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
+                        }
                       >
-                        {unreadCount > 99 ? '99+' : unreadCount}
+                        {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
                       </span>
                     )}
                   </span>

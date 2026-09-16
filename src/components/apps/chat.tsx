@@ -1639,7 +1639,7 @@ interface ContactSessionPreview {
   time: number;
 }
 
-/** 扫描本地聊天记录：已添加好友的 CHAR/NPC 中有消息记录的进会话列表（按最后消息时间倒序） */
+/** 扫描本地聊天记录：已添加好友的 CHAR/NPC 中有消息记录的进会话列表（按最后消息时间倒序；撤回的消息预览显示撤回文案） */
 function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[] {
   const out: ContactSessionPreview[] = [];
   for (const c of contacts) {
@@ -1649,7 +1649,11 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     const last = msgs[msgs.length - 1];
     out.push({
       contact: c,
-      preview: (last?.content ?? '').trim() || '…',
+      preview: last?.recalled
+        ? last.role === 'user'
+          ? '你撤回一条消息'
+          : '对方撤回一条消息'
+        : (last?.content ?? '').trim() || '…',
       time: last?.time ?? 0,
     });
   }
@@ -1967,7 +1971,12 @@ export default function ChatApp() {
   ];
 
   const last = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : undefined;
-  const preview = last?.content || SEED_MSGS[0].content;
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」
+  const preview = last?.recalled
+    ? last.role === 'user'
+      ? '你撤回一条消息'
+      : '对方撤回一条消息'
+    : last?.content || SEED_MSGS[0].content;
   const listTime = mounted ? (last && last.time > 0 ? fmtTime(last.time) : '现在') : '';
 
   // 跨 App 跳转中（等联系人载入）：先不渲染主界面，避免闪一下会话列表

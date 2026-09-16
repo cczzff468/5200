@@ -17,6 +17,12 @@ export interface FwdRecord {
   /** 记录快照自带头像（转发时定格原说话人头像；详情页用它渲染，避免拿到转发目标会话的头像）。
    *  旧数据无此字段 → 详情页回退按 role 取当前会话头像 */
   avatar?: string | null;
+  /** 原消息类型快照：表情包 / 图片在详情页显示原图，其余类型显示 text 文字（红包/转账/亲属卡/位置等） */
+  kind?: 'text' | 'sticker' | 'image';
+  /** 表情包 / 图片的图片地址（kind 为 sticker/image 时有值） */
+  imgSrc?: string;
+  /** 表情包语义（点击 toast 提示用） */
+  stkMeaning?: string;
 }
 
 /** 转发目标（好友 + 自己） */

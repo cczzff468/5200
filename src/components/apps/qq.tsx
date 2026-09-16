@@ -174,7 +174,7 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
-import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdSheetTarget } from './forward-sheet';
+import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -209,7 +209,7 @@ interface QQMsg {
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
-  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null }[] };
+  fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -271,6 +271,8 @@ interface MsgPacket {
 /** 会话列表预览：非文本消息显示摘要 */
 function msgPreview(m: QQMsg | undefined): string {
   if (!m) return '';
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」
+  if (m.recalled) return m.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息';
   if (m.kind === 'redpacket') return '[QQ红包]';
   if (m.kind === 'transfer') return '[转账]';
   if (m.kind === 'family') return '[亲属卡]';
@@ -578,6 +580,10 @@ function loadMsgs(contactId: string): QQMsg[] {
                         time: typeof r.time === 'number' ? r.time : 0,
                         // 保留记录快照头像（undefined = 旧数据无此字段，详情页回退按角色取）
                         avatar: typeof r.avatar === 'string' ? r.avatar : r.avatar === null ? null : undefined,
+                        // 富媒体快照：表情包/图片详情页显示原图（旧数据无此字段 → 按纯文字渲染）
+                        kind: r.kind === 'sticker' || r.kind === 'image' ? r.kind : undefined,
+                        imgSrc: typeof r.imgSrc === 'string' ? r.imgSrc : undefined,
+                        stkMeaning: typeof r.stkMeaning === 'string' ? r.stkMeaning : undefined,
                       }))
                   : undefined,
               }
@@ -2430,6 +2436,10 @@ function ChatPage({
             time: m.time,
             // 记录快照自带头像：定格转发时原说话人的头像，详情页不会错拿转发目标会话的头像
             avatar: m.role === 'me' ? me.avatar : peer.avatar,
+            // 富媒体快照：表情包/图片在详情页显示原图；红包/转账/亲属卡/位置只显示文字
+            kind: m.kind === 'sticker' ? ('sticker' as const) : m.kind === 'image' ? ('image' as const) : ('text' as const),
+            imgSrc: m.kind === 'sticker' ? m.stk?.url : m.kind === 'image' ? m.content : undefined,
+            stkMeaning: m.kind === 'sticker' ? m.stk?.meaning : undefined,
           })),
         },
       };
@@ -2835,7 +2845,7 @@ function ChatPage({
               ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
               ) : (
-              <div className={`mb-3 flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+              <div className={`mb-3 flex items-end ${m.kind === 'image' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
                 {selectMode && isSelectable(m) && !mine && (
                   /* 多选模式勾选圈（对方消息在行左侧） */
                   <span
@@ -2850,28 +2860,34 @@ function ChatPage({
                 )}
                 {!mine && <QqAvatar src={peer.avatar} alt={peer.name} size={40} />}
                 {m.kind === 'redpacket' && m.packet ? (
-                  <RedPacketBubble
-                    packet={m.packet}
-                    showOpen={!mine && !rpSettled && !rpClaimedByMe}
-                    onClick={() => setLayer({ view: !mine && !rpSettled && !rpClaimedByMe ? 'rp-open' : 'rp-detail', msgId: m.id })}
-                  />
+                  <div {...bubblePress}>
+                    <RedPacketBubble
+                      packet={m.packet}
+                      showOpen={!mine && !rpSettled && !rpClaimedByMe}
+                      onClick={() => setLayer({ view: !mine && !rpSettled && !rpClaimedByMe ? 'rp-open' : 'rp-detail', msgId: m.id })}
+                    />
+                  </div>
                 ) : m.kind === 'transfer' && m.packet ? (
-                  <TransferBubble
-                    packet={m.packet}
-                    mine={mine}
-                    received={m.packet.received === true}
-                    onClick={() =>
-                      // 对方发来的未收款且未退还的转账 → 收款页（时钟+待你收款+收款按钮）；其余 → 交易详情
-                      setLayer({ view: !mine && m.packet?.received !== true && !m.packet?.status ? 'tr-receive' : 'tr-detail', msgId: m.id })
-                    }
-                  />
+                  <div {...bubblePress}>
+                    <TransferBubble
+                      packet={m.packet}
+                      mine={mine}
+                      received={m.packet.received === true}
+                      onClick={() =>
+                        // 对方发来的未收款且未退还的转账 → 收款页（时钟+待你收款+收款按钮）；其余 → 交易详情
+                        setLayer({ view: !mine && m.packet?.received !== true && !m.packet?.status ? 'tr-receive' : 'tr-detail', msgId: m.id })
+                      }
+                    />
+                  </div>
                 ) : m.kind === 'family' && m.fam ? (
-                  <FamilyBubble
-                    fam={m.fam}
-                    mine={mine}
-                    peerName={peer.name}
-                    onClick={() => setLayer({ view: 'fam-detail', msgId: m.id })}
-                  />
+                  <div {...bubblePress}>
+                    <FamilyBubble
+                      fam={m.fam}
+                      mine={mine}
+                      peerName={peer.name}
+                      onClick={() => setLayer({ view: 'fam-detail', msgId: m.id })}
+                    />
+                  </div>
                 ) : m.kind === 'location' && m.loc ? (
                   <div {...bubblePress}>
                     <LocationBubble loc={m.loc} onClick={() => onToast('位置详情暂未开放')} />
@@ -2919,7 +2935,7 @@ function ChatPage({
                     <p className="mt-2 border-t border-black/10 pt-1.5 text-[11px] text-black/40 dark:border-white/15 dark:text-white/45">聊天记录</p>
                   </div>
                 ) : m.kind === 'forward' && m.fwd ? (
-                  /* 转发卡片：内嵌原消息内容 + 「转发自」来源说明 */
+                  /* 转发卡片：内嵌原消息内容（来源说明已按需求移除） */
                   <div
                     {...bubblePress}
                     data-testid="qq-forward-bubble"
@@ -2930,7 +2946,6 @@ function ChatPage({
                       {m.quote && <span className="mb-0.5 block text-[12px] text-white/75">{m.quote.name}：{m.quote.content}</span>}
                       {m.content}
                     </div>
-                    <p className="mt-1.5 text-[11px] text-white/70">转发自「{m.fwd.from}」的聊天记录</p>
                   </div>
                 ) : (
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
@@ -3594,6 +3609,16 @@ function ChatPage({
         const d = fwdDetailId ? msgs.find((x) => x.id === fwdDetailId) ?? null : null;
         if (!d || d.kind !== 'forward' || !d.fwd?.merged) return null;
         const records = d.fwd.records ?? [];
+        /** 记录头像解析：快照优先 → 旧数据按说话人名字查联系人（含自己）→ 角色回退。
+         *  修复「转发给我自己时 AI 记录错拿我的头像」：旧卡片无 avatar 快照时回退 peer.avatar，
+         *  转发目标是我自己则 peer 就是我 → 按名字查联系人才能找回原说话人头像 */
+        const resolveAvatar = (r: FwdRecord): string | null => {
+          if (r.avatar !== undefined) return r.avatar;
+          if (r.name === me.name) return me.avatar;
+          const hit = contacts.find((c) => c.name === r.name);
+          if (hit) return hit.avatar;
+          return r.role === 'me' ? me.avatar : peer.avatar;
+        };
         return (
           <div className="absolute inset-0 z-[65] flex flex-col bg-white text-[#1F2329] dark:bg-[#16171A] dark:text-white" data-testid="qq-fwd-detail">
             <div className="shrink-0 bg-white pt-[54px] dark:bg-[#16171A]">
@@ -3610,18 +3635,33 @@ function ChatPage({
               <div className="divide-y divide-black/[0.06] dark:divide-white/[0.08]">
                 {records.map((r, i) => (
                   <div key={i} className="flex items-start gap-2 py-3">
-                    <QqAvatar
-                      src={r.avatar !== undefined ? r.avatar : r.role === 'me' ? me.avatar : peer.avatar}
-                      alt={r.name}
-                      size={34}
-                    />
+                    <QqAvatar src={resolveAvatar(r)} alt={r.name} size={34} />
                     <div className="min-w-0 flex-1">
                       {/* 名字在左、时间顶到最右 */}
                       <div className="flex items-baseline justify-between gap-2">
                         <p className="truncate text-[11.5px] text-black/40 dark:text-white/40">{r.name}</p>
                         <span className="shrink-0 text-[10.5px] text-black/30 dark:text-white/30">{fwdRecordTime(r.time)}</span>
                       </div>
-                      <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.4]">{r.text}</p>
+                      {/* 表情包/图片显示原图；其余类型（文字/红包/转账/亲属卡/位置）显示快照文字 */}
+                      {r.kind === 'sticker' && r.imgSrc ? (
+                        <img
+                          src={r.imgSrc}
+                          alt={r.stkMeaning ? `表情：${r.stkMeaning}` : '表情'}
+                          data-testid="qq-fwd-detail-sticker"
+                          className="mt-0.5 max-h-[110px] w-auto max-w-[150px] rounded-[10px] object-contain"
+                          loading="lazy"
+                        />
+                      ) : r.kind === 'image' && r.imgSrc ? (
+                        <img
+                          src={r.imgSrc}
+                          alt="图片消息"
+                          data-testid="qq-fwd-detail-image"
+                          className="mt-0.5 max-h-[190px] w-auto max-w-[210px] rounded-[12px] object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.4]">{r.text}</p>
+                      )}
                       {r.quote && (
                         <p className="mt-0.5 line-clamp-2 border-l-2 border-black/15 pl-1.5 text-[12px] leading-[1.35] text-black/45 dark:border-white/20 dark:text-white/50">{r.quote}</p>
                       )}
@@ -5703,9 +5743,14 @@ function MessagesPage({
                   <span
                     data-testid={`qq-unread-badge-${contact.id}`}
                     aria-label={`${unreadCount} 条未读`}
-                    className="absolute -right-2 -top-2 flex h-[21px] min-w-[21px] items-center justify-center rounded-full bg-[#F5455C] px-[6px] text-[12px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.28)] ring-2 ring-white dark:ring-[#111214]"
+                    className={
+                      flagsMap[contact.id]?.muted === true
+                        ? /* 免打扰：不显示数字，只显示小红点 */
+                          'absolute -right-[2px] -top-[2px] block h-[10px] w-[10px] rounded-full bg-[#F5455C] ring-2 ring-white dark:ring-[#111214]'
+                        : 'absolute -right-2 -top-2 flex h-[21px] min-w-[21px] items-center justify-center rounded-full bg-[#F5455C] px-[6px] text-[12px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.28)] ring-2 ring-white dark:ring-[#111214]'
+                    }
                   >
-                    {unreadCount > 99 ? '99+' : unreadCount}
+                    {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
               </span>
