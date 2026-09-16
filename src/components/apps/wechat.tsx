@@ -258,9 +258,6 @@ function uid(): string {
 /** 当前正在查看的微信聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
 let wxActiveChatId: string | null = null;
 
-/** 当前正在查看的微信聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
-let wxActiveChatId: string | null = null;
-
 function loadMsgs(contactId: string): WxMsg[] {
   try {
     const raw = window.localStorage.getItem(lsMsgsKey(contactId));
