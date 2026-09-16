@@ -40,6 +40,7 @@ import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
@@ -477,6 +478,11 @@ function ChatView({
   useEffect(() => {
     setSentenceSendState(getSentenceSend(sessionKey));
   }, [sessionKey]);
+  /** 时间感知开关（本会话独立，发送时现场读取；见 @/lib/time-aware） */
+  const [timeAware, setTimeAwareState] = useState(() => getTimeAware(sessionKey));
+  useEffect(() => {
+    setTimeAwareState(getTimeAware(sessionKey));
+  }, [sessionKey]);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -594,7 +600,13 @@ function ChatView({
           [userMsg?.content ?? '', ...base.slice(-6).map((m) => m.content)].filter(Boolean).join(' ')
         )
       : '';
-    const baseSys = [systemPrompt, memoryBlock].filter(Boolean).join('\n\n');
+    // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
+    // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值；
+    // AI 助手会话（无人设）也注入时间块，让「现在几点」这类问题能答准
+    const timeBlock = getTimeAware(sessionKey)
+      ? buildTimeAwareBlock({ lastMsgTime: msgs.length > 0 ? msgs[msgs.length - 1].time : null })
+      : '';
+    const baseSys = [systemPrompt, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
     const sysContent = baseSys
       ? replyCount > 1
         ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
@@ -1154,6 +1166,7 @@ function ChatView({
               : '未开启'
           }
           sentenceSend={sentenceSend}
+          timeAware={timeAware}
           onBack={() => setSettingsOpen(false)}
           onOpenTranslate={() => setTranslateOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -1164,6 +1177,11 @@ function ChatView({
               markPendingBatch(sessionKey, false);
               setPendingDispatch(false);
             }
+          }}
+          onToggleTimeAware={(v) => {
+            // 立即持久化并生效（下一次请求现场读取，无需重启）
+            setTimeAware(sessionKey, v);
+            setTimeAwareState(v);
           }}
         />
       )}

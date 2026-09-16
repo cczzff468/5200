@@ -143,6 +143,7 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegment
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -1834,6 +1835,11 @@ function ChatPage({
   useEffect(() => {
     setSentenceSendState(getSentenceSend(sessionKey));
   }, [sessionKey]);
+  /** 时间感知开关（本会话独立，发送时现场读取；见 @/lib/time-aware） */
+  const [timeAware, setTimeAwareState] = useState(() => getTimeAware(sessionKey));
+  useEffect(() => {
+    setTimeAwareState(getTimeAware(sessionKey));
+  }, [sessionKey]);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -2227,7 +2233,16 @@ function ChatPage({
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     const memoryBlock = memRecallBlock(peer.id, 'qq', memContext);
-    const systemFull = [system, memoryBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '']
+    // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
+    // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值，按角色隔离不串台
+    const priorMsgs = baseMsgs ?? msgs;
+    const timeBlock = getTimeAware(sessionKey)
+      ? buildTimeAwareBlock({
+          lastMsgTime: priorMsgs.length > 0 ? priorMsgs[priorMsgs.length - 1].time : null,
+          regionHint: peer.region || null,
+        })
+      : '';
+    const systemFull = [system, memoryBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '', timeBlock]
       .filter(Boolean)
       .join('\n\n');
     const payloadMsgs: ChatPayloadMessage[] = [
@@ -3444,6 +3459,7 @@ function ChatPage({
               : '未开启'
           }
           sentenceSend={sentenceSend}
+          timeAware={timeAware}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
@@ -3457,6 +3473,11 @@ function ChatPage({
               markPendingBatch(sessionKey, false);
               setPendingDispatch(false);
             }
+          }}
+          onToggleTimeAware={(v) => {
+            // 立即持久化并生效（下一次请求现场读取，无需重启）
+            setTimeAware(sessionKey, v);
+            setTimeAwareState(v);
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}

@@ -44,6 +44,7 @@ import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecor
 import { createContact, deleteContact as deleteContactLocal, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -77,6 +78,8 @@ interface CallBubble {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  /** 字幕产生时间（epoch ms）—— 时间感知用它计算通话内的说话间隔 */
+  t: number;
 }
 
 const KEYS: { digit: string; letters: string }[] = [
@@ -572,14 +575,14 @@ function CallScreen({
       // 自己的号码（user）：对方不说话、也不用回复 —— 发出去的话只留字幕
       if (contact?.kind === 'user') {
         if (userText) {
-          setBubbles((b) => [...b, { id: genId(), role: 'user' as const, text: userText }]);
+          setBubbles((b) => [...b, { id: genId(), role: 'user' as const, text: userText, t: Date.now() }]);
         }
         setPeerStatus('listening');
         return;
       }
       setPeerStatus('thinking');
       const historyBefore: CallBubble[] = userText
-        ? [...bubblesRef.current, { id: genId(), role: 'user' as const, text: userText }]
+        ? [...bubblesRef.current, { id: genId(), role: 'user' as const, text: userText, t: Date.now() }]
         : bubblesRef.current;
       if (userText) {
         setBubbles((b) => [...b, historyBefore[historyBefore.length - 1]]);
@@ -588,6 +591,25 @@ function CallScreen({
       // 记忆库：本轮对话结束后的轮次计数与自动提取（后台异步，失败静默）；
       // 请求前先召回该联系人（互通开关范围）的记忆注入 system（服务端拼到人设后）
       const memoryBlock = contact?.id ? memRecallBlock(contact.id, 'phone', userText ?? '') : undefined;
+      // 时间感知（按联系人独立开关，发送时现场读取；关闭时不注入）：
+      // 上次聊天间隔 = 通话内上一条字幕时间戳；本轮是通话第一句时退回最近一次接通的通话记录时间
+      const priorBubbles = bubblesRef.current;
+      let lastChatTime: number | null = priorBubbles.length > 0 ? priorBubbles[priorBubbles.length - 1].t : null;
+      if (!lastChatTime && contact?.id) {
+        try {
+          const logs = await localDB.getAll('call-logs');
+          const last = logs
+            .filter((l) => l.contactId === contact.id && l.duration > 0)
+            .sort((a, b) => b.createdAt - a.createdAt)[0];
+          lastChatTime = last?.createdAt ?? null;
+        } catch {
+          lastChatTime = null;
+        }
+      }
+      const timeBlock =
+        contact?.id && getTimeAware(`phone:${contact.id}`)
+          ? buildTimeAwareBlock({ lastMsgTime: lastChatTime, regionHint: contact.region || null })
+          : '';
       const memorizeTurn = (reply: string) => {
         if (!contact?.id) return;
         const turns = memConvoFromRaw(
@@ -632,6 +654,8 @@ function CallScreen({
             greeting: userText === null,
             history: historyBefore.map((m) => ({ role: m.role, content: m.text })),
             memoryBlock,
+            // 时间感知块（前端按联系人开关现场构建；服务端拼到人设+记忆之后）
+            timeBlock,
             // 设置 App「API 设置」的配置：服务端优先用它调用户自己的 API
             config: apiConfig,
           }),
@@ -647,7 +671,7 @@ function CallScreen({
         // 字幕随流式增量逐字上屏，完成后 TTS 播报
         if (res.ok && data.directOnly && Array.isArray(data.messages) && data.messages.length > 0) {
           const bubbleId = genId();
-          setBubbles((b) => [...b, { id: bubbleId, role: 'assistant' as const, text: '' }]);
+          setBubbles((b) => [...b, { id: bubbleId, role: 'assistant' as const, text: '', t: Date.now() }]);
           try {
             const full = await directChatStream(apiConfig, data.messages, (delta) => {
               setBubbles((b) =>
@@ -682,7 +706,7 @@ function CallScreen({
           return;
         }
         const reply = data.reply;
-        setBubbles((b) => [...b, { id: genId(), role: 'assistant', text: reply }]);
+        setBubbles((b) => [...b, { id: genId(), role: 'assistant', text: reply, t: Date.now() }]);
         memorizeTurn(reply);
         await speak(reply);
       } catch (err) {

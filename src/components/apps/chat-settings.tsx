@@ -5,13 +5,14 @@
  * （微信 / QQ / 信息三端，variant 区分主题）：
  * - ChatSettingsPage（微信/QQ）：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
  *   回复条数入口（进入独立二级页 ChatReplyCountPage）、翻译入口（进入 ChatTranslatePage）、
- *   分句发送开关、查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
+ *   分句发送开关、时间感知开关（AI 感知当前时间/节日/事件时长/上次聊天间隔，按会话独立）、
+ *   查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
  * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条（上限，可少发），AI 像
  *   真人一样一句一句连发多条消息（一句一条，由 @/lib/reply-count 切分与节奏控制）
  * - ChatTranslatePage：翻译语言页（三端共用，参考 iOS 翻译语言页）—— 总开关 + 语言对选择：
  *   上方左右两个语言槽可点选（点一侧再在下方列表选语言），中间 ⇄ 一键互换；
  *   聊天中按消息语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧
- * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关）
+ * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关 + 时间感知开关）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
@@ -125,12 +126,14 @@ export function ChatSettingsPage({
   replyCount,
   translateSummary,
   sentenceSend,
+  timeAware,
   onBack,
   onTogglePinned,
   onToggleMuted,
   onOpenReplyCount,
   onOpenTranslate,
   onToggleSentenceSend,
+  onToggleTimeAware,
   onOpenSearch,
   onOpenBg,
   onOpenPeerProfile,
@@ -156,12 +159,15 @@ export function ChatSettingsPage({
   translateSummary: string;
   /** 分句发送开关状态（开启后连续发消息 AI 不回复，输入框为空再点发送才触发回复） */
   sentenceSend: boolean;
+  /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
+  timeAware: boolean;
   onBack: () => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
   onOpenReplyCount: () => void;
   onOpenTranslate: () => void;
   onToggleSentenceSend: (v: boolean) => void;
+  onToggleTimeAware: (v: boolean) => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
   /** 点击信息卡片 → 进入联系人详细界面（QQ 好友资料页 / 微信好友详情页）；不传则卡片不可点 */
@@ -314,6 +320,23 @@ export function ChatSettingsPage({
         </div>
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
           开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
+        </p>
+
+        {/* 时间感知：AI 感知当前时间/季节/节日、事件耗时与上次聊天间隔（按会话独立开关，发送时现场读取） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <div className={`flex items-center justify-between ${rowCls}`}>
+            <span>时间感知</span>
+            <ChatToggle
+              on={timeAware}
+              onChange={onToggleTimeAware}
+              accent={accent}
+              testId={`${testPrefix}-settings-time`}
+              label="时间感知"
+            />
+          </div>
+        </div>
+        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+          开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
         </p>
 
         {/* 查找聊天记录 */}
@@ -993,9 +1016,11 @@ export function SmsChatSettingsPage({
   phone,
   translateSummary,
   sentenceSend,
+  timeAware,
   onBack,
   onOpenTranslate,
   onToggleSentenceSend,
+  onToggleTimeAware,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1003,9 +1028,12 @@ export function SmsChatSettingsPage({
   phone: string;
   translateSummary: string;
   sentenceSend: boolean;
+  /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
+  timeAware: boolean;
   onBack: () => void;
   onOpenTranslate: () => void;
   onToggleSentenceSend: (v: boolean) => void;
+  onToggleTimeAware: (v: boolean) => void;
 }) {
   const t = translateTokens('sms');
   return (
@@ -1070,6 +1098,23 @@ export function SmsChatSettingsPage({
         </div>
         <p className={t.captionCls}>
           开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
+        </p>
+
+        {/* 时间感知 */}
+        <div className={`${t.cardCls} mt-3`}>
+          <div className={`flex items-center justify-between ${t.rowCls}`}>
+            <span>时间感知</span>
+            <ChatToggle
+              on={timeAware}
+              onChange={onToggleTimeAware}
+              accent="#34C759"
+              testId="sms-settings-time"
+              label="时间感知"
+            />
+          </div>
+        </div>
+        <p className={t.captionCls}>
+          开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
         </p>
       </div>
     </div>

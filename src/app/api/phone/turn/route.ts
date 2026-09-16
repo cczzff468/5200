@@ -384,7 +384,9 @@ export async function POST(req: NextRequest) {
   });
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
-  const systemFull = memoryBlock ? `${system}\n\n${memoryBlock}` : system;
+  // 时间感知块：前端按联系人开关现场构建（当前时间/季节/节日/事件时长/上次聊天间隔），附加在记忆之后
+  const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
+  const systemFull = [system, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
 
   // 上游要求 messages 必须以 user 消息收尾：
   // - 普通轮次：历史本身以用户刚说的话收尾，直接透传；

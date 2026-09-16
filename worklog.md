@@ -4869,3 +4869,31 @@ Work Log:
 Stage Summary:
 - 发现页与我页朋友圈图标统一为 27px small 档，其余发现页图标保持 31px
 - commit + push 完成
+
+---
+Task ID: AK
+Agent: Z.ai Code (main)
+Task: 聊天界面新增「时间感知」开关——AI 感知当前时间/节日/事件时长/上次聊天间隔（微信/QQ/信息/电话四端）
+
+Work Log:
+- 新建 src/lib/time-aware.ts 核心模块：
+  · 开关按会话键（wx:<id>/qq:<id>/sms:<key>/phone:<id>）存 localStorage 单键 map「chat-time-aware」，默认开启，发送时现场读取（改后立即影响下一次请求）
+  · buildTimeAwareBlock：北京时间 UTC+8 换算（toBjTime，设备时区无关）+ 季节（气候季节）+ 当年月份天数表（平/闰年 2 月）+ 日期运算规则 + 事件时长感知规则 + 场所营业状态 + 常见事件时长参照 + 时空感知内化协议（最高优先级，禁止输出时间戳卡片、分钟向下取整、节日插在城市前）+ 2026 节日对照表（含 520/521/双11/双12 网络节日；母亲节/父亲节/感恩节按星期规则任意年份动态计算）+ 距离上次聊天（formatChatGap：X 天 Y 小时 Z 分钟 / 第一次聊天）
+  · bun 脚本验证：2026-09-25 中秋、5-10 母亲节、2-17 春节、10-3 国庆、7 月暑期、520、3 小时 25 分钟格式、平闰年全部命中
+- chat-settings.tsx：ChatSettingsPage（微信/QQ）与 SmsChatSettingsPage（信息）各加「时间感知」开关行（ChatToggle，testId wx/qq-settings-time、sms-settings-time），位于分句发送之后
+- 四端注入（与 memoryBlock 同一拼接模式，均在 system 组装处）：
+  · wechat.tsx runAiTurn / qq.tsx runAiTurn：priorMsgs 末条 time 作为 lastMsgTime（不含本轮新消息），regionHint=peer.region
+  · chat.tsx startAiTurn：msgs 末条 time；AI 助手会话（无人设）也注入时间块
+  · phone.tsx runTurn：CallBubble 新增 t 字段（4 处创建点补时间戳），通话第一句回退最近一次接通通话记录（call-logs 按 contactId+duration>0）；timeBlock 随请求体传服务端
+- /api/phone/turn/route.ts：接收 root.timeBlock，systemFull = [人设, 记忆, 时间块].join('\n\n')（directOnly 浏览器直连路径自动携带）
+- E2E 验证（fetch 拦截器捕获 /api/chat 请求体）：
+  · 开态：system 含完整时间感知块——「当前时间：2026年9月16日 星期三 19:03:26（北京时间，UTC+8）。今天是：无特殊节日。距离上次聊天：3 小时 48 分钟。当前季节是秋季。」+ 地区参考 + 内化协议 + 节日表
+  · 关态：关闭开关后立刻再发，system 无任何时间感知内容（立即生效）
+  · 持久化：localStorage {"wx:n1":false} → reload 后开关仍为关；角色隔离：小雅会话（无记录）默认开启
+  · 信息端设置页开关 UI 冒烟通过；QQ 登录未绑定 QQ 号，UI 冒烟跳过（与微信共用同一组件+同一模式，tsc 同构保证）
+- lint + tsc 0 问题；dev.log 无异常（2 条 502 为沙盒无上游 API 的预期失败）
+
+Stage Summary:
+- 时间感知四端全通：开关按会话独立持久化、默认开、立即生效；注入块含当前时间/月份天数表/日期运算/事件时长/营业状态/常见时长/内化协议/节日表/上次聊天间隔九部分；时间戳卡片被协议明确禁止输出
+- 关键设计：北京时间用 UTC+8 偏移换算与设备时区解耦；周规则节日（母亲/父亲/感恩节）动态算任意年份成立；通话场景间隔回退到 call-logs
+- commit + push 完成
