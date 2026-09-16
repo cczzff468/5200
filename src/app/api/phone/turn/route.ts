@@ -229,6 +229,8 @@ interface InlineContact {
   relation: string | null;
   /** 仅 NPC：对机主（USER）的关系 */
   relationToUser: string | null;
+  /** 生日（几月几号，如 6.20 / 6月20日；注入人设前归一化） */
+  birthday: string | null;
   /** 配角圈注入（由前端 npc-bond 组装）：认识的配角/归属者资料卡/背景近况 */
   ownerLabel?: string;
   npcCircle?: { name: string; relation: string; relationToUser: string; persona: string }[];
@@ -251,6 +253,7 @@ function parseInlineContact(raw: unknown): InlineContact | null {
     background: typeof c.background === 'string' ? c.background : null,
     relation: typeof c.relation === 'string' ? c.relation : null,
     relationToUser: typeof c.relationToUser === 'string' ? c.relationToUser : null,
+    birthday: typeof c.birthday === 'string' ? c.birthday : null,
     ownerLabel: typeof c.ownerLabel === 'string' ? c.ownerLabel : undefined,
     npcCircle: parseNpcCircle(c.npcCircle),
     ownerCard: parseStrList(c.ownerCard),
@@ -365,6 +368,7 @@ export async function POST(req: NextRequest) {
         background: inline.background,
         relation: inline.relation,
         relationToUser: inline.relationToUser,
+        birthday: inline.birthday,
       }
     : (() => {
         const p = unknownPersona(number);

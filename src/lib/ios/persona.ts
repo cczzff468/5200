@@ -9,6 +9,8 @@
  *   数据缺失的要素回退为通用表述，不编造具体内容。
  */
 
+import { formatBirthday } from '@/lib/contacts';
+
 /** 人设数据源（联系人记录的形状子集；全部可选字段缺省时安全回退） */
 export interface PersonaSource {
   name: string;
@@ -31,6 +33,8 @@ export interface PersonaSource {
   relation?: string | null;
   /** 仅 NPC：对机主（USER）的关系（如 网友/同事/用户的朋友/情敌） */
   relationToUser?: string | null;
+  /** 生日（几月几号；支持 6.20 / 6月20日 等写法，注入前经 formatBirthday 归一化，AI 无歧义理解） */
+  birthday?: string | null;
 }
 
 /** 配角圈条目（CHAR 人设里注入「你认识的配角」用，由 npc-bond 组装） */
@@ -104,10 +108,12 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   if (clean(peer.company)) identity.push(`就职于${clean(peer.company)}`);
   if (clean(peer.region)) identity.push(`坐标${clean(peer.region)}`);
 
-  // 基础资料要素：性别 / 年龄 / 身高 / 体重（有才写）
+  // 基础资料要素：性别 / 年龄 / 生日 / 身高 / 体重（有才写；生日统一归一化为「6月20日」式写法）
   const facts: string[] = [];
   if (clean(peer.gender)) facts.push(`性别 ${clean(peer.gender)}`);
   if (clean(peer.age)) facts.push(`${clean(peer.age)}岁`);
+  const birthday = formatBirthday(peer.birthday);
+  if (birthday) facts.push(`生日 ${birthday}`);
   if (clean(peer.height)) facts.push(`身高 ${clean(peer.height)}`);
   if (clean(peer.weight)) facts.push(`体重 ${clean(peer.weight)}`);
 

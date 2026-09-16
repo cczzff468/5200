@@ -26,6 +26,7 @@ import {
   updateContact,
 } from '@/lib/ios/contacts-store';
 import {
+  formatBirthday,
   genPhone,
   genQQ,
   genWechatId,
@@ -1167,7 +1168,7 @@ function ContactFormView({
               <input value={form.region} onChange={(e) => set('region')(e.target.value)} placeholder="如 上海" aria-label="地区" className={boxInputCls} />
             </BoxField>
             <BoxField label="生日">
-              <input value={form.birthday} onChange={(e) => set('birthday')(e.target.value)} placeholder="几月几号，如 3月5日" aria-label="生日" className={boxInputCls} />
+              <input value={form.birthday} onChange={(e) => set('birthday')(e.target.value)} placeholder="几月几号，如 3月5日 或 6.20" aria-label="生日" className={boxInputCls} />
             </BoxField>
           </FieldGrid>
           <BoxField label={isNpc ? '你们的关系' : '关系'}>
@@ -1463,7 +1464,7 @@ function DetailView({
           {contact.weight && <DetailRow label="体重" value={contact.weight} />}
           {contact.occupation && <DetailRow label="职业" value={contact.occupation} />}
           {contact.region && <DetailRow label="地区" value={contact.region} />}
-          {contact.birthday && <DetailRow label="生日" value={contact.birthday} />}
+          {contact.birthday && <DetailRow label="生日" value={formatBirthday(contact.birthday) ?? ''} />}
           {contact.relation && (
             <DetailRow label={contact.kind === 'npc' ? '你们的关系' : '关系'} value={contact.relation} />
           )}

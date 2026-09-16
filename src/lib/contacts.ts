@@ -170,6 +170,33 @@ export function genPassword(length = 10): string {
   return chars.join('');
 }
 
+/**
+ * 生日归一化：把「6.20」「6/20」「6-20」「06.20」「1999.6.20」「6月20」「6月20日」「1999年6月20日」
+ * 等常见写法统一转成「6月20日」/「1999年6月20日」，
+ * 保证 AI 人设 system prompt 与详情页展示都能无歧义理解；无法解析的写法原样返回。
+ */
+export function formatBirthday(v?: string | null): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (!t) return null;
+  // 带年份：1999年6月20日 / 1999.6.20 / 1999-6-20 / 1999/6/20
+  const full = t.match(/^(\d{4})\s*[年.．/／\-]\s*(\d{1,2})\s*[月.．/／\-]\s*(\d{1,2})\s*日?号?$/);
+  if (full) {
+    const y = Number(full[1]);
+    const mo = Number(full[2]);
+    const d = Number(full[3]);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return `${y}年${mo}月${d}日`;
+  }
+  // 不带年份：6月20日 / 6.20 / 6/20 / 6-20 / 06.20
+  const short = t.match(/^(\d{1,2})\s*[月.．/／\-]\s*(\d{1,2})\s*日?号?$/);
+  if (short) {
+    const mo = Number(short[1]);
+    const d = Number(short[2]);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return `${mo}月${d}日`;
+  }
+  return t.slice(0, 30);
+}
+
 /** 文本字段统一 trim；空串归一为 null */
 export function normalizeText(v: unknown, maxLen: number): string | null {
   if (typeof v !== 'string') return null;

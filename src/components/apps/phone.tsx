@@ -622,6 +622,7 @@ function CallScreen({
                   region: contact.region,
                   relation: contact.relation,
                   relationToUser: contact.relationToUser ?? null,
+                  birthday: contact.birthday ?? null,
                   persona: contact.persona,
                   background: contact.background,
                   ...(npcExtra ?? {}),

@@ -94,24 +94,37 @@ function GroupCard({ children }: { children: ReactNode }) {
   );
 }
 
-/** 主列表行图标：30px 圆角渐变灰方块 + 白色线性图标（黑白灰风） */
-function RowIcon({ icon: Icon }: { icon: LucideIcon }) {
+/** iOS 系统设置图标色板（参照用户截图：纯色圆角方块 + 白色图标） */
+const TONE_ORANGE = '#FF9500';
+const TONE_BLUE = '#007AFF';
+const TONE_GREEN = '#34C759';
+const TONE_RED = '#FF3B30';
+const TONE_GRAY = '#8E8E93';
+const TONE_CYAN = '#32ADE6';
+
+/** 主列表行图标：纯色圆角方块 + 白色线性图标（iOS 设置风） */
+function RowIcon({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
   return (
-    <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] bg-gradient-to-b from-[#C8C8CD] to-[#8E8E93] dark:from-[#48484E] dark:to-[#232327]">
+    <span
+      className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px]"
+      style={{ backgroundColor: tone }}
+    >
       <Icon className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
     </span>
   );
 }
 
-/** 主列表行：左渐变方块图标 + 标签，右侧可选值 / ChevronRight */
+/** 主列表行：左彩色方块图标 + 标签，右侧可选值 / ChevronRight */
 function MainRow({
   icon,
+  tone,
   label,
   value,
   onClick,
   chevron,
 }: {
   icon: LucideIcon;
+  tone: string;
   label: string;
   value?: string;
   onClick?: () => void;
@@ -120,7 +133,7 @@ function MainRow({
   const showChevron = chevron ?? onClick !== undefined;
   const inner = (
     <>
-      <RowIcon icon={icon} />
+      <RowIcon icon={icon} tone={tone} />
       <span className="min-w-0 flex-1 truncate text-[16px]">{label}</span>
       {value !== undefined && (
         <span className="max-w-[50%] shrink-0 truncate text-[15px] text-muted-foreground">{value}</span>
@@ -262,12 +275,12 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         {/* 无线控制（演示项） */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
           <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
-            <RowIcon icon={Plane} />
+            <RowIcon icon={Plane} tone={TONE_ORANGE} />
             <span className="min-w-0 flex-1 truncate text-[16px]">飞行模式</span>
             <Switch checked={airplane} onCheckedChange={toggleAirplane} aria-label="飞行模式" />
           </div>
-          <MainRow icon={Wifi} label="无线局域网" value="未连接" chevron />
-          <MainRow icon={Bluetooth} label="蓝牙" value="打开" chevron />
+          <MainRow icon={Wifi} tone={TONE_BLUE} label="无线局域网" value="未连接" chevron />
+          <MainRow icon={Bluetooth} tone={TONE_BLUE} label="蓝牙" value="打开" chevron />
         </div>
         <p className="mt-2 px-8 text-[12px] leading-relaxed text-muted-foreground">
           飞行模式、无线局域网与蓝牙均为演示项，不改变系统状态。
@@ -275,24 +288,26 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
 
         {/* 锁屏与密码（按用户要求不显示开启状态提示） */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
-          <MainRow icon={Lock} label="锁屏与密码" onClick={() => onOpen('lock')} />
+          <MainRow icon={Lock} tone={TONE_RED} label="锁屏与密码" onClick={() => onOpen('lock')} />
         </div>
 
         {/* 显示与亮度 / 壁纸 / 通知 */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
           <MainRow
             icon={Sun}
+            tone={TONE_BLUE}
             label="显示与亮度"
             value={THEME_SHORT[theme]}
             onClick={() => onOpen('theme')}
           />
           <MainRow
             icon={ImageIcon}
+            tone={TONE_CYAN}
             label="壁纸"
             value={wallpaperName}
             onClick={() => onOpen('wallpaper')}
           />
-          <MainRow icon={Bell} label="通知" onClick={() => onOpen('notification')} />
+          <MainRow icon={Bell} tone={TONE_RED} label="通知" onClick={() => onOpen('notification')} />
         </div>
 
         {/* 开发者 */}
@@ -300,16 +315,17 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         <div className="mx-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
           <MainRow
             icon={Wrench}
+            tone={TONE_GRAY}
             label="API 配置"
             value={apiKey.trim() ? `已配置 · ${apiModel}` : '未配置'}
             onClick={() => onOpen('api')}
           />
-          <MainRow icon={Database} label="存储" onClick={() => onOpen('storage')} />
+          <MainRow icon={Database} tone={TONE_GREEN} label="存储" onClick={() => onOpen('storage')} />
         </div>
 
         {/* 关于本机 */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
-          <MainRow icon={Info} label="关于本机" onClick={() => onOpen('about')} />
+          <MainRow icon={Info} tone={TONE_GRAY} label="关于本机" onClick={() => onOpen('about')} />
         </div>
 
         <p className="py-6 text-center text-[12px] text-muted-foreground">
