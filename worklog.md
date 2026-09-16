@@ -5056,3 +5056,32 @@ Stage Summary:
 - 交付：memory-core.ts（timeEditedAt + 核心/长期 expiresAt）、memory.ts（MemTimePatch + updateXxxTime + 三层手动保护 + 召回/总结过期过滤补全）、memory-bank.tsx（三层时间显示 + 手动徽章 + 编辑态时间编辑/清除），共 3 文件。
 - 关键决策：①timeEditedAt 单标记保护全部时间字段（用户改任一时间即整体受保护），手动清除同样保留标记（清除也是一种设置）；②核心/长期补 expiresAt 字段而非只读展示——「默认永不过期」语义不变，用户可显式设置，召回/预览/长期总结全链路尊重手动过期；③UI 时间编辑用 datetime-local（00:00 值与 memTimeLabel「0点=纯日期」约定天然契合）；④内容与时间分开落库（复用既有 updateXxx 与新增 updateXxxTime），避免重写既有编辑函数签名。
 - 不破坏既有功能：三层结构/淡化状态机/权重/互通/隔离/手动总结/视角修复/流式聊天均未改动；过期过滤为增量条件，时间感知核心（AM）行为不变。
+
+---
+Task ID: AUDIT-MEM
+Agent: Z.ai Code (main)
+Task: 记忆系统全量审计（碎片/核心/长期三层）：数据完整性/提取逻辑/新旧冲突/召回注入/角色隔离/用户控制 七维逐项验证 + 修复发现的问题
+
+Work Log:
+- 发现沙箱环境被重置到 Task Q 旧快照（HEAD=141594a，记忆系统源码与 git 对象全部丢失）→ git fetch 后确认 GitHub origin/main=fe11794 完好 → git reset --hard origin/main 恢复全部记忆代码
+- 代码层通读 memory.ts(1264行)/memory-core.ts/extract/summarize 路由/memory-bank.tsx(1690行) 全部时间感知实现
+- agent-browser 隔离会话（400×860）种受控测试数据（c1 机主小晨/c2 角色小雅/c3 隔离对照：7 碎片覆盖全场景 + 3 核心 + 2 长期 + wx 对话）逐项 E2E：
+  · UI 显示：事件时间/过期时间中文标签（9月17日 23:09）、手动/已过期/已更新/已入核心徽标全部正确渲染，过期/已更新卡片沉底
+  · memSweepExpiry：过期碎片进档案页自动落 expiredAt ✓
+  · UI 手动编辑：碎片+核心编辑弹窗 datetime-local 设置事件/过期时间 → 落库 + timeEditedAt + 「手动」徽标 ✓
+  · 防覆盖：stub 提取重复提及手动编辑过的记忆（带新时间）→ 时间未被覆盖仅刷新加强计数 ✓（f-ok/f-manual 双验证）
+  · 时间解析双保险：非法字符串('not-a-date!!')/超±5年('2035-01-01') → null 入库 ✓
+  · 真实 extract API（SDK 兜底）：相对时间「明天下午」按北京时间锚点→2026-09-18 ✓；「减肥」持续状态→expiresAt 置空 eventTime、1-2 周过期 ✓；「生日」周期性→永不过期 ✓
+  · 矛盾更新：stub supersedes → 旧记忆 supersededAt/supersededBy 落库，注入抓包确认不再出现 ✓
+  · 注入抓包（微信端发消息抓 system）：头部当前时间+「时间越近的记忆越可信」提示 ✓；长期/核心/碎片各层按有效时间从新到旧排序 ✓；过期/已更新/已消费/已归档/非本端来源全部过滤 ✓；每条带时间标签（事件时间优先，否则来源时间·App）✓
+  · 互通开关：share=true QQ 来源进微信注入 ✓；share=false 只剩 wx 来源 ✓；恢复 true ✓
+  · 角色隔离：c3 记忆不进 c2 注入 ✓；机主联系人(user kind)不展示/不记记忆 ✓
+  · 视角修复：mem-repair 按钮实测「对方喜欢看电影，用户是程序员」→「小雅喜欢看电影，小晨是程序员」✓
+  · 轮次计数：AI 回复成功落盘后 mem-round+1 ✓（error 分支不计入为合理设计）
+- 发现并修复 P2 问题：extract/route.ts 注释声称「过期不得早于事件时间」但 collect() 未实现校验 → 服务端 collect() 加 etMs/exMs 比较丢弃 ex<et 的 expiresAt；memory.ts normalizeExtract 客户端双保险同款防护；stub 实测 ex<et 组合 expiresAt 被丢、合法组合保留 ✓
+- bunx tsc --noEmit + bun run lint 全绿；测试数据仅存在于 agent-browser 隔离档案随会话关闭丢弃
+
+Stage Summary:
+- 七维审计结论：一~六共 22 项检查全部实测通过（非理论）；唯一代码缺陷（ex<et 未校验）已修复并验证
+- 已知设计边界（未改，如实说明）：①提取时间锚点固定北京时间（服务端 Asia/Shanghai），注入头部当前时间用浏览器本地时区——中国用户一致，其他时区浏览器下两处显示可能差几小时；②手动设置过时间的记忆仍可被矛盾新记忆 supersedes 标「已更新」（时间字段本身不被改写，内容矛盾处理优先）；③核心被长期收编(archivedAt)后其手动过期时间不再生效（由长期代表）
+- 模型日期算术噪声提示：真实提取中「下周六」被某次算成 9-21（应为 9-26）——上游模型能力问题，非系统代码问题，格式/范围/逻辑校验均正常兜底

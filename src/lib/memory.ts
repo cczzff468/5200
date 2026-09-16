@@ -641,8 +641,9 @@ function normalizeExtract(res: ExtractApiResult): ExtractItem[] {
       const item: ExtractItem = { text: o.text.trim(), weight: normalizeWeight(o.weight, o.text) };
       const et = parseMemTime(o.eventTime, now);
       const ex = parseMemTime(o.expiresAt, now);
+      // 双保险：过期时间不得早于事件时间（服务端已校验一次，这里兜底防历史残留/异常数据）
       if (et != null) item.eventTime = et;
-      if (ex != null) item.expiresAt = ex;
+      if (ex != null && (et == null || ex >= et)) item.expiresAt = ex;
       if (Array.isArray(o.supersedes)) {
         const ids = o.supersedes
           .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)

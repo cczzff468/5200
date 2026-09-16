@@ -116,8 +116,11 @@ function collect(parsedFragments: unknown[], nowMs: number, validIds: Set<string
         const item: OutItem = { text: o.text.trim(), weight: normalizeWeight(o.weight, o.text) };
         const et = saneTimeStr(o.eventTime, nowMs);
         const ex = saneTimeStr(o.expiresAt, nowMs);
+        // 过期时间不得早于事件时间（荒谬组合防幻觉）：两者都有效且 ex < et 时丢弃 expiresAt
+        const etMs = et != null ? Date.parse(et.replace(' ', 'T')) : null;
+        const exMs = ex != null ? Date.parse(ex.replace(' ', 'T')) : null;
         if (et) item.eventTime = et;
-        if (ex) item.expiresAt = ex;
+        if (ex && (etMs == null || exMs == null || exMs >= etMs)) item.expiresAt = ex;
         if (Array.isArray(o.supersedes)) {
           const ids = o.supersedes
             .filter((id): id is string => typeof id === 'string' && validIds.has(id))
