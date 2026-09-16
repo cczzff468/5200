@@ -4667,3 +4667,40 @@ Work Log:
 
 Stage Summary:
 - 顶栏区域视觉纯净化：标签背后不再泛灰；Dock 与顶栏玻璃分离定义，选中态对比度不受影响；testid/逻辑零改动
+
+---
+Task ID: AE
+Agent: Z.ai Code (main)
+Task: 记忆库智能化管理四大功能——记忆过期/淡化（失忆程度设置）、去重/合并、优先级/权重、来源追溯
+
+Work Log:
+- 新建 src/lib/memory-core.ts（纯类型+纯逻辑，无浏览器 API，客户端/服务端共用）：
+  · 类型扩展：MemFragment 增 weight（high/normal/low）/reinforcedAt（淡化计时起点）/reinforceCount/sourceMsgId；MemSettings 增 forget（fast≈3天/medium≈2周/slow≈2月/never）
+  · 淡化状态机 fadeState：有效期=失忆天数×权重倍率（low×0.5 先淡化、high×2 更持久，验证「从不重要的记忆开始」）；超一半→fading（召回降权0.4），超满→faded（归档，不召回不参与总结）
+  · 相似度 similarity=2-gram 重叠/较短边（「用户喜欢海边」vs「用户很喜欢去海边」≈0.6 命中；北京/上海出差 ≈0.36 不误伤）；权重自动分类 autoWeight（姓名/关系/承诺/过敏→high；明天/下周/最近在→low）+ normalizeWeight/higherWeight/weightFactor
+- 改造 src/lib/memory.ts（类型转出 memory-core，既有 import 路径全兼容）：
+  · appendFragments 三层去重：精确重复→加强（reinforcedAt/次数刷新）；相似≥0.6→合并（内容取更完整、权重取更高、不新增占位）；全新→建条（LLM 权重优先，缺省 autoWeight）；自动提取与手动总结同路径生效
+  · memDedupeNow 全库两两整理（正本=已入核心者优先/更早创建者，内容取长、次数累加）；reinforceFragment「回忆一下」（重置淡化计时）；archivedFragmentCount
+  · memRecallBlock/memRecallPreview 重排：排除 faded、fading 降权 0.4、得分×权重系数；maybeAutoSummarize/pendingFragmentCount 同步排除已归档；memAfterAiTurn 增 getSourceMsgId 惰性参数（来源消息ID）；memLastMsgId 从原始消息取末条有效 id
+- /api/memory/extract：prompt 要求输出 {text, weight}（high=身份/关系/承诺/禁忌，low=临时安排/近期状态，normal=其余）；解析兼容旧字符串格式（autoWeight 兜底）
+- 四端调用点（chat/wechat/qq/phone）传入 () => memLastMsgId(...)，电话取最后一条 bubble id
+- memory-bank.tsx UI（水墨主题内零彩色新增）：
+  · 碎片卡徽标行：重要（纯黑）/临时（灰）权重徽、淡化中/已归档徽、相对时间（relTime）、来源 #msgId后6位；归档卡 opacity-0.55 沉底、淡化中 0.8
+  · 卡片常驻「回忆一下」图标（RotateCcw，仅淡化/归档显示，testid={id}-reinforce）→ 徽标消失+opacity 恢复+toast
+  · 编辑态权重三选（mem-weight-high/normal/low 胶囊），保存写入 weight
+  · 设置页三新 section：失忆程度（mem-forget-fast/medium/slow/never，说明淡化→归档规则）、整理重复记忆（mem-dedupe，busy 态+toast「合并了 N 条相似记忆」）、召回预览（mem-recall-preview，核心徽标行+权重徽标行，max-h-72 滚动，实时重算）；数据说明增「N 条已归档」
+- lint + tsc 0 问题；Agent Browser E2E（393×852，解锁→双滑→记忆库→n1，种 5 条测试数据）：
+  ①fast 档：8天/10天种子+全部归档徽标、沉底、opacity 0.55、回忆按钮出现；high 种子「重要」+来源 #556677、low 种子「临时」+来源 #def456 ✓
+  ②编辑 ae-sim-a→权重选「重要」→保存：徽标出现+localStorage weight=high ✓
+  ③召回预览排序：核心×2 置顶→重要·生日→重要·喜欢海边→普通；归档/已消费全部排除 ✓
+  ④整理重复记忆：toast「合并了 4 条相似记忆」（16→12，长文本保留、无重复）✓
+  ⑤回忆一下：归档→fresh（徽标消失、opacity 1、reinforcedAt 重置、次数+1）✓
+  ⑥失忆程度联动：fast(两老条全归档)→medium(low 已归档但 normal 仅淡化中 0.8=权重先淡化的直观证明)→slow(全部 fresh) ✓
+  ⑦暗色主题全套截图（归档淡显/单色开关/白按钮/预览）✓；恢复 light ✓
+  ⑧console 0 错误、page errors 空、dev.log 全 200；测试种子清理、forget 恢复 medium
+
+Stage Summary:
+- 记忆库具备完整记忆生命周期：提取（带权重判定+来源消息ID）→ 去重合并（精确/相似双层）→ 淡化（按失忆程度×权重从速到缓）→ 归档（不召回不参与总结，可「回忆一下」救回）→ 召回（权重×相关性×淡化系数排序，设置页可预览）
+- 「你怎么知道的」可答：每条碎片显示来源 App+时间+消息 ID 短码
+- 既有 testid 全保留；新增 testid：mem-forget-{fast|medium|slow|never}、mem-dedupe、mem-recall-preview、mem-weight-{high|normal|low}、{id}-reinforce
+- extract API 返回结构升级为 {text,weight}[]（兼容旧客户端语义）；ui/data 层零迁移成本（旧数据缺字段走默认值）

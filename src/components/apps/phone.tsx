@@ -42,7 +42,7 @@ import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, updateContact } from '@/lib/ios/contacts-store';
-import { memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -594,7 +594,10 @@ function CallScreen({
           ''
         );
         turns.push({ role: 'peer', text: reply });
-        memAfterAiTurn(contact.id, 'phone', apiConfig, () => turns);
+        memAfterAiTurn(contact.id, 'phone', apiConfig, () => turns, () => {
+          const last = historyBefore[historyBefore.length - 1];
+          return last ? String(last.id) : undefined;
+        });
       };
       try {
         const res = await fetch('/api/phone/turn', {

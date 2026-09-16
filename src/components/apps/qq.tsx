@@ -140,7 +140,7 @@ import {
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
-import { memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getQqProfileBg, loginQQ, listContacts, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
@@ -2291,7 +2291,13 @@ function ChatPage({
         // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
         addBondPoints(peer.id, BOND_MSG_POINTS);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）
-        memAfterAiTurn(peer.id, 'qq', apiConfig, () => memConvoFromRaw(loadMsgs(peer.id), peer.name));
+        memAfterAiTurn(
+          peer.id,
+          'qq',
+          apiConfig,
+          () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
+          () => memLastMsgId(loadMsgs(peer.id))
+        );
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

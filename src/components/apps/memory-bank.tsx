@@ -3,15 +3,18 @@
 /**
  * 记忆库 App（跨应用记忆互通管理）——「简约水墨 · 档案卡」视觉主题：
  * 全灰白单色（无任何彩色/渐变）+ hairline 与虚线档案分隔 + 克制毛玻璃（顶栏 / 底部悬浮胶囊 Dock）。
- * 记忆卡：头部时钟时间（碎片）/ 纯黑徽章（核心）+ 右上角常驻编辑/删除图标 + 虚线分隔 + 底部来源徽章；
+ * 记忆卡：头部时钟时间（碎片）/ 纯黑徽章（核心）+ 右上角常驻操作图标（回忆/编辑/删除）+ 虚线分隔 +
+ * 底部来源徽章行（权重/来源 App/淡化状态/相对时间/来源消息 ID）；
  * 列表页：圆角搜索条 + 统计总览 + 联系人档案卡。
  *
  * 功能结构（逻辑与 src/lib/memory.ts 保持一致，本文件只负责呈现）：
  * - 联系人列表（统计总览条 + 每联系人一张档案卡）→ 记忆详情页（三个 Tab）
- * - Tab1 记忆碎片：每 N 轮对话自动提取（内容/来源时间/所属会话），支持查看/编辑/删除
+ * - Tab1 记忆碎片：每 N 轮对话自动提取（内容/来源时间/所属会话），支持查看/编辑/删除；
+ *   权重（重要/普通/临时）可调、淡化状态徽标（淡化中→已归档沉底）、过期可「回忆一下」救回
  * - Tab2 长期记忆（核心记忆）：M 条碎片自动总结（内容/来源碎片数量/生成时间），支持查看/编辑/删除
- * - Tab3 设置：提取频率（10/20/30/40/50 轮）、总结阈值（3/5/7/10 条）、跨 App 互通开关（默认开）、
- *   「立即总结」手动触发（不等 N 轮立刻整理当前对话，区分碎片与长期记忆并提示）
+ * - Tab3 设置：提取频率（10/20/30/40/50 轮）、总结阈值（3/5/7/10 条）、失忆程度（快/中/慢/从不）、
+ *   跨 App 互通开关（默认开）、「立即总结」手动触发、「整理重复记忆」（相似记忆去重合并）、
+ *   「召回预览」（按权重×相关性排序的下次注入记忆）
  * - 数据按联系人 ID 隔离（localStorage 持久化，重启保留）；
  *   互通开 = QQ/微信/信息/电话四端共享该联系人记忆；关 = 各端只用自己来源的记忆
  */
@@ -23,11 +26,13 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Combine,
   Gem,
   Info,
   Layers,
   Loader2,
   Pencil,
+  RotateCcw,
   Search,
   Settings2,
   Share2,
@@ -44,29 +49,52 @@ import { useSettings } from '@/lib/ios/store';
 import {
   DEFAULT_MEM_SETTINGS,
   MEM_APP_LABEL,
+  MEM_FORGET_LABEL,
+  MEM_FORGET_OPTIONS,
   MEM_INTERVAL_OPTIONS,
   MEM_THRESHOLD_OPTIONS,
+  archivedFragmentCount,
   deleteFragment,
   deleteLongTerm,
+  fadeState,
   getMemSettings,
   listFragments,
   listLongTerm,
+  memDedupeNow,
   memMostRecentApp,
+  memRecallPreview,
   memSummarizeNow,
   pendingFragmentCount,
+  reinforceFragment,
   saveMemSettings,
   updateFragment,
   updateLongTerm,
+  type FadeState,
   type MemApp,
+  type MemForget,
   type MemFragment,
   type MemLongTerm,
   type MemSettings,
+  type MemWeight,
 } from '@/lib/memory';
 
 /** 时间戳 → 「9月16日 14:30」 */
 function fmtTime(ts: number): string {
   const d = new Date(ts);
   return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 时间戳 → 相对时间标签「刚刚 / N 分钟前 / N 小时前 / N 天前 / N 个月前」 */
+function relTime(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts);
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const DAY = 24 * HOUR;
+  if (diff < MIN) return '刚刚';
+  if (diff < HOUR) return `${Math.floor(diff / MIN)} 分钟前`;
+  if (diff < DAY) return `${Math.floor(diff / HOUR)} 小时前`;
+  if (diff < 30 * DAY) return `${Math.floor(diff / DAY)} 天前`;
+  return `${Math.floor(diff / (30 * DAY))} 个月前`;
 }
 
 // ---------------- 主题常量（简约水墨：黑白灰 + hairline） ----------------
@@ -373,7 +401,15 @@ function MemoryDetail({
         </div>
 
         <div className="pt-4">
-          {tab === 'frag' && <FragTab contactId={contact.id} frags={frags} refresh={refresh} showToast={showToast} />}
+          {tab === 'frag' && (
+            <FragTab
+              contactId={contact.id}
+              frags={frags}
+              forget={settings.forget}
+              refresh={refresh}
+              showToast={showToast}
+            />
+          )}
           {tab === 'ltm' && <LtmTab contactId={contact.id} ltms={ltms} refresh={refresh} showToast={showToast} />}
           {tab === 'set' && (
             <SetTab
@@ -440,17 +476,54 @@ function ConsumedBadge() {
   );
 }
 
+/** 权重徽标：重要（纯黑）/ 临时（灰）；普通不显示，减少噪音 */
+function WeightBadge({ weight }: { weight: MemWeight }) {
+  if (weight === 'normal') return null;
+  if (weight === 'high') {
+    return (
+      <span className={`rounded-full px-1.5 py-[1px] text-[10.5px] font-semibold ${INK}`}>重要</span>
+    );
+  }
+  return (
+    <span className="rounded-full bg-black/[0.04] px-1.5 py-[1px] text-[10.5px] font-medium text-black/40 dark:bg-white/[0.07] dark:text-white/40">
+      临时
+    </span>
+  );
+}
+
+/** 淡化状态徽标：淡化中（召回降权）/ 已归档（不参与召回） */
+function FadeBadge({ st }: { st: FadeState }) {
+  if (st === 'fresh') return null;
+  return (
+    <span className="rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium text-black/45 dark:bg-white/[0.08] dark:text-white/45">
+      {st === 'fading' ? '淡化中' : '已归档'}
+    </span>
+  );
+}
+
 function FragTab({
   contactId,
   frags,
+  forget,
   refresh,
   showToast,
 }: {
   contactId: string;
   frags: MemFragment[];
+  forget: MemForget;
   refresh: () => void;
   showToast: (m: string) => void;
 }) {
+  const now = Date.now();
+  const withState = useMemo(
+    () => frags.map((f) => ({ f, st: fadeState(f, forget, now) })),
+    [frags, forget, now]
+  );
+  // 已归档沉底，其余保持创建时间倒序
+  const ordered = useMemo(
+    () => [...withState].sort((a, b) => (a.st === 'faded' ? 1 : 0) - (b.st === 'faded' ? 1 : 0)),
+    [withState]
+  );
   if (frags.length === 0) {
     return (
       <EmptyState
@@ -461,12 +534,15 @@ function FragTab({
   }
   return (
     <div className="space-y-2.5">
-      {frags.map((f) => (
+      {ordered.map(({ f, st }) => (
         <MemoryCard
           key={f.id}
           testid={`mem-frag-${f.id}`}
           variant="frag"
           consumed={Boolean(f.consumedAt)}
+          fade={st}
+          weight={f.weight ?? 'normal'}
+          showWeight
           content={f.content}
           header={
             <span className="flex items-center gap-1.5 text-[12px] font-medium tabular-nums text-black/40 dark:text-white/40">
@@ -476,14 +552,27 @@ function FragTab({
           }
           meta={
             <span className="flex flex-wrap items-center gap-1.5">
+              <WeightBadge weight={f.weight ?? 'normal'} />
               <AppBadge app={f.app} />
+              <FadeBadge st={st} />
               {f.consumedAt && <ConsumedBadge />}
+              <span aria-hidden="true">·</span>
+              <span>{relTime(f.reinforcedAt ?? f.sourceTime)}</span>
+              {f.sourceMsgId && (
+                <span className="tabular-nums">· 来源 #{f.sourceMsgId.slice(-6)}</span>
+              )}
             </span>
           }
-          onSave={(text) => {
-            if (updateFragment(contactId, f.id, text)) {
+          onSave={(text, w) => {
+            if (updateFragment(contactId, f.id, text, w)) {
               refresh();
               showToast('碎片已更新');
+            }
+          }}
+          onReinforce={() => {
+            if (reinforceFragment(contactId, f.id)) {
+              refresh();
+              showToast('已回忆，淡化时间已重置');
             }
           }}
           onDelete={() => {
@@ -579,14 +668,31 @@ function SetTab({
   const apiConfig = useSettings((s) => s.apiConfig);
   const [settings, setSettings] = useState<MemSettings>(() => getMemSettings(contactId));
   const [busy, setBusy] = useState(false);
+  const [dedupeBusy, setDedupeBusy] = useState(false);
   const fragCount = listFragments(contactId).length;
   const pending = pendingFragmentCount(contactId);
+  const archived = archivedFragmentCount(contactId);
   const ltmCount = listLongTerm(contactId).length;
+  // 召回预览：每次渲染实时重算（父组件每 5s 轻刷，改动设置后 refresh 会触发重渲）
+  const preview = memRecallPreview(contactId);
 
   const patch = (p: Partial<MemSettings>) => {
     const next = saveMemSettings(contactId, p);
     setSettings(next);
     refresh();
+  };
+
+  /** 整理重复记忆：相似记忆（同一件事的不同说法）合并为一条 */
+  const dedupe = () => {
+    if (dedupeBusy) return;
+    setDedupeBusy(true);
+    // 轻微延时让 busy 态可见，体验更稳
+    window.setTimeout(() => {
+      const n = memDedupeNow(contactId);
+      setDedupeBusy(false);
+      refresh();
+      showToast(n > 0 ? `整理完成：合并了 ${n} 条相似记忆` : '没有发现重复的记忆');
+    }, 350);
   };
 
   /** 立即总结：不等 N 轮，立刻整理当前对话（自动挑该联系人最近活跃的会话） */
@@ -600,11 +706,10 @@ function SetTab({
         return;
       }
       const res = await memSummarizeNow(contactId, recent.app, apiConfig, recent.convo);
-      showToast(
-        res.longTerm > 0
-          ? `总结完成：新增 ${res.fragments} 条碎片，并生成 ${res.longTerm} 条长期记忆`
-          : `总结完成：新增 ${res.fragments} 条记忆碎片`
-      );
+      const parts = [`新增 ${res.fragments} 条碎片`];
+      if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
+      if (res.longTerm > 0) parts.push(`生成 ${res.longTerm} 条长期记忆`);
+      showToast(`总结完成：${parts.join('，')}`);
       refresh();
     } catch (err) {
       showToast(err instanceof Error && err.message ? err.message : '总结失败，请稍后再试');
@@ -667,6 +772,33 @@ function SetTab({
         </div>
       </section>
 
+      {/* 失忆程度 */}
+      <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-forget">
+        <SetSectionHead title="失忆程度" />
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
+          有时效的记忆（如「明天去北京」）会先「淡化」（召回降权）、后「归档」（不再参与召回）：
+          快≈3 天、中≈2 周、慢≈2 个月。从不重要的记忆开始淡化，重要记忆（姓名/关系/承诺）更持久。
+        </p>
+        <div className="mt-3 grid grid-cols-4 gap-1.5">
+          {MEM_FORGET_OPTIONS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={settings.forget === v}
+              data-testid={`mem-forget-${v}`}
+              onClick={() => patch({ forget: v })}
+              className={`rounded-full py-2 text-[14px] font-semibold transition-colors ${
+                settings.forget === v
+                  ? INK
+                  : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/60 dark:active:bg-white/[0.14]'
+              }`}
+            >
+              {MEM_FORGET_LABEL[v]}
+            </button>
+          ))}
+        </div>
+      </section>
+
       {/* 跨 App 互通开关 */}
       <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-share">
         <div className="flex items-start justify-between gap-3">
@@ -704,6 +836,70 @@ function SetTab({
         </button>
       </section>
 
+      {/* 整理重复记忆 */}
+      <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-dedupe">
+        <SetSectionHead title="整理重复记忆" />
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
+          同一件事的不同说法（如「喜欢海边」/「很喜欢去海边」）在提取时会自动合并为一条，避免重复占位；这里可一次性清理全部相似记忆。
+        </p>
+        <button
+          type="button"
+          data-testid="mem-dedupe"
+          onClick={dedupe}
+          disabled={dedupeBusy}
+          className={`mt-3.5 flex h-12 w-full items-center justify-center gap-2 rounded-full text-[16px] font-semibold transition-opacity active:opacity-80 ${INK} ${
+            dedupeBusy ? 'opacity-50' : ''
+          }`}
+        >
+          {dedupeBusy ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <Combine className="h-[18px] w-[18px]" />}
+          {dedupeBusy ? '正在整理…' : '整理重复记忆'}
+        </button>
+      </section>
+
+      {/* 召回预览 */}
+      <section className={`rounded-[18px] p-4 ${CARD_CLS}`} data-testid="mem-set-recall">
+        <SetSectionHead title="召回预览" />
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
+          下次与 TA 聊天时，将按「权重 × 相关性」注入以下记忆（已排除归档；互通关闭时各 App 仅注入自己来源的部分）。
+        </p>
+        <div className="mt-3 max-h-72 space-y-2 overflow-y-auto" data-testid="mem-recall-preview">
+          {preview.ltm.length === 0 && preview.frags.length === 0 ? (
+            <p className="py-4 text-center text-[12.5px] text-black/35 dark:text-white/35">还没有可召回的记忆</p>
+          ) : (
+            <>
+              {preview.ltm.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-start gap-2 rounded-xl bg-black/[0.035] px-2.5 py-2 text-[12.5px] leading-relaxed text-black/70 dark:bg-white/[0.06] dark:text-white/70"
+                >
+                  <span className={`mt-[1px] inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-[1px] text-[10px] font-semibold ${INK}`}>
+                    <Gem aria-hidden="true" className="h-2.5 w-2.5" />
+                    核心
+                  </span>
+                  <span className="min-w-0">{m.content}</span>
+                </div>
+              ))}
+              {preview.frags.map((f) => (
+                <div
+                  key={f.id}
+                  className="flex items-start gap-2 rounded-xl bg-black/[0.035] px-2.5 py-2 text-[12.5px] leading-relaxed text-black/70 dark:bg-white/[0.06] dark:text-white/70"
+                >
+                  {f.weight === 'high' && (
+                    <span className={`mt-[1px] shrink-0 rounded-full px-1.5 py-[1px] text-[10px] font-semibold ${INK}`}>重要</span>
+                  )}
+                  {f.weight === 'low' && (
+                    <span className="mt-[1px] shrink-0 rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10px] font-medium text-black/40 dark:bg-white/[0.08] dark:text-white/40">
+                      临时
+                    </span>
+                  )}
+                  <span className="min-w-0">{f.content}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </section>
+
       {/* 数据说明 */}
       <section
         className="flex gap-2 rounded-[18px] bg-black/[0.04] p-4 text-[12.5px] leading-relaxed text-black/45 dark:bg-white/[0.06] dark:text-white/45"
@@ -712,10 +908,10 @@ function SetTab({
         <Info aria-hidden="true" className="mt-[1px] h-4 w-4 shrink-0 text-black/30 dark:text-white/30" />
         <div>
           <p>
-            当前联系人：{fragCount} 条碎片（{pending} 条待总结）· {ltmCount} 条核心记忆
+            当前联系人：{fragCount} 条碎片（{pending} 条待总结{archived > 0 ? ` · ${archived} 条已归档` : ''}）· {ltmCount} 条核心记忆
           </p>
           <p className="mt-1">
-            记忆按联系人独立存储、跨重启保留；删除联系人时其全部记忆一并删除。默认设置：每 {DEFAULT_MEM_SETTINGS.interval} 轮提取、{DEFAULT_MEM_SETTINGS.threshold} 条碎片总结一次、互通开启。
+            记忆按联系人独立存储、跨重启保留；删除联系人时其全部记忆一并删除。默认设置：每 {DEFAULT_MEM_SETTINGS.interval} 轮提取、{DEFAULT_MEM_SETTINGS.threshold} 条碎片总结一次、互通开启、失忆程度「中」。
           </p>
         </div>
       </section>
@@ -763,51 +959,90 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
   );
 }
 
-/** 记忆卡片（档案风）：头部时间/徽章 + 右上角常驻编辑/删除 + 虚线分隔 + 底部来源徽章。
- * - frag：头部时钟时间；已入核心的碎片淡显
+/** 记忆卡片（档案风）：头部时间/徽章 + 右上角常驻操作图标 + 虚线分隔 + 底部来源徽章行。
+ * - frag：头部时钟时间；权重徽标 + 淡化状态 + 相对时间 + 来源消息 ID；过期可「回忆一下」；
+ *   编辑态可调权重（重要/普通/临时）
  * - ltm：头部纯黑「核心记忆」徽章
+ * - 透明度取「淡化/消费」更淡的一档：已归档 0.55 > 淡化中 0.8 > 已入核心 0.72
  */
 function MemoryCard({
   variant,
   consumed = false,
+  fade = 'fresh',
+  weight = 'normal',
+  showWeight = false,
   content,
   header,
   meta,
   testid,
   onSave,
   onDelete,
+  onReinforce,
 }: {
   variant: 'frag' | 'ltm';
   /** 仅 frag：已被长期记忆总结消费 */
   consumed?: boolean;
+  /** 淡化状态：fading=淡化中（半淡显），faded=已归档（沉底淡显） */
+  fade?: FadeState;
+  /** 仅 frag：记忆权重（编辑态可调） */
+  weight?: MemWeight;
+  /** 编辑态是否显示权重选择 */
+  showWeight?: boolean;
   content: string;
   /** 头部左侧：碎片=时钟时间，核心=黑徽章 */
   header: React.ReactNode;
   /** 底部来源徽章 / 元信息 */
   meta: React.ReactNode;
   testid: string;
-  onSave: (text: string) => void;
+  onSave: (text: string, weight: MemWeight) => void;
   onDelete: () => void;
+  /** 仅 frag：淡化中/已归档时显示「回忆一下」 */
+  onReinforce?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
+  const [editWeight, setEditWeight] = useState<MemWeight>(weight);
   const [confirmDel, setConfirmDel] = useState(false);
 
+  const dimCls =
+    fade === 'faded'
+      ? 'opacity-[0.55]'
+      : fade === 'fading'
+        ? 'opacity-[0.8]'
+        : consumed
+          ? 'opacity-[0.72]'
+          : '';
+
+  const weightOptions: [MemWeight, string][] = [
+    ['high', '重要'],
+    ['normal', '普通'],
+    ['low', '临时'],
+  ];
+
   return (
-    <div
-      data-testid={testid}
-      className={`rounded-[20px] p-4 ${CARD_CLS} ${variant === 'frag' && consumed ? 'opacity-[0.72]' : ''}`}
-    >
-      {/* 头部：时间/徽章 + 常驻编辑删除图标 */}
+    <div data-testid={testid} className={`rounded-[20px] p-4 ${CARD_CLS} ${dimCls}`}>
+      {/* 头部：时间/徽章 + 常驻操作图标 */}
       <div className="flex min-h-8 items-center justify-between gap-2">
         {header}
         {!editing && (
           <div className="-mr-1.5 flex items-center">
+            {fade !== 'fresh' && onReinforce && (
+              <button
+                type="button"
+                aria-label="回忆一下"
+                data-testid={`${testid}-reinforce`}
+                onClick={onReinforce}
+                className="grid h-8 w-8 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
+              >
+                <RotateCcw className="h-[15px] w-[15px]" strokeWidth={1.8} />
+              </button>
+            )}
             <button
               type="button"
               aria-label="编辑记忆"
               onClick={() => {
                 setDraft(content);
+                setEditWeight(weight);
                 setEditing(true);
               }}
               className="grid h-8 w-8 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
@@ -839,6 +1074,27 @@ function MemoryCard({
             aria-label="编辑记忆内容"
             className="w-full resize-none rounded-xl bg-black/[0.04] p-2.5 text-[14.5px] leading-relaxed outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40"
           />
+          {showWeight && (
+            <div className="mt-2 flex items-center gap-1.5">
+              <span className="text-[11.5px] text-black/40 dark:text-white/40">权重</span>
+              {weightOptions.map(([w, label]) => (
+                <button
+                  key={w}
+                  type="button"
+                  aria-pressed={editWeight === w}
+                  data-testid={`mem-weight-${w}`}
+                  onClick={() => setEditWeight(w)}
+                  className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors ${
+                    editWeight === w
+                      ? INK
+                      : 'bg-black/[0.05] text-black/55 active:bg-black/[0.1] dark:bg-white/[0.08] dark:text-white/55 dark:active:bg-white/[0.14]'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="mt-2 flex justify-end gap-2">
             <button
               type="button"
@@ -855,7 +1111,7 @@ function MemoryCard({
               data-testid={`${testid}-save`}
               onClick={() => {
                 const t = draft.trim();
-                if (t) onSave(t);
+                if (t) onSave(t, editWeight);
                 setEditing(false);
               }}
               className={`flex items-center gap-1 rounded-full px-3.5 py-1.5 text-[13.5px] font-medium active:opacity-80 ${INK}`}

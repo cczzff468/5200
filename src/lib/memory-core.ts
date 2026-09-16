@@ -1,0 +1,170 @@
+/**
+ * 记忆库 · 纯数据类型与纯逻辑（无浏览器 API，客户端/服务端路由均可安全导入）。
+ * 存储与管线在 src/lib/memory.ts；本文件只放「可共享的记忆模型」：
+ * - 类型：MemFragment / MemLongTerm / MemSettings / 权重 / 失忆程度
+ * - 淡化状态机：fresh（新鲜）→ fading（淡化中，召回降权）→ faded（已归档，不参与召回）
+ * - 权重自动分类：姓名/关系/承诺/健康禁忌 → high；临时安排/近期状态 → low；其余 normal
+ * - 相似度：字符 2-gram 最短边归一化（「用户喜欢海边」≈「用户很喜欢去海边」可判同）
+ */
+
+// ---------------- 基础类型 ----------------
+
+export type MemApp = 'wx' | 'qq' | 'sms' | 'phone';
+
+export const MEM_APP_LABEL: Record<MemApp, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
+
+/** 记忆权重：高（身份/关系/承诺/禁忌）/ 普通 / 低（临时安排、近期状态，最先淡化） */
+export type MemWeight = 'high' | 'normal' | 'low';
+
+/** 失忆程度：快≈3天 / 中≈2周 / 慢≈2个月 / 从不 */
+export type MemForget = 'fast' | 'medium' | 'slow' | 'never';
+
+export const MEM_FORGET_OPTIONS: MemForget[] = ['fast', 'medium', 'slow', 'never'];
+export const MEM_FORGET_LABEL: Record<MemForget, string> = { fast: '快', medium: '中', slow: '慢', never: '从不' };
+export const MEM_FORGET_DAYS: Record<Exclude<MemForget, 'never'>, number> = { fast: 3, medium: 14, slow: 60 };
+
+/** 记忆碎片：每 N 轮对话（或手动总结）提取的一条「事实/偏好/承诺」 */
+export interface MemFragment {
+  id: string;
+  contactId: string;
+  /** 来源会话（哪个 App 的对话提取出来的） */
+  app: MemApp;
+  content: string;
+  /** 来源时间：提取时对话最后一条消息的时间 */
+  sourceTime: number;
+  createdAt: number;
+  /** 手动编辑过的时间（编辑后不再被自动流程改写） */
+  editedAt?: number;
+  /** 已被长期记忆总结消费（召回时由长期记忆代表，避免重复注入） */
+  consumedAt?: number;
+  /** 权重（召回排序用；高权重召回优先、淡化更慢，低权重最先淡化）。缺省按内容自动分类 */
+  weight?: MemWeight;
+  /** 最近一次被「加强」的时间：重复提及/合并相似记忆/手动回忆都会刷新；淡化计时起点 */
+  reinforcedAt?: number;
+  /** 被重复提及/合并的次数（重复出现的记忆更可信） */
+  reinforceCount?: number;
+  /** 来源消息 ID（追溯：这条记忆来自哪次对话的哪条消息） */
+  sourceMsgId?: string;
+}
+
+/** 长期记忆：M 条碎片自动总结出的一条核心记忆 */
+export interface MemLongTerm {
+  id: string;
+  contactId: string;
+  content: string;
+  /** 来源碎片数量 */
+  fragmentCount: number;
+  /** 来源碎片 id（详情/审计用） */
+  sourceIds: string[];
+  /** 来源 App 集合（互通关闭时召回过滤用） */
+  apps: MemApp[];
+  createdAt: number;
+  editedAt?: number;
+}
+
+/** 每联系人记忆设置 */
+export interface MemSettings {
+  /** 对话总结频率：每隔多少轮对话自动提取一次记忆碎片 */
+  interval: 10 | 20 | 30 | 40 | 50;
+  /** 长期记忆总结频率：积累多少个（未消费的）记忆碎片后自动触发核心总结 */
+  threshold: 3 | 5 | 7 | 10;
+  /** 跨 App 互通记忆（默认开）：开=四端共享，关=各 App 只用自己来源的记忆 */
+  share: boolean;
+  /** 失忆程度（默认中）：过期记忆先淡化后归档，不再参与召回；从不重要的记忆开始 */
+  forget: MemForget;
+}
+
+export const DEFAULT_MEM_SETTINGS: MemSettings = { interval: 20, threshold: 5, share: true, forget: 'medium' };
+
+export const MEM_INTERVAL_OPTIONS: MemSettings['interval'][] = [10, 20, 30, 40, 50];
+export const MEM_THRESHOLD_OPTIONS: MemSettings['threshold'][] = [3, 5, 7, 10];
+
+/** 对话轮次（供提取器使用的一问一答文本） */
+export interface MemConvoTurn {
+  role: 'me' | 'peer';
+  text: string;
+}
+
+// ---------------- 权重 ----------------
+
+/** 权重系数：召回得分乘数 & 淡化有效期倍率（高权重更持久、低权重先淡化） */
+export function weightFactor(w?: MemWeight): number {
+  return w === 'high' ? 2 : w === 'low' ? 0.5 : 1;
+}
+
+/** 权重取高：合并记忆时保留更重要的一档 */
+export function higherWeight(a?: MemWeight, b?: MemWeight): MemWeight {
+  const rank = (w?: MemWeight) => (w === 'high' ? 2 : w === 'low' ? 0 : 1);
+  return rank(a) >= rank(b) ? (a ?? 'normal') : (b ?? 'normal');
+}
+
+const HIGH_PAT =
+  /(生日|纪念|结婚|订婚|离婚|老婆|老公|女友|女朋友|男友|男朋友|对象|未婚|妻子|丈夫|女儿|儿子|孩子|弟弟|妹妹|哥哥|姐姐|父母|爸妈|爸爸|妈妈|家人|爷爷|奶奶|外婆|外公|名字|姓名|叫.{0,4}(吗|么|呢)|承诺|答应|保证|约定|说好|欠|过敏|忌口|不能吃|病史|住院|手术|药)/;
+const LOW_PAT =
+  /(明天|后天|大后天|下周|下星期|下个月|月底|今晚|今天晚|这几天|近期|最近在|正在减|暂时|临时|可能|也许|大概|说不定|先不|试试|考虑)/;
+
+/** 关键词自动分类（LLM 未返回权重时的兜底）：姓名/关系/承诺/健康 → high；临时/近期 → low */
+export function autoWeight(text: string): MemWeight {
+  if (HIGH_PAT.test(text)) return 'high';
+  if (LOW_PAT.test(text)) return 'low';
+  return 'normal';
+}
+
+/** 归一化模型返回的权重（非法值回落自动分类） */
+export function normalizeWeight(w: unknown, text: string): MemWeight {
+  return w === 'high' || w === 'low' || w === 'normal' ? w : autoWeight(text);
+}
+
+// ---------------- 淡化状态机 ----------------
+
+export type FadeState = 'fresh' | 'fading' | 'faded';
+
+/** 淡化计时输入：取「最近被加强的时间」，没有则回落来源时间/创建时间 */
+export interface FadeInput {
+  reinforcedAt?: number;
+  sourceTime?: number;
+  createdAt?: number;
+  weight?: MemWeight;
+}
+
+/**
+ * 记忆淡化状态：
+ * - 有效期 = 失忆程度天数 × 权重倍率（low ×0.5 先淡化，high ×2 更持久，never = 永不）
+ * - 超过有效期一半 → fading（淡化中：召回降权 0.4，UI 半淡显）
+ * - 超过有效期 → faded（已归档：不再参与召回/总结，UI 沉底淡显，可「回忆一下」救回）
+ */
+export function fadeState(m: FadeInput, forget: MemForget, now: number = Date.now()): FadeState {
+  if (forget === 'never') return 'fresh';
+  const days = MEM_FORGET_DAYS[forget] * weightFactor(m.weight);
+  const base = m.reinforcedAt ?? m.sourceTime ?? m.createdAt ?? now;
+  const ageDays = (now - base) / 86_400_000;
+  if (ageDays >= days) return 'faded';
+  if (ageDays >= days * 0.5) return 'fading';
+  return 'fresh';
+}
+
+// ---------------- 相似度（去重合并） ----------------
+
+/** 字符 2-gram 集合（中文友好轻量相关性） */
+export function bigrams(s: string): Set<string> {
+  const t = s.replace(/\s+/g, '');
+  const out = new Set<string>();
+  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));
+  return out;
+}
+
+/** 相似度：重叠 gram 数 / 较短边 gram 数（0-1）。≥0.6 视为「同一事实的不同说法」 */
+export function similarity(a: string, b: string): number {
+  const ga = bigrams(a);
+  const gb = bigrams(b);
+  const min = Math.min(ga.size, gb.size);
+  if (min === 0) return 0;
+  let n = 0;
+  ga.forEach((g) => {
+    if (gb.has(g)) n++;
+  });
+  return n / min;
+}
+
+/** 相似合并阈值：例「用户喜欢海边」vs「用户很喜欢去海边」≈0.6 命中；不同事实（北京/上海）≈0.36 不命中 */
+export const SIMILAR_MERGE_THRESHOLD = 0.6;

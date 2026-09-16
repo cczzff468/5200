@@ -39,7 +39,7 @@ import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
-import { memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
@@ -629,7 +629,14 @@ function ChatView({
         });
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）
-        if (memContactId) memAfterAiTurn(memContactId, 'sms', apiConfig, () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''));
+        if (memContactId)
+          memAfterAiTurn(
+            memContactId,
+            'sms',
+            apiConfig,
+            () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
+            () => memLastMsgId(loadMsgs(storageKey) ?? [])
+          );
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
