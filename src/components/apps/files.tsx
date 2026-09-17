@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { ReadTagsOptions } from 'jsmediatags';
 import {
   CalendarDays,
   ChevronRight,
@@ -13,11 +14,13 @@ import {
   Music2,
   Pause,
   Play,
+  Plus,
   Trash2,
   X,
 } from 'lucide-react';
 import {
   localDB,
+  genId,
   formatDuration,
   type PhotoRecord,
   type RecordingRecord,
@@ -26,25 +29,38 @@ import {
   type CalendarEventRecord,
   type ReminderRecord,
 } from '@/lib/ios/db';
-import { IOSNavBar, IOSBackButton } from '@/components/ios/IOSNavBar';
+import { IOSNavBar, IOSBackButton, IOSTextButton } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 
 /**
  * 文件 App：
  * - 根级页：我的 iPhone / 存储空间卡（navigator.storage.estimate）/ 6 个资料库统计
  * - 二级页：各资料库条目列表（照片缩略图+大图预览、录音/音乐点按播放、备忘录只读全文、事件/提醒标题+日期）
- * - 数据只读统计 + 单条删除经 localDB.delete，不写其他任何 store
+ * - 添加能力：照片/录音/音乐库右上角「+」从设备导入文件（音频自动读时长，音乐另读 ID3 标签与封面）；
+ *   备忘录/日历事件/提醒库「+」新建表单，写入同一 IndexedDB store —— 照片/音乐/备忘录/日历/提醒
+ *   各原 App 直接展示这些数据，单条删除经 localDB.delete
  */
 
 type LibKey = 'photos' | 'recordings' | 'music' | 'notes' | 'events' | 'reminders';
 
-const LIBS: { key: LibKey; name: string; icon: typeof ImageIcon; empty: string }[] = [
-  { key: 'photos', name: '照片', icon: ImageIcon, empty: '没有照片' },
-  { key: 'recordings', name: '录音', icon: Mic, empty: '没有录音' },
-  { key: 'music', name: '音乐', icon: Music2, empty: '没有音乐' },
-  { key: 'notes', name: '备忘录', icon: FileText, empty: '没有备忘录' },
-  { key: 'events', name: '日历事件', icon: CalendarDays, empty: '没有事件' },
-  { key: 'reminders', name: '提醒', icon: CircleCheck, empty: '没有提醒' },
+type SheetKind = 'note' | 'event' | 'reminder';
+
+const LIBS: {
+  key: LibKey;
+  name: string;
+  icon: typeof ImageIcon;
+  empty: string;
+  /** 可导入文件时的 accept（照片/录音/音乐） */
+  accept?: string;
+  /** 可新建表单时的类型（备忘录/事件/提醒） */
+  form?: SheetKind;
+}[] = [
+  { key: 'photos', name: '照片', icon: ImageIcon, empty: '没有照片', accept: 'image/*' },
+  { key: 'recordings', name: '录音', icon: Mic, empty: '没有录音', accept: 'audio/*' },
+  { key: 'music', name: '音乐', icon: Music2, empty: '没有音乐', accept: 'audio/*' },
+  { key: 'notes', name: '备忘录', icon: FileText, empty: '没有备忘录', form: 'note' },
+  { key: 'events', name: '日历事件', icon: CalendarDays, empty: '没有事件', form: 'event' },
+  { key: 'reminders', name: '提醒', icon: CircleCheck, empty: '没有提醒', form: 'reminder' },
 ];
 
 function pad2(n: number): string {
@@ -67,6 +83,97 @@ function formatPct(p: number): string {
   if (!Number.isFinite(p) || p <= 0) return '0';
   if (p < 0.1) return '<0.1';
   return String(parseFloat(p.toFixed(1)));
+}
+
+/** 去扩展名（音乐导入兜底标题） */
+function stripExt(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(0, i) : name;
+}
+
+/** 本地时区今天的 YYYY-MM-DD（date input 值） */
+function toInputDate(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** 用临时 Audio 元素读取音频时长（秒），失败/超时回退 0 */
+function readAudioDuration(blob: Blob): Promise<number> {
+  return new Promise((resolve) => {
+    const el = document.createElement('audio');
+    const url = URL.createObjectURL(blob);
+    let settled = false;
+    const finish = (d: number) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(d);
+    };
+    const timer = window.setTimeout(() => finish(0), 10000);
+    el.addEventListener('loadedmetadata', () => {
+      window.clearTimeout(timer);
+      finish(Number.isFinite(el.duration) ? el.duration : 0);
+    });
+    el.addEventListener('error', () => {
+      window.clearTimeout(timer);
+      finish(0);
+    });
+    el.src = url;
+  });
+}
+
+interface ParsedTags {
+  title?: string;
+  artist?: string;
+  album?: string;
+  picture?: Blob;
+}
+
+/** 动态 import jsmediatags 读 ID3 标签与封面（与音乐 App 同款，失败回退空标签） */
+async function readId3Tags(file: File): Promise<ParsedTags> {
+  try {
+    const mod = await import('jsmediatags/dist/jsmediatags.min.js');
+    const readFn = mod.default?.read ?? mod.read;
+    if (typeof readFn !== 'function') return {};
+    return await new Promise<ParsedTags>((resolve) => {
+      const timer = window.setTimeout(() => resolve({}), 6000);
+      const options: ReadTagsOptions = {
+        file,
+        onSuccess: (result) => {
+          window.clearTimeout(timer);
+          const tags = result.tags ?? {};
+          let picture: Blob | undefined;
+          const pic = tags.picture;
+          if (pic && Array.isArray(pic.data) && pic.data.length > 0) {
+            picture = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
+          }
+          resolve({ title: tags.title, artist: tags.artist, album: tags.album, picture });
+        },
+        onError: () => {
+          window.clearTimeout(timer);
+          resolve({});
+        },
+      };
+      readFn(options);
+    });
+  } catch {
+    return {};
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** 纯文本 → 备忘录 HTML（每行一个 <p>，与备忘录 App 的 contenteditable 产出兼容） */
+function textToHtml(s: string): string {
+  const lines = s.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.length === 1 && lines[0].trim() === '') return '';
+  return lines.map((l) => `<p>${escapeHtml(l) || '<br>'}</p>`).join('');
 }
 
 function dateLabel(ts: number): string {
@@ -267,6 +374,194 @@ function ItemRow({
 
 // ---------------- 二级资料库页 ----------------
 
+/** 新建表单层的 iOS 风格输入行 */
+function FormRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-3 px-4 py-2.5">
+      <span className="w-[72px] shrink-0 text-[15px] text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1">{children}</span>
+    </label>
+  );
+}
+
+const formInputCls =
+  'min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted-foreground/50';
+
+/** 新建表单层（备忘录/日历事件/提醒）：iOS 模态，保存写入对应 store */
+function FormSheet({
+  kind,
+  name,
+  onCancel,
+  onSaved,
+}: {
+  kind: SheetKind;
+  name: string;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [date, setDate] = useState(() => toInputDate(new Date()));
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [note, setNote] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [dueTime, setDueTime] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      if (kind === 'note') {
+        const rec: NoteRecord = {
+          id: genId(),
+          title: title.trim() || '新备忘录',
+          content: textToHtml(body),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          category: '',
+        };
+        await localDB.put('notes', rec);
+      } else if (kind === 'event') {
+        const rec: CalendarEventRecord = {
+          id: genId(),
+          title: title.trim() || '无标题事件',
+          date: date || toInputDate(new Date()),
+          startTime,
+          endTime,
+          note,
+          createdAt: Date.now(),
+        };
+        await localDB.put('events', rec);
+      } else {
+        const rec: ReminderRecord = {
+          id: genId(),
+          title: title.trim() || '未命名提醒',
+          notes: note,
+          completed: false,
+          flagged: false,
+          dueDate,
+          dueTime,
+          createdAt: Date.now(),
+          completedAt: null,
+        };
+        await localDB.put('reminders', rec);
+      }
+      onSaved();
+    } catch {
+      /* IndexedDB 不可用等：留在表单层（用户可重试或取消） */
+      setSaving(false);
+    }
+  }
+
+  const titlePlaceholder =
+    kind === 'note' ? '标题（默认“新备忘录”）' : kind === 'event' ? '标题（默认“无标题事件”）' : '标题（默认“未命名提醒”）';
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-background">
+      <IOSNavBar
+        title={`新建${name.replace('库', '')}`}
+        large={false}
+        left={<IOSBackButton label="取消" onClick={onCancel} />}
+        right={<IOSTextButton onClick={() => void save()}>存储</IOSTextButton>}
+      />
+      <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-[40px] pt-2">
+        <div className="divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+          <FormRow label="标题">
+            <input
+              className={formInputCls}
+              value={title}
+              placeholder={titlePlaceholder}
+              onChange={(e) => setTitle(e.target.value)}
+              data-testid="files-form-title"
+            />
+          </FormRow>
+
+          {kind === 'note' && (
+            <div className="px-4 py-2.5">
+              <textarea
+                className="min-h-[180px] w-full resize-none bg-transparent text-[16px] leading-relaxed outline-none placeholder:text-muted-foreground/50"
+                value={body}
+                placeholder="正文（可换行）"
+                onChange={(e) => setBody(e.target.value)}
+                data-testid="files-form-body"
+              />
+            </div>
+          )}
+
+          {kind === 'event' && (
+            <>
+              <FormRow label="日期">
+                <input type="date" className={formInputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+              </FormRow>
+              <FormRow label="开始">
+                <input
+                  type="time"
+                  className={formInputCls}
+                  value={startTime}
+                  placeholder="留空为全天"
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+              </FormRow>
+              <FormRow label="结束">
+                <input type="time" className={formInputCls} value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+              </FormRow>
+              <FormRow label="备注">
+                <input
+                  className={formInputCls}
+                  value={note}
+                  placeholder="可选"
+                  onChange={(e) => setNote(e.target.value)}
+                />
+              </FormRow>
+            </>
+          )}
+
+          {kind === 'reminder' && (
+            <>
+              <FormRow label="截止日期">
+                <input
+                  type="date"
+                  className={formInputCls}
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                />
+              </FormRow>
+              <FormRow label="截止时间">
+                <input
+                  type="time"
+                  className={formInputCls}
+                  value={dueTime}
+                  placeholder="可选"
+                  onChange={(e) => setDueTime(e.target.value)}
+                />
+              </FormRow>
+              <FormRow label="备注">
+                <input
+                  className={formInputCls}
+                  value={note}
+                  placeholder="可选"
+                  onChange={(e) => setNote(e.target.value)}
+                />
+              </FormRow>
+            </>
+          )}
+        </div>
+        <p className="px-1 pt-3 text-[12px] leading-relaxed text-muted-foreground">
+          保存后可在对应的{kind === 'note' ? '备忘录' : kind === 'event' ? '日历' : '提醒事项'}应用中查看与编辑。
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function LibraryView({
   lib,
   name,
@@ -293,6 +588,12 @@ function LibraryView({
   const [openNoteId, setOpenNoteId] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
+  // 添加能力：导入文件 / 新建表单
+  const [reloadTick, setReloadTick] = useState(0);
+  const [importing, setImporting] = useState<{ done: number; total: number } | null>(null);
+  const [sheet, setSheet] = useState<SheetKind | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const meta = LIBS.find((l) => l.key === lib) ?? LIBS[0];
   const count =
     lib === 'photos'
@@ -307,9 +608,12 @@ function LibraryView({
               ? events.length
               : reminders.length;
 
-  // 初次加载（await 之后再 setState），照片同时生成 ObjectURL
+  // 加载列表（await 之后再 setState），照片同时生成 ObjectURL；添加/删除后 reloadTick 触发重载
   useEffect(() => {
     let alive = true;
+    // 重载前回收上一轮照片 ObjectURL（避免泄漏）
+    for (const url of Object.values(urlMapRef.current)) URL.revokeObjectURL(url);
+    urlMapRef.current = {};
     void (async () => {
       try {
         switch (lib) {
@@ -370,7 +674,7 @@ function LibraryView({
     return () => {
       alive = false;
     };
-  }, [lib]);
+  }, [lib, reloadTick]);
 
   // 卸载清理：回收全部照片 ObjectURL 并停止播放
   useEffect(() => {
@@ -429,6 +733,61 @@ function LibraryView({
     onChanged();
   }
 
+  /** 添加入口：可导入库弹文件选择器，表单库打开新建层 */
+  function handleAddTap() {
+    if (meta.accept) {
+      fileInputRef.current?.click();
+      return;
+    }
+    if (meta.form) setSheet(meta.form);
+  }
+
+  /** 添加/导入成功后的公共收尾：重载列表 + 刷新根级统计 */
+  function afterChange() {
+    setSheet(null);
+    setReloadTick((t) => t + 1);
+    onChanged();
+  }
+
+  /** 从设备导入文件（可多选）：照片直接入库；录音/音乐先读时长，音乐另读 ID3 标签 */
+  async function handleImport(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    setImporting({ done: 0, total: files.length });
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (lib === 'photos') {
+          const rec: PhotoRecord = { id: genId(), blob: file, name: file.name, createdAt: Date.now() };
+          await localDB.put('photos', rec);
+        } else if (lib === 'recordings') {
+          const duration = await readAudioDuration(file);
+          const rec: RecordingRecord = { id: genId(), blob: file, name: file.name, duration, createdAt: Date.now() };
+          await localDB.put('recordings', rec);
+        } else if (lib === 'music') {
+          const [duration, tags] = await Promise.all([readAudioDuration(file), readId3Tags(file)]);
+          const rec: MusicRecord = {
+            id: genId(),
+            blob: file,
+            name: file.name,
+            title: tags.title?.trim() || stripExt(file.name),
+            artist: tags.artist?.trim() || '未知歌手',
+            album: tags.album?.trim() || '',
+            cover: tags.picture ?? null,
+            duration,
+            createdAt: Date.now(),
+          };
+          await localDB.put('music', rec);
+        }
+        setImporting({ done: i + 1, total: files.length });
+      }
+    } catch {
+      /* 单文件失败不中断其余导入 */
+    }
+    setImporting(null);
+    afterChange();
+  }
+
   const openNote = openNoteId ? (notes.find((n) => n.id === openNoteId) ?? null) : null;
   const previewUrl = previewId ? (photoUrls[previewId] ?? null) : null;
   const previewName = previewId ? (photos.find((p) => p.id === previewId)?.name ?? '照片') : '';
@@ -436,7 +795,37 @@ function LibraryView({
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
       <div className="no-scrollbar flex-1 overflow-y-auto">
-        <IOSNavBar title={name} large={false} left={<IOSBackButton label="文件" onClick={onBack} />} />
+        <IOSNavBar
+          title={name}
+          large={false}
+          left={<IOSBackButton label="文件" onClick={onBack} />}
+          right={
+            (meta.accept || meta.form) && !importing ? (
+              <button
+                type="button"
+                aria-label={`添加到${name}`}
+                data-testid={`files-add-${lib}`}
+                onClick={handleAddTap}
+                className="rounded-full p-1 transition-opacity active:opacity-50"
+              >
+                <Plus className="h-6 w-6" strokeWidth={2} />
+              </button>
+            ) : undefined
+          }
+        />
+        {/* 隐藏文件选择器（照片/录音/音乐导入） */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={meta.accept}
+          multiple
+          hidden
+          onChange={(e) => {
+            const files = e.target.files;
+            void handleImport(files);
+            e.target.value = '';
+          }}
+        />
 
         <div className="px-4 pb-[40px] pt-1">
           {loaded && count === 0 ? (
@@ -573,6 +962,18 @@ function LibraryView({
         </div>
       )}
 
+      {/* 导入进度提示（照片/录音/音乐多文件导入） */}
+      {importing && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-[44px]">
+          <div className="rounded-full bg-foreground/90 px-4 py-1.5 text-[13px] font-medium text-background shadow-lg">
+            正在导入 {importing.done}/{importing.total}…
+          </div>
+        </div>
+      )}
+
+      {/* 新建表单层（备忘录/日历事件/提醒） */}
+      {sheet && <FormSheet kind={sheet} name={name} onCancel={() => setSheet(null)} onSaved={afterChange} />}
+
       {/* 备忘录只读全文层 */}
       {openNote && (
         <div className="absolute inset-0 z-40 flex flex-col bg-background">
@@ -695,7 +1096,7 @@ export default function FilesApp() {
         </div>
 
         <div className="px-8 pb-[40px] pt-4 text-center text-[12px] leading-relaxed text-muted-foreground">
-          文件应用展示所有本地数据，由各应用创建并存储于 IndexedDB。
+          照片、录音、音乐可从右上角「+」导入设备文件；备忘录、日历事件、提醒可在此新建，与各应用数据互通。
         </div>
       </div>
     </div>

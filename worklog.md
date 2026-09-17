@@ -5148,3 +5148,27 @@ Stage Summary:
 - 审计结论：迁移主体（10 组模块）完整性/幂等/写穿统一/隔离/清理全部实测通过；发现并修复 2 个边界缺陷（降级注水缺失、迁移覆盖窗口），修复后复测通过
 - 如实说明的边界：①多标签页并发写各自内存缓存互不可见（单手机仿真场景，旧实现同样无跨标签同步）；②kv 无二级索引，按前缀约定隔离+内存 Map 过滤（键数=联系人×~10 量级，全量注水 getAll 开销可接受；消息表无分页但有 100/200 条切片上限兜底）；③聊天消息整键 put 存在写放大（每次全量序列化数组，旧 localStorage 实现相同，未恶化）；④完整降级 UI 因 contacts 存 IndexedDB 而受限（登录不可用），降级保命范围=已迁移键数据不丢不阻 UI；⑤非可提取密钥防「文件泄露」，同源脚本仍可解密（纯前端方案理论上限）
 - 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无错误；改动仅 src/lib/ios/idb-kv.ts（+worklog）
+
+---
+Task ID: FILES-ADD
+Agent: Z.ai Code (main)
+Task: 文件 App 补全「添加」能力（照片/录音/音乐导入文件 + 备忘录/日历事件/提醒新建表单）
+
+Work Log:
+- 改造 src/components/apps/files.tsx（原为纯只读：6 资料库统计+单条删除）：
+  ①照片/录音/音乐库二级页右上角「+」→ 隐藏 file input（accept image/*/audio/*，multiple）从设备导入；照片直接入 photos store，录音/音乐先经临时 Audio 读时长（10s 超时兜底 0），音乐另动态 import jsmediatags 读 ID3 标题/歌手/专辑/封面（失败回退去扩展名标题+未知歌手），与音乐 App 同款逻辑
+  ②备忘录/日历事件/提醒库「+」→ iOS 风格 FormSheet 新建表单（标题/正文或日期时间/备注行式布局，date/time 原生控件，事件日期默认今天、开始留空=全天）；备忘录纯文本经 escapeHtml+逐行 <p> 转 HTML（防 XSS，与备忘录 App contenteditable 产出兼容）；保存写入 notes/events/reminders store
+  ③保存/导入后 reloadTick 触发列表重载（照片 ObjectURL 先回收再重建防泄漏）+ onChanged 刷新根级统计；导入中显示「正在导入 i/n…」进度胶囊；底部文案同步更新
+- E2E 实测（agent-browser，DataTransfer 注入文件绕过原生选择器）：
+  ①照片导入 2 张（项目图标+canvas 生成图）→ 列表缩略图/文件名/大小/时间正确，根级统计 2 项 ✅
+  ②录音导入 JS 生成 1 秒正弦波 WAV → 时长 0:01 正确读出 ✅
+  ③音乐导入同名 WAV → 标题「我的新歌」（stripExt 生效）/未知歌手/0:01/16KB ✅
+  ④新建备忘录「购物清单」（正文含 <b> 字面量）→ 备忘录 App 列表+详情显示，<b> 以纯文本渲染（XSS 转义实测通过）、<p> 换行正确 ✅
+  ⑤新建事件「项目评审会 9月17日 14:00–15:30」→ 日历 App 17 日事件圆点+DOM 断言标题/时间存在 ✅
+  ⑥新建提醒「给小雅回复消息 9月18日 09:00」→ 提醒事项 App「1 项未完成」显示 ✅
+  ⑦reload 后 IndexedDB 六库计数 photos:2/recordings:1/music:1/notes:1/events:1/reminders:1 全部保留（持久化）✅
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无错误
+
+Stage Summary:
+- 文件 App 从只读升级为可增：6 个资料库全部具备添加入口；导入的音乐/照片与音乐/照片 App 数据互通（同 store），新建的备忘录/事件/提醒在备忘录/日历/提醒事项 App 可查看编辑；单条删除与统计原有能力不变
+- 未做（如实说明）：文件 App 不提供「文件夹」维度（IndexedDB 各库无目录结构，iOS Files 语义下需要 db v7 升级+全 App 改造，当前按库分类已覆盖使用场景）；文档类任意文件（PDF/zip 等）无对应展示 App，未新增独立文件库
