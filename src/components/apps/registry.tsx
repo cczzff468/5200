@@ -345,6 +345,8 @@ const APP_DEFS: AppDef[] = [
   {
     id: 'worldbook',
     name: '世界书',
+    image: '/icons/worldbook.png',
+    // 备用线条图（有 image 时不会展示）：书本图案贴近用户提供的实体图标
     glyph: <BookMarked className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: WorldBookApp,
   },
