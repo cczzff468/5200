@@ -65,6 +65,7 @@ const TAGLINES: Record<AppId, string> = {
   camera: '拍照与录像',
   appstore: '发现、安装与恢复 App',
   memory: '跨应用 AI 记忆互通',
+  worldbook: '关键词触发的 AI 设定库',
 };
 
 /** 分类（排行榜副标题 & 搜索关键字） */
@@ -90,6 +91,7 @@ const CATEGORY: Record<AppId, string> = {
   camera: '摄影与录像',
   appstore: '商店',
   memory: '效率',
+  worldbook: '效率',
 };
 
 /** App 标签页分组 */
@@ -97,7 +99,7 @@ const GROUPS: { title: string; ids: AppId[] }[] = [
   { title: '必装 App', ids: ['wechat', 'qq', 'chat', 'photos', 'camera', 'music', 'browser', 'weather'] },
   {
     title: '实用工具',
-    ids: ['clock', 'calculator', 'notes', 'reminders', 'calendar', 'files', 'recorder', 'contacts', 'phone'],
+    ids: ['clock', 'calculator', 'notes', 'reminders', 'calendar', 'files', 'recorder', 'contacts', 'phone', 'worldbook'],
   },
   { title: '个性定制', ids: ['themes', 'settings', 'appstore'] },
 ];

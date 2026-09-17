@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import {
   AudioLines,
+  BookMarked,
   BrainCircuit,
   Calculator as CalculatorIcon,
   CalendarDays,
@@ -52,6 +53,7 @@ const WeChatApp = dynamic(() => import('./wechat'), { ssr: false });
 const QQApp = dynamic(() => import('./qq'), { ssr: false });
 const AppStoreApp = dynamic(() => import('./appstore'), { ssr: false });
 const MemoryBankApp = dynamic(() => import('./memory-bank'), { ssr: false });
+const WorldBookApp = dynamic(() => import('./worldbook'), { ssr: false });
 
 export interface AppMeta {
   id: AppId;
@@ -339,6 +341,12 @@ const APP_DEFS: AppDef[] = [
     image: '/icons/memory-helper.png',
     glyph: <BrainCircuit className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: MemoryBankApp,
+  },
+  {
+    id: 'worldbook',
+    name: '世界书',
+    glyph: <BookMarked className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    component: WorldBookApp,
   },
 ];
 

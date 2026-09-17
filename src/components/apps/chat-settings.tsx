@@ -20,7 +20,7 @@
  *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeftRight, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
+import { ArrowLeftRight, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { stickerToggleCaption } from '@/lib/sticker-toggle';
@@ -129,6 +129,7 @@ export function ChatSettingsPage({
   sentenceSend,
   timeAware,
   stickersOn,
+  worldBooksSummary,
   onBack,
   onTogglePinned,
   onToggleMuted,
@@ -137,6 +138,7 @@ export function ChatSettingsPage({
   onToggleSentenceSend,
   onToggleTimeAware,
   onToggleStickers,
+  onOpenWorldBooks,
   onOpenSearch,
   onOpenBg,
   onOpenPeerProfile,
@@ -166,6 +168,8 @@ export function ChatSettingsPage({
   timeAware: boolean;
   /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
   stickersOn: boolean;
+  /** 挂载的世界书摘要（未挂载时「未选择」） */
+  worldBooksSummary: string;
   onBack: () => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
@@ -174,6 +178,7 @@ export function ChatSettingsPage({
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
   onToggleStickers: (v: boolean) => void;
+  onOpenWorldBooks: () => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
   /** 点击信息卡片 → 进入联系人详细界面（QQ 好友资料页 / 微信好友详情页）；不传则卡片不可点 */
@@ -359,6 +364,25 @@ export function ChatSettingsPage({
           </div>
         </div>
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{stickerToggleCaption(stickersOn)}</p>
+
+        {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <button type="button" data-testid={`${testPrefix}-settings-worldbooks`} onClick={onOpenWorldBooks} className={rowCls}>
+            <span className="flex items-center gap-2.5">
+              <BookMarked className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
+              世界书
+            </span>
+            <span className="flex shrink-0 items-center gap-2">
+              <span data-testid={`${testPrefix}-worldbooks-summary`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+                {worldBooksSummary}
+              </span>
+              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+          挂载的世界书会在聊天内容命中条目触发词时，把对应设定注入提示词；书在「世界书」App 里维护。
+        </p>
 
         {/* 查找聊天记录 */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1039,11 +1063,13 @@ export function SmsChatSettingsPage({
   sentenceSend,
   timeAware,
   stickersOn,
+  worldBooksSummary,
   onBack,
   onOpenTranslate,
   onToggleSentenceSend,
   onToggleTimeAware,
   onToggleStickers,
+  onOpenWorldBooks,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1055,11 +1081,15 @@ export function SmsChatSettingsPage({
   timeAware: boolean;
   /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
   stickersOn: boolean;
+  /** 挂载的世界书摘要（未挂载时「未选择」） */
+  worldBooksSummary: string;
   onBack: () => void;
   onOpenTranslate: () => void;
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
   onToggleStickers: (v: boolean) => void;
+  /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
+  onOpenWorldBooks?: () => void;
 }) {
   const t = translateTokens('sms');
   return (
@@ -1157,6 +1187,130 @@ export function SmsChatSettingsPage({
           </div>
         </div>
         <p className={t.captionCls}>{stickerToggleCaption(stickersOn)}</p>
+
+        {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择）；AI 助手会话无此入口 */}
+        {onOpenWorldBooks && (
+          <>
+            <div className={`${t.cardCls} mt-3`}>
+              <button type="button" data-testid="sms-settings-worldbooks" onClick={onOpenWorldBooks} className={t.rowCls}>
+                <span className="flex items-center gap-2.5">
+                  <BookMarked className="h-[18px] w-[18px] text-muted-foreground" strokeWidth={1.9} aria-hidden="true" />
+                  世界书
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span data-testid="sms-worldbooks-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+                    {worldBooksSummary}
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+                </span>
+              </button>
+            </div>
+            <p className={t.captionCls}>
+              挂载的世界书会在聊天内容命中条目触发词时，把对应设定注入提示词；书在「世界书」App 里维护。
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 世界书挂载页（三端共用二级页） ----------------
+
+/**
+ * 世界书挂载页（微信/QQ/信息聊天设置二级页）：为当前联系人勾选要挂载的世界书（可多选）。
+ * 挂载后本书的「局部」条目在该聊天生效；「全局」条目无需挂载即全聊天生效；
+ * 「专属」条目仅对条目上指定的角色生效。书籍本体在「世界书」App 里维护。
+ */
+export function WorldBookPickerPage({
+  variant,
+  books,
+  boundIds,
+  onBack,
+  onChange,
+}: {
+  variant: ChatSettingsVariant;
+  /** 全部世界书（id/名字/条目数） */
+  books: Array<{ id: string; name: string; entryCount: number; enabledCount: number }>;
+  /** 当前联系人已挂载的书 id */
+  boundIds: string[];
+  onBack: () => void;
+  /** 勾选变化（每次点选回传完整 id 列表，由调用方持久化） */
+  onChange: (ids: string[]) => void;
+}) {
+  const t = translateTokens(variant);
+  const testPrefix = variant;
+  const bound = useMemo(() => new Set(boundIds), [boundIds]);
+
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className={`flex ${t.headerH} items-center px-2`}>
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid={`${testPrefix}-worldbooks-back`}
+            onClick={onBack}
+            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
+          >
+            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+          </button>
+          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>世界书</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        {books.length === 0 ? (
+          <div className="mt-16 text-center">
+            <BookMarked className="mx-auto h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+            <p className={`mt-3 text-[14px] ${t.sms ? 'text-muted-foreground' : 'text-black/35 dark:text-white/35'}`}>
+              还没有世界书，到「世界书」App 创建后再来挂载
+            </p>
+          </div>
+        ) : (
+          <div className={`${t.cardCls} overflow-hidden`}>
+            {books.map((book, i) => {
+              const selected = bound.has(book.id);
+              return (
+                <div key={book.id}>
+                  {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+                  <button
+                    type="button"
+                    data-testid={`${testPrefix}-worldbook-option-${i}`}
+                    aria-label={`${selected ? '取消挂载' : '挂载'}${book.name}`}
+                    onClick={() => {
+                      const next = new Set(bound);
+                      if (selected) next.delete(book.id);
+                      else next.add(book.id);
+                      onChange(books.filter((b) => next.has(b.id)).map((b) => b.id));
+                    }}
+                    className={t.rowCls}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate">{book.name}</span>
+                      <span
+                        className={`mt-0.5 block truncate text-[12.5px] ${
+                          t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40'
+                        }`}
+                      >
+                        {book.entryCount} 条目 · {book.enabledCount} 启用
+                      </span>
+                    </span>
+                    {selected && (
+                      <span className="grid shrink-0 place-items-center pl-2" style={{ color: t.accent }} aria-label="已挂载">
+                        <Check className="h-5 w-5" strokeWidth={2.4} />
+                      </span>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p className={t.captionCls}>
+          勾选即挂载：本书「局部」条目在当前聊天生效；「全局」条目无需挂载全聊天生效；「专属」条目仅对条目指定的角色生效。点条目触发词命中时，设定内容会注入提示词（未命中不发送）。
+        </p>
       </div>
     </div>
   );

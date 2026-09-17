@@ -5284,3 +5284,44 @@ Stage Summary:
 - 审计结论：七维清单中一/二/三/五全部通过实测；四（记忆联动）与六.3（删除清理）发现 3 个真实缺陷并当场修复——评论/回复注入记忆防事实矛盾、删动态/评论级联清理各角色记忆碎片、相似合并补齐溯源字段
 - 交付 3 文件：src/lib/moments.ts（评论记忆注入+级联清理接线）、src/lib/memory.ts（memPurgeMomentSources+合并溯源补齐）、src/app/api/moments/generate/route.ts（comment/reply 记忆段）
 - 遗留提示（非本次范围）：QQ PostMoreMenu 对 seed 帖无守卫（当前 ZONE_SEEDS=[] 无风险）；微信 friendMoments 分支的第二个 EditPostDialog 不可达（死代码无害）；沙箱保存的 mock 上游建议用户在设置里换回真实 API
+
+---
+Task ID: WB-APP-1
+Agent: Z.ai Code (main)
+Task: 新增「世界书」App——按关键词触发的 AI 设定库（主屏图标 + 书籍/条目管理 + 微信/QQ/信息三端挂载 + 六位置提示词注入）
+
+Work Log:
+- 新建 src/lib/ios/worldbook.ts：数据模型（WorldBook/WbEntry：开关·名字·触发词·内容·插入位置·生效范围·优先级·忽略大小写）；kv 存储（worldbooks 全量 + wb-bind:<contactId> 挂载关系）；wbNameCheck（名字非空+禁 emoji，≤30字）；wbEntryCheck/parseKeywordsInput；导入解析 parseWorldBookImport（兼容标准导出/裸数组/单本，位置与范围白名单归一化，专属条目按 targetContactName 跨设备解析联系人、解析不到降级 local，无法激活条目丢弃）；触发引擎 wbEntryMatches（include 匹配，任一触发词命中即激活，ignoreCase 小写化比较）；collectWbBlocks（global 无需挂载全聊天生效 / local 仅挂载书生效 / exclusive 仅指定联系人生效，六位置分组、同位置 priority 降序稳定排序，【世界书设定】头包裹拼接）；applyWbUserBlocks（before_user/after_user 包裹消息数组最后一条 user 消息）；pruneBookFromAllBindings（删书时从所有联系人挂载列表摘除，动态 import 避免contacts-store静态环）
+- 新建 src/components/apps/worldbook.tsx（世界书 App，iOS 黑白灰：#F2F2F7/白卡/深灰字，dark:black/#1C1C1E 自适配；MonoToggle 单色开关 开=黑底白钮/暗色白底黑钮）：书籍列表页（卡片+条目数/启用数/日期+⋯菜单：重命名/导出/删除；顶栏 导入+新建；BackToHome）；条目列表页（每行 MonoToggle 启用开关+触发词预览+位置/范围徽章+删除）；条目编辑页（名字/触发词 chips 输入（逗号顿号分号空白分隔去重去空）/内容 textarea/插入位置 6 选 1（含说明）/生效范围 3 选 1（专属展开联系人选择列表带角色类型）/优先级 ±步进（0-9999，越大越靠前）/忽略大小写开关；完成校验触发词≥1 且内容非空）；NameDialog（新建/重命名共用，emoji 拦截就地报错「世界书名字不能包含 emoji」）；ConfirmDialog/ActionSheet/LocalToast；导出 buildExportPayload→Blob 下载（targetContactId→名字）；导入隐藏 file input+DataTransfer 兼容
+- 注册：store.ts AppId 加 'worldbook'；registry.tsx 动态 import + APP_DEFS（BookMarked 线条图标，磨砂玻璃 LineIcon 底座黑白灰自适应，无彩色 PNG 与整体风格一致）；appstore.tsx TAGLINES/CATEGORY/GROUPS 补齐（Record<AppId,...> 编译必需）
+- chat-settings.tsx：ChatSettingsPage（微信/QQ）与 SmsChatSettingsPage（信息，onOpenWorldBooks 可选——AI 助手会话无联系人角色则隐藏入口行）新增「世界书」入口行（BookMarked 图标+挂载摘要+testid {wx,qq,sms}-settings-worldbooks / -worldbooks-summary）+说明文案；新增三端共用 WorldBookPickerPage（多选勾挂载，条目数/启用数副标题，说明三种范围语义）
+- wechat.tsx / qq.tsx：wbOpen/wbBound 状态（peer.id 变化重读）；ChatSettingsPage 接线（摘要=挂载书名顿号连接或「未选择」）；WorldBookPickerPage 渲染（onChange→setBoundBookIds 按联系人持久化）；runAiTurn 注入：collectWbBlocks(peer.id, wbScanText([userMsg, sysEvent, base.slice(-8)]))，systemFull=[beforeSystem, [beforeChar,system,afterChar], memoryBlock, momentsBlock, actionRules, timeBlock, afterSystem].filter.join，payloadMsgs 经 applyWbUserBlocks 包裹最后 user 消息（sysEvent 追加在其后不受影响）
+- chat.tsx（信息端）：wbContactId=storageKey 前缀 c: 提取（仅联系人会话参与，AI 助手会话不注入）；baseSys 同构六位置组装；payload applyWbUserBlocks；SmsChatSettingsPage 接线+picker 渲染
+- contacts-store.ts deleteContact：级联 clearContactBinding(被删联系人+名下NPC)，书籍本体保留（用户创作）；专属条目目标指向已删联系人=永不激活的无害死配置
+- E2E 实测（agent-browser，锁屏上滑解锁→主屏第3页「世界书」图标→全流程）：
+  ①主屏图标：第 3 页自动补位出现，磨砂单色图标浅色/深色主题均正常（意外切到深色壁纸时白线图标清晰可辨）
+  ②新建拦截：名字「魔法书📖」→创建→就地报错「世界书名字不能包含 emoji」，未创建；改「魔法世界观」→创建成功并进入书页
+  ③条目管理：魔法体系(魔法/法师/咒语, after_char, local)、禁忌之湖(湖水, before_system, global, 优先级3)、精灵族谱·王族血统(精灵, exclusive→乐乐)、月圆之夜(月亮, before_user, global)、高优月亮(月亮, before_user, local, 优先级1)、星语者(星星, after_user, global)、法师戒律(法师, before_char, global)、时之沙漏(时间, after_system, global) 全部经真实 UI 创建落库（IndexedDB kv worldbooks 字段逐项核对一致）
+  ④导出：⋯→导出，拦截 URL.createObjectURL 捕获 Blob，JSON 结构正确（app/version/books/entries，非专属无 targetContactName）
+  ⑤导入：emoji 书名文件→toast「导入失败：世界书名字不能包含 emoji（坏书📖）」且不创建；合法文件→「已导入「星辰教团」」，targetContactName=乐乐 解析为 char-lele，优先级2/before_user 保留
+  ⑥重命名（星辰教团→星辰教团·改，toast 确认）与删除（确认弹层→「已删除」列表 3→2）通过
+  ⑦挂载：微信→乐乐→聊天信息→「世界书」行（摘要「未选择」）→选择页勾选魔法世界观→摘要变「魔法世界观」；kv 落库 wb-bind:char-lele=[bookId]
+  ⑧注入捕获（window.fetch 补丁记录 /api/chat 请求体，注入在客户端组装所以请求体即最终提示词）：
+    - 乐乐发「…湖水…魔法…」：before_system 块（黑湖）位于 system[0..108]，人设【名字】在 109——系统提示词之前✓；魔法体系在 888（人设之后、记忆块【关于对方的记忆】之前）——角色定义之后✓
+    - 乐乐发「你是精灵吗」：王族血统(专属)在 920 注入——无需挂载✓
+    - z 发「你是精灵吗」：零注入（hasSetting=false）——专属不串台✓
+    - 乐乐发「今晚的月亮真圆」：最后一条 user 消息=【世界书设定】月亮设定+原消息，system 无泄漏——用户消息之前✓
+    - 乐乐发「今晚的月亮好圆啊」：包裹块内 设定A(优先级1) 在 月圆之夜(优先级0) 之前——同位置优先级降序✓
+    - 乐乐发「月亮和星星都出来了」：user 消息前后各一个【世界书设定】块——用户消息之前+之后同轮验证✓
+    - 乐乐发「法师很厉害吗」：法师戒律(20) 在人设(29) 之前——角色定义之前✓
+    - 乐乐发「你有时间吗」：时之沙漏在 system 末尾(2146/2269，记忆/朋友圈/时间块之后、连发条数指令之前)——系统提示词之后✓
+    - 停用禁忌之湖开关（列表行灰色）后发「湖水为什么是黑的」：黑湖内容零注入（其余扫描窗口命中的条目照常）——开关关闭永不发送✓
+    - z 发「你懂魔法吗」：零注入——未挂载书的 local 条目不生效✓（global/local/exclusive 三语义与绑定必要性全部闭环）
+  ⑨质量：清空 console 后刷新无任何 error；bunx tsc --noEmit 0 错误、bun run lint 通过；dev.log 全 200（moments/generate 为朋友圈调度器正常触发，与本功能无关）
+
+Stage Summary:
+- 交付 10 文件：lib/ios/worldbook.ts、components/apps/worldbook.tsx（新）、lib/ios/store.ts、components/apps/registry.tsx、components/apps/appstore.tsx、components/apps/chat-settings.tsx、components/apps/wechat.tsx、components/apps/qq.tsx、components/apps/chat.tsx、lib/ios/contacts-store.ts
+- 语义澄清（按需求文档落到两个独立字段）：插入位置=提示词中的物理位置（6 种）；生效范围=对哪些聊天生效（全局/局部/专属），两者正交组合；「未命中不发送」+「条目名字不发 AI」+「世界书与记忆库完全独立（互不读写）」均按需求实现
+- 注入位置对齐现有 system 组装：before_char/after_char 以人设块（buildPersonaSystemPrompt 产物含 extraRules）为界；after_system 在记忆/朋友圈/时间感知之后、回复条数指令之前（回复条数是格式化元指令，置于最后更稳）
+- 扫描窗口=最新用户消息+最近 8 条上下文（同屏所有进入请求的文本），关键词在窗口内持续有效（SillyTavern 同类语义），停用/删除条目立即生效
+- 澄清：E2E 种子数据（2 本书 8 条目+挂载关系）在 agent-browser 隔离会话的 IndexedDB，不污染用户浏览器；AI 上游为遗留 mock（回复固定话术），不影响注入链路验证——注入验证的是请求体（客户端组装后的最终提示词），与上游无关

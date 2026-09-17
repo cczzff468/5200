@@ -8,6 +8,7 @@
  */
 import { localDB, genId } from './db';
 import { kvDel } from './idb-kv';
+import { clearContactBinding } from './worldbook';
 import { memPurgeContact } from '@/lib/memory';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
 import { wsHeaders } from './workspace';
@@ -280,6 +281,10 @@ export async function deleteContact(id: string): Promise<boolean> {
   // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/会话标志/背景图一并清理
   for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId);
   purgeChatTracesFor(id);
+  // 世界书：清理被删联系人（含级联 NPC）的挂载关系键；书籍本体与条目是用户创作，保留不删
+  //（专属条目目标指向已删联系人时永远不激活，属无害死配置，用户可在条目编辑里改）
+  clearContactBinding(id);
+  for (const npcId of cascadedNpcIds) clearContactBinding(npcId);
   return true;
 }
 

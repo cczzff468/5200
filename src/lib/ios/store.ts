@@ -713,7 +713,8 @@ export type AppId =
   | 'contacts'
   | 'settings'
   | 'appstore'
-  | 'memory';
+  | 'memory'
+  | 'worldbook';
 
 export type AppPhase = 'closed' | 'opening' | 'open' | 'closing';
 

@@ -46,7 +46,16 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
-import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
+import { ChatTranslatePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import {
+  WB_EMPTY_BLOCKS,
+  applyWbUserBlocks,
+  collectWbBlocks,
+  getBoundBookIds,
+  loadBooks,
+  setBoundBookIds,
+  wbScanText,
+} from '@/lib/ios/worldbook';
 import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
@@ -490,6 +499,13 @@ function ChatView({
   useEffect(() => {
     setStickersOnState(getStickersOn(sessionKey));
   }, [sessionKey]);
+  /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
+  const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+  const [wbOpen, setWbOpen] = useState(false);
+  const [wbBound, setWbBound] = useState<string[]>(() => (wbContactId ? getBoundBookIds(wbContactId) : []));
+  useEffect(() => {
+    setWbBound(wbContactId ? getBoundBookIds(wbContactId) : []);
+  }, [wbContactId]);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -623,15 +639,34 @@ function ChatView({
     const timeBlock = getTimeAware(sessionKey)
       ? buildTimeAwareBlock({ lastMsgTime: msgs.length > 0 ? msgs[msgs.length - 1].time : null })
       : '';
-    const baseSys = [systemPrompt, memoryBlock, momentsBlock, timeBlock, stickersOn ? '' : STICKER_OFF_RULE].filter(Boolean).join('\n\n');
+    // 世界书：仅联系人会话参与（AI 助手会话无联系人角色）；命中触发词条目按插入位置注入
+    const wbBlocks = wbContactId
+      ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => m.content)]))
+      : null;
+    const charBlock =
+      wbBlocks && systemPrompt
+        ? [wbBlocks.beforeChar, systemPrompt, wbBlocks.afterChar].filter(Boolean).join('\n\n')
+        : systemPrompt ?? '';
+    const baseSys = [
+      ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
+      charBlock,
+      memoryBlock,
+      momentsBlock,
+      timeBlock,
+      stickersOn ? '' : STICKER_OFF_RULE,
+      ...(wbBlocks ? [wbBlocks.afterSystem] : []),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const sysContent = baseSys
       ? replyCount > 1
         ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
         : baseSys
       : null;
-    const payload: ChatPayloadMessage[] = sysContent
-      ? [{ role: 'system', content: sysContent }, ...history]
-      : history;
+    const payload: ChatPayloadMessage[] = applyWbUserBlocks(
+      sysContent ? [{ role: 'system' as const, content: sysContent }, ...history] : history,
+      wbBlocks ?? WB_EMPTY_BLOCKS,
+    );
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -1194,6 +1229,14 @@ function ChatView({
           sentenceSend={sentenceSend}
           timeAware={timeAware}
           stickersOn={stickersOn}
+          worldBooksSummary={
+            wbContactId
+              ? loadBooks()
+                  .filter((b) => wbBound.includes(b.id))
+                  .map((b) => b.name)
+                  .join('、') || '未选择'
+              : '未选择'
+          }
           onBack={() => setSettingsOpen(false)}
           onOpenTranslate={() => setTranslateOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -1214,6 +1257,26 @@ function ChatView({
             // 立即持久化并生效（下一次请求现场读取，无需重启）：关闭后 AI 不发表情包也不发 emoji
             saveStickersOn(sessionKey, v);
             setStickersOnState(v);
+          }}
+          onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
+        />
+      )}
+
+      {/* 世界书挂载页（聊天设置二级页，仅联系人会话）：为联系人勾选挂载的书籍 */}
+      {wbOpen && wbContactId && (
+        <WorldBookPickerPage
+          variant="sms"
+          books={loadBooks().map((b) => ({
+            id: b.id,
+            name: b.name,
+            entryCount: b.entries.length,
+            enabledCount: b.entries.filter((e) => e.enabled).length,
+          }))}
+          boundIds={wbBound}
+          onBack={() => setWbOpen(false)}
+          onChange={(ids) => {
+            setBoundBookIds(wbContactId, ids);
+            setWbBound(ids);
           }}
         />
       )}

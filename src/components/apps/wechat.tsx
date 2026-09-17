@@ -135,10 +135,12 @@ import {
   ChatSearchPage,
   ChatSettingsPage,
   ChatTranslatePage,
+  WorldBookPickerPage,
   chatBgLayerStyle,
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
+import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbScanText } from '@/lib/ios/worldbook';
 import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import {
@@ -3412,6 +3414,13 @@ function ChatPage({
   useEffect(() => {
     setStickersOnState(getStickersOn(sessionKey));
   }, [sessionKey]);
+  /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
+  const [wbOpen, setWbOpen] = useState(false);
+  /** 当前联系人挂载的世界书 id（切换联系人/挂载变化时重读） */
+  const [wbBound, setWbBound] = useState<string[]>(() => getBoundBookIds(peer.id));
+  useEffect(() => {
+    setWbBound(getBoundBookIds(peer.id));
+  }, [peer.id]);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -3638,13 +3647,27 @@ function ChatPage({
           regionHint: peer.region || null,
         })
       : '';
-    const systemFull = [system, memoryBlock, momentsBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '', timeBlock]
+    // 世界书：扫描「最新用户消息 + 最近 8 条上下文」，命中触发词的条目按插入位置分组注入
+    //（系统/角色定义前后进 system，用户消息前后包裹最后一条 user 消息；未命中不发送）
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => m.content)]));
+    const systemFull = [
+      wbBlocks.beforeSystem,
+      [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
+      memoryBlock,
+      momentsBlock,
+      actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      timeBlock,
+      wbBlocks.afterSystem,
+    ]
       .filter(Boolean)
       .join('\n\n');
-    const payloadMsgs: ChatPayloadMessage[] = [
-      { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
-      ...history,
-    ];
+    const payloadMsgs: ChatPayloadMessage[] = applyWbUserBlocks(
+      [
+        { role: 'system' as const, content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
+        ...history,
+      ],
+      wbBlocks,
+    );
     if (sysEvent) payloadMsgs.push({ role: 'user', content: sysEvent });
 
     const started = beginChatStream({
@@ -4925,7 +4948,31 @@ function ChatPage({
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
+          onOpenWorldBooks={() => setWbOpen(true)}
+          worldBooksSummary={loadBooks()
+            .filter((b) => wbBound.includes(b.id))
+            .map((b) => b.name)
+            .join('、') || '未选择'}
           onOpenPeerProfile={() => onOpenFriendDetail(peer)}
+        />
+      )}
+
+      {/* 世界书挂载页（聊天设置二级页）：为联系人勾选挂载的书籍（按联系人隔离持久化） */}
+      {wbOpen && (
+        <WorldBookPickerPage
+          variant="wx"
+          books={loadBooks().map((b) => ({
+            id: b.id,
+            name: b.name,
+            entryCount: b.entries.length,
+            enabledCount: b.entries.filter((e) => e.enabled).length,
+          }))}
+          boundIds={wbBound}
+          onBack={() => setWbOpen(false)}
+          onChange={(ids) => {
+            setBoundBookIds(peer.id, ids);
+            setWbBound(ids);
+          }}
         />
       )}
 
