@@ -72,17 +72,19 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - 网格拆成多页横向滑动：跟手拖动（手指带页走，首页/末页橡皮筋阻尼），松手按位移/甩速
  *   吸附翻页——轻轻一甩即翻页；跟手期间吞掉 click，不会误开 App；
  *   编辑模式同样可以从空白处左右轻扫翻页（图标上起手=拖拽换位，空白处起手=翻页）；
- * - 默认三页（其余第三/四页小组件默认收起）：第 1 页 = 时钟小组件（顶部通栏整行、无边框大数字浮在壁纸上）
+ * - 默认三页（其余小组件默认收起）：第 1 页 = 时钟小组件（顶部通栏整行、无边框大数字浮在壁纸上）
  *   + 天气小组件（152×152，占 2×2 格）+ 天气/主题/浏览器/备忘录/相机/照片/文件/计算器
  *   （用户指定顺序）；
  *   第 2 页 = 信息卡片小组件（顶部通栏大名片）+ 气泡小组件（双头像 + 各自头顶气泡，无边框浮在壁纸上）
  *   + 提醒事项/语音备忘录/日历/时钟（用户指定顺序）；
- *   第 3 页 = 网易云小组件（黑胶唱片播放器卡，点击开音乐 App）+ 音乐/微信 App（用户指定）；
- *   日记/一起听/对话气泡/黑胶四枚小组件默认收起（hidden 记录，不占页），
+ *   第 3 页 = 网易云小组件（黑胶唱片播放器卡，点击开音乐 App）+ 音乐/微信/App Store/QQ/记忆/世界书
+ *   （用户指定顺序，世界书自 v9 起纳入页尾）；
+ *   日记/一起听/对话气泡/黑胶/iCity/日历/表盘时钟/拍立得八枚小组件默认收起（hidden 记录，不占页；
+ *   v9 起 widgets-7 新加的四个不上屏——用户要求新添加的小组件不显示），
  *   需要时从编辑模式「+」画廊或主题 App「小组件」界面一键找回（默认落到末尾装得下的页）；
  *   （v6 起：存量旧版本布局直接重置为新默认，保留 hidden 删除记录（网易云旧收起记录除外，
  *   迁移时放行上屏）；旧数据缺小组件时按默认位置补回：时钟补到第 1 页头、天气补到时钟旁、
- *   信息卡片补到第 2 页头、气泡补到信息卡片后；收起的四枚不自动复活）；
+ *   信息卡片补到第 2 页头、气泡补到信息卡片后；收起的八枚不自动复活）；
  * - 信息卡片/气泡/日记/一起听小组件：点击弹出编辑器（换头像/换背景图/改文字 / 换头像改气泡文字 /
  *   改日记头像与文字 / 换头像改气泡与歌曲文案），数据存 localStorage；
  * - 指示器互换（同一位置交叉淡入淡出）：静止时显示「搜索」胶囊，滑动中/翻页后短暂显示
@@ -96,7 +98,7 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  *
  * 编辑模式（长按任意图标/小组件或长按空白处进入）：
  * - 全部图标/小组件抖动，左上角出现深色「删除」× 角标；
- * - 左上角「+」→ 小组件画廊浮层（全部 9 种小组件 1:1 预览，点 + 添加回主屏，
+ * - 左上角「+」→ 小组件画廊浮层（全部 13 种小组件 1:1 预览，点 + 添加回主屏，
  *   × 删除过的项从 hidden 找回；与主题 App「小组件」界面同一套画廊）
  *   + 右上角「恢复默认」与白色「完成」胶囊按钮；
  * - 编辑中点按空白处直接退出编辑（用户要求）；
@@ -270,19 +272,22 @@ const DOTS_LINGER_MS = 1100;
 /** 页网格行间距（gap-y-[16px]，与渲染处保持一致；行距拟合用） */
 const GRID_GAP_Y = 16;
 
-/** 当前布局版本：v8 = 新增四个小组件上屏（第 2 页 +iCity、第 3 页 +日历、第 4 页新建：表盘时钟+拍立得）
- *  ——存量旧版本布局直接重置为新默认（保留 hidden 删除记录）；
- *  日记/一起听/对话气泡/黑胶仍默认收起（需要时从「+」画廊或主题 App「小组件」界面一键找回） */
-const LAYOUT_VERSION = 8;
+/** 当前布局版本：v9 = widgets-7 的四个新小组件（iCity/日历/表盘时钟/拍立得）改为默认收起不上屏
+ *  （用户要求：新添加的小组件不显示；需要时从「+」画廊或主题 App「小组件」界面一键找回）；
+ *  世界书 App 纳入第 3 页默认排布——存量旧版本布局直接重置为新默认（保留 hidden 删除记录）；
+ *  日记/一起听/对话气泡/黑胶/iCity/日历/表盘时钟/拍立得均默认收起 */
+const LAYOUT_VERSION = 9;
 /** 第 1 页 App（用户指定顺序；时钟/天气小组件在其上方；App Store 已移至第 3 页——仍是已移除 App 的唯一恢复入口） */
 const PAGE1_APP_IDS: AppId[] = ['weather', 'themes', 'browser', 'notes', 'camera', 'photos', 'files', 'calculator'];
 /** 第 2 页 App（用户指定顺序；信息卡片/气泡小组件在其上方；音乐/微信移至第 3 页） */
 const PAGE2_APP_IDS: AppId[] = ['reminders', 'recorder', 'calendar', 'clock'];
-/** 第 3 页 App（用户指定：音乐/微信/App Store[在 QQ 左侧]/QQ；网易云小组件在其上方） */
-const PAGE3_APP_IDS: AppId[] = ['music', 'wechat', 'appstore', 'qq', 'memory'];
-/** 第三/四页其余小组件（默认收起不显示：写入 hidden，需要时从「+」画廊/主题小组件页找回；
- *  网易云小组件自 v6 起默认上屏第 3 页，不再收起） */
-const DEFAULT_HIDDEN_WIDGETS: WidgetKind[] = ['diary', 'listen', 'dialog', 'vinyl'];
+/** 第 3 页 App（用户指定：音乐/微信/App Store[在 QQ 左侧]/QQ；网易云小组件在其上方；
+ *  世界书自 v9 起纳入页尾——否则 v9 重置路径提前 return 不会走 App 补位逻辑，世界书会从主屏消失） */
+const PAGE3_APP_IDS: AppId[] = ['music', 'wechat', 'appstore', 'qq', 'memory', 'worldbook'];
+/** 其余小组件（默认收起不显示：写入 hidden，需要时从「+」画廊/主题小组件页找回；
+ *  网易云小组件自 v6 起默认上屏第 3 页，不再收起；
+ *  v9 起 widgets-7 的四个新小组件 iCity/日历/表盘时钟/拍立得也默认收起——用户要求新添加的小组件不显示） */
+const DEFAULT_HIDDEN_WIDGETS: WidgetKind[] = ['diary', 'listen', 'dialog', 'vinyl', 'icity', 'calendar', 'tickclock', 'polaroid'];
 
 function defaultLayout(): HomeLayout {
   return {
@@ -296,11 +301,9 @@ function defaultLayout(): HomeLayout {
       [
         { kind: 'widget', widget: 'profile' },
         { kind: 'widget', widget: 'bubble' },
-        { kind: 'widget', widget: 'icity' },
         ...PAGE2_APP_IDS.map((id) => ({ kind: 'app' as const, id })),
       ],
-      [{ kind: 'widget', widget: 'calendar' }, { kind: 'widget', widget: 'netease' }, ...PAGE3_APP_IDS.map((id) => ({ kind: 'app' as const, id }))],
-      [{ kind: 'widget', widget: 'tickclock' }, { kind: 'widget', widget: 'polaroid' }],
+      [{ kind: 'widget', widget: 'netease' }, ...PAGE3_APP_IDS.map((id) => ({ kind: 'app' as const, id }))],
     ],
     dock: DOCK_APPS.map((a) => a.id),
     hidden: DEFAULT_HIDDEN_WIDGETS.map(widgetKey),
@@ -461,8 +464,9 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     const di = p4.findIndex((t) => t.kind === 'widget' && t.widget === 'dialog');
     p4.splice(di >= 0 ? di + 1 : p4.length, 0, { kind: 'widget', widget: 'vinyl' });
   }
-  // v8 新小组件缺失时的默认落位：iCity→第 2 页气泡后、日历→第 3 页头、
-  // 表盘时钟→第 4 页头、拍立得→表盘时钟后（hidden 里的不补）
+  // widgets-7 四个新小组件缺失时的默认落位：iCity→第 2 页气泡后、日历→第 3 页头、
+  // 表盘时钟→第 4 页头、拍立得→表盘时钟后（hidden 里的不补——v9 起默认收起，存量布局已在
+  // hidden 里，不会自动复活；用户从画廊主动加回后此处不再介入）
   if (!widgetSeen.icity) {
     while (pages.length < 2) pages.push([]);
     const p2 = pages[1];
@@ -1100,7 +1104,7 @@ export default function HomeScreen() {
     }
   };
 
-  /** 编辑模式：恢复默认布局（App/前两页小组件回默认位；默认收起的第三/四页其余小组件保持
+  /** 编辑模式：恢复默认布局（App/默认上屏的小组件回默认位；默认收起的八枚小组件保持
    *  hidden，可从「+」画廊一键找回） */
   const restoreDefault = () => {
     const def = defaultLayout();

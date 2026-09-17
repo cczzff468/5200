@@ -5484,3 +5484,28 @@ Stage Summary:
 - 改动文件：新增 CalendarCard/ICityCard/TickClockCard/PolaroidCard.tsx + public/images/polaroid-*.png；修改 HomeScreen.tsx、WidgetGallery.tsx
 - 用户三诉求全部落地：iCity 可改名字（编辑器名字字段）+可换头像（更换头像/恢复默认）；拍立得可换图片（三张独立更换）；4 个新组件全部默认上屏（P2/P3/P4）
 - 小组件体系零破坏：原有 9 种组件/编辑器/画廊/主题页小组件页全部兼容，13 种 1:1 预览一致
+
+---
+Task ID: widgets-8
+Agent: Z.ai Code (main)
+Task: 新添加的 4 个小组件（iCity/日历/表盘时钟/拍立得）默认不上屏（用户要求：新添加的小组件让他不显示）
+
+Work Log:
+- src/components/ios/HomeScreen.tsx 单文件四处改动：
+  ①DEFAULT_HIDDEN_WIDGETS 扩到 8 枚：['diary','listen','dialog','vinyl'] + ['icity','calendar','tickclock','polaroid']——与老四枚同模式：默认收起写入 hidden（不占页、刷新不复活），需要时从编辑模式「+」画廊或主题 App「小组件」界面一键找回；编辑器（iCity 改名换头像/拍立得换图）全部保留
+  ②defaultLayout() 移除 4 个新组件（P2 去 icity、P3 去日历、删掉只装表盘时钟+拍立得的 P4）——默认布局回到三页
+  ③LAYOUT_VERSION 8→9：用户浏览器里已持久化的 v8 布局（新组件在屏）走重置路径自动剥离，新默认立即生效
+  ④世界书 App 补进 PAGE3_APP_IDS 页尾——关键配套：v9 重置路径提前 return 不走 App 补位逻辑，若不显式纳入默认排布，世界书会随重置从主屏消失（widgets-7 时代它靠同版本补位落到 P4，v9 删掉 P4 后无家可归）；顺带修复全新会话首帧世界书不上屏（此前 sanitize(undefined) 直接返回不含世界书的 def，第二次加载才靠补位出现）
+- 同步更新文件头分页注释（三页排布/收起八枚/画廊 13 种）、恢复默认 docstring、v9 版本注释
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844）：
+  ①全新会话：读 IndexedDB 布局 = v9/3 页/[P1 时钟+天气+8App | P2 信息卡片+气泡+4App | P3 网易云+音乐+微信+App Store+QQ+记忆库+世界书]，hidden=8 枚 widget key；截图确认 P2 无 iCity、P3 无日历且世界书图标在页尾、右滑滑不出第 4 页
+  ②存量 v8 迁移：种入带 4 新组件+世界书 P4 的 v8 布局 → reload → 自动重置为 v9（新组件全部剥离并入 hidden、世界书落 P3、dock 保留）
+  ③画廊双向链路：画廊 DOM 13 种全在（gallery-widget-* testid 含 4 新组件）；点 iCity 添加 → 落当前页 P1 末尾+移出 hidden+落库；×删除 → 回 hidden+落库；最终恢复「4 新组件全收起」标准状态
+  ④console 无错误（仅 HMR/DevTools info）
+
+Stage Summary:
+- 改动文件：仅 src/components/ios/HomeScreen.tsx（布局策略调整，无小组件组件文件/画廊/编辑器改动）
+- 用户诉求落地：widgets-7 新增的 4 个小组件默认不再上屏；功能本体（13 种画廊 1:1 预览、iCity 改名换头像、拍立得换图、表盘时钟、日历）完整保留，可从「+」画廊或主题页随时找回
+- 附带修复两处潜在缺陷：世界书在 v9 重置后消失的风险（纳入 P3 默认排布）、全新会话世界书首帧不上屏（同一次改动覆盖）
+- E2E 过程中实锤了画廊「添加→落当前页第一个装得下的页」的行为（addWidgetFromGallery 从当前页起找容量），与「默认落到末尾装得下的页」的旧注释表述有出入但属设计内行为，未改动
