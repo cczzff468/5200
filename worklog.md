@@ -5121,3 +5121,30 @@ Stage Summary:
 - 交付 14 文件：新增 idb-kv.ts（迁移器+写穿层）/secure-store.ts（API Key 加密）；db.ts v6 kv store；PhoneShell 开机门接入；聊天消息/记忆/表情包/朋友圈/空间/钱包/互动状态/收藏/好友请求/翻译缓存 10 组模块统一走 IndexedDB；API Key 密文落盘+静默升级
 - 四坑对策落地：别全换（B 级开关类保留 localStorage）、迁移兜底（幂等+校验后删键+失败重试+IndexedDB 不可用降级）、读写统一（迁移模块运行期零 localStorage 写入，rg 扫描证明）、安全（AES-GCM 非可提取密钥加密 apiKey）
 - 不破坏现有功能：聊天收发/记忆三层/角色隔离（键名不变仅换介质）/时间感知/回复条数/分句/互通开关全链路未动；隔离会话测试数据随浏览器关闭丢弃
+
+---
+Task ID: AUDIT-IDB
+Agent: Z.ai Code (main)
+Task: 「localStorage → IndexedDB 迁移」完整审计（23 项：迁移完整性/读写统一/数据结构/角色隔离/异常边界/可复现验证），发现没生效先定位根因
+
+Work Log:
+- 静态扫描复核：rg 全项目 localStorage 调用 30 处逐一分类 —— 迁移模块（聊天消息三端/记忆五族/表情包/朋友圈/好友请求/空间三键/签到/亲密度/点赞/钱包十二键/收藏/翻译缓存）运行期读写已全部走 kvGet/kvSet，代码零残留；剩余 localStorage 均为 B 级小件（开关/角标/登录会话 ID/卡片布局/天气电量缓存）或合法通道（idb-kv 迁移器自身、memPurgeContact/purgeChatTracesFor 兼容清扫、降级回退）；确认 chat-translate-cfg（开关配置）与已迁移的 chat-translate-cache（译文缓存）是两个键，未漏迁
+- 代码审查发现并修复 2 个真实缺陷（idb-kv.ts）：
+  ①降级模式缺注水 —— ensureKvReady catch（IndexedDB 打不开，如禁存储环境）原样直接 readyDone=true，memStore 恒空，kvGet 永远返回 null：同一降级会话刷新后 localStorage 里的聊天记录读不到（数据在但不可见）。修复：catch 分支扫描 localStorage 命中迁移清单的键 JSON.parse 后注水 memStore
+  ②迁移覆盖窗口 —— 迁移器原「put→读回校验→删旧键」，若 put 成功后删键前页面被杀（或校验失败保留旧键）而期间用户运行期 kvSet 更新过该键，下次启动会用 LS 旧值 put 覆盖 kv 新值（数据回退）。修复：put 前先查 kv，已有键即视为已迁移（kv 为准）直接清 LS；仅对本次新 put 做读回校验（校验失败保留 LS 下次重试）。初版修复有逻辑错误（existing!=null 时用 LS 旧值校验会因值不同 continue 导致 LS 永删不掉），自查发现后改为「仅新 put 校验」语义
+- E2E 实测（agent-browser 隔离会话，10 组旧 LS 键+联系人种入）：
+  ①迁移完整：10 键（含 dataURL 表情包/嵌套记忆设置/消息数组）→ reload → LS 全删 + kv 全量迁入 + 逐键值断言无损 allMigrated:true
+  ②二次启动幂等：reload 后 LS 无复活、kv 键数不变无重复、值未被旧数据覆盖
+  ③UI 渲染：微信登录（IndexedDB contacts）→ 会话列表预览显示迁移消息「吃了，豆浆油条」→ 聊天页 3 条旧消息气泡方向/时间分组正确
+  ④写穿：发新消息 → kv 3→5 条（含 403 错误提示气泡）+ localStorage 零复活
+  ⑤角色隔离：roleA 发消息后 roleB 键值原样（隔离未误伤）；删除联系人（同按钮二次确认 3 秒窗口内双击）→ roleA 的 5 个 kv 键全删 + LS 残留键（sms-chat-msgs:roleA）被清扫 + roleB 数据完好
+  ⑥覆盖窗口修复验证：预插 kv 运行期新值 + LS 种旧值 → reload → kv 新值保留 + LS 清理
+  ⑦降级分支：临时测试钩子（URL 参数禁 indexedDB，验证后已删）→ console.warn 出现 + LS 数据完好保留（迁移器抛错不删键）+ 页面无崩溃；完整降级 UI 受固有边界限制（contacts 本存 IndexedDB，登录页出现，非本次迁移范围）
+  ⑧性能：50×200KB=10MB 写入 IndexedDB 30ms，主线程 1ms 任务零阻塞（kvSet 同步内存+异步写穿设计生效）
+  ⑨API Key 加密复核：种明文 apiConfig → reload → {__enc,iv,ct} 信封 + 明文消失 + cryptoKey extractable:false
+- 审计过程中的排障：种子消息用了 role:'user'/text 字段被 loadMsgs schema 校验过滤（预览显示「开始聊天吧」）——修正为 role:'me'|'peer'+content 后通过，顺带验证了坏数据健壮性；首轮迁移测试污染 kv（坏 schema 数据占位触发「已有键不覆盖」），清理后重做干净链路；删除联系人点击间隔超 3 秒被 confirming 超时重置——根因是自动化节奏而非缺陷，合并到单次 eval 3 秒窗口内双击后通过
+
+Stage Summary:
+- 审计结论：迁移主体（10 组模块）完整性/幂等/写穿统一/隔离/清理全部实测通过；发现并修复 2 个边界缺陷（降级注水缺失、迁移覆盖窗口），修复后复测通过
+- 如实说明的边界：①多标签页并发写各自内存缓存互不可见（单手机仿真场景，旧实现同样无跨标签同步）；②kv 无二级索引，按前缀约定隔离+内存 Map 过滤（键数=联系人×~10 量级，全量注水 getAll 开销可接受；消息表无分页但有 100/200 条切片上限兜底）；③聊天消息整键 put 存在写放大（每次全量序列化数组，旧 localStorage 实现相同，未恶化）；④完整降级 UI 因 contacts 存 IndexedDB 而受限（登录不可用），降级保命范围=已迁移键数据不丢不阻 UI；⑤非可提取密钥防「文件泄露」，同源脚本仍可解密（纯前端方案理论上限）
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无错误；改动仅 src/lib/ios/idb-kv.ts（+worklog）

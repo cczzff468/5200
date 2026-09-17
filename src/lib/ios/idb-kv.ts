@@ -168,13 +168,20 @@ async function migrateLsToKv(): Promise<number> {
       } catch {
         value = raw; // 非 JSON 字符串原样存
       }
-      await localDB.put('kv', { key, value });
-      // 校验：读回并对比序列化结果，一致才算迁移成功
-      const back = await localDB.get('kv', key);
-      const ok =
-        back != null &&
-        JSON.stringify(back.value) === JSON.stringify(value);
-      if (!ok) continue; // 保留旧键，下次启动重试
+      // 已有键则不覆盖：说明上次迁移 put 已成功（可能后续运行期已被 kvSet 更新过）。
+      // 防止极端窗口（put 成功后、删旧键前页面被杀）下，下次启动用 localStorage
+      // 旧值覆盖运行期新值。kv 存的是 JSON.parse 结果（可结构化克隆），不存在
+      // 「上次写坏」需要 LS 修复的场景，直接以 kv 为准并清掉 LS 旧键。
+      const existing = await localDB.get('kv', key);
+      if (existing == null) {
+        await localDB.put('kv', { key, value });
+        // 校验：读回并对比序列化结果，一致才算迁移成功
+        const back = await localDB.get('kv', key);
+        const ok =
+          back != null &&
+          JSON.stringify(back.value) === JSON.stringify(value);
+        if (!ok) continue; // 保留旧键，下次启动重试
+      }
       window.localStorage.removeItem(key);
       migrated++;
     } catch {
@@ -204,9 +211,28 @@ export function ensureKvReady(): Promise<void> {
       await hydrateAll();
       readyDone = true;
     } catch {
-      // IndexedDB 打不开（极端环境）：降级回 localStorage 读写，聊天/记忆等不中断
+      // IndexedDB 打不开（极端环境，如隐私模式禁用存储）：降级回 localStorage 读写，聊天/记忆等不中断。
+      // 同时把 localStorage 里的管理键注水进内存 —— 降级模式下 kvSet 也会写 localStorage，
+      // 同一隐私会话刷新后 localStorage 数据还在，必须注水才能读到（否则刷新即丢）。
       idbAvailable = false;
       readyDone = true;
+      if (typeof window !== 'undefined') {
+        try {
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i);
+            if (!k || !isMigratableKey(k) || memStore.has(k)) continue;
+            const raw = window.localStorage.getItem(k);
+            if (raw == null) continue;
+            try {
+              memStore.set(k, JSON.parse(raw));
+            } catch {
+              memStore.set(k, raw);
+            }
+          }
+        } catch {
+          // 注水失败忽略（与旧代码无键时行为一致）
+        }
+      }
       console.warn('[idb-kv] IndexedDB 不可用，已降级回 localStorage 持久化');
     }
   })();
