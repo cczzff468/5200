@@ -5425,3 +5425,20 @@ Work Log:
 Stage Summary:
 - 改动文件：src/lib/ios/worldbook.ts（范围排序/空内容兜底/异常兜底/总预算截断 4 项加固）；wechat/qq/chat 三端与 UI 零改动
 - 审计结论：九维检查中 7 项原实现已达标（有单元+E2E 双证），3 处缺口（同位置书排序、空内容脏数据、无预算上限）本轮修复并验证；2 处「无法在沙箱验证」如实标注（AI 对提示词规则的实际遵循度需真实 API、before/after_system 并入同一条 system 消息而非独立 system 消息——对模型语义等价，已在报告中说明）
+
+---
+Task ID: wb-icon-5
+Agent: Z.ai Code (main)
+Task: 把世界书 App 图标换成用户上传的图片（蓝色书架实体图标）
+
+Work Log:
+- 用户上传「书径 - Kindle传书-iOS-512x512.png」（512×512 RGBA，蓝色圆角底+白色书架图案）落盘在 upload/，复制为 public/icons/worldbook.png（与其他 21 枚实体图标同目录同命名规范）
+- src/components/apps/registry.tsx：worldbook 定义新增 image: '/icons/worldbook.png'；BookMarked 线条图降级为备用 glyph（与 QQ 等同模式，有 image 时不会展示）
+- 自动生效面：APPS.icon 走 RealIconTile（主屏网格/Dock/Spotlight/多任务）；AppIconTile 经 IMAGES 映射同样优先 image（主题页/App Store 卡片预览）——两处代码零改动
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844，解锁后翻到第 3 页）：世界书图标显示为上传的蓝色书架实体图，圆角由容器统一裁切；network 面板 GET /_next/image?url=%2Ficons%2Fworldbook.png 200；img 元素实测渲染 64.2px（60px 槽位×1.07 放大）；console 无错误
+
+Stage Summary:
+- 改动文件：public/icons/worldbook.png（新增）、src/components/apps/registry.tsx（+1 行 image 字段+注释）
+- 世界书功能逻辑（注入/规则/审计加固）零触碰；这是纯视觉替换
+- in-app 内部的 BookMarked 小图标（worldbook.tsx 空态/行标、chat-settings.tsx 挂载行）保留——它们是界面内语义图标而非 App 图标，与 iOS 实体图标体系不冲突
