@@ -5202,3 +5202,33 @@ Stage Summary:
   ⑨ 聊天注入：buildMomentsChatBlock 执行（由懒写入发生证实）；聊天回复因用户直连 API 403 地域限制显示错误气泡（既有聊天链路的环境限制，非本任务引入）
 - 数据结构符合需求五：动态 {id, peerId, author, content, images, createdAt}；互动 {id, postId, author, type, content, createdAt, parentId}；记忆 source='moments' + sourcePostId/sourceKind/sourceCommentId
 - 遗留说明：定时(schedule)触发与频率(interval)共用 runAutoPosts 同一结算路径（仅到期条件不同）未单独 E2E；删联系人级联清理走动态 import（代码路径简单，未做 UI 级 E2E）
+
+---
+Task ID: MOMENTS-2
+Agent: Z.ai Code (main)
+Task: 朋友圈 AI 回复修复（串台/回复自己/内容重复/人机感）+ 长按删评 + 有感而发去门槛 + AI 动态可编辑删除 + 评论 AI 动态 AI 必回
+
+Work Log:
+- 根因定位（截图复盘）：「乐乐 回复 乐乐」自回复 = 旧版本遗留队列项 parentCommentId 指向 AI 自己的评论（aed2b60 已修生成端，但遗留队列数据仍会触发）；两角色内容一模一样 = 写入层无去重防线
+- 防串台三层防线（一）：①drainReplies 结算前守卫——parent.author !== 'user' 直接丢弃（遗留坏队列项自灭，不生成）+ 该角色已回复过该评论则跳过；②addCharMomentComment 写入层硬性拒绝——同一条动态下已存在一模一样内容（任何人发的）不写入；③prompt 层——评论/回复都带评论区已有发言清单并禁止重复/类似话术，回复 prompt 显式声明「你是X，回复对象是Y，会显示为 X 回复 Y，不是你自己」
+- 遗留数据修复（一.3）：listMomentPosts 读时摘掉「AI 回复自己」（replyTo===自己名字且 authorKind==='char' → replyToName/parentId 置空）；新增 repairLegacyMomentData()（检测原始存储有坏数据才写回修复，幂等）挂 MomentsScheduler 启动 + QQ ZonePage 挂载；微信 loadMoments / QQ loadZoneComments 原始读取同样兜底（修复前打开 App 也显示正确）
+- 人机感（二）：generate route sys 加「活人不是客服：可懒散/带情绪/调侃不客气，禁万能祝福夸奖模板」；comment prompt 要求 15~50 字口语化（接梗/调侃/吐槽/反问/拆台/短句均可）+ 必须扣住动态具体内容禁止空泛夸赞 + 禁句式清单（这话说得真好/希望你能/祝你/为你感到开心/加油/永远支持你）+ 评论区已有发言禁再类似；reply prompt 同款 + 显式指代（X 回复 Y）
+- 长按评论删除（微信+QQ）：移除评论行尾 × 按钮；评论体长按 480ms 弹 CommentDeleteDialog（moments-shared 新共享组件，含作者名与「其下回复一并删除」提示）确认后删除；长按后 suppressClick 拦截紧随 click（不误弹回复框），移动 >10px 取消；微信仅自己朋友圈页可删（好友页只读不变），QQ 种子帖评论不响应长按；deleteMomentComment 升级为递归收集全部后代评论级联删除 + 队列内 parentCommentId 命中删除集的回复项一并撤掉
+- 有感而发去门槛（用户需求）：删除「累计聊天 ≥8 轮且距上次动态 ≥6 小时」条件与轮次计数器（turnsKey/bump/read/reset 四函数删除，wx/qq/sms/phone 四端 bumpMomentChatTurns 调用与 import 全部清理，purgeMomentsForContact 同步清计数器行删除）；改为每次 tick 小概率心血来潮（1/240，期望约 20 分钟一次）+ 仅保留 15 分钟最小间隔防连发刷屏（非触发条件）；设置弹层文案更新为「根据最近聊天和记忆，想发的时候就发」「随时心血来潮……不攒轮次、不设时间表」
+- AI 动态可编辑/删除：微信 MomentRow 移除 mine 门控（编辑/删除按钮只要 handler 传入就显示，AI 动态同款）；QQ PostMoreMenu 移除 mine prop 编辑恒显示
+- 评论 AI 动态 AI 必回（用户需求「ai发了动态，我给他评论，他也能回我」）：addUserMomentComment 的回复排队规则扩展为「回复的是 AI 的评论 → 那个 AI 回；顶层评论的是角色本人的动态 → 动态作者回」，统一带用户评论 id 入队（指向/prompt 指代正确）
+- E2E 实测（agent-browser 隔离会话，种 2 角色 char-lele/z + 机主 Z + 遗留坏数据）：
+  ①遗留修复：种入「乐乐 回复 乐乐」坏评论 + 指向 AI 评论的坏队列项 → reload 后 UI 显示为独立评论（无错误指向）、IndexedDB 原始数据 selfReplyCount=0、坏队列项到期被守卫丢弃（队列清空）且未生成任何自回复评论 ✓
+  ②长按删评（微信）：长按乐乐评论 600ms → 确认弹层（含「其下的回复也会一并删除」）→ 确认后评论+其下「Z 回复 乐乐」级联消失 + IndexedDB 落盘（comments 只剩 2 条）+ X 按钮数量 0 ✓
+  ③评论 AI 动态 → AI 回我：评论乐乐动态 → 22s 后乐乐回复 replyTo='Z' 指向正确（内容贴人设：「辞职信都写好了结果老板画大饼我怂了」）✓
+  ④多轮回复链：Z→乐乐→Z→乐乐 四层全链 parentId 串接正确、每层 replyTo 展示名正确（UI 渲染「乐乐 回复 Z」「Z 回复 乐乐」清晰）、无一次自回复、无重复内容 ✓
+  ⑤AI 动态编辑/删除（微信）：✨让乐乐发一条（AI 200 生成 11s 毒舌闺蜜风格加班动态）→ 菜单显示编辑+删除 → 编辑保存生效（旧文案消失新文案出现）→ 删除生效 ✓
+  ⑥多角色同评论区互异：火锅动态 z 评论（调侃辣「你确定不是被辣到说不出话」）；电影动态 z+乐乐都点赞、z 评论（毒舌影评「星星多是因为电影太烂」）——两角色内容/风格完全不同，且乐乐已互动后 candidates 过滤不再重复互动 ✓
+  ⑦有感而发：设置 UI 无「8 轮/6 小时/攒够」字样 → 开启聊天触发 + Math.random 覆写恒 0（概率门必中）→ 14s 内乐乐自动发布人设化动态（融合加班记忆梗）✓
+  ⑧QQ 空间全链路：种动态+评论 → 长按删评弹层+删除生效（X 数量 0、回复按钮保留）→ ✨让乐乐发 QQ 动态（生成内容引用了微信侧加班记忆——互通开关下动态记忆跨平台共享按设计工作）→ 「…」菜单编辑+删除 AI 动态全部生效 ✓
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无错误（此前 GET / 500 为编辑过程瞬时编译态，最终编译与请求全部 200）
+
+Stage Summary:
+- 交付 8 文件：moments.ts（防串台守卫/写入去重/遗留修复/递删/顶层评论AI回/触发去门槛）、generate route（人设化反模板 prompt）、moments-shared.tsx（CommentDeleteDialog/文案/PostMoreMenu）、wechat.tsx、qq.tsx（长按删评 UI/AI 动态编辑删除/读时兜底）、chat.tsx、phone.tsx、MomentsScheduler.tsx（bump 清理/修复挂载）
+- 串台问题三层闭环：遗留坏数据自动修复 + 遗留坏队列项守卫自灭 + 新写入去重，配 prompt 层「明确谁回复谁/禁复用别人话术」；实测同评论区多角色内容完全不同、多轮链指向全部正确
+- 如实说明：①「同一条动态两位 AI 各写一条评论」的场景依赖互动队列随机抽 1-2 位，实测两轮各抽中 z（50% 概率抽 1 位），两位齐评的同屏样本未自然出现，但写入层同内容硬拒绝 + prompt 互异要求对任意组合生效，且两角色分别评论/回复同评论区的内容已实测完全不同；②有感而发的随机触发期望约 20 分钟一次（15 分钟防连发下限），E2E 用 Math.random 覆写验证触发链路，真实节奏不可也不应 E2E 等待；③测试数据在隔离会话，未污染用户浏览器

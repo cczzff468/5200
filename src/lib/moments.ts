@@ -105,8 +105,6 @@ const USER_NAMES_KEY = 'moments-user-names';
 const QUEUE_KEY = 'moments-queue';
 /** 每角色×平台自动发布设置 */
 const AUTO_CFG_KEY = 'moments-auto-cfg';
-/** 聊天灵感触发：累计聊天轮次 */
-const turnsKey = (contactId: string) => `moments-chat-turns:${contactId}`;
 /** 自动发布失败退避 */
 const attemptKey = (contactId: string, platform: MomentPlatform) => `moments-auto-attempt:${contactId}:${platform}`;
 
@@ -290,6 +288,9 @@ export function listMomentPosts(
             .map((c) => {
               const nm = str(c.author);
               const kind = authorOf(nm, c.authorKind, userNames);
+              const rawReplyTo = typeof c.replyTo === 'string' ? c.replyTo : null;
+              // 旧版遗留修复（一.1）：AI「回复自己」（replyTo 是自己的名字）是历史 bug 数据，读出来时摘掉错误指向，降为独立评论
+              const selfReply = kind === 'char' && rawReplyTo !== null && rawReplyTo === nm;
               return {
                 id: str(c.id) || uid(),
                 author: kind,
@@ -298,8 +299,8 @@ export function listMomentPosts(
                 content: str(c.text),
                 createdAt:
                   typeof c.createdAt === 'number' ? c.createdAt : typeof c.time === 'number' ? c.time : createdAt,
-                parentId: typeof c.parentId === 'string' ? c.parentId : null,
-                replyToName: typeof c.replyTo === 'string' ? c.replyTo : null,
+                parentId: selfReply ? null : typeof c.parentId === 'string' ? c.parentId : null,
+                replyToName: selfReply ? null : rawReplyTo,
               };
             }),
         });
@@ -322,6 +323,9 @@ export function listMomentPosts(
         .map((c) => {
           const nm = str(c.author);
           const kind = authorOf(nm, c.authorKind, userNames);
+          const rawReplyTo = typeof c.replyTo === 'string' ? c.replyTo : null;
+          // 同微信分支：AI「回复自己」的历史 bug 数据读时修复
+          const selfReply = kind === 'char' && rawReplyTo !== null && rawReplyTo === nm;
           return {
             id: str(c.id) || uid(),
             author: kind,
@@ -329,8 +333,8 @@ export function listMomentPosts(
             peerId: typeof c.peerId === 'string' ? c.peerId : kind === 'char' ? peerIdByName(nm) : null,
             content: str(c.content),
             createdAt: typeof c.createdAt === 'number' ? c.createdAt : (qqTimeToTs(c.time) ?? createdAt),
-            parentId: typeof c.parentId === 'string' ? c.parentId : null,
-            replyToName: typeof c.replyTo === 'string' ? c.replyTo : null,
+            parentId: selfReply ? null : typeof c.parentId === 'string' ? c.parentId : null,
+            replyToName: selfReply ? null : rawReplyTo,
           };
         });
       out.push({
@@ -718,16 +722,28 @@ export function addUserMomentComment(
       postDetail: post.content.slice(0, 40),
     });
   }
-  // 回复的是 AI 角色的评论 → 排一条 AI 回复（二.3：AI 可以继续回复用户的回复，支持多轮）。
+  // AI 回复排队（二.1/二.3）：回复的是 AI 的评论 → 那个 AI 来回（多轮）；
+  // 顶层评论的是角色本人的动态 → 动态作者也来回复用户（AI 发的动态，用户评论后 TA 会回）。
   // 队列里带「用户的这条评论」id（不是 AI 的父评论）：AI 的是在回复用户这句话，
   // replyTo 展示名/prompt 指代才会是用户（而非 AI 自己），parentId 也串在用户评论下
-  if (parent && parent.author === 'char' && parent.peerId) {
-    enqueueCharReply(platform, postId, parent.peerId, comment.id, args.userName);
+  const replyPeerId = parent
+    ? parent.author === 'char'
+      ? parent.peerId
+      : null
+    : post.author === 'char'
+      ? post.peerId
+      : null;
+  if (replyPeerId) {
+    enqueueCharReply(platform, postId, replyPeerId, comment.id, args.userName);
   }
   return comment;
 }
 
-/** 角色评论/回复（AI 互动与 AI 回复共用；写入该角色记忆——三.4） */
+/**
+ * 角色评论/回复（AI 互动与 AI 回复共用；写入该角色记忆——三.4）。
+ * 防重复（一.4）：同一条动态下已有一模一样的内容（任何人发的）→ 拒绝写入，
+ * 保证「不同角色内容互异 / 同角色不重复」在数据层硬性成立（生成撞车/重试也不会出现重复评论）。
+ */
 export function addCharMomentComment(
   platform: MomentPlatform,
   postId: string,
@@ -746,6 +762,7 @@ export function addCharMomentComment(
   const list = listMomentPosts(platform, args.userName);
   const post = list.find((p) => p.id === postId);
   if (!post) return null;
+  if (post.comments.some((c) => c.content.trim() === text)) return null; // 已有一模一样的内容 → 不重复写入
   const comment: MomentCommentView = {
     id: uid(),
     author: 'char',
@@ -777,19 +794,28 @@ export function addCharMomentComment(
   return comment;
 }
 
-/** 删除一条评论（用户删除自己的评论；其下的回复一并删，相关队列回复一并撤掉） */
+/** 删除一条评论（长按删除；任何人的评论都可删——手机是用户的。其下全部后代回复一并删，相关队列回复一并撤掉） */
 export function deleteMomentComment(platform: MomentPlatform, postId: string, commentId: string, userName: string): boolean {
   const list = listMomentPosts(platform, userName);
   const post = list.find((p) => p.id === postId);
   if (!post || !post.comments.some((c) => c.id === commentId)) return false;
+  // 递归收集全部后代评论（回复的回复…）一并删除
+  const removed = new Set<string>([commentId]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const c of post.comments) {
+      if (c.parentId && removed.has(c.parentId) && !removed.has(c.id)) {
+        removed.add(c.id);
+        grew = true;
+      }
+    }
+  }
   persistMomentPosts(
     platform,
-    list.map((p) =>
-      p.id === postId ? { ...p, comments: p.comments.filter((c) => c.id !== commentId && c.parentId !== commentId) } : p
-    )
+    list.map((p) => (p.id === postId ? { ...p, comments: p.comments.filter((c) => !removed.has(c.id)) } : p))
   );
   try {
-    const q = loadQueueSafe().filter((item) => item.type !== 'reply' || item.parentCommentId !== commentId);
+    const q = loadQueueSafe().filter((item) => item.type !== 'reply' || !removed.has(item.parentCommentId));
     saveQueue(q);
   } catch {
     // 忽略
@@ -947,33 +973,6 @@ export function saveMomentAutoCfg(contactId: string, platform: MomentPlatform, p
   return next;
 }
 
-/** 聊天灵感触发：每轮 AI 回复后 +1（各聊天 App finalize 调用） */
-export function bumpMomentChatTurns(contactId: string): void {
-  if (!contactId) return;
-  try {
-    const n = (kvGet<number>(turnsKey(contactId)) ?? 0) + 1;
-    kvSet(turnsKey(contactId), n > 999 ? 999 : n);
-  } catch {
-    // 忽略
-  }
-}
-
-function readMomentChatTurns(contactId: string): number {
-  try {
-    return kvGet<number>(turnsKey(contactId)) ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
-function resetMomentChatTurns(contactId: string): void {
-  try {
-    kvSet(turnsKey(contactId), 0);
-  } catch {
-    // 忽略
-  }
-}
-
 // ---------------- AI 生成（走 /api/moments/generate；用户 API 配置优先，服务端 SDK 兜底） ----------------
 
 function personaOf(peer: ContactRecord): Record<string, string | null> {
@@ -1069,7 +1068,7 @@ export async function aiCommentOnMoment(args: {
     content,
     replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
   });
-  if (!added) throw new Error('动态已被删除');
+  if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');
   return added;
 }
 
@@ -1097,7 +1096,7 @@ function peersForPlatform(contacts: ContactRecord[], platform: MomentPlatform): 
   return contacts.filter((c) => (c.kind === 'char' || c.kind === 'npc') && isFriendIn(c, platform));
 }
 
-/** 结算到期的 AI 回复（用户回复了 AI 评论 → AI 再回复）；未到期/未处理的项原样保留 */
+/** 结算到期的 AI 回复（用户评论/回复了 AI → AI 再回复）；未到期/未处理的项原样保留 */
 async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentTickDeps): Promise<MomentQueueItem[]> {
   const keep: MomentQueueItem[] = [];
   for (const item of queue) {
@@ -1114,6 +1113,11 @@ async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentT
       const post = listMomentPosts(item.platform, item.userName).find((p) => p.id === item.postId);
       const parent = post?.comments.find((c) => c.id === item.parentCommentId);
       if (!peer || !post || !parent) continue; // 动态/评论已被删 → 丢弃
+      // 防串台（一.1）：AI 只回「用户发的评论」。旧版本遗留的队列项指向 AI 自己/别人的评论
+      // （会生成「乐乐 回复 乐乐」这种错误指向），直接丢弃不生成
+      if (parent.author !== 'user') continue;
+      // 该角色已经回复过这条评论（重试/遗留重复）→ 不再生成
+      if (post.comments.some((c) => c.peerId === item.peerId && c.parentId === parent.id)) continue;
       await aiCommentOnMoment({
         apiConfig: deps.apiConfig,
         platform: item.platform,
@@ -1190,8 +1194,9 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
       } else if (cfg.trigger === 'interval') {
         if (now - last >= cfg.intervalHours * 3_600_000) plan.push({ peer, platform, cfg });
       } else {
-        // 聊天灵感：累计聊天 ≥8 轮且距上次动态 ≥6 小时 → 有感而发（内容自然呼应最近话题）
-        if (readMomentChatTurns(peer.id) >= 8 && now - last >= 6 * 3_600_000) {
+        // 聊天灵感（有感而发）：不攒轮次、不设时间门槛——AI 心血来潮想发就发。
+        // 实现为每次 tick 小概率触发（期望约 20 分钟一次）；下面的 15 分钟最小间隔只是防连发刷屏的保险，不是触发条件
+        if (now - last >= 15 * 60_000 && Math.random() < 1 / 240) {
           plan.push({ peer, platform, cfg, hint: '结合你们最近聊过的话题和你的近况，有感而发' });
         }
       }
@@ -1217,7 +1222,6 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
       userName,
       hint: pick.hint,
     });
-    if (pick.cfg.trigger === 'chat') resetMomentChatTurns(pick.peer.id);
     emitMomentsChanged(pick.platform);
   } catch {
     // 保留退避标记（10 分钟后重试）
@@ -1339,6 +1343,61 @@ export function buildMomentsChatBlock(args: {
   return lines.join('\n');
 }
 
+// ---------------- 旧版本遗留数据修复（MomentsScheduler 启动时执行一次） ----------------
+
+/** 原始存储里是否存在「AI 回复自己」的历史 bug 数据（replyTo 是自己的名字且作者为 char） */
+function hasLegacySelfReplyRaw(platform: MomentPlatform): boolean {
+  try {
+    if (platform === 'wx') {
+      const raw = kvGet<WxRawPost[]>(WX_MOMENTS_KEY);
+      if (!Array.isArray(raw)) return false;
+      return raw.some(
+        (p) =>
+          Array.isArray(p?.comments) &&
+          p.comments.some(
+            (c) =>
+              Boolean(c) &&
+              typeof c === 'object' &&
+              (c as WxRawComment).authorKind === 'char' &&
+              typeof (c as WxRawComment).author === 'string' &&
+              (c as WxRawComment).replyTo === (c as WxRawComment).author
+          )
+      );
+    }
+    const raw = kvGet<Record<string, QqRawComment[]>>(QQ_COMMENTS_KEY);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    return Object.values(raw).some(
+      (arr) =>
+        Array.isArray(arr) &&
+        arr.some(
+          (c) =>
+            Boolean(c) &&
+            typeof c === 'object' &&
+            (c as QqRawComment).authorKind === 'char' &&
+            typeof (c as QqRawComment).author === 'string' &&
+            (c as QqRawComment).replyTo === (c as QqRawComment).author
+        )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 一次性修复旧版本遗留数据：AI「回复自己」的错误指向（listMomentPosts 视图层已兼容修复，
+ * 这里再把修复结果写回存储，让 App 内的原始读取也能显示正确）。
+ */
+export function repairLegacyMomentData(): void {
+  try {
+    for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+      if (!hasLegacySelfReplyRaw(platform)) continue;
+      persistMomentPosts(platform, listMomentPosts(platform));
+    }
+  } catch {
+    // 忽略（修复失败不影响功能，视图层读取时仍会兜底修复）
+  }
+}
+
 // ---------------- 联系人删除级联清理（contacts-store.deleteContact 动态引入调用） ----------------
 
 /** 删除该联系人的全部动态痕迹：TA 的动态、TA 的点赞/评论、队列里的待回复项与计数器 */
@@ -1361,7 +1420,6 @@ export function purgeMomentsForContact(contactId: string): void {
     }
     const q = loadQueueSafe().filter((x) => x.type !== 'reply' || x.peerId !== contactId);
     saveQueue(q);
-    kvDel(turnsKey(contactId));
     kvDel(attemptKey(contactId, 'wx'));
     kvDel(attemptKey(contactId, 'qq'));
   } catch {

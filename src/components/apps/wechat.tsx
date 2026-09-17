@@ -110,7 +110,6 @@ import {
   addUserMomentPost,
   aiPostMoment,
   buildMomentsChatBlock,
-  bumpMomentChatTurns,
   deleteMomentComment,
   deleteMomentPost,
   enqueuePostInteractions,
@@ -120,7 +119,7 @@ import {
   toggleUserMomentLike,
   updateMomentPostContent,
 } from '@/lib/moments';
-import { AskPostSheet, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
+import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -531,13 +530,19 @@ function loadMoments(): WxMoment[] {
                   typeof (c as WxMomentComment).text === 'string' &&
                   typeof (c as WxMomentComment).time === 'number'
               )
-              .map((c) => ({
-                id: typeof c.id === 'string' ? c.id : uid(),
-                author: c.author,
-                text: c.text,
-                time: c.time,
-                replyTo: typeof c.replyTo === 'string' ? c.replyTo : null,
-              }))
+              .map((c) => {
+                // 旧版遗留修复：AI「回复自己」的历史 bug 数据（replyTo 是自己的名字且作者为 char）读时摘掉错误指向
+                const rawReplyTo = typeof c.replyTo === 'string' ? c.replyTo : null;
+                const selfReplyBug =
+                  rawReplyTo !== null && rawReplyTo === c.author && (c as { authorKind?: unknown }).authorKind === 'char';
+                return {
+                  id: typeof c.id === 'string' ? c.id : uid(),
+                  author: c.author,
+                  text: c.text,
+                  time: c.time,
+                  replyTo: selfReplyBug ? null : rawReplyTo,
+                };
+              })
           : [],
       }));
   } catch {
@@ -3700,8 +3705,6 @@ function ChatPage({
               { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );
-        // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
-        bumpMomentChatTurns(peer.id);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -5296,7 +5299,6 @@ function ChatPage({
 function MomentRow({
   post,
   meName,
-  mine,
   menuOpen,
   onToggleMenu,
   onToggleLike,
@@ -5306,25 +5308,54 @@ function MomentRow({
   onEditRequest,
 }: {
   post: WxMoment;
-  /** 机主展示名（点赞高亮 / 自己评论可删） */
+  /** 机主展示名（点赞高亮用） */
   meName: string;
-  mine: boolean;
   menuOpen: boolean;
   onToggleMenu: () => void;
   onToggleLike: () => void;
   onComment: (text: string, reply: { commentId: string; name: string } | null) => void;
   onDelete: () => void;
-  /** 删除自己的评论（其下回复一并删） */
+  /** 长按评论删除（任何人的评论都可删，其下回复一并删；好友朋友圈页不传） */
   onDeleteComment?: (commentId: string) => void;
-  /** 编辑动态正文（仅自己的动态传入） */
+  /** 编辑动态正文（自己的和 AI 的都可以编辑；好友朋友圈页不传） */
   onEditRequest?: () => void;
 }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState('');
   /** 回复目标：点某条评论设置（再点一次取消），带评论 id（回复 AI 评论可触发多轮） */
   const [replyTarget, setReplyTarget] = useState<{ commentId: string; name: string } | null>(null);
+  /** 长按删除的评论（确认弹层） */
+  const [delTarget, setDelTarget] = useState<{ id: string; author: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
+  /** 长按计时器 + 起点坐标（移动超阈值视为滚动取消）+ 长按后拦截紧随的 click */
+  const pressRef = useRef<{ timer: number | null; x: number; y: number }>({ timer: null, x: 0, y: 0 });
+  const suppressClickRef = useRef(false);
+
+  const clearPress = () => {
+    if (pressRef.current.timer) {
+      window.clearTimeout(pressRef.current.timer);
+      pressRef.current.timer = null;
+    }
+  };
+  useEffect(() => clearPress, []);
+
+  const startCommentPress = (c: WxMomentComment) => (e: React.PointerEvent) => {
+    if (!onDeleteComment) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    clearPress();
+    pressRef.current = { x: e.clientX, y: e.clientY, timer: null };
+    pressRef.current.timer = window.setTimeout(() => {
+      pressRef.current.timer = null;
+      suppressClickRef.current = true;
+      setDelTarget({ id: c.id, author: c.author });
+    }, 480);
+  };
+  const onCommentPointerMove = (e: React.PointerEvent) => {
+    const t = pressRef.current;
+    if (!t.timer) return;
+    if (Math.abs(e.clientX - t.x) > 10 || Math.abs(e.clientY - t.y) > 10) clearPress();
+  };
 
   useEffect(() => {
     if (composerOpen) inputRef.current?.focus();
@@ -5419,32 +5450,30 @@ function MomentRow({
                 <MessageCircle className="h-4 w-4" strokeWidth={1.8} />
                 评论
               </button>
-              {mine && (
+              {onEditRequest && (
                 <>
-                  <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
-                  {onEditRequest && (
-                    <button
-                      type="button"
-                      data-testid={`wx-moment-edit-${post.id}`}
-                      onClick={onEditRequest}
-                      className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
-                    >
-                      <Pencil className="h-4 w-4" strokeWidth={1.8} />
-                      编辑
-                    </button>
-                  )}
                   <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
                   <button
                     type="button"
-                    data-testid={`wx-moment-delete-${post.id}`}
-                    onClick={onDelete}
-                    className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] text-[#FF9C9C] active:bg-white/10"
+                    data-testid={`wx-moment-edit-${post.id}`}
+                    onClick={onEditRequest}
+                    className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
                   >
-                    <Trash2 className="h-4 w-4" strokeWidth={1.8} />
-                    删除
+                    <Pencil className="h-4 w-4" strokeWidth={1.8} />
+                    编辑
                   </button>
                 </>
               )}
+              <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
+              <button
+                type="button"
+                data-testid={`wx-moment-delete-${post.id}`}
+                onClick={onDelete}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] text-[#FF9C9C] active:bg-white/10"
+              >
+                <Trash2 className="h-4 w-4" strokeWidth={1.8} />
+                删除
+              </button>
             </div>
           </div>
         )}
@@ -5472,8 +5501,18 @@ function MomentRow({
                       <button
                         type="button"
                         data-testid={`wx-moment-comment-${post.id}-${c.id}`}
-                        title={`回复 ${c.author}`}
+                        title={`回复 ${c.author}（长按删除）`}
+                        onPointerDown={startCommentPress(c)}
+                        onPointerUp={clearPress}
+                        onPointerLeave={clearPress}
+                        onPointerCancel={clearPress}
+                        onPointerMove={onCommentPointerMove}
                         onClick={() => {
+                          // 长按后拦截紧随的 click（不弹出回复框）
+                          if (suppressClickRef.current) {
+                            suppressClickRef.current = false;
+                            return;
+                          }
                           setComposerOpen(true);
                           setReplyTarget((r) => (r && r.commentId === c.id ? null : { commentId: c.id, name: c.author }));
                         }}
@@ -5488,20 +5527,6 @@ function MomentRow({
                         )}
                         <span className="text-black/85 dark:text-white/85">：{c.text}</span>
                       </button>
-                      {c.author === meName && onDeleteComment && (
-                        <button
-                          type="button"
-                          aria-label="删除评论"
-                          data-testid={`wx-moment-comment-del-${post.id}-${c.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteComment(c.id);
-                          }}
-                          className="mt-[3px] shrink-0 rounded-full p-0.5 text-black/30 active:bg-black/5 dark:text-white/30 dark:active:bg-white/10"
-                        >
-                          <X className="h-3.5 w-3.5" strokeWidth={2.2} />
-                        </button>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -5537,6 +5562,18 @@ function MomentRow({
               发送
             </button>
           </div>
+        )}
+
+        {/* 长按评论 → 删除确认（任何人的评论都可删；其下回复一并删） */}
+        {delTarget && onDeleteComment && (
+          <CommentDeleteDialog
+            author={delTarget.author}
+            onCancel={() => setDelTarget(null)}
+            onDelete={() => {
+              onDeleteComment(delTarget.id);
+              setDelTarget(null);
+            }}
+          />
         )}
       </div>
     </div>
@@ -5679,7 +5716,6 @@ function MomentsPage({
                 key={p.id}
                 post={p}
                 meName={me.name}
-                mine={p.authorName === me.name}
                 menuOpen={menuId === p.id}
                 onToggleMenu={() => setMenuId(menuId === p.id ? null : p.id)}
                 onToggleLike={() => {
@@ -5692,7 +5728,7 @@ function MomentsPage({
                   setMenuId(null);
                 }}
                 onDeleteComment={onDeleteComment ? (commentId) => onDeleteComment(p.id, commentId) : undefined}
-                onEditRequest={onEditRequest && p.authorName === me.name ? () => onEditRequest(p) : undefined}
+                onEditRequest={onEditRequest ? () => onEditRequest(p) : undefined}
               />
             ))}
             <p className="py-6 text-center text-[12px] text-black/25 dark:text-white/25">没有更多了</p>

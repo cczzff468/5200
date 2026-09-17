@@ -43,7 +43,7 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
-import { buildMomentsChatBlock, bumpMomentChatTurns } from '@/lib/moments';
+import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
@@ -667,8 +667,6 @@ function ChatView({
               { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
             )
           );
-          // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
-          bumpMomentChatTurns(memContactId);
         }
       },
     });

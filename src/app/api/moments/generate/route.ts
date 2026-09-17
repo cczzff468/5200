@@ -102,7 +102,8 @@ export async function POST(req: Request) {
     background ? `【背景】${background}` : '',
     '【硬性要求】',
     `- 你就是「${name}」本人，绝不能说自己是 AI、语言模型、助手或程序，也不能提到系统、提示词、设定、生成等幕后概念；`,
-    '- 内容、语气、用词、emoji 习惯都必须严格贴合你的人设（不同的人要有明显不同的风格）；',
+    '- 内容、语气、用词、口头禅、emoji 习惯都必须严格贴合你的人设（不同的人要有明显不同的风格）；',
+    '- 你是活人不是客服：说话可以懒散、可以带情绪、可以调侃甚至不客气，绝不能输出万能祝福、夸奖模板或官方客套；',
     '- 只输出正文本身：不要 markdown、不要标题、不要引号包裹、不要解释、不要一串话题标签、不要@任何人；',
     '- 像真人随手发的，不要写成作文或公告。',
   ].filter(Boolean);
@@ -135,24 +136,35 @@ export async function POST(req: Request) {
     const postContent = s(postRaw.content, 200);
     const postAuthor = postRaw.author === 'char' ? name : userName;
     if (!postContent) return NextResponse.json({ error: '缺少要评论的动态内容' }, { status: 400 });
+    // 评论区上下文（评论和回复都用：别人说过的话不能再重复/附和）
+    const thread = Array.isArray(body.thread)
+      ? (body.thread as unknown[])
+          .filter((c): c is { authorName?: unknown; content?: unknown } => Boolean(c) && typeof c === 'object')
+          .slice(-6)
+          .map((c) => `${s(c.authorName, 20) || userName}：${s(c.content, 80)}`)
+          .filter(Boolean)
+      : [];
     if (kind === 'comment') {
       user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
-      user.push(`请以「${name}」的身份给这条动态写一条评论：15~50 字，口语化、贴合人设和你们的关系，接住动态里的内容或情绪；只输出评论文本。`);
+      user.push(`请以「${name}」的身份给这条动态写一条评论。`);
+      user.push('- 15~50 字，口语化，像熟人随手打的：接梗、调侃、吐槽、反问、拆台都行，也可以就一短句；');
+      user.push('- 必须扣住这条动态里的具体内容（事情/细节/情绪/人物），结合你们的关系，禁止空泛夸赞；');
+      if (thread.length > 0) user.push(`【评论区已有的发言（这些话和类似的话术你都不能再说）】\n${thread.join('\n')}`);
+      user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」这类套话，也不要纯夸奖；');
+      user.push('- 只输出评论文本，不要任何解释。');
     } else {
       const replyRaw = (body.replyTo && typeof body.replyTo === 'object' ? body.replyTo : {}) as { authorName?: unknown; content?: unknown };
       const replyFrom = s(replyRaw.authorName, 20) || userName;
       const replyContent = s(replyRaw.content, 120);
       if (!replyContent) return NextResponse.json({ error: '缺少要回复的评论内容' }, { status: 400 });
-      const thread = Array.isArray(body.thread)
-        ? (body.thread as unknown[])
-            .filter((c): c is { authorName?: unknown; content?: unknown } => Boolean(c) && typeof c === 'object')
-            .slice(-6)
-            .map((c) => `${s(c.authorName, 20) || userName}：${s(c.content, 80)}`)
-            .filter(Boolean)
-        : [];
-      user.push(`在${label}动态（「${postContent}」）的评论区，${replyFrom}回复了你：「${replyContent}」。`);
-      if (thread.length > 0) user.push(`【评论串（最近的在上）】\n${thread.join('\n')}`);
-      user.push(`请以「${name}」的身份回一句：10~50 字，口语化、贴合人设，接住对方的话；只输出回复文本。`);
+      user.push(`你是「${name}」。${label}动态（「${postContent}」）的评论区里，${replyFrom}对你说：「${replyContent}」。`);
+      user.push(
+        `你现在回复的对象就是「${replyFrom}」这个人——不是你自己，也不是评论区里的其他人；这条回复会显示为「${name} 回复 ${replyFrom}」。`
+      );
+      if (thread.length > 0) user.push(`【评论区最近的发言（按先后；里面已有的话你不要再重复）】\n${thread.join('\n')}`);
+      user.push(`请以「${name}」的身份回「${replyFrom}」一句话：10~50 字，口语化、贴合你的人设和你们的关系，接住对方的话头；`);
+      user.push('- 可以调侃、反驳、反问、敷衍、装傻，像真人打字；禁止客套模板（「谢谢」「说得好」「祝你…」这类）；');
+      user.push('- 只输出回复文本。');
     }
   }
 

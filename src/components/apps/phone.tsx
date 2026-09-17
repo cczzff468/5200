@@ -44,7 +44,7 @@ import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecor
 import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
-import { buildMomentsChatBlock, bumpMomentChatTurns } from '@/lib/moments';
+import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import type { ContactRecord } from '@/lib/contacts';
 
@@ -646,8 +646,6 @@ function CallScreen({
               { user: owner || profileName, peer: contact.name }
             )
           );
-        // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
-        bumpMomentChatTurns(contact.id);
       };
       try {
         // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡；需要全部联系人现场查一次，失败回退无注入）

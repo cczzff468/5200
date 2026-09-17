@@ -147,15 +147,15 @@ import {
   addUserMomentPost,
   aiPostMoment,
   buildMomentsChatBlock,
-  bumpMomentChatTurns,
   deleteMomentComment,
   deleteMomentPost,
   enqueuePostInteractions,
+  repairLegacyMomentData,
   subscribeMomentsChanged,
   toggleUserMomentLike,
   updateMomentPostContent,
 } from '@/lib/moments';
-import { AskPostSheet, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
+import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
@@ -506,6 +506,8 @@ interface ZoneComment {
   time: string;
   /** 回复的目标评论作者（回复评论功能） */
   replyTo?: string;
+  /** 作者类型（引擎写入；legacy 数据可能缺失，读时按名字推断） */
+  authorKind?: 'user' | 'char';
 }
 
 /** 空间种子动态（原「卖萌磕到牙」示例帖已按需求移除，空间仅显示用户自己发布的动态） */
@@ -536,10 +538,18 @@ function loadZoneComments(): Record<string, ZoneComment[]> {
     const out: Record<string, ZoneComment[]> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       if (!Array.isArray(v)) continue;
-      const list = v.filter(
-        (x): x is ZoneComment =>
-          Boolean(x) && typeof (x as ZoneComment).author === 'string' && typeof (x as ZoneComment).content === 'string'
-      );
+      const list = v
+        .filter(
+          (x): x is ZoneComment =>
+            Boolean(x) && typeof (x as ZoneComment).author === 'string' && typeof (x as ZoneComment).content === 'string'
+        )
+        .map((x) => {
+          // 旧版遗留修复：AI「回复自己」的历史 bug 数据（replyTo 是自己的名字且作者为 char）读时摘掉错误指向
+          if (x.authorKind === 'char' && typeof x.replyTo === 'string' && x.replyTo === x.author) {
+            return { ...x, replyTo: undefined };
+          }
+          return x;
+        });
       if (list.length) out[k] = list;
     }
     return out;
@@ -2320,8 +2330,6 @@ function ChatPage({
               { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );
-        // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
-        bumpMomentChatTurns(peer.id);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -7163,17 +7171,47 @@ function ZonePage({
   const [askOpen, setAskOpen] = useState(false);
   const [askBusyId, setAskBusyId] = useState<string | null>(null);
   const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
+  /** 长按删除的评论（确认弹层） */
+  const [delComment, setDelComment] = useState<{ postId: string; commentId: string; author: string } | null>(null);
+  /** 长按计时器 + 起点坐标（移动超阈值视为滚动取消）+ 长按后拦截紧随的 click */
+  const pressRef = useRef<{ timer: number | null; x: number; y: number }>({ timer: null, x: 0, y: 0 });
+  const suppressClickRef = useRef(false);
 
-  // 引擎（调度器/AI）在别处写入动态后同步本地视图（AI 点赞/评论/新动态实时出现）
-  useEffect(
-    () =>
-      subscribeMomentsChanged((platform) => {
-        if (platform && platform !== 'qq') return;
-        setUserPosts(loadZonePosts());
-        setCommentsMap(loadZoneComments());
-      }),
-    []
-  );
+  const clearPress = () => {
+    if (pressRef.current.timer) {
+      window.clearTimeout(pressRef.current.timer);
+      pressRef.current.timer = null;
+    }
+  };
+  useEffect(() => clearPress, []);
+
+  /** 长按评论（480ms）→ 删除确认；移动超 10px 视为滚动取消 */
+  const startCommentPress = (p: ZonePost, c: ZoneComment) => (e: React.PointerEvent) => {
+    if (p.id.startsWith('seed-')) return; // 示例动态的评论不支持删除
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    clearPress();
+    pressRef.current = { x: e.clientX, y: e.clientY, timer: null };
+    pressRef.current.timer = window.setTimeout(() => {
+      pressRef.current.timer = null;
+      suppressClickRef.current = true;
+      setDelComment({ postId: p.id, commentId: c.id, author: c.author });
+    }, 480);
+  };
+  const onCommentPointerMove = (e: React.PointerEvent) => {
+    const t = pressRef.current;
+    if (!t.timer) return;
+    if (Math.abs(e.clientX - t.x) > 10 || Math.abs(e.clientY - t.y) > 10) clearPress();
+  };
+
+  // 旧版遗留修复 + 订阅引擎刷新（AI 点赞/评论/新动态实时出现）
+  useEffect(() => {
+    repairLegacyMomentData();
+    return subscribeMomentsChanged((platform) => {
+      if (platform && platform !== 'qq') return;
+      setUserPosts(loadZonePosts());
+      setCommentsMap(loadZoneComments());
+    });
+  }, []);
 
   const posts: ZonePost[] = useMemo(() => [...userPosts, ...ZONE_SEEDS], [userPosts]);
 
@@ -7402,7 +7440,24 @@ function ZonePage({
                     >
                       {(commentsMap[p.id] ?? []).map((c) => (
                         <div key={c.id} className="flex items-start gap-2 text-[14px] leading-[1.5]">
-                          <p className="min-w-0 flex-1">
+                          <p
+                            className="min-w-0 flex-1 active:opacity-70"
+                            title="点击回复，长按删除"
+                            onPointerDown={startCommentPress(p, c)}
+                            onPointerUp={clearPress}
+                            onPointerLeave={clearPress}
+                            onPointerCancel={clearPress}
+                            onPointerMove={onCommentPointerMove}
+                            onClick={() => {
+                              // 长按后拦截紧随的 click（不设置回复目标）
+                              if (suppressClickRef.current) {
+                                suppressClickRef.current = false;
+                                return;
+                              }
+                              setReplyTarget((r) => ({ ...r, [p.id]: { id: c.id, name: c.author } }));
+                              commentInputRefs.current[p.id]?.focus();
+                            }}
+                          >
                             <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">{c.author}</span>
                             {c.replyTo && (
                               <>
@@ -7425,17 +7480,6 @@ function ZonePage({
                           >
                             回复
                           </button>
-                          {c.author === me.name && (
-                            <button
-                              type="button"
-                              aria-label="删除评论"
-                              data-testid={`qq-zone-comment-del-${p.id}-${c.id}`}
-                              onClick={() => deleteMomentComment('qq', p.id, c.id, me.name)}
-                              className="shrink-0 rounded-full p-0.5 pt-1 text-black/30 active:bg-black/5 dark:text-white/30 dark:active:bg-white/10"
-                            >
-                              <X className="h-3.5 w-3.5" strokeWidth={2.2} />
-                            </button>
-                          )}
                         </div>
                       ))}
                     </div>
@@ -7512,7 +7556,6 @@ function ZonePage({
       )}
       {menuPostId && (
         <PostMoreMenu
-          mine={posts.find((x) => x.id === menuPostId)?.authorName === me.name}
           onEdit={() => {
             const hit = posts.find((x) => x.id === menuPostId);
             if (hit) setEditingPost({ id: hit.id, content: hit.content });
@@ -7535,6 +7578,17 @@ function ZonePage({
           onSave={(text) => {
             if (!updateMomentPostContent('qq', editingPost.id, me.name, text)) onToast('动态内容不能为空');
             setEditingPost(null);
+          }}
+        />
+      )}
+      {/* 长按评论 → 删除确认（任何人的评论都可删；其下回复一并删） */}
+      {delComment && (
+        <CommentDeleteDialog
+          author={delComment.author}
+          onCancel={() => setDelComment(null)}
+          onDelete={() => {
+            deleteMomentComment('qq', delComment.postId, delComment.commentId, me.name);
+            setDelComment(null);
           }}
         />
       )}

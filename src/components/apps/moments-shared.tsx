@@ -114,7 +114,7 @@ export function AskPostSheet({
 const TRIGGERS: { key: MomentAutoCfg['trigger']; label: string; desc: string; icon: ReactNode }[] = [
   { key: 'schedule', label: '定时发布', desc: '每天到点自动发一条', icon: <Clock3 className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" /> },
   { key: 'interval', label: '按频率发布', desc: '每隔一段时间自动发一条', icon: <CalendarClock className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" /> },
-  { key: 'chat', label: '聊天后有感而发', desc: '根据最近聊天和记忆，攒够轮次后发一条', icon: <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" /> },
+  { key: 'chat', label: '聊天后有感而发', desc: '根据最近聊天和记忆，想发的时候就发', icon: <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" /> },
 ];
 
 export function MomentAutoCfgSheet({
@@ -228,7 +228,7 @@ export function MomentAutoCfgSheet({
           )}
           {cfg.trigger === 'chat' && (
             <p className="px-4 py-2 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
-              与 TA 聊满 8 轮且距上一条动态超过 6 小时后，TA 会根据最近的聊天内容和记忆库，以自己的口吻发一条「有感而发」的动态。
+              开启后，TA 会根据你们最近的聊天和 TA 的记忆库，随时心血来潮发一条「有感而发」的动态——不攒轮次、不设时间表，什么时候想发就发。
             </p>
           )}
           <p className="px-4 pt-1 text-[12.5px] leading-relaxed text-black/40 dark:text-white/40">
@@ -292,16 +292,55 @@ export function EditPostDialog({
   );
 }
 
+// ---------------- 删除评论确认弹层（长按评论触发；微信/QQ 共用） ----------------
+
+export function CommentDeleteDialog({
+  author,
+  onCancel,
+  onDelete,
+}: {
+  /** 被删评论的作者名（提示文案用） */
+  author: string;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-50 grid place-items-center bg-black/40 p-6" role="dialog" aria-label="删除评论" onClick={onCancel}>
+      <div className="w-full rounded-[14px] bg-white p-4 dark:bg-[#1C1C1E]" onClick={(e) => e.stopPropagation()}>
+        <p className="text-[15px] font-medium">删除评论</p>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-black/55 dark:text-white/55">
+          确定删除「{author}」的这条评论吗？它下面的回复也会一并删除。
+        </p>
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            type="button"
+            data-testid="moments-comment-del-cancel"
+            onClick={onCancel}
+            className="rounded-[8px] px-3.5 py-1.5 text-[14px] text-black/60 active:bg-black/5 dark:text-white/60 dark:active:bg-white/10"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="moments-comment-del-confirm"
+            onClick={onDelete}
+            className="rounded-[8px] bg-[#FA5151] px-3.5 py-1.5 text-[14px] font-medium text-white active:opacity-80"
+          >
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 单条动态「…」菜单（QQ 空间用；编辑/删除） ----------------
 
 export function PostMoreMenu({
-  mine,
   onEdit,
   onDelete,
   onClose,
 }: {
-  /** 是否自己的动态（决定是否显示编辑） */
-  mine: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onClose: () => void;
@@ -310,12 +349,10 @@ export function PostMoreMenu({
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" role="dialog" aria-label="动态操作" onClick={onClose}>
       <div className="pb-6" onClick={(e) => e.stopPropagation()}>
         <div className="mx-3 overflow-hidden rounded-[12px] bg-white dark:bg-[#1C1C1E]">
-          {mine && (
-            <button type="button" data-testid="moments-post-edit" onClick={onEdit} className="flex h-[48px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.04] dark:border-white/10 dark:active:bg-white/[0.06]">
-              <Settings2 className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
-              编辑动态
-            </button>
-          )}
+          <button type="button" data-testid="moments-post-edit" onClick={onEdit} className="flex h-[48px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.04] dark:border-white/10 dark:active:bg-white/[0.06]">
+            <Settings2 className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
+            编辑动态
+          </button>
           <button type="button" data-testid="moments-post-delete" onClick={onDelete} className="flex h-[48px] w-full items-center gap-2.5 px-4 text-left text-[15px] text-[#FA5151] active:bg-black/[0.04] dark:text-[#FF9A97] dark:active:bg-white/[0.06]">
             <Trash2 className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
             删除动态
