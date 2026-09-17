@@ -5349,3 +5349,22 @@ Stage Summary:
 - 交付 1 文件：src/components/apps/worldbook.tsx（书库首页分类改版+条目长按/⋯菜单+编辑页右上角显式保存三合一），数据层 lib/ios/worldbook.ts 与三端注入链路零改动（不回归）
 - 交互语义确认：新建条目=显式创建（保存才存在），编辑条目=显式保存（返回即还原）；书籍统计按主范围不重不漏；角色筛选回答"这本书在和谁聊天时会生效"
 - E2E 种子遗留：本会话删除了种子条目「高优月亮」、新增「幽灵船」（禁忌之湖内容改为 V2 测试文本），均在 agent-browser 隔离会话 IndexedDB，不污染用户浏览器
+
+---
+Task ID: wb-ui-fix-1
+Agent: Z.ai Code (main)
+Task: 世界书App UI 反馈修复——①ActionSheet 重复 key 控制台报错（两个同名"乐乐（AI 角色）"导致 Encountered two children with the same key）；②"全部角色那里不包括 user（用户自己）"；③上面/下面的 tab 美化缩小
+
+Work Log:
+- 定位报错源：worldbook.tsx 的 ActionSheet 以 `key={a.label}` 作 key，两个同名 AI 角色联系人（乐乐×2）在"按角色查看会生效的世界书"浮层里产生重复 key
+- ActionSheet 修复：SheetAction 增加可选 `id` 字段，key 改为 `a.id ?? \`${a.label}-${ai}\``（角色筛选项传联系人 id 作稳定 key），同名联系人不再撞 key
+- 排除 user（用户是自己）：新增 `aiContacts = contacts.filter(c => c.kind !== 'user')`；①角色筛选浮层只列 AI 角色/配角；②条目编辑页「专属→指定角色」选择器改传 aiContacts；③activeCharFilter 守卫加 `kind !== 'user'`（历史误选 user 时自动归位为全部角色）
+- 上面 tab（统计卡）压缩：py-3→py-2、数字 19px→16px、标签 12px→10.5px、下划指示条 2.5px→2px（inset-x-9）
+- 下面 tab（底部范围筛选栏）重做为 iOS 分段控件：高 40px→30px，容器 bg-black/[0.06] 圆角 11px 内嵌 p-[3px]，激活段白底浮起投影（深色模式白/22% 灰段），更小更精致
+- 角色筛选 chip 同步缩小：h-9→h-7、13.5px→12px，与压缩后的统计卡协调
+- agent-browser 实测：锁屏解锁→搜索打开世界书→新建"魔法世界观"（emoji 名"测试📖书"被正确拦截）→建 乐乐×2（CHAR）+ 我自己（USER）→打开角色筛选浮层：只显示 全部角色+乐乐×2，**无我自己，无重复 key 报错**；选乐乐筛选生效（0 条目全局书正确不显示）；条目编辑→专属→指定角色列表只列 乐乐×2；右上角保存→条目落盘；改名后直接返回→重进名字未变（显式保存、退出不自动保存✓）；行尾无删除图标，⋯菜单与长按均弹出 编辑/删除；浅色/深色（html.dark）双模式截图核验紧凑 tab 正常
+
+Stage Summary:
+- 修复文件：src/components/apps/worldbook.tsx（ActionSheet key、aiContacts 过滤、统计卡/分段栏/chip 压缩）
+- 控制台重复 key 报错消除；角色相关列表（筛选浮层、专属指定角色）全部排除 user；上下 tab 更小更精致，深浅色适配正常
+- 显式保存、长按/⋯删除、emoji 校验等此前能力回归通过；世界书触发注入引擎与记忆库未改动

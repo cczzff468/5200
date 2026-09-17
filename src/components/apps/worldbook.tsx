@@ -91,6 +91,8 @@ function MonoToggle({ on, onChange, label, testId }: { on: boolean; onChange: (v
 // ---------------- 通用浮层 ----------------
 
 interface SheetAction {
+  /** 稳定唯一 key：label 可能重复（如两个同名 AI 角色），提供 id 时优先用 id 作 key */
+  id?: string;
   label: string;
   destructive?: boolean;
   onSelect: () => void;
@@ -104,9 +106,9 @@ function ActionSheet({ title, actions, onClose }: { title: string; actions: Shee
       <div className="absolute inset-x-3 bottom-4 flex flex-col gap-2">
         <div className={`${CARD_CLS} p-1.5`}>
           <p className={`px-3 py-2 text-center text-[12.5px] leading-[1.4] ${SUB_CLS}`}>{title}</p>
-          {actions.map((a) => (
+          {actions.map((a, ai) => (
             <button
-              key={a.label}
+              key={a.id ?? `${a.label}-${ai}`}
               type="button"
               onClick={() => {
                 onClose();
@@ -372,6 +374,9 @@ export default function WorldBookApp() {
     setBindings(map);
   }, [contacts, books]);
 
+  /** 角色可选名单：只列 AI 角色/配角——user 是用户自己，不参与角色筛选与专属指定 */
+  const aiContacts = useMemo(() => contacts.filter((c) => c.kind !== 'user'), [contacts]);
+
   const persist = (next: WorldBook[]) => {
     setBooks(next);
     saveBooks(next);
@@ -387,7 +392,8 @@ export default function WorldBookApp() {
     enabled: books.filter((b) => b.entries.some((e) => e.enabled)).length,
   };
 
-  const activeCharFilter = charFilterId && contacts.some((c) => c.id === charFilterId) ? charFilterId : null;
+  const activeCharFilter =
+    charFilterId && contacts.some((c) => c.id === charFilterId && c.kind !== 'user') ? charFilterId : null;
   const charFilterName = activeCharFilter ? contacts.find((c) => c.id === activeCharFilter)?.name ?? '' : '';
 
   // 角色筛选语义：与该角色聊天时会生效的书（启用中的 global + 已挂载到该角色的 local + 专属该角色）
@@ -613,7 +619,7 @@ export default function WorldBookApp() {
               key={entry.id}
               entry={entry}
               isNew={nav.isNew === true}
-              contacts={contacts}
+              contacts={aiContacts}
               registerSave={(fn) => {
                 editorSaveRef.current = fn;
               }}
@@ -650,7 +656,8 @@ export default function WorldBookApp() {
       {/* 底部范围筛选栏（书库首页） */}
       {nav.name === 'list' && (
         <div className="shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-1" data-testid="wb-scope-bar">
-          <div className="flex gap-2">
+          {/* iOS 分段控件样式：更矮更紧凑（激活段白底浮起，深色模式浅灰段） */}
+          <div className="flex gap-[3px] rounded-[11px] bg-black/[0.06] p-[3px] dark:bg-white/[0.09]">
             {([
               ['all', '全部'],
               ['global', WB_SCOPE_LABELS.global],
@@ -663,10 +670,10 @@ export default function WorldBookApp() {
                 data-testid={`wb-filter-${s}`}
                 aria-pressed={scopeFilter === s}
                 onClick={() => setScopeFilter(s)}
-                className={`h-10 flex-1 rounded-[12px] text-[14.5px] font-medium transition-colors ${
+                className={`h-[30px] flex-1 rounded-[8px] text-[12.5px] font-medium transition-all ${
                   scopeFilter === s
-                    ? 'bg-black text-white dark:bg-white dark:text-black'
-                    : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.09] dark:text-white/60 dark:active:bg-white/[0.15]'
+                    ? 'bg-white text-black shadow-[0_1px_3px_rgba(0,0,0,0.14)] dark:bg-white/[0.22] dark:text-white dark:shadow-none'
+                    : 'text-black/55 active:bg-black/[0.04] dark:text-white/55 dark:active:bg-white/[0.07]'
                 }`}
               >
                 {label}
@@ -761,8 +768,10 @@ export default function WorldBookApp() {
           title="按角色查看会生效的世界书"
           onClose={() => setCharSheet(false)}
           actions={[
-            { label: '全部角色', onSelect: () => setCharFilterId(null) },
-            ...contacts.map((c) => ({
+            { id: 'wb-char-all', label: '全部角色', onSelect: () => setCharFilterId(null) },
+            // 只列 AI 角色/配角，不包括 user（用户自己）
+            ...aiContacts.map((c) => ({
+              id: c.id,
               label: `${c.name}（${kindLabel(c.kind)}）`,
               onSelect: () => setCharFilterId(c.id),
             })),
@@ -830,18 +839,18 @@ function BookListPage({
           type="button"
           data-testid="wb-char-filter"
           onClick={onOpenCharSheet}
-          className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-black/[0.05] px-3.5 text-[13.5px] active:bg-black/[0.1] dark:bg-white/[0.1] dark:active:bg-white/[0.16]"
+          className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-black/[0.05] px-2.5 text-[12px] active:bg-black/[0.1] dark:bg-white/[0.1] dark:active:bg-white/[0.16]"
         >
           {charFilterName || '全部角色'}
-          <ChevronDown className="h-4 w-4 opacity-50" strokeWidth={2.2} aria-hidden="true" />
+          <ChevronDown className="h-3.5 w-3.5 opacity-50" strokeWidth={2.2} aria-hidden="true" />
         </button>
       </div>
       <p className={`px-1 pt-1 text-[13px] ${SUB_CLS}`} data-testid="wb-library-sub">
         共 {totalCount} 个世界书 · 最后更新 {lastUpdateText}
       </p>
 
-      {/* 统计卡：全局/局部/专属 三列可点（再点一次取消筛选），已启用为计数展示 */}
-      <div className={`${CARD_CLS} mt-3 flex items-stretch`}>
+      {/* 统计卡（紧凑）：全局/局部/专属 三列可点（再点一次取消筛选），已启用为计数展示 */}
+      <div className={`${CARD_CLS} mt-2.5 flex items-stretch`}>
         {(['global', 'local', 'exclusive'] as const).map((s, i) => (
           <button
             key={s}
@@ -849,22 +858,22 @@ function BookListPage({
             data-testid={`wb-scope-tab-${s}`}
             aria-pressed={scopeFilter === s}
             onClick={() => onScopeTab(s)}
-            className={`relative flex-1 py-3 text-center ${
+            className={`relative flex-1 py-2 text-center transition-colors ${
               i > 0 ? `border-l ${DIVIDER_CLS}` : ''
             } ${scopeFilter === s ? 'bg-black/[0.04] dark:bg-white/[0.06]' : 'active:bg-black/[0.03] dark:active:bg-white/[0.04]'}`}
           >
-            <span className="block text-[19px] font-bold leading-none tabular-nums">{stats[s]}</span>
-            <span className={`mt-1.5 block text-[12px] ${scopeFilter === s ? '' : SUB_CLS}`}>{WB_SCOPE_LABELS[s]}</span>
+            <span className="block text-[16px] font-bold leading-none tabular-nums">{stats[s]}</span>
+            <span className={`mt-[3px] block text-[10.5px] ${scopeFilter === s ? 'font-medium' : SUB_CLS}`}>{WB_SCOPE_LABELS[s]}</span>
             {scopeFilter === s && (
-              <span aria-hidden="true" className="absolute inset-x-7 bottom-0 h-[2.5px] rounded-t-full bg-black dark:bg-white" />
+              <span aria-hidden="true" className="absolute inset-x-9 bottom-0 h-[2px] rounded-t-full bg-black dark:bg-white" />
             )}
           </button>
         ))}
-        <div className={`flex-1 border-l py-3 text-center ${DIVIDER_CLS}`}>
-          <span className="block text-[19px] font-bold leading-none tabular-nums" data-testid="wb-stat-enabled">
+        <div className={`flex-1 border-l py-2 text-center ${DIVIDER_CLS}`}>
+          <span className="block text-[16px] font-bold leading-none tabular-nums" data-testid="wb-stat-enabled">
             {stats.enabled}
           </span>
-          <span className={`mt-1.5 block text-[12px] ${SUB_CLS}`}>已启用</span>
+          <span className={`mt-[3px] block text-[10.5px] ${SUB_CLS}`}>已启用</span>
         </div>
       </div>
       {charFilterName && (
