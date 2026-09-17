@@ -5442,3 +5442,22 @@ Stage Summary:
 - 改动文件：public/icons/worldbook.png（新增）、src/components/apps/registry.tsx（+1 行 image 字段+注释）
 - 世界书功能逻辑（注入/规则/审计加固）零触碰；这是纯视觉替换
 - in-app 内部的 BookMarked 小图标（worldbook.tsx 空态/行标、chat-settings.tsx 挂载行）保留——它们是界面内语义图标而非 App 图标，与 iOS 实体图标体系不冲突
+
+---
+Task ID: wb-ui-6
+Agent: Z.ai Code (main)
+Task: 世界书书库首页 UI 三处调整（底部筛选 tab 上移+椭圆包裹 / 标题上移顶栏返回键右侧 / 书籍列表行尾去掉 >）
+
+Work Log:
+- src/components/apps/worldbook.tsx 四处改动：
+  ①顶栏：nav=list 时在返回键（BackToHome）右侧渲染 <h1>我的世界书库</h1>（17px semibold，与导航标题同级语义）；其余页面标题仍居中，逻辑不变
+  ②BookListPage：删掉内容区 26px 大标题行；「全部角色」筛选 chip 保留原位置（该行改为 justify-end 靠右，仅专属 tab 显示）
+  ③底部范围筛选栏：四个散排按钮（rounded-[11px] 各自带灰底）改为单个椭圆胶囊底座（rounded-full bg-black/[0.05] p-1）整体包裹；段内按钮改 rounded-full，激活=黑底白字圆片（深色反转），未激活=透明底灰字；整体上移：pb 0.65rem→1.35rem（+约 11px 底部留白）
+  ④书籍列表行：删除行尾 ChevronRight「>」（保留 ⋯ 更多按钮）；详情页设置行的 > 不动（非用户所指的列表）
+- 同步更新文件头注释与 BookListPage docstring
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844，解锁→第 3 页→打开世界书）：顶栏「‹ 我的世界书库」符合预期；新建「测试书」后列表行尾部无 >；底部椭圆胶囊内 全部(黑圆片)/全局/局部/专属 排列正确、位置上移；切「专属」tab 激活圆片切换正确、右上「全部角色」chip 靠右显示；console 无错误
+
+Stage Summary:
+- 改动文件：仅 src/components/apps/worldbook.tsx（纯 UI 调整，无逻辑/数据改动）
+- 世界书功能逻辑（注入/规则/审计加固）与数据层零触碰；wb-filter-* / wb-back / wb-create 等 testid 全部保留，E2E 兼容
