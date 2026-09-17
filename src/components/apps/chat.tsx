@@ -54,6 +54,7 @@ import {
   getBoundBookIds,
   loadBooks,
   setBoundBookIds,
+  wbRulesBlock,
   wbScanText,
 } from '@/lib/ios/worldbook';
 import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
@@ -640,6 +641,7 @@ function ChatView({
       ? buildTimeAwareBlock({ lastMsgTime: msgs.length > 0 ? msgs[msgs.length - 1].time : null })
       : '';
     // 世界书：仅联系人会话参与（AI 助手会话无联系人角色）；命中触发词条目按插入位置注入
+    //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；有内容时 system 末尾附带使用规则）
     const wbBlocks = wbContactId
       ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => m.content)]))
       : null;
@@ -654,7 +656,7 @@ function ChatView({
       momentsBlock,
       timeBlock,
       stickersOn ? '' : STICKER_OFF_RULE,
-      ...(wbBlocks ? [wbBlocks.afterSystem] : []),
+      ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
     ]
       .filter(Boolean)
       .join('\n\n');

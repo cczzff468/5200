@@ -5387,3 +5387,25 @@ Stage Summary:
 - 改动文件：src/lib/ios/worldbook.ts（模型+引擎+导入导出）、src/components/apps/worldbook.tsx（全量 UI 重构）、src/components/apps/chat-settings.tsx（挂载页文案+注释）、wechat.tsx/qq.tsx/chat.tsx（挂载列表过滤局部书）
 - 范围语义升级为书级三态：全局=常驻注入无需关键词（新行为）、局部=挂载+关键词、专属=绑定角色+关键词；书级启用总开关；旧数据自动迁移无需用户操作
 - 验证：tsc/lint 通过；旧数据迁移、新建弹窗、条目校验、范围切换、停用、chip 显隐、深色模式均实测通过；微信登录流程受阻（全新环境无账号）故挂载页三处过滤以代码审查+tsc 验证（机械改动）
+
+---
+Task ID: wb-rules-3
+Agent: Z.ai Code (main)
+Task: 世界书补充「提示词规则」——注入格式改为【世界设定开始】/【世界设定结束】包裹；system 明确写入使用规则（6 条）、信息优先级（7 级）、冲突处理（3 条）；范围限定（不破坏现有功能/书间不干扰/三种范围分别生效）
+
+Work Log:
+- 注入格式重构（src/lib/ios/worldbook.ts）：删除旧分组头 WB_GROUP_HEADER【世界书设定】，新增 WB_WRAP_OPEN/WB_WRAP_CLOSE（【世界设定开始】/【世界设定结束】）；formatGroup（跨书混拼）改为 formatBookGroup——每本书在同一位置独立包裹成一个块（书内命中条目按优先级降序排列），不同书各自成块互不穿插，天然满足「不同世界书的规则不能互相干扰」与「世界书内部多条冲突按条目优先级排序」
+- collectWbBlocks 重构：先按书过滤（停用书/未挂载局部书/绑定他人专属书跳过——三范围分别生效的既有语义不变），书内按位置归集命中条目并排序，再逐位置 join 各书包裹块
+- 新增 hasWbContent(blocks)（六个位置任一有内容即 true）与 wbRulesBlock(blocks)（无内容返回空串不注入；有内容返回完整规则文本）：
+  · 使用规则 6 条（用户原文逐字）：理解世界观/冲突以世界设定为准/不背诵要自然融入/不当作用户说过的话/不暴露「设定」「世界书」字眼/没提到的内容不凭空编造
+  · 优先级 7 级（用户原文逐字）：系统规则（最高）＞世界书设定＞角色人设＞长期记忆和核心记忆＞记忆碎片＞最近聊天记录＞用户新消息（最低但必须回应）
+  · 冲突处理 3 条（用户原文逐字）：对记忆以世界书为准/书内冲突按条目优先级排序/对人设以世界书为准除非人设明确标注「覆盖世界书」
+- 三端接入：wechat.tsx / qq.tsx 的 systemFull 末尾追加 wbRulesBlock(wbBlocks)（位于 afterSystem 之后，保证规则文本里「以上是世界设定」与实际注入顺序一致）；chat.tsx（信息）在 wbBlocks 存在时追加 [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)]；AI 助手会话（无联系人）wbBlocks 为 null 完全不注入，行为与此前一致
+- 单元验证（临时脚本 bun 直跑，28/28 通过后删除）：全局书各自独立包裹（2 开+2 闭标记）、书内优先级 A1(10)先于A2(2)、书间不穿插、停用条目/停用书/未挂载局部书（即使命中触发词）/绑定他人专属书均不注入、旧头【世界书设定】不存在、挂载局部书命中注入且独立成块、规则 6+7+3 全文逐字命中、空块规则为空串、before_user/after_user 包裹最后一条 user 消息且带包裹标记、system 消息不受影响
+- E2E 实测（agent-browser 390×844）：全新环境建联系人「海月」（CHAR，加好友）→ 世界书 App 建全局书「海边小城世界观」+条目「小镇设定」（潮汐镇内容，全局书无触发词保存成功）→ 信息 App 与海月开聊 → eval 补丁 window.fetch 捕获 /api/chat 真实请求体：system 消息含【世界设定开始】潮汐镇内容【世界设定结束】（after_char 位置紧随人设）+ 完整【世界设定使用规则】块；旧头不存在；回归：小助手会话发消息捕获 payload 无包裹无规则（sysLen 0，与改动前一致）；浏览器 console 无应用错误（/api/chat 502 为沙箱无 AI Key 的预期上游失败）
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过
+
+Stage Summary:
+- 改动文件：src/lib/ios/worldbook.ts（注入格式+规则块）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx（system 末尾各 +1 行 wbRulesBlock 接入）
+- 语义要点：规则块只在「本次确实注入了世界书内容」时出现，不会污染无世界书的普通聊天；注入格式按书独立包裹（书间隔离、书内按优先级）；优先级声明写在 system 里但仅是提示词约定，不改代码层注入顺序（代码层仍由插入位置决定段落次序）
+- 世界书与记忆库/朋友圈/时间感知/回复条数/角色隔离零耦合改动；导入导出、显式保存等此前能力不回归

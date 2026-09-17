@@ -140,7 +140,7 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
-import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbScanText } from '@/lib/ios/worldbook';
+import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import {
@@ -3648,7 +3648,8 @@ function ChatPage({
         })
       : '';
     // 世界书：扫描「最新用户消息 + 最近 8 条上下文」，命中触发词的条目按插入位置分组注入
-    //（系统/角色定义前后进 system，用户消息前后包裹最后一条 user 消息；未命中不发送）
+    //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
+    // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则）
     const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => m.content)]));
     const systemFull = [
       wbBlocks.beforeSystem,
@@ -3658,6 +3659,7 @@ function ChatPage({
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
       timeBlock,
       wbBlocks.afterSystem,
+      wbRulesBlock(wbBlocks),
     ]
       .filter(Boolean)
       .join('\n\n');

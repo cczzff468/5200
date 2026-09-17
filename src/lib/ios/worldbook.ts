@@ -8,9 +8,12 @@
  *    - local     局部：命中关键词才注入，且仅当本书被挂载到当前聊天（聊天设置里挂载）；
  *    - exclusive 专属：命中关键词才注入，仅对绑定的那个角色生效（无需挂载）；
  * 3. 书级「启用」总开关：关闭后整本书永不注入（条目级开关仍可单独停用条目）；
- * 4. 每次发送消息时扫描最近上下文，命中任一触发词且处于启用状态的条目被激活；
- * 5. 激活条目按「插入位置」分组、同位置按「优先级」降序拼接，注入到发送给 AI 的提示词中；
- * 6. 未命中的条目不参与发送——世界书内容不进记忆库，两者完全独立。
+ * 4. 每次发送消息时扫描最近上下文，命中任一触发词且处于启用状态的条目被激活（全局书无需触发词）；
+ * 5. 激活条目按书独立包裹成【世界设定开始】/【世界设定结束】块：按「插入位置」分组，
+ *    书内同位置按「优先级」降序排列，不同书各自成块互不穿插；
+ * 6. 有世界书内容注入时，system 末尾同步注入「世界设定使用规则」（wbRulesBlock）：
+ *    使用规则 + 信息优先级（系统规则＞世界书＞人设＞记忆＞聊天记录＞新消息）+ 冲突处理；
+ * 7. 未命中的条目不参与发送——世界书内容不进记忆库，两者完全独立。
  *
  * 插入位置（position，决定激活内容注入到提示词的哪个部分）：
  * - before_system 系统提示词之前 / after_system 系统提示词之后
@@ -443,6 +446,59 @@ export function parseWorldBookImport(
   return books;
 }
 
+// ---------------- 注入格式与使用规则 ----------------
+
+/** 世界设定包裹标记：命中的条目内容整段包在两个标记之间（AI 据此识别哪些是世界设定） */
+export const WB_WRAP_OPEN = '【世界设定开始】';
+export const WB_WRAP_CLOSE = '【世界设定结束】';
+
+/** 单本书在一个位置上的注入块：整本包裹成一段（不同世界书各自独立成块，互不穿插干扰） */
+function formatBookGroup(entries: WbEntry[]): string {
+  return `${WB_WRAP_OPEN}\n${entries.map((e) => e.content.trim()).join('\n\n')}\n${WB_WRAP_CLOSE}`;
+}
+
+/** 是否有任何位置注入了世界书内容（决定是否把「使用规则」一并写入 system） */
+export function hasWbContent(blocks: WbBlocks): boolean {
+  return Boolean(
+    blocks.beforeSystem ||
+      blocks.afterSystem ||
+      blocks.beforeChar ||
+      blocks.afterChar ||
+      blocks.beforeUser ||
+      blocks.afterUser,
+  );
+}
+
+/**
+ * 世界书使用规则（追加到 system 末尾；本次没有任何世界书内容时返回空串不注入）：
+ * 明确告诉 AI —— 哪些是世界设定、怎么用、信息优先级顺序、冲突如何处理。
+ */
+export function wbRulesBlock(blocks: WbBlocks): string {
+  if (!hasWbContent(blocks)) return '';
+  return [
+    '【世界设定使用规则】',
+    '对话中【世界设定开始】与【世界设定结束】标记之间的内容是本次对话的世界设定，使用时必须遵守以下规则：',
+    '1. 以上是世界设定，请根据这些设定理解当前世界观、角色背景和关系；',
+    '2. 如果设定与记忆、聊天记录冲突，以世界设定为准；',
+    '3. 不要直接背诵设定内容，要自然地融入回复；',
+    '4. 不要把设定内容当成用户说过的话；',
+    '5. 不要在回复里暴露"这是设定"或"世界书"这样的字眼；',
+    '6. 如果设定里没有提到的内容，不要凭空编造。',
+    '各信息来源的优先级从高到低依次为：',
+    '1. 系统规则（最高）',
+    '2. 世界书设定',
+    '3. 角色人设',
+    '4. 长期记忆和核心记忆',
+    '5. 记忆碎片',
+    '6. 最近聊天记录',
+    '7. 用户新消息（最低，但必须回应）',
+    '冲突处理：',
+    '1. 世界书与记忆冲突时，以世界书为准；',
+    '2. 世界书内部多条设定冲突时，按条目优先级排序；',
+    '3. 世界书与角色人设冲突时，以世界书为准，除非角色人设里明确标注"覆盖世界书"。',
+  ].join('\n');
+}
+
 // ---------------- 触发匹配与注入 ----------------
 
 /** 注入块（六个位置；空串 = 该位置没有命中条目） */
@@ -479,19 +535,14 @@ export function wbEntryMatches(entry: Pick<WbEntry, 'keywords' | 'ignoreCase'>, 
   });
 }
 
-const WB_GROUP_HEADER = '【世界书设定】';
-
-function formatGroup(entries: WbEntry[]): string {
-  return `${WB_GROUP_HEADER}\n${entries.map((e) => e.content.trim()).join('\n\n')}`;
-}
-
 /**
  * 收集当前聊天应注入的世界书内容（范围在书级）：
  * - 书级开关关闭 → 整本跳过；
  * - global 书：所有聊天生效，内容常驻注入（不扫描触发词）；
  * - local 书：仅当本书挂载到当前联系人时生效，条目需命中触发词；
  * - exclusive 书：仅当绑定目标 = 当前联系人时生效，条目需命中触发词；
- * 再按「条目启用 + 命中」过滤，按插入位置分组、同位置优先级降序拼接。
+ * 再按「条目启用 + 命中」过滤，每本书按插入位置独立包裹成【世界设定开始】/【世界设定结束】块
+ * （书内同位置按优先级降序；不同书各自成块互不穿插，规则互不干扰）。
  * contactId 为 null（无联系人的会话）时只有 global 书可能生效。
  */
 export function collectWbBlocks(contactId: string | null, scanText: string): WbBlocks {
@@ -499,7 +550,8 @@ export function collectWbBlocks(contactId: string | null, scanText: string): WbB
   if (books.length === 0) return WB_EMPTY_BLOCKS;
   const bound = contactId ? new Set(getBoundBookIds(contactId)) : new Set<string>();
 
-  const byPosition: Record<WbPosition, WbEntry[]> = {
+  // 每个位置上收集「书级注入块」：一本书在同一位置最多贡献一个包裹块
+  const groupsByPosition: Record<WbPosition, string[]> = {
     before_system: [],
     after_system: [],
     before_char: [],
@@ -512,19 +564,26 @@ export function collectWbBlocks(contactId: string | null, scanText: string): WbB
     if (book.scope === 'local' && !bound.has(book.id)) continue;
     if (book.scope === 'exclusive' && (!contactId || book.targetContactId !== contactId)) continue;
     const alwaysInject = book.scope === 'global';
+    // 本书内按位置归集命中条目（书内多条冲突 → 按条目优先级排序；不同书之间不互相穿插）
+    const inBook: Partial<Record<WbPosition, WbEntry[]>> = {};
     for (const entry of book.entries) {
       if (!entry.enabled) continue;
       if (!alwaysInject && !wbEntryMatches(entry, scanText)) continue;
-      byPosition[entry.position].push(entry);
+      (inBook[entry.position] ??= []).push(entry);
+    }
+    for (const pos of WB_POSITIONS) {
+      const list = inBook[pos];
+      if (!list || list.length === 0) continue;
+      list.sort((a, b) => b.priority - a.priority); // 数字大的排前面；同优先级保持书内顺序（sort 稳定）
+      groupsByPosition[pos].push(formatBookGroup(list));
     }
   }
 
   const blocks = { ...WB_EMPTY_BLOCKS };
   for (const pos of WB_POSITIONS) {
-    const list = byPosition[pos];
-    if (list.length === 0) continue;
-    list.sort((a, b) => b.priority - a.priority); // 数字大的排前面；同优先级保持书内顺序（sort 稳定）
-    const text = formatGroup(list);
+    const groups = groupsByPosition[pos];
+    if (groups.length === 0) continue;
+    const text = groups.join('\n\n');
     if (pos === 'before_system') blocks.beforeSystem = text;
     else if (pos === 'after_system') blocks.afterSystem = text;
     else if (pos === 'before_char') blocks.beforeChar = text;
