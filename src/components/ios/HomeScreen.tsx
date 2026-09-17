@@ -51,6 +51,10 @@ import {
 import { NeteaseCardWidget } from './NeteaseCard';
 import { VinylCardWidget } from './VinylCard';
 import { WidgetGalleryContent, GALLERY_KINDS, ClockGridWidget, type GalleryKind } from './WidgetGallery';
+import { CalendarCardWidget } from './CalendarCard';
+import { ICityCardWidget, ICityCardEditor, loadICityCard, type ICityCardData, DEFAULT_ICITY_CARD, ICITY_CARD_KEY } from './ICityCard';
+import { TickClockCardWidget } from './TickClockCard';
+import { PolaroidCardWidget, PolaroidCardEditor, loadPolaroidCard, type PolaroidCardData, DEFAULT_POLAROID_CARD, POLAROID_CARD_KEY } from './PolaroidCard';
 
 // 天气小组件懒加载：主屏首帧先显示同尺寸占位，避免千行天气 App UI 拖慢首屏
 const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m) => m.WeatherWidget), {
@@ -107,12 +111,12 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - × 删除的项记入 hidden 持久化（刷新不复活），「恢复默认」可找回。
  */
 
-/** 桌面小组件种类：时钟（大数字卡）/ 天气 / 信息卡片（个人名片）/ 气泡（双头像+各自头顶气泡）/ 日记（日记卡）/ 一起听（双人气泡+迷你播放器）/ 网易云（黑胶播放器卡）/ 对话气泡（双头像+交错双气泡）/ 黑胶（大唱片+唱针） */
-export type WidgetKind = 'weather' | 'clock' | 'profile' | 'bubble' | 'diary' | 'listen' | 'netease' | 'dialog' | 'vinyl';
+/** 桌面小组件种类：时钟（大数字卡）/ 天气 / 信息卡片（个人名片）/ 气泡（双头像+各自头顶气泡）/ 日记（日记卡）/ 一起听（双人气泡+迷你播放器）/ 网易云（黑胶播放器卡）/ 对话气泡（双头像+交错双气泡）/ 黑胶（大唱片+唱针）/ 日历（月历横版）/ iCity（名字+日期+头像胶囊）/ 表盘时钟（刻度表圈）/ 拍立得（三张胶片照） */
+export type WidgetKind = 'weather' | 'clock' | 'profile' | 'bubble' | 'diary' | 'listen' | 'netease' | 'dialog' | 'vinyl' | 'calendar' | 'icity' | 'tickclock' | 'polaroid';
 type Tile = { kind: 'widget'; widget: WidgetKind } | { kind: 'app'; id: AppId } | { kind: 'empty' };
 type Zone = 'grid' | 'dock';
 
-const WIDGET_KINDS: WidgetKind[] = ['weather', 'clock', 'profile', 'bubble', 'diary', 'listen', 'netease', 'dialog', 'vinyl'];
+const WIDGET_KINDS: WidgetKind[] = ['weather', 'clock', 'profile', 'bubble', 'diary', 'listen', 'netease', 'dialog', 'vinyl', 'calendar', 'icity', 'tickclock', 'polaroid'];
 /** 小组件元信息：× 删除角标文案 + 点击行为（openApp=null 的点击开对应编辑器） */
 const WIDGET_META: Record<WidgetKind, { label: string; openApp: AppId | null }> = {
   weather: { label: '天气小组件', openApp: 'weather' },
@@ -124,6 +128,10 @@ const WIDGET_META: Record<WidgetKind, { label: string; openApp: AppId | null }> 
   netease: { label: '网易云小组件', openApp: 'music' },
   dialog: { label: '对话气泡小组件', openApp: null },
   vinyl: { label: '黑胶小组件', openApp: 'music' },
+  calendar: { label: '日历小组件', openApp: 'calendar' },
+  icity: { label: 'iCity小组件', openApp: null },
+  tickclock: { label: '表盘时钟小组件', openApp: 'clock' },
+  polaroid: { label: '拍立得小组件', openApp: null },
 };
 /** 小组件网格跨度：时钟/日记/对话气泡（2 行）/信息卡片（3 行）= 顶部通栏整行，天气/气泡 = 2×2 方格，
  *  一起听/网易云/黑胶 = 2×3 竖版方格（App 环绕） */
@@ -137,6 +145,10 @@ const WIDGET_SPAN: Record<WidgetKind, string> = {
   netease: 'col-span-2 row-span-3',
   dialog: 'col-span-4 row-span-2',
   vinyl: 'col-span-2 row-span-3',
+  calendar: 'col-span-4 row-span-2',
+  icity: 'col-span-2 row-span-2 self-center',
+  tickclock: 'col-span-2 row-span-2 self-center',
+  polaroid: 'col-span-4 row-span-2',
 };
 
 /** 小组件网格跨度（数值版）：flow 模拟 / 空白位行列线拟合（槽宽反推单列宽、槽高反推行距）用 */
@@ -150,6 +162,10 @@ const WIDGET_SPAN_SIZE: Record<WidgetKind, { c: number; r: number }> = {
   netease: { c: 2, r: 3 },
   dialog: { c: 4, r: 2 },
   vinyl: { c: 2, r: 3 },
+  calendar: { c: 4, r: 2 },
+  icity: { c: 2, r: 2 },
+  tickclock: { c: 2, r: 2 },
+  polaroid: { c: 4, r: 2 },
 };
 
 /** 小组件稳定键（data-id / hidden / 拖拽 id 用）：带前缀避免与同名 App id（weather）冲突 */
@@ -254,10 +270,10 @@ const DOTS_LINGER_MS = 1100;
 /** 页网格行间距（gap-y-[16px]，与渲染处保持一致；行距拟合用） */
 const GRID_GAP_Y = 16;
 
-/** 当前布局版本：v7 = App Store 从第 1 页末尾移到第 3 页（QQ 左侧，用户指定；QQ 首次纳入默认页）
- *  ——存量旧版本布局直接重置为新默认（保留 hidden 删除记录）；网易云小组件仍在第 3 页顶部，
+/** 当前布局版本：v8 = 新增四个小组件上屏（第 2 页 +iCity、第 3 页 +日历、第 4 页新建：表盘时钟+拍立得）
+ *  ——存量旧版本布局直接重置为新默认（保留 hidden 删除记录）；
  *  日记/一起听/对话气泡/黑胶仍默认收起（需要时从「+」画廊或主题 App「小组件」界面一键找回） */
-const LAYOUT_VERSION = 7;
+const LAYOUT_VERSION = 8;
 /** 第 1 页 App（用户指定顺序；时钟/天气小组件在其上方；App Store 已移至第 3 页——仍是已移除 App 的唯一恢复入口） */
 const PAGE1_APP_IDS: AppId[] = ['weather', 'themes', 'browser', 'notes', 'camera', 'photos', 'files', 'calculator'];
 /** 第 2 页 App（用户指定顺序；信息卡片/气泡小组件在其上方；音乐/微信移至第 3 页） */
@@ -280,9 +296,11 @@ function defaultLayout(): HomeLayout {
       [
         { kind: 'widget', widget: 'profile' },
         { kind: 'widget', widget: 'bubble' },
+        { kind: 'widget', widget: 'icity' },
         ...PAGE2_APP_IDS.map((id) => ({ kind: 'app' as const, id })),
       ],
-      [{ kind: 'widget', widget: 'netease' }, ...PAGE3_APP_IDS.map((id) => ({ kind: 'app' as const, id }))],
+      [{ kind: 'widget', widget: 'calendar' }, { kind: 'widget', widget: 'netease' }, ...PAGE3_APP_IDS.map((id) => ({ kind: 'app' as const, id }))],
+      [{ kind: 'widget', widget: 'tickclock' }, { kind: 'widget', widget: 'polaroid' }],
     ],
     dock: DOCK_APPS.map((a) => a.id),
     hidden: DEFAULT_HIDDEN_WIDGETS.map(widgetKey),
@@ -365,6 +383,10 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     netease: hidden.has(widgetKey('netease')),
     dialog: hidden.has(widgetKey('dialog')),
     vinyl: hidden.has(widgetKey('vinyl')),
+    calendar: hidden.has(widgetKey('calendar')),
+    icity: hidden.has(widgetKey('icity')),
+    tickclock: hidden.has(widgetKey('tickclock')),
+    polaroid: hidden.has(widgetKey('polaroid')),
   };
   const placed = new Set<AppId>(dock);
   for (const list of rawPages) {
@@ -438,6 +460,28 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     const p4 = pages[3];
     const di = p4.findIndex((t) => t.kind === 'widget' && t.widget === 'dialog');
     p4.splice(di >= 0 ? di + 1 : p4.length, 0, { kind: 'widget', widget: 'vinyl' });
+  }
+  // v8 新小组件缺失时的默认落位：iCity→第 2 页气泡后、日历→第 3 页头、
+  // 表盘时钟→第 4 页头、拍立得→表盘时钟后（hidden 里的不补）
+  if (!widgetSeen.icity) {
+    while (pages.length < 2) pages.push([]);
+    const p2 = pages[1];
+    const bi = p2.findIndex((t) => t.kind === 'widget' && t.widget === 'bubble');
+    p2.splice(bi >= 0 ? bi + 1 : p2.length, 0, { kind: 'widget', widget: 'icity' });
+  }
+  if (!widgetSeen.calendar) {
+    while (pages.length < 3) pages.push([]);
+    pages[2].unshift({ kind: 'widget', widget: 'calendar' });
+  }
+  if (!widgetSeen.tickclock) {
+    while (pages.length < 4) pages.push([]);
+    pages[3].unshift({ kind: 'widget', widget: 'tickclock' });
+  }
+  if (!widgetSeen.polaroid) {
+    while (pages.length < 4) pages.push([]);
+    const p4 = pages[3];
+    const ti = p4.findIndex((t) => t.kind === 'widget' && t.widget === 'tickclock');
+    p4.splice(ti >= 0 ? ti + 1 : p4.length, 0, { kind: 'widget', widget: 'polaroid' });
   }
 
   // 缺失的 App：从末尾往前找还有容量的页补入，都满了就开新页
@@ -683,6 +727,12 @@ export default function HomeScreen() {
   // ---------------- 对话气泡小组件（第四页，双头像/双气泡可改） ----------------
   const [dialogCard, setDialogCard] = useState<DialogCardData>(DEFAULT_DIALOG_CARD);
   const [dialogEditorOpen, setDialogEditorOpen] = useState(false);
+  // ---------------- iCity 小组件（第二页，名字/头像/胶囊一句话可改） ----------------
+  const [icityCard, setIcityCard] = useState<ICityCardData>(DEFAULT_ICITY_CARD);
+  const [icityEditorOpen, setIcityEditorOpen] = useState(false);
+  // ---------------- 拍立得小组件（第四页，三张照片可换） ----------------
+  const [polaroidCard, setPolaroidCard] = useState<PolaroidCardData>(DEFAULT_POLAROID_CARD);
+  const [polaroidEditorOpen, setPolaroidEditorOpen] = useState(false);
   // 挂载后读 localStorage（SSR 首帧先渲染默认内容，避免水合不一致）
   useEffect(() => {
     setProfileCard(loadProfileCard());
@@ -690,6 +740,8 @@ export default function HomeScreen() {
     setDiaryCard(loadDiaryCard());
     setListenCard(loadListenCard());
     setDialogCard(loadDialogCard());
+    setIcityCard(loadICityCard());
+    setPolaroidCard(loadPolaroidCard());
   }, []);
   const saveProfileCard = (d: ProfileCardData) => {
     setProfileCard(d);
@@ -727,6 +779,22 @@ export default function HomeScreen() {
     setDialogCard(d);
     try {
       localStorage.setItem(DIALOG_CARD_KEY, JSON.stringify(d));
+    } catch {
+      /* 存储满时忽略 */
+    }
+  };
+  const saveIcityCard = (d: ICityCardData) => {
+    setIcityCard(d);
+    try {
+      localStorage.setItem(ICITY_CARD_KEY, JSON.stringify(d));
+    } catch {
+      /* 存储满时忽略 */
+    }
+  };
+  const savePolaroidCard = (d: PolaroidCardData) => {
+    setPolaroidCard(d);
+    try {
+      localStorage.setItem(POLAROID_CARD_KEY, JSON.stringify(d));
     } catch {
       /* 存储满时忽略 */
     }
@@ -1781,6 +1849,14 @@ export default function HomeScreen() {
             <DialogCardWidget data={dialogCard} />
           ) : tile.widget === 'vinyl' ? (
             <VinylCardWidget />
+          ) : tile.widget === 'calendar' ? (
+            <CalendarCardWidget />
+          ) : tile.widget === 'icity' ? (
+            <ICityCardWidget data={icityCard} />
+          ) : tile.widget === 'tickclock' ? (
+            <TickClockCardWidget />
+          ) : tile.widget === 'polaroid' ? (
+            <PolaroidCardWidget data={polaroidCard} />
           ) : (
             <WeatherWidget />
           )}
@@ -1882,6 +1958,8 @@ export default function HomeScreen() {
               else if (tile.widget === 'diary') setDiaryEditorOpen(true);
               else if (tile.widget === 'listen') setListenEditorOpen(true);
               else if (tile.widget === 'dialog') setDialogEditorOpen(true);
+              else if (tile.widget === 'icity') setIcityEditorOpen(true);
+              else if (tile.widget === 'polaroid') setPolaroidEditorOpen(true);
               else setBubbleEditorOpen(true);
             }
           }}
@@ -2183,6 +2261,30 @@ export default function HomeScreen() {
         />
       )}
 
+      {/* iCity 小组件编辑器（底部弹窗：改名字/换头像/改胶囊文字；打开时才挂载） */}
+      {icityEditorOpen && (
+        <ICityCardEditor
+          data={icityCard}
+          onClose={() => setIcityEditorOpen(false)}
+          onSave={(d) => {
+            saveIcityCard(d);
+            setIcityEditorOpen(false);
+          }}
+        />
+      )}
+
+      {/* 拍立得小组件编辑器（底部弹窗：三张照片逐张更换/恢复默认；打开时才挂载） */}
+      {polaroidEditorOpen && (
+        <PolaroidCardEditor
+          data={polaroidCard}
+          onClose={() => setPolaroidEditorOpen(false)}
+          onSave={(d) => {
+            savePolaroidCard(d);
+            setPolaroidEditorOpen(false);
+          }}
+        />
+      )}
+
       {/* 编辑模式「+」小组件画廊浮层：全部小组件 1:1 预览（平铺不分组），点 + 添加回主屏（遮罩点按关闭） */}
       {edit && galleryOpen && (
         <div
@@ -2213,6 +2315,8 @@ export default function HomeScreen() {
               diaryData={diaryCard}
               listenData={listenCard}
               dialogData={dialogCard}
+              icityData={icityCard}
+              polaroidData={polaroidCard}
               added={galleryAdded}
               onAdd={addWidgetFromGallery}
             />
