@@ -4,8 +4,9 @@
  * 世界书 App —— 给 AI 挂载静态设定和世界观（按关键词触发的设定库）。
  *
  * 页面结构（iOS 黑白灰风格：白 / 浅灰 / 深灰，深色模式自动适配）：
- * - 书库首页：大标题 + 统计卡（全局/局部/专属 三列可点按范围筛选 + 已启用计数）+ 底部范围
- *   筛选栏（全部/全局/局部/专属，激活黑底白字）；右上角「全部角色」筛选**只在专属 tab 显示**
+ * - 书库首页：顶栏标题「我的世界书库」紧跟返回键右侧 + 统计卡（全局/局部/专属 三列可点按
+ *   范围筛选 + 已启用计数）+ 底部范围筛选栏（椭圆胶囊底座整体包裹 全部/全局/局部/专属，
+ *   激活段黑底白字圆片）；右上角「全部角色」筛选**只在专属 tab 显示**
  *   （筛绑定给某角色的专属书）；新建走居中大弹窗（名称 + 范围三选卡片 + 专属绑定角色），
  *   名字校验：非空 + 禁 emoji；书籍管理：重命名、删除、导出、导入（.json）
  * - 书籍详情页：条目计数 + 范围徽章 + 一句话说明；设置卡（范围 / 启用总开关 / 专属时绑定角色）；
@@ -692,6 +693,8 @@ export default function WorldBookApp() {
           ) : (
             <BackToHome className="static!" />
           )}
+          {/* 书库首页：标题紧跟返回键右侧（用户要求），其余页面标题居中 */}
+          {nav.name === 'list' && <h1 className="ml-1 text-[17px] font-semibold leading-none">我的世界书库</h1>}
           <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">
             {nav.name === 'book'
               ? books.find((b) => b.id === nav.bookId)?.name ?? ''
@@ -860,10 +863,10 @@ export default function WorldBookApp() {
         })()}
       </div>
 
-      {/* 底部范围筛选栏（书库首页）：胶囊式，激活黑底白字 */}
+      {/* 底部范围筛选栏（书库首页）：椭圆胶囊底座整体包裹，激活黑底白字圆片；整体上移（加大底部留白） */}
       {nav.name === 'list' && (
-        <div className="shrink-0 px-4 pb-[calc(0.65rem+env(safe-area-inset-bottom))] pt-1" data-testid="wb-scope-bar">
-          <div className="flex gap-2">
+        <div className="shrink-0 px-4 pb-[calc(1.35rem+env(safe-area-inset-bottom))] pt-1" data-testid="wb-scope-bar">
+          <div className="flex items-center gap-1 rounded-full bg-black/[0.05] p-1 dark:bg-white/[0.09]">
             {([
               ['all', '全部'],
               ['global', WB_SCOPE_LABELS.global],
@@ -876,10 +879,10 @@ export default function WorldBookApp() {
                 data-testid={`wb-filter-${s}`}
                 aria-pressed={scopeFilter === s}
                 onClick={() => applyScopeFilter(s)}
-                className={`h-9 flex-1 rounded-[11px] text-[13px] font-medium transition-colors ${
+                className={`h-9 flex-1 rounded-full text-[13px] font-medium transition-colors ${
                   scopeFilter === s
                     ? 'bg-black text-white dark:bg-white dark:text-black'
-                    : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.09] dark:text-white/60 dark:active:bg-white/[0.15]'
+                    : 'text-black/60 active:bg-black/[0.06] dark:text-white/60 dark:active:bg-white/[0.1]'
                 }`}
               >
                 {label}
@@ -1036,7 +1039,7 @@ function EmptyHint({ text }: { text: string }) {
   );
 }
 
-/** 书库首页：大标题 + 角色筛选（仅专属 tab）+ 统计卡（可点筛选）+ 书籍卡片列表 + 空态 */
+/** 书库首页：角色筛选（仅专属 tab）+ 统计卡（可点筛选）+ 书籍卡片列表 + 空态（大标题已上移顶栏返回键右侧） */
 function BookListPage({
   books,
   totalCount,
@@ -1064,10 +1067,9 @@ function BookListPage({
 }) {
   return (
     <>
-      <div className="flex items-center justify-between gap-2 px-1 pt-1">
-        <h1 className="text-[26px] font-bold leading-tight tracking-tight">我的世界书库</h1>
-        {/* 「全部角色」筛选只在专属界面显示 */}
-        {scopeFilter === 'exclusive' && (
+      {/* 「全部角色」筛选只在专属界面显示（原大标题行保留，仅剩筛选钮靠右） */}
+      {scopeFilter === 'exclusive' && (
+        <div className="flex items-center justify-end gap-2 px-1 pt-1">
           <button
             type="button"
             data-testid="wb-char-filter"
@@ -1077,8 +1079,8 @@ function BookListPage({
             {charFilterName || '全部角色'}
             <ChevronDown className="h-3.5 w-3.5 opacity-50" strokeWidth={2.2} aria-hidden="true" />
           </button>
-        )}
-      </div>
+        </div>
+      )}
       <p className={`px-1 pt-1 text-[13px] ${SUB_CLS}`} data-testid="wb-library-sub">
         共 {totalCount} 个世界书 · 最后更新 {lastUpdateText}
       </p>
@@ -1154,7 +1156,6 @@ function BookListPage({
                         {book.entries.length} 条目 · {enabled} 启用 · {fmtDate(book.updatedAt)}
                       </span>
                     </span>
-                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
