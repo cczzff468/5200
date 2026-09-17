@@ -5409,3 +5409,19 @@ Stage Summary:
 - 改动文件：src/lib/ios/worldbook.ts（注入格式+规则块）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx（system 末尾各 +1 行 wbRulesBlock 接入）
 - 语义要点：规则块只在「本次确实注入了世界书内容」时出现，不会污染无世界书的普通聊天；注入格式按书独立包裹（书间隔离、书内按优先级）；优先级声明写在 system 里但仅是提示词约定，不改代码层注入顺序（代码层仍由插入位置决定段落次序）
 - 世界书与记忆库/朋友圈/时间感知/回复条数/角色隔离零耦合改动；导入导出、显式保存等此前能力不回归
+
+---
+Task ID: wb-audit-4
+Agent: Z.ai Code (main)
+Task: 世界书功能九维全量审计（数据层/范围/触发/插入位置/注入顺序/提示词规则/隔离/异常边界/验证方式）——不只报告，逐项实测并修复审计发现的缺口
+
+Work Log:
+- 代码核查：书=WorldBook{scope,targetContactId,enabled,entries[]}，条目=WbEntry{enabled,keywords,content,position,priority,ignoreCase}（一.2/1.3✓）；书名 wbNameCheck 禁 emoji/空/超 30 字（一.4✓，UI 创建+重命名两处调用）；deleteBook 过滤书对象（条目嵌套其内连带清理）+pruneBookFromAllBindings 清挂载+确认弹层提示条目数（一.5✓）；增删改全按 book.id/entry.id 定位，联系人删除时 clearContactBinding 级联（一.6✓）；存储形态=书内嵌条目数组存 kv 单键 worldbooks（逻辑两层、物理单键，写入原子；个人量级适用）
+- 审计缺口修复（src/lib/ios/worldbook.ts）：①同位置多本书排序改为 全局→专属→局部（WB_SCOPE_RANK，稳定排序保持书库内顺序），对齐注入顺序预期；②空内容条目注入时跳过（历史/导入脏数据兜底）；③collectWbBlocks 包 try/catch，意外异常返回 WB_EMPTY_BLOCKS，世界书永不阻断发送；④新增 WB_INJECT_BUDGET=20000 字符总预算（六位置合计）+WB_TRUNCATE_NOTICE 截断提示——按提示词物理次序（before_system→before_char→after_char→after_system→before_user→after_user）优先保留，超预算块书内按优先级尽量保留前几条（保底 200 字符），后续块舍弃，包裹标记始终成对收口
+- 单元验证（临时脚本 51/51 通过后删除）：数据层校验/范围三态隔离/切换范围与停用立即生效（kv 写穿后下一次 collect 即反映）/多关键词任一命中/ignoreCase 开关两态/未命中不注入/关闭条目不注入/同词多条全注入/书内优先级排序/六位置各归各位+混合顺序正确（模拟三端拼接）/非法 position 归一 after_char/同位置书按范围排序/预算截断（总量≤预算+提示成对收口+高优先级先保留）/规则块六项逐字/空库全空块无规则/空白内容条目跳过/脏数据（书缺字段条目缺字段）归一不崩
+- E2E 实测（agent-browser，IDB 种子 5 个位置标记条目+海月专属书+MEMCHECK_ 记忆）：①与海月发消息捕获 /api/chat——六位置全在正确槽位、顺序=系统前置→人设前置→人设→(全局潮汐镇→专属海月专属)→记忆 MEMCHECK_→系统后置→使用规则块（末尾），用户消息被 用户前置/后置 包裹；②发不含关键词消息「今天天气如何」——专属书仍命中（灯塔在最近 8 条上下文里），证明扫描窗口=当前消息+最近 8 轮；③建第二角色松风加好友发消息——只见全局书，海月专属与海月记忆均不出现（专属隔离+记忆按角色隔离双证）；④UI 关闭书级启用→再发消息——世界书内容与规则块全部消失（人设完好 sysLen 346），UI 详情页显示「已停用」徽章；重新打开开关恢复注入
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过；浏览器 console 无应用错误（/api/chat 502 为沙箱无 AI Key 预期现象）
+
+Stage Summary:
+- 改动文件：src/lib/ios/worldbook.ts（范围排序/空内容兜底/异常兜底/总预算截断 4 项加固）；wechat/qq/chat 三端与 UI 零改动
+- 审计结论：九维检查中 7 项原实现已达标（有单元+E2E 双证），3 处缺口（同位置书排序、空内容脏数据、无预算上限）本轮修复并验证；2 处「无法在沙箱验证」如实标注（AI 对提示词规则的实际遵循度需真实 API、before/after_system 并入同一条 system 消息而非独立 system 消息——对模型语义等价，已在报告中说明）

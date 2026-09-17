@@ -10,7 +10,8 @@
  * 3. 书级「启用」总开关：关闭后整本书永不注入（条目级开关仍可单独停用条目）；
  * 4. 每次发送消息时扫描最近上下文，命中任一触发词且处于启用状态的条目被激活（全局书无需触发词）；
  * 5. 激活条目按书独立包裹成【世界设定开始】/【世界设定结束】块：按「插入位置」分组，
- *    书内同位置按「优先级」降序排列，不同书各自成块互不穿插；
+ *    书内同位置按「优先级」降序排列，同一位置上多本书按 全局→专属→局部 排列，
+ *    各书独立成块互不穿插；六个位置合计有总预算（WB_INJECT_BUDGET）防超长；
  * 6. 有世界书内容注入时，system 末尾同步注入「世界设定使用规则」（wbRulesBlock）：
  *    使用规则 + 信息优先级（系统规则＞世界书＞人设＞记忆＞聊天记录＞新消息）+ 冲突处理；
  * 7. 未命中的条目不参与发送——世界书内容不进记忆库，两者完全独立。
@@ -452,6 +453,22 @@ export function parseWorldBookImport(
 export const WB_WRAP_OPEN = '【世界设定开始】';
 export const WB_WRAP_CLOSE = '【世界设定结束】';
 
+/**
+ * 单次发送的世界书总注入预算（字符数，六个位置合计）：
+ * 超出预算时按「注入顺序优先」截断——先保住 before_system/角色定义前后等 system 级内容，
+ * 靠近用户消息的块最先被舍弃；书内按条目优先级保留。安全网，正常使用远达不到。
+ */
+export const WB_INJECT_BUDGET = 20000;
+
+/** 截断提示（拼在最后一个仍保留内容的位置块末尾，仅 system 可见） */
+export const WB_TRUNCATE_NOTICE = '（世界设定过长：超出预算的条目已按注入顺序与优先级截断）';
+
+/** 注入顺序（= 提示词里的物理次序）：预算截断按此顺序优先保留靠前位置 */
+const WB_PROMPT_ORDER: WbPosition[] = ['before_system', 'before_char', 'after_char', 'after_system', 'before_user', 'after_user'];
+
+/** 同一位置上多本书的排列顺序：全局（世界观框架）→ 专属（角色私设）→ 局部（会话事件） */
+const WB_SCOPE_RANK: Record<WbScope, number> = { global: 0, exclusive: 1, local: 2 };
+
 /** 单本书在一个位置上的注入块：整本包裹成一段（不同世界书各自独立成块，互不穿插干扰） */
 function formatBookGroup(entries: WbEntry[]): string {
   return `${WB_WRAP_OPEN}\n${entries.map((e) => e.content.trim()).join('\n\n')}\n${WB_WRAP_CLOSE}`;
@@ -541,16 +558,37 @@ export function wbEntryMatches(entry: Pick<WbEntry, 'keywords' | 'ignoreCase'>, 
  * - global 书：所有聊天生效，内容常驻注入（不扫描触发词）；
  * - local 书：仅当本书挂载到当前联系人时生效，条目需命中触发词；
  * - exclusive 书：仅当绑定目标 = 当前联系人时生效，条目需命中触发词；
- * 再按「条目启用 + 命中」过滤，每本书按插入位置独立包裹成【世界设定开始】/【世界设定结束】块
- * （书内同位置按优先级降序；不同书各自成块互不穿插，规则互不干扰）。
+ * 再按「条目启用 + 内容非空 + 命中」过滤，每本书按插入位置独立包裹成【世界设定开始】/【世界设定结束】块
+ * （书内同位置按优先级降序；同一位置上多本书按 全局→专属→局部 排列、同范围保持书库顺序，
+ *   各书独立成块互不穿插，规则互不干扰）；
+ * 全部位置合计不超过 WB_INJECT_BUDGET 字符，超出按注入顺序截断（靠近用户消息的先舍弃）。
  * contactId 为 null（无联系人的会话）时只有 global 书可能生效。
+ * 注入层任何意外异常都返回空块——世界书永不阻断消息发送。
  */
 export function collectWbBlocks(contactId: string | null, scanText: string): WbBlocks {
+  try {
+    return collectWbBlocksInner(contactId, scanText);
+  } catch {
+    return WB_EMPTY_BLOCKS;
+  }
+}
+
+function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlocks {
   const books = loadBooks();
   if (books.length === 0) return WB_EMPTY_BLOCKS;
   const bound = contactId ? new Set(getBoundBookIds(contactId)) : new Set<string>();
 
-  // 每个位置上收集「书级注入块」：一本书在同一位置最多贡献一个包裹块
+  // 本轮生效的书：过滤停用/未挂载/绑定他人；再按 全局→专属→局部 稳定排序（同范围保持书库顺序）
+  const activeBooks = books.filter((book) => {
+    if (book.enabled === false) return false;
+    if (book.scope === 'local' && !bound.has(book.id)) return false;
+    if (book.scope === 'exclusive' && (!contactId || book.targetContactId !== contactId)) return false;
+    return true;
+  });
+  if (activeBooks.length === 0) return WB_EMPTY_BLOCKS;
+  activeBooks.sort((a, b) => WB_SCOPE_RANK[a.scope] - WB_SCOPE_RANK[b.scope]); // Array.sort 稳定
+
+  // 每个位置上收集「书级注入块」（已按范围顺序追加）：一本书在同一位置最多贡献一个包裹块
   const groupsByPosition: Record<WbPosition, string[]> = {
     before_system: [],
     after_system: [],
@@ -559,15 +597,13 @@ export function collectWbBlocks(contactId: string | null, scanText: string): WbB
     before_user: [],
     after_user: [],
   };
-  for (const book of books) {
-    if (book.enabled === false) continue;
-    if (book.scope === 'local' && !bound.has(book.id)) continue;
-    if (book.scope === 'exclusive' && (!contactId || book.targetContactId !== contactId)) continue;
+  for (const book of activeBooks) {
     const alwaysInject = book.scope === 'global';
     // 本书内按位置归集命中条目（书内多条冲突 → 按条目优先级排序；不同书之间不互相穿插）
     const inBook: Partial<Record<WbPosition, WbEntry[]>> = {};
     for (const entry of book.entries) {
       if (!entry.enabled) continue;
+      if (!entry.content.trim()) continue; // 空内容条目不注入（历史/导入脏数据兜底）
       if (!alwaysInject && !wbEntryMatches(entry, scanText)) continue;
       (inBook[entry.position] ??= []).push(entry);
     }
@@ -579,18 +615,52 @@ export function collectWbBlocks(contactId: string | null, scanText: string): WbB
     }
   }
 
+  // 按提示词物理次序填充，累计长度不超过预算；超预算的块尽量保留书内高优先级条目，后续块全部舍弃
+  const keyFor = (pos: WbPosition): keyof WbBlocks =>
+    pos === 'before_system' ? 'beforeSystem'
+    : pos === 'after_system' ? 'afterSystem'
+    : pos === 'before_char' ? 'beforeChar'
+    : pos === 'after_char' ? 'afterChar'
+    : pos === 'before_user' ? 'beforeUser'
+    : 'afterUser';
   const blocks = { ...WB_EMPTY_BLOCKS };
-  for (const pos of WB_POSITIONS) {
-    const groups = groupsByPosition[pos];
-    if (groups.length === 0) continue;
-    const text = groups.join('\n\n');
-    if (pos === 'before_system') blocks.beforeSystem = text;
-    else if (pos === 'after_system') blocks.afterSystem = text;
-    else if (pos === 'before_char') blocks.beforeChar = text;
-    else if (pos === 'after_char') blocks.afterChar = text;
-    else if (pos === 'before_user') blocks.beforeUser = text;
-    else blocks.afterUser = text;
+  let used = 0;
+  let truncated = false;
+  let lastKey: keyof WbBlocks | null = null;
+  for (const pos of WB_PROMPT_ORDER) {
+    const key = keyFor(pos);
+    const kept: string[] = [];
+    for (const group of groupsByPosition[pos]) {
+      if (used + group.length <= WB_INJECT_BUDGET) {
+        kept.push(group);
+        used += group.length;
+        continue;
+      }
+      // 本块放不下：保留书内排在前面的（高优先级）条目直到预算耗尽，剩余块全部舍弃
+      truncated = true;
+      const inner = group.slice(WB_WRAP_OPEN.length + 1, group.length - WB_WRAP_CLOSE.length - 1);
+      const parts = inner.split('\n\n');
+      const keepParts: string[] = [];
+      let partialUsed = used + WB_WRAP_OPEN.length + WB_WRAP_CLOSE.length + 2; // 包裹标记与换行开销
+      for (const part of parts) {
+        const add = (keepParts.length > 0 ? 2 : 0) + part.length;
+        if (partialUsed + add > WB_INJECT_BUDGET) break;
+        keepParts.push(part);
+        partialUsed += add;
+      }
+      if (keepParts.length > 0 && partialUsed >= used + 200) {
+        kept.push(`${WB_WRAP_OPEN}\n${keepParts.join('\n\n')}\n${WB_WRAP_CLOSE}`);
+        used = partialUsed;
+      }
+      break;
+    }
+    if (kept.length > 0) {
+      blocks[key] = kept.join('\n\n');
+      lastKey = key;
+    }
+    if (truncated) break;
   }
+  if (truncated && lastKey) blocks[lastKey] += `\n\n${WB_TRUNCATE_NOTICE}`;
   return blocks;
 }
 
