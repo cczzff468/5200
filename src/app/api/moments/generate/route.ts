@@ -152,6 +152,10 @@ export async function POST(req: Request) {
       user.push('- 15~50 字，口语化，像熟人随手打的：接梗、调侃、吐槽、反问、拆台都行，也可以就一短句；');
       user.push('- 必须扣住这条动态里的具体内容（事情/细节/情绪/人物），结合你们的关系，禁止空泛夸赞；');
       if (thread.length > 0) user.push(`【评论区已有的发言（这些话和类似的话术你都不能再说）】\n${thread.join('\n')}`);
+      if (memories.length > 0)
+        user.push(
+          `【你记得的关于${userName}和你们之间的事（评论不得与这些已知事实矛盾；能自然顺带一句最好，但不能生硬复述）】\n${memories.map((m) => `- ${m}`).join('\n')}`
+        );
       user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」这类套话，也不要纯夸奖；');
       user.push('- 只输出评论文本，不要任何解释。');
     } else {
@@ -164,6 +168,10 @@ export async function POST(req: Request) {
         `你现在回复的对象就是「${replyFrom}」这个人——不是你自己，也不是评论区里的其他人；这条回复会显示为「${name} 回复 ${replyFrom}」。`
       );
       if (thread.length > 0) user.push(`【评论区最近的发言（按先后；里面已有的话你不要再重复）】\n${thread.join('\n')}`);
+      if (memories.length > 0)
+        user.push(
+          `【你记得的关于${userName}和你们之间的事（回复不得与这些已知事实矛盾）】\n${memories.map((m) => `- ${m}`).join('\n')}`
+        );
       user.push(`请以「${name}」的身份回「${replyFrom}」一句话：10~50 字，口语化、贴合你的人设和你们的关系，接住对方的话头；`);
       user.push('- 可以调侃、反驳、反问、敷衍、装傻，像真人打字；禁止客套模板（「谢谢」「说得好」「祝你…」这类）；');
       user.push('- 只输出回复文本。');

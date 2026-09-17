@@ -635,6 +635,30 @@ export function memHasMomentFragment(contactId: string, postId: string): boolean
   }
 }
 
+/**
+ * 按追溯字段清理「动态来源」记忆碎片（删除动态/评论时级联调用，六.3）：
+ * - 删动态传 { postId }：该动态相关的全部来源记忆（TA 发的动态/点赞/评论/回复/用户动态被看到）一并清掉，
+ *   保证删完之后 AI 聊天时不会再引用这条已删除的动态；
+ * - 删评论传 { postId, commentId }：只清该条评论（含其触发的回复）产生的记忆。
+ * 含已消费/已归档/已过期的残留项一并清（它们虽不参与召回，但保留着已删内容的痕迹）。
+ * 返回清除的碎片数。
+ */
+export function memPurgeMomentSources(contactId: string, filter: { postId: string; commentId?: string }): number {
+  try {
+    const list = readFragments(contactId);
+    const hit = (f: MemFragment) =>
+      f.source === 'moments' &&
+      f.sourcePostId === filter.postId &&
+      (filter.commentId == null || f.sourceCommentId === filter.commentId);
+    const next = list.filter((f) => !hit(f));
+    if (next.length === list.length) return 0;
+    writeJSON(fragKey(contactId), next);
+    return list.length - next.length;
+  } catch {
+    return 0;
+  }
+}
+
 // ---------------- 轮次计数 + 自动提取 ----------------
 
 /** 防并发：同一联系人同一 App 正在提取/总结时跳过新触发 */
@@ -832,6 +856,15 @@ function appendFragments(
         if (item.expiresAt != null) simHit.expiresAt = item.expiresAt;
       }
       if (!simHit.sourceMsgId && sourceMsgId) simHit.sourceMsgId = sourceMsgId;
+      // 溯源字段补齐（动态来源记忆）：点赞/评论同动态连续写入时内容相近会被合并成一条，
+      // 合并目标（先写入的那条）若缺溯源字段，用本次传入的补齐——否则删评论时按
+      // sourceCommentId 清理会漏掉这条合并碎片（六.3 级联清理依赖这些字段）
+      if (extra) {
+        if (!simHit.source && extra.source) simHit.source = extra.source;
+        if (!simHit.sourcePostId && extra.sourcePostId) simHit.sourcePostId = extra.sourcePostId;
+        if (!simHit.sourceKind && extra.sourceKind) simHit.sourceKind = extra.sourceKind;
+        if (!simHit.sourceCommentId && extra.sourceCommentId) simHit.sourceCommentId = extra.sourceCommentId;
+      }
       seen.add(normText(simHit.content));
       merged++;
       continue;

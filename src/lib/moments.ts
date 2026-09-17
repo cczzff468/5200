@@ -31,12 +31,13 @@
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import type { ApiConfig } from '@/lib/ios/store';
-import { contactRealName, ownerRealName } from '@/lib/ios/contacts-store';
+import { contactRealName, listContacts, ownerRealName } from '@/lib/ios/contacts-store';
 import {
   getMemSettings,
   listFragments,
   memAddMomentFragment,
   memHasMomentFragment,
+  memPurgeMomentSources,
   memRecentConvo,
   type MemApp,
 } from '@/lib/memory';
@@ -607,7 +608,22 @@ export function updateMomentPostContent(platform: MomentPlatform, postId: string
   return true;
 }
 
-/** 删除动态（含评论/点赞与队列里相关的待处理项） */
+/**
+ * 级联清理该动态/评论在各角色记忆里留下的「动态来源」碎片（六.3：删了动态/评论，
+ * AI 不该再在聊天里记得「你发过那条/我评论过那条」）。异步批量执行，不阻塞 UI。
+ */
+function purgeMomentMemories(filter: { postId: string; commentId?: string }): void {
+  void (async () => {
+    try {
+      const contacts = await listContacts();
+      for (const c of contacts) memPurgeMomentSources(c.id, filter);
+    } catch {
+      // 记忆清理是增强能力，失败静默
+    }
+  })();
+}
+
+/** 删除动态（含评论/点赞、队列里的相关待处理项与各角色记忆里的相关碎片） */
 export function deleteMomentPost(platform: MomentPlatform, postId: string, userName: string): boolean {
   const list = listMomentPosts(platform, userName);
   if (!list.some((p) => p.id === postId)) return false;
@@ -618,6 +634,7 @@ export function deleteMomentPost(platform: MomentPlatform, postId: string, userN
   } catch {
     // 忽略
   }
+  purgeMomentMemories({ postId });
   return true;
 }
 
@@ -794,7 +811,7 @@ export function addCharMomentComment(
   return comment;
 }
 
-/** 删除一条评论（长按删除；任何人的评论都可删——手机是用户的。其下全部后代回复一并删，相关队列回复一并撤掉） */
+/** 删除一条评论（长按删除；任何人的评论都可删——手机是用户的。其下全部后代回复、相关队列回复与记忆碎片一并清掉） */
 export function deleteMomentComment(platform: MomentPlatform, postId: string, commentId: string, userName: string): boolean {
   const list = listMomentPosts(platform, userName);
   const post = list.find((p) => p.id === postId);
@@ -820,6 +837,7 @@ export function deleteMomentComment(platform: MomentPlatform, postId: string, co
   } catch {
     // 忽略
   }
+  purgeMomentMemories({ postId, commentId });
   return true;
 }
 
@@ -1040,7 +1058,7 @@ export async function aiPostMoment(args: {
   return addCharMomentPost(platform, { peer, userName, content });
 }
 
-/** AI 给用户的动态写一条评论/回复（二.1/二.3；内容贴合人设与动态内容） */
+/** AI 给用户的动态写一条评论/回复（二.1/二.3；内容贴合人设、动态内容与记忆——不与已知事实矛盾） */
 export async function aiCommentOnMoment(args: {
   apiConfig: ApiConfig;
   platform: MomentPlatform;
@@ -1053,6 +1071,7 @@ export async function aiCommentOnMoment(args: {
   const { apiConfig, platform, peer, post, userName, replyTo } = args;
   // 评论串（回复时带上下文，让 AI 接得住多轮）
   const thread = post.comments.slice(-6).map((c) => ({ authorName: c.authorName, content: c.content }));
+  // 记忆素材（四.1）：评论/回复也参考记忆库，避免评论内容与已知事实矛盾
   const content = await callGenerateApi(apiConfig, {
     kind: replyTo ? 'reply' : 'comment',
     platform,
@@ -1061,6 +1080,7 @@ export async function aiCommentOnMoment(args: {
     post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 200) },
     thread,
     replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content } : null,
+    memories: memorySnippets(peer.id),
   });
   const added = addCharMomentComment(platform, post.id, {
     peer,

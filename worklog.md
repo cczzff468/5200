@@ -5258,3 +5258,29 @@ Stage Summary:
 - 交付 8 文件：lib/emoji.ts、lib/sticker-toggle.ts（新）、api/moments/generate/route.ts、chat-settings.tsx、wechat.tsx、qq.tsx、chat.tsx、（emoji strip 三端复用）
 - 「发动态不加点 emoji」由 prompt 禁令 + 服务端硬剥离双保险落地，评论/回复不受影响；「表情包开关」三端按会话独立、默认开启不改变存量行为，关闭后三层保障（system 禁令 / 表情包规则与清单不下发 + 卡片丢弃 / 落盘与流式双重字符剥离），用户自己发表情完全不受影响
 - 修复过程中发现并解决信息端标记残留 bug；浏览器重启后 IndexedDB 被清空（agent-browser ephemeral profile），已重新种子化完成全部验证
+
+---
+Task ID: MOMENTS-AUDIT-1
+Agent: Z.ai Code (main)
+Task: 朋友圈/动态 AI 评论功能七维完整审计（角色独立性/回复指向/人机感/记忆联动/重复冲突/异常边界/验证方式），发现问题即修
+
+Work Log:
+- 全量通读 moments.ts 引擎（1429行）、/api/moments/generate route、moments-shared.tsx、wechat/qq 朋友圈页面、MomentsScheduler、memory.ts 动态碎片管线、sticker-toggle/emoji 工具（Explore 子代理并行审计 UI 层 6 项）
+- 代码审计结论：一~三、五（角色独立性/回复指向/人机感/重复冲突）此前 ced002f/a11d8d8 的修复全部在位且生效——每角色独立 API 调用+persona 注入、parentId+replyToName 双字段、drainReplies 三层防线（只回用户评论/同角色同父只回一次/遗留自回复修复）、数据层同内容硬拒绝、prompt 反模板禁令
+- 发现缺陷①（四.1/四.2）：评论/回复生成不注入记忆——aiCommentOnMoment payload 无 memories，route 只在 post 分支用记忆 → 评论可能与已知事实矛盾。修复：payload 加 memories: memorySnippets(peer.id)，route comment/reply 分支各注入记忆段+「不得与已知事实矛盾」指令
+- 发现缺陷②（六.3）：删除动态/评论只删数据+队列，各角色记忆里的动态来源碎片（sourcePostId/sourceCommentId）残留 → AI 聊天仍会引用已删动态。修复：memory.ts 新增 memPurgeMomentSources（按 postId/commentId 过滤清除，含已消费/已归档残留）；moments.ts deleteMomentPost/deleteMomentComment fire-and-forget 调 purgeMomentMemories（listContacts 全量遍历，不阻塞 UI）
+- 发现缺陷③（审计中实测撞见）：点赞+评论同动态时两碎片内容相近被相似合并成一条，合并目标丢失 sourceCommentId → 缺陷②的按 commentId 清理会漏。修复：appendFragments 相似合并分支补齐 source/sourcePostId/sourceKind/sourceCommentId 缺失字段
+- E2E 实测（agent-browser，真实上游可用，种子乐乐+新建角色z理工直男人设）：
+  ①同动态双角色评论内容完全不同（水煮鱼动态：z「川菜馆的辣比咖啡提神？下次开会带瓶辣椒水好了」vs 乐乐「辣得爽吧？下午开会打瞌睡的样子肯定很精彩」），且确定性 API 对比（同动态同记忆两 persona）产出风格迥异内容，均正确引用记忆事实（学手冲/猫毛过敏）无矛盾
+  ②回复指向：用户回复乐乐评论 → 数据层 AI 回复 replyTo=机主+parentId 串用户评论；UI 渲染「机主 回复 乐乐」「乐乐 回复 机主」，无自回复；用户评论 z 的动态 → z 回复 replyTo=机主接产品经理梗
+  ③长按评论删除：480ms 长按弹 CommentDeleteDialog，无 x 号残留；删 z 评论后 z 的碎片（sourceCommentId 命中）同步清除、乐乐的精确保留；删整条动态后双方碎片全部清零（缺陷②修复实测生效）
+  ④AI 动态编辑（EditPostDialog 改乐乐动态正文落盘成功）；动态禁 emoji：让TA发一条（z）真实生成纯文本 hasEmoji=false
+  ⑤评论沉淀记忆：z 的记忆库 5 条 moments 碎片全形状正确（char-post/char-comment/机主评论z动态/z回复机主评论）
+  ⑥表情包开关：聊天设置 wx-settings-stickers 存在（默认开），关闭持久化 {"wx:char-lele":false}；mock 上游原始回复含 😄🎉✨+[表情包:stk-x]，UI 气泡全部干净（三层剥离生效）
+- 澄清（非缺陷）：本沙箱浏览器配置的上游为上一会话遗留 mock（对任何输入固定回「好嘞收到！马上安排 稍后联系你」）——聊天套话感来自该 mock 上游而非管线；moments 生成因该 mock 服务端不可达自动走 SDK 兜底产出高质量人设内容（completeWithFallback 设计行为）；队列注入测试发现 idb-kv 为内存写穿层，控制台直写 IndexedDB 不影响运行期内存缓存（E2E 方法论记录）
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无运行期错误
+
+Stage Summary:
+- 审计结论：七维清单中一/二/三/五全部通过实测；四（记忆联动）与六.3（删除清理）发现 3 个真实缺陷并当场修复——评论/回复注入记忆防事实矛盾、删动态/评论级联清理各角色记忆碎片、相似合并补齐溯源字段
+- 交付 3 文件：src/lib/moments.ts（评论记忆注入+级联清理接线）、src/lib/memory.ts（memPurgeMomentSources+合并溯源补齐）、src/app/api/moments/generate/route.ts（comment/reply 记忆段）
+- 遗留提示（非本次范围）：QQ PostMoreMenu 对 seed 帖无守卫（当前 ZONE_SEEDS=[] 无风险）；微信 friendMoments 分支的第二个 EditPostDialog 不可达（死代码无害）；沙箱保存的 mock 上游建议用户在设置里换回真实 API
