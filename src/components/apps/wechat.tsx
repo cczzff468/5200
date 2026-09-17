@@ -100,6 +100,7 @@ import {
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
@@ -283,9 +284,10 @@ let wxActiveChatId: string | null = null;
 
 function loadMsgs(contactId: string): WxMsg[] {
   try {
-    const raw = window.localStorage.getItem(lsMsgsKey(contactId));
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    // 持久化在 IndexedDB kv store（启动时由 idb-kv 从 localStorage 迁移，内存同步读）
+    const raw = kvGet<WxMsg[]>(lsMsgsKey(contactId));
+    if (!Array.isArray(raw)) return [];
+    const parsed: unknown = raw;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -395,11 +397,8 @@ function loadMsgs(contactId: string): WxMsg[] {
 }
 
 function saveMsgs(contactId: string, msgs: WxMsg[]): void {
-  try {
-    window.localStorage.setItem(lsMsgsKey(contactId), JSON.stringify(msgs.slice(-100)));
-  } catch {
-    // 持久化失败忽略
-  }
+  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+  kvSet(lsMsgsKey(contactId), msgs.slice(-100));
   // 新消息自动恢复被「删除/不显示」的会话（真微信行为）
   try {
     const hid = loadStrList(LS_CHAT_HIDDEN);
@@ -417,11 +416,10 @@ const lsAiEventsKey = (contactId: string) => `wx-ai-events:${contactId}`;
 
 function pushAiEvent(contactId: string, text: string): void {
   try {
-    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const parsed: unknown = kvGet<string[]>(lsAiEventsKey(contactId));
     const arr = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
     arr.push(text);
-    window.localStorage.setItem(lsAiEventsKey(contactId), JSON.stringify(arr.slice(-10)));
+    kvSet(lsAiEventsKey(contactId), arr.slice(-10));
   } catch {
     // 忽略
   }
@@ -429,11 +427,10 @@ function pushAiEvent(contactId: string, text: string): void {
 
 function drainAiEvents(contactId: string): string[] {
   try {
-    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
-    if (!raw) return [];
-    window.localStorage.removeItem(lsAiEventsKey(contactId));
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    const parsed: unknown = kvGet<string[]>(lsAiEventsKey(contactId));
+    if (!Array.isArray(parsed)) return [];
+    kvDel(lsAiEventsKey(contactId));
+    return parsed.filter((x): x is string => typeof x === 'string');
   } catch {
     return [];
   }
@@ -495,9 +492,7 @@ function saveStrList(key: string, list: string[]): void {
 
 function loadMoments(): WxMoment[] {
   try {
-    const raw = window.localStorage.getItem(LS_MOMENTS);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<WxMoment[]>(LS_MOMENTS);
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((p): p is WxMoment => Boolean(p) && typeof (p as WxMoment).id === 'string' && typeof (p as WxMoment).time === 'number')
@@ -534,7 +529,7 @@ function loadMoments(): WxMoment[] {
 /** 返回是否保存成功（失败提示存储空间不足） */
 function saveMoments(list: WxMoment[]): boolean {
   try {
-    window.localStorage.setItem(LS_MOMENTS, JSON.stringify(list.slice(0, 200)));
+    kvSet(LS_MOMENTS, list.slice(0, 200));
     return true;
   } catch {
     return false;
@@ -566,9 +561,7 @@ function ensureFriendPosts(friend: { name: string; avatar: string | null }, list
 
 function loadReqs(): WxFriendReq[] {
   try {
-    const raw = window.localStorage.getItem(LS_WX_REQS);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<WxFriendReq[]>(LS_WX_REQS);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (r): r is WxFriendReq =>
@@ -581,7 +574,7 @@ function loadReqs(): WxFriendReq[] {
 
 function saveReqs(list: WxFriendReq[]): void {
   try {
-    window.localStorage.setItem(LS_WX_REQS, JSON.stringify(list.slice(0, 100)));
+    kvSet(LS_WX_REQS, list.slice(0, 100));
   } catch {
     // 持久化失败忽略
   }

@@ -3,7 +3,7 @@
 /**
  * 微信「服务」页面栈（钱包体系）：
  * 服务主页 → 钱包 → 零钱 / 零钱明细 / 零钱通 / 银行卡 / 亲属卡（介绍 → 选人 → 设置 → 管理）
- * 数据独立存 localStorage（wx-wallet / wx-wallet-cards / wx-change-bills / wx-lcq / wx-family-cards），与 QQ 钱包互不影响
+ * 数据独立存 IndexedDB kv store（wx-wallet / wx-wallet-cards / wx-change-bills / wx-lcq / wx-family-cards），与 QQ 钱包互不影响
  * 界面按微信真实截图 1:1 还原：零钱页、零钱通黄色主题、银行卡添加页、亲属卡三页
  */
 
@@ -101,9 +101,9 @@ export function uid(): string {
 
 export function loadJSON<T>(key: string, fallback: T): T {
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    // 钱包数据已迁 IndexedDB kv store（内存同步读）；localStorage 仅作迁移前旧数据源
+    const v = kvGet<T>(key);
+    return v === null || v === undefined ? fallback : (v as T);
   } catch {
     return fallback;
   }
@@ -111,7 +111,7 @@ export function loadJSON<T>(key: string, fallback: T): T {
 
 export function saveJSON(key: string, value: unknown): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    kvSet(key, value);
   } catch {
     // 持久化失败忽略
   }
@@ -193,16 +193,17 @@ export function saveFamilyCardsIn(list: WxFamilyCardIn[]): void {
 // ---------------- 聊天消息联动（亲属卡赠送/接收 → 写入微信聊天消息流） ----------------
 
 /** 与 wechat.tsx 的 lsMsgsKey 保持一致的消息存储 key 前缀 */
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+
 const WX_LS_MSGS_PREFIX = 'wx-chat-msgs:';
 
 /** 向指定联系人的微信聊天消息流末尾追加一条消息（跨模块写入：钱包赠送亲属卡 → 聊天卡片） */
 export function appendWxChatMsg(contactId: string, msg: Record<string, unknown>): void {
   try {
-    const raw = window.localStorage.getItem(WX_LS_MSGS_PREFIX + contactId);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const parsed: unknown = kvGet<unknown[]>(WX_LS_MSGS_PREFIX + contactId);
     if (!Array.isArray(parsed)) return;
     parsed.push(msg);
-    window.localStorage.setItem(WX_LS_MSGS_PREFIX + contactId, JSON.stringify(parsed.slice(-100)));
+    kvSet(WX_LS_MSGS_PREFIX + contactId, parsed.slice(-100));
   } catch {
     // 读写失败忽略
   }
@@ -2100,8 +2101,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
             saveFamilyCardsIn(next);
             if (card?.friendId) {
               try {
-                const raw = window.localStorage.getItem(WX_LS_MSGS_PREFIX + card.friendId);
-                const parsed: unknown = raw ? JSON.parse(raw) : [];
+                const parsed: unknown = kvGet<unknown[]>(WX_LS_MSGS_PREFIX + card.friendId);
                 if (Array.isArray(parsed)) {
                   const msgs = parsed as Array<Record<string, unknown>>;
                   const fam = card;
@@ -2122,7 +2122,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
                     kind: 'notice',
                     notice: { icon: 'fam', pre: '你退回了', accent: '亲属卡' },
                   });
-                  window.localStorage.setItem(WX_LS_MSGS_PREFIX + card.friendId, JSON.stringify(updated));
+                  kvSet(WX_LS_MSGS_PREFIX + card.friendId, updated);
                 }
               } catch {
                 // 同步失败不影响解除本身
@@ -2219,7 +2219,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
 
 interface WxPayPwdData {
   enabled: boolean;
-  /** 6 位数字密码（仅本机 localStorage 保存） */
+  /** 6 位数字密码（仅本机 IndexedDB 加密存储之外的本机保存，不外传） */
   pwd: string | null;
 }
 
@@ -2227,8 +2227,7 @@ export const WX_LS_PAY_PWD = 'wx-pay-pwd';
 
 export function wxLoadPayPwd(): WxPayPwdData {
   try {
-    const raw = window.localStorage.getItem(WX_LS_PAY_PWD);
-    const p: unknown = raw ? JSON.parse(raw) : null;
+    const p: unknown = kvGet(WX_LS_PAY_PWD);
     if (p && typeof p === 'object') {
       const d = p as Partial<WxPayPwdData>;
       const pwd = typeof d.pwd === 'string' && /^\d{6}$/.test(d.pwd) ? d.pwd : null;

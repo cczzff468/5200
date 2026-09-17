@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
+import { encryptValue, decryptValue } from './secure-store';
 
 // ---------------- 类型 ----------------
 
@@ -267,7 +268,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
       let apiConfig: ApiConfig = { ...DEFAULT_API_CONFIG };
       if (apiRec && typeof apiRec.value === 'object' && apiRec.value !== null) {
-        const v = apiRec.value as Partial<ApiConfig>;
+        // 兼容：旧版明文记录 / 新版密文信封都从这里解出
+        const v = ((await decryptValue<Partial<ApiConfig>>(apiRec.value)) ?? apiRec.value) as Partial<ApiConfig>;
         apiConfig = {
           baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_API_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
@@ -275,18 +277,36 @@ export const useSettings = create<SettingsState>((set, get) => ({
           temperature: typeof v.temperature === 'number' ? v.temperature : DEFAULT_API_CONFIG.temperature,
           maxTokens: typeof v.maxTokens === 'number' ? v.maxTokens : DEFAULT_API_CONFIG.maxTokens,
         };
+        // 旧版明文静默升级：立即以密文回写（有 apiKey 才有必要；无 key 的占位配置不动）
+        const wasPlain = !('__enc' in (apiRec.value as object));
+        if (wasPlain && typeof apiConfig.apiKey === 'string' && apiConfig.apiKey.length > 0) {
+          void encryptValue(apiConfig)
+            .then((enc) => localDB.put('settings', { key: 'apiConfig', value: enc }))
+            .catch(() => undefined);
+        }
       }
 
       let apiPresets: ApiPreset[] = [];
-      if (presetsRec && Array.isArray(presetsRec.value)) {
-        apiPresets = presetsRec.value.filter(
-          (p): p is ApiPreset =>
-            typeof p === 'object' &&
-            p !== null &&
-            typeof (p as ApiPreset).id === 'string' &&
-            typeof (p as ApiPreset).name === 'string' &&
-            typeof (p as ApiPreset).config === 'object'
-        );
+      if (presetsRec && presetsRec.value) {
+        // 兼容：旧版明文数组 / 新版密文信封
+        const pv = (await decryptValue<ApiPreset[]>(presetsRec.value)) ?? presetsRec.value;
+        if (Array.isArray(pv)) {
+          apiPresets = pv.filter(
+            (p): p is ApiPreset =>
+              typeof p === 'object' &&
+              p !== null &&
+              typeof (p as ApiPreset).id === 'string' &&
+              typeof (p as ApiPreset).name === 'string' &&
+              typeof (p as ApiPreset).config === 'object'
+          );
+          // 旧版明文含 apiKey 时静默升级为密文
+          const hasKey = apiPresets.some((p) => typeof p.config?.apiKey === 'string' && p.config.apiKey.length > 0);
+          if (!('__enc' in (presetsRec.value as object)) && hasKey) {
+            void encryptValue(apiPresets)
+              .then((enc) => localDB.put('settings', { key: 'apiPresets', value: enc }))
+              .catch(() => undefined);
+          }
+        }
       }
 
       set({
@@ -368,12 +388,18 @@ export const useSettings = create<SettingsState>((set, get) => ({
   updateApiConfig: (patch) => {
     const apiConfig = { ...get().apiConfig, ...patch };
     set({ apiConfig });
-    void localDB.put('settings', { key: 'apiConfig', value: apiConfig });
+    // 安全：含 apiKey，密文落盘（AES-GCM 非可提取密钥），IndexedDB 不存明文
+    void encryptValue(apiConfig)
+      .then((v) => localDB.put('settings', { key: 'apiConfig', value: v }))
+      .catch(() => undefined);
   },
 
   setApiPresets: (list) => {
     set({ apiPresets: list });
-    void localDB.put('settings', { key: 'apiPresets', value: list });
+    // 安全：预设的 config 可能含 apiKey，同样密文落盘
+    void encryptValue(list)
+      .then((v) => localDB.put('settings', { key: 'apiPresets', value: v }))
+      .catch(() => undefined);
   },
 
   applyLockConfig: (cfg) => {

@@ -1,9 +1,11 @@
 /**
  * 表情包数据层（微信 / QQ 共用）：
- * - localStorage 持久化：wx-stickers / qq-stickers
+ * - IndexedDB kv store 持久化：wx-stickers / qq-stickers（图片 dataURL 体积大，localStorage 容易超配额）
  * - 每张表情：图片（dataURL 或 URL）+ 意思（供 AI 理解并据此回复）
  * - URL 添加时自动从 URL 中识别中文意思（query 参数或文件名/路径段）
  */
+
+import { kvGet, kvSet } from './idb-kv';
 
 export interface Sticker {
   id: string;
@@ -18,9 +20,7 @@ const LS_KEY = (app: 'wx' | 'qq') => `${app}-stickers`;
 
 export function loadStickers(app: 'wx' | 'qq'): Sticker[] {
   try {
-    const raw = window.localStorage.getItem(LS_KEY(app));
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<Partial<Sticker>[]>(LS_KEY(app));
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((s): s is Partial<Sticker> => Boolean(s) && typeof (s as Partial<Sticker>).url === 'string')
@@ -38,9 +38,10 @@ export function loadStickers(app: 'wx' | 'qq'): Sticker[] {
 
 export function saveStickers(app: 'wx' | 'qq', list: Sticker[]): void {
   try {
-    window.localStorage.setItem(LS_KEY(app), JSON.stringify(list.slice(0, 200)));
+    // 内存同步 + 异步写穿 IndexedDB
+    kvSet(LS_KEY(app), list.slice(0, 200));
   } catch {
-    // 持久化失败忽略（dataURL 过多可能超配额）
+    // 持久化失败忽略
   }
 }
 

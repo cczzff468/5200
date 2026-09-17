@@ -5103,3 +5103,21 @@ Work Log:
 Stage Summary:
 - 18 项检查结论：1/2/3/4（注入层 4 项）实测通过；5-8（模型层）因上游 403 无法实测、注入信息完备性已验证（环境限制如实报告）；9/10/11/12（记忆层 4 项）实测通过；13 时区不准已修复兜底（三时区实测一致；系统 epoch 本身偏差无对时手段，属设计边界如实说明）；14 实测通过（关开关不注入+异常 lastMsgTime 兜底+时间块纯同步拼接无网络调用不可能失败）；15 实测通过（聊天/分句/回复条数/记忆提取/角色隔离链路未受影响，3 次真实发送走通）
 - 交付修复 3 文件：memory-core.ts（bjParts+两标签固定北京时间）、memory.ts（parseMemTime 北京时间解析）、memory-bank.tsx（手动编辑时间输入框北京时间互逆转换）——中国用户行为不变，非中国时区设备从「两处时间差 8 小时」修复为「全链路固定北京时间」
+
+---
+Task ID: MIG-IDB
+Agent: Z.ai Code (main)
+Task: localStorage → IndexedDB 数据迁移（全量扫描五维清单 + 分模块迁移 + 逐模块验证 + API Key 加密）
+
+Work Log:
+- 全量扫描 25 个文件的 localStorage 调用，按「存什么/数据量/读写频率/隔离维度/是否适合迁移」输出五维清单：A 级迁移 10 组键（聊天消息 wx/qq/ios-chat-msgs:*+assistant、记忆 mem-* 五族、表情包 wx/qq-stickers（dataURL 大图有超配额风险）、朋友圈 wx-moments、QQ 空间三键、钱包十二键（含支付密码）、互动状态（bond/checkin/friend-likes/ai-events）、收藏、好友请求、翻译缓存）；B 级保留 localStorage（开关/角标/缓存/布局等 <10KB 小件，同步首帧读）
+- 基础设施：①db.ts 升 v6 加 kv store（{key,value}，key=原 localStorage 键名）；②新建 src/lib/ios/idb-kv.ts —— MIGRATE_EXACT/MIGRATE_PREFIXES 清单 + migrateLsToKv（幂等：parse→put→读回 JSON 对比校验→一致才 removeItem 旧键，失败保留下次重试）+ hydrateAll（getAll 全量注水内存 Map）+ kvGet/kvSet/kvDel/kvDelByPrefix（同步内存读 + 异步写穿 IndexedDB）+ ensureKvReady（迁移→注水→ready）+ 降级通道（IndexedDB 打不开时 kvGet/kvSet 回退 localStorage 保命）；③PhoneShell 开机门控接入 ensureKvReady（loaded 前完成迁移+注水，所有模块同步读零改动安全）
+- 模块迁移（读写统一：迁移模块运行期只写 IndexedDB，内存仅同步缓存层）：聊天消息三端 loadMsgs/saveMsgs 换 kvGet/kvSet；memory.ts readJSON/writeJSON 换 kv（记忆全部读写的唯一通道，一处改全层生效）+ memPurgeContact 双删（kv+localStorage 兼容清扫）；contacts-store purgeChatTracesFor 聊天键 kvDel+旧键清扫；stickers/favorites/translate-cache；wechat（moments/reqs/ai-events）；qq（zone 三键/checkin/likes/bond/ai-events/钱包五键）；wechat-wallet（loadJSON/saveJSON 收口改 kv，微信主文件经 import 自动统一+消息读写+pay-pwd）
+- API Key 安全（坑 4）：apiConfig/apiPresets 原明文存 IndexedDB settings —— 新建 src/lib/ios/secure-store.ts（WebCrypto AES-GCM-256 非可提取 CryptoKey（extractable=false 存 settings.cryptoKey，JS 永远拿不到密钥字节）+ encryptValue/decryptValue 信封 {__enc,iv,ct}）；store.ts load 解密读取+旧明文静默升级回写、updateApiConfig/setApiPresets 密文落盘；请求使用时照常解密进请求体（存储密文/传输按需）
+- 验证（agent-browser 隔离会话逐模块）：①种 9 类旧 localStorage 键+明文 apiConfig/apiPresets → reload → 9 键全部从 localStorage 删除、kv store 全部迁入 ✅；②apiConfig 变密文信封（明文 key 不存在）、apiPresets 密文、cryptoKey 为 CryptoKey 且 extractable:false ✅；③微信登录→会话列表预览显示迁移旧消息→聊天页 3 条旧消息全部渲染→发新消息后 kv 从 3 条变 6 条且 localStorage 零复活（写穿）✅；④请求体抓包 config.apiKey=解密后明文 key（加密存储/使用解密链路通）✅；⑤记忆库设置页显示 1 联系人 1 碎片、雅雅档案显示「小雅喜欢喝拿铁」（mem-frag 迁移+UI 渲染）✅；⑥微信服务页钱包 ¥88.50（wx-wallet 迁移+UI）✅；⑦rg 全项目兜底扫描：迁移键的 localStorage.setItem/getItem 代码残留清零（仅注释）✅；⑧bunx tsc --noEmit + bun run lint 全绿、dev.log 无错误
+- 已知边界（如实说明）：①多标签页并发写各自内存缓存互不可见（单手机仿真场景，旧实现同样无跨标签同步）；②kvGet 在极早期未注水窗口回退读 localStorage（覆盖 SSR/首帧，与旧代码无键时行为一致）；③非可提取密钥防「数据库文件泄露」（密钥密文分离），同源脚本仍可调用 CryptoKey 解密（纯前端方案的理论上限，如实说明）
+
+Stage Summary:
+- 交付 14 文件：新增 idb-kv.ts（迁移器+写穿层）/secure-store.ts（API Key 加密）；db.ts v6 kv store；PhoneShell 开机门接入；聊天消息/记忆/表情包/朋友圈/空间/钱包/互动状态/收藏/好友请求/翻译缓存 10 组模块统一走 IndexedDB；API Key 密文落盘+静默升级
+- 四坑对策落地：别全换（B 级开关类保留 localStorage）、迁移兜底（幂等+校验后删键+失败重试+IndexedDB 不可用降级）、读写统一（迁移模块运行期零 localStorage 写入，rg 扫描证明）、安全（AES-GCM 非可提取密钥加密 apiKey）
+- 不破坏现有功能：聊天收发/记忆三层/角色隔离（键名不变仅换介质）/时间感知/回复条数/分句/互通开关全链路未动；隔离会话测试数据随浏览器关闭丢弃

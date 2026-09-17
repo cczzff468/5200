@@ -161,6 +161,12 @@ export interface AppSettingRecord {
   value: unknown;
 }
 
+/** 通用 KV 记录（从 localStorage 迁移的中大容量模块用；key = 原 localStorage 键名） */
+export interface KvRecord {
+  key: string;
+  value: unknown;
+}
+
 /** 联系人记录：CHAR（AI 角色）/ USER（我自己）/ NPC（配角），四 App 共享（存本地 IndexedDB） */
 export type { ContactRecord };
 
@@ -181,6 +187,7 @@ interface IOSDB extends DBSchema {
   voicemails: { key: string; value: VoicemailRecord; indexes: { createdAt: number } };
   contacts: { key: string; value: ContactRecord };
   settings: { key: string; value: AppSettingRecord };
+  kv: { key: string; value: KvRecord };
 }
 
 export type IOSStoreName =
@@ -197,10 +204,11 @@ export type IOSStoreName =
   | 'call-logs'
   | 'voicemails'
   | 'contacts'
-  | 'settings';
+  | 'settings'
+  | 'kv';
 
 const DB_NAME = 'ios-phone-db';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 let dbPromise: Promise<IDBPDatabase<IOSDB>> | null = null;
 
@@ -244,6 +252,10 @@ function getDB(): Promise<IDBPDatabase<IOSDB>> {
         if (oldVersion < 5 && !db.objectStoreNames.contains('contacts')) {
           // 联系人本地化（原服务端 SQLite → IndexedDB）：首次升版后由 migrateFromServer() 灌入旧数据
           db.createObjectStore('contacts', { keyPath: 'id' });
+        }
+        if (oldVersion < 6 && !db.objectStoreNames.contains('kv')) {
+          // localStorage → IndexedDB 迁移目标（聊天消息/记忆/表情包/钱包等中大容量模块）
+          db.createObjectStore('kv', { keyPath: 'key' });
         }
       },
     });

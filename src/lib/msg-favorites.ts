@@ -1,6 +1,6 @@
 /**
  * 消息收藏（微信 / QQ 双端共用存储模型；「信息」App 无收藏功能）：
- * - localStorage 分端存储：wx-favorites / qq-favorites
+ * - IndexedDB kv store 分端存储（启动时由 idb-kv 从 localStorage 迁移）：wx-favorites / qq-favorites
  * - 收藏项 = 原消息快照（文本 / 表情 / 图片 / 位置 / 卡片摘要）+ 来源会话信息
  * - 聊天气泡长按菜单「收藏」与多选批量收藏写入；收藏页（微信「我」/ QQ 个人抽屉）读取
  */
@@ -32,6 +32,8 @@ export interface MsgFavorite {
   savedAt: number;
 }
 
+import { kvGet, kvSet } from './ios/idb-kv';
+
 const LS_KEYS: Record<FavApp, string> = { wx: 'wx-favorites', qq: 'qq-favorites' };
 
 export function favId(): string {
@@ -40,9 +42,7 @@ export function favId(): string {
 
 export function loadFavorites(app: FavApp): MsgFavorite[] {
   try {
-    const raw = window.localStorage.getItem(LS_KEYS[app]);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<MsgFavorite[]>(LS_KEYS[app]);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (x): x is MsgFavorite =>
@@ -58,7 +58,7 @@ export function loadFavorites(app: FavApp): MsgFavorite[] {
 
 export function saveFavorites(app: FavApp, list: MsgFavorite[]): void {
   try {
-    window.localStorage.setItem(LS_KEYS[app], JSON.stringify(list.slice(-200)));
+    kvSet(LS_KEYS[app], list.slice(-200));
   } catch {
     // 持久化失败忽略
   }

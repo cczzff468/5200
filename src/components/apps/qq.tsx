@@ -144,6 +144,7 @@ import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLab
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -500,9 +501,7 @@ const SEED_DEFAULT_LIKE: Record<string, boolean> = {};
 
 function loadZonePosts(): ZonePost[] {
   try {
-    const raw = window.localStorage.getItem(LS_ZONE_POSTS);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<ZonePost[]>(LS_ZONE_POSTS);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (p): p is ZonePost =>
@@ -518,9 +517,7 @@ function loadZonePosts(): ZonePost[] {
 
 function loadZoneComments(): Record<string, ZoneComment[]> {
   try {
-    const raw = window.localStorage.getItem(LS_ZONE_COMMENTS);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<Record<string, ZoneComment[]>>(LS_ZONE_COMMENTS);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const out: Record<string, ZoneComment[]> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
@@ -562,9 +559,8 @@ let qqActiveChatId: string | null = null;
 
 function loadMsgs(contactId: string): QQMsg[] {
   try {
-    const raw = window.localStorage.getItem(lsMsgsKey(contactId));
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    // 持久化在 IndexedDB kv store（启动时由 idb-kv 从 localStorage 迁移，内存同步读）
+    const parsed: unknown = kvGet<QQMsg[]>(lsMsgsKey(contactId));
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -613,11 +609,8 @@ function loadMsgs(contactId: string): QQMsg[] {
 }
 
 function saveMsgs(contactId: string, msgs: QQMsg[]): void {
-  try {
-    window.localStorage.setItem(lsMsgsKey(contactId), JSON.stringify(msgs.slice(-200)));
-  } catch {
-    // 持久化失败忽略
-  }
+  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+  kvSet(lsMsgsKey(contactId), msgs.slice(-200));
 }
 
 // ---------------- 转发感知：目标会话的 AI 事件队列 ----------------
@@ -628,11 +621,10 @@ const lsAiEventsKey = (contactId: string) => `qq-ai-events:${contactId}`;
 
 function pushAiEvent(contactId: string, text: string): void {
   try {
-    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const parsed: unknown = kvGet<string[]>(lsAiEventsKey(contactId));
     const arr = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
     arr.push(text);
-    window.localStorage.setItem(lsAiEventsKey(contactId), JSON.stringify(arr.slice(-10)));
+    kvSet(lsAiEventsKey(contactId), arr.slice(-10));
   } catch {
     // 忽略
   }
@@ -640,11 +632,10 @@ function pushAiEvent(contactId: string, text: string): void {
 
 function drainAiEvents(contactId: string): string[] {
   try {
-    const raw = window.localStorage.getItem(lsAiEventsKey(contactId));
-    if (!raw) return [];
-    window.localStorage.removeItem(lsAiEventsKey(contactId));
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    const parsed: unknown = kvGet<string[]>(lsAiEventsKey(contactId));
+    if (!Array.isArray(parsed)) return [];
+    kvDel(lsAiEventsKey(contactId));
+    return parsed.filter((x): x is string => typeof x === 'string');
   } catch {
     return [];
   }
@@ -681,7 +672,7 @@ function copyTextWithToast(text: string, onToast: (m: string) => void): void {
 
 function saveZonePosts(posts: ZonePost[]): void {
   try {
-    window.localStorage.setItem(LS_ZONE_POSTS, JSON.stringify(posts.slice(0, 50)));
+    kvSet(LS_ZONE_POSTS, posts.slice(0, 50));
   } catch {
     // 持久化失败忽略
   }
@@ -704,7 +695,7 @@ const lsBondKey = (contactId: string) => `qq-bond:${contactId}`;
 
 function saveBondStat(contactId: string, s: BondStat): void {
   try {
-    window.localStorage.setItem(lsBondKey(contactId), JSON.stringify(s));
+    kvSet(lsBondKey(contactId), s);
   } catch {
     // 持久化失败忽略
   }
@@ -713,9 +704,8 @@ function saveBondStat(contactId: string, s: BondStat): void {
 /** 读取密友统计；首次（或数据缺失）时从 0 开始建档（成为好友天数/密友值初始都是 0） */
 function loadBondStat(contactId: string): BondStat {
   try {
-    const raw = window.localStorage.getItem(lsBondKey(contactId));
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<BondStat>;
+    const p = kvGet<Partial<BondStat>>(lsBondKey(contactId));
+    if (p && typeof p === 'object') {
       if (typeof p.since === 'number' && typeof p.points === 'number') {
         return { since: p.since, points: p.points, day: p.day ?? '', todayGain: p.todayGain ?? 0 };
       }
@@ -896,8 +886,7 @@ function QqHeader({
 function QqCheckinPills({ testidPrefix, onToast }: { testidPrefix: string; onToast: (m: string) => void }) {
   const [checkin, setCheckin] = useState<{ last: string; streak: number }>(() => {
     try {
-      const raw = window.localStorage.getItem(LS_QQ_CHECKIN);
-      const p: unknown = raw ? JSON.parse(raw) : null;
+      const p: unknown = kvGet(LS_QQ_CHECKIN);
       if (p && typeof p === 'object') {
         const rec = p as { last?: unknown; streak?: unknown };
         if (typeof rec.last === 'string' && typeof rec.streak === 'number') return { last: rec.last, streak: rec.streak };
@@ -920,7 +909,7 @@ function QqCheckinPills({ testidPrefix, onToast }: { testidPrefix: string; onToa
     const next = { last: localDateKey(), streak };
     setCheckin(next);
     try {
-      window.localStorage.setItem(LS_QQ_CHECKIN, JSON.stringify(next));
+      kvSet(LS_QQ_CHECKIN, next);
     } catch {
       // 忽略
     }
@@ -5462,8 +5451,7 @@ function FriendProfilePage({
   // 点赞数：本地持久化，点击 +1（对照 QQ 资料卡点赞）
   const [likes, setLikes] = useState<number>(() => {
     try {
-      const raw = window.localStorage.getItem(LS_FRIEND_LIKE(peer.id));
-      const n = raw ? Number(JSON.parse(raw)) : 0;
+      const n = Number(kvGet<number>(LS_FRIEND_LIKE(peer.id)) ?? 0);
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
     } catch {
       return 0;
@@ -5473,7 +5461,7 @@ function FriendProfilePage({
     const next = likes + 1;
     setLikes(next);
     try {
-      window.localStorage.setItem(LS_FRIEND_LIKE(peer.id), JSON.stringify(next));
+      kvSet(LS_FRIEND_LIKE(peer.id), next);
     } catch {
       // 忽略
     }
@@ -7143,8 +7131,7 @@ function ZonePage({
   const [userPosts, setUserPosts] = useState<ZonePost[]>(loadZonePosts);
   const [seedLiked, setSeedLiked] = useState<Record<string, boolean>>(() => {
     try {
-      const raw = window.localStorage.getItem(LS_ZONE_LIKES);
-      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      const parsed: unknown = kvGet<Record<string, boolean>>(LS_ZONE_LIKES);
       return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
     } catch {
       return {};
@@ -7163,7 +7150,7 @@ function ZonePage({
 
   const persistComments = (next: Record<string, ZoneComment[]>) => {
     try {
-      window.localStorage.setItem(LS_ZONE_COMMENTS, JSON.stringify(next));
+      kvSet(LS_ZONE_COMMENTS, next);
     } catch {
       // 忽略
     }
@@ -7205,7 +7192,7 @@ function ZonePage({
       const next = { ...seedLiked, [p.id]: !likedOf(p) };
       setSeedLiked(next);
       try {
-        window.localStorage.setItem(LS_ZONE_LIKES, JSON.stringify(next));
+        kvSet(LS_ZONE_LIKES, next);
       } catch {
         // 忽略
       }
@@ -8002,8 +7989,7 @@ const DEFAULT_WALLET: WalletData = { balance: 1.03, qb: 0.1, vault: 0 };
 
 function loadWallet(): WalletData {
   try {
-    const raw = window.localStorage.getItem(LS_WALLET);
-    const p: unknown = raw ? JSON.parse(raw) : null;
+    const p: unknown = kvGet(LS_WALLET);
     if (p && typeof p === 'object') {
       const d = p as Partial<WalletData>;
       return {
@@ -8020,7 +8006,7 @@ function loadWallet(): WalletData {
 
 function saveWallet(d: WalletData): void {
   try {
-    window.localStorage.setItem(LS_WALLET, JSON.stringify(d));
+    kvSet(LS_WALLET, d);
   } catch {
     // 忽略
   }
@@ -8028,8 +8014,7 @@ function saveWallet(d: WalletData): void {
 
 function loadBankCards(): BankCard[] {
   try {
-    const raw = window.localStorage.getItem(LS_WALLET_CARDS);
-    const p: unknown = raw ? JSON.parse(raw) : null;
+    const p: unknown = kvGet<BankCard[]>(LS_WALLET_CARDS);
     if (Array.isArray(p)) return p.filter((c) => c && typeof c === 'object' && typeof (c as BankCard).last4 === 'string');
   } catch {
     // 忽略
@@ -8039,7 +8024,7 @@ function loadBankCards(): BankCard[] {
 
 function saveBankCards(list: BankCard[]): void {
   try {
-    window.localStorage.setItem(LS_WALLET_CARDS, JSON.stringify(list));
+    kvSet(LS_WALLET_CARDS, list);
   } catch {
     // 忽略
   }
@@ -8047,8 +8032,7 @@ function saveBankCards(list: BankCard[]): void {
 
 function loadWalletBills(): WalletBill[] {
   try {
-    const raw = window.localStorage.getItem(LS_WALLET_BILLS);
-    const p: unknown = raw ? JSON.parse(raw) : null;
+    const p: unknown = kvGet<WalletBill[]>(LS_WALLET_BILLS);
     if (Array.isArray(p)) return p.filter((b) => b && typeof b === 'object' && typeof (b as WalletBill).amount === 'number');
   } catch {
     // 忽略
@@ -8058,7 +8042,7 @@ function loadWalletBills(): WalletBill[] {
 
 function saveWalletBills(list: WalletBill[]): void {
   try {
-    window.localStorage.setItem(LS_WALLET_BILLS, JSON.stringify(list));
+    kvSet(LS_WALLET_BILLS, list);
   } catch {
     // 忽略
   }
@@ -8092,8 +8076,7 @@ const LS_PAY_PWD = 'qq-pay-pwd';
 
 function loadPayPwd(): PayPwdData {
   try {
-    const raw = window.localStorage.getItem(LS_PAY_PWD);
-    const p: unknown = raw ? JSON.parse(raw) : null;
+    const p: unknown = kvGet(LS_PAY_PWD);
     if (p && typeof p === 'object') {
       const d = p as Partial<PayPwdData>;
       const pwd = typeof d.pwd === 'string' && /^\d{6}$/.test(d.pwd) ? d.pwd : null;
@@ -8107,7 +8090,7 @@ function loadPayPwd(): PayPwdData {
 
 function savePayPwd(d: PayPwdData): void {
   try {
-    window.localStorage.setItem(LS_PAY_PWD, JSON.stringify(d));
+    kvSet(LS_PAY_PWD, d);
   } catch {
     // 忽略
   }
@@ -8172,8 +8155,7 @@ const LS_VAULT_EARN = 'qq-vault-earn';
 
 function loadVaultEarn(): VaultEarnData {
   try {
-    const raw = window.localStorage.getItem(LS_VAULT_EARN);
-    const p: unknown = raw ? JSON.parse(raw) : null;
+    const p: unknown = kvGet(LS_VAULT_EARN);
     if (p && typeof p === 'object') {
       const d = p as Partial<VaultEarnData>;
       if (typeof d.lastDate === 'string' && Array.isArray(d.log)) {
@@ -8188,7 +8170,7 @@ function loadVaultEarn(): VaultEarnData {
 
 function saveVaultEarn(d: VaultEarnData): void {
   try {
-    window.localStorage.setItem(LS_VAULT_EARN, JSON.stringify(d));
+    kvSet(LS_VAULT_EARN, d);
   } catch {
     // 忽略
   }

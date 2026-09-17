@@ -7,6 +7,7 @@
  *   搬完（全部落库成功后）才通知服务端清空对应数据——先搬后删，中途失败下次重来（put 幂等）
  */
 import { localDB, genId } from './db';
+import { kvDel } from './idb-kv';
 import { memPurgeContact } from '@/lib/memory';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
 import { wsHeaders } from './workspace';
@@ -198,7 +199,8 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
 
 /**
  * 删除联系人后清理其全部「聊天痕迹」（NPC 级联删除时对每个被删 id 各调一次）：
- * - 聊天记录（localStorage）：微信 wx-chat-msgs:<id> / QQ qq-chat-msgs:<id> / 信息 ios-chat-msgs:c:<id>；
+ * - 聊天记录（已迁 IndexedDB kv store）：微信 wx-chat-msgs:<id> / QQ qq-chat-msgs:<id> /
+ *   信息 ios-chat-msgs:c:<id>（kvDel 同步删内存 + 异步删库；localStorage 旧键一并清扫兼容）；
  * - 会话级设置 map 条目：chat-time-aware（时间感知）与 chat-reply-counts（回复条数）里
  *   该联系人的 wx:<id> / qq:<id> / sms:c:<id> / phone:<id> 四个键；
  * - 会话标志（置顶/免打扰/背景标记）：wx-chat-flags / qq-chat-flags 里的条目
@@ -209,11 +211,17 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
 function purgeChatTracesFor(id: string): void {
   if (!id) return;
   try {
-    // 聊天记录（三个 App 的 localStorage 键；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫）
-    window.localStorage.removeItem(`wx-chat-msgs:${id}`);
-    window.localStorage.removeItem(`qq-chat-msgs:${id}`);
-    window.localStorage.removeItem(`ios-chat-msgs:c:${id}`);
-    window.localStorage.removeItem(`sms-chat-msgs:${id}`);
+    // 聊天记录（IndexedDB kv store；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫）
+    for (const k of [
+      `wx-chat-msgs:${id}`,
+      `qq-chat-msgs:${id}`,
+      `ios-chat-msgs:c:${id}`,
+      `sms-chat-msgs:${id}`,
+    ]) {
+      kvDel(k);
+      // 兼容清扫：迁移器已删旧键，这里再删一次防历史残留复活
+      window.localStorage.removeItem(k);
+    }
     // 会话级设置 map（时间感知 / 回复条数）：按会话键删除该联系人条目
     for (const mapKey of ['chat-time-aware', 'chat-reply-counts']) {
       const raw = window.localStorage.getItem(mapKey);

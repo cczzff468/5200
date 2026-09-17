@@ -41,6 +41,7 @@ import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRen
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
@@ -98,9 +99,8 @@ function lsMsgsKey(sessionKey: string): string {
 
 function loadMsgs(sessionKey: string): ChatMsg[] | null {
   try {
-    const raw = window.localStorage.getItem(lsMsgsKey(sessionKey));
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
+    // 持久化在 IndexedDB kv store（启动时由 idb-kv 从 localStorage 迁移，内存同步读）
+    const parsed: unknown = kvGet<ChatMsg[]>(lsMsgsKey(sessionKey));
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
     const ok = parsed.every(
       (m) =>
@@ -122,11 +122,8 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
 }
 
 function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
-  try {
-    window.localStorage.setItem(lsMsgsKey(sessionKey), JSON.stringify(msgs.slice(-100)));
-  } catch {
-    // 持久化失败忽略
-  }
+  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+  kvSet(lsMsgsKey(sessionKey), msgs.slice(-100));
 }
 
 /** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；

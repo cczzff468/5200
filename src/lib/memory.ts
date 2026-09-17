@@ -41,6 +41,7 @@
  */
 
 import type { ApiConfig } from '@/lib/ios/store';
+import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import {
   DEFAULT_MEM_SETTINGS,
   MEM_APP_LABEL,
@@ -108,7 +109,7 @@ export {
   type MemWeight,
 } from './memory-core';
 
-// ---------------- localStorage 基础 ----------------
+// ---------------- 持久化基础（IndexedDB kv store，启动时由 idb-kv 从 localStorage 迁移） ----------------
 
 const fragKey = (contactId: string) => `mem-frag:${contactId}`;
 /** 核心记忆存储键（沿用历史 ltm 键名，语义为核心层，避免旧数据迁移） */
@@ -119,9 +120,7 @@ const roundKey = (contactId: string, app: MemApp) => `mem-round:${contactId}:${a
 
 function readJSON<T>(key: string): T | null {
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
+    return kvGet<T>(key);
   } catch {
     return null;
   }
@@ -129,9 +128,10 @@ function readJSON<T>(key: string): T | null {
 
 function writeJSON(key: string, value: unknown): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    // 内存同步 + 异步写穿 IndexedDB；存储失败不中断聊天（记忆是增强能力）
+    kvSet(key, value);
   } catch {
-    // 存储满等异常：静默（记忆是增强能力，不因存储失败打断聊天）
+    // 忽略
   }
 }
 
@@ -425,11 +425,17 @@ export function deleteLongTerm(contactId: string, id: string): boolean {
 /** 删除联系人时级联清理其全部记忆（碎片/核心/长期/设置/轮次计数） */
 export function memPurgeContact(contactId: string): void {
   try {
-    window.localStorage.removeItem(fragKey(contactId));
-    window.localStorage.removeItem(coreKey(contactId));
-    window.localStorage.removeItem(longKey(contactId));
-    window.localStorage.removeItem(settingsKey(contactId));
-    (['wx', 'qq', 'sms', 'phone'] as MemApp[]).forEach((app) => window.localStorage.removeItem(roundKey(contactId, app)));
+    // IndexedDB kv（内存+库同步删）+ localStorage 旧键兼容清扫（防历史残留复活）
+    for (const k of [
+      fragKey(contactId),
+      coreKey(contactId),
+      longKey(contactId),
+      settingsKey(contactId),
+      ...(['wx', 'qq', 'sms', 'phone'] as MemApp[]).map((app) => roundKey(contactId, app)),
+    ]) {
+      kvDel(k);
+      window.localStorage.removeItem(k);
+    }
   } catch {
     // 忽略
   }
@@ -1229,14 +1235,14 @@ export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn
 export function memRecentConvo(contactId: string, app: MemApp): MemConvoTurn[] {
   try {
     if (app === 'phone') return [];
-    const raw =
+    // 聊天记录已迁 IndexedDB kv store（内存同步读，启动时由 idb-kv 迁移）
+    const parsed: unknown = kvGet(
       app === 'wx'
-        ? window.localStorage.getItem(`wx-chat-msgs:${contactId}`)
+        ? `wx-chat-msgs:${contactId}`
         : app === 'qq'
-          ? window.localStorage.getItem(`qq-chat-msgs:${contactId}`)
-          : window.localStorage.getItem(`ios-chat-msgs:c:${contactId}`);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+          ? `qq-chat-msgs:${contactId}`
+          : `ios-chat-msgs:c:${contactId}`
+    );
     if (!Array.isArray(parsed)) return [];
     return memConvoFromRaw(parsed, '');
   } catch {
@@ -1255,9 +1261,7 @@ export function memMostRecentApp(contactId: string): { app: MemApp; convo: MemCo
           ? `qq-chat-msgs:${contactId}`
           : `ios-chat-msgs:c:${contactId}`;
     try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) continue;
-      const parsed: unknown = JSON.parse(raw);
+      const parsed: unknown = kvGet(key);
       if (!Array.isArray(parsed) || parsed.length === 0) continue;
       const last = parsed[parsed.length - 1] as { time?: unknown } | null;
       const ts = typeof last?.time === 'number' ? last.time : 0;

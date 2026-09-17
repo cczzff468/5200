@@ -6,6 +6,7 @@ import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
+import { ensureKvReady } from '@/lib/ios/idb-kv';
 import StatusBar from './StatusBar';
 import HomeScreen from './HomeScreen';
 import AppWindow from './AppWindow';
@@ -115,9 +116,14 @@ export default function PhoneShell() {
     };
   }, []);
 
-  // 从 IndexedDB 加载持久化配置（主题/壁纸/API/锁屏密码）
+  // 从 IndexedDB 加载持久化配置（主题/壁纸/API/锁屏密码）。
+  // 先完成 localStorage → IndexedDB 迁移与注水（聊天/记忆/表情包等模块的同步读写
+  // 都依赖内存缓存就位），再读设置 —— 两者都完成后才结束开机门控。
   useEffect(() => {
-    void load();
+    void (async () => {
+      await ensureKvReady();
+      await load();
+    })();
   }, [load]);
 
   const dark = selectResolvedTheme(theme, systemDark) === 'dark';

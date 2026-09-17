@@ -9,13 +9,14 @@
  *   左侧是中文、右侧是英语时，中文消息气泡下方显示英文译文，英文消息则显示中文译文；
  * - 语言检测 detectMessageLang：按文字体系（假名/谚文/西里尔/阿拉伯/泰文/汉字简繁/拉丁字母
  *   停用词打分）判断消息属于哪一侧；检测不出时默认按「消息是左侧语言」处理（左侧通常为用户母语）；
- * - 译文缓存：localStorage 单键（容量上限 FIFO），key = `<语言>|<原文>`（与具体会话无关，
+ * - 译文缓存：IndexedDB kv 单键（容量上限 FIFO，启动时由 idb-kv 迁移），key = `<语言>|<原文>`（与具体会话无关，
  *   同样的原文+目标语言全局复用），组件内存里另有一份运行时 Map 避免反复读盘；
  * - requestTranslation：带并发闸（最多 3 个同时在途）+ 在途去重（同 key 复用同一 Promise）；
  *   优先走 /api/translate 服务器代理，服务器不可达 / 直连标记 / 内网地址时回退
  *   浏览器直连（directChatStream 兼容非流式 JSON 解析），与聊天链路的兜底策略一致。
  */
 import type { ApiConfig } from '@/lib/ios/store';
+import { kvGet, kvSet } from './ios/idb-kv';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 
 // ---------------- 语言清单 ----------------
@@ -225,9 +226,7 @@ function ensureCache(): void {
   if (cacheLoaded || typeof window === 'undefined') return;
   cacheLoaded = true;
   try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
-    if (!raw) return;
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = kvGet<unknown>(CACHE_KEY);
     if (!Array.isArray(parsed)) return;
     for (const item of parsed) {
       if (Array.isArray(item) && item.length === 2 && typeof item[0] === 'string' && typeof item[1] === 'string') {
@@ -248,7 +247,7 @@ function persistCache(): void {
     memCache.delete(oldest);
   }
   try {
-    window.localStorage.setItem(CACHE_KEY, JSON.stringify([...memCache.entries()]));
+    kvSet(CACHE_KEY, [...memCache.entries()]);
   } catch {
     // 持久化失败忽略（内存缓存仍然有效）
   }
