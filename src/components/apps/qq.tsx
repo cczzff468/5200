@@ -157,6 +157,8 @@ import {
 } from '@/lib/moments';
 import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
@@ -826,9 +828,10 @@ function fmtChatTime(ts: number): string {
 }
 
 /** 联系人 AI 人设（QQ 聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
- *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入；
+ *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入（表情包开关关闭时不下发表情包规则，
+ *  并注入禁用 emoji/表情包的显式规则）；
  *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况） */
-function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null, stickers: Sticker[], npcExtra?: NpcPromptExtra | null): string {
+function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, npcExtra?: NpcPromptExtra | null): string {
   return buildPersonaSystemPrompt(peer, {
     channel: 'QQ',
     userName: me.name,
@@ -836,7 +839,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
     ...npcExtra,
     extraRules: [
       '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
-      ...buildRichRules(stickers),
+      ...buildRichRules(stickersOn ? stickers : []),
+      ...(stickersOn ? [] : [STICKER_OFF_RULE]),
     ],
   });
 }
@@ -1845,6 +1849,11 @@ function ChatPage({
   useEffect(() => {
     setTimeAwareState(getTimeAware(sessionKey));
   }, [sessionKey]);
+  /** 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
+  const [stickersOn, setStickersOnState] = useState(() => getStickersOn(sessionKey));
+  useEffect(() => {
+    setStickersOnState(getStickersOn(sessionKey));
+  }, [sessionKey]);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -2230,7 +2239,9 @@ function ChatPage({
     // 我发给 AI 的待处理红包/转账 → 注入处理动作规则与待处理清单（AI 用 [领取红包:ID] 等标记处理，回应按人设正文说）
     const replyCount = getReplyCount(sessionKey);
     const stickers = loadStickers('qq');
-    const system = buildPersonaPrompt(peer, me, ownerName, stickers, buildNpcPromptExtra(peer, contacts));
+    // 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji）
+    const stickersOn = getStickersOn(sessionKey);
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
     const actionRules = buildActionRules(collectPendingCards(base));
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
@@ -2295,12 +2306,17 @@ function ChatPage({
           }
           const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
           for (const seg of segs) {
-            for (const p of parseRichParts(seg, stickers)) {
+            for (const p of parseRichParts(seg, stickersOn ? stickers : [])) {
               const id = idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`;
-              if (p.type === 'text') {
-                all.push({ id, role: 'peer', content: p.text, time: t });
-              } else {
+              if (p.type === 'rich') {
+                // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/亲属卡/位置卡片不受影响）
+                if (!stickersOn && p.rich.kind === 'sticker') continue;
                 all.push(richToQqMsg(p.rich, id, t, peer));
+              } else {
+                // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉
+                const text = stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' '));
+                if (!stickersOn && !text.trim()) continue;
+                all.push({ id, role: 'peer', content: text, time: t });
               }
               idx++;
               t += 600 + Math.floor(Math.random() * 600);
@@ -3117,7 +3133,7 @@ function ChatPage({
                   <div className="mb-3 flex items-end justify-start gap-2" key={i} data-testid={`qq-stream-bubble-${i}`}>
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
                     <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
-                      {prettifyRichText(t)}
+                      {stickersOn ? prettifyRichText(t) : stripEmojiText(prettifyRichText(t).replace(/\[表情包\]/g, ' '))}
                     </div>
                   </div>
                 ))}
@@ -3474,6 +3490,7 @@ function ChatPage({
           }
           sentenceSend={sentenceSend}
           timeAware={timeAware}
+          stickersOn={stickersOn}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
@@ -3492,6 +3509,11 @@ function ChatPage({
             // 立即持久化并生效（下一次请求现场读取，无需重启）
             setTimeAware(sessionKey, v);
             setTimeAwareState(v);
+          }}
+          onToggleStickers={(v) => {
+            // 立即持久化并生效（下一次请求现场读取，无需重启）：关闭后 AI 不发表情包也不发 emoji
+            saveStickersOn(sessionKey, v);
+            setStickersOnState(v);
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}

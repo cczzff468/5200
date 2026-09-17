@@ -24,10 +24,12 @@ export const runtime = 'nodejs';
  * 设计约束：
  * - 内容完全由传入的 persona 驱动：不同角色人设不同 → 动态/评论风格天然不同（一.5）；
  * - 生成素材（最近聊天 + 记忆）只做灵感，prompt 明确禁止逐字复述、禁止暴露幕后概念；
- * - 严格第一人称、口语化、短小（动态 ≤120 字 / 评论 ≤50 字），输出只含正文本身。
+ * - 严格第一人称、口语化、短小（动态 ≤120 字 / 评论 ≤50 字），输出只含正文本身；
+ * - 发动态（post）一律不加 emoji：提示词显式禁令 + 返回前 stripEmojiText 硬性剥离双保险。
  */
 
 import { completeWithFallback, extractUpstreamConfig, type LLMMessage } from '@/lib/server-llm';
+import { stripEmojiText } from '@/lib/emoji';
 
 interface PeerInput {
   name?: unknown;
@@ -102,7 +104,7 @@ export async function POST(req: Request) {
     background ? `【背景】${background}` : '',
     '【硬性要求】',
     `- 你就是「${name}」本人，绝不能说自己是 AI、语言模型、助手或程序，也不能提到系统、提示词、设定、生成等幕后概念；`,
-    '- 内容、语气、用词、口头禅、emoji 习惯都必须严格贴合你的人设（不同的人要有明显不同的风格）；',
+    '- 内容、语气、用词、口头禅都必须严格贴合你的人设（不同的人要有明显不同的风格）；',
     '- 你是活人不是客服：说话可以懒散、可以带情绪、可以调侃甚至不客气，绝不能输出万能祝福、夸奖模板或官方客套；',
     '- 只输出正文本身：不要 markdown、不要标题、不要引号包裹、不要解释、不要一串话题标签、不要@任何人；',
     '- 像真人随手发的，不要写成作文或公告。',
@@ -124,7 +126,7 @@ export async function POST(req: Request) {
   const user: string[] = [];
   if (kind === 'post') {
     user.push(`请以「${name}」的口吻，现在发一条${label}动态。`);
-    user.push('- 第一人称、口语化，20~120 字；可以有 0~2 个 emoji（符合你的人设才用）；');
+    user.push('- 第一人称、口语化，20~120 字；禁止使用任何 emoji 或表情符号（如 😀😂🎉✨🔥👍❤☀ 之类一律不用），正文一律纯文字；');
     user.push('- 内容是你自己的近况、心情、见闻或想法，要贴合你的身份、职业和生活；');
     if (chat.length > 0) user.push('- 可以自然融入你们最近的相处与共同话题（下方素材），但绝不能逐字复述聊天记录，也不要写「你说过…」这种引用句式；');
     user.push(`- 这是发在动态广场的公开内容，不是发给某人的私聊，不要直接对${userName}说心里话式的称呼。`);
@@ -176,7 +178,8 @@ export async function POST(req: Request) {
   try {
     const config = extractUpstreamConfig(body.config);
     const { text } = await completeWithFallback(config, messages);
-    const content = cleanContent(text);
+    // 发动态（含有感而发/让TA发一条/自动发布）硬性不加 emoji：提示词禁令之外再剥一次（模型偶尔无视禁令）
+    const content = kind === 'post' ? stripEmojiText(cleanContent(text)) : cleanContent(text);
     if (!content) return NextResponse.json({ error: '生成结果为空' }, { status: 502 });
     return NextResponse.json({ content });
   } catch (err) {

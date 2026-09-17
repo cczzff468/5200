@@ -5232,3 +5232,29 @@ Stage Summary:
 - 交付 8 文件：moments.ts（防串台守卫/写入去重/遗留修复/递删/顶层评论AI回/触发去门槛）、generate route（人设化反模板 prompt）、moments-shared.tsx（CommentDeleteDialog/文案/PostMoreMenu）、wechat.tsx、qq.tsx（长按删评 UI/AI 动态编辑删除/读时兜底）、chat.tsx、phone.tsx、MomentsScheduler.tsx（bump 清理/修复挂载）
 - 串台问题三层闭环：遗留坏数据自动修复 + 遗留坏队列项守卫自灭 + 新写入去重，配 prompt 层「明确谁回复谁/禁复用别人话术」；实测同评论区多角色内容完全不同、多轮链指向全部正确
 - 如实说明：①「同一条动态两位 AI 各写一条评论」的场景依赖互动队列随机抽 1-2 位，实测两轮各抽中 z（50% 概率抽 1 位），两位齐评的同屏样本未自然出现，但写入层同内容硬拒绝 + prompt 互异要求对任意组合生效，且两角色分别评论/回复同评论区的内容已实测完全不同；②有感而发的随机触发期望约 20 分钟一次（15 分钟防连发下限），E2E 用 Math.random 覆写验证触发链路，真实节奏不可也不应 E2E 等待；③测试数据在隔离会话，未污染用户浏览器
+
+---
+Task ID: STICKER-TOGGLE-1
+Agent: Z.ai Code (main)
+Task: 发动态不加 emoji + 聊天设置加「表情包」开关（关闭后 AI 不发表情包也不发 emoji）
+
+Work Log:
+- 新建 src/lib/emoji.ts：stripEmojiText/hasEmoji 纯函数（客户端+服务端共用），覆盖 emoji 主区(U+1F000–1FAFF)/杂项符号(2600-27BF)/技术符号/2B00-2BFF/变体选择符/ZWJ/按键帽/〰〽㊗㊙，保留普通标点、CJK、颜文字；剥离后清理多余空格与标点前空悬空格
+- 新建 src/lib/sticker-toggle.ts：按会话独立的表情包开关（sessionKey=wx:<id>/qq:<id>/sms:<key>，localStorage map，与 sentence-send 同款）；getStickersOn 未设置默认 true（保持既有行为）；STICKER_OFF_RULE 注入 system 的禁令（禁一切表情包标记变体 + 禁一切 emoji，用户发的表情照常理解含义）；stickerToggleCaption 开关说明文案
+- /api/moments/generate：①sys 里「emoji 习惯贴合人设」改为不含 emoji 表述；②post prompt 从「可有 0~2 个 emoji」改为「禁止使用任何 emoji 或表情符号，正文一律纯文字」；③kind=post 返回前 stripEmojiText 硬性剥离（含有感而发/让TA发一条/自动发布），双保险；comment/reply 保持人设化不受影响
+- chat-settings.tsx：ChatSettingsPage（微信/QQ）与 SmsChatSettingsPage（信息）新增 stickersOn/onToggleStickers props，时间感知下方加「表情包」开关行 + 说明小字（testId: wx/qq/sms-settings-stickers）
+- wechat.tsx：stickersOn state（sessionKey 切换重载）；buildPersonaPrompt 增加 stickersOn 参数——关闭时 buildRichRules 传空清单（不下发表情包规则）并追加 STICKER_OFF_RULE；发送时现场 getStickersOn；finalize 落盘：表情包 rich 卡片丢弃（红包/转账/亲属卡/位置不受影响）、文字 stripEmojiText + 去 [表情包]/[表情] 占位、空段跳过；流式渲染同步剥除（开关关闭时 prettifyRichText→去占位→stripEmojiText）；ChatSettingsPage 接线
+- qq.tsx：与 wechat 完全同构的接线（prompt/落盘/流式/设置）
+- chat.tsx（信息端）：stickersOn state；startAiTurn 的 baseSys 追加 STICKER_OFF_RULE（信息端无表情包规则可下发，只禁 emoji）；finalize 每段先剥离表情包类标记（[表情包:xx]/[表情:xx]/[发送了表情：xx]/【】变体，信息端本不解析标记会残留原文）再 stripEmojiText；流式渲染同步；SmsChatSettingsPage 接线
+- E2E 实测（agent-browser 隔离会话，种子 user-e2e/char-lele）：
+  ①微信设置页「表情包」开关默认开；关闭 → localStorage {"wx:char-lele":false} + 文案变「已关闭：对方不再发表情包，也不再发任何 emoji 表情…」
+  ②mock /api/chat 回复「哇塞！😂 太好了🎉🎉 我先笑为敬 [表情包:stk-test] 晚上一起吃饭☀ 记得叫我呀✨」：关闭时落盘 3 条纯文字气泡（😂🎉☀✨ 全剥、表情包标记消失）；开关打开对照发送 → emoji 全部保留、未知表情 ID 按既有兜底显示「[表情包]」文字
+  ③QQ 端同款开关（{"qq:char-lele":false}）+ 关闭后剥离实测通过
+  ④信息端 SmsChatSettingsPage 开关（{"sms:assistant":false}）；首测发现 [表情包:stk-x] 标记残留 bug → chat.tsx 增加标记剥离正则（bun 单测 4 用例 PASS）→ 复测「好嘞收到！ 马上安排 稍后联系你」干净无残留
+  ⑤发动态无 emoji：微信朋友圈 ✨让乐乐发一条 两次（/api/moments/generate 服务端兜底 200），生成内容为毒舌吐槽风格纯文字；IndexedDB wx-moments 原始数据 2 条动态 withEmoji=0
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无错误（moments/generate 全 200）
+
+Stage Summary:
+- 交付 8 文件：lib/emoji.ts、lib/sticker-toggle.ts（新）、api/moments/generate/route.ts、chat-settings.tsx、wechat.tsx、qq.tsx、chat.tsx、（emoji strip 三端复用）
+- 「发动态不加点 emoji」由 prompt 禁令 + 服务端硬剥离双保险落地，评论/回复不受影响；「表情包开关」三端按会话独立、默认开启不改变存量行为，关闭后三层保障（system 禁令 / 表情包规则与清单不下发 + 卡片丢弃 / 落盘与流式双重字符剥离），用户自己发表情完全不受影响
+- 修复过程中发现并解决信息端标记残留 bug；浏览器重启后 IndexedDB 被清空（agent-browser ephemeral profile），已重新种子化完成全部验证

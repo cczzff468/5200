@@ -23,6 +23,7 @@ import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ArrowLeftRight, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
+import { stickerToggleCaption } from '@/lib/sticker-toggle';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
@@ -127,6 +128,7 @@ export function ChatSettingsPage({
   translateSummary,
   sentenceSend,
   timeAware,
+  stickersOn,
   onBack,
   onTogglePinned,
   onToggleMuted,
@@ -134,6 +136,7 @@ export function ChatSettingsPage({
   onOpenTranslate,
   onToggleSentenceSend,
   onToggleTimeAware,
+  onToggleStickers,
   onOpenSearch,
   onOpenBg,
   onOpenPeerProfile,
@@ -161,6 +164,8 @@ export function ChatSettingsPage({
   sentenceSend: boolean;
   /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
   timeAware: boolean;
+  /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
+  stickersOn: boolean;
   onBack: () => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
@@ -168,6 +173,7 @@ export function ChatSettingsPage({
   onOpenTranslate: () => void;
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
+  onToggleStickers: (v: boolean) => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
   /** 点击信息卡片 → 进入联系人详细界面（QQ 好友资料页 / 微信好友详情页）；不传则卡片不可点 */
@@ -338,6 +344,21 @@ export function ChatSettingsPage({
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
           开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
         </p>
+
+        {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <div className={`flex items-center justify-between ${rowCls}`}>
+            <span>表情包</span>
+            <ChatToggle
+              on={stickersOn}
+              onChange={onToggleStickers}
+              accent={accent}
+              testId={`${testPrefix}-settings-stickers`}
+              label="表情包"
+            />
+          </div>
+        </div>
+        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{stickerToggleCaption(stickersOn)}</p>
 
         {/* 查找聊天记录 */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1017,10 +1038,12 @@ export function SmsChatSettingsPage({
   translateSummary,
   sentenceSend,
   timeAware,
+  stickersOn,
   onBack,
   onOpenTranslate,
   onToggleSentenceSend,
   onToggleTimeAware,
+  onToggleStickers,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1030,10 +1053,13 @@ export function SmsChatSettingsPage({
   sentenceSend: boolean;
   /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
   timeAware: boolean;
+  /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
+  stickersOn: boolean;
   onBack: () => void;
   onOpenTranslate: () => void;
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
+  onToggleStickers: (v: boolean) => void;
 }) {
   const t = translateTokens('sms');
   return (
@@ -1116,6 +1142,21 @@ export function SmsChatSettingsPage({
         <p className={t.captionCls}>
           开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
         </p>
+
+        {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
+        <div className={`${t.cardCls} mt-3`}>
+          <div className={`flex items-center justify-between ${t.rowCls}`}>
+            <span>表情包</span>
+            <ChatToggle
+              on={stickersOn}
+              onChange={onToggleStickers}
+              accent="#34C759"
+              testId="sms-settings-stickers"
+              label="表情包"
+            />
+          </div>
+        </div>
+        <p className={t.captionCls}>{stickerToggleCaption(stickersOn)}</p>
       </div>
     </div>
   );

@@ -40,6 +40,8 @@ import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
@@ -483,6 +485,11 @@ function ChatView({
   useEffect(() => {
     setTimeAwareState(getTimeAware(sessionKey));
   }, [sessionKey]);
+  /** 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle；信息端无表情包，只约束 emoji） */
+  const [stickersOn, setStickersOnState] = useState(() => getStickersOn(sessionKey));
+  useEffect(() => {
+    setStickersOnState(getStickersOn(sessionKey));
+  }, [sessionKey]);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -616,7 +623,7 @@ function ChatView({
     const timeBlock = getTimeAware(sessionKey)
       ? buildTimeAwareBlock({ lastMsgTime: msgs.length > 0 ? msgs[msgs.length - 1].time : null })
       : '';
-    const baseSys = [systemPrompt, memoryBlock, momentsBlock, timeBlock].filter(Boolean).join('\n\n');
+    const baseSys = [systemPrompt, memoryBlock, momentsBlock, timeBlock, stickersOn ? '' : STICKER_OFF_RULE].filter(Boolean).join('\n\n');
     const sysContent = baseSys
       ? replyCount > 1
         ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
@@ -640,7 +647,10 @@ function ChatView({
           return;
         }
         // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
-        const segs = splitReplySegments(content, replyCount > 1);
+        // 表情包开关关闭时：先去掉表情包类标记残留（信息端本就不解析标记），再硬性剥除 emoji（prompt 禁令之外的双保险）
+        const segs = splitReplySegments(content, replyCount > 1).map((seg) =>
+          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
+        );
         let t = startedAt;
         const saved: ChatMsg[] = segs.map((seg, i) => {
           const msg: ChatMsg = {
@@ -1070,7 +1080,7 @@ function ChatView({
                             style={{ clipPath: TAIL_CLIP_LEFT }}
                           />
                         )}
-                        <span className="relative">{t}</span>
+                        <span className="relative">{stickersOn ? t : stripEmojiText(t)}</span>
                       </div>
                     );
                   })}
@@ -1183,6 +1193,7 @@ function ChatView({
           }
           sentenceSend={sentenceSend}
           timeAware={timeAware}
+          stickersOn={stickersOn}
           onBack={() => setSettingsOpen(false)}
           onOpenTranslate={() => setTranslateOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -1198,6 +1209,11 @@ function ChatView({
             // 立即持久化并生效（下一次请求现场读取，无需重启）
             setTimeAware(sessionKey, v);
             setTimeAwareState(v);
+          }}
+          onToggleStickers={(v) => {
+            // 立即持久化并生效（下一次请求现场读取，无需重启）：关闭后 AI 不发表情包也不发 emoji
+            saveStickersOn(sessionKey, v);
+            setStickersOnState(v);
           }}
         />
       )}
