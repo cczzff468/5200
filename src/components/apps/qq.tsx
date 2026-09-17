@@ -142,6 +142,20 @@ import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import {
+  addUserMomentComment,
+  addUserMomentPost,
+  aiPostMoment,
+  buildMomentsChatBlock,
+  bumpMomentChatTurns,
+  deleteMomentComment,
+  deleteMomentPost,
+  enqueuePostInteractions,
+  subscribeMomentsChanged,
+  toggleUserMomentLike,
+  updateMomentPostContent,
+} from '@/lib/moments';
+import { AskPostSheet, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
@@ -668,14 +682,6 @@ function copyTextWithToast(text: string, onToast: (m: string) => void): void {
     // 回退
   }
   fallback();
-}
-
-function saveZonePosts(posts: ZonePost[]): void {
-  try {
-    kvSet(LS_ZONE_POSTS, posts.slice(0, 50));
-  } catch {
-    // 持久化失败忽略
-  }
 }
 
 // ---------------- 密友值 / 好友天数（好友标识页，按 QQ 规则增长） ----------------
@@ -2222,6 +2228,9 @@ function ChatPage({
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     const memoryBlock = memRecallBlock(peer.id, 'qq', memContext);
+    // QQ动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看 QQ 平台的动态），
+    // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
+    const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer });
     // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
     // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值，按角色隔离不串台
     const priorMsgs = baseMsgs ?? msgs;
@@ -2231,7 +2240,7 @@ function ChatPage({
           regionHint: peer.region || null,
         })
       : '';
-    const systemFull = [system, memoryBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '', timeBlock]
+    const systemFull = [system, memoryBlock, momentsBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '', timeBlock]
       .filter(Boolean)
       .join('\n\n');
     const payloadMsgs: ChatPayloadMessage[] = [
@@ -2311,6 +2320,8 @@ function ChatPage({
               { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );
+        // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
+        bumpMomentChatTurns(peer.id);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -7117,17 +7128,21 @@ function NewFriendsPage({
 
 function ZonePage({
   me,
+  contacts,
   onBack,
   onOpenSettings,
   onCompose,
   onToast,
 }: {
   me: QQUser;
+  /** 联系人列表（「让好友发一条」候选 + 平台好友过滤） */
+  contacts: ContactRecord[];
   onBack: () => void;
   onOpenSettings: () => void;
   onCompose: () => void;
   onToast: (m: string) => void;
 }) {
+  const apiConfig = useSettings((s) => s.apiConfig);
   const [userPosts, setUserPosts] = useState<ZonePost[]>(loadZonePosts);
   const [seedLiked, setSeedLiked] = useState<Record<string, boolean>>(() => {
     try {
@@ -7139,41 +7154,41 @@ function ZonePage({
   });
   const [commentsMap, setCommentsMap] = useState<Record<string, ZoneComment[]>>(loadZoneComments);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
-  const [replyTarget, setReplyTarget] = useState<Record<string, string | undefined>>({});
+  /** 回复目标：评论 id + 名字（带 id 才能支持回复 AI 评论后 AI 再回复的多轮链） */
+  const [replyTarget, setReplyTarget] = useState<Record<string, { id: string; name: string } | undefined>>({});
   const commentInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  /** 「…」操作菜单 / 编辑说说 / 让好友发一条 / 自动发布设置 */
+  const [menuPostId, setMenuPostId] = useState<string | null>(null);
+  const [editingPost, setEditingPost] = useState<{ id: string; content: string } | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
+  const [askBusyId, setAskBusyId] = useState<string | null>(null);
+  const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
+
+  // 引擎（调度器/AI）在别处写入动态后同步本地视图（AI 点赞/评论/新动态实时出现）
+  useEffect(
+    () =>
+      subscribeMomentsChanged((platform) => {
+        if (platform && platform !== 'qq') return;
+        setUserPosts(loadZonePosts());
+        setCommentsMap(loadZoneComments());
+      }),
+    []
+  );
 
   const posts: ZonePost[] = useMemo(() => [...userPosts, ...ZONE_SEEDS], [userPosts]);
-
-  const persistPosts = (next: ZonePost[]) => {
-    saveZonePosts(next);
-  };
-
-  const persistComments = (next: Record<string, ZoneComment[]>) => {
-    try {
-      kvSet(LS_ZONE_COMMENTS, next);
-    } catch {
-      // 忽略
-    }
-  };
 
   const addComment = (p: ZonePost) => {
     const t = (commentDrafts[p.id] ?? '').trim();
     if (!t) return;
-    const now = new Date();
-    const c: ZoneComment = {
-      id: uid(),
-      author: me.name,
+    // 统一走动态引擎：回复 AI 的评论会自动排一条 AI 的再回复（多轮）；评论角色的动态会写入该角色记忆
+    const rt = replyTarget[p.id];
+    addUserMomentComment('qq', p.id, {
+      userName: me.name,
       content: t,
-      time: `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(
-        now.getHours()
-      ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-      replyTo: replyTarget[p.id],
-    };
-    const next = { ...commentsMap, [p.id]: [...(commentsMap[p.id] ?? []), c] };
-    setCommentsMap(next);
+      replyTo: rt ? { commentId: rt.id, name: rt.name } : undefined,
+    });
     setCommentDrafts((d) => ({ ...d, [p.id]: '' }));
     setReplyTarget((r) => ({ ...r, [p.id]: undefined }));
-    persistComments(next);
   };
 
   const likedOf = (p: ZonePost): boolean =>
@@ -7198,15 +7213,26 @@ function ZonePage({
       }
       return;
     }
-    const liked = p.likedBy.includes(me.name);
-    const nextLiked = liked ? p.likedBy.filter((n) => n !== me.name) : [...p.likedBy, me.name];
-    const next = userPosts.map((x) => (x.id === p.id ? { ...x, likedBy: nextLiked } : x));
-    setUserPosts(next);
-    persistPosts(next);
+    // 统一走动态引擎（写入点赞名，评论区的 AI 可见）
+    toggleUserMomentLike('qq', p.id, me.name);
+  };
+
+  /** 让 AI 好友现在发一条动态（内容按人设 + 最近聊天 + 记忆生成；发布即写该角色记忆） */
+  const askMomentPost = async (c: ContactRecord) => {
+    setAskBusyId(c.id);
+    try {
+      await aiPostMoment({ apiConfig, platform: 'qq', peer: c, userName: me.name });
+      onToast(`已让「${displayNameOf(c)}」发了一条动态`);
+      setAskOpen(false);
+    } catch (e) {
+      onToast(e instanceof Error && e.message ? e.message : '生成失败，请稍后再试');
+    } finally {
+      setAskBusyId(null);
+    }
   };
 
   return (
-    <div className="flex h-full flex-col bg-white dark:bg-[#111214]">
+    <div className="relative flex h-full flex-col bg-white dark:bg-[#111214]">
       {/* 全屏：整个页面（含顶部渐变区）在同一滚动容器里，头部随内容一起滚走 */}
       <div className="flex-1 overflow-y-auto" data-testid="qq-zone-feed">
       {/* 顶部渐变区：导航 + 个人卡 + 宫格 + 发布框（随页面滚动） */}
@@ -7222,9 +7248,19 @@ function ZonePage({
           </button>
           <button
             type="button"
+            aria-label="让好友发一条动态"
+            title="让好友发一条动态"
+            data-testid="qq-zone-ask"
+            onClick={() => setAskOpen(true)}
+            className="ml-auto grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
+          >
+            <Sparkles className="h-[18px] w-[18px]" strokeWidth={2} />
+          </button>
+          <button
+            type="button"
             aria-label="消息通知"
             onClick={() => onToast('通知暂未开放')}
-            className="ml-auto grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
+            className="ml-2 grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
           >
             <Bell className="h-[18px] w-[18px]" strokeWidth={2} />
           </button>
@@ -7297,6 +7333,7 @@ function ZonePage({
         {posts.map((p) => {
           const liked = likedOf(p);
           const names = namesOf(p);
+          const rt = replyTarget[p.id];
           return (
             <div key={p.id} className="border-b border-black/[0.06] px-4 py-4 dark:border-white/[0.06]">
               <div className="flex items-start gap-3">
@@ -7307,7 +7344,8 @@ function ZonePage({
                     <button
                       type="button"
                       aria-label="更多操作"
-                      onClick={() => onToast('更多操作暂未开放')}
+                      data-testid={`qq-zone-more-${p.id}`}
+                      onClick={() => setMenuPostId(menuPostId === p.id ? null : p.id)}
                       className="shrink-0 px-1 text-[18px] leading-none text-black/40 active:opacity-60 dark:text-white/40"
                     >
                       …
@@ -7380,13 +7418,24 @@ function ZonePage({
                             aria-label={`回复${c.author}的评论`}
                             data-testid={`qq-zone-reply-${p.id}-${c.id}`}
                             onClick={() => {
-                              setReplyTarget((r) => ({ ...r, [p.id]: c.author }));
+                              setReplyTarget((r) => ({ ...r, [p.id]: { id: c.id, name: c.author } }));
                               commentInputRefs.current[p.id]?.focus();
                             }}
                             className="shrink-0 pt-0.5 text-[12px] text-black/40 active:opacity-60 dark:text-white/40"
                           >
                             回复
                           </button>
+                          {c.author === me.name && (
+                            <button
+                              type="button"
+                              aria-label="删除评论"
+                              data-testid={`qq-zone-comment-del-${p.id}-${c.id}`}
+                              onClick={() => deleteMomentComment('qq', p.id, c.id, me.name)}
+                              className="shrink-0 rounded-full p-0.5 pt-1 text-black/30 active:bg-black/5 dark:text-white/30 dark:active:bg-white/10"
+                            >
+                              <X className="h-3.5 w-3.5" strokeWidth={2.2} />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -7394,15 +7443,15 @@ function ZonePage({
 
                   <div className="mt-2.5 flex items-center gap-2 rounded-full bg-black/[0.04] px-3 py-2 dark:bg-white/[0.06]">
                     <QqAvatar src={me.avatar} alt={me.name} size={22} />
-                    {replyTarget[p.id] && (
+                    {rt && (
                       <button
                         type="button"
-                        aria-label={`取消回复${replyTarget[p.id]}`}
+                        aria-label={`取消回复${rt.name}`}
                         data-testid={`qq-zone-reply-cancel-${p.id}`}
                         onClick={() => setReplyTarget((r) => ({ ...r, [p.id]: undefined }))}
                         className="flex shrink-0 items-center gap-0.5 rounded-full bg-black/[0.06] px-2 py-0.5 text-[11px] text-black/55 active:opacity-60 dark:bg-white/[0.08] dark:text-white/55"
                       >
-                        回复{replyTarget[p.id]}
+                        回复{rt.name}
                         <X className="h-3 w-3" strokeWidth={2.4} aria-hidden="true" />
                       </button>
                     )}
@@ -7412,7 +7461,7 @@ function ZonePage({
                       }}
                       data-testid={`qq-zone-comment-input-${p.id}`}
                       aria-label={`评论${p.authorName}的动态`}
-                      placeholder={replyTarget[p.id] ? `回复 ${replyTarget[p.id]}：` : '说点什么吧...'}
+                      placeholder={rt ? `回复 ${rt.name}：` : '说点什么吧...'}
                       value={commentDrafts[p.id] ?? ''}
                       onChange={(e) => setCommentDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
                       onKeyDown={(e) => {
@@ -7439,6 +7488,56 @@ function ZonePage({
         })}
         {posts.length === 0 && <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">还没有动态</p>}
       </div>
+
+      {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑/删除说说（六.4） */}
+      {askOpen && (
+        <AskPostSheet
+          title="让好友发一条"
+          friends={momentFriendsOf(contacts, 'qq')}
+          busyId={askBusyId}
+          onClose={() => setAskOpen(false)}
+          onAsk={(c) => void askMomentPost(c)}
+          onOpenCfg={(c) => setCfgPeer(c)}
+          renderAvatar={(c, size) => <QqAvatar src={c.avatar} alt={displayNameOf(c)} size={size} />}
+        />
+      )}
+      {cfgPeer && (
+        <MomentAutoCfgSheet
+          contact={cfgPeer}
+          platform="qq"
+          platformLabel="QQ动态"
+          onClose={() => setCfgPeer(null)}
+          onToast={onToast}
+        />
+      )}
+      {menuPostId && (
+        <PostMoreMenu
+          mine={posts.find((x) => x.id === menuPostId)?.authorName === me.name}
+          onEdit={() => {
+            const hit = posts.find((x) => x.id === menuPostId);
+            if (hit) setEditingPost({ id: hit.id, content: hit.content });
+            setMenuPostId(null);
+          }}
+          onDelete={() => {
+            deleteMomentPost('qq', menuPostId, me.name);
+            setMenuPostId(null);
+            onToast('已删除动态');
+          }}
+          onClose={() => setMenuPostId(null)}
+        />
+      )}
+      {editingPost && (
+        <EditPostDialog
+          key={editingPost.id}
+          initial={editingPost.content}
+          busy={false}
+          onCancel={() => setEditingPost(null)}
+          onSave={(text) => {
+            if (!updateMomentPostContent('qq', editingPost.id, me.name, text)) onToast('动态内容不能为空');
+            setEditingPost(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -7453,7 +7552,8 @@ function WritePostPage({
 }: {
   me: QQUser;
   onBack: () => void;
-  onPublish: (p: ZonePost) => void;
+  /** 发表：正文 + 配图（入库/记忆/互动队列由动态引擎统一处理） */
+  onPublish: (text: string, images: string[]) => void;
   onToast: (m: string) => void;
 }) {
   const [text, setText] = useState('');
@@ -7478,18 +7578,7 @@ function WritePostPage({
 
   const publish = () => {
     if (!canPost || busy) return;
-    const now = new Date();
-    onPublish({
-      id: uid(),
-      authorName: me.name,
-      avatar: me.avatar,
-      content: text.trim(),
-      time: `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(
-        now.getHours()
-      ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-      likedBy: [],
-      images: images.length ? images : undefined,
-    });
+    onPublish(text.trim(), images);
     onToast('已发表到空间');
     onBack();
   };
@@ -9499,10 +9588,14 @@ function MainScreen({
   const openTabs = useCallback((tab: '消息' | '联系人' | '动态') => setRoute({ page: 'tabs', tab }), []);
   const openChatOf = useCallback((c: ContactRecord) => setRoute({ page: 'chat', contactId: c.id }), []);
 
-  // 写说说发表：预置新帖后回空间动态流（ZonePage 挂载时从 localStorage 读到）
-  const handlePublishZonePost = useCallback((post: ZonePost) => {
-    saveZonePosts([post, ...loadZonePosts()]);
-  }, []);
+  // 写说说发表：统一走动态引擎（入库 + 记忆 + 排 AI 互动队列），回空间动态流（ZonePage 订阅 moments-changed 自动刷新）
+  const handlePublishZonePost = useCallback(
+    (text: string, images: string[]) => {
+      const post = addUserMomentPost('qq', { userName: me.name, avatar: me.avatar, content: text, images });
+      enqueuePostInteractions('qq', post.id);
+    },
+    [me.avatar, me.name]
+  );
 
   const chatPeer =
     route.page === 'chat' || route.page === 'bond' || route.page === 'friend-profile'
@@ -9600,6 +9693,7 @@ function MainScreen({
       ) : route.page === 'zone' ? (
         <ZonePage
           me={me}
+          contacts={contacts}
           onBack={() => openTabs('动态')}
           onOpenSettings={() => setRoute({ page: 'settings' })}
           onCompose={() => setRoute({ page: 'zone-compose' })}

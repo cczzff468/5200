@@ -43,6 +43,7 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { buildMomentsChatBlock, bumpMomentChatTurns } from '@/lib/moments';
 import { ChatTranslatePage, SmsChatSettingsPage } from './chat-settings';
 import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
@@ -599,13 +600,23 @@ function ChatView({
           [userMsg?.content ?? '', ...base.slice(-6).map((m) => m.content)].filter(Boolean).join(' ')
         )
       : '';
+    // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（信息 App 无自有平台，
+    // 关闭时不注入——动态属于社交平台，不属于短信）；用户广播动态首次被看到时懒写入该角色记忆
+    const momentsBlock = memContactId
+      ? buildMomentsChatBlock({
+          contactId: memContactId,
+          app: 'sms',
+          userName: profileName,
+          peer: { id: memContactId, name: peer.name ?? peer.title, nickname: null },
+        })
+      : '';
     // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
     // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值；
     // AI 助手会话（无人设）也注入时间块，让「现在几点」这类问题能答准
     const timeBlock = getTimeAware(sessionKey)
       ? buildTimeAwareBlock({ lastMsgTime: msgs.length > 0 ? msgs[msgs.length - 1].time : null })
       : '';
-    const baseSys = [systemPrompt, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
+    const baseSys = [systemPrompt, memoryBlock, momentsBlock, timeBlock].filter(Boolean).join('\n\n');
     const sysContent = baseSys
       ? replyCount > 1
         ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
@@ -645,7 +656,7 @@ function ChatView({
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
         // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
         // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        if (memContactId)
+        if (memContactId) {
           void Promise.all([ownerRealName(), contactRealName(memContactId)]).then(([owner, peerReal]) =>
             memAfterAiTurn(
               memContactId,
@@ -656,6 +667,9 @@ function ChatView({
               { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
             )
           );
+          // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
+          bumpMomentChatTurns(memContactId);
+        }
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回

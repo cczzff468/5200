@@ -268,6 +268,15 @@ export async function deleteContact(id: string): Promise<boolean> {
   await localDB.delete('contacts', id);
   // 记忆库：删除联系人时其全部记忆（碎片/长期记忆/设置/轮次计数）一并删除，不留孤儿数据
   memPurgeContact(id);
+  // 朋友圈/QQ动态：被删联系人（含级联 NPC）的动态/点赞/评论/待回复队列一并清理
+  // （动态引入避免与 moments.ts 的静态循环依赖：moments.ts 也引用本模块解析真实名字）
+  try {
+    const { purgeMomentsForContact } = await import('@/lib/moments');
+    for (const npcId of cascadedNpcIds) purgeMomentsForContact(npcId);
+    purgeMomentsForContact(id);
+  } catch {
+    // 清理失败不阻塞删除
+  }
   // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/会话标志/背景图一并清理
   for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId);
   purgeChatTracesFor(id);

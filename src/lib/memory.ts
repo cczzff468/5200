@@ -549,8 +549,10 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
   if (keepFrags.length > 0) {
     lines.push('◇ 近期记忆碎片：');
     keepFrags.forEach(({ f }, i) => {
-      // 事件时间优先（内容所指的时间），否则用来源对话时间；碎片额外带来源 App 标注
-      const t = f.eventTime != null ? memTimeLabel(f.eventTime, now) : `${memTimeLabel(f.sourceTime, now)}·${MEM_APP_LABEL[f.app]}`;
+      // 事件时间优先（内容所指的时间），否则用来源对话时间；碎片额外带来源渠道标注
+      // （朋友圈/QQ动态来源的碎片与私聊区分标注，让 AI 知道这是动态里的事，不是私聊说的）
+      const srcLabel = f.source === 'moments' ? (f.app === 'wx' ? '朋友圈' : 'QQ动态') : MEM_APP_LABEL[f.app];
+      const t = f.eventTime != null ? memTimeLabel(f.eventTime, now) : `${memTimeLabel(f.sourceTime, now)}·${srcLabel}`;
       lines.push(`${i + 1}. （${t}）${f.content}`);
     });
   }
@@ -581,6 +583,56 @@ export function memRecallPreview(contactId: string): { longs: MemLongTerm[]; cor
     .slice(0, 5)
     .map((x) => x.f);
   return { longs, cores, frags };
+}
+
+// ---------------- 动态来源记忆（朋友圈/QQ动态 → 记忆，不经 LLM 提取直接入库） ----------------
+
+/** 动态来源记忆的追溯字段（与 MemFragment.source* 对应） */
+export interface MemMomentSource {
+  postId: string;
+  kind: 'post' | 'like' | 'comment';
+  commentId?: string;
+}
+
+/**
+ * 写入一条「朋友圈/QQ动态」来源的记忆碎片（动态与记忆双向打通：发动态/点赞/评论/回复都会入库）。
+ * - 内容由调用方用「机主真实名字 + 角色真实名字」视角拼好（禁「对方/用户/我」）；
+ * - 来源标注 source='moments' + 关联动态 id/互动类型，与私聊记忆区分（六.5 数据结构要求）；
+ * - 走 appendFragments 同款去重/合并/矛盾管线：同一事实重复写入只会加强，不会重复占位；
+ * - app 传动态所在平台（wx 朋友圈 / qq QQ动态）：互通开关关闭时，其它 App 不会召回这些记忆。
+ * 返回是否写入（新增或加强）成功。
+ */
+export function memAddMomentFragment(
+  contactId: string,
+  app: MemApp,
+  content: string,
+  src: MemMomentSource,
+  sourceTime?: number
+): boolean {
+  try {
+    const text = content.trim();
+    if (!contactId || !text) return false;
+    const res = appendFragments(
+      contactId,
+      app,
+      [{ text, weight: autoWeight(text) }],
+      sourceTime ?? Date.now(),
+      undefined,
+      { source: 'moments', sourcePostId: src.postId, sourceKind: src.kind, sourceCommentId: src.commentId }
+    );
+    return res.added.length > 0 || res.merged > 0 || res.superseded > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** 该联系人是否已有某条动态来源的记忆（动态→记忆写入去重用，避免同一动态重复入库） */
+export function memHasMomentFragment(contactId: string, postId: string): boolean {
+  try {
+    return readFragments(contactId).some((f) => f.sourcePostId === postId);
+  } catch {
+    return false;
+  }
 }
 
 // ---------------- 轮次计数 + 自动提取 ----------------
@@ -702,7 +754,9 @@ function appendFragments(
   app: MemApp,
   items: ExtractItem[],
   sourceTime: number,
-  sourceMsgId?: string
+  sourceMsgId?: string,
+  /** 额外字段（动态来源记忆用：source/sourcePostId/sourceKind/sourceCommentId 直通新碎片） */
+  extra?: Partial<Pick<MemFragment, 'source' | 'sourcePostId' | 'sourceKind' | 'sourceCommentId'>>
 ): { added: MemFragment[]; merged: number; superseded: number } {
   const list = readFragments(contactId);
   const now = Date.now();
@@ -723,6 +777,7 @@ function appendFragments(
     reinforcedAt: now,
     reinforceCount: 0,
     sourceMsgId,
+    ...(extra ?? {}),
   });
   for (const item of items) {
     const content = item.text.trim();

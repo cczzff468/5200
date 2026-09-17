@@ -30,6 +30,7 @@ import {
   MapPin,
   MessageCircle,
   Newspaper,
+  Pencil,
   Phone,
   Pin,
   PinOff,
@@ -40,6 +41,7 @@ import {
   Search,
   Smartphone,
   Smile,
+  Sparkles,
   Star,
   Tag,
   Trash2,
@@ -102,6 +104,23 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import {
+  addCharMomentPost,
+  addUserMomentComment,
+  addUserMomentPost,
+  aiPostMoment,
+  buildMomentsChatBlock,
+  bumpMomentChatTurns,
+  deleteMomentComment,
+  deleteMomentPost,
+  enqueuePostInteractions,
+  isPostByPeer,
+  listMomentPosts,
+  subscribeMomentsChanged,
+  toggleUserMomentLike,
+  updateMomentPostContent,
+} from '@/lib/moments';
+import { AskPostSheet, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
@@ -526,38 +545,12 @@ function loadMoments(): WxMoment[] {
   }
 }
 
-/** 返回是否保存成功（失败提示存储空间不足） */
-function saveMoments(list: WxMoment[]): boolean {
-  try {
-    kvSet(LS_MOMENTS, list.slice(0, 200));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** 好友朋友圈示例动态（首次进入该好友的朋友圈时补齐，写入同一条全局列表，点赞/评论可互动） */
+/** 好友朋友圈示例动态（首次进入该好友的朋友圈时补齐，走动态引擎写入：writeMemory=false 不入记忆） */
 const FRIEND_POST_TEMPLATES: ReadonlyArray<{ text: string; agoMs: number }> = [
   { text: '今天天气不错，出去走了走 ☀️', agoMs: 2 * 3_600_000 },
   { text: '忙完这个项目，终于可以休息一下了', agoMs: 26 * 3_600_000 },
   { text: '新的开始，加油！', agoMs: 3 * 86_400_000 },
 ];
-
-function ensureFriendPosts(friend: { name: string; avatar: string | null }, list: WxMoment[]): WxMoment[] {
-  if (list.some((p) => p.authorName === friend.name)) return list;
-  const now = Date.now();
-  const seeds: WxMoment[] = FRIEND_POST_TEMPLATES.map((t) => ({
-    id: uid(),
-    authorName: friend.name,
-    avatar: friend.avatar,
-    text: t.text,
-    images: [],
-    time: now - t.agoMs,
-    likes: [],
-    comments: [],
-  }));
-  return [...list, ...seeds].sort((a, b) => b.time - a.time);
-}
 
 function loadReqs(): WxFriendReq[] {
   try {
@@ -3617,6 +3610,9 @@ function ChatPage({
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     const memoryBlock = memRecallBlock(peer.id, 'wx', memContext);
+    // 朋友圈动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看朋友圈平台的动态），
+    // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
+    const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer });
     // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
     // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值，按角色隔离不串台
     const priorMsgs = baseMsgs ?? msgs;
@@ -3626,7 +3622,7 @@ function ChatPage({
           regionHint: peer.region || null,
         })
       : '';
-    const systemFull = [system, memoryBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '', timeBlock]
+    const systemFull = [system, memoryBlock, momentsBlock, actionRules.length > 0 ? actionRules.join('\n\n') : '', timeBlock]
       .filter(Boolean)
       .join('\n\n');
     const payloadMsgs: ChatPayloadMessage[] = [
@@ -3704,6 +3700,8 @@ function ChatPage({
               { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );
+        // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
+        bumpMomentChatTurns(peer.id);
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -5297,31 +5295,40 @@ function ChatPage({
 /** 单条动态 */
 function MomentRow({
   post,
+  meName,
   mine,
   menuOpen,
   onToggleMenu,
   onToggleLike,
   onComment,
   onDelete,
+  onDeleteComment,
+  onEditRequest,
 }: {
   post: WxMoment;
+  /** 机主展示名（点赞高亮 / 自己评论可删） */
+  meName: string;
   mine: boolean;
   menuOpen: boolean;
   onToggleMenu: () => void;
   onToggleLike: () => void;
-  onComment: (text: string, replyTo: string | null) => void;
+  onComment: (text: string, reply: { commentId: string; name: string } | null) => void;
   onDelete: () => void;
+  /** 删除自己的评论（其下回复一并删） */
+  onDeleteComment?: (commentId: string) => void;
+  /** 编辑动态正文（仅自己的动态传入） */
+  onEditRequest?: () => void;
 }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState('');
-  /** 回复目标：点某条评论设置（再点一次取消），placeholder 提示 */
-  const [replyName, setReplyName] = useState<string | null>(null);
+  /** 回复目标：点某条评论设置（再点一次取消），带评论 id（回复 AI 评论可触发多轮） */
+  const [replyTarget, setReplyTarget] = useState<{ commentId: string; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (composerOpen) inputRef.current?.focus();
-  }, [composerOpen, replyName]);
+  }, [composerOpen, replyTarget]);
 
   /** 评论框打开时，点击输入框以外的任意位置自动收起（不想评论了点别处即可关闭） */
   useEffect(() => {
@@ -5330,7 +5337,7 @@ function MomentRow({
       const target = e.target as Node | null;
       if (composerRef.current && target && composerRef.current.contains(target)) return;
       setComposerOpen(false);
-      setReplyName(null);
+      setReplyTarget(null);
     };
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
@@ -5339,9 +5346,9 @@ function MomentRow({
   const sendComment = () => {
     const text = draft.trim();
     if (!text) return;
-    onComment(text, replyName);
+    onComment(text, replyTarget);
     setDraft('');
-    setReplyName(null);
+    setReplyTarget(null);
     setComposerOpen(false);
   };
 
@@ -5396,8 +5403,8 @@ function MomentRow({
                 onClick={onToggleLike}
                 className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
               >
-                <Heart className={`h-4 w-4 ${post.likes.includes(post.authorName) ? 'fill-[#FA5151] text-[#FA5151]' : ''}`} strokeWidth={1.8} />
-                {post.likes.includes(post.authorName) ? '取消' : '赞'}
+                <Heart className={`h-4 w-4 ${post.likes.includes(meName) ? 'fill-[#FA5151] text-[#FA5151]' : ''}`} strokeWidth={1.8} />
+                {post.likes.includes(meName) ? '取消' : '赞'}
               </button>
               <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
               <button
@@ -5414,6 +5421,18 @@ function MomentRow({
               </button>
               {mine && (
                 <>
+                  <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
+                  {onEditRequest && (
+                    <button
+                      type="button"
+                      data-testid={`wx-moment-edit-${post.id}`}
+                      onClick={onEditRequest}
+                      className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
+                    >
+                      <Pencil className="h-4 w-4" strokeWidth={1.8} />
+                      编辑
+                    </button>
+                  )}
                   <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
                   <button
                     type="button"
@@ -5449,26 +5468,41 @@ function MomentRow({
               {post.comments.length > 0 && (
                 <div className="min-w-0">
                   {post.comments.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      data-testid={`wx-moment-comment-${post.id}-${c.id}`}
-                      title={`回复 ${c.author}`}
-                      onClick={() => {
-                        setComposerOpen(true);
-                        setReplyName((r) => (r === c.author ? null : c.author));
-                      }}
-                      className="block w-full text-left text-[13px] leading-[1.6] active:opacity-70"
-                    >
-                      <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.author}</span>
-                      {c.replyTo && (
-                        <>
-                          <span className="text-black/85 dark:text-white/85"> 回复 </span>
-                          <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.replyTo}</span>
-                        </>
+                    <div key={c.id} className="flex items-start gap-1">
+                      <button
+                        type="button"
+                        data-testid={`wx-moment-comment-${post.id}-${c.id}`}
+                        title={`回复 ${c.author}`}
+                        onClick={() => {
+                          setComposerOpen(true);
+                          setReplyTarget((r) => (r && r.commentId === c.id ? null : { commentId: c.id, name: c.author }));
+                        }}
+                        className="min-w-0 flex-1 text-left text-[13px] leading-[1.6] active:opacity-70"
+                      >
+                        <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.author}</span>
+                        {c.replyTo && (
+                          <>
+                            <span className="text-black/85 dark:text-white/85"> 回复 </span>
+                            <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.replyTo}</span>
+                          </>
+                        )}
+                        <span className="text-black/85 dark:text-white/85">：{c.text}</span>
+                      </button>
+                      {c.author === meName && onDeleteComment && (
+                        <button
+                          type="button"
+                          aria-label="删除评论"
+                          data-testid={`wx-moment-comment-del-${post.id}-${c.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteComment(c.id);
+                          }}
+                          className="mt-[3px] shrink-0 rounded-full p-0.5 text-black/30 active:bg-black/5 dark:text-white/30 dark:active:bg-white/10"
+                        >
+                          <X className="h-3.5 w-3.5" strokeWidth={2.2} />
+                        </button>
                       )}
-                      <span className="text-black/85 dark:text-white/85">：{c.text}</span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -5488,8 +5522,8 @@ function MomentRow({
                   sendComment();
                 }
               }}
-              placeholder={replyName ? `回复 ${replyName}：` : '评论'}
-              aria-label={replyName ? `回复 ${replyName}` : '写评论'}
+              placeholder={replyTarget ? `回复 ${replyTarget.name}：` : '评论'}
+              aria-label={replyTarget ? `回复 ${replyTarget.name}` : '写评论'}
               data-testid={`wx-moment-comment-input-${post.id}`}
               className="h-8 min-w-0 flex-1 rounded-[4px] bg-[#F7F7F7] px-2.5 text-[13.5px] outline-none placeholder:text-black/30 focus:bg-white focus:ring-1 focus:ring-black/15 dark:bg-[#242424] dark:placeholder:text-white/30 dark:focus:bg-[#1F1F1F] dark:focus:ring-white/20"
             />
@@ -5518,6 +5552,9 @@ function MomentsPage({
   onToggleLike,
   onComment,
   onDelete,
+  onDeleteComment,
+  onEditRequest,
+  onOpenAsk,
   onToast,
 }: {
   me: WxUser;
@@ -5527,8 +5564,14 @@ function MomentsPage({
   onBack: () => void;
   onCompose: () => void;
   onToggleLike: (id: string) => void;
-  onComment: (id: string, text: string, replyTo: string | null) => void;
+  onComment: (id: string, text: string, reply: { commentId: string; name: string } | null) => void;
   onDelete: (id: string) => void;
+  /** 删除自己的评论（好友朋友圈页不传） */
+  onDeleteComment?: (postId: string, commentId: string) => void;
+  /** 编辑动态正文（仅自己的动态；好友朋友圈页不传） */
+  onEditRequest?: (post: WxMoment) => void;
+  /** 顶部「让好友发一条」入口（仅自己的朋友圈页传入） */
+  onOpenAsk?: () => void;
   onToast: (m: string) => void;
 }) {
   const isMine = !owner;
@@ -5635,6 +5678,7 @@ function MomentsPage({
               <MomentRow
                 key={p.id}
                 post={p}
+                meName={me.name}
                 mine={p.authorName === me.name}
                 menuOpen={menuId === p.id}
                 onToggleMenu={() => setMenuId(menuId === p.id ? null : p.id)}
@@ -5642,11 +5686,13 @@ function MomentsPage({
                   onToggleLike(p.id);
                   setMenuId(null);
                 }}
-                onComment={(text, replyTo) => onComment(p.id, text, replyTo)}
+                onComment={(text, reply) => onComment(p.id, text, reply)}
                 onDelete={() => {
                   onDelete(p.id);
                   setMenuId(null);
                 }}
+                onDeleteComment={onDeleteComment ? (commentId) => onDeleteComment(p.id, commentId) : undefined}
+                onEditRequest={onEditRequest && p.authorName === me.name ? () => onEditRequest(p) : undefined}
               />
             ))}
             <p className="py-6 text-center text-[12px] text-black/25 dark:text-white/25">没有更多了</p>
@@ -5685,19 +5731,35 @@ function MomentsPage({
           </button>
           <span className={`text-[17px] font-medium ${scrolled ? '' : 'hidden'}`}>朋友圈</span>
           {isMine ? (
-            <button
-              type="button"
-              aria-label="发布朋友圈"
-              data-testid="wx-moments-compose"
-              onClick={onCompose}
-              className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
-                scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
-              }`}
-            >
-              <Camera className="h-[22px] w-[22px]" strokeWidth={1.8} />
-            </button>
+            <div className="flex items-center gap-1">
+              {onOpenAsk && (
+                <button
+                  type="button"
+                  aria-label="让好友发一条动态"
+                  title="让好友发一条动态"
+                  data-testid="wx-moments-ask"
+                  onClick={onOpenAsk}
+                  className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
+                    scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
+                  }`}
+                >
+                  <Sparkles className="h-[21px] w-[21px]" strokeWidth={1.8} />
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label="发布朋友圈"
+                data-testid="wx-moments-compose"
+                onClick={onCompose}
+                className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
+                  scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
+                }`}
+              >
+                <Camera className="h-[22px] w-[22px]" strokeWidth={1.8} />
+              </button>
+            </div>
           ) : (
-            <span className="w-[30px] shrink-0" aria-hidden="true" />
+            <span className="w-[60px] shrink-0" aria-hidden="true" />
           )}
         </div>
       </div>
@@ -6524,6 +6586,15 @@ function MainScreen({
   const [page, setPage] = useState<Page>('main');
   const [menuOpen, setMenuOpen] = useState(false);
   const [moments, setMoments] = useState<WxMoment[]>(() => loadMoments());
+  /** 用户 API 配置（让 AI 发动态时按人设生成内容用） */
+  const apiConfig = useSettings((s) => s.apiConfig);
+  /** 「让好友发一条」弹层与生成中的联系人 id */
+  const [askOpen, setAskOpen] = useState(false);
+  const [askBusyId, setAskBusyId] = useState<string | null>(null);
+  /** 正在配置自动发动态的好友（每角色 × 朋友圈） */
+  const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
+  /** 正在编辑的动态（id + 当前正文） */
+  const [editingPost, setEditingPost] = useState<{ id: string; text: string } | null>(null);
   const [reqs, setReqs] = useState<WxFriendReq[]>(() => loadReqs());
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6706,83 +6777,117 @@ function MainScreen({
       });
   }, [friends]);
 
-  /** 朋友圈更新（同步 localStorage，失败提示） */
-  const updateMoments = useCallback(
-    (next: WxMoment[]) => {
-      setMoments(next);
-      if (!saveMoments(next)) showToast('存储空间不足，动态可能没有保存');
-    },
-    [showToast]
+  /** 朋友圈更新：改由动态引擎写入，这里只从存储重读刷新视图（引擎每次落盘也广播 moments-changed） */
+  const reloadMoments = useCallback(() => setMoments(loadMoments()), []);
+  // 引擎（调度器/AI）在别处写入动态后同步本地视图（点赞/评论/新动态实时出现）
+  useEffect(
+    () =>
+      subscribeMomentsChanged((platform) => {
+        if (platform && platform !== 'wx') return;
+        reloadMoments();
+      }),
+    [reloadMoments]
   );
 
   const publishMoment = useCallback(
     (text: string, images: string[]) => {
-      const post: WxMoment = {
-        id: uid(),
-        authorName: me.name,
-        avatar: me.avatar,
-        text,
-        images,
-        time: Date.now(),
-        likes: [],
-        comments: [],
-      };
-      updateMoments([post, ...moments]);
+      // 统一走动态引擎：入库 + 写看到它的角色记忆（聊天时懒入库）+ 排 AI 互动队列（8~18s 后好友点赞/评论）
+      const post = addUserMomentPost('wx', { userName: me.name, avatar: me.avatar, content: text, images });
+      enqueuePostInteractions('wx', post.id);
+      reloadMoments();
       setPage('moments');
       showToast('已发表到朋友圈');
     },
-    [me.avatar, me.name, moments, showToast, updateMoments]
+    [me.avatar, me.name, reloadMoments, showToast]
   );
 
   const toggleLike = useCallback(
     (id: string) => {
-      updateMoments(
-        moments.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                likes: p.likes.includes(me.name)
-                  ? p.likes.filter((n) => n !== me.name)
-                  : [...p.likes, me.name],
-              }
-            : p
-        )
-      );
+      toggleUserMomentLike('wx', id, me.name);
+      reloadMoments();
     },
-    [me.name, moments, updateMoments]
+    [me.name, reloadMoments]
   );
 
-  /** 发表评论（replyTo = 「回复某人」的名字） */
+  /** 发表评论（reply = 回复目标的评论 id + 名字；回复 AI 评论会自动排一条 AI 的再回复，多轮） */
   const addComment = useCallback(
-    (id: string, text: string, replyTo: string | null) => {
-      updateMoments(
-        moments.map((p) =>
-          p.id === id
-            ? { ...p, comments: [...p.comments, { id: uid(), author: me.name, text, time: Date.now(), replyTo }] }
-            : p
-        )
-      );
+    (id: string, text: string, reply: { commentId: string; name: string } | null) => {
+      addUserMomentComment('wx', id, {
+        userName: me.name,
+        content: text,
+        replyTo: reply ? { commentId: reply.commentId, name: reply.name } : undefined,
+      });
+      reloadMoments();
     },
-    [me.name, moments, updateMoments]
+    [me.name, reloadMoments]
   );
 
-  /** 进入好友朋友圈：首次自动补三条示例动态（写回全局列表持久化），界面与自己朋友圈同款 */
+  /** 进入好友朋友圈：首次自动补三条示例动态（示例动态不入记忆），界面与自己朋友圈同款 */
   const openFriendMoments = useCallback(
     (c: ContactRecord) => {
-      const next = ensureFriendPosts({ name: c.name, avatar: c.avatar }, moments);
-      if (next !== moments) updateMoments(next);
+      const known = listMomentPosts('wx', me.name, contacts);
+      if (!known.some((p) => isPostByPeer(p, c))) {
+        const now = Date.now();
+        for (const t of FRIEND_POST_TEMPLATES) {
+          addCharMomentPost('wx', {
+            peer: c,
+            userName: me.name,
+            content: t.text,
+            writeMemory: false,
+            createdAt: now - t.agoMs,
+          });
+        }
+      }
+      reloadMoments();
       setFriendMoments(c);
       setPage('friendMoments');
     },
-    [moments, updateMoments]
+    [contacts, me.name, reloadMoments]
   );
 
   const deleteMoment = useCallback(
     (id: string) => {
-      updateMoments(moments.filter((p) => p.id !== id));
+      deleteMomentPost('wx', id, me.name);
+      reloadMoments();
       showToast('已删除动态');
     },
-    [moments, showToast, updateMoments]
+    [me.name, reloadMoments, showToast]
+  );
+
+  /** 删除评论（自己的评论；其下的回复一并删，AI 未结算的回复一并撤掉） */
+  const deleteComment = useCallback(
+    (postId: string, commentId: string) => {
+      deleteMomentComment('wx', postId, commentId, me.name);
+      reloadMoments();
+    },
+    [me.name, reloadMoments]
+  );
+
+  /** 编辑动态正文（自己的动态） */
+  const editMomentPost = useCallback(
+    (id: string, text: string) => {
+      if (!updateMomentPostContent('wx', id, me.name, text)) showToast('动态内容不能为空');
+      reloadMoments();
+    },
+    [me.name, reloadMoments, showToast]
+  );
+
+  /** 让 AI 好友现在发一条动态（内容按人设 + 最近聊天 + 记忆生成；发布即写该角色记忆） */
+  const askMomentPost = useCallback(
+    async (c: ContactRecord) => {
+      setAskBusyId(c.id);
+      try {
+        await aiPostMoment({ apiConfig, platform: 'wx', peer: c, userName: me.name });
+        reloadMoments();
+        showToast(`已让「${displayNameOf(c)}」发了一条动态`);
+        setAskOpen(false);
+      } catch (e) {
+        showToast(e instanceof Error && e.message ? e.message : '生成失败，请稍后再试');
+      } finally {
+        setAskBusyId(null);
+      }
+    },
+    [apiConfig, me.name, reloadMoments, showToast]
   );
 
   /** 添加好友成功：写入「新的朋友」通知并刷新联系人列表 */
@@ -6838,16 +6943,54 @@ function MainScreen({
   // 若 chat 判断在前会错误地直接渲染聊天页，退出聊天后才看到朋友圈（导航栈错乱）。
   if (page === 'moments') {
     return (
-      <MomentsPage
-        me={me}
-        posts={moments}
-        onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
-        onCompose={() => setPage('compose')}
-        onToggleLike={toggleLike}
-        onComment={addComment}
-        onDelete={deleteMoment}
-        onToast={showToast}
-      />
+      <>
+        <MomentsPage
+          me={me}
+          posts={moments}
+          onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
+          onCompose={() => setPage('compose')}
+          onToggleLike={toggleLike}
+          onComment={addComment}
+          onDelete={deleteMoment}
+          onDeleteComment={deleteComment}
+          onEditRequest={(p) => setEditingPost({ id: p.id, text: p.text })}
+          onOpenAsk={() => setAskOpen(true)}
+          onToast={showToast}
+        />
+        {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑动态（六.4） */}
+        {askOpen && (
+          <AskPostSheet
+            title="让好友发一条"
+            friends={momentFriendsOf(contacts, 'wx')}
+            busyId={askBusyId}
+            onClose={() => setAskOpen(false)}
+            onAsk={(c) => void askMomentPost(c)}
+            onOpenCfg={(c) => setCfgPeer(c)}
+            renderAvatar={(c, size) => <WxAvatar src={c.avatar} alt={displayNameOf(c)} size={size} />}
+          />
+        )}
+        {cfgPeer && (
+          <MomentAutoCfgSheet
+            contact={cfgPeer}
+            platform="wx"
+            platformLabel="朋友圈"
+            onClose={() => setCfgPeer(null)}
+            onToast={showToast}
+          />
+        )}
+        {editingPost && (
+          <EditPostDialog
+            key={editingPost.id}
+            initial={editingPost.text}
+            busy={false}
+            onCancel={() => setEditingPost(null)}
+            onSave={(text) => {
+              editMomentPost(editingPost.id, text);
+              setEditingPost(null);
+            }}
+          />
+        )}
+      </>
     );
   }
   if (page === 'compose') {
@@ -6861,17 +7004,31 @@ function MainScreen({
   }
   if (page === 'friendMoments' && friendMoments) {
     return (
-      <MomentsPage
-        me={me}
-        owner={{ name: friendMoments.name, avatar: friendMoments.avatar }}
-        posts={moments.filter((p) => p.authorName === friendMoments.name)}
-        onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
-        onCompose={() => setPage('compose')}
-        onToggleLike={toggleLike}
-        onComment={addComment}
-        onDelete={deleteMoment}
-        onToast={showToast}
-      />
+      <>
+        <MomentsPage
+          me={me}
+          owner={{ name: friendMoments.name, avatar: friendMoments.avatar }}
+          posts={moments.filter((p) => p.authorName === friendMoments.name)}
+          onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
+          onCompose={() => setPage('compose')}
+          onToggleLike={toggleLike}
+          onComment={addComment}
+          onDelete={deleteMoment}
+          onToast={showToast}
+        />
+        {editingPost && (
+          <EditPostDialog
+            key={editingPost.id}
+            initial={editingPost.text}
+            busy={false}
+            onCancel={() => setEditingPost(null)}
+            onSave={(text) => {
+              editMomentPost(editingPost.id, text);
+              setEditingPost(null);
+            }}
+          />
+        )}
+      </>
     );
   }
   if (chatPeer) {

@@ -44,6 +44,7 @@ import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecor
 import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { buildMomentsChatBlock, bumpMomentChatTurns } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import type { ContactRecord } from '@/lib/contacts';
 
@@ -593,6 +594,16 @@ function CallScreen({
       // 记忆库：本轮对话结束后的轮次计数与自动提取（后台异步，失败静默）；
       // 请求前先召回该联系人（互通开关范围）的记忆注入 system（服务端拼到人设后）
       const memoryBlock = contact?.id ? memRecallBlock(contact.id, 'phone', userText ?? '') : undefined;
+      // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（电话无自有平台，关闭时不注入）；
+      // 用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
+      const momentsBlock = contact?.id
+        ? buildMomentsChatBlock({
+            contactId: contact.id,
+            app: 'phone',
+            userName: profileName,
+            peer: { id: contact.id, name: contact.name, nickname: contact.nickname ?? null },
+          })
+        : '';
       // 时间感知（按联系人独立开关，发送时现场读取；关闭时不注入）：
       // 上次聊天间隔 = 通话内上一条字幕时间戳；本轮是通话第一句时退回最近一次接通的通话记录时间
       const priorBubbles = bubblesRef.current;
@@ -635,6 +646,8 @@ function CallScreen({
               { user: owner || profileName, peer: contact.name }
             )
           );
+        // 聊天灵感触发（一.6）：轮次计数 +1，攒够阈值后该角色可能「有感而发」自动发一条动态
+        bumpMomentChatTurns(contact.id);
       };
       try {
         // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡；需要全部联系人现场查一次，失败回退无注入）
@@ -668,6 +681,8 @@ function CallScreen({
             greeting: userText === null,
             history: historyBefore.map((m) => ({ role: m.role, content: m.text })),
             memoryBlock,
+            // 社交动态块（前端按互通开关现场构建；服务端拼到人设+记忆之后）
+            momentsBlock: momentsBlock || undefined,
             // 时间感知块（前端按联系人开关现场构建；服务端拼到人设+记忆之后）
             timeBlock,
             // 设置 App「API 设置」的配置：服务端优先用它调用户自己的 API

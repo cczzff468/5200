@@ -5172,3 +5172,33 @@ Work Log:
 Stage Summary:
 - 文件 App 从只读升级为可增：6 个资料库全部具备添加入口；导入的音乐/照片与音乐/照片 App 数据互通（同 store），新建的备忘录/事件/提醒在备忘录/日历/提醒事项 App 可查看编辑；单条删除与统计原有能力不变
 - 未做（如实说明）：文件 App 不提供「文件夹」维度（IndexedDB 各库无目录结构，iOS Files 语义下需要 db v7 升级+全 App 改造，当前按库分类已覆盖使用场景）；文档类任意文件（PDF/zip 等）无对应展示 App，未新增独立文件库
+
+---
+Task ID: MOMENTS-1
+Agent: 主协调者 (Z.ai Code)
+Task: 新增「朋友圈/QQ动态」功能——AI 发动态（三种触发）× 动态互动（多轮）× 动态与聊天记忆双向打通，六大类需求全量实施
+
+Work Log:
+- 探索发现上次会话已提交核心引擎（moments.ts 1367 行统一引擎 + /api/moments/generate 生成端点 + moments-shared.tsx 共享 UI + memory.ts 动态来源记忆扩展，commit 03ddc5e），但完全未接线：调度器未挂载、聊天未注入、微信/QQ UI 未接入、worklog 无条目、commit message 是 UUID
+- 修复引擎遗留编译错误 2 处：moments-shared.tsx 缺 ChevronRight 导入；moments.ts listMomentPosts 的 p.time 类型收窄失败（引入 createdAt 局部变量）
+- 新建 src/components/ios/MomentsScheduler.tsx：全局调度组件（每 5s 调 runMomentsTick），机主展示名从 wx/qq-session-user-id 登录态推导（与 App 内 authorName 同源），联系人每分钟刷新；挂载进 PhoneShell（dynamic import 懒加载，App 不打开也结算）
+- contacts-store.deleteContact：动态 import purgeMomentsForContact，删除联系人（含级联 NPC）时清理其动态/点赞/评论/队列/计数器（动态引入避免与 moments.ts 循环依赖）
+- 微信朋友圈接线（wechat.tsx）：发布/点赞/评论/回复/删除/编辑全部改走引擎（addUserMomentPost + enqueuePostInteractions / toggleUserMomentLike / addUserMomentComment / deleteMomentPost / deleteMomentComment / updateMomentPostContent）；好友朋友圈示例动态改 addCharMomentPost(writeMemory:false)；订阅 moments-changed 实时刷新；MomentRow 修复点赞高亮 bug（原比对 authorName 改 meName）、回复目标带评论 id（支持多轮）、自己的评论加 × 删除、菜单加编辑入口（EditPostDialog，key 重挂载）；朋友圈页顶栏加 ✨「让好友发一条」（AskPostSheet + 行尾齿轮 MomentAutoCfgSheet 每角色三种触发设置）；废弃本地 saveMoments/ensureFriendPosts
+- QQ 空间接线（qq.tsx）：ZonePage 全量走引擎（发说说改 onPublish(text,images) → addUserMomentPost + 排互动队列；点赞/评论/回复同微信；「…」按钮接 PostMoreMenu 编辑/删除；自己的评论加 × 删除；顶栏加 ✨ 让好友发一条 + 自动发布设置）；ZonePage 加 relative 定位、接收 contacts prop；删除死代码 saveZonePosts
+- 四个聊天端注入动态感知（需求四）：wechat/qq 的 systemFull 加 buildMomentsChatBlock(peer.id, 'wx'/'qq')；sms(chat.tsx)/phone(phone.tsx) 同样注入（app='sms'/'phone'，互通关闭时不注入）；phone.tsx 走 /api/phone/turn payload 新增 momentsBlock 字段（route.ts 接收拼进 system）；各端 finalize 成功后 bumpMomentChatTurns（聊天灵感触发的轮次计数）
+- 修复多轮回复 bug：addUserMomentComment 原把 AI 父评论 id 传给 enqueueCharReply，导致 AI 再回复的 replyTo 指向 AI 自己（「王大力 回复 王大力」）且 prompt 指代错误；改为传「用户的评论」id，AI 回复正确指向用户并串链在用户评论下
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 0 问题
+
+Stage Summary:
+- E2E 实测全部通过（AI 上游服务端 SDK 兜底实际可用，/api/moments/generate 实测 200 返回人设化内容）：
+  ① 用户发动态 → IndexedDB 持久化（wx-moments 带 author:'user'）+ 互动队列入队 ✓
+  ② 8~18s 后调度结算：婷婷/王大力 AI 点赞 + 王大力 AI 评论（贴合动态内容）实时出现在 UI ✓
+  ③ 用户回复 AI 评论 → AI 3~8s 后再回复（多轮链 parentId 串接，内容贴合程序员人设吐槽产品经理）✓
+  ④ ✨让TA发一条：婷婷即时发布人设化动态（美术生写生/橘猫/美术馆）✓
+  ⑤ 自动发布（频率 1h 触发实测）：王大力自动发布，内容同时融合最近聊天（柯基）+ 记忆（QQ 动态健身房打卡）+ 人设（API 被墙/加班）✓
+  ⑥ 记忆双向打通：mem-frag:seed-char-2 出现 source='moments' 碎片（点赞/评论/回复/懒写入各句式，真实名字视角，带 sourcePostId 追溯）；用户广播动态聊天"被看到"时懒写入该角色记忆（已互动过的动态正确去重）✓
+  ⑦ 编辑动态（EditPostDialog → updateMomentPostContent）、删除评论（× 按钮，含其下回复级联）、删除动态（menu → deleteMomentPost）实测 ✓
+  ⑧ QQ 空间发说说/婷婷点赞/持久化实测 ✓
+  ⑨ 聊天注入：buildMomentsChatBlock 执行（由懒写入发生证实）；聊天回复因用户直连 API 403 地域限制显示错误气泡（既有聊天链路的环境限制，非本任务引入）
+- 数据结构符合需求五：动态 {id, peerId, author, content, images, createdAt}；互动 {id, postId, author, type, content, createdAt, parentId}；记忆 source='moments' + sourcePostId/sourceKind/sourceCommentId
+- 遗留说明：定时(schedule)触发与频率(interval)共用 runAutoPosts 同一结算路径（仅到期条件不同）未单独 E2E；删联系人级联清理走动态 import（代码路径简单，未做 UI 级 E2E）
