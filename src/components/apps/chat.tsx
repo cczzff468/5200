@@ -1266,12 +1266,14 @@ function ChatView({
       {wbOpen && wbContactId && (
         <WorldBookPickerPage
           variant="sms"
-          books={loadBooks().map((b) => ({
-            id: b.id,
-            name: b.name,
-            entryCount: b.entries.length,
-            enabledCount: b.entries.filter((e) => e.enabled).length,
-          }))}
+          books={loadBooks()
+            .filter((b) => b.scope === 'local')
+            .map((b) => ({
+              id: b.id,
+              name: b.name,
+              entryCount: b.entries.length,
+              enabledCount: b.entries.filter((e) => e.enabled).length,
+            }))}
           boundIds={wbBound}
           onBack={() => setWbOpen(false)}
           onChange={(ids) => {

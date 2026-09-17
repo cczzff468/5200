@@ -3,15 +3,14 @@
  *
  * 整体链路（「给 AI 挂载静态设定和世界观」需求）：
  * 1. 用户在「世界书」App 里维护若干本书，每本书含若干条目（触发词 + 设定内容）；
- * 2. 聊天界面（微信/QQ/信息）的聊天设置里，可以为联系人挂载任意多本书；
- * 3. 每次发送消息时扫描最近上下文，命中任一触发词且处于启用状态的条目被激活；
- * 4. 激活条目按「插入位置」分组、同位置按「优先级」降序拼接，注入到发送给 AI 的提示词中；
- * 5. 未命中的条目不参与发送——世界书内容不进记忆库，两者完全独立。
- *
- * 生效范围（scope，决定条目对哪些聊天生效）：
- * - global    全局：不绑定角色，所有聊天共享生效（无需挂载）；
- * - local     局部：仅当本书被挂载到当前联系人时生效；
- * - exclusive 专属：仅对条目上指定的那个联系人生效（无需挂载）。
+ * 2. 范围（scope）属于**世界书本体**（不是条目）：
+ *    - global    全局：所有对话生效，**无需关键词触发**（内容常驻注入），适合世界观框架、基础设定；
+ *    - local     局部：命中关键词才注入，且仅当本书被挂载到当前聊天（聊天设置里挂载）；
+ *    - exclusive 专属：命中关键词才注入，仅对绑定的那个角色生效（无需挂载）；
+ * 3. 书级「启用」总开关：关闭后整本书永不注入（条目级开关仍可单独停用条目）；
+ * 4. 每次发送消息时扫描最近上下文，命中任一触发词且处于启用状态的条目被激活；
+ * 5. 激活条目按「插入位置」分组、同位置按「优先级」降序拼接，注入到发送给 AI 的提示词中；
+ * 6. 未命中的条目不参与发送——世界书内容不进记忆库，两者完全独立。
  *
  * 插入位置（position，决定激活内容注入到提示词的哪个部分）：
  * - before_system 系统提示词之前 / after_system 系统提示词之后
@@ -20,6 +19,7 @@
  *
  * 存储：书籍全量存 IndexedDB kv（键 worldbooks）；联系人挂载关系按联系人隔离
  * （键 wb-bind:<contactId>）。读写走 @/lib/ios/idb-kv 的内存写穿层（与朋友圈/记忆同层）。
+ * 兼容旧版数据：旧结构把 scope 放在条目上，loadBooks 时自动归一化到书级。
  */
 
 import { hasEmoji } from '@/lib/emoji';
@@ -55,23 +55,40 @@ export const WB_SCOPE_LABELS: Record<WbScope, string> = {
   exclusive: '专属',
 };
 
-/** 条目结构（条目名字仅本地显示，不发送给 AI） */
+/** 范围选择卡片副标题（新建弹窗里的三选卡片） */
+export const WB_SCOPE_SUBTITLES: Record<WbScope, string> = {
+  global: '所有对话生效 · 无需关键词',
+  local: '命中关键词 · 当前会话生效',
+  exclusive: '绑定角色 · 命中关键词生效',
+};
+
+/** 详情页头部一句话说明（短版） */
+export const WB_SCOPE_SHORT_DESC: Record<WbScope, string> = {
+  global: '所有对话都生效，无需关键词触发',
+  local: '挂载后生效，命中关键词才注入',
+  exclusive: '仅对绑定的角色生效，命中关键词才注入',
+};
+
+/** 设置卡下方的用途提示（适合…） */
+export const WB_SCOPE_TIPS: Record<WbScope, string> = {
+  global: '适合世界观框架、基础设定',
+  local: '适合剧情事件、场景细节',
+  exclusive: '适合角色专属设定、角色私设',
+};
+
+/** 条目结构（条目名字仅本地显示，不发送给 AI；范围在书级，条目不再带 scope） */
 export interface WbEntry {
   id: string;
   /** 开关：关闭后永不发送 */
   enabled: boolean;
   /** 条目名字（仅本地显示） */
   name: string;
-  /** 触发词：一个或多个关键词，命中任一即激活 */
+  /** 触发词：一个或多个关键词，命中任一即激活（全局书无需触发词，可留空） */
   keywords: string[];
   /** 内容：激活后插入的设定文本 */
   content: string;
   /** 插入位置 */
   position: WbPosition;
-  /** 生效范围 */
-  scope: WbScope;
-  /** scope === 'exclusive' 时的指定联系人 id */
-  targetContactId?: string | null;
   /** 优先级：同一位置多条命中时数字大的排前面 */
   priority: number;
   /** 触发词匹配是否忽略大小写 */
@@ -81,6 +98,12 @@ export interface WbEntry {
 export interface WorldBook {
   id: string;
   name: string;
+  /** 书级启用总开关：关闭后整本书永不注入 */
+  enabled: boolean;
+  /** 书级范围：全局（常驻注入）/ 局部（挂载后关键词触发）/ 专属（绑定角色关键词触发） */
+  scope: WbScope;
+  /** scope === 'exclusive' 时绑定的联系人 id */
+  targetContactId: string | null;
   entries: WbEntry[];
   createdAt: number;
   updatedAt: number;
@@ -93,9 +116,76 @@ const BOOKS_KEY = 'worldbooks';
 /** 联系人挂载的书籍 id 列表（按联系人隔离） */
 export const wbBindKey = (contactId: string): string => `wb-bind:${contactId}`;
 
+/** 旧版原始形状（scope 在条目上；书可能缺 enabled/scope 字段）——仅用于迁移归一化 */
+interface RawLegacyEntry extends Partial<WbEntry> {
+  scope?: unknown;
+  targetContactId?: unknown;
+}
+
+interface RawLegacyBook extends Omit<Partial<WorldBook>, 'entries'> {
+  entries?: RawLegacyEntry[];
+}
+
+function isWbScope(v: unknown): v is WbScope {
+  return v === 'global' || v === 'local' || v === 'exclusive';
+}
+
+/** 旧数据归一化：书级 scope 缺失时按条目旧 scope 推断（专属 > 局部 > 全局），条目上的 scope 字段剥离 */
+function normalizeRawBook(raw: RawLegacyBook): WorldBook {
+  const legacyEntries = Array.isArray(raw.entries) ? raw.entries : [];
+  const entries: WbEntry[] = legacyEntries.map((e) => {
+    const base: WbEntry = {
+      id: typeof e.id === 'string' ? e.id : newWbId('wbe'),
+      enabled: e.enabled !== false,
+      name: typeof e.name === 'string' ? e.name : '',
+      keywords: Array.isArray(e.keywords) ? e.keywords.filter((k): k is string => typeof k === 'string') : [],
+      content: typeof e.content === 'string' ? e.content : '',
+      position: isWbPosition(e.position) ? e.position : 'after_char',
+      priority: typeof e.priority === 'number' && Number.isFinite(e.priority) ? Math.floor(e.priority) : 0,
+      ignoreCase: e.ignoreCase !== false,
+    };
+    return base;
+  });
+
+  let scope = raw.scope;
+  let targetContactId = typeof raw.targetContactId === 'string' ? raw.targetContactId : null;
+  if (!isWbScope(scope)) {
+    // 旧版推断：有专属条目 → 专属（取第一个专属目标）；否则有局部条目 → 局部；否则全局
+    const legacy = legacyEntries as Array<RawLegacyEntry | undefined>;
+    const ex = legacy.find((e) => e?.scope === 'exclusive');
+    if (ex) {
+      scope = 'exclusive';
+      targetContactId = typeof ex.targetContactId === 'string' ? ex.targetContactId : null;
+    } else if (legacy.some((e) => e?.scope === 'local')) {
+      scope = 'local';
+      targetContactId = null;
+    } else {
+      scope = 'global';
+      targetContactId = null;
+    }
+  }
+
+  return {
+    id: typeof raw.id === 'string' ? raw.id : newWbId('wb'),
+    name: typeof raw.name === 'string' ? raw.name : '未命名世界书',
+    enabled: raw.enabled !== false,
+    scope,
+    targetContactId,
+    entries,
+    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+  };
+}
+
+function isWbPosition(v: unknown): v is WbPosition {
+  return (WB_POSITIONS as readonly string[]).includes(typeof v === 'string' ? v : '');
+}
+
 export function loadBooks(): WorldBook[] {
   const raw = kvGet<WorldBook[]>(BOOKS_KEY);
-  return Array.isArray(raw) ? raw : [];
+  if (!Array.isArray(raw)) return [];
+  // 兼容旧结构（scope 在条目上）：读入时归一化；下次保存即落为新结构
+  return raw.map((b) => normalizeRawBook(b as RawLegacyBook));
 }
 
 export function saveBooks(books: WorldBook[]): void {
@@ -149,9 +239,16 @@ export function wbNameCheck(name: string): { ok: boolean; reason: string } {
   return { ok: true, reason: '' };
 }
 
-/** 条目保存校验：至少 1 个触发词、内容非空（否则该条目永远不会被激活，没有意义） */
-export function wbEntryCheck(entry: Pick<WbEntry, 'keywords' | 'content'>): { ok: boolean; reason: string } {
-  if (entry.keywords.length === 0) return { ok: false, reason: '至少填写 1 个触发词' };
+/**
+ * 条目保存校验：内容非空；局部/专属书还要求至少 1 个触发词
+ * （全局书内容常驻注入、不扫描触发词，触发词可留空）。
+ */
+export function wbEntryCheck(
+  entry: Pick<WbEntry, 'keywords' | 'content'>,
+  opts?: { requireKeywords?: boolean },
+): { ok: boolean; reason: string } {
+  const requireKeywords = opts?.requireKeywords !== false;
+  if (requireKeywords && entry.keywords.length === 0) return { ok: false, reason: '至少填写 1 个触发词' };
   if (!entry.content.trim()) return { ok: false, reason: '内容不能为空' };
   return { ok: true, reason: '' };
 }
@@ -177,8 +274,6 @@ export function createEntryDraft(): WbEntry {
     keywords: [],
     content: '',
     position: 'after_char',
-    scope: 'local',
-    targetContactId: null,
     priority: 0,
     ignoreCase: true,
   };
@@ -194,8 +289,8 @@ interface ExportedEntry {
   keywords?: unknown;
   content?: unknown;
   position?: unknown;
+  /** 旧版遗留字段：导入时忽略（范围已上移到书级） */
   scope?: unknown;
-  /** 导出格式里带目标角色名字（id 跨设备无意义），导入时按当前联系人名单解析 */
   targetContactName?: unknown;
   priority?: unknown;
   ignoreCase?: unknown;
@@ -203,6 +298,11 @@ interface ExportedEntry {
 
 interface ExportedBook {
   name?: unknown;
+  enabled?: unknown;
+  /** 新版：书级范围 */
+  scope?: unknown;
+  /** 专属书绑定的角色名字（id 跨设备无意义），导入时按当前联系人名单解析 */
+  targetContactName?: unknown;
   entries?: unknown;
 }
 
@@ -210,25 +310,26 @@ export interface WorldBookExportPayload {
   app: typeof EXPORT_APP_TAG;
   version: number;
   exportedAt: number;
-  books: Array<{ name: string; entries: ExportedEntry[] }>;
+  books: ExportedBook[];
 }
 
-/** 导出载荷（targetContactId → targetContactName，跨设备可读） */
+/** 导出载荷（书级 scope + 专属绑定角色名；条目不再带范围字段） */
 export function buildExportPayload(books: WorldBook[], contactNameOf: (id: string) => string): WorldBookExportPayload {
   return {
     app: EXPORT_APP_TAG,
-    version: 1,
+    version: 2,
     exportedAt: Date.now(),
     books: books.map((b) => ({
       name: b.name,
+      enabled: b.enabled,
+      scope: b.scope,
+      targetContactName: b.scope === 'exclusive' && b.targetContactId ? contactNameOf(b.targetContactId) : undefined,
       entries: b.entries.map((e) => ({
         enabled: e.enabled,
         name: e.name,
         keywords: e.keywords,
         content: e.content,
         position: e.position,
-        scope: e.scope,
-        targetContactName: e.scope === 'exclusive' && e.targetContactId ? contactNameOf(e.targetContactId) : undefined,
         priority: e.priority,
         ignoreCase: e.ignoreCase,
       })),
@@ -241,16 +342,17 @@ function asString(v: unknown, fallback = ''): string {
 }
 
 function normalizePosition(v: unknown): WbPosition {
-  return (WB_POSITIONS as readonly string[]).includes(typeof v === 'string' ? v : '') ? (v as WbPosition) : 'after_char';
+  return isWbPosition(v) ? v : 'after_char';
 }
 
 function normalizeScope(v: unknown): WbScope {
-  return (WB_SCOPES as readonly string[]).includes(typeof v === 'string' ? v : '') ? (v as WbScope) : 'local';
+  return isWbScope(v) ? v : 'local';
 }
 
 /**
- * 解析导入内容 → 书籍数组（联系人名字按当前名单解析为 id，解析不到时降级为 local）。
- * 兼容三种形状：标准导出 {app, books:[...]} / 裸书籍数组 [...] / 单本书 {name, entries}。
+ * 解析导入内容 → 书籍数组（专属绑定的角色名字按当前名单解析为 id，解析不到时降级为局部）。
+ * 兼容形状：标准导出 {app, books:[...]} / 裸书籍数组 [...] / 单本书 {name, entries}；
+ * 同时兼容 v1 旧导出（scope 在条目上）——按条目旧 scope 推断书级范围后剥离。
  * 抛错时 message 直接可展示（emoji 名字校验也在这里做）。
  */
 export function parseWorldBookImport(
@@ -279,6 +381,9 @@ export function parseWorldBookImport(
     if (!check.ok) throw new Error(`导入失败：${check.reason}${name ? `（${name}）` : ''}`);
     const rawEntries = Array.isArray(b.entries) ? b.entries : [];
     const entries: WbEntry[] = [];
+    let legacyExclusiveTarget: string | null = null;
+    let hasLegacyLocal = false;
+    let hasLegacyExclusive = false;
     for (const re of rawEntries) {
       if (!re || typeof re !== 'object') continue;
       const e = re as ExportedEntry;
@@ -286,15 +391,16 @@ export function parseWorldBookImport(
       const keywords = Array.isArray(e.keywords)
         ? [...new Set(e.keywords.filter((k): k is string => typeof k === 'string' && k.trim() !== '').map((k) => k.trim()))]
         : [];
-      if (!content.trim() || keywords.length === 0) continue; // 无法激活的条目直接丢弃
-      let scope = normalizeScope(e.scope);
-      let targetContactId: string | null = null;
-      if (scope === 'exclusive') {
-        const targetName = asString(e.targetContactName).trim();
-        targetContactId = targetName ? resolveContactByName(targetName) : null;
-        if (!targetContactId) scope = 'local'; // 目标角色不存在（跨设备）：降级为局部
+      if (!content.trim()) continue; // 没有内容的条目直接丢弃
+      // v1 旧导出：记录条目级 scope 用于推断书级范围
+      if (e.scope === 'exclusive') {
+        hasLegacyExclusive = true;
+        if (!legacyExclusiveTarget && typeof e.targetContactName === 'string' && e.targetContactName.trim()) {
+          legacyExclusiveTarget = e.targetContactName.trim();
+        }
+      } else if (e.scope === 'local') {
+        hasLegacyLocal = true;
       }
-      const priorityNum = typeof e.priority === 'number' && Number.isFinite(e.priority) ? Math.floor(e.priority) : 0;
       entries.push({
         id: newWbId('wbe'),
         enabled: e.enabled !== false,
@@ -302,13 +408,36 @@ export function parseWorldBookImport(
         keywords,
         content,
         position: normalizePosition(e.position),
-        scope,
-        targetContactId,
-        priority: Math.min(9999, Math.max(0, priorityNum)),
+        priority: Math.min(9999, Math.max(0, typeof e.priority === 'number' && Number.isFinite(e.priority) ? Math.floor(e.priority) : 0)),
         ignoreCase: e.ignoreCase !== false,
       });
     }
-    books.push({ id: newWbId('wb'), name, entries, createdAt: now, updatedAt: now });
+
+    // 书级范围：优先新版字段；缺失时按旧条目 scope 推断；专属绑定名解析失败 → 降级局部
+    let scope = isWbScope(b.scope) ? b.scope : null;
+    let targetName = asString(b.targetContactName).trim();
+    if (!scope) {
+      if (hasLegacyExclusive) scope = 'exclusive';
+      else if (hasLegacyLocal) scope = 'local';
+      else scope = entries.length > 0 ? 'global' : 'local';
+      if (!targetName && legacyExclusiveTarget) targetName = legacyExclusiveTarget;
+    }
+    let targetContactId: string | null = null;
+    if (scope === 'exclusive') {
+      targetContactId = targetName ? resolveContactByName(targetName) : null;
+      if (!targetContactId) scope = 'local'; // 绑定角色不存在（跨设备）：降级为局部
+    }
+
+    books.push({
+      id: newWbId('wb'),
+      name,
+      enabled: b.enabled !== false,
+      scope,
+      targetContactId,
+      entries,
+      createdAt: now,
+      updatedAt: now,
+    });
   });
   if (books.length === 0) throw new Error('文件里没有可导入的条目');
   return books;
@@ -357,15 +486,15 @@ function formatGroup(entries: WbEntry[]): string {
 }
 
 /**
- * 收集当前聊天应注入的世界书内容：
- * - global 条目：所有聊天生效（无需挂载）；
- * - local 条目：仅当本书挂载到当前联系人时生效；
- * - exclusive 条目：仅当条目指定目标 = 当前联系人时生效；
- * 再按「启用 + 命中触发词」过滤，按插入位置分组、同位置优先级降序拼接。
- * contactId 为 null（无联系人的会话）时只有 global 条目可能生效。
+ * 收集当前聊天应注入的世界书内容（范围在书级）：
+ * - 书级开关关闭 → 整本跳过；
+ * - global 书：所有聊天生效，内容常驻注入（不扫描触发词）；
+ * - local 书：仅当本书挂载到当前联系人时生效，条目需命中触发词；
+ * - exclusive 书：仅当绑定目标 = 当前联系人时生效，条目需命中触发词；
+ * 再按「条目启用 + 命中」过滤，按插入位置分组、同位置优先级降序拼接。
+ * contactId 为 null（无联系人的会话）时只有 global 书可能生效。
  */
 export function collectWbBlocks(contactId: string | null, scanText: string): WbBlocks {
-  if (!scanText.trim()) return WB_EMPTY_BLOCKS;
   const books = loadBooks();
   if (books.length === 0) return WB_EMPTY_BLOCKS;
   const bound = contactId ? new Set(getBoundBookIds(contactId)) : new Set<string>();
@@ -379,12 +508,13 @@ export function collectWbBlocks(contactId: string | null, scanText: string): WbB
     after_user: [],
   };
   for (const book of books) {
-    const isBound = bound.has(book.id);
+    if (book.enabled === false) continue;
+    if (book.scope === 'local' && !bound.has(book.id)) continue;
+    if (book.scope === 'exclusive' && (!contactId || book.targetContactId !== contactId)) continue;
+    const alwaysInject = book.scope === 'global';
     for (const entry of book.entries) {
       if (!entry.enabled) continue;
-      if (entry.scope === 'local' && !isBound) continue;
-      if (entry.scope === 'exclusive' && (!contactId || entry.targetContactId !== contactId)) continue;
-      if (!wbEntryMatches(entry, scanText)) continue;
+      if (!alwaysInject && !wbEntryMatches(entry, scanText)) continue;
       byPosition[entry.position].push(entry);
     }
   }

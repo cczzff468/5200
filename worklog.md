@@ -5368,3 +5368,22 @@ Stage Summary:
 - 修复文件：src/components/apps/worldbook.tsx（ActionSheet key、aiContacts 过滤、统计卡/分段栏/chip 压缩）
 - 控制台重复 key 报错消除；角色相关列表（筛选浮层、专属指定角色）全部排除 user；上下 tab 更小更精致，深浅色适配正常
 - 显式保存、长按/⋯删除、emoji 校验等此前能力回归通过；世界书触发注入引擎与记忆库未改动
+
+---
+Task ID: wb-scope-book-2
+Agent: Z.ai Code (main)
+Task: 世界书反馈第二轮——①范围（全局/局部/专属）从条目上移到世界书本体；②新建世界书弹窗按用户参考图重做；③右上角「全部角色」筛选只在专属界面显示；④不显示「AI 角色」标签；⑤书籍详情页按参考图重做
+
+Work Log:
+- 数据模型重构（src/lib/ios/worldbook.ts）：WorldBook 增加 enabled/scope/targetContactId，WbEntry 移除 scope/targetContactId；loadBooks 内置旧数据归一化（旧条目级 scope → 书级：专属>局部>全局，剥离条目 scope 字段，补 enabled 默认 true）；collectWbBlocks 改为书级过滤 + **全局书内容常驻注入（不扫描触发词）**、局部=挂载后关键词触发、专属=绑定角色关键词触发、书级停用整本跳过；wbEntryCheck 增加 requireKeywords 选项（全局书触发词可留空）；导出 v2（书级 scope/enabled/绑定角色名）+ 兼容 v1 旧导出导入；新增 WB_SCOPE_SUBTITLES/WB_SCOPE_SHORT_DESC/WB_SCOPE_TIPS 文案常量
+- 新建弹窗 CreateBookDialog（worldbook.tsx，按截图 1）：X 关闭 + 书本图标 + 标题「新建世界书」+ 副标题「为 AI 聊天准备的世界观设定库」+ 名称输入（例如：现代都市背景）+ 范围三选卡片（全局 Globe/局部 Crosshair/专属 User 图标，选中黑边框+黑勾圆，未选中灰底+空圈）+ 所选范围说明 + 专属时内嵌绑定角色列表（无角色提示去联系人创建）+ 底部 取消/创建世界书；专属未绑角色时创建被拦截
+- 书籍详情页（按截图 2）：条目大计数 + 黑底范围徽章（停用时灰「已停用」徽章）+ 一句话范围说明；设置卡（范围行=点击换范围 ActionSheet，切专属未绑定时自动弹出绑定菜单；启用行=书级总开关 MonoToggle；专属时绑定角色行）；「适合…」用途提示；虚线「+ 新建条目」大按钮；空态（文档图标+还没有条目+条目是发送给 AI 的世界观设定）
+- 「全部角色」筛选 chip 只在底部范围栏选中「专属」时显示（切换范围自动清空角色筛选），筛绑定给该角色的专属书；ActionSheet 角色选项去掉「（AI 角色）」等类型标签，只显示名字（key 用联系人 id）
+- 条目编辑器：删除生效范围区块与指定角色选择器；触发词区对全局书显示「可留空」提示并放行校验；条目徽章只剩插入位置+优先级
+- 三端挂载页（wechat/qq/chat 调用点）：books 过滤 b.scope==='local' 才进挂载列表；chat-settings 挂载页文案改书级语义（局部才需挂载/全局常驻/专属绑定角色）
+- agent-browser 实测：注入旧结构数据→重载后正确迁移（旧专属书显示 专属·已删除角色 徽章与绑定行、旧局部书显示 局部，条目 scope 徽章消失）；新建弹窗截图比对参考图一致；局部书条目缺触发词被拦截（至少填写 1 个触发词）、补齐后保存成功；全局书条目无触发词直接保存成功（行显示「无触发词（全局书内容常驻注入）」）；专属创建未绑角色被拦截；全部角色 chip 专属 tab 显示/其余 tab 隐藏；详情页范围 全局↔局部 切换生效；停用后灰徽章+开关关闭；深色模式列表/详情截图正常；无控制台错误
+
+Stage Summary:
+- 改动文件：src/lib/ios/worldbook.ts（模型+引擎+导入导出）、src/components/apps/worldbook.tsx（全量 UI 重构）、src/components/apps/chat-settings.tsx（挂载页文案+注释）、wechat.tsx/qq.tsx/chat.tsx（挂载列表过滤局部书）
+- 范围语义升级为书级三态：全局=常驻注入无需关键词（新行为）、局部=挂载+关键词、专属=绑定角色+关键词；书级启用总开关；旧数据自动迁移无需用户操作
+- 验证：tsc/lint 通过；旧数据迁移、新建弹窗、条目校验、范围切换、停用、chip 显隐、深色模式均实测通过；微信登录流程受阻（全新环境无账号）故挂载页三处过滤以代码审查+tsc 验证（机械改动）

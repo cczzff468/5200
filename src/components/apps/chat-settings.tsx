@@ -381,7 +381,7 @@ export function ChatSettingsPage({
           </button>
         </div>
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-          挂载的世界书会在聊天内容命中条目触发词时，把对应设定注入提示词；书在「世界书」App 里维护。
+          挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
         </p>
 
         {/* 查找聊天记录 */}
@@ -1206,7 +1206,7 @@ export function SmsChatSettingsPage({
               </button>
             </div>
             <p className={t.captionCls}>
-              挂载的世界书会在聊天内容命中条目触发词时，把对应设定注入提示词；书在「世界书」App 里维护。
+              挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
             </p>
           </>
         )}
@@ -1219,8 +1219,8 @@ export function SmsChatSettingsPage({
 
 /**
  * 世界书挂载页（微信/QQ/信息聊天设置二级页）：为当前联系人勾选要挂载的世界书（可多选）。
- * 挂载后本书的「局部」条目在该聊天生效；「全局」条目无需挂载即全聊天生效；
- * 「专属」条目仅对条目上指定的角色生效。书籍本体在「世界书」App 里维护。
+ * 范围在书级：只有「局部」范围的书需要挂载（挂载后命中关键词才注入）；
+ * 「全局」书无需挂载对所有对话常驻生效；「专属」书仅对绑定的角色生效。书籍本体在「世界书」App 里维护。
  */
 export function WorldBookPickerPage({
   variant,
@@ -1230,7 +1230,7 @@ export function WorldBookPickerPage({
   onChange,
 }: {
   variant: ChatSettingsVariant;
-  /** 全部世界书（id/名字/条目数） */
+  /** 可挂载的世界书（局部范围；id/名字/条目数） */
   books: Array<{ id: string; name: string; entryCount: number; enabledCount: number }>;
   /** 当前联系人已挂载的书 id */
   boundIds: string[];
@@ -1265,7 +1265,7 @@ export function WorldBookPickerPage({
           <div className="mt-16 text-center">
             <BookMarked className="mx-auto h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
             <p className={`mt-3 text-[14px] ${t.sms ? 'text-muted-foreground' : 'text-black/35 dark:text-white/35'}`}>
-              还没有世界书，到「世界书」App 创建后再来挂载
+              没有可挂载的「局部」世界书；到「世界书」App 创建（范围选局部）后再来挂载
             </p>
           </div>
         ) : (
@@ -1309,7 +1309,7 @@ export function WorldBookPickerPage({
           </div>
         )}
         <p className={t.captionCls}>
-          勾选即挂载：本书「局部」条目在当前聊天生效；「全局」条目无需挂载全聊天生效；「专属」条目仅对条目指定的角色生效。点条目触发词命中时，设定内容会注入提示词（未命中不发送）。
+          只有「局部」范围的世界书需要挂载：挂载后，聊天内容命中条目触发词时才注入对应设定（未命中不发送）。「全局」书无需挂载、对所有对话常驻生效；「专属」书仅对绑定的角色生效——都在「世界书」App 里设置。
         </p>
       </div>
     </div>
