@@ -5461,3 +5461,26 @@ Work Log:
 Stage Summary:
 - 改动文件：仅 src/components/apps/worldbook.tsx（纯 UI 调整，无逻辑/数据改动）
 - 世界书功能逻辑（注入/规则/审计加固）与数据层零触碰；wb-filter-* / wb-back / wb-create 等 testid 全部保留，E2E 兼容
+
+---
+Task ID: widgets-7
+Agent: Z.ai Code (main)
+Task: 按用户 4 张参考图新增 4 个主屏小组件（日历/iCity/表盘时钟/拍立得），iCity 可改名字+换头像、拍立得可换图片
+
+Work Log:
+- 新建 4 个组件文件（沿用 ProfileCard 范式：Data 接口 + KEY + DEFAULT + load + Widget + Editor）：
+  ①src/components/ios/CalendarCard.tsx——CalendarCardWidget（col-span-4×2 行 ≈342×168 白卡）：左侧月名/星期/大号日期，右侧整月网格（周一起始、今天黑圆反白、周末淡灰）；纯展示（点击开日历 App）；SSR 首帧不渲染日期防 hydration 不一致，30s 刷新
+  ②src/components/ios/ICityCard.tsx——ICityCardWidget（2×2 ≈159×168 半透明深灰卡）：左上名字（默认 icity）+「MM月DD日 星期X」+底部胶囊（圆头像+一句话，默认「写点什么」）；ICityCardEditor 底部弹窗改名字/换头像（fileToScaledDataURL 256px）/改胶囊文字；数据存 localStorage home.icityCard.v1；点击开编辑器
+  ③src/components/ios/TickClockCard.tsx——TickClockCardWidget（2×2 半透明深灰卡）：SVG 60 根径向刻度（每 5 根加长加粗，表圈质感）+中央 42px 数字时间；点击开时钟 App；10s 刷新
+  ④src/components/ios/PolaroidCard.tsx——PolaroidCardWidget（col-span-4×2 行、无底卡浮在壁纸）：三张白框拍立得（w-100px，rot -6.5/1.5/7 度错落+顶部米色胶带），照片回退内置默认图；PolaroidCardEditor 三槽逐张更换（480px 压缩）/恢复默认；localStorage home.polaroidCard.v1
+- 内置默认拍立得照片：z-ai CLI 生成 3 张阴郁胶片感图（雨洼小花/玻璃雨滴望海/雪夜街景）→ public/images/polaroid-{1,2,3}.png
+- HomeScreen.tsx：WidgetKind/WIDGET_KINDS/WIDGET_META/WIDGET_SPAN/WIDGET_SPAN_SIZE 各 +4（calendar/icity/tickclock/polaroid）；renderTileContent 分发 + 点击分支（icity/polaroid→编辑器，calendar/tickclock→openApp）；state+load+save+编辑器挂载；LAYOUT_VERSION 7→8（默认布局：P2=profile+bubble+icity+4 App、P3=calendar+netease+5 App、P4 新建=tickclock+polaroid；旧布局自动重置保留 hidden）；sanitizeLayout widgetSeen 补 4 类+缺失回补落位逻辑
+- WidgetGallery.tsx：GalleryKind/GALLERY_KINDS/GALLERY_ITEMS/WidgetGalleryContent/ThemesWidgetsPage 全部扩到 13 种（1:1 预览与主屏同数据源）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 全新会话）：P2 出现 iCity 组件（icity/日期/头像胶囊）→点开编辑器→改名「我的城市」+胶囊文字→保存即时生效→reload 后持久 ✓；P3 日历组件（9月/星期四/17 大日期+整月网格今天黑圆反白）→点击打开日历 App ✓；P4 表盘时钟（刻度圈+13:39/13:47 走时）→点击打开时钟 App ✓；拍立得三张胶片照+胶带错落 ✓→编辑器三槽预览/更换按钮 ✓；全新会话 console 无错误（期间一次 key 警告为 HMR 中间态缓存，全新会话复测干净）
+- 已知行为：布局 v8 重置后「世界书」App 由补位逻辑落到第 4 页（第 3 页已被日历占满 2 行）——编辑模式可拖动，非缺陷
+
+Stage Summary:
+- 改动文件：新增 CalendarCard/ICityCard/TickClockCard/PolaroidCard.tsx + public/images/polaroid-*.png；修改 HomeScreen.tsx、WidgetGallery.tsx
+- 用户三诉求全部落地：iCity 可改名字（编辑器名字字段）+可换头像（更换头像/恢复默认）；拍立得可换图片（三张独立更换）；4 个新组件全部默认上屏（P2/P3/P4）
+- 小组件体系零破坏：原有 9 种组件/编辑器/画廊/主题页小组件页全部兼容，13 种 1:1 预览一致
