@@ -5325,3 +5325,27 @@ Stage Summary:
 - 注入位置对齐现有 system 组装：before_char/after_char 以人设块（buildPersonaSystemPrompt 产物含 extraRules）为界；after_system 在记忆/朋友圈/时间感知之后、回复条数指令之前（回复条数是格式化元指令，置于最后更稳）
 - 扫描窗口=最新用户消息+最近 8 条上下文（同屏所有进入请求的文本），关键词在窗口内持续有效（SillyTavern 同类语义），停用/删除条目立即生效
 - 澄清：E2E 种子数据（2 本书 8 条目+挂载关系）在 agent-browser 隔离会话的 IndexedDB，不污染用户浏览器；AI 上游为遗留 mock（回复固定话术），不影响注入链路验证——注入验证的是请求体（客户端组装后的最终提示词），与上游无关
+
+---
+Task ID: WB-APP-2
+Agent: Z.ai Code (main)
+Task: 世界书三项体验改造——①书库首页按用户截图改版（大标题+统计卡范围分类+角色筛选+底部范围筛选栏）；②条目列表删除交互改造（行尾删除图标→长按/⋯菜单）；③条目编辑页显式保存（右上角保存按钮，返回不保存，新建条目保存前不落盘）
+
+Work Log:
+- 用户反馈（附截图）：要这样的分类（全局/局部/专属 统计+筛选）、条目列表行尾删除图标改长按或三个点、添加条目右上角加保存按钮且不要退出就保存
+- ①书库首页改版（worldbook.tsx BookListPage 重写）：大标题「我的世界书库」+右上角「全部角色 ▾」pill（ActionSheet 选角色）+副标题「共 N 个世界书 · 最后更新 HH:MM」+统计卡（全局/局部/专属 三列为可点 tab，选中列灰底+黑色下划线指示器，再点取消；已启用为纯计数）+底部固定筛选栏（全部/全局/局部/专属 四 chip，选中黑底白字，含 safe-area-inset-bottom）；书籍卡片名后加范围徽章（专属附目标角色名）；空态复刻截图：Globe 图标+「该范围下暂无世界书」+「切换范围筛选，或点 + 新建一个」
+- 新增 primaryScopeOf（书籍主范围归类：专属>局部>全局，混合书按最具体范围归类保证统计不重不漏）、exclusiveNamesOf、fmtTime（当天 HH:MM/跨天 M月D日 HH:MM）、ScopeFilter/WbStats 类型
+- 角色筛选语义=「与该角色聊天时会生效的书」：书内任一启用条目为 global，或 local 且该书挂载到该角色（getBoundBookIds 读 wb-bind:<contactId>，contacts/books 变化时同步刷新 bindings state），或 exclusive 目标=该角色；contactId 失效（联系人已删）自动忽略筛选
+- ②条目行改造：抽 EntryRow 组件+新增 useLongPress hook（pointer 事件 480ms，移动>8px 判滚动取消，didFire 抑制长按后紧随的 click，onContextMenu preventDefault，select-none+[-webkit-touch-callout:none]）；行尾 Trash2 删除图标→MoreHorizontal ⋯按钮（wb-entry-more-{i}），长按与 ⋯ 同开 ActionSheet（编辑条目/删除条目 destructive→ConfirmDialog）；worldbook.tsx 全文件仅此一处交互变化，BookDetailPage onDeleteEntry prop 改 onEntrySheet
+- ③编辑页显式保存：+新建条目不再立即落盘（旧实现 createEntryDraft 直接 persist 导致"未填写就退出也留空条目"）→ pendingDraft state 持草稿，Nav entry 加 isNew；顶栏右上角「保存」按钮（wb-edit-save-top）经 registerSave 回调绑定编辑页内部 save（useEffect 每渲染重绑保证草稿最新）；返回=放弃草稿/丢弃修改（pendingDraft 清空，不调 onSave）；新条目隐藏底部删除按钮；标题「新建条目/编辑条目」；校验失败 toast+行内错误双提示；移除底部「完成」按钮与旧的 valid 死变量、initialOf 死函数
+- E2E 实测（agent-browser，390×844，锁屏上滑→第3页世界书）：
+  ①书库首页结构复刻截图（大标题/角色pill/统计卡/徽章/底部栏）；点统计卡「专属」→列表只剩精灵族谱；底部「全局」→空态（0全局，地球图标文案与截图一致）；角色筛选乐乐→2本（局部已挂载+专属）；机主→1本（魔法世界观含启用中的全局条目，语义正确非 bug；IndexedDB 核实仅 wb-bind:char-lele 存在）
+  ②条目行无删除图标；⋯菜单弹出 iOS ActionSheet（编辑/删除红色）；长按「高优月亮」弹菜单且未误入编辑页（click 抑制生效）；菜单删除→确认弹层→删除成功 toast「已删除条目」列表 7→6
+  ③编辑页：改内容→返回→重进=原文（未保存）；改内容→点右上角保存→回列表→重进+整页 reload 后=新值（已落盘）；新建条目页标题「新建条目」无删除按钮；填写幽灵船→返回→列表仍 6 条（草稿未落盘）；重进填写→右上角保存→幽灵船入列 7 条（createEntryDraft 默认 局部/角色定义之后/启用）；空条目直接保存→toast「至少填写 1 个触发词」拦截
+  ④深色模式（class 策略 .dark）：书库首页/条目列表/开关白钮/徽章/底部筛选栏全部适配；console 无应用错误（dev tools「1 Issue」为此前调试 eval 脚本的 TypeError，非应用代码）
+- 质量：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无运行期错误
+
+Stage Summary:
+- 交付 1 文件：src/components/apps/worldbook.tsx（书库首页分类改版+条目长按/⋯菜单+编辑页右上角显式保存三合一），数据层 lib/ios/worldbook.ts 与三端注入链路零改动（不回归）
+- 交互语义确认：新建条目=显式创建（保存才存在），编辑条目=显式保存（返回即还原）；书籍统计按主范围不重不漏；角色筛选回答"这本书在和谁聊天时会生效"
+- E2E 种子遗留：本会话删除了种子条目「高优月亮」、新增「幽灵船」（禁忌之湖内容改为 V2 测试文本），均在 agent-browser 隔离会话 IndexedDB，不污染用户浏览器

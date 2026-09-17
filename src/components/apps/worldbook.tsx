@@ -4,22 +4,26 @@
  * 世界书 App —— 给 AI 挂载静态设定和世界观（按关键词触发的设定库）。
  *
  * 页面结构（iOS 黑白灰风格：白 / 浅灰 / 深灰，深色模式自动适配）：
- * - 书籍列表页：新建（名字校验：非空 + 禁 emoji）、重命名、删除、导出、导入（.json）
+ * - 书库首页：大标题 + 统计卡（全局/局部/专属 三列可点按范围筛选 + 已启用计数）+ 底部范围
+ *   筛选栏；右上角角色筛选（查看与某角色聊天时会生效的书：全局 + 已挂载局部 + 专属该角色）；
+ *   书籍管理：新建（名字校验：非空 + 禁 emoji）、重命名、删除、导出、导入（.json）
  * - 书籍详情页：条目卡片列表，每条带启用开关（iOS 风格单色 Switch）、触发词预览、
- *   插入位置/生效范围徽章；点卡片进入条目编辑
+ *   插入位置/生效范围徽章；点卡片进入编辑，长按条目或点右侧 ⋯ 弹出操作菜单（编辑/删除）
  * - 条目编辑页：开关 / 名字（仅本地显示）/ 触发词 / 内容 / 插入位置（6 选 1）/
  *   生效范围（全局·局部·专属，专属需指定联系人）/ 优先级（同位置多条命中时数字大的排前）/
- *   忽略大小写
+ *   忽略大小写；右上角「保存」才写入，返回不保存，新建条目保存前不落盘
  *
  * 数据与触发逻辑在 @/lib/ios/worldbook（kv 存储 + 注入引擎）；聊天侧挂载入口在
  * 微信/QQ/信息的聊天设置 →「世界书」。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   BookMarked,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Globe,
   MoreHorizontal,
   Plus,
   Trash2,
@@ -36,6 +40,7 @@ import {
   WB_SCOPE_LABELS,
   buildExportPayload,
   createEntryDraft,
+  getBoundBookIds,
   loadBooks,
   newWbId,
   parseKeywordsInput,
@@ -257,17 +262,81 @@ function kindLabel(kind: string | null | undefined): string {
   return 'AI 角色';
 }
 
-function initialOf(name: string): string {
-  return name.trim().slice(0, 1) || '?';
-}
-
 function safeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, '_');
 }
 
+function fmtTime(ts: number): string {
+  const d = new Date(ts);
+  const hh = `${d.getHours()}`.padStart(2, '0');
+  const mm = `${d.getMinutes()}`.padStart(2, '0');
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+}
+
+/** 书籍主范围归类：专属 > 局部 > 全局（混合范围的书按最具体范围归类，保证统计不重不漏） */
+function primaryScopeOf(book: WorldBook): WbScope {
+  if (book.entries.some((e) => e.scope === 'exclusive')) return 'exclusive';
+  if (book.entries.some((e) => e.scope === 'local')) return 'local';
+  return 'global';
+}
+
+/** 专属条目目标角色名字列表（去重，用于书籍徽章展示） */
+function exclusiveNamesOf(book: WorldBook, contacts: ContactRecord[]): string[] {
+  const ids = [
+    ...new Set(book.entries.filter((e) => e.scope === 'exclusive' && e.targetContactId).map((e) => e.targetContactId as string)),
+  ];
+  return ids.map((id) => contacts.find((c) => c.id === id)?.name ?? '已删除角色');
+}
+
+type ScopeFilter = 'all' | WbScope;
+
+interface WbStats {
+  global: number;
+  local: number;
+  exclusive: number;
+  enabled: number;
+}
+
+/** 长按手势（指针事件实现；移动超过阈值视为滚动，取消触发） */
+function useLongPress(onLongPress: () => void, ms = 480) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fired = useRef(false);
+  const startPoint = useRef<{ x: number; y: number } | null>(null);
+  const clear = () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  return {
+    onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
+      fired.current = false;
+      startPoint.current = { x: e.clientX, y: e.clientY };
+      clear();
+      timer.current = setTimeout(() => {
+        fired.current = true;
+        onLongPress();
+      }, ms);
+    },
+    onPointerMove: (e: ReactPointerEvent<HTMLButtonElement>) => {
+      const s = startPoint.current;
+      if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 8) clear();
+    },
+    onPointerUp: clear,
+    onPointerLeave: clear,
+    onPointerCancel: clear,
+    didFire: () => fired.current,
+  };
+}
+
 // ---------------- 页面组件 ----------------
 
-type Nav = { name: 'list' } | { name: 'book'; bookId: string } | { name: 'entry'; bookId: string; entryId: string };
+type Nav =
+  | { name: 'list' }
+  | { name: 'book'; bookId: string }
+  | { name: 'entry'; bookId: string; entryId: string; isNew?: boolean };
 
 /** 世界书 App 主组件 */
 export default function WorldBookApp() {
@@ -280,6 +349,13 @@ export default function WorldBookApp() {
   const [toast, showToast] = useLocalToast();
   const importRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [pendingDraft, setPendingDraft] = useState<WbEntry | null>(null); // 新建条目的未保存草稿（保存才落盘，返回即放弃）
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
+  const [charFilterId, setCharFilterId] = useState<string | null>(null);
+  const [charSheet, setCharSheet] = useState(false);
+  const [sheetEntryId, setSheetEntryId] = useState<string | null>(null);
+  const [bindings, setBindings] = useState<Record<string, string[]>>({});
+  const editorSaveRef = useRef<(() => void) | null>(null);
 
   // 开机门控保证 kv 已注水：挂载时同步读一次即可（书籍只在本 App 内修改）
   useEffect(() => {
@@ -289,6 +365,13 @@ export default function WorldBookApp() {
       .catch(() => undefined);
   }, []);
 
+  // 角色筛选需要挂载关系：联系人与书籍变化时同步读一次 kv（内存读，开销可忽略）
+  useEffect(() => {
+    const map: Record<string, string[]> = {};
+    for (const c of contacts) map[c.id] = getBoundBookIds(c.id);
+    setBindings(map);
+  }, [contacts, books]);
+
   const persist = (next: WorldBook[]) => {
     setBooks(next);
     saveBooks(next);
@@ -296,6 +379,34 @@ export default function WorldBookApp() {
 
   const bookNameOf = (id: string) => contacts.find((c) => c.id === id)?.name ?? '';
   const contactNameOf = (id: string | null | undefined) => (id ? bookNameOf(id) : '');
+
+  const stats: WbStats = {
+    global: books.filter((b) => primaryScopeOf(b) === 'global').length,
+    local: books.filter((b) => primaryScopeOf(b) === 'local').length,
+    exclusive: books.filter((b) => primaryScopeOf(b) === 'exclusive').length,
+    enabled: books.filter((b) => b.entries.some((e) => e.enabled)).length,
+  };
+
+  const activeCharFilter = charFilterId && contacts.some((c) => c.id === charFilterId) ? charFilterId : null;
+  const charFilterName = activeCharFilter ? contacts.find((c) => c.id === activeCharFilter)?.name ?? '' : '';
+
+  // 角色筛选语义：与该角色聊天时会生效的书（启用中的 global + 已挂载到该角色的 local + 专属该角色）
+  const filteredBooks = books.filter((b) => {
+    if (scopeFilter !== 'all' && primaryScopeOf(b) !== scopeFilter) return false;
+    if (activeCharFilter) {
+      const bound = bindings[activeCharFilter] ?? [];
+      const effective = b.entries.some((e) => {
+        if (!e.enabled) return false;
+        if (e.scope === 'global') return true;
+        if (e.scope === 'local') return bound.includes(b.id);
+        return e.targetContactId === activeCharFilter;
+      });
+      if (!effective) return false;
+    }
+    return true;
+  });
+
+  const lastUpdateText = books.length === 0 ? '—' : fmtTime(Math.max(...books.map((b) => b.updatedAt)));
 
   const createBook = (name: string) => {
     const trimmed = name.trim();
@@ -354,6 +465,8 @@ export default function WorldBookApp() {
   };
 
   const sheetBook = sheetBookId ? books.find((b) => b.id === sheetBookId) : null;
+  const sheetEntryBook = nav.name === 'book' ? books.find((b) => b.id === nav.bookId) : null;
+  const sheetEntry = sheetEntryBook && sheetEntryId ? sheetEntryBook.entries.find((e) => e.id === sheetEntryId) ?? null : null;
 
   return (
     <div className={`absolute inset-0 flex h-full w-full flex-col ${PAGE_CLS}`}>
@@ -365,7 +478,14 @@ export default function WorldBookApp() {
               type="button"
               aria-label="返回"
               data-testid="wb-back"
-              onClick={() => setNav(nav.name === 'entry' ? { name: 'book', bookId: nav.bookId } : { name: 'list' })}
+              onClick={() => {
+                if (nav.name === 'entry') {
+                  if (nav.isNew) setPendingDraft(null); // 新建未保存：返回即放弃草稿
+                  setNav({ name: 'book', bookId: nav.bookId });
+                } else {
+                  setNav({ name: 'list' });
+                }
+              }}
               className="flex items-center rounded-full px-1 active:opacity-50"
             >
               <ChevronLeft className="h-7 w-7" strokeWidth={2.2} />
@@ -374,7 +494,13 @@ export default function WorldBookApp() {
             <BackToHome className="static!" />
           )}
           <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">
-            {nav.name === 'list' ? '世界书' : nav.name === 'book' ? books.find((b) => b.id === nav.bookId)?.name ?? '' : '编辑条目'}
+            {nav.name === 'book'
+              ? books.find((b) => b.id === nav.bookId)?.name ?? ''
+              : nav.name === 'entry'
+                ? nav.isNew
+                  ? '新建条目'
+                  : '编辑条目'
+                : ''}
           </div>
           <div className="ml-auto flex items-center gap-1 pr-1">
             {nav.name === 'list' && (
@@ -408,8 +534,8 @@ export default function WorldBookApp() {
                   data-testid="wb-add-entry"
                   onClick={() => {
                     const draft = createEntryDraft();
-                    persist(books.map((b) => (b.id === nav.bookId ? { ...b, entries: [...b.entries, draft], updatedAt: Date.now() } : b)));
-                    setNav({ name: 'entry', bookId: nav.bookId, entryId: draft.id });
+                    setPendingDraft(draft); // 草稿不落盘，点右上角「保存」才创建
+                    setNav({ name: 'entry', bookId: nav.bookId, entryId: draft.id, isNew: true });
                   }}
                   className="grid h-9 w-9 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
                 >
@@ -426,6 +552,16 @@ export default function WorldBookApp() {
                 </button>
               </>
             )}
+            {nav.name === 'entry' && (
+              <button
+                type="button"
+                data-testid="wb-edit-save-top"
+                onClick={() => editorSaveRef.current?.()}
+                className="rounded-full px-2.5 py-1.5 text-[16px] font-semibold active:opacity-50"
+              >
+                保存
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -433,7 +569,19 @@ export default function WorldBookApp() {
       {/* 内容区 */}
       <div className="flex-1 overflow-y-auto px-4 pb-10 pt-2">
         {nav.name === 'list' && (
-          <BookListPage books={books} onOpen={(id) => setNav({ name: 'book', bookId: id })} onSheet={setSheetBookId} />
+          <BookListPage
+            books={filteredBooks}
+            totalCount={books.length}
+            stats={stats}
+            lastUpdateText={lastUpdateText}
+            scopeFilter={scopeFilter}
+            onScopeTab={(s) => setScopeFilter((prev) => (prev === s ? 'all' : s))}
+            charFilterName={charFilterName}
+            onOpenCharSheet={() => setCharSheet(true)}
+            contacts={contacts}
+            onOpen={(id) => setNav({ name: 'book', bookId: id })}
+            onSheet={setSheetBookId}
+          />
         )}
         {nav.name === 'book' && (() => {
           const book = books.find((b) => b.id === nav.bookId);
@@ -452,34 +600,33 @@ export default function WorldBookApp() {
                 )
               }
               onOpenEntry={(entryId) => setNav({ name: 'entry', bookId: book.id, entryId })}
-              onDeleteEntry={(entryId) => {
-                const entry = book.entries.find((e) => e.id === entryId);
-                setConfirm({
-                  title: '删除条目',
-                  message: `「${entry?.name || '未命名条目'}」删除后不可恢复。`,
-                  confirmText: '删除',
-                  destructive: true,
-                  action: () => {
-                    persist(books.map((b) => (b.id === book.id ? { ...b, entries: b.entries.filter((e) => e.id !== entryId), updatedAt: Date.now() } : b)));
-                    showToast('已删除条目');
-                  },
-                });
-              }}
+              onEntrySheet={(entryId) => setSheetEntryId(entryId)}
             />
           );
         })()}
         {nav.name === 'entry' && (() => {
           const book = books.find((b) => b.id === nav.bookId);
-          const entry = book?.entries.find((e) => e.id === nav.entryId);
-          if (!book || !entry) return <EmptyHint text="该条目不存在或已被删除" />;
+          const entry = nav.isNew ? pendingDraft : book?.entries.find((e) => e.id === nav.entryId);
+          if (!book || !entry) return <EmptyHint text="该条目不存在或已被放弃" />;
           return (
             <EntryEditorPage
               key={entry.id}
               entry={entry}
+              isNew={nav.isNew === true}
               contacts={contacts}
+              registerSave={(fn) => {
+                editorSaveRef.current = fn;
+              }}
+              showToast={showToast}
               onSave={(next) => {
-                persist(books.map((b) => (b.id === book.id ? { ...b, updatedAt: Date.now(), entries: b.entries.map((e) => (e.id === entry.id ? next : e)) } : b)));
-                showToast('已保存');
+                if (nav.isNew) {
+                  persist(books.map((b) => (b.id === book.id ? { ...b, updatedAt: Date.now(), entries: [...b.entries, next] } : b)));
+                  setPendingDraft(null);
+                  showToast('已创建条目');
+                } else {
+                  persist(books.map((b) => (b.id === book.id ? { ...b, updatedAt: Date.now(), entries: b.entries.map((e) => (e.id === entry.id ? next : e)) } : b)));
+                  showToast('已保存');
+                }
                 setNav({ name: 'book', bookId: book.id });
               }}
               onDelete={() => {
@@ -499,6 +646,35 @@ export default function WorldBookApp() {
           );
         })()}
       </div>
+
+      {/* 底部范围筛选栏（书库首页） */}
+      {nav.name === 'list' && (
+        <div className="shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-1" data-testid="wb-scope-bar">
+          <div className="flex gap-2">
+            {([
+              ['all', '全部'],
+              ['global', WB_SCOPE_LABELS.global],
+              ['local', WB_SCOPE_LABELS.local],
+              ['exclusive', WB_SCOPE_LABELS.exclusive],
+            ] as const).map(([s, label]) => (
+              <button
+                key={s}
+                type="button"
+                data-testid={`wb-filter-${s}`}
+                aria-pressed={scopeFilter === s}
+                onClick={() => setScopeFilter(s)}
+                className={`h-10 flex-1 rounded-[12px] text-[14.5px] font-medium transition-colors ${
+                  scopeFilter === s
+                    ? 'bg-black text-white dark:bg-white dark:text-black'
+                    : 'bg-black/[0.05] text-black/60 active:bg-black/[0.1] dark:bg-white/[0.09] dark:text-white/60 dark:active:bg-white/[0.15]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 浮层 */}
       {nameDialog?.mode === 'create' && <NameDialog title="新建世界书" initial="" confirmText="创建" onConfirm={createBook} onClose={() => setNameDialog(null)} />}
@@ -543,6 +719,56 @@ export default function WorldBookApp() {
           ]}
         />
       )}
+      {sheetEntry && (
+        <ActionSheet
+          title={sheetEntry.name || '未命名条目'}
+          onClose={() => setSheetEntryId(null)}
+          actions={[
+            {
+              label: '编辑条目',
+              onSelect: () => {
+                if (!sheetEntryBook) return;
+                setNav({ name: 'entry', bookId: sheetEntryBook.id, entryId: sheetEntry.id });
+              },
+            },
+            {
+              label: '删除条目',
+              destructive: true,
+              onSelect: () => {
+                const targetBook = sheetEntryBook;
+                if (!targetBook) return;
+                setConfirm({
+                  title: '删除条目',
+                  message: `「${sheetEntry.name || '未命名条目'}」删除后不可恢复。`,
+                  confirmText: '删除',
+                  destructive: true,
+                  action: () => {
+                    persist(
+                      books.map((b) =>
+                        b.id === targetBook.id ? { ...b, entries: b.entries.filter((e) => e.id !== sheetEntry.id), updatedAt: Date.now() } : b,
+                      ),
+                    );
+                    showToast('已删除条目');
+                  },
+                });
+              },
+            },
+          ]}
+        />
+      )}
+      {charSheet && (
+        <ActionSheet
+          title="按角色查看会生效的世界书"
+          onClose={() => setCharSheet(false)}
+          actions={[
+            { label: '全部角色', onSelect: () => setCharFilterId(null) },
+            ...contacts.map((c) => ({
+              label: `${c.name}（${kindLabel(c.kind)}）`,
+              onSelect: () => setCharFilterId(c.id),
+            })),
+          ]}
+        />
+      )}
       <input
         ref={importRef}
         type="file"
@@ -570,25 +796,95 @@ function EmptyHint({ text }: { text: string }) {
   );
 }
 
-/** 书籍列表页 */
+/** 书库首页：大标题 + 角色筛选 + 统计卡（可点筛选）+ 书籍卡片列表 + 空态 */
 function BookListPage({
   books,
+  totalCount,
+  stats,
+  lastUpdateText,
+  scopeFilter,
+  onScopeTab,
+  charFilterName,
+  onOpenCharSheet,
+  contacts,
   onOpen,
   onSheet,
 }: {
-  books: WorldBook[];
+  books: WorldBook[]; // 已按范围/角色过滤后的书籍
+  totalCount: number;
+  stats: WbStats;
+  lastUpdateText: string;
+  scopeFilter: ScopeFilter;
+  onScopeTab: (scope: WbScope) => void;
+  charFilterName: string;
+  onOpenCharSheet: () => void;
+  contacts: ContactRecord[];
   onOpen: (bookId: string) => void;
   onSheet: (bookId: string) => void;
 }) {
   return (
     <>
-      <p className={CAPTION_CLS}>按关键词触发的设定库：聊天消息命中条目触发词时，该条目的设定文本会注入发给 AI 的提示词；未命中不发送。</p>
-      {books.length === 0 ? (
+      <div className="flex items-center justify-between gap-2 px-1 pt-1">
+        <h1 className="text-[26px] font-bold leading-tight tracking-tight">我的世界书库</h1>
+        <button
+          type="button"
+          data-testid="wb-char-filter"
+          onClick={onOpenCharSheet}
+          className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-black/[0.05] px-3.5 text-[13.5px] active:bg-black/[0.1] dark:bg-white/[0.1] dark:active:bg-white/[0.16]"
+        >
+          {charFilterName || '全部角色'}
+          <ChevronDown className="h-4 w-4 opacity-50" strokeWidth={2.2} aria-hidden="true" />
+        </button>
+      </div>
+      <p className={`px-1 pt-1 text-[13px] ${SUB_CLS}`} data-testid="wb-library-sub">
+        共 {totalCount} 个世界书 · 最后更新 {lastUpdateText}
+      </p>
+
+      {/* 统计卡：全局/局部/专属 三列可点（再点一次取消筛选），已启用为计数展示 */}
+      <div className={`${CARD_CLS} mt-3 flex items-stretch`}>
+        {(['global', 'local', 'exclusive'] as const).map((s, i) => (
+          <button
+            key={s}
+            type="button"
+            data-testid={`wb-scope-tab-${s}`}
+            aria-pressed={scopeFilter === s}
+            onClick={() => onScopeTab(s)}
+            className={`relative flex-1 py-3 text-center ${
+              i > 0 ? `border-l ${DIVIDER_CLS}` : ''
+            } ${scopeFilter === s ? 'bg-black/[0.04] dark:bg-white/[0.06]' : 'active:bg-black/[0.03] dark:active:bg-white/[0.04]'}`}
+          >
+            <span className="block text-[19px] font-bold leading-none tabular-nums">{stats[s]}</span>
+            <span className={`mt-1.5 block text-[12px] ${scopeFilter === s ? '' : SUB_CLS}`}>{WB_SCOPE_LABELS[s]}</span>
+            {scopeFilter === s && (
+              <span aria-hidden="true" className="absolute inset-x-7 bottom-0 h-[2.5px] rounded-t-full bg-black dark:bg-white" />
+            )}
+          </button>
+        ))}
+        <div className={`flex-1 border-l py-3 text-center ${DIVIDER_CLS}`}>
+          <span className="block text-[19px] font-bold leading-none tabular-nums" data-testid="wb-stat-enabled">
+            {stats.enabled}
+          </span>
+          <span className={`mt-1.5 block text-[12px] ${SUB_CLS}`}>已启用</span>
+        </div>
+      </div>
+      {charFilterName && (
+        <p className={CAPTION_CLS}>正在查看与「{charFilterName}」聊天时会生效的世界书：全局 + 已挂载到该角色的局部 + 专属该角色。</p>
+      )}
+
+      {totalCount === 0 ? (
         <EmptyHint text="还没有世界书，点右上角 + 新建" />
+      ) : books.length === 0 ? (
+        <div className="grid place-items-center pt-16 text-center">
+          <Globe className="h-12 w-12 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+          <p className="mt-3 text-[15px] font-medium text-black/35 dark:text-white/35">该范围下暂无世界书</p>
+          <p className={`mt-1.5 text-[13px] ${SUB_CLS}`}>切换范围筛选，或点 + 新建一个</p>
+        </div>
       ) : (
-        <div className={`${CARD_CLS} mt-2`}>
+        <div className={`${CARD_CLS} mt-3`}>
           {books.map((book, i) => {
             const enabled = book.entries.filter((e) => e.enabled).length;
+            const scope = primaryScopeOf(book);
+            const exNames = scope === 'exclusive' ? exclusiveNamesOf(book, contacts).join('、') : '';
             return (
               <div key={book.id} className={i > 0 ? `border-t ${DIVIDER_CLS}` : ''}>
                 <div className="flex items-center">
@@ -602,7 +898,13 @@ function BookListPage({
                       <BookMarked className="h-5 w-5 text-black/60 dark:text-white/60" strokeWidth={1.8} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[16px]">{book.name}</span>
+                      <span className="block truncate text-[16px]">
+                        {book.name}
+                        <span className="ml-1.5 inline-block rounded-[4px] bg-black/[0.05] px-1.5 py-0.5 align-middle text-[10.5px] leading-none text-black/55 dark:bg-white/[0.09] dark:text-white/55">
+                          {WB_SCOPE_LABELS[scope]}
+                          {exNames ? ` · ${exNames}` : ''}
+                        </span>
+                      </span>
                       <span className={`mt-0.5 block truncate text-[12.5px] ${SUB_CLS}`}>
                         {book.entries.length} 条目 · {enabled} 启用 · {fmtDate(book.updatedAt)}
                       </span>
@@ -643,52 +945,93 @@ function EntryBadges({ entry, contactName }: { entry: WbEntry; contactName: stri
   );
 }
 
-/** 书籍详情页（条目列表） */
+/** 单条条目行（点=编辑；长按或 ⋯=操作菜单，行尾不再放删除图标） */
+function EntryRow({
+  entry,
+  index,
+  contactName,
+  onToggle,
+  onOpen,
+  onSheet,
+}: {
+  entry: WbEntry;
+  index: number;
+  contactName: string;
+  onToggle: (v: boolean) => void;
+  onOpen: () => void;
+  onSheet: () => void;
+}) {
+  const lp = useLongPress(onSheet);
+  return (
+    <div className={index > 0 ? `border-t ${DIVIDER_CLS}` : ''}>
+      <div className="flex items-center gap-2 pr-2">
+        <button
+          type="button"
+          data-testid={`wb-entry-${index}`}
+          onClick={() => {
+            if (!lp.didFire()) onOpen(); // 长按已触发菜单时抑制紧随的 click
+          }}
+          onPointerDown={lp.onPointerDown}
+          onPointerMove={lp.onPointerMove}
+          onPointerUp={lp.onPointerUp}
+          onPointerLeave={lp.onPointerLeave}
+          onPointerCancel={lp.onPointerCancel}
+          onContextMenu={(e) => e.preventDefault()}
+          className="min-w-0 flex-1 select-none px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] [-webkit-touch-callout:none]"
+        >
+          <span className={`block truncate text-[15.5px] ${entry.enabled ? '' : SUB_CLS}`}>{entry.name || '未命名条目'}</span>
+          <span className={`mt-0.5 block truncate text-[12.5px] ${SUB_CLS}`}>触发词：{entry.keywords.join('、')}</span>
+          <EntryBadges entry={entry} contactName={contactName} />
+        </button>
+        <MonoToggle on={entry.enabled} onChange={onToggle} label={`启用${entry.name || '未命名条目'}`} testId={`wb-entry-toggle-${index}`} />
+        <button
+          type="button"
+          aria-label={`${entry.name || '未命名条目'} 更多操作`}
+          data-testid={`wb-entry-more-${index}`}
+          onClick={onSheet}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
+        >
+          <MoreHorizontal className="h-5 w-5 text-black/35 dark:text-white/35" strokeWidth={2} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 书籍详情页（条目列表）：点条目编辑，长按 / ⋯ 打开操作菜单（编辑/删除） */
 function BookDetailPage({
   book,
   contacts,
   onToggleEntry,
   onOpenEntry,
-  onDeleteEntry,
+  onEntrySheet,
 }: {
   book: WorldBook;
   contacts: ContactRecord[];
   onToggleEntry: (entryId: string, v: boolean) => void;
   onOpenEntry: (entryId: string) => void;
-  onDeleteEntry: (entryId: string) => void;
+  onEntrySheet: (entryId: string) => void;
 }) {
   const contactNameOf = (id: string | null | undefined) => (id ? contacts.find((c) => c.id === id)?.name ?? '已删除角色' : '');
   return (
     <>
       <p className={CAPTION_CLS}>
-        {book.entries.length > 0 ? '点条目编辑；开关关闭后该条目永不发送。' : '还没有条目，点右上角 + 新建第一条设定。'}
+        {book.entries.length > 0
+          ? '点条目编辑；长按条目或点右侧 ⋯ 可删除；开关关闭后该条目永不发送。'
+          : '还没有条目，点右上角 + 新建第一条设定。'}
       </p>
       {book.entries.length > 0 && (
         <div className={`${CARD_CLS} mt-2`}>
           {book.entries.map((entry, i) => (
-            <div key={entry.id} className={i > 0 ? `border-t ${DIVIDER_CLS}` : ''}>
-              <div className="flex items-center gap-2 pr-2">
-                <button
-                  type="button"
-                  data-testid={`wb-entry-${i}`}
-                  onClick={() => onOpenEntry(entry.id)}
-                  className="min-w-0 flex-1 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
-                >
-                  <span className={`block truncate text-[15.5px] ${entry.enabled ? '' : SUB_CLS}`}>{entry.name || '未命名条目'}</span>
-                  <span className={`mt-0.5 block truncate text-[12.5px] ${SUB_CLS}`}>触发词：{entry.keywords.join('、')}</span>
-                  <EntryBadges entry={entry} contactName={contactNameOf(entry.targetContactId)} />
-                </button>
-                <MonoToggle on={entry.enabled} onChange={(v) => onToggleEntry(entry.id, v)} label={`启用${entry.name || '未命名条目'}`} testId={`wb-entry-toggle-${i}`} />
-                <button
-                  type="button"
-                  aria-label={`删除${entry.name || '未命名条目'}`}
-                  onClick={() => onDeleteEntry(entry.id)}
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
-                >
-                  <Trash2 className={`h-[18px] w-[18px] ${DESTRUCTIVE_CLS}`} strokeWidth={1.8} aria-hidden="true" />
-                </button>
-              </div>
-            </div>
+            <EntryRow
+              key={entry.id}
+              entry={entry}
+              index={i}
+              contactName={contactNameOf(entry.targetContactId)}
+              onToggle={(v) => onToggleEntry(entry.id, v)}
+              onOpen={() => onOpenEntry(entry.id)}
+              onSheet={() => onEntrySheet(entry.id)}
+            />
           ))}
         </div>
       )}
@@ -744,15 +1087,23 @@ const SCOPE_NOTES: Record<WbScope, string> = {
   exclusive: '仅对下方指定的那个角色生效（无需挂载）',
 };
 
-/** 条目编辑页（本地草稿，点「完成」才落盘） */
+/** 条目编辑页（本地草稿，点右上角「保存」才落盘；新建条目在保存前不落盘，返回即放弃） */
 function EntryEditorPage({
   entry,
+  isNew,
   contacts,
+  registerSave,
+  showToast,
   onSave,
   onDelete,
 }: {
   entry: WbEntry;
+  /** 新建未保存的条目：不渲染删除按钮，保存时才写入书籍 */
+  isNew?: boolean;
   contacts: ContactRecord[];
+  /** 把内部 save 暴露给顶栏（右上角「保存」按钮） */
+  registerSave?: (fn: (() => void) | null) => void;
+  showToast?: (msg: string) => void;
   onSave: (next: WbEntry) => void;
   onDelete: () => void;
 }) {
@@ -761,12 +1112,11 @@ function EntryEditorPage({
   const [error, setError] = useState('');
   const keywords = useMemo(() => parseKeywordsInput(keywordsInput), [keywordsInput]);
 
-  const valid = wbEntryCheck({ keywords, content: draft.content });
-
   const save = () => {
     const check = wbEntryCheck({ keywords, content: draft.content });
     if (!check.ok) {
       setError(check.reason);
+      showToast?.(check.reason);
       return;
     }
     onSave({
@@ -777,9 +1127,15 @@ function EntryEditorPage({
     });
   };
 
+  // 草稿状态在本组件内：每次渲染把最新 save 暴露给顶栏右上角「保存」按钮
+  useEffect(() => {
+    registerSave?.(save);
+    return () => registerSave?.(null);
+  });
+
   return (
     <div className="pb-2">
-      {/* 开关 + 完成由顶栏？顶栏右上是加号——完成按钮放底部主按钮 */}
+      {/* 开关 + 条目名字 */}
       <div className={`${CARD_CLS}`}>
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-[15.5px]">启用条目</span>
@@ -954,27 +1310,23 @@ function EntryEditorPage({
 
       {error && <p className={`px-1 pt-2.5 text-[12.5px] ${DESTRUCTIVE_CLS}`}>{error}</p>}
 
-      {/* 保存 / 删除 */}
-      <div className="mt-5 flex flex-col gap-2.5">
-        <button
-          type="button"
-          data-testid="wb-edit-save"
-          onClick={save}
-          className="h-11 rounded-[12px] bg-black text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
-        >
-          完成
-        </button>
-        <button
-          type="button"
-          data-testid="wb-edit-delete"
-          onClick={onDelete}
-          className={`flex h-11 items-center justify-center gap-1.5 rounded-[12px] bg-white text-[15.5px] active:bg-black/[0.04] dark:bg-[#1C1C1E] dark:active:bg-white/[0.08] ${DESTRUCTIVE_CLS}`}
-        >
-          <Trash2 className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
-          删除条目
-        </button>
-      </div>
-      <p className={`pt-2 text-center text-[12px] ${SUB_CLS}`}>返回不保存修改，点「完成」才会保存</p>
+      {/* 删除（仅已保存的条目；保存按钮在顶栏右上角） */}
+      {!isNew && (
+        <div className="mt-5">
+          <button
+            type="button"
+            data-testid="wb-edit-delete"
+            onClick={onDelete}
+            className={`flex h-11 w-full items-center justify-center gap-1.5 rounded-[12px] bg-white text-[15.5px] active:bg-black/[0.04] dark:bg-[#1C1C1E] dark:active:bg-white/[0.08] ${DESTRUCTIVE_CLS}`}
+          >
+            <Trash2 className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+            删除条目
+          </button>
+        </div>
+      )}
+      <p className={`pt-2 text-center text-[12px] ${SUB_CLS}`}>
+        {isNew ? '点右上角「保存」创建条目；返回则放弃' : '点右上角「保存」才会生效；返回不保存修改'}
+      </p>
     </div>
   );
 }
