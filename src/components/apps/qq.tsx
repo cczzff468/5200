@@ -198,6 +198,16 @@ import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteM
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
+import { QqGroupChatPage, QqGroupCreatePage, QqGroupInfoPage, QqGroupAvatar, qqGroupRowId } from './qq-group';
+import {
+  dissolveGroup as dissolveGroupRecord,
+  effectiveInterop,
+  getGroup,
+  groupPreview,
+  listGroups as listChatGroups,
+  updateGroup as updateGroupRecord,
+  type ChatGroup,
+} from '@/lib/ios/groups';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -2273,7 +2283,12 @@ function ChatPage({
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => (m.kind === 'image' ? '[图片]' : m.content))]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
-    const memoryBlock = memRecallBlock(peer.id, 'qq', memContext);
+    // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按「群开关 + 按成员覆盖」判断可见性
+    //（effectiveInterop 把按角色设置的覆盖也接进来；用户和角色 A 的私聊记忆默认不对角色 B 开放——
+    //  存储键即隔离边界，这里只影响该角色自己的召回范围）
+    const memoryBlock = memRecallBlock(peer.id, 'qq', memContext, {
+      interopOn: (groupId: string) => effectiveInterop(groupId, peer.id),
+    });
     // QQ动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看 QQ 平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
     const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer });
@@ -5740,6 +5755,7 @@ function MessagesPage({
   me,
   contacts,
   onOpenChat,
+  onOpenGroup,
   onOpenDrawer,
   onAvatar,
   onAddFriend,
@@ -5748,6 +5764,8 @@ function MessagesPage({
   me: QQUser;
   contacts: ContactRecord[];
   onOpenChat: (c: ContactRecord) => void;
+  /** 打开某个 QQ 群聊（群会话行） */
+  onOpenGroup: (g: ChatGroup) => void;
   onOpenDrawer: () => void;
   onAvatar: () => void;
   onAddFriend: () => void;
@@ -5766,7 +5784,7 @@ function MessagesPage({
   // 全局流式回复落盘 tick：聊天页外收到的 AI 回复写入存储后刷新会话预览/排序
   useChatStreamFinalized('qq:', () => setMsgTick((t) => t + 1));
   // 长按菜单（微信同款横向单行条：置顶/标为未读/删除 + 指向箭头；浅色白底黑字/深色深底白字；位置在长按触发时计算好，render 不读 ref）
-  const [ctx, setCtx] = useState<null | { contact: ContactRecord; x: number; y: number; arrow: 'down' | 'up'; arrowX: number }>(null);
+  const [ctx, setCtx] = useState<null | { row: SessionRow; x: number; y: number; arrow: 'down' | 'up'; arrowX: number }>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const pressRef = useRef<{ timer: number | null; x: number; y: number }>({ timer: null, x: 0, y: 0 });
   const suppressClickRef = useRef(false);
@@ -5793,38 +5811,56 @@ function MessagesPage({
     () => new Set(Object.keys(flagsMap).filter((id) => flagsMap[id]?.pinned === true)),
     [flagsMap]
   );
+  /** 会话行：私聊（contact）或群聊（group）；群会话按 group:<gid> 键共用置顶/免打扰/未读设施 */
+  interface SessionRow {
+    key: string;
+    name: string;
+    contact: ContactRecord | null;
+    group: ChatGroup | null;
+    text: string;
+    time: number;
+  }
+  // QQ 群聊（与私聊同列表展示但各自独立会话；tab 切换重挂载时现场读取即最新）
+  const chatGroups = useMemo(() => listChatGroups('qq'), []);
   /** 全量会话（未套搜索过滤）：幽灵未读清理必须以全量列表为准，否则搜索时会把列表外会话的未读误删 */
-  const baseConversations = useMemo(() => {
-    const list = contacts.filter(
-      (c) => ((isFriendIn(c, 'qq') && c.kind !== 'user') || c.id === me.id) && !(hiddenSet.has(c.id) && loadMsgs(c.id).length === 0)
-    );
-    const withPreview = list.map((c) => {
-      const msgs = loadMsgs(c.id);
-      // 通知行（领取/接收）不作为会话预览，回退到最后一条实质消息
-      const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
-      return { contact: c, text: msgPreview(last), time: last?.time ?? 0 };
-    });
-    withPreview.sort((a, b) => {
-      const pa = pinSet.has(a.contact.id) ? 0 : 1;
-      const pb = pinSet.has(b.contact.id) ? 0 : 1;
+  const baseConversations = useMemo<SessionRow[]>(() => {
+    const rows: SessionRow[] = contacts
+      .filter(
+        (c) => ((isFriendIn(c, 'qq') && c.kind !== 'user') || c.id === me.id) && !(hiddenSet.has(c.id) && loadMsgs(c.id).length === 0)
+      )
+      .map((c) => {
+        const msgs = loadMsgs(c.id);
+        // 通知行（领取/接收）不作为会话预览，回退到最后一条实质消息
+        const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
+        return { key: c.id, name: c.name, contact: c, group: null, text: msgPreview(last), time: last?.time ?? 0 };
+      });
+    // 群会话行（群聊与私聊是两类会话，各自独立显示；隐藏后不再出现，可从联系人 › 群聊 再进）
+    for (const g of chatGroups) {
+      if (hiddenSet.has(qqGroupRowId(g.id))) continue;
+      const p = groupPreview(g.id);
+      rows.push({ key: qqGroupRowId(g.id), name: g.name, contact: null, group: g, text: p.text, time: p.time });
+    }
+    rows.sort((a, b) => {
+      const pa = pinSet.has(a.key) ? 0 : 1;
+      const pb = pinSet.has(b.key) ? 0 : 1;
       if (pa !== pb) return pa - pb;
       if (a.time !== b.time) return b.time - a.time;
-      return a.contact.name.localeCompare(b.contact.name, 'zh-Hans-CN');
+      return a.name.localeCompare(b.name, 'zh-Hans-CN');
     });
-    return withPreview;
-  }, [contacts, me.id, hiddenSet, pinSet, msgTick]);
+    return rows;
+  }, [contacts, me.id, hiddenSet, pinSet, msgTick, chatGroups]);
   const conversations = useMemo(() => {
     const kw = q.trim().toLowerCase();
     if (!kw) return baseConversations;
     return baseConversations.filter(
-      (x) => x.contact.name.toLowerCase().includes(kw) || (x.contact.qqId ?? '').includes(kw) || x.text.toLowerCase().includes(kw)
+      (x) => x.name.toLowerCase().includes(kw) || (x.contact?.qqId ?? '').includes(kw) || x.text.toLowerCase().includes(kw)
     );
   }, [baseConversations, q]);
 
   /** 幽灵未读清理：只保留当前会话列表里的未读（已删除会话/已删联系人的残留计数没有行可清，
    *  会让底部 tab 与主屏图标角标卡死；prune 无变化时不写入，可安全随 baseConversations 重算触发） */
   useEffect(() => {
-    qqUnreads.prune(baseConversations.map((c) => c.contact.id));
+    qqUnreads.prune(baseConversations.map((row) => row.key));
   }, [baseConversations]);
 
   // 长按检测：按住 480ms 弹出会话操作菜单；移动超 12px 视为滚动取消
@@ -5834,7 +5870,7 @@ function MessagesPage({
       pressRef.current.timer = null;
     }
   };
-  const onSessionPointerDown = (e: React.PointerEvent, c: ContactRecord) => {
+  const onSessionPointerDown = (e: React.PointerEvent, row: SessionRow) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     clearPress();
     pressRef.current = { x: e.clientX, y: e.clientY, timer: null };
@@ -5858,7 +5894,7 @@ function MessagesPage({
       }
       y = Math.min(y, Math.max(rootH - MENU_H - 12, 6));
       const arrowX = Math.min(Math.max(px - x, 24), MENU_W - 24);
-      setCtx({ contact: c, x, y, arrow, arrowX });
+      setCtx({ row, x, y, arrow, arrowX });
       // 长按后拦截紧随的 click（不进入会话）
       suppressClickRef.current = true;
     }, 480);
@@ -5888,6 +5924,15 @@ function MessagesPage({
     setHidden(nextHidden);
     qqChatFlagsStore.reset(id); // 置顶/免打扰/聊天背景一并清除
     qqUnreads.clear(id);
+  };
+  /** 群会话删除：只从消息列表移除该行（群本体与聊天记录保留，可从联系人 › 群聊 再进） */
+  const removeGroupSession = (key: string) => {
+    const nextHidden = hidden.includes(key) ? hidden : [...hidden, key];
+    saveStrList(LS_CHAT_HIDDEN, nextHidden);
+    setHidden(nextHidden);
+    qqChatFlagsStore.reset(key);
+    qqUnreads.clear(key);
+    onToast('已从列表移除，群聊保留在联系人 › 群聊');
   };
 
   return (
@@ -5938,23 +5983,24 @@ function MessagesPage({
             还没有会话，去「联系人」App 添加好友吧
           </p>
         )}
-        {conversations.map(({ contact, text, time }) => {
-          const pinned = pinSet.has(contact.id);
-          const unreadCount = unreads[contact.id] ?? 0;
+        {conversations.map((row) => {
+          const pinned = pinSet.has(row.key);
+          const unreadCount = unreads[row.key] ?? 0;
           return (
             <button
-              key={contact.id}
+              key={row.key}
               type="button"
-              data-testid={`qq-session-${contact.id}`}
+              data-testid={`qq-session-${row.key}`}
               onClick={() => {
                 if (suppressClickRef.current) {
                   suppressClickRef.current = false;
                   return;
                 }
-                markRead(contact.id);
-                onOpenChat(contact);
+                markRead(row.key);
+                if (row.contact) onOpenChat(row.contact);
+                else if (row.group) onOpenGroup(row.group);
               }}
-              onPointerDown={(e) => onSessionPointerDown(e, contact)}
+              onPointerDown={(e) => onSessionPointerDown(e, row)}
               onPointerMove={onSessionPointerMove}
               onPointerUp={clearPress}
               onPointerCancel={clearPress}
@@ -5964,32 +6010,36 @@ function MessagesPage({
               }`}
             >
               <span className="relative shrink-0">
-                <QqAvatar src={contact.avatar} alt={contact.name} size={52} />
+                {row.contact ? (
+                  <QqAvatar src={row.contact.avatar} alt={row.contact.name} size={52} />
+                ) : (
+                  row.group && <QqGroupAvatar group={row.group} contacts={contacts} size={52} />
+                )}
                 {unreadCount > 0 && (
                   <span
-                    data-testid={`qq-unread-badge-${contact.id}`}
+                    data-testid={`qq-unread-badge-${row.key}`}
                     aria-label={`${unreadCount} 条未读`}
                     className={
-                      flagsMap[contact.id]?.muted === true
+                      flagsMap[row.key]?.muted === true
                         ? /* 免打扰：不显示数字，只显示小红点 */
                           'absolute -right-[2px] -top-[2px] block h-[10px] w-[10px] rounded-full bg-[#F5455C] ring-2 ring-white dark:ring-[#111214]'
                         : 'absolute -right-2 -top-2 flex h-[21px] min-w-[21px] items-center justify-center rounded-full bg-[#F5455C] px-[6px] text-[12px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.28)] ring-2 ring-white dark:ring-[#111214]'
                     }
                   >
-                    {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
+                    {flagsMap[row.key]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
-                  <div className="truncate text-[16px] font-medium leading-snug">{contact.name}</div>
-                  {flagsMap[contact.id]?.muted === true && (
+                  <div className="truncate text-[16px] font-medium leading-snug">{row.name}</div>
+                  {flagsMap[row.key]?.muted === true && (
                     <BellOff className="h-3.5 w-3.5 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
                   )}
                 </div>
-                <div className="truncate text-[13px] text-black/35 dark:text-white/35">{text}</div>
+                <div className="truncate text-[13px] text-black/35 dark:text-white/35">{row.text}</div>
               </div>
-              <span className="shrink-0 text-[12px] text-black/30 dark:text-white/30">{fmtListTime(time)}</span>
+              <span className="shrink-0 text-[12px] text-black/30 dark:text-white/30">{fmtListTime(row.time)}</span>
             </button>
           );
         })}
@@ -6024,43 +6074,44 @@ function MessagesPage({
                   role="menuitem"
                   data-testid="qq-ctx-pin"
                   onClick={() => {
-                    togglePin(ctx.contact.id);
+                    togglePin(ctx.row.key);
                     closeCtx();
                   }}
                   className="flex h-[64px] flex-1 flex-col items-center justify-center gap-[5px] text-[11px] active:bg-black/[0.05] dark:active:bg-white/10"
                 >
-                  {pinSet.has(ctx.contact.id) ? (
+                  {pinSet.has(ctx.row.key) ? (
                     <PinOff className="h-[19px] w-[19px]" strokeWidth={1.9} aria-hidden="true" />
                   ) : (
                     <Pin className="h-[19px] w-[19px]" strokeWidth={1.9} aria-hidden="true" />
                   )}
-                  {pinSet.has(ctx.contact.id) ? '取消置顶' : '置顶'}
+                  {pinSet.has(ctx.row.key) ? '取消置顶' : '置顶'}
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   data-testid="qq-ctx-unread"
                   onClick={() => {
-                    toggleUnread(ctx.contact.id);
+                    toggleUnread(ctx.row.key);
                     closeCtx();
                   }}
                   className="flex h-[64px] flex-1 flex-col items-center justify-center gap-[5px] text-[11px] active:bg-black/[0.05] dark:active:bg-white/10"
                 >
                   <MailOpen className="h-[19px] w-[19px]" strokeWidth={1.9} aria-hidden="true" />
-                  {unreads[ctx.contact.id] ? '标为已读' : '标为未读'}
+                  {unreads[ctx.row.key] ? '标为已读' : '标为未读'}
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   data-testid="qq-ctx-delete"
                   onClick={() => {
-                    removeSession(ctx.contact.id);
+                    if (ctx.row.group) removeGroupSession(ctx.row.key);
+                    else removeSession(ctx.row.key);
                     closeCtx();
                   }}
                   className="flex h-[64px] flex-1 flex-col items-center justify-center gap-[5px] text-[11px] text-[#F5455C] active:bg-black/[0.05] dark:text-[#FF9A97] dark:active:bg-white/10"
                 >
                   <Trash2 className="h-[19px] w-[19px]" strokeWidth={1.9} aria-hidden="true" />
-                  删除
+                  {ctx.row.group ? '移除会话' : '删除'}
                 </button>
               </div>
             </div>
@@ -6084,6 +6135,8 @@ function ContactsPage({
   onAvatar,
   onAddFriend,
   onOpenNewFriends,
+  onOpenGroup,
+  onCreateGroup,
   onToast,
 }: {
   me: QQUser;
@@ -6093,12 +6146,22 @@ function ContactsPage({
   onAvatar: () => void;
   onAddFriend: () => void;
   onOpenNewFriends: () => void;
+  /** 打开某个 QQ 群聊 */
+  onOpenGroup: (g: ChatGroup) => void;
+  /** 发起群聊（建群页） */
+  onCreateGroup: () => void;
   onToast: (m: string) => void;
 }) {
   const [q, setQ] = useState('');
   const [tab, setTab] = useState<CtTab>('分组');
   const [expandSpecial, setExpandSpecial] = useState(false);
   const [expandFriends, setExpandFriends] = useState(true);
+  // QQ 群聊（联系人 › 群聊 tab；tab 切换会重挂载本页，现场读取即最新）
+  const chatGroups = useMemo(() => listChatGroups('qq'), []);
+  const filteredGroups = useMemo(() => {
+    const kw2 = q.trim().toLowerCase();
+    return kw2 ? chatGroups.filter((g) => g.name.toLowerCase().includes(kw2)) : chatGroups;
+  }, [chatGroups, q]);
 
   const friends = useMemo(() => contacts.filter((c) => isFriendIn(c, 'qq') && c.kind !== 'user'), [contacts]);
   const special = useMemo(() => friends.filter((c) => c.relation?.includes('特别') || c.relation?.includes('关心')), [friends]);
@@ -6281,7 +6344,48 @@ function ContactsPage({
           </div>
         )}
 
-        {(tab === '群聊' || tab === '频道' || tab === '机器人' || tab === '设备') && (
+        {tab === '群聊' && (
+          <div>
+            {/* 发起群聊（从已有角色中选成员建群） */}
+            <button
+              type="button"
+              data-testid="qq-contacts-group-create"
+              onClick={onCreateGroup}
+              className="flex w-full items-center gap-3 border-b border-black/[0.05] px-4 py-3 text-left active:bg-black/[0.04] dark:border-white/[0.06] dark:active:bg-white/[0.05]"
+            >
+              <span className="grid h-[42px] w-[42px] shrink-0 place-items-center rounded-[10px] bg-[#0099FF]/10 text-[#0099FF] dark:bg-[#4AA3FF]/15 dark:text-[#4AA3FF]" aria-hidden="true">
+                <UserPlus className="h-5 w-5" strokeWidth={2} />
+              </span>
+              <span className="flex-1 text-[15px]">发起群聊</span>
+              <ChevronRight className="h-5 w-5 text-black/25 dark:text-white/25" aria-hidden="true" />
+            </button>
+            {filteredGroups.length === 0 ? (
+              <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂无群聊，点上方「发起群聊」创建</p>
+            ) : (
+              filteredGroups.map((g) => {
+                const p = groupPreview(g.id);
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    data-testid={`qq-contacts-group-${g.id}`}
+                    onClick={() => onOpenGroup(g)}
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05]"
+                  >
+                    <QqGroupAvatar group={g} contacts={contacts} size={42} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15px]">{g.name}</span>
+                      {p.text && <span className="block truncate text-[12px] text-black/35 dark:text-white/35">{p.text}</span>}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-black/30 dark:text-white/30">{g.memberIds.length + 1}人</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {(tab === '频道' || tab === '机器人' || tab === '设备') && (
           <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂无{tab}</p>
         )}
       </div>
@@ -9707,7 +9811,10 @@ type MainRoute =
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
-  | { page: 'favorites' };
+  | { page: 'favorites' }
+  | { page: 'group-create' }
+  | { page: 'group-chat'; groupId: string }
+  | { page: 'group-info'; groupId: string };
 
 function MainScreen({
   me,
@@ -9750,6 +9857,21 @@ function MainScreen({
 
   const openTabs = useCallback((tab: '消息' | '联系人' | '动态') => setRoute({ page: 'tabs', tab }), []);
   const openChatOf = useCallback((c: ContactRecord) => setRoute({ page: 'chat', contactId: c.id }), []);
+  const openGroupOf = useCallback((g: ChatGroup) => setRoute({ page: 'group-chat', groupId: g.id }), []);
+  /** 群数据版本：updateGroupRecord 落盘后 bump，让当前打开的群页拿到最新群对象 */
+  const [groupVersion, setGroupVersion] = useState(0);
+  const patchGroup = useCallback(
+    (groupId: string, patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberInterop' | 'replyPolicy' | 'memberIds'>>) => {
+      updateGroupRecord(groupId, patch);
+      setGroupVersion((v) => v + 1);
+    },
+    []
+  );
+  /** 当前打开的群（从存储现场读取；groupVersion 变化后重算） */
+  const groupPeer = useMemo(
+    () => (route.page === 'group-chat' || route.page === 'group-info' ? getGroup(route.groupId) : null),
+    [route, groupVersion]
+  );
 
   // 写说说发表：统一走动态引擎（入库 + 记忆 + 排 AI 互动队列），回空间动态流（ZonePage 订阅 moments-changed 自动刷新）
   const handlePublishZonePost = useCallback(
@@ -9880,6 +10002,43 @@ function MainScreen({
         />
       ) : route.page === 'security' ? (
         <SecurityPage me={me} contacts={contacts} onBack={() => setRoute({ page: 'settings' })} onSwitchAccount={onLogout} onToast={showToast} />
+      ) : route.page === 'group-create' ? (
+        <QqGroupCreatePage
+          contacts={contacts}
+          onBack={() => openTabs('联系人')}
+          onCreated={(g) => setRoute({ page: 'group-chat', groupId: g.id })}
+        />
+      ) : route.page === 'group-info' && groupPeer ? (
+        <QqGroupInfoPage
+          key={`ginfo-${groupPeer.id}-${groupVersion}`}
+          group={groupPeer}
+          contacts={contacts}
+          onBack={() => setRoute({ page: 'group-chat', groupId: groupPeer.id })}
+          onUpdate={(patch) => patchGroup(groupPeer.id, patch)}
+          onDissolve={() => {
+            dissolveGroupRecord(groupPeer.id);
+            showToast('群聊已解散');
+            openTabs('联系人');
+          }}
+          onToast={showToast}
+        />
+      ) : route.page === 'group-chat' && groupPeer ? (
+        <QqGroupChatPage
+          key={groupPeer.id}
+          group={groupPeer}
+          me={{ id: me.id, name: me.name, avatar: me.avatar }}
+          contacts={contacts}
+          ownerLabelOf={ownerNameOf}
+          onBack={() => openTabs('消息')}
+          onUpdate={(patch) => patchGroup(groupPeer.id, patch)}
+          onOpenInfo={() => setRoute({ page: 'group-info', groupId: groupPeer.id })}
+          onDissolve={() => {
+            dissolveGroupRecord(groupPeer.id);
+            showToast('群聊已解散');
+            openTabs('消息');
+          }}
+          onToast={showToast}
+        />
       ) : route.page === 'tabs' ? (
         <>
           <div className="min-h-0 flex-1 overflow-hidden pt-[54px]">
@@ -9888,6 +10047,7 @@ function MainScreen({
                 me={me}
                 contacts={contacts}
                 onOpenChat={openChatOf}
+                onOpenGroup={openGroupOf}
                 onOpenDrawer={() => setDrawerOpen(true)}
                 onAvatar={closeApp}
                 onAddFriend={() => setRoute({ page: 'addfriend' })}
@@ -9903,6 +10063,8 @@ function MainScreen({
                 onAvatar={() => setDrawerOpen(true)}
                 onAddFriend={() => setRoute({ page: 'addfriend' })}
                 onOpenNewFriends={() => setRoute({ page: 'newfriends' })}
+                onOpenGroup={openGroupOf}
+                onCreateGroup={() => setRoute({ page: 'group-create' })}
                 onToast={showToast}
               />
             )}

@@ -5638,3 +5638,37 @@ Work Log:
 Stage Summary:
 - 改动文件：新增 src/lib/ios/groups.ts、src/components/apps/wx-group.tsx；修改 src/lib/memory-core.ts、src/lib/memory.ts、src/components/apps/wechat.tsx、src/components/apps/memory-bank.tsx、src/lib/ios/contacts-store.ts
 - 用户七块需求落地：①入口（+菜单发起群聊+通讯录群聊列表+会话列表群行）②多角色按人设分别回复、区分不串台、@优先 ③互通开关按群独立（默认关=完全隔离）④群记忆带来源（群ID/参与角色/发言人=存储归属角色）参与私聊召回 ⑤注入逻辑（私聊=私聊+互通群记忆；群聊=当前群+互通时角色私聊记忆；每角色独立 system；明确告知群聊语境与参与者）⑥角色隔离（只读自己记忆、群间隔离、开关不影响角色间）⑦零破坏（私聊/记忆分层/世界书/时间感知/回复条数/朋友圈/识图全部未动；无资金操作；长按菜单齐全）
+
+---
+Task ID: group-14
+Agent: Z.ai Code (main)
+Task: QQ 同步支持群聊（与微信并列双宿主）+ 群聊记忆与私聊记忆互通增强（按成员覆盖/回复策略/关系感知）——用户澄清「同时开发 QQ 和微信群聊」后的完整实现
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts 泛化双宿主：ChatGroup.app 扩为 'wx'|'qq'；存储分池（微信群沿用 wx-chat-groups 历史键、QQ 群新 qq-chat-groups），listGroups(app?) 过滤、getGroup 双池查找（群 id 全局唯一）；消息键 <app>-group-msgs:<gid>（wx 前缀兼容旧数据）；新增 memberInterop?: Record<contactId,'on'|'off'>（按成员覆盖互通，三态：跟随群聊/强制互通/强制隔离）+ replyPolicy?: 'all'|'mention'|'auto'（回复策略）+ effectiveInterop(groupId,contactId) 统一解析 + groupReplyPolicy()；dissolveGroup 按 app 清理对应 localStorage map（qq-chat-unreads/flags/hidden）与 <app>:group:<gid> 时间感知键、mem-round:<cid>:<app>:group:<gid> 轮次键；normalizeGroup 兼容旧数据（缺字段回退）
+- 记忆接线：memRecallBlock 的 interopOn 回调在四个聊天页全部接上 effectiveInterop——QQ 群聊页（mode:'group'+interopOn 按成员解析）、微信群聊页（同）、QQ 私聊 ChatPage、微信私聊 ChatPage（private 模式按群开关+成员覆盖判断群碎片可见性）；跨 App 记忆互通开关、按角色覆盖、群间硬隔离三层语义由 memory.ts 既有过滤逻辑承担，本次只补齐按成员覆盖的解析入口
+- UI src/components/apps/qq-group.tsx（新，~1250 行，QQ 蓝主题 #0099FF/圆头像/18px 气泡）：QqGroupCreatePage（多选 QQ 好友+群名自动生成）/QqGroupChatPage（气泡带发言者名+头像、@浮层、长按菜单 复制/引用/撤回/删除、流式气泡显示当前发言角色、群回合引擎 @优先→其余按顺序逐个流式回复）/QqGroupInfoPage（群名片换头像、成员网格邀请/移出、群名/群公告编辑、回复策略选择面板、记忆与私聊互通开关、按成员覆盖互通三态循环按钮、时间感知/置顶/免打扰、清空记录、解散并退出群聊）；QqGroupAvatar 2×2 拼贴（圆角方形 QQ 风格）
+- 关系感知（需求三）：群聊规则块增强——【群聊模式】声明当前群+参与者名单+自己身份；【群成员速览】逐成员列出名字+与机主关系（relation）+性格速写（persona 截断），声明角色间可互相称呼/对话、群聊语气可不同但人设不变、禁「用户/AI/角色/人设」出戏词汇；qgroup chat 页与 wx-group 页同步增强
+- 回复策略（需求二.2 决定是否回复）：replyPolicy 三档——'all' 全员按序回复（默认，兼容旧行为）/'mention' 仅被@成员回复（没人被@则无人回复）/'auto' 每角色 system 注入【发言判断】规则，回复整条为 [SKIP] 标记时不落盘、不计未读、不提取记忆（AI 自判沉默）；runGroupTurn 按策略排序回复队列，两宿主同构
+- qq.tsx 集成：imports + MainRoute 增 group-create/group-chat/group-info 三路由；MainScreen 增 groupVersion 状态 + patchGroup（updateGroupRecord 落盘后 bump 使 groupPeer=getGroup() 重算）+ openGroupOf；ContactsPage 群聊 tab 实装（发起群聊入口+群列表行，替换「暂无群聊」占位）；MessagesPage 会话列表重构为 SessionRow{key,contact,group}——群会话行（键 group:<gid> 共用置顶/免打扰/未读/隐藏设施，群头像拼贴+预览+角标），长按菜单支持群行（置顶/标为未读/移除会话——移除只隐藏列表行不解散群，群保留在联系人›群聊），搜索/排序/prune 全兼容；qq-group.tsx 头注释记录 AI 管线与范围限定
+- Bug 修复（E2E 抓到）：wechat.tsx 两处 listGroups() 无参调用改为 listGroups('wx')、wx-group.tsx 群列表页同步——否则 QQ 群会漏进微信会话列表/微信通讯录群聊页（宿主泄漏）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 隔离会话 + 守护进程 mock :4100 OpenAI 兼容 SSE——按 system【名字】回「我是<名字>…」、auto 下红红回 [SKIP]、记录每请求 name/isGroup/hasDigest/hasAuto/hasGroupMem/sysSha；种子 林川(user)+红红/明仔(char) QQ/微信好友、mem-settings interval=10、apiConfig 指向 mock）：
+  ①QQ 建群：联系人›群聊→发起群聊→勾 2 人→「红红、明仔的群聊」自动命名→群聊页（3 人）
+  ②多角色独立回复：发消息→红红/明仔逐个流式回复，内容各含自己名字（mock 按 system 生成→独立组装实锤）；sysSha 不同（227,242,230,46 vs 57,162,31,20）、sysHead 各自人设（图书管理员 vs 大学生）、hasDigest=true（群成员速览）✓
+  ③auto 策略：群信息→回复策略→AI 自判→发消息→红红 [SKIP] 不落盘（仅明仔气泡出现）✓
+  ④mention 策略：无@消息→0 回复；@明仔→仅明仔回复（peer 数 7→8）✓
+  ⑤群记忆提取（预置 mem-round=9 触发）：@消息两轮→/api/memory/extract 两次命中 mock→碎片落库 mem-frag:c-xiaoming/c-xiaohong 各 1 条，source='group'+sourceGroupId+app='qq'，按角色隔离存储 ✓
+  ⑥记忆库来源徽章：记忆库→红红→碎片卡片「QQ·群聊·红红、明仔的群聊」徽章+内容可见 ✓
+  ⑦互通开关双向验证：群互通关（默认）→私聊红红发消息→mock 日志 hasGroupMem=False（群记忆不进私聊召回）；开→再发→hasGroupMem=True ✓
+  ⑧按成员覆盖：群开关开+红红强制隔离→私聊红红 hasGroupMem=False、私聊明仔（跟随群开）hasGroupMem=True——角色互不干扰 ✓
+  ⑨群间隔离：解散群→新建同成员群→发消息→明仔回合 hasGroupMem=False（旧群记忆碎片不进新群，互通开关不影响群间硬隔离）✓
+  ⑩群管理：改名「关系研究所」即时生效；移出明仔→邀请回（成员瓦片 2）；解散并退出→toast「群聊已解散」→qq-chat-groups 空、mem-round:qq:group:* 清理（私聊/微信群键保留正常）✓
+  ⑪长按菜单：气泡长按→复制/引用/撤回/删除 四项；撤回生效（「撤回了一条消息」行）✓
+  ⑫消息列表：群会话行（拼贴头像+「明仔：我是明仔…」预览+置顶排序）与私聊行并存互不混淆 ✓
+  ⑬微信回归：修复后微信会话列表只剩私聊（QQ 群不再泄漏）；微信群建群→发消息→两角色独立回复（绿气泡主题）✓；QQ 私聊回归正常（「我是红红，私聊收到啦」）
+  - 排障备注：mem-settings.interval=1 不在合法档位 [10,20,30,40,50] 被回退 20 → 改播种 interval=10+mem-round=9 触发；mention 策略下无@消息不产生 AI 回合（预期行为）曾误判提取未触发；agent-browser eval 顶层 const 重复声明报错→统一 IIFE；mock [SKIP] 匹配名笔误（小红→红红）修正后自判沉默生效
+Stage Summary:
+- 改动文件：新增 src/components/apps/qq-group.tsx；修改 src/lib/ios/groups.ts（双宿主泛化+memberInterop+replyPolicy）、src/components/apps/qq.tsx（路由/联系人/消息列表/私聊接线）、src/components/apps/wx-group.tsx（按成员互通 UI+回复策略+关系感知+interopOn）、src/components/apps/wechat.tsx（interopOn 接线+listGroups('wx') 泄漏修复）
+- 用户需求落地：一（QQ/微信分别建群、选成员、群名/头像/成员列表、编辑/删除/退出、群与私聊分开显示）✓ 二（全员可见、可决定是否回复三档策略、角色互相对话、人设不串台）✓ 三（自己与用户关系=人设 relation、其他成员速览=速览注入、当前是群聊=群聊模式声明、禁出戏）✓ 四（按群+按角色双层互通开关、持久化、记忆库可查群聊/私聊来源）✓ 五（只读自己相关记忆、不读他人私密、A 的私聊记忆不对 B 开放、群间隔离）✓ 六（零破坏回归实测、无真实资金操作、长按菜单齐全）✓
+- mock 设施沉淀：/home/z/.cache/mock-group-4100.ts（聊天 SSE+记忆提取 JSON+请求指纹日志），守护启动 python3 .zscripts/daemonize.py /home/z/.cache/mock-group-4100.log bun /home/z/.cache/mock-group-4100.ts

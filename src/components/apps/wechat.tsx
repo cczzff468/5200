@@ -57,7 +57,7 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
-import { groupPreview, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, type ChatGroup } from '@/lib/ios/groups';
+import { groupPreview, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
@@ -3639,7 +3639,12 @@ function ChatPage({
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
-    const memoryBlock = memRecallBlock(peer.id, 'wx', memContext);
+    // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按「群开关 + 按成员覆盖」判断可见性
+    //（effectiveInterop 把按角色设置的覆盖也接进来；用户和角色 A 的私聊记忆默认不对角色 B 开放——
+    //  存储键即隔离边界，这里只影响该角色自己的召回范围）
+    const memoryBlock = memRecallBlock(peer.id, 'wx', memContext, {
+      interopOn: (groupId: string) => effectiveInterop(groupId, peer.id),
+    });
     // 朋友圈动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看朋友圈平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
     const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer });
@@ -6724,11 +6729,11 @@ function MainScreen({
   const [tab, setTab] = useState<Tab>('chats');
   const [chatPeer, setChatPeer] = useState<ContactRecord | null>(null);
   /** 群聊：群列表缓存 / 正在聊的群 / 群子页（create=发起群聊、list=通讯录群聊列表）/ 群聊信息页 */
-  const [wxGroups, setWxGroups] = useState<ChatGroup[]>(() => listGroups());
+  const [wxGroups, setWxGroups] = useState<ChatGroup[]>(() => listGroups('wx'));
   const [groupPeer, setGroupPeer] = useState<ChatGroup | null>(null);
   const [groupPage, setGroupPage] = useState<null | 'create' | 'list'>(null);
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
-  const refreshGroups = useCallback(() => setWxGroups(listGroups()), []);
+  const refreshGroups = useCallback(() => setWxGroups(listGroups('wx')), []);
   /** 详情页（联系人详细界面）：从聊天设置信息卡片 / 通讯录进入；返回与朋友圈回退链见渲染分支 */
   const [detail, setDetail] = useState<ContactRecord | null>(null);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */

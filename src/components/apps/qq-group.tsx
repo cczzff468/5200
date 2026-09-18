@@ -1,22 +1,24 @@
 'use client';
 
 /**
- * 微信群聊（宿主：微信 App；会话身份 sessionKey = `wx:group:<groupId>`）。
+ * QQ 群聊（宿主：QQ App；会话身份 sessionKey = `qq:group:<groupId>`）。
  *
  * 组成：
- * - WxGroupCreatePage  建群：多选微信好友 + 群名（默认按成员名生成）；
- * - WxGroupListPage    群列表（通讯录 › 群聊入口）；
- * - WxGroupChatPage    群聊页：气泡（发言者名+头像）/ @某成员优先回复 / 长按菜单（复制/引用/撤回/删除）/
+ * - QqGroupCreatePage  建群：多选 QQ 好友 + 群名（默认按成员名生成）；
+ * - QqGroupChatPage    群聊页：气泡（发言者名+头像）/ @某成员优先回复 / 长按菜单（复制/引用/撤回/删除）/
  *                      流式气泡（当前发言角色）/ 多角色逐个顺序回复；
- * - WxGroupInfoPage    群聊信息：成员管理（邀请/移出）、群名、群公告、群头像、
+ * - QqGroupInfoPage    群聊信息：成员管理（邀请/移出）、群名、群公告、群头像、
  *                      记忆与私聊互通开关（按群独立 + 按成员覆盖）、回复策略（全员/仅@/AI 自判）、
  *                      置顶/免打扰、时间感知、清空记录、解散并退出群聊。
  *
  * AI 管线（多角色，每个角色独立组装 system，绝不共用）：
  * - 用户发言后按「被 @ 成员优先，其余按成员顺序」逐个发起流式回合（单会话单流，队列串行）；
- * - 每个角色的 system = 七要素人设 + 群聊规则（当前是群聊/参与者名单/只代表自己/禁复读）+
- *   该角色自己的记忆召回（memRecallBlock mode='group'：本群记忆 + 互通开启时的自己私聊记忆）+
- *   时间感知（按群开关）+ 世界书；机主与其他成员的历史消息一律映射为「发言者：内容」的 user 消息；
+ * - 每个角色的 system = 七要素人设（含自己与机主的关系）+ 群聊规则（当前是群聊/参与者名单与成员速览/
+ *   只代表自己/禁复读/可以互相对话）+ 该角色自己的记忆召回（memRecallBlock mode='group'：
+ *   本群记忆 + 互通开启时的自己私聊记忆；interopOn 按成员覆盖解析）+ 时间感知（按群开关）+ 世界书；
+ *   机主与其他成员的历史消息一律映射为「发言者：内容」的 user 消息；
+ * - 回复策略 replyPolicy：'all' 全员按顺序回复（默认）/'mention' 仅被 @ 成员回复/'auto' 每个角色
+ *   自判是否发言（无话可说只回 [SKIP]，不落盘不提取记忆不进上下文）；
  * - finalize：回复落盘（senderId 区分发言人）+ 未读 + memAfterAiTurn（roundScope 按群隔离，
  *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）。
  * - 范围限定：群内不提供红包/转账/亲属卡等资金功能；表情包/识图等私聊特性不进入群聊管线。
@@ -42,7 +44,6 @@ import {
   useBubbleLongPress,
   type BubbleMenuItem,
 } from '@/components/apps/bubble-menu';
-import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
@@ -64,8 +65,8 @@ import {
   type GroupReplyPolicy,
   type WxGroupMsg,
 } from '@/lib/ios/groups';
-import { wxChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
-import { wxUnreads } from '@/lib/unread-store';
+import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
+import { qqUnreads } from '@/lib/unread-store';
 import { memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
@@ -80,9 +81,16 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 
-/** 群会话 id（未读/标志/隐藏等以字符串 id 为键的设施共用） */
-export const groupRowId = (groupId: string) => `group:${groupId}`;
-const sessionKeyOf = (groupId: string) => `wx:group:${groupId}`;
+/** 群会话 id（未读/标志/隐藏等以字符串 id 为键的设施共用，与微信群同构） */
+export const qqGroupRowId = (groupId: string) => `group:${groupId}`;
+const sessionKeyOf = (groupId: string) => `qq:group:${groupId}`;
+
+/** 回复策略的展示文案 */
+export const REPLY_POLICY_LABEL: Record<GroupReplyPolicy, string> = {
+  all: '全员回复',
+  mention: '仅被@成员',
+  auto: 'AI 自判发言',
+};
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -90,19 +98,12 @@ function uid(): string {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** 回复策略的展示文案 */
-const REPLY_POLICY_LABEL: Record<GroupReplyPolicy, string> = {
-  all: '全员回复',
-  mention: '仅被@成员',
-  auto: 'AI 自判发言',
-};
-
-/** AI 自判跳过标记：整条回复只有这个标记时不落盘（不进消息、不提取记忆、不计未读） */
-const SKIP_RE = /^\[?\s*(?:SKIP|跳过)\s*\]?$/i;
-
 function memberNameOf(c: ContactRecord): string {
   return displayNameOf(c);
 }
+
+/** AI 自判跳过标记：整条回复只有这个标记时不落盘（不进消息、不提取记忆、不计未读） */
+const SKIP_RE = /^\[?\s*(?:SKIP|跳过)\s*\]?$/i;
 
 /** 剪贴板复制（clipboard API 不可用时回退 execCommand） */
 function copyText(text: string, onToast: (m: string) => void): void {
@@ -138,8 +139,25 @@ function fmtGroupTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
-/** 群头像：自定义头像优先；否则前 4 名成员头像拼贴（真微信同款风格） */
-export function GroupAvatar({
+/** QQ 头像（圆形；无头像时蓝色 Q 占位） */
+function QqAvatar({ src, alt, size = 40 }: { src: string | null; alt: string; size?: number }) {
+  const style: React.CSSProperties = { width: size, height: size };
+  if (src) {
+    return <img src={src} alt={alt} draggable={false} className="shrink-0 rounded-full object-cover" style={style} />;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      className="flex shrink-0 items-center justify-center rounded-full bg-[#B9D9F3] font-semibold text-white"
+      style={{ ...style, fontSize: Math.round(size * 0.42) }}
+    >
+      {alt.slice(0, 1) || 'Q'}
+    </div>
+  );
+}
+
+/** 群头像：自定义头像优先；否则前 4 名成员头像拼贴（QQ 圆角方形同款风格） */
+export function QqGroupAvatar({
   group,
   contacts,
   size = 48,
@@ -158,14 +176,14 @@ export function GroupAvatar({
         src={group.avatar}
         alt={`${group.name} 群头像`}
         style={{ width: size, height: size }}
-        className="shrink-0 rounded-[6px] object-cover"
+        className="shrink-0 rounded-[10px] object-cover"
       />
     );
   }
   return (
     <div
       style={{ width: size, height: size }}
-      className="grid shrink-0 grid-cols-2 grid-rows-2 overflow-hidden rounded-[6px] bg-[#DCDCDC] dark:bg-[#3A3A3A]"
+      className="grid shrink-0 grid-cols-2 grid-rows-2 overflow-hidden rounded-[10px] bg-[#E3E6EB] dark:bg-[#3A3A3A]"
       aria-label={`${group.name} 群头像`}
     >
       {members.length === 0 ? (
@@ -178,13 +196,13 @@ export function GroupAvatar({
             m.avatar ? (
               <img key={m.id} src={m.avatar} alt={m.name} className="h-full w-full object-cover" />
             ) : (
-              <div key={m.id} className="flex h-full w-full items-center justify-center bg-[#C7C7C7] dark:bg-[#4A4A4A]">
-                <DefaultAvatar size={size / 2.4} />
+              <div key={m.id} className="flex h-full w-full items-center justify-center bg-[#C9D6E4] dark:bg-[#4A4A4A]">
+                <span className="text-[10px] font-semibold text-white">{memberNameOf(m).slice(0, 1)}</span>
               </div>
             )
           )}
           {Array.from({ length: 4 - members.length }).map((_, i) => (
-            <div key={`pad-${i}`} className="bg-[#E6E6E6] dark:bg-[#333333]" />
+            <div key={`pad-${i}`} className="bg-[#EBEEF2] dark:bg-[#333333]" />
           ))}
         </>
       )}
@@ -196,17 +214,17 @@ export function GroupAvatar({
 
 function GroupNavBar({ title, onBack, right }: { title: string; onBack: () => void; right?: React.ReactNode }) {
   return (
-    <div className="sticky top-0 z-20 shrink-0 border-b border-black/5 bg-[#EDEDED]/95 pt-[54px] backdrop-blur dark:border-white/10 dark:bg-[#111111]/95">
-      <div className="flex h-11 items-center px-3">
+    <div className="sticky top-0 z-20 shrink-0 border-b border-black/[0.05] bg-[#F5F6F7]/95 pt-[54px] backdrop-blur dark:border-white/[0.06] dark:bg-[#111214]/95">
+      <div className="flex h-12 items-center px-3">
         <button
           type="button"
           aria-label="返回"
           onClick={onBack}
-          className="-ml-1 p-1 text-black/75 active:opacity-50 dark:text-white/75"
+          className="-ml-1 rounded-full p-1.5 active:bg-black/5 dark:active:bg-white/10"
         >
-          <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
+          <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
         </button>
-        <div className="flex-1 truncate text-center text-[16px] font-medium">{title}</div>
+        <div className="flex-1 truncate text-center text-[17px] font-semibold">{title}</div>
         <div className="flex min-w-[32px] items-center justify-end">{right}</div>
       </div>
     </div>
@@ -231,9 +249,9 @@ function InfoRow({
       type="button"
       onClick={onClick}
       data-testid={testId}
-      className={`flex w-full items-center gap-3 px-4 py-3 text-left ${onClick ? 'active:bg-black/5 dark:active:bg-white/5' : 'cursor-default'}`}
+      className={`flex w-full items-center gap-3 px-4 py-3 text-left ${onClick ? 'active:bg-black/[0.04] dark:active:bg-white/[0.05]' : 'cursor-default'}`}
     >
-      <span className={`text-[15px] ${danger ? 'text-[#FA5150]' : ''}`}>{label}</span>
+      <span className={`text-[15px] ${danger ? 'text-[#F5455C]' : ''}`}>{label}</span>
       <span className="ml-auto flex items-center gap-1 text-[13px] text-black/40 dark:text-white/40">
         {value}
         {onClick && <ChevronRight className="h-4 w-4" />}
@@ -284,14 +302,14 @@ function CenterDialog({
   const [val, setVal] = useState(initial ?? '');
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-8" onClick={onCancel}>
-      <div className="w-full rounded-[12px] bg-white p-4 dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-[14px] bg-white p-4 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 text-center text-[15px] font-medium">{title}</div>
         <Input
           value={val}
           autoFocus
           onChange={(e) => setVal(e.target.value)}
           placeholder={placeholder}
-          className="h-10 rounded-[10px] bg-black/5 text-[14px] dark:bg-white/10"
+          className="h-10 rounded-[10px] bg-black/[0.05] text-[14px] dark:bg-white/10"
           onKeyDown={(e) => {
             if (e.key === 'Enter') onSave(val);
           }}
@@ -300,14 +318,14 @@ function CenterDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="h-9 flex-1 rounded-[8px] bg-black/5 text-[14px] active:opacity-70 dark:bg-white/10"
+            className="h-9 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-70 dark:bg-white/10"
           >
             取消
           </button>
           <button
             type="button"
             onClick={() => onSave(val)}
-            className="h-9 flex-1 rounded-[8px] bg-[#07C160] text-[14px] font-medium text-white active:opacity-80"
+            className="h-9 flex-1 rounded-[8px] bg-[#0099FF] text-[14px] font-medium text-white active:opacity-80"
           >
             确定
           </button>
@@ -320,20 +338,20 @@ function CenterDialog({
 function ConfirmDialog({ text, onCancel, onConfirm }: { text: string; onCancel: () => void; onConfirm: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-10" onClick={onCancel}>
-      <div className="w-full rounded-[12px] bg-white dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full rounded-[14px] bg-white dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pb-5 pt-6 text-center text-[15px] leading-relaxed">{text}</div>
         <div className="flex border-t border-black/10 dark:border-white/10">
           <button
             type="button"
             onClick={onCancel}
-            className="flex-1 py-3 text-[15px] active:bg-black/5 dark:active:bg-white/5"
+            className="flex-1 py-3 text-[15px] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
           >
             取消
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="flex-1 border-l border-black/10 py-3 text-[15px] font-medium text-[#FA5150] active:bg-black/5 dark:border-white/10 dark:active:bg-white/5"
+            className="flex-1 border-l border-black/10 py-3 text-[15px] font-medium text-[#F5455C] active:bg-black/[0.04] dark:border-white/10 dark:active:bg-white/[0.06]"
           >
             确定
           </button>
@@ -345,8 +363,8 @@ function ConfirmDialog({ text, onCancel, onConfirm }: { text: string; onCancel: 
 
 // ---------------- 建群页 ----------------
 
-/** 建群：多选微信好友（CHAR/NPC）+ 群名；至少 1 名成员 */
-export function WxGroupCreatePage({
+/** 建群：多选 QQ 好友（CHAR/NPC）+ 群名；至少 1 名成员 */
+export function QqGroupCreatePage({
   contacts,
   onBack,
   onCreated,
@@ -355,7 +373,7 @@ export function WxGroupCreatePage({
   onBack: () => void;
   onCreated: (g: ChatGroup) => void;
 }) {
-  const candidates = useMemo(() => contacts.filter((c) => c.kind !== 'user' && isFriendIn(c, 'wx')), [contacts]);
+  const candidates = useMemo(() => contacts.filter((c) => c.kind !== 'user' && isFriendIn(c, 'qq')), [contacts]);
   const [selected, setSelected] = useState<string[]>([]);
   const [nameDirty, setNameDirty] = useState(false);
   const [name, setName] = useState('');
@@ -373,15 +391,15 @@ export function WxGroupCreatePage({
   const create = () => {
     const me = contacts.find((c) => c.kind === 'user');
     if (!me || selected.length === 0) return;
-    const g = createGroup({ name: effName || '未命名群聊', memberIds: selected, ownerId: me.id });
+    const g = createGroup({ app: 'qq', name: effName || '未命名群聊', memberIds: selected, ownerId: me.id });
     onCreated(g);
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#EDEDED] dark:bg-[#111111]">
+    <div className="flex h-full flex-col bg-[#F5F6F7] dark:bg-[#111214]">
       <GroupNavBar title="发起群聊" onBack={onBack} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="bg-white px-4 py-3 dark:bg-[#1A1A1A]">
+        <div className="bg-white px-4 py-3 dark:bg-[#1B1C1F]">
           <Input
             value={effName}
             onChange={(e) => {
@@ -389,17 +407,17 @@ export function WxGroupCreatePage({
               setName(e.target.value);
             }}
             placeholder="群聊名称（留空按成员名生成）"
-            className="h-10 rounded-[10px] bg-black/5 text-[14px] dark:bg-white/10"
-            data-testid="wx-group-name-input"
+            className="h-10 rounded-[10px] bg-black/[0.05] text-[14px] dark:bg-white/10"
+            data-testid="qq-group-name-input"
           />
         </div>
-        <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
-          <div className="border-b border-black/5 px-4 py-2.5 text-[12px] text-black/45 dark:border-white/10 dark:text-white/45">
+        <div className="mt-2 bg-white dark:bg-[#1B1C1F]">
+          <div className="border-b border-black/[0.05] px-4 py-2.5 text-[12px] text-black/45 dark:border-white/[0.06] dark:text-white/45">
             选择群成员（{selected.length} 人）
           </div>
           {candidates.length === 0 && (
             <div className="px-4 py-10 text-center text-[13px] text-black/40 dark:text-white/40">
-              还没有微信好友，先去「添加朋友」吧
+              还没有 QQ 好友，先去「加好友」吧
             </div>
           )}
           {candidates.map((c) => {
@@ -408,20 +426,16 @@ export function WxGroupCreatePage({
               <button
                 key={c.id}
                 type="button"
-                data-testid={`wx-group-cand-${c.id}`}
+                data-testid={`qq-group-cand-${c.id}`}
                 onClick={() => toggle(c.id)}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05]"
               >
-                {c.avatar ? (
-                  <img src={c.avatar} alt={c.name} className="h-10 w-10 shrink-0 rounded-[6px] object-cover" />
-                ) : (
-                  <DefaultAvatar size={40} className="shrink-0 rounded-[6px]" />
-                )}
+                <QqAvatar src={c.avatar} alt={memberNameOf(c)} size={40} />
                 <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(c)}</span>
                 <span
                   aria-hidden="true"
                   className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                    on ? 'border-[#07C160] bg-[#07C160]' : 'border-black/20 dark:border-white/25'
+                    on ? 'border-[#0099FF] bg-[#0099FF]' : 'border-black/20 dark:border-white/25'
                   }`}
                 >
                   {on && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
@@ -431,13 +445,13 @@ export function WxGroupCreatePage({
           })}
         </div>
       </div>
-      <div className="shrink-0 border-t border-black/5 bg-white p-3 dark:border-white/10 dark:bg-[#1A1A1A]">
+      <div className="shrink-0 border-t border-black/[0.05] bg-white p-3 dark:border-white/[0.06] dark:bg-[#1B1C1F]">
         <button
           type="button"
-          data-testid="wx-group-create-btn"
+          data-testid="qq-group-create-btn"
           disabled={selected.length === 0}
           onClick={create}
-          className="h-11 w-full rounded-[10px] bg-[#07C160] text-[15px] font-medium text-white active:opacity-80 disabled:opacity-40"
+          className="h-11 w-full rounded-[10px] bg-[#0099FF] text-[15px] font-medium text-white active:opacity-80 disabled:opacity-40"
         >
           创建群聊
         </button>
@@ -446,78 +460,9 @@ export function WxGroupCreatePage({
   );
 }
 
-// ---------------- 群列表页（通讯录 › 群聊） ----------------
-
-export function WxGroupListPage({
-  contacts,
-  onBack,
-  onOpen,
-  onCreate,
-}: {
-  contacts: ContactRecord[];
-  onBack: () => void;
-  onOpen: (g: ChatGroup) => void;
-  onCreate: () => void;
-}) {
-  // 每次挂载（从建群/解散返回时父组件会 remount 本页）现场读取，天然最新
-  const groups = useMemo(() => listGroups('wx'), []);
-  return (
-    <div className="flex h-full flex-col bg-[#EDEDED] dark:bg-[#111111]">
-      <GroupNavBar
-        title="群聊"
-        onBack={onBack}
-        right={
-          <button
-            type="button"
-            aria-label="发起群聊"
-            data-testid="wx-grouplist-add"
-            onClick={onCreate}
-            className="p-1 text-black/75 active:opacity-50 dark:text-white/75"
-          >
-            <UserPlus className="h-[20px] w-[20px]" strokeWidth={1.9} />
-          </button>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {groups.length === 0 ? (
-          <div className="px-8 py-20 text-center text-[13px] leading-relaxed text-black/40 dark:text-white/40">
-            还没有群聊
-            <br />
-            点击右上角「+」发起群聊
-          </div>
-        ) : (
-          <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
-            {groups.map((g) => {
-              const p = groupPreview(g.id);
-              return (
-                <button
-                  key={g.id}
-                  type="button"
-                  data-testid={`wx-grouplist-item-${g.id}`}
-                  onClick={() => onOpen(g)}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/5 dark:active:bg-white/5"
-                >
-                  <GroupAvatar group={g} contacts={contacts} size={44} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px]">{g.name}</span>
-                    {p.text && (
-                      <span className="block truncate text-[12px] text-black/40 dark:text-white/40">{p.text}</span>
-                    )}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-black/35 dark:text-white/35">{g.memberIds.length + 1}人</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ---------------- 群聊信息页 ----------------
 
-export function WxGroupInfoPage({
+export function QqGroupInfoPage({
   group,
   contacts,
   onBack,
@@ -539,7 +484,7 @@ export function WxGroupInfoPage({
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const gid = group.id;
-  const [flags, setFlags] = useState<ChatFlags>(() => wxChatFlags.get());
+  const [flags, setFlags] = useState<ChatFlags>(() => qqChatFlags.get());
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -548,11 +493,11 @@ export function WxGroupInfoPage({
     [group.memberIds, contacts]
   );
   const candidates = useMemo(
-    () => contacts.filter((c) => c.kind !== 'user' && isFriendIn(c, 'wx') && !group.memberIds.includes(c.id)),
+    () => contacts.filter((c) => c.kind !== 'user' && isFriendIn(c, 'qq') && !group.memberIds.includes(c.id)),
     [contacts, group.memberIds]
   );
 
-  useEffect(() => wxChatFlags.subscribe(() => setFlags({ ...wxChatFlags.get() })), []);
+  useEffect(() => qqChatFlags.subscribe(() => setFlags({ ...qqChatFlags.get() })), []);
 
   const pickAvatar = (file: File) => {
     const reader = new FileReader();
@@ -606,8 +551,8 @@ export function WxGroupInfoPage({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-[#EDEDED] dark:bg-[#111111]">
-      <GroupNavBar title={`聊天信息(${members.length + 1})`} onBack={onBack} />
+    <div className="flex h-full flex-col overflow-y-auto bg-[#F5F6F7] dark:bg-[#111214]">
+      <GroupNavBar title={`群聊信息(${members.length + 1})`} onBack={onBack} />
       <input
         ref={fileRef}
         type="file"
@@ -621,14 +566,14 @@ export function WxGroupInfoPage({
       />
 
       {/* 群名片 */}
-      <div className="bg-white px-4 py-4 dark:bg-[#1A1A1A]">
+      <div className="bg-white px-4 py-4 dark:bg-[#1B1C1F]">
         <button
           type="button"
           className="flex w-full items-center gap-4 text-left active:opacity-70"
           onClick={() => fileRef.current?.click()}
-          data-testid="wx-groupinfo-avatar"
+          data-testid="qq-groupinfo-avatar"
         >
-          <GroupAvatar group={group} contacts={contacts} size={56} />
+          <QqGroupAvatar group={group} contacts={contacts} size={56} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[17px] font-medium">{group.name}</span>
             <span className="text-[12px] text-black/40 dark:text-white/40">
@@ -639,7 +584,7 @@ export function WxGroupInfoPage({
       </div>
 
       {/* 群成员 */}
-      <div className="mt-2 bg-white px-4 py-3 dark:bg-[#1A1A1A]">
+      <div className="mt-2 bg-white px-4 py-3 dark:bg-[#1B1C1F]">
         <div className="mb-3 flex items-center">
           <span className="text-[13px] font-medium text-black/60 dark:text-white/60">群成员</span>
           <span className="ml-auto text-[12px] text-black/40 dark:text-white/40">{members.length} 人</span>
@@ -651,13 +596,9 @@ export function WxGroupInfoPage({
               type="button"
               className="flex flex-col items-center gap-1"
               onClick={() => setMemberSheet(m)}
-              data-testid={`wx-groupinfo-member-${m.id}`}
+              data-testid={`qq-groupinfo-member-${m.id}`}
             >
-              {m.avatar ? (
-                <img src={m.avatar} alt={m.name} className="h-11 w-11 rounded-[8px] object-cover" />
-              ) : (
-                <DefaultAvatar size={44} className="rounded-[8px]" />
-              )}
+              <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={44} />
               <span className="max-w-[56px] truncate text-[11px] text-black/60 dark:text-white/60">
                 {memberNameOf(m)}
               </span>
@@ -667,9 +608,9 @@ export function WxGroupInfoPage({
             type="button"
             className="flex flex-col items-center gap-1"
             onClick={() => setInviteOpen(true)}
-            data-testid="wx-groupinfo-invite"
+            data-testid="qq-groupinfo-invite"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-[8px] bg-black/5 dark:bg-white/10">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/[0.05] dark:bg-white/10">
               <UserPlus className="h-5 w-5 text-black/50 dark:text-white/50" />
             </span>
             <span className="text-[11px] text-black/60 dark:text-white/60">邀请</span>
@@ -678,19 +619,19 @@ export function WxGroupInfoPage({
       </div>
 
       {/* 群设置 */}
-      <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
-        <InfoRow label="群聊名称" value={group.name} onClick={() => setDialog({ kind: 'name' })} testId="wx-groupinfo-name" />
+      <div className="mt-2 divide-y divide-black/[0.05] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+        <InfoRow label="群聊名称" value={group.name} onClick={() => setDialog({ kind: 'name' })} testId="qq-groupinfo-name" />
         <InfoRow
           label="群公告"
           value={group.announcement ? `${group.announcement.slice(0, 12)}…` : '未设置'}
           onClick={() => setDialog({ kind: 'announcement' })}
-          testId="wx-groupinfo-notice"
+          testId="qq-groupinfo-notice"
         />
         <InfoRow
           label="回复策略"
           value={REPLY_POLICY_LABEL[group.replyPolicy ?? 'all']}
           onClick={() => setPolicyOpen(true)}
-          testId="wx-groupinfo-policy"
+          testId="qq-groupinfo-policy"
         />
         <SwitchRow
           label="记忆与私聊互通"
@@ -700,7 +641,7 @@ export function WxGroupInfoPage({
             onUpdate({ memoryInterop: v });
             onToast(v ? '已开启互通' : '已关闭互通');
           }}
-          testId="wx-groupinfo-interop"
+          testId="qq-groupinfo-interop"
         />
         {/* 按成员覆盖互通（三态）：精确控制每个角色的群↔私聊记忆流向 */}
         {members.length > 0 && (
@@ -712,21 +653,17 @@ export function WxGroupInfoPage({
             <div className="mt-2 space-y-1.5">
               {members.map((m) => (
                 <div key={m.id} className="flex items-center gap-2.5">
-                  {m.avatar ? (
-                    <img src={m.avatar} alt={m.name} className="h-[30px] w-[30px] shrink-0 rounded-[6px] object-cover" />
-                  ) : (
-                    <DefaultAvatar size={30} className="shrink-0 rounded-[6px]" />
-                  )}
+                  <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={30} />
                   <span className="min-w-0 flex-1 truncate text-[14px]">{memberNameOf(m)}</span>
                   <button
                     type="button"
-                    data-testid={`wx-groupinfo-minterop-${m.id}`}
+                    data-testid={`qq-groupinfo-minterop-${m.id}`}
                     onClick={() => cycleMemberInterop(m.id)}
                     className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium active:opacity-70 ${
                       group.memberInterop?.[m.id] === 'on'
-                        ? 'bg-[#07C160]/10 text-[#07C160]'
+                        ? 'bg-[#0099FF]/10 text-[#0099FF] dark:bg-[#4AA3FF]/15 dark:text-[#4AA3FF]'
                         : group.memberInterop?.[m.id] === 'off'
-                          ? 'bg-[#FA5150]/10 text-[#FA5150]'
+                          ? 'bg-[#F5455C]/10 text-[#F5455C] dark:text-[#FF9A97]'
                           : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/55'
                     }`}
                   >
@@ -748,19 +685,19 @@ export function WxGroupInfoPage({
         />
         <SwitchRow
           label="置顶聊天"
-          checked={flags[groupRowId(gid)]?.pinned === true}
-          onChange={(v) => wxChatFlags.update(groupRowId(gid), { pinned: v })}
+          checked={flags[qqGroupRowId(gid)]?.pinned === true}
+          onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { pinned: v })}
         />
         <SwitchRow
           label="消息免打扰"
-          checked={flags[groupRowId(gid)]?.muted === true}
-          onChange={(v) => wxChatFlags.update(groupRowId(gid), { muted: v })}
+          checked={flags[qqGroupRowId(gid)]?.muted === true}
+          onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { muted: v })}
         />
       </div>
 
-      <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
-        <InfoRow label="清空聊天记录" danger onClick={() => setConfirmClear(true)} testId="wx-groupinfo-clear" />
-        <InfoRow label="解散并退出群聊" danger onClick={() => setConfirmDissolve(true)} testId="wx-groupinfo-dissolve" />
+      <div className="mt-2 divide-y divide-black/[0.05] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+        <InfoRow label="清空聊天记录" danger onClick={() => setConfirmClear(true)} testId="qq-groupinfo-clear" />
+        <InfoRow label="解散并退出群聊" danger onClick={() => setConfirmDissolve(true)} testId="qq-groupinfo-dissolve" />
       </div>
       <div className="py-8 text-center text-[11px] text-black/30 dark:text-white/30">
         群聊为本地模拟，不含任何真实资金操作
@@ -769,20 +706,16 @@ export function WxGroupInfoPage({
       {/* 成员操作 */}
       {memberSheet && (
         <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setMemberSheet(null)}>
-          <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 px-3 py-2">
-              {memberSheet.avatar ? (
-                <img src={memberSheet.avatar} alt={memberSheet.name} className="h-10 w-10 rounded-[8px] object-cover" />
-              ) : (
-                <DefaultAvatar size={40} className="rounded-[8px]" />
-              )}
+              <QqAvatar src={memberSheet.avatar} alt={memberNameOf(memberSheet)} size={40} />
               <div className="text-[15px]">{memberNameOf(memberSheet)}</div>
             </div>
             <button
               type="button"
-              data-testid="wx-groupinfo-remove-member"
+              data-testid="qq-groupinfo-remove-member"
               onClick={() => removeMember(memberSheet)}
-              className="mt-1 flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#FA5150] active:bg-black/5 dark:active:bg-white/5"
+              className="mt-1 flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
             >
               <UserMinus className="h-4 w-4" />
               移出群聊
@@ -791,33 +724,68 @@ export function WxGroupInfoPage({
         </div>
       )}
 
+      {/* 回复策略选择 */}
+      {policyOpen && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setPolicyOpen(false)}>
+          <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
+            <div className="px-3 pb-1 pt-2 text-center text-[13px] text-black/45 dark:text-white/45">
+              谁来回复（决定每个成员是否发言）
+            </div>
+            {(Object.keys(REPLY_POLICY_LABEL) as GroupReplyPolicy[]).map((p) => {
+              const on = (group.replyPolicy ?? 'all') === p;
+              const desc =
+                p === 'all'
+                  ? '所有成员按顺序逐个回复'
+                  : p === 'mention'
+                    ? '只有被 @ 的成员回复（没人被 @ 就没人说话）'
+                    : '每个成员根据人设与消息内容自判要不要说话（无话可说就沉默）';
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  data-testid={`qq-groupinfo-policy-${p}`}
+                  onClick={() => {
+                    onUpdate({ replyPolicy: p });
+                    setPolicyOpen(false);
+                    onToast(`已设为${REPLY_POLICY_LABEL[p]}`);
+                  }}
+                  className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px]">{REPLY_POLICY_LABEL[p]}</span>
+                    <span className="block text-[11px] text-black/40 dark:text-white/40">{desc}</span>
+                  </span>
+                  {on && <Check className="h-4 w-4 shrink-0 text-[#0099FF]" strokeWidth={2.5} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 邀请成员 */}
       {inviteOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-[#EDEDED] dark:bg-[#111111]">
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#F5F6F7] dark:bg-[#111214]">
           <GroupNavBar title="邀请成员" onBack={() => setInviteOpen(false)} />
           <div className="min-h-0 flex-1 overflow-y-auto">
             {candidates.length === 0 ? (
-              <div className="px-8 py-20 text-center text-[13px] text-black/40 dark:text-white/40">没有可邀请的微信好友</div>
+              <div className="px-8 py-20 text-center text-[13px] text-black/40 dark:text-white/40">没有可邀请的 QQ 好友</div>
             ) : (
-              <div className="bg-white dark:bg-[#1A1A1A]">
+              <div className="bg-white dark:bg-[#1B1C1F]">
                 {candidates.map((c) => (
                   <button
                     key={c.id}
                     type="button"
-                    data-testid={`wx-group-invite-${c.id}`}
+                    data-testid={`qq-group-invite-${c.id}`}
                     onClick={() => {
                       const next = addGroupMember(gid, c.id);
                       if (next) onUpdate({ memberIds: next.memberIds });
                       onToast(`已邀请 ${memberNameOf(c)}`);
                       setInviteOpen(false);
                     }}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05]"
                   >
-                    {c.avatar ? (
-                      <img src={c.avatar} alt={c.name} className="h-10 w-10 shrink-0 rounded-[6px] object-cover" />
-                    ) : (
-                      <DefaultAvatar size={40} className="shrink-0 rounded-[6px]" />
-                    )}
+                    <QqAvatar src={c.avatar} alt={memberNameOf(c)} size={40} />
                     <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(c)}</span>
                     <UserPlus className="h-4 w-4 shrink-0 text-black/40 dark:text-white/40" />
                   </button>
@@ -852,44 +820,6 @@ export function WxGroupInfoPage({
           }}
         />
       )}
-      {/* 回复策略选择 */}
-      {policyOpen && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setPolicyOpen(false)}>
-          <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
-            <div className="px-3 pb-1 pt-2 text-center text-[13px] text-black/45 dark:text-white/45">
-              谁来回复（决定每个成员是否发言）
-            </div>
-            {(Object.keys(REPLY_POLICY_LABEL) as GroupReplyPolicy[]).map((p) => {
-              const on = (group.replyPolicy ?? 'all') === p;
-              const desc =
-                p === 'all'
-                  ? '所有成员按顺序逐个回复'
-                  : p === 'mention'
-                    ? '只有被 @ 的成员回复（没人被 @ 就没人说话）'
-                    : '每个成员根据人设与消息内容自判要不要说话（无话可说就沉默）';
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  data-testid={`wx-groupinfo-policy-${p}`}
-                  onClick={() => {
-                    onUpdate({ replyPolicy: p });
-                    setPolicyOpen(false);
-                    onToast(`已设为${REPLY_POLICY_LABEL[p]}`);
-                  }}
-                  className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left active:bg-black/5 dark:active:bg-white/5"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[15px]">{REPLY_POLICY_LABEL[p]}</span>
-                    <span className="block text-[11px] text-black/40 dark:text-white/40">{desc}</span>
-                  </span>
-                  {on && <Check className="h-4 w-4 shrink-0 text-[#07C160]" strokeWidth={2.5} />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
       {confirmClear && (
         <ConfirmDialog
           text="确定清空该群的聊天记录？"
@@ -904,7 +834,7 @@ export function WxGroupInfoPage({
       )}
       {confirmDissolve && (
         <ConfirmDialog
-          text="解散后群聊与聊天记录将删除，确定解散？"
+          text="解散后群聊与聊天记录将删除，确定解散并退出？"
           onCancel={() => setConfirmDissolve(false)}
           onConfirm={() => {
             setConfirmDissolve(false);
@@ -922,12 +852,13 @@ export function WxGroupInfoPage({
  * 群聊页。群回合引擎（多角色顺序流式回复）：
  * - runningRef 防重入；每个角色 await 一次 beginChatStream→finalize 的完整回合；
  * - 流式气泡头像/名字由 groupSpeaker 模块级 map 提供（页面中途退出重进也能对上发言角色）；
- * - finalize 里 loadGroupMsgs→append→saveGroupMsgs（组件卸载后照样落盘）+ 未读 + 记忆提取。
+ * - finalize 里 loadGroupMsgs→append→saveGroupMsgs（组件卸载后照样落盘）+ 未读 + 记忆提取；
+ * - replyPolicy：'mention' 只跑被 @ 成员；'auto' 每个成员自判（[SKIP] 回复不落盘）。
  */
 let activeGroupKey: string | null = null;
 const groupSpeaker = new Map<string, string>();
 
-export function WxGroupChatPage({
+export function QqGroupChatPage({
   group,
   me,
   contacts,
@@ -1011,7 +942,7 @@ export function WxGroupChatPage({
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
       if (activeGroupKey !== sKey && m.kind !== 'notice') {
-        wxUnreads.bump(groupRowId(gid), 1);
+        qqUnreads.bump(qqGroupRowId(gid), 1);
       }
     },
     [gid, sKey]
@@ -1088,14 +1019,14 @@ export function WxGroupChatPage({
 
         const npcExtra = buildNpcPromptExtra(char, contactsRef.current);
         const system = buildPersonaSystemPrompt(char, {
-          channel: '微信',
+          channel: 'QQ',
           userName: meName,
           ownerName: ownerLabelOf(char),
           ...npcExtra,
           extraRules: groupRules,
         });
         // 记忆（按角色隔离 + 群互通开关 + 按成员覆盖）：mode='group' → 本群记忆 + 互通开启时的自己私聊记忆
-        const memoryBlock = memRecallBlock(char.id, 'wx', memContext, {
+        const memoryBlock = memRecallBlock(char.id, 'qq', memContext, {
           mode: 'group',
           groupId: gid,
           interopOn: (g2: string) => effectiveInterop(g2, char.id),
@@ -1144,7 +1075,7 @@ export function WxGroupChatPage({
                 const [u, p] = await Promise.all([ownerRealName(), contactRealName(char.id)]);
                 memAfterAiTurn(
                   char.id,
-                  'wx',
+                  'qq',
                   apiConfig,
                   () =>
                     loadGroupMsgs(gid)
@@ -1274,31 +1205,31 @@ export function WxGroupChatPage({
   const streaming = stream?.status === 'streaming';
 
   return (
-    <div className="relative flex h-full flex-col bg-[#EDEDED] dark:bg-[#111111]">
-      {/* 顶栏 */}
-      <div className="shrink-0 border-b border-black/5 bg-[#EDEDED] pt-[54px] dark:border-white/10 dark:bg-[#111111]">
-        <div className="flex h-11 items-center px-3">
-          <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 p-1 text-black/75 active:opacity-50 dark:text-white/75">
-            <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
+    <div className="relative flex h-full flex-col bg-[#F5F6F7] dark:bg-[#111214]">
+      {/* 顶栏（对照 QQ 私聊同款：返回 + 群名/人数 + 菜单） */}
+      <div className="shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
+        <div className="flex h-12 items-center gap-1 px-3">
+          <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5 dark:active:bg-white/10">
+            <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
           </button>
-          <button type="button" onClick={onOpenInfo} data-testid="wx-groupchat-openinfo" className="flex min-w-0 flex-1 flex-col items-center active:opacity-60">
-            <span className="max-w-[180px] truncate text-[16px] font-medium">{group.name}</span>
-            <span className="text-[10px] text-black/40 dark:text-white/40">{members.length + 1} 人</span>
+          <button type="button" onClick={onOpenInfo} data-testid="qq-groupchat-openinfo" className="ml-1 flex min-w-0 flex-1 flex-col items-start active:opacity-60">
+            <span className="max-w-[220px] truncate text-[17px] font-semibold leading-tight">{group.name}</span>
+            <span className="text-[11px] text-black/40 dark:text-white/40">{members.length + 1} 人</span>
           </button>
           <button
             type="button"
-            aria-label="聊天信息"
+            aria-label="群聊设置"
             onClick={onOpenInfo}
-            data-testid="wx-groupchat-info"
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded-[6px] bg-black/5 text-[12px] text-black/60 active:opacity-60 dark:bg-white/10 dark:text-white/60"
+            data-testid="qq-groupchat-info"
+            className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5 dark:active:bg-white/10"
           >
-            …
+            <Users className="h-[20px] w-[20px] text-black/70 dark:text-white/70" strokeWidth={2} />
           </button>
         </div>
       </div>
 
       {/* 消息列表 */}
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="wx-groupchat-list">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3" data-testid="qq-groupchat-list">
         {msgs.length === 0 && (
           <div className="pt-16 text-center text-[12px] leading-relaxed text-black/35 dark:text-white/35">
             群聊已创建
@@ -1313,7 +1244,7 @@ export function WxGroupChatPage({
             return (
               <div key={m.id} className="py-2 text-center">
                 {showTime && <div className="pb-1 text-[10px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
-                <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
                   {m.noticeText ?? m.content}
                 </span>
               </div>
@@ -1321,35 +1252,43 @@ export function WxGroupChatPage({
           }
           const mine = m.role === 'me';
           const sender = mine ? null : m.senderId === 'unknown' ? null : memberById.get(m.senderId) ?? null;
+          const senderName = mine ? me.name : sender ? memberNameOf(sender) : m.senderName;
           const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
           return (
             <div key={m.id} data-mid={m.id} {...bubblePress}>
-              {showTime && <div className="py-2 text-center text-[10px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+              {showTime && <div className="py-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                  <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
                     {mine ? '你' : m.senderName || '有人'}撤回了一条消息
                   </span>
                 </div>
               ) : (
                 <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
-                  {senderAvatar ? (
-                    <img src={senderAvatar} alt={mine ? me.name : m.senderName} className="h-9 w-9 shrink-0 rounded-[5px] object-cover" />
-                  ) : (
-                    <DefaultAvatar size={36} className="shrink-0 rounded-[5px]" />
-                  )}
+                  <QqAvatar src={senderAvatar} alt={senderName} size={40} />
                   <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     {!mine && <span className="mb-0.5 px-1 text-[11px] leading-none text-black/40 dark:text-white/40">{m.senderName}</span>}
                     <div
-                      className={`${mine ? 'rounded-[8px] bg-[#95EC69] dark:bg-[#3EB575]' : 'rounded-[8px] bg-white dark:bg-[#2C2C2C]'} px-3 py-2 text-[15px] leading-relaxed`}
-                      data-testid={mine ? 'wx-groupmsg-me' : 'wx-groupmsg-peer'}
+                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                        mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
+                      }`}
+                      style={mine ? { backgroundColor: '#0099FF' } : undefined}
+                      data-testid={mine ? 'qq-groupmsg-me' : 'qq-groupmsg-peer'}
                     >
                       {m.quote && (
-                        <div className="mb-1 border-l-2 border-black/20 pl-2 text-[11px] leading-snug text-black/45 dark:border-white/25 dark:text-white/45">
-                          引用 {m.quote.name}：{m.quote.content}
+                        <div
+                          className={`mb-1 max-w-full overflow-hidden rounded-[6px] px-2 py-1 text-[12.5px] leading-[1.35] ${
+                            mine
+                              ? 'bg-white/20 text-white/85'
+                              : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
+                          }`}
+                        >
+                          <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                            {m.quote.name}：{m.quote.content}
+                          </p>
                         </div>
                       )}
-                      <span className="whitespace-pre-wrap break-words">{m.content}</span>
+                      <span>{m.content}</span>
                     </div>
                   </div>
                 </div>
@@ -1359,18 +1298,14 @@ export function WxGroupChatPage({
         })}
         {/* 流式气泡（当前发言角色） */}
         {streaming && stream && (
-          <div className="mb-3 flex gap-2" data-testid="wx-group-stream">
-            {speaker?.avatar ? (
-              <img src={speaker.avatar} alt={memberNameOf(speaker)} className="h-9 w-9 shrink-0 rounded-[5px] object-cover" />
-            ) : (
-              <DefaultAvatar size={36} className="shrink-0 rounded-[5px]" />
-            )}
+          <div className="mb-3 flex gap-2" data-testid="qq-group-stream">
+            <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
             <div className="flex min-w-0 max-w-[72%] flex-col items-start">
               <span className="mb-0.5 px-1 text-[11px] leading-none text-black/40 dark:text-white/40">
                 {speaker ? memberNameOf(speaker) : '…'}
               </span>
-              <div className="rounded-[8px] bg-white px-3 py-2 text-[15px] leading-relaxed dark:bg-[#2C2C2C]">
-                <span className="whitespace-pre-wrap break-words">{stream.content || '…'}</span>
+              <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
+                <span>{stream.content || '…'}</span>
                 <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />
               </div>
             </div>
@@ -1379,9 +1314,9 @@ export function WxGroupChatPage({
       </div>
 
       {/* 输入区 */}
-      <div className="shrink-0 border-t border-black/5 bg-[#F7F7F7] dark:border-white/10 dark:bg-[#1A1A1A]">
+      <div className="shrink-0 border-t border-black/[0.05] bg-white dark:border-white/[0.06] dark:bg-[#1B1C1F]">
         {quote && (
-          <div className="flex items-center gap-2 border-b border-black/5 px-3 py-1.5 text-[12px] text-black/50 dark:border-white/10 dark:text-white/50">
+          <div className="flex items-center gap-2 border-b border-black/[0.05] px-3 py-1.5 text-[12px] text-black/50 dark:border-white/[0.06] dark:text-white/50">
             <span className="min-w-0 flex-1 truncate">引用 {quote.name}：{quote.content}</span>
             <button type="button" aria-label="取消引用" onClick={() => setQuote(null)} className="shrink-0 active:opacity-60">
               <X className="h-3.5 w-3.5" />
@@ -1392,9 +1327,9 @@ export function WxGroupChatPage({
           <button
             type="button"
             aria-label="提及成员"
-            data-testid="wx-groupchat-at"
+            data-testid="qq-groupchat-at"
             onClick={() => setAtOpen((v) => !v)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/5 text-black/55 active:opacity-60 dark:bg-white/10 dark:text-white/55"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.05] text-black/55 active:opacity-60 dark:bg-white/10 dark:text-white/55"
           >
             <AtSign className="h-[18px] w-[18px]" />
           </button>
@@ -1410,16 +1345,16 @@ export function WxGroupChatPage({
             }}
             placeholder={streaming ? '成员回复中…' : '发消息…@ 可点名'}
             disabled={streaming || runningRef.current}
-            className="h-9 flex-1 rounded-[8px] bg-white text-[15px] dark:bg-[#2C2C2C]"
-            data-testid="wx-groupchat-input"
+            className="h-9 flex-1 rounded-full bg-black/[0.05] text-[15px] dark:bg-white/10"
+            data-testid="qq-groupchat-input"
           />
           <button
             type="button"
             onClick={send}
             disabled={streaming || !draft.trim()}
-            data-testid="wx-groupchat-send"
+            data-testid="qq-groupchat-send"
             aria-label="发送"
-            className="flex h-9 shrink-0 items-center gap-1 rounded-[8px] bg-[#07C160] px-3.5 text-[14px] font-medium text-white active:opacity-80 disabled:opacity-40"
+            className="flex h-9 shrink-0 items-center gap-1 rounded-[8px] bg-[#0099FF] px-3.5 text-[14px] font-medium text-white active:opacity-80 disabled:opacity-40"
           >
             <SendHorizontal className="h-4 w-4" />
           </button>
@@ -1428,8 +1363,8 @@ export function WxGroupChatPage({
         {atOpen && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
-            <div className="absolute bottom-[54px] left-3 z-40 w-[220px] overflow-hidden rounded-[10px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2C2C2C]">
-              <div className="border-b border-black/5 px-3 py-2 text-[11px] text-black/40 dark:border-white/10 dark:text-white/40">
+            <div className="absolute bottom-[54px] left-3 z-40 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2A2C31]">
+              <div className="border-b border-black/[0.05] px-3 py-2 text-[11px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
                 @ 群成员（被 @ 的优先回复）
               </div>
               <div className="max-h-[220px] overflow-y-auto">
@@ -1438,15 +1373,11 @@ export function WxGroupChatPage({
                   <button
                     key={m.id}
                     type="button"
-                    data-testid={`wx-group-at-${m.id}`}
+                    data-testid={`qq-group-at-${m.id}`}
                     onClick={() => insertMention(m)}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/5 dark:active:bg-white/5"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
                   >
-                    {m.avatar ? (
-                      <img src={m.avatar} alt={m.name} className="h-7 w-7 rounded-[5px] object-cover" />
-                    ) : (
-                      <DefaultAvatar size={28} className="rounded-[5px]" />
-                    )}
+                    <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={28} />
                     <span className="min-w-0 flex-1 truncate text-[14px]">{memberNameOf(m)}</span>
                   </button>
                 ))}
@@ -1458,7 +1389,7 @@ export function WxGroupChatPage({
 
       {/* 长按菜单 */}
       {menu && menuRect && menuMsg && (
-        <BubbleActionMenu pos={menuRect} items={menuItems} onSelect={onMenuSelect} onClose={() => { setMenu(null); setMenuRect(null); }} testPrefix="wx-group" />
+        <BubbleActionMenu pos={menuRect} items={menuItems} onSelect={onMenuSelect} onClose={() => { setMenu(null); setMenuRect(null); }} testPrefix="qq-group" />
       )}
     </div>
   );
