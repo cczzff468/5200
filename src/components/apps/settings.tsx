@@ -38,6 +38,7 @@ import {
   useSettings,
   type ApiPreset,
   type ThemeMode,
+  type VisionConfig,
   type VisionPreset,
 } from '@/lib/ios/store';
 import { Input } from '@/components/ui/input';
@@ -45,6 +46,7 @@ import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
+import { describeImages } from '@/lib/vision-client';
 
 // ---------------- 常量与类型 ----------------
 
@@ -1190,8 +1192,8 @@ function ApiPage({ onBack }: { onBack: () => void }) {
 
 /**
  * 识图模型配置页（与「API 配置」并列、互相独立）：
- * 预设（内置 4 家 + 用户自存）/ API 地址 / API Key / 模型名（可拉取模型列表）/ 存为预设；
- * 更改自动保存、聊天发送时现场读取（保存后自动生效，无需重启）。
+ * 预设（内置 4 家 + 用户自存）/ API 地址 / API Key / 模型名（可拉取模型列表）/ 存为预设 / 测试（发送内置测试图，走与聊天完全相同的识图管线验证连通与效果）；
+ * 更改自动保存、聊天发送时现场读取（保存后自动生效，无需重启）；使用说明放页尾。
  * 未配置时聊天发图不触发识图，文字聊天完全不受影响。
  */
 function VisionPage({ onBack }: { onBack: () => void }) {
@@ -1211,14 +1213,26 @@ function VisionPage({ onBack }: { onBack: () => void }) {
   const [modelsError, setModelsError] = useState('');
   const [modelsHint, setModelsHint] = useState('');
 
+  // 识图测试（内置测试图 → describeImages 同款管线）
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState('');
+  const [testResult, setTestResult] = useState('');
+
+  /** 配置变更统一入口：自动保存 + 清掉过期的测试结果 */
+  const patchVisionConfig = (patch: Partial<VisionConfig>) => {
+    updateVisionConfig(patch);
+    setTestError('');
+    setTestResult('');
+  };
+
   const applyBuiltin = (p: (typeof BUILTIN_VISION_PRESETS)[number]) => {
-    updateVisionConfig({ baseUrl: p.baseUrl, model: p.model });
+    patchVisionConfig({ baseUrl: p.baseUrl, model: p.model });
     setModelsError('');
     setModelsHint('');
   };
 
   const applyUserPreset = (p: VisionPreset) => {
-    updateVisionConfig(p.config);
+    patchVisionConfig(p.config);
     setModelsError('');
     setModelsHint('');
   };
@@ -1288,14 +1302,81 @@ function VisionPage({ onBack }: { onBack: () => void }) {
   const q = modelQuery.trim().toLowerCase();
   const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
 
+  /** 程序化画一张内容可识别的测试图（户外小屋场景），用于验证识图模型真的「看懂」了图片 */
+  const buildTestImage = (): string => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 240;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    const sky = ctx.createLinearGradient(0, 0, 0, 240);
+    sky.addColorStop(0, '#6FBBF5');
+    sky.addColorStop(1, '#D8F0FF');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, 320, 240);
+    ctx.fillStyle = '#FFD60A';
+    ctx.beginPath();
+    ctx.arc(262, 48, 26, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#79C86E';
+    ctx.fillRect(0, 158, 320, 82);
+    ctx.fillStyle = '#F4F4F8';
+    ctx.fillRect(56, 112, 92, 62);
+    ctx.fillStyle = '#FF9F0A';
+    ctx.beginPath();
+    ctx.moveTo(46, 114);
+    ctx.lineTo(102, 68);
+    ctx.lineTo(158, 114);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#8A6248';
+    ctx.fillRect(90, 136, 26, 38);
+    ctx.fillStyle = '#1C1C1E';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillText('测试图片', 176, 196);
+    ctx.font = '13px sans-serif';
+    ctx.fillText('VISION TEST', 177, 216);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  };
+
+  /** 连接测试：走与聊天发图完全相同的 describeImages 管线，成功展示描述、失败展示错误 */
+  const runVisionTest = async () => {
+    if (!visionConfig.baseUrl.trim()) {
+      setTestError('请先填写 API 地址');
+      return;
+    }
+    if (!visionConfig.model.trim()) {
+      setTestError('请先填写模型名');
+      return;
+    }
+    const testImage = buildTestImage();
+    if (!testImage) {
+      setTestError('无法生成测试图片，请直接在聊天里发图验证');
+      return;
+    }
+    setTesting(true);
+    setTestError('');
+    setTestResult('');
+    try {
+      const desc = await describeImages(visionConfig, {
+        images: [testImage],
+        text: '连接测试：请用一句话描述这张图片',
+      });
+      if (desc) {
+        setTestResult(desc);
+      } else {
+        setTestError('识图模型没有返回描述内容，请确认模型是否支持图片输入');
+      }
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : '测试失败，请稍后重试');
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <DetailShell title="识图模型" onBack={onBack}>
       <div className="flex flex-col gap-5">
-        {/* 说明 */}
-        <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
-          识图模型只负责「看图」：聊天里发图片时先用它把图片转成文字描述，再交给聊天模型生成回复；两者配置互相独立、互不覆盖。未配置时发图不识图，文字聊天不受影响。
-        </p>
-
         {/* 预设区 */}
         <section>
           <div className="mb-2 text-[13px] font-medium text-muted-foreground">预设</div>
@@ -1388,7 +1469,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
               <FieldLabel>API 地址</FieldLabel>
               <Input
                 value={visionConfig.baseUrl}
-                onChange={(e) => updateVisionConfig({ baseUrl: e.target.value })}
+                onChange={(e) => patchVisionConfig({ baseUrl: e.target.value })}
                 placeholder="https://api.openai.com/v1/chat/completions"
                 className="h-10 rounded-[10px] bg-background text-[14px]"
               />
@@ -1401,7 +1482,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 <Input
                   type={showKey ? 'text' : 'password'}
                   value={visionConfig.apiKey}
-                  onChange={(e) => updateVisionConfig({ apiKey: e.target.value })}
+                  onChange={(e) => patchVisionConfig({ apiKey: e.target.value })}
                   placeholder="sk-...（免 Key 接口可留空）"
                   autoComplete="off"
                   className={`h-10 rounded-[10px] bg-background text-[14px] ${
@@ -1435,7 +1516,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
               <div className="flex gap-2">
                 <Input
                   value={visionConfig.model}
-                  onChange={(e) => updateVisionConfig({ model: e.target.value })}
+                  onChange={(e) => patchVisionConfig({ model: e.target.value })}
                   placeholder="如 gpt-4o-mini / qwen-vl-plus / glm-4v-flash"
                   className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
                 />
@@ -1488,7 +1569,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                             key={m}
                             type="button"
                             onClick={() => {
-                              updateVisionConfig({ model: m });
+                              patchVisionConfig({ model: m });
                               setModelPanelOpen(false);
                             }}
                             className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
@@ -1512,8 +1593,46 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 还没有配置识图模型：聊天中发送图片不会触发识图（不影响文字聊天）。填写 OpenAI 兼容的多模态接口地址与模型名后，发图即可让 AI 看懂图片。
               </div>
             )}
+
+            {/* 识图测试：与聊天发图同一条管线（/api/vision 代理 → 私有地址浏览器直连兜底） */}
+            <div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void runVisionTest()}
+                  disabled={testing}
+                  data-testid="vision-test-btn"
+                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-4 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+                >
+                  {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
+                  {testing ? '测试中…' : '测试'}
+                </button>
+                <span className="text-[11px] leading-snug text-muted-foreground/70">
+                  发送一张内置测试图片，验证接口连通与识图效果
+                </span>
+              </div>
+              {testError && (
+                <p data-testid="vision-test-error" className="mt-1.5 text-[12px]" style={{ color: IOS_RED }}>
+                  {testError}
+                </p>
+              )}
+              {testResult && (
+                <div
+                  data-testid="vision-test-result"
+                  className="mt-2 rounded-[10px] border border-emerald-500/30 bg-emerald-400/10 px-3 py-2 text-[12px] leading-relaxed text-emerald-700 dark:border-emerald-400/25 dark:text-emerald-200/90"
+                >
+                  <span className="font-medium">测试成功：</span>
+                  {testResult}
+                </div>
+              )}
+            </div>
           </div>
         </section>
+
+        {/* 使用说明（页尾） */}
+        <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
+          识图模型只负责「看图」：聊天里发图片时先用它把图片转成文字描述，再交给聊天模型生成回复；两者配置互相独立、互不覆盖。未配置时发图不识图，文字聊天不受影响。
+        </p>
 
         <p className="text-[11px] leading-relaxed text-muted-foreground/80">
           图片仅内联传给你自己配置的识图接口，不经过任何第三方图床；预设保存在本机 IndexedDB（API Key 加密存储）。

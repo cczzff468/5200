@@ -5536,3 +5536,28 @@ Stage Summary:
 - 未配置不影响文字聊天（发图保持旧行为）；识图失败显示系统提示、不当角色台词、不影响后续聊天
 - 图片仅内联（data URL）转发到用户自己配置的识图接口，不落盘、不经第三方图床
 - 现有聊天/角色隔离/记忆/世界书/时间感知/回复条数/朋友圈零破坏（全部注入块在识图追加前已组装完成，识图只追加独立 user 消息；QQ dataURL 泄漏修复属顺带加固）
+
+---
+Task ID: vision-10
+Agent: Z.ai Code (main)
+Task: 识图模型页添加「测试」按钮 + 把页面顶部说明提示移到页尾
+
+Work Log:
+- src/components/apps/settings.tsx 单文件改动：
+  ①「测试」按钮（连接配置卡内、模型名/未配置提示之后）：点击程序化画一张内容可识别的测试图（canvas 320×240 JPEG：蓝天渐变+太阳+草地+橙顶白屋+「测试图片 VISION TEST」字样），以「连接测试：请用一句话描述这张图片」走与聊天发图完全相同的 describeImages 管线（/api/vision 服务器代理 → 私有地址浏览器直连兜底）；成功=绿色结果框展示模型返回的描述（证明真的看懂了图），失败=红字错误（复用 err.message 友好文案）；测试中按钮转圈禁用；testid：vision-test-btn / vision-test-result / vision-test-error
+  ②顶部说明段「识图模型只负责『看图』……」整段移到页尾（连接配置之后、隐私说明之前），页面顶部现在直接从预设区开始
+  ③patchVisionConfig 统一入口：baseUrl/apiKey/model 输入、预设应用、模型面板选择全部改走它——自动保存同时清掉过期的测试结果/错误
+  ④runVisionTest 前置校验：无 baseUrl→「请先填写 API 地址」、无模型名→「请先填写模型名」、describeImages 返回空描述→「识图模型没有返回描述内容，请确认模型是否支持图片输入」
+  ⑤导入 VisionConfig 类型 + describeImages；组件 docstring 同步（测试按钮/说明放页尾）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 + 守护进程化 mock OpenAI 兼容识图服务 :3999，CORS 头+preflight 204）：
+  ①页面结构：顶部无说明（预设区打头）、说明段落位页尾（根容器第 3/4 子元素、隐私说明之前）、「测试」按钮在场
+  ②成功路径：填 http://localhost:3999/v1 + mock-vision → 点测试 → 绿色框「测试成功：画面是蓝天下一座橙色屋顶的白色小屋，屋前是绿色草地，右上角挂着黄色太阳，图上写着“测试图片 VISION TEST”。」——测试图被模型真实描述，管线端到端打通
+  ③失败降级三连：死端口 3998→红字「浏览器直连失败：本机网关需允许跨域（CORS）……」；清空模型名→「请先填写模型名」；清空 baseUrl→「请先填写 API 地址」（受控输入清空用原生 setter 触发，fill("") 不触发 React onChange 的坑已绕过）
+  ④持久化：reload → 设置行「识图模型 已配置 · mock-vision」→ 进页配置原样、说明仍在页尾、测试按钮在场
+  ⑤console/page errors 零报错；最终截图确认排版
+  - 过程备注：后台 mock 首次用 nohup+& 被沙箱进程回收（curl 空响应、浏览器直连误报 CORS），改用 .zscripts/daemonize.py 双 fork 守护后稳定；测完已 kill、3999 已释放
+Stage Summary:
+- 改动文件：仅 src/components/apps/settings.tsx
+- 用户两诉求落地：识图模型页新增「测试」按钮（内置测试图、与聊天同一条识图管线、成功显示描述/失败显示错误）；页面顶部说明提示移到页尾
+- 聊天管线/识图服务端/store 零改动（纯设置 UI 增强）；测试不落任何第三方服务，图片仅内联发给用户自己配置的接口
