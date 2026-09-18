@@ -57,6 +57,8 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { groupPreview, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, type ChatGroup } from '@/lib/ios/groups';
+import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
@@ -6721,6 +6723,12 @@ function MainScreen({
 }) {
   const [tab, setTab] = useState<Tab>('chats');
   const [chatPeer, setChatPeer] = useState<ContactRecord | null>(null);
+  /** 群聊：群列表缓存 / 正在聊的群 / 群子页（create=发起群聊、list=通讯录群聊列表）/ 群聊信息页 */
+  const [wxGroups, setWxGroups] = useState<ChatGroup[]>(() => listGroups());
+  const [groupPeer, setGroupPeer] = useState<ChatGroup | null>(null);
+  const [groupPage, setGroupPage] = useState<null | 'create' | 'list'>(null);
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false);
+  const refreshGroups = useCallback(() => setWxGroups(listGroups()), []);
   /** 详情页（联系人详细界面）：从聊天设置信息卡片 / 通讯录进入；返回与朋友圈回退链见渲染分支 */
   const [detail, setDetail] = useState<ContactRecord | null>(null);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */
@@ -6785,34 +6793,39 @@ function MainScreen({
   /** 自己的完整联系人资料（个人资料页的性别 / 地区用） */
   const meRecord = useMemo(() => contacts.find((c) => c.id === me.id) ?? null, [contacts, me.id]);
 
-  /** 会话列表：置顶优先，其余按最后消息时间倒序；已删除/不显示的隐藏（新消息自动恢复）；跟自己的会话有消息时也显示（同文件传输助手） */
-  const sessions = useMemo(() => {
+  /** 会话列表：置顶优先，其余按最后消息时间倒序；已删除/不显示的隐藏（新消息自动恢复）；跟自己的会话有消息时也显示（同文件传输助手）；群会话按 group:<gid> 键共用置顶/免打扰/未读设施 */
+  const sessions = useMemo<{ key: string; contact: ContactRecord | null; group: ChatGroup | null; preview: string; time: number }[]>(() => {
     const hiddenSet = new Set(hidden);
-    const items = friends
+    const items: { key: string; contact: ContactRecord | null; group: ChatGroup | null; preview: string; time: number }[] = friends
       .filter((c) => !hiddenSet.has(c.id))
       .map((c) => {
         const p = readPreview(c.id);
-        return { contact: c, preview: p.text, time: p.time };
+        return { key: c.id, contact: c, group: null, preview: p.text, time: p.time };
       });
     const mine = readPreview(me.id);
     if (mine.text && !hiddenSet.has(me.id)) {
       const meContact = contacts.find((c) => c.id === me.id) ?? meAsContact(me);
-      items.push({ contact: meContact, preview: mine.text, time: mine.time });
+      items.push({ key: meContact.id, contact: meContact, group: null, preview: mine.text, time: mine.time });
+    }
+    for (const g of wxGroups) {
+      if (hiddenSet.has(groupRowId(g.id))) continue;
+      const p = groupPreview(g.id);
+      items.push({ key: groupRowId(g.id), contact: null, group: g, preview: p.text, time: p.time });
     }
     items.sort((a, b) => {
-      const pa = pinSet.has(a.contact.id) ? 0 : 1;
-      const pb = pinSet.has(b.contact.id) ? 0 : 1;
+      const pa = pinSet.has(a.key) ? 0 : 1;
+      const pb = pinSet.has(b.key) ? 0 : 1;
       if (pa !== pb) return pa - pb;
       return (b.time || 0) - (a.time || 0);
     });
     return items;
-    // chatPeer 入依赖：从聊天返回（或进入聊天）时重算预览，红包/转账/新消息即时反映到列表；msgTick：好友来信时重算
-  }, [contacts, friends, me, chatPeer, pinSet, hidden, msgTick]);
+    // chatPeer 入依赖：从聊天返回（或进入聊天）时重算预览，红包/转账/新消息即时反映到列表；msgTick：好友来信时重算；groups：群数据变更时重算
+  }, [contacts, friends, me, chatPeer, pinSet, hidden, msgTick, wxGroups]);
 
   /** 幽灵未读清理：只保留当前可见会话的未读（不显示该聊天/已删联系人的残留计数没有行可清，
    *  会让底部 tab 与主屏图标角标卡死；prune 无变化时不写入，可安全随 sessions 重算触发） */
   useEffect(() => {
-    wxUnreads.prune(sessions.map((s) => s.contact.id));
+    wxUnreads.prune(sessions.map((s) => s.key));
   }, [sessions]);
 
   /** 长按会话 → 弹出 QQ 同款竖向卡片菜单（480ms 触发，移动超 12px 视为滚动取消） */
@@ -7173,6 +7186,84 @@ function MainScreen({
       </>
     );
   }
+  if (groupPage === 'create') {
+    return (
+      <WxGroupCreatePage
+        contacts={contacts}
+        onBack={() => setGroupPage(null)}
+        onCreated={(g) => {
+          refreshGroups();
+          setGroupPage(null);
+          setGroupPeer(g);
+        }}
+      />
+    );
+  }
+  if (groupPage === 'list') {
+    return (
+      <WxGroupListPage
+        contacts={contacts}
+        onBack={() => setGroupPage(null)}
+        onOpen={(g) => {
+          refreshGroups();
+          setGroupPage(null);
+          setGroupPeer(g);
+        }}
+        onCreate={() => setGroupPage('create')}
+      />
+    );
+  }
+  if (groupPeer && groupInfoOpen) {
+    return (
+      <WxGroupInfoPage
+        key={`info-${groupPeer.id}`}
+        group={groupPeer}
+        contacts={contacts}
+        onBack={() => setGroupInfoOpen(false)}
+        onUpdate={(patch) => {
+          const next = updateGroupRecord(groupPeer.id, patch);
+          refreshGroups();
+          if (next) setGroupPeer(next);
+        }}
+        onDissolve={() => {
+          dissolveGroupRecord(groupPeer.id);
+          refreshGroups();
+          setGroupPeer(null);
+          setGroupInfoOpen(false);
+          showToast('群聊已解散');
+        }}
+        onToast={showToast}
+      />
+    );
+  }
+  if (groupPeer) {
+    return (
+      <WxGroupChatPage
+        key={groupPeer.id}
+        group={groupPeer}
+        me={me}
+        contacts={contacts}
+        ownerLabelOf={(p) => ownerName(p)}
+        onBack={() => {
+          refreshGroups();
+          setGroupPeer(null);
+        }}
+        onUpdate={(patch) => {
+          const next = updateGroupRecord(groupPeer.id, patch);
+          refreshGroups();
+          if (next) setGroupPeer(next);
+        }}
+        onOpenInfo={() => setGroupInfoOpen(true)}
+        onDissolve={() => {
+          dissolveGroupRecord(groupPeer.id);
+          refreshGroups();
+          setGroupPeer(null);
+          showToast('群聊已解散');
+        }}
+        onToast={showToast}
+      />
+    );
+  }
   if (chatPeer) {
     return (
       <ChatPage
@@ -7283,7 +7374,7 @@ function MainScreen({
               data-testid="wx-menu-group"
               onClick={() => {
                 setMenuOpen(false);
-                showToast('「发起群聊」暂未开放');
+                setGroupPage('create');
               }}
               className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-[11px] text-left text-[15.5px] active:bg-white/10"
             >
@@ -7328,63 +7419,117 @@ function MainScreen({
                 <p className="mt-1 text-[12.5px] text-black/30 dark:text-white/30">添加好友后，在这里和 TA 聊天</p>
               </div>
             )}
-            {sessions.map(({ contact, preview, time }) => {
-              const pinned = pinSet.has(contact.id);
-              const unreadCount = unreads[contact.id] ?? 0;
+            {sessions.map((row) => {
+              const pinned = pinSet.has(row.key);
+              const unreadCount = unreads[row.key] ?? 0;
+              if (row.group) {
+                // 群会话行（无长按菜单；点开进群聊页）
+                const g = row.group;
+                const gid = groupRowId(g.id);
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    data-testid={`wx-chat-item-group-${g.id}`}
+                    onClick={() => {
+                      if (suppressClickRef.current) {
+                        suppressClickRef.current = false;
+                        return;
+                      }
+                      markRead(gid);
+                      setGroupPeer(g);
+                    }}
+                    className={`flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
+                      pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
+                    }`}
+                  >
+                    <span className="relative shrink-0">
+                      <GroupAvatar group={g} contacts={contacts} size={44} />
+                      {unreadCount > 0 && (
+                        <span
+                          data-testid={`wx-unread-badge-${gid}`}
+                          aria-label={`${unreadCount} 条未读`}
+                          className={
+                            flagsMap[gid]?.muted === true
+                              ? 'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
+                              : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
+                          }
+                        >
+                          {flagsMap[gid]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
+                        </span>
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-[16px]">{g.name}</span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          {flagsMap[gid]?.muted === true && (
+                            <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
+                          )}
+                          <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(row.time)}</span>
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">{row.preview || '群聊已创建'}</p>
+                    </div>
+                  </button>
+                );
+              }
+              const contact = row.contact;
+              if (!contact) return null;
               return (
                 <button
                   key={contact.id}
                   type="button"
                   data-testid={`wx-chat-item-${contact.name}`}
-                  onClick={() => {
-                    if (suppressClickRef.current) {
-                      suppressClickRef.current = false;
-                      return;
-                    }
-                    markRead(contact.id);
-                    setChatPeer(contact);
-                  }}
-                  onPointerDown={(e) => onSessionPointerDown(e, contact)}
-                  onPointerMove={onSessionPointerMove}
-                  onPointerUp={clearPress}
-                  onPointerCancel={clearPress}
-                  onPointerLeave={clearPress}
-                  className={`flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
-                    pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
-                  }`}
-                >
-                  <span className="relative shrink-0">
-                    <WxAvatar src={contact.avatar} alt={contact.name} size={44} />
-                    {unreadCount > 0 && (
-                      <span
-                        data-testid={`wx-unread-badge-${contact.id}`}
-                        aria-label={`${unreadCount} 条未读`}
-                        className={
-                          flagsMap[contact.id]?.muted === true
-                            ? /* 免打扰：不显示数字，只显示小红点（原生微信同款） */
-                              'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
-                            : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
-                        }
-                      >
-                        {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
-                      </span>
-                    )}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-[16px]">{contact.name}</span>
-                      <span className="flex shrink-0 items-center gap-1">
-                        {flagsMap[contact.id]?.muted === true && (
-                          <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
-                        )}
-                        <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(time)}</span>
-                      </span>
+                    onClick={() => {
+                      if (suppressClickRef.current) {
+                        suppressClickRef.current = false;
+                        return;
+                      }
+                      markRead(contact.id);
+                      setChatPeer(contact);
+                    }}
+                    onPointerDown={(e) => onSessionPointerDown(e, contact)}
+                    onPointerMove={onSessionPointerMove}
+                    onPointerUp={clearPress}
+                    onPointerCancel={clearPress}
+                    onPointerLeave={clearPress}
+                    className={`flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
+                      pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
+                    }`}
+                  >
+                    <span className="relative shrink-0">
+                      <WxAvatar src={contact.avatar} alt={contact.name} size={44} />
+                      {unreadCount > 0 && (
+                        <span
+                          data-testid={`wx-unread-badge-${contact.id}`}
+                          aria-label={`${unreadCount} 条未读`}
+                          className={
+                            flagsMap[contact.id]?.muted === true
+                              ? /* 免打扰：不显示数字，只显示小红点（原生微信同款） */
+                                'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
+                              : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
+                          }
+                        >
+                          {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
+                        </span>
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-[16px]">{contact.name}</span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          {flagsMap[contact.id]?.muted === true && (
+                            <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
+                          )}
+                          <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(row.time)}</span>
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">
+                        {row.preview || '开始聊天吧'}
+                      </p>
                     </div>
-                    <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">
-                      {preview || '开始聊天吧'}
-                    </p>
-                  </div>
-                </button>
+                  </button>
               );
             })}
           </div>
@@ -7407,7 +7552,7 @@ function MainScreen({
               />
               <WxMenuRow
                 label="群聊"
-                onClick={() => showToast('「群聊」暂未开放')}
+                onClick={() => setGroupPage('list')}
                 icon={
                   <WxTileIcon bg="#07C160">
                     <Users className="h-[21px] w-[21px]" strokeWidth={2} />

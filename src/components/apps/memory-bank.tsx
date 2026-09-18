@@ -46,6 +46,7 @@ import {
   Share2,
   Sparkles,
   Trash2,
+  Users,
   Wand2,
 } from 'lucide-react';
 import { IOSScreen } from '@/components/ios/IOSNavBar';
@@ -53,6 +54,7 @@ import { BackToHome } from '@/components/ios/BackToHome';
 import { DefaultAvatar } from './default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
 import { listContacts } from '@/lib/ios/contacts-store';
+import { getGroup } from '@/lib/ios/groups';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from '@/lib/ios/store';
 import {
@@ -630,6 +632,22 @@ function AppBadge({ app }: { app: MemApp }) {
   );
 }
 
+/** 群聊来源徽标：群聊·群名（群已解散时只显示「群聊」） */
+function GroupSourceBadge({ groupId }: { groupId: string }) {
+  let name: string | null = null;
+  try {
+    name = getGroup(groupId)?.name ?? null;
+  } catch {
+    name = null;
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-black/[0.045] px-1.5 py-[1px] text-[10.5px] font-medium text-black/50 dark:bg-white/[0.07] dark:text-white/50">
+      <Users className="h-3 w-3" strokeWidth={2.2} />
+      {name ? `群聊·${name}` : '群聊'}
+    </span>
+  );
+}
+
 /** 「已入核心」徽标：该碎片已被长期记忆总结消费 */
 function ConsumedBadge({ label = '已入核心' }: { label?: string }) {
   return (
@@ -770,6 +788,7 @@ function FragTab({
               {f.timeEditedAt != null && <ManualTimeBadge />}
               <WeightBadge weight={f.weight ?? 'normal'} />
               <AppBadge app={f.app} />
+              {f.source === 'group' && f.sourceGroupId && <GroupSourceBadge groupId={f.sourceGroupId} />}
               <FadeBadge st={st} />
               {f.consumedAt && <ConsumedBadge />}
               {expired && <ExpiredBadge />}

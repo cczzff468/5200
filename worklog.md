@@ -5606,3 +5606,35 @@ Work Log:
 Stage Summary:
 - 改动文件：仅 src/components/apps/settings.tsx（纯样式收敛，逻辑零改动）
 - 测试按钮从「重装饰」回调为「简约」：平面白底描边按钮 + 一行式图标结果展示，融入表单整体风格；三态（默认/加载中/结果）样式层级清晰
+
+---
+Task ID: group-13
+Agent: Z.ai Code (main)
+Task: 微信新增「群聊」功能——多角色分别回复/@优先/群记忆与私聊记忆按群独立互通（用户七块完整需求）
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts（新）：ChatGroup{id,app:'wx',name,avatar,ownerId,memberIds,announcement,memoryInterop,createdAt}（kv 键 wx-chat-groups）+ WxGroupMsg{senderId,senderName,quote,recalled,notice…}（wx-group-msgs:<gid>，封顶 200）+ create/update/addMember/removeMember/dissolveGroup（级联清未读/标志/隐藏/时间感知/每成员群轮次计数，localStorage map 精准删键）+ groupPreview；purgeContactFromGroups 供删联系人级联（成员清空自动解散）
+- 记忆层：
+  ①memory-core.ts：MemFragment.source 扩为 'chat'|'moments'|'group' + sourceGroupId + groupMembers；MemCore/MemLongTerm 增 groupIds + privateSource（总结时从来源携带，缺省兼容旧数据）
+  ②memory.ts：memRecallBlock 增第 4 参 MemRecallOpts{mode:'private'|'group',groupId,interopOn,groupLabel}——private 模式按来源群 memoryInterop 决定群碎片/总结是否参与私聊召回（缺省解析器直读群数据层）；group 模式只读当前群来源 + 互通开启时自己的非群聊记忆，其他群的总结永不参与（群间隔离），角色隔离由 mem-frag:<contactId> 键天然保证；碎片来源标注「群聊·<群名>」；总结函数（碎片→核心→长期）携带 groupIds/privateSource；memAfterAiTurn 增第 7 参 MemTurnOpts{roundScope,group:{id,members}}——群轮次计数 mem-round:<cid>:wx:group:<gid> 与私聊互不干扰，提取碎片带群来源标记
+- UI src/components/apps/wx-group.tsx（新，~1330 行）：WxGroupCreatePage（多选微信好友+群名默认「A、B、C的群聊」）/WxGroupListPage（通讯录›群聊）/WxGroupChatPage（微信同款气泡：peer 白泡+成员名标注+头像、me 绿泡；@浮层点名插入；长按菜单 复制/引用/撤回/删除（bubble-menu 共用组件，{...bubblePress} 挂消息容器）；流式气泡显示当前发言角色（groupSpeaker 模块级 map，中途退出重进不失主）；群回合引擎：@成员优先→其余按成员顺序逐个流式回复，runningRef 防重入+队列串行）/WxGroupInfoPage（群名片点头像换头像、成员格点出移出、邀请浮层、群名/群公告编辑、记忆与私聊互通开关（按群）、时间感知/置顶/免打扰、清空记录、解散群聊）
+- wechat.tsx 接线（既有「发起群聊」「群聊」占位全部转正）：MainScreen 增 wxGroups/groupPeer/groupPage/groupInfoOpen 状态；sessions 变 union（contact|group，群键 group:<gid> 共用置顶/免打扰/未读/隐藏设施，预览走 groupPreview）；会话行群分支（头像拼贴 GroupAvatar 2×2/未读角标/免打扰小红点）；渲染分支 create/list/info/chatPage
+- 多角色 system 独立组装（每角色各一份，绝不共用）：buildPersonaSystemPrompt（含 NPC 配角圈）+ 群聊规则块（【群聊模式】当前是群聊「X」+参与成员名单+只以自己身份发言+禁复制复读其他成员+每次一条短消息+群公告）+ memRecallBlock(mode:'group') + 时间感知（按群开关）+ 世界书（collectWbBlocks/applyWbUserBlocks/wbRulesBlock 全套）；上下文映射：自己历史→assistant、机主/其他成员→「发言者：内容」user 消息；finalize 落盘+未读（不在页面时 bump）+ memAfterAiTurn（names 双真实名+roundScope+群来源标记）
+- 配套：contacts-store.purgeChatTracesFor 增 purgeContactFromGroups 级联；memory-bank.tsx 碎片徽章行增「群聊·群名」来源徽章（GroupSourceBadge）
+- 群内不含红包/转账/亲属卡等资金功能（群信息页明示「不含任何真实资金操作」）；表情包/识图不进群聊管线（私聊特性零改动）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过（修一处 hooks/set-state-in-effect：群列表页去掉无谓 tick effect；修 wx-group 长按处理器漏挂）
+- E2E 实测（agent-browser 390×844 + 守护进程 mock :3999 按角色名记录各角色 system + SSE 流式）：
+  ①建群：「发起群聊」→ 勾选小美+阿力 → 群名自动「小美、阿力的群聊」→ 创建进群聊页（3 人）
+  ②多角色回复：发「大家好」→ 小美、阿力逐个流式回复，内容分别为「小美的群聊回复」「阿力的群聊回复」（mock 按 system 内【名字】生成——证明每角色独立 system、不串台不复制）；气泡带成员名+头像+时间分隔
+  ③@优先：@浮层点名阿力发送 → 阿力第一个回复、小美随后 ✓
+  ④互通关闭（默认）：群聊 system 断言——小美含【群聊模式】+参与成员+本群记忆「约好周末一起去爬山」、不含私聊记忆「特别怕狗」；阿力不含小美的群碎片（角色隔离）；双方私聊记忆均不进群聊 ✓
+  ⑤互通开启（群信息页 UI 切换）：小美 system 含「特别怕狗」、阿力含「学吉他」——各自私聊记忆进群聊且互不可见对方记忆 ✓
+  ⑥私聊方向（互通开）：私聊小美 → system 含群记忆「爬山」且带「群聊·」来源标注 ✓；互通关闭后 → 群记忆消失、私聊记忆保留 ✓
+  ⑦长按菜单：复制/引用（引用条出现）/撤回（「阿力撤回了一条消息」灰行）/删除 四项动作实测 ✓
+  ⑧持久化：reload → 群会话行在列表（预览含撤回文案）→ 进群 9 peer+5 me+1 撤回行全在 → 群信息互通开关=unchecked（关闭态持久化）✓
+  ⑨群改名「周末爬山小分队」即时生效 ✓；群信息页截图确认与参考 QQ 群聊信息页布局一致
+  - 排障备注：种子群碎片 sourceGroupId 与 UI 建群实际 id 不匹配导致首轮回断失败（数据问题非代码）；mock 最初只记最后一个请求，升级按角色名记录后双向断言齐全；502 记录为 mock 重启间隙服务器代理降级、浏览器直连兜底成功
+  - 设计边界（如实标注）：群聊记忆自动提取由轮次间隔（默认 20 轮，按角色+按群独立计数）触发，E2E 未到阈值未实测提取入库（提取/落库/标记路径与朋友圈来源同构复用 appendFragments extra）；记忆库「立即提取」按钮只覆盖私聊来源；群内回复条数固定每角色 1 条（回复条数为私聊特性）
+Stage Summary:
+- 改动文件：新增 src/lib/ios/groups.ts、src/components/apps/wx-group.tsx；修改 src/lib/memory-core.ts、src/lib/memory.ts、src/components/apps/wechat.tsx、src/components/apps/memory-bank.tsx、src/lib/ios/contacts-store.ts
+- 用户七块需求落地：①入口（+菜单发起群聊+通讯录群聊列表+会话列表群行）②多角色按人设分别回复、区分不串台、@优先 ③互通开关按群独立（默认关=完全隔离）④群记忆带来源（群ID/参与角色/发言人=存储归属角色）参与私聊召回 ⑤注入逻辑（私聊=私聊+互通群记忆；群聊=当前群+互通时角色私聊记忆；每角色独立 system；明确告知群聊语境与参与者）⑥角色隔离（只读自己记忆、群间隔离、开关不影响角色间）⑦零破坏（私聊/记忆分层/世界书/时间感知/回复条数/朋友圈/识图全部未动；无资金操作；长按菜单齐全）

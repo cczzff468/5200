@@ -59,14 +59,19 @@ export interface MemFragment {
   reinforceCount?: number;
   /** 来源消息 ID（追溯：这条记忆来自哪次对话的哪条消息） */
   sourceMsgId?: string;
-  /** 来源渠道：缺省 = 私聊对话提取；'moments' = 朋友圈/QQ空间动态（与私聊区分，注入时带渠道标注） */
-  source?: 'chat' | 'moments';
+  /** 来源渠道：缺省 = 私聊对话提取；'moments' = 朋友圈/QQ空间动态（与私聊区分，注入时带渠道标注）；
+   *  'group' = 群聊对话提取（互开关决定是否参与私聊召回；群聊召回仅限当前群） */
+  source?: 'chat' | 'moments' | 'group';
   /** source==='moments'：关联的动态 id（动态与记忆双向打通的追溯键） */
   sourcePostId?: string;
   /** source==='moments'：互动类型（发动态/点赞/评论） */
   sourceKind?: 'post' | 'like' | 'comment';
   /** source==='moments'：关联的评论 id（可追溯到具体哪条互动） */
   sourceCommentId?: string;
+  /** source==='group'：来源群聊 ID（互通开关与群间隔离的判断键） */
+  sourceGroupId?: string;
+  /** source==='group'：事件发生时群内参与角色 ID（含机主；审计/展示用，召回按 contactId 隔离不依赖此字段） */
+  groupMembers?: string[];
 }
 
 /** 核心记忆：M 条碎片自动总结出的一条核心事实（被长期记忆收编后标记 archivedAt） */
@@ -90,6 +95,10 @@ export interface MemCore {
   timeEditedAt?: number;
   /** 已被长期记忆总结收编（召回时由长期记忆代表，不再参与后续总结与召回） */
   archivedAt?: number;
+  /** 来源群聊 ID 集合：空/缺省 = 纯私聊来源（旧数据）；总结时由来源碎片汇总（互通与群间隔离过滤用） */
+  groupIds?: string[];
+  /** 是否含非群聊（私聊/朋友圈）来源：缺省 true（旧数据兼容）；纯群聊来源的总结为 false */
+  privateSource?: boolean;
 }
 
 /** 长期记忆：K 条核心记忆自动总结出的最稳定画像（记忆层级的顶层） */
@@ -111,6 +120,10 @@ export interface MemLongTerm {
   editedAt?: number;
   /** 时间被用户手动编辑过的事件：设置后自动流程不得改写 eventTime/expiresAt */
   timeEditedAt?: number;
+  /** 来源群聊 ID 集合：空/缺省 = 纯私聊来源（旧数据）；总结时由来源核心汇总（互通与群间隔离过滤用） */
+  groupIds?: string[];
+  /** 是否含非群聊（私聊/朋友圈）来源：缺省 true（旧数据兼容）；纯群聊来源的总结为 false */
+  privateSource?: boolean;
 }
 
 /** 每联系人记忆设置 */

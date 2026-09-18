@@ -42,6 +42,7 @@
 
 import type { ApiConfig } from '@/lib/ios/store';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
+import { getGroup } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
   MEM_APP_LABEL,
@@ -132,6 +133,25 @@ function writeJSON(key: string, value: unknown): void {
     kvSet(key, value);
   } catch {
     // 忽略
+  }
+}
+
+/** 群聊互通开关默认解析：从群数据层读该群的 memoryInterop（群不存在 = 不互通，保守隔离）。
+ *  groups.ts 只依赖 idb-kv/genId，无循环依赖 */
+function defaultGroupInteropOn(groupId: string): boolean {
+  try {
+    return getGroup(groupId)?.memoryInterop === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 群名默认解析（召回标注「群聊·群名」用；群已解散时回退 null） */
+function defaultGroupLabel(groupId: string): string | null {
+  try {
+    return getGroup(groupId)?.name ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -484,15 +504,59 @@ function fragRecallScore(f: MemFragment, forget: MemForget, context: string, now
  * 容量上限：长期 8 条、核心 12 条、碎片 5 条（各按 权重×相关性×淡化 降序截断）；
  * 已入长期（archivedAt）的核心、已入核心（consumedAt）与已归档的碎片不再召回。
  * 该联系人没有记忆 / 互通关闭且当前 App 无来源记忆 → 返回空串（正常聊天，不报错）。
+ *
+ * 群聊互通（opts）：
+ * - mode 'private'（缺省）：跨 App 互通开关照旧；另读群聊来源记忆——碎片/总结按来源群
+ *   memoryInterop 判断（互斥于跨 App share 开关，两层开关都开才可见）；
+ * - mode 'group'（groupId 必传）：只读当前群来源记忆 + （该群互通开启时）自己的非群聊记忆；
+ *   其他群的记忆永不参与（群间隔离），角色隔离由存储键天然保证。
  */
-export function memRecallBlock(contactId: string, app: MemApp, contextText: string): string {
+export interface MemRecallOpts {
+  mode?: 'private' | 'group';
+  /** mode='group' 时必传：当前群聊 ID */
+  groupId?: string;
+  /** 群互通开关解析（缺省读群数据层的 memoryInterop） */
+  interopOn?: (groupId: string) => boolean;
+  /** 群名解析（来源标注「群聊·群名」用；缺省读群数据层） */
+  groupLabel?: (groupId: string) => string | null;
+}
+
+export function memRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
   if (!contactId) return '';
   memSweepExpiry(contactId);
   const { share, forget } = getMemSettings(contactId);
   const now = Date.now();
+  const isGroupMode = opts?.mode === 'group' && !!opts.groupId;
+  const curGroup = opts?.groupId ?? '';
+  const interopOn = opts?.interopOn ?? defaultGroupInteropOn;
+  const groupLabelOf = opts?.groupLabel ?? defaultGroupLabel;
+  /** 核心/长期层级的群来源可见性：纯私聊总结恒可见（旧数据兼容）；带群来源的按各群互通判断 */
+  const summaryVisiblePrivate = (m: Pick<MemCore, 'groupIds' | 'privateSource'>): boolean => {
+    const gids = m.groupIds ?? [];
+    if (gids.length === 0) return true; // 纯私聊/朋友圈来源（含旧数据）
+    if (m.privateSource !== false) return true; // 混合来源（含私聊部分）：私聊恒可见
+    return gids.some((g) => interopOn(g)); // 纯群聊来源：任一来源群互通开启才可见
+  };
+  /** 群聊模式下的总结可见性：本群来源恒可见；纯私聊总结在互通开时可见；其他群的总结永不可见（群间隔离） */
+  const summaryVisibleInGroup = (m: Pick<MemCore, 'groupIds' | 'privateSource'>): boolean => {
+    const gids = m.groupIds ?? [];
+    if (gids.includes(curGroup)) return true;
+    if (gids.some((g) => g !== curGroup)) return false; // 沾了其他群来源：不进本群上下文
+    return interopOn(curGroup) && m.privateSource !== false;
+  };
+  /** 碎片级可见性（来源精确到条） */
+  const fragVisiblePrivate = (f: MemFragment): boolean => {
+    if (f.source !== 'group') return true;
+    return f.sourceGroupId ? interopOn(f.sourceGroupId) : false;
+  };
+  const fragVisibleInGroup = (f: MemFragment): boolean => {
+    if (f.source === 'group') return f.sourceGroupId === curGroup; // 只读当前群（群间隔离）
+    return interopOn(curGroup); // 自己的私聊/朋友圈记忆：互通开启才可见
+  };
   // 长期记忆（顶层画像）：全量注入（安全上限 8 条防失控）；用户手动设置过期的长期不再注入
   const longs = listLongTerm(contactId)
     .filter((m) => !isMemExpired(m, now) && (share || m.apps.includes(app)))
+    .filter((m) => (isGroupMode ? summaryVisibleInGroup(m) : summaryVisiblePrivate(m)))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 8);
@@ -500,12 +564,14 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
   // 用户手动设置过期的核心不再注入（默认永不过期不受影响）
   const cores = listCores(contactId)
     .filter((m) => !m.archivedAt && !isMemExpired(m, now) && (share || m.apps.includes(app)))
+    .filter((m) => (isGroupMode ? summaryVisibleInGroup(m) : summaryVisiblePrivate(m)))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 12);
   // 近期记忆碎片：按相关性取前 5 条；已消费的由核心记忆代表，已更新/已过期的不召回
   const frags = listFragments(contactId)
     .filter((f) => !f.consumedAt && !f.supersededAt && !isMemExpired(f, now) && (share || f.app === app))
+    .filter((f) => (isGroupMode ? fragVisibleInGroup(f) : fragVisiblePrivate(f)))
     .map((f) => ({ f, ...fragRecallScore(f, forget, contextText, now) }))
     .filter((x) => x.st !== 'faded')
     .sort((a, b) => b.s - a.s)
@@ -550,8 +616,15 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
     lines.push('◇ 近期记忆碎片：');
     keepFrags.forEach(({ f }, i) => {
       // 事件时间优先（内容所指的时间），否则用来源对话时间；碎片额外带来源渠道标注
-      // （朋友圈/QQ动态来源的碎片与私聊区分标注，让 AI 知道这是动态里的事，不是私聊说的）
-      const srcLabel = f.source === 'moments' ? (f.app === 'wx' ? '朋友圈' : 'QQ动态') : MEM_APP_LABEL[f.app];
+      // （朋友圈/QQ动态/群聊来源的碎片与私聊区分标注，让 AI 知道这是哪里发生的事）
+      const srcLabel =
+        f.source === 'moments'
+          ? f.app === 'wx'
+            ? '朋友圈'
+            : 'QQ动态'
+          : f.source === 'group'
+            ? `群聊·${(f.sourceGroupId && groupLabelOf(f.sourceGroupId)) || '群聊'}`
+            : MEM_APP_LABEL[f.app];
       const t = f.eventTime != null ? memTimeLabel(f.eventTime, now) : `${memTimeLabel(f.sourceTime, now)}·${srcLabel}`;
       lines.push(`${i + 1}. （${t}）${f.content}`);
     });
@@ -779,8 +852,8 @@ function appendFragments(
   items: ExtractItem[],
   sourceTime: number,
   sourceMsgId?: string,
-  /** 额外字段（动态来源记忆用：source/sourcePostId/sourceKind/sourceCommentId 直通新碎片） */
-  extra?: Partial<Pick<MemFragment, 'source' | 'sourcePostId' | 'sourceKind' | 'sourceCommentId'>>
+  /** 额外字段（动态/群聊来源记忆用：source/sourcePostId/sourceKind/sourceCommentId/sourceGroupId/groupMembers 直通新碎片） */
+  extra?: Partial<Pick<MemFragment, 'source' | 'sourcePostId' | 'sourceKind' | 'sourceCommentId' | 'sourceGroupId' | 'groupMembers'>>
 ): { added: MemFragment[]; merged: number; superseded: number } {
   const list = readFragments(contactId);
   const now = Date.now();
@@ -864,6 +937,8 @@ function appendFragments(
         if (!simHit.sourcePostId && extra.sourcePostId) simHit.sourcePostId = extra.sourcePostId;
         if (!simHit.sourceKind && extra.sourceKind) simHit.sourceKind = extra.sourceKind;
         if (!simHit.sourceCommentId && extra.sourceCommentId) simHit.sourceCommentId = extra.sourceCommentId;
+        if (!simHit.sourceGroupId && extra.sourceGroupId) simHit.sourceGroupId = extra.sourceGroupId;
+        if (!simHit.groupMembers && extra.groupMembers) simHit.groupMembers = extra.groupMembers;
       }
       seen.add(normText(simHit.content));
       merged++;
@@ -914,6 +989,9 @@ async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig,
       const ets = pending.map((f) => f.eventTime).filter((t): t is number => t != null);
       return ets.length > 0 ? Math.min(...ets) : undefined;
     })(),
+    // 群聊来源携带（互通与群间隔离过滤用）：混合来源 privateSource=true，纯群聊为 false
+    groupIds: Array.from(new Set(pending.map((f) => f.sourceGroupId).filter((g): g is string => !!g))),
+    privateSource: pending.some((f) => f.source !== 'group'),
   };
   const all = readCores(contactId);
   writeJSON(coreKey(contactId), [...all, core]);
@@ -951,6 +1029,9 @@ async function summarizeCoresIntoLong(contactId: string, apiConfig: ApiConfig, n
     sourceIds: pending.map((m) => m.id),
     apps: Array.from(new Set(pending.flatMap((m) => m.apps))),
     createdAt: Date.now(),
+    // 群聊来源携带（互通与群间隔离过滤用）：混合来源 privateSource=true，纯群聊为 false
+    groupIds: Array.from(new Set(pending.flatMap((m) => m.groupIds ?? []))),
+    privateSource: pending.some((m) => m.privateSource !== false),
   };
   const all = readLongTerm(contactId);
   writeJSON(longKey(contactId), [...all, long]);
@@ -976,6 +1057,14 @@ async function maybeAutoLongSummarize(contactId: string, apiConfig: ApiConfig, n
   return summarizeCoresIntoLong(contactId, apiConfig, names);
 }
 
+/** 群聊轮次的来源/作用域选项（memAfterAiTurn opts）：群记忆碎片带来源标记，轮次计数与私聊分开 */
+export interface MemTurnOpts {
+  /** 轮次计数隔离作用域（如 `group:<gid>` → mem-round:<cid>:wx:group:<gid>，与私聊轮次互不干扰） */
+  roundScope?: string;
+  /** 群聊来源标记：碎片写 source='group' + sourceGroupId + groupMembers */
+  group?: { id: string; members: string[] };
+}
+
 /**
  * 一轮 AI 对话结束后的记忆管线（各聊天 App 的 finalize 成功分支调用）：
  * 1) 轮次 +1；2) 达到提取间隔 → 从最近对话提取记忆碎片（后台异步，不阻塞聊天）；
@@ -984,6 +1073,7 @@ async function maybeAutoLongSummarize(contactId: string, apiConfig: ApiConfig, n
  * buildConvo 惰性调用：只有真的需要提取时才读取/整理对话文本。
  * getSourceMsgId 惰性调用：提取时取来源消息 ID（追溯用，可省略）。
  * names：用户真实名字 + 角色名字（视角统一注入提取/总结 prompt；缺省回退固定称呼）。
+ * opts：群聊轮次传 roundScope + group（群记忆来源标记，轮次计数与私聊互不干扰）。
  */
 export function memAfterAiTurn(
   contactId: string | null,
@@ -991,13 +1081,15 @@ export function memAfterAiTurn(
   apiConfig: ApiConfig,
   buildConvo: () => MemConvoTurn[],
   getSourceMsgId?: () => string | undefined,
-  names?: MemNames | null
+  names?: MemNames | null,
+  opts?: MemTurnOpts
 ): void {
   if (!contactId) return;
+  const scope = opts?.roundScope ? `:${opts.roundScope}` : '';
   try {
     // 时间感知：先把已到期的碎片标记归档（惰性清扫，召回/总结另有实时过滤兜底）
     memSweepExpiry(contactId);
-    const key = roundKey(contactId, app);
+    const key = `mem-round:${contactId}:${app}${scope}`;
     const count = (readJSON<number>(key) ?? 0) + 1;
     const { interval } = getMemSettings(contactId);
     if (count < interval) {
@@ -1006,7 +1098,7 @@ export function memAfterAiTurn(
     }
     // 达到间隔：归零计数并异步提取（归零在先避免每轮重试轰炸；下个窗口自然重试）
     writeJSON(key, 0);
-    const guard = `${contactId}:${app}`;
+    const guard = `${contactId}:${app}${scope}`;
     if (inflight.has(guard)) return;
     inflight.add(guard);
     void (async () => {
@@ -1019,7 +1111,13 @@ export function memAfterAiTurn(
             apiConfig
           );
           const items = normalizeExtract(res);
-          if (items.length > 0) appendFragments(contactId, app, items, Date.now(), getSourceMsgId?.());
+          if (items.length > 0) {
+            // 群聊轮次：碎片带群来源标记（source/sourceGroupId/groupMembers），供互通召回过滤
+            const extra = opts?.group
+              ? { source: 'group' as const, sourceGroupId: opts.group.id, groupMembers: opts.group.members }
+              : undefined;
+            appendFragments(contactId, app, items, Date.now(), getSourceMsgId?.(), extra);
+          }
         }
       } catch (err) {
         console.warn('[memory] 自动提取失败（下个窗口重试）', err);

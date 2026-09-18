@@ -23,6 +23,7 @@ import {
   type ContactPayload,
   type ContactRecord,
 } from '@/lib/contacts';
+import { purgeContactFromGroups } from './groups';
 
 const MIGRATED_KEY = 'ios-contacts-migrated';
 
@@ -245,6 +246,12 @@ function purgeChatTracesFor(id: string): void {
   // 会话标志：走总线 reset（内存 + localStorage + 订阅广播同步）
   wxChatFlags.reset(id);
   qqChatFlags.reset(id);
+  // 群聊级联：把被删联系人从所有群的成员里移除（成员清空的群自动解散，群消息/未读/标志一并清理）
+  try {
+    purgeContactFromGroups(id);
+  } catch {
+    // 清理失败不阻塞删除
+  }
   // 聊天背景图本体（IndexedDB）：异步清理，失败忽略
   void localDB.delete('settings', `chat-bg:wx:${id}`).catch(() => undefined);
   void localDB.delete('settings', `chat-bg:qq:${id}`).catch(() => undefined);
