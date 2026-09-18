@@ -38,6 +38,7 @@ import {
   useSettings,
   type ApiPreset,
   type ThemeMode,
+  type VisionPreset,
 } from '@/lib/ios/store';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
@@ -47,7 +48,7 @@ import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct
 
 // ---------------- 常量与类型 ----------------
 
-type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'about' | 'lock';
+type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'vision' | 'about' | 'lock';
 
 const IOS_RED = '#FF453A';
 
@@ -63,6 +64,14 @@ const BUILTIN_API_PRESETS: { name: string; baseUrl: string; model: string }[] = 
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
   { name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1/chat/completions', model: 'moonshot-v1-8k' },
   { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4-flash' },
+];
+
+/** 内置识图预设：均为支持图片输入的模型（识图模型与聊天模型可同厂不同款） */
+const BUILTIN_VISION_PRESETS: { name: string; baseUrl: string; model: string }[] = [
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+  { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4v-flash' },
+  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-vl-plus' },
+  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1/chat/completions', model: 'Qwen/Qwen2.5-VL-7B-Instruct' },
 ];
 
 // ---------------- 模块级工具 ----------------
@@ -101,6 +110,7 @@ const TONE_GREEN = '#34C759';
 const TONE_RED = '#FF3B30';
 const TONE_GRAY = '#8E8E93';
 const TONE_CYAN = '#32ADE6';
+const TONE_PURPLE = '#AF52FF';
 
 /** 主列表行图标：纯色圆角方块 + 白色线性图标（iOS 设置风） */
 function RowIcon({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
@@ -193,6 +203,8 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
   const apiKey = useSettings((s) => s.apiConfig.apiKey);
   const apiModel = useSettings((s) => s.apiConfig.model);
+  const visionConfigured = useSettings((s) => Boolean(s.visionConfig.baseUrl.trim()));
+  const visionModel = useSettings((s) => s.visionConfig.model);
   const profile = useSettings((s) => s.profile);
 
   const [airplane, setAirplane] = useState(false);
@@ -319,6 +331,13 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             label="API 配置"
             value={apiKey.trim() ? `已配置 · ${apiModel}` : '未配置'}
             onClick={() => onOpen('api')}
+          />
+          <MainRow
+            icon={Eye}
+            tone={TONE_PURPLE}
+            label="识图模型"
+            value={visionConfigured ? `已配置 · ${visionModel.trim() || '未填模型名'}` : '未配置'}
+            onClick={() => onOpen('vision')}
           />
           <MainRow icon={Database} tone={TONE_GREEN} label="存储" onClick={() => onOpen('storage')} />
         </div>
@@ -1167,6 +1186,343 @@ function ApiPage({ onBack }: { onBack: () => void }) {
   );
 }
 
+// ---------------- 识图模型设置 ----------------
+
+/**
+ * 识图模型配置页（与「API 配置」并列、互相独立）：
+ * 预设（内置 4 家 + 用户自存）/ API 地址 / API Key / 模型名（可拉取模型列表）/ 存为预设；
+ * 更改自动保存、聊天发送时现场读取（保存后自动生效，无需重启）。
+ * 未配置时聊天发图不触发识图，文字聊天完全不受影响。
+ */
+function VisionPage({ onBack }: { onBack: () => void }) {
+  const visionConfig = useSettings((s) => s.visionConfig);
+  const visionPresets = useSettings((s) => s.visionPresets);
+  const updateVisionConfig = useSettings((s) => s.updateVisionConfig);
+  const setVisionPresets = useSettings((s) => s.setVisionPresets);
+
+  const [showKey, setShowKey] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
+
+  const [models, setModels] = useState<string[]>([]);
+  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState('');
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+  const [modelsHint, setModelsHint] = useState('');
+
+  const applyBuiltin = (p: (typeof BUILTIN_VISION_PRESETS)[number]) => {
+    updateVisionConfig({ baseUrl: p.baseUrl, model: p.model });
+    setModelsError('');
+    setModelsHint('');
+  };
+
+  const applyUserPreset = (p: VisionPreset) => {
+    updateVisionConfig(p.config);
+    setModelsError('');
+    setModelsHint('');
+  };
+
+  const deletePreset = (id: string) => {
+    setVisionPresets(visionPresets.filter((p) => p.id !== id));
+  };
+
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+    setVisionPresets([...visionPresets, { id: genId(), name, config: { ...visionConfig } }]);
+    setPresetName('');
+    setSaveOpen(false);
+  };
+
+  const fetchModels = async () => {
+    if (!visionConfig.baseUrl.trim()) {
+      setModelsError('请先填写 API 地址');
+      return;
+    }
+    setFetchingModels(true);
+    setModelsError('');
+    setModelsHint('');
+    try {
+      const res = await fetch('/api/settings/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: visionConfig.baseUrl, apiKey: visionConfig.apiKey }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { models?: string[]; hint?: string; error?: string; directOnly?: boolean }
+        | null;
+      // 内网地址或服务器不可达/地区限制（directOnly）：改用浏览器直连拉取
+      if (!data || data.directOnly || (data.error && isPrivateApiUrl(visionConfig.baseUrl))) {
+        const direct = await directFetchModels(visionConfig.baseUrl, visionConfig.apiKey);
+        if (direct.error) {
+          setModelsError(direct.error);
+          return;
+        }
+        if (direct.hint && direct.models.length === 0) {
+          setModelsHint(direct.hint);
+          return;
+        }
+        setModels(direct.models);
+        setModelQuery('');
+        setModelPanelOpen(true);
+        return;
+      }
+      if (!res.ok || !data || data.error) {
+        setModelsError(data?.error ?? '拉取模型失败，请稍后重试');
+      } else if (data.hint && (data.models ?? []).length === 0) {
+        // 反代等无模型列表接口：优雅降级，提示手动输入
+        setModelsHint(data.hint);
+      } else {
+        setModels(data.models ?? []);
+        setModelQuery('');
+        setModelPanelOpen(true);
+      }
+    } catch {
+      setModelsError('无法连接到服务器');
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const q = modelQuery.trim().toLowerCase();
+  const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
+
+  return (
+    <DetailShell title="识图模型" onBack={onBack}>
+      <div className="flex flex-col gap-5">
+        {/* 说明 */}
+        <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
+          识图模型只负责「看图」：聊天里发图片时先用它把图片转成文字描述，再交给聊天模型生成回复；两者配置互相独立、互不覆盖。未配置时发图不识图，文字聊天不受影响。
+        </p>
+
+        {/* 预设区 */}
+        <section>
+          <div className="mb-2 text-[13px] font-medium text-muted-foreground">预设</div>
+          <div className="flex flex-wrap gap-2">
+            {BUILTIN_VISION_PRESETS.map((p) => {
+              const active = visionConfig.baseUrl === p.baseUrl;
+              return (
+                <button
+                  key={p.name}
+                  type="button"
+                  onClick={() => applyBuiltin(p)}
+                  className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
+                    active
+                      ? 'border-foreground bg-foreground text-background'
+                      : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+                  }`}
+                >
+                  {p.name}
+                </button>
+              );
+            })}
+            {visionPresets.map((p) => {
+              const active =
+                visionConfig.baseUrl === p.config.baseUrl && visionConfig.model === p.config.model;
+              return (
+                <span
+                  key={p.id}
+                  className={`flex items-center gap-1.5 rounded-full border py-1.5 pl-3 pr-2 text-[13px] ${
+                    active
+                      ? 'border-foreground bg-foreground text-background'
+                      : 'border-border text-foreground/85'
+                  }`}
+                >
+                  <button type="button" onClick={() => applyUserPreset(p)} className="max-w-[120px] truncate">
+                    {p.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deletePreset(p.id)}
+                    aria-label={`删除识图预设 ${p.name}`}
+                    className="opacity-60 transition-opacity hover:opacity-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setSaveOpen((v) => !v)}
+              className="flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-muted-foreground/50"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              存为预设
+            </button>
+          </div>
+          {saveOpen && (
+            <div className="mt-3 flex gap-2">
+              <Input
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+                placeholder="预设名称，如 本地视觉模型"
+                autoFocus
+                className="h-9 flex-1 rounded-[10px] bg-background text-[14px]"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') savePreset();
+                }}
+              />
+              <button
+                type="button"
+                onClick={savePreset}
+                disabled={!presetName.trim()}
+                className="h-9 shrink-0 rounded-[10px] bg-foreground px-4 text-[13px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-40"
+              >
+                保存
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* 配置表单 */}
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
+            <span className="text-[11px] text-muted-foreground/70">更改自动保存 · 即时生效</span>
+          </div>
+          <div className="flex flex-col gap-4 rounded-[12px] bg-card p-4">
+            {/* API 地址 */}
+            <div>
+              <FieldLabel>API 地址</FieldLabel>
+              <Input
+                value={visionConfig.baseUrl}
+                onChange={(e) => updateVisionConfig({ baseUrl: e.target.value })}
+                placeholder="https://api.openai.com/v1/chat/completions"
+                className="h-10 rounded-[10px] bg-background text-[14px]"
+              />
+            </div>
+
+            {/* API Key */}
+            <div>
+              <FieldLabel>API Key</FieldLabel>
+              <div className="relative">
+                <Input
+                  type={showKey ? 'text' : 'password'}
+                  value={visionConfig.apiKey}
+                  onChange={(e) => updateVisionConfig({ apiKey: e.target.value })}
+                  placeholder="sk-...（免 Key 接口可留空）"
+                  autoComplete="off"
+                  className={`h-10 rounded-[10px] bg-background text-[14px] ${
+                    visionConfig.apiKey ? 'pr-16' : 'pr-10'
+                  }`}
+                />
+                {visionConfig.apiKey && (
+                  <button
+                    type="button"
+                    onClick={() => updateVisionConfig({ apiKey: '' })}
+                    aria-label="清空识图 API Key"
+                    className="absolute right-8 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowKey((v) => !v)}
+                  aria-label={showKey ? '隐藏识图 Key' : '显示识图 Key'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-opacity hover:opacity-80"
+                >
+                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* 模型名 */}
+            <div className="relative">
+              <FieldLabel>模型名</FieldLabel>
+              <div className="flex gap-2">
+                <Input
+                  value={visionConfig.model}
+                  onChange={(e) => updateVisionConfig({ model: e.target.value })}
+                  placeholder="如 gpt-4o-mini / qwen-vl-plus / glm-4v-flash"
+                  className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void fetchModels()}
+                  disabled={fetchingModels}
+                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+                >
+                  {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  拉取模型
+                </button>
+              </div>
+              {modelsError && (
+                <p className="mt-1.5 text-[12px]" style={{ color: IOS_RED }}>
+                  {modelsError}
+                </p>
+              )}
+              {modelsHint && (
+                <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                  {modelsHint}
+                </div>
+              )}
+
+              {modelPanelOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-20"
+                    onClick={() => setModelPanelOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
+                    <div className="border-b border-border/60 p-2">
+                      <Input
+                        value={modelQuery}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        placeholder="搜索模型，如 vl / vision"
+                        autoFocus
+                        className="h-9 rounded-[10px] bg-background text-[13px]"
+                      />
+                    </div>
+                    <div className="thin-scrollbar max-h-64 overflow-y-auto">
+                      {filteredModels.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">
+                          没有匹配的模型
+                        </div>
+                      ) : (
+                        filteredModels.map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => {
+                              updateVisionConfig({ model: m });
+                              setModelPanelOpen(false);
+                            }}
+                            className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+                          >
+                            <span className="truncate text-[14px]">{m}</span>
+                            {visionConfig.model === m && (
+                              <Check className="h-4 w-4 shrink-0 text-foreground" strokeWidth={2.5} />
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* 未配置提示 */}
+            {!visionConfig.baseUrl.trim() && (
+              <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                还没有配置识图模型：聊天中发送图片不会触发识图（不影响文字聊天）。填写 OpenAI 兼容的多模态接口地址与模型名后，发图即可让 AI 看懂图片。
+              </div>
+            )}
+          </div>
+        </section>
+
+        <p className="text-[11px] leading-relaxed text-muted-foreground/80">
+          图片仅内联传给你自己配置的识图接口，不经过任何第三方图床；预设保存在本机 IndexedDB（API Key 加密存储）。
+        </p>
+      </div>
+    </DetailShell>
+  );
+}
+
 // ---------------- 锁屏密码 ----------------
 
 type LockStage = 'menu' | 'verifyOff' | 'verifyChange' | 'setNew' | 'confirmNew';
@@ -1534,6 +1890,7 @@ export default function SettingsApp() {
       {page === 'storage' && <StoragePage onBack={() => setPage('root')} />}
       {page === 'wallpaper' && <WallpaperPage onBack={() => setPage('root')} />}
       {page === 'api' && <ApiPage onBack={() => setPage('root')} />}
+      {page === 'vision' && <VisionPage onBack={() => setPage('root')} />}
       {page === 'lock' && <LockPage onBack={() => setPage('root')} />}
       {page === 'about' && <AboutPage onBack={() => setPage('root')} />}
     </IOSScreen>

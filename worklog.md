@@ -5509,3 +5509,30 @@ Stage Summary:
 - 用户诉求落地：widgets-7 新增的 4 个小组件默认不再上屏；功能本体（13 种画廊 1:1 预览、iCity 改名换头像、拍立得换图、表盘时钟、日历）完整保留，可从「+」画廊或主题页随时找回
 - 附带修复两处潜在缺陷：世界书在 v9 重置后消失的风险（纳入 P3 默认排布）、全新会话世界书首帧不上屏（同一次改动覆盖）
 - E2E 过程中实锤了画廊「添加→落当前页第一个装得下的页」的行为（addWidgetFromGallery 从当前页起找容量），与「默认落到末尾装得下的页」的旧注释表述有出入但属设计内行为，未改动
+
+---
+Task ID: vision-9
+Agent: Z.ai Code (main)
+Task: 设置 App 新增「识图模型」配置——聊天发图先识图、描述交给聊天模型；未配置/失败不影响文字聊天
+
+Work Log:
+- 事故处理：开工前发现 .git 被外部进程整体替换为旧仓库状态（最近提交对象全部丢失、大量功能文件变未跟踪）。从 origin/main（2058698，含此前全部推送）fetch + mixed reset 恢复本地仓库；期间一次 git checkout 误回滚 store.ts 的未提交改动，已从 origin/main 精确还原（工作区其余外部改动原样保留，未纳入本次提交）
+- 数据层 src/lib/ios/store.ts：新增 VisionConfig { baseUrl, apiKey, model } / VisionPreset / DEFAULT_VISION_CONFIG（baseUrl 空 = 未配置）；state+updateVisionConfig+setVisionPresets；IndexedDB settings 键 visionConfig/visionPresets，与 apiConfig 同策略 AES-GCM 密文落盘（含旧明文静默升级）；与 apiConfig 完全独立互不覆盖，切换角色不感知（全局配置）
+- 服务端 src/app/api/vision/route.ts（新）：POST { images[], text, config } → 组装 OpenAI 兼容多模态 messages（system 识图提示 + user [text, image_url×N]）非流式调用；仅接受 data:image/ 内联图（拒远程 URL、单张 ≤5MB、≤4 张）；baseUrl 归一化候选/私有地址 directOnly/400 max_completion_tokens 兼容重试均与 /api/chat 同款；返回 { desc }
+- 浏览器直连 src/lib/ios/direct-api.ts：新增 directVisionDescribe（多模态非流式，CORS 简单请求兜底 + max_completion_tokens 重试）；src/lib/vision-client.ts（新）：describeImages 统一入口（服务器代理优先→私有/directOnly 直连兜底），visionConfigReady 校验
+- 聊天管线 src/lib/chat-stream-store.ts：BeginChatStreamOptions 增 vision?: { images[], text }；runStream 发聊天请求前执行识图前置步骤（现场读 useSettings.getState().visionConfig → 保存后自动生效无需重启）；成功=把描述以用户口吻「（我发了一张图片，图片内容是：…）」追加为一条 user 上下文消息；失败=patchState visionNotice（仅展示，不进上下文/不当台词），本轮按无图片继续；未配置=完全跳过
+- 设置 UI src/components/apps/settings.tsx：Page 增 'vision'；根列表「开发者」组新增「识图模型」行（紫色 Eye 图标，值=已配置·模型名/未配置）；VisionPage：说明文案 + 预设区（内置 OpenAI/智谱 GLM/通义千问/硅基流动 4 家视觉模型 + 用户预设增删用）+ API 地址/API Key(显隐+清空)/模型名 + 拉取模型（/api/settings/models + 私有地址浏览器直连兜底 + 模型选择面板）+ 存为预设 + 未配置提示 + 更改自动保存即时生效
+- 微信 src/components/apps/wechat.tsx：sendImageFiles 发图后（识图已配置 && 非 own 会话 && 无进行中流）经 runAiTurnRef(null, imageMsgs) 触发 AI 回合（未配置保持旧行为不触发）；runAiTurn 尾部扫描连续「我」消息收集本轮图片（≤3，遇对方/AI 回复即停）传 vision；历史上下文图片以 [图片] 占位进入（原为完全剔除）
+- QQ src/components/apps/qq.tsx：同款接线（sendImageFiles 触发 + turnImages 扫描 + vision 传参）；修复图片 dataURL 泄入记忆提取 memContext 与世界书触发词扫描（均改 [图片] 占位）；历史上下文同款 [图片] 占位
+- 流式区 UI：微信 wx-stream-bubble / QQ qq-stream-bubble 顶部渲染 stream.visionNotice（灰字居中系统提示，流结束随流块消失）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 + 本地 mock OpenAI 兼容服务 :3999，识图/聊天双通道带回显）：
+  ①设置页全要素渲染（说明/预设 4 家/表单/未配置提示）；②拉取模型：填 http://localhost:3999/v1 → 面板列出 mock-vision/mock-vl-2 可点选（私有地址浏览器直连路径验证）；③存为预设「测试识图」chip 激活态；④完整链路：微信登录(建机主 user 联系人 13800000001/demo1234 + CHAR 小美好友) → 注入 PNG 图片 → 图片消息上屏 → AI 自动回复，回复 TAIL 回显「（我发了一张图片，图片内容是：识图描述：…橘色的猫坐在窗台上晒太阳。）」——证明识图描述确实注入聊天上下文且回复由聊天模型生成；⑤识图失败降级：识图地址改死端口 → 发图 → wx-vision-notice「图片识别失败，本次回复未结合图片（…）」灰字系统提示（DOM 断言+截图），错误未当角色台词，聊天模型照常回复（TAIL=[图片]，无描述）；⑥文字聊天不受影响（文本消息正常回复）；⑦持久化：reload 后死端口配置与「测试识图」预设均在（密文读写正常）；⑧未配置：清空 baseUrl → 发图 16s 内零 AI 回复（旧行为保持）
+  - QQ 端与微信共用 chat-stream-store 识图管线（已过 E2E），QQ 自有接线（发图触发/扫描/占位）与微信逐行同构，未单独走 QQ 登录+E2E（如实标注）
+
+Stage Summary:
+- 改动文件：新增 src/lib/vision-client.ts、src/app/api/vision/route.ts；修改 src/lib/ios/store.ts、src/lib/ios/direct-api.ts、src/lib/chat-stream-store.ts、src/components/apps/settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+- 识图模型只「看」不「聊」：描述作为上下文注入，回复由聊天模型生成；两套配置独立互不覆盖；角色切换不影响配置
+- 未配置不影响文字聊天（发图保持旧行为）；识图失败显示系统提示、不当角色台词、不影响后续聊天
+- 图片仅内联（data URL）转发到用户自己配置的识图接口，不落盘、不经第三方图床
+- 现有聊天/角色隔离/记忆/世界书/时间感知/回复条数/朋友圈零破坏（全部注入块在识图追加前已组装完成，识图只追加独立 user 消息；QQ dataURL 泄漏修复属顺带加固）

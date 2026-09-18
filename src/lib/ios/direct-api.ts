@@ -247,6 +247,140 @@ export async function directFetchModels(
   };
 }
 
+// ---------------- 识图（非流式多模态，图片理解用） ----------------
+
+/** 从非流式多模态响应提取文本（复用 pickDelta：兼容 string / 分段数组两种 content） */
+function pickVisionText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const obj = payload as Record<string, unknown>;
+  const choices = Array.isArray(obj.choices) ? obj.choices : [];
+  const first: unknown = choices[0];
+  if (first && typeof first === 'object') {
+    const rec = first as { message?: unknown; delta?: unknown };
+    const t = pickDelta(rec.message) || pickDelta(rec.delta);
+    if (t) return t;
+  }
+  if (typeof obj.content === 'string') return obj.content;
+  if (typeof obj.response === 'string') return obj.response;
+  return '';
+}
+
+/**
+ * 浏览器直连识图：把图片（data URL）作为多模态 user 消息发给用户配置的接口，
+ * 非流式取回描述文本。与 directTest 同款兜底（CORS 简单请求重试）与 400 参数兼容重试。
+ */
+export async function directVisionDescribe(
+  config: Pick<ApiConfig, 'baseUrl' | 'apiKey' | 'model'>,
+  images: string[],
+  text: string,
+  systemPrompt: string,
+  timeoutMs = 60000
+): Promise<string> {
+  const model = config.model.trim();
+  const candidates = buildCandidates(config.baseUrl, 'chat/completions');
+  const content: unknown[] = [
+    { type: 'text', text: text.trim() || '请描述这张图片' },
+    ...images.map((url) => ({ type: 'image_url', image_url: { url } })),
+  ];
+  const body = JSON.stringify({
+    ...(model ? { model } : {}),
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content },
+    ],
+    max_tokens: 512,
+    stream: false,
+  });
+
+  /** 从非 2xx 响应提取错误 message（同 directTest） */
+  const readError = async (res: Response): Promise<string> => {
+    const raw = await res.text().catch(() => '');
+    try {
+      const parsed = JSON.parse(raw) as { error?: unknown; message?: unknown };
+      if (typeof parsed.error === 'string') return parsed.error;
+      if (parsed.error && typeof parsed.error === 'object' && typeof (parsed.error as { message?: unknown }).message === 'string') {
+        return (parsed.error as { message: string }).message;
+      }
+      if (typeof parsed.message === 'string') return parsed.message;
+    } catch {
+      // 非 JSON
+    }
+    return raw.slice(0, 160);
+  };
+
+  let lastErr: unknown = null;
+  for (const url of candidates) {
+    // 参数兼容重试：最多 3 次（原始 → 换 max_completion_tokens → 去 temperature——识图本就不带温度，保留结构对齐）
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: authHeaders(config.apiKey),
+          body,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (err) {
+        lastErr = err;
+        // CORS 兜底：简单请求（text/plain、不带 Authorization）避开预检
+        try {
+          const res2 = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body,
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+          if (res2.ok) return pickVisionText(await res2.json().catch(() => null));
+        } catch {
+          // 兜底也失败：换下一个候选
+        }
+        break; // 网络不通：换下一个候选
+      }
+      if (!res.ok) {
+        const msg = await readError(res);
+        if (res.status === 400 && attempt === 0 && /max_completion_tokens|unsupported parameter.{0,40}max_tokens/i.test(msg)) {
+          // 新模型拒绝 max_tokens：改用 max_completion_tokens 重试一次
+          const retryBody = JSON.stringify({
+            ...(model ? { model } : {}),
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content },
+            ],
+            max_completion_tokens: 512,
+            stream: false,
+          });
+          try {
+            const res2 = await fetch(url, {
+              method: 'POST',
+              headers: authHeaders(config.apiKey),
+              body: retryBody,
+              signal: AbortSignal.timeout(timeoutMs),
+            });
+            if (res2.ok) return pickVisionText(await res2.json().catch(() => null));
+          } catch {
+            // 重试失败走统一错误
+          }
+        }
+        throw new Error(
+          res.status === 401
+            ? 'API Key 无效或未授权（401）'
+            : res.status === 404
+              ? '接口路径或模型不存在（404），请检查识图 API 地址与模型名'
+              : msg || `识图接口返回 ${res.status}`
+        );
+      }
+      const text2 = pickVisionText(await res.json().catch(() => null));
+      if (text2.trim()) return text2.trim();
+      throw new Error('识图接口返回了空内容');
+    }
+  }
+  throw new Error(
+    lastErr instanceof Error && /timeout|abort/i.test(lastErr.message)
+      ? '识图直连超时：地址不可达或网络受限'
+      : directFetchErrorHint(config.baseUrl)
+  );
+}
+
 // ---------------- 聊天（SSE 流式） ----------------
 
 interface DirectChatMessage {

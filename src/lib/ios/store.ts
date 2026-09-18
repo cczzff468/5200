@@ -26,6 +26,24 @@ export interface ApiPreset {
   config: ApiConfig;
 }
 
+/** 识图模型配置：与聊天模型（ApiConfig）完全独立、互不覆盖，只负责「看图」，不负责回复
+ *  ——聊天发图时先用它把图片转成文字描述，再交给聊天模型生成最终回复；未配置（baseUrl 空）时不影响文字聊天 */
+export interface VisionConfig {
+  /** OpenAI 兼容的 chat/completions 完整地址（或以 /v1 结尾的基地址） */
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export interface VisionPreset {
+  id: string;
+  name: string;
+  config: VisionConfig;
+}
+
+/** 默认未配置：发图不触发识图，聊天行为与旧版完全一致 */
+export const DEFAULT_VISION_CONFIG: VisionConfig = { baseUrl: '', apiKey: '', model: '' };
+
 export type PasscodeLength = 4 | 6;
 
 export interface LockConfig {
@@ -139,6 +157,10 @@ interface SettingsState {
   apiConfig: ApiConfig;
   /** 用户自己保存的 API 预设 */
   apiPresets: ApiPreset[];
+  /** 识图模型配置（与 apiConfig 互相独立、互不覆盖；密文持久化） */
+  visionConfig: VisionConfig;
+  /** 用户自己保存的识图模型预设 */
+  visionPresets: VisionPreset[];
   /** 锁屏密码配置（持久化） */
   lockConfig: LockConfig;
   /** 个人信息（头像/名字/标签，持久化） */
@@ -159,6 +181,9 @@ interface SettingsState {
   setLockCustomWallpaper: (blob: Blob | null) => void;
   updateApiConfig: (patch: Partial<ApiConfig>) => void;
   setApiPresets: (list: ApiPreset[]) => void;
+  /** 更新识图模型配置（立即持久化；聊天发送时现场读取 → 保存后自动生效，无需重启） */
+  updateVisionConfig: (patch: Partial<VisionConfig>) => void;
+  setVisionPresets: (list: VisionPreset[]) => void;
   applyLockConfig: (cfg: LockConfig) => void;
   /** 更新个人信息（立即持久化） */
   setProfile: (patch: Partial<Profile>) => void;
@@ -177,6 +202,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
   lockCustomWallpaperUrl: null,
   apiConfig: { ...DEFAULT_API_CONFIG },
   apiPresets: [],
+  visionConfig: { ...DEFAULT_VISION_CONFIG },
+  visionPresets: [],
   lockConfig: { lockScreen: true, enabled: false, code: '', len: 4 },
   profile: { ...DEFAULT_PROFILE },
   customIcons: {},
@@ -185,12 +212,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, lockRec, profileRec, iconsRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
         localDB.get('settings', 'apiConfig'),
         localDB.get('settings', 'apiPresets'),
+        localDB.get('settings', 'visionConfig'),
+        localDB.get('settings', 'visionPresets'),
         localDB.get('settings', 'lock'),
         localDB.get('settings', 'profile'),
         localDB.get('settings', 'customIcons'),
@@ -309,6 +338,44 @@ export const useSettings = create<SettingsState>((set, get) => ({
         }
       }
 
+      // 识图模型配置（含 apiKey，密文信封，与 apiConfig 同策略；未配置 = baseUrl 空）
+      let visionConfig: VisionConfig = { ...DEFAULT_VISION_CONFIG };
+      if (visionRec && typeof visionRec.value === 'object' && visionRec.value !== null) {
+        const v = ((await decryptValue<Partial<VisionConfig>>(visionRec.value)) ?? visionRec.value) as Partial<VisionConfig>;
+        visionConfig = {
+          baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : '',
+          apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+          model: typeof v.model === 'string' ? v.model : '',
+        };
+        const visionWasPlain = !('__enc' in (visionRec.value as object));
+        if (visionWasPlain && visionConfig.apiKey.length > 0) {
+          void encryptValue(visionConfig)
+            .then((enc) => localDB.put('settings', { key: 'visionConfig', value: enc }))
+            .catch(() => undefined);
+        }
+      }
+
+      let visionPresets: VisionPreset[] = [];
+      if (visionPresetsRec && visionPresetsRec.value) {
+        const vv = (await decryptValue<VisionPreset[]>(visionPresetsRec.value)) ?? visionPresetsRec.value;
+        if (Array.isArray(vv)) {
+          visionPresets = vv.filter(
+            (p): p is VisionPreset =>
+              typeof p === 'object' &&
+              p !== null &&
+              typeof (p as VisionPreset).id === 'string' &&
+              typeof (p as VisionPreset).name === 'string' &&
+              typeof (p as VisionPreset).config === 'object'
+          );
+          const visionHasKey = visionPresets.some((p) => typeof p.config?.apiKey === 'string' && p.config.apiKey.length > 0);
+          if (!('__enc' in (visionPresetsRec.value as object)) && visionHasKey) {
+            void encryptValue(visionPresets)
+              .then((enc) => localDB.put('settings', { key: 'visionPresets', value: enc }))
+              .catch(() => undefined);
+          }
+        }
+      }
+
       set({
         theme,
         wallpaperPreset,
@@ -317,6 +384,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         lockCustomWallpaperUrl,
         apiConfig,
         apiPresets,
+        visionConfig,
+        visionPresets,
         lockConfig,
         profile,
         customIcons,
@@ -399,6 +468,22 @@ export const useSettings = create<SettingsState>((set, get) => ({
     // 安全：预设的 config 可能含 apiKey，同样密文落盘
     void encryptValue(list)
       .then((v) => localDB.put('settings', { key: 'apiPresets', value: v }))
+      .catch(() => undefined);
+  },
+
+  updateVisionConfig: (patch) => {
+    const visionConfig = { ...get().visionConfig, ...patch };
+    set({ visionConfig });
+    // 安全：含 apiKey，密文落盘（与 apiConfig 同策略）
+    void encryptValue(visionConfig)
+      .then((v) => localDB.put('settings', { key: 'visionConfig', value: v }))
+      .catch(() => undefined);
+  },
+
+  setVisionPresets: (list) => {
+    set({ visionPresets: list });
+    void encryptValue(list)
+      .then((v) => localDB.put('settings', { key: 'visionPresets', value: v }))
       .catch(() => undefined);
   },
 

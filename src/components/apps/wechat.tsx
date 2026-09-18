@@ -3577,7 +3577,8 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          // 图片消息以 [图片] 占位进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -3598,6 +3599,8 @@ function ChatPage({
           pre +
           (m.kind === 'forward' && m.fwd?.merged
             ? `[聊天记录：${(m.fwd.records ?? []).slice(-8).map((r) => `${r.name}：${r.text}`).join(' ／ ')}]`
+            : m.kind === 'image'
+            ? '[图片]'
             : m.kind === 'sticker' && m.stk
             ? m.role === 'me'
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -3672,12 +3675,23 @@ function ChatPage({
     );
     if (sysEvent) payloadMsgs.push({ role: 'user', content: sysEvent });
 
+    // 识图输入：收集本轮的图片（从末尾向前、连续「我」的消息里的图片；遇到对方/AI 回复即停，
+    // 最多 3 张）。识图配置存在时，chat-stream-store 会先识图再把描述作为上下文交给聊天模型；
+    // 未配置时该字段不生效，行为与旧版一致
+    const turnImages: string[] = [];
+    for (let i = base.length - 1; i >= 0 && turnImages.length < 3; i--) {
+      const m = base[i];
+      if (m.role !== 'me') break;
+      if (m.kind === 'image' && m.img?.src) turnImages.unshift(m.img.src);
+    }
+
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
       messages: payloadMsgs,
       apiConfig,
       replyCount,
+      ...(turnImages.length > 0 ? { vision: { images: turnImages, text: userMsg?.content ?? '' } } : {}),
       finalize: ({ aiMsgId, content, error, startedAt }) => {
         if (error) {
           saveMsgs(peer.id, [
@@ -4218,15 +4232,28 @@ function ChatPage({
     onToast(`已收款 ¥${fmtMoney(m.tr.amount)}`);
   };
 
-  /** 原生相机/相册选到的图片发送（压缩 dataURL，最多 9 张；相机拍摄单张也走这里） */
+  /** 原生相机/相册选到的图片发送（压缩 dataURL，最多 9 张；相机拍摄单张也走这里）。
+   *  已配置识图模型时：发图触发 AI 回合（识图模型先看图，聊天模型再回复）；
+   *  未配置时保持旧行为（图片只入聊天记录，不触发回复） */
   const sendImageFiles = async (files: FileList) => {
+    const created: WxMsg[] = [];
     for (const f of Array.from(files).slice(0, 9)) {
       try {
         const d = await readImageFile(f);
-        setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image', img: { src: d } }]);
+        const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image', img: { src: d } };
+        created.push(msg);
+        setMsgs((prev) => [...prev, msg]);
       } catch {
         onToast('图片发送失败');
       }
+    }
+    if (
+      created.length > 0 &&
+      peer.id !== me.id &&
+      !isChatStreaming(sessionKey) &&
+      useSettings.getState().visionConfig.baseUrl.trim()
+    ) {
+      runAiTurnRef.current?.(null, created);
     }
   };
 
@@ -4697,6 +4724,12 @@ function ChatPage({
               <div key={stream.aiMsgId} data-testid="wx-stream-bubble">
                 {showTime && (
                   <p className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtChatTime(stream.startedAt)}</p>
+                )}
+                {/* 识图失败系统提示：只作展示，不进对话上下文、不当角色台词 */}
+                {stream.visionNotice && (
+                  <p data-testid="wx-vision-notice" className="py-1 text-center text-[12px] leading-relaxed text-black/40 dark:text-white/40">
+                    {stream.visionNotice}
+                  </p>
                 )}
                 {split.texts.map((t, i) => (
                   <div className="flex items-start gap-2 py-1.5" key={i} data-testid={`wx-stream-bubble-${i}`}>

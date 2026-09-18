@@ -26,8 +26,10 @@
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ApiConfig } from '@/lib/ios/store';
+import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { createReplyPacer } from '@/lib/reply-count';
+import { describeImages } from '@/lib/vision-client';
 // ---------------- 公开类型 ----------------
 
 export type ChatStreamStatus = 'streaming' | 'done' | 'error';
@@ -47,11 +49,22 @@ export interface ChatStreamState {
   startedAt: number;
   /** 本次流请求的回复条数（>1 时流式气泡按「一行一条」实时切分渲染） */
   replyCount?: number;
+  /**
+   * 识图失败提示（本轮图片交给识图模型失败时展示；只作系统提示，
+   * 不进对话上下文、不当角色台词、不影响本轮之后的聊天）
+   */
+  visionNotice?: string;
 }
 
 export interface ChatPayloadMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+/** 本轮识图输入：用户随消息发送的图片（data URL）+ 随图文字（可为空） */
+export interface ChatVisionInput {
+  images: string[];
+  text: string;
 }
 
 /** finalize 结果：流结束（成功/失败）后的最终数据 */
@@ -77,6 +90,12 @@ export interface BeginChatStreamOptions {
    * 并抬高 max_tokens 下限防止多条被截断；条数切分与落盘由各 App 的 finalize 负责。
    */
   replyCount?: number;
+  /**
+   * 本轮识图输入（可选）：用户在聊天里发送的图片。提供时先用「设置 › 识图模型」
+   * 把图片转成文字描述，再作为上下文交给聊天模型；识图模型只负责看图，
+   * 最终回复由聊天模型生成；未配置识图模型 / 识图失败不影响文字聊天。
+   */
+  vision?: ChatVisionInput;
   /**
    * 流结束（成功或失败，恰好一次）后把最终 AI 消息写入该角色的聊天记录。
    * 由各 App 在发起时提供：内部使用该 App 的 loadMsgs/saveMsgs 与消息类型，
@@ -202,8 +221,28 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   };
 
   try {
+    // 识图前置步骤（设置 › 识图模型；未配置 / 本轮无图片时跳过，文字聊天零影响）：
+    // 识图模型只负责「看」——把图片转成描述，追加为一条 user 上下文消息；
+    // 最终回复仍由聊天模型生成；识图失败展示系统提示（不进上下文、不当角色台词），本轮按无图片继续
+    let workMessages = messages;
+    if (opts.vision && opts.vision.images.length > 0) {
+      const visionConfig = useSettings.getState().visionConfig;
+      if (visionConfig.baseUrl.trim()) {
+        try {
+          const desc = await describeImages(visionConfig, { images: opts.vision.images, text: opts.vision.text });
+          if (desc) {
+            const n = opts.vision.images.length;
+            const prefix = n > 1 ? `（我发了 ${n} 张图片，图片内容分别是：` : '（我发了一张图片，图片内容是：';
+            workMessages = [...messages, { role: 'user' as const, content: `${prefix}${desc}）` }];
+          }
+        } catch (err) {
+          const detail = err instanceof Error && err.message ? err.message : '未知原因';
+          patchState(rt, { visionNotice: `图片识别失败，本次回复未结合图片（${detail}）` });
+        }
+      }
+    }
     // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）
-    await streamOnce(messages);
+    await streamOnce(workMessages);
     // 流数据接收结束：剩余未放出的消息继续按连发节奏逐条放出（每条完整弹出、间隔停顿），
     // 全部放完后才收尾落盘 —— 短回复也是一句一句出现，不会在流结束瞬间全部弹出
     await pacer?.end();

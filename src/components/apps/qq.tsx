@@ -2008,20 +2008,33 @@ function ChatPage({
     [peer.id, me.id]
   );
 
-  // 相册选图发送（图片消息，压缩 dataURL，最多 9 张）
+  // 相册选图发送（图片消息，压缩 dataURL，最多 9 张）。
+  //  已配置识图模型时：发图触发 AI 回合（识图模型先看图，聊天模型再回复）；
+  //  未配置时保持旧行为（图片只入聊天记录，不触发回复）
   const sendImageFiles = useCallback(
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
+      const created: QQMsg[] = [];
       for (const f of Array.from(files).slice(0, 9)) {
         try {
           const d = await compressImageFile(f);
-          setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: d, time: Date.now(), kind: 'image' }]);
+          const msg: QQMsg = { id: uid(), role: 'me', content: d, time: Date.now(), kind: 'image' };
+          created.push(msg);
+          setMsgs((prev) => [...prev, msg]);
         } catch {
           onToast('图片发送失败');
         }
       }
+      if (
+        created.length > 0 &&
+        peer.id !== me.id &&
+        !isChatStreaming(sessionKey) &&
+        useSettings.getState().visionConfig.baseUrl.trim()
+      ) {
+        runAiTurnRef.current?.(null, created);
+      }
     },
-    [onToast]
+    [onToast, peer.id, me.id, sessionKey]
   );
 
   // 按所选支付方式扣款并发送卡片消息
@@ -2198,11 +2211,11 @@ function ChatPage({
     addBondPoints(peer.id, BOND_MSG_POINTS);
     const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
     // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
-    // 图片消息 content 是 dataURL，不入上下文
+    // 图片消息以 [图片] 占位进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && (m.kind !== 'image' && (m.content || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -2227,6 +2240,8 @@ function ChatPage({
               : m.stk.sid
                 ? `[表情包:${m.stk.sid}]`
                 : `[发送了表情：${m.stk.meaning || '无描述'}]`
+            : m.kind === 'image'
+            ? '[图片]'
             : m.kind === 'redpacket' && m.packet
               ? `[红包 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount} "${m.packet.note}"，${cardStateLabel(m)}]`
               : m.kind === 'transfer' && m.packet
@@ -2253,8 +2268,9 @@ function ChatPage({
     const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
     const actionRules = buildActionRules(collectPendingCards(base));
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
-    // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
-    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
+    // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入；
+    // 图片消息以 [图片] 占位（防止 dataURL 大字符串进入记忆提取）
+    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => (m.kind === 'image' ? '[图片]' : m.content))]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     const memoryBlock = memRecallBlock(peer.id, 'qq', memContext);
@@ -2272,8 +2288,9 @@ function ChatPage({
       : '';
     // 世界书：扫描「最新用户消息 + 最近 8 条上下文」，命中触发词的条目按插入位置分组注入
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
-    // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则）
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => m.content)]));
+    // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则；
+    // 图片消息以 [图片] 占位，防 dataURL 进入触发词扫描）
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => (m.kind === 'image' ? '[图片]' : m.content))]));
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -2295,12 +2312,25 @@ function ChatPage({
     );
     if (sysEvent) payloadMsgs.push({ role: 'user', content: sysEvent });
 
+    // 识图输入：收集本轮的图片（从末尾向前、连续「我」的消息里的图片；遇到对方/AI 回复即停，
+    // 最多 3 张）。识图配置存在时，chat-stream-store 会先识图再把描述作为上下文交给聊天模型；
+    // 未配置时该字段不生效，行为与旧版一致
+    const turnImages: string[] = [];
+    for (let i = base.length - 1; i >= 0 && turnImages.length < 3; i--) {
+      const m = base[i];
+      if (m.role !== 'me') break;
+      if (m.kind === 'image' && typeof m.content === 'string' && m.content.startsWith('data:image/')) {
+        turnImages.unshift(m.content);
+      }
+    }
+
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
       messages: payloadMsgs,
       apiConfig,
       replyCount,
+      ...(turnImages.length > 0 ? { vision: { images: turnImages, text: userMsg?.content ?? '' } } : {}),
       finalize: ({ aiMsgId, content, error, startedAt }) => {
         if (error) {
           saveMsgs(peer.id, [
@@ -3153,6 +3183,12 @@ function ChatPage({
               <div key={stream.aiMsgId} data-testid="qq-stream-bubble">
                 {showTime && (
                   <p className="my-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtChatTime(stream.startedAt)}</p>
+                )}
+                {/* 识图失败系统提示：只作展示，不进对话上下文、不当角色台词 */}
+                {stream.visionNotice && (
+                  <p data-testid="qq-vision-notice" className="my-1 text-center text-[12px] leading-relaxed text-black/40 dark:text-white/40">
+                    {stream.visionNotice}
+                  </p>
                 )}
                 {split.texts.map((t, i) => (
                   <div className="mb-3 flex items-end justify-start gap-2" key={i} data-testid={`qq-stream-bubble-${i}`}>
