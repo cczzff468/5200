@@ -5584,3 +5584,25 @@ Work Log:
 Stage Summary:
 - 改动文件：仅 src/components/apps/settings.tsx（纯视觉增强，逻辑/testid/vision-test-btn 交互零改动）
 - 测试按钮升级为与识图模型行同色系的紫色渐变主按钮，成功/失败结果框图标化、卡片化，页面观感统一
+
+---
+Task ID: vision-12
+Agent: Z.ai Code (main)
+Task: 识图测试按钮再美化——简约风
+
+Work Log:
+- src/components/apps/settings.tsx 识图测试区块去装饰化（用户反馈「再美化一下，简约」）：
+  ①按钮：紫色渐变主按钮 → 全宽白底描边平面按钮（h-10 rounded-[10px] border-border bg-background，与页面输入框同规格；hover/active 淡灰底、无渐变无阴影无缩放），保留 ScanEye 图标 +「测试识图」/加载「正在识图…」转圈
+  ②容器：淡紫色测试卡片移除，回归普通 div，与表单融为一体
+  ③结果展示卡片化 → 极简一行流：成功=绿色 CheckCircle2 + 描述文字（无边框盒子，emerald-600/dark:emerald-400/90）；失败=红色 AlertCircle + 错误文字（IOS_RED）；均小图标打头 + px-1 缩进
+  - 导入不变（ScanEye/CheckCircle2/AlertCircle/Loader2 仍全在用）；testid 与交互逻辑零改动
+- 排障记录（非 bug）：复验时测试报「浏览器直连失败…」——根因是上一轮 vision-11 验证错误路径后 baseUrl 遗留死端口 3998 未还原（agent-browser 隔离 profile 内）；经页面裸 fetch 直连 :3999 成功 + 还原 baseUrl 后测试通过双重定位确认，应用代码无问题
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 + 守护进程 mock :3999）：
+  ①按钮样式实锤：getComputedStyle backgroundImage=none（渐变已移除）、文案「测试识图」
+  ②成功路径：还原 baseUrl → 点测试 → 绿色 ✓ + mock 描述一行流展示（截图 vision-btn-min.png：白底描边按钮+简约结果行，与表单风格统一）
+  ③失败路径：死端口错误行同样以图标+文字极简展示（本轮排障过程中 DOM 实锤）
+  ④console/page errors 零报错；测完 mock 已 kill、遗留死端口配置已在隔离 profile 中还原
+Stage Summary:
+- 改动文件：仅 src/components/apps/settings.tsx（纯样式收敛，逻辑零改动）
+- 测试按钮从「重装饰」回调为「简约」：平面白底描边按钮 + 一行式图标结果展示，融入表单整体风格；三态（默认/加载中/结果）样式层级清晰
