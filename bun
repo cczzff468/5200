@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/z/my-project/.zscripts/daemonize.py", line 43, in <module>
+    daemonize_and_exec(argv, logfile)
+  File "/home/z/my-project/.zscripts/daemonize.py", line 35, in daemonize_and_exec
+    os.execvp(argv[0], argv)
+  File "<frozen os>", line 609, in execvp
+  File "<frozen os>", line 632, in _execvpe
+PermissionError: [Errno 13] Permission denied
