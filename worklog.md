@@ -5561,3 +5561,26 @@ Stage Summary:
 - 改动文件：仅 src/components/apps/settings.tsx
 - 用户两诉求落地：识图模型页新增「测试」按钮（内置测试图、与聊天同一条识图管线、成功显示描述/失败显示错误）；页面顶部说明提示移到页尾
 - 聊天管线/识图服务端/store 零改动（纯设置 UI 增强）；测试不落任何第三方服务，图片仅内联发给用户自己配置的接口
+
+---
+Task ID: vision-11
+Agent: Z.ai Code (main)
+Task: 识图测试按钮美化
+
+Work Log:
+- src/components/apps/settings.tsx 识图测试区块重设计（与设置根列表「识图模型」行的紫色 Eye 图标 #AF52FF 呼应）：
+  ①按钮：灰边框小按钮 → 全宽 h-11 紫色渐变主按钮（linear-gradient 135deg #C768F8→#AF52FF→#9C3DF2）+ 柔和紫晕阴影 + hover 提亮 + active:scale-[0.98] 按压反馈；图标 ImageIcon → ScanEye（识图语义），文案「测试」→「测试识图」，加载态「正在识图…」转圈
+  ②区块容器：独立淡紫卡片（border-[#AF52FF]/20 + bg-[#AF52FF]/[0.05] p-3），提示文案移到按钮下方居中
+  ③成功结果框：加 CheckCircle2 图标 + 加粗「测试成功」标题行，描述正文缩进其下（emerald 色调保持）
+  ④错误结果框：裸红字 → 淡红圆角卡（rgba(255,69,58,0.3) 边 + 0.08 底）+ AlertCircle 图标，与琥珀色警告框风格统一
+  - 新增导入：ScanEye / CheckCircle2 / AlertCircle（ImageIcon 页内另有使用不清理）
+- 过程备注：一次 MultiEdit 因 old_str 打错字（兑→兜）未命中，imports 编辑已先行生效——按文件实际状态补齐 JSX 替换
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 + 守护进程 mock :3999）：
+  ①按钮样式实锤：getBoundingClientRect 300×44（全宽 h-11）、backgroundImage 紫渐变生效
+  ②成功路径：点「测试识图」→ 结果框「测试成功」标题 + mock 描述正文（截图 vision-btn-v2.png 确认淡紫区块+渐变按钮+绿色成功卡视觉）
+  ③失败路径：改死端口 → 淡红圆角错误卡 + AlertCircle 图标（截图 vision-btn-err.png）
+  ④console/page errors 零报错；测完 mock 已 kill
+Stage Summary:
+- 改动文件：仅 src/components/apps/settings.tsx（纯视觉增强，逻辑/testid/vision-test-btn 交互零改动）
+- 测试按钮升级为与识图模型行同色系的紫色渐变主按钮，成功/失败结果框图标化、卡片化，页面观感统一

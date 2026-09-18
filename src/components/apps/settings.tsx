@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import {
+  AlertCircle,
   Bell,
   Bluetooth,
   Camera,
   Check,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -20,6 +22,7 @@ import {
   Moon,
   Plane,
   Plus,
+  ScanEye,
   Sun,
   Upload,
   User,
@@ -1595,34 +1598,41 @@ function VisionPage({ onBack }: { onBack: () => void }) {
             )}
 
             {/* 识图测试：与聊天发图同一条管线（/api/vision 代理 → 私有地址浏览器直连兜底） */}
-            <div>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => void runVisionTest()}
-                  disabled={testing}
-                  data-testid="vision-test-btn"
-                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-4 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
-                >
-                  {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
-                  {testing ? '测试中…' : '测试'}
-                </button>
-                <span className="text-[11px] leading-snug text-muted-foreground/70">
-                  发送一张内置测试图片，验证接口连通与识图效果
-                </span>
-              </div>
+            <div className="rounded-[12px] border border-[#AF52FF]/20 bg-[#AF52FF]/[0.05] p-3">
+              <button
+                type="button"
+                onClick={() => void runVisionTest()}
+                disabled={testing}
+                data-testid="vision-test-btn"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-[10px] text-[14px] font-semibold text-white shadow-[0_2px_10px_rgba(175,82,255,0.35)] transition-all hover:brightness-[1.06] active:scale-[0.98] disabled:opacity-60"
+                style={{ background: 'linear-gradient(135deg, #C768F8 0%, #AF52FF 55%, #9C3DF2 100%)' }}
+              >
+                {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanEye className="h-4 w-4" strokeWidth={2.2} />}
+                {testing ? '正在识图…' : '测试识图'}
+              </button>
+              <p className="mt-2 text-center text-[11px] leading-snug text-muted-foreground/80">
+                发送一张内置测试图片，验证接口连通与识图效果
+              </p>
               {testError && (
-                <p data-testid="vision-test-error" className="mt-1.5 text-[12px]" style={{ color: IOS_RED }}>
-                  {testError}
-                </p>
+                <div
+                  data-testid="vision-test-error"
+                  className="mt-2 flex items-start gap-1.5 rounded-[10px] border px-3 py-2 text-[12px] leading-relaxed"
+                  style={{ borderColor: 'rgba(255,69,58,0.3)', background: 'rgba(255,69,58,0.08)', color: IOS_RED }}
+                >
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{testError}</span>
+                </div>
               )}
               {testResult && (
                 <div
                   data-testid="vision-test-result"
-                  className="mt-2 rounded-[10px] border border-emerald-500/30 bg-emerald-400/10 px-3 py-2 text-[12px] leading-relaxed text-emerald-700 dark:border-emerald-400/25 dark:text-emerald-200/90"
+                  className="mt-2 rounded-[10px] border border-emerald-500/30 bg-emerald-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-emerald-700 dark:border-emerald-400/25 dark:text-emerald-200/90"
                 >
-                  <span className="font-medium">测试成功：</span>
-                  {testResult}
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={2.2} />
+                    测试成功
+                  </div>
+                  <p className="mt-1 opacity-90">{testResult}</p>
                 </div>
               )}
             </div>
