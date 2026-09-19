@@ -20,8 +20,9 @@
  *   机主与其他成员的历史消息一律映射为「发言者：内容」的 user 消息；
  * - finalize：回复落盘（senderId 区分发言人）+ 未读 + memAfterAiTurn（roundScope 按群隔离，
  *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）。
- * - 范围限定：群内不提供红包/转账/亲属卡等资金功能（加号入口仅提示）；用户可发表情包/图片/位置，
- *   AI 成员不主动发送富媒体。
+ * - 群红包（普通/拼手气/专属）与指定成员转账：复用单聊同一套卡片/页面组件（RedPacketBubble/RedPacketCompose 等），
+ *   消息落本群消息库按群隔离持久化；成员按人设领取/收款/退回，纯本地模拟不涉及真实资金。
+ * - 回复条数（按群独立连发多条）与分句发送（连发不触发回复，空输入点发送统一触发）与单聊同套逻辑。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -73,10 +74,12 @@ import {
   saveGroupMsgs,
   updateGroup,
   type ChatGroup,
+  type GroupRpData,
+  type GroupTrData,
   type WxGroupMsg,
 } from '@/lib/ios/groups';
 import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
-import { ChatBgPage, ChatToggle, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
+import { ChatBgPage, ChatReplyCountPage, ChatToggle, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
 import type { Sticker } from '@/lib/ios/stickers';
 import { readImageFile } from './wechat';
 import {
@@ -86,8 +89,30 @@ import {
   QqPlusGrid,
   QqStickerBubble,
   QqStickerPanel,
+  RedPacketBubble,
+  RedPacketCompose,
+  RedPacketOpenModal,
   RpIcon,
+  QQNoticeRow,
+  TransferBubble,
+  TransferCompose,
+  PayPwdGate,
+  fmtMoney,
+  type MsgPacket,
 } from './qq';
+import { canPay, executePayment, gainToWallet, loadBankCards, loadPayPwd, loadWallet, round2 } from './qq';
+import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender, splitReplySegments } from '@/lib/reply-count';
+import { getSentenceSend, hasPendingBatch, markPendingBatch, saveSentenceSend } from '@/lib/sentence-send';
+import {
+  actionVerb,
+  buildActionRules,
+  extractRichActionParts,
+  mergeRichSegments,
+  parseRichParts,
+  prettifyRichText,
+  type PendingCardInfo,
+  type RichAction,
+} from '@/lib/chat-rich';
 import { qqUnreads } from '@/lib/unread-store';
 import { memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -105,6 +130,49 @@ import { Input } from '@/components/ui/input';
 /** 群会话 id（未读/标志/隐藏等以字符串 id 为键的设施共用，与微信群同构） */
 export const qqGroupRowId = (groupId: string) => `group:${groupId}`;
 const sessionKeyOf = (groupId: string) => `qq:group:${groupId}`;
+
+// ---------------- 群红包/转账（纯本地模拟；按群 ID 隔离，与单聊互不相通） ----------------
+
+/** 机主发的红包/转账短 ID（AI 动作标记里引用；格式如 grp-x7k2） */
+function nextGroupCid(prefix: 'rp' | 'tr'): string {
+  return `grp-${prefix === 'rp' ? 'r' : 't'}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
+}
+
+/** 群红包状态标签：待领取 → 部分领取 → 已抢完 / 已过期（与微信侧同规则） */
+function groupRpStateLabel(rp: GroupRpData): string {
+  if (rp.expired) return '已过期';
+  if (rp.claims.length >= rp.count) return '已抢完';
+  if (rp.claims.length > 0) return `已领取 ${rp.claims.length}/${rp.count}`;
+  return '待领取';
+}
+
+/** 群转账状态标签 */
+function groupTrStateLabel(tr: GroupTrData): string {
+  if (tr.received) return '已收款';
+  if (tr.status === 'returned') return '已退回';
+  if (tr.status === 'rejected') return '已拒收';
+  return '待收款';
+}
+
+/** 拼手气随机拆一份：前 n-1 份在「剩余÷份数×2」内随机（保底 0.01，给后面每份留 0.01），最后一份拿剩余全部 */
+function splitLuckyAmount(remaining: number, leftCount: number): number {
+  if (leftCount <= 1) return round2(remaining);
+  const max = Math.max(0.01, round2(remaining - 0.01 * (leftCount - 1)));
+  const amt = round2((remaining * Math.random() * 2) / leftCount);
+  return Math.min(max, Math.max(0.01, amt));
+}
+
+/** 群红包总额：普通 = 单个金额×个数；拼手气 = 总金额；专属 = 单个金额 */
+export function groupRpTotal(mode: GroupRpData['mode'], amount: number, count: number): number {
+  return mode === 'normal' ? round2(amount * count) : round2(amount);
+}
+
+/** 完整时间：2026年9月19日 20:32:08（群红包/转账详情页领取时间用） */
+function fmtGrpFullTime(ts: number): string {
+  const d = new Date(ts);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+}
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -497,6 +565,9 @@ export function QqGroupInfoPage({
   const [removeOpen, setRemoveOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
+  const [replyCountOpen, setReplyCountOpen] = useState(false);
+  const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
+  const [sentenceOn, setSentenceOn] = useState(() => getSentenceSend(sessionKeyOf(group.id)));
   const gid = group.id;
   /** 稳定伪群号（仅展示用途，由群 id 哈希生成，同群恒定） */
   const groupNo = useMemo(() => {
@@ -719,8 +790,27 @@ export function QqGroupInfoPage({
         />
       </div>
 
-      {/* 通用开关卡片 */}
+      {/* 通用开关卡片（回复条数/分句发送/时间感知/置顶/免打扰；均按群独立） */}
       <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+        <InfoRow
+          label="回复条数"
+          value={`${replyCount} 条`}
+          onClick={() => setReplyCountOpen(true)}
+          testId="qq-groupinfo-replycount"
+        />
+        <SwitchRow
+          label="分句发送"
+          caption="开启后：你连续发的多条消息成员都不回复，把想说的话发完、输入框为空时再点一次「发送」，成员才统一回复"
+          checked={sentenceOn}
+          onChange={(v) => {
+            saveSentenceSend(sessionKeyOf(gid), v);
+            setSentenceOn(v);
+            if (!v) {
+              markPendingBatch(sessionKeyOf(gid), false);
+            }
+          }}
+          testId="qq-groupinfo-sentence"
+        />
         <SwitchRow
           label="时间感知"
           caption="让成员按当前时段与消息间隔感知时间（按群独立）"
@@ -910,11 +1000,172 @@ export function QqGroupInfoPage({
           />
         </div>
       )}
+
+      {/* 回复条数页（聊天信息二级页；按群独立，与单聊互不影响） */}
+      {replyCountOpen && (
+        <div className="fixed inset-0 z-50">
+          <ChatReplyCountPage
+            variant="qq"
+            value={replyCount}
+            onBack={() => setReplyCountOpen(false)}
+            onSelect={(n) => {
+              saveReplyCount(sessionKeyOf(gid), n);
+              setReplyCount(n);
+              setReplyCountOpen(false);
+              onToast(`回复条数已设为 ${n} 条`);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
 // ---------------- 群聊页 ----------------
+
+/** QQ 风格群红包详情页：红色头 + 领取列表（谁领了多少、手气）+ 过期/专属状态（复用单聊详情页视觉语言） */
+function GroupRpDetailPage({
+  senderName,
+  senderAvatar,
+  rp,
+  onBack,
+  onToast,
+}: {
+  senderName: string;
+  senderAvatar: string | null;
+  rp: GroupRpData;
+  onBack: () => void;
+  onToast: (m: string) => void;
+}) {
+  const claimedSum = round2(rp.claims.reduce((s, c) => s + c.amount, 0));
+  const best = rp.claims.length > 1 ? rp.claims.reduce((a, b) => (b.amount > a.amount ? b : a)) : null;
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white" data-testid="qq-grp-rp-detail">
+      <div className="relative shrink-0 bg-[#F5455C] pt-[54px] text-white">
+        <div className="relative flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="qq-grp-rp-detail-back" onClick={onBack} className="active:opacity-60">
+            <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[16px] font-medium">红包详情</div>
+        </div>
+        <div
+          aria-hidden="true"
+          className="absolute left-1/2 top-full h-[26px] w-[140%] -translate-x-1/2 rounded-[50%] bg-[#F5F6F8] dark:bg-[#16171A]"
+        />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto pt-12">
+        <div className="flex items-center gap-2.5">
+          <span className="rounded-full border-2 border-[#F0C87E]/85 p-[2px]">
+            <QqAvatar src={senderAvatar} alt={senderName} size={40} />
+          </span>
+          <span className="text-[19px] font-medium" data-testid="qq-grp-rp-detail-title">
+            {senderName}的红包
+          </span>
+        </div>
+        <p className="mt-2 text-[14px] text-black/45 dark:text-white/45">{rp.blessing}</p>
+        <p className="mt-1.5 text-[13px] text-[#D8A244]" data-testid="qq-grp-rp-detail-status">
+          {rp.mode === 'exclusive' && rp.targetName ? `专属红包 · 只给${rp.targetName} · ` : ''}
+          {groupRpStateLabel(rp)}
+        </p>
+        <p className="mt-7 font-semibold text-[#D8A244]" data-testid="qq-grp-rp-detail-amount">
+          <span className="text-[44px] leading-none">{fmtMoney(groupRpTotal(rp.mode, rp.amount, rp.count))}</span>
+          <span className="ml-1.5 text-[19px]">元</span>
+        </p>
+
+        <div className="mt-8 w-[88%] max-w-[360px] rounded-[12px] bg-white dark:bg-[#232529]" data-testid="qq-grp-rp-claim">
+          <p className="px-4 pb-2 pt-3.5 text-[12px] text-black/40 dark:text-white/40" data-testid="qq-grp-rp-claim-caption">
+            {rp.count}个红包共{fmtMoney(groupRpTotal(rp.mode, rp.amount, rp.count))}元，已领取{rp.claims.length}/{rp.count}
+            {rp.expired ? `，已退回${fmtMoney(round2(groupRpTotal(rp.mode, rp.amount, rp.count) - claimedSum))}元` : ''}
+          </p>
+          {rp.claims.length > 0 ? (
+            <div className="pb-2">
+              {rp.claims.map((c, i) => (
+                <div key={`${c.contactId}-${i}`} className="flex items-center gap-3 border-t border-black/[0.05] px-4 py-3 dark:border-white/[0.06]">
+                  <QqAvatar src={c.avatar} alt={c.name} size={36} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px]">
+                      {c.name}
+                      {best && best.amount === c.amount && best.ts === c.ts ? <span className="ml-1 text-[11px] text-[#D8A244]">手气最佳</span> : null}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-black/35 dark:text-white/35">{fmtGrpFullTime(c.ts || Date.now())}</span>
+                  </span>
+                  <span className="shrink-0 text-[15px] font-medium text-[#D8A244]">¥{fmtMoney(c.amount)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-4 pb-8 pt-6 text-center text-[13px] text-black/30 dark:text-white/30">
+              {rp.expired ? '红包已过期，未领取金额已退回发起人' : '等待领取…'}
+            </p>
+          )}
+        </div>
+        <button type="button" onClick={() => onToast('红包记录暂未开放')} className="mt-5 text-[13px] text-[#0099FF] active:opacity-60">
+          查看领取记录 &gt;
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** QQ 风格群转账详情页：转账给群里某位成员 + 收款/退回/拒收状态（复用单聊详情页视觉语言） */
+function GroupTrDetailPage({
+  tr,
+  fromName,
+  onBack,
+}: {
+  tr: GroupTrData;
+  fromName: string;
+  onBack: () => void;
+}) {
+  const status = groupTrStateLabel(tr);
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white" data-testid="qq-grp-tr-detail">
+      <div className="shrink-0 bg-[#F5F6F8] pt-[54px] dark:bg-[#16171A]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="qq-grp-tr-detail-back" onClick={onBack} className="active:opacity-60">
+            <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[16px] font-medium">转账详情</div>
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-5 pt-8">
+        <div className="w-full max-w-[380px] rounded-[16px] bg-white px-5 py-6 dark:bg-[#232529]" data-testid="qq-grp-tr-detail-card">
+          <div className="flex items-center gap-3.5">
+            <span
+              className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-full"
+              style={{ background: 'linear-gradient(135deg, #29ABF2, #0099FF)' }}
+              aria-hidden="true"
+            >
+              <ArrowLeftRight className="h-6 w-6 text-white" strokeWidth={2} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[25px] font-semibold leading-tight" data-testid="qq-grp-tr-detail-amount">¥{fmtMoney(tr.amount)}</p>
+              <p className="mt-0.5 truncate text-[13px] text-black/45 dark:text-white/45" data-testid="qq-grp-tr-detail-status">
+                {tr.received ? `${tr.toName}已收款` : status === '已退回' ? '已退回' : status === '已拒收' ? '已拒收' : `待${tr.toName}收款`}
+              </p>
+            </div>
+          </div>
+          {tr.note ? <p className="mt-4 border-t border-black/[0.05] pt-3 text-[14px] text-black/70 dark:border-white/[0.06] dark:text-white/70">留言：{tr.note}</p> : null}
+          <div className="mt-4 space-y-2.5 border-t border-black/[0.05] pt-3 text-[13px] dark:border-white/[0.06]">
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">转账人</span>
+              <span>{fromName}</span>
+            </p>
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">收款成员</span>
+              <span data-testid="qq-grp-tr-detail-to">{tr.toName}</span>
+            </p>
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">状态</span>
+              <span>{status}</span>
+            </p>
+          </div>
+        </div>
+        <p className="pt-6 text-center text-[12px] text-black/35 dark:text-white/35">群里其他成员只看到转账卡片，无法操作这笔转账</p>
+      </div>
+    </div>
+  );
+}
 
 /**
  * 群聊页。群回合引擎（多角色顺序流式回复）：
@@ -957,6 +1208,21 @@ export function QqGroupChatPage({
   const [stickerOpen, setStickerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [compose, setCompose] = useState<'location' | null>(null);
+  // 群红包/转账浮层流程：发红包页（复用单聊 RedPacketCompose）/ 转账选人页→转账页（复用单聊 TransferCompose）/ 开箱 / 详情
+  const [layer, setLayer] = useState<
+    | null
+    | { view: 'rp-compose' }
+    | { view: 'tr-pick' }
+    | { view: 'tr-compose'; member: ContactRecord }
+    | { view: 'rp-open'; msgId: string }
+    | { view: 'rp-detail'; msgId: string }
+    | { view: 'tr-detail'; msgId: string }
+  >(null);
+  // 支付密码验证中的支付（与单聊同规则）
+  const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; label: string; amount: number; methodId: string; packet?: MsgPacket; tr?: { member: ContactRecord; amount: number; note: string } }>(null);
+  // 分句发送（按群独立；开启后连发消息不触发回复，空输入点「发送」统一触发）
+  const [sentenceSend, setSentenceSend] = useState(() => getSentenceSend(sKey));
+  const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sKey));
   const [speakerId, setSpeakerId] = useState<string | null>(() => groupSpeaker.get(sKey) ?? null);
   const stream = useChatStream(sKey);
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -1038,6 +1304,54 @@ export function QqGroupChatPage({
     [gid, sKey]
   );
 
+  /** 就地更新一条群消息的附加数据（红包/转账状态流转用）：读改写存储 + 页面存活时同步 state */
+  const patchGroupMsg = useCallback(
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content'>>) => {
+      const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
+      saveGroupMsgs(gid, next);
+      if (mountedRef.current) setMsgs(next);
+    },
+    [gid]
+  );
+
+  /** 过期清算：发出超 24h 仍有剩余的红包 → 标记已过期（终态），剩余金额退回发起人（机主发起 → 退回钱包+写账单） */
+  const expireStalePackets = useCallback(() => {
+    const now = Date.now();
+    for (const m of loadGroupMsgs(gid)) {
+      if (m.kind !== 'redpacket' || !m.rp) continue;
+      const rp = m.rp;
+      if (rp.expired || rp.claims.length >= rp.count) continue;
+      if (now - rp.sentAt < 24 * 3600_000) continue;
+      const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
+      patchGroupMsg(m.id, { rp: { ...rp, expired: true, expiredAt: now } });
+      if (m.senderId === 'me' && remaining > 0) {
+        gainToWallet(remaining, '红包过期退回');
+      }
+      appendMsg({
+        id: uid(),
+        role: 'me',
+        senderId: 'me',
+        senderName: '',
+        content: '',
+        time: now,
+        kind: 'notice',
+        noticeText: `${m.senderId === 'me' ? '你' : m.senderName || '有人'}的红包已过期${remaining > 0 ? `，${fmtMoney(remaining)}元已退回` : ''}`,
+      });
+    }
+  }, [appendMsg, gid, patchGroupMsg]);
+
+  useEffect(() => {
+    expireStalePackets();
+  }, [expireStalePackets]);
+
+  /** 追加一条带图标的资金通知行（xx领取了你的红包 / 收下了你的转账） */
+  const appendFundNotice = useCallback(
+    (icon: 'rp' | 'tr', pre: string, accent: string) => {
+      appendMsg({ id: uid(), role: 'me', senderId: 'me', senderName: '', content: '', time: Date.now(), kind: 'notice', notice: { icon, pre, accent } });
+    },
+    [appendMsg]
+  );
+
   /** @ 某成员：插入「@名字 」到草稿 */
   const insertMention = (c: ContactRecord) => {
     setAtOpen(false);
@@ -1049,7 +1363,7 @@ export function QqGroupChatPage({
   const parseMentions = (text: string): ContactRecord[] =>
     members.filter((c) => text.includes(`@${memberNameOf(c)}`));
 
-  /** 消息进入 AI 上下文的文本快照（图片/位置/表情包有占位描述，与单聊一致） */
+  /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
     if (m.kind === 'image') return '[图片]';
     if (m.kind === 'sticker' && m.stk) {
@@ -1058,6 +1372,14 @@ export function QqGroupChatPage({
         : `[表情]${m.stk.meaning ? ` ${m.stk.meaning}` : ''}`;
     }
     if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`;
+    if (m.kind === 'redpacket' && m.rp) {
+      const rp = m.rp;
+      return `[红包 ID:${rp.cid ?? m.id} ¥${rp.amount}${rp.count > 1 ? `x${rp.count}` : ''} "${rp.blessing}"，${groupRpStateLabel(rp)}]`;
+    }
+    if (m.kind === 'transfer' && m.tr) {
+      const tr = m.tr;
+      return `[转账 ID:${tr.cid ?? m.id} ¥${tr.amount}${tr.note ? ` "${tr.note}"` : ''}，发给${tr.toName}，${groupTrStateLabel(tr)}]`;
+    }
     return m.content;
   };
 
@@ -1071,7 +1393,86 @@ export function QqGroupChatPage({
           : '[表情]'
         : m.kind === 'location' && m.loc
           ? `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`
-          : m.content;
+          : m.kind === 'redpacket' && m.rp
+            ? `[红包] ¥${m.rp.amount} ${m.rp.blessing}`
+            : m.kind === 'transfer' && m.tr
+              ? `[转账] ¥${m.tr.amount}${m.tr.note ? ` ${m.tr.note}` : ''}`
+              : m.content;
+
+  /** 收集该成员当前可处理的群红包/转账（生成 system 待处理清单）：
+   *  红包：不是自己发的、未过期、还有剩余份、自己没领过、（专属 → 只给被指定成员）；
+   *  转账：只有被指定的收款成员能处理 */
+  const collectGroupPending = useCallback(
+    (charId: string): PendingCardInfo[] => {
+      const out: PendingCardInfo[] = [];
+      for (const m of loadGroupMsgs(gid)) {
+        if (m.recalled) continue;
+        if (m.kind === 'redpacket' && m.rp && m.senderId !== charId) {
+          const rp = m.rp;
+          if (rp.expired || rp.claims.length >= rp.count) continue;
+          if (rp.claims.some((c) => c.contactId === charId)) continue;
+          if (rp.mode === 'exclusive' && rp.targetId !== charId) continue;
+          const bits = [
+            `祝福语"${rp.blessing}"`,
+            rp.count > 1 ? `共${rp.count}份剩${rp.count - rp.claims.length}份` : '',
+            rp.mode === 'exclusive' ? '专属发给你一个人的' : rp.mode === 'lucky' ? '拼手气' : '',
+            m.senderId === 'me' ? '来自机主' : `来自${m.senderName}`,
+          ].filter(Boolean);
+          out.push({ id: rp.cid ?? m.id, kind: 'redpacket', amount: rp.count > 1 && rp.mode === 'normal' ? round2(rp.amount) : rp.amount, label: bits.join('，') });
+        } else if (m.kind === 'transfer' && m.tr && m.role === 'me' && m.tr.toId === charId && !m.tr.received && !m.tr.status) {
+          const tr = m.tr;
+          out.push({ id: tr.cid ?? m.id, kind: 'transfer', amount: tr.amount, label: tr.note ? `备注"${tr.note}"，机主转给你的` : '机主转给你的' });
+        }
+      }
+      return out;
+    },
+    [gid]
+  );
+
+  /** 应用成员对群红包/转账的处理动作（领取/收款/退回/拒收；幂等，状态流转后不可重复处理） */
+  const applyGroupAiAction = useCallback(
+    (char: ContactRecord, action: RichAction) => {
+      const verb = actionVerb(action.kind);
+      const all = loadGroupMsgs(gid);
+      const m = all.find(
+        (x) =>
+          !x.recalled &&
+          ((x.kind === 'redpacket' && x.rp && (x.rp.cid === action.targetId || x.id === action.targetId)) ||
+            (x.kind === 'transfer' && x.tr && (x.tr.cid === action.targetId || x.id === action.targetId)))
+      );
+      if (!m) return;
+      const charName = memberNameOf(char);
+      if (m.kind === 'redpacket' && m.rp) {
+        const rp = m.rp;
+        if (verb !== 'claim') return; // 群红包没有退回/拒收语义（未领完 24h 自动过期退回）
+        if (rp.expired || rp.claims.length >= rp.count || rp.claims.some((c) => c.contactId === char.id)) return;
+        if (rp.mode === 'exclusive' && rp.targetId !== char.id) return;
+        const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
+        const left = rp.count - rp.claims.length;
+        const amt = rp.mode === 'lucky' && left > 1 ? splitLuckyAmount(remaining, left) : remaining;
+        patchGroupMsg(m.id, { rp: { ...rp, claims: [...rp.claims, { contactId: char.id, name: charName, avatar: char.avatar, amount: amt, ts: Date.now() }] } });
+        appendFundNotice('rp', `${charName}领取了${m.senderId === 'me' ? '你' : m.senderName || '群友'}的`, rp.mode === 'exclusive' ? '专属红包' : '红包');
+        return;
+      }
+      if (m.kind === 'transfer' && m.tr) {
+        const tr = m.tr;
+        if (tr.toId !== char.id) return; // 只有被选中的收款成员能处理
+        if (tr.received || tr.status) return;
+        if (verb === 'claim') {
+          patchGroupMsg(m.id, { tr: { ...tr, received: true, receivedAt: Date.now() } });
+          appendFundNotice('tr', `${charName}收下了你发的`, '转账');
+        } else if (verb === 'return') {
+          patchGroupMsg(m.id, { tr: { ...tr, status: 'returned' } });
+          gainToWallet(tr.amount, '转账退回');
+          appendFundNotice('tr', `${charName}退回了你的`, '转账');
+        } else {
+          patchGroupMsg(m.id, { tr: { ...tr, status: 'rejected' } });
+          appendFundNotice('tr', `${charName}拒收了你的`, '转账');
+        }
+      }
+    },
+    [appendFundNotice, gid, patchGroupMsg]
+  );
 
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
@@ -1109,13 +1510,22 @@ export function QqGroupChatPage({
           `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户）${
             others.length ? '、' + others.map(memberNameOf).join('、') : ''
           }。你以「${charName}」的身份参与其中。`,
-          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」是图片/位置/表情包消息，请自然理解并回应。',
+          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，请自然理解并回应。',
           '只以「' + charName + '」的身份和口吻发言，绝不替其他成员发言、代答或描写他们的言行。',
           '不复制、不复述、不换说法重复其他成员刚说过的内容（群里最忌跟风复读）。',
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
           '把群里的每个成员都当作真实的群友，绝不出戏：不说「用户」「AI」「角色」「人设」这类幕后词汇，也不表现出「我知道谁在操作」。',
           '每次只发一条简短消息（一两句话），像真人在群里随手打字。',
+          '【发红包】想给群里发红包时，在回复里输出 [红包:金额:祝福语]（如 [红包:8.88:恭喜发财]），红包会以你的名义发进群里，大家都能抢；金额量力而行、符合你的人设与场合，不要频繁发。',
         ];
+        // 群红包/转账待处理清单（每个成员独立视角）：是否抢/收完全按人设决定，不处理就不输出标记
+        const pendingCards = collectGroupPending(char.id);
+        if (pendingCards.length > 0) {
+          groupRules.push(
+            '【群红包/转账】下面的清单来自本群：红包由机主或群成员发出，多份红包每人限领一份；专属红包只有被指定的人能领；转账只有收款人能处理。抢不抢、收不收都按你的人设与当时的语境自然决定。',
+            ...buildActionRules(pendingCards)
+          );
+        }
         // 群成员速览（关系感知）：其他成员是谁、与机主的关系、性格速写（角色间相处按双方人设自然把握）
         const memberLines = others.map((c) => {
           const rel = (c.relation ?? '').trim();
@@ -1160,7 +1570,12 @@ export function QqGroupChatPage({
         ]
           .filter(Boolean)
           .join('\n\n');
-        const payload: ChatPayloadMessage[] = [{ role: 'system', content: systemFull }, ...history];
+        // 回复条数（按群独立，发送时现场读取）：>1 时连发多条（一句一条），成员们像真人一样逐条刷屏
+        const replyCount = getReplyCount(sKey);
+        const payload: ChatPayloadMessage[] = [
+          { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
+          ...history,
+        ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
 
         const ok = beginChatStream({
@@ -1168,6 +1583,7 @@ export function QqGroupChatPage({
           aiMsgId: genId(),
           messages,
           apiConfig,
+          replyCount,
           // 配置识图模型后：群里发的图片先识图，成员结合图片按人设回复（与单聊同管线）
           ...(turnImages.length > 0 ? { vision: { images: turnImages, text: lastUserText } } : {}),
           finalize: (result) => {
@@ -1177,15 +1593,55 @@ export function QqGroupChatPage({
               resolve();
               return;
             }
-            const reply: WxGroupMsg = {
-              id: result.aiMsgId,
-              role: 'peer',
-              senderId: char.id,
-              senderName: charName,
-              content: text || '（…）',
-              time: Date.now(),
-            };
-            appendMsg(reply);
+            // 回复按出现顺序切「文字块 + 处理动作」：动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置落盘），
+            // 文字块按边界切分（回复条数>1 时一句一条）后再解析 [红包:…] 标记 → 群红包卡片消息
+            const parts = extractRichActionParts(text);
+            const all: WxGroupMsg[] = [];
+            let t = result.startedAt;
+            let idx = 0;
+            for (const part of parts) {
+              if (part.type === 'action') {
+                applyGroupAiAction(char, part.action);
+                continue;
+              }
+              const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
+              for (const seg of segs) {
+                for (const p of parseRichParts(seg, [])) {
+                  const id = idx === 0 ? result.aiMsgId : `${result.aiMsgId}-${idx}`;
+                  if (p.type === 'rich') {
+                    // 群里成员只发红包卡片（转账/亲属卡需要指定收款人，群规则不下发；位置/表情包富标记忽略）
+                    if (p.rich.kind !== 'redpacket') continue;
+                    all.push({
+                      id,
+                      role: 'peer',
+                      senderId: char.id,
+                      senderName: charName,
+                      content: '',
+                      time: t,
+                      kind: 'redpacket',
+                      rp: {
+                        amount: p.rich.amount,
+                        count: 1,
+                        mode: 'normal',
+                        blessing: p.rich.blessing || '恭喜发财',
+                        claims: [],
+                        sentAt: Date.now(),
+                      },
+                    });
+                  } else {
+                    const cleaned = p.text.trim();
+                    if (!cleaned) continue;
+                    all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: cleaned, time: t });
+                  }
+                  idx += 1;
+                  t += 600 + Math.floor(Math.random() * 600);
+                }
+              }
+            }
+            if (all.length === 0) {
+              all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
+            }
+            for (const m of all) appendMsg(m);
             // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
             void (async () => {
               try {
@@ -1216,21 +1672,23 @@ export function QqGroupChatPage({
         });
         if (!ok) resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
       }),
-    [apiConfig, appendMsg, gid, me.id, me.name, ownerLabelOf, sKey]
+    [apiConfig, appendMsg, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, sKey]
   );
 
-  /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默） */
+  /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默）。
+   *  trigger 可省略（分句发送批次触发/红包/转账卡片入群时无文字可 @）：此时全员按人设自判。 */
   const runGroupTurn = useCallback(
-    async (myMsg: WxGroupMsg) => {
+    async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
       const g = getGroup(gid);
       if (!g || g.memberIds.length === 0) return;
       runningRef.current = true;
       try {
+        expireStalePackets(); // 每轮开始前先清算过期红包（终态不可再改）
         const all = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
           .filter((c): c is ContactRecord => !!c);
-        const mentioned = parseMentions(myMsg.content);
+        const mentioned = trigger ? parseMentions(trigger.content) : [];
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
         // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则）
@@ -1254,12 +1712,26 @@ export function QqGroupChatPage({
         if (mountedRef.current) setSpeakerId(null);
       }
     },
-    [gid, runCharTurn, sKey]
+    [expireStalePackets, gid, runCharTurn, sKey]
   );
+
+  /** 分句发送批次触发：把已发出的整批消息交给成员统一回复（输入框为空时点「发送」） */
+  const dispatchBatch = () => {
+    if (!pendingDispatch || runningRef.current || isChatStreaming(sKey)) return;
+    setPendingDispatch(false);
+    markPendingBatch(sKey, false);
+    const persisted = loadGroupMsgs(gid);
+    const lastMe = [...persisted].reverse().find((m) => m.role === 'me');
+    void runGroupTurn(lastMe);
+  };
 
   const send = () => {
     const text = draft.trim();
-    if (!text) return;
+    // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
+    if (!text) {
+      if (sentenceSend && pendingDispatch) dispatchBatch();
+      return;
+    }
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
       return;
@@ -1276,6 +1748,12 @@ export function QqGroupChatPage({
     setDraft('');
     setQuote(null);
     appendMsg(msg);
+    // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
     void runGroupTurn(msg);
   };
 
@@ -1304,7 +1782,14 @@ export function QqGroupChatPage({
       }
     }
     for (const m of created) appendMsg(m);
-    if (created.length > 0 && useSettings.getState().visionConfig.baseUrl.trim()) {
+    if (created.length === 0) return;
+    // 分句发送开启：只入列不触发回复（与文字消息同规则）
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    if (useSettings.getState().visionConfig.baseUrl.trim()) {
       void runGroupTurn(created[created.length - 1]);
     }
   };
@@ -1327,6 +1812,11 @@ export function QqGroupChatPage({
       stk: { url: s.url, meaning: s.meaning },
     };
     appendMsg(msg);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
     void runGroupTurn(msg);
   };
 
@@ -1349,15 +1839,168 @@ export function QqGroupChatPage({
       loc: { name, address },
     };
     appendMsg(msg);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
     void runGroupTurn(msg);
   };
 
-  // 加号面板五宫格（与单聊完全一致的入口与配色；红包/转账按群范围限定仅提示）
+  // ---------------- 群红包/转账（纯本地模拟，不涉及真实资金；复用单聊同一套页面/卡片组件） ----------------
+
+  /** 群红包提交（单聊 RedPacketCompose 群模式产出 MsgPacket）：换算成群红包数据 → 预检/验证/扣款 → 落卡消息 → 群回合 */
+  const submitGroupRp = (p: MsgPacket, methodId: string) => {
+    if (p.type !== 'redpacket') return;
+    const mode: GroupRpData['mode'] = p.mode === 'dedicated' ? 'exclusive' : p.mode ?? 'normal';
+    const total = groupRpTotal(mode, p.amount, p.count ?? 1);
+    if (!canPay(methodId, total)) {
+      onToast(methodId === 'balance' ? '钱包余额不足，请先充值' : '卡内余额不足，请更换支付方式');
+      return;
+    }
+    const pp = loadPayPwd();
+    if (pp.enabled && pp.pwd) {
+      setGate({ kind: 'redpacket', label: '发红包', amount: total, methodId, packet: p });
+      return;
+    }
+    execGroupRp(p, methodId);
+  };
+
+  const execGroupRp = (p: MsgPacket, methodId: string) => {
+    if (p.type !== 'redpacket') return;
+    const mode: GroupRpData['mode'] = p.mode === 'dedicated' ? 'exclusive' : p.mode ?? 'normal';
+    const total = groupRpTotal(mode, p.amount, p.count ?? 1);
+    if (!executePayment(methodId, total, '红包')) {
+      onToast(methodId === 'balance' ? '钱包余额不足，请先充值' : '余额不足，请更换支付方式');
+      return;
+    }
+    const msg: WxGroupMsg = {
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'redpacket',
+      rp: {
+        amount: p.amount,
+        count: mode === 'exclusive' ? 1 : p.count ?? 1,
+        mode,
+        blessing: p.note || '恭喜发财',
+        targetId: mode === 'exclusive' ? p.toId : undefined,
+        targetName: mode === 'exclusive' ? p.toName : undefined,
+        claims: [],
+        sentAt: Date.now(),
+        cid: nextGroupCid('rp'),
+      },
+    };
+    setLayer(null);
+    appendMsg(msg);
+    onToast(mode === 'exclusive' && p.toName ? `专属红包已发给${p.toName}` : `红包已发出 ${fmtMoney(total)} 元`);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    void runGroupTurn(msg);
+  };
+
+  const execGroupTr = (amount: number, note: string, member: ContactRecord, methodId: string) => {
+    if (!executePayment(methodId, amount, '转账')) {
+      onToast(methodId === 'balance' ? '钱包余额不足，请先充值' : '余额不足，请更换支付方式');
+      return;
+    }
+    const msg: WxGroupMsg = {
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'transfer',
+      tr: { amount, note, toId: member.id, toName: memberNameOf(member), cid: nextGroupCid('tr') },
+    };
+    setLayer(null);
+    appendMsg(msg);
+    onToast(`已向 ${memberNameOf(member)} 转账 ${fmtMoney(amount)} 元`);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    void runGroupTurn(msg);
+  };
+
+  /** 我领取成员发的红包（开箱「開」）：金额入钱包+记账单+领取记录+通知行 → 进详情；专属红包只给被指定成员 */
+  const claimGroupRp = (msgId: string) => {
+    const m = loadGroupMsgs(gid).find((x) => x.id === msgId);
+    if (!m?.rp) return;
+    const rp = m.rp;
+    if (rp.mode === 'exclusive' && rp.targetId) {
+      onToast(`这是发给${rp.targetName}的专属红包`);
+      setLayer({ view: 'rp-detail', msgId });
+      return;
+    }
+    if (rp.expired || rp.claims.length >= rp.count || rp.claims.some((c) => c.contactId === 'me')) {
+      setLayer({ view: 'rp-detail', msgId });
+      return;
+    }
+    const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
+    const left = rp.count - rp.claims.length;
+    const amt = rp.mode === 'lucky' && left > 1 ? splitLuckyAmount(remaining, left) : remaining;
+    patchGroupMsg(msgId, { rp: { ...rp, claims: [...rp.claims, { contactId: 'me', name: me.name, avatar: me.avatar, amount: amt, ts: Date.now() }] } });
+    gainToWallet(amt, '红包');
+    appendFundNotice('rp', `你领取了${m.senderId === 'me' ? '自己发的' : m.senderName || '群友'}的`, '红包');
+    setLayer({ view: 'rp-detail', msgId });
+  };
+
+  /** 红包卡片点击：成员发的未领完且我能领 → 先开箱；其余直接进详情 */
+  const openRpMsg = (m: WxGroupMsg) => {
+    const rp = m.rp;
+    if (!rp) return;
+    const claimable = m.senderId !== 'me' && !rp.expired && rp.claims.length < rp.count && !rp.claims.some((c) => c.contactId === 'me') && rp.mode !== 'exclusive';
+    if (claimable) {
+      setLayer({ view: 'rp-open', msgId: m.id });
+      return;
+    }
+    if (rp.mode === 'exclusive' && m.senderId !== 'me' && !rp.claims.some((c) => c.contactId === 'me') && !rp.expired && rp.claims.length < rp.count) {
+      onToast(`这是发给${rp.targetName}的专属红包`);
+    }
+    setLayer({ view: 'rp-detail', msgId: m.id });
+  };
+
+  // 加号面板五宫格（与单聊完全一致的入口与配色；红包/转账 → 群级流程：发红包页 / 先选收款成员）
   const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
     { key: 'call', label: '语音通话', color: '#2FBF71', icon: <Phone className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('语音通话暂未开放') },
     { key: 'video', label: '视频通话', color: '#1B9FF0', icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('视频通话暂未开放') },
-    { key: 'rp', label: '红包', color: '#F5455C', icon: <RpIcon className="h-[26px] w-[26px]" />, onClick: () => onToast('群聊暂不支持红包/转账') },
-    { key: 'transfer', label: '转账', color: '#12B7F5', icon: <ArrowLeftRight className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('群聊暂不支持红包/转账') },
+    {
+      key: 'rp',
+      label: '红包',
+      color: '#F5455C',
+      icon: <RpIcon className="h-[26px] w-[26px]" />,
+      onClick: () => {
+        setStickerOpen(false);
+        setAtOpen(false);
+        setPlusOpen(false);
+        setLayer({ view: 'rp-compose' });
+      },
+    },
+    {
+      key: 'transfer',
+      label: '转账',
+      color: '#12B7F5',
+      icon: <ArrowLeftRight className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        setStickerOpen(false);
+        setAtOpen(false);
+        setPlusOpen(false);
+        if (members.length === 0) {
+          onToast('群里还没有成员');
+          return;
+        }
+        setLayer({ view: 'tr-pick' });
+      },
+    },
     {
       key: 'loc',
       label: '位置',
@@ -1419,6 +2062,10 @@ export function QqGroupChatPage({
 
   const speaker = speakerId ? memberById.get(speakerId) ?? null : null;
   const streaming = stream?.status === 'streaming';
+
+  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次） */
+  const canDispatch = sentenceSend && pendingDispatch && !streaming && !runningRef.current;
+  const layerMsg = layer && 'msgId' in layer ? msgs.find((m) => m.id === layer.msgId) ?? null : null;
 
   /** 富媒体消息行（图片/位置/表情包）：与文字行同一套头像/名字/宽度几何 */
   const renderMsgRow = (m: WxGroupMsg, media: React.ReactNode) => {
@@ -1482,9 +2129,13 @@ export function QqGroupChatPage({
             return (
               <div key={m.id} className="py-2 text-center">
                 {showTime && <div className="pb-1 text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
-                <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
-                  {m.noticeText ?? m.content}
-                </span>
+                {m.notice ? (
+                  <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
+                ) : (
+                  <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                    {m.noticeText ?? m.content}
+                  </span>
+                )}
               </div>
             );
           }
@@ -1526,6 +2177,32 @@ export function QqGroupChatPage({
                     onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
                   />
                 )
+              ) : m.kind === 'redpacket' && m.rp ? (
+                renderMsgRow(
+                  m,
+                  <RedPacketBubble
+                    packet={{
+                      type: 'redpacket',
+                      amount: m.rp.amount,
+                      note: m.rp.blessing,
+                      count: m.rp.count,
+                      mode: m.rp.mode === 'exclusive' ? 'dedicated' : m.rp.mode,
+                      claims: m.rp.claims.map((c) => ({ name: c.name, avatar: c.avatar, amount: c.amount, ts: c.ts })),
+                    }}
+                    showOpen={m.senderId !== 'me' && !m.rp.expired && m.rp.claims.length < m.rp.count && !m.rp.claims.some((c) => c.contactId === 'me') && m.rp.mode !== 'exclusive'}
+                    onClick={() => openRpMsg(m)}
+                  />
+                )
+              ) : m.kind === 'transfer' && m.tr ? (
+                renderMsgRow(
+                  m,
+                  <TransferBubble
+                    packet={{ type: 'transfer', amount: m.tr.amount, note: m.tr.note }}
+                    mine={m.role === 'me'}
+                    received={m.tr.received === true}
+                    onClick={() => setLayer({ view: 'tr-detail', msgId: m.id })}
+                  />
+                )
               ) : (
                 <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
                   <QqAvatar src={senderAvatar} alt={senderName} size={40} />
@@ -1559,19 +2236,47 @@ export function QqGroupChatPage({
             </div>
           );
         })}
-        {/* 流式气泡（当前发言角色） */}
+        {/* 流式气泡（当前发言角色）：回复条数>1 时按边界实时切成多个气泡，下一句没打完时显示打字中 */}
         {streaming && stream && (
-          <div className="mb-3 flex gap-2" data-testid="qq-group-stream">
-            <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
-            <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-              <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
-                {speaker ? memberNameOf(speaker) : '…'}
-              </span>
-              <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
-                <span>{stream.content || '…'}</span>
-                <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />
-              </div>
-            </div>
+          <div data-testid="qq-group-stream">
+            {(() => {
+              const split = splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1);
+              return (
+                <>
+                  {split.texts.map((t, i) => (
+                    <div key={i} className="mb-3 flex gap-2">
+                      <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
+                      <div className="flex min-w-0 max-w-[72%] flex-col items-start">
+                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+                          {speaker ? memberNameOf(speaker) : '…'}
+                        </span>
+                        <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
+                          {prettifyRichText(t)}
+                          {i === split.texts.length - 1 && <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {(split.pending || split.texts.length === 0) && (
+                    <div className="mb-3 flex gap-2">
+                      <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
+                      <div className="flex min-w-0 max-w-[72%] flex-col items-start">
+                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+                          {speaker ? memberNameOf(speaker) : '…'}
+                        </span>
+                        <div className="w-fit rounded-[18px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">
+                          <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">
+                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
+                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
+                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -1620,13 +2325,13 @@ export function QqGroupChatPage({
           <button
             type="button"
             onClick={send}
-            disabled={streaming || !draft.trim()}
+            disabled={streaming || runningRef.current || (!draft.trim() && !canDispatch)}
             data-testid="qq-groupchat-send"
             aria-label="发送"
             className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
-              draft.trim() && !streaming ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
+              (draft.trim() || canDispatch) && !streaming && !runningRef.current ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
             }`}
-            style={{ backgroundColor: draft.trim() && !streaming ? '#0099FF' : '#8AD4F7' }}
+            style={{ backgroundColor: (draft.trim() || canDispatch) && !streaming && !runningRef.current ? '#0099FF' : '#8AD4F7' }}
           >
             发送
           </button>
@@ -1717,6 +2422,105 @@ export function QqGroupChatPage({
       {/* 位置页（与单聊共用同一套组件；位置卡片群里所有角色可见） */}
       {compose === 'location' && (
         <LocationPickerPage onClose={() => setCompose(null)} onSend={(loc) => sendLocation(loc.name, loc.addr)} />
+      )}
+
+      {/* 群红包/转账浮层流程（发红包页[复用单聊 RedPacketCompose 群模式] / 选人页 / 转账页[复用单聊 TransferCompose] / 开箱 / 详情） */}
+      {layer?.view === 'rp-compose' && (
+        <RedPacketCompose
+          wallet={loadWallet()}
+          cards={loadBankCards()}
+          members={members}
+          onToast={onToast}
+          onClose={() => setLayer(null)}
+          onSend={submitGroupRp}
+        />
+      )}
+      {layer?.view === 'tr-pick' && (
+        <div className="absolute inset-0 z-40 flex flex-col bg-[#F5F6F8] pt-[54px] dark:bg-[#16171A]" data-testid="qq-grp-tr-pick">
+          <div className="flex h-11 shrink-0 items-center px-2">
+            <button
+              type="button"
+              aria-label="返回"
+              data-testid="qq-grp-tr-pick-back"
+              onClick={() => setLayer(null)}
+              className="rounded-full p-1.5 active:bg-black/5 dark:active:bg-white/10"
+            >
+              <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
+            </button>
+            <div className="flex-1 pr-8 text-center text-[16px] font-medium text-[#1F2329] dark:text-white">选择收款成员</div>
+          </div>
+          <p className="px-5 pb-2 pt-3 text-[12.5px] text-black/40 dark:text-white/40">转账给「{group.name}」中的一位成员，只有 TA 能收款</p>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-8">
+            <div className="overflow-hidden rounded-[12px] bg-white dark:bg-[#1B1C1F]">
+              {members.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  data-testid={`qq-grp-tr-pick-${m.id}`}
+                  onClick={() => setLayer({ view: 'tr-compose', member: m })}
+                  className="flex w-full items-center gap-3 border-b border-black/[0.04] px-4 py-2.5 text-left last:border-b-0 active:bg-black/[0.04] dark:border-white/[0.05] dark:active:bg-white/[0.06]"
+                >
+                  <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={40} />
+                  <span className="min-w-0 flex-1 truncate text-[15px] text-[#1F2329] dark:text-white">{memberNameOf(m)}</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {layer?.view === 'tr-compose' && (
+        <TransferCompose
+          peer={layer.member}
+          wallet={loadWallet()}
+          cards={loadBankCards()}
+          onToast={onToast}
+          onClose={() => setLayer(null)}
+          onSend={(p, methodId) => {
+            if (p.type !== 'transfer') return;
+            const pp = loadPayPwd();
+            if (pp.enabled && pp.pwd) {
+              setGate({ kind: 'transfer', label: '转账', amount: p.amount, methodId, tr: { member: layer.member, amount: p.amount, note: p.note } });
+              return;
+            }
+            execGroupTr(p.amount, p.note, layer.member, methodId);
+          }}
+        />
+      )}
+      {layer?.view === 'rp-open' && layerMsg?.rp && (
+        <RedPacketOpenModal
+          senderName={layerMsg.senderId === 'me' ? '我' : layerMsg.senderName || '群友'}
+          avatar={layerMsg.senderId === 'me' ? me.avatar : memberById.get(layerMsg.senderId)?.avatar ?? null}
+          note={layerMsg.rp.blessing}
+          onOpen={() => claimGroupRp(layer.msgId)}
+          onClose={() => setLayer(null)}
+        />
+      )}
+      {layer?.view === 'rp-detail' && layerMsg?.rp && (
+        <GroupRpDetailPage
+          senderName={layerMsg.senderId === 'me' ? '我' : layerMsg.senderName || '群友'}
+          senderAvatar={layerMsg.senderId === 'me' ? me.avatar : memberById.get(layerMsg.senderId)?.avatar ?? null}
+          rp={layerMsg.rp}
+          onBack={() => setLayer(null)}
+          onToast={onToast}
+        />
+      )}
+      {layer?.view === 'tr-detail' && layerMsg?.tr && (
+        <GroupTrDetailPage tr={layerMsg.tr} fromName={layerMsg.role === 'me' ? me.name : layerMsg.senderName || '群友'} onBack={() => setLayer(null)} />
+      )}
+
+      {/* 支付密码验证浮层（开启支付密码后群红包/群转账发送前弹出自绘键盘，与单聊同规则） */}
+      {gate && (
+        <PayPwdGate
+          label={`${gate.label} ¥${fmtMoney(gate.amount)} 元`}
+          onOk={() => {
+            const g = gate;
+            setGate(null);
+            if (g.kind === 'redpacket' && g.packet) execGroupRp(g.packet, g.methodId);
+            else if (g.kind === 'transfer' && g.tr) execGroupTr(g.tr.amount, g.tr.note, g.tr.member, g.methodId);
+          }}
+          onClose={() => setGate(null)}
+        />
       )}
       {/* 原生相机/相册隐藏 input：相机单张（capture 调起后置摄像头）、图片可多选（与单聊同款） */}
       <input

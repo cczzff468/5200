@@ -10,7 +10,8 @@
  *   私聊召回、角色私聊记忆参与群聊召回；effectiveInterop 统一解析，聊天页把结果以 interopOn 回调
  *   传给记忆召回；角色之间的隔离永远由记忆存储键（mem-frag:<contactId>）保证，与开关无关；
  * - 谁来回复由每个角色按自己的人设与消息内容自判（无需回复只回 [SKIP]，不落盘），@ 成员始终优先；
- * - 群里不提供红包/转账等资金功能（加号面板仅入口，点击提示不支持），符合范围限定。
+ * - 群红包（普通/拼手气/专属）与指定成员转账：消息落本群消息库，状态随群持久化（按群 ID 隔离，
+ *   与单聊互不相通）；成员按人设领取/收款/退回，纯本地模拟不涉及真实资金。
  */
 
 import { kvDel, kvGet, kvSet } from './idb-kv';
@@ -37,6 +38,49 @@ export interface ChatGroup {
   createdAt: number;
 }
 
+/**
+ * 群红包数据（随群消息持久化；群间按群 ID 隔离、与单聊红包互不相通）。
+ * 状态机：待领取（claims 空）→ 部分领取（0 < claims.length < count）→ 已抢完（claims.length ≥ count）/
+ * 已过期（sentAt + 24h 后仍有剩余 → expired，剩余金额按剩余份退回发起人）。
+ * 每个成员（含机主 'me'）领取记录独立，不能重复领取；专属红包只有被指定成员能领。
+ */
+export interface GroupRpData {
+  /** 拼手气 = 总金额；普通/专属 = 单个金额 */
+  amount: number;
+  /** 红包个数（普通/专属固定 1..n；专属固定 1） */
+  count: number;
+  /** 普通 normal / 拼手气 lucky / 专属 exclusive */
+  mode: 'normal' | 'lucky' | 'exclusive';
+  blessing: string;
+  /** 专属红包指定成员的联系人 ID / 名字（exclusive 时有值；其他人看到但不能领） */
+  targetId?: string;
+  targetName?: string;
+  /** 领取记录（按领取顺序追加；contactId = 'me' 表示机主领取） */
+  claims: Array<{ contactId: string; name: string; avatar: string | null; amount: number; ts: number }>;
+  /** 发出时间（24h 过期判定基准） */
+  sentAt: number;
+  /** 已过期（剩余金额已退回发起人；终态不可再改） */
+  expired?: boolean;
+  expiredAt?: number;
+  /** AI 处理动作用的短 ID（机主发的红包；成员在回复标记里引用） */
+  cid?: string;
+}
+
+/** 群转账数据（机主 → 指定群成员；只有被选中的成员能收款；按群 ID 隔离） */
+export interface GroupTrData {
+  amount: number;
+  note: string;
+  /** 指定收款成员（联系人 ID / 名字；只有 TA 能收款，其他人只看到有转账发生） */
+  toId: string;
+  toName: string;
+  received?: boolean;
+  receivedAt?: number;
+  /** 退还/拒收终态（被指定成员退回/拒收；终态后不可再改） */
+  status?: 'returned' | 'rejected';
+  /** AI 处理动作用的短 ID */
+  cid?: string;
+}
+
 /** 群消息：role 沿用 me/peer 语义，senderId 区分具体发言人（'me' = 机主，否则为角色联系人 ID） */
 export interface WxGroupMsg {
   id: string;
@@ -45,9 +89,15 @@ export interface WxGroupMsg {
   senderName: string;
   content: string;
   time: number;
-  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker';
-  /** 系统通知行（进群/退出等），居中灰字渲染 */
+  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer';
+  /** 群红包卡片数据（kind = 'redpacket' 时有值） */
+  rp?: GroupRpData;
+  /** 群转账卡片数据（kind = 'transfer' 时有值） */
+  tr?: GroupTrData;
+  /** 系统通知行（进群/退出等），居中灰字渲染；有 notice（红包/转账通知）时用带图标的彩色尾词样式 */
   noticeText?: string;
+  /** 资金通知行数据（xx领取了你的红包/收下了你的转账；渲染用彩色尾词行） */
+  notice?: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string };
   img?: { src: string };
   /** 位置卡片消息（群里所有角色可见，进上下文映射为 [位置] 文本） */
   loc?: { name: string; address: string };
@@ -257,8 +307,54 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
     senderName: typeof r.senderName === 'string' ? r.senderName : '',
     content: r.content,
     time: r.time,
-    kind: r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' ? r.kind : 'text',
+    kind:
+      r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer'
+        ? r.kind
+        : 'text',
+    rp:
+      r.kind === 'redpacket' && r.rp && typeof r.rp.amount === 'number'
+        ? {
+            amount: r.rp.amount,
+            count: typeof r.rp.count === 'number' && r.rp.count >= 1 ? Math.floor(r.rp.count) : 1,
+            mode: r.rp.mode === 'lucky' || r.rp.mode === 'exclusive' ? r.rp.mode : 'normal',
+            blessing: typeof r.rp.blessing === 'string' ? r.rp.blessing : '恭喜发财，大吉大利',
+            targetId: typeof r.rp.targetId === 'string' ? r.rp.targetId : undefined,
+            targetName: typeof r.rp.targetName === 'string' ? r.rp.targetName : undefined,
+            claims: Array.isArray(r.rp.claims)
+              ? r.rp.claims
+                  .filter((c): c is GroupRpData['claims'][number] => Boolean(c) && typeof (c as { name?: unknown }).name === 'string')
+                  .map((c) => ({
+                    contactId: typeof c.contactId === 'string' ? c.contactId : '',
+                    name: c.name,
+                    avatar: typeof c.avatar === 'string' ? c.avatar : null,
+                    amount: typeof c.amount === 'number' ? c.amount : 0,
+                    ts: typeof c.ts === 'number' ? c.ts : 0,
+                  }))
+              : [],
+            sentAt: typeof r.rp.sentAt === 'number' ? r.rp.sentAt : r.time,
+            expired: r.rp.expired === true || undefined,
+            expiredAt: typeof r.rp.expiredAt === 'number' ? r.rp.expiredAt : undefined,
+            cid: typeof r.rp.cid === 'string' ? r.rp.cid : undefined,
+          }
+        : undefined,
+    tr:
+      r.kind === 'transfer' && r.tr && typeof r.tr.amount === 'number'
+        ? {
+            amount: r.tr.amount,
+            note: typeof r.tr.note === 'string' ? r.tr.note : '',
+            toId: typeof r.tr.toId === 'string' ? r.tr.toId : '',
+            toName: typeof r.tr.toName === 'string' ? r.tr.toName : '',
+            received: r.tr.received === true || undefined,
+            receivedAt: typeof r.tr.receivedAt === 'number' ? r.tr.receivedAt : undefined,
+            status: r.tr.status === 'returned' || r.tr.status === 'rejected' ? r.tr.status : undefined,
+            cid: typeof r.tr.cid === 'string' ? r.tr.cid : undefined,
+          }
+        : undefined,
     noticeText: typeof r.noticeText === 'string' ? r.noticeText : undefined,
+    notice:
+      r.notice && typeof r.notice.pre === 'string' && typeof r.notice.accent === 'string'
+        ? { icon: r.notice.icon === 'tr' || r.notice.icon === 'fam' ? r.notice.icon : 'rp', pre: r.notice.pre, accent: r.notice.accent }
+        : undefined,
     img: r.img && typeof r.img.src === 'string' ? { src: r.img.src } : undefined,
     loc:
       r.loc && typeof r.loc.name === 'string' && typeof r.loc.address === 'string'
@@ -295,6 +391,8 @@ export function groupPreview(groupId: string): { text: string; time: number } {
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
   if (last.kind === 'sticker') return { text: `[表情]${last.stk?.meaning ? ` ${last.stk.meaning}` : ''}`, time: last.time };
   if (last.kind === 'location') return { text: `[位置] ${last.loc?.name ?? ''}`.trim(), time: last.time };
+  if (last.kind === 'redpacket') return { text: '[红包]', time: last.time };
+  if (last.kind === 'transfer') return { text: '[转账]', time: last.time };
   const prefix = last.role === 'me' ? '我' : last.senderName;
   return { text: `${prefix}：${last.content}`, time: last.time };
 }

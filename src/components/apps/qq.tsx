@@ -278,7 +278,7 @@ interface QQFamData {
   cid?: string;
 }
 
-interface MsgPacket {
+export interface MsgPacket {
   type: 'redpacket' | 'transfer';
   /** 金额（元）：普通/专属红包 = 单个金额；拼手气红包 = 总金额 */
   amount: number;
@@ -288,6 +288,9 @@ interface MsgPacket {
   count?: number;
   /** 红包类型：普通 / 拼手气 / 专属 */
   mode?: 'normal' | 'lucky' | 'dedicated';
+  /** 专属红包指定收款成员（群聊专属红包用；单聊不需要：对方即收款人） */
+  toId?: string;
+  toName?: string;
   /** 领取记录（领取后写入） */
   claims?: Array<{ name: string; avatar: string | null; amount: number; ts: number }>;
   /** 转账是否已被对方收款（发出后延迟自动收款） */
@@ -4021,7 +4024,7 @@ function RpCoverPattern() {
 }
 
 /** 聊天中的红包卡片（对照真机封面：企鹅+QQ字样+祝福语+右侧斜线纹理/圆弧/菱形/企鹅暗纹+底部亮红大弧+開/QQ红包；自己发的点开进详情，对方的先开箱） */
-function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; showOpen: boolean; onClick: () => void }) {
+export function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; showOpen: boolean; onClick: () => void }) {
   const claimed = (packet.claims ?? []).length > 0;
   const settled = claimed || packet.status === 'returned' || packet.status === 'rejected';
   // 终态（已领取/已退回/已拒收）→ 显示原状态文案；待领取中 → 有祝福语显示祝福语、没写祝福语显示「待领取」（与转账卡留言规则一致）
@@ -4074,7 +4077,7 @@ function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; sho
  *  待收款中：有转账留言时状态行优先显示留言（没写留言才显示状态文案，与微信端同规则）；
  *  终态（已收款/已退还/已拒收）：不再显示留言，改回显示原状态文案（与微信端同规则）；
  *  收款/退还/拒收后卡片颜色变灰（对照真实 QQ：终态卡褪色），退还卡圆图标换成↩ */
-function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
+export function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
   const refunded = packet.status === 'returned';
   // 终态（已收款/已退还/已拒收）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
   const settled = received || Boolean(packet.status);
@@ -4148,7 +4151,7 @@ function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: 
 }
 
 /** 聊天系统通知行（居中小图标 + 灰字 + 彩色尾词，如「xx领取了你的红包」） */
-function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
+export function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
   return (
     <div className="mb-3 flex justify-center" data-testid="qq-notice-row">
       <span className="flex max-w-[86%] items-center gap-1.5 text-[12.5px] text-black/45 dark:text-white/45">
@@ -4186,19 +4189,24 @@ function QQNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: st
   );
 }
 
-/** 发红包页（对照截图②：普通/拼手气/专属 tab + 单个金额 + 祝福语 + 封面 + 支付方式[余额/银行卡] + 大金额 + 塞钱进红包） */
-function RedPacketCompose({ wallet, cards, onToast, onClose, onSend }: { wallet: WalletData; cards: BankCard[]; onToast: (m: string) => void; onClose: () => void; onSend: (p: MsgPacket, methodId: string) => void }) {
+/** 发红包页（对照截图②：普通/拼手气/专属 tab + 单个金额 + 祝福语 + 封面 + 支付方式[余额/银行卡] + 大金额 + 塞钱进红包）。
+ *  单聊/群聊共用：传入 members（群成员清单）即启用群模式 —— 普通红包支持多个个数、专属红包需从群成员里选收款人
+ *  （packet 带上 toId/toName；群模式普通红包 count>1 时实际扣款 = 单个金额×个数，由调用方计） */
+export function RedPacketCompose({ wallet, cards, onToast, onClose, onSend, members }: { wallet: WalletData; cards: BankCard[]; onToast: (m: string) => void; onClose: () => void; onSend: (p: MsgPacket, methodId: string) => void; members?: ContactRecord[] }) {
   const [tab, setTab] = useState<'normal' | 'lucky' | 'dedicated'>('normal');
   const [amount, setAmount] = useState('');
   const [count, setCount] = useState('1');
   const [note, setNote] = useState('恭喜发财');
   const [methodId, setMethodId] = useState('balance');
   const [methodOpen, setMethodOpen] = useState(false);
+  const [target, setTarget] = useState<ContactRecord | null>(null);
+  const [pickOpen, setPickOpen] = useState(false);
   const methodCard = cards.find((c) => c.id === methodId) ?? null;
   const num = Math.round((parseFloat(amount) || 0) * 100) / 100;
   const cnt = Math.min(100, Math.max(1, Math.round(parseFloat(count) || 1)));
   const total = num;
-  const ok = num > 0 && (tab !== 'lucky' || cnt >= 1);
+  const groupMode = Array.isArray(members) && members.length > 0;
+  const ok = num > 0 && (tab !== 'lucky' || cnt >= 1) && (tab !== 'dedicated' || !groupMode || target != null);
   const tabLabel = (t: 'normal' | 'lucky' | 'dedicated'): string => (t === 'normal' ? '普通' : t === 'lucky' ? '拼手气红包' : '专属红包');
   return (
     <div className="absolute inset-0 z-40 flex flex-col bg-[#F5F6F8] pt-[54px] dark:bg-[#16171A]">
@@ -4229,7 +4237,7 @@ function RedPacketCompose({ wallet, cards, onToast, onClose, onSend }: { wallet:
             <span className="text-[16px] text-[#1F2329] dark:text-white">元</span>
           </span>
         </div>
-        {tab === 'lucky' ? (
+        {(tab === 'lucky' || (groupMode && tab === 'normal')) ? (
           <div className="mt-2.5 flex h-[62px] items-center justify-between rounded-[14px] bg-white px-4 dark:bg-[#232529]">
             <span className="text-[16px] text-[#1F2329] dark:text-white">红包个数</span>
             <span className="flex items-center gap-2">
@@ -4244,6 +4252,28 @@ function RedPacketCompose({ wallet, cards, onToast, onClose, onSend }: { wallet:
               <span className="text-[16px] text-[#1F2329] dark:text-white">个</span>
             </span>
           </div>
+        ) : null}
+        {/* 专属红包收款成员（群模式限定：从群成员里选一个人领） */}
+        {groupMode && tab === 'dedicated' ? (
+          <button
+            type="button"
+            data-testid="qq-rp-target"
+            onClick={() => setPickOpen(true)}
+            className="mt-2.5 flex h-[62px] w-full items-center justify-between rounded-[14px] bg-white px-4 text-left active:bg-black/[0.03] dark:bg-[#232529] dark:active:bg-white/[0.05]"
+          >
+            <span className="text-[16px] text-[#1F2329] dark:text-white">指定成员</span>
+            <span className="flex items-center gap-2">
+              {target ? (
+                <span className="flex items-center gap-1.5">
+                  <QqAvatar src={target.avatar} alt={target.name} size={26} />
+                  <span className="text-[15px] text-[#1F2329] dark:text-white">{target.name}</span>
+                </span>
+              ) : (
+                <span className="text-[14px] text-black/35 dark:text-white/35">选择群成员</span>
+              )}
+              <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+            </span>
+          </button>
         ) : null}
         {/* 祝福语 */}
         <div className="mt-2.5 flex h-[62px] items-center gap-3 rounded-[14px] bg-white px-4 dark:bg-[#232529]">
@@ -4297,9 +4327,10 @@ function RedPacketCompose({ wallet, cards, onToast, onClose, onSend }: { wallet:
                 type: 'redpacket',
                 amount: total,
                 note: note.trim() || '恭喜发财',
-                count: tab === 'lucky' ? cnt : 1,
+                count: tab === 'lucky' || (groupMode && tab === 'normal') ? cnt : 1,
                 mode: tab,
                 claims: [],
+                ...(groupMode && tab === 'dedicated' && target ? { toId: target.id, toName: target.name } : {}),
               }, methodId);
             }}
             style={{ backgroundColor: ok ? '#F5455C' : '#F8B9BE' }}
@@ -4322,12 +4353,38 @@ function RedPacketCompose({ wallet, cards, onToast, onClose, onSend }: { wallet:
           }}
         />
       ) : null}
+      {/* 指定成员选择 sheet（群模式专属红包：只有被选中的成员能领） */}
+      {pickOpen && members ? (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setPickOpen(false)} data-testid="qq-rp-target-sheet">
+          <div className="max-h-[62%] overflow-hidden rounded-t-[16px] bg-white dark:bg-[#232529]" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 pb-2 pt-4 text-[15px] font-medium text-[#1F2329] dark:text-white">选择指定成员（只有 TA 能领这个红包）</div>
+            <div className="max-h-[52vh] overflow-y-auto pb-6">
+              {members.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  data-testid={`qq-rp-target-${m.id}`}
+                  onClick={() => {
+                    setTarget(m);
+                    setPickOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <QqAvatar src={m.avatar} alt={m.name} size={38} />
+                  <span className="min-w-0 flex-1 truncate text-[15px] text-[#1F2329] dark:text-white">{m.name}</span>
+                  {target?.id === m.id ? <Check className="h-5 w-5 shrink-0 text-[#0099FF]" aria-hidden="true" /> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 /** 向好友转账页（对照截图①：转账给 头像/QQ号 + 金额卡 + 留言 0/12 + 支付方式[余额/银行卡] + 转账按钮 + 防诈提示） */
-function TransferCompose({ peer, wallet, cards, onToast, onClose, onSend }: { peer: ContactRecord; wallet: WalletData; cards: BankCard[]; onToast: (m: string) => void; onClose: () => void; onSend: (p: MsgPacket, methodId: string) => void }) {
+export function TransferCompose({ peer, wallet, cards, onToast, onClose, onSend }: { peer: ContactRecord; wallet: WalletData; cards: BankCard[]; onToast: (m: string) => void; onClose: () => void; onSend: (p: MsgPacket, methodId: string) => void }) {
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [methodId, setMethodId] = useState('balance');
@@ -4410,7 +4467,7 @@ function TransferCompose({ peer, wallet, cards, onToast, onClose, onSend }: { pe
 }
 
 /** 红包开箱弹窗（对照截图②：近全屏大红卡 + 封面纹样 + 发红包人 + 祝福语 + 大「開」+ 弹窗外关闭） */
-function RedPacketOpenModal({ senderName, avatar, note, onOpen, onClose, onRefund }: { senderName: string; avatar: string | null; note: string; onOpen: () => void; onClose: () => void; onRefund?: () => void }) {
+export function RedPacketOpenModal({ senderName, avatar, note, onOpen, onClose, onRefund }: { senderName: string; avatar: string | null; note: string; onOpen: () => void; onClose: () => void; onRefund?: () => void }) {
   return (
     <div className="absolute inset-0 z-50 grid place-items-center bg-black/70 px-7 pb-12" role="dialog" aria-label="打开红包">
       <style>{'@keyframes qqRpModalIn{from{transform:scale(.86);opacity:0}to{transform:scale(1);opacity:1}}'}</style>
@@ -4987,7 +5044,7 @@ export function LocationPickerPage({ onClose, onSend }: { onClose: () => void; o
 // ---------------- 支付方式 / 支付密码（红包/转账付款 + 微信风格自绘键盘） ----------------
 
 /** 支付方式选择底部弹层（QQ钱包余额 / 银行卡，发红包/转账页用） */
-function PayMethodSheet({ wallet, cards, selectedId, onClose, onPick }: { wallet: WalletData; cards: BankCard[]; selectedId: string; onClose: () => void; onPick: (id: string) => void }) {
+export function PayMethodSheet({ wallet, cards, selectedId, onClose, onPick }: { wallet: WalletData; cards: BankCard[]; selectedId: string; onClose: () => void; onPick: (id: string) => void }) {
   const rows: Array<{ id: string; name: string; sub: string; node: React.ReactNode }> = [
     {
       id: 'balance',
@@ -5100,7 +5157,7 @@ function PayPwdSheet({ title, sub, hint, errorKey, onComplete, onClose }: { titl
 }
 
 /** 支付密码验证浮层（红包/转账/充值/提现/小金库支付前调用；正确回调 onOk，错误清空重输） */
-function PayPwdGate({ label, onOk, onClose }: { label: string; onOk: () => void; onClose: () => void }) {
+export function PayPwdGate({ label, onOk, onClose }: { label: string; onOk: () => void; onClose: () => void }) {
   const [errKey, setErrKey] = useState(0);
   return (
     <div className="absolute inset-0 z-[60] flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={onClose}>
@@ -8319,7 +8376,7 @@ function SecurityPage({
 
 // ---------------- QQ 钱包（个人中心抽屉「钱包」入口；对照真机：主页/余额/小金库/银行卡/提现/充值/账单） ----------------
 
-interface WalletData {
+export interface WalletData {
   /** 余额（元） */
   balance: number;
   /** Q币 */
@@ -8328,7 +8385,7 @@ interface WalletData {
   vault: number;
 }
 
-interface BankCard {
+export interface BankCard {
   id: string;
   /** 持卡人 */
   holder: string;
@@ -8401,7 +8458,7 @@ interface WalletBill {
 /** 默认钱包（对照真机演示数据：余额 1.03 / Q币 0.10 / 小金库 0.00） */
 const DEFAULT_WALLET: WalletData = { balance: 1.03, qb: 0.1, vault: 0 };
 
-function loadWallet(): WalletData {
+export function loadWallet(): WalletData {
   try {
     const p: unknown = kvGet(LS_WALLET);
     if (p && typeof p === 'object') {
@@ -8426,7 +8483,7 @@ function saveWallet(d: WalletData): void {
   }
 }
 
-function loadBankCards(): BankCard[] {
+export function loadBankCards(): BankCard[] {
   try {
     const p: unknown = kvGet<BankCard[]>(LS_WALLET_CARDS);
     if (Array.isArray(p)) return p.filter((c) => c && typeof c === 'object' && typeof (c as BankCard).last4 === 'string');
@@ -8472,7 +8529,7 @@ function payFromWallet(amount: number, billTitle: string): boolean {
 }
 
 /** 收款入钱包余额（领取红包用），同步写账单 */
-function gainToWallet(amount: number, billTitle: string): void {
+export function gainToWallet(amount: number, billTitle: string): void {
   const w = loadWallet();
   saveWallet({ ...w, balance: round2(w.balance + amount) });
   saveWalletBills([{ id: uid(), title: billTitle, amount, ts: Date.now() }, ...loadWalletBills()].slice(0, 100));
@@ -8488,7 +8545,7 @@ interface PayPwdData {
 
 const LS_PAY_PWD = 'qq-pay-pwd';
 
-function loadPayPwd(): PayPwdData {
+export function loadPayPwd(): PayPwdData {
   try {
     const p: unknown = kvGet(LS_PAY_PWD);
     if (p && typeof p === 'object') {
@@ -8525,7 +8582,7 @@ function payFromCard(cardId: string, amount: number, billTitle: string): boolean
 }
 
 /** 支付前预检：所选支付方式（余额/银行卡）余额是否充足 */
-function canPay(methodId: string, amount: number): boolean {
+export function canPay(methodId: string, amount: number): boolean {
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return loadWallet().balance >= amount;
   const c = loadBankCards().find((x) => x.id === methodId);
@@ -8533,7 +8590,7 @@ function canPay(methodId: string, amount: number): boolean {
 }
 
 /** 按所选支付方式扣款（余额 / 银行卡），同步写账单 */
-function executePayment(methodId: string, amount: number, billTitle: string): boolean {
+export function executePayment(methodId: string, amount: number, billTitle: string): boolean {
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return payFromWallet(amount, billTitle);
   return payFromCard(methodId, amount, billTitle);
@@ -8628,9 +8685,9 @@ function settleVaultEarn(vault: number): VaultEarnData {
   return next;
 }
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+export const round2 = (n: number): number => Math.round(n * 100) / 100;
 
-function fmtMoney(n: number): string {
+export function fmtMoney(n: number): string {
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
@@ -8647,7 +8704,7 @@ function MoneyDigits({ value, className = '', fracClassName = '' }: { value: num
 }
 
 /** 金额输入通用约束：最多 7 位整数 + 2 位小数 */
-function sanitizeAmount(v: string): string {
+export function sanitizeAmount(v: string): string {
   return /^\d{0,7}(\.\d{0,2})?$/.test(v) ? v : v.slice(0, -1);
 }
 

@@ -5821,3 +5821,39 @@ Stage Summary:
 - 群/私背景隔离：flags 键 group:<gid> vs 联系人 id；IndexedDB chat-bg:qq:group:<gid> vs chat-bg:qq:<联系人id>——互不覆盖
 - 新 testid：qq-groupchat-tool-image/tool-camera/sticker/plus、qq-group-plus-panel、qq-groupmsg-image/sticker、qq-groupinfo-bg；存量 testid（qq-groupchat-input/send/at、qq-plus-*、qq-sticker-panel-*、qq-loc-*）全部兼容
 - 已知边界：AI 成员仍不主动发表情包/图片/位置（范围限定维持）；红包/转账在群内仅入口提示（与微信侧一致）
+---
+Task ID: group-19
+Agent: Z.ai Code (main)
+Task: 回复条数+分句发送进群聊（wx/qq 双端）+ 群聊红包（普通/拼手气/专属）与群转账（指定成员收款），逻辑与单聊一致、按群 ID 隔离持久化、卡片组件与单聊共用
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts：WxGroupMsg.kind 扩为 +redpacket/transfer；新增 GroupRpData（amount/count/mode normal|lucky|exclusive/blessing/targetId+targetName 专属/claims[{contactId,name,avatar,amount,ts}]/sentAt/expired+expiredAt/cid）与 GroupTrData（amount/note/toId+toName 指定收款成员/received/status returned|rejected/cid）；normalizeMsg 同步 sanitize（claims 逐条净化、sentAt 缺省回退消息 time）；groupPreview 增加 [红包]/[转账]；notice 字段（icon rp|tr|fam + pre + accent 资金通知行）入 normalize；范围限定注释更新
+- 单聊共用件导出（零复制实现）：wechat.tsx 导出 RpBubble/TrBubble/WxNoticeRow/RpOpenLayer/TransferCompose/WxPayMethodSheet/wxCanPay/wxExecutePayment/wxMethodLabel/wxPatchBalance/sanitizeAmount；qq.tsx 导出 RedPacketBubble/TransferBubble/QQNoticeRow/RedPacketOpenModal/RedPacketCompose/TransferCompose/PayMethodSheet/PayPwdGate/MsgPacket/WalletData/BankCard/loadWallet/loadBankCards/canPay/executePayment/gainToWallet/loadPayPwd/fmtMoney/round2
+- QQ RedPacketCompose 群模式（单群共用同一页面）：可选 members prop——群模式下普通红包也出「红包个数」行；专属红包出「指定成员」行 → 成员选择 sheet（只有 TA 能领），packet 带出 toId/toName；单聊（无 members）行为零变化；MsgPacket 增 toId/toName
+- wx-group.tsx 群红包/转账全流程：GroupRpCompose（微信风格三 tab：普通[单个金额×个数]/拼手气[总金额+个数]/专属[单个金额+指定成员 sheet]，祝福语，支付方式行复用 WxPayMethodSheet，24h 退款提示）；GroupTrPickPage（先选收款成员）→ 单聊同款 TransferCompose(peer=成员)；GroupRpDetailPage（红头弧形+状态+领取列表 n/N+过期退回金额）；GroupTrDetailPage（金额/留言/转账人/收款成员/状态）；claimGroupRp（我领成员红包：金额入零钱+账单+领取记录+通知行→详情；专属非指定人 toast 拦截）；openRpMsg（成员发的可领→RpOpenLayer 开箱，否则直达详情）；submit/execGroupRp（总额=普通 单个×个数/拼手气 总金额/专属 单个；wxCanPay 预检→WxPayPwdGate 支付密码→wxExecutePayment 扣款→落卡消息→群回合）；submit/execGroupTr（同链路，卡带 toId/toName）
+- qq-group.tsx 全量对齐（QQ 风格）：复用单聊 RedPacketCompose（群模式）/TransferCompose/RedPacketOpenModal/RedPacketBubble/TransferBubble/PayPwdGate；群转账选人页 qq-grp-tr-pick；GroupRpDetailPage（QQ 红头+手气最佳+领取列表）/GroupTrDetailPage；claimGroupRp→gainToWallet；execGroupRp 把 MsgPacket 换算成 GroupRpData（dedicated→exclusive 映射）
+- 引擎（wx/qq 同构）：collectGroupPending(charId)——成员视角可处理清单（红包：非自己发/未过期/有剩余/未领过/专属仅指定人；转账：role=me 且 toId=char）；runCharTurn 注入【群红包/转账】规则+buildActionRules(pending)；finalize 用 extractRichActionParts 按「文字块+动作」交错处理——动作就地 applyGroupAiAction（红包领取：普通=单个金额/拼手气=splitLuckyAmount 随机拆份留保底/专属=单个金额，写入 claims+通知行「xx领取了你的红包/专属红包」；转账：收款→已收款+通知行「收下了」、退回→原路退款+写账单+「退回了」、拒收→终态），幂等且终态不可再改；文字块 mergeRichSegments+splitReplySegments（回复条数>1 一句一条）→ parseRichParts 解析 [红包:金额:祝福语] → 成员发群红包卡片（count=1），其余富标记忽略；回复条数 buildReplyCountPrompt 注入+beginChatStream replyCount 透传；流式气泡 splitReplyRender 实时多气泡+打字中（与私聊同节奏）
+- 回复条数/分句发送进群聊（wx+qq 信息页）：回复条数 InfoRow（值 n 条）→ ChatReplyCountPage（variant 对应，saveReplyCount 按群 sessionKey `wx/qq:group:<gid>` 隔离持久化）；分句发送 SwitchRow（getSentenceSend/saveSentenceSend）；聊天页 send 分句分支（连发只入列+markPendingBatch）、空输入点「发送」=dispatchBatch（取最后一条我的消息触发群回合）、空输入可点发送按钮（canDispatch）、图片/表情/位置/红包/转账发送同规则尊重分句
+- 过期清算 expireStalePackets：聊天页挂载+每轮群回合前扫描——发出超 24h 仍有剩余 → expired 终态+剩余金额退回发起人（wx wxPatchBalance/qq gainToWallet 写账单）+系统通知行
+- 渲染：群消息列表红包/转账卡片（wx RpBubble/TrBubble、qq RedPacketBubble/TransferBubble，全部复用单聊组件；红包副标题显示 已领取 n/N、专属红包·给xx、待领取/已过期；转账显示 待xx收款/xx已收款/已退回）；资金通知行（WxNoticeRow/QQNoticeRow 复用）；撤回/删除/复制快照支持卡片消息；长按菜单不变
+- 修复：wx-group 信息页 useState 初始化引用 gid 未声明（Cannot access 'gid' before initialization）→ 改用 group.id；红包详情「林川（林川）」重名后缀去除
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 隔离会话 + 守护 mock :4100 v2（可输出 [领取红包:ID]/[收款转账:ID]/[红包:6.66:谢谢老板]/三连句；只抢 grp- 前缀机主红包）；IndexedDB 直种 林川(user 90001/pw123456)+红红/明仔(char friendWx+friendQq)+明文 apiConfig→mock+wx 钱包 500/qq 钱包 300）：
+  ①微信建群「快乐小分队(3)」→信息页回复条数设 3 条→发文字→红红/明仔各连发 3 条独立气泡（一句一条）✓
+  ②信息页开分句发送→连发两条消息不触发回复+空输入出现绿色「发送」→点发送统一触发→两成员各 3 条回复 ✓
+  ③拼手气红包 8.88×2「晚上球局基金」→卡片红色待领取→成员抢完→卡片变灰「已领取 2/2」+两条领取通知行+成员各 3 条回应；详情页 2个红包共8.88元已领取2/2（红红¥2.19+明仔¥6.69=8.88）✓
+  ④专属红包 6.66 指定红红→toast「专属红包已发给红红」→红红领取（通知行「红红领取了你的专属红包」）明仔未领 ✓
+  ⑤转账选人页→明仔→单聊同款转账页 20 元「球场地费」→卡「¥20.00 明仔已收款」+通知行「明仔收下了你发的转账」+详情页（转账人/收款成员/状态/说明）✓；扣款链路正确（500-8.88-6.66=484.46 显示于支付方式行）
+  ⑥AI 发红包：求红包→红红发 [红包:6.66] 卡片→我点开箱 RpOpenLayer「開」→领取入零钱+详情「林川 ¥6.66 已领取 1/1」+通知行 ✓
+  ⑦重载后红包/转账状态与领取记录全部保留（持久化）✓
+  ⑧QQ 建群「QQ摸鱼小队(3)」→拼手气 8.88×2「摸鱼基金」→卡片「已领取」变灰+红红/明仔领取通知+各 3 条回应；详情页手气最佳标记（红红¥8.78 最佳+明仔¥0.10）✓
+  ⑨QQ 专属红包 tab「指定成员」行+成员选择 sheet→明仔领取「明仔领取了你的专属红包」✓
+  ⑩QQ 转账→红红 18 元「奶茶钱」→蓝卡「已转入好友余额」+通知行「红红收下了你发的转账」✓；QQ 信息页回复条数（5 条）+分句发送行在 ✓
+  ⑪console 零报错、dev.log 无异常（仅 Fast Refresh 编译日志）
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（数据层）、src/components/apps/wechat.tsx（仅导出）、src/components/apps/qq.tsx（导出+RedPacketCompose 群模式+MsgPacket.toId/toName）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx
+- 卡片/页面组件单群共用清单：wx RpBubble/TrBubble/WxNoticeRow/RpOpenLayer/TransferCompose/WxPayMethodSheet；qq RedPacketBubble/TransferBubble/QQNoticeRow/RedPacketOpenModal/RedPacketCompose/TransferCompose/PayPwdGate——群聊仅新增 GroupRpCompose(wx)/群转账选人页(双端)/群详情页(双端，多领取列表)
+- 状态机：红包 待领取→部分领取(n/N)→已抢完/已过期(24h 退回)；转账 待收款→已收款/已退回/已拒收；全部终态幂等不可再改；按群 ID 隔离（<app>-group-msgs:<gid>），与单聊存储完全独立
+- 群/私资金隔离：群红包数据 GroupRpData/GroupTrData 独立于单聊 WxRpData/MsgPacket，群钱包进出只走机主钱包（成员无钱包，领取即消耗）；不涉及真实资金
+- 新 testid：wx-grp-rp-*（compose/target/detail）、wx-grp-tr-pick-*、wx-grp-tr-detail-*、wx-groupinfo-replycount/sentence、qq-grp-rp-detail-*、qq-grp-tr-pick-*、qq-grp-tr-detail-*、qq-groupinfo-replycount/sentence、qq-rp-target(+sheet)；存量 testid 全部兼容
+- 已知边界：AI 成员只能发单份红包（标记格式限制）且不能发转账（需指定收款人）；专属红包指定对象只能是 AI 成员（群成员列表不含机主）；mock 不覆盖 [SKIP] 与过期路径（逻辑与前版本一致/时间维度难触发）

@@ -637,8 +637,8 @@ function wxLoadBalance(): number {
 
 const LS_CARDS = 'wx-wallet-cards';
 
-/** 零钱增减 + 可选写一条零钱明细账单；余额不足返回 false */
-function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账'; amount: number }): boolean {
+/** 零钱增减 + 可选写一条零钱明细账单；余额不足返回 false（单聊/群聊共用） */
+export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账'; amount: number }): boolean {
   const next = Math.round((wxLoadBalance() + delta) * 100) / 100;
   if (next < 0) return false;
   saveJSON(LS_WALLET, { balance: next });
@@ -654,8 +654,8 @@ function wxPushBill(kind: '红包' | '转账', amount: number): void {
   saveJSON(LS_BILLS, [{ id: uid(), kind, amount, time: Date.now() }, ...bills].slice(0, 100));
 }
 
-/** 支付方式可用性预检：零钱 / 银行卡 / 我收到的亲属卡（本月剩余额度） */
-function wxCanPay(methodId: string, amount: number): boolean {
+/** 支付方式可用性预检：零钱 / 银行卡 / 我收到的亲属卡（本月剩余额度）；单聊/群聊共用 */
+export function wxCanPay(methodId: string, amount: number): boolean {
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return wxLoadBalance() >= amount;
   if (methodId.startsWith('fcin-')) {
@@ -666,8 +666,8 @@ function wxCanPay(methodId: string, amount: number): boolean {
   return Boolean(c) && (c?.balance ?? 0) >= amount;
 }
 
-/** 按所选支付方式扣款（零钱 / 银行卡 / 亲属卡额度；亲属卡不动零钱不写账单，其余写零钱明细） */
-function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账'): boolean {
+/** 按所选支付方式扣款（零钱 / 银行卡 / 亲属卡额度；亲属卡不动零钱不写账单，其余写零钱明细）；单聊/群聊共用 */
+export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账'): boolean {
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount });
   if (methodId.startsWith('fcin-')) {
@@ -688,8 +688,8 @@ function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '�
   return true;
 }
 
-/** 支付方式展示名（发送页支付方式行 / 支付密码验证浮层副标题用） */
-function wxMethodLabel(methodId: string): string {
+/** 支付方式展示名（发送页支付方式行 / 支付密码验证浮层副标题用）；单聊/群聊共用 */
+export function wxMethodLabel(methodId: string): string {
   if (methodId === 'balance') return `零钱（可用 ${fmtMoney(wxLoadBalance())} 元）`;
   if (methodId.startsWith('fcin-')) {
     const f = loadFamilyCardsIn().find((x) => x.id === methodId);
@@ -699,8 +699,8 @@ function wxMethodLabel(methodId: string): string {
   return c ? `${c.bank}（尾号${c.tail}）` : '支付方式';
 }
 
-/** 金额输入通用约束：最多 7 位整数 + 2 位小数 */
-function sanitizeAmount(v: string): string {
+/** 金额输入通用约束：最多 7 位整数 + 2 位小数（单聊/群聊共用） */
+export function sanitizeAmount(v: string): string {
   return /^\d{0,7}(\.\d{0,2})?$/.test(v) ? v : v.slice(0, -1);
 }
 
@@ -2490,8 +2490,8 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
   );
 }
 
-/** 支付方式选择底部弹层（零钱 / 银行卡 / 我收到的亲属卡；发红包/转账页用） */
-function WxPayMethodSheet({
+/** 支付方式选择底部弹层（零钱 / 银行卡 / 我收到的亲属卡；发红包/转账页用；单聊/群聊共用） */
+export function WxPayMethodSheet({
   cards,
   familyIn,
   selectedId,
@@ -2702,8 +2702,9 @@ function RedPacketCompose({
   );
 }
 
-/** 转账页：转账给 xx + 金额输入卡 + 转账说明 + 支付方式行 + 底部「转账」发送按钮（无数字键盘） */
-function TransferCompose({
+/** 转账页：转账给 xx + 金额输入卡 + 转账说明 + 支付方式行 + 底部「转账」发送按钮（无数字键盘）。
+ *  单聊/群聊共用（群聊传入被选中的群成员） */
+export function TransferCompose({
   peer,
   onBack,
   onSubmit,
@@ -2828,8 +2829,9 @@ function TransferCompose({
   );
 }
 
-/** 红包聊天卡片（红橙渐变，底部「红包」条；与转账卡同宽 206px；未领取点击弹「開」，已领取进详情） */
-function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: string; settled: boolean; onClick: () => void }) {
+/** 红包聊天卡片（红橙渐变，底部「红包」条；与转账卡同宽 206px；未领取点击弹「開」，已领取进详情）。
+ *  单聊/群聊共用同一套卡片组件（群聊传入群红包的祝福语/进度文案） */
+export function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: string; settled: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -2862,8 +2864,9 @@ function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: 
  *  状态文案按角色与收款状态区分：接收完成后才显示「已转入零钱」，之前是「待对方收款」；
  *  待收款中：有转账留言时状态行优先显示留言（没写留言才显示状态文案）；
  *  终态（已收款/已退还/已拒收）：不再显示留言，改回显示原状态文案（用户需求：退还接收以后不要显示留言）；
- *  收款/退还/拒收后卡片颜色变灰（对照真实微信：终态卡褪色），退还卡圆图标换成↩ */
-function TrBubble({ amount, status, received, refunded, fromMe, note, settled, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; note?: string; settled?: boolean; onClick: () => void }) {
+ *  收款/退还/拒收后卡片颜色变灰（对照真实微信：终态卡褪色），退还卡圆图标换成↩。
+ *  单聊/群聊共用同一套卡片组件（群聊传入群转账的状态文案） */
+export function TrBubble({ amount, status, received, refunded, fromMe, note, settled, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; note?: string; settled?: boolean; onClick: () => void }) {
   // 终态（已收款/已退还/已拒收）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
   const line = !settled && note && note.trim() ? note : status;
   return (
@@ -2896,8 +2899,8 @@ function TrBubble({ amount, status, received, refunded, fromMe, note, settled, o
   );
 }
 
-/** 聊天系统通知行（截图参考：居中小图标 + 灰字 + 金色尾词，如「xx领取了你的红包」） */
-function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
+/** 聊天系统通知行（截图参考：居中小图标 + 灰字 + 金色尾词，如「xx领取了你的红包」；单聊/群聊共用） */
+export function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
   return (
     <div className="flex justify-center py-1.5" data-testid="wx-notice-row">
       <span className="flex max-w-[86%] items-center gap-1.5 text-[13px] text-black/45 dark:text-white/45">
@@ -2935,9 +2938,10 @@ function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: st
 
 /**
  * 开红包弹窗（对照真实微信：半透明黑底遮罩透出聊天，居中一张圆角红包封面卡，
- * 金色描边 + 头像/「XX的红包」/祝福语 + 底部亮红大弧上金色呼吸光晕「開」钮，卡片下方金色 X 关闭）
+ * 金色描边 + 头像/「XX的红包」/祝福语 + 底部亮红大弧上金色呼吸光晕「開」钮，卡片下方金色 X 关闭）；
+ * 单聊/群聊共用（群聊里成员发的红包同样先开箱）
  */
-function RpOpenLayer({
+export function RpOpenLayer({
   senderName,
   senderAvatar,
   blessing,

@@ -83,12 +83,15 @@ import {
   saveGroupMsgs,
   updateGroup,
   type ChatGroup,
+  type GroupRpData,
+  type GroupTrData,
   type WxGroupMsg,
 } from '@/lib/ios/groups';
 import type { Sticker } from '@/lib/ios/stickers';
 import { wxChatFlags, type ChatFlags } from '@/lib/chat-flags';
 import {
   ChatBgPage,
+  ChatReplyCountPage,
   ChatToggle,
   chatBgLayerStyle,
   WX_CHAT_BG_DEFAULT,
@@ -100,10 +103,22 @@ import {
   LocViewLayer,
   LocationPickerPage,
   readImageFile,
+  RpBubble,
+  RpOpenLayer,
   StickerMsgBubble,
+  TransferCompose,
+  TrBubble,
   WxAvatar,
+  WxNoticeRow,
+  WxPayMethodSheet,
   WxStickerPanel,
+  sanitizeAmount,
+  wxCanPay,
+  wxExecutePayment,
+  wxMethodLabel,
+  wxPatchBalance,
 } from './wechat';
+import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, loadFamilyCardsIn } from './wechat-wallet';
 import { wxUnreads } from '@/lib/unread-store';
 import { memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -117,6 +132,52 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { Input } from '@/components/ui/input';
+import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender, splitReplySegments } from '@/lib/reply-count';
+import { getSentenceSend, hasPendingBatch, markPendingBatch, saveSentenceSend } from '@/lib/sentence-send';
+import {
+  actionVerb,
+  buildActionRules,
+  extractRichActionParts,
+  mergeRichSegments,
+  parseRichParts,
+  prettifyRichText,
+  type PendingCardInfo,
+  type RichAction,
+} from '@/lib/chat-rich';
+
+// ---------------- 群红包/转账（纯本地模拟；按群 ID 隔离，与单聊互不相通） ----------------
+
+/** 金额四舍五入到分 */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** 机主发的红包/转账短 ID（AI 动作标记里引用；格式如 grp-x7k2） */
+function nextGroupCid(prefix: 'rp' | 'tr'): string {
+  return `grp-${prefix === 'rp' ? 'r' : 't'}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
+}
+
+/** 群红包状态标签（卡片副标题/详情页/AI 上下文共用）：待领取 → 部分领取 → 已抢完 / 已过期 */
+function groupRpStateLabel(rp: GroupRpData): string {
+  if (rp.expired) return '已过期';
+  if (rp.claims.length >= rp.count) return '已抢完';
+  if (rp.claims.length > 0) return `已领取 ${rp.claims.length}/${rp.count}`;
+  return '待领取';
+}
+
+/** 群转账状态标签 */
+function groupTrStateLabel(tr: GroupTrData): string {
+  if (tr.received) return '已收款';
+  if (tr.status === 'returned') return '已退回';
+  if (tr.status === 'rejected') return '已拒收';
+  return '待收款';
+}
+
+/** 拼手气随机拆一份：前 n-1 份在「剩余÷份数×2」内随机（保底 0.01，给后面每份留 0.01），最后一份拿剩余全部 */
+function splitLuckyAmount(remaining: number, leftCount: number): number {
+  if (leftCount <= 1) return round2(remaining);
+  const max = Math.max(0.01, round2(remaining - 0.01 * (leftCount - 1)));
+  const amt = round2((remaining * Math.random() * 2) / leftCount);
+  return Math.min(max, Math.max(0.01, amt));
+}
 
 /** 群会话 id（未读/标志/隐藏/聊天背景等以字符串 id 为键的设施共用） */
 export const groupRowId = (groupId: string) => `group:${groupId}`;
@@ -578,6 +639,9 @@ export function WxGroupInfoPage({
   const [bgOpen, setBgOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
+  const [replyCountOpen, setReplyCountOpen] = useState(false);
+  const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
+  const [sentenceOn, setSentenceOn] = useState(() => getSentenceSend(sessionKeyOf(group.id)));
   const gid = group.id;
   const [flags, setFlags] = useState<ChatFlags>(() => wxChatFlags.get());
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
@@ -792,8 +856,27 @@ export function WxGroupInfoPage({
         />
       </div>
 
-      {/* 通用开关 */}
+      {/* 通用开关（回复条数/分句发送/时间感知/置顶/免打扰；均按群独立） */}
       <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
+        <InfoRow
+          label="回复条数"
+          value={`${replyCount} 条`}
+          onClick={() => setReplyCountOpen(true)}
+          testId="wx-groupinfo-replycount"
+        />
+        <SwitchRow
+          label="分句发送"
+          caption="开启后：你连续发的多条消息成员都不回复，把想说的话发完、输入框为空时再点一次「发送」，成员才统一回复"
+          checked={sentenceOn}
+          onChange={(v) => {
+            saveSentenceSend(sessionKeyOf(gid), v);
+            setSentenceOn(v);
+            if (!v) {
+              markPendingBatch(sessionKeyOf(gid), false);
+            }
+          }}
+          testId="wx-groupinfo-sentence"
+        />
         <SwitchRow
           label="时间感知"
           caption="让成员按当前时段与消息间隔感知时间（按群独立）"
@@ -972,6 +1055,23 @@ export function WxGroupInfoPage({
         </div>
       )}
 
+      {/* 回复条数页（聊天信息二级页；按群独立，与单聊互不影响） */}
+      {replyCountOpen && (
+        <div className="fixed inset-0 z-50">
+          <ChatReplyCountPage
+            variant="wx"
+            value={replyCount}
+            onBack={() => setReplyCountOpen(false)}
+            onSelect={(n) => {
+              saveReplyCount(sessionKeyOf(gid), n);
+              setReplyCount(n);
+              setReplyCountOpen(false);
+              onToast(`回复条数已设为 ${n} 条`);
+            }}
+          />
+        </div>
+      )}
+
       {dialog?.kind === 'name' && (
         <CenterDialog
           title="群聊名称"
@@ -1063,6 +1163,408 @@ function WxGroupPlusPanel({ onAction }: { onAction: (a: GroupPlusAction) => void
   );
 }
 
+// ---------------- 群红包/转账页面组件（微信风格；纯本地模拟） ----------------
+
+/** 完整时间：2026年9月19日 20:32:08（群红包/转账详情页领取时间用） */
+function fmtGrpFullTime(ts: number): string {
+  const d = new Date(ts);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+}
+
+/** 群红包总额：普通 = 单个金额×个数；拼手气 = 总金额；专属 = 单个金额 */
+export function groupRpTotal(mode: GroupRpData['mode'], amount: number, count: number): number {
+  return mode === 'normal' ? round2(amount * count) : round2(amount);
+}
+
+/**
+ * 群发红包页（微信风格；与单聊发红包页同一套视觉，字段按群场景扩展）：
+ * 普通（单个金额×个数）/ 拼手气（总金额+个数）/ 专属（单个金额 + 指定群成员领取）+ 祝福语 + 支付方式。
+ * 支付方式 sheet 与单聊共用 WxPayMethodSheet。
+ */
+function GroupRpCompose({
+  members,
+  meBalanceLabel,
+  onBack,
+  onSubmit,
+  onToast,
+}: {
+  members: ContactRecord[];
+  meBalanceLabel: string;
+  onBack: () => void;
+  onSubmit: (p: { mode: GroupRpData['mode']; amount: number; count: number; blessing: string; target: ContactRecord | null }, methodId: string) => void;
+  onToast: (m: string) => void;
+}) {
+  const [tab, setTab] = useState<GroupRpData['mode']>('normal');
+  const [val, setVal] = useState('');
+  const [count, setCount] = useState('1');
+  const [blessing, setBlessing] = useState('');
+  const [methodId, setMethodId] = useState('balance');
+  const [methodOpen, setMethodOpen] = useState(false);
+  const [target, setTarget] = useState<ContactRecord | null>(null);
+  const [pickOpen, setPickOpen] = useState(false);
+  const num = parseFloat(val || '0');
+  const cnt = Math.min(100, Math.max(1, Math.round(parseFloat(count) || 1)));
+  const ok = num >= 0.01 && (tab !== 'exclusive' || target != null);
+  const total = groupRpTotal(tab, num, cnt);
+  const submit = () => {
+    if (!ok) {
+      onToast('请输入金额');
+      return;
+    }
+    if (total > 2000) {
+      onToast('红包总额不可超过 2000 元');
+      return;
+    }
+    onSubmit({ mode: tab, amount: num, count: tab === 'lucky' ? cnt : tab === 'normal' ? cnt : 1, blessing: blessing.trim() || '恭喜发财，大吉大利', target }, methodId);
+  };
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-grp-rp-compose">
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-grp-rp-back" onClick={onBack} className="active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[17px] font-medium">发红包</div>
+        </div>
+      </div>
+      {/* tab 行 */}
+      <div className="flex shrink-0 items-center gap-7 bg-[#EDEDED] px-5 pt-1 dark:bg-[#111111]">
+        {([['normal', '普通红包'], ['lucky', '拼手气红包'], ['exclusive', '专属红包']] as const).map(([t, label]) => (
+          <button key={t} type="button" data-testid={`wx-grp-rp-tab-${t}`} onClick={() => setTab(t)} className="relative pb-2.5">
+            <span className={`text-[15px] ${tab === t ? 'font-medium text-black dark:text-white' : 'text-black/45 dark:text-white/45'}`}>{label}</span>
+            {tab === t ? <span className="absolute inset-x-1.5 bottom-0 h-[3px] rounded-full bg-[#F04A3A]" aria-hidden="true" /> : null}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4">
+        <div className="flex items-center justify-between rounded-[10px] bg-white px-4 py-[13px] dark:bg-[#1A1A1A]">
+          <span className="text-[16px]">{tab === 'lucky' ? '总金额' : '单个金额'}</span>
+          <span className="flex items-center gap-1 text-[15px]">
+            <span className="text-black/50 dark:text-white/50">¥</span>
+            <input
+              value={val}
+              inputMode="decimal"
+              onChange={(e) => setVal(sanitizeAmount(e.target.value))}
+              placeholder="0.00"
+              aria-label="红包金额"
+              data-testid="wx-grp-rp-amount"
+              className="w-[96px] bg-transparent text-right text-[15px] outline-none placeholder:text-black/25 dark:placeholder:text-white/25"
+            />
+          </span>
+        </div>
+        {tab !== 'exclusive' ? (
+          <div className="mt-3 flex items-center justify-between rounded-[10px] bg-white px-4 py-[13px] dark:bg-[#1A1A1A]">
+            <span className="text-[16px]">红包个数</span>
+            <span className="flex items-center gap-2">
+              <input
+                value={count}
+                inputMode="numeric"
+                onChange={(e) => setCount(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                aria-label="红包个数"
+                data-testid="wx-grp-rp-count"
+                className="w-[72px] bg-transparent text-right text-[15px] outline-none"
+              />
+              <span className="text-[15px] text-black/50 dark:text-white/50">个</span>
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            data-testid="wx-grp-rp-target"
+            onClick={() => setPickOpen(true)}
+            className="mt-3 flex w-full items-center justify-between rounded-[10px] bg-white px-4 py-[13px] text-left active:bg-black/[0.03] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
+          >
+            <span className="text-[16px]">指定成员</span>
+            <span className="ml-auto flex items-center gap-2">
+              {target ? (
+                <>
+                  <WxAvatar src={target.avatar} alt={memberNameOf(target)} size={26} />
+                  <span className="text-[15px]">{memberNameOf(target)}</span>
+                </>
+              ) : (
+                <span className="text-[14px] text-black/35 dark:text-white/35">选择群成员</span>
+              )}
+              <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+            </span>
+          </button>
+        )}
+        <div className="mt-3 flex items-center gap-2 rounded-[10px] bg-white px-4 py-[14px] dark:bg-[#1A1A1A]">
+          <input
+            value={blessing}
+            onChange={(e) => setBlessing(e.target.value.slice(0, 25))}
+            placeholder="恭喜发财，大吉大利"
+            data-testid="wx-grp-rp-blessing"
+            className="h-8 min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-black/25 dark:placeholder:text-white/25"
+          />
+        </div>
+        {/* 支付方式（与单聊共用同一套 sheet） */}
+        <div className="mt-3 overflow-hidden rounded-[10px] bg-white dark:bg-[#1A1A1A]">
+          <button
+            type="button"
+            data-testid="wx-grp-rp-method"
+            onClick={() => setMethodOpen(true)}
+            className="flex w-full items-center px-4 py-[14px] text-left active:bg-black/[0.03] dark:active:bg-white/[0.06]"
+          >
+            <span className="flex-1 text-[16px]">支付方式</span>
+            <span className="mr-1 max-w-[58%] truncate text-[14px] text-black/45 dark:text-white/45">{meBalanceLabel}</span>
+            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+        </div>
+
+        <div className="mt-10 text-center">
+          <p className="font-semibold" data-testid="wx-grp-rp-big">
+            <span className="text-[28px]">¥</span>
+            <span className="ml-2 text-[48px] leading-none">{val || '0.00'}</span>
+            {tab === 'normal' && cnt > 1 ? <span className="ml-2 text-[15px] font-normal text-black/45 dark:text-white/45">× {cnt} 个</span> : null}
+          </p>
+          <button
+            type="button"
+            data-testid="wx-grp-rp-send"
+            onClick={submit}
+            className={`mt-8 h-[46px] w-[230px] rounded-[8px] text-[17px] font-medium text-white active:brightness-95 ${
+              ok ? 'bg-[#F04A3A]' : 'bg-[#F04A3A]/45'
+            }`}
+          >
+            塞钱进红包
+          </button>
+        </div>
+      </div>
+      <p className="shrink-0 pb-6 pt-4 text-center text-[12px] text-black/35 dark:text-white/35">未领取的红包，将于24小时后发起退款（群成员按人设领取）</p>
+      {methodOpen ? (
+        <WxPayMethodSheet
+          cards={loadCards()}
+          familyIn={loadFamilyCardsIn()}
+          selectedId={methodId}
+          onClose={() => setMethodOpen(false)}
+          onPick={(id) => {
+            setMethodId(id);
+            setMethodOpen(false);
+          }}
+        />
+      ) : null}
+      {pickOpen ? (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setPickOpen(false)} data-testid="wx-grp-rp-target-sheet">
+          <div className="max-h-[62%] overflow-hidden rounded-t-[14px] bg-white pb-4 dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 pb-1 pt-4 text-[15px] font-medium">选择指定成员（只有 TA 能领这个红包）</div>
+            <div className="max-h-[52vh] overflow-y-auto">
+              {members.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  data-testid={`wx-grp-rp-target-${m.id}`}
+                  onClick={() => {
+                    setTarget(m);
+                    setPickOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
+                >
+                  <WxAvatar src={m.avatar} alt={memberNameOf(m)} size={38} />
+                  <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(m)}</span>
+                  {target?.id === m.id ? <Check className="h-5 w-5 shrink-0 text-[#07C160]" aria-hidden="true" /> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 群转账选人页：先从群成员里选一个收款人，再进与单聊同款的 TransferCompose（共用同一套组件） */
+function GroupTrPickPage({
+  members,
+  groupName,
+  onBack,
+  onPick,
+}: {
+  members: ContactRecord[];
+  groupName: string;
+  onBack: () => void;
+  onPick: (c: ContactRecord) => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-grp-tr-pick">
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-grp-tr-pick-back" onClick={onBack} className="active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[17px] font-medium">选择收款成员</div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+        <p className="px-4 pb-2 pt-3 text-[12.5px] text-black/40 dark:text-white/40">转账给「{groupName}」中的一位成员，只有 TA 能收款</p>
+        <div className="bg-white dark:bg-[#1A1A1A]">
+          {members.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              data-testid={`wx-grp-tr-pick-${m.id}`}
+              onClick={() => onPick(m)}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
+            >
+              <WxAvatar src={m.avatar} alt={memberNameOf(m)} size={40} />
+              <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(m)}</span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 群红包详情页（红色弧形头 + 领取列表；普通/拼手气/专属/过期共用；与单聊详情页同一套视觉） */
+function GroupRpDetailPage({
+  senderName,
+  senderAvatar,
+  blessing,
+  rp,
+  onBack,
+  onToast,
+}: {
+  senderName: string;
+  senderAvatar: string | null;
+  blessing: string;
+  rp: GroupRpData;
+  onBack: () => void;
+  onToast: (m: string) => void;
+}) {
+  const claimedSum = round2(rp.claims.reduce((s, c) => s + c.amount, 0));
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-white text-black dark:bg-[#111111] dark:text-white" data-testid="wx-grp-rp-detail">
+      <div className="relative shrink-0 bg-[#F25844] pt-[54px]">
+        <div className="relative flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-grp-rp-detail-back" onClick={onBack} className="active:opacity-60">
+            <ChevronLeft className="h-7 w-7 text-[#F6CE93]" strokeWidth={2.2} />
+          </button>
+          <button type="button" aria-label="更多" onClick={() => onToast('更多暂未开放')} className="ml-auto px-2 active:opacity-60">
+            <span className="flex items-center gap-[3px]" aria-hidden="true">
+              <span className="h-[4px] w-[4px] rounded-full bg-[#F6CE93]" />
+              <span className="h-[4px] w-[4px] rounded-full bg-[#F6CE93]" />
+              <span className="h-[4px] w-[4px] rounded-full bg-[#F6CE93]" />
+            </span>
+          </button>
+        </div>
+        <div
+          aria-hidden="true"
+          className="absolute left-1/2 top-full h-[30px] w-[140%] -translate-x-1/2 rounded-[50%] bg-white dark:bg-[#111111]"
+          style={{ boxShadow: '0 -3px 0 #E9C880' }}
+        />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto pt-[8vh]">
+        <div className="flex items-center gap-2.5">
+          <WxAvatar src={senderAvatar} alt={senderName} size={36} />
+          <span className="text-[20px] font-medium" data-testid="wx-grp-rp-detail-title">
+            {senderName}的红包
+          </span>
+        </div>
+        <p className="mt-2.5 text-[15px] text-black/40 dark:text-white/40">{blessing}</p>
+        <p className="mt-2 text-[13px] text-[#D8A244]" data-testid="wx-grp-rp-detail-status">
+          {rp.mode === 'exclusive' && rp.targetName ? `专属红包 · 只给${rp.targetName} · ` : ''}
+          {groupRpStateLabel(rp)}
+        </p>
+        <p className="mt-8 font-semibold text-[#D8A244]" data-testid="wx-grp-rp-detail-amount">
+          <span className="text-[46px] leading-none">{fmtMoney(rp.mode === 'lucky' ? rp.amount : groupRpTotal(rp.mode, rp.amount, rp.count))}</span>
+          <span className="ml-1.5 text-[20px]">元</span>
+        </p>
+
+        {/* 领取详情（谁领取了、领了多少；群里所有成员的领取记录） */}
+        <div className="mt-9 w-[87%] max-w-[350px]" data-testid="wx-grp-rp-claim">
+          <p className="text-[12px] text-black/35 dark:text-white/35" data-testid="wx-grp-rp-claim-caption">
+            {rp.count}个红包共{fmtMoney(groupRpTotal(rp.mode, rp.amount, rp.count))}元，已领取{rp.claims.length}/{rp.count}
+            {rp.expired ? `，已退回${fmtMoney(round2(groupRpTotal(rp.mode, rp.amount, rp.count) - claimedSum))}元` : ''}
+          </p>
+          {rp.claims.length > 0 ? (
+            <div className="mt-1.5">
+              {rp.claims.map((c, i) => (
+                <div key={`${c.contactId}-${i}`} className="flex items-center gap-3 border-t border-black/[0.06] py-3.5 first:border-t-0 dark:border-white/[0.08]">
+                  <WxAvatar src={c.avatar} alt={c.name} size={36} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px]">{c.name}</span>
+                    <span className="mt-0.5 block text-[11px] text-black/35 dark:text-white/35">{fmtGrpFullTime(c.ts || Date.now())}</span>
+                  </span>
+                  <span className="shrink-0 text-[15px] font-medium text-[#D8A244]">¥{fmtMoney(c.amount)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-7 text-center text-[13px] text-black/30 dark:text-white/30">
+              {rp.expired ? '红包已过期，未领取金额已退回' : '等待领取…'}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 群转账详情页（转账给群里某位成员；收款/退回/拒收状态 + 时间行；与单聊详情页同一套视觉语言） */
+function GroupTrDetailPage({
+  tr,
+  fromName,
+  onBack,
+}: {
+  tr: GroupTrData;
+  fromName: string;
+  onBack: () => void;
+}) {
+  const status = groupTrStateLabel(tr);
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-grp-tr-detail">
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-grp-tr-detail-back" onClick={onBack} className="active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[17px] font-medium">转账详情</div>
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-10">
+        <div className="w-full max-w-[380px] rounded-[10px] bg-white px-5 py-6 dark:bg-[#1A1A1A]" data-testid="wx-grp-tr-detail-card">
+          <div className="flex items-center gap-3.5">
+            <span
+              className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-full"
+              style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}
+              aria-hidden="true"
+            >
+              <ArrowLeftRight className="h-6 w-6 text-white" strokeWidth={2} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[26px] font-semibold leading-tight" data-testid="wx-grp-tr-detail-amount">¥{fmtMoney(tr.amount)}</p>
+              <p className="mt-0.5 truncate text-[13px] text-black/45 dark:text-white/45" data-testid="wx-grp-tr-detail-status">
+                {tr.received ? `${tr.toName}已收款` : status === '已退回' ? '已退回' : status === '已拒收' ? '已拒收' : `待${tr.toName}收款`}
+              </p>
+            </div>
+          </div>
+          {tr.note ? <p className="mt-4 border-t border-black/[0.06] pt-3 text-[14px] text-black/70 dark:border-white/[0.08] dark:text-white/70">留言：{tr.note}</p> : null}
+          <div className="mt-4 space-y-2.5 border-t border-black/[0.06] pt-3 text-[13px] dark:border-white/[0.08]">
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">转账人</span>
+              <span>{fromName}</span>
+            </p>
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">收款成员</span>
+              <span data-testid="wx-grp-tr-detail-to">{tr.toName}</span>
+            </p>
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">状态</span>
+              <span>{status}</span>
+            </p>
+            <p className="flex justify-between">
+              <span className="text-black/40 dark:text-white/40">当前状态说明</span>
+              <span className="text-black/55 dark:text-white/55">群聊转账 · 只有被选中的成员能收款</span>
+            </p>
+          </div>
+        </div>
+        <p className="pt-6 text-center text-[12px] text-black/35 dark:text-white/35">群里其他成员只看到转账卡片，无法操作这笔转账</p>
+      </div>
+    </div>
+  );
+}
+
 export function WxGroupChatPage({
   group,
   me,
@@ -1105,6 +1607,21 @@ export function WxGroupChatPage({
   const [compose, setCompose] = useState<'location' | null>(null);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [locView, setLocView] = useState<{ name: string; address: string } | null>(null);
+  // 群红包/转账浮层流程：发红包页 / 转账选人页→转账页 / 红包开箱 / 红包详情 / 转账详情
+  const [layer, setLayer] = useState<
+    | null
+    | { view: 'rp-compose' }
+    | { view: 'tr-pick' }
+    | { view: 'tr-compose'; member: ContactRecord }
+    | { view: 'rp-open'; msgId: string }
+    | { view: 'rp-detail'; msgId: string }
+    | { view: 'tr-detail'; msgId: string }
+  >(null);
+  // 转账页提交后待验证的支付（开启支付密码时先弹自绘键盘，与单聊同规则）
+  const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; amount: number; methodId: string; rp?: { mode: GroupRpData['mode']; amount: number; count: number; blessing: string; target: ContactRecord | null }; tr?: { member: ContactRecord; note: string } }>(null);
+  // 分句发送（按群独立；开启后连发消息不触发回复，空输入点「发送」统一触发）
+  const [sentenceSend, setSentenceSend] = useState(() => getSentenceSend(sKey));
+  const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sKey));
   const [speakerId, setSpeakerId] = useState<string | null>(() => groupSpeaker.get(sKey) ?? null);
   const stream = useChatStream(sKey);
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -1149,6 +1666,47 @@ export function WxGroupChatPage({
   );
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
 
+  /** 就地更新一条群消息的附加数据（红包/转账状态流转用）：读改写存储 + 页面存活时同步 state */
+  const patchGroupMsg = useCallback(
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content'>>) => {
+      const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
+      saveGroupMsgs(gid, next);
+      if (mountedRef.current) setMsgs(next);
+    },
+    [gid]
+  );
+
+  /** 追加一条带图标的资金通知行（xx领取了你的红包 / 收下了你的转账；定义在 appendMsg 之后，见下方） */
+  /** 收集该成员当前可处理的群红包/转账（生成 system 待处理清单）：
+   *  红包：不是自己发的、未过期、还有剩余份、自己没领过、（专属 → 只给被指定成员）；
+   *  转账：只有被指定的收款成员能处理 */
+  const collectGroupPending = useCallback(
+    (charId: string): PendingCardInfo[] => {
+      const out: PendingCardInfo[] = [];
+      for (const m of loadGroupMsgs(gid)) {
+        if (m.recalled) continue;
+        if (m.kind === 'redpacket' && m.rp && m.senderId !== charId) {
+          const rp = m.rp;
+          if (rp.expired || rp.claims.length >= rp.count) continue;
+          if (rp.claims.some((c) => c.contactId === charId)) continue;
+          if (rp.mode === 'exclusive' && rp.targetId !== charId) continue;
+          const bits = [
+            `祝福语"${rp.blessing}"`,
+            rp.count > 1 ? `共${rp.count}份剩${rp.count - rp.claims.length}份` : '',
+            rp.mode === 'exclusive' ? '专属发给你一个人的' : rp.mode === 'lucky' ? '拼手气' : '',
+            m.senderId === 'me' ? '来自机主' : `来自${m.senderName}`,
+          ].filter(Boolean);
+          out.push({ id: rp.cid ?? m.id, kind: 'redpacket', amount: rp.count > 1 && rp.mode === 'normal' ? round2(rp.amount) : rp.amount, label: bits.join('，') });
+        } else if (m.kind === 'transfer' && m.tr && m.role === 'me' && m.tr.toId === charId && !m.tr.received && !m.tr.status) {
+          const tr = m.tr;
+          out.push({ id: tr.cid ?? m.id, kind: 'transfer', amount: tr.amount, label: tr.note ? `备注"${tr.note}"，机主转给你的` : '机主转给你的' });
+        }
+      }
+      return out;
+    },
+    [gid]
+  );
+
   useEffect(() => {
     mountedRef.current = true;
     activeGroupKey = sKey;
@@ -1187,6 +1745,91 @@ export function WxGroupChatPage({
     [gid, sKey]
   );
 
+  /** 过期清算：发出超 24h 仍有剩余的红包 → 标记已过期（终态），剩余金额退回发起人（机主发起 → 退回零钱+写账单） */
+  const expireStalePackets = useCallback(() => {
+    const now = Date.now();
+    for (const m of loadGroupMsgs(gid)) {
+      if (m.kind !== 'redpacket' || !m.rp) continue;
+      const rp = m.rp;
+      if (rp.expired || rp.claims.length >= rp.count) continue;
+      if (now - rp.sentAt < 24 * 3600_000) continue;
+      const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
+      patchGroupMsg(m.id, { rp: { ...rp, expired: true, expiredAt: now } });
+      if (m.senderId === 'me' && remaining > 0) {
+        wxPatchBalance(remaining, { kind: '红包', amount: remaining });
+      }
+      appendMsg({
+        id: uid(),
+        role: 'me',
+        senderId: 'me',
+        senderName: '',
+        content: '',
+        time: now,
+        kind: 'notice',
+        noticeText: `${m.senderId === 'me' ? '你' : m.senderName || '有人'}的红包已过期${remaining > 0 ? `，${fmtMoney(remaining)}元已退回` : ''}`,
+      });
+    }
+  }, [appendMsg, gid, patchGroupMsg]);
+
+  useEffect(() => {
+    expireStalePackets();
+  }, [expireStalePackets]);
+
+  /** 追加一条带图标的资金通知行（xx领取了你的红包 / 收下了你的转账） */
+  const appendFundNotice = useCallback(
+    (icon: 'rp' | 'tr', pre: string, accent: string) => {
+      appendMsg({ id: uid(), role: 'me', senderId: 'me', senderName: '', content: '', time: Date.now(), kind: 'notice', notice: { icon, pre, accent } });
+    },
+    [appendMsg]
+  );
+
+  /** 应用成员对群红包/转账的处理动作（领取/收款/退回/拒收；幂等，状态流转后不可重复处理）：
+   *  红包领取：每份金额按类型计算（普通=单个金额/拼手气=随机拆一份/专属=单个金额），写入领取记录（剩余份数减少）；
+   *  转账：收款 → 状态已收款；退回 → 原路退回零钱（写账单）；拒收 → 终态。 */
+  const applyGroupAiAction = useCallback(
+    (char: ContactRecord, action: RichAction) => {
+      const verb = actionVerb(action.kind);
+      const all = loadGroupMsgs(gid);
+      const m = all.find(
+        (x) =>
+          !x.recalled &&
+          ((x.kind === 'redpacket' && x.rp && (x.rp.cid === action.targetId || x.id === action.targetId)) ||
+            (x.kind === 'transfer' && x.tr && (x.tr.cid === action.targetId || x.id === action.targetId)))
+      );
+      if (!m) return;
+      const charName = memberNameOf(char);
+      if (m.kind === 'redpacket' && m.rp) {
+        const rp = m.rp;
+        if (verb !== 'claim') return; // 群红包没有退回/拒收语义（未领完 24h 自动过期退回）
+        if (rp.expired || rp.claims.length >= rp.count || rp.claims.some((c) => c.contactId === char.id)) return;
+        if (rp.mode === 'exclusive' && rp.targetId !== char.id) return;
+        const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
+        const left = rp.count - rp.claims.length;
+        const amt = rp.mode === 'lucky' && left > 1 ? splitLuckyAmount(remaining, left) : remaining;
+        patchGroupMsg(m.id, { rp: { ...rp, claims: [...rp.claims, { contactId: char.id, name: charName, avatar: char.avatar, amount: amt, ts: Date.now() }] } });
+        appendFundNotice('rp', `${charName}领取了${m.senderId === 'me' ? '你' : m.senderName || '群友'}的`, rp.mode === 'exclusive' ? '专属红包' : '红包');
+        return;
+      }
+      if (m.kind === 'transfer' && m.tr) {
+        const tr = m.tr;
+        if (tr.toId !== char.id) return; // 只有被选中的收款成员能处理
+        if (tr.received || tr.status) return;
+        if (verb === 'claim') {
+          patchGroupMsg(m.id, { tr: { ...tr, received: true, receivedAt: Date.now() } });
+          appendFundNotice('tr', `${charName}收下了你发的`, '转账');
+        } else if (verb === 'return') {
+          patchGroupMsg(m.id, { tr: { ...tr, status: 'returned' } });
+          wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+          appendFundNotice('tr', `${charName}退回了你的`, '转账');
+        } else {
+          patchGroupMsg(m.id, { tr: { ...tr, status: 'rejected' } });
+          appendFundNotice('tr', `${charName}拒收了你的`, '转账');
+        }
+      }
+    },
+    [appendFundNotice, gid, patchGroupMsg]
+  );
+
   /** @ 某成员：插入「@名字 」到草稿 */
   const insertMention = (c: ContactRecord) => {
     setAtOpen(false);
@@ -1198,7 +1841,7 @@ export function WxGroupChatPage({
   const parseMentions = (text: string): ContactRecord[] =>
     members.filter((c) => text.includes(`@${memberNameOf(c)}`));
 
-  /** 消息进入 AI 上下文的文本快照（图片/位置/表情包有占位描述，与单聊一致） */
+  /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
     if (m.kind === 'image') return '[图片]';
     if (m.kind === 'sticker' && m.stk) {
@@ -1207,6 +1850,14 @@ export function WxGroupChatPage({
         : `[表情]${m.stk.meaning ? ` ${m.stk.meaning}` : ''}`;
     }
     if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`;
+    if (m.kind === 'redpacket' && m.rp) {
+      const rp = m.rp;
+      return `[红包 ID:${rp.cid ?? m.id} ¥${rp.amount}${rp.count > 1 ? `x${rp.count}` : ''} "${rp.blessing}"，${groupRpStateLabel(rp)}]`;
+    }
+    if (m.kind === 'transfer' && m.tr) {
+      const tr = m.tr;
+      return `[转账 ID:${tr.cid ?? m.id} ¥${tr.amount}${tr.note ? ` "${tr.note}"` : ''}，发给${tr.toName}，${groupTrStateLabel(tr)}]`;
+    }
     return m.content;
   };
 
@@ -1220,7 +1871,11 @@ export function WxGroupChatPage({
           : '[表情]'
         : m.kind === 'location' && m.loc
           ? `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`
-          : m.content;
+          : m.kind === 'redpacket' && m.rp
+            ? `[红包] ¥${m.rp.amount} ${m.rp.blessing}`
+            : m.kind === 'transfer' && m.tr
+              ? `[转账] ¥${m.tr.amount}${m.tr.note ? ` ${m.tr.note}` : ''}`
+              : m.content;
 
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
@@ -1258,13 +1913,22 @@ export function WxGroupChatPage({
           `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户）${
             others.length ? '、' + others.map(memberNameOf).join('、') : ''
           }。你以「${charName}」的身份参与其中。`,
-          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」是图片/位置/表情包消息，请自然理解并回应。',
+          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，请自然理解并回应。',
           '只以「' + charName + '」的身份和口吻发言，绝不替其他成员发言、代答或描写他们的言行。',
           '不复制、不复述、不换说法重复其他成员刚说过的内容（群里最忌跟风复读）。',
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
           '把群里的每个成员都当作真实的群友，绝不出戏：不说「用户」「AI」「角色」「人设」这类幕后词汇，也不表现出「我知道谁在操作」。',
           '每次只发一条简短消息（一两句话），像真人在群里随手打字。',
+          '【发红包】想给群里发红包时，在回复里输出 [红包:金额:祝福语]（如 [红包:8.88:恭喜发财]），红包会以你的名义发进群里，大家都能抢；金额量力而行、符合你的人设与场合，不要频繁发。',
         ];
+        // 群红包/转账待处理清单（每个成员独立视角）：是否抢/收完全按人设决定，不处理就不输出标记
+        const pendingCards = collectGroupPending(char.id);
+        if (pendingCards.length > 0) {
+          groupRules.push(
+            '【群红包/转账】下面的清单来自本群：红包由机主或群成员发出，多份红包每人限领一份；专属红包只有被指定的人能领；转账只有收款人能处理。抢不抢、收不收都按你的人设与当时的语境自然决定。',
+            ...buildActionRules(pendingCards)
+          );
+        }
         // 群成员速览（关系感知）：其他成员是谁、与机主的关系、性格速写（角色间相处按双方人设自然把握）
         const memberLines = others.map((c) => {
           const rel = (c.relation ?? '').trim();
@@ -1309,7 +1973,12 @@ export function WxGroupChatPage({
         ]
           .filter(Boolean)
           .join('\n\n');
-        const payload: ChatPayloadMessage[] = [{ role: 'system', content: systemFull }, ...history];
+        // 回复条数（按群独立，发送时现场读取）：>1 时连发多条（一句一条），成员们像真人一样逐条刷屏
+        const replyCount = getReplyCount(sKey);
+        const payload: ChatPayloadMessage[] = [
+          { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
+          ...history,
+        ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
 
         const ok = beginChatStream({
@@ -1317,6 +1986,7 @@ export function WxGroupChatPage({
           aiMsgId: genId(),
           messages,
           apiConfig,
+          replyCount,
           // 配置识图模型后：群里发的图片先识图，成员结合图片按人设回复（与单聊同管线）
           ...(turnImages.length > 0 ? { vision: { images: turnImages, text: lastUserText } } : {}),
           finalize: (result) => {
@@ -1326,15 +1996,55 @@ export function WxGroupChatPage({
               resolve();
               return;
             }
-            const reply: WxGroupMsg = {
-              id: result.aiMsgId,
-              role: 'peer',
-              senderId: char.id,
-              senderName: charName,
-              content: text || '（…）',
-              time: Date.now(),
-            };
-            appendMsg(reply);
+            // 回复按出现顺序切「文字块 + 处理动作」：动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置落盘），
+            // 文字块按边界（标记/换行/句末标点，回复条数>1 时一句一条）切分后再解析 [红包:…] 标记 → 群红包卡片消息
+            const parts = extractRichActionParts(text);
+            const all: WxGroupMsg[] = [];
+            let t = result.startedAt;
+            let idx = 0;
+            for (const part of parts) {
+              if (part.type === 'action') {
+                applyGroupAiAction(char, part.action);
+                continue;
+              }
+              const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
+              for (const seg of segs) {
+                for (const p of parseRichParts(seg, [])) {
+                  const id = idx === 0 ? result.aiMsgId : `${result.aiMsgId}-${idx}`;
+                  if (p.type === 'rich') {
+                    // 群里成员只发红包卡片（转账/亲属卡需要指定收款人，群规则不下发；位置/表情包富标记忽略）
+                    if (p.rich.kind !== 'redpacket') continue;
+                    all.push({
+                      id,
+                      role: 'peer',
+                      senderId: char.id,
+                      senderName: charName,
+                      content: '',
+                      time: t,
+                      kind: 'redpacket',
+                      rp: {
+                        amount: p.rich.amount,
+                        count: 1,
+                        mode: 'normal',
+                        blessing: p.rich.blessing || '恭喜发财，大吉大利',
+                        claims: [],
+                        sentAt: Date.now(),
+                      },
+                    });
+                  } else {
+                    const cleaned = p.text.trim();
+                    if (!cleaned) continue;
+                    all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: cleaned, time: t });
+                  }
+                  idx += 1;
+                  t += 600 + Math.floor(Math.random() * 600);
+                }
+              }
+            }
+            if (all.length === 0) {
+              all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
+            }
+            for (const m of all) appendMsg(m);
             // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
             void (async () => {
               try {
@@ -1366,21 +2076,23 @@ export function WxGroupChatPage({
         if (!ok) resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
       }),
      
-    [apiConfig, appendMsg, gid, me.id, me.name, ownerLabelOf, sKey]
+    [apiConfig, appendMsg, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, sKey]
   );
 
-  /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默） */
+  /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默）。
+   *  trigger 可省略（分句发送批次触发/红包/转账卡片入群时无文字可 @）：此时全员按人设自判。 */
   const runGroupTurn = useCallback(
-    async (myMsg: WxGroupMsg) => {
+    async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
       const g = getGroup(gid);
       if (!g || g.memberIds.length === 0) return;
       runningRef.current = true;
       try {
+        expireStalePackets(); // 每轮开始前先清算过期红包（终态不可再改）
         const all = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
           .filter((c): c is ContactRecord => !!c);
-        const mentioned = parseMentions(myMsg.content);
+        const mentioned = trigger ? parseMentions(trigger.content) : [];
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
         // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则）
@@ -1405,12 +2117,26 @@ export function WxGroupChatPage({
       }
     },
      
-    [gid, runCharTurn, sKey]
+    [expireStalePackets, gid, runCharTurn, sKey]
   );
+
+  /** 分句发送批次触发：把已发出的整批消息交给成员统一回复（输入框为空时点「发送」） */
+  const dispatchBatch = () => {
+    if (!pendingDispatch || runningRef.current || isChatStreaming(sKey)) return;
+    setPendingDispatch(false);
+    markPendingBatch(sKey, false);
+    const persisted = loadGroupMsgs(gid);
+    const lastMe = [...persisted].reverse().find((m) => m.role === 'me');
+    void runGroupTurn(lastMe);
+  };
 
   const send = () => {
     const text = draft.trim();
-    if (!text) return;
+    // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
+    if (!text) {
+      if (sentenceSend && pendingDispatch) dispatchBatch();
+      return;
+    }
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
       return;
@@ -1427,6 +2153,12 @@ export function WxGroupChatPage({
     setDraft('');
     setQuote(null);
     appendMsg(msg);
+    // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
     void runGroupTurn(msg);
   };
 
@@ -1455,7 +2187,14 @@ export function WxGroupChatPage({
       }
     }
     for (const m of created) appendMsg(m);
-    if (created.length > 0 && useSettings.getState().visionConfig.baseUrl.trim()) {
+    if (created.length === 0) return;
+    // 分句发送开启：只入列不触发回复（与文字消息同规则，空输入点「发送」统一触发）
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    if (useSettings.getState().visionConfig.baseUrl.trim()) {
       void runGroupTurn(created[created.length - 1]);
     }
   };
@@ -1478,6 +2217,11 @@ export function WxGroupChatPage({
       stk: { url: s.url, meaning: s.meaning },
     };
     appendMsg(msg);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
     void runGroupTurn(msg);
   };
 
@@ -1500,10 +2244,147 @@ export function WxGroupChatPage({
       loc: { name, address },
     };
     appendMsg(msg);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
     void runGroupTurn(msg);
   };
 
-  /** 加号面板动作（与单聊同款入口；图片/相机/位置真正可用，资金入口按群范围限定提示不支持） */
+  // ---------------- 群红包/转账（纯本地模拟，不涉及真实资金） ----------------
+
+  /** 群红包/转账提交：余额预检 → 开启支付密码先验证 → 扣款并插卡片消息 → 触发群回合（成员按人设领取/收款） */
+  const submitGroupRp = (p: { mode: GroupRpData['mode']; amount: number; count: number; blessing: string; target: ContactRecord | null }, methodId: string) => {
+    const total = groupRpTotal(p.mode, p.amount, p.count);
+    if (!wxCanPay(methodId, total)) {
+      onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
+      return;
+    }
+    const pp = wxLoadPayPwd();
+    if (pp.enabled && pp.pwd) {
+      setGate({ kind: 'redpacket', amount: total, methodId, rp: p });
+      return;
+    }
+    execGroupRp(p, methodId);
+  };
+
+  const execGroupRp = (p: { mode: GroupRpData['mode']; amount: number; count: number; blessing: string; target: ContactRecord | null }, methodId: string) => {
+    const total = groupRpTotal(p.mode, p.amount, p.count);
+    if (!wxExecutePayment(methodId, total, '红包')) {
+      onToast(methodId === 'balance' ? '零钱不足，请先充值' : '余额不足，请更换支付方式');
+      return;
+    }
+    const msg: WxGroupMsg = {
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'redpacket',
+      rp: {
+        amount: p.amount,
+        count: p.mode === 'exclusive' ? 1 : p.count,
+        mode: p.mode,
+        blessing: p.blessing,
+        targetId: p.mode === 'exclusive' && p.target ? p.target.id : undefined,
+        targetName: p.mode === 'exclusive' && p.target ? memberNameOf(p.target) : undefined,
+        claims: [],
+        sentAt: Date.now(),
+        cid: nextGroupCid('rp'),
+      },
+    };
+    setLayer(null);
+    appendMsg(msg);
+    onToast(p.mode === 'exclusive' && p.target ? `专属红包已发给${memberNameOf(p.target)}` : `红包已发出 ${fmtMoney(total)} 元`);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    void runGroupTurn(msg);
+  };
+
+  const submitGroupTr = (amount: number, note: string, member: ContactRecord, methodId: string) => {
+    if (!wxCanPay(methodId, amount)) {
+      onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
+      return;
+    }
+    const pp = wxLoadPayPwd();
+    if (pp.enabled && pp.pwd) {
+      setGate({ kind: 'transfer', amount, methodId, tr: { member, note } });
+      return;
+    }
+    execGroupTr(amount, note, member, methodId);
+  };
+
+  const execGroupTr = (amount: number, note: string, member: ContactRecord, methodId: string) => {
+    if (!wxExecutePayment(methodId, amount, '转账')) {
+      onToast(methodId === 'balance' ? '零钱不足，请先充值' : '余额不足，请更换支付方式');
+      return;
+    }
+    const msg: WxGroupMsg = {
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'transfer',
+      tr: { amount, note, toId: member.id, toName: memberNameOf(member), cid: nextGroupCid('tr') },
+    };
+    setLayer(null);
+    appendMsg(msg);
+    onToast(`已向 ${memberNameOf(member)} 转账 ${fmtMoney(amount)} 元`);
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    void runGroupTurn(msg);
+  };
+
+  /** 我领取成员发的红包（开箱「開」）：金额入零钱+记账单+领取记录+通知行 → 进详情；
+   *  专属红包只给被指定成员，其他人点击提示不能领 */
+  const claimGroupRp = (msgId: string) => {
+    const m = loadGroupMsgs(gid).find((x) => x.id === msgId);
+    if (!m?.rp) return;
+    const rp = m.rp;
+    if (rp.mode === 'exclusive' && rp.targetId) {
+      onToast(`这是发给${rp.targetName}的专属红包`);
+      setLayer({ view: 'rp-detail', msgId });
+      return;
+    }
+    if (rp.expired || rp.claims.length >= rp.count || rp.claims.some((c) => c.contactId === 'me')) {
+      setLayer({ view: 'rp-detail', msgId });
+      return;
+    }
+    const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
+    const left = rp.count - rp.claims.length;
+    const amt = rp.mode === 'lucky' && left > 1 ? splitLuckyAmount(remaining, left) : remaining;
+    patchGroupMsg(msgId, { rp: { ...rp, claims: [...rp.claims, { contactId: 'me', name: me.name, avatar: me.avatar, amount: amt, ts: Date.now() }] } });
+    wxPatchBalance(amt, { kind: '红包', amount: amt });
+    appendFundNotice('rp', `你领取了${m.senderId === 'me' ? '自己发的' : m.senderName || '群友'}的`, '红包');
+    setLayer({ view: 'rp-detail', msgId });
+  };
+
+  /** 红包卡片点击：成员发的未领完且我能领 → 先开箱；其余（自己发的/已领/已完/已过期）直接进详情 */
+  const openRpMsg = (m: WxGroupMsg) => {
+    const rp = m.rp;
+    if (!rp) return;
+    const claimable = m.senderId !== 'me' && !rp.expired && rp.claims.length < rp.count && !rp.claims.some((c) => c.contactId === 'me') && rp.mode !== 'exclusive';
+    if (claimable) {
+      setLayer({ view: 'rp-open', msgId: m.id });
+      return;
+    }
+    if (rp.mode === 'exclusive' && m.senderId !== 'me' && !rp.claims.some((c) => c.contactId === 'me') && !rp.expired && rp.claims.length < rp.count) {
+      onToast(`这是发给${rp.targetName}的专属红包`);
+    }
+    setLayer({ view: 'rp-detail', msgId: m.id });
+  };
+
+  /** 加号面板动作（图片/相机/位置同前；红包/转账 → 群级流程：发红包页 / 先选收款成员） */
   const handlePlusAction = (a: GroupPlusAction) => {
     if (a === 'image') {
       setPlusOpen(false);
@@ -1523,8 +2404,20 @@ export function WxGroupChatPage({
       setCompose('location');
       return;
     }
-    if (a === 'redpacket' || a === 'transfer') {
-      onToast('群聊暂不支持红包/转账');
+    if (a === 'redpacket') {
+      setPlusOpen(false);
+      setStickerOpen(false);
+      setLayer({ view: 'rp-compose' });
+      return;
+    }
+    if (a === 'transfer') {
+      setPlusOpen(false);
+      setStickerOpen(false);
+      if (members.length === 0) {
+        onToast('群里还没有成员');
+        return;
+      }
+      setLayer({ view: 'tr-pick' });
       return;
     }
     const label: Record<string, string> = { voicecall: '语音通话', videocall: '视频通话', favorite: '收藏' };
@@ -1578,6 +2471,11 @@ export function WxGroupChatPage({
 
   const speaker = speakerId ? memberById.get(speakerId) ?? null : null;
   const streaming = stream?.status === 'streaming';
+
+  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次） */
+  const canDispatch = sentenceSend && pendingDispatch && !streaming && !runningRef.current;
+  const rpComposeLayer = layer?.view === 'rp-compose' ? layer : null;
+  const layerMsg = layer && 'msgId' in layer ? msgs.find((m) => m.id === layer.msgId) ?? null : null;
 
   /** 消息行外层（头像 + 发言者名；文字与富媒体共用同一套行几何） */
   const renderMsgRow = (m: WxGroupMsg, media?: React.ReactNode) => {
@@ -1646,9 +2544,13 @@ export function WxGroupChatPage({
             return (
               <div key={m.id} className="py-2 text-center">
                 {showTime && <div className="pb-1 text-[12px] text-black/35 dark:text-white/35">{fmtGroupTime(m.time)}</div>}
-                <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[12px] text-black/45 dark:bg-white/10 dark:text-white/45">
-                  {m.noticeText ?? m.content}
-                </span>
+                {m.notice ? (
+                  <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
+                ) : (
+                  <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[12px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                    {m.noticeText ?? m.content}
+                  </span>
+                )}
               </div>
             );
           }
@@ -1688,6 +2590,42 @@ export function WxGroupChatPage({
                     }}
                   />
                 )
+              ) : m.kind === 'redpacket' && m.rp ? (
+                renderMsgRow(
+                  m,
+                  <RpBubble
+                    blessing={m.rp.blessing}
+                    sub={
+                      m.rp.expired
+                        ? '已过期'
+                        : m.rp.claims.length >= m.rp.count
+                          ? `已领取 ${m.rp.claims.length}/${m.rp.count}`
+                          : m.rp.claims.length > 0
+                            ? `已领取 ${m.rp.claims.length}/${m.rp.count}`
+                            : m.rp.mode === 'exclusive'
+                              ? `专属红包 · 给${m.rp.targetName ?? '群友'}`
+                              : m.rp.count > 1
+                                ? `${m.rp.count} 个红包待领取`
+                                : '待领取'
+                    }
+                    settled={m.rp.expired || m.rp.claims.length >= m.rp.count}
+                    onClick={() => openRpMsg(m)}
+                  />
+                )
+              ) : m.kind === 'transfer' && m.tr ? (
+                renderMsgRow(
+                  m,
+                  <TrBubble
+                    amount={m.tr.amount}
+                    status={m.tr.received ? `${m.tr.toName}已收款` : m.tr.status === 'returned' ? '已退回' : m.tr.status === 'rejected' ? '已拒收' : `待${m.tr.toName}收款`}
+                    received={m.tr.received === true}
+                    refunded={m.tr.status === 'returned'}
+                    fromMe={m.role === 'me'}
+                    note={m.tr.note || undefined}
+                    settled={Boolean(m.tr.received || m.tr.status)}
+                    onClick={() => setLayer({ view: 'tr-detail', msgId: m.id })}
+                  />
+                )
               ) : (
                 renderMsgRow(
                   m,
@@ -1722,30 +2660,52 @@ export function WxGroupChatPage({
             </div>
           );
         })}
-        {/* 流式气泡（当前发言角色）：等待首字时显示打字点（与私聊一致） */}
+        {/* 流式气泡（当前发言角色）：回复条数>1 时按边界实时切成多个气泡，下一句没打完时显示打字中（与私聊同节奏） */}
         {streaming && stream && (
-          <div className="mb-3 flex items-start gap-2" data-testid="wx-group-stream">
-            <WxAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={38} />
-            <div className="flex min-w-0 max-w-[calc(100%-92px)] flex-col items-start">
-              <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
-                {speaker ? memberNameOf(speaker) : '…'}
-              </span>
-              <div className="relative rounded-[5px] bg-white px-3 py-2 text-[16px] leading-[1.45] dark:bg-[#1E1E1E]">
-                <span aria-hidden="true" className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]" />
-                {stream.content ? (
-                  <>
-                    <span className="whitespace-pre-wrap break-words">{stream.content}</span>
-                    <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />
-                  </>
-                ) : (
-                  <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">
-                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
-                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
-                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
-                  </span>
-                )}
-              </div>
-            </div>
+          <div data-testid="wx-group-stream">
+            {(() => {
+              const split = splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1);
+              return (
+                <>
+                  {split.texts.map((t, i) => (
+                    <div key={i} className="mb-3 flex items-start gap-2">
+                      <WxAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={38} />
+                      <div className="flex min-w-0 max-w-[calc(100%-92px)] flex-col items-start">
+                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
+                          {speaker ? memberNameOf(speaker) : '…'}
+                        </span>
+                        <div className="relative rounded-[5px] bg-white px-3 py-2 text-[16px] leading-[1.45] dark:bg-[#1E1E1E]">
+                          <span aria-hidden="true" className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]" />
+                          <span className="whitespace-pre-wrap break-words">
+                            {prettifyRichText(t)}
+                            {i === split.texts.length - 1 && <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {/* 首句未凑齐 / 下一句还没出现 → 打字中气泡（与私聊一句一句连发节奏一致） */}
+                  {(split.pending || split.texts.length === 0) && (
+                    <div className="mb-3 flex items-start gap-2">
+                      <WxAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={38} />
+                      <div className="flex min-w-0 max-w-[calc(100%-92px)] flex-col items-start">
+                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
+                          {speaker ? memberNameOf(speaker) : '…'}
+                        </span>
+                        <div className="relative rounded-[5px] bg-white px-3 py-2 dark:bg-[#1E1E1E]">
+                          <span aria-hidden="true" className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]" />
+                          <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">
+                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
+                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
+                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -1796,7 +2756,7 @@ export function WxGroupChatPage({
               data-testid="wx-groupchat-input"
               className="h-9 min-w-0 flex-1 rounded-[6px] border border-black/10 bg-white px-3 text-[16px] outline-none dark:border-white/15 dark:bg-[#1A1A1A]"
             />
-            {draft.trim() ? (
+            {draft.trim() || canDispatch ? (
               <button
                 type="button"
                 onClick={send}
@@ -1873,6 +2833,69 @@ export function WxGroupChatPage({
 
       {/* 位置页（与单聊共用同一套组件） */}
       {compose === 'location' && <LocationPickerPage onClose={() => setCompose(null)} onSend={sendLocation} onToast={onToast} />}
+
+      {/* 群红包/转账浮层流程（发红包页 / 选人页 / 转账页[共用单聊组件] / 开箱 / 详情） */}
+      {rpComposeLayer && (
+        <GroupRpCompose
+          members={members}
+          meBalanceLabel={wxMethodLabel('balance')}
+          onBack={() => setLayer(null)}
+          onSubmit={submitGroupRp}
+          onToast={onToast}
+        />
+      )}
+      {layer?.view === 'tr-pick' && (
+        <GroupTrPickPage
+          members={members}
+          groupName={group.name}
+          onBack={() => setLayer(null)}
+          onPick={(c) => setLayer({ view: 'tr-compose', member: c })}
+        />
+      )}
+      {layer?.view === 'tr-compose' && (
+        <TransferCompose
+          peer={layer.member}
+          onBack={() => setLayer(null)}
+          onSubmit={(amount, note, methodId) => submitGroupTr(amount, note, layer.member, methodId)}
+          onToast={onToast}
+        />
+      )}
+      {layer?.view === 'rp-open' && layerMsg?.rp && (
+        <RpOpenLayer
+          senderName={layerMsg.senderId === 'me' ? '我' : layerMsg.senderName || '群友'}
+          senderAvatar={layerMsg.senderId === 'me' ? me.avatar : memberById.get(layerMsg.senderId)?.avatar ?? null}
+          blessing={layerMsg.rp.blessing}
+          onOpen={() => claimGroupRp(layer.msgId)}
+          onClose={() => setLayer(null)}
+        />
+      )}
+      {layer?.view === 'rp-detail' && layerMsg?.rp && (
+        <GroupRpDetailPage
+          senderName={layerMsg.senderId === 'me' ? '我' : layerMsg.senderName || '群友'}
+          senderAvatar={layerMsg.senderId === 'me' ? me.avatar : memberById.get(layerMsg.senderId)?.avatar ?? null}
+          blessing={layerMsg.rp.blessing}
+          rp={layerMsg.rp}
+          onBack={() => setLayer(null)}
+          onToast={onToast}
+        />
+      )}
+      {layer?.view === 'tr-detail' && layerMsg?.tr && (
+        <GroupTrDetailPage tr={layerMsg.tr} fromName={layerMsg.role === 'me' ? me.name : layerMsg.senderName || '群友'} onBack={() => setLayer(null)} />
+      )}
+
+      {/* 支付密码验证浮层（开启支付密码后群红包/群转账发送前弹出自绘键盘，与单聊同规则） */}
+      {gate && (
+        <WxPayPwdGate
+          label={`${gate.kind === 'redpacket' ? '发红包' : '转账'} ¥${fmtMoney(gate.amount)} 元`}
+          onOk={() => {
+            const g = gate;
+            setGate(null);
+            if (g.kind === 'redpacket' && g.rp) execGroupRp(g.rp, g.methodId);
+            else if (g.kind === 'transfer' && g.tr) execGroupTr(g.amount, g.tr.note, g.tr.member, g.methodId);
+          }}
+          onClose={() => setGate(null)}
+        />
+      )}
       {/* 原生相机/相册隐藏 input：相机单张（capture 调起后置摄像头）、图片可多选（与单聊同款） */}
       <input
         ref={cameraInputRef}
