@@ -2283,11 +2283,11 @@ function ChatPage({
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => (m.kind === 'image' ? '[图片]' : m.content))]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
-    // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按「群开关 + 按成员覆盖」判断可见性
-    //（effectiveInterop 把按角色设置的覆盖也接进来；用户和角色 A 的私聊记忆默认不对角色 B 开放——
+    // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按群级互通开关判断可见性
+    //（effectiveInterop 只跟群开关；用户和角色 A 的私聊记忆默认不对角色 B 开放——
     //  存储键即隔离边界，这里只影响该角色自己的召回范围）
     const memoryBlock = memRecallBlock(peer.id, 'qq', memContext, {
-      interopOn: (groupId: string) => effectiveInterop(groupId, peer.id),
+      interopOn: effectiveInterop,
     });
     // QQ动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看 QQ 平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
@@ -9861,7 +9861,7 @@ function MainScreen({
   /** 群数据版本：updateGroupRecord 落盘后 bump，让当前打开的群页拿到最新群对象 */
   const [groupVersion, setGroupVersion] = useState(0);
   const patchGroup = useCallback(
-    (groupId: string, patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberInterop' | 'replyPolicy' | 'memberIds'>>) => {
+    (groupId: string, patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => {
       updateGroupRecord(groupId, patch);
       setGroupVersion((v) => v + 1);
     },

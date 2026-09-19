@@ -1,9 +1,21 @@
-/** 默认头像：黑白灰小人剪影（联系人 App / 信息 App 通用） */
-export function DefaultAvatar({ size = 44, className = '' }: { size?: number; className?: string }) {
+/**
+ * 默认头像：黑白灰小人剪影（联系人 App / 信息 App 通用）。
+ * shape='square' 时不内置圆角（微信 App 风格：方形圆角头像由调用方按尺寸传入 rounded-[Xpx]），
+ * 避免与内置 rounded-full 产生同类工具类冲突。
+ */
+export function DefaultAvatar({
+  size = 44,
+  className = '',
+  shape = 'circle',
+}: {
+  size?: number;
+  className?: string;
+  shape?: 'circle' | 'square';
+}) {
   return (
     <div
       aria-hidden="true"
-      className={`flex shrink-0 items-center justify-center rounded-full bg-[#C7C7CC] text-white ${className}`}
+      className={`flex shrink-0 items-center justify-center ${shape === 'circle' ? 'rounded-full' : ''} bg-[#C7C7CC] text-white ${className}`}
       style={{ width: size, height: size }}
     >
       <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: size * 0.62, height: size * 0.62 }}>

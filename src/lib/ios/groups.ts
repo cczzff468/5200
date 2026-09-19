@@ -6,24 +6,19 @@
  * - 会话身份 sessionKey = `<app>:group:<id>`（复用流总线/未读/标志/时间感知等按字符串键隔离的设施）；
  * - 存储：微信群 `wx-chat-groups`（历史数据兼容）、QQ 群 `qq-chat-groups` 两池分开，群 id 全局唯一，
  *   getGroup 双池查找；消息落 `<app>-group-msgs:<id>`（微信群沿用历史 wx-group-msgs 前缀）；
- * - 记忆互通开关 memoryInterop 按群独立：开启时群记忆参与成员角色的私聊召回、角色私聊记忆参与群聊召回；
- *   memberInterop 可按成员覆盖（'on' 强制互通 / 'off' 强制隔离，缺省跟随群开关）——「开关按群或按角色设置」；
- *   effectiveInterop 统一解析，聊天页把结果以 interopOn 回调传给记忆召回；
- *   角色之间的隔离永远由记忆存储键（mem-frag:<contactId>）保证，与开关无关；
- * - replyPolicy 决定谁来回复（决定是否回复的需求）：'all' 全员按顺序回复（默认，兼容旧行为）/
- *   'mention' 仅被 @ 成员回复 / 'auto' 每个角色自判是否发言（返回 [SKIP] 的回复不落盘）；
- * - 群里不提供任何真实资金操作（无红包/转账/亲属卡），符合范围限定。
+ * - 记忆互通开关 memoryInterop 按群独立（设置页唯一入口，不再有按成员覆盖）：开启时群记忆参与成员角色的
+ *   私聊召回、角色私聊记忆参与群聊召回；effectiveInterop 统一解析，聊天页把结果以 interopOn 回调
+ *   传给记忆召回；角色之间的隔离永远由记忆存储键（mem-frag:<contactId>）保证，与开关无关；
+ * - 谁来回复由每个角色按自己的人设与消息内容自判（无需回复只回 [SKIP]，不落盘），@ 成员始终优先；
+ * - 群里不提供红包/转账等资金功能（加号面板仅入口，点击提示不支持），符合范围限定。
  */
 
 import { kvDel, kvGet, kvSet } from './idb-kv';
-import { genId } from './db';
+import { genId, localDB } from './db';
 
 // ---------------- 类型 ----------------
 
 export type GroupApp = 'wx' | 'qq';
-
-/** 谁来回复：'all' 全员按顺序回复（默认）/'mention' 仅被 @ 成员/'auto' AI 自判（无话可说返回 [SKIP]） */
-export type GroupReplyPolicy = 'all' | 'mention' | 'auto';
 
 export interface ChatGroup {
   id: string;
@@ -37,12 +32,8 @@ export interface ChatGroup {
   /** AI 角色成员联系人 ID（不含机主；机主恒为群成员） */
   memberIds: string[];
   announcement: string;
-  /** 记忆与私聊互通（按群独立；默认关闭 = 群记忆与私聊完全隔离） */
+  /** 记忆与私聊互通（按群独立；默认关闭 = 群记忆与私聊完全隔离；设置页唯一入口） */
   memoryInterop: boolean;
-  /** 按成员覆盖互通：'on' 强制互通 / 'off' 强制隔离；缺省 = 跟随 memoryInterop（按角色设置开关） */
-  memberInterop?: Record<string, 'on' | 'off'>;
-  /** 谁来回复（缺省 'all'） */
-  replyPolicy?: GroupReplyPolicy;
   createdAt: number;
 }
 
@@ -54,10 +45,14 @@ export interface WxGroupMsg {
   senderName: string;
   content: string;
   time: number;
-  kind?: 'text' | 'notice' | 'image';
+  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker';
   /** 系统通知行（进群/退出等），居中灰字渲染 */
   noticeText?: string;
   img?: { src: string };
+  /** 位置卡片消息（群里所有角色可见，进上下文映射为 [位置] 文本） */
+  loc?: { name: string; address: string };
+  /** 表情包消息（用户从表情面板发送；AI 上下文映射为 [发送了表情：意思]） */
+  stk?: { url: string; meaning: string; sid?: string };
   quote?: { name: string; content: string };
   recalled?: boolean;
 }
@@ -107,8 +102,6 @@ function normalizeGroup(g: unknown): ChatGroup | null {
     memberIds: r.memberIds.filter((x): x is string => typeof x === 'string'),
     announcement: typeof r.announcement === 'string' ? r.announcement : '',
     memoryInterop: r.memoryInterop === true,
-    memberInterop: r.memberInterop && typeof r.memberInterop === 'object' ? r.memberInterop : undefined,
-    replyPolicy: r.replyPolicy === 'mention' || r.replyPolicy === 'auto' ? r.replyPolicy : undefined,
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
   };
 }
@@ -158,10 +151,10 @@ export function createGroup(input: {
   return group;
 }
 
-/** 更新群（名字/头像/公告/互通开关/按成员覆盖/回复策略/成员等）；返回更新后的群（群不存在返回 null） */
+/** 更新群（名字/头像/公告/互通开关/成员等）；返回更新后的群（群不存在返回 null） */
 export function updateGroup(
   groupId: string,
-  patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberInterop' | 'replyPolicy' | 'memberIds'>>
+  patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>
 ): ChatGroup | null {
   const app = getGroup(groupId)?.app;
   if (!app) return null;
@@ -188,21 +181,11 @@ export function removeGroupMember(groupId: string, contactId: string): ChatGroup
 }
 
 /**
- * 该群该成员的记忆互通最终生效值：memberInterop 覆盖优先，缺省跟随群开关。
- * （「开关按群或按角色设置」的统一解析；群不存在一律视为隔离。）
+ * 该群的记忆互通生效值：只跟群级开关（按成员覆盖已移除，旧数据里的覆盖记录随 normalize 丢弃）。
+ * 群不存在一律视为隔离。
  */
-export function effectiveInterop(groupId: string, contactId: string): boolean {
-  const g = getGroup(groupId);
-  if (!g) return false;
-  const ov = g.memberInterop?.[contactId];
-  if (ov === 'on') return true;
-  if (ov === 'off') return false;
-  return g.memoryInterop === true;
-}
-
-/** 该群的回复策略（缺省 'all'，与旧行为一致） */
-export function groupReplyPolicy(groupId: string): GroupReplyPolicy {
-  return getGroup(groupId)?.replyPolicy ?? 'all';
+export function effectiveInterop(groupId: string): boolean {
+  return getGroup(groupId)?.memoryInterop === true;
 }
 
 /** 从 localStorage JSON map 里删掉一个键（unreads/flags/hidden/time-aware 同构清理用） */
@@ -240,6 +223,8 @@ export function dissolveGroup(groupId: string): ChatGroup | null {
     for (const cid of g.memberIds) {
       kvDel(`mem-round:${cid}:${g.app}:group:${groupId}`);
     }
+    // 群聊天背景图片本体（IndexedDB settings store，键同 contacts-store 的 chat-bg 前缀；群背景与单聊相互独立）
+    void localDB.delete('settings', `chat-bg:${g.app}:group:${groupId}`).catch(() => undefined);
   } catch {
     // 清理失败不阻塞解散
   }
@@ -272,9 +257,17 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
     senderName: typeof r.senderName === 'string' ? r.senderName : '',
     content: r.content,
     time: r.time,
-    kind: r.kind === 'notice' || r.kind === 'image' ? r.kind : 'text',
+    kind: r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' ? r.kind : 'text',
     noticeText: typeof r.noticeText === 'string' ? r.noticeText : undefined,
     img: r.img && typeof r.img.src === 'string' ? { src: r.img.src } : undefined,
+    loc:
+      r.loc && typeof r.loc.name === 'string' && typeof r.loc.address === 'string'
+        ? { name: r.loc.name, address: r.loc.address }
+        : undefined,
+    stk:
+      r.stk && typeof r.stk.url === 'string'
+        ? { url: r.stk.url, meaning: typeof r.stk.meaning === 'string' ? r.stk.meaning : '', sid: typeof r.stk.sid === 'string' ? r.stk.sid : undefined }
+        : undefined,
     quote: r.quote && typeof r.quote.name === 'string' && typeof r.quote.content === 'string' ? { name: r.quote.name, content: r.quote.content } : undefined,
     recalled: r.recalled === true,
   };
@@ -300,6 +293,8 @@ export function groupPreview(groupId: string): { text: string; time: number } {
   if (!last) return { text: '', time: 0 };
   if (last.recalled) return { text: `${last.role === 'me' ? '你' : last.senderName || '有人'}撤回了一条消息`, time: last.time };
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
+  if (last.kind === 'sticker') return { text: `[表情]${last.stk?.meaning ? ` ${last.stk.meaning}` : ''}`, time: last.time };
+  if (last.kind === 'location') return { text: `[位置] ${last.loc?.name ?? ''}`.trim(), time: last.time };
   const prefix = last.role === 'me' ? '我' : last.senderName;
   return { text: `${prefix}：${last.content}`, time: last.time };
 }

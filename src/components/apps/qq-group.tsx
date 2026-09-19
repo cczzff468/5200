@@ -8,17 +8,14 @@
  * - QqGroupChatPage    群聊页：气泡（发言者名+头像）/ @某成员优先回复 / 长按菜单（复制/引用/撤回/删除）/
  *                      流式气泡（当前发言角色）/ 多角色逐个顺序回复；
  * - QqGroupInfoPage    群聊信息：成员管理（邀请/移出）、群名、群公告、群头像、
- *                      记忆与私聊互通开关（按群独立 + 按成员覆盖）、回复策略（全员/仅@/AI 自判）、
- *                      置顶/免打扰、时间感知、清空记录、解散并退出群聊。
+ *                      记忆与私聊互通开关（按群独立）、置顶/免打扰、时间感知、清空记录、解散并退出群聊。
  *
  * AI 管线（多角色，每个角色独立组装 system，绝不共用）：
- * - 用户发言后按「被 @ 成员优先，其余按成员顺序」逐个发起流式回合（单会话单流，队列串行）；
+ * - 用户发言后按「被 @ 成员必答优先，其余成员按人设自判（[SKIP] 不落盘）」逐个发起流式回合（单会话单流，队列串行）；
  * - 每个角色的 system = 七要素人设（含自己与机主的关系）+ 群聊规则（当前是群聊/参与者名单与成员速览/
  *   只代表自己/禁复读/可以互相对话）+ 该角色自己的记忆召回（memRecallBlock mode='group'：
- *   本群记忆 + 互通开启时的自己私聊记忆；interopOn 按成员覆盖解析）+ 时间感知（按群开关）+ 世界书；
+ *   本群记忆 + 互通开启时的自己私聊记忆；interopOn 只跟群级开关）+ 时间感知（按群开关）+ 世界书；
  *   机主与其他成员的历史消息一律映射为「发言者：内容」的 user 消息；
- * - 回复策略 replyPolicy：'all' 全员按顺序回复（默认）/'mention' 仅被 @ 成员回复/'auto' 每个角色
- *   自判是否发言（无话可说只回 [SKIP]，不落盘不提取记忆不进上下文）；
  * - finalize：回复落盘（senderId 区分发言人）+ 未读 + memAfterAiTurn（roundScope 按群隔离，
  *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）。
  * - 范围限定：群内不提供红包/转账/亲属卡等资金功能；表情包/识图等私聊特性不进入群聊管线。
@@ -65,10 +62,10 @@ import {
   saveGroupMsgs,
   updateGroup,
   type ChatGroup,
-  type GroupReplyPolicy,
   type WxGroupMsg,
 } from '@/lib/ios/groups';
 import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
+import { ChatToggle } from '@/components/apps/chat-settings';
 import { qqUnreads } from '@/lib/unread-store';
 import { memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -81,19 +78,11 @@ import {
   useChatStream,
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
-import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 
 /** 群会话 id（未读/标志/隐藏等以字符串 id 为键的设施共用，与微信群同构） */
 export const qqGroupRowId = (groupId: string) => `group:${groupId}`;
 const sessionKeyOf = (groupId: string) => `qq:group:${groupId}`;
-
-/** 回复策略的展示文案 */
-export const REPLY_POLICY_LABEL: Record<GroupReplyPolicy, string> = {
-  all: '全员回复',
-  mention: '仅被@成员',
-  auto: 'AI 自判发言',
-};
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -283,7 +272,7 @@ function SwitchRow({
         {caption && <div className="mt-0.5 text-[11px] leading-snug text-black/40 dark:text-white/40">{caption}</div>}
       </div>
       <div className="shrink-0">
-        <Switch checked={checked} onCheckedChange={onChange} aria-label={label} data-testid={testId} />
+        <ChatToggle on={checked} onChange={onChange} accent="#0099FF" testId={testId} label={label} />
       </div>
     </div>
   );
@@ -476,7 +465,7 @@ export function QqGroupInfoPage({
   group: ChatGroup;
   contacts: ContactRecord[];
   onBack: () => void;
-  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberInterop' | 'replyPolicy' | 'memberIds'>>) => void;
+  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
@@ -484,7 +473,6 @@ export function QqGroupInfoPage({
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
-  const [policyOpen, setPolicyOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const gid = group.id;
@@ -543,22 +531,6 @@ export function QqGroupInfoPage({
       onToast(`已移出 ${memberNameOf(c)}`);
       onUpdate({ memberIds: next.memberIds });
     }
-  };
-
-  /** 按成员覆盖互通的三态循环：跟随群聊 → 强制互通 → 强制隔离 → 跟随群聊 */
-  const cycleMemberInterop = (cid: string) => {
-    const cur = group.memberInterop?.[cid];
-    const next: 'on' | 'off' | undefined = cur === undefined ? 'on' : cur === 'on' ? 'off' : undefined;
-    const map = { ...(group.memberInterop ?? {}) };
-    if (next === undefined) delete map[cid];
-    else map[cid] = next;
-    onUpdate({ memberInterop: Object.keys(map).length > 0 ? map : undefined });
-    onToast(next === 'on' ? '已强制互通' : next === 'off' ? '已强制隔离' : '已恢复跟随群聊');
-  };
-
-  const memberInteropLabel = (cid: string): string => {
-    const ov = group.memberInterop?.[cid];
-    return ov === 'on' ? '强制互通' : ov === 'off' ? '强制隔离' : '跟随群聊';
   };
 
   return (
@@ -656,15 +628,9 @@ export function QqGroupInfoPage({
           onClick={() => setDialog({ kind: 'announcement' })}
           testId="qq-groupinfo-notice"
         />
-        <InfoRow
-          label="回复策略"
-          value={REPLY_POLICY_LABEL[group.replyPolicy ?? 'all']}
-          onClick={() => setPolicyOpen(true)}
-          testId="qq-groupinfo-policy"
-        />
         <SwitchRow
           label="记忆与私聊互通"
-          caption="开启后：群里发生的事，成员在私聊里也记得；成员的私聊记忆也会带进群聊。关闭则完全隔离（按群独立设置，下方可按成员覆盖）。"
+          caption="开启后：群里发生的事，成员在私聊里也记得；成员的私聊记忆也会带进群聊。关闭则完全隔离（按群独立设置）。"
           checked={group.memoryInterop}
           onChange={(v) => {
             onUpdate({ memoryInterop: v });
@@ -672,37 +638,6 @@ export function QqGroupInfoPage({
           }}
           testId="qq-groupinfo-interop"
         />
-        {/* 按成员覆盖互通（三态）：精确控制每个角色的群↔私聊记忆流向 */}
-        {members.length > 0 && (
-          <div className="px-4 py-3">
-            <div className="text-[13px] font-medium text-black/60 dark:text-white/60">按成员覆盖互通</div>
-            <div className="mt-1 text-[11px] leading-snug text-black/40 dark:text-white/40">
-              缺省跟随上方群开关；可对单个成员强制互通或强制隔离（只影响 TA 在本群与私聊之间的记忆，不影响成员之间）。
-            </div>
-            <div className="mt-2 space-y-1.5">
-              {members.map((m) => (
-                <div key={m.id} className="flex items-center gap-2.5">
-                  <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={30} />
-                  <span className="min-w-0 flex-1 truncate text-[14px]">{memberNameOf(m)}</span>
-                  <button
-                    type="button"
-                    data-testid={`qq-groupinfo-minterop-${m.id}`}
-                    onClick={() => cycleMemberInterop(m.id)}
-                    className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium active:opacity-70 ${
-                      group.memberInterop?.[m.id] === 'on'
-                        ? 'bg-[#0099FF]/10 text-[#0099FF] dark:bg-[#4AA3FF]/15 dark:text-[#4AA3FF]'
-                        : group.memberInterop?.[m.id] === 'off'
-                          ? 'bg-[#F5455C]/10 text-[#F5455C] dark:text-[#FF9A97]'
-                          : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/55'
-                    }`}
-                  >
-                    {memberInteropLabel(m.id)}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 通用开关卡片 */}
@@ -801,45 +736,6 @@ export function QqGroupInfoPage({
         </div>
       )}
 
-      {/* 回复策略选择 */}
-      {policyOpen && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setPolicyOpen(false)}>
-          <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
-            <div className="px-3 pb-1 pt-2 text-center text-[13px] text-black/45 dark:text-white/45">
-              谁来回复（决定每个成员是否发言）
-            </div>
-            {(Object.keys(REPLY_POLICY_LABEL) as GroupReplyPolicy[]).map((p) => {
-              const on = (group.replyPolicy ?? 'all') === p;
-              const desc =
-                p === 'all'
-                  ? '所有成员按顺序逐个回复'
-                  : p === 'mention'
-                    ? '只有被 @ 的成员回复（没人被 @ 就没人说话）'
-                    : '每个成员根据人设与消息内容自判要不要说话（无话可说就沉默）';
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  data-testid={`qq-groupinfo-policy-${p}`}
-                  onClick={() => {
-                    onUpdate({ replyPolicy: p });
-                    setPolicyOpen(false);
-                    onToast(`已设为${REPLY_POLICY_LABEL[p]}`);
-                  }}
-                  className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[15px]">{REPLY_POLICY_LABEL[p]}</span>
-                    <span className="block text-[11px] text-black/40 dark:text-white/40">{desc}</span>
-                  </span>
-                  {on && <Check className="h-4 w-4 shrink-0 text-[#0099FF]" strokeWidth={2.5} />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* 邀请成员 */}
       {inviteOpen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-[#F5F6F7] dark:bg-[#111214]">
@@ -930,7 +826,7 @@ export function QqGroupInfoPage({
  * - runningRef 防重入；每个角色 await 一次 beginChatStream→finalize 的完整回合；
  * - 流式气泡头像/名字由 groupSpeaker 模块级 map 提供（页面中途退出重进也能对上发言角色）；
  * - finalize 里 loadGroupMsgs→append→saveGroupMsgs（组件卸载后照样落盘）+ 未读 + 记忆提取；
- * - replyPolicy：'mention' 只跑被 @ 成员；'auto' 每个成员自判（[SKIP] 回复不落盘）。
+ * - 谁来回复按人设自判：被 @ 成员必答优先，其余成员逐个自判（[SKIP] 回复不落盘）；
  */
 let activeGroupKey: string | null = null;
 const groupSpeaker = new Map<string, string>();
@@ -952,7 +848,7 @@ export function QqGroupChatPage({
   /** NPC 归属者名解析（人设 prompt 用） */
   ownerLabelOf: (peer: ContactRecord) => string | null;
   onBack: () => void;
-  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'memberIds' | 'memoryInterop' | 'memberInterop' | 'replyPolicy'>>) => void;
+  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'memberIds' | 'memoryInterop'>>) => void;
   onOpenInfo: () => void;
   onDissolve: () => void;
   onToast: (m: string) => void;
@@ -1036,9 +932,10 @@ export function QqGroupChatPage({
   const parseMentions = (text: string): ContactRecord[] =>
     members.filter((c) => text.includes(`@${memberNameOf(c)}`));
 
-  /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆 */
+  /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
+   *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
   const runCharTurn = useCallback(
-    (char: ContactRecord) =>
+    (char: ContactRecord, allowSkip: boolean) =>
       new Promise<void>((resolve) => {
         const g = getGroup(gid);
         if (!g) {
@@ -1089,8 +986,8 @@ export function QqGroupChatPage({
           groupRules.push('【群成员速览】群里其他成员的情况（你与他们的相处方式按你的人设与各自人设自然把握）：', ...memberLines);
         }
         if (g.announcement) groupRules.push(`【群公告】${g.announcement}`);
-        // AI 自判发言：无话可说时只回 [SKIP]（finalize 阶段整条丢弃，不落盘）
-        if (g.replyPolicy === 'auto') {
+        // 发言自判（按人设来）：未被 @ 的成员无话可说时只回 [SKIP]（finalize 阶段整条丢弃，不落盘）
+        if (allowSkip) {
           groupRules.push('【发言判断】刚发出的这条消息如果与你无关、不需要你表态或你无话可说（比如别人在单独聊天），只回复 [SKIP] 两个词，不要说任何其他内容；有你要说的就正常回复。');
         }
 
@@ -1102,11 +999,11 @@ export function QqGroupChatPage({
           ...npcExtra,
           extraRules: groupRules,
         });
-        // 记忆（按角色隔离 + 群互通开关 + 按成员覆盖）：mode='group' → 本群记忆 + 互通开启时的自己私聊记忆
+        // 记忆（按角色隔离 + 群级互通开关）：mode='group' → 本群记忆 + 互通开启时的自己私聊记忆
         const memoryBlock = memRecallBlock(char.id, 'qq', memContext, {
           mode: 'group',
           groupId: gid,
-          interopOn: (g2: string) => effectiveInterop(g2, char.id),
+          interopOn: effectiveInterop,
         });
         const wbBlocks = collectWbBlocks(char.id, wbScanText([lastUserText, memContext]));
         const timeBlock = getTimeAware(sKey)
@@ -1132,8 +1029,8 @@ export function QqGroupChatPage({
           apiConfig,
           finalize: (result) => {
             const text = (result.content ?? '').trim();
-            // AI 自判沉默：整条回复是 [SKIP] 标记 → 不落盘、不提取记忆（本轮对 TA 没有发生任何社交事件）
-            if (g.replyPolicy === 'auto' && SKIP_RE.test(text)) {
+            // 人设自判沉默：整条回复是 [SKIP] 标记 → 不落盘、不提取记忆（本轮对 TA 没有发生任何社交事件）
+            if (allowSkip && SKIP_RE.test(text)) {
               resolve();
               return;
             }
@@ -1179,7 +1076,7 @@ export function QqGroupChatPage({
     [apiConfig, appendMsg, gid, me.id, me.name, ownerLabelOf, sKey]
   );
 
-  /** 一个群回合：按回复策略决定谁回复；@ 成员优先，其余按成员顺序逐个回复 */
+  /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默） */
   const runGroupTurn = useCallback(
     async (myMsg: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
@@ -1191,15 +1088,13 @@ export function QqGroupChatPage({
           .map((id) => contactsRef.current.find((c) => c.id === id))
           .filter((c): c is ContactRecord => !!c);
         const mentioned = parseMentions(myMsg.content);
-        const policy = g.replyPolicy ?? 'all';
-        // 'mention'：只跑被 @ 成员；'all'/'auto'：全员（被 @ 优先），'auto' 由每轮 [SKIP] 自行沉默
         const ordered =
-          policy === 'mention' ? mentioned : mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
+          mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
         for (const char of ordered) {
           if (!getGroup(gid)) break; // 群已被解散
           groupSpeaker.set(sKey, char.id);
           if (mountedRef.current) setSpeakerId(char.id);
-          await runCharTurn(char);
+          await runCharTurn(char, !mentioned.includes(char));
           await sleep(420);
         }
       } finally {

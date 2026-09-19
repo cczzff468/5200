@@ -1004,8 +1004,8 @@ function wxApplyAiActions(
 }
 
 /** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL；
- *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图） */
-function readImageFile(file: File, max = 720): Promise<string> {
+ *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图）；群聊发图复用同一套压缩逻辑 */
+export function readImageFile(file: File, max = 720): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('图片读取失败'));
@@ -1059,7 +1059,7 @@ function WxTileIcon({ bg, children }: { bg: string; children: React.ReactNode })
 }
 
 /** 头像：微信风格「正方形圆角」（有图用图，无图用灰底剪影，绝不出现在圆形） */
-function WxAvatar({ src, alt, size = 44 }: { src: string | null; alt: string; size?: number }) {
+export function WxAvatar({ src, alt, size = 44 }: { src: string | null; alt: string; size?: number }) {
   const radius = Math.max(4, Math.round(size * 0.11));
   const style: React.CSSProperties = { width: size, height: size, borderRadius: radius };
   if (src) {
@@ -1421,8 +1421,8 @@ function FamilyBubble({ title, sub, settled, onClick }: { title: string; sub: st
   );
 }
 
-/** 位置聊天卡片（微信同款：上部名称/地址白底 + 下方小地图 + 红色定位针） */
-function LocBubble({ name, address, onClick }: { name: string; address: string; onClick: () => void }) {
+/** 位置聊天卡片（微信同款：上部名称/地址白底 + 下方小地图 + 红色定位针；群聊复用同一套组件） */
+export function LocBubble({ name, address, onClick }: { name: string; address: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -1440,8 +1440,8 @@ function LocBubble({ name, address, onClick }: { name: string; address: string; 
 }
 
 /** 图片消息气泡（圆角直出，点开全屏预览）：中等尺寸（用户反馈过大 → 从 250×330 收敛）。
- *  img 用固定像素上限（max-w/max-h 均为绝对值，按比例缩放互不冲突；百分比在 flex 包裹层内会循环解析导致尺寸失真） */
-function ImageMsgBubble({ src, onClick }: { src: string; onClick: () => void }) {
+ *  img 用固定像素上限（max-w/max-h 均为绝对值，按比例缩放互不冲突；百分比在 flex 包裹层内会循环解析导致尺寸失真）；群聊复用同一套组件 */
+export function ImageMsgBubble({ src, onClick }: { src: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -1454,8 +1454,8 @@ function ImageMsgBubble({ src, onClick }: { src: string; onClick: () => void }) 
   );
 }
 
-/** 位置页（大地图 + 内置地点列表 + 自定义位置；选中即发送位置卡片） */
-function LocationPickerPage({
+/** 位置页（大地图 + 内置地点列表 + 自定义位置；选中即发送位置卡片；群聊复用同一套组件） */
+export function LocationPickerPage({
   onClose,
   onSend,
   onToast,
@@ -1551,8 +1551,8 @@ function LocationPickerPage({
   );
 }
 
-/** 位置详情页（点聊天中的位置卡片进入：大地图 + 名称地址） */
-function LocViewLayer({ name, address, onClose }: { name: string; address: string; onClose: () => void }) {
+/** 位置详情页（点聊天中的位置卡片进入：大地图 + 名称地址；群聊复用同一套组件） */
+export function LocViewLayer({ name, address, onClose }: { name: string; address: string; onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-50 flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-loc-view">
       <div className="flex h-12 shrink-0 items-center px-2 pt-[54px]">
@@ -1573,8 +1573,8 @@ function LocViewLayer({ name, address, onClose }: { name: string; address: strin
   );
 }
 
-/** 表情消息气泡（点开全屏预览 + 意思提示） */
-function StickerMsgBubble({ src, meaning, onClick }: { src: string; meaning: string; onClick: () => void }) {
+/** 表情消息气泡（点开全屏预览 + 意思提示；群聊复用同一套组件） */
+export function StickerMsgBubble({ src, meaning, onClick }: { src: string; meaning: string; onClick: () => void }) {
   return (
     <button type="button" data-testid="wx-sticker-bubble" onClick={onClick} className="block active:opacity-80" title={meaning || '表情'}>
       <img
@@ -1685,7 +1685,7 @@ function StickerAddForm({
 }
 
 /** 聊天表情面板（表情按钮弹出：网格点选发送 + 内嵌添加[手机图片/URL+意思] + 管理删除） */
-function WxStickerPanel({
+export function WxStickerPanel({
   onPick,
   onClose,
   onToast,
@@ -3639,11 +3639,11 @@ function ChatPage({
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
-    // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按「群开关 + 按成员覆盖」判断可见性
-    //（effectiveInterop 把按角色设置的覆盖也接进来；用户和角色 A 的私聊记忆默认不对角色 B 开放——
+    // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按群级互通开关判断可见性
+    //（effectiveInterop 只跟群开关；用户和角色 A 的私聊记忆默认不对角色 B 开放——
     //  存储键即隔离边界，这里只影响该角色自己的召回范围）
     const memoryBlock = memRecallBlock(peer.id, 'wx', memContext, {
-      interopOn: (groupId: string) => effectiveInterop(groupId, peer.id),
+      interopOn: effectiveInterop,
     });
     // 朋友圈动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看朋友圈平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）

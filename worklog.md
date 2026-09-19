@@ -5742,3 +5742,34 @@ Stage Summary:
 - 改动文件：仅 src/components/apps/wx-group.tsx（imports 增 BellOff/CirclePlus/Smile、去 SendHorizontal；GroupNavBar/InfoRow/SwitchRow 三个通用小件升级；聊天页与信息页视觉全面对齐私聊）
 - 功能零改动：AI 管线/记忆互通/回复策略/长按菜单/置顶免打扰/解散逻辑/testid 全部原样（wx-groupchat-*、wx-groupmsg-*、wx-groupinfo-*、wx-group-* 兼容），新增 wx-groupchat-sticker/wx-groupchat-plus/wx-group-quote-bar
 - 视觉策略沉淀：群聊页此后与私聊页共享同一套气泡/输入栏规格（5px 圆角、38px 头像、8px 尾巴、16px 文本、#EDEDED 无边框输入栏、发送按钮文字化），后续改私聊样式时应同步群聊
+---
+Task ID: group-17
+Agent: Z.ai Code (main)
+Task: 微信群聊设置页功能精简（删回复策略→按人设回复、删按成员覆盖互通）+ 头像方形圆角 + 开关变大 + 群公告美化 + 单聊输入功能完整对齐群聊（表情包/加号菜单/图片/相机/位置/聊天背景）
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts：删除 GroupReplyPolicy/replyPolicy/memberInterop 字段与 groupReplyPolicy()，effectiveInterop 简化为只跟群级开关 (groupId)=>boolean（旧数据里的覆盖记录随 normalize 丢弃）；WxGroupMsg kind 扩为 text/notice/image/location/sticker + 新增 loc/stk 字段（normalize 同步解析）；groupPreview 支持 [表情 含义]/[位置 地点名] 预览；dissolveGroup 级联清理群聊天背景图（IndexedDB settings 键 chat-bg:<app>:group:<gid>）
+- 回复行为改「按人设来」（wx+qq 双引擎）：runCharTurn 增加 allowSkip 参数——被 @ 成员必答（无 [SKIP] 规则），其余成员逐个注入【发言判断】规则按人设自判，整条 [SKIP] 不落盘不提取记忆；runGroupTurn 顺序 = 被@成员优先 + 其余成员顺序，忽略 replyPolicy
+- 设置页精简（wx-group.tsx + qq-group.tsx 两端）：删除「回复策略」行与选择 sheet、删除「按成员覆盖互通」整块与三态 pill，互通 caption 改为按群独立单入口；onUpdate Pick 同步收窄（qq.tsx patchGroup 类型同步）
+- 头像方形圆角：wx-group 全部头像统一换 WxAvatar（与私聊同一套正方形圆角几何）；default-avatar.tsx 加 shape='square' 模式（不内置 rounded-full，避免同类工具类冲突）；GroupAvatar 拼贴默认头像同步方形
+- 开关变大：SwitchRow 弃用 shadcn Switch（18×32）→ 共用 chat-settings.tsx 的 ChatToggle（30×50，微信绿 #07C160 / QQ 蓝 #0099FF），wx+qq 四个开关全部变大
+- 群公告美化（wx）：CenterDialog 单行弹窗 → 独立整页编辑器（GroupNavBar + 保存按钮 + 多行 textarea maxLength 300 + 字数计数 + 说明文案）；qq 保持 CenterDialog 不动
+- 单聊输入功能对齐（wx-group.tsx，共用同一套组件）：①wechat.tsx 导出 WxAvatar/readImageFile/WxStickerPanel/LocationPickerPage/LocViewLayer/LocBubble/ImageMsgBubble/StickerMsgBubble（导出原位声明，无复制实现）；②聊天页新增表情面板（用户已添加的表情包，发送 → 本群消息库独立保存 + [发送了表情：意思] 进上下文触发群回合）；③加号面板 WxGroupPlusPanel 与单聊 PlusPanel 同款 4×2 网格八入口（相机/图片/语音通话/视频通话/红包/转账/位置/收藏）——图片/相机走同一套隐藏 input+readImageFile 压缩、位置走同一套 LocationPickerPage；资金入口按范围限定点击 toast「群聊暂不支持红包/转账」，语音/视频/收藏同单聊「暂未开放」；④位置卡片 LocBubble 渲染 + LocViewLayer 详情 + 群里所有角色可见（[位置] 进上下文）；⑤图片 ImageMsgBubble + 全屏 viewer，配置识图模型时走与单聊同一管线（vision: {images,text} 逐成员先识图再回复，未配置则图片只入记录不触发回复，与单聊一致）；⑥消息历史/复制快照映射：image→[图片]、location→[位置 名 地址]、sticker→[发送了表情：意思]；长按菜单复制用快照、撤回/删除支持所有类型；群输入框不再 disabled（与单聊一致，回复中发送→toast 引导）
+- 群聊聊天背景（wx）：信息页新增「聊天背景」行（右侧迷你预览 swatch）→ 与单聊同一套 ChatBgPage（预览卡/相册上传/14 色壁纸/默认）；存储复用 wxChatFlags 的 group:<gid> 键 + IndexedDB chat-bg:wx:group:<gid>——按群 ID 隔离、与单聊背景互不影响、持久化；聊天页背景层（mode≠default 时 absolute inset-0 + chatBgLayerStyle），顶栏/输入栏自带底色不受影响，消息区透出背景
+- 修复存量 bug：微信 App 主屏根 toast 在群聊分支提前 return 不渲染 → 群聊页/信息页所有 toast（已复制/已撤回/已邀请/群聊暂不支持…）历来不可见；wx-group 两页接入 LocalToast+useLocalToast（与私聊页同方案，双写外部 onToast）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 0 警告
+- E2E 实测（agent-browser 390×844 隔离会话 + 存活 mock :4100；IndexedDB 直种 林川(user,13800001234/pw123456,90001/pw123456)+红红/明仔(char,friendWx+friendQq)+明文 apiConfig/visionConfig→mock+2 枚 wx-stickers）：
+  ①建群「红红、明仔的群聊(3)」→文字消息→红红/明仔按人设逐个回复（allowSkip 全跑通）✓
+  ②表情面板 2 枚种子表情→点选发送→贴纸气泡+两成员回复 ✓
+  ③加号面板八入口齐全→位置页（与单聊同款）→点广州塔→位置卡片+小地图+两成员回复（全员可见）✓
+  ④canvas 构造 PNG 注入相册 input→图片气泡+识图管线后两成员回复 ✓
+  ⑤聊天信息页：回复策略行不存在、按成员覆盖不存在、聊天背景行在、开关 50×30 共 4 枚 ✓
+  ⑥背景页选 #FFC9D4→返回聊天页粉背景透出（顶栏/输入栏不受影响）；杀 App 重载→解锁→重进群背景仍生效 ✓
+  ⑦群公告整页编辑器：输入 24 字→保存→信息页行值「每周五晚8点群内球局，迟…」✓
+  ⑧红包入口 toast「群聊暂不支持红包/转账」现在可见（toast 修复验证）✓
+  ⑨QQ 群信息页回归：策略行/覆盖块已删、蓝色 50×30 开关、头卡/成员卡布局原样 ✓
+  ⑩微信单聊回归：发「单聊回归测试」→AI 正常回复 ✓；console 零错误、dev.log 仅沙箱 /api/chat 502 预期噪音
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（数据层）、src/components/apps/wx-group.tsx（设置页精简+输入对齐+背景+公告编辑器+toast 修复）、src/components/apps/qq-group.tsx（策略/覆盖删除+引擎按人设+大开关）、src/components/apps/wechat.tsx（导出共用组件+effectiveInterop 接线）、src/components/apps/qq.tsx（effectiveInterop 接线+patchGroup 类型）、src/components/apps/default-avatar.tsx（shape 方形模式）
+- 删除项 testid：wx/qq-groupinfo-policy(-all/-mention/-auto)、wx/qq-groupinfo-minterop-* 不复存在；其余全部保持兼容
+- 已知边界：AI 成员不在群里发表情包/图片（范围限定维持）；mock 无 [SKIP] 路径覆盖（逻辑与旧 auto 策略一致）；qq 群公告编辑器保持原弹窗（本轮只美化微信侧）
