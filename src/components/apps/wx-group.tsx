@@ -28,7 +28,9 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Minus,
   Pencil,
+  Plus,
   SendHorizontal,
   Trash2,
   UserMinus,
@@ -535,6 +537,7 @@ export function WxGroupInfoPage({
   const [dialog, setDialog] = useState<null | { kind: 'name' | 'announcement' }>(null);
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
@@ -578,6 +581,7 @@ export function WxGroupInfoPage({
 
   const removeMember = (c: ContactRecord) => {
     setMemberSheet(null);
+    setRemoveOpen(false);
     if (members.length <= 1) {
       onToast('至少保留一名成员');
       return;
@@ -620,66 +624,69 @@ export function WxGroupInfoPage({
         }}
       />
 
-      {/* 群名片 */}
+      {/* 成员格点（对照真微信：成员头像瓦片 + 虚线 ＋/－ 按钮） */}
       <div className="bg-white px-4 py-4 dark:bg-[#1A1A1A]">
-        <button
-          type="button"
-          className="flex w-full items-center gap-4 text-left active:opacity-70"
-          onClick={() => fileRef.current?.click()}
-          data-testid="wx-groupinfo-avatar"
-        >
-          <GroupAvatar group={group} contacts={contacts} size={56} />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[17px] font-medium">{group.name}</span>
-            <span className="text-[12px] text-black/40 dark:text-white/40">
-              {members.length + 1} 人 · 点头像可更换群头像
-            </span>
-          </span>
-        </button>
-      </div>
-
-      {/* 群成员 */}
-      <div className="mt-2 bg-white px-4 py-3 dark:bg-[#1A1A1A]">
-        <div className="mb-3 flex items-center">
-          <span className="text-[13px] font-medium text-black/60 dark:text-white/60">群成员</span>
-          <span className="ml-auto text-[12px] text-black/40 dark:text-white/40">{members.length} 人</span>
-        </div>
         <div className="grid grid-cols-5 gap-y-3">
           {members.map((m) => (
             <button
               key={m.id}
               type="button"
-              className="flex flex-col items-center gap-1"
+              className="flex flex-col items-center gap-1.5"
               onClick={() => setMemberSheet(m)}
               data-testid={`wx-groupinfo-member-${m.id}`}
             >
               {m.avatar ? (
-                <img src={m.avatar} alt={m.name} className="h-11 w-11 rounded-[8px] object-cover" />
+                <img src={m.avatar} alt={m.name} className="h-11 w-11 rounded-[6px] object-cover" />
               ) : (
-                <DefaultAvatar size={44} className="rounded-[8px]" />
+                <DefaultAvatar size={44} className="rounded-[6px]" />
               )}
-              <span className="max-w-[56px] truncate text-[11px] text-black/60 dark:text-white/60">
+              <span className="max-w-[56px] truncate text-[11px] leading-none text-black/50 dark:text-white/50">
                 {memberNameOf(m)}
               </span>
             </button>
           ))}
           <button
             type="button"
-            className="flex flex-col items-center gap-1"
+            aria-label="邀请成员"
+            className="flex flex-col items-center gap-1.5"
             onClick={() => setInviteOpen(true)}
             data-testid="wx-groupinfo-invite"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-[8px] bg-black/5 dark:bg-white/10">
-              <UserPlus className="h-5 w-5 text-black/50 dark:text-white/50" />
+            <span className="flex h-11 w-11 items-center justify-center rounded-[6px] border-[1.5px] border-dashed border-black/[0.18] dark:border-white/[0.25]">
+              <Plus className="h-[22px] w-[22px] text-black/30 dark:text-white/35" strokeWidth={1.6} />
             </span>
-            <span className="text-[11px] text-black/60 dark:text-white/60">邀请</span>
           </button>
+          {members.length > 0 && (
+            <button
+              type="button"
+              aria-label="移除成员"
+              className="flex flex-col items-center gap-1.5"
+              onClick={() => setRemoveOpen(true)}
+              data-testid="wx-groupinfo-remove"
+            >
+              <span className="flex h-11 w-11 items-center justify-center rounded-[6px] border-[1.5px] border-dashed border-black/[0.18] dark:border-white/[0.25]">
+                <Minus className="h-[22px] w-[22px] text-black/30 dark:text-white/35" strokeWidth={1.6} />
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* 群设置 */}
+      {/* 群资料 */}
       <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
         <InfoRow label="群聊名称" value={group.name} onClick={() => setDialog({ kind: 'name' })} testId="wx-groupinfo-name" />
+        <button
+          type="button"
+          className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
+          onClick={() => fileRef.current?.click()}
+          data-testid="wx-groupinfo-avatar"
+        >
+          <span className="text-[15px]">群头像</span>
+          <span className="ml-auto flex items-center gap-2">
+            <GroupAvatar group={group} contacts={contacts} size={40} />
+            <ChevronRight className="h-4 w-4 text-black/30 dark:text-white/30" />
+          </span>
+        </button>
         <InfoRow
           label="群公告"
           value={group.announcement ? `${group.announcement.slice(0, 12)}…` : '未设置'}
@@ -758,10 +765,17 @@ export function WxGroupInfoPage({
         />
       </div>
 
-      <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
+      <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
         <InfoRow label="清空聊天记录" danger onClick={() => setConfirmClear(true)} testId="wx-groupinfo-clear" />
-        <InfoRow label="解散并退出群聊" danger onClick={() => setConfirmDissolve(true)} testId="wx-groupinfo-dissolve" />
       </div>
+      <button
+        type="button"
+        data-testid="wx-groupinfo-dissolve"
+        onClick={() => setConfirmDissolve(true)}
+        className="mt-2 w-full bg-white py-[13px] text-center text-[15px] text-[#FA5150] active:bg-black/5 dark:bg-[#1A1A1A] dark:active:bg-white/5"
+      >
+        退出群聊
+      </button>
       <div className="py-8 text-center text-[11px] text-black/30 dark:text-white/30">
         群聊为本地模拟，不含任何真实资金操作
       </div>
@@ -787,6 +801,37 @@ export function WxGroupInfoPage({
               <UserMinus className="h-4 w-4" />
               移出群聊
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 移除成员（虚线 － 入口） */}
+      {removeOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#EDEDED] dark:bg-[#111111]">
+          <GroupNavBar title="移除成员" onBack={() => setRemoveOpen(false)} />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="bg-white dark:bg-[#1A1A1A]">
+              {members.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  data-testid={`wx-group-remove-${m.id}`}
+                  onClick={() => removeMember(m)}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
+                >
+                  {m.avatar ? (
+                    <img src={m.avatar} alt={m.name} className="h-10 w-10 shrink-0 rounded-[6px] object-cover" />
+                  ) : (
+                    <DefaultAvatar size={40} className="shrink-0 rounded-[6px]" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(m)}</span>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black/5 dark:bg-white/10">
+                    <Minus className="h-4 w-4 text-black/45 dark:text-white/50" />
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="px-8 py-10 text-center text-[12px] text-black/35 dark:text-white/35">点击成员将其移出群聊（至少保留一名）</div>
           </div>
         </div>
       )}
@@ -904,7 +949,7 @@ export function WxGroupInfoPage({
       )}
       {confirmDissolve && (
         <ConfirmDialog
-          text="解散后群聊与聊天记录将删除，确定解散？"
+          text="退出后将解散该群并删除聊天记录，确定退出？"
           onCancel={() => setConfirmDissolve(false)}
           onConfirm={() => {
             setConfirmDissolve(false);
@@ -1281,16 +1326,15 @@ export function WxGroupChatPage({
           <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 p-1 text-black/75 active:opacity-50 dark:text-white/75">
             <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
           </button>
-          <button type="button" onClick={onOpenInfo} data-testid="wx-groupchat-openinfo" className="flex min-w-0 flex-1 flex-col items-center active:opacity-60">
-            <span className="max-w-[180px] truncate text-[16px] font-medium">{group.name}</span>
-            <span className="text-[10px] text-black/40 dark:text-white/40">{members.length + 1} 人</span>
+          <button type="button" onClick={onOpenInfo} data-testid="wx-groupchat-openinfo" className="flex min-w-0 flex-1 justify-center active:opacity-60">
+            <span className="max-w-[210px] truncate text-[16px] font-medium">{group.name}({members.length + 1})</span>
           </button>
           <button
             type="button"
             aria-label="聊天信息"
             onClick={onOpenInfo}
             data-testid="wx-groupchat-info"
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded-[6px] bg-black/5 text-[12px] text-black/60 active:opacity-60 dark:bg-white/10 dark:text-white/60"
+            className="-mr-1 ml-auto px-1.5 py-1 text-[20px] font-light leading-none text-black/70 active:opacity-50 dark:text-white/70"
           >
             …
           </button>
@@ -1312,7 +1356,7 @@ export function WxGroupChatPage({
           if (m.kind === 'notice') {
             return (
               <div key={m.id} className="py-2 text-center">
-                {showTime && <div className="pb-1 text-[10px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+                {showTime && <div className="pb-1 text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
                 <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
                   {m.noticeText ?? m.content}
                 </span>
@@ -1324,7 +1368,7 @@ export function WxGroupChatPage({
           const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
           return (
             <div key={m.id} data-mid={m.id} {...bubblePress}>
-              {showTime && <div className="py-2 text-center text-[10px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+              {showTime && <div className="py-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
                   <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
@@ -1339,11 +1383,17 @@ export function WxGroupChatPage({
                     <DefaultAvatar size={36} className="shrink-0 rounded-[5px]" />
                   )}
                   <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                    {!mine && <span className="mb-0.5 px-1 text-[11px] leading-none text-black/40 dark:text-white/40">{m.senderName}</span>}
+                    {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">{m.senderName}</span>}
                     <div
-                      className={`${mine ? 'rounded-[8px] bg-[#95EC69] dark:bg-[#3EB575]' : 'rounded-[8px] bg-white dark:bg-[#2C2C2C]'} px-3 py-2 text-[15px] leading-relaxed`}
+                      className={`relative ${mine ? 'rounded-[8px] bg-[#95EC69] dark:bg-[#3EB575]' : 'rounded-[8px] bg-white dark:bg-[#2C2C2C]'} px-3 py-2 text-[15px] leading-relaxed`}
                       data-testid={mine ? 'wx-groupmsg-me' : 'wx-groupmsg-peer'}
                     >
+                      <span
+                        aria-hidden="true"
+                        className={`absolute top-[13px] h-[6px] w-[6px] rotate-45 rounded-[1px] ${
+                          mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#2C2C2C]'
+                        }`}
+                      />
                       {m.quote && (
                         <div className="mb-1 border-l-2 border-black/20 pl-2 text-[11px] leading-snug text-black/45 dark:border-white/25 dark:text-white/45">
                           引用 {m.quote.name}：{m.quote.content}
@@ -1366,10 +1416,11 @@ export function WxGroupChatPage({
               <DefaultAvatar size={36} className="shrink-0 rounded-[5px]" />
             )}
             <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-              <span className="mb-0.5 px-1 text-[11px] leading-none text-black/40 dark:text-white/40">
+              <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
                 {speaker ? memberNameOf(speaker) : '…'}
               </span>
-              <div className="rounded-[8px] bg-white px-3 py-2 text-[15px] leading-relaxed dark:bg-[#2C2C2C]">
+              <div className="relative rounded-[8px] bg-white px-3 py-2 text-[15px] leading-relaxed dark:bg-[#2C2C2C]">
+                <span aria-hidden="true" className="absolute -left-[3px] top-[13px] h-[6px] w-[6px] rotate-45 rounded-[1px] bg-white dark:bg-[#2C2C2C]" />
                 <span className="whitespace-pre-wrap break-words">{stream.content || '…'}</span>
                 <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />
               </div>

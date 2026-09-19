@@ -30,7 +30,10 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Lock,
+  Minus,
   Pencil,
+  Plus,
   SendHorizontal,
   Trash2,
   UserMinus,
@@ -480,10 +483,17 @@ export function QqGroupInfoPage({
   const [dialog, setDialog] = useState<null | { kind: 'name' | 'announcement' }>(null);
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const gid = group.id;
+  /** 稳定伪群号（仅展示用途，由群 id 哈希生成，同群恒定） */
+  const groupNo = useMemo(() => {
+    let h = 0;
+    for (const ch of group.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return String(100000000 + (h % 900000000));
+  }, [group.id]);
   const [flags, setFlags] = useState<ChatFlags>(() => qqChatFlags.get());
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   const fileRef = useRef<HTMLInputElement>(null);
@@ -523,6 +533,7 @@ export function QqGroupInfoPage({
 
   const removeMember = (c: ContactRecord) => {
     setMemberSheet(null);
+    setRemoveOpen(false);
     if (members.length <= 1) {
       onToast('至少保留一名成员');
       return;
@@ -552,7 +563,7 @@ export function QqGroupInfoPage({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-[#F5F6F7] dark:bg-[#111214]">
-      <GroupNavBar title={`群聊信息(${members.length + 1})`} onBack={onBack} />
+      <GroupNavBar title="聊天信息" onBack={onBack} />
       <input
         ref={fileRef}
         type="file"
@@ -565,61 +576,79 @@ export function QqGroupInfoPage({
         }}
       />
 
-      {/* 群名片 */}
-      <div className="bg-white px-4 py-4 dark:bg-[#1B1C1F]">
+      {/* 群资料头部卡片（对照真 QQ：大头像 + 群名 + 群号 + 锁定标签） */}
+      <div className="mx-3 mt-2 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
         <button
           type="button"
-          className="flex w-full items-center gap-4 text-left active:opacity-70"
+          className="flex w-full items-center gap-3.5 px-4 py-4 text-left active:opacity-70"
           onClick={() => fileRef.current?.click()}
           data-testid="qq-groupinfo-avatar"
         >
-          <QqGroupAvatar group={group} contacts={contacts} size={56} />
+          <QqGroupAvatar group={group} contacts={contacts} size={64} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[17px] font-medium">{group.name}</span>
-            <span className="text-[12px] text-black/40 dark:text-white/40">
-              {members.length + 1} 人 · 点头像可更换群头像
+            <span className="block truncate text-[19px] font-semibold leading-snug">{group.name}</span>
+            <span className="mt-1 flex items-center gap-1.5 text-[13px] text-black/45 dark:text-white/45">
+              <span className="shrink-0">群号：{groupNo}</span>
+              <span className="flex shrink-0 items-center gap-1 rounded-[4px] bg-black/[0.05] px-1.5 py-[2px] text-[10px] text-black/45 dark:bg-white/10 dark:text-white/50">
+                <Lock className="h-2.5 w-2.5" />
+                不允许被搜索
+              </span>
             </span>
           </span>
+          <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" />
         </button>
       </div>
 
-      {/* 群成员 */}
-      <div className="mt-2 bg-white px-4 py-3 dark:bg-[#1B1C1F]">
+      {/* 群成员卡片（对照真 QQ：圆头像瓦片 + 邀请/移除圆形按钮） */}
+      <div className="mx-3 mt-2.5 rounded-[12px] bg-white px-4 py-3.5 dark:bg-[#1B1C1F]">
         <div className="mb-3 flex items-center">
-          <span className="text-[13px] font-medium text-black/60 dark:text-white/60">群成员</span>
-          <span className="ml-auto text-[12px] text-black/40 dark:text-white/40">{members.length} 人</span>
+          <span className="text-[16px] font-semibold">群成员</span>
+          <span className="ml-auto text-[13px] text-black/35 dark:text-white/35">{members.length + 1}人</span>
         </div>
-        <div className="grid grid-cols-5 gap-y-3">
+        <div className="flex flex-wrap gap-x-[13px] gap-y-3">
           {members.map((m) => (
             <button
               key={m.id}
               type="button"
-              className="flex flex-col items-center gap-1"
+              className="flex w-[52px] flex-col items-center gap-1"
               onClick={() => setMemberSheet(m)}
               data-testid={`qq-groupinfo-member-${m.id}`}
             >
-              <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={44} />
-              <span className="max-w-[56px] truncate text-[11px] text-black/60 dark:text-white/60">
+              <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={48} />
+              <span className="max-w-[52px] truncate text-[11px] leading-none text-black/50 dark:text-white/50">
                 {memberNameOf(m)}
               </span>
             </button>
           ))}
           <button
             type="button"
-            className="flex flex-col items-center gap-1"
+            className="flex w-[52px] flex-col items-center gap-1"
             onClick={() => setInviteOpen(true)}
             data-testid="qq-groupinfo-invite"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/[0.05] dark:bg-white/10">
-              <UserPlus className="h-5 w-5 text-black/50 dark:text-white/50" />
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#F0F1F2] dark:bg-white/10">
+              <Plus className="h-6 w-6 text-black/45 dark:text-white/50" strokeWidth={1.8} />
             </span>
-            <span className="text-[11px] text-black/60 dark:text-white/60">邀请</span>
+            <span className="text-[11px] leading-none text-black/50 dark:text-white/50">邀请</span>
           </button>
+          {members.length > 0 && (
+            <button
+              type="button"
+              className="flex w-[52px] flex-col items-center gap-1"
+              onClick={() => setRemoveOpen(true)}
+              data-testid="qq-groupinfo-remove"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#F0F1F2] dark:bg-white/10">
+                <Minus className="h-6 w-6 text-black/45 dark:text-white/50" strokeWidth={1.8} />
+              </span>
+              <span className="text-[11px] leading-none text-black/50 dark:text-white/50">移除</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* 群设置 */}
-      <div className="mt-2 divide-y divide-black/[0.05] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+      <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
         <InfoRow label="群聊名称" value={group.name} onClick={() => setDialog({ kind: 'name' })} testId="qq-groupinfo-name" />
         <InfoRow
           label="群公告"
@@ -674,6 +703,10 @@ export function QqGroupInfoPage({
             </div>
           </div>
         )}
+      </div>
+
+      {/* 通用开关卡片 */}
+      <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
         <SwitchRow
           label="时间感知"
           caption="让成员按当前时段与消息间隔感知时间（按群独立）"
@@ -684,7 +717,7 @@ export function QqGroupInfoPage({
           }}
         />
         <SwitchRow
-          label="置顶聊天"
+          label="设为置顶"
           checked={flags[qqGroupRowId(gid)]?.pinned === true}
           onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { pinned: v })}
         />
@@ -695,11 +728,28 @@ export function QqGroupInfoPage({
         />
       </div>
 
-      <div className="mt-2 divide-y divide-black/[0.05] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
-        <InfoRow label="清空聊天记录" danger onClick={() => setConfirmClear(true)} testId="qq-groupinfo-clear" />
-        <InfoRow label="解散并退出群聊" danger onClick={() => setConfirmDissolve(true)} testId="qq-groupinfo-dissolve" />
+      {/* 危险操作（对照真 QQ：删除聊天记录=蓝、解散群聊=红） */}
+      <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
+        <button
+          type="button"
+          data-testid="qq-groupinfo-clear"
+          onClick={() => setConfirmClear(true)}
+          className="w-full rounded-[12px] px-4 py-[13px] text-left text-[15px] text-[#0099FF] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+        >
+          清空聊天记录
+        </button>
       </div>
-      <div className="py-8 text-center text-[11px] text-black/30 dark:text-white/30">
+      <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
+        <button
+          type="button"
+          data-testid="qq-groupinfo-dissolve"
+          onClick={() => setConfirmDissolve(true)}
+          className="w-full rounded-[12px] px-4 py-[13px] text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+        >
+          解散群聊
+        </button>
+      </div>
+      <div className="py-7 text-center text-[11px] text-black/30 dark:text-white/30">
         群聊为本地模拟，不含任何真实资金操作
       </div>
 
@@ -720,6 +770,33 @@ export function QqGroupInfoPage({
               <UserMinus className="h-4 w-4" />
               移出群聊
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 移除成员（－ 入口） */}
+      {removeOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#F5F6F7] dark:bg-[#111214]">
+          <GroupNavBar title="移除成员" onBack={() => setRemoveOpen(false)} />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-3 mt-2 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+              {members.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  data-testid={`qq-group-remove-${m.id}`}
+                  onClick={() => removeMember(m)}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                >
+                  <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={40} />
+                  <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(m)}</span>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black/[0.05] dark:bg-white/10">
+                    <Minus className="h-4 w-4 text-black/45 dark:text-white/50" />
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="px-8 py-10 text-center text-[12px] text-black/35 dark:text-white/35">点击成员将其移出群聊（至少保留一名）</div>
           </div>
         </div>
       )}
@@ -1243,7 +1320,7 @@ export function QqGroupChatPage({
           if (m.kind === 'notice') {
             return (
               <div key={m.id} className="py-2 text-center">
-                {showTime && <div className="pb-1 text-[10px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+                {showTime && <div className="pb-1 text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
                 <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
                   {m.noticeText ?? m.content}
                 </span>
@@ -1267,7 +1344,7 @@ export function QqGroupChatPage({
                 <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
                   <QqAvatar src={senderAvatar} alt={senderName} size={40} />
                   <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                    {!mine && <span className="mb-0.5 px-1 text-[11px] leading-none text-black/40 dark:text-white/40">{m.senderName}</span>}
+                    {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">{m.senderName}</span>}
                     <div
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
@@ -1301,7 +1378,7 @@ export function QqGroupChatPage({
           <div className="mb-3 flex gap-2" data-testid="qq-group-stream">
             <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
             <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-              <span className="mb-0.5 px-1 text-[11px] leading-none text-black/40 dark:text-white/40">
+              <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
                 {speaker ? memberNameOf(speaker) : '…'}
               </span>
               <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">

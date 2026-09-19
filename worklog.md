@@ -5672,3 +5672,38 @@ Stage Summary:
 - 改动文件：新增 src/components/apps/qq-group.tsx；修改 src/lib/ios/groups.ts（双宿主泛化+memberInterop+replyPolicy）、src/components/apps/qq.tsx（路由/联系人/消息列表/私聊接线）、src/components/apps/wx-group.tsx（按成员互通 UI+回复策略+关系感知+interopOn）、src/components/apps/wechat.tsx（interopOn 接线+listGroups('wx') 泄漏修复）
 - 用户需求落地：一（QQ/微信分别建群、选成员、群名/头像/成员列表、编辑/删除/退出、群与私聊分开显示）✓ 二（全员可见、可决定是否回复三档策略、角色互相对话、人设不串台）✓ 三（自己与用户关系=人设 relation、其他成员速览=速览注入、当前是群聊=群聊模式声明、禁出戏）✓ 四（按群+按角色双层互通开关、持久化、记忆库可查群聊/私聊来源）✓ 五（只读自己相关记忆、不读他人私密、A 的私聊记忆不对 B 开放、群间隔离）✓ 六（零破坏回归实测、无真实资金操作、长按菜单齐全）✓
 - mock 设施沉淀：/home/z/.cache/mock-group-4100.ts（聊天 SSE+记忆提取 JSON+请求指纹日志），守护启动 python3 .zscripts/daemonize.py /home/z/.cache/mock-group-4100.log bun /home/z/.cache/mock-group-4100.ts
+---
+Task ID: group-15
+Agent: Z.ai Code (main)
+Task: 群聊功能美化（用户给 4 张真机参考截图：微信群聊信息页 / QQ 群聊信息页两屏 / 微信群聊页）——按真机布局重排 QQ/微信两个群聊信息页并打磨群聊页细节
+
+Work Log:
+- 微信群聊信息页（wx-group.tsx WxGroupInfoPage）微信化重排，对照参考截图 1：
+  ①顶部改为真微信「成员格点」：成员头像瓦片(44px 圆角 6px+名字)打头，后接虚线框「＋」(邀请)与虚线框「－」(移除)，去掉原「群名片」大标题卡与「邀请」文字钮；
+  ②群资料区改行式：群聊名称 / 群头像（行右侧 40px 缩略图，点击换头像，原 testid wx-groupinfo-avatar 迁移至此）/ 群公告 / 回复策略；
+  ③危险区拆分：「清空聊天记录」独立白卡；新增居中红色「退出群聊」通栏按钮（替代原「解散并退出群聊」行，testid 不变，确认文案改为「退出后将解散该群并删除聊天记录，确定退出？」）；
+  ④新增「移除成员」整页选择器（虚线－入口，testid wx-group-remove-<cid>，成员行+灰圆减号，底部提示至少保留一名；removeMember 同时关闭 memberSheet 与 removeOpen）。
+- QQ 群聊信息页（qq-group.tsx QqGroupInfoPage）卡片化重排，对照参考截图 2+3：
+  ①头部卡片：64px 群头像拼贴 + 群名(19px 半粗) + 稳定伪群号（由群 id 哈希生成 9 位，同群恒定）+「🔒不允许被搜索」灰色标签 + chevron，点击换头像；
+  ②群成员卡片：标题行「群成员 | N人」+ 圆头像瓦片(48px) + 圆形「邀请＋」「移除－」按钮（带文字标签，对照真 QQ 邀请/移除圆钮）；
+  ③全页改圆角卡片：灰底上白色 rounded-[12px] 卡片 mx-3 mt-2.5 分区（设置卡/开关卡/危险卡），替代原通栏白条；
+  ④开关卡改 QQ 术语「设为置顶」；危险操作改真 QQ 配色：「清空聊天记录」蓝色(#0099FF)独立卡、「解散群聊」红色(#F5455C)独立卡；
+  ⑤导航标题从「群聊信息(N)」改为「聊天信息」（对照真 QQ）；新增「移除成员」卡片式选择器（testid qq-group-remove-<cid>）。
+- 群聊页细节（对照参考截图 4）：
+  ①微信群聊页标题改真微信格式「群名(N)」（去掉副标题行）；右上「…」从灰底方块改为微信式纯文本轻按钮；
+  ②微信气泡加真微信同款小尾巴（rotate-45 6px 方块：me 泡右侧绿、peer 泡左侧白，流式泡同款）；时间分隔 10px→11px；
+  ③双宿主成员名标注 11px/40% → 12px/45%；QQ 通知行时间同步 11px。
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过；导入新增 Minus/Plus/Lock，UserMinus/UserPlus 仍被成员操作/邀请页使用无冗余。
+- E2E 实测（agent-browser 390×844 隔离会话 + daemonize 守护 mock :4100（重建于 /home/z/.cache/mock-group-4100.ts，SSE 按 system【名字】生成回复 + CORS + /api/memory/extract 兜底）；IndexedDB 直种 林川(user, 13800001234/pw123456, wx+qq 好友) + 红红/明仔(char, friendWx+friendQq) + 明文 apiConfig（store 兼容路径自动加密升级））：
+  ①微信登录→通讯录›群聊→发起群聊→勾 2 人→创建→标题「红红、明仔的群聊(3)」✓
+  ②发消息→红红/明仔逐个流式回复（内容各含自己名字），绿泡右/白泡左+小尾巴+成员名 12px+居中时间 ✓
+  ③微信聊天信息页：成员格点+虚线＋/−、群聊名称/群头像/群公告/回复策略行式布局、互通+按成员覆盖、时间感知/置顶/免打扰、清空记录、红色「退出群聊」通栏——截图与参考图 1 布局一致 ✓
+  ④虚线－→移除成员页（红红/明仔 行+减号）✓
+  ⑤QQ 登录(90001)→联系人›群聊→发起群聊→创建→蓝泡回复 ✓
+  ⑥QQ 聊天信息页：头卡（拼贴+群名+群号：595033400+不允许被搜索）、成员卡（圆瓦片+邀请/移除圆钮）、设置/开关卡片、蓝「清空聊天记录」、红「解散群聊」——截图与参考图 2+3 一致 ✓
+  ⑦QQ 移除成员页（卡片式列表）✓
+  ⑧双宿主会话列表：群会话行（2×2 拼贴头像+「明仔：…」预览+时间）与私聊行并存 ✓
+  ⑨console 无错误；dev.log 中 /api/chat 502 为沙箱代理预期（直连 mock 兜底成功）
+Stage Summary:
+- 改动文件：src/components/apps/wx-group.tsx（信息页重排+移除页+聊天页细节）、src/components/apps/qq-group.tsx（信息页卡片化+群号+移除页+细节）；全部 testid 保持兼容（wx/qq-groupinfo-*、groupchat-*、groupmsg-*、group-at-*），新增 wx/qq-groupinfo-remove 与 wx/qq-group-remove-<cid>
+- 功能零改动：AI 管线/记忆互通/回复策略/长按菜单/置顶免打扰/解散逻辑全部原样，仅视觉与信息架构对齐真机参考图；群聊功能美化完成（group-15）
