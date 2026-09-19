@@ -5707,3 +5707,38 @@ Work Log:
 Stage Summary:
 - 改动文件：src/components/apps/wx-group.tsx（信息页重排+移除页+聊天页细节）、src/components/apps/qq-group.tsx（信息页卡片化+群号+移除页+细节）；全部 testid 保持兼容（wx/qq-groupinfo-*、groupchat-*、groupmsg-*、group-at-*），新增 wx/qq-groupinfo-remove 与 wx/qq-group-remove-<cid>
 - 功能零改动：AI 管线/记忆互通/回复策略/长按菜单/置顶免打扰/解散逻辑全部原样，仅视觉与信息架构对齐真机参考图；群聊功能美化完成（group-15）
+---
+Task ID: group-16
+Agent: Z.ai Code (main)
+Task: 微信群聊聊天界面 + 聊天设置（聊天信息）界面再美化——群聊页全部视觉规格对齐私聊页（wechat.tsx 现行视觉语言），设置页按真机卡片节奏重排并修公告省略号 bug
+
+Work Log:
+- 群聊页（WxGroupChatPage）对齐私聊视觉语言：
+  ①顶栏：去 border-b（与消息区/输入栏同色，同私聊）；标题 16px→17px font-medium；返回键 ChevronLeft 23px/2.2→28px/2；右上「…」文本轻钮→微信同款「···」三点圆点 glyph；标题旁新增免打扰 BellOff 小图标（chat 页新增 wxChatFlags 订阅，与私聊一致）
+  ②气泡：圆角 8px→5px、字号 15px→16px leading-[1.45]、尾巴 6px@top13→8px@top11（去 rounded-[1px]）、头像 36px/5px→38px/4px（WxAvatar 同比例）、dark peer 泡 #2C2C2C→#1E1E1E、me 泡补 dark:text-black、max-w 72%→calc(100%-92px)（与私聊同一几何）、气泡加 select-none
+  ③引用块（气泡内）：border-l-2 竖线式→私聊同款底色块（me: bg-black/[0.08]；peer: bg-black/[0.05] dark:bg-white/10）rounded-[4px] px-2 py-1 text-[12.5px] + line-clamp-2
+  ④流式气泡：等待首字时显示 3 个跳动打字点（6px bounce，与私聊「正在输入」同款），有内容后显示文本+闪烁光标；气泡/头像/尾巴规格同步 ②
+  ⑤文字规格：时间分隔/系统行/撤回行 11px/30→12px/35（撤回行同款胶囊）、空态 12px→13px、发言者名 45%→40%
+  ⑥输入区：容器 #F7F7F7+border-t→#EDEDED 无边框（同私聊）；内边距对齐 px-2.5 pb-[18px] pt-2 gap-2.5；@ 钮从灰底圆→私聊语音钮同款 35px 描边圆钮（展开时转绿）；输入框 shadcn Input→原生 input（h-9 rounded-[6px] border-black/10 bg-white text-[16px]，dark 同步）；草稿非空时右侧变私聊同款绿色「发送」文本按钮（rounded-[5px] px-3.5 py-1.5 active:bg-[#06AD56]），空闲时显示 Smile(25px)+CirclePlus(26px) 图标钮（点击 toast「群聊暂不支持表情/更多功能」，视觉对齐真微信但守住群聊范围限定）；引用条从整宽 border-b 行→私聊同款 rounded-[6px] 灰底卡（wx-group-quote-bar）
+  ⑦@ 浮层：bottom-[54px] 定位→容器 relative + bottom-full（锚定输入区上方，含引用条也不遮挡），atOpen 时 @ 钮转绿
+- 聊天设置页（WxGroupInfoPage）：
+  ①卡片重分组（真微信 8px 灰隙节奏）：群资料卡（群聊名称/群头像/群公告/回复策略）｜记忆互通卡（记忆与私聊互通+按成员覆盖互通）｜通用开关卡（时间感知/置顶聊天/消息免打扰）｜清空聊天记录｜退出群聊
+  ②行规格：InfoRow/SwitchRow 15px/32px→16px/py-[11px]（同 WxMenuRow），值文本 13→14px+max-w-[60%] truncate，chevron 16px/30%→18px/25% stroke2，caption 11→12px
+  ③Switch 选中色改微信绿 data-[state=checked]:bg-[#07C160]
+  ④修复：群公告值 ≤12 字也带「…」的 bug→仅超 12 字截断；群头像行 label 15→16px、chevron 对齐
+  ⑤退出群聊通栏 15→16px；覆盖互通 30px 小头像 6px→4px 圆角
+- GroupNavBar：返回键/标题规格同步（28px/2、17px）——建群页/群列表页/设置页三处一致
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+- E2E 实测（agent-browser 390×844 隔离会话 + 守护 mock :4100（group-15 遗留存活）；IndexedDB 直种 林川(user,13800001234/pw123456)+红红/明仔(char,friendWx+friendQq)+明文 apiConfig→mock）：
+  ①登录→通讯录›群聊→发起群聊→勾 2 人→创建→「红红、明仔的群聊(3)」✓
+  ②空态提示 13px ✓；草稿「晚上一起去打球吗？」→表情/加号消失变绿「发送」✓→发送→绿泡右侧+尾巴+居中时间，红红/明仔逐个流式回复（白泡+发言者名+尾巴），mock 日志 name=红红/明仔 group=true 共 6 回合 ✓
+  ③@ 浮层锚定输入区上方 ✓；@明仔 发送→明仔优先回复✓
+  ④长按气泡→复制/引用/撤回/删除 菜单✓→引用→新引用条灰底卡显示于输入区上方✓
+  ⑤聊天信息页两屏截图：成员格点+虚线＋−、群资料四行、互通卡+覆盖三态 pill、通用开关卡、清空红字、退出通栏——布局/字号/绿开关符合预期 ✓
+  ⑥互通开关开→绿色✓；红红强制互通→pill 变绿「强制互通」✓
+  ⑦暗色模式全页回归：群聊页（#111 底/#1E1E1E peer 泡/#3EB575 me 泡/暗输入栏）+信息页（暗卡+绿开关+暗 pill）✓，验证后恢复 light
+  ⑧console 零错误、errors 空；dev.log 仅沙箱 /api/chat 502 预期噪音（直连 mock 兜底成功）
+Stage Summary:
+- 改动文件：仅 src/components/apps/wx-group.tsx（imports 增 BellOff/CirclePlus/Smile、去 SendHorizontal；GroupNavBar/InfoRow/SwitchRow 三个通用小件升级；聊天页与信息页视觉全面对齐私聊）
+- 功能零改动：AI 管线/记忆互通/回复策略/长按菜单/置顶免打扰/解散逻辑/testid 全部原样（wx-groupchat-*、wx-groupmsg-*、wx-groupinfo-*、wx-group-* 兼容），新增 wx-groupchat-sticker/wx-groupchat-plus/wx-group-quote-bar
+- 视觉策略沉淀：群聊页此后与私聊页共享同一套气泡/输入栏规格（5px 圆角、38px 头像、8px 尾巴、16px 文本、#EDEDED 无边框输入栏、发送按钮文字化），后续改私聊样式时应同步群聊

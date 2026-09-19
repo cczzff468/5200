@@ -25,13 +25,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AtSign,
+  BellOff,
   Check,
   ChevronLeft,
   ChevronRight,
+  CirclePlus,
   Minus,
   Pencil,
   Plus,
-  SendHorizontal,
+  Smile,
   Trash2,
   UserMinus,
   UserPlus,
@@ -204,11 +206,11 @@ function GroupNavBar({ title, onBack, right }: { title: string; onBack: () => vo
           type="button"
           aria-label="返回"
           onClick={onBack}
-          className="-ml-1 p-1 text-black/75 active:opacity-50 dark:text-white/75"
+          className="-ml-1 flex items-center p-1 text-black/75 active:opacity-50 dark:text-white/75"
         >
-          <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
+          <ChevronLeft className="h-7 w-7" strokeWidth={2} />
         </button>
-        <div className="flex-1 truncate text-center text-[16px] font-medium">{title}</div>
+        <div className="flex-1 truncate text-center text-[17px] font-medium">{title}</div>
         <div className="flex min-w-[32px] items-center justify-end">{right}</div>
       </div>
     </div>
@@ -233,12 +235,12 @@ function InfoRow({
       type="button"
       onClick={onClick}
       data-testid={testId}
-      className={`flex w-full items-center gap-3 px-4 py-3 text-left ${onClick ? 'active:bg-black/5 dark:active:bg-white/5' : 'cursor-default'}`}
+      className={`flex w-full items-center gap-3 px-4 py-[11px] text-left ${onClick ? 'active:bg-black/[0.04] dark:active:bg-white/[0.06]' : 'cursor-default'}`}
     >
-      <span className={`text-[15px] ${danger ? 'text-[#FA5150]' : ''}`}>{label}</span>
-      <span className="ml-auto flex items-center gap-1 text-[13px] text-black/40 dark:text-white/40">
-        {value}
-        {onClick && <ChevronRight className="h-4 w-4" />}
+      <span className={`shrink-0 text-[16px] ${danger ? 'text-[#FA5150]' : ''}`}>{label}</span>
+      <span className="ml-auto flex min-w-0 max-w-[60%] items-center gap-1 text-[14px] text-black/40 dark:text-white/40">
+        <span className="truncate">{value}</span>
+        {onClick && <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />}
       </span>
     </button>
   );
@@ -258,13 +260,13 @@ function SwitchRow({
   testId?: string;
 }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    <div className="flex items-center gap-3 px-4 py-[11px]">
       <div className="min-w-0 flex-1">
-        <div className="text-[15px]">{label}</div>
-        {caption && <div className="mt-0.5 text-[11px] leading-snug text-black/40 dark:text-white/40">{caption}</div>}
+        <div className="text-[16px]">{label}</div>
+        {caption && <div className="mt-0.5 text-[12px] leading-snug text-black/40 dark:text-white/40">{caption}</div>}
       </div>
       <div className="shrink-0">
-        <Switch checked={checked} onCheckedChange={onChange} aria-label={label} data-testid={testId} />
+        <Switch checked={checked} onCheckedChange={onChange} aria-label={label} data-testid={testId} className="data-[state=checked]:bg-[#07C160]" />
       </div>
     </div>
   );
@@ -681,15 +683,15 @@ export function WxGroupInfoPage({
           onClick={() => fileRef.current?.click()}
           data-testid="wx-groupinfo-avatar"
         >
-          <span className="text-[15px]">群头像</span>
+          <span className="text-[16px]">群头像</span>
           <span className="ml-auto flex items-center gap-2">
             <GroupAvatar group={group} contacts={contacts} size={40} />
-            <ChevronRight className="h-4 w-4 text-black/30 dark:text-white/30" />
+            <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
           </span>
         </button>
         <InfoRow
           label="群公告"
-          value={group.announcement ? `${group.announcement.slice(0, 12)}…` : '未设置'}
+          value={group.announcement ? (group.announcement.length > 12 ? `${group.announcement.slice(0, 12)}…` : group.announcement) : '未设置'}
           onClick={() => setDialog({ kind: 'announcement' })}
           testId="wx-groupinfo-notice"
         />
@@ -699,6 +701,10 @@ export function WxGroupInfoPage({
           onClick={() => setPolicyOpen(true)}
           testId="wx-groupinfo-policy"
         />
+      </div>
+
+      {/* 记忆互通（按群开关 + 按成员覆盖） */}
+      <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
         <SwitchRow
           label="记忆与私聊互通"
           caption="开启后：群里发生的事，成员在私聊里也记得；成员的私聊记忆也会带进群聊。关闭则完全隔离（按群独立设置，下方可按成员覆盖）。"
@@ -713,16 +719,16 @@ export function WxGroupInfoPage({
         {members.length > 0 && (
           <div className="px-4 py-3">
             <div className="text-[13px] font-medium text-black/60 dark:text-white/60">按成员覆盖互通</div>
-            <div className="mt-1 text-[11px] leading-snug text-black/40 dark:text-white/40">
+            <div className="mt-1 text-[12px] leading-snug text-black/40 dark:text-white/40">
               缺省跟随上方群开关；可对单个成员强制互通或强制隔离（只影响 TA 在本群与私聊之间的记忆，不影响成员之间）。
             </div>
             <div className="mt-2 space-y-1.5">
               {members.map((m) => (
                 <div key={m.id} className="flex items-center gap-2.5">
                   {m.avatar ? (
-                    <img src={m.avatar} alt={m.name} className="h-[30px] w-[30px] shrink-0 rounded-[6px] object-cover" />
+                    <img src={m.avatar} alt={m.name} className="h-[30px] w-[30px] shrink-0 rounded-[4px] object-cover" />
                   ) : (
-                    <DefaultAvatar size={30} className="shrink-0 rounded-[6px]" />
+                    <DefaultAvatar size={30} className="shrink-0 rounded-[4px]" />
                   )}
                   <span className="min-w-0 flex-1 truncate text-[14px]">{memberNameOf(m)}</span>
                   <button
@@ -744,6 +750,10 @@ export function WxGroupInfoPage({
             </div>
           </div>
         )}
+      </div>
+
+      {/* 通用开关 */}
+      <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
         <SwitchRow
           label="时间感知"
           caption="让成员按当前时段与消息间隔感知时间（按群独立）"
@@ -772,7 +782,7 @@ export function WxGroupInfoPage({
         type="button"
         data-testid="wx-groupinfo-dissolve"
         onClick={() => setConfirmDissolve(true)}
-        className="mt-2 w-full bg-white py-[13px] text-center text-[15px] text-[#FA5150] active:bg-black/5 dark:bg-[#1A1A1A] dark:active:bg-white/5"
+        className="mt-2 w-full bg-white py-[13px] text-center text-[16px] text-[#FA5150] active:bg-black/5 dark:bg-[#1A1A1A] dark:active:bg-white/5"
       >
         退出群聊
       </button>
@@ -1014,6 +1024,9 @@ export function WxGroupChatPage({
 
   // 长按菜单
   const [menu, setMenu] = useState<null | { mid: string }>(null);
+  // 免打扰角标（标题旁 BellOff，与私聊一致）
+  const [flags, setFlags] = useState<ChatFlags>(() => wxChatFlags.get());
+  useEffect(() => wxChatFlags.subscribe(() => setFlags({ ...wxChatFlags.get() })), []);
 
   const members = useMemo(
     () =>
@@ -1320,23 +1333,31 @@ export function WxGroupChatPage({
 
   return (
     <div className="relative flex h-full flex-col bg-[#EDEDED] dark:bg-[#111111]">
-      {/* 顶栏 */}
-      <div className="shrink-0 border-b border-black/5 bg-[#EDEDED] pt-[54px] dark:border-white/10 dark:bg-[#111111]">
-        <div className="flex h-11 items-center px-3">
-          <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 p-1 text-black/75 active:opacity-50 dark:text-white/75">
-            <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
+      {/* 顶栏：与消息区/输入栏同色无边框（同私聊） */}
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" onClick={onBack} className="flex items-center px-1 active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
           </button>
-          <button type="button" onClick={onOpenInfo} data-testid="wx-groupchat-openinfo" className="flex min-w-0 flex-1 justify-center active:opacity-60">
-            <span className="max-w-[210px] truncate text-[16px] font-medium">{group.name}({members.length + 1})</span>
+          <button type="button" onClick={onOpenInfo} data-testid="wx-groupchat-openinfo" className="flex min-w-0 flex-1 items-center justify-center gap-1.5 active:opacity-60">
+            <span className="max-w-[220px] truncate text-[17px] font-medium">{group.name}({members.length + 1})</span>
+            {flags[groupRowId(gid)]?.muted === true && (
+              <BellOff className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
+            )}
           </button>
           <button
             type="button"
             aria-label="聊天信息"
             onClick={onOpenInfo}
             data-testid="wx-groupchat-info"
-            className="-mr-1 ml-auto px-1.5 py-1 text-[20px] font-light leading-none text-black/70 active:opacity-50 dark:text-white/70"
+            className="px-2 active:opacity-50"
           >
-            …
+            {/* 微信同款「···」三点图标 */}
+            <span className="flex items-center gap-[3px]" aria-hidden="true">
+              <span className="h-[4px] w-[4px] rounded-full bg-current opacity-70" />
+              <span className="h-[4px] w-[4px] rounded-full bg-current opacity-70" />
+              <span className="h-[4px] w-[4px] rounded-full bg-current opacity-70" />
+            </span>
           </button>
         </div>
       </div>
@@ -1344,7 +1365,7 @@ export function WxGroupChatPage({
       {/* 消息列表 */}
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="wx-groupchat-list">
         {msgs.length === 0 && (
-          <div className="pt-16 text-center text-[12px] leading-relaxed text-black/35 dark:text-white/35">
+          <div className="pt-16 text-center text-[13px] leading-relaxed text-black/35 dark:text-white/35">
             群聊已创建
             <br />
             发条消息打个招呼吧（@某位成员可让它优先回复）
@@ -1356,8 +1377,8 @@ export function WxGroupChatPage({
           if (m.kind === 'notice') {
             return (
               <div key={m.id} className="py-2 text-center">
-                {showTime && <div className="pb-1 text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
-                <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                {showTime && <div className="pb-1 text-[12px] text-black/35 dark:text-white/35">{fmtGroupTime(m.time)}</div>}
+                <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[12px] text-black/45 dark:bg-white/10 dark:text-white/45">
                   {m.noticeText ?? m.content}
                 </span>
               </div>
@@ -1368,35 +1389,44 @@ export function WxGroupChatPage({
           const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
           return (
             <div key={m.id} data-mid={m.id} {...bubblePress}>
-              {showTime && <div className="py-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+              {showTime && <div className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtGroupTime(m.time)}</div>}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                  <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[12px] text-black/45 dark:bg-white/10 dark:text-white/45">
                     {mine ? '你' : m.senderName || '有人'}撤回了一条消息
                   </span>
                 </div>
               ) : (
-                <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
+                <div className={`mb-3 flex items-start gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
                   {senderAvatar ? (
-                    <img src={senderAvatar} alt={mine ? me.name : m.senderName} className="h-9 w-9 shrink-0 rounded-[5px] object-cover" />
+                    <img src={senderAvatar} alt={mine ? me.name : m.senderName} className="h-[38px] w-[38px] shrink-0 rounded-[4px] object-cover" />
                   ) : (
-                    <DefaultAvatar size={36} className="shrink-0 rounded-[5px]" />
+                    <DefaultAvatar size={38} className="shrink-0 rounded-[4px]" />
                   )}
-                  <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                    {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">{m.senderName}</span>}
+                  <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">{m.senderName}</span>}
                     <div
-                      className={`relative ${mine ? 'rounded-[8px] bg-[#95EC69] dark:bg-[#3EB575]' : 'rounded-[8px] bg-white dark:bg-[#2C2C2C]'} px-3 py-2 text-[15px] leading-relaxed`}
+                      className={`relative select-none rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
+                        mine
+                          ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
+                          : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
+                      }`}
                       data-testid={mine ? 'wx-groupmsg-me' : 'wx-groupmsg-peer'}
                     >
+                      {/* 气泡小三角（微信同款，与私聊同规格） */}
                       <span
                         aria-hidden="true"
-                        className={`absolute top-[13px] h-[6px] w-[6px] rotate-45 rounded-[1px] ${
-                          mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#2C2C2C]'
+                        className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
+                          mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                         }`}
                       />
                       {m.quote && (
-                        <div className="mb-1 border-l-2 border-black/20 pl-2 text-[11px] leading-snug text-black/45 dark:border-white/25 dark:text-white/45">
-                          引用 {m.quote.name}：{m.quote.content}
+                        <div
+                          className={`mb-1 max-w-full overflow-hidden rounded-[4px] px-2 py-1 text-[12.5px] leading-[1.35] ${
+                            mine ? 'bg-black/[0.08] text-black/60' : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
+                          }`}
+                        >
+                          <p className="line-clamp-2 whitespace-pre-wrap break-all">引用 {m.quote.name}：{m.quote.content}</p>
                         </div>
                       )}
                       <span className="whitespace-pre-wrap break-words">{m.content}</span>
@@ -1407,79 +1437,121 @@ export function WxGroupChatPage({
             </div>
           );
         })}
-        {/* 流式气泡（当前发言角色） */}
+        {/* 流式气泡（当前发言角色）：等待首字时显示打字点（与私聊一致） */}
         {streaming && stream && (
-          <div className="mb-3 flex gap-2" data-testid="wx-group-stream">
+          <div className="mb-3 flex items-start gap-2" data-testid="wx-group-stream">
             {speaker?.avatar ? (
-              <img src={speaker.avatar} alt={memberNameOf(speaker)} className="h-9 w-9 shrink-0 rounded-[5px] object-cover" />
+              <img src={speaker.avatar} alt={memberNameOf(speaker)} className="h-[38px] w-[38px] shrink-0 rounded-[4px] object-cover" />
             ) : (
-              <DefaultAvatar size={36} className="shrink-0 rounded-[5px]" />
+              <DefaultAvatar size={38} className="shrink-0 rounded-[4px]" />
             )}
-            <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-              <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+            <div className="flex min-w-0 max-w-[calc(100%-92px)] flex-col items-start">
+              <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
                 {speaker ? memberNameOf(speaker) : '…'}
               </span>
-              <div className="relative rounded-[8px] bg-white px-3 py-2 text-[15px] leading-relaxed dark:bg-[#2C2C2C]">
-                <span aria-hidden="true" className="absolute -left-[3px] top-[13px] h-[6px] w-[6px] rotate-45 rounded-[1px] bg-white dark:bg-[#2C2C2C]" />
-                <span className="whitespace-pre-wrap break-words">{stream.content || '…'}</span>
-                <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />
+              <div className="relative rounded-[5px] bg-white px-3 py-2 text-[16px] leading-[1.45] dark:bg-[#1E1E1E]">
+                <span aria-hidden="true" className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]" />
+                {stream.content ? (
+                  <>
+                    <span className="whitespace-pre-wrap break-words">{stream.content}</span>
+                    <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />
+                  </>
+                ) : (
+                  <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">
+                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
+                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
+                    <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
+                  </span>
+                )}
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* 输入区 */}
-      <div className="shrink-0 border-t border-black/5 bg-[#F7F7F7] dark:border-white/10 dark:bg-[#1A1A1A]">
+      {/* 输入区：与私聊同款（灰底无边框；@ 描边圆钮；草稿非空变绿色「发送」） */}
+      <div className="relative z-10 shrink-0 bg-[#EDEDED] dark:bg-[#111111]">
         {quote && (
-          <div className="flex items-center gap-2 border-b border-black/5 px-3 py-1.5 text-[12px] text-black/50 dark:border-white/10 dark:text-white/50">
-            <span className="min-w-0 flex-1 truncate">引用 {quote.name}：{quote.content}</span>
-            <button type="button" aria-label="取消引用" onClick={() => setQuote(null)} className="shrink-0 active:opacity-60">
-              <X className="h-3.5 w-3.5" />
-            </button>
+          <div className="px-2.5 pt-2" data-testid="wx-group-quote-bar">
+            <div className="flex items-start gap-2 rounded-[6px] bg-black/[0.05] px-2.5 py-1.5 dark:bg-white/[0.08]">
+              <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-black/55 dark:text-white/55">
+                引用 {quote.name}：{quote.content}
+              </p>
+              <button type="button" aria-label="取消引用" onClick={() => setQuote(null)} className="shrink-0 text-black/35 active:opacity-60 dark:text-white/35">
+                <X className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </div>
           </div>
         )}
-        <div className="flex items-center gap-2 px-3 py-2">
-          <button
-            type="button"
-            aria-label="提及成员"
-            data-testid="wx-groupchat-at"
-            onClick={() => setAtOpen((v) => !v)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/5 text-black/55 active:opacity-60 dark:bg-white/10 dark:text-white/55"
-          >
-            <AtSign className="h-[18px] w-[18px]" />
-          </button>
-          <Input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder={streaming ? '成员回复中…' : '发消息…@ 可点名'}
-            disabled={streaming || runningRef.current}
-            className="h-9 flex-1 rounded-[8px] bg-white text-[15px] dark:bg-[#2C2C2C]"
-            data-testid="wx-groupchat-input"
-          />
-          <button
-            type="button"
-            onClick={send}
-            disabled={streaming || !draft.trim()}
-            data-testid="wx-groupchat-send"
-            aria-label="发送"
-            className="flex h-9 shrink-0 items-center gap-1 rounded-[8px] bg-[#07C160] px-3.5 text-[14px] font-medium text-white active:opacity-80 disabled:opacity-40"
-          >
-            <SendHorizontal className="h-4 w-4" />
-          </button>
+        <div className="px-2.5 pb-[18px] pt-2">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              aria-label="提及成员"
+              data-testid="wx-groupchat-at"
+              aria-expanded={atOpen}
+              onClick={() => setAtOpen((v) => !v)}
+              className={`shrink-0 active:opacity-70 ${atOpen ? 'text-[#07C160]' : ''}`}
+            >
+              <span className="flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.7px] border-black/75 text-black/85 transition-colors active:bg-black/[0.06] dark:border-white/70 dark:text-white/85 dark:active:bg-white/10">
+                <AtSign className="h-[19px] w-[19px]" strokeWidth={2} />
+              </span>
+            </button>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              placeholder={streaming || runningRef.current ? '成员回复中…' : '发消息…'}
+              disabled={streaming || runningRef.current}
+              data-testid="wx-groupchat-input"
+              className="h-9 min-w-0 flex-1 rounded-[6px] border border-black/10 bg-white px-3 text-[16px] outline-none disabled:opacity-60 dark:border-white/15 dark:bg-[#1A1A1A]"
+            />
+            {draft.trim() ? (
+              <button
+                type="button"
+                onClick={send}
+                disabled={streaming || runningRef.current}
+                data-testid="wx-groupchat-send"
+                aria-label="发送"
+                className="shrink-0 rounded-[5px] bg-[#07C160] px-3.5 py-1.5 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+              >
+                发送
+              </button>
+            ) : (
+              <div className="flex shrink-0 items-center gap-[13px] text-black/80 dark:text-white/80">
+                <button
+                  type="button"
+                  aria-label="表情"
+                  data-testid="wx-groupchat-sticker"
+                  onClick={() => onToast('群聊暂不支持表情')}
+                  className="active:opacity-60"
+                >
+                  <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="更多功能"
+                  data-testid="wx-groupchat-plus"
+                  onClick={() => onToast('群聊暂不支持更多功能')}
+                  className="active:opacity-60"
+                >
+                  <CirclePlus className="h-[26px] w-[26px]" strokeWidth={1.5} />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        {/* @ 成员浮层 */}
+        {/* @ 成员浮层：锚定输入区容器上方（含引用条） */}
         {atOpen && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
-            <div className="absolute bottom-[54px] left-3 z-40 w-[220px] overflow-hidden rounded-[10px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2C2C2C]">
+            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[10px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2C2C2C]">
               <div className="border-b border-black/5 px-3 py-2 text-[11px] text-black/40 dark:border-white/10 dark:text-white/40">
                 @ 群成员（被 @ 的优先回复）
               </div>
