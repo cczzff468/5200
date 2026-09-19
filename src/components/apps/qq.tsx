@@ -1330,8 +1330,80 @@ function QqStickerAddForm({
   );
 }
 
-/** QQ 聊天表情面板（点选发送 + 内嵌添加 + 管理删除；数据 qq-stickers） */
-function QqStickerPanel({
+/** 图片消息气泡（单聊/群聊共用：固定像素上限，圆角同气泡） */
+export function QqImageBubble({ src, testId }: { src: string; testId?: string }) {
+  return (
+    <img
+      src={src}
+      alt="图片消息"
+      data-testid={testId}
+      className="max-h-[210px] w-auto max-w-[160px] rounded-[18px] object-cover"
+    />
+  );
+}
+
+/** 表情包消息气泡（单聊/群聊共用：点按提示表情含义） */
+export function QqStickerBubble({
+  url,
+  meaning,
+  onClick,
+  testId = 'qq-sticker-bubble',
+}: {
+  url: string;
+  meaning: string;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onClick}
+      className="active:opacity-80"
+      title={meaning || '表情'}
+    >
+      <img
+        src={url}
+        alt={meaning ? `表情：${meaning}` : '表情'}
+        className="max-h-[110px] w-auto max-w-[118px] rounded-[14px] object-contain"
+        loading="lazy"
+      />
+    </button>
+  );
+}
+
+/** 加号面板宫格（单聊/群聊共用：彩色圆角瓷贴 + 白色图标，对照新版 QQ 更多面板） */
+export function QqPlusGrid({
+  items,
+}: {
+  items: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }>;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-y-6">
+      {items.map((it) => (
+        <button
+          key={it.key}
+          type="button"
+          data-testid={`qq-plus-${it.key}`}
+          onClick={it.onClick}
+          className="flex flex-col items-center gap-2 transition-transform active:scale-95"
+        >
+          <span
+            className="grid h-[52px] w-[52px] place-items-center rounded-[15px] text-white shadow-[0_2px_10px_rgba(0,0,0,0.10)]"
+            style={{ backgroundColor: it.color }}
+            aria-hidden="true"
+          >
+            {it.icon}
+          </span>
+          <span className="text-[12px] text-[#1F2329] dark:text-white/85">{it.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** QQ 聊天表情面板（点选发送 + 内嵌添加 + 管理删除；数据 qq-stickers；单聊/群聊共用同一套） */
+export function QqStickerPanel({
   onPick,
   onClose,
   onToast,
@@ -1412,7 +1484,11 @@ function QqStickerPanel({
   };
 
   return (
-    <div className="relative shrink-0 border-t border-black/[0.05] bg-white dark:border-white/[0.06] dark:bg-[#1B1C1F]" data-testid="qq-sticker-panel">
+    <div
+      className="relative shrink-0 border-t border-black/[0.05] bg-white dark:border-white/[0.06] dark:bg-[#1B1C1F]"
+      style={{ animation: 'qqPanelIn 0.24s ease-out' }}
+      data-testid="qq-sticker-panel"
+    >
       <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
         <p className="text-[15px] font-medium">表情</p>
         <div className="flex items-center gap-4">
@@ -2880,8 +2956,8 @@ function ChatPage({
         swipe.current = null;
       }}
     >
-      {/* 正在输入三点跳动动画（气泡内圆点上下弹跳） */}
-      <style>{'@keyframes qqTypingDot{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}'}</style>
+      {/* 正在输入三点跳动动画 + 面板上浮动画（qqPanelIn：加号面板/表情面板共用） */}
+      <style>{'@keyframes qqTypingDot{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}@keyframes qqPanelIn{from{transform:translateY(65%);opacity:.35}to{transform:translateY(0);opacity:1}}'}</style>
       {/* 聊天背景层（聊天设置页设置：纯色/图片；顶栏与输入栏自身有底色，不受影响） */}
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
@@ -3061,25 +3137,15 @@ function ChatPage({
                   </div>
                 ) : m.kind === 'image' ? (
                   <div {...bubblePress} className="min-w-0">
-                    {/* 固定像素上限（calc 百分比在 flex 包裹层内会循环解析导致图片缩小且不贴边）；再缩小一档（用户反馈仍偏大） */}
-                    <img src={m.content} alt="图片消息" className="max-h-[210px] w-auto max-w-[160px] rounded-[18px] object-cover" />
+                    <QqImageBubble src={m.content} />
                   </div>
                 ) : m.kind === 'sticker' && m.stk ? (
                   <div {...bubblePress}>
-                    <button
-                      type="button"
-                      data-testid="qq-sticker-bubble"
+                    <QqStickerBubble
+                      url={m.stk.url}
+                      meaning={m.stk.meaning}
                       onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
-                      className="active:opacity-80"
-                      title={m.stk.meaning || '表情'}
-                    >
-                      <img
-                        src={m.stk.url}
-                        alt={m.stk.meaning ? `表情：${m.stk.meaning}` : '表情'}
-                        className="max-h-[110px] w-auto max-w-[118px] rounded-[14px] object-contain"
-                        loading="lazy"
-                      />
-                    </button>
+                    />
                   </div>
                 ) : m.kind === 'forward' && m.fwd?.merged ? (
                   /* 合并转发「聊天记录」卡片（原生同款：两面都白底）：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
@@ -3300,8 +3366,10 @@ function ChatPage({
               if (input.trim()) void send();
               else dispatchBatch();
             }}
-            className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white ${
-              (input.trim() || canDispatch) && !streaming ? 'active:brightness-95' : 'opacity-90'
+            className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
+              (input.trim() || canDispatch) && !streaming
+                ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95'
+                : 'opacity-90'
             }`}
             style={{ backgroundColor: (input.trim() || canDispatch) && !streaming ? QQ_BLUE : '#8AD4F7' }}
           >
@@ -3309,16 +3377,16 @@ function ChatPage({
           </button>
         </div>
         <div className="flex items-center justify-between px-7 pb-[18px] pt-2 text-black/80 dark:text-white/80">
-          <button type="button" aria-label="语音" onClick={() => onToast('语音暂未开放')} className="active:opacity-60">
+          <button type="button" aria-label="语音" onClick={() => onToast('语音暂未开放')} className="p-2 -m-2 active:opacity-60">
             <Mic className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
-          <button type="button" aria-label="图片" data-testid="qq-tool-image" onClick={() => fileRef.current?.click()} className="active:opacity-60">
+          <button type="button" aria-label="图片" data-testid="qq-tool-image" onClick={() => fileRef.current?.click()} className="p-2 -m-2 active:opacity-60">
             <ImageIcon className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
-          <button type="button" aria-label="拍摄" data-testid="qq-tool-camera" onClick={() => cameraInputRef.current?.click()} className="active:opacity-60">
+          <button type="button" aria-label="拍摄" data-testid="qq-tool-camera" onClick={() => cameraInputRef.current?.click()} className="p-2 -m-2 active:opacity-60">
             <Camera className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
-          <button type="button" aria-label="点缀" onClick={() => onToast('点缀暂未开放')} className="active:opacity-60">
+          <button type="button" aria-label="点缀" onClick={() => onToast('点缀暂未开放')} className="p-2 -m-2 active:opacity-60">
             <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
           <button
@@ -3330,7 +3398,7 @@ function ChatPage({
               setPlusOpen(false);
               setStickerOpen((v) => !v);
             }}
-            className="active:opacity-60"
+            className="p-2 -m-2 active:opacity-60"
           >
             <Smile className={`h-[25px] w-[25px] ${stickerOpen ? 'text-[#0099FF]' : ''}`} strokeWidth={1.8} aria-hidden="true" />
           </button>
@@ -3343,24 +3411,14 @@ function ChatPage({
               setStickerOpen(false);
               setPlusOpen((v) => !v);
             }}
-            className="active:opacity-60"
+            className="p-2 -m-2 active:opacity-60"
           >
-            <Plus className="h-[26px] w-[26px]" strokeWidth={1.8} aria-hidden="true" />
+            <Plus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
         {plusOpen ? (
           <div data-testid="qq-plus-panel" className="border-t border-black/[0.05] px-5 pb-6 pt-5 dark:border-white/[0.06]" style={{ animation: 'qqPanelIn 0.24s ease-out' }}>
-            <style>{'@keyframes qqPanelIn{from{transform:translateY(65%);opacity:.35}to{transform:translateY(0);opacity:1}}'}</style>
-            <div className="grid grid-cols-3 gap-y-6">
-              {plusItems.map((it) => (
-                <button key={it.key} type="button" data-testid={`qq-plus-${it.key}`} onClick={it.onClick} className="flex flex-col items-center gap-2 active:opacity-60">
-                  <span className="grid h-[46px] w-[46px] place-items-center" style={{ color: it.color }} aria-hidden="true">
-                    {it.icon}
-                  </span>
-                  <span className="text-[12px] text-[#1F2329] dark:text-white/85">{it.label}</span>
-                </button>
-              ))}
-            </div>
+            <QqPlusGrid items={plusItems} />
           </div>
         ) : null}
         {stickerOpen ? (
@@ -3906,8 +3964,8 @@ function ChatPage({
 
 // ---------------- 红包 / 转账（聊天加号面板 → 发送卡片 → 点击进详情） ----------------
 
-/** 红包小图标（加号面板用，红色信封） */
-function RpIcon({ className = '' }: { className?: string }) {
+/** 红包小图标（加号面板用，红色信封；单聊/群聊共用） */
+export function RpIcon({ className = '' }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="4" y="3" width="16" height="18" rx="2.5" />
@@ -4803,8 +4861,8 @@ function MapPreview({ label, className = '' }: { label?: string; className?: str
   );
 }
 
-/** 聊天中的位置卡片（上地图下信息，对照 QQ 位置消息） */
-function LocationBubble({ loc, onClick }: { loc: MsgLoc; onClick: () => void }) {
+/** 聊天中的位置卡片（上地图下信息，对照 QQ 位置消息；单聊/群聊共用） */
+export function LocationBubble({ loc, onClick }: { loc: MsgLoc; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -4833,8 +4891,8 @@ const LOC_PRESETS: Array<{ name: string; addr: string; dist: string }> = [
   { name: '陆家嘴环球金融中心', addr: '上海市浦东新区世纪大道100号', dist: '1640公里' },
 ];
 
-/** 发送位置页（内置地点一键发送 + 自定义位置表单，发送后聊天内出现位置卡片） */
-function LocationPickerPage({ onClose, onSend }: { onClose: () => void; onSend: (loc: MsgLoc) => void }) {
+/** 发送位置页（内置地点一键发送 + 自定义位置表单，发送后聊天内出现位置卡片；单聊/群聊共用） */
+export function LocationPickerPage({ onClose, onSend }: { onClose: () => void; onSend: (loc: MsgLoc) => void }) {
   const [custom, setCustom] = useState(false);
   const [name, setName] = useState('');
   const [addr, setAddr] = useState('');

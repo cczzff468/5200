@@ -7,6 +7,8 @@
  * - QqGroupCreatePage  建群：多选 QQ 好友 + 群名（默认按成员名生成）；
  * - QqGroupChatPage    群聊页：气泡（发言者名+头像）/ @某成员优先回复 / 长按菜单（复制/引用/撤回/删除）/
  *                      流式气泡（当前发言角色）/ 多角色逐个顺序回复；
+ *                      输入与单聊完全对齐（表情包/加号面板/图片/相机/位置，共用同一套组件）；
+ *                      聊天背景按群独立（入口在聊天信息页，与单聊同款 ChatBgPage）；
  * - QqGroupInfoPage    群聊信息：成员管理（邀请/移出）、群名、群公告、群头像、
  *                      记忆与私聊互通开关（按群独立）、置顶/免打扰、时间感知、清空记录、解散并退出群聊。
  *
@@ -18,24 +20,33 @@
  *   机主与其他成员的历史消息一律映射为「发言者：内容」的 user 消息；
  * - finalize：回复落盘（senderId 区分发言人）+ 未读 + memAfterAiTurn（roundScope 按群隔离，
  *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）。
- * - 范围限定：群内不提供红包/转账/亲属卡等资金功能；表情包/识图等私聊特性不进入群聊管线。
+ * - 范围限定：群内不提供红包/转账/亲属卡等资金功能（加号入口仅提示）；用户可发表情包/图片/位置，
+ *   AI 成员不主动发送富媒体。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeftRight,
   AtSign,
+  Camera,
   Check,
   ChevronLeft,
   ChevronRight,
+  Image as ImageIcon,
   Lock,
+  MapPin,
+  Mic,
   Minus,
   Pencil,
+  Phone,
   Plus,
-  SendHorizontal,
+  Sparkles,
+  Smile,
   Trash2,
   UserMinus,
   UserPlus,
   Users,
+  Video,
   X,
 } from 'lucide-react';
 import {
@@ -47,7 +58,7 @@ import {
 import { displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
-import { contactRealName, ownerRealName } from '@/lib/ios/contacts-store';
+import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
 import { genId } from '@/lib/ios/db';
 import {
   addGroupMember,
@@ -65,7 +76,18 @@ import {
   type WxGroupMsg,
 } from '@/lib/ios/groups';
 import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
-import { ChatToggle } from '@/components/apps/chat-settings';
+import { ChatBgPage, ChatToggle, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
+import type { Sticker } from '@/lib/ios/stickers';
+import { readImageFile } from './wechat';
+import {
+  LocationBubble,
+  LocationPickerPage,
+  QqImageBubble,
+  QqPlusGrid,
+  QqStickerBubble,
+  QqStickerPanel,
+  RpIcon,
+} from './qq';
 import { qqUnreads } from '@/lib/unread-store';
 import { memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -485,6 +507,47 @@ export function QqGroupInfoPage({
   const [flags, setFlags] = useState<ChatFlags>(() => qqChatFlags.get());
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   const fileRef = useRef<HTMLInputElement>(null);
+  const [bgOpen, setBgOpen] = useState(false);
+
+  // ---- 聊天背景（按群独立：标志在 qqChatFlags 的 group:<gid> 键，图片本体在 IndexedDB；与单聊互不影响） ----
+  const rowFlags = flags[qqGroupRowId(gid)];
+  const bgMode = rowFlags?.bgMode ?? 'default';
+  const bg: ChatSettingsBg = { mode: bgMode, color: rowFlags?.bgColor ?? '' };
+  const [bgImageUrl, setBgImageUrl] = useState<string | null>(null);
+  const [uploadingBg, setUploadingBg] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    if (bgMode === 'image') {
+      void getChatBgImage('qq', `group:${gid}`).then((d) => {
+        if (alive) setBgImageUrl(d);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [bgMode, rowFlags?.bgV, gid]);
+
+  const handlePickBgColor = (c: string) => {
+    qqChatFlags.update(qqGroupRowId(gid), { bgMode: 'color', bgColor: c, bgV: Date.now() });
+  };
+  const handleResetBg = () => {
+    void removeChatBgImage('qq', `group:${gid}`).catch(() => undefined);
+    qqChatFlags.update(qqGroupRowId(gid), { bgMode: 'default', bgV: Date.now() });
+  };
+  const handleUploadBg = async (file: File) => {
+    setUploadingBg(true);
+    try {
+      const data = await readImageFile(file, 1280);
+      await setChatBgImage('qq', `group:${gid}`, data);
+      qqChatFlags.update(qqGroupRowId(gid), { bgMode: 'image', bgV: Date.now() });
+      onToast('聊天背景已更新');
+    } catch {
+      onToast('图片处理失败，请重试');
+    } finally {
+      setUploadingBg(false);
+    }
+  };
 
   const members = useMemo(
     () => group.memberIds.map((id) => contacts.find((c) => c.id === id)).filter((c): c is ContactRecord => !!c),
@@ -628,6 +691,22 @@ export function QqGroupInfoPage({
           onClick={() => setDialog({ kind: 'announcement' })}
           testId="qq-groupinfo-notice"
         />
+        <button
+          type="button"
+          data-testid="qq-groupinfo-bg"
+          onClick={() => setBgOpen(true)}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05]"
+        >
+          <span className="shrink-0 text-[15px]">聊天背景</span>
+          <span className="ml-auto flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="h-[22px] w-[22px] rounded-[5px] border border-black/10 bg-cover bg-center dark:border-white/15"
+              style={chatBgLayerStyle(bg, bgImageUrl) ?? { backgroundColor: '#F5F6F7' }}
+            />
+            <ChevronRight className="h-4 w-4" />
+          </span>
+        </button>
         <SwitchRow
           label="记忆与私聊互通"
           caption="开启后：群里发生的事，成员在私聊里也记得；成员的私聊记忆也会带进群聊。关闭则完全隔离（按群独立设置）。"
@@ -815,6 +894,22 @@ export function QqGroupInfoPage({
           }}
         />
       )}
+
+      {/* 聊天背景页（与单聊同一套 ChatBgPage；按群隔离持久化，与单聊背景互不影响） */}
+      {bgOpen && (
+        <div className="fixed inset-0 z-50">
+          <ChatBgPage
+            variant="qq"
+            bg={bg}
+            bgImageUrl={bgImageUrl}
+            uploading={uploadingBg}
+            onBack={() => setBgOpen(false)}
+            onPickColor={handlePickBgColor}
+            onPickImageFile={(f) => void handleUploadBg(f)}
+            onResetBg={handleResetBg}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -859,6 +954,9 @@ export function QqGroupChatPage({
   const [draft, setDraft] = useState('');
   const [quote, setQuote] = useState<{ name: string; content: string } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
+  const [stickerOpen, setStickerOpen] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [compose, setCompose] = useState<'location' | null>(null);
   const [speakerId, setSpeakerId] = useState<string | null>(() => groupSpeaker.get(sKey) ?? null);
   const stream = useChatStream(sKey);
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -866,6 +964,8 @@ export function QqGroupChatPage({
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const contactsRef = useRef(contacts);
   contactsRef.current = contacts;
   const groupRef = useRef(group);
@@ -873,6 +973,23 @@ export function QqGroupChatPage({
 
   // 长按菜单
   const [menu, setMenu] = useState<null | { mid: string }>(null);
+  // 聊天背景（按群独立：标志在 qqChatFlags 的 group:<gid> 键，图片本体在 IndexedDB；与单聊互不影响）
+  const [flags, setFlags] = useState<ChatFlags>(() => qqChatFlags.get());
+  useEffect(() => qqChatFlags.subscribe(() => setFlags({ ...qqChatFlags.get() })), []);
+  const bgMode = flags[qqGroupRowId(gid)]?.bgMode ?? 'default';
+  const bg: ChatSettingsBg = { mode: bgMode, color: flags[qqGroupRowId(gid)]?.bgColor ?? '' };
+  const [bgImageUrl, setBgImageUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (bgMode === 'image') {
+      void getChatBgImage('qq', `group:${gid}`).then((d) => {
+        if (alive) setBgImageUrl(d);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [bgMode, flags[qqGroupRowId(gid)]?.bgV, gid]);
 
   const members = useMemo(
     () =>
@@ -932,10 +1049,34 @@ export function QqGroupChatPage({
   const parseMentions = (text: string): ContactRecord[] =>
     members.filter((c) => text.includes(`@${memberNameOf(c)}`));
 
+  /** 消息进入 AI 上下文的文本快照（图片/位置/表情包有占位描述，与单聊一致） */
+  const msgTextOf = (m: WxGroupMsg): string => {
+    if (m.kind === 'image') return '[图片]';
+    if (m.kind === 'sticker' && m.stk) {
+      return m.role === 'me'
+        ? `[发送了表情：${m.stk.meaning || '无描述'}]`
+        : `[表情]${m.stk.meaning ? ` ${m.stk.meaning}` : ''}`;
+    }
+    if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`;
+    return m.content;
+  };
+
+  /** 消息的可复制文本快照（长按菜单复制用） */
+  const msgSnapshotOf = (m: WxGroupMsg): string =>
+    m.kind === 'image'
+      ? '[图片]'
+      : m.kind === 'sticker' && m.stk
+        ? m.stk.meaning
+          ? `[表情] ${m.stk.meaning}`
+          : '[表情]'
+        : m.kind === 'location' && m.loc
+          ? `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`
+          : m.content;
+
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
   const runCharTurn = useCallback(
-    (char: ContactRecord, allowSkip: boolean) =>
+    (char: ContactRecord, allowSkip: boolean, turnImages: string[]) =>
       new Promise<void>((resolve) => {
         const g = getGroup(gid);
         if (!g) {
@@ -947,17 +1088,17 @@ export function QqGroupChatPage({
         const ctxMsgs = loadGroupMsgs(gid)
           .filter((m) => m.kind !== 'notice' && !m.recalled)
           .slice(-24);
-        // 上下文映射：自己 → assistant；机主/其他成员 → 「发言者：内容」user 消息
+        // 上下文映射：自己 → assistant；机主/其他成员 → 「发言者：内容」user 消息（富媒体按占位文本）
         const history: ChatPayloadMessage[] = ctxMsgs.map((m): ChatPayloadMessage => {
           if (m.role === 'me') {
-            const content = `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${m.content}`;
+            const content = `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${msgTextOf(m)}`;
             return { role: 'user', content: `${meName}：${content}` };
           }
-          if (m.senderId === char.id) return { role: 'assistant', content: m.content };
-          return { role: 'user', content: `${m.senderName || '成员'}：${m.content}` };
+          if (m.senderId === char.id) return { role: 'assistant', content: msgTextOf(m) };
+          return { role: 'user', content: `${m.senderName || '成员'}：${msgTextOf(m)}` };
         });
         const lastUserText = [...ctxMsgs].reverse().find((m) => m.role === 'me')?.content ?? '';
-        const memContext = [lastUserText, ...ctxMsgs.slice(-6).map((m) => m.content)].filter(Boolean).join(' ');
+        const memContext = [lastUserText, ...ctxMsgs.slice(-6).map(msgTextOf)].filter(Boolean).join(' ');
 
         // 群聊规则（每个角色独立声明：当前是群聊、参与者有谁、只代表自己、禁复读、可互相对话）
         const others = g.memberIds
@@ -968,7 +1109,7 @@ export function QqGroupChatPage({
           `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户）${
             others.length ? '、' + others.map(memberNameOf).join('、') : ''
           }。你以「${charName}」的身份参与其中。`,
-          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。',
+          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」是图片/位置/表情包消息，请自然理解并回应。',
           '只以「' + charName + '」的身份和口吻发言，绝不替其他成员发言、代答或描写他们的言行。',
           '不复制、不复述、不换说法重复其他成员刚说过的内容（群里最忌跟风复读）。',
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
@@ -1027,6 +1168,8 @@ export function QqGroupChatPage({
           aiMsgId: genId(),
           messages,
           apiConfig,
+          // 配置识图模型后：群里发的图片先识图，成员结合图片按人设回复（与单聊同管线）
+          ...(turnImages.length > 0 ? { vision: { images: turnImages, text: lastUserText } } : {}),
           finalize: (result) => {
             const text = (result.content ?? '').trim();
             // 人设自判沉默：整条回复是 [SKIP] 标记 → 不落盘、不提取记忆（本轮对 TA 没有发生任何社交事件）
@@ -1057,8 +1200,8 @@ export function QqGroupChatPage({
                       .slice(-30)
                       .map((m) =>
                         m.role === 'me'
-                          ? { role: 'me' as const, text: m.content }
-                          : { role: 'peer' as const, text: `${m.senderName}：${m.content}` }
+                          ? { role: 'me' as const, text: msgTextOf(m) }
+                          : { role: 'peer' as const, text: `${m.senderName}：${msgTextOf(m)}` }
                       ),
                   undefined,
                   { user: u, peer: p },
@@ -1090,11 +1233,19 @@ export function QqGroupChatPage({
         const mentioned = parseMentions(myMsg.content);
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
+        // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则）
+        const turnImages: string[] = [];
+        const persisted = loadGroupMsgs(gid);
+        for (let i = persisted.length - 1; i >= 0 && turnImages.length < 3; i--) {
+          const m = persisted[i];
+          if (m.role !== 'me') break;
+          if (m.kind === 'image' && m.img?.src) turnImages.unshift(m.img.src);
+        }
         for (const char of ordered) {
           if (!getGroup(gid)) break; // 群已被解散
           groupSpeaker.set(sKey, char.id);
           if (mountedRef.current) setSpeakerId(char.id);
-          await runCharTurn(char, !mentioned.includes(char));
+          await runCharTurn(char, !mentioned.includes(char), turnImages);
           await sleep(420);
         }
       } finally {
@@ -1128,6 +1279,99 @@ export function QqGroupChatPage({
     void runGroupTurn(msg);
   };
 
+  /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；配置识图模型后触发群回合） */
+  const sendImageFiles = async (files: FileList) => {
+    if (runningRef.current || isChatStreaming(sKey)) {
+      onToast('成员们还在回复，稍等一下');
+      return;
+    }
+    const created: WxGroupMsg[] = [];
+    for (const f of Array.from(files).slice(0, 9)) {
+      try {
+        const d = await readImageFile(f);
+        created.push({
+          id: uid(),
+          role: 'me',
+          senderId: 'me',
+          senderName: me.name,
+          content: '',
+          time: Date.now(),
+          kind: 'image',
+          img: { src: d },
+        });
+      } catch {
+        onToast('图片发送失败');
+      }
+    }
+    for (const m of created) appendMsg(m);
+    if (created.length > 0 && useSettings.getState().visionConfig.baseUrl.trim()) {
+      void runGroupTurn(created[created.length - 1]);
+    }
+  };
+
+  /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应） */
+  const sendSticker = (s: Sticker) => {
+    setStickerOpen(false);
+    if (runningRef.current || isChatStreaming(sKey)) {
+      onToast('成员们还在回复，稍等一下');
+      return;
+    }
+    const msg: WxGroupMsg = {
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'sticker',
+      stk: { url: s.url, meaning: s.meaning },
+    };
+    appendMsg(msg);
+    void runGroupTurn(msg);
+  };
+
+  /** 发送位置卡片消息（内置地点/自定义位置；群里所有角色都能看到） */
+  const sendLocation = (name: string, address: string) => {
+    setPlusOpen(false);
+    setCompose(null);
+    if (runningRef.current || isChatStreaming(sKey)) {
+      onToast('成员们还在回复，稍等一下');
+      return;
+    }
+    const msg: WxGroupMsg = {
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'location',
+      loc: { name, address },
+    };
+    appendMsg(msg);
+    void runGroupTurn(msg);
+  };
+
+  // 加号面板五宫格（与单聊完全一致的入口与配色；红包/转账按群范围限定仅提示）
+  const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
+    { key: 'call', label: '语音通话', color: '#2FBF71', icon: <Phone className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('语音通话暂未开放') },
+    { key: 'video', label: '视频通话', color: '#1B9FF0', icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('视频通话暂未开放') },
+    { key: 'rp', label: '红包', color: '#F5455C', icon: <RpIcon className="h-[26px] w-[26px]" />, onClick: () => onToast('群聊暂不支持红包/转账') },
+    { key: 'transfer', label: '转账', color: '#12B7F5', icon: <ArrowLeftRight className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('群聊暂不支持红包/转账') },
+    {
+      key: 'loc',
+      label: '位置',
+      color: '#F0605C',
+      icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        setStickerOpen(false);
+        setAtOpen(false);
+        setPlusOpen(false);
+        setCompose('location');
+      },
+    },
+  ];
+
   // 长按菜单动作
   const menuMsg = menu ? msgs.find((m) => m.id === menu.mid) ?? null : null;
   const menuItems: BubbleMenuItem[] = useMemo(() => {
@@ -1153,7 +1397,7 @@ export function QqGroupChatPage({
     setMenu(null);
     setMenuRect(null);
     if (key === 'copy') {
-      copyText(menuMsg.content, onToast);
+      copyText(msgSnapshotOf(menuMsg), onToast);
     } else if (key === 'quote') {
       setQuote({ name: menuMsg.role === 'me' ? '我' : menuMsg.senderName, content: menuMsg.content });
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -1176,10 +1420,32 @@ export function QqGroupChatPage({
   const speaker = speakerId ? memberById.get(speakerId) ?? null : null;
   const streaming = stream?.status === 'streaming';
 
+  /** 富媒体消息行（图片/位置/表情包）：与文字行同一套头像/名字/宽度几何 */
+  const renderMsgRow = (m: WxGroupMsg, media: React.ReactNode) => {
+    const mine = m.role === 'me';
+    const sender = mine ? null : m.senderId === 'unknown' ? null : memberById.get(m.senderId) ?? null;
+    const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
+    return (
+      <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
+        <QqAvatar src={senderAvatar} alt={mine ? me.name : m.senderName} size={40} />
+        <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+          {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">{m.senderName}</span>}
+          {media}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="relative flex h-full flex-col bg-[#F5F6F7] dark:bg-[#111214]">
+      {/* 面板上浮动画（加号/表情面板，与单聊共用同一套 keyframes） */}
+      <style>{'@keyframes qqPanelIn{from{transform:translateY(65%);opacity:.35}to{transform:translateY(0);opacity:1}}'}</style>
+      {/* 聊天背景层（聊天信息页设置：纯色/图片；顶栏与输入栏自身有底色，不受影响；按群独立，与单聊互不影响） */}
+      {bg.mode !== 'default' && (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
+      )}
       {/* 顶栏（对照 QQ 私聊同款：返回 + 群名/人数 + 菜单） */}
-      <div className="shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
+      <div className="relative z-10 shrink-0 bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]">
         <div className="flex h-12 items-center gap-1 px-3">
           <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5 dark:active:bg-white/10">
             <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
@@ -1200,8 +1466,8 @@ export function QqGroupChatPage({
         </div>
       </div>
 
-      {/* 消息列表 */}
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3" data-testid="qq-groupchat-list">
+      {/* 消息列表：自定义聊天背景时透出背景层 */}
+      <div ref={listRef} className="relative z-10 min-h-0 flex-1 overflow-y-auto px-3.5 py-3" data-testid="qq-groupchat-list">
         {msgs.length === 0 && (
           <div className="pt-16 text-center text-[12px] leading-relaxed text-black/35 dark:text-white/35">
             群聊已创建
@@ -1235,6 +1501,31 @@ export function QqGroupChatPage({
                     {mine ? '你' : m.senderName || '有人'}撤回了一条消息
                   </span>
                 </div>
+              ) : m.kind === 'image' && m.img ? (
+                renderMsgRow(
+                  m,
+                  <div className="min-w-0">
+                    <QqImageBubble src={m.img.src} testId="qq-groupmsg-image" />
+                  </div>
+                )
+              ) : m.kind === 'location' && m.loc ? (
+                renderMsgRow(
+                  m,
+                  <LocationBubble
+                    loc={{ name: m.loc.name, addr: m.loc.address }}
+                    onClick={() => onToast('位置详情暂未开放')}
+                  />
+                )
+              ) : m.kind === 'sticker' && m.stk ? (
+                renderMsgRow(
+                  m,
+                  <QqStickerBubble
+                    testId="qq-groupmsg-sticker"
+                    url={m.stk.url}
+                    meaning={m.stk.meaning}
+                    onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
+                  />
+                )
               ) : (
                 <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
                   <QqAvatar src={senderAvatar} alt={senderName} size={40} />
@@ -1285,8 +1576,8 @@ export function QqGroupChatPage({
         )}
       </div>
 
-      {/* 输入区 */}
-      <div className="shrink-0 border-t border-black/[0.05] bg-white dark:border-white/[0.06] dark:bg-[#1B1C1F]">
+      {/* 输入区：与单聊同款几何（输入行 + 六图标工具栏）；@ 钮为群聊专属；表情/加号/图片/相机/位置与单聊完全对齐（共用同一套组件） */}
+      <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
         {quote && (
           <div className="flex items-center gap-2 border-b border-black/[0.05] px-3 py-1.5 text-[12px] text-black/50 dark:border-white/[0.06] dark:text-white/50">
             <span className="min-w-0 flex-1 truncate">引用 {quote.name}：{quote.content}</span>
@@ -1295,17 +1586,24 @@ export function QqGroupChatPage({
             </button>
           </div>
         )}
-        <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex items-center gap-2 px-3 pb-1 pt-3">
           <button
             type="button"
             aria-label="提及成员"
             data-testid="qq-groupchat-at"
-            onClick={() => setAtOpen((v) => !v)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.05] text-black/55 active:opacity-60 dark:bg-white/10 dark:text-white/55"
+            aria-expanded={atOpen}
+            onClick={() => {
+              setStickerOpen(false);
+              setPlusOpen(false);
+              setAtOpen((v) => !v);
+            }}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
+              atOpen ? 'bg-[#0099FF] text-white' : 'bg-black/[0.05] text-black/55 dark:bg-white/10 dark:text-white/55'
+            }`}
           >
             <AtSign className="h-[18px] w-[18px]" />
           </button>
-          <Input
+          <input
             ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -1315,10 +1613,9 @@ export function QqGroupChatPage({
                 send();
               }
             }}
-            placeholder={streaming ? '成员回复中…' : '发消息…@ 可点名'}
-            disabled={streaming || runningRef.current}
-            className="h-9 flex-1 rounded-full bg-black/[0.05] text-[15px] dark:bg-white/10"
+            aria-label="发送群聊消息"
             data-testid="qq-groupchat-input"
+            className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
           />
           <button
             type="button"
@@ -1326,16 +1623,74 @@ export function QqGroupChatPage({
             disabled={streaming || !draft.trim()}
             data-testid="qq-groupchat-send"
             aria-label="发送"
-            className="flex h-9 shrink-0 items-center gap-1 rounded-[8px] bg-[#0099FF] px-3.5 text-[14px] font-medium text-white active:opacity-80 disabled:opacity-40"
+            className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
+              draft.trim() && !streaming ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
+            }`}
+            style={{ backgroundColor: draft.trim() && !streaming ? '#0099FF' : '#8AD4F7' }}
           >
-            <SendHorizontal className="h-4 w-4" />
+            发送
           </button>
         </div>
-        {/* @ 成员浮层 */}
+        {/* 工具栏（与单聊同款六图标：语音/图片/拍摄/点缀/表情/加号） */}
+        <div className="flex items-center justify-between px-7 pb-[18px] pt-2 text-black/80 dark:text-white/80">
+          <button type="button" aria-label="语音" onClick={() => onToast('语音通话暂未开放')} className="p-2 -m-2 active:opacity-60">
+            <Mic className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button type="button" aria-label="图片" data-testid="qq-groupchat-tool-image" onClick={() => photoInputRef.current?.click()} className="p-2 -m-2 active:opacity-60">
+            <ImageIcon className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button type="button" aria-label="拍摄" data-testid="qq-groupchat-tool-camera" onClick={() => cameraInputRef.current?.click()} className="p-2 -m-2 active:opacity-60">
+            <Camera className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button type="button" aria-label="点缀" onClick={() => onToast('点缀暂未开放')} className="p-2 -m-2 active:opacity-60">
+            <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="表情"
+            data-testid="qq-groupchat-sticker"
+            aria-expanded={stickerOpen}
+            onClick={() => {
+              setPlusOpen(false);
+              setAtOpen(false);
+              setStickerOpen((v) => !v);
+            }}
+            className="p-2 -m-2 active:opacity-60"
+          >
+            <Smile className={`h-[25px] w-[25px] ${stickerOpen ? 'text-[#0099FF]' : ''}`} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="更多功能"
+            data-testid="qq-groupchat-plus"
+            aria-expanded={plusOpen}
+            onClick={() => {
+              setStickerOpen(false);
+              setAtOpen(false);
+              setPlusOpen((v) => !v);
+            }}
+            className="p-2 -m-2 active:opacity-60"
+          >
+            <Plus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
+        {/* 加号面板（与单聊共用同一套宫格；红包/转账按群范围限定提示不支持） */}
+        {plusOpen && (
+          <div
+            data-testid="qq-group-plus-panel"
+            className="border-t border-black/[0.05] px-5 pb-6 pt-5 dark:border-white/[0.06]"
+            style={{ animation: 'qqPanelIn 0.24s ease-out' }}
+          >
+            <QqPlusGrid items={plusItems} />
+          </div>
+        )}
+        {/* 表情面板（与单聊共用同一套组件；表情包按群会话独立保存） */}
+        {stickerOpen && <QqStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
+        {/* @ 成员浮层：锚定输入区容器上方（含面板与引用条也不遮挡） */}
         {atOpen && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
-            <div className="absolute bottom-[54px] left-3 z-40 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2A2C31]">
+            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2A2C31]">
               <div className="border-b border-black/[0.05] px-3 py-2 text-[11px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
                 @ 群成员（被 @ 的优先回复）
               </div>
@@ -1358,6 +1713,36 @@ export function QqGroupChatPage({
           </>
         )}
       </div>
+
+      {/* 位置页（与单聊共用同一套组件；位置卡片群里所有角色可见） */}
+      {compose === 'location' && (
+        <LocationPickerPage onClose={() => setCompose(null)} onSend={(loc) => sendLocation(loc.name, loc.addr)} />
+      )}
+      {/* 原生相机/相册隐藏 input：相机单张（capture 调起后置摄像头）、图片可多选（与单聊同款） */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        data-testid="qq-groupchat-camera"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) void sendImageFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        data-testid="qq-groupchat-photo"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) void sendImageFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
 
       {/* 长按菜单 */}
       {menu && menuRect && menuMsg && (

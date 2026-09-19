@@ -5773,3 +5773,51 @@ Stage Summary:
 - 改动文件：src/lib/ios/groups.ts（数据层）、src/components/apps/wx-group.tsx（设置页精简+输入对齐+背景+公告编辑器+toast 修复）、src/components/apps/qq-group.tsx（策略/覆盖删除+引擎按人设+大开关）、src/components/apps/wechat.tsx（导出共用组件+effectiveInterop 接线）、src/components/apps/qq.tsx（effectiveInterop 接线+patchGroup 类型）、src/components/apps/default-avatar.tsx（shape 方形模式）
 - 删除项 testid：wx/qq-groupinfo-policy(-all/-mention/-auto)、wx/qq-groupinfo-minterop-* 不复存在；其余全部保持兼容
 - 已知边界：AI 成员不在群里发表情包/图片（范围限定维持）；mock 无 [SKIP] 路径覆盖（逻辑与旧 auto 策略一致）；qq 群公告编辑器保持原弹窗（本轮只美化微信侧）
+---
+Task ID: group-18
+Agent: Z.ai Code (main)
+Task: QQ 单聊底部输入框美化 + QQ 群聊输入功能完整对齐单聊（表情包/加号菜单/图片/相机/位置/聊天背景，共用同一套组件）
+
+Work Log:
+- 共用组件抽取（qq.tsx，单聊群聊零复制实现）：
+  ①新增并导出 QqPlusGrid（加号面板宫格：彩色圆角瓷贴 52px rounded-[15px] + 白色图标 + 轻阴影 + active:scale-95，对照新版 QQ 更多面板）——单聊 plusItems 与群聊 plusItems 均渲染它；
+  ②新增并导出 QqImageBubble（图片气泡 max-h-210/max-w-160 rounded-[18px]）/ QqStickerBubble（表情气泡 max-h-110/max-w-118 rounded-[14px] + 点按提示含义，testId 参数化）——单聊渲染改用（原内联 JSX 迁入，标记不变）；群聊直接复用；
+  ③导出存量组件 QqStickerPanel / LocationPickerPage / LocationBubble / RpIcon（导出原位声明）；
+  ④qq-group.tsx 通过 import from './qq' 引用全部共用件（与 wechat↔wx-group 同款循环引用模式，运行时渲染期取用，无初始化顺序问题）
+- QQ 单聊输入框美化（qq.tsx ChatPage）：
+  ①加号面板：透明底彩色线框图标 → 彩色瓷贴（QqPlusGrid，单群同款）；
+  ②qqPanelIn 上浮动画 keyframes 从加号面板内联 <style> 提升到 ChatPage 根（与 qqTypingDot 合并）；QqStickerPanel 根容器补同款上浮动画（此前只有加号面板有）；
+  ③工具栏六钮（语音/图片/拍摄/点缀/表情/加号）补 p-2 -m-2 触控热区（44px 级可达目标，视觉位置零偏移）；加号钮展开时 rotate-45 转 ×；
+  ④发送按钮补 transition-all + 启用时 shadow-[0_2px_10px_rgba(0,153,255,0.30)] + active:scale-[0.97]
+- QQ 群聊输入完整对齐单聊（qq-group.tsx，与微信侧 group-17 同方案）：
+  ①输入区重构：[@钮][输入框 h-40 rounded-[10px] 描边灰底（同单聊几何）][发送文字钮] + 下方同款六图标工具栏（语音/图片/拍摄/点缀/表情/加号）——群聊专属 @ 钮保留在输入行左侧，展开转蓝；@ 浮层从 bottom-[54px] 改锚定输入容器上方（bottom-full，面板/引用条展开也不遮挡）；
+  ②表情面板：共用 QqStickerPanel（用户已添加的表情包；点选发送 → 贴纸气泡 + [发送了表情：意思] 进上下文触发群回合；消息落 qq-group-msgs:<gid> 按群会话独立保存）；
+  ③加号面板：QqPlusGrid + 与单聊完全一致的五入口（语音通话/视频通话/红包/转账/位置）——红包/转账按群范围限定 toast「群聊暂不支持红包/转账」，位置进共用 LocationPickerPage，通话类 toast 暂未开放；
+  ④图片/相机：工具栏图片钮→多选隐藏 input、拍摄钮→capture 环境相机隐藏 input，同一套 readImageFile 压缩（wechat.tsx 导出件），ImageMsg 渲染用共用 QqImageBubble；配置识图模型后走与单聊同一管线（runGroupTurn 收集末尾连续「我」的图片≤3 张 → beginChatStream vision:{images,text} 逐成员先识图再按人设回复；未配置则图片只入记录不触发回复）；
+  ⑤位置：sendLocation → WxGroupMsg kind='location'（loc 字段），渲染共用 LocationBubble（QQ 小地图卡），点卡片 toast 位置详情暂未开放（与单聊一致）；群里所有角色可见（每成员上下文都映射 [位置 名 地址]）；
+  ⑥AI 上下文映射：新增 msgTextOf（image→[图片]/sticker→[发送了表情：…]/location→[位置 …]，与 wx-group 同构）——runCharTurn history、memContext、memAfterAiTurn 全部经它映射；群聊规则补富媒体占位说明句；runCharTurn 签名加 turnImages 参数（与 wx-group 一致）；
+  ⑦长按菜单：复制用 msgSnapshotOf（图片→[图片]、表情→[表情] 意思、位置→[位置 名 地址]）；引用仍限文字消息；撤回/删除支持全部类型；输入框不再 disabled（与单聊一致，回复中发送→toast 引导）；
+  ⑧消息列表：富媒体行 renderMsgRow 与文字行同一套头像 40px/名字/max-w-72% 几何；群预览（groupPreview）此前已支持表情/位置/图片占位
+- QQ 群聊聊天背景（qq-group.tsx + 共用 ChatBgPage）：
+  ①信息页「群设置」卡群公告行下方新增「聊天背景」行（右侧 22px 迷你预览 swatch + chevron，testid qq-groupinfo-bg）→ 与单聊同一套 ChatBgPage variant="qq"（预览卡/相册上传/14 色壁纸/恢复默认）；
+  ②存储：标志在 qqChatFlags 的 group:<gid> 键（bgMode/bgColor/bgV），图片本体 IndexedDB chat-bg:qq:group:<gid>（setChatBgImage/removeChatBgImage）——按群 ID 隔离、与单聊背景互不影响、重启后仍生效；dissolveGroup 已有级联清理（groups.ts 存量逻辑，qq 前缀天然覆盖）；
+  ③聊天页背景层：bg.mode≠default 时 absolute inset-0 z-0 + chatBgLayerStyle，顶栏/输入栏 relative z-10 自带底色不受影响，消息列表透出背景；信息页/聊天页各自订阅 qqChatFlags 即时同步
+- 质量门禁：bunx tsc --noEmit 0 错误（修掉一处遗漏的 bgOpen state 声明）、bun run lint 通过
+- E2E 实测（agent-browser 390×844 隔离会话 + 守护 mock :4100（group-15 起存活，chat/completions 流式+非流式+记忆提取全兼容）；IndexedDB 直种 林川(user,90001/pw123456)+红红/明仔(char,friendQq)+明文 apiConfig/visionConfig→mock+2 枚 qq-stickers）：
+  ①QQ 登录→联系人›群聊›发起群聊→勾 2 人→「红红、明仔的群聊(3)」→文字消息→红红/明仔逐个流式回复 ✓
+  ②表情面板（共用件）2 枚种子表情→点「哈哈大笑」→黄色贴纸气泡+两成员回复，面板自动收起 ✓
+  ③加号面板五彩色瓷贴齐全→红包→toast「群聊暂不支持红包/转账」可见 ✓
+  ④位置页（共用件）→点东方通信大厦→QQ 小地图位置卡片+地址+两成员回复 ✓
+  ⑤相册 input 注入 320×240 PNG→图片气泡+识图管线后两成员回复 ✓
+  ⑥群信息页：聊天背景行（swatch）在→ChatBgPage 选 #FFC9D4→预览卡变粉→返回聊天页粉背景透出（顶栏 #F5F6F7/输入栏白色保持本色）✓
+  ⑦杀页面 reload→解锁→QQ→重进群：粉背景仍生效、消息完整 ✓
+  ⑧@ 浮层锚定输入区上方、@ 钮高亮蓝→@明仔 发送→明仔优先回复+红红跟进 ✓
+  ⑨QQ 单聊回归：输入框/瓷贴加号面板（与群同款）/发送钮阴影→发「单聊回归测试」→红红私聊回复 ✓
+  ⑩console 零错误、errors 空；dev.log 仅沙箱 /api/chat 502 预期噪音（直连 mock 兜底成功）
+Stage Summary:
+- 改动文件：src/components/apps/qq.tsx（导出共用件+QqPlusGrid/QqImageBubble/QqStickerBubble 新增+单聊输入美化+单聊渲染迁移到共用件）、src/components/apps/qq-group.tsx（输入对齐+聊天背景+信息页背景行）
+- 微信侧零改动（wx-group.tsx/wechat.tsx 本轮只读）：微信群聊背景与输入对齐已在 group-17 落地，本轮 QQ 侧补齐，两端行为对等
+- 组件共用清单（单聊↔群聊零复制）：QqStickerPanel/QqPlusGrid/QqImageBubble/QqStickerBubble/LocationPickerPage/LocationBubble/RpIcon（qq.tsx）；readImageFile（wechat.tsx）；ChatBgPage/chatBgLayerStyle（chat-settings.tsx）
+- 群/私背景隔离：flags 键 group:<gid> vs 联系人 id；IndexedDB chat-bg:qq:group:<gid> vs chat-bg:qq:<联系人id>——互不覆盖
+- 新 testid：qq-groupchat-tool-image/tool-camera/sticker/plus、qq-group-plus-panel、qq-groupmsg-image/sticker、qq-groupinfo-bg；存量 testid（qq-groupchat-input/send/at、qq-plus-*、qq-sticker-panel-*、qq-loc-*）全部兼容
+- 已知边界：AI 成员仍不主动发表情包/图片/位置（范围限定维持）；红包/转账在群内仅入口提示（与微信侧一致）
