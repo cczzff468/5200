@@ -35,6 +35,10 @@ export interface PersonaSource {
   relationToUser?: string | null;
   /** 生日（几月几号；支持 6.20 / 6月20日 等写法，注入前经 formatBirthday 归一化，AI 无歧义理解） */
   birthday?: string | null;
+  /** 昵称（存在时展示层用昵称当 name；人设里同时告知真名与昵称的关系） */
+  nickname?: string | null;
+  /** 真实姓名（展示副本 withDisplayNames 把原 name 存到这里；与 name 不同时注入「大名/昵称」关系） */
+  realName?: string | null;
 }
 
 /** 配角圈条目（CHAR 人设里注入「你认识的配角」用，由 npc-bond 组装） */
@@ -85,6 +89,20 @@ function clean(v?: string | null): string {
 export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPromptCtx): string {
   const user = clean(ctx.userName) || '用户';
   const name = clean(peer.name) || '对方';
+  // 真名/昵称关系：展示层用昵称替换了 name 时（副本 realName 存原 name），或原始数据里
+  // name≠nickname 时，角色除了「平时被叫的名字」还有一个大名——必须告知，否则别人用
+  // 真名叫 TA 时角色会说「哪来的XX」（不承认自己的真名）
+  const nick = clean(peer.nickname);
+  const realName =
+    clean(peer.realName) || (nick && nick !== name ? clean(peer.name) : '');
+  const shownName = nick || name;
+  const nameLines =
+    realName && realName !== shownName
+      ? [
+          `【名字】${shownName}（真实姓名/大名：${realName}）`,
+          `「${realName}」是你的真实姓名，「${shownName}」是你的昵称——别人用哪个名字叫你都是在叫你；被叫到大名时可以按人设害羞、嫌弃或假装不习惯，但不能不知道、更不能否认「${realName}」就是你自己。`,
+        ]
+      : [`【名字】${name}`];
   const persona = clean(peer.persona);
   const background = clean(peer.background);
   const relation = clean(peer.relation);
@@ -118,10 +136,10 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   if (clean(peer.weight)) facts.push(`体重 ${clean(peer.weight)}`);
 
   const lines: string[] = [
-    `你现在是${user}${ctx.channel}里的联系人「${name}」，正在${ctx.channel}上和${user}互动。${roleplayNote}`,
-    `请始终以「${name}」的身份、用第一人称口语化回复，严格保持角色，不要跳出。`,
+    `你现在是${user}${ctx.channel}里的联系人「${shownName}」，正在${ctx.channel}上和${user}互动。${roleplayNote}`,
+    `请始终以「${shownName}」的身份、用第一人称口语化回复，严格保持角色，不要跳出。`,
     '',
-    `【名字】${name}`,
+    ...nameLines,
     `【身份】${identity.join('，')}`,
     ...(facts.length ? [`【基础资料】${facts.join('；')}`] : []),
     `【性格】${persona || '按资料自然呈现，像一个有血有肉的真实的人'}`,
@@ -165,6 +183,7 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     `- 资料里没有的信息不要大量编造；`,
     `- 不提供违法违规或危险行为的指引（暴力、自伤、违禁品等）；遇到这类话题，以「${name}」的身份礼貌回避、转移话题或善意劝阻，不配合展开；`,
     `- 不要输出 markdown、列表、序号、引号或括号舞台说明；`,
+    `- 聊天记录按时间顺序排列，最后一条就是${user}刚发给你的话——直接回应它本身，不要当作没看见，也不要丢下对方的话题自顾自说，更不要替${user}编造回答或自己接自己的话（不自问自答）；`,
     `- 每次只回复对方刚说的话，简短自然、像真人随手打字。`,
     ...(peer.kind === 'npc'
       ? [

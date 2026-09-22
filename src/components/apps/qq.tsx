@@ -133,6 +133,7 @@ import {
   beginChatStream,
   clearChatStream,
   isChatStreaming,
+  subscribeChatStreamFinalized,
   useChatStream,
   useChatStreamFinalized,
   type ChatPayloadMessage,
@@ -169,6 +170,7 @@ import type { Sticker } from '@/lib/ios/stickers';
 import {
   buildRichRules,
   buildActionRules,
+  cleanBubbleText,
   extractRichActionParts,
   actionVerb,
   mergeRichSegments,
@@ -597,6 +599,8 @@ function nextCid(prefix: 'rp' | 'tr' | 'fam'): string {
 
 /** 当前正在查看的 QQ 聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
 let qqActiveChatId: string | null = null;
+/** 排队回复表：对方正在回复时用户又发了消息的联系人 id —— 本轮流结束后由聊天页自动补跑一轮回复 */
+const qqQueuedTurns = new Set<string>();
 
 function loadMsgs(contactId: string): QQMsg[] {
   try {
@@ -2290,6 +2294,29 @@ function ChatPage({
     });
   }, [stream, sessionKey, peer.id]);
 
+  /** 排队补跑：流进行中发来的消息（qqQueuedTurns）在本轮流结束后自动触发回复。
+   *  页面存活时监听流结束广播；离开后流才收尾的，重进页面时补跑（消息已落盘不丢）。 */
+  useEffect(() => {
+    const kick = () => {
+      if (!qqQueuedTurns.has(peer.id)) return;
+      if (isChatStreaming(sessionKey)) return; // 本轮流还没收尾：等结束广播再跑
+      qqQueuedTurns.delete(peer.id);
+      window.setTimeout(() => {
+        const saved = loadMsgs(peer.id);
+        setMsgs((prev) => {
+          const ids = new Set(prev.map((m) => m.id));
+          return [...prev, ...saved.filter((m) => !ids.has(m.id))];
+        });
+        runAiTurnRef.current?.(null, [], undefined, saved);
+      }, 260);
+    };
+    const unsub = subscribeChatStreamFinalized((sKey) => {
+      if (sKey === sessionKey) kick();
+    });
+    kick(); // 挂载时：之前排队但流已结束（离开页面后流才收尾）→ 立即补跑
+    return unsub;
+  }, [sessionKey, peer.id]);
+
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息（要一并进上下文与待处理清单）。
@@ -2462,9 +2489,10 @@ function ChatPage({
                 if (!stickersOn && p.rich.kind === 'sticker') continue;
                 all.push(richToQqMsg(p.rich, id, t, peer));
               } else {
-                // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉
-                const text = stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' '));
-                if (!stickersOn && !text.trim()) continue;
+                // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
+                // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
+                const text = cleanBubbleText(stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
+                if (!text) continue;
                 all.push({ id, role: 'peer', content: text, time: t });
               }
               idx++;
@@ -2507,8 +2535,18 @@ function ChatPage({
 
   const send = useCallback(() => {
     const text = input.trim();
-    if (!text || isChatStreaming(sessionKey)) return;
+    if (!text) return;
     const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
+    // 对方正在回复（连发短消息的逐条播放也占用流，可持续数秒）：消息照常入列并排队，
+    // 本轮流结束后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
+    // 看起来像「发了消息没人理」，AI 下一轮自然接不上话）
+    if (isChatStreaming(sessionKey)) {
+      setInput('');
+      setQuote(null);
+      setMsgs((prev) => [...prev, userMsg]);
+      qqQueuedTurns.add(peer.id);
+      return;
+    }
     setInput('');
     setQuote(null);
     // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
@@ -3208,7 +3246,9 @@ function ChatPage({
                           </p>
                         </div>
                       )}
-                      {m.content || (
+                      {m.content ? (
+                        cleanBubbleText(m.content) || m.content
+                      ) : (
                         <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
                           {[0, 1, 2].map((d) => (
                             <span

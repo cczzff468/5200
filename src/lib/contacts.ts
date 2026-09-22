@@ -48,6 +48,9 @@ export interface ContactRecord {
   friendQq?: boolean;
   /** 信息 App 好友标记（缺省 = 沿用旧全局 isFriend） */
   friendSms?: boolean;
+  /** 真实姓名（withDisplayNames 展示副本专用：昵称替换 name 时把原 name 存到这里；
+   *  人设注入用——角色要知道自己的大名/真名，别人用真名叫 TA 时不能不承认） */
+  realName?: string | null;
   createdAt: string;
 }
 
@@ -99,7 +102,7 @@ export function displayNameOf(c: Pick<ContactRecord, 'name' | 'nickname'>): stri
 
 /** 把一组联系人的 name 替换成昵称展示名（仅供 QQ/微信/信息等 App 内部显示用，真实名字不变） */
 export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
-  return list.map((c) => (c.nickname?.trim() ? { ...c, name: displayNameOf(c) } : c));
+  return list.map((c) => (c.nickname?.trim() ? { ...c, name: displayNameOf(c), realName: c.realName ?? c.name } : c));
 }
 
 /** 拥有独立好友状态的社交 App（QQ / 微信 / 信息：一个 App 添加好友不影响其他 App） */

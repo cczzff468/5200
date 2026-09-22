@@ -157,6 +157,19 @@ function parseAmount(v: string | undefined): number {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : NaN;
 }
 
+/**
+ * 气泡文本首尾清洗：剥掉首尾的空白与「看不见的占位字符」（零宽空格 U+200B-200F、
+ * 词连接符 U+2060、盲文空格 U+2800、韩文填充符 U+3164/U+FFA0 等——模型偶尔会输出，
+ * String.trim 不认识它们，残留在气泡开头就是一条「前面有空隙」的消息）。
+ * 持久化与渲染两处都过一遍：渲染层过一遍还能修复已落盘的存量脏数据。
+ */
+const BLANK_CHARS = '\u200B\u200C\u200D\u200E\u200F\u2060\u2800\u3164\uFFA0';
+export function cleanBubbleText(text: string): string {
+  const head = new RegExp(`^[\\s${BLANK_CHARS}]+`);
+  const tail = new RegExp(`[\\s${BLANK_CHARS}]+$`);
+  return text.replace(head, '').replace(tail, '');
+}
+
 /** AI 发红包/转账/亲属卡但没写金额（或金额非法）时的兑底：照样出卡片，不让标记变成干巴巴的文字 */
 function fallbackAmount(kind: 'redpacket' | 'transfer' | 'family'): number {
   const [min, max] = kind === 'redpacket' ? [0.88, 20] : kind === 'transfer' ? [8, 88] : [520, 520];

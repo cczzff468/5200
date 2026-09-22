@@ -5954,3 +5954,28 @@ Stage Summary:
 - 数据隔离：AI 发的红包/转账与用户发的同结构（GroupRpData/GroupTrData），按群 ID 隔离持久化、与单聊互不相通；不涉及真实资金（AI 成员无钱包，发卡不扣款、退款只退机主）
 - 新增交互：AI 转账给机主 → 详情页收款/退还按钮（wx-grp-tr-detail-receive|return、qq-grp-tr-detail-receive|return）+发起成员自动回应
 - 已知边界：AI 发红包标记不指定类型（count>1 固定拼手气）；AI 不能发专属红包/亲属卡（群聊场景无意义，规则未下发标记）；节流为内存态（刷新清零，「短时间内」语义合理）；表情包按会话开关 getStickersOn(sKey)（群信息页暂无独立开关行，默认开）
+---
+Task ID: fix-reply-ux
+Agent: Z.ai Code (main)
+Task: 修复用户反馈三问题——①AI 回复第一个气泡前面有空隙 ②AI 像看不见用户消息一样自问自答 ③角色有昵称时否认自己的真实姓名（单聊/群聊都要修）
+
+Work Log:
+- 问题 ①（气泡开头空隙）：读 reply-count.ts 确认 splitReplySegments/splitReplyRender 均已 trim 标准空白；E2E 复现（mock 返回「 乐乐\n咋啦\n…」带前导空格五连发）证明管线对标准空白已干净。剩余风险 = 模型偶尔输出的「trim 不认识」的占位字符（U+200B-200F 零宽、U+2060、U+2800 盲文空格、U+3164/U+FFA0 填充符）。修复：chat-rich.ts 新增 cleanBubbleText（首尾剥 \s + 上述字符），四端（wechat/qq/wx-group/qq-group）持久化与渲染双层套用——渲染层套用可修复已落盘的存量脏数据
+- 问题 ②（看不见我说话/自问自答）根因实锤：**流式回复期间用户发消息被静默丢弃**——连发短消息的逐条播放（pacer 600-1100ms/条）让 isChatStreaming 持续数秒，wechat.tsx/qq.tsx 的 send() 在此窗口直接 return（消息不发送、无提示、滞留输入框）；E2E 实测：连点两次发送，第二条既不入库也无回复（input-after:"连发二"）。修复（四端）：
+  - wechat.tsx/qq.tsx 单聊：send() 遇流进行中 → 消息照常入列 + 模块级排队表 wxQueuedTurns/qqQueuedTurns.add(peer.id)；useEffect 订阅 subscribeChatStreamFinalized → 流结束广播时（或挂载时发现遗留排队）自动补跑一轮回复（260ms 后 loadMsgs 全量落盘记录合并进 state + runAiTurn(null,[],undefined,saved)）；离开页面后流才收尾的场景由重进页面时的挂载补跑兜底
+  - wx-group.tsx/qq-group.tsx 群聊：send() 遇回合进行中 → 消息照常发出（appendMsg）+ groupQueuedRef 标记 + toast「消息已发出，成员们回完这轮就聊」（原为拦截+要求重发）；runGroupTurn finally 里检查标记 → 500ms 后自动再起一轮（trigger=最后一条我的消息）
+- 问题 ③（不承认真名）：根因 = 展示层 withDisplayNames 用昵称替换 name 后，人设里只有昵称（榴莲），角色对真名（乐乐）一无所知 → 群聊里「我就是榴莲啊 哪来的乐乐」。修复：
+  - contacts.ts：ContactRecord 增 realName? 字段；withDisplayNames 替换 name 时把原 name 存入 realName
+  - persona.ts：PersonaSource 增 nickname/realName；realName 解析（副本 realName 优先，兜底 name≠nickname 的原始数据）；【名字】行为「榴莲（真实姓名/大名：乐乐）」+ 解释行「别人用哪个名字叫你都是在叫你；被叫到大名可以按人设害羞/嫌弃/不习惯，但不能不知道或否认乐乐是你」——全 App（微信/QQ/信息/电话/群聊）统一生效
+  - wx-group/qq-group【群成员速览】：其他成员带「大名叫乐乐」（realName ≠ 展示名时）
+  - 附加：persona.ts 禁止事项新增「最后一条就是用户刚发的话——直接回应它本身，不要当作没看见、不要丢下对方话题自顾自说、更不要替用户编造回答或自己接自己的话（不自问自答）」——提示词层配合排队修复双保险
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常
+- E2E 实测（agent-browser + mock :4100，指纹新增 hasRealName/hasMemberRealName/hasNoSelfAnswer）：
+  ①种子 contact name=乐乐 nickname=榴莲 → 微信单聊发消息 → 指纹 hasRealName=true + hasNoSelfAnswer=true（system 含【名字】榴莲（真实姓名/大名：乐乐））✓
+  ②排队实测（核心）：单聊连点两次发送（第二次在流播放期）→ 第二条照常入列显示 + 输入框清空 + 第一轮流结束后自动第 3 轮回复该消息（存储序列 …第一条→AI回复→第二条排队→AI回复；/__log 3 turns）✓
+  ③建群（榴莲+红红）发消息 → 榴莲 hasRealName=true（自己的大名）；红红 hasMemberRealName=true（群成员速览含「榴莲（大名叫乐乐…）」）✓
+  ④首尾清洗：cleanBubbleText 挂渲染层+落盘层（存量脏消息重进页面即修复）✓
+Stage Summary:
+- 改动文件：src/lib/chat-rich.ts（cleanBubbleText）、src/lib/contacts.ts（realName）、src/lib/ios/persona.ts（真名/昵称注入+不自问自答禁令）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（排队发送+补跑+清洗）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（群排队+清洗+成员大名）
+- 行为变化：流式回复期间用户发消息 = 照常显示 + 自动在回复后获得 AI 回应（单聊/群聊一致）；群聊不再出现「稍等一下」拦截；角色对自己的大名/昵称双重认知
+- 已知边界：单聊排队补跑依赖页面订阅/重进挂载补跑（消息永不丢失）；群排队补跑一轮后若又有排队消息会继续串行补跑

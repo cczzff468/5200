@@ -116,6 +116,7 @@ import {
   actionVerb,
   buildActionRules,
   buildGroupRichRules,
+  cleanBubbleText,
   extractRichActionParts,
   mergeRichSegments,
   parseRichParts,
@@ -1352,6 +1353,8 @@ export function QqGroupChatPage({
   const stream = useChatStream(sKey);
   const apiConfig = useSettings((s) => s.apiConfig);
   const runningRef = useRef(false);
+  /** 排队回复标记：回合进行中用户又发了消息 → 本回合结束后自动再起一轮 */
+  const groupQueuedRef = useRef(false);
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1696,8 +1699,10 @@ export function QqGroupChatPage({
         const memberLines = others.map((c) => {
           const rel = (c.relation ?? '').trim();
           const ps = (c.persona ?? '').trim();
-          const bits = [rel ? `与${meName}是${rel}` : '', ps ? ps.slice(0, 48) : ''].filter(Boolean);
-          return `- ${memberNameOf(c)}${bits.length ? `（${bits.join('；')}）` : ''}`;
+          const shown = memberNameOf(c);
+          const real = (c.realName ?? '').trim();
+          const bits = [real && real !== shown ? `大名叫${real}` : '', rel ? `与${meName}是${rel}` : '', ps ? ps.slice(0, 48) : ''].filter(Boolean);
+          return `- ${shown}${bits.length ? `（${bits.join('；')}）` : ''}`;
         });
         if (memberLines.length > 0) {
           groupRules.push('【群成员速览】群里其他成员的情况（你与他们的相处方式按你的人设与各自人设自然把握）：', ...memberLines);
@@ -1860,7 +1865,8 @@ export function QqGroupChatPage({
                       }
                     }
                   } else {
-                    const cleaned = p.text.trim();
+                    // 首尾清洗：剥掉模型偶尔输出的零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
+                    const cleaned = cleanBubbleText(p.text);
                     if (!cleaned) continue;
                     all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: cleaned, time: t });
                   }
@@ -1943,6 +1949,12 @@ export function QqGroupChatPage({
         runningRef.current = false;
         groupSpeaker.delete(sKey);
         if (mountedRef.current) setSpeakerId(null);
+        // 排队补跑：回合进行中用户又发了消息 → 本回合结束后自动再起一轮（消息已在群消息库，成员都能看到）
+        if (groupQueuedRef.current) {
+          groupQueuedRef.current = false;
+          const lastMe = [...loadGroupMsgs(gid)].reverse().find((m) => m.role === 'me');
+          if (lastMe && getGroup(gid)) window.setTimeout(() => void runGroupTurn(lastMe), 500);
+        }
       }
     },
     [expireStalePackets, gid, runCharTurn, sKey]
@@ -1965,10 +1977,6 @@ export function QqGroupChatPage({
       if (sentenceSend && pendingDispatch) dispatchBatch();
       return;
     }
-    if (runningRef.current || isChatStreaming(sKey)) {
-      onToast('成员们还在回复，稍等一下');
-      return;
-    }
     const msg: WxGroupMsg = {
       id: uid(),
       role: 'me',
@@ -1980,6 +1988,13 @@ export function QqGroupChatPage({
     };
     setDraft('');
     setQuote(null);
+    if (runningRef.current || isChatStreaming(sKey)) {
+      // 成员们还在回复：消息照常发出并排队，本回合结束后自动再起一轮（不再拦截后让用户重发）
+      appendMsg(msg);
+      groupQueuedRef.current = true;
+      onToast('消息已发出，成员们回完这轮就聊');
+      return;
+    }
     appendMsg(msg);
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发
     if (sentenceSend) {
@@ -2886,7 +2901,7 @@ export function QqGroupChatPage({
                           </p>
                         </div>
                       )}
-                      <span>{m.content}</span>
+                      <span>{cleanBubbleText(m.content)}</span>
                     </div>
                   </div>
                 </div>
