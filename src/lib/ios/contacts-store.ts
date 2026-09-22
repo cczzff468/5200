@@ -210,7 +210,7 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
  * - 聊天背景图本体（IndexedDB settings store）：chat-bg:wx:<id> / chat-bg:qq:<id>。
  * 全部尽力而为（单键失败不阻塞删除）；记忆库由 memPurgeContact 负责不在本函数范围。
  */
-function purgeChatTracesFor(id: string): void {
+function purgeChatTracesFor(id: string, name?: string): void {
   if (!id) return;
   try {
     // 聊天记录（IndexedDB kv store；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫）
@@ -246,9 +246,10 @@ function purgeChatTracesFor(id: string): void {
   // 会话标志：走总线 reset（内存 + localStorage + 订阅广播同步）
   wxChatFlags.reset(id);
   qqChatFlags.reset(id);
-  // 群聊级联：把被删联系人从所有群的成员里移除（成员清空的群自动解散，群消息/未读/标志一并清理）
+  // 群聊级联：把被删联系人从所有群的成员里移除（成员清空的群自动解散，群消息/未读/标志一并清理）；
+  // 带上名字让留下的成员收到「XX退出了群聊」事件（AI 由此知道人为什么不见了）
   try {
-    purgeContactFromGroups(id);
+    purgeContactFromGroups(id, { name });
   } catch {
     // 清理失败不阻塞删除
   }
@@ -287,7 +288,7 @@ export async function deleteContact(id: string): Promise<boolean> {
   }
   // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/会话标志/背景图一并清理
   for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId);
-  purgeChatTracesFor(id);
+  purgeChatTracesFor(id, existing.name);
   // 世界书：清理被删联系人（含级联 NPC）的挂载关系键；书籍本体与条目是用户创作，保留不删
   //（专属条目目标指向已删联系人时永远不激活，属无害死配置，用户可在条目编辑里改）
   clearContactBinding(id);

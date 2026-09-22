@@ -258,8 +258,9 @@ interface WxMsg {
   loc?: { name: string; address: string };
   /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
   stk?: { url: string; meaning: string; sid?: string };
-  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
-  quote?: { name: string; content: string };
+  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀）；
+   *  id = 被引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */
+  quote?: { name: string; content: string; id?: string };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
@@ -329,7 +330,7 @@ function loadMsgs(contactId: string): WxMsg[] {
         ...m,
         quote:
           m.quote && typeof m.quote.name === 'string' && typeof m.quote.content === 'string'
-            ? { name: m.quote.name, content: m.quote.content }
+            ? { name: m.quote.name, content: m.quote.content, id: typeof m.quote.id === 'string' ? m.quote.id : undefined }
             : undefined,
         recalled: m.recalled === true || undefined,
         fwd:
@@ -3451,7 +3452,7 @@ function ChatPage({
   const [editMsg, setEditMsg] = useState<WxMsg | null>(null);
   const [editDraft, setEditDraft] = useState('');
   /** 引用回复（输入框上方条；发送时挂到新消息上） */
-  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
+  const [quote, setQuote] = useState<null | { name: string; content: string; id?: string }>(null);
   /** 多选模式：勾选消息批量删除/转发/收藏 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -4079,7 +4080,13 @@ function ChatPage({
           onToast('对方正在回复，请稍后再试');
           return;
         }
-        setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+        // 一.5 引用联动：被删消息若被其他消息引用，引用内容改写为「原消息已删除」
+        const gone = new Set([m.id]);
+        setMsgs((prev) =>
+          prev
+            .filter((x) => !gone.has(x.id))
+            .map((x) => (x.quote?.id && gone.has(x.quote.id) ? { ...x, quote: { ...x.quote, content: '原消息已删除' } } : x))
+        );
         onToast('已删除');
         break;
       }
@@ -4088,7 +4095,8 @@ function ChatPage({
         setEditDraft(m.content);
         break;
       case 'quote':
-        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m) });
+        // id 带上源消息：删除/撤回后引用显示「原消息已删除」
+        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m), id: m.id });
         break;
       case 'multi':
         setSelectMode(true);
@@ -4099,7 +4107,14 @@ function ChatPage({
           onToast('对方正在回复，请稍后再试');
           return;
         }
-        setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
+        // 二.3：不删原始记录（标记 recalled 渲染居中灰字）；引用联动改写（原内容不再可见）
+        setMsgs((prev) =>
+          prev.map((x) => {
+            if (x.id === m.id) return { ...x, recalled: true };
+            if (x.quote?.id && x.quote.id === m.id && !x.recalled) return { ...x, quote: { ...x.quote, content: '原消息已删除' } };
+            return x;
+          })
+        );
         onToast('已撤回');
         break;
       }
@@ -4149,7 +4164,12 @@ function ChatPage({
       return;
     }
     const ids = new Set(selectedIds);
-    setMsgs((prev) => prev.filter((x) => !ids.has(x.id)));
+    // 一.5：批量删除同样触发引用联动（被删消息被引用时改写为「原消息已删除」）
+    setMsgs((prev) =>
+      prev
+        .filter((x) => !ids.has(x.id))
+        .map((x) => (x.quote?.id && ids.has(x.quote.id) ? { ...x, quote: { ...x.quote, content: '原消息已删除' } } : x))
+    );
     onToast(`已删除 ${selectedIds.length} 条消息`);
     exitSelect();
   };

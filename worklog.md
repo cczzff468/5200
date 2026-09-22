@@ -5979,3 +5979,45 @@ Stage Summary:
 - 改动文件：src/lib/chat-rich.ts（cleanBubbleText）、src/lib/contacts.ts（realName）、src/lib/ios/persona.ts（真名/昵称注入+不自问自答禁令）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（排队发送+补跑+清洗）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（群排队+清洗+成员大名）
 - 行为变化：流式回复期间用户发消息 = 照常显示 + 自动在回复后获得 AI 回应（单聊/群聊一致）；群聊不再出现「稍等一下」拦截；角色对自己的大名/昵称双重认知
 - 已知边界：单聊排队补跑依赖页面订阅/重进挂载补跑（消息永不丢失）；群排队补跑一轮后若又有排队消息会继续串行补跑
+---
+Task ID: grp-events-admin
+Agent: Z.ai Code (main)
+Task: 群聊补全引用/撤回收尾 + 群系统消息（加入/退出/禁言/管理员/转让/改名/公告/建群）+ AI 感知群内事件 + 群设置管理（成员列表/管理员/禁言/踢人/转让群主/群资料）+ 权限规则 + QQ「发起群聊」迁入消息页加号菜单
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts：ChatGroup 增 adminIds/mutes（normalize 兼容旧数据）；WxGroupMsg 增 evt（GroupEventDetail: type/actorId/targetId/extra）与 quote.id；
+  新增 pushGroupEvent（群事件→kind notice+noticeText 居中灰字，随群消息持久化）、groupRoleOf/isGroupMuted/groupMuteLeftText、
+  setGroupAdmin/muteGroupMember(5档:10分钟/1小时/3小时/1天/永久=GROUP_MUTE_PRESETS)/unmuteGroupMember/kickGroupMember/transferGroupOwner
+  （全部成功即自动落对应系统消息：加入/退出/移出/禁言X/解除禁言/成为管理员/被取消管理员/群主转让给X/群名被修改为「X」/群头像已更新/群公告已更新）；
+  addGroupMember 加 name 参数落「XX加入了群聊」；createGroup 自动落「群聊创建」；updateGroup 改名/头像/公告时值变化才落事件（所有调用方统一覆盖）；
+  purgeContactFromGroups 加 name →「XX退出了群聊」（contacts-store 删除联系人级联传入 existing.name）；collectGroupEventLines（按时间升序取最近12条，groupEventAgo 相对时间标签）；
+  kick 清理被踢者 adminIds/mutes；转让后新群主移出 adminIds；群主不可被禁言/踢出（数据层兜底）
+- 微信群聊 src/components/apps/wx-group.tsx：信息页成员格点加机主瓦片（首位）+群主/管理员徽标（橙/绿），群主/管理员排序优先；
+  成员操作单按身份出按钮：设为/取消管理员（仅群主）、禁言（时长选择单）、解除禁言、转让群主（确认弹窗）、移出群聊（管理员仅普通成员）；禁言中显示「禁言中：剩 X 分钟」；
+  虚线「－」移除入口仅群主/管理员可见；removeMember→kickGroupMember；邀请传 name；
+  聊天页：runCharTurn 注入【群内事件】块（collectGroupEventLines+「不要装作没看见…不必逐条点评」规则）；runGroupTurn 过滤被禁言成员（被@也不发言，物理禁言）；
+  quote 状态带 id；removeMsgs/recallMsg 引用联动（被删/被撤回消息被引用时引用内容改写「原消息已删除」，批量删除同样生效）；机主被禁言时输入阻断+横幅（防御性）
+- QQ 群聊 src/components/apps/qq-group.tsx：全量同构镜像（qq-* testid、QQ 蓝样式、adminId/mutes 同数据层）
+- 单聊 src/components/apps/wechat.tsx / qq.tsx：WxMsg/QQMsg.quote 增 id（长按引用时带上、normalize 透传）；删除/撤回（单条+批量）时引用联动改写「原消息已删除」
+- QQ 消息页右上角加号：点击改为下拉菜单（对照截图：白色圆角面板+指向箭头，创建群聊/创建频道/加好友群/扫一扫/传文件/收付款 六项，testid qq-msgs-plus-menu/qq-plus-*）；
+  创建群聊→路由 group-create；加好友/群→原 onAddFriend；其余 toast 暂未开放；联系人页「发起群聊」行移除（入口真正迁移），空态文案改「点消息页右上角＋创建」
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、console 零错误、dev.log 无异常
+- E2E（agent-browser 390×844 隔离会话 + mock :4100 v2（扩 fingerprint: hasEvt/evtJoin/evtMute/evtAdmin/evtKick/evtTransfer/evtRename + 事件感知测试指令；子壳 setsid 驻留）+ IndexedDB 直种 林川(user)/红红/明仔/大飞 + 明文 apiConfig→mock）：
+  ①微信建群→聊天页居中灰字「群聊创建」✓；改名「快乐小分队」→「群名被修改为「快乐小分队」」✓；改公告→「群公告已更新」✓
+  ②信息页成员瓦片：机主首位+群主徽标，红红操作单出 设为管理员/禁言/转让群主/移出群聊 四项 ✓；设管理员→「红红成为管理员」✓；禁言10分钟→「红红被禁言10 分钟」✓
+  ③禁言实测：发消息→红红不回复（明仔回复）；fingerprint hasEvt=true/evtMute=true/evtAdmin=true（事件按时间注入 system）✓；解除禁言→「红红被解除禁言」+禁言中剩X分钟显示 ✓
+  ④AI 事件感知：邀请大飞→「大飞加入了群聊」✓；发「新成员感知测试」→红红回「刚看到大飞进群了，欢迎欢迎！」（mock 仅当 system 含加入事件才回该句），三名成员 hasEvt/evtJoin 全 true ✓
+  ⑤转让群主→「群主转让给 红红」+机主变普通成员（操作单无管理按钮+「你是普通成员」提示）✓
+  ⑥群聊引用传播：引用明仔消息→发送→删除原消息→引用块变「明仔：原消息已删除」✓；撤回红红消息→「红红撤回了一条消息」✓
+  ⑦单聊引用传播（微信）：引用大飞消息带 quote.id 落库→删除原消息→引用块「大飞：原消息已删除」✓
+  ⑧QQ 加号菜单：六项与截图一致（含图标+箭头面板），创建群聊→建群页 ✓；建群→「群聊创建」✓；禁言明仔→「明仔被禁言10 分钟」+禁言后不回复（红红正常回复，hasEvt/evtMute 实锤）✓
+  ⑨QQ 邀请大飞→join 事件→踢出→「大飞被移出群聊」✓；被踢后发消息大飞不再参与回复 ✓
+  ⑩撤回引用联动（QQ 群）：引用红红消息→撤回原消息→「红红撤回了一条消息」+引用块「红红：原消息已删除」✓
+  ⑪持久化：reload 后全部事件行/禁言状态（禁言中剩8分钟）/转让结果（wx 群 ownerId=char-hong）全部保留 ✓
+  ⑫系统消息样式实锤：居中、灰色（black/45）、11-12px 胶囊；不进 AI 历史（runCharTurn 过滤 notice）、不触发回复、会话预览跳过
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（核心数据层+事件）、src/lib/ios/contacts-store.ts（purge 传名）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（群管理 UI+禁言执行+事件注入+引用联动）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（单聊引用联动+QQ 加号菜单+入口迁移）
+- 事件生成统一在数据层（addGroupMember/createGroup/updateGroup/kickGroupMember/muteGroupMember/unmuteGroupMember/setGroupAdmin/transferGroupOwner 内部自动落系统消息），调用方不会遗漏；事件=kind notice+evt，不参与 AI 历史/预览/未读，但按时间注入 system（【群内事件】）
+- 权限：groupRoleOf（owner>admin>member）+canManageTarget（管理员仅管普通成员、群主不可被管理）+禁言物理执行（回合循环过滤）+机主被禁言输入阻断；转让后旧群主变普通成员（实测生效）
+- 新 testid：wx-groupinfo-toggle-admin|mute|unmute|transfer|transfer-confirm|mute-status|mute-<ms>|mute-forever、wx-group-me-muted、qq-groupinfo-同名系列、qq-msgs-plus-menu、qq-plus-create-group|create-channel|add-friend|scan|send-file|pay；存量 testid 全部兼容
+- 已知边界：AI 群主/管理员不会主动执行管理操作（管理动作仅由用户 UI 触发，符合「用户可以扮演群主或管理员」）；「XX退出了群聊」目前唯一触发路径为删除联系人级联（群成员无自主退群流程）；禁言倒计时为惰性过期（无需写回）；转发/收藏/红包等既有功能零改动

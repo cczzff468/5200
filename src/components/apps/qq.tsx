@@ -100,8 +100,12 @@ import {
   Pin,
   PinOff,
   Plus,
+  FolderOutput,
+  Hash,
+  JapaneseYen,
   QrCode,
   Radio,
+  ScanLine,
   Search,
   Settings,
   Share2,
@@ -239,8 +243,9 @@ interface QQMsg {
   notice?: QQNoticeData;
   /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
   stk?: { url: string; meaning: string; sid?: string };
-  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
-  quote?: { name: string; content: string };
+  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀）；
+   *  id = 被引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */
+  quote?: { name: string; content: string; id?: string };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
@@ -619,7 +624,7 @@ function loadMsgs(contactId: string): QQMsg[] {
         ...m,
         quote:
           m.quote && typeof m.quote.name === 'string' && typeof m.quote.content === 'string'
-            ? { name: m.quote.name, content: m.quote.content }
+            ? { name: m.quote.name, content: m.quote.content, id: typeof m.quote.id === 'string' ? m.quote.id : undefined }
             : undefined,
         recalled: m.recalled === true || undefined,
         fwd:
@@ -1976,7 +1981,7 @@ function ChatPage({
   const [editMsg, setEditMsg] = useState<QQMsg | null>(null);
   const [editDraft, setEditDraft] = useState('');
   /** 引用回复（输入框上方条；发送时挂到新消息上） */
-  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
+  const [quote, setQuote] = useState<null | { name: string; content: string; id?: string }>(null);
   /** 多选模式：勾选消息批量删除/转发/收藏 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -2757,7 +2762,13 @@ function ChatPage({
           onToast('对方正在回复，请稍后再试');
           return;
         }
-        setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+        // 一.5 引用联动：被删消息若被其他消息引用，引用内容改写为「原消息已删除」
+        const gone = new Set([m.id]);
+        setMsgs((prev) =>
+          prev
+            .filter((x) => !gone.has(x.id))
+            .map((x) => (x.quote?.id && gone.has(x.quote.id) ? { ...x, quote: { ...x.quote, content: '原消息已删除' } } : x))
+        );
         onToast('已删除');
         break;
       }
@@ -2766,7 +2777,8 @@ function ChatPage({
         setEditDraft(m.content);
         break;
       case 'quote':
-        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m) });
+        // id 带上源消息：删除/撤回后引用显示「原消息已删除」
+        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m), id: m.id });
         break;
       case 'multi':
         setSelectMode(true);
@@ -2777,7 +2789,14 @@ function ChatPage({
           onToast('对方正在回复，请稍后再试');
           return;
         }
-        setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
+        // 二.3：不删原始记录（标记 recalled 渲染居中灰字）；引用联动改写（原内容不再可见）
+        setMsgs((prev) =>
+          prev.map((x) => {
+            if (x.id === m.id) return { ...x, recalled: true };
+            if (x.quote?.id && x.quote.id === m.id && !x.recalled) return { ...x, quote: { ...x.quote, content: '原消息已删除' } };
+            return x;
+          })
+        );
         onToast('已撤回');
         break;
       }
@@ -2827,7 +2846,12 @@ function ChatPage({
       return;
     }
     const ids = new Set(selectedIds);
-    setMsgs((prev) => prev.filter((x) => !ids.has(x.id)));
+    // 一.5：批量删除同样触发引用联动（被删消息被引用时改写为「原消息已删除」）
+    setMsgs((prev) =>
+      prev
+        .filter((x) => !ids.has(x.id))
+        .map((x) => (x.quote?.id && ids.has(x.quote.id) ? { ...x, quote: { ...x.quote, content: '原消息已删除' } } : x))
+    );
     onToast(`已删除 ${selectedIds.length} 条消息`);
     exitSelect();
   };
@@ -5914,6 +5938,7 @@ function MessagesPage({
   onOpenDrawer,
   onAvatar,
   onAddFriend,
+  onCreateGroup,
   onToast,
 }: {
   me: QQUser;
@@ -5924,9 +5949,13 @@ function MessagesPage({
   onOpenDrawer: () => void;
   onAvatar: () => void;
   onAddFriend: () => void;
+  /** 发起群聊（建群页）——入口在消息页右上角加号菜单 */
+  onCreateGroup: () => void;
   onToast: (m: string) => void;
 }) {
   const [q, setQ] = useState('');
+  // 右上角加号菜单（对照真 QQ：创建群聊/创建频道/加好友/群/扫一扫/传文件/收付款）
+  const [plusMenu, setPlusMenu] = useState(false);
   // 右滑手势：页面任意位置（输入控件除外）水平右滑 → 个人中心抽屉
   const swipe = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   // 会话管理：置顶 / 免打扰（chat-flags 总线）/ 未读 / 已删除（长按菜单操作，localStorage 持久化）
@@ -6118,15 +6147,51 @@ function MessagesPage({
         subtitle={<OnlineBadge />}
         onAvatar={onAvatar}
         action={
-          <button
-            type="button"
-            aria-label="添加"
-            data-testid="qq-msgs-add"
-            className="rounded-full p-1.5 active:bg-black/5"
-            onClick={onAddFriend}
-          >
-            <Plus className="h-6 w-6" strokeWidth={2} />
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              aria-label="添加"
+              aria-expanded={plusMenu}
+              data-testid="qq-msgs-add"
+              className="rounded-full p-1.5 active:bg-black/5"
+              onClick={() => setPlusMenu((v) => !v)}
+            >
+              <Plus className={`h-6 w-6 transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2} />
+            </button>
+            {/* 加号下拉菜单（对照需求截图：白色圆角面板 + 指向箭头；点击面板外关闭） */}
+            {plusMenu && (
+              <>
+                <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setPlusMenu(false)} />
+                <div
+                  data-testid="qq-msgs-plus-menu"
+                  className="absolute right-0 top-[calc(100%+6px)] z-50 w-[172px] rounded-[14px] bg-white p-1.5 shadow-[0_6px_28px_rgba(0,0,0,0.16)] dark:bg-[#2A2C31] dark:shadow-[0_6px_28px_rgba(0,0,0,0.5)]"
+                >
+                  <span aria-hidden="true" className="absolute -top-[5px] right-[13px] block h-2.5 w-2.5 rotate-45 rounded-[2px] bg-white dark:bg-[#2A2C31]" />
+                  {(
+                    [
+                      { key: 'create-group', label: '创建群聊', icon: <MessageSquarePlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onCreateGroup(); } },
+                      { key: 'create-channel', label: '创建频道', icon: <Hash className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('创建频道暂未开放'); } },
+                      { key: 'add-friend', label: '加好友/群', icon: <UserPlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onAddFriend(); } },
+                      { key: 'scan', label: '扫一扫', icon: <ScanLine className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('扫一扫暂未开放'); } },
+                      { key: 'send-file', label: '传文件', icon: <FolderOutput className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('传文件暂未开放'); } },
+                      { key: 'pay', label: '收付款', icon: <JapaneseYen className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('收付款暂未开放'); } },
+                    ] as const
+                  ).map((it) => (
+                    <button
+                      key={it.key}
+                      type="button"
+                      data-testid={`qq-plus-${it.key}`}
+                      onClick={it.action}
+                      className="flex w-full items-center gap-3 rounded-[10px] px-3 py-[9px] text-left active:bg-black/5 dark:active:bg-white/10"
+                    >
+                      <span className="shrink-0 text-black/70 dark:text-white/70">{it.icon}</span>
+                      <span className="text-[15px]">{it.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         }
       />
       <div className="px-4 pb-2 pt-1">
@@ -6291,7 +6356,6 @@ function ContactsPage({
   onAddFriend,
   onOpenNewFriends,
   onOpenGroup,
-  onCreateGroup,
   onToast,
 }: {
   me: QQUser;
@@ -6303,8 +6367,6 @@ function ContactsPage({
   onOpenNewFriends: () => void;
   /** 打开某个 QQ 群聊 */
   onOpenGroup: (g: ChatGroup) => void;
-  /** 发起群聊（建群页） */
-  onCreateGroup: () => void;
   onToast: (m: string) => void;
 }) {
   const [q, setQ] = useState('');
@@ -6501,21 +6563,9 @@ function ContactsPage({
 
         {tab === '群聊' && (
           <div>
-            {/* 发起群聊（从已有角色中选成员建群） */}
-            <button
-              type="button"
-              data-testid="qq-contacts-group-create"
-              onClick={onCreateGroup}
-              className="flex w-full items-center gap-3 border-b border-black/[0.05] px-4 py-3 text-left active:bg-black/[0.04] dark:border-white/[0.06] dark:active:bg-white/[0.05]"
-            >
-              <span className="grid h-[42px] w-[42px] shrink-0 place-items-center rounded-[10px] bg-[#0099FF]/10 text-[#0099FF] dark:bg-[#4AA3FF]/15 dark:text-[#4AA3FF]" aria-hidden="true">
-                <UserPlus className="h-5 w-5" strokeWidth={2} />
-              </span>
-              <span className="flex-1 text-[15px]">发起群聊</span>
-              <ChevronRight className="h-5 w-5 text-black/25 dark:text-white/25" aria-hidden="true" />
-            </button>
+            {/* 发起群聊入口已迁移至消息页右上角「+」菜单（对照需求：创建群聊移到加号里面） */}
             {filteredGroups.length === 0 ? (
-              <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂无群聊，点上方「发起群聊」创建</p>
+              <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂无群聊，点消息页右上角「+」创建</p>
             ) : (
               filteredGroups.map((g) => {
                 const p = groupPreview(g.id);
@@ -10206,6 +10256,7 @@ function MainScreen({
                 onOpenDrawer={() => setDrawerOpen(true)}
                 onAvatar={closeApp}
                 onAddFriend={() => setRoute({ page: 'addfriend' })}
+                onCreateGroup={() => setRoute({ page: 'group-create' })}
                 onToast={showToast}
               />
             )}
@@ -10219,7 +10270,6 @@ function MainScreen({
                 onAddFriend={() => setRoute({ page: 'addfriend' })}
                 onOpenNewFriends={() => setRoute({ page: 'newfriends' })}
                 onOpenGroup={openGroupOf}
-                onCreateGroup={() => setRoute({ page: 'group-create' })}
                 onToast={showToast}
               />
             )}

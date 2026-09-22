@@ -33,15 +33,18 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Crown,
   Forward,
   Image as ImageIcon,
   Lock,
   MapPin,
   Mic,
+  MicOff,
   Minus,
   Phone,
   Plus,
   Search,
+  Shield,
   Sparkles,
   Smile,
   Star,
@@ -66,19 +69,29 @@ import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setC
 import { genId } from '@/lib/ios/db';
 import {
   addGroupMember,
+  collectGroupEventLines,
   GROUP_MEMBER_CAP,
+  GROUP_MUTE_PRESETS,
   createGroup,
   dissolveGroup,
   effectiveInterop,
   getGroup,
+  groupMuteLeftText,
   groupPreview,
+  groupRoleOf,
+  isGroupMuted,
+  kickGroupMember,
   listGroups,
   loadGroupMsgs,
-  removeGroupMember,
+  muteGroupMember,
   saveGroupMsgs,
+  setGroupAdmin,
+  transferGroupOwner,
+  unmuteGroupMember,
   updateGroup,
   type ChatGroup,
   type GroupFwdRecord,
+  type GroupMemberRole,
   type GroupRpData,
   type GroupTrData,
   type WxGroupMsg,
@@ -648,6 +661,9 @@ export function QqGroupInfoPage({
 }) {
   const [dialog, setDialog] = useState<null | { kind: 'name' | 'announcement' }>(null);
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
+  // 禁言时长选择单（群主/管理员对目标成员发起）；转让群主确认弹窗
+  const [muteSheet, setMuteSheet] = useState<ContactRecord | null>(null);
+  const [transferConfirm, setTransferConfirm] = useState<ContactRecord | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -716,6 +732,20 @@ export function QqGroupInfoPage({
     [contacts, group.memberIds]
   );
 
+  // ---- 群角色 / 权限（六.权限规则）：群主全部权限；管理员可禁言/踢人（仅普通成员）；普通成员不能管理他人 ----
+  const meRec = useMemo(() => contacts.find((c) => c.kind === 'user') ?? null, [contacts]);
+  const myRole: GroupMemberRole = meRec ? groupRoleOf(group, meRec.id) : 'member';
+  const amOwner = myRole === 'owner';
+  const amAdmin = myRole === 'admin';
+  const canManage = amOwner || amAdmin;
+  /** 目标成员能否被我管理（管理员只能管普通成员；群主除自己外都能管） */
+  const canManageTarget = (target: ContactRecord): boolean => {
+    if (target.id === group.ownerId) return false; // 群主不可被管理
+    return amOwner || (amAdmin && groupRoleOf(group, target.id) === 'member');
+  };
+  /** 群主身份标签（成员瓦片/操作单用） */
+  const roleLabelOf = (id: string): string => (group.ownerId === id ? '群主' : group.adminIds.includes(id) ? '管理员' : '');
+
   useEffect(() => qqChatFlags.subscribe(() => setFlags({ ...qqChatFlags.get() })), []);
 
   const pickAvatar = (file: File) => {
@@ -747,10 +777,58 @@ export function QqGroupInfoPage({
       onToast('至少保留一名成员');
       return;
     }
-    const next = removeGroupMember(gid, c.id);
+    // 踢人（三.3/六.3）：群主/管理员才可操作；群主不可被移出；成功后自动落「XX被移出群聊」系统消息
+    if (!canManageTarget(c)) {
+      onToast(amOwner ? '群主不可被移出' : '管理员只能移出普通成员');
+      return;
+    }
+    const next = kickGroupMember(gid, c.id, { name: memberNameOf(c) });
     if (next) {
-      onToast(`已移出 ${memberNameOf(c)}`);
+      onToast(`已将 ${memberNameOf(c)} 移出群聊`);
       onUpdate({ memberIds: next.memberIds });
+    }
+  };
+
+  /** 设为/取消管理员（仅群主；群主本人不可被设）：成功自动落系统消息（三.5） */
+  const toggleAdmin = (c: ContactRecord, admin: boolean) => {
+    setMemberSheet(null);
+    if (!amOwner) return;
+    const next = setGroupAdmin(gid, c.id, admin, { name: memberNameOf(c) });
+    if (next) {
+      onToast(admin ? `已将 ${memberNameOf(c)} 设为管理员` : `已取消 ${memberNameOf(c)} 的管理员`);
+      onUpdate({}); // 空补丁：让宿主刷新群对象（adminIds 已在数据层落盘）
+    }
+  };
+
+  /** 禁言（带时长；六.5 禁言期间不能发言）：成功自动落「XX被禁言 X」系统消息（三.4） */
+  const applyMute = (c: ContactRecord, ms: number | null, label: string) => {
+    setMuteSheet(null);
+    setMemberSheet(null);
+    const next = muteGroupMember(gid, c.id, ms, { name: memberNameOf(c) });
+    if (next) {
+      onToast(`已禁言 ${memberNameOf(c)} ${label}`);
+      onUpdate({});
+    }
+  };
+
+  /** 解除禁言：自动落「XX被解除禁言」系统消息（三.4） */
+  const liftMute = (c: ContactRecord) => {
+    setMemberSheet(null);
+    const next = unmuteGroupMember(gid, c.id, { name: memberNameOf(c) });
+    if (next) {
+      onToast(`已解除 ${memberNameOf(c)} 的禁言`);
+      onUpdate({});
+    }
+  };
+
+  /** 转让群主（仅群主；六.2 只能转让不能取消）：自动落「群主转让给 XX」系统消息（三.6） */
+  const doTransfer = (c: ContactRecord) => {
+    setTransferConfirm(null);
+    setMemberSheet(null);
+    const next = transferGroupOwner(gid, c.id, { name: memberNameOf(c) });
+    if (next) {
+      onToast(`群主已转让给 ${memberNameOf(c)}`);
+      onUpdate({});
     }
   };
 
@@ -799,20 +877,56 @@ export function QqGroupInfoPage({
           <span className="ml-auto text-[13px] text-black/35 dark:text-white/35">{members.length + 1}人</span>
         </div>
         <div className="flex flex-wrap gap-x-[13px] gap-y-3">
-          {members.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className="flex w-[52px] flex-col items-center gap-1"
-              onClick={() => setMemberSheet(m)}
-              data-testid={`qq-groupinfo-member-${m.id}`}
-            >
-              <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={48} />
-              <span className="max-w-[52px] truncate text-[11px] leading-none text-black/50 dark:text-white/50">
-                {memberNameOf(m)}
+          {/* 五.1 群成员列表：机主瓦片也在列（首位），成员带群主/管理员身份徽标 */}
+          {meRec && (
+            <div className="flex w-[52px] flex-col items-center gap-1">
+              <QqAvatar src={meRec.avatar} alt={meRec.name} size={48} />
+              <span className="flex max-w-[52px] items-center gap-1 overflow-hidden">
+                <span className="truncate text-[11px] leading-none text-black/50 dark:text-white/50">{meRec.name}</span>
+                {myRole !== 'member' && (
+                  <span
+                    className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                      amOwner ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                    }`}
+                  >
+                    {myRole === 'owner' ? '群主' : '管理员'}
+                  </span>
+                )}
               </span>
-            </button>
-          ))}
+            </div>
+          )}
+          {[...members]
+            .sort((a, b) => {
+              // 群主在前、管理员其次（其余保持原序）；机主瓦片始终首位
+              const rank = (id: string) => (group.ownerId === id ? 0 : group.adminIds.includes(id) ? 1 : 2);
+              return rank(a.id) - rank(b.id);
+            })
+            .map((m) => {
+              const rl = roleLabelOf(m.id);
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className="flex w-[52px] flex-col items-center gap-1"
+                  onClick={() => setMemberSheet(m)}
+                  data-testid={`qq-groupinfo-member-${m.id}`}
+                >
+                  <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={48} />
+                  <span className="flex max-w-[52px] items-center gap-1 overflow-hidden">
+                    <span className="truncate text-[11px] leading-none text-black/50 dark:text-white/50">{memberNameOf(m)}</span>
+                    {rl && (
+                      <span
+                        className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                          rl === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                        }`}
+                      >
+                        {rl}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
           <button
             type="button"
             className="flex w-[52px] flex-col items-center gap-1"
@@ -824,7 +938,7 @@ export function QqGroupInfoPage({
             </span>
             <span className="text-[11px] leading-none text-black/50 dark:text-white/50">邀请</span>
           </button>
-          {members.length > 0 && (
+          {canManage && members.length > 0 && (
             <button
               type="button"
               className="flex w-[52px] flex-col items-center gap-1"
@@ -944,23 +1058,155 @@ export function QqGroupInfoPage({
         群聊为本地模拟，不含任何真实资金操作
       </div>
 
-      {/* 成员操作 */}
+      {/* 成员操作（五.2-6：管理员/禁言/解禁/踢人/转让群主，按身份出按钮；六.权限规则门控） */}
       {memberSheet && (
         <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setMemberSheet(null)}>
           <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 px-3 py-2">
               <QqAvatar src={memberSheet.avatar} alt={memberNameOf(memberSheet)} size={40} />
-              <div className="text-[15px]">{memberNameOf(memberSheet)}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-[15px]">
+                  <span className="truncate">{memberNameOf(memberSheet)}</span>
+                  {roleLabelOf(memberSheet.id) && (
+                    <span
+                      className={`shrink-0 rounded-[3px] px-1 text-[10px] leading-[16px] ${
+                        roleLabelOf(memberSheet.id) === '群主'
+                          ? 'bg-[#FA9D3B]/15 text-[#D07818]'
+                          : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                      }`}
+                    >
+                      {roleLabelOf(memberSheet.id)}
+                    </span>
+                  )}
+                </div>
+                {groupMuteLeftText(group, memberSheet.id) && (
+                  <div className="mt-0.5 flex items-center gap-1 text-[12px] text-[#F5455C]" data-testid="qq-groupinfo-mute-status">
+                    <MicOff className="h-3 w-3" />
+                    禁言中：{groupMuteLeftText(group, memberSheet.id)}
+                  </div>
+                )}
+              </div>
             </div>
-            <button
-              type="button"
-              data-testid="qq-groupinfo-remove-member"
-              onClick={() => removeMember(memberSheet)}
-              className="mt-1 flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
-            >
-              <UserMinus className="h-4 w-4" />
-              移出群聊
-            </button>
+            {/* 设为/取消管理员（仅群主；群主本人不可被设） */}
+            {amOwner && memberSheet.id !== group.ownerId && (
+              <button
+                type="button"
+                data-testid="qq-groupinfo-toggle-admin"
+                onClick={() => toggleAdmin(memberSheet, !group.adminIds.includes(memberSheet.id))}
+                className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <Shield className="h-4 w-4" />
+                {group.adminIds.includes(memberSheet.id) ? '取消管理员' : '设为管理员'}
+              </button>
+            )}
+            {/* 禁言（群主：除自己外都能禁；管理员：仅普通成员） */}
+            {canManageTarget(memberSheet) && !groupMuteLeftText(group, memberSheet.id) && (
+              <button
+                type="button"
+                data-testid="qq-groupinfo-mute"
+                onClick={() => setMuteSheet(memberSheet)}
+                className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#D07818] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <MicOff className="h-4 w-4" />
+                禁言
+              </button>
+            )}
+            {/* 解除禁言 */}
+            {canManageTarget(memberSheet) && groupMuteLeftText(group, memberSheet.id) && (
+              <button
+                type="button"
+                data-testid="qq-groupinfo-unmute"
+                onClick={() => liftMute(memberSheet)}
+                className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#0C8B4D] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <Mic className="h-4 w-4" />
+                解除禁言
+              </button>
+            )}
+            {/* 转让群主（仅群主；六.2 只能转让不能取消） */}
+            {amOwner && memberSheet.id !== group.ownerId && (
+              <button
+                type="button"
+                data-testid="qq-groupinfo-transfer"
+                onClick={() => {
+                  setTransferConfirm(memberSheet);
+                  setMemberSheet(null);
+                }}
+                className="flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#D07818] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <Crown className="h-4 w-4" />
+                转让群主
+              </button>
+            )}
+            {/* 移出群聊（群主：除自己外；管理员：仅普通成员） */}
+            {canManageTarget(memberSheet) && (
+              <button
+                type="button"
+                data-testid="qq-groupinfo-remove-member"
+                onClick={() => removeMember(memberSheet)}
+                className="mt-1 flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <UserMinus className="h-4 w-4" />
+                移出群聊
+              </button>
+            )}
+            {!canManageTarget(memberSheet) && !amOwner && (
+              <p className="px-3 pb-1 pt-2 text-[12px] leading-relaxed text-black/35 dark:text-white/35">
+                你是普通成员，不能管理其他成员
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 禁言时长选择单（10 分钟 / 1 小时 / 3 小时 / 1 天 / 永久） */}
+      {muteSheet && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setMuteSheet(null)}>
+          <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
+            <p className="px-3 py-2 text-[13px] text-black/45 dark:text-white/45">
+              禁言 {memberNameOf(muteSheet)}（禁言期间不能在群里发言）
+            </p>
+            {GROUP_MUTE_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                data-testid={`qq-groupinfo-mute-${p.ms === null ? 'forever' : p.ms}`}
+                onClick={() => applyMute(muteSheet, p.ms, p.label)}
+                className="flex w-full items-center justify-between rounded-[10px] px-3 py-3 text-left text-[15px] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <span>{p.label}</span>
+                {p.ms === null && <span className="text-[12px] text-[#F5455C]">直到解除</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 转让群主确认 */}
+      {transferConfirm && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setTransferConfirm(null)}>
+          <div className="w-full max-w-[300px] rounded-[14px] bg-white p-5 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[16px] font-medium">转让群主</p>
+            <p className="mt-2 text-[13px] leading-relaxed text-black/55 dark:text-white/55">
+              确定把群主转让给「{memberNameOf(transferConfirm)}」吗？转让后你将成为普通成员。
+            </p>
+            <div className="mt-4 flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setTransferConfirm(null)}
+                className="h-10 flex-1 rounded-[8px] bg-black/5 text-[14px] dark:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="qq-groupinfo-transfer-confirm"
+                onClick={() => doTransfer(transferConfirm)}
+                className="h-10 flex-1 rounded-[8px] bg-[#0099FF] text-[14px] font-medium text-white active:opacity-80"
+              >
+                确认转让
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1007,7 +1253,8 @@ export function QqGroupInfoPage({
                     type="button"
                     data-testid={`qq-group-invite-${c.id}`}
                     onClick={() => {
-                      const next = addGroupMember(gid, c.id);
+                      // 三.1：入群自动落「XX加入了群聊」系统消息（事件在数据层 addGroupMember 内生成）
+                      const next = addGroupMember(gid, c.id, { name: memberNameOf(c) });
                       if (!next) {
                         onToast(`群成员已达上限（${GROUP_MEMBER_CAP} 人）`);
                         return;
@@ -1329,7 +1576,7 @@ export function QqGroupChatPage({
   const sKey = sessionKeyOf(gid);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   const [draft, setDraft] = useState('');
-  const [quote, setQuote] = useState<{ name: string; content: string } | null>(null);
+  const [quote, setQuote] = useState<{ name: string; content: string; id?: string } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -1404,6 +1651,10 @@ export function QqGroupChatPage({
     [contacts, group.memberIds]
   );
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+
+  // 六.5：机主被禁言时的输入阻断（当前权限体系下机主通常为群主，此处为防御性支持；禁言过期自动恢复）
+  const meMuted = isGroupMuted(group, me.id);
+  const meMuteLeft = meMuted ? groupMuteLeftText(group, me.id) : null;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1708,6 +1959,16 @@ export function QqGroupChatPage({
           groupRules.push('【群成员速览】群里其他成员的情况（你与他们的相处方式按你的人设与各自人设自然把握）：', ...memberLines);
         }
         if (g.announcement) groupRules.push(`【群公告】${g.announcement}`);
+        // 群内事件感知（四.1/4.3）：系统事件（加入/退出/禁言/管理员/转让/改名/公告/建群）按时间排序注入 system。
+        // 事件不参与正常回复（历史里没有），但成员都在场看到了，不能装作不知道（四.2/4.4）
+        const evtLines = collectGroupEventLines(gid);
+        if (evtLines.length > 0) {
+          groupRules.push(
+            '【群内事件】最近群里发生的这些事你都在场看到了（按时间先后）：',
+            ...evtLines,
+            '这些事件都是真实发生的，不要装作没看见：有新成员加入可以按人设自然打招呼，有人退群/被禁言/成为管理员/群主转让等也可以在合适的时机自然反应；但不必逐条点评事件，没有想说的就不用特意回应。'
+          );
+        }
         // 发言自判（按人设来）：未被 @ 的成员无话可说时只回 [SKIP]（finalize 阶段整条丢弃，不落盘）
         if (allowSkip) {
           groupRules.push('【发言判断】刚发出的这条消息如果与你无关、不需要你表态或你无话可说（比如别人在单独聊天），只回复 [SKIP] 两个词，不要说任何其他内容；有你要说的就正常回复。');
@@ -1924,9 +2185,12 @@ export function QqGroupChatPage({
       runningRef.current = true;
       try {
         expireStalePackets(); // 每轮开始前先清算过期红包（终态不可再改）
-        const all = g.memberIds
+        // 六.5 禁言执行：被禁言的成员本轮不能发言（被 @ 也不行，物理禁言；禁言过期自动恢复）
+        const fresh = getGroup(gid) ?? g;
+        const all = fresh.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
-          .filter((c): c is ContactRecord => !!c);
+          .filter((c): c is ContactRecord => !!c)
+          .filter((c) => !isGroupMuted(fresh, c.id));
         const mentioned = trigger ? parseMentions(trigger.content) : [];
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
@@ -1971,6 +2235,10 @@ export function QqGroupChatPage({
   };
 
   const send = () => {
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
     const text = draft.trim();
     // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
     if (!text) {
@@ -2498,12 +2766,31 @@ export function QqGroupChatPage({
     onToast(target.self ? '已转发给自己' : `已转发给 ${target.name}`);
   };
 
-  /** 从群记录里移除消息（单条删除/批量删除共用；只动选中的消息，不碰其他成员的消息） */
+  /** 从群记录里移除消息（单条删除/批量删除共用；只动选中的消息，不碰其他成员的消息）。
+   *  一.5 引用联动：被删消息若被其他消息引用，引用内容改写为「原消息已删除」（引用关系用 quote.id 关联） */
   const removeMsgs = useCallback(
     (ids: string[]) => {
       if (ids.length === 0) return;
       const set = new Set(ids);
-      const next = loadGroupMsgs(gid).filter((m) => !set.has(m.id));
+      const next = loadGroupMsgs(gid)
+        .filter((m) => !set.has(m.id))
+        .map((m) =>
+          m.quote?.id && set.has(m.quote.id) ? { ...m, quote: { ...m.quote, content: '原消息已删除' } } : m
+        );
+      saveGroupMsgs(gid, next);
+      if (mountedRef.current) setMsgs(next);
+    },
+    [gid]
+  );
+
+  /** 撤回消息的引用联动（一.5 同规则：撤回后原内容不再可见，引用显示「原消息已删除」） */
+  const recallMsg = useCallback(
+    (mid: string) => {
+      const next = loadGroupMsgs(gid).map((m) => {
+        if (m.id === mid) return { ...m, recalled: true };
+        if (m.quote?.id && m.quote.id === mid && !m.recalled) return { ...m, quote: { ...m.quote, content: '原消息已删除' } };
+        return m;
+      });
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
     },
@@ -2534,8 +2821,8 @@ export function QqGroupChatPage({
         setEditDraft(m.content);
         break;
       case 'quote':
-        // 群聊引用带发言人：显示引用的是谁的消息
-        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m) });
+        // 群聊引用带发言人：显示引用的是谁的消息（id 带上源消息，删除/撤回后显示「原消息已删除」）
+        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m), id: m.id });
         requestAnimationFrame(() => inputRef.current?.focus());
         break;
       case 'multi':
@@ -2550,7 +2837,8 @@ export function QqGroupChatPage({
           onToast('成员们还在回复，稍等一下');
           return;
         }
-        patchGroupMsg(m.id, { recalled: true });
+        // 二.3/二.5：撤回不删原始记录（标记 recalled 渲染为居中灰字「谁撤回了一条消息」）；引用联动改写
+        recallMsg(m.id);
         onToast('已撤回');
         break;
       }
@@ -2992,6 +3280,13 @@ export function QqGroupChatPage({
           </div>
         ) : (
         <>
+        {/* 六.5 禁言横幅：我被禁言时输入区上方提示（当前权限体系下机主通常为群主，此处为防御性支持） */}
+        {meMuted && (
+          <div className="flex items-center justify-center gap-1.5 border-b border-black/[0.05] px-3 py-1.5 text-[12px] text-black/50 dark:border-white/[0.06] dark:text-white/50" data-testid="qq-group-me-muted">
+            <MicOff className="h-3.5 w-3.5" />
+            你已被禁言（{meMuteLeft ?? '永久'}），暂时无法发言
+          </div>
+        )}
         {quote && (
           <div className="flex items-center gap-2 border-b border-black/[0.05] px-3 py-1.5 text-[12px] text-black/50 dark:border-white/[0.06] dark:text-white/50">
             <span className="min-w-0 flex-1 truncate">引用 {quote.name}：{quote.content}</span>
