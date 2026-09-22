@@ -42,7 +42,7 @@
 
 import type { ApiConfig } from '@/lib/ios/store';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getGroup } from '@/lib/ios/groups';
+import { getGroup, onGroupDissolved } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
   MEM_APP_LABEL,
@@ -461,6 +461,53 @@ export function memPurgeContact(contactId: string): void {
   }
 }
 
+/** 解散群聊 → 级联清理群来源记忆（钩子由 groups 层触发；依赖方向 memory → groups 单向，不反向 import） */
+onGroupDissolved((g) => memPurgeGroupSource(g.id, g.memberIds));
+
+/**
+ * 解散群聊时清理「群来源记忆」（onGroupDissolved 钩子调用；群删除时记忆一起清理的规则）：
+ * - 碎片：删除 source==='group' 且 sourceGroupId===groupId 的条目（无论是否已被总结消费/归档）；
+ * - 核心/长期：内容不删（可能含私聊来源的事实），只从 groupIds 里剔除该群；
+ *   剔除后不再有任何群来源时 privateSource 还原为 true（纯私聊语义，与旧数据兼容路径一致）。
+ * 成员维度只遍历群成员（只有成员参与过群聊，其他联系人不可能有该群来源的记忆）。
+ */
+export function memPurgeGroupSource(groupId: string, memberIds: string[]): void {
+  if (!groupId) return;
+  const ids = Array.from(new Set(memberIds.filter(Boolean)));
+  for (const contactId of ids) {
+    try {
+      // 碎片层：过滤掉本群来源的条目
+      const frags = readFragments(contactId);
+      const nextFrags = frags.filter((f) => !(f.source === 'group' && f.sourceGroupId === groupId));
+      if (nextFrags.length !== frags.length) writeJSON(fragKey(contactId), nextFrags);
+      // 核心层：剔除本群来源标记（内容保留）
+      const cores = readCores(contactId);
+      let coresChanged = false;
+      const nextCores = cores.map((m) => {
+        const gids = m.groupIds ?? [];
+        if (!gids.includes(groupId)) return m;
+        coresChanged = true;
+        const rest = gids.filter((x) => x !== groupId);
+        return { ...m, groupIds: rest.length > 0 ? rest : undefined, privateSource: rest.length > 0 ? m.privateSource : true };
+      });
+      if (coresChanged) writeJSON(coreKey(contactId), nextCores);
+      // 长期层：同核心层
+      const longs = readLongTerm(contactId);
+      let longsChanged = false;
+      const nextLongs = longs.map((m) => {
+        const gids = m.groupIds ?? [];
+        if (!gids.includes(groupId)) return m;
+        longsChanged = true;
+        const rest = gids.filter((x) => x !== groupId);
+        return { ...m, groupIds: rest.length > 0 ? rest : undefined, privateSource: rest.length > 0 ? m.privateSource : true };
+      });
+      if (longsChanged) writeJSON(longKey(contactId), nextLongs);
+    } catch {
+      // 单个成员清理失败不影响其他成员
+    }
+  }
+}
+
 // ---------------- 召回（AI 带着记忆聊天） ----------------
 
 /** 相关性打分：内容与当前上下文的重叠 + 新近加成（长期/核心/碎片各自组内排序用） */
@@ -522,6 +569,16 @@ export interface MemRecallOpts {
 }
 
 export function memRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
+  // 顶层容错（与 collectWbBlocks 同款约定）：记忆注入任何意外异常都不阻断消息发送，
+  // 返回空块 = 无记忆正常聊天（群聊/私聊同此规则）
+  try {
+    return memRecallBlockInner(contactId, app, contextText, opts);
+  } catch {
+    return '';
+  }
+}
+
+function memRecallBlockInner(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
   if (!contactId) return '';
   memSweepExpiry(contactId);
   const { share, forget } = getMemSettings(contactId);

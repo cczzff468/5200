@@ -7200,6 +7200,7 @@ function MainScreen({
       <WxGroupCreatePage
         contacts={contacts}
         onBack={() => setGroupPage(null)}
+        onToast={showToast}
         onCreated={(g) => {
           refreshGroups();
           setGroupPage(null);

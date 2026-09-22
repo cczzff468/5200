@@ -5892,3 +5892,33 @@ Stage Summary:
 - 新 testid：wx-grp-select-*/wx-grp-select-bar|del|forward|fav|cancel|count、wx-grp-edit-layer|input|save、wx-grp-fwd-choose-mask|bar|each|merge、wx-grp-fwd-target-layer|<id>|back、wx-grp-fwd-detail*、wx-grp-forward-bubble、qq-grp-select-*/bar|del|forward|fav|cancel|count、qq-grp-edit-layer|input|save、qq-grp-fwd-*、qq-grp-forward-bubble；存量 testid 全部兼容
 - 数据兼容：WxGroupMsg 新增 forward/fwd 由 normalizeMsg 规范化；群→单聊转发写入与单聊同键同结构（wx-chat-msgs:/qq-chat-msgs:），单聊原生渲染器直接识别
 - 已知边界：红包/转账卡片被转发时按单聊同规则转为占位文本卡片（不克隆活卡不动资金）；跨宿主转发（微信群→QQ）不支持（数据隔离维持）；QQ 群时间感知开关行暂无独立 testid（功能已验证）
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: 群聊功能完整检查（十大类规则逐项审计）+ 缺失规则补全（解散级联清理记忆/人数上限/防刷屏/隐私边界/资金真实性/敏感内容/召回容错/坏类名修复）
+
+Work Log:
+- 通读群聊核心代码建立现状清单：src/lib/ios/groups.ts（440 行数据层）、wx-group.tsx（3645 行）、qq-group.tsx（3249 行）、persona.ts、memory.ts（memRecallBlock group 模式）、time-aware.ts、chat-rich.ts（buildActionRules）、worldbook.ts（collectWbBlocks 容错）+ worklog group-13~19/Task 1 历史记录
+- 逐项审计结论（已有 ✓）：一.2 增删成员/改群名/改头像；二.1 按人设自判+@优先；二.3 角色互相对话；二.4 出戏禁令；三 关系注入（【与X的关系】+【群成员速览】）；四 记忆按群/按角色隔离+互通默认关+群间隔离+时间标签；五 输入全套共用组件+群背景独立；六 红包多人抢/专属指定人/转账先选人/状态持久化/按人设领取+24h 退款；七 时间感知注入；八 长按菜单 8/9 项；十.1 建群成员≥1（按钮 disabled）+移除至少留一名+成员清空自动解散；[SKIP] 空回复占位兜底
+- 补全 ①解散群聊级联清理群来源记忆（一.3）：groups.ts 新增 onGroupDissolved 钩子注册器（dissolveGroup 末尾逐个 try-catch 调用，依赖方向保持 memory→groups 单向不成环）；memory.ts 新增 memPurgeGroupSource(groupId, memberIds)（碎片删 source='group'+sourceGroupId=gid；核心/长期内容保留只剔 groupIds、剔后无群来源时 privateSource 还原 true）+ 模块级注册钩子
+- 补全 ②群人数上限 50（一.2/十.4）：groups.ts 导出 GROUP_MEMBER_CAP=50；createGroup 截断、addGroupMember 满员返回 null；wx/qq 建群页 toggle 满员拦截 toast+「至少选择一名成员」提示（新增可选 onToast prop，wechat.tsx/qq.tsx 调用处接线 wx 用 showToast）+邀请浮层满员 toast「群成员已达上限（50 人）」
+- 补全 ③群规则块三条新规则（二.5/九.1/九.4，wx+qq 双端同步）：防刷屏（每话题一两句/连发不凑数/不抢话）、【隐私边界】（成员私聊内容与私下告知的事绝不在群里说/不传话挑事）、资金真实性（红包转账以卡片和系统通知为准/绝不凭空说收发过钱）
+- 补全 ④通用敏感内容规则（九.3，单群一致）：persona.ts【禁止事项】新增「不提供违法违规或危险行为的指引；遇这类话题以角色身份礼貌回避、转移话题或善意劝阻」——全 App（微信/QQ/信息/电话/群聊）统一生效
+- 补全 ⑤memRecallBlock 顶层容错（十.3）：主体改 memRecallBlockInner，导出函数 try-catch 包裹（与 collectWbBlocks 同款约定：注入任何异常返回空块，注入失败不影响正常聊天，群聊/私聊同此规则）
+- 修复 ⑥存量坏 CSS 类 pb-ax(Npx,env(safe-area-inset-bottom))] → pb-[max(Npx,env(safe-area-inset-bottom))]（safe-area 底部内边距实际失效）：wx-group.tsx:1210 群加号面板 + 存量同款 wechat.tsx×2 / qq.tsx×1 / wechat-wallet.tsx×5 共 9 处全部清零
+- ⑦过时注释/文案修正：WxGroupPlusPanel「群聊不含资金功能」→「红包/转账为群内真实可用功能」；wx 退出群聊确认文案 →「退出后将解散该群并删除聊天记录与群聊记忆，确定退出？」；qq 解散确认文案 →「解散后群聊、聊天记录与群聊记忆将删除，确定解散并退出？」；runGroupTurn 注释补全员 [SKIP] 兜底约定（不落盘不提示=真实群聊沉默；空回复「（…）」占位；群解散/无成员静默返回）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过（dev.log 中 onGroupDissolved ReferenceError 为编辑中间态历史记录，import 补齐后 GET / 200 正常）
+- E2E 实测（agent-browser 390×844 隔离会话 + mock LLM :4100（/v1/chat/completions 流式 SSE + /api/memory/extract + /__log 请求指纹日志 + /__reset；含「沉默测试」→红红 [SKIP] 分支）；IndexedDB 直种 林川(user 90001/pw123456)+红红/明仔(char friendWx+friendQq)+明文 apiConfig+群来源记忆碎片）：
+  ①微信群「红红、明仔的群聊(3)」建群：成员 0 时创建按钮 disabled ✓；自动群名 ✓
+  ②发消息 → /__log 断言红红/明仔两份 system：isGroup=true（【群聊模式】）、hasNoSpam=true（防刷屏·新增）、hasPrivacy=true（隐私边界·新增）、hasMoneyRule=true（资金真实性·新增）、hasSafeRule=true（敏感内容·新增 persona 层）、hasSkip=true（发言判断）✓
+  ③时间感知按群开关：开启后 hasTime=true（【时间感知】注入）✓；QQ 群默认关 hasTime=false（按群独立）✓
+  ④群记忆召回+角色隔离：红红 hasMem=true（本群来源碎片「群里约定过每周五晚一起打球」）；明仔 hasMem=false（角色隔离）✓
+  ⑤沉默兜底：「沉默测试」消息 → 红红 mock 回 [SKIP] 整条丢弃（页面无 [SKIP] 气泡不落盘）、明仔正常回复 ✓
+  ⑥解散级联清理（核心新增）：解散前 mem-frag:c-hong=[frag-audit-1 gid=本群]、mem-ltm:c-hong=[core-audit-1 gids=[本群]] → 退出群聊（确认文案含「与群聊记忆」）→ 群池空、fragsLeft=[]（群碎片删除）、cores=[{core-audit-1, priv:true}]（内容保留、groupIds 剔除、privateSource 还原 true）✓
+  ⑦QQ 群同构：建群 disabled 按钮 ✓、建群 ✓、规则注入断言全 true ✓、解散确认文案「解散后群聊、聊天记录与群聊记忆将删除」✓、解散后 qq-chat-groups 空 ✓
+  ⑧console 零错误、页面无报错
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（GROUP_MEMBER_CAP+onGroupDissolved+createGroup/addGroupMember 校验+注释）、src/lib/memory.ts（memPurgeGroupSource+钩子注册+memRecallBlock 顶层容错）、src/lib/ios/persona.ts（敏感内容禁令）、src/components/apps/wx-group.tsx（规则块×3+建群/邀请上限+解散文案+坏类名+注释）、src/components/apps/qq-group.tsx（同构镜像）、src/components/apps/wechat.tsx（onToast 接线+pb-ax×2）、src/components/apps/qq.tsx（onToast 接线+pb-ax×1）、src/components/apps/wechat-wallet.tsx（pb-ax×5）
+- 十大类审计全部落地：一（级联清理记忆+人数上限补齐）二（防刷屏明文规则）三（原已完备）四（原已完备）五（原已完备+坏类名修复）六（原已完备）七（原已完备）八（原已完备）九（隐私边界/资金真实性/敏感内容三条补齐+互通默认关确认）十（建群校验/SKIP 兜底/召回容错/人数上限全闭环）
+- 新增规则生效方式：system 注入类（防刷屏/隐私/资金/敏感内容）由 E2E mock 请求指纹实锤；数据类（解散清记忆/人数上限）由 IndexedDB 前后对照实锤；UX 类（确认文案/disabled/toast）由页面快照实锤

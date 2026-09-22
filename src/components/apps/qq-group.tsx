@@ -66,6 +66,7 @@ import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setC
 import { genId } from '@/lib/ios/db';
 import {
   addGroupMember,
+  GROUP_MEMBER_CAP,
   createGroup,
   dissolveGroup,
   effectiveInterop,
@@ -504,16 +505,20 @@ function ConfirmDialog({ text, onCancel, onConfirm }: { text: string; onCancel: 
 
 // ---------------- 建群页 ----------------
 
-/** 建群：多选 QQ 好友（CHAR/NPC）+ 群名；至少 1 名成员 */
+/** 建群：多选 QQ 好友（CHAR/NPC）+ 群名；至少 1 名成员；人数上限 GROUP_MEMBER_CAP */
 export function QqGroupCreatePage({
   contacts,
   onBack,
   onCreated,
+  onToast,
 }: {
   contacts: ContactRecord[];
   onBack: () => void;
   onCreated: (g: ChatGroup) => void;
+  /** 页内提示（建群规则：成员至少一名、人数上限）；未接时静默 */
+  onToast?: (m: string) => void;
 }) {
+  const toast = onToast ?? (() => {});
   const candidates = useMemo(() => contacts.filter((c) => c.kind !== 'user' && isFriendIn(c, 'qq')), [contacts]);
   const [selected, setSelected] = useState<string[]>([]);
   const [nameDirty, setNameDirty] = useState(false);
@@ -527,11 +532,23 @@ export function QqGroupCreatePage({
   }, [selected, contacts]);
   const effName = (nameDirty ? name : suggested).trim();
 
-  const toggle = (id: string) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      // 群人数上限（与邀请浮层同一规则）：超出后不可再勾选
+      if (prev.length >= GROUP_MEMBER_CAP) {
+        toast(`群成员最多 ${GROUP_MEMBER_CAP} 人`);
+        return prev;
+      }
+      return [...prev, id];
+    });
 
   const create = () => {
     const me = contacts.find((c) => c.kind === 'user');
-    if (!me || selected.length === 0) return;
+    if (!me || selected.length === 0) {
+      toast('至少选择一名成员');
+      return;
+    }
     const g = createGroup({ app: 'qq', name: effName || '未命名群聊', memberIds: selected, ownerId: me.id });
     onCreated(g);
   };
@@ -980,7 +997,11 @@ export function QqGroupInfoPage({
                     data-testid={`qq-group-invite-${c.id}`}
                     onClick={() => {
                       const next = addGroupMember(gid, c.id);
-                      if (next) onUpdate({ memberIds: next.memberIds });
+                      if (!next) {
+                        onToast(`群成员已达上限（${GROUP_MEMBER_CAP} 人）`);
+                        return;
+                      }
+                      onUpdate({ memberIds: next.memberIds });
                       onToast(`已邀请 ${memberNameOf(c)}`);
                       setInviteOpen(false);
                     }}
@@ -1035,7 +1056,7 @@ export function QqGroupInfoPage({
       )}
       {confirmDissolve && (
         <ConfirmDialog
-          text="解散后群聊与聊天记录将删除，确定解散并退出？"
+          text="解散后群聊、聊天记录与群聊记忆将删除，确定解散并退出？"
           onCancel={() => setConfirmDissolve(false)}
           onConfirm={() => {
             setConfirmDissolve(false);
@@ -1596,6 +1617,9 @@ export function QqGroupChatPage({
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
           '把群里的每个成员都当作真实的群友，绝不出戏：不说「用户」「AI」「角色」「人设」这类幕后词汇，也不表现出「我知道谁在操作」。',
           '每次只发一条简短消息（一两句话），像真人在群里随手打字。',
+          '不要刷屏：每个话题只说一两句就够，没新内容不要为了说话而说话；需要连发多条时也只说值得说的话，绝不硬凑条数，更不要在别人正在说话时抢话打断。',
+          '【隐私边界】其他成员私下告诉你的事、或你只在私聊里知道的私密内容，绝不在群里说出去；同理不替其他成员公开他们的秘密；别人之间有分歧时不搬弄是非、不传话挑事。',
+          '群里的红包、转账都是真实卡片：谁发了什么、谁领了/收了，以卡片和系统通知为准；没有对应卡片或通知时，绝不凭空说自己发过或收到过钱。',
           '【发红包】想给群里发红包时，在回复里输出 [红包:金额:祝福语]（如 [红包:8.88:恭喜发财]），红包会以你的名义发进群里，大家都能抢；金额量力而行、符合你的人设与场合，不要频繁发。',
         ];
         // 群红包/转账待处理清单（每个成员独立视角）：是否抢/收完全按人设决定，不处理就不输出标记
@@ -1756,7 +1780,9 @@ export function QqGroupChatPage({
   );
 
   /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默）。
-   *  trigger 可省略（分句发送批次触发/红包/转账卡片入群时无文字可 @）：此时全员按人设自判。 */
+   *  trigger 可省略（分句发送批次触发/红包/转账卡片入群时无文字可 @）：此时全员按人设自判。
+   *  兜底约定（异常与边界）：全员都 [SKIP] 时不落盘不提示（真实群聊发消息也可能没人接）；
+   *  单条回复为空时 finalize 已有占位兜底；群已解散/无成员时静默返回。 */
   const runGroupTurn = useCallback(
     async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;

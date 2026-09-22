@@ -11,7 +11,10 @@
  *   传给记忆召回；角色之间的隔离永远由记忆存储键（mem-frag:<contactId>）保证，与开关无关；
  * - 谁来回复由每个角色按自己的人设与消息内容自判（无需回复只回 [SKIP]，不落盘），@ 成员始终优先；
  * - 群红包（普通/拼手气/专属）与指定成员转账：消息落本群消息库，状态随群持久化（按群 ID 隔离，
- *   与单聊互不相通）；成员按人设领取/收款/退回，纯本地模拟不涉及真实资金。
+ *   与单聊互不相通）；成员按人设领取/收款/退回，纯本地模拟不涉及真实资金；
+ * - 解散群聊级联清理：群记录/群消息（含红包/转账卡片状态）/会话附属数据/群聊天背景 + 群来源记忆
+ *   （onGroupDissolved 钩子由 memory 层注册，删去各成员记忆库里 sourceGroupId=本群的碎片/总结，
+ *   依赖方向保持 memory → groups 单向，不反向 import）。
  */
 
 import { kvDel, kvGet, kvSet } from './idb-kv';
@@ -157,6 +160,9 @@ function writeJSON(key: string, value: unknown): void {
 
 // ---------------- 群 CRUD ----------------
 
+/** 群成员人数上限（对齐真微信群的「人多即散」体验上限；防止 AI 回合无节制放大） */
+export const GROUP_MEMBER_CAP = 50;
+
 function normalizeGroup(g: unknown): ChatGroup | null {
   if (!g || typeof g !== 'object') return null;
   const r = g as Partial<ChatGroup>;
@@ -210,7 +216,7 @@ export function createGroup(input: {
     name: input.name.trim() || '未命名群聊',
     avatar: input.avatar ?? null,
     ownerId: input.ownerId,
-    memberIds: Array.from(new Set(input.memberIds)),
+    memberIds: Array.from(new Set(input.memberIds)).slice(0, GROUP_MEMBER_CAP),
     announcement: input.announcement?.trim() ?? '',
     memoryInterop: false,
     createdAt: Date.now(),
@@ -236,9 +242,12 @@ export function updateGroup(
   return next;
 }
 
+/** 邀请成员：已在群里原样返回；人数达上限（GROUP_MEMBER_CAP）返回 null（UI 提示「已达上限」） */
 export function addGroupMember(groupId: string, contactId: string): ChatGroup | null {
   const g = getGroup(groupId);
-  if (!g || g.memberIds.includes(contactId)) return g ?? null;
+  if (!g) return null;
+  if (g.memberIds.includes(contactId)) return g;
+  if (g.memberIds.length >= GROUP_MEMBER_CAP) return null;
   return updateGroup(groupId, { memberIds: [...g.memberIds, contactId] });
 }
 
@@ -270,8 +279,19 @@ function removeLocalMapKey(lsKey: string, id: string): void {
   }
 }
 
+type GroupDissolveHook = (group: ChatGroup) => void;
+const dissolveHooks: GroupDissolveHook[] = [];
+
+/** 注册「群已解散」钩子（依赖方各自注册清理逻辑；群数据层不反向依赖记忆层）。
+ *  钩子异常互不影响：单个失败不阻塞其它清理，也不阻塞解散本身。 */
+export function onGroupDissolved(fn: GroupDissolveHook): void {
+  dissolveHooks.push(fn);
+}
+
 /**
- * 解散群聊：删除群 + 群消息 + 会话级附属数据（未读/标志/隐藏/时间感知/每成员的群记忆提取轮次计数）。
+ * 解散群聊：删除群 + 群消息（红包/转账卡片状态随消息一并清除）+ 会话级附属数据
+ * （未读/标志/隐藏/时间感知/每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
+ * （通过 onGroupDissolved 钩子级联，见 memory 层 memPurgeGroupSource）。
  * 返回被解散的群（供 UI 提示），群不存在返回 null。
  */
 export function dissolveGroup(groupId: string): ChatGroup | null {
@@ -295,6 +315,14 @@ export function dissolveGroup(groupId: string): ChatGroup | null {
     void localDB.delete('settings', `chat-bg:${g.app}:group:${groupId}`).catch(() => undefined);
   } catch {
     // 清理失败不阻塞解散
+  }
+  // 群来源记忆级联清理（钩子逐个调用；单个钩子异常不影响其余清理，更不阻塞解散）
+  for (const fn of dissolveHooks) {
+    try {
+      fn(g);
+    } catch {
+      // 忽略
+    }
   }
   return g;
 }
