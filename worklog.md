@@ -5922,3 +5922,35 @@ Stage Summary:
 - 改动文件：src/lib/ios/groups.ts（GROUP_MEMBER_CAP+onGroupDissolved+createGroup/addGroupMember 校验+注释）、src/lib/memory.ts（memPurgeGroupSource+钩子注册+memRecallBlock 顶层容错）、src/lib/ios/persona.ts（敏感内容禁令）、src/components/apps/wx-group.tsx（规则块×3+建群/邀请上限+解散文案+坏类名+注释）、src/components/apps/qq-group.tsx（同构镜像）、src/components/apps/wechat.tsx（onToast 接线+pb-ax×2）、src/components/apps/qq.tsx（onToast 接线+pb-ax×1）、src/components/apps/wechat-wallet.tsx（pb-ax×5）
 - 十大类审计全部落地：一（级联清理记忆+人数上限补齐）二（防刷屏明文规则）三（原已完备）四（原已完备）五（原已完备+坏类名修复）六（原已完备）七（原已完备）八（原已完备）九（隐私边界/资金真实性/敏感内容三条补齐+互通默认关确认）十（建群校验/SKIP 兜底/召回容错/人数上限全闭环）
 - 新增规则生效方式：system 注入类（防刷屏/隐私/资金/敏感内容）由 E2E mock 请求指纹实锤；数据类（解散清记忆/人数上限）由 IndexedDB 前后对照实锤；UX 类（确认文案/disabled/toast）由页面快照实锤
+---
+Task ID: group-ai-rich
+Agent: Z.ai Code (main)
+Task: 群聊 AI 角色主动发红包/转账/位置/表情包（与单聊共用组件、按群 ID 隔离、system 约定标记、人设自主触发、节流防连发）
+
+Work Log:
+- 标记层 src/lib/chat-rich.ts：RichRedpacket 增 count?（群聊 [红包:总金额:个数:祝福语]，个数段非数字时兼容旧格式 [红包:金额:祝福语]）、RichTransfer 增 target?（群聊 [转账:对象:金额:备注]，对象=群成员名字）；parseMarker 增 group 分支（红包 count 解析 clamp 1..100、转账对象缺失返回 null 让标记回退文字——群转账没有收款人就不成立）；parseRichParts 增 opts { group?: boolean }（向后兼容，单聊调用零改动）；新增 buildGroupRichRules(stickers)：群聊特殊消息规则（四种标记格式+示例）+【发钱纪律】（人设自主决定/没有合适理由不发/不是每轮都发/一轮最多一次/短时间不连发/对象必须是真实成员）+表情包格式强调+表情包清单（最多 30 个）
+- 微信群聊 src/components/apps/wx-group.tsx：runCharTurn 注入 buildGroupRichRules（stickersOn=getStickersOn(sKey) 按群表情开关下发 loadStickers('wx') 清单，关闭时下发 STICKER_OFF_RULE 且表情卡片丢弃——与单聊同规则）；finalize 落盘层全量解析群聊标记：红包（count>1 → lucky 拼手气/count=1 → normal，带 cid）→ GroupRpData 卡片；转账（resolveMemberByName 按显示名 精确→包含 解析收款对象=机主'me'或 AI 成员，解析不到不成卡）→ GroupTrData 卡片（带 cid）；位置 → loc 卡片（coords 兜底「地图上的一个位置」，与单聊 richToWxMsg 同规则）；表情包 → stk 卡片（按 ID 匹配收藏清单，找不到回退文字「[表情包]」）
+- 节流双层（五.4 同一角色短时间不能连续发多次）：①提示词层 aiMoneyAt Map（`sKey:charId`→时间戳，内存态）+AI_MONEY_COOLDOWN_MS=3min，冷却期内注入「【发钱节流】你刚刚才发过…这轮不要再发」；②落盘层 finalize 内 moneySentThisTurn+inMoneyCooldown 双检，同一轮只保留第一张钱卡、冷却期内钱卡丢弃（文字照常落盘）；成功发卡才写入时间戳
+- AI→AI/成员间转账闭环：collectGroupPending 转账条件去掉 m.role==='me' 限制（机主发的或群内其他成员转给你的都进待处理清单），发起方称呼 fromLabel（机主→「你发的」、成员→「xx发的」）；退款只退机主发的（成员无钱包，wxPatchBalance/gainToWallet 仅 fromMe 时调用）；AI 成员用 [收款转账:ID]/[领取红包:ID] 处理，applyGroupAiAction 幂等状态流转+通知行
+- AI 转账给机主的收款 UI（双端）：GroupTrDetailPage 增 canAct/onReceive/onReturn（收款人是机主且待收款时显示「退还/收款」按钮，wx 绿色方角/QQ 蓝色圆角）；groupTrStatusText 收款人=机主时「待你收款/你已收款」；新增 receiveGroupTr（received+金额入零钱/钱包+记账单+通知行「你收下了xx发的转账」+toast）、returnGroupTr（status='returned'+通知行，不动钱包）、nudgeAiSender（处理完让发起成员按人设回应一轮，与红包领取回应同节奏）
+- QQ 群聊 src/components/apps/qq-group.tsx 全量同构镜像（loadStickers('qq')/gainToWallet/qq-* testid）；顺带修复 QQ 群转账卡片不传 packet.status 导致已退回/已拒收不变灰的问题
+- 渲染零新增组件：AI 发的红包/转账/位置/表情包完全复用用户手动发送的同款卡片（wx RpBubble/TrBubble/LocBubble/StickerMsgBubble、qq RedPacketBubble/TransferBubble/LocationBubble/QqStickerBubble），按群消息库持久化（<app>-group-msgs:<gid> 按群 ID 隔离不变）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、console 零错误、dev.log 无异常
+- E2E 实测（agent-browser 390×844 + mock LLM v2 :4100（/v1/chat/completions 流式+非流式，按 lastUser 测试指令输出标记；【待处理清单】在场时明仔优先回 [领取红包:ID]/[收款转账:ID]；/__log 请求指纹断言；IndexedDB 直种 林川(user)/红红/明仔+wx 500/qq 300 钱包+贴纸清单+明文 apiConfig））：
+  ①微信建群「红红、明仔的群聊(3)」→发「发红包测试」→红红回文字+[红包:8.88:2:晚上一起吃火锅呀]→拼手气红包卡片（副标题 N 个待领取）；同回合明仔待处理清单自动领取（通知行「明仔领取了红红的红包」）；我点开箱 RpOpenLayer「開」领取→详情页 8.88 元 2/2（明仔¥7.48+林川¥1.40）✓
+  ②指纹断言：isGroup/hasGroupRich/hasMoneyDiscipline/hasStickerFormat/hasStickerList 全 true，明仔 hasPending=true（第一轮 hasThrottle=false）✓
+  ③节流实测：发红包 2 分钟内再发「转账给我测试」→提示词层 hasThrottle=true+落盘层卡片被丢（无转账卡，文字照常）；刷新清内存节流后重发→¥66.00 转账卡出现 ✓
+  ④AI 转账给机主：卡片「待你收款」→详情页（转账人红红/收款成员林川/留言/退还+收款按钮）→点收款→卡片灰化「你已收款」+通知行「你收下了红红发的转账」+红红自动回应一轮；钱包 500+1.40+66=567.40 实锤入账 ✓
+  ⑤AI 转账给成员：「转给成员测试」→红红发 [转账:明仔:20:昨天奶茶钱]→同一回合明仔 [收款转账:ID] 自动收款→卡片「明仔已收款」+通知行「明仔收下了红红发的转账」✓
+  ⑥坏名转账：「转账坏名测试」→[转账:路人甲:20]→解析不到成员不成卡（¥20 全页零匹配），文字正常落盘（资金真实性）✓
+  ⑦位置：「位置测试」→[位置:上海外滩:121.48,31.23]→上海外滩地图卡片（与用户手发同款渲染）✓
+  ⑧表情包：「表情包测试」→[表情包:stk-test1]→stk 卡片；「表情变体测试」→[发送了表情：开心] loose 变体按意思匹配成功 ✓
+  ⑨QQ 端同构：建群→拼手气 8.88×2（明仔¥3.14+林川¥5.74 手气最佳）→QQ 转账 ¥66 收款（卡片已收款+通知行+入钱包 300+5.74+66=371.74）→位置卡片→表情包（stk-test1 不在 QQ 清单时正确回退「[表情包]」文字——四.5 回退规则实锤；补种后成功渲染 QQ 蓝色贴纸）✓
+  ⑩旧格式兼容：群聊 [红包:8.88:恭喜发财]（无个数段）→count=1 normal 卡片 ✓；单聊回归 [红包:18.88:生日快乐]/[位置:…]→单聊卡片正常（共用解析零破坏）✓
+  ⑪持久化：刷新后红包领取记录（已领取 1/2→2/2）/转账状态（已收款）/通知行/卡片全部保留 ✓
+Stage Summary:
+- 改动文件：src/lib/chat-rich.ts（标记 group 模式+buildGroupRichRules）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（规则注入+finalize 全量解析+节流双层+AI→AI 转账闭环+AI→机主转账收款 UI）；单聊 wechat.tsx/qq.tsx/bubble-menu 零改动（组件全部复用）
+- 触发方式与需求完全对齐：system 注入 [红包:金额:个数:祝福语]/[转账:对象:金额:备注]/[位置:地点名:经纬度]/[表情包:表情ID] 四种标记约定；AI 按人设/对话/记忆自主决定（【发钱纪律】明确「不是每轮都要发、没有合适理由不发」）；3 分钟节流（提示词+落盘双层）防短时间连发
+- 数据隔离：AI 发的红包/转账与用户发的同结构（GroupRpData/GroupTrData），按群 ID 隔离持久化、与单聊互不相通；不涉及真实资金（AI 成员无钱包，发卡不扣款、退款只退机主）
+- 新增交互：AI 转账给机主 → 详情页收款/退还按钮（wx-grp-tr-detail-receive|return、qq-grp-tr-detail-receive|return）+发起成员自动回应
+- 已知边界：AI 发红包标记不指定类型（count>1 固定拼手气）；AI 不能发专属红包/亲属卡（群聊场景无意义，规则未下发标记）；节流为内存态（刷新清零，「短时间内」语义合理）；表情包按会话开关 getStickersOn(sKey)（群信息页暂无独立开关行，默认开）

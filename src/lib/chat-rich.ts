@@ -21,17 +21,21 @@ import type { Sticker } from './ios/stickers';
 
 // ---------------- 标记解析结果 ----------------
 
-/** 红包标记：[红包:金额:祝福语] */
+/** 红包标记：[红包:金额:祝福语]；群聊模式 [红包:总金额:个数:祝福语]（count 有值 = 群聊解析结果） */
 export interface RichRedpacket {
   kind: 'redpacket';
   amount: number;
   blessing: string;
+  /** 群聊模式：红包个数（默认 1；>1 时按拼手气发进群） */
+  count?: number;
 }
-/** 转账标记：[转账:金额:备注] */
+/** 转账标记：[转账:金额:备注]；群聊模式 [转账:对象:金额:备注]（target = 收款成员名字，由调用方按群成员解析） */
 export interface RichTransfer {
   kind: 'transfer';
   amount: number;
   note: string;
+  /** 群聊模式：标记里写的收款对象名字（未解析成群成员前） */
+  target?: string;
 }
 /** 亲属卡标记：[亲属卡:每月额度:留言] */
 export interface RichFamily {
@@ -175,16 +179,36 @@ function resolveSticker(token: string, stickers: Sticker[]): Sticker | null {
   );
 }
 
-/** 解析单个标记 → 富消息数据；金额非法 / 名称缺失等格式错误时返回 null（调用方回退为文本显示） */
-function parseMarker(kind: string, inner: string, stickers: Sticker[] | null): RichMsg | null {
+/** 解析单个标记 → 富消息数据；金额非法 / 名称缺失等格式错误时返回 null（调用方回退为文本显示）。
+ *  group=true 时按群聊格式解析：红包 [红包:总金额:个数:祝福语]（个数段非数字时兼容单聊写法 [红包:金额:祝福语]），
+ *  转账 [转账:对象:金额:备注]（对象 = 群里成员名字，缺失时返回 null 让标记回退文字——群转账没有收款人就不成立）。 */
+function parseMarker(kind: string, inner: string, stickers: Sticker[] | null, group = false): RichMsg | null {
   const segs = inner.split(/[:：]/);
   switch (kind) {
     case '红包': {
       // 金额缺失/非法时兑底随机金额：AI 常写成裸的 [红包]，照文字显示会让「AI 发红包」看起来失效
       const amount = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('redpacket');
+      if (group) {
+        const cntRaw = (segs[1] ?? '').trim();
+        const cnt = Number(cntRaw);
+        if (cntRaw !== '' && Number.isFinite(cnt) && cnt >= 1) {
+          // 群聊格式：[红包:总金额:个数:祝福语]
+          const count = Math.min(100, Math.max(1, Math.round(cnt)));
+          return { kind: 'redpacket', amount, count, blessing: segs.slice(2).join(':').trim() || '恭喜发财，大吉大利' };
+        }
+        // 兼容单聊写法 [红包:金额:祝福语]：个数为 1，后段全部当祝福语
+        return { kind: 'redpacket', amount, count: 1, blessing: segs.slice(1).join(':').trim() || '恭喜发财，大吉大利' };
+      }
       return { kind: 'redpacket', amount, blessing: segs.slice(1).join(':').trim() || '恭喜发财，大吉大利' };
     }
     case '转账': {
+      if (group) {
+        // 群聊格式：[转账:对象:金额:备注]——对象必须是群成员名字（调用方解析），写不出对象就不成卡
+        const target = (segs[0] ?? '').trim();
+        if (!target) return null;
+        const amount = Number.isFinite(parseAmount(segs[1])) ? parseAmount(segs[1]) : fallbackAmount('transfer');
+        return { kind: 'transfer', amount, note: segs.slice(2).join(':').trim(), target };
+      }
       const amount = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('transfer');
       return { kind: 'transfer', amount, note: segs.slice(1).join(':').trim() };
     }
@@ -234,13 +258,14 @@ function splitLooseStickers(text: string, stickers: Sticker[] | null): RichPart[
  * - 格式错误的标记（金额不是数字等）原样作为文本显示；
  * - 文字段再做一次表情变体扫描（[发送了表情：XX] 等），转出对应表情包。
  */
-export function parseRichParts(seg: string, stickers: Sticker[] | null): RichPart[] {
+export function parseRichParts(seg: string, stickers: Sticker[] | null, opts?: { group?: boolean }): RichPart[] {
+  const group = opts?.group === true;
   const parts: RichPart[] = [];
   let last = 0;
   for (const m of seg.matchAll(RICH_RE)) {
     const before = seg.slice(last, m.index).trim();
     if (before) parts.push(...splitLooseStickers(before, stickers));
-    const rich = parseMarker(m[1], m[2] ?? '', stickers);
+    const rich = parseMarker(m[1], m[2] ?? '', stickers, group);
     if (!rich) {
       // 格式错误 / 表情 ID 与意思都对不上：表情回退为干净的「[表情包]」，其余回退显示标记原文
       parts.push({ type: 'text', text: m[1] === '表情包' ? '[表情包]' : m[0] });
@@ -304,6 +329,44 @@ export function buildRichRules(stickers: Sticker[]): string[] {
           '【发表情包·格式强调】聊天记录里的「[发送了表情：XX]」只是对方发表情的存档记录，不是你的输出格式，禁止模仿！' +
             '你自己想发表情包时，必须原样输出一行 [表情包:表情ID]，ID 只能从下面的清单里选（方括号+冒号+ID，多一个字都发不出去）。' +
             '如清单里有 stk-abc:抱猫，就输出 [表情包:stk-abc]，不要输出 [表情包:抱猫]、[表情:抱猫]、[发送了表情：抱猫] 等任何变体。',
+        ]
+      : []),
+  ];
+  if (stickers.length > 0) {
+    rules.push(
+      '【表情包清单】（ID:意思）：' +
+        stickers
+          .slice(0, 30)
+          .map((s) => `${s.id}${s.meaning ? `:${s.meaning}` : ''}`)
+          .join('；')
+    );
+  }
+  return rules;
+}
+
+/**
+ * 群聊版「特殊消息」约定规则（微信群 / QQ 群共用；格式与单聊不同）：
+ * - 红包带个数：[红包:总金额:个数:祝福语]，个数 > 1 时群里按拼手气发（每人随机一份）；
+ * - 转账带收款对象：[转账:对象:金额:备注]，对象写群里成员的名字（含机主）；
+ * - 位置、表情包与单聊同格式；
+ * - 发钱纪律：按人设自主决定、没有合适理由不发；一轮最多一次，短时间内不连续发（页面另有硬节流兜底）。
+ * 没有收藏表情包时不给表情包规则，AI 自然不会输出该标记。
+ */
+export function buildGroupRichRules(stickers: Sticker[]): string[] {
+  const rules = [
+    '【群聊特殊消息】想发红包/转账/位置/表情包时，在回复里输出对应标记——标记单独占一行，前后不要加引号、括号说明或代码块，不要解释：' +
+      '[红包:总金额:个数:祝福语]（如 [红包:8.88:2:晚上好呀]，发给一个人的红包个数写 1，如 [红包:6.66:1:拿去买奶茶]）；' +
+      '[转账:对象:金额:备注]（对象写群里成员的名字，如 [转账:红红:66:昨天的奶茶钱]，转给机主就写机主的名字）；' +
+      '[位置:地点名:经纬度或地址]（如 [位置:上海外滩:121.48,31.23]）' +
+      (stickers.length > 0 ? '；[表情包:表情ID]（从群里可用的表情包清单里选，只能用清单里的 ID）' : '') +
+      '。金额写数字（可带小数），红包个数写整数。',
+    '【发钱纪律】红包/转账按你的人设、你们的关系和当下话题自主决定，没有合适的理由就不要发，不是每轮都要发；' +
+      '一轮回复最多发一次红包或转账，短时间内（比如几分钟内）不要连续发多次；转账对象必须是群里真实存在的成员名字，不要转给不存在的人。',
+    ...(stickers.length > 0
+      ? [
+          '【发表情包·格式强调】聊天记录里的「[发送了表情：XX]」只是别人发表情的存档记录，不是你的输出格式，禁止模仿！' +
+            '你自己想发表情包时，必须原样输出一行 [表情包:表情ID]，ID 只能从下面的清单里选（方括号+冒号+ID，多一个字都发不出去）。' +
+            '表情包要符合当下的语境和你的性格，别刷屏。',
         ]
       : []),
   ];

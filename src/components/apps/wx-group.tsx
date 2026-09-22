@@ -91,7 +91,8 @@ import {
   type GroupTrData,
   type WxGroupMsg,
 } from '@/lib/ios/groups';
-import type { Sticker } from '@/lib/ios/stickers';
+import { loadStickers, type Sticker } from '@/lib/ios/stickers';
+import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { wxChatFlags, type ChatFlags } from '@/lib/chat-flags';
 import { addFavorite, isMsgFavorited, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
@@ -144,6 +145,7 @@ import { getSentenceSend, hasPendingBatch, markPendingBatch, saveSentenceSend } 
 import {
   actionVerb,
   buildActionRules,
+  buildGroupRichRules,
   extractRichActionParts,
   mergeRichSegments,
   parseRichParts,
@@ -198,6 +200,14 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** AI 自判跳过标记：整条回复只有这个标记时不落盘（不进消息、不提取记忆、不计未读） */
 const SKIP_RE = /^\[?\s*(?:SKIP|跳过)\s*\]?$/i;
+
+/**
+ * AI 成员发红包/转账节流（同一角色短时间不连续发多次；内存态，按群会话+角色隔离）：
+ * ① 提示词层：冷却期内注入「你刚发过，这轮别再发」规则；② 落盘层：冷却期内/同一轮里多出的
+ * 红包/转账卡片直接丢弃（文字部分照常落盘）。与群规则里的「发钱纪律」配套。 */
+const AI_MONEY_COOLDOWN_MS = 3 * 60_000;
+const aiMoneyAt = new Map<string, number>();
+const moneyCooldownKey = (sKey: string, charId: string) => `${sKey}:${charId}`;
 
 function memberNameOf(c: ContactRecord): string {
   return displayNameOf(c);
@@ -1589,15 +1599,29 @@ function GroupRpDetailPage({
   );
 }
 
-/** 群转账详情页（转账给群里某位成员；收款/退回/拒收状态 + 时间行；与单聊详情页同一套视觉语言） */
+/** 群转账详情页状态文案（收款人是机主时用「你」） */
+function groupTrStatusText(tr: GroupTrData): string {
+  if (tr.received) return tr.toId === 'me' ? '你已收款' : `${tr.toName}已收款`;
+  const status = groupTrStateLabel(tr);
+  if (status === '已退回' || status === '已拒收') return status;
+  return tr.toId === 'me' ? '待你收款' : `待${tr.toName}收款`;
+}
+
 function GroupTrDetailPage({
   tr,
   fromName,
   onBack,
+  /** 收款人是机主且待收款时开放「收款/退还」操作（成员转账给机主的场景） */
+  canAct = false,
+  onReceive,
+  onReturn,
 }: {
   tr: GroupTrData;
   fromName: string;
   onBack: () => void;
+  canAct?: boolean;
+  onReceive?: () => void;
+  onReturn?: () => void;
 }) {
   const status = groupTrStateLabel(tr);
   return (
@@ -1623,7 +1647,7 @@ function GroupTrDetailPage({
             <div className="min-w-0">
               <p className="text-[26px] font-semibold leading-tight" data-testid="wx-grp-tr-detail-amount">¥{fmtMoney(tr.amount)}</p>
               <p className="mt-0.5 truncate text-[13px] text-black/45 dark:text-white/45" data-testid="wx-grp-tr-detail-status">
-                {tr.received ? `${tr.toName}已收款` : status === '已退回' ? '已退回' : status === '已拒收' ? '已拒收' : `待${tr.toName}收款`}
+                {groupTrStatusText(tr)}
               </p>
             </div>
           </div>
@@ -1646,6 +1670,26 @@ function GroupTrDetailPage({
               <span className="text-black/55 dark:text-white/55">群聊转账 · 只有被选中的成员能收款</span>
             </p>
           </div>
+          {canAct ? (
+            <div className="mt-5 flex gap-3 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
+              <button
+                type="button"
+                data-testid="wx-grp-tr-detail-return"
+                onClick={onReturn}
+                className="h-10 flex-1 rounded-[6px] border border-black/15 text-[15px] text-black/75 active:bg-black/[0.04] dark:border-white/20 dark:text-white/75 dark:active:bg-white/[0.06]"
+              >
+                退还
+              </button>
+              <button
+                type="button"
+                data-testid="wx-grp-tr-detail-receive"
+                onClick={onReceive}
+                className="h-10 flex-1 rounded-[6px] bg-[#07C160] text-[15px] font-medium text-white active:brightness-95"
+              >
+                收款
+              </button>
+            </div>
+          ) : null}
         </div>
         <p className="pt-6 text-center text-[12px] text-black/35 dark:text-white/35">群里其他成员只看到转账卡片，无法操作这笔转账</p>
       </div>
@@ -1777,8 +1821,8 @@ export function WxGroupChatPage({
 
   /** 追加一条带图标的资金通知行（xx领取了你的红包 / 收下了你的转账；定义在 appendMsg 之后，见下方） */
   /** 收集该成员当前可处理的群红包/转账（生成 system 待处理清单）：
-   *  红包：不是自己发的、未过期、还有剩余份、自己没领过、（专属 → 只给被指定成员）；
-   *  转账：只有被指定的收款成员能处理 */
+   *  红包：不是自己发的（机主或任何成员发的）、未过期、还有剩余份、自己没领过、（专属 → 只给被指定成员）；
+   *  转账：只有被指定的收款成员能处理（机主发的或群内其他成员转给你的） */
   const collectGroupPending = useCallback(
     (charId: string): PendingCardInfo[] => {
       const out: PendingCardInfo[] = [];
@@ -1796,9 +1840,10 @@ export function WxGroupChatPage({
             m.senderId === 'me' ? '来自机主' : `来自${m.senderName}`,
           ].filter(Boolean);
           out.push({ id: rp.cid ?? m.id, kind: 'redpacket', amount: rp.count > 1 && rp.mode === 'normal' ? round2(rp.amount) : rp.amount, label: bits.join('，') });
-        } else if (m.kind === 'transfer' && m.tr && m.role === 'me' && m.tr.toId === charId && !m.tr.received && !m.tr.status) {
+        } else if (m.kind === 'transfer' && m.tr && m.tr.toId === charId && !m.tr.received && !m.tr.status) {
           const tr = m.tr;
-          out.push({ id: tr.cid ?? m.id, kind: 'transfer', amount: tr.amount, label: tr.note ? `备注"${tr.note}"，机主转给你的` : '机主转给你的' });
+          const from = m.role === 'me' ? '机主' : m.senderName || '群友';
+          out.push({ id: tr.cid ?? m.id, kind: 'transfer', amount: tr.amount, label: tr.note ? `备注"${tr.note}"，${from}转给你的` : `${from}转给你的` });
         }
       }
       return out;
@@ -1913,16 +1958,19 @@ export function WxGroupChatPage({
         const tr = m.tr;
         if (tr.toId !== char.id) return; // 只有被选中的收款成员能处理
         if (tr.received || tr.status) return;
+        // 发起方称呼（机主发的 →「你」；其他成员发的 → 对方名字）；退款只退机主发的（成员无钱包）
+        const fromMe = m.role === 'me';
+        const fromLabel = fromMe ? '你发的' : `${m.senderName || '群友'}发的`;
         if (verb === 'claim') {
           patchGroupMsg(m.id, { tr: { ...tr, received: true, receivedAt: Date.now() } });
-          appendFundNotice('tr', `${charName}收下了你发的`, '转账');
+          appendFundNotice('tr', `${charName}收下了${fromLabel}`, '转账');
         } else if (verb === 'return') {
           patchGroupMsg(m.id, { tr: { ...tr, status: 'returned' } });
-          wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
-          appendFundNotice('tr', `${charName}退回了你的`, '转账');
+          if (fromMe) wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+          appendFundNotice('tr', `${charName}退回了${fromLabel}`, '转账');
         } else {
           patchGroupMsg(m.id, { tr: { ...tr, status: 'rejected' } });
-          appendFundNotice('tr', `${charName}拒收了你的`, '转账');
+          appendFundNotice('tr', `${charName}拒收了${fromLabel}`, '转账');
         }
       }
     },
@@ -2013,6 +2061,11 @@ export function WxGroupChatPage({
         const lastUserText = [...ctxMsgs].reverse().find((m) => m.role === 'me')?.content ?? '';
         const memContext = [lastUserText, ...ctxMsgs.slice(-6).map(msgTextOf)].filter(Boolean).join(' ');
 
+        // 表情包（用户本地添加的收藏清单，与单聊同一套）：按本群表情开关下发（默认开）；
+        // 关闭时不下发清单也不让 AI 发表情包卡片（与单聊同规则）
+        const stickers = loadStickers('wx');
+        const stickersOn = getStickersOn(sKey);
+
         // 群聊规则（每个角色独立声明：当前是群聊、参与者有谁、只代表自己、禁复读、可互相对话）
         const others = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
@@ -2031,9 +2084,17 @@ export function WxGroupChatPage({
           '不要刷屏：每个话题只说一两句就够，没新内容不要为了说话而说话；需要连发多条时也只说值得说的话，绝不硬凑条数，更不要在别人正在说话时抢话打断。',
           '【隐私边界】其他成员私下告诉你的事、或你只在私聊里知道的私密内容，绝不在群里说出去；同理不替其他成员公开他们的秘密；别人之间有分歧时不搬弄是非、不传话挑事。',
           '群里的红包、转账都是真实卡片：谁发了什么、谁领了/收了，以卡片和系统通知为准；没有对应卡片或通知时，绝不凭空说自己发过或收到过钱。',
-          '【发红包】想给群里发红包时，在回复里输出 [红包:金额:祝福语]（如 [红包:8.88:恭喜发财]），红包会以你的名义发进群里，大家都能抢；金额量力而行、符合你的人设与场合，不要频繁发。',
+          // 特殊消息标记（群聊格式：红包带个数、转账带收款对象；表情包清单按本群表情开关下发）
+          ...buildGroupRichRules(stickersOn ? stickers : []),
+          ...(stickersOn ? [] : [STICKER_OFF_RULE]),
         ];
+        // 发钱节流（提示词层）：冷却期内提醒这轮不要再发红包/转账（落盘层另有硬节流兜底）
+        const lastMoneyAt = aiMoneyAt.get(moneyCooldownKey(sKey, char.id)) ?? 0;
+        if (Date.now() - lastMoneyAt < AI_MONEY_COOLDOWN_MS) {
+          groupRules.push('【发钱节流】你刚刚才发过红包或转账，短时间内别再发了：这轮不要再输出任何红包/转账标记，正常聊天就好。');
+        }
         // 群红包/转账待处理清单（每个成员独立视角）：是否抢/收完全按人设决定，不处理就不输出标记
+        // （红包：机主或任何成员发的都可抢；转账：只有被指定的收款成员能处理——含其他成员转给你的）
         const pendingCards = collectGroupPending(char.id);
         if (pendingCards.length > 0) {
           groupRules.push(
@@ -2109,11 +2170,29 @@ export function WxGroupChatPage({
               return;
             }
             // 回复按出现顺序切「文字块 + 处理动作」：动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置落盘），
-            // 文字块按边界（标记/换行/句末标点，回复条数>1 时一句一条）切分后再解析 [红包:…] 标记 → 群红包卡片消息
+            // 文字块按边界（标记/换行/句末标点，回复条数>1 时一句一条）切分后再解析群聊特殊标记 →
+            // [红包:总金额:个数:祝福语] 群红包卡片 / [转账:对象:金额:备注] 指定成员转账 / [位置…] / [表情包:ID]
+            // （渲染与交互复用用户手动发送的同款卡片组件；位置/表情包全群可见）
             const parts = extractRichActionParts(text);
             const all: WxGroupMsg[] = [];
             let t = result.startedAt;
             let idx = 0;
+            // 发钱节流（落盘层）：同一轮最多一张红包/转账卡 + 冷却期内不再发（文字部分照常落盘）
+            let moneySentThisTurn = false;
+            const inMoneyCooldown = Date.now() - (aiMoneyAt.get(moneyCooldownKey(sKey, char.id)) ?? 0) < AI_MONEY_COOLDOWN_MS;
+            // 群成员名字 → 成员解析（转账收款对象）：机主 + 全部 AI 成员（按显示名精确 → 包含逐级匹配）
+            const resolveMemberByName = (name: string): { id: string; name: string } | null => {
+              const n = name.trim();
+              if (!n) return null;
+              if (n === me.name) return { id: 'me', name: me.name };
+              const pool = (groupRef.current.memberIds ?? [])
+                .map((id) => contactsRef.current.find((c) => c.id === id))
+                .filter((c): c is ContactRecord => !!c && c.id !== char.id);
+              const exact = pool.find((c) => memberNameOf(c) === n);
+              if (exact) return { id: exact.id, name: memberNameOf(exact) };
+              const partial = pool.find((c) => memberNameOf(c).includes(n) || n.includes(memberNameOf(c)));
+              return partial ? { id: partial.id, name: memberNameOf(partial) } : null;
+            };
             for (const part of parts) {
               if (part.type === 'action') {
                 applyGroupAiAction(char, part.action);
@@ -2121,28 +2200,75 @@ export function WxGroupChatPage({
               }
               const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
               for (const seg of segs) {
-                for (const p of parseRichParts(seg, [])) {
+                for (const p of parseRichParts(seg, stickersOn ? stickers : [], { group: true })) {
                   const id = idx === 0 ? result.aiMsgId : `${result.aiMsgId}-${idx}`;
                   if (p.type === 'rich') {
-                    // 群里成员只发红包卡片（转账/亲属卡需要指定收款人，群规则不下发；位置/表情包富标记忽略）
-                    if (p.rich.kind !== 'redpacket') continue;
-                    all.push({
-                      id,
-                      role: 'peer',
-                      senderId: char.id,
-                      senderName: charName,
-                      content: '',
-                      time: t,
-                      kind: 'redpacket',
-                      rp: {
-                        amount: p.rich.amount,
-                        count: 1,
-                        mode: 'normal',
-                        blessing: p.rich.blessing || '恭喜发财，大吉大利',
-                        claims: [],
-                        sentAt: Date.now(),
-                      },
-                    });
+                    const isMoney = p.rich.kind === 'redpacket' || p.rich.kind === 'transfer';
+                    // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/位置卡片不受影响，与单聊同规则）
+                    if (!stickersOn && p.rich.kind === 'sticker') continue;
+                    // 发钱节流：同一轮已发过或冷却期内 → 丢弃钱卡（不影响其他内容）
+                    if (isMoney && (moneySentThisTurn || inMoneyCooldown)) continue;
+                    if (p.rich.kind === 'redpacket') {
+                      const count = p.rich.count ?? 1;
+                      all.push({
+                        id,
+                        role: 'peer',
+                        senderId: char.id,
+                        senderName: charName,
+                        content: '',
+                        time: t,
+                        kind: 'redpacket',
+                        rp: {
+                          amount: p.rich.amount,
+                          count,
+                          // 多份红包按拼手气发进群（每人随机一份，与真人玩法一致）；单个 = 普通红包
+                          mode: count > 1 ? 'lucky' : 'normal',
+                          blessing: p.rich.blessing || '恭喜发财，大吉大利',
+                          claims: [],
+                          sentAt: Date.now(),
+                          cid: nextGroupCid('rp'),
+                        },
+                      });
+                      moneySentThisTurn = true;
+                      aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
+                    } else if (p.rich.kind === 'transfer') {
+                      // 收款对象必须解析到群里真实成员（机主或 AI 成员），解析不到不成卡（资金真实性）
+                      const target = resolveMemberByName(p.rich.target ?? '');
+                      if (!target) continue;
+                      all.push({
+                        id,
+                        role: 'peer',
+                        senderId: char.id,
+                        senderName: charName,
+                        content: '',
+                        time: t,
+                        kind: 'transfer',
+                        tr: { amount: p.rich.amount, note: p.rich.note, toId: target.id, toName: target.name, cid: nextGroupCid('tr') },
+                      });
+                      moneySentThisTurn = true;
+                      aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
+                    } else if (p.rich.kind === 'location') {
+                      // 位置卡片（与用户手动发送同款渲染，全群可见）
+                      all.push({
+                        id,
+                        role: 'peer',
+                        senderId: char.id,
+                        senderName: charName,
+                        content: '',
+                        time: t,
+                        kind: 'location',
+                        loc: { name: p.rich.name, address: p.rich.coords || '地图上的一个位置' },
+                      });
+                    } else if (p.rich.kind === 'sticker') {
+                      // 表情包（从用户收藏清单按 ID 匹配；找不到时回退显示文字）
+                      const sid = p.rich.stickerId;
+                      const s = stickers.find((x) => x.id === sid);
+                      if (s) {
+                        all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: '', time: t, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } });
+                      } else {
+                        all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: '[表情包]', time: t });
+                      }
+                    }
                   } else {
                     const cleaned = p.text.trim();
                     if (!cleaned) continue;
@@ -2496,6 +2622,45 @@ export function WxGroupChatPage({
       onToast(`这是发给${rp.targetName}的专属红包`);
     }
     setLayer({ view: 'rp-detail', msgId: m.id });
+  };
+
+  /** 我收款：成员（AI）转账给我的卡片 → 状态已收款 + 金额入零钱（记账单）+ 通知行 → 发起成员按人设回应 */
+  const receiveGroupTr = (m: WxGroupMsg) => {
+    const tr = m.tr;
+    if (!tr || tr.toId !== 'me' || tr.received || tr.status) return;
+    patchGroupMsg(m.id, { tr: { ...tr, received: true, receivedAt: Date.now() } });
+    wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+    appendFundNotice('tr', `你收下了${m.senderName || '群友'}发的`, '转账');
+    setLayer(null);
+    onToast(`已收款 ${fmtMoney(tr.amount)} 元`);
+    nudgeAiSender(m.senderId);
+  };
+
+  /** 我退还：成员（AI）转账给我的卡片 → 终态已退回 + 通知行 → 发起成员按人设回应（纯本地模拟，不动钱包） */
+  const returnGroupTr = (m: WxGroupMsg) => {
+    const tr = m.tr;
+    if (!tr || tr.toId !== 'me' || tr.received || tr.status) return;
+    patchGroupMsg(m.id, { tr: { ...tr, status: 'returned' } });
+    appendFundNotice('tr', `你退回了${m.senderName || '群友'}的`, '转账');
+    setLayer(null);
+    onToast('转账已退还');
+    nudgeAiSender(m.senderId);
+  };
+
+  /** 我处理完成员发来的转账后，让发起成员按人设自然回应一轮（只叫 TA 一个人；红包领取回应同款节奏） */
+  const nudgeAiSender = (senderId: string) => {
+    if (runningRef.current || isChatStreaming(sKey)) return;
+    const char = memberById.get(senderId) ?? contactsRef.current.find((c) => c.id === senderId) ?? null;
+    if (!char) return;
+    window.setTimeout(() => {
+      if (runningRef.current || isChatStreaming(sKey)) return;
+      groupSpeaker.set(sKey, char.id);
+      if (mountedRef.current) setSpeakerId(char.id);
+      void runCharTurn(char, false, []).finally(() => {
+        groupSpeaker.delete(sKey);
+        if (mountedRef.current) setSpeakerId(null);
+      });
+    }, 80);
   };
 
   /** 加号面板动作（图片/相机/位置同前；红包/转账 → 群级流程：发红包页 / 先选收款成员） */
@@ -3062,7 +3227,7 @@ export function WxGroupChatPage({
                   m,
                   <TrBubble
                     amount={m.tr.amount}
-                    status={m.tr.received ? `${m.tr.toName}已收款` : m.tr.status === 'returned' ? '已退回' : m.tr.status === 'rejected' ? '已拒收' : `待${m.tr.toName}收款`}
+                    status={groupTrStatusText(m.tr)}
                     received={m.tr.received === true}
                     refunded={m.tr.status === 'returned'}
                     fromMe={m.role === 'me'}
@@ -3408,7 +3573,14 @@ export function WxGroupChatPage({
         />
       )}
       {layer?.view === 'tr-detail' && layerMsg?.tr && (
-        <GroupTrDetailPage tr={layerMsg.tr} fromName={layerMsg.role === 'me' ? me.name : layerMsg.senderName || '群友'} onBack={() => setLayer(null)} />
+        <GroupTrDetailPage
+          tr={layerMsg.tr}
+          fromName={layerMsg.role === 'me' ? me.name : layerMsg.senderName || '群友'}
+          onBack={() => setLayer(null)}
+          canAct={layerMsg.tr.toId === 'me' && !layerMsg.tr.received && !layerMsg.tr.status && layerMsg.senderId !== 'me'}
+          onReceive={() => receiveGroupTr(layerMsg)}
+          onReturn={() => returnGroupTr(layerMsg)}
+        />
       )}
 
       {/* 支付密码验证浮层（开启支付密码后群红包/群转账发送前弹出自绘键盘，与单聊同规则） */}
