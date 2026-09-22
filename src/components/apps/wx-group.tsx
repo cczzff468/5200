@@ -1284,9 +1284,9 @@ export function WxGroupInfoPage({
         </div>
       )}
 
-      {/* 禁言时长选择单（10 分钟 / 1 小时 / 3 小时 / 1 天 / 永久） */}
+      {/* 禁言时长选择单（10 分钟 / 1 小时 / 3 小时 / 1 天 / 永久）：z-[60] 保证在群管理选择页之上立即弹出 */}
       {muteSheet && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setMuteSheet(null)}>
+        <div className="fixed inset-0 z-[60] flex items-end bg-black/40" onClick={() => setMuteSheet(null)}>
           <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
             <p className="px-3 py-2 text-[13px] text-black/45 dark:text-white/45">
               禁言 {memberNameOf(muteSheet)}（禁言期间不能在群里发言）
@@ -2148,7 +2148,7 @@ export function WxGroupChatPage({
   const sKey = sessionKeyOf(gid);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   const [draft, setDraft] = useState('');
-  const [quote, setQuote] = useState<{ name: string; content: string; id?: string } | null>(null);
+  const [quote, setQuote] = useState<{ name: string; content: string; id?: string; time?: number } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -2399,10 +2399,13 @@ export function WxGroupChatPage({
     [appendFundNotice, gid, patchGroupMsg]
   );
 
-  /** @ 某成员：插入「@名字 」到草稿 */
+  /** @ 某成员：插入「@名字 」到草稿（输入框以 @ 结尾时替换该 @，与键入 @ 唤起浮层无缝衔接） */
   const insertMention = (c: ContactRecord) => {
     setAtOpen(false);
-    setDraft((d) => `${d}${d && !d.endsWith(' ') ? ' ' : ''}@${memberNameOf(c)} `);
+    setDraft((d) => {
+      const base = d.endsWith('@') ? d.slice(0, -1) : d;
+      return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${memberNameOf(c)} `;
+    });
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -3406,7 +3409,7 @@ export function WxGroupChatPage({
         break;
       case 'quote':
         // 群聊引用带发言人：显示引用的是谁的消息（id 带上源消息，删除/撤回后显示「原消息已删除」）
-        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m), id: m.id });
+        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m), id: m.id, time: m.time });
         requestAnimationFrame(() => inputRef.current?.focus());
         break;
       case 'multi':
@@ -3547,11 +3550,11 @@ export function WxGroupChatPage({
               </span>
             )}
           </span>
-          {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
-          {m.quote && (
+          {/* 引用块：文字消息的引用移入气泡内（微信样式：回复在上、引用在下）；卡片类消息仍用气泡上方胶囊 */}
+          {m.quote && (m.kind === 'image' || m.kind === 'location' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'forward') && (
             <div
               data-testid="wx-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
+              className="mb-1 max-w-full overflow-hidden rounded-[10px] bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3642,13 +3645,13 @@ export function WxGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3673,12 +3676,12 @@ export function WxGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
@@ -3808,7 +3811,18 @@ export function WxGroupChatPage({
                       }`}
                     />
                     <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
-                  </div>
+                    {/* 微信引用样式：回复内容在上，被引用消息以小字灰色显示在气泡内下方 */}
+                    {m.quote && (
+                      <p
+                        data-testid="wx-grp-quote-block"
+                        className={`mt-1.5 line-clamp-3 whitespace-pre-wrap break-all text-[13px] leading-[1.4] ${
+                          mine ? 'text-black/50 dark:text-black/60' : 'text-black/45 dark:text-white/50'
+                        }`}
+                      >
+                        {m.quote.name}：{m.quote.content}
+                      </p>
+                    )}
+                  </div>,
                 )
               )}
             </div>
@@ -3962,7 +3976,16 @@ export function WxGroupChatPage({
             <input
               ref={inputRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft(v);
+                // 键入 @ 直接唤起成员浮层（微信/QQ 同款：点选后替换该 @ 并插入「@名字 」）
+                if (v.endsWith('@')) {
+                  setStickerOpen(false);
+                  setPlusOpen(false);
+                  setAtOpen(true);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();

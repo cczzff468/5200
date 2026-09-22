@@ -28,16 +28,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
-  AtSign,
   Camera,
   Check,
   ChevronLeft,
   ChevronRight,
+  CornerRightDown,
   Crown,
   Forward,
   Image as ImageIcon,
-  Lock,
   MapPin,
+  Megaphone,
   Mic,
   MicOff,
   Minus,
@@ -89,6 +89,7 @@ import {
   setGroupAdmin,
   transferGroupOwner,
   unmuteGroupMember,
+  ensureGroupNo,
   updateGroup,
   type ChatGroup,
   type GroupFwdRecord,
@@ -252,6 +253,24 @@ function fmtGroupTime(ts: number): string {
   yest.setDate(now.getDate() - 1);
   if (d.toDateString() === yest.toDateString()) return `昨天 ${hm}`;
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
+const QUOTE_WEEK_CN = ['日', '一', '二', '三', '四', '五', '六'];
+/** QQ 引用卡时间（对照截图）：今天 → HH:MM；昨天 → 昨天HH:MM；一周内 → 星期XHH:MM；更久 → M月D日HH:MM（跨年带年份） */
+function qqQuoteTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === now.toDateString()) return hm;
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (d.toDateString() === yest.toDateString()) return `昨天${hm}`;
+  const weekAgo = new Date(now);
+  weekAgo.setDate(now.getDate() - 6);
+  weekAgo.setHours(0, 0, 0, 0);
+  if (ts >= weekAgo.getTime()) return `星期${QUOTE_WEEK_CN[d.getDay()]}${hm}`;
+  const y = d.getFullYear() === now.getFullYear() ? '' : `${d.getFullYear()}年`;
+  return `${y}${d.getMonth() + 1}月${d.getDate()}日${hm}`;
 }
 
 // ---------------- 群 → 单聊转发（与 QQ 单聊同一套存储键 / 感知事件键，单聊 loadMsgs 打开即能读回） ----------------
@@ -664,7 +683,11 @@ export function QqGroupInfoPage({
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
-  const [dialog, setDialog] = useState<null | { kind: 'name' | 'announcement' | 'remark' }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'name' | 'remark' }>(null);
+  // 群公告独立页（对照真 QQ：公告卡片 + 发布/编辑，仅群主/管理员可发布）
+  const [annOpen, setAnnOpen] = useState(false);
+  const [annEditing, setAnnEditing] = useState(false);
+  const [noticeDraft, setNoticeDraft] = useState('');
   // 群管理页（集中的管理入口）：管理员添加 / 取消管理员 / 禁言 / 转让群主
   const [mgmtOpen, setMgmtOpen] = useState<null | 'admin-add' | 'admin-remove' | 'mute' | 'transfer'>(null);
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
@@ -679,12 +702,32 @@ export function QqGroupInfoPage({
   const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
   const [sentenceOn, setSentenceOn] = useState(() => getSentenceSend(sessionKeyOf(group.id)));
   const gid = group.id;
-  /** 稳定伪群号（仅展示用途，由群 id 哈希生成，同群恒定） */
-  const groupNo = useMemo(() => {
-    let h = 0;
-    for (const ch of group.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    return String(100000000 + (h % 900000000));
-  }, [group.id]);
+  /** 群号（建群时分配的唯一 9 位数字；旧群缺省时惰性补发并落盘，保证每个群的群号都不一样） */
+  const [groupNo, setGroupNo] = useState<string>(() => group.no ?? '');
+  useEffect(() => {
+    if (group.no) {
+      setGroupNo(group.no);
+      return;
+    }
+    setGroupNo(ensureGroupNo(gid));
+  }, [group.no, gid]);
+  /** 公告页元信息：发布人（群主显示名）+ 发布时间 */
+  const annPublisher = useMemo(() => {
+    const o = contacts.find((c) => c.id === group.ownerId);
+    return o ? memberNameOf(o) : '群主';
+  }, [contacts, group.ownerId]);
+  const annDateText = useMemo(() => {
+    if (!group.annAt) return '';
+    const d = new Date(group.annAt);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }, [group.annAt]);
+  /** 发布/保存群公告（清空内容发布 = 删除公告；数据层自动落「群公告已更新」事件） */
+  const saveNotice = () => {
+    const had = Boolean(group.announcement.trim());
+    onUpdate({ announcement: noticeDraft.trim() });
+    setAnnEditing(false);
+    onToast(had ? '群公告已更新' : '群公告已发布');
+  };
   const [flags, setFlags] = useState<ChatFlags>(() => qqChatFlags.get());
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   const fileRef = useRef<HTMLInputElement>(null);
@@ -865,13 +908,7 @@ export function QqGroupInfoPage({
           <QqGroupAvatar group={group} contacts={contacts} size={64} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[19px] font-semibold leading-snug">{group.name}</span>
-            <span className="mt-1 flex items-center gap-1.5 text-[13px] text-black/45 dark:text-white/45">
-              <span className="shrink-0">群号：{groupNo}</span>
-              <span className="flex shrink-0 items-center gap-1 rounded-[4px] bg-black/[0.05] px-1.5 py-[2px] text-[10px] text-black/45 dark:bg-white/10 dark:text-white/50">
-                <Lock className="h-2.5 w-2.5" />
-                不允许被搜索
-              </span>
-            </span>
+            <span className="mt-1 block text-[13px] text-black/45 dark:text-white/45">群号：{groupNo}</span>
           </span>
           <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" />
         </button>
@@ -988,8 +1025,8 @@ export function QqGroupInfoPage({
         />
         <InfoRow
           label="群公告"
-          value={group.announcement ? `${group.announcement.slice(0, 12)}…` : '未设置'}
-          onClick={() => setDialog({ kind: 'announcement' })}
+          value={group.announcement ? (group.announcement.length > 12 ? `${group.announcement.slice(0, 12)}…` : group.announcement) : '未设置'}
+          onClick={() => setAnnOpen(true)}
           testId="qq-groupinfo-notice"
         />
         <button
@@ -1221,9 +1258,9 @@ export function QqGroupInfoPage({
         </div>
       )}
 
-      {/* 禁言时长选择单（10 分钟 / 1 小时 / 3 小时 / 1 天 / 永久） */}
+      {/* 禁言时长选择单（10 分钟 / 1 小时 / 3 小时 / 1 天 / 永久）：z-[60] 保证在群管理选择页之上立即弹出 */}
       {muteSheet && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={() => setMuteSheet(null)}>
+        <div className="fixed inset-0 z-[60] flex items-end bg-black/40" onClick={() => setMuteSheet(null)}>
           <div className="w-full rounded-t-[14px] bg-white p-2 pb-6 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
             <p className="px-3 py-2 text-[13px] text-black/45 dark:text-white/45">
               禁言 {memberNameOf(muteSheet)}（禁言期间不能在群里发言）
@@ -1458,18 +1495,94 @@ export function QqGroupInfoPage({
           }}
         />
       )}
-      {dialog?.kind === 'announcement' && (
-        <CenterDialog
-          title="群公告"
-          initial={group.announcement}
-          placeholder="写入群公告，成员会在群聊语境里看到"
-          onCancel={() => setDialog(null)}
-          onSave={(v) => {
-            onUpdate({ announcement: v.trim() });
-            setDialog(null);
-          }}
-        />
+      {/* 群公告独立页（对照真 QQ：公告卡片视图 + 全页编辑；仅群主/管理员可发布，入口在上方「群公告」行） */}
+      {annOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#F5F6F7] dark:bg-[#111214]" data-testid="qq-group-notice-page">
+          <GroupNavBar
+            title="群公告"
+            onBack={() => {
+              setAnnOpen(false);
+              setAnnEditing(false);
+            }}
+            right={
+              canManage ? (
+                annEditing ? (
+                  <button
+                    type="button"
+                    data-testid="qq-group-notice-save"
+                    onClick={saveNotice}
+                    className="text-[15px] font-medium text-[#0099FF] active:opacity-60"
+                  >
+                    发布
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="qq-group-notice-edit"
+                    onClick={() => {
+                      setNoticeDraft(group.announcement);
+                      setAnnEditing(true);
+                    }}
+                    className="text-[15px] font-medium text-[#0099FF] active:opacity-60"
+                  >
+                    {group.announcement ? '编辑' : '发布'}
+                  </button>
+                )
+              ) : undefined
+            }
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-3">
+            {annEditing ? (
+              <>
+                <div className="rounded-[12px] bg-white p-3.5 dark:bg-[#1B1C1F]">
+                  <textarea
+                    data-testid="qq-group-notice-input"
+                    value={noticeDraft}
+                    maxLength={500}
+                    onChange={(e) => setNoticeDraft(e.target.value)}
+                    rows={9}
+                    placeholder="写入群公告：置顶须知、群规、本周安排…成员会在群聊语境里看到（AI 回复时也会参考）"
+                    className="w-full resize-none bg-transparent text-[15.5px] leading-[1.7] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+                  />
+                </div>
+                <p className="px-1 pt-2 text-right text-[12px] text-black/35 dark:text-white/35">{noticeDraft.length}/500</p>
+                <p className="px-1 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+                  群公告会注入每个成员的聊天语境，让群聊更有真实感；清空内容并点「发布」即可删除公告。
+                </p>
+              </>
+            ) : group.announcement ? (
+              <div className="overflow-hidden rounded-[12px] bg-white dark:bg-[#1B1C1F]" data-testid="qq-group-notice-card">
+                <div className="flex items-center gap-2.5 bg-gradient-to-r from-[#0099FF]/12 to-transparent px-4 py-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#0099FF] text-white">
+                    <Megaphone className="h-[18px] w-[18px]" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[15px] font-semibold">群公告</p>
+                    <p className="mt-0.5 text-[11.5px] text-black/40 dark:text-white/40">
+                      {annPublisher} 发布{annDateText ? ` · ${annDateText}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <p
+                  className="whitespace-pre-wrap break-words px-4 pb-4 pt-1 text-[15.5px] leading-[1.75] text-black/80 dark:text-white/85"
+                  data-testid="qq-group-notice-content"
+                >
+                  {group.announcement}
+                </p>
+              </div>
+            ) : (
+              <div className="pt-24 text-center" data-testid="qq-group-notice-empty">
+                <Megaphone className="mx-auto h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} />
+                <p className="mt-3 text-[14px] text-black/40 dark:text-white/40">暂无公告</p>
+                <p className="mt-1 text-[12px] text-black/30 dark:text-white/30">
+                  {canManage ? '点右上角「发布」写一条群公告' : '群主/管理员发布后会在群里通知'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
+
       {confirmClear && (
         <ConfirmDialog
           text="确定清空该群的聊天记录？"
@@ -1746,7 +1859,7 @@ export function QqGroupChatPage({
   const sKey = sessionKeyOf(gid);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   const [draft, setDraft] = useState('');
-  const [quote, setQuote] = useState<{ name: string; content: string; id?: string } | null>(null);
+  const [quote, setQuote] = useState<{ name: string; content: string; id?: string; time?: number } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -1912,10 +2025,13 @@ export function QqGroupChatPage({
     [appendMsg]
   );
 
-  /** @ 某成员：插入「@名字 」到草稿 */
+  /** @ 某成员：插入「@名字 」到草稿（输入框以 @ 结尾时替换该 @，与键入 @ 唤起浮层无缝衔接） */
   const insertMention = (c: ContactRecord) => {
     setAtOpen(false);
-    setDraft((d) => `${d}${d && !d.endsWith(' ') ? ' ' : ''}@${memberNameOf(c)} `);
+    setDraft((d) => {
+      const base = d.endsWith('@') ? d.slice(0, -1) : d;
+      return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${memberNameOf(c)} `;
+    });
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -2991,8 +3107,8 @@ export function QqGroupChatPage({
         setEditDraft(m.content);
         break;
       case 'quote':
-        // 群聊引用带发言人：显示引用的是谁的消息（id 带上源消息，删除/撤回后显示「原消息已删除」）
-        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m), id: m.id });
+        // 群聊引用带发言人：显示引用的是谁的消息（id 带上源消息，删除/撤回后显示「原消息已删除」；time 供 QQ 引用卡显示）
+        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m), id: m.id, time: m.time });
         requestAnimationFrame(() => inputRef.current?.focus());
         break;
       case 'multi':
@@ -3132,11 +3248,11 @@ export function QqGroupChatPage({
               </span>
             )}
           </span>
-          {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
+          {/* 引用块（卡片类消息：气泡上方独立胶囊；文字消息的引用卡在气泡内） */}
           {m.quote && (
             <div
               data-testid="qq-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
+              className="mb-1 max-w-full overflow-hidden rounded-[10px] bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3188,9 +3304,10 @@ export function QqGroupChatPage({
           <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5 dark:active:bg-white/10">
             <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
           </button>
-          <button type="button" onClick={onOpenInfo} data-testid="qq-groupchat-openinfo" className="ml-1 flex min-w-0 flex-1 flex-col items-start active:opacity-60">
-            <span className="max-w-[220px] truncate text-[17px] font-semibold leading-tight">{groupDisplayName(group)}</span>
-            <span className="text-[11px] text-black/40 dark:text-white/40">{members.length + 1} 人</span>
+          <button type="button" onClick={onOpenInfo} data-testid="qq-groupchat-openinfo" className="ml-1 flex min-w-0 flex-1 items-center active:opacity-60">
+            <span className="max-w-[240px] truncate text-[17px] font-semibold leading-tight">
+              {groupDisplayName(group)}({members.length + 1})
+            </span>
           </button>
           <button
             type="button"
@@ -3222,13 +3339,13 @@ export function QqGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3256,12 +3373,12 @@ export function QqGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
@@ -3388,14 +3505,6 @@ export function QqGroupChatPage({
                         </span>
                       )}
                     </span>
-                    {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
-                    {m.quote && (
-                      <div className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60">
-                        <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                          {m.quote.name}：{m.quote.content}
-                        </p>
-                      </div>
-                    )}
                     <div
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
@@ -3403,6 +3512,27 @@ export function QqGroupChatPage({
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
                       data-testid={mine ? 'qq-groupmsg-me' : 'qq-groupmsg-peer'}
                     >
+                      {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方） */}
+                      {m.quote && (() => {
+                        const qTime = m.quote.time ?? (m.quote.id ? msgs.find((x) => x.id === m.quote?.id)?.time : undefined);
+                        return (
+                          <div
+                            data-testid="qq-grp-quote-block"
+                            className={`mb-2 rounded-[12px] px-3 py-2 text-left ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
+                          >
+                            <div className={`flex items-center gap-1.5 text-[13px] leading-[1.4] ${mine ? 'text-white/85' : 'text-black/50 dark:text-white/50'}`}>
+                              <span className="min-w-0 flex-1 truncate">
+                                {m.quote.name}
+                                {qTime ? ` ${qqQuoteTime(qTime)}` : ''}
+                              </span>
+                              <CornerRightDown className={`h-3.5 w-3.5 shrink-0 ${mine ? 'text-white/70' : 'text-black/35 dark:text-white/40'}`} />
+                            </div>
+                            <p className={`mt-0.5 line-clamp-2 whitespace-pre-wrap break-all text-[14.5px] leading-[1.45] ${mine ? 'text-white' : 'text-black/80 dark:text-white/85'}`}>
+                              {m.quote.content}
+                            </p>
+                          </div>
+                        );
+                      })()}
                       <span>{cleanBubbleText(m.content)}</span>
                     </div>
                   </div>
@@ -3474,7 +3604,7 @@ export function QqGroupChatPage({
         )}
       </div>
 
-      {/* 输入区：与单聊同款几何（输入行 + 六图标工具栏）；@ 钮为群聊专属；表情/加号/图片/相机/位置与单聊完全对齐（共用同一套组件）；
+      {/* 输入区：与单聊同款几何（输入行 + 六图标工具栏）；键入 @ 唤起成员浮层（无独立 @ 钮）；表情/加号/图片/相机/位置与单聊完全对齐（共用同一套组件）；
           多选模式下变为批量删除/分享/收藏操作栏（与单聊一致） */}
       <div className="relative z-10 shrink-0 bg-white dark:bg-[#1B1C1F]">
         {selectMode ? (
@@ -3528,26 +3658,19 @@ export function QqGroupChatPage({
           </div>
         )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
-          <button
-            type="button"
-            aria-label="提及成员"
-            data-testid="qq-groupchat-at"
-            aria-expanded={atOpen}
-            onClick={() => {
-              setStickerOpen(false);
-              setPlusOpen(false);
-              setAtOpen((v) => !v);
-            }}
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
-              atOpen ? 'bg-[#0099FF] text-white' : 'bg-black/[0.05] text-black/55 dark:bg-white/10 dark:text-white/55'
-            }`}
-          >
-            <AtSign className="h-[18px] w-[18px]" />
-          </button>
           <input
             ref={inputRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDraft(v);
+              // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
+              if (v.endsWith('@')) {
+                setStickerOpen(false);
+                setPlusOpen(false);
+                setAtOpen(true);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

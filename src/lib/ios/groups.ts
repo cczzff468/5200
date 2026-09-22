@@ -75,6 +75,10 @@ export interface ChatGroup {
   /** 禁言表：联系人 ID → 解禁时间戳（null = 永久；缺失 = 未禁言；过期视为自动解禁） */
   mutes: Record<string, number | null>;
   announcement: string;
+  /** 群公告最近一次更新时间（QQ 群公告页展示；旧数据缺省） */
+  annAt?: number;
+  /** 群号（建群时分配的 9 位唯一数字，仅展示用途；旧群首次进入设置页时惰性补发并落盘） */
+  no?: string;
   /** 记忆与私聊互通（按群独立；默认关闭 = 群记忆与私聊完全隔离；设置页唯一入口） */
   memoryInterop: boolean;
   createdAt: number;
@@ -173,7 +177,14 @@ export interface WxGroupMsg {
   loc?: { name: string; address: string };
   /** 表情包消息（用户从表情面板发送；AI 上下文映射为 [发送了表情：意思]） */
   stk?: { url: string; meaning: string; sid?: string };
-  quote?: { name: string; content: string; /** 引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */ id?: string };
+  quote?: {
+    name: string;
+    content: string;
+    /** 引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */
+    id?: string;
+    /** 被引用消息的发送时间（QQ 引用卡显示「星期X HH:MM」样式；旧数据缺省由 UI 回源查找兜底） */
+    time?: number;
+  };
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: GroupFwdRecord[] };
@@ -238,6 +249,8 @@ function normalizeGroup(g: unknown): ChatGroup | null {
           )
         : {},
     announcement: typeof r.announcement === 'string' ? r.announcement : '',
+    annAt: typeof r.annAt === 'number' ? r.annAt : undefined,
+    no: typeof r.no === 'string' && /^\d{6,}$/.test(r.no) ? r.no : undefined,
     memoryInterop: r.memoryInterop === true,
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
   };
@@ -257,6 +270,31 @@ function writePool(app: GroupApp, list: ChatGroup[]): void {
 export function listGroups(app?: GroupApp): ChatGroup[] {
   if (app) return readPool(app);
   return [...readPool('wx'), ...readPool('qq')];
+}
+
+/** 生成唯一群号（9 位数字、首位非 0；跨双宿主查重，保证每个群的群号都不一样） */
+function genUniqueGroupNo(): string {
+  const used = new Set(listGroups().map((g) => g.no).filter((x): x is string => Boolean(x)));
+  for (let i = 0; i < 50; i++) {
+    const no = String(Math.floor(100000000 + Math.random() * 900000000));
+    if (!used.has(no)) return no;
+  }
+  return String(Date.now()).slice(-9); // 极端兜底：时间尾数（同毫秒建多群概率可忽略）
+}
+
+/** 群号（建群时已分配则直接返回；旧群缺省时惰性生成唯一号码并落盘，同群恒定） */
+export function ensureGroupNo(groupId: string): string {
+  const g = getGroup(groupId);
+  if (!g) return '';
+  if (g.no) return g.no;
+  const no = genUniqueGroupNo();
+  const list = readPool(g.app);
+  const idx = list.findIndex((x) => x.id === groupId);
+  if (idx !== -1) {
+    list[idx] = { ...list[idx], no };
+    writePool(g.app, list);
+  }
+  return no;
 }
 
 export function getGroup(groupId: string): ChatGroup | null {
@@ -283,6 +321,7 @@ export function createGroup(input: {
     adminIds: [],
     mutes: {},
     announcement: input.announcement?.trim() ?? '',
+    no: genUniqueGroupNo(),
     memoryInterop: false,
     createdAt: Date.now(),
   };
@@ -320,6 +359,7 @@ export function updateGroup(
     pushGroupEvent(groupId, '群头像已更新', { type: 'avatar' });
   }
   if (patch.announcement !== undefined && (patch.announcement ?? '') !== (prev.announcement ?? '')) {
+    next.annAt = Date.now();
     pushGroupEvent(groupId, '群公告已更新', { type: 'announcement' });
   }
   return next;

@@ -260,7 +260,7 @@ interface WxMsg {
   stk?: { url: string; meaning: string; sid?: string };
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀）；
    *  id = 被引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */
-  quote?: { name: string; content: string; id?: string };
+  quote?: { name: string; content: string; id?: string; time?: number };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
@@ -3455,7 +3455,7 @@ function ChatPage({
   const [editMsg, setEditMsg] = useState<WxMsg | null>(null);
   const [editDraft, setEditDraft] = useState('');
   /** 引用回复（输入框上方条；发送时挂到新消息上） */
-  const [quote, setQuote] = useState<null | { name: string; content: string; id?: string }>(null);
+  const [quote, setQuote] = useState<null | { name: string; content: string; id?: string; time?: number }>(null);
   /** 多选模式：勾选消息批量删除/转发/收藏 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -4099,7 +4099,7 @@ function ChatPage({
         break;
       case 'quote':
         // id 带上源消息：删除/撤回后引用显示「原消息已删除」
-        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m), id: m.id });
+        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m), id: m.id, time: m.time });
         break;
       case 'multi':
         setSelectMode(true);
@@ -4604,13 +4604,13 @@ function ChatPage({
             {/* 时间分隔（截图样式：居中半透明胶囊） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
               <div className="py-2 text-center">
-                <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtChatTime(m.time)}</span>
+                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
               </div>
             )}
             {m.recalled ? (
               /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
               <div data-testid="wx-recall-row" className="py-1.5 text-center">
-                <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                   {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                 </span>
               </div>
@@ -4740,17 +4740,6 @@ function ChatPage({
                 </div>
               ) : (
                 <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
-                  {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
-                  {m.quote && (
-                    <div
-                      data-testid="wx-quote-block"
-                      className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
-                    >
-                      <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                        {m.quote.name}：{m.quote.content}
-                      </p>
-                    </div>
-                  )}
                   <div
                     {...bubblePress}
                     className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
@@ -4776,6 +4765,17 @@ function ChatPage({
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
                       </span>
+                    )}
+                    {/* 微信引用样式：回复内容在上，被引用消息以小字灰色显示在气泡内下方 */}
+                    {m.quote && (
+                      <p
+                        data-testid="wx-quote-block"
+                        className={`mt-1.5 line-clamp-3 whitespace-pre-wrap break-all text-[13px] leading-[1.4] ${
+                          m.role === 'me' ? 'text-black/50 dark:text-black/60' : 'text-black/45 dark:text-white/50'
+                        }`}
+                      >
+                        {m.quote.name}：{m.quote.content}
+                      </p>
                     )}
                   </div>
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}

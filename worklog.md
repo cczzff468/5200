@@ -6060,3 +6060,28 @@ Work Log:
   - 视觉基线（对照用户截图）：时间/撤回/群事件 = 居中半透明圆角胶囊（rounded-[9px] bg-white/70 px-3.5 py-1.5 灰字，暗色 bg-white/[0.12]）；引用 = 气泡上方独立半透明胶囊「名字：内容」（无「引用」前缀），跟随发送侧对齐
   - 新 testid：wx/qq-settings-remark、wx/qq-remark-input|save|value、sms-settings-remark、sms-remark-input|save|value、wx/qq-groupinfo-pin、wx/qq-groupinfo-mute-switch、wx/qq-groupinfo-remark、wx/qq-groupinfo-mgmt-{admin-add|admin-remove|mute|transfer}、wx/qq-groupinfo-mgmt-{add|remove|mute|unmute|transfer}-<contactId>
   - 存量兼容：旧群数据 remark 缺省 ''；旧联系人无 remark 字段（可选链兼容）；既有 testid（wx/qq-groupmsg-*、*quote-block、*recall-row）全部保留；禁言/管理员/转让/引用联动/红包转账等既有功能零回归（E2E 复验通过）
+
+---
+Task ID: ui-polish-10
+Agent: Z.ai Code (main)
+Task: 用户十项 UI 反馈——QQ 引用改截图同款气泡内引用卡 + 微信引用移到回复下方 + 禁言弹窗即时弹出修复 + 半透明胶囊按截图美化 + QQ 群顶栏名字(N) + 删除「不允许被搜索」+ 每群唯一群号 + QQ 群公告独立页 + 删 QQ 输入栏 @ 钮 + QQ/微信键入 @ 可 @ 角色
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts：ChatGroup 增 no?（群号，建群时 genUniqueGroupNo 生成 9 位唯一数字、跨双宿主查重）与 annAt?（公告更新时间，updateGroup 公告变化时写入）；normalizeGroup 兼容旧数据（缺省 undefined）；新增 ensureGroupNo(groupId)（旧群惰性补发唯一群号并落盘，同群恒定）；WxGroupMsg.quote 增 time?（被引用消息发送时间，供 QQ 引用卡显示）
+- QQ 引用卡（截图同款）src/components/apps/qq-group.tsx + qq.tsx：文字气泡内嵌深色圆角引用卡（mine=bg-black/[0.14] 白字 / peer=bg-black/[0.06]），上行「名字 + qqQuoteTime(时间) + CornerRightDown 箭头图标」、下行引用内容（line-clamp-2），回复内容在卡片下方同气泡内；qqQuoteTime 格式：今天 HH:MM / 昨天 HH:MM / 一周内 星期XHH:MM / 更久 M月D日HH:MM（跨年带年份）；quote.time 缺省时按 quote.id 回源 msgs 查时间兜底；setQuote 时带 time: m.time（单聊+群聊同构）；卡片类消息（图片/红包等）的引用仍用气泡上方胶囊
+- 微信引用在下方 src/components/apps/wechat.tsx + wx-group.tsx：文字气泡内回复内容在上、被引用消息以 13px 小字灰色显示在气泡内下方（mine=text-black/50、peer=text-black/45，暗色适配）；testid（wx-quote-block/wx-grp-quote-block）保留；群聊 renderMsgRow 仅卡片类消息保留上方胶囊，文字消息引用全部入气泡
+- 禁言弹窗修复（双端）：根因 = muteSheet 时长选择单渲染在 DOM 中先于 mgmtOpen 全屏选择页且同为 z-50，点「禁言」后弹窗被管理页盖住，返回后才可见；修复 = muteSheet 蒙层改 z-[60]（qq-group.tsx + wx-group.tsx），点成员「禁言」后时长单立即浮在群管理选择页之上
+- 胶囊美化（对照截图 2，四端统一）：时间分隔/撤回行/群事件通知行统一改为 rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55（此前 11.5-12.5px 小字 bg-white/70 px-3.5 py-1.5）；应用 qq.tsx（时间+撤回）、wechat.tsx（时间+撤回）、qq-group.tsx（时间×2+事件×2）、wx-group.tsx（时间×2+事件×2）
+- QQ 群顶栏（截图要求）：聊天页标题改「群名(N)」单行（原两行「群名 / N 人」）；群设置头部卡删除「不允许被搜索」锁标 chip，仅留「群号：XXXXXXXXX」；群号改显示持久化唯一号码（旧 hash 兜底移除），信息页 useEffect 调 ensureGroupNo 惰性补号
+- QQ 群公告独立页（对照真 QQ）：新增 annOpen/annEditing/noticeDraft 状态与全屏页（GroupNavBar + right 插槽「发布/编辑」按钮，仅群主/管理员）；查看模式 = 公告卡片（蓝色渐变头 + Megaphone 图标 + 「群主名 发布 · M月D日 HH:MM」 + 正文 whitespace-pre-wrap）；编辑模式 = 全页 textarea（500 字 + 字数 + 提示文案）；发布后页面停留展示新卡片；移除原 CenterDialog 单行编辑；入口仍为设置页「群公告」行
+- 修复公告页发布后被关：qq.tsx 的 QqGroupInfoPage key 由 `ginfo-<id>-<groupVersion>` 改为 `ginfo-<id>`（原 key 每次 onUpdate 都整页重挂载 → 公告页/管理页状态被清空踢回设置页；与 wechat.tsx 对齐后 props 正常流入，公告发布后页面停留、管理页操作后状态原地刷新；groupVersion 仍驱动 groupPeer memo 重算，数据零滞后）
+- 输入栏 @：qq-group.tsx 删除输入行 @ 圆钮（AtSign 图标与 import 一并清理）；双端（qq-group + wx-group）输入 onChange 检测「草稿以 @ 结尾」立即唤起成员浮层（insertMention 同时改为替换结尾 @ 后插入「@名字 」，点选与键入无缝衔接，选后 refocus）；微信输入栏 @ 钮按需求保留
+- E2E 实测（agent-browser 390×844 隔离会话 + mock :4100 + /tmp/seed.js）：①QQ 建群「林川、红红、明仔」→ 顶栏「林川、红红、明仔(3)」✓；②输入栏无 @ 钮、键入「红红你来安排@」浮层立即弹出、点红红后草稿=「红红你来安排 @红红 」✓；③发消息→长按→引用→发「9」→引用卡渲染在蓝色气泡内（「我 14:11」+箭头+「红红你来安排 @红红」+回复 9 在卡下），DOM 确认 card 在 qq-groupmsg-me 内部 ✓（截图对照用户截图同款）；④设置页「群号：360216164」且无「不允许被搜索」✓；⑤群管理→禁言→点红红「禁言」→时长单在管理页之上立即可见（z-[60] 修复实锤）→选 10 分钟→toast「已禁言 红红 10 分钟」✓；⑥公告行→独立页（空态+发布钮）→发布→卡片视图（图标+发布人+时间+正文）；再编辑发布→页面停留且新卡片即时呈现 ✓；⑦建第二个 QQ 群→群号 118998741 ≠ 360216164（唯一性）✓；⑧微信群建群→发消息→引用→绿泡内「好呀好呀」+下方小字「我：周五晚上一起吃饭吗」✓；⑨微信键入 @→浮层→「明天 @红红 」✓；⑩微信单聊引用在绿泡内回复下方「林川：测试微信单聊」✓；⑪撤回→「你撤回了一条消息」半透明胶囊（截图同款）✓；⑫转让群主给红红→toast+聊天页徽标即时刷新（林川:普通 / 红红:群主）✓；⑬console 零错误零警告；dev.log 仅既有 /api/chat 502 直连兜底噪音
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（群号/公告时间/引用时间）、src/components/apps/qq-group.tsx（引用卡+禁言 z-index+群号+顶栏(N)+公告独立页+删@钮+键入@+胶囊）、src/components/apps/wx-group.tsx（引用入气泡+禁言 z-index+键入@+胶囊）、src/components/apps/qq.tsx（单聊引用卡+qqQuoteTime+胶囊+info 页 key 修复）、src/components/apps/wechat.tsx（单聊引用在下方+胶囊）
+- 视觉基线对齐用户截图：QQ 引用 = 蓝泡内深色圆角卡（名字+时间+↘箭头 / 引用内容 / 回复在下）；微信引用 = 回复在上、引用小字在下（气泡内）；系统显示 = 居中半透明圆角胶囊（bg-white/75 rounded-[10px] 灰字）
+- 交互修复：禁言时长单即时弹出（双端）；QQ 公告发布后停留展示；键入 @ 唤起 @ 浮层（QQ+微信）；QQ 输入栏无 @ 钮
+- 数据保障：每群唯一 9 位群号（建群分配+旧群惰性补发，跨双宿主查重）；公告带发布时间 annAt；引用带 time 字段（旧数据回源兜底）
+- 存量兼容：旧引用（无 time）正常渲染（仅无时间行）；旧群无 no 时进设置页自动补号；全部既有 testid 保留（qq-groupchat-at 已删除按需求）

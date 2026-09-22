@@ -1,20 +1,3 @@
-5894 /home/z/my-project/worklog.md
-  ①按钮：紫色渐变主按钮 → 全宽白底描边平面按钮（h-10 rounded-[10px] border-border bg-background，与页面输入框同规格；hover/active 淡灰底、无渐变无阴影无缩放），保留 ScanEye 图标 +「测试识图」/加载「正在识图…」转圈
-  ②容器：淡紫色测试卡片移除，回归普通 div，与表单融为一体
-  ③结果展示卡片化 → 极简一行流：成功=绿色 CheckCircle2 + 描述文字（无边框盒子，emerald-600/dark:emerald-400/90）；失败=红色 AlertCircle + 错误文字（IOS_RED）；均小图标打头 + px-1 缩进
-  - 导入不变（ScanEye/CheckCircle2/AlertCircle/Loader2 仍全在用）；testid 与交互逻辑零改动
-- 排障记录（非 bug）：复验时测试报「浏览器直连失败…」——根因是上一轮 vision-11 验证错误路径后 baseUrl 遗留死端口 3998 未还原（agent-browser 隔离 profile 内）；经页面裸 fetch 直连 :3999 成功 + 还原 baseUrl 后测试通过双重定位确认，应用代码无问题
-- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
-- E2E 实测（agent-browser 390×844 + 守护进程 mock :3999）：
-  ①按钮样式实锤：getComputedStyle backgroundImage=none（渐变已移除）、文案「测试识图」
-  ②成功路径：还原 baseUrl → 点测试 → 绿色 ✓ + mock 描述一行流展示（截图 vision-btn-min.png：白底描边按钮+简约结果行，与表单风格统一）
-  ③失败路径：死端口错误行同样以图标+文字极简展示（本轮排障过程中 DOM 实锤）
-  ④console/page errors 零报错；测完 mock 已 kill、遗留死端口配置已在隔离 profile 中还原
-Stage Summary:
-- 改动文件：仅 src/components/apps/settings.tsx（纯样式收敛，逻辑零改动）
-- 测试按钮从「重装饰」回调为「简约」：平面白底描边按钮 + 一行式图标结果展示，融入表单整体风格；三态（默认/加载中/结果）样式层级清晰
-
----
 Task ID: group-13
 Agent: Z.ai Code (main)
 Task: 微信新增「群聊」功能——多角色分别回复/@优先/群记忆与私聊记忆按群独立互通（用户七块完整需求）
@@ -299,3 +282,171 @@ Stage Summary:
 - 新 testid：wx-grp-select-*/wx-grp-select-bar|del|forward|fav|cancel|count、wx-grp-edit-layer|input|save、wx-grp-fwd-choose-mask|bar|each|merge、wx-grp-fwd-target-layer|<id>|back、wx-grp-fwd-detail*、wx-grp-forward-bubble、qq-grp-select-*/bar|del|forward|fav|cancel|count、qq-grp-edit-layer|input|save、qq-grp-fwd-*、qq-grp-forward-bubble；存量 testid 全部兼容
 - 数据兼容：WxGroupMsg 新增 forward/fwd 由 normalizeMsg 规范化；群→单聊转发写入与单聊同键同结构（wx-chat-msgs:/qq-chat-msgs:），单聊原生渲染器直接识别
 - 已知边界：红包/转账卡片被转发时按单聊同规则转为占位文本卡片（不克隆活卡不动资金）；跨宿主转发（微信群→QQ）不支持（数据隔离维持）；QQ 群时间感知开关行暂无独立 testid（功能已验证）
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: 群聊功能完整检查（十大类规则逐项审计）+ 缺失规则补全（解散级联清理记忆/人数上限/防刷屏/隐私边界/资金真实性/敏感内容/召回容错/坏类名修复）
+
+Work Log:
+- 通读群聊核心代码建立现状清单：src/lib/ios/groups.ts（440 行数据层）、wx-group.tsx（3645 行）、qq-group.tsx（3249 行）、persona.ts、memory.ts（memRecallBlock group 模式）、time-aware.ts、chat-rich.ts（buildActionRules）、worldbook.ts（collectWbBlocks 容错）+ worklog group-13~19/Task 1 历史记录
+- 逐项审计结论（已有 ✓）：一.2 增删成员/改群名/改头像；二.1 按人设自判+@优先；二.3 角色互相对话；二.4 出戏禁令；三 关系注入（【与X的关系】+【群成员速览】）；四 记忆按群/按角色隔离+互通默认关+群间隔离+时间标签；五 输入全套共用组件+群背景独立；六 红包多人抢/专属指定人/转账先选人/状态持久化/按人设领取+24h 退款；七 时间感知注入；八 长按菜单 8/9 项；十.1 建群成员≥1（按钮 disabled）+移除至少留一名+成员清空自动解散；[SKIP] 空回复占位兜底
+- 补全 ①解散群聊级联清理群来源记忆（一.3）：groups.ts 新增 onGroupDissolved 钩子注册器（dissolveGroup 末尾逐个 try-catch 调用，依赖方向保持 memory→groups 单向不成环）；memory.ts 新增 memPurgeGroupSource(groupId, memberIds)（碎片删 source='group'+sourceGroupId=gid；核心/长期内容保留只剔 groupIds、剔后无群来源时 privateSource 还原 true）+ 模块级注册钩子
+- 补全 ②群人数上限 50（一.2/十.4）：groups.ts 导出 GROUP_MEMBER_CAP=50；createGroup 截断、addGroupMember 满员返回 null；wx/qq 建群页 toggle 满员拦截 toast+「至少选择一名成员」提示（新增可选 onToast prop，wechat.tsx/qq.tsx 调用处接线 wx 用 showToast）+邀请浮层满员 toast「群成员已达上限（50 人）」
+- 补全 ③群规则块三条新规则（二.5/九.1/九.4，wx+qq 双端同步）：防刷屏（每话题一两句/连发不凑数/不抢话）、【隐私边界】（成员私聊内容与私下告知的事绝不在群里说/不传话挑事）、资金真实性（红包转账以卡片和系统通知为准/绝不凭空说收发过钱）
+- 补全 ④通用敏感内容规则（九.3，单群一致）：persona.ts【禁止事项】新增「不提供违法违规或危险行为的指引；遇这类话题以角色身份礼貌回避、转移话题或善意劝阻」——全 App（微信/QQ/信息/电话/群聊）统一生效
+- 补全 ⑤memRecallBlock 顶层容错（十.3）：主体改 memRecallBlockInner，导出函数 try-catch 包裹（与 collectWbBlocks 同款约定：注入任何异常返回空块，注入失败不影响正常聊天，群聊/私聊同此规则）
+- 修复 ⑥存量坏 CSS 类 pb-ax(Npx,env(safe-area-inset-bottom))] → pb-ax(Npx,env(safe-area-inset-bottom))]（safe-area 底部内边距实际失效）：wx-group.tsx:1210 群加号面板 + 存量同款 wechat.tsx×2 / qq.tsx×1 / wechat-wallet.tsx×5 共 9 处全部清零
+- ⑦过时注释/文案修正：WxGroupPlusPanel「群聊不含资金功能」→「红包/转账为群内真实可用功能」；wx 退出群聊确认文案 →「退出后将解散该群并删除聊天记录与群聊记忆，确定退出？」；qq 解散确认文案 →「解散后群聊、聊天记录与群聊记忆将删除，确定解散并退出？」；runGroupTurn 注释补全员 [SKIP] 兜底约定（不落盘不提示=真实群聊沉默；空回复「（…）」占位；群解散/无成员静默返回）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过（dev.log 中 onGroupDissolved ReferenceError 为编辑中间态历史记录，import 补齐后 GET / 200 正常）
+- E2E 实测（agent-browser 390×844 隔离会话 + mock LLM :4100（/v1/chat/completions 流式 SSE + /api/memory/extract + /__log 请求指纹日志 + /__reset；含「沉默测试」→红红 [SKIP] 分支）；IndexedDB 直种 林川(user 90001/pw123456)+红红/明仔(char friendWx+friendQq)+明文 apiConfig+群来源记忆碎片）：
+  ①微信群「红红、明仔的群聊(3)」建群：成员 0 时创建按钮 disabled ✓；自动群名 ✓
+  ②发消息 → /__log 断言红红/明仔两份 system：isGroup=true（【群聊模式】）、hasNoSpam=true（防刷屏·新增）、hasPrivacy=true（隐私边界·新增）、hasMoneyRule=true（资金真实性·新增）、hasSafeRule=true（敏感内容·新增 persona 层）、hasSkip=true（发言判断）✓
+  ③时间感知按群开关：开启后 hasTime=true（【时间感知】注入）✓；QQ 群默认关 hasTime=false（按群独立）✓
+  ④群记忆召回+角色隔离：红红 hasMem=true（本群来源碎片「群里约定过每周五晚一起打球」）；明仔 hasMem=false（角色隔离）✓
+  ⑤沉默兜底：「沉默测试」消息 → 红红 mock 回 [SKIP] 整条丢弃（页面无 [SKIP] 气泡不落盘）、明仔正常回复 ✓
+  ⑥解散级联清理（核心新增）：解散前 mem-frag:c-hong=[frag-audit-1 gid=本群]、mem-ltm:c-hong=[core-audit-1 gids=[本群]] → 退出群聊（确认文案含「与群聊记忆」）→ 群池空、fragsLeft=[]（群碎片删除）、cores=[{core-audit-1, priv:true}]（内容保留、groupIds 剔除、privateSource 还原 true）✓
+  ⑦QQ 群同构：建群 disabled 按钮 ✓、建群 ✓、规则注入断言全 true ✓、解散确认文案「解散后群聊、聊天记录与群聊记忆将删除」✓、解散后 qq-chat-groups 空 ✓
+  ⑧console 零错误、页面无报错
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（GROUP_MEMBER_CAP+onGroupDissolved+createGroup/addGroupMember 校验+注释）、src/lib/memory.ts（memPurgeGroupSource+钩子注册+memRecallBlock 顶层容错）、src/lib/ios/persona.ts（敏感内容禁令）、src/components/apps/wx-group.tsx（规则块×3+建群/邀请上限+解散文案+坏类名+注释）、src/components/apps/qq-group.tsx（同构镜像）、src/components/apps/wechat.tsx（onToast 接线+pb-ax×2）、src/components/apps/qq.tsx（onToast 接线+pb-ax×1）、src/components/apps/wechat-wallet.tsx（pb-ax×5）
+- 十大类审计全部落地：一（级联清理记忆+人数上限补齐）二（防刷屏明文规则）三（原已完备）四（原已完备）五（原已完备+坏类名修复）六（原已完备）七（原已完备）八（原已完备）九（隐私边界/资金真实性/敏感内容三条补齐+互通默认关确认）十（建群校验/SKIP 兜底/召回容错/人数上限全闭环）
+- 新增规则生效方式：system 注入类（防刷屏/隐私/资金/敏感内容）由 E2E mock 请求指纹实锤；数据类（解散清记忆/人数上限）由 IndexedDB 前后对照实锤；UX 类（确认文案/disabled/toast）由页面快照实锤
+---
+Task ID: group-ai-rich
+Agent: Z.ai Code (main)
+Task: 群聊 AI 角色主动发红包/转账/位置/表情包（与单聊共用组件、按群 ID 隔离、system 约定标记、人设自主触发、节流防连发）
+
+Work Log:
+- 标记层 src/lib/chat-rich.ts：RichRedpacket 增 count?（群聊 [红包:总金额:个数:祝福语]，个数段非数字时兼容旧格式 [红包:金额:祝福语]）、RichTransfer 增 target?（群聊 [转账:对象:金额:备注]，对象=群成员名字）；parseMarker 增 group 分支（红包 count 解析 clamp 1..100、转账对象缺失返回 null 让标记回退文字——群转账没有收款人就不成立）；parseRichParts 增 opts { group?: boolean }（向后兼容，单聊调用零改动）；新增 buildGroupRichRules(stickers)：群聊特殊消息规则（四种标记格式+示例）+【发钱纪律】（人设自主决定/没有合适理由不发/不是每轮都发/一轮最多一次/短时间不连发/对象必须是真实成员）+表情包格式强调+表情包清单（最多 30 个）
+- 微信群聊 src/components/apps/wx-group.tsx：runCharTurn 注入 buildGroupRichRules（stickersOn=getStickersOn(sKey) 按群表情开关下发 loadStickers('wx') 清单，关闭时下发 STICKER_OFF_RULE 且表情卡片丢弃——与单聊同规则）；finalize 落盘层全量解析群聊标记：红包（count>1 → lucky 拼手气/count=1 → normal，带 cid）→ GroupRpData 卡片；转账（resolveMemberByName 按显示名 精确→包含 解析收款对象=机主'me'或 AI 成员，解析不到不成卡）→ GroupTrData 卡片（带 cid）；位置 → loc 卡片（coords 兜底「地图上的一个位置」，与单聊 richToWxMsg 同规则）；表情包 → stk 卡片（按 ID 匹配收藏清单，找不到回退文字「[表情包]」）
+- 节流双层（五.4 同一角色短时间不能连续发多次）：①提示词层 aiMoneyAt Map（`sKey:charId`→时间戳，内存态）+AI_MONEY_COOLDOWN_MS=3min，冷却期内注入「【发钱节流】你刚刚才发过…这轮不要再发」；②落盘层 finalize 内 moneySentThisTurn+inMoneyCooldown 双检，同一轮只保留第一张钱卡、冷却期内钱卡丢弃（文字照常落盘）；成功发卡才写入时间戳
+- AI→AI/成员间转账闭环：collectGroupPending 转账条件去掉 m.role==='me' 限制（机主发的或群内其他成员转给你的都进待处理清单），发起方称呼 fromLabel（机主→「你发的」、成员→「xx发的」）；退款只退机主发的（成员无钱包，wxPatchBalance/gainToWallet 仅 fromMe 时调用）；AI 成员用 [收款转账:ID]/[领取红包:ID] 处理，applyGroupAiAction 幂等状态流转+通知行
+- AI 转账给机主的收款 UI（双端）：GroupTrDetailPage 增 canAct/onReceive/onReturn（收款人是机主且待收款时显示「退还/收款」按钮，wx 绿色方角/QQ 蓝色圆角）；groupTrStatusText 收款人=机主时「待你收款/你已收款」；新增 receiveGroupTr（received+金额入零钱/钱包+记账单+通知行「你收下了xx发的转账」+toast）、returnGroupTr（status='returned'+通知行，不动钱包）、nudgeAiSender（处理完让发起成员按人设回应一轮，与红包领取回应同节奏）
+- QQ 群聊 src/components/apps/qq-group.tsx 全量同构镜像（loadStickers('qq')/gainToWallet/qq-* testid）；顺带修复 QQ 群转账卡片不传 packet.status 导致已退回/已拒收不变灰的问题
+- 渲染零新增组件：AI 发的红包/转账/位置/表情包完全复用用户手动发送的同款卡片（wx RpBubble/TrBubble/LocBubble/StickerMsgBubble、qq RedPacketBubble/TransferBubble/LocationBubble/QqStickerBubble），按群消息库持久化（<app>-group-msgs:<gid> 按群 ID 隔离不变）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、console 零错误、dev.log 无异常
+- E2E 实测（agent-browser 390×844 + mock LLM v2 :4100（/v1/chat/completions 流式+非流式，按 lastUser 测试指令输出标记；【待处理清单】在场时明仔优先回 [领取红包:ID]/[收款转账:ID]；/__log 请求指纹断言；IndexedDB 直种 林川(user)/红红/明仔+wx 500/qq 300 钱包+贴纸清单+明文 apiConfig））：
+  ①微信建群「红红、明仔的群聊(3)」→发「发红包测试」→红红回文字+[红包:8.88:2:晚上一起吃火锅呀]→拼手气红包卡片（副标题 N 个待领取）；同回合明仔待处理清单自动领取（通知行「明仔领取了红红的红包」）；我点开箱 RpOpenLayer「開」领取→详情页 8.88 元 2/2（明仔¥7.48+林川¥1.40）✓
+  ②指纹断言：isGroup/hasGroupRich/hasMoneyDiscipline/hasStickerFormat/hasStickerList 全 true，明仔 hasPending=true（第一轮 hasThrottle=false）✓
+  ③节流实测：发红包 2 分钟内再发「转账给我测试」→提示词层 hasThrottle=true+落盘层卡片被丢（无转账卡，文字照常）；刷新清内存节流后重发→¥66.00 转账卡出现 ✓
+  ④AI 转账给机主：卡片「待你收款」→详情页（转账人红红/收款成员林川/留言/退还+收款按钮）→点收款→卡片灰化「你已收款」+通知行「你收下了红红发的转账」+红红自动回应一轮；钱包 500+1.40+66=567.40 实锤入账 ✓
+  ⑤AI 转账给成员：「转给成员测试」→红红发 [转账:明仔:20:昨天奶茶钱]→同一回合明仔 [收款转账:ID] 自动收款→卡片「明仔已收款」+通知行「明仔收下了红红发的转账」✓
+  ⑥坏名转账：「转账坏名测试」→[转账:路人甲:20]→解析不到成员不成卡（¥20 全页零匹配），文字正常落盘（资金真实性）✓
+  ⑦位置：「位置测试」→[位置:上海外滩:121.48,31.23]→上海外滩地图卡片（与用户手发同款渲染）✓
+  ⑧表情包：「表情包测试」→[表情包:stk-test1]→stk 卡片；「表情变体测试」→[发送了表情：开心] loose 变体按意思匹配成功 ✓
+  ⑨QQ 端同构：建群→拼手气 8.88×2（明仔¥3.14+林川¥5.74 手气最佳）→QQ 转账 ¥66 收款（卡片已收款+通知行+入钱包 300+5.74+66=371.74）→位置卡片→表情包（stk-test1 不在 QQ 清单时正确回退「[表情包]」文字——四.5 回退规则实锤；补种后成功渲染 QQ 蓝色贴纸）✓
+  ⑩旧格式兼容：群聊 [红包:8.88:恭喜发财]（无个数段）→count=1 normal 卡片 ✓；单聊回归 [红包:18.88:生日快乐]/[位置:…]→单聊卡片正常（共用解析零破坏）✓
+  ⑪持久化：刷新后红包领取记录（已领取 1/2→2/2）/转账状态（已收款）/通知行/卡片全部保留 ✓
+Stage Summary:
+- 改动文件：src/lib/chat-rich.ts（标记 group 模式+buildGroupRichRules）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（规则注入+finalize 全量解析+节流双层+AI→AI 转账闭环+AI→机主转账收款 UI）；单聊 wechat.tsx/qq.tsx/bubble-menu 零改动（组件全部复用）
+- 触发方式与需求完全对齐：system 注入 [红包:金额:个数:祝福语]/[转账:对象:金额:备注]/[位置:地点名:经纬度]/[表情包:表情ID] 四种标记约定；AI 按人设/对话/记忆自主决定（【发钱纪律】明确「不是每轮都要发、没有合适理由不发」）；3 分钟节流（提示词+落盘双层）防短时间连发
+- 数据隔离：AI 发的红包/转账与用户发的同结构（GroupRpData/GroupTrData），按群 ID 隔离持久化、与单聊互不相通；不涉及真实资金（AI 成员无钱包，发卡不扣款、退款只退机主）
+- 新增交互：AI 转账给机主 → 详情页收款/退还按钮（wx-grp-tr-detail-receive|return、qq-grp-tr-detail-receive|return）+发起成员自动回应
+- 已知边界：AI 发红包标记不指定类型（count>1 固定拼手气）；AI 不能发专属红包/亲属卡（群聊场景无意义，规则未下发标记）；节流为内存态（刷新清零，「短时间内」语义合理）；表情包按会话开关 getStickersOn(sKey)（群信息页暂无独立开关行，默认开）
+---
+Task ID: fix-reply-ux
+Agent: Z.ai Code (main)
+Task: 修复用户反馈三问题——①AI 回复第一个气泡前面有空隙 ②AI 像看不见用户消息一样自问自答 ③角色有昵称时否认自己的真实姓名（单聊/群聊都要修）
+
+Work Log:
+- 问题 ①（气泡开头空隙）：读 reply-count.ts 确认 splitReplySegments/splitReplyRender 均已 trim 标准空白；E2E 复现（mock 返回「 乐乐\n咋啦\n…」带前导空格五连发）证明管线对标准空白已干净。剩余风险 = 模型偶尔输出的「trim 不认识」的占位字符（U+200B-200F 零宽、U+2060、U+2800 盲文空格、U+3164/U+FFA0 填充符）。修复：chat-rich.ts 新增 cleanBubbleText（首尾剥 \s + 上述字符），四端（wechat/qq/wx-group/qq-group）持久化与渲染双层套用——渲染层套用可修复已落盘的存量脏数据
+- 问题 ②（看不见我说话/自问自答）根因实锤：**流式回复期间用户发消息被静默丢弃**——连发短消息的逐条播放（pacer 600-1100ms/条）让 isChatStreaming 持续数秒，wechat.tsx/qq.tsx 的 send() 在此窗口直接 return（消息不发送、无提示、滞留输入框）；E2E 实测：连点两次发送，第二条既不入库也无回复（input-after:"连发二"）。修复（四端）：
+  - wechat.tsx/qq.tsx 单聊：send() 遇流进行中 → 消息照常入列 + 模块级排队表 wxQueuedTurns/qqQueuedTurns.add(peer.id)；useEffect 订阅 subscribeChatStreamFinalized → 流结束广播时（或挂载时发现遗留排队）自动补跑一轮回复（260ms 后 loadMsgs 全量落盘记录合并进 state + runAiTurn(null,[],undefined,saved)）；离开页面后流才收尾的场景由重进页面时的挂载补跑兜底
+  - wx-group.tsx/qq-group.tsx 群聊：send() 遇回合进行中 → 消息照常发出（appendMsg）+ groupQueuedRef 标记 + toast「消息已发出，成员们回完这轮就聊」（原为拦截+要求重发）；runGroupTurn finally 里检查标记 → 500ms 后自动再起一轮（trigger=最后一条我的消息）
+- 问题 ③（不承认真名）：根因 = 展示层 withDisplayNames 用昵称替换 name 后，人设里只有昵称（榴莲），角色对真名（乐乐）一无所知 → 群聊里「我就是榴莲啊 哪来的乐乐」。修复：
+  - contacts.ts：ContactRecord 增 realName? 字段；withDisplayNames 替换 name 时把原 name 存入 realName
+  - persona.ts：PersonaSource 增 nickname/realName；realName 解析（副本 realName 优先，兜底 name≠nickname 的原始数据）；【名字】行为「榴莲（真实姓名/大名：乐乐）」+ 解释行「别人用哪个名字叫你都是在叫你；被叫到大名可以按人设害羞/嫌弃/不习惯，但不能不知道或否认乐乐是你」——全 App（微信/QQ/信息/电话/群聊）统一生效
+  - wx-group/qq-group【群成员速览】：其他成员带「大名叫乐乐」（realName ≠ 展示名时）
+  - 附加：persona.ts 禁止事项新增「最后一条就是用户刚发的话——直接回应它本身，不要当作没看见、不要丢下对方话题自顾自说、更不要替用户编造回答或自己接自己的话（不自问自答）」——提示词层配合排队修复双保险
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常
+- E2E 实测（agent-browser + mock :4100，指纹新增 hasRealName/hasMemberRealName/hasNoSelfAnswer）：
+  ①种子 contact name=乐乐 nickname=榴莲 → 微信单聊发消息 → 指纹 hasRealName=true + hasNoSelfAnswer=true（system 含【名字】榴莲（真实姓名/大名：乐乐））✓
+  ②排队实测（核心）：单聊连点两次发送（第二次在流播放期）→ 第二条照常入列显示 + 输入框清空 + 第一轮流结束后自动第 3 轮回复该消息（存储序列 …第一条→AI回复→第二条排队→AI回复；/__log 3 turns）✓
+  ③建群（榴莲+红红）发消息 → 榴莲 hasRealName=true（自己的大名）；红红 hasMemberRealName=true（群成员速览含「榴莲（大名叫乐乐…）」）✓
+  ④首尾清洗：cleanBubbleText 挂渲染层+落盘层（存量脏消息重进页面即修复）✓
+Stage Summary:
+- 改动文件：src/lib/chat-rich.ts（cleanBubbleText）、src/lib/contacts.ts（realName）、src/lib/ios/persona.ts（真名/昵称注入+不自问自答禁令）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（排队发送+补跑+清洗）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（群排队+清洗+成员大名）
+- 行为变化：流式回复期间用户发消息 = 照常显示 + 自动在回复后获得 AI 回应（单聊/群聊一致）；群聊不再出现「稍等一下」拦截；角色对自己的大名/昵称双重认知
+- 已知边界：单聊排队补跑依赖页面订阅/重进挂载补跑（消息永不丢失）；群排队补跑一轮后若又有排队消息会继续串行补跑
+---
+Task ID: grp-events-admin
+Agent: Z.ai Code (main)
+Task: 群聊补全引用/撤回收尾 + 群系统消息（加入/退出/禁言/管理员/转让/改名/公告/建群）+ AI 感知群内事件 + 群设置管理（成员列表/管理员/禁言/踢人/转让群主/群资料）+ 权限规则 + QQ「发起群聊」迁入消息页加号菜单
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts：ChatGroup 增 adminIds/mutes（normalize 兼容旧数据）；WxGroupMsg 增 evt（GroupEventDetail: type/actorId/targetId/extra）与 quote.id；
+  新增 pushGroupEvent（群事件→kind notice+noticeText 居中灰字，随群消息持久化）、groupRoleOf/isGroupMuted/groupMuteLeftText、
+  setGroupAdmin/muteGroupMember(5档:10分钟/1小时/3小时/1天/永久=GROUP_MUTE_PRESETS)/unmuteGroupMember/kickGroupMember/transferGroupOwner
+  （全部成功即自动落对应系统消息：加入/退出/移出/禁言X/解除禁言/成为管理员/被取消管理员/群主转让给X/群名被修改为「X」/群头像已更新/群公告已更新）；
+  addGroupMember 加 name 参数落「XX加入了群聊」；createGroup 自动落「群聊创建」；updateGroup 改名/头像/公告时值变化才落事件（所有调用方统一覆盖）；
+  purgeContactFromGroups 加 name →「XX退出了群聊」（contacts-store 删除联系人级联传入 existing.name）；collectGroupEventLines（按时间升序取最近12条，groupEventAgo 相对时间标签）；
+  kick 清理被踢者 adminIds/mutes；转让后新群主移出 adminIds；群主不可被禁言/踢出（数据层兜底）
+- 微信群聊 src/components/apps/wx-group.tsx：信息页成员格点加机主瓦片（首位）+群主/管理员徽标（橙/绿），群主/管理员排序优先；
+  成员操作单按身份出按钮：设为/取消管理员（仅群主）、禁言（时长选择单）、解除禁言、转让群主（确认弹窗）、移出群聊（管理员仅普通成员）；禁言中显示「禁言中：剩 X 分钟」；
+  虚线「－」移除入口仅群主/管理员可见；removeMember→kickGroupMember；邀请传 name；
+  聊天页：runCharTurn 注入【群内事件】块（collectGroupEventLines+「不要装作没看见…不必逐条点评」规则）；runGroupTurn 过滤被禁言成员（被@也不发言，物理禁言）；
+  quote 状态带 id；removeMsgs/recallMsg 引用联动（被删/被撤回消息被引用时引用内容改写「原消息已删除」，批量删除同样生效）；机主被禁言时输入阻断+横幅（防御性）
+- QQ 群聊 src/components/apps/qq-group.tsx：全量同构镜像（qq-* testid、QQ 蓝样式、adminId/mutes 同数据层）
+- 单聊 src/components/apps/wechat.tsx / qq.tsx：WxMsg/QQMsg.quote 增 id（长按引用时带上、normalize 透传）；删除/撤回（单条+批量）时引用联动改写「原消息已删除」
+- QQ 消息页右上角加号：点击改为下拉菜单（对照截图：白色圆角面板+指向箭头，创建群聊/创建频道/加好友群/扫一扫/传文件/收付款 六项，testid qq-msgs-plus-menu/qq-plus-*）；
+  创建群聊→路由 group-create；加好友/群→原 onAddFriend；其余 toast 暂未开放；联系人页「发起群聊」行移除（入口真正迁移），空态文案改「点消息页右上角＋创建」
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、console 零错误、dev.log 无异常
+- E2E（agent-browser 390×844 隔离会话 + mock :4100 v2（扩 fingerprint: hasEvt/evtJoin/evtMute/evtAdmin/evtKick/evtTransfer/evtRename + 事件感知测试指令；子壳 setsid 驻留）+ IndexedDB 直种 林川(user)/红红/明仔/大飞 + 明文 apiConfig→mock）：
+  ①微信建群→聊天页居中灰字「群聊创建」✓；改名「快乐小分队」→「群名被修改为「快乐小分队」」✓；改公告→「群公告已更新」✓
+  ②信息页成员瓦片：机主首位+群主徽标，红红操作单出 设为管理员/禁言/转让群主/移出群聊 四项 ✓；设管理员→「红红成为管理员」✓；禁言10分钟→「红红被禁言10 分钟」✓
+  ③禁言实测：发消息→红红不回复（明仔回复）；fingerprint hasEvt=true/evtMute=true/evtAdmin=true（事件按时间注入 system）✓；解除禁言→「红红被解除禁言」+禁言中剩X分钟显示 ✓
+  ④AI 事件感知：邀请大飞→「大飞加入了群聊」✓；发「新成员感知测试」→红红回「刚看到大飞进群了，欢迎欢迎！」（mock 仅当 system 含加入事件才回该句），三名成员 hasEvt/evtJoin 全 true ✓
+  ⑤转让群主→「群主转让给 红红」+机主变普通成员（操作单无管理按钮+「你是普通成员」提示）✓
+  ⑥群聊引用传播：引用明仔消息→发送→删除原消息→引用块变「明仔：原消息已删除」✓；撤回红红消息→「红红撤回了一条消息」✓
+  ⑦单聊引用传播（微信）：引用大飞消息带 quote.id 落库→删除原消息→引用块「大飞：原消息已删除」✓
+  ⑧QQ 加号菜单：六项与截图一致（含图标+箭头面板），创建群聊→建群页 ✓；建群→「群聊创建」✓；禁言明仔→「明仔被禁言10 分钟」+禁言后不回复（红红正常回复，hasEvt/evtMute 实锤）✓
+  ⑨QQ 邀请大飞→join 事件→踢出→「大飞被移出群聊」✓；被踢后发消息大飞不再参与回复 ✓
+  ⑩撤回引用联动（QQ 群）：引用红红消息→撤回原消息→「红红撤回了一条消息」+引用块「红红：原消息已删除」✓
+  ⑪持久化：reload 后全部事件行/禁言状态（禁言中剩8分钟）/转让结果（wx 群 ownerId=char-hong）全部保留 ✓
+  ⑫系统消息样式实锤：居中、灰色（black/45）、11-12px 胶囊；不进 AI 历史（runCharTurn 过滤 notice）、不触发回复、会话预览跳过
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（核心数据层+事件）、src/lib/ios/contacts-store.ts（purge 传名）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（群管理 UI+禁言执行+事件注入+引用联动）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（单聊引用联动+QQ 加号菜单+入口迁移）
+- 事件生成统一在数据层（addGroupMember/createGroup/updateGroup/kickGroupMember/muteGroupMember/unmuteGroupMember/setGroupAdmin/transferGroupOwner 内部自动落系统消息），调用方不会遗漏；事件=kind notice+evt，不参与 AI 历史/预览/未读，但按时间注入 system（【群内事件】）
+- 权限：groupRoleOf（owner>admin>member）+canManageTarget（管理员仅管普通成员、群主不可被管理）+禁言物理执行（回合循环过滤）+机主被禁言输入阻断；转让后旧群主变普通成员（实测生效）
+- 新 testid：wx-groupinfo-toggle-admin|mute|unmute|transfer|transfer-confirm|mute-status|mute-<ms>|mute-forever、wx-group-me-muted、qq-groupinfo-同名系列、qq-msgs-plus-menu、qq-plus-create-group|create-channel|add-friend|scan|send-file|pay；存量 testid 全部兼容
+- 已知边界：AI 群主/管理员不会主动执行管理操作（管理动作仅由用户 UI 触发，符合「用户可以扮演群主或管理员」）；「XX退出了群聊」目前唯一触发路径为删除联系人级联（群成员无自主退群流程）；禁言倒计时为惰性过期（无需写回）；转发/收藏/红包等既有功能零改动
+
+---
+Task ID: reqe-ui-polish
+Agent: Z.ai Code (main)
+Task: 需求 E——聊天界面名字旁显示群主/管理员徽标 + 群聊显示我的名字 + 群设置页新增「群管理」区块（管理员添加/取消管理员/禁言/转让群主）+ 群设置置顶/免打扰上移 + 单聊设置查找聊天记录/聊天背景移到免打扰下方 + 单聊/群聊设置添加备注（联系人备注 + 群备注）+ 系统显示（时间/撤回/群提示）改为截图同款半透明胶囊 + 引用改为截图同款气泡上方独立胶囊 + 建群默认群名=我的名字+成员名字
+
+Work Log:
+- 数据层 src/lib/contacts.ts：ContactRecord/ContactPayload 增 remark；displayNameOf 改为「备注 > 昵称 > 真名」，withDisplayNames 备注非空也替换展示名（realName 照旧兜底）→ 全 App（微信/QQ/信息/群聊成员名/引用名）显示备注，AI 人设不受影响
+- 数据层 src/lib/ios/contacts-store.ts：createContact/updateContact 支持 remark（normalizeText 60）
+- 数据层 src/lib/ios/groups.ts：ChatGroup 增 remark；normalizeGroup 兼容旧数据（缺省 ''）；updateGroup patch 支持 remark（不落群事件——备注仅机主可见）；新增 groupDisplayName(g)（备注优先）
+- 共享设置页 src/components/apps/chat-settings.tsx：
+  - ChatSettingsPage（微信/QQ）新顺序：信息卡 → 备注 → 置顶聊天/消息免打扰 → 查找聊天记录 → 聊天背景 → 回复条数/翻译/分句发送/时间感知/表情包/世界书；新增备注行+弹窗（remark/onSaveRemark props，testid {wx|qq}-settings-remark/{wx|qq}-remark-input/save/value）
+  - SmsChatSettingsPage（信息）同款备注行+弹窗（sms-settings-remark 等）
+- 微信单聊 src/components/apps/wechat.tsx：时间分隔/撤回改半透明胶囊（rounded-[9px] bg-white/70 dark:bg-white/[0.12]，撤回文案改「你/对方撤回了一条消息」）；引用块移出气泡 → 气泡上方独立胶囊（保留 wx-quote-block testid，格式「名字：内容」无「引用」前缀）；ChatPage 增 onSaveRemark，根部 updateContact+reloadContacts，peer 由 contacts 现取（保存后展示名即时刷新）；消息列表群会话标题 g.remark 优先
+- QQ 单聊 src/components/apps/qq.tsx：同上全套（qq-recall-row/qq-quote-block/qq-settings-remark；根部经 refreshContacts）；消息列表与联系人群列表群备注名、群搜索支持备注
+- 微信群聊 src/components/apps/wx-group.tsx：
+  - renderMsgRow：发言者名字行改为「名字+群主/管理员徽标」（橙/绿，与信息页同色），机主自己的消息也显示名字+徽标（原 !mine 才显示名字）；流式气泡名字行同款徽标
+  - 引用块移出气泡（wx-grp-quote-block，气泡上方独立胶囊）；时间/事件 noticeText/撤回行全部胶囊化，撤回文案「"名字" 撤回了一条消息」（对照截图）
+  - 信息页：置顶聊天/消息免打扰上移至成员栏下方首屏卡；群资料卡「群聊名称」下新增「备注」行（CenterDialog kind=remark，onUpdate({remark})）；新增「群管理」区块（仅群主/管理员可见）：管理员添加/取消管理员（仅群主）+ 禁言 + 转让群主（仅群主），四个 InfoRow 打开全屏成员选择页（mgmtOpen: admin-add/admin-remove/mute/transfer），操作复用 toggleAdmin/applyMute/liftMute/setTransferConfirm（数据层自动落系统消息）；成员聊天顶栏/建群页照常
+  - 聊天顶栏标题 groupDisplayName(group)（备注优先）
+  - 建群默认群名 = [我的名字, ...成员名字].join('、')（>4 人截断为「A、B、C等N人群聊」）
+- QQ 群聊 src/components/apps/qq-group.tsx：wx-group 全量镜像（徽标用 QQ 蓝管理员色；qq-groupinfo-pin/mute-switch/remark/mgmt-* 系列 testid；置顶/免打扰上移；群管理区块+选择页；备注 CenterDialog；建群默认名；顶栏 groupDisplayName）
+- 信息端 src/components/apps/chat.tsx：引用块移出气泡（sms-quote-block 同款胶囊）；ChatPeer 增 remark；聊天设置备注保存 → updateContact + loadContacts + 会话 peer 就地刷新
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、console 零错误、dev.log 无异常
+- E2E（agent-browser 390×844 + 既有 mock :4100 + /tmp/seed.js 种子 林川/红红(备注后:红红姐)/明仔）：
+  ①QQ 建群：选红红+明仔 → 默认群名「林川、红红、明仔」✓；微信建群（红红已备注红红姐）→「林川、红红姐、明仔」✓（成员展示名参与组合）
+  ②建群后聊天页：「群聊创建」+ 时间胶囊（rounded-[9px] bg-white/70）✓；我的消息行「林川+群主徽标」✓；AI 回复行名字无徽标（普通成员）✓
+  ③引用：长按 AI 消息→引用→发送 → 引用块渲染于气泡上方独立胶囊（qq-grp-quote-block/wx-quote-block，文本「红红：内容」）✓ 微信/QQ 单聊+群聊全部验证
+  ④撤回：群聊撤回 →「"明仔" 撤回了一条消息」胶囊 ✓；单聊撤回 →「你/对方撤回了一条消息」胶囊 ✓；撤回被引用原消息 → 引用块自动改「红红姐：原消息已删除」✓
+  ⑤群管理（QQ）：管理员添加→明仔 → toast+「明仔成为管理员」胶囊+聊天页明仔名字旁蓝色管理员徽标 ✓；禁言明仔10分钟 →「明仔被禁言10 分钟」+禁言期间发消息明仔不回复（红红回「我看到有人被禁言了」=AI 事件感知仍通）✓；转让群主给红红 →「群主转让给 红红」+我的消息不再带群主徽标+红红带群主徽标 ✓
+  ⑥群备注：群信息备注「快乐老家」→ 聊天顶栏「快乐老家 3人」+ 消息列表「快乐老家」✓
+  ⑦单聊备注：QQ 红红备注「红红姐」→ 聊天顶栏/消息列表/微信消息列表（wx-chat-item-红红姐）/微信建群默认名 全部生效 ✓
+  ⑧单聊设置顺序（QQ+微信）：信息卡→备注→置顶→免打扰→查找聊天记录→聊天背景→回复条数→… ✓；群设置顺序：成员栏→置顶→免打扰→群聊名称→备注→群公告→聊天背景→群管理→… ✓
+  ⑨持久化：备注/禁言/管理员/转让全部落 IndexedDB（kv 直读验证 quote.id/recalled/role 状态正确）
+- Stage Summary:
+  - 改动文件：src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/lib/ios/groups.ts、src/components/apps/chat-settings.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx、chat.tsx
+  - 视觉基线（对照用户截图）：时间/撤回/群事件 = 居中半透明圆角胶囊（rounded-[9px] bg-white/70 px-3.5 py-1.5 灰字，暗色 bg-white/[0.12]）；引用 = 气泡上方独立半透明胶囊「名字：内容」（无「引用」前缀），跟随发送侧对齐
+  - 新 testid：wx/qq-settings-remark、wx/qq-remark-input|save|value、sms-settings-remark、sms-remark-input|save|value、wx/qq-groupinfo-pin、wx/qq-groupinfo-mute-switch、wx/qq-groupinfo-remark、wx/qq-groupinfo-mgmt-{admin-add|admin-remove|mute|transfer}、wx/qq-groupinfo-mgmt-{add|remove|mute|unmute|transfer}-<contactId>
+  - 存量兼容：旧群数据 remark 缺省 ''；旧联系人无 remark 字段（可选链兼容）；既有 testid（wx/qq-groupmsg-*、*quote-block、*recall-row）全部保留；禁言/管理员/转让/引用联动/红包转账等既有功能零回归（E2E 复验通过）

@@ -1999,4 +1999,4 @@
   1999→  · bun run lint 通过；dev.log 无代码错误
   2000→- 清理：测试聊天消息两条 key 已删（自己会话恢复空态、凡凡会话恢复空态）、主题恢复 dark、浏览器已关；未做任何 git push
 
-[showing lines 1-2000 of 5895; use offset=2001 with limit to continue reading]
+[showing lines 1-2000 of 6063; use offset=2001 with limit to continue reading]

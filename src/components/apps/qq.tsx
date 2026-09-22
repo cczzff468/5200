@@ -59,6 +59,7 @@ import {
   ClipboardList,
   Clock,
   CloudSun,
+  CornerRightDown,
   CreditCard,
   Crown,
   Delete,
@@ -245,7 +246,7 @@ interface QQMsg {
   stk?: { url: string; meaning: string; sid?: string };
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀）；
    *  id = 被引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */
-  quote?: { name: string; content: string; id?: string };
+  quote?: { name: string; content: string; id?: string; time?: number };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
@@ -849,6 +850,23 @@ function fmtChatTime(ts: number): string {
   if (d.toDateString() === yest.toDateString()) return `昨天 ${hm}`;
   if (now.getTime() - ts < 7 * 86400000) return `星期${'日一二三四五六'[d.getDay()]} ${hm}`;
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
+/** QQ 引用卡时间（对照截图）：今天 → HH:MM；昨天 → 昨天HH:MM；一周内 → 星期XHH:MM；更久 → M月D日HH:MM（跨年带年份） */
+function qqQuoteTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === now.toDateString()) return hm;
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (d.toDateString() === yest.toDateString()) return `昨天${hm}`;
+  const weekAgo = new Date(now);
+  weekAgo.setDate(now.getDate() - 6);
+  weekAgo.setHours(0, 0, 0, 0);
+  if (ts >= weekAgo.getTime()) return `星期${'日一二三四五六'[d.getDay()]}${hm}`;
+  const y = d.getFullYear() === now.getFullYear() ? '' : `${d.getFullYear()}年`;
+  return `${y}${d.getMonth() + 1}月${d.getDate()}日${hm}`;
 }
 
 /** 联系人 AI 人设（QQ 聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
@@ -1984,7 +2002,7 @@ function ChatPage({
   const [editMsg, setEditMsg] = useState<QQMsg | null>(null);
   const [editDraft, setEditDraft] = useState('');
   /** 引用回复（输入框上方条；发送时挂到新消息上） */
-  const [quote, setQuote] = useState<null | { name: string; content: string; id?: string }>(null);
+  const [quote, setQuote] = useState<null | { name: string; content: string; id?: string; time?: number }>(null);
   /** 多选模式：勾选消息批量删除/转发/收藏 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -2780,8 +2798,8 @@ function ChatPage({
         setEditDraft(m.content);
         break;
       case 'quote':
-        // id 带上源消息：删除/撤回后引用显示「原消息已删除」
-        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m), id: m.id });
+        // id 带上源消息：删除/撤回后引用显示「原消息已删除」；time 供 QQ 引用卡显示时间
+        setQuote({ name: m.role === 'me' ? me.name : peer.name, content: quoteContentOf(m), id: m.id, time: m.time });
         break;
       case 'multi':
         setSelectMode(true);
@@ -3147,13 +3165,13 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtChatTime(m.time)}</span>
+                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
                 <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -3255,17 +3273,6 @@ function ChatPage({
                   </div>
                 ) : (
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                    {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
-                    {m.quote && (
-                      <div
-                        data-testid="qq-quote-block"
-                        className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
-                      >
-                        <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                          {m.quote.name}：{m.quote.content}
-                        </p>
-                      </div>
-                    )}
                     <div
                       {...bubblePress}
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
@@ -3273,6 +3280,27 @@ function ChatPage({
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
+                      {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方） */}
+                      {m.quote && (() => {
+                        const qTime = m.quote.time ?? (m.quote.id ? msgs.find((x) => x.id === m.quote?.id)?.time : undefined);
+                        return (
+                          <div
+                            data-testid="qq-quote-block"
+                            className={`mb-2 rounded-[12px] px-3 py-2 ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
+                          >
+                            <div className={`flex items-center gap-1.5 text-[13px] leading-[1.4] ${mine ? 'text-white/85' : 'text-black/50 dark:text-white/50'}`}>
+                              <span className="min-w-0 flex-1 truncate">
+                                {m.quote.name}
+                                {qTime ? ` ${qqQuoteTime(qTime)}` : ''}
+                              </span>
+                              <CornerRightDown className={`h-3.5 w-3.5 shrink-0 ${mine ? 'text-white/70' : 'text-black/35 dark:text-white/40'}`} />
+                            </div>
+                            <p className={`mt-0.5 line-clamp-2 whitespace-pre-wrap break-all text-[14.5px] leading-[1.45] ${mine ? 'text-white' : 'text-black/80 dark:text-white/85'}`}>
+                              {m.quote.content}
+                            </p>
+                          </div>
+                        );
+                      })()}
                       {m.content ? (
                         cleanBubbleText(m.content) || m.content
                       ) : (
@@ -10231,7 +10259,7 @@ function MainScreen({
         />
       ) : route.page === 'group-info' && groupPeer ? (
         <QqGroupInfoPage
-          key={`ginfo-${groupPeer.id}-${groupVersion}`}
+          key={`ginfo-${groupPeer.id}`}
           group={groupPeer}
           contacts={contacts}
           onBack={() => setRoute({ page: 'group-chat', groupId: groupPeer.id })}
