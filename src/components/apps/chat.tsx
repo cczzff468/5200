@@ -1018,7 +1018,7 @@ function ChatView({
                   {m.quote && (
                     <div
                       data-testid="sms-quote-block"
-                      className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-black/[0.06] px-3 py-1.5 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
+                      className="mb-1 max-w-full overflow-hidden rounded-[6px] bg-black/[0.06] px-2.5 py-1 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
                     >
                       <p className="line-clamp-2 whitespace-pre-wrap break-all">
                         {m.quote.name}：{m.quote.content}

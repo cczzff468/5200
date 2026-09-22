@@ -57,7 +57,7 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
-import { groupPreview, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
+import { groupPreview, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
@@ -4604,13 +4604,13 @@ function ChatPage({
             {/* 时间分隔（截图样式：居中半透明胶囊） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
               <div className="py-2 text-center">
-                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
+                <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
               </div>
             )}
             {m.recalled ? (
               /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
               <div data-testid="wx-recall-row" className="py-1.5 text-center">
-                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                   {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                 </span>
               </div>
@@ -4766,18 +4766,16 @@ function ChatPage({
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
                       </span>
                     )}
-                    {/* 微信引用样式：回复内容在上，被引用消息以小字灰色显示在气泡内下方 */}
-                    {m.quote && (
-                      <p
-                        data-testid="wx-quote-block"
-                        className={`mt-1.5 line-clamp-3 whitespace-pre-wrap break-all text-[13px] leading-[1.4] ${
-                          m.role === 'me' ? 'text-black/50 dark:text-black/60' : 'text-black/45 dark:text-white/50'
-                        }`}
-                      >
-                        {m.quote.name}：{m.quote.content}
-                      </p>
-                    )}
                   </div>
+                  {/* 微信引用（截图样式）：独立半透明胶囊挂在气泡下方「名字：内容」 */}
+                  {m.quote && (
+                    <div
+                      data-testid="wx-quote-block"
+                      className="mt-[3px] max-w-full overflow-hidden rounded-[6px] bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:bg-white/[0.13] dark:text-white/60"
+                    >
+                      <p className="line-clamp-2 whitespace-pre-wrap break-all">{m.quote.name}：{m.quote.content}</p>
+                    </div>
+                  )}
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                   {renderTranslations(m.id, m.content)}
                 </div>
@@ -7300,6 +7298,13 @@ function MainScreen({
           refreshGroups();
           if (next) setGroupPeer(next);
         }}
+        onQuit={() => {
+          quitGroupRecord(groupPeer.id);
+          refreshGroups();
+          setGroupPeer(null);
+          setGroupInfoOpen(false);
+          showToast('已退出群聊');
+        }}
         onDissolve={() => {
           dissolveGroupRecord(groupPeer.id);
           refreshGroups();
@@ -7329,6 +7334,12 @@ function MainScreen({
           if (next) setGroupPeer(next);
         }}
         onOpenInfo={() => setGroupInfoOpen(true)}
+        onQuit={() => {
+          quitGroupRecord(groupPeer.id);
+          refreshGroups();
+          setGroupPeer(null);
+          showToast('已退出群聊');
+        }}
         onDissolve={() => {
           dissolveGroupRecord(groupPeer.id);
           refreshGroups();

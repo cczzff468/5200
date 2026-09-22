@@ -725,6 +725,7 @@ export function WxGroupInfoPage({
   contacts,
   onBack,
   onUpdate,
+  onQuit,
   onDissolve,
   onToast: onToastExternal,
 }: {
@@ -732,6 +733,9 @@ export function WxGroupInfoPage({
   contacts: ContactRecord[];
   onBack: () => void;
   onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
+  /** 退出群聊（仅机主本机移除；AI 成员的群记忆保留） */
+  onQuit: () => void;
+  /** 解散群聊（群对所有人消失；群聊记忆级联清理） */
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
@@ -757,6 +761,7 @@ export function WxGroupInfoPage({
   const [removeOpen, setRemoveOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmQuit, setConfirmQuit] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const [replyCountOpen, setReplyCountOpen] = useState(false);
   const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
@@ -905,10 +910,11 @@ export function WxGroupInfoPage({
     }
   };
 
-  /** 转让群主（仅群主；六.2 谁都不能取消群主，只能转让）：自动落「群主转让给 XX」系统消息（三.6） */
+  /** 转让群主（仅群主；六.2 谁都不能取消群主，只能转让）：自动落「群主转让给 XX」系统消息（三.6）；确认后返回设置页 */
   const doTransfer = (c: ContactRecord) => {
     setTransferConfirm(null);
     setMemberSheet(null);
+    setMgmtOpen(null);
     const next = transferGroupOwner(gid, c.id, { name: memberNameOf(c) });
     if (next) {
       onToast(`群主已转让给 ${memberNameOf(c)}`);
@@ -1175,11 +1181,19 @@ export function WxGroupInfoPage({
       </div>
       <button
         type="button"
+        data-testid="wx-groupinfo-quit"
+        onClick={() => setConfirmQuit(true)}
+        className="mt-2 w-full bg-white py-[13px] text-center text-[16px] text-[#FA5150] active:bg-black/5 dark:bg-[#1A1A1A] dark:active:bg-white/5"
+      >
+        退出群聊
+      </button>
+      <button
+        type="button"
         data-testid="wx-groupinfo-dissolve"
         onClick={() => setConfirmDissolve(true)}
         className="mt-2 w-full bg-white py-[13px] text-center text-[16px] text-[#FA5150] active:bg-black/5 dark:bg-[#1A1A1A] dark:active:bg-white/5"
       >
-        退出群聊
+        解散群聊
       </button>
       <div className="py-8 text-center text-[11px] text-black/30 dark:text-white/30">
         群聊为本地模拟，不含任何真实资金操作
@@ -1307,9 +1321,9 @@ export function WxGroupInfoPage({
         </div>
       )}
 
-      {/* 转让群主确认 */}
+      {/* 转让群主确认：z-[60] 保证在群管理选择页之上立即弹出（与禁言时长单同款修复）；确认后返回设置页 */}
       {transferConfirm && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setTransferConfirm(null)}>
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/40 p-8" onClick={() => setTransferConfirm(null)}>
           <div className="w-full max-w-[300px] rounded-[14px] bg-white p-5 dark:bg-[#2C2C2C]" onClick={(e) => e.stopPropagation()}>
             <p className="text-[16px] font-medium">转让群主</p>
             <p className="mt-2 text-[13px] leading-relaxed text-black/55 dark:text-white/55">
@@ -1414,10 +1428,7 @@ export function WxGroupInfoPage({
                       <button
                         type="button"
                         data-testid={`wx-groupinfo-mgmt-transfer-${m.id}`}
-                        onClick={() => {
-                          setMgmtOpen(null);
-                          setTransferConfirm(m);
-                        }}
+                        onClick={() => setTransferConfirm(m)}
                         className="shrink-0 rounded-[8px] bg-[#FA9D3B]/10 px-3 py-1.5 text-[13px] text-[#D07818] active:opacity-70"
                       >
                         转让给 TA
@@ -1610,9 +1621,19 @@ export function WxGroupInfoPage({
           }}
         />
       )}
+      {confirmQuit && (
+        <ConfirmDialog
+          text="退出后将删除本机的群聊记录，并不再接收此群消息，确定退出？"
+          onCancel={() => setConfirmQuit(false)}
+          onConfirm={() => {
+            setConfirmQuit(false);
+            onQuit();
+          }}
+        />
+      )}
       {confirmDissolve && (
         <ConfirmDialog
-          text="退出后将解散该群并删除聊天记录与群聊记忆，确定退出？"
+          text="解散后所有成员都将退出该群，聊天记录与群聊记忆将被删除，确定解散？"
           onCancel={() => setConfirmDissolve(false)}
           onConfirm={() => {
             setConfirmDissolve(false);
@@ -2121,6 +2142,7 @@ export function WxGroupChatPage({
   onBack,
   onUpdate,
   onOpenInfo,
+  onQuit,
   onDissolve,
   onToast: onToastExternal,
 }: {
@@ -2132,6 +2154,9 @@ export function WxGroupChatPage({
   onBack: () => void;
   onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'memberIds' | 'memoryInterop'>>) => void;
   onOpenInfo: () => void;
+  /** 退出群聊（仅机主本机移除） */
+  onQuit: () => void;
+  /** 解散群聊（群对所有人消失） */
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
@@ -3550,18 +3575,19 @@ export function WxGroupChatPage({
               </span>
             )}
           </span>
-          {/* 引用块：文字消息的引用移入气泡内（微信样式：回复在上、引用在下）；卡片类消息仍用气泡上方胶囊 */}
-          {m.quote && (m.kind === 'image' || m.kind === 'location' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'forward') && (
+          {/* 引用块（截图样式）：独立半透明胶囊统一挂在气泡/卡片下方（「名字：内容」，无边框阴影）；
+              文字/图片/红包等全部走这里（转发卡片自带引用展示，排除避免双渲染） */}
+          {media}
+          {m.quote && m.kind !== 'forward' && (
             <div
               data-testid="wx-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[10px] bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.13] dark:text-white/60"
+              className="mt-[3px] max-w-full overflow-hidden rounded-[6px] bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
               </p>
             </div>
           )}
-          {media}
         </div>
       </div>
     );
@@ -3645,13 +3671,13 @@ export function WxGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block max-w-[280px] truncate rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3676,12 +3702,12 @@ export function WxGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block max-w-[280px] truncate rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
@@ -3795,34 +3821,25 @@ export function WxGroupChatPage({
               ) : (
                 renderMsgRow(
                   m,
-                  <div
-                    className={`relative w-fit max-w-full select-none rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
-                      mine
-                        ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
-                        : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
-                    }`}
-                    data-testid={mine ? 'wx-groupmsg-me' : 'wx-groupmsg-peer'}
-                  >
-                    {/* 气泡小三角（微信同款，与私聊同规格） */}
-                    <span
-                      aria-hidden="true"
-                      className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
-                        mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
+                  <>
+                    <div
+                      className={`relative w-fit max-w-full select-none rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
+                        mine
+                          ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
+                          : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
                       }`}
-                    />
-                    <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
-                    {/* 微信引用样式：回复内容在上，被引用消息以小字灰色显示在气泡内下方 */}
-                    {m.quote && (
-                      <p
-                        data-testid="wx-grp-quote-block"
-                        className={`mt-1.5 line-clamp-3 whitespace-pre-wrap break-all text-[13px] leading-[1.4] ${
-                          mine ? 'text-black/50 dark:text-black/60' : 'text-black/45 dark:text-white/50'
+                      data-testid={mine ? 'wx-groupmsg-me' : 'wx-groupmsg-peer'}
+                    >
+                      {/* 气泡小三角（微信同款，与私聊同规格） */}
+                      <span
+                        aria-hidden="true"
+                        className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
+                          mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                         }`}
-                      >
-                        {m.quote.name}：{m.quote.content}
-                      </p>
-                    )}
-                  </div>,
+                      />
+                      <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
+                    </div>
+                  </>,
                 )
               )}
             </div>
@@ -4047,22 +4064,23 @@ export function WxGroupChatPage({
         {atOpen && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
-            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[10px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2C2C2C]">
-              <div className="border-b border-black/5 px-3 py-2 text-[11px] text-black/40 dark:border-white/10 dark:text-white/40">
+            {/* @ 成员浮层（整屏宽：左右贴满屏幕、顶栏圆角贴住输入区） */}
+            <div className="absolute bottom-full left-0 right-0 z-40 w-full overflow-hidden rounded-t-[14px] border-t border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2C2C2C]">
+              <div className="border-b border-black/5 px-4 py-2.5 text-[12px] text-black/40 dark:border-white/10 dark:text-white/40">
                 @ 群成员（被 @ 的成员必答优先）
               </div>
-              <div className="max-h-[220px] overflow-y-auto">
-                {members.length === 0 && <div className="px-3 py-4 text-center text-[12px] text-black/40">群内还没有成员</div>}
+              <div className="max-h-[280px] overflow-y-auto">
+                {members.length === 0 && <div className="px-4 py-4 text-center text-[12px] text-black/40">群内还没有成员</div>}
                 {members.map((m) => (
                   <button
                     key={m.id}
                     type="button"
                     data-testid={`wx-group-at-${m.id}`}
                     onClick={() => insertMention(m)}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/5 dark:active:bg-white/5"
+                    className="flex w-full items-center gap-2.5 px-4 py-[9px] text-left active:bg-black/5 dark:active:bg-white/5"
                   >
-                    <WxAvatar src={m.avatar} alt={m.name} size={28} />
-                    <span className="min-w-0 flex-1 truncate text-[14px]">{memberNameOf(m)}</span>
+                    <WxAvatar src={m.avatar} alt={m.name} size={32} />
+                    <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(m)}</span>
                   </button>
                 ))}
               </div>

@@ -629,9 +629,11 @@ export function onGroupDissolved(fn: GroupDissolveHook): void {
  * 解散群聊：删除群 + 群消息（红包/转账卡片状态随消息一并清除）+ 会话级附属数据
  * （未读/标志/隐藏/时间感知/每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
  * （通过 onGroupDissolved 钩子级联，见 memory 层 memPurgeGroupSource）。
+ * opts.purgeMemory = false 时跳过群来源记忆清理（用于「退出群聊」：群对其他成员仍然存在，
+ * AI 成员的群记忆应当保留，只有机主本机删除该群）。
  * 返回被解散的群（供 UI 提示），群不存在返回 null。
  */
-export function dissolveGroup(groupId: string): ChatGroup | null {
+export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g) return null;
   writePool(g.app, readPool(g.app).filter((x) => x.id !== groupId));
@@ -653,15 +655,27 @@ export function dissolveGroup(groupId: string): ChatGroup | null {
   } catch {
     // 清理失败不阻塞解散
   }
-  // 群来源记忆级联清理（钩子逐个调用；单个钩子异常不影响其余清理，更不阻塞解散）
-  for (const fn of dissolveHooks) {
-    try {
-      fn(g);
-    } catch {
-      // 忽略
+  // 群来源记忆级联清理（钩子逐个调用；单个钩子异常不影响其余清理，更不阻塞解散）。
+  // opts.purgeMemory = false（退出群聊）时跳过：群对 AI 成员仍然存在，记忆保留。
+  if (opts?.purgeMemory !== false) {
+    for (const fn of dissolveHooks) {
+      try {
+        fn(g);
+      } catch {
+        // 忽略
+      }
     }
   }
   return g;
+}
+
+/**
+ * 退出群聊（机主本人退群）：本机删除该群（群记录/消息/未读/标志/时间感知/背景等附属数据），
+ * 但不清 AI 成员的群来源记忆（群对其他成员仍然存在，他们记得群里发生过什么）。
+ * 与「解散群聊」的区别：解散 = 群对所有人消失且记忆级联清理；退出 = 仅机主本机移除。
+ */
+export function quitGroup(groupId: string): ChatGroup | null {
+  return dissolveGroup(groupId, { purgeMemory: false });
 }
 
 /** 从所有群中移除某联系人（删除联系人级联）；成员清空的群自动解散。返回受影响的群名（toast 汇总用）。

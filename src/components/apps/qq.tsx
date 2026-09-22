@@ -208,6 +208,7 @@ import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRec
 import { QqGroupChatPage, QqGroupCreatePage, QqGroupInfoPage, QqGroupAvatar, qqGroupRowId } from './qq-group';
 import {
   dissolveGroup as dissolveGroupRecord,
+  quitGroup as quitGroupRecord,
   effectiveInterop,
   getGroup,
   groupPreview,
@@ -3165,13 +3166,13 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
+                  <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
                 <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -10264,6 +10265,11 @@ function MainScreen({
           contacts={contacts}
           onBack={() => setRoute({ page: 'group-chat', groupId: groupPeer.id })}
           onUpdate={(patch) => patchGroup(groupPeer.id, patch)}
+          onQuit={() => {
+            quitGroupRecord(groupPeer.id);
+            showToast('已退出群聊');
+            openTabs('联系人');
+          }}
           onDissolve={() => {
             dissolveGroupRecord(groupPeer.id);
             showToast('群聊已解散');
@@ -10281,6 +10287,11 @@ function MainScreen({
           onBack={() => openTabs('消息')}
           onUpdate={(patch) => patchGroup(groupPeer.id, patch)}
           onOpenInfo={() => setRoute({ page: 'group-info', groupId: groupPeer.id })}
+          onQuit={() => {
+            quitGroupRecord(groupPeer.id);
+            showToast('已退出群聊');
+            openTabs('消息');
+          }}
           onDissolve={() => {
             dissolveGroupRecord(groupPeer.id);
             showToast('群聊已解散');

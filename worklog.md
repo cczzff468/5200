@@ -6085,3 +6085,33 @@ Stage Summary:
 - 交互修复：禁言时长单即时弹出（双端）；QQ 公告发布后停留展示；键入 @ 唤起 @ 浮层（QQ+微信）；QQ 输入栏无 @ 钮
 - 数据保障：每群唯一 9 位群号（建群分配+旧群惰性补发，跨双宿主查重）；公告带发布时间 annAt；引用带 time 字段（旧数据回源兜底）
 - 存量兼容：旧引用（无 time）正常渲染（仅无时间行）；旧群无 no 时进设置页自动补号；全部既有 testid 保留（qq-groupchat-at 已删除按需求）
+
+---
+Task ID: reqf-ui-followup
+Agent: Z.ai Code (main)
+Task: 用户对需求 F 实现的六项跟进——①引用截图归属澄清（截图1=QQ 引用卡、截图2=微信引用胶囊）+ 微信引用改为截图2同款「气泡下方独立半透明胶囊」②半透明胶囊精修（圆角太圆/空隙太大/外面细细黑边）③转让群主弹窗要返回设置界面才出现（修复为在选择页之上立即弹出）④@弹窗改左右整屏宽 ⑤退出群聊下面加解散群聊 ⑥E2E 全量回归
+
+Work Log:
+- 数据层 src/lib/ios/groups.ts：dissolveGroup 增 opts.purgeMemory（=false 跳过 onGroupDissolved 钩子级联）；新增 quitGroup(groupId)（=dissolveGroup + purgeMemory:false）——「退出群聊」只删机主本机（群记录/消息/未读/标志/时间感知/背景），AI 成员的群来源记忆保留（群对他们仍然存在）；「解散群聊」走原 dissolveGroup 全量级联清理
+- 引用归属核对：QQ（单聊 qq.tsx + 群聊 qq-group.tsx）文字消息引用 = 气泡内深色圆角卡（名字+qqQuoteTime 时间+CornerRightDown 箭头 / 引用内容 / 回复在下），与截图1完全一致，本次零改动零回归；微信（单聊 wechat.tsx + 群聊 wx-group.tsx）文字消息引用从「气泡内 13px 小字」改回截图2同款——独立半透明胶囊挂在气泡下方（mt-[3px] 紧贴、rounded-[6px] bg-white/75 px-2.5 py-1 text-[13px]「名字：内容」line-clamp-2，暗色 bg-white/[0.13]），跟随发送侧对齐（mine 右对齐/peer 左对齐，对照截图2中胶囊在绿泡下方且比泡宽）；卡片类消息（图片/位置/表情包/红包/转账）引用统一从「气泡上方」移到「下方」与文字一致；renderMsgRow 引用块排除 kind==='forward'（转发卡自带引用展示，防双渲染）
+- 胶囊精修（对照截图2，四端 14 处统一）：时间分隔/撤回行/群事件通知/卡片引用胶囊 rounded-[10px]→rounded-[6px]、px-4 py-[6px]→px-2.5 py-[4px]（引用胶囊 px-3 py-1.5→px-2.5 py-1）、删除卡片引用胶囊的 shadow-[0_1px_2px_rgba(0,0,0,0.04)]（即用户所见「细细黑边」）；sms 端 chat.tsx 引用胶囊同步 rounded-[9px]→[6px]、px-3 py-1.5→px-2.5 py-1
+- 转让群主弹窗修复（双端同构）：根因 = mgmt 转让选择页点「转让给 TA」先 setMgmtOpen(null) 再弹确认框 → 弹窗只在被踢回设置页后才可见；修复 = ①点击只 setTransferConfirm(m) 不关选择页 ②确认框蒙层 z-50→z-[60]（与禁言时长单同款）在选择页之上立即弹出 ③doTransfer 增 setMgmtOpen(null) 确认后自动返回设置页（取消则留在选择页可换人）
+- @弹窗整屏宽（双端）：wx-group/qq-group 输入区上方成员浮层 w-[220px] left-3 → left-0 right-0 w-full、rounded-[10/12px]→rounded-t-[14px]（贴住输入栏只圆上角）、border 四边→border-t 仅顶边、行高 py-2→py-[9px] px-3→px-4 头像 28→32 字号 14→15、列表 max-h 220→280px；实测 getBoundingClientRect left=0 right=390 width=390 viewport=390（微信/QQ 同）
+- 退出群聊下新增解散群聊：微信 wx-group 设置页原「退出群聊」红钮（testid wx-groupinfo-dissolve）拆成两个——退出群聊（新 testid wx-groupinfo-quit，ConfirmDialog「退出后将删除本机的群聊记录，并不再接收此群消息，确定退出？」→ onQuit→quitGroup→toast 已退出群聊）+ 解散群聊（继承 testid wx-groupinfo-dissolve，ConfirmDialog「解散后所有成员都将退出该群，聊天记录与群聊记忆将被删除，确定解散？」→ onDissolve→dissolveGroup→toast 群聊已解散）；WxGroupInfoPage/WxGroupChatPage 增 onQuit prop，wechat.tsx 两个挂载点接线 quitGroupRecord；QQ qq-group 设置页在清空聊天记录与解散群聊之间补「退出群聊」（testid qq-groupinfo-quit，微信同款文案与 quitGroup 通路）+ onQuit prop + confirmQuit 状态 + ConfirmDialog，qq.tsx 两个挂载点接线（info 页退出后落联系人 tab、聊天页退出后落消息 tab）
+- E2E（agent-browser 390×844 + 自建 mock :4100（SSE 流式固定回复+浏览器直连 CORS 头）+ IndexedDB 直种 林川(user, wechatId linchuan001/qqId 10001, 密码 123456)/红红/明仔(friendWx+friendQq) + 明文 apiConfig→mock）：
+  ①微信建群「林川、红红、明仔」→发消息→mock 流式回复落两条 ✓；长按红红消息→9 项气泡菜单→引用→发「好呀好呀」→气泡下方单条胶囊「红红：我们就这样呼呼噜噜一辈子」（截图2同款；修复过程中发现并消灭了一次双渲染）✓
+  ②时间胶囊 23:08/群聊创建/群主转让给 红红 全部新胶囊样式（小圆角紧凑无边框阴影）✓
+  ③转让：设置页→群管理→转让群主→点红红「转让给 TA」→确认框立即浮在选择页之上→确认转让→回设置页+toast「群主已转让给 红红」+成员瓦片红红带群主徽标+林川变普通 ✓；QQ 同构验证弹窗即时弹出 ✓
+  ④@：微信/QQ 键入 @ → 整屏宽浮层（JS 实测 width=390=viewport）✓
+  ⑤引用联动：删除被引用原消息 → 胶囊变「红红：原消息已删除」✓（新渲染位置下联动仍通）
+  ⑥QQ 设置页顺序：清空聊天记录→退出群聊→解散群聊（群号 122513548 独一无二）✓；QQ 退出群聊→确认→toast「已退出群聊」→落联系人 tab→kv 直读 qq-chat-groups=[]（本机已删）✓
+  ⑦微信解散群聊→确认→toast「群聊已解散」→群从列表消失→kv 直读 wx-chat-groups=[] ✓
+  ⑧console 零错误零警告；tsc 0 错误；lint 通过
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、agent-browser errors/console 干净、dev.log 仅既有 /api/chat 502 直连兜底噪音（直连链路本身已用 mock 复验证通）
+
+Stage Summary:
+- 改动文件：src/lib/ios/groups.ts（quitGroup/purgeMemory）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（胶囊+引用下方+onQuit 接线）、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx（引用胶囊下方+转让弹窗 z-[60]+@整屏宽+退出/解散双钮）、src/components/apps/chat.tsx（sms 引用胶囊同步精修）
+- 视觉基线：微信引用 = 气泡下方独立半透明胶囊（截图2同款）；QQ 引用 = 气泡内深色卡（截图1同款，未动）；时间/事件/撤回/引用胶囊 = rounded-[6px] 紧凑 padding 无边框阴影
+- 交互基线：转让确认框在群管理选择页之上立即弹出、确认后返回设置页；@浮层左右贴满整屏；退出群聊=仅本机移除（AI 记忆保留）、解散群聊=全量清理（记忆级联删除）
+- testid 变更：退出群聊 wx-groupinfo-dissolve→wx-groupinfo-quit（解散群聊继承 wx-groupinfo-dissolve）；新增 qq-groupinfo-quit；其余全部保留
+- 已知边界：退出/解散在本地模拟中均为删除本机群记录（差异在是否级联清理 AI 群记忆）；退出后群无法从 UI 重新进入（无被拉回流程）；E2E 种子与 mock 已清理

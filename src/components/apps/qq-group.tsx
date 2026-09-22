@@ -673,6 +673,7 @@ export function QqGroupInfoPage({
   contacts,
   onBack,
   onUpdate,
+  onQuit,
   onDissolve,
   onToast,
 }: {
@@ -680,6 +681,9 @@ export function QqGroupInfoPage({
   contacts: ContactRecord[];
   onBack: () => void;
   onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
+  /** 退出群聊（仅机主本机移除；AI 成员的群记忆保留） */
+  onQuit: () => void;
+  /** 解散群聊（群对所有人消失；群聊记忆级联清理） */
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
@@ -697,6 +701,7 @@ export function QqGroupInfoPage({
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmQuit, setConfirmQuit] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const [replyCountOpen, setReplyCountOpen] = useState(false);
   const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
@@ -871,10 +876,11 @@ export function QqGroupInfoPage({
     }
   };
 
-  /** 转让群主（仅群主；六.2 只能转让不能取消）：自动落「群主转让给 XX」系统消息（三.6） */
+  /** 转让群主（仅群主；六.2 只能转让不能取消）：自动落「群主转让给 XX」系统消息（三.6）；确认后返回设置页 */
   const doTransfer = (c: ContactRecord) => {
     setTransferConfirm(null);
     setMemberSheet(null);
+    setMgmtOpen(null);
     const next = transferGroupOwner(gid, c.id, { name: memberNameOf(c) });
     if (next) {
       onToast(`群主已转让给 ${memberNameOf(c)}`);
@@ -1132,7 +1138,7 @@ export function QqGroupInfoPage({
         />
       </div>
 
-      {/* 危险操作（对照真 QQ：删除聊天记录=蓝、解散群聊=红） */}
+      {/* 危险操作（对照真 QQ：删除聊天记录=蓝、退出/解散群聊=红；退出在上、解散在下） */}
       <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
         <button
           type="button"
@@ -1141,6 +1147,16 @@ export function QqGroupInfoPage({
           className="w-full rounded-[12px] px-4 py-[13px] text-left text-[15px] text-[#0099FF] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
         >
           清空聊天记录
+        </button>
+      </div>
+      <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
+        <button
+          type="button"
+          data-testid="qq-groupinfo-quit"
+          onClick={() => setConfirmQuit(true)}
+          className="w-full rounded-[12px] px-4 py-[13px] text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+        >
+          退出群聊
         </button>
       </div>
       <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
@@ -1281,9 +1297,9 @@ export function QqGroupInfoPage({
         </div>
       )}
 
-      {/* 转让群主确认 */}
+      {/* 转让群主确认：z-[60] 保证在群管理选择页之上立即弹出（与禁言时长单同款修复）；确认后返回设置页 */}
       {transferConfirm && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setTransferConfirm(null)}>
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/40 p-8" onClick={() => setTransferConfirm(null)}>
           <div className="w-full max-w-[300px] rounded-[14px] bg-white p-5 dark:bg-[#2A2C31]" onClick={(e) => e.stopPropagation()}>
             <p className="text-[16px] font-medium">转让群主</p>
             <p className="mt-2 text-[13px] leading-relaxed text-black/55 dark:text-white/55">
@@ -1388,10 +1404,7 @@ export function QqGroupInfoPage({
                       <button
                         type="button"
                         data-testid={`qq-groupinfo-mgmt-transfer-${m.id}`}
-                        onClick={() => {
-                          setMgmtOpen(null);
-                          setTransferConfirm(m);
-                        }}
+                        onClick={() => setTransferConfirm(m)}
                         className="shrink-0 rounded-[8px] bg-[#FA9D3B]/10 px-3 py-1.5 text-[13px] text-[#D07818] active:opacity-70"
                       >
                         转让给 TA
@@ -1595,9 +1608,19 @@ export function QqGroupInfoPage({
           }}
         />
       )}
+      {confirmQuit && (
+        <ConfirmDialog
+          text="退出后将删除本机的群聊记录，并不再接收此群消息，确定退出？"
+          onCancel={() => setConfirmQuit(false)}
+          onConfirm={() => {
+            setConfirmQuit(false);
+            onQuit();
+          }}
+        />
+      )}
       {confirmDissolve && (
         <ConfirmDialog
-          text="解散后群聊、聊天记录与群聊记忆将删除，确定解散并退出？"
+          text="解散后所有成员都将退出该群，聊天记录与群聊记忆将被删除，确定解散？"
           onCancel={() => setConfirmDissolve(false)}
           onConfirm={() => {
             setConfirmDissolve(false);
@@ -1841,6 +1864,7 @@ export function QqGroupChatPage({
   onBack,
   onUpdate,
   onOpenInfo,
+  onQuit,
   onDissolve,
   onToast,
 }: {
@@ -1852,6 +1876,9 @@ export function QqGroupChatPage({
   onBack: () => void;
   onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'memberIds' | 'memoryInterop'>>) => void;
   onOpenInfo: () => void;
+  /** 退出群聊（仅机主本机移除） */
+  onQuit: () => void;
+  /** 解散群聊（群对所有人消失） */
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
@@ -3252,7 +3279,7 @@ export function QqGroupChatPage({
           {m.quote && (
             <div
               data-testid="qq-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[10px] bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.13] dark:text-white/60"
+              className="mb-1 max-w-full overflow-hidden rounded-[6px] bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3339,13 +3366,13 @@ export function QqGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block max-w-[280px] truncate rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3373,12 +3400,12 @@ export function QqGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block max-w-[280px] truncate rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
@@ -3754,22 +3781,23 @@ export function QqGroupChatPage({
         {atOpen && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
-            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2A2C31]">
-              <div className="border-b border-black/[0.05] px-3 py-2 text-[11px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
+            {/* @ 成员浮层（整屏宽：左右贴满屏幕、顶栏圆角贴住输入区） */}
+            <div className="absolute bottom-full left-0 right-0 z-40 w-full overflow-hidden rounded-t-[14px] border-t border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2A2C31]">
+              <div className="border-b border-black/[0.05] px-4 py-2.5 text-[12px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
                 @ 群成员（被 @ 的优先回复）
               </div>
-              <div className="max-h-[220px] overflow-y-auto">
-                {members.length === 0 && <div className="px-3 py-4 text-center text-[12px] text-black/40">群内还没有成员</div>}
+              <div className="max-h-[280px] overflow-y-auto">
+                {members.length === 0 && <div className="px-4 py-4 text-center text-[12px] text-black/40">群内还没有成员</div>}
                 {members.map((m) => (
                   <button
                     key={m.id}
                     type="button"
                     data-testid={`qq-group-at-${m.id}`}
                     onClick={() => insertMention(m)}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                    className="flex w-full items-center gap-2.5 px-4 py-[9px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
                   >
-                    <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={28} />
-                    <span className="min-w-0 flex-1 truncate text-[14px]">{memberNameOf(m)}</span>
+                    <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={32} />
+                    <span className="min-w-0 flex-1 truncate text-[15px]">{memberNameOf(m)}</span>
                   </button>
                 ))}
               </div>
