@@ -3275,11 +3275,11 @@ export function QqGroupChatPage({
               </span>
             )}
           </span>
-          {/* 引用块（卡片类消息：气泡上方独立胶囊；文字消息的引用卡在气泡内） */}
+          {/* 引用块（卡片类消息：气泡上方独立胶囊；小圆角 + 细黑边框；文字消息的引用卡在气泡内） */}
           {m.quote && (
             <div
               data-testid="qq-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[6px] bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:bg-white/[0.13] dark:text-white/60"
+              className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3469,7 +3469,7 @@ export function QqGroupChatPage({
                     onClick={() => {
                       if (!selectMode) setFwdDetailId(m.id);
                     }}
-                    className="w-fit max-w-full select-none rounded-[18px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
+                    className="w-fit max-w-full select-none rounded-[10px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
                   >
                     <p className="text-[15.5px] font-semibold leading-[1.35]">{m.fwd.title ?? m.content}</p>
                     <div className="mt-1 space-y-[1px] text-[13.5px] leading-[1.5] text-[#1F2329]/55 dark:text-white/60">
@@ -3489,7 +3489,7 @@ export function QqGroupChatPage({
                   m,
                   <div
                     data-testid="qq-grp-forward-bubble"
-                    className={`w-fit max-w-full select-none rounded-[18px] px-3.5 py-[9px] ${
+                    className={`w-fit max-w-full select-none rounded-[10px] px-3.5 py-[9px] ${
                       mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                     }`}
                     style={mine ? { backgroundColor: '#0099FF' } : undefined}
@@ -3533,7 +3533,7 @@ export function QqGroupChatPage({
                       )}
                     </span>
                     <div
-                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
@@ -3545,7 +3545,7 @@ export function QqGroupChatPage({
                         return (
                           <div
                             data-testid="qq-grp-quote-block"
-                            className={`mb-2 rounded-[12px] px-3 py-2 text-left ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
+                            className={`mb-2 rounded-[8px] px-3 py-2 text-left ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
                           >
                             <div className={`flex items-center gap-1.5 text-[13px] leading-[1.4] ${mine ? 'text-white/85' : 'text-black/50 dark:text-white/50'}`}>
                               <span className="min-w-0 flex-1 truncate">
@@ -3591,7 +3591,7 @@ export function QqGroupChatPage({
                             </span>
                           )}
                         </span>
-                        <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
+                        <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[10px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
                           {prettifyRichText(t)}
                           {i === split.texts.length - 1 && <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />}
                         </div>
@@ -3614,7 +3614,7 @@ export function QqGroupChatPage({
                             </span>
                           )}
                         </span>
-                        <div className="w-fit rounded-[18px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">
+                        <div className="w-fit rounded-[10px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">
                           <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">
                             <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
                             <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />

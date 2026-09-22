@@ -1368,7 +1368,7 @@ export function QqImageBubble({ src, testId }: { src: string; testId?: string })
       src={src}
       alt="图片消息"
       data-testid={testId}
-      className="max-h-[210px] w-auto max-w-[160px] rounded-[18px] object-cover"
+      className="max-h-[210px] w-auto max-w-[160px] rounded-[10px] object-cover"
     />
   );
 }
@@ -3246,7 +3246,7 @@ function ChatPage({
                     onClick={() => {
                       if (!selectMode) setFwdDetailId(m.id);
                     }}
-                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
+                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[10px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
                   >
                     <p className="text-[15.5px] font-semibold leading-[1.35]">{m.fwd.title ?? m.content}</p>
                     <div className="mt-1 space-y-[1px] text-[13.5px] leading-[1.5] text-[#1F2329]/55 dark:text-white/60">
@@ -3264,7 +3264,7 @@ function ChatPage({
                   <div
                     {...bubblePress}
                     data-testid="qq-forward-bubble"
-                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] px-3.5 py-[9px] text-white"
+                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[10px] px-3.5 py-[9px] text-white"
                     style={{ backgroundColor: '#0099FF' }}
                   >
                     <div className="line-clamp-8 whitespace-pre-wrap break-words border-l-2 border-white/40 pl-2 text-[14px] leading-[1.4]">
@@ -3276,7 +3276,7 @@ function ChatPage({
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div
                       {...bubblePress}
-                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
@@ -3287,7 +3287,7 @@ function ChatPage({
                         return (
                           <div
                             data-testid="qq-quote-block"
-                            className={`mb-2 rounded-[12px] px-3 py-2 ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
+                            className={`mb-2 rounded-[8px] px-3 py-2 ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
                           >
                             <div className={`flex items-center gap-1.5 text-[13px] leading-[1.4] ${mine ? 'text-white/85' : 'text-black/50 dark:text-white/50'}`}>
                               <span className="min-w-0 flex-1 truncate">
@@ -3373,7 +3373,7 @@ function ChatPage({
                 {split.texts.map((t, i) => (
                   <div className="mb-3 flex items-end justify-start gap-2" key={i} data-testid={`qq-stream-bubble-${i}`}>
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
-                    <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
+                    <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[10px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
                       {stickersOn ? prettifyRichText(t) : stripEmojiText(prettifyRichText(t).replace(/\[表情包\]/g, ' '))}
                     </div>
                   </div>
@@ -3381,7 +3381,7 @@ function ChatPage({
                 {(split.pending || split.texts.length === 0) && (
                   <div className="mb-3 flex items-end justify-start gap-2" data-testid="qq-stream-typing">
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
-                    <div className="max-w-[calc(100%-96px)] rounded-[18px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">{dots}</div>
+                    <div className="max-w-[calc(100%-96px)] rounded-[10px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">{dots}</div>
                   </div>
                 )}
               </div>

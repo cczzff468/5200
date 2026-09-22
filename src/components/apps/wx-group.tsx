@@ -3575,13 +3575,13 @@ export function WxGroupChatPage({
               </span>
             )}
           </span>
-          {/* 引用块（截图样式）：独立半透明胶囊统一挂在气泡/卡片下方（「名字：内容」，无边框阴影）；
+          {/* 引用块（截图样式）：独立半透明胶囊统一挂在气泡/卡片下方（「名字：内容」，小圆角 + 细黑边框）；
               文字/图片/红包等全部走这里（转发卡片自带引用展示，排除避免双渲染） */}
           {media}
           {m.quote && m.kind !== 'forward' && (
             <div
               data-testid="wx-grp-quote-block"
-              className="mt-[3px] max-w-full overflow-hidden rounded-[6px] bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:bg-white/[0.13] dark:text-white/60"
+              className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3913,9 +3913,9 @@ export function WxGroupChatPage({
         )}
       </div>
 
-      {/* 输入区：与私聊同款灰底无边框；@ 描边圆钮；表情/加号/图片/相机/位置与单聊完全对齐（共用同一套组件）；
+      {/* 输入区：与私聊同款灰底；@ 描边圆钮；表情/加号/图片/相机/位置与单聊完全对齐（共用同一套组件）；
           多选模式下变为批量删除/分享/收藏操作栏（与单聊一致） */}
-      <div className="relative z-10 shrink-0 bg-[#EDEDED] dark:bg-[#111111]">
+      <div className="relative z-10 shrink-0 border-t border-black/[0.07] bg-[#EDEDED] dark:border-white/[0.06] dark:bg-[#111111]">
         {selectMode ? (
           <div className="flex items-center justify-around px-6 pb-[26px] pt-3" data-testid="wx-grp-select-bar">
             <button
@@ -3986,7 +3986,7 @@ export function WxGroupChatPage({
               }}
               className={`shrink-0 active:opacity-70 ${atOpen ? 'text-[#07C160]' : ''}`}
             >
-              <span className="flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.7px] border-black/75 text-black/85 transition-colors active:bg-black/[0.06] dark:border-white/70 dark:text-white/85 dark:active:bg-white/10">
+              <span className="flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.5px] border-black/90 text-black/85 transition-colors active:bg-black/[0.06] dark:border-white/75 dark:text-white/85 dark:active:bg-white/10">
                 <AtSign className="h-[19px] w-[19px]" strokeWidth={2} />
               </span>
             </button>
@@ -4011,7 +4011,7 @@ export function WxGroupChatPage({
               }}
               placeholder=""
               data-testid="wx-groupchat-input"
-              className="h-9 min-w-0 flex-1 rounded-[6px] border border-black/10 bg-white px-3 text-[16px] outline-none dark:border-white/15 dark:bg-[#1A1A1A]"
+              className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
             />
             {draft.trim() || canDispatch ? (
               <button
@@ -4020,12 +4020,12 @@ export function WxGroupChatPage({
                 disabled={streaming || runningRef.current}
                 data-testid="wx-groupchat-send"
                 aria-label="发送"
-                className="shrink-0 rounded-[5px] bg-[#07C160] px-3.5 py-1.5 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
               >
                 发送
               </button>
             ) : (
-              <div className="flex shrink-0 items-center gap-[13px] text-black/80 dark:text-white/80">
+              <div className="flex shrink-0 items-center gap-4 text-black/80 dark:text-white/80">
                 <button
                   type="button"
                   aria-label="表情"

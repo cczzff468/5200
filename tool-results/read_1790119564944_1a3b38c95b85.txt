@@ -1,0 +1,2002 @@
+     1→'use client';
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from 'react';
+     4→import type { ChangeEvent, ReactNode } from 'react';
+     5→import {
+     6→  AlertCircle,
+     7→  Bell,
+     8→  Bluetooth,
+     9→  Camera,
+    10→  Check,
+    11→  CheckCircle2,
+    12→  ChevronLeft,
+    13→  ChevronRight,
+    14→  Database,
+    15→  Eye,
+    16→  EyeOff,
+    17→  Image as ImageIcon,
+    18→  Info,
+    19→  Loader2,
+    20→  Lock,
+    21→  Monitor,
+    22→  Moon,
+    23→  Plane,
+    24→  Plus,
+    25→  ScanEye,
+    26→  Sun,
+    27→  Upload,
+    28→  User,
+    29→  Wifi,
+    30→  Wrench,
+    31→  X,
+    32→} from 'lucide-react';
+    33→import type { LucideIcon } from 'lucide-react';
+    34→import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
+    35→import PasscodePad from '@/components/ios/PasscodePad';
+    36→import { useUI } from '@/lib/ios/store';
+    37→import { genId, localDB } from '@/lib/ios/db';
+    38→import {
+    39→  DEFAULT_API_CONFIG,
+    40→  WALLPAPER_PRESETS,
+    41→  useSettings,
+    42→  type ApiPreset,
+    43→  type ThemeMode,
+    44→  type VisionConfig,
+    45→  type VisionPreset,
+    46→} from '@/lib/ios/store';
+    47→import { Input } from '@/components/ui/input';
+    48→import { Progress } from '@/components/ui/progress';
+    49→import { Slider } from '@/components/ui/slider';
+    50→import { Switch } from '@/components/ui/switch';
+    51→import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
+    52→import { describeImages } from '@/lib/vision-client';
+    53→
+    54→// ---------------- 常量与类型 ----------------
+    55→
+    56→type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'vision' | 'about' | 'lock';
+    57→
+    58→const IOS_RED = '#FF453A';
+    59→
+    60→/** 主列表"显示与亮度"右侧的主题短名 */
+    61→const THEME_SHORT: Record<ThemeMode, string> = {
+    62→  light: '浅色',
+    63→  dark: '深色',
+    64→  auto: '自动',
+    65→};
+    66→
+    67→/** 内置预设：仅保留国内可直连的三家（服务器出口网络对海外厂商有地区限制） */
+    68→const BUILTIN_API_PRESETS: { name: string; baseUrl: string; model: string }[] = [
+    69→  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
+    70→  { name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1/chat/completions', model: 'moonshot-v1-8k' },
+    71→  { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4-flash' },
+    72→];
+    73→
+    74→/** 内置识图预设：均为支持图片输入的模型（识图模型与聊天模型可同厂不同款） */
+    75→const BUILTIN_VISION_PRESETS: { name: string; baseUrl: string; model: string }[] = [
+    76→  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+    77→  { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4v-flash' },
+    78→  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-vl-plus' },
+    79→  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1/chat/completions', model: 'Qwen/Qwen2.5-VL-7B-Instruct' },
+    80→];
+    81→
+    82→// ---------------- 模块级工具 ----------------
+    83→
+    84→async function readStorageEstimate(): Promise<{ usage: number; quota: number }> {
+    85→  try {
+    86→    if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
+    87→      const est = await navigator.storage.estimate();
+    88→      return { usage: est.usage ?? 0, quota: est.quota ?? 0 };
+    89→    }
+    90→  } catch {
+    91→    // 忽略，返回 0
+    92→  }
+    93→  return { usage: 0, quota: 0 };
+    94→}
+    95→
+    96→function formatMB(bytes: number): string {
+    97→  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+    98→  const mb = bytes / (1024 * 1024);
+    99→  return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
+   100→}
+   101→
+   102→// ---------------- 通用小组件 ----------------
+   103→
+   104→/** iOS 分组卡片（子页用） */
+   105→function GroupCard({ children }: { children: ReactNode }) {
+   106→  return (
+   107→    <div className="divide-y divide-border/60 overflow-hidden rounded-[12px] bg-card">{children}</div>
+   108→  );
+   109→}
+   110→
+   111→/** iOS 系统设置图标色板（参照用户截图：纯色圆角方块 + 白色图标） */
+   112→const TONE_ORANGE = '#FF9500';
+   113→const TONE_BLUE = '#007AFF';
+   114→const TONE_GREEN = '#34C759';
+   115→const TONE_RED = '#FF3B30';
+   116→const TONE_GRAY = '#8E8E93';
+   117→const TONE_CYAN = '#32ADE6';
+   118→const TONE_PURPLE = '#AF52FF';
+   119→
+   120→/** 主列表行图标：纯色圆角方块 + 白色线性图标（iOS 设置风） */
+   121→function RowIcon({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
+   122→  return (
+   123→    <span
+   124→      className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px]"
+   125→      style={{ backgroundColor: tone }}
+   126→    >
+   127→      <Icon className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+   128→    </span>
+   129→  );
+   130→}
+   131→
+   132→/** 主列表行：左彩色方块图标 + 标签，右侧可选值 / ChevronRight */
+   133→function MainRow({
+   134→  icon,
+   135→  tone,
+   136→  label,
+   137→  value,
+   138→  onClick,
+   139→  chevron,
+   140→}: {
+   141→  icon: LucideIcon;
+   142→  tone: string;
+   143→  label: string;
+   144→  value?: string;
+   145→  onClick?: () => void;
+   146→  chevron?: boolean;
+   147→}) {
+   148→  const showChevron = chevron ?? onClick !== undefined;
+   149→  const inner = (
+   150→    <>
+   151→      <RowIcon icon={icon} tone={tone} />
+   152→      <span className="min-w-0 flex-1 truncate text-[16px]">{label}</span>
+   153→      {value !== undefined && (
+   154→        <span className="max-w-[50%] shrink-0 truncate text-[15px] text-muted-foreground">{value}</span>
+   155→      )}
+   156→      {showChevron && <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />}
+   157→    </>
+   158→  );
+   159→
+   160→  if (onClick === undefined) {
+   161→    return <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">{inner}</div>;
+   162→  }
+   163→  return (
+   164→    <button
+   165→      type="button"
+   166→      onClick={onClick}
+   167→      className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/50"
+   168→    >
+   169→      {inner}
+   170→    </button>
+   171→  );
+   172→}
+   173→
+   174→/** 详情页外壳：居中标题导航 + 返回按钮 + 右滑进入动画 */
+   175→function DetailShell({
+   176→  title,
+   177→  onBack,
+   178→  children,
+   179→}: {
+   180→  title: string;
+   181→  onBack: () => void;
+   182→  children: ReactNode;
+   183→}) {
+   184→  return (
+   185→    <>
+   186→      <IOSNavBar title={title} large={false} left={<IOSBackButton onClick={onBack} label="" />} />
+   187→      <div className="no-scrollbar flex-1 overflow-y-auto">
+   188→        <div
+   189→          key={title}
+   190→          className="animate-in slide-in-from-right-6 fade-in duration-300 px-4 pb-[40px] pt-2"
+   191→        >
+   192→          {children}
+   193→        </div>
+   194→      </div>
+   195→    </>
+   196→  );
+   197→}
+   198→
+   199→function FieldLabel({ children }: { children: ReactNode }) {
+   200→  return <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">{children}</div>;
+   201→}
+   202→
+   203→// ---------------- 主列表 ----------------
+   204→
+   205→function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
+   206→  const theme = useSettings((s) => s.theme);
+   207→  const wallpaperPreset = useSettings((s) => s.wallpaperPreset);
+   208→  const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
+   209→  const apiKey = useSettings((s) => s.apiConfig.apiKey);
+   210→  const apiModel = useSettings((s) => s.apiConfig.model);
+   211→  const visionConfigured = useSettings((s) => Boolean(s.visionConfig.baseUrl.trim()));
+   212→  const visionModel = useSettings((s) => s.visionConfig.model);
+   213→  const profile = useSettings((s) => s.profile);
+   214→
+   215→  const [airplane, setAirplane] = useState(false);
+   216→
+   217→  // 挂载读取持久化的飞行模式开关（演示项）
+   218→  useEffect(() => {
+   219→    let cancelled = false;
+   220→    void (async () => {
+   221→      try {
+   222→        const rec = await localDB.get('settings', 'radios');
+   223→        if (!cancelled && rec && typeof rec.value === 'object' && rec.value !== null) {
+   224→          const v = rec.value as { airplane?: unknown };
+   225→          setAirplane(v.airplane === true);
+   226→        }
+   227→      } catch {
+   228→        // IndexedDB 不可用时保持默认关闭
+   229→      }
+   230→    })();
+   231→    return () => {
+   232→      cancelled = true;
+   233→    };
+   234→  }, []);
+   235→
+   236→  const toggleAirplane = (v: boolean) => {
+   237→    setAirplane(v);
+   238→    void localDB.put('settings', { key: 'radios', value: { airplane: v } });
+   239→  };
+   240→
+   241→  const wallpaperName = customWallpaperUrl
+   242→    ? '自定义'
+   243→    : (WALLPAPER_PRESETS.find((p) => p.id === wallpaperPreset)?.name ?? '自定义');
+   244→
+   245→  return (
+   246→    <>
+   247→      {/* 顶部：返回主屏幕箭头 + 大标题「设置」（用户要求补上标签；返回键处不显示文字） */}
+   248→      <div className="sticky top-0 z-20 shrink-0 bg-background/80 pt-[54px] backdrop-blur-xl">
+   249→        <div className="flex h-11 items-center gap-1.5 px-4">
+   250→          <button
+   251→            type="button"
+   252→            onClick={useUI.getState().closeApp}
+   253→            aria-label="返回主屏幕"
+   254→            className="flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors active:bg-muted/60"
+   255→          >
+   256→            <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
+   257→          </button>
+   258→          <span className="truncate text-[19px] font-bold leading-none tracking-tight">设置</span>
+   259→        </div>
+   260→      </div>
+   261→      <div className="no-scrollbar flex-1 overflow-y-auto pb-5">
+   262→        {/* 个人资料卡（点击进入个人信息：头像/名字/标签） */}
+   263→        <div className="mx-4 mt-2 overflow-hidden rounded-[16px] bg-card">
+   264→          <button
+   265→            type="button"
+   266→            onClick={() => onOpen('profile')}
+   267→            className="flex w-full items-center gap-4 p-4 text-left transition-colors active:bg-muted/50"
+   268→          >
+   269→            {profile.avatar ? (
+   270→              <img
+   271→                src={profile.avatar}
+   272→                alt="头像"
+   273→                className="h-[56px] w-[56px] shrink-0 rounded-full object-cover"
+   274→              />
+   275→            ) : (
+   276→              <span className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#D8D8DD] to-[#AEB0B8]">
+   277→                <User className="h-7 w-7 text-[#7C7C84]" strokeWidth={1.8} />
+   278→              </span>
+   279→            )}
+   280→            <span className="min-w-0 flex-1">
+   281→              <span className="block truncate text-[22px] font-semibold leading-tight">
+   282→                {profile.name.trim() || 'iPhone 用户'}
+   283→              </span>
+   284→              <span className="mt-1 block truncate text-[13px] text-muted-foreground">
+   285→                {profile.tag.trim() || 'Apple 账户、iCloud'}
+   286→              </span>
+   287→            </span>
+   288→            <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+   289→          </button>
+   290→        </div>
+   291→
+   292→        {/* 无线控制（演示项） */}
+   293→        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+   294→          <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+   295→            <RowIcon icon={Plane} tone={TONE_ORANGE} />
+   296→            <span className="min-w-0 flex-1 truncate text-[16px]">飞行模式</span>
+   297→            <Switch checked={airplane} onCheckedChange={toggleAirplane} aria-label="飞行模式" />
+   298→          </div>
+   299→          <MainRow icon={Wifi} tone={TONE_BLUE} label="无线局域网" value="未连接" chevron />
+   300→          <MainRow icon={Bluetooth} tone={TONE_BLUE} label="蓝牙" value="打开" chevron />
+   301→        </div>
+   302→        <p className="mt-2 px-8 text-[12px] leading-relaxed text-muted-foreground">
+   303→          飞行模式、无线局域网与蓝牙均为演示项，不改变系统状态。
+   304→        </p>
+   305→
+   306→        {/* 锁屏与密码（按用户要求不显示开启状态提示） */}
+   307→        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+   308→          <MainRow icon={Lock} tone={TONE_RED} label="锁屏与密码" onClick={() => onOpen('lock')} />
+   309→        </div>
+   310→
+   311→        {/* 显示与亮度 / 壁纸 / 通知 */}
+   312→        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+   313→          <MainRow
+   314→            icon={Sun}
+   315→            tone={TONE_BLUE}
+   316→            label="显示与亮度"
+   317→            value={THEME_SHORT[theme]}
+   318→            onClick={() => onOpen('theme')}
+   319→          />
+   320→          <MainRow
+   321→            icon={ImageIcon}
+   322→            tone={TONE_CYAN}
+   323→            label="壁纸"
+   324→            value={wallpaperName}
+   325→            onClick={() => onOpen('wallpaper')}
+   326→          />
+   327→          <MainRow icon={Bell} tone={TONE_RED} label="通知" onClick={() => onOpen('notification')} />
+   328→        </div>
+   329→
+   330→        {/* 开发者 */}
+   331→        <div className="mb-2 mt-6 px-8 text-[13px] text-muted-foreground">开发者</div>
+   332→        <div className="mx-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+   333→          <MainRow
+   334→            icon={Wrench}
+   335→            tone={TONE_GRAY}
+   336→            label="API 配置"
+   337→            value={apiKey.trim() ? `已配置 · ${apiModel}` : '未配置'}
+   338→            onClick={() => onOpen('api')}
+   339→          />
+   340→          <MainRow
+   341→            icon={Eye}
+   342→            tone={TONE_PURPLE}
+   343→            label="识图模型"
+   344→            value={visionConfigured ? `已配置 · ${visionModel.trim() || '未填模型名'}` : '未配置'}
+   345→            onClick={() => onOpen('vision')}
+   346→          />
+   347→          <MainRow icon={Database} tone={TONE_GREEN} label="存储" onClick={() => onOpen('storage')} />
+   348→        </div>
+   349→
+   350→        {/* 关于本机 */}
+   351→        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+   352→          <MainRow icon={Info} tone={TONE_GRAY} label="关于本机" onClick={() => onOpen('about')} />
+   353→        </div>
+   354→
+   355→        <p className="py-6 text-center text-[12px] text-muted-foreground">
+   356→          iOS Web · 本地优先架构 · 数据仅存于你的浏览器
+   357→        </p>
+   358→      </div>
+   359→    </>
+   360→  );
+   361→}
+   362→
+   363→// ---------------- 外观与主题 ----------------
+   364→
+   365→function ThemePage({ onBack }: { onBack: () => void }) {
+   366→  const theme = useSettings((s) => s.theme);
+   367→  const setTheme = useSettings((s) => s.setTheme);
+   368→
+   369→  const options: { value: ThemeMode; label: string; icon: LucideIcon }[] = [
+   370→    { value: 'light', label: '浅色', icon: Sun },
+   371→    { value: 'dark', label: '深色', icon: Moon },
+   372→    { value: 'auto', label: '跟随系统', icon: Monitor },
+   373→  ];
+   374→
+   375→  return (
+   376→    <DetailShell title="显示与亮度" onBack={onBack}>
+   377→      <GroupCard>
+   378→        {options.map((o) => {
+   379→          const Icon = o.icon;
+   380→          return (
+   381→            <button
+   382→              key={o.value}
+   383→              type="button"
+   384→              onClick={() => setTheme(o.value)}
+   385→              className="flex h-[46px] w-full items-center gap-3 px-4 text-left transition-colors active:bg-muted/50"
+   386→            >
+   387→              <Icon className="h-5 w-5 shrink-0 text-muted-foreground" strokeWidth={2} />
+   388→              <span className="flex-1 text-[16px]">{o.label}</span>
+   389→              {theme === o.value && (
+   390→                <Check className="h-5 w-5 shrink-0 text-foreground" strokeWidth={2.5} />
+   391→              )}
+   392→            </button>
+   393→          );
+   394→        })}
+   395→      </GroupCard>
+   396→      <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
+   397→        跟随系统将随设备深色模式自动切换，过渡动画平滑。
+   398→      </p>
+   399→    </DetailShell>
+   400→  );
+   401→}
+   402→
+   403→// ---------------- 通知 ----------------
+   404→
+   405→function NotificationPage({ onBack }: { onBack: () => void }) {
+   406→  const [enabled, setEnabled] = useState<boolean>(() =>
+   407→    typeof window !== 'undefined' && typeof Notification !== 'undefined'
+   408→      ? Notification.permission === 'granted'
+   409→      : false
+   410→  );
+   411→  const [denied, setDenied] = useState<boolean>(() =>
+   412→    typeof window !== 'undefined' && typeof Notification !== 'undefined'
+   413→      ? Notification.permission === 'denied'
+   414→      : false
+   415→  );
+   416→
+   417→  const handleToggle = async (checked: boolean) => {
+   418→    if (!checked) {
+   419→      setEnabled(false);
+   420→      return;
+   421→    }
+   422→    if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+   423→      setEnabled(false);
+   424→      return;
+   425→    }
+   426→    if (Notification.permission === 'granted') {
+   427→      setEnabled(true);
+   428→      setDenied(false);
+   429→      return;
+   430→    }
+   431→    if (Notification.permission === 'denied') {
+   432→      setEnabled(false);
+   433→      setDenied(true);
+   434→      return;
+   435→    }
+   436→    // 'default'：向浏览器请求授权
+   437→    const result = await Notification.requestPermission();
+   438→    if (result === 'granted') {
+   439→      setEnabled(true);
+   440→      setDenied(false);
+   441→    } else {
+   442→      setEnabled(false);
+   443→      setDenied(result === 'denied');
+   444→    }
+   445→  };
+   446→
+   447→  return (
+   448→    <DetailShell title="通知" onBack={onBack}>
+   449→      <GroupCard>
+   450→        <div className="flex h-[46px] items-center justify-between px-4">
+   451→          <span className="text-[16px]">允许通知</span>
+   452→          <Switch
+   453→            checked={enabled}
+   454→            onCheckedChange={(v) => void handleToggle(v)}
+   455→            aria-label="允许通知"
+   456→          />
+   457→        </div>
+   458→      </GroupCard>
+   459→      {denied && (
+   460→        <p className="mt-3 px-1 text-[13px] leading-relaxed" style={{ color: IOS_RED }}>
+   461→          通知已被浏览器拒绝，请在浏览器设置中恢复。
+   462→        </p>
+   463→      )}
+   464→      <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
+   465→        闹钟和计时器到点时将通过系统通知提醒。
+   466→      </p>
+   467→    </DetailShell>
+   468→  );
+   469→}
+   470→
+   471→// ---------------- 存储空间 ----------------
+   472→
+   473→interface StorageCounts {
+   474→  photos: number;
+   475→  recordings: number;
+   476→  music: number;
+   477→  notes: number;
+   478→  events: number;
+   479→}
+   480→
+   481→function StoragePage({ onBack }: { onBack: () => void }) {
+   482→  const [usage, setUsage] = useState<number | null>(null);
+   483→  const [quota, setQuota] = useState<number | null>(null);
+   484→  const [counts, setCounts] = useState<StorageCounts | null>(null);
+   485→  const [cleaning, setCleaning] = useState(false);
+   486→  const [cleanMsg, setCleanMsg] = useState('');
+   487→
+   488→  const loadStats = useCallback(async () => {
+   489→    const est = await readStorageEstimate();
+   490→    setUsage(est.usage);
+   491→    setQuota(est.quota);
+   492→    try {
+   493→      const [photos, recordings, music, notes, events] = await Promise.all([
+   494→        localDB.count('photos'),
+   495→        localDB.count('recordings'),
+   496→        localDB.count('music'),
+   497→        localDB.count('notes'),
+   498→        localDB.count('events'),
+   499→      ]);
+   500→      setCounts({ photos, recordings, music, notes, events });
+   501→    } catch {
+   502→      setCounts({ photos: 0, recordings: 0, music: 0, notes: 0, events: 0 });
+   503→    }
+   504→  }, []);
+   505→
+   506→  useEffect(() => {
+   507→    void loadStats();
+   508→  }, [loadStats]);
+   509→
+   510→  const handleClean = async () => {
+   511→    if (cleaning) return;
+   512→    if (!window.confirm('确定清理全部媒体缓存吗？照片、录音和音乐将被删除。')) return;
+   513→    setCleaning(true);
+   514→    setCleanMsg('');
+   515→    try {
+   516→      await Promise.all([localDB.clear('photos'), localDB.clear('recordings'), localDB.clear('music')]);
+   517→      await loadStats();
+   518→      setCleanMsg('已清理媒体缓存，空间已释放');
+   519→      window.setTimeout(() => setCleanMsg(''), 3000);
+   520→    } catch {
+   521→      setCleanMsg('清理失败，请重试');
+   522→    } finally {
+   523→      setCleaning(false);
+   524→    }
+   525→  };
+   526→
+   527→  const percent =
+   528→    usage !== null && quota !== null && quota > 0
+   529→      ? Math.min(100, Math.round((usage / quota) * 1000) / 10)
+   530→      : 0;
+   531→
+   532→  const rows: { label: string; count: number; unit: string }[] = counts
+   533→    ? [
+   534→        { label: '照片', count: counts.photos, unit: '张' },
+   535→        { label: '录音', count: counts.recordings, unit: '条' },
+   536→        { label: '音乐', count: counts.music, unit: '首' },
+   537→        { label: '备忘录', count: counts.notes, unit: '条' },
+   538→        { label: '事件', count: counts.events, unit: '项' },
+   539→      ]
+   540→    : [];
+   541→
+   542→  return (
+   543→    <DetailShell title="存储空间" onBack={onBack}>
+   544→      <GroupCard>
+   545→        <div className="p-4">
+   546→          <div className="flex items-baseline justify-between gap-3">
+   547→            <span className="text-[16px]">设备存储</span>
+   548→            <span className="text-right text-[13px] tabular-nums text-muted-foreground">
+   549→              {usage === null || quota === null
+   550→                ? '计算中…'
+   551→                : `已用 ${formatMB(usage)} / 可用约 ${formatMB(quota)}`}
+   552→            </span>
+   553→          </div>
+   554→          <Progress value={percent} className="mt-3 h-2" />
+   555→        </div>
+   556→      </GroupCard>
+   557→
+   558→      <div className="mt-6">
+   559→        <GroupCard>
+   560→          {rows.length === 0 ? (
+   561→            <div className="flex h-[46px] items-center px-4 text-[15px] text-muted-foreground">
+   562→              统计中…
+   563→            </div>
+   564→          ) : (
+   565→            rows.map((r) => (
+   566→              <div key={r.label} className="flex h-[46px] items-center justify-between px-4">
+   567→                <span className="text-[16px]">{r.label}</span>
+   568→                <span className="text-[15px] tabular-nums text-muted-foreground">
+   569→                  {r.count} {r.unit}
+   570→                </span>
+   571→              </div>
+   572→            ))
+   573→          )}
+   574→        </GroupCard>
+   575→      </div>
+   576→
+   577→      <div className="mt-6">
+   578→        <GroupCard>
+   579→          <button
+   580→            type="button"
+   581→            onClick={() => void handleClean()}
+   582→            disabled={cleaning}
+   583→            className="flex h-[46px] w-full items-center justify-center gap-2 px-4 text-[16px] transition-colors active:bg-muted/50 disabled:opacity-50"
+   584→            style={{ color: IOS_RED }}
+   585→          >
+   586→            {cleaning && <Loader2 className="h-4 w-4 animate-spin" />}
+   587→            清理媒体缓存
+   588→          </button>
+   589→        </GroupCard>
+   590→      </div>
+   591→
+   592→      {cleanMsg && (
+   593→        <p
+   594→          className={`mt-3 px-1 text-[13px] leading-relaxed ${
+   595→            cleanMsg.startsWith('已清理') ? 'text-emerald-600 dark:text-emerald-400' : ''
+   596→          }`}
+   597→          style={cleanMsg.startsWith('已清理') ? undefined : { color: IOS_RED }}
+   598→        >
+   599→          {cleanMsg}
+   600→        </p>
+   601→      )}
+   602→      <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
+   603→        清理将删除全部照片、录音与音乐文件，备忘录和日程不受影响。
+   604→      </p>
+   605→    </DetailShell>
+   606→  );
+   607→}
+   608→
+   609→// ---------------- 壁纸 ----------------
+   610→
+   611→function WallpaperPage({ onBack }: { onBack: () => void }) {
+   612→  const wallpaperPreset = useSettings((s) => s.wallpaperPreset);
+   613→  const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
+   614→  const setWallpaperPreset = useSettings((s) => s.setWallpaperPreset);
+   615→  const setCustomWallpaper = useSettings((s) => s.setCustomWallpaper);
+   616→
+   617→  const handleUpload = (e: ChangeEvent<HTMLInputElement>) => {
+   618→    const file = e.target.files?.[0];
+   619→    if (file) setCustomWallpaper(file);
+   620→    e.target.value = '';
+   621→  };
+   622→
+   623→  return (
+   624→    <DetailShell title="壁纸" onBack={onBack}>
+   625→      <div className="flex flex-col gap-6">
+   626→        {customWallpaperUrl && (
+   627→          <div>
+   628→            <div className="relative h-[140px] w-full overflow-hidden rounded-[14px] border border-border">
+   629→              <div
+   630→                className="absolute inset-0 bg-cover bg-center"
+   631→                style={{ backgroundImage: `url(${customWallpaperUrl})` }}
+   632→              />
+   633→              <span className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-md">
+   634→                <Check className="h-4 w-4 text-foreground" strokeWidth={3} />
+   635→              </span>
+   636→              <span className="absolute bottom-2 left-2 rounded-full bg-black/55 px-2.5 py-1 text-[12px] text-white">
+   637→                自定义壁纸
+   638→              </span>
+   639→            </div>
+   640→            <button
+   641→              type="button"
+   642→              onClick={() => setCustomWallpaper(null)}
+   643→              className="mt-2.5 text-[13px] transition-opacity active:opacity-50"
+   644→              style={{ color: IOS_RED }}
+   645→            >
+   646→              移除自定义壁纸
+   647→            </button>
+   648→          </div>
+   649→        )}
+   650→
+   651→        <div className="grid grid-cols-2 gap-4">
+   652→          {WALLPAPER_PRESETS.map((p) => {
+   653→            const selected = !customWallpaperUrl && wallpaperPreset === p.id;
+   654→            return (
+   655→              <button key={p.id} type="button" onClick={() => setWallpaperPreset(p.id)} className="text-left">
+   656→                <div
+   657→                  className="relative h-[120px] overflow-hidden rounded-[14px] border border-border/60 transition-transform active:scale-[0.98]"
+   658→                  style={{ background: p.css }}
+   659→                >
+   660→                  {selected && (
+   661→                    <span className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-md">
+   662→                      <Check className="h-4 w-4 text-foreground" strokeWidth={3} />
+   663→                    </span>
+   664→                  )}
+   665→                </div>
+   666→                <div className="mt-1.5 text-[14px]">{p.name}</div>
+   667→              </button>
+   668→            );
+   669→          })}
+   670→        </div>
+   671→
+   672→        <label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-[12px] border border-border bg-card text-[15px] font-medium transition-colors active:bg-muted/60">
+   673→          <Upload className="h-4 w-4" />
+   674→          上传自定义壁纸
+   675→          <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+   676→        </label>
+   677→
+   678→        <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
+   679→          自定义壁纸保存在本机 IndexedDB，不会上传。
+   680→        </p>
+   681→      </div>
+   682→    </DetailShell>
+   683→  );
+   684→}
+   685→
+   686→// ---------------- API 设置 ----------------
+   687→
+   688→function ApiPage({ onBack }: { onBack: () => void }) {
+   689→  const apiConfig = useSettings((s) => s.apiConfig);
+   690→  const apiPresets = useSettings((s) => s.apiPresets);
+   691→  const updateApiConfig = useSettings((s) => s.updateApiConfig);
+   692→  const setApiPresets = useSettings((s) => s.setApiPresets);
+   693→
+   694→  const [showKey, setShowKey] = useState(false);
+   695→  const [saveOpen, setSaveOpen] = useState(false);
+   696→  const [presetName, setPresetName] = useState('');
+   697→
+   698→  const [models, setModels] = useState<string[]>([]);
+   699→  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+   700→  const [modelQuery, setModelQuery] = useState('');
+   701→  const [fetchingModels, setFetchingModels] = useState(false);
+   702→  const [modelsError, setModelsError] = useState('');
+   703→  const [modelsHint, setModelsHint] = useState('');
+   704→
+   705→  const [testLoading, setTestLoading] = useState(false);
+   706→  const [testOk, setTestOk] = useState<{ latencyMs: number; model: string; viaDirect?: boolean } | null>(null);
+   707→  const [testError, setTestError] = useState('');
+   708→  const [testConnected, setTestConnected] = useState(false);
+   709→  const [testUrl, setTestUrl] = useState('');
+   710→
+   711→  const [maxText, setMaxText] = useState(() => String(apiConfig.maxTokens));
+   712→
+   713→  const clearTestResult = () => {
+   714→    setTestOk(null);
+   715→    setTestError('');
+   716→    setTestConnected(false);
+   717→    setTestUrl('');
+   718→  };
+   719→
+   720→  const applyBuiltin = (p: (typeof BUILTIN_API_PRESETS)[number]) => {
+   721→    updateApiConfig({ baseUrl: p.baseUrl, model: p.model });
+   722→    clearTestResult();
+   723→  };
+   724→
+   725→  const applyUserPreset = (p: ApiPreset) => {
+   726→    updateApiConfig(p.config);
+   727→    setMaxText(String(p.config.maxTokens));
+   728→    clearTestResult();
+   729→  };
+   730→
+   731→  const deletePreset = (id: string) => {
+   732→    setApiPresets(apiPresets.filter((p) => p.id !== id));
+   733→  };
+   734→
+   735→  const savePreset = () => {
+   736→    const name = presetName.trim();
+   737→    if (!name) return;
+   738→    setApiPresets([...apiPresets, { id: genId(), name, config: { ...apiConfig } }]);
+   739→    setPresetName('');
+   740→    setSaveOpen(false);
+   741→  };
+   742→
+   743→  const fetchModels = async () => {
+   744→    if (!apiConfig.baseUrl.trim()) {
+   745→      setModelsError('请先填写 API 地址');
+   746→      return;
+   747→    }
+   748→    setFetchingModels(true);
+   749→    setModelsError('');
+   750→    setModelsHint('');
+   751→    try {
+   752→      const res = await fetch('/api/settings/models', {
+   753→        method: 'POST',
+   754→        headers: { 'Content-Type': 'application/json' },
+   755→        body: JSON.stringify({ baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey }),
+   756→      });
+   757→      const data = (await res.json().catch(() => null)) as
+   758→        | { models?: string[]; hint?: string; error?: string; url?: string; directOnly?: boolean }
+   759→        | null;
+   760→      // 内网地址或服务器不可达/地区限制（directOnly）：改用浏览器直连拉取
+   761→      if (!data || data.directOnly || (data.error && isPrivateApiUrl(apiConfig.baseUrl))) {
+   762→        const direct = await directFetchModels(apiConfig.baseUrl, apiConfig.apiKey);
+   763→        if (direct.error) {
+   764→          const serverMsg = typeof data?.error === 'string' ? data.error : '';
+   765→          setModelsError(
+   766→            serverMsg && !isPrivateApiUrl(apiConfig.baseUrl)
+   767→              ? `${serverMsg}；浏览器直连也不可用：${direct.error}`
+   768→              : direct.error
+   769→          );
+   770→          return;
+   771→        }
+   772→        if (direct.hint && direct.models.length === 0) {
+   773→          setModelsHint(direct.hint);
+   774→          return;
+   775→        }
+   776→        setModels(direct.models);
+   777→        setModelQuery('');
+   778→        setModelPanelOpen(true);
+   779→        return;
+   780→      }
+   781→      if (!res.ok || !data || data.error) {
+   782→        const base = data?.error ?? '拉取模型失败，请稍后重试';
+   783→        setModelsError(data?.url ? `${base}（实际请求：${data.url}）` : base);
+   784→      } else if (data.hint && (data.models ?? []).length === 0) {
+   785→        // 反代等无模型列表接口：优雅降级，提示手动输入
+   786→        setModelsHint(data.hint);
+   787→      } else {
+   788→        setModels(data.models ?? []);
+   789→        setModelQuery('');
+   790→        setModelPanelOpen(true);
+   791→      }
+   792→    } catch {
+   793→      setModelsError('无法连接到服务器');
+   794→    } finally {
+   795→      setFetchingModels(false);
+   796→    }
+   797→  };
+   798→
+   799→  const runTest = async () => {
+   800→    if (!apiConfig.baseUrl.trim()) {
+   801→      setTestError('请先填写 API 地址');
+   802→      return;
+   803→    }
+   804→    setTestLoading(true);
+   805→    clearTestResult();
+   806→    try {
+   807→      const res = await fetch('/api/settings/test', {
+   808→        method: 'POST',
+   809→        headers: { 'Content-Type': 'application/json' },
+   810→        body: JSON.stringify({
+   811→          baseUrl: apiConfig.baseUrl,
+   812→          apiKey: apiConfig.apiKey,
+   813→          model: apiConfig.model,
+   814→          temperature: apiConfig.temperature,
+   815→          maxTokens: apiConfig.maxTokens,
+   816→        }),
+   817→      });
+   818→      const data = (await res.json().catch(() => null)) as
+   819→        | {
+   820→            ok?: boolean;
+   821→            latencyMs?: number;
+   822→            model?: string;
+   823→            error?: string;
+   824→            connected?: boolean;
+   825→            url?: string;
+   826→            directOnly?: boolean;
+   827→          }
+   828→        | null;
+   829→      setTestUrl(typeof data?.url === 'string' ? data.url : '');
+   830→      if (data?.ok) {
+   831→        setTestOk({ latencyMs: data.latencyMs ?? 0, model: data.model ?? apiConfig.model });
+   832→        return;
+   833→      }
+   834→      // 私有地址（云端服务器必然不可达）或服务器明确建议直连（地区限制/网络不可达/限流）：
+   835→      // 改用浏览器直连兑底；服务器返回非 JSON（网关错误页等 data=null）时私有地址同样兑底，
+   836→      // 避免误报「测试失败」
+   837→      const serverError = data?.error ?? '测试失败，请稍后重试';
+   838→      if (data?.directOnly || isPrivateApiUrl(apiConfig.baseUrl)) {
+   839→        const direct = await directTest(apiConfig);
+   840→        if (direct.ok) {
+   841→          setTestOk({ latencyMs: direct.latencyMs, model: direct.model, viaDirect: true });
+   842→          return;
+   843→        }
+   844→        setTestUrl(apiConfig.baseUrl);
+   845→        setTestError(
+   846→          isPrivateApiUrl(apiConfig.baseUrl)
+   847→            ? direct.error ?? '浏览器直连失败'
+   848→            : `${serverError}；浏览器直连也不可用：${direct.error ?? '请确认该 API 允许跨域访问（CORS）'}`
+   849→        );
+   850→        return;
+   851→      }
+   852→      setTestError(serverError);
+   853→      setTestConnected(Boolean(data?.connected));
+   854→    } catch {
+   855→      setTestError('无法连接到服务器');
+   856→    } finally {
+   857→      setTestLoading(false);
+   858→    }
+   859→  };
+   860→
+   861→  const handleMaxChange = (v: string) => {
+   862→    setMaxText(v);
+   863→    const n = Number.parseInt(v, 10);
+   864→    if (Number.isFinite(n) && n >= 64) updateApiConfig({ maxTokens: n });
+   865→  };
+   866→
+   867→  const handleMaxBlur = () => {
+   868→    const n = Number.parseInt(maxText, 10);
+   869→    if (!Number.isFinite(n) || n < 64) {
+   870→      setMaxText(String(apiConfig.maxTokens));
+   871→    } else {
+   872→      setMaxText(String(n));
+   873→      updateApiConfig({ maxTokens: n });
+   874→    }
+   875→  };
+   876→
+   877→  const q = modelQuery.trim().toLowerCase();
+   878→  const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
+   879→
+   880→  return (
+   881→    <DetailShell title="API 设置" onBack={onBack}>
+   882→      <div className="flex flex-col gap-5">
+   883→        {/* 预设区 */}
+   884→        <section>
+   885→          <div className="mb-2 text-[13px] font-medium text-muted-foreground">预设</div>
+   886→          <div className="flex flex-wrap gap-2">
+   887→            {BUILTIN_API_PRESETS.map((p) => {
+   888→              const active = apiConfig.baseUrl === p.baseUrl;
+   889→              return (
+   890→                <button
+   891→                  key={p.name}
+   892→                  type="button"
+   893→                  onClick={() => applyBuiltin(p)}
+   894→                  className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
+   895→                    active
+   896→                      ? 'border-foreground bg-foreground text-background'
+   897→                      : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+   898→                  }`}
+   899→                >
+   900→                  {p.name}
+   901→                </button>
+   902→              );
+   903→            })}
+   904→            {apiPresets.map((p) => {
+   905→              const active =
+   906→                apiConfig.baseUrl === p.config.baseUrl && apiConfig.model === p.config.model;
+   907→              return (
+   908→                <span
+   909→                  key={p.id}
+   910→                  className={`flex items-center gap-1.5 rounded-full border py-1.5 pl-3 pr-2 text-[13px] ${
+   911→                    active
+   912→                      ? 'border-foreground bg-foreground text-background'
+   913→                      : 'border-border text-foreground/85'
+   914→                  }`}
+   915→                >
+   916→                  <button type="button" onClick={() => applyUserPreset(p)} className="max-w-[120px] truncate">
+   917→                    {p.name}
+   918→                  </button>
+   919→                  <button
+   920→                    type="button"
+   921→                    onClick={() => deletePreset(p.id)}
+   922→                    aria-label={`删除预设 ${p.name}`}
+   923→                    className="opacity-60 transition-opacity hover:opacity-100"
+   924→                  >
+   925→                    <X className="h-3 w-3" />
+   926→                  </button>
+   927→                </span>
+   928→              );
+   929→            })}
+   930→            <button
+   931→              type="button"
+   932→              onClick={() => setSaveOpen((v) => !v)}
+   933→              className="flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-muted-foreground/50"
+   934→            >
+   935→              <Plus className="h-3.5 w-3.5" />
+   936→              存为预设
+   937→            </button>
+   938→          </div>
+   939→          {saveOpen && (
+   940→            <div className="mt-3 flex gap-2">
+   941→              <Input
+   942→                value={presetName}
+   943→                onChange={(e) => setPresetName(e.target.value)}
+   944→                placeholder="预设名称，如 我的GPT"
+   945→                autoFocus
+   946→                className="h-9 flex-1 rounded-[10px] bg-background text-[14px]"
+   947→                onKeyDown={(e) => {
+   948→                  if (e.key === 'Enter') savePreset();
+   949→                }}
+   950→              />
+   951→              <button
+   952→                type="button"
+   953→                onClick={savePreset}
+   954→                disabled={!presetName.trim()}
+   955→                className="h-9 shrink-0 rounded-[10px] bg-foreground px-4 text-[13px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-40"
+   956→              >
+   957→                保存
+   958→              </button>
+   959→            </div>
+   960→          )}
+   961→        </section>
+   962→
+   963→        {/* 配置表单 */}
+   964→        <section>
+   965→          <div className="mb-2 flex items-center justify-between">
+   966→            <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
+   967→            <span className="text-[11px] text-muted-foreground/70">更改自动保存</span>
+   968→          </div>
+   969→          <div className="flex flex-col gap-4 rounded-[12px] bg-card p-4">
+   970→            {/* API 地址 */}
+   971→            <div>
+   972→              <FieldLabel>API 地址</FieldLabel>
+   973→              <Input
+   974→                value={apiConfig.baseUrl}
+   975→                onChange={(e) => updateApiConfig({ baseUrl: e.target.value })}
+   976→                placeholder={DEFAULT_API_CONFIG.baseUrl}
+   977→                className="h-10 rounded-[10px] bg-background text-[14px]"
+   978→              />
+   979→            </div>
+   980→
+   981→            {/* API Key */}
+   982→            <div>
+   983→              <FieldLabel>API Key</FieldLabel>
+   984→              <div className="relative">
+   985→                <Input
+   986→                  type={showKey ? 'text' : 'password'}
+   987→                  value={apiConfig.apiKey}
+   988→                  onChange={(e) => updateApiConfig({ apiKey: e.target.value })}
+   989→                  placeholder="sk-..."
+   990→                  autoComplete="off"
+   991→                  className={`h-10 rounded-[10px] bg-background text-[14px] ${
+   992→                    apiConfig.apiKey ? 'pr-16' : 'pr-10'
+   993→                  }`}
+   994→                />
+   995→                {/* 清空 Key（仅在有内容时显示） */}
+   996→                {apiConfig.apiKey && (
+   997→                  <button
+   998→                    type="button"
+   999→                    onClick={() => {
+  1000→                      updateApiConfig({ apiKey: '' });
+  1001→                      clearTestResult();
+  1002→                    }}
+  1003→                    aria-label="清空 API Key"
+  1004→                    className="absolute right-8 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-colors hover:text-foreground"
+  1005→                  >
+  1006→                    <X className="h-4 w-4" />
+  1007→                  </button>
+  1008→                )}
+  1009→                <button
+  1010→                  type="button"
+  1011→                  onClick={() => setShowKey((v) => !v)}
+  1012→                  aria-label={showKey ? '隐藏 Key' : '显示 Key'}
+  1013→                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-opacity hover:opacity-80"
+  1014→                >
+  1015→                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+  1016→                </button>
+  1017→              </div>
+  1018→            </div>
+  1019→
+  1020→            {/* 模型 */}
+  1021→            <div className="relative">
+  1022→              <FieldLabel>模型</FieldLabel>
+  1023→              <div className="flex gap-2">
+  1024→                <Input
+  1025→                  value={apiConfig.model}
+  1026→                  onChange={(e) => updateApiConfig({ model: e.target.value })}
+  1027→                  placeholder={DEFAULT_API_CONFIG.model}
+  1028→                  className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+  1029→                />
+  1030→                <button
+  1031→                  type="button"
+  1032→                  onClick={() => void fetchModels()}
+  1033→                  disabled={fetchingModels}
+  1034→                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+  1035→                >
+  1036→                  {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+  1037→                  拉取模型
+  1038→                </button>
+  1039→              </div>
+  1040→              {modelsError && (
+  1041→                <p className="mt-1.5 text-[12px]" style={{ color: IOS_RED }}>
+  1042→                  {modelsError}
+  1043→                </p>
+  1044→              )}
+  1045→              {modelsHint && (
+  1046→                <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+  1047→                  {modelsHint}
+  1048→                </div>
+  1049→              )}
+  1050→
+  1051→              {modelPanelOpen && (
+  1052→                <>
+  1053→                  <div
+  1054→                    className="fixed inset-0 z-20"
+  1055→                    onClick={() => setModelPanelOpen(false)}
+  1056→                    aria-hidden="true"
+  1057→                  />
+  1058→                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
+  1059→                    <div className="border-b border-border/60 p-2">
+  1060→                      <Input
+  1061→                        value={modelQuery}
+  1062→                        onChange={(e) => setModelQuery(e.target.value)}
+  1063→                        placeholder="搜索模型，如 32k / turbo"
+  1064→                        autoFocus
+  1065→                        className="h-9 rounded-[10px] bg-background text-[13px]"
+  1066→                      />
+  1067→                    </div>
+  1068→                    <div className="thin-scrollbar max-h-64 overflow-y-auto">
+  1069→                      {filteredModels.length === 0 ? (
+  1070→                        <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">
+  1071→                          没有匹配的模型
+  1072→                        </div>
+  1073→                      ) : (
+  1074→                        filteredModels.map((m) => (
+  1075→                          <button
+  1076→                            key={m}
+  1077→                            type="button"
+  1078→                            onClick={() => {
+  1079→                              updateApiConfig({ model: m });
+  1080→                              setModelPanelOpen(false);
+  1081→                            }}
+  1082→                            className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+  1083→                          >
+  1084→                            <span className="truncate text-[14px]">{m}</span>
+  1085→                            {apiConfig.model === m && (
+  1086→                              <Check
+  1087→                                className="h-4 w-4 shrink-0 text-foreground"
+  1088→                                strokeWidth={2.5}
+  1089→                              />
+  1090→                            )}
+  1091→                          </button>
+  1092→                        ))
+  1093→                      )}
+  1094→                    </div>
+  1095→                  </div>
+  1096→                </>
+  1097→              )}
+  1098→            </div>
+  1099→
+  1100→            {/* 温度 */}
+  1101→            <div>
+  1102→              <div className="mb-2.5 text-[13px] font-medium text-muted-foreground">温度</div>
+  1103→              <div className="flex items-center gap-3">
+  1104→                <Slider
+  1105→                  min={0}
+  1106→                  max={2}
+  1107→                  step={0.1}
+  1108→                  value={[apiConfig.temperature]}
+  1109→                  onValueChange={(v) => updateApiConfig({ temperature: v[0] ?? 0.7 })}
+  1110→                  className="flex-1"
+  1111→                  aria-label="温度"
+  1112→                />
+  1113→                <span className="min-w-[48px] rounded-full bg-muted px-2.5 py-1 text-center text-[13px] tabular-nums">
+  1114→                  {apiConfig.temperature.toFixed(1)}
+  1115→                </span>
+  1116→              </div>
+  1117→            </div>
+  1118→
+  1119→            {/* 最大 Token */}
+  1120→            <div>
+  1121→              <FieldLabel>最大 Token</FieldLabel>
+  1122→              <Input
+  1123→                type="number"
+  1124→                min={64}
+  1125→                step={64}
+  1126→                value={maxText}
+  1127→                onChange={(e) => handleMaxChange(e.target.value)}
+  1128→                onBlur={handleMaxBlur}
+  1129→                className="h-10 rounded-[10px] bg-background text-[14px]"
+  1130→              />
+  1131→            </div>
+  1132→
+  1133→            {/* 未配置 Key 提示 */}
+  1134→            {!apiConfig.apiKey.trim() && (
+  1135→              <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+  1136→                未配置 API Key 时，AI 助手无法回复；请填写 OpenAI 兼容接口地址与 API Key 后再聊天。
+  1137→              </div>
+  1138→            )}
+  1139→          </div>
+  1140→        </section>
+  1141→
+  1142→        {/* 测试连接 */}
+  1143→        <section className="flex flex-col gap-3">
+  1144→          <button
+  1145→            type="button"
+  1146→            onClick={() => void runTest()}
+  1147→            disabled={testLoading}
+  1148→            className="flex h-11 w-full items-center justify-center gap-2 rounded-[12px] bg-foreground text-[15px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-50"
+  1149→          >
+  1150→            {testLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+  1151→            测试连接
+  1152→          </button>
+  1153→          {testOk && (
+  1154→            <div className="rounded-[12px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-[13px] leading-relaxed text-emerald-700 dark:text-emerald-300">
+  1155→              ✅ 连接成功{testOk.viaDirect ? '（浏览器直连）' : ''} · 延迟 {testOk.latencyMs}ms · 模型 {testOk.model}
+  1156→            </div>
+  1157→          )}
+  1158→          {testError && (
+  1159→            <div
+  1160→              className="rounded-[12px] border px-4 py-3 text-[13px] leading-relaxed"
+  1161→              style={
+  1162→                testConnected
+  1163→                  ? {
+  1164→                      borderColor: 'rgba(245,158,11,0.35)',
+  1165→                      backgroundColor: 'rgba(245,158,11,0.1)',
+  1166→                      color: '#B45309',
+  1167→                    }
+  1168→                  : { borderColor: 'rgba(255,69,58,0.3)', backgroundColor: 'rgba(255,69,58,0.1)', color: IOS_RED }
+  1169→              }
+  1170→            >
+  1171→              {testConnected ? '⚠️ ' : '❌ '}
+  1172→              {testError}
+  1173→              {testConnected && (
+  1174→                <span className="mt-1 block text-[12px] opacity-80">
+  1175→                  接口本身可达，问题出在配置而不是连接；按提示修正后即可聊天。
+  1176→                </span>
+  1177→              )}
+  1178→            </div>
+  1179→          )}
+  1180→          {testUrl && (
+  1181→            <div className="break-all px-1 text-[11px] leading-relaxed text-muted-foreground/80">
+  1182→              实际请求：{testUrl}
+  1183→            </div>
+  1184→          )}
+  1185→          <p className="text-[11px] leading-relaxed text-muted-foreground/80">
+  1186→            预设保存后下次打开网站依然可用（数据保存在本机 IndexedDB）。
+  1187→          </p>
+  1188→        </section>
+  1189→      </div>
+  1190→    </DetailShell>
+  1191→  );
+  1192→}
+  1193→
+  1194→// ---------------- 识图模型设置 ----------------
+  1195→
+  1196→/**
+  1197→ * 识图模型配置页（与「API 配置」并列、互相独立）：
+  1198→ * 预设（内置 4 家 + 用户自存）/ API 地址 / API Key / 模型名（可拉取模型列表）/ 存为预设 / 测试（发送内置测试图，走与聊天完全相同的识图管线验证连通与效果）；
+  1199→ * 更改自动保存、聊天发送时现场读取（保存后自动生效，无需重启）；使用说明放页尾。
+  1200→ * 未配置时聊天发图不触发识图，文字聊天完全不受影响。
+  1201→ */
+  1202→function VisionPage({ onBack }: { onBack: () => void }) {
+  1203→  const visionConfig = useSettings((s) => s.visionConfig);
+  1204→  const visionPresets = useSettings((s) => s.visionPresets);
+  1205→  const updateVisionConfig = useSettings((s) => s.updateVisionConfig);
+  1206→  const setVisionPresets = useSettings((s) => s.setVisionPresets);
+  1207→
+  1208→  const [showKey, setShowKey] = useState(false);
+  1209→  const [saveOpen, setSaveOpen] = useState(false);
+  1210→  const [presetName, setPresetName] = useState('');
+  1211→
+  1212→  const [models, setModels] = useState<string[]>([]);
+  1213→  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  1214→  const [modelQuery, setModelQuery] = useState('');
+  1215→  const [fetchingModels, setFetchingModels] = useState(false);
+  1216→  const [modelsError, setModelsError] = useState('');
+  1217→  const [modelsHint, setModelsHint] = useState('');
+  1218→
+  1219→  // 识图测试（内置测试图 → describeImages 同款管线）
+  1220→  const [testing, setTesting] = useState(false);
+  1221→  const [testError, setTestError] = useState('');
+  1222→  const [testResult, setTestResult] = useState('');
+  1223→
+  1224→  /** 配置变更统一入口：自动保存 + 清掉过期的测试结果 */
+  1225→  const patchVisionConfig = (patch: Partial<VisionConfig>) => {
+  1226→    updateVisionConfig(patch);
+  1227→    setTestError('');
+  1228→    setTestResult('');
+  1229→  };
+  1230→
+  1231→  const applyBuiltin = (p: (typeof BUILTIN_VISION_PRESETS)[number]) => {
+  1232→    patchVisionConfig({ baseUrl: p.baseUrl, model: p.model });
+  1233→    setModelsError('');
+  1234→    setModelsHint('');
+  1235→  };
+  1236→
+  1237→  const applyUserPreset = (p: VisionPreset) => {
+  1238→    patchVisionConfig(p.config);
+  1239→    setModelsError('');
+  1240→    setModelsHint('');
+  1241→  };
+  1242→
+  1243→  const deletePreset = (id: string) => {
+  1244→    setVisionPresets(visionPresets.filter((p) => p.id !== id));
+  1245→  };
+  1246→
+  1247→  const savePreset = () => {
+  1248→    const name = presetName.trim();
+  1249→    if (!name) return;
+  1250→    setVisionPresets([...visionPresets, { id: genId(), name, config: { ...visionConfig } }]);
+  1251→    setPresetName('');
+  1252→    setSaveOpen(false);
+  1253→  };
+  1254→
+  1255→  const fetchModels = async () => {
+  1256→    if (!visionConfig.baseUrl.trim()) {
+  1257→      setModelsError('请先填写 API 地址');
+  1258→      return;
+  1259→    }
+  1260→    setFetchingModels(true);
+  1261→    setModelsError('');
+  1262→    setModelsHint('');
+  1263→    try {
+  1264→      const res = await fetch('/api/settings/models', {
+  1265→        method: 'POST',
+  1266→        headers: { 'Content-Type': 'application/json' },
+  1267→        body: JSON.stringify({ baseUrl: visionConfig.baseUrl, apiKey: visionConfig.apiKey }),
+  1268→      });
+  1269→      const data = (await res.json().catch(() => null)) as
+  1270→        | { models?: string[]; hint?: string; error?: string; directOnly?: boolean }
+  1271→        | null;
+  1272→      // 内网地址或服务器不可达/地区限制（directOnly）：改用浏览器直连拉取
+  1273→      if (!data || data.directOnly || (data.error && isPrivateApiUrl(visionConfig.baseUrl))) {
+  1274→        const direct = await directFetchModels(visionConfig.baseUrl, visionConfig.apiKey);
+  1275→        if (direct.error) {
+  1276→          setModelsError(direct.error);
+  1277→          return;
+  1278→        }
+  1279→        if (direct.hint && direct.models.length === 0) {
+  1280→          setModelsHint(direct.hint);
+  1281→          return;
+  1282→        }
+  1283→        setModels(direct.models);
+  1284→        setModelQuery('');
+  1285→        setModelPanelOpen(true);
+  1286→        return;
+  1287→      }
+  1288→      if (!res.ok || !data || data.error) {
+  1289→        setModelsError(data?.error ?? '拉取模型失败，请稍后重试');
+  1290→      } else if (data.hint && (data.models ?? []).length === 0) {
+  1291→        // 反代等无模型列表接口：优雅降级，提示手动输入
+  1292→        setModelsHint(data.hint);
+  1293→      } else {
+  1294→        setModels(data.models ?? []);
+  1295→        setModelQuery('');
+  1296→        setModelPanelOpen(true);
+  1297→      }
+  1298→    } catch {
+  1299→      setModelsError('无法连接到服务器');
+  1300→    } finally {
+  1301→      setFetchingModels(false);
+  1302→    }
+  1303→  };
+  1304→
+  1305→  const q = modelQuery.trim().toLowerCase();
+  1306→  const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
+  1307→
+  1308→  /** 程序化画一张内容可识别的测试图（户外小屋场景），用于验证识图模型真的「看懂」了图片 */
+  1309→  const buildTestImage = (): string => {
+  1310→    const canvas = document.createElement('canvas');
+  1311→    canvas.width = 320;
+  1312→    canvas.height = 240;
+  1313→    const ctx = canvas.getContext('2d');
+  1314→    if (!ctx) return '';
+  1315→    const sky = ctx.createLinearGradient(0, 0, 0, 240);
+  1316→    sky.addColorStop(0, '#6FBBF5');
+  1317→    sky.addColorStop(1, '#D8F0FF');
+  1318→    ctx.fillStyle = sky;
+  1319→    ctx.fillRect(0, 0, 320, 240);
+  1320→    ctx.fillStyle = '#FFD60A';
+  1321→    ctx.beginPath();
+  1322→    ctx.arc(262, 48, 26, 0, Math.PI * 2);
+  1323→    ctx.fill();
+  1324→    ctx.fillStyle = '#79C86E';
+  1325→    ctx.fillRect(0, 158, 320, 82);
+  1326→    ctx.fillStyle = '#F4F4F8';
+  1327→    ctx.fillRect(56, 112, 92, 62);
+  1328→    ctx.fillStyle = '#FF9F0A';
+  1329→    ctx.beginPath();
+  1330→    ctx.moveTo(46, 114);
+  1331→    ctx.lineTo(102, 68);
+  1332→    ctx.lineTo(158, 114);
+  1333→    ctx.closePath();
+  1334→    ctx.fill();
+  1335→    ctx.fillStyle = '#8A6248';
+  1336→    ctx.fillRect(90, 136, 26, 38);
+  1337→    ctx.fillStyle = '#1C1C1E';
+  1338→    ctx.font = 'bold 24px sans-serif';
+  1339→    ctx.fillText('测试图片', 176, 196);
+  1340→    ctx.font = '13px sans-serif';
+  1341→    ctx.fillText('VISION TEST', 177, 216);
+  1342→    return canvas.toDataURL('image/jpeg', 0.85);
+  1343→  };
+  1344→
+  1345→  /** 连接测试：走与聊天发图完全相同的 describeImages 管线，成功展示描述、失败展示错误 */
+  1346→  const runVisionTest = async () => {
+  1347→    if (!visionConfig.baseUrl.trim()) {
+  1348→      setTestError('请先填写 API 地址');
+  1349→      return;
+  1350→    }
+  1351→    if (!visionConfig.model.trim()) {
+  1352→      setTestError('请先填写模型名');
+  1353→      return;
+  1354→    }
+  1355→    const testImage = buildTestImage();
+  1356→    if (!testImage) {
+  1357→      setTestError('无法生成测试图片，请直接在聊天里发图验证');
+  1358→      return;
+  1359→    }
+  1360→    setTesting(true);
+  1361→    setTestError('');
+  1362→    setTestResult('');
+  1363→    try {
+  1364→      const desc = await describeImages(visionConfig, {
+  1365→        images: [testImage],
+  1366→        text: '连接测试：请用一句话描述这张图片',
+  1367→      });
+  1368→      if (desc) {
+  1369→        setTestResult(desc);
+  1370→      } else {
+  1371→        setTestError('识图模型没有返回描述内容，请确认模型是否支持图片输入');
+  1372→      }
+  1373→    } catch (err) {
+  1374→      setTestError(err instanceof Error ? err.message : '测试失败，请稍后重试');
+  1375→    } finally {
+  1376→      setTesting(false);
+  1377→    }
+  1378→  };
+  1379→
+  1380→  return (
+  1381→    <DetailShell title="识图模型" onBack={onBack}>
+  1382→      <div className="flex flex-col gap-5">
+  1383→        {/* 预设区 */}
+  1384→        <section>
+  1385→          <div className="mb-2 text-[13px] font-medium text-muted-foreground">预设</div>
+  1386→          <div className="flex flex-wrap gap-2">
+  1387→            {BUILTIN_VISION_PRESETS.map((p) => {
+  1388→              const active = visionConfig.baseUrl === p.baseUrl;
+  1389→              return (
+  1390→                <button
+  1391→                  key={p.name}
+  1392→                  type="button"
+  1393→                  onClick={() => applyBuiltin(p)}
+  1394→                  className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
+  1395→                    active
+  1396→                      ? 'border-foreground bg-foreground text-background'
+  1397→                      : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+  1398→                  }`}
+  1399→                >
+  1400→                  {p.name}
+  1401→                </button>
+  1402→              );
+  1403→            })}
+  1404→            {visionPresets.map((p) => {
+  1405→              const active =
+  1406→                visionConfig.baseUrl === p.config.baseUrl && visionConfig.model === p.config.model;
+  1407→              return (
+  1408→                <span
+  1409→                  key={p.id}
+  1410→                  className={`flex items-center gap-1.5 rounded-full border py-1.5 pl-3 pr-2 text-[13px] ${
+  1411→                    active
+  1412→                      ? 'border-foreground bg-foreground text-background'
+  1413→                      : 'border-border text-foreground/85'
+  1414→                  }`}
+  1415→                >
+  1416→                  <button type="button" onClick={() => applyUserPreset(p)} className="max-w-[120px] truncate">
+  1417→                    {p.name}
+  1418→                  </button>
+  1419→                  <button
+  1420→                    type="button"
+  1421→                    onClick={() => deletePreset(p.id)}
+  1422→                    aria-label={`删除识图预设 ${p.name}`}
+  1423→                    className="opacity-60 transition-opacity hover:opacity-100"
+  1424→                  >
+  1425→                    <X className="h-3 w-3" />
+  1426→                  </button>
+  1427→                </span>
+  1428→              );
+  1429→            })}
+  1430→            <button
+  1431→              type="button"
+  1432→              onClick={() => setSaveOpen((v) => !v)}
+  1433→              className="flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-muted-foreground/50"
+  1434→            >
+  1435→              <Plus className="h-3.5 w-3.5" />
+  1436→              存为预设
+  1437→            </button>
+  1438→          </div>
+  1439→          {saveOpen && (
+  1440→            <div className="mt-3 flex gap-2">
+  1441→              <Input
+  1442→                value={presetName}
+  1443→                onChange={(e) => setPresetName(e.target.value)}
+  1444→                placeholder="预设名称，如 本地视觉模型"
+  1445→                autoFocus
+  1446→                className="h-9 flex-1 rounded-[10px] bg-background text-[14px]"
+  1447→                onKeyDown={(e) => {
+  1448→                  if (e.key === 'Enter') savePreset();
+  1449→                }}
+  1450→              />
+  1451→              <button
+  1452→                type="button"
+  1453→                onClick={savePreset}
+  1454→                disabled={!presetName.trim()}
+  1455→                className="h-9 shrink-0 rounded-[10px] bg-foreground px-4 text-[13px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-40"
+  1456→              >
+  1457→                保存
+  1458→              </button>
+  1459→            </div>
+  1460→          )}
+  1461→        </section>
+  1462→
+  1463→        {/* 配置表单 */}
+  1464→        <section>
+  1465→          <div className="mb-2 flex items-center justify-between">
+  1466→            <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
+  1467→            <span className="text-[11px] text-muted-foreground/70">更改自动保存 · 即时生效</span>
+  1468→          </div>
+  1469→          <div className="flex flex-col gap-4 rounded-[12px] bg-card p-4">
+  1470→            {/* API 地址 */}
+  1471→            <div>
+  1472→              <FieldLabel>API 地址</FieldLabel>
+  1473→              <Input
+  1474→                value={visionConfig.baseUrl}
+  1475→                onChange={(e) => patchVisionConfig({ baseUrl: e.target.value })}
+  1476→                placeholder="https://api.openai.com/v1/chat/completions"
+  1477→                className="h-10 rounded-[10px] bg-background text-[14px]"
+  1478→              />
+  1479→            </div>
+  1480→
+  1481→            {/* API Key */}
+  1482→            <div>
+  1483→              <FieldLabel>API Key</FieldLabel>
+  1484→              <div className="relative">
+  1485→                <Input
+  1486→                  type={showKey ? 'text' : 'password'}
+  1487→                  value={visionConfig.apiKey}
+  1488→                  onChange={(e) => patchVisionConfig({ apiKey: e.target.value })}
+  1489→                  placeholder="sk-...（免 Key 接口可留空）"
+  1490→                  autoComplete="off"
+  1491→                  className={`h-10 rounded-[10px] bg-background text-[14px] ${
+  1492→                    visionConfig.apiKey ? 'pr-16' : 'pr-10'
+  1493→                  }`}
+  1494→                />
+  1495→                {visionConfig.apiKey && (
+  1496→                  <button
+  1497→                    type="button"
+  1498→                    onClick={() => updateVisionConfig({ apiKey: '' })}
+  1499→                    aria-label="清空识图 API Key"
+  1500→                    className="absolute right-8 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-colors hover:text-foreground"
+  1501→                  >
+  1502→                    <X className="h-4 w-4" />
+  1503→                  </button>
+  1504→                )}
+  1505→                <button
+  1506→                  type="button"
+  1507→                  onClick={() => setShowKey((v) => !v)}
+  1508→                  aria-label={showKey ? '隐藏识图 Key' : '显示识图 Key'}
+  1509→                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-opacity hover:opacity-80"
+  1510→                >
+  1511→                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+  1512→                </button>
+  1513→              </div>
+  1514→            </div>
+  1515→
+  1516→            {/* 模型名 */}
+  1517→            <div className="relative">
+  1518→              <FieldLabel>模型名</FieldLabel>
+  1519→              <div className="flex gap-2">
+  1520→                <Input
+  1521→                  value={visionConfig.model}
+  1522→                  onChange={(e) => patchVisionConfig({ model: e.target.value })}
+  1523→                  placeholder="如 gpt-4o-mini / qwen-vl-plus / glm-4v-flash"
+  1524→                  className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+  1525→                />
+  1526→                <button
+  1527→                  type="button"
+  1528→                  onClick={() => void fetchModels()}
+  1529→                  disabled={fetchingModels}
+  1530→                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+  1531→                >
+  1532→                  {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+  1533→                  拉取模型
+  1534→                </button>
+  1535→              </div>
+  1536→              {modelsError && (
+  1537→                <p className="mt-1.5 text-[12px]" style={{ color: IOS_RED }}>
+  1538→                  {modelsError}
+  1539→                </p>
+  1540→              )}
+  1541→              {modelsHint && (
+  1542→                <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+  1543→                  {modelsHint}
+  1544→                </div>
+  1545→              )}
+  1546→
+  1547→              {modelPanelOpen && (
+  1548→                <>
+  1549→                  <div
+  1550→                    className="fixed inset-0 z-20"
+  1551→                    onClick={() => setModelPanelOpen(false)}
+  1552→                    aria-hidden="true"
+  1553→                  />
+  1554→                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
+  1555→                    <div className="border-b border-border/60 p-2">
+  1556→                      <Input
+  1557→                        value={modelQuery}
+  1558→                        onChange={(e) => setModelQuery(e.target.value)}
+  1559→                        placeholder="搜索模型，如 vl / vision"
+  1560→                        autoFocus
+  1561→                        className="h-9 rounded-[10px] bg-background text-[13px]"
+  1562→                      />
+  1563→                    </div>
+  1564→                    <div className="thin-scrollbar max-h-64 overflow-y-auto">
+  1565→                      {filteredModels.length === 0 ? (
+  1566→                        <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">
+  1567→                          没有匹配的模型
+  1568→                        </div>
+  1569→                      ) : (
+  1570→                        filteredModels.map((m) => (
+  1571→                          <button
+  1572→                            key={m}
+  1573→                            type="button"
+  1574→                            onClick={() => {
+  1575→                              patchVisionConfig({ model: m });
+  1576→                              setModelPanelOpen(false);
+  1577→                            }}
+  1578→                            className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+  1579→                          >
+  1580→                            <span className="truncate text-[14px]">{m}</span>
+  1581→                            {visionConfig.model === m && (
+  1582→                              <Check className="h-4 w-4 shrink-0 text-foreground" strokeWidth={2.5} />
+  1583→                            )}
+  1584→                          </button>
+  1585→                        ))
+  1586→                      )}
+  1587→                    </div>
+  1588→                  </div>
+  1589→                </>
+  1590→              )}
+  1591→            </div>
+  1592→
+  1593→            {/* 未配置提示 */}
+  1594→            {!visionConfig.baseUrl.trim() && (
+  1595→              <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+  1596→                还没有配置识图模型：聊天中发送图片不会触发识图（不影响文字聊天）。填写 OpenAI 兼容的多模态接口地址与模型名后，发图即可让 AI 看懂图片。
+  1597→              </div>
+  1598→            )}
+  1599→
+  1600→            {/* 识图测试：与聊天发图同一条管线（/api/vision 代理 → 私有地址浏览器直连兜底） */}
+  1601→            <div>
+  1602→              <button
+  1603→                type="button"
+  1604→                onClick={() => void runVisionTest()}
+  1605→                disabled={testing}
+  1606→                data-testid="vision-test-btn"
+  1607→                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] border border-border bg-background text-[13px] font-medium text-foreground transition-colors hover:bg-muted/40 active:bg-muted/70 disabled:opacity-50"
+  1608→              >
+  1609→                {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanEye className="h-3.5 w-3.5" />}
+  1610→                {testing ? '正在识图…' : '测试识图'}
+  1611→              </button>
+  1612→              <p className="mt-1.5 text-center text-[11px] leading-snug text-muted-foreground/70">
+  1613→                发送一张内置测试图片，验证接口连通与识图效果
+  1614→              </p>
+  1615→              {testError && (
+  1616→                <div
+  1617→                  data-testid="vision-test-error"
+  1618→                  className="mt-2 flex items-start gap-1.5 px-1 text-[12px] leading-relaxed"
+  1619→                  style={{ color: IOS_RED }}
+  1620→                >
+  1621→                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+  1622→                  <span>{testError}</span>
+  1623→                </div>
+  1624→              )}
+  1625→              {testResult && (
+  1626→                <div
+  1627→                  data-testid="vision-test-result"
+  1628→                  className="mt-2 flex items-start gap-1.5 px-1 text-[12px] leading-relaxed text-emerald-600 dark:text-emerald-400/90"
+  1629→                >
+  1630→                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
+  1631→                  <span>{testResult}</span>
+  1632→                </div>
+  1633→              )}
+  1634→            </div>
+  1635→          </div>
+  1636→        </section>
+  1637→
+  1638→        {/* 使用说明（页尾） */}
+  1639→        <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
+  1640→          识图模型只负责「看图」：聊天里发图片时先用它把图片转成文字描述，再交给聊天模型生成回复；两者配置互相独立、互不覆盖。未配置时发图不识图，文字聊天不受影响。
+  1641→        </p>
+  1642→
+  1643→        <p className="text-[11px] leading-relaxed text-muted-foreground/80">
+  1644→          图片仅内联传给你自己配置的识图接口，不经过任何第三方图床；预设保存在本机 IndexedDB（API Key 加密存储）。
+  1645→        </p>
+  1646→      </div>
+  1647→    </DetailShell>
+  1648→  );
+  1649→}
+  1650→
+  1651→// ---------------- 锁屏密码 ----------------
+  1652→
+  1653→type LockStage = 'menu' | 'verifyOff' | 'verifyChange' | 'setNew' | 'confirmNew';
+  1654→
+  1655→const LOCK_STAGE_TITLE: Record<Exclude<LockStage, 'menu'>, string> = {
+  1656→  verifyOff: '输入密码',
+  1657→  verifyChange: '输入密码',
+  1658→  setNew: '输入新密码',
+  1659→  confirmNew: '再输入一次',
+  1660→};
+  1661→
+  1662→/**
+  1663→ * 锁屏密码管理：开启/关闭（需验证原密码）、修改密码（原密码 → 新密码两次）、
+  1664→ * 密码类型（4/6 位，未开启时可切换）、立即锁定。
+  1665→ */
+  1666→function LockPage({ onBack }: { onBack: () => void }) {
+  1667→  const lockConfig = useSettings((s) => s.lockConfig);
+  1668→  const applyLockConfig = useSettings((s) => s.applyLockConfig);
+  1669→  const setLockScreen = useSettings((s) => s.setLockScreen);
+  1670→
+  1671→  const [stage, setStage] = useState<LockStage>('menu');
+  1672→  const [tempCode, setTempCode] = useState('');
+  1673→  const [errText, setErrText] = useState('');
+  1674→  const [errSignal, setErrSignal] = useState(0);
+  1675→
+  1676→  const fail = (msg: string) => {
+  1677→    setErrSignal((s) => s + 1);
+  1678→    setErrText(msg);
+  1679→  };
+  1680→
+  1681→  const cancelSub = () => {
+  1682→    setStage('menu');
+  1683→    setTempCode('');
+  1684→    setErrText('');
+  1685→  };
+  1686→
+  1687→  // ---------------- 菜单 ----------------
+  1688→  if (stage === 'menu') {
+  1689→    return (
+  1690→      <DetailShell title="锁屏与密码" onBack={onBack}>
+  1691→        <GroupCard>
+  1692→          <div className="divide-y divide-border/60">
+  1693→            {/* 锁屏总开关：关掉后不再出现锁屏界面 */}
+  1694→            <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+  1695→              <span className="min-w-0 flex-1 text-[16px]">锁屏</span>
+  1696→              <Switch
+  1697→                checked={lockConfig.lockScreen}
+  1698→                onCheckedChange={(v) => {
+  1699→                  setErrText('');
+  1700→                  setLockScreen(v);
+  1701→                }}
+  1702→                aria-label="锁屏开关"
+  1703→              />
+  1704→            </div>
+  1705→            {/* 锁屏密码开关（仅在锁屏开启时可用） */}
+  1706→            <div
+  1707→              className={`flex min-h-[52px] items-center gap-3 px-4 py-2 ${
+  1708→                lockConfig.lockScreen ? '' : 'pointer-events-none opacity-40'
+  1709→              }`}
+  1710→            >
+  1711→              <span className="min-w-0 flex-1 text-[16px]">锁屏密码</span>
+  1712→              <Switch
+  1713→                checked={lockConfig.enabled}
+  1714→                onCheckedChange={(v) => {
+  1715→                  setErrText('');
+  1716→                  if (v) {
+  1717→                    setTempCode('');
+  1718→                    setStage('setNew');
+  1719→                  } else if (lockConfig.code) {
+  1720→                    setStage('verifyOff');
+  1721→                  } else {
+  1722→                    applyLockConfig({ lockScreen: true, enabled: false, code: '', len: lockConfig.len });
+  1723→                  }
+  1724→                }}
+  1725→                aria-label="锁屏密码开关"
+  1726→              />
+  1727→            </div>
+  1728→          </div>
+  1729→        </GroupCard>
+  1730→        <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted-foreground">
+  1731→          {lockConfig.lockScreen
+  1732→            ? '开启后，锁屏上滑解锁需要输入密码；关闭浏览器再打开或按下电源键都会回到锁屏。'
+  1733→            : '锁屏已关闭：开机和按下电源键都会直接进入主屏幕。'}
+  1734→        </p>
+  1735→
+  1736→        {lockConfig.lockScreen && (
+  1737→          <div className="mt-4">
+  1738→            <GroupCard>
+  1739→              {lockConfig.enabled && (
+  1740→                <button
+  1741→                  type="button"
+  1742→                  onClick={() => {
+  1743→                    setErrText('');
+  1744→                    setTempCode('');
+  1745→                    setStage('verifyChange');
+  1746→                  }}
+  1747→                  className="flex h-[46px] w-full items-center justify-between px-4 text-left transition-colors active:bg-muted/50"
+  1748→                >
+  1749→                  <span className="text-[16px]">更改密码</span>
+  1750→                  <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+  1751→                </button>
+  1752→              )}
+  1753→              <div className="flex min-h-[52px] items-center justify-between px-4 py-2">
+  1754→                <span className="text-[16px]">密码类型</span>
+  1755→                {lockConfig.enabled ? (
+  1756→                  <span className="text-[15px] text-muted-foreground">
+  1757→                    {lockConfig.len === 6 ? '6 位数字' : '4 位数字'}
+  1758→                  </span>
+  1759→                ) : (
+  1760→                  <div className="flex rounded-full bg-muted p-0.5" role="radiogroup" aria-label="密码位数">
+  1761→                    {([4, 6] as const).map((n) => (
+  1762→                      <button
+  1763→                        key={n}
+  1764→                        type="button"
+  1765→                        role="radio"
+  1766→                        aria-checked={lockConfig.len === n}
+  1767→                        onClick={() => applyLockConfig({ lockScreen: true, enabled: false, code: '', len: n })}
+  1768→                        className={`h-8 w-[68px] rounded-full text-[14px] transition ${
+  1769→                          lockConfig.len === n
+  1770→                            ? 'bg-background font-medium shadow-sm'
+  1771→                            : 'text-muted-foreground'
+  1772→                        }`}
+  1773→                      >
+  1774→                        {n} 位
+  1775→                      </button>
+  1776→                    ))}
+  1777→                  </div>
+  1778→                )}
+  1779→              </div>
+  1780→            </GroupCard>
+  1781→          </div>
+  1782→        )}
+  1783→
+  1784→        {errText && (
+  1785→          <p className="mt-3 px-1 text-[13px] leading-relaxed" style={{ color: IOS_RED }} role="alert">
+  1786→            {errText}
+  1787→          </p>
+  1788→        )}
+  1789→      </DetailShell>
+  1790→    );
+  1791→  }
+  1792→
+  1793→  // ---------------- 密码输入子页 ----------------
+  1794→
+  1795→  const handleComplete = (code: string) => {
+  1796→    if (stage === 'verifyOff') {
+  1797→      if (code === lockConfig.code) {
+  1798→        applyLockConfig({ ...lockConfig, enabled: false, code: '' });
+  1799→        setErrText('');
+  1800→        setStage('menu');
+  1801→      } else {
+  1802→        fail('密码错误，请重试');
+  1803→      }
+  1804→    } else if (stage === 'verifyChange') {
+  1805→      if (code === lockConfig.code) {
+  1806→        setErrText('');
+  1807→        setTempCode('');
+  1808→        setStage('setNew');
+  1809→      } else {
+  1810→        fail('密码错误，请重试');
+  1811→      }
+  1812→    } else if (stage === 'setNew') {
+  1813→      setTempCode(code);
+  1814→      setErrText('');
+  1815→      setStage('confirmNew');
+  1816→    } else if (stage === 'confirmNew') {
+  1817→      if (code === tempCode) {
+  1818→        applyLockConfig({ ...lockConfig, enabled: true, code });
+  1819→        setErrText('');
+  1820→        setTempCode('');
+  1821→        setStage('menu');
+  1822→      } else {
+  1823→        setTempCode('');
+  1824→        setStage('setNew');
+  1825→        fail('两次输入不一致，请重新设置');
+  1826→      }
+  1827→    }
+  1828→  };
+  1829→
+  1830→  return (
+  1831→    <DetailShell title="锁屏与密码" onBack={cancelSub}>
+  1832→      <div className="flex flex-col items-center pt-6">
+  1833→        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+  1834→          <Lock className="h-6 w-6 text-muted-foreground" strokeWidth={2} />
+  1835→        </div>
+  1836→        <p className="mt-3 text-[17px] font-semibold">{LOCK_STAGE_TITLE[stage]}</p>
+  1837→        {stage === 'confirmNew' && (
+  1838→          <p className="mt-1 text-[13px] text-muted-foreground">请再次输入相同的密码</p>
+  1839→        )}
+  1840→        <PasscodePad
+  1841→          length={lockConfig.len}
+  1842→          onComplete={handleComplete}
+  1843→          errorSignal={errSignal}
+  1844→          className="mt-6"
+  1845→        />
+  1846→        <p className="mt-4 min-h-[20px] text-[13px] font-medium" style={{ color: IOS_RED }} role="alert">
+  1847→          {errText}
+  1848→        </p>
+  1849→        <button
+  1850→          type="button"
+  1851→          onClick={cancelSub}
+  1852→          className="mt-2 rounded-full px-6 py-2 text-[15px] text-muted-foreground transition active:opacity-60"
+  1853→        >
+  1854→          取消
+  1855→        </button>
+  1856→      </div>
+  1857→    </DetailShell>
+  1858→  );
+  1859→}
+  1860→
+  1861→// ---------------- 关于本机 ----------------
+  1862→
+  1863→function AboutRow({ label, value }: { label: string; value: string }) {
+  1864→  return (
+  1865→    <div className="flex min-h-[46px] items-center justify-between gap-3 px-4 py-2">
+  1866→      <span className="shrink-0 text-[16px]">{label}</span>
+  1867→      <span className="text-right text-[15px] text-muted-foreground">{value}</span>
+  1868→    </div>
+  1869→  );
+  1870→}
+  1871→
+  1872→// ---------------- 个人信息 ----------------
+  1873→
+  1874→/** 读取图片文件 → 居中裁剪缩放为 256px 头像 data URL（控住 IndexedDB 体积） */
+  1875→function fileToAvatarDataUrl(file: File): Promise<string> {
+  1876→  return new Promise((resolve, reject) => {
+  1877→    const url = URL.createObjectURL(file);
+  1878→    const img = new Image();
+  1879→    img.onload = () => {
+  1880→      try {
+  1881→        const size = 256;
+  1882→        const canvas = document.createElement('canvas');
+  1883→        canvas.width = size;
+  1884→        canvas.height = size;
+  1885→        const ctx = canvas.getContext('2d');
+  1886→        if (!ctx) throw new Error('canvas 不可用');
+  1887→        const scale = Math.max(size / img.width, size / img.height);
+  1888→        const w = img.width * scale;
+  1889→        const h = img.height * scale;
+  1890→        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+  1891→        URL.revokeObjectURL(url);
+  1892→        resolve(canvas.toDataURL('image/jpeg', 0.85));
+  1893→      } catch (err) {
+  1894→        URL.revokeObjectURL(url);
+  1895→        reject(err instanceof Error ? err : new Error('图片处理失败'));
+  1896→      }
+  1897→    };
+  1898→    img.onerror = () => {
+  1899→      URL.revokeObjectURL(url);
+  1900→      reject(new Error('图片读取失败'));
+  1901→    };
+  1902→    img.src = url;
+  1903→  });
+  1904→}
+  1905→
+  1906→/** 个人信息页：从手机上传头像、修改名字与标签（即改即存，锁屏「×××的iPhone」同步） */
+  1907→function ProfilePage({ onBack }: { onBack: () => void }) {
+  1908→  const profile = useSettings((s) => s.profile);
+  1909→  const setProfile = useSettings((s) => s.setProfile);
+  1910→  const fileRef = useRef<HTMLInputElement>(null);
+  1911→
+  1912→  const onPickFile = (e: ChangeEvent<HTMLInputElement>) => {
+  1913→    const file = e.target.files?.[0];
+  1914→    e.target.value = ''; // 允许重复选择同一张图
+  1915→    if (!file) return;
+  1916→    void fileToAvatarDataUrl(file)
+  1917→      .then((dataUrl) => setProfile({ avatar: dataUrl }))
+  1918→      .catch(() => undefined);
+  1919→  };
+  1920→
+  1921→  return (
+  1922→    <DetailShell title="个人信息" onBack={onBack}>
+  1923→      {/* 头像：点击从手机相册/文件选择 */}
+  1924→      <div className="flex flex-col items-center pt-3">
+  1925→        <button
+  1926→          type="button"
+  1927→          onClick={() => fileRef.current?.click()}
+  1928→          aria-label="更换头像"
+  1929→          className="relative rounded-full transition-transform active:scale-95"
+  1930→        >
+  1931→          {profile.avatar ? (
+  1932→            <img src={profile.avatar} alt="头像" className="h-[88px] w-[88px] rounded-full object-cover" />
+  1933→          ) : (
+  1934→            <span className="flex h-[88px] w-[88px] items-center justify-center rounded-full bg-gradient-to-b from-[#D8D8DD] to-[#AEB0B8]">
+  1935→              <User className="h-11 w-11 text-[#7C7C84]" strokeWidth={1.8} />
+  1936→            </span>
+  1937→          )}
+  1938→          <span className="absolute -bottom-0.5 -right-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full border-[3px] border-background bg-muted">
+  1939→            <Camera className="h-[15px] w-[15px] text-foreground" strokeWidth={2.2} />
+  1940→          </span>
+  1941→        </button>
+  1942→        <p className="mt-2.5 text-[12px] text-muted-foreground">轻点头像，从手机相册选择照片</p>
+  1943→        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickFile} />
+  1944→      </div>
+  1945→
+  1946→      {/* 名字 / 标签（即改即存） */}
+  1947→      <div className="mt-6">
+  1948→        <GroupCard>
+  1949→          <div className="flex items-center gap-3 px-4 py-1.5">
+  1950→            <span className="w-[64px] shrink-0 text-[15px] text-muted-foreground">名字</span>
+  1951→            <Input
+  1952→              value={profile.name}
+  1953→              onChange={(e) => setProfile({ name: e.target.value })}
+  1954→              placeholder="iPhone 用户"
+  1955→              maxLength={20}
+  1956→              aria-label="名字"
+  1957→              className="h-11 border-0 bg-transparent px-0 text-[16px] shadow-none focus-visible:ring-0 dark:bg-transparent"
+  1958→            />
+  1959→          </div>
+  1960→          <div className="flex items-center gap-3 px-4 py-1.5">
+  1961→            <span className="w-[64px] shrink-0 text-[15px] text-muted-foreground">标签</span>
+  1962→            <Input
+  1963→              value={profile.tag}
+  1964→              onChange={(e) => setProfile({ tag: e.target.value })}
+  1965→              placeholder="Apple 账户、iCloud"
+  1966→              maxLength={30}
+  1967→              aria-label="标签"
+  1968→              className="h-11 border-0 bg-transparent px-0 text-[16px] shadow-none focus-visible:ring-0 dark:bg-transparent"
+  1969→            />
+  1970→          </div>
+  1971→        </GroupCard>
+  1972→        <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted-foreground">
+  1973→          名字将显示在锁屏「×××的iPhone」小组件上；头像、名字与标签自动保存。
+  1974→        </p>
+  1975→      </div>
+  1976→    </DetailShell>
+  1977→  );
+  1978→}
+  1979→
+  1980→function AboutPage({ onBack }: { onBack: () => void }) {
+  1981→  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  1982→  const uaShort = ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
+  1983→
+  1984→  return (
+  1985→    <DetailShell title="关于本机" onBack={onBack}>
+  1986→      <GroupCard>
+  1987→        <AboutRow label="名称" value="iPhone" />
+  1988→        <AboutRow label="系统版本" value="iOS Web 1.0.0" />
+  1989→        <AboutRow label="架构" value="本地优先（IndexedDB）" />
+  1990→        <div className="flex min-h-[46px] items-center justify-between gap-3 px-4 py-2">
+  1991→          <span className="shrink-0 text-[16px]">浏览器</span>
+  1992→          <span className="truncate text-right text-[13px] text-muted-foreground" title={ua || undefined}>
+  1993→            {uaShort || '—'}
+  1994→          </span>
+  1995→        </div>
+  1996→      </GroupCard>
+  1997→      <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
+  1998→        照片、备忘录、日程、聊天与全部设置均保存在浏览器 IndexedDB 中，可随时清理，不会上传服务器。
+  1999→      </p>
+  2000→    </DetailShell>
+
+[showing lines 1-2000 of 2024; use offset=2001 with limit to continue reading]

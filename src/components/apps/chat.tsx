@@ -1014,11 +1014,11 @@ function ChatView({
                 )}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
                 <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                  {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊） */}
+                  {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊，小圆角 + 细黑边框） */}
                   {m.quote && (
                     <div
                       data-testid="sms-quote-block"
-                      className="mb-1 max-w-full overflow-hidden rounded-[6px] bg-black/[0.06] px-2.5 py-1 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
+                      className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-black/[0.06] px-2.5 py-1 text-[12.5px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60"
                     >
                       <p className="line-clamp-2 whitespace-pre-wrap break-all">
                         {m.quote.name}：{m.quote.content}

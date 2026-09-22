@@ -6115,3 +6115,22 @@ Stage Summary:
 - 交互基线：转让确认框在群管理选择页之上立即弹出、确认后返回设置页；@浮层左右贴满整屏；退出群聊=仅本机移除（AI 记忆保留）、解散群聊=全量清理（记忆级联删除）
 - testid 变更：退出群聊 wx-groupinfo-dissolve→wx-groupinfo-quit（解散群聊继承 wx-groupinfo-dissolve）；新增 qq-groupinfo-quit；其余全部保留
 - 已知边界：退出/解散在本地模拟中均为删除本机群记录（差异在是否级联清理 AI 群记忆）；退出后群无法从 UI 重新进入（无被拉回流程）；E2E 种子与 mock 已清理
+
+---
+Task ID: 1
+Agent: main (Z.ai Code)
+Task: 修复 API 测试连接失败 + 半透明胶囊样式 + QQ气泡圆角 + 微信底部输入框美化
+
+Work Log:
+- 定位到 API 测试失败根因：前端调用 /api/settings/test，但该路由不存在（仅存在 /api/settings/models），请求 404 后显示通用错误"测试失败，请稍后重试"（dev.log 证实 POST /api/settings/test 404）
+- 新建 src/app/api/settings/test/route.ts：极小非流式 ping 请求验证连通；与 /api/chat 同款 baseUrl 归一化候选；参数兼容重试（max_completion_tokens / 去温度）；私有地址/403 地区限制/网络不可达返回 directOnly 让客户端浏览器直连兜底；401/400/429 返回具体错误文案；reachable 区分「连不上」与「连得上但配置错」(connected)
+- dev.log 验证：POST /api/settings/test 200 in 4.4s（用户 API vsllm.cc 从沙箱可达，测试成功）；curl 无效 key 返回 {"error":"API Key 无效或未授权（401）","connected":true}
+- 半透明引用胶囊（4 处）rounded-[6px]→rounded-[4px] + 细黑边框 border-black/25（暗色 border-white/25）：wechat.tsx wx-quote-block、wx-group.tsx wx-grp-quote-block、qq-group.tsx qq-grp-quote-block（独立胶囊）、chat.tsx sms-quote-block
+- QQ 气泡圆角 rounded-[18px]→rounded-[10px]（qq.tsx 6 处 + qq-group.tsx 5 处，含图片/转发卡气泡）；气泡内 QQ 引用卡 rounded-[12px]→rounded-[8px]（qq.tsx、qq-group.tsx）
+- 微信底部输入栏（wechat.tsx 单聊 + wx-group.tsx 群聊）对照真实微信美化：容器加顶部发丝线 border-t black/[0.07]；语音/@ 圆钮 border-[1.7px]/75→[1.5px]/90 更利落；输入框去边框改纯白块 h-[36px] rounded-[5px] + 绿色光标 caret-[#07C160]（暗色 #232323）；发送钮 h-8 rounded-[4px] px-4；表情/加号间距 gap-[13px]→gap-4
+- 浏览器端到端自检（agent-browser）：解锁→微信登录（IndexedDB 种子账号）→发消息→长按菜单→引用→发送：computed style 证实胶囊 radius 4px / border 1px black/25 / bg white/75；输入框 radius 5px 无边框 + 绿色 caret；QQ 登录→发消息：气泡 computed radius 10px
+
+Stage Summary:
+- /api/settings/test 路由缺失是测试失败根因，已补齐并支持浏览器直连兜底与参数兼容
+- 引用胶囊：更小圆角 + 细黑边框；QQ 气泡 10px；微信输入栏对齐真实微信
+- 全部改动通过 lint；浏览器实测通过（引用流、气泡渲染、输入栏样式、测试连接 200）
