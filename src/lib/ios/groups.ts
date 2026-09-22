@@ -62,6 +62,8 @@ export interface ChatGroup {
   /** 宿主 App（微信 / QQ） */
   app: GroupApp;
   name: string;
+  /** 群备注名（仅机主自己可见；设置后聊天界面/消息列表优先显示备注，群资料真实名不变） */
+  remark?: string;
   /** 群头像 dataURL；空 = 用成员头像拼贴渲染 */
   avatar: string | null;
   /** 创建者（机主）联系人 ID；可转让给任意成员（AI 成员也可成为群主） */
@@ -220,6 +222,8 @@ function normalizeGroup(g: unknown): ChatGroup | null {
     id: r.id,
     app: r.app === 'qq' ? 'qq' : 'wx',
     name: typeof r.name === 'string' ? r.name : '未命名群聊',
+    // 群备注为新增字段：旧数据缺省补空串
+    remark: typeof r.remark === 'string' ? r.remark : '',
     avatar: typeof r.avatar === 'string' ? r.avatar : null,
     ownerId: typeof r.ownerId === 'string' ? r.ownerId : '',
     memberIds: r.memberIds.filter((x): x is string => typeof x === 'string'),
@@ -295,7 +299,7 @@ export function createGroup(input: {
  */
 export function updateGroup(
   groupId: string,
-  patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>
+  patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>
 ): ChatGroup | null {
   const app = getGroup(groupId)?.app;
   if (!app) return null;
@@ -305,6 +309,7 @@ export function updateGroup(
   const prev = list[idx];
   const next: ChatGroup = { ...prev, ...patch };
   if (patch.name !== undefined) next.name = patch.name.trim() || next.name;
+  if (patch.remark !== undefined) next.remark = patch.remark.trim();
   list[idx] = next;
   writePool(app, list);
   // 群资料事件（只在值真正变化时发，成员增删走专用函数不经过这里）
@@ -348,6 +353,12 @@ export function groupRoleOf(g: ChatGroup, contactId: string): GroupMemberRole {
   if (g.ownerId === contactId) return 'owner';
   if (g.adminIds.includes(contactId)) return 'admin';
   return 'member';
+}
+
+/** 群显示名：有备注用备注（仅机主自己可见），否则用群名（聊天顶栏/消息列表/群列表统一走这里） */
+export function groupDisplayName(g: Pick<ChatGroup, 'name' | 'remark'>): string {
+  const rk = g.remark?.trim();
+  return rk ? rk : g.name;
 }
 
 /** 是否处于禁言中（永久禁言或未到解禁时间；过期即视为自动解禁，无需写回） */

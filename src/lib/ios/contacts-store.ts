@@ -135,6 +135,7 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     qqId: normalizeText(payload.qqId, 16) ?? genQQ(),
     qqPassword: normalizeText(payload.qqPassword, 64),
     avatar: normalizeAvatar(payload.avatar),
+    remark: normalizeText(payload.remark, 60),
     isFriend: payload.kind === 'user',
     createdAt: new Date().toISOString(),
   };
@@ -177,6 +178,7 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if ('avatar' in patch) next.avatar = normalizeAvatar(patch.avatar);
   // 手机号可编辑但留空不自动生成（避免编辑时悄悄换号）
   if ('phone' in patch) next.phone = normalizeText(patch.phone, 20);
+  if ('remark' in patch) next.remark = normalizeText(patch.remark, 60);
 
   if ('ownerId' in patch && existing.kind === 'npc') {
     const ownerId = normalizeText(patch.ownerId, 64);

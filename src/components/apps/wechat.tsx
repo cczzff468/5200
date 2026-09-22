@@ -3340,6 +3340,7 @@ function ChatPage({
   otherUnread,
   onBack,
   onOpenFriendDetail,
+  onSaveRemark,
 }: {
   me: WxUser;
   peer: ContactRecord;
@@ -3351,6 +3352,8 @@ function ChatPage({
   onBack: () => void;
   /** 聊天设置页点信息卡片 → 进入该好友的详情页 */
   onOpenFriendDetail: (c: ContactRecord) => void;
+  /** 保存备注（空串 = 清除；宿主持久化 + 刷新联系人展示名） */
+  onSaveRemark: (v: string) => void | Promise<void>;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
 }) {
@@ -4598,15 +4601,19 @@ function ChatPage({
               highlightId === m.id ? 'bg-[#07C160]/15 ring-1 ring-[#07C160]/50' : ''
             }`}
           >
-            {/* 时间分隔（同微信）：首条或与上一条间隔超 5 分钟时显示 */}
+            {/* 时间分隔（截图样式：居中半透明胶囊） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
-              <p className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtChatTime(m.time)}</p>
+              <div className="py-2 text-center">
+                <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtChatTime(m.time)}</span>
+              </div>
             )}
             {m.recalled ? (
-              /* 已撤回：居中灰字（你撤回一条消息 / 对方撤回一条消息） */
-              <p data-testid="wx-recall-row" className="py-1.5 text-center text-[12.5px] text-black/35 dark:text-white/35">
-                {m.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息'}
-              </p>
+              /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
+              <div data-testid="wx-recall-row" className="py-1.5 text-center">
+                <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                  {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
+                </span>
+              </div>
             ) : m.kind === 'notice' && m.notice ? (
               <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
             ) : (
@@ -4733,6 +4740,17 @@ function ChatPage({
                 </div>
               ) : (
                 <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
+                  {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
+                  {m.quote && (
+                    <div
+                      data-testid="wx-quote-block"
+                      className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
+                    >
+                      <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                        {m.quote.name}：{m.quote.content}
+                      </p>
+                    </div>
+                  )}
                   <div
                     {...bubblePress}
                     className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
@@ -4750,21 +4768,6 @@ function ChatPage({
                           : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                       }`}
                     />
-                    {/* 引用块（菜单「引用」发送的消息）：名字 + 内容小字嵌在气泡顶部 */}
-                    {m.quote && (
-                      <div
-                        data-testid="wx-quote-block"
-                        className={`mb-1 max-w-full overflow-hidden rounded-[4px] px-2 py-1 text-[12.5px] leading-[1.35] ${
-                          m.role === 'me'
-                            ? 'bg-black/[0.08] text-black/60'
-                            : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
-                        }`}
-                      >
-                        <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                          {m.quote.name}：{m.quote.content}
-                        </p>
-                      </div>
-                    )}
                     {m.content ? (
                       cleanBubbleText(m.content) || m.content
                     ) : (
@@ -5013,6 +5016,10 @@ function ChatPage({
           idLabel="微信号"
           idValue={peer.wechatId || peer.qqId || '未设置'}
           metaLine={[peer.region, peer.occupation].filter((x): x is string => Boolean(x)).join(' · ')}
+          remark={peer.remark ?? ''}
+          onSaveRemark={(v) => {
+            void onSaveRemark(v);
+          }}
           pinned={flags.pinned === true}
           muted={flags.muted === true}
           bg={bg}
@@ -7337,12 +7344,21 @@ function MainScreen({
       <ChatPage
         key={chatPeer.id}
         me={me}
-        peer={chatPeer}
+        peer={contacts.find((c) => c.id === chatPeer.id) ?? chatPeer}
         contacts={contacts}
         ownerName={ownerName(chatPeer)}
         otherUnread={chatOtherUnread}
         onBack={backToList}
         onOpenFriendDetail={(c) => openFriendDetail(c)}
+        onSaveRemark={async (v) => {
+          try {
+            await updateContact(chatPeer.id, { remark: v || null });
+            await reloadContacts();
+            showToast(v ? '备注已保存' : '备注已清除');
+          } catch {
+            showToast('备注保存失败');
+          }
+        }}
         onToast={showToast}
       />
     );
@@ -7529,7 +7545,7 @@ function MainScreen({
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-[16px]">{g.name}</span>
+                        <span className="truncate text-[16px]">{g.remark?.trim() || g.name}</span>
                         <span className="flex shrink-0 items-center gap-1">
                           {flagsMap[gid]?.muted === true && (
                             <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />

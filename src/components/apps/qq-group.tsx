@@ -76,6 +76,7 @@ import {
   dissolveGroup,
   effectiveInterop,
   getGroup,
+  groupDisplayName,
   groupMuteLeftText,
   groupPreview,
   groupRoleOf,
@@ -552,7 +553,11 @@ export function QqGroupCreatePage({
       .map((id) => contacts.find((c) => c.id === id))
       .filter((c): c is ContactRecord => !!c)
       .map(memberNameOf);
-    return names.length === 0 ? '' : `${names.slice(0, 3).join('、')}的群聊`;
+    if (names.length === 0) return '';
+    // 默认群名 = 我的名字 + 成员名字（真实 QQ 同款；人多时截断）
+    const meRec = contacts.find((c) => c.kind === 'user');
+    const all = meRec ? [memberNameOf(meRec), ...names] : names;
+    return all.length <= 4 ? all.join('、') : `${all.slice(0, 3).join('、')}等${all.length}人群聊`;
   }, [selected, contacts]);
   const effName = (nameDirty ? name : suggested).trim();
 
@@ -588,7 +593,7 @@ export function QqGroupCreatePage({
               setNameDirty(true);
               setName(e.target.value);
             }}
-            placeholder="群聊名称（留空按成员名生成）"
+            placeholder="群聊名称（默认为我的名字+成员名字）"
             className="h-10 rounded-[10px] bg-black/[0.05] text-[14px] dark:bg-white/10"
             data-testid="qq-group-name-input"
           />
@@ -655,11 +660,13 @@ export function QqGroupInfoPage({
   group: ChatGroup;
   contacts: ContactRecord[];
   onBack: () => void;
-  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
+  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
-  const [dialog, setDialog] = useState<null | { kind: 'name' | 'announcement' }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'name' | 'announcement' | 'remark' }>(null);
+  // 群管理页（集中的管理入口）：管理员添加 / 取消管理员 / 禁言 / 转让群主
+  const [mgmtOpen, setMgmtOpen] = useState<null | 'admin-add' | 'admin-remove' | 'mute' | 'transfer'>(null);
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
   // 禁言时长选择单（群主/管理员对目标成员发起）；转让群主确认弹窗
   const [muteSheet, setMuteSheet] = useState<ContactRecord | null>(null);
@@ -954,9 +961,31 @@ export function QqGroupInfoPage({
         </div>
       </div>
 
+      {/* 置顶 / 免打扰（上移至成员卡下方首屏；按群独立） */}
+      <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+        <SwitchRow
+          label="设为置顶"
+          checked={flags[qqGroupRowId(gid)]?.pinned === true}
+          onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { pinned: v })}
+          testId="qq-groupinfo-pin"
+        />
+        <SwitchRow
+          label="消息免打扰"
+          checked={flags[qqGroupRowId(gid)]?.muted === true}
+          onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { muted: v })}
+          testId="qq-groupinfo-mute-switch"
+        />
+      </div>
+
       {/* 群设置 */}
       <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
         <InfoRow label="群聊名称" value={group.name} onClick={() => setDialog({ kind: 'name' })} testId="qq-groupinfo-name" />
+        <InfoRow
+          label="备注"
+          value={group.remark?.trim() || '未设置'}
+          onClick={() => setDialog({ kind: 'remark' })}
+          testId="qq-groupinfo-remark"
+        />
         <InfoRow
           label="群公告"
           value={group.announcement ? `${group.announcement.slice(0, 12)}…` : '未设置'}
@@ -991,7 +1020,50 @@ export function QqGroupInfoPage({
         />
       </div>
 
-      {/* 通用开关卡片（回复条数/分句发送/时间感知/置顶/免打扰；均按群独立） */}
+      {/* 群管理（仅群主/管理员可见；管理员只能禁言，任命/转让仅群主；六.权限规则门控） */}
+      {canManage && (
+        <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+          <p className="px-4 pb-1 pt-3 text-[12px] text-black/40 dark:text-white/40">群管理</p>
+          {amOwner && (
+            <InfoRow
+              label="管理员添加"
+              value={group.adminIds.length > 0 ? `现有 ${group.adminIds.length} 名` : '未设置'}
+              onClick={() => setMgmtOpen('admin-add')}
+              testId="qq-groupinfo-mgmt-admin-add"
+            />
+          )}
+          {amOwner && (
+            <InfoRow
+              label="取消管理员"
+              value={group.adminIds.length > 0 ? `现有 ${group.adminIds.length} 名` : '无'}
+              onClick={() => {
+                if (group.adminIds.length === 0) {
+                  onToast('当前没有管理员');
+                  return;
+                }
+                setMgmtOpen('admin-remove');
+              }}
+              testId="qq-groupinfo-mgmt-admin-remove"
+            />
+          )}
+          <InfoRow
+            label="禁言"
+            value="选成员禁言/解禁"
+            onClick={() => setMgmtOpen('mute')}
+            testId="qq-groupinfo-mgmt-mute"
+          />
+          {amOwner && (
+            <InfoRow
+              label="转让群主"
+              value="选一位成员接任"
+              onClick={() => setMgmtOpen('transfer')}
+              testId="qq-groupinfo-mgmt-transfer"
+            />
+          )}
+        </div>
+      )}
+
+      {/* 通用开关卡片（回复条数/分句发送/时间感知；均按群独立） */}
       <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
         <InfoRow
           label="回复条数"
@@ -1020,16 +1092,6 @@ export function QqGroupInfoPage({
             setTimeAware(sessionKeyOf(gid), v);
             setTimeAwareOn(v);
           }}
-        />
-        <SwitchRow
-          label="设为置顶"
-          checked={flags[qqGroupRowId(gid)]?.pinned === true}
-          onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { pinned: v })}
-        />
-        <SwitchRow
-          label="消息免打扰"
-          checked={flags[qqGroupRowId(gid)]?.muted === true}
-          onChange={(v) => qqChatFlags.update(qqGroupRowId(gid), { muted: v })}
         />
       </div>
 
@@ -1211,6 +1273,101 @@ export function QqGroupInfoPage({
         </div>
       )}
 
+      {/* 群管理选择页（集中管理入口）：管理员添加 / 取消管理员 / 禁言 / 转让群主；操作复用数据层同款函数（自动落系统消息） */}
+      {mgmtOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#F5F6F7] dark:bg-[#111214]">
+          <GroupNavBar
+            title={mgmtOpen === 'admin-add' ? '管理员添加' : mgmtOpen === 'admin-remove' ? '取消管理员' : mgmtOpen === 'mute' ? '禁言成员' : '转让群主'}
+            onBack={() => setMgmtOpen(null)}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <p className="px-8 py-3 text-center text-[12px] leading-relaxed text-black/35 dark:text-white/35">
+              {mgmtOpen === 'admin-add' && '点击普通成员将其设为管理员（仅群主）'}
+              {mgmtOpen === 'admin-remove' && '点击管理员取消其管理员身份（仅群主）'}
+              {mgmtOpen === 'mute' && '点击成员进行禁言（可选时长）；已禁言成员可直接解除'}
+              {mgmtOpen === 'transfer' && '点击成员把群主转让给 TA，转让后你将成为普通成员'}
+            </p>
+            <div className="mx-3 mt-1 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
+              {(mgmtOpen === 'admin-add'
+                ? members.filter((m) => groupRoleOf(group, m.id) === 'member')
+                : mgmtOpen === 'admin-remove'
+                  ? members.filter((m) => groupRoleOf(group, m.id) === 'admin')
+                  : mgmtOpen === 'mute'
+                    ? members.filter((m) => canManageTarget(m))
+                    : members.filter((m) => m.id !== group.ownerId)
+              ).map((m) => {
+                const mutedLeft = groupMuteLeftText(group, m.id);
+                return (
+                  <div key={m.id} className="flex w-full items-center gap-3 px-4 py-2.5">
+                    <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={40} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[15px]">{memberNameOf(m)}</p>
+                      {mgmtOpen === 'mute' && mutedLeft && (
+                        <p className="mt-0.5 text-[12px] text-[#F5455C]">禁言中：{mutedLeft}</p>
+                      )}
+                    </div>
+                    {mgmtOpen === 'admin-add' && (
+                      <button
+                        type="button"
+                        data-testid={`qq-groupinfo-mgmt-add-${m.id}`}
+                        onClick={() => toggleAdmin(m, true)}
+                        className="shrink-0 rounded-[8px] bg-[#0099FF]/10 px-3 py-1.5 text-[13px] text-[#0072C7] active:opacity-70"
+                      >
+                        设为管理员
+                      </button>
+                    )}
+                    {mgmtOpen === 'admin-remove' && (
+                      <button
+                        type="button"
+                        data-testid={`qq-groupinfo-mgmt-remove-${m.id}`}
+                        onClick={() => toggleAdmin(m, false)}
+                        className="shrink-0 rounded-[8px] bg-[#F5455C]/10 px-3 py-1.5 text-[13px] text-[#F5455C] active:opacity-70"
+                      >
+                        取消管理员
+                      </button>
+                    )}
+                    {mgmtOpen === 'mute' && (
+                      mutedLeft ? (
+                        <button
+                          type="button"
+                          data-testid={`qq-groupinfo-mgmt-unmute-${m.id}`}
+                          onClick={() => liftMute(m)}
+                          className="shrink-0 rounded-[8px] bg-[#0099FF]/10 px-3 py-1.5 text-[13px] text-[#0072C7] active:opacity-70"
+                        >
+                          解除禁言
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          data-testid={`qq-groupinfo-mgmt-mute-${m.id}`}
+                          onClick={() => setMuteSheet(m)}
+                          className="shrink-0 rounded-[8px] bg-[#FA9D3B]/10 px-3 py-1.5 text-[13px] text-[#D07818] active:opacity-70"
+                        >
+                          禁言
+                        </button>
+                      )
+                    )}
+                    {mgmtOpen === 'transfer' && (
+                      <button
+                        type="button"
+                        data-testid={`qq-groupinfo-mgmt-transfer-${m.id}`}
+                        onClick={() => {
+                          setMgmtOpen(null);
+                          setTransferConfirm(m);
+                        }}
+                        className="shrink-0 rounded-[8px] bg-[#FA9D3B]/10 px-3 py-1.5 text-[13px] text-[#D07818] active:opacity-70"
+                      >
+                        转让给 TA
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 移除成员（－ 入口） */}
       {removeOpen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-[#F5F6F7] dark:bg-[#111214]">
@@ -1285,6 +1442,19 @@ export function QqGroupInfoPage({
             const t = v.trim();
             if (t) onUpdate({ name: t });
             setDialog(null);
+          }}
+        />
+      )}
+      {dialog?.kind === 'remark' && (
+        <CenterDialog
+          title="群备注"
+          initial={group.remark ?? ''}
+          placeholder="仅自己可见，保存后聊天界面优先显示备注"
+          onCancel={() => setDialog(null)}
+          onSave={(v) => {
+            onUpdate({ remark: v.trim() });
+            setDialog(null);
+            onToast(v.trim() ? '备注已保存' : '备注已清除');
           }}
         />
       )}
@@ -2924,10 +3094,16 @@ export function QqGroupChatPage({
   const layerMsg = layer && 'msgId' in layer ? msgs.find((m) => m.id === layer.msgId) ?? null : null;
 
   /** 富媒体消息行（图片/位置/表情包）：与文字行同一套头像/名字/宽度几何；多选模式下行首插入勾选圈 */
+  /** 发言者身份徽标文案（群主/管理员；普通成员 null） */
+  const roleLabelOfId = (id: string): string | null => {
+    const role = groupRoleOf(group, id);
+    return role === 'member' ? null : role === 'owner' ? '群主' : '管理员';
+  };
   const renderMsgRow = (m: WxGroupMsg, media: React.ReactNode) => {
     const mine = m.role === 'me';
     const sender = mine ? null : m.senderId === 'unknown' ? null : memberById.get(m.senderId) ?? null;
     const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
+    const roleLabel = roleLabelOfId(mine ? me.id : m.senderId);
     return (
       <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
         {selectMode && isSelectable(m) && (
@@ -2943,7 +3119,30 @@ export function QqGroupChatPage({
         )}
         <QqAvatar src={senderAvatar} alt={mine ? me.name : m.senderName} size={40} />
         <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-          {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">{m.senderName}</span>}
+          {/* 发言者名字（含机主自己）+ 群主/管理员徽标 */}
+          <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+            <span className="truncate">{mine ? me.name : m.senderName}</span>
+            {roleLabel && (
+              <span
+                className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                  roleLabel === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                }`}
+              >
+                {roleLabel}
+              </span>
+            )}
+          </span>
+          {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
+          {m.quote && (
+            <div
+              data-testid="qq-grp-quote-block"
+              className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
+            >
+              <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                {m.quote.name}：{m.quote.content}
+              </p>
+            </div>
+          )}
           {media}
         </div>
       </div>
@@ -2990,7 +3189,7 @@ export function QqGroupChatPage({
             <ChevronLeft className="h-6 w-6" strokeWidth={2.4} />
           </button>
           <button type="button" onClick={onOpenInfo} data-testid="qq-groupchat-openinfo" className="ml-1 flex min-w-0 flex-1 flex-col items-start active:opacity-60">
-            <span className="max-w-[220px] truncate text-[17px] font-semibold leading-tight">{group.name}</span>
+            <span className="max-w-[220px] truncate text-[17px] font-semibold leading-tight">{groupDisplayName(group)}</span>
             <span className="text-[11px] text-black/40 dark:text-white/40">{members.length + 1} 人</span>
           </button>
           <button
@@ -3021,11 +3220,15 @@ export function QqGroupChatPage({
           if (m.kind === 'notice') {
             return (
               <div key={m.id} className="py-2 text-center">
-                {showTime && <div className="pb-1 text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+                {showTime && (
+                  <div className="pb-1.5">
+                    <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                  </div>
+                )}
                 {m.notice ? (
                   <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3051,11 +3254,15 @@ export function QqGroupChatPage({
               }
               {...bubblePress}
             >
-              {showTime && <div className="py-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtGroupTime(m.time)}</div>}
+              {showTime && (
+                <div className="py-2 text-center">
+                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                </div>
+              )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block rounded-[4px] bg-black/[0.05] px-2 py-0.5 text-[11px] text-black/45 dark:bg-white/10 dark:text-white/45">
-                    {mine ? '你' : m.senderName || '有人'}撤回了一条消息
+                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                    {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
               ) : m.kind === 'image' && m.img ? (
@@ -3168,7 +3375,27 @@ export function QqGroupChatPage({
                   )}
                   <QqAvatar src={senderAvatar} alt={senderName} size={40} />
                   <div className={`flex min-w-0 max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                    {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">{m.senderName}</span>}
+                    {/* 发言者名字（含机主自己）+ 群主/管理员徽标 */}
+                    <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+                      <span className="truncate">{senderName}</span>
+                      {roleLabelOfId(mine ? me.id : m.senderId) && (
+                        <span
+                          className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                            roleLabelOfId(mine ? me.id : m.senderId) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                          }`}
+                        >
+                          {roleLabelOfId(mine ? me.id : m.senderId)}
+                        </span>
+                      )}
+                    </span>
+                    {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
+                    {m.quote && (
+                      <div className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60">
+                        <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                          {m.quote.name}：{m.quote.content}
+                        </p>
+                      </div>
+                    )}
                     <div
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
@@ -3176,19 +3403,6 @@ export function QqGroupChatPage({
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
                       data-testid={mine ? 'qq-groupmsg-me' : 'qq-groupmsg-peer'}
                     >
-                      {m.quote && (
-                        <div
-                          className={`mb-1 max-w-full overflow-hidden rounded-[6px] px-2 py-1 text-[12.5px] leading-[1.35] ${
-                            mine
-                              ? 'bg-white/20 text-white/85'
-                              : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
-                          }`}
-                        >
-                          <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                            {m.quote.name}：{m.quote.content}
-                          </p>
-                        </div>
-                      )}
                       <span>{cleanBubbleText(m.content)}</span>
                     </div>
                   </div>
@@ -3208,8 +3422,17 @@ export function QqGroupChatPage({
                     <div key={i} className="mb-3 flex gap-2">
                       <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
                       <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
-                          {speaker ? memberNameOf(speaker) : '…'}
+                        <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+                          <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
+                          {speaker && roleLabelOfId(speaker.id) && (
+                            <span
+                              className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                                roleLabelOfId(speaker.id) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                              }`}
+                            >
+                              {roleLabelOfId(speaker.id)}
+                            </span>
+                          )}
                         </span>
                         <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
                           {prettifyRichText(t)}
@@ -3222,8 +3445,17 @@ export function QqGroupChatPage({
                     <div className="mb-3 flex gap-2">
                       <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
                       <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
-                          {speaker ? memberNameOf(speaker) : '…'}
+                        <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
+                          <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
+                          {speaker && roleLabelOfId(speaker.id) && (
+                            <span
+                              className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                                roleLabelOfId(speaker.id) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
+                              }`}
+                            >
+                              {roleLabelOfId(speaker.id)}
+                            </span>
+                          )}
                         </span>
                         <div className="w-fit rounded-[18px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">
                           <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">

@@ -6021,3 +6021,42 @@ Stage Summary:
 - 权限：groupRoleOf（owner>admin>member）+canManageTarget（管理员仅管普通成员、群主不可被管理）+禁言物理执行（回合循环过滤）+机主被禁言输入阻断；转让后旧群主变普通成员（实测生效）
 - 新 testid：wx-groupinfo-toggle-admin|mute|unmute|transfer|transfer-confirm|mute-status|mute-<ms>|mute-forever、wx-group-me-muted、qq-groupinfo-同名系列、qq-msgs-plus-menu、qq-plus-create-group|create-channel|add-friend|scan|send-file|pay；存量 testid 全部兼容
 - 已知边界：AI 群主/管理员不会主动执行管理操作（管理动作仅由用户 UI 触发，符合「用户可以扮演群主或管理员」）；「XX退出了群聊」目前唯一触发路径为删除联系人级联（群成员无自主退群流程）；禁言倒计时为惰性过期（无需写回）；转发/收藏/红包等既有功能零改动
+
+---
+Task ID: reqe-ui-polish
+Agent: Z.ai Code (main)
+Task: 需求 E——聊天界面名字旁显示群主/管理员徽标 + 群聊显示我的名字 + 群设置页新增「群管理」区块（管理员添加/取消管理员/禁言/转让群主）+ 群设置置顶/免打扰上移 + 单聊设置查找聊天记录/聊天背景移到免打扰下方 + 单聊/群聊设置添加备注（联系人备注 + 群备注）+ 系统显示（时间/撤回/群提示）改为截图同款半透明胶囊 + 引用改为截图同款气泡上方独立胶囊 + 建群默认群名=我的名字+成员名字
+
+Work Log:
+- 数据层 src/lib/contacts.ts：ContactRecord/ContactPayload 增 remark；displayNameOf 改为「备注 > 昵称 > 真名」，withDisplayNames 备注非空也替换展示名（realName 照旧兜底）→ 全 App（微信/QQ/信息/群聊成员名/引用名）显示备注，AI 人设不受影响
+- 数据层 src/lib/ios/contacts-store.ts：createContact/updateContact 支持 remark（normalizeText 60）
+- 数据层 src/lib/ios/groups.ts：ChatGroup 增 remark；normalizeGroup 兼容旧数据（缺省 ''）；updateGroup patch 支持 remark（不落群事件——备注仅机主可见）；新增 groupDisplayName(g)（备注优先）
+- 共享设置页 src/components/apps/chat-settings.tsx：
+  - ChatSettingsPage（微信/QQ）新顺序：信息卡 → 备注 → 置顶聊天/消息免打扰 → 查找聊天记录 → 聊天背景 → 回复条数/翻译/分句发送/时间感知/表情包/世界书；新增备注行+弹窗（remark/onSaveRemark props，testid {wx|qq}-settings-remark/{wx|qq}-remark-input/save/value）
+  - SmsChatSettingsPage（信息）同款备注行+弹窗（sms-settings-remark 等）
+- 微信单聊 src/components/apps/wechat.tsx：时间分隔/撤回改半透明胶囊（rounded-[9px] bg-white/70 dark:bg-white/[0.12]，撤回文案改「你/对方撤回了一条消息」）；引用块移出气泡 → 气泡上方独立胶囊（保留 wx-quote-block testid，格式「名字：内容」无「引用」前缀）；ChatPage 增 onSaveRemark，根部 updateContact+reloadContacts，peer 由 contacts 现取（保存后展示名即时刷新）；消息列表群会话标题 g.remark 优先
+- QQ 单聊 src/components/apps/qq.tsx：同上全套（qq-recall-row/qq-quote-block/qq-settings-remark；根部经 refreshContacts）；消息列表与联系人群列表群备注名、群搜索支持备注
+- 微信群聊 src/components/apps/wx-group.tsx：
+  - renderMsgRow：发言者名字行改为「名字+群主/管理员徽标」（橙/绿，与信息页同色），机主自己的消息也显示名字+徽标（原 !mine 才显示名字）；流式气泡名字行同款徽标
+  - 引用块移出气泡（wx-grp-quote-block，气泡上方独立胶囊）；时间/事件 noticeText/撤回行全部胶囊化，撤回文案「"名字" 撤回了一条消息」（对照截图）
+  - 信息页：置顶聊天/消息免打扰上移至成员栏下方首屏卡；群资料卡「群聊名称」下新增「备注」行（CenterDialog kind=remark，onUpdate({remark})）；新增「群管理」区块（仅群主/管理员可见）：管理员添加/取消管理员（仅群主）+ 禁言 + 转让群主（仅群主），四个 InfoRow 打开全屏成员选择页（mgmtOpen: admin-add/admin-remove/mute/transfer），操作复用 toggleAdmin/applyMute/liftMute/setTransferConfirm（数据层自动落系统消息）；成员聊天顶栏/建群页照常
+  - 聊天顶栏标题 groupDisplayName(group)（备注优先）
+  - 建群默认群名 = [我的名字, ...成员名字].join('、')（>4 人截断为「A、B、C等N人群聊」）
+- QQ 群聊 src/components/apps/qq-group.tsx：wx-group 全量镜像（徽标用 QQ 蓝管理员色；qq-groupinfo-pin/mute-switch/remark/mgmt-* 系列 testid；置顶/免打扰上移；群管理区块+选择页；备注 CenterDialog；建群默认名；顶栏 groupDisplayName）
+- 信息端 src/components/apps/chat.tsx：引用块移出气泡（sms-quote-block 同款胶囊）；ChatPeer 增 remark；聊天设置备注保存 → updateContact + loadContacts + 会话 peer 就地刷新
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、console 零错误、dev.log 无异常
+- E2E（agent-browser 390×844 + 既有 mock :4100 + /tmp/seed.js 种子 林川/红红(备注后:红红姐)/明仔）：
+  ①QQ 建群：选红红+明仔 → 默认群名「林川、红红、明仔」✓；微信建群（红红已备注红红姐）→「林川、红红姐、明仔」✓（成员展示名参与组合）
+  ②建群后聊天页：「群聊创建」+ 时间胶囊（rounded-[9px] bg-white/70）✓；我的消息行「林川+群主徽标」✓；AI 回复行名字无徽标（普通成员）✓
+  ③引用：长按 AI 消息→引用→发送 → 引用块渲染于气泡上方独立胶囊（qq-grp-quote-block/wx-quote-block，文本「红红：内容」）✓ 微信/QQ 单聊+群聊全部验证
+  ④撤回：群聊撤回 →「"明仔" 撤回了一条消息」胶囊 ✓；单聊撤回 →「你/对方撤回了一条消息」胶囊 ✓；撤回被引用原消息 → 引用块自动改「红红姐：原消息已删除」✓
+  ⑤群管理（QQ）：管理员添加→明仔 → toast+「明仔成为管理员」胶囊+聊天页明仔名字旁蓝色管理员徽标 ✓；禁言明仔10分钟 →「明仔被禁言10 分钟」+禁言期间发消息明仔不回复（红红回「我看到有人被禁言了」=AI 事件感知仍通）✓；转让群主给红红 →「群主转让给 红红」+我的消息不再带群主徽标+红红带群主徽标 ✓
+  ⑥群备注：群信息备注「快乐老家」→ 聊天顶栏「快乐老家 3人」+ 消息列表「快乐老家」✓
+  ⑦单聊备注：QQ 红红备注「红红姐」→ 聊天顶栏/消息列表/微信消息列表（wx-chat-item-红红姐）/微信建群默认名 全部生效 ✓
+  ⑧单聊设置顺序（QQ+微信）：信息卡→备注→置顶→免打扰→查找聊天记录→聊天背景→回复条数→… ✓；群设置顺序：成员栏→置顶→免打扰→群聊名称→备注→群公告→聊天背景→群管理→… ✓
+  ⑨持久化：备注/禁言/管理员/转让全部落 IndexedDB（kv 直读验证 quote.id/recalled/role 状态正确）
+- Stage Summary:
+  - 改动文件：src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/lib/ios/groups.ts、src/components/apps/chat-settings.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx、chat.tsx
+  - 视觉基线（对照用户截图）：时间/撤回/群事件 = 居中半透明圆角胶囊（rounded-[9px] bg-white/70 px-3.5 py-1.5 灰字，暗色 bg-white/[0.12]）；引用 = 气泡上方独立半透明胶囊「名字：内容」（无「引用」前缀），跟随发送侧对齐
+  - 新 testid：wx/qq-settings-remark、wx/qq-remark-input|save|value、sms-settings-remark、sms-remark-input|save|value、wx/qq-groupinfo-pin、wx/qq-groupinfo-mute-switch、wx/qq-groupinfo-remark、wx/qq-groupinfo-mgmt-{admin-add|admin-remove|mute|transfer}、wx/qq-groupinfo-mgmt-{add|remove|mute|unmute|transfer}-<contactId>
+  - 存量兼容：旧群数据 remark 缺省 ''；旧联系人无 remark 字段（可选链兼容）；既有 testid（wx/qq-groupmsg-*、*quote-block、*recall-row）全部保留；禁言/管理员/转让/引用联动/红包转账等既有功能零回归（E2E 复验通过）

@@ -429,8 +429,10 @@ function IOSConfirmDialog({
 interface ChatPeer {
   title: string;
   avatarSrc: string | null;
-  /** 对方名字（聊天设置页信息卡用；信息 App 内为昵称） */
+  /** 对方名字（聊天设置页信息卡用；信息 App 内为昵称/备注） */
   name?: string;
+  /** 备注名（仅机主自己可见；聊天设置页备注行用） */
+  remark?: string;
 }
 
 /** 当前聊天会话：'assistant' | 'c:<contactId>' */
@@ -447,6 +449,7 @@ function ChatView({
   peer,
   systemPrompt,
   onBack,
+  onSaveRemark,
 }: {
   /** 会话存储键：'assistant' | 'c:<contactId>'（key 变化 = 组件重挂载，互不串扰） */
   storageKey: string;
@@ -457,6 +460,8 @@ function ChatView({
   /** 联系人聊天的 AI 人设（system 消息，随请求发送） */
   systemPrompt: string | null;
   onBack: () => void;
+  /** 保存备注（仅联系人会话传入；空串 = 清除；宿主负责持久化并刷新展示名） */
+  onSaveRemark?: (v: string) => void;
 }) {
   const [input, setInput] = useState('');
   // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
@@ -1009,6 +1014,17 @@ function ChatView({
                 )}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
                 <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                  {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊） */}
+                  {m.quote && (
+                    <div
+                      data-testid="sms-quote-block"
+                      className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-black/[0.06] px-3 py-1.5 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
+                    >
+                      <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                        {m.quote.name}：{m.quote.content}
+                      </p>
+                    </div>
+                  )}
                   <div
                       {...bubblePress}
                       className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 text-[15px] leading-[1.45] ${
@@ -1030,19 +1046,6 @@ function ChatView({
                           className="absolute -right-[6px] bottom-0 h-[18px] w-[14px] bg-[#007AFF]"
                           style={{ clipPath: TAIL_CLIP_RIGHT }}
                         />
-                      )}
-                      {/* 引用块（菜单「引用」发送的消息）：名字 + 内容小字嵌在气泡顶部 */}
-                      {m.quote && (
-                        <div
-                          data-testid="sms-quote-block"
-                          className={`mb-1 max-w-full overflow-hidden rounded-[8px] px-2 py-1 text-[12px] leading-[1.35] ${
-                            mine ? 'bg-white/20 text-white/85' : 'bg-black/[0.06] text-black/55 dark:bg-white/10 dark:text-white/60'
-                          }`}
-                        >
-                          <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                            {m.quote.name}：{m.quote.content}
-                          </p>
-                        </div>
                       )}
                       <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
                     </div>
@@ -1223,6 +1226,10 @@ function ChatView({
           peerName={peer.name ?? peer.title}
           peerAvatar={peer.avatarSrc}
           phone={peer.title}
+          remark={peer.remark ?? ''}
+          onSaveRemark={(v) => {
+            if (wbContactId) onSaveRemark?.(v);
+          }}
           translateSummary={
             transCfg.on
               ? `${translateLangLabel(transCfg.left)} ⇄ ${translateLangLabel(transCfg.right)}`
@@ -1996,7 +2003,7 @@ export default function ChatApp() {
     const owner = c.ownerId ? contacts.find((o) => o.id === c.ownerId) : undefined;
     setChatSession({
       key: `c:${c.id}`,
-      peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name },
+      peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name, remark: c.remark ?? '' },
       systemPrompt: buildPersonaPrompt(c, owner?.name ?? null, buildNpcPromptExtra(c, contacts)),
     });
     setView('chat');
@@ -2153,6 +2160,28 @@ export default function ChatApp() {
           peer={chatSession.peer}
           systemPrompt={chatSession.systemPrompt}
           onBack={() => setView('main')}
+          onSaveRemark={(v) => {
+            if (!chatSession || chatSession.key === 'assistant') return;
+            const cid = chatSession.key.slice(2);
+            void (async () => {
+              try {
+                await updateContact(cid, { remark: v || null });
+                const raw = await listContacts();
+                const c = raw.find((x) => x.id === cid);
+                await loadContacts();
+                if (c) {
+                  const shown = withDisplayNames([c])[0];
+                  setChatSession((prev) =>
+                    prev && prev.key === `c:${cid}`
+                      ? { ...prev, peer: { ...prev.peer, name: displayNameOf(shown) || shown.name, remark: shown.remark ?? '' } }
+                      : prev,
+                  );
+                }
+              } catch {
+                // 持久化失败静默（备注为增强能力）
+              }
+            })();
+          }}
         />
       </IOSScreen>
     );

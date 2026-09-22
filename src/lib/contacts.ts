@@ -51,6 +51,8 @@ export interface ContactRecord {
   /** 真实姓名（withDisplayNames 展示副本专用：昵称替换 name 时把原 name 存到这里；
    *  人设注入用——角色要知道自己的大名/真名，别人用真名叫 TA 时不能不承认） */
   realName?: string | null;
+  /** 备注名（仅机主自己可见的显示名；设置后聊天界面/消息列表优先显示备注，AI 人设不变） */
+  remark?: string | null;
   createdAt: string;
 }
 
@@ -85,6 +87,7 @@ export interface ContactPayload {
   friendWx?: boolean;
   friendQq?: boolean;
   friendSms?: boolean;
+  remark?: string | null;
 }
 
 function randInt(min: number, max: number): number {
@@ -92,17 +95,19 @@ function randInt(min: number, max: number): number {
 }
 
 /**
- * 昵称展示名：昵称非空用昵称，否则退回真实名字。
- * QQ/微信等社交 App 的联系人显示统一走这里（昵称不是真实名字）。
+ * 展示名：备注 > 昵称 > 真实名字。
+ * QQ/微信等社交 App 的联系人显示统一走这里（备注/昵称不是真实名字）。
  */
-export function displayNameOf(c: Pick<ContactRecord, 'name' | 'nickname'>): string {
+export function displayNameOf(c: Pick<ContactRecord, 'name' | 'nickname'> & { remark?: string | null }): string {
+  const rk = c.remark?.trim();
+  if (rk) return rk;
   const nick = c.nickname?.trim();
   return nick ? nick : c.name;
 }
 
-/** 把一组联系人的 name 替换成昵称展示名（仅供 QQ/微信/信息等 App 内部显示用，真实名字不变） */
+/** 把一组联系人的 name 替换成展示名（备注/昵称优先，仅供 QQ/微信/信息等 App 内部显示用，真实名字不变） */
 export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
-  return list.map((c) => (c.nickname?.trim() ? { ...c, name: displayNameOf(c), realName: c.realName ?? c.name } : c));
+  return list.map((c) => (c.remark?.trim() || c.nickname?.trim() ? { ...c, name: displayNameOf(c), realName: c.realName ?? c.name } : c));
 }
 
 /** 拥有独立好友状态的社交 App（QQ / 微信 / 信息：一个 App 添加好友不影响其他 App） */

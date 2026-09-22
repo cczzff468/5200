@@ -85,6 +85,7 @@ import {
   GROUP_MEMBER_CAP,
   GROUP_MUTE_PRESETS,
   getGroup,
+  groupDisplayName,
   groupMuteLeftText,
   groupPreview,
   groupRoleOf,
@@ -554,7 +555,11 @@ export function WxGroupCreatePage({
       .map((id) => contacts.find((c) => c.id === id))
       .filter((c): c is ContactRecord => !!c)
       .map(memberNameOf);
-    return names.length === 0 ? '' : `${names.slice(0, 3).join('、')}的群聊`;
+    if (names.length === 0) return '';
+    // 默认群名 = 我的名字 + 成员名字（真实微信同款「谁和谁的群聊」语义；人多时截断）
+    const meRec = contacts.find((c) => c.kind === 'user');
+    const all = meRec ? [memberNameOf(meRec), ...names] : names;
+    return all.length <= 4 ? all.join('、') : `${all.slice(0, 3).join('、')}等${all.length}人群聊`;
   }, [selected, contacts]);
   const effName = (nameDirty ? name : suggested).trim();
 
@@ -590,7 +595,7 @@ export function WxGroupCreatePage({
               setNameDirty(true);
               setName(e.target.value);
             }}
-            placeholder="群聊名称（留空按成员名生成）"
+            placeholder="群聊名称（默认为我的名字+成员名字）"
             className="h-10 rounded-[10px] bg-black/5 text-[14px] dark:bg-white/10"
             data-testid="wx-group-name-input"
           />
@@ -726,7 +731,7 @@ export function WxGroupInfoPage({
   group: ChatGroup;
   contacts: ContactRecord[];
   onBack: () => void;
-  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
+  onUpdate: (patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>) => void;
   onDissolve: () => void;
   onToast: (m: string) => void;
 }) {
@@ -739,10 +744,12 @@ export function WxGroupInfoPage({
     },
     [emitToast, onToastExternal]
   );
-  const [dialog, setDialog] = useState<{ kind: 'name' } | null>(null);
+  const [dialog, setDialog] = useState<{ kind: 'name' | 'remark' } | null>(null);
   const [announceOpen, setAnnounceOpen] = useState(false);
   const [noticeDraft, setNoticeDraft] = useState('');
   const [memberSheet, setMemberSheet] = useState<ContactRecord | null>(null);
+  // 群管理页（置顶的集中管理入口）：管理员添加 / 取消管理员 / 禁言 / 转让群主
+  const [mgmtOpen, setMgmtOpen] = useState<null | 'admin-add' | 'admin-remove' | 'mute' | 'transfer'>(null);
   // 禁言时长选择单（群主/管理员对目标成员发起）；转让群主确认弹窗
   const [muteSheet, setMuteSheet] = useState<ContactRecord | null>(null);
   const [transferConfirm, setTransferConfirm] = useState<ContactRecord | null>(null);
@@ -1010,9 +1017,31 @@ export function WxGroupInfoPage({
         </div>
       </div>
 
+      {/* 置顶 / 免打扰（上移至成员栏下方首屏；按群独立） */}
+      <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
+        <SwitchRow
+          label="置顶聊天"
+          checked={flags[groupRowId(gid)]?.pinned === true}
+          onChange={(v) => wxChatFlags.update(groupRowId(gid), { pinned: v })}
+          testId="wx-groupinfo-pin"
+        />
+        <SwitchRow
+          label="消息免打扰"
+          checked={flags[groupRowId(gid)]?.muted === true}
+          onChange={(v) => wxChatFlags.update(groupRowId(gid), { muted: v })}
+          testId="wx-groupinfo-mute-switch"
+        />
+      </div>
+
       {/* 群资料 */}
       <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
         <InfoRow label="群聊名称" value={group.name} onClick={() => setDialog({ kind: 'name' })} testId="wx-groupinfo-name" />
+        <InfoRow
+          label="备注"
+          value={group.remark?.trim() || '未设置'}
+          onClick={() => setDialog({ kind: 'remark' })}
+          testId="wx-groupinfo-remark"
+        />
         <button
           type="button"
           className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/5"
@@ -1051,6 +1080,49 @@ export function WxGroupInfoPage({
           </span>
         </button>
       </div>
+
+      {/* 群管理（仅群主/管理员可见；管理员只能禁言，任命/转让仅群主；六.权限规则门控） */}
+      {canManage && (
+        <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
+          <p className="px-4 pb-1 pt-3 text-[12px] text-black/40 dark:text-white/40">群管理</p>
+          {amOwner && (
+            <InfoRow
+              label="管理员添加"
+              value={group.adminIds.length > 0 ? `现有 ${group.adminIds.length} 名` : '未设置'}
+              onClick={() => setMgmtOpen('admin-add')}
+              testId="wx-groupinfo-mgmt-admin-add"
+            />
+          )}
+          {amOwner && (
+            <InfoRow
+              label="取消管理员"
+              value={group.adminIds.length > 0 ? `现有 ${group.adminIds.length} 名` : '无'}
+              onClick={() => {
+                if (group.adminIds.length === 0) {
+                  onToast('当前没有管理员');
+                  return;
+                }
+                setMgmtOpen('admin-remove');
+              }}
+              testId="wx-groupinfo-mgmt-admin-remove"
+            />
+          )}
+          <InfoRow
+            label="禁言"
+            value="选成员禁言/解禁"
+            onClick={() => setMgmtOpen('mute')}
+            testId="wx-groupinfo-mgmt-mute"
+          />
+          {amOwner && (
+            <InfoRow
+              label="转让群主"
+              value="选一位成员接任"
+              onClick={() => setMgmtOpen('transfer')}
+              testId="wx-groupinfo-mgmt-transfer"
+            />
+          )}
+        </div>
+      )}
 
       {/* 记忆互通（按群开关） */}
       <div className="mt-2 divide-y divide-black/5 bg-white dark:divide-white/10 dark:bg-[#1A1A1A]">
@@ -1095,16 +1167,6 @@ export function WxGroupInfoPage({
             setTimeAware(sessionKeyOf(gid), v);
             setTimeAwareOn(v);
           }}
-        />
-        <SwitchRow
-          label="置顶聊天"
-          checked={flags[groupRowId(gid)]?.pinned === true}
-          onChange={(v) => wxChatFlags.update(groupRowId(gid), { pinned: v })}
-        />
-        <SwitchRow
-          label="消息免打扰"
-          checked={flags[groupRowId(gid)]?.muted === true}
-          onChange={(v) => wxChatFlags.update(groupRowId(gid), { muted: v })}
         />
       </div>
 
@@ -1274,6 +1336,101 @@ export function WxGroupInfoPage({
         </div>
       )}
 
+      {/* 群管理选择页（集中管理入口）：管理员添加 / 取消管理员 / 禁言 / 转让群主；操作复用数据层同款函数（自动落系统消息） */}
+      {mgmtOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#EDEDED] dark:bg-[#111111]">
+          <GroupNavBar
+            title={mgmtOpen === 'admin-add' ? '管理员添加' : mgmtOpen === 'admin-remove' ? '取消管理员' : mgmtOpen === 'mute' ? '禁言成员' : '转让群主'}
+            onBack={() => setMgmtOpen(null)}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <p className="px-8 py-3 text-center text-[12px] leading-relaxed text-black/35 dark:text-white/35">
+              {mgmtOpen === 'admin-add' && '点击普通成员将其设为管理员（仅群主）'}
+              {mgmtOpen === 'admin-remove' && '点击管理员取消其管理员身份（仅群主）'}
+              {mgmtOpen === 'mute' && '点击成员进行禁言（可选时长）；已禁言成员可直接解除'}
+              {mgmtOpen === 'transfer' && '点击成员把群主转让给 TA，转让后你将成为普通成员'}
+            </p>
+            <div className="bg-white dark:bg-[#1A1A1A]">
+              {(mgmtOpen === 'admin-add'
+                ? members.filter((m) => groupRoleOf(group, m.id) === 'member')
+                : mgmtOpen === 'admin-remove'
+                  ? members.filter((m) => groupRoleOf(group, m.id) === 'admin')
+                  : mgmtOpen === 'mute'
+                    ? members.filter((m) => canManageTarget(m))
+                    : members.filter((m) => m.id !== group.ownerId)
+              ).map((m) => {
+                const mutedLeft = groupMuteLeftText(group, m.id);
+                return (
+                  <div key={m.id} className="flex w-full items-center gap-3 px-4 py-2.5">
+                    <WxAvatar src={m.avatar} alt={m.name} size={40} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[15px]">{memberNameOf(m)}</p>
+                      {mgmtOpen === 'mute' && mutedLeft && (
+                        <p className="mt-0.5 text-[12px] text-[#FA5150]">禁言中：{mutedLeft}</p>
+                      )}
+                    </div>
+                    {mgmtOpen === 'admin-add' && (
+                      <button
+                        type="button"
+                        data-testid={`wx-groupinfo-mgmt-add-${m.id}`}
+                        onClick={() => toggleAdmin(m, true)}
+                        className="shrink-0 rounded-[8px] bg-[#07C160]/10 px-3 py-1.5 text-[13px] text-[#0C8B4D] active:opacity-70"
+                      >
+                        设为管理员
+                      </button>
+                    )}
+                    {mgmtOpen === 'admin-remove' && (
+                      <button
+                        type="button"
+                        data-testid={`wx-groupinfo-mgmt-remove-${m.id}`}
+                        onClick={() => toggleAdmin(m, false)}
+                        className="shrink-0 rounded-[8px] bg-[#FA5150]/10 px-3 py-1.5 text-[13px] text-[#FA5150] active:opacity-70"
+                      >
+                        取消管理员
+                      </button>
+                    )}
+                    {mgmtOpen === 'mute' && (
+                      mutedLeft ? (
+                        <button
+                          type="button"
+                          data-testid={`wx-groupinfo-mgmt-unmute-${m.id}`}
+                          onClick={() => liftMute(m)}
+                          className="shrink-0 rounded-[8px] bg-[#07C160]/10 px-3 py-1.5 text-[13px] text-[#0C8B4D] active:opacity-70"
+                        >
+                          解除禁言
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          data-testid={`wx-groupinfo-mgmt-mute-${m.id}`}
+                          onClick={() => setMuteSheet(m)}
+                          className="shrink-0 rounded-[8px] bg-[#FA9D3B]/10 px-3 py-1.5 text-[13px] text-[#D07818] active:opacity-70"
+                        >
+                          禁言
+                        </button>
+                      )
+                    )}
+                    {mgmtOpen === 'transfer' && (
+                      <button
+                        type="button"
+                        data-testid={`wx-groupinfo-mgmt-transfer-${m.id}`}
+                        onClick={() => {
+                          setMgmtOpen(null);
+                          setTransferConfirm(m);
+                        }}
+                        className="shrink-0 rounded-[8px] bg-[#FA9D3B]/10 px-3 py-1.5 text-[13px] text-[#D07818] active:opacity-70"
+                      >
+                        转让给 TA
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 移除成员（虚线 － 入口） */}
       {removeOpen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-[#EDEDED] dark:bg-[#111111]">
@@ -1426,6 +1583,18 @@ export function WxGroupInfoPage({
             const t = v.trim();
             if (t) onUpdate({ name: t });
             setDialog(null);
+          }}
+        />
+      )}
+      {dialog?.kind === 'remark' && (
+        <CenterDialog
+          title="群备注"
+          initial={group.remark ?? ''}
+          onCancel={() => setDialog(null)}
+          onSave={(v) => {
+            onUpdate({ remark: v.trim() });
+            setDialog(null);
+            onToast(v.trim() ? '备注已保存' : '备注已清除');
           }}
         />
       )}
@@ -3340,10 +3509,16 @@ export function WxGroupChatPage({
   const layerMsg = layer && 'msgId' in layer ? msgs.find((m) => m.id === layer.msgId) ?? null : null;
 
   /** 消息行外层（头像 + 发言者名；文字与富媒体共用同一套行几何；多选模式下行首插入勾选圈） */
+  /** 发言者身份徽标文案（群主/管理员；普通成员 null） */
+  const roleLabelOfId = (id: string): string | null => {
+    const role = groupRoleOf(group, id);
+    return role === 'member' ? null : role === 'owner' ? '群主' : '管理员';
+  };
   const renderMsgRow = (m: WxGroupMsg, media?: React.ReactNode) => {
     const mine = m.role === 'me';
     const sender = mine ? null : m.senderId === 'unknown' ? null : memberById.get(m.senderId) ?? null;
     const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
+    const roleLabel = roleLabelOfId(mine ? me.id : m.senderId);
     return (
       <div className={`mb-3 flex items-start gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
         {selectMode && isSelectable(m) && (
@@ -3359,7 +3534,30 @@ export function WxGroupChatPage({
         )}
         <WxAvatar src={senderAvatar} alt={mine ? me.name : m.senderName} size={38} />
         <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-          {!mine && <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">{m.senderName}</span>}
+          {/* 发言者名字（含机主自己）+ 群主/管理员徽标 */}
+          <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
+            <span className="truncate">{mine ? me.name : m.senderName}</span>
+            {roleLabel && (
+              <span
+                className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                  roleLabel === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#07C160]/15 text-[#0C8B4D]'
+                }`}
+              >
+                {roleLabel}
+              </span>
+            )}
+          </span>
+          {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
+          {m.quote && (
+            <div
+              data-testid="wx-grp-quote-block"
+              className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
+            >
+              <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                {m.quote.name}：{m.quote.content}
+              </p>
+            </div>
+          )}
           {media}
         </div>
       </div>
@@ -3404,7 +3602,7 @@ export function WxGroupChatPage({
             <ChevronLeft className="h-7 w-7" strokeWidth={2} />
           </button>
           <button type="button" onClick={onOpenInfo} data-testid="wx-groupchat-openinfo" className="flex min-w-0 flex-1 items-center justify-center gap-1.5 active:opacity-60">
-            <span className="max-w-[220px] truncate text-[17px] font-medium">{group.name}({members.length + 1})</span>
+            <span className="max-w-[220px] truncate text-[17px] font-medium">{groupDisplayName(group)}({members.length + 1})</span>
             {flags[groupRowId(gid)]?.muted === true && (
               <BellOff className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
             )}
@@ -3442,11 +3640,15 @@ export function WxGroupChatPage({
           if (m.kind === 'notice') {
             return (
               <div key={m.id} className="py-2 text-center">
-                {showTime && <div className="pb-1 text-[12px] text-black/35 dark:text-white/35">{fmtGroupTime(m.time)}</div>}
+                {showTime && (
+                  <div className="pb-1.5">
+                    <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                  </div>
+                )}
                 {m.notice ? (
                   <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[12px] text-black/45 dark:bg-white/10 dark:text-white/45">
+                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3469,11 +3671,15 @@ export function WxGroupChatPage({
               }
               {...bubblePress}
             >
-              {showTime && <div className="py-2 text-center text-[12px] text-black/35 dark:text-white/35">{fmtGroupTime(m.time)}</div>}
+              {showTime && (
+                <div className="py-2 text-center">
+                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtGroupTime(m.time)}</span>
+                </div>
+              )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block rounded-[4px] bg-black/5 px-2 py-0.5 text-[12px] text-black/45 dark:bg-white/10 dark:text-white/45">
-                    {mine ? '你' : m.senderName || '有人'}撤回了一条消息
+                  <span className="inline-block max-w-[280px] truncate rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[12.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                    {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
               ) : m.kind === 'image' && m.img ? (
@@ -3601,15 +3807,6 @@ export function WxGroupChatPage({
                         mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                       }`}
                     />
-                    {m.quote && (
-                      <div
-                        className={`mb-1 max-w-full overflow-hidden rounded-[4px] px-2 py-1 text-[12.5px] leading-[1.35] ${
-                          mine ? 'bg-black/[0.08] text-black/60' : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
-                        }`}
-                      >
-                        <p className="line-clamp-2 whitespace-pre-wrap break-all">引用 {m.quote.name}：{m.quote.content}</p>
-                      </div>
-                    )}
                     <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
                   </div>
                 )
@@ -3628,8 +3825,17 @@ export function WxGroupChatPage({
                     <div key={i} className="mb-3 flex items-start gap-2">
                       <WxAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={38} />
                       <div className="flex min-w-0 max-w-[calc(100%-92px)] flex-col items-start">
-                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
-                          {speaker ? memberNameOf(speaker) : '…'}
+                        <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
+                          <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
+                          {speaker && roleLabelOfId(speaker.id) && (
+                            <span
+                              className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                                roleLabelOfId(speaker.id) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#07C160]/15 text-[#0C8B4D]'
+                              }`}
+                            >
+                              {roleLabelOfId(speaker.id)}
+                            </span>
+                          )}
                         </span>
                         <div className="relative rounded-[5px] bg-white px-3 py-2 text-[16px] leading-[1.45] dark:bg-[#1E1E1E]">
                           <span aria-hidden="true" className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]" />
@@ -3646,8 +3852,17 @@ export function WxGroupChatPage({
                     <div className="mb-3 flex items-start gap-2">
                       <WxAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={38} />
                       <div className="flex min-w-0 max-w-[calc(100%-92px)] flex-col items-start">
-                        <span className="mb-0.5 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
-                          {speaker ? memberNameOf(speaker) : '…'}
+                        <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
+                          <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
+                          {speaker && roleLabelOfId(speaker.id) && (
+                            <span
+                              className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
+                                roleLabelOfId(speaker.id) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#07C160]/15 text-[#0C8B4D]'
+                              }`}
+                            >
+                              {roleLabelOfId(speaker.id)}
+                            </span>
+                          )}
                         </span>
                         <div className="relative rounded-[5px] bg-white px-3 py-2 dark:bg-[#1E1E1E]">
                           <span aria-hidden="true" className="absolute -left-[3px] top-[11px] h-[8px] w-[8px] rotate-45 bg-white dark:bg-[#1E1E1E]" />

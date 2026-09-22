@@ -1881,6 +1881,7 @@ function ChatPage({
   onBack,
   onOpenBond,
   onOpenFriendProfile,
+  onSaveRemark,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -1893,6 +1894,8 @@ function ChatPage({
   onOpenBond: () => void;
   /** 聊天设置页点信息卡片 → 进入好友资料页 */
   onOpenFriendProfile: () => void;
+  /** 保存备注（空串 = 清除；宿主持久化 + 刷新联系人展示名） */
+  onSaveRemark: (v: string) => void | Promise<void>;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
 }) {
@@ -3143,13 +3146,17 @@ function ChatPage({
               }`}
             >
               {showTime && (
-                <p className="my-2 text-center text-[11px] text-black/30 dark:text-white/30">{fmtChatTime(m.time)}</p>
+                <div className="my-2 text-center">
+                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">{fmtChatTime(m.time)}</span>
+                </div>
               )}
               {m.recalled ? (
-                /* 已撤回：居中灰字（你撤回一条消息 / 对方撤回一条消息） */
-                <p data-testid="qq-recall-row" className="mb-3 text-center text-[12px] text-black/35 dark:text-white/35">
-                  {m.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息'}
-                </p>
+                /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
+                <div data-testid="qq-recall-row" className="mb-3 text-center">
+                  <span className="inline-block rounded-[9px] bg-white/70 px-3.5 py-1.5 text-[11.5px] leading-none text-black/45 dark:bg-white/[0.12] dark:text-white/50">
+                    {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
+                  </span>
+                </div>
               ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
               ) : (
@@ -3248,6 +3255,17 @@ function ChatPage({
                   </div>
                 ) : (
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    {/* 引用块（截图样式：气泡上方独立的半透明圆角胶囊，不再嵌在气泡内） */}
+                    {m.quote && (
+                      <div
+                        data-testid="qq-quote-block"
+                        className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-white/70 px-3 py-1.5 text-[13.5px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.12] dark:text-white/60"
+                      >
+                        <p className="line-clamp-2 whitespace-pre-wrap break-all">
+                          {m.quote.name}：{m.quote.content}
+                        </p>
+                      </div>
+                    )}
                     <div
                       {...bubblePress}
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
@@ -3255,21 +3273,6 @@ function ChatPage({
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
-                      {/* 引用块（菜单「引用」发送的消息）：名字 + 内容小字嵌在气泡顶部 */}
-                      {m.quote && (
-                        <div
-                          data-testid="qq-quote-block"
-                          className={`mb-1 max-w-full overflow-hidden rounded-[6px] px-2 py-1 text-[12.5px] leading-[1.35] ${
-                            mine
-                              ? 'bg-white/20 text-white/85'
-                              : 'bg-black/[0.05] text-black/50 dark:bg-white/10 dark:text-white/60'
-                          }`}
-                        >
-                          <p className="line-clamp-2 whitespace-pre-wrap break-all">
-                            {m.quote.name}：{m.quote.content}
-                          </p>
-                        </div>
-                      )}
                       {m.content ? (
                         cleanBubbleText(m.content) || m.content
                       ) : (
@@ -3679,6 +3682,10 @@ function ChatPage({
           idLabel="QQ号"
           idValue={peer.qqId || '未设置'}
           metaLine={[peer.region, peer.occupation].filter((x): x is string => Boolean(x)).join(' · ')}
+          remark={peer.remark ?? ''}
+          onSaveRemark={(v) => {
+            void onSaveRemark(v);
+          }}
           pinned={flags.pinned === true}
           muted={flags.muted === true}
           bg={bg}
@@ -6022,7 +6029,7 @@ function MessagesPage({
     for (const g of chatGroups) {
       if (hiddenSet.has(qqGroupRowId(g.id))) continue;
       const p = groupPreview(g.id);
-      rows.push({ key: qqGroupRowId(g.id), name: g.name, contact: null, group: g, text: p.text, time: p.time });
+      rows.push({ key: qqGroupRowId(g.id), name: g.remark?.trim() || g.name, contact: null, group: g, text: p.text, time: p.time });
     }
     rows.sort((a, b) => {
       const pa = pinSet.has(a.key) ? 0 : 1;
@@ -6377,7 +6384,7 @@ function ContactsPage({
   const chatGroups = useMemo(() => listChatGroups('qq'), []);
   const filteredGroups = useMemo(() => {
     const kw2 = q.trim().toLowerCase();
-    return kw2 ? chatGroups.filter((g) => g.name.toLowerCase().includes(kw2)) : chatGroups;
+    return kw2 ? chatGroups.filter((g) => g.name.toLowerCase().includes(kw2) || (g.remark ?? '').toLowerCase().includes(kw2)) : chatGroups;
   }, [chatGroups, q]);
 
   const friends = useMemo(() => contacts.filter((c) => isFriendIn(c, 'qq') && c.kind !== 'user'), [contacts]);
@@ -6579,7 +6586,7 @@ function ContactsPage({
                   >
                     <QqGroupAvatar group={g} contacts={contacts} size={42} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15px]">{g.name}</span>
+                      <span className="block truncate text-[15px]">{g.remark?.trim() || g.name}</span>
                       {p.text && <span className="block truncate text-[12px] text-black/35 dark:text-white/35">{p.text}</span>}
                     </span>
                     <span className="shrink-0 text-[11px] text-black/30 dark:text-white/30">{g.memberIds.length + 1}人</span>
@@ -10132,6 +10139,15 @@ function MainScreen({
           onBack={() => openTabs('消息')}
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
           onOpenFriendProfile={() => setRoute({ page: 'friend-profile', contactId: chatPeer.id })}
+          onSaveRemark={async (v) => {
+            try {
+              await updateContact(chatPeer.id, { remark: v || null });
+              await refreshContacts();
+              showToast(v ? '备注已保存' : '备注已清除');
+            } catch {
+              showToast('备注保存失败');
+            }
+          }}
           onToast={showToast}
         />
       ) : route.page === 'bond' && chatPeer ? (
