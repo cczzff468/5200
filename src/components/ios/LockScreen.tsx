@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Camera, CloudSun, Flashlight, FlashlightOff } from 'lucide-react';
-import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight, useBootDisplayLight } from '@/lib/ios/store';
+import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight, useBootDisplayLight, useWallpaperDecodedRepaint } from '@/lib/ios/store';
 import { WALLPAPER_PRESETS, BOOT_LOCK_WALL_STYLE } from '@/lib/ios/wallpaper-presets';
 import { formatLunarDate, formatSolarShort } from '@/lib/ios/lunar';
 import { formatIOSTime, formatWeekShort, ssrWallClock, useNow } from '@/lib/ios/clock';
@@ -72,6 +72,9 @@ export default function LockScreen({
     storeLoaded
       ? { ...storeLw, lightBottom: undefined as boolean | undefined }
       : bootLw;
+  // 锁屏壁纸层重光栅化：同主屏壁纸层（未解码白缝防护，详见 store.ts useWallpaperDecodedRepaint）
+  const lockWallRef = useRef<HTMLDivElement | null>(null);
+  useWallpaperDecodedRepaint(wallpaperStyle, lockWallRef);
 
   const [mode, setMode] = useState<'lock' | 'passcode' | 'resetNew' | 'resetConfirm'>('lock');
   const [errText, setErrText] = useState('');
@@ -247,8 +250,9 @@ export default function LockScreen({
       role="dialog"
       aria-label="锁屏"
     >
-      {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸；首帧 = CSS 变量直出真实壁纸） */}
-      <div className="absolute inset-0" style={wallpaperStyle} data-boot-lock-wall="" suppressHydrationWarning aria-hidden="true" />
+      {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸；首帧 = CSS 变量直出真实壁纸）。
+          -inset-px：四边各多出 1px，亚像素取整产生的边缘细缝被推到可视区外 */}
+      <div ref={lockWallRef} className="absolute -inset-px" style={wallpaperStyle} data-boot-lock-wall="" suppressHydrationWarning aria-hidden="true" />
 
       {/* initial={false}：首次挂载不播淡入——开机直接整帧呈现锁屏内容，
           否则时钟/小组件在壁纸上先透明再淡入，看起来像锁屏闪了一下 */}

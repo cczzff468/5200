@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
@@ -25,6 +25,20 @@ export const metadata: Metadata = {
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
+};
+
+/** 视口：viewport-fit=cover 让 PWA/内嵌浏览器场景下内容延伸到刘海与底部手势区之下 ——
+ *  否则系统栏区域会露出一道系统底色条，壁纸看起来「上/下被套了框」。
+ *  themeColor 同步壁纸底色，浏览器地址栏/状态栏不再出现异色条。 */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#dcdce1" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+  ],
 };
 
 export default async function RootLayout({

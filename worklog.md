@@ -6345,3 +6345,26 @@ Stage Summary:
 - 改动文件：src/components/apps/worldbook.tsx（shrink-0 三处+输入框 64px+空态诊断两分支+gotoCreateChar+两张 ActionSheet 空态）、src/lib/ios/store.ts（pendingContactCreate）、src/components/apps/contacts.tsx（消费 pendingContactCreate 直达新建表单）
 - 关键决策：①绑定角色「没有角色」的真凶是 flex 压缩 0 高而非数据问题——数据链路（listContacts/aiContacts 过滤/打开时重读）本来就是通的；②「去创建」入口全部改为预置 CHAR 新建表单的跨 App 跳转，把「建在 USER tab 导致名单空」这一用户侧误操作从流程上堵死；③空名单文案按「只有 user」/「完全没有」两分支给出可执行指引
 - 已知边界：若用户把角色建在另一台设备/浏览器（本地 IndexedDB 不互通），名单在该设备上确实为空，弹窗会如实提示并引导在该设备创建
+
+---
+Task ID: wallpaper-seam-fix
+Agent: Z.ai Code (main)
+Task: 桌面/壁纸边缘出现不自然的分割线/缝（像壁纸容器没铺满全屏、被套了一个框），修复并保证四边平滑无缝
+
+Work Log:
+- 【排查·排除图像内容】先排查壁纸源文件：三张预设壁纸（dark-stream/ink-marble/mist-mountain，实为 JPEG 768x1344）顶部/左缘条带经 sharp 裁剪查看均无异常内容；浏览器 canvas 逐像素采样解码结果顶部纯黑（灰度 4-8）、naturalWidth=768 无 EXIF 旋转 → 图像内容与解码无问题
+- 【排查·几何测量】Playwright 实测 390x844 移动端：wrapper/shell/壁纸层 rect 全部 [0,0,390,844]，docScrollW=390 无横向溢出，margin/padding/border 全 0 → 标准 <640px 视口的渲染像素级完美；DPR1/2/3 边缘逐列扫描（内部参考偏差法）+ 边界突变法均无亮线
+- 【排查·锁定真因】用户真机场景（手机/折叠屏/平板/横屏/桌面模式浏览器）视口宽度可 ≥640px，而 PhoneShell 的 iPhone 机身外框（32px 灰背板 + 12px #151517 机身边框 + 56px 圆角）只用 sm:(min-width:640) 断点判断 → 这类真机上壁纸被套进机身框：左/右边缘出现机身边框切割线+背板露边 = 用户描述的「分割线/被套框」；此外发现 layout.tsx 缺 viewport meta（PWA/内嵌浏览器系统栏区域露出系统底色条）+ pre-existing hydration 结构不匹配（SSR 默认渲染锁屏 vs 镜像 lockScreen:false → React 整树重建，诊断时 pageerror 抓到完整组件栈）
+- 【修复①触屏全屏覆盖】globals.css 新增 @media (min-width:640px) and (hover:none) and (pointer:coarse) 规则：真机触屏设备拆除机身框（padding/border/radius/box-shadow 归零、shell 强制 100svh×100%、包装底色 #000），并隐藏会悬在屏外引发横向滚动的电源键（新增 data-power-btn 标记）；桌面鼠标环境完全不受影响
+- 【修复②壁纸层 overscan】PhoneShell 主屏壁纸层 / LockScreen 锁屏壁纸层 / AppSwitcher 壁纸拷贝层三处 inset-0 → -inset-px：cover 按 +2px 盒子重新计算，任何亚像素取整/缩放误差产生的背景色细缝被推到可视区外
+- 【修复③解码后重光栅化】store.ts 新增 useWallpaperDecodedRepaint(style,ref)：img.decode() 完成后对壁纸层做零视觉差异绘制失效（0px 透明 outline 加后移除）强制合成器用已解码像素重画 —— 防「首帧光栅化早于大图解码、未解码图块以白占位画进合成层且静态页面无重绘 → 边缘亮缝整个会话留存」；PhoneShell 与 LockScreen 各接一份
+- 【修复④viewport meta】layout.tsx 补 Viewport 导出：viewport-fit=cover（PWA/内嵌浏览器内容延伸到刘海与手势区之下）+ themeColor 双色板；同步 keywords 恢复被误删的 Next.js 项时的顺带确认
+- 【修复⑤水合结构对齐】boot-script.ts 尾部脚本：镜像 lockScreen===false 时在 React 水合前摘除被 data-lock-off CSS 隐藏的 SSR 锁屏节点（内联脚本随 HTML 解析执行，早于异步 module 脚本，时序安全）→ DOM 与客户端首渲染结构一致，hydration mismatch 根除；真机 cookie 与镜像一致时本就无锁屏结构，no-op
+- 【E2E 实测】自建 .e2e/wall-verify.ts 矩阵（Playwright DPR3）：T1 移动端 390x844 触屏 shell=[0,0,390,844]、wall=[-1,-1,392,846]、border=0、无横滚 ✓；T2 折叠屏展开 717x916 触屏（修复前必被套框）shell=[0,0,717,916] 全屏无框 ✓（截图目检壁纸四边铺满）；T3 桌面 1280x900 鼠标环境机身框完整保留（padding 32/border 12/radius 56/电源键可见）✓；四边边界突变检测三视口全 PASS（左 0.29-0.37 / 右 0.50-1.39 / 上 0.31-0.65 / 下 1.02-1.07，阈值 12）；viewport meta=width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover 三视口均注入 ✓
+- 【回归实测】.e2e/wall-regress.ts：解锁→打开微信成功、pageerror/console error 均为 0（修复前每次加载必有 hydration error，修复后彻底消失，顺带消掉右上角「1 Issue」徽标）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无新报错；测试均用一次性浏览器 profile（IndexedDB/localStorage 种子不残留真实环境）
+
+Stage Summary:
+- 改动文件：src/app/globals.css（触屏全屏覆盖规则+隐藏电源键）、src/components/ios/PhoneShell.tsx（壁纸层 -inset-px+wallRef+重光栅化接线+data-power-btn）、src/components/ios/LockScreen.tsx（同款 overscan+重光栅化）、src/components/ios/AppSwitcher.tsx（壁纸拷贝 overscan）、src/lib/ios/store.ts（useWallpaperDecodedRepaint）、src/lib/ios/boot-script.ts（尾部脚本摘除隐藏锁屏节点）、src/app/layout.tsx（Viewport 导出）
+- 关键决策：①机身框保留给桌面鼠标环境（hover:none+pointer:coarse 判真机，不误伤触屏笔记本——它们有 hover:fine）；②三条防线互补：触屏拆框（主因）、overscan 消亚像素缝、解码重光栅化防坏首帧卡死；③hydration 对齐放在尾部内联脚本而非 React 侧 —— 不动锁屏首帧直出架构
+- 遗留说明：预览面板 iframe 仍无法写 cookie（第三方限制），但镜像+水合对齐后首帧与水合后完全一致，不再有任何结构重建

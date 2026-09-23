@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
-import { selectResolvedTheme, seedDisplay, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
+import {
+  selectResolvedTheme,
+  seedDisplay,
+  useSettings,
+  useSystemDark,
+  useUI,
+  useWallpaperStyle,
+  useWallpaperDecodedRepaint,
+} from '@/lib/ios/store';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { BOOT_WALL_STYLE } from '@/lib/ios/wallpaper-presets';
 import { bootSnapshotFromWindow, type DisplaySnapshot } from '@/lib/ios/display-cookie';
@@ -75,6 +83,10 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
   const barLight = useLightForeground('bottom', boot?.lockWallpaper);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  // 壁纸层引用：解码完成后强制重光栅化，防「未解码图块以白占位画进合成层、
+  // 静态页面无重绘 → 壁纸边缘白缝/亮线整个会话留存」（详见 store.ts 注释）
+  const wallRef = useRef<HTMLDivElement | null>(null);
+  useWallpaperDecodedRepaint(wallpaperStyle, wallRef);
   /** 底部边缘上滑手势进行中状态（fired 防止同一次滑动重复触发） */
   const edgeGesture = useRef<{ x: number; y: number; fired: boolean } | null>(null);
 
@@ -206,9 +218,12 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
       >
         {/* 壁纸层（首帧 = CSS 变量，pre-paint 脚本写入真实壁纸；load() 后换 store 具体值）。
             boot+锁定时主屏壁纸层被锁屏完全盖住 —— 置 hidden 防止它比锁屏层早绘制 1 帧造成透出闪现；
-            unlock 后 / 关锁屏时必须可见（主屏背景） */}
+            unlock 后 / 关锁屏时必须可见（主屏背景）。
+            -inset-px：四边各多出 1px（cover 按 392×846+ 的盒子重新计算），
+            任何亚像素取整/缩放误差产生的背景色细缝都被推到可视区外 —— 边缘零缝隙 */}
         <div
-          className="absolute inset-0"
+          ref={wallRef}
+          className="absolute -inset-px"
           style={boot && locked ? { ...BOOT_WALL_STYLE, visibility: 'hidden' } : wallpaperStyle}
           data-boot-wall=""
           suppressHydrationWarning
@@ -283,11 +298,12 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
         {/* 朋友圈/QQ动态全局调度：AI 好友的点赞/评论/回复延迟队列结算 + 三种触发自动发动态（App 不打开也生效） */}
         <MomentsScheduler />
 
-        {/* 电源键（桌面端机身右侧：熄屏 ↔ 亮屏锁定） */}
+        {/* 电源键（桌面端机身右侧：熄屏 ↔ 亮屏锁定；真机触屏模式下由全局 CSS 隐藏） */}
         <button
           type="button"
           aria-label="电源键：熄屏或唤醒"
           title="电源键"
+          data-power-btn=""
           onClick={pressPower}
           className="absolute -right-[17px] top-[196px] z-[10] hidden h-[64px] w-[6px] rounded-r-[3px] bg-[#3a3a3d] transition-colors hover:bg-[#5a5a5e] active:bg-[#6a6a6e] sm:block"
         />

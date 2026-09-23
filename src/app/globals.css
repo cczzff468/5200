@@ -214,3 +214,26 @@ html[data-boot-lock-dark] [data-homebar-fg] {
 @view-transition {
   navigation: auto;
 }
+
+/* 真机触屏设备永远全屏无机身框（修「壁纸边缘分割线/被套框」）：
+   桌面端 ≥640px 会套上 iPhone 机身外框（32px 背板 + 12px 机身边框 + 圆角），
+   但这个断点只看宽度 —— 折叠屏展开态 / 平板 / 横屏手机 / 桌面模式浏览器的视口同样 ≥640px，
+   真机上就会被套进框里：壁纸左右边缘出现机身边框切割线 + 背板灰边 = 用户看到的「缝」。
+   触屏且无悬停（真机特征）时全部拆除，壁纸严格铺满整屏；桌面鼠标环境不受影响。 */
+@media (min-width: 640px) and (hover: none) and (pointer: coarse) {
+  [data-ios-wrap] {
+    padding: 0 !important;
+    background: #000 !important;
+  }
+  [data-ios-shell] {
+    height: 100svh !important;
+    width: 100% !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  /* 机身边框拆除后电源键会悬在屏外（-right-17px）→ 触发横向滚动 / 挤出一条缝，一并隐藏 */
+  [data-power-btn] {
+    display: none !important;
+  }
+}

@@ -190,7 +190,7 @@ export default function AppSwitcher() {
         className="pointer-events-none absolute inset-0 overflow-hidden"
         style={{ zIndex: -1 }}
       >
-        <div className="absolute inset-0" style={wallpaperStyle} />
+        <div className="absolute -inset-px" style={wallpaperStyle} />
         <div
           className="absolute inset-0"
           style={{

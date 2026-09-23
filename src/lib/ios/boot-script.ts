@@ -116,11 +116,22 @@ export function buildTailBootScript(): string {
   return `(function(){
 try {
   var s=window.__IOS_DISPLAY__;
-  if(!s||!s.tz)return;
-  var f=new Intl.DateTimeFormat('en-US',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:s.tz});
-  var t=f.format(new Date());
-  var nodes=document.querySelectorAll('[data-ssr-clock]');
-  for(var i=0;i<nodes.length;i++)nodes[i].textContent=t;
+  /* 时区修正：iframe 无 cookie 时服务端只能按本机时区（UTC）渲染时钟，差 8 小时 */
+  if(s&&s.tz){
+    var f=new Intl.DateTimeFormat('en-US',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:s.tz});
+    var t=f.format(new Date());
+    var nodes=document.querySelectorAll('[data-ssr-clock]');
+    for(var i=0;i<nodes.length;i++)nodes[i].textContent=t;
+  }
+  /* 水合结构对齐：镜像里锁屏总开关为关时，SSR（无 cookie 按默认快照）渲染的锁屏节点
+     此刻已被 html[data-lock-off] CSS 隐藏 —— 但 React 水合是按 JSX 结构比对 DOM 的，
+     display:none 的多余节点照样造成结构级 hydration mismatch → 整树重建（性能损失 + 一帧闪烁）。
+     在 React 载入前（本内联脚本随 HTML 解析执行，早于异步 module 脚本）把该节点从 DOM 摘除，
+     DOM 与客户端首渲染完全一致 → 水合零不匹配。cookie 与镜像一致（真机浏览器）时本就是无锁屏结构，no-op。 */
+  if(s&&s.lockScreen===false){
+    var locks=document.querySelectorAll('[data-lock-screen]');
+    for(var j=0;j<locks.length;j++)locks[j].parentNode&&locks[j].parentNode.removeChild(locks[j]);
+  }
 } catch(e) {}
 })();`;
 }

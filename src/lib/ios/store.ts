@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
+import { useSyncExternalStore, useMemo, useState, useEffect, useRef, type CSSProperties, type RefObject } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
 import {
@@ -629,6 +629,58 @@ export function useWallpaperStyle(): CSSProperties {
     () => resolveWallpaperStyle(wallpaperPreset, customWallpaperUrl),
     [customWallpaperUrl, wallpaperPreset]
   );
+}
+
+/**
+ * 壁纸图片「解码完成后强制重光栅化」（修壁纸边缘白缝/亮线，纯渲染层修复，零功能影响）：
+ *
+ * 现象：真机/模拟器上壁纸某一边缘（左/右/上/下都可能）出现 1~数像素的白色或浅色亮线，
+ * 像壁纸容器没铺满、被套了框；页面静止期间永久留存。
+ *
+ * 根因：Chromium 首帧光栅化可能早于大图（JPEG/PNG）解码完成 —— 未解码的图块按
+ * 白色/空白占位画进合成层；壁纸层是纯静态背景，之后没有任何损伤（damage）事件
+ * 触发重绘 → 坏的首帧光栅整个会话都不再更新。图片越慢（弱网/大图/低性能设备）越容易命中。
+ *
+ * 修复：用 img.decode() 等待解码完成，然后对壁纸层做一次「零视觉差异的绘制失效」
+ * （加 0px 透明 outline 再移除 —— outline 属绘制属性，不参与布局、不可见，
+ * 但会让合成器重新光栅化该层）→ 用已解码像素重画，白缝消失。
+ */
+export function useWallpaperDecodedRepaint(style: CSSProperties, ref: RefObject<HTMLElement | null>): void {
+  const bgImage = typeof style.backgroundImage === 'string' ? style.backgroundImage : '';
+  const url = useMemo(() => {
+    const m = bgImage.match(/url\((['"]?)([^'")]+)\1\)/);
+    return m ? m[2] : null;
+  }, [bgImage]);
+  useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    const img = new Image();
+    img.src = url;
+    const nudge = () => {
+      if (!alive) return;
+      const el = ref.current;
+      if (!el) return;
+      // 零视觉差异的绘制失效：0px 透明 outline 不可见、不参与布局，但强制重光栅化
+      el.style.outline = '0px solid transparent';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (alive) el.style.outline = '';
+        });
+      });
+    };
+    const decoded: Promise<void> =
+      typeof img.decode === 'function'
+        ? img.decode()
+        : new Promise<void>((res) => {
+            img.onload = () => res();
+          });
+    decoded.then(nudge).catch(() => {
+      /* 解码失败静默：坏图本来就没有正确像素可重绘 */
+    });
+    return () => {
+      alive = false;
+    };
+  }, [ref, url]);
 }
 
 /**
