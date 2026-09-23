@@ -3554,7 +3554,7 @@ export function WxGroupChatPage({
           {m.quote && (m.kind === 'image' || m.kind === 'location' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'forward') && (
             <div
               data-testid="wx-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[10px] bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.13] dark:text-white/60"
+              className="mb-1 max-w-full overflow-hidden rounded-[8px] border border-black/20 bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/50 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-white/20 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3562,6 +3562,15 @@ export function WxGroupChatPage({
             </div>
           )}
           {media}
+          {/* 微信引用（对照用户截图）：文字消息的引用为气泡下方独立半透明胶囊「名字：内容」，跟随发送侧对齐；卡片类消息仍用气泡上方胶囊 */}
+          {m.quote && (!m.kind || m.kind === 'text') && (
+            <div
+              data-testid="wx-grp-quote-block"
+              className="mt-1 max-w-full overflow-hidden rounded-[8px] border border-black/20 bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/55 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-white/20 dark:bg-white/[0.13] dark:text-white/60"
+            >
+              <p className="line-clamp-3 whitespace-pre-wrap break-all">{m.quote.name}：{m.quote.content}</p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -3645,13 +3654,13 @@ export function WxGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block max-w-[280px] truncate rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3676,12 +3685,12 @@ export function WxGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block max-w-[280px] truncate rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
@@ -3811,17 +3820,6 @@ export function WxGroupChatPage({
                       }`}
                     />
                     <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
-                    {/* 微信引用样式：回复内容在上，被引用消息以小字灰色显示在气泡内下方 */}
-                    {m.quote && (
-                      <p
-                        data-testid="wx-grp-quote-block"
-                        className={`mt-1.5 line-clamp-3 whitespace-pre-wrap break-all text-[13px] leading-[1.4] ${
-                          mine ? 'text-black/50 dark:text-black/60' : 'text-black/45 dark:text-white/50'
-                        }`}
-                      >
-                        {m.quote.name}：{m.quote.content}
-                      </p>
-                    )}
                   </div>,
                 )
               )}

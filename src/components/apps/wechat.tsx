@@ -13,7 +13,6 @@ import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } fr
 import {
   ArrowLeftRight,
   AtSign,
-  Ban,
   Banknote,
   BellOff,
   Camera,
@@ -3447,6 +3446,8 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 加号面板展开（输入框保持在面板上方） */
   const [plusOpen, setPlusOpen] = useState(false);
+  /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
+  const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
   const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | null>(null);
   /** 原生相机 / 相册隐藏 input：加号面板「相机」「图片」直接调用手机能力（无自建页面） */
@@ -3997,22 +3998,44 @@ function ChatPage({
     [peer.id, peer.name, me.name, pushSysMsg]
   );
 
-  /** 拉黑气泡图标（iOS 黑白灰）：我拉黑了对方 → 我的每条气泡后「对方被我拉黑」；
-   *  对方拉黑了我 → 对方每条气泡后「我被拉黑」；系统提示行/申请卡片/撤回行不显示 */
-  const blockedBadgeOf = (m: WxMsg) => {
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡 + 气泡下方灰字「消息已发出，但被对方拒收了。」。
+   *  我拉黑了对方 → 对方的气泡标记；对方拉黑了我 → 我的气泡标记；互拉时两侧同时显示；
+   *  系统提示行/申请卡片/撤回行不显示 */
+  const blockSideOf = (m: WxMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
-    const mine = m.role === 'me';
-    const show = mine ? blk.byUser === true : blk.byChar === true;
-    if (!show) return null;
+    if (m.role === 'me' && blk.byChar) return 'me';
+    if (m.role === 'peer' && blk.byUser) return 'peer';
+    return null;
+  };
+
+  /** 红色 ! 圆点：紧贴气泡（我的消息在气泡左侧、对方在气泡右侧，微信发送失败图标同位） */
+  const blockedIconOf = (m: WxMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
     return (
-      <div
-        data-testid={mine ? 'wx-block-badge-me' : 'wx-block-badge-peer'}
-        aria-label={mine ? '对方被我拉黑' : '我被拉黑'}
-        className={`flex items-center gap-1 py-[2px] text-[10px] leading-none text-black/30 dark:text-white/30 ${mine ? 'justify-end pr-[46px]' : 'justify-start pl-[46px]'}`}
+      <span
+        data-testid={side === 'me' ? 'wx-block-icon-me' : 'wx-block-icon-peer'}
+        aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
+        className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white"
       >
-        <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
-        <span>{mine ? '对方被我拉黑' : '我被拉黑'}</span>
-      </div>
+        !
+      </span>
+    );
+  };
+
+  /** 气泡下方灰字状态行（微信拉黑同款文案）；对齐被标记一方气泡一侧 */
+  const blockedLineOf = (m: WxMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
+    return (
+      <p
+        data-testid={side === 'me' ? 'wx-block-line-me' : 'wx-block-line-peer'}
+        className={`py-[2px] text-[12.5px] leading-[1.4] text-black/35 dark:text-white/40 ${
+          side === 'me' ? 'pr-[46px] text-right' : 'pl-[46px] text-left'
+        }`}
+      >
+        消息已发出，但被对方拒收了。
+      </p>
     );
   };
 
@@ -4760,13 +4783,13 @@ function ChatPage({
             {/* 时间分隔（截图样式：居中半透明胶囊） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
               <div className="py-2 text-center">
-                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
+                <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
               </div>
             )}
             {m.recalled ? (
               /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
               <div data-testid="wx-recall-row" className="py-1.5 text-center">
-                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                   {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                 </span>
               </div>
@@ -4775,7 +4798,7 @@ function ChatPage({
             ) : m.kind === 'sys' && m.sys ? (
               /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
               <div data-testid="wx-sys-row" className="py-1.5 text-center">
-                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                   {m.sys.text}
                 </span>
               </div>
@@ -4942,26 +4965,26 @@ function ChatPage({
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
                       </span>
                     )}
-                    {/* 微信引用样式：回复内容在上，被引用消息以小字灰色显示在气泡内下方 */}
-                    {m.quote && (
-                      <p
-                        data-testid="wx-quote-block"
-                        className={`mt-1.5 line-clamp-3 whitespace-pre-wrap break-all text-[13px] leading-[1.4] ${
-                          m.role === 'me' ? 'text-black/50 dark:text-black/60' : 'text-black/45 dark:text-white/50'
-                        }`}
-                      >
-                        {m.quote.name}：{m.quote.content}
-                      </p>
-                    )}
                   </div>
+                  {/* 微信引用（对照用户截图）：引用为气泡下方的独立半透明胶囊「名字：内容」，跟随发送侧对齐 */}
+                  {m.quote && (
+                    <div
+                      data-testid="wx-quote-block"
+                      className="mt-1 max-w-full rounded-[8px] border border-black/20 bg-white/75 px-3 py-1.5 text-[13px] leading-[1.4] text-black/55 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/60"
+                    >
+                      <p className="line-clamp-3 whitespace-pre-wrap break-all">{m.quote.name}：{m.quote.content}</p>
+                    </div>
+                  )}
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                   {renderTranslations(m.id, m.content)}
                 </div>
               )}
+              {/* 拉黑图标（对照用户截图：红色 ! 圆点紧贴气泡，微信发送失败图标同位） */}
+              {blockedIconOf(m)}
             </div>
             )}
-            {/* 拉黑图标（iOS 黑白灰）：我拉黑了对方 → 我的气泡后「对方被我拉黑」；对方拉黑了我 → 对方气泡后「我被拉黑」 */}
-            {blockedBadgeOf(m)}
+            {/* 拉黑状态行：气泡下方灰字「消息已发出，但被对方拒收了。」（被拉黑一方的消息才显示） */}
+            {blockedLineOf(m)}
           </div>
         ))}
         {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式）。
@@ -5009,11 +5032,10 @@ function ChatPage({
                     </div>
                   </div>
                 )}
-                {blk.byChar === true && (
-                  <div className="flex items-center gap-1 pl-[46px] py-[2px] text-[10px] leading-none text-black/30 dark:text-white/30">
-                    <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
-                    <span>我被拉黑</span>
-                  </div>
+                {blk.byUser === true && (
+                  <p data-testid="wx-block-line-peer" className="py-[2px] pl-[46px] text-left text-[12.5px] leading-[1.4] text-black/35 dark:text-white/40">
+                    消息已发出，但被对方拒收了。
+                  </p>
                 )}
               </div>
             );
@@ -5091,7 +5113,16 @@ function ChatPage({
             <input
               data-testid="wx-chat-input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setInput(v);
+                // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+                if (!selfChat && v.endsWith('@')) {
+                  setPlusOpen(false);
+                  setStickerOpen(false);
+                  setAtOpen(true);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void send();
               }}
@@ -5145,6 +5176,32 @@ function ChatPage({
         </div>
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
         {plusOpen && <PlusPanel onAction={handlePlusAction} />}
+        {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
+        {atOpen && !selfChat && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
+            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#1E1E1E]">
+              <div className="border-b border-black/[0.05] px-3 py-2 text-[11px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
+                @ 联系人（被 @ 的优先回复）
+              </div>
+              <button
+                type="button"
+                data-testid={`wx-chat-at-${peer.id}`}
+                onClick={() => {
+                  setAtOpen(false);
+                  setInput((v) => {
+                    const base = v.endsWith('@') ? v.slice(0, -1) : v;
+                    return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${peer.name} `;
+                  });
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <WxAvatar src={peer.avatar} alt={peer.name} size={28} />
+                <span className="min-w-0 flex-1 truncate text-[14px]">{peer.name}</span>
+              </button>
+            </div>
+          </>
+        )}
         </>
         )}
       </div>

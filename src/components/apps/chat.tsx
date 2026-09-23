@@ -4,7 +4,6 @@ import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState, typ
 import { motion } from 'framer-motion';
 import {
   ArrowUp,
-  Ban,
   ChevronRight,
   CircleCheck,
   EyeOff,
@@ -878,22 +877,42 @@ function ChatView({
     }
   };
 
-  /** 拉黑气泡图标（iOS 黑白灰）：我拉黑了对方 → 我的每条气泡后「对方被我拉黑」；
-   *  对方拉黑了我 → 对方每条气泡后「我被拉黑」；系统提示行/申请卡片/撤回行不显示 */
-  const blockedBadgeOf = (m: ChatMsg) => {
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡 + 气泡下方灰字「消息已发出，但被对方拒收了。」。
+   *  我拉黑了对方 → 对方的气泡标记；对方拉黑了我 → 我的气泡标记；互拉时两侧同时显示；
+   *  系统提示行/申请卡片/撤回行不显示 */
+  const blockSideOf = (m: ChatMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.sys || m.blkreq) return null;
-    const mine = m.role === 'user';
-    const show = mine ? blk.byUser === true : blk.byChar === true;
-    if (!show) return null;
+    if (m.role === 'user' && blk.byChar) return 'me';
+    if (m.role === 'assistant' && blk.byUser) return 'peer';
+    return null;
+  };
+
+  /** 红色 ! 圆点：紧贴气泡（我的消息在气泡左侧、对方在气泡右侧，iMessage 发送失败图标同位） */
+  const blockedIconOf = (m: ChatMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
     return (
-      <div
-        data-testid={mine ? 'sms-block-badge-me' : 'sms-block-badge-peer'}
-        aria-label={mine ? '对方被我拉黑' : '我被拉黑'}
-        className="mt-0.5 flex items-center gap-1 text-[10px] leading-none text-black/30 dark:text-white/30"
+      <span
+        data-testid={side === 'me' ? 'sms-block-icon-me' : 'sms-block-icon-peer'}
+        aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
+        className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#FF3B30] text-[13px] font-bold leading-none text-white"
       >
-        <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
-        <span>{mine ? '对方被我拉黑' : '我被拉黑'}</span>
-      </div>
+        !
+      </span>
+    );
+  };
+
+  /** 气泡下方灰字状态行；对齐被标记一方气泡一侧 */
+  const blockedLineOf = (m: ChatMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
+    return (
+      <p
+        data-testid={side === 'me' ? 'sms-block-line-me' : 'sms-block-line-peer'}
+        className="mt-0.5 text-[11.5px] leading-[1.4] text-black/35 dark:text-white/40"
+      >
+        消息已发出，但被对方拒收了。
+      </p>
     );
   };
 
@@ -1207,6 +1226,8 @@ function ChatView({
                     {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
                   </span>
                 )}
+                {/* 拉黑图标（红色 !）：我的消息在气泡左侧 */}
+                {mine && blockedIconOf(m)}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
                 <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                   {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊） */}
@@ -1245,13 +1266,15 @@ function ChatView({
                       <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
                     </div>
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
-                  {blockedBadgeOf(m)}
+                  {blockedLineOf(m)}
                   {renderTranslations(m.id, m.content, m.error && !mine)}
                   {/* iMessage：已送达挂在气泡下沿、小尾巴另一侧（气泡左下角，与气泡左缘对齐） */}
                   {mine && i === lastUserIdx && !m.error && (
                     <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
                   )}
                 </div>
+                {/* 拉黑图标（红色 !）：对方的消息在气泡右侧 */}
+                {!mine && blockedIconOf(m)}
                 {selectMode && mine && (
                   <span
                     aria-hidden="true"
@@ -1323,11 +1346,10 @@ function ChatView({
                   {(split.pending || split.texts.length === 0) && (
                     <div data-testid="sms-stream-typing">{dots}</div>
                   )}
-                  {blk.byChar === true && (
-                    <div className="mt-0.5 flex items-center gap-1 text-[10px] leading-none text-black/30 dark:text-white/30">
-                      <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
-                      <span>我被拉黑</span>
-                    </div>
+                  {blk.byUser === true && (
+                    <p data-testid="sms-block-line-peer" className="mt-0.5 text-[11.5px] leading-[1.4] text-black/35 dark:text-white/40">
+                      消息已发出，但被对方拒收了。
+                    </p>
                   )}
                 </div>
               </motion.div>

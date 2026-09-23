@@ -6117,3 +6117,23 @@ Stage Summary:
 - 改动文件：src/lib/ios/block-state.ts（新建）、src/lib/chat-rich.ts、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx；.e2e/mock-llm.ts（+/__script /__reset /__queue 脚本化回复队列）与 .e2e/block-seed.js、.e2e/block-nav.js、.e2e/block-util.js（E2E 基建）
 - 行为基线：拉黑=纯关系状态，不拦截任何消息流；两方向（byUser/byChar）独立、可互拉；全部状态变更（用户开关、角色标记、卡片同意/拒绝）都生成居中灰胶囊系统消息并持久化到 IndexedDB kv；AI 每轮 system 现场注入拉黑状态与对应标记用法，被拒绝的申请会被明确告知
 - 已知边界：群聊完全不读写拉黑状态（单聊/群聊独立）；拉黑类标记在群聊语境下被静默忽略（群聊人设不含标记规则，正常不会出现）；信息端用户名取 profile.name（凡凡）、微信/QQ 取登录账号显示名（App 既有约定）
+
+---
+Task ID: ui-fix-0523
+Agent: Z.ai Code (main)
+Task: 用户五项 UI 反馈——①半透明胶囊圆角收小+细黑边框 ②QQ/微信单聊键入 @ 可 @ 角色 ③微信引用改为截图同款「气泡下方独立半透明胶囊」 ④QQ 气泡圆角收小（昨天提过但未落盘，本次补上） ⑤拉黑图标改截图同款红色 ! 圆点+「消息已发出，但被对方拒收了。」灰字状态行（双向两侧气泡都显示）
+
+Work Log:
+- 胶囊美化：四文件（wechat/qq/wx-group/qq-group）共 16 处 `rounded-[10px] bg-white/75` → `rounded-[8px] border border-black/20 bg-white/75`（暗色 dark:border-white/20），覆盖时间分隔/撤回行/拉黑系统提示/卡片类引用胶囊
+- 微信引用改版（对照用户截图1）：wechat.tsx 单聊文字气泡的引用从「气泡内下方小字」移出 → 气泡下方独立半透明胶囊「名字：内容」（rounded-[8px]+黑细边框，line-clamp-3，跟随发送侧 items-end/items-start 对齐，testid wx-quote-block 保留）；wx-group.tsx 群聊文字消息同款（renderMsgRow 在 media 之后渲染下方胶囊，卡片类消息仍用气泡上方胶囊，testid wx-grp-quote-block 保留）；QQ 引用卡（气泡内深色卡）保持不变（此前为显式需求）
+- QQ 气泡圆角：qq.tsx + qq-group.tsx 全部气泡 rounded-[18px]→[12px]（文字/流式/打字中/合并转发卡/转发卡/图片气泡/表情气泡 14→12/单聊申请卡片），气泡内 QQ 引用卡 rounded-[12px]→[10px]（嵌套层次）；排查确认上一批（群号/公告独立页/群聊键入@/QQ引用卡）均未丢失，仅气泡圆角这项从未落盘
+- 单聊 @ 提及（QQ+微信，对照群聊既有交互）：输入 onChange 检测草稿以 @ 结尾 → 关闭表情/加号面板并唤起 @ 浮层（fixed 透明遮罩点击关闭 + absolute bottom-full left-3 白色圆角面板：表头「@ 联系人（被 @ 的优先回复）」+ 联系人头像名字行）；点选 → 草稿末尾 @ 替换为「@名字 」（前无空格自动补）；testid wx/qq-chat-at-<peerId>；微信给自己发的会话（selfChat）不触发
+- 拉黑图标重设计（对照用户截图2，三 App 统一）：删除旧「Ban 图标+我被拉黑/对方被我拉黑」文字徽标 → ①红色 ! 圆点（h-5 w-5 rounded-full，wx #FA5151 / qq #F5455C / sms #FF3B30，白色粗感叹号）紧贴气泡——我的消息在气泡左侧、对方消息在气泡右侧（微信发送失败图标同位，flex-row-reverse 行尾/普通行尾插入即可镜像）②气泡下方灰字状态行「消息已发出，但被对方拒收了。」（跟随被标记一方气泡侧对齐；iMessage 端 mt-0.5 小字）。方向语义：byChar（对方拉黑我）→ 我的气泡标记；byUser（我拉黑对方）→ 对方的气泡标记；互拉两侧同显；系统提示行/申请卡片/撤回行不标记。流式气泡区由 byChar 修正为 byUser（流式气泡是对方向我发的消息，仅 byUser 时标记，只显示状态行不加图标）。testid：wx/qq/sms-block-icon-me|peer + wx/qq/sms-block-line-me|peer（旧 *-block-badge-* 移除）
+- E2E 实测（agent-browser 390×844 + 种子 榴莲）：①时间胶囊 class 含 rounded-[8px]+border-black/20 ✓；②种子带引用消息 → 消息列内 DOM 顺序 [气泡「光着」][wx-quote-block「榴莲：…」] 引用在气泡下方 ✓（截图对照用户截图1 同款）；③微信键入「测试@」→ 浮层弹出 → 点榴莲 → 草稿=「测试 @榴莲 」✓；④QQ 同测「在吗@」→ 浮层「榴莲」✓；⑤kv 置互拉 {byUser,byChar} → 微信 iconMe×7/iconPeer×10+对应状态行、QQ iconMe×1/iconPeer×3（修漏后 lineMe×1/linePeer×3）、信息 iconMe×2+状态行 ✓；⑥QQ 气泡 rounded-[12px] 且无 18px 残留 ✓；⑦截图核验：微信/QQ/信息三端红色 ! 紧贴气泡+灰字行+胶囊细边框全部符合截图
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、agent-browser console/errors 零错误
+
+Stage Summary:
+- 改动文件：src/components/apps/wechat.tsx、qq.tsx、chat.tsx、wx-group.tsx、qq-group.tsx
+- 视觉基线更新：半透明胶囊 = rounded-[8px] + 1px 黑细边框（black/20，暗色 white/20）；QQ 气泡圆角 12px；微信引用 = 气泡下方独立胶囊；拉黑标记 = 红 ! 圆点（发送失败图标位）+「消息已发出，但被对方拒收了。」灰字行
+- 交互新增：QQ/微信单聊键入 @ 唤起 @ 浮层，点选插入「@名字 」（与群聊一致）
+- 存量兼容：wx-quote-block/wx-grp-quote-block testid 保留（位置从气泡内移到气泡下方）；群聊卡片类引用胶囊（上方）不变；拉黑数据结构/标记管线/设置开关零改动

@@ -102,7 +102,6 @@ import {
   PinOff,
   Plus,
   FolderOutput,
-  Ban,
   Hash,
   JapaneseYen,
   QrCode,
@@ -1386,7 +1385,7 @@ export function QqImageBubble({ src, testId }: { src: string; testId?: string })
       src={src}
       alt="图片消息"
       data-testid={testId}
-      className="max-h-[210px] w-auto max-w-[160px] rounded-[18px] object-cover"
+      className="max-h-[210px] w-auto max-w-[160px] rounded-[12px] object-cover"
     />
   );
 }
@@ -1414,7 +1413,7 @@ export function QqStickerBubble({
       <img
         src={url}
         alt={meaning ? `表情：${meaning}` : '表情'}
-        className="max-h-[110px] w-auto max-w-[118px] rounded-[14px] object-contain"
+        className="max-h-[110px] w-auto max-w-[118px] rounded-[12px] object-contain"
         loading="lazy"
       />
     </button>
@@ -1928,7 +1927,7 @@ function QqBlockReqCard({
   return (
     <div
       data-testid="qq-blockreq-card"
-      className="w-fit max-w-[calc(100%-40px)] rounded-[18px] bg-white px-3 py-2.5 shadow-sm dark:bg-[#2A2C31]"
+      className="w-fit max-w-[calc(100%-40px)] rounded-[12px] bg-white px-3 py-2.5 shadow-sm dark:bg-[#2A2C31]"
       aria-label={`${name}申请解除拉黑`}
     >
       <div className="flex items-center gap-2">
@@ -2011,6 +2010,8 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   // 加号面板（弹出时把输入行+工具栏整体顶起，输入框跟随面板上浮）
   const [plusOpen, setPlusOpen] = useState(false);
+  /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
+  const [atOpen, setAtOpen] = useState(false);
   // 表情面板（与加号面板互斥）
   const [stickerOpen, setStickerOpen] = useState(false);
   // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置）
@@ -2225,22 +2226,44 @@ function ChatPage({
     [peer.id, peer.name, me.name, pushSysMsg]
   );
 
-  /** 拉黑气泡图标（iOS 黑白灰）：我拉黑了对方 → 我的每条气泡后「对方被我拉黑」；
-   *  对方拉黑了我 → 对方每条气泡后「我被拉黑」；系统提示行/申请卡片/撤回行不显示 */
-  const blockedBadgeOf = (m: QQMsg) => {
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡 + 气泡下方灰字「消息已发出，但被对方拒收了。」。
+   *  我拉黑了对方 → 对方的气泡标记；对方拉黑了我 → 我的气泡标记；互拉时两侧同时显示；
+   *  系统提示行/申请卡片/撤回行不显示 */
+  const blockSideOf = (m: QQMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
-    const mine = m.role === 'me';
-    const show = mine ? blk.byUser === true : blk.byChar === true;
-    if (!show) return null;
+    if (m.role === 'me' && blk.byChar) return 'me';
+    if (m.role === 'peer' && blk.byUser) return 'peer';
+    return null;
+  };
+
+  /** 红色 ! 圆点：紧贴气泡（我的消息在气泡左侧、对方在气泡右侧） */
+  const blockedIconOf = (m: QQMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
     return (
-      <div
-        data-testid={mine ? 'qq-block-badge-me' : 'qq-block-badge-peer'}
-        aria-label={mine ? '对方被我拉黑' : '我被拉黑'}
-        className={`flex items-center gap-1 py-[2px] text-[10px] leading-none text-black/30 dark:text-white/30 ${mine ? 'justify-end pr-[48px]' : 'justify-start pl-[48px]'}`}
+      <span
+        data-testid={side === 'me' ? 'qq-block-icon-me' : 'qq-block-icon-peer'}
+        aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
+        className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#F5455C] text-[13px] font-bold leading-none text-white"
       >
-        <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
-        <span>{mine ? '对方被我拉黑' : '我被拉黑'}</span>
-      </div>
+        !
+      </span>
+    );
+  };
+
+  /** 气泡下方灰字状态行；对齐被标记一方气泡一侧 */
+  const blockedLineOf = (m: QQMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
+    return (
+      <p
+        data-testid={side === 'me' ? 'qq-block-line-me' : 'qq-block-line-peer'}
+        className={`py-[2px] text-[12.5px] leading-[1.4] text-black/35 dark:text-white/40 ${
+          side === 'me' ? 'pr-[48px] text-right' : 'pl-[48px] text-left'
+        }`}
+      >
+        消息已发出，但被对方拒收了。
+      </p>
     );
   };
 
@@ -3325,13 +3348,13 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
+                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
                 <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -3340,7 +3363,7 @@ function ChatPage({
               ) : m.kind === 'sys' && m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
                 <div data-testid="qq-sys-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                     {m.sys.text}
                   </span>
                 </div>
@@ -3425,7 +3448,7 @@ function ChatPage({
                     onClick={() => {
                       if (!selectMode) setFwdDetailId(m.id);
                     }}
-                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
+                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[12px] bg-white px-3.5 py-[9px] text-[#1F2329] shadow-sm dark:bg-[#2A2C31] dark:text-white"
                   >
                     <p className="text-[15.5px] font-semibold leading-[1.35]">{m.fwd.title ?? m.content}</p>
                     <div className="mt-1 space-y-[1px] text-[13.5px] leading-[1.5] text-[#1F2329]/55 dark:text-white/60">
@@ -3443,7 +3466,7 @@ function ChatPage({
                   <div
                     {...bubblePress}
                     data-testid="qq-forward-bubble"
-                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[18px] px-3.5 py-[9px] text-white"
+                    className="w-fit max-w-[calc(100%-96px)] select-none rounded-[12px] px-3.5 py-[9px] text-white"
                     style={{ backgroundColor: '#0099FF' }}
                   >
                     <div className="line-clamp-8 whitespace-pre-wrap break-words border-l-2 border-white/40 pl-2 text-[14px] leading-[1.4]">
@@ -3455,7 +3478,7 @@ function ChatPage({
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div
                       {...bubblePress}
-                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[12px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
@@ -3466,7 +3489,7 @@ function ChatPage({
                         return (
                           <div
                             data-testid="qq-quote-block"
-                            className={`mb-2 rounded-[12px] px-3 py-2 ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
+                            className={`mb-2 rounded-[10px] px-3 py-2 ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
                           >
                             <div className={`flex items-center gap-1.5 text-[13px] leading-[1.4] ${mine ? 'text-white/85' : 'text-black/50 dark:text-white/50'}`}>
                               <span className="min-w-0 flex-1 truncate">
@@ -3517,8 +3540,10 @@ function ChatPage({
                 )}
               </div>
               )}
-              {/* 拉黑图标（iOS 黑白灰）：我拉黑了对方 → 我的气泡后「对方被我拉黑」；对方拉黑了我 → 对方气泡后「我被拉黑」 */}
-              {blockedBadgeOf(m)}
+              {/* 拉黑图标（对照用户截图：红色 ! 圆点紧贴气泡） */}
+              {blockedIconOf(m)}
+              {/* 拉黑状态行：气泡下方灰字「消息已发出，但被对方拒收了。」 */}
+              {blockedLineOf(m)}
             </div>
           );
         })}
@@ -3554,7 +3579,7 @@ function ChatPage({
                 {split.texts.map((t, i) => (
                   <div className="mb-3 flex items-end justify-start gap-2" key={i} data-testid={`qq-stream-bubble-${i}`}>
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
-                    <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[18px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
+                    <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[12px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
                       {stickersOn ? prettifyRichText(t) : stripEmojiText(prettifyRichText(t).replace(/\[表情包\]/g, ' '))}
                     </div>
                   </div>
@@ -3562,14 +3587,13 @@ function ChatPage({
                 {(split.pending || split.texts.length === 0) && (
                   <div className="mb-3 flex items-end justify-start gap-2" data-testid="qq-stream-typing">
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
-                    <div className="max-w-[calc(100%-96px)] rounded-[18px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">{dots}</div>
+                    <div className="max-w-[calc(100%-96px)] rounded-[12px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">{dots}</div>
                   </div>
                 )}
-                {blk.byChar === true && (
-                  <div className="flex items-center gap-1 pl-[48px] py-[2px] text-[10px] leading-none text-black/30 dark:text-white/30">
-                    <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
-                    <span>我被拉黑</span>
-                  </div>
+                {blk.byUser === true && (
+                  <p data-testid="qq-block-line-peer" className="py-[2px] pl-[48px] text-left text-[12.5px] leading-[1.4] text-black/35 dark:text-white/40">
+                    消息已发出，但被对方拒收了。
+                  </p>
                 )}
               </div>
             );
@@ -3636,7 +3660,16 @@ function ChatPage({
           <input
             data-testid="qq-chat-input"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInput(v);
+              // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+              if (v.endsWith('@')) {
+                setPlusOpen(false);
+                setStickerOpen(false);
+                setAtOpen(true);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void send();
             }}
@@ -3713,6 +3746,32 @@ function ChatPage({
             onClose={() => setStickerOpen(false)}
             onToast={onToast}
           />
+        ) : null}
+        {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
+        {atOpen ? (
+          <>
+            <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
+            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#2A2C31]">
+              <div className="border-b border-black/[0.05] px-3 py-2 text-[11px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
+                @ 联系人（被 @ 的优先回复）
+              </div>
+              <button
+                type="button"
+                data-testid={`qq-chat-at-${peer.id}`}
+                onClick={() => {
+                  setAtOpen(false);
+                  setInput((v) => {
+                    const base = v.endsWith('@') ? v.slice(0, -1) : v;
+                    return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${peer.name} `;
+                  });
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <QqAvatar src={peer.avatar} alt={peer.name} size={28} />
+                <span className="min-w-0 flex-1 truncate text-[14px]">{peer.name}</span>
+              </button>
+            </div>
+          </>
         ) : null}
         </>
         )}
