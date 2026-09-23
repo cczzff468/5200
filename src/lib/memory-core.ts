@@ -128,8 +128,8 @@ export interface MemLongTerm {
 
 /** 每联系人记忆设置 */
 export interface MemSettings {
-  /** 对话总结频率：每隔多少轮对话自动提取一次记忆碎片 */
-  interval: 3 | 5 | 10 | 20 | 30;
+  /** 对话总结频率：累计多少条消息（双方消息都算）自动提取一次记忆碎片；跨 App 互通开时四端合并计算 */
+  interval: 10 | 20 | 30 | 40 | 50;
   /** 核心记忆总结频率：积累多少个（未消费的）记忆碎片后自动触发核心总结 */
   threshold: 5 | 10 | 15 | 20 | 30;
   /** 长期记忆总结频率：积累多少条（未归档的）核心记忆后自动触发长期记忆总结；默认 5 */
@@ -141,14 +141,14 @@ export interface MemSettings {
 }
 
 export const DEFAULT_MEM_SETTINGS: MemSettings = {
-  interval: 5,
+  interval: 10,
   threshold: 5,
   longThreshold: 5,
   share: true,
   forget: 'medium',
 };
 
-export const MEM_INTERVAL_OPTIONS: MemSettings['interval'][] = [3, 5, 10, 20, 30];
+export const MEM_INTERVAL_OPTIONS: MemSettings['interval'][] = [10, 20, 30, 40, 50];
 export const MEM_THRESHOLD_OPTIONS: MemSettings['threshold'][] = [5, 10, 15, 20, 30];
 export const MEM_LONG_OPTIONS: MemSettings['longThreshold'][] = [3, 5, 7, 10, 20];
 

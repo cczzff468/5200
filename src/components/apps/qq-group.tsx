@@ -2472,7 +2472,8 @@ export function QqGroupChatPage({
                           ? { role: 'me' as const, text: msgTextOf(m) }
                           : { role: 'peer' as const, text: `${m.senderName}：${msgTextOf(m)}` }
                       ),
-                  undefined,
+                  // 消息计数锚点用：未 slice/map 的有效消息数组（群消息流，含其他成员的消息）
+                  () => loadGroupMsgs(gid).filter((m) => m.kind !== 'notice' && !m.recalled),
                   { user: u, peer: p },
                   { roundScope: `group:${gid}`, group: { id: gid, members: [me.id, ...groupRef.current.memberIds] } }
                 );

@@ -69,6 +69,8 @@ const MIGRATE_PREFIXES = [
   'mem-long:',
   'mem-settings:',
   'mem-round:',
+  'mem-msgcount:',
+  'mem-anchor:',
 ];
 
 function isMigratableKey(key: string): boolean {

@@ -646,9 +646,11 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
     removeLocalMapKey(maps.hidden, `group:${groupId}`);
     // 时间感知开关（localStorage map 里的键）
     removeLocalMapKey('chat-time-aware', `${g.app}:group:${groupId}`);
-    // 每个成员的群记忆提取轮次计数（mem-round:<contactId>:<app>:group:<gid>）
+    // 每个成员的群记忆提取计数（旧 mem-round 轮次键 + 新 mem-msgcount 消息计数 / mem-anchor 锚点，均按群 scope）
     for (const cid of g.memberIds) {
       kvDel(`mem-round:${cid}:${g.app}:group:${groupId}`);
+      kvDel(`mem-msgcount:${cid}:${g.app}:group:${groupId}`);
+      kvDel(`mem-anchor:${cid}:${g.app}:group:${groupId}`);
     }
     // 群聊天背景图片本体（IndexedDB settings store，键同 contacts-store 的 chat-bg 前缀；群背景与单聊相互独立）
     void localDB.delete('settings', `chat-bg:${g.app}:group:${groupId}`).catch(() => undefined);

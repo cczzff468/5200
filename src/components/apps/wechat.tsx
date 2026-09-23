@@ -109,7 +109,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -3801,7 +3801,7 @@ function ChatPage({
               'wx',
               apiConfig,
               () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-              () => memLastMsgId(loadMsgs(peer.id)),
+              () => loadMsgs(peer.id),
               { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );

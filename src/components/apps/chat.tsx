@@ -44,7 +44,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatTranslatePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
@@ -717,7 +717,7 @@ function ChatView({
               'sms',
               apiConfig,
               () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
-              () => memLastMsgId(loadMsgs(storageKey) ?? []),
+              () => loadMsgs(storageKey) ?? [],
               { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
             )
           );

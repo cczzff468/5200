@@ -6203,3 +6203,33 @@ Stage Summary:
 - 行为基线：新用户/未手动改过频率的用户现在每 5 轮自动提取一次碎片（约 5 问 5 答攒一批记忆）；核心总结阈值 5 条碎片、长期阈值 5 条核心不变；提取重复内容自动合并/加强（appendFragments 去重）不会刷屏
 - 验证基线：聊天→计数→提取→入库→记忆库 UI 展示全链路浏览器实测打通；设置页新档位与默认选中 5 确认
 - 已知边界：手动改过频率（存了 10/20/30）的用户保持自己的选择；用户上游 API 失败时提取走服务端内置 SDK 兜底不受影响
+
+---
+Task ID: mem-count-rework
+Agent: main (Z.ai Code)
+Task: 记忆提取计数机制重构——按用户需求改为「消息条数口径 + 互通开跨 App 合并累计 / 互通关各 App 独立」
+
+Work Log:
+- 核心改造（src/lib/memory.ts）：
+  ①计数键换新：废弃 mem-round:<cid>:<app> 轮次键（口径=AI 回复轮数，不再读写，仅删联系人时残留清扫）；新键 mem-msgcount:<cid>（互通开=按角色一条计数四 App 合并） / mem-msgcount:<cid>:<app>（互通关=各 App 独立） / mem-msgcount:<cid>:<app>:group:<gid>（群聊始终按群独立）
+  ②消息条数口径：新增 countSinceAnchor（数锚点之后的有效消息，用户+AI 都算，撤回/失败不计；锚点缺失或被裁剪时全量兜底宁多勿漏）；锚点键 mem-anchor:<cid>:<app>[:group:<gid>] 存已计数的最后消息 ID，每次 AI 回复落盘后数增量汇入计数并推进锚点
+  ③memAfterAiTurn 签名第 5 参 getSourceMsgId→getMsgs（返回会话原始消息数组；电话端无持久消息数组传 null，内部固定计 2 条=1 用户字幕+1 AI 回复）；触发即清零重新累计；互通开且当前会话 convo<4 时跨 App 取 memMostRecentApp 最近活跃会话兜底（合并计数可能主要来自其他 App）
+  ④saveMemSettings：share 实际变化时 kvDelByPrefix 清 mem-msgcount 前缀（口径切换旧数字无意义；锚点保留——已计过的消息不重复计）
+  ⑤memPurgeContact 补 kvDelByPrefix(mem-msgcount/mem-anchor 前缀)；groups.ts dissolveGroup 每成员补删 mem-msgcount/mem-anchor 群 scope 键；idb-kv.ts MIGRATE_PREFIXES 补两新前缀（降级 localStorage 模式注水覆盖）
+- 默认值与档位（src/lib/memory-core.ts）：DEFAULT_MEM_SETTINGS.interval 5→10；MEM_INTERVAL_OPTIONS [3,5,10,20,30]→[10,20,30,40,50]；MemSettings.interval 联合类型同步；旧存的 3/5 经 includes 校验自动回退 10
+- 设置 UI（src/components/apps/memory-bank.tsx）：频率说明文案改「累计多少条消息（你和 TA 的都算）自动提取一次记忆碎片；跨 App 互通开启时微信/QQ/信息/电话合并计算，关闭时各 App 独立计数」；手动「立即总结」四个入口本就不读计数（不受影响，未改动）
+- 六个调用点接线：chat.tsx/wechat.tsx/qq.tsx 改传 () => loadMsgs(...)（原 memLastMsgId 包装移除，import 同步清理）；phone.tsx 传 () => null（固定 +2 注释说明）；qq-group.tsx/wx-group.tsx 新增第 5 参传未 slice 的群有效消息数组（锚点计数用，buildConvo 保持 slice(-30) 提取窗口）
+- E2E 浏览器实测（agent-browser 390×844 + mock LLM :4100（SSE 聊天/非流式 fragments+summary JSON/CORS/请求日志）+ IndexedDB 种子 林川+榴莲+apiConfig→mock + React __reactProps.onClick 直调驱动 App 导航）：
+  ①场景 A 互通开合并计数（默认 10 条）：微信 3 回合=6 条消息 → 合并键 mem-msgcount:c-char=6（证明用户消息计入，纯轮次口径会是 3）→ QQ 2 回合=4 条 → 6+4=10 触发：mock 日志 kind=extract + dev.log POST /api/memory/extract 200 + 2 条碎片入库（app='qq' 触发端）+ 计数归零 + 双锚点（wx/qq）各就位
+  ②场景 B 触发后清零重新累计：QQ 再发 10 条消息 → 第二次 extract 200 → 计数再归零；重复碎片被 appendFragments 去重合并为「加强」不重复占位
+  ③场景 C 互通关独立计数（种 mem-settings share:false）：QQ 2 回合 → 独立键 mem-msgcount:c-char:qq=4、合并键残留值 5 原封不动（不跨 App 合并）→ 再发 3 回合（+6=10）→ 独立触发第三次 extract 200 → 独立键清零、合并键仍未动
+  ④设置 UI 截图验证：文案含「累计多少条消息…合并计算，关闭时各 App 独立计数」、档位 10[选中]/20/30/40/50、档案头部「2 条碎片/互通·关」
+  ⑤群聊/电话：调用点接线经 tsc 类型校验（群聊锚点独立于私聊、电话固定 +2），行为与私聊同构
+- 测试工程备忘（重要）：agent-browser 每次 close/open 均为全新 profile（IndexedDB 不跨重启），种子必须在 open 后 eval 写入并 reload 注水；运行中的应用直接改 IndexedDB 与 idb-kv 内存缓存不一致（读写全走 memStore），需 reload 后生效；App 图标/导航按钮的程序化 click 与部分原生 click 在 HMR 后会失效（hit-test 被覆盖层命中），稳定方案 = 元素 __reactProps$xxx.onClick() 直调（openWith 闭包无事件参数依赖）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过；测试环境清理（浏览器关闭、mock 进程杀掉、.e2e 与 /tmp 临时产物删除）
+
+Stage Summary:
+- 计数基线：提取节奏=累计消息条数（用户+AI 都算）达阈值触发并清零；互通开四端合并（同一角色微信聊 3 条+QQ 聊 3 条即 6 条+6 条，可跨端凑满阈值）、互通关各 App 独立、群聊按群独立
+- 默认 10 条（用户可调 10/20/30/40/50，设置页标明「消息条数」口径）；手动「立即总结」随时可用不受计数影响
+- 改动文件：src/lib/memory.ts、src/lib/memory-core.ts、src/lib/ios/idb-kv.ts、src/lib/ios/groups.ts、src/components/apps/{chat,wechat,qq,phone,qq-group,wx-group,memory-bank}.tsx
+- 兼容性：旧 mem-round 键废弃不迁移；旧设置档 3/5 自动回退 10；记忆分层（碎片→核心→长期）、召回互通过滤、角色隔离、单聊/群聊、去重合并全部未动

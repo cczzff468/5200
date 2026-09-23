@@ -43,7 +43,7 @@ import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import type { ContactRecord } from '@/lib/contacts';
@@ -639,10 +639,8 @@ function CallScreen({
               'phone',
               apiConfig,
               () => turns,
-              () => {
-                const last = historyBefore[historyBefore.length - 1];
-                return last ? String(last.id) : undefined;
-              },
+              // 电话通话无持久消息数组：memAfterAiTurn 内部按「1 条用户字幕 + 1 条 AI 回复」固定计数
+              () => null,
               { user: owner || profileName, peer: contact.name }
             )
           );

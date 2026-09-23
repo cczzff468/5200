@@ -147,7 +147,7 @@ import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import {
   addUserMomentComment,
   addUserMomentPost,
@@ -2548,7 +2548,7 @@ function ChatPage({
               'qq',
               apiConfig,
               () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-              () => memLastMsgId(loadMsgs(peer.id)),
+              () => loadMsgs(peer.id),
               { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );

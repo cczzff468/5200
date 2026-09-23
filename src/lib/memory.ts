@@ -9,8 +9,12 @@
  *   · mem-ltm:<contactId>    核心记忆（M 条碎片总结；键名沿用历史 ltm，语义=核心层）
  *   · mem-long:<contactId>   长期记忆（K 条核心记忆总结出的最稳定画像，层级顶层）
  *   · mem-settings:<contactId> 每联系人设置（提取频率/核心阈值/长期阈值/互通开关/失忆程度）
- *   · mem-round:<contactId>:<app>  各 App 会话的对话轮次计数（提取节奏用）
- * - 三层管线：碎片（每 N 轮提取）→ 核心记忆（积累 M 条碎片总结一条）→ 长期记忆（积累 K 条
+ *   · mem-msgcount:<cid>[:<app>[:group:<gid>]]  自上次提取累计的消息条数（提取节奏用）：
+ *     群聊始终按群独立；私聊互通开 = 按角色一条计数（四 App 合并累计）、互通关 = 各 App 独立
+ *   · mem-anchor:<cid>:<app>[:group:<gid>]  各会话已计数的最后一条消息 ID（增量计数锚点：
+ *     每次 AI 回复后数锚点之后的新增消息（用户+AI 都算），汇入计数；切换互通只清计数不清锚点）
+ *   · 旧 mem-round:<cid>:<app> 轮次键已废弃不再读写（仅删除联系人时残留清扫）
+ * - 三层管线：碎片（每 N 条消息提取）→ 核心记忆（积累 M 条碎片总结一条）→ 长期记忆（积累 K 条
  *   未归档核心总结一条，默认 K=5）；核心被长期收编后标记 archivedAt（方案A：不再参与后续
  *   总结与召回，由长期记忆代表，避免重复总结/重复注入）。
  * - 互通开关（默认开）：开 = 四个 App（QQ/微信/信息/电话）共享该联系人全部记忆；
@@ -41,7 +45,7 @@
  */
 
 import type { ApiConfig } from '@/lib/ios/store';
-import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
+import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 import { getGroup, onGroupDissolved } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
@@ -117,7 +121,17 @@ const fragKey = (contactId: string) => `mem-frag:${contactId}`;
 const coreKey = (contactId: string) => `mem-ltm:${contactId}`;
 const longKey = (contactId: string) => `mem-long:${contactId}`;
 const settingsKey = (contactId: string) => `mem-settings:${contactId}`;
+/** 旧轮次计数键（口径=AI 回复轮数，已废弃）：仅 memPurgeContact 残留清扫用 */
 const roundKey = (contactId: string, app: MemApp) => `mem-round:${contactId}:${app}`;
+/** 消息条数计数键：scope 非空（群聊）按群独立；私聊互通开 = 按角色合并（无 app 段）、互通关 = 各 App 独立 */
+const countKey = (contactId: string, app: MemApp, scope: string, share: boolean) =>
+  scope
+    ? `mem-msgcount:${contactId}:${app}${scope}`
+    : share
+      ? `mem-msgcount:${contactId}`
+      : `mem-msgcount:${contactId}:${app}`;
+/** 增量计数锚点键（已计数的最后一条消息 ID）：始终按会话（app+scope），各 App 消息流独立数增量 */
+const anchorKey = (contactId: string, app: MemApp, scope: string) => `mem-anchor:${contactId}:${app}${scope}`;
 
 function readJSON<T>(key: string): T | null {
   try {
@@ -190,8 +204,18 @@ export function getMemSettings(contactId: string): MemSettings {
 }
 
 export function saveMemSettings(contactId: string, patch: Partial<MemSettings>): MemSettings {
-  const next = { ...getMemSettings(contactId), ...patch };
+  const prev = getMemSettings(contactId);
+  const next = { ...prev, ...patch };
   writeJSON(settingsKey(contactId), next);
+  // 互通口径切换：计数清零重新累计（合并计数的数字对独立计数无意义，反之亦然；
+  // 锚点保留——已计过的消息不重复计，切换后只数新消息）
+  if (patch.share !== undefined && patch.share !== prev.share) {
+    try {
+      kvDelByPrefix(`mem-msgcount:${contactId}`);
+    } catch {
+      // 忽略
+    }
+  }
   return next;
 }
 
@@ -442,7 +466,7 @@ export function deleteLongTerm(contactId: string, id: string): boolean {
   return true;
 }
 
-/** 删除联系人时级联清理其全部记忆（碎片/核心/长期/设置/轮次计数） */
+/** 删除联系人时级联清理其全部记忆（碎片/核心/长期/设置/消息计数/锚点/旧轮次键） */
 export function memPurgeContact(contactId: string): void {
   try {
     // IndexedDB kv（内存+库同步删）+ localStorage 旧键兼容清扫（防历史残留复活）
@@ -456,6 +480,9 @@ export function memPurgeContact(contactId: string): void {
       kvDel(k);
       window.localStorage.removeItem(k);
     }
+    // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键）
+    kvDelByPrefix(`mem-msgcount:${contactId}`);
+    kvDelByPrefix(`mem-anchor:${contactId}`);
   } catch {
     // 忽略
   }
@@ -1121,30 +1148,47 @@ async function maybeAutoLongSummarize(contactId: string, apiConfig: ApiConfig, n
   return summarizeCoresIntoLong(contactId, apiConfig, names);
 }
 
-/** 群聊轮次的来源/作用域选项（memAfterAiTurn opts）：群记忆碎片带来源标记，轮次计数与私聊分开 */
+/** 群聊会话的来源/作用域选项（memAfterAiTurn opts）：群记忆碎片带来源标记，消息计数与私聊分开 */
 export interface MemTurnOpts {
-  /** 轮次计数隔离作用域（如 `group:<gid>` → mem-round:<cid>:wx:group:<gid>，与私聊轮次互不干扰） */
+  /** 计数隔离作用域（如 `group:<gid>` → mem-msgcount:<cid>:wx:group:<gid>，与私聊计数互不干扰） */
   roundScope?: string;
   /** 群聊来源标记：碎片写 source='group' + sourceGroupId + groupMembers */
   group?: { id: string; members: string[] };
 }
 
 /**
+ * 数锚点之后的有效消息条数（消息条数口径：用户消息 + AI 消息都算）。
+ * 撤回/失败消息不计；锚点缺失（首次）或丢失（消息被清理/封顶裁剪）时全量计入——宁可多计早触发。
+ */
+function countSinceAnchor(msgs: unknown[], anchorId?: string): number {
+  const valid = msgs.filter((m) => {
+    const o = m as { recalled?: unknown; error?: unknown } | null;
+    return !(o && typeof o === 'object' && (o.recalled === true || o.error === true));
+  });
+  if (!anchorId) return valid.length;
+  const idx = valid.findIndex((m) => String((m as { id?: unknown } | null)?.id ?? '') === anchorId);
+  if (idx < 0) return valid.length;
+  return valid.length - 1 - idx;
+}
+
+/**
  * 一轮 AI 对话结束后的记忆管线（各聊天 App 的 finalize 成功分支调用）：
- * 1) 轮次 +1；2) 达到提取间隔 → 从最近对话提取记忆碎片（后台异步，不阻塞聊天）；
- * 3) 碎片积累达到核心阈值 → 自动总结核心记忆；4) 核心积累达到长期阈值 → 自动总结长期记忆。
- * 失败静默（console.warn），不打断聊天。
+ * 1) 按消息条数累计（数锚点之后的新增消息，用户+AI 都算；互通开时四 App 合并到同一计数，
+ *    互通关/群聊各会话独立）；2) 达到提取间隔（消息条数）→ 清零并从最近对话提取记忆碎片
+ * （后台异步，不阻塞聊天）；3) 碎片积累达到核心阈值 → 自动总结核心记忆；
+ * 4) 核心积累达到长期阈值 → 自动总结长期记忆。失败静默（console.warn），不打断聊天。
  * buildConvo 惰性调用：只有真的需要提取时才读取/整理对话文本。
- * getSourceMsgId 惰性调用：提取时取来源消息 ID（追溯用，可省略）。
+ * getMsgs 惰性调用：返回本会话原始消息数组（增量计数 + 来源消息 ID 用）；
+ *   返回 null（电话通话等无持久消息数组的会话）时本轮固定计 2 条（1 用户 + 1 AI）。
  * names：用户真实名字 + 角色名字（视角统一注入提取/总结 prompt；缺省回退固定称呼）。
- * opts：群聊轮次传 roundScope + group（群记忆来源标记，轮次计数与私聊互不干扰）。
+ * opts：群聊传 roundScope + group（群记忆来源标记，计数与私聊互不干扰）。
  */
 export function memAfterAiTurn(
   contactId: string | null,
   app: MemApp,
   apiConfig: ApiConfig,
   buildConvo: () => MemConvoTurn[],
-  getSourceMsgId?: () => string | undefined,
+  getMsgs?: () => unknown[] | null,
   names?: MemNames | null,
   opts?: MemTurnOpts
 ): void {
@@ -1153,22 +1197,39 @@ export function memAfterAiTurn(
   try {
     // 时间感知：先把已到期的碎片标记归档（惰性清扫，召回/总结另有实时过滤兜底）
     memSweepExpiry(contactId);
-    const key = `mem-round:${contactId}:${app}${scope}`;
-    const count = (readJSON<number>(key) ?? 0) + 1;
-    const { interval } = getMemSettings(contactId);
+    const { interval, share } = getMemSettings(contactId);
+    const cKey = countKey(contactId, app, scope, share);
+    const aKey = anchorKey(contactId, app, scope);
+    const msgs = getMsgs?.() ?? null;
+    let added: number;
+    if (msgs && msgs.length > 0) {
+      added = countSinceAnchor(msgs, readJSON<string>(aKey) ?? undefined);
+      const lastId = memLastMsgId(msgs);
+      if (lastId) writeJSON(aKey, lastId);
+    } else {
+      added = 2; // 无消息数组（电话通话）：本轮固定 1 条用户字幕 + 1 条 AI 回复
+    }
+    if (added <= 0) return;
+    const count = (readJSON<number>(cKey) ?? 0) + added;
     if (count < interval) {
-      writeJSON(key, count);
+      writeJSON(cKey, count);
       return;
     }
-    // 达到间隔：归零计数并异步提取（归零在先避免每轮重试轰炸；下个窗口自然重试）
-    writeJSON(key, 0);
+    // 达到间隔：清零重新累计并异步提取（清零在先避免每轮重试轰炸；提取失败不回滚，下个窗口重新累计）
+    writeJSON(cKey, 0);
     const guard = `${contactId}:${app}${scope}`;
     if (inflight.has(guard)) return;
     inflight.add(guard);
     void (async () => {
       try {
-        const convo = buildConvo();
+        let convo = buildConvo();
+        // 互通开且当前会话内容太少（合并计数可能主要来自其他 App）：跨 App 取该联系人最近活跃会话
+        if (convo.length < 4 && share && !scope) {
+          const recent = memMostRecentApp(contactId);
+          if (recent && recent.convo.length > convo.length) convo = recent.convo;
+        }
         if (convo.length >= 4) {
+          const sourceMsgId = msgs ? memLastMsgId(msgs) : undefined;
           const res = await callMemoryApi<ExtractApiResult>(
             'extract',
             { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
@@ -1180,7 +1241,7 @@ export function memAfterAiTurn(
             const extra = opts?.group
               ? { source: 'group' as const, sourceGroupId: opts.group.id, groupMembers: opts.group.members }
               : undefined;
-            appendFragments(contactId, app, items, Date.now(), getSourceMsgId?.(), extra);
+            appendFragments(contactId, app, items, Date.now(), sourceMsgId, extra);
           }
         }
       } catch (err) {
