@@ -6180,3 +6180,26 @@ Stage Summary:
 - 互通行为基线：同一角色四端同体；互通开=记忆共享且角色被明确告知「别端聊过的事你亲身记得，绝不能否认」；互通关=各端记忆独立且角色知道「本App只有本App的记录」，回答口径为「我这边只有QQ的记录」而非「我微信都没加你」
 - 视觉基线：全部引用样式胶囊（时间/撤回/引用块/引用条/禁言横幅）= 12px 字号 + px-2 py-[3px]（条式 py-1），4px 圆角细边框不变
 - 已知边界：互通开但记忆尚未提取（默认每 20 轮才自动提取）时角色仍可自然应对（persona 已告知多端好友关系）；群聊模式的召回头部保持原文案（群来源标注独立体系）
+
+---
+Task ID: mem-auto-extract-fix
+Agent: main (Z.ai Code)
+Task: 排查「AI 不自动总结提取记忆了」——用户报告聊过天后记忆库无自动提取的新碎片
+
+Work Log:
+- 全链路排查：后端 /api/memory/extract 与 /api/memory/summarize 路由完好（含 completeWithFallback 用户上游失败回退内置 SDK）；callMemoryApi、memAfterAiTurn 调用链在四端聊天组件（wechat/qq/chat/phone/qq-group/wx-group）全部接通；ownerRealName/contactRealName 内部 catch 不会 reject；idb-kv 注水在开机门控前完成——管线本身无断点
+- 根因确认：默认提取频率 DEFAULT_MEM_SETTINGS.interval=20（且轮次按「联系人×App」独立计数 mem-round:<cid>:<app>），日常聊天单端单联系人几乎永远攒不满 20 轮 → 提取从不触发；dev.log 实证：18 次 POST /api/chat 200、0 次 /api/memory/extract 调用，完全吻合；git 历史确认默认 20 自记忆库上线从未改过（用户此前也基本没触发过，感知为「不工作了」）
+- 修复（memory-core.ts）：MEM_INTERVAL_OPTIONS [10,20,30,40,50]→[3,5,10,20,30]；DEFAULT_MEM_SETTINGS.interval 20→5；MemSettings.interval 联合类型同步 3|5|10|20|30；旧设置兼容：已存的 10/20/30 保留，40/50（越界档位）经 includes 校验自动回退新默认 5；memory-bank.tsx 文档注释同步（设置 UI grid-cols-5 恰好五档，动态读 DEFAULT_MEM_SETTINGS.interval 的「默认设置」文案自动跟随）
+- E2E 浏览器实测（agent-browser 390×844 + 自建 mock LLM :4100（SSE 聊天回复 + 非流式 fragments/summary JSON + CORS + 请求日志）+ IndexedDB 种子 林川(user linchuan001/123456)/榴莲(char friendWx+friendQq) + apiConfig→mock + mem-round:c-char:wx=4）：
+  ①微信登录→发消息→mock 流式回复→第 1 轮即命中种子的阈值边界：计数 4+1=5≥5 归零，但提取因 convo.length(2)<4 合理跳过（真实场景计数与消息同步增长不会出现）→继续自然聊满 6 轮
+  ②第 6 轮回复落盘后：mock 日志出现 kind=extract、dev.log 出现 POST /api/memory/extract 200 → 2 条碎片自动入库 mem-frag:c-char（「榴莲和林川约好了周五晚上一起吃饭」normal /「榴莲最近在准备一场跑步比赛」low，app='wx' 标记正确）→ 计数器归零 ✓
+  ③记忆库 App UI：榴莲档案页「2 条碎片/0 条核心/0 条长期/互通·开」，两条碎片带时间/来源「微信」/来源消息 ID 正常展示 ✓
+  ④设置 Tab：提取频率五档按钮 3/5/10/20/30，默认选中 5（aria-pressed）✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过；测试环境已清理（浏览器会话关闭、mock 进程杀掉、.e2e 临时目录删除）
+
+Stage Summary:
+- 根因：不是管线坏了，是默认「每 20 轮提取一次」的间隔在实际使用中几乎永远达不到（轮次还按联系人×App 分开计）
+- 改动文件：src/lib/memory-core.ts（默认 5 轮 + 档位 [3,5,10,20,30] + 类型）、src/components/apps/memory-bank.tsx（注释）
+- 行为基线：新用户/未手动改过频率的用户现在每 5 轮自动提取一次碎片（约 5 问 5 答攒一批记忆）；核心总结阈值 5 条碎片、长期阈值 5 条核心不变；提取重复内容自动合并/加强（appendFragments 去重）不会刷屏
+- 验证基线：聊天→计数→提取→入库→记忆库 UI 展示全链路浏览器实测打通；设置页新档位与默认选中 5 确认
+- 已知边界：手动改过频率（存了 10/20/30）的用户保持自己的选择；用户上游 API 失败时提取走服务端内置 SDK 兜底不受影响
