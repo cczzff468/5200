@@ -3999,37 +3999,40 @@ function ChatPage({
     [peer.id, peer.name, me.name, pushSysMsg]
   );
 
-  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——不管是谁拉黑，被标记一方气泡都带图标：
-   *  对方拉黑了我 → 我的气泡标记；我拉黑了对方 → 对方的气泡标记；互拉时两侧同时显示；
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——拉黑关系存续期间（任一方向），该期间内的
+   *  双方气泡都带图标（用户拉黑 AI 后用户气泡也有图标，反之亦然）；
    *  按拉黑区间判定：拉黑前的历史消息不标，拉黑期间发的消息恒标（解除后也不消失），解除后新消息不标；
    *  系统提示行/申请卡片/撤回行不显示 */
   const blockSideOf = (m: WxMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
-    if (m.role === 'me' && blockCoversAt(blk, 'byChar', m.time)) return 'me';
-    if (m.role === 'peer' && blockCoversAt(blk, 'byUser', m.time)) return 'peer';
-    return null;
+    if (!blockCoversAt(blk, 'byUser', m.time) && !blockCoversAt(blk, 'byChar', m.time)) return null;
+    return m.role === 'me' ? 'me' : 'peer';
   };
 
-  /** 红色 ! 圆点：紧贴气泡（我的消息在气泡左侧、对方在气泡右侧，微信发送失败图标同位） */
+  /** 拉黑图标渲染（红色 ! 圆点，微信发送失败图标同位）：我的消息在气泡左侧、对方在气泡右侧 */
+  const blockIconSpan = (side: 'me' | 'peer', testid: string) => (
+    <span
+      data-testid={testid}
+      aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
+      className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white"
+    >
+      !
+    </span>
+  );
+
+  /** 红色 ! 圆点：紧贴气泡（流式与落盘消息共用同款样式） */
   const blockedIconOf = (m: WxMsg) => {
     const side = blockSideOf(m);
     if (!side) return null;
-    return (
-      <span
-        data-testid={side === 'me' ? 'wx-block-icon-me' : 'wx-block-icon-peer'}
-        aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
-        className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white"
-      >
-        !
-      </span>
-    );
+    return blockIconSpan(side, side === 'me' ? 'wx-block-icon-me' : 'wx-block-icon-peer');
   };
 
-  /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」时跟在我的消息后面，
-   *  居中半透明圆角胶囊（与系统提示行同款）；
-   *  我拉黑对方 → 对方气泡只显示拉黑图标，不显示拒收文案 */
+  /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」区间内我的消息后面跟随（与图标判定解耦：
+   *  用户拉黑 AI 后自己的气泡也有图标，但不显示拒收文案），
+   *  居中半透明圆角胶囊（与系统提示行同款） */
   const blockedLineOf = (m: WxMsg) => {
-    if (blockSideOf(m) !== 'me') return null;
+    if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
+    if (m.role !== 'me' || !blockCoversAt(blk, 'byChar', m.time)) return null;
     return (
       <div className="py-1 text-center">
         <span
@@ -5017,6 +5020,9 @@ function ChatPage({
                       />
                       {stickersOn ? prettifyRichText(t) : stripEmojiText(prettifyRichText(t).replace(/\[表情包\]/g, ' '))}
                     </div>
+                    {/* 拉黑图标：流式期间与落盘消息一致，气泡出现即显示（不等回复完成） */}
+                    {(blockCoversAt(blk, 'byUser', stream.startedAt) || blockCoversAt(blk, 'byChar', stream.startedAt)) &&
+                      blockIconSpan('peer', 'wx-stream-block-icon')}
                   </div>
                 ))}
                 {(split.pending || split.texts.length === 0) && (

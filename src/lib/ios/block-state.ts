@@ -61,9 +61,8 @@ export interface BlockEntry {
   reqCount?: number;
 }
 
-/** 申请被拒绝后的冷却窗口：窗口内角色的 [申请解除拉黑] 动作被静默忽略（防连环刷卡片） */
-export const BLOCK_REQ_COOLDOWN_MS = 10 * 60 * 1000;
-/** 当前拉黑周期内申请被拒绝次数上限：达到后彻底不再受理（用户解除拉黑后重新拉黑才重置） */
+/** 当前拉黑周期内申请被拒绝次数上限：达到后彻底不再受理（用户解除拉黑后重新拉黑才重置）。
+ *  注意：已按用户要求移除「被拒后冷却期」——被拒后可以立即再次申请，只有次数上限拦截。 */
 export const BLOCK_REQ_MAX_REJECTED = 3;
 
 const blockKey = (app: BlockApp, contactId: string) => `${app}-block:${contactId}`;
@@ -189,11 +188,8 @@ export function applyCharBlockAction(
     return { entry: saveBlock(app, contactId, { ...cur, byChar: undefined, byCharUntil: Date.now() }), changed: true, reqCreated: false };
   }
   // request：必须当前真的被用户拉黑，且没有还没处理的申请（避免连环申请刷屏）；
-  // 被拒绝后有冷却窗口（冷却内静默忽略），拒绝次数达上限后彻底不再受理（新周期由用户重新拉黑开启）
+  // 冷却期已按用户要求移除（被拒后可立即再申请）；拒绝次数达上限后彻底不再受理（新周期由用户重新拉黑开启）
   if (!cur.byUser || cur.reqReason) return { entry: cur, changed: false, reqCreated: false };
-  if (cur.rejectedAt && Date.now() - cur.rejectedAt < BLOCK_REQ_COOLDOWN_MS) {
-    return { entry: cur, changed: false, reqCreated: false };
-  }
   if ((cur.reqCount ?? 0) >= BLOCK_REQ_MAX_REJECTED) {
     return { entry: cur, changed: false, reqCreated: false };
   }
@@ -284,8 +280,7 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
     ].join('\n');
   }
   const lines: string[] = [];
-  // 防骚扰状态：冷却中 / 次数达上限 → 明确告诉角色别再发申请（硬性拦截在 applyCharBlockAction 里）
-  const inCooldown = b.byUser && b.rejectedAt !== undefined && Date.now() - b.rejectedAt < BLOCK_REQ_COOLDOWN_MS;
+  // 防骚扰状态：次数达上限 → 明确告诉角色别再发申请（硬性拦截在 applyCharBlockAction 里；冷却期已移除）
   const capped = b.byUser && (b.reqCount ?? 0) >= BLOCK_REQ_MAX_REJECTED;
   if (b.byUser) {
     lines.push(
@@ -295,8 +290,7 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
       `- 你可以申请让 ${user} 解除拉黑：在回复里单独输出一行标记 [申请解除拉黑:你的理由]（标记里用一句话写真诚的理由，不要加引号）。系统会把申请做成卡片展示给 ${user}，由 TA 决定同不同意。`,
       `- 申请还没结果时不要重复输出申请标记；`
     );
-    if (b.rejectedAt) lines.push(`- 你上次申请解除拉黑被 ${user} 拒绝了。先按人设消化这件事（失落、赌气、反思都行），不要立刻再发申请。`);
-    if (inCooldown) lines.push(`- 你刚被拒绝不久，系统暂时不会再转达新的申请（冷却中），不要输出申请标记。`);
+    if (b.rejectedAt) lines.push(`- 你上次申请解除拉黑被 ${user} 拒绝了。先按人设消化这件事（失落、赌气、反思都行）；想再次申请时可以再输出申请标记。`);
     if (capped) lines.push(`- 你已经多次申请被拒绝，系统不会再转达新的申请，不要输出申请标记。`);
   }
   if (b.byChar) {

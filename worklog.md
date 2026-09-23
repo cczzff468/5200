@@ -6269,3 +6269,21 @@ Stage Summary:
 - 改动文件：src/lib/ios/block-state.ts（区间字段+blockCoversAt+能力声明注入）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx（blockSideOf 改区间判定，各 1 处）
 - 用户 5 大症状全部闭环：AI 说拉黑必写状态（能力声明强制标记）→ 双方向状态区分（byUser/byChar 本就独立、现在 AI 侧真的会写入）→ 持久化（kv 本就落盘，实测 reload 保留）→ 双向红色感叹号（拉黑期间/之后发的消息带图标，历史区间规则精确）→ AI 感知（system 每轮现场注入对应方向状态段，实测请求体断言）
 - 边界说明：真实 AI 是否愿输出 [拉黑] 标记取决于模型 prompt 遵循度——机制链路（标记解析/状态写入/图标/感知）已实测全通，能力声明措辞已最强约束（"严禁只说不标"；mock 与真实模型走完全相同的解析与渲染路径）
+
+---
+Task ID: block-ux-round2 + api-test-route
+Agent: Z.ai Code (main)
+Task: ①拉黑关系存续期间双方气泡都显示红色感叹号 ②图标气泡出现即显示（不等回复完成）③删除申请解除拉黑冷却期 ④API 设置「测试连接」失败修复
+
+Work Log:
+- ①双向图标语义修正：blockSideOf（wechat/qq/chat 三处）从「被拉黑方才标」改为「拉黑关系存续期间（byUser/byChar 任一区间覆盖消息时间），双方气泡都标」——用户拉黑 AI 后用户气泡也有图标，AI 拉黑用户同理；互拉全标
+- ②拒收行与图标判定解耦：blockedLineOf 改为独立判定（仅 byChar 区间内的 me 消息跟「消息已发出，但被对方拒收了。」），用户拉黑 AI 后自己气泡有图标但无拒收文案（方向语义不变）；实测互拉态 linesMe=1 仅跟 AI 拉黑后的 me 消息
+- ②流式气泡图标：wechat（wx-stream-bubble 行内）/ qq / chat（sms-stream 气泡行外包 flex items-end）三个流式分支按 stream.startedAt 做区间判定插入 blockIconSpan（testid *-stream-block-icon）——气泡出现即显示；实测 mock 长回复轮询 STREAM_ICON_FOUND@120ms（流式开始即有图标），落盘后 icons 数与区间一致
+- ③冷却期删除：applyCharBlockAction 移除 rejectedAt 冷却拦截（仅保留 BLOCK_REQ_MAX_REJECTED=3 次数上限）；buildBlockPromptBlock 删除「冷却中」提示行，被拒措辞改为「想再次申请时可以再输出申请标记」；实测：拒绝→4 秒后立即再申请→新卡片 pending 出现（旧逻辑 10min 冷却内静默忽略）；连拒 3 次后第 4 次申请不再出卡片（上限仍在）
+- ④API 测试失败根因：前端 runTest 调用 /api/settings/test 但该路由不存在（404→res.json()=null→永远「测试失败，请稍后重试」）；新建 src/app/api/settings/test/route.ts（服务器端代理测试：端点归一化候选 + 400 参数兼容重试 max_completion_tokens/去温度 + 私有地址返回 directOnly 让前端浏览器直连 + 401/403/404/429 友好错误透传），逻辑与 /api/chat、directTest 完全同款
+- E2E 实测：curl 直测 route——私有地址 {directOnly:true}✓、不可达公网 {connected:false, error:"无法连接到上游接口：fetch failed（实际请求端点：…）"}✓；UI 完整链路——设置›API 配置›测试连接→「（浏览器直连）· 延迟 8ms · 模型 mock-model」✓；双向图标 iconsMe=1+iconsPeer=1（用户拉黑 AI）✓；回归 AI 拉黑用户方向 iconsMe=10/linesMe=1/iconsPeer=16 全部符合区间规则 ✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过；测试后已清空三个 App 的 block 键并恢复 seed 基线
+
+Stage Summary:
+- 改动文件：src/lib/ios/block-state.ts（删冷却+提示措辞）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx（blockSideOf 双向化+blockedLineOf 解耦+blockIconSpan 提取+流式分支图标）、src/app/api/settings/test/route.ts（新建，修复「测试连接」404）
+- 用户 4 项全部闭环并有实测证据；拒收行语义保持「仅对方拉黑我」不变，图标语义升级为「拉黑关系存续期间双方都标」
