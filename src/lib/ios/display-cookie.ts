@@ -127,11 +127,21 @@ export function bootSnapshotFromWindow(): DisplaySnapshot | null {
 
 // ---------------- 自定义壁纸首帧缓存（压缩 dataURL；Blob 要等 IndexedDB load，太慢） ----------------
 
+export interface WallLightness {
+  top: boolean;
+  bottom: boolean;
+  all: boolean;
+}
+
 export interface WallCacheEntry {
-  /** 压缩后的 dataURL（image/jpeg） */
+  /** 压缩后的 dataURL（webp 优先——保留透明通道，回退 jpeg） */
   d: string;
   /** 源 Blob 大小（自愈比对：尺寸不符 = 缓存过期，重新生成） */
   s: number;
+  /** 壁纸平均色（压缩时顺手算出）：首帧占位底色用它，换正式图时色差最小 */
+  avg?: string;
+  /** 分区亮度（压缩时顺手算出）：首帧前景色同步正确，水合/实测后不再变色闪烁 */
+  light?: WallLightness;
 }
 
 export interface WallCache {
@@ -164,12 +174,26 @@ export function writeWallCache(kind: 'home' | 'lock', entry: WallCacheEntry | nu
   }
 }
 
+/** 与 store 的壁纸亮度实测同一阈值（0.5）：缓存里算出的分区亮度与运行时实测口径一致，避免两套判断互相打架 */
+const WALL_LIGHT_THRESHOLD = 0.5;
+
+function luminance255(r: number, g: number, b: number): number {
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
 /**
- * Blob → 压缩 dataURL（最长边约 1080px、JPEG 0.82）：控制在几百 KB 内，
- * pre-paint 脚本首帧直接用它当背景图，自定义壁纸不再等 IndexedDB load。
+ * Blob → 压缩 dataURL + 平均色 + 分区亮度（一次解码全部算好）：
+ * - 最长边约 1080px、webp 0.85（保留透明通道；不支持时回退 JPEG 0.82）；
+ * - avg：缩到 1×1 取平均色 —— boot 期占位底色用它，dataURL→原 Blob 换图瞬间色差最小；
+ * - light：缩到 32×64 按 Rec.709 亮度算顶/底/整体 —— 与 store 运行时实测同口径，
+ *   首帧前景色即正确，实测接管后不再变色闪烁。
  * 失败（解码失败/Canvas 不可用）返回 null，调用方跳过缓存。
  */
-export async function compressBlobToDataUrl(blob: Blob, maxSide = 1080, quality = 0.82): Promise<string | null> {
+export async function compressBlobToDataUrl(
+  blob: Blob,
+  maxSide = 1080,
+  quality = 0.82
+): Promise<{ d: string; avg: string; light: WallLightness } | null> {
   try {
     if (typeof document === 'undefined') return null;
     const bitmap = await createImageBitmap(blob);
@@ -182,8 +206,64 @@ export async function compressBlobToDataUrl(blob: Blob, maxSide = 1080, quality 
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
     ctx.drawImage(bitmap, 0, 0, w, h);
+
+    // 平均色：1×1 缩样
+    let avg = '#1c1c1e';
+    try {
+      const tiny = document.createElement('canvas');
+      tiny.width = 1;
+      tiny.height = 1;
+      const tctx = tiny.getContext('2d', { willReadFrequently: true });
+      if (tctx) {
+        tctx.drawImage(bitmap, 0, 0, 1, 1);
+        const [r, g, b] = tctx.getImageData(0, 0, 1, 1).data;
+        avg = `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+      }
+    } catch {
+      /* 平均色失败用默认深灰 */
+    }
+
+    // 分区亮度：32×64 逐行（口径与 store.useMeasuredWallpaperLight 完全一致）
+    let light: WallLightness | null = null;
+    try {
+      const W = 32;
+      const H = 64;
+      const small = document.createElement('canvas');
+      small.width = W;
+      small.height = H;
+      const sctx = small.getContext('2d', { willReadFrequently: true });
+      if (sctx) {
+        sctx.drawImage(bitmap, 0, 0, W, H);
+        const { data } = sctx.getImageData(0, 0, W, H);
+        const rowLum: number[] = [];
+        for (let y = 0; y < H; y++) {
+          let sum = 0;
+          for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4;
+            sum += luminance255(data[i], data[i + 1], data[i + 2]);
+          }
+          rowLum.push(sum / W);
+        }
+        const avgRows = (a: number, b: number) => {
+          let sum = 0;
+          for (let y = a; y < b; y++) sum += rowLum[y];
+          return sum / (b - a);
+        };
+        light = {
+          top: avgRows(0, Math.floor(H * 0.35)) > WALL_LIGHT_THRESHOLD,
+          bottom: avgRows(Math.floor(H * 0.86), H) > WALL_LIGHT_THRESHOLD,
+          all: avgRows(0, H) > WALL_LIGHT_THRESHOLD,
+        };
+      }
+    } catch {
+      /* 亮度实测失败静默：首帧回退深色前景 */
+    }
+
     bitmap.close();
-    return canvas.toDataURL('image/jpeg', quality);
+    // webp 优先（保留透明通道、体积更小）；不支持 webp 的浏览器回退 jpeg
+    let d = canvas.toDataURL('image/webp', 0.85);
+    if (!d.startsWith('data:image/webp')) d = canvas.toDataURL('image/jpeg', quality);
+    return { d, avg, light: light ?? { top: false, bottom: false, all: false } };
   } catch {
     return null;
   }
@@ -202,6 +282,6 @@ export async function healWallCache(kind: 'home' | 'lock', blob: Blob | null): P
     return;
   }
   if (entry && entry.s === blob.size) return;
-  const d = await compressBlobToDataUrl(blob);
-  if (d) writeWallCache(kind, { d, s: blob.size });
+  const out = await compressBlobToDataUrl(blob);
+  if (out) writeWallCache(kind, { d: out.d, s: blob.size, avg: out.avg, light: out.light });
 }

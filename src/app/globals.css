@@ -196,3 +196,9 @@ html[data-boot-lock-light] [data-statusbar-fg] {
 html[data-boot-lock-light] [data-homebar-fg] {
   background-color: #000 !important;
 }
+
+/* 跨文档视图过渡（Chrome 126+）：同源导航期间旧页面保持可见直到新页面可绘制，
+   消除刷新/进入网页时的白屏闪烁；不支持的浏览器自动回退默认行为 */
+@view-transition {
+  navigation: auto;
+}

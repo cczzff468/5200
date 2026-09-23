@@ -15,6 +15,26 @@ import {
 } from './display-cookie';
 import { WALLPAPER_PRESETS, resolveWallpaperStyle, type WallpaperPreset } from './wallpaper-presets';
 
+// ---------------- 壁纸亮度实测的 localStorage 持久化（防首帧文字变色闪烁） ----------------
+// 图片壁纸的亮度要异步解码测量（锁屏文字随背景变色）—— 测量完成前只能回退静态标记，
+// 首帧颜色与实测结果不一致时就会「闪一下变色」。把实测结果持久化到 localStorage：
+// 下次开机模块加载时同步回填内存缓存 → 首帧渲染即命中，颜色从第一帧起就不变。
+
+const WALL_LIGHT_LS_KEY = 'ios-wall-light';
+
+function persistWallLight(url: string, v: { top: boolean; bottom: boolean; all: boolean }): void {
+  try {
+    const raw = window.localStorage.getItem(WALL_LIGHT_LS_KEY);
+    const map = (raw ? (JSON.parse(raw) as Record<string, { top: boolean; bottom: boolean; all: boolean }>) : {}) ?? {};
+    const keys = Object.keys(map);
+    if (keys.length >= 40 && !(url in map)) delete map[keys[0]]; // 上限防膨胀
+    map[url] = v;
+    window.localStorage.setItem(WALL_LIGHT_LS_KEY, JSON.stringify(map));
+  } catch {
+    /* 存储不可用静默：仅失去「下次开机免测量」优化 */
+  }
+}
+
 // 壁纸预设与样式解析已抽到 wallpaper-presets.ts（服务端 layout 也要用）；此处 re-export 保持既有导入不变
 export { WALLPAPER_PRESETS, resolveWallpaperStyle };
 export type { WallpaperPreset };
@@ -173,12 +193,34 @@ function syncDisplayCookie(s: Pick<SettingsState, 'theme' | 'wallpaperPreset' | 
   writeDisplayLS(snap);
 }
 
-/** 自定义壁纸首帧缓存生成：压缩 dataURL 写 localStorage（失败静默，退回旧换图行为） */
+/**
+ * 图片预解码（fire-and-forget）：让浏览器提前完成取图+解码，真正渲染到 background-image 时零延迟。
+ * 用于 load() 拿到自定义壁纸 Blob URL 的瞬间 —— boot 期显示的是 dataURL 缓存，
+ * 换原 Blob 图前先解码好，切换瞬间无感（不然首绘要等解码，浅色底色会闪一下）。
+ */
+function warmImageDecode(url: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const img = new Image();
+    img.src = url;
+    const done = img.decode?.();
+    if (done && typeof done.catch === 'function') done.catch(() => undefined);
+  } catch {
+    /* 预解码失败静默：换图时浏览器自行解码 */
+  }
+}
+
+/** 自定义壁纸首帧缓存生成：压缩 dataURL + 平均色 + 分区亮度一并写入 localStorage（失败静默，退回旧换图行为） */
 function compressWallCache(kind: 'home' | 'lock', blob: Blob): Promise<WallCacheEntry | null> {
   return compressBlobToDataUrl(blob).then(
-    (d) => {
-      const entry: WallCacheEntry | null = d ? { d, s: blob.size } : null;
+    (out) => {
+      const entry: WallCacheEntry | null = out ? { d: out.d, s: blob.size, avg: out.avg, light: out.light } : null;
       writeWallCache(kind, entry);
+      // 压缩时已算出分区亮度 → 同步回填运行时实测缓存：boot→load 换图后前景色不变
+      if (out) {
+        wallpaperLightCache.set(out.d, out.light);
+        persistWallLight(out.d, out.light);
+      }
       return entry;
     },
     () => null
@@ -288,6 +330,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         if (w.customBlob instanceof Blob) {
           homeWallBlob = w.customBlob;
           customWallpaperUrl = URL.createObjectURL(w.customBlob);
+          warmImageDecode(customWallpaperUrl); // 预解码：boot 期 dataURL → 原 Blob 换图瞬间无感
         } else if (typeof w.preset === 'string' && WALLPAPER_PRESETS.some((p) => p.id === w.preset)) {
           wallpaperPreset = w.preset;
         }
@@ -305,6 +348,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         if (lw.customBlob instanceof Blob) {
           lockWallBlob = lw.customBlob;
           lockCustomWallpaperUrl = URL.createObjectURL(lw.customBlob);
+          warmImageDecode(lockCustomWallpaperUrl); // 预解码：同上（锁屏自定义壁纸）
         }
       }
       // 首帧缓存自愈（后台静默）：localStorage 里的自定义壁纸 dataURL 与 IndexedDB Blob 比对，
@@ -619,6 +663,21 @@ const LIGHT_LUMINANCE_THRESHOLD = 0.5;
 const wallpaperLightCache = new Map<string, { top: boolean; bottom: boolean; all: boolean }>();
 const WALLPAPER_LIGHT_CACHE_MAX = 32;
 
+// 模块加载时同步回填上一次会话的实测结果（客户端）：首次渲染即命中，首帧颜色零跳变
+if (typeof window !== 'undefined') {
+  try {
+    const raw = window.localStorage.getItem(WALL_LIGHT_LS_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, { top: boolean; bottom: boolean; all: boolean }>) : {};
+    for (const [k, v] of Object.entries(map)) {
+      if (v && typeof v.top === 'boolean' && typeof v.bottom === 'boolean' && typeof v.all === 'boolean') {
+        wallpaperLightCache.set(k, v);
+      }
+    }
+  } catch {
+    /* 缓存损坏静默：走异步实测 */
+  }
+}
+
 export interface WallpaperLightness {
   /** 顶部区域（状态栏/日期/大时钟/小组件，0–35%）是否偏浅：true=用黑字 */
   top: boolean | null;
@@ -736,6 +795,7 @@ export function useMeasuredWallpaperLight(style: CSSProperties): WallpaperLightn
           wallpaperLightCache.delete(wallpaperLightCache.keys().next().value as string);
         }
         wallpaperLightCache.set(url, result);
+        persistWallLight(url, result); // 持久化：下次开机模块加载时同步回填，首帧颜色零跳变
         setImgState({ url, ...result });
       } catch {
         // 画布被污染等异常：保持 null 回退静态标记

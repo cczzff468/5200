@@ -58,10 +58,12 @@ try {
   var decls=[];
   if(front)decls.push('background-color:'+front.base+'!important');
   function dataUrlOf(kind){try{var e=wc&&wc[kind];return e&&e.d?e.d:null;}catch(e){return null;}}
+  function entryOf(kind){try{return wc&&wc[kind]&&wc[kind].d?wc[kind]:null;}catch(e){return null;}}
   function setVars(prefix,id,kind){
-    var d=dataUrlOf(kind);var p=presetOf(id);
+    var en=entryOf(kind);var d=en?en.d:null;var p=presetOf(id);
     if(d){
-      decls.push(prefix+'-base:#1c1c1e');
+      /* 占位底色用压缩时算出的平均色：boot→load 换原 Blob 图瞬间色差最小（无感切换） */
+      decls.push(prefix+'-base:'+(en.avg||'#1c1c1e'));
       decls.push(prefix+'-image:url("'+d+'")');
       decls.push(prefix+'-size:cover');
       decls.push(prefix+'-pos:center');
@@ -79,8 +81,12 @@ try {
   document.head.appendChild(st);
   /* 首帧前景色：锁屏开启且锁屏壁纸偏浅时，SSR（无 cookie）按默认 graphite 画了白字，
      水合后才会变黑字 = 变色闪烁。标记 html 属性让全局 CSS 在首帧就覆盖成黑字
-     （PhoneShell load() 后移除标记，前景色交还给实测逻辑）。 */
-  if(lockOn&&front&&front.light)html.setAttribute('data-boot-lock-light','');
+     （PhoneShell load() 后移除标记，前景色交还给实测逻辑）。
+     自定义壁纸没有预设静态标记 —— 用压缩时持久化的分区亮度（与运行时实测同口径）。 */
+  var frontLight=front?front.light:false;
+  var lockEn=lockOn?entryOf('lock'):null;
+  if(lockOn&&lockEn&&lockEn.light&&typeof lockEn.light.top==='boolean')frontLight=lockEn.light.top;
+  if(lockOn&&frontLight)html.setAttribute('data-boot-lock-light','');
   var dark=snap.theme==='dark'||(snap.theme==='auto'&&!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches));
   if(dark)html.classList.add('dark');
   if(!lockOn)html.setAttribute('data-lock-off','');

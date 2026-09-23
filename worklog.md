@@ -6223,3 +6223,30 @@ Stage Summary:
 - 改动文件：src/lib/ios/display-cookie.ts（LS 镜像+壁纸 dataURL 缓存+压缩/自愈工具）、src/lib/ios/boot-script.ts（新建，pre-paint+尾部脚本）、src/lib/ios/wallpaper-presets.ts（BOOT_WALL_STYLE/BOOT_LOCK_WALL_STYLE 变量样式+bootPresetTableJson 含 light 标记）、src/app/layout.tsx（注入两段脚本）、src/lib/ios/store.ts（syncDisplayCookie 双写、壁纸缓存写入、load() 自愈）、src/components/ios/PhoneShell.tsx（bootSnapshot 优先 window 全局、壁纸层恒变量引用、seedDisplay 客户端守卫、html.dark/data-lock-off/data-boot-lock-light 接管）、src/components/ios/LockScreen.tsx（BOOT_LOCK_WALL_STYLE+data 属性）、src/components/ios/StatusBar.tsx（bootLockWallpaper 前景直通+data 属性）、src/lib/ios/foreground.ts（useLightForeground boot 预设参数）、src/app/globals.css（data-lock-off 隐藏+3 条前景覆盖）
 - 根因结论：锁屏闪烁=三因叠加（iframe cookie 阻断 × React19 清 html 内联变量 × SSR zustand 跨请求泄漏）；壁纸卡 2 秒=图片请求晚于水合+上述黑窗期；现首帧绘制前一切就绪，绘制后零变化
 - 已知边界：浏览器导航白屏（任何网站都有，非应用闪烁）；真·首次访问（无 LS 无 cookie）首帧为默认 graphite，load() 后换真实设置并落镜像，之后每次首帧即真实
+
+---
+Task ID: lock-enter-flicker-polish
+Agent: Z.ai Code (main)
+Task: 用户仍报「进入锁屏时屏幕会闪烁一下」，按其 5 项排查清单逐项定位并按 6 项修复要求实施（预加载/占位/最小重渲染/opacity 动画/平滑进出/真机验证），不改任何既有功能
+
+Work Log:
+- 30fps 全帧采样（此前 10fps 会漏单帧闪烁）定位剩余闪烁源：刷新路径 f009-013 共 5 帧（166ms）导航白闪是唯一实质闪烁（锁屏内容/壁纸/文字首帧已全部正确）
+- 按用户清单逐项排查结论：①锁屏组件无重复渲染（AnimatePresence initial={false}，boot+锁定时反而把主屏壁纸层置 hidden 防早绘 1 帧透出）②壁纸异步加载问题——PNG 预设 HTML 解析期 preload、自定义壁纸压缩 dataURL 缓存直出，本次再加 Blob 预解码 ③加载完成前占位——本次把占位底色升级为压缩时算出的平均色（1×1 缩样）+ webp 保留透明通道 ④动画——熄屏遮罩从条件卸载（display 式硬切）改为常驻 opacity 150ms 过渡 ⑤定时器仅时钟 1s tick（必要）+ 亮度实测完成时会变色闪烁——本次持久化修复
+- 修复实施：
+  ①@view-transition{navigation:auto}（globals.css）——同源导航旧页保持可见到新页可绘，Chrome 153 实测刷新白闪 5 帧→0 帧（150/150 全为锁屏帧）
+  ②亮度实测持久化（store.ts）：useMeasuredWallpaperLight 结果写 localStorage(ios-wall-light)+模块加载同步回填内存缓存——首帧渲染即命中，锁屏/状态栏文字颜色从第一帧起零跳变；自定义壁纸在压缩 dataURL 时同步算出分区亮度（与实测同口径 0.5 阈值）一并回填
+  ③自定义壁纸缓存升级（display-cookie.ts）：webp 0.85（透明通道不丢，回退 jpeg）+ avg 平均色（boot 占位底色=平均色，dataURL→原 Blob 换图色差最小）+ light 分区亮度（boot 脚本据此设置首帧前景色标记，自定义壁纸无静态标记的盲区补齐）
+  ④Blob 预解码（store.ts warmImageDecode）：load() 拿到自定义壁纸 ObjectURL 立即 new Image()+decode()，换图瞬间无感
+  ⑤熄屏遮罩 opacity 化（PhoneShell）：常驻 div + transition-opacity 150ms + 非熄屏 pointer-events-none/aria-hidden，亮灭屏平滑淡切
+  ⑥boot 脚本 avg/light 消费（boot-script.ts）：--ios-boot-*-base 用缓存平均色、data-boot-lock-light 纳入自定义亮度
+- E2E 实证（agent-browser 30fps 全帧分类）：
+  ①V1 刷新路径：150/150 帧全为锁屏帧，白帧 0、过渡 0（修复前 5 帧白闪）✓
+  ②V2 电源键熄屏→唤醒循环：唯一过渡=熄屏淡入，唤醒无白闪无错帧 ✓
+  ③V3b 自定义红色锁屏壁纸稳态：159/163 帧红屏、0 暗帧 0 graphite 回退帧，首帧即真图，load() 换原 Blob 无感 ✓（V3 首次注入后首次加载按 graphite 兜底→load 后换红，属预期自愈链）
+  ④微信冒烟：打开有内容 ✓；水合错误 0、tsc/lint 全绿、测试壁纸已清理恢复原设置
+- 范围确认：改动仅限显示层（globals.css/display-cookie/boot-script/wallpaper-presets/store 壁纸与亮度部分/PhoneShell/LockScreen/StatusBar/foreground），聊天/记忆/世界书/朋友圈/红包/群管理/拉黑等逻辑零触碰
+
+Stage Summary:
+- 闪烁根因收口：进入锁屏的残余闪烁=导航白闪（View Transition 已消除）+ 亮度实测完成时的文字变色（持久化已消除）+ 自定义壁纸换图（平均色占位+预解码已消除）；三层修复后进入/刷新/亮熄屏全路径 30fps 抽帧零异常帧
+- 改动文件：src/app/globals.css、src/lib/ios/display-cookie.ts、src/lib/ios/boot-script.ts、src/lib/ios/store.ts、src/components/ios/PhoneShell.tsx
+- 已知边界：View Transition 被浏览器跳过时（资源紧张偶发）导航白帧约 130ms，属浏览器级导航空白，非应用内闪烁

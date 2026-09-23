@@ -200,8 +200,16 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
           dark ? 'dark' : ''
         }`}
       >
-        {/* 壁纸层（首帧 = CSS 变量，pre-paint 脚本写入真实壁纸；load() 后换 store 具体值） */}
-        <div className="absolute inset-0" style={wallpaperStyle} data-boot-wall="" suppressHydrationWarning aria-hidden="true" />
+        {/* 壁纸层（首帧 = CSS 变量，pre-paint 脚本写入真实壁纸；load() 后换 store 具体值）。
+            boot+锁定时主屏壁纸层被锁屏完全盖住 —— 置 hidden 防止它比锁屏层早绘制 1 帧造成透出闪现；
+            unlock 后 / 关锁屏时必须可见（主屏背景） */}
+        <div
+          className="absolute inset-0"
+          style={boot && locked ? { ...BOOT_WALL_STYLE, visibility: 'hidden' } : wallpaperStyle}
+          data-boot-wall=""
+          suppressHydrationWarning
+          aria-hidden="true"
+        />
 
         {/* 主屏幕 */}
         <HomeScreen />
@@ -245,15 +253,18 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
           )}
         </AnimatePresence>
 
-        {/* 熄屏遮罩（电源键熄屏；轻点或再按电源键唤醒到锁屏） */}
-        {screenOff && (
-          <div
-            role="button"
-            aria-label="轻点唤醒屏幕"
-            onClick={pressPower}
-            className="absolute inset-0 z-[95] cursor-pointer bg-black"
-          />
-        )}
+        {/* 熄屏遮罩（电源键熄屏；轻点或再按电源键唤醒到锁屏）。
+            常驻 + opacity 过渡（150ms）而非条件卸载 —— display 切换会造成硬切闪烁，
+            淡入淡出才符合 iOS 亮熄屏观感；非熄屏时 pointer-events-none 不挡点击 */}
+        <div
+          role="button"
+          aria-label="轻点唤醒屏幕"
+          aria-hidden={!screenOff}
+          onClick={pressPower}
+          className={`absolute inset-0 z-[95] bg-black transition-opacity duration-150 ease-out ${
+            screenOff ? 'cursor-pointer opacity-100' : 'pointer-events-none opacity-0'
+          }`}
+        />
 
         {/* 状态栏 + 灵动岛（bootTz：SSR 首帧按用户时区渲染时间；bootLockWallpaper：首帧前景色按锁屏壁纸选） */}
         <StatusBar bootTz={bootSnapshot?.tz} bootLockWallpaper={boot?.lockWallpaper} />
