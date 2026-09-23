@@ -6325,3 +6325,23 @@ Stage Summary:
 - 改动文件：src/lib/ios/store.ts（readWallCache 导入 + seedWallLightFromCache + load() 接线）、src/components/ios/LockScreen.tsx（前景色回退链加 bootLight 兜底）、src/components/apps/worldbook.tsx（useUI 导入、输入框放大、可操作空态+跳转、弹窗打开重读联系人）
 - 关键决策：①亮度播种而非等实测——压缩缓存亮度与运行时实测同算法同源，种子即真值；②switchToApp 而非 openApp 做应用间跳转；③user 排除维持 aiContacts 过滤（弹窗/绑定菜单/角色筛选三处一致），空态文案明示「user 不出现」消除用户对 user 卡片的困惑
 - 遗留说明：从未写过压缩缓存（极老版本设的自定义壁纸）的首次会话仍可能有一次颜色修正，cache 自愈后永久稳定，属预期
+
+---
+Task ID: wb-input-shrink + wb-bind-list-fix
+Agent: Z.ai Code (main)
+Task: ①世界书新建弹窗名称输入框变小（用户原话「名称输入框变小」，80px 偏大回调）②专属世界书绑定角色「没有角色可选」（用户原话「绑定角色那里都没有角色怎么选择角色（我已经添加了角色）」）
+
+Work Log:
+- 根因定位（绑定角色问题的真凶）：CreateBookDialog 是 flex flex-col + max-h-[88%] + overflow-y-auto 的压缩容器——绑定名单子容器带 overflow-y-auto，flex 子项 min-height:auto 在内容超高时会被压缩到 0px！实测 listClientH=0 / scrollH=85（红红+榴莲两行都在 DOM 里但整列不可见）= 用户「我已经添加了角色但绑定那里没有角色」的真正原因；与上一轮输入框被压缩（shrink-0 修复）同类，当时只保护了输入框漏了列表。此前 E2E 只断言 DOM 存在未断言可见高度，故漏检
+- 修复一（弹窗内三处补 shrink-0）：绑定名单容器加 w-full shrink-0（内部超高走 max-h-44 滚动）、空态卡加 w-full shrink-0、范围三选卡容器加 w-full shrink-0；实测列表实高 0→85px，截图确认红红/榴莲可见
+- 修复二（输入框回调）：wb-dialog-name h-20(80px)→h-16(64px)、字号 19→18px（用户看完 80px 后说「变小」；64px 同时大于最初被嫌小的 48px，两种解读下都符合用户意图）；实测 {h:64, font:18px, radius:16px}
+- 修复三（空名单诊断升级）：名单为空分两种原因明示——a) 联系人里只有 user 类型：「名单为空：你添加的联系人都是 user（你自己）…当前 user 卡片：凡凡…要在 CHAR 标签页创建」（直指用户把 AI 角色建在 USER tab 的常见误操作）；b) 完全没有联系人：原文案保留并强调 CHAR 标签页
+- 修复四（跨 App 直达创建）：store.ts 新增 pendingContactCreate('char'|'user'|'npc'|null)+setter（仿 pendingContactEdit）；contacts.tsx 挂载消费→直接进入对应类型新建表单（setTab+setView add）；worldbook.tsx gotoCreateChar()（setPendingContactCreate('char')+switchToApp）接入三处入口——弹窗空态卡按钮、详情页绑定菜单空态项、首页角色筛选空态项；用户点「去创建」后落在「添加CHAR」表单，从根上杜绝建错类型
+- 修复五（两处空白 ActionSheet 空态）：详情页「绑定角色」菜单空名单时原来只有标题+取消（一张白板）→ 现在标题变「还没有可绑定的 AI 角色（user 你自己不在名单内）」+「去联系人 App 新建 AI 角色（CHAR）」动作；首页专属 tab 角色筛选空名单同理补「还没有 AI 角色，去联系人 App 新建（CHAR）」
+- E2E 实测矩阵（agent-browser 390×844，直接种 IndexedDB contacts/kv）：T1 仅 user(凡凡)时新建→专属→诊断卡 212px 完整渲染且点名凡凡 ✓；T2 点「去联系人 App 新建 AI 角色」→联系人 App 直开「添加CHAR」表单 ✓；T3 表单建小红→落库 kind:'char' ✓；T4 回世界书新建→输入框 64px/18px→专属名单 [小红]（凡凡被排除）✓；T5 选小红创建→详情页绑定行「绑定角色小红」✓；T6 绑定菜单列出小红 ✓；T7 删光 AI 角色后绑定菜单→诊断标题+去创建动作（不再是白板）✓；T8 从该菜单跳转→直落添加CHAR ✓；T9 首页专属 tab 角色筛选空态项 ✓；shrink-0 修复后完整创建流回归（建榴莲专属书）✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常；测试后 contacts/worldbooks kv 已恢复基线（[红红,榴莲,char]+[凡凡,user]、wb=null），测试脚本存档 .e2e/wb-seed.js
+
+Stage Summary:
+- 改动文件：src/components/apps/worldbook.tsx（shrink-0 三处+输入框 64px+空态诊断两分支+gotoCreateChar+两张 ActionSheet 空态）、src/lib/ios/store.ts（pendingContactCreate）、src/components/apps/contacts.tsx（消费 pendingContactCreate 直达新建表单）
+- 关键决策：①绑定角色「没有角色」的真凶是 flex 压缩 0 高而非数据问题——数据链路（listContacts/aiContacts 过滤/打开时重读）本来就是通的；②「去创建」入口全部改为预置 CHAR 新建表单的跨 App 跳转，把「建在 USER tab 导致名单空」这一用户侧误操作从流程上堵死；③空名单文案按「只有 user」/「完全没有」两分支给出可执行指引
+- 已知边界：若用户把角色建在另一台设备/浏览器（本地 IndexedDB 不互通），名单在该设备上确实为空，弹窗会如实提示并引导在该设备创建

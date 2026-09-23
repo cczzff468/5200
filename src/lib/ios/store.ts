@@ -966,6 +966,9 @@ interface UIState {
   /** 跨 App 跳转：QQ 好友资料页「编辑资料」/ 微信好友详情页「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页，消费后置回 null */
   pendingContactEdit: string | null;
   setPendingContactEdit: (id: string | null) => void;
+  /** 跨 App 跳转：世界书「绑定角色」名单为空的「去创建」→ 打开联系人 App 后直接进入对应类型的新建表单（恒为 char），消费后置回 null */
+  pendingContactCreate: 'char' | 'user' | 'npc' | null;
+  setPendingContactCreate: (v: 'char' | 'user' | 'npc' | null) => void;
 }
 
 export const useUI = create<UIState>((set, get) => ({
@@ -987,6 +990,10 @@ export const useUI = create<UIState>((set, get) => ({
   pendingContactEdit: null,
   setPendingContactEdit: (v) => {
     set({ pendingContactEdit: v });
+  },
+  pendingContactCreate: null,
+  setPendingContactCreate: (v) => {
+    set({ pendingContactCreate: v });
   },
   openApp: (id) => {
     if (get().locked) return; // 锁屏时禁止打开 App（锁屏直达相机走 lockCameraOpen）

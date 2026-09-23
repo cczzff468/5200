@@ -221,12 +221,15 @@ function NameDialog({
 /** 新建世界书大弹窗（按用户参考图：图标 + 标题副标题 + 名称 + 范围三选卡片 + 底部取消/创建） */
 function CreateBookDialog({
   contacts,
+  userNames,
   onConfirm,
   onClose,
   onCreateCharacter,
 }: {
   /** 角色可选名单（已排除 user 用户自己），供「专属」绑定 */
   contacts: ContactRecord[];
+  /** 被排除的 user（用户自己）名字列表：名单为空时用于诊断提示（用户常把 AI 角色建在 USER 标签页下） */
+  userNames: string[];
   onConfirm: (name: string, scope: WbScope, targetContactId: string | null) => void;
   onClose: () => void;
   /** 名单为空时跳去联系人 App 创建角色 */
@@ -272,7 +275,7 @@ function CreateBookDialog({
           <p className={`mt-1 text-[14px] ${SUB_CLS}`}>为 AI 聊天准备的世界观设定库</p>
         </div>
 
-        {/* 名称（大输入框：80px 高 + 19px 字号，手机上好点好输） */}
+        {/* 名称（大输入框：64px 高 + 18px 字号，手机上好点好输；80px 用户反馈偏大回调到 64） */}
         <p className="mt-5 text-[16px] font-semibold">名称</p>
         <input
           autoFocus
@@ -285,12 +288,12 @@ function CreateBookDialog({
           aria-label="世界书名称"
           data-testid="wb-dialog-name"
           maxLength={40}
-          className="mt-2.5 h-20 w-full shrink-0 rounded-[16px] bg-black/[0.05] px-5 text-[19px] outline-none placeholder:text-[16px] placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
+          className="mt-2.5 h-16 w-full shrink-0 rounded-[16px] bg-black/[0.05] px-5 text-[18px] outline-none placeholder:text-[16px] placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
         />
 
         {/* 范围三选卡片 */}
         <p className="mt-5 text-[16px] font-semibold">范围</p>
-        <div className="mt-2 flex flex-col gap-2.5">
+        <div className="mt-2 flex w-full shrink-0 flex-col gap-2.5">
           {WB_SCOPES.map((s) => {
             const selected = scope === s;
             return (
@@ -343,14 +346,25 @@ function CreateBookDialog({
           <>
             <p className="mt-4 text-[16px] font-semibold">绑定角色</p>
             {contacts.length === 0 ? (
-              /* 名单为空：给出明确原因 + 去创建的入口（不再只是干巴巴一句话） */
+              /* 名单为空：分两种原因说清楚 + 去创建的入口（直接预选 CHAR 新建表单，
+                 避免用户在 USER 标签页下建「角色」后回来看还是空） */
               <div
                 data-testid="wb-dialog-empty-chars"
-                className="mt-2 rounded-[14px] bg-black/[0.05] px-4 py-4 dark:bg-white/[0.08]"
+                className="mt-2 w-full shrink-0 rounded-[14px] bg-black/[0.05] px-4 py-4 dark:bg-white/[0.08]"
               >
-                <p className="text-[14px] font-medium">还没有可绑定的 AI 角色</p>
+                <p className="text-[14px] font-medium">
+                  {userNames.length > 0 ? '名单为空：你添加的联系人都是 user（你自己）' : '还没有可绑定的 AI 角色'}
+                </p>
                 <p className={`mt-1 text-[12.5px] leading-[1.55] ${SUB_CLS}`}>
-                  名单只列 AI 角色，你自己（user）不会出现在名单里；先到「联系人」App 创建角色，再回来绑定。
+                  {userNames.length > 0 ? (
+                    <>
+                      绑定名单只显示 AI 角色（CHAR），user 不在其中（当前 user 卡片：{userNames.slice(0, 3).join('、')}
+                      {userNames.length > 3 ? ' 等' : ''}）。
+                      AI 角色要在「联系人」App 底部切到 <span className="font-medium">CHAR</span> 标签页创建，或直接点下面新建。
+                    </>
+                  ) : (
+                    <>名单只列 AI 角色，你自己（user）不会出现在名单里。到「联系人」App 用 CHAR 标签创建一个，再回来绑定。</>
+                  )}
                 </p>
                 <button
                   type="button"
@@ -358,11 +372,13 @@ function CreateBookDialog({
                   onClick={onCreateCharacter}
                   className="mt-3 h-11 w-full rounded-[12px] bg-black text-[14px] font-medium text-white active:opacity-80 dark:bg-white dark:text-black"
                 >
-                  去联系人 App 创建角色
+                  去联系人 App 新建 AI 角色
                 </button>
               </div>
             ) : (
-              <div className="mt-2 max-h-44 overflow-y-auto rounded-[14px] bg-black/[0.05] dark:bg-white/[0.08]">
+              /* 关键：shrink-0 防止 flex 弹窗把列表压成 0 高（overflow-y-auto 子项 min-height:auto 会被压缩，
+                  角色明明存在却整列不可见 = 用户看到的「绑定角色那里没有角色」；内部超高走 max-h-44 滚动） */
+              <div className="mt-2 max-h-44 w-full shrink-0 overflow-y-auto rounded-[14px] bg-black/[0.05] dark:bg-white/[0.08]">
                 {contacts.map((c) => {
                   const selected = targetId === c.id;
                   return (
@@ -580,6 +596,14 @@ export default function WorldBookApp() {
 
   /** 角色可选名单：只列 AI 角色/配角——user 是用户自己，不参与绑定与筛选 */
   const aiContacts = useMemo(() => contacts.filter((c) => c.kind !== 'user'), [contacts]);
+  /** 被排除的 user 名字：名单为空时用于诊断（用户常把 AI 角色建在 USER 标签页下） */
+  const userNames = useMemo(() => contacts.filter((c) => c.kind === 'user').map((c) => c.name), [contacts]);
+
+  /** 从世界书跳去联系人 App 创建 AI 角色：预置 CHAR 新建表单（避免用户建在 USER 标签页下，导致绑定名单依旧为空） */
+  const gotoCreateChar = () => {
+    useUI.getState().setPendingContactCreate('char');
+    useUI.getState().switchToApp('contacts');
+  };
 
   const persist = (next: WorldBook[]) => {
     setBooks(next);
@@ -924,11 +948,12 @@ export default function WorldBookApp() {
       {createOpen && (
         <CreateBookDialog
           contacts={aiContacts}
+          userNames={userNames}
           onConfirm={createBook}
           onClose={() => setCreateOpen(false)}
           onCreateCharacter={() => {
             setCreateOpen(false);
-            useUI.getState().switchToApp('contacts');
+            gotoCreateChar();
           }}
         />
       )}
@@ -1017,12 +1042,20 @@ export default function WorldBookApp() {
           onClose={() => setCharSheet(false)}
           actions={[
             { id: 'wb-char-all', label: '全部角色', onSelect: () => setCharFilterId(null) },
-            // 只列 AI 角色/配角（不显示角色类型标签），不包括 user（用户自己）
-            ...aiContacts.map((c) => ({
-              id: c.id,
-              label: c.name,
-              onSelect: () => setCharFilterId(c.id),
-            })),
+            // 只列 AI 角色/配角（不显示角色类型标签），不包括 user（用户自己）；空名单时给出可操作的创建入口
+            ...(aiContacts.length > 0
+              ? aiContacts.map((c) => ({
+                  id: c.id,
+                  label: c.name,
+                  onSelect: () => setCharFilterId(c.id),
+                }))
+              : [
+                  {
+                    id: 'wb-char-goto-create',
+                    label: '还没有 AI 角色，去联系人 App 新建（CHAR）',
+                    onSelect: gotoCreateChar,
+                  },
+                ]),
           ]}
         />
       )}
@@ -1038,16 +1071,30 @@ export default function WorldBookApp() {
           }))}
         />
       )}
-      {/* 详情页「绑定角色」行：换绑专属书的目标角色 */}
+      {/* 详情页「绑定角色」行：换绑专属书的目标角色（空名单时说明原因 + 可操作入口，不再弹一张空白菜单） */}
       {bindSheetBook && (
         <ActionSheet
-          title="绑定角色（仅对该角色的聊天生效）"
+          title={
+            aiContacts.length > 0
+              ? '绑定角色（仅对该角色的聊天生效）'
+              : '还没有可绑定的 AI 角色（user 你自己不在名单内）'
+          }
           onClose={() => setBindSheetFor(null)}
-          actions={aiContacts.map((c) => ({
-            id: c.id,
-            label: c.name,
-            onSelect: () => bindBookTarget(bindSheetBook.id, c.id),
-          }))}
+          actions={
+            aiContacts.length > 0
+              ? aiContacts.map((c) => ({
+                  id: c.id,
+                  label: c.name,
+                  onSelect: () => bindBookTarget(bindSheetBook.id, c.id),
+                }))
+              : [
+                  {
+                    id: 'wb-bind-goto-create',
+                    label: '去联系人 App 新建 AI 角色（CHAR）',
+                    onSelect: gotoCreateChar,
+                  },
+                ]
+          }
         />
       )}
       <input

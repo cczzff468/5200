@@ -401,6 +401,8 @@ export default function ContactsApp() {
   const [view, setView] = useState<View>({ mode: 'list' });
   /** 跨 App 跳转：QQ「编辑资料」/ 微信「朋友资料」带来的联系人 id（挂载时消费，等载入后直接进编辑页） */
   const [pendingEdit, setPendingEdit] = useState<string | null>(() => useUI.getState().pendingContactEdit);
+  /** 跨 App 跳转：世界书「去创建 AI 角色」带来的预设类型（挂载时消费，直接进对应 tab 的新建表单） */
+  const [pendingCreate, setPendingCreate] = useState<'char' | 'user' | 'npc' | null>(() => useUI.getState().pendingContactCreate);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -421,6 +423,7 @@ export default function ContactsApp() {
   // 挂载即消费跨 App 请求（避免失败时残留导致以后误跳）
   useEffect(() => {
     if (useUI.getState().pendingContactEdit) useUI.getState().setPendingContactEdit(null);
+    if (useUI.getState().pendingContactCreate) useUI.getState().setPendingContactCreate(null);
   }, []);
 
   // QQ/微信跳转过来的：联系人载入后直接进入对应联系人的编辑页；
@@ -434,6 +437,15 @@ export default function ContactsApp() {
       setView({ mode: 'edit', id: target.id });
     }
   }, [pendingEdit, loading, contacts]);
+
+  // 世界书「去创建 AI 角色」跳过来的：直接进入对应类型的新建表单（CHAR 预选），
+  // 避免用户在 USER 标签页下建“角色”（那种卡片进不了世界书绑定名单，用户会以为加了角色却选不了）
+  useEffect(() => {
+    if (!pendingCreate) return;
+    setPendingCreate(null);
+    setTab(pendingCreate);
+    setView({ mode: 'add', kind: pendingCreate });
+  }, [pendingCreate]);
 
   /** 新建或更新本地联系人（编辑/添加好友后同步） */
   const upsert = useCallback((c: ContactRecord) => {

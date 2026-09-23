@@ -1,0 +1,1667 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * 世界书 App —— 给 AI 挂载静态设定和世界观（按关键词触发的设定库）。
+     5→ *
+     6→ * 页面结构（iOS 黑白灰风格：白 / 浅灰 / 深灰，深色模式自动适配）：
+     7→ * - 书库首页：顶栏标题「我的世界书库」紧跟返回键右侧 + 统计卡（全局/局部/专属 三列可点按
+     8→ *   范围筛选 + 已启用计数）+ 底部范围筛选栏（椭圆胶囊底座整体包裹 全部/全局/局部/专属，
+     9→ *   激活段黑底白字圆片）；右上角「全部角色」筛选**只在专属 tab 显示**
+    10→ *   （筛绑定给某角色的专属书）；新建走居中大弹窗（名称 + 范围三选卡片 + 专属绑定角色），
+    11→ *   名字校验：非空 + 禁 emoji；书籍管理：重命名、删除、导出、导入（.json）
+    12→ * - 书籍详情页：条目计数 + 范围徽章 + 一句话说明；设置卡（范围 / 启用总开关 / 专属时绑定角色）；
+    13→ *   虚线「+ 新建条目」大按钮；条目卡片列表（开关 + 触发词预览 + 插入位置徽章），
+    14→ *   点卡片进入编辑，长按条目或点右侧 ⋯ 弹出操作菜单（编辑/删除），行尾无删除图标
+    15→ * - 条目编辑页：开关 / 名字（仅本地显示）/ 触发词（全局书可留空）/ 内容 / 插入位置（6 选 1）/
+    16→ *   优先级 / 忽略大小写；右上角「保存」才写入，返回不保存，新建条目保存前不落盘
+    17→ *
+    18→ * 范围（全局/局部/专属）与「启用」属于**世界书本体**（不是条目）：
+    19→ * - 全局：所有对话生效，内容常驻注入（无需关键词）；
+    20→ * - 局部：聊天设置里挂载后，命中关键词才注入；
+    21→ * - 专属：仅对绑定的角色生效，命中关键词才注入。
+    22→ * 数据与触发逻辑在 @/lib/ios/worldbook；聊天侧挂载入口在微信/QQ/信息的聊天设置 →「世界书」。
+    23→ */
+    24→import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+    25→import {
+    26→  BookMarked,
+    27→  BookOpen,
+    28→  Check,
+    29→  ChevronDown,
+    30→  ChevronLeft,
+    31→  ChevronRight,
+    32→  Crosshair,
+    33→  FileText,
+    34→  Globe,
+    35→  MoreHorizontal,
+    36→  Plus,
+    37→  Trash2,
+    38→  Upload,
+    39→  User,
+    40→  X,
+    41→} from 'lucide-react';
+    42→import type { ContactRecord } from '@/lib/contacts';
+    43→import { listContacts } from '@/lib/ios/contacts-store';
+    44→import { useUI } from '@/lib/ios/store';
+    45→import { BackToHome } from '@/components/ios/BackToHome';
+    46→import { useLocalToast, LocalToast } from './page-toast';
+    47→import {
+    48→  WB_POSITIONS,
+    49→  WB_POSITION_LABELS,
+    50→  WB_SCOPES,
+    51→  WB_SCOPE_LABELS,
+    52→  WB_SCOPE_SHORT_DESC,
+    53→  WB_SCOPE_SUBTITLES,
+    54→  WB_SCOPE_TIPS,
+    55→  buildExportPayload,
+    56→  createEntryDraft,
+    57→  loadBooks,
+    58→  newWbId,
+    59→  parseKeywordsInput,
+    60→  parseWorldBookImport,
+    61→  pruneBookFromAllBindings,
+    62→  saveBooks,
+    63→  wbEntryCheck,
+    64→  wbNameCheck,
+    65→  type WorldBook,
+    66→  type WbEntry,
+    67→  type WbPosition,
+    68→  type WbScope,
+    69→} from '@/lib/ios/worldbook';
+    70→
+    71→// ---------------- 主题 token（黑白灰，深色自动适配） ----------------
+    72→
+    73→const PAGE_CLS = 'bg-[#F2F2F7] text-black dark:bg-black dark:text-white';
+    74→const CARD_CLS = 'overflow-hidden rounded-[14px] bg-white dark:bg-[#1C1C1E]';
+    75→const DIVIDER_CLS = 'border-black/[0.06] dark:border-white/[0.08]';
+    76→const SUB_CLS = 'text-black/45 dark:text-white/45';
+    77→const CAPTION_CLS = `px-1 pt-2 text-[12.5px] leading-[1.6] ${SUB_CLS}`;
+    78→const DESTRUCTIVE_CLS = 'text-[#FF3B30] dark:text-[#FF453A]';
+    79→
+    80→/** 单色 iOS 开关：开 = 黑底白钮（深色模式白底黑钮），贴合黑白灰主色调 */
+    81→function MonoToggle({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId?: string }) {
+    82→  return (
+    83→    <button
+    84→      type="button"
+    85→      role="switch"
+    86→      aria-checked={on}
+    87→      aria-label={label}
+    88→      data-testid={testId}
+    89→      onClick={() => onChange(!on)}
+    90→      className={`relative h-[30px] w-[50px] shrink-0 rounded-full transition-colors duration-200 ${
+    91→        on ? 'bg-black dark:bg-white' : 'bg-black/[0.14] dark:bg-white/[0.24]'
+    92→      }`}
+    93→    >
+    94→      <span
+    95→        aria-hidden="true"
+    96→        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full shadow-[0_2px_5px_rgba(0,0,0,0.25)] transition-all duration-200 ${
+    97→          on ? 'left-[22px] bg-white dark:bg-black' : 'left-[2px] bg-white dark:bg-[#E9E9EB]'
+    98→        }`}
+    99→      />
+   100→    </button>
+   101→  );
+   102→}
+   103→
+   104→// ---------------- 通用浮层 ----------------
+   105→
+   106→interface SheetAction {
+   107→  /** 稳定唯一 key：label 可能重复（如两个同名 AI 角色），提供 id 时优先用 id 作 key */
+   108→  id?: string;
+   109→  label: string;
+   110→  destructive?: boolean;
+   111→  onSelect: () => void;
+   112→}
+   113→
+   114→/** iOS 风格底部操作菜单 */
+   115→function ActionSheet({ title, actions, onClose }: { title: string; actions: SheetAction[]; onClose: () => void }) {
+   116→  return (
+   117→    <div className="absolute inset-0 z-[70]" role="dialog" aria-label={title}>
+   118→      <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 bg-black/40" />
+   119→      <div className="absolute inset-x-3 bottom-4 flex flex-col gap-2">
+   120→        <div className={`${CARD_CLS} p-1.5`}>
+   121→          <p className={`px-3 py-2 text-center text-[12.5px] leading-[1.4] ${SUB_CLS}`}>{title}</p>
+   122→          {actions.map((a, ai) => (
+   123→            <button
+   124→              key={a.id ?? `${a.label}-${ai}`}
+   125→              type="button"
+   126→              onClick={() => {
+   127→                onClose();
+   128→                a.onSelect();
+   129→              }}
+   130→              className={`flex w-full items-center justify-center rounded-[10px] px-4 py-3 text-[16px] active:bg-black/[0.05] dark:active:bg-white/[0.08] ${
+   131→                a.destructive ? DESTRUCTIVE_CLS : ''
+   132→              }`}
+   133→            >
+   134→              {a.label}
+   135→            </button>
+   136→          ))}
+   137→        </div>
+   138→        <button
+   139→          type="button"
+   140→          onClick={onClose}
+   141→          className={`${CARD_CLS} flex items-center justify-center py-3 text-[16px] font-semibold active:bg-black/[0.05] dark:active:bg-white/[0.08]`}
+   142→        >
+   143→          取消
+   144→        </button>
+   145→      </div>
+   146→    </div>
+   147→  );
+   148→}
+   149→
+   150→/** 范围图标（书级范围：全局=地球 / 局部=准星 / 专属=人像） */
+   151→function ScopeIcon({ scope, className }: { scope: WbScope; className?: string }) {
+   152→  const cls = className ?? 'h-5 w-5';
+   153→  if (scope === 'global') return <Globe className={cls} strokeWidth={1.8} aria-hidden="true" />;
+   154→  if (scope === 'local') return <Crosshair className={cls} strokeWidth={1.8} aria-hidden="true" />;
+   155→  return <User className={cls} strokeWidth={1.8} aria-hidden="true" />;
+   156→}
+   157→
+   158→/** 名字输入弹层（重命名世界书用；emoji 校验在确认时进行，错误就地显示） */
+   159→function NameDialog({
+   160→  title,
+   161→  initial,
+   162→  confirmText,
+   163→  onConfirm,
+   164→  onClose,
+   165→}: {
+   166→  title: string;
+   167→  initial: string;
+   168→  confirmText: string;
+   169→  onConfirm: (name: string) => void;
+   170→  onClose: () => void;
+   171→}) {
+   172→  const [value, setValue] = useState(initial);
+   173→  const [error, setError] = useState('');
+   174→  const submit = () => {
+   175→    const check = wbNameCheck(value);
+   176→    if (!check.ok) setError(check.reason);
+   177→    else onConfirm(value);
+   178→  };
+   179→  return (
+   180→    <div className="absolute inset-0 z-[70] grid place-items-center px-8" role="dialog" aria-label={title}>
+   181→      <button type="button" aria-label="取消" onClick={onClose} className="absolute inset-0 bg-black/40" />
+   182→      <div className={`${CARD_CLS} relative w-full p-4`}>
+   183→        <p className="text-center text-[16px] font-semibold">{title}</p>
+   184→        <input
+   185→          autoFocus
+   186→          value={value}
+   187→          onChange={(e) => {
+   188→            setValue(e.target.value);
+   189→            setError('');
+   190→          }}
+   191→          onKeyDown={(e) => {
+   192→            if (e.key === 'Enter') submit();
+   193→          }}
+   194→          placeholder="世界书名字"
+   195→          aria-label="世界书名字"
+   196→          maxLength={40}
+   197→          className="mt-3 h-10 w-full rounded-[10px] border border-black/10 bg-black/[0.03] px-3 text-[15px] outline-none focus:border-black/25 dark:border-white/15 dark:bg-white/[0.06] dark:focus:border-white/35"
+   198→        />
+   199→        {error && <p className={`mt-2 text-[12.5px] ${DESTRUCTIVE_CLS}`}>{error}</p>}
+   200→        <div className="mt-4 flex gap-2">
+   201→          <button
+   202→            type="button"
+   203→            onClick={onClose}
+   204→            className="h-10 flex-1 rounded-[10px] bg-black/[0.05] text-[15px] active:bg-black/[0.1] dark:bg-white/[0.08] dark:active:bg-white/[0.14]"
+   205→          >
+   206→            取消
+   207→          </button>
+   208→          <button
+   209→            type="button"
+   210→            onClick={submit}
+   211→            className="h-10 flex-1 rounded-[10px] bg-black text-[15px] font-medium text-white active:opacity-80 dark:bg-white dark:text-black"
+   212→          >
+   213→            {confirmText}
+   214→          </button>
+   215→        </div>
+   216→      </div>
+   217→    </div>
+   218→  );
+   219→}
+   220→
+   221→/** 新建世界书大弹窗（按用户参考图：图标 + 标题副标题 + 名称 + 范围三选卡片 + 底部取消/创建） */
+   222→function CreateBookDialog({
+   223→  contacts,
+   224→  onConfirm,
+   225→  onClose,
+   226→  onCreateCharacter,
+   227→}: {
+   228→  /** 角色可选名单（已排除 user 用户自己），供「专属」绑定 */
+   229→  contacts: ContactRecord[];
+   230→  onConfirm: (name: string, scope: WbScope, targetContactId: string | null) => void;
+   231→  onClose: () => void;
+   232→  /** 名单为空时跳去联系人 App 创建角色 */
+   233→  onCreateCharacter: () => void;
+   234→}) {
+   235→  const [name, setName] = useState('');
+   236→  const [scope, setScope] = useState<WbScope>('global');
+   237→  const [targetId, setTargetId] = useState<string | null>(null);
+   238→  const [error, setError] = useState('');
+   239→
+   240→  const submit = () => {
+   241→    const check = wbNameCheck(name);
+   242→    if (!check.ok) {
+   243→      setError(check.reason);
+   244→      return;
+   245→    }
+   246→    if (scope === 'exclusive' && !targetId) {
+   247→      setError('专属世界书需要绑定一个角色');
+   248→      return;
+   249→    }
+   250→    onConfirm(name.trim(), scope, scope === 'exclusive' ? targetId : null);
+   251→  };
+   252→
+   253→  return (
+   254→    <div className="absolute inset-0 z-[70] grid place-items-center px-6" role="dialog" aria-label="新建世界书">
+   255→      <button type="button" aria-label="取消" onClick={onClose} className="absolute inset-0 bg-black/40" />
+   256→      <div className="relative flex max-h-[88%] w-full flex-col overflow-y-auto rounded-[24px] bg-white p-5 pb-6 dark:bg-[#1C1C1E]" data-testid="wb-create-dialog">
+   257→        <button
+   258→          type="button"
+   259→          aria-label="关闭"
+   260→          onClick={onClose}
+   261→          className="absolute right-3.5 top-3.5 grid h-8 w-8 place-items-center rounded-full bg-black/[0.05] active:bg-black/[0.1] dark:bg-white/[0.1] dark:active:bg-white/[0.18]"
+   262→        >
+   263→          <X className="h-4 w-4 text-black/50 dark:text-white/50" strokeWidth={2.4} aria-hidden="true" />
+   264→        </button>
+   265→
+   266→        {/* 头部：图标 + 标题 + 副标题 */}
+   267→        <div className="mt-2 flex flex-col items-center">
+   268→          <span aria-hidden="true" className="grid h-16 w-16 place-items-center rounded-[18px] border-[1.5px] border-black/15 dark:border-white/25">
+   269→            <BookOpen className="h-7 w-7 text-black/70 dark:text-white/70" strokeWidth={1.6} />
+   270→          </span>
+   271→          <p className="mt-3.5 text-[21px] font-bold leading-tight">新建世界书</p>
+   272→          <p className={`mt-1 text-[14px] ${SUB_CLS}`}>为 AI 聊天准备的世界观设定库</p>
+   273→        </div>
+   274→
+   275→        {/* 名称（大输入框：80px 高 + 19px 字号，手机上好点好输） */}
+   276→        <p className="mt-5 text-[16px] font-semibold">名称</p>
+   277→        <input
+   278→          autoFocus
+   279→          value={name}
+   280→          onChange={(e) => {
+   281→            setName(e.target.value);
+   282→            setError('');
+   283→          }}
+   284→          placeholder="例如：现代都市背景"
+   285→          aria-label="世界书名称"
+   286→          data-testid="wb-dialog-name"
+   287→          maxLength={40}
+   288→          className="mt-2.5 h-20 w-full shrink-0 rounded-[16px] bg-black/[0.05] px-5 text-[19px] outline-none placeholder:text-[16px] placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
+   289→        />
+   290→
+   291→        {/* 范围三选卡片 */}
+   292→        <p className="mt-5 text-[16px] font-semibold">范围</p>
+   293→        <div className="mt-2 flex flex-col gap-2.5">
+   294→          {WB_SCOPES.map((s) => {
+   295→            const selected = scope === s;
+   296→            return (
+   297→              <button
+   298→                key={s}
+   299→                type="button"
+   300→                data-testid={`wb-dialog-scope-${s}`}
+   301→                aria-pressed={selected}
+   302→                onClick={() => {
+   303→                  setScope(s);
+   304→                  setError('');
+   305→                }}
+   306→                className={`flex w-full items-center gap-3 rounded-[14px] border-2 px-3.5 py-3 text-left transition-colors ${
+   307→                  selected
+   308→                    ? 'border-black bg-white dark:border-white dark:bg-transparent'
+   309→                    : 'border-transparent bg-black/[0.05] active:bg-black/[0.08] dark:bg-white/[0.08] dark:active:bg-white/[0.12]'
+   310→                }`}
+   311→              >
+   312→                <span
+   313→                  aria-hidden="true"
+   314→                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-[12px] border-[1.5px] ${
+   315→                    selected ? 'border-black/60 dark:border-white/60' : 'border-black/15 dark:border-white/25'
+   316→                  }`}
+   317→                >
+   318→                  <ScopeIcon scope={s} className="h-5 w-5 text-black/70 dark:text-white/70" />
+   319→                </span>
+   320→                <span className="min-w-0 flex-1">
+   321→                  <span className="block text-[16.5px] font-semibold leading-tight">{WB_SCOPE_LABELS[s]}</span>
+   322→                  <span className={`mt-1 block truncate text-[12.5px] ${SUB_CLS}`}>{WB_SCOPE_SUBTITLES[s]}</span>
+   323→                </span>
+   324→                {selected ? (
+   325→                  <span aria-label="已选中" className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full bg-black dark:bg-white">
+   326→                    <Check className="h-3.5 w-3.5 text-white dark:text-black" strokeWidth={3} aria-hidden="true" />
+   327→                  </span>
+   328→                ) : (
+   329→                  <span aria-hidden="true" className="h-[26px] w-[26px] shrink-0 rounded-full border-[1.5px] border-black/20 dark:border-white/30" />
+   330→                )}
+   331→              </button>
+   332→            );
+   333→          })}
+   334→        </div>
+   335→
+   336→        {/* 所选范围的说明（短说明 + 适用提示） */}
+   337→        <p className={`mt-3.5 text-[13px] leading-[1.6] ${SUB_CLS}`}>
+   338→          {WB_SCOPE_SHORT_DESC[scope]}，{WB_SCOPE_TIPS[scope]}
+   339→        </p>
+   340→
+   341→        {/* 专属：绑定角色 */}
+   342→        {scope === 'exclusive' && (
+   343→          <>
+   344→            <p className="mt-4 text-[16px] font-semibold">绑定角色</p>
+   345→            {contacts.length === 0 ? (
+   346→              /* 名单为空：给出明确原因 + 去创建的入口（不再只是干巴巴一句话） */
+   347→              <div
+   348→                data-testid="wb-dialog-empty-chars"
+   349→                className="mt-2 rounded-[14px] bg-black/[0.05] px-4 py-4 dark:bg-white/[0.08]"
+   350→              >
+   351→                <p className="text-[14px] font-medium">还没有可绑定的 AI 角色</p>
+   352→                <p className={`mt-1 text-[12.5px] leading-[1.55] ${SUB_CLS}`}>
+   353→                  名单只列 AI 角色，你自己（user）不会出现在名单里；先到「联系人」App 创建角色，再回来绑定。
+   354→                </p>
+   355→                <button
+   356→                  type="button"
+   357→                  data-testid="wb-dialog-goto-contacts"
+   358→                  onClick={onCreateCharacter}
+   359→                  className="mt-3 h-11 w-full rounded-[12px] bg-black text-[14px] font-medium text-white active:opacity-80 dark:bg-white dark:text-black"
+   360→                >
+   361→                  去联系人 App 创建角色
+   362→                </button>
+   363→              </div>
+   364→            ) : (
+   365→              <div className="mt-2 max-h-44 overflow-y-auto rounded-[14px] bg-black/[0.05] dark:bg-white/[0.08]">
+   366→                {contacts.map((c) => {
+   367→                  const selected = targetId === c.id;
+   368→                  return (
+   369→                    <button
+   370→                      key={c.id}
+   371→                      type="button"
+   372→                      data-testid={`wb-dialog-target-${c.id}`}
+   373→                      onClick={() => {
+   374→                        setTargetId(c.id);
+   375→                        setError('');
+   376→                      }}
+   377→                      className={`flex w-full items-center justify-between px-4 py-2.5 text-left text-[15px] first:rounded-t-[14px] last:rounded-b-[14px] active:bg-black/[0.05] dark:active:bg-white/[0.08] ${
+   378→                        selected ? 'font-medium' : ''
+   379→                      }`}
+   380→                    >
+   381→                      <span className="truncate">{c.name}</span>
+   382→                      {selected && (
+   383→                        <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-black dark:bg-white">
+   384→                          <Check className="h-3 w-3 text-white dark:text-black" strokeWidth={3} aria-hidden="true" />
+   385→                        </span>
+   386→                      )}
+   387→                    </button>
+   388→                  );
+   389→                })}
+   390→              </div>
+   391→            )}
+   392→          </>
+   393→        )}
+   394→
+   395→        {error && <p className={`mt-3 text-[12.5px] ${DESTRUCTIVE_CLS}`}>{error}</p>}
+   396→
+   397→        {/* 底部按钮 */}
+   398→        <div className="mt-6 flex gap-3">
+   399→          <button
+   400→            type="button"
+   401→            data-testid="wb-dialog-cancel"
+   402→            onClick={onClose}
+   403→            className="h-[52px] flex-[0.85] rounded-[16px] bg-black/[0.05] text-[16px] active:bg-black/[0.1] dark:bg-white/[0.08] dark:active:bg-white/[0.14]"
+   404→          >
+   405→            取消
+   406→          </button>
+   407→          <button
+   408→            type="button"
+   409→            data-testid="wb-dialog-submit"
+   410→            onClick={submit}
+   411→            className="h-[52px] flex-[1.15] rounded-[16px] bg-black text-[16px] font-semibold text-white active:opacity-80 dark:bg-white dark:text-black"
+   412→          >
+   413→            创建世界书
+   414→          </button>
+   415→        </div>
+   416→      </div>
+   417→    </div>
+   418→  );
+   419→}
+   420→
+   421→/** 通用确认弹层（删除等破坏性操作） */
+   422→function ConfirmDialog({
+   423→  title,
+   424→  message,
+   425→  confirmText,
+   426→  destructive,
+   427→  onConfirm,
+   428→  onClose,
+   429→}: {
+   430→  title: string;
+   431→  message: string;
+   432→  confirmText: string;
+   433→  destructive?: boolean;
+   434→  onConfirm: () => void;
+   435→  onClose: () => void;
+   436→}) {
+   437→  return (
+   438→    <div className="absolute inset-0 z-[70] grid place-items-center px-8" role="dialog" aria-label={title}>
+   439→      <button type="button" aria-label="取消" onClick={onClose} className="absolute inset-0 bg-black/40" />
+   440→      <div className={`${CARD_CLS} relative w-full p-4`}>
+   441→        <p className="text-center text-[16px] font-semibold">{title}</p>
+   442→        <p className={`mt-2 text-center text-[13.5px] leading-[1.55] ${SUB_CLS}`}>{message}</p>
+   443→        <div className="mt-4 flex gap-2">
+   444→          <button
+   445→            type="button"
+   446→            onClick={onClose}
+   447→            className="h-10 flex-1 rounded-[10px] bg-black/[0.05] text-[15px] active:bg-black/[0.1] dark:bg-white/[0.08] dark:active:bg-white/[0.14]"
+   448→          >
+   449→            取消
+   450→          </button>
+   451→          <button
+   452→            type="button"
+   453→            onClick={() => {
+   454→              onClose();
+   455→              onConfirm();
+   456→            }}
+   457→            className={`h-10 flex-1 rounded-[10px] text-[15px] font-medium text-white active:opacity-80 ${
+   458→              destructive ? 'bg-[#FF3B30] dark:bg-[#FF453A]' : 'bg-black dark:bg-white dark:text-black'
+   459→            }`}
+   460→          >
+   461→            {confirmText}
+   462→          </button>
+   463→        </div>
+   464→      </div>
+   465→    </div>
+   466→  );
+   467→}
+   468→
+   469→// ---------------- 小工具 ----------------
+   470→
+   471→function fmtDate(ts: number): string {
+   472→  const d = new Date(ts);
+   473→  return `${d.getMonth() + 1}月${d.getDate()}日`;
+   474→}
+   475→
+   476→function safeFileName(name: string): string {
+   477→  return name.replace(/[\\/:*?"<>|]/g, '_');
+   478→}
+   479→
+   480→function fmtTime(ts: number): string {
+   481→  const d = new Date(ts);
+   482→  const hh = `${d.getHours()}`.padStart(2, '0');
+   483→  const mm = `${d.getMinutes()}`.padStart(2, '0');
+   484→  const now = new Date();
+   485→  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+   486→  return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+   487→}
+   488→
+   489→/** 专属书绑定角色名（单个；可能未绑定/已删除） */
+   490→function exclusiveNameOf(book: WorldBook, contacts: ContactRecord[]): string {
+   491→  if (!book.targetContactId) return '';
+   492→  return contacts.find((c) => c.id === book.targetContactId)?.name ?? '已删除角色';
+   493→}
+   494→
+   495→type ScopeFilter = 'all' | WbScope;
+   496→
+   497→interface WbStats {
+   498→  global: number;
+   499→  local: number;
+   500→  exclusive: number;
+   501→  enabled: number;
+   502→}
+   503→
+   504→/** 长按手势（指针事件实现；移动超过阈值视为滚动，取消触发） */
+   505→function useLongPress(onLongPress: () => void, ms = 480) {
+   506→  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+   507→  const fired = useRef(false);
+   508→  const startPoint = useRef<{ x: number; y: number } | null>(null);
+   509→  const clear = () => {
+   510→    if (timer.current) {
+   511→      clearTimeout(timer.current);
+   512→      timer.current = null;
+   513→    }
+   514→  };
+   515→  return {
+   516→    onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
+   517→      fired.current = false;
+   518→      startPoint.current = { x: e.clientX, y: e.clientY };
+   519→      clear();
+   520→      timer.current = setTimeout(() => {
+   521→        fired.current = true;
+   522→        onLongPress();
+   523→      }, ms);
+   524→    },
+   525→    onPointerMove: (e: ReactPointerEvent<HTMLButtonElement>) => {
+   526→      const s = startPoint.current;
+   527→      if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 8) clear();
+   528→    },
+   529→    onPointerUp: clear,
+   530→    onPointerLeave: clear,
+   531→    onPointerCancel: clear,
+   532→    didFire: () => fired.current,
+   533→  };
+   534→}
+   535→
+   536→// ---------------- 页面组件 ----------------
+   537→
+   538→type Nav =
+   539→  | { name: 'list' }
+   540→  | { name: 'book'; bookId: string }
+   541→  | { name: 'entry'; bookId: string; entryId: string; isNew?: boolean };
+   542→
+   543→/** 世界书 App 主组件 */
+   544→export default function WorldBookApp() {
+   545→  const [books, setBooks] = useState<WorldBook[]>([]);
+   546→  const [nav, setNav] = useState<Nav>({ name: 'list' });
+   547→  const [contacts, setContacts] = useState<ContactRecord[]>([]);
+   548→  const [createOpen, setCreateOpen] = useState(false);
+   549→  const [renameDialog, setRenameDialog] = useState<{ bookId: string } | null>(null);
+   550→  const [confirm, setConfirm] = useState<{ title: string; message: string; confirmText: string; destructive?: boolean; action: () => void } | null>(null);
+   551→  const [sheetBookId, setSheetBookId] = useState<string | null>(null);
+   552→  const [toast, showToast] = useLocalToast();
+   553→  const importRef = useRef<HTMLInputElement>(null);
+   554→  const [importing, setImporting] = useState(false);
+   555→  const [pendingDraft, setPendingDraft] = useState<WbEntry | null>(null); // 新建条目的未保存草稿（保存才落盘，返回即放弃）
+   556→  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
+   557→  const [charFilterId, setCharFilterId] = useState<string | null>(null);
+   558→  const [charSheet, setCharSheet] = useState(false);
+   559→  const [sheetEntryId, setSheetEntryId] = useState<string | null>(null);
+   560→  const [scopeSheetFor, setScopeSheetFor] = useState<string | null>(null); // 详情页「范围」行
+   561→  const [bindSheetFor, setBindSheetFor] = useState<string | null>(null); // 详情页「绑定角色」行
+   562→  const editorSaveRef = useRef<(() => void) | null>(null);
+   563→
+   564→  // 开机门控保证 kv 已注水：挂载时同步读一次即可（书籍只在本 App 内修改）
+   565→  useEffect(() => {
+   566→    setBooks(loadBooks());
+   567→    void listContacts()
+   568→      .then(setContacts)
+   569→      .catch(() => undefined);
+   570→  }, []);
+   571→
+   572→  // 创建弹窗/绑定菜单/角色筛选打开时重读联系人：用户刚在联系人 App 建完角色回来立即生效，
+   573→  // 不依赖本 App 挂载时机（避免「绑定角色那里没有角色」的旧数据）
+   574→  useEffect(() => {
+   575→    if (!createOpen && !bindSheetFor && !charSheet) return;
+   576→    void listContacts()
+   577→      .then(setContacts)
+   578→      .catch(() => undefined);
+   579→  }, [createOpen, bindSheetFor, charSheet]);
+   580→
+   581→  /** 角色可选名单：只列 AI 角色/配角——user 是用户自己，不参与绑定与筛选 */
+   582→  const aiContacts = useMemo(() => contacts.filter((c) => c.kind !== 'user'), [contacts]);
+   583→
+   584→  const persist = (next: WorldBook[]) => {
+   585→    setBooks(next);
+   586→    saveBooks(next);
+   587→  };
+   588→
+   589→  const contactNameOf = (id: string | null | undefined) => (id ? contacts.find((c) => c.id === id)?.name ?? '已删除角色' : '');
+   590→
+   591→  const stats: WbStats = {
+   592→    global: books.filter((b) => b.scope === 'global').length,
+   593→    local: books.filter((b) => b.scope === 'local').length,
+   594→    exclusive: books.filter((b) => b.scope === 'exclusive').length,
+   595→    enabled: books.filter((b) => b.enabled && b.entries.some((e) => e.enabled)).length,
+   596→  };
+   597→
+   598→  const activeCharFilter =
+   599→    charFilterId && contacts.some((c) => c.id === charFilterId && c.kind !== 'user') ? charFilterId : null;
+   600→  const charFilterName = activeCharFilter ? contacts.find((c) => c.id === activeCharFilter)?.name ?? '' : '';
+   601→
+   602→  /** 切换范围 tab；离开「专属」时清掉角色筛选（角色筛选只在专属界面有意义） */
+   603→  const applyScopeFilter = (s: ScopeFilter) => {
+   604→    setScopeFilter(s);
+   605→    if (s !== 'exclusive') setCharFilterId(null);
+   606→  };
+   607→
+   608→  // 范围筛选按书级 scope；角色筛选（仅专属界面出现）筛绑定给该角色的专属书
+   609→  const filteredBooks = books.filter((b) => {
+   610→    if (scopeFilter !== 'all' && b.scope !== scopeFilter) return false;
+   611→    if (activeCharFilter) return b.scope === 'exclusive' && b.targetContactId === activeCharFilter;
+   612→    return true;
+   613→  });
+   614→
+   615→  const lastUpdateText = books.length === 0 ? '—' : fmtTime(Math.max(...books.map((b) => b.updatedAt)));
+   616→
+   617→  const createBook = (name: string, scope: WbScope, targetContactId: string | null) => {
+   618→    const now = Date.now();
+   619→    const book: WorldBook = { id: newWbId('wb'), name, enabled: true, scope, targetContactId, entries: [], createdAt: now, updatedAt: now };
+   620→    setCreateOpen(false);
+   621→    persist([...books, book]);
+   622→    showToast(`已创建「${name}」`);
+   623→    setNav({ name: 'book', bookId: book.id });
+   624→  };
+   625→
+   626→  const renameBook = (bookId: string, name: string) => {
+   627→    const trimmed = name.trim();
+   628→    setRenameDialog(null);
+   629→    persist(books.map((b) => (b.id === bookId ? { ...b, name: trimmed, updatedAt: Date.now() } : b)));
+   630→    showToast('已重命名');
+   631→  };
+   632→
+   633→  const deleteBook = (bookId: string) => {
+   634→    const target = books.find((b) => b.id === bookId);
+   635→    persist(books.filter((b) => b.id !== bookId));
+   636→    void pruneBookFromAllBindings(bookId);
+   637→    showToast(`已删除「${target?.name ?? ''}」`);
+   638→    if (nav.name !== 'list' && 'bookId' in nav && nav.bookId === bookId) setNav({ name: 'list' });
+   639→  };
+   640→
+   641→  /** 书级启用总开关：关闭后整本书永不注入 */
+   642→  const toggleBookEnabled = (bookId: string, v: boolean) => {
+   643→    persist(books.map((b) => (b.id === bookId ? { ...b, enabled: v, updatedAt: Date.now() } : b)));
+   644→  };
+   645→
+   646→  /** 改书级范围；切到专属且未绑定角色时，紧接着打开绑定角色菜单 */
+   647→  const changeBookScope = (bookId: string, scope: WbScope) => {
+   648→    const target = books.find((b) => b.id === bookId)?.targetContactId ?? null;
+   649→    persist(books.map((b) => (b.id === bookId ? { ...b, scope, updatedAt: Date.now() } : b)));
+   650→    if (scope === 'exclusive' && !target) {
+   651→      showToast('请选择绑定的角色');
+   652→      setBindSheetFor(bookId);
+   653→    }
+   654→  };
+   655→
+   656→  /** 绑定/更换专属书的目标角色 */
+   657→  const bindBookTarget = (bookId: string, contactId: string) => {
+   658→    persist(books.map((b) => (b.id === bookId ? { ...b, targetContactId: contactId, updatedAt: Date.now() } : b)));
+   659→    showToast('已绑定角色');
+   660→  };
+   661→
+   662→  const exportBook = (bookId: string) => {
+   663→    const book = books.find((b) => b.id === bookId);
+   664→    if (!book) return;
+   665→    const payload = buildExportPayload([book], (id) => contactNameOf(id));
+   666→    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+   667→    const url = URL.createObjectURL(blob);
+   668→    const a = document.createElement('a');
+   669→    a.href = url;
+   670→    a.download = `${safeFileName(book.name)}.json`;
+   671→    document.body.appendChild(a);
+   672→    a.click();
+   673→    a.remove();
+   674→    setTimeout(() => URL.revokeObjectURL(url), 4000);
+   675→    showToast('已导出 .json 文件');
+   676→  };
+   677→
+   678→  const importFile = async (file: File) => {
+   679→    setImporting(true);
+   680→    try {
+   681→      const text = await file.text();
+   682→      const parsed: unknown = JSON.parse(text);
+   683→      const imported = parseWorldBookImport(parsed, (name) => contacts.find((c) => c.name === name)?.id ?? null);
+   684→      persist([...books, ...imported]);
+   685→      showToast(imported.length === 1 ? `已导入「${imported[0].name}」` : `已导入 ${imported.length} 本世界书`);
+   686→    } catch (err) {
+   687→      showToast(err instanceof Error && err.message ? err.message : '导入失败：文件不是合法的 JSON');
+   688→    } finally {
+   689→      setImporting(false);
+   690→    }
+   691→  };
+   692→
+   693→  const sheetBook = sheetBookId ? books.find((b) => b.id === sheetBookId) : null;
+   694→  const sheetEntryBook = nav.name === 'book' ? books.find((b) => b.id === nav.bookId) : null;
+   695→  const sheetEntry = sheetEntryBook && sheetEntryId ? sheetEntryBook.entries.find((e) => e.id === sheetEntryId) ?? null : null;
+   696→  const scopeSheetBook = scopeSheetFor ? books.find((b) => b.id === scopeSheetFor) : null;
+   697→  const bindSheetBook = bindSheetFor ? books.find((b) => b.id === bindSheetFor) : null;
+   698→
+   699→  return (
+   700→    <div className={`absolute inset-0 flex h-full w-full flex-col ${PAGE_CLS}`}>
+   701→      {/* 顶栏 */}
+   702→      <div className="shrink-0 pt-[54px]">
+   703→        <div className="relative flex h-11 items-center px-2">
+   704→          {nav.name !== 'list' ? (
+   705→            <button
+   706→              type="button"
+   707→              aria-label="返回"
+   708→              data-testid="wb-back"
+   709→              onClick={() => {
+   710→                if (nav.name === 'entry') {
+   711→                  if (nav.isNew) setPendingDraft(null); // 新建未保存：返回即放弃草稿
+   712→                  setNav({ name: 'book', bookId: nav.bookId });
+   713→                } else {
+   714→                  setNav({ name: 'list' });
+   715→                }
+   716→              }}
+   717→              className="flex items-center rounded-full px-1 active:opacity-50"
+   718→            >
+   719→              <ChevronLeft className="h-7 w-7" strokeWidth={2.2} />
+   720→            </button>
+   721→          ) : (
+   722→            <BackToHome className="static!" />
+   723→          )}
+   724→          {/* 书库首页：标题紧跟返回键右侧（用户要求），其余页面标题居中 */}
+   725→          {nav.name === 'list' && <h1 className="ml-1 text-[17px] font-semibold leading-none">我的世界书库</h1>}
+   726→          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">
+   727→            {nav.name === 'book'
+   728→              ? books.find((b) => b.id === nav.bookId)?.name ?? ''
+   729→              : nav.name === 'entry'
+   730→                ? nav.isNew
+   731→                  ? '新建条目'
+   732→                  : '编辑条目'
+   733→                : ''}
+   734→          </div>
+   735→          <div className="ml-auto flex items-center gap-1 pr-1">
+   736→            {nav.name === 'list' && (
+   737→              <>
+   738→                <button
+   739→                  type="button"
+   740→                  aria-label="导入世界书"
+   741→                  data-testid="wb-import"
+   742→                  onClick={() => importRef.current?.click()}
+   743→                  disabled={importing}
+   744→                  className="grid h-9 w-9 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1] disabled:opacity-50"
+   745→                >
+   746→                  <Upload className="h-[21px] w-[21px]" strokeWidth={2} aria-hidden="true" />
+   747→                </button>
+   748→                <button
+   749→                  type="button"
+   750→                  aria-label="新建世界书"
+   751→                  data-testid="wb-create"
+   752→                  onClick={() => setCreateOpen(true)}
+   753→                  className="grid h-9 w-9 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
+   754→                >
+   755→                  <Plus className="h-[23px] w-[23px]" strokeWidth={2.2} aria-hidden="true" />
+   756→                </button>
+   757→              </>
+   758→            )}
+   759→            {nav.name === 'book' && (
+   760→              <>
+   761→                <button
+   762→                  type="button"
+   763→                  aria-label="新建条目"
+   764→                  data-testid="wb-add-entry"
+   765→                  onClick={() => {
+   766→                    const draft = createEntryDraft();
+   767→                    setPendingDraft(draft); // 草稿不落盘，点右上角「保存」才创建
+   768→                    setNav({ name: 'entry', bookId: nav.bookId, entryId: draft.id, isNew: true });
+   769→                  }}
+   770→                  className="grid h-9 w-9 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
+   771→                >
+   772→                  <Plus className="h-[23px] w-[23px]" strokeWidth={2.2} aria-hidden="true" />
+   773→                </button>
+   774→                <button
+   775→                  type="button"
+   776→                  aria-label="更多操作"
+   777→                  data-testid="wb-book-more"
+   778→                  onClick={() => setSheetBookId(nav.bookId)}
+   779→                  className="grid h-9 w-9 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
+   780→                >
+   781→                  <MoreHorizontal className="h-[22px] w-[22px]" strokeWidth={2} aria-hidden="true" />
+   782→                </button>
+   783→              </>
+   784→            )}
+   785→            {nav.name === 'entry' && (
+   786→              <button
+   787→                type="button"
+   788→                data-testid="wb-edit-save-top"
+   789→                onClick={() => editorSaveRef.current?.()}
+   790→                className="rounded-full px-2.5 py-1.5 text-[16px] font-semibold active:opacity-50"
+   791→              >
+   792→                保存
+   793→              </button>
+   794→            )}
+   795→          </div>
+   796→        </div>
+   797→      </div>
+   798→
+   799→      {/* 内容区 */}
+   800→      <div className="flex-1 overflow-y-auto px-4 pb-10 pt-2">
+   801→        {nav.name === 'list' && (
+   802→          <BookListPage
+   803→            books={filteredBooks}
+   804→            totalCount={books.length}
+   805→            stats={stats}
+   806→            lastUpdateText={lastUpdateText}
+   807→            scopeFilter={scopeFilter}
+   808→            onScopeTab={applyScopeFilter}
+   809→            charFilterName={charFilterName}
+   810→            onOpenCharSheet={() => setCharSheet(true)}
+   811→            contacts={contacts}
+   812→            onOpen={(id) => setNav({ name: 'book', bookId: id })}
+   813→            onSheet={setSheetBookId}
+   814→          />
+   815→        )}
+   816→        {nav.name === 'book' && (() => {
+   817→          const book = books.find((b) => b.id === nav.bookId);
+   818→          if (!book) return <EmptyHint text="这本书不存在或已被删除" />;
+   819→          return (
+   820→            <BookDetailPage
+   821→              book={book}
+   822→              contacts={contacts}
+   823→              onToggleEntry={(entryId, v) =>
+   824→                persist(
+   825→                  books.map((b) =>
+   826→                    b.id === book.id
+   827→                      ? { ...b, updatedAt: Date.now(), entries: b.entries.map((e) => (e.id === entryId ? { ...e, enabled: v } : e)) }
+   828→                      : b,
+   829→                  ),
+   830→                )
+   831→              }
+   832→              onOpenEntry={(entryId) => setNav({ name: 'entry', bookId: book.id, entryId })}
+   833→              onEntrySheet={(entryId) => setSheetEntryId(entryId)}
+   834→              onAddEntry={() => {
+   835→                const draft = createEntryDraft();
+   836→                setPendingDraft(draft);
+   837→                setNav({ name: 'entry', bookId: book.id, entryId: draft.id, isNew: true });
+   838→              }}
+   839→              onToggleBook={(v) => toggleBookEnabled(book.id, v)}
+   840→              onOpenScopeSheet={() => setScopeSheetFor(book.id)}
+   841→              onOpenBindSheet={() => {
+   842→                if (aiContacts.length === 0) {
+   843→                  showToast('暂无角色，先到「联系人」App 创建');
+   844→                  return;
+   845→                }
+   846→                setBindSheetFor(book.id);
+   847→              }}
+   848→            />
+   849→          );
+   850→        })()}
+   851→        {nav.name === 'entry' && (() => {
+   852→          const book = books.find((b) => b.id === nav.bookId);
+   853→          const entry = nav.isNew ? pendingDraft : book?.entries.find((e) => e.id === nav.entryId);
+   854→          if (!book || !entry) return <EmptyHint text="该条目不存在或已被放弃" />;
+   855→          return (
+   856→            <EntryEditorPage
+   857→              key={entry.id}
+   858→              entry={entry}
+   859→              isNew={nav.isNew === true}
+   860→              bookScope={book.scope}
+   861→              registerSave={(fn) => {
+   862→                editorSaveRef.current = fn;
+   863→              }}
+   864→              showToast={showToast}
+   865→              onSave={(next) => {
+   866→                if (nav.isNew) {
+   867→                  persist(books.map((b) => (b.id === book.id ? { ...b, updatedAt: Date.now(), entries: [...b.entries, next] } : b)));
+   868→                  setPendingDraft(null);
+   869→                  showToast('已创建条目');
+   870→                } else {
+   871→                  persist(books.map((b) => (b.id === book.id ? { ...b, updatedAt: Date.now(), entries: b.entries.map((e) => (e.id === entry.id ? next : e)) } : b)));
+   872→                  showToast('已保存');
+   873→                }
+   874→                setNav({ name: 'book', bookId: book.id });
+   875→              }}
+   876→              onDelete={() => {
+   877→                setConfirm({
+   878→                  title: '删除条目',
+   879→                  message: `「${entry.name || '未命名条目'}」删除后不可恢复。`,
+   880→                  confirmText: '删除',
+   881→                  destructive: true,
+   882→                  action: () => {
+   883→                    persist(books.map((b) => (b.id === book.id ? { ...b, entries: b.entries.filter((e) => e.id !== entry.id), updatedAt: Date.now() } : b)));
+   884→                    showToast('已删除条目');
+   885→                    setNav({ name: 'book', bookId: book.id });
+   886→                  },
+   887→                });
+   888→              }}
+   889→            />
+   890→          );
+   891→        })()}
+   892→      </div>
+   893→
+   894→      {/* 底部范围筛选栏（书库首页）：椭圆胶囊底座整体包裹，激活黑底白字圆片；整体上移（加大底部留白） */}
+   895→      {nav.name === 'list' && (
+   896→        <div className="shrink-0 px-4 pb-[calc(1.35rem+env(safe-area-inset-bottom))] pt-1" data-testid="wb-scope-bar">
+   897→          <div className="flex items-center gap-1 rounded-full bg-black/[0.05] p-1 dark:bg-white/[0.09]">
+   898→            {([
+   899→              ['all', '全部'],
+   900→              ['global', WB_SCOPE_LABELS.global],
+   901→              ['local', WB_SCOPE_LABELS.local],
+   902→              ['exclusive', WB_SCOPE_LABELS.exclusive],
+   903→            ] as const).map(([s, label]) => (
+   904→              <button
+   905→                key={s}
+   906→                type="button"
+   907→                data-testid={`wb-filter-${s}`}
+   908→                aria-pressed={scopeFilter === s}
+   909→                onClick={() => applyScopeFilter(s)}
+   910→                className={`h-9 flex-1 rounded-full text-[13px] font-medium transition-colors ${
+   911→                  scopeFilter === s
+   912→                    ? 'bg-black text-white dark:bg-white dark:text-black'
+   913→                    : 'text-black/60 active:bg-black/[0.06] dark:text-white/60 dark:active:bg-white/[0.1]'
+   914→                }`}
+   915→              >
+   916→                {label}
+   917→              </button>
+   918→            ))}
+   919→          </div>
+   920→        </div>
+   921→      )}
+   922→
+   923→      {/* 浮层 */}
+   924→      {createOpen && (
+   925→        <CreateBookDialog
+   926→          contacts={aiContacts}
+   927→          onConfirm={createBook}
+   928→          onClose={() => setCreateOpen(false)}
+   929→          onCreateCharacter={() => {
+   930→            setCreateOpen(false);
+   931→            useUI.getState().switchToApp('contacts');
+   932→          }}
+   933→        />
+   934→      )}
+   935→      {renameDialog && (
+   936→        <NameDialog
+   937→          title="重命名世界书"
+   938→          initial={books.find((b) => b.id === renameDialog.bookId)?.name ?? ''}
+   939→          confirmText="保存"
+   940→          onConfirm={(name) => renameBook(renameDialog.bookId, name)}
+   941→          onClose={() => setRenameDialog(null)}
+   942→        />
+   943→      )}
+   944→      {confirm && (
+   945→        <ConfirmDialog
+   946→          title={confirm.title}
+   947→          message={confirm.message}
+   948→          confirmText={confirm.confirmText}
+   949→          destructive={confirm.destructive}
+   950→          onConfirm={confirm.action}
+   951→          onClose={() => setConfirm(null)}
+   952→        />
+   953→      )}
+   954→      {sheetBook && (
+   955→        <ActionSheet
+   956→          title={sheetBook.name}
+   957→          onClose={() => setSheetBookId(null)}
+   958→          actions={[
+   959→            { label: '重命名', onSelect: () => setRenameDialog({ bookId: sheetBook.id }) },
+   960→            { label: '导出', onSelect: () => exportBook(sheetBook.id) },
+   961→            {
+   962→              label: '删除世界书',
+   963→              destructive: true,
+   964→              onSelect: () =>
+   965→                setConfirm({
+   966→                  title: '删除世界书',
+   967→                  message: `「${sheetBook.name}」及其 ${sheetBook.entries.length} 个条目将被删除，且不再注入任何聊天。`,
+   968→                  confirmText: '删除',
+   969→                  destructive: true,
+   970→                  action: () => deleteBook(sheetBook.id),
+   971→                }),
+   972→            },
+   973→          ]}
+   974→        />
+   975→      )}
+   976→      {sheetEntry && (
+   977→        <ActionSheet
+   978→          title={sheetEntry.name || '未命名条目'}
+   979→          onClose={() => setSheetEntryId(null)}
+   980→          actions={[
+   981→            {
+   982→              label: '编辑条目',
+   983→              onSelect: () => {
+   984→                if (!sheetEntryBook) return;
+   985→                setNav({ name: 'entry', bookId: sheetEntryBook.id, entryId: sheetEntry.id });
+   986→              },
+   987→            },
+   988→            {
+   989→              label: '删除条目',
+   990→              destructive: true,
+   991→              onSelect: () => {
+   992→                const targetBook = sheetEntryBook;
+   993→                if (!targetBook) return;
+   994→                setConfirm({
+   995→                  title: '删除条目',
+   996→                  message: `「${sheetEntry.name || '未命名条目'}」删除后不可恢复。`,
+   997→                  confirmText: '删除',
+   998→                  destructive: true,
+   999→                  action: () => {
+  1000→                    persist(
+  1001→                      books.map((b) =>
+  1002→                        b.id === targetBook.id ? { ...b, entries: b.entries.filter((e) => e.id !== sheetEntry.id), updatedAt: Date.now() } : b,
+  1003→                      ),
+  1004→                    );
+  1005→                    showToast('已删除条目');
+  1006→                  },
+  1007→                });
+  1008→              },
+  1009→            },
+  1010→          ]}
+  1011→        />
+  1012→      )}
+  1013→      {/* 专属 tab 的角色筛选（只筛绑定给该角色的专属书） */}
+  1014→      {charSheet && (
+  1015→        <ActionSheet
+  1016→          title="只看绑定给哪个角色的专属世界书"
+  1017→          onClose={() => setCharSheet(false)}
+  1018→          actions={[
+  1019→            { id: 'wb-char-all', label: '全部角色', onSelect: () => setCharFilterId(null) },
+  1020→            // 只列 AI 角色/配角（不显示角色类型标签），不包括 user（用户自己）
+  1021→            ...aiContacts.map((c) => ({
+  1022→              id: c.id,
+  1023→              label: c.name,
+  1024→              onSelect: () => setCharFilterId(c.id),
+  1025→            })),
+  1026→          ]}
+  1027→        />
+  1028→      )}
+  1029→      {/* 详情页「范围」行：改书级范围 */}
+  1030→      {scopeSheetBook && (
+  1031→        <ActionSheet
+  1032→          title={`更换范围（当前：${WB_SCOPE_LABELS[scopeSheetBook.scope]}）`}
+  1033→          onClose={() => setScopeSheetFor(null)}
+  1034→          actions={WB_SCOPES.map((s) => ({
+  1035→            id: s,
+  1036→            label: `${WB_SCOPE_LABELS[s]} · ${WB_SCOPE_SUBTITLES[s]}`,
+  1037→            onSelect: () => changeBookScope(scopeSheetBook.id, s),
+  1038→          }))}
+  1039→        />
+  1040→      )}
+  1041→      {/* 详情页「绑定角色」行：换绑专属书的目标角色 */}
+  1042→      {bindSheetBook && (
+  1043→        <ActionSheet
+  1044→          title="绑定角色（仅对该角色的聊天生效）"
+  1045→          onClose={() => setBindSheetFor(null)}
+  1046→          actions={aiContacts.map((c) => ({
+  1047→            id: c.id,
+  1048→            label: c.name,
+  1049→            onSelect: () => bindBookTarget(bindSheetBook.id, c.id),
+  1050→          }))}
+  1051→        />
+  1052→      )}
+  1053→      <input
+  1054→        ref={importRef}
+  1055→        type="file"
+  1056→        accept=".json,application/json"
+  1057→        hidden
+  1058→        data-testid="wb-import-input"
+  1059→        onChange={(e) => {
+  1060→          const f = e.target.files?.[0];
+  1061→          e.target.value = '';
+  1062→          if (f) void importFile(f);
+  1063→        }}
+  1064→      />
+  1065→      <LocalToast msg={toast} />
+  1066→    </div>
+  1067→  );
+  1068→}
+  1069→
+  1070→/** 空态提示 */
+  1071→function EmptyHint({ text }: { text: string }) {
+  1072→  return (
+  1073→    <div className="grid place-items-center pt-16 text-center">
+  1074→      <BookMarked className="h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+  1075→      <p className={`mt-3 text-[14px] ${SUB_CLS}`}>{text}</p>
+  1076→    </div>
+  1077→  );
+  1078→}
+  1079→
+  1080→/** 书库首页：角色筛选（仅专属 tab）+ 统计卡（可点筛选）+ 书籍卡片列表 + 空态（大标题已上移顶栏返回键右侧） */
+  1081→function BookListPage({
+  1082→  books,
+  1083→  totalCount,
+  1084→  stats,
+  1085→  lastUpdateText,
+  1086→  scopeFilter,
+  1087→  onScopeTab,
+  1088→  charFilterName,
+  1089→  onOpenCharSheet,
+  1090→  contacts,
+  1091→  onOpen,
+  1092→  onSheet,
+  1093→}: {
+  1094→  books: WorldBook[]; // 已按范围/角色过滤后的书籍
+  1095→  totalCount: number;
+  1096→  stats: WbStats;
+  1097→  lastUpdateText: string;
+  1098→  scopeFilter: ScopeFilter;
+  1099→  onScopeTab: (scope: ScopeFilter) => void;
+  1100→  charFilterName: string;
+  1101→  onOpenCharSheet: () => void;
+  1102→  contacts: ContactRecord[];
+  1103→  onOpen: (bookId: string) => void;
+  1104→  onSheet: (bookId: string) => void;
+  1105→}) {
+  1106→  return (
+  1107→    <>
+  1108→      {/* 「全部角色」筛选只在专属界面显示（原大标题行保留，仅剩筛选钮靠右） */}
+  1109→      {scopeFilter === 'exclusive' && (
+  1110→        <div className="flex items-center justify-end gap-2 px-1 pt-1">
+  1111→          <button
+  1112→            type="button"
+  1113→            data-testid="wb-char-filter"
+  1114→            onClick={onOpenCharSheet}
+  1115→            className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-black/[0.05] px-2.5 text-[12px] active:bg-black/[0.1] dark:bg-white/[0.1] dark:active:bg-white/[0.16]"
+  1116→          >
+  1117→            {charFilterName || '全部角色'}
+  1118→            <ChevronDown className="h-3.5 w-3.5 opacity-50" strokeWidth={2.2} aria-hidden="true" />
+  1119→          </button>
+  1120→        </div>
+  1121→      )}
+  1122→      <p className={`px-1 pt-1 text-[13px] ${SUB_CLS}`} data-testid="wb-library-sub">
+  1123→        共 {totalCount} 个世界书 · 最后更新 {lastUpdateText}
+  1124→      </p>
+  1125→
+  1126→      {/* 统计卡（紧凑）：全局/局部/专属 三列可点（再点一次取消筛选），已启用为计数展示 */}
+  1127→      <div className={`${CARD_CLS} mt-2.5 flex items-stretch`}>
+  1128→        {(['global', 'local', 'exclusive'] as const).map((s, i) => (
+  1129→          <button
+  1130→            key={s}
+  1131→            type="button"
+  1132→            data-testid={`wb-scope-tab-${s}`}
+  1133→            aria-pressed={scopeFilter === s}
+  1134→            onClick={() => onScopeTab(scopeFilter === s ? 'all' : s)}
+  1135→            className={`relative flex-1 py-2 text-center transition-colors ${
+  1136→              i > 0 ? `border-l ${DIVIDER_CLS}` : ''
+  1137→            } ${scopeFilter === s ? 'bg-black/[0.04] dark:bg-white/[0.06]' : 'active:bg-black/[0.03] dark:active:bg-white/[0.04]'}`}
+  1138→          >
+  1139→            <span className="block text-[16px] font-bold leading-none tabular-nums">{stats[s]}</span>
+  1140→            <span className={`mt-[3px] block text-[10.5px] ${scopeFilter === s ? 'font-medium' : SUB_CLS}`}>{WB_SCOPE_LABELS[s]}</span>
+  1141→            {scopeFilter === s && (
+  1142→              <span aria-hidden="true" className="absolute inset-x-9 bottom-0 h-[2px] rounded-t-full bg-black dark:bg-white" />
+  1143→            )}
+  1144→          </button>
+  1145→        ))}
+  1146→        <div className={`flex-1 border-l py-2 text-center ${DIVIDER_CLS}`}>
+  1147→          <span className="block text-[16px] font-bold leading-none tabular-nums" data-testid="wb-stat-enabled">
+  1148→            {stats.enabled}
+  1149→          </span>
+  1150→          <span className={`mt-[3px] block text-[10.5px] ${SUB_CLS}`}>已启用</span>
+  1151→        </div>
+  1152→      </div>
+  1153→      {charFilterName && <p className={CAPTION_CLS}>只看绑定给「{charFilterName}」的专属世界书。</p>}
+  1154→
+  1155→      {totalCount === 0 ? (
+  1156→        <EmptyHint text="还没有世界书，点右上角 + 新建" />
+  1157→      ) : books.length === 0 ? (
+  1158→        <div className="grid place-items-center pt-16 text-center">
+  1159→          <Globe className="h-12 w-12 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+  1160→          <p className="mt-3 text-[15px] font-medium text-black/35 dark:text-white/35">该范围下暂无世界书</p>
+  1161→          <p className={`mt-1.5 text-[13px] ${SUB_CLS}`}>切换范围筛选，或点 + 新建一个</p>
+  1162→        </div>
+  1163→      ) : (
+  1164→        <div className={`${CARD_CLS} mt-3`}>
+  1165→          {books.map((book, i) => {
+  1166→            const enabled = book.entries.filter((e) => e.enabled).length;
+  1167→            const exName = book.scope === 'exclusive' ? exclusiveNameOf(book, contacts) : '';
+  1168→            return (
+  1169→              <div key={book.id} className={i > 0 ? `border-t ${DIVIDER_CLS}` : ''}>
+  1170→                <div className="flex items-center">
+  1171→                  <button
+  1172→                    type="button"
+  1173→                    data-testid={`wb-book-${i}`}
+  1174→                    onClick={() => onOpen(book.id)}
+  1175→                    className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+  1176→                  >
+  1177→                    <span aria-hidden="true" className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-black/[0.05] dark:bg-white/[0.08]">
+  1178→                      <BookMarked className="h-5 w-5 text-black/60 dark:text-white/60" strokeWidth={1.8} />
+  1179→                    </span>
+  1180→                    <span className="min-w-0 flex-1">
+  1181→                      <span className="block truncate text-[16px]">
+  1182→                        {book.name}
+  1183→                        <span className="ml-1.5 inline-block rounded-[4px] bg-black/[0.05] px-1.5 py-0.5 align-middle text-[10.5px] leading-none text-black/55 dark:bg-white/[0.09] dark:text-white/55">
+  1184→                          {WB_SCOPE_LABELS[book.scope]}
+  1185→                          {exName ? ` · ${exName}` : ''}
+  1186→                        </span>
+  1187→                        {!book.enabled && (
+  1188→                          <span className="ml-1 inline-block rounded-[4px] bg-black/[0.05] px-1.5 py-0.5 align-middle text-[10.5px] leading-none text-black/40 dark:bg-white/[0.09] dark:text-white/40">
+  1189→                            已停用
+  1190→                          </span>
+  1191→                        )}
+  1192→                      </span>
+  1193→                      <span className={`mt-0.5 block truncate text-[12.5px] ${SUB_CLS}`}>
+  1194→                        {book.entries.length} 条目 · {enabled} 启用 · {fmtDate(book.updatedAt)}
+  1195→                      </span>
+  1196→                    </span>
+  1197→                  </button>
+  1198→                  <button
+  1199→                    type="button"
+  1200→                    aria-label={`${book.name} 更多操作`}
+  1201→                    data-testid={`wb-book-more-${i}`}
+  1202→                    onClick={() => onSheet(book.id)}
+  1203→                    className="grid h-11 w-10 shrink-0 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
+  1204→                  >
+  1205→                    <MoreHorizontal className="h-5 w-5 text-black/35 dark:text-white/35" strokeWidth={2} aria-hidden="true" />
+  1206→                  </button>
+  1207→                </div>
+  1208→              </div>
+  1209→            );
+  1210→          })}
+  1211→        </div>
+  1212→      )}
+  1213→    </>
+  1214→  );
+  1215→}
+  1216→
+  1217→/** 位置徽章（范围在书级，条目不再显示范围徽章） */
+  1218→function EntryBadges({ entry }: { entry: WbEntry }) {
+  1219→  const base = 'rounded-[4px] bg-black/[0.05] px-1.5 py-0.5 text-[11px] leading-none dark:bg-white/[0.09]';
+  1220→  return (
+  1221→    <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+  1222→      <span className={base}>{WB_POSITION_LABELS[entry.position]}</span>
+  1223→      {entry.priority > 0 && <span className={base}>优先级 {entry.priority}</span>}
+  1224→    </span>
+  1225→  );
+  1226→}
+  1227→
+  1228→/** 单条条目行（点=编辑；长按或 ⋯=操作菜单，行尾不再放删除图标） */
+  1229→function EntryRow({
+  1230→  entry,
+  1231→  index,
+  1232→  onToggle,
+  1233→  onOpen,
+  1234→  onSheet,
+  1235→}: {
+  1236→  entry: WbEntry;
+  1237→  index: number;
+  1238→  onToggle: (v: boolean) => void;
+  1239→  onOpen: () => void;
+  1240→  onSheet: () => void;
+  1241→}) {
+  1242→  const lp = useLongPress(onSheet);
+  1243→  return (
+  1244→    <div className={index > 0 ? `border-t ${DIVIDER_CLS}` : ''}>
+  1245→      <div className="flex items-center gap-2 pr-2">
+  1246→        <button
+  1247→          type="button"
+  1248→          data-testid={`wb-entry-${index}`}
+  1249→          onClick={() => {
+  1250→            if (!lp.didFire()) onOpen(); // 长按已触发菜单时抑制紧随的 click
+  1251→          }}
+  1252→          onPointerDown={lp.onPointerDown}
+  1253→          onPointerMove={lp.onPointerMove}
+  1254→          onPointerUp={lp.onPointerUp}
+  1255→          onPointerLeave={lp.onPointerLeave}
+  1256→          onPointerCancel={lp.onPointerCancel}
+  1257→          onContextMenu={(e) => e.preventDefault()}
+  1258→          className="min-w-0 flex-1 select-none px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] [-webkit-touch-callout:none]"
+  1259→        >
+  1260→          <span className={`block truncate text-[15.5px] ${entry.enabled ? '' : SUB_CLS}`}>{entry.name || '未命名条目'}</span>
+  1261→          <span className={`mt-0.5 block truncate text-[12.5px] ${SUB_CLS}`}>
+  1262→            {entry.keywords.length > 0 ? `触发词：${entry.keywords.join('、')}` : '无触发词（全局书内容常驻注入）'}
+  1263→          </span>
+  1264→          <EntryBadges entry={entry} />
+  1265→        </button>
+  1266→        <MonoToggle on={entry.enabled} onChange={onToggle} label={`启用${entry.name || '未命名条目'}`} testId={`wb-entry-toggle-${index}`} />
+  1267→        <button
+  1268→          type="button"
+  1269→          aria-label={`${entry.name || '未命名条目'} 更多操作`}
+  1270→          data-testid={`wb-entry-more-${index}`}
+  1271→          onClick={onSheet}
+  1272→          className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/[0.06] dark:active:bg-white/[0.1]"
+  1273→        >
+  1274→          <MoreHorizontal className="h-5 w-5 text-black/35 dark:text-white/35" strokeWidth={2} aria-hidden="true" />
+  1275→        </button>
+  1276→      </div>
+  1277→    </div>
+  1278→  );
+  1279→}
+  1280→
+  1281→/** 书籍详情页（按参考图）：计数 + 范围徽章 + 说明；范围/启用/绑定角色设置卡；虚线新建条目；条目列表 */
+  1282→function BookDetailPage({
+  1283→  book,
+  1284→  contacts,
+  1285→  onToggleEntry,
+  1286→  onOpenEntry,
+  1287→  onEntrySheet,
+  1288→  onAddEntry,
+  1289→  onToggleBook,
+  1290→  onOpenScopeSheet,
+  1291→  onOpenBindSheet,
+  1292→}: {
+  1293→  book: WorldBook;
+  1294→  contacts: ContactRecord[];
+  1295→  onToggleEntry: (entryId: string, v: boolean) => void;
+  1296→  onOpenEntry: (entryId: string) => void;
+  1297→  onEntrySheet: (entryId: string) => void;
+  1298→  onAddEntry: () => void;
+  1299→  /** 书级启用总开关 */
+  1300→  onToggleBook: (v: boolean) => void;
+  1301→  /** 打开「范围」选择菜单 */
+  1302→  onOpenScopeSheet: () => void;
+  1303→  /** 打开「绑定角色」菜单（仅专属范围） */
+  1304→  onOpenBindSheet: () => void;
+  1305→}) {
+  1306→  const boundName = book.scope === 'exclusive' ? exclusiveNameOf(book, contacts) : '';
+  1307→  return (
+  1308→    <>
+  1309→      {/* 头部：条目计数 + 范围徽章 + 一句话说明 */}
+  1310→      <div className="flex items-center gap-2.5 px-1 pt-1.5">
+  1311→        <span className="text-[34px] font-bold leading-none tabular-nums" data-testid="wb-detail-count">
+  1312→          {book.entries.length}
+  1313→        </span>
+  1314→        {book.enabled ? (
+  1315→          <span className="rounded-[8px] bg-black px-2.5 py-1 text-[14px] font-semibold leading-none text-white dark:bg-white dark:text-black">
+  1316→            {WB_SCOPE_LABELS[book.scope]}
+  1317→          </span>
+  1318→        ) : (
+  1319→          <span className="rounded-[8px] bg-black/35 px-2.5 py-1 text-[14px] font-semibold leading-none text-white dark:bg-white/35">
+  1320→            已停用
+  1321→          </span>
+  1322→        )}
+  1323→      </div>
+  1324→      <p className={`mt-2 px-1 text-[14.5px] ${SUB_CLS}`}>{WB_SCOPE_SHORT_DESC[book.scope]}</p>
+  1325→
+  1326→      {/* 设置卡：范围 / 启用（总开关）/ 绑定角色（仅专属） */}
+  1327→      <div className={`${CARD_CLS} mt-3`}>
+  1328→        <button
+  1329→          type="button"
+  1330→          data-testid="wb-detail-scope-row"
+  1331→          onClick={onOpenScopeSheet}
+  1332→          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+  1333→        >
+  1334→          <span aria-hidden="true" className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] border border-black/15 dark:border-white/20">
+  1335→            <ScopeIcon scope={book.scope} className="h-5 w-5 text-black/70 dark:text-white/70" />
+  1336→          </span>
+  1337→          <span className="min-w-0 flex-1">
+  1338→            <span className="block text-[16px]">范围</span>
+  1339→          </span>
+  1340→          <span className={`shrink-0 text-[15px] ${SUB_CLS}`}>
+  1341→            {WB_SCOPE_LABELS[book.scope]}
+  1342→            {book.scope === 'exclusive' ? ` · ${boundName || '未绑定'}` : ''}
+  1343→          </span>
+  1344→          <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} aria-hidden="true" />
+  1345→        </button>
+  1346→        <div className={`border-t ${DIVIDER_CLS}`}>
+  1347→          <div className="flex items-center gap-3 px-4 py-3">
+  1348→            <span aria-hidden="true" className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] border border-black/15 dark:border-white/20">
+  1349→              <FileText className="h-5 w-5 text-black/70 dark:text-white/70" strokeWidth={1.8} />
+  1350→            </span>
+  1351→            <span className="min-w-0 flex-1">
+  1352→              <span className="block text-[16px]">启用</span>
+  1353→            </span>
+  1354→            <MonoToggle on={book.enabled} onChange={onToggleBook} label="启用世界书" testId="wb-detail-enable" />
+  1355→          </div>
+  1356→        </div>
+  1357→        {book.scope === 'exclusive' && (
+  1358→          <div className={`border-t ${DIVIDER_CLS}`}>
+  1359→            <button
+  1360→              type="button"
+  1361→              data-testid="wb-detail-bind-row"
+  1362→              onClick={onOpenBindSheet}
+  1363→              className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+  1364→            >
+  1365→              <span aria-hidden="true" className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] border border-black/15 dark:border-white/20">
+  1366→                <User className="h-5 w-5 text-black/70 dark:text-white/70" strokeWidth={1.8} />
+  1367→              </span>
+  1368→              <span className="min-w-0 flex-1">
+  1369→                <span className="block text-[16px]">绑定角色</span>
+  1370→              </span>
+  1371→              <span className={`shrink-0 truncate text-[15px] ${boundName ? SUB_CLS : DESTRUCTIVE_CLS}`}>{boundName || '未绑定'}</span>
+  1372→              <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} aria-hidden="true" />
+  1373→            </button>
+  1374→          </div>
+  1375→        )}
+  1376→      </div>
+  1377→      <p className={CAPTION_CLS}>{WB_SCOPE_TIPS[book.scope]}</p>
+  1378→
+  1379→      {/* 虚线「+ 新建条目」大按钮 */}
+  1380→      <button
+  1381→        type="button"
+  1382→        data-testid="wb-detail-add"
+  1383→        onClick={onAddEntry}
+  1384→        className="mt-3 flex w-full items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/25 py-4 text-[16px] font-semibold active:bg-black/[0.03] dark:border-white/30 dark:active:bg-white/[0.05]"
+  1385→      >
+  1386→        <Plus className="h-[18px] w-[18px]" strokeWidth={2.4} aria-hidden="true" />
+  1387→        新建条目
+  1388→      </button>
+  1389→
+  1390→      {book.entries.length > 0 && (
+  1391→        <div className={`${CARD_CLS} mt-3`}>
+  1392→          {book.entries.map((entry, i) => (
+  1393→            <EntryRow
+  1394→              key={entry.id}
+  1395→              entry={entry}
+  1396→              index={i}
+  1397→              onToggle={(v) => onToggleEntry(entry.id, v)}
+  1398→              onOpen={() => onOpenEntry(entry.id)}
+  1399→              onSheet={() => onEntrySheet(entry.id)}
+  1400→            />
+  1401→          ))}
+  1402→        </div>
+  1403→      )}
+  1404→
+  1405→      {book.entries.length === 0 && (
+  1406→        <div className="grid place-items-center pt-14 text-center">
+  1407→          <FileText className="h-12 w-12 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+  1408→          <p className="mt-3 text-[16px] font-semibold">还没有条目</p>
+  1409→          <p className={`mt-1.5 text-[13.5px] ${SUB_CLS}`}>条目是发送给 AI 的世界观设定</p>
+  1410→        </div>
+  1411→      )}
+  1412→    </>
+  1413→  );
+  1414→}
+  1415→
+  1416→/** 设置组里的选项行（右侧勾） */
+  1417→function OptionRow({
+  1418→  label,
+  1419→  note,
+  1420→  selected,
+  1421→  testId,
+  1422→  onClick,
+  1423→  first,
+  1424→}: {
+  1425→  label: string;
+  1426→  note?: string;
+  1427→  selected: boolean;
+  1428→  testId: string;
+  1429→  onClick: () => void;
+  1430→  first?: boolean;
+  1431→}) {
+  1432→  return (
+  1433→    <div className={first ? '' : `border-t ${DIVIDER_CLS}`}>
+  1434→      <button type="button" data-testid={testId} onClick={onClick} className="flex w-full items-center justify-between px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]">
+  1435→        <span className="min-w-0">
+  1436→          <span className="block text-[15px]">{label}</span>
+  1437→          {note && <span className={`mt-0.5 block text-[12px] leading-[1.4] ${SUB_CLS}`}>{note}</span>}
+  1438→        </span>
+  1439→        {selected && (
+  1440→          <span className="grid shrink-0 place-items-center pl-2" aria-label="已选中">
+  1441→            <Check className="h-5 w-5" strokeWidth={2.4} />
+  1442→          </span>
+  1443→        )}
+  1444→      </button>
+  1445→    </div>
+  1446→  );
+  1447→}
+  1448→
+  1449→const POSITION_NOTES: Record<WbPosition, string> = {
+  1450→  before_system: '插入整段系统提示词最前面',
+  1451→  after_system: '插入整段系统提示词最后面',
+  1452→  before_char: '插在角色人设定义之前',
+  1453→  after_char: '插在角色人设定义之后',
+  1454→  before_user: '包裹在最后一条用户消息之前',
+  1455→  after_user: '包裹在最后一条用户消息之后',
+  1456→};
+  1457→
+  1458→/** 条目编辑页（本地草稿，点右上角「保存」才落盘；新建条目在保存前不落盘，返回即放弃）。
+  1459→ * 范围在书级：编辑页不再有生效范围区块；全局书触发词可留空（内容常驻注入）。 */
+  1460→function EntryEditorPage({
+  1461→  entry,
+  1462→  isNew,
+  1463→  bookScope,
+  1464→  registerSave,
+  1465→  showToast,
+  1466→  onSave,
+  1467→  onDelete,
+  1468→}: {
+  1469→  entry: WbEntry;
+  1470→  /** 新建未保存的条目：不渲染删除按钮，保存时才写入书籍 */
+  1471→  isNew?: boolean;
+  1472→  /** 所属书的范围：全局书触发词可留空 */
+  1473→  bookScope: WbScope;
+  1474→  /** 把内部 save 暴露给顶栏（右上角「保存」按钮） */
+  1475→  registerSave?: (fn: (() => void) | null) => void;
+  1476→  showToast?: (msg: string) => void;
+  1477→  onSave: (next: WbEntry) => void;
+  1478→  onDelete: () => void;
+  1479→}) {
+  1480→  const [draft, setDraft] = useState<WbEntry>(entry);
+  1481→  const [keywordsInput, setKeywordsInput] = useState(entry.keywords.join('，'));
+  1482→  const [error, setError] = useState('');
+  1483→  const keywords = useMemo(() => parseKeywordsInput(keywordsInput), [keywordsInput]);
+  1484→
+  1485→  const save = () => {
+  1486→    const check = wbEntryCheck({ keywords, content: draft.content }, { requireKeywords: bookScope !== 'global' });
+  1487→    if (!check.ok) {
+  1488→      setError(check.reason);
+  1489→      showToast?.(check.reason);
+  1490→      return;
+  1491→    }
+  1492→    onSave({
+  1493→      ...draft,
+  1494→      name: draft.name.trim() || '未命名条目',
+  1495→      keywords,
+  1496→      content: draft.content,
+  1497→    });
+  1498→  };
+  1499→
+  1500→  // 草稿状态在本组件内：每次渲染把最新 save 暴露给顶栏右上角「保存」按钮
+  1501→  useEffect(() => {
+  1502→    registerSave?.(save);
+  1503→    return () => registerSave?.(null);
+  1504→  });
+  1505→
+  1506→  return (
+  1507→    <div className="pb-2">
+  1508→      {/* 开关 + 条目名字 */}
+  1509→      <div className={`${CARD_CLS}`}>
+  1510→        <div className="flex items-center justify-between px-4 py-3">
+  1511→          <span className="text-[15.5px]">启用条目</span>
+  1512→          <MonoToggle on={draft.enabled} onChange={(v) => setDraft({ ...draft, enabled: v })} label="启用条目" testId="wb-edit-enabled" />
+  1513→        </div>
+  1514→        <div className={`border-t ${DIVIDER_CLS}`}>
+  1515→          <label className="block px-4 pb-1 pt-2.5 text-[12.5px]">
+  1516→            <span className={SUB_CLS}>条目名字（仅本地显示，不发送给 AI）</span>
+  1517→          </label>
+  1518→          <input
+  1519→            value={draft.name}
+  1520→            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+  1521→            placeholder="如：魔法世界观"
+  1522→            aria-label="条目名字"
+  1523→            data-testid="wb-edit-name"
+  1524→            className="h-10 w-full bg-transparent px-4 text-[15px] outline-none placeholder:text-black/25 dark:placeholder:text-white/25"
+  1525→          />
+  1526→        </div>
+  1527→      </div>
+  1528→
+  1529→      {/* 触发词（全局书可留空：内容常驻注入不扫描关键词） */}
+  1530→      <p className="px-1 pb-1.5 pt-4 text-[13px] text-black/50 dark:text-white/50">
+  1531→        触发词
+  1532→        {bookScope === 'global' && <span className="ml-1.5 text-[11.5px] text-black/35 dark:text-white/35">全局书无需触发词，可留空</span>}
+  1533→      </p>
+  1534→      <div className={`${CARD_CLS} p-3`}>
+  1535→        <input
+  1536→          value={keywordsInput}
+  1537→          onChange={(e) => {
+  1538→            setKeywordsInput(e.target.value);
+  1539→            setError('');
+  1540→          }}
+  1541→          placeholder={bookScope === 'global' ? '可留空（内容始终注入）' : '多个触发词用逗号分隔，命中任一即激活'}
+  1542→          aria-label="触发词"
+  1543→          data-testid="wb-edit-keywords"
+  1544→          className="h-9 w-full rounded-[9px] bg-black/[0.04] px-3 text-[14.5px] outline-none placeholder:text-black/25 dark:bg-white/[0.07] dark:placeholder:text-white/25"
+  1545→        />
+  1546→        {keywords.length > 0 && (
+  1547→          <div className="mt-2.5 flex flex-wrap gap-1.5">
+  1548→            {keywords.map((kw) => (
+  1549→              <button
+  1550→                key={kw}
+  1551→                type="button"
+  1552→                aria-label={`删除触发词 ${kw}`}
+  1553→                onClick={() => {
+  1554→                  const rest = keywords.filter((k) => k !== kw);
+  1555→                  setKeywordsInput(rest.join('，'));
+  1556→                }}
+  1557→                className="flex items-center gap-1 rounded-full bg-black/[0.06] py-1 pl-2.5 pr-1.5 text-[12.5px] active:opacity-60 dark:bg-white/[0.1]"
+  1558→              >
+  1559→                {kw}
+  1560→                <span aria-hidden="true" className="grid h-3.5 w-3.5 place-items-center rounded-full bg-black/25 text-[9px] leading-none text-white dark:bg-white/30">
+  1561→                  ×
+  1562→                </span>
+  1563→              </button>
+  1564→            ))}
+  1565→          </div>
+  1566→        )}
+  1567→      </div>
+  1568→
+  1569→      {/* 内容 */}
+  1570→      <p className="px-1 pb-1.5 pt-4 text-[13px] text-black/50 dark:text-white/50">内容（激活后插入的设定文本）</p>
+  1571→      <div className={`${CARD_CLS} p-3`}>
+  1572→        <textarea
+  1573→          value={draft.content}
+  1574→          onChange={(e) => {
+  1575→            setDraft({ ...draft, content: e.target.value });
+  1576→            setError('');
+  1577→          }}
+  1578→          placeholder="写给 AI 的设定文本，如：这个世界是一片魔法大陆，共有五大王国……"
+  1579→          aria-label="条目内容"
+  1580→          data-testid="wb-edit-content"
+  1581→          rows={6}
+  1582→          className="w-full resize-none rounded-[9px] bg-black/[0.04] px-3 py-2.5 text-[14.5px] leading-[1.6] outline-none placeholder:text-black/25 dark:bg-white/[0.07] dark:placeholder:text-white/25"
+  1583→        />
+  1584→      </div>
+  1585→
+  1586→      {/* 插入位置 */}
+  1587→      <p className="px-1 pb-1.5 pt-4 text-[13px] text-black/50 dark:text-white/50">插入位置</p>
+  1588→      <div className={CARD_CLS}>
+  1589→        {WB_POSITIONS.map((pos, i) => (
+  1590→          <OptionRow
+  1591→            key={pos}
+  1592→            label={WB_POSITION_LABELS[pos]}
+  1593→            note={POSITION_NOTES[pos]}
+  1594→            selected={draft.position === pos}
+  1595→            testId={`wb-edit-pos-${pos}`}
+  1596→            first={i === 0}
+  1597→            onClick={() => setDraft({ ...draft, position: pos })}
+  1598→          />
+  1599→        ))}
+  1600→      </div>
+  1601→
+  1602→      {/* 优先级 + 忽略大小写 */}
+  1603→      <p className="px-1 pb-1.5 pt-4 text-[13px] text-black/50 dark:text-white/50">排序与匹配</p>
+  1604→      <div className={CARD_CLS}>
+  1605→        <div className="flex items-center justify-between px-4 py-2.5">
+  1606→          <span className="min-w-0">
+  1607→            <span className="block text-[15px]">优先级</span>
+  1608→            <span className={`mt-0.5 block text-[12px] leading-[1.4] ${SUB_CLS}`}>同一位置多条命中时，数字大的排前面</span>
+  1609→          </span>
+  1610→          <span className="flex shrink-0 items-center gap-3">
+  1611→            <button
+  1612→              type="button"
+  1613→              aria-label="降低优先级"
+  1614→              data-testid="wb-edit-priority-minus"
+  1615→              onClick={() => setDraft({ ...draft, priority: Math.max(0, draft.priority - 1) })}
+  1616→              className="grid h-8 w-8 place-items-center rounded-full bg-black/[0.05] text-[18px] active:bg-black/[0.1] dark:bg-white/[0.09] dark:active:bg-white/[0.15]"
+  1617→            >
+  1618→              −
+  1619→            </button>
+  1620→            <span data-testid="wb-edit-priority-value" className="w-8 text-center text-[15.5px] tabular-nums">
+  1621→              {draft.priority}
+  1622→            </span>
+  1623→            <button
+  1624→              type="button"
+  1625→              aria-label="提高优先级"
+  1626→              data-testid="wb-edit-priority-plus"
+  1627→              onClick={() => setDraft({ ...draft, priority: Math.min(9999, draft.priority + 1) })}
+  1628→              className="grid h-8 w-8 place-items-center rounded-full bg-black/[0.05] text-[18px] active:bg-black/[0.1] dark:bg-white/[0.09] dark:active:bg-white/[0.15]"
+  1629→            >
+  1630→              +
+  1631→            </button>
+  1632→          </span>
+  1633→        </div>
+  1634→        <div className={`border-t ${DIVIDER_CLS}`}>
+  1635→          <div className="flex items-center justify-between px-4 py-2.5">
+  1636→            <span className="min-w-0">
+  1637→              <span className="block text-[15px]">忽略大小写</span>
+  1638→              <span className={`mt-0.5 block text-[12px] leading-[1.4] ${SUB_CLS}`}>触发词匹配时不区分英文字母大小写</span>
+  1639→            </span>
+  1640→            <MonoToggle on={draft.ignoreCase} onChange={(v) => setDraft({ ...draft, ignoreCase: v })} label="忽略大小写" testId="wb-edit-ignorecase" />
+  1641→          </div>
+  1642→        </div>
+  1643→      </div>
+  1644→
+  1645→      {error && <p className={`px-1 pt-2.5 text-[12.5px] ${DESTRUCTIVE_CLS}`}>{error}</p>}
+  1646→
+  1647→      {/* 删除（仅已保存的条目；保存按钮在顶栏右上角） */}
+  1648→      {!isNew && (
+  1649→        <div className="mt-5">
+  1650→          <button
+  1651→            type="button"
+  1652→            data-testid="wb-edit-delete"
+  1653→            onClick={onDelete}
+  1654→            className={`flex h-11 w-full items-center justify-center gap-1.5 rounded-[12px] bg-white text-[15.5px] active:bg-black/[0.04] dark:bg-[#1C1C1E] dark:active:bg-white/[0.08] ${DESTRUCTIVE_CLS}`}
+  1655→          >
+  1656→            <Trash2 className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+  1657→            删除条目
+  1658→          </button>
+  1659→        </div>
+  1660→      )}
+  1661→      <p className={`pt-2 text-center text-[12px] ${SUB_CLS}`}>
+  1662→        {isNew ? '点右上角「保存」创建条目；返回则放弃' : '点右上角「保存」才会生效；返回不保存修改'}
+  1663→      </p>
+  1664→    </div>
+  1665→  );
+  1666→}
+  1667→
