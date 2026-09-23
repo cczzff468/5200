@@ -1,0 +1,981 @@
+     1→'use client';
+     2→
+     3→import { create } from 'zustand';
+     4→import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
+     5→import { localDB } from './db';
+     6→import { encryptValue, decryptValue } from './secure-store';
+     7→
+     8→// ---------------- 类型 ----------------
+     9→
+    10→export type ThemeMode = 'light' | 'dark' | 'auto';
+    11→export type ResolvedTheme = 'light' | 'dark';
+    12→
+    13→export interface ApiConfig {
+    14→  /** OpenAI 兼容的 chat/completions 完整地址（或以 /v1 结尾的基地址） */
+    15→  baseUrl: string;
+    16→  apiKey: string;
+    17→  model: string;
+    18→  /** 0 - 2 */
+    19→  temperature: number;
+    20→  maxTokens: number;
+    21→}
+    22→
+    23→export interface ApiPreset {
+    24→  id: string;
+    25→  name: string;
+    26→  config: ApiConfig;
+    27→}
+    28→
+    29→/** 识图模型配置：与聊天模型（ApiConfig）完全独立、互不覆盖，只负责「看图」，不负责回复
+    30→ *  ——聊天发图时先用它把图片转成文字描述，再交给聊天模型生成最终回复；未配置（baseUrl 空）时不影响文字聊天 */
+    31→export interface VisionConfig {
+    32→  /** OpenAI 兼容的 chat/completions 完整地址（或以 /v1 结尾的基地址） */
+    33→  baseUrl: string;
+    34→  apiKey: string;
+    35→  model: string;
+    36→}
+    37→
+    38→export interface VisionPreset {
+    39→  id: string;
+    40→  name: string;
+    41→  config: VisionConfig;
+    42→}
+    43→
+    44→/** 默认未配置：发图不触发识图，聊天行为与旧版完全一致 */
+    45→export const DEFAULT_VISION_CONFIG: VisionConfig = { baseUrl: '', apiKey: '', model: '' };
+    46→
+    47→export type PasscodeLength = 4 | 6;
+    48→
+    49→export interface LockConfig {
+    50→  /** 是否启用锁屏界面（关闭后开机/电源键不再出现锁屏，直接进主屏幕） */
+    51→  lockScreen: boolean;
+    52→  /** 是否启用锁屏密码（关闭后锁屏仅需上滑解锁；仅在 lockScreen 开启时生效） */
+    53→  enabled: boolean;
+    54→  /** 密码（数字字符串，enabled=false 时为 ''） */
+    55→  code: string;
+    56→  /** 密码位数 */
+    57→  len: PasscodeLength;
+    58→}
+    59→
+    60→export const DEFAULT_API_CONFIG: ApiConfig = {
+    61→  baseUrl: 'https://api.openai.com/v1/chat/completions',
+    62→  apiKey: '',
+    63→  model: 'gpt-4o-mini',
+    64→  temperature: 0.7,
+    65→  maxTokens: 2048,
+    66→};
+    67→
+    68→/** 个人信息（设置根页个人卡片 + 锁屏「×××的iPhone」小组件共用） */
+    69→export interface Profile {
+    70→  name: string;
+    71→  tag: string;
+    72→  /** 头像 data URL（上传时已缩至 256px，控住体积） */
+    73→  avatar: string | null;
+    74→}
+    75→
+    76→export const DEFAULT_PROFILE: Profile = { name: '', tag: 'Apple 账户、iCloud', avatar: null };
+    77→
+    78→/** 锁屏壁纸持久化记录（锁屏壁纸与主屏幕完全独立） */
+    79→interface LockWallpaperRecord {
+    80→  preset?: string;
+    81→  customBlob?: Blob;
+    82→}
+    83→
+    84→export interface WallpaperPreset {
+    85→  id: string;
+    86→  name: string;
+    87→  css: string;
+    88→  /** 浅色壁纸（状态栏文字用黑色） */
+    89→  light: boolean;
+    90→  /** 底色兜底：PNG 预设图片异步加载/解码前先铺纯色，避免锁屏/主屏透出下层内容闪现 */
+    91→  base: string;
+    92→}
+    93→
+    94→export const WALLPAPER_PRESETS: WallpaperPreset[] = [
+    95→  {
+    96→    id: 'dark-stream',
+    97→    name: '暗流',
+    98→    css: 'url(/wallpapers/dark-stream.png) center / cover no-repeat',
+    99→    light: false,
+   100→    base: '#0a0a0d',
+   101→  },
+   102→  {
+   103→    id: 'ink-marble',
+   104→    name: '墨纹',
+   105→    css: 'url(/wallpapers/ink-marble.png) center / cover no-repeat',
+   106→    light: false,
+   107→    base: '#141417',
+   108→  },
+   109→  {
+   110→    id: 'mist-mountain',
+   111→    name: '雾山',
+   112→    css: 'url(/wallpapers/mist-mountain.png) center / cover no-repeat',
+   113→    light: true,
+   114→    base: '#d9dade',
+   115→  },
+   116→  {
+   117→    id: 'graphite',
+   118→    name: '石墨黑',
+   119→    css: 'radial-gradient(120% 90% at 20% 0%, #2a2a2e 0%, #161618 45%, #050506 100%)',
+   120→    light: false,
+   121→    base: '#161618',
+   122→  },
+   123→  {
+   124→    id: 'dusk',
+   125→    name: '暮色灰',
+   126→    css: 'linear-gradient(180deg, #1b1b1f 0%, #33343b 52%, #5c5d66 100%)',
+   127→    light: false,
+   128→    base: '#1b1b1f',
+   129→  },
+   130→  {
+   131→    id: 'silver',
+   132→    name: '银白',
+   133→    css: 'linear-gradient(180deg, #fafafc 0%, #e3e3e9 55%, #b7b8c0 100%)',
+   134→    light: true,
+   135→    base: '#fafafc',
+   136→  },
+   137→  {
+   138→    id: 'mist',
+   139→    name: '晨雾',
+   140→    css: 'linear-gradient(180deg, #ececf1 0%, #c6c7cf 55%, #90919b 100%)',
+   141→    light: true,
+   142→    base: '#ececf1',
+   143→  },
+   144→];
+   145→
+   146→// ---------------- 设置 Store ----------------
+   147→
+   148→interface SettingsState {
+   149→  theme: ThemeMode;
+   150→  wallpaperPreset: string;
+   151→  /** 自定义壁纸的 ObjectURL（Blob 存 IndexedDB） */
+   152→  customWallpaperUrl: string | null;
+   153→  /** 锁屏壁纸预设（锁屏壁纸与主屏幕完全独立，各有各的预设/自定义） */
+   154→  lockWallpaperPreset: string;
+   155→  /** 锁屏自定义壁纸的 ObjectURL（Blob 存 IndexedDB） */
+   156→  lockCustomWallpaperUrl: string | null;
+   157→  apiConfig: ApiConfig;
+   158→  /** 用户自己保存的 API 预设 */
+   159→  apiPresets: ApiPreset[];
+   160→  /** 识图模型配置（与 apiConfig 互相独立、互不覆盖；密文持久化） */
+   161→  visionConfig: VisionConfig;
+   162→  /** 用户自己保存的识图模型预设 */
+   163→  visionPresets: VisionPreset[];
+   164→  /** 锁屏密码配置（持久化） */
+   165→  lockConfig: LockConfig;
+   166→  /** 个人信息（头像/名字/标签，持久化） */
+   167→  profile: Profile;
+   168→  /** 自定义 App 图标（AppId → ObjectURL，Blob 存 IndexedDB settings.customIcons） */
+   169→  customIcons: Record<string, string>;
+   170→  loaded: boolean;
+   171→
+   172→  load: () => Promise<void>;
+   173→  /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
+   174→  setLockScreen: (on: boolean) => void;
+   175→  setTheme: (t: ThemeMode) => void;
+   176→  setWallpaperPreset: (id: string) => void;
+   177→  setCustomWallpaper: (blob: Blob | null) => void;
+   178→  /** 设置锁屏壁纸预设（独立于主屏幕壁纸） */
+   179→  setLockWallpaperPreset: (id: string) => void;
+   180→  /** 设置锁屏自定义壁纸（null=移除自定义，回退到锁屏已选预设） */
+   181→  setLockCustomWallpaper: (blob: Blob | null) => void;
+   182→  updateApiConfig: (patch: Partial<ApiConfig>) => void;
+   183→  setApiPresets: (list: ApiPreset[]) => void;
+   184→  /** 更新识图模型配置（立即持久化；聊天发送时现场读取 → 保存后自动生效，无需重启） */
+   185→  updateVisionConfig: (patch: Partial<VisionConfig>) => void;
+   186→  setVisionPresets: (list: VisionPreset[]) => void;
+   187→  applyLockConfig: (cfg: LockConfig) => void;
+   188→  /** 更新个人信息（立即持久化） */
+   189→  setProfile: (patch: Partial<Profile>) => void;
+   190→  /** 设置/移除某 App 的自定义图标（blob=null 恢复默认），同步持久化到 IndexedDB */
+   191→  setCustomIcon: (appId: AppId, blob: Blob | null) => void;
+   192→  /** 清空全部自定义图标（全部恢复默认） */
+   193→  resetAllCustomIcons: () => void;
+   194→}
+   195→
+   196→export const useSettings = create<SettingsState>((set, get) => ({
+   197→  // 主题默认浅色（用户要求）；load 时无记录/一次性迁移后也回退到浅色
+   198→  theme: 'light',
+   199→  wallpaperPreset: 'graphite',
+   200→  customWallpaperUrl: null,
+   201→  lockWallpaperPreset: 'graphite',
+   202→  lockCustomWallpaperUrl: null,
+   203→  apiConfig: { ...DEFAULT_API_CONFIG },
+   204→  apiPresets: [],
+   205→  visionConfig: { ...DEFAULT_VISION_CONFIG },
+   206→  visionPresets: [],
+   207→  lockConfig: { lockScreen: true, enabled: false, code: '', len: 4 },
+   208→  profile: { ...DEFAULT_PROFILE },
+   209→  customIcons: {},
+   210→  loaded: false,
+   211→
+   212→  load: async () => {
+   213→    if (get().loaded) return;
+   214→    try {
+   215→      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec] = await Promise.all([
+   216→        localDB.get('settings', 'theme'),
+   217→        localDB.get('settings', 'wallpaper'),
+   218→        localDB.get('settings', 'lockWallpaper'),
+   219→        localDB.get('settings', 'apiConfig'),
+   220→        localDB.get('settings', 'apiPresets'),
+   221→        localDB.get('settings', 'visionConfig'),
+   222→        localDB.get('settings', 'visionPresets'),
+   223→        localDB.get('settings', 'lock'),
+   224→        localDB.get('settings', 'profile'),
+   225→        localDB.get('settings', 'customIcons'),
+   226→      ]);
+   227→
+   228→      // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
+   229→      let customIcons: Record<string, string> = {};
+   230→      if (iconsRec && typeof iconsRec.value === 'object' && iconsRec.value !== null) {
+   231→        for (const [k, v] of Object.entries(iconsRec.value as Record<string, unknown>)) {
+   232→          if (v instanceof Blob) customIcons[k] = URL.createObjectURL(v);
+   233→        }
+   234→      }
+   235→
+   236→      let profile: Profile = { ...DEFAULT_PROFILE };
+   237→      if (profileRec && typeof profileRec.value === 'object' && profileRec.value !== null) {
+   238→        const v = profileRec.value as Partial<Profile>;
+   239→        profile = {
+   240→          name: typeof v.name === 'string' ? v.name : '',
+   241→          tag: typeof v.tag === 'string' ? v.tag : DEFAULT_PROFILE.tag,
+   242→          avatar:
+   243→            typeof v.avatar === 'string' && v.avatar.startsWith('data:image/') && v.avatar.length < 600_000
+   244→              ? v.avatar
+   245→              : null,
+   246→        };
+   247→      }
+   248→
+   249→      let lockConfig: LockConfig = { lockScreen: true, enabled: false, code: '', len: 4 };
+   250→      if (lockRec && typeof lockRec.value === 'object' && lockRec.value !== null) {
+   251→        const v = lockRec.value as Partial<LockConfig>;
+   252→        lockConfig = {
+   253→          lockScreen: v.lockScreen !== false, // 旧记录无此字段 → 默认开启
+   254→          enabled: v.enabled === true,
+   255→          code: typeof v.code === 'string' ? v.code : '',
+   256→          len: v.len === 6 ? 6 : 4,
+   257→        };
+   258→      }
+   259→
+   260→      // 主题默认浅色（用户要求）：无记录回退浅色；历史存储里的「深色」一次性重置为浅色
+   261→      //（否则用户之前测试时持久化的 dark 会让默认值改动不可见；重置后用户再手动切深色仍可保留）
+   262→      let theme: ThemeMode = 'light';
+   263→      if (themeRec && (themeRec.value === 'light' || themeRec.value === 'dark' || themeRec.value === 'auto')) {
+   264→        theme = themeRec.value;
+   265→      }
+   266→      const themeResetRec = await localDB.get('settings', 'themeDefaultLight');
+   267→      const themeReset = !themeResetRec;
+   268→      if (themeReset && theme === 'dark') {
+   269→        theme = 'light';
+   270→        void localDB.put('settings', { key: 'theme', value: 'light' });
+   271→      }
+   272→      if (themeReset) void localDB.put('settings', { key: 'themeDefaultLight', value: true });
+   273→
+   274→      let wallpaperPreset = 'graphite';
+   275→      let customWallpaperUrl: string | null = null;
+   276→      if (wallpaperRec && typeof wallpaperRec.value === 'object' && wallpaperRec.value !== null) {
+   277→        const w = wallpaperRec.value as { preset?: unknown; customBlob?: unknown };
+   278→        if (w.customBlob instanceof Blob) {
+   279→          customWallpaperUrl = URL.createObjectURL(w.customBlob);
+   280→        } else if (typeof w.preset === 'string' && WALLPAPER_PRESETS.some((p) => p.id === w.preset)) {
+   281→          wallpaperPreset = w.preset;
+   282→        }
+   283→      }
+   284→
+   285→      // 锁屏壁纸（完全独立，默认 graphite）：{ preset, customBlob } 同时记录，移除自定义后可回退到已选预设
+   286→      let lockWallpaperPreset = 'graphite';
+   287→      let lockCustomWallpaperUrl: string | null = null;
+   288→      if (lockWallpaperRec && typeof lockWallpaperRec.value === 'object' && lockWallpaperRec.value !== null) {
+   289→        const lw = lockWallpaperRec.value as LockWallpaperRecord;
+   290→        if (typeof lw.preset === 'string' && WALLPAPER_PRESETS.some((p) => p.id === lw.preset)) {
+   291→          lockWallpaperPreset = lw.preset;
+   292→        }
+   293→        if (lw.customBlob instanceof Blob) {
+   294→          lockCustomWallpaperUrl = URL.createObjectURL(lw.customBlob);
+   295→        }
+   296→      }
+   297→
+   298→      let apiConfig: ApiConfig = { ...DEFAULT_API_CONFIG };
+   299→      if (apiRec && typeof apiRec.value === 'object' && apiRec.value !== null) {
+   300→        // 兼容：旧版明文记录 / 新版密文信封都从这里解出
+   301→        const v = ((await decryptValue<Partial<ApiConfig>>(apiRec.value)) ?? apiRec.value) as Partial<ApiConfig>;
+   302→        apiConfig = {
+   303→          baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_API_CONFIG.baseUrl,
+   304→          apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+   305→          model: typeof v.model === 'string' && v.model ? v.model : DEFAULT_API_CONFIG.model,
+   306→          temperature: typeof v.temperature === 'number' ? v.temperature : DEFAULT_API_CONFIG.temperature,
+   307→          maxTokens: typeof v.maxTokens === 'number' ? v.maxTokens : DEFAULT_API_CONFIG.maxTokens,
+   308→        };
+   309→        // 旧版明文静默升级：立即以密文回写（有 apiKey 才有必要；无 key 的占位配置不动）
+   310→        const wasPlain = !('__enc' in (apiRec.value as object));
+   311→        if (wasPlain && typeof apiConfig.apiKey === 'string' && apiConfig.apiKey.length > 0) {
+   312→          void encryptValue(apiConfig)
+   313→            .then((enc) => localDB.put('settings', { key: 'apiConfig', value: enc }))
+   314→            .catch(() => undefined);
+   315→        }
+   316→      }
+   317→
+   318→      let apiPresets: ApiPreset[] = [];
+   319→      if (presetsRec && presetsRec.value) {
+   320→        // 兼容：旧版明文数组 / 新版密文信封
+   321→        const pv = (await decryptValue<ApiPreset[]>(presetsRec.value)) ?? presetsRec.value;
+   322→        if (Array.isArray(pv)) {
+   323→          apiPresets = pv.filter(
+   324→            (p): p is ApiPreset =>
+   325→              typeof p === 'object' &&
+   326→              p !== null &&
+   327→              typeof (p as ApiPreset).id === 'string' &&
+   328→              typeof (p as ApiPreset).name === 'string' &&
+   329→              typeof (p as ApiPreset).config === 'object'
+   330→          );
+   331→          // 旧版明文含 apiKey 时静默升级为密文
+   332→          const hasKey = apiPresets.some((p) => typeof p.config?.apiKey === 'string' && p.config.apiKey.length > 0);
+   333→          if (!('__enc' in (presetsRec.value as object)) && hasKey) {
+   334→            void encryptValue(apiPresets)
+   335→              .then((enc) => localDB.put('settings', { key: 'apiPresets', value: enc }))
+   336→              .catch(() => undefined);
+   337→          }
+   338→        }
+   339→      }
+   340→
+   341→      // 识图模型配置（含 apiKey，密文信封，与 apiConfig 同策略；未配置 = baseUrl 空）
+   342→      let visionConfig: VisionConfig = { ...DEFAULT_VISION_CONFIG };
+   343→      if (visionRec && typeof visionRec.value === 'object' && visionRec.value !== null) {
+   344→        const v = ((await decryptValue<Partial<VisionConfig>>(visionRec.value)) ?? visionRec.value) as Partial<VisionConfig>;
+   345→        visionConfig = {
+   346→          baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : '',
+   347→          apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+   348→          model: typeof v.model === 'string' ? v.model : '',
+   349→        };
+   350→        const visionWasPlain = !('__enc' in (visionRec.value as object));
+   351→        if (visionWasPlain && visionConfig.apiKey.length > 0) {
+   352→          void encryptValue(visionConfig)
+   353→            .then((enc) => localDB.put('settings', { key: 'visionConfig', value: enc }))
+   354→            .catch(() => undefined);
+   355→        }
+   356→      }
+   357→
+   358→      let visionPresets: VisionPreset[] = [];
+   359→      if (visionPresetsRec && visionPresetsRec.value) {
+   360→        const vv = (await decryptValue<VisionPreset[]>(visionPresetsRec.value)) ?? visionPresetsRec.value;
+   361→        if (Array.isArray(vv)) {
+   362→          visionPresets = vv.filter(
+   363→            (p): p is VisionPreset =>
+   364→              typeof p === 'object' &&
+   365→              p !== null &&
+   366→              typeof (p as VisionPreset).id === 'string' &&
+   367→              typeof (p as VisionPreset).name === 'string' &&
+   368→              typeof (p as VisionPreset).config === 'object'
+   369→          );
+   370→          const visionHasKey = visionPresets.some((p) => typeof p.config?.apiKey === 'string' && p.config.apiKey.length > 0);
+   371→          if (!('__enc' in (visionPresetsRec.value as object)) && visionHasKey) {
+   372→            void encryptValue(visionPresets)
+   373→              .then((enc) => localDB.put('settings', { key: 'visionPresets', value: enc }))
+   374→              .catch(() => undefined);
+   375→          }
+   376→        }
+   377→      }
+   378→
+   379→      set({
+   380→        theme,
+   381→        wallpaperPreset,
+   382→        customWallpaperUrl,
+   383→        lockWallpaperPreset,
+   384→        lockCustomWallpaperUrl,
+   385→        apiConfig,
+   386→        apiPresets,
+   387→        visionConfig,
+   388→        visionPresets,
+   389→        lockConfig,
+   390→        profile,
+   391→        customIcons,
+   392→        loaded: true,
+   393→      });
+   394→      // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
+   395→      if (!lockConfig.lockScreen) useUI.setState({ locked: false });
+   396→    } catch {
+   397→      set({ loaded: true });
+   398→    }
+   399→  },
+   400→
+   401→  setLockScreen: (on) => {
+   402→    const cur = get().lockConfig;
+   403→    const cfg: LockConfig = on
+   404→      ? { ...cur, lockScreen: true }
+   405→      : { lockScreen: false, enabled: false, code: '', len: cur.len }; // 关锁屏即停用密码
+   406→    set({ lockConfig: cfg });
+   407→    void localDB.put('settings', { key: 'lock', value: { ...cfg } });
+   408→    if (!on) useUI.setState({ locked: false, screenOff: false, lockCameraOpen: false, torchOpen: false });
+   409→  },
+   410→
+   411→  setTheme: (t) => {
+   412→    set({ theme: t });
+   413→    void localDB.put('settings', { key: 'theme', value: t });
+   414→  },
+   415→
+   416→  setWallpaperPreset: (id) => {
+   417→    const old = get().customWallpaperUrl;
+   418→    if (old) URL.revokeObjectURL(old);
+   419→    set({ wallpaperPreset: id, customWallpaperUrl: null });
+   420→    void localDB.put('settings', { key: 'wallpaper', value: { preset: id } });
+   421→  },
+   422→
+   423→  setCustomWallpaper: (blob) => {
+   424→    const old = get().customWallpaperUrl;
+   425→    if (old) URL.revokeObjectURL(old);
+   426→    if (!blob) {
+   427→      set({ customWallpaperUrl: null });
+   428→      void localDB.put('settings', { key: 'wallpaper', value: { preset: get().wallpaperPreset } });
+   429→      return;
+   430→    }
+   431→    const url = URL.createObjectURL(blob);
+   432→    set({ customWallpaperUrl: url });
+   433→    void localDB.put('settings', { key: 'wallpaper', value: { customBlob: blob } });
+   434→  },
+   435→
+   436→  setLockWallpaperPreset: (id) => {
+   437→    const old = get().lockCustomWallpaperUrl;
+   438→    if (old) URL.revokeObjectURL(old);
+   439→    set({ lockWallpaperPreset: id, lockCustomWallpaperUrl: null });
+   440→    void localDB.put('settings', { key: 'lockWallpaper', value: { preset: id } });
+   441→  },
+   442→
+   443→  setLockCustomWallpaper: (blob) => {
+   444→    const old = get().lockCustomWallpaperUrl;
+   445→    if (old) URL.revokeObjectURL(old);
+   446→    const preset = get().lockWallpaperPreset;
+   447→    if (!blob) {
+   448→      set({ lockCustomWallpaperUrl: null });
+   449→      void localDB.put('settings', { key: 'lockWallpaper', value: { preset } });
+   450→      return;
+   451→    }
+   452→    const url = URL.createObjectURL(blob);
+   453→    set({ lockCustomWallpaperUrl: url });
+   454→    void localDB.put('settings', { key: 'lockWallpaper', value: { preset, customBlob: blob } });
+   455→  },
+   456→
+   457→  updateApiConfig: (patch) => {
+   458→    const apiConfig = { ...get().apiConfig, ...patch };
+   459→    set({ apiConfig });
+   460→    // 安全：含 apiKey，密文落盘（AES-GCM 非可提取密钥），IndexedDB 不存明文
+   461→    void encryptValue(apiConfig)
+   462→      .then((v) => localDB.put('settings', { key: 'apiConfig', value: v }))
+   463→      .catch(() => undefined);
+   464→  },
+   465→
+   466→  setApiPresets: (list) => {
+   467→    set({ apiPresets: list });
+   468→    // 安全：预设的 config 可能含 apiKey，同样密文落盘
+   469→    void encryptValue(list)
+   470→      .then((v) => localDB.put('settings', { key: 'apiPresets', value: v }))
+   471→      .catch(() => undefined);
+   472→  },
+   473→
+   474→  updateVisionConfig: (patch) => {
+   475→    const visionConfig = { ...get().visionConfig, ...patch };
+   476→    set({ visionConfig });
+   477→    // 安全：含 apiKey，密文落盘（与 apiConfig 同策略）
+   478→    void encryptValue(visionConfig)
+   479→      .then((v) => localDB.put('settings', { key: 'visionConfig', value: v }))
+   480→      .catch(() => undefined);
+   481→  },
+   482→
+   483→  setVisionPresets: (list) => {
+   484→    set({ visionPresets: list });
+   485→    void encryptValue(list)
+   486→      .then((v) => localDB.put('settings', { key: 'visionPresets', value: v }))
+   487→      .catch(() => undefined);
+   488→  },
+   489→
+   490→  applyLockConfig: (cfg) => {
+   491→    set({ lockConfig: { ...cfg } });
+   492→    void localDB.put('settings', { key: 'lock', value: { ...cfg } });
+   493→  },
+   494→
+   495→  setProfile: (patch) => {
+   496→    const profile = { ...get().profile, ...patch };
+   497→    set({ profile });
+   498→    void localDB.put('settings', { key: 'profile', value: profile });
+   499→  },
+   500→
+   501→  setCustomIcon: (appId, blob) => {
+   502→    set((s) => {
+   503→      const urls = { ...s.customIcons };
+   504→      if (blob) urls[appId] = URL.createObjectURL(blob);
+   505→      else delete urls[appId];
+   506→      return { customIcons: urls };
+   507→    });
+   508→    // 持久化：读出完整 Blob 映射，改完写回（store 内只保留 ObjectURL）
+   509→    void (async () => {
+   510→      try {
+   511→        const rec = await localDB.get('settings', 'customIcons');
+   512→        const value: Record<string, Blob> = {};
+   513→        if (rec && typeof rec.value === 'object' && rec.value !== null) {
+   514→          for (const [k, v] of Object.entries(rec.value as Record<string, unknown>)) {
+   515→            if (v instanceof Blob) value[k] = v;
+   516→          }
+   517→        }
+   518→        if (blob) value[appId] = blob;
+   519→        else delete value[appId];
+   520→        await localDB.put('settings', { key: 'customIcons', value });
+   521→      } catch {
+   522→        /* 持久化失败忽略：本次会话内仍生效 */
+   523→      }
+   524→    })();
+   525→  },
+   526→
+   527→  resetAllCustomIcons: () => {
+   528→    for (const u of Object.values(get().customIcons)) URL.revokeObjectURL(u);
+   529→    set({ customIcons: {} });
+   530→    void localDB.put('settings', { key: 'customIcons', value: {} });
+   531→  },
+   532→}));
+   533→
+   534→/** 解析后的实际主题（auto 跟随系统） */
+   535→export function selectResolvedTheme(theme: ThemeMode, systemDark: boolean): ResolvedTheme {
+   536→  if (theme === 'auto') return systemDark ? 'dark' : 'light';
+   537→  return theme;
+   538→}
+   539→
+   540→/** 由预设 id + 自定义 URL 解析壁纸背景样式（手机壳/锁屏/前景明暗共用，故导出）。
+   541→ *  自定义优先；预设 css 可能是 background 简写，需拆解。
+   542→ *  始终带 backgroundColor 底色：PNG 壁纸异步加载/解码前先铺不透明纯色，
+   543→ *  否则锁屏/主屏头几帧透明，会透出下层界面（刷新时主界面一闪而过的根因） */
+   544→export function resolveWallpaperStyle(presetId: string, customUrl: string | null): CSSProperties {
+   545→  if (customUrl) {
+   546→    return {
+   547→      backgroundColor: '#1c1c1e',
+   548→      backgroundImage: `url(${customUrl})`,
+   549→      backgroundSize: 'cover',
+   550→      backgroundPosition: 'center',
+   551→    };
+   552→  }
+   553→  const preset = WALLPAPER_PRESETS.find((w) => w.id === presetId) ?? WALLPAPER_PRESETS[0];
+   554→  // 预设 css 可能是 background 简写（如 "url(...) center / cover no-repeat"），
+   555→  // 不能整体赋给 backgroundImage（浏览器会丢弃整条声明），需拆解
+   556→  if (preset.css.startsWith('url(')) {
+   557→    const end = preset.css.indexOf(')');
+   558→    const url = end > 4 ? preset.css.slice(4, end) : '';
+   559→    return {
+   560→      backgroundColor: preset.base,
+   561→      backgroundImage: `url(${url})`,
+   562→      backgroundSize: 'cover',
+   563→      backgroundPosition: 'center',
+   564→    };
+   565→  }
+   566→  return { backgroundColor: preset.base, backgroundImage: preset.css };
+   567→}
+   568→
+   569→/** 主屏幕壁纸背景样式（手机壳用）。锁屏/前景明暗实测也需要它，故导出 */
+   570→export function useWallpaperStyle(): CSSProperties {
+   571→  const wallpaperPreset = useSettings((s) => s.wallpaperPreset);
+   572→  const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
+   573→  return useMemo(
+   574→    () => resolveWallpaperStyle(wallpaperPreset, customWallpaperUrl),
+   575→    [customWallpaperUrl, wallpaperPreset]
+   576→  );
+   577→}
+   578→
+   579→/**
+   580→ * 锁屏壁纸（样式 + 明暗）：锁屏壁纸与主屏幕壁纸完全独立，永远用自己的预设/自定义，
+   581→ * 不再跟随主屏幕。手机壳壁纸层是主屏幕壁纸，锁屏自绘壁纸层盖住主屏幕。
+   582→ */
+   583→export function useLockWallpaper(): { style: CSSProperties; light: boolean } {
+   584→  const lockPreset = useSettings((s) => s.lockWallpaperPreset);
+   585→  const lockCustom = useSettings((s) => s.lockCustomWallpaperUrl);
+   586→  return useMemo(() => {
+   587→    if (lockCustom) {
+   588→      return {
+   589→        style: {
+   590→          // 底色兜底：Blob 图片异步解码前先铺不透明纯色，避免锁屏头几帧透出主屏幕（闪烁根因之一）
+   591→          backgroundColor: '#1c1c1e',
+   592→          backgroundImage: `url(${lockCustom})`,
+   593→          backgroundSize: 'cover',
+   594→          backgroundPosition: 'center',
+   595→        } as CSSProperties,
+   596→        light: false, // 自定义壁纸按深色处理（与主屏逻辑一致）
+   597→      };
+   598→    }
+   599→    const preset = WALLPAPER_PRESETS.find((w) => w.id === lockPreset);
+   600→    return {
+   601→      style: resolveWallpaperStyle(preset?.id ?? WALLPAPER_PRESETS[0].id, null),
+   602→      light: preset?.light ?? false,
+   603→    };
+   604→  }, [lockCustom, lockPreset]);
+   605→}
+   606→
+   607→// ---------------- 壁纸亮度实测（锁屏文字跟随背景色） ----------------
+   608→
+   609→/** 区域平均亮度高于该值视为偏浅（该区域文字用黑色） */
+   610→const LIGHT_LUMINANCE_THRESHOLD = 0.5;
+   611→
+   612→/** 图片壁纸亮度实测结果的模块级缓存（url → 三区域结果）：
+   613→ *  同一张壁纸被多处独立 hook消费（图标底座 ×N / 锁屏 / 状态栏 / 页点），
+   614→ *  共享缓存避免每个实例重复解码测量；后挂载的实例（如打开 Spotlight/多任务）
+   615→ *  首帧即命中，不会闪「测量中回退静态标记」的错误颜色。上限 32 条防泄漏 */
+   616→const wallpaperLightCache = new Map<string, { top: boolean; bottom: boolean; all: boolean }>();
+   617→const WALLPAPER_LIGHT_CACHE_MAX = 32;
+   618→
+   619→export interface WallpaperLightness {
+   620→  /** 顶部区域（状态栏/日期/大时钟/小组件，0–35%）是否偏浅：true=用黑字 */
+   621→  top: boolean | null;
+   622→  /** 底部区域（上滑提示/快捷按钮/Home 横杠，86–100%）是否偏浅：true=用黑字 */
+   623→  bottom: boolean | null;
+   624→  /** 整体平均亮度是否偏浅（主屏图标标签/页点分布在全屏，用整体判定）：true=用黑字 */
+   625→  all: boolean | null;
+   626→}
+   627→
+   628→/** 从 backgroundImage 里提取第一张 url(...) 的图片地址 */
+   629→function bgImageUrlOf(bgImage: string): string | null {
+   630→  const m = bgImage.match(/url\((['"]?)([^'")]+)\1\)/);
+   631→  return m ? m[2] : null;
+   632→}
+   633→
+   634→/** 解析 CSS 颜色为 [r,g,b]（支持 #rgb/#rrggbb/#rrggbbaa 与 rgb()/rgba()） */
+   635→function parseCssColor(input: string): [number, number, number] | null {
+   636→  const s = input.trim();
+   637→  let m = s.match(/^#([0-9a-f]{3,8})$/i);
+   638→  if (m) {
+   639→    let hex = m[1];
+   640→    if (hex.length === 3 || hex.length === 4) hex = [...hex].map((c) => c + c).join('');
+   641→    const r = parseInt(hex.slice(0, 2), 16);
+   642→    const g = parseInt(hex.slice(2, 4), 16);
+   643→    const b = parseInt(hex.slice(4, 6), 16);
+   644→    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return [r, g, b];
+   645→    return null;
+   646→  }
+   647→  m = s.match(/^rgba?\(([^)]+)\)$/i);
+   648→  if (m) {
+   649→    const parts = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+   650→    if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) {
+   651→      return [parts[0], parts[1], parts[2]];
+   652→    }
+   653→  }
+   654→  return null;
+   655→}
+   656→
+   657→function luminanceOf([r, g, b]: [number, number, number]): number {
+   658→  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+   659→}
+   660→
+   661→/**
+   662→ * 分区域实测壁纸亮度（锁屏文字随背景变色）：
+   663→ * - 图片壁纸：解码后缩到 32×64 逐行取 Rec.709 亮度，顶部 0–35%（状态栏/时钟/小组件）与
+   664→ *   底部 86–100%（上滑提示/快捷按钮/Home 横杠）分别求均值 —— 解决「上亮下暗」壁纸
+   665→ *   （如雾山上白山+下深林）一刀切判色导致某端文字看不清的问题；
+   666→ * - 纯色/渐变壁纸：解析样式里的色值，按出现顺序（渐变自上而下）前半=顶/后半=底；
+   667→ * 返回 true=偏浅（黑字）/ false=偏深（白字）/ null=测量中或失败（调用方回退预设静态标记）。
+   668→ */
+   669→export function useMeasuredWallpaperLight(style: CSSProperties): WallpaperLightness {
+   670→  const bgImage = typeof style.backgroundImage === 'string' ? style.backgroundImage : '';
+   671→  const bgColor = typeof style.backgroundColor === 'string' ? style.backgroundColor : '';
+   672→  const url = useMemo(() => bgImageUrlOf(bgImage), [bgImage]);
+   673→
+   674→  // 纯色/渐变壁纸：同步纯函数推导
+   675→  const colorLight = useMemo<WallpaperLightness>(() => {
+   676→    if (url) return { top: null, bottom: null, all: null }; // 图片壁纸走异步实测
+   677→    const tokens = `${bgColor} ${bgImage}`.match(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]+\)/g) ?? [];
+   678→    const lums = tokens
+   679→      .map(parseCssColor)
+   680→      .filter((c): c is [number, number, number] => c !== null)
+   681→      .map(luminanceOf);
+   682→    if (lums.length === 0) return { top: null, bottom: null, all: null };
+   683→    const half = Math.max(1, Math.ceil(lums.length / 2));
+   684→    const avg = (arr: number[]) => arr.reduce((acc, v) => acc + v, 0) / arr.length;
+   685→    return {
+   686→      top: avg(lums.slice(0, half)) > LIGHT_LUMINANCE_THRESHOLD,
+   687→      bottom: avg(lums.slice(Math.max(0, lums.length - half))) > LIGHT_LUMINANCE_THRESHOLD,
+   688→      all: avg(lums) > LIGHT_LUMINANCE_THRESHOLD,
+   689→    };
+   690→  }, [bgColor, bgImage, url]);
+   691→
+   692→  // 图片壁纸：解码后异步实测。结果绑定当时的 url，防止换壁纸瞬间新旧串值
+   693→  const [imgState, setImgState] = useState<{ url: string; top: boolean; bottom: boolean; all: boolean } | null>(null);
+   694→  useEffect(() => {
+   695→    if (!url) return;
+   696→    // 共享缓存已命中：渲染时已同步消费，无需重复解码测量
+   697→    if (wallpaperLightCache.has(url)) return;
+   698→    let cancelled = false;
+   699→    const img = new Image();
+   700→    img.onload = () => {
+   701→      if (cancelled) return;
+   702→      try {
+   703→        const W = 32;
+   704→        const H = 64;
+   705→        const canvas = document.createElement('canvas');
+   706→        canvas.width = W;
+   707→        canvas.height = H;
+   708→        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+   709→        if (!ctx) return; // 保持 null → 回退静态标记
+   710→        ctx.drawImage(img, 0, 0, W, H);
+   711→        const { data } = ctx.getImageData(0, 0, W, H);
+   712→        const rowLum: number[] = [];
+   713→        for (let y = 0; y < H; y++) {
+   714→          let sum = 0;
+   715→          for (let x = 0; x < W; x++) {
+   716→            const i = (y * W + x) * 4;
+   717→            sum += luminanceOf([data[i], data[i + 1], data[i + 2]]);
+   718→          }
+   719→          rowLum.push(sum / W);
+   720→        }
+   721→        const avgRows = (a: number, b: number) => {
+   722→          let sum = 0;
+   723→          for (let y = a; y < b; y++) sum += rowLum[y];
+   724→          return sum / (b - a);
+   725→        };
+   726→        const result = {
+   727→          top: avgRows(0, Math.floor(H * 0.35)) > LIGHT_LUMINANCE_THRESHOLD,
+   728→          bottom: avgRows(Math.floor(H * 0.86), H) > LIGHT_LUMINANCE_THRESHOLD,
+   729→          all: avgRows(0, H) > LIGHT_LUMINANCE_THRESHOLD,
+   730→        };
+   731→        // 写入共享缓存（简单上限淘汰，防长会话换壁纸累积泄漏）
+   732→        if (wallpaperLightCache.size >= WALLPAPER_LIGHT_CACHE_MAX) {
+   733→          wallpaperLightCache.delete(wallpaperLightCache.keys().next().value as string);
+   734→        }
+   735→        wallpaperLightCache.set(url, result);
+   736→        setImgState({ url, ...result });
+   737→      } catch {
+   738→        // 画布被污染等异常：保持 null 回退静态标记
+   739→      }
+   740→    };
+   741→    img.onerror = () => {
+   742→      if (!cancelled) setImgState(null);
+   743→    };
+   744→    img.src = url;
+   745→    return () => {
+   746→      cancelled = true;
+   747→    };
+   748→  }, [url]);
+   749→
+   750→  if (url) {
+   751→    // 共享缓存命中：同步返回（后挂载的图标/多任务/Spotlight 首帧即拿到结果，
+   752→    // 不闪「测量中回退静态标记」的错误颜色，也避免 effect 内 setState）
+   753→    const cached = wallpaperLightCache.get(url);
+   754→    if (cached) return cached;
+   755→    return imgState && imgState.url === url
+   756→      ? { top: imgState.top, bottom: imgState.bottom, all: imgState.all }
+   757→      : { top: null, bottom: null, all: null };
+   758→  }
+   759→  return colorLight;
+   760→}
+   761→
+   762→const darkMQ =
+   763→  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+   764→    ? window.matchMedia('(prefers-color-scheme: dark)')
+   765→    : null;
+   766→
+   767→/** 是否为系统深色模式（useSyncExternalStore 安全订阅） */
+   768→export function useSystemDark(): boolean {
+   769→  return useSyncExternalStore(
+   770→    (onChange) => {
+   771→      if (!darkMQ) return () => undefined;
+   772→      darkMQ.addEventListener('change', onChange);
+   773→      return () => darkMQ.removeEventListener('change', onChange);
+   774→    },
+   775→    () => darkMQ?.matches ?? false,
+   776→    () => false
+   777→  );
+   778→}
+   779→
+   780→// ---------------- UI Store ----------------
+   781→
+   782→export type AppId =
+   783→  | 'chat'
+   784→  | 'wechat'
+   785→  | 'qq'
+   786→  | 'phone'
+   787→  | 'photos'
+   788→  | 'camera'
+   789→  | 'music'
+   790→  | 'browser'
+   791→  | 'weather'
+   792→  | 'clock'
+   793→  | 'themes'
+   794→  | 'files'
+   795→  | 'reminders'
+   796→  | 'calculator'
+   797→  | 'notes'
+   798→  | 'calendar'
+   799→  | 'recorder'
+   800→  | 'contacts'
+   801→  | 'settings'
+   802→  | 'appstore'
+   803→  | 'memory'
+   804→  | 'worldbook';
+   805→
+   806→export type AppPhase = 'closed' | 'opening' | 'open' | 'closing';
+   807→
+   808→/** 多任务卡片上限（最新在前） */
+   809→const MAX_RECENT_APPS = 6;
+   810→
+   811→interface UIState {
+   812→  activeApp: AppId | null;
+   813→  phase: AppPhase;
+   814→  /** 最近使用过的 App（多任务切换器卡片，最新在前；关闭 App 仍保留在后台） */
+   815→  recentApps: AppId[];
+   816→  /** 多任务切换器是否打开（可在主屏幕或任一 App 内打开） */
+   817→  switcherOpen: boolean;
+   818→  /** 锁屏是否激活（页面加载即锁定；锁定时覆盖全部交互） */
+   819→  locked: boolean;
+   820→  /** 熄屏（电源键：亮屏锁定 ↔ 熄屏，黑屏遮罩） */
+   821→  screenOff: boolean;
+   822→  /** 锁屏直达相机（不解锁，关闭相机回锁屏） */
+   823→  lockCameraOpen: boolean;
+   824→  /** 锁屏手电筒补光开启（全屏白，前景需转黑） */
+   825→  torchOpen: boolean;
+   826→  /** 闹钟响铃弹层全屏显示中（背景色，前景随主题） */
+   827→  alarmRinging: boolean;
+   828→  /** 电话 App 通话全屏层显示中（深色背景，状态栏/Home 横杠需白前景） */
+   829→  callActive: boolean;
+   830→  /** 主屏幕编辑（抖动）模式进行中：底部边缘上滑手势不触发多任务切换器 */
+   831→  homeEdit: boolean;
+   832→  openApp: (id: AppId) => void;
+   833→  closeApp: () => void;
+   834→  openSwitcher: () => void;
+   835→  closeSwitcher: () => void;
+   836→  /** 切换器关闭动画期间先把前台 App 退到后台（立即露出主屏幕） */
+   837→  exitForegroundApp: () => void;
+   838→  /** 在切换器里点卡片：切到该 App（无论当前是否已有 App 在前台） */
+   839→  switchToApp: (id: AppId) => void;
+   840→  /** 在切换器里上滑卡片：彻底关闭该 App（若是前台 App 则一并退出） */
+   841→  killApp: (id: AppId) => void;
+   842→  /** 解锁（锁屏上滑验证通过） */
+   843→  unlock: () => void;
+   844→  /** 立即锁定（关闭一切 App/切换器/锁屏相机，回到锁屏） */
+   845→  lock: () => void;
+   846→  /** 电源键：熄屏 ↔ 亮屏锁定 */
+   847→  pressPower: () => void;
+   848→  setLockCameraOpen: (v: boolean) => void;
+   849→  setTorchOpen: (v: boolean) => void;
+   850→  setAlarmRinging: (v: boolean) => void;
+   851→  setCallActive: (v: boolean) => void;
+   852→  /** 跨 App 跳转：电话 App 联系人详情点「信息」→ 打开信息 App 后自动进入该联系人会话（相当于添加好友），消费后置回 null */
+   853→  pendingChatContact: string | null;
+   854→  setPendingChatContact: (id: string | null) => void;
+   855→  /** 跨 App 跳转：QQ 好友资料页「编辑资料」/ 微信好友详情页「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页，消费后置回 null */
+   856→  pendingContactEdit: string | null;
+   857→  setPendingContactEdit: (id: string | null) => void;
+   858→}
+   859→
+   860→export const useUI = create<UIState>((set, get) => ({
+   861→  activeApp: null,
+   862→  phase: 'closed',
+   863→  recentApps: [],
+   864→  switcherOpen: false,
+   865→  locked: true,
+   866→  screenOff: false,
+   867→  lockCameraOpen: false,
+   868→  torchOpen: false,
+   869→  alarmRinging: false,
+   870→  callActive: false,
+   871→  homeEdit: false,
+   872→  pendingChatContact: null,
+   873→  setPendingChatContact: (v) => {
+   874→    set({ pendingChatContact: v });
+   875→  },
+   876→  pendingContactEdit: null,
+   877→  setPendingContactEdit: (v) => {
+   878→    set({ pendingContactEdit: v });
+   879→  },
+   880→  openApp: (id) => {
+   881→    if (get().locked) return; // 锁屏时禁止打开 App（锁屏直达相机走 lockCameraOpen）
+   882→    if (get().activeApp || get().phase !== 'closed') return;
+   883→    set({
+   884→      activeApp: id,
+   885→      phase: 'opening',
+   886→      switcherOpen: false,
+   887→      recentApps: [id, ...get().recentApps.filter((a) => a !== id)].slice(0, MAX_RECENT_APPS),
+   888→    });
+   889→    requestAnimationFrame(() => {
+   890→      requestAnimationFrame(() => {
+   891→        if (useUI.getState().phase === 'opening') set({ phase: 'open' });
+   892→      });
+   893→    });
+   894→  },
+   895→  closeApp: () => {
+   896→    if (get().locked) return;
+   897→    if (!get().activeApp || get().phase === 'closing') return;
+   898→    set({ phase: 'closing' });
+   899→    window.setTimeout(() => {
+   900→      if (useUI.getState().phase === 'closing') set({ activeApp: null, phase: 'closed' });
+   901→    }, 380);
+   902→  },
+   903→  openSwitcher: () => {
+   904→    // 主屏幕或 App 内都可打开（打开/关闭动画进行中除外；锁定时禁止）
+   905→    if (get().locked) return;
+   906→    if (get().switcherOpen || get().phase === 'opening' || get().phase === 'closing') return;
+   907→    set({ switcherOpen: true });
+   908→  },
+   909→  closeSwitcher: () => {
+   910→    if (get().switcherOpen) set({ switcherOpen: false });
+   911→  },
+   912→  exitForegroundApp: () => {
+   913→    if (get().activeApp) set({ activeApp: null, phase: 'closed' });
+   914→  },
+   915→  switchToApp: (id) => {
+   916→    if (get().locked) return;
+   917→    set({
+   918→      activeApp: id,
+   919→      phase: 'open',
+   920→      switcherOpen: false,
+   921→      recentApps: [id, ...get().recentApps.filter((a) => a !== id)].slice(0, MAX_RECENT_APPS),
+   922→    });
+   923→  },
+   924→  killApp: (id) => {
+   925→    const patch: Partial<UIState> = { recentApps: get().recentApps.filter((a) => a !== id) };
+   926→    if (get().activeApp === id) {
+   927→      patch.activeApp = null;
+   928→      patch.phase = 'closed';
+   929→    }
+   930→    set(patch);
+   931→  },
+   932→  unlock: () => {
+   933→    set({ locked: false, screenOff: false, lockCameraOpen: false, torchOpen: false });
+   934→  },
+   935→  lock: () => {
+   936→    set({
+   937→      locked: true,
+   938→      screenOff: false,
+   939→      lockCameraOpen: false,
+   940→      torchOpen: false,
+   941→      activeApp: null,
+   942→      phase: 'closed',
+   943→      switcherOpen: false,
+   944→    });
+   945→  },
+   946→  pressPower: () => {
+   947→    const s = get();
+   948→    const lockScreen = useSettings.getState().lockConfig.lockScreen;
+   949→    if (s.screenOff) {
+   950→      // 熄屏 → 亮屏：有锁屏回锁定界面；无锁屏保持原界面
+   951→      set(lockScreen ? { screenOff: false, locked: true } : { screenOff: false });
+   952→    } else if (lockScreen) {
+   953→      // 熄屏并锁定（退出一切前台界面）
+   954→      set({
+   955→        screenOff: true,
+   956→        locked: true,
+   957→        lockCameraOpen: false,
+   958→        torchOpen: false,
+   959→        activeApp: null,
+   960→        phase: 'closed',
+   961→        switcherOpen: false,
+   962→      });
+   963→    } else {
+   964→      // 无锁屏：仅熄屏，保留当前界面
+   965→      set({ screenOff: true });
+   966→    }
+   967→  },
+   968→  setLockCameraOpen: (v) => {
+   969→    set({ lockCameraOpen: v });
+   970→  },
+   971→  setTorchOpen: (v) => {
+   972→    set({ torchOpen: v });
+   973→  },
+   974→  setAlarmRinging: (v) => {
+   975→    set({ alarmRinging: v });
+   976→  },
+   977→  setCallActive: (v) => {
+   978→    set({ callActive: v });
+   979→  },
+   980→}));
+   981→

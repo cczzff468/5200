@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
-import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
+import { selectResolvedTheme, seedDisplay, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useLightForeground } from '@/lib/ios/foreground';
+import type { DisplaySnapshot } from '@/lib/ios/display-cookie';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
 import StatusBar from './StatusBar';
@@ -27,8 +28,18 @@ const OPEN_DELTA = 18;
 /**
  * 手机壳：桌面端显示 iPhone 机身外框（含电源键），移动端全屏。
  * 内部依次为 壁纸层 → 主屏幕 → App 窗口 → 多任务切换器 → 锁屏 → 熄屏遮罩 → 状态栏 → 灵动岛。
+ *
+ * 首帧防闪烁：主题/壁纸/锁屏开关由服务端 cookie 注水（initialDisplay），
+ * 在任何 store 订阅之前同步 seed —— SSR 与客户端首帧同源，无黑屏开机门控。
+ * IndexedDB 设置读出（load）后补齐其余设置，首帧已是最终样子。
  */
-export default function PhoneShell() {
+export default function PhoneShell({ initialDisplay }: { initialDisplay?: DisplaySnapshot | null }) {
+  // 首帧注水：useState 惰性初始化保证在任何 hook 订阅前执行且仅执行一次（StrictMode 双渲染也幂等）
+  useState(() => {
+    seedDisplay(initialDisplay);
+    return true;
+  });
+
   const theme = useSettings((s) => s.theme);
   const systemDark = useSystemDark();
   const load = useSettings((s) => s.load);
@@ -36,7 +47,6 @@ export default function PhoneShell() {
   const locked = useUI((s) => s.locked);
   const screenOff = useUI((s) => s.screenOff);
   const pressPower = useUI((s) => s.pressPower);
-  const loaded = useSettings((s) => s.loaded);
   const wallpaperStyle = useWallpaperStyle();
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
   const barLight = useLightForeground('bottom');
@@ -131,26 +141,10 @@ export default function PhoneShell() {
 
   const dark = selectResolvedTheme(theme, systemDark) === 'dark';
 
-  // 开机门控：设置从 IndexedDB 读出前只显示纯黑开机屏。
-  // 若用户关闭了锁屏，locked 会在 load() 内同步纠正为 false——
-  // 先等 loaded 再渲染锁屏/主屏，锁屏就不会“闪现一下再消失”。
-  if (!loaded) {
-    return (
-      <div className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8">
-        <div
-          className={`relative h-[100svh] w-full overflow-hidden bg-black sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
-            dark ? 'dark' : ''
-          }`}
-        >
-          {/* 灵动岛（开机阶段仅保留硬件开孔） */}
-          <div
-            className="pointer-events-none absolute left-1/2 top-[11px] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
-            aria-hidden="true"
-          />
-        </div>
-      </div>
-    );
-  }
+  // 开机门控已移除（防锁屏闪烁的最终修复）：过去「设置读出前渲染纯黑开机屏」，
+  // 刷新时旧锁屏→一段纯黑→新锁屏，看起来就是锁屏闪一下。
+  // 现在首帧由 cookie 注水的真实设置直接渲染锁屏/主屏，load() 只负责补齐
+  // 首帧不需要的数据（API 配置/自定义壁纸/自定义图标/密码等），到达时原地更新。
 
   return (
     <div className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8">

@@ -6157,3 +6157,26 @@ Stage Summary:
 - 拒收文案新语义：「消息已发出，但被对方拒收了。」= 居中胶囊、仅对方拉黑我时跟在我的消息后面；我拉黑对方 → 对方气泡只有拉黑图标；拉黑图标两个方向恒显示
 - 锁屏：开机首帧整屏直出（无淡入），自定义锁屏壁纸有底色兜底
 - 存量兼容：*-block-line-peer testid 移除（E2E 脚本无引用）；wx/qq/sms-block-line-me 保留；拉黑数据结构/标记管线/设置开关/申请卡片零改动；群聊零改动
+
+---
+Task ID: lock-flicker-root-cause
+Agent: Z.ai Code (main)
+Task: 用户反馈「预览不显示 + 锁屏还闪烁」——定位锁屏闪烁的真正根因并修复；恢复预览
+
+Work Log:
+- 定位「预览不显示」：dev server 进程已死（curl localhost:3000 连接拒绝），重启 `bun run dev` 后 / 返回 200，预览恢复（与代码无关）
+- 定位「锁屏还闪烁」的真正根因（录屏 30fps 抽帧实证）：此前 ui-fix-0524 修的是锁屏内部淡入（AnimatePresence initial={false}），但 PhoneShell 的「开机门控」仍在——loaded=false 时渲染纯黑开机屏，刷新/进入网页的真实帧序列是「旧锁屏 → 约 0.6s 纯黑 → 新锁屏」，抽帧确认 f005-f010 共 6 帧全黑 (0,0,0)，这就是用户看到的闪烁
+- 修复方案「cookie 注水首帧直出」：新建 src/lib/ios/display-cookie.ts——DisplaySnapshot{theme,wallpaper,lockWallpaper,lockScreen}、parseDisplayCookie/serializeDisplayCookie/writeDisplayCookie（1 年期 path=/ samesite=lax）、DEFAULT_DISPLAY_SNAPSHOT 与 store 初始值一致（light/graphite/graphite/true）
+- page.tsx 改 async server component：`await cookies()` 读 ios-display 传给 PhoneShell（cookie 非法/缺失 → null 回退默认值）
+- store.ts：新增 syncDisplayCookie（四项显示设置变化即写 cookie）挂入 setTheme/setWallpaperPreset/setLockWallpaperPreset/setLockScreen/applyLockConfig/load() 尾部（IndexedDB 被清时 cookie 自愈）；新增导出 seedDisplay(snap)（同步 setState 注水 theme/wallpaperPreset/lockWallpaperPreset + useUI.locked）
+- PhoneShell.tsx：接收 initialDisplay prop，useState 惰性初始化最先执行 seedDisplay（SSR 与客户端首帧同源、无水合差异、StrictMode 幂等）；彻底移除黑屏开机门控（loaded selector 一并移除）；MomentsScheduler/AlarmWatcher 挂载安全性确认（异步 tick + 异常静默）后随壳直出
+- 效果：SSR 首帧直接按真实设置渲染锁屏（锁屏壁纸/主题/是否出锁屏全对），load() 只补首帧不需要的数据（API 配置/自定义壁纸 Blob/自定义图标/密码），到达原地更新
+- E2E 实测（agent-browser 390×844）：①重载录屏 52 帧逐帧像素比对——全部 (17,16,19) 同色，纯黑帧 0 个（修复前同流程 6 帧全黑）✓ ②cookie 实写验证：切壁纸「雾山」→ ios-display 立即变 wallpaper=mist-mountain ✓ ③浅色壁纸重载：无黑帧、无水合错误，首帧锁屏直出（时钟/天气/电量注水后原地填充，无布局位移）✓ ④关锁屏开关 → cookie lockScreen:false → 重载直接进主屏幕（aria-label=锁屏 不存在）✓ ⑤重开锁屏 → 重载回锁屏 ✓ ⑥上滑解锁/主屏幕/设置 App 全程可用 ✓ ⑦console/errors 水合错误 0 ✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常（仅既有噪音）
+- 已知边界（有意取舍）：有密码用户重载后锁屏先以「仅上滑」形态出现，load() 补上密码配置（约数百 ms 内完成，人手不可能在此窗口完成上滑）；自定义壁纸 Blob 首帧按预设底色兜底，图片解码后一次性换图（非黑闪，无法避免——Blob 本就异步）
+
+Stage Summary:
+- 改动文件：src/lib/ios/display-cookie.ts（新建）、src/app/page.tsx（async + cookies 注水）、src/lib/ios/store.ts（syncDisplayCookie/seedDisplay/五个 setter 挂钩）、src/components/ios/PhoneShell.tsx（initialDisplay prop + 移除黑屏门控）
+- 根因结论：锁屏闪烁 = 黑屏开机门控，非锁屏内部动画；本次与 ui-fix-0524 的内部动画修复互补，两层都已消除
+- 迁移路径：用户已有 IndexedDB 设置但无 cookie 的首次加载，首帧按默认快照渲染、load() 后换成本人设置并落 cookie，此后每次进入/刷新首帧即最终样子
+- 拉黑 5 项修正（ui-fix-0524）经核实均已实施且 E2E 通过，无遗留

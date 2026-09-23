@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
+import { writeDisplayCookie, type DisplaySnapshot } from './display-cookie';
 
 // ---------------- 类型 ----------------
 
@@ -191,6 +192,30 @@ interface SettingsState {
   setCustomIcon: (appId: AppId, blob: Blob | null) => void;
   /** 清空全部自定义图标（全部恢复默认） */
   resetAllCustomIcons: () => void;
+}
+
+/** 当前显示设置的 cookie 镜像（主题/壁纸/锁屏开关）：决定 SSR 首帧长相的四项，
+ *  任何一项变化都立即重写 cookie，下次进入网页服务端直接按真实设置渲染首帧（防锁屏闪烁） */
+function syncDisplayCookie(s: Pick<SettingsState, 'theme' | 'wallpaperPreset' | 'lockWallpaperPreset' | 'lockConfig'>): void {
+  const snap: DisplaySnapshot = {
+    theme: s.theme,
+    wallpaper: s.wallpaperPreset,
+    lockWallpaper: s.lockWallpaperPreset,
+    lockScreen: s.lockConfig.lockScreen !== false,
+  };
+  writeDisplayCookie(snap);
+}
+
+/** 用服务端传来的显示快照在首帧渲染前同步注水 store（SSR 与客户端首帧同源，无水合差异）。
+ *  必须在 PhoneShell 首次渲染、任何 useSettings/useUI 订阅之前调用一次 */
+export function seedDisplay(snap: DisplaySnapshot | null | undefined): void {
+  if (!snap) return;
+  useSettings.setState({
+    theme: snap.theme,
+    wallpaperPreset: snap.wallpaper,
+    lockWallpaperPreset: snap.lockWallpaper,
+  });
+  useUI.setState({ locked: snap.lockScreen });
 }
 
 export const useSettings = create<SettingsState>((set, get) => ({
@@ -391,6 +416,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         customIcons,
         loaded: true,
       });
+      // 设置从 IndexedDB 读出后同步一份到 cookie：IndexedDB 被清/换设备时 cookie 自愈
+      syncDisplayCookie(get());
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
       if (!lockConfig.lockScreen) useUI.setState({ locked: false });
     } catch {
@@ -405,12 +432,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
       : { lockScreen: false, enabled: false, code: '', len: cur.len }; // 关锁屏即停用密码
     set({ lockConfig: cfg });
     void localDB.put('settings', { key: 'lock', value: { ...cfg } });
+    syncDisplayCookie(get());
     if (!on) useUI.setState({ locked: false, screenOff: false, lockCameraOpen: false, torchOpen: false });
   },
 
   setTheme: (t) => {
     set({ theme: t });
     void localDB.put('settings', { key: 'theme', value: t });
+    syncDisplayCookie(get());
   },
 
   setWallpaperPreset: (id) => {
@@ -418,6 +447,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     if (old) URL.revokeObjectURL(old);
     set({ wallpaperPreset: id, customWallpaperUrl: null });
     void localDB.put('settings', { key: 'wallpaper', value: { preset: id } });
+    syncDisplayCookie(get());
   },
 
   setCustomWallpaper: (blob) => {
@@ -438,6 +468,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     if (old) URL.revokeObjectURL(old);
     set({ lockWallpaperPreset: id, lockCustomWallpaperUrl: null });
     void localDB.put('settings', { key: 'lockWallpaper', value: { preset: id } });
+    syncDisplayCookie(get());
   },
 
   setLockCustomWallpaper: (blob) => {
@@ -490,6 +521,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   applyLockConfig: (cfg) => {
     set({ lockConfig: { ...cfg } });
     void localDB.put('settings', { key: 'lock', value: { ...cfg } });
+    syncDisplayCookie(get());
   },
 
   setProfile: (patch) => {
