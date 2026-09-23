@@ -1,7 +1,7 @@
 'use client';
 
 import { useSyncExternalStore } from 'react';
-import { formatIOSTime } from '@/lib/ios/clock';
+import { formatIOSTime, ssrWallClock } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
 import { useLightForeground } from '@/lib/ios/foreground';
 
@@ -53,7 +53,7 @@ function BatteryIcon({ level, charging, low }: { level: number; charging: boolea
  * 电量使用 Battery Status API（@/lib/ios/battery），低于 20% 仅电量填充变红（百分比与外框不变色）。
  * 文字颜色由 useLightForeground 判定（默认按背景顶部区域实测明暗，与 Home 横杠同一套逻辑但区域不同）。
  */
-export default function StatusBar() {
+export default function StatusBar({ bootTz }: { bootTz?: string } = {}) {
   const clockSecond = useSyncExternalStore(
     (onChange) => {
       const timer = window.setInterval(onChange, 1000);
@@ -66,6 +66,8 @@ export default function StatusBar() {
   const lightText = useLightForeground();
 
   const now = clockSecond > 0 ? new Date(clockSecond * 1000) : null;
+  // SSR 兜底：服务端拿不到 setInterval 时钟，用用户时区（cookie 直通）墙钟直接渲染首帧时间
+  const shown = now ?? ssrWallClock(bootTz);
   const level = battery?.level ?? 100;
   const low = level < 20 && !battery?.charging;
 
@@ -76,7 +78,9 @@ export default function StatusBar() {
       }`}
       aria-label="状态栏"
     >
-      <time className="w-[70px] leading-none tabular-nums tracking-tight">{now ? formatIOSTime(now) : ''}</time>
+      <time className="w-[70px] leading-none tabular-nums tracking-tight" suppressHydrationWarning>
+        {shown ? formatIOSTime(shown) : ''}
+      </time>
       <div className="flex items-center gap-[4px] leading-none">
         <SignalBars />
         {/* WiFi（加大版，整体上移一点避免视觉偏低） */}

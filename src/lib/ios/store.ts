@@ -5,6 +5,11 @@ import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties 
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
 import { writeDisplayCookie, type DisplaySnapshot } from './display-cookie';
+import { WALLPAPER_PRESETS, resolveWallpaperStyle, type WallpaperPreset } from './wallpaper-presets';
+
+// 壁纸预设与样式解析已抽到 wallpaper-presets.ts（服务端 layout 也要用）；此处 re-export 保持既有导入不变
+export { WALLPAPER_PRESETS, resolveWallpaperStyle };
+export type { WallpaperPreset };
 
 // ---------------- 类型 ----------------
 
@@ -82,72 +87,16 @@ interface LockWallpaperRecord {
   customBlob?: Blob;
 }
 
-export interface WallpaperPreset {
-  id: string;
-  name: string;
-  css: string;
-  /** 浅色壁纸（状态栏文字用黑色） */
-  light: boolean;
-  /** 底色兜底：PNG 预设图片异步加载/解码前先铺纯色，避免锁屏/主屏透出下层内容闪现 */
-  base: string;
-}
-
-export const WALLPAPER_PRESETS: WallpaperPreset[] = [
-  {
-    id: 'dark-stream',
-    name: '暗流',
-    css: 'url(/wallpapers/dark-stream.png) center / cover no-repeat',
-    light: false,
-    base: '#0a0a0d',
-  },
-  {
-    id: 'ink-marble',
-    name: '墨纹',
-    css: 'url(/wallpapers/ink-marble.png) center / cover no-repeat',
-    light: false,
-    base: '#141417',
-  },
-  {
-    id: 'mist-mountain',
-    name: '雾山',
-    css: 'url(/wallpapers/mist-mountain.png) center / cover no-repeat',
-    light: true,
-    base: '#d9dade',
-  },
-  {
-    id: 'graphite',
-    name: '石墨黑',
-    css: 'radial-gradient(120% 90% at 20% 0%, #2a2a2e 0%, #161618 45%, #050506 100%)',
-    light: false,
-    base: '#161618',
-  },
-  {
-    id: 'dusk',
-    name: '暮色灰',
-    css: 'linear-gradient(180deg, #1b1b1f 0%, #33343b 52%, #5c5d66 100%)',
-    light: false,
-    base: '#1b1b1f',
-  },
-  {
-    id: 'silver',
-    name: '银白',
-    css: 'linear-gradient(180deg, #fafafc 0%, #e3e3e9 55%, #b7b8c0 100%)',
-    light: true,
-    base: '#fafafc',
-  },
-  {
-    id: 'mist',
-    name: '晨雾',
-    css: 'linear-gradient(180deg, #ececf1 0%, #c6c7cf 55%, #90919b 100%)',
-    light: true,
-    base: '#ececf1',
-  },
-];
+// 壁纸预设（WallpaperPreset/WALLPAPER_PRESETS）与样式解析（resolveWallpaperStyle）
+// 已抽到 wallpaper-presets.ts（服务端 layout 也要用，'use client' 模块的函数无法在服务端调用）；
+// 文件顶部已 re-export，既有导入不受影响。
 
 // ---------------- 设置 Store ----------------
 
 interface SettingsState {
   theme: ThemeMode;
+  /** 用户时区（cookie 注水，SSR 渲染时钟/日期用；不持久化到 IndexedDB，load 不覆盖） */
+  tz?: string;
   wallpaperPreset: string;
   /** 自定义壁纸的 ObjectURL（Blob 存 IndexedDB） */
   customWallpaperUrl: string | null;
@@ -197,23 +146,35 @@ interface SettingsState {
 /** 当前显示设置的 cookie 镜像（主题/壁纸/锁屏开关）：决定 SSR 首帧长相的四项，
  *  任何一项变化都立即重写 cookie，下次进入网页服务端直接按真实设置渲染首帧（防锁屏闪烁） */
 function syncDisplayCookie(s: Pick<SettingsState, 'theme' | 'wallpaperPreset' | 'lockWallpaperPreset' | 'lockConfig'>): void {
+  let tz: string | undefined;
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    tz = undefined;
+  }
   const snap: DisplaySnapshot = {
     theme: s.theme,
     wallpaper: s.wallpaperPreset,
     lockWallpaper: s.lockWallpaperPreset,
     lockScreen: s.lockConfig.lockScreen !== false,
+    tz,
   };
   writeDisplayCookie(snap);
 }
 
-/** 用服务端传来的显示快照在首帧渲染前同步注水 store（SSR 与客户端首帧同源，无水合差异）。
- *  必须在 PhoneShell 首次渲染、任何 useSettings/useUI 订阅之前调用一次 */
+/** 用服务端传来的显示快照在注水前同步写入 store（水合 commit 后至 load() 完成前的桥接窗口）。
+ *  必须在 PhoneShell 首次渲染、任何 useSettings/useUI 订阅之前调用一次（幂等）。
+ *  【注意】zustand v5 的 useSyncExternalStore getServerSnapshot 读 getInitialState()
+ *  （创建时快照），SSR 与水合阶段 selector 看不到 setState —— 所以 SSR 首帧的
+ *  壁纸/主题/时区/锁屏开关不能依赖本函数，必须由 page.tsx → PhoneShell 的
+ *  initialDisplay prop 直通（见 PhoneShell/LockScreen/StatusBar 的 boot 处理）。 */
 export function seedDisplay(snap: DisplaySnapshot | null | undefined): void {
   if (!snap) return;
   useSettings.setState({
     theme: snap.theme,
     wallpaperPreset: snap.wallpaper,
     lockWallpaperPreset: snap.lockWallpaper,
+    tz: snap.tz,
   });
   useUI.setState({ locked: snap.lockScreen });
 }
@@ -569,34 +530,7 @@ export function selectResolvedTheme(theme: ThemeMode, systemDark: boolean): Reso
   return theme;
 }
 
-/** 由预设 id + 自定义 URL 解析壁纸背景样式（手机壳/锁屏/前景明暗共用，故导出）。
- *  自定义优先；预设 css 可能是 background 简写，需拆解。
- *  始终带 backgroundColor 底色：PNG 壁纸异步加载/解码前先铺不透明纯色，
- *  否则锁屏/主屏头几帧透明，会透出下层界面（刷新时主界面一闪而过的根因） */
-export function resolveWallpaperStyle(presetId: string, customUrl: string | null): CSSProperties {
-  if (customUrl) {
-    return {
-      backgroundColor: '#1c1c1e',
-      backgroundImage: `url(${customUrl})`,
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-    };
-  }
-  const preset = WALLPAPER_PRESETS.find((w) => w.id === presetId) ?? WALLPAPER_PRESETS[0];
-  // 预设 css 可能是 background 简写（如 "url(...) center / cover no-repeat"），
-  // 不能整体赋给 backgroundImage（浏览器会丢弃整条声明），需拆解
-  if (preset.css.startsWith('url(')) {
-    const end = preset.css.indexOf(')');
-    const url = end > 4 ? preset.css.slice(4, end) : '';
-    return {
-      backgroundColor: preset.base,
-      backgroundImage: `url(${url})`,
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-    };
-  }
-  return { backgroundColor: preset.base, backgroundImage: preset.css };
-}
+// resolveWallpaperStyle 已移至 wallpaper-presets.ts（文件顶部 re-export）
 
 /** 主屏幕壁纸背景样式（手机壳用）。锁屏/前景明暗实测也需要它，故导出 */
 export function useWallpaperStyle(): CSSProperties {

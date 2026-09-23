@@ -33,7 +33,14 @@ export interface BlockEntry {
   reqAt?: number;
   /** 最近一次申请被拒绝的时间（角色要知道被拒绝） */
   rejectedAt?: number;
+  /** 当前拉黑周期内被拒绝的申请次数（防骚扰：达到上限后不再受理新申请） */
+  reqCount?: number;
 }
+
+/** 申请被拒绝后的冷却窗口：窗口内角色的 [申请解除拉黑] 动作被静默忽略（防连环刷卡片） */
+export const BLOCK_REQ_COOLDOWN_MS = 10 * 60 * 1000;
+/** 当前拉黑周期内申请被拒绝次数上限：达到后彻底不再受理（用户解除拉黑后重新拉黑才重置） */
+export const BLOCK_REQ_MAX_REJECTED = 3;
 
 const blockKey = (app: BlockApp, contactId: string) => `${app}-block:${contactId}`;
 
@@ -45,6 +52,7 @@ function normalize(v: unknown): BlockEntry {
     reqReason: typeof e.reqReason === 'string' && e.reqReason.trim() ? e.reqReason.trim().slice(0, 80) : undefined,
     reqAt: typeof e.reqAt === 'number' ? e.reqAt : undefined,
     rejectedAt: typeof e.rejectedAt === 'number' ? e.rejectedAt : undefined,
+    reqCount: typeof e.reqCount === 'number' && e.reqCount > 0 ? e.reqCount : undefined,
   };
 }
 
@@ -60,7 +68,7 @@ export function loadBlock(app: BlockApp, contactId: string): BlockEntry {
 /** 写某会话的拉黑状态；entry 为空对象时删除键（保持存储干净） */
 export function saveBlock(app: BlockApp, contactId: string, entry: BlockEntry): BlockEntry {
   const n = normalize(entry);
-  const empty = !n.byUser && !n.byChar && !n.reqReason && !n.reqAt && !n.rejectedAt;
+  const empty = !n.byUser && !n.byChar && !n.reqReason && !n.reqAt && !n.rejectedAt && !n.reqCount;
   try {
     if (empty) kvDel(blockKey(app, contactId));
     else kvSet(blockKey(app, contactId), n);
@@ -73,10 +81,15 @@ export function saveBlock(app: BlockApp, contactId: string, entry: BlockEntry): 
 /**
  * 用户设置/解除对角色的拉黑（设置页开关用）。
  * 只动 byUser，不影响 byChar（两个方向独立）；返回最新状态。
+ * 解除拉黑 → 清空申请计数/拒绝记录；重新拉黑 → 新的防骚扰周期（计数归零）。
  */
 export function setUserBlock(app: BlockApp, contactId: string, blocked: boolean): BlockEntry {
   const cur = loadBlock(app, contactId);
-  return saveBlock(app, contactId, { ...cur, byUser: blocked || undefined });
+  if (blocked) {
+    if (cur.byUser) return cur; // 已是拉黑态：保留申请冷却/计数（防用开关重置骚扰防护）
+    return saveBlock(app, contactId, { byUser: true, byChar: cur.byChar });
+  }
+  return saveBlock(app, contactId, { byChar: cur.byChar });
 }
 
 /**
@@ -101,8 +114,15 @@ export function applyCharBlockAction(
     if (!cur.byChar) return { entry: cur, changed: false, reqCreated: false };
     return { entry: saveBlock(app, contactId, { ...cur, byChar: undefined }), changed: true, reqCreated: false };
   }
-  // request：必须当前真的被用户拉黑，且没有还没处理的申请（避免连环申请刷屏）
+  // request：必须当前真的被用户拉黑，且没有还没处理的申请（避免连环申请刷屏）；
+  // 被拒绝后有冷却窗口（冷却内静默忽略），拒绝次数达上限后彻底不再受理（新周期由用户重新拉黑开启）
   if (!cur.byUser || cur.reqReason) return { entry: cur, changed: false, reqCreated: false };
+  if (cur.rejectedAt && Date.now() - cur.rejectedAt < BLOCK_REQ_COOLDOWN_MS) {
+    return { entry: cur, changed: false, reqCreated: false };
+  }
+  if ((cur.reqCount ?? 0) >= BLOCK_REQ_MAX_REJECTED) {
+    return { entry: cur, changed: false, reqCreated: false };
+  }
   return {
     entry: saveBlock(app, contactId, { ...cur, reqReason: (reason ?? '').trim().slice(0, 80) || '想和你和好', reqAt: Date.now() }),
     changed: true,
@@ -110,16 +130,21 @@ export function applyCharBlockAction(
   };
 }
 
-/** 用户同意角色的解除申请：清除 byUser 与待处理申请（byChar 不受影响） */
+/** 用户同意角色的解除申请：清除 byUser 与待处理申请（byChar 不受影响）；防骚扰计数一并清零 */
 export function acceptBlockReq(app: BlockApp, contactId: string): BlockEntry {
   const cur = loadBlock(app, contactId);
-  return saveBlock(app, contactId, { ...cur, byUser: undefined, reqReason: undefined, reqAt: undefined });
+  return saveBlock(app, contactId, { byChar: cur.byChar });
 }
 
-/** 用户拒绝角色的解除申请：拉黑保持，记录拒绝时间（角色要知道被拒绝），清掉待处理申请 */
+/** 用户拒绝角色的解除申请：拉黑保持，记录拒绝时间与累计次数（角色要知道被拒绝），清掉待处理申请 */
 export function rejectBlockReq(app: BlockApp, contactId: string): BlockEntry {
   const cur = loadBlock(app, contactId);
-  return saveBlock(app, contactId, { ...cur, rejectedAt: Date.now(), reqReason: undefined, reqAt: undefined });
+  return saveBlock(app, contactId, {
+    byUser: true,
+    byChar: cur.byChar,
+    rejectedAt: Date.now(),
+    reqCount: (cur.reqCount ?? 0) + 1,
+  });
 }
 
 /** AI 拉黑类动作标记 → applyCharBlockAction 的动作种类 */
@@ -141,6 +166,9 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
   const ch = BLOCK_CHANNEL[app];
   const user = userName || '用户';
   const lines: string[] = [];
+  // 防骚扰状态：冷却中 / 次数达上限 → 明确告诉角色别再发申请（硬性拦截在 applyCharBlockAction 里）
+  const inCooldown = b.byUser && b.rejectedAt !== undefined && Date.now() - b.rejectedAt < BLOCK_REQ_COOLDOWN_MS;
+  const capped = b.byUser && (b.reqCount ?? 0) >= BLOCK_REQ_MAX_REJECTED;
   if (b.byUser) {
     lines.push(
       `【拉黑状态】${user} 已经在${ch}上把你拉黑了。`,
@@ -150,6 +178,8 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
       `- 申请还没结果时不要重复输出申请标记；`
     );
     if (b.rejectedAt) lines.push(`- 你上次申请解除拉黑被 ${user} 拒绝了。先按人设消化这件事（失落、赌气、反思都行），不要立刻再发申请。`);
+    if (inCooldown) lines.push(`- 你刚被拒绝不久，系统暂时不会再转达新的申请（冷却中），不要输出申请标记。`);
+    if (capped) lines.push(`- 你已经多次申请被拒绝，系统不会再转达新的申请，不要输出申请标记。`);
   }
   if (b.byChar) {
     lines.push(

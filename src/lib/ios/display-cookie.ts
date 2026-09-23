@@ -19,6 +19,8 @@ export interface DisplaySnapshot {
   lockWallpaper: string;
   /** 锁屏总开关（false=开机直接进主屏幕，不出锁屏） */
   lockScreen: boolean;
+  /** 用户时区（IANA 名，如 Asia/Shanghai；SSR 用它渲染时钟/日期，与服务端本机时区无关） */
+  tz?: string;
 }
 
 export const DISPLAY_COOKIE_NAME = 'ios-display';
@@ -41,7 +43,8 @@ function asSnapshot(v: unknown): DisplaySnapshot | null {
   if (typeof wallpaper !== 'string' || wallpaper.length === 0 || wallpaper.length > 64) return null;
   if (typeof lockWallpaper !== 'string' || lockWallpaper.length === 0 || lockWallpaper.length > 64) return null;
   if (typeof o.lockScreen !== 'boolean') return null;
-  return { theme, wallpaper, lockWallpaper, lockScreen: o.lockScreen };
+  const tz = typeof o.tz === 'string' && o.tz.length > 0 && o.tz.length <= 64 ? o.tz : undefined;
+  return { theme, wallpaper, lockWallpaper, lockScreen: o.lockScreen, tz };
 }
 
 /** 解析 cookie 头里的显示快照（无效/缺失 → null，调用方回退默认值） */

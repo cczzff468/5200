@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, seedDisplay, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useLightForeground } from '@/lib/ios/foreground';
+import { resolveWallpaperStyle } from '@/lib/ios/wallpaper-presets';
 import type { DisplaySnapshot } from '@/lib/ios/display-cookie';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
@@ -43,11 +44,24 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
   const theme = useSettings((s) => s.theme);
   const systemDark = useSystemDark();
   const load = useSettings((s) => s.load);
+  const storeLoaded = useSettings((s) => s.loaded);
   const switcherOpen = useUI((s) => s.switcherOpen);
-  const locked = useUI((s) => s.locked);
+  const storeLocked = useUI((s) => s.locked);
   const screenOff = useUI((s) => s.screenOff);
   const pressPower = useUI((s) => s.pressPower);
-  const wallpaperStyle = useWallpaperStyle();
+  const storeWallpaperStyle = useWallpaperStyle();
+  // 【SSR 首帧真值】zustand v5 的 selector 在 SSR/水合阶段读 store 创建时快照（setState 注水不可见），
+  // 所以 loaded 之前的壁纸/主题/锁屏开关/时区全部用 cookie 快照（initialDisplay）直通；
+  // load() 完成后切回 store（含自定义壁纸 Blob、真实密码配置等）。
+  // loaded 的 selector 语义恰好正确：SSR/水合阶段恒 false → 用 cookie；之后 store 为 true → 用 store。
+  const boot = storeLoaded ? null : initialDisplay;
+  const theme0 = boot?.theme ?? theme;
+  const locked = boot ? (boot.lockScreen && storeLocked) : storeLocked;
+  const bootWallpaperStyle = useMemo(
+    () => resolveWallpaperStyle(boot?.wallpaper ?? 'graphite', null),
+    [boot?.wallpaper]
+  );
+  const wallpaperStyle = boot ? bootWallpaperStyle : storeWallpaperStyle;
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
   const barLight = useLightForeground('bottom');
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -139,7 +153,7 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
     })();
   }, [load]);
 
-  const dark = selectResolvedTheme(theme, systemDark) === 'dark';
+  const dark = selectResolvedTheme(theme0, systemDark) === 'dark';
 
   // 开机门控已移除（防锁屏闪烁的最终修复）：过去「设置读出前渲染纯黑开机屏」，
   // 刷新时旧锁屏→一段纯黑→新锁屏，看起来就是锁屏闪一下。
@@ -184,8 +198,17 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
         {/* 多任务切换器（主屏幕或 App 内均可打开；锁定时被锁屏覆盖） */}
         <AppSwitcher />
 
-        {/* 锁屏（含密码验证 / 手电筒 / 锁屏直达相机；解锁时播放退场动画） */}
-        <AnimatePresence>{locked && <LockScreen key="lockscreen" />}</AnimatePresence>
+        {/* 锁屏（含密码验证 / 手电筒 / 锁屏直达相机；解锁时播放退场动画）
+            bootLockWallpaper：SSR/水合阶段 store selector 读不到注水值，壁纸用 cookie 快照直通 */}
+        <AnimatePresence>
+          {locked && (
+            <LockScreen
+              key="lockscreen"
+              bootTz={initialDisplay?.tz}
+              bootLockWallpaper={boot?.lockWallpaper}
+            />
+          )}
+        </AnimatePresence>
 
         {/* 熄屏遮罩（电源键熄屏；轻点或再按电源键唤醒到锁屏） */}
         {screenOff && (
@@ -197,8 +220,8 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
           />
         )}
 
-        {/* 状态栏 + 灵动岛 */}
-        <StatusBar />
+        {/* 状态栏 + 灵动岛（bootTz：SSR 首帧按用户时区渲染时间） */}
+        <StatusBar bootTz={initialDisplay?.tz} />
         <div
           className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
           aria-hidden="true"

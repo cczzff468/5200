@@ -1,12 +1,13 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Camera, CloudSun, Flashlight, FlashlightOff } from 'lucide-react';
 import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight } from '@/lib/ios/store';
+import { WALLPAPER_PRESETS, resolveWallpaperStyle } from '@/lib/ios/wallpaper-presets';
 import { formatLunarDate, formatSolarShort } from '@/lib/ios/lunar';
-import { formatIOSTime, useNow } from '@/lib/ios/clock';
+import { formatIOSTime, formatWeekShort, ssrWallClock, useNow } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
 import { weatherCodeInfo, useWeatherSnapshot } from '@/components/apps/weather-core';
 import PasscodePad from './PasscodePad';
@@ -14,8 +15,7 @@ import PasscodePad from './PasscodePad';
 // 锁屏直达相机：相机 App 懒加载（点开锁屏相机时才拉取，不拖累首屏）
 const CameraApp = dynamic(() => import('@/components/apps/camera'), { ssr: false });
 
-/** 周短格式（模块级缓存，避免每秒新建 Intl.DateTimeFormat） */
-const WEEK_FMT = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' });
+/** 周短格式：改用 clock.ts 的 formatWeekShort（支持 SSR 时区），模块级常量已移除 */
 
 /**
  * 锁屏（仿 iOS）：
@@ -24,7 +24,15 @@ const WEEK_FMT = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' });
  * - 手电筒（白屏补光模拟）与相机快捷入口（锁屏直达相机，不解锁，关闭相机回锁屏）；
  * - 密码验证失败抖动 + 提示，验证通过播放解锁退场动画（由 PhoneShell 的 AnimatePresence 播放）。
  */
-export default function LockScreen() {
+export default function LockScreen({
+  bootTz,
+  bootLockWallpaper,
+}: {
+  /** SSR 首帧时钟时区（cookie 直通；客户端注水后走 useNow 本机时钟，不用此值） */
+  bootTz?: string;
+  /** loaded 之前的锁屏壁纸预设（cookie 直通；store selector 在 SSR/水合阶段读不到注水值） */
+  bootLockWallpaper?: string;
+} = {}) {
   const lockConfig = useSettings((s) => s.lockConfig);
   const applyLockConfig = useSettings((s) => s.applyLockConfig);
   const profileName = useSettings((s) => s.profile.name).trim();
@@ -37,8 +45,22 @@ export default function LockScreen() {
 
   const now = useNow();
   const battery = useBattery();
-  // 锁屏壁纸（主题里可独立设置，未设置时跟随主屏幕）
-  const { style: wallpaperStyle, light: presetLight } = useLockWallpaper();
+  // SSR 首帧兜底：服务端拿不到 useNow（恒 null），过去时钟/日期在首帧 HTML 里是空的，
+  // JS 加载完才「凭空出现」——观感是锁屏缺内容闪一下。现在服务端用用户时区（cookie 直通）
+  // 直接渲染当前时间；客户端注水后 useNow 接管（suppressHydrationWarning 压制毫秒级偏差）。
+  const shown = now ?? ssrWallClock(bootTz);
+  // 锁屏壁纸（主题里可独立设置，未设置时跟随主屏幕）。
+  // loaded 之前用 bootLockWallpaper（cookie 直通）：store selector 在 SSR/水合阶段读创建时快照
+  const storeLw = useLockWallpaper();
+  const storeLoaded = useSettings((s) => s.loaded);
+  const bootLw = useMemo(() => {
+    const preset = WALLPAPER_PRESETS.find((w) => w.id === bootLockWallpaper);
+    return {
+      style: resolveWallpaperStyle(preset?.id ?? WALLPAPER_PRESETS[0].id, null),
+      light: preset?.light ?? false,
+    };
+  }, [bootLockWallpaper]);
+  const { style: wallpaperStyle, light: presetLight } = storeLoaded ? storeLw : bootLw;
 
   const [mode, setMode] = useState<'lock' | 'passcode' | 'resetNew' | 'resetConfirm'>('lock');
   const [errText, setErrText] = useState('');
@@ -75,8 +97,8 @@ export default function LockScreen() {
   /** 锁屏设备名：个人信息名字 + 的iPhone（名字来自设置-个人信息） */
   const deviceName = profileName ? `${profileName}的iPhone` : 'iPhone';
   // 日期行含农历换算：直接计算，React Compiler 会按真实依赖自动记忆化
-  const dateLine = now ? `${formatSolarShort(now)} · ${formatLunarDate(now)}` : '';
-  const weekShort = now ? WEEK_FMT.format(now) : '';
+  const dateLine = shown ? `${formatSolarShort(shown)} · ${formatLunarDate(shown)}` : '';
+  const weekShort = shown ? formatWeekShort(shown) : '';
 
   // ---------------- 上滑解锁手势 ----------------
 
@@ -234,14 +256,17 @@ export default function LockScreen() {
                   : 'transform 0.32s cubic-bezier(0.32,0.72,0,1), opacity 0.32s ease',
               }}
             >
-              {/* 日期 + 农历 + 大时钟 */}
+              {/* 日期 + 农历 + 大时钟（SSR 首帧即有内容；水合后由客户端时钟接管，suppressHydrationWarning 压制毫秒级偏差警告） */}
               <div className="flex flex-col items-center px-6 pt-[84px]">
-                {dateLine && <p className="text-center text-[17px] font-semibold tracking-wide opacity-95">{dateLine}</p>}
+                <p className="text-center text-[17px] font-semibold tracking-wide opacity-95" suppressHydrationWarning>
+                  {dateLine}
+                </p>
                 <p
                   className="mt-1 text-center text-[88px] font-semibold leading-[1.05] tracking-[-0.02em] tabular-nums"
                   style={lightText ? { textShadow: '0 2px 18px rgba(0,0,0,0.15)' } : undefined}
+                  suppressHydrationWarning
                 >
-                  {now ? formatIOSTime(now) : ''}
+                  {shown ? formatIOSTime(shown) : ''}
                 </p>
               </div>
 
@@ -278,10 +303,12 @@ export default function LockScreen() {
                   className="flex h-[64px] w-[64px] flex-col items-center justify-center gap-[3px] rounded-full bg-white shadow-[0_5px_14px_rgba(0,0,0,0.2)]"
                   aria-label="锁屏日期"
                 >
-                  <span className="text-[22px] font-semibold leading-none tabular-nums text-[#FF453A]">
-                    {now ? now.getDate() : '--'}
+                  <span className="text-[22px] font-semibold leading-none tabular-nums text-[#FF453A]" suppressHydrationWarning>
+                    {shown ? shown.getDate() : '--'}
                   </span>
-                  <span className="text-[11px] font-medium leading-none text-black/70">{weekShort || '周--'}</span>
+                  <span className="text-[11px] font-medium leading-none text-black/70" suppressHydrationWarning>
+                    {weekShort || '周--'}
+                  </span>
                 </div>
               </div>
 

@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { DISPLAY_COOKIE_NAME, parseDisplayCookie } from "@/lib/ios/display-cookie";
+import { bootBackColorOf } from "@/lib/ios/wallpaper-presets";
+import { cookies } from "next/headers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,13 +26,23 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // 首帧背板 = 壁纸底色（cookie 注水；无 cookie 回退默认锁屏壁纸石墨黑）：
+  // 浏览器解析到 <html> 的第一帧就是壁纸色，进网页/刷新不再出现「白底 → 深色锁屏」的闪变
+  const jar = await cookies();
+  const display = parseDisplayCookie(jar.get(DISPLAY_COOKIE_NAME)?.value);
+  const backColor = bootBackColorOf(
+    display?.wallpaper ?? 'graphite',
+    display?.lockWallpaper ?? 'graphite',
+    display?.lockScreen ?? true
+  );
+
   return (
-    <html lang="zh-CN" suppressHydrationWarning>
+    <html lang="zh-CN" suppressHydrationWarning style={{ backgroundColor: backColor }}>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

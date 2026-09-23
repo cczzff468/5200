@@ -6180,3 +6180,23 @@ Stage Summary:
 - 根因结论：锁屏闪烁 = 黑屏开机门控，非锁屏内部动画；本次与 ui-fix-0524 的内部动画修复互补，两层都已消除
 - 迁移路径：用户已有 IndexedDB 设置但无 cookie 的首次加载，首帧按默认快照渲染、load() 后换成本人设置并落 cookie，此后每次进入/刷新首帧即最终样子
 - 拉黑 5 项修正（ui-fix-0524）经核实均已实施且 E2E 通过，无遗留
+
+---
+Task ID: audit-block-full + lock-ssr-final
+Agent: Z.ai Code (main)
+Task: ①锁屏"还有问题"根治（SSR 首帧完整渲染）②双向拉黑九大项全项实测审计（每项给可复现步骤与实证）
+
+Work Log:
+- 锁屏根因再定位（录屏 15fps 逐帧 + 帧指纹）：黑屏门控已除，但 SSR 首帧锁屏是"半成品"——大时钟/日期/状态栏时间全空、小组件显示占位，JS 加载完才"凭空出现"（观感仍是闪烁）；且 html 背板白色 → 深色壁纸闪变
+- 修复三件套：①clock.ts 新增 ssrWallClock(tz)（服务端按用户时区取墙钟 Date，本机 getter 直读）+ formatIOSTime/formatWeekShort 改墙钟约定（避免 Intl 双重换算）②LockScreen/StatusBar SSR 直接渲染时钟/日期/星期/日期组件（suppressHydrationWarning 压水合偏差）③layout.tsx 读 cookie 把壁纸底色写进 <html> 内联背景（首帧前浏览器背板=壁纸色，无白闪）
+- 【关键发现】zustand v5 useStore 的 getServerSnapshot = selector(api.getInitialState())：SSR 与水合阶段所有 selector 读创建时快照，setState 注水对它们不可见（此前 cookie 注水方案对客户端组件实际无效，layout 直读才能生效）——page.tsx→PhoneShell initialDisplay prop 直通 + loaded 语义（SSR/水合恒 false→用 cookie，load 后 true→用 store）才是正确通路；wallpaper-presets.ts 抽成服务端安全模块（resolveWallpaperStyle/bootBackColorOf）
+- curl 实证（服务器 UTC、伪造 tz=Asia/Shanghai + silver 壁纸 cookie）：大时钟/状态栏=19:46（上海时间✓）、html 背景 #fafafc ✓、锁屏壁纸=银白渐变 ✓、锁屏关闭时 HTML 无锁屏 ✓、无 cookie 回退默认 ✓；浏览器录屏 99 帧无黑/白异常帧，首帧（水合前）即完整锁屏；console 水合错误 0
+- 拉黑审计中发现并修复回归：setUserBlock 重构时漏写 byUser:true（开关拉开后 kv 落空、图标不显示）——审计第一步即抓住，修复后全链路复测
+- 【新功能】防骚扰硬拦截（block-state.ts）：BLOCK_REQ_COOLDOWN_MS=10min（拒绝后冷却，窗口内 [申请解除拉黑] 静默忽略）+ BLOCK_REQ_MAX_REJECTED=3（当前拉黑周期被拒次数上限，达上限彻底不受理；用户解除拉黑/同意后重置，重新拉黑开新周期）；BlockEntry 增 reqCount；buildBlockPromptBlock 注入"冷却中/已达上限不要再发申请"提示；setUserBlock 已拉黑时重复开不重置计数（防用开关绕过）
+- E2E 实证矩阵（agent-browser 390×844 + mock:4100 脚本队列 + 请求日志断言）：九大项全部实测通过，详见审计报告（会话报告输出）；期间顺带实证：标记从会话列表预览剥除、红包编辑页在拉黑态正常（余额校验兜底）、撤回/引用在拉黑态正常、互拉双 system 块同时注入、互拉双图标同显
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常
+
+Stage Summary:
+- 改动文件：src/lib/ios/clock.ts（ssrWallClock/墙钟 formatIOSTime/formatWeekShort）、src/lib/ios/wallpaper-presets.ts（新建，服务端安全）、src/lib/ios/store.ts（tz 字段/seedDisplay 桥接/壁纸模块 re-export）、src/lib/ios/display-cookie.ts（tz 字段）、src/app/layout.tsx（html 背板色）、src/app/page.tsx（cookie 直通）、src/components/ios/PhoneShell.tsx（boot prop 分发/loaded 语义）、src/components/ios/LockScreen.tsx（SSR 时钟+boot 壁纸）、src/components/ios/StatusBar.tsx（SSR 时间）、src/lib/ios/block-state.ts（byUser 回归修复+冷却/上限/reqCount/提示注入）
+- 锁屏最终形态：进网页第一帧 = 用户真实壁纸底色 + 完整锁屏（时钟/日期/农历/星期全在），零黑屏零白屏零内容跳变；水合后原地接管无跳变
+- 拉黑审计结论：九大项全过；唯一缺口（拒绝后无冷却/无上限）已在本次补齐并实测；审计过程抓住一个本轮重构引入的 byUser 丢失回归并修复
