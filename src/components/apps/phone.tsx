@@ -43,7 +43,7 @@ import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
-import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import type { ContactRecord } from '@/lib/contacts';
@@ -679,6 +679,8 @@ function CallScreen({
             greeting: userText === null,
             history: historyBefore.map((m) => ({ role: m.role, content: m.text })),
             memoryBlock,
+            // 跨 App 身份感知：互通开关（有联系人才注入；陌生号码单场景无需多端感知）
+            multiApp: contact?.id ? getMemSettings(contact.id).share : undefined,
             // 社交动态块（前端按互通开关现场构建；服务端拼到人设+记忆之后）
             momentsBlock: momentsBlock || undefined,
             // 时间感知块（前端按联系人开关现场构建；服务端拼到人设+记忆之后）

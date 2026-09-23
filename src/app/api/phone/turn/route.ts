@@ -306,16 +306,19 @@ function unknownPersona(number: string): { name: string; persona: string } {
 /**
  * 组装通话场景 system prompt：七要素人设（名字/身份/性格/说话风格/背景/与用户的关系/禁止事项）
  * 由全 App 共用模块从联系人数据组装；这里只追加语音通话场景规则。
+ * multiApp：跨 App 身份感知（前端按每联系人互通开关传入；undefined=不注入）。
  */
 function buildCallSystemPrompt(
   peer: PersonaSource,
   greeting: boolean,
-  npcExtra?: { ownerLabel?: string; npcCircle?: InlineContact['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] }
+  npcExtra?: { ownerLabel?: string; npcCircle?: InlineContact['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
+  multiApp?: boolean
 ): string {
   const base = buildPersonaSystemPrompt(peer, {
     channel: '语音通话',
     userName: null,
     ...npcExtra,
+    multiApp,
     extraRules: [
       '这是实时语音通话：用第一人称口语化说话，像真人打电话；每次只说 1-2 句（通常不超过 20 个字），一次只说一件事；',
       '禁止任何表情符号、emoji、引号、括号、列表；只输出要说出口的话；',
@@ -376,12 +379,17 @@ export async function POST(req: NextRequest) {
       })();
   const peerName = peer.name;
 
-  const system = buildCallSystemPrompt(peer, greeting, {
-    ownerLabel: inline?.ownerLabel,
-    npcCircle: inline?.npcCircle,
-    ownerCard: inline?.ownerCard,
-    backgroundNotes: inline?.backgroundNotes,
-  });
+  const system = buildCallSystemPrompt(
+    peer,
+    greeting,
+    {
+      ownerLabel: inline?.ownerLabel,
+      npcCircle: inline?.npcCircle,
+      ownerCard: inline?.ownerCard,
+      backgroundNotes: inline?.backgroundNotes,
+    },
+    root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined
+  );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
   // 社交动态块：前端按互通开关现场构建的「最近朋友圈/QQ动态 + 相关互动」（动态与聊天记忆双向打通）

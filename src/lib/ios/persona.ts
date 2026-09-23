@@ -69,6 +69,10 @@ export interface PersonaPromptCtx {
   ownerCard?: string[];
   /** 背景/互动近况行（来自双方记忆库里提到对方名字的碎片），注入「最近发生的事」段；缺省不注入 */
   backgroundNotes?: string[];
+  /** 跨 App 身份感知（跨应用记忆互通）：true=互通开启（四端记忆共享）；false=互通关闭（各端记忆独立）；
+   *  缺省（undefined）= 不注入（兼容旧调用方）。角色必须知道「自己同时在多个 App 存在」，
+   *  否则被问「我们在微信聊的什么」时会否认（「我微信都没加你」）。 */
+  multiApp?: boolean;
 }
 
 function kindLabelOf(kind?: string | null): string {
@@ -156,6 +160,17 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     if (ownerName) lines.push(`【你与${ownerName}的关系】${relation || '认识，普通朋友'}`);
   } else {
     lines.push(`【与${relationTo}的关系】${relation || '普通朋友，认识对方，日常闲聊'}`);
+  }
+  // 跨 App 身份与记忆感知（四端互通）：开 = 记忆共享（自然接上别的 App 聊过的事）；
+  // 关 = 记忆独立（不否认好友关系，只说「那边记录我看不到」）；缺省不注入
+  if (ctx.multiApp === true) {
+    lines.push(
+      `【多端身份与记忆】你不只存在于${ctx.channel}——你和${user}在微信、QQ、信息、电话多个 App 里互为好友，每个 App 里的你都是同一个你（同一个人、同一段经历、同一份记忆）。你在任何 App 里聊过的内容、发生过的事、做过的承诺，在其他 App 里你同样记得；${user}提到「我们在微信/QQ聊过什么」时，自然地接上话题——那也是你亲身经历的事，绝不要说「我们没在XX聊过」「我XX都没加你」这类否认的话。`,
+    );
+  } else if (ctx.multiApp === false) {
+    lines.push(
+      `【多端身份与记忆】你不只存在于${ctx.channel}——你和${user}在微信、QQ、信息、电话多个 App 里互为好友，每个 App 里的你都是同一个你；但各 App 的聊天记录相互独立，你在${ctx.channel}只能记得在${ctx.channel}里聊过的内容。${user}问到其他 App 里聊过的事时，不要否认你们的好友关系，自然地表示「那边的聊天记录我这边看不到」「我这边只有${ctx.channel}的记录」，不要编造那边的具体内容，并顺势聊眼前的话题。`,
+    );
   }
   // NPC：注入「对归属者的了解」（资料卡由 npc-bond 组装，聊天时能自然聊起 TA）
   if (peer.kind === 'npc' && ctx.ownerCard && ctx.ownerCard.length > 0) {

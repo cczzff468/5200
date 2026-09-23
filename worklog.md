@@ -6154,3 +6154,29 @@ Stage Summary:
 - 视觉基线：所有聊天半透明圆角胶囊（时间/撤回/群通知/引用条/禁言横幅/sms 撤回）= 引用胶囊同款：rounded-[4px]、细黑边框（light black/25、dark white/25）、bg-white/75（dark white/[0.13]）、py-1 紧凑
 - 开机体验基线：黑屏门控（含壁纸预载）→ 锁屏一次性完整呈现；重新锁屏同样即刻完整，无任何闪烁
 - 已知边界：完全离线且无缓存时开机门控最多多等 1.5s（超时放行，锁屏铺底色）
+---
+Task ID: 1
+Agent: main (Z.ai Code)
+Task: 胶囊及字号调小 + 跨 App 记忆互通修复（QQ/微信双端验证）
+
+Work Log:
+- 排查确认：微信/QQ/信息/电话共用同一份本地联系人（contacts IndexedDB，friendWx/friendQq 独立标记），同一角色跨 App 同一个 contactId——记忆互通的存储与召回过滤逻辑本身无 bug；根因在「角色人设完全不感知自己多端存在」（system 首句「你现在是xxQQ里的联系人」强烈暗示单端身份），模型被问「我们在微信聊的什么」时自然否认（「我微信都没加你」）；且互通关闭时角色也不知道自己只看得到本 App 记忆
+- persona.ts：PersonaPromptCtx 新增 multiApp?: boolean（true=互通开注入【多端身份与记忆】共享版；false=互通关注入独立版：不否认好友关系+「那边记录我看不到」话术；undefined=不注入兼容旧调用）；插入位置=关系段之后、NPC 资料卡之前（确认 NpcPromptExtra 展开无 multiApp 键不覆盖）
+- memory.ts memRecallBlockInner：注入块头部按 isGroupMode/share 三分支文案——私聊+互通开=「跨应用记忆库：你在微信/QQ/信息/电话都和TA聊过，带App标注的记忆可能来自任何一端，都是你亲身经历的事」；私聊+互通关=「仅本App记忆（跨应用互通已关闭）：你在其他App和TA聊过的内容这里看不到」；群聊模式保持原样
+- 调用方全接：wechat.tsx/qq.tsx buildPersonaPrompt 加 multiApp: getMemSettings(peer.id).share（发送时现场读）；chat.tsx（短信）buildPersonaPrompt 加第 3 参 multiApp（openContactChat 打开会话时读 getMemSettings(c.id).share）；phone.tsx fetch /api/phone/turn body 加 multiApp（有联系人才传）+ route.ts buildCallSystemPrompt 加参透传（严格 boolean 解析）；wx-group.tsx/qq-group.tsx 群聊 buildPersonaSystemPrompt 同传（群聊同样告知多端身份）；6 文件 import 补 getMemSettings
+- 胶囊调小（「胶囊和里面的字都有点大」）：微信系 15 处（时间分隔/撤回行/引用块 13px→12px、px-2.5 py-1→px-2 py-[3px]；引用输入条+禁言横幅 px-2.5 py-1.5→px-2 py-1）+ sms chat.tsx 2 处（12.5px→12px 同款 padding 收紧）；sms 引用条/qq-group 引用条禁言横幅（边框条式非胶囊）按既定基线不动
+- E2E（agent-browser 390×844 + mock LLM :4100 SSE+CORS + IndexedDB 种 林川(user linchuan001/qqId 10001 密码123456)/榴莲(char friendWx+friendQq) + 明文 apiConfig→mock）：
+  ①微信登录→榴莲发消息→mock 捕获 system：含【多端身份与记忆】共享版（「你不只存在于微信……绝不要说我XX都没加你」）✓
+  ②QQ 登录（协议勾选）→榴莲发消息→system：QQ 渠道首句 +【多端身份与记忆】QQ 变体 ✓
+  ③互通开（share:true 种 wx 来源碎片「约好周六吃火锅」）→ QQ 问「周六我们吃什么」→ mock 捕获 system 含「（9月23日 07:37·微信）林川和榴莲约好这周六一起去吃火锅」+ 头部「跨应用记忆库：你在微信/QQ/信息/电话都和TA聊过…」✓——QQ 里的榴莲能接上微信聊的事
+  ④互通关（share:false）+ 仅 wx 碎片 → QQ system 无火锅记忆、persona=独立版（「各 App 的聊天记录相互独立…自然地表示那边的聊天记录我这边看不到」）✓
+  ⑤互通关 + QQ 来源碎片 → QQ system 含「（08:08·QQ）脱口秀」记忆 + 头部「仅本App记忆（跨应用互通已关闭）」、不含微信碎片 ✓
+  ⑥胶囊 computed style（微信会话页）：fontSize 12px / padding 3px·8px / radius 4px / border 1px black/25 ✓（引用样式基准不变，仅整体缩小）
+  ⑦恢复 share:true、清全部种子（IndexedDB+localStorage）、杀 mock；console 零错误零警告
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 仅既有 /api/chat 502 直连兜底噪音（测试前期 apiConfig 未生效的预期现象）
+
+Stage Summary:
+- 改动文件：src/lib/ios/persona.ts（multiApp 注入）、src/lib/memory.ts（召回头部三分支）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx / phone.tsx / wx-group.tsx / qq-group.tsx（multiApp 接线 + 胶囊缩小）、src/app/api/phone/turn/route.ts（multiApp 透传）
+- 互通行为基线：同一角色四端同体；互通开=记忆共享且角色被明确告知「别端聊过的事你亲身记得，绝不能否认」；互通关=各端记忆独立且角色知道「本App只有本App的记录」，回答口径为「我这边只有QQ的记录」而非「我微信都没加你」
+- 视觉基线：全部引用样式胶囊（时间/撤回/引用块/引用条/禁言横幅）= 12px 字号 + px-2 py-[3px]（条式 py-1），4px 圆角细边框不变
+- 已知边界：互通开但记忆尚未提取（默认每 20 轮才自动提取）时角色仍可自然应对（persona 已告知多端好友关系）；群聊模式的召回头部保持原文案（群来源标注独立体系）

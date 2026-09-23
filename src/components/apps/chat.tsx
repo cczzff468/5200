@@ -44,7 +44,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
-import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatTranslatePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
@@ -141,11 +141,13 @@ function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
 
 /** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
  *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装 */
-function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, npcExtra?: NpcPromptExtra | null): string {
+function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null): string {
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
     userName: null,
     ownerName,
+    // 跨 App 身份感知：互通开关（打开会话时现场读取）
+    multiApp,
     ...npcExtra,
   });
 }
@@ -990,7 +992,7 @@ function ChatView({
               {m.recalled ? (
                 /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
                 <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
-                  <span className="rounded-[4px] border border-black/25 bg-black/[0.06] px-2.5 py-1 text-[12.5px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60">
+                  <span className="rounded-[4px] border border-black/25 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60">
                     {mine ? '你撤回一条消息' : '对方撤回一条消息'}
                   </span>
                 </div>
@@ -1018,7 +1020,7 @@ function ChatView({
                   {m.quote && (
                     <div
                       data-testid="sms-quote-block"
-                      className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-black/[0.06] px-2.5 py-1 text-[12.5px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60"
+                      className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60"
                     >
                       <p className="line-clamp-2 whitespace-pre-wrap break-all">
                         {m.quote.name}：{m.quote.content}
@@ -2004,7 +2006,7 @@ export default function ChatApp() {
     setChatSession({
       key: `c:${c.id}`,
       peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name, remark: c.remark ?? '' },
-      systemPrompt: buildPersonaPrompt(c, owner?.name ?? null, buildNpcPromptExtra(c, contacts)),
+      systemPrompt: buildPersonaPrompt(c, owner?.name ?? null, getMemSettings(c.id).share, buildNpcPromptExtra(c, contacts)),
     });
     setView('chat');
   };

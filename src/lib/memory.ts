@@ -657,8 +657,15 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   keepLongs.sort((a, b) => memEffectiveTime(b.m) - memEffectiveTime(a.m));
   keepCores.sort((a, b) => memEffectiveTime(b.m) - memEffectiveTime(a.m));
   keepFrags.sort((a, b) => memEffectiveTime(b.f) - memEffectiveTime(a.f));
+  // 头部说明按互通状态分文案（跨 App 互通修复）：角色必须被告知「多端同一个人」以及
+  // 本次能看到哪些来源的记忆——否则带「·微信」标注的碎片会被当成无关信息，甚至否认在别处的对话
+  const headScope = isGroupMode
+    ? '记忆库自动整理'
+    : share
+      ? '跨应用记忆库：你在微信/QQ/信息/电话都和TA聊过，下面带App标注的记忆可能来自任何一端，都是你亲身经历的事'
+      : '仅本App记忆（跨应用互通已关闭）：你在其他App和TA聊过的内容这里看不到';
   const lines: string[] = [
-    `【关于对方的记忆（跨应用记忆库自动整理；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
+    `【关于对方的记忆（${headScope}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
     '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
   ];
   if (keepLongs.length > 0) {

@@ -147,7 +147,7 @@ import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
-import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
 import {
   addUserMomentComment,
   addUserMomentPost,
@@ -879,6 +879,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
     channel: 'QQ',
     userName: me.name,
     ownerName,
+    // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取）
+    multiApp: getMemSettings(peer.id).share,
     ...npcExtra,
     extraRules: [
       '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
@@ -3166,13 +3168,13 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
+                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
                 <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -3429,7 +3431,7 @@ function ChatPage({
         {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
         {quote && (
           <div className="px-3 pb-1 pt-2" data-testid="qq-quote-bar">
-            <div className="flex items-start gap-2 rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1.5 dark:border-white/25 dark:bg-white/[0.13]">
+            <div className="flex items-start gap-2 rounded-[4px] border border-black/25 bg-white/75 px-2 py-1 dark:border-white/25 dark:bg-white/[0.13]">
               <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-black/55 dark:text-white/55">
                 引用 {quote.name}：{quote.content}
               </p>

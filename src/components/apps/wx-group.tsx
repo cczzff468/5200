@@ -143,7 +143,7 @@ import {
 } from './wechat';
 import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, loadFamilyCardsIn } from './wechat-wallet';
 import { wxUnreads } from '@/lib/unread-store';
-import { memAfterAiTurn, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { useSettings } from '@/lib/ios/store';
@@ -2585,6 +2585,8 @@ export function WxGroupChatPage({
           channel: '微信',
           userName: meName,
           ownerName: ownerLabelOf(char),
+          // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取；群聊同样告知多端身份）
+          multiApp: getMemSettings(char.id).share,
           ...npcExtra,
           extraRules: groupRules,
         });
@@ -3581,7 +3583,7 @@ export function WxGroupChatPage({
           {m.quote && m.kind !== 'forward' && (
             <div
               data-testid="wx-grp-quote-block"
-              className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+              className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -3671,13 +3673,13 @@ export function WxGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -3702,12 +3704,12 @@ export function WxGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
@@ -3954,7 +3956,7 @@ export function WxGroupChatPage({
         {/* 六.5 禁言横幅：我被禁言时输入区上方提示（当前权限体系下机主通常为群主，此处为防御性支持） */}
         {meMuted && (
           <div className="px-2.5 pt-2" data-testid="wx-group-me-muted">
-            <div className="flex items-center justify-center gap-1.5 rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1.5 text-[12px] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/50">
+            <div className="flex items-center justify-center gap-1.5 rounded-[4px] border border-black/25 bg-white/75 px-2 py-1 text-[12px] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/50">
               <MicOff className="h-3.5 w-3.5" />
               你已被禁言（{meMuteLeft ?? '永久'}），暂时无法发言
             </div>
@@ -3962,7 +3964,7 @@ export function WxGroupChatPage({
         )}
         {quote && (
           <div className="px-2.5 pt-2" data-testid="wx-group-quote-bar">
-            <div className="flex items-start gap-2 rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1.5 dark:border-white/25 dark:bg-white/[0.13]">
+            <div className="flex items-start gap-2 rounded-[4px] border border-black/25 bg-white/75 px-2 py-1 dark:border-white/25 dark:bg-white/[0.13]">
               <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-black/55 dark:text-white/55">
                 引用 {quote.name}：{quote.content}
               </p>
