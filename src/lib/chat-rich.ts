@@ -81,12 +81,47 @@ export type RichActionKind =
   | 'return-transfer'
   | 'reject-transfer'
   | 'claim-family'
-  | 'reject-family';
+  | 'reject-family'
+  // 群管理动作（AI 是群主/管理员；targetId = 成员名字或新群名/公告内容，arg = 禁言时长文本）
+  | 'mute-member'
+  | 'unmute-member'
+  | 'kick-member'
+  | 'rename-group'
+  | 'announce-group'
+  // 退群挽留动作（用户退群后的私聊里，群主/管理员把人拉回来）
+  | 'reinvite-user'
+  | 'grant-admin'
+  | 'grant-owner'
+  | 'abandon-invite';
 
 export interface RichAction {
   kind: RichActionKind;
-  /** 目标卡片 ID（用户发卡时生成的短 ID，如 rp-x7k2；兼容直接用消息 id 匹配） */
+  /** 目标卡片 ID（用户发卡时生成的短 ID，如 rp-x7k2；兼容直接用消息 id 匹配）。
+   *  管理动作 = 目标成员名字 / 新群名 / 公告内容；无参动作（拉回群聊等）为空串。 */
   targetId: string;
+  /** 禁言时长文本（mute-member 专用，如「1 小时」「永久」；空 = 调用方兑底） */
+  arg?: string;
+}
+
+/** 群管理动作（群聊页执行器负责权限校验与落盘） */
+export function isGroupAdminAction(action: RichAction): boolean {
+  return (
+    action.kind === 'mute-member' ||
+    action.kind === 'unmute-member' ||
+    action.kind === 'kick-member' ||
+    action.kind === 'rename-group' ||
+    action.kind === 'announce-group'
+  );
+}
+
+/** 退群挽留动作（私聊侧 quit-flow 执行器负责） */
+export function isQuitWinbackAction(action: RichAction): boolean {
+  return (
+    action.kind === 'reinvite-user' ||
+    action.kind === 'grant-admin' ||
+    action.kind === 'grant-owner' ||
+    action.kind === 'abandon-invite'
+  );
 }
 
 const ACTION_LABELS: Record<string, RichActionKind> = {
@@ -98,11 +133,29 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   拒收转账: 'reject-transfer',
   收下亲属卡: 'claim-family',
   拒收亲属卡: 'reject-family',
+  // 群管理动作（含常见变体写法）
+  禁言: 'mute-member',
+  解禁: 'unmute-member',
+  取消禁言: 'unmute-member',
+  移出群聊: 'kick-member',
+  踢出群聊: 'kick-member',
+  移出: 'kick-member',
+  踢出: 'kick-member',
+  改群名: 'rename-group',
+  修改群名: 'rename-group',
+  改公告: 'announce-group',
+  修改公告: 'announce-group',
+  更新公告: 'announce-group',
+  // 退群挽留动作
+  拉回群聊: 'reinvite-user',
+  设为管理员: 'grant-admin',
+  转让群主: 'grant-owner',
+  放弃邀请: 'abandon-invite',
 };
 
-const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：]([^\][]*))?\]/g;
+const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
-export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
+export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
 
 /** 回复按出现顺序切开的片段：普通文字块 或 处理动作（两者交错，保持流式输出顺序） */
 export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; action: RichAction };
@@ -120,9 +173,24 @@ export function extractRichActionParts(text: string): RichActionPart[] {
   for (const m of text.matchAll(ACTION_RE)) {
     const before = text.slice(last, m.index);
     if (before.trim()) parts.push({ type: 'text', text: before });
-    const targetId = (m[2] ?? '').split(/[:：]/)[0].trim();
-    // 第三段及以后（旧版感谢语/理由）直接丢弃：回应内容由 AI 人设正文承担
-    if (targetId) parts.push({ type: 'action', action: { kind: ACTION_LABELS[m[1]], targetId } });
+    const raw = (m[2] ?? '').trim();
+    const kind = ACTION_LABELS[m[1]];
+    if (kind === 'mute-member') {
+      // [禁言:成员:时长]：名字取第一段，时长取剩余整段（兼容写法丢时长由执行器兑底）
+      const segs = raw.split(/[:：]/);
+      const name = (segs[0] ?? '').trim();
+      if (name) parts.push({ type: 'action', action: { kind, targetId: name, arg: segs.slice(1).join(':').trim() || undefined } });
+    } else if (kind === 'unmute-member' || kind === 'kick-member' || kind === 'rename-group' || kind === 'announce-group') {
+      // [解禁/移出群聊/改群名/改公告:内容]：内容整段保留（公告/群名里可能出现冒号）
+      if (raw) parts.push({ type: 'action', action: { kind, targetId: raw } });
+    } else if (kind === 'reinvite-user' || kind === 'grant-admin' || kind === 'grant-owner' || kind === 'abandon-invite') {
+      // 无参动作（AI 手滑在标记里写了说明文字也容忍：执行器不读 targetId）
+      parts.push({ type: 'action', action: { kind, targetId: raw } });
+    } else {
+      // 卡片处理动作：targetId 取第一段；第三段及以后（旧版感谢语/理由）直接丢弃：回应内容由 AI 人设正文承担
+      const targetId = raw.split(/[:：]/)[0].trim();
+      if (targetId) parts.push({ type: 'action', action: { kind, targetId } });
+    }
     last = m.index + m[0].length;
   }
   const tail = text.slice(last).replace(ACTION_TAIL_RE, '');
@@ -143,8 +211,8 @@ export function actionVerb(kind: RichActionKind): 'claim' | 'return' | 'reject' 
 
 /** 完整标记（中英文冒号兼容；内容里不允许出现「]」） */
 const RICH_RE = /\[(红包|转账|亲属卡|位置|表情包)(?:[:：]([^\][]*))?\]/g;
-/** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体与处理动作标记） */
-const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
+/** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体、处理动作、群管理与挽留标记） */
+const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
 /**
  * AI 仿写用户记录格式的表情标记变体（聊天历史里用户表情以「[发送了表情：意思]」进入上下文，
  * AI 经常照葫芦画瓢输出同款格式，或把意思当 ID 写成 [表情:XX]）——这些变体在普通文字段里

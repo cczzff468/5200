@@ -99,10 +99,12 @@ import {
   mergeRichSegments,
   parseRichParts,
   prettifyRichText,
+  isQuitWinbackAction,
   type PendingCardInfo,
   type RichAction,
   type RichMsg,
 } from '@/lib/chat-rich';
+import { activeQuitFlowFor, applyQuitWinbackAction } from '@/lib/ios/quit-flow';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -3671,6 +3673,9 @@ function ChatPage({
     const stickersOn = getStickersOn(sessionKey);
     const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
     const actionRules = buildActionRules(wxCollectPendingCards(base));
+    // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
+    // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
+    const quitCtx = activeQuitFlowFor(peer.id);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
@@ -3704,6 +3709,7 @@ function ChatPage({
       memoryBlock,
       momentsBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      quitCtx?.section ?? '',
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -3759,6 +3765,12 @@ function ChatPage({
         let idx = 0;
         for (const part of parts) {
           if (part.type === 'action') {
+            // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
+            //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
+            if (isQuitWinbackAction(part.action)) {
+              applyQuitWinbackAction(peer.id, part.action);
+              continue;
+            }
             const applied = wxApplyAiActions([part.action], cur, peer, t);
             cur = applied.msgs;
             all.push(...applied.notices, ...applied.extras);
@@ -6803,6 +6815,12 @@ function MainScreen({
   const [groupPage, setGroupPage] = useState<null | 'create' | 'list'>(null);
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const refreshGroups = useCallback(() => setWxGroups(listGroups('wx')), []);
+  // 退群挽留：AI 把机主拉回群后（quit-flow 恢复群记录并广播事件）立即刷新群列表，恢复的群回到会话列表
+  useEffect(() => {
+    const fn = () => refreshGroups();
+    window.addEventListener('quit-flow:group-restored', fn);
+    return () => window.removeEventListener('quit-flow:group-restored', fn);
+  }, [refreshGroups]);
   /** 详情页（联系人详细界面）：从聊天设置信息卡片 / 通讯录进入；返回与朋友圈回退链见渲染分支 */
   const [detail, setDetail] = useState<ContactRecord | null>(null);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */

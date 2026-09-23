@@ -181,10 +181,12 @@ import {
   mergeRichSegments,
   parseRichParts,
   prettifyRichText,
+  isQuitWinbackAction,
   type PendingCardInfo,
   type RichAction,
   type RichMsg,
 } from '@/lib/chat-rich';
+import { activeQuitFlowFor, applyQuitWinbackAction } from '@/lib/ios/quit-flow';
 import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
@@ -2412,6 +2414,9 @@ function ChatPage({
     const stickersOn = getStickersOn(sessionKey);
     const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
     const actionRules = buildActionRules(collectPendingCards(base));
+    // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
+    // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
+    const quitCtx = activeQuitFlowFor(peer.id);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入；
     // 图片消息以 [图片] 占位（防止 dataURL 大字符串进入记忆提取）
@@ -2447,6 +2452,7 @@ function ChatPage({
       memoryBlock,
       momentsBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      quitCtx?.section ?? '',
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -2504,6 +2510,12 @@ function ChatPage({
         let idx = 0;
         for (const part of parts) {
           if (part.type === 'action') {
+            // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
+            //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
+            if (isQuitWinbackAction(part.action)) {
+              applyQuitWinbackAction(peer.id, part.action);
+              continue;
+            }
             const applied = applyAiActions([part.action], cur, peer, t);
             cur = applied.msgs;
             all.push(...applied.notices, ...applied.extras);
@@ -6043,7 +6055,17 @@ function MessagesPage({
     time: number;
   }
   // QQ 群聊（与私聊同列表展示但各自独立会话；tab 切换重挂载时现场读取即最新）
-  const chatGroups = useMemo(() => listChatGroups('qq'), []);
+  // 退群挽留：AI 把机主拉回群后（quit-flow 广播恢复事件）立刻重读群池，恢复的群即时回到列表
+  const [groupsTick, setGroupsTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setGroupsTick((v) => v + 1);
+    window.addEventListener('quit-flow:group-restored', fn);
+    return () => window.removeEventListener('quit-flow:group-restored', fn);
+  }, []);
+  const chatGroups = useMemo(() => {
+    void groupsTick;
+    return listChatGroups('qq');
+  }, [groupsTick]);
   /** 全量会话（未套搜索过滤）：幽灵未读清理必须以全量列表为准，否则搜索时会把列表外会话的未读误删 */
   const baseConversations = useMemo<SessionRow[]>(() => {
     const rows: SessionRow[] = contacts

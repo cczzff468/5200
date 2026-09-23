@@ -6233,3 +6233,37 @@ Stage Summary:
 - 默认 10 条（用户可调 10/20/30/40/50，设置页标明「消息条数」口径）；手动「立即总结」随时可用不受计数影响
 - 改动文件：src/lib/memory.ts、src/lib/memory-core.ts、src/lib/ios/idb-kv.ts、src/lib/ios/groups.ts、src/components/apps/{chat,wechat,qq,phone,qq-group,wx-group,memory-bank}.tsx
 - 兼容性：旧 mem-round 键废弃不迁移；旧设置档 3/5 自动回退 10；记忆分层（碎片→核心→长期）、召回互通过滤、角色隔离、单聊/群聊、去重合并全部未动
+
+---
+Task ID: group-admin-quitflow
+Agent: main (Z.ai Code)
+Task: 群聊 AI 管理员权限 + 用户退群后的 AI 主动行为（私信/拉回群/授身份）
+
+Work Log:
+- 标记层（src/lib/chat-rich.ts）：RichActionKind 扩展 9 种——群管理 5 种（mute-member/unmute-member/kick-member/rename-group/announce-group，含 禁言/解禁/取消禁言/移出群聊/踢出群聊/改群名/修改群名/改公告/修改公告/更新公告 别名）+ 退群挽留 4 种（reinvite-user/grant-admin/grant-owner/abandon-invite）；ACTION_RE/ACTION_TAIL_RE/OPEN_TAIL_RE 同步扩展（半截标记流式截断+切分合并照常）；extractRichActionParts 按类型取参：[禁言:名:时长] 拆名字+时长、解禁/踢/改群名/改公告整段保留（内容可含冒号）、拉回群聊等无参动作容忍尾部说明；新增 isGroupAdminAction/isQuitWinbackAction 分流谓词；prettifyRichText 流式期隐藏全部新标记
+- 权限模块（src/lib/ios/group-admin.ts，新建）：groupRoleLabel；canModerateTarget（群主管除自己外所有人/管理员只管普通成员/成员无权限，对自己动手一律拒绝）；canEditGroupInfo（群主+管理员可改名改公告）；parseMuteDuration（10分钟/1小时/3小时/1天/永久/X小时Y分钟/纯数字按分钟，兜底 10 分钟、封顶 30 天）；buildGroupAdminRules——普通成员返回空（无权限不注入不教标记），群主/管理员注入【你的群管理权限】（标记语法+权限边界）+【管理分寸】（分寸感交给性格：严厉角色果断出手、随和角色几乎不动用）+【当前禁言中】动态名单（谁被禁+剩余时长，解禁标记才有的放矢）
+- 群数据层（src/lib/ios/groups.ts）：onGroupQuit 钩子（quitGroup 删除前先调钩子传群对象+全量消息，单个钩子异常不阻塞退群）；restoreQuitGroup(g,msgs,{joinName})——拉回群时同 id 原样写回群池（成员/身份/禁言/公告全保留，机主恒为成员无需改表）+恢复最近群消息（历史不断档）+落「XX加入了群聊」join 事件；解散群不触发挽留（群对所有人都没了）
+- 退群挽留模块（src/lib/ios/quit-flow.ts，新建）：QuitFlowState{gid/app/groupName/quitAt/snapshot/recentMsgs(40)/dm/winback} 存 kv（quit-flow:<gid> + index，重启不丢）；captureQuitSnapshot 覆盖式快照（再退群=新一轮，配额重置）；ensureQuitHook 幂等注册；调度 runQuitFlowTick（QuitFlowScheduler 每 5s）——fireAt=退群后 20~50s（保证 1 分钟窗口内）到点发主动私信，宽限窗 10 分钟（页面关过错过则放弃）、最多重试 8 次（流被占用/请求失败下一 tick 再试）、机主已先私聊过该成员则不再补发；候选=群主 AI→管理员→普通成员中第一个「在该 App 互为好友」者，选定后固定；私信经 beginChatStream 全局总线（persona+【群聊近况】快照事件+最近对话+记忆召回+【刚刚发生的事】指令），[SKIP]=人设拒绝不发，错误/空回复不落盘只重试；落盘 persistPrivateAiMsg 与各 App saveMsgs 同口径（wx 100 条封顶+恢复被删会话、qq 200 条）+未读 bump；每次退群最多 1 条私信+1 次邀请（状态机硬保证，AI 再输出标记也被吞）；activeQuitFlowFor 给私聊注入退群背景（未拉回=完整背景+事件+对话+[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]说明+邀请过提示；已拉回=精简【群务】段只留授身份能力，保留至 24h TTL 供后续授权）；applyQuitWinbackAction 执行：拉回=先 bump 群未读再 restoreQuitGroup 再广播 quit-flow:group-restored 事件（restoreInFlight 串行化——同回复后续 [设为管理员] 等恢复落定再执行，修掉 getGroup 竞态）；授身份走 setGroupAdmin/transferGroupOwner（数据层自动落系统消息，幂等不重复发事件）；放弃=refused 后彻底不再注入不纠缠
+- 调度器（src/components/ios/QuitFlowScheduler.tsx，新建）：仿 MomentsScheduler（5s tick+busy/alive+联系人 60s 缓存），挂 PhoneShell（dynamic ssr:false，App 不打开也生效）
+- 群组件（qq-group.tsx / wx-group.tsx 同构接线）：runCharTurn groupRules 注入 buildGroupAdminRules（管理标记教学+动态禁言名单）；新增 applyGroupAdminAction 执行器（getGroup 现场读+硬权限校验+名字精确/包含逐级解析含机主+数据层落盘+onUpdate({}) 刷新宿主群对象）；finalize 动作分流 isGroupAdminAction→applyGroupAdminAction / 其余→applyGroupAiAction
+- 私聊管线（wechat.tsx / qq.tsx 同构接线）：runAiTurn 注入 activeQuitFlowFor(peer.id)?.section 进 systemFull（退群背景/群务段）；finalize 动作分流 isQuitWinbackAction→applyQuitWinbackAction / 其余→红包转账动作；wechat 根组件监听 quit-flow:group-restored→refreshGroups；qq MessagesPage 监听→groupsTick 重读群池——恢复的群即时回列表，先 bump 后刷新的顺序保证幽灵未读清理不误删
+- E2E 浏览器实测（agent-browser 390×844 + mock LLM :4100 SSE/CORS/请求日志 + 队列脚本化回复 + IndexedDB 种子 林川(user)/榴莲(char 群主)/红红(char) + 群「周末爬山群」ownerId=AI）：
+  ①A1 禁言：指令→榴莲回 [禁言:红红:10分钟] 安静，别刷屏了→mutes.c-honghong=+10min 落盘+系统消息「红红被禁言10 分钟」✓
+  ②A5 解禁：→mutes 清空+「红红被解除禁言」✓
+  ③A4 越权：成员红红被脚本化输出 [禁言:榴莲:1 小时]→执行器丢弃（成员无权限），mutes 空、无事件✓
+  ④A2 改群名：→群名「周末欢乐群」+「群名被修改为「周末欢乐群」」+顶栏(3)实时变(2)验证在前✓
+  ⑤A3 踢人：→memberIds 只剩榴莲+「红红被移出群聊」✓
+  ⑥提示词：榴莲 system 含【你的群管理权限】你是这个群的群主+【当前禁言中】红红（剩 8 分钟）；红红 system 无管理段（grep 计数 1）✓
+  ⑦B1 退群：群信息页退出→快照（index/成员/27 条近况）落 kv、群本机删除✓
+  ⑧B2 主动私信：约 30s 到达「咋突然退群了？嫌我管得严啊？」（1 分钟窗口内）+未读 c-liulian:1+只发一条；第二轮退群私信 prompt 实测含【群聊近况】全部事件（禁言/解禁/改名/踢人/加入）+最近对话（第一版漏注入已补）✓
+  ⑨B3 拉回群：私信回复→[拉回群聊]→群原样恢复+历史保留+「林川加入了群聊」+标记从气泡剥离✓
+  ⑩B4 授身份：[设为管理员]→adminIds=['me'] 持久化+「林川成为管理员」（同回复双标记的恢复竞态已修：restoreInFlight 串行化；resolved 状态保留至 TTL 使后续授权可达，实测补发一击即中）✓
+  ⑪B5 拒绝：第三轮退群→私信→回复「不回去了，别拉我了」→[放弃邀请]→群未被恢复+refused 后状态被 tick 清理、不再注入不再纠缠✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过；dev.log 无运行时错误（POST /api/chat 502=内网地址 directOnly 预期行为，浏览器直连 mock 正常；POST /api/memory/extract 200=消息计数自然触发提取、与本次改动无冲突）；测试环境已清理（浏览器关闭、mock 杀掉、.e2e 与 /tmp 临时产物删除）
+
+Stage Summary:
+- 需求一（AI 管理员权限）基线：AI 群主/管理员在群聊里用 5 种管理标记行使权限，系统执行+居中灰字系统消息+随群持久化（重启保留），分寸感由人设驱动（提示词明示严厉管得严/随和不用），硬校验兜底（不能越权、不能对自己/群主动手，越权标记静默丢弃）；普通成员不注入规则自然不会输出
+- 需求二三（退群后主动行为）基线：退群→20~50s 内最合适的一员按人设+群聊近况+记忆主动私信（每退群最多 1 条，[SKIP] 可不发，机主先开口则不补发）；用户回复→私聊注入退群背景，AI 按人设可 [拉回群聊]（每退群最多 1 次）+ [设为管理员]/[转让群主]（仅群主、需先回群）；用户明确拒绝 [放弃邀请]→24h 内彻底沉默；拉回=群原样恢复（历史/身份/公告全保留）+join 事件+列表即时可见+未读红点
+- 需求四五基线：全部系统消息沿用 groups.ts 事件层（加入/退出/禁言/解禁/移出/改名/公告/管理员/群主）；群内事件经【群内事件】注入让成员感知；私信参考快照里的群事件+对话+记忆
+- 改动文件：src/lib/chat-rich.ts、src/lib/ios/{group-admin,quit-flow,groups}.ts（新建 2 个）、src/components/ios/{QuitFlowScheduler.tsx(新建),PhoneShell.tsx}、src/components/apps/{qq-group,wx-group,wechat,qq}.tsx
+- 已知边界：QQ 端接线与微信同构（tsc 验证，未单独跑 QQ 界面 E2E）；授身份需在拉回后 24h 内（TTL 后快照清理，AI 不再提退群话题）；主动私信依赖 QuitFlowScheduler 存活（页面关闭超过 10 分钟宽限窗则该次私信放弃，退群背景仍在用户下次私聊时注入）

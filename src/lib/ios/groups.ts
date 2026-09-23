@@ -625,6 +625,15 @@ export function onGroupDissolved(fn: GroupDissolveHook): void {
   dissolveHooks.push(fn);
 }
 
+type GroupQuitHook = (group: ChatGroup, msgs: WxGroupMsg[]) => void;
+const quitHooks: GroupQuitHook[] = [];
+
+/** 注册「机主退出群聊」钩子（退群挽留调度器在此捕获群快照与最近消息，供 1 分钟内 AI 私信与拉回群用）。
+ *  与解散钩子同规则：单个钩子异常不影响退群本身。 */
+export function onGroupQuit(fn: GroupQuitHook): void {
+  quitHooks.push(fn);
+}
+
 /**
  * 解散群聊：删除群 + 群消息（红包/转账卡片状态随消息一并清除）+ 会话级附属数据
  * （未读/标志/隐藏/时间感知/每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
@@ -675,9 +684,56 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
  * 退出群聊（机主本人退群）：本机删除该群（群记录/消息/未读/标志/时间感知/背景等附属数据），
  * 但不清 AI 成员的群来源记忆（群对其他成员仍然存在，他们记得群里发生过什么）。
  * 与「解散群聊」的区别：解散 = 群对所有人消失且记忆级联清理；退出 = 仅机主本机移除。
+ * 退出前先发退群钩子（快照群与最近消息，供退群挽留：AI 主动私信 + 拉回群）。
  */
 export function quitGroup(groupId: string): ChatGroup | null {
+  const g = getGroup(groupId);
+  if (!g) return null;
+  // 退群快照钩子（在删除前调用，钩子拿到完整的群对象与消息历史；单个失败不阻塞退群）
+  try {
+    const msgs = loadGroupMsgs(groupId);
+    for (const fn of quitHooks) {
+      try {
+        fn(g, msgs);
+      } catch {
+        // 忽略
+      }
+    }
+  } catch {
+    // 忽略
+  }
   return dissolveGroup(groupId, { purgeMemory: false });
+}
+
+/**
+ * 恢复退出的群（退群挽留：AI 把机主拉回群）：群记录原样写回（同 id，成员/身份/禁言/公告全保留，
+ * 机主本就恒为群成员，无需改成员表），恢复退群前的最近群消息（历史不断档），
+ * 并落「XX加入了群聊」事件（join，opts.joinName = 机主显示名）。
+ * 群已存在（未被删除/已被其它路径恢复）时不重复写入，只补事件。返回恢复后的群。
+ */
+export function restoreQuitGroup(
+  g: ChatGroup,
+  msgs: WxGroupMsg[],
+  opts?: { joinName?: string },
+): ChatGroup {
+  if (!getGroup(g.id)) {
+    const normalized = normalizeGroup(g) ?? g;
+    writePool(normalized.app, [...readPool(normalized.app), normalized]);
+    if (msgs.length > 0) {
+      try {
+        const key = groupMsgsKey(normalized.app, normalized.id);
+        const cur = readJSON<WxGroupMsg[]>(key);
+        const list = Array.isArray(cur) ? cur : [];
+        writeJSON(key, [...list, ...msgs].slice(-MSGS_CAP));
+      } catch {
+        // 消息恢复失败不阻塞拉群
+      }
+    }
+  }
+  if (opts?.joinName) {
+    pushGroupEvent(g.id, `${opts.joinName}加入了群聊`, { type: 'join', targetId: 'me' });
+  }
+  return getGroup(g.id) ?? g;
 }
 
 /** 从所有群中移除某联系人（删除联系人级联）；成员清空的群自动解散。返回受影响的群名（toast 汇总用）。

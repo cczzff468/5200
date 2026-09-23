@@ -99,6 +99,7 @@ import {
   type WxGroupMsg,
 } from '@/lib/ios/groups';
 import { addFavorite, isMsgFavorited, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
+import { buildGroupAdminRules, canEditGroupInfo, canModerateTarget, parseMuteDuration } from '@/lib/ios/group-admin';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
@@ -133,6 +134,7 @@ import {
   buildGroupRichRules,
   cleanBubbleText,
   extractRichActionParts,
+  isGroupAdminAction,
   mergeRichSegments,
   parseRichParts,
   prettifyRichText,
@@ -2190,6 +2192,64 @@ export function QqGroupChatPage({
     [appendFundNotice, gid, patchGroupMsg]
   );
 
+  /** 应用 AI 成员的管理动作（需求一：AI 被设为群主/管理员时可用权限）：
+   *  禁言/解禁/移出群聊/改群名/改公告。硬性权限校验（群主>管理员>成员，越权/对自己动手一律丢弃），
+   *  实际落盘走 groups.ts 数据层（自动生成系统消息并持久化）；成功后让宿主刷新群对象。 */
+  const applyGroupAdminAction = useCallback(
+    (char: ContactRecord, action: RichAction) => {
+      const g = getGroup(gid);
+      if (!g) return;
+      if (groupRoleOf(g, char.id) === 'member') return; // 普通成员没有管理权限：标记直接丢弃
+      // 成员名字 → 联系人（机主 + 全部 AI 成员；精确 → 互相包含逐级匹配，与转账收款对象同口径）
+      const resolveTarget = (name: string): { id: string; name: string } | null => {
+        const n = name.trim();
+        if (!n) return null;
+        if (n === me.name) return { id: 'me', name: me.name };
+        const pool = g.memberIds
+          .map((id) => contactsRef.current.find((c) => c.id === id))
+          .filter((c): c is ContactRecord => !!c && c.id !== char.id);
+        const exact = pool.find((c) => memberNameOf(c) === n);
+        if (exact) return { id: exact.id, name: memberNameOf(exact) };
+        const partial = pool.find((c) => memberNameOf(c).includes(n) || n.includes(memberNameOf(c)));
+        return partial ? { id: partial.id, name: memberNameOf(partial) } : null;
+      };
+      switch (action.kind) {
+        case 'mute-member': {
+          const t = resolveTarget(action.targetId);
+          if (!t || !canModerateTarget(g, char.id, t.id)) return;
+          muteGroupMember(gid, t.id, parseMuteDuration(action.arg ?? ''), { name: t.name });
+          break;
+        }
+        case 'unmute-member': {
+          const t = resolveTarget(action.targetId);
+          if (!t || !canModerateTarget(g, char.id, t.id)) return;
+          unmuteGroupMember(gid, t.id, { name: t.name });
+          break;
+        }
+        case 'kick-member': {
+          const t = resolveTarget(action.targetId);
+          if (!t || !canModerateTarget(g, char.id, t.id)) return;
+          kickGroupMember(gid, t.id, { name: t.name });
+          break;
+        }
+        case 'rename-group': {
+          const n = action.targetId.trim().slice(0, 30);
+          if (n && n !== g.name && canEditGroupInfo(g, char.id)) updateGroup(gid, { name: n });
+          break;
+        }
+        case 'announce-group': {
+          const n = action.targetId.trim().slice(0, 200);
+          if (n && canEditGroupInfo(g, char.id)) updateGroup(gid, { announcement: n });
+          break;
+        }
+        default:
+          return;
+      }
+      onUpdate({}); // 成员/禁言/群名/公告可能变了：让宿主刷新群对象
+    },
+    [gid, me.name, onUpdate]
+  );
+
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
   const runCharTurn = useCallback(
@@ -2259,6 +2319,14 @@ export function QqGroupChatPage({
             ...buildActionRules(pendingCards)
           );
         }
+        // AI 管理权限（需求一）：被设为群主/管理员的成员可输出管理标记（禁言/解禁/移出/改群名/改公告），
+        // 是否使用、分寸如何完全由人设决定；普通成员不注入（无权限自然不会输出标记）
+        const groupNameOf = (id: string): string => {
+          if (id === me.id) return me.name;
+          const c = contactsRef.current.find((x) => x.id === id);
+          return c ? memberNameOf(c) : '群成员';
+        };
+        groupRules.push(...buildGroupAdminRules(g, char.id, groupNameOf));
         // 群成员速览（关系感知）：其他成员是谁、与机主的关系、性格速写（角色间相处按双方人设自然把握）
         const memberLines = others.map((c) => {
           const rel = (c.relation ?? '').trim();
@@ -2366,7 +2434,9 @@ export function QqGroupChatPage({
             };
             for (const part of parts) {
               if (part.type === 'action') {
-                applyGroupAiAction(char, part.action);
+                // 管理标记（禁言/解禁/移出/改群名/改公告）与卡片处理标记（领红包/收转账）分流入各自的执行器
+                if (isGroupAdminAction(part.action)) applyGroupAdminAction(char, part.action);
+                else applyGroupAiAction(char, part.action);
                 continue;
               }
               const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
@@ -2486,7 +2556,7 @@ export function QqGroupChatPage({
         });
         if (!ok) resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
       }),
-    [apiConfig, appendMsg, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, sKey]
+    [apiConfig, appendMsg, applyGroupAdminAction, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, sKey]
   );
 
   /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默）。
