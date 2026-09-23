@@ -53,7 +53,7 @@ function BatteryIcon({ level, charging, low }: { level: number; charging: boolea
  * 电量使用 Battery Status API（@/lib/ios/battery），低于 20% 仅电量填充变红（百分比与外框不变色）。
  * 文字颜色由 useLightForeground 判定（默认按背景顶部区域实测明暗，与 Home 横杠同一套逻辑但区域不同）。
  */
-export default function StatusBar({ bootTz }: { bootTz?: string } = {}) {
+export default function StatusBar({ bootTz, bootLockWallpaper }: { bootTz?: string; bootLockWallpaper?: string } = {}) {
   const clockSecond = useSyncExternalStore(
     (onChange) => {
       const timer = window.setInterval(onChange, 1000);
@@ -63,7 +63,8 @@ export default function StatusBar({ bootTz }: { bootTz?: string } = {}) {
     () => 0
   );
   const battery = useBattery();
-  const lightText = useLightForeground();
+  // 首帧快照直通：loaded 前 store 里的壁纸还是默认值，前景明暗按快照里的锁屏壁纸选（避免浅色壁纸首帧白字看不清）
+  const lightText = useLightForeground('top', bootLockWallpaper);
 
   const now = clockSecond > 0 ? new Date(clockSecond * 1000) : null;
   // SSR 兜底：服务端拿不到 setInterval 时钟，用用户时区（cookie 直通）墙钟直接渲染首帧时间
@@ -76,9 +77,11 @@ export default function StatusBar({ bootTz }: { bootTz?: string } = {}) {
       className={`pointer-events-none absolute inset-x-0 top-0 z-[70] flex h-[54px] items-center justify-between pl-[30px] pr-[13px] pt-[6px] text-[15px] font-semibold ${
         lightText ? 'text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.25)]' : 'text-black'
       }`}
+      data-statusbar-fg=""
+      suppressHydrationWarning
       aria-label="状态栏"
     >
-      <time className="w-[70px] leading-none tabular-nums tracking-tight" suppressHydrationWarning>
+      <time className="w-[70px] leading-none tabular-nums tracking-tight" data-ssr-clock="" suppressHydrationWarning>
         {shown ? formatIOSTime(shown) : ''}
       </time>
       <div className="flex items-center gap-[4px] leading-none">

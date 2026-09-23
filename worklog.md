@@ -6200,3 +6200,26 @@ Stage Summary:
 - 改动文件：src/lib/ios/clock.ts（ssrWallClock/墙钟 formatIOSTime/formatWeekShort）、src/lib/ios/wallpaper-presets.ts（新建，服务端安全）、src/lib/ios/store.ts（tz 字段/seedDisplay 桥接/壁纸模块 re-export）、src/lib/ios/display-cookie.ts（tz 字段）、src/app/layout.tsx（html 背板色）、src/app/page.tsx（cookie 直通）、src/components/ios/PhoneShell.tsx（boot prop 分发/loaded 语义）、src/components/ios/LockScreen.tsx（SSR 时钟+boot 壁纸）、src/components/ios/StatusBar.tsx（SSR 时间）、src/lib/ios/block-state.ts（byUser 回归修复+冷却/上限/reqCount/提示注入）
 - 锁屏最终形态：进网页第一帧 = 用户真实壁纸底色 + 完整锁屏（时钟/日期/农历/星期全在），零黑屏零白屏零内容跳变；水合后原地接管无跳变
 - 拉黑审计结论：九大项全过；唯一缺口（拒绝后无冷却/无上限）已在本次补齐并实测；审计过程抓住一个本轮重构引入的 byUser 丢失回归并修复
+
+---
+Task ID: lock-flicker-iframe-root
+Agent: Z.ai Code (main)
+Task: 用户反馈「锁屏还是会闪烁，壁纸会卡个 2 秒才显示」——cookie 注水方案在真实预览环境失效，彻底根治
+
+Work Log:
+- 根因一（iframe 第三方 cookie）：预览面板是跨站 iframe，samesite=lax 的 ios-display cookie 在第三方上下文写不进去 → 服务端每次都拿默认快照（light/graphite）SSR → 水合后 load() 才换真实设置 = 闪烁 + 壁纸延迟；此前 E2E 全在顶层导航做，cookie 可用，所以测不出来
+- 根因二（React 19 重置 html 内联 style）：pre-paint 变量最初写在 documentElement.style 上，React 19 水合时把 <html> 的 style 属性重置为它期望的值（suppressHydrationWarning 管不住 style）→ CSS 变量在水合瞬间被清空 → 壁纸层 var() 回退透明 → 透出黑壳直到 load() = 闪一下 + 壁纸卡 2 秒（Test E 录屏实证：红→暗 1.4s→红）
+- 根因三（SSR 阶段 zustand 服务端单例泄漏）：seedDisplay 在 PhoneShell 的 useState 初始化器里于 SSR 也执行，之前带 lockScreen=false cookie 的请求把服务端 useUI.locked 永久改成 false → 之后所有无 cookie 的 SSR 都渲染「无锁屏主屏」，水合后再弹回锁屏（Test final 抽帧 f008 实证）
+- 修复三件套：①双通道镜像——display-cookie.ts 新增 localStorage 镜像（writeDisplayLS/readDisplayLS，跨站 iframe 里唯一可靠通道）+ 自定义壁纸压缩 dataURL 缓存（ios-display-wall，compressBlobToDataUrl 1080px/JPEG0.82 + load() 里 healWallCache 自愈）②boot-script.ts（新建）——layout 注入 <body> 开头的 pre-paint 脚本：读 LS/cookie 快照 → 把背板色与 --ios-boot-* 壁纸变量写进 <head><style id=ios-boot-style>（React 管不到，永不清空）、PNG 壁纸 <link rel=preload fetchpriority=high>、html.dark（auto 用 matchMedia 即时判定）、data-lock-off / data-boot-lock-light 标记、window.__IOS_DISPLAY__ 全局；尾部脚本按镜像时区修正 SSR 时钟文本（iframe 无 cookie 时服务端只有 UTC）③PhoneShell/LockScreen boot 期壁纸一律用 BOOT_WALL_STYLE/BOOT_LOCK_WALL_STYLE 变量引用（SSR 无 cookie 也渲染同一份 markup）+ seedDisplay 加 typeof window 守卫 + data-lock-screen/data-lock-fg/data-statusbar-fg/data-homebar-fg 稳定属性 + globals.css 三条首帧前景色覆盖规则（浅色壁纸 SSR 白字→首帧即黑字，load 后由 PhoneShell 移除标记交还实测逻辑）
+- E2E 实证矩阵（agent-browser 390×844 + 录屏 10fps 抽帧像素分类；每例均删 ios-display cookie 模拟 iframe）：
+  ①Test E3 自定义壁纸（红色 Blob→IndexedDB→dataURL 缓存）+关锁屏+无 cookie：50 帧全红 0 暗帧，壁纸从首帧到 load() 全程稳定 ✓
+  ②Test A2 雾山 PNG 锁屏壁纸+开锁屏+无 cookie：旧页 6 帧后 55 帧雾山锁屏零切换，首帧即黑字时钟/日期/小组件全齐（data-boot-lock-light 生效）✓
+  ③Test final2 无 cookie 全流程：SSR 锁屏稳定 4.6s（f6-51，泄漏修复实证）→解锁→雾山主屏即现（PNG 预载）→Spotlight→计算器→回主屏，全程无壁纸/明暗闪烁 ✓
+  ④深色主题+无 cookie：html.dark 水合前后一致、状态栏白字、cookie 自愈 ✓
+  ⑤运行时自愈链：load() 尾部 syncDisplayCookie 重写 cookie+LS、healWallCache 补 dataURL 缓存，全部实测 ✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 全 200、console/errors 无水合错误；测试后已恢复用户原始设置（light/mist/graphite/lock-on，清掉注入的测试 Blob）
+
+Stage Summary:
+- 改动文件：src/lib/ios/display-cookie.ts（LS 镜像+壁纸 dataURL 缓存+压缩/自愈工具）、src/lib/ios/boot-script.ts（新建，pre-paint+尾部脚本）、src/lib/ios/wallpaper-presets.ts（BOOT_WALL_STYLE/BOOT_LOCK_WALL_STYLE 变量样式+bootPresetTableJson 含 light 标记）、src/app/layout.tsx（注入两段脚本）、src/lib/ios/store.ts（syncDisplayCookie 双写、壁纸缓存写入、load() 自愈）、src/components/ios/PhoneShell.tsx（bootSnapshot 优先 window 全局、壁纸层恒变量引用、seedDisplay 客户端守卫、html.dark/data-lock-off/data-boot-lock-light 接管）、src/components/ios/LockScreen.tsx（BOOT_LOCK_WALL_STYLE+data 属性）、src/components/ios/StatusBar.tsx（bootLockWallpaper 前景直通+data 属性）、src/lib/ios/foreground.ts（useLightForeground boot 预设参数）、src/app/globals.css（data-lock-off 隐藏+3 条前景覆盖）
+- 根因结论：锁屏闪烁=三因叠加（iframe cookie 阻断 × React19 清 html 内联变量 × SSR zustand 跨请求泄漏）；壁纸卡 2 秒=图片请求晚于水合+上述黑窗期；现首帧绘制前一切就绪，绘制后零变化
+- 已知边界：浏览器导航白屏（任何网站都有，非应用闪烁）；真·首次访问（无 LS 无 cookie）首帧为默认 graphite，load() 后换真实设置并落镜像，之后每次首帧即真实

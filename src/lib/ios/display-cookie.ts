@@ -1,13 +1,19 @@
 /**
- * 显示设置的 Cookie 镜像（首帧防闪烁）：
+ * 显示设置的「首帧镜像」（防锁屏闪烁）：
  * 过去 PhoneShell 在 IndexedDB 设置读出前渲染纯黑开机屏 —— 刷新/进入网页时
- * 「旧锁屏 → 一段纯黑 → 新锁屏」，看起来就是锁屏闪烁。
- * 现在把主题/壁纸/锁屏开关这几项「决定首帧长什么样」的设置同步写进 cookie
- * （每次变更时由 store setter 写入，随请求带上服务端），
- * 服务端 SSR 直接按真实设置渲染锁屏/主屏 —— 首帧即最终样子，黑屏门控彻底移除。
+ * 「旧锁屏 → 一段纯黑 → 新锁屏」；后来改成 cookie 注水 SSR 直出，但 cookie 有一个
+ * 致命盲区：预览面板是跨站 iframe，第三方上下文里 samesite=lax 的 cookie 根本写不进去
+ * → 服务端每次都拿默认快照渲染 → load() 后才换成真实设置 = 闪烁 + 壁纸延迟。
  *
- * 约束：cookie 只放小的枚举值（主题/预设 id/布尔），不放 Blob/自定义壁纸图；
- * 自定义壁纸首帧按预设底色兜底显示，图片解码后由既有逻辑换上（一次性换图，非黑闪）。
+ * 现在双通道镜像：
+ * - cookie（原有）：顶层导航可写，服务端 SSR 直读（layout/page）；
+ * - localStorage（新增）：跨站 iframe 里也可写（分区存储但持久），随 setters 同步写；
+ *   layout 注入的 pre-paint 内联脚本读它，在首帧绘制前用 CSS 变量直出真实壁纸/背板。
+ *
+ * 另外缓存自定义壁纸的压缩 dataURL（ios-display-wall）：Blob 只存在 IndexedDB，
+ * 要等 load() 才有 —— 有了 dataURL 缓存，自定义壁纸也能首帧直出。
+ *
+ * 约束：cookie 只放小枚举值；localStorage 额外放壁纸图 dataURL（压缩到 ~几百 KB）。
  */
 
 export interface DisplaySnapshot {
@@ -24,8 +30,18 @@ export interface DisplaySnapshot {
 }
 
 export const DISPLAY_COOKIE_NAME = 'ios-display';
+export const DISPLAY_LS_KEY = 'ios-display';
+export const DISPLAY_WALL_LS_KEY = 'ios-display-wall';
 
-/** 默认值与 store 初始状态保持一致（首次访问无 cookie 时 SSR 用它渲染） */
+/** pre-paint 脚本写入的全局（PhoneShell 客户端首渲染优先读它，cookie prop 兜底） */
+declare global {
+  interface Window {
+    __IOS_DISPLAY__?: DisplaySnapshot | null;
+    __IOS_DISPLAY_WALL__?: WallCache | null;
+  }
+}
+
+/** 默认值与 store 初始状态保持一致（首次访问无任何镜像时 SSR 用它渲染） */
 export const DEFAULT_DISPLAY_SNAPSHOT: DisplaySnapshot = {
   theme: 'light',
   wallpaper: 'graphite',
@@ -77,6 +93,115 @@ export function writeDisplayCookie(snap: DisplaySnapshot): void {
   try {
     document.cookie = `${DISPLAY_COOKIE_NAME}=${serializeDisplayCookie(snap)}; path=/; max-age=31536000; samesite=lax`;
   } catch {
-    /* cookie 不可用时静默：首帧回退默认样式 */
+    /* cookie 不可用（如跨站 iframe）时静默：pre-paint 脚本会走 localStorage 通道 */
   }
+}
+
+// ---------------- localStorage 镜像（iframe 里唯一可靠的首帧通道） ----------------
+
+/** 客户端写 localStorage 镜像（与 writeDisplayCookie 成对调用；同步 API，写完即生效） */
+export function writeDisplayLS(snap: DisplaySnapshot): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(DISPLAY_LS_KEY, JSON.stringify(snap));
+  } catch {
+    /* 存储满/被禁时静默：回退 cookie/默认首帧 */
+  }
+}
+
+/** 客户端读 localStorage 镜像（无效/缺失 → null） */
+export function readDisplayLS(): DisplaySnapshot | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return asSnapshot(JSON.parse(window.localStorage.getItem(DISPLAY_LS_KEY) ?? 'null'));
+  } catch {
+    return null;
+  }
+}
+
+/** 客户端读启动快照：pre-paint 脚本写在 window 上的全局优先（head 时机比 React 早），缺失回退 cookie prop */
+export function bootSnapshotFromWindow(): DisplaySnapshot | null {
+  if (typeof window === 'undefined') return null;
+  return window.__IOS_DISPLAY__ ?? null;
+}
+
+// ---------------- 自定义壁纸首帧缓存（压缩 dataURL；Blob 要等 IndexedDB load，太慢） ----------------
+
+export interface WallCacheEntry {
+  /** 压缩后的 dataURL（image/jpeg） */
+  d: string;
+  /** 源 Blob 大小（自愈比对：尺寸不符 = 缓存过期，重新生成） */
+  s: number;
+}
+
+export interface WallCache {
+  v: 1;
+  home?: WallCacheEntry | null;
+  lock?: WallCacheEntry | null;
+}
+
+/** 客户端读自定义壁纸缓存（pre-paint 脚本用同 key 同格式直接读 localStorage） */
+export function readWallCache(): WallCache | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const v = JSON.parse(window.localStorage.getItem(DISPLAY_WALL_LS_KEY) ?? 'null') as WallCache | null;
+    return v && v.v === 1 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 写/清某一面的自定义壁纸缓存（kind: home=主屏壁纸 lock=锁屏壁纸） */
+export function writeWallCache(kind: 'home' | 'lock', entry: WallCacheEntry | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const cur = readWallCache() ?? { v: 1 as const };
+    const next: WallCache = { v: 1, home: cur.home ?? null, lock: cur.lock ?? null };
+    next[kind] = entry;
+    window.localStorage.setItem(DISPLAY_WALL_LS_KEY, JSON.stringify(next));
+  } catch {
+    /* 配额满等失败静默：自定义壁纸退回「load 后换图」的旧行为 */
+  }
+}
+
+/**
+ * Blob → 压缩 dataURL（最长边约 1080px、JPEG 0.82）：控制在几百 KB 内，
+ * pre-paint 脚本首帧直接用它当背景图，自定义壁纸不再等 IndexedDB load。
+ * 失败（解码失败/Canvas 不可用）返回 null，调用方跳过缓存。
+ */
+export async function compressBlobToDataUrl(blob: Blob, maxSide = 1080, quality = 0.82): Promise<string | null> {
+  try {
+    if (typeof document === 'undefined') return null;
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 首帧缓存自愈（load() 后台调用）：IndexedDB 里的自定义壁纸与 localStorage 缓存比对，
+ * 尺寸不符/缺失 → 重新生成；壁纸已移除 → 清缓存。全部静默，绝不阻塞开机。
+ */
+export async function healWallCache(kind: 'home' | 'lock', blob: Blob | null): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const cur = readWallCache();
+  const entry = cur ? cur[kind] ?? null : null;
+  if (!blob) {
+    if (entry) writeWallCache(kind, null);
+    return;
+  }
+  if (entry && entry.s === blob.size) return;
+  const d = await compressBlobToDataUrl(blob);
+  if (d) writeWallCache(kind, { d, s: blob.size });
 }

@@ -4,7 +4,15 @@ import { create } from 'zustand';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
-import { writeDisplayCookie, type DisplaySnapshot } from './display-cookie';
+import {
+  writeDisplayCookie,
+  writeDisplayLS,
+  writeWallCache,
+  healWallCache,
+  compressBlobToDataUrl,
+  type DisplaySnapshot,
+  type WallCacheEntry,
+} from './display-cookie';
 import { WALLPAPER_PRESETS, resolveWallpaperStyle, type WallpaperPreset } from './wallpaper-presets';
 
 // 壁纸预设与样式解析已抽到 wallpaper-presets.ts（服务端 layout 也要用）；此处 re-export 保持既有导入不变
@@ -143,8 +151,10 @@ interface SettingsState {
   resetAllCustomIcons: () => void;
 }
 
-/** 当前显示设置的 cookie 镜像（主题/壁纸/锁屏开关）：决定 SSR 首帧长相的四项，
- *  任何一项变化都立即重写 cookie，下次进入网页服务端直接按真实设置渲染首帧（防锁屏闪烁） */
+/** 当前显示设置的镜像（主题/壁纸/锁屏开关）：决定 SSR/pre-paint 首帧长相的四项，
+ *  任何一项变化都立即重写 cookie + localStorage，下次进入网页首帧直接按真实设置渲染（防锁屏闪烁）。
+ *  cookie 服务顶层导航的 SSR；localStorage 供 pre-paint 启动脚本用 —— 预览面板是跨站 iframe，
+ *  第三方上下文里 cookie 写不进去，localStorage 是唯一可靠的首帧通道。 */
 function syncDisplayCookie(s: Pick<SettingsState, 'theme' | 'wallpaperPreset' | 'lockWallpaperPreset' | 'lockConfig'>): void {
   let tz: string | undefined;
   try {
@@ -160,6 +170,19 @@ function syncDisplayCookie(s: Pick<SettingsState, 'theme' | 'wallpaperPreset' | 
     tz,
   };
   writeDisplayCookie(snap);
+  writeDisplayLS(snap);
+}
+
+/** 自定义壁纸首帧缓存生成：压缩 dataURL 写 localStorage（失败静默，退回旧换图行为） */
+function compressWallCache(kind: 'home' | 'lock', blob: Blob): Promise<WallCacheEntry | null> {
+  return compressBlobToDataUrl(blob).then(
+    (d) => {
+      const entry: WallCacheEntry | null = d ? { d, s: blob.size } : null;
+      writeWallCache(kind, entry);
+      return entry;
+    },
+    () => null
+  );
 }
 
 /** 用服务端传来的显示快照在注水前同步写入 store（水合 commit 后至 load() 完成前的桥接窗口）。
@@ -259,9 +282,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
       let wallpaperPreset = 'graphite';
       let customWallpaperUrl: string | null = null;
+      let homeWallBlob: Blob | null = null;
       if (wallpaperRec && typeof wallpaperRec.value === 'object' && wallpaperRec.value !== null) {
         const w = wallpaperRec.value as { preset?: unknown; customBlob?: unknown };
         if (w.customBlob instanceof Blob) {
+          homeWallBlob = w.customBlob;
           customWallpaperUrl = URL.createObjectURL(w.customBlob);
         } else if (typeof w.preset === 'string' && WALLPAPER_PRESETS.some((p) => p.id === w.preset)) {
           wallpaperPreset = w.preset;
@@ -271,15 +296,21 @@ export const useSettings = create<SettingsState>((set, get) => ({
       // 锁屏壁纸（完全独立，默认 graphite）：{ preset, customBlob } 同时记录，移除自定义后可回退到已选预设
       let lockWallpaperPreset = 'graphite';
       let lockCustomWallpaperUrl: string | null = null;
+      let lockWallBlob: Blob | null = null;
       if (lockWallpaperRec && typeof lockWallpaperRec.value === 'object' && lockWallpaperRec.value !== null) {
         const lw = lockWallpaperRec.value as LockWallpaperRecord;
         if (typeof lw.preset === 'string' && WALLPAPER_PRESETS.some((p) => p.id === lw.preset)) {
           lockWallpaperPreset = lw.preset;
         }
         if (lw.customBlob instanceof Blob) {
+          lockWallBlob = lw.customBlob;
           lockCustomWallpaperUrl = URL.createObjectURL(lw.customBlob);
         }
       }
+      // 首帧缓存自愈（后台静默）：localStorage 里的自定义壁纸 dataURL 与 IndexedDB Blob 比对，
+      // 缺失/过期（尺寸不符）重新生成，壁纸已移除则清缓存 —— 保证下次开机首帧直出不落空
+      void healWallCache('home', homeWallBlob);
+      void healWallCache('lock', lockWallBlob);
 
       let apiConfig: ApiConfig = { ...DEFAULT_API_CONFIG };
       if (apiRec && typeof apiRec.value === 'object' && apiRec.value !== null) {
@@ -417,19 +448,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
     if (!blob) {
       set({ customWallpaperUrl: null });
       void localDB.put('settings', { key: 'wallpaper', value: { preset: get().wallpaperPreset } });
+      writeWallCache('home', null);
       return;
     }
     const url = URL.createObjectURL(blob);
     set({ customWallpaperUrl: url });
     void localDB.put('settings', { key: 'wallpaper', value: { customBlob: blob } });
-  },
-
-  setLockWallpaperPreset: (id) => {
-    const old = get().lockCustomWallpaperUrl;
-    if (old) URL.revokeObjectURL(old);
-    set({ lockWallpaperPreset: id, lockCustomWallpaperUrl: null });
-    void localDB.put('settings', { key: 'lockWallpaper', value: { preset: id } });
-    syncDisplayCookie(get());
+    // 首帧缓存：压缩 dataURL 写 localStorage，下次开机自定义壁纸首帧直出（不等 IndexedDB load）
+    void compressWallCache('home', blob);
   },
 
   setLockCustomWallpaper: (blob) => {
@@ -439,11 +465,22 @@ export const useSettings = create<SettingsState>((set, get) => ({
     if (!blob) {
       set({ lockCustomWallpaperUrl: null });
       void localDB.put('settings', { key: 'lockWallpaper', value: { preset } });
+      writeWallCache('lock', null);
       return;
     }
     const url = URL.createObjectURL(blob);
     set({ lockCustomWallpaperUrl: url });
     void localDB.put('settings', { key: 'lockWallpaper', value: { preset, customBlob: blob } });
+    // 首帧缓存：压缩 dataURL 写 localStorage，下次开机锁屏自定义壁纸首帧直出
+    void compressWallCache('lock', blob);
+  },
+
+  setLockWallpaperPreset: (id) => {
+    const old = get().lockCustomWallpaperUrl;
+    if (old) URL.revokeObjectURL(old);
+    set({ lockWallpaperPreset: id, lockCustomWallpaperUrl: null });
+    void localDB.put('settings', { key: 'lockWallpaper', value: { preset: id } });
+    syncDisplayCookie(get());
   },
 
   updateApiConfig: (patch) => {

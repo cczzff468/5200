@@ -174,3 +174,25 @@
     transform: rotate(360deg);
   }
 }
+
+/* 启动脚本标记：锁屏总开关关闭时首帧直接隐藏 SSR 锁屏（直进主屏幕）。
+   pre-paint 脚本按 localStorage 镜像设置 html[data-lock-off]（水合前生效，iframe 里 cookie 缺失也准确）；
+   PhoneShell 挂载后移除标记，此后锁屏显隐完全由 locked 状态驱动 */
+html[data-lock-off] [data-lock-screen] {
+  display: none !important;
+}
+
+/* 首帧前景色覆盖（boot 期）：锁屏开启且锁屏壁纸偏浅时，pre-paint 脚本给 html 打
+   data-boot-lock-light 标记 —— 无 cookie 的 SSR（预览 iframe）按默认 graphite 画了白前景，
+   水合后才会切黑 = 变色闪烁；这三条规则让首帧直接是正确前景色。
+   load() 完成后 PhoneShell 移除标记，前景色交还给壁纸亮度实测逻辑 */
+html[data-boot-lock-light] [data-lock-fg] {
+  color: rgba(0, 0, 0, 0.85) !important;
+}
+html[data-boot-lock-light] [data-statusbar-fg] {
+  color: #000 !important;
+  text-shadow: none !important;
+}
+html[data-boot-lock-light] [data-homebar-fg] {
+  background-color: #000 !important;
+}

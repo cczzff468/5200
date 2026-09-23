@@ -5,8 +5,8 @@ import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, seedDisplay, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useLightForeground } from '@/lib/ios/foreground';
-import { resolveWallpaperStyle } from '@/lib/ios/wallpaper-presets';
-import type { DisplaySnapshot } from '@/lib/ios/display-cookie';
+import { BOOT_WALL_STYLE } from '@/lib/ios/wallpaper-presets';
+import { bootSnapshotFromWindow, type DisplaySnapshot } from '@/lib/ios/display-cookie';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
 import StatusBar from './StatusBar';
@@ -30,14 +30,25 @@ const OPEN_DELTA = 18;
  * 手机壳：桌面端显示 iPhone 机身外框（含电源键），移动端全屏。
  * 内部依次为 壁纸层 → 主屏幕 → App 窗口 → 多任务切换器 → 锁屏 → 熄屏遮罩 → 状态栏 → 灵动岛。
  *
- * 首帧防闪烁：主题/壁纸/锁屏开关由服务端 cookie 注水（initialDisplay），
- * 在任何 store 订阅之前同步 seed —— SSR 与客户端首帧同源，无黑屏开机门控。
- * IndexedDB 设置读出（load）后补齐其余设置，首帧已是最终样子。
+ * 首帧防闪烁：主题/壁纸/锁屏开关由「首帧镜像」直出 ——
+ * - SSR：page.tsx 从 cookie 读快照传 initialDisplay（顶层导航可用）；
+ * - 客户端：pre-paint 启动脚本（layout 注入）读 localStorage 镜像写在 window.__IOS_DISPLAY__，
+ *   跨站 iframe（预览面板）里 cookie 写不进去时它仍是真实值 → 客户端首渲染优先用它；
+ * - 壁纸层首帧用 CSS 变量样式（BOOT_WALL_STYLE）：SSR 与客户端的 style 属性完全相同
+ *   （都是 var() 引用），真实壁纸由启动脚本在绘制前写进变量 → 零水合差异、首帧即真实壁纸。
+ * IndexedDB 设置读出（load）后切回 store（含自定义壁纸 Blob、真实密码配置等）。
  */
 export default function PhoneShell({ initialDisplay }: { initialDisplay?: DisplaySnapshot | null }) {
-  // 首帧注水：useState 惰性初始化保证在任何 hook 订阅前执行且仅执行一次（StrictMode 双渲染也幂等）
+  // 首帧注水快照：客户端优先用启动脚本全局（localStorage 镜像，iframe 里也真实），SSR 用 cookie prop
+  const bootSnapshot = bootSnapshotFromWindow() ?? initialDisplay;
+  // 首帧注水：useState 惰性初始化保证在任何 hook 订阅前执行且仅执行一次（StrictMode 双渲染也幂等）。
+  // 【只在客户端执行】seedDisplay 会 setState —— zustand 是模块级单例，SSR 阶段执行会污染服务端
+  // store 并跨请求泄漏（例如之前某个带 lockScreen=false cookie 的请求会把服务端 locked 永久改成 false，
+  // 之后所有无 cookie 的 SSR 都渲染「无锁屏」，水合后再弹回锁屏 = 闪烁）。
+  // SSR 的 locked/主题/壁纸由「store 初始值 + boot prop（cookie）」确定，确定性问题由
+  // pre-paint 脚本的 data-lock-off / CSS 变量在首帧绘制前修正。
   useState(() => {
-    seedDisplay(initialDisplay);
+    if (typeof window !== 'undefined') seedDisplay(bootSnapshot);
     return true;
   });
 
@@ -51,19 +62,18 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
   const pressPower = useUI((s) => s.pressPower);
   const storeWallpaperStyle = useWallpaperStyle();
   // 【SSR 首帧真值】zustand v5 的 selector 在 SSR/水合阶段读 store 创建时快照（setState 注水不可见），
-  // 所以 loaded 之前的壁纸/主题/锁屏开关/时区全部用 cookie 快照（initialDisplay）直通；
+  // 所以 loaded 之前的壁纸/主题/锁屏开关/时区全部用首帧快照（bootSnapshot）直通；
   // load() 完成后切回 store（含自定义壁纸 Blob、真实密码配置等）。
-  // loaded 的 selector 语义恰好正确：SSR/水合阶段恒 false → 用 cookie；之后 store 为 true → 用 store。
-  const boot = storeLoaded ? null : initialDisplay;
+  // loaded 的 selector 语义恰好正确：SSR/水合阶段恒 false → 用快照；之后 store 为 true → 用 store。
+  const boot = storeLoaded ? null : bootSnapshot;
   const theme0 = boot?.theme ?? theme;
   const locked = boot ? (boot.lockScreen && storeLocked) : storeLocked;
-  const bootWallpaperStyle = useMemo(
-    () => resolveWallpaperStyle(boot?.wallpaper ?? 'graphite', null),
-    [boot?.wallpaper]
-  );
-  const wallpaperStyle = boot ? bootWallpaperStyle : storeWallpaperStyle;
+  // 首帧（loaded 前）一律用 CSS 变量引用 —— 无 cookie 的 SSR（预览 iframe）也渲染同一份 var() 样式，
+  // 真实壁纸由 pre-paint 脚本写进 <head><style>：变量有值→首帧即真实壁纸；
+  // 无值（真首次访问）→回退 graphite 默认。若这里用具体预设值，无 cookie SSR 会先画默认色直到水合 = 深色闪烁
+  const wallpaperStyle = storeLoaded ? storeWallpaperStyle : BOOT_WALL_STYLE;
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
-  const barLight = useLightForeground('bottom');
+  const barLight = useLightForeground('bottom', boot?.lockWallpaper);
   const shellRef = useRef<HTMLDivElement | null>(null);
   /** 底部边缘上滑手势进行中状态（fired 防止同一次滑动重复触发） */
   const edgeGesture = useRef<{ x: number; y: number; fired: boolean } | null>(null);
@@ -155,21 +165,43 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
 
   const dark = selectResolvedTheme(theme0, systemDark) === 'dark';
 
+  // html 级深色类同步：pre-paint 脚本已按首帧快照加过 html.dark（水合前就生效），
+  // 这里在挂载后接管（主题切换/自动模式变化时增删）；脚本留下的 data-lock-off 标记也一并移除
+  // （此后锁屏显隐完全由 locked 状态驱动，标记只在「水合前隐藏 SSR 锁屏」用）。
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.toggle('dark', dark);
+    html.removeAttribute('data-lock-off');
+  }, [dark]);
+
+  // 首帧前景色标记（data-boot-lock-light）只在 boot 期有效：load() 后壁纸明暗由实测接管，
+  // 移除标记让 CSS 覆盖规则失效，避免盖住 React 的动态前景色
+  const storeLoadedForFlag = useSettings((s) => s.loaded);
+  useEffect(() => {
+    if (storeLoadedForFlag) document.documentElement.removeAttribute('data-boot-lock-light');
+  }, [storeLoadedForFlag]);
+
   // 开机门控已移除（防锁屏闪烁的最终修复）：过去「设置读出前渲染纯黑开机屏」，
   // 刷新时旧锁屏→一段纯黑→新锁屏，看起来就是锁屏闪一下。
   // 现在首帧由 cookie 注水的真实设置直接渲染锁屏/主屏，load() 只负责补齐
   // 首帧不需要的数据（API 配置/自定义壁纸/自定义图标/密码等），到达时原地更新。
 
   return (
-    <div className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8">
+    <div
+      data-ios-wrap=""
+      suppressHydrationWarning
+      className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8"
+    >
       <div
         ref={shellRef}
+        data-ios-shell=""
+        suppressHydrationWarning
         className={`relative h-[100svh] w-full overflow-hidden bg-black text-foreground sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
           dark ? 'dark' : ''
         }`}
       >
-        {/* 壁纸层 */}
-        <div className="absolute inset-0" style={wallpaperStyle} aria-hidden="true" />
+        {/* 壁纸层（首帧 = CSS 变量，pre-paint 脚本写入真实壁纸；load() 后换 store 具体值） */}
+        <div className="absolute inset-0" style={wallpaperStyle} data-boot-wall="" suppressHydrationWarning aria-hidden="true" />
 
         {/* 主屏幕 */}
         <HomeScreen />
@@ -191,6 +223,8 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
               className={`h-[5px] w-[134px] rounded-full opacity-90 transition-colors duration-300 ${
                 barLight ? 'bg-white' : 'bg-black'
               }`}
+              data-homebar-fg=""
+              suppressHydrationWarning
             />
           </div>
         )}
@@ -199,12 +233,13 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
         <AppSwitcher />
 
         {/* 锁屏（含密码验证 / 手电筒 / 锁屏直达相机；解锁时播放退场动画）
-            bootLockWallpaper：SSR/水合阶段 store selector 读不到注水值，壁纸用 cookie 快照直通 */}
+            bootLockWallpaper：SSR/水合阶段 store selector 读不到注水值，预设明暗标记用快照直通；
+            壁纸本身走 CSS 变量（pre-paint 脚本首帧直出）；data-lock-screen 供启动脚本/全局 CSS 定位 */}
         <AnimatePresence>
           {locked && (
             <LockScreen
               key="lockscreen"
-              bootTz={initialDisplay?.tz}
+              bootTz={bootSnapshot?.tz}
               bootLockWallpaper={boot?.lockWallpaper}
             />
           )}
@@ -220,8 +255,8 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
           />
         )}
 
-        {/* 状态栏 + 灵动岛（bootTz：SSR 首帧按用户时区渲染时间） */}
-        <StatusBar bootTz={initialDisplay?.tz} />
+        {/* 状态栏 + 灵动岛（bootTz：SSR 首帧按用户时区渲染时间；bootLockWallpaper：首帧前景色按锁屏壁纸选） */}
+        <StatusBar bootTz={bootSnapshot?.tz} bootLockWallpaper={boot?.lockWallpaper} />
         <div
           className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
           aria-hidden="true"

@@ -36,7 +36,7 @@ const APP_STATUS_BAR_LIGHT: Partial<Record<AppId, boolean>> = {
  * 之前横杠用 mix-blend-difference，在饱和色背景上会呈现互补色（如蓝天→橙杠），
  * 改为按背景明暗直接选黑/白，观感与 iOS 一致。
  */
-export function useLightForeground(region: 'top' | 'bottom' = 'top'): boolean {
+export function useLightForeground(region: 'top' | 'bottom' = 'top', bootLockPresetId?: string): boolean {
   const activeApp = useUI((s) => s.activeApp);
   const switcherOpen = useUI((s) => s.switcherOpen);
   const lockCameraOpen = useUI((s) => s.lockCameraOpen);
@@ -46,6 +46,7 @@ export function useLightForeground(region: 'top' | 'bottom' = 'top'): boolean {
   const callActive = useUI((s) => s.callActive);
   const theme = useSettings((s) => s.theme);
   const systemDark = useSystemDark();
+  const loaded = useSettings((s) => s.loaded);
   const wallpaperPreset = useSettings((s) => s.wallpaperPreset);
   const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
   // 锁屏壁纸完全独立，锁屏时前景颜色始终跟随锁屏壁纸
@@ -54,9 +55,15 @@ export function useLightForeground(region: 'top' | 'bottom' = 'top'): boolean {
 
   const dark = theme === 'auto' ? systemDark : theme === 'dark';
 
-  // 壁纸明暗：静态标记兜底 + 实测亮度。hooks 必须无条件调用，故先算好再走分支
+  // 壁纸明暗：静态标记兜底 + 实测亮度。hooks 必须无条件调用，故先算好再走分支。
+  // 首帧（loaded 前）store 里的壁纸还是默认值：锁屏时用快照直通的锁屏壁纸预设
+  // （PhoneShell/StatusBar 传入 bootLockPresetId），否则浅色壁纸首帧白字看不清、load() 后再变色像闪烁
   const onLock = locked;
-  const effPresetId = onLock ? lockWallpaperPreset : wallpaperPreset;
+  const effPresetId = onLock
+    ? loaded || !bootLockPresetId
+      ? lockWallpaperPreset
+      : bootLockPresetId
+    : wallpaperPreset;
   const effCustom = onLock ? lockCustomWallpaperUrl : customWallpaperUrl;
   const effStyle = useMemo(
     () => resolveWallpaperStyle(effPresetId, effCustom),

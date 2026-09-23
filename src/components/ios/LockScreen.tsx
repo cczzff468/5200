@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Camera, CloudSun, Flashlight, FlashlightOff } from 'lucide-react';
 import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight } from '@/lib/ios/store';
-import { WALLPAPER_PRESETS, resolveWallpaperStyle } from '@/lib/ios/wallpaper-presets';
+import { WALLPAPER_PRESETS, BOOT_LOCK_WALL_STYLE } from '@/lib/ios/wallpaper-presets';
 import { formatLunarDate, formatSolarShort } from '@/lib/ios/lunar';
 import { formatIOSTime, formatWeekShort, ssrWallClock, useNow } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
@@ -50,13 +50,16 @@ export default function LockScreen({
   // 直接渲染当前时间；客户端注水后 useNow 接管（suppressHydrationWarning 压制毫秒级偏差）。
   const shown = now ?? ssrWallClock(bootTz);
   // 锁屏壁纸（主题里可独立设置，未设置时跟随主屏幕）。
-  // loaded 之前用 bootLockWallpaper（cookie 直通）：store selector 在 SSR/水合阶段读创建时快照
+  // loaded 之前用 BOOT_LOCK_WALL_STYLE（CSS 变量引用）：
+  // store selector 在 SSR/水合阶段读创建时快照，具体预设值两边可能不一致（iframe 里服务端只有默认快照）
+  // —— 变量引用让 SSR/客户端 style 属性完全相同，真实壁纸由 pre-paint 脚本写进变量，首帧即真实壁纸；
+  // 明暗静态标记仍按快照预设取（bootLockWallpaper）。
   const storeLw = useLockWallpaper();
   const storeLoaded = useSettings((s) => s.loaded);
   const bootLw = useMemo(() => {
     const preset = WALLPAPER_PRESETS.find((w) => w.id === bootLockWallpaper);
     return {
-      style: resolveWallpaperStyle(preset?.id ?? WALLPAPER_PRESETS[0].id, null),
+      style: BOOT_LOCK_WALL_STYLE,
       light: preset?.light ?? false,
     };
   }, [bootLockWallpaper]);
@@ -219,6 +222,7 @@ export default function LockScreen({
     <motion.div
       className="absolute inset-0 z-[65] select-none overflow-hidden"
       style={{ touchAction: 'none' }}
+      data-lock-screen=""
       // 解锁退场：从当前位置继续上滑并淡出（与拖拽手势无缝衔接）
       exit={{ y: -420, opacity: 0 }}
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
@@ -230,8 +234,8 @@ export default function LockScreen({
       role="dialog"
       aria-label="锁屏"
     >
-      {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸） */}
-      <div className="absolute inset-0" style={wallpaperStyle} aria-hidden="true" />
+      {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸；首帧 = CSS 变量直出真实壁纸） */}
+      <div className="absolute inset-0" style={wallpaperStyle} data-boot-lock-wall="" suppressHydrationWarning aria-hidden="true" />
 
       {/* initial={false}：首次挂载不播淡入——开机直接整帧呈现锁屏内容，
           否则时钟/小组件在壁纸上先透明再淡入，看起来像锁屏闪了一下 */}
@@ -245,9 +249,11 @@ export default function LockScreen({
             exit={{ opacity: 0, y: -30 }}
             transition={{ duration: 0.2 }}
           >
-            {/* 可拖拽内容层 */}
+            {/* 可拖拽内容层（data-lock-fg：boot 期浅色壁纸的首帧前景色由全局 CSS 覆盖，避免水合后变色闪烁） */}
             <div
               className={`absolute inset-0 flex flex-col ${fg}`}
+              data-lock-fg=""
+              suppressHydrationWarning
               style={{
                 transform: `translateY(${dy}px)`,
                 opacity: Math.max(0.3, 1 + Math.min(0, dy) / 420),
@@ -264,6 +270,7 @@ export default function LockScreen({
                 <p
                   className="mt-1 text-center text-[88px] font-semibold leading-[1.05] tracking-[-0.02em] tabular-nums"
                   style={lightText ? { textShadow: '0 2px 18px rgba(0,0,0,0.15)' } : undefined}
+                  data-ssr-clock=""
                   suppressHydrationWarning
                 >
                   {shown ? formatIOSTime(shown) : ''}

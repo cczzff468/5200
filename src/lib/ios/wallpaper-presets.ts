@@ -100,3 +100,37 @@ export function bootBackColorOf(wallpaperId: string, lockWallpaperId: string, lo
   const preset = WALLPAPER_PRESETS.find((w) => w.id === id);
   return preset?.base ?? WALLPAPER_PRESETS[0].base;
 }
+
+// ---------------- pre-paint 启动脚本用的两张「CSS 变量壁纸」 ----------------
+// cookie 在跨站 iframe（预览面板）里写不进去，服务端只能渲染默认快照；
+// 所以首帧壁纸不能用具体预设值（否则 SSR 与真实设置不一致 → load() 后换图 = 闪烁）。
+// 改为渲染 CSS 变量引用：layout 注入的 pre-paint 脚本在首帧绘制前把真实值写进
+// <html> 的 --ios-boot-* 变量（读 localStorage 镜像，iframe 里也可用），
+// SSR/客户端两边的 style 属性完全相同（都是 var() 引用）→ 零水合差异，首帧即真实壁纸。
+
+/** 主屏幕壁纸层首帧样式（变量未设置时回退 graphite 默认，与 store 初始值一致） */
+export const BOOT_WALL_STYLE: import('react').CSSProperties = {
+  backgroundColor: 'var(--ios-boot-wall-base, #161618)',
+  backgroundImage: 'var(--ios-boot-wall-image, none)',
+  backgroundSize: 'var(--ios-boot-wall-size, auto)',
+  backgroundPosition: 'var(--ios-boot-wall-pos, center)',
+};
+
+/** 锁屏壁纸层首帧样式（同上；锁屏默认也是 graphite） */
+export const BOOT_LOCK_WALL_STYLE: import('react').CSSProperties = {
+  backgroundColor: 'var(--ios-boot-lock-wall-base, #161618)',
+  backgroundImage: 'var(--ios-boot-lock-wall-image, none)',
+  backgroundSize: 'var(--ios-boot-lock-wall-size, auto)',
+  backgroundPosition: 'var(--ios-boot-lock-wall-pos, center)',
+};
+
+/** 内联 pre-paint 脚本的预设表 JSON：{ id: { base, css, img, light } }
+ *  （img=PNG 图片地址，供预载与样式还原；light=浅色壁纸标记，供首帧前景色覆盖规则） */
+export function bootPresetTableJson(): string {
+  const table: Record<string, { base: string; css: string; img: string | null; light: boolean }> = {};
+  for (const p of WALLPAPER_PRESETS) {
+    const m = p.css.startsWith('url(') ? p.css.slice(4, p.css.indexOf(')')) : null;
+    table[p.id] = { base: p.base, css: p.css, img: m && m.length > 0 ? m : null, light: p.light };
+  }
+  return JSON.stringify(table);
+}
