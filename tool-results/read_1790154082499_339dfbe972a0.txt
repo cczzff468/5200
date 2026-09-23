@@ -1,0 +1,2002 @@
+     1→'use client';
+     2→
+     3→import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
+     4→import { motion } from 'framer-motion';
+     5→import {
+     6→  ArrowUp,
+     7→  ChevronRight,
+     8→  CircleCheck,
+     9→  EyeOff,
+    10→  Loader2,
+    11→  Mail,
+    12→  MailOpen,
+    13→  MessageCircle,
+    14→  Mic,
+    15→  Pin,
+    16→  PinOff,
+    17→  Plus,
+    18→  Search,
+    19→  Trash2,
+    20→  UserPlus,
+    21→  Video,
+    22→  X,
+    23→  type LucideIcon,
+    24→} from 'lucide-react';
+    25→import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
+    26→import { BackToHome } from '@/components/ios/BackToHome';
+    27→import { GlassButton } from '@/components/ios/GlassButton';
+    28→import { DefaultAvatar } from '@/components/apps/default-avatar';
+    29→import { useSettings, useUI } from '@/lib/ios/store';
+    30→import {
+    31→  beginChatStream,
+    32→  clearChatStream,
+    33→  isChatStreaming,
+    34→  useChatStream,
+    35→  useChatStreamFinalized,
+    36→  type ChatPayloadMessage,
+    37→} from '@/lib/chat-stream-store';
+    38→import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+    39→import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
+    40→import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
+    41→import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
+    42→import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
+    43→import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+    44→import { stripEmojiText } from '@/lib/emoji';
+    45→import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+    46→import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+    47→import { memAfterAiTurn, memConvoFromRaw, memLastMsgId, memRecallBlock } from '@/lib/memory';
+    48→import { buildMomentsChatBlock } from '@/lib/moments';
+    49→import { ChatTranslatePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+    50→import {
+    51→  WB_EMPTY_BLOCKS,
+    52→  applyWbUserBlocks,
+    53→  collectWbBlocks,
+    54→  getBoundBookIds,
+    55→  loadBooks,
+    56→  setBoundBookIds,
+    57→  wbRulesBlock,
+    58→  wbScanText,
+    59→} from '@/lib/ios/worldbook';
+    60→import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
+    61→import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
+    62→import { chatBadge } from '@/lib/unread-store';
+    63→import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
+    64→
+    65→// ---------------- 类型与常量 ----------------
+    66→
+    67→type TabKey = 'chats' | 'contacts';
+    68→type View = 'main' | 'add' | 'chat';
+    69→
+    70→interface ChatMsg {
+    71→  id: string;
+    72→  role: 'user' | 'assistant';
+    73→  content: string;
+    74→  time: number;
+    75→  /** 请求失败的消息（不参与上下文、红字显示） */
+    76→  error?: boolean;
+    77→  /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
+    78→  quote?: { name: string; content: string };
+    79→  /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
+    80→  recalled?: boolean;
+    81→}
+    82→
+    83→/** 小助手（内置 AI 联系人，回复由 /api/chat 按用户配置的 OpenAI 兼容接口流式提供） */
+    84→const ASSISTANT = {
+    85→  name: '小助手',
+    86→  phone: '10086',
+    87→  desc: 'AI 智能助理 · 随时在线',
+    88→} as const;
+    89→
+    90→/** iMessage 己方气泡蓝（用户指定参考 iMessage 截图） */
+    91→const SELF_BLUE = '#007AFF';
+    92→
+    93→const SEED_MSGS: ChatMsg[] = [
+    94→  {
+    95→    id: 'seed-1',
+    96→    role: 'assistant',
+    97→    content: '你好，欢迎来到Cove，我是你的AI小助手。聊天解闷、头脑风暴、算数查资料…有什么想问的随时发消息给我',
+    98→    time: 0,
+    99→  },
+   100→];
+   101→
+   102→/** 本地持久化：小助手沿用旧 key 兼容历史记录；联系人会话按 id 分 key */
+   103→const LS_READ_KEY = 'ios-chat-assistant-read';
+   104→/** 小助手会话未读条数（AI 发了几条消息，主屏角标/会话行角标就是几；0 = 已读） */
+   105→const LS_UNREAD_N_KEY = 'ios-chat-assistant-unread-n';
+   106→const LS_HIDDEN_KEY = 'ios-chat-assistant-hidden';
+   107→const LS_PIN_KEY = 'ios-chat-assistant-pin';
+   108→
+   109→function lsMsgsKey(sessionKey: string): string {
+   110→  return sessionKey === 'assistant' ? 'ios-chat-assistant-msgs' : `ios-chat-msgs:${sessionKey}`;
+   111→}
+   112→
+   113→function loadMsgs(sessionKey: string): ChatMsg[] | null {
+   114→  try {
+   115→    // 持久化在 IndexedDB kv store（启动时由 idb-kv 从 localStorage 迁移，内存同步读）
+   116→    const parsed: unknown = kvGet<ChatMsg[]>(lsMsgsKey(sessionKey));
+   117→    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+   118→    const ok = parsed.every(
+   119→      (m) =>
+   120→        m &&
+   121→        typeof m === 'object' &&
+   122→        typeof (m as ChatMsg).content === 'string' &&
+   123→        ((m as ChatMsg).role === 'user' || (m as ChatMsg).role === 'assistant')
+   124→    );
+   125→    if (!ok) return null;
+   126→    const msgs = (parsed as ChatMsg[]).slice(-100);
+   127→    // 欢迎语文案迁移：种子消息按固定 id 识别，旧文案就地替换为最新文案（用户消息不动）
+   128→    if (sessionKey === 'assistant' && msgs[0]?.id === SEED_MSGS[0].id && msgs[0].content !== SEED_MSGS[0].content) {
+   129→      msgs[0] = { ...msgs[0], content: SEED_MSGS[0].content };
+   130→    }
+   131→    return msgs;
+   132→  } catch {
+   133→    return null;
+   134→  }
+   135→}
+   136→
+   137→function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
+   138→  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+   139→  kvSet(lsMsgsKey(sessionKey), msgs.slice(-100));
+   140→}
+   141→
+   142→/** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
+   143→ *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装 */
+   144→function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, npcExtra?: NpcPromptExtra | null): string {
+   145→  return buildPersonaSystemPrompt(c, {
+   146→    channel: '短信',
+   147→    userName: null,
+   148→    ownerName,
+   149→    ...npcExtra,
+   150→  });
+   151→}
+   152→
+   153→function uid(): string {
+   154→  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+   155→}
+   156→
+   157→function fmtTime(t: number): string {
+   158→  const d = new Date(t);
+   159→  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+   160→}
+   161→
+   162→function fmtDay(t: number): string {
+   163→  const d = new Date(t);
+   164→  return `${d.getMonth() + 1}月${d.getDate()}日`;
+   165→}
+   166→
+   167→function dayKey(t: number): string {
+   168→  const d = new Date(t);
+   169→  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+   170→}
+   171→
+   172→/** 会话列表时间：今天显示 HH:MM，跨天显示 M月D日 */
+   173→function fmtListTime(t: number): string {
+   174→  if (!t) return '';
+   175→  return dayKey(t) === dayKey(Date.now()) ? fmtTime(t) : fmtDay(t);
+   176→}
+   177→
+   178→/** 聊天日期分隔行文案（与微信聊天时间规则一致）：今天只显 HH:MM（不加日期）；
+   179→ *  昨天「昨天 HH:MM」；一周内（含前天）「星期X HH:MM」；一周前「M月D日 HH:MM」 */
+   180→function fmtChatStamp(t: number): string {
+   181→  const d = new Date(t);
+   182→  const now = new Date();
+   183→  if (d.toDateString() === now.toDateString()) return fmtTime(t);
+   184→  const yest = new Date(now);
+   185→  yest.setDate(now.getDate() - 1);
+   186→  if (d.toDateString() === yest.toDateString()) return `昨天 ${fmtTime(t)}`;
+   187→  if (now.getTime() - t < 7 * 86400000) return `星期${'日一二三四五六'[d.getDay()]} ${fmtTime(t)}`;
+   188→  return `${fmtDay(t)} ${fmtTime(t)}`;
+   189→}
+   190→
+   191→// ---------------- 长按（微信风格菜单：记录触点与行位置） ----------------
+   192→
+   193→/** 长按触发时的触点信息（x=视口横坐标，rowBottom=会话行底部视口纵坐标） */
+   194→interface LongPressPos {
+   195→  x: number;
+   196→  rowBottom: number;
+   197→}
+   198→
+   199→function useLongPress(onFire: (pos: LongPressPos) => void, ms = 500) {
+   200→  const timer = useRef(0);
+   201→  const fired = useRef(false);
+   202→  const pos = useRef<LongPressPos>({ x: 0, rowBottom: 0 });
+   203→  const stop = () => window.clearTimeout(timer.current);
+   204→  useEffect(() => stop, []);
+   205→  return {
+   206→    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+   207→      fired.current = false;
+   208→      // rect 需在事件同步阶段捕获（timeout 里 currentTarget 已为 null）
+   209→      pos.current = { x: e.clientX, rowBottom: e.currentTarget.getBoundingClientRect().bottom };
+   210→      stop();
+   211→      timer.current = window.setTimeout(() => {
+   212→        fired.current = true;
+   213→        if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
+   214→        onFire(pos.current);
+   215→      }, ms);
+   216→    },
+   217→    onPointerUp: stop,
+   218→    onPointerLeave: stop,
+   219→    onPointerCancel: stop,
+   220→    onContextMenu: (e: MouseEvent) => e.preventDefault(),
+   221→    /** 长按已触发时拦截随后的 click（不打开会话） */
+   222→    onClickCapture: (e: MouseEvent) => {
+   223→      if (fired.current) {
+   224→        e.preventDefault();
+   225→        e.stopPropagation();
+   226→        fired.current = false;
+   227→      }
+   228→    },
+   229→  };
+   230→}
+   231→
+   232→// ---------------- 日期分隔行（iMessage 风格） ----------------
+   233→
+   234→function DaySeparator({ time }: { time: number }) {
+   235→  return (
+   236→    <div className="my-3.5 flex flex-col items-center gap-[3px]">
+   237→      <span className="text-[11px] font-semibold tracking-wide text-muted-foreground">iMessage</span>
+   238→      <span className="text-[11px] text-muted-foreground/80">{fmtChatStamp(time)}</span>
+   239→    </div>
+   240→  );
+   241→}
+   242→
+   243→// ---------------- 气泡尾巴（与气泡同色的弧形小尾巴） ----------------
+   244→
+   245→const TAIL_CLIP_LEFT = 'path("M12 0 L12 6 C11 12 7 16 0 18 C4 13 6 8 6 2 L6 0 Z")';
+   246→const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 L8 0 Z")';
+   247→
+   248→// ---------------- 会话行 ----------------
+   249→
+   250→function AssistantRow({
+   251→  preview,
+   252→  time,
+   253→  unreadCount,
+   254→  pinned,
+   255→  onOpen,
+   256→  onLongPress,
+   257→}: {
+   258→  preview: string;
+   259→  time: string;
+   260→  unreadCount: number;
+   261→  pinned: boolean;
+   262→  onOpen: () => void;
+   263→  onLongPress: (pos: LongPressPos) => void;
+   264→}) {
+   265→  const press = useLongPress(onLongPress);
+   266→  return (
+   267→    <button
+   268→      type="button"
+   269→      onClick={onOpen}
+   270→      aria-label="和小助手聊天"
+   271→      {...press}
+   272→      // 微信样式：置顶 = 整行灰底；按下高亮 = 同款灰色（按下瞬间像临时置顶）
+   273→      className={`relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+   274→        pinned ? 'bg-black/[0.06] dark:bg-white/[0.08]' : ''
+   275→      } active:bg-black/[0.06] dark:active:bg-white/[0.08]`}
+   276→    >
+   277→      <DefaultAvatar size={52} />
+   278→      <div className="min-w-0 flex-1">
+   279→        <div className="flex items-baseline justify-between gap-2">
+   280→          <span className="flex min-w-0 items-center gap-1">
+   281→            <span className="truncate text-[15px] font-semibold">{ASSISTANT.name}</span>
+   282→          </span>
+   283→          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{time}</span>
+   284→        </div>
+   285→        <div className="mt-0.5 flex items-center justify-between gap-2">
+   286→          <p className="truncate text-[13px] leading-snug text-muted-foreground">{preview}</p>
+   287→          {unreadCount > 0 && (
+   288→            <span
+   289→              data-testid="sms-unread-badge"
+   290→              aria-label={`${unreadCount} 条未读`}
+   291→              className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#FF3B30] px-1 text-[11px] font-semibold leading-none text-white"
+   292→            >
+   293→              {unreadCount > 99 ? '99+' : unreadCount}
+   294→            </span>
+   295→          )}
+   296→        </div>
+   297→      </div>
+   298→      {/* iOS 内缩式发丝分隔线 */}
+   299→      <span aria-hidden="true" className="absolute bottom-0 left-[76px] right-0 h-px bg-border/50" />
+   300→    </button>
+   301→  );
+   302→}
+   303→
+   304→// ---------------- 微信风格长按菜单（深色浮层，横向图标+文字，锚定在会话卡片下方） ----------------
+   305→
+   306→interface WxMenuItem {
+   307→  icon: LucideIcon;
+   308→  label: string;
+   309→  onSelect: () => void;
+   310→}
+   311→
+   312→/** 估算菜单总宽（CJK 字宽 ≈ 字号，每项左右 px-[13px]） */
+   313→function wxMenuWidth(labels: string[]): number {
+   314→  return labels.reduce((acc, l) => acc + l.length * 10.5 + 26, 0);
+   315→}
+   316→
+   317→function WxLongPressMenu({
+   318→  pos,
+   319→  items,
+   320→  onClose,
+   321→}: {
+   322→  pos: { top: number; left: number; arrowX: number };
+   323→  items: WxMenuItem[];
+   324→  onClose: () => void;
+   325→}) {
+   326→  return (
+   327→    <div className="absolute inset-0 z-[70]" role="dialog" aria-label="会话操作菜单" aria-modal="true">
+   328→      {/* 透明遮罩：点击空白处关闭 */}
+   329→      <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 cursor-default" />
+   330→      <motion.div
+   331→        initial={{ opacity: 0, scale: 0.85, y: -6 }}
+   332→        animate={{ opacity: 1, scale: 1, y: 0 }}
+   333→        transition={{ type: 'spring', stiffness: 520, damping: 34 }}
+   334→        className="absolute"
+   335→        style={{ top: pos.top, left: pos.left, transformOrigin: `${pos.arrowX + 5}px 0` }}
+   336→      >
+   337→        {/* 指向会话卡片的小箭头（与菜单同色） */}
+   338→        <span
+   339→          aria-hidden="true"
+   340→          className="absolute -top-[4.5px] z-10 h-[11px] w-[11px] rotate-45 rounded-[2px]"
+   341→          style={{ left: pos.arrowX, backgroundColor: 'rgba(44,44,46,0.97)' }}
+   342→        />
+   343→        <div
+   344→          className="relative flex items-stretch overflow-hidden rounded-[10px] shadow-2xl"
+   345→          style={{ backgroundColor: 'rgba(44,44,46,0.97)', backdropFilter: 'blur(20px)' }}
+   346→        >
+   347→          {items.map((item, i) => (
+   348→            <button
+   349→              key={item.label}
+   350→              type="button"
+   351→              onClick={() => {
+   352→                onClose();
+   353→                item.onSelect();
+   354→              }}
+   355→              className={`flex flex-col items-center gap-[5px] px-[13px] pb-2 pt-[9px] text-white transition-colors active:bg-white/15 ${
+   356→                i > 0 ? 'border-l border-white/10' : ''
+   357→              }`}
+   358→            >
+   359→              <item.icon className="h-[19px] w-[19px]" strokeWidth={1.7} aria-hidden="true" />
+   360→              <span className="whitespace-nowrap text-[10.5px] leading-none">{item.label}</span>
+   361→            </button>
+   362→          ))}
+   363→        </div>
+   364→      </motion.div>
+   365→    </div>
+   366→  );
+   367→}
+   368→
+   369→// ---------------- iOS 风格确认弹窗（App 容器内绝对定位，弹簧动画） ----------------
+   370→
+   371→function IOSConfirmDialog({
+   372→  open,
+   373→  title,
+   374→  desc,
+   375→  confirmLabel,
+   376→  onCancel,
+   377→  onConfirm,
+   378→}: {
+   379→  open: boolean;
+   380→  title: string;
+   381→  desc?: string;
+   382→  confirmLabel: string;
+   383→  onCancel: () => void;
+   384→  onConfirm: () => void;
+   385→}) {
+   386→  if (!open) return null;
+   387→  return (
+   388→    <div
+   389→      className="absolute inset-0 z-[80] flex items-center justify-center px-10"
+   390→      role="alertdialog"
+   391→      aria-modal="true"
+   392→      aria-label={title}
+   393→    >
+   394→      <button type="button" aria-label="取消" onClick={onCancel} className="absolute inset-0 cursor-default bg-black/35" />
+   395→      <motion.div
+   396→        initial={{ opacity: 0, scale: 1.1 }}
+   397→        animate={{ opacity: 1, scale: 1 }}
+   398→        transition={{ type: 'spring', stiffness: 480, damping: 30 }}
+   399→        className="relative w-full max-w-[270px] overflow-hidden rounded-[14px] bg-[#f4f4f6]/95 text-center shadow-2xl backdrop-blur-2xl dark:bg-[#2a2a2c]/95"
+   400→      >
+   401→        <div className="px-4 pb-4 pt-[18px]">
+   402→          <p className="text-[16px] font-semibold leading-snug">{title}</p>
+   403→          {desc && <p className="mt-1 text-[13px] leading-snug text-muted-foreground">{desc}</p>}
+   404→        </div>
+   405→        <div className="flex border-t border-black/10 dark:border-white/10">
+   406→          <button
+   407→            type="button"
+   408→            onClick={onCancel}
+   409→            className="flex h-[44px] flex-1 items-center justify-center border-r border-black/10 text-[16px] transition-colors active:bg-black/5 dark:border-white/10 dark:active:bg-white/10"
+   410→          >
+   411→            取消
+   412→          </button>
+   413→          <button
+   414→            type="button"
+   415→            onClick={onConfirm}
+   416→            className="flex h-[44px] flex-1 items-center justify-center text-[16px] font-semibold text-[#FF3B30] transition-colors active:bg-black/5 dark:text-[#FF453A] dark:active:bg-white/10"
+   417→          >
+   418→            {confirmLabel}
+   419→          </button>
+   420→        </div>
+   421→      </motion.div>
+   422→    </div>
+   423→  );
+   424→}
+   425→
+   426→// ---------------- 聊天视图（iMessage 风格） ----------------
+   427→
+   428→/** 聊天对端信息：顶栏标题（手机号）与头像 */
+   429→interface ChatPeer {
+   430→  title: string;
+   431→  avatarSrc: string | null;
+   432→  /** 对方名字（聊天设置页信息卡用；信息 App 内为昵称/备注） */
+   433→  name?: string;
+   434→  /** 备注名（仅机主自己可见；聊天设置页备注行用） */
+   435→  remark?: string;
+   436→}
+   437→
+   438→/** 当前聊天会话：'assistant' | 'c:<contactId>' */
+   439→interface ChatSession {
+   440→  key: string;
+   441→  peer: ChatPeer;
+   442→  systemPrompt: string | null;
+   443→}
+   444→
+   445→function ChatView({
+   446→  storageKey,
+   447→  initialMsgs,
+   448→  onMsgsChange,
+   449→  peer,
+   450→  systemPrompt,
+   451→  onBack,
+   452→  onSaveRemark,
+   453→}: {
+   454→  /** 会话存储键：'assistant' | 'c:<contactId>'（key 变化 = 组件重挂载，互不串扰） */
+   455→  storageKey: string;
+   456→  initialMsgs: ChatMsg[];
+   457→  /** 消息变化回传父级（小助手会话用于列表预览；联系人会话不传） */
+   458→  onMsgsChange?: (msgs: ChatMsg[]) => void;
+   459→  peer: ChatPeer;
+   460→  /** 联系人聊天的 AI 人设（system 消息，随请求发送） */
+   461→  systemPrompt: string | null;
+   462→  onBack: () => void;
+   463→  /** 保存备注（仅联系人会话传入；空串 = 清除；宿主负责持久化并刷新展示名） */
+   464→  onSaveRemark?: (v: string) => void;
+   465→}) {
+   466→  const [input, setInput] = useState('');
+   467→  // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
+   468→  const [msgs, setMsgs] = useState<ChatMsg[]>(() => {
+   469→    const saved = loadMsgs(storageKey);
+   470→    return saved && saved.length ? saved : initialMsgs;
+   471→  });
+   472→  /** 全局流式回复状态（请求由 chat-stream-store 发起并接收，退出聊天页/退出 App 不中断） */
+   473→  const sessionKey = `sms:${storageKey}`;
+   474→  const stream = useChatStream(sessionKey);
+   475→  const streaming = stream?.status === 'streaming';
+   476→  const scrollRef = useRef<HTMLDivElement>(null);
+   477→  // 用户自己的 OpenAI 兼容接口配置（设置 › API 配置），聊天全部走该配置
+   478→  const apiConfig = useSettings((s) => s.apiConfig);
+   479→  /** 机主名字（记忆提取视角统一用：碎片一律用真实名字指代用户；设置 › Apple 账户可改） */
+   480→  const profileName = useSettings((s) => s.profile.name);
+   481→  /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */
+   482→  const [settingsOpen, setSettingsOpen] = useState(false);
+   483→  /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
+   484→  const [translateOpen, setTranslateOpen] = useState(false);
+   485→  /** 当前会话的翻译配置（开启后文字消息气泡下方显示所选语言的译文） */
+   486→  const [transCfg, setTransCfgState] = useState<ChatTranslateCfg>(() => getTranslateCfg(sessionKey));
+   487→  useEffect(() => {
+   488→    setTransCfgState(getTranslateCfg(sessionKey));
+   489→  }, [sessionKey]);
+   490→  /** 译文缓存（key = `${msgId}|${langCode}`）与失败标记（避免每帧重试） */
+   491→  const [translations, setTranslations] = useState<Record<string, string>>({});
+   492→  const [trFailed, setTrFailed] = useState<Record<string, boolean>>({});
+   493→  /** 分句发送开关（开启后连续发消息 AI 不回复，输入框为空再点一次发送才触发回复） */
+   494→  const [sentenceSend, setSentenceSendState] = useState(() => getSentenceSend(sessionKey));
+   495→  useEffect(() => {
+   496→    setSentenceSendState(getSentenceSend(sessionKey));
+   497→  }, [sessionKey]);
+   498→  /** 时间感知开关（本会话独立，发送时现场读取；见 @/lib/time-aware） */
+   499→  const [timeAware, setTimeAwareState] = useState(() => getTimeAware(sessionKey));
+   500→  useEffect(() => {
+   501→    setTimeAwareState(getTimeAware(sessionKey));
+   502→  }, [sessionKey]);
+   503→  /** 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle；信息端无表情包，只约束 emoji） */
+   504→  const [stickersOn, setStickersOnState] = useState(() => getStickersOn(sessionKey));
+   505→  useEffect(() => {
+   506→    setStickersOnState(getStickersOn(sessionKey));
+   507→  }, [sessionKey]);
+   508→  /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
+   509→  const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+   510→  const [wbOpen, setWbOpen] = useState(false);
+   511→  const [wbBound, setWbBound] = useState<string[]>(() => (wbContactId ? getBoundBookIds(wbContactId) : []));
+   512→  useEffect(() => {
+   513→    setWbBound(wbContactId ? getBoundBookIds(wbContactId) : []);
+   514→  }, [wbContactId]);
+   515→  /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
+   516→  const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
+   517→  useEffect(() => {
+   518→    setPendingDispatch(hasPendingBatch(sessionKey));
+   519→  }, [sessionKey]);
+   520→  const onMsgsChangeRef = useRef(onMsgsChange);
+   521→  // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）
+   522→  useEffect(() => {
+   523→    onMsgsChangeRef.current = onMsgsChange;
+   524→  });
+   525→
+   526→  // 消息回传父级（小助手会话列表预览）
+   527→  useEffect(() => {
+   528→    onMsgsChangeRef.current?.(msgs);
+   529→  }, [msgs]);
+   530→
+   531→  // 本地持久化：流式中的 AI 回复不进本地 msgs（在全局 store 里），msgs 只含已落盘内容，直接保存
+   532→  useEffect(() => {
+   533→    saveMsgs(storageKey, msgs);
+   534→  }, [msgs, storageKey]);
+   535→
+   536→  // 新消息/流式输出时自动滚到底部
+   537→  useEffect(() => {
+   538→    const el = scrollRef.current;
+   539→    if (el) el.scrollTop = el.scrollHeight;
+   540→  }, [msgs, stream]);
+   541→
+   542→  // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）按检测到的语言双向翻译成另一侧
+   543→  // （左侧语言的消息译成右侧，右侧语言的消息译成左侧）。缓存、并发闸、在途去重都在
+   544→  // @/lib/chat-translate 内部，这里只负责把结果写入组件状态
+   545→  useEffect(() => {
+   546→    if (!transCfg.on) return;
+   547→    const targets = msgs
+   548→      .filter((m) => !m.error && m.content.trim() && !m.content.startsWith('（AI'))
+   549→      .slice(-60);
+   550→    if (targets.length === 0) return;
+   551→    let alive = true;
+   552→    for (const m of targets) {
+   553→      const code = detectTranslateTarget(m.content, transCfg.left, transCfg.right);
+   554→      const key = `${m.id}|${code}`;
+   555→      if (translations[key] !== undefined || trFailed[key]) continue;
+   556→      requestTranslation({ text: m.content, lang: code, apiConfig })
+   557→        .then((text) => {
+   558→          if (alive) setTranslations((prev) => (prev[key] === text ? prev : { ...prev, [key]: text }));
+   559→        })
+   560→        .catch(() => {
+   561→          if (alive) setTrFailed((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+   562→        });
+   563→    }
+   564→    return () => {
+   565→      alive = false;
+   566→    };
+   567→  }, [msgs, transCfg, translations, trFailed, apiConfig]);
+   568→
+   569→  /** 气泡下方译文行（翻译开启时按消息语言显示对侧语言的译文，带语言名前缀） */
+   570→  const renderTranslations = (msgId: string, content: string, error?: boolean) => {
+   571→    if (error || !transCfg.on) return null;
+   572→    if (!content.trim() || content.startsWith('（AI')) return null;
+   573→    const code = detectTranslateTarget(content, transCfg.left, transCfg.right);
+   574→    const text = translations[`${msgId}|${code}`];
+   575→    if (typeof text !== 'string' || !text) return null;
+   576→    return (
+   577→      <p
+   578→        data-testid="sms-translate-row"
+   579→        className="mt-1 max-w-full whitespace-pre-wrap break-words text-[12.5px] leading-[1.45] text-muted-foreground"
+   580→      >
+   581→        {`${translateLangLabel(code)}：${text}`}
+   582→      </p>
+   583→    );
+   584→  };
+   585→
+   586→  /** 全局流结束（成功/失败）：finalize 已把最终消息落盘，把落盘后的完整记录并回本地并清理流状态。
+   587→   *  useLayoutEffect + 微任务：渲染帧内完成同步避免气泡闪断；页面不在时流自然由 store 收尾，重进后走同逻辑 */
+   588→  useLayoutEffect(() => {
+   589→    if (!stream || stream.status === 'streaming') return;
+   590→    void Promise.resolve().then(() => {
+   591→      setMsgs((prev) => {
+   592→        const saved = loadMsgs(storageKey);
+   593→        if (!saved || saved.length === 0) return prev;
+   594→        // 按 id 合并：本地消息优先，落盘新增的只会是 AI 回复
+   595→        const ids = new Set(prev.map((m) => m.id));
+   596→        return [...prev, ...saved.filter((m) => !ids.has(m.id))];
+   597→      });
+   598→      clearChatStream(sessionKey);
+   599→    });
+   600→  }, [stream, sessionKey, storageKey]);
+   601→
+   602→  /** AI 回合：把整轮流式请求交给全局 store（userMsg 为 null = 分句发送批次触发，消息早已入列）。
+   603→   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
+   604→  const startAiTurn = (userMsg: ChatMsg | null) => {
+   605→    const base = userMsg ? [...msgs, userMsg] : msgs;
+   606→    // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知）
+   607→    const history = base
+   608→      .filter((m) => !m.error && m.content && !m.recalled)
+   609→      .slice(-20)
+   610→      .map((m) => ({
+   611→        role: m.role,
+   612→        content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${m.content}`,
+   613→      }));
+   614→
+   615→    const aiId = uid();
+   616→    // 用户消息立即入列并落盘；AI 回复交给全局 store 流式接收（退出聊天页不中断），
+   617→    // 结束/失败后由 finalize 写入本会话聊天记录（与页面是否存活无关）
+   618→    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
+   619→
+   620→    // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
+   621→    // 回复条数（本会话独立设置；信息端未提供设置入口，未设置时保持 1 条的现状）
+   622→    const replyCount = systemPrompt ? getReplyCount(sessionKey, 1) : 1;
+   623→    // 记忆库：联系人会话召回记忆（storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
+   624→    const memContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+   625→    const memoryBlock = memContactId
+   626→      ? memRecallBlock(
+   627→          memContactId,
+   628→          'sms',
+   629→          [userMsg?.content ?? '', ...base.slice(-6).map((m) => m.content)].filter(Boolean).join(' ')
+   630→        )
+   631→      : '';
+   632→    // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（信息 App 无自有平台，
+   633→    // 关闭时不注入——动态属于社交平台，不属于短信）；用户广播动态首次被看到时懒写入该角色记忆
+   634→    const momentsBlock = memContactId
+   635→      ? buildMomentsChatBlock({
+   636→          contactId: memContactId,
+   637→          app: 'sms',
+   638→          userName: profileName,
+   639→          peer: { id: memContactId, name: peer.name ?? peer.title, nickname: null },
+   640→        })
+   641→      : '';
+   642→    // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
+   643→    // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值；
+   644→    // AI 助手会话（无人设）也注入时间块，让「现在几点」这类问题能答准
+   645→    const timeBlock = getTimeAware(sessionKey)
+   646→      ? buildTimeAwareBlock({ lastMsgTime: msgs.length > 0 ? msgs[msgs.length - 1].time : null })
+   647→      : '';
+   648→    // 世界书：仅联系人会话参与（AI 助手会话无联系人角色）；命中触发词条目按插入位置注入
+   649→    //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；有内容时 system 末尾附带使用规则）
+   650→    const wbBlocks = wbContactId
+   651→      ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => m.content)]))
+   652→      : null;
+   653→    const charBlock =
+   654→      wbBlocks && systemPrompt
+   655→        ? [wbBlocks.beforeChar, systemPrompt, wbBlocks.afterChar].filter(Boolean).join('\n\n')
+   656→        : systemPrompt ?? '';
+   657→    const baseSys = [
+   658→      ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
+   659→      charBlock,
+   660→      memoryBlock,
+   661→      momentsBlock,
+   662→      timeBlock,
+   663→      stickersOn ? '' : STICKER_OFF_RULE,
+   664→      ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
+   665→    ]
+   666→      .filter(Boolean)
+   667→      .join('\n\n');
+   668→    const sysContent = baseSys
+   669→      ? replyCount > 1
+   670→        ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
+   671→        : baseSys
+   672→      : null;
+   673→    const payload: ChatPayloadMessage[] = applyWbUserBlocks(
+   674→      sysContent ? [{ role: 'system' as const, content: sysContent }, ...history] : history,
+   675→      wbBlocks ?? WB_EMPTY_BLOCKS,
+   676→    );
+   677→    const started = beginChatStream({
+   678→      sessionKey,
+   679→      aiMsgId: aiId,
+   680→      messages: payload,
+   681→      apiConfig,
+   682→      replyCount,
+   683→      finalize: ({ aiMsgId, content, error, startedAt }) => {
+   684→        if (error) {
+   685→          saveMsgs(storageKey, [
+   686→            ...(loadMsgs(storageKey) ?? []),
+   687→            { id: aiMsgId, role: 'assistant', content: error, time: startedAt, error: true },
+   688→          ]);
+   689→          return;
+   690→        }
+   691→        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
+   692→        // 表情包开关关闭时：先去掉表情包类标记残留（信息端本就不解析标记），再硬性剥除 emoji（prompt 禁令之外的双保险）
+   693→        const segs = splitReplySegments(content, replyCount > 1).map((seg) =>
+   694→          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
+   695→        );
+   696→        let t = startedAt;
+   697→        const saved: ChatMsg[] = segs.map((seg, i) => {
+   698→          const msg: ChatMsg = {
+   699→            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
+   700→            role: 'assistant',
+   701→            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
+   702→            time: t,
+   703→          };
+   704→          t += 600 + Math.floor(Math.random() * 600);
+   705→          return msg;
+   706→        });
+   707→        saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
+   708→        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
+   709→        // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
+   710→        // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+   711→        if (memContactId) {
+   712→          void Promise.all([ownerRealName(), contactRealName(memContactId)]).then(([owner, peerReal]) =>
+   713→            memAfterAiTurn(
+   714→              memContactId,
+   715→              'sms',
+   716→              apiConfig,
+   717→              () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
+   718→              () => memLastMsgId(loadMsgs(storageKey) ?? []),
+   719→              { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
+   720→            )
+   721→          );
+   722→        }
+   723→      },
+   724→    });
+   725→    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
+   726→    if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+   727→  };
+   728→
+   729→  const send = () => {
+   730→    const text = input.trim();
+   731→    if (!text || isChatStreaming(sessionKey)) return;
+   732→
+   733→    const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now(), quote: quote ?? undefined };
+   734→    setInput('');
+   735→    setQuote(null);
+   736→    // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
+   737→    if (sentenceSend) {
+   738→      setMsgs((prev) => [...prev, userMsg]);
+   739→      setPendingDispatch(true);
+   740→      markPendingBatch(sessionKey, true);
+   741→      return;
+   742→    }
+   743→    startAiTurn(userMsg);
+   744→  };
+   745→
+   746→  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
+   747→  const dispatchBatch = () => {
+   748→    if (!pendingDispatch || isChatStreaming(sessionKey)) return;
+   749→    setPendingDispatch(false);
+   750→    markPendingBatch(sessionKey, false);
+   751→    startAiTurn(null);
+   752→  };
+   753→
+   754→  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次） */
+   755→  const canDispatch = sentenceSend && pendingDispatch && !streaming;
+   756→
+   757→  // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回（信息端无转发/收藏/重新生成） ----------------
+   758→
+   759→  /** 轻量提示（复制/删除等动作反馈；信息端无全局 toast） */
+   760→  const [toastMsg, setToastMsg] = useState('');
+   761→  const toastTimer = useRef<number | null>(null);
+   762→  const showToast = useCallback((m: string) => {
+   763→    setToastMsg(m);
+   764→    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+   765→    toastTimer.current = window.setTimeout(() => setToastMsg(''), 1500);
+   766→  }, []);
+   767→  useEffect(
+   768→    () => () => {
+   769→      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+   770→    },
+   771→    []
+   772→  );
+   773→
+   774→  /** 气泡长按菜单（横向弹窗）：消息 + 容器内坐标 */
+   775→  const [msgMenu, setMsgMenu] = useState<null | { msg: ChatMsg; pos: BubbleMenuPos }>(null);
+   776→  /** 编辑消息弹窗（菜单「编辑」）：原消息 + 草稿 */
+   777→  const [editMsg, setEditMsg] = useState<ChatMsg | null>(null);
+   778→  const [editDraft, setEditDraft] = useState('');
+   779→  /** 引用回复（输入框上方条；发送时挂到新消息上） */
+   780→  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
+   781→  /** 多选模式：勾选消息批量删除 */
+   782→  const [selectMode, setSelectMode] = useState(false);
+   783→  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+   784→  /** 聊天页根元素（长按菜单定位参照） */
+   785→  const pageRef = useRef<HTMLDivElement>(null);
+   786→
+   787→  /** 引用人名：我的消息 → 「我」；对方 → 联系人名/手机号 */
+   788→  const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? '我' : peer.name || peer.title);
+   789→
+   790→  /** 按发送方组装长按菜单项（复制 删除 编辑 引用 多选 撤回） */
+   791→  const buildMsgMenuItems = (_m: ChatMsg): BubbleMenuItem[] => {
+   792→    const B = BUBBLE_MENU_ICONS;
+   793→    return [
+   794→      { key: 'copy', label: '复制', icon: B.copy },
+   795→      { key: 'del', label: '删除', icon: B.del, danger: true },
+   796→      { key: 'edit', label: '编辑', icon: B.edit },
+   797→      { key: 'quote', label: '引用', icon: B.quote },
+   798→      { key: 'multi', label: '多选', icon: B.multi },
+   799→      { key: 'recall', label: '撤回', icon: B.recall },
+   800→    ];
+   801→  };
+   802→
+   803→  /** 气泡长按手势（fire 里用 data-mid 反查消息；多选模式下不弹菜单改为点选勾选） */
+   804→  const bubblePress = useBubbleLongPress((el) => {
+   805→    const mid = el.closest('[data-mid]')?.getAttribute('data-mid') ?? null;
+   806→    const msg = mid ? msgs.find((x) => x.id === mid) ?? null : null;
+   807→    if (!msg || msg.recalled) return;
+   808→    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, 6) });
+   809→  }, !selectMode);
+   810→
+   811→  /** 退出多选模式 */
+   812→  const exitSelect = useCallback(() => {
+   813→    setSelectMode(false);
+   814→    setSelectedIds([]);
+   815→  }, []);
+   816→
+   817→  const toggleSelect = (id: string) =>
+   818→    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+   819→
+   820→  /** 长按菜单动作分发（执行后关闭菜单） */
+   821→  const handleMenuAction = (key: string) => {
+   822→    const m = msgMenu?.msg ?? null;
+   823→    setMsgMenu(null);
+   824→    if (!m) return;
+   825→    switch (key) {
+   826→      case 'copy': {
+   827→        const t = m.content;
+   828→        const done = () => showToast('已拷贝');
+   829→        const fallback = () => {
+   830→          try {
+   831→            const ta = document.createElement('textarea');
+   832→            ta.value = t;
+   833→            ta.style.position = 'fixed';
+   834→            ta.style.opacity = '0';
+   835→            document.body.appendChild(ta);
+   836→            ta.select();
+   837→            document.execCommand('copy');
+   838→            document.body.removeChild(ta);
+   839→            done();
+   840→          } catch {
+   841→            showToast('拷贝失败');
+   842→          }
+   843→        };
+   844→        try {
+   845→          if (navigator.clipboard?.writeText) {
+   846→            navigator.clipboard.writeText(t).then(done).catch(fallback);
+   847→          } else {
+   848→            fallback();
+   849→          }
+   850→        } catch {
+   851→          fallback();
+   852→        }
+   853→        break;
+   854→      }
+   855→      case 'del': {
+   856→        if (isChatStreaming(sessionKey)) {
+   857→          showToast('对方正在回复，请稍后再试');
+   858→          return;
+   859→        }
+   860→        setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+   861→        showToast('已删除');
+   862→        break;
+   863→      }
+   864→      case 'edit':
+   865→        setEditMsg(m);
+   866→        setEditDraft(m.content);
+   867→        break;
+   868→      case 'quote':
+   869→        setQuote({ name: quoteNameOf(m), content: m.content });
+   870→        break;
+   871→      case 'multi':
+   872→        setSelectMode(true);
+   873→        setSelectedIds([m.id]);
+   874→        break;
+   875→      case 'recall': {
+   876→        if (isChatStreaming(sessionKey)) {
+   877→          showToast('对方正在回复，请稍后再试');
+   878→          return;
+   879→        }
+   880→        setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
+   881→        showToast('已撤回');
+   882→        break;
+   883→      }
+   884→    }
+   885→  };
+   886→
+   887→  /** 编辑保存：更新该条消息内容（quote 等字段保留），自动落盘 */
+   888→  const saveEdit = () => {
+   889→    const t = editDraft.trim();
+   890→    if (!editMsg) return;
+   891→    if (!t) {
+   892→      showToast('内容不能为空');
+   893→      return;
+   894→    }
+   895→    if (isChatStreaming(sessionKey)) {
+   896→      showToast('对方正在回复，请稍后再试');
+   897→      return;
+   898→    }
+   899→    setMsgs((prev) => prev.map((x) => (x.id === editMsg.id ? { ...x, content: t } : x)));
+   900→    setEditMsg(null);
+   901→    showToast('已修改');
+   902→  };
+   903→
+   904→  /** 多选批量删除 */
+   905→  const batchDelete = () => {
+   906→    if (selectedIds.length === 0) return;
+   907→    if (isChatStreaming(sessionKey)) {
+   908→      showToast('对方正在回复，请稍后再试');
+   909→      return;
+   910→    }
+   911→    const ids = new Set(selectedIds);
+   912→    setMsgs((prev) => prev.filter((x) => !ids.has(x.id)));
+   913→    showToast(`已删除 ${selectedIds.length} 条消息`);
+   914→    exitSelect();
+   915→  };
+   916→
+   917→  // iMessage 语义：「已送达」挂在最后一条己方消息下方
+   918→  const lastUserIdx = msgs.reduce((acc, m, idx) => (m.role === 'user' ? idx : acc), -1);
+   919→
+   920→  return (
+   921→    <div ref={pageRef} className="relative flex h-full min-h-0 flex-col">
+   922→      {/* 顶栏：返回箭头 + 居中头像/手机号（不显示名字）+ 摄像机图标（聊天设置入口） */}
+   923→      <div className="z-20 shrink-0 border-b border-border/50 bg-background/80 pt-[54px] backdrop-blur-xl">
+   924→        <div className="relative flex h-[64px] items-center px-3">
+   925→          <IOSBackButton label="" onClick={onBack} />
+   926→          <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+   927→            {peer.avatarSrc ? (
+   928→              <img src={peer.avatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
+   929→            ) : (
+   930→              <DefaultAvatar size={40} />
+   931→            )}
+   932→            <div className="mt-0.5 flex items-center gap-0.5 leading-none">
+   933→              <span className="text-[13px] font-semibold tabular-nums">{peer.title}</span>
+   934→              <ChevronRight className="h-3 w-3 text-muted-foreground/70" strokeWidth={2.5} aria-hidden="true" />
+   935→            </div>
+   936→          </div>
+   937→          <div className="ml-auto flex items-center">
+   938→            <button
+   939→              type="button"
+   940→              aria-label="聊天设置"
+   941→              data-testid="sms-chat-settings-entry"
+   942→              onClick={() => setSettingsOpen(true)}
+   943→              className="flex h-9 w-9 items-center justify-center rounded-full text-foreground active:bg-black/5"
+   944→            >
+   945→              <Video className="h-[22px] w-[22px]" strokeWidth={1.8} />
+   946→            </button>
+   947→          </div>
+   948→        </div>
+   949→      </div>
+   950→
+   951→      {/* 消息流 */}
+   952→      <div
+   953→        ref={scrollRef}
+   954→        role="log"
+   955→        aria-label="聊天消息"
+   956→        aria-live="polite"
+   957→        className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-2 pt-1"
+   958→      >
+   959→        {msgs.length === 0 && (
+   960→          <div className="flex h-full flex-col items-center justify-center gap-2.5 pb-10">
+   961→            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/5 dark:bg-white/10">
+   962→              <MessageCircle className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} aria-hidden="true" />
+   963→            </div>
+   964→            <p className="text-[14px] font-medium text-muted-foreground">发条短信打个招呼吧</p>
+   965→          </div>
+   966→        )}
+   967→        {msgs.map((m, i) => {
+   968→          const prev = i > 0 ? msgs[i - 1] : undefined;
+   969→          const next = i < msgs.length - 1 ? msgs[i + 1] : undefined;
+   970→          const newDay = prev === undefined || dayKey(prev.time) !== dayKey(m.time);
+   971→          const grouped = prev !== undefined && !newDay && prev.role === m.role;
+   972→          const lastOfGroup = next === undefined || next.role !== m.role;
+   973→          const mine = m.role === 'user';
+   974→          const text = m.content.trim();
+   975→          return (
+   976→            <div
+   977→              key={m.id}
+   978→              data-mid={m.id}
+   979→              onClickCapture={
+   980→                selectMode && !m.recalled
+   981→                  ? (e) => {
+   982→                      e.preventDefault();
+   983→                      e.stopPropagation();
+   984→                      toggleSelect(m.id);
+   985→                    }
+   986→                  : undefined
+   987→              }
+   988→            >
+   989→              {newDay && <DaySeparator time={m.time} />}
+   990→              {m.recalled ? (
+   991→                /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
+   992→                <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
+   993→                  <span className="rounded-full bg-black/[0.06] px-3 py-1 text-[12px] text-muted-foreground dark:bg-white/[0.08]">
+   994→                    {mine ? '你撤回一条消息' : '对方撤回一条消息'}
+   995→                  </span>
+   996→                </div>
+   997→              ) : (
+   998→              <motion.div
+   999→                initial={{ opacity: 0, y: 10, scale: 0.97 }}
+  1000→                animate={{ opacity: 1, y: 0, scale: 1 }}
+  1001→                transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+  1002→                className={`flex ${mine ? 'justify-end' : 'justify-start'} ${grouped ? 'mt-[3px]' : 'mt-2.5'}`}
+  1003→              >
+  1004→                {selectMode && !mine && (
+  1005→                  <span
+  1006→                    aria-hidden="true"
+  1007→                    data-testid={`sms-select-${m.id}`}
+  1008→                    className={`mr-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+  1009→                      selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+  1010→                    }`}
+  1011→                  >
+  1012→                    {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+  1013→                  </span>
+  1014→                )}
+  1015→                {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
+  1016→                <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+  1017→                  {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊） */}
+  1018→                  {m.quote && (
+  1019→                    <div
+  1020→                      data-testid="sms-quote-block"
+  1021→                      className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-black/[0.06] px-3 py-1.5 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
+  1022→                    >
+  1023→                      <p className="line-clamp-2 whitespace-pre-wrap break-all">
+  1024→                        {m.quote.name}：{m.quote.content}
+  1025→                      </p>
+  1026→                    </div>
+  1027→                  )}
+  1028→                  <div
+  1029→                      {...bubblePress}
+  1030→                      className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 text-[15px] leading-[1.45] ${
+  1031→                        mine
+  1032→                          ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
+  1033→                          : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
+  1034→                      }`}
+  1035→                    >
+  1036→                      {!mine && lastOfGroup && (
+  1037→                        <span
+  1038→                          aria-hidden="true"
+  1039→                          className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
+  1040→                          style={{ clipPath: TAIL_CLIP_LEFT }}
+  1041→                        />
+  1042→                      )}
+  1043→                      {mine && lastOfGroup && (
+  1044→                        <span
+  1045→                          aria-hidden="true"
+  1046→                          className="absolute -right-[6px] bottom-0 h-[18px] w-[14px] bg-[#007AFF]"
+  1047→                          style={{ clipPath: TAIL_CLIP_RIGHT }}
+  1048→                        />
+  1049→                      )}
+  1050→                      <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
+  1051→                    </div>
+  1052→                  {/* 翻译开启时在气泡下方显示所选语言的译文 */}
+  1053→                  {renderTranslations(m.id, m.content, m.error && !mine)}
+  1054→                  {/* iMessage：已送达挂在气泡下沿、小尾巴另一侧（气泡左下角，与气泡左缘对齐） */}
+  1055→                  {mine && i === lastUserIdx && !m.error && (
+  1056→                    <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
+  1057→                  )}
+  1058→                </div>
+  1059→                {selectMode && mine && (
+  1060→                  <span
+  1061→                    aria-hidden="true"
+  1062→                    data-testid={`sms-select-${m.id}`}
+  1063→                    className={`ml-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+  1064→                      selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+  1065→                    }`}
+  1066→                  >
+  1067→                    {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+  1068→                  </span>
+  1069→                )}
+  1070→              </motion.div>
+  1071→              )}
+  1072→            </div>
+  1073→          );
+  1074→        })}
+  1075→        {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；
+  1076→            iMessage 语义：未收到内容时显示打字中动画，收到后变为流式文本气泡）。
+  1077→            回复条数 > 1 时按边界（标记/换行/句末标点，一句一条）实时切成多个气泡，下一句没打完时显示打字中动画（一句一句连发节奏） */}
+  1078→        {stream && stream.status === 'streaming' &&
+  1079→          (() => {
+  1080→            const split = splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1);
+  1081→            const dots = (
+  1082→              <div className="relative rounded-[18px] rounded-bl-[5px] bg-muted px-4 py-3.5">
+  1083→                <span
+  1084→                  aria-hidden="true"
+  1085→                  className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
+  1086→                  style={{ clipPath: TAIL_CLIP_LEFT }}
+  1087→                />
+  1088→                <div className="flex items-center gap-1">
+  1089→                  {[0, 1, 2].map((d) => (
+  1090→                    <span
+  1091→                      key={d}
+  1092→                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
+  1093→                      style={{ animationDelay: `${d * 0.15}s` }}
+  1094→                    />
+  1095→                  ))}
+  1096→                </div>
+  1097→              </div>
+  1098→            );
+  1099→            return (
+  1100→              <motion.div
+  1101→                initial={{ opacity: 0, y: 10, scale: 0.97 }}
+  1102→                animate={{ opacity: 1, y: 0, scale: 1 }}
+  1103→                transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+  1104→                className="mt-2.5 flex justify-start"
+  1105→                data-testid="sms-stream-bubble"
+  1106→              >
+  1107→                <div className="flex max-w-[76%] flex-col items-start">
+  1108→                  {split.texts.map((t, i) => {
+  1109→                    const lastOfGroup = i === split.texts.length - 1 && !split.pending;
+  1110→                    return (
+  1111→                      <div
+  1112→                        key={i}
+  1113→                        data-testid={`sms-stream-bubble-${i}`}
+  1114→                        className="relative mb-[3px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-muted px-3.5 py-2 text-[15px] leading-[1.45] text-foreground last:mb-0"
+  1115→                      >
+  1116→                        {lastOfGroup && (
+  1117→                          <span
+  1118→                            aria-hidden="true"
+  1119→                            className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
+  1120→                            style={{ clipPath: TAIL_CLIP_LEFT }}
+  1121→                          />
+  1122→                        )}
+  1123→                        <span className="relative">{stickersOn ? t : stripEmojiText(t)}</span>
+  1124→                      </div>
+  1125→                    );
+  1126→                  })}
+  1127→                  {(split.pending || split.texts.length === 0) && (
+  1128→                    <div data-testid="sms-stream-typing">{dots}</div>
+  1129→                  )}
+  1130→                </div>
+  1131→              </motion.div>
+  1132→            );
+  1133→          })()}
+  1134→        <div aria-hidden="true" className="h-1" />
+  1135→      </div>
+  1136→
+  1137→      {/* 输入栏（多选模式下变为批量删除操作栏）：引用条 + 圆钮 / iMessage输入框（麦克风↔发送） */}
+  1138→      {selectMode ? (
+  1139→        <div
+  1140→          className="z-20 flex shrink-0 items-center justify-between border-t border-border/50 bg-background/85 px-6 pb-[30px] pt-2 backdrop-blur-xl"
+  1141→          data-testid="sms-select-bar"
+  1142→        >
+  1143→          <button type="button" data-testid="sms-select-cancel" onClick={exitSelect} className="text-[15px] text-muted-foreground">
+  1144→            取消
+  1145→          </button>
+  1146→          <span className="text-[13px] text-muted-foreground">已选 {selectedIds.length} 条</span>
+  1147→          <button
+  1148→            type="button"
+  1149→            data-testid="sms-select-del"
+  1150→            disabled={selectedIds.length === 0}
+  1151→            onClick={batchDelete}
+  1152→            className="text-[15px] font-medium text-[#FF3B30] disabled:opacity-40"
+  1153→          >
+  1154→            删除{selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
+  1155→          </button>
+  1156→        </div>
+  1157→      ) : (
+  1158→      <>
+  1159→      {/* 引用条（长按菜单「引用」后显示在输入栏上方；发送时挂到新消息上） */}
+  1160→      {quote && (
+  1161→        <div
+  1162→          className="z-20 flex shrink-0 items-start gap-2 border-t border-border/50 bg-background/85 px-3 py-1.5 backdrop-blur-xl"
+  1163→          data-testid="sms-quote-bar"
+  1164→        >
+  1165→          <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">
+  1166→            引用 {quote.name}：{quote.content}
+  1167→          </p>
+  1168→          <button
+  1169→            type="button"
+  1170→            aria-label="取消引用"
+  1171→            data-testid="sms-quote-cancel"
+  1172→            onClick={() => setQuote(null)}
+  1173→            className="shrink-0 text-muted-foreground/70"
+  1174→          >
+  1175→            <X className="h-4 w-4" strokeWidth={2} />
+  1176→          </button>
+  1177→        </div>
+  1178→      )}
+  1179→      <form
+  1180→        onSubmit={(e: FormEvent) => {
+  1181→          e.preventDefault();
+  1182→          if (input.trim()) void send();
+  1183→          else dispatchBatch();
+  1184→        }}
+  1185→        className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-2.5 pb-[30px] pt-2 backdrop-blur-xl"
+  1186→      >
+  1187→        <div
+  1188→          aria-hidden="true"
+  1189→          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-border/50 bg-card/60 text-muted-foreground backdrop-blur-xl"
+  1190→        >
+  1191→          <Plus className="h-5 w-5" strokeWidth={2} />
+  1192→        </div>
+  1193→        <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full border border-border/70 bg-background pl-3.5 pr-1.5">
+  1194→          <input
+  1195→            value={input}
+  1196→            onChange={(e) => setInput(e.target.value)}
+  1197→            placeholder="iMessage信息"
+  1198→            aria-label="消息输入框"
+  1199→            className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
+  1200→          />
+  1201→          {(input.trim() || canDispatch) ? (
+  1202→            <button
+  1203→              type="submit"
+  1204→              aria-label={input.trim() ? '发送' : '发送（让对方回复）'}
+  1205→              disabled={streaming}
+  1206→              className="flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90 disabled:opacity-40"
+  1207→              style={{ backgroundColor: SELF_BLUE }}
+  1208→            >
+  1209→              {streaming ? (
+  1210→                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} aria-hidden="true" />
+  1211→              ) : (
+  1212→                <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.6} aria-hidden="true" />
+  1213→              )}
+  1214→            </button>
+  1215→          ) : (
+  1216→            <Mic aria-hidden="true" className="mx-1.5 h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
+  1217→          )}
+  1218→        </div>
+  1219→      </form>
+  1220→      </>
+  1221→      )}
+  1222→
+  1223→      {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
+  1224→      {settingsOpen && (
+  1225→        <SmsChatSettingsPage
+  1226→          peerName={peer.name ?? peer.title}
+  1227→          peerAvatar={peer.avatarSrc}
+  1228→          phone={peer.title}
+  1229→          remark={peer.remark ?? ''}
+  1230→          onSaveRemark={(v) => {
+  1231→            if (wbContactId) onSaveRemark?.(v);
+  1232→          }}
+  1233→          translateSummary={
+  1234→            transCfg.on
+  1235→              ? `${translateLangLabel(transCfg.left)} ⇄ ${translateLangLabel(transCfg.right)}`
+  1236→              : '未开启'
+  1237→          }
+  1238→          sentenceSend={sentenceSend}
+  1239→          timeAware={timeAware}
+  1240→          stickersOn={stickersOn}
+  1241→          worldBooksSummary={
+  1242→            wbContactId
+  1243→              ? loadBooks()
+  1244→                  .filter((b) => wbBound.includes(b.id))
+  1245→                  .map((b) => b.name)
+  1246→                  .join('、') || '未选择'
+  1247→              : '未选择'
+  1248→          }
+  1249→          onBack={() => setSettingsOpen(false)}
+  1250→          onOpenTranslate={() => setTranslateOpen(true)}
+  1251→          onToggleSentenceSend={(v) => {
+  1252→            saveSentenceSend(sessionKey, v);
+  1253→            setSentenceSendState(v);
+  1254→            if (!v) {
+  1255→              // 关闭分句发送：清除待回复批次标记，后续发送恢复原有的即时回复行为
+  1256→              markPendingBatch(sessionKey, false);
+  1257→              setPendingDispatch(false);
+  1258→            }
+  1259→          }}
+  1260→          onToggleTimeAware={(v) => {
+  1261→            // 立即持久化并生效（下一次请求现场读取，无需重启）
+  1262→            setTimeAware(sessionKey, v);
+  1263→            setTimeAwareState(v);
+  1264→          }}
+  1265→          onToggleStickers={(v) => {
+  1266→            // 立即持久化并生效（下一次请求现场读取，无需重启）：关闭后 AI 不发表情包也不发 emoji
+  1267→            saveStickersOn(sessionKey, v);
+  1268→            setStickersOnState(v);
+  1269→          }}
+  1270→          onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
+  1271→        />
+  1272→      )}
+  1273→
+  1274→      {/* 世界书挂载页（聊天设置二级页，仅联系人会话）：为联系人勾选挂载的书籍 */}
+  1275→      {wbOpen && wbContactId && (
+  1276→        <WorldBookPickerPage
+  1277→          variant="sms"
+  1278→          books={loadBooks()
+  1279→            .filter((b) => b.scope === 'local')
+  1280→            .map((b) => ({
+  1281→              id: b.id,
+  1282→              name: b.name,
+  1283→              entryCount: b.entries.length,
+  1284→              enabledCount: b.entries.filter((e) => e.enabled).length,
+  1285→            }))}
+  1286→          boundIds={wbBound}
+  1287→          onBack={() => setWbOpen(false)}
+  1288→          onChange={(ids) => {
+  1289→            setBoundBookIds(wbContactId, ids);
+  1290→            setWbBound(ids);
+  1291→          }}
+  1292→        />
+  1293→      )}
+  1294→
+  1295→      {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}
+  1296→      {translateOpen && (
+  1297→        <ChatTranslatePage
+  1298→          variant="sms"
+  1299→          cfg={transCfg}
+  1300→          onBack={() => setTranslateOpen(false)}
+  1301→          onChange={(next) => {
+  1302→            const n = normalizeTranslateCfg(next);
+  1303→            saveTranslateCfg(sessionKey, n);
+  1304→            setTransCfgState(n);
+  1305→          }}
+  1306→        />
+  1307→      )}
+  1308→
+  1309→      {/* 编辑消息弹窗（长按菜单「编辑」）：修改内容后更新该条消息并落盘 */}
+  1310→      {editMsg && (
+  1311→        <div className="absolute inset-0 z-[80] flex items-center justify-center bg-black/35 px-8" data-testid="sms-edit-layer" onClick={() => setEditMsg(null)}>
+  1312→          <div
+  1313→            className="w-full max-w-[280px] overflow-hidden rounded-[14px] bg-[#f4f4f6]/95 shadow-2xl backdrop-blur-2xl dark:bg-[#2a2a2c]/95"
+  1314→            onClick={(e) => e.stopPropagation()}
+  1315→          >
+  1316→            <p className="pb-1 pt-4 text-center text-[16px] font-semibold">编辑消息</p>
+  1317→            <div className="px-4 pb-3 pt-2">
+  1318→              <textarea
+  1319→                value={editDraft}
+  1320→                onChange={(e) => setEditDraft(e.target.value)}
+  1321→                rows={4}
+  1322→                maxLength={2000}
+  1323→                autoFocus
+  1324→                data-testid="sms-edit-input"
+  1325→                className="w-full resize-none rounded-[10px] bg-white px-2.5 py-2 text-[15px] leading-[1.45] outline-none dark:bg-black/30"
+  1326→              />
+  1327→            </div>
+  1328→            <div className="flex border-t border-black/10 dark:border-white/10">
+  1329→              <button
+  1330→                type="button"
+  1331→                onClick={() => setEditMsg(null)}
+  1332→                className="h-[44px] flex-1 border-r border-black/10 text-[16px] active:bg-black/5 dark:border-white/10 dark:active:bg-white/10"
+  1333→              >
+  1334→                取消
+  1335→              </button>
+  1336→              <button
+  1337→                type="button"
+  1338→                data-testid="sms-edit-save"
+  1339→                onClick={saveEdit}
+  1340→                className="h-[44px] flex-1 text-[16px] font-semibold text-[#007AFF] active:bg-black/5 dark:active:bg-white/10"
+  1341→              >
+  1342→                保存
+  1343→              </button>
+  1344→            </div>
+  1345→          </div>
+  1346→        </div>
+  1347→      )}
+  1348→
+  1349→      {/* 气泡长按横向菜单（横向深色卡片；点菜单项执行动作，点空白处关闭） */}
+  1350→      {msgMenu && (
+  1351→        <BubbleActionMenu
+  1352→          pos={msgMenu.pos}
+  1353→          items={buildMsgMenuItems(msgMenu.msg)}
+  1354→          onSelect={handleMenuAction}
+  1355→          onClose={() => setMsgMenu(null)}
+  1356→          testPrefix="sms-menu"
+  1357→        />
+  1358→      )}
+  1359→
+  1360→      {/* 轻量提示（复制/删除等动作反馈） */}
+  1361→      {toastMsg && (
+  1362→        <div className="pointer-events-none absolute bottom-28 left-1/2 z-[90] -translate-x-1/2" data-testid="sms-toast">
+  1363→          <span className="rounded-full bg-black/75 px-3.5 py-1.5 text-[13px] text-white shadow-lg dark:bg-white/85 dark:text-black">{toastMsg}</span>
+  1364→        </div>
+  1365→      )}
+  1366→    </div>
+  1367→  );
+  1368→}
+  1369→
+  1370→// ---------------- 添加好友（连接联系人 App：把创建好的 CHAR/NPC 加为好友） ----------------
+  1371→
+  1372→/**
+  1373→ * 添加好友页（「未添加好友」只能在这里添加/删除）：
+  1374→ * - 「联系人」App 里创建了但尚未添加为好友的 CHAR/NPC，需输入 TA 的手机号搜索到后才能添加；
+  1375→ *   也可以在这里直接删除这些未添加好友（二次确认，删除后联系人一并移除）
+  1376→ * - 添加成功后：出现在联系人 App 主列表与信息 App（联系人面板 + 可发起聊天）
+  1377→ */
+  1378→function AddFriendView({
+  1379→  contacts,
+  1380→  onBack,
+  1381→  onAddFriend,
+  1382→  onDeleted,
+  1383→}: {
+  1384→  contacts: ContactRecord[];
+  1385→  onBack: () => void;
+  1386→  onAddFriend: (c: ContactRecord) => void;
+  1387→  /** 删除成功：把该联系人（及其名下级联 NPC）从本地列表移除 */
+  1388→  onDeleted: (c: ContactRecord) => void;
+  1389→}) {
+  1390→  const [query, setQuery] = useState('');
+  1391→  const [addingId, setAddingId] = useState<string | null>(null);
+  1392→  const [error, setError] = useState('');
+  1393→  /** 刚添加成功的联系人名字（顶部成功提示条，2 秒后消失） */
+  1394→  const [justAdded, setJustAdded] = useState<string | null>(null);
+  1395→  /** 删除二次确认：当前处于「确认删除」状态的联系人 id（3 秒不点自动退回） */
+  1396→  const [confirmId, setConfirmId] = useState<string | null>(null);
+  1397→  const [deletingId, setDeletingId] = useState<string | null>(null);
+  1398→  /** 刚删除成功的联系人名字（顶部提示条，2.4 秒后消失） */
+  1399→  const [justDeleted, setJustDeleted] = useState<string | null>(null);
+  1400→
+  1401→  const pending = useMemo(
+  1402→    () => contacts.filter((c) => c.kind !== 'user' && !isFriendIn(c, 'sms')),
+  1403→    [contacts]
+  1404→  );
+  1405→  /** 只有输入手机号才搜索（名字搜不到）：必须凭手机号才能找到待添加的好友 */
+  1406→  const q = query.trim().toLowerCase();
+  1407→  const filtered = q ? pending.filter((c) => (c.phone ?? '').toLowerCase().includes(q)) : [];
+  1408→
+  1409→  // 成功提示自动消失 + 删除确认自动退回
+  1410→  useEffect(() => {
+  1411→    if (!justAdded) return;
+  1412→    const t = window.setTimeout(() => setJustAdded(null), 2200);
+  1413→    return () => window.clearTimeout(t);
+  1414→  }, [justAdded]);
+  1415→  useEffect(() => {
+  1416→    if (!justDeleted) return;
+  1417→    const t = window.setTimeout(() => setJustDeleted(null), 2400);
+  1418→    return () => window.clearTimeout(t);
+  1419→  }, [justDeleted]);
+  1420→  useEffect(() => {
+  1421→    if (!confirmId) return;
+  1422→    const t = window.setTimeout(() => setConfirmId(null), 3000);
+  1423→    return () => window.clearTimeout(t);
+  1424→  }, [confirmId]);
+  1425→
+  1426→  const add = async (c: ContactRecord) => {
+  1427→    if (addingId) return;
+  1428→    setAddingId(c.id);
+  1429→    setError('');
+  1430→    try {
+  1431→      const updated = await updateContact(c.id, { friendSms: true });
+  1432→      if (!updated) throw new Error('联系人不存在');
+  1433→      onAddFriend(updated);
+  1434→      setJustAdded(displayNameOf(updated));
+  1435→    } catch (err) {
+  1436→      setError(err instanceof Error ? err.message : '添加失败，请重试');
+  1437→    } finally {
+  1438→      setAddingId(null);
+  1439→    }
+  1440→  };
+  1441→
+  1442→  /** 删除未添加好友（名下 NPC 级联删，本地完成），成功后同步本地列表 */
+  1443→  const del = async (c: ContactRecord) => {
+  1444→    if (deletingId) return;
+  1445→    setDeletingId(c.id);
+  1446→    setError('');
+  1447→    try {
+  1448→      const removed = await deleteContact(c.id);
+  1449→      if (!removed) throw new Error('删除失败');
+  1450→      onDeleted(c);
+  1451→      setJustDeleted(c.name);
+  1452→      setConfirmId(null);
+  1453→    } catch (err) {
+  1454→      setError(err instanceof Error ? err.message : '删除失败，请重试');
+  1455→    } finally {
+  1456→      setDeletingId(null);
+  1457→    }
+  1458→  };
+  1459→
+  1460→  return (
+  1461→    <>
+  1462→      <IOSNavBar
+  1463→        large={false}
+  1464→        title="添加好友"
+  1465→        left={<IOSBackButton label="信息" onClick={onBack} />}
+  1466→        right={<span className="min-w-[40px]" />}
+  1467→      />
+  1468→      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-8">
+  1469→        {/* 搜索：长方形边框输入框，必须输入手机号才能找到待添加的好友 */}
+  1470→        <div
+  1471→          className={`mt-1 flex h-[46px] items-center gap-2 rounded-[12px] border bg-background px-3.5 transition-colors focus-within:border-foreground/45 focus-within:ring-4 focus-within:ring-foreground/[0.07] ${
+  1472→            error ? 'border-[#FF3B30]/60' : 'border-border/80'
+  1473→          }`}
+  1474→        >
+  1475→          <Search className="h-[17px] w-[17px] shrink-0 text-muted-foreground/60" strokeWidth={2} aria-hidden="true" />
+  1476→          <input
+  1477→            id="add-friend-query"
+  1478→            value={query}
+  1479→            onChange={(e) => {
+  1480→              setQuery(e.target.value);
+  1481→              if (error) setError('');
+  1482→            }}
+  1483→            placeholder="输入手机号查找好友"
+  1484→            aria-label="输入手机号搜索好友"
+  1485→            className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/40"
+  1486→          />
+  1487→          {query && (
+  1488→            <button
+  1489→              type="button"
+  1490→              onClick={() => setQuery('')}
+  1491→              aria-label="清空搜索"
+  1492→              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted-foreground/30 text-background transition active:opacity-60"
+  1493→            >
+  1494→              <X className="h-3 w-3" strokeWidth={2.5} aria-hidden="true" />
+  1495→            </button>
+  1496→          )}
+  1497→        </div>
+  1498→        {error && (
+  1499→          <p className="mt-1.5 px-1 text-[12px] leading-none text-[#FF3B30]" role="alert">
+  1500→            {error}
+  1501→          </p>
+  1502→        )}
+  1503→        <p className="mt-2 px-1 text-[12px] leading-[17px] text-muted-foreground">
+  1504→          在「联系人」App 创建的联系人，需输入 TA 的手机号搜索到后才能添加；未添加好友也只能在这里删除
+  1505→        </p>
+  1506→
+  1507→        {/* 刚添加/删除成功提示 */}
+  1508→        {justAdded && (
+  1509→          <div
+  1510→            className="mt-3 flex items-start gap-2 rounded-[12px] bg-[#34C759]/12 px-3.5 py-2.5 text-[13px] leading-snug text-[#248A3D] dark:text-[#30D158]"
+  1511→            role="status"
+  1512→          >
+  1513→            <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} aria-hidden="true" />
+  1514→            <span>已添加「{justAdded}」为好友，现在可以在「信息」App 和 TA 聊天了</span>
+  1515→          </div>
+  1516→        )}
+  1517→        {justDeleted && (
+  1518→          <div
+  1519→            className="mt-3 flex items-start gap-2 rounded-[12px] bg-[#FF453A]/12 px-3.5 py-2.5 text-[13px] leading-snug text-[#D70015] dark:text-[#FF453A]"
+  1520→            role="status"
+  1521→          >
+  1522→            <Trash2 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} aria-hidden="true" />
+  1523→            <span>已删除未添加好友「{justDeleted}」</span>
+  1524→          </div>
+  1525→        )}
+  1526→
+  1527→        {/* 搜索结果：必须输入手机号才会出现待添加的好友 */}
+  1528→        {!q ? (
+  1529→          <div className="mt-3 rounded-[14px] border-[1.5px] border-dashed border-border/70 bg-muted/25 px-4 py-8 text-center">
+  1530→            <p className="text-[14px] font-medium text-muted-foreground">输入手机号查找好友</p>
+  1531→            <p className="mt-1 text-[12px] leading-snug text-muted-foreground/70">
+  1532→              到「联系人」App 创建联系人后，凭手机号来这里添加
+  1533→            </p>
+  1534→          </div>
+  1535→        ) : filtered.length === 0 ? (
+  1536→          <div className="mt-3 rounded-[14px] bg-muted/40 px-4 py-8 text-center">
+  1537→            <p className="text-[14px] font-medium text-muted-foreground">没有找到该手机号</p>
+  1538→            <p className="mt-1 text-[12px] leading-snug text-muted-foreground/70">
+  1539→              检查号码是否正确，或到「联系人」App 查看手机号
+  1540→            </p>
+  1541→          </div>
+  1542→        ) : (
+  1543→          <ul className="mt-3 overflow-hidden rounded-[14px] bg-muted/45" aria-label="待添加好友列表">
+  1544→            {filtered.map((c) => (
+  1545→              <li key={c.id} className="border-b border-border/50 last:border-b-0">
+  1546→                <div className="flex w-full items-center gap-3 px-3.5 py-2.5">
+  1547→                  {c.avatar ? (
+  1548→                    <img
+  1549→                      src={c.avatar}
+  1550→                      alt=""
+  1551→                      className="h-12 w-12 shrink-0 rounded-full object-cover"
+  1552→                    />
+  1553→                  ) : (
+  1554→                    <DefaultAvatar size={48} />
+  1555→                  )}
+  1556→                  <span className="min-w-0 flex-1">
+  1557→                    <span className="block truncate text-[15px] font-semibold leading-tight">{c.name}</span>
+  1558→                    <span className="mt-0.5 block truncate text-[12px] tabular-nums text-muted-foreground">
+  1559→                      {c.kind.toUpperCase()} · {c.phone ?? '未设置手机号'}
+  1560→                    </span>
+  1561→                  </span>
+  1562→                  <span className="flex shrink-0 items-center gap-1.5">
+  1563→                    <GlassButton
+  1564→                      type="button"
+  1565→                      onClick={() => void add(c)}
+  1566→                      disabled={addingId === c.id || deletingId === c.id}
+  1567→                      aria-label={`添加${c.name}为好友`}
+  1568→                      className="flex h-[32px] items-center gap-1 rounded-full px-4 text-[13px] font-semibold"
+  1569→                    >
+  1570→                      {addingId === c.id ? (
+  1571→                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+  1572→                      ) : (
+  1573→                        <UserPlus className="h-3.5 w-3.5" strokeWidth={2.2} aria-hidden="true" />
+  1574→                      )}
+  1575→                      {addingId === c.id ? '添加中' : '添加'}
+  1576→                    </GlassButton>
+  1577→                    {confirmId === c.id ? (
+  1578→                      <GlassButton
+  1579→                        variant="danger"
+  1580→                        type="button"
+  1581→                        onClick={() => void del(c)}
+  1582→                        disabled={deletingId === c.id}
+  1583→                        aria-label={`确认删除${c.name}`}
+  1584→                        data-testid={`confirm-delete-${c.id}`}
+  1585→                        className="flex h-[32px] items-center gap-1 rounded-full px-3.5 text-[13px] font-semibold"
+  1586→                      >
+  1587→                        {deletingId === c.id ? (
+  1588→                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+  1589→                        ) : (
+  1590→                          <Trash2 className="h-3.5 w-3.5" strokeWidth={2.2} aria-hidden="true" />
+  1591→                        )}
+  1592→                        {deletingId === c.id ? '删除中' : '确认删除'}
+  1593→                      </GlassButton>
+  1594→                    ) : (
+  1595→                      <GlassButton
+  1596→                        variant="danger"
+  1597→                        type="button"
+  1598→                        onClick={() => setConfirmId(c.id)}
+  1599→                        disabled={deletingId === c.id}
+  1600→                        aria-label={`删除${c.name}`}
+  1601→                        data-testid={`delete-pending-${c.id}`}
+  1602→                        className="flex h-[32px] items-center gap-1 rounded-full px-3.5 text-[13px] font-semibold"
+  1603→                      >
+  1604→                        <Trash2 className="h-3.5 w-3.5" strokeWidth={2.2} aria-hidden="true" />
+  1605→                        删除
+  1606→                      </GlassButton>
+  1607→                    )}
+  1608→                  </span>
+  1609→                </div>
+  1610→              </li>
+  1611→            ))}
+  1612→          </ul>
+  1613→        )}
+  1614→      </div>
+  1615→    </>
+  1616→  );
+  1617→}
+  1618→
+  1619→// ---------------- 联系人面板（连接联系人 App：只显示 CHAR 与 NPC，USER 不出现） ----------------
+  1620→
+  1621→function ContactRow({ contact, onOpen }: { contact: ContactRecord; onOpen: () => void }) {
+  1622→  return (
+  1623→    <button
+  1624→      type="button"
+  1625→      onClick={onOpen}
+  1626→      aria-label={`和${contact.name}聊天`}
+  1627→      className="relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors active:bg-muted/60"
+  1628→    >
+  1629→      {contact.avatar ? (
+  1630→        <img src={contact.avatar} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
+  1631→      ) : (
+  1632→        <DefaultAvatar size={44} />
+  1633→      )}
+  1634→      <span className="min-w-0 flex-1">
+  1635→        <span className="block truncate text-[15px] font-semibold leading-tight">{contact.name}</span>
+  1636→        <span className="mt-0.5 block truncate text-[12px] tabular-nums text-muted-foreground">
+  1637→          {contact.phone ?? '未设置手机号'}
+  1638→        </span>
+  1639→      </span>
+  1640→      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} aria-hidden="true" />
+  1641→      <span aria-hidden="true" className="absolute bottom-0 left-[72px] right-0 h-px bg-border/50" />
+  1642→    </button>
+  1643→  );
+  1644→}
+  1645→
+  1646→/** 单个分组（CHAR / NPC）：空组整块隐藏 */
+  1647→function ContactGroup({
+  1648→  label,
+  1649→  list,
+  1650→  emptyHint,
+  1651→  onOpenContact,
+  1652→}: {
+  1653→  label: string;
+  1654→  list: ContactRecord[];
+  1655→  emptyHint: string;
+  1656→  onOpenContact: (c: ContactRecord) => void;
+  1657→}) {
+  1658→  if (list.length === 0) {
+  1659→    return (
+  1660→      <>
+  1661→        <p className="px-4 pb-1 pt-4 text-[12px] font-medium tracking-wide text-muted-foreground">{label}</p>
+  1662→        <p className="px-4 pb-1 text-[13px] leading-snug text-muted-foreground/55">{emptyHint}</p>
+  1663→      </>
+  1664→    );
+  1665→  }
+  1666→  return (
+  1667→    <>
+  1668→      <p className="px-4 pb-1 pt-4 text-[12px] font-medium tracking-wide text-muted-foreground">{label}</p>
+  1669→      <ul aria-label={`${label}联系人列表`}>
+  1670→        {list.map((c) => (
+  1671→          <li key={c.id}>
+  1672→            <ContactRow contact={c} onOpen={() => onOpenContact(c)} />
+  1673→          </li>
+  1674→        ))}
+  1675→      </ul>
+  1676→    </>
+  1677→  );
+  1678→}
+  1679→
+  1680→function ContactsPanel({
+  1681→  contacts,
+  1682→  state,
+  1683→  query,
+  1684→  onQuery,
+  1685→  onRetry,
+  1686→  onOpenAssistant,
+  1687→  onOpenContact,
+  1688→}: {
+  1689→  contacts: ContactRecord[];
+  1690→  state: 'loading' | 'error' | 'ready';
+  1691→  query: string;
+  1692→  onQuery: (v: string) => void;
+  1693→  onRetry: () => void;
+  1694→  onOpenAssistant: () => void;
+  1695→  onOpenContact: (c: ContactRecord) => void;
+  1696→}) {
+  1697→  const q = query.trim().toLowerCase();
+  1698→  /** 搜索：名字/手机号/微信号/职业/地区/关系；USER 与未添加好友的不出现 */
+  1699→  const match = (c: ContactRecord) =>
+  1700→    !q ||
+  1701→    [c.name, c.phone, c.wechatId, c.occupation, c.region, c.relation].some(
+  1702→      (v) => typeof v === 'string' && v.toLowerCase().includes(q)
+  1703→    );
+  1704→  const charList = contacts.filter((c) => c.kind === 'char' && isFriendIn(c, 'sms') && match(c));
+  1705→  const npcList = contacts.filter((c) => c.kind === 'npc' && isFriendIn(c, 'sms') && match(c));
+  1706→  const friendList = [...charList, ...npcList];
+  1707→
+  1708→  return (
+  1709→    <>
+  1710→      {/* 搜索框 */}
+  1711→      <div className="px-4 pb-1 pt-2">
+  1712→        <div className="flex h-[36px] items-center gap-1.5 rounded-[11px] bg-muted px-3">
+  1713→          <Search className="h-4 w-4 shrink-0 text-muted-foreground/60" strokeWidth={2} aria-hidden="true" />
+  1714→          <input
+  1715→            value={query}
+  1716→            onChange={(e) => onQuery(e.target.value)}
+  1717→            placeholder="搜索"
+  1718→            aria-label="搜索联系人"
+  1719→            className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
+  1720→          />
+  1721→          {query && (
+  1722→            <button
+  1723→              type="button"
+  1724→              onClick={() => onQuery('')}
+  1725→              aria-label="清空搜索"
+  1726→              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted-foreground/30 text-background transition active:opacity-60"
+  1727→            >
+  1728→              <X className="h-3 w-3" strokeWidth={2.5} aria-hidden="true" />
+  1729→            </button>
+  1730→          )}
+  1731→        </div>
+  1732→      </div>
+  1733→
+  1734→      {/* 智能助理 */}
+  1735→      <p className="px-4 pb-1 pt-3 text-[12px] font-medium tracking-wide text-muted-foreground">智能助理</p>
+  1736→      <button
+  1737→        type="button"
+  1738→        onClick={onOpenAssistant}
+  1739→        aria-label="查看小助手资料"
+  1740→        className="relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition active:bg-muted/60"
+  1741→      >
+  1742→        <DefaultAvatar size={44} />
+  1743→        <div className="min-w-0 flex-1">
+  1744→          <div className="truncate text-[15px] font-semibold">{ASSISTANT.name}</div>
+  1745→          <div className="mt-0.5 truncate text-[12px] tabular-nums text-muted-foreground">{ASSISTANT.phone}</div>
+  1746→        </div>
+  1747→        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" strokeWidth={2} aria-hidden="true" />
+  1748→        <span aria-hidden="true" className="absolute bottom-0 left-[72px] right-0 h-px bg-border/50" />
+  1749→      </button>
+  1750→
+  1751→      {/* 联系人数据（来自联系人 App） */}
+  1752→      {state === 'loading' && (
+  1753→        <div className="flex h-28 items-center justify-center text-muted-foreground">
+  1754→          <Loader2 className="h-5 w-5 animate-spin" aria-label="加载联系人" />
+  1755→        </div>
+  1756→      )}
+  1757→      {state === 'error' && (
+  1758→        <div className="px-6 py-8 text-center text-[14px] text-muted-foreground">
+  1759→          联系人读取失败
+  1760→          <button type="button" onClick={onRetry} className="ml-2 text-foreground underline">
+  1761→            重试
+  1762→          </button>
+  1763→        </div>
+  1764→      )}
+  1765→      {state === 'ready' && (
+  1766→        <>
+  1767→          <ContactGroup
+  1768→            label="联系人"
+  1769→            list={friendList}
+  1770→            emptyHint={q ? '没有匹配的联系人' : '还没有好友，点右上角「+」添加好友'}
+  1771→            onOpenContact={onOpenContact}
+  1772→          />
+  1773→          <div aria-hidden="true" className="h-6" />
+  1774→        </>
+  1775→      )}
+  1776→    </>
+  1777→  );
+  1778→}
+  1779→
+  1780→// ---------------- 联系人会话行（信息列表：和好友的聊天记录预览） ----------------
+  1781→
+  1782→/** 联系人会话预览 */
+  1783→interface ContactSessionPreview {
+  1784→  contact: ContactRecord;
+  1785→  preview: string;
+  1786→  time: number;
+  1787→}
+  1788→
+  1789→/** 扫描本地聊天记录：已添加好友的 CHAR/NPC 中有消息记录的进会话列表（按最后消息时间倒序；撤回的消息预览显示撤回文案） */
+  1790→function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[] {
+  1791→  const out: ContactSessionPreview[] = [];
+  1792→  for (const c of contacts) {
+  1793→    if (c.kind === 'user' || !isFriendIn(c, 'sms')) continue;
+  1794→    const msgs = loadMsgs(`c:${c.id}`);
+  1795→    if (!msgs || msgs.length === 0) continue;
+  1796→    const last = msgs[msgs.length - 1];
+  1797→    out.push({
+  1798→      contact: c,
+  1799→      preview: last?.recalled
+  1800→        ? last.role === 'user'
+  1801→          ? '你撤回一条消息'
+  1802→          : '对方撤回一条消息'
+  1803→        : (last?.content ?? '').trim() || '…',
+  1804→      time: last?.time ?? 0,
+  1805→    });
+  1806→  }
+  1807→  return out.sort((a, b) => b.time - a.time);
+  1808→}
+  1809→
+  1810→/** 联系人会话行：头像 + 名字 + 最后一条消息预览 + 时间（点击进入聊天） */
+  1811→function ContactSessionRow({
+  1812→  contact,
+  1813→  preview,
+  1814→  time,
+  1815→  onOpen,
+  1816→}: {
+  1817→  contact: ContactRecord;
+  1818→  preview: string;
+  1819→  time: number;
+  1820→  onOpen: () => void;
+  1821→}) {
+  1822→  return (
+  1823→    <button
+  1824→      type="button"
+  1825→      onClick={onOpen}
+  1826→      aria-label={`和${contact.name}聊天`}
+  1827→      className="relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors active:bg-black/[0.06] dark:active:bg-white/[0.08]"
+  1828→    >
+  1829→      {contact.avatar ? (
+  1830→        <img src={contact.avatar} alt="" className="h-[52px] w-[52px] shrink-0 rounded-full object-cover" />
+  1831→      ) : (
+  1832→        <DefaultAvatar size={52} />
+  1833→      )}
+  1834→      <div className="min-w-0 flex-1">
+  1835→        <div className="flex items-baseline justify-between gap-2">
+  1836→          <span className="truncate text-[15px] font-semibold">{contact.name}</span>
+  1837→          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{fmtListTime(time)}</span>
+  1838→        </div>
+  1839→        <div className="mt-0.5 flex items-center justify-between gap-2">
+  1840→          <p className="truncate text-[13px] leading-snug text-muted-foreground">{preview}</p>
+  1841→        </div>
+  1842→      </div>
+  1843→      {/* iOS 内缩式发丝分隔线 */}
+  1844→      <span aria-hidden="true" className="absolute bottom-0 left-[76px] right-0 h-px bg-border/50" />
+  1845→    </button>
+  1846→  );
+  1847→}
+  1848→
+  1849→// ---------------- 底部椭圆分段控件（信息 / 联系人） ----------------
+  1850→
+  1851→function BottomTabBar({ tab, onChange }: { tab: TabKey; onChange: (t: TabKey) => void }) {
+  1852→  const items = [
+  1853→    { key: 'chats', label: '信息' },
+  1854→    { key: 'contacts', label: '联系人' },
+  1855→  ] as const;
+  1856→  return (
+  1857→    <nav className="z-20 shrink-0 bg-background/85 pb-[30px] pt-2.5 backdrop-blur-xl">
+  1858→      <div role="tablist" aria-label="信息分组" className="mx-auto flex w-[220px] rounded-full bg-muted p-[2px]">
+  1859→        {items.map(({ key, label }) => (
+  1860→          <button
+  1861→            key={key}
+  1862→            type="button"
+  1863→            role="tab"
+  1864→            aria-selected={tab === key}
+  1865→            onClick={() => onChange(key)}
+  1866→            className="relative flex-1 rounded-full py-[7px] text-[13px] font-medium transition-colors"
+  1867→          >
+  1868→            {tab === key && (
+  1869→              <motion.span
+  1870→                layoutId="msg-tab-thumb"
+  1871→                className="absolute inset-0 rounded-full bg-background shadow-sm"
+  1872→                transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+  1873→              />
+  1874→            )}
+  1875→            <span className={`relative z-10 transition-colors ${tab === key ? 'text-foreground' : 'text-muted-foreground'}`}>
+  1876→              {label}
+  1877→            </span>
+  1878→          </button>
+  1879→        ))}
+  1880→      </div>
+  1881→    </nav>
+  1882→  );
+  1883→}
+  1884→
+  1885→// ---------------- 主视图 ----------------
+  1886→
+  1887→export default function ChatApp() {
+  1888→  const [view, setView] = useState<View>('main');
+  1889→  const [tab, setTab] = useState<TabKey>('chats');
+  1890→  /** 跨 App 跳转：电话 App 联系人详情点「信息」带来的联系人 id（挂载时消费，等联系人载入后自动进会话） */
+  1891→  const [pendingJump, setPendingJump] = useState<string | null>(() => useUI.getState().pendingChatContact);
+  1892→  /** 小助手会话未读条数（AI 发了几条消息角标就是几；0 = 已读） */
+  1893→  const [unreadN, setUnreadN] = useState(0);
+  1894→  const unread = unreadN > 0;
+  1895→  /** 已读水位：最后一次「已见」的小助手消息条数（AI 回复落盘时按增量累计未读） */
+  1896→  const seenLenRef = useRef(0);
+  1897→  /** 会话被删除后隐藏（从联系人重新进入聊天即恢复） */
+  1898→  const [hidden, setHidden] = useState(false);
+  1899→  /** 置顶 */
+  1900→  const [pinned, setPinned] = useState(false);
+  1901→  const [menuOpen, setMenuOpen] = useState(false);
+  1902→  /** 微信菜单位置（相对 App 容器） */
+  1903→  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, arrowX: 0 });
+  1904→  /** 删除确认弹窗 */
+  1905→  const [confirmDelete, setConfirmDelete] = useState(false);
+  1906→  const screenRef = useRef<HTMLDivElement>(null);
+  1907→  /** 小助手会话消息（父级持有：会话行预览用；聊天内状态在 ChatView 内部） */
+  1908→  const [assistantMsgs, setAssistantMsgs] = useState<ChatMsg[]>(SEED_MSGS);
+  1909→  const [mounted, setMounted] = useState(false);
+  1910→
+  1911→  // 联系人数据（连接联系人 App）
+  1912→  const [contacts, setContacts] = useState<ContactRecord[]>([]);
+  1913→  const [contactState, setContactState] = useState<'loading' | 'error' | 'ready'>('loading');
+  1914→  const [query, setQuery] = useState('');
+  1915→  /** 当前聊天会话（null = 未在聊天中） */
+  1916→  const [chatSession, setChatSession] = useState<ChatSession | null>(null);
+  1917→  /** 好友会话预览（信息列表：有聊天记录的好友 CHAR/NPC） */
+  1918→  const [contactSessions, setContactSessions] = useState<ContactSessionPreview[]>([]);
+  1919→
+  1920→  // 挂载后载入小助手本地状态（已读/置顶/删除标记 + 预览消息；异步微任务：保持水合安全）
+  1921→  useEffect(() => {
+  1922→    let cancelled = false;
+  1923→    void Promise.resolve().then(() => {
+  1924→      if (cancelled) return;
+  1925→      setHidden(window.localStorage.getItem(LS_HIDDEN_KEY) === '1');
+  1926→      setPinned(window.localStorage.getItem(LS_PIN_KEY) === '1');
+  1927→      // 未读条数：优先读计数（AI 发了几条就是几）；旧数据只有已读布尔 → 未读时至少 1
+  1928→      let n = 0;
+  1929→      try {
+  1930→        const raw = Number(window.localStorage.getItem(LS_UNREAD_N_KEY));
+  1931→        if (Number.isFinite(raw) && raw > 0) n = Math.min(Math.floor(raw), 99);
+  1932→        if (window.localStorage.getItem(LS_READ_KEY) !== '1') n = Math.max(n, 1);
+  1933→      } catch {
+  1934→        // 读取失败按 0
+  1935→      }
+  1936→      setUnreadN(n);
+  1937→      const saved = loadMsgs('assistant');
+  1938→      if (saved && saved.length) setAssistantMsgs(saved);
+  1939→      seenLenRef.current = saved ? saved.length : 0;
+  1940→      setMounted(true);
+  1941→    });
+  1942→    return () => {
+  1943→      cancelled = true;
+  1944→    };
+  1945→  }, []);
+  1946→
+  1947→  // 未读条数变化 → 落盘（同时同步旧版已读布尔键，兼容旧逻辑）
+  1948→  useEffect(() => {
+  1949→    if (!mounted) return;
+  1950→    try {
+  1951→      window.localStorage.setItem(LS_UNREAD_N_KEY, String(unreadN));
+  1952→      if (unreadN > 0) window.localStorage.removeItem(LS_READ_KEY);
+  1953→      else window.localStorage.setItem(LS_READ_KEY, '1');
+  1954→    } catch {
+  1955→      // 持久化失败忽略
+  1956→    }
+  1957→  }, [unreadN, mounted]);
+  1958→
+  1959→  // 全局流式回复落盘：小助手会话在聊天页外收到 AI 回复时，从存储刷新列表预览并按条数累计未读
+  1960→  // （联系人会话预览由 contactSessions 在进入列表时重算，无需额外订阅）
+  1961→  useChatStreamFinalized('sms:assistant', () => {
+  1962→    const saved = loadMsgs('assistant');
+  1963→    if (!saved || !saved.length) return;
+  1964→    setAssistantMsgs(saved);
+  1965→    const prevLen = seenLenRef.current;
+  1966→    if (view === 'chat' && chatSession?.key === 'assistant') {
+  1967→      // 小助手聊天页正开着：消息实时可见，不计未读，只推进已读水位
+  1968→      seenLenRef.current = Math.max(prevLen, saved.length);
+  1969→      return;
+  1970→    }
+  1971→    // AI 在聊天页外回复：未读条数按本轮 AI 实际发来的消息条数累加（进聊天即清零）
+  1972→    if (saved.length > prevLen) {
+  1973→      const fresh = saved.slice(prevLen).filter((m) => m.role === 'assistant').length;
+  1974→      seenLenRef.current = saved.length;
+  1975→      if (fresh > 0) setUnreadN((n) => Math.min(n + fresh, 99));
+  1976→    }
+  1977→  });
+  1978→
+  1979→  // 置顶 / 删除标记持久化
+  1980→  useEffect(() => {
+  1981→    if (!mounted) return;
+  1982→    try {
+  1983→      window.localStorage.setItem(LS_PIN_KEY, pinned ? '1' : '0');
+  1984→      window.localStorage.setItem(LS_HIDDEN_KEY, hidden ? '1' : '0');
+  1985→    } catch {
+  1986→      // 持久化失败忽略
+  1987→    }
+  1988→  }, [pinned, hidden, mounted]);
+  1989→
+  1990→  /** 和小助手聊天（空记录时 ChatView 内部重新播种欢迎语） */
+  1991→  const openAssistantChat = () => {
+  1992→    setUnreadN(0);
+  1993→    const cur = loadMsgs('assistant');
+  1994→    if (cur) seenLenRef.current = cur.length;
+  1995→    // 已删除/隐藏的会话重新进入即恢复显示
+  1996→    setHidden(false);
+  1997→    setChatSession({ key: 'assistant', peer: { title: ASSISTANT.phone, avatarSrc: null, name: ASSISTANT.name }, systemPrompt: null });
+  1998→    setView('chat');
+  1999→  };
+  2000→
+
+[showing lines 1-2000 of 2291; use offset=2001 with limit to continue reading]

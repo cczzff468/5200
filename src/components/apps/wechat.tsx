@@ -13,6 +13,7 @@ import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } fr
 import {
   ArrowLeftRight,
   AtSign,
+  Ban,
   Banknote,
   BellOff,
   Camera,
@@ -134,6 +135,16 @@ import type { Sticker } from '@/lib/ios/stickers';
 import { useUnreadMap, wxUnreads as wxUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, wxChatFlags as wxChatFlagsStore } from '@/lib/chat-flags';
 import {
+  acceptBlockReq,
+  applyCharBlockAction,
+  blockActionKindOf,
+  buildBlockPromptBlock,
+  loadBlock,
+  rejectBlockReq,
+  setUserBlock,
+  type BlockEntry,
+} from '@/lib/ios/block-state';
+import {
   ChatBgPage,
   ChatReplyCountPage,
   ChatSearchPage,
@@ -248,14 +259,19 @@ interface WxMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward';
+  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；
+   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片 */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'sys' | 'blockreq';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
   fam?: WxFamData;
   img?: { src: string };
   loc?: { name: string; address: string };
+  /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示 */
+  sys?: { text: string };
+  /** 申请解除拉黑卡片数据（kind = 'blockreq' 时有值）：status pending=待处理 accepted=已同意 rejected=已拒绝 */
+  blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected' };
   /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
   stk?: { url: string; meaning: string; sid?: string };
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀）；
@@ -618,10 +634,10 @@ function meAsContact(me: WxUser): ContactRecord {
   };
 }
 
-/** 会话列表预览（最后一条非通知消息 + 时间）；撤回的消息显示「你/对方撤回一条消息」 */
+/** 会话列表预览（最后一条非通知/系统提示消息 + 时间）；撤回的消息显示「你/对方撤回一条消息」 */
 function readPreview(contactId: string): { text: string; time: number } {
   const msgs = loadMsgs(contactId);
-  const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
+  const last = [...msgs].reverse().find((m) => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq');
   if (!last) return { text: '', time: 0 };
   if (last.recalled) return { text: last.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息', time: last.time };
   if (last.kind === 'redpacket') return { text: '[微信红包]', time: last.time };
@@ -3332,6 +3348,66 @@ function TrDetailPage({
   );
 }
 
+/** 申请解除拉黑卡片（角色被用户拉黑后发起；iOS 黑白灰风，同意→解除拉黑，拒绝→保持并让角色知道） */
+function WxBlockReqCard({
+  name,
+  avatar,
+  reason,
+  status,
+  onAccept,
+  onReject,
+}: {
+  name: string;
+  avatar: string | null;
+  reason: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  onAccept: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <div
+      data-testid="wx-blockreq-card"
+      className="w-fit max-w-[calc(100%-40px)] rounded-[5px] bg-white px-3 py-2.5 shadow-sm dark:bg-[#1E1E1E]"
+      aria-label={`${name}申请解除拉黑`}
+    >
+      <div className="flex items-center gap-2">
+        <WxAvatar src={avatar} alt={name} size={34} />
+        <div className="min-w-0">
+          <p className="truncate text-[14px] font-medium leading-tight text-black dark:text-white">{name}</p>
+          <p className="mt-0.5 text-[12px] leading-tight text-black/45 dark:text-white/45">申请解除拉黑</p>
+        </div>
+      </div>
+      {reason && (
+        <p className="mt-2 rounded-[4px] bg-black/[0.04] px-2 py-1.5 text-[13px] leading-[1.5] text-black/70 dark:bg-white/[0.08] dark:text-white/70">「{reason}」</p>
+      )}
+      {status === 'pending' ? (
+        <div className="mt-2.5 flex gap-2">
+          <button
+            type="button"
+            data-testid="wx-blockreq-reject"
+            aria-label={`拒绝${name}的解除拉黑申请`}
+            onClick={onReject}
+            className="h-8 flex-1 rounded-[4px] bg-black/[0.05] text-[13px] text-black/70 transition active:opacity-70 dark:bg-white/10 dark:text-white/70"
+          >
+            拒绝
+          </button>
+          <button
+            type="button"
+            data-testid="wx-blockreq-accept"
+            aria-label={`同意${name}的解除拉黑申请`}
+            onClick={onAccept}
+            className="h-8 flex-1 rounded-[4px] bg-[#07C160] text-[13px] font-medium text-white transition active:opacity-80"
+          >
+            同意
+          </button>
+        </div>
+      ) : (
+        <p className="mt-2 text-[12px] text-black/35 dark:text-white/35">{status === 'accepted' ? '已同意，拉黑已解除' : '已拒绝'}</p>
+      )}
+    </div>
+  );
+}
+
 function ChatPage({
   me,
   peer,
@@ -3361,6 +3437,8 @@ function ChatPage({
   const [chatToast, onToast] = useLocalToast();
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
+  /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
+  const [blk, setBlk] = useState<BlockEntry>(() => loadBlock('wx', peer.id));
   const [input, setInput] = useState('');
   /** 全局流式回复状态（请求由 chat-stream-store 发起并接收，退出聊天页/退出 App 不中断） */
   const sessionKey = `wx:${peer.id}`;
@@ -3696,12 +3774,16 @@ function ChatPage({
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则）
     const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => m.content)]));
+    // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，
+    // 不拦截消息——角色仍可发消息，但要按人设表现出被拉黑/已拉黑的态度，并可输出对应标记）
+    const blkBlock = buildBlockPromptBlock('wx', peer.id, me.name);
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
       memoryBlock,
       momentsBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      blkBlock,
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -3757,6 +3839,24 @@ function ChatPage({
         let idx = 0;
         for (const part of parts) {
           if (part.type === 'action') {
+            // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
+            // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
+            const bk = blockActionKindOf(part.action);
+            if (bk) {
+              const res = applyCharBlockAction('wx', peer.id, bk, part.action.targetId);
+              setBlk(res.entry);
+              if (res.changed && bk === 'block') {
+                all.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `你已被「${peer.name}」拉黑` } });
+                t += 1;
+              } else if (res.changed && bk === 'unblock') {
+                all.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」解除了对你的拉黑` } });
+                t += 1;
+              } else if (res.reqCreated && bk === 'request') {
+                all.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'blockreq', blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+                t += 1;
+              }
+              continue;
+            }
             const applied = wxApplyAiActions([part.action], cur, peer, t);
             cur = applied.msgs;
             all.push(...applied.notices, ...applied.extras);
@@ -3860,6 +3960,62 @@ function ChatPage({
     [peer.name, onToast]
   );
 
+  // ---------------- 双向拉黑（用户开关 / 角色申请卡片的同意与拒绝） ----------------
+
+  /** 追加一条系统提示行（拉黑状态变更提示；居中灰字胶囊，不进 AI 上下文） */
+  const pushSysMsg = useCallback((text: string) => {
+    setMsgs((prev) => [...prev, { id: uid(), role: 'peer' as const, content: '', time: Date.now(), kind: 'sys' as const, sys: { text } }]);
+  }, []);
+
+  /** 设置页「拉黑」开关：持久化（kv，按联系人隔离）+ 生成系统消息；角色下一轮起通过 system 感知 */
+  const toggleBlockFromSettings = useCallback(
+    (v: boolean) => {
+      setBlk(setUserBlock('wx', peer.id, v));
+      pushSysMsg(v ? `你已拉黑「${peer.name}」` : `你已解除拉黑「${peer.name}」`);
+    },
+    [peer.id, peer.name, pushSysMsg]
+  );
+
+  /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
+   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」 */
+  const resolveBlockReq = useCallback(
+    (m: WxMsg, accept: boolean) => {
+      if (m.blkreq?.status !== 'pending') return;
+      setMsgs((prev) =>
+        prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x))
+      );
+      if (accept) {
+        setBlk(acceptBlockReq('wx', peer.id));
+        pushSysMsg(`你同意了「${peer.name}」的解除拉黑申请`);
+        runAiTurnRef.current?.(null, [], `（系统事件：${me.name}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`);
+      } else {
+        setBlk(rejectBlockReq('wx', peer.id));
+        pushSysMsg(`你拒绝了「${peer.name}」的解除拉黑申请`);
+        runAiTurnRef.current?.(null, [], `（系统事件：${me.name}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`);
+      }
+    },
+    [peer.id, peer.name, me.name, pushSysMsg]
+  );
+
+  /** 拉黑气泡图标（iOS 黑白灰）：我拉黑了对方 → 我的每条气泡后「对方被我拉黑」；
+   *  对方拉黑了我 → 对方每条气泡后「我被拉黑」；系统提示行/申请卡片/撤回行不显示 */
+  const blockedBadgeOf = (m: WxMsg) => {
+    if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
+    const mine = m.role === 'me';
+    const show = mine ? blk.byUser === true : blk.byChar === true;
+    if (!show) return null;
+    return (
+      <div
+        data-testid={mine ? 'wx-block-badge-me' : 'wx-block-badge-peer'}
+        aria-label={mine ? '对方被我拉黑' : '我被拉黑'}
+        className={`flex items-center gap-1 py-[2px] text-[10px] leading-none text-black/30 dark:text-white/30 ${mine ? 'justify-end pr-[46px]' : 'justify-start pl-[46px]'}`}
+      >
+        <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
+        <span>{mine ? '对方被我拉黑' : '我被拉黑'}</span>
+      </div>
+    );
+  };
+
   const send = useCallback(() => {
     const text = input.trim();
     if (!text) return;
@@ -3924,7 +4080,7 @@ function ChatPage({
                   : m.content;
 
   /** 消息是否可长按弹菜单 / 多选勾选（通知行与已撤回行除外） */
-  const isSelectable = (m: WxMsg): boolean => m.kind !== 'notice' && !m.recalled;
+  const isSelectable = (m: WxMsg): boolean => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && !m.recalled;
 
   /** 按发送方与消息类型组装长按菜单项（我的/AI 气泡都可：复制 删除 编辑 引用 多选 撤回 转发 收藏；AI 气泡多一个重新生成；已收藏的消息显示「已收藏」） */
   const buildMsgMenuItems = (m: WxMsg): BubbleMenuItem[] => {
@@ -4447,7 +4603,7 @@ function ChatPage({
   const searchItems = useMemo<ChatSearchItem[]>(
     () =>
       msgs
-        .filter((m) => m.kind !== 'image')
+        .filter((m) => m.kind !== 'image' && m.kind !== 'sys' && m.kind !== 'blockreq')
         .map((m) => ({
           id: m.id,
           role: m.role,
@@ -4616,6 +4772,26 @@ function ChatPage({
               </div>
             ) : m.kind === 'notice' && m.notice ? (
               <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
+            ) : m.kind === 'sys' && m.sys ? (
+              /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
+              <div data-testid="wx-sys-row" className="py-1.5 text-center">
+                <span className="inline-block rounded-[10px] bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  {m.sys.text}
+                </span>
+              </div>
+            ) : m.kind === 'blockreq' && m.blkreq ? (
+              /* 申请解除拉黑卡片（角色发起）：头像+名字+理由+同意/拒绝 */
+              <div className="flex items-start gap-2 py-1.5">
+                <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
+                <WxBlockReqCard
+                  name={peer.name}
+                  avatar={peer.avatar}
+                  reason={m.blkreq.reason}
+                  status={m.blkreq.status}
+                  onAccept={() => resolveBlockReq(m, true)}
+                  onReject={() => resolveBlockReq(m, false)}
+                />
+              </div>
             ) : (
             <div className={`flex items-start py-1.5 ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
               {selectMode && isSelectable(m) && (
@@ -4784,6 +4960,8 @@ function ChatPage({
               )}
             </div>
             )}
+            {/* 拉黑图标（iOS 黑白灰）：我拉黑了对方 → 我的气泡后「对方被我拉黑」；对方拉黑了我 → 对方气泡后「我被拉黑」 */}
+            {blockedBadgeOf(m)}
           </div>
         ))}
         {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；与上方 peer 文字气泡同款样式）。
@@ -4829,6 +5007,12 @@ function ChatPage({
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
                       </span>
                     </div>
+                  </div>
+                )}
+                {blk.byChar === true && (
+                  <div className="flex items-center gap-1 pl-[46px] py-[2px] text-[10px] leading-none text-black/30 dark:text-white/30">
+                    <Ban className="h-[11px] w-[11px]" strokeWidth={2.2} aria-hidden="true" />
+                    <span>我被拉黑</span>
                   </div>
                 )}
               </div>
@@ -5060,6 +5244,8 @@ function ChatPage({
           onOpenSearch={() => setSearchOpen(true)}
           onOpenBg={() => setBgOpen(true)}
           onOpenWorldBooks={() => setWbOpen(true)}
+          blockedByUser={blk.byUser === true}
+          onToggleBlock={selfChat ? undefined : toggleBlockFromSettings}
           worldBooksSummary={loadBooks()
             .filter((b) => wbBound.includes(b.id))
             .map((b) => b.name)

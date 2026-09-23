@@ -6085,3 +6085,35 @@ Stage Summary:
 - 交互修复：禁言时长单即时弹出（双端）；QQ 公告发布后停留展示；键入 @ 唤起 @ 浮层（QQ+微信）；QQ 输入栏无 @ 钮
 - 数据保障：每群唯一 9 位群号（建群分配+旧群惰性补发，跨双宿主查重）；公告带发布时间 annAt；引用带 time 字段（旧数据回源兜底）
 - 存量兼容：旧引用（无 time）正常渲染（仅无时间行）；旧群无 no 时进设置页自动补号；全部既有 testid 保留（qq-groupchat-at 已删除按需求）
+
+---
+Task ID: dm-block-bidirectional
+Agent: Z.ai Code (main)
+Task: QQ、微信、信息三个 App 的单聊新增「双向拉黑」功能——用户拉黑角色（设置开关）/ 角色拉黑用户（AI 标记）/ 角色申请解除拉黑（聊天内请求卡片：头像+名字+理由+同意/拒绝）/ 拉黑不拦截消息只表示关系状态 / 全部状态变更生成系统消息 / 气泡后拉黑图标区分「我被拉黑」「对方被我拉黑」（iOS 黑白灰）/ AI 感知注入 system / 按 App×角色 ID 隔离持久化 / 单聊与群聊独立
+
+Work Log:
+- 新建数据层 src/lib/ios/block-state.ts：BlockEntry{byUser,byChar,reqReason,reqAt,rejectedAt}；存储键 `${app}-block:<contactId>`（app∈wx/qq/sms → 三 App 独立、按角色 ID 隔离、群聊不读写）；IndexedDB kv 内存同步读+异步写穿（重启保留）；setUserBlock（用户开关）/applyCharBlockAction（block/unblock/request 幂等：重复拉黑、没被拉黑就申请、已有待处理申请均 no-op）/acceptBlockReq（清 byUser+申请）/rejectBlockReq（记录 rejectedAt，角色下一轮知道被拒）；buildBlockPromptBlock（无状态时空串不占 token；被拉黑→告知+语气可按人设变化+[申请解除拉黑:理由] 用法；拉黑别人→告知+不拦截消息说明+[解除拉黑] 用法；被拒绝→追加「上次申请被拒绝」行）
+- 标记管线 src/lib/chat-rich.ts：RichActionKind 新增 block-user/unblock-user/request-unblock；ACTION_RE/ACTION_TAIL_RE/OPEN_TAIL_RE 纳入 [拉黑]/[解除拉黑]/[申请解除拉黑:理由]（流式期 prettifyRichText 自动隐藏标记、切分边界自动合并半截标记）；extractRichActionParts 对拉黑类动作始终产出（request-unblock 的 targetId=理由全文不按冒号截断）
+- 设置页 src/components/apps/chat-settings.tsx：ChatSettingsPage（微信/QQ）与 SmsChatSettingsPage（信息）新增「拉黑」开关卡+说明文案（拉黑不拦截消息、对方会知道、气泡出拉黑图标、随时可解除）；props blockedByUser/onToggleBlock 可选——不传则隐藏（信息端小助手会话不传→无此功能）
+- 微信 src/components/apps/wechat.tsx：WxMsg 增 kind 'sys'（居中灰胶囊系统提示，不进 AI 上下文/记忆/预览）与 'blockreq'（申请卡片）；ChatPage 持有 blk 状态（kv 初始化）；设置开关 → setUserBlock+系统消息「你已拉黑/解除拉黑「XX」」；finalize 动作分支 → applyCharBlockAction 就地产出系统消息/申请卡片（落盘顺序=流式顺序）；runAiTurn systemFull 注入 blkBlock（每轮现场读 kv）；WxBlockReqCard（同意→acceptBlockReq+系统消息+sysEvent 触发 AI 回应；拒绝→rejectBlockReq+系统消息+sysEvent）；气泡后拉黑图标 blockedBadgeOf（我拉黑对方→我的气泡后「对方被我拉黑」；对方拉黑我→对方气泡后「我被拉黑」；含流式气泡与互拉双显）；isSelectable/搜索页过滤 sys/blockreq；readPreview 回退跳过 sys/blockreq
+- QQ src/components/apps/qq.tsx：全量镜像（QqBlockReqCard 蓝色系、qq-blockreq-card/-accept/-reject、qq-sys-row、qq-block-badge-me/-peer、msgPreview 预览回退跳过）
+- 信息 src/components/apps/chat.tsx：ChatMsg 增 sys/blkreq 字段；startAiTurn 增 sysEvent 参数（同意/拒绝后触发 AI 回应）+ baseSys 注入 buildBlockPromptBlock('sms')；finalize 改用 extractRichActionParts 交错管线（拉黑动作就地应用）；SmsBlockReqCard（iMessage 风格）；小助手会话 wbContactId=null → 无开关无徽标无标记处理；scanContactSessions/bubblePress 排除 sys/blkreq
+- E2E 实测（agent-browser 390×844 + mock:4100 新增 /__script 脚本化回复队列 + IndexedDB 种子 凡凡(昵称凑凑)/榴莲）：
+  ①用户拉黑（微信）：设置开关 ON → 系统消息「你已拉黑「榴莲」」+ 我的气泡后灰色 Ban 图标「对方被我拉黑」+ kv wx-block:c-liulian={byUser:true} ✓
+  ②AI 感知：下一轮请求 system 含【拉黑状态】「凑凑 已经在微信上把你拉黑了」+不拦截消息说明+[申请解除拉黑] 用法 ✓
+  ③申请卡片：脚本 [申请解除拉黑:上次是我不对，火锅我请！] → 聊天内卡片（头像+榴莲+申请解除拉黑+理由+拒绝/同意）+ kv reqReason/reqAt ✓
+  ④拒绝：点拒绝 → 卡片变「已拒绝」+ 系统消息「你拒绝了…」+ kv rejectedAt 写入 + AI 即刻收到系统事件回应 + 下一轮 system 注入「你上次申请解除拉黑被…拒绝了」✓
+  ⑤同意：再次申请 → 点同意 → 卡片「已同意，拉黑已解除」+ 系统消息 + kv byUser 清除 + 我的气泡徽标全部消失 + AI 收到系统事件 + 下一轮 system 不再含拉黑块 ✓
+  ⑥角色拉黑：脚本 [拉黑] → 系统消息「你已被「榴莲」拉黑」+ AI 气泡后「我被拉黑」徽标 + kv byChar:true ✓；[解除拉黑] → 「「榴莲」解除了对你的拉黑」+ 徽标消失 + kv 清除 ✓
+  ⑦互拉：信息端 byChar+用户开关 → AI 气泡「我被拉黑」与我的气泡「对方被我拉黑」同时显示 ✓；解除用户侧 → 仅我的徽标消失、对方徽标保留 ✓
+  ⑧三 App 隔离：微信已拉黑状态下 QQ 会话 0 徽标 0 系统消息、kv qq-block 为 null ✓；QQ 开关/卡片/同意全链路独立复验通过 ✓；信息端标记/开关/注入（「你已经在短信上把 凡凡 拉黑了」）通过 ✓
+  ⑨小助手会话：无拉黑开关（sms-settings-block 不存在）✓
+  ⑩持久化：整页 reload 后全部系统消息行/卡片终态/徽标状态/kv 完整保留 ✓
+  ⑪拉黑不拦截消息：双向收发全程未被阻断（消息、AI 回复、流式输出均正常）✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、agent-browser console/errors 零错误、dev.log 仅既有 /api/chat 502 直连兜底噪音
+- 新 testid：wx/qq/sms-settings-block（设置开关）、wx/qq/sms-sys-row（系统提示行）、wx/qq/sms-blockreq-card/-accept/-reject（申请卡片）、wx/qq/sms-block-badge-me/-peer（气泡拉黑图标）；群聊组件（wx-group/qq-group）零改动（单聊与群聊独立）
+
+Stage Summary:
+- 改动文件：src/lib/ios/block-state.ts（新建）、src/lib/chat-rich.ts、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx；.e2e/mock-llm.ts（+/__script /__reset /__queue 脚本化回复队列）与 .e2e/block-seed.js、.e2e/block-nav.js、.e2e/block-util.js（E2E 基建）
+- 行为基线：拉黑=纯关系状态，不拦截任何消息流；两方向（byUser/byChar）独立、可互拉；全部状态变更（用户开关、角色标记、卡片同意/拒绝）都生成居中灰胶囊系统消息并持久化到 IndexedDB kv；AI 每轮 system 现场注入拉黑状态与对应标记用法，被拒绝的申请会被明确告知
+- 已知边界：群聊完全不读写拉黑状态（单聊/群聊独立）；拉黑类标记在群聊语境下被静默忽略（群聊人设不含标记规则，正常不会出现）；信息端用户名取 profile.name（凡凡）、微信/QQ 取登录账号显示名（App 既有约定）

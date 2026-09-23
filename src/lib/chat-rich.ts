@@ -68,7 +68,11 @@ export type RichPart = { type: 'text'; text: string } | { type: 'rich'; rich: Ri
  * - [领取红包:红包ID] / [退回红包:红包ID] / [拒收红包:红包ID]
  * - [收款转账:转账ID] / [退回转账:转账ID] / [拒收转账:转账ID]
  * - [收下亲属卡:亲属卡ID] / [拒收亲属卡:亲属卡ID]
- * 标记只负责改变卡片状态（通知行由系统生成），不带感谢语/理由——道谢、吐槽、退回/拒收的
+ * 另有双向拉黑类动作（仅单聊由 block-state 应用；群聊/未知语境下由调用方忽略）：
+ * - [拉黑]：角色拉黑用户
+ * - [解除拉黑]：角色解除对用户的拉黑
+ * - [申请解除拉黑:理由]：角色申请让用户解除对自己的拉黑（理由原样透传，做成请求卡片）
+ * 标记只负责改变卡片/状态（通知行由系统生成），不带感谢语/理由——道谢、吐槽、退回/拒收的
  * 原因等所有想说的话都由 AI 按人设用正文正常说。动作标记不是消息：落盘前由
  * extractRichActionParts 按出现顺序提取（保证通知行落盘在流式时的真实位置，而不是永远堆在
  * 正文前），标记本身不会出现在聊天记录里。
@@ -81,7 +85,13 @@ export type RichActionKind =
   | 'return-transfer'
   | 'reject-transfer'
   | 'claim-family'
-  | 'reject-family';
+  | 'reject-family'
+  | 'block-user'
+  | 'unblock-user'
+  | 'request-unblock';
+
+/** 拉黑类动作（targetId 语义不同：request-unblock 的 targetId = 申请理由全文，其余为空） */
+export const BLOCK_ACTION_KINDS: ReadonlySet<RichActionKind> = new Set(['block-user', 'unblock-user', 'request-unblock']);
 
 export interface RichAction {
   kind: RichActionKind;
@@ -98,11 +108,14 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   拒收转账: 'reject-transfer',
   收下亲属卡: 'claim-family',
   拒收亲属卡: 'reject-family',
+  拉黑: 'block-user',
+  解除拉黑: 'unblock-user',
+  申请解除拉黑: 'request-unblock',
 };
 
-const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：]([^\][]*))?\]/g;
+const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|拉黑|解除拉黑|申请解除拉黑)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
-export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
+export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|拉黑|解除拉黑|申请解除拉黑)(?:[:：][^\][]*)?$/;
 
 /** 回复按出现顺序切开的片段：普通文字块 或 处理动作（两者交错，保持流式输出顺序） */
 export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; action: RichAction };
@@ -120,9 +133,15 @@ export function extractRichActionParts(text: string): RichActionPart[] {
   for (const m of text.matchAll(ACTION_RE)) {
     const before = text.slice(last, m.index);
     if (before.trim()) parts.push({ type: 'text', text: before });
-    const targetId = (m[2] ?? '').split(/[:：]/)[0].trim();
-    // 第三段及以后（旧版感谢语/理由）直接丢弃：回应内容由 AI 人设正文承担
-    if (targetId) parts.push({ type: 'action', action: { kind: ACTION_LABELS[m[1]], targetId } });
+    const kind = ACTION_LABELS[m[1]];
+    if (BLOCK_ACTION_KINDS.has(kind)) {
+      // 拉黑类动作没有目标 ID；申请解除拉黑的 targetId = 申请理由全文（不按冒号截断）
+      parts.push({ type: 'action', action: { kind, targetId: kind === 'request-unblock' ? (m[2] ?? '').trim() : '' } });
+    } else {
+      const targetId = (m[2] ?? '').split(/[:：]/)[0].trim();
+      // 第三段及以后（旧版感谢语/理由）直接丢弃：回应内容由 AI 人设正文承担
+      if (targetId) parts.push({ type: 'action', action: { kind, targetId } });
+    }
     last = m.index + m[0].length;
   }
   const tail = text.slice(last).replace(ACTION_TAIL_RE, '');
@@ -144,7 +163,7 @@ export function actionVerb(kind: RichActionKind): 'claim' | 'return' | 'reject' 
 /** 完整标记（中英文冒号兼容；内容里不允许出现「]」） */
 const RICH_RE = /\[(红包|转账|亲属卡|位置|表情包)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体与处理动作标记） */
-const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡)(?:[:：][^\][]*)?$/;
+const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|拉黑|解除拉黑|申请解除拉黑)(?:[:：][^\][]*)?$/;
 /**
  * AI 仿写用户记录格式的表情标记变体（聊天历史里用户表情以「[发送了表情：意思]」进入上下文，
  * AI 经常照葫芦画瓢输出同款格式，或把意思当 ID 写成 [表情:XX]）——这些变体在普通文字段里

@@ -5,8 +5,12 @@
  * - 群聊请求：按 system 里「你以「XX」的身份参与其中」提取成员名，回复带名字便于断言
  * - 记忆提取请求（system 含「只输出 JSON」/「fragments」）→ 返回合法 fragments JSON
  * - 所有请求体落 /tmp/mock-llm-requests.log（JSONL）供断言 system 注入内容
+ * - /__script POST {reply} 压入脚本化回复队列（记忆提取请求不消费队列）；/__reset 清队列+日志；/__queue 查看队列
  */
 const PORT = 4100;
+
+/** 脚本化回复队列（FIFO；非记忆提取的聊天请求依次消费） */
+const scriptQueue: string[] = [];
 
 Bun.serve({
   port: PORT,
@@ -18,6 +22,25 @@ Bun.serve({
       'Access-Control-Allow-Headers': '*',
     };
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    // 测试控制端点
+    if (url.pathname === '/__script') {
+      try {
+        const b = await req.json();
+        const replies: string[] = Array.isArray(b?.replies) ? b.replies : typeof b?.reply === 'string' ? [b.reply] : [];
+        scriptQueue.push(...replies);
+        return new Response(JSON.stringify({ ok: true, queued: replies.length, total: scriptQueue.length }), { headers: { 'Content-Type': 'application/json', ...cors } });
+      } catch {
+        return new Response('bad request', { status: 400, headers: cors });
+      }
+    }
+    if (url.pathname === '/__reset') {
+      scriptQueue.length = 0;
+      try { await Bun.write('/tmp/mock-llm-requests.log', ''); } catch {}
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json', ...cors } });
+    }
+    if (url.pathname === '/__queue') {
+      return new Response(JSON.stringify({ queue: [...scriptQueue] }), { headers: { 'Content-Type': 'application/json', ...cors } });
+    }
     if (url.pathname !== '/v1/chat/completions' && url.pathname !== '/chat/completions') {
       return new Response('not found', { status: 404, headers: cors });
     }
@@ -42,6 +65,8 @@ Bun.serve({
     let reply: string;
     if (isMemoryExtract) {
       reply = JSON.stringify({ fragments: [] });
+    } else if (scriptQueue.length > 0) {
+      reply = scriptQueue.shift() ?? '';
     } else {
       const m = system.match(/你以「(.+?)」的身份参与/);
       const name = m ? m[1] : (system.match(/你是「(.+?)」/)?.[1] ?? 'AI');
