@@ -13,6 +13,7 @@ const CORS = {
   'Access-Control-Allow-Headers': '*',
 };
 let queue: string[] = [];
+let logQueue: Promise<void> = Promise.resolve();
 
 Bun.serve({
   port: PORT,
@@ -30,9 +31,13 @@ Bun.serve({
     }
     if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
       const body = (await req.json().catch(() => ({}))) as { stream?: boolean; messages?: unknown };
-      try {
-        await Bun.write(LOG, JSON.stringify({ t: Date.now(), body }) + '\n', { append: true });
-      } catch {}
+      logQueue = logQueue.then(async () => {
+        try {
+          const prev = await Bun.file(LOG).text().catch(() => '');
+          await Bun.write(LOG, prev + JSON.stringify({ t: Date.now(), body }) + '\n');
+        } catch {}
+      });
+      await logQueue;
       const stream = body.stream === true;
       const scripted = queue.shift();
       const content = stream ? (typeof scripted === 'string' ? scripted : '好的，我在呢。') : '{"fragments":[]}';

@@ -108,14 +108,15 @@ export interface RichAction {
   arg?: string;
 }
 
-/** 群管理动作（群聊页执行器负责权限校验与落盘） */
+/** 群管理动作（群聊页执行器负责权限校验与落盘；grant-owner = 群主 AI 转让群主给指定成员） */
 export function isGroupAdminAction(action: RichAction): boolean {
   return (
     action.kind === 'mute-member' ||
     action.kind === 'unmute-member' ||
     action.kind === 'kick-member' ||
     action.kind === 'rename-group' ||
-    action.kind === 'announce-group'
+    action.kind === 'announce-group' ||
+    action.kind === 'grant-owner'
   );
 }
 

@@ -2274,6 +2274,17 @@ export function QqGroupChatPage({
           if (n && canEditGroupInfo(g, char.id)) updateGroup(gid, { announcement: n });
           break;
         }
+        case 'grant-owner': {
+          // AI（群主）在群里转让群主给指定成员（[转让群主:成员名字]）：仅群主、要写名字、不能转给自己；
+          // 转给机主也允许（机主不在 memberIds，meVariants 分支可命中）
+          const t = resolveTarget(action.targetId);
+          if (!t) return;
+          if (groupRoleOf(g, char.id) !== 'owner') return; // 只有群主能转让（越权吞掉）
+          if (t.id === char.id) return; // 不能转给自己
+          if (t.id !== me.id && !g.memberIds.includes(t.id)) return; // 只能转给群内真实成员
+          transferGroupOwner(gid, t.id, { name: t.name });
+          break;
+        }
         default:
           return;
       }

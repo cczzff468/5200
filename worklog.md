@@ -6341,3 +6341,51 @@ Stage Summary:
 - 群聊卡片：微信绿/QQ 蓝双样式（pending 按钮态/accepted 可进群/rejected 灰显），消息随私聊持久化、进 AI 上下文占位、不破坏多选/长按
 - 改动文件：src/lib/chat-rich.ts、src/lib/memory.ts、src/lib/ios/groups.ts、src/lib/ios/group-social.ts（新建）、src/components/ios/QuitFlowScheduler.tsx、src/components/apps/{wechat,qq,wx-group,qq-group}.tsx
 - 已知边界：invite-to-group 标记解析兼容但执行器吞掉（机主恒在群语义下无真实场景，退群拉回走 quit-flow）；建群/拉人冷却按角色全局（跨 App 共享，同一个人 24h 一次）；开场白依赖建群后群未解散（拒绝解散后静默放弃）；NPC 不主动建群（配角定位，仅可被拉）
+
+---
+Task ID: name-nickname-group-actions-fix
+Agent: main (Z.ai Code)
+Task: 名字/昵称混淆修复 + 群管理操作真实生效 + 群成员排序 + 群聊卡片交互 + 退群挽留强化 + 预览兜底；随后按用户清单对「AI 群管理操作」做整体真实性检查
+
+Work Log:
+- 名字/昵称区分（根因：toWxUser 把展示副本的 name（已被 withDisplayNames 换成昵称）当真名传给 AI）：
+  - contacts.ts 新增 AddressMode/addressNameOf/contactNameVariants/nameVariantHit/meTileLabel；store.ts 新增 addressMode 设置（IndexedDB 持久化，默认 'name'）
+  - persona.ts 新增 ctx.userRealName/userNickname → 注入【用户的称呼】段（原话口径「用户的名字是凡凡，昵称是凑凑」+「凑凑不是另一个人/不是正式名字/平时称呼用X」）
+  - wechat/qq：WxUser/QQUser 带 realName+nickname（toWxUser 用 c.realName ?? c.name 修根因）；loginWechat/loginQQ 返回真名+昵称；buildPersonaPrompt 用称呼名；记忆兜底用真名
+  - wx-group/qq-group：meName=称呼名；【群聊模式】参与成员标注「凡凡（机主用户，昵称「凑凑」也是 TA）」；resolveTarget/resolveMemberByName 走多变体（真名/展示名/昵称/「我」「机主」）；群聊 system 也注入称呼段
+  - group-social/quit-flow 同口径（开场白/挽留私信/退群背景均用称呼名）；chat.tsx 信息端补称呼段
+  - 设置 App 新增「AI 称呼方式」卡片（用名字→AI 称呼你「凡凡」/ 用昵称→「凑凑」，即改即存）
+- 群管理真实生效：
+  - group-admin.ts：普通成员不再静默不注入 → 注入【群管理权限】无权限段（如实拒绝、指出群主/管理员、禁止假装执行）；群主/管理员加【管理操作·执行铁律】（只有标记生效、以系统通知为准、没输出标记不得声称操作过）
+  - group-social.ts：resolveByName 走多变体；管理员注入「任命管理员只有群主可以」说明；群主加【转让群主】标记说明
+  - resolveTarget 支持真名/昵称/「我」「机主」（修「AI 写凡凡但群里显示凑凑导致操作静默失败」）
+  - 补缺口：群内 AI [转让群主:成员] 此前被静默吞（grant-owner 无群聊分支）→ wx-group/qq-group 执行器加 grant-owner 分支（仅群主/要名字/不能转自己/只能转群内成员或机主）+ isGroupAdminAction 纳入 grant-owner（首次修复后 E2E 发现分流条件漏了，二修）
+- 群成员排序：wx-group/qq-group 群信息页成员格点改为「群主→管理员→普通成员」全列表排序（机主瓦片并入排序不再恒居首位），机主标签按设置显示「凡凡（凑凑）」/「凑凑」
+- 群聊卡片：卡片本体改为不可点击（微信绿/QQ 蓝双端），点「接受邀请」才进群（decideGroupCard 已有 onOpenGroup）
+- 退群挽留：fireAt 缩短为 quitAt+8~20s；activeQuitFlowFor 注入【拉回群·执行铁律】（无标记声称拉回无效、以「XX加入了群聊」系统通知为准、无权限如实说明）；reinvite-user 幂等重拉（resolved 但群不存在时允许再拉）
+- 群预览兜底：groupPreview 群内全事件时回退显示最近事件文案（修「会话行预览空白」）；pushGroupEvent 广播 group-msgs:updated，wx-group/qq-group 监听即时重读（修「接受邀请进群后加入事件晚一拍不显示」）
+- E2E（agent-browser + mock :4100 脚本化 + IndexedDB 种子 凡凡(昵称凑凑)/榴莲/红红 + 微信群周末爬山群）：
+  ①私聊称呼：system 实测含「你现在是凡凡微信里的联系人」+【用户的称呼】段；AI 回复叫「凡凡」；切「用昵称」后变「你现在是凑凑微信里的联系人」✓
+  ②群聊称呼：参与成员「凡凡（机主用户，昵称「凑凑」也是 TA）」；历史标注「凡凡：@榴莲…」；QQ 端同验证 ✓
+  ③解禁：注入禁言→@榴莲→[解禁:红红]→「红红被解除禁言」+mutes 清空 ✓
+  ④禁言：[禁言:红红:5分钟]→「红红被禁言5 分钟」+mutes 落盘；机主被禁言时发送被拦（消息未落盘）✓
+  ⑤踢人：[移出群聊:红红]→「红红被移出群聊」+memberIds 移除+char-kick 落盘（actor=榴莲）✓
+  ⑥拉人：[邀请:红红]→「榴莲邀请红红加入了群聊」+memberIds 恢复+backAt 回群标记 ✓
+  ⑦改群名：[改群名:周末徒步小分队]→事件+顶栏实时+kv 持久化 ✓
+  ⑧改公告：[改公告:…]→事件+announcement 落盘 ✓
+  ⑨转让群主：[转让群主:红红]→「群主转让给 红红」+ownerId=c-honghong（一修分流后通过）✓
+  ⑩越权：普通成员榴莲输出 [禁言:红红]→标记剥除+无事件+mutes 不变（系统层丢弃）；bun 直测 buildGroupAdminRules 输出无权限段（含「绝不能假装已经执行」）✓
+  ⑪事件感知：榴莲 system 实测按时间注入【群内事件】全部 7 类事件行 ✓
+  ⑫排序：群信息页「榴莲|群主 → 凡凡（凑凑）|管理员 → 红红|管理员」；机主瓦片不再恒居首位 ✓
+  ⑬卡片：点卡片主体不跳群页（双端）；点「接受邀请」才进群+「凡凡加入了群聊」+AI 群主徽标 ✓
+  ⑭退群挽留：退群→快照落盘（fireAt=+16.5s）→主动私信 ~16s 到达→回复→[拉回群聊]→群原样恢复+「凡凡加入了群聊」+历史保留+列表可见+winback resolved；重复标记幂等吞掉 ✓
+  ⑮预览兜底：纯事件群「老友聚集地」列表预览显示「榴莲创建了群聊」✓
+  ⑯冷却：QQ 端 24h 内二次 [建群] 被吞（跨 App 冷却生效，清冷却后恢复）✓
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过；dev.log 无运行时错误
+- E2E 基建保留在 .e2e/（boot.sh/mock-llm.ts/seed.js/nav.js/prompt-check.ts），后续验证可直接复用；测试浏览器与 mock 已清理
+
+Stage Summary:
+- 用户称呼链路全面打通：真名/昵称双字段贯穿 登录→会话→persona→群聊提示词→成员解析→记忆→挽留私信；默认用名字，设置可选昵称；AI 侧统一称呼名，展示层不变（昵称优先）
+- 群管理 9 类操作全部真实执行（禁言/解禁/踢人/给管理员/改群名/改公告/转让群主/拉人/建群）：标记→硬校验→数据层落盘→居中系统消息→广播刷新→事件注入 system；越权标记系统层丢弃+提示词诚实拒绝双防线
+- 本轮修复的 4 个真实缺陷：①toWxUser 真名取展示名（称呼混淆根因）②群内 [转让群主] 静默吞+首次修复漏分流条件 ③普通成员 AI 无权限提示缺失（假成功温床）④纯事件群预览空白/进群事件晚一拍不显示
+- 已知边界：mock 环境无法验证真实模型「被纠正后自发改口」（提示词已含称呼指令与「两个名字都是同一人」约束，建议真实模型下复测）；拉回群 restore 异常时静默但支持重拉幂等，提示词要求以系统通知为准
