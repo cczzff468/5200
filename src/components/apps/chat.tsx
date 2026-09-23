@@ -877,8 +877,8 @@ function ChatView({
     }
   };
 
-  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡 + 气泡下方灰字「消息已发出，但被对方拒收了。」。
-   *  我拉黑了对方 → 对方的气泡标记；对方拉黑了我 → 我的气泡标记；互拉时两侧同时显示；
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——不管是谁拉黑，被标记一方气泡都带图标：
+   *  对方拉黑了我 → 我的气泡标记；我拉黑了对方 → 对方的气泡标记；互拉时两侧同时显示；
    *  系统提示行/申请卡片/撤回行不显示 */
   const blockSideOf = (m: ChatMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.sys || m.blkreq) return null;
@@ -902,17 +902,20 @@ function ChatView({
     );
   };
 
-  /** 气泡下方灰字状态行；对齐被标记一方气泡一侧 */
+  /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」时跟在我的消息后面，
+   *  居中半透明圆角胶囊（与系统提示行同款）；
+   *  我拉黑对方 → 对方气泡只显示拉黑图标，不显示拒收文案 */
   const blockedLineOf = (m: ChatMsg) => {
-    const side = blockSideOf(m);
-    if (!side) return null;
+    if (blockSideOf(m) !== 'me') return null;
     return (
-      <p
-        data-testid={side === 'me' ? 'sms-block-line-me' : 'sms-block-line-peer'}
-        className="mt-0.5 text-[11.5px] leading-[1.4] text-black/35 dark:text-white/40"
-      >
-        消息已发出，但被对方拒收了。
-      </p>
+      <div className="mt-1 flex justify-center">
+        <span
+          data-testid="sms-block-line-me"
+          className="rounded-[6px] bg-black/[0.06] px-3 py-[4px] text-[12px] text-muted-foreground dark:bg-white/[0.08]"
+        >
+          消息已发出，但被对方拒收了。
+        </span>
+      </div>
     );
   };
 
@@ -1179,15 +1182,15 @@ function ChatView({
               {newDay && <DaySeparator time={m.time} />}
               {m.recalled ? (
                 /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
-                <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
-                  <span className="rounded-full bg-black/[0.06] px-3 py-1 text-[12px] text-muted-foreground dark:bg-white/[0.08]">
+                <div className="mt-2 flex justify-center" data-testid="sms-recall-row">
+                  <span className="rounded-[6px] bg-black/[0.06] px-3 py-[4px] text-[12px] text-muted-foreground dark:bg-white/[0.08]">
                     {mine ? '你撤回一条消息' : '对方撤回一条消息'}
                   </span>
                 </div>
               ) : m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中灰字胶囊 */
-                <div className="mt-2.5 flex justify-center" data-testid="sms-sys-row">
-                  <span className="rounded-full bg-black/[0.06] px-3 py-1 text-[12px] text-muted-foreground dark:bg-white/[0.08]">
+                <div className="mt-2 flex justify-center" data-testid="sms-sys-row">
+                  <span className="rounded-[6px] bg-black/[0.06] px-3 py-[4px] text-[12px] text-muted-foreground dark:bg-white/[0.08]">
                     {m.sys.text}
                   </span>
                 </div>
@@ -1234,7 +1237,7 @@ function ChatView({
                   {m.quote && (
                     <div
                       data-testid="sms-quote-block"
-                      className="mb-1 max-w-full overflow-hidden rounded-[9px] bg-black/[0.06] px-3 py-1.5 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
+                      className="mb-1 max-w-full overflow-hidden rounded-[6px] bg-black/[0.06] px-3 py-1.5 text-[12.5px] leading-[1.4] text-black/55 dark:bg-white/[0.1] dark:text-white/60"
                     >
                       <p className="line-clamp-2 whitespace-pre-wrap break-all">
                         {m.quote.name}：{m.quote.content}
@@ -1266,7 +1269,6 @@ function ChatView({
                       <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
                     </div>
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
-                  {blockedLineOf(m)}
                   {renderTranslations(m.id, m.content, m.error && !mine)}
                   {/* iMessage：已送达挂在气泡下沿、小尾巴另一侧（气泡左下角，与气泡左缘对齐） */}
                   {mine && i === lastUserIdx && !m.error && (
@@ -1288,6 +1290,8 @@ function ChatView({
                 )}
               </motion.div>
               )}
+              {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
+              {blockedLineOf(m)}
             </div>
           );
         })}
@@ -1345,11 +1349,6 @@ function ChatView({
                   })}
                   {(split.pending || split.texts.length === 0) && (
                     <div data-testid="sms-stream-typing">{dots}</div>
-                  )}
-                  {blk.byUser === true && (
-                    <p data-testid="sms-block-line-peer" className="mt-0.5 text-[11.5px] leading-[1.4] text-black/35 dark:text-white/40">
-                      消息已发出，但被对方拒收了。
-                    </p>
                   )}
                 </div>
               </motion.div>

@@ -211,7 +211,9 @@ export default function LockScreen() {
       {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸） */}
       <div className="absolute inset-0" style={wallpaperStyle} aria-hidden="true" />
 
-      <AnimatePresence mode="wait">
+      {/* initial={false}：首次挂载不播淡入——开机直接整帧呈现锁屏内容，
+          否则时钟/小组件在壁纸上先透明再淡入，看起来像锁屏闪了一下 */}
+      <AnimatePresence mode="wait" initial={false}>
         {mode === 'lock' ? (
           <motion.div
             key="lock"

@@ -2226,8 +2226,8 @@ function ChatPage({
     [peer.id, peer.name, me.name, pushSysMsg]
   );
 
-  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡 + 气泡下方灰字「消息已发出，但被对方拒收了。」。
-   *  我拉黑了对方 → 对方的气泡标记；对方拉黑了我 → 我的气泡标记；互拉时两侧同时显示；
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——不管是谁拉黑，被标记一方气泡都带图标：
+   *  对方拉黑了我 → 我的气泡标记；我拉黑了对方 → 对方的气泡标记；互拉时两侧同时显示；
    *  系统提示行/申请卡片/撤回行不显示 */
   const blockSideOf = (m: QQMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
@@ -2251,19 +2251,20 @@ function ChatPage({
     );
   };
 
-  /** 气泡下方灰字状态行；对齐被标记一方气泡一侧 */
+  /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」时跟在我的消息后面，
+   *  居中半透明圆角胶囊（与系统提示行同款）；
+   *  我拉黑对方 → 对方气泡只显示拉黑图标，不显示拒收文案 */
   const blockedLineOf = (m: QQMsg) => {
-    const side = blockSideOf(m);
-    if (!side) return null;
+    if (blockSideOf(m) !== 'me') return null;
     return (
-      <p
-        data-testid={side === 'me' ? 'qq-block-line-me' : 'qq-block-line-peer'}
-        className={`py-[2px] text-[12.5px] leading-[1.4] text-black/35 dark:text-white/40 ${
-          side === 'me' ? 'pr-[48px] text-right' : 'pl-[48px] text-left'
-        }`}
-      >
-        消息已发出，但被对方拒收了。
-      </p>
+      <div className="mb-2 text-center">
+        <span
+          data-testid="qq-block-line-me"
+          className="inline-block rounded-[6px] border border-black/20 bg-white/75 px-3 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55"
+        >
+          消息已发出，但被对方拒收了。
+        </span>
+      </div>
     );
   };
 
@@ -3347,14 +3348,14 @@ function ChatPage({
               }`}
             >
               {showTime && (
-                <div className="my-2 text-center">
-                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
+                <div className="my-1.5 text-center">
+                  <span className="inline-block rounded-[6px] border border-black/20 bg-white/75 px-3 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
-                <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
+                <div data-testid="qq-recall-row" className="mb-2 text-center">
+                  <span className="inline-block rounded-[6px] border border-black/20 bg-white/75 px-3 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -3362,8 +3363,8 @@ function ChatPage({
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
               ) : m.kind === 'sys' && m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
-                <div data-testid="qq-sys-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[8px] border border-black/20 bg-white/75 px-4 py-[6px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
+                <div data-testid="qq-sys-row" className="mb-2 text-center">
+                  <span className="inline-block rounded-[6px] border border-black/20 bg-white/75 px-3 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:border-white/20 dark:bg-white/[0.13] dark:text-white/55">
                     {m.sys.text}
                   </span>
                 </div>
@@ -3542,7 +3543,7 @@ function ChatPage({
               )}
               {/* 拉黑图标（对照用户截图：红色 ! 圆点紧贴气泡） */}
               {blockedIconOf(m)}
-              {/* 拉黑状态行：气泡下方灰字「消息已发出，但被对方拒收了。」 */}
+              {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
               {blockedLineOf(m)}
             </div>
           );
@@ -3589,11 +3590,6 @@ function ChatPage({
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
                     <div className="max-w-[calc(100%-96px)] rounded-[12px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">{dots}</div>
                   </div>
-                )}
-                {blk.byUser === true && (
-                  <p data-testid="qq-block-line-peer" className="py-[2px] pl-[48px] text-left text-[12.5px] leading-[1.4] text-black/35 dark:text-white/40">
-                    消息已发出，但被对方拒收了。
-                  </p>
                 )}
               </div>
             );

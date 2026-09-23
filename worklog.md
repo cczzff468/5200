@@ -6137,3 +6137,23 @@ Stage Summary:
 - 视觉基线更新：半透明胶囊 = rounded-[8px] + 1px 黑细边框（black/20，暗色 white/20）；QQ 气泡圆角 12px；微信引用 = 气泡下方独立胶囊；拉黑标记 = 红 ! 圆点（发送失败图标位）+「消息已发出，但被对方拒收了。」灰字行
 - 交互新增：QQ/微信单聊键入 @ 唤起 @ 浮层，点选插入「@名字 」（与群聊一致）
 - 存量兼容：wx-quote-block/wx-grp-quote-block testid 保留（位置从气泡内移到气泡下方）；群聊卡片类引用胶囊（上方）不变；拉黑数据结构/标记管线/设置开关零改动
+---
+Task ID: ui-fix-0524
+Agent: Z.ai Code (main)
+Task: 用户五项反馈修复——①半透明胶囊圆角收小（8px→6px）+ 内外间距收紧 ②进入网页锁屏闪烁修复 ③「消息已发出，但被对方拒收了。」改为居中半透明胶囊 ④拒收文案方向语义修正（仅「对方拉黑我」显示，我拉黑对方不显示）⑤拉黑图标双向保留（不管谁拉黑都有图标）
+
+Work Log:
+- 胶囊美化（五文件 19 处统一）：居中系统胶囊（时间分隔/撤回行/拉黑系统提示/群事件通知）`rounded-[8px] px-4 py-[6px]` → `rounded-[6px] px-3 py-[4px]`，保留 1px 黑细边框与半透明底（dark 对应）；引用胶囊（wx/qq/wx-group/qq-group 四处）圆角同步 8px→6px；信息端撤回/系统行 `rounded-full px-3 py-1` → `rounded-[6px] px-3 py-[4px]`、引用块 9px→6px；外层间距同步收紧（wx 时间 py-2→py-1.5、撤回/系统 py-1.5→py-1；qq 时间 my-2→my-1.5、撤回/系统 mb-3→mb-2；群聊两端同构；信息端 mt-2.5→mt-2）
+- 拒收文案重做（三端 blockedLineOf 重写）：仅 `blockSideOf(m)==='me'`（对方拉黑我、role=me 的消息）才渲染，样式改为居中半透明胶囊（与系统提示行同款 rounded-[6px] 细边框），testid 保留 wx/qq/sms-block-line-me；`*-block-line-peer` testid 全部移除（我拉黑对方 → 对方气泡只显示红色 ! 图标、无任何拒收文案，document 全文断言「消息已发出，但被对方拒收了」不存在）
+- 拉黑图标双向保留：blockSideOf 语义不变（byChar→我的气泡、byUser→对方气泡、互拉两侧同显），注释更新为「不管是谁拉黑，被标记一方气泡都带图标」
+- 流式气泡区三处 byUser 拒收行删除（wechat/qq/chat stream 区块）：流式气泡是对方消息，按新语义永不显示拒收文案
+- 锁屏闪烁修复（两处根因）：① LockScreen.tsx 模式切换 AnimatePresence 加 `initial={false}`——开机首帧不再播内容淡入（修复前时钟/小组件在壁纸上先 opacity:0 再 0.2s 淡入 = 「闪一下」；修复后 E2E 实测首帧即 opacity=1 且无 inline opacity 样式）② store.ts useLockWallpaper 自定义壁纸分支补 `backgroundColor:'#1c1c1e'` 底色兜底——Blob 图片异步解码前不透出下层
+- E2E 实测（agent-browser 390×844 + mock:4100 + 种子 凡凡/榴莲）：①微信时间胶囊 class 含 rounded-[6px]+px-3 py-[4px]+border，全页无 8px 残留 ✓ ②场景① byUser：对方气泡 iconPeer 有、我的消息 iconMe=0、anyRejectText=false（拒收文案彻底不出现）✓ ③场景② byChar：我的气泡 iconMe=1 + lineMe=1（wrapper=py-1 text-center 居中胶囊）、对方无标记 ✓ ④场景③互拉：iconPeer=4/iconMe=2 双向图标、lineMe=2 仅我的消息、AI 流式回复（脚本化「那晚上整火锅？」）入列后只加图标不加拒收行 ✓ ⑤QQ byChar：蓝色气泡红 ! 图标+居中拒收胶囊 ✓（注意：直接改 IndexedDB kv 必须整页 reload 让 idb-kv 内存缓存重建，否则组件读旧缓存——排查时曾误判，charCode 验证文件未损坏）⑥信息端 byChar：iMessage 蓝泡图标+已送达+居中拒收胶囊 ✓ ⑦锁屏首帧 opacity=1/ineline=none（t=281ms 起连续 8 采样稳定）✓ ⑧console/errors 零错误
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+
+Stage Summary:
+- 改动文件：src/components/apps/wechat.tsx、qq.tsx、chat.tsx、wx-group.tsx、qq-group.tsx、src/components/ios/LockScreen.tsx、src/lib/ios/store.ts
+- 视觉基线更新：半透明胶囊 = rounded-[6px] + 1px 黑细边框 + px-3 py-[4px]（更小圆角更紧实），时间/撤回/系统提示/拒收提示/群事件/引用全部统一
+- 拒收文案新语义：「消息已发出，但被对方拒收了。」= 居中胶囊、仅对方拉黑我时跟在我的消息后面；我拉黑对方 → 对方气泡只有拉黑图标；拉黑图标两个方向恒显示
+- 锁屏：开机首帧整屏直出（无淡入），自定义锁屏壁纸有底色兜底
+- 存量兼容：*-block-line-peer testid 移除（E2E 脚本无引用）；wx/qq/sms-block-line-me 保留；拉黑数据结构/标记管线/设置开关/申请卡片零改动；群聊零改动

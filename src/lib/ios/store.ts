@@ -587,6 +587,8 @@ export function useLockWallpaper(): { style: CSSProperties; light: boolean } {
     if (lockCustom) {
       return {
         style: {
+          // 底色兜底：Blob 图片异步解码前先铺不透明纯色，避免锁屏头几帧透出主屏幕（闪烁根因之一）
+          backgroundColor: '#1c1c1e',
           backgroundImage: `url(${lockCustom})`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
