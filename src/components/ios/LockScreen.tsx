@@ -88,11 +88,15 @@ export default function LockScreen({
 
   // 壁纸亮度决定前景色：分区域实测壁纸亮度（顶部 0–35% 管状态栏/日期/时钟/小组件，
   // 底部 86–100% 管上滑提示/快捷按钮）——「上亮下暗」的壁纸（如雾山）两端分别选黑/白字，
-  // 测量中或失败时回退 boot 快照分区亮度 → 预设静态标记（三段同源，颜色零跳变）；
+  // 测量中或失败时回退链：boot 快照分区亮度 → 预设静态标记（三段同源，颜色零跳变）；
+  // boot 值兜底尤其关键：load() 移除 data-boot-lock-* CSS 锁的瞬间实测可能尚未落地
+  // （自定义壁纸 Blob URL 每会话都变），若直接跳静态标记就会重现「黑→白」变色闪烁 ——
+  // 保持 boot 判定值直到实测接管，两端颜色一致（同一张图同一算法）；
   // 自定义壁纸同样实测，浅色图自动改用黑字
   const measured = useMeasuredWallpaperLight(wallpaperStyle);
-  const lightWallpaper = measured.top ?? presetLight;
-  const lightWallpaperBottom = measured.bottom ?? (presetLightBottom ?? presetLight);
+  const lightWallpaper = measured.top ?? (bootLight?.lock?.top ?? presetLight);
+  const lightWallpaperBottom =
+    measured.bottom ?? (bootLight?.lock?.bottom ?? (presetLightBottom ?? presetLight));
   const lightText = !lightWallpaper;
   const lightTextBottom = !lightWallpaperBottom;
   const fg = lightText ? 'text-white' : 'text-black/85';

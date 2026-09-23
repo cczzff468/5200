@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import type { ContactRecord } from '@/lib/contacts';
 import { listContacts } from '@/lib/ios/contacts-store';
+import { useUI } from '@/lib/ios/store';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { useLocalToast, LocalToast } from './page-toast';
 import {
@@ -222,11 +223,14 @@ function CreateBookDialog({
   contacts,
   onConfirm,
   onClose,
+  onCreateCharacter,
 }: {
   /** 角色可选名单（已排除 user 用户自己），供「专属」绑定 */
   contacts: ContactRecord[];
   onConfirm: (name: string, scope: WbScope, targetContactId: string | null) => void;
   onClose: () => void;
+  /** 名单为空时跳去联系人 App 创建角色 */
+  onCreateCharacter: () => void;
 }) {
   const [name, setName] = useState('');
   const [scope, setScope] = useState<WbScope>('global');
@@ -268,7 +272,7 @@ function CreateBookDialog({
           <p className={`mt-1 text-[14px] ${SUB_CLS}`}>为 AI 聊天准备的世界观设定库</p>
         </div>
 
-        {/* 名称 */}
+        {/* 名称（大输入框：80px 高 + 19px 字号，手机上好点好输） */}
         <p className="mt-5 text-[16px] font-semibold">名称</p>
         <input
           autoFocus
@@ -281,7 +285,7 @@ function CreateBookDialog({
           aria-label="世界书名称"
           data-testid="wb-dialog-name"
           maxLength={40}
-          className="mt-2.5 h-16 w-full rounded-[16px] bg-black/[0.05] px-5 text-[18px] outline-none placeholder:text-[15px] placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
+          className="mt-2.5 h-20 w-full shrink-0 rounded-[16px] bg-black/[0.05] px-5 text-[19px] outline-none placeholder:text-[16px] placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
         />
 
         {/* 范围三选卡片 */}
@@ -339,9 +343,24 @@ function CreateBookDialog({
           <>
             <p className="mt-4 text-[16px] font-semibold">绑定角色</p>
             {contacts.length === 0 ? (
-              <p className={`mt-2 rounded-[14px] bg-black/[0.05] px-4 py-3.5 text-[13.5px] dark:bg-white/[0.08] ${SUB_CLS}`}>
-                暂无角色，可先到「联系人」App 创建
-              </p>
+              /* 名单为空：给出明确原因 + 去创建的入口（不再只是干巴巴一句话） */
+              <div
+                data-testid="wb-dialog-empty-chars"
+                className="mt-2 rounded-[14px] bg-black/[0.05] px-4 py-4 dark:bg-white/[0.08]"
+              >
+                <p className="text-[14px] font-medium">还没有可绑定的 AI 角色</p>
+                <p className={`mt-1 text-[12.5px] leading-[1.55] ${SUB_CLS}`}>
+                  名单只列 AI 角色，你自己（user）不会出现在名单里；先到「联系人」App 创建角色，再回来绑定。
+                </p>
+                <button
+                  type="button"
+                  data-testid="wb-dialog-goto-contacts"
+                  onClick={onCreateCharacter}
+                  className="mt-3 h-11 w-full rounded-[12px] bg-black text-[14px] font-medium text-white active:opacity-80 dark:bg-white dark:text-black"
+                >
+                  去联系人 App 创建角色
+                </button>
+              </div>
             ) : (
               <div className="mt-2 max-h-44 overflow-y-auto rounded-[14px] bg-black/[0.05] dark:bg-white/[0.08]">
                 {contacts.map((c) => {
@@ -549,6 +568,15 @@ export default function WorldBookApp() {
       .then(setContacts)
       .catch(() => undefined);
   }, []);
+
+  // 创建弹窗/绑定菜单/角色筛选打开时重读联系人：用户刚在联系人 App 建完角色回来立即生效，
+  // 不依赖本 App 挂载时机（避免「绑定角色那里没有角色」的旧数据）
+  useEffect(() => {
+    if (!createOpen && !bindSheetFor && !charSheet) return;
+    void listContacts()
+      .then(setContacts)
+      .catch(() => undefined);
+  }, [createOpen, bindSheetFor, charSheet]);
 
   /** 角色可选名单：只列 AI 角色/配角——user 是用户自己，不参与绑定与筛选 */
   const aiContacts = useMemo(() => contacts.filter((c) => c.kind !== 'user'), [contacts]);
@@ -893,7 +921,17 @@ export default function WorldBookApp() {
       )}
 
       {/* 浮层 */}
-      {createOpen && <CreateBookDialog contacts={aiContacts} onConfirm={createBook} onClose={() => setCreateOpen(false)} />}
+      {createOpen && (
+        <CreateBookDialog
+          contacts={aiContacts}
+          onConfirm={createBook}
+          onClose={() => setCreateOpen(false)}
+          onCreateCharacter={() => {
+            setCreateOpen(false);
+            useUI.getState().switchToApp('contacts');
+          }}
+        />
+      )}
       {renameDialog && (
         <NameDialog
           title="重命名世界书"

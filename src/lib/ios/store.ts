@@ -8,6 +8,7 @@ import {
   writeDisplayCookie,
   writeDisplayLS,
   writeWallCache,
+  readWallCache,
   healWallCache,
   compressBlobToDataUrl,
   type DisplaySnapshot,
@@ -355,6 +356,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
       // 缺失/过期（尺寸不符）重新生成，壁纸已移除则清缓存 —— 保证下次开机首帧直出不落空
       void healWallCache('home', homeWallBlob);
       void healWallCache('lock', lockWallBlob);
+      // 自定义壁纸 Blob URL 的亮度种子：压缩缓存里存有同一张图 32×64 分区亮度（与运行时实测
+      // 完全同算法同源）。Blob URL 每次会话都变、持久化实测表永远命中不了 —— 不种子的话
+      // load() 完成到异步实测落地之间有几百毫秒只能回退静态标记（自定义恒 false=白字），
+      // boot 期由压缩缓存判定的黑字会跳白 = 锁屏数字「黑→白」闪烁的根因。
+      // 种子后 useMeasuredWallpaperLight 在 loaded 翻真的同一渲染里同步命中，boot→load 颜色无缝衔接。
+      seedWallLightFromCache('home', customWallpaperUrl);
+      seedWallLightFromCache('lock', lockCustomWallpaperUrl);
 
       let apiConfig: ApiConfig = { ...DEFAULT_API_CONFIG };
       if (apiRec && typeof apiRec.value === 'object' && apiRec.value !== null) {
@@ -662,6 +670,24 @@ const LIGHT_LUMINANCE_THRESHOLD = 0.5;
  *  首帧即命中，不会闪「测量中回退静态标记」的错误颜色。上限 32 条防泄漏 */
 const wallpaperLightCache = new Map<string, { top: boolean; bottom: boolean; all: boolean }>();
 const WALLPAPER_LIGHT_CACHE_MAX = 32;
+
+/**
+ * 自定义壁纸 Blob URL → 持久化压缩缓存里的分区亮度（load() 时同步播种）：
+ * compressBlobToDataUrl 与运行时实测都是「原图直接缩到 32×64 取 Rec.709 分区均值」，
+ * 同一张图结果逐位一致 —— 种子即真值，不是近似。自定义壁纸的 Blob URL 每次会话
+ * 重新生成，ios-wall-light 持久化表按 URL 键存、永远命中不了，必须从压缩缓存桥接。
+ */
+function seedWallLightFromCache(kind: 'home' | 'lock', url: string | null): void {
+  if (!url) return;
+  try {
+    const light = readWallCache()?.[kind]?.light;
+    if (light && typeof light.top === 'boolean' && !wallpaperLightCache.has(url)) {
+      wallpaperLightCache.set(url, { top: light.top, bottom: light.bottom, all: light.all });
+    }
+  } catch {
+    /* 缓存不可用静默：退回异步实测（仅失去免闪烁优化） */
+  }
+}
 
 // 模块加载时同步回填上一次会话的实测结果（客户端）：首次渲染即命中，首帧颜色零跳变
 if (typeof window !== 'undefined') {

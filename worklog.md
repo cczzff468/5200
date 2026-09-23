@@ -6304,3 +6304,24 @@ Work Log:
 Stage Summary:
 - 改动文件：src/lib/ios/boot-script.ts（lightOf 统一判定+__IOS_DISPLAY_LIGHT__+双向标记）、src/lib/ios/store.ts（useBootDisplayLight）、src/lib/ios/foreground.ts（loaded 前消费 boot 值）、src/components/ios/LockScreen.tsx（boot 亮度直通+底部独立回退）、src/components/ios/PhoneShell.tsx（移除双向标记）、src/app/globals.css（data-boot-lock-dark 三条规则）、src/components/apps/worldbook.tsx（名称输入框变大）
 - 锁屏前景色全链路（boot CSS → 水合 → load 实测）严格同源，黑/白两方向都有 CSS 钉死；已知边界：壁纸「首次访问」（ios-wall-light 无缓存且静态标记与实测不符）时实测完成会有一次修正，此后持久化不再跳
+
+---
+Task ID: 3
+Agent: 主协调者 (Z.ai Code)
+Task: ①锁屏数字「黑→白」变色闪烁修复；②世界书新建弹窗名称输入框变大；③专属世界书「绑定角色」无角色可选问题（user 不显示）
+
+Work Log:
+- 【根因定位·锁屏】通读 display-cookie.ts / boot-script.ts / store.ts / LockScreen.tsx / foreground.ts / globals.css，锁定变色根因：load() 完成时 PhoneShell 移除 data-boot-lock-light/dark CSS 锁，此刻锁屏前景色链为 measured.top ?? presetLight —— 自定义锁屏壁纸的 Blob URL 每次会话重新生成，ios-wall-light 持久化实测表按 URL 键存永远命中不了 → measured.top 要等异步解码测量（几百 ms）才非空 → 回退值 storeLw.light 对自定义壁纸硬编码 false（白字）；boot 期由压缩缓存 light 判定的黑字在交接瞬间跳白 = 用户看到的「数字变黑然后变白」
+- 【修复①store.ts】新增 seedWallLightFromCache(kind,url)：load() 读出自定义壁纸 Blob URL 后，立即用压缩缓存里的分区亮度（compressBlobToDataUrl 与运行时实测同为「原图直接缩 32×64 取 Rec.709 分区均值」，同图结果逐位一致）播种 wallpaperLightCache → loaded 翻真的同一渲染里 useMeasuredWallpaperLight 同步命中，交接零空窗
+- 【修复②LockScreen.tsx】实测未就绪时的回退链改为 measured.top ?? bootLight?.lock?.top ?? 静态标记（底部分区同构）——boot 判定值兜底到实测落地，双保险消灭交接跳变
+- 【实测·锁屏】agent-browser --init-script 注入首帧 rAF 颜色探针（.e2e/color-probe.js），种入「浅色自定义锁屏壁纸 + 镜像 + IndexedDB Blob」后 location.reload：颜色日志仅两条——t=344ms rgba(0,0,0,0.85)（boot 锁定期）→ t=1044ms oklab(0 0 0/0.85)（同一颜色的不同序列化，boot 标记已移除）＝全程黑字零变色；反方向种深色壁纸：t=222ms 与 t=915ms 均为 rgb(255,255,255)＝全程白字零变色。两方向均无白/黑闪
+- 【修复③·世界书弹窗】名称输入框 h-16→h-20、字号 18→19px、placeholder 15→16px，并加 shrink-0（实测弹窗 flex-col+max-h 会压缩子元素，不加 shrink-0 实量只有 67px；加后实量 80px）
+- 【修复④·绑定角色】名单为空时从一句灰色提示升级为可操作空态卡：明确说明「名单只列 AI 角色，你自己（user）不会出现在名单里」+「去联系人 App 创建角色」按钮（switchToApp('contacts')；注意 openApp 在已有 App 前台时是 no-op，必须用 switchToApp）——直接回答「都没有角色怎么选择角色」
+- 【修复⑤·数据新鲜度】创建弹窗/绑定菜单/角色筛选打开时重读 listContacts：用户在联系人 App 建完角色回世界书立即生效，不依赖 App 挂载时机
+- 【实测·世界书】E2E：输入框实量 80px/19px ✓；专属名单 [红红,榴莲]、user 卡片「凡凡」被排除 ✓；删光 AI 角色后弹窗出现空态卡+按钮 ✓；点按钮切到联系人 App（CHAR/USER/NPC 分栏可见）✓；恢复联系人后重开弹窗名单实时回来 ✓；完整创建流「都市设定/专属/绑定榴莲」提交后 kv 落库 {scope:'exclusive', targetContactId:'c-liulian'} ✓；测试数据已清理（worldbooks kv 删除、壁纸测试状态清除、联系人恢复基线）
+- 质量门禁：bunx tsc --noEmit 0 错误；bun run lint 无告警；dev.log 无新报错（仅无关的天气 API 外部 502）
+
+Stage Summary:
+- 改动文件：src/lib/ios/store.ts（readWallCache 导入 + seedWallLightFromCache + load() 接线）、src/components/ios/LockScreen.tsx（前景色回退链加 bootLight 兜底）、src/components/apps/worldbook.tsx（useUI 导入、输入框放大、可操作空态+跳转、弹窗打开重读联系人）
+- 关键决策：①亮度播种而非等实测——压缩缓存亮度与运行时实测同算法同源，种子即真值；②switchToApp 而非 openApp 做应用间跳转；③user 排除维持 aiContacts 过滤（弹窗/绑定菜单/角色筛选三处一致），空态文案明示「user 不出现」消除用户对 user 卡片的困惑
+- 遗留说明：从未写过压缩缓存（极老版本设的自定义壁纸）的首次会话仍可能有一次颜色修正，cache 自愈后永久稳定，属预期
