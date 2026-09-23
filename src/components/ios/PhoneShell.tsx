@@ -174,11 +174,15 @@ export default function PhoneShell({ initialDisplay }: { initialDisplay?: Displa
     html.removeAttribute('data-lock-off');
   }, [dark]);
 
-  // 首帧前景色标记（data-boot-lock-light）只在 boot 期有效：load() 后壁纸明暗由实测接管，
-  // 移除标记让 CSS 覆盖规则失效，避免盖住 React 的动态前景色
+  // 首帧前景色标记（data-boot-lock-light / data-boot-lock-dark）只在 boot 期有效：
+  // load() 后壁纸明暗由实测接管（boot 期标记与实测同源，颜色无缝衔接），
+  // 移除两个标记让 CSS 覆盖规则失效，避免盖住 React 的动态前景色
   const storeLoadedForFlag = useSettings((s) => s.loaded);
   useEffect(() => {
-    if (storeLoadedForFlag) document.documentElement.removeAttribute('data-boot-lock-light');
+    if (storeLoadedForFlag) {
+      document.documentElement.removeAttribute('data-boot-lock-light');
+      document.documentElement.removeAttribute('data-boot-lock-dark');
+    }
   }, [storeLoadedForFlag]);
 
   // 开机门控已移除（防锁屏闪烁的最终修复）：过去「设置读出前渲染纯黑开机屏」，

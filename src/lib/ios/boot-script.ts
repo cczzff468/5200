@@ -82,11 +82,29 @@ try {
   /* 首帧前景色：锁屏开启且锁屏壁纸偏浅时，SSR（无 cookie）按默认 graphite 画了白字，
      水合后才会变黑字 = 变色闪烁。标记 html 属性让全局 CSS 在首帧就覆盖成黑字
      （PhoneShell load() 后移除标记，前景色交还给实测逻辑）。
-     自定义壁纸没有预设静态标记 —— 用压缩时持久化的分区亮度（与运行时实测同口径）。 */
-  var frontLight=front?front.light:false;
-  var lockEn=lockOn?entryOf('lock'):null;
-  if(lockOn&&lockEn&&lockEn.light&&typeof lockEn.light.top==='boolean')frontLight=lockEn.light.top;
-  if(lockOn&&frontLight)html.setAttribute('data-boot-lock-light','');
+     前景亮度判定（与运行时实测严格同源，防止「黑→白」变色跳变）：
+     1) 自定义壁纸：压缩缓存里算好的分区亮度（ios-display-wall.light）；
+     2) 预设图片壁纸：运行时实测结果持久化表（ios-wall-light，键=图片地址，与运行时共享缓存同源）；
+     3) 都没有（首次访问该壁纸）：回退预设静态标记（首访实测完成后会有一次修正，属预期）。
+     计算结果同时挂 window.__IOS_DISPLAY_LIGHT__ —— 组件在水合后、load() 前消费同一份值
+     （store.ts useBootDisplayLight），移除 data-boot-lock-light 标记前后颜色零变化。 */
+  var LIGHTS_LS=null;try{LIGHTS_LS=parseJson(localStorage.getItem('ios-wall-light')||'null');}catch(e){}
+  function lightOf(id,kind){
+    var en=entryOf(kind);
+    if(en&&en.light&&typeof en.light.top==='boolean')return en.light;
+    var p=presetOf(id);
+    if(p&&p.img&&LIGHTS_LS&&LIGHTS_LS[p.img]&&typeof LIGHTS_LS[p.img].top==='boolean')return LIGHTS_LS[p.img];
+    return {top:!!(p&&p.light),bottom:!!(p&&p.light),all:!!(p&&p.light)};
+  }
+  var lockLight=lockOn?lightOf(lockId,'lock'):lightOf(wallId,'home');
+  var homeLight=lightOf(wallId,'home');
+  window.__IOS_DISPLAY_LIGHT__={lock:lockLight,home:homeLight};
+  if(lockOn){
+    /* 两个方向的覆盖都钉死：浅色壁纸→黑字，深色壁纸→白字。
+     无论 SSR 快照（默认 graphite / cookie）与真实壁纸怎么错位，boot 期颜色都由同一份 lockLight 决定 */
+    if(lockLight.top)html.setAttribute('data-boot-lock-light','');
+    else html.setAttribute('data-boot-lock-dark','');
+  }
   var dark=snap.theme==='dark'||(snap.theme==='auto'&&!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches));
   if(dark)html.classList.add('dark');
   if(!lockOn)html.setAttribute('data-lock-off','');

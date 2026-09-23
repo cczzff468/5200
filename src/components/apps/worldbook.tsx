@@ -281,7 +281,7 @@ function CreateBookDialog({
           aria-label="世界书名称"
           data-testid="wb-dialog-name"
           maxLength={40}
-          className="mt-2 h-12 w-full rounded-[14px] bg-black/[0.05] px-4 text-[15.5px] outline-none placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
+          className="mt-2.5 h-16 w-full rounded-[16px] bg-black/[0.05] px-5 text-[18px] outline-none placeholder:text-[15px] placeholder:text-black/25 dark:bg-white/[0.08] dark:placeholder:text-white/25"
         />
 
         {/* 范围三选卡片 */}

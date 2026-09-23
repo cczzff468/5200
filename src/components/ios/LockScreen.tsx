@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Camera, CloudSun, Flashlight, FlashlightOff } from 'lucide-react';
-import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight } from '@/lib/ios/store';
+import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight, useBootDisplayLight } from '@/lib/ios/store';
 import { WALLPAPER_PRESETS, BOOT_LOCK_WALL_STYLE } from '@/lib/ios/wallpaper-presets';
 import { formatLunarDate, formatSolarShort } from '@/lib/ios/lunar';
 import { formatIOSTime, formatWeekShort, ssrWallClock, useNow } from '@/lib/ios/clock';
@@ -56,14 +56,22 @@ export default function LockScreen({
   // 明暗静态标记仍按快照预设取（bootLockWallpaper）。
   const storeLw = useLockWallpaper();
   const storeLoaded = useSettings((s) => s.loaded);
+  // boot 脚本算好的锁屏壁纸分区亮度（与 data-boot-lock-light 标记/持久化实测同源）：
+  // loaded 前回退它而不是预设静态标记 —— 消灭「boot 首帧颜色 → 水合变色 → load() 再变色」的跳变
+  const bootLight = useBootDisplayLight();
   const bootLw = useMemo(() => {
     const preset = WALLPAPER_PRESETS.find((w) => w.id === bootLockWallpaper);
+    const staticMark = preset?.light ?? false;
     return {
       style: BOOT_LOCK_WALL_STYLE,
-      light: preset?.light ?? false,
+      light: bootLight?.lock?.top ?? staticMark,
+      lightBottom: bootLight?.lock?.bottom ?? staticMark,
     };
-  }, [bootLockWallpaper]);
-  const { style: wallpaperStyle, light: presetLight } = storeLoaded ? storeLw : bootLw;
+  }, [bootLockWallpaper, bootLight]);
+  const { style: wallpaperStyle, light: presetLight, lightBottom: presetLightBottom } =
+    storeLoaded
+      ? { ...storeLw, lightBottom: undefined as boolean | undefined }
+      : bootLw;
 
   const [mode, setMode] = useState<'lock' | 'passcode' | 'resetNew' | 'resetConfirm'>('lock');
   const [errText, setErrText] = useState('');
@@ -80,10 +88,11 @@ export default function LockScreen({
 
   // 壁纸亮度决定前景色：分区域实测壁纸亮度（顶部 0–35% 管状态栏/日期/时钟/小组件，
   // 底部 86–100% 管上滑提示/快捷按钮）——「上亮下暗」的壁纸（如雾山）两端分别选黑/白字，
-  // 测量中或失败时回退预设静态标记；自定义壁纸同样实测，浅色图自动改用黑字
+  // 测量中或失败时回退 boot 快照分区亮度 → 预设静态标记（三段同源，颜色零跳变）；
+  // 自定义壁纸同样实测，浅色图自动改用黑字
   const measured = useMeasuredWallpaperLight(wallpaperStyle);
   const lightWallpaper = measured.top ?? presetLight;
-  const lightWallpaperBottom = measured.bottom ?? presetLight;
+  const lightWallpaperBottom = measured.bottom ?? (presetLightBottom ?? presetLight);
   const lightText = !lightWallpaper;
   const lightTextBottom = !lightWallpaperBottom;
   const fg = lightText ? 'text-white' : 'text-black/85';

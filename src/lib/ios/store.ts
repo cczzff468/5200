@@ -840,6 +840,28 @@ export function useSystemDark(): boolean {
   );
 }
 
+/**
+ * boot 脚本算好的壁纸前景亮度（window.__IOS_DISPLAY_LIGHT__ = { lock:{top,bottom,all}, home:{...} }）：
+ * pre-paint 脚本在首帧绘制前从「自定义壁纸压缩缓存 light / ios-wall-light 实测持久化 / 预设静态标记」
+ * 统一判定（与运行时 useMeasuredWallpaperLight 的持久化缓存严格同源）。
+ * 组件在 loaded 前消费这份值（而非预设静态标记），保证：
+ * boot CSS 标记（data-boot-lock-light）→ 水合渲染 → load() 后实测接管，三段颜色完全一致，不再黑/白跳变。
+ * useSyncExternalStore：服务端快照恒 null（SSR 由 boot CSS 覆盖规则兜底），客户端首渲染即拿到
+ * boot 值 —— 服务端/客户端快照不同是 useSyncExternalStore 官方支持的模式，不产生水合 mismatch。
+ */
+export interface BootDisplayLight {
+  lock: { top: boolean; bottom: boolean; all: boolean };
+  home: { top: boolean; bottom: boolean; all: boolean };
+}
+
+export function useBootDisplayLight(): BootDisplayLight | null {
+  return useSyncExternalStore(
+    () => () => undefined, // boot 值静态，无需订阅
+    () => ((window as unknown as { __IOS_DISPLAY_LIGHT__?: BootDisplayLight }).__IOS_DISPLAY_LIGHT__ ?? null) as BootDisplayLight | null,
+    () => null
+  );
+}
+
 // ---------------- UI Store ----------------
 
 export type AppId =

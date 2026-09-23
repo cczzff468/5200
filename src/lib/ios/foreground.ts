@@ -6,6 +6,7 @@ import {
   useSystemDark,
   useUI,
   useMeasuredWallpaperLight,
+  useBootDisplayLight,
   resolveWallpaperStyle,
   WALLPAPER_PRESETS,
   type AppId,
@@ -71,8 +72,14 @@ export function useLightForeground(region: 'top' | 'bottom' = 'top', bootLockPre
   );
   const measured = useMeasuredWallpaperLight(effStyle);
   const preset = WALLPAPER_PRESETS.find((w) => w.id === effPresetId);
+  // loaded 前（锁屏快照期）：boot 脚本算好的分区亮度（与 data-boot-lock-light 标记/持久化实测严格同源），
+  // 消灭「boot 黑字 → 水合回退预设标记变色」的跳变；测量中回退链：boot 值 → 预设静态标记
+  const bootLight = useBootDisplayLight();
   const staticLight = !effCustom && (preset?.light ?? false);
-  const lightWallpaper = (region === 'top' ? measured.top : measured.bottom) ?? staticLight;
+  const bootWall = !loaded && onLock ? bootLight?.lock : null;
+  const measuredTop = measured.top ?? (bootWall ? bootWall.top : null);
+  const measuredBottom = measured.bottom ?? (bootWall ? bootWall.bottom : null);
+  const lightWallpaper = (region === 'top' ? measuredTop : measuredBottom) ?? staticLight;
 
   if (callActive) return true; // 电话通话全屏层（深色渐变，盖在 App 上）→ 白前景
   if (activeApp && !switcherOpen) {

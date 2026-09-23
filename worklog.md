@@ -6287,3 +6287,20 @@ Work Log:
 Stage Summary:
 - 改动文件：src/lib/ios/block-state.ts（删冷却+提示措辞）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx（blockSideOf 双向化+blockedLineOf 解耦+blockIconSpan 提取+流式分支图标）、src/app/api/settings/test/route.ts（新建，修复「测试连接」404）
 - 用户 4 项全部闭环并有实测证据；拒收行语义保持「仅对方拉黑我」不变，图标语义升级为「拉黑关系存续期间双方都标」
+
+---
+Task ID: lock-fg-color-stable + wb-dialog-input
+Agent: Z.ai Code (main)
+Task: ①锁屏时钟数字「变黑然后变白」跳变根治 ②世界书新建弹窗名称输入框变大
+
+Work Log:
+- 根因（颜色跳变 = 三段判定不同源）：锁屏前景色在三个阶段分别由三套数据决定 —— boot 期 pre-paint 脚本（data-boot-lock-light，按预设静态标记/自定义缓存）、水合后 load() 前（useMeasuredWallpaperLight 对 BOOT_LOCK_WALL_STYLE 的 var() 引用解析不出 URL/色值 → 回退预设静态标记）、load() 后（真实壁纸样式实测）。三段数据源不一致即产生「白→黑→白」式跳变；且 light 标记只有单向覆盖（浅色壁纸→黑字），深色壁纸时 SSR 渲染了黑字 class 无反向覆盖
+- 修复（统一数据源三件套）：①boot-script.ts 新增 lightOf(id,kind) 统一判定（自定义压缩缓存 light → ios-wall-light 实测持久化表[键=预设图片地址，与运行时 wallpaperLightCache 完全同源] → 预设静态标记兜底），结果挂 window.__IOS_DISPLAY_LIGHT__={lock,home}，双向标记 data-boot-lock-light（浅→黑字）/ data-boot-lock-dark（深→白字）都出自同一 lockLight；②store.ts 新增 useBootDisplayLight()（useSyncExternalStore 读全局，server snapshot=null 不产生水合 mismatch）；③foreground.ts useLightForeground 与 LockScreen 在 loaded 前回退 bootLight.lock.top/bottom（与标记同源）→ boot CSS 覆盖 → 水合渲染 → load 后实测，四段颜色恒定；globals.css 补三条 data-boot-lock-dark 反向覆盖规则；PhoneShell load() 后移除两个标记
+- E2E 实证（录屏 10fps 抽帧 + 大时钟区域像素分类 avg/mn/mx 判定）：深色自定义锁屏壁纸 51 帧全 white-text 零翻转；浅色雾山 PNG 锁屏 46/47 帧 black-text + 1 帧导航过渡帧，无黑白翻转；eval 连续采样（3.8s，80-90ms 间隔）时钟+状态栏颜色恒定（rgb(255,255,255) / oklab(0 0 0/.85)）；水合错误 0
+- 世界书输入框：wb-dialog-name h-12(48px)→h-16(64px)、字号 15.5→18px、圆角 14→16px、px-4→px-5，实测 {h:64, fontSize:'18px', radius:'16px'} ✓
+- 期间发现并处置：dev server 热更新缓存损坏（SSR 假报 bootPresetTableJson is not defined，dev.log 0 条、tsc/lint 全绿）→ 重启恢复；测试后已恢复锁屏壁纸为 graphite 基线
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常、hydration mismatch 0
+
+Stage Summary:
+- 改动文件：src/lib/ios/boot-script.ts（lightOf 统一判定+__IOS_DISPLAY_LIGHT__+双向标记）、src/lib/ios/store.ts（useBootDisplayLight）、src/lib/ios/foreground.ts（loaded 前消费 boot 值）、src/components/ios/LockScreen.tsx（boot 亮度直通+底部独立回退）、src/components/ios/PhoneShell.tsx（移除双向标记）、src/app/globals.css（data-boot-lock-dark 三条规则）、src/components/apps/worldbook.tsx（名称输入框变大）
+- 锁屏前景色全链路（boot CSS → 水合 → load 实测）严格同源，黑/白两方向都有 CSS 钉死；已知边界：壁纸「首次访问」（ios-wall-light 无缓存且静态标记与实测不符）时实测完成会有一次修正，此后持久化不再跳
