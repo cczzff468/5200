@@ -12,6 +12,7 @@ import { useEffect } from 'react';
 import { listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
 import { ensureQuitHook, runQuitFlowTick } from '@/lib/ios/quit-flow';
+import { ensureGroupSocialHooks } from '@/lib/ios/group-social';
 
 const TICK_MS = 5000;
 const CONTACTS_REFRESH_MS = 60_000;
@@ -25,6 +26,8 @@ export default function QuitFlowScheduler() {
 
     // 退群钩子（幂等）：必须先于任何退群操作注册
     ensureQuitHook();
+    // 群社交钩子（幂等）：AI 成员被踢 → 被踢通知；重新拉进群 → 回群感知
+    ensureGroupSocialHooks();
 
     const tick = async () => {
       if (!alive || busy) return;

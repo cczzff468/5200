@@ -182,11 +182,20 @@ import {
   parseRichParts,
   prettifyRichText,
   isQuitWinbackAction,
+  isGroupSocialAction,
   type PendingCardInfo,
   type RichAction,
   type RichMsg,
 } from '@/lib/chat-rich';
 import { activeQuitFlowFor, applyQuitWinbackAction } from '@/lib/ios/quit-flow';
+import {
+  applyGroupCardDecision,
+  applyGroupSocialAction,
+  buildGroupSocialRules,
+  buildKickNoticeSection,
+  setGroupSocialContacts,
+  type GroupCardData,
+} from '@/lib/ios/group-social';
 import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
@@ -235,8 +244,8 @@ interface QQMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片 */
-  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward';
+  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片 */
+  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard';
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
   packet?: MsgPacket;
   /** 位置消息附加数据 */
@@ -254,6 +263,8 @@ interface QQMsg {
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
+  /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
+  gcard?: GroupCardData;
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -334,6 +345,7 @@ function msgPreview(m: QQMsg | undefined): string {
   if (m.kind === 'location') return '[位置]';
   if (m.kind === 'sticker') return '[表情]';
   if (m.kind === 'forward') return m.fwd?.merged ? '[聊天记录]' : m.content;
+  if (m.kind === 'groupcard') return '[群聊邀请]';
   return m.content;
 }
 
@@ -1905,6 +1917,7 @@ function ChatPage({
   onOpenBond,
   onOpenFriendProfile,
   onSaveRemark,
+  onOpenGroup,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -1919,6 +1932,8 @@ function ChatPage({
   onOpenFriendProfile: () => void;
   /** 保存备注（空串 = 清除；宿主持久化 + 刷新联系人展示名） */
   onSaveRemark: (v: string) => void | Promise<void>;
+  /** 群聊卡片「接受邀请」后进入群聊（宿主刷新群列表并打开群页） */
+  onOpenGroup?: (gid: string) => void;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
 }) {
@@ -2227,6 +2242,24 @@ function ChatPage({
     saveMsgs(peer.id, msgs);
   }, [msgs, peer.id]);
 
+  /** 群聊卡片：接受/拒绝（状态随消息持久化；接受后宿主打开群聊） */
+  const decideGroupCard = useCallback(
+    (m: QQMsg, accept: boolean) => {
+      if (!m.gcard || m.gcard.status !== 'pending') return;
+      const r = applyGroupCardDecision('qq', peer.id, m.id, accept);
+      setMsgs((prev) => prev.map((x) => (x.id === m.id && x.gcard ? { ...x, gcard: { ...x.gcard, status: accept ? 'accepted' : 'rejected' } } : x)));
+      if (accept && r?.joined) {
+        onToast(`已加入群聊「${r.groupName}」`);
+        onOpenGroup?.(m.gcard.gid);
+      } else if (accept) {
+        onToast('该群聊已失效');
+      } else {
+        onToast('已拒绝邀请');
+      }
+    },
+    [peer.id, onOpenGroup, onToast],
+  );
+
   // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）
   useEffect(() => {
     const evs = drainAiEvents(peer.id);
@@ -2362,7 +2395,7 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -2395,7 +2428,9 @@ function ChatPage({
                 ? `[转账 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount}${m.packet.note ? ` "${m.packet.note}"` : ''}，${cardStateLabel(m)}]`
                 : m.kind === 'family' && m.fam
                   ? `[亲属卡，${cardStateLabel(m)}]`
-                  : m.content),
+                  : m.kind === 'groupcard' && m.gcard
+                    ? `[群聊邀请卡片：${m.gcard.name}，${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
+                    : m.content),
         };
       });
 
@@ -2417,6 +2452,10 @@ function ChatPage({
     // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
+    // 被踢感知（需求一）：TA 被移出过群聊（未回群/刚回群）→ 私聊里记得并按人设自然提起
+    const kickSection = buildKickNoticeSection(peer.id, me.name);
+    // 建群能力（需求二/四）：关系到位、话题合适时可主动建群（冷却/拒绝表硬校验，提示词同步约束）
+    const socialRules = buildGroupSocialRules(peer, 'qq', contacts, me.name);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入；
     // 图片消息以 [图片] 占位（防止 dataURL 大字符串进入记忆提取）
@@ -2453,6 +2492,8 @@ function ChatPage({
       momentsBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
       quitCtx?.section ?? '',
+      kickSection,
+      socialRules,
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -2514,6 +2555,16 @@ function ChatPage({
             //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
             if (isQuitWinbackAction(part.action)) {
               applyQuitWinbackAction(peer.id, part.action);
+              continue;
+            }
+            // 群社交动作（[建群:群名:成员] 等）：建群 → 卡片消息随本回复落盘（权限/冷却/拒绝表在执行器硬校验）
+            if (isGroupSocialAction(part.action)) {
+              const card = applyGroupSocialAction(peer, 'qq', part.action.kind, part.action.targetId, part.action.arg);
+              if (card) {
+                all.push({ id: idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`, role: 'peer', content: '', time: t, kind: 'groupcard', gcard: card });
+                idx += 1;
+                t += 600 + Math.floor(Math.random() * 600);
+              }
               continue;
             }
             const applied = applyAiActions([part.action], cur, peer, t);
@@ -3285,6 +3336,16 @@ function ChatPage({
                       {m.quote && <span className="mb-0.5 block text-[12px] text-white/75">{m.quote.name}：{m.quote.content}</span>}
                       {m.content}
                     </div>
+                  </div>
+                ) : m.kind === 'groupcard' && m.gcard ? (
+                  /* 群聊邀请卡片（AI 主动建群/拉人）：pending 出接受/拒绝，接受后点卡片进群 */
+                  <div {...bubblePress}>
+                    <QqGroupCardBubble
+                      card={m.gcard}
+                      onAccept={() => decideGroupCard(m, true)}
+                      onReject={() => decideGroupCard(m, false)}
+                      onOpen={() => m.gcard && onOpenGroup?.(m.gcard.gid)}
+                    />
                   </div>
                 ) : (
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
@@ -4261,6 +4322,76 @@ function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: 
       </div>
       <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">亲属卡</div>
     </button>
+  );
+}
+
+/**
+ * 群聊邀请卡片（AI 主动建群/拉人时发出；QQ 蓝色系同款布局）：
+ * pending = 副文案 + 接受/拒绝按钮；accepted = 点击进群；rejected = 灰显已拒绝。
+ */
+export function QqGroupCardBubble({
+  card,
+  onAccept,
+  onReject,
+  onOpen,
+}: {
+  card: GroupCardData;
+  onAccept: () => void;
+  onReject: () => void;
+  onOpen: () => void;
+}) {
+  const rejected = card.status === 'rejected';
+  return (
+    <div
+      data-testid="qq-group-card"
+      className={`w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#232426] ${rejected ? 'opacity-60' : ''}`}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          if (!rejected) onOpen();
+        }}
+        className="flex w-full items-center gap-2.5 px-3 pb-2.5 pt-3 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+      >
+        <span
+          aria-hidden="true"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] bg-[#0099FF]/10 dark:bg-[#0099FF]/20"
+        >
+          <Users className="h-5 w-5 text-[#0099FF]" strokeWidth={1.8} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[15px] font-medium leading-[1.3] text-black dark:text-white">{card.name}</span>
+          <span className="mt-0.5 block truncate text-[12px] leading-[1.3] text-black/45 dark:text-white/45">
+            {card.inviterName}邀请你加入群聊{card.memberNames.length > 1 ? `（${card.memberNames.slice(0, 3).join('、')}${card.memberNames.length > 3 ? '等' : ''}）` : ''}
+          </span>
+        </span>
+        {!rejected && <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/30" />}
+      </button>
+      {card.status === 'pending' ? (
+        <div className="flex border-t border-black/[0.06] dark:border-white/[0.08]">
+          <button
+            type="button"
+            data-testid="qq-group-card-reject"
+            onClick={onReject}
+            className="flex-1 py-2 text-[13.5px] text-black/55 active:bg-black/[0.04] dark:text-white/55 dark:active:bg-white/[0.06]"
+          >
+            拒绝
+          </button>
+          <button
+            type="button"
+            data-testid="qq-group-card-accept"
+            onClick={onAccept}
+            className="flex-1 border-l border-black/[0.06] py-2 text-[13.5px] font-medium text-[#0099FF] active:bg-black/[0.04] dark:border-white/[0.08] dark:active:bg-white/[0.06]"
+          >
+            接受邀请
+          </button>
+        </div>
+      ) : (
+        <div className="border-t border-black/[0.06] px-3 py-1.5 text-center text-[12px] text-black/40 dark:border-white/[0.08] dark:text-white/40">
+          {rejected ? '已拒绝' : '已加入群聊'}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -10194,6 +10325,11 @@ function MainScreen({
           onBack={() => openTabs('消息')}
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
           onOpenFriendProfile={() => setRoute({ page: 'friend-profile', contactId: chatPeer.id })}
+          onOpenGroup={(gid) => {
+            const g = getGroup(gid);
+            if (!g) return;
+            setRoute({ page: 'group-chat', groupId: g.id });
+          }}
           onSaveRemark={async (v) => {
             try {
               await updateContact(chatPeer.id, { remark: v || null });
@@ -10430,6 +10566,11 @@ export default function QQApp() {
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState<QQUser | null>(null);
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
+
+  // 群社交：把联系人快照喂给 group-social（建群/拉人名单、被踢通知的宿主侧数据源）
+  useEffect(() => {
+    setGroupSocialContacts(contacts);
+  }, [contacts]);
 
   // 启动：拉联系人 + 恢复登录态（联系人被删则自动登出；QQ 内显示昵称，昵称优先于真实名字）
   useEffect(() => {

@@ -169,6 +169,19 @@ function defaultGroupLabel(groupId: string): string | null {
   }
 }
 
+/**
+ * 群来源记忆的成员可见性：被移出群聊（不在群成员表）后不能再读取该群的记忆（需求一.4）。
+ * 群不存在（已解散）同样不可见；只在私聊召回侧使用（群聊页召回本身要求在群内）。
+ */
+function defaultGroupMemberVisible(groupId: string, contactId: string): boolean {
+  if (!groupId) return false;
+  try {
+    return getGroup(groupId)?.memberIds.includes(contactId) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -614,12 +627,16 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   const curGroup = opts?.groupId ?? '';
   const interopOn = opts?.interopOn ?? defaultGroupInteropOn;
   const groupLabelOf = opts?.groupLabel ?? defaultGroupLabel;
+  /** 群来源可见性（私聊侧）：互通开关 + 自己仍在该群成员表（被移出群聊后不能再读该群的记忆）。
+   *  纯群来源总结：任一来源群同时满足才可见；碎片：来源群满足才可见。 */
+  const groupMemVisible = (gid: string | null | undefined): boolean =>
+    !!gid && interopOn(gid) && defaultGroupMemberVisible(gid, contactId);
   /** 核心/长期层级的群来源可见性：纯私聊总结恒可见（旧数据兼容）；带群来源的按各群互通判断 */
   const summaryVisiblePrivate = (m: Pick<MemCore, 'groupIds' | 'privateSource'>): boolean => {
     const gids = m.groupIds ?? [];
     if (gids.length === 0) return true; // 纯私聊/朋友圈来源（含旧数据）
     if (m.privateSource !== false) return true; // 混合来源（含私聊部分）：私聊恒可见
-    return gids.some((g) => interopOn(g)); // 纯群聊来源：任一来源群互通开启才可见
+    return gids.some((g) => groupMemVisible(g)); // 纯群聊来源：任一来源群互通开启才可见
   };
   /** 群聊模式下的总结可见性：本群来源恒可见；纯私聊总结在互通开时可见；其他群的总结永不可见（群间隔离） */
   const summaryVisibleInGroup = (m: Pick<MemCore, 'groupIds' | 'privateSource'>): boolean => {
@@ -631,7 +648,7 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   /** 碎片级可见性（来源精确到条） */
   const fragVisiblePrivate = (f: MemFragment): boolean => {
     if (f.source !== 'group') return true;
-    return f.sourceGroupId ? interopOn(f.sourceGroupId) : false;
+    return groupMemVisible(f.sourceGroupId);
   };
   const fragVisibleInGroup = (f: MemFragment): boolean => {
     if (f.source === 'group') return f.sourceGroupId === curGroup; // 只读当前群（群间隔离）

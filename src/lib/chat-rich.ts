@@ -88,6 +88,11 @@ export type RichActionKind =
   | 'kick-member'
   | 'rename-group'
   | 'announce-group'
+  // 群社交动作（AI 主动建群/拉人；targetId = 群名或成员名字，arg = 建群成员名单）
+  | 'create-group'
+  | 'invite-to-group'
+  | 'invite-member'
+  | 'promote-admin'
   // 退群挽留动作（用户退群后的私聊里，群主/管理员把人拉回来）
   | 'reinvite-user'
   | 'grant-admin'
@@ -112,6 +117,26 @@ export function isGroupAdminAction(action: RichAction): boolean {
     action.kind === 'rename-group' ||
     action.kind === 'announce-group'
   );
+}
+
+/**
+ * 群社交动作（AI 主动建群/拉人）：
+ * - create-group / invite-to-group 在私聊执行（群聊卡片 → 用户接受/拒绝）；
+ * - invite-member / promote-admin 在群聊执行（群主/管理员权限行为）；
+ * 权限/冷却/拒绝表在 group-social 执行器硬校验，越权标记一律丢弃。
+ */
+export function isGroupSocialAction(action: RichAction): boolean {
+  return (
+    action.kind === 'create-group' ||
+    action.kind === 'invite-to-group' ||
+    action.kind === 'invite-member' ||
+    action.kind === 'promote-admin'
+  );
+}
+
+/** 群聊页执行的群社交动作（拉人进群/设管理员；与群管理动作同一执行器分流） */
+export function isGroupChatSocialAction(action: RichAction): boolean {
+  return action.kind === 'invite-member' || action.kind === 'promote-admin';
 }
 
 /** 退群挽留动作（私聊侧 quit-flow 执行器负责） */
@@ -146,6 +171,15 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   改公告: 'announce-group',
   修改公告: 'announce-group',
   更新公告: 'announce-group',
+  // 群社交动作（建群/拉人；长词在前避免被短词抢先匹配）
+  创建群聊: 'create-group',
+  建群: 'create-group',
+  邀请进群: 'invite-to-group',
+  拉进群: 'invite-to-group',
+  邀请: 'invite-member',
+  拉人进群: 'invite-member',
+  任命管理员: 'promote-admin',
+  设管理员: 'promote-admin',
   // 退群挽留动作
   拉回群聊: 'reinvite-user',
   设为管理员: 'grant-admin',
@@ -153,9 +187,9 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   放弃邀请: 'abandon-invite',
 };
 
-const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：]([^\][]*))?\]/g;
+const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
-export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
+export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
 
 /** 回复按出现顺序切开的片段：普通文字块 或 处理动作（两者交错，保持流式输出顺序） */
 export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; action: RichAction };
@@ -186,6 +220,11 @@ export function extractRichActionParts(text: string): RichActionPart[] {
     } else if (kind === 'reinvite-user' || kind === 'grant-admin' || kind === 'grant-owner' || kind === 'abandon-invite') {
       // 无参动作（AI 手滑在标记里写了说明文字也容忍：执行器不读 targetId）
       parts.push({ type: 'action', action: { kind, targetId: raw } });
+    } else if (kind === 'create-group') {
+      // [建群:群名:成员1,成员2,…]：群名取第一段，成员名单取剩余整段（成员可省略 = 只拉机主）
+      const segs = raw.split(/[:：]/);
+      const name = (segs[0] ?? '').trim();
+      if (name) parts.push({ type: 'action', action: { kind, targetId: name, arg: segs.slice(1).join(':').trim() || undefined } });
     } else {
       // 卡片处理动作：targetId 取第一段；第三段及以后（旧版感谢语/理由）直接丢弃：回应内容由 AI 人设正文承担
       const targetId = raw.split(/[:：]/)[0].trim();
@@ -212,7 +251,7 @@ export function actionVerb(kind: RichActionKind): 'claim' | 'return' | 'reject' 
 /** 完整标记（中英文冒号兼容；内容里不允许出现「]」） */
 const RICH_RE = /\[(红包|转账|亲属卡|位置|表情包)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体、处理动作、群管理与挽留标记） */
-const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
+const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
 /**
  * AI 仿写用户记录格式的表情标记变体（聊天历史里用户表情以「[发送了表情：意思]」进入上下文，
  * AI 经常照葫芦画瓢输出同款格式，或把意思当 ID 写成 [表情:XX]）——这些变体在普通文字段里

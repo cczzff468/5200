@@ -309,6 +309,8 @@ export function createGroup(input: {
   app?: GroupApp;
   avatar?: string | null;
   announcement?: string;
+  /** 创建者显示名：传入时建群事件文案为「XX创建了群聊」（AI 主动建群/需求二.3）；缺省保持「群聊创建」 */
+  creatorName?: string;
 }): ChatGroup {
   const app: GroupApp = input.app ?? 'wx';
   const group: ChatGroup = {
@@ -326,8 +328,11 @@ export function createGroup(input: {
     createdAt: Date.now(),
   };
   writePool(app, [...readPool(app), group]);
-  // 建群系统消息（三.9）：居中灰字「群聊创建」，随群消息持久化
-  pushGroupEvent(group.id, '群聊创建', { type: 'create' });
+  // 建群系统消息：居中灰字随群消息持久化（AI/用户建群带创建者名「XX创建了群聊」；旧调用保持「群聊创建」）
+  pushGroupEvent(group.id, input.creatorName ? `${input.creatorName}创建了群聊` : '群聊创建', {
+    type: 'create',
+    ...(input.ownerId ? { actorId: input.ownerId } : {}),
+  });
   return group;
 }
 
@@ -366,15 +371,25 @@ export function updateGroup(
 }
 
 /** 邀请成员：已在群里原样返回；人数达上限（GROUP_MEMBER_CAP）返回 null（UI 提示「已达上限」）。
- *  成功时落「XX加入了群聊」系统消息（三.1；opts.name = 新成员显示名，供事件文本使用）。 */
-export function addGroupMember(groupId: string, contactId: string, opts?: { name?: string }): ChatGroup | null {
+ *  成功时落 join 事件系统消息：opts.eventText 优先（AI 拉人时「XX邀请YY加入了群聊」），
+ *  否则「YY加入了群聊」（opts.name = 新成员显示名）；并触发成员加入钩子（group-social 在此感知回群）。 */
+export function addGroupMember(groupId: string, contactId: string, opts?: { name?: string; eventText?: string }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g) return null;
   if (g.memberIds.includes(contactId)) return g;
   if (g.memberIds.length >= GROUP_MEMBER_CAP) return null;
   const next = updateGroup(groupId, { memberIds: [...g.memberIds, contactId] });
-  if (next && opts?.name) {
-    pushGroupEvent(groupId, `${opts.name}加入了群聊`, { type: 'join', targetId: contactId });
+  if (next) {
+    if (opts?.eventText || opts?.name) {
+      pushGroupEvent(groupId, opts?.eventText || `${opts?.name}加入了群聊`, { type: 'join', targetId: contactId });
+    }
+    for (const fn of joinHooks) {
+      try {
+        fn(next, contactId);
+      } catch {
+        // 单个钩子异常不影响入群
+      }
+    }
   }
   return next;
 }
@@ -523,8 +538,9 @@ export function unmuteGroupMember(groupId: string, contactId: string, opts?: { n
   return list[idx];
 }
 
-/** 踢人（移出群聊）：群主不可被移出；成功落「XX被移出群聊」事件（三.3）；被移出者不再参与该群回复 */
-export function kickGroupMember(groupId: string, contactId: string, opts?: { name?: string }): ChatGroup | null {
+/** 踢人（移出群聊）：群主不可被移出；成功落「XX被移出群聊」事件（三.3）；被移出者不再参与该群回复。
+ *  opts.actorName = 操作者显示名（机主或执行踢人的 AI），透传给被踢钩子（被踢角色私聊时知道是谁踢的）。 */
+export function kickGroupMember(groupId: string, contactId: string, opts?: { name?: string; actorName?: string }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g || contactId === g.ownerId) return g ?? null;
   if (!g.memberIds.includes(contactId)) return g;
@@ -546,6 +562,13 @@ export function kickGroupMember(groupId: string, contactId: string, opts?: { nam
     }
     const name = opts?.name ?? '群成员';
     pushGroupEvent(groupId, `${name}被移出群聊`, { type: 'kick', targetId: contactId });
+    for (const fn of kickedHooks) {
+      try {
+        fn(g, contactId, opts?.actorName);
+      } catch {
+        // 单个钩子异常不影响踢人
+      }
+    }
   }
   return next;
 }
@@ -633,6 +656,23 @@ const quitHooks: GroupQuitHook[] = [];
  *  与解散钩子同规则：单个钩子异常不影响退群本身。 */
 export function onGroupQuit(fn: GroupQuitHook): void {
   quitHooks.push(fn);
+}
+
+/** AI 成员被移出群聊钩子（group-social 在此写「被踢通知」，供被踢角色私聊时记得这件事/感知回群）。
+ *  targetId = 被移出的 AI 成员联系人 ID；actorName = 操作者显示名（机主或执行踢人的 AI）。 */
+type MemberKickedHook = (group: ChatGroup, targetId: string, actorName?: string) => void;
+const kickedHooks: MemberKickedHook[] = [];
+
+export function onMemberKicked(fn: MemberKickedHook): void {
+  kickedHooks.push(fn);
+}
+
+/** 成员加入群聊钩子（group-social 在此识别「被踢过的角色被重新拉进群」→ 回群感知）。 */
+type MemberJoinedHook = (group: ChatGroup, contactId: string) => void;
+const joinHooks: MemberJoinedHook[] = [];
+
+export function onMemberJoined(fn: MemberJoinedHook): void {
+  joinHooks.push(fn);
 }
 
 /**

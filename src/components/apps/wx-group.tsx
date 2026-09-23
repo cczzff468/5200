@@ -112,6 +112,8 @@ import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { wxChatFlags, type ChatFlags } from '@/lib/chat-flags';
 import { addFavorite, isMsgFavorited, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { buildGroupAdminRules, canEditGroupInfo, canModerateTarget, parseMuteDuration } from '@/lib/ios/group-admin';
+import { applyGroupChatSocialAction, buildGroupInviteRules, kickNoticeOf } from '@/lib/ios/group-social';
+import { isGroupChatSocialAction } from '@/lib/chat-rich';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import {
@@ -583,7 +585,7 @@ export function WxGroupCreatePage({
       toast('至少选择一名成员');
       return;
     }
-    const g = createGroup({ name: effName || '未命名群聊', memberIds: selected, ownerId: me.id });
+    const g = createGroup({ name: effName || '未命名群聊', memberIds: selected, ownerId: me.id, creatorName: memberNameOf(me) });
     onCreated(g);
   };
 
@@ -879,7 +881,7 @@ export function WxGroupInfoPage({
       onToast(amOwner ? '群主不可被移出' : '管理员只能移出普通成员');
       return;
     }
-    const next = kickGroupMember(gid, c.id, { name: memberNameOf(c) });
+    const next = kickGroupMember(gid, c.id, { name: memberNameOf(c), actorName: meRec?.name || '机主' });
     if (next) {
       onToast(`已将 ${memberNameOf(c)} 移出群聊`);
       onUpdate({ memberIds: next.memberIds });
@@ -2438,6 +2440,13 @@ export function WxGroupChatPage({
    *  实际落盘走 groups.ts 数据层（自动生成系统消息并持久化）；成功后让宿主刷新群对象。 */
   const applyGroupAdminAction = useCallback(
     (char: ContactRecord, action: RichAction) => {
+      // 群社交动作（[邀请:名字] / [设管理员:名字]）：关系/冷却/拒绝表/权限在 group-social 执行器硬校验
+      if (isGroupChatSocialAction(action)) {
+        const gNow = getGroup(gid);
+        if (gNow) applyGroupChatSocialAction(gNow, char, 'wx', action.kind, action.targetId);
+        onUpdate({});
+        return;
+      }
       const g = getGroup(gid);
       if (!g) return;
       if (groupRoleOf(g, char.id) === 'member') return; // 普通成员没有管理权限：标记直接丢弃
@@ -2481,7 +2490,7 @@ export function WxGroupChatPage({
             onUpdate({});
             return;
           }
-          kickGroupMember(gid, t.id, { name: t.name });
+          kickGroupMember(gid, t.id, { name: t.name, actorName: memberNameOf(char) });
           break;
         }
         case 'rename-group': {
@@ -2638,6 +2647,17 @@ export function WxGroupChatPage({
           return c ? memberNameOf(c) : '群成员';
         };
         groupRules.push(...buildGroupAdminRules(g, char.id, groupNameOf));
+        // 邀请能力（需求三）：群主/管理员可拉人进群（可拉名单=有关系 NPC/该 App 好友，冷却/拒绝表硬校验）；
+        // 群主还能 [设管理员:名字] 任命管理员；普通成员不注入
+        const inviteRules = buildGroupInviteRules(g, char, 'wx', contactsRef.current);
+        if (inviteRules) groupRules.push(inviteRules);
+        // 回群感知（需求一.5）：该角色被移出过本群又被拉回来 → 告知 TA（历史事件里也有被踢+回群记录）
+        const kickNotice = kickNoticeOf(char.id);
+        if (kickNotice && kickNotice.gid === gid && kickNotice.backAt) {
+          groupRules.push(
+            `【你回到了群聊】你之前被移出过群聊「${kickNotice.groupName}」，刚刚又被拉回来了。这段小插曲你记得，可以按人设自然提起，不要当成没发生过。`,
+          );
+        }
         // 群成员速览（关系感知）：其他成员是谁、与机主的关系、性格速写（角色间相处按双方人设自然把握）
         const memberLines = others.map((c) => {
           const rel = (c.relation ?? '').trim();
@@ -2746,7 +2766,7 @@ export function WxGroupChatPage({
             for (const part of parts) {
               if (part.type === 'action') {
                 // 管理标记（禁言/解禁/移出/改群名/改公告）与卡片处理标记（领红包/收转账）分流入各自的执行器
-                if (isGroupAdminAction(part.action)) applyGroupAdminAction(char, part.action);
+                if (isGroupAdminAction(part.action) || isGroupChatSocialAction(part.action)) applyGroupAdminAction(char, part.action);
                 else applyGroupAiAction(char, part.action);
                 continue;
               }

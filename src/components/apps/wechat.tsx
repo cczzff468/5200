@@ -100,11 +100,21 @@ import {
   parseRichParts,
   prettifyRichText,
   isQuitWinbackAction,
+  isGroupSocialAction,
   type PendingCardInfo,
   type RichAction,
   type RichMsg,
 } from '@/lib/chat-rich';
 import { activeQuitFlowFor, applyQuitWinbackAction } from '@/lib/ios/quit-flow';
+import {
+  applyGroupCardDecision,
+  applyGroupSocialAction,
+  buildGroupSocialRules,
+  buildKickNoticeSection,
+  ensureGroupSocialHooks,
+  setGroupSocialContacts,
+  type GroupCardData,
+} from '@/lib/ios/group-social';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -250,8 +260,8 @@ interface WxMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward';
+  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片 */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -267,6 +277,8 @@ interface WxMsg {
   recalled?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
+  /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
+  gcard?: GroupCardData;
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -419,6 +431,20 @@ function loadMsgs(contactId: string): WxMsg[] {
         }
         if (m.kind === 'sticker' && m.stk && typeof m.stk.url === 'string') {
           return { ...m, stk: { url: m.stk.url, meaning: typeof m.stk.meaning === 'string' ? m.stk.meaning : '' } };
+        }
+        if (m.kind === 'groupcard' && m.gcard && typeof m.gcard.gid === 'string') {
+          const c = m.gcard;
+          return {
+            ...m,
+            gcard: {
+              gid: c.gid,
+              name: typeof c.name === 'string' ? c.name : '群聊',
+              inviterId: typeof c.inviterId === 'string' ? c.inviterId : '',
+              inviterName: typeof c.inviterName === 'string' ? c.inviterName : '',
+              memberNames: Array.isArray(c.memberNames) ? c.memberNames.filter((x): x is string => typeof x === 'string') : [],
+              status: c.status === 'accepted' || c.status === 'rejected' ? c.status : 'pending',
+            },
+          };
         }
         return m;
       });
@@ -633,6 +659,7 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (last.kind === 'location') return { text: '[位置]', time: last.time };
   if (last.kind === 'sticker') return { text: '[表情]', time: last.time };
   if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };
+  if (last.kind === 'groupcard') return { text: '[群聊邀请]', time: last.time };
   return { text: last.content, time: last.time };
 }
 
@@ -2908,6 +2935,76 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
   );
 }
 
+/**
+ * 群聊邀请卡片（AI 主动建群/拉人时发出；对照真微信「邀请你加入群聊」卡片）：
+ * pending = 副文案 + 接受/拒绝按钮；accepted = 点击进群；rejected = 灰显已拒绝。
+ */
+export function WxGroupCardBubble({
+  card,
+  onAccept,
+  onReject,
+  onOpen,
+}: {
+  card: GroupCardData;
+  onAccept: () => void;
+  onReject: () => void;
+  onOpen: () => void;
+}) {
+  const rejected = card.status === 'rejected';
+  return (
+    <div
+      data-testid="wx-group-card"
+      className={`w-[248px] select-none overflow-hidden rounded-[8px] bg-white shadow-sm dark:bg-[#1E1E1E] ${rejected ? 'opacity-60' : ''}`}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          if (!rejected) onOpen();
+        }}
+        className="flex w-full items-center gap-2.5 px-3 pb-2.5 pt-3 text-left active:bg-black/[0.03] dark:active:bg-white/[0.04]"
+      >
+        <span
+          aria-hidden="true"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-[6px] bg-[#07C160]/10 dark:bg-[#07C160]/15"
+        >
+          <Users className="h-5 w-5 text-[#07C160]" strokeWidth={1.8} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[15px] font-medium leading-[1.3] text-black dark:text-white">{card.name}</span>
+          <span className="mt-0.5 block truncate text-[12px] leading-[1.3] text-black/45 dark:text-white/45">
+            {card.inviterName}邀请你加入群聊{card.memberNames.length > 1 ? `（${card.memberNames.slice(0, 3).join('、')}${card.memberNames.length > 3 ? '等' : ''}）` : ''}
+          </span>
+        </span>
+        {!rejected && <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/30" />}
+      </button>
+      {card.status === 'pending' ? (
+        <div className="flex border-t border-black/[0.06] dark:border-white/[0.08]">
+          <button
+            type="button"
+            data-testid="wx-group-card-reject"
+            onClick={onReject}
+            className="flex-1 py-2 text-[13.5px] text-black/55 active:bg-black/[0.04] dark:text-white/55 dark:active:bg-white/[0.06]"
+          >
+            拒绝
+          </button>
+          <button
+            type="button"
+            data-testid="wx-group-card-accept"
+            onClick={onAccept}
+            className="flex-1 border-l border-black/[0.06] py-2 text-[13.5px] font-medium text-[#07C160] active:bg-black/[0.04] dark:border-white/[0.08] dark:active:bg-white/[0.06]"
+          >
+            接受邀请
+          </button>
+        </div>
+      ) : (
+        <div className="border-t border-black/[0.06] px-3 py-1.5 text-center text-[12px] text-black/40 dark:border-white/[0.08] dark:text-white/40">
+          {rejected ? '已拒绝' : '已加入群聊'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 聊天系统通知行（截图参考：居中小图标 + 灰字 + 金色尾词，如「xx领取了你的红包」；单聊/群聊共用） */
 export function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
   return (
@@ -3345,6 +3442,7 @@ function ChatPage({
   onBack,
   onOpenFriendDetail,
   onSaveRemark,
+  onOpenGroup,
 }: {
   me: WxUser;
   peer: ContactRecord;
@@ -3358,6 +3456,8 @@ function ChatPage({
   onOpenFriendDetail: (c: ContactRecord) => void;
   /** 保存备注（空串 = 清除；宿主持久化 + 刷新联系人展示名） */
   onSaveRemark: (v: string) => void | Promise<void>;
+  /** 群聊卡片「接受邀请」后进入群聊（宿主刷新群列表并打开群页） */
+  onOpenGroup?: (gid: string) => void;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
 }) {
@@ -3485,6 +3585,25 @@ function ChatPage({
   useEffect(() => {
     saveMsgs(peer.id, msgs);
   }, [msgs, peer.id]);
+
+  /** 群聊卡片：接受/拒绝（状态随消息持久化；接受后宿主打开群聊）。
+   *  groupcard 消息 content 为空、不进多选/长按菜单，无需 patch 其它字段。 */
+  const decideGroupCard = useCallback(
+    (m: WxMsg, accept: boolean) => {
+      if (!m.gcard || m.gcard.status !== 'pending') return;
+      const r = applyGroupCardDecision('wx', peer.id, m.id, accept);
+      setMsgs((prev) => prev.map((x) => (x.id === m.id && x.gcard ? { ...x, gcard: { ...x.gcard, status: accept ? 'accepted' : 'rejected' } } : x)));
+      if (accept && r?.joined) {
+        onToast(`已加入群聊「${r.groupName}」`);
+        onOpenGroup?.(m.gcard.gid);
+      } else if (accept) {
+        onToast('该群聊已失效');
+      } else {
+        onToast('已拒绝邀请');
+      }
+    },
+    [peer.id, onOpenGroup, onToast],
+  );
 
   // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）
   useEffect(() => {
@@ -3619,7 +3738,7 @@ function ChatPage({
       .filter(
         (m) =>
           // 图片消息以 [图片] 占位进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -3654,7 +3773,9 @@ function ChatPage({
                 ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}，${wxCardStateLabel(m)}]`
                 : m.kind === 'family' && m.fam
                   ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m)}]`
-                  : m.content),
+                  : m.kind === 'groupcard' && m.gcard
+                    ? `[群聊邀请卡片：${m.gcard.name}，${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
+                    : m.content),
         };
       });
 
@@ -3676,6 +3797,10 @@ function ChatPage({
     // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
+    // 被踢感知（需求一）：TA 被移出过群聊（未回群/刚回群）→ 私聊里记得并按人设自然提起
+    const kickSection = buildKickNoticeSection(peer.id, me.name);
+    // 建群能力（需求二/四）：关系到位、话题合适时可主动建群（冷却/拒绝表硬校验，提示词同步约束）
+    const socialRules = buildGroupSocialRules(peer, 'wx', contacts, me.name);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
@@ -3710,6 +3835,8 @@ function ChatPage({
       momentsBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
       quitCtx?.section ?? '',
+      kickSection,
+      socialRules,
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -3769,6 +3896,16 @@ function ChatPage({
             //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
             if (isQuitWinbackAction(part.action)) {
               applyQuitWinbackAction(peer.id, part.action);
+              continue;
+            }
+            // 群社交动作（[建群:群名:成员] 等）：建群 → 卡片消息随本回复落盘（权限/冷却/拒绝表在执行器硬校验）
+            if (isGroupSocialAction(part.action)) {
+              const card = applyGroupSocialAction(peer, 'wx', part.action.kind, part.action.targetId, part.action.arg);
+              if (card) {
+                all.push({ id: idx === 0 ? aiMsgId : `${aiMsgId}-${idx}`, role: 'peer', content: '', time: t, kind: 'groupcard', gcard: card });
+                idx += 1;
+                t += 600 + Math.floor(Math.random() * 600);
+              }
               continue;
             }
             const applied = wxApplyAiActions([part.action], cur, peer, t);
@@ -4751,6 +4888,16 @@ function ChatPage({
                     )}
                     {m.content}
                   </div>
+                </div>
+              ) : m.kind === 'groupcard' && m.gcard ? (
+                /* 群聊邀请卡片（AI 主动建群/拉人）：pending 出接受/拒绝，接受后点卡片进群 */
+                <div {...bubblePress}>
+                  <WxGroupCardBubble
+                    card={m.gcard}
+                    onAccept={() => decideGroupCard(m, true)}
+                    onReject={() => decideGroupCard(m, false)}
+                    onOpen={() => m.gcard && onOpenGroup?.(m.gcard.gid)}
+                  />
                 </div>
               ) : (
                 <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
@@ -6815,6 +6962,10 @@ function MainScreen({
   const [groupPage, setGroupPage] = useState<null | 'create' | 'list'>(null);
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const refreshGroups = useCallback(() => setWxGroups(listGroups('wx')), []);
+  // 群社交：把联系人快照喂给 group-social（建群/拉人名单、被踢通知的宿主侧数据源）
+  useEffect(() => {
+    setGroupSocialContacts(contacts);
+  }, [contacts]);
   // 退群挽留：AI 把机主拉回群后（quit-flow 恢复群记录并广播事件）立即刷新群列表，恢复的群回到会话列表
   useEffect(() => {
     const fn = () => refreshGroups();
@@ -7383,6 +7534,14 @@ function MainScreen({
         otherUnread={chatOtherUnread}
         onBack={backToList}
         onOpenFriendDetail={(c) => openFriendDetail(c)}
+        onOpenGroup={(gid) => {
+          const g = getGroup(gid);
+          if (!g) return;
+          refreshGroups();
+          setHidden(loadStrList(LS_CHAT_HIDDEN));
+          setChatPeer(null);
+          setGroupPeer(g);
+        }}
         onSaveRemark={async (v) => {
           try {
             await updateContact(chatPeer.id, { remark: v || null });

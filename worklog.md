@@ -6296,3 +6296,48 @@ Stage Summary:
 - 行为基线补充：AI（群主/管理员）现在真的能把机主移出群聊——机主本机群消失、AI 侧按被踢口径在 20~50s 内主动私信、可道歉拉回并授身份；机主被禁言后文字/图片/表情/位置/红包/转账全路径拦截；机主身份在群状态表中统一为登录联系人 ID（'me' 仅作旧数据兼容兜底）
 - 改动文件：src/lib/ios/groups.ts（kickOwnerFromGroup/quitGroup opts/恢复按时间归位）、src/lib/ios/quit-flow.ts（kicked 口径/meContactId）、src/components/apps/{qq-group,wx-group}.tsx（踢机主分支+禁言全路径封锁+ID 统一+onToast）、src/components/apps/wechat.tsx（onUpdate 以存储为准+getGroup 导入）、src/components/apps/qq.tsx（渲染期群路由兜底）
 - 已知边界：AI 不能修改自己的权限为结构性保证（无对应标记、授身份标记仅目标机主且仅群主有效、数据层幂等）；Kick 后挽留依赖 QuitFlowScheduler 存活（关闭页面超 10 分钟宽限窗放弃，背景仍在下次私聊注入）；改群名/改公告的 UI 拦截仅靠权限校验（canEditGroupInfo），与真微信一致
+
+---
+Task ID: group-social-kick-create-invite
+Agent: main (Z.ai Code)
+Task: 群聊新能力——AI 感知被踢 / AI 主动建群 / AI 拉人进群 / 群聊卡片 / 触发与防骚扰限制
+
+Work Log:
+- 标记层（src/lib/chat-rich.ts）：RichActionKind 新增 4 种群社交动作——create-group（[建群:群名:成员1,成员2]，群名取第一段、成员名单取剩余整段）、invite-to-group（[邀请进群:群名]，解析兼容但执行器吞掉——机主恒在群，退群挽留通道负责拉回）、invite-member（[邀请:名字]）、promote-admin（[设管理员:名字]）；ACTION_LABELS/ACTION_RE/ACTION_TAIL_RE/OPEN_TAIL_RE 同步扩展；新增 isGroupSocialAction（私聊执行分流）与 isGroupChatSocialAction（群聊执行分流）谓词
+- 数据层（src/lib/ios/groups.ts）：createGroup 加 creatorName（建群事件文案「XX创建了群聊」，UI 建群传机主名、AI 建群传角色名；旧调用保持「群聊创建」）；addGroupMember 加 eventText（AI 拉人事件「XX邀请YY加入了群聊」）+ 新增 joinHooks（onMemberJoined）；kickGroupMember 加 actorName + 新增 kickedHooks（onMemberKicked）；钩子异常互不影响
+- 核心模块（src/lib/ios/group-social.ts，新建）：
+  ①被踢通知：CharKickNotice 存 kv char-kick:<contactId>（角色/群/操作者/时刻/backAt；TTL 24h）；kickedHooks 写入（targetId 恒为 AI 成员）、joinHooks 识别回群写 backAt；buildKickNoticeSection 生成私聊注入段——未回群=【被移出群聊】（可质问/困惑/委屈按人设提起，绝不能否认）+已回群=【你回到了群聊】
+  ②冷却/拒绝状态机：kv ai-group-social:<charId>{lastCreateAt, invites{gid:tid→{at,refused}}, refusedGroups}；建群冷却 24h、拉人冷却同目标 24h、拒绝过永不再拉、拒绝卡片重置建群冷却（24h 不再建群骚扰）；每角色最多 50 条邀请记录防膨胀
+  ③关系约束：groupSocialCandidates = 名下 NPC（ownerId=char.id）+ 该 App 互为好友的角色；群内拉人/建群成员解析硬校验名单外目标一律吞掉（需求三.6）
+  ④规则注入：buildGroupSocialRules（私聊【建群能力】：标记语法+群名人设+名单+分寸「不是每次聊天都建群」+冷却/拒绝提示）；buildGroupInviteRules（群聊【邀请能力】仅群主/管理员 +【任命管理员】仅群主）
+  ⑤执行器：applyGroupSocialAction（建群=createGroup(ownerId=char)+群会话隐藏(hidden 列表)+返回卡片数据由 finalize 随回复落盘+延迟 1.8s AI 开场白 sendGroupOpening——独立流式回合，群解散则不落盘）；applyGroupChatSocialAction（群内拉人=关系/冷却/拒绝硬校验→addGroupMember(eventText)；设管理员=仅群主、不能设自己、只能设普通成员→setGroupAdmin）
+  ⑥卡片决策 applyGroupCardDecision：接受=解除隐藏+pushGroupEvent「机主加入了群聊」+未读+清除拒绝记录；拒绝=卡片 rejected+refusedGroups+重置冷却+本机解散（purgeMemory:false 保留 AI 群记忆）
+- 记忆隔离（src/lib/memory.ts）：新增 defaultGroupMemberVisible——私聊召回时群来源碎片/纯群来源总结需「互通开 + 自己仍在群成员表」，被移出群聊后不能再读该群记忆（需求一.4）；混合来源（含私聊部分）总结恒可见不受影响
+- 宿主接线（wechat.tsx / qq.tsx 同构）：WxMsg/QQMsg kind 加 'groupcard'+gcard 字段（loadMsgs 规范化+预览「[群聊邀请]」+AI 上下文占位「[群聊邀请卡片：群名，状态]」）；runAiTurn 注入 buildKickNoticeSection+buildGroupSocialRules；finalize 动作分流 isGroupSocialAction→applyGroupSocialAction（卡片消息随 all 数组落盘，与红包卡片同模式）；ChatPage 新增 onOpenGroup prop + decideGroupCard（接受/拒绝 patch 本地消息+applyGroupCardDecision+接受后宿主打开群页）；群聊邀请卡片组件 WxGroupCardBubble（微信绿）/QqGroupCardBubble（QQ 蓝）：pending=接受/拒绝按钮、accepted=点击进群、rejected=灰显
+- 群组件接线（wx-group.tsx / qq-group.tsx 同构）：finalize 动作分流扩为 isGroupAdminAction||isGroupChatSocialAction→applyGroupAdminAction（内部分流群社交动作）；runCharTurn 注入 buildGroupInviteRules+回群感知段（kickNotice.gid 匹配且有 backAt→【你回到了群聊】）；UI 踢人传 actorName（meRec.name）、AI 踢人传 actorName（memberNameOf(char)）；UI/AI 建群传 creatorName
+- 全局（QuitFlowScheduler.tsx）：ensureGroupSocialHooks 幂等注册被踢/入群钩子
+
+E2E 浏览器实测（agent-browser 390×844 + mock LLM :4100 脚本化 + IndexedDB 种子 林川/榴莲/红红 + 微信/QQ 双端）：
+- 建群全链路：榴莲输出 [建群:老友火锅局:红红] → 群创建（ownerId=c-char ✓ 六.1）+ 群事件「榴莲创建了群聊」✓ + 私聊卡片「榴莲邀请你加入群聊（榴莲、红红）」pending ✓ + 群会话隐藏 ✓ + 1.8s 后 AI 开场白落群 ✓；点「接受邀请」→ 卡片 accepted+自动跳群页+「林川加入了群聊」事件+解除隐藏+未读；群信息页顶栏显示「榴莲 群主」标签 ✓（需求二.6）
+- 群内拉人：榴莲 [邀请:红红] → members+[c-hong]+事件「榴莲邀请红红加入了群聊」✓（需求三.3）；[设管理员:林川] → admins=[user-lin]+「林川成为管理员」✓（六.2）
+- 权限回归：机主（普通成员）在群信息页点红红显示「你是普通成员，不能管理其他成员」✓（层级正确）
+- 被踢感知（需求一）：管理员林川踢红红 → kv char-kick:c-hong={actorName:林川,groupName} ✓+群事件「红红被移出群聊」✓；红红私聊发消息 → mock 实测 system 注入【被移出群聊】段（含操作者与群名、话术指引）✓；群聊侧其他成员 system 的【群内事件】按时间排序注入（榴莲创建了群聊→林川加入了群聊→林川成为管理员→红红被移出群聊）✓
+- 记忆隔离（一.4）：开群互通+种红红群来源碎片与私聊碎片 → 被踢后红红私聊召回：群碎片不可见 ✓、私聊碎片正常可见 ✓
+- 回群感知（一.5）：UI 邀请红红回群 → joinHooks 写 backAt ✓；群内红红 system 注入【你回到了群聊】且被踢段消失 ✓；私聊红红 system 同样注入回群段 ✓
+- 冷却与拒绝（四.3/四.4）：同角色 24h 内第二次 [建群:…] 被吞（无新群）✓；冷却过期后建「周末运动群」→ 点拒绝 → 卡片 rejected+群解散+refusedGroups 记录+lastCreateAt 重置（24h 内不再建群骚扰）✓
+- QQ 端同构抽查：榴莲 QQ 私聊输出 [建群:榴莲的小窝:红红] → QQ 群创建+蓝色系卡片渲染（拒绝/接受按钮）✓
+- 回归：单聊收发/表情/红包管线未动（单聊消息类型只增不改）；群聊多角色回合、系统消息渲染、群管理标记全部正常；dev.log 无运行时错误
+
+修复过程记录（E2E 暴露的 3 个实现 bug）：
+- ①卡片不显示：初版执行器直接写 kv，不在 finalize 落盘数组里 → 改为执行器返回 GroupCardData、调用方组装 kind='groupcard' 消息推进 all（与红包卡片同模式）
+- ②invite-member 不执行：群组件 finalize 动作分流是二元的（isGroupAdminAction/else 红包执行器），新标记落进红包分支被吞 → 分流扩为 isGroupAdminAction||isGroupChatSocialAction
+- ③建群成员解析失败：chat-rich.ts 的 extractRichActionParts 缺 create-group 分支（标记落入 else 通用分支丢掉 arg）→ 补专用解析分支（群名第一段+成员剩余整段）
+
+Stage Summary:
+- 需求一（AI 感知被踢）基线：用户/AI 踢掉 AI 角色后，被踢角色私聊注入被踢段（记得操作者与群名、按人设可提起）、不再收群消息、群来源记忆不再召回；重新拉回后私聊+群聊双侧注入回群段；全程 kv 持久化（24h TTL）
+- 需求二（AI 主动建群）基线：私聊关系/话题触发（提示词约束+冷却硬校验），AI 建群默认群主、可拉用户（群聊卡片）+有关系 NPC+好友角色，群事件「XX创建了群聊」，建群后 AI 群里主动开场白，用户在群设置可见群主身份；用户接受前进群卡片交互（隐藏群会话）
+- 需求三（AI 拉人进群）基线：群内群主/管理员 [邀请:名字] 只能拉名单内（名下 NPC/该 App 好友），事件「XX邀请YY加入了群聊」；用户侧邀请卡片接受/拒绝逻辑（建群卡片）；拒绝后重置冷却+拒绝记录，绝不再拉
+- 需求四/五/六：触发条件由提示词分寸约束+冷却硬校验双保险；全部事件（建群/拉人/被踢/回群/管理员）系统消息居中灰字持久化+按时间注入 system；群对话记忆自动提取管线照常沉淀（不刷屏）；权限层级/不能自踢/不能越权/持久化沿用群管理模块
+- 群聊卡片：微信绿/QQ 蓝双样式（pending 按钮态/accepted 可进群/rejected 灰显），消息随私聊持久化、进 AI 上下文占位、不破坏多选/长按
+- 改动文件：src/lib/chat-rich.ts、src/lib/memory.ts、src/lib/ios/groups.ts、src/lib/ios/group-social.ts（新建）、src/components/ios/QuitFlowScheduler.tsx、src/components/apps/{wechat,qq,wx-group,qq-group}.tsx
+- 已知边界：invite-to-group 标记解析兼容但执行器吞掉（机主恒在群语义下无真实场景，退群拉回走 quit-flow）；建群/拉人冷却按角色全局（跨 App 共享，同一个人 24h 一次）；开场白依赖建群后群未解散（拒绝解散后静默放弃）；NPC 不主动建群（配角定位，仅可被拉）
