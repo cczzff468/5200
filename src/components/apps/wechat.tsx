@@ -139,7 +139,7 @@ import {
 } from '@/lib/moments';
 import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
-import { displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
+import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
@@ -183,7 +183,12 @@ import {
 
 interface WxUser {
   id: string;
+  /** 微信内显示名（备注/昵称优先；非真实姓名） */
   name: string;
+  /** 真实姓名（联系人 name 字段；AI 称呼与记忆统一用它，展示不用） */
+  realName?: string | null;
+  /** 昵称（联系人 nickname 字段；只是昵称，不是另一个人也不是正式名字） */
+  nickname?: string | null;
   avatar: string | null;
   wechatId: string | null;
   phone: string | null;
@@ -624,7 +629,8 @@ function meAsContact(me: WxUser): ContactRecord {
     kind: 'user',
     ownerId: null,
     name: me.name,
-    nickname: null,
+    nickname: me.nickname ?? null,
+    realName: me.realName ?? null,
     gender: null,
     age: null,
     height: null,
@@ -875,9 +881,14 @@ function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
  *  并注入禁用 emoji/表情包的显式规则）；
  *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况） */
 function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, npcExtra?: NpcPromptExtra | null): string {
+  // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
+  // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
+  const mode = useSettings.getState().addressMode;
   return buildPersonaSystemPrompt(peer, {
     channel: '微信',
-    userName: me.name,
+    userName: addressNameOf(me, mode),
+    userRealName: me.realName ?? me.name,
+    userNickname: me.nickname ?? null,
     ownerName,
     // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取）
     multiApp: getMemSettings(peer.id).share,
@@ -1252,6 +1263,8 @@ function LoginScreen({ onLogin }: { onLogin: (u: WxUser) => void }) {
         onLogin({
           id: rec.user.id,
           name: rec.user.name,
+          realName: rec.user.realName,
+          nickname: rec.user.nickname,
           avatar: rec.user.avatar,
           wechatId: rec.user.wechatId,
           phone: rec.user.phone,
@@ -2937,18 +2950,16 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
 
 /**
  * 群聊邀请卡片（AI 主动建群/拉人时发出；对照真微信「邀请你加入群聊」卡片）：
- * pending = 副文案 + 接受/拒绝按钮；accepted = 点击进群；rejected = 灰显已拒绝。
+ * pending = 副文案 + 接受/拒绝按钮（点「接受邀请」才进群）；accepted/rejected = 状态行（卡片本体不可点，不进群）。
  */
 export function WxGroupCardBubble({
   card,
   onAccept,
   onReject,
-  onOpen,
 }: {
   card: GroupCardData;
   onAccept: () => void;
   onReject: () => void;
-  onOpen: () => void;
 }) {
   const rejected = card.status === 'rejected';
   return (
@@ -2956,13 +2967,8 @@ export function WxGroupCardBubble({
       data-testid="wx-group-card"
       className={`w-[248px] select-none overflow-hidden rounded-[8px] bg-white shadow-sm dark:bg-[#1E1E1E] ${rejected ? 'opacity-60' : ''}`}
     >
-      <button
-        type="button"
-        onClick={() => {
-          if (!rejected) onOpen();
-        }}
-        className="flex w-full items-center gap-2.5 px-3 pb-2.5 pt-3 text-left active:bg-black/[0.03] dark:active:bg-white/[0.04]"
-      >
+      {/* 卡片本体不可点击进群（需求：点卡片不进群，点「接受邀请」才算进群）；进群入口只有接受按钮 */}
+      <div className="flex w-full items-center gap-2.5 px-3 pb-2.5 pt-3 text-left">
         <span
           aria-hidden="true"
           className="grid h-10 w-10 shrink-0 place-items-center rounded-[6px] bg-[#07C160]/10 dark:bg-[#07C160]/15"
@@ -2975,8 +2981,7 @@ export function WxGroupCardBubble({
             {card.inviterName}邀请你加入群聊{card.memberNames.length > 1 ? `（${card.memberNames.slice(0, 3).join('、')}${card.memberNames.length > 3 ? '等' : ''}）` : ''}
           </span>
         </span>
-        {!rejected && <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/30" />}
-      </button>
+      </div>
       {card.status === 'pending' ? (
         <div className="flex border-t border-black/[0.06] dark:border-white/[0.08]">
           <button
@@ -3797,10 +3802,12 @@ function ChatPage({
     // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
+    // 名字/昵称区分：AI 侧统一用称呼名（默认真名「凡凡」）指代用户；展示层（朋友圈等）仍用显示名
+    const meAddrName = addressNameOf(me, useSettings.getState().addressMode);
     // 被踢感知（需求一）：TA 被移出过群聊（未回群/刚回群）→ 私聊里记得并按人设自然提起
-    const kickSection = buildKickNoticeSection(peer.id, me.name);
+    const kickSection = buildKickNoticeSection(peer.id, meAddrName);
     // 建群能力（需求二/四）：关系到位、话题合适时可主动建群（冷却/拒绝表硬校验，提示词同步约束）
-    const socialRules = buildGroupSocialRules(peer, 'wx', contacts, me.name);
+    const socialRules = buildGroupSocialRules(peer, 'wx', contacts, meAddrName);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
@@ -3951,7 +3958,7 @@ function ChatPage({
               apiConfig,
               () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
               () => loadMsgs(peer.id),
-              { user: owner || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
+              { user: owner || me.realName || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
             )
           );
       },
@@ -4890,13 +4897,12 @@ function ChatPage({
                   </div>
                 </div>
               ) : m.kind === 'groupcard' && m.gcard ? (
-                /* 群聊邀请卡片（AI 主动建群/拉人）：pending 出接受/拒绝，接受后点卡片进群 */
+                /* 群聊邀请卡片（AI 主动建群/拉人）：pending 出接受/拒绝；点「接受邀请」才进群，卡片本体不可点 */
                 <div {...bubblePress}>
                   <WxGroupCardBubble
                     card={m.gcard}
                     onAccept={() => decideGroupCard(m, true)}
                     onReject={() => decideGroupCard(m, false)}
-                    onOpen={() => m.gcard && onOpenGroup?.(m.gcard.gid)}
                   />
                 </div>
               ) : (
@@ -8212,6 +8218,10 @@ export default function WeChatApp() {
     return {
       id: c.id,
       name: displayNameOf(c),
+      // 真名/昵称随会话携带：AI 称呼（persona/group prompt）与群成员解析要用，展示仍用 name。
+      // contacts 是 withDisplayNames 后的展示副本（name 已被昵称替换）→ 真名必须取 realName 字段
+      realName: c.realName ?? c.name,
+      nickname: c.nickname ?? null,
       avatar: c.avatar,
       wechatId: c.wechatId,
       phone: c.phone,

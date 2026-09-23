@@ -23,7 +23,7 @@
  * - 解散群聊不触发挽留（群对所有人都没了）。
  */
 
-import { displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
+import { addressNameOf, displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
 import { memRecallBlock, getMemSettings } from '../memory';
 import { cleanBubbleText, extractRichActionParts, type RichAction } from '../chat-rich';
 import { beginChatStream, isChatStreaming, type ChatPayloadMessage } from '../chat-stream-store';
@@ -156,7 +156,7 @@ export function captureQuitSnapshot(group: ChatGroup, msgs: WxGroupMsg[], opts?:
     quitAt: Date.now(),
     snapshot: group,
     recentMsgs: msgs.slice(-40),
-    dm: { contactId: null, fireAt: Date.now() + 20_000 + Math.floor(Math.random() * 30_000) },
+    dm: { contactId: null, fireAt: Date.now() + 8_000 + Math.floor(Math.random() * 12_000) },
     winback: {},
     kicked: opts?.kicked === true || undefined,
   };
@@ -194,13 +194,16 @@ function meContactId(app: GroupApp): string {
 
 export function refreshMeNameCache(contacts: ContactRecord[]): void {
   try {
+    // 名字/昵称区分：缓存「称呼名」（默认真名「凡凡」；用户选了用昵称才是「凑凑」）——
+    // 私信人设/退群背景/历史标注统一用称呼名指代机主，与聊天主链路同口径
+    const mode = useSettings.getState().addressMode;
     const wxId = window.localStorage.getItem('wx-session-user-id');
     const qqId = window.localStorage.getItem('qq-session-user-id');
     const wxHit = wxId ? contacts.find((c) => c.id === wxId && c.kind === 'user') : null;
     const qqHit = qqId ? contacts.find((c) => c.id === qqId && c.kind === 'user') : null;
     cachedMeNames = {
-      wx: wxHit ? displayNameOf(wxHit) : '',
-      qq: qqHit ? displayNameOf(qqHit) : '',
+      wx: wxHit ? addressNameOf(wxHit, mode) : '',
+      qq: qqHit ? addressNameOf(qqHit, mode) : '',
       owner: cachedMeNames.owner,
     };
   } catch {
@@ -295,9 +298,15 @@ export function activeQuitFlowFor(contactId: string): QuitFlowContext | null {
         '如果你真心想请 TA 回到群里（符合你的性格才提；这个邀请最多只能发一次，TA 明确拒绝过就绝不再提），' +
         '在回复里单独输出一行标记 [拉回群聊]，系统会把 TA 拉回群里；' +
         'TA 回群后你想让 TA 当管理员，可以再输出一行 [设为管理员]；想让 TA 接任群主（仅你是群主时有效），输出 [转让群主]。',
+      // 拉回群·执行铁律（防「我说拉回来了但实际没拉」）：标记是唯一执行方式，系统通知是唯一凭据
+      '【拉回群·执行铁律】[拉回群聊] 标记是唯一真的能把 TA 拉回群的方式——只在正文里说「我把你拉回来了」「我拉一下」而没输出标记，系统不会执行任何操作，TA 也绝不会回到群里；' +
+        '拉回是否成功以群里出现的系统通知「XX加入了群聊」为准，没看到这条通知就等于没拉成，绝不能在没输出标记的情况下声称已经把 TA 拉回群里；' +
+        '如果标记输出后系统没有公示「XX加入了群聊」，要如实告诉 TA「没拉成/可能拉不了」，绝不能嘴上说成功了。',
     );
   } else {
-    lines.push('（你不是这个群的群主或管理员，没有办法把 TA 拉回群，只能正常聊天、安抚或转告群主。）');
+    lines.push(
+      '（你不是这个群的群主或管理员，没有办法把 TA 拉回群。TA 让你拉 TA 回去时，必须如实说明你拉不了——你不是群主/管理员，系统不会执行你的拉回操作；可以建议 TA 自己从群聊里重新加入，或让 TA 找群主。绝不能假装已经把 TA 拉回来了。）',
+    );
   }
   lines.push(
     '如果你判断 TA 明确不想回来、拒绝了你的邀请，输出一行 [放弃邀请]，之后彻底不再提拉回群的事，也不要纠缠。',
@@ -358,7 +367,11 @@ export function applyQuitWinbackAction(contactId: string, action: RichAction): b
   if (!st) return false;
   switch (action.kind) {
     case 'reinvite-user': {
-      if (st.winback.offered || st.winback.resolved || st.winback.refused) return true;
+      if (st.winback.refused) return true;
+      // 已拉回过：群已真实恢复 → 吞掉重复标记；群不存在（上次恢复失败/被手动删除）→ 允许幂等重拉一次
+      if (st.winback.resolved || st.winback.offered) {
+        if (getGroup(st.gid)) return true;
+      }
       if (ctx.role !== 'owner' && ctx.role !== 'admin') return true; // 无权限：吞掉
       st.winback.offered = true;
       st.winback.resolved = true;
@@ -514,9 +527,13 @@ async function sendQuitDm(st: QuitFlowState, contacts: ContactRecord[]): Promise
     '这是你主动发起的一轮：没有对方刚发来的消息需要回应，不要自我介绍式的突兀开场，像平时给 TA 发消息一样自然。',
     '不要提及「系统」「通知」「标记」等幕后词汇，输出的正文就是私信本身。',
   ];
+  const meRec = contacts.find((c) => c.id === meContactId(app) && c.kind === 'user');
   const system = buildPersonaSystemPrompt(contact, {
     channel,
     userName: meName,
+    // 名字/昵称区分：挽留私信同样注入【用户的称呼】段
+    userRealName: meRec?.realName ?? meRec?.name ?? null,
+    userNickname: meRec?.nickname ?? null,
     ownerName: npcExtra?.ownerLabel ?? null,
     multiApp: share,
     ...npcExtra,

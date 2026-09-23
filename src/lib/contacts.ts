@@ -110,6 +110,68 @@ export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
   return list.map((c) => (c.remark?.trim() || c.nickname?.trim() ? { ...c, name: displayNameOf(c), realName: c.realName ?? c.name } : c));
 }
 
+// ---------------- 名字 / 昵称区分（AI 称呼与成员解析共用） ----------------
+
+/**
+ * AI 对用户的称呼方式（全局设置；'name' = 用名字「凡凡」（默认），'nickname' = 用昵称「凑凑」）。
+ * 持久化在设置 Store（settings store 'addressMode' 键）。
+ */
+export type AddressMode = 'name' | 'nickname';
+
+/**
+ * AI 称呼名：按称呼方式取「名字」或「昵称」。
+ * 名字/昵称混淆修复的核心取值函数——原始记录（name=真名）与展示副本（name=昵称、realName=原真名）
+ * 两种形状都能正确取到目标称呼：
+ * - mode 'name'：真实姓名优先（副本 realName / 原始 name），无真名回退 name；
+ * - mode 'nickname'：昵称存在时用昵称，否则回退真名。
+ */
+export function addressNameOf(c: { name: string; nickname?: string | null; realName?: string | null }, mode: AddressMode): string {
+  const nick = c.nickname?.trim() ?? '';
+  if (mode === 'nickname' && nick) return nick;
+  const real = c.realName?.trim() ?? '';
+  return real || c.name;
+}
+
+/**
+ * 联系人的全部可识别名字（去重）：真名 / 展示名 / 昵称 / 备注。
+ * AI 写成员名字时可能用其中任何一个（人设里教过大名、聊天里见过昵称）——
+ * 群管理标记（禁言/踢人/设管理员）的目标解析全部按这套变体匹配，名字写错一个形式不再导致操作静默失败。
+ */
+export function contactNameVariants(c: { name: string; nickname?: string | null; realName?: string | null; remark?: string | null }): string[] {
+  const out = new Set<string>();
+  const push = (v?: string | null) => {
+    const t = (v ?? '').trim();
+    if (t) out.add(t);
+  };
+  push(c.realName);
+  push(c.name);
+  push(c.nickname);
+  push(c.remark);
+  return [...out];
+}
+
+/**
+ * 名字变体里是否命中目标名（精确 → 互相包含逐级；n 为空永远不命中）。
+ * 与群组件 resolveTarget 的「精确 → 包含」口径一致，供多变体匹配复用。
+ */
+export function nameVariantHit(variants: string[], n: string): boolean {
+  const t = n.trim();
+  if (!t) return false;
+  if (variants.some((v) => v === t)) return true;
+  return variants.some((v) => v.includes(t) || t.includes(v));
+}
+
+/**
+ * 成员格点显示名（群聊设置页成员瓦片用）：有昵称时按用户设置显示
+ * 「凡凡（凑凑）」（用名字模式，名字昵称都能对上号）或「凑凑」（用昵称模式）；无昵称显示名字。
+ */
+export function meTileLabel(c: { name: string; nickname?: string | null; realName?: string | null }, mode: AddressMode): string {
+  const shown = addressNameOf(c, mode);
+  const nick = c.nickname?.trim() ?? '';
+  if (mode === 'name' && nick && nick !== shown) return `${shown}（${nick}）`;
+  return shown;
+}
+
 /** 拥有独立好友状态的社交 App（QQ / 微信 / 信息：一个 App 添加好友不影响其他 App） */
 export type FriendApp = 'wx' | 'qq' | 'sms';
 

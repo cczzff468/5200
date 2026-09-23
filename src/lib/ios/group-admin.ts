@@ -69,13 +69,30 @@ export function parseMuteDuration(text: string): number | null {
 }
 
 /**
- * 群管理权限提示词（追加到该角色在群聊里的 extraRules；普通成员返回空数组——
- * 没有权限就不注入，AI 自然不会输出管理标记）。
- * nameOf：联系人 ID → 显示名（含机主 'me'）。
+ * 群管理权限提示词（追加到该角色在群聊里的 extraRules）。
+ * - 群主/管理员：标记语法 + 权限边界 + 执行纪律（只有标记才真实生效，口头声称无效）；
+ * - 普通成员：不再静默不注入（旧版空白导致成员 AI 被用户要求禁言/给管理员时凭空声称「我点了」）——
+ *   显式告知没有权限，被要求执行管理操作时必须如实说明并拒绝假装成功（操作失败要给明确提示）。
+ * nameOf：联系人 ID → 称呼名（含机主）。
  */
 export function buildGroupAdminRules(g: ChatGroup, charId: string, nameOf: (id: string) => string): string[] {
   const role = groupRoleOf(g, charId);
-  if (role === 'member') return [];
+  if (role === 'member') {
+    // 普通成员：如实告知没有权限 + 群里谁有权限（被用户要求禁言/给管理员时拒绝假装成功）
+    const ownerName = g.ownerId ? nameOf(g.ownerId) : '';
+    const adminNames = g.adminIds.filter((id) => id !== g.ownerId).map(nameOf);
+    const whoCan = [
+      ownerName ? `群主是「${ownerName}」` : '',
+      adminNames.length > 0 ? `管理员：${adminNames.map((n) => `「${n}」`).join('、')}` : '',
+    ]
+      .filter(Boolean)
+      .join('，');
+    return [
+      '【群管理权限】你不是这个群的群主或管理员，只是普通成员——禁言、解禁、踢人、改群名、改公告、任命管理员这些事你都做不了（系统也不会执行）。' +
+        '别人让你做这些操作时，必须如实说明你只是普通成员、做不了' + (whoCan ? `，建议 TA 直接找${whoCan}` : '') + '；' +
+        '绝不能假装已经执行、更不能说「我点了」「我做了」这类话。',
+    ];
+  }
   const rules: string[] = [];
   const boundary =
     role === 'owner'
@@ -89,7 +106,11 @@ export function buildGroupAdminRules(g: ChatGroup, charId: string, nameOf: (id: 
       '[改群名:新群名] 修改群名；' +
       '[改公告:公告内容] 更新群公告。' +
       '标记会被系统执行并以群通知公示，标记本身不会显示出来；操作后用你自己的语气简短说一句原因即可。' +
-      `权限边界：${boundary}。`,
+      `权限边界：${boundary}。` +
+      '标记里的成员名字必须写【群聊模式】参与成员名单里的名字（TA 的名字或昵称都行），写错名字操作不会生效。',
+    // 执行纪律（防「我明明点了」假成功）：只有标记执行了才算数，系统通知是唯一凭据
+    '【管理操作·执行铁律】管理操作只有真的输出了对应标记才会生效，只打字说「我禁言了」「我给你管理员了」不会有任何实际效果；' +
+      '操作是否成功以群里出现的系统通知为准（如「XX被禁言10 分钟」）——没看到对应通知就等于没执行成功，要如实告知对方，绝不能在没输出标记的情况下声称已经操作过。',
     '【管理分寸】是否动用权限、何时动用，完全由你的性格决定：严厉较真、看重秩序的角色可以在有人刷屏、吵架抬杠、发广告、严重违规时果断出手（以禁言为主，踢人是最后手段）；温和随性、不爱管事的角色几乎不动用权限，最多口头劝一句。绝不无故禁言或踢人，不拿权限挟私报复，也别管得太宽让人窒息；改群名/改公告属于日常事务，有正当理由时可以自然使用。',
   );
   // 当前禁言名单（AI 感知：谁被禁着、还剩多久，解禁标记才有意义）

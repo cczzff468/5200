@@ -50,6 +50,9 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { describeImages } from '@/lib/vision-client';
+import { listContacts } from '@/lib/ios/contacts-store';
+import { meTileLabel, type AddressMode } from '@/lib/contacts';
+import { MessageCircleHeart } from 'lucide-react';
 
 // ---------------- 常量与类型 ----------------
 
@@ -116,6 +119,7 @@ const TONE_RED = '#FF3B30';
 const TONE_GRAY = '#8E8E93';
 const TONE_CYAN = '#32ADE6';
 const TONE_PURPLE = '#AF52FF';
+const TONE_PINK = '#FF2D55';
 
 /** 主列表行图标：纯色圆角方块 + 白色线性图标（iOS 设置风） */
 function RowIcon({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
@@ -201,6 +205,83 @@ function FieldLabel({ children }: { children: ReactNode }) {
 }
 
 // ---------------- 主列表 ----------------
+
+/**
+ * AI 称呼方式（名字/昵称区分修复）：
+ * - 默认「用名字」：AI 称呼用户用真实姓名（如 凡凡）；「用昵称」才用昵称（如 凑凑）；
+ * - 单聊/群聊/群成员瓦片/记忆全部跟随本设置；即改即存，下一条消息起生效。
+ */
+function AddressModeCard() {
+  const addressMode = useSettings((s) => s.addressMode);
+  const setAddressMode = useSettings((s) => s.setAddressMode);
+  /** 机主卡片（取真实名字与昵称做示例展示；无卡片时用通用文案） */
+  const [me, setMe] = useState<{ label: string; name: string; nickname: string | null } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void listContacts()
+      .then((list) => {
+        if (!alive) return;
+        const hit = list.find((c) => c.kind === 'user');
+        if (!hit) return;
+        setMe({
+          name: hit.name,
+          nickname: hit.nickname ?? null,
+          label: meTileLabel({ name: hit.name, nickname: hit.nickname }, 'name'),
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const options: { key: AddressMode; label: string; desc: string }[] = [
+    { key: 'name', label: '用名字', desc: me ? `AI 称呼你「${me.name}」` : 'AI 称呼你的名字' },
+    { key: 'nickname', label: '用昵称', desc: me?.nickname ? `AI 称呼你「${me.nickname}」` : 'AI 称呼你的昵称' },
+  ];
+
+  return (
+    <div data-testid="settings-address-mode">
+      <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+          <RowIcon icon={MessageCircleHeart} tone={TONE_PINK} />
+          <span className="min-w-0 flex-1 truncate text-[16px]">AI 称呼方式</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 p-3">
+          {options.map((opt) => {
+            const active = addressMode === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                data-testid={`settings-address-${opt.key}`}
+                onClick={() => setAddressMode(opt.key)}
+                aria-pressed={active}
+                className={`rounded-[10px] border p-3 text-left transition-colors ${
+                  active ? 'border-transparent bg-accent text-accent-foreground' : 'border-border/60 bg-background/40 active:bg-muted/50'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="text-[15px] font-medium">{opt.label}</span>
+                  {active && <Check className="h-4 w-4" strokeWidth={2.4} aria-hidden="true" />}
+                </span>
+                <span className={`mt-0.5 block truncate text-[12px] ${active ? 'text-accent-foreground/70' : 'text-muted-foreground'}`}>
+                  {opt.desc}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {me?.nickname ? (
+        <p className="mt-2 px-8 text-[12px] leading-relaxed text-muted-foreground">
+          你的名字是「{me.name}」，昵称是「{me.nickname}」——AI 知道两个名字都是你，只是按上面的方式选择称呼。
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const theme = useSettings((s) => s.theme);
@@ -307,6 +388,9 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
           <MainRow icon={Lock} tone={TONE_RED} label="锁屏与密码" onClick={() => onOpen('lock')} />
         </div>
+
+        {/* AI 称呼方式（名字/昵称区分）：默认用名字「凡凡」，选「用昵称称呼」后才用「凑凑」 */}
+        <AddressModeCard />
 
         {/* 显示与亮度 / 壁纸 / 通知 */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">

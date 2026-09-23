@@ -302,7 +302,12 @@ export interface WxLoginSuccess {
   ok: true;
   user: {
     id: string;
+    /** 显示名（备注/昵称优先） */
     name: string;
+    /** 真实姓名（联系人 name 字段；AI 称呼与记忆统一用） */
+    realName: string;
+    /** 昵称（只是昵称，不是正式名字） */
+    nickname: string | null;
     avatar: string | null;
     wechatId: string | null;
     phone: string | null;
@@ -345,6 +350,8 @@ export async function loginWechat(mode: 'phone' | 'wechat' | 'qq', rawAccount: s
     user: {
       id: hit.id,
       name: displayNameOf(hit),
+      realName: hit.name,
+      nickname: hit.nickname ?? null,
       avatar: hit.avatar,
       wechatId: hit.wechatId,
       phone: hit.phone,
@@ -364,7 +371,12 @@ export interface QQLoginSuccess {
   ok: true;
   user: {
     id: string;
+    /** 显示名（备注/昵称优先） */
     name: string;
+    /** 真实姓名（联系人 name 字段；AI 称呼与记忆统一用） */
+    realName: string;
+    /** 昵称（只是昵称，不是正式名字） */
+    nickname: string | null;
     avatar: string | null;
     qqId: string | null;
     phone: string | null;
@@ -402,6 +414,8 @@ export async function loginQQ(mode: 'phone' | 'account', rawAccount: string, pas
     user: {
       id: hit.id,
       name: displayNameOf(hit),
+      realName: hit.name,
+      nickname: hit.nickname ?? null,
       avatar: hit.avatar,
       qqId: hit.qqId,
       phone: hit.phone,

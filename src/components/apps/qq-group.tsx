@@ -62,7 +62,7 @@ import {
   useBubbleLongPress,
   type BubbleMenuItem,
 } from '@/components/apps/bubble-menu';
-import { displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
+import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, contactNameVariants, type ContactRecord } from '@/lib/contacts';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
@@ -794,6 +794,8 @@ export function QqGroupInfoPage({
 
   // ---- 群角色 / 权限（六.权限规则）：群主全部权限；管理员可禁言/踢人（仅普通成员）；普通成员不能管理他人 ----
   const meRec = useMemo(() => contacts.find((c) => c.kind === 'user') ?? null, [contacts]);
+  // 称呼方式（全局设置）：机主瓦片显示「凡凡（凑凑）」或「凑凑」
+  const addressMode = useSettings((s) => s.addressMode);
   // 机主身份（兼容双键）：挽留流程旧版曾以字面量 'me' 写入 adminIds/ownerId，联系人 ID 查不到时回退 'me' 查一次
   const myRole: GroupMemberRole = meRec
     ? groupRoleOf(group, meRec.id) !== 'member'
@@ -937,43 +939,30 @@ export function QqGroupInfoPage({
           <span className="ml-auto text-[13px] text-black/35 dark:text-white/35">{members.length + 1}人</span>
         </div>
         <div className="flex flex-wrap gap-x-[13px] gap-y-3">
-          {/* 五.1 群成员列表：机主瓦片也在列（首位），成员带群主/管理员身份徽标 */}
-          {meRec && (
-            <div className="flex w-[52px] flex-col items-center gap-1">
-              <QqAvatar src={meRec.avatar} alt={meRec.name} size={48} />
-              <span className="flex max-w-[52px] items-center gap-1 overflow-hidden">
-                <span className="truncate text-[11px] leading-none text-black/50 dark:text-white/50">{meRec.name}</span>
-                {myRole !== 'member' && (
-                  <span
-                    className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
-                      amOwner ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
-                    }`}
-                  >
-                    {myRole === 'owner' ? '群主' : '管理员'}
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
-          {[...members]
+          {/* 五.1 群成员列表：机主瓦片也在列；排序 = 群主 → 管理员 → 普通成员（机主按身份排位，不再恒居首位）；
+              机主瓦片按称呼设置显示「凡凡（凑凑）」（用名字）或「凑凑」（用昵称），成员带群主/管理员身份徽标 */}
+          {[...(meRec ? [meRec] : []), ...members]
             .sort((a, b) => {
-              // 群主在前、管理员其次（其余保持原序）；机主瓦片始终首位
+              // 群主在前、管理员其次、普通成员在后（同角色保持原序；机主按身份参与排序）
               const rank = (id: string) => (group.ownerId === id ? 0 : group.adminIds.includes(id) ? 1 : 2);
               return rank(a.id) - rank(b.id);
             })
             .map((m) => {
+              const isMe = meRec != null && m.id === meRec.id;
               const rl = roleLabelOf(m.id);
               return (
-                <button
+                <div
                   key={m.id}
-                  type="button"
                   className="flex w-[52px] flex-col items-center gap-1"
-                  onClick={() => setMemberSheet(m)}
-                  data-testid={`qq-groupinfo-member-${m.id}`}
+                  data-testid={isMe ? 'qq-groupinfo-member-me' : `qq-groupinfo-member-${m.id}`}
+                  onClick={isMe ? undefined : () => setMemberSheet(m)}
+                  role={isMe ? undefined : 'button'}
                 >
-                  <QqAvatar src={m.avatar} alt={memberNameOf(m)} size={48} />
+                  <QqAvatar src={m.avatar} alt={isMe ? meTileLabel(m, addressMode) : memberNameOf(m)} size={48} />
                   <span className="flex max-w-[52px] items-center gap-1 overflow-hidden">
-                    <span className="truncate text-[11px] leading-none text-black/50 dark:text-white/50">{memberNameOf(m)}</span>
+                    <span className="truncate text-[11px] leading-none text-black/50 dark:text-white/50">
+                      {isMe ? meTileLabel(m, addressMode) : memberNameOf(m)}
+                    </span>
                     {rl && (
                       <span
                         className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
@@ -984,7 +973,7 @@ export function QqGroupInfoPage({
                       </span>
                     )}
                   </span>
-                </button>
+                </div>
               );
             })}
           <button
@@ -1879,7 +1868,7 @@ export function QqGroupChatPage({
   onToast,
 }: {
   group: ChatGroup;
-  me: { id: string; name: string; avatar: string | null };
+  me: { id: string; name: string; realName?: string | null; nickname?: string | null; avatar: string | null };
   contacts: ContactRecord[];
   /** NPC 归属者名解析（人设 prompt 用） */
   ownerLabelOf: (peer: ContactRecord) => string | null;
@@ -1895,6 +1884,16 @@ export function QqGroupChatPage({
   const gid = group.id;
   const sKey = sessionKeyOf(gid);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
+  // 存储侧追加（后台落盘的事件/开场白）→ 广播后即时重读（与微信同构）
+  useEffect(() => {
+    const fn = (e: Event) => {
+      const gid2 = (e as CustomEvent<{ gid?: string }>).detail?.gid;
+      if (gid2 && gid2 !== gid) return;
+      setMsgs(loadGroupMsgs(gid));
+    };
+    window.addEventListener('group-msgs:updated', fn);
+    return () => window.removeEventListener('group-msgs:updated', fn);
+  }, [gid]);
   const [draft, setDraft] = useState('');
   const [quote, setQuote] = useState<{ name: string; content: string; id?: string; time?: number } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
@@ -1931,6 +1930,11 @@ export function QqGroupChatPage({
   contactsRef.current = contacts;
   const groupRef = useRef(group);
   groupRef.current = group;
+  // 机主全部可识别名字（真名/展示名/昵称/「我」「机主」）：AI 管理标记与转账收款对象的目标解析共用
+  const meVariants = useMemo(
+    () => [...new Set([me.name, me.realName ?? '', me.nickname ?? '', '我', '机主'].map((v) => v.trim()).filter(Boolean))],
+    [me.name, me.realName, me.nickname]
+  );
 
   // 长按菜单
   const [menu, setMenu] = useState<null | { mid: string }>(null);
@@ -2216,18 +2220,19 @@ export function QqGroupChatPage({
       const g = getGroup(gid);
       if (!g) return;
       if (groupRoleOf(g, char.id) === 'member') return; // 普通成员没有管理权限：标记直接丢弃
-      // 成员名字 → 联系人（机主 + 全部 AI 成员；精确 → 互相包含逐级匹配，与转账收款对象同口径）
+      // 成员名字 → 联系人（机主 + 全部 AI 成员；真名/展示名/昵称多变体：精确 → 互相包含逐级匹配）
       // 机主统一用登录联系人 ID（me.id）：与 ownerId/adminIds/mutes 的键口径一致；字面量 'me' 仅作旧数据兼容
       const resolveTarget = (name: string): { id: string; name: string } | null => {
         const n = name.trim();
         if (!n) return null;
-        if (n === me.name) return { id: me.id, name: me.name };
+        // 机主：名字/真名/昵称/「我」「机主」都指向同一个人（me.id），事件文案仍用显示名 me.name
+        if (nameVariantHit(meVariants, n)) return { id: me.id, name: me.name };
         const pool = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
           .filter((c): c is ContactRecord => !!c && c.id !== char.id);
-        const exact = pool.find((c) => memberNameOf(c) === n);
+        const exact = pool.find((c) => contactNameVariants(c).some((v) => v === n));
         if (exact) return { id: exact.id, name: memberNameOf(exact) };
-        const partial = pool.find((c) => memberNameOf(c).includes(n) || n.includes(memberNameOf(c)));
+        const partial = pool.find((c) => nameVariantHit(contactNameVariants(c), n));
         return partial ? { id: partial.id, name: memberNameOf(partial) } : null;
       };
       switch (action.kind) {
@@ -2274,7 +2279,7 @@ export function QqGroupChatPage({
       }
       onUpdate({}); // 成员/禁言/群名/公告可能变了：让宿主刷新群对象
     },
-    [gid, me.name, onToast, onUpdate]
+    [gid, me, onToast, onUpdate]
   );
 
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
@@ -2288,7 +2293,8 @@ export function QqGroupChatPage({
           return;
         }
         const charName = memberNameOf(char);
-        const meName = me.name;
+        // 名字/昵称区分：AI 侧统一用称呼名指代机主（默认真名「凡凡」；用户选了用昵称才是「凑凑」）
+        const meName = addressNameOf(me, useSettings.getState().addressMode);
         const ctxMsgs = loadGroupMsgs(gid)
           .filter((m) => m.kind !== 'notice' && !m.recalled)
           .slice(-24);
@@ -2316,7 +2322,8 @@ export function QqGroupChatPage({
           .filter((c): c is ContactRecord => !!c)
           .filter((c) => c.id !== char.id);
         const groupRules = [
-          `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户）${
+          // 名字/昵称区分（群聊版）：参与成员里机主用称呼名，并明确昵称只是同一个人的另一个叫法
+          `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户${me.nickname?.trim() && me.nickname.trim() !== meName ? `，昵称「${me.nickname.trim()}」也是 TA` : ''}）${
             others.length ? '、' + others.map(memberNameOf).join('、') : ''
           }。你以「${charName}」的身份参与其中。`,
           '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，请自然理解并回应。',
@@ -2347,9 +2354,9 @@ export function QqGroupChatPage({
           );
         }
         // AI 管理权限（需求一）：被设为群主/管理员的成员可输出管理标记（禁言/解禁/移出/改群名/改公告），
-        // 是否使用、分寸如何完全由人设决定；普通成员不注入（无权限自然不会输出标记）
+        // 是否使用、分寸如何完全由人设决定；普通成员注入「无权限」说明（被要求执行时如实拒绝不假装成功）
         const groupNameOf = (id: string): string => {
-          if (id === me.id) return me.name;
+          if (id === me.id) return meName; // AI 侧统一用称呼名（与参与成员名单一致）
           const c = contactsRef.current.find((x) => x.id === id);
           return c ? memberNameOf(c) : '群成员';
         };
@@ -2397,6 +2404,9 @@ export function QqGroupChatPage({
         const system = buildPersonaSystemPrompt(char, {
           channel: 'QQ',
           userName: meName,
+          // 名字/昵称区分：群聊同样注入【用户的称呼】段（名字是凡凡，昵称是凑凑）
+          userRealName: me.realName ?? me.name,
+          userNickname: me.nickname ?? null,
           ownerName: ownerLabelOf(char),
           // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取；群聊同样告知多端身份）
           multiApp: getMemSettings(char.id).share,
@@ -2461,7 +2471,7 @@ export function QqGroupChatPage({
             const resolveMemberByName = (name: string): { id: string; name: string } | null => {
               const n = name.trim();
               if (!n) return null;
-              if (n === me.name) return { id: 'me', name: me.name };
+              if (nameVariantHit(meVariants, n)) return { id: 'me', name: me.name };
               const pool = (groupRef.current.memberIds ?? [])
                 .map((id) => contactsRef.current.find((c) => c.id === id))
                 .filter((c): c is ContactRecord => !!c && c.id !== char.id);

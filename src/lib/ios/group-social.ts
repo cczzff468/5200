@@ -22,7 +22,7 @@
  * - 用户拒绝过建群/进群卡片后，该角色对该群彻底沉默。
  */
 
-import { displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
+import { addressNameOf, displayNameOf, isFriendIn, nameVariantHit, contactNameVariants, type ContactRecord } from '../contacts';
 import { cleanBubbleText, extractRichActionParts } from '../chat-rich';
 import { beginChatStream, isChatStreaming } from '../chat-stream-store';
 import { qqUnreads, wxUnreads } from '../unread-store';
@@ -312,9 +312,12 @@ export function buildGroupInviteRules(g: ChatGroup, char: ContactRecord, app: Gr
   }
   if (role === 'owner') {
     lines.push(
-      '【任命管理员】你是群主，想让某位成员当管理员时，在回复里单独输出一行 [设管理员:成员名字]（只能设别人，不能设自己；' +
+      '【任命管理员】你是群主，想让某位成员当管理员时，在回复里单独输出一行 [设管理员:成员名字]（只能设别人，不能设自己；名字写群里成员的名字或昵称，机主写 TA 的名字或昵称；' +
         '标记会被系统执行并公示，按你的性格和群里的需要自然决定，通常在群变大、你需要帮手时才用）。',
     );
+  } else {
+    // 管理员没有任命权：被用户要求给管理员时必须如实说明，不能假装成功
+    lines.push('（任命管理员只有群主可以操作，你没有这个权限；TA 让你给谁管理员时，如实说明你做不了，建议 TA 找群主。）');
   }
   return lines.join('\n');
 }
@@ -401,16 +404,13 @@ function meContactId(app: GroupApp): string {
   }
 }
 
-/** 名字 → 联系人（精确 → 互相包含逐级匹配，与群组件 resolveTarget 同口径） */
+/** 名字 → 联系人（真名/展示名/昵称/备注多变体：精确 → 互相包含逐级匹配，与群组件 resolveTarget 同口径） */
 function resolveByName(name: string, pool: ContactRecord[]): ContactRecord | null {
   const n = name.trim();
   if (!n) return null;
-  const exact = pool.find((c) => (displayNameOf(c) || c.name) === n || c.name === n);
+  const exact = pool.find((c) => contactNameVariants(c).some((v) => v === n));
   if (exact) return exact;
-  const partial = pool.find((c) => {
-    const dn = displayNameOf(c) || c.name;
-    return dn.includes(n) || n.includes(dn);
-  });
+  const partial = pool.find((c) => nameVariantHit(contactNameVariants(c), n));
   return partial ?? null;
 }
 
@@ -516,7 +516,8 @@ async function sendGroupOpening(g: ChatGroup, char: ContactRecord): Promise<void
     const contacts = listContactsSnapshot();
     const meId = meContactId(g.app);
     const meRec = contacts.find((c) => c.id === meId && c.kind === 'user');
-    const meName = meRec ? displayNameOf(meRec) || meRec.name : '机主';
+    // 名字/昵称区分：AI 侧统一用称呼名指代机主（默认真名；用户选了用昵称才是昵称）
+    const meName = meRec ? addressNameOf(meRec, useSettings.getState().addressMode) : '机主';
     const memberNames = g.memberIds
       .map((id) => contacts.find((c) => c.id === id))
       .filter((c): c is ContactRecord => !!c)
@@ -531,6 +532,9 @@ async function sendGroupOpening(g: ChatGroup, char: ContactRecord): Promise<void
     const system = buildPersonaSystemPrompt(char, {
       channel,
       userName: meName,
+      // 名字/昵称区分：开场白人设同样注入【用户的称呼】段
+      userRealName: meRec?.realName ?? meRec?.name ?? null,
+      userNickname: meRec?.nickname ?? null,
       ownerName: char.kind === 'npc' && char.ownerId ? contacts.find((c) => c.id === char.ownerId)?.name ?? null : null,
       extraRules: groupRules,
     });

@@ -53,8 +53,13 @@ export interface NpcCircleEntry {
 }
 
 export interface PersonaPromptCtx {
-  /** 聊天对面的用户名；未知（如陌生来电）传 null → 文案用「用户」 */
+  /** 聊天对面的用户称呼名（已按用户「称呼方式」设置解析：默认名字「凡凡」，选了用昵称才是「凑凑」）；
+   *  未知（如陌生来电）传 null → 文案用「用户」 */
   userName?: string | null;
+  /** 用户真实姓名（如「凡凡」）：与昵称同时存在时注入【用户的称呼】段，AI 不能把两者当成两个人 */
+  userRealName?: string | null;
+  /** 用户昵称（如「凑凑」）：只是昵称，不是正式名字，更不是另一个人 */
+  userNickname?: string | null;
   /** NPC 场景：聊天中用户扮演的归属角色名 */
   ownerName?: string | null;
   /** 场景渠道名，如 微信 / QQ / 短信 / 语音通话 */
@@ -92,6 +97,9 @@ function clean(v?: string | null): string {
  */
 export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPromptCtx): string {
   const user = clean(ctx.userName) || '用户';
+  // 用户的名字/昵称（【用户的称呼】段注入用）：两者都存在且不同时才注入
+  const userReal = clean(ctx.userRealName);
+  const userNick = clean(ctx.userNickname);
   const name = clean(peer.name) || '对方';
   // 真名/昵称关系：展示层用昵称替换了 name 时（副本 realName 存原 name），或原始数据里
   // name≠nickname 时，角色除了「平时被叫的名字」还有一个大名——必须告知，否则别人用
@@ -144,6 +152,13 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     `请始终以「${shownName}」的身份、用第一人称口语化回复，严格保持角色，不要跳出。`,
     '',
     ...nameLines,
+    // 名字/昵称区分（用户数据同时有名字与昵称时注入）：明确告知两者指同一个人，杜绝「凑凑是谁」式混淆
+    ...(userNick && userReal && userNick !== userReal
+      ? [
+          `【用户的称呼】用户的名字是${userReal}，昵称是${userNick}。`,
+          `「${userNick}」只是 TA 的昵称，不是另一个人，也不是什么正式名字——「${userReal}」和「${userNick}」指的都是同一位用户。别人（包括你在内）用哪个名字叫 TA 都是在叫同一个人；绝不能把「${userNick}」当成一个新出现的人，也不能把「${userNick}」当成正式名字。平时称呼这位用户用「${user}」${user === userNick ? '（TA 选择用昵称称呼）' : ''}。`,
+        ]
+      : []),
     `【身份】${identity.join('，')}`,
     ...(facts.length ? [`【基础资料】${facts.join('；')}`] : []),
     `【性格】${persona || '按资料自然呈现，像一个有血有肉的真实的人'}`,

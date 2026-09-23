@@ -36,6 +36,7 @@ import {
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
@@ -140,11 +141,16 @@ function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
 }
 
 /** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
- *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装 */
-function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null): string {
+ *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装；
+ *  userReal/userNick：机主真实姓名/昵称（【用户的称呼】段注入用，名字/昵称不混淆） */
+function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null, userReal?: string | null, userNick?: string | null): string {
+  const mode = useSettings.getState().addressMode;
+  const addrName = userReal ? addressNameOf({ name: userReal, nickname: userNick ?? null, realName: userReal }, mode) : null;
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
-    userName: null,
+    userName: addrName,
+    userRealName: userReal ?? null,
+    userNickname: userNick ?? null,
     ownerName,
     // 跨 App 身份感知：互通开关（打开会话时现场读取）
     multiApp,
@@ -2003,10 +2009,19 @@ export default function ChatApp() {
   /** 和联系人（CHAR/NPC）聊天：AI 按人设扮演（含配角圈/归属者了解注入） */
   const openContactChat = (c: ContactRecord) => {
     const owner = c.ownerId ? contacts.find((o) => o.id === c.ownerId) : undefined;
+    // 机主卡片（名字/昵称区分）：人设里明确「名字是凡凡，昵称是凑凑」
+    const meCard = contacts.find((x) => x.kind === 'user');
     setChatSession({
       key: `c:${c.id}`,
       peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name, remark: c.remark ?? '' },
-      systemPrompt: buildPersonaPrompt(c, owner?.name ?? null, getMemSettings(c.id).share, buildNpcPromptExtra(c, contacts)),
+      systemPrompt: buildPersonaPrompt(
+        c,
+        owner?.name ?? null,
+        getMemSettings(c.id).share,
+        buildNpcPromptExtra(c, contacts),
+        meCard?.realName ?? null,
+        meCard?.nickname ?? null
+      ),
     });
     setView('chat');
   };

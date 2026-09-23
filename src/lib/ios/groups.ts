@@ -476,6 +476,12 @@ export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDet
   } catch {
     return null;
   }
+  // 广播存储变更：打开中的群聊页即时重读（卡片接受后的「XX加入了群聊」等后台落盘事件不再晚一拍）
+  try {
+    window.dispatchEvent(new CustomEvent('group-msgs:updated', { detail: { gid: groupId } }));
+  } catch {
+    // 非浏览器环境忽略
+  }
   return msg;
 }
 
@@ -941,11 +947,15 @@ export function saveGroupMsgs(groupId: string, msgs: WxGroupMsg[]): void {
   writeJSON(groupMsgsKey(app, groupId), msgs.slice(-MSGS_CAP));
 }
 
-/** 该群最后一条非通知消息（会话列表预览用） */
+/** 该群最后一条非通知消息（会话列表预览用）；群里只有系统事件时回退显示最近事件文案（预览不空白） */
 export function groupPreview(groupId: string): { text: string; time: number } {
   const msgs = loadGroupMsgs(groupId);
   const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
-  if (!last) return { text: '', time: 0 };
+  if (!last) {
+    // 全是事件通知（如刚建群/刚拉回、开场白未落盘）：用最近一条事件文案当预览，避免会话行空白
+    const evt = [...msgs].reverse().find((m) => typeof m.noticeText === 'string' && m.noticeText);
+    return { text: evt?.noticeText ?? '', time: evt?.time ?? 0 };
+  }
   if (last.recalled) return { text: `${last.role === 'me' ? '你' : last.senderName || '有人'}撤回了一条消息`, time: last.time };
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
   if (last.kind === 'sticker') return { text: `[表情]${last.stk?.meaning ? ` ${last.stk.meaning}` : ''}`, time: last.time };

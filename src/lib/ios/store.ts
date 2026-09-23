@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
+import type { AddressMode } from '../contacts';
 
 // ---------------- 类型 ----------------
 
@@ -165,6 +166,9 @@ interface SettingsState {
   lockConfig: LockConfig;
   /** 个人信息（头像/名字/标签，持久化） */
   profile: Profile;
+  /** AI 对用户的称呼方式：'name' = 用名字（默认）；'nickname' = 用昵称（持久化）。
+   *  名字/昵称区分修复：默认用名字「凡凡」，用户在设置里选「用昵称称呼」后才用「凑凑」 */
+  addressMode: AddressMode;
   /** 自定义 App 图标（AppId → ObjectURL，Blob 存 IndexedDB settings.customIcons） */
   customIcons: Record<string, string>;
   loaded: boolean;
@@ -187,6 +191,8 @@ interface SettingsState {
   applyLockConfig: (cfg: LockConfig) => void;
   /** 更新个人信息（立即持久化） */
   setProfile: (patch: Partial<Profile>) => void;
+  /** 设置 AI 称呼方式（立即持久化；聊天发送时现场读取 → 保存后自动生效） */
+  setAddressMode: (m: AddressMode) => void;
   /** 设置/移除某 App 的自定义图标（blob=null 恢复默认），同步持久化到 IndexedDB */
   setCustomIcon: (appId: AppId, blob: Blob | null) => void;
   /** 清空全部自定义图标（全部恢复默认） */
@@ -206,13 +212,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   visionPresets: [],
   lockConfig: { lockScreen: true, enabled: false, code: '', len: 4 },
   profile: { ...DEFAULT_PROFILE },
+  addressMode: 'name',
   customIcons: {},
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, addressModeRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -223,6 +230,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'lock'),
         localDB.get('settings', 'profile'),
         localDB.get('settings', 'customIcons'),
+        localDB.get('settings', 'addressMode'),
       ]);
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
@@ -397,6 +405,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         visionPresets,
         lockConfig,
         profile,
+        addressMode: addressModeRec?.value === 'nickname' ? 'nickname' : 'name',
         customIcons,
         loaded: true,
       });
@@ -415,6 +424,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set({ lockConfig: cfg });
     void localDB.put('settings', { key: 'lock', value: { ...cfg } });
     if (!on) useUI.setState({ locked: false, screenOff: false, lockCameraOpen: false, torchOpen: false });
+  },
+
+  setAddressMode: (m) => {
+    set({ addressMode: m });
+    void localDB.put('settings', { key: 'addressMode', value: m });
   },
 
   setTheme: (t) => {
