@@ -3166,13 +3166,13 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">{fmtChatTime(m.time)}</span>
+                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
                 <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[6px] bg-white/75 px-2.5 py-[4px] text-[13px] leading-[1.35] text-black/45 dark:bg-white/[0.13] dark:text-white/55">
+                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1 text-[13px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -3429,7 +3429,7 @@ function ChatPage({
         {/* 引用条（长按菜单「引用」后显示在输入框上方；发送时挂到新消息上） */}
         {quote && (
           <div className="px-3 pb-1 pt-2" data-testid="qq-quote-bar">
-            <div className="flex items-start gap-2 rounded-[10px] bg-black/[0.04] px-2.5 py-1.5 dark:bg-white/[0.07]">
+            <div className="flex items-start gap-2 rounded-[4px] border border-black/25 bg-white/75 px-2.5 py-1.5 dark:border-white/25 dark:bg-white/[0.13]">
               <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-black/55 dark:text-white/55">
                 引用 {quote.name}：{quote.content}
               </p>

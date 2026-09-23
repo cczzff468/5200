@@ -6134,3 +6134,23 @@ Stage Summary:
 - /api/settings/test 路由缺失是测试失败根因，已补齐并支持浏览器直连兜底与参数兼容
 - 引用胶囊：更小圆角 + 细黑边框；QQ 气泡 10px；微信输入栏对齐真实微信
 - 全部改动通过 lint；浏览器实测通过（引用流、气泡渲染、输入栏样式、测试连接 200）
+
+---
+Task ID: 1
+Agent: main (Z.ai Code)
+Task: 所有半透明圆角胶囊统一成引用胶囊样式 + 修复刚打开网页时锁屏闪烁
+
+Work Log:
+- 录屏定位锁屏闪烁根因（agent-browser 30fps 录制冷启动逐帧测亮度）：①LockScreen 内层 AnimatePresence 首挂载播 initial 淡入（时钟/小组件 200ms 内从 30%→100% 透明度「浮现」）②壁纸 PNG 异步加载（base 纯色 #141417 先铺、~130ms 后图片弹入，亮度 37.7→40.1 跳变）③useMeasuredWallpaperLight 首测期间文字色回退静态标记可能跳变
+- 修复①：LockScreen.tsx 内层 <AnimatePresence mode="wait"> 加 initial={false}——冷启动/重新锁屏首挂载内容即刻完整显示；锁屏↔密码键盘后续切换仍照常淡入淡出（AnimatePresence 的 initial 只抑制自身首次渲染）
+- 修复②③：store.ts 新增 measureWallpaperLightInto(url,img)（与 hook 同一 32×64 canvas 三区域算法，写入共享 wallpaperLightCache）+ preloadWallpapersForBoot(urls, 1.5s 兜底)——load() 在 set({loaded:true}) 前 await 预载主屏/锁屏壁纸（含自定义 blob URL；data: 跳过），黑屏开机门控期间完成下载解码+亮度预热，锁屏/主屏首帧即完整壁纸+正确前景色；离线最坏多等 1.5s 放行不卡死
+- 胶囊统一（「变成引用那样的」= rounded-[4px] + border-black/25/白 + bg-white/75 + py-1，暗色 border-white/25 + bg-white/[0.13]）：四端 12 处浮动胶囊（时间分隔×8/撤回行+群通知×4：wechat 4607/4613、wx-group 3674/3680/3705/3710、qq 3169/3175、qq-group 3369/3375/3403/3408）+ 输入区 4 处半透明胶囊（引用条 wechat 4877/wx-group 3965/qq 3433、wx-group 禁言横幅 3957）+ sms 撤回胶囊（chat.tsx 993，对齐 sms 引用胶囊 bg-black/[0.06] 系）共 17 处；文字色统一为引用的 black/50、dark:white/60
+- 有意不动：qq-group 禁言横幅/引用条（边框条式非胶囊）、WxNoticeRow/QQNoticeRow（无底色纯文本）、DaySeparator（纯文本）、转账卡内「转账」标签、收藏卡内 bg-black/[0.03] 面板、搜索框/按钮等 bg-black/[0.05] 交互件
+- E2E（agent-browser）：录屏证实冷启动 = 黑屏开机门控 → 锁屏首帧即完整（内容满透明度、壁纸完整，无淡入无弹图，代价仅开机多 ~330ms 预载）；解锁上滑正常；微信小美会话时间胶囊 computed style {r:4px, b:1px black/25, bg:white/75} 与引用胶囊逐字节一致；QQ 小美会话时间胶囊/撤回行（发「撤回测试消息」→长按→撤回）同款一致；QQ 引用条同款一致；console 零报错、dev.log 无编译错误
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过
+
+Stage Summary:
+- 改动文件：src/components/ios/LockScreen.tsx（initial={false}）、src/lib/ios/store.ts（开机壁纸预载+亮度缓存预热）、src/components/apps/wechat.tsx / wx-group.tsx / qq.tsx / qq-group.tsx / chat.tsx（17 处胶囊统一）
+- 视觉基线：所有聊天半透明圆角胶囊（时间/撤回/群通知/引用条/禁言横幅/sms 撤回）= 引用胶囊同款：rounded-[4px]、细黑边框（light black/25、dark white/25）、bg-white/75（dark white/[0.13]）、py-1 紧凑
+- 开机体验基线：黑屏门控（含壁纸预载）→ 锁屏一次性完整呈现；重新锁屏同样即刻完整，无任何闪烁
+- 已知边界：完全离线且无缓存时开机门控最多多等 1.5s（超时放行，锁屏铺底色）

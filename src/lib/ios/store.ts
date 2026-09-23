@@ -376,6 +376,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
         }
       }
 
+      // 开机门控收尾前预载主屏/锁屏壁纸（最多等 1.5s 兜底）：
+      // 锁屏/主屏挂载首帧即完整壁纸 + 正确前景色，修复刚打开网页时锁屏壁纸「闪一下」
+      const bootUrls: (string | null | undefined)[] = [customWallpaperUrl, lockCustomWallpaperUrl];
+      for (const pid of [wallpaperPreset, lockWallpaperPreset]) {
+        const bg = resolveWallpaperStyle(pid, null).backgroundImage;
+        if (bg) bootUrls.push(bgImageUrlOf(bg));
+      }
+      await preloadWallpapersForBoot(bootUrls);
+
       set({
         theme,
         wallpaperPreset,
@@ -613,6 +622,72 @@ const LIGHT_LUMINANCE_THRESHOLD = 0.5;
  *  首帧即命中，不会闪「测量中回退静态标记」的错误颜色。上限 32 条防泄漏 */
 const wallpaperLightCache = new Map<string, { top: boolean; bottom: boolean; all: boolean }>();
 const WALLPAPER_LIGHT_CACHE_MAX = 32;
+
+/** 用已解码的图片实测三区域亮度并写入共享缓存（与 useMeasuredWallpaperLight 同一算法）。
+ *  开机预热调用：锁屏/主屏挂载首帧即拿到正确前景色，不闪「测量中回退静态标记」的跳变 */
+function measureWallpaperLightInto(url: string, img: HTMLImageElement): void {
+  if (wallpaperLightCache.has(url)) return;
+  try {
+    const W = 32;
+    const H = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, W, H);
+    const { data } = ctx.getImageData(0, 0, W, H);
+    const rowLum: number[] = [];
+    for (let y = 0; y < H; y++) {
+      let sum = 0;
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        sum += luminanceOf([data[i], data[i + 1], data[i + 2]]);
+      }
+      rowLum.push(sum / W);
+    }
+    const avgRows = (a: number, b: number) => {
+      let sum = 0;
+      for (let y = a; y < b; y++) sum += rowLum[y];
+      return sum / (b - a);
+    };
+    if (wallpaperLightCache.size >= WALLPAPER_LIGHT_CACHE_MAX) {
+      wallpaperLightCache.delete(wallpaperLightCache.keys().next().value as string);
+    }
+    wallpaperLightCache.set(url, {
+      top: avgRows(0, Math.floor(H * 0.35)) > LIGHT_LUMINANCE_THRESHOLD,
+      bottom: avgRows(Math.floor(H * 0.86), H) > LIGHT_LUMINANCE_THRESHOLD,
+      all: avgRows(0, H) > LIGHT_LUMINANCE_THRESHOLD,
+    });
+  } catch {
+    // 画布被污染等异常：静默放弃，hook 内回退预设静态标记
+  }
+}
+
+/**
+ * 开机预载壁纸（修复刚打开网页时锁屏「闪一下」）：
+ * 黑屏开机门控期间把主屏/锁屏壁纸图提前拉取解码并预热亮度实测缓存，
+ * 锁屏/主屏挂载首帧即完整壁纸 + 正确前景色，不再「先铺底色 → 图片弹入」。
+ * data:/blob: 之外全部适用（data URL 无网络请求无需预载）；
+ * 整体带超时兜底，最坏多等 timeoutMs 即放行，绝不卡死开机。
+ */
+async function preloadWallpapersForBoot(urls: (string | null | undefined)[], timeoutMs = 1500): Promise<void> {
+  const list = [...new Set(urls.filter((u): u is string => !!u && !u.startsWith('data:')))];
+  if (list.length === 0) return;
+  const work = list.map(
+    (url) =>
+      new Promise<void>((res) => {
+        const img = new Image();
+        img.onload = () => {
+          measureWallpaperLightInto(url, img);
+          res();
+        };
+        img.onerror = () => res();
+        img.src = url;
+      })
+  );
+  await Promise.race([Promise.all(work), new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+}
 
 export interface WallpaperLightness {
   /** 顶部区域（状态栏/日期/大时钟/小组件，0–35%）是否偏浅：true=用黑字 */

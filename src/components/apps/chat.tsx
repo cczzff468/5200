@@ -990,7 +990,7 @@ function ChatView({
               {m.recalled ? (
                 /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
                 <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
-                  <span className="rounded-full bg-black/[0.06] px-3 py-1 text-[12px] text-muted-foreground dark:bg-white/[0.08]">
+                  <span className="rounded-[4px] border border-black/25 bg-black/[0.06] px-2.5 py-1 text-[12.5px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60">
                     {mine ? '你撤回一条消息' : '对方撤回一条消息'}
                   </span>
                 </div>
