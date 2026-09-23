@@ -91,6 +91,7 @@ import {
   groupRoleOf,
   isGroupMuted,
   kickGroupMember,
+  kickOwnerFromGroup,
   listGroups,
   loadGroupMsgs,
   muteGroupMember,
@@ -784,7 +785,12 @@ export function WxGroupInfoPage({
 
   // ---- 群角色 / 权限（六.权限规则）：群主全部权限；管理员可禁言/踢人（仅普通成员）；普通成员不能管理他人 ----
   const meRec = useMemo(() => contacts.find((c) => c.kind === 'user') ?? null, [contacts]);
-  const myRole: GroupMemberRole = meRec ? groupRoleOf(group, meRec.id) : 'member';
+  // 机主身份（兼容双键）：挽留流程旧版曾以字面量 'me' 写入 adminIds/ownerId，联系人 ID 查不到时回退 'me' 查一次
+  const myRole: GroupMemberRole = meRec
+    ? groupRoleOf(group, meRec.id) !== 'member'
+      ? groupRoleOf(group, meRec.id)
+      : groupRoleOf(group, 'me')
+    : 'member';
   const amOwner = myRole === 'owner';
   const amAdmin = myRole === 'admin';
   const canManage = amOwner || amAdmin;
@@ -2255,8 +2261,9 @@ export function WxGroupChatPage({
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
 
   // 六.5：机主被禁言时的输入阻断（当前权限体系下机主通常为群主，此处为防御性支持；禁言过期自动恢复）
-  const meMuted = isGroupMuted(group, me.id);
-  const meMuteLeft = meMuted ? groupMuteLeftText(group, me.id) : null;
+  // 兼容双键：挽留流程旧版曾以字面量 'me' 写入禁言表，联系人 ID 与 'me' 任一命中即视为被禁
+  const meMuted = isGroupMuted(group, me.id) || isGroupMuted(group, 'me');
+  const meMuteLeft = meMuted ? groupMuteLeftText(group, me.id) ?? groupMuteLeftText(group, 'me') : null;
 
   /** 就地更新一条群消息的附加数据（红包/转账状态流转用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
@@ -2435,10 +2442,11 @@ export function WxGroupChatPage({
       if (!g) return;
       if (groupRoleOf(g, char.id) === 'member') return; // 普通成员没有管理权限：标记直接丢弃
       // 成员名字 → 联系人（机主 + 全部 AI 成员；精确 → 互相包含逐级匹配，与转账收款对象同口径）
+      // 机主统一用登录联系人 ID（me.id）：与 ownerId/adminIds/mutes 的键口径一致；字面量 'me' 仅作旧数据兼容
       const resolveTarget = (name: string): { id: string; name: string } | null => {
         const n = name.trim();
         if (!n) return null;
-        if (n === me.name) return { id: 'me', name: me.name };
+        if (n === me.name) return { id: me.id, name: me.name };
         const pool = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
           .filter((c): c is ContactRecord => !!c && c.id !== char.id);
@@ -2463,6 +2471,16 @@ export function WxGroupChatPage({
         case 'kick-member': {
           const t = resolveTarget(action.targetId);
           if (!t || !canModerateTarget(g, char.id, t.id)) return;
+          if (t.id === me.id) {
+            // AI 把机主移出群聊（五.4：被踢出后本机看不到该群）：先落踢出事件，再按退群口径
+            // 本机移除（同时触发退群挽留快照，AI 事后可按人设私信道歉/邀请回群）；
+            // kickOwnerFromGroup 同步删群，直接 return（后续 onUpdate 无意义，宿主靠 toast 提示）
+            onToast(`你已被${memberNameOf(char)}移出群聊`);
+            kickOwnerFromGroup(gid, { name: t.name });
+            // 群已从本机移除：必须仍走 onUpdate 让宿主刷新（微信 setGroupPeer(null) 关页 / QQ 靠 groupVersion 重算回落列表）
+            onUpdate({});
+            return;
+          }
           kickGroupMember(gid, t.id, { name: t.name });
           break;
         }
@@ -2481,7 +2499,7 @@ export function WxGroupChatPage({
       }
       onUpdate({}); // 成员/禁言/群名/公告可能变了：让宿主刷新群对象
     },
-    [gid, me.name, onUpdate]
+    [gid, me.name, onToast, onUpdate]
   );
 
   /** @ 某成员：插入「@名字 」到草稿（输入框以 @ 结尾时替换该 @，与键入 @ 唤起浮层无缝衔接） */
@@ -2956,6 +2974,10 @@ export function WxGroupChatPage({
 
   /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；配置识图模型后触发群回合） */
   const sendImageFiles = async (files: FileList) => {
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
       return;
@@ -2994,6 +3016,10 @@ export function WxGroupChatPage({
   /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应） */
   const sendSticker = (s: Sticker) => {
     setStickerOpen(false);
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
       return;
@@ -3021,6 +3047,10 @@ export function WxGroupChatPage({
   const sendLocation = (name: string, address: string) => {
     setPlusOpen(false);
     setCompose(null);
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
       return;
@@ -3062,6 +3092,10 @@ export function WxGroupChatPage({
   };
 
   const execGroupRp = (p: { mode: GroupRpData['mode']; amount: number; count: number; blessing: string; target: ContactRecord | null }, methodId: string) => {
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
     const total = groupRpTotal(p.mode, p.amount, p.count);
     if (!wxExecutePayment(methodId, total, '红包')) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : '余额不足，请更换支付方式');
@@ -3112,6 +3146,10 @@ export function WxGroupChatPage({
   };
 
   const execGroupTr = (amount: number, note: string, member: ContactRecord, methodId: string) => {
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
     if (!wxExecutePayment(methodId, amount, '转账')) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : '余额不足，请更换支付方式');
       return;

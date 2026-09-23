@@ -10137,7 +10137,9 @@ function MainScreen({
     () => (route.page === 'group-chat' || route.page === 'group-info' ? getGroup(route.groupId) : null),
     [route, groupVersion]
   );
-
+  // 群路由但群已不在（被 AI 移出群聊 / 群已解散）：渲染期按消息 tab 兜底，避免空页面
+  const staleGroupRoute = !groupPeer && (route.page === 'group-chat' || route.page === 'group-info');
+  const activeTab: '消息' | '联系人' | '动态' = route.page === 'tabs' ? route.tab : '消息';
   // 写说说发表：统一走动态引擎（入库 + 记忆 + 排 AI 互动队列），回空间动态流（ZonePage 订阅 moments-changed 自动刷新）
   const handlePublishZonePost = useCallback(
     (text: string, images: string[]) => {
@@ -10323,10 +10325,10 @@ function MainScreen({
           }}
           onToast={showToast}
         />
-      ) : route.page === 'tabs' ? (
+      ) : route.page === 'tabs' || staleGroupRoute ? (
         <>
           <div className="min-h-0 flex-1 overflow-hidden pt-[54px]">
-            {route.tab === '消息' && (
+            {activeTab === '消息' && (
               <MessagesPage
                 me={me}
                 contacts={contacts}
@@ -10339,7 +10341,7 @@ function MainScreen({
                 onToast={showToast}
               />
             )}
-            {route.tab === '联系人' && (
+            {activeTab === '联系人' && (
               <ContactsPage
                 me={me}
                 contacts={contacts}
@@ -10352,7 +10354,7 @@ function MainScreen({
                 onToast={showToast}
               />
             )}
-            {route.tab === '动态' && (
+            {activeTab === '动态' && (
               <DiscoverPage me={me} onAvatar={() => setDrawerOpen(true)} onZone={() => setRoute({ page: 'zone' })} onToast={showToast} />
             )}
           </div>
@@ -10361,7 +10363,7 @@ function MainScreen({
           <div className="shrink-0 border-t border-black/[0.05] bg-white pb-[16px] dark:border-white/[0.06] dark:bg-[#1B1C1F]">
           <nav className="flex h-[52px] items-stretch" aria-label="QQ 标签">
             {TAB_DEFS.map((t) => {
-              const active = route.page === 'tabs' && route.tab === t.id;
+              const active = !staleGroupRoute && route.page === 'tabs' && route.tab === t.id;
               return (
                 <button
                   key={t.id}

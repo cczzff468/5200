@@ -57,7 +57,7 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
-import { groupPreview, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
+import { groupPreview, getGroup, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
@@ -7314,9 +7314,10 @@ function MainScreen({
         contacts={contacts}
         onBack={() => setGroupInfoOpen(false)}
         onUpdate={(patch) => {
-          const next = updateGroupRecord(groupPeer.id, patch);
+          updateGroupRecord(groupPeer.id, patch);
           refreshGroups();
-          if (next) setGroupPeer(next);
+          // 始终以存储现场为准（群被 AI 移出群聊删除时 getGroup 返回 null → 关闭群页/回列表）
+          setGroupPeer(getGroup(groupPeer.id));
         }}
         onQuit={() => {
           quitGroupRecord(groupPeer.id);
@@ -7349,9 +7350,10 @@ function MainScreen({
           setGroupPeer(null);
         }}
         onUpdate={(patch) => {
-          const next = updateGroupRecord(groupPeer.id, patch);
+          updateGroupRecord(groupPeer.id, patch);
           refreshGroups();
-          if (next) setGroupPeer(next);
+          // 始终以存储现场为准（群被 AI 移出群聊删除时 getGroup 返回 null → 关闭群页/回列表）
+          setGroupPeer(getGroup(groupPeer.id));
         }}
         onOpenInfo={() => setGroupInfoOpen(true)}
         onQuit={() => {

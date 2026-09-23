@@ -625,10 +625,11 @@ export function onGroupDissolved(fn: GroupDissolveHook): void {
   dissolveHooks.push(fn);
 }
 
-type GroupQuitHook = (group: ChatGroup, msgs: WxGroupMsg[]) => void;
+type GroupQuitHook = (group: ChatGroup, msgs: WxGroupMsg[], opts?: { kicked?: boolean }) => void;
 const quitHooks: GroupQuitHook[] = [];
 
 /** 注册「机主退出群聊」钩子（退群挽留调度器在此捕获群快照与最近消息，供 1 分钟内 AI 私信与拉回群用）。
+ *  opts.kicked = 机主是被 AI 移出群聊（非主动退出），挽留私信文案按被踢口径生成。
  *  与解散钩子同规则：单个钩子异常不影响退群本身。 */
 export function onGroupQuit(fn: GroupQuitHook): void {
   quitHooks.push(fn);
@@ -686,7 +687,7 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
  * 与「解散群聊」的区别：解散 = 群对所有人消失且记忆级联清理；退出 = 仅机主本机移除。
  * 退出前先发退群钩子（快照群与最近消息，供退群挽留：AI 主动私信 + 拉回群）。
  */
-export function quitGroup(groupId: string): ChatGroup | null {
+export function quitGroup(groupId: string, opts?: { kicked?: boolean }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g) return null;
   // 退群快照钩子（在删除前调用，钩子拿到完整的群对象与消息历史；单个失败不阻塞退群）
@@ -694,7 +695,7 @@ export function quitGroup(groupId: string): ChatGroup | null {
     const msgs = loadGroupMsgs(groupId);
     for (const fn of quitHooks) {
       try {
-        fn(g, msgs);
+        fn(g, msgs, opts);
       } catch {
         // 忽略
       }
@@ -703,6 +704,19 @@ export function quitGroup(groupId: string): ChatGroup | null {
     // 忽略
   }
   return dissolveGroup(groupId, { purgeMemory: false });
+}
+
+/**
+ * 机主被移出群聊（AI 群主/管理员对普通成员身份的机主行使踢人权）。
+ * 五.4「被踢出后看不到该群消息」：先落「XX被移出群聊」系统消息，再按退群口径本机移除
+ * （群对 AI 成员仍然存在；同时触发退群挽留快照，AI 事后可按人设私信道歉/邀请回群）。
+ * opts.name = 机主显示名（事件文本用）。群不存在返回 null。
+ */
+export function kickOwnerFromGroup(groupId: string, opts?: { name?: string }): ChatGroup | null {
+  const g = getGroup(groupId);
+  if (!g) return null;
+  pushGroupEvent(groupId, `${opts?.name ?? '机主'}被移出群聊`, { type: 'kick', targetId: 'me' });
+  return quitGroup(groupId, { kicked: true });
 }
 
 /**
@@ -724,7 +738,10 @@ export function restoreQuitGroup(
         const key = groupMsgsKey(normalized.app, normalized.id);
         const cur = readJSON<WxGroupMsg[]>(key);
         const list = Array.isArray(cur) ? cur : [];
-        writeJSON(key, [...list, ...msgs].slice(-MSGS_CAP));
+        // 按时间归位合并：恢复前若残留了个别新消息（如踢出后 AI 回合尾部落盘的孤儿消息），
+        // 与快照历史按时间重排，避免渲染顺序错乱
+        const merged = [...list, ...msgs].sort((a, b) => a.time - b.time);
+        writeJSON(key, merged.slice(-MSGS_CAP));
       } catch {
         // 消息恢复失败不阻塞拉群
       }

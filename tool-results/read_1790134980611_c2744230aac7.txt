@@ -1,0 +1,902 @@
+     1→/**
+     2→ * 群聊数据层（宿主：微信 / QQ 双 App）。
+     3→ *
+     4→ * 设计要点：
+     5→ * - 群 = ChatGroup：独立会话实体（非联系人），成员是 AI 角色（char/npc）联系人 ID，机主固定参与；
+     6→ * - 会话身份 sessionKey = `<app>:group:<id>`（复用流总线/未读/标志/时间感知等按字符串键隔离的设施）；
+     7→ * - 存储：微信群 `wx-chat-groups`（历史数据兼容）、QQ 群 `qq-chat-groups` 两池分开，群 id 全局唯一，
+     8→ *   getGroup 双池查找；消息落 `<app>-group-msgs:<id>`（微信群沿用历史 wx-group-msgs 前缀）；
+     9→ * - 记忆互通开关 memoryInterop 按群独立（设置页唯一入口，不再有按成员覆盖）：开启时群记忆参与成员角色的
+    10→ *   私聊召回、角色私聊记忆参与群聊召回；effectiveInterop 统一解析，聊天页把结果以 interopOn 回调
+    11→ *   传给记忆召回；角色之间的隔离永远由记忆存储键（mem-frag:<contactId>）保证，与开关无关；
+    12→ * - 谁来回复由每个角色按自己的人设与消息内容自判（无需回复只回 [SKIP]，不落盘），@ 成员始终优先；
+    13→ * - 群红包（普通/拼手气/专属）与指定成员转账：消息落本群消息库，状态随群持久化（按群 ID 隔离，
+    14→ *   与单聊互不相通）；成员按人设领取/收款/退回，纯本地模拟不涉及真实资金；
+    15→ * - 解散群聊级联清理：群记录/群消息（含红包/转账卡片状态）/会话附属数据/群聊天背景 + 群来源记忆
+    16→ *   （onGroupDissolved 钩子由 memory 层注册，删去各成员记忆库里 sourceGroupId=本群的碎片/总结，
+    17→ *   依赖方向保持 memory → groups 单向，不反向 import）。
+    18→ */
+    19→
+    20→import { kvDel, kvGet, kvSet } from './idb-kv';
+    21→import { genId, localDB } from './db';
+    22→
+    23→// ---------------- 类型 ----------------
+    24→
+    25→export type GroupApp = 'wx' | 'qq';
+    26→
+    27→/** 群成员身份：群主 / 管理员 / 普通成员（机主与 AI 成员同一套规则，权限按身份分配） */
+    28→export type GroupMemberRole = 'owner' | 'admin' | 'member';
+    29→
+    30→/** 群事件类型（系统消息 + AI 感知注入共用同一套分类） */
+    31→export type GroupEventType =
+    32→  | 'create'
+    33→  | 'join'
+    34→  | 'leave'
+    35→  | 'kick'
+    36→  | 'mute'
+    37→  | 'unmute'
+    38→  | 'admin-add'
+    39→  | 'admin-remove'
+    40→  | 'owner-transfer'
+    41→  | 'rename'
+    42→  | 'avatar'
+    43→  | 'announcement';
+    44→
+    45→const EVENT_TYPES: ReadonlySet<string> = new Set([
+    46→  'create', 'join', 'leave', 'kick', 'mute', 'unmute', 'admin-add', 'admin-remove', 'owner-transfer', 'rename', 'avatar', 'announcement',
+    47→]);
+    48→
+    49→/** 群事件详情（挂在系统消息上：渲染用 noticeText，AI 感知用 type + 文本） */
+    50→export interface GroupEventDetail {
+    51→  type: GroupEventType;
+    52→  /** 操作发起人联系人 ID（'me' = 机主；纯系统事件可省） */
+    53→  actorId?: string;
+    54→  /** 事件对象成员联系人 ID */
+    55→  targetId?: string;
+    56→  /** 附加信息（新群名/禁言时长文本等） */
+    57→  extra?: string;
+    58→}
+    59→
+    60→export interface ChatGroup {
+    61→  id: string;
+    62→  /** 宿主 App（微信 / QQ） */
+    63→  app: GroupApp;
+    64→  name: string;
+    65→  /** 群备注名（仅机主自己可见；设置后聊天界面/消息列表优先显示备注，群资料真实名不变） */
+    66→  remark?: string;
+    67→  /** 群头像 dataURL；空 = 用成员头像拼贴渲染 */
+    68→  avatar: string | null;
+    69→  /** 创建者（机主）联系人 ID；可转让给任意成员（AI 成员也可成为群主） */
+    70→  ownerId: string;
+    71→  /** AI 角色成员联系人 ID（不含机主；机主恒为群成员） */
+    72→  memberIds: string[];
+    73→  /** 管理员联系人 ID 列表（不含群主；机主/AI 成员均可担任） */
+    74→  adminIds: string[];
+    75→  /** 禁言表：联系人 ID → 解禁时间戳（null = 永久；缺失 = 未禁言；过期视为自动解禁） */
+    76→  mutes: Record<string, number | null>;
+    77→  announcement: string;
+    78→  /** 群公告最近一次更新时间（QQ 群公告页展示；旧数据缺省） */
+    79→  annAt?: number;
+    80→  /** 群号（建群时分配的 9 位唯一数字，仅展示用途；旧群首次进入设置页时惰性补发并落盘） */
+    81→  no?: string;
+    82→  /** 记忆与私聊互通（按群独立；默认关闭 = 群记忆与私聊完全隔离；设置页唯一入口） */
+    83→  memoryInterop: boolean;
+    84→  createdAt: number;
+    85→}
+    86→
+    87→/** 禁言时长预设（信息页禁言选择单；ms = null 表示永久） */
+    88→export const GROUP_MUTE_PRESETS: Array<{ label: string; ms: number | null }> = [
+    89→  { label: '10 分钟', ms: 10 * 60_000 },
+    90→  { label: '1 小时', ms: 60 * 60_000 },
+    91→  { label: '3 小时', ms: 3 * 60 * 60_000 },
+    92→  { label: '1 天', ms: 24 * 60 * 60_000 },
+    93→  { label: '永久', ms: null },
+    94→];
+    95→
+    96→/**
+    97→ * 群红包数据（随群消息持久化；群间按群 ID 隔离、与单聊红包互不相通）。
+    98→ * 状态机：待领取（claims 空）→ 部分领取（0 < claims.length < count）→ 已抢完（claims.length ≥ count）/
+    99→ * 已过期（sentAt + 24h 后仍有剩余 → expired，剩余金额按剩余份退回发起人）。
+   100→ * 每个成员（含机主 'me'）领取记录独立，不能重复领取；专属红包只有被指定成员能领。
+   101→ */
+   102→export interface GroupRpData {
+   103→  /** 拼手气 = 总金额；普通/专属 = 单个金额 */
+   104→  amount: number;
+   105→  /** 红包个数（普通/专属固定 1..n；专属固定 1） */
+   106→  count: number;
+   107→  /** 普通 normal / 拼手气 lucky / 专属 exclusive */
+   108→  mode: 'normal' | 'lucky' | 'exclusive';
+   109→  blessing: string;
+   110→  /** 专属红包指定成员的联系人 ID / 名字（exclusive 时有值；其他人看到但不能领） */
+   111→  targetId?: string;
+   112→  targetName?: string;
+   113→  /** 领取记录（按领取顺序追加；contactId = 'me' 表示机主领取） */
+   114→  claims: Array<{ contactId: string; name: string; avatar: string | null; amount: number; ts: number }>;
+   115→  /** 发出时间（24h 过期判定基准） */
+   116→  sentAt: number;
+   117→  /** 已过期（剩余金额已退回发起人；终态不可再改） */
+   118→  expired?: boolean;
+   119→  expiredAt?: number;
+   120→  /** AI 处理动作用的短 ID（机主发的红包；成员在回复标记里引用） */
+   121→  cid?: string;
+   122→}
+   123→
+   124→/** 群转账数据（机主 → 指定群成员；只有被选中的成员能收款；按群 ID 隔离） */
+   125→export interface GroupTrData {
+   126→  amount: number;
+   127→  note: string;
+   128→  /** 指定收款成员（联系人 ID / 名字；只有 TA 能收款，其他人只看到有转账发生） */
+   129→  toId: string;
+   130→  toName: string;
+   131→  received?: boolean;
+   132→  receivedAt?: number;
+   133→  /** 退还/拒收终态（被指定成员退回/拒收；终态后不可再改） */
+   134→  status?: 'returned' | 'rejected';
+   135→  /** AI 处理动作用的短 ID */
+   136→  cid?: string;
+   137→}
+   138→
+   139→/** 合并转发「聊天记录」卡片里的一条对话快照（与单聊 FwdRecord 同构；转发卡片随群消息持久化） */
+   140→export interface GroupFwdRecord {
+   141→  name: string;
+   142→  role: 'me' | 'peer';
+   143→  text: string;
+   144→  /** 原消息引用了其他消息时的引用行（「名字：内容」） */
+   145→  quote?: string;
+   146→  time: number;
+   147→  /** 记录快照自带头像（转发时定格原说话人头像；详情页用它渲染） */
+   148→  avatar?: string | null;
+   149→  /** 原消息类型快照：表情包/图片详情页显示原图，其余显示 text 文字 */
+   150→  kind?: 'text' | 'sticker' | 'image';
+   151→  imgSrc?: string;
+   152→  stkMeaning?: string;
+   153→}
+   154→
+   155→/** 群消息：role 沿用 me/peer 语义，senderId 区分具体发言人（'me' = 机主，否则为角色联系人 ID） */
+   156→export interface WxGroupMsg {
+   157→  id: string;
+   158→  role: 'me' | 'peer';
+   159→  senderId: string;
+   160→  senderName: string;
+   161→  content: string;
+   162→  time: number;
+   163→  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer' | 'forward';
+   164→  /** 群红包卡片数据（kind = 'redpacket' 时有值） */
+   165→  rp?: GroupRpData;
+   166→  /** 群转账卡片数据（kind = 'transfer' 时有值） */
+   167→  tr?: GroupTrData;
+   168→  /** 系统通知行（进群/退出等），居中灰字渲染；有 notice（红包/转账通知）时用带图标的彩色尾词样式 */
+   169→  noticeText?: string;
+   170→  /** 群事件详情（noticeText 为群事件文本时有值：加入/退出/禁言/管理员/转让/改名/公告/建群）；
+   171→   *  事件不参与 AI 正常回复（历史过滤掉），但会按时间排序注入 system 让成员感知 */
+   172→  evt?: GroupEventDetail;
+   173→  /** 资金通知行数据（xx领取了你的红包/收下了你的转账；渲染用彩色尾词行） */
+   174→  notice?: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string };
+   175→  img?: { src: string };
+   176→  /** 位置卡片消息（群里所有角色可见，进上下文映射为 [位置] 文本） */
+   177→  loc?: { name: string; address: string };
+   178→  /** 表情包消息（用户从表情面板发送；AI 上下文映射为 [发送了表情：意思]） */
+   179→  stk?: { url: string; meaning: string; sid?: string };
+   180→  quote?: {
+   181→    name: string;
+   182→    content: string;
+   183→    /** 引用源消息 ID（原消息删除/撤回后引用显示「原消息已删除」） */
+   184→    id?: string;
+   185→    /** 被引用消息的发送时间（QQ 引用卡显示「星期X HH:MM」样式；旧数据缺省由 UI 回源查找兜底） */
+   186→    time?: number;
+   187→  };
+   188→  recalled?: boolean;
+   189→  /** 转发卡片（kind='forward'；fwd.from = 来源会话名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
+   190→  fwd?: { from: string; merged?: boolean; title?: string; records?: GroupFwdRecord[] };
+   191→}
+   192→
+   193→// ---------------- 存储（IndexedDB kv 写穿层，与消息/记忆同款） ----------------
+   194→
+   195→/** 两个宿主各自的群池（微信群沿用历史键，QQ 独立新键） */
+   196→const POOLS: Record<GroupApp, string> = { wx: 'wx-chat-groups', qq: 'qq-chat-groups' };
+   197→const MSGS_CAP = 200;
+   198→
+   199→/** 会话级 localStorage map 键（未读/标志/隐藏）：按宿主区分，解散群时同构清理 */
+   200→const LS_MAPS: Record<GroupApp, { unreads: string; flags: string; hidden: string }> = {
+   201→  wx: { unreads: 'wx-chat-unreads', flags: 'wx-chat-flags', hidden: 'wx-chat-hidden' },
+   202→  qq: { unreads: 'qq-chat-unreads', flags: 'qq-chat-flags', hidden: 'qq-chat-hidden' },
+   203→};
+   204→
+   205→const groupMsgsKey = (app: GroupApp, groupId: string) => `${app}-group-msgs:${groupId}`;
+   206→
+   207→function readJSON<T>(key: string): T | null {
+   208→  try {
+   209→    return kvGet<T>(key);
+   210→  } catch {
+   211→    return null;
+   212→  }
+   213→}
+   214→
+   215→function writeJSON(key: string, value: unknown): void {
+   216→  try {
+   217→    kvSet(key, value);
+   218→  } catch {
+   219→    // 存储失败不中断（群是增强能力）
+   220→  }
+   221→}
+   222→
+   223→// ---------------- 群 CRUD ----------------
+   224→
+   225→/** 群成员人数上限（对齐真微信群的「人多即散」体验上限；防止 AI 回合无节制放大） */
+   226→export const GROUP_MEMBER_CAP = 50;
+   227→
+   228→function normalizeGroup(g: unknown): ChatGroup | null {
+   229→  if (!g || typeof g !== 'object') return null;
+   230→  const r = g as Partial<ChatGroup>;
+   231→  if (typeof r.id !== 'string' || !Array.isArray(r.memberIds)) return null;
+   232→  return {
+   233→    id: r.id,
+   234→    app: r.app === 'qq' ? 'qq' : 'wx',
+   235→    name: typeof r.name === 'string' ? r.name : '未命名群聊',
+   236→    // 群备注为新增字段：旧数据缺省补空串
+   237→    remark: typeof r.remark === 'string' ? r.remark : '',
+   238→    avatar: typeof r.avatar === 'string' ? r.avatar : null,
+   239→    ownerId: typeof r.ownerId === 'string' ? r.ownerId : '',
+   240→    memberIds: r.memberIds.filter((x): x is string => typeof x === 'string'),
+   241→    // 管理员/禁言为新增字段：旧数据缺省补空值（normalize 保证读写形状一致）
+   242→    adminIds: Array.isArray(r.adminIds) ? r.adminIds.filter((x): x is string => typeof x === 'string') : [],
+   243→    mutes:
+   244→      r.mutes && typeof r.mutes === 'object' && !Array.isArray(r.mutes)
+   245→        ? Object.fromEntries(
+   246→            Object.entries(r.mutes as Record<string, unknown>).filter(
+   247→              (entry): entry is [string, number | null] => typeof entry[0] === 'string' && (entry[1] === null || typeof entry[1] === 'number'),
+   248→            ),
+   249→          )
+   250→        : {},
+   251→    announcement: typeof r.announcement === 'string' ? r.announcement : '',
+   252→    annAt: typeof r.annAt === 'number' ? r.annAt : undefined,
+   253→    no: typeof r.no === 'string' && /^\d{6,}$/.test(r.no) ? r.no : undefined,
+   254→    memoryInterop: r.memoryInterop === true,
+   255→    createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
+   256→  };
+   257→}
+   258→
+   259→function readPool(app: GroupApp): ChatGroup[] {
+   260→  const raw = readJSON<ChatGroup[]>(POOLS[app]);
+   261→  if (!Array.isArray(raw)) return [];
+   262→  return raw.map(normalizeGroup).filter((g): g is ChatGroup => g != null);
+   263→}
+   264→
+   265→function writePool(app: GroupApp, list: ChatGroup[]): void {
+   266→  writeJSON(POOLS[app], list);
+   267→}
+   268→
+   269→/** 全部群（双宿主；app 传参时只看该宿主） */
+   270→export function listGroups(app?: GroupApp): ChatGroup[] {
+   271→  if (app) return readPool(app);
+   272→  return [...readPool('wx'), ...readPool('qq')];
+   273→}
+   274→
+   275→/** 生成唯一群号（9 位数字、首位非 0；跨双宿主查重，保证每个群的群号都不一样） */
+   276→function genUniqueGroupNo(): string {
+   277→  const used = new Set(listGroups().map((g) => g.no).filter((x): x is string => Boolean(x)));
+   278→  for (let i = 0; i < 50; i++) {
+   279→    const no = String(Math.floor(100000000 + Math.random() * 900000000));
+   280→    if (!used.has(no)) return no;
+   281→  }
+   282→  return String(Date.now()).slice(-9); // 极端兜底：时间尾数（同毫秒建多群概率可忽略）
+   283→}
+   284→
+   285→/** 群号（建群时已分配则直接返回；旧群缺省时惰性生成唯一号码并落盘，同群恒定） */
+   286→export function ensureGroupNo(groupId: string): string {
+   287→  const g = getGroup(groupId);
+   288→  if (!g) return '';
+   289→  if (g.no) return g.no;
+   290→  const no = genUniqueGroupNo();
+   291→  const list = readPool(g.app);
+   292→  const idx = list.findIndex((x) => x.id === groupId);
+   293→  if (idx !== -1) {
+   294→    list[idx] = { ...list[idx], no };
+   295→    writePool(g.app, list);
+   296→  }
+   297→  return no;
+   298→}
+   299→
+   300→export function getGroup(groupId: string): ChatGroup | null {
+   301→  return listGroups().find((g) => g.id === groupId) ?? null;
+   302→}
+   303→
+   304→export function createGroup(input: {
+   305→  name: string;
+   306→  memberIds: string[];
+   307→  ownerId: string;
+   308→  /** 宿主 App（缺省 wx，兼容旧调用） */
+   309→  app?: GroupApp;
+   310→  avatar?: string | null;
+   311→  announcement?: string;
+   312→}): ChatGroup {
+   313→  const app: GroupApp = input.app ?? 'wx';
+   314→  const group: ChatGroup = {
+   315→    id: genId(),
+   316→    app,
+   317→    name: input.name.trim() || '未命名群聊',
+   318→    avatar: input.avatar ?? null,
+   319→    ownerId: input.ownerId,
+   320→    memberIds: Array.from(new Set(input.memberIds)).slice(0, GROUP_MEMBER_CAP),
+   321→    adminIds: [],
+   322→    mutes: {},
+   323→    announcement: input.announcement?.trim() ?? '',
+   324→    no: genUniqueGroupNo(),
+   325→    memoryInterop: false,
+   326→    createdAt: Date.now(),
+   327→  };
+   328→  writePool(app, [...readPool(app), group]);
+   329→  // 建群系统消息（三.9）：居中灰字「群聊创建」，随群消息持久化
+   330→  pushGroupEvent(group.id, '群聊创建', { type: 'create' });
+   331→  return group;
+   332→}
+   333→
+   334→/**
+   335→ * 更新群（名字/头像/公告/互通开关/成员等）；返回更新后的群（群不存在返回 null）。
+   336→ * 群资料变更（改名/换头像/改公告）自动落一条群事件系统消息（三.7/8：所有操作要生成对应系统消息），
+   337→ * 机主无关调用方是谁（信息页/聊天页/宿主壳层统一在此处发事件，避免遗漏）。
+   338→ */
+   339→export function updateGroup(
+   340→  groupId: string,
+   341→  patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>
+   342→): ChatGroup | null {
+   343→  const app = getGroup(groupId)?.app;
+   344→  if (!app) return null;
+   345→  const list = readPool(app);
+   346→  const idx = list.findIndex((g) => g.id === groupId);
+   347→  if (idx === -1) return null;
+   348→  const prev = list[idx];
+   349→  const next: ChatGroup = { ...prev, ...patch };
+   350→  if (patch.name !== undefined) next.name = patch.name.trim() || next.name;
+   351→  if (patch.remark !== undefined) next.remark = patch.remark.trim();
+   352→  list[idx] = next;
+   353→  writePool(app, list);
+   354→  // 群资料事件（只在值真正变化时发，成员增删走专用函数不经过这里）
+   355→  if (patch.name !== undefined && next.name !== prev.name) {
+   356→    pushGroupEvent(groupId, `群名被修改为「${next.name}」`, { type: 'rename', extra: next.name });
+   357→  }
+   358→  if (patch.avatar !== undefined && (patch.avatar ?? null) !== (prev.avatar ?? null)) {
+   359→    pushGroupEvent(groupId, '群头像已更新', { type: 'avatar' });
+   360→  }
+   361→  if (patch.announcement !== undefined && (patch.announcement ?? '') !== (prev.announcement ?? '')) {
+   362→    next.annAt = Date.now();
+   363→    pushGroupEvent(groupId, '群公告已更新', { type: 'announcement' });
+   364→  }
+   365→  return next;
+   366→}
+   367→
+   368→/** 邀请成员：已在群里原样返回；人数达上限（GROUP_MEMBER_CAP）返回 null（UI 提示「已达上限」）。
+   369→ *  成功时落「XX加入了群聊」系统消息（三.1；opts.name = 新成员显示名，供事件文本使用）。 */
+   370→export function addGroupMember(groupId: string, contactId: string, opts?: { name?: string }): ChatGroup | null {
+   371→  const g = getGroup(groupId);
+   372→  if (!g) return null;
+   373→  if (g.memberIds.includes(contactId)) return g;
+   374→  if (g.memberIds.length >= GROUP_MEMBER_CAP) return null;
+   375→  const next = updateGroup(groupId, { memberIds: [...g.memberIds, contactId] });
+   376→  if (next && opts?.name) {
+   377→    pushGroupEvent(groupId, `${opts.name}加入了群聊`, { type: 'join', targetId: contactId });
+   378→  }
+   379→  return next;
+   380→}
+   381→
+   382→/** 原始移除（不发事件；供联系人删除级联等内部路径使用；UI 踢人请用 kickGroupMember） */
+   383→export function removeGroupMember(groupId: string, contactId: string): ChatGroup | null {
+   384→  const g = getGroup(groupId);
+   385→  if (!g) return null;
+   386→  return updateGroup(groupId, { memberIds: g.memberIds.filter((id) => id !== contactId) });
+   387→}
+   388→
+   389→// ---------------- 群角色 / 禁言 / 群事件 ----------------
+   390→
+   391→/** 成员身份：群主 > 管理员 > 普通成员（ownerId 命中即群主，其次 adminIds，其余为普通成员） */
+   392→export function groupRoleOf(g: ChatGroup, contactId: string): GroupMemberRole {
+   393→  if (g.ownerId === contactId) return 'owner';
+   394→  if (g.adminIds.includes(contactId)) return 'admin';
+   395→  return 'member';
+   396→}
+   397→
+   398→/** 群显示名：有备注用备注（仅机主自己可见），否则用群名（聊天顶栏/消息列表/群列表统一走这里） */
+   399→export function groupDisplayName(g: Pick<ChatGroup, 'name' | 'remark'>): string {
+   400→  const rk = g.remark?.trim();
+   401→  return rk ? rk : g.name;
+   402→}
+   403→
+   404→/** 是否处于禁言中（永久禁言或未到解禁时间；过期即视为自动解禁，无需写回） */
+   405→export function isGroupMuted(g: ChatGroup, contactId: string, now: number = Date.now()): boolean {
+   406→  const until = g.mutes[contactId];
+   407→  if (until === null) return true;
+   408→  if (typeof until === 'number' && until > now) return true;
+   409→  return false;
+   410→}
+   411→
+   412→/** 禁言剩余描述（「剩 X 分钟 / X 小时 / X 天」或「永久」；未禁言返回 null） */
+   413→export function groupMuteLeftText(g: ChatGroup, contactId: string, now: number = Date.now()): string | null {
+   414→  const until = g.mutes[contactId];
+   415→  if (until === null) return '永久';
+   416→  if (typeof until !== 'number' || until <= now) return null;
+   417→  const left = Math.max(1, Math.ceil((until - now) / 60_000));
+   418→  if (left < 60) return `剩 ${left} 分钟`;
+   419→  const hours = Math.ceil(left / 60);
+   420→  if (hours < 24) return `剩 ${hours} 小时`;
+   421→  return `剩 ${Math.ceil(hours / 24)} 天`;
+   422→}
+   423→
+   424→/** 时长毫秒 → 人类可读（事件文本用；固定档位优先用 GROUP_MUTE_PRESETS 的 label） */
+   425→function muteDurationText(ms: number | null): string {
+   426→  if (ms === null) return '永久';
+   427→  const preset = GROUP_MUTE_PRESETS.find((p) => p.ms === ms);
+   428→  if (preset) return preset.label;
+   429→  if (ms % 60_000 === 0) {
+   430→    const mins = ms / 60_000;
+   431→    if (mins % 60 === 0) return `${mins / 60} 小时`;
+   432→    return `${mins} 分钟`;
+   433→  }
+   434→  return `${Math.round(ms / 60_000)} 分钟`;
+   435→}
+   436→
+   437→/**
+   438→ * 追加一条群事件系统消息（居中灰字；随群消息持久化）。
+   439→ * 事件不参与 AI 正常回复（历史/预览都过滤），但会经 collectGroupEventLines 按时间注入 system。
+   440→ * 追加失败（群不存在/存储异常）返回 null，不阻塞调用方。
+   441→ */
+   442→export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDetail): WxGroupMsg | null {
+   443→  const g = getGroup(groupId);
+   444→  if (!g) return null;
+   445→  const msg: WxGroupMsg = {
+   446→    id: genId(),
+   447→    role: 'peer',
+   448→    senderId: 'system',
+   449→    senderName: '',
+   450→    content: '',
+   451→    time: Date.now(),
+   452→    kind: 'notice',
+   453→    noticeText: text,
+   454→    evt,
+   455→  };
+   456→  try {
+   457→    const key = groupMsgsKey(g.app, groupId);
+   458→    const cur = readJSON<WxGroupMsg[]>(key);
+   459→    const list = Array.isArray(cur) ? cur : [];
+   460→    writeJSON(key, [...list, msg].slice(-MSGS_CAP));
+   461→  } catch {
+   462→    return null;
+   463→  }
+   464→  return msg;
+   465→}
+   466→
+   467→/** 设置/取消管理员（仅群主可操作；群主本人不能被设为管理员）。opts.name 供事件文本。 */
+   468→export function setGroupAdmin(groupId: string, contactId: string, admin: boolean, opts?: { name?: string }): ChatGroup | null {
+   469→  const g = getGroup(groupId);
+   470→  if (!g || contactId === g.ownerId) return g ?? null;
+   471→  const has = g.adminIds.includes(contactId);
+   472→  if (admin === has) return g; // 幂等：状态不变不发事件
+   473→  const adminIds = admin ? [...g.adminIds, contactId] : g.adminIds.filter((id) => id !== contactId);
+   474→  const app = g.app;
+   475→  const list = readPool(app);
+   476→  const idx = list.findIndex((x) => x.id === groupId);
+   477→  if (idx === -1) return null;
+   478→  list[idx] = { ...g, adminIds };
+   479→  writePool(app, list);
+   480→  const name = opts?.name ?? '群成员';
+   481→  pushGroupEvent(groupId, admin ? `${name}成为管理员` : `${name}被取消管理员`, {
+   482→    type: admin ? 'admin-add' : 'admin-remove',
+   483→    targetId: contactId,
+   484→  });
+   485→  return list[idx];
+   486→}
+   487→
+   488→/** 禁言（群主可禁言除自己外的任何成员；管理员只应禁言普通成员——权限门控由 UI 层负责，数据层只拦群主）。duration=null 表示永久 */
+   489→export function muteGroupMember(groupId: string, contactId: string, duration: number | null, opts?: { name?: string }): ChatGroup | null {
+   490→  const g = getGroup(groupId);
+   491→  if (!g || contactId === g.ownerId) return g ?? null;
+   492→  const mutes = { ...g.mutes, [contactId]: duration === null ? null : Date.now() + duration };
+   493→  const app = g.app;
+   494→  const list = readPool(app);
+   495→  const idx = list.findIndex((x) => x.id === groupId);
+   496→  if (idx === -1) return null;
+   497→  list[idx] = { ...g, mutes };
+   498→  writePool(app, list);
+   499→  const name = opts?.name ?? '群成员';
+   500→  pushGroupEvent(groupId, `${name}被禁言${muteDurationText(duration)}`, {
+   501→    type: 'mute',
+   502→    targetId: contactId,
+   503→    extra: muteDurationText(duration),
+   504→  });
+   505→  return list[idx];
+   506→}
+   507→
+   508→/** 解除禁言（未禁言时静默返回，不发事件） */
+   509→export function unmuteGroupMember(groupId: string, contactId: string, opts?: { name?: string }): ChatGroup | null {
+   510→  const g = getGroup(groupId);
+   511→  if (!g || !(contactId in g.mutes)) return g;
+   512→  const mutes = { ...g.mutes };
+   513→  delete mutes[contactId];
+   514→  const app = g.app;
+   515→  const list = readPool(app);
+   516→  const idx = list.findIndex((x) => x.id === groupId);
+   517→  if (idx === -1) return null;
+   518→  list[idx] = { ...g, mutes };
+   519→  writePool(app, list);
+   520→  if (opts?.name) {
+   521→    pushGroupEvent(groupId, `${opts.name}被解除禁言`, { type: 'unmute', targetId: contactId });
+   522→  }
+   523→  return list[idx];
+   524→}
+   525→
+   526→/** 踢人（移出群聊）：群主不可被移出；成功落「XX被移出群聊」事件（三.3）；被移出者不再参与该群回复 */
+   527→export function kickGroupMember(groupId: string, contactId: string, opts?: { name?: string }): ChatGroup | null {
+   528→  const g = getGroup(groupId);
+   529→  if (!g || contactId === g.ownerId) return g ?? null;
+   530→  if (!g.memberIds.includes(contactId)) return g;
+   531→  const next = updateGroup(groupId, { memberIds: g.memberIds.filter((id) => id !== contactId) });
+   532→  if (next) {
+   533→    // 被踢成员的管理员身份/禁言记录一并清理（人已不在群里）
+   534→    if (next.adminIds.includes(contactId) || contactId in next.mutes) {
+   535→      const app = g.app;
+   536→      const list = readPool(app);
+   537→      const idx = list.findIndex((x) => x.id === groupId);
+   538→      if (idx !== -1) {
+   539→        list[idx] = {
+   540→          ...next,
+   541→          adminIds: next.adminIds.filter((id) => id !== contactId),
+   542→          mutes: Object.fromEntries(Object.entries(next.mutes).filter(([k]) => k !== contactId)),
+   543→        };
+   544→        writePool(app, list);
+   545→      }
+   546→    }
+   547→    const name = opts?.name ?? '群成员';
+   548→    pushGroupEvent(groupId, `${name}被移出群聊`, { type: 'kick', targetId: contactId });
+   549→  }
+   550→  return next;
+   551→}
+   552→
+   553→/** 转让群主：新群主从管理员列表移除（群主不兼任管理员），原群主变为普通成员；落「群主转让给 XX」事件（三.6） */
+   554→export function transferGroupOwner(groupId: string, newOwnerId: string, opts?: { name?: string }): ChatGroup | null {
+   555→  const g = getGroup(groupId);
+   556→  if (!g || !newOwnerId || newOwnerId === g.ownerId) return g;
+   557→  const app = g.app;
+   558→  const list = readPool(app);
+   559→  const idx = list.findIndex((x) => x.id === groupId);
+   560→  if (idx === -1) return null;
+   561→  list[idx] = { ...g, ownerId: newOwnerId, adminIds: g.adminIds.filter((id) => id !== newOwnerId) };
+   562→  writePool(app, list);
+   563→  if (opts?.name) {
+   564→    pushGroupEvent(groupId, `群主转让给 ${opts.name}`, { type: 'owner-transfer', targetId: newOwnerId });
+   565→  }
+   566→  return list[idx];
+   567→}
+   568→
+   569→/**
+   570→ * 收集本群最近的群事件行（按时间升序，AI system 注入用；四.1/4.3：事件按时间排序注入，不能错乱）。
+   571→ * 返回「- 刚刚：红红加入了群聊」形态的行数组；无事件返回空数组。
+   572→ */
+   573→export function collectGroupEventLines(groupId: string, limit = 12, now: number = Date.now()): string[] {
+   574→  return loadGroupMsgs(groupId)
+   575→    .filter((m) => m.evt)
+   576→    .sort((a, b) => a.time - b.time)
+   577→    .slice(-limit)
+   578→    .map((m) => `- ${groupEventAgo(m.time, now)}：${m.noticeText ?? ''}`);
+   579→}
+   580→
+   581→/** 事件相对时间标签（刚刚 / X 分钟前 / X 小时前 / 昨天 / M月D日 HH:MM） */
+   582→export function groupEventAgo(ts: number, now: number = Date.now()): string {
+   583→  const diff = now - ts;
+   584→  if (diff < 60_000) return '刚刚';
+   585→  if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+   586→  if (diff < 24 * 60 * 60_000) return `${Math.floor(diff / (60 * 60_000))} 小时前`;
+   587→  const d = new Date(ts);
+   588→  const hh = String(d.getHours()).padStart(2, '0');
+   589→  const mm = String(d.getMinutes()).padStart(2, '0');
+   590→  const yest = new Date(now - 24 * 60 * 60_000);
+   591→  if (d.getFullYear() === yest.getFullYear() && d.getMonth() === yest.getMonth() && d.getDate() === yest.getDate()) {
+   592→    return `昨天 ${hh}:${mm}`;
+   593→  }
+   594→  return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+   595→}
+   596→
+   597→/**
+   598→ * 该群的记忆互通生效值：只跟群级开关（按成员覆盖已移除，旧数据里的覆盖记录随 normalize 丢弃）。
+   599→ * 群不存在一律视为隔离。
+   600→ */
+   601→export function effectiveInterop(groupId: string): boolean {
+   602→  return getGroup(groupId)?.memoryInterop === true;
+   603→}
+   604→
+   605→/** 从 localStorage JSON map 里删掉一个键（unreads/flags/hidden/time-aware 同构清理用） */
+   606→function removeLocalMapKey(lsKey: string, id: string): void {
+   607→  try {
+   608→    const raw = localStorage.getItem(lsKey);
+   609→    if (!raw) return;
+   610→    const map = JSON.parse(raw) as Record<string, unknown>;
+   611→    if (!(id in map)) return;
+   612→    delete map[id];
+   613→    localStorage.setItem(lsKey, JSON.stringify(map));
+   614→  } catch {
+   615→    // 忽略
+   616→  }
+   617→}
+   618→
+   619→type GroupDissolveHook = (group: ChatGroup) => void;
+   620→const dissolveHooks: GroupDissolveHook[] = [];
+   621→
+   622→/** 注册「群已解散」钩子（依赖方各自注册清理逻辑；群数据层不反向依赖记忆层）。
+   623→ *  钩子异常互不影响：单个失败不阻塞其它清理，也不阻塞解散本身。 */
+   624→export function onGroupDissolved(fn: GroupDissolveHook): void {
+   625→  dissolveHooks.push(fn);
+   626→}
+   627→
+   628→type GroupQuitHook = (group: ChatGroup, msgs: WxGroupMsg[]) => void;
+   629→const quitHooks: GroupQuitHook[] = [];
+   630→
+   631→/** 注册「机主退出群聊」钩子（退群挽留调度器在此捕获群快照与最近消息，供 1 分钟内 AI 私信与拉回群用）。
+   632→ *  与解散钩子同规则：单个钩子异常不影响退群本身。 */
+   633→export function onGroupQuit(fn: GroupQuitHook): void {
+   634→  quitHooks.push(fn);
+   635→}
+   636→
+   637→/**
+   638→ * 解散群聊：删除群 + 群消息（红包/转账卡片状态随消息一并清除）+ 会话级附属数据
+   639→ * （未读/标志/隐藏/时间感知/每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
+   640→ * （通过 onGroupDissolved 钩子级联，见 memory 层 memPurgeGroupSource）。
+   641→ * opts.purgeMemory = false 时跳过群来源记忆清理（用于「退出群聊」：群对其他成员仍然存在，
+   642→ * AI 成员的群记忆应当保留，只有机主本机删除该群）。
+   643→ * 返回被解散的群（供 UI 提示），群不存在返回 null。
+   644→ */
+   645→export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean }): ChatGroup | null {
+   646→  const g = getGroup(groupId);
+   647→  if (!g) return null;
+   648→  writePool(g.app, readPool(g.app).filter((x) => x.id !== groupId));
+   649→  try {
+   650→    kvDel(groupMsgsKey(g.app, groupId));
+   651→    // 未读/标志/隐藏为 localStorage JSON map（键 = 会话 id；群会话 id = `group:<gid>`）
+   652→    const maps = LS_MAPS[g.app];
+   653→    removeLocalMapKey(maps.unreads, `group:${groupId}`);
+   654→    removeLocalMapKey(maps.flags, `group:${groupId}`);
+   655→    removeLocalMapKey(maps.hidden, `group:${groupId}`);
+   656→    // 时间感知开关（localStorage map 里的键）
+   657→    removeLocalMapKey('chat-time-aware', `${g.app}:group:${groupId}`);
+   658→    // 每个成员的群记忆提取计数（旧 mem-round 轮次键 + 新 mem-msgcount 消息计数 / mem-anchor 锚点，均按群 scope）
+   659→    for (const cid of g.memberIds) {
+   660→      kvDel(`mem-round:${cid}:${g.app}:group:${groupId}`);
+   661→      kvDel(`mem-msgcount:${cid}:${g.app}:group:${groupId}`);
+   662→      kvDel(`mem-anchor:${cid}:${g.app}:group:${groupId}`);
+   663→    }
+   664→    // 群聊天背景图片本体（IndexedDB settings store，键同 contacts-store 的 chat-bg 前缀；群背景与单聊相互独立）
+   665→    void localDB.delete('settings', `chat-bg:${g.app}:group:${groupId}`).catch(() => undefined);
+   666→  } catch {
+   667→    // 清理失败不阻塞解散
+   668→  }
+   669→  // 群来源记忆级联清理（钩子逐个调用；单个钩子异常不影响其余清理，更不阻塞解散）。
+   670→  // opts.purgeMemory = false（退出群聊）时跳过：群对 AI 成员仍然存在，记忆保留。
+   671→  if (opts?.purgeMemory !== false) {
+   672→    for (const fn of dissolveHooks) {
+   673→      try {
+   674→        fn(g);
+   675→      } catch {
+   676→        // 忽略
+   677→      }
+   678→    }
+   679→  }
+   680→  return g;
+   681→}
+   682→
+   683→/**
+   684→ * 退出群聊（机主本人退群）：本机删除该群（群记录/消息/未读/标志/时间感知/背景等附属数据），
+   685→ * 但不清 AI 成员的群来源记忆（群对其他成员仍然存在，他们记得群里发生过什么）。
+   686→ * 与「解散群聊」的区别：解散 = 群对所有人消失且记忆级联清理；退出 = 仅机主本机移除。
+   687→ * 退出前先发退群钩子（快照群与最近消息，供退群挽留：AI 主动私信 + 拉回群）。
+   688→ */
+   689→export function quitGroup(groupId: string): ChatGroup | null {
+   690→  const g = getGroup(groupId);
+   691→  if (!g) return null;
+   692→  // 退群快照钩子（在删除前调用，钩子拿到完整的群对象与消息历史；单个失败不阻塞退群）
+   693→  try {
+   694→    const msgs = loadGroupMsgs(groupId);
+   695→    for (const fn of quitHooks) {
+   696→      try {
+   697→        fn(g, msgs);
+   698→      } catch {
+   699→        // 忽略
+   700→      }
+   701→    }
+   702→  } catch {
+   703→    // 忽略
+   704→  }
+   705→  return dissolveGroup(groupId, { purgeMemory: false });
+   706→}
+   707→
+   708→/**
+   709→ * 恢复退出的群（退群挽留：AI 把机主拉回群）：群记录原样写回（同 id，成员/身份/禁言/公告全保留，
+   710→ * 机主本就恒为群成员，无需改成员表），恢复退群前的最近群消息（历史不断档），
+   711→ * 并落「XX加入了群聊」事件（join，opts.joinName = 机主显示名）。
+   712→ * 群已存在（未被删除/已被其它路径恢复）时不重复写入，只补事件。返回恢复后的群。
+   713→ */
+   714→export function restoreQuitGroup(
+   715→  g: ChatGroup,
+   716→  msgs: WxGroupMsg[],
+   717→  opts?: { joinName?: string },
+   718→): ChatGroup {
+   719→  if (!getGroup(g.id)) {
+   720→    const normalized = normalizeGroup(g) ?? g;
+   721→    writePool(normalized.app, [...readPool(normalized.app), normalized]);
+   722→    if (msgs.length > 0) {
+   723→      try {
+   724→        const key = groupMsgsKey(normalized.app, normalized.id);
+   725→        const cur = readJSON<WxGroupMsg[]>(key);
+   726→        const list = Array.isArray(cur) ? cur : [];
+   727→        writeJSON(key, [...list, ...msgs].slice(-MSGS_CAP));
+   728→      } catch {
+   729→        // 消息恢复失败不阻塞拉群
+   730→      }
+   731→    }
+   732→  }
+   733→  if (opts?.joinName) {
+   734→    pushGroupEvent(g.id, `${opts.joinName}加入了群聊`, { type: 'join', targetId: 'me' });
+   735→  }
+   736→  return getGroup(g.id) ?? g;
+   737→}
+   738→
+   739→/** 从所有群中移除某联系人（删除联系人级联）；成员清空的群自动解散。返回受影响的群名（toast 汇总用）。
+   740→ *  opts.name 提供时给留下的成员落「XX退出了群聊」事件（三.2；AI 由此知道人为什么不见了）。 */
+   741→export function purgeContactFromGroups(contactId: string, opts?: { name?: string }): string[] {
+   742→  const affected: string[] = [];
+   743→  for (const g of listGroups()) {
+   744→    if (!g.memberIds.includes(contactId)) continue;
+   745→    affected.push(g.name);
+   746→    const next = g.memberIds.filter((id) => id !== contactId);
+   747→    if (next.length === 0) {
+   748→      dissolveGroup(g.id);
+   749→    } else {
+   750→      updateGroup(g.id, { memberIds: next });
+   751→      if (opts?.name) {
+   752→        pushGroupEvent(g.id, `${opts.name}退出了群聊`, { type: 'leave', targetId: contactId });
+   753→      }
+   754→    }
+   755→  }
+   756→  return affected;
+   757→}
+   758→
+   759→// ---------------- 群消息存取 ----------------
+   760→
+   761→function normalizeMsg(m: unknown): WxGroupMsg | null {
+   762→  if (!m || typeof m !== 'object') return null;
+   763→  const r = m as Partial<WxGroupMsg>;
+   764→  if (typeof r.id !== 'string' || typeof r.content !== 'string' || typeof r.time !== 'number') return null;
+   765→  return {
+   766→    id: r.id,
+   767→    role: r.role === 'me' ? 'me' : 'peer',
+   768→    senderId: typeof r.senderId === 'string' ? r.senderId : 'unknown',
+   769→    senderName: typeof r.senderName === 'string' ? r.senderName : '',
+   770→    content: r.content,
+   771→    time: r.time,
+   772→    kind:
+   773→      r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward'
+   774→        ? r.kind
+   775→        : 'text',
+   776→    rp:
+   777→      r.kind === 'redpacket' && r.rp && typeof r.rp.amount === 'number'
+   778→        ? {
+   779→            amount: r.rp.amount,
+   780→            count: typeof r.rp.count === 'number' && r.rp.count >= 1 ? Math.floor(r.rp.count) : 1,
+   781→            mode: r.rp.mode === 'lucky' || r.rp.mode === 'exclusive' ? r.rp.mode : 'normal',
+   782→            blessing: typeof r.rp.blessing === 'string' ? r.rp.blessing : '恭喜发财，大吉大利',
+   783→            targetId: typeof r.rp.targetId === 'string' ? r.rp.targetId : undefined,
+   784→            targetName: typeof r.rp.targetName === 'string' ? r.rp.targetName : undefined,
+   785→            claims: Array.isArray(r.rp.claims)
+   786→              ? r.rp.claims
+   787→                  .filter((c): c is GroupRpData['claims'][number] => Boolean(c) && typeof (c as { name?: unknown }).name === 'string')
+   788→                  .map((c) => ({
+   789→                    contactId: typeof c.contactId === 'string' ? c.contactId : '',
+   790→                    name: c.name,
+   791→                    avatar: typeof c.avatar === 'string' ? c.avatar : null,
+   792→                    amount: typeof c.amount === 'number' ? c.amount : 0,
+   793→                    ts: typeof c.ts === 'number' ? c.ts : 0,
+   794→                  }))
+   795→              : [],
+   796→            sentAt: typeof r.rp.sentAt === 'number' ? r.rp.sentAt : r.time,
+   797→            expired: r.rp.expired === true || undefined,
+   798→            expiredAt: typeof r.rp.expiredAt === 'number' ? r.rp.expiredAt : undefined,
+   799→            cid: typeof r.rp.cid === 'string' ? r.rp.cid : undefined,
+   800→          }
+   801→        : undefined,
+   802→    tr:
+   803→      r.kind === 'transfer' && r.tr && typeof r.tr.amount === 'number'
+   804→        ? {
+   805→            amount: r.tr.amount,
+   806→            note: typeof r.tr.note === 'string' ? r.tr.note : '',
+   807→            toId: typeof r.tr.toId === 'string' ? r.tr.toId : '',
+   808→            toName: typeof r.tr.toName === 'string' ? r.tr.toName : '',
+   809→            received: r.tr.received === true || undefined,
+   810→            receivedAt: typeof r.tr.receivedAt === 'number' ? r.tr.receivedAt : undefined,
+   811→            status: r.tr.status === 'returned' || r.tr.status === 'rejected' ? r.tr.status : undefined,
+   812→            cid: typeof r.tr.cid === 'string' ? r.tr.cid : undefined,
+   813→          }
+   814→        : undefined,
+   815→    noticeText: typeof r.noticeText === 'string' ? r.noticeText : undefined,
+   816→    evt:
+   817→      r.evt && typeof r.evt.type === 'string' && EVENT_TYPES.has(r.evt.type)
+   818→        ? {
+   819→            type: r.evt.type as GroupEventDetail['type'],
+   820→            actorId: typeof r.evt.actorId === 'string' ? r.evt.actorId : undefined,
+   821→            targetId: typeof r.evt.targetId === 'string' ? r.evt.targetId : undefined,
+   822→            extra: typeof r.evt.extra === 'string' ? r.evt.extra : undefined,
+   823→          }
+   824→        : undefined,
+   825→    notice:
+   826→      r.notice && typeof r.notice.pre === 'string' && typeof r.notice.accent === 'string'
+   827→        ? { icon: r.notice.icon === 'tr' || r.notice.icon === 'fam' ? r.notice.icon : 'rp', pre: r.notice.pre, accent: r.notice.accent }
+   828→        : undefined,
+   829→    img: r.img && typeof r.img.src === 'string' ? { src: r.img.src } : undefined,
+   830→    loc:
+   831→      r.loc && typeof r.loc.name === 'string' && typeof r.loc.address === 'string'
+   832→        ? { name: r.loc.name, address: r.loc.address }
+   833→        : undefined,
+   834→    stk:
+   835→      r.stk && typeof r.stk.url === 'string'
+   836→        ? { url: r.stk.url, meaning: typeof r.stk.meaning === 'string' ? r.stk.meaning : '', sid: typeof r.stk.sid === 'string' ? r.stk.sid : undefined }
+   837→        : undefined,
+   838→    quote:
+   839→      r.quote && typeof r.quote.name === 'string' && typeof r.quote.content === 'string'
+   840→        ? {
+   841→            name: r.quote.name,
+   842→            content: r.quote.content,
+   843→            // 引用源消息 ID（删除/撤回后把引用内容改写为「原消息已删除」用；旧数据无此字段照常渲染）
+   844→            id: typeof r.quote.id === 'string' ? r.quote.id : undefined,
+   845→          }
+   846→        : undefined,
+   847→    recalled: r.recalled === true,
+   848→    fwd:
+   849→      r.kind === 'forward' && r.fwd && typeof r.fwd.from === 'string'
+   850→        ? {
+   851→            from: r.fwd.from,
+   852→            merged: r.fwd.merged === true || undefined,
+   853→            title: typeof r.fwd.title === 'string' ? r.fwd.title : undefined,
+   854→            records: Array.isArray(r.fwd.records)
+   855→              ? r.fwd.records
+   856→                  .filter((x): x is GroupFwdRecord => Boolean(x) && typeof (x as GroupFwdRecord).name === 'string' && typeof (x as GroupFwdRecord).text === 'string')
+   857→                  .map((x) => ({
+   858→                    name: x.name,
+   859→                    role: x.role === 'me' ? ('me' as const) : ('peer' as const),
+   860→                    text: x.text,
+   861→                    quote: typeof x.quote === 'string' ? x.quote : undefined,
+   862→                    time: typeof x.time === 'number' ? x.time : 0,
+   863→                    avatar: typeof x.avatar === 'string' ? x.avatar : x.avatar === null ? null : undefined,
+   864→                    kind: x.kind === 'sticker' || x.kind === 'image' ? x.kind : undefined,
+   865→                    imgSrc: typeof x.imgSrc === 'string' ? x.imgSrc : undefined,
+   866→                    stkMeaning: typeof x.stkMeaning === 'string' ? x.stkMeaning : undefined,
+   867→                  }))
+   868→              : undefined,
+   869→          }
+   870→        : undefined,
+   871→  };
+   872→}
+   873→
+   874→export function loadGroupMsgs(groupId: string): WxGroupMsg[] {
+   875→  const app = getGroup(groupId)?.app ?? 'wx';
+   876→  const raw = readJSON<WxGroupMsg[]>(groupMsgsKey(app, groupId));
+   877→  if (!Array.isArray(raw)) return [];
+   878→  return raw.map(normalizeMsg).filter((m): m is WxGroupMsg => m != null);
+   879→}
+   880→
+   881→/** 落盘（保留最后 200 条，与私聊同量级） */
+   882→export function saveGroupMsgs(groupId: string, msgs: WxGroupMsg[]): void {
+   883→  const app = getGroup(groupId)?.app ?? 'wx';
+   884→  writeJSON(groupMsgsKey(app, groupId), msgs.slice(-MSGS_CAP));
+   885→}
+   886→
+   887→/** 该群最后一条非通知消息（会话列表预览用） */
+   888→export function groupPreview(groupId: string): { text: string; time: number } {
+   889→  const msgs = loadGroupMsgs(groupId);
+   890→  const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
+   891→  if (!last) return { text: '', time: 0 };
+   892→  if (last.recalled) return { text: `${last.role === 'me' ? '你' : last.senderName || '有人'}撤回了一条消息`, time: last.time };
+   893→  if (last.kind === 'image') return { text: '[图片]', time: last.time };
+   894→  if (last.kind === 'sticker') return { text: `[表情]${last.stk?.meaning ? ` ${last.stk.meaning}` : ''}`, time: last.time };
+   895→  if (last.kind === 'location') return { text: `[位置] ${last.loc?.name ?? ''}`.trim(), time: last.time };
+   896→  if (last.kind === 'redpacket') return { text: '[红包]', time: last.time };
+   897→  if (last.kind === 'transfer') return { text: '[转账]', time: last.time };
+   898→  if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };
+   899→  const prefix = last.role === 'me' ? '我' : last.senderName;
+   900→  return { text: `${prefix}：${last.content}`, time: last.time };
+   901→}
+   902→

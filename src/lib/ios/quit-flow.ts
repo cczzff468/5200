@@ -80,6 +80,8 @@ export interface QuitFlowState {
     /** 已拉回（流程完成） */
     resolved?: boolean;
   };
+  /** 机主是被 AI 移出群聊（非主动退出）：私信与背景文案按被踢口径生成（旧数据缺省 = 主动退出） */
+  kicked?: boolean;
 }
 
 const INDEX_KEY = 'quit-flow:index';
@@ -144,8 +146,9 @@ function deleteState(gid: string): void {
 /**
  * 退群钩子入口：快照群与最近消息，开启一轮挽留流程。
  * 同群旧快照直接覆盖（再次退群 = 新一轮，邀请/私信配额重置）。
+ * opts.kicked = 机主是被 AI 移出群聊（私信/背景文案按被踢口径生成）。
  */
-export function captureQuitSnapshot(group: ChatGroup, msgs: WxGroupMsg[]): void {
+export function captureQuitSnapshot(group: ChatGroup, msgs: WxGroupMsg[], opts?: { kicked?: boolean }): void {
   const st: QuitFlowState = {
     gid: group.id,
     app: group.app,
@@ -155,17 +158,18 @@ export function captureQuitSnapshot(group: ChatGroup, msgs: WxGroupMsg[]): void 
     recentMsgs: msgs.slice(-40),
     dm: { contactId: null, fireAt: Date.now() + 20_000 + Math.floor(Math.random() * 30_000) },
     winback: {},
+    kicked: opts?.kicked === true || undefined,
   };
   saveState(st);
 }
 
 let hookInstalled = false;
 
-/** 注册退群钩子（QuitFlowScheduler 挂载时调用；幂等） */
+/** 注册退群钩子（QuitFlowScheduler 挂载时调用；幂等；opts.kicked 透传被踢口径） */
 export function ensureQuitHook(): void {
   if (hookInstalled) return;
   hookInstalled = true;
-  onGroupQuit((g, msgs) => captureQuitSnapshot(g, msgs));
+  onGroupQuit((g, msgs, opts) => captureQuitSnapshot(g, msgs, opts));
 }
 
 // ---------------- 私聊侧：退群背景注入 ----------------
@@ -175,6 +179,17 @@ let cachedMeNames: { wx: string; qq: string; owner: string } = { wx: '', qq: '',
 
 function meNameOf(app: GroupApp): string {
   return cachedMeNames[app] || cachedMeNames.owner || '机主';
+}
+
+/** 机主在该 App 的联系人 ID（会话登录账号；缺省回退字面量 'me' 兼容旧口径）。
+ *  授予身份/禁言/踢人等群状态表的键统一用联系人 ID，与群创建时 ownerId = me.id 的口径一致。 */
+function meContactId(app: GroupApp): string {
+  try {
+    const id = window.localStorage.getItem(app === 'wx' ? 'wx-session-user-id' : 'qq-session-user-id');
+    return id || 'me';
+  } catch {
+    return 'me';
+  }
 }
 
 export function refreshMeNameCache(contacts: ContactRecord[]): void {
@@ -268,8 +283,9 @@ export function activeQuitFlowFor(contactId: string): QuitFlowContext | null {
     .filter((m) => m.kind !== 'notice' && !m.recalled)
     .slice(-8)
     .map((m) => `- ${snapshotMsgLine(m, meName)}`);
+  const quitDesc = st.kicked ? `被移出了群聊「${st.groupName}」（不是 TA 自己退的）` : `刚刚退出了群聊「${st.groupName}」`;
   lines.push(
-    `【退群背景】${meName}刚刚退出了群聊「${st.groupName}」（你是该群的${role === 'owner' ? '群主' : role === 'admin' ? '管理员' : '普通成员'}）。这件事你从群里知道了，TA 私下找你聊天时你可以按人设与你们的关系自然面对这件事。退群前后群里最近的情况：`,
+    `【退群背景】${meName}${quitDesc}（你是该群的${role === 'owner' ? '群主' : role === 'admin' ? '管理员' : '普通成员'}）。这件事你从群里知道了，TA 私下找你聊天时你可以按人设与你们的关系自然面对这件事。退群前后群里最近的情况：`,
   );
   if (evtLines.length > 0) lines.push('最近事件：', ...evtLines);
   if (dlgLines.length > 0) lines.push('最近对话：', ...dlgLines);
@@ -355,8 +371,9 @@ export function applyQuitWinbackAction(contactId: string, action: RichAction): b
       void afterRestore(st, () => {
         const g = getGroup(st.gid);
         if (!g || groupRoleOf(g, contactId) !== 'owner') return; // 只有群主能给管理员
+        const meId = meContactId(st.app);
         void ownerRealName()
-          .then((owner) => setGroupAdmin(st.gid, 'me', true, { name: owner || '机主' }))
+          .then((owner) => setGroupAdmin(st.gid, meId, true, { name: owner || '机主' }))
           .catch(() => undefined);
       });
       return true;
@@ -366,8 +383,9 @@ export function applyQuitWinbackAction(contactId: string, action: RichAction): b
       void afterRestore(st, () => {
         const g = getGroup(st.gid);
         if (!g || groupRoleOf(g, contactId) !== 'owner') return; // 只有群主能转让
+        const meId = meContactId(st.app);
         void ownerRealName()
-          .then((owner) => transferGroupOwner(st.gid, 'me', { name: owner || '机主' }))
+          .then((owner) => transferGroupOwner(st.gid, meId, { name: owner || '机主' }))
           .catch(() => undefined);
       });
       return true;
@@ -485,9 +503,12 @@ async function sendQuitDm(st: QuitFlowState, contacts: ContactRecord[]): Promise
   const channel = app === 'wx' ? '微信' : 'QQ';
   const npcExtra = buildNpcPromptExtra(contact, contacts);
   const share = getMemSettings(contact.id).share;
+  const quitFact = st.kicked
+    ? `你（或群里的管理员）刚刚把${meName}移出了群聊「${st.groupName}」`
+    : `${meName}刚刚退出了群聊「${st.groupName}」`;
   const lastUserTurn =
-    `【刚刚发生的事】${meName}刚刚退出了群聊「${st.groupName}」（这是系统事件，不是 TA 发给你的消息）。` +
-    `你现在决定要不要主动私信 TA。说什么、怎么说，完全按你的人设和你们的关系来：可以关心、问原因、挽留、吐槽，也可以装作随意聊起群里最近的事，甚至觉得没必要打扰就保持沉默。` +
+    `【刚刚发生的事】${quitFact}（这是系统事件，不是 TA 发给你的消息）。` +
+    `你现在决定要不要主动私信 TA。说什么、怎么说，完全按你的人设和你们的关系来：可以关心、问原因、道歉、挽留、吐槽，也可以装作随意聊起群里最近的事，甚至觉得没必要打扰就保持沉默。` +
     `要私信就直接输出你发给 TA 的正文（一两句话，像真人随手打字）；如果你觉得以你的性格根本不会主动私信，只回复 [SKIP]。`;
   const dmRules = [
     '这是你主动发起的一轮：没有对方刚发来的消息需要回应，不要自我介绍式的突兀开场，像平时给 TA 发消息一样自然。',

@@ -6267,3 +6267,32 @@ Stage Summary:
 - 需求四五基线：全部系统消息沿用 groups.ts 事件层（加入/退出/禁言/解禁/移出/改名/公告/管理员/群主）；群内事件经【群内事件】注入让成员感知；私信参考快照里的群事件+对话+记忆
 - 改动文件：src/lib/chat-rich.ts、src/lib/ios/{group-admin,quit-flow,groups}.ts（新建 2 个）、src/components/ios/{QuitFlowScheduler.tsx(新建),PhoneShell.tsx}、src/components/apps/{qq-group,wx-group,wechat,qq}.tsx
 - 已知边界：QQ 端接线与微信同构（tsc 验证，未单独跑 QQ 界面 E2E）；授身份需在拉回后 24h 内（TTL 后快照清理，AI 不再提退群话题）；主动私信依赖 QuitFlowScheduler 存活（页面关闭超过 10 分钟宽限窗则该次私信放弃，退群背景仍在用户下次私聊时注入）
+
+---
+Task ID: group-admin-quitflow-audit
+Agent: main (Z.ai Code)
+Task: 对「群聊 AI 管理员权限 + 用户退群后主动行为」做全面复查（40 项检查清单），发现问题定位根因并修复，禁止只报「已完成」
+
+Work Log:
+- 静态审查全链路（groups.ts / group-admin.ts / quit-flow.ts / chat-rich.ts / qq-group.tsx / wx-group.tsx / wechat.tsx / qq.tsx / QuitFlowScheduler.tsx）：核对权限层级、五类管理操作、系统消息、事件注入、挽留状态机、防骚扰约束
+- 发现缺口①（五.4）：canModerateTarget 允许群主 AI 对普通成员身份的机主执行移出，但 memberIds 按设计不含机主 → kickGroupMember('me') 静默 no-op（无系统消息、用户仍在群、AI 认知与现实脱节）。修复：groups.ts 新增 kickOwnerFromGroup（先落「XX被移出群聊」事件 → quitGroup({kicked:true}) 本机移除并触发挽留快照），qq-group/wx-group 执行器 kick-member 分支识别机主目标走新函数；restoreQuitGroup 恢复消息改为按时间归位合并（吸收踢出后 AI 回合尾部落盘的孤儿消息防乱序）；quitGroup/onGroupQuit 钩子链透传 {kicked} 口径，quit-flow 私信/背景文案区分「退出」与「被移出」（被踢时 AI 私信按道歉口径生成）
+- 发现缺口②（五.3）：被禁言机主仅文字发送被拦，图片/表情包/位置/红包/转账五条发送路径无禁言检查。修复：qq-group/wx-group 的 sendImageFiles/sendSticker/sendLocation/execGroupRp/execGroupTr（含支付密码 gate 后路径）统一补 meMuted 拦截 + toast
+- 发现 BUG③（ID 口径不一致，根因级）：群创建 ownerId=me.id（联系人 ID），但群管理/挽留链路对机主用字面量 'me'——AI 禁言机主写入 mutes['me'] 而 UI 检查 mutes[user-lin]，禁言机主完全无效（横幅不出现、输入不封锁）；挽留 [设为管理员]/[转让群主] 写入 adminIds:['me'] 同样不影响 UI（上轮 B4 验证只看了数据未看 UI 表现）。修复：resolveTarget 返回 me.id；meMuted/meMuteLeft/myRole 双键兼容（联系人 ID 优先、'me' 兜底旧数据）；quit-flow 新增 meContactId(app)（读 wx/qq-session-user-id）供授身份使用
+- 发现 BUG④（宿主接线）：AI 踢机主后微信宿主 onUpdate 的 `if (next) setGroupPeer(next)` 在群已删除时（next=null）不关页 → 用户停留在已删群的聊天页。修复：wechat.tsx 两处 onUpdate 改为 setGroupPeer(getGroup(...)) 始终以存储现场为准；QQ 宿主新增渲染期兜底（staleGroupRoute → 按「消息」tab 渲染 + activeTab 派生，避免 effect setState 触发 react-hooks/set-state-in-effect lint 错误）
+- E2E 浏览器实测（agent-browser 390×844 + mock LLM :4100 脚本化 + IndexedDB 种子 林川/榴莲(群主)/红红(管理员) + QQ 群周末爬山群 + 微信群周末火锅群）：
+  ①权限层级：群主 [禁言:红红:10分钟] 生效（mutes 落盘+居中系统消息）；管理员红红 [禁言:榴莲] 标记被丢弃（mutes 无榴莲）但正文照常发出；榴莲 system 含【你的群管理权限】你是这个群的群主+【管理分寸】，红红含管理员边界；红红被禁后 [SKIP] 物理禁言（回合跳过）
+  ②对自己操作：榴莲 [禁言:榴莲:1小时] 丢弃（mutes 无变化）；[改群名:周末欢乐群] 生效 + 顶栏实时更新 + 「群名被修改为」事件
+  ③禁言机主（ID 修复后）：[禁言:林川:30分钟] → mutes['user-lin']（键统一）+ 横幅「你已被禁言（剩 30 分钟）」+ 文字发送 toast 拦截未落盘 + 红包路径 toast 拦截未扣款未落卡（caught at +0.5s）
+  ④AI 踢机主：toast + 聊天页关闭回落消息列表 + 群从列表消失 + quit-flow 快照 kicked=true（事件含禁言+踢出、fireAt=quitAt+27.8s 在 1 分钟窗内）+ 约 22~30s 后榴莲主动私信送达（每轮恰 1 条，私信 prompt 实测含【刚刚发生的事】被踢口径 + 【群聊近况】事件与对话）
+  ⑤拉回+授身份：回复私信 → [拉回群聊][设为管理员] 同回复双标记 → 群原样恢复（历史含孤儿消息按时间归位）+「林川加入了群聊」+ adminIds:['c-honghong','user-lin']（meContactId 修复生效，UI 可见管理员身份）+「林川成为管理员」事件
+  ⑥拒绝与防骚扰：手动退群（新快照 kicked=None 口径正确）→ 私信 → 回复「别拉我了」→ [放弃邀请] → 群未恢复、quit-flow state 被 tick 清理（index 空）、后续私聊 system 实测不含【退群背景】/【群务】
+  ⑦持久化重启：种入改名+双向禁言+公告+管理员状态 → 浏览器重载 → 群名/禁言横幅（剩 25 分钟）/红红管理员标签/操作单「禁言中：剩 X 分钟」全部保留
+  ⑧微信群抽查：禁言机主（横幅+事件）与踢机主（页面关闭+群消失+挽留私信送达）双路径复现，与 QQ 同构
+  ⑨回归：单聊收发+AI 回复正常（且退群背景对群内任一成员私聊正确注入）；dev.log 8 次 /api/memory/extract 200 自然触发、无运行时错误；记忆/未读/红包过期清算未受影响
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过（渲染期派生替代 effect setState 规避 react-hooks/set-state-in-effect）；测试环境已清理（浏览器关闭、mock 杀掉、.e2e 删除、eslint ignores 还原）
+
+Stage Summary:
+- 复查结论：原实现 40 项检查中 36 项真实成立；发现并修复 4 个问题——①AI 踢机主静默 no-op（含挽留链路打通+被踢口径）②禁言仅拦文字（5 条发送路径补齐）③机主 ID 口径分裂导致「AI 禁言机主/授机主身份」写读错位（根因级，上轮验证盲区）④微信宿主踢出后不关页+QQ 宿主空页兜底
+- 行为基线补充：AI（群主/管理员）现在真的能把机主移出群聊——机主本机群消失、AI 侧按被踢口径在 20~50s 内主动私信、可道歉拉回并授身份；机主被禁言后文字/图片/表情/位置/红包/转账全路径拦截；机主身份在群状态表中统一为登录联系人 ID（'me' 仅作旧数据兼容兜底）
+- 改动文件：src/lib/ios/groups.ts（kickOwnerFromGroup/quitGroup opts/恢复按时间归位）、src/lib/ios/quit-flow.ts（kicked 口径/meContactId）、src/components/apps/{qq-group,wx-group}.tsx（踢机主分支+禁言全路径封锁+ID 统一+onToast）、src/components/apps/wechat.tsx（onUpdate 以存储为准+getGroup 导入）、src/components/apps/qq.tsx（渲染期群路由兜底）
+- 已知边界：AI 不能修改自己的权限为结构性保证（无对应标记、授身份标记仅目标机主且仅群主有效、数据层幂等）；Kick 后挽留依赖 QuitFlowScheduler 存活（关闭页面超 10 分钟宽限窗放弃，背景仍在下次私聊注入）；改群名/改公告的 UI 拦截仅靠权限校验（canEditGroupInfo），与真微信一致
