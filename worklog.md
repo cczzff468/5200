@@ -6250,3 +6250,22 @@ Stage Summary:
 - 闪烁根因收口：进入锁屏的残余闪烁=导航白闪（View Transition 已消除）+ 亮度实测完成时的文字变色（持久化已消除）+ 自定义壁纸换图（平均色占位+预解码已消除）；三层修复后进入/刷新/亮熄屏全路径 30fps 抽帧零异常帧
 - 改动文件：src/app/globals.css、src/lib/ios/display-cookie.ts、src/lib/ios/boot-script.ts、src/lib/ios/store.ts、src/components/ios/PhoneShell.tsx
 - 已知边界：View Transition 被浏览器跳过时（资源紧张偶发）导航白帧约 130ms，属浏览器级导航空白，非应用内闪烁
+
+---
+Task ID: block-bugfix-realstate
+Agent: Z.ai Code (main)
+Task: 用户报告拉黑功能严重 bug（AI 说拉黑但系统不记录/方向混淆/AI 无感知/双向气泡无红色感叹号），修复并全链路实测
+
+Work Log:
+- 根因定位（9 大症状收敛到 2 个缺口）：①buildBlockPromptBlock 只在已有拉黑状态时注入 → 无状态时 AI 完全不知道自己有 [拉黑]/[解除拉黑] 标记 → 用户让 AI 拉黑时 AI 只能口头配合说"拉黑了"，状态永远写不进去 → 下游全部（图标/拒收行/AI 感知/系统消息）不触发；②气泡图标按"当前状态"给所有消息打标 → 不满足历史消息区间要求
+- 修复一（状态真实性/说到做到）：buildBlockPromptBlock 无拉黑状态时也注入「XX拉黑能力」声明（5 行）——决定拉黑（含用户要求 AI 拉黑 TA 而照做）必须单独输出 [拉黑] 标记；严禁嘴上说拉黑不输出标记（"系统不会记录，你的说法就是假的"）；按 App 场景名区分（微信拉黑能力/QQ拉黑能力/短信拉黑能力）
+- 修复二（拉黑区间）：BlockEntry 新增 byUserAt/byUserUntil/byCharAt/byCharUntil + byUserHist/byCharHist（解除后重新拉黑时旧周期归档）；setUserBlock/applyCharBlockAction/acceptBlockReq/rejectBlockReq 全部写入区间；新增 blockCoversAt(b,dir,t) 区间判定（当前拉黑=at 起恒标+hist 区间；已解除=仅区间内标；旧数据无 at 视为 0 兼容旧行为）；saveBlock empty 判断纳入新字段
+- 修复三（气泡标记历史规则）：wechat/qq/chat 三处 blockSideOf 改用 blockCoversAt（me 气泡读 byChar 区间、peer 气泡读 byUser 区间）——拉黑前消息不标、拉黑期间消息恒标（解除后不消失）、解除后新消息不标；拒收行随 blockSideOf 走同一规则
+- E2E 实测矩阵（mock-llm:4100 + agent-browser 390×844，请求体落 /tmp/mock-llm-requests.log 断言）：T1 无状态能力声明注入 ✓；T2 mock 回复带[拉黑]→系统消息"你已被「榴莲」拉黑"+kv byChar/byCharAt 写入 ✓；T2b 拉黑后用户消息 iconsMe=1+拒收行=1+下轮 system 注入 byChar 段 ✓；T3 设置开关拉黑 AI→byUser/byUserAt+系统消息"你已拉黑「榴莲」" ✓；T3b 互拉双图标(me2/peer1)+双向注入 ✓；T5 reload 后状态/图标/区间全保留 ✓；T6 AI[解除拉黑]→byCharUntil 写入+区间内图标保留+新消息不标 ✓；T7 QQ 能力声明+拉黑动作+跨 App 隔离（qq-block 与 wx-block 互不影响）✓；T8 信息 App 能力声明+开关拉黑+AI 气泡图标+byUser 注入 ✓；T9 用户场景完整复现（"你把我拉黑吧"→AI 拉黑→解除→拉黑期间消息图标保留）✓
+- 回归确认：wx-group/qq-group 零引用拉黑状态（群聊独立不破坏）；applyCharBlockAction 的 request 前置条件/冷却/上限逻辑未动；测试后已清空三个 App 的 block 键并恢复 seed 基线（本次 bug 报告的混淆源之一即上轮审计残留的 byUser:true/reqCount:3 状态）
+- 质量门禁：bunx tsc --noEmit 0 错误、bun run lint 通过、dev.log 无异常
+
+Stage Summary:
+- 改动文件：src/lib/ios/block-state.ts（区间字段+blockCoversAt+能力声明注入）、src/components/apps/wechat.tsx / qq.tsx / chat.tsx（blockSideOf 改区间判定，各 1 处）
+- 用户 5 大症状全部闭环：AI 说拉黑必写状态（能力声明强制标记）→ 双方向状态区分（byUser/byChar 本就独立、现在 AI 侧真的会写入）→ 持久化（kv 本就落盘，实测 reload 保留）→ 双向红色感叹号（拉黑期间/之后发的消息带图标，历史区间规则精确）→ AI 感知（system 每轮现场注入对应方向状态段，实测请求体断言）
+- 边界说明：真实 AI 是否愿输出 [拉黑] 标记取决于模型 prompt 遵循度——机制链路（标记解析/状态写入/图标/感知）已实测全通，能力声明措辞已最强约束（"严禁只说不标"；mock 与真实模型走完全相同的解析与渲染路径）

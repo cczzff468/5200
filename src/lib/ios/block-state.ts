@@ -11,6 +11,12 @@
  * - 持久化在 IndexedDB kv store（idb-kv 内存同步读 + 异步写穿），重启 App 后保留。
  * - 角色侧行为：被拉黑时可通过标记 [申请解除拉黑:理由] 发起「解除申请卡片」，用户同意/拒绝；
  *   角色可主动 [拉黑] / [解除拉黑]，所有状态变更都生成系统消息。
+ * - 无拉黑状态时 system 也会注入「拉黑能力声明」（buildBlockPromptBlock）：告知角色可以
+ *   输出 [拉黑]/[解除拉黑] 标记、且说到必须做到（只在嘴上说拉黑而不输出标记 = 系统不记录 = 说话是假的），
+ *   这是「角色说拉黑就真的拉黑」的一致性保证。
+ * - 拉黑区间：每次拉黑记录开始时间（byUserAt/byCharAt），解除时记录结束时间（Until）；
+ *   解除后重新拉黑会把旧周期归档进 Hist。气泡拉黑图标按「消息时间是否落在拉黑区间内」显示——
+ *   拉黑前的历史消息不标、拉黑期间发的消息恒标（解除后也不消失）、解除后新消息不标。
  */
 
 import { kvGet, kvSet, kvDel } from './idb-kv';
@@ -21,12 +27,30 @@ export type BlockApp = 'wx' | 'qq' | 'sms';
 /** 各 App 的场景名（system 注入用） */
 export const BLOCK_CHANNEL: Record<BlockApp, string> = { wx: '微信', qq: 'QQ', sms: '短信' };
 
+/** 一段已结束（或当前进行中）的拉黑区间 [at, until)；until 缺省 = 仍在拉黑中（仅 Hist 归档外使用） */
+export interface BlockSpan {
+  at: number;
+  until?: number;
+}
+
 /** 单个会话的拉黑状态（全部字段可选，空对象 = 无任何拉黑关系） */
 export interface BlockEntry {
   /** 用户拉黑了角色 */
   byUser?: boolean;
   /** 角色拉黑了用户 */
   byChar?: boolean;
+  /** 当前这轮「用户拉黑角色」的开始时间（气泡图标区间判定用） */
+  byUserAt?: number;
+  /** 最近一轮「用户拉黑角色」的结束时间（解除拉黑时写入；进行中无值） */
+  byUserUntil?: number;
+  /** 往期已结束的「用户拉黑角色」区间（解除后重新拉黑时归档；图标按区间保留） */
+  byUserHist?: BlockSpan[];
+  /** 当前这轮「角色拉黑用户」的开始时间 */
+  byCharAt?: number;
+  /** 最近一轮「角色拉黑用户」的结束时间（解除时写入；进行中无值） */
+  byCharUntil?: number;
+  /** 往期已结束的「角色拉黑用户」区间 */
+  byCharHist?: BlockSpan[];
   /** 待处理的解除申请理由（有值 = 角色发起的申请正等用户处理） */
   reqReason?: string;
   /** 申请发起时间 */
@@ -46,9 +70,27 @@ const blockKey = (app: BlockApp, contactId: string) => `${app}-block:${contactId
 
 function normalize(v: unknown): BlockEntry {
   const e = (v && typeof v === 'object' ? v : {}) as BlockEntry;
+  const num = (x: unknown): number | undefined => (typeof x === 'number' && isFinite(x) ? x : undefined);
+  const span = (x: unknown): BlockSpan | null => {
+    const s = (x && typeof x === 'object' ? x : {}) as Partial<BlockSpan>;
+    const at = num(s.at);
+    if (at === undefined) return null;
+    return { at, until: num(s.until) };
+  };
+  const spans = (x: unknown): BlockSpan[] | undefined => {
+    if (!Array.isArray(x)) return undefined;
+    const arr = x.map(span).filter((s): s is BlockSpan => s !== null);
+    return arr.length ? arr : undefined;
+  };
   return {
     byUser: e.byUser === true || undefined,
     byChar: e.byChar === true || undefined,
+    byUserAt: num(e.byUserAt),
+    byUserUntil: num(e.byUserUntil),
+    byUserHist: spans(e.byUserHist),
+    byCharAt: num(e.byCharAt),
+    byCharUntil: num(e.byCharUntil),
+    byCharHist: spans(e.byCharHist),
     reqReason: typeof e.reqReason === 'string' && e.reqReason.trim() ? e.reqReason.trim().slice(0, 80) : undefined,
     reqAt: typeof e.reqAt === 'number' ? e.reqAt : undefined,
     rejectedAt: typeof e.rejectedAt === 'number' ? e.rejectedAt : undefined,
@@ -68,7 +110,11 @@ export function loadBlock(app: BlockApp, contactId: string): BlockEntry {
 /** 写某会话的拉黑状态；entry 为空对象时删除键（保持存储干净） */
 export function saveBlock(app: BlockApp, contactId: string, entry: BlockEntry): BlockEntry {
   const n = normalize(entry);
-  const empty = !n.byUser && !n.byChar && !n.reqReason && !n.reqAt && !n.rejectedAt && !n.reqCount;
+  const empty =
+    !n.byUser && !n.byChar &&
+    !n.byUserAt && !n.byUserUntil && !n.byUserHist &&
+    !n.byCharAt && !n.byCharUntil && !n.byCharHist &&
+    !n.reqReason && !n.reqAt && !n.rejectedAt && !n.reqCount;
   try {
     if (empty) kvDel(blockKey(app, contactId));
     else kvSet(blockKey(app, contactId), n);
@@ -81,15 +127,37 @@ export function saveBlock(app: BlockApp, contactId: string, entry: BlockEntry): 
 /**
  * 用户设置/解除对角色的拉黑（设置页开关用）。
  * 只动 byUser，不影响 byChar（两个方向独立）；返回最新状态。
- * 解除拉黑 → 清空申请计数/拒绝记录；重新拉黑 → 新的防骚扰周期（计数归零）。
+ * 拉黑 → 记录开始时间（新周期）；解除 → 记录结束时间（区间保留供图标显示）+ 清空申请计数/拒绝记录；
+ * 重新拉黑 → 旧周期归档进 Hist、开新周期（计数归零）。
  */
 export function setUserBlock(app: BlockApp, contactId: string, blocked: boolean): BlockEntry {
   const cur = loadBlock(app, contactId);
   if (blocked) {
     if (cur.byUser) return cur; // 已是拉黑态：保留申请冷却/计数（防用开关重置骚扰防护）
-    return saveBlock(app, contactId, { byUser: true, byChar: cur.byChar });
+    const hist = [...(cur.byUserHist ?? [])];
+    if (cur.byUserAt !== undefined && cur.byUserUntil !== undefined) hist.push({ at: cur.byUserAt, until: cur.byUserUntil });
+    return saveBlock(app, contactId, {
+      ...cur,
+      byUser: true,
+      byUserAt: Date.now(),
+      byUserUntil: undefined,
+      byUserHist: hist.length ? hist : undefined,
+      reqReason: undefined,
+      reqAt: undefined,
+      rejectedAt: undefined,
+      reqCount: undefined,
+    });
   }
-  return saveBlock(app, contactId, { byChar: cur.byChar });
+  if (!cur.byUser) return cur; // 本来就没拉黑：幂等不动（不产生伪区间）
+  return saveBlock(app, contactId, {
+    ...cur,
+    byUser: undefined,
+    byUserUntil: Date.now(),
+    reqReason: undefined,
+    reqAt: undefined,
+    rejectedAt: undefined,
+    reqCount: undefined,
+  });
 }
 
 /**
@@ -108,11 +176,17 @@ export function applyCharBlockAction(
   const cur = loadBlock(app, contactId);
   if (kind === 'block') {
     if (cur.byChar) return { entry: cur, changed: false, reqCreated: false };
-    return { entry: saveBlock(app, contactId, { ...cur, byChar: true }), changed: true, reqCreated: false };
+    const hist = [...(cur.byCharHist ?? [])];
+    if (cur.byCharAt !== undefined && cur.byCharUntil !== undefined) hist.push({ at: cur.byCharAt, until: cur.byCharUntil });
+    return {
+      entry: saveBlock(app, contactId, { ...cur, byChar: true, byCharAt: Date.now(), byCharUntil: undefined, byCharHist: hist.length ? hist : undefined }),
+      changed: true,
+      reqCreated: false,
+    };
   }
   if (kind === 'unblock') {
     if (!cur.byChar) return { entry: cur, changed: false, reqCreated: false };
-    return { entry: saveBlock(app, contactId, { ...cur, byChar: undefined }), changed: true, reqCreated: false };
+    return { entry: saveBlock(app, contactId, { ...cur, byChar: undefined, byCharUntil: Date.now() }), changed: true, reqCreated: false };
   }
   // request：必须当前真的被用户拉黑，且没有还没处理的申请（避免连环申请刷屏）；
   // 被拒绝后有冷却窗口（冷却内静默忽略），拒绝次数达上限后彻底不再受理（新周期由用户重新拉黑开启）
@@ -130,21 +204,54 @@ export function applyCharBlockAction(
   };
 }
 
-/** 用户同意角色的解除申请：清除 byUser 与待处理申请（byChar 不受影响）；防骚扰计数一并清零 */
+/** 用户同意角色的解除申请：清除 byUser 与待处理申请（byChar 不受影响）；防骚扰计数一并清零；拉黑区间保留供图标显示 */
 export function acceptBlockReq(app: BlockApp, contactId: string): BlockEntry {
   const cur = loadBlock(app, contactId);
-  return saveBlock(app, contactId, { byChar: cur.byChar });
+  return saveBlock(app, contactId, {
+    ...cur,
+    byUser: undefined,
+    byUserUntil: Date.now(),
+    reqReason: undefined,
+    reqAt: undefined,
+    rejectedAt: undefined,
+    reqCount: undefined,
+  });
 }
 
 /** 用户拒绝角色的解除申请：拉黑保持，记录拒绝时间与累计次数（角色要知道被拒绝），清掉待处理申请 */
 export function rejectBlockReq(app: BlockApp, contactId: string): BlockEntry {
   const cur = loadBlock(app, contactId);
   return saveBlock(app, contactId, {
+    ...cur,
     byUser: true,
-    byChar: cur.byChar,
+    reqReason: undefined,
+    reqAt: undefined,
     rejectedAt: Date.now(),
     reqCount: (cur.reqCount ?? 0) + 1,
   });
+}
+
+function spanCovers(h: BlockSpan[] | undefined, t: number): boolean {
+  if (!h) return false;
+  return h.some((r) => t >= r.at && (r.until === undefined || t < r.until));
+}
+
+/**
+ * 气泡拉黑图标判定：t（消息时间）是否落在指定方向的拉黑区间内。
+ * - 拉黑进行中：本周期开始（at）之后的消息恒显示（含解除后重新拉黑的往期区间）；
+ *   旧数据无 at 时视为 0（全部显示，与旧行为一致）。
+ * - 已解除：只显示落在任一已记录区间 [at, until) 内的消息——拉黑前的历史不标、
+ *   拉黑期间的标记解除后不消失、解除后新消息不标。
+ */
+export function blockCoversAt(b: BlockEntry, dir: 'byUser' | 'byChar', t: number): boolean {
+  if (dir === 'byUser') {
+    if (b.byUser) return t >= (b.byUserAt ?? 0) || spanCovers(b.byUserHist, t);
+    if (b.byUserUntil !== undefined && t >= (b.byUserAt ?? 0) && t < b.byUserUntil) return true;
+    return spanCovers(b.byUserHist, t);
+  }
+  if (b.byChar) return t >= (b.byCharAt ?? 0) || spanCovers(b.byCharHist, t);
+  if (b.byCharUntil !== undefined && t >= (b.byCharAt ?? 0) && t < b.byCharUntil) return true;
+  return spanCovers(b.byCharHist, t);
 }
 
 /** AI 拉黑类动作标记 → applyCharBlockAction 的动作种类 */
@@ -156,15 +263,26 @@ export function blockActionKindOf(a: RichAction): 'block' | 'unblock' | 'request
 }
 
 /**
- * 双向拉黑的 system 注入块（每轮请求现场读取，无任何拉黑状态时返回空串不占 token）：
- * - 告知角色当前的拉黑关系（谁拉黑了谁）、拉黑不拦截消息这一事实；
- * - 允许语气态度按人设变化；给出对应方向的标记（被拉黑 → 可申请解除；拉黑别人 → 可解除）。
+ * 双向拉黑的 system 注入块（每轮请求现场读取）：
+ * - 无拉黑状态时也注入「拉黑能力声明」（短，几行）：告知角色可以真的拉黑/解除拉黑用户，
+ *   且说到必须做到——决定拉黑就必须输出 [拉黑] 标记，只嘴上说而系统不记录 = 说话是假的。
+ *   这是「角色说拉黑就真的拉黑」的一致性保证（没有这段，角色只会口头配合，状态永远写不进去）。
+ * - 有拉黑状态时注入当前关系（谁拉黑了谁）、拉黑不拦截消息这一事实；
+ *   允许语气态度按人设变化；给出对应方向的标记（被拉黑 → 可申请解除；拉黑别人 → 可解除）。
  */
 export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName: string): string {
   const b = loadBlock(app, contactId);
-  if (!b.byUser && !b.byChar) return '';
   const ch = BLOCK_CHANNEL[app];
   const user = userName || '用户';
+  if (!b.byUser && !b.byChar) {
+    return [
+      `【${ch}拉黑能力】你可以真的拉黑 / 解除拉黑 ${user}（系统会记录状态并生成提示）：`,
+      `- 当你决定拉黑 ${user}（包括 TA 要求你拉黑 TA、而你决定照做）时，必须在回复中单独输出一行 [拉黑]，系统会立即记录并生成提示。`,
+      `- 严禁只在文字上说"拉黑了"却不输出 [拉黑] 标记——那样系统不会记录，你的说法就是假的。`,
+      `- 已经拉黑后想恢复关系时，单独输出一行 [解除拉黑]。`,
+      `- 只在对话真实发展到这一步时才输出上述标记；没有这个意图时不要输出。`,
+    ].join('\n');
+  }
   const lines: string[] = [];
   // 防骚扰状态：冷却中 / 次数达上限 → 明确告诉角色别再发申请（硬性拦截在 applyCharBlockAction 里）
   const inCooldown = b.byUser && b.rejectedAt !== undefined && Date.now() - b.rejectedAt < BLOCK_REQ_COOLDOWN_MS;

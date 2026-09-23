@@ -49,6 +49,7 @@ import {
   acceptBlockReq,
   applyCharBlockAction,
   blockActionKindOf,
+  blockCoversAt,
   buildBlockPromptBlock,
   loadBlock,
   rejectBlockReq,
@@ -879,11 +880,12 @@ function ChatView({
 
   /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——不管是谁拉黑，被标记一方气泡都带图标：
    *  对方拉黑了我 → 我的气泡标记；我拉黑了对方 → 对方的气泡标记；互拉时两侧同时显示；
+   *  按拉黑区间判定：拉黑前的历史消息不标，拉黑期间发的消息恒标（解除后也不消失），解除后新消息不标；
    *  系统提示行/申请卡片/撤回行不显示 */
   const blockSideOf = (m: ChatMsg): 'me' | 'peer' | null => {
     if (m.recalled || m.sys || m.blkreq) return null;
-    if (m.role === 'user' && blk.byChar) return 'me';
-    if (m.role === 'assistant' && blk.byUser) return 'peer';
+    if (m.role === 'user' && blockCoversAt(blk, 'byChar', m.time)) return 'me';
+    if (m.role === 'assistant' && blockCoversAt(blk, 'byUser', m.time)) return 'peer';
     return null;
   };
 
