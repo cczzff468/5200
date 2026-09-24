@@ -1508,6 +1508,8 @@ function ChatView({
             setStickersOnState(v);
           }}
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
+          blockedByUser={blk.byUser === true}
+          onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
         />
       )}
 

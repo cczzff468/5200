@@ -3556,6 +3556,8 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 加号面板展开（输入框保持在面板上方） */
   const [plusOpen, setPlusOpen] = useState(false);
+  /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
+  const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
   const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | null>(null);
   /** 原生相机 / 相册隐藏 input：加号面板「相机」「图片」直接调用手机能力（无自建页面） */
@@ -5282,7 +5284,16 @@ function ChatPage({
             <input
               data-testid="wx-chat-input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setInput(v);
+                // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+                if (!selfChat && v.endsWith('@')) {
+                  setPlusOpen(false);
+                  setStickerOpen(false);
+                  setAtOpen(true);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void send();
               }}
@@ -5336,6 +5347,32 @@ function ChatPage({
         </div>
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
         {plusOpen && <PlusPanel onAction={handlePlusAction} />}
+        {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
+        {atOpen && !selfChat && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={() => setAtOpen(false)} aria-hidden="true" />
+            <div className="absolute bottom-full left-3 z-40 mb-1 w-[220px] overflow-hidden rounded-[12px] border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-[#1E1E1E]">
+              <div className="border-b border-black/[0.05] px-3 py-2 text-[11px] text-black/40 dark:border-white/[0.06] dark:text-white/40">
+                @ 联系人（被 @ 的优先回复）
+              </div>
+              <button
+                type="button"
+                data-testid={`wx-chat-at-${peer.id}`}
+                onClick={() => {
+                  setAtOpen(false);
+                  setInput((v) => {
+                    const base = v.endsWith('@') ? v.slice(0, -1) : v;
+                    return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${peer.name} `;
+                  });
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <WxAvatar src={peer.avatar} alt={peer.name} size={28} />
+                <span className="min-w-0 flex-1 truncate text-[14px]">{peer.name}</span>
+              </button>
+            </div>
+          </>
+        )}
         </>
         )}
       </div>
