@@ -40,6 +40,7 @@ export default function PhoneShell() {
   const screenOff = useUI((s) => s.screenOff);
   const pressPower = useUI((s) => s.pressPower);
   const loaded = useSettings((s) => s.loaded);
+  const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
   const wallpaperStyle = useWallpaperStyle();
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
   const barLight = useLightForeground('bottom');
@@ -163,8 +164,42 @@ export default function PhoneShell() {
           dark ? 'dark' : ''
         }`}
       >
-        {/* 壁纸层 */}
-        <div className="absolute inset-0" style={wallpaperStyle} aria-hidden="true" />
+        {/* 壁纸层：自定义壁纸双层绘制——底层 cover+模糊+放大（色彩延伸铺满全屏），
+            上层 contain 完整显示原图不裁切（宽高比与屏幕一致时两层重合、视觉与 cover 一致；
+            不一致时屏幕边缘是模糊自延伸而非被截断的设计元素，消除“分割线/套框”观感且不留白边）。
+            预设壁纸保持单层 cover。全部用 -inset-[2px] 四周超采样：
+            超出部分被壳层 overflow-hidden 裁掉，任何缩放/像素比下四边都不会露出底色细缝 */}
+        {customWallpaperUrl ? (
+          <>
+            <div
+              aria-hidden="true"
+              className="absolute -inset-[2px]"
+              style={{
+                backgroundColor: '#1c1c1e',
+                backgroundImage: `url(${customWallpaperUrl})`,
+                // 拉伸铺满而非 cover：模糊后形变不可见，但边缘颜色与原图四边一致，
+                // 与上层 contain 前景衔接无色差（cover 会裁到中间色导致上下带异色）
+                backgroundSize: '100% 100%',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+                filter: 'blur(36px)',
+                transform: 'scale(1.1)',
+              }}
+            />
+            <div
+              aria-hidden="true"
+              className="absolute -inset-[2px]"
+              style={{
+                backgroundImage: `url(${customWallpaperUrl})`,
+                backgroundSize: 'contain',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+              }}
+            />
+          </>
+        ) : (
+          <div className="absolute -inset-[2px]" style={wallpaperStyle} aria-hidden="true" />
+        )}
 
         {/* 主屏幕 */}
         <HomeScreen />

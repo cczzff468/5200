@@ -571,6 +571,7 @@ export function resolveWallpaperStyle(presetId: string, customUrl: string | null
       backgroundImage: `url(${customUrl})`,
       backgroundSize: 'cover',
       backgroundPosition: 'center',
+      backgroundRepeat: 'no-repeat',
     };
   }
   const preset = WALLPAPER_PRESETS.find((w) => w.id === presetId) ?? WALLPAPER_PRESETS[0];
@@ -584,6 +585,7 @@ export function resolveWallpaperStyle(presetId: string, customUrl: string | null
       backgroundImage: `url(${url})`,
       backgroundSize: 'cover',
       backgroundPosition: 'center',
+      backgroundRepeat: 'no-repeat',
     };
   }
   return { backgroundColor: preset.base, backgroundImage: preset.css };

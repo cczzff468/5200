@@ -39,6 +39,8 @@ export default function LockScreen() {
   const battery = useBattery();
   // 锁屏壁纸（主题里可独立设置，未设置时跟随主屏幕）
   const { style: wallpaperStyle, light: presetLight } = useLockWallpaper();
+  // 锁屏自定义壁纸 URL：双层绘制用（与主屏同款防裁切策略）
+  const lockCustomUrl = useSettings((s) => s.lockCustomWallpaperUrl);
 
   const [mode, setMode] = useState<'lock' | 'passcode' | 'resetNew' | 'resetConfirm'>('lock');
   const [errText, setErrText] = useState('');
@@ -208,8 +210,40 @@ export default function LockScreen() {
       role="dialog"
       aria-label="锁屏"
     >
-      {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸） */}
-      <div className="absolute inset-0" style={wallpaperStyle} aria-hidden="true" />
+      {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸）。
+          自定义壁纸双层绘制（与主屏同款）：底层 cover+模糊+放大铺满，上层 contain 完整不裁切；
+          预设单层 cover。全部 -inset-[2px] 超采样防边缘露底色细缝 */}
+      {lockCustomUrl ? (
+        <>
+          <div
+            aria-hidden="true"
+            className="absolute -inset-[2px]"
+            style={{
+              backgroundColor: '#1c1c1e',
+              backgroundImage: `url(${lockCustomUrl})`,
+              // 拉伸铺满而非 cover：模糊后形变不可见，但边缘颜色与原图四边一致，
+              // 与上层 contain 前景衔接无色差（cover 会裁到中间色导致上下带异色）
+              backgroundSize: '100% 100%',
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat',
+              filter: 'blur(36px)',
+              transform: 'scale(1.1)',
+            }}
+          />
+          <div
+            aria-hidden="true"
+            className="absolute -inset-[2px]"
+            style={{
+              backgroundImage: `url(${lockCustomUrl})`,
+              backgroundSize: 'contain',
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat',
+            }}
+          />
+        </>
+      ) : (
+        <div className="absolute -inset-[2px]" style={wallpaperStyle} aria-hidden="true" />
+      )}
 
       {/* initial={false}：冷启动首挂载不走入场淡入（否则刚打开网页时钟/小组件会「闪一下」才浮现）；
           之后锁屏 ↔ 密码键盘切换仍照常播淡入淡出 */}
