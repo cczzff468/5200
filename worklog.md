@@ -6485,3 +6485,24 @@ Stage Summary:
 - 本地 main（D1-D4 全部修复）已成为 GitHub 远程 main
 - 远程 9/23 平行版本保留在 backup/remote-main-0923 分支，可随时找回
 - 安全提醒：PAT 已在聊天中暴露且嵌入 remote URL，建议用户在 GitHub 上轮换该 token
+
+---
+Task ID: 6
+Agent: main (Z.ai Code)
+Task: 移除自定义壁纸四周的模糊延伸垫（用户：「不要模糊延伸垫在四周了」）
+
+Work Log:
+- 定位：自定义壁纸为三层绘制（PhoneShell.tsx + LockScreen.tsx 同款）——①不透明拉伸底垫、②模糊延伸层（blur(36px)+scale(1.1)，D4 引入用于承接 blur 淡出环）、③contain 完整前景
+- 修改：两文件各删除第②层模糊延伸 div，三层改两层；四周延伸带改由①的锐利拉伸原图承接（比例不一致时可见轻微拉伸形变，但无模糊光晕）；同步更新注释
+- tsc + lint 零错误
+- 实测（agent-browser，360×800 视口，上传 800×800 测试壁纸制造明显延伸带）：
+  主屏四缘像素采样全为壁纸边框黄 (255,255,0)，无黑带（D4 不回退）；
+  红→青带边界 1-2px 内完成过渡（旧 blur 层会产生 ~70px 渐变带）；contain 黄框周围零颜色混合；
+  锁屏（独立锁屏壁纸走 themes 应用上传）同样验证通过，全部色带与源图像素级一致；
+  上滑解锁正常、拍立得三框四角完整（D4 不回退）、小组件无遮挡（D3 不回退）
+- errors/console/dev.log 零错误
+
+Stage Summary:
+- 自定义壁纸三层→两层：删除 blur(36px)+scale(1.1) 模糊延伸层，四周改为锐利拉伸原图延伸
+- 涉及文件：src/components/ios/PhoneShell.tsx、src/components/ios/LockScreen.tsx
+- 权衡：锐利拉伸在壁纸与延伸带衔接处有轻微形变观感（原 blur 的存在也掩盖了衔接），若用户不接受可再换 cover 裁切或纯色底

@@ -164,13 +164,11 @@ export default function PhoneShell() {
           dark ? 'dark' : ''
         }`}
       >
-        {/* 壁纸层：自定义壁纸三层绘制——
-            ① 不透明底垫：拉伸铺满原图（无滤镜无变换，元素边缘即原图边缘色，壳内绝对不透明）；
-            ② 模糊层：同样拉伸 + blur(36px) + scale(1.1) 作环境色延伸。blur 会在元素绘制边缘
-               ~2×半径内拉入透明度（scale(1.1) 只能把淡出环推出 ~20px），若直接叠在黑壳上，
-               屏幕四缘会出现一圈「黑黑的」渐变暗带（360/390 视口实测均在）——
-               有了 ① 的底垫，淡出环透出的是同图拉伸色而非黑底，暗带消失且边缘色保真；
-            ③ contain 前景：完整显示原图不裁切（宽高比与屏幕一致时与底垫重合、视觉与 cover 一致；
+        {/* 壁纸层：自定义壁纸两层绘制——
+            ① 不透明底垫：拉伸铺满原图（无滤镜无变换，元素边缘即原图边缘色，壳内绝对不透明）。
+               比例不一致时四周延伸带为锐利原图——用户要求不做模糊环境色延伸（旧版 blur(36px)
+               层会在壁纸四周垫一圈模糊光晕，已移除）；
+            ② contain 前景：完整显示原图不裁切（宽高比与屏幕一致时与底垫重合、视觉与 cover 一致；
                不一致时屏幕边缘是原图边缘色的延伸而非被截断的设计元素，消除「分割线/套框」观感）。
             预设壁纸保持单层 cover。前景/底垫 -inset-[2px] 超采样：超出部分被壳层
             overflow-hidden 裁掉，任何缩放/像素比下四边都不会露出底色细缝 */}
@@ -187,18 +185,6 @@ export default function PhoneShell() {
                 backgroundSize: '100% 100%',
                 backgroundPosition: 'center',
                 backgroundRepeat: 'no-repeat',
-              }}
-            />
-            <div
-              aria-hidden="true"
-              className="absolute -inset-[2px]"
-              style={{
-                backgroundImage: `url(${customWallpaperUrl})`,
-                backgroundSize: '100% 100%',
-                backgroundPosition: 'center',
-                backgroundRepeat: 'no-repeat',
-                filter: 'blur(36px)',
-                transform: 'scale(1.1)',
               }}
             />
             <div
