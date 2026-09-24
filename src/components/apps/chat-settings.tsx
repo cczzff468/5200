@@ -143,6 +143,8 @@ export function ChatSettingsPage({
   onOpenSearch,
   onOpenBg,
   onOpenPeerProfile,
+  blockedByUser,
+  onToggleBlock,
 }: {
   variant: ChatSettingsVariant;
   /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
@@ -188,6 +190,10 @@ export function ChatSettingsPage({
   onOpenBg: () => void;
   /** 点击信息卡片 → 进入联系人详细界面（QQ 好友资料页 / 微信好友详情页）；不传则卡片不可点 */
   onOpenPeerProfile?: () => void;
+  /** 双向拉黑：当前是否已拉黑对方（不传 = 该会话不支持拉黑，隐藏开关） */
+  blockedByUser?: boolean;
+  /** 拉黑开关切换（宿主负责持久化 + 生成系统消息） */
+  onToggleBlock?: (v: boolean) => void;
 }) {
   const wx = variant === 'wx';
 
@@ -438,6 +444,27 @@ export function ChatSettingsPage({
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
           挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
         </p>
+
+        {/* 拉黑：双向拉黑开关（拉黑不拦截消息，只是关系状态；对方会知道被拉黑，AI 可申请解除） */}
+        {onToggleBlock && (
+          <>
+            <div className={`${cardCls} mt-3 overflow-hidden`}>
+              <div className={`flex items-center justify-between ${rowCls}`}>
+                <span>拉黑</span>
+                <ChatToggle
+                  on={blockedByUser === true}
+                  onChange={onToggleBlock}
+                  accent={accent}
+                  testId={`${testPrefix}-settings-block`}
+                  label="拉黑"
+                />
+              </div>
+            </div>
+            <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+              开启后你将拉黑「{peerName}」：你们仍可以互相发消息，但对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
+            </p>
+          </>
+        )}
 
         {/* 备注编辑弹窗 */}
         {remarkOpen && (
@@ -1140,6 +1167,8 @@ export function SmsChatSettingsPage({
   onToggleTimeAware,
   onToggleStickers,
   onOpenWorldBooks,
+  blockedByUser,
+  onToggleBlock,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1164,6 +1193,10 @@ export function SmsChatSettingsPage({
   onToggleStickers: (v: boolean) => void;
   /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
   onOpenWorldBooks?: () => void;
+  /** 双向拉黑：当前是否已拉黑对方（不传 = 该会话不支持拉黑，隐藏开关） */
+  blockedByUser?: boolean;
+  /** 拉黑开关切换（宿主负责持久化 + 生成系统消息） */
+  onToggleBlock?: (v: boolean) => void;
 }) {
   const t = translateTokens('sms');
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
@@ -1305,6 +1338,27 @@ export function SmsChatSettingsPage({
             </div>
             <p className={t.captionCls}>
               挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
+            </p>
+          </>
+        )}
+
+        {/* 拉黑：双向拉黑开关（拉黑不拦截消息，只是关系状态；对方会知道被拉黑，AI 可申请解除） */}
+        {onToggleBlock && (
+          <>
+            <div className={`${t.cardCls} mt-3`}>
+              <div className={`flex items-center justify-between ${t.rowCls}`}>
+                <span>拉黑</span>
+                <ChatToggle
+                  on={blockedByUser === true}
+                  onChange={onToggleBlock}
+                  accent="#34C759"
+                  testId="sms-settings-block"
+                  label="拉黑"
+                />
+              </div>
+            </div>
+            <p className={t.captionCls}>
+              开启后你将拉黑「{peerName}」：你们仍可以互相发消息，但对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
             </p>
           </>
         )}

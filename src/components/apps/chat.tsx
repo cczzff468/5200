@@ -43,6 +43,18 @@ import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLab
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { stripEmojiText } from '@/lib/emoji';
+import { extractRichActionParts } from '@/lib/chat-rich';
+import {
+  acceptBlockReq,
+  applyCharBlockAction,
+  blockActionKindOf,
+  blockCoversAt,
+  buildBlockPromptBlock,
+  loadBlock,
+  rejectBlockReq,
+  setUserBlock,
+  type BlockEntry,
+} from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
@@ -79,6 +91,74 @@ interface ChatMsg {
   quote?: { name: string; content: string };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
+  /** 系统提示行（拉黑/解除拉黑等状态变更；居中灰字胶囊，不参与上下文） */
+  sys?: { text: string };
+  /** 申请解除拉黑卡片（角色被拉黑后发起）：status pending=待处理 accepted=已同意 rejected=已拒绝 */
+  blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected' };
+}
+
+/** 申请解除拉黑卡片（角色被用户拉黑后发起；同意→解除拉黑，拒绝→保持并让角色知道） */
+function SmsBlockReqCard({
+  name,
+  avatar,
+  reason,
+  status,
+  onAccept,
+  onReject,
+}: {
+  name: string;
+  avatar: string | null;
+  reason: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  onAccept: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <div
+      data-testid="sms-blockreq-card"
+      className="w-fit max-w-full rounded-[18px] rounded-bl-[5px] bg-muted px-3.5 py-2.5"
+      aria-label={`${name}申请解除拉黑`}
+    >
+      <div className="flex items-center gap-2">
+        {avatar ? (
+          <img src={avatar} alt="" className="h-[34px] w-[34px] shrink-0 rounded-full object-cover" />
+        ) : (
+          <DefaultAvatar size={34} />
+        )}
+        <div className="min-w-0">
+          <p className="truncate text-[14px] font-semibold leading-tight">{name}</p>
+          <p className="mt-0.5 text-[12px] leading-tight text-muted-foreground">申请解除拉黑</p>
+        </div>
+      </div>
+      {reason && (
+        <p className="mt-2 rounded-[10px] bg-black/[0.04] px-2 py-1.5 text-[13px] leading-[1.5] text-black/70 dark:bg-white/[0.08] dark:text-white/70">「{reason}」</p>
+      )}
+      {status === 'pending' ? (
+        <div className="mt-2.5 flex gap-2">
+          <button
+            type="button"
+            data-testid="sms-blockreq-reject"
+            aria-label={`拒绝${name}的解除拉黑申请`}
+            onClick={onReject}
+            className="h-8 flex-1 rounded-full bg-black/[0.06] text-[13px] text-black/70 transition active:opacity-70 dark:bg-white/10 dark:text-white/70"
+          >
+            拒绝
+          </button>
+          <button
+            type="button"
+            data-testid="sms-blockreq-accept"
+            aria-label={`同意${name}的解除拉黑申请`}
+            onClick={onAccept}
+            className="h-8 flex-1 rounded-full bg-[#007AFF] text-[13px] font-medium text-white transition active:opacity-80"
+          >
+            同意
+          </button>
+        </div>
+      ) : (
+        <p className="mt-2 text-[12px] text-black/35 dark:text-white/35">{status === 'accepted' ? '已同意，拉黑已解除' : '已拒绝'}</p>
+      )}
+    </div>
+  );
 }
 
 /** 小助手（内置 AI 联系人，回复由 /api/chat 按用户配置的 OpenAI 兼容接口流式提供） */
@@ -515,6 +595,8 @@ function ChatView({
   }, [sessionKey]);
   /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
   const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+  /** 双向拉黑状态（仅联系人会话；小助手会话无角色 ID 不参与；kv 持久化按联系人隔离） */
+  const [blk, setBlk] = useState<BlockEntry>(() => (wbContactId ? loadBlock('sms', wbContactId) : {}));
   const [wbOpen, setWbOpen] = useState(false);
   const [wbBound, setWbBound] = useState<string[]>(() => (wbContactId ? getBoundBookIds(wbContactId) : []));
   useEffect(() => {
@@ -609,7 +691,7 @@ function ChatView({
 
   /** AI 回合：把整轮流式请求交给全局 store（userMsg 为 null = 分句发送批次触发，消息早已入列）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
-  const startAiTurn = (userMsg: ChatMsg | null) => {
+  const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string) => {
     const base = userMsg ? [...msgs, userMsg] : msgs;
     // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知）
     const history = base
@@ -667,6 +749,8 @@ function ChatView({
       charBlock,
       memoryBlock,
       momentsBlock,
+      // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，不拦截消息）
+      wbContactId ? buildBlockPromptBlock('sms', wbContactId, profileName) : '',
       timeBlock,
       stickersOn ? '' : STICKER_OFF_RULE,
       ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
@@ -682,6 +766,7 @@ function ChatView({
       sysContent ? [{ role: 'system' as const, content: sysContent }, ...history] : history,
       wbBlocks ?? WB_EMPTY_BLOCKS,
     );
+    if (sysEvent) payload.push({ role: 'user', content: sysEvent });
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -696,22 +781,58 @@ function ChatView({
           ]);
           return;
         }
-        // 按边界（分隔标记/换行/句末标点，一句一条）切成多条消息：一条消息一个气泡、一条记录，各自带 createdAt（像真人连发）
-        // 表情包开关关闭时：先去掉表情包类标记残留（信息端本就不解析标记），再硬性剥除 emoji（prompt 禁令之外的双保险）
-        const segs = splitReplySegments(content, replyCount > 1).map((seg) =>
-          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
-        );
+        // 1) 先按出现顺序切成「文字块 + 拉黑动作」交错片段：拉黑类标记就地应用（改状态 + 系统提示行/申请卡片），
+        //    保证落盘顺序与流式期间用户看到的顺序一致；信息端无红包/转账，其他动作标记忽略
+        // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；表情包开关关闭时剥除 emoji
+        const peerLabel = peer.name ?? peer.title;
+        const saved: ChatMsg[] = [];
         let t = startedAt;
-        const saved: ChatMsg[] = segs.map((seg, i) => {
-          const msg: ChatMsg = {
-            id: i === 0 ? aiMsgId : `${aiMsgId}-${i}`,
-            role: 'assistant',
-            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
-            time: t,
-          };
-          t += 600 + Math.floor(Math.random() * 600);
-          return msg;
-        });
+        let segIdx = 0;
+        const pushTextSegs = (text: string) => {
+          const segs = splitReplySegments(text, replyCount > 1).map((seg) =>
+            stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
+          );
+          for (const seg of segs) {
+            const msg: ChatMsg = {
+              id: segIdx === 0 ? aiMsgId : `${aiMsgId}-${segIdx}`,
+              role: 'assistant',
+              content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
+              time: t,
+            };
+            t += 600 + Math.floor(Math.random() * 600);
+            segIdx += 1;
+            saved.push(msg);
+          }
+        };
+        for (const part of extractRichActionParts(content)) {
+          if (part.type === 'action') {
+            const bk = blockActionKindOf(part.action);
+            if (bk && wbContactId) {
+              const res = applyCharBlockAction('sms', wbContactId, bk, part.action.targetId);
+              setBlk(res.entry);
+              if (res.changed && bk === 'block') {
+                saved.push({ id: `${aiMsgId}-sys-${segIdx}`, role: 'assistant', content: '', time: t, sys: { text: `你已被「${peerLabel}」拉黑` } });
+                t += 1;
+                segIdx += 1;
+              } else if (res.changed && bk === 'unblock') {
+                saved.push({ id: `${aiMsgId}-sys-${segIdx}`, role: 'assistant', content: '', time: t, sys: { text: `「${peerLabel}」解除了对你的拉黑` } });
+                t += 1;
+                segIdx += 1;
+              } else if (res.reqCreated && bk === 'request') {
+                saved.push({ id: `${aiMsgId}-blk-${segIdx}`, role: 'assistant', content: '', time: t, blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+                t += 1;
+                segIdx += 1;
+              }
+              continue;
+            }
+            continue; // 信息端无红包/转账动作
+          }
+          pushTextSegs(part.text);
+        }
+        // 整段空白且没有任何拉黑产出时不算有效回复，给兑底文案
+        if (saved.length === 0) {
+          saved.push({ id: aiMsgId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt });
+        }
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
         // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
@@ -732,6 +853,81 @@ function ChatView({
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+  };
+
+  // ---------------- 双向拉黑（仅联系人会话；小助手会话不参与） ----------------
+
+  /** 追加一条系统提示行（拉黑状态变更提示；居中灰字胶囊，不参与上下文） */
+  const pushSysMsg = (text: string) => {
+    setMsgs((prev) => [...prev, { id: uid(), role: 'assistant' as const, content: '', time: Date.now(), sys: { text } }]);
+  };
+
+  /** 设置页「拉黑」开关：持久化（kv，按联系人隔离）+ 生成系统消息；角色下一轮起通过 system 感知 */
+  const toggleBlockFromSettings = (v: boolean) => {
+    if (!wbContactId) return;
+    setBlk(setUserBlock('sms', wbContactId, v));
+    pushSysMsg(v ? `你已拉黑「${peer.name ?? peer.title}」` : `你已解除拉黑「${peer.name ?? peer.title}」`);
+  };
+
+  /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
+   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」 */
+  const resolveBlockReq = (m: ChatMsg, accept: boolean) => {
+    if (!wbContactId || m.blkreq?.status !== 'pending') return;
+    setMsgs((prev) => prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x)));
+    if (accept) {
+      setBlk(acceptBlockReq('sms', wbContactId));
+      pushSysMsg(`你同意了「${peer.name ?? peer.title}」的解除拉黑申请`);
+      startAiTurn(null, `（系统事件：对方同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`);
+    } else {
+      setBlk(rejectBlockReq('sms', wbContactId));
+      pushSysMsg(`你拒绝了「${peer.name ?? peer.title}」的解除拉黑申请`);
+      startAiTurn(null, `（系统事件：对方拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`);
+    }
+  };
+
+  /** 拉黑标记（红色 ! 圆点紧贴气泡——拉黑关系存续期间（任一方向），该期间内的双方气泡都带图标；
+   *  按拉黑区间判定：拉黑前的历史消息不标，拉黑期间发的消息恒标（解除后也不消失），解除后新消息不标；
+   *  系统提示行/申请卡片/撤回行不显示 */
+  const blockSideOf = (m: ChatMsg): 'me' | 'peer' | null => {
+    if (m.recalled || m.sys || m.blkreq) return null;
+    if (!blockCoversAt(blk, 'byUser', m.time) && !blockCoversAt(blk, 'byChar', m.time)) return null;
+    return m.role === 'user' ? 'me' : 'peer';
+  };
+
+  /** 拉黑图标渲染（红色 ! 圆点）：我的消息在气泡左侧、对方在气泡右侧（流式与落盘共用） */
+  const blockIconSpan = (side: 'me' | 'peer', testid: string) => (
+    <span
+      data-testid={testid}
+      aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
+      className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#FF3B30] text-[13px] font-bold leading-none text-white"
+    >
+      !
+    </span>
+  );
+
+  /** 红色 ! 圆点：紧贴气泡（流式与落盘消息共用同款样式） */
+  const blockedIconOf = (m: ChatMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
+    return blockIconSpan(side, side === 'me' ? 'sms-block-icon-me' : 'sms-block-icon-peer');
+  };
+
+  /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」区间内我的消息后面跟随（与图标判定解耦：
+   *  用户拉黑 AI 后自己的气泡也有图标，但不显示拒收文案），
+   *  居中半透明圆角胶囊（与系统提示行同款） */
+  const blockedLineOf = (m: ChatMsg) => {
+    if (m.recalled || m.sys || m.blkreq) return null;
+    if (m.role !== 'user' || !blockCoversAt(blk, 'byChar', m.time)) return null;
+    return (
+      <div className="mt-1 flex justify-center">
+        <span
+          data-testid="sms-block-line-me"
+          className="rounded-[6px] bg-black/[0.06] px-3 py-[4px] text-[12px] text-muted-foreground dark:bg-white/[0.08]"
+        >
+          消息已发出，但被对方拒收了。
+        </span>
+      </div>
+    );
   };
 
   const send = () => {
@@ -812,7 +1008,7 @@ function ChatView({
   const bubblePress = useBubbleLongPress((el) => {
     const mid = el.closest('[data-mid]')?.getAttribute('data-mid') ?? null;
     const msg = mid ? msgs.find((x) => x.id === mid) ?? null : null;
-    if (!msg || msg.recalled) return;
+    if (!msg || msg.recalled || msg.sys || msg.blkreq) return;
     setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, 6) });
   }, !selectMode);
 
@@ -985,7 +1181,7 @@ function ChatView({
               key={m.id}
               data-mid={m.id}
               onClickCapture={
-                selectMode && !m.recalled
+                selectMode && !m.recalled && !m.sys && !m.blkreq
                   ? (e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -1002,6 +1198,30 @@ function ChatView({
                     {mine ? '你撤回一条消息' : '对方撤回一条消息'}
                   </span>
                 </div>
+              ) : m.sys ? (
+                /* 系统提示行（拉黑/解除拉黑等状态变更）：居中灰字胶囊 */
+                <div className="mt-2.5 flex justify-center" data-testid="sms-sys-row">
+                  <span className="rounded-[4px] border border-black/25 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60">
+                    {m.sys.text}
+                  </span>
+                </div>
+              ) : m.blkreq ? (
+                /* 申请解除拉黑卡片（角色发起）：头像+名字+理由+同意/拒绝 */
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+                  className="mt-2.5 flex justify-start"
+                >
+                  <SmsBlockReqCard
+                    name={peer.name ?? peer.title}
+                    avatar={peer.avatarSrc}
+                    reason={m.blkreq.reason}
+                    status={m.blkreq.status}
+                    onAccept={() => resolveBlockReq(m, true)}
+                    onReject={() => resolveBlockReq(m, false)}
+                  />
+                </motion.div>
               ) : (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
@@ -1020,6 +1240,8 @@ function ChatView({
                     {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
                   </span>
                 )}
+                {/* 拉黑图标（红色 !）：我的消息在气泡左侧 */}
+                {mine && blockedIconOf(m)}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
                 <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                   {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊，小圆角 + 细黑边框） */}
@@ -1064,6 +1286,8 @@ function ChatView({
                     <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
                   )}
                 </div>
+                {/* 拉黑图标（红色 !）：对方的消息在气泡右侧 */}
+                {!mine && blockedIconOf(m)}
                 {selectMode && mine && (
                   <span
                     aria-hidden="true"
@@ -1077,6 +1301,8 @@ function ChatView({
                 )}
               </motion.div>
               )}
+              {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
+              {blockedLineOf(m)}
             </div>
           );
         })}
@@ -1134,6 +1360,12 @@ function ChatView({
                   })}
                   {(split.pending || split.texts.length === 0) && (
                     <div data-testid="sms-stream-typing">{dots}</div>
+                  )}
+                  {/* 拉黑图标：流式期间与落盘消息一致，气泡出现即显示（不等回复完成） */}
+                  {(blockCoversAt(blk, 'byUser', stream.startedAt) || blockCoversAt(blk, 'byChar', stream.startedAt)) && (
+                    <div className="flex items-end gap-1.5">
+                      {blockIconSpan('peer', 'sms-stream-block-icon')}
+                    </div>
                   )}
                 </div>
               </motion.div>

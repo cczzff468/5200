@@ -187,6 +187,17 @@ import {
   type RichAction,
   type RichMsg,
 } from '@/lib/chat-rich';
+import {
+  acceptBlockReq,
+  applyCharBlockAction,
+  blockActionKindOf,
+  blockCoversAt,
+  buildBlockPromptBlock,
+  loadBlock,
+  rejectBlockReq,
+  setUserBlock,
+  type BlockEntry,
+} from '@/lib/ios/block-state';
 import { activeQuitFlowFor, applyQuitWinbackAction } from '@/lib/ios/quit-flow';
 import {
   applyGroupCardDecision,
@@ -249,8 +260,9 @@ interface QQMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片 */
-  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard';
+  /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
+   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片 */
+  kind?: 'text' | 'image' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq';
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
   packet?: MsgPacket;
   /** 位置消息附加数据 */
@@ -259,6 +271,10 @@ interface QQMsg {
   fam?: QQFamData;
   /** 通知行数据（kind = notice 时有值） */
   notice?: QQNoticeData;
+  /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示 */
+  sys?: { text: string };
+  /** 申请解除拉黑卡片数据（kind = 'blockreq' 时有值）：status pending=待处理 accepted=已同意 rejected=已拒绝 */
+  blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected' };
   /** 表情消息（stk.url 图片，stk.meaning 意思，stk.sid 本地表情包唯一 ID——AI 上下文回写 [表情包:ID] 示范格式） */
   stk?: { url: string; meaning: string; sid?: string };
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀）；
@@ -1919,6 +1935,67 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
 
 // ---------------- 聊天页 ----------------
 
+/** 申请解除拉黑卡片（角色被用户拉黑后发起；同意→解除拉黑，拒绝→保持并让角色知道） */
+function QqBlockReqCard({
+  name,
+  avatar,
+  reason,
+  status,
+  onAccept,
+  onReject,
+}: {
+  name: string;
+  avatar: string | null;
+  reason: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  onAccept: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <div
+      data-testid="qq-blockreq-card"
+      className="w-fit max-w-[calc(100%-40px)] rounded-[12px] bg-white px-3 py-2.5 shadow-sm dark:bg-[#2A2C31]"
+      aria-label={`${name}申请解除拉黑`}
+    >
+      <div className="flex items-center gap-2">
+        <QqAvatar src={avatar} alt={name} size={34} />
+        <div className="min-w-0">
+          <p className="truncate text-[14px] font-medium leading-tight text-[#1F2329] dark:text-white">{name}</p>
+          <p className="mt-0.5 text-[12px] leading-tight text-black/45 dark:text-white/45">申请解除拉黑</p>
+        </div>
+      </div>
+      {reason && (
+        <p className="mt-2 rounded-[10px] bg-black/[0.04] px-2 py-1.5 text-[13px] leading-[1.5] text-black/70 dark:bg-white/[0.08] dark:text-white/70">「{reason}」</p>
+      )}
+      {status === 'pending' ? (
+        <div className="mt-2.5 flex gap-2">
+          <button
+            type="button"
+            data-testid="qq-blockreq-reject"
+            aria-label={`拒绝${name}的解除拉黑申请`}
+            onClick={onReject}
+            className="h-8 flex-1 rounded-full bg-black/[0.05] text-[13px] text-black/70 transition active:opacity-70 dark:bg-white/10 dark:text-white/70"
+          >
+            拒绝
+          </button>
+          <button
+            type="button"
+            data-testid="qq-blockreq-accept"
+            aria-label={`同意${name}的解除拉黑申请`}
+            onClick={onAccept}
+            className="h-8 flex-1 rounded-full text-[13px] font-medium text-white transition active:opacity-80"
+            style={{ backgroundColor: '#0099FF' }}
+          >
+            同意
+          </button>
+        </div>
+      ) : (
+        <p className="mt-2 text-[12px] text-black/35 dark:text-white/35">{status === 'accepted' ? '已同意，拉黑已解除' : '已拒绝'}</p>
+      )}
+    </div>
+  );
+}
+
 function ChatPage({
   me,
   peer,
@@ -1953,6 +2030,8 @@ function ChatPage({
   const [chatToast, onToast] = useLocalToast();
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
+  /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
+  const [blk, setBlk] = useState<BlockEntry>(() => loadBlock('qq', peer.id));
   const [input, setInput] = useState('');
   /** 全局流式回复状态（请求由 chat-stream-store 发起并接收，退出聊天页/退出 App 不中断） */
   const sessionKey = `qq:${peer.id}`;
@@ -2499,12 +2578,16 @@ function ChatPage({
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则；
     // 图片消息以 [图片] 占位，防 dataURL 进入触发词扫描）
     const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => (m.kind === 'image' ? '[图片]' : m.content))]));
+    // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，
+    // 不拦截消息——角色仍可发消息，但要按人设表现出被拉黑/已拉黑的态度，并可输出对应标记）
+    const blkBlock = buildBlockPromptBlock('qq', peer.id, me.name);
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
       memoryBlock,
       momentsBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      blkBlock,
       quitCtx?.section ?? '',
       kickSection,
       socialRules,
@@ -2565,6 +2648,24 @@ function ChatPage({
         let idx = 0;
         for (const part of parts) {
           if (part.type === 'action') {
+            // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
+            // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
+            const bk = blockActionKindOf(part.action);
+            if (bk) {
+              const res = applyCharBlockAction('qq', peer.id, bk, part.action.targetId);
+              setBlk(res.entry);
+              if (res.changed && bk === 'block') {
+                all.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `你已被「${peer.name}」拉黑` } });
+                t += 1;
+              } else if (res.changed && bk === 'unblock') {
+                all.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」解除了对你的拉黑` } });
+                t += 1;
+              } else if (res.reqCreated && bk === 'request') {
+                all.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'blockreq', blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+                t += 1;
+              }
+              continue;
+            }
             // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
             //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
             if (isQuitWinbackAction(part.action)) {
@@ -2639,6 +2740,89 @@ function ChatPage({
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 sendRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
 
+  // ---------------- 双向拉黑（用户开关 / 角色申请卡片的同意与拒绝） ----------------
+
+  /** 追加一条系统提示行（拉黑状态变更提示；居中灰字胶囊，不进 AI 上下文） */
+  const pushSysMsg = useCallback((text: string) => {
+    setMsgs((prev) => [...prev, { id: uid(), role: 'peer' as const, content: '', time: Date.now(), kind: 'sys' as const, sys: { text } }]);
+  }, []);
+
+  /** 设置页「拉黑」开关：持久化（kv，按联系人隔离）+ 生成系统消息；角色下一轮起通过 system 感知 */
+  const toggleBlockFromSettings = useCallback(
+    (v: boolean) => {
+      setBlk(setUserBlock('qq', peer.id, v));
+      pushSysMsg(v ? `你已拉黑「${peer.name}」` : `你已解除拉黑「${peer.name}」`);
+    },
+    [peer.id, peer.name, pushSysMsg]
+  );
+
+  /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
+   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」 */
+  const resolveBlockReq = useCallback(
+    (m: QQMsg, accept: boolean) => {
+      if (m.blkreq?.status !== 'pending') return;
+      setMsgs((prev) =>
+        prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x))
+      );
+      if (accept) {
+        setBlk(acceptBlockReq('qq', peer.id));
+        pushSysMsg(`你同意了「${peer.name}」的解除拉黑申请`);
+        runAiTurnRef.current?.(null, [], `（系统事件：${me.name}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`);
+      } else {
+        setBlk(rejectBlockReq('qq', peer.id));
+        pushSysMsg(`你拒绝了「${peer.name}」的解除拉黑申请`);
+        runAiTurnRef.current?.(null, [], `（系统事件：${me.name}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`);
+      }
+    },
+    [peer.id, peer.name, me.name, pushSysMsg]
+  );
+
+  /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——拉黑关系存续期间（任一方向），该期间内的
+   *  双方气泡都带图标（用户拉黑 AI 后用户气泡也有图标，反之亦然）；
+   *  按拉黑区间判定：拉黑前的历史消息不标，拉黑期间发的消息恒标（解除后也不消失），解除后新消息不标；
+   *  系统提示行/申请卡片/撤回行不显示 */
+  const blockSideOf = (m: QQMsg): 'me' | 'peer' | null => {
+    if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
+    if (!blockCoversAt(blk, 'byUser', m.time) && !blockCoversAt(blk, 'byChar', m.time)) return null;
+    return m.role === 'me' ? 'me' : 'peer';
+  };
+
+  /** 拉黑图标渲染（红色 ! 圆点）：我的消息在气泡左侧、对方在气泡右侧（流式与落盘共用） */
+  const blockIconSpan = (side: 'me' | 'peer', testid: string) => (
+    <span
+      data-testid={testid}
+      aria-label={side === 'me' ? '我被拉黑' : '对方被我拉黑'}
+      className="flex h-[20px] w-[20px] shrink-0 self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white"
+    >
+      !
+    </span>
+  );
+
+  /** 红色 ! 圆点：紧贴气泡（流式与落盘消息共用同款样式） */
+  const blockedIconOf = (m: QQMsg) => {
+    const side = blockSideOf(m);
+    if (!side) return null;
+    return blockIconSpan(side, side === 'me' ? 'qq-block-icon-me' : 'qq-block-icon-peer');
+  };
+
+  /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」区间内我的消息后面跟随（与图标判定解耦：
+   *  用户拉黑 AI 后自己的气泡也有图标，但不显示拒收文案），
+   *  居中半透明圆角胶囊（与系统提示行同款） */
+  const blockedLineOf = (m: QQMsg) => {
+    if (m.recalled || m.kind === 'notice' || m.kind === 'sys' || m.kind === 'blockreq') return null;
+    if (m.role !== 'me' || !blockCoversAt(blk, 'byChar', m.time)) return null;
+    return (
+      <div className="pt-1 text-center">
+        <span
+          data-testid="qq-block-line-me"
+          className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+        >
+          消息已发出，但被对方拒收了。
+        </span>
+      </div>
+    );
+  };
+
   const send = useCallback(() => {
     const text = input.trim();
     if (!text) return;
@@ -2703,7 +2887,7 @@ function ChatPage({
                   : m.content;
 
   /** 消息是否可长按弹菜单 / 多选勾选（通知行与已撤回行除外） */
-  const isSelectable = (m: QQMsg): boolean => m.kind !== 'notice' && !m.recalled;
+  const isSelectable = (m: QQMsg): boolean => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && !m.recalled;
 
   /** 按发送方与消息类型组装长按菜单项（我的/AI 气泡都可：复制 删除 编辑 引用 多选 撤回 转发 收藏；AI 气泡多一个重新生成；已收藏的消息显示「已收藏」） */
   const buildMsgMenuItems = (m: QQMsg): BubbleMenuItem[] => {
@@ -3257,6 +3441,26 @@ function ChatPage({
                 </div>
               ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
+              ) : m.kind === 'sys' && m.sys ? (
+                /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
+                <div data-testid="qq-sys-row" className="mb-3 text-center">
+                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                    {m.sys.text}
+                  </span>
+                </div>
+              ) : m.kind === 'blockreq' && m.blkreq ? (
+                /* 申请解除拉黑卡片（角色发起）：头像+名字+理由+同意/拒绝 */
+                <div className="mb-3 flex items-end justify-start gap-2">
+                  <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
+                  <QqBlockReqCard
+                    name={peer.name}
+                    avatar={peer.avatar}
+                    reason={m.blkreq.reason}
+                    status={m.blkreq.status}
+                    onAccept={() => resolveBlockReq(m, true)}
+                    onReject={() => resolveBlockReq(m, false)}
+                  />
+                </div>
               ) : (
               <div className={`mb-3 flex items-end ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
                 {selectMode && isSelectable(m) && !mine && (
@@ -3272,6 +3476,8 @@ function ChatPage({
                   </span>
                 )}
                 {!mine && <QqAvatar src={peer.avatar} alt={peer.name} size={40} />}
+                {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧 */}
+                {mine && blockedIconOf(m)}
                 {m.kind === 'redpacket' && m.packet ? (
                   <div {...bubblePress}>
                     <RedPacketBubble
@@ -3410,6 +3616,8 @@ function ChatPage({
                   </div>
                 )}
                 {mine && <QqAvatar src={me.avatar} alt={me.name} size={40} />}
+                {/* 拉黑图标（红色 ! 圆点）：对方的消息在气泡右侧 */}
+                {!mine && blockedIconOf(m)}
                 {selectMode && isSelectable(m) && mine && (
                   /* 多选模式勾选圈（我的消息在行右侧；转发勾选模式移到最左侧，对照原生） */
                   <span
@@ -3426,6 +3634,8 @@ function ChatPage({
                 )}
               </div>
               )}
+            {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
+            {blockedLineOf(m)}
             </div>
           );
         })}
@@ -3464,6 +3674,9 @@ function ChatPage({
                     <div className="max-w-[calc(100%-96px)] whitespace-pre-wrap break-words rounded-[10px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
                       {stickersOn ? prettifyRichText(t) : stripEmojiText(prettifyRichText(t).replace(/\[表情包\]/g, ' '))}
                     </div>
+                    {/* 拉黑图标：流式期间与落盘消息一致，气泡出现即显示（不等回复完成） */}
+                    {(blockCoversAt(blk, 'byUser', stream.startedAt) || blockCoversAt(blk, 'byChar', stream.startedAt)) &&
+                      blockIconSpan('peer', 'qq-stream-block-icon')}
                   </div>
                 ))}
                 {(split.pending || split.texts.length === 0) && (
@@ -3819,6 +4032,8 @@ function ChatPage({
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
+          blockedByUser={blk.byUser === true}
+          onToggleBlock={peer.id === me.id ? undefined : toggleBlockFromSettings}
           onOpenReplyCount={() => setReplyOpen(true)}
           onOpenTranslate={() => setTranslateOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -6210,8 +6425,8 @@ function MessagesPage({
       )
       .map((c) => {
         const msgs = loadMsgs(c.id);
-        // 通知行（领取/接收）不作为会话预览，回退到最后一条实质消息
-        const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
+        // 通知行/系统提示行/申请卡片不作为会话预览，回退到最后一条实质消息
+        const last = [...msgs].reverse().find((m) => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq');
         return { key: c.id, name: c.name, contact: c, group: null, text: msgPreview(last), time: last?.time ?? 0 };
       });
     // 群会话行（群聊与私聊是两类会话，各自独立显示；隐藏后不再出现，可从联系人 › 群聊 再进）

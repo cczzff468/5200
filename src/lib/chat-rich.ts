@@ -68,6 +68,10 @@ export type RichPart = { type: 'text'; text: string } | { type: 'rich'; rich: Ri
  * - [领取红包:红包ID] / [退回红包:红包ID] / [拒收红包:红包ID]
  * - [收款转账:转账ID] / [退回转账:转账ID] / [拒收转账:转账ID]
  * - [收下亲属卡:亲属卡ID] / [拒收亲属卡:亲属卡ID]
+ * 另有双向拉黑类动作（仅单聊由 block-state 应用；群聊/未知语境下由调用方忽略）：
+ * - [拉黑]：角色拉黑用户
+ * - [解除拉黑]：角色解除对用户的拉黑
+ * - [申请解除拉黑:理由]：角色申请让用户解除对自己的拉黑（理由原样透传，做成请求卡片）
  * 标记只负责改变卡片状态（通知行由系统生成），不带感谢语/理由——道谢、吐槽、退回/拒收的
  * 原因等所有想说的话都由 AI 按人设用正文正常说。动作标记不是消息：落盘前由
  * extractRichActionParts 按出现顺序提取（保证通知行落盘在流式时的真实位置，而不是永远堆在
@@ -82,6 +86,9 @@ export type RichActionKind =
   | 'reject-transfer'
   | 'claim-family'
   | 'reject-family'
+  | 'block-user'
+  | 'unblock-user'
+  | 'request-unblock'
   // 群管理动作（AI 是群主/管理员；targetId = 成员名字或新群名/公告内容，arg = 禁言时长文本）
   | 'mute-member'
   | 'unmute-member'
@@ -98,6 +105,9 @@ export type RichActionKind =
   | 'grant-admin'
   | 'grant-owner'
   | 'abandon-invite';
+
+/** 拉黑类动作（targetId 语义不同：request-unblock 的 targetId = 申请理由全文，其余为空） */
+export const BLOCK_ACTION_KINDS: ReadonlySet<RichActionKind> = new Set(['block-user', 'unblock-user', 'request-unblock']);
 
 export interface RichAction {
   kind: RichActionKind;
@@ -159,6 +169,10 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   拒收转账: 'reject-transfer',
   收下亲属卡: 'claim-family',
   拒收亲属卡: 'reject-family',
+  // 拉黑类动作（长词在前避免被短词抢先匹配）
+  申请解除拉黑: 'request-unblock',
+  解除拉黑: 'unblock-user',
+  拉黑: 'block-user',
   // 群管理动作（含常见变体写法）
   禁言: 'mute-member',
   解禁: 'unmute-member',
@@ -188,9 +202,9 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   放弃邀请: 'abandon-invite',
 };
 
-const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：]([^\][]*))?\]/g;
+const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
-export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
+export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
 
 /** 回复按出现顺序切开的片段：普通文字块 或 处理动作（两者交错，保持流式输出顺序） */
 export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; action: RichAction };
@@ -210,7 +224,10 @@ export function extractRichActionParts(text: string): RichActionPart[] {
     if (before.trim()) parts.push({ type: 'text', text: before });
     const raw = (m[2] ?? '').trim();
     const kind = ACTION_LABELS[m[1]];
-    if (kind === 'mute-member') {
+    if (BLOCK_ACTION_KINDS.has(kind)) {
+      // 拉黑类动作没有目标 ID；申请解除拉黑的 targetId = 申请理由全文（不按冒号截断）
+      parts.push({ type: 'action', action: { kind, targetId: kind === 'request-unblock' ? raw : '' } });
+    } else if (kind === 'mute-member') {
       // [禁言:成员:时长]：名字取第一段，时长取剩余整段（兼容写法丢时长由执行器兑底）
       const segs = raw.split(/[:：]/);
       const name = (segs[0] ?? '').trim();
@@ -252,7 +269,7 @@ export function actionVerb(kind: RichActionKind): 'claim' | 'return' | 'reject' 
 /** 完整标记（中英文冒号兼容；内容里不允许出现「]」） */
 const RICH_RE = /\[(红包|转账|亲属卡|位置|表情包)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的半截标记（AI 还在逐字输出 / 被切分边界切开；含表情包变体、处理动作、群管理与挽留标记） */
-const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
+const OPEN_TAIL_RE = /\[(?:红包|转账|亲属卡|位置|表情包|发送了表情包|发送了表情|发送表情包|发送表情|表情|领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请)(?:[:：][^\][]*)?$/;
 /**
  * AI 仿写用户记录格式的表情标记变体（聊天历史里用户表情以「[发送了表情：意思]」进入上下文，
  * AI 经常照葫芦画瓢输出同款格式，或把意思当 ID 写成 [表情:XX]）——这些变体在普通文字段里
