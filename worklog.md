@@ -6468,3 +6468,20 @@ Stage Summary:
 - 根因二：拍立得行 324px+旋转外扩 > 320px 格子（360 视口）→ overflow-hidden 裁掉左右两框的外上角（修复：设计宽 350 + ResizeObserver 等比缩放，≥350 视口零变化）
 - 关键教训：此前所有 E2E 只测 390×844；用户实机是 360 CSS px（Android 常见），凡「固定尺寸行 vs 随视口收缩的格子」都要在 360 下验证
 - 涉及文件：src/components/ios/PhoneShell.tsx、src/components/ios/LockScreen.tsx、src/components/ios/PolaroidCard.tsx
+
+---
+Task ID: 5
+Agent: main (Z.ai Code)
+Task: 推送当前项目（含 D1-D4 全部修复）到 GitHub cczzff468/5200 main 分支
+
+Work Log:
+- 检查 git 状态：工作区干净，本地 main 含 D3/D4 修复提交
+- 发现 .env 被 git 跟踪（内容仅为本地 SQLite 路径，无真实密钥），git rm --cached 移除跟踪并提交（2b1d6c4）
+- 配置 origin remote（PAT 嵌入 URL），首次推送被拒：远程 main 有 13 个本地没有的自动快照提交（2026-09-23，来自此前会话的自动备份，含 display-cookie.ts/wallpaper-presets.ts 等；本地当前项目不引用这些文件，两条历史为同一应用的平行演化版本）
+- 确认本地代码无 display-cookie/wallpaper-presets 导入，当前项目功能不受远程独有文件影响
+- 安全策略：先把远程现有 main 推送为备份分支 backup/remote-main-0923（零丢失），再 force-with-lease 推送本地 main
+
+Stage Summary:
+- 本地 main（D1-D4 全部修复）已成为 GitHub 远程 main
+- 远程 9/23 平行版本保留在 backup/remote-main-0923 分支，可随时找回
+- 安全提醒：PAT 已在聊天中暴露且嵌入 remote URL，建议用户在 GitHub 上轮换该 token
