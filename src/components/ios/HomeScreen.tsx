@@ -1951,7 +1951,7 @@ export default function HomeScreen() {
           data-page={p}
           data-index={i}
           data-id={id}
-          className={`relative ${WIDGET_SPAN[tile.widget]} touch-none select-none`}
+          className={`relative ${WIDGET_SPAN[tile.widget]} select-none ${edit ? 'touch-none' : '[touch-action:pan-y]'}`}
           role="button"
           tabIndex={0}
           aria-label={meta.openApp ? `打开${APP_MAP[meta.openApp].name}应用` : `编辑${meta.label}`}
@@ -1984,7 +1984,7 @@ export default function HomeScreen() {
         data-page={p}
         data-index={i}
         data-id={tile.id}
-        className="relative col-span-1 flex touch-none select-none justify-center"
+        className={`relative col-span-1 flex select-none justify-center ${edit ? 'touch-none' : '[touch-action:pan-y]'}`}
         role="button"
         tabIndex={0}
         aria-label={`打开${app.name}`}
@@ -2009,7 +2009,7 @@ export default function HomeScreen() {
   return (
     <div
       ref={rootRef}
-      className={`absolute inset-0 z-10 flex touch-none select-none flex-col pb-[38px] transition-[padding-top,opacity] duration-300 ${
+      className={`absolute inset-0 z-10 flex select-none flex-col pb-[38px] transition-[padding-top,opacity] duration-300 [touch-action:pan-y] ${
         edit ? 'pt-[112px]' : 'pt-[64px]'
       } ${activeApp ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
       onPointerDown={rootPointerDown}
@@ -2059,10 +2059,16 @@ export default function HomeScreen() {
         </div>
       )}
 
-      {/* 分页页 grid：横向平移翻页（每页一组 tile，小组件跟随所在页）；touch-none 保证跟手不被浏览器滚动手势打断。
-          视口必须占满全屏宽（水平内边距由每页自带 px-5 承担，而非根容器）：
-          否则翻页时页面内容会在离屏幕边缘 20px 处被硬裁切、两侧露壁纸条（用户报告的滑动边缘分割线） */}
-      <div className="relative min-h-0 flex-1 touch-none overflow-hidden">
+      {/* 分页视口：绝对定位铺满整块屏幕（横竖都全屏——用户要求把这个「扩展到全局」）。
+          横向：视口占满全屏宽，翻页裁切发生在屏幕真实边缘（水平内边距由每页 px-5 承担，
+          否则滑动时内容在离边缘 20px 处被硬裁、两侧露壁纸条——D2 修复）；纵向：视口占满
+          全屏高——旧实现视口只占中间约 600px（上下让位状态栏/页点/Dock），小组件多的页
+          （每页上限 14 格）底部小组件会被 overflow-hidden 悬空裁掉，静止状态就被「盖住」
+          （实测日历下半截消失、下一行小组件整行不可见）。现在每页自身可竖向滚动
+          （overscroll-contain 防浏览器下拉刷新；拖拽中 overflow 冻结——scrollTop 保留，
+          保证边缘翻页与拖拽落位的几何采样一致），底部小组件滚上来即完整可见；
+          页点与 Dock（relative z-10）悬浮在页面之上，内容从其下方穿过 */}
+      <div className="absolute inset-0">
         <div
           ref={trackRef}
           data-testid="pages-track"
@@ -2073,22 +2079,32 @@ export default function HomeScreen() {
             <div
               key={p}
               data-testid={`home-page-${p}`}
+              data-page-scroller
               aria-hidden={p !== page}
               inert={p !== page}
-              className="grid h-fit w-full shrink-0 grid-cols-4 items-start gap-x-2 gap-y-[16px] overflow-hidden px-5 pt-2"
+              className="no-scrollbar h-full w-full shrink-0 overflow-y-auto overscroll-contain [touch-action:pan-y]"
+              style={{ overflow: dragId ? 'hidden' : undefined }}
             >
-              {tiles.map((tile, i) => renderGridTile(tile, i, p))}
-              {tiles.length === 0 && (
-                <p className={`col-span-4 pt-10 text-center text-[13px] ${wallpaperLight ? 'text-black/45' : 'text-white/45'}`}>空白页 · 可把 App 拖到这里</p>
-              )}
+              <div
+                className={`grid h-fit w-full grid-cols-4 items-start gap-x-2 gap-y-[16px] px-5 pb-[164px] transition-[padding-top] duration-300 ${
+                  edit ? 'pt-[120px]' : 'pt-[72px]'
+                }`}
+              >
+                {tiles.map((tile, i) => renderGridTile(tile, i, p))}
+                {tiles.length === 0 && (
+                  <p className={`col-span-4 pt-10 text-center text-[13px] ${wallpaperLight ? 'text-black/45' : 'text-white/45'}`}>空白页 · 可把 App 拖到这里</p>
+                )}
+              </div>
             </div>
           ))}
         </div>
       </div>
+      {/* 弹性占位：分页视口改为绝对定位后，由它把页点/Dock 撑回屏幕底部 */}
+      <div className="flex-1" />
 
       {/* 页点/搜索互换区：滑动中或编辑模式显示页点（点按跳页），静止时同位置淡入搜索胶囊
           （整体上移 6px：pb-12px 让内容在 34px 高度带内偏上，用户要求搜索往上移一点点） */}
-      <div className="relative h-[34px] w-full shrink-0" data-testid="page-indicator">
+      <div className="relative z-10 h-[34px] w-full shrink-0" data-testid="page-indicator">
         <div
           aria-hidden={!dotsVisible}
           className={`absolute inset-0 flex items-center justify-center gap-[7px] pb-[12px] transition-all duration-200 ${
@@ -2138,10 +2154,11 @@ export default function HomeScreen() {
       </div>
 
       {/* Dock（hairline 轮廓随壁纸明暗：浅色壁纸白底座画不出边界 → 淡黑描边，
-          深色壁纸 → 淡白描边与半透明白底座呼应）；mx-5 保持原根容器 px-5 时的水平内缩 */}
+          深色壁纸 → 淡白描边与半透明白底座呼应）；mx-5 保持原根容器 px-5 时的水平内缩；
+          relative z-10 悬浮在绝对定位的分页视口之上（页面竖向滚动时内容从 Dock 下方穿过） */}
       <div
         data-dock
-        className={`mx-5 flex items-center gap-[18px] rounded-[32px] bg-white/[0.16] ring-1 ${
+        className={`relative z-10 mx-5 flex items-center gap-[18px] rounded-[32px] bg-white/[0.16] ring-1 ${
           wallpaperLight ? 'ring-black/[0.08]' : 'ring-white/[0.12]'
         } px-[14px] py-[13px] shadow-[0_4px_18px_rgba(0,0,0,0.18)] backdrop-blur-2xl dark:bg-white/[0.10] ${
           edit ? 'touch-none select-none' : ''

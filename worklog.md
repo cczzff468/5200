@@ -6429,3 +6429,21 @@ Stage Summary:
 - 根因：翻页视口被根容器 px-5 内缩，滑动裁切边界在屏幕内侧 20px 处（静止不可见、滑动暴露）
 - 修复模式：视口全屏宽 + 内边距下沉到每页（视觉零变化、滑动贴边裁切，对齐 iOS 行为）
 - 涉及文件：src/components/ios/HomeScreen.tsx（仅 className 调整，无逻辑改动）
+
+---
+Task ID: D3-fullscreen-pager
+Agent: Z.ai Code (main)
+Task: 用户澄清「不滑动的时候能不能也把这个扩展到全局，有的小组件都被盖住了」——静止状态下部分小组件被盖住，要求把 D2 的全屏视口处理扩展到全局
+
+Work Log:
+- 排查用户语义：「这个」= D2 的翻页视口全屏化；「被盖住」= 静止状态下小组件被悬空裁切（非滑动场景）
+- 复现实验：往 IndexedDB 写入小组件密集页（dialog/vinyl/calendar/icity/tickclock/polaroid，写入时须同步从 hidden 移除，否则 sanitize 按「默认收起」剔除）→ 实测日历卡片下半截被硬裁、icity/表盘时钟/拍立得整行不可见
+- 根因：分页视口是 flex-1 中段容器（约 600px，上下让位状态栏 64px / 页点 34px / Dock 84px / 底部 38px），页内容超高时被 overflow-hidden 在视口底边悬空裁掉；每页上限 14 格，小组件多的页必然超高 → 静止状态就被「盖住」
+- 修复 HomeScreen.tsx：①分页视口改 absolute inset-0 铺满整块屏幕（横竖全屏），水平贴边裁切（D2）保持；②每页自身 overflow-y-auto + overscroll-contain + [touch-action:pan-y] 可竖向滚动，底部小组件滚上来即完整可见；③页内容 pt 72/120（编辑）+ pb-164 内建避让，scroll-top 时静态布局与修复前逐像素一致（clockTop=116/dockTop=742 实测）；④页点/Dock 加 relative z-10 悬浮于视口之上，内容从其下方穿过（Dock 半透明毛玻璃，iOS 同款观感）；⑤根容器 touch-none → [touch-action:pan-y]（放行竖向原生滚动，水平仍由 JS 翻页接管，顺带修复画廊浮层触摸无法滚动的潜在问题）；⑥网格 tile 非编辑模式 touch-none → [touch-action:pan-y]（触摸可从图标上起手滚动页面），编辑模式保持 touch-none 保证拖拽；⑦拖拽中页面 overflow 经 style 冻结（scrollTop 保留），边缘翻页与落位几何采样一致
+- E2E 验证：密集页滚到底后日历/icity/表盘时钟/拍立得/图标行全部完整可见且与 Dock 保持间距；第 1 页静态布局与修复前一致；横向慢滑中途帧边缘干净（D2 回归通过）；计算器点击打开正常；编辑模式顶栏/抖动/画廊/拖拽换位（calculator↔camera 实测换位）/完成退出全过；恢复默认布局成功清理测试数据；390×844 移动端全屏模式正常；tsc + lint 零错误；dev.log 无新增错误
+- 排障备忘：agent-browser 的 mouse wheel/scroll 只能滚动 document，滚动不了页内 overflow 容器（用 JS scrollTop 驱动验证）；history.back() 会把浏览器导航离开应用造成白屏，回主屏一律用界面内返回按钮；往 homeLayout 写测试布局必须同步清 hidden 里对应 widget:key，否则 sanitize 静默剔除
+
+Stage Summary:
+- 根因：分页视口只占屏幕中段约 600px，超高页面的底部小组件被 overflow-hidden 悬空裁掉（静止状态可见的「被盖住」）
+- 修复模式：视口全屏化（横+纵）+ 每页竖向滚动 + 页点/Dock 悬浮 + 拖拽期滚动冻结；scroll-top 静态布局零变化
+- 涉及文件：src/components/ios/HomeScreen.tsx（视口/页面结构、触控手势、拖拽冻结）
