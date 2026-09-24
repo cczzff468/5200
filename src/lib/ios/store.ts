@@ -81,6 +81,25 @@ export const SAFE_VOICE_BY_PROVIDER: Record<TtsConfig['provider'], string> = {
   openai: 'alloy',
 };
 
+/** 语音识别（STT）配置：与 TTS 配置相互独立、互不覆盖，用于语音消息「转文字」。
+ *  内置识别免配置开箱即用；OpenAI 兼容走 /audio/transcriptions（Whisper 等） */
+export interface SttConfig {
+  /** 'builtin' = 内置识别（免配置）；'openai' = OpenAI 兼容服务商 */
+  provider: 'builtin' | 'openai';
+  /** OpenAI 兼容服务商地址（如 https://api.openai.com/v1） */
+  baseUrl: string;
+  apiKey: string;
+  /** 识别模型名（OpenAI 兼容用；空 = 服务端默认 whisper-1） */
+  model: string;
+}
+
+export const DEFAULT_STT_CONFIG: SttConfig = {
+  provider: 'builtin',
+  baseUrl: 'https://api.openai.com/v1',
+  apiKey: '',
+  model: 'whisper-1',
+};
+
 /**
  * OpenAI 标准六音色（可作为点选建议）：
  * 服务商没有音色列表接口时（第三方 OpenAI 兼容大多如此），用这组兜底展示，
@@ -220,6 +239,8 @@ interface SettingsState {
   ttsConfig: TtsConfig;
   /** 拉取到的音色列表缓存（供联系人音色选择器共用） */
   ttsVoices: TtsVoiceOption[];
+  /** 语音识别（STT）配置：与 TTS 相互独立（含 Key，密文持久化） */
+  sttConfig: SttConfig;
   /** 自定义 App 图标（AppId → ObjectURL，Blob 存 IndexedDB settings.customIcons） */
   customIcons: Record<string, string>;
   loaded: boolean;
@@ -246,6 +267,8 @@ interface SettingsState {
   setAddressMode: (m: AddressMode) => void;
   /** 更新语音 API 配置（立即持久化；播放时现场读取 → 保存后自动生效，无需重启） */
   updateTtsConfig: (patch: Partial<TtsConfig>) => void;
+  /** 更新语音识别（STT）配置（立即持久化；转文字时现场读取 → 保存后自动生效，无需重启） */
+  updateSttConfig: (patch: Partial<SttConfig>) => void;
   /** 更新音色列表缓存（持久化到 IndexedDB settings.ttsVoices） */
   setTtsVoices: (list: TtsVoiceOption[]) => void;
   /** 设置/移除某 App 的自定义图标（blob=null 恢复默认），同步持久化到 IndexedDB */
@@ -270,13 +293,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   addressMode: 'name',
   ttsConfig: { ...DEFAULT_TTS_CONFIG },
   ttsVoices: [],
+  sttConfig: { ...DEFAULT_STT_CONFIG },
   customIcons: {},
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, ttsVoicesRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, ttsVoicesRec, sttRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -289,6 +313,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'customIcons'),
         localDB.get('settings', 'ttsConfig'),
         localDB.get('settings', 'ttsVoices'),
+        localDB.get('settings', 'sttConfig'),
       ]);
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
@@ -451,13 +476,32 @@ export const useSettings = create<SettingsState>((set, get) => ({
           baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : DEFAULT_TTS_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
           groupId: typeof v.groupId === 'string' ? v.groupId : '',
-          model: typeof v.model === 'string' && v.model ? v.model : DEFAULT_TTS_CONFIG.model,
+          // 模型允许为空（OpenAI 兼容服务商可以不需要模型）：只有字段缺失/非字符串才回退默认值
+          model: typeof v.model === 'string' ? v.model : DEFAULT_TTS_CONFIG.model,
           defaultVoiceId: typeof v.defaultVoiceId === 'string' ? v.defaultVoiceId : '',
         };
         const ttsWasPlain = !('__enc' in (ttsRec.value as object));
         if (ttsWasPlain && ttsConfig.apiKey.length > 0) {
           void encryptValue(ttsConfig)
             .then((enc) => localDB.put('settings', { key: 'ttsConfig', value: enc }))
+            .catch(() => undefined);
+        }
+      }
+
+      // 语音识别（STT）配置（含 apiKey，密文信封，与 TTS 同策略；provider 缺省 builtin）
+      let sttConfig: SttConfig = { ...DEFAULT_STT_CONFIG };
+      if (sttRec && typeof sttRec.value === 'object' && sttRec.value !== null) {
+        const v = ((await decryptValue<Partial<SttConfig>>(sttRec.value)) ?? sttRec.value) as Partial<SttConfig>;
+        sttConfig = {
+          provider: v.provider === 'openai' ? 'openai' : 'builtin',
+          baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_STT_CONFIG.baseUrl,
+          apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+          model: typeof v.model === 'string' ? v.model : DEFAULT_STT_CONFIG.model,
+        };
+        const sttWasPlain = !('__enc' in (sttRec.value as object));
+        if (sttWasPlain && sttConfig.apiKey.length > 0) {
+          void encryptValue(sttConfig)
+            .then((enc) => localDB.put('settings', { key: 'sttConfig', value: enc }))
             .catch(() => undefined);
         }
       }
@@ -496,6 +540,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         addressMode: 'name',
         ttsConfig,
         ttsVoices,
+        sttConfig,
         customIcons,
         loaded: true,
       });
@@ -612,6 +657,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setTtsVoices: (list) => {
     set({ ttsVoices: list });
     void localDB.put('settings', { key: 'ttsVoices', value: list });
+  },
+
+  updateSttConfig: (patch) => {
+    const sttConfig = { ...get().sttConfig, ...patch };
+    set({ sttConfig });
+    // 安全：含 apiKey，密文落盘（与 TTS 同策略）
+    void encryptValue(sttConfig)
+      .then((v) => localDB.put('settings', { key: 'sttConfig', value: v }))
+      .catch(() => undefined);
   },
 
   applyLockConfig: (cfg) => {

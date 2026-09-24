@@ -6689,3 +6689,32 @@ Stage Summary:
 - OpenAI 兼容服务商的模型名现在是真正的选填项：留空 → 请求无 model 字段（不需要模型的服务商开箱即用）；填写 → 正常携带
 - 界面三层明示：标签「选填」、留空 chip、说明文案；MiniMax 保持必填语义不变
 - 涉及文件：src/lib/server-tts.ts、src/components/apps/settings.tsx、.gitignore
+
+---
+Task ID: 6（主协调部分）
+Agent: 主协调者 (Z.ai Code)
+Task: 语音发送功能（录制/语音气泡/长按转文字/文字转语音发送）——共享基建 + 微信单聊参考实现 + 全链路 E2E
+
+Work Log:
+- 需求：聊天输入区麦克风进入「按住说话」；按住录音松开发送；上滑取消、右滑转文字；60s 上限自动发送；权限拒绝仍可文字聊天。语音气泡（播放/波形/时长/进度/暂停继续/新旧互斥）。长按语音气泡「转文字」（结果显示气泡下方、可复制、失败提示「转文字失败，请重试」）。文字转语音发送开关。STT 独立配置与 TTS 互不覆盖。语音消息持久化。单聊群聊共用组件。不破坏既有功能。
+- store.ts：新增 SttConfig（provider 'builtin'|'openai' + baseUrl/apiKey/model）+ DEFAULT_STT_CONFIG + sttConfig 状态 + updateSttConfig（密文持久化，与 ttsConfig 同策略）；顺带修复迭代3遗留真 Bug：ttsConfig.load 解析把空 model 强制回填默认值（「不需要模型」重启即失效）→ 改为仅字段缺失才回退
+- 新增 lib/ios/audio-utils.ts：pickRecorderMime / blobToWav16kBase64（16k 单声道 WAV base64，与电话端 ASR 同源）/ blobToDataUrl / measureAudioDuration / downsampleWave / hashWaveBars / voiceDurationLabel
+- 新增 lib/ios/stt-client.ts：transcribeAudioBlob（builtin→WAV base64→/api/stt；openai→multipart→/api/stt 转发）；isSttReady
+- 新增 /api/stt/route.ts：builtin（z-ai SDK ASR）+ openai（手工 multipart 组装 → node:https 强制 IPv4 转发 {baseUrl}/audio/transcriptions，model 空默认 whisper-1，错误透出业务文案不回显 Key）；server-tts.ts 的 httpsRequest 导出并支持 Buffer body
+- 新增 lib/ios/audio-focus.ts（音频焦点注册表）+ lib/ios/voice-player.ts（语音气泡全局单例播放器：play/pause/resume/进度 100ms 广播/zustand）；tts-client 注册 'tts' 焦点实现 TTS 朗读 ↔ 语音气泡互斥
+- 新增 lib/ios/voice-send.ts：synthesizeSelfVoice（文字转语音：全局默认音色 → /api/tts → dataURL + 时长 + 伪波形；未配置抛「请先配置语音 API」）
+- bubble-menu.tsx：BUBBLE_MENU_ICONS 增加 stt（FileText）
+- 新增 components/apps/voice-bubble.tsx（VoiceMsgBubble：播放/暂停 + 波形进度填色 + 时长 + 转写展示，wx/qq/im 三主题，me/peer 双侧）+ voice-input.tsx（useVoiceRecorder：MediaRecorder 24kbps + AnalyserNode 100ms 采样 + 60s 上限自动结束 + 启动失败清理；VoiceHoldBar：setPointerCapture 按住说话，上滑/左滑取消、右滑转文字；RecordOverlay：计时+实时波形+大麦克风+手势区浮层）
+- wechat.tsx 参考集成：WxMsg kind+voice 字段 + loadMsgs 规范化；语音模式状态/TTS 开关状态/recorder；commitVoiceMsg（入列→后台转文字→触发 AI；排队兼容；selfChat 只记录）；handleVoiceOutcome（send/stt/cancel 分发 + cancel 显式丢弃修复）；send() TTS 分支（sendTextAsVoiceRef 模式）；runAiTurn 历史映射 voice→transcript||'[语音]'（含 memContext/wbScanText）；quoteContentOf/buildMsgMenuItems(转文字+复制)/handleMenuAction(stt case)/forwardClone(整条克隆)；气泡渲染 VoiceMsgBubble 分支；输入区语音模式切换 + VoiceHoldBar + AudioLines TTS 开关；RecordOverlay 渲染；卸载 stopVoicePlayback
+- settings.tsx VoicePage：新增「语音识别 STT（转文字）」独立配置区（内置识别（免配置）/OpenAI 兼容 chips + 地址/Key（密文）/模型选填+chips）
+- E2E（agent-browser，360×800，测试联系人 e2e-me/e2e-peer，mock TTS :4599）：
+  ①TTS 开关→发送→语音气泡（transcript=原文显示气泡下方）✓ ②播放/暂停/继续/结束+进度归位 ✓ ③长按菜单（转文字/复制/删除/多选/撤回/转发/收藏，无编辑引用）✓ ④转文字 toast ✓ ⑤复制「已复制」✓ ⑥语音模式/按住说话/权限错误 toast ✓ ⑦页面内伪造麦克风：按住1.5s松开→气泡+自动转写 ✓ 上滑取消丢弃 ✓ 右滑转文字→STT→发文字消息 ✓ 连续录音 ✓ ⑧刷新后气泡+转写持久 ✓ ⑨AI 对语音消息正常回复（转写进 prompt）✓ ⑩纯文字聊天不受影响 ✓ ⑪mock 收包验证空 model 不携带（迭代3回归）✓
+  ⑫/api/stt builtin：真实语音 mp3（z-ai tts 生成）→「你好世界，今天是星期三，天气真不错。」识别成功 ✓ ⑬/api/stt openai：multipart 转发 mock（Bearer 头/model 默认 whisper-1/音频字节 204816 全对）✓
+- E2E 过程中发现并修复：a) ttsConfig 空 model 重启回填（上文）b) 录音启动失败不清理流/录音器 → catch 中补清理 c) cancel 手势 ≥0.7s 会误发送 → handleVoiceOutcome 显式拦截 zone==='cancel'
+- 说明：headless 无真实麦克风，60s 自动发送路径为代码审阅（rec.stop→onstop→finalize 与松开同链路）；沙箱为独立测试档案，用户真实浏览器数据不受影响；测试产生的联系人/会话仅存于沙箱
+
+Stage Summary:
+- 共享语音基建全部就绪并经微信端全链路验证；QQ/微信群/QQ群/信息 四端接入分发给子代理（6-a~6-d）
+- 新增文件：src/lib/ios/{audio-utils,stt-client,audio-focus,voice-player,voice-send}.ts、src/app/api/stt/route.ts、src/components/apps/{voice-bubble,voice-input}.tsx
+- 修改：store.ts（SttConfig+model 选填修复）、server-tts.ts（导出 httpsRequest/Buffer body）、tts-client.ts（音频焦点）、bubble-menu.tsx（stt 图标）、settings.tsx（STT 区）、wechat.tsx（参考实现）
+- E2E 环境：mock TTS bun /home/z/.tmp-e2e/mock-tts.ts（:4599，/v1/audio/speech 返回 1.5s WAV，/__last 查收包）；mock STT mock-stt.ts（:4600）；测试联系人 e2e-me（手机号13800000000/微信 e2e_me_wx/密码 test1234）与角色 e2e-peer（小测）；ttsConfig 已在沙箱 UI 配置为 openai+http://localhost:4599/v1+sk-test-123+空模型

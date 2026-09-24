@@ -2038,8 +2038,12 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const ttsVoices = useSettings((s) => s.ttsVoices);
   const updateTtsConfig = useSettings((s) => s.updateTtsConfig);
   const setTtsVoices = useSettings((s) => s.setTtsVoices);
+  // 语音识别（STT）独立配置：与 TTS 互不覆盖
+  const sttConfig = useSettings((s) => s.sttConfig);
+  const updateSttConfig = useSettings((s) => s.updateSttConfig);
 
   const [showKey, setShowKey] = useState(false);
+  const [showSttKey, setShowSttKey] = useState(false);
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
   const [voiceQuery, setVoiceQuery] = useState('');
   const [fetchingVoices, setFetchingVoices] = useState(false);
@@ -2543,6 +2547,106 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               音色优先级：联系人的独立音色（联系人 App 编辑）→ 这里的全局默认 → 系统安全默认。
               配置会在电话、微信、QQ 的语音播放中生效；合成失败不影响文字聊天。
             </p>
+          </div>
+        </section>
+
+        {/* 语音识别 STT（转文字）：与 TTS 配置相互独立、互不覆盖；内置识别免配置 */}
+        <section>
+          <div className="mb-2 text-[13px] font-medium text-muted-foreground">语音识别 STT（转文字）</div>
+          <div className="flex flex-col gap-3 rounded-[12px] bg-card p-4">
+            <div className="flex gap-2">
+              {([
+                { id: 'builtin', label: '内置识别（免配置）' },
+                { id: 'openai', label: 'OpenAI 兼容' },
+              ] as const).map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  data-testid={`stt-provider-${p.id}`}
+                  onClick={() => updateSttConfig({ provider: p.id })}
+                  className={`h-10 flex-1 rounded-[10px] border text-[13px] font-medium transition-colors ${
+                    sttConfig.provider === p.id
+                      ? 'border-foreground bg-foreground text-background'
+                      : 'border-border text-foreground/80 hover:border-muted-foreground/40'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {sttConfig.provider === 'builtin' ? (
+              <p className="text-[12px] leading-relaxed text-muted-foreground">
+                使用内置识别引擎，免配置开箱即用：语音消息「转文字」、录音自动转写都走这里；
+                与上方 TTS（文字转语音）配置相互独立、互不覆盖。
+              </p>
+            ) : (
+              <>
+                <div>
+                  <FieldLabel>API 地址</FieldLabel>
+                  <Input
+                    value={sttConfig.baseUrl}
+                    onChange={(e) => updateSttConfig({ baseUrl: e.target.value })}
+                    placeholder="如 https://api.openai.com/v1"
+                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                  />
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
+                    兼容 OpenAI /audio/transcriptions 接口的服务商（Whisper 等）；填到 /v1 即可。
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel>API Key</FieldLabel>
+                  <div className="relative">
+                    <Input
+                      type={showSttKey ? 'text' : 'password'}
+                      value={sttConfig.apiKey}
+                      onChange={(e) => updateSttConfig({ apiKey: e.target.value })}
+                      placeholder="sk-…"
+                      className="h-10 rounded-[10px] bg-background pr-16 text-[14px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSttKey((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-muted-foreground"
+                    >
+                      {showSttKey ? '隐藏' : '显示'}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
+                    Key 加密存在本机，不进日志；识别请求经本站代理转发，不直接暴露给网页。
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel>识别模型（选填）</FieldLabel>
+                  <Input
+                    value={sttConfig.model}
+                    onChange={(e) => updateSttConfig({ model: e.target.value })}
+                    placeholder="如 whisper-1（留空用默认 whisper-1）"
+                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {['whisper-1', 'whisper-large-v3', 'SenseVoiceSmall'].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => updateSttConfig({ model: m })}
+                        className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                          sttConfig.model.trim() === m
+                            ? 'border-foreground bg-foreground text-background'
+                            : 'border-border text-foreground/70 hover:border-muted-foreground/40'
+                        }`
+                      }
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-[12px] leading-relaxed text-muted-foreground">
+                  保存后立即生效（每次转文字现场读取）；识别失败不影响语音消息的发送与播放。
+                </p>
+              </>
+            )}
           </div>
         </section>
       </div>

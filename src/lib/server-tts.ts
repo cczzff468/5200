@@ -58,13 +58,14 @@ interface HttpsOptions {
   method: 'GET' | 'POST';
   url: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: string | Buffer;
   timeoutMs: number;
 }
 
 /** 返回 {status, json} 或 {status, binary}；非 2xx 也返回（由调用方决定错误文案）。
- *  https 用 node:https 强制 IPv4；http（本地/局域网 TTS 服务器，如 GPT-SoVITS）走 node:http */
-function httpsRequest(opts: HttpsOptions): Promise<{ status: number; json: unknown; binary: Buffer; contentType: string }> {
+ *  https 用 node:https 强制 IPv4；http（本地/局域网 TTS/STT 服务器）走 node:http。
+ *  导出给 /api/stt 的 OpenAI 兼容 multipart 转发复用（body 可为 Buffer）。 */
+export function httpsRequest(opts: HttpsOptions): Promise<{ status: number; json: unknown; binary: Buffer; contentType: string }> {
   return new Promise((resolve, reject) => {
     const u = new URL(opts.url);
     const isHttps = u.protocol === 'https:';

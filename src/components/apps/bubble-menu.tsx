@@ -14,6 +14,7 @@ import { motion } from 'framer-motion';
 import {
   CheckSquare,
   Copy,
+  FileText,
   Forward,
   Pencil,
   RefreshCw,
@@ -45,6 +46,7 @@ export const BUBBLE_MENU_ICONS = {
   forward: Forward,
   fav: Star,
   regen: RefreshCw,
+  stt: FileText,
 } as const;
 
 export interface BubbleMenuPos {

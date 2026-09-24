@@ -13,6 +13,7 @@ import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } fr
 import {
   ArrowLeftRight,
   AtSign,
+  AudioLines,
   Banknote,
   BellOff,
   Camera,
@@ -59,6 +60,12 @@ import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteM
 import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
+import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
+import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
+import { blobToDataUrl } from '@/lib/ios/audio-utils';
+import { stopVoicePlayback } from '@/lib/ios/voice-player';
 import { groupPreview, getGroup, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -279,8 +286,8 @@ interface WxMsg {
   content: string;
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq';
+   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写） */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -302,6 +309,8 @@ interface WxMsg {
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
   gcard?: GroupCardData;
+  /** 语音消息（kind='voice'）：音频 dataURL 持久化在聊天记录里，重启后仍可播放 */
+  voice?: VoiceMsgData;
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -448,6 +457,19 @@ function loadMsgs(contactId: string): WxMsg[] {
         }
         if (m.kind === 'image' && m.img && typeof m.img.src === 'string') {
           return m;
+        }
+        if (m.kind === 'voice' && m.voice && typeof m.voice.url === 'string') {
+          // 语音消息规范化（旧记录/损坏记录兼容：无 url 的语音直接当普通文本处理）
+          return {
+            ...m,
+            voice: {
+              url: m.voice.url,
+              duration: typeof m.voice.duration === 'number' && m.voice.duration > 0 ? m.voice.duration : 1,
+              wave: Array.isArray(m.voice.wave) ? m.voice.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+              transcript: typeof m.voice.transcript === 'string' && m.voice.transcript ? m.voice.transcript : undefined,
+              stt: m.voice.stt === 'pending' || m.voice.stt === 'done' || m.voice.stt === 'failed' ? m.voice.stt : undefined,
+            },
+          };
         }
         if (m.kind === 'location' && m.loc && typeof m.loc.name === 'string') {
           return { ...m, loc: { name: m.loc.name, address: typeof m.loc.address === 'string' ? m.loc.address : '' } };
@@ -3546,13 +3568,20 @@ function ChatPage({
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
-  // 退出聊天页/切换会话：停止语音播放并释放播放器（单例，防跨会话串音）
-  useEffect(() => () => stopSpeaking(), [peer.id]);
+  // 退出聊天页/切换会话：停止语音播放与 TTS 朗读并释放播放器（单例，防跨会话串音）
+  useEffect(() => () => {
+    stopSpeaking();
+    stopVoicePlayback();
+  }, [peer.id]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
   const [blk, setBlk] = useState<BlockEntry>(() => loadBlock('wx', peer.id));
   const [input, setInput] = useState('');
+  /** 语音输入模式：输入框替换为「按住 说话」胶囊（左侧圆钮切换） */
+  const [voiceMode, setVoiceMode] = useState(false);
+  /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
+  const [ttsSend, setTtsSend] = useState(false);
   /** 全局流式回复状态（请求由 chat-stream-store 发起并接收，退出聊天页/退出 App 不中断） */
   const sessionKey = `wx:${peer.id}`;
   const stream = useChatStream(sessionKey);
@@ -3826,8 +3855,8 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          // 图片消息以 [图片] 占位进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          // 图片以 [图片] 占位、语音以转写文本/占位进入历史（本轮图片实际内容由识图模型描述追加在末尾）
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'voice' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -3850,6 +3879,9 @@ function ChatPage({
             ? `[聊天记录：${(m.fwd.records ?? []).slice(-8).map((r) => `${r.name}：${r.text}`).join(' ／ ')}]`
             : m.kind === 'image'
             ? '[图片]'
+            : m.kind === 'voice'
+            ? // 语音消息：AI 直接读转写文本（自然对话）；识别失败/未识别时用占位
+              m.voice?.transcript || '[语音]'
             : m.kind === 'sticker' && m.stk
             ? m.role === 'me'
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -3894,7 +3926,7 @@ function ChatPage({
     const socialRules = buildGroupSocialRules(peer, 'wx', contacts, meAddrName);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
-    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => m.content)]
+    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按群级互通开关判断可见性
@@ -3918,7 +3950,7 @@ function ChatPage({
     // 世界书：扫描「最新用户消息 + 最近 8 条上下文」，命中触发词的条目按插入位置分组注入
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则）
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => m.content)]));
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]));
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，
     // 不拦截消息——角色仍可发消息，但要按人设表现出被拉黑/已拉黑的态度，并可输出对应标记）
     const blkBlock = buildBlockPromptBlock('wx', peer.id, me.name);
@@ -4207,9 +4239,17 @@ function ChatPage({
     );
   };
 
+  /** 文字转语音发送（定义在下方；send 在前引用 → 同 runAiTurnRef 的 ref 模式） */
+  const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
+
   const send = useCallback(() => {
     const text = input.trim();
     if (!text) return;
+    // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
+    if (ttsSend) {
+      sendTextAsVoiceRef.current(text);
+      return;
+    }
     const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
     // 对方正在回复（连发短消息的逐条播放也占用流，可持续数秒）：消息照常入列并排队，
     // 本轮流结束后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
@@ -4236,7 +4276,7 @@ function ChatPage({
       return;
     }
     runAiTurn(userMsg);
-  }, [input, me, peer, runAiTurn, sessionKey, sentenceSend, quote]);
+  }, [input, me, peer, runAiTurn, sessionKey, sentenceSend, quote, ttsSend]);
 
   /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
   const dispatchBatch = useCallback(() => {
@@ -4245,6 +4285,115 @@ function ChatPage({
     markPendingBatch(sessionKey, false);
     runAiTurn(null);
   }, [pendingDispatch, runAiTurn, sessionKey]);
+
+  // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字 ----------------
+
+  /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+
+  /** 语音消息落库：入列 → （录音）后台转文字 → 触发 AI 回复；
+   *  presetTranscript = 文字转语音的原文（不再识别）；selfChat 只记录；回复中排队补跑 */
+  const commitVoiceMsg = useCallback(
+    (clip: VoiceClip, presetTranscript?: string) => {
+      const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
+      const voice: VoiceMsgData = hasText
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, ...(clip.blob ? { stt: 'pending' as const } : { stt: 'done' as const }) };
+      const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice };
+      setMsgs((prev) => [...prev, msg]);
+      // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复
+      if (peer.id === me.id) return;
+      const selfId = msg.id;
+      const patchAndTrigger = (transcript: string) => {
+        let next: WxMsg[] = [];
+        setMsgs((prev) => {
+          next = prev.map((x) =>
+            x.id === selfId && x.voice
+              ? { ...x, voice: { ...x.voice, transcript: transcript || undefined, stt: transcript ? ('done' as const) : ('failed' as const) } }
+              : x,
+          );
+          return next;
+        });
+        saveMsgs(peer.id, next);
+        if (isChatStreaming(sessionKey)) {
+          wxQueuedTurns.add(peer.id); // 对方正在回复：本轮结束后自动补跑（补跑读最新落盘，能读到转写）
+          return;
+        }
+        // 转写已落库：把最新消息数组作为 base 交给 AI（避免闭包旧状态），消息早已在列 → userMsg 传 null
+        window.setTimeout(() => runAiTurnRef.current?.(null, [], undefined, next), 60);
+      };
+      if (hasText || !clip.blob) {
+        if (isChatStreaming(sessionKey)) {
+          wxQueuedTurns.add(peer.id);
+          return;
+        }
+        window.setTimeout(() => runAiTurnRef.current?.(null), 80);
+        return;
+      }
+      void transcribeAudioBlob(clip.blob)
+        .then((text) => patchAndTrigger(text))
+        .catch(() => patchAndTrigger(''));
+    },
+    [me.id, peer.id, sessionKey],
+  );
+
+  /** 录音手势结果分发：松开=发语音；右滑=转文字发文本（失败回退语音）；取消/太短=丢弃 */
+  const handleVoiceOutcome = useCallback(
+    (result: VoiceRecordResult | null, zone: VoiceRecordZone) => {
+      // 取消手势（哪怕录够了时长）与太短结果一律丢弃；仅「原松开未滑动」的太短给提示
+      if (!result || zone === 'cancel') {
+        if (!result && zone === null) onToast('说话时间太短');
+        return;
+      }
+      if (zone === 'stt') {
+        // 滑到「转文字」：识别成功发文字消息（与打字发送同链路）；失败回退为语音气泡，不丢录音
+        void transcribeAudioBlob(result.blob)
+          .then((text) => {
+            if (!text) throw new Error('empty');
+            const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now() };
+            if (peer.id === me.id) {
+              setMsgs((prev) => [...prev, userMsg]);
+              return;
+            }
+            if (isChatStreaming(sessionKey)) {
+              setMsgs((prev) => [...prev, userMsg]);
+              wxQueuedTurns.add(peer.id);
+              return;
+            }
+            if (sentenceSend) {
+              setMsgs((prev) => [...prev, userMsg]);
+              setPendingDispatch(true);
+              markPendingBatch(sessionKey, true);
+              return;
+            }
+            runAiTurnRef.current?.(userMsg);
+          })
+          .catch(() => {
+            onToast('转文字失败，已按语音发送');
+            void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
+          });
+        return;
+      }
+      // 原松开：语音气泡入列，后台转文字，转完触发回复
+      void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
+    },
+    [commitVoiceMsg, me.id, onToast, peer.id, sessionKey, sentenceSend],
+  );
+
+  const rec = useVoiceRecorder({ onResult: handleVoiceOutcome, onStartError: (m) => onToast(m) });
+
+  /** 文字转语音发送（不想说话时：输入文字 → 发出语音气泡）；失败只 toast，不当聊天内容 */
+  const sendTextAsVoice = useCallback(
+    (text: string) => {
+      setInput('');
+      setQuote(null);
+      void synthesizeSelfVoice(text)
+        .then((clip) => commitVoiceMsg(clip, text))
+        .catch((e: unknown) => onToast(e instanceof Error && e.message ? e.message : '语音生成失败，请重试'));
+    },
+    [commitVoiceMsg, onToast],
+  );
+  sendTextAsVoiceRef.current = sendTextAsVoice;
 
   // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成 ----------------
 
@@ -4256,7 +4405,11 @@ function ChatPage({
         : '[表情]'
       : m.kind === 'image'
         ? '[图片]'
-        : m.kind === 'location'
+        : m.kind === 'voice'
+          ? m.voice?.transcript
+            ? `[语音] ${m.voice.transcript}`
+            : '[语音]'
+          : m.kind === 'location'
           ? `[位置] ${m.loc?.name ?? ''}`
           : m.kind === 'redpacket' && m.rp
             ? `[红包] ¥${m.rp.amount} ${m.rp.blessing}`
@@ -4277,7 +4430,11 @@ function ChatPage({
   const buildMsgMenuItems = (m: WxMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isText = !m.kind || m.kind === 'text';
-    const items: BubbleMenuItem[] = [{ key: 'copy', label: '复制', icon: B.copy }];
+    const isVoice = m.kind === 'voice';
+    const items: BubbleMenuItem[] = [];
+    // 语音消息首项「转文字」（已有结果时点击提示；识别失败可重试），随后仍是复制（复制转写结果）
+    if (isVoice) items.push({ key: 'stt', label: '转文字', icon: B.stt });
+    items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (isText) items.push({ key: 'quote', label: '引用', icon: B.quote });
@@ -4353,6 +4510,8 @@ function ChatPage({
     if (m.kind === 'sticker' && m.stk) return { id, role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { id, role: 'me', content: '', time: Date.now(), kind: 'image', img: { ...m.img } };
     if (m.kind === 'location' && m.loc) return { id, role: 'me', content: '', time: Date.now(), kind: 'location', loc: { ...m.loc } };
+    // 语音消息整条克隆（含音频 dataURL），目标会话里照常可播放
+    if (m.kind === 'voice' && m.voice) return { id, role: 'me', content: '', time: Date.now(), kind: 'voice', voice: { ...m.voice } };
     const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family';
     return { id, role: 'me', content: isCard ? quoteContentOf(m) : m.content, time: Date.now(), kind: 'forward', fwd: { from: peer.name }, quote: m.quote };
   };
@@ -4422,6 +4581,33 @@ function ChatPage({
     setMsgMenu(null);
     if (!m) return;
     switch (key) {
+      case 'stt': {
+        // 语音消息「转文字」：已有结果 → 提示；否则现场识别（builtin 免配置），失败可重试
+        const v = m.voice;
+        if (!v) break;
+        if (v.stt === 'done' && v.transcript) {
+          onToast('转文字结果已显示在气泡下方');
+          break;
+        }
+        onToast('正在转文字…');
+        void (async () => {
+          try {
+            const blob = await (await fetch(v.url)).blob();
+            const text = await transcribeAudioBlob(blob);
+            if (!text) {
+              onToast('转文字失败，请重试');
+              return;
+            }
+            setMsgs((prev) =>
+              prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: text, stt: 'done' as const } } : x)),
+            );
+            onToast('已转文字');
+          } catch {
+            onToast('转文字失败，请重试');
+          }
+        })();
+        break;
+      }
       case 'copy':
         copyTextWithToast(quoteContentOf(m), onToast);
         break;
@@ -5049,6 +5235,11 @@ function ChatPage({
                 <div {...bubblePress}>
                   <ImageMsgBubble src={m.img.src} onClick={() => setViewerSrc(m.img?.src ?? null)} />
                 </div>
+              ) : m.kind === 'voice' && m.voice ? (
+                /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方 */
+                <div {...bubblePress}>
+                  <VoiceMsgBubble msgId={m.id} voice={m.voice} side={m.role} theme="wx" />
+                </div>
               ) : m.kind === 'location' && m.loc ? (
                 <div {...bubblePress}>
                   <LocBubble name={m.loc.name} address={m.loc.address} onClick={() => setLocViewId(m.id)} />
@@ -5286,14 +5477,29 @@ function ChatPage({
           <div className="flex items-center gap-2.5">
             <button
               type="button"
-              aria-label="语音输入"
-              onClick={() => onToast('语音输入暂未开放')}
+              aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
+              data-testid="wx-voice-toggle"
+              onClick={() => {
+                setVoiceMode((v) => !v);
+                setPlusOpen(false);
+                setStickerOpen(false);
+              }}
               className="shrink-0 active:opacity-70"
             >
-              <span className="flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.5px] border-black/90 bg-transparent text-black/85 transition-colors active:bg-black/[0.06] dark:border-white/75 dark:text-white/85 dark:active:bg-white/10">
+              <span
+                className={`flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.5px] bg-transparent transition-colors active:bg-black/[0.06] dark:active:bg-white/10 ${
+                  voiceMode
+                    ? 'border-[#07C160] text-[#07C160]'
+                    : 'border-black/90 text-black/85 dark:border-white/75 dark:text-white/85'
+                }`}
+              >
                 <VoiceWaveGlyph size={20} />
               </span>
             </button>
+            {voiceMode ? (
+              /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
+              <VoiceHoldBar rec={rec} testId="wx-voice-hold" />
+            ) : (
             <input
               data-testid="wx-chat-input"
               value={input}
@@ -5313,20 +5519,39 @@ function ChatPage({
               placeholder=""
               className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
             />
+            )}
             {(input.trim() || canDispatch) ? (
-              <button
-                type="button"
-                aria-label={input.trim() ? '发送' : '发送（让对方回复）'}
-                data-testid="wx-chat-send"
-                disabled={streaming}
-                onClick={() => {
-                  if (input.trim()) void send();
-                  else dispatchBatch();
-                }}
-                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
-              >
-                发送
-              </button>
+              <>
+                {/* 文字转语音开关（有文字时出现）：开启后发送的文字变为语音气泡 */}
+                {input.trim() ? (
+                  <button
+                    type="button"
+                    aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+                    data-testid="wx-tts-toggle"
+                    onClick={() => {
+                      const nv = !ttsSend;
+                      setTtsSend(nv);
+                      onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+                    }}
+                    className={`shrink-0 transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/55 dark:text-white/55'}`}
+                  >
+                    <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}
+                  data-testid="wx-chat-send"
+                  disabled={streaming}
+                  onClick={() => {
+                    if (input.trim()) void send();
+                    else dispatchBatch();
+                  }}
+                  className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+                >
+                  发送
+                </button>
+              </>
             ) : (
               <div className="flex shrink-0 items-center gap-4 text-black/80 dark:text-white/80">
                 <button
@@ -5895,6 +6120,9 @@ function ChatPage({
           testPrefix="wx-menu"
         />
       )}
+
+      {/* 录音浮层（按住说话期间：计时 + 实时波形 + 取消/转文字手势区） */}
+      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
 
       {/* 页内 toast（收藏成功/取消收藏/已复制/已转发给 xx 等操作提示） */}
       <LocalToast msg={chatToast} />

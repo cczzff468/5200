@@ -1,0 +1,810 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * 语音备忘录 App —— 仿 iOS 17 语音备忘录（跟随主题浅色/深色 + 红色录制元素 #FF453A）
+     5→ * - 录音：MediaRecorder（mime 依次尝试 audio/webm → audio/mp4 → 默认），支持暂停/继续
+     6→ * - 实时波形：AudioContext + AnalyserNode，48 根红色竖条 rAF 绘制
+     7→ * - 播放：模块级单例 Audio，行内进度 rAF 更新；切歌/卸载时停止并回收 ObjectURL
+     8→ * - 浅色模式整体 bg-background 浅色；录音钮空闲态外圈用红色投影/红晕替代深色模式的白底
+     9→ */
+    10→
+    11→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    12→import { AudioLines, ChevronDown, Pause, Pencil, Play, Share2, Trash2 } from 'lucide-react';
+    13→import { formatDuration, genId, localDB, type RecordingRecord } from '@/lib/ios/db';
+    14→import { IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
+    15→import { BackToHome } from '@/components/ios/BackToHome';
+    16→
+    17→// ---------------- 模块级播放单例 ----------------
+    18→
+    19→let pbAudio: HTMLAudioElement | null = null;
+    20→let pbUrl: string | null = null;
+    21→
+    22→function getPlaybackAudio(): HTMLAudioElement {
+    23→  if (!pbAudio) pbAudio = new Audio();
+    24→  return pbAudio;
+    25→}
+    26→
+    27→/** 停止播放并回收 ObjectURL */
+    28→function stopPlayback() {
+    29→  if (pbAudio) {
+    30→    pbAudio.pause();
+    31→    pbAudio.onended = null;
+    32→  }
+    33→  if (pbUrl) {
+    34→    URL.revokeObjectURL(pbUrl);
+    35→    pbUrl = null;
+    36→  }
+    37→}
+    38→
+    39→// ---------------- 工具 ----------------
+    40→
+    41→function pickMime(): string | undefined {
+    42→  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    43→    return undefined;
+    44→  }
+    45→  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+    46→  for (const c of candidates) {
+    47→    try {
+    48→      if (MediaRecorder.isTypeSupported(c)) return c;
+    49→    } catch {
+    50→      /* ignore */
+    51→    }
+    52→  }
+    53→  return undefined;
+    54→}
+    55→
+    56→function extFromMime(mime: string): string {
+    57→  const m = mime.toLowerCase();
+    58→  if (m.includes('mp4') || m.includes('aac') || m.includes('m4a')) return 'm4a';
+    59→  if (m.includes('ogg')) return 'ogg';
+    60→  if (m.includes('wav')) return 'wav';
+    61→  return 'webm';
+    62→}
+    63→
+    64→/** mm:ss（两位分钟，与 formatDuration 的 m:ss 不同） */
+    65→function mmss(total: number): string {
+    66→  const s = Math.max(0, Math.floor(total));
+    67→  return `${Math.floor(s / 60)
+    68→    .toString()
+    69→    .padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+    70→}
+    71→
+    72→/** 12 小时制：下午3:45 */
+    73→function ampmTime(ts: number): string {
+    74→  const d = new Date(ts);
+    75→  const h = d.getHours();
+    76→  const ampm = h < 12 ? '上午' : '下午';
+    77→  const h12 = h % 12 === 0 ? 12 : h % 12;
+    78→  return `${ampm}${h12}:${d.getMinutes().toString().padStart(2, '0')}`;
+    79→}
+    80→
+    81→function dateGroupLabel(ts: number): string {
+    82→  const d = new Date(ts);
+    83→  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    84→  const diffDays = Math.floor((startOf(new Date()) - startOf(d)) / 86400000);
+    85→  if (diffDays <= 0) return '今天';
+    86→  if (diffDays === 1) return '昨天';
+    87→  const now = new Date();
+    88→  const monday = new Date(now);
+    89→  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    90→  monday.setHours(0, 0, 0, 0);
+    91→  if (d.getTime() >= monday.getTime()) {
+    92→    const names = ['日', '一', '二', '三', '四', '五', '六'] as const;
+    93→    return `周${names[d.getDay()]}`;
+    94→  }
+    95→  return `${d.getMonth() + 1}月${d.getDate()}日`;
+    96→}
+    97→
+    98→function nextRecordingName(rows: RecordingRecord[]): string {
+    99→  let max = 0;
+   100→  for (const r of rows) {
+   101→    const m = /^新录音 (\d+)$/.exec(r.name);
+   102→    if (m) max = Math.max(max, Number.parseInt(m[1], 10));
+   103→  }
+   104→  return `新录音 ${max + 1}`;
+   105→}
+   106→
+   107→// ---------------- 波形绘制 ----------------
+   108→
+   109→const BAR_COUNT = 48;
+   110→const BAR_GAP = 3;
+   111→
+   112→/** 静态波形的确定性振幅（0~1，左右镜像对称） */
+   113→const STATIC_AMPS: number[] = Array.from({ length: BAR_COUNT }, (_, i) => {
+   114→  const m = i < BAR_COUNT / 2 ? i : BAR_COUNT - 1 - i;
+   115→  const env = 0.35 + 0.65 * (m / (BAR_COUNT / 2));
+   116→  return Math.min(1, 0.22 + 0.6 * Math.abs(Math.sin(m * 0.55 + 0.8)) * env);
+   117→});
+   118→
+   119→/** 主题自适应的波形颜色（.dark 挂在手机壳层，用 closest 探测） */
+   120→function waveColors(canvas: HTMLCanvasElement): { live: string; idle: string } {
+   121→  const dark = canvas.closest('.dark') !== null;
+   122→  return dark
+   123→    ? { live: 'rgba(255,255,255,0.92)', idle: 'rgba(255,255,255,0.22)' }
+   124→    : { live: 'rgba(0,0,0,0.82)', idle: 'rgba(0,0,0,0.16)' };
+   125→}
+   126→
+   127→function drawBar(
+   128→  ctx: CanvasRenderingContext2D,
+   129→  x: number,
+   130→  y: number,
+   131→  bw: number,
+   132→  barH: number
+   133→): void {
+   134→  const roundRect = (
+   135→    ctx as unknown as { roundRect?: (x: number, y: number, w: number, h: number, r: number) => void }
+   136→  ).roundRect;
+   137→  if (typeof roundRect === 'function') {
+   138→    ctx.beginPath();
+   139→    roundRect.call(ctx, x, y, bw, barH, bw / 2);
+   140→    ctx.fill();
+   141→  } else {
+   142→    ctx.fillRect(x, y, bw, barH);
+   143→  }
+   144→}
+   145→
+   146→function drawWave(canvas: HTMLCanvasElement | null, analyser: AnalyserNode | null, active: boolean) {
+   147→  if (!canvas) return;
+   148→  const ctx = canvas.getContext('2d');
+   149→  if (!ctx) return;
+   150→  const dpr = window.devicePixelRatio || 1;
+   151→  const w = canvas.clientWidth;
+   152→  const h = canvas.clientHeight;
+   153→  if (w <= 0 || h <= 0) return;
+   154→  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+   155→    canvas.width = Math.round(w * dpr);
+   156→    canvas.height = Math.round(h * dpr);
+   157→  }
+   158→  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+   159→  ctx.clearRect(0, 0, w, h);
+   160→  const bw = Math.max(2, (w - BAR_GAP * (BAR_COUNT - 1)) / BAR_COUNT);
+   161→  const colors = waveColors(canvas);
+   162→
+   163→  // 未录音/暂停：静态居中对称波形条
+   164→  if (!active || !analyser) {
+   165→    ctx.fillStyle = colors.idle;
+   166→    for (let i = 0; i < BAR_COUNT; i++) {
+   167→      const barH = Math.max(3, STATIC_AMPS[i] * h * 0.62);
+   168→      const x = i * (bw + BAR_GAP);
+   169→      drawBar(ctx, x, (h - barH) / 2, bw, barH);
+   170→    }
+   171→    return;
+   172→  }
+   173→
+   174→  const data = new Uint8Array(analyser.frequencyBinCount);
+   175→  analyser.getByteFrequencyData(data);
+   176→  ctx.fillStyle = colors.live;
+   177→  for (let i = 0; i < BAR_COUNT; i++) {
+   178→    // 频率轴按幂曲线取样，让低中频分布更自然
+   179→    const t = i / BAR_COUNT;
+   180→    const bin = Math.min(data.length - 1, Math.floor(Math.pow(t, 1.4) * data.length * 0.72));
+   181→    const v = data[bin] / 255;
+   182→    const barH = Math.max(3, v * h * 0.92);
+   183→    const x = i * (bw + BAR_GAP);
+   184→    drawBar(ctx, x, (h - barH) / 2, bw, barH);
+   185→  }
+   186→}
+   187→
+   188→// ---------------- 行组件 ----------------
+   189→
+   190→function RecordingRow({
+   191→  record,
+   192→  expanded,
+   193→  renaming,
+   194→  isLoaded,
+   195→  isPlaying,
+   196→  playPos,
+   197→  onToggleExpand,
+   198→  onTogglePlay,
+   199→  onRenameStart,
+   200→  onRenameCommit,
+   201→  onShare,
+   202→  onDelete,
+   203→}: {
+   204→  record: RecordingRecord;
+   205→  expanded: boolean;
+   206→  renaming: boolean;
+   207→  isLoaded: boolean;
+   208→  isPlaying: boolean;
+   209→  playPos: number;
+   210→  onToggleExpand: () => void;
+   211→  onTogglePlay: () => void;
+   212→  onRenameStart: () => void;
+   213→  onRenameCommit: (value: string) => void;
+   214→  onShare: () => void;
+   215→  onDelete: () => void;
+   216→}) {
+   217→  const pct = isLoaded ? Math.min(100, (playPos / Math.max(1, record.duration)) * 100) : 0;
+   218→
+   219→  return (
+   220→    <div>
+   221→      <div
+   222→        role="button"
+   223→        tabIndex={0}
+   224→        onClick={onToggleExpand}
+   225→        onKeyDown={(e) => {
+   226→          if (e.key === 'Enter' || e.key === ' ') {
+   227→            e.preventDefault();
+   228→            onToggleExpand();
+   229→          }
+   230→        }}
+   231→        className="flex w-full cursor-pointer items-center px-5 py-4 text-left transition-colors active:bg-muted/50"
+   232→      >
+   233→        {renaming ? (
+   234→          <input
+   235→            autoFocus
+   236→            defaultValue={record.name}
+   237→            aria-label="重命名录音"
+   238→            onClick={(e) => e.stopPropagation()}
+   239→            onKeyDown={(e) => {
+   240→              e.stopPropagation();
+   241→              if (e.key === 'Enter') onRenameCommit(e.currentTarget.value);
+   242→              if (e.key === 'Escape') onRenameCommit('');
+   243→            }}
+   244→            onBlur={(e) => onRenameCommit(e.currentTarget.value)}
+   245→            className="w-full rounded-[10px] bg-muted px-2.5 py-1 text-[17px] text-foreground outline-none focus:ring-2 focus:ring-foreground/30"
+   246→          />
+   247→        ) : (
+   248→          <>
+   249→            <div className="min-w-0 flex-1">
+   250→              <div className="truncate text-[17px] leading-snug">{record.name}</div>
+   251→              <div className="mt-[3px] truncate text-[13px] leading-snug text-muted-foreground">
+   252→                {dateGroupLabel(record.createdAt)} {ampmTime(record.createdAt)}
+   253→              </div>
+   254→            </div>
+   255→            {/* 时长右侧独立列（iOS 语音备忘录同款） */}
+   256→            <span className="ml-3 shrink-0 text-[14px] leading-none tabular-nums text-muted-foreground">
+   257→              {formatDuration(record.duration)}
+   258→            </span>
+   259→            <ChevronDown
+   260→              className={`ml-2 h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
+   261→                expanded ? 'rotate-180' : ''
+   262→              }`}
+   263→            />
+   264→          </>
+   265→        )}
+   266→      </div>
+   267→
+   268→      {expanded && (
+   269→        <div className="px-5 pb-4 pt-0.5">
+   270→          {/* 播放控制：按钮 + 进度条 */}
+   271→          <div className="flex items-center gap-3.5">
+   272→            <button
+   273→              type="button"
+   274→              onClick={onTogglePlay}
+   275→              aria-label={isPlaying ? `暂停播放「${record.name}」` : `播放「${record.name}」`}
+   276→              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted transition duration-150 active:scale-90"
+   277→            >
+   278→              {isPlaying ? (
+   279→                <Pause className="h-[18px] w-[18px]" fill="currentColor" />
+   280→              ) : (
+   281→                <Play className="ml-0.5 h-[18px] w-[18px]" fill="currentColor" />
+   282→              )}
+   283→            </button>
+   284→            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+   285→              <div
+   286→                className="h-full rounded-full bg-foreground/85 transition-[width] duration-150"
+   287→                style={{ width: `${pct}%` }}
+   288→              />
+   289→            </div>
+   290→          </div>
+   291→          {/* 播放时间：两端对齐 */}
+   292→          <div className="mt-1.5 flex items-center justify-between pl-[58px] text-[11px] tabular-nums text-muted-foreground">
+   293→            <span>{formatDuration(isLoaded ? playPos : 0)}</span>
+   294→            <span>{formatDuration(record.duration)}</span>
+   295→          </div>
+   296→          {/* 行操作 */}
+   297→          <div className="mt-3 flex gap-2">
+   298→            <button
+   299→              type="button"
+   300→              onClick={onRenameStart}
+   301→              className="flex items-center gap-1.5 rounded-full bg-muted px-3.5 py-1.5 text-[13px] transition-colors active:bg-muted/60"
+   302→            >
+   303→              <Pencil className="h-3.5 w-3.5" />
+   304→              重命名
+   305→            </button>
+   306→            <button
+   307→              type="button"
+   308→              onClick={onShare}
+   309→              className="flex items-center gap-1.5 rounded-full bg-muted px-3.5 py-1.5 text-[13px] transition-colors active:bg-muted/60"
+   310→            >
+   311→              <Share2 className="h-3.5 w-3.5" />
+   312→              分享
+   313→            </button>
+   314→            <button
+   315→              type="button"
+   316→              onClick={onDelete}
+   317→              className="flex items-center gap-1.5 rounded-full bg-[#FF453A]/10 px-3.5 py-1.5 text-[13px] text-[#FF453A] transition-colors active:bg-[#FF453A]/20"
+   318→            >
+   319→              <Trash2 className="h-3.5 w-3.5" />
+   320→              删除
+   321→            </button>
+   322→          </div>
+   323→        </div>
+   324→      )}
+   325→    </div>
+   326→  );
+   327→}
+   328→
+   329→// ---------------- App ----------------
+   330→
+   331→type RecStatus = 'idle' | 'recording' | 'paused';
+   332→
+   333→export default function RecorderApp() {
+   334→  const [recordings, setRecordings] = useState<RecordingRecord[]>([]);
+   335→  const [expandedId, setExpandedId] = useState<string | null>(null);
+   336→  const [renamingId, setRenamingId] = useState<string | null>(null);
+   337→  const [status, setStatus] = useState<RecStatus>('idle');
+   338→  const [elapsed, setElapsed] = useState(0);
+   339→  const [micError, setMicError] = useState<string | null>(null);
+   340→  // 播放状态
+   341→  const [playId, setPlayId] = useState<string | null>(null);
+   342→  const [playActive, setPlayActive] = useState(false);
+   343→  const [playPos, setPlayPos] = useState(0);
+   344→
+   345→  // 录音相关 refs
+   346→  const recRef = useRef<MediaRecorder | null>(null);
+   347→  const streamRef = useRef<MediaStream | null>(null);
+   348→  const chunksRef = useRef<Blob[]>([]);
+   349→  const ctxRef = useRef<AudioContext | null>(null);
+   350→  const analyserRef = useRef<AnalyserNode | null>(null);
+   351→  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+   352→  const elapsedBaseRef = useRef<number>(0);
+   353→  const runStartRef = useRef<number>(0);
+   354→  const lastSecRef = useRef<number>(-1);
+   355→
+   356→  const reload = useCallback(async () => {
+   357→    const rows = await localDB.getAll('recordings');
+   358→    rows.sort((a, b) => b.createdAt - a.createdAt);
+   359→    setRecordings(rows);
+   360→  }, []);
+   361→
+   362→  useEffect(() => {
+   363→    // 首次加载：在 .then 回调中 setState（避免同步 setState）
+   364→    void localDB
+   365→      .getAll('recordings')
+   366→      .then((rows) => {
+   367→        rows.sort((a, b) => b.createdAt - a.createdAt);
+   368→        setRecordings(rows);
+   369→      })
+   370→      .catch(() => undefined);
+   371→  }, []);
+   372→
+   373→  const cleanupCapture = useCallback(() => {
+   374→    streamRef.current?.getTracks().forEach((t) => t.stop());
+   375→    streamRef.current = null;
+   376→    if (ctxRef.current && ctxRef.current.state !== 'closed') {
+   377→      void ctxRef.current.close().catch(() => undefined);
+   378→    }
+   379→    ctxRef.current = null;
+   380→    analyserRef.current = null;
+   381→  }, []);
+   382→
+   383→  const finalizeRecording = useCallback(
+   384→    async (mimeType: string) => {
+   385→      const chunks = chunksRef.current;
+   386→      chunksRef.current = [];
+   387→      const duration = Math.max(0, elapsedBaseRef.current);
+   388→      recRef.current = null;
+   389→      cleanupCapture();
+   390→      setStatus('idle');
+   391→      setElapsed(0);
+   392→      if (chunks.length === 0 || duration < 0.5) return;
+   393→      const blob = new Blob(chunks, { type: mimeType.includes('audio') ? mimeType : 'audio/webm' });
+   394→      const rows = await localDB.getAll('recordings');
+   395→      const record: RecordingRecord = {
+   396→        id: genId(),
+   397→        blob,
+   398→        name: nextRecordingName(rows),
+   399→        duration: Math.max(1, Math.round(duration)),
+   400→        createdAt: Date.now(),
+   401→      };
+   402→      await localDB.put('recordings', record);
+   403→      await reload();
+   404→    },
+   405→    [cleanupCapture, reload]
+   406→  );
+   407→
+   408→  const stopPlaybackRow = useCallback(() => {
+   409→    stopPlayback();
+   410→    setPlayId(null);
+   411→    setPlayActive(false);
+   412→    setPlayPos(0);
+   413→  }, []);
+   414→
+   415→  // ---------------- 录音控制 ----------------
+   416→
+   417→  const startRecording = useCallback(async () => {
+   418→    setMicError(null);
+   419→    // 录音时先停止行内播放，避免回声
+   420→    stopPlaybackRow();
+   421→    if (!navigator.mediaDevices?.getUserMedia) {
+   422→      setMicError('当前浏览器不支持录音');
+   423→      return;
+   424→    }
+   425→    try {
+   426→      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+   427→      streamRef.current = stream;
+   428→      const mime = pickMime();
+   429→      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+   430→      chunksRef.current = [];
+   431→      rec.ondataavailable = (e: BlobEvent) => {
+   432→        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+   433→      };
+   434→      rec.onstop = () => {
+   435→        void finalizeRecording(rec.mimeType || mime || 'audio/webm');
+   436→      };
+   437→      rec.start(250);
+   438→      recRef.current = rec;
+   439→
+   440→      const w = window as Window & { webkitAudioContext?: typeof AudioContext };
+   441→      const Ctor = window.AudioContext ?? w.webkitAudioContext;
+   442→      if (Ctor) {
+   443→        const ctx = new Ctor();
+   444→        void ctx.resume().catch(() => undefined);
+   445→        const source = ctx.createMediaStreamSource(stream);
+   446→        const analyser = ctx.createAnalyser();
+   447→        analyser.fftSize = 256;
+   448→        source.connect(analyser);
+   449→        ctxRef.current = ctx;
+   450→        analyserRef.current = analyser;
+   451→      }
+   452→
+   453→      elapsedBaseRef.current = 0;
+   454→      runStartRef.current = performance.now();
+   455→      lastSecRef.current = 0;
+   456→      setElapsed(0);
+   457→      setStatus('recording');
+   458→    } catch {
+   459→      setMicError('无法访问麦克风，请检查浏览器权限');
+   460→    }
+   461→  }, [finalizeRecording, stopPlaybackRow]);
+   462→
+   463→  const stopRecording = useCallback(() => {
+   464→    const rec = recRef.current;
+   465→    if (!rec) return;
+   466→    if (status === 'recording') {
+   467→      elapsedBaseRef.current += (performance.now() - runStartRef.current) / 1000;
+   468→    }
+   469→    try {
+   470→      if (rec.state !== 'inactive') rec.stop();
+   471→    } catch {
+   472→      /* ignore */
+   473→    }
+   474→    setStatus('idle');
+   475→  }, [status]);
+   476→
+   477→  const togglePause = useCallback(() => {
+   478→    const rec = recRef.current;
+   479→    if (!rec) return;
+   480→    if (status === 'recording') {
+   481→      try {
+   482→        rec.pause();
+   483→      } catch {
+   484→        /* ignore */
+   485→      }
+   486→      elapsedBaseRef.current += (performance.now() - runStartRef.current) / 1000;
+   487→      try {
+   488→        void ctxRef.current?.suspend().catch(() => undefined);
+   489→      } catch {
+   490→        /* ignore */
+   491→      }
+   492→      setStatus('paused');
+   493→    } else if (status === 'paused') {
+   494→      try {
+   495→        rec.resume();
+   496→      } catch {
+   497→        /* ignore */
+   498→      }
+   499→      try {
+   500→        void ctxRef.current?.resume().catch(() => undefined);
+   501→      } catch {
+   502→        /* ignore */
+   503→      }
+   504→      runStartRef.current = performance.now();
+   505→      setStatus('recording');
+   506→    }
+   507→  }, [status]);
+   508→
+   509→  // ---------------- 行操作 ----------------
+   510→
+   511→  const toggleExpand = useCallback((id: string) => {
+   512→    setRenamingId(null);
+   513→    setExpandedId((cur) => (cur === id ? null : id));
+   514→  }, []);
+   515→
+   516→  const togglePlayRow = useCallback(
+   517→    (rec: RecordingRecord) => {
+   518→      const audio = getPlaybackAudio();
+   519→      if (playId === rec.id) {
+   520→        if (playActive) {
+   521→          audio.pause();
+   522→          setPlayActive(false);
+   523→        } else {
+   524→          // 播放到结尾后重新点击 → 从头开始
+   525→          if (audio.currentTime >= rec.duration - 0.05) {
+   526→            try {
+   527→              audio.currentTime = 0;
+   528→            } catch {
+   529→              /* ignore */
+   530→            }
+   531→          }
+   532→          audio.play().then(
+   533→            () => setPlayActive(true),
+   534→            () => setPlayActive(false)
+   535→          );
+   536→        }
+   537→        return;
+   538→      }
+   539→      // 切歌：先回收旧 ObjectURL
+   540→      stopPlayback();
+   541→      const url = URL.createObjectURL(rec.blob);
+   542→      pbUrl = url;
+   543→      audio.src = url;
+   544→      audio.onended = () => {
+   545→        setPlayId(null);
+   546→        setPlayActive(false);
+   547→        setPlayPos(0);
+   548→      };
+   549→      setPlayId(rec.id);
+   550→      setPlayPos(0);
+   551→      setPlayActive(true);
+   552→      audio.play().catch(() => setPlayActive(false));
+   553→    },
+   554→    [playActive, playId]
+   555→  );
+   556→
+   557→  const commitRename = useCallback(
+   558→    async (rec: RecordingRecord, value: string) => {
+   559→      setRenamingId(null);
+   560→      const name = value.trim();
+   561→      if (!name || name === rec.name) return;
+   562→      await localDB.put('recordings', { ...rec, name });
+   563→      await reload();
+   564→    },
+   565→    [reload]
+   566→  );
+   567→
+   568→  const shareRecording = useCallback(async (rec: RecordingRecord) => {
+   569→    const ext = extFromMime(rec.blob.type || 'audio/webm');
+   570→    const file = new File([rec.blob], `${rec.name}.${ext}`, { type: rec.blob.type || 'audio/webm' });
+   571→    const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
+   572→    if (nav.share && nav.canShare && nav.canShare({ files: [file] })) {
+   573→      try {
+   574→        await nav.share({ files: [file], title: rec.name });
+   575→      } catch {
+   576→        /* 用户取消分享 */
+   577→      }
+   578→      return;
+   579→    }
+   580→    // 不支持 Web Share：降级为下载
+   581→    const url = URL.createObjectURL(rec.blob);
+   582→    const a = document.createElement('a');
+   583→    a.href = url;
+   584→    a.download = file.name;
+   585→    document.body.appendChild(a);
+   586→    a.click();
+   587→    a.remove();
+   588→    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+   589→  }, []);
+   590→
+   591→  const deleteRecording = useCallback(
+   592→    async (rec: RecordingRecord) => {
+   593→      if (!window.confirm(`删除「${rec.name}」？此操作不可撤销。`)) return;
+   594→      if (playId === rec.id) stopPlaybackRow();
+   595→      await localDB.delete('recordings', rec.id);
+   596→      await reload();
+   597→    },
+   598→    [playId, reload, stopPlaybackRow]
+   599→  );
+   600→
+   601→  // ---------------- 波形 / 计时循环 ----------------
+   602→
+   603→  useEffect(() => {
+   604→    const canvas = canvasRef.current;
+   605→    if (status === 'idle') {
+   606→      drawWave(canvas, null, false);
+   607→      return;
+   608→    }
+   609→    let raf = 0;
+   610→    const loop = () => {
+   611→      drawWave(canvasRef.current, analyserRef.current, status === 'recording');
+   612→      if (status === 'recording') {
+   613→        const total = elapsedBaseRef.current + (performance.now() - runStartRef.current) / 1000;
+   614→        const sec = Math.floor(total);
+   615→        if (sec !== lastSecRef.current) {
+   616→          lastSecRef.current = sec;
+   617→          setElapsed(sec);
+   618→        }
+   619→      }
+   620→      raf = requestAnimationFrame(loop);
+   621→    };
+   622→    raf = requestAnimationFrame(loop);
+   623→    return () => cancelAnimationFrame(raf);
+   624→  }, [status]);
+   625→
+   626→  // ---------------- 播放进度循环 ----------------
+   627→
+   628→  useEffect(() => {
+   629→    if (!playId || !playActive) return;
+   630→    let raf = 0;
+   631→    let last = -1;
+   632→    const loop = () => {
+   633→      const a = pbAudio;
+   634→      if (a && !a.paused) {
+   635→        const t = a.currentTime;
+   636→        if (Math.abs(t - last) > 0.05) {
+   637→          last = t;
+   638→          setPlayPos(t);
+   639→        }
+   640→      }
+   641→      raf = requestAnimationFrame(loop);
+   642→    };
+   643→    raf = requestAnimationFrame(loop);
+   644→    return () => cancelAnimationFrame(raf);
+   645→  }, [playId, playActive]);
+   646→
+   647→  // ---------------- 卸载清理 ----------------
+   648→
+   649→  useEffect(() => {
+   650→    return () => {
+   651→      const rec = recRef.current;
+   652→      if (rec) {
+   653→        rec.onstop = null;
+   654→        rec.ondataavailable = null;
+   655→        try {
+   656→          if (rec.state !== 'inactive') rec.stop();
+   657→        } catch {
+   658→          /* ignore */
+   659→        }
+   660→      }
+   661→      recRef.current = null;
+   662→      streamRef.current?.getTracks().forEach((t) => t.stop());
+   663→      streamRef.current = null;
+   664→      if (ctxRef.current && ctxRef.current.state !== 'closed') {
+   665→        void ctxRef.current.close().catch(() => undefined);
+   666→      }
+   667→      ctxRef.current = null;
+   668→      analyserRef.current = null;
+   669→      stopPlayback();
+   670→    };
+   671→  }, []);
+   672→
+   673→  // ---------------- 分组 ----------------
+   674→
+   675→  const groups = useMemo(() => {
+   676→    const sorted = [...recordings].sort((a, b) => b.createdAt - a.createdAt);
+   677→    const out: { label: string; items: RecordingRecord[] }[] = [];
+   678→    for (const r of sorted) {
+   679→      const label = dateGroupLabel(r.createdAt);
+   680→      const last = out[out.length - 1];
+   681→      if (last && last.label === label) last.items.push(r);
+   682→      else out.push({ label, items: [r] });
+   683→    }
+   684→    return out;
+   685→  }, [recordings]);
+   686→
+   687→  // ---------------- 渲染 ----------------
+   688→
+   689→  return (
+   690→    <IOSScreen>
+   691→      <IOSNavBar inline title="语音备忘录" left={<BackToHome className="static!" />} />
+   692→
+   693→      <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto pb-5">
+   694→        {groups.length === 0 ? (
+   695→          <div className="flex h-full flex-col items-center justify-center gap-2 pb-10 text-muted-foreground">
+   696→            <AudioLines className="h-10 w-10 text-muted-foreground/50" />
+   697→            <div className="text-[15px] font-medium text-foreground">没有语音备忘录</div>
+   698→            <div className="text-[13px]">点击下方红色按钮开始录音</div>
+   699→          </div>
+   700→        ) : (
+   701→          groups.map((group) => (
+   702→            <div key={group.label} className="mb-4">
+   703→              <div className="sticky top-0 z-10 bg-background/85 px-6 py-1.5 text-[13px] font-semibold text-muted-foreground backdrop-blur">
+   704→                {group.label}
+   705→              </div>
+   706→              <div className="mx-4 divide-y divide-border/40 overflow-hidden rounded-[16px] bg-card">
+   707→                {group.items.map((rec) => (
+   708→                  <RecordingRow
+   709→                    key={rec.id}
+   710→                    record={rec}
+   711→                    expanded={expandedId === rec.id}
+   712→                    renaming={renamingId === rec.id}
+   713→                    isLoaded={playId === rec.id}
+   714→                    isPlaying={playId === rec.id && playActive}
+   715→                    playPos={playId === rec.id ? playPos : 0}
+   716→                    onToggleExpand={() => toggleExpand(rec.id)}
+   717→                    onTogglePlay={() => togglePlayRow(rec)}
+   718→                    onRenameStart={() => setRenamingId(rec.id)}
+   719→                    onRenameCommit={(value) => void commitRename(rec, value)}
+   720→                    onShare={() => void shareRecording(rec)}
+   721→                    onDelete={() => void deleteRecording(rec)}
+   722→                  />
+   723→                ))}
+   724→              </div>
+   725→            </div>
+   726→          ))
+   727→        )}
+   728→      </div>
+   729→
+   730→      {/* 底部录音区：波形舞台 + 大计时 + 录音钮 */}
+   731→      <div className="shrink-0 border-t border-border/60 bg-background px-6 pb-[34px] pt-3">
+   732→        <canvas
+   733→          ref={canvasRef}
+   734→          className="h-[72px] w-full [mask-image:linear-gradient(to_right,transparent,black_9%,black_91%,transparent)]"
+   735→          aria-hidden="true"
+   736→        />
+   737→        <div className="mt-1 flex h-[68px] flex-col items-center justify-center">
+   738→          <div
+   739→            className={`text-[52px] font-thin leading-none tabular-nums ${
+   740→              status === 'idle' ? 'text-foreground/25' : 'text-foreground'
+   741→            }`}
+   742→          >
+   743→            {mmss(elapsed)}
+   744→          </div>
+   745→          <div className="mt-1.5 flex h-4 items-center gap-1.5 text-[12px] leading-none text-muted-foreground">
+   746→            {status === 'recording' && (
+   747→              <>
+   748→                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#FF453A]" />
+   749→                <span>录音中</span>
+   750→              </>
+   751→            )}
+   752→            {status === 'paused' && <span>已暂停</span>}
+   753→            {status === 'idle' &&
+   754→              (micError ? (
+   755→                <span className="text-[#FF453A]">{micError}</span>
+   756→              ) : (
+   757→                <span>{recordings.length > 0 ? '点击一行展开播放与操作' : ''}</span>
+   758→              ))}
+   759→          </div>
+   760→        </div>
+   761→        <div className="mt-2 flex items-center justify-between">
+   762→          <div className="flex h-[72px] w-[72px] items-center justify-center">
+   763→            {status !== 'idle' && (
+   764→              <button
+   765→                type="button"
+   766→                onClick={togglePause}
+   767→                aria-label={status === 'paused' ? '继续录音' : '暂停录音'}
+   768→                className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-foreground transition duration-150 active:scale-90"
+   769→              >
+   770→                {status === 'paused' ? (
+   771→                  <Play className="h-5 w-5 translate-x-[1px]" fill="currentColor" />
+   772→                ) : (
+   773→                  <Pause className="h-5 w-5" fill="currentColor" />
+   774→                )}
+   775→              </button>
+   776→            )}
+   777→          </div>
+   778→          <button
+   779→            type="button"
+   780→            onClick={status === 'idle' ? () => void startRecording() : stopRecording}
+   781→            aria-label={status === 'idle' ? '开始录音' : '停止录音'}
+   782→            className="relative flex h-[72px] w-[72px] items-center justify-center rounded-full transition-transform active:scale-95"
+   783→          >
+   784→            {status === 'recording' && (
+   785→              <span
+   786→                aria-hidden="true"
+   787→                className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-[#FF453A]/25 [animation-duration:1.8s]"
+   788→              />
+   789→            )}
+   790→            {status === 'idle' ? (
+   791→              // 空闲：浅色模式红晕外圈（投影代替白底），深色模式保持白底红环
+   792→              <span className="flex h-[72px] w-[72px] items-center justify-center rounded-full bg-[#FF453A]/10 shadow-[0_8px_24px_rgba(255,69,58,0.3)] dark:bg-white dark:shadow-none dark:outline dark:outline-1 dark:outline-border/60">
+   793→                <span className="hidden h-[54px] w-[54px] items-center justify-center rounded-full border-[3px] border-[#FF453A] dark:flex">
+   794→                  <span className="h-[28px] w-[28px] rounded-full bg-[#FF453A]" />
+   795→                </span>
+   796→                <span className="h-[28px] w-[28px] rounded-full bg-[#FF453A] dark:hidden" />
+   797→              </span>
+   798→            ) : (
+   799→              <span className="flex h-[72px] w-[72px] items-center justify-center rounded-full bg-[#FF453A] shadow-[0_8px_24px_rgba(255,69,58,0.4)]">
+   800→                <span className="h-6 w-6 rounded-[5px] bg-white" />
+   801→              </span>
+   802→            )}
+   803→          </button>
+   804→          <div className="h-[72px] w-[72px]" />
+   805→        </div>
+   806→      </div>
+   807→    </IOSScreen>
+   808→  );
+   809→}
+   810→

@@ -8,6 +8,7 @@
  * - 安全：API Key 只随请求体发给本站代理 /api/tts，不在任何日志中出现
  */
 
+import { stopOtherAudio, registerAudioSource } from './audio-focus';
 import { getContact } from './contacts-store';
 import { SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings } from './store';
 
@@ -163,6 +164,8 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     opts.voiceId?.trim() || (await resolveVoiceForContact(opts.contactId ?? null)).voiceId;
 
   stopSpeaking();
+  // 与语音消息气泡播放互斥：开始 TTS 朗读前停掉在播的语音气泡
+  stopOtherAudio('tts');
   const myToken = playToken;
 
   const res = await fetch('/api/tts', {
@@ -213,3 +216,6 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
   // 正常播完（未被 stopSpeaking 打断）才触发 onEnd；电话的「对方讲完→回到听」状态机依赖它
   if (myToken === playToken) opts.onEnd?.();
 }
+
+// 注册到全局音频焦点：语音消息气泡开始播放前会停掉这里的 TTS 朗读
+registerAudioSource('tts', () => stopSpeaking());
