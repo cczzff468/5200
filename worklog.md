@@ -6531,3 +6531,22 @@ Stage Summary:
 - D6：壁纸四周从「拉伸原图延伸」升级为「边缘色延伸带」——无模糊、无接缝、无内容跳变，肉眼几乎看不出垫了东西
 - 涉及文件：src/components/ios/WallpaperLayers.tsx（新增）、PhoneShell.tsx、LockScreen.tsx
 - 经验：agent-browser errors 为会话级累积且 --clear 可能不生效，验证需关会话重开；多文件协作改动应一次保存完（避免 HMR 中间态）
+---
+Task ID: 8
+Agent: main (Z.ai Code)
+Task: 排查「拉黑功能消失」并全面清点其他需要恢复的功能（用户：「为什么没有拉黑功能了」「你再看看还有没有什么要恢复的」）
+
+Work Log:
+- 拉黑代码本体完好（src/lib/ios/block-state.ts + wechat/qq/chat 三应用 + chat-settings 开关组件都在）；真正断点：短信应用 chat.tsx 调用 SmsChatSettingsPage 时漏传 blockedByUser/onToggleBlock → 开关被隐藏；处理函数 toggleBlockFromSettings/blk 状态/气泡图标/申请卡片逻辑全部健在，纯入口断线
+- 根因定位：本地 main 与 9/23 自动快照（backup/remote-main-0923）为平行演化，备份线 chat.tsx:1503-1504 有该接线而 main 线从未有过；强推后用户记忆中的功能消失
+- 用 scripts/cmp-feat.mjs（新写：剥离注释后提取备份侧特征中文字符串比对 main）做全应用功能审计，筛出 2 组真丢失（其余均为措辞漂移假阳性——群聊解散/退出双流程、memory-bank 频率设置等 main 侧都有且更完整）：
+  ②微信/QQ 单聊 @提及（atOpen 浮层：键入@唤起→点选把@替换为「@名字 」；群聊版两线都有，单聊版只在备份线）
+  ③世界书空名单体验链：store.pendingContactCreate 跨App状态 + contacts.tsx 挂载消费（预选 CHAR 新建表单）+ worldbook 空名单两种原因诊断文案/「去联系人 App 新建 AI 角色」按钮/弹窗 h-16 大输入框/列表 shrink-0 防 flex 压扁
+- 移植保持备份线原实现（微信版带 selfChat 门控，QQ 版无；测试前缀 wx-chat-at/qq-chat-at）
+- tsc + lint 零错误；agent-browser 实测（360×800）：短信加好友→聊天设置拉黑开关出现→开启→系统消息「你已拉黑「小雨」」→关闭 aria-checked=false；微信/QQ 登录（QQ 凭据 88886666 从 IndexedDB contacts 读出）→单聊键入@→浮层出现→点选后输入框「@小雨 」；世界书新建弹窗渲染→专属绑定列表正常→建「测试书」→绑定菜单正常→删除恢复 0/0/0；全程 errors 面板零错误
+- commit 996ec7a 推送前工作区已验证
+
+Stage Summary:
+- 三组丢失功能全部找回：①短信拉黑开关 ②微信/QQ 单聊@提及 ③世界书空名单诊断+跳转创建（store/contacts/worldbook 三件套）
+- 经验：排查「功能消失」先查 UI 入口接线（处理函数在、开关不显示 = 属性漏传），再对照 backup 分支 diff；cmp-feat.mjs 可复用做双分支功能审计
+- 涉及文件：chat.tsx、wechat.tsx、qq.tsx、worldbook.tsx、contacts.tsx、store.ts、scripts/cmp-feat.mjs（新增）
