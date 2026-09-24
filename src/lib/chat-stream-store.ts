@@ -220,11 +220,34 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     }
   };
 
+  /**
+   * 最终兜底：代理 + 浏览器直连都失败后，请求服务端内置模型（forceSdk）生成回复；
+   * 成功把全量文本交给 onDelta 返回 true，失败（含非 200 / 空文本）返回 false 保留原错误。
+   */
+  const sdkFallbackOnce = async (roundMessages: ChatPayloadMessage[]): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: roundMessages, forceSdk: true }),
+      });
+      if (!res.ok) return false;
+      const text = await res.text();
+      if (!text.trim()) return false;
+      onDelta(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /** 本轮实际发送的消息（识图成功后会被替换为「原图消息 + 图片描述」的组合） */
+  let workMessages: ChatPayloadMessage[] = messages;
+
   try {
     // 识图前置步骤（设置 › 识图模型；未配置 / 本轮无图片时跳过，文字聊天零影响）：
     // 识图模型只负责「看」——把图片转成描述，追加为一条 user 上下文消息；
     // 最终回复仍由聊天模型生成；识图失败展示系统提示（不进上下文、不当角色台词），本轮按无图片继续
-    let workMessages = messages;
     if (opts.vision && opts.vision.images.length > 0) {
       const visionConfig = useSettings.getState().visionConfig;
       if (visionConfig.baseUrl.trim()) {
@@ -248,12 +271,20 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     await pacer?.end();
     patchState(rt, { status: 'done' });
   } catch (err) {
-    // 失败立刻放出已收内容（错误信息要马上可见；各 App 错误时按自己的文案落盘，不丢已到手的正文）
-    await pacer?.end({ immediate: true });
-    patchState(rt, {
-      status: 'error',
-      error: err instanceof Error && err.message ? err.message : '消息没有送达，请稍后重试',
-    });
+    // 代理与浏览器直连都失败：最后用服务端内置模型兜底一次（forceSdk），救回本轮回复；
+    // 兜底成功按正常完成收尾，失败才落错误文案（保留最先的代理侧错误，便于区分原因）
+    const viaSdk = await sdkFallbackOnce(workMessages);
+    if (viaSdk) {
+      await pacer?.end();
+      patchState(rt, { status: 'done' });
+    } else {
+      // 失败立刻放出已收内容（错误信息要马上可见；各 App 错误时按自己的文案落盘，不丢已到手的正文）
+      await pacer?.end({ immediate: true });
+      patchState(rt, {
+        status: 'error',
+        error: err instanceof Error && err.message ? err.message : '消息没有送达，请稍后重试',
+      });
+    }
   }
   // ---- 收尾（status 补丁与 finalize 在同一微任务里，订阅方重渲染时落盘已完成）----
   if (!rt.finalized) {

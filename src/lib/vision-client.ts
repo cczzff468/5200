@@ -35,6 +35,21 @@ function sanitizeImages(images: string[]): string[] {
   return images.filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
 }
 
+/** 内置识图兜底：POST /api/vision { forceSdk: true }（直连失败后的最终手段） */
+async function describeViaSdk(req: VisionRequest): Promise<string> {
+  const images = sanitizeImages(req.images);
+  if (images.length === 0) return '';
+  const res = await fetch('/api/vision', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ images, text: req.text, forceSdk: true }),
+  });
+  const data = (await res.json().catch(() => null)) as { desc?: unknown; error?: unknown } | null;
+  if (res.ok && data && typeof data.desc === 'string' && data.desc.trim()) return data.desc.trim();
+  const msg = typeof data?.error === 'string' && data.error ? data.error : `识图请求失败（HTTP ${res.status}）`;
+  throw new Error(msg);
+}
+
 /**
  * 请求识图描述：返回描述文本（可能为空串 = 模型没产出，调用方按未识图处理）。
  * 失败抛 Error（友好文案，由调用方展示为系统提示；绝不把错误当角色台词）。
@@ -45,9 +60,13 @@ export async function describeImages(config: VisionConfig, req: VisionRequest): 
   }
   const images = sanitizeImages(req.images);
   if (images.length === 0) return '';
-  // 内网/本机地址：云端服务器必然不可达 → 直接浏览器直连
+  // 内网/本机地址：云端服务器必然不可达 → 浏览器直连；直连也失败 → 内置识图兜底
   if (isPrivateApiUrl(config.baseUrl)) {
-    return directVisionDescribe(config, images, req.text, VISION_SYSTEM_PROMPT);
+    try {
+      return await directVisionDescribe(config, images, req.text, VISION_SYSTEM_PROMPT);
+    } catch {
+      return describeViaSdk(req);
+    }
   }
   const res = await fetch('/api/vision', {
     method: 'POST',
@@ -58,9 +77,13 @@ export async function describeImages(config: VisionConfig, req: VisionRequest): 
     | { desc?: unknown; error?: unknown; directOnly?: unknown }
     | null;
   if (res.ok && data && typeof data.desc === 'string') return data.desc.trim();
-  // 服务器建议直连（地区限制/网络不可达）→ 浏览器直连兜底
+  // 服务器建议直连（地区限制/网络不可达）→ 浏览器直连兜底；直连也失败 → 内置识图兜底
   if (data?.directOnly === true) {
-    return directVisionDescribe(config, images, req.text, VISION_SYSTEM_PROMPT);
+    try {
+      return await directVisionDescribe(config, images, req.text, VISION_SYSTEM_PROMPT);
+    } catch {
+      return describeViaSdk(req);
+    }
   }
   const msg = typeof data?.error === 'string' && data.error ? data.error : `识图请求失败（HTTP ${res.status}）`;
   throw new Error(msg);

@@ -142,6 +142,33 @@ function extractReplyText(raw: string): string {
   }
 }
 
+/**
+ * 内置模型兜底（z-ai-web-dev-sdk）：用户上游故障 / 未配置时把通话对话救回来，
+ * 与 /api/chat、server-llm.ts 同策略；SDK 不接收 system 角色，人设并入 assistant。
+ */
+async function sdkTurn(messages: CallApiMessage[]): Promise<string> {
+  const ZAI = (await import('z-ai-web-dev-sdk')).default;
+  const zai = await ZAI.create();
+  const completion = await zai.chat.completions.create({
+    messages: messages.map((m) => ({
+      role: m.role === 'system' ? ('assistant' as const) : m.role,
+      content: m.content,
+    })),
+    thinking: { type: 'disabled' },
+  });
+  const text = completion.choices[0]?.message?.content ?? '';
+  if (!text.trim()) throw new Error('内置模型返回空内容');
+  return text;
+}
+
+/** 通话回复清理：去 markdown 符号 / 首尾引号包裹（TTS 朗读友好） */
+function cleanCallReply(raw: string): string {
+  return raw
+    .replace(/[*_`#>~[\]]/g, '')
+    .replace(/^["'「『]+|["'」』]+$/g, '')
+    .trim();
+}
+
 /** 上游错误 → 通话场景友好文案 */
 function friendlyUpstreamError(status: number, bodyText: string): string {
   let msg = '';
@@ -409,13 +436,24 @@ export async function POST(req: NextRequest) {
     messages.push({ role: 'user', content: '（请继续用口语回应）' });
   }
 
-  // ---------- 统一走用户自己的 API（设置 App › API 设置），无内置模型 ----------
+  // ---------- 统一走用户自己的 API；未配置 / 上游故障时内置模型兜底 ----------
   const config = extractUpstreamConfig(root.config);
+
+  /** 内置模型兜底：把人设/记忆/时间块照常注入，保证通话体验不中断；viaSdk 供前端统计 */
+  const sdkFallback = async (): Promise<NextResponse> => {
+    try {
+      const reply = cleanCallReply(await sdkTurn(messages));
+      if (reply) return NextResponse.json({ reply, name: peerName, viaSdk: true });
+      return NextResponse.json({ error: '对方没有回应，请稍后再试' }, { status: 502 });
+    } catch (err) {
+      const detail = err instanceof Error && err.message ? err.message : '未知错误';
+      return NextResponse.json({ error: `内置模型也不可用：${detail}` }, { status: 502 });
+    }
+  };
+
   if (!config) {
-    return NextResponse.json(
-      { error: '尚未配置 API：请到 设置 › API 设置 填写接口地址后再拨打' },
-      { status: 400 }
-    );
+    // 未配置也能通话：直接内置模型接听
+    return sdkFallback();
   }
   let hostname = '';
   try {
@@ -431,12 +469,9 @@ export async function POST(req: NextRequest) {
   const result = await callUpstream(config, messages);
   if (result.reply) {
     // 去掉可能出现的 markdown 符号/首尾引号包裹
-    const reply = result.reply
-      .replace(/[*_`#>~[\]]/g, '')
-      .replace(/^["'「『]+|["'」』]+$/g, '')
-      .trim();
+    const reply = cleanCallReply(result.reply);
     if (reply) return NextResponse.json({ reply, name: peerName });
-    return NextResponse.json({ error: '对方没有回应，请稍后再试' }, { status: 502 });
   }
-  return NextResponse.json({ error: result.error ?? '对方信号不好，稍后再试' }, { status: 502 });
+  // 上游故障（连接失败/401/403/404/429/空回复）：内置模型兜底，通话不中断
+  return sdkFallback();
 }
