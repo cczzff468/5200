@@ -6617,3 +6617,25 @@ Stage Summary:
 - 「AI 称呼方式」设置已按用户要求移除：昵称只是 App 显示昵称，AI 统一用真实名字称呼（历史 nickname 设置值失效）；【用户的称呼】注入保留防止 AI 把昵称当另一个人
 - 行为保证：TTS 失败回退内置朗读（电话）/错误 toast（聊天），文字聊天永不中断；新播放停旧、页面销毁释放播放器；Key 不落日志
 - 涉及文件：src/lib/server-tts.ts（新）、src/app/api/tts/route.ts（新）、src/app/api/tts/voices/route.ts（新）、src/lib/ios/tts-client.ts（新）、src/components/apps/voice-play.tsx（新）、store.ts、settings.tsx、contacts.ts、contacts-store.ts、contacts.tsx、phone.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx
+
+---
+Task ID: 3（本次会话）
+Agent: 主协调者 (Z.ai Code)
+Task: ①修复「预览不显示」②语音 API 模型名处新增「拉取模型」功能（用户消息：预览不显示，还有语音API模型那里添加一个拉取功能）
+
+Work Log:
+- ①预览不显示根因：dev server 进程已死（3000 端口无监听、curl 000；dev.log 末尾遗留一次 EADDRINUSE 为重复启动尝试）。重启 `bun run dev` 后 GET / 200，页面正常渲染；agent-browser 全新加载复核（锁屏→解锁→主屏→实时天气小组件 21°C）全程正常
+- ②VoicePage 模型名新增「拉取模型」：与聊天/识图 API 页完全同款体验——复用 POST /api/settings/models（多候选路径 /v1/models→/models、401/403/404 语义）+ 内网地址（127.0.0.1/192.168.* 等）自动回落 directFetchModels 浏览器直连
+- TTS 语境特化：结果列表把 TTS 相关模型（/tts|speech|audio|voice/i）排到最前并加「语音」圆角小标签，普通聊天模型排后仍可选；搜索框 placeholder「搜索模型，如 tts / speech」；选中即写入 ttsConfig.model 并关面板；面板带 fixed 遮罩点击外部关闭（与 ApiPage 同款 z-20/z-30 层级）
+- 降级路径：服务商无模型列表接口（如 MiniMax 官方域名）→ 提示「该服务商未提供模型列表接口，不影响语音合成使用；可从下方常用模型中点选，或直接手动填写」；常用模型 chips 保留在输入框下方
+- 切换服务商时同步关闭模型面板并清错误/提示状态
+- E2E 验证（mock OpenAI 兼容服务商 4599 端口，CORS + /v1/models 混合列表 5 TTS + 3 聊天模型 + 401 校验，用后已删）：127.0.0.1 内网地址走浏览器直连成功拉取→面板 TTS 模型排前带「语音」标签；点选 qwen-tts → 模型输入框更新、面板关闭；bad-key → 401 错误文案「API Key 无效或未授权（401）」正确显示；360×800 视口截图确认模型行布局无溢出
+- 用户原有配置全程保护：测试前备份 IndexedDB ttsConfig 密文信封 + UI 字段明文（baseUrl=http://localhost:4599 / key=sk-test-123 / model=tts-1 / voice=nova），测试后逐字段还原，并整页 reload（锁屏→解锁→设置→语音 API）复核持久化无损
+- agent-browser 备忘：图标 div 内 synthetic PointerEvent 不触发 React 点击（须用 snapshot ref 点击）；页面 reload 后自动上锁，锁屏相机快捷钮（lucide-camera）会盖住 Dock 设置图标导致 click 报 covered，须先上滑解锁
+- tsc + lint 零错误；errors 面板零错误；dev.log 无错误
+- commit 9f76dc0 已推送 origin/main
+
+Stage Summary:
+- 预览问题=dev server 进程死亡（非代码问题），重启即恢复
+- 语音 API 模型名现支持「拉取模型」：多候选路径 + 内网直连兜底 + TTS 模型排前带标签 + 无列表接口优雅降级；与聊天/识图 API 配置体验完全一致且相互独立
+- 涉及文件：src/components/apps/settings.tsx（仅 VoicePage，+159/-7）
