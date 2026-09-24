@@ -2009,7 +2009,7 @@ export default function HomeScreen() {
   return (
     <div
       ref={rootRef}
-      className={`absolute inset-0 z-10 flex touch-none select-none flex-col px-5 pb-[38px] transition-[padding-top,opacity] duration-300 ${
+      className={`absolute inset-0 z-10 flex touch-none select-none flex-col pb-[38px] transition-[padding-top,opacity] duration-300 ${
         edit ? 'pt-[112px]' : 'pt-[64px]'
       } ${activeApp ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
       onPointerDown={rootPointerDown}
@@ -2059,7 +2059,9 @@ export default function HomeScreen() {
         </div>
       )}
 
-      {/* 分页页 grid：横向平移翻页（每页一组 tile，小组件跟随所在页）；touch-none 保证跟手不被浏览器滚动手势打断 */}
+      {/* 分页页 grid：横向平移翻页（每页一组 tile，小组件跟随所在页）；touch-none 保证跟手不被浏览器滚动手势打断。
+          视口必须占满全屏宽（水平内边距由每页自带 px-5 承担，而非根容器）：
+          否则翻页时页面内容会在离屏幕边缘 20px 处被硬裁切、两侧露壁纸条（用户报告的滑动边缘分割线） */}
       <div className="relative min-h-0 flex-1 touch-none overflow-hidden">
         <div
           ref={trackRef}
@@ -2073,7 +2075,7 @@ export default function HomeScreen() {
               data-testid={`home-page-${p}`}
               aria-hidden={p !== page}
               inert={p !== page}
-              className="grid h-fit w-full shrink-0 grid-cols-4 items-start gap-x-2 gap-y-[16px] overflow-hidden pt-2"
+              className="grid h-fit w-full shrink-0 grid-cols-4 items-start gap-x-2 gap-y-[16px] overflow-hidden px-5 pt-2"
             >
               {tiles.map((tile, i) => renderGridTile(tile, i, p))}
               {tiles.length === 0 && (
@@ -2136,10 +2138,10 @@ export default function HomeScreen() {
       </div>
 
       {/* Dock（hairline 轮廓随壁纸明暗：浅色壁纸白底座画不出边界 → 淡黑描边，
-          深色壁纸 → 淡白描边与半透明白底座呼应） */}
+          深色壁纸 → 淡白描边与半透明白底座呼应）；mx-5 保持原根容器 px-5 时的水平内缩 */}
       <div
         data-dock
-        className={`flex items-center gap-[18px] rounded-[32px] bg-white/[0.16] ring-1 ${
+        className={`mx-5 flex items-center gap-[18px] rounded-[32px] bg-white/[0.16] ring-1 ${
           wallpaperLight ? 'ring-black/[0.08]' : 'ring-white/[0.12]'
         } px-[14px] py-[13px] shadow-[0_4px_18px_rgba(0,0,0,0.18)] backdrop-blur-2xl dark:bg-white/[0.10] ${
           edit ? 'touch-none select-none' : ''

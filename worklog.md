@@ -6413,3 +6413,19 @@ Stage Summary:
 - 关键决策：同比例壁纸视觉与原 cover 完全一致（双层重合），比例不一致时以模糊自延伸替代截断，兼顾"不留白、不裁切、四边无缝"
 - 排障备忘：桌面图标是带 aria-label 的 div 而非 button 标签，eval 按 tag 查询会扑空，须用 [aria-label] 选择器
 - 涉及文件：src/lib/ios/store.ts、src/components/ios/PhoneShell.tsx、src/components/ios/LockScreen.tsx
+
+---
+Task ID: D2-swipe-edge-seam
+Agent: Z.ai Code (main)
+Task: 用户反馈"滑动的时候边上有问题"（截图：翻页中日历小组件卡片在屏幕内侧被硬裁切、两侧露壁纸条）——修复滑动翻页边缘分割线
+
+Work Log:
+- 分析用户截图 Screenshot_20260924_081659.jpg（1080×602）：翻页进行中，小组件卡片内容在离屏幕左缘约 20px 处被硬裁切，裁切线两侧为壁纸条 → "滑动时边上像有分割线"
+- 定位根因：HomeScreen 根容器 px-5（左右各 20px）把翻页视口（overflow-hidden 容器）也内缩了——页面内容在内容盒边缘（屏幕内侧 20px）被裁切，滑动时两侧露出壁纸条+硬切割线；静止时无异常（用户只在滑动时看到）
+- 修复 HomeScreen.tsx：根容器移除 px-5（翻页视口扩展到全屏宽 390px），水平内边距下沉到每页自身（page div 加 px-5，布局像素级不变），Dock 加 mx-5 保持原内缩
+- E2E 验证：滑动中帧截屏——左侧天气组件贴 x=0 裁切、右侧新页组件贴 x=389 滑入，左/右缘像素与内侧 6px 处完全一致（无壁纸条/无黑线/无内缩切割线）；track 实测宽度 390；滑动后静止布局与修复前一致（图标/组件/页点/Dock 位置不变）；编辑模式（长按）顶栏+删除钮+拖拽测量回归正常；tsc + lint 零错误
+
+Stage Summary:
+- 根因：翻页视口被根容器 px-5 内缩，滑动裁切边界在屏幕内侧 20px 处（静止不可见、滑动暴露）
+- 修复模式：视口全屏宽 + 内边距下沉到每页（视觉零变化、滑动贴边裁切，对齐 iOS 行为）
+- 涉及文件：src/components/ios/HomeScreen.tsx（仅 className 调整，无逻辑改动）
