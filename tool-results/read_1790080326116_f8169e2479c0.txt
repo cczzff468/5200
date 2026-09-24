@@ -1,0 +1,1318 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * 聊天设置页 + 聊天背景页 + 回复条数页 + 翻译页 + 查找聊天记录页 + 信息端聊天设置页
+     5→ * （微信 / QQ / 信息三端，variant 区分主题）：
+     6→ * - ChatSettingsPage（微信/QQ）：信息卡片（头像/名字/微信号或QQ号/地区职业）、置顶聊天、消息免打扰、
+     7→ *   回复条数入口（进入独立二级页 ChatReplyCountPage）、翻译入口（进入 ChatTranslatePage）、
+     8→ *   分句发送开关、时间感知开关（AI 感知当前时间/节日/事件时长/上次聊天间隔，按会话独立）、
+     9→ *   查找聊天记录入口、聊天背景入口（进入独立二级页 ChatBgPage）
+    10→ * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条（上限，可少发），AI 像
+    11→ *   真人一样一句一句连发多条消息（一句一条，由 @/lib/reply-count 切分与节奏控制）
+    12→ * - ChatTranslatePage：翻译语言页（三端共用，参考 iOS 翻译语言页）—— 总开关 + 语言对选择：
+    13→ *   上方左右两个语言槽可点选（点一侧再在下方列表选语言），中间 ⇄ 一键互换；
+    14→ *   聊天中按消息语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧
+    15→ * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关 + 时间感知开关）
+    16→ * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
+    17→ * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
+    18→ * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
+    19→ *   @/lib/reply-count / @/lib/chat-translate / @/lib/sentence-send（localStorage，按会话键隔离），
+    20→ *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
+    21→ */
+    22→import { useMemo, useRef, useState, type CSSProperties } from 'react';
+    23→import { ArrowLeftRight, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
+    24→import type { ChatBgMode } from '@/lib/chat-flags';
+    25→import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
+    26→import { stickerToggleCaption } from '@/lib/sticker-toggle';
+    27→import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
+    28→
+    29→export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
+    30→
+    31→/** 当前聊天背景状态（从 chat-flags 取） */
+    32→export interface ChatSettingsBg {
+    33→  mode: ChatBgMode;
+    34→  /** mode === 'color' 时的纯色 */
+    35→  color: string;
+    36→}
+    37→
+    38→/** App 默认聊天底色（预览卡片与「默认」色块用） */
+    39→export const WX_CHAT_BG_DEFAULT = '#EDEDED';
+    40→export const QQ_CHAT_BG_DEFAULT = '#F5F6F7';
+    41→
+    42→/** 内置纯色壁纸（淡色系 14 款，搭配白/绿气泡均可读） */
+    43→export const CHAT_BG_SOLID_COLORS: readonly string[] = [
+    44→  '#BAD5E8',
+    45→  '#A8D8B9',
+    46→  '#FFE3B3',
+    47→  '#FFC9D4',
+    48→  '#D6C9F0',
+    49→  '#B5E3D8',
+    50→  '#FFF6B3',
+    51→  '#CDD7E0',
+    52→  '#FFC7A8',
+    53→  '#E2E8CD',
+    54→  '#F3D9E5',
+    55→  '#C9E7F5',
+    56→  '#E5D3BD',
+    57→  '#D7DBDE',
+    58→];
+    59→
+    60→/** 聊天页背景层样式：color → 纯色；image → 图片（cover 居中）；default → undefined（不渲染层） */
+    61→export function chatBgLayerStyle(bg: ChatSettingsBg, imageUrl: string | null): CSSProperties | undefined {
+    62→  if (bg.mode === 'color' && bg.color) {
+    63→    return { backgroundColor: bg.color };
+    64→  }
+    65→  if (bg.mode === 'image' && imageUrl) {
+    66→    return {
+    67→      backgroundImage: `url(${imageUrl})`,
+    68→      backgroundSize: 'cover',
+    69→      backgroundPosition: 'center',
+    70→      backgroundRepeat: 'no-repeat',
+    71→    };
+    72→  }
+    73→  return undefined;
+    74→}
+    75→
+    76→/** iOS 风格开关（微信绿 / QQ 绿，on 色随 variant） */
+    77→export function ChatToggle({
+    78→  on,
+    79→  onChange,
+    80→  accent,
+    81→  testId,
+    82→  label,
+    83→}: {
+    84→  on: boolean;
+    85→  onChange: (v: boolean) => void;
+    86→  accent: string;
+    87→  testId?: string;
+    88→  label?: string;
+    89→}) {
+    90→  return (
+    91→    <button
+    92→      type="button"
+    93→      role="switch"
+    94→      aria-checked={on}
+    95→      aria-label={label}
+    96→      data-testid={testId}
+    97→      onClick={() => onChange(!on)}
+    98→      className={`relative h-[30px] w-[50px] shrink-0 rounded-full transition-colors duration-200 ${
+    99→        on ? '' : 'bg-black/[0.12] dark:bg-white/[0.22]'
+   100→      }`}
+   101→      style={on ? { backgroundColor: accent } : undefined}
+   102→    >
+   103→      <span
+   104→        aria-hidden="true"
+   105→        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.25)] transition-all duration-200 ${
+   106→          on ? 'left-[22px]' : 'left-[2px]'
+   107→        }`}
+   108→      />
+   109→    </button>
+   110→  );
+   111→}
+   112→
+   113→/** 聊天设置页 */
+   114→
+   115→export function ChatSettingsPage({
+   116→  variant,
+   117→  title,
+   118→  peerName,
+   119→  peerAvatar,
+   120→  idLabel,
+   121→  idValue,
+   122→  metaLine,
+   123→  pinned,
+   124→  muted,
+   125→  bg,
+   126→  bgImageUrl,
+   127→  replyCount,
+   128→  translateSummary,
+   129→  sentenceSend,
+   130→  timeAware,
+   131→  stickersOn,
+   132→  worldBooksSummary,
+   133→  onBack,
+   134→  onTogglePinned,
+   135→  onToggleMuted,
+   136→  onOpenReplyCount,
+   137→  onOpenTranslate,
+   138→  onToggleSentenceSend,
+   139→  onToggleTimeAware,
+   140→  onToggleStickers,
+   141→  onOpenWorldBooks,
+   142→  onOpenSearch,
+   143→  onOpenBg,
+   144→  onOpenPeerProfile,
+   145→}: {
+   146→  variant: ChatSettingsVariant;
+   147→  /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
+   148→  title: string;
+   149→  peerName: string;
+   150→  peerAvatar: string | null;
+   151→  /** 信息卡第二行：微信号 / QQ 号 */
+   152→  idLabel: string;
+   153→  idValue: string;
+   154→  /** 信息卡第三行：地区 · 职业（可为空） */
+   155→  metaLine: string;
+   156→  pinned: boolean;
+   157→  muted: boolean;
+   158→  bg: ChatSettingsBg;
+   159→  /** mode === 'image' 时已加载的图片 data URL（未加载完为 null；入口行迷你预览用） */
+   160→  bgImageUrl: string | null;
+   161→  /** 当前会话的回复条数（AI 连发多条消息） */
+   162→  replyCount: number;
+   163→  /** 翻译入口行右侧摘要：未开启 / 已选语言列表 / 未选择语言 */
+   164→  translateSummary: string;
+   165→  /** 分句发送开关状态（开启后连续发消息 AI 不回复，输入框为空再点发送才触发回复） */
+   166→  sentenceSend: boolean;
+   167→  /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
+   168→  timeAware: boolean;
+   169→  /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
+   170→  stickersOn: boolean;
+   171→  /** 挂载的世界书摘要（未挂载时「未选择」） */
+   172→  worldBooksSummary: string;
+   173→  onBack: () => void;
+   174→  onTogglePinned: (v: boolean) => void;
+   175→  onToggleMuted: (v: boolean) => void;
+   176→  onOpenReplyCount: () => void;
+   177→  onOpenTranslate: () => void;
+   178→  onToggleSentenceSend: (v: boolean) => void;
+   179→  onToggleTimeAware: (v: boolean) => void;
+   180→  onToggleStickers: (v: boolean) => void;
+   181→  onOpenWorldBooks: () => void;
+   182→  onOpenSearch: () => void;
+   183→  onOpenBg: () => void;
+   184→  /** 点击信息卡片 → 进入联系人详细界面（QQ 好友资料页 / 微信好友详情页）；不传则卡片不可点 */
+   185→  onOpenPeerProfile?: () => void;
+   186→}) {
+   187→  const wx = variant === 'wx';
+   188→
+   189→  // 主题 token（微信灰白 / QQ 冷灰白）
+   190→  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+   191→  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+   192→  const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
+   193→  const rowCls = wx
+   194→    ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+   195→    : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+   196→  // 开关选中色：微信绿 / QQ 蓝
+   197→  const accent = wx ? '#07C160' : '#0099FF';
+   198→  const defaultBg = wx ? WX_CHAT_BG_DEFAULT : QQ_CHAT_BG_DEFAULT;
+   199→  const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
+   200→  const headerH = wx ? 'h-11' : 'h-12';
+   201→  const testPrefix = variant;
+   202→
+   203→  return (
+   204→    <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
+   205→      {/* 顶栏 */}
+   206→      <div className="shrink-0 pt-[54px]">
+   207→        <div className={`flex ${headerH} items-center px-2`}>
+   208→          <button
+   209→            type="button"
+   210→            aria-label="返回"
+   211→            data-testid={`${testPrefix}-chat-settings-back`}
+   212→            onClick={onBack}
+   213→            className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}
+   214→          >
+   215→            <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+   216→          </button>
+   217→          <div className={`flex-1 pr-8 text-center ${titleCls}`}>{title}</div>
+   218→        </div>
+   219→      </div>
+   220→
+   221→      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+   222→        {/* 信息卡片（点击进入联系人详细界面：QQ 好友资料页 / 微信好友详情页） */}
+   223→        <div className={`${cardCls} overflow-hidden`}>
+   224→          {(() => {
+   225→            const inner = (
+   226→              <>
+   227→                <ChatSettingsAvatar variant={variant} src={peerAvatar} alt={peerName} size={56} />
+   228→                <div className="min-w-0 flex-1">
+   229→                  <p className={`truncate ${wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold'}`}>{peerName}</p>
+   230→                  <p className="mt-1 truncate text-[13px] text-black/45 dark:text-white/45">
+   231→                    {idLabel}：{idValue}
+   232→                  </p>
+   233→                  {metaLine && <p className="mt-0.5 truncate text-[13px] text-black/45 dark:text-white/45">{metaLine}</p>}
+   234→                </div>
+   235→              </>
+   236→            );
+   237→            if (!onOpenPeerProfile) {
+   238→              return <div className={`flex items-center gap-3 px-4 ${wx ? 'py-4' : 'py-3.5'}`}>{inner}</div>;
+   239→            }
+   240→            return (
+   241→              <button
+   242→                type="button"
+   243→                data-testid={`${testPrefix}-chat-settings-card`}
+   244→                onClick={onOpenPeerProfile}
+   245→                aria-label={`查看${peerName}的资料`}
+   246→                className={`flex w-full items-center gap-3 px-4 text-left transition-colors active:bg-black/[0.04] dark:active:bg-white/[0.06] ${wx ? 'py-4' : 'py-3.5'}`}
+   247→              >
+   248→                {inner}
+   249→                <ChevronRight className="h-5 w-5 shrink-0 text-black/20 dark:text-white/25" aria-hidden="true" />
+   250→              </button>
+   251→            );
+   252→          })()}
+   253→        </div>
+   254→
+   255→        {/* 置顶 / 免打扰开关（纯文字行，无图标） */}
+   256→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   257→          <div className={`flex items-center justify-between ${rowCls}`}>
+   258→            <span>置顶聊天</span>
+   259→            <ChatToggle
+   260→              on={pinned}
+   261→              onChange={onTogglePinned}
+   262→              accent={accent}
+   263→              testId={`${testPrefix}-settings-pin`}
+   264→              label="置顶聊天"
+   265→            />
+   266→          </div>
+   267→          <div className={`border-t ${dividerCls}`} />
+   268→          <div className={`flex items-center justify-between ${rowCls}`}>
+   269→            <span>消息免打扰</span>
+   270→            <ChatToggle
+   271→              on={muted}
+   272→              onChange={onToggleMuted}
+   273→              accent={accent}
+   274→              testId={`${testPrefix}-settings-mute`}
+   275→              label="消息免打扰"
+   276→            />
+   277→          </div>
+   278→        </div>
+   279→
+   280→        {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择） */}
+   281→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   282→          <button
+   283→            type="button"
+   284→            data-testid={`${testPrefix}-settings-reply-count`}
+   285→            onClick={onOpenReplyCount}
+   286→            className={rowCls}
+   287→          >
+   288→            <span>回复条数</span>
+   289→            <span className="flex shrink-0 items-center gap-2">
+   290→              <span data-testid={`${testPrefix}-reply-count-value`} className="text-[14px] text-black/40 dark:text-white/40">
+   291→                {replyCount} 条
+   292→              </span>
+   293→              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+   294→            </span>
+   295→          </button>
+   296→        </div>
+   297→
+   298→        {/* 翻译：气泡下方多语言翻译（独立二级页选语言，三端共用 ChatTranslatePage） */}
+   299→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   300→          <button
+   301→            type="button"
+   302→            data-testid={`${testPrefix}-settings-translate`}
+   303→            onClick={onOpenTranslate}
+   304→            className={rowCls}
+   305→          >
+   306→            <span>翻译</span>
+   307→            <span className="flex shrink-0 items-center gap-2">
+   308→              <span
+   309→                data-testid={`${testPrefix}-translate-summary`}
+   310→                className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40"
+   311→              >
+   312→                {translateSummary}
+   313→              </span>
+   314→              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+   315→            </span>
+   316→          </button>
+   317→        </div>
+   318→
+   319→        {/* 分句发送：开启后连续发的消息对方不回复，输入框为空时再点一次「发送」才触发回复 */}
+   320→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   321→          <div className={`flex items-center justify-between ${rowCls}`}>
+   322→            <span>分句发送</span>
+   323→            <ChatToggle
+   324→              on={sentenceSend}
+   325→              onChange={onToggleSentenceSend}
+   326→              accent={accent}
+   327→              testId={`${testPrefix}-settings-sentence`}
+   328→              label="分句发送"
+   329→            />
+   330→          </div>
+   331→        </div>
+   332→        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+   333→          开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
+   334→        </p>
+   335→
+   336→        {/* 时间感知：AI 感知当前时间/季节/节日、事件耗时与上次聊天间隔（按会话独立开关，发送时现场读取） */}
+   337→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   338→          <div className={`flex items-center justify-between ${rowCls}`}>
+   339→            <span>时间感知</span>
+   340→            <ChatToggle
+   341→              on={timeAware}
+   342→              onChange={onToggleTimeAware}
+   343→              accent={accent}
+   344→              testId={`${testPrefix}-settings-time`}
+   345→              label="时间感知"
+   346→            />
+   347→          </div>
+   348→        </div>
+   349→        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+   350→          开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
+   351→        </p>
+   352→
+   353→        {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
+   354→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   355→          <div className={`flex items-center justify-between ${rowCls}`}>
+   356→            <span>表情包</span>
+   357→            <ChatToggle
+   358→              on={stickersOn}
+   359→              onChange={onToggleStickers}
+   360→              accent={accent}
+   361→              testId={`${testPrefix}-settings-stickers`}
+   362→              label="表情包"
+   363→            />
+   364→          </div>
+   365→        </div>
+   366→        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{stickerToggleCaption(stickersOn)}</p>
+   367→
+   368→        {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择） */}
+   369→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   370→          <button type="button" data-testid={`${testPrefix}-settings-worldbooks`} onClick={onOpenWorldBooks} className={rowCls}>
+   371→            <span className="flex items-center gap-2.5">
+   372→              <BookMarked className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
+   373→              世界书
+   374→            </span>
+   375→            <span className="flex shrink-0 items-center gap-2">
+   376→              <span data-testid={`${testPrefix}-worldbooks-summary`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+   377→                {worldBooksSummary}
+   378→              </span>
+   379→              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+   380→            </span>
+   381→          </button>
+   382→        </div>
+   383→        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+   384→          挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
+   385→        </p>
+   386→
+   387→        {/* 查找聊天记录 */}
+   388→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   389→          <button type="button" data-testid={`${testPrefix}-settings-search`} onClick={onOpenSearch} className={rowCls}>
+   390→            <span className="flex items-center gap-2.5">
+   391→              <Search className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
+   392→              查找聊天记录
+   393→            </span>
+   394→            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+   395→          </button>
+   396→        </div>
+   397→
+   398→        {/* 聊天背景：二级页入口行（右侧当前背景迷你预览） */}
+   399→        <div className={`${cardCls} mt-3 overflow-hidden`}>
+   400→          <button type="button" data-testid={`${testPrefix}-settings-bg`} onClick={onOpenBg} className={rowCls}>
+   401→            <span>聊天背景</span>
+   402→            <span className="flex shrink-0 items-center gap-2">
+   403→              <span
+   404→                aria-hidden="true"
+   405→                className="h-[22px] w-[22px] rounded-[5px] border border-black/10 bg-cover bg-center dark:border-white/15"
+   406→                style={chatBgLayerStyle(bg, bgImageUrl) ?? { backgroundColor: defaultBg }}
+   407→              />
+   408→              <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+   409→            </span>
+   410→          </button>
+   411→        </div>
+   412→      </div>
+   413→    </div>
+   414→  );
+   415→}
+   416→
+   417→/** 回复条数选择页（聊天设置二级页）：AI 像真人一样按选定条数连发多条消息 */
+   418→
+   419→export function ChatReplyCountPage({
+   420→  variant,
+   421→  value,
+   422→  onBack,
+   423→  onSelect,
+   424→}: {
+   425→  variant: ChatSettingsVariant;
+   426→  /** 当前会话的回复条数 */
+   427→  value: number;
+   428→  onBack: () => void;
+   429→  onSelect: (n: number) => void;
+   430→}) {
+   431→  const wx = variant === 'wx';
+   432→
+   433→  // 主题 token（与 ChatSettingsPage 一致）
+   434→  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+   435→  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+   436→  const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
+   437→  const rowCls = wx
+   438→    ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+   439→    : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+   440→  // 选中勾色：微信绿 / QQ 蓝
+   441→  const accent = wx ? '#07C160' : '#0099FF';
+   442→  const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
+   443→  const headerH = wx ? 'h-11' : 'h-12';
+   444→  const testPrefix = variant;
+   445→
+   446→  return (
+   447→    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
+   448→      {/* 顶栏 */}
+   449→      <div className="shrink-0 pt-[54px]">
+   450→        <div className={`flex ${headerH} items-center px-2`}>
+   451→          <button
+   452→            type="button"
+   453→            aria-label="返回"
+   454→            data-testid={`${testPrefix}-reply-count-back`}
+   455→            onClick={onBack}
+   456→            className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}
+   457→          >
+   458→            <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+   459→          </button>
+   460→          <div className={`flex-1 pr-8 text-center ${titleCls}`}>回复条数</div>
+   461→        </div>
+   462→      </div>
+   463→
+   464→      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+   465→        <div className={`${cardCls} overflow-hidden`}>
+   466→          {REPLY_COUNT_OPTIONS.map((n, i) => (
+   467→            <div key={n}>
+   468→              {i > 0 && <div className={`border-t ${dividerCls}`} />}
+   469→              <button
+   470→                type="button"
+   471→                data-testid={`${testPrefix}-reply-count-option-${n}`}
+   472→                aria-label={`回复条数 ${n} 条`}
+   473→                onClick={() => onSelect(n)}
+   474→                className={rowCls}
+   475→              >
+   476→                <span>{n} 条</span>
+   477→                {value === n && (
+   478→                  <span className="grid place-items-center" style={{ color: accent }} aria-label="已选中">
+   479→                    <Check className="h-5 w-5" strokeWidth={2.4} />
+   480→                  </span>
+   481→                )}
+   482→              </button>
+   483→            </div>
+   484→          ))}
+   485→        </div>
+   486→        <p className="px-1 pt-3 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+   487→          对方将按选定条数像真人一样连续发送多条消息，每条独立一个气泡；换一个聊天对象需要单独设置。
+   488→        </p>
+   489→      </div>
+   490→    </div>
+   491→  );
+   492→}
+   493→
+   494→/** 聊天背景页（聊天设置二级页）：顶部预览卡片 → 从手机相册上传 → 内置纯色壁纸 */
+   495→
+   496→export function ChatBgPage({
+   497→  variant,
+   498→  bg,
+   499→  bgImageUrl,
+   500→  uploading,
+   501→  onBack,
+   502→  onPickColor,
+   503→  onPickImageFile,
+   504→  onResetBg,
+   505→}: {
+   506→  variant: ChatSettingsVariant;
+   507→  bg: ChatSettingsBg;
+   508→  /** mode === 'image' 时已加载的图片 data URL（未加载完为 null） */
+   509→  bgImageUrl: string | null;
+   510→  uploading: boolean;
+   511→  onBack: () => void;
+   512→  onPickColor: (color: string) => void;
+   513→  onPickImageFile: (file: File) => void;
+   514→  onResetBg: () => void;
+   515→}) {
+   516→  const fileRef = useRef<HTMLInputElement>(null);
+   517→  const wx = variant === 'wx';
+   518→
+   519→  // 主题 token（与 ChatSettingsPage 一致）
+   520→  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+   521→  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+   522→  // 选中/勾色：微信绿 / QQ 蓝
+   523→  const accent = wx ? '#07C160' : '#0099FF';
+   524→  const defaultBg = wx ? WX_CHAT_BG_DEFAULT : QQ_CHAT_BG_DEFAULT;
+   525→  const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
+   526→  const headerH = wx ? 'h-11' : 'h-12';
+   527→  const testPrefix = variant;
+   528→
+   529→  // 「默认」色块当前选中 = 背景为默认模式
+   530→  const isDefault = bg.mode === 'default';
+   531→
+   532→  return (
+   533→    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
+   534→      {/* 顶栏 */}
+   535→      <div className="shrink-0 pt-[54px]">
+   536→        <div className={`flex ${headerH} items-center px-2`}>
+   537→          <button
+   538→            type="button"
+   539→            aria-label="返回"
+   540→            data-testid={`${testPrefix}-bg-page-back`}
+   541→            onClick={onBack}
+   542→            className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}
+   543→          >
+   544→            <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+   545→          </button>
+   546→          <div className={`flex-1 pr-8 text-center ${titleCls}`}>聊天背景</div>
+   547→        </div>
+   548→      </div>
+   549→
+   550→      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+   551→        <div className={`${cardCls} overflow-hidden p-4`}>
+   552→          {/* 预览卡片（9:16 竖版，模拟聊天效果，即时反映当前选择） */}
+   553→          <div
+   554→            data-testid={`${testPrefix}-bg-preview`}
+   555→            className="relative mx-auto w-full max-w-[248px] overflow-hidden rounded-[14px] border border-black/10 shadow-[0_2px_12px_rgba(0,0,0,0.08)] dark:border-white/10"
+   556→            style={{ aspectRatio: '9 / 16' }}
+   557→          >
+   558→            <div className="absolute inset-0" style={chatBgLayerStyle(bg, bgImageUrl) ?? { backgroundColor: defaultBg }} />
+   559→            <div className={`relative flex h-full flex-col p-3 text-[11px] leading-[1.5] ${wx ? 'text-black' : 'text-[#1F2329]'}`}>
+   560→              <p className="text-center text-[9px] text-black/35 dark:text-white/40">昨天 20:15</p>
+   561→              <div className="mt-2 max-w-[78%] self-start rounded-[7px] bg-white/95 px-2 py-1.5 shadow-sm dark:bg-[#2A2C31]/95 dark:text-white">
+   562→                在吗？
+   563→              </div>
+   564→              <div
+   565→                className="mt-2 max-w-[78%] self-end rounded-[7px] px-2 py-1.5 text-black shadow-sm"
+   566→                style={{ backgroundColor: wx ? '#95EC69' : '#0099FF', color: wx ? '#000' : '#fff' }}
+   567→              >
+   568→                刚看到消息啦～
+   569→              </div>
+   570→              <div className="mt-2 max-w-[78%] self-start rounded-[7px] bg-white/95 px-2 py-1.5 shadow-sm dark:bg-[#2A2C31]/95 dark:text-white">
+   571→                周末一起出去玩吗？
+   572→              </div>
+   573→              <div
+   574→                className="mt-auto max-w-[78%] self-end rounded-[7px] px-2 py-1.5 text-black shadow-sm"
+   575→                style={{ backgroundColor: wx ? '#95EC69' : '#0099FF', color: wx ? '#000' : '#fff' }}
+   576→              >
+   577→                好呀好呀 😄
+   578→              </div>
+   579→            </div>
+   580→            {bg.mode === 'image' && !bgImageUrl && (
+   581→              <div className="absolute inset-0 grid place-items-center bg-black/25">
+   582→                <Loader2 className="h-5 w-5 animate-spin text-white" aria-label="背景加载中" />
+   583→              </div>
+   584→            )}
+   585→          </div>
+   586→
+   587→          {/* 从手机相册上传 */}
+   588→          <button
+   589→            type="button"
+   590→            data-testid={`${testPrefix}-bg-upload`}
+   591→            onClick={() => fileRef.current?.click()}
+   592→            disabled={uploading}
+   593→            className={`mt-4 flex w-full items-center justify-center gap-2 rounded-[10px] border border-black/10 py-2.5 text-[15px] active:bg-black/[0.04] disabled:opacity-60 dark:border-white/15 dark:active:bg-white/[0.06] ${
+   594→              wx ? '' : 'text-[14.5px]'
+   595→            }`}
+   596→          >
+   597→            {uploading ? (
+   598→              <Loader2 className="h-[18px] w-[18px] animate-spin" aria-hidden="true" />
+   599→            ) : (
+   600→              <ImageIcon className="h-[18px] w-[18px] text-black/55 dark:text-white/55" strokeWidth={1.9} aria-hidden="true" />
+   601→            )}
+   602→            {uploading ? '正在处理图片…' : '从手机相册上传'}
+   603→          </button>
+   604→          <input
+   605→            ref={fileRef}
+   606→            type="file"
+   607→            accept="image/*"
+   608→            hidden
+   609→            data-testid={`${testPrefix}-bg-input`}
+   610→            onChange={(e) => {
+   611→              const f = e.target.files?.[0];
+   612→              e.target.value = '';
+   613→              if (f) onPickImageFile(f);
+   614→            }}
+   615→          />
+   616→
+   617→          {/* 内置纯色壁纸 */}
+   618→          <p className="pb-2.5 pt-4 text-[13px] text-black/40 dark:text-white/40">内置纯色壁纸</p>
+   619→          <div className="grid grid-cols-5 gap-3">
+   620→            {/* 默认壁纸 */}
+   621→            <button
+   622→              type="button"
+   623→              aria-label="恢复默认背景"
+   624→              data-testid={`${testPrefix}-bg-default`}
+   625→              onClick={onResetBg}
+   626→              className="relative h-14 overflow-hidden rounded-[10px] border border-black/10 active:opacity-70 dark:border-white/15"
+   627→              style={{ backgroundColor: defaultBg }}
+   628→            >
+   629→              {isDefault && (
+   630→                <span className="absolute inset-0 grid place-items-center" style={{ color: accent }}>
+   631→                  <Check className="h-5 w-5" strokeWidth={2.4} />
+   632→                </span>
+   633→              )}
+   634→              <span className="absolute inset-x-0 bottom-0 bg-black/25 py-[2px] text-center text-[10px] leading-none text-white">
+   635→                默认
+   636→              </span>
+   637→            </button>
+   638→            {CHAT_BG_SOLID_COLORS.map((c) => {
+   639→              const selected = bg.mode === 'color' && bg.color.toLowerCase() === c.toLowerCase();
+   640→              return (
+   641→                <button
+   642→                  key={c}
+   643→                  type="button"
+   644→                  aria-label={`壁纸 ${c}`}
+   645→                  data-testid={`${testPrefix}-bg-color-${c.slice(1)}`}
+   646→                  onClick={() => onPickColor(c)}
+   647→                  className="relative h-14 overflow-hidden rounded-[10px] border border-black/10 active:opacity-70 dark:border-white/10"
+   648→                  style={{ backgroundColor: c }}
+   649→                >
+   650→                  {selected && (
+   651→                    <span className="absolute inset-0 grid place-items-center text-black/55">
+   652→                      <Check className="h-5 w-5" strokeWidth={2.4} />
+   653→                    </span>
+   654→                  )}
+   655→                </button>
+   656→              );
+   657→            })}
+   658→          </div>
+   659→        </div>
+   660→      </div>
+   661→    </div>
+   662→  );
+   663→}
+   664→
+   665→/** 设置页头像（微信圆角方 / QQ、信息圆形，首字母兜底同各 App 风格） */
+   666→function ChatSettingsAvatar({ variant, src, alt, size }: { variant: ChatSettingsVariant; src: string | null; alt: string; size: number }) {
+   667→  const wx = variant === 'wx';
+   668→  const style: CSSProperties = { width: size, height: size };
+   669→  if (src) {
+   670→    return (
+   671→      <img
+   672→        src={src}
+   673→        alt={alt}
+   674→        draggable={false}
+   675→        className={`shrink-0 bg-muted object-cover ${wx ? 'rounded-[7px]' : 'rounded-full'}`}
+   676→        style={style}
+   677→      />
+   678→    );
+   679→  }
+   680→  return (
+   681→    <div
+   682→      aria-hidden="true"
+   683→      className={`flex shrink-0 items-center justify-center font-semibold text-white ${
+   684→        wx ? 'rounded-[7px] bg-[#C9C9CE] dark:bg-[#3C3C42]' : variant === 'sms' ? 'rounded-full bg-[#C7C7CC] dark:bg-[#3A3A3C]' : 'rounded-full bg-[#B9D9F3]'
+   685→      }`}
+   686→      style={{ ...style, fontSize: Math.round(size * 0.42) }}
+   687→    >
+   688→      {alt.slice(0, 1) || (wx ? '' : 'Q')}
+   689→    </div>
+   690→  );
+   691→}
+   692→
+   693→/** 查找聊天记录页 */
+   694→
+   695→export interface ChatSearchItem {
+   696→  id: string;
+   697→  role: 'me' | 'peer';
+   698→  text: string;
+   699→  time: number;
+   700→}
+   701→
+   702→function fmtSearchTime(ts: number): string {
+   703→  const d = new Date(ts);
+   704→  const now = new Date();
+   705→  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+   706→  if (d.getFullYear() !== now.getFullYear()) return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+   707→  if (d.toDateString() === now.toDateString()) return hm;
+   708→  return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+   709→}
+   710→
+   711→export function ChatSearchPage({
+   712→  variant,
+   713→  items,
+   714→  myName,
+   715→  peerName,
+   716→  myAvatar,
+   717→  peerAvatar,
+   718→  onClose,
+   719→  onJumpTo,
+   720→}: {
+   721→  variant: ChatSettingsVariant;
+   722→  /** 可搜索的聊天记录（调用方已把各类消息规整成文本摘要） */
+   723→  items: ChatSearchItem[];
+   724→  myName: string;
+   725→  peerName: string;
+   726→  myAvatar: string | null;
+   727→  peerAvatar: string | null;
+   728→  onClose: () => void;
+   729→  onJumpTo: (id: string) => void;
+   730→}) {
+   731→  const [kw, setKw] = useState('');
+   732→  const wx = variant === 'wx';
+   733→
+   734→  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+   735→  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+   736→  const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
+   737→  const headerH = wx ? 'h-11' : 'h-12';
+   738→  const testPrefix = variant;
+   739→
+   740→  const results = useMemo(() => {
+   741→    const key = kw.trim().toLowerCase();
+   742→    if (!key) return null;
+   743→    return items.filter((it) => it.text.toLowerCase().includes(key));
+   744→  }, [items, kw]);
+   745→
+   746→  /** 命中片段高亮：按关键词切片 */
+   747→  const renderSnippet = (text: string, key: string) => {
+   748→    const lower = text.toLowerCase();
+   749→    const k = key.toLowerCase();
+   750→    const parts: Array<{ t: string; hit: boolean }> = [];
+   751→    let i = 0;
+   752→    while (true) {
+   753→      const idx = lower.indexOf(k, i);
+   754→      if (idx < 0) {
+   755→        parts.push({ t: text.slice(i), hit: false });
+   756→        break;
+   757→      }
+   758→      if (idx > i) parts.push({ t: text.slice(i, idx), hit: false });
+   759→      parts.push({ t: text.slice(idx, idx + k.length), hit: true });
+   760→      i = idx + k.length;
+   761→    }
+   762→    return parts.map((p, n) =>
+   763→      p.hit ? (
+   764→        <span key={n} className="rounded-[2px] bg-[#F7E36D]/70 text-black dark:bg-[#8A7A2E]/70 dark:text-white">
+   765→          {p.t}
+   766→        </span>
+   767→      ) : (
+   768→        <span key={n}>{p.t}</span>
+   769→      )
+   770→    );
+   771→  };
+   772→
+   773→  const key = kw.trim();
+   774→
+   775→  return (
+   776→    <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
+   777→      {/* 顶栏 */}
+   778→      <div className="shrink-0 pt-[54px]">
+   779→        <div className={`flex ${headerH} items-center px-2`}>
+   780→          <button
+   781→            type="button"
+   782→            aria-label="返回"
+   783→            data-testid={`${testPrefix}-chat-search-back`}
+   784→            onClick={onClose}
+   785→            className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}
+   786→          >
+   787→            <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+   788→          </button>
+   789→          <div className={`flex-1 pr-8 text-center ${titleCls}`}>查找聊天记录</div>
+   790→        </div>
+   791→        {/* 搜索框 */}
+   792→        <div className={`flex items-center gap-2 px-4 pb-2.5 ${wx ? 'pt-1' : 'pt-1.5'}`}>
+   793→          <div className="flex h-[34px] flex-1 items-center gap-2 rounded-[9px] bg-black/[0.05] px-2.5 dark:bg-white/[0.08]">
+   794→            <Search className="h-[15px] w-[15px] shrink-0 text-black/35 dark:text-white/35" strokeWidth={2.2} aria-hidden="true" />
+   795→            <input
+   796→              autoFocus
+   797→              type="text"
+   798→              value={kw}
+   799→              onChange={(e) => setKw(e.target.value)}
+   800→              placeholder="搜索聊天内容"
+   801→              data-testid={`${testPrefix}-chat-search-input`}
+   802→              aria-label="搜索聊天内容"
+   803→              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+   804→            />
+   805→            {kw && (
+   806→              <button type="button" aria-label="清空" onClick={() => setKw('')} className="shrink-0 active:opacity-60">
+   807→                <span className="grid h-[16px] w-[16px] place-items-center rounded-full bg-black/25 text-[10px] leading-none text-white dark:bg-white/30">
+   808→                  ×
+   809→                </span>
+   810→              </button>
+   811→            )}
+   812→          </div>
+   813→          <button type="button" onClick={onClose} className={`shrink-0 text-[15px] active:opacity-60 ${wx ? '' : 'text-[15px]'}`}>
+   814→            取消
+   815→          </button>
+   816→        </div>
+   817→      </div>
+   818→
+   819→      {/* 结果 */}
+   820→      <div className="flex-1 overflow-y-auto px-4 pb-6">
+   821→        {results === null ? (
+   822→          <div className="mt-16 text-center">
+   823→            <Search className="mx-auto h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+   824→            <p className="mt-3 text-[14px] text-black/35 dark:text-white/35">输入关键词查找聊天记录</p>
+   825→          </div>
+   826→        ) : results.length === 0 ? (
+   827→          <p className="mt-16 text-center text-[14px] text-black/35 dark:text-white/35">没有找到与「{key}」相关的聊天记录</p>
+   828→        ) : (
+   829→          <>
+   830→            <p className="px-1 pb-2 pt-1 text-[12.5px] text-black/40 dark:text-white/40">
+   831→              共 {results.length} 条与「{key}」相关的记录，点击可定位
+   832→            </p>
+   833→            <div className={`${cardCls} overflow-hidden`}>
+   834→              {results.map((it, n) => (
+   835→                <button
+   836→                  key={it.id}
+   837→                  type="button"
+   838→                  data-testid={`${testPrefix}-chat-search-item-${n}`}
+   839→                  onClick={() => onJumpTo(it.id)}
+   840→                  className={`flex w-full items-start gap-2.5 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
+   841→                    n > 0 ? (wx ? 'border-t border-black/5 dark:border-white/10' : 'border-t border-black/[0.04] dark:border-white/[0.06]') : ''
+   842→                  }`}
+   843→                >
+   844→                  <ChatSettingsAvatar variant={variant} src={it.role === 'me' ? myAvatar : peerAvatar} alt={it.role === 'me' ? myName : peerName} size={36} />
+   845→                  <span className="min-w-0 flex-1">
+   846→                    <span className="flex items-baseline justify-between gap-2">
+   847→                      <span className="truncate text-[14.5px]">{it.role === 'me' ? myName : peerName}</span>
+   848→                      <span className="shrink-0 text-[11.5px] text-black/35 dark:text-white/35">{fmtSearchTime(it.time)}</span>
+   849→                    </span>
+   850→                    <span className="mt-0.5 line-clamp-2 block break-all text-[13.5px] leading-[1.45] text-black/60 dark:text-white/60">
+   851→                      {renderSnippet(it.text, key)}
+   852→                    </span>
+   853→                  </span>
+   854→                </button>
+   855→              ))}
+   856→            </div>
+   857→          </>
+   858→        )}
+   859→      </div>
+   860→    </div>
+   861→  );
+   862→}
+   863→
+   864→// ---------------- 翻译语言页（三端共用二级页） ----------------
+   865→
+   866→/** 翻译页主题 token（微信灰白 / QQ 冷灰白 / 信息 iOS 风） */
+   867→function translateTokens(variant: ChatSettingsVariant) {
+   868→  const wx = variant === 'wx';
+   869→  const sms = variant === 'sms';
+   870→  return {
+   871→    wx,
+   872→    sms,
+   873→    pageCls: sms
+   874→      ? 'bg-background text-foreground'
+   875→      : wx
+   876→        ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
+   877→        : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white',
+   878→    cardCls: sms
+   879→      ? 'overflow-hidden rounded-[14px] bg-black/[0.045] dark:bg-white/[0.08]'
+   880→      : wx
+   881→        ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]'
+   882→        : 'rounded-[14px] bg-white dark:bg-[#232529]',
+   883→    dividerCls: sms
+   884→      ? 'border-border/60'
+   885→      : wx
+   886→        ? 'border-black/5 dark:border-white/10'
+   887→        : 'border-black/[0.04] dark:border-white/[0.06]',
+   888→    rowCls: sms
+   889→      ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[15.5px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+   890→      : wx
+   891→        ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+   892→        : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]',
+   893→    accent: sms ? '#007AFF' : wx ? '#07C160' : '#0099FF',
+   894→    titleCls: wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold',
+   895→    headerH: wx ? 'h-11' : 'h-12',
+   896→    captionCls: sms
+   897→      ? 'px-1 pt-2.5 text-[12.5px] leading-[1.6] text-muted-foreground'
+   898→      : 'px-1 pt-2.5 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40',
+   899→  };
+   900→}
+   901→
+   902→/**
+   903→ * 翻译语言页（聊天设置二级页，微信 / QQ / 信息三端共用，参考 iOS 翻译语言页）：
+   904→ * 总开关 + 语言对选择 —— 上方左右两个语言槽都可点选（点一侧设为待选侧，再在下方列表中
+   905→ * 选择该侧语言），中间 ⇄ 一键互换两侧语言；下方「常用语言 / 更多语言」分组列表，
+   906→ * 两侧已占用的语言灰显。聊天中按消息语言双向翻译：左侧语言的消息译成右侧，反之亦然
+   907→ * （如「中文简体 ⇄ 英语」：中文消息显示英文译文，英文消息显示中文译文）。
+   908→ */
+   909→export function ChatTranslatePage({
+   910→  variant,
+   911→  cfg,
+   912→  onBack,
+   913→  onChange,
+   914→}: {
+   915→  variant: ChatSettingsVariant;
+   916→  /** 当前会话的翻译配置（on + 语言对） */
+   917→  cfg: ChatTranslateCfg;
+   918→  onBack: () => void;
+   919→  /** 开关 / 选语言 / 互换 都统一回传新配置，由调用方持久化（按会话隔离） */
+   920→  onChange: (next: ChatTranslateCfg) => void;
+   921→}) {
+   922→  const t = translateTokens(variant);
+   923→  const testPrefix = variant;
+   924→  // 当前待设置的一侧（点上方一侧切换；默认左侧）
+   925→  const [side, setSide] = useState<'left' | 'right'>('left');
+   926→
+   927→  /** 列表点选：把语言设到待选侧；选到另一侧正在用的语言时直接互换两侧（不会出现两侧同语言） */
+   928→  const pick = (code: string) => {
+   929→    const other = side === 'left' ? cfg.right : cfg.left;
+   930→    if (code === other) {
+   931→      onChange({ ...cfg, left: cfg.right, right: cfg.left });
+   932→      return;
+   933→    }
+   934→    onChange(side === 'left' ? { ...cfg, left: code } : { ...cfg, right: code });
+   935→  };
+   936→
+   937→  /** 语言槽（左右各一）：待选侧加浅色胶囊底，点击切换待选侧 */
+   938→  const renderSlot = (sideKey: 'left' | 'right', code: string) => {
+   939→    const active = side === sideKey;
+   940→    return (
+   941→      <button
+   942→        type="button"
+   943→        data-testid={`${testPrefix}-translate-side-${sideKey}`}
+   944→        aria-label={`选择${sideKey === 'left' ? '左' : '右'}侧语言，当前 ${translateLangLabel(code)}`}
+   945→        onClick={() => setSide(sideKey)}
+   946→        className={`max-w-[38%] truncate rounded-[12px] px-3.5 py-1.5 text-[20px] font-semibold transition-colors ${
+   947→          active ? 'bg-black/[0.06] dark:bg-white/[0.12]' : 'active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+   948→        }`}
+   949→      >
+   950→        {translateLangLabel(code)}
+   951→      </button>
+   952→    );
+   953→  };
+   954→
+   955→  /** 分组语言列表：两侧已占用的语言灰显；✓ 标记待选侧当前语言 */
+   956→  const renderGroup = (langs: readonly TranslateLang[], groupLabel: string) => (
+   957→    <>
+   958→      <p className="px-1 pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">{groupLabel}</p>
+   959→      <div className={`${t.cardCls} overflow-hidden`}>
+   960→        {langs.map((l, i) => {
+   961→          const activeLang = (side === 'left' ? cfg.left : cfg.right) === l.code;
+   962→          const used = cfg.left === l.code || cfg.right === l.code;
+   963→          return (
+   964→            <div key={l.code}>
+   965→              {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+   966→              <button
+   967→                type="button"
+   968→                data-testid={`${testPrefix}-translate-lang-${l.code}`}
+   969→                aria-label={`把${side === 'left' ? '左' : '右'}侧语言设为${l.label}`}
+   970→                onClick={() => pick(l.code)}
+   971→                className={t.rowCls}
+   972→              >
+   973→                <span className={used ? 'text-black/35 dark:text-white/35' : ''}>{l.label}</span>
+   974→                <span className="flex shrink-0 items-center gap-1.5">
+   975→                  {activeLang && (
+   976→                    <span className="grid place-items-center" style={{ color: t.accent }} aria-label="当前语言">
+   977→                      <Check className="h-5 w-5" strokeWidth={2.4} />
+   978→                    </span>
+   979→                  )}
+   980→                  <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+   981→                </span>
+   982→              </button>
+   983→            </div>
+   984→          );
+   985→        })}
+   986→      </div>
+   987→    </>
+   988→  );
+   989→
+   990→  return (
+   991→    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+   992→      {/* 顶栏 */}
+   993→      <div className="shrink-0 pt-[54px]">
+   994→        <div className={`flex ${t.headerH} items-center px-2`}>
+   995→          <button
+   996→            type="button"
+   997→            aria-label="返回"
+   998→            data-testid={`${testPrefix}-translate-back`}
+   999→            onClick={onBack}
+  1000→            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
+  1001→          >
+  1002→            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+  1003→          </button>
+  1004→          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>翻译语言</div>
+  1005→        </div>
+  1006→      </div>
+  1007→
+  1008→      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+  1009→        {/* 总开关 */}
+  1010→        <div className={`${t.cardCls}`}>
+  1011→          <div className={`flex items-center justify-between ${t.rowCls}`}>
+  1012→            <span>翻译</span>
+  1013→            <ChatToggle
+  1014→              on={cfg.on}
+  1015→              onChange={(v) => onChange({ ...cfg, on: v })}
+  1016→              accent={t.accent}
+  1017→              testId={`${testPrefix}-translate-switch`}
+  1018→              label="翻译"
+  1019→            />
+  1020→          </div>
+  1021→        </div>
+  1022→        <p className={t.captionCls}>开启后，消息会按语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧，译文显示在气泡下方。</p>
+  1023→
+  1024→        {/* 语言对选择器：左右两个语言槽 + 中间互换按钮 */}
+  1025→        <div className="flex items-center justify-center gap-2 pb-1 pt-4">
+  1026→          {renderSlot('left', cfg.left)}
+  1027→          <button
+  1028→            type="button"
+  1029→            data-testid={`${testPrefix}-translate-swap`}
+  1030→            aria-label="互换两侧语言"
+  1031→            onClick={() => onChange({ ...cfg, left: cfg.right, right: cfg.left })}
+  1032→            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-black/55 active:bg-black/[0.05] dark:text-white/55 dark:active:bg-white/[0.08]"
+  1033→          >
+  1034→            <ArrowLeftRight className="h-[19px] w-[19px]" strokeWidth={2} aria-hidden="true" />
+  1035→          </button>
+  1036→          {renderSlot('right', cfg.right)}
+  1037→        </div>
+  1038→        <p className="px-1 pb-1 pt-1 text-center text-[13.5px] text-black/40 dark:text-white/40">
+  1039→          点击上方一侧，再在下方列表中选择该侧语言
+  1040→        </p>
+  1041→
+  1042→        {/* 语言列表：常用语言 / 更多语言 */}
+  1043→        {renderGroup(COMMON_TRANSLATE_LANGS, '常用语言')}
+  1044→        {renderGroup(MORE_TRANSLATE_LANGS, '更多语言')}
+  1045→
+  1046→        <p className={t.captionCls}>换一个聊天对象需要单独设置。</p>
+  1047→      </div>
+  1048→    </div>
+  1049→  );
+  1050→}
+  1051→
+  1052→// ---------------- 信息 App 聊天设置页（iOS 风格） ----------------
+  1053→
+  1054→/**
+  1055→ * 信息 App 的聊天设置页（聊天页顶栏摄像机图标进入）：
+  1056→ * 对方信息卡片 + 翻译入口（ChatTranslatePage，variant=sms）+ 分句发送开关。
+  1057→ */
+  1058→export function SmsChatSettingsPage({
+  1059→  peerName,
+  1060→  peerAvatar,
+  1061→  phone,
+  1062→  translateSummary,
+  1063→  sentenceSend,
+  1064→  timeAware,
+  1065→  stickersOn,
+  1066→  worldBooksSummary,
+  1067→  onBack,
+  1068→  onOpenTranslate,
+  1069→  onToggleSentenceSend,
+  1070→  onToggleTimeAware,
+  1071→  onToggleStickers,
+  1072→  onOpenWorldBooks,
+  1073→}: {
+  1074→  peerName: string;
+  1075→  peerAvatar: string | null;
+  1076→  /** 信息卡第二行：手机号（可为空） */
+  1077→  phone: string;
+  1078→  translateSummary: string;
+  1079→  sentenceSend: boolean;
+  1080→  /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
+  1081→  timeAware: boolean;
+  1082→  /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
+  1083→  stickersOn: boolean;
+  1084→  /** 挂载的世界书摘要（未挂载时「未选择」） */
+  1085→  worldBooksSummary: string;
+  1086→  onBack: () => void;
+  1087→  onOpenTranslate: () => void;
+  1088→  onToggleSentenceSend: (v: boolean) => void;
+  1089→  onToggleTimeAware: (v: boolean) => void;
+  1090→  onToggleStickers: (v: boolean) => void;
+  1091→  /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
+  1092→  onOpenWorldBooks?: () => void;
+  1093→}) {
+  1094→  const t = translateTokens('sms');
+  1095→  return (
+  1096→    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+  1097→      {/* 顶栏 */}
+  1098→      <div className="shrink-0 pt-[54px]">
+  1099→        <div className="relative flex h-12 items-center px-2">
+  1100→          <button
+  1101→            type="button"
+  1102→            aria-label="返回"
+  1103→            data-testid="sms-chat-settings-back"
+  1104→            onClick={onBack}
+  1105→            className="flex items-center rounded-full p-1 active:opacity-50"
+  1106→          >
+  1107→            <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+  1108→          </button>
+  1109→          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">
+  1110→            聊天设置
+  1111→          </div>
+  1112→        </div>
+  1113→      </div>
+  1114→
+  1115→      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-3">
+  1116→        {/* 对方信息卡片 */}
+  1117→        <div className={`${t.cardCls}`}>
+  1118→          <div className="flex items-center gap-3 px-4 py-3.5">
+  1119→            <ChatSettingsAvatar variant="sms" src={peerAvatar} alt={peerName} size={52} />
+  1120→            <div className="min-w-0 flex-1">
+  1121→              <p className="truncate text-[16px] font-semibold">{peerName}</p>
+  1122→              {phone && (
+  1123→                <p className="mt-0.5 truncate text-[13px] tabular-nums text-muted-foreground">{phone}</p>
+  1124→              )}
+  1125→            </div>
+  1126→          </div>
+  1127→        </div>
+  1128→
+  1129→        {/* 翻译入口 */}
+  1130→        <div className={`${t.cardCls} mt-3`}>
+  1131→          <button type="button" data-testid="sms-settings-translate" onClick={onOpenTranslate} className={t.rowCls}>
+  1132→            <span>翻译</span>
+  1133→            <span className="flex shrink-0 items-center gap-1.5">
+  1134→              <span data-testid="sms-translate-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+  1135→                {translateSummary}
+  1136→              </span>
+  1137→              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+  1138→            </span>
+  1139→          </button>
+  1140→        </div>
+  1141→
+  1142→        {/* 分句发送 */}
+  1143→        <div className={`${t.cardCls} mt-3`}>
+  1144→          <div className={`flex items-center justify-between ${t.rowCls}`}>
+  1145→            <span>分句发送</span>
+  1146→            <ChatToggle
+  1147→              on={sentenceSend}
+  1148→              onChange={onToggleSentenceSend}
+  1149→              accent="#34C759"
+  1150→              testId="sms-settings-sentence"
+  1151→              label="分句发送"
+  1152→            />
+  1153→          </div>
+  1154→        </div>
+  1155→        <p className={t.captionCls}>
+  1156→          开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
+  1157→        </p>
+  1158→
+  1159→        {/* 时间感知 */}
+  1160→        <div className={`${t.cardCls} mt-3`}>
+  1161→          <div className={`flex items-center justify-between ${t.rowCls}`}>
+  1162→            <span>时间感知</span>
+  1163→            <ChatToggle
+  1164→              on={timeAware}
+  1165→              onChange={onToggleTimeAware}
+  1166→              accent="#34C759"
+  1167→              testId="sms-settings-time"
+  1168→              label="时间感知"
+  1169→            />
+  1170→          </div>
+  1171→        </div>
+  1172→        <p className={t.captionCls}>
+  1173→          开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
+  1174→        </p>
+  1175→
+  1176→        {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
+  1177→        <div className={`${t.cardCls} mt-3`}>
+  1178→          <div className={`flex items-center justify-between ${t.rowCls}`}>
+  1179→            <span>表情包</span>
+  1180→            <ChatToggle
+  1181→              on={stickersOn}
+  1182→              onChange={onToggleStickers}
+  1183→              accent="#34C759"
+  1184→              testId="sms-settings-stickers"
+  1185→              label="表情包"
+  1186→            />
+  1187→          </div>
+  1188→        </div>
+  1189→        <p className={t.captionCls}>{stickerToggleCaption(stickersOn)}</p>
+  1190→
+  1191→        {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择）；AI 助手会话无此入口 */}
+  1192→        {onOpenWorldBooks && (
+  1193→          <>
+  1194→            <div className={`${t.cardCls} mt-3`}>
+  1195→              <button type="button" data-testid="sms-settings-worldbooks" onClick={onOpenWorldBooks} className={t.rowCls}>
+  1196→                <span className="flex items-center gap-2.5">
+  1197→                  <BookMarked className="h-[18px] w-[18px] text-muted-foreground" strokeWidth={1.9} aria-hidden="true" />
+  1198→                  世界书
+  1199→                </span>
+  1200→                <span className="flex shrink-0 items-center gap-1.5">
+  1201→                  <span data-testid="sms-worldbooks-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+  1202→                    {worldBooksSummary}
+  1203→                  </span>
+  1204→                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+  1205→                </span>
+  1206→              </button>
+  1207→            </div>
+  1208→            <p className={t.captionCls}>
+  1209→              挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
+  1210→            </p>
+  1211→          </>
+  1212→        )}
+  1213→      </div>
+  1214→    </div>
+  1215→  );
+  1216→}
+  1217→
+  1218→// ---------------- 世界书挂载页（三端共用二级页） ----------------
+  1219→
+  1220→/**
+  1221→ * 世界书挂载页（微信/QQ/信息聊天设置二级页）：为当前联系人勾选要挂载的世界书（可多选）。
+  1222→ * 范围在书级：只有「局部」范围的书需要挂载（挂载后命中关键词才注入）；
+  1223→ * 「全局」书无需挂载对所有对话常驻生效；「专属」书仅对绑定的角色生效。书籍本体在「世界书」App 里维护。
+  1224→ */
+  1225→export function WorldBookPickerPage({
+  1226→  variant,
+  1227→  books,
+  1228→  boundIds,
+  1229→  onBack,
+  1230→  onChange,
+  1231→}: {
+  1232→  variant: ChatSettingsVariant;
+  1233→  /** 可挂载的世界书（局部范围；id/名字/条目数） */
+  1234→  books: Array<{ id: string; name: string; entryCount: number; enabledCount: number }>;
+  1235→  /** 当前联系人已挂载的书 id */
+  1236→  boundIds: string[];
+  1237→  onBack: () => void;
+  1238→  /** 勾选变化（每次点选回传完整 id 列表，由调用方持久化） */
+  1239→  onChange: (ids: string[]) => void;
+  1240→}) {
+  1241→  const t = translateTokens(variant);
+  1242→  const testPrefix = variant;
+  1243→  const bound = useMemo(() => new Set(boundIds), [boundIds]);
+  1244→
+  1245→  return (
+  1246→    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+  1247→      {/* 顶栏 */}
+  1248→      <div className="shrink-0 pt-[54px]">
+  1249→        <div className={`flex ${t.headerH} items-center px-2`}>
+  1250→          <button
+  1251→            type="button"
+  1252→            aria-label="返回"
+  1253→            data-testid={`${testPrefix}-worldbooks-back`}
+  1254→            onClick={onBack}
+  1255→            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
+  1256→          >
+  1257→            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+  1258→          </button>
+  1259→          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>世界书</div>
+  1260→        </div>
+  1261→      </div>
+  1262→
+  1263→      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+  1264→        {books.length === 0 ? (
+  1265→          <div className="mt-16 text-center">
+  1266→            <BookMarked className="mx-auto h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
+  1267→            <p className={`mt-3 text-[14px] ${t.sms ? 'text-muted-foreground' : 'text-black/35 dark:text-white/35'}`}>
+  1268→              没有可挂载的「局部」世界书；到「世界书」App 创建（范围选局部）后再来挂载
+  1269→            </p>
+  1270→          </div>
+  1271→        ) : (
+  1272→          <div className={`${t.cardCls} overflow-hidden`}>
+  1273→            {books.map((book, i) => {
+  1274→              const selected = bound.has(book.id);
+  1275→              return (
+  1276→                <div key={book.id}>
+  1277→                  {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+  1278→                  <button
+  1279→                    type="button"
+  1280→                    data-testid={`${testPrefix}-worldbook-option-${i}`}
+  1281→                    aria-label={`${selected ? '取消挂载' : '挂载'}${book.name}`}
+  1282→                    onClick={() => {
+  1283→                      const next = new Set(bound);
+  1284→                      if (selected) next.delete(book.id);
+  1285→                      else next.add(book.id);
+  1286→                      onChange(books.filter((b) => next.has(b.id)).map((b) => b.id));
+  1287→                    }}
+  1288→                    className={t.rowCls}
+  1289→                  >
+  1290→                    <span className="min-w-0">
+  1291→                      <span className="block truncate">{book.name}</span>
+  1292→                      <span
+  1293→                        className={`mt-0.5 block truncate text-[12.5px] ${
+  1294→                          t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40'
+  1295→                        }`}
+  1296→                      >
+  1297→                        {book.entryCount} 条目 · {book.enabledCount} 启用
+  1298→                      </span>
+  1299→                    </span>
+  1300→                    {selected && (
+  1301→                      <span className="grid shrink-0 place-items-center pl-2" style={{ color: t.accent }} aria-label="已挂载">
+  1302→                        <Check className="h-5 w-5" strokeWidth={2.4} />
+  1303→                      </span>
+  1304→                    )}
+  1305→                  </button>
+  1306→                </div>
+  1307→              );
+  1308→            })}
+  1309→          </div>
+  1310→        )}
+  1311→        <p className={t.captionCls}>
+  1312→          只有「局部」范围的世界书需要挂载：挂载后，聊天内容命中条目触发词时才注入对应设定（未命中不发送）。「全局」书无需挂载、对所有对话常驻生效；「专属」书仅对绑定的角色生效——都在「世界书」App 里设置。
+  1313→        </p>
+  1314→      </div>
+  1315→    </div>
+  1316→  );
+  1317→}
+  1318→

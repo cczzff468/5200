@@ -6668,3 +6668,24 @@ Stage Summary:
 - 修复 directFetchModels 与服务端 /api/settings/models 的 404 语义不一致及终局误报「地址不可达」问题（本机/局域网网关为主要受益场景，聊天/识图 API 页的同款拉取也一并受益）
 - 音色「自己填」与「拉取」两条路在设置页与联系人编辑器都已闭环
 - 涉及文件：src/lib/ios/direct-api.ts、src/app/api/settings/models/route.ts、src/lib/ios/store.ts、src/components/apps/settings.tsx、src/components/apps/contacts.tsx
+
+---
+Task ID: 5（本次会话）
+Agent: 主协调者 (Z.ai Code)
+Task: 用户澄清「OpenAI 有的服务商没有模型，不需要模型」——模型名改为选填：留空 = 合成请求完全不携带 model 字段
+
+Work Log:
+- 语义修正：openaiSynthesize（server-tts.ts）原先空模型会强填 'tts-1' 发给上游——对不需要模型的服务商（如部分本机 TTS 网关）可能被拒。改为 model 留空时构造 payload 不含 model 字段；填了才发送。MiniMax 分支保持必填兜底（t2a_v2 协议本身要求 model）
+- UI（settings.tsx VoicePage）：模型名标签加「（选填）」（仅 OpenAI 兼容）；placeholder 改「如 tts-1，不需要模型可留空」；新增「不需要模型（留空）」chip（点击清空模型并高亮，与常用模型 chips 并列）；字段下方说明「留空时请求不携带 model 参数，需要时再填」（MiniMax 侧对应提示必须带模型名）；TTS_MODEL_MANUAL_HINT 同步提及留空选项
+- E2E 验证（mock 严格「不需要模型」服务商：带 model 参数即 400「此服务商不需要 model 参数」，用后已删）：
+  ①curl /api/tts 空 model → 200 audio/mpeg 1644 字节，mock 记录 hasModel=false；带 model=tts-1 → 502「合成失败：此服务商不需要 model 参数」，mock 记录 hasModel=true——条件发送双向正确
+  ②浏览器（360×800）：留空 chip 点击清空模型 → 试听成功（mock hasModel=false）；手填 tts-1 → 试听报「合成失败：此服务商不需要 model 参数」（mock hasModel=true）——界面与链路一致
+- 数据保护：发现用户在此期间自行清空了语音 API 配置（IndexedDB ttsConfig 记录为 null、界面为 MiniMax 默认值），测试后按当前状态原样还原（MiniMax 默认字段 + 删除 ttsConfig 记录 + reload 复核「语音 API 未配置」），不擅自替用户重填
+- 顺带清理：上次提交混入的 tool-results/ 工具产物文件（git rm --cached + .gitignore 忽略）；本次一并修复若干文件被工具 chmod 644→755 的模式漂移（内容无变化）
+- tsc + lint 零错误；dev.log 无异常（200/502 均为测试预期请求）
+- commit f62e3f8 + 9c78aec 已推送 origin/main
+
+Stage Summary:
+- OpenAI 兼容服务商的模型名现在是真正的选填项：留空 → 请求无 model 字段（不需要模型的服务商开箱即用）；填写 → 正常携带
+- 界面三层明示：标签「选填」、留空 chip、说明文案；MiniMax 保持必填语义不变
+- 涉及文件：src/lib/server-tts.ts、src/components/apps/settings.tsx、.gitignore
