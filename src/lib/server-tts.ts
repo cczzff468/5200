@@ -202,11 +202,14 @@ export async function minimaxVoices(cfg: TtsUpstreamConfig): Promise<{ id: strin
   return out;
 }
 
-/** OpenAI 兼容 audio/speech 合成：返回音频 Buffer（mp3） */
+/** OpenAI 兼容 audio/speech 合成：返回音频 Buffer（mp3）；模型名留空 = 不发送 model 字段（部分服务商不需要模型） */
 export async function openaiSynthesize(cfg: TtsUpstreamConfig, text: string, voiceId: string, speed: number): Promise<Buffer> {
   const base = normalizeTtsBaseUrl(cfg.baseUrl);
   if (!base) throw new Error('API 地址无效');
   if (!cfg.apiKey.trim()) throw new Error('请先填写 API Key');
+  const model = cfg.model?.trim();
+  const payload: Record<string, unknown> = { input: text, voice: voiceId, response_format: 'mp3', speed };
+  if (model) payload.model = model;
   const res = await httpsRequest({
     method: 'POST',
     url: openaiSpeechUrl(base),
@@ -214,7 +217,7 @@ export async function openaiSynthesize(cfg: TtsUpstreamConfig, text: string, voi
       Authorization: `Bearer ${cfg.apiKey.trim()}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model: cfg.model?.trim() || 'tts-1', input: text, voice: voiceId, response_format: 'mp3', speed }),
+    body: JSON.stringify(payload),
     timeoutMs: 60_000,
   });
   if (res.status >= 400) {

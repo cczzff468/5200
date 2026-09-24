@@ -2024,7 +2024,7 @@ const TTS_PROVIDER_PRESETS = {
 } as const;
 
 /** 拉取不到模型列表时的降级提示（语音合成语境，区别于聊天 API 的提示文案） */
-const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口，不影响语音合成使用；可从下方常用模型中点选，或直接手动填写模型名。';
+const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口；不需要模型的服务商留空即可，需要的可从下方常用模型点选或手动填写。';
 
 /**
  * 语音 API 设置页（与聊天 API / 识图 API 相互独立、互不覆盖）：
@@ -2336,12 +2336,12 @@ function VoicePage({ onBack }: { onBack: () => void }) {
             )}
 
             <div className="relative">
-              <FieldLabel>模型名</FieldLabel>
+              <FieldLabel>模型名{!isMinimax && <span className="ml-1 font-normal text-muted-foreground/70">（选填）</span>}</FieldLabel>
               <div className="flex gap-2">
                 <Input
                   value={ttsConfig.model}
                   onChange={(e) => updateTtsConfig({ model: e.target.value })}
-                  placeholder={preset.model}
+                  placeholder={isMinimax ? preset.model : `如 ${preset.model}，不需要模型可留空`}
                   className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
                 />
                 <button
@@ -2419,6 +2419,19 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               )}
 
               <div className="mt-2 flex flex-wrap gap-1.5">
+                {!isMinimax && (
+                  <button
+                    type="button"
+                    onClick={() => updateTtsConfig({ model: '' })}
+                    className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                      !ttsConfig.model.trim()
+                        ? 'border-foreground bg-foreground text-background'
+                        : 'border-border text-foreground/70 hover:border-muted-foreground/40'
+                    }`}
+                  >
+                    不需要模型（留空）
+                  </button>
+                )}
                 {preset.modelChips.map((m) => (
                   <button
                     key={m}
@@ -2434,6 +2447,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   </button>
                 ))}
               </div>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground/80">
+                {isMinimax
+                  ? 'MiniMax 合成接口必须携带模型名。'
+                  : '不需要模型的服务商可留空：留空时请求不携带 model 参数，需要时再填。'}
+              </p>
             </div>
           </div>
         </section>
