@@ -6639,3 +6639,32 @@ Stage Summary:
 - 预览问题=dev server 进程死亡（非代码问题），重启即恢复
 - 语音 API 模型名现支持「拉取模型」：多候选路径 + 内网直连兜底 + TTS 模型排前带标签 + 无列表接口优雅降级；与聊天/识图 API 配置体验完全一致且相互独立
 - 涉及文件：src/components/apps/settings.tsx（仅 VoicePage，+159/-7）
+
+---
+Task ID: 4（本次会话）
+Agent: 主协调者 (Z.ai Code)
+Task: 用户反馈「openai 有的没有模型，还有音色可以自己填也可以拉取」——第三方 OpenAI 兼容服务商普遍没有模型列表/音色列表接口，把两条拉取链路都做成可用的优雅降级：拉不到也能点选建议或手动填
+
+Work Log:
+- 排查用户场景：用户配置为 OpenAI 兼容 + 本机 TTS（http://localhost:4599）；此类网关大多只有 /audio/speech，没有 /v1/models 与音色接口 → 拉取模型/音色都落空
+- 复现出真 Bug ①：directFetchModels（浏览器直连路径，本机/局域网地址必经）对 404 直接报「服务返回异常（HTTP 404）」——与服务端路由「404=换下一候选」语义不一致；且单候选（base 以 /v1 结尾）时 404/无法解析最终误报「地址不可达」。修复 direct-api.ts：404/405/501 → continue 换下一候选；有响应但都拿不到列表 → 返回 hint（优雅降级）不再误报网络错误
+- 复现出真 Bug ②：/api/settings/models 服务端路由同款终局误报（sawNotFound/candidates>1 之外的单候选无解析场景返回「无法连接」）。修复 route.ts：只要收到过任何响应，终局一律降级为 hint；仅全部网络不可达才报 directOnly
+- 音色拉取增强（settings.tsx VoicePage）：第三方 OpenAI 兼容拉不到音色列表时，不再只提示手动填——直接展示 OpenAI 标准六音色（alloy/echo/fable/onyx/nova/shimmer，新增 store.ts 导出 OPENAI_STANDARD_VOICES）面板供点选，hint 注明「也可在输入框直接手动填写任意音色名」；MiniMax 保持手动填提示（其音色需 GroupId 拉取，无法本地枚举）
+- 联系人音色选择器增强（contacts.tsx）：此前只在「设置里拉取过列表」后才有点选 chips，从未拉取过时只能手打——现在 ttsVoices 缓存为空且服务商为 OpenAI 兼容时兜底展示标准六音色 chips（点选填充/再点取消不变）；MiniMax 仍引导去设置拉取
+- 模型常用 chips 扩充（settings.tsx TTS_PROVIDER_PRESETS.openai.modelChips）：tts-1 / tts-1-hd / gpt-4o-mini-tts 基础上新增 qwen-tts-latest（阿里百炼）、FunAudioLLM/CosyVoice2-0.5B（硅基流动）两个国内常见 OpenAI 兼容 TTS 模型，拉不到列表时点选即用
+- E2E 验证（mock 双模式服务商 4599 端口：lists=off 两接口全 404 / lists=on 返回真实列表，curl __toggle 切换，用后已删）：
+  ①lists=off 拉取模型 → hint「该服务商未提供模型列表接口…可从下方常用模型中点选」+ 5 个 chips 可点，无错误无面板（修复前为「服务返回异常（HTTP 404）」）
+  ②lists=off 拉取音色列表 → 面板展开标准六音色 + hint，点 fable → defaultVoiceId=fable ✓
+  ③lists=on 拉取音色 → 真实列表（我的音色一/二，voice_id 解析正确）点选生效 ✓；拉取模型 → my-tts-pro/tts-1 带「语音」标签排前、gpt-4o 排后 ✓
+  ④联系人回退：清空 ttsVoices 缓存 → reload → 编辑小雪 → 语音音色区出现标准六音色 chips，点 fable → voiceId=fable，再点选回 nova 后退出未保存（联系人数据零改动）
+  ⑤服务端 /api/tts/voices 对真实列表解析正常（宽松解析 {voices:[{voice_id,voice_name}]}）
+- 排障：mock 音色端点路径写错（/v1/voices ≠ 服务端约定的 /v1/audio/voices）导致一次空列表假阴性，对齐后通过；restore 脚本依赖 window 全局在 reload 后丢失导致首次恢复超时，改用字面量恢复
+- 数据保护：恢复用户原始 ttsConfig 密文信封 + ttsVoices 缓存（Alloy 沉稳/Nova 清亮/Shimmer 温柔 3 条）并 reload 复核 UI（localhost:4599 / sk-test-123 / tts-1 / nova）与 IndexedDB 全部一致；小雪联系人未保存任何改动
+- tsc + lint 零错误；errors 面板零错误；dev.log 无错误
+- commit 3b5ed98 已推送 origin/main
+
+Stage Summary:
+- 「没有模型列表/音色列表」的第三方 OpenAI 兼容服务商现在是完整可用的流程：拉取 → 拿不到 → 点选建议（模型 chips / 标准六音色）或手动填，全程无报错阻塞
+- 修复 directFetchModels 与服务端 /api/settings/models 的 404 语义不一致及终局误报「地址不可达」问题（本机/局域网网关为主要受益场景，聊天/识图 API 页的同款拉取也一并受益）
+- 音色「自己填」与「拉取」两条路在设置页与联系人编辑器都已闭环
+- 涉及文件：src/lib/ios/direct-api.ts、src/app/api/settings/models/route.ts、src/lib/ios/store.ts、src/components/apps/settings.tsx、src/components/apps/contacts.tsx
