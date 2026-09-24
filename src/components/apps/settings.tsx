@@ -2022,6 +2022,9 @@ const TTS_PROVIDER_PRESETS = {
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1', modelChips: ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts'] },
 } as const;
 
+/** 拉取不到模型列表时的降级提示（语音合成语境，区别于聊天 API 的提示文案） */
+const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口，不影响语音合成使用；可从下方常用模型中点选，或直接手动填写模型名。';
+
 /**
  * 语音 API 设置页（与聊天 API / 识图 API 相互独立、互不覆盖）：
  * - 服务商：MiniMax / OpenAI 兼容；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
@@ -2041,6 +2044,14 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const [fetchingVoices, setFetchingVoices] = useState(false);
   const [voicesError, setVoicesError] = useState('');
   const [voicesHint, setVoicesHint] = useState('');
+
+  // 模型列表拉取（与聊天/识图 API 的「拉取模型」同款体验）
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+  const [modelsHint, setModelsHint] = useState('');
+  const [ttsModels, setTtsModels] = useState<string[]>([]);
+  const [modelQuery, setModelQuery] = useState('');
+  const [modelPanelOpen, setModelPanelOpen] = useState(false);
 
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
@@ -2073,6 +2084,9 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     setVoicesError('');
     setVoicesHint('');
     setVoicePanelOpen(false);
+    setModelsError('');
+    setModelsHint('');
+    setModelPanelOpen(false);
   };
 
   const fetchVoices = async () => {
@@ -2115,6 +2129,67 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     }
   };
 
+  /** TTS 相关模型排前（tts/speech/audio/voice 命中），其余模型排后仍可选 */
+  const applyTtsModels = (list: string[]) => {
+    const isTts = (m: string) => /tts|speech|audio|voice/i.test(m);
+    const sorted = [...list].sort((a, b) => Number(isTts(b)) - Number(isTts(a)) || a.localeCompare(b));
+    setTtsModels(sorted);
+    setModelQuery('');
+    setModelPanelOpen(true);
+  };
+
+  const fetchTtsModels = async () => {
+    if (!ttsConfig.baseUrl.trim()) {
+      setModelsError('请先填写 API 地址');
+      return;
+    }
+    setFetchingModels(true);
+    setModelsError('');
+    setModelsHint('');
+    try {
+      const res = await fetch('/api/settings/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: ttsConfig.baseUrl, apiKey: ttsConfig.apiKey }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { models?: string[]; hint?: string; error?: string; url?: string; directOnly?: boolean }
+        | null;
+      // 内网地址或服务器不可达/地区限制（directOnly）：改用浏览器直连拉取
+      if (!data || data.directOnly || (data.error && isPrivateApiUrl(ttsConfig.baseUrl))) {
+        const direct = await directFetchModels(ttsConfig.baseUrl, ttsConfig.apiKey);
+        if (direct.error) {
+          const serverMsg = typeof data?.error === 'string' ? data.error : '';
+          setModelsError(
+            serverMsg && !isPrivateApiUrl(ttsConfig.baseUrl)
+              ? `${serverMsg}；浏览器直连也不可用：${direct.error}`
+              : direct.error
+          );
+          return;
+        }
+        if (direct.hint && direct.models.length === 0) {
+          setModelsHint(TTS_MODEL_MANUAL_HINT);
+          return;
+        }
+        applyTtsModels(direct.models);
+        return;
+      }
+      if (!res.ok || !data || data.error) {
+        const base = data?.error ?? '拉取模型失败，请稍后重试';
+        setModelsError(data?.url ? `${base}（实际请求：${data.url}）` : base);
+      } else if (data.hint && (data.models ?? []).length === 0) {
+        // MiniMax 等无模型列表接口：优雅降级，可用常用模型 chips 或手动填写
+        setModelsHint(TTS_MODEL_MANUAL_HINT);
+      } else {
+        applyTtsModels(data.models ?? []);
+      }
+    } catch {
+      setModelsError('无法连接到服务器');
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
   const runPreview = async () => {
     if (previewLoading) return;
     setPreviewLoading(true);
@@ -2153,6 +2228,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
 
   const q = voiceQuery.trim().toLowerCase();
   const filteredVoices = q ? ttsVoices.filter((v) => v.id.toLowerCase().includes(q) || v.name.toLowerCase().includes(q)) : ttsVoices;
+  const mq = modelQuery.trim().toLowerCase();
+  const filteredTtsModels = mq ? ttsModels.filter((m) => m.toLowerCase().includes(mq)) : ttsModels;
 
   return (
     <DetailShell title="语音 API" onBack={onBack}>
@@ -2249,14 +2326,89 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               </div>
             )}
 
-            <div>
+            <div className="relative">
               <FieldLabel>模型名</FieldLabel>
-              <Input
-                value={ttsConfig.model}
-                onChange={(e) => updateTtsConfig({ model: e.target.value })}
-                placeholder={preset.model}
-                className="h-10 rounded-[10px] bg-background text-[14px]"
-              />
+              <div className="flex gap-2">
+                <Input
+                  value={ttsConfig.model}
+                  onChange={(e) => updateTtsConfig({ model: e.target.value })}
+                  placeholder={preset.model}
+                  className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void fetchTtsModels()}
+                  disabled={fetchingModels}
+                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+                >
+                  {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  拉取模型
+                </button>
+              </div>
+              {modelsError && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {modelsError}
+                </p>
+              )}
+              {modelsHint && (
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{modelsHint}</p>
+              )}
+
+              {/* 模型列表面板（拉取成功后展开；TTS 相关模型排前） */}
+              {modelPanelOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-20"
+                    onClick={() => setModelPanelOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
+                    <div className="border-b border-border/60 p-2">
+                      <Input
+                        value={modelQuery}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        placeholder="搜索模型，如 tts / speech"
+                        autoFocus
+                        className="h-9 rounded-[10px] bg-background text-[13px]"
+                      />
+                    </div>
+                    <div className="thin-scrollbar max-h-64 overflow-y-auto">
+                      {filteredTtsModels.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">没有匹配的模型</div>
+                      ) : (
+                        filteredTtsModels.map((m) => {
+                          const isTts = /tts|speech|audio|voice/i.test(m);
+                          return (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => {
+                                updateTtsConfig({ model: m });
+                                setModelPanelOpen(false);
+                              }}
+                              className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="truncate text-[14px]">{m}</span>
+                                {isTts && (
+                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                    语音
+                                  </span>
+                                )}
+                              </span>
+                              {ttsConfig.model.trim() === m && (
+                                <Check className="h-4 w-4 shrink-0 text-foreground" strokeWidth={2.5} />
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {preset.modelChips.map((m) => (
                   <button
