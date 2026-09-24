@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
+  AudioLines,
   Camera,
   Check,
   ChevronLeft,
@@ -132,6 +133,12 @@ import { canPay, executePayment, gainToWallet, loadBankCards, loadPayPwd, loadWa
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender, splitReplySegments } from '@/lib/reply-count';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
+import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
+import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
+import { blobToDataUrl } from '@/lib/ios/audio-utils';
+import { stopVoicePlayback } from '@/lib/ios/voice-player';
 import { getSentenceSend, hasPendingBatch, markPendingBatch, saveSentenceSend } from '@/lib/sentence-send';
 import {
   actionVerb,
@@ -288,7 +295,9 @@ export interface QqSingleMsgShape {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  kind?: 'text' | 'image' | 'sticker' | 'location' | 'forward';
+  kind?: 'text' | 'image' | 'sticker' | 'location' | 'forward' | 'voice';
+  /** 语音消息数据（kind='voice'；与 VoiceMsgData 同构，qq.tsx loadMsgs 规范化可读回） */
+  voice?: VoiceMsgData;
   img?: { src: string };
   loc?: { name: string; addr: string };
   stk?: { url: string; meaning: string };
@@ -1885,8 +1894,11 @@ export function QqGroupChatPage({
 }) {
   const gid = group.id;
   const sKey = sessionKeyOf(gid);
-  // 退出群聊页/切群：停止语音播放并释放播放器（单例，防跨群串音）
-  useEffect(() => () => stopSpeaking(), [gid]);
+  // 退出群聊页/切群：停止 TTS 朗读与语音气泡播放并释放播放器（单例，防跨群串音）
+  useEffect(() => () => {
+    stopSpeaking();
+    stopVoicePlayback();
+  }, [gid]);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   // 存储侧追加（后台落盘的事件/开场白）→ 广播后即时重读（与微信同构）
   useEffect(() => {
@@ -1919,12 +1931,20 @@ export function QqGroupChatPage({
   // 分句发送（按群独立；开启后连发消息不触发回复，空输入点「发送」统一触发）
   const [sentenceSend, setSentenceSend] = useState(() => getSentenceSend(sKey));
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sKey));
+  // 语音输入模式：输入框替换为「按住 说话」胶囊（工具栏麦克风钮切换）
+  const [voiceMode, setVoiceMode] = useState(false);
+  // 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用）
+  const [ttsSend, setTtsSend] = useState(false);
   const [speakerId, setSpeakerId] = useState<string | null>(() => groupSpeaker.get(sKey) ?? null);
   const stream = useChatStream(sKey);
   const apiConfig = useSettings((s) => s.apiConfig);
   const runningRef = useRef(false);
   /** 排队回复标记：回合进行中用户又发了消息 → 本回合结束后自动再起一轮 */
   const groupQueuedRef = useRef(false);
+  /** 群回合触发器（语音消息转写完成后的补跑用：经 ref 调最新回合，避免闭包旧状态/旧配置） */
+  const runGroupTurnRef = useRef<(trigger?: WxGroupMsg) => void>(() => undefined);
+  /** 文字转语音发送（定义在下方；send 在前引用 → 同 runGroupTurnRef 的 ref 模式） */
+  const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -2088,6 +2108,8 @@ export function QqGroupChatPage({
   /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
     if (m.kind === 'image') return '[图片]';
+    // 语音消息：转写直接作为文本内容进上下文（识别不出时用占位，成员知道 TA 发了语音）
+    if (m.kind === 'voice') return m.voice?.transcript || '[语音]';
     if (m.kind === 'sticker' && m.stk) {
       return m.role === 'me'
         ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -2114,7 +2136,11 @@ export function QqGroupChatPage({
   const msgSnapshotOf = (m: WxGroupMsg): string =>
     m.kind === 'image'
       ? '[图片]'
-      : m.kind === 'sticker' && m.stk
+      : m.kind === 'voice'
+        ? m.voice?.transcript
+          ? `[语音] ${m.voice.transcript}`
+          : '[语音]'
+        : m.kind === 'sticker' && m.stk
         ? m.stk.meaning
           ? `[表情] ${m.stk.meaning}`
           : '[表情]'
@@ -2323,7 +2349,9 @@ export function QqGroupChatPage({
           if (m.senderId === char.id) return { role: 'assistant', content: `${quoted}${msgTextOf(m)}` };
           return { role: 'user', content: `${m.senderName || '成员'}：${quoted}${msgTextOf(m)}` };
         });
-        const lastUserText = [...ctxMsgs].reverse().find((m) => m.role === 'me')?.content ?? '';
+        const lastMeMsg = [...ctxMsgs].reverse().find((m) => m.role === 'me');
+        // 最后一条机主消息的文本快照（语音按转写映射，与历史构建走同一套 msgTextOf）
+        const lastUserText = lastMeMsg ? msgTextOf(lastMeMsg) : '';
         const memContext = [lastUserText, ...ctxMsgs.slice(-6).map(msgTextOf)].filter(Boolean).join(' ');
 
         // 表情包（用户本地添加的收藏清单，与单聊同一套）：按本群表情开关下发（默认开）；
@@ -2341,7 +2369,7 @@ export function QqGroupChatPage({
           `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户${me.nickname?.trim() && me.nickname.trim() !== meName ? `，昵称「${me.nickname.trim()}」也是 TA` : ''}）${
             others.length ? '、' + others.map(memberNameOf).join('、') : ''
           }。你以「${charName}」的身份参与其中。`,
-          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，请自然理解并回应。',
+          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，「[语音]」是识别不出文字的语音消息（听不到声音，按语境自然回应即可），请自然理解并回应。',
           '只以「' + charName + '」的身份和口吻发言，绝不替其他成员发言、代答或描写他们的言行。',
           '不复制、不复述、不换说法重复其他成员刚说过的内容（群里最忌跟风复读）。',
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
@@ -2672,6 +2700,7 @@ export function QqGroupChatPage({
     },
     [expireStalePackets, gid, runCharTurn, sKey]
   );
+  runGroupTurnRef.current = runGroupTurn;
 
   /** 分句发送批次触发：把已发出的整批消息交给成员统一回复（输入框为空时点「发送」） */
   const dispatchBatch = () => {
@@ -2692,6 +2721,11 @@ export function QqGroupChatPage({
     // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
     if (!text) {
       if (sentenceSend && pendingDispatch) dispatchBatch();
+      return;
+    }
+    // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
+    if (ttsSend) {
+      sendTextAsVoiceRef.current(text);
       return;
     }
     const msg: WxGroupMsg = {
@@ -2721,6 +2755,115 @@ export function QqGroupChatPage({
     }
     void runGroupTurn(msg);
   };
+
+  // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字（与微信单聊/群聊同套共享组件） ----------------
+
+  /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+
+  /** 语音消息落库：入列 → （录音）后台转文字 → 触发群回合；
+   *  presetTranscript = 文字转语音的原文（不再识别）；禁言拦截；回复中排队补跑 */
+  const commitVoiceMsg = useCallback(
+    (clip: VoiceClip, presetTranscript?: string) => {
+      if (meMuted) {
+        onToast('你已被禁言，暂时无法发言');
+        return;
+      }
+      const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
+      const voice: VoiceMsgData = hasText
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, ...(clip.blob ? { stt: 'pending' as const } : { stt: 'done' as const }) };
+      const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: '', time: Date.now(), kind: 'voice', voice };
+      appendMsg(msg);
+      const selfId = msg.id;
+      const patchAndTrigger = (transcript: string) => {
+        const next = loadGroupMsgs(gid).map((x) =>
+          x.id === selfId && x.voice
+            ? { ...x, voice: { ...x.voice, transcript: transcript || undefined, stt: transcript ? ('done' as const) : ('failed' as const) } }
+            : x,
+        );
+        saveGroupMsgs(gid, next);
+        if (mountedRef.current) setMsgs(next);
+        if (runningRef.current || isChatStreaming(sKey)) {
+          groupQueuedRef.current = true; // 成员们还在回复：这轮结束后自动补跑（补跑读最新落盘，能读到转写）
+          return;
+        }
+        // 转写已落库：无 trigger 起一轮（消息已在群消息库，全员可见；@ 判断不适用语音）
+        window.setTimeout(() => runGroupTurnRef.current?.(), 60);
+      };
+      if (hasText || !clip.blob) {
+        if (runningRef.current || isChatStreaming(sKey)) {
+          groupQueuedRef.current = true;
+          return;
+        }
+        window.setTimeout(() => runGroupTurnRef.current?.(), 80);
+        return;
+      }
+      void transcribeAudioBlob(clip.blob)
+        .then((text) => patchAndTrigger(text))
+        .catch(() => patchAndTrigger(''));
+    },
+    [appendMsg, gid, me.name, meMuted, onToast, sKey],
+  );
+
+  /** 录音手势结果分发：松开=发语音；右滑=转文字发文本（失败回退语音）；取消/太短=丢弃 */
+  const handleVoiceOutcome = useCallback(
+    (result: VoiceRecordResult | null, zone: VoiceRecordZone) => {
+      // 取消手势（哪怕录够了时长）与太短结果一律丢弃；仅「原松开未滑动」的太短给提示
+      if (!result || zone === 'cancel') {
+        if (!result && zone === null) onToast('说话时间太短');
+        return;
+      }
+      if (meMuted) {
+        onToast('你已被禁言，暂时无法发言');
+        return;
+      }
+      if (zone === 'stt') {
+        // 滑到「转文字」：识别成功发文字消息（与打字发送同链路）；失败回退为语音气泡，不丢录音
+        void transcribeAudioBlob(result.blob)
+          .then((text) => {
+            if (!text) throw new Error('empty');
+            const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: text, time: Date.now() };
+            if (runningRef.current || isChatStreaming(sKey)) {
+              appendMsg(msg);
+              groupQueuedRef.current = true;
+              onToast('消息已发出，成员们回完这轮就聊');
+              return;
+            }
+            appendMsg(msg);
+            if (sentenceSend) {
+              setPendingDispatch(true);
+              markPendingBatch(sKey, true);
+              return;
+            }
+            runGroupTurnRef.current?.(msg);
+          })
+          .catch(() => {
+            onToast('转文字失败，已按语音发送');
+            void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
+          });
+        return;
+      }
+      // 原松开：语音气泡入列，后台转文字，转完触发群回合
+      void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
+    },
+    [appendMsg, commitVoiceMsg, me.name, meMuted, onToast, sentenceSend, sKey],
+  );
+
+  const rec = useVoiceRecorder({ onResult: handleVoiceOutcome, onStartError: (m) => onToast(m) });
+
+  /** 文字转语音发送（不想说话时：输入文字 → 发出语音气泡）；失败只 toast，不当聊天内容 */
+  const sendTextAsVoice = useCallback(
+    (text: string) => {
+      setDraft('');
+      setQuote(null);
+      void synthesizeSelfVoice(text)
+        .then((clip) => commitVoiceMsg(clip, text))
+        .catch((e: unknown) => onToast(e instanceof Error && e.message ? e.message : '语音生成失败，请重试'));
+    },
+    [commitVoiceMsg, onToast],
+  );
+  sendTextAsVoiceRef.current = sendTextAsVoice;
 
   /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；配置识图模型后触发群回合） */
   const sendImageFiles = async (files: FileList) => {
@@ -3049,7 +3192,11 @@ export function QqGroupChatPage({
   const buildMsgMenuItems = (m: WxGroupMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isText = !m.kind || m.kind === 'text';
-    const items: BubbleMenuItem[] = [{ key: 'copy', label: '复制', icon: B.copy }];
+    const isVoice = m.kind === 'voice';
+    const items: BubbleMenuItem[] = [];
+    // 语音消息首项「转文字」（已有结果时点击提示；识别失败可重试），随后仍是复制（复制转写结果）
+    if (isVoice) items.push({ key: 'stt', label: '转文字', icon: B.stt });
+    items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (isText) items.push({ key: 'quote', label: '引用', icon: B.quote });
@@ -3148,6 +3295,8 @@ export function QqGroupChatPage({
     if (m.kind === 'sticker' && m.stk) return { ...base, content: '', kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { ...base, content: '', kind: 'image', img: { ...m.img } };
     if (m.kind === 'location' && m.loc) return { ...base, content: '', kind: 'location', loc: { ...m.loc } };
+    // 语音消息整条克隆（含音频 dataURL），目标会话里照常可播放
+    if (m.kind === 'voice' && m.voice) return { ...base, content: '', kind: 'voice', voice: { ...m.voice } };
     const isCard = m.kind === 'redpacket' || m.kind === 'transfer';
     return { ...base, content: isCard ? msgSnapshotOf(m) : m.content, kind: 'forward', fwd: { from: group.name }, quote: m.quote };
   };
@@ -3159,6 +3308,8 @@ export function QqGroupChatPage({
     if (m.kind === 'sticker' && m.stk) return { ...base, content: '', kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { ...base, content: m.img.src, kind: 'image' };
     if (m.kind === 'location' && m.loc) return { ...base, content: '', kind: 'location', loc: { name: m.loc.name, addr: m.loc.address } };
+    // 语音消息整条克隆（QQ 单聊同款 kind='voice'，qq.tsx loadMsgs 规范化可读回播放）
+    if (m.kind === 'voice' && m.voice) return { ...base, content: '', kind: 'voice', voice: { ...m.voice } };
     const isCard = m.kind === 'redpacket' || m.kind === 'transfer';
     return { ...base, content: isCard ? msgSnapshotOf(m) : m.content, kind: 'forward', fwd: { from: group.name }, quote: m.quote };
   };
@@ -3273,6 +3424,35 @@ export function QqGroupChatPage({
     setMenuRect(null);
     if (!m) return;
     switch (key) {
+      case 'stt': {
+        // 语音消息「转文字」：已有结果 → 提示；否则现场识别（builtin 免配置），失败可重试
+        const v = m.voice;
+        if (!v) break;
+        if (v.stt === 'done' && v.transcript) {
+          onToast('转文字结果已显示在气泡下方');
+          break;
+        }
+        onToast('正在转文字…');
+        void (async () => {
+          try {
+            const blob = await (await fetch(v.url)).blob();
+            const text = await transcribeAudioBlob(blob);
+            if (!text) {
+              onToast('转文字失败，请重试');
+              return;
+            }
+            const next = loadGroupMsgs(gid).map((x) =>
+              x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: text, stt: 'done' as const } } : x,
+            );
+            saveGroupMsgs(gid, next);
+            if (mountedRef.current) setMsgs(next);
+            onToast('已转文字');
+          } catch {
+            onToast('转文字失败，请重试');
+          }
+        })();
+        break;
+      }
       case 'copy':
         copyText(msgSnapshotOf(m), onToast);
         break;
@@ -3660,6 +3840,18 @@ export function QqGroupChatPage({
                     </div>
                   </div>
                 )
+              ) : m.kind === 'voice' && m.voice ? (
+                /* 语音消息：播放/暂停 + 波形 + 时长；行级长按（data-mid 包装层）弹菜单：转文字/复制/…；转写结果显示在气泡下方 */
+                renderMsgRow(
+                  m,
+                  <VoiceMsgBubble
+                    msgId={m.id}
+                    voice={m.voice}
+                    side={m.role}
+                    theme="qq"
+                    style={m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
+                  />
+                )
               ) : (
                 <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
                   {selectMode && isSelectable(m) && (
@@ -3850,47 +4042,84 @@ export function QqGroupChatPage({
           </div>
         )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => {
-              const v = e.target.value;
-              setDraft(v);
-              // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
-              if (v.endsWith('@')) {
-                setStickerOpen(false);
-                setPlusOpen(false);
-                setAtOpen(true);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            aria-label="发送群聊消息"
-            data-testid="qq-groupchat-input"
-            className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
-          />
-          <button
-            type="button"
-            onClick={send}
-            disabled={streaming || runningRef.current || (!draft.trim() && !canDispatch)}
-            data-testid="qq-groupchat-send"
-            aria-label="发送"
-            className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
-              (draft.trim() || canDispatch) && !streaming && !runningRef.current ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
-            }`}
-            style={{ backgroundColor: (draft.trim() || canDispatch) && !streaming && !runningRef.current ? '#0099FF' : '#8AD4F7' }}
-          >
-            发送
-          </button>
+          {voiceMode ? (
+            /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
+            <VoiceHoldBar rec={rec} testId="qqg-voice-hold" />
+          ) : (
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft(v);
+                // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
+                if (v.endsWith('@')) {
+                  setStickerOpen(false);
+                  setPlusOpen(false);
+                  setAtOpen(true);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              aria-label="发送群聊消息"
+              data-testid="qq-groupchat-input"
+              className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+            />
+          )}
+          {(draft.trim() || canDispatch) ? (
+            <>
+              {/* 文字转语音开关（有文字时出现，发送钮左侧）：开启后发送的文字变为语音气泡 */}
+              {draft.trim() ? (
+                <button
+                  type="button"
+                  aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+                  data-testid="qqg-tts-toggle"
+                  onClick={() => {
+                    const nv = !ttsSend;
+                    setTtsSend(nv);
+                    onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+                  }}
+                  className="shrink-0 p-1 transition-colors active:opacity-60"
+                  style={{ color: ttsSend ? '#0099FF' : undefined }}
+                >
+                  <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={send}
+                disabled={streaming || runningRef.current || (!draft.trim() && !canDispatch)}
+                data-testid="qq-groupchat-send"
+                aria-label={ttsSend ? '发送（转语音）' : '发送'}
+                className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
+                  (draft.trim() || canDispatch) && !streaming && !runningRef.current ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
+                }`}
+                style={{ backgroundColor: (draft.trim() || canDispatch) && !streaming && !runningRef.current ? '#0099FF' : '#8AD4F7' }}
+              >
+                发送
+              </button>
+            </>
+          ) : null}
         </div>
         {/* 工具栏（与单聊同款六图标：语音/图片/拍摄/点缀/表情/加号） */}
         <div className="flex items-center justify-between px-7 pb-[18px] pt-2 text-black/80 dark:text-white/80">
-          <button type="button" aria-label="语音" onClick={() => onToast('语音通话暂未开放')} className="p-2 -m-2 active:opacity-60">
-            <Mic className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
+          <button
+            type="button"
+            aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
+            data-testid="qqg-voice-toggle"
+            onClick={() => {
+              setVoiceMode((v) => !v);
+              setStickerOpen(false);
+              setPlusOpen(false);
+              setAtOpen(false);
+            }}
+            className="p-2 -m-2 active:opacity-60"
+          >
+            <Mic className={`h-[25px] w-[25px] ${voiceMode ? 'text-[#0099FF]' : ''}`} strokeWidth={1.8} aria-hidden="true" />
           </button>
           <button type="button" aria-label="图片" data-testid="qq-groupchat-tool-image" onClick={() => photoInputRef.current?.click()} className="p-2 -m-2 active:opacity-60">
             <ImageIcon className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
@@ -4297,6 +4526,9 @@ export function QqGroupChatPage({
       {menu && menuRect && menuMsg && (
         <BubbleActionMenu pos={menuRect} items={buildMsgMenuItems(menuMsg)} onSelect={onMenuSelect} onClose={() => { setMenu(null); setMenuRect(null); }} testPrefix="qq-group" />
       )}
+
+      {/* 语音录制浮层（按住说话期间的计时/实时波形/手势提示；纯视觉不拦截手势） */}
+      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState, typ
 import { motion } from 'framer-motion';
 import {
   ArrowUp,
+  AudioLines,
   ChevronRight,
   CircleCheck,
   EyeOff,
@@ -74,6 +75,13 @@ import { deleteContact, listContacts, ownerRealName, contactRealName, updateCont
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
+import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
+import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { stopSpeaking } from '@/lib/ios/tts-client';
+import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
+import { blobToDataUrl } from '@/lib/ios/audio-utils';
+import { stopVoicePlayback } from '@/lib/ios/voice-player';
 
 // ---------------- 类型与常量 ----------------
 
@@ -85,6 +93,10 @@ interface ChatMsg {
   role: 'user' | 'assistant';
   content: string;
   time: number;
+  /** 消息类型（缺省 = text；旧数据无此字段天然兼容） */
+  kind?: 'text' | 'voice';
+  /** 语音消息数据（kind==='voice' 时有效；音频 dataURL 持久化在聊天记录里） */
+  voice?: VoiceMsgData;
   /** 请求失败的消息（不参与上下文、红字显示） */
   error?: boolean;
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
@@ -205,6 +217,26 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
     );
     if (!ok) return null;
     const msgs = (parsed as ChatMsg[]).slice(-100);
+    // 语音消息规范化（旧记录/损坏记录兼容：url 非字符串的语音降级为文本占位，不再当语音渲染）
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (m.kind !== 'voice') continue;
+      const v = m.voice;
+      if (v && typeof v.url === 'string' && v.url) {
+        msgs[i] = {
+          ...m,
+          voice: {
+            url: v.url,
+            duration: typeof v.duration === 'number' && v.duration > 0 ? v.duration : 1,
+            wave: Array.isArray(v.wave) ? v.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+            transcript: typeof v.transcript === 'string' && v.transcript ? v.transcript : undefined,
+            stt: v.stt === 'pending' || v.stt === 'done' || v.stt === 'failed' ? v.stt : undefined,
+          },
+        };
+      } else {
+        msgs[i] = { ...m, kind: 'text', voice: undefined, content: m.content || '[语音]' };
+      }
+    }
     // 欢迎语文案迁移：种子消息按固定 id 识别，旧文案就地替换为最新文案（用户消息不动）
     if (sessionKey === 'assistant' && msgs[0]?.id === SEED_MSGS[0].id && msgs[0].content !== SEED_MSGS[0].content) {
       msgs[0] = { ...msgs[0], content: SEED_MSGS[0].content };
@@ -562,6 +594,14 @@ function ChatView({
   const stream = useChatStream(sessionKey);
   const streaming = stream?.status === 'streaming';
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 退出聊天页/切换会话（组件按 key 重挂载）：停止语音气泡播放与朗读并释放（防跨会话串音）
+  useEffect(
+    () => () => {
+      stopSpeaking();
+      stopVoicePlayback();
+    },
+    [sessionKey],
+  );
   // 用户自己的 OpenAI 兼容接口配置（设置 › API 配置），聊天全部走该配置
   const apiConfig = useSettings((s) => s.apiConfig);
   /** 机主名字（记忆提取视角统一用：碎片一律用真实名字指代用户；设置 › Apple 账户可改） */
@@ -593,6 +633,12 @@ function ChatView({
   useEffect(() => {
     setStickersOnState(getStickersOn(sessionKey));
   }, [sessionKey]);
+  /** 语音输入模式：输入框替换为「按住 说话」胶囊（右侧 Mic 钮切换，原装饰图标位置） */
+  const [voiceMode, setVoiceMode] = useState(false);
+  /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
+  const [ttsSend, setTtsSend] = useState(false);
+  /** 引用回复（输入框上方条；发送时挂到新消息上）——send 在下方引用，需先声明 */
+  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
   /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
   const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
   /** 双向拉黑状态（仅联系人会话；小助手会话无角色 ID 不参与；kv 持久化按联系人隔离） */
@@ -689,17 +735,27 @@ function ChatView({
     });
   }, [stream, sessionKey, storageKey]);
 
-  /** AI 回合：把整轮流式请求交给全局 store（userMsg 为 null = 分句发送批次触发，消息早已入列）。
-   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容 */
-  const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string) => {
-    const base = userMsg ? [...msgs, userMsg] : msgs;
-    // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知）
+  /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
+   *  转写完成后（异步）触发回复时拿到的才是含语音消息与转写的最新历史 */
+  const startAiTurnRef = useRef<((userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => void) | null>(null);
+  /** 文字转语音发送（定义在 send 之后）：send 在前引用 → 同 ref 模式 */
+  const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
+
+  /** AI 回合：把整轮流式请求交给全局 store（userMsg 为 null = 分句发送批次触发/语音转写完成触发，消息早已入列）。
+   *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
+   *  baseMsgs：显式传入最新消息数组（语音转写完成后调用时避免闭包旧状态漏掉刚落库的语音消息） */
+  const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => {
+    const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : [])];
+    // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知；
+    // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位）
     const history = base
-      .filter((m) => !m.error && m.content && !m.recalled)
+      .filter((m) => !m.error && !m.recalled && (m.content || m.kind === 'voice'))
       .slice(-20)
       .map((m) => ({
         role: m.role,
-        content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${m.content}`,
+        content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+          m.kind === 'voice' ? m.voice?.transcript || '[语音]' : m.content
+        }`,
       }));
 
     const aiId = uid();
@@ -716,7 +772,9 @@ function ChatView({
       ? memRecallBlock(
           memContactId,
           'sms',
-          [userMsg?.content ?? '', ...base.slice(-6).map((m) => m.content)].filter(Boolean).join(' ')
+          [userMsg?.content ?? '', ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]
+            .filter(Boolean)
+            .join(' ')
         )
       : '';
     // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（信息 App 无自有平台，
@@ -738,7 +796,7 @@ function ChatView({
     // 世界书：仅联系人会话参与（AI 助手会话无联系人角色）；命中触发词条目按插入位置注入
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；有内容时 system 末尾附带使用规则）
     const wbBlocks = wbContactId
-      ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => m.content)]))
+      ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]))
       : null;
     const charBlock =
       wbBlocks && systemPrompt
@@ -854,6 +912,10 @@ function ChatView({
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
   };
+  // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）；无依赖数组 = 每次渲染后同步最新闭包
+  useEffect(() => {
+    startAiTurnRef.current = startAiTurn;
+  });
 
   // ---------------- 双向拉黑（仅联系人会话；小助手会话不参与） ----------------
 
@@ -934,6 +996,12 @@ function ChatView({
     const text = input.trim();
     if (!text || isChatStreaming(sessionKey)) return;
 
+    // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
+    if (ttsSend) {
+      sendTextAsVoiceRef.current(text);
+      return;
+    }
+
     const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now(), quote: quote ?? undefined };
     setInput('');
     setQuote(null);
@@ -975,13 +1043,113 @@ function ChatView({
     []
   );
 
+  // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字 ----------------
+
+  /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+
+  /** 语音消息落库：入列 → （录音）后台转文字 → 触发 AI 回复；
+   *  presetTranscript = 文字转语音的原文（不再识别）；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
+  const commitVoiceMsg = useCallback(
+    (clip: VoiceClip, presetTranscript?: string) => {
+      const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
+      const voice: VoiceMsgData = hasText
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, ...(clip.blob ? { stt: 'pending' as const } : { stt: 'done' as const }) };
+      const msg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'voice', voice };
+      setMsgs((prev) => [...prev, msg]);
+      const selfId = msg.id;
+      const patchAndTrigger = (transcript: string) => {
+        let next: ChatMsg[] = [];
+        setMsgs((prev) => {
+          next = prev.map((x) =>
+            x.id === selfId && x.voice
+              ? { ...x, voice: { ...x.voice, transcript: transcript || undefined, stt: transcript ? ('done' as const) : ('failed' as const) } }
+              : x,
+          );
+          return next;
+        });
+        if (isChatStreaming(sessionKey)) return;
+        // 转写已更新：把最新消息数组作为 base 交给 AI（避免闭包旧状态），消息早已在列 → userMsg 传 null
+        window.setTimeout(() => startAiTurnRef.current?.(null, undefined, next), 80);
+      };
+      if (hasText || !clip.blob) {
+        if (isChatStreaming(sessionKey)) return;
+        window.setTimeout(() => startAiTurnRef.current?.(null), 80);
+        return;
+      }
+      void transcribeAudioBlob(clip.blob)
+        .then((text) => patchAndTrigger(text))
+        .catch(() => patchAndTrigger(''));
+    },
+    [sessionKey],
+  );
+
+  /** 录音手势结果分发：松开=发语音；右滑=转文字发文本（失败回退语音）；取消/太短=丢弃 */
+  const handleVoiceOutcome = useCallback(
+    (result: VoiceRecordResult | null, zone: VoiceRecordZone) => {
+      // 取消手势（哪怕录够了时长）与太短结果一律丢弃；仅「原松开未滑动」的太短给提示
+      if (!result || zone === 'cancel') {
+        if (!result && zone === null) showToast('说话时间太短');
+        return;
+      }
+      if (zone === 'stt') {
+        // 滑到「转文字」：识别成功发文字消息（与打字发送同链路）；失败回退为语音气泡，不丢录音
+        void transcribeAudioBlob(result.blob)
+          .then((text) => {
+            if (!text) throw new Error('empty');
+            if (isChatStreaming(sessionKey)) {
+              showToast('对方正在回复，请稍后再试');
+              return;
+            }
+            const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
+            if (sentenceSend) {
+              setMsgs((prev) => [...prev, userMsg]);
+              setPendingDispatch(true);
+              markPendingBatch(sessionKey, true);
+              return;
+            }
+            startAiTurnRef.current?.(userMsg);
+          })
+          .catch(() => {
+            showToast('转文字失败，已按语音发送');
+            void blobToDataUrl(result.blob).then((dataUrl) =>
+              commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave })
+            );
+          });
+        return;
+      }
+      // 原松开：语音气泡入列，后台转文字，转完触发回复
+      void blobToDataUrl(result.blob).then((dataUrl) =>
+        commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave })
+      );
+    },
+    [commitVoiceMsg, sentenceSend, sessionKey, showToast],
+  );
+
+  const rec = useVoiceRecorder({ onResult: handleVoiceOutcome, onStartError: showToast });
+
+  /** 文字转语音发送（不想说话时：输入文字 → 发出语音气泡）；失败只 toast，不当聊天内容 */
+  const sendTextAsVoice = useCallback(
+    (text: string) => {
+      setInput('');
+      setQuote(null);
+      void synthesizeSelfVoice(text)
+        .then((clip) => commitVoiceMsg(clip, text))
+        .catch((e: unknown) => showToast(e instanceof Error && e.message ? e.message : '语音生成失败，请重试'));
+    },
+    [commitVoiceMsg, showToast],
+  );
+  // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）；send 前引用经此拿到最新实现
+  useEffect(() => {
+    sendTextAsVoiceRef.current = sendTextAsVoice;
+  });
+
   /** 气泡长按菜单（横向弹窗）：消息 + 容器内坐标 */
   const [msgMenu, setMsgMenu] = useState<null | { msg: ChatMsg; pos: BubbleMenuPos }>(null);
   /** 编辑消息弹窗（菜单「编辑」）：原消息 + 草稿 */
   const [editMsg, setEditMsg] = useState<ChatMsg | null>(null);
   const [editDraft, setEditDraft] = useState('');
-  /** 引用回复（输入框上方条；发送时挂到新消息上） */
-  const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
   /** 多选模式：勾选消息批量删除 */
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -991,17 +1159,29 @@ function ChatView({
   /** 引用人名：我的消息 → 「我」；对方 → 联系人名/手机号 */
   const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? '我' : peer.name || peer.title);
 
-  /** 按发送方组装长按菜单项（复制 删除 编辑 引用 多选 撤回） */
-  const buildMsgMenuItems = (_m: ChatMsg): BubbleMenuItem[] => {
+  /** 消息的可复制/引用文本快照（语音消息 = [语音] + 转写，与微信同语义） */
+  const quoteContentOf = (m: ChatMsg): string =>
+    m.kind === 'voice'
+      ? m.voice?.transcript
+        ? `[语音] ${m.voice.transcript}`
+        : '[语音]'
+      : m.content;
+
+  /** 按发送方组装长按菜单项（语音首项转文字；复制 删除 编辑 引用 多选 撤回；语音无编辑/引用） */
+  const buildMsgMenuItems = (m: ChatMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
-    return [
-      { key: 'copy', label: '复制', icon: B.copy },
-      { key: 'del', label: '删除', icon: B.del, danger: true },
-      { key: 'edit', label: '编辑', icon: B.edit },
-      { key: 'quote', label: '引用', icon: B.quote },
-      { key: 'multi', label: '多选', icon: B.multi },
-      { key: 'recall', label: '撤回', icon: B.recall },
-    ];
+    const isVoice = m.kind === 'voice';
+    const items: BubbleMenuItem[] = [];
+    if (isVoice) items.push({ key: 'stt', label: '转文字', icon: B.stt });
+    items.push({ key: 'copy', label: '复制', icon: B.copy });
+    items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
+    if (!isVoice) {
+      items.push({ key: 'edit', label: '编辑', icon: B.edit });
+      items.push({ key: 'quote', label: '引用', icon: B.quote });
+    }
+    items.push({ key: 'multi', label: '多选', icon: B.multi });
+    items.push({ key: 'recall', label: '撤回', icon: B.recall });
+    return items;
   };
 
   /** 气泡长按手势（fire 里用 data-mid 反查消息；多选模式下不弹菜单改为点选勾选） */
@@ -1009,7 +1189,7 @@ function ChatView({
     const mid = el.closest('[data-mid]')?.getAttribute('data-mid') ?? null;
     const msg = mid ? msgs.find((x) => x.id === mid) ?? null : null;
     if (!msg || msg.recalled || msg.sys || msg.blkreq) return;
-    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, 6) });
+    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, buildMsgMenuItems(msg).length) });
   }, !selectMode);
 
   /** 退出多选模式 */
@@ -1027,8 +1207,35 @@ function ChatView({
     setMsgMenu(null);
     if (!m) return;
     switch (key) {
+      case 'stt': {
+        // 语音消息「转文字」：已有结果 → 提示；否则现场识别（builtin 免配置），失败可重试
+        const v = m.voice;
+        if (!v) break;
+        if (v.stt === 'done' && v.transcript) {
+          showToast('转文字结果已显示在气泡下方');
+          break;
+        }
+        showToast('正在转文字…');
+        void (async () => {
+          try {
+            const blob = await (await fetch(v.url)).blob();
+            const text = await transcribeAudioBlob(blob);
+            if (!text) {
+              showToast('转文字失败，请重试');
+              return;
+            }
+            setMsgs((prev) =>
+              prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: text, stt: 'done' as const } } : x)),
+            );
+            showToast('已转文字');
+          } catch {
+            showToast('转文字失败，请重试');
+          }
+        })();
+        break;
+      }
       case 'copy': {
-        const t = m.content;
+        const t = quoteContentOf(m);
         const done = () => showToast('已拷贝');
         const fallback = () => {
           try {
@@ -1070,7 +1277,7 @@ function ChatView({
         setEditDraft(m.content);
         break;
       case 'quote':
-        setQuote({ name: quoteNameOf(m), content: m.content });
+        setQuote({ name: quoteNameOf(m), content: quoteContentOf(m) });
         break;
       case 'multi':
         setSelectMode(true);
@@ -1221,6 +1428,55 @@ function ChatView({
                     onAccept={() => resolveBlockReq(m, true)}
                     onReject={() => resolveBlockReq(m, false)}
                   />
+                </motion.div>
+              ) : m.kind === 'voice' && m.voice ? (
+                /* 语音消息：VoiceMsgBubble（播放/波形/时长；转写结果由组件内置展示在气泡下方）。
+                   我方气泡 #007AFF 白字（与文本气泡同款圆角 18px）；长按菜单/多选/拉黑图标与文本消息一致 */
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+                  className={`flex ${mine ? 'justify-end' : 'justify-start'} ${grouped ? 'mt-[3px]' : 'mt-2.5'}`}
+                >
+                  {selectMode && !mine && (
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`mr-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                  )}
+                  {mine && blockedIconOf(m)}
+                  <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div {...bubblePress}>
+                      <VoiceMsgBubble
+                        msgId={m.id}
+                        voice={m.voice}
+                        side={mine ? 'me' : 'peer'}
+                        theme="im"
+                        style={mine ? { backgroundColor: SELF_BLUE } : undefined}
+                      />
+                    </div>
+                    {/* iMessage：已送达挂在最后一条己方消息下沿（与文本气泡同规则） */}
+                    {mine && i === lastUserIdx && (
+                      <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
+                    )}
+                  </div>
+                  {!mine && blockedIconOf(m)}
+                  {selectMode && mine && (
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`ml-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                  )}
                 </motion.div>
               ) : (
               <motion.div
@@ -1431,29 +1687,66 @@ function ChatView({
           <Plus className="h-5 w-5" strokeWidth={2} />
         </div>
         <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full border border-border/70 bg-background pl-3.5 pr-1.5">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="iMessage信息"
-            aria-label="消息输入框"
-            className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
-          />
-          {(input.trim() || canDispatch) ? (
-            <button
-              type="submit"
-              aria-label={input.trim() ? '发送' : '发送（让对方回复）'}
-              disabled={streaming}
-              className="flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90 disabled:opacity-40"
-              style={{ backgroundColor: SELF_BLUE }}
-            >
-              {streaming ? (
-                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} aria-hidden="true" />
-              ) : (
-                <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.6} aria-hidden="true" />
-              )}
-            </button>
+          {voiceMode ? (
+            /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
+            <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
           ) : (
-            <Mic aria-hidden="true" className="mx-1.5 h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.8} />
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="iMessage信息"
+              aria-label="消息输入框"
+              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
+            />
+          )}
+          {!voiceMode && (input.trim() || canDispatch) ? (
+            <>
+              {/* 文字转语音开关（有文字时出现）：开启后发送的文字变为语音气泡 */}
+              {input.trim() ? (
+                <button
+                  type="button"
+                  aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+                  data-testid="sms-tts-toggle"
+                  onClick={() => {
+                    const nv = !ttsSend;
+                    setTtsSend(nv);
+                    showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+                  }}
+                  className={`mr-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
+                    ttsSend ? 'text-[#007AFF]' : 'text-muted-foreground'
+                  }`}
+                >
+                  <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.3 : 1.8} aria-hidden="true" />
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}
+                disabled={streaming}
+                className="flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90 disabled:opacity-40"
+                style={{ backgroundColor: SELF_BLUE }}
+              >
+                {streaming ? (
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} aria-hidden="true" />
+                ) : (
+                  <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.6} aria-hidden="true" />
+                )}
+              </button>
+            </>
+          ) : (
+            /* 语音模式切换钮（原装饰 Mic 位置）：语音模式高亮 */
+            <button
+              type="button"
+              aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
+              aria-pressed={voiceMode}
+              data-testid="sms-voice-toggle"
+              onClick={() => setVoiceMode((v) => !v)}
+              className={`mx-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-70 ${
+                voiceMode ? 'bg-[#007AFF] text-white' : 'text-muted-foreground'
+              }`}
+            >
+              <Mic className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+            </button>
           )}
         </div>
       </form>
@@ -1598,6 +1891,9 @@ function ChatView({
           testPrefix="sms-menu"
         />
       )}
+
+      {/* 录音浮层（按住说话期间）：计时 + 实时波形 + 手势提示（纯视觉，手势在按住的胶囊上） */}
+      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
 
       {/* 轻量提示（复制/删除等动作反馈） */}
       {toastMsg && (
@@ -2036,13 +2332,20 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
     const last = msgs[msgs.length - 1];
+    // 语音消息预览：[语音] + 转写（与微信同语义）；未识别时只显示占位
+    const lastText =
+      last?.kind === 'voice'
+        ? last.voice?.transcript
+          ? `[语音] ${last.voice.transcript}`
+          : '[语音]'
+        : (last?.content ?? '');
     out.push({
       contact: c,
       preview: last?.recalled
         ? last.role === 'user'
           ? '你撤回一条消息'
           : '对方撤回一条消息'
-        : (last?.content ?? '').trim() || '…',
+        : lastText.trim() || '…',
       time: last?.time ?? 0,
     });
   }
@@ -2369,12 +2672,16 @@ export default function ChatApp() {
   ];
 
   const last = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : undefined;
-  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览 [语音] + 转写
   const preview = last?.recalled
     ? last.role === 'user'
       ? '你撤回一条消息'
       : '对方撤回一条消息'
-    : last?.content || SEED_MSGS[0].content;
+    : last?.kind === 'voice'
+      ? last.voice?.transcript
+        ? `[语音] ${last.voice.transcript}`
+        : '[语音]'
+      : last?.content || SEED_MSGS[0].content;
   const listTime = mounted ? (last && last.time > 0 ? fmtTime(last.time) : '现在') : '';
 
   // 跨 App 跳转中（等联系人载入）：先不渲染主界面，避免闪一下会话列表

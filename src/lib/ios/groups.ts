@@ -160,7 +160,10 @@ export interface WxGroupMsg {
   senderName: string;
   content: string;
   time: number;
-  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer' | 'forward';
+  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer' | 'forward' | 'voice';
+  /** 语音消息（kind = 'voice'）：音频/波形/时长/转写（结构等价于 components/apps/voice-bubble 的 VoiceMsgData，
+   *  lib 层不反向依赖 UI 组件，这里用同形本地类型；字段变动需两处同步） */
+  voice?: { url: string; duration: number; wave: number[]; transcript?: string; stt?: 'pending' | 'done' | 'failed' };
   /** 群红包卡片数据（kind = 'redpacket' 时有值） */
   rp?: GroupRpData;
   /** 群转账卡片数据（kind = 'transfer' 时有值） */
@@ -833,9 +836,20 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
     content: r.content,
     time: r.time,
     kind:
-      r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward'
+      r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward' || r.kind === 'voice'
         ? r.kind
         : 'text',
+    // 语音消息规范化（宽松字段兜底；音频 dataURL 随消息持久化，重启后仍可播放）
+    voice:
+      r.kind === 'voice' && r.voice && typeof r.voice.url === 'string'
+        ? {
+            url: r.voice.url,
+            duration: typeof r.voice.duration === 'number' && r.voice.duration > 0 ? r.voice.duration : 1,
+            wave: Array.isArray(r.voice.wave) ? r.voice.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+            transcript: typeof r.voice.transcript === 'string' && r.voice.transcript ? r.voice.transcript : undefined,
+            stt: r.voice.stt === 'pending' || r.voice.stt === 'done' || r.voice.stt === 'failed' ? r.voice.stt : undefined,
+          }
+        : undefined,
     rp:
       r.kind === 'redpacket' && r.rp && typeof r.rp.amount === 'number'
         ? {
@@ -960,6 +974,7 @@ export function groupPreview(groupId: string): { text: string; time: number } {
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
   if (last.kind === 'sticker') return { text: `[表情]${last.stk?.meaning ? ` ${last.stk.meaning}` : ''}`, time: last.time };
   if (last.kind === 'location') return { text: `[位置] ${last.loc?.name ?? ''}`.trim(), time: last.time };
+  if (last.kind === 'voice') return { text: '[语音]', time: last.time };
   if (last.kind === 'redpacket') return { text: '[红包]', time: last.time };
   if (last.kind === 'transfer') return { text: '[转账]', time: last.time };
   if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };

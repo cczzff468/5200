@@ -6718,3 +6718,70 @@ Stage Summary:
 - 新增文件：src/lib/ios/{audio-utils,stt-client,audio-focus,voice-player,voice-send}.ts、src/app/api/stt/route.ts、src/components/apps/{voice-bubble,voice-input}.tsx
 - 修改：store.ts（SttConfig+model 选填修复）、server-tts.ts（导出 httpsRequest/Buffer body）、tts-client.ts（音频焦点）、bubble-menu.tsx（stt 图标）、settings.tsx（STT 区）、wechat.tsx（参考实现）
 - E2E 环境：mock TTS bun /home/z/.tmp-e2e/mock-tts.ts（:4599，/v1/audio/speech 返回 1.5s WAV，/__last 查收包）；mock STT mock-stt.ts（:4600）；测试联系人 e2e-me（手机号13800000000/微信 e2e_me_wx/密码 test1234）与角色 e2e-peer（小测）；ttsConfig 已在沙箱 UI 配置为 openai+http://localhost:4599/v1+sk-test-123+空模型
+
+---
+Task ID: 6-a
+Agent: general-purpose（超时前完成编码，主协调者接手验证）
+Task: QQ 单聊（src/components/apps/qq.tsx）接入语音消息
+
+Work Log:
+- QQMsg 增加 kind 'voice' + voice?: VoiceMsgData；loadMsgs 增加 voice 规范化
+- runAiTurn 补第 4 参 baseMsgs（对齐微信签名），历史映射 voice→transcript||'[语音]'，filter 白名单加 voice；memContext/wbScanText 用转写（image 同时改走占位，口径统一）
+- commitVoiceMsg/handleVoiceOutcome/sendTextAsVoice/sendTextAsVoiceRef 全套照微信模式；排队走 qqQueuedTurns
+- 菜单：voice 首项「转文字」+ case 'stt'；quoteContentOf/forwardClone/favOf 兼容
+- 输入区：原 Mic 图标改为语音模式切换（qq-voice-toggle），qq-voice-hold 按住说话；qq-tts-toggle（AudioLines）发送钮左侧；RecordOverlay 渲染；卸载 stopSpeaking+stopVoicePlayback
+
+Stage Summary:
+- 代码完成，tsc/lint 零错误；E2E（主协调者执行）：TTS 发送→气泡+转写 ✓、播放/暂停 ✓、长按菜单（转文字/复制/删除/多选/撤回/转发/收藏）✓、转文字 toast「转文字结果已显示在气泡下方」✓、复制「已复制」✓、语音模式+伪造麦克风录音→自动转写→AI 回复 ✓
+
+---
+Task ID: 6-b
+Agent: general-purpose（超时前完成编码，主协调者接手验证）
+Task: 微信群聊（wx-group.tsx + groups.ts 共享类型）接入语音消息
+
+Work Log:
+- groups.ts：WxGroupMsg kind 加 'voice' + voice 结构等价本地类型（lib 不反向依赖 UI）；normalizeMsg 补 voice 规范化；groupPreview 语音显示 [语音]
+- wx-group.tsx：msgTextOf 加 voice 分支（历史/lastUserText/快照同口径自动生效）；@ 提及旁新增语音切换按钮（wxg-voice-toggle）；commitVoiceMsg 转写完成后 runGroupTurn(updated) 触发群回合；wxg-tts-toggle；菜单 stt 项+case 'stt'；语音气泡渲染（theme wx）；卸载释放
+
+Stage Summary:
+- 代码完成，tsc/lint 零错误；E2E：建群→TTS 发送→气泡+转写 ✓、成员回复引用转写内容（「啥是群语音第二条啊？」）✓、刷新后气泡+转写持久 ✓
+
+---
+Task ID: 6-c
+Agent: general-purpose（超时前完成编码，主协调者接手验证）
+Task: QQ 群聊（qq-group.tsx）接入语音消息
+
+Work Log:
+- 复用 groups.ts 的 voice 字段（6-b 已就绪，未重复改动）
+- msgTextOf/msgSnapshotOf 加 voice 分支；runGroupTurnRef ref 模式（send 前引用）；commitVoiceMsg 转写后触发群回合；原 Mic（原误绑「语音通话暂未开放」）改为语音模式切换（qqg-voice-toggle）；qqg-tts-toggle；qqg-voice-hold；气泡渲染（theme qq，我方 #0099FF 内联底色）；菜单 stt 项
+
+Stage Summary:
+- 代码完成，tsc/lint 零错误；E2E：QQ 建群→TTS 发送→气泡+转写 ✓、伪造麦克风录音→浮层+自动转写 ✓、群成员回复引用内容（「这语音功能真方便！」「收到你的消息了！」）✓、刷新后持久 ✓
+
+---
+Task ID: 6-d
+Agent: general-purpose（超时前完成编码，主协调者接手验证）
+Task: 信息 App（chat.tsx）接入语音消息
+
+Work Log:
+- ChatMsg 增加 kind?: 'text'|'voice' + voice?: VoiceMsgData（最基础 kind 基建）；load 规范化
+- startAiTurn 增加 baseMsgs 参数 + startAiTurnRef ref 模式；历史映射 voice→transcript||'[语音]'；memContext/wbScanText 同口径
+- 原装饰性 Mic 改为语音模式切换（sms-voice-toggle）；sms-voice-hold；sms-tts-toggle；语音气泡（theme im，我方 #007AFF）；菜单 voice 首项「转文字」+ case 'stt'；卸载 stopVoicePlayback
+
+Stage Summary:
+- 代码完成，tsc/lint 零错误；E2E：TTS 发送→气泡+转写 ✓、播放/暂停 ✓、长按菜单（转文字/复制/删除/多选/撤回）✓、语音模式 hold bar ✓、纯文字聊天与 AI 回复不受影响 ✓
+
+---
+Task ID: 6-e（收尾）
+Agent: 主协调者 (Z.ai Code)
+Task: 四端接入结果核验、全端 E2E、测试设施清理
+
+Work Log:
+- 审查 6-a~6-d 代码 diff：全部镜像微信参考实现，共享库仅 groups.ts 按授权改动（类型+规范化+预览）；tsc + lint 零错误
+- 全端 E2E（单浏览器会话顺序执行，测试联系人 e2e-me/e2e-peer，mock TTS/STT）：微信单聊/QQ 单聊/微信群聊/QQ 群聊/信息 五端语音收发、播放、转文字、复制、录音、AI 回复、持久化全部通过；群列表预览 [语音] 正确
+- 期间修复（主协调者）：wechat handleVoiceOutcome 对 zone==='cancel' 的显式拦截；voice-input start() 失败路径媒体流清理；store.ts 空 model 回填（迭代3回归）
+- 清理：mini-services/voice-mock 测试服务已删除（mock 进程已停）；沙箱为独立测试档案，未触碰用户真实数据；.gitignore 忽略根级 tool-results/
+- 超时说明：4 个并行子代理在编码完成后被 Task 工具超时截断，未能自行完成 E2E/worklog，由主协调者接手完成（即 6-e）
+
+Stage Summary:
+- 语音发送功能五端全量上线：录制（按住说话/上滑取消/右滑转文字/60s 上限/权限处理）、语音气泡（播放/波形/时长/进度/暂停/互斥/持久化）、长按转文字（内置识别免配置+OpenAI 兼容 STT 独立配置）、文字转语音发送（复用语音 API，全局默认音色）；文字聊天与全部既有功能不受影响
