@@ -70,7 +70,7 @@ import { LocalToast, useLocalToast } from './page-toast';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlayWx, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -3076,8 +3076,8 @@ export function WxGroupChatPage({
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
   type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
 
-  /** 语音消息落库：入列（senderId='me'）→（录音）后台转文字 → 转写完触发群回合（成员都能读到转写）；
-   *  回合进行中则只落库并排队（补跑读最新落盘，能读到转写） */
+  /** 语音消息落库：入列（senderId='me'）→ 直接触发群回合（语音不再自动转文字，长按「转文字」才识别）；
+   *  回合进行中则只落库并排队（补跑从存储读最新消息） */
   const commitVoiceMsg = useCallback(
     (clip: VoiceClip, presetTranscript?: string) => {
       if (meMuted) {
@@ -3087,44 +3087,44 @@ export function WxGroupChatPage({
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, ...(clip.blob ? { stt: 'pending' as const } : { stt: 'done' as const }) };
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
       const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: '', time: Date.now(), kind: 'voice', voice };
       appendMsg(msg);
-      const selfId = msg.id;
-      // 转写完成后：更新消息（含落盘）→ 触发群回合（runGroupTurn 内部从存储读最新消息，无闭包陈旧问题；
-      // trigger 传更新后的消息对象，content 为空 → 无 @，全员按人设自判）
-      const patchAndTrigger = (transcript: string) => {
-        const next = loadGroupMsgs(gid).map((x) =>
-          x.id === selfId && x.voice
-            ? { ...x, voice: { ...x.voice, transcript: transcript || undefined, stt: transcript ? ('done' as const) : ('failed' as const) } }
-            : x,
-        );
-        saveGroupMsgs(gid, next);
-        if (mountedRef.current) setMsgs(next);
-        const updated = next.find((x) => x.id === selfId);
-        if (runningRef.current || isChatStreaming(sKey)) {
-          groupQueuedRef.current = true; // 成员们还在回复：本回合结束后自动补跑（读最新落盘，能读到转写）
-          return;
-        }
-        window.setTimeout(() => void runGroupTurn(updated), 80);
-      };
-      if (hasText || !clip.blob) {
-        // 文字转语音（transcript 已带原文，无需识别）：消息已在列，直接触发
-        if (runningRef.current || isChatStreaming(sKey)) {
-          groupQueuedRef.current = true;
-          return;
-        }
-        window.setTimeout(() => void runGroupTurn(msg), 80);
+      // 消息已入库（无转写时成员历史映射用 '[语音]' 占位）；trigger 传消息对象，content 为空 → 无 @，全员按人设自判
+      if (runningRef.current || isChatStreaming(sKey)) {
+        groupQueuedRef.current = true; // 成员们还在回复：本回合结束后自动补跑
         return;
       }
-      void transcribeAudioBlob(clip.blob)
-        .then((text) => patchAndTrigger(text))
-        .catch(() => patchAndTrigger(''));
+      window.setTimeout(() => void runGroupTurn(msg), 80);
     },
-    [appendMsg, gid, me.name, meMuted, onToast, runGroupTurn, sKey],
+    [appendMsg, me.name, meMuted, onToast, runGroupTurn, sKey],
   );
 
-  /** 录音手势结果分发：松开=发语音；右滑=转文字发文本（失败回退语音）；取消/太短=丢弃 */
+  /** 「划到转文字」松开后：先识别再预览，由用户决定发送文字 / 发送语音（原始录音）/ 取消 */
+  const sttPreview = useSttPreview({
+    onSendText: (text) => {
+      const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: text, time: Date.now(), quote: quote ?? undefined };
+      if (runningRef.current || isChatStreaming(sKey)) {
+        appendMsg(msg);
+        groupQueuedRef.current = true;
+        onToast('消息已发出，成员们回完这轮就聊');
+        return;
+      }
+      if (sentenceSend) {
+        appendMsg(msg);
+        setPendingDispatch(true);
+        markPendingBatch(sKey, true);
+        return;
+      }
+      appendMsg(msg);
+      void runGroupTurn(msg);
+    },
+    onSendVoice: (clip) => {
+      void blobToDataUrl(clip.blob).then((dataUrl) => commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave }));
+    },
+  });
+
+  /** 录音手势结果分发：松开=发语音；划到转文字=预览确认；取消/太短=丢弃 */
   const handleVoiceOutcome = useCallback(
     (result: VoiceRecordResult | null, zone: VoiceRecordZone) => {
       // 取消手势（哪怕录够了时长）与太短结果一律丢弃；仅「原松开未滑动」的太短给提示
@@ -3137,36 +3137,14 @@ export function WxGroupChatPage({
         return;
       }
       if (zone === 'stt') {
-        // 滑到「转文字」：识别成功发文字消息（与打字发送同链路，含排队/分句）；失败回退为语音气泡，不丢录音
-        void transcribeAudioBlob(result.blob)
-          .then((text) => {
-            if (!text) throw new Error('empty');
-            const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: text, time: Date.now(), quote: quote ?? undefined };
-            if (runningRef.current || isChatStreaming(sKey)) {
-              appendMsg(msg);
-              groupQueuedRef.current = true;
-              onToast('消息已发出，成员们回完这轮就聊');
-              return;
-            }
-            if (sentenceSend) {
-              appendMsg(msg);
-              setPendingDispatch(true);
-              markPendingBatch(sKey, true);
-              return;
-            }
-            appendMsg(msg);
-            void runGroupTurn(msg);
-          })
-          .catch(() => {
-            onToast('转文字失败，已按语音发送');
-            void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
-          });
+        // 划到「转文字」：先识别并预览，用户决定发送文字 / 发送语音 / 取消（不再直接发送）
+        sttPreview.open(result);
         return;
       }
-      // 原松开：语音气泡入列，后台转文字，转完触发群回合
+      // 原松开：语音气泡入列（不自动转文字），直接触发群回合
       void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
     },
-    [appendMsg, commitVoiceMsg, me.name, meMuted, onToast, quote, runGroupTurn, sentenceSend, sKey],
+    [appendMsg, commitVoiceMsg, me.name, meMuted, onToast, sKey, sttPreview.open],
   );
 
   const rec = useVoiceRecorder({ onResult: handleVoiceOutcome, onStartError: (m) => onToast(m) });
@@ -4796,6 +4774,15 @@ export function WxGroupChatPage({
 
       {/* 按住说话全屏浮层（录音中显示：计时 + 实时波形 + 手势提示；与单聊同款） */}
       {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
+      {sttPreview.state && (
+        <SttPreviewOverlay
+          state={sttPreview.state}
+          accent="#07C160"
+          onCancel={sttPreview.close}
+          onSendText={sttPreview.sendText}
+          onSendVoice={sttPreview.sendVoice}
+        />
+      )}
 
       {/* 长按菜单（与单聊共用同一套组件，选项/样式/交互完全一致） */}
       {menu && menuRect && menuMsg && (

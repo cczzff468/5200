@@ -8,19 +8,24 @@
  *   边缘上滑手势读到 isVoiceHoldActive() 即中止 —— 「按住 说话」胶囊就在边缘带内，录音时
  *   上滑取消不再把多任务卡片拉起来
  * - VoiceHoldBar：微信/信息输入区「按住 说话」胶囊。按住开录，setPointerCapture + touch-none
- *   保证手指划出仍持续跟踪、不被浏览器滚动认领；上滑/左滑 → 取消，右滑 → 转文字，原松开 → 发送
+ *   保证手指划出仍持续跟踪、不被浏览器滚动认领；手势主轴判定（斜滑不误判）：
+ *   上滑 → 取消，右滑 → 转文字，左滑 → 取消，原松开 → 发送
  * - QqVoicePanel / QqVoiceHoldButton：QQ 风语音面板（参考 QQ App：工具栏下方展开
- *   「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签）。大圆钮按住开录：左滑 → 「文」转文字，
- *   右滑/上滑 → 「×」取消，原松开 → 发送
- * - RecordOverlayWx：微信风录音浮层 —— 暗幕 + 绿色气泡实时波形 + 底部「取消 / 滑到这里 转文字」
+ *   「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签）。大圆钮按住开录且**原位不动**（原位光环）：
+ *   左滑 → 「文」转文字，右滑/上滑 → 「×」取消，原松开 → 发送
+ * - RecordOverlayWx：微信风录音浮层 —— 暗幕 + 绿色气泡实时波形（屏幕中部）+ 底部「取消 / 滑到这里 转文字」
  *   + 浅色「松开 发送」条
- * - RecordOverlayQq：QQ 风录音浮层 —— 白幕 + 顶部计时与两侧波形 + 中央大麦克风 + 左「文」右「×」
+ * - RecordOverlayQq：QQ 风录音浮层 —— 白幕只罩消息区（计时/两侧波形/左「文」右「×」），
+ *   底部透明窗露出语音面板：大圆钮不上移、原位可见
+ * - useSttPreview / SttPreviewOverlay：「划到转文字」松开后先识别再预览，用户决定发送文字 /
+ *   发送语音（原始录音）/ 取消，不再直接发送
  * - 权限被拒/不支持录音：onStartError 提示，仍可继续用文字聊天
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mic } from 'lucide-react';
+import { Loader2, Mic } from 'lucide-react';
 import { downsampleWave, pickRecorderMime } from '@/lib/ios/audio-utils';
+import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
 
 export interface VoiceRecordResult {
@@ -402,10 +407,20 @@ export function VoiceHoldBar({
   testId?: string;
 }) {
   const holding = rec.phase !== 'idle';
+  // 主轴判定：斜着滑（比如往右下滑到「转文字」胶囊时带一点上抬）不再被「上滑→取消」抢先误判 ——
+  // 水平位移占主导时按左右分属转文字/取消，只有垂直主导的上滑才取消
   const applyZone = (dx: number, dy: number) => {
-    if (dy < -60 || dx < -70) rec.setZone('cancel'); // 上滑 / 左滑 → 取消
-    else if (dx > 70) rec.setZone('stt'); // 右滑 → 转文字
-    else rec.setZone(null);
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+    if (adx > ady) {
+      if (dx > 60) rec.setZone('stt'); // 右滑 → 转文字
+      else if (dx < -60) rec.setZone('cancel'); // 左滑 → 取消
+      else rec.setZone(null);
+    } else if (dy < -60) {
+      rec.setZone('cancel'); // 上滑 → 取消
+    } else {
+      rec.setZone(null);
+    }
   };
   const g = useHoldGesture(rec, applyZone);
 
@@ -413,7 +428,7 @@ export function VoiceHoldBar({
     <button
       type="button"
       data-testid={testId}
-      aria-label={holding ? '正在录音，松开发送，上滑取消' : '按住说话'}
+      aria-label={holding ? '正在录音，松开发送，上滑取消，右滑转文字' : '按住说话'}
       onPointerDown={g.onPointerDown}
       onPointerMove={g.onPointerMove}
       onPointerUp={g.onPointerUp}
@@ -441,10 +456,19 @@ export function QqVoiceHoldButton({
   testId?: string;
 }) {
   const holding = rec.phase !== 'idle';
+  // 主轴判定（同 VoiceHoldBar）：左滑主导 → 「文」转文字，右滑/上滑主导 → 取消；斜滑不再误判成取消
   const applyZone = (dx: number, dy: number) => {
-    if (dx < -70) rec.setZone('stt'); // 左滑 → 「文」转文字
-    else if (dy < -60 || dx > 70) rec.setZone('cancel'); // 上滑 / 右滑 → 「×」取消
-    else rec.setZone(null);
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+    if (adx > ady) {
+      if (dx < -60) rec.setZone('stt'); // 左滑 → 「文」转文字
+      else if (dx > 60) rec.setZone('cancel'); // 右滑 → 「×」取消
+      else rec.setZone(null);
+    } else if (dy < -60) {
+      rec.setZone('cancel'); // 上滑 → 取消
+    } else {
+      rec.setZone(null);
+    }
   };
   const g = useHoldGesture(rec, applyZone);
 
@@ -458,8 +482,21 @@ export function QqVoiceHoldButton({
       onPointerUp={g.onPointerUp}
       onPointerCancel={g.onPointerCancel}
       onContextMenu={(e) => e.preventDefault()}
-      className="grid h-[112px] w-[112px] touch-none select-none place-items-center rounded-full bg-gradient-to-b from-[#3AA0FF] to-[#1374F0] shadow-[0_10px_36px_rgba(31,143,255,0.45)] transition-transform active:scale-[0.97]"
+      className="relative grid h-[112px] w-[112px] touch-none select-none place-items-center rounded-full bg-gradient-to-b from-[#3AA0FF] to-[#1374F0] shadow-[0_10px_36px_rgba(31,143,255,0.45)] transition-transform active:scale-[0.97]"
     >
+      {/* 录音中原位光环：按钮不上浮不居中，就在面板原位置呼吸；滑到取消变红环、转文字变蓝环 */}
+      {holding && (
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-[-14px] rounded-full border-[3px] transition-colors ${
+            rec.zone === 'cancel'
+              ? 'border-[#FA5151]'
+              : rec.zone === 'stt'
+                ? 'border-[#0099FF]'
+                : 'border-[#1F8FFF]/45'
+          } ${rec.phase === 'recording' ? 'animate-pulse' : ''}`}
+        />
+      )}
       <Mic className="h-12 w-12 text-white" strokeWidth={1.8} aria-hidden="true" />
     </button>
   );
@@ -508,8 +545,8 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center bg-black/75"
     >
-      {/* 绿色录音气泡（转文字/取消时变色）+ 下指尾巴 */}
-      <div className="relative mt-[16%]">
+      {/* 绿色录音气泡（转文字/取消时变色）+ 下指尾巴：整体下移到屏幕中部，不再贴顶 */}
+      <div className="relative mt-[28%]">
         <div
           className={`flex h-[92px] items-center justify-center gap-[3px] rounded-[24px] px-7 transition-colors ${
             cancel ? 'bg-[#FA5151]' : 'bg-[#95EC69]'
@@ -560,8 +597,12 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
   );
 }
 
-/** QQ 风录音浮层：白幕 + 顶部计时与两侧波形 + 中央大麦克风 + 左「文」右「×」 */
-export function RecordOverlayQq({ rec }: { rec: VoiceRecorder }) {
+/**
+ * QQ 风录音浮层：白幕只罩消息区（上部），底部透明窗露出语音面板 —— 大圆麦克风不上移，
+ * 就在原位呼吸（光环反馈见 QqVoiceHoldButton）；上部显示计时/两侧波形 + 左「文」右「×」。
+ * bottomInset = 输入行 + 工具栏 + 语音面板的总高（QQ 单聊/群聊结构一致，约 400px）
+ */
+export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder; bottomInset?: number }) {
   if (rec.phase === 'idle') return null;
   const stt = rec.zone === 'stt';
   const cancel = rec.zone === 'cancel';
@@ -571,52 +612,193 @@ export function RecordOverlayQq({ rec }: { rec: VoiceRecorder }) {
     <div
       data-testid="voice-record-overlay"
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center bg-white/95 dark:bg-[#1B1C1F]/95"
+      className="pointer-events-none absolute inset-0 z-40 flex flex-col"
     >
-      {/* 顶部计时 + 两侧波形 */}
-      <div className="mt-9 flex h-8 items-center gap-[3px]">
-        {leftBars.map((v, i) => (
-          <span key={`l${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
-        ))}
-        <span
-          className="mx-2 min-w-[64px] text-center text-[26px] font-light tabular-nums text-black/80 dark:text-white/80"
-          data-testid="voice-record-timer"
-        >
-          {timeLabelOf(rec.seconds)}
-        </span>
-        {rightBars.map((v, i) => (
-          <span key={`r${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
-        ))}
-      </div>
-      {/* 左「文」/ 大麦克风 / 右「×」 */}
-      <div className="mt-[18%] flex w-full items-center justify-center">
-        <span
-          className={`grid h-[64px] w-[64px] place-items-center rounded-full text-[20px] transition-colors ${
-            stt ? 'bg-[#0099FF] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
-          }`}
-        >
-          文
-        </span>
-        <div className="relative mx-16 grid h-[124px] w-[124px] place-items-center">
-          {rec.phase === 'recording' && (
-            <span className="absolute inset-0 animate-ping rounded-full bg-[#1F8FFF]/30" style={{ animationDuration: '1.6s' }} />
-          )}
-          <span className="relative grid h-[104px] w-[104px] place-items-center rounded-full bg-gradient-to-b from-[#3AA0FF] to-[#1374F0] shadow-[0_10px_36px_rgba(31,143,255,0.45)]">
-            <Mic className="h-11 w-11 text-white" strokeWidth={1.8} aria-hidden="true" />
+      {/* 上部白幕：计时 + 两侧波形 + 左「文」/ 右「×」 */}
+      <div className="flex min-h-0 flex-1 flex-col items-center bg-white/95 dark:bg-[#1B1C1F]/95">
+        <div className="mt-9 flex h-8 items-center gap-[3px]">
+          {leftBars.map((v, i) => (
+            <span key={`l${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
+          ))}
+          <span
+            className="mx-2 min-w-[64px] text-center text-[26px] font-light tabular-nums text-black/80 dark:text-white/80"
+            data-testid="voice-record-timer"
+          >
+            {timeLabelOf(rec.seconds)}
+          </span>
+          {rightBars.map((v, i) => (
+            <span key={`r${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
+          ))}
+        </div>
+        {/* 左「文」/ 右「×」（大圆钮本体在下方面板原位，不再居中复刻一份） */}
+        <div className="mt-14 flex w-full items-center justify-center">
+          <span
+            className={`grid h-[64px] w-[64px] place-items-center rounded-full text-[20px] transition-colors ${
+              stt ? 'bg-[#0099FF] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
+            }`}
+          >
+            文
+          </span>
+          <span className="mx-16 h-[2px] w-24 rounded-full bg-black/[0.06] dark:bg-white/[0.08]" aria-hidden="true" />
+          <span
+            className={`grid h-[64px] w-[64px] place-items-center rounded-full transition-colors ${
+              cancel ? 'bg-[#FA5151] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
+            }`}
+          >
+            ✕
           </span>
         </div>
-        <span
-          className={`grid h-[64px] w-[64px] place-items-center rounded-full text-black/80 transition-colors dark:text-white/80 ${
-            cancel ? 'bg-[#FA5151] text-white' : 'bg-[#F2F3F5] dark:bg-white/10'
-          }`}
-        >
-          ✕
-        </span>
+        {/* 底部提示（贴白幕下缘，正上方就是原位的大圆钮） */}
+        <p className="mt-auto pb-4 text-[15px] text-black/45 dark:text-white/45">
+          {cancel ? '松开 取消' : stt ? '松开 转文字' : '松开 发送'}
+        </p>
       </div>
-      {/* 底部提示 */}
-      <p className="mt-auto pb-12 text-[15px] text-black/45 dark:text-white/45">
-        {cancel ? '松开 取消' : stt ? '松开 转文字' : '松开 发送'}
-      </p>
+      {/* 底部透明窗：语音面板与大圆钮原位可见 */}
+      <div className="shrink-0" style={{ height: bottomInset }} />
+    </div>
+  );
+}
+
+/* ───────────────────────── 「划到转文字」识别预览（松开后不再直接发送） ───────────────────────── */
+
+/** 预览状态：识别中 / 已出文字 / 识别失败（录音 blob 随状态保留，供「发送语音」用原始录音） */
+export interface SttPreviewState {
+  status: 'pending' | 'done' | 'failed';
+  text: string;
+  clip: VoiceRecordResult;
+}
+
+/**
+ * 转文字预览流程：open(clip) → 识别 → 显示文字 → 用户决定：
+ * - 发送文字：走各端正常文字发送链路（onSendText）
+ * - 发送语音：原始录音照语音气泡发送（onSendVoice，不重新合成）
+ * - 取消：整条丢弃
+ */
+export function useSttPreview(opts: {
+  onSendText: (text: string) => void;
+  onSendVoice: (clip: VoiceRecordResult) => void;
+}) {
+  const [state, setState] = useState<SttPreviewState | null>(null);
+  const optsRef = useRef(opts);
+  useEffect(() => {
+    optsRef.current = opts;
+  });
+  const stateRef = useRef<SttPreviewState | null>(null);
+  const seqRef = useRef(0);
+
+  const apply = useCallback((next: SttPreviewState | null) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
+
+  const open = useCallback(
+    (clip: VoiceRecordResult) => {
+      seqRef.current += 1;
+      const seq = seqRef.current;
+      apply({ status: 'pending', text: '', clip });
+      void transcribeAudioBlob(clip.blob)
+        .then((text) => {
+          if (seqRef.current !== seq) return; // 期间已取消/重开：丢弃过期结果
+          apply(text ? { status: 'done', text, clip } : { status: 'failed', text: '', clip });
+        })
+        .catch(() => {
+          if (seqRef.current !== seq) return;
+          apply({ status: 'failed', text: '', clip });
+        });
+    },
+    [apply],
+  );
+
+  const close = useCallback(() => {
+    seqRef.current += 1;
+    apply(null);
+  }, [apply]);
+
+  const sendText = useCallback(() => {
+    const st = stateRef.current;
+    close();
+    if (st && st.status === 'done' && st.text) optsRef.current.onSendText(st.text);
+  }, [close]);
+
+  const sendVoice = useCallback(() => {
+    const st = stateRef.current;
+    close();
+    if (st) optsRef.current.onSendVoice(st.clip);
+  }, [close]);
+
+  return { state, open, close, sendText, sendVoice };
+}
+
+/** 转文字预览弹层：识别中转圈 / 结果可确认；失败仍可「发送语音」保住录音；accent 按各端主题色 */
+export function SttPreviewOverlay({
+  state,
+  accent = '#07C160',
+  onCancel,
+  onSendText,
+  onSendVoice,
+}: {
+  state: SttPreviewState;
+  /** 各端主题色（微信绿 / QQ 蓝 / 信息蓝） */
+  accent?: string;
+  onCancel: () => void;
+  onSendText: () => void;
+  onSendVoice: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 px-7" data-testid="stt-preview">
+      <div className="w-full max-w-[300px] rounded-[16px] bg-white p-4 shadow-2xl dark:bg-[#2A2C31]">
+        <p className="text-center text-[16px] font-medium text-black/85 dark:text-white/90">转文字</p>
+        {state.status === 'pending' ? (
+          <div className="flex flex-col items-center gap-3 py-8" data-testid="stt-preview-pending">
+            <Loader2 className="h-7 w-7 animate-spin text-black/35 dark:text-white/35" aria-hidden="true" />
+            <p className="text-[14px] text-black/45 dark:text-white/45">识别中…</p>
+          </div>
+        ) : state.status === 'failed' ? (
+          <div className="py-6 text-center" data-testid="stt-preview-failed">
+            <p className="text-[14px] text-[#FA5151]">转文字失败，请重试</p>
+            <p className="mt-1.5 text-[12px] text-black/40 dark:text-white/40">仍可发送语音，或取消丢弃</p>
+          </div>
+        ) : (
+          <div
+            className="mt-3 max-h-[180px] overflow-y-auto rounded-[10px] bg-black/[0.04] p-3 dark:bg-white/[0.06]"
+            data-testid="stt-preview-text"
+          >
+            <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.5] text-black/85 dark:text-white/90">
+              {state.text}
+            </p>
+          </div>
+        )}
+        <div className="mt-4 flex items-center gap-2.5">
+          <button
+            type="button"
+            data-testid="stt-preview-cancel"
+            onClick={onCancel}
+            className="h-11 flex-1 rounded-[10px] bg-black/[0.05] text-[15px] text-black/60 active:opacity-70 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="stt-preview-send-voice"
+            onClick={onSendVoice}
+            className="h-11 flex-1 rounded-[10px] text-[15px] font-medium active:opacity-80"
+            style={{ backgroundColor: `${accent}1A`, color: accent }}
+          >
+            发送语音
+          </button>
+          {state.status === 'done' && (
+            <button
+              type="button"
+              data-testid="stt-preview-send-text"
+              onClick={onSendText}
+              className="h-11 flex-1 rounded-[10px] text-[15px] font-medium text-white active:opacity-80"
+              style={{ backgroundColor: accent }}
+            >
+              发送文字
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

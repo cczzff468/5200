@@ -1,14 +1,17 @@
 'use client';
 
 /**
- * 语音消息气泡（微信 / QQ / 信息 / 两端群聊共用）：
- * - 播放按钮 + 波形条 + 时长；点击切换播放/暂停（全局单例：新播自动停旧，也停 TTS 朗读）
- * - 播放中波形按进度填色（useVoicePlayback 全局进度，100ms 刷新）
+ * 语音消息气泡（微信 / QQ / 信息 / 两端群聊共用），样式对齐用户参考截图：
+ * - 微信风（theme='wx'）：绿底白字，无播放按钮无波形条 —— 时长 + 喇叭图标（我方时长在左、
+ *   喇叭在右；对方镜像：喇叭在左、时长在右）；播放中喇叭图标呼吸闪烁
+ * - QQ / 信息风（theme='qq' | 'im'）：圆形播放钮（我方半透明白底、对方品牌蓝底）+ 白色波形条 +
+ *   时长；播放中波形按进度填色（useVoicePlayback 全局进度，100ms 刷新）
+ * - 点击气泡切换播放/暂停（全局单例：新播自动停旧，也停 TTS 朗读）
  * - 转文字结果（stt='done'）以小字显示在气泡下方；stt='pending' 显示「转文字中…」
  * - 长按菜单由外层 {...bubblePress} 提供，组件本身只处理点击播放
  */
 
-import { Pause, Play } from 'lucide-react';
+import { Pause, Play, Volume2 } from 'lucide-react';
 import { useVoicePlayback, voicePlayer } from '@/lib/ios/voice-player';
 import { voiceDurationLabel } from '@/lib/ios/audio-utils';
 
@@ -18,9 +21,9 @@ export interface VoiceMsgData {
   url: string;
   /** 秒（≥1） */
   duration: number;
-  /** 静态波形（0~1，约 20 根） */
+  /** 静态波形（0~1，约 20 根；微信风不展示，仍保留供 QQ 风使用） */
   wave: number[];
-  /** 转文字结果（语音录制自动识别 / 长按转文字 / 文字转语音的原文） */
+  /** 转文字结果（长按「转文字」后写入 / 文字转语音的原文） */
   transcript?: string;
   /** pending = 识别中；done = 有结果；failed = 识别失败（可长按重试） */
   stt?: 'pending' | 'done' | 'failed';
@@ -31,9 +34,9 @@ export type VoiceBubbleTheme = 'wx' | 'qq' | 'im';
 /** 各端配色（own = 我方绿/蓝气泡；peer = 对方白/灰气泡） */
 const THEME: Record<VoiceBubbleTheme, { own: string; peer: string; ownTranscript: string; peerTranscript: string }> = {
   wx: {
-    own: 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black',
+    own: 'bg-[#95EC69] text-white dark:bg-[#3EB575] dark:text-white',
     peer: 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white',
-    ownTranscript: 'text-black/50 dark:text-black/60',
+    ownTranscript: 'text-black/50 dark:text-white/55',
     peerTranscript: 'text-black/50 dark:text-white/55',
   },
   qq: {
@@ -50,6 +53,9 @@ const THEME: Record<VoiceBubbleTheme, { own: string; peer: string; ownTranscript
   },
 };
 
+/** 波形条静态兜底（无采样数据时） */
+const FALLBACK_BARS = [0.35, 0.55, 0.4, 0.75, 0.5, 0.85, 0.45, 0.65, 0.4, 0.8, 0.5, 0.7, 0.35, 0.75, 0.45, 0.65, 0.4, 0.7];
+
 export function VoiceMsgBubble({
   msgId,
   voice,
@@ -59,10 +65,10 @@ export function VoiceMsgBubble({
 }: {
   msgId: string;
   voice: VoiceMsgData;
-  /** 'me' | 'peer'：决定配色与播放图标方向 */
+  /** 'me' | 'peer'：决定配色与图标方向 */
   side: 'me' | 'peer';
   theme: VoiceBubbleTheme;
-  /** QQ 我方气泡的底色等自定义样式（theme='qq' && side='me' 时由调用方传 backgroundColor） */
+  /** QQ/信息 我方气泡的底色等自定义样式（由调用方传 backgroundColor） */
   style?: React.CSSProperties;
 }) {
   const { activeId, playing, progress } = useVoicePlayback();
@@ -70,14 +76,19 @@ export function VoiceMsgBubble({
   const t = THEME[theme];
   const isActive = activeId === msgId;
   const isPlaying = isActive && playing;
-  const bars = voice.wave.length > 0 ? voice.wave : [0.3, 0.5, 0.4, 0.7, 0.5, 0.8, 0.4, 0.6, 0.35, 0.7, 0.45, 0.6, 0.3, 0.65, 0.4, 0.55];
+  const isWx = theme === 'wx';
+  const bars = voice.wave.length > 0 ? voice.wave : FALLBACK_BARS;
+  const label = voiceDurationLabel(voice.duration);
+  /** 对方气泡的播放钮品牌蓝：QQ 蓝 / 信息蓝 */
+  const peerCircleCls = theme === 'im' ? 'bg-[#007AFF]' : 'bg-[#0099FF]';
 
-  const bubbleCls =
-    theme === 'qq' && mine
-      ? 'rounded-[10px] text-white'
+  const bubbleCls = isWx
+    ? `rounded-[10px] ${mine ? t.own : t.peer}`
+    : theme === 'qq' && mine
+      ? 'rounded-[12px] text-white'
       : theme === 'im' && mine
         ? 'rounded-[18px] text-white'
-        : `rounded-[10px] ${mine ? t.own : t.peer}`;
+        : `rounded-[12px] ${t.peer}`;
 
   return (
     <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
@@ -90,30 +101,65 @@ export function VoiceMsgBubble({
           e.stopPropagation();
           voicePlayer.toggle(msgId, voice.url);
         }}
-        className={`flex w-fit min-w-[96px] items-center gap-2 px-3 py-[9px] transition-transform active:scale-[0.98] ${bubbleCls}`}
+        className={`flex w-fit items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
+          isWx ? 'min-w-[86px] gap-2.5 px-3.5 py-[11px]' : 'gap-2.5 px-3 py-[10px]'
+        }`}
         style={style}
       >
-        {isPlaying ? (
-          <Pause className="h-[17px] w-[17px] shrink-0" strokeWidth={2.2} aria-hidden="true" />
-        ) : (
-          <Play className="h-[17px] w-[17px] shrink-0" strokeWidth={2.2} aria-hidden="true" />
-        )}
-        {/* 波形：播放中按进度填色；QQ/信息 我方白条，微信黑条 */}
-        <span className="flex h-[18px] items-center gap-[2.5px]" aria-hidden="true">
-          {bars.map((h, i) => {
-            const filled = isActive && progress * bars.length > i;
-            return (
-              <span
-                key={i}
-                className={`w-[2.5px] rounded-full transition-colors duration-100 ${
-                  filled ? 'bg-current' : 'bg-current opacity-40'
-                }`}
-                style={{ height: `${Math.max(3, Math.round(h * 18))}px` }}
+        {isWx ? (
+          /* 微信风：时长 + 喇叭图标（对方镜像），播放中图标呼吸 */
+          mine ? (
+            <>
+              <span className="shrink-0 text-[15px] leading-none">{label}</span>
+              <Volume2
+                className={`h-[19px] w-[19px] shrink-0 ${isPlaying ? 'animate-pulse' : ''}`}
+                strokeWidth={2}
+                aria-hidden="true"
               />
-            );
-          })}
-        </span>
-        <span className="shrink-0 text-[13px] leading-none opacity-80">{voiceDurationLabel(voice.duration)}</span>
+            </>
+          ) : (
+            <>
+              <Volume2
+                className={`h-[19px] w-[19px] shrink-0 -scale-x-100 ${isPlaying ? 'animate-pulse' : ''}`}
+                strokeWidth={2}
+                aria-hidden="true"
+              />
+              <span className="shrink-0 text-[15px] leading-none">{label}</span>
+            </>
+          )
+        ) : (
+          <>
+            {/* QQ/信息风：圆形播放钮（我方半透明白底、对方品牌蓝底） */}
+            <span
+              className={`grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full ${
+                mine ? 'bg-white/25' : peerCircleCls
+              }`}
+              aria-hidden="true"
+            >
+              {isPlaying ? (
+                <Pause className="h-[15px] w-[15px] text-white" fill="white" strokeWidth={0} />
+              ) : (
+                <Play className="h-[15px] w-[15px] translate-x-[1px] text-white" fill="white" strokeWidth={0} />
+              )}
+            </span>
+            {/* 波形条：播放中按进度填色（未播段降透明度） */}
+            <span className="flex h-[24px] items-center gap-[3px]" aria-hidden="true">
+              {bars.map((h, i) => {
+                const filled = isActive && progress * bars.length > i;
+                return (
+                  <span
+                    key={i}
+                    className={`w-[3px] rounded-full bg-current transition-opacity duration-100 ${
+                      filled ? 'opacity-100' : 'opacity-45'
+                    }`}
+                    style={{ height: `${Math.max(5, Math.round(h * 24))}px` }}
+                  />
+                );
+              })}
+            </span>
+            <span className="shrink-0 text-[15px] leading-none">{label}</span>
+          </>
+        )}
       </button>
       {/* 转文字结果（气泡下方小字）：识别中提示 / 已完成的结果（长按菜单「复制」可复制） */}
       {voice.stt === 'pending' && (
@@ -124,7 +170,7 @@ export function VoiceMsgBubble({
       {voice.stt === 'done' && voice.transcript && (
         <span
           data-testid="voice-transcript"
-          className={`mt-[3px] max-w-full whitespace-pre-wrap break-words px-1 text-[12.5px] leading-[1.45] ${
+          className={`mt-[3px] w-fit min-w-[180px] max-w-full whitespace-pre-wrap break-words px-1 text-[12.5px] leading-[1.45] ${
             mine ? t.ownTranscript : t.peerTranscript
           }`}
         >

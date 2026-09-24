@@ -76,7 +76,7 @@ import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from 
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlayWx, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
@@ -1048,44 +1048,47 @@ function ChatView({
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
   type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
 
-  /** 语音消息落库：入列 → （录音）后台转文字 → 触发 AI 回复；
-   *  presetTranscript = 文字转语音的原文（不再识别）；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
+  /** 语音消息落库：入列 → 直接触发 AI 回复（语音不再自动转文字，长按「转文字」才识别）；
+   *  presetTranscript = 文字转语音的原文；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
   const commitVoiceMsg = useCallback(
     (clip: VoiceClip, presetTranscript?: string) => {
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, ...(clip.blob ? { stt: 'pending' as const } : { stt: 'done' as const }) };
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
       const msg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
-      const selfId = msg.id;
-      const patchAndTrigger = (transcript: string) => {
-        let next: ChatMsg[] = [];
-        setMsgs((prev) => {
-          next = prev.map((x) =>
-            x.id === selfId && x.voice
-              ? { ...x, voice: { ...x.voice, transcript: transcript || undefined, stt: transcript ? ('done' as const) : ('failed' as const) } }
-              : x,
-          );
-          return next;
-        });
-        if (isChatStreaming(sessionKey)) return;
-        // 转写已更新：把最新消息数组作为 base 交给 AI（避免闭包旧状态），消息早已在列 → userMsg 传 null
-        window.setTimeout(() => startAiTurnRef.current?.(null, undefined, next), 80);
-      };
-      if (hasText || !clip.blob) {
-        if (isChatStreaming(sessionKey)) return;
-        window.setTimeout(() => startAiTurnRef.current?.(null), 80);
-        return;
-      }
-      void transcribeAudioBlob(clip.blob)
-        .then((text) => patchAndTrigger(text))
-        .catch(() => patchAndTrigger(''));
+      // 消息已在列（history 映射无转写时用 '[语音]' 占位），userMsg 传 null
+      if (isChatStreaming(sessionKey)) return;
+      window.setTimeout(() => startAiTurnRef.current?.(null), 80);
     },
     [sessionKey],
   );
 
-  /** 录音手势结果分发：松开=发语音；右滑=转文字发文本（失败回退语音）；取消/太短=丢弃 */
+  /** 「划到转文字」松开后：先识别再预览，由用户决定发送文字 / 发送语音（原始录音）/ 取消 */
+  const sttPreview = useSttPreview({
+    onSendText: (text) => {
+      if (isChatStreaming(sessionKey)) {
+        showToast('对方正在回复，请稍后再试');
+        return;
+      }
+      const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
+      if (sentenceSend) {
+        setMsgs((prev) => [...prev, userMsg]);
+        setPendingDispatch(true);
+        markPendingBatch(sessionKey, true);
+        return;
+      }
+      startAiTurnRef.current?.(userMsg);
+    },
+    onSendVoice: (clip) => {
+      void blobToDataUrl(clip.blob).then((dataUrl) =>
+        commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave })
+      );
+    },
+  });
+
+  /** 录音手势结果分发：松开=发语音；划到转文字=预览确认；取消/太短=丢弃 */
   const handleVoiceOutcome = useCallback(
     (result: VoiceRecordResult | null, zone: VoiceRecordZone) => {
       // 取消手势（哪怕录够了时长）与太短结果一律丢弃；仅「原松开未滑动」的太短给提示
@@ -1094,37 +1097,16 @@ function ChatView({
         return;
       }
       if (zone === 'stt') {
-        // 滑到「转文字」：识别成功发文字消息（与打字发送同链路）；失败回退为语音气泡，不丢录音
-        void transcribeAudioBlob(result.blob)
-          .then((text) => {
-            if (!text) throw new Error('empty');
-            if (isChatStreaming(sessionKey)) {
-              showToast('对方正在回复，请稍后再试');
-              return;
-            }
-            const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
-            if (sentenceSend) {
-              setMsgs((prev) => [...prev, userMsg]);
-              setPendingDispatch(true);
-              markPendingBatch(sessionKey, true);
-              return;
-            }
-            startAiTurnRef.current?.(userMsg);
-          })
-          .catch(() => {
-            showToast('转文字失败，已按语音发送');
-            void blobToDataUrl(result.blob).then((dataUrl) =>
-              commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave })
-            );
-          });
+        // 划到「转文字」：先识别并预览，用户决定发送文字 / 发送语音 / 取消（不再直接发送）
+        sttPreview.open(result);
         return;
       }
-      // 原松开：语音气泡入列，后台转文字，转完触发回复
+      // 原松开：语音气泡入列（不自动转文字），直接触发回复
       void blobToDataUrl(result.blob).then((dataUrl) =>
         commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave })
       );
     },
-    [commitVoiceMsg, sentenceSend, sessionKey, showToast],
+    [commitVoiceMsg, sessionKey, showToast, sttPreview.open],
   );
 
   const rec = useVoiceRecorder({ onResult: handleVoiceOutcome, onStartError: showToast });
@@ -1897,6 +1879,15 @@ function ChatView({
 
       {/* 录音浮层（按住说话期间）：计时 + 实时波形 + 手势提示（纯视觉，手势在按住的胶囊上） */}
       {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
+      {sttPreview.state && (
+        <SttPreviewOverlay
+          state={sttPreview.state}
+          accent="#007AFF"
+          onCancel={sttPreview.close}
+          onSendText={sttPreview.sendText}
+          onSendVoice={sttPreview.sendVoice}
+        />
+      )}
 
       {/* 轻量提示（复制/删除等动作反馈） */}
       {toastMsg && (
