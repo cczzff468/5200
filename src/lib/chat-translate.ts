@@ -314,6 +314,27 @@ async function translateViaServer(apiConfig: ApiConfig, text: string, langLabel:
   throw err;
 }
 
+/** 内置模型兜底翻译：POST /api/translate { forceSdk: true }（代理 + 直连都失败后的最终手段） */
+async function translateViaSdk(text: string, langLabel: string): Promise<string> {
+  const res = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, lang: langLabel, forceSdk: true }),
+  });
+  let data: unknown = null;
+  try {
+    data = await res.json();
+  } catch {
+    // 忽略解析失败
+  }
+  const rec = (data && typeof data === 'object' ? data : {}) as { translation?: unknown; error?: unknown };
+  if (res.ok && typeof rec.translation === 'string' && rec.translation.trim()) {
+    return rec.translation.trim();
+  }
+  const detail = typeof rec.error === 'string' ? rec.error : `请求失败（${res.status}）`;
+  throw new Error(detail);
+}
+
 async function runTranslate(apiConfig: ApiConfig, text: string, langLabel: string): Promise<string> {
   try {
     return await translateViaServer(apiConfig, text, langLabel);
@@ -321,11 +342,16 @@ async function runTranslate(apiConfig: ApiConfig, text: string, langLabel: strin
     const directOnly = err instanceof Error && (err as Error & { directOnly?: boolean }).directOnly === true;
     // 内网地址 / 服务器建议直连：浏览器直连兜底（directChatStream 兼容非流式 JSON 解析）
     if (directOnly || isPrivateApiUrl(apiConfig.baseUrl)) {
-      const out = await directChatStream(apiConfig, buildTranslateMessages(text, langLabel), () => undefined);
-      const trimmed = out.trim();
-      if (trimmed) return trimmed;
+      try {
+        const out = await directChatStream(apiConfig, buildTranslateMessages(text, langLabel), () => undefined);
+        const trimmed = out.trim();
+        if (trimmed) return trimmed;
+      } catch {
+        // 直连也失败：落到内置模型兜底
+      }
     }
-    throw err;
+    // 最终兜底：服务端内置模型（用户上游 403/401/不可达时翻译体验不中断）
+    return await translateViaSdk(text, langLabel);
   }
 }
 

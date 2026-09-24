@@ -6532,6 +6532,31 @@ Stage Summary:
 - 涉及文件：src/components/ios/WallpaperLayers.tsx（新增）、PhoneShell.tsx、LockScreen.tsx
 - 经验：agent-browser errors 为会话级累积且 --clear 可能不生效，验证需关会话重开；多文件协作改动应一次保存完（避免 HMR 中间态）
 ---
+Task ID: 1（本次会话）
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取仓库 cczzff468/5200 到工作区，修复 AI 全链路 403 地区限制问题（聊天/翻译/识图/电话轮次统一加内置模型兜底）
+
+Work Log:
+- 克隆 https://github.com/cczzff468/5200.git（PAT 认证）到工作区，rsync 同步全部源码 + .git，bun install 装依赖，db:push 同步 Prisma schema，3000 端口启动 dev server
+- agent-browser 端到端验证：锁屏/上滑解锁/主屏/信息 App 渲染全部正常；发消息后 AI 回复报「服务拒绝访问（403）：Country, region or territory not supported」
+- 根因：/api/chat 只代理用户配置的 OpenAI 兼容上游，无 SDK 兜底（server-llm.ts 有但聊天主链路没用）；默认 baseUrl api.openai.com 在当前服务器地区被 403，浏览器直连也被 CORS 拦死
+- 修复 /api/chat/route.ts：①body 支持 forceSdk 标志（前端代理+直连全失败后的最终兜底请求）②未配置 config → 直接 SDK 生成（原 400 拦截改为可用）③上游失败（非 directOnly：连接失败/401/404/空响应/5xx）→ 服务端直接 SDK 兜底；directOnly（内网地址/403 地区限制/429）保留原语义交前端先直连
+- 修复 chat-stream-store.ts：workMessages 提升到 try 外声明；新增 sdkFallbackOnce（forceSdk 请求）；runStream catch 里代理+直连都失败后最后兜底一次，成功按正常 done 收尾（不落错误文案）
+- 修复 /api/phone/turn/route.ts：新增 sdkTurn + cleanCallReply；未配置 API → 内置模型直接接听（原 400 拦截改可用）；上游故障（含空回复）→ sdkFallback 兜底，响应带 viaSdk: true
+- 修复 /api/translate/route.ts：新增 sdkTranslate；messages 组装提前；forceSdk 分支 + 未配置直接 SDK
+- 修复 /api/vision/route.ts：新增 sdkVision（zai.chat.completions.createVision，model glm-4.5v，data URL 直接作 image_url）；forceSdk/未配置/上游全部失败三条路径均兜底
+- 修复 chat-translate.ts：runTranslate 失败链末尾新增 translateViaSdk（forceSdk 请求）；直连失败不再直接 throw，落到 SDK 兜底
+- 修复 vision-client.ts：新增 describeViaSdk；isPrivateApiUrl 直连失败、directOnly 直连失败两条路径落到内置识图兜底
+- 验证：lint 0 错误；curl 验证 /api/chat forceSdk、无 config、translate 无配置、phone/turn 无配置+403 上游共 5 个场景全部返回正常内容；浏览器发消息端到端收到内置模型回复（502→forceSdk→200 全链路在 dev.log 确认）
+
+Stage Summary:
+- 全部 AI 功能（信息/微信/QQ 聊天、AI 通话、气泡翻译、识图、记忆提取/总结、朋友圈生成）在「用户上游被 403/401/不可达」或「未配置」场景下统一兜底到 z-ai-web-dev-sdk 内置模型，体验不中断
+- 兜底策略三层：用户上游 → 浏览器直连（directOnly/内网场景）→ 服务端内置 SDK；与项目既有 completeWithFallback 模式完全一致
+- 响应标记：SDK 兜底路径返回 viaSdk: true / X-Reply-Via: sdk-fallback header，便于后续 UI 区分
+- 疑点澄清：phone/turn 的 unknownPersona 曾疑似的 seeds[h...] 语法损坏为 sed 输出渲染问题，Read 确认源码完好
+- 未动 .env（DATABASE_URL 指向 db/custom.db 正常）；git remote origin 已配置 PAT，改动待提交推送
+
+---
 Task ID: 8
 Agent: main (Z.ai Code)
 Task: 排查「拉黑功能消失」并全面清点其他需要恢复的功能（用户：「为什么没有拉黑功能了」「你再看看还有没有什么要恢复的」）

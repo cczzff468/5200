@@ -130,6 +130,27 @@ function isPrivateHost(hostname: string): boolean {
   return /^172\.(1[6-9]|2\d|3[01])\./.test(h);
 }
 
+/**
+ * 内置模型兜底（z-ai-web-dev-sdk）：上游故障 / 未配置时把翻译救回来，
+ * 与 /api/chat、server-llm.ts 同策略；SDK 不接收 system 角色，并入 assistant。
+ */
+async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
+  const ZAI = (await import('z-ai-web-dev-sdk')).default;
+  const zai = await ZAI.create();
+  const completion = await zai.chat.completions.create({
+    messages: messages.map((m) => ({
+      role: m.role === 'system' ? ('assistant' as const) : m.role,
+      content: m.content,
+    })),
+    thinking: { type: 'disabled' },
+  });
+  const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
+  const content = choice?.message?.content;
+  const text = typeof content === 'string' ? content.trim() : '';
+  if (!text) throw new Error('内置模型返回空内容');
+  return text;
+}
+
 export async function POST(req: NextRequest) {
   let body: unknown;
   try {
@@ -147,12 +168,40 @@ export async function POST(req: NextRequest) {
   if (!lang || lang.length > 30) {
     return NextResponse.json({ error: 'lang 不能为空' }, { status: 400 });
   }
+  // 组装翻译 messages（供上游与内置模型兜底共用）
+  const messages: UpstreamMessage[] = [
+    {
+      role: 'system',
+      content:
+        `你是一个翻译引擎。把用户发来的内容准确、自然地翻译成${lang}。` +
+        `只输出译文本身：不要解释、不要加引号、不要输出原文或任何多余内容；` +
+        `保留原文的语气、标点和表情符号；如果内容本身已经是${lang}，原样输出。`,
+    },
+    { role: 'user', content: text },
+  ];
+
+  // forceSdk：前端在代理 + 浏览器直连都失败后的最终兜底请求（直接用内置模型翻译）
+  if (root.forceSdk === true) {
+    try {
+      return NextResponse.json({ translation: await sdkTranslate(messages), viaSdk: true });
+    } catch (err) {
+      const detail = err instanceof Error && err.message ? err.message : '未知错误';
+      return NextResponse.json({ error: `内置模型翻译失败：${detail}` }, { status: 502 });
+    }
+  }
+
   const config = extractConfig(root.config);
   if (!config) {
-    return NextResponse.json(
-      { error: '还没有配置 AI 接口：请先到「设置 › API 配置」填写 OpenAI 兼容的 API 地址与 API Key' },
-      { status: 400 }
-    );
+    // 未配置也能翻：直接用服务端内置模型，不再拦截报错
+    try {
+      return NextResponse.json({ translation: await sdkTranslate(messages), viaSdk: true });
+    } catch (err) {
+      const detail = err instanceof Error && err.message ? err.message : '未知错误';
+      return NextResponse.json(
+        { error: `还没有配置 AI 接口，且内置模型不可用：${detail}` },
+        { status: 502 }
+      );
+    }
   }
   try {
     if (isPrivateHost(new URL(config.baseUrl).hostname)) {
@@ -165,16 +214,7 @@ export async function POST(req: NextRequest) {
     // URL 解析失败走正常流程
   }
 
-  const messages: UpstreamMessage[] = [
-    {
-      role: 'system',
-      content:
-        `你是一个翻译引擎。把用户发来的内容准确、自然地翻译成${lang}。` +
-        `只输出译文本身：不要解释、不要加引号、不要输出原文或任何多余内容；` +
-        `保留原文的语气、标点和表情符号；如果内容本身已经是${lang}，原样输出。`,
-    },
-    { role: 'user', content: text },
-  ];
+  // forceSdk / 未配置兜底已在上文处理；上游走下面正常流程
 
   const candidates = buildChatCandidates(config.baseUrl);
   const headers: Record<string, string> = {
