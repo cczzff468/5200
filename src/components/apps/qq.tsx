@@ -138,7 +138,7 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { QqVoicePanel, RecordOverlayQq, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -3958,30 +3958,25 @@ function ChatPage({
           </div>
         )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
-          {voiceMode ? (
-            /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
-            <VoiceHoldBar rec={rec} testId="qq-voice-hold" />
-          ) : (
-            <input
-              data-testid="qq-chat-input"
-              value={input}
-              onChange={(e) => {
-                const v = e.target.value;
-                setInput(v);
-                // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
-                if (v.endsWith('@')) {
-                  setPlusOpen(false);
-                  setStickerOpen(false);
-                  setAtOpen(true);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void send();
-              }}
-              aria-label={`发送消息给${peer.name}`}
-              className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
-            />
-          )}
+          <input
+            data-testid="qq-chat-input"
+            value={input}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInput(v);
+              // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+              if (v.endsWith('@')) {
+                setPlusOpen(false);
+                setStickerOpen(false);
+                setAtOpen(true);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void send();
+            }}
+            aria-label={`发送消息给${peer.name}`}
+            className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+          />
           {input.trim() ? (
             /* 文字转语音开关（有文字时出现）：开启后发送的文字变为语音气泡 */
             <button
@@ -4024,6 +4019,7 @@ function ChatPage({
             data-testid="qq-voice-toggle"
             aria-expanded={voiceMode}
             onClick={() => {
+              if (rec.phase !== 'idle') return; // 录音按住中不允许切换（防止按住中的大圆钮被卸载导致手势丢失）
               setVoiceMode((v) => !v);
               setPlusOpen(false);
               setStickerOpen(false);
@@ -4068,6 +4064,8 @@ function ChatPage({
             <Plus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
+        {/* QQ 语音面板（工具栏下方展开，相当于键盘区）：「按住说话」+ 大圆麦克风（左滑转文字/右滑取消）+ 变声/对讲/录音 */}
+        {voiceMode && <QqVoicePanel rec={rec} holdTestId="qq-voice-hold" />}
         {plusOpen ? (
           <div data-testid="qq-plus-panel" className="border-t border-black/[0.05] px-5 pb-6 pt-5 dark:border-white/[0.06]" style={{ animation: 'qqPanelIn 0.24s ease-out' }}>
             <QqPlusGrid items={plusItems} />
@@ -4641,7 +4639,7 @@ function ChatPage({
       )}
 
       {/* 录音浮层（按住说话期间：计时 + 实时波形 + 取消/转文字手势区） */}
-      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
+      {rec.phase !== 'idle' && <RecordOverlayQq rec={rec} />}
 
       {/* 页内 toast（收藏成功/取消收藏/已复制/已转发给 xx 等操作提示） */}
       <LocalToast msg={chatToast} />

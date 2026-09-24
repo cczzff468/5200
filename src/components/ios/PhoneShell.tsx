@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
+import { isVoiceHoldActive } from '@/components/apps/voice-input';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
@@ -68,6 +69,12 @@ export default function PhoneShell() {
     const onMove = (e: PointerEvent) => {
       const g = edgeGesture.current;
       if (!g || g.fired) return;
+      // 语音「按住说话」进行中：本次边缘手势作废（按住胶囊就在边缘带内，
+      // 录音上滑取消不能把多任务卡片拉起来）
+      if (isVoiceHoldActive()) {
+        finish();
+        return;
+      }
       const dy = g.y - e.clientY;
       if (dy > OPEN_DELTA && dy > Math.abs(e.clientX - g.x) * 0.85) {
         g.fired = true;
@@ -87,6 +94,8 @@ export default function PhoneShell() {
     const onTouchMove = (e: TouchEvent) => {
       const g = edgeGesture.current;
       if (!g || g.fired) return;
+      // 语音按住录音期间：不拦截也不认领（按住胶囊已 touch-none，浏览器不会接手滚动）
+      if (isVoiceHoldActive()) return;
       const t = e.touches[0];
       if (!t) return;
       const dy = g.y - t.clientY;
@@ -102,6 +111,8 @@ export default function PhoneShell() {
       edgeGesture.current = null; // 上一次未正常收尾的手势作废
       const ui = useUI.getState();
       if (ui.locked || ui.screenOff || ui.switcherOpen || ui.alarmRinging) return;
+      // 录音按住进行中（如另一根手指按下）：不启动边缘手势
+      if (isVoiceHoldActive()) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       const rect = shellRef.current?.getBoundingClientRect();
       if (!rect) return;

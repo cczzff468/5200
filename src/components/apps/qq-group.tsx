@@ -134,7 +134,7 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender,
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { QqVoicePanel, RecordOverlayQq, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -4042,34 +4042,29 @@ export function QqGroupChatPage({
           </div>
         )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
-          {voiceMode ? (
-            /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
-            <VoiceHoldBar rec={rec} testId="qqg-voice-hold" />
-          ) : (
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => {
-                const v = e.target.value;
-                setDraft(v);
-                // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
-                if (v.endsWith('@')) {
-                  setStickerOpen(false);
-                  setPlusOpen(false);
-                  setAtOpen(true);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              aria-label="发送群聊消息"
-              data-testid="qq-groupchat-input"
-              className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
-            />
-          )}
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDraft(v);
+              // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
+              if (v.endsWith('@')) {
+                setStickerOpen(false);
+                setPlusOpen(false);
+                setAtOpen(true);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            aria-label="发送群聊消息"
+            data-testid="qq-groupchat-input"
+            className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+          />
           {(draft.trim() || canDispatch) ? (
             <>
               {/* 文字转语音开关（有文字时出现，发送钮左侧）：开启后发送的文字变为语音气泡 */}
@@ -4112,6 +4107,7 @@ export function QqGroupChatPage({
             aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
             data-testid="qqg-voice-toggle"
             onClick={() => {
+              if (rec.phase !== 'idle') return; // 录音按住中不允许切换（防止按住中的大圆钮被卸载导致手势丢失）
               setVoiceMode((v) => !v);
               setStickerOpen(false);
               setPlusOpen(false);
@@ -4159,6 +4155,8 @@ export function QqGroupChatPage({
             <Plus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
+        {/* QQ 语音面板（工具栏下方展开，相当于键盘区）：「按住说话」+ 大圆麦克风（左滑转文字/右滑取消）+ 变声/对讲/录音 */}
+        {voiceMode && <QqVoicePanel rec={rec} holdTestId="qqg-voice-hold" />}
         {/* 加号面板（与单聊共用同一套宫格；红包/转账按群范围限定提示不支持） */}
         {plusOpen && (
           <div
@@ -4528,7 +4526,7 @@ export function QqGroupChatPage({
       )}
 
       {/* 语音录制浮层（按住说话期间的计时/实时波形/手势提示；纯视觉不拦截手势） */}
-      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
+      {rec.phase !== 'idle' && <RecordOverlayQq rec={rec} />}
     </div>
   );
 }

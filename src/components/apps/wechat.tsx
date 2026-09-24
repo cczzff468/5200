@@ -61,7 +61,7 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { RecordOverlayWx, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -5480,6 +5480,7 @@ function ChatPage({
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
               data-testid="wx-voice-toggle"
               onClick={() => {
+                if (rec.phase !== 'idle') return; // 录音按住中不允许切换（防止按住中的胶囊被卸载导致手势丢失）
                 setVoiceMode((v) => !v);
                 setPlusOpen(false);
                 setStickerOpen(false);
@@ -6122,7 +6123,7 @@ function ChatPage({
       )}
 
       {/* 录音浮层（按住说话期间：计时 + 实时波形 + 取消/转文字手势区） */}
-      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
+      {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
 
       {/* 页内 toast（收藏成功/取消收藏/已复制/已转发给 xx 等操作提示） */}
       <LocalToast msg={chatToast} />

@@ -6785,3 +6785,23 @@ Work Log:
 
 Stage Summary:
 - 语音发送功能五端全量上线：录制（按住说话/上滑取消/右滑转文字/60s 上限/权限处理）、语音气泡（播放/波形/时长/进度/暂停/互斥/持久化）、长按转文字（内置识别免配置+OpenAI 兼容 STT 独立配置）、文字转语音发送（复用语音 API，全局默认音色）；文字聊天与全部既有功能不受影响
+---
+Task ID: 7
+Agent: 主协调者 (Z.ai Code)
+Task: 语音发送功能按参考图精修——微信/QQ双风格录音UI + 录音上滑误触多任务卡片修复
+
+Work Log:
+- 用户反馈：4张参考图（1-2微信风、3-4QQ风）+「录音上滑容易进入多任务卡片」
+- 定位根因：PhoneShell 全局底部边缘手势（72px 边缘带 + 上滑 18px 触发）与微信「按住 说话」胶囊（正在边缘带内）的上滑取消手势冲突
+- voice-input.tsx 重构：新增模块级按住标志 beginVoiceHold/endVoiceHold/isVoiceHoldActive + useHoldFlag（down/up/cancel/卸载全路径防泄漏）；按住手势抽成 useHoldGesture 共用 hook；VoiceHoldBar/QqVoiceHoldButton 均 touch-none 防浏览器滚动认领
+- 微信风录音浮层 RecordOverlayWx（图2）：暗幕 + 绿色气泡实时波形（取消态变红 #FA5151）+ 下指尾巴 + 计时 + 左「取消」右「滑到这里 转文字」胶囊（激活高亮）+ 底部浅色「松开 发送/取消/转文字」条
+- QQ 风：QqVoiceHoldButton 大圆麦克风钮（左滑→「文」转文字、右滑/上滑→「×」取消）+ QqVoicePanel 语音面板（工具栏下方展开，相当于键盘区：「按住说话」+ 大圆钮 + 变声/对讲/录音页签，输入行与消息列表保留）；RecordOverlayQq（图4）：白幕 + 顶部计时与两侧波形 + 中央大麦克风光环 + 左「文」（激活蓝 #0099FF）右「×」（激活红）
+- PhoneShell：onDown/onMove/onTouchMove 三处读 isVoiceHoldActive() —— 按住录音期间边缘手势直接作废（onMove 里 finish() 解绑监听），touchmove 不再 preventDefault（touch-none 已防滚动认领）
+- 五端接入调整：微信单聊/群聊/信息 → RecordOverlayWx；QQ单聊/群聊 → QqVoicePanel + RecordOverlayQq；五端语音切换钮加录音中防误切守卫（rec.phase !== 'idle' 时 return，防按住中按钮被卸载导致手势丢失）；QQ 两端输入行还原为常驻文本输入（对齐图3）
+- E2E（agent-browser，假麦克风=WebAudio 振荡器 MediaStreamDestination 每次新建流）：微信单聊按住录音→上滑取消【多任务卡片未弹出（修复核心验证）】、松开取消无消息、原松开发送→绿色语音气泡（播放键+波形+2″）、点击播放、长按菜单（转文字/复制/删除/多选/撤回/转发/收藏齐全）、转文字（音调被 ASR 识别为符号，真实语音正常）；TTS 发送失败路径→toast「无法连接到服务商服务器…」且聊天无污染；QQ 单聊面板/浮层/左滑文（蓝色高亮）/右滑×（红色高亮）/取消无消息/stt 失败自动回退语音气泡+后台转写成功挂 transcript+AI 回复；QQ 群聊面板+录音+群成员语音回复；录音结束后边缘手势恢复正常
+- 调试坑：agent-browser 会话内视口仅 577px 高导致手机壳下半不可交互（set viewport 1280x920 解决）；锁屏状态需先上滑解锁；主屏图标被小组件遮挡需点未被遮挡区域；假麦克风必须每次 getUserMedia 新建流（复用同一流在录音结束后 track 被 stop，第二次录音无数据静默丢弃）
+
+Stage Summary:
+- 录音上滑误触多任务卡片已修复（按住录音期间 PhoneShell 边缘手势全局屏蔽，结束后自动恢复）
+- 微信/QQ 录音 UI 按参考图各自风格实现：微信=「按住说话」胶囊+暗幕绿气泡浮层；QQ=语音面板+大圆麦克风+白幕「文/×」浮层；五端共用 useVoiceRecorder/useHoldGesture，单聊群聊同一套组件
+- tsc/lint 零错误；E2E 五端核心交互全通过；用户数据未触碰（测试均在既有测试会话内，假麦克风为运行时注入、重载即清除）

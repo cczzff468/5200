@@ -70,7 +70,7 @@ import { LocalToast, useLocalToast } from './page-toast';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { RecordOverlayWx, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -4364,6 +4364,7 @@ export function WxGroupChatPage({
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
               data-testid="wxg-voice-toggle"
               onClick={() => {
+                if (rec.phase !== 'idle') return; // 录音按住中不允许切换
                 setAtOpen(false);
                 setStickerOpen(false);
                 setPlusOpen(false);
@@ -4794,7 +4795,7 @@ export function WxGroupChatPage({
       })()}
 
       {/* 按住说话全屏浮层（录音中显示：计时 + 实时波形 + 手势提示；与单聊同款） */}
-      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
+      {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
 
       {/* 长按菜单（与单聊共用同一套组件，选项/样式/交互完全一致） */}
       {menu && menuRect && menuMsg && (

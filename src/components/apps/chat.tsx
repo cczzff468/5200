@@ -76,7 +76,7 @@ import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from 
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { RecordOverlay, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { RecordOverlayWx, VoiceHoldBar, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
@@ -1740,7 +1740,10 @@ function ChatView({
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
               aria-pressed={voiceMode}
               data-testid="sms-voice-toggle"
-              onClick={() => setVoiceMode((v) => !v)}
+              onClick={() => {
+                if (rec.phase !== 'idle') return; // 录音按住中不允许切换
+                setVoiceMode((v) => !v);
+              }}
               className={`mx-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-70 ${
                 voiceMode ? 'bg-[#007AFF] text-white' : 'text-muted-foreground'
               }`}
@@ -1893,7 +1896,7 @@ function ChatView({
       )}
 
       {/* 录音浮层（按住说话期间）：计时 + 实时波形 + 手势提示（纯视觉，手势在按住的胶囊上） */}
-      {rec.phase !== 'idle' && <RecordOverlay rec={rec} />}
+      {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
 
       {/* 轻量提示（复制/删除等动作反馈） */}
       {toastMsg && (
