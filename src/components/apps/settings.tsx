@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import {
   AlertCircle,
+  AudioLines,
   Bell,
   Bluetooth,
   Camera,
@@ -26,6 +27,7 @@ import {
   Sun,
   Upload,
   User,
+  Volume2,
   Wifi,
   Wrench,
   X,
@@ -41,6 +43,7 @@ import {
   useSettings,
   type ApiPreset,
   type ThemeMode,
+  type TtsVoiceOption,
   type VisionConfig,
   type VisionPreset,
 } from '@/lib/ios/store';
@@ -50,13 +53,10 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { describeImages } from '@/lib/vision-client';
-import { listContacts } from '@/lib/ios/contacts-store';
-import { meTileLabel, type AddressMode } from '@/lib/contacts';
-import { MessageCircleHeart } from 'lucide-react';
 
 // ---------------- 常量与类型 ----------------
 
-type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'vision' | 'about' | 'lock';
+type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'vision' | 'voice' | 'about' | 'lock';
 
 const IOS_RED = '#FF453A';
 
@@ -206,83 +206,6 @@ function FieldLabel({ children }: { children: ReactNode }) {
 
 // ---------------- 主列表 ----------------
 
-/**
- * AI 称呼方式（名字/昵称区分修复）：
- * - 默认「用名字」：AI 称呼用户用真实姓名（如 凡凡）；「用昵称」才用昵称（如 凑凑）；
- * - 单聊/群聊/群成员瓦片/记忆全部跟随本设置；即改即存，下一条消息起生效。
- */
-function AddressModeCard() {
-  const addressMode = useSettings((s) => s.addressMode);
-  const setAddressMode = useSettings((s) => s.setAddressMode);
-  /** 机主卡片（取真实名字与昵称做示例展示；无卡片时用通用文案） */
-  const [me, setMe] = useState<{ label: string; name: string; nickname: string | null } | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    void listContacts()
-      .then((list) => {
-        if (!alive) return;
-        const hit = list.find((c) => c.kind === 'user');
-        if (!hit) return;
-        setMe({
-          name: hit.name,
-          nickname: hit.nickname ?? null,
-          label: meTileLabel({ name: hit.name, nickname: hit.nickname }, 'name'),
-        });
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const options: { key: AddressMode; label: string; desc: string }[] = [
-    { key: 'name', label: '用名字', desc: me ? `AI 称呼你「${me.name}」` : 'AI 称呼你的名字' },
-    { key: 'nickname', label: '用昵称', desc: me?.nickname ? `AI 称呼你「${me.nickname}」` : 'AI 称呼你的昵称' },
-  ];
-
-  return (
-    <div data-testid="settings-address-mode">
-      <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
-        <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
-          <RowIcon icon={MessageCircleHeart} tone={TONE_PINK} />
-          <span className="min-w-0 flex-1 truncate text-[16px]">AI 称呼方式</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2 p-3">
-          {options.map((opt) => {
-            const active = addressMode === opt.key;
-            return (
-              <button
-                key={opt.key}
-                type="button"
-                data-testid={`settings-address-${opt.key}`}
-                onClick={() => setAddressMode(opt.key)}
-                aria-pressed={active}
-                className={`rounded-[10px] border p-3 text-left transition-colors ${
-                  active ? 'border-transparent bg-accent text-accent-foreground' : 'border-border/60 bg-background/40 active:bg-muted/50'
-                }`}
-              >
-                <span className="flex items-center gap-1.5">
-                  <span className="text-[15px] font-medium">{opt.label}</span>
-                  {active && <Check className="h-4 w-4" strokeWidth={2.4} aria-hidden="true" />}
-                </span>
-                <span className={`mt-0.5 block truncate text-[12px] ${active ? 'text-accent-foreground/70' : 'text-muted-foreground'}`}>
-                  {opt.desc}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {me?.nickname ? (
-        <p className="mt-2 px-8 text-[12px] leading-relaxed text-muted-foreground">
-          你的名字是「{me.name}」，昵称是「{me.nickname}」——AI 知道两个名字都是你，只是按上面的方式选择称呼。
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const theme = useSettings((s) => s.theme);
   const wallpaperPreset = useSettings((s) => s.wallpaperPreset);
@@ -291,6 +214,8 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const apiModel = useSettings((s) => s.apiConfig.model);
   const visionConfigured = useSettings((s) => Boolean(s.visionConfig.baseUrl.trim()));
   const visionModel = useSettings((s) => s.visionConfig.model);
+  const ttsConfigured = useSettings((s) => Boolean(s.ttsConfig.apiKey.trim() && s.ttsConfig.baseUrl.trim()));
+  const ttsModel = useSettings((s) => s.ttsConfig.model);
   const profile = useSettings((s) => s.profile);
 
   const [airplane, setAirplane] = useState(false);
@@ -389,9 +314,6 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
           <MainRow icon={Lock} tone={TONE_RED} label="锁屏与密码" onClick={() => onOpen('lock')} />
         </div>
 
-        {/* AI 称呼方式（名字/昵称区分）：默认用名字「凡凡」，选「用昵称称呼」后才用「凑凑」 */}
-        <AddressModeCard />
-
         {/* 显示与亮度 / 壁纸 / 通知 */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
           <MainRow
@@ -427,6 +349,13 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             label="识图模型"
             value={visionConfigured ? `已配置 · ${visionModel.trim() || '未填模型名'}` : '未配置'}
             onClick={() => onOpen('vision')}
+          />
+          <MainRow
+            icon={AudioLines}
+            tone={TONE_CYAN}
+            label="语音 API"
+            value={ttsConfigured ? `已配置 · ${ttsModel.trim() || '未填模型名'}` : '未配置'}
+            onClick={() => onOpen('voice')}
           />
           <MainRow icon={Database} tone={TONE_GREEN} label="存储" onClick={() => onOpen('storage')} />
         </div>
@@ -2085,6 +2014,363 @@ function AboutPage({ onBack }: { onBack: () => void }) {
   );
 }
 
+// ---------------- 语音 API（TTS） ----------------
+
+/** 服务商预设值（切换服务商时地址/模型名联动，用户仍可改） */
+const TTS_PROVIDER_PRESETS = {
+  minimax: { baseUrl: 'https://api.minimax.chat', model: 'speech-01-turbo', modelChips: ['speech-01-turbo', 'speech-01-hd', 'speech-02-turbo', 'speech-02-hd'] },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1', modelChips: ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts'] },
+} as const;
+
+/**
+ * 语音 API 设置页（与聊天 API / 识图 API 相互独立、互不覆盖）：
+ * - 服务商：MiniMax / OpenAI 兼容；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
+ * - 音色列表：MiniMax get_voice 拉取；OpenAI 兼容尽力尝试、拉不到手动填
+ * - 全局默认音色：角色未设独立 voiceId 时使用（联系人 App 可给角色单独设音色）
+ * - 试听：用当前配置合成一句样例直接播放
+ */
+function VoicePage({ onBack }: { onBack: () => void }) {
+  const ttsConfig = useSettings((s) => s.ttsConfig);
+  const ttsVoices = useSettings((s) => s.ttsVoices);
+  const updateTtsConfig = useSettings((s) => s.updateTtsConfig);
+  const setTtsVoices = useSettings((s) => s.setTtsVoices);
+
+  const [showKey, setShowKey] = useState(false);
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  const [voiceQuery, setVoiceQuery] = useState('');
+  const [fetchingVoices, setFetchingVoices] = useState(false);
+  const [voicesError, setVoicesError] = useState('');
+  const [voicesHint, setVoicesHint] = useState('');
+
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const isMinimax = ttsConfig.provider === 'minimax';
+  const preset = TTS_PROVIDER_PRESETS[ttsConfig.provider];
+
+  // 页面卸载：停掉试听音频并释放
+  useEffect(
+    () => () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+    },
+    []
+  );
+
+  const switchProvider = (p: 'minimax' | 'openai') => {
+    if (p === ttsConfig.provider) return;
+    // 地址是另一家的默认值时自动换成当前家的默认值；用户自定义过的地址原样保留
+    const otherDefault = TTS_PROVIDER_PRESETS[ttsConfig.provider].baseUrl;
+    const nextDefault = TTS_PROVIDER_PRESETS[p].baseUrl;
+    updateTtsConfig({
+      provider: p,
+      baseUrl: ttsConfig.baseUrl.trim() === otherDefault ? nextDefault : ttsConfig.baseUrl,
+      model: ttsConfig.model.trim() === TTS_PROVIDER_PRESETS[ttsConfig.provider].model ? TTS_PROVIDER_PRESETS[p].model : ttsConfig.model,
+    });
+    setVoicesError('');
+    setVoicesHint('');
+    setVoicePanelOpen(false);
+  };
+
+  const fetchVoices = async () => {
+    if (!ttsConfig.baseUrl.trim()) {
+      setVoicesError('请先填写 API 地址');
+      return;
+    }
+    if (!ttsConfig.apiKey.trim()) {
+      setVoicesError('请先填写 API Key');
+      return;
+    }
+    setFetchingVoices(true);
+    setVoicesError('');
+    setVoicesHint('');
+    try {
+      const res = await fetch('/api/tts/voices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: ttsConfig }),
+      });
+      const data = (await res.json().catch(() => null)) as { voices?: TtsVoiceOption[]; error?: string } | null;
+      if (!res.ok || !data || data.error) {
+        setVoicesError(data?.error ?? '拉取音色列表失败，可手动填写音色');
+        return;
+      }
+      const list = data.voices ?? [];
+      setTtsVoices(list);
+      if (list.length === 0) {
+        // OpenAI 兼容服务商无音色接口：优雅降级，手动填写
+        setVoicesHint('该服务商没有提供音色列表接口，请直接手动填写音色（如 alloy / 男声 等）');
+        setVoicePanelOpen(false);
+      } else {
+        setVoiceQuery('');
+        setVoicePanelOpen(true);
+      }
+    } catch {
+      setVoicesError('无法连接到服务器');
+    } finally {
+      setFetchingVoices(false);
+    }
+  };
+
+  const runPreview = async () => {
+    if (previewLoading) return;
+    setPreviewLoading(true);
+    setPreviewError('');
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    try {
+      const voiceId = ttsConfig.defaultVoiceId.trim() || (isMinimax ? 'female-shaonv' : 'alloy');
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: ttsConfig, voiceId, text: '你好，这是当前的语音音色，很高兴见到你。' }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        setPreviewError(data?.error ?? '语音生成失败');
+        return;
+      }
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        if (previewAudioRef.current === audio) previewAudioRef.current = null;
+      };
+      await audio.play().catch(() => {
+        if (previewAudioRef.current === audio) previewAudioRef.current = null;
+      });
+    } catch {
+      setPreviewError('语音生成失败，请检查配置');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const q = voiceQuery.trim().toLowerCase();
+  const filteredVoices = q ? ttsVoices.filter((v) => v.id.toLowerCase().includes(q) || v.name.toLowerCase().includes(q)) : ttsVoices;
+
+  return (
+    <DetailShell title="语音 API" onBack={onBack}>
+      <div className="flex flex-col gap-5">
+        {/* 服务商 */}
+        <section>
+          <div className="mb-2 text-[13px] font-medium text-muted-foreground">服务商</div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => switchProvider('minimax')}
+              className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
+                isMinimax ? 'border-foreground bg-foreground text-background' : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+              }`}
+            >
+              MiniMax
+            </button>
+            <button
+              type="button"
+              onClick={() => switchProvider('openai')}
+              className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
+                !isMinimax ? 'border-foreground bg-foreground text-background' : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+              }`}
+            >
+              OpenAI 兼容
+            </button>
+          </div>
+        </section>
+
+        {/* 连接配置（更改自动保存） */}
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
+            <span className="text-[11px] text-muted-foreground/70">更改自动保存 · 即时生效</span>
+          </div>
+          <div className="flex flex-col gap-4 rounded-[12px] bg-card p-4">
+            <div>
+              <FieldLabel>API 地址</FieldLabel>
+              <Input
+                value={ttsConfig.baseUrl}
+                onChange={(e) => updateTtsConfig({ baseUrl: e.target.value })}
+                placeholder={preset.baseUrl}
+                className="h-10 rounded-[10px] bg-background text-[14px]"
+              />
+            </div>
+
+            <div>
+              <FieldLabel>API Key</FieldLabel>
+              <div className="relative">
+                <Input
+                  type={showKey ? 'text' : 'password'}
+                  value={ttsConfig.apiKey}
+                  onChange={(e) => updateTtsConfig({ apiKey: e.target.value })}
+                  placeholder={isMinimax ? 'eyJhbGciOi...' : 'sk-...'}
+                  autoComplete="off"
+                  className={`h-10 rounded-[10px] bg-background text-[14px] ${ttsConfig.apiKey ? 'pr-16' : 'pr-10'}`}
+                />
+                {ttsConfig.apiKey && (
+                  <button
+                    type="button"
+                    onClick={() => updateTtsConfig({ apiKey: '' })}
+                    aria-label="清空 API Key"
+                    className="absolute right-8 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowKey((v) => !v)}
+                  aria-label={showKey ? '隐藏 Key' : '显示 Key'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-opacity hover:opacity-80"
+                >
+                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {isMinimax && (
+              <div>
+                <FieldLabel>GroupId</FieldLabel>
+                <Input
+                  value={ttsConfig.groupId}
+                  onChange={(e) => updateTtsConfig({ groupId: e.target.value })}
+                  placeholder="MiniMax 控制台「账户管理」里的 GroupId"
+                  autoComplete="off"
+                  className="h-10 rounded-[10px] bg-background text-[14px]"
+                />
+                {!ttsConfig.groupId.trim() && (
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
+                    MiniMax 的音色列表与语音合成接口都需要带上 GroupId。
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div>
+              <FieldLabel>模型名</FieldLabel>
+              <Input
+                value={ttsConfig.model}
+                onChange={(e) => updateTtsConfig({ model: e.target.value })}
+                placeholder={preset.model}
+                className="h-10 rounded-[10px] bg-background text-[14px]"
+              />
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {preset.modelChips.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => updateTtsConfig({ model: m })}
+                    className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                      ttsConfig.model.trim() === m
+                        ? 'border-foreground bg-foreground text-background'
+                        : 'border-border text-foreground/70 hover:border-muted-foreground/40'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* 全局默认音色 */}
+        <section>
+          <div className="mb-2 text-[13px] font-medium text-muted-foreground">全局默认音色</div>
+          <div className="flex flex-col gap-3 rounded-[12px] bg-card p-4">
+            <div className="flex gap-2">
+              <Input
+                value={ttsConfig.defaultVoiceId}
+                onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
+                placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : '如 alloy（留空用系统默认）'}
+                className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+              />
+              <button
+                type="button"
+                onClick={fetchVoices}
+                disabled={fetchingVoices}
+                className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-foreground px-3.5 text-[13px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-50"
+              >
+                {fetchingVoices ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+                拉取音色列表
+              </button>
+            </div>
+
+            {voicesError && (
+              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {voicesError}
+              </p>
+            )}
+            {voicesHint && <p className="text-[12px] leading-relaxed text-muted-foreground">{voicesHint}</p>}
+
+            {/* 音色列表面板（拉取成功后展开；搜索过滤 + 点击选中） */}
+            {voicePanelOpen && ttsVoices.length > 0 && (
+              <div className="overflow-hidden rounded-[10px] border border-border/70 bg-background">
+                <div className="border-b border-border/60 p-2">
+                  <Input
+                    value={voiceQuery}
+                    onChange={(e) => setVoiceQuery(e.target.value)}
+                    placeholder="搜索音色"
+                    className="h-9 rounded-[8px] bg-background text-[13px]"
+                  />
+                </div>
+                <div className="thin-scrollbar max-h-64 overflow-y-auto">
+                  {filteredVoices.map((v) => {
+                    const active = ttsConfig.defaultVoiceId.trim() === v.id;
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => updateTtsConfig({ defaultVoiceId: v.id })}
+                        className="flex w-full items-center gap-2 border-b border-border/40 px-3 py-2.5 text-left last:border-b-0 transition-colors active:bg-muted/60"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[14px]">{v.name}</span>
+                          {v.name !== v.id && <span className="block truncate text-[11px] text-muted-foreground">{v.id}</span>}
+                        </span>
+                        {active && <Check className="h-4 w-4 shrink-0" strokeWidth={2.4} aria-hidden="true" />}
+                      </button>
+                    );
+                  })}
+                  {filteredVoices.length === 0 && <p className="px-3 py-3 text-[13px] text-muted-foreground">没有匹配的音色</p>}
+                </div>
+              </div>
+            )}
+
+            {/* 试听 */}
+            <div>
+              <button
+                type="button"
+                onClick={runPreview}
+                disabled={previewLoading}
+                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] border border-border bg-background text-[14px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+              >
+                {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
+                试听当前音色
+              </button>
+              {previewError && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {previewError}
+                </p>
+              )}
+            </div>
+
+            <p className="text-[12px] leading-relaxed text-muted-foreground">
+              音色优先级：联系人的独立音色（联系人 App 编辑）→ 这里的全局默认 → 系统安全默认。
+              配置会在电话、微信、QQ 的语音播放中生效；合成失败不影响文字聊天。
+            </p>
+          </div>
+        </section>
+      </div>
+    </DetailShell>
+  );
+}
+
 // ---------------- 根组件 ----------------
 
 export default function SettingsApp() {
@@ -2100,6 +2386,7 @@ export default function SettingsApp() {
       {page === 'wallpaper' && <WallpaperPage onBack={() => setPage('root')} />}
       {page === 'api' && <ApiPage onBack={() => setPage('root')} />}
       {page === 'vision' && <VisionPage onBack={() => setPage('root')} />}
+      {page === 'voice' && <VoicePage onBack={() => setPage('root')} />}
       {page === 'lock' && <LockPage onBack={() => setPage('root')} />}
       {page === 'about' && <AboutPage onBack={() => setPage('root')} />}
     </IOSScreen>

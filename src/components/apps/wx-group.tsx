@@ -65,6 +65,8 @@ import {
 } from '@/components/apps/bubble-menu';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
+import { stopSpeaking } from '@/lib/ios/tts-client';
+import { VoicePlayButton } from '@/components/apps/voice-play';
 import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, contactNameVariants, type ContactRecord } from '@/lib/contacts';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
@@ -2170,6 +2172,8 @@ export function WxGroupChatPage({
   );
   const gid = group.id;
   const sKey = sessionKeyOf(gid);
+  // 退出群聊页/切群：停止语音播放并释放播放器（单例，防跨群串音）
+  useEffect(() => () => stopSpeaking(), [gid]);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   // 存储侧追加（AI 开场白/卡片接受后的「XX加入了群聊」事件等后台落盘）→ 广播后即时重读，
   // 修掉「接受邀请进群但加入事件晚一拍落盘时页面看不到」的时序缺口
@@ -3993,6 +3997,15 @@ export function WxGroupChatPage({
                       />
                       <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
                     </div>
+                    {/* 语音播放：按发言人角色音色朗读（senderId 对应联系人 voiceId → 全局默认 → 安全默认） */}
+                    {!mine && m.content && (
+                      <VoicePlayButton
+                        contactId={m.senderId === 'me' ? null : m.senderId}
+                        text={m.content}
+                        className="mt-[3px]"
+                        onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
+                      />
+                    )}
                   </>,
                 )
               )}

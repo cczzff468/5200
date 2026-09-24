@@ -134,6 +134,8 @@ import {
   X,
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { stopSpeaking } from '@/lib/ios/tts-client';
+import { VoicePlayButton } from '@/components/apps/voice-play';
 import {
   beginChatStream,
   clearChatStream,
@@ -2028,6 +2030,8 @@ function ChatPage({
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
+  // 退出聊天页/切换会话：停止语音播放并释放播放器（单例，防跨会话串音）
+  useEffect(() => () => stopSpeaking(), [peer.id]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
@@ -3613,6 +3617,15 @@ function ChatPage({
                         </span>
                       )}
                     </div>
+                    {/* 语音播放：按该角色音色朗读（角色 voiceId → 全局默认 → 安全默认；合成失败不影响文字聊天） */}
+                    {!mine && m.content && (
+                      <VoicePlayButton
+                        contactId={peer.id}
+                        text={m.content}
+                        className="mt-[4px]"
+                        onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
+                      />
+                    )}
                     {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                     {renderTranslations(m.id, m.content)}
                   </div>

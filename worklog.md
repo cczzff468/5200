@@ -6593,3 +6593,27 @@ Stage Summary:
 - 仓库已完整落位工作区并跑通核心链路（锁屏→解锁→聊天→AI 兜底回复），环境就绪等待用户需求
 - 备份分支可用：origin/backup/old-main-0919、origin/backup/remote-main-0923（Task 8 功能审计时的对照基线）
 - PAT 已配置在本地 origin remote（用户聊天中提供），改动验证后可直接 push
+
+---
+Task ID: 2（本次会话）
+Agent: 主协调者 (Z.ai Code)
+Task: ①删除设置 App「AI 称呼方式」（昵称只是 App 显示昵称、名字才是真名，AI 统一用真名称呼）②新增「语音 API」设置（MiniMax + OpenAI 兼容）③角色独立音色（联系人 voiceId + 编辑选择器）④音色优先级解析（角色→全局默认→安全默认）⑤接入电话/微信/QQ（含群聊按发言人）
+
+Work Log:
+- 后端：新建 src/lib/server-tts.ts（MiniMax t2a_v2/get_voice + OpenAI 兼容 audio/speech 的服务端共享层；node:https 强制 IPv4 防 undici IPv6 回退缺陷；http:// 支持本地/局域网 TTS 服务器如 GPT-SoVITS；连接错误映射可读中文文案）+ /api/tts（TTS 代理，返回 audio/mpeg 二进制）+ /api/tts/voices（音色列表；OpenAI 官方域名拉不到时回退内置 6 标准音色，第三方返回空列表交手动填写）；Key 只随请求体转发、绝不写日志
+- 共享客户端：新建 src/lib/ios/tts-client.ts——cleanTextForTts（剥离 *舞台动作*、（旁白）、【标签】、[表情] 标记、Markdown/URL/emoji）、resolveVoiceForContact（每次播放实时 getContact 重读 voiceId，切角色/改音色下一条即生效，绝不沿用缓存；角色→全局 defaultVoiceId→按服务商安全默认 female-shaonv/alloy）、单例播放器（新播放自动停旧；stopSpeaking 释放+resolve 等待中的调用方防 await 悬挂；onStart/onEnd/cancelled/volume 支持）
+- store.ts：新增 ttsConfig（密文信封持久化，与聊天/识图 API 完全独立）+ ttsVoices（音色列表缓存）+ updateTtsConfig/setTtsVoices；addressMode 冻结为 'name'（load 时忽略历史 'nickname' 存储值；AddressMode 类型与【用户的称呼】人设注入保留，AI 仍知道昵称与真名同属一人）
+- settings.tsx：删除 AddressModeCard 与相关 import；开发者分组新增「语音 API」行（AudioLines 图标，副标题 已配置·模型名/未配置）；新增 VoicePage（MiniMax/OpenAI 兼容服务商切换联动默认地址与模型、API 地址/Key/GroupId（仅 MiniMax）/模型名+快捷 chips、拉取音色列表→搜索面板点选设全局默认、试听当前音色、更改自动保存即时生效）；Page 类型加 'voice'
+- 联系人模型：ContactRecord/ContactPayload 加 voiceId?: string|null（contacts.ts），createContact/updateContact 支持（contacts-store.ts）；联系人编辑表单新增「语音音色」区（voiceId 手动输入 + 设置拉取的音色 chips 点选/再点取消 + 优先级说明），保存随 ...form 落库
+- 电话 App：CallScreen.speak 重构——①isTtsConfigured 时走 speakUserTts（联系人实时音色，volume 跟随扬声器/听筒，endedRef 取消检查，onEnd 回到「聆听」状态机）失败静默回退②内置 /api/phone/tts（按性别挑声线）原链路保留；语音留言 toggleVmPlay 同样双链路（用户 API 失败回退内置，播放即标已读）；挂断/卸载/开始录音时 stopSpeaking()
+- 聊天气泡播放：新建 src/components/apps/voice-play.tsx（VoicePlayButton 共用组件：状态机 idle/loading/playing、seqRef 防串态、cleanTextForTts 为空不渲染按钮如纯表情消息）；wechat.tsx/qq.tsx 单聊 AI 文本气泡下方插入按钮（contactId=peer.id）；wx-group.tsx/qq-group.tsx 群聊按 senderId 解析发言人音色（'me' 除外）；四处 ChatPage 均在卸载/切会话时 stopSpeaking() 防跨会话串音；失败 toast「语音播放失败，请检查「语音 API」配置」不影响文字聊天
+- 排障：测试中发现 http:// 请求 ECONNREFUSED 且 message 为空 → 根因 localhost 解析 ::1 而 Bun mock 只绑 IPv4 → 统一 family:4 + 错误码映射（ECONNREFUSED/ENOTFOUND/ETIMEDOUT）
+- 验证（mock TTS 服务器 4599 端口，OpenAI 兼容协议，用后已删）：curl /api/tts 200 audio/mpeg 28844 字节（RIFF/WAVE 透传）、/api/tts/voices 返回 3 音色、空 Key/缺 GroupId 错误文案正确；浏览器端到端——设置页称呼卡片已消失/语音 API 页配置 mock→拉取 3 音色→选 Nova→试听成功；联系人「小雪」创建 voiceId=nova（IndexedDB 复核持久化）；微信登录→加好友→AI 回复「嗨凡凡…」（真名称呼✓）→点播放按钮 mock 收到 voice=nova；QQ 登录（722086087）→聊天→每条 AI 消息带播放按钮→mock 收到 voice=nova；电话拨打小雪→接通问候语 mock 收到 voice=nova；信息 App 回归发消息正常（AI 回复到达，文字聊天不受影响）；tsc + lint 零错误
+- 测试数据留在浏览器 IndexedDB（凡凡/小雪/聊天记录），服务端无污染；mock 服务器与临时文件已删除
+
+Stage Summary:
+- 语音 API 独立配置体系落地：设置 › 语音 API（MiniMax/OpenAI 兼容）→ /api/tts 代理 → 单例播放器；与聊天/识图 API 互不覆盖
+- 音色优先级：角色 voiceId（每次实时重读）→ 全局默认 → 安全默认；电话/微信/QQ 三端一致，群聊按发言人隔离
+- 「AI 称呼方式」设置已按用户要求移除：昵称只是 App 显示昵称，AI 统一用真实名字称呼（历史 nickname 设置值失效）；【用户的称呼】注入保留防止 AI 把昵称当另一个人
+- 行为保证：TTS 失败回退内置朗读（电话）/错误 toast（聊天），文字聊天永不中断；新播放停旧、页面销毁释放播放器；Key 不落日志
+- 涉及文件：src/lib/server-tts.ts（新）、src/app/api/tts/route.ts（新）、src/app/api/tts/voices/route.ts（新）、src/lib/ios/tts-client.ts（新）、src/components/apps/voice-play.tsx（新）、store.ts、settings.tsx、contacts.ts、contacts-store.ts、contacts.tsx、phone.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx

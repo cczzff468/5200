@@ -45,6 +45,42 @@ export interface VisionPreset {
 /** 默认未配置：发图不触发识图，聊天行为与旧版完全一致 */
 export const DEFAULT_VISION_CONFIG: VisionConfig = { baseUrl: '', apiKey: '', model: '' };
 
+/** 语音 API（TTS）配置：与聊天 API（apiConfig）/识图 API（visionConfig）相互独立、互不覆盖。
+ *  服务商支持 MiniMax 与 OpenAI 兼容接口；保存后下一次播放即生效（每次播放现场读取，无缓存无重启） */
+export interface TtsConfig {
+  /** 'minimax' = MiniMax（t2a_v2）；'openai' = OpenAI 兼容（/audio/speech） */
+  provider: 'minimax' | 'openai';
+  baseUrl: string;
+  apiKey: string;
+  /** MiniMax 专属：账户 GroupId（get_voice / t2a_v2 必填） */
+  groupId: string;
+  /** 模型名（如 speech-01-turbo / tts-1） */
+  model: string;
+  /** 全局默认音色（角色未设独立 voiceId 时用；空 = 用服务商安全默认音色） */
+  defaultVoiceId: string;
+}
+
+/** 拉取到的音色列表缓存（设置页与联系人音色选择器共用；也支持手动填写不受限） */
+export interface TtsVoiceOption {
+  id: string;
+  name: string;
+}
+
+export const DEFAULT_TTS_CONFIG: TtsConfig = {
+  provider: 'minimax',
+  baseUrl: 'https://api.minimax.chat',
+  apiKey: '',
+  groupId: '',
+  model: 'speech-01-turbo',
+  defaultVoiceId: '',
+};
+
+/** 各服务商的程序安全默认音色（角色/全局都没配时兑底；与服务端 /api/tts 保持一致） */
+export const SAFE_VOICE_BY_PROVIDER: Record<TtsConfig['provider'], string> = {
+  minimax: 'female-shaonv',
+  openai: 'alloy',
+};
+
 export type PasscodeLength = 4 | 6;
 
 export interface LockConfig {
@@ -166,9 +202,14 @@ interface SettingsState {
   lockConfig: LockConfig;
   /** 个人信息（头像/名字/标签，持久化） */
   profile: Profile;
-  /** AI 对用户的称呼方式：'name' = 用名字（默认）；'nickname' = 用昵称（持久化）。
-   *  名字/昵称区分修复：默认用名字「凡凡」，用户在设置里选「用昵称称呼」后才用「凑凑」 */
+  /** AI 对用户的称呼方式：用户已要求移除「AI 称呼方式」设置——昵称只是 App 显示昵称、
+   *  名字才是真名，AI 统一用真实名字称呼（load 时固定回 'name'，历史存储的 'nickname' 不再生效）；
+   *  【用户的称呼】人设注入保留，AI 仍知道昵称与真名同属一人 */
   addressMode: AddressMode;
+  /** 语音 API（TTS）配置：与聊天/识图 API 相互独立（含 Key，密文持久化） */
+  ttsConfig: TtsConfig;
+  /** 拉取到的音色列表缓存（供联系人音色选择器共用） */
+  ttsVoices: TtsVoiceOption[];
   /** 自定义 App 图标（AppId → ObjectURL，Blob 存 IndexedDB settings.customIcons） */
   customIcons: Record<string, string>;
   loaded: boolean;
@@ -191,8 +232,12 @@ interface SettingsState {
   applyLockConfig: (cfg: LockConfig) => void;
   /** 更新个人信息（立即持久化） */
   setProfile: (patch: Partial<Profile>) => void;
-  /** 设置 AI 称呼方式（立即持久化；聊天发送时现场读取 → 保存后自动生效） */
+  /** 设置 AI 称呼方式（无 UI 入口；保留接口兼容，状态恒为 'name'） */
   setAddressMode: (m: AddressMode) => void;
+  /** 更新语音 API 配置（立即持久化；播放时现场读取 → 保存后自动生效，无需重启） */
+  updateTtsConfig: (patch: Partial<TtsConfig>) => void;
+  /** 更新音色列表缓存（持久化到 IndexedDB settings.ttsVoices） */
+  setTtsVoices: (list: TtsVoiceOption[]) => void;
   /** 设置/移除某 App 的自定义图标（blob=null 恢复默认），同步持久化到 IndexedDB */
   setCustomIcon: (appId: AppId, blob: Blob | null) => void;
   /** 清空全部自定义图标（全部恢复默认） */
@@ -213,13 +258,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
   lockConfig: { lockScreen: true, enabled: false, code: '', len: 4 },
   profile: { ...DEFAULT_PROFILE },
   addressMode: 'name',
+  ttsConfig: { ...DEFAULT_TTS_CONFIG },
+  ttsVoices: [],
   customIcons: {},
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, addressModeRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, ttsVoicesRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -230,7 +277,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'lock'),
         localDB.get('settings', 'profile'),
         localDB.get('settings', 'customIcons'),
-        localDB.get('settings', 'addressMode'),
+        localDB.get('settings', 'ttsConfig'),
+        localDB.get('settings', 'ttsVoices'),
       ]);
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
@@ -384,6 +432,35 @@ export const useSettings = create<SettingsState>((set, get) => ({
         }
       }
 
+      // 语音 API 配置（含 apiKey，密文信封，与 apiConfig 同策略）
+      let ttsConfig: TtsConfig = { ...DEFAULT_TTS_CONFIG };
+      if (ttsRec && typeof ttsRec.value === 'object' && ttsRec.value !== null) {
+        const v = ((await decryptValue<Partial<TtsConfig>>(ttsRec.value)) ?? ttsRec.value) as Partial<TtsConfig>;
+        ttsConfig = {
+          provider: v.provider === 'openai' ? 'openai' : 'minimax',
+          baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : DEFAULT_TTS_CONFIG.baseUrl,
+          apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+          groupId: typeof v.groupId === 'string' ? v.groupId : '',
+          model: typeof v.model === 'string' && v.model ? v.model : DEFAULT_TTS_CONFIG.model,
+          defaultVoiceId: typeof v.defaultVoiceId === 'string' ? v.defaultVoiceId : '',
+        };
+        const ttsWasPlain = !('__enc' in (ttsRec.value as object));
+        if (ttsWasPlain && ttsConfig.apiKey.length > 0) {
+          void encryptValue(ttsConfig)
+            .then((enc) => localDB.put('settings', { key: 'ttsConfig', value: enc }))
+            .catch(() => undefined);
+        }
+      }
+
+      // 音色列表缓存（无敏感信息，明文）
+      let ttsVoices: TtsVoiceOption[] = [];
+      if (ttsVoicesRec && Array.isArray(ttsVoicesRec.value)) {
+        ttsVoices = (ttsVoicesRec.value as unknown[]).filter(
+          (v): v is TtsVoiceOption =>
+            typeof v === 'object' && v !== null && typeof (v as TtsVoiceOption).id === 'string'
+        );
+      }
+
       // 开机门控收尾前预载主屏/锁屏壁纸（最多等 1.5s 兜底）：
       // 锁屏/主屏挂载首帧即完整壁纸 + 正确前景色，修复刚打开网页时锁屏壁纸「闪一下」
       const bootUrls: (string | null | undefined)[] = [customWallpaperUrl, lockCustomWallpaperUrl];
@@ -405,7 +482,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
         visionPresets,
         lockConfig,
         profile,
-        addressMode: addressModeRec?.value === 'nickname' ? 'nickname' : 'name',
+        // 称呼方式已按用户要求固定为「用真实名字」：昵称只是 App 显示昵称，不再是可选项
+        addressMode: 'name',
+        ttsConfig,
+        ttsVoices,
         customIcons,
         loaded: true,
       });
@@ -508,6 +588,20 @@ export const useSettings = create<SettingsState>((set, get) => ({
     void encryptValue(list)
       .then((v) => localDB.put('settings', { key: 'visionPresets', value: v }))
       .catch(() => undefined);
+  },
+
+  updateTtsConfig: (patch) => {
+    const ttsConfig = { ...get().ttsConfig, ...patch };
+    set({ ttsConfig });
+    // 安全：含 apiKey，密文落盘（与 apiConfig 同策略）
+    void encryptValue(ttsConfig)
+      .then((v) => localDB.put('settings', { key: 'ttsConfig', value: v }))
+      .catch(() => undefined);
+  },
+
+  setTtsVoices: (list) => {
+    set({ ttsVoices: list });
+    void localDB.put('settings', { key: 'ttsVoices', value: list });
   },
 
   applyLockConfig: (cfg) => {

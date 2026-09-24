@@ -57,6 +57,8 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { stopSpeaking } from '@/lib/ios/tts-client';
+import { VoicePlayButton } from '@/components/apps/voice-play';
 import { groupPreview, getGroup, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -3544,6 +3546,8 @@ function ChatPage({
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
+  // 退出聊天页/切换会话：停止语音播放并释放播放器（单例，防跨会话串音）
+  useEffect(() => () => stopSpeaking(), [peer.id]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
@@ -5139,6 +5143,15 @@ function ChatPage({
                       </span>
                     )}
                   </div>
+                  {/* 语音播放：按该角色音色朗读（角色 voiceId → 全局默认 → 安全默认；合成失败不影响文字聊天） */}
+                  {m.role === 'peer' && m.content && (
+                    <VoicePlayButton
+                      contactId={peer.id}
+                      text={m.content}
+                      className="mt-[3px]"
+                      onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
+                    />
+                  )}
                   {/* 微信引用（截图样式）：独立半透明胶囊挂在气泡下方「名字：内容」（小圆角 + 细黑边框） */}
                   {m.quote && (
                     <div

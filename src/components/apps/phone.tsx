@@ -46,6 +46,7 @@ import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -537,11 +538,34 @@ function CallScreen({
   const contact = target.contact;
   const gender = useMemo(() => contactGender(contact), [contact]);
 
-  /** TTS 播放一句（失败静默降级：字幕仍在） */
+  /** TTS 播放一句：优先用户语音 API（设置 › 语音 API；音色 = 联系人独立 voiceId → 全局默认 → 安全默认），
+   *  未配置/合成失败回退内置朗读（按性别挑声线）——字幕与文字流程不受影响 */
   const speak = useCallback(
     async (text: string) => {
       setPeerStatus('speaking');
+      const volume = speaker ? 1 : 0.45;
+      const resume = () => {
+        if (!endedRef.current) setPeerStatus('listening');
+      };
+      // ① 用户语音 API：每次播放实时重读联系人 voiceId（切联系人/改音色后下一句即生效）
+      if (isTtsConfigured()) {
+        try {
+          await speakUserTts({
+            text,
+            contactId: contact?.id ?? null,
+            volume,
+            cancelled: () => endedRef.current,
+            onEnd: resume,
+          });
+          resume(); // 正常播完 onEnd 已触发；被取消/打断时这里兕底回到听
+          return;
+        } catch {
+          // 合成失败 → 回退内置朗读
+        }
+      }
+      // ② 内置朗读（原有链路）
       try {
+        stopSpeaking();
         const res = await fetch('/api/phone/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -557,18 +581,18 @@ function CallScreen({
         audio.onended = () => {
           URL.revokeObjectURL(url);
           if (audioRef.current === audio) audioRef.current = null;
-          if (!endedRef.current) setPeerStatus('listening');
+          resume();
         };
         await audio.play().catch(() => {
           URL.revokeObjectURL(url);
           if (audioRef.current === audio) audioRef.current = null;
-          if (!endedRef.current) setPeerStatus('listening');
+          resume();
         });
       } catch {
-        if (!endedRef.current) setPeerStatus('listening');
+        resume();
       }
     },
-    [gender, speaker]
+    [contact?.id, gender, speaker]
   );
 
   /** 发起一轮 AI 对话（userText = 用户刚说的话；greeting = 接通问候） */
@@ -758,6 +782,7 @@ function CallScreen({
     if (endedRef.current) return;
     endedRef.current = true;
     ringRef.current?.stop();
+    stopSpeaking();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -899,6 +924,7 @@ function CallScreen({
       window.clearTimeout(emptyTimer);
       if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
       ring.stop();
+      stopSpeaking();
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -936,6 +962,7 @@ function CallScreen({
       return;
     }
     setError('');
+    stopSpeaking();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -2964,51 +2991,76 @@ export default function PhoneApp() {
     setPlayingVmId(null);
   }, []);
 
-  /** 播放/暂停一条语音留言（TTS 按文本合成；播放即标为已读） */
+  /** 播放/暂停一条语音留言（优先用户语音 API 的联系人音色，失败回退内置 TTS；播放即标为已读） */
   const toggleVmPlay = useCallback(
     async (vm: VoicemailRecord) => {
       if (playingVmId === vm.id) {
         stopVmAudio();
+        stopSpeaking();
         return;
       }
       stopVmAudio();
+      stopSpeaking();
       setLoadingVmId(vm.id);
+      const markRead = () => {
+        if (!vm.read) {
+          const next = { ...vm, read: true };
+          setVoicemails((prev) => (prev ? prev.map((v) => (v.id === vm.id ? next : v)) : prev));
+          void localDB.put('voicemails', next);
+        }
+      };
       try {
-        const contact = contacts?.find((c) => c.id === vm.contactId) ?? null;
-        const res = await fetch('/api/phone/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: vm.text, gender: contactGender(contact) }),
-        });
-        if (!res.ok) throw new Error('tts failed');
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        vmAudioRef.current = audio;
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          if (vmAudioRef.current === audio) vmAudioRef.current = null;
-          setPlayingVmId(null);
-        };
-        setPlayingVmId(vm.id);
-        await audio.play().catch(() => {
-          URL.revokeObjectURL(url);
-          if (vmAudioRef.current === audio) vmAudioRef.current = null;
-          setPlayingVmId(null);
-          showToast('留言播放失败，请再试一次');
-        });
-      } catch {
-        showToast('留言播放失败，请再试一次');
+        let played = false;
+        // ① 用户语音 API：按留言联系人实时解析音色（角色 voiceId → 全局默认 → 安全默认）
+        if (isTtsConfigured()) {
+          try {
+            setPlayingVmId(vm.id);
+            await speakUserTts({
+              text: vm.text,
+              contactId: vm.contactId || null,
+              onEnd: () => setPlayingVmId(null),
+            });
+            played = true;
+          } catch {
+            setPlayingVmId(null); // 合成失败 → 回退内置朗读
+          }
+        }
+        // ② 内置朗读（原有链路）
+        if (!played) {
+          try {
+            const contact = contacts?.find((c) => c.id === vm.contactId) ?? null;
+            const res = await fetch('/api/phone/tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: vm.text, gender: contactGender(contact) }),
+            });
+            if (!res.ok) throw new Error('tts failed');
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            vmAudioRef.current = audio;
+            audio.onended = () => {
+              URL.revokeObjectURL(url);
+              if (vmAudioRef.current === audio) vmAudioRef.current = null;
+              setPlayingVmId(null);
+            };
+            setPlayingVmId(vm.id);
+            await audio.play().catch(() => {
+              URL.revokeObjectURL(url);
+              if (vmAudioRef.current === audio) vmAudioRef.current = null;
+              setPlayingVmId(null);
+              showToast('留言播放失败，请再试一次');
+            });
+          } catch {
+            showToast('留言播放失败，请再试一次');
+          }
+        }
+        markRead();
       } finally {
         setLoadingVmId(null);
       }
-      if (!vm.read) {
-        const next = { ...vm, read: true };
-        setVoicemails((prev) => (prev ? prev.map((v) => (v.id === vm.id ? next : v)) : prev));
-        void localDB.put('voicemails', next);
-      }
     },
-    [playingVmId, stopVmAudio, contacts, showToast]
+    [contacts, playingVmId, showToast, stopVmAudio]
   );
 
   const deleteVoicemail = useCallback(

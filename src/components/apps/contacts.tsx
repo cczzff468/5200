@@ -33,7 +33,7 @@ import {
   type ContactKind,
   type ContactRecord,
 } from '@/lib/contacts';
-import { useUI } from '@/lib/ios/store';
+import { useUI, useSettings } from '@/lib/ios/store';
 
 /**
  * 联系人 App：
@@ -871,6 +871,8 @@ interface ContactFormState {
   wechatPassword: string;
   qqId: string;
   qqPassword: string;
+  /** 语音音色：该角色在电话/微信/QQ 里说话用的 voiceId（空 = 用全局默认音色） */
+  voiceId: string;
 }
 
 const EMPTY_FORM: ContactFormState = {
@@ -892,6 +894,7 @@ const EMPTY_FORM: ContactFormState = {
   wechatPassword: '',
   qqId: '',
   qqPassword: '',
+  voiceId: '',
 };
 
 function formFromRecord(c: ContactRecord): ContactFormState {
@@ -915,6 +918,7 @@ function formFromRecord(c: ContactRecord): ContactFormState {
     wechatPassword: pick(c.wechatPassword),
     qqId: pick(c.qqId),
     qqPassword: pick(c.qqPassword),
+    voiceId: pick(c.voiceId ?? null),
   };
 }
 
@@ -938,6 +942,8 @@ function ContactFormView({
   const tabMeta = TABS.find((t) => t.key === kind)!;
 
   const [form, setForm] = useState<ContactFormState>(initial ? formFromRecord(initial) : EMPTY_FORM);
+  /** 设置「语音 API」拉取到的音色列表（点选填充 voiceId；也可手动填） */
+  const voiceOptions = useSettings((s) => s.ttsVoices);
   const [avatar, setAvatar] = useState<string | null>(initial?.avatar ?? null);
   const [personaFileName, setPersonaFileName] = useState<string | null>(null);
   const [ownerId, setOwnerId] = useState<string>(initial?.ownerId ?? '');
@@ -1203,6 +1209,47 @@ function ContactFormView({
               />
             </BoxField>
           )}
+        </div>
+
+        {/* 语音音色（电话/微信/QQ 说话声音）：从设置拉取的音色列表点选，或手动填 voiceId；留空用全局默认 */}
+        <SectionTitle>语音音色</SectionTitle>
+        <div className="flex flex-col gap-3.5">
+          <BoxField label="voiceId">
+            <input
+              value={form.voiceId}
+              onChange={(e) => set('voiceId')(e.target.value)}
+              placeholder="留空 = 用全局默认音色"
+              aria-label="语音音色 voiceId"
+              className={boxInputCls}
+            />
+          </BoxField>
+          {voiceOptions.length > 0 && (
+            <div className="thin-scrollbar flex max-h-24 flex-wrap gap-1.5 overflow-y-auto rounded-[12px] bg-muted/30 p-2.5">
+              {voiceOptions.map((v) => {
+                const active = form.voiceId.trim() === v.id;
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => set('voiceId')(active ? '' : v.id)}
+                    aria-pressed={active}
+                    title={v.name === v.id ? v.id : `${v.name}（${v.id}）`}
+                    className={`max-w-full truncate rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                      active
+                        ? 'border-foreground bg-foreground text-background'
+                        : 'border-border/70 bg-background/60 text-foreground/75 active:bg-muted/60'
+                    }`}
+                  >
+                    {v.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
+            该角色的说话声音，电话、微信、QQ 通用。音色可从「设置 › 语音 API」拉取列表后点选，也可手动填写；
+            没设置时用全局默认音色，全局也没设置时用系统安全默认。
+          </p>
         </div>
 
         {/* 人设 / 背景 */}

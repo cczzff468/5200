@@ -130,6 +130,8 @@ import {
 } from './qq';
 import { canPay, executePayment, gainToWallet, loadBankCards, loadPayPwd, loadWallet, round2 } from './qq';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender, splitReplySegments } from '@/lib/reply-count';
+import { stopSpeaking } from '@/lib/ios/tts-client';
+import { VoicePlayButton } from '@/components/apps/voice-play';
 import { getSentenceSend, hasPendingBatch, markPendingBatch, saveSentenceSend } from '@/lib/sentence-send';
 import {
   actionVerb,
@@ -1883,6 +1885,8 @@ export function QqGroupChatPage({
 }) {
   const gid = group.id;
   const sKey = sessionKeyOf(gid);
+  // 退出群聊页/切群：停止语音播放并释放播放器（单例，防跨群串音）
+  useEffect(() => () => stopSpeaking(), [gid]);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   // 存储侧追加（后台落盘的事件/开场白）→ 广播后即时重读（与微信同构）
   useEffect(() => {
@@ -3714,6 +3718,15 @@ export function QqGroupChatPage({
                       })()}
                       <span>{cleanBubbleText(m.content)}</span>
                     </div>
+                    {/* 语音播放：按发言人角色音色朗读（senderId 对应联系人 voiceId → 全局默认 → 安全默认） */}
+                    {!mine && m.content && (
+                      <VoicePlayButton
+                        contactId={m.senderId === 'me' ? null : m.senderId}
+                        text={m.content}
+                        className="mt-[4px]"
+                        onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
+                      />
+                    )}
                   </div>
                 </div>
               )}

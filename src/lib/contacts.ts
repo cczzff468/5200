@@ -53,6 +53,9 @@ export interface ContactRecord {
   realName?: string | null;
   /** 备注名（仅机主自己可见的显示名；设置后聊天界面/消息列表优先显示备注，AI 人设不变） */
   remark?: string | null;
+  /** 语音音色（该角色在电话/微信/QQ 里说活用的 voiceId；空 = 用全局默认音色）。
+   *  每次播放时实时重读，切角色/改音色后下一句即生效 */
+  voiceId?: string | null;
   createdAt: string;
 }
 
@@ -88,6 +91,8 @@ export interface ContactPayload {
   friendQq?: boolean;
   friendSms?: boolean;
   remark?: string | null;
+  /** 语音音色（角色在电话/微信/QQ 里的说话音色；空 = 用全局默认） */
+  voiceId?: string | null;
 }
 
 function randInt(min: number, max: number): number {
