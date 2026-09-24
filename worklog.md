@@ -6575,3 +6575,21 @@ Stage Summary:
 - 三组丢失功能全部找回：①短信拉黑开关 ②微信/QQ 单聊@提及 ③世界书空名单诊断+跳转创建（store/contacts/worldbook 三件套）
 - 经验：排查「功能消失」先查 UI 入口接线（处理函数在、开关不显示 = 属性漏传），再对照 backup 分支 diff；cmp-feat.mjs 可复用做双分支功能审计
 - 涉及文件：chat.tsx、wechat.tsx、qq.tsx、worldbook.tsx、contacts.tsx、store.ts、scripts/cmp-feat.mjs（新增）
+
+---
+Task ID: 1（本次会话）
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取仓库 cczzff468/5200 到工作区并启动验证，等待用户提出修改/新增功能需求
+
+Work Log:
+- 克隆 https://github.com/cczzff468/5200.git 到 /home/z/repo-5200（远程含 backup/old-main-0919、backup/remote-main-0923 两个备份分支），HEAD=6b82744
+- rsync 同步全部源码 + .git 到 /home/z/my-project（upload/ 目录宿主 I/O 报错为 chgrp 元数据问题，文件实际完整；二次校验 --checksum 通过，git HEAD 一致）
+- bun install（14 packages）、写入 .env（DATABASE_URL=file:/home/z/my-project/db/custom.db）、bun run db:push 成功
+- 3000 端口启动 dev server（首次 curl 000 为启动竞态，实际进程已在；第二次重复启动报 EADDRINUSE 属预期，单一 next-server v16.1.3 正常服务）
+- agent-browser 端到端验证（390×844）：锁屏渲染/上滑解锁手势/主屏图标网格/天气小组件真实数据（19°C 毛毛雨 北京，API 链路通）/信息 App 打开/发送「你好呀，测试一下」→ 内置模型成功回复「你好！很高兴见到你，测试成功！…」
+- errors 面板零错误，dev.log 无 error/warn
+
+Stage Summary:
+- 仓库已完整落位工作区并跑通核心链路（锁屏→解锁→聊天→AI 兜底回复），环境就绪等待用户需求
+- 备份分支可用：origin/backup/old-main-0919、origin/backup/remote-main-0923（Task 8 功能审计时的对照基线）
+- PAT 已配置在本地 origin remote（用户聊天中提供），改动验证后可直接 push
