@@ -81,6 +81,16 @@ export const SAFE_VOICE_BY_PROVIDER: Record<TtsConfig['provider'], string> = {
   openai: 'alloy',
 };
 
+/**
+ * OpenAI 标准六音色（可作为点选建议）：
+ * 服务商没有音色列表接口时（第三方 OpenAI 兼容大多如此），用这组兜底展示，
+ * 用户可点选也可手动填；大多数 OpenAI 兼容网关都兼容这六个标准音色名。
+ */
+export const OPENAI_STANDARD_VOICES: TtsVoiceOption[] = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((id) => ({
+  id,
+  name: id,
+}));
+
 export type PasscodeLength = 4 | 6;
 
 export interface LockConfig {

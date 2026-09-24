@@ -221,10 +221,16 @@ export async function directFetchModels(
   if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
 
   let lastErr: unknown = null;
+  let sawAnyResponse = false;
   for (const url of candidates) {
     try {
       const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(timeoutMs) });
+      sawAnyResponse = true;
       if (res.status === 401) return { models: [], error: 'API Key 无效或未授权（401）' };
+      if (res.status === 404 || res.status === 405 || res.status === 501) {
+        // 该路径不存在：尝试下一个候选（很多网关只有 chat/completions）
+        continue;
+      }
       if (!res.ok) return { models: [], error: `服务返回异常（HTTP ${res.status}）` };
       const payload: unknown = await res.json().catch(() => null);
       if (!payload) continue;
@@ -237,6 +243,13 @@ export async function directFetchModels(
     } catch (err) {
       lastErr = err;
     }
+  }
+  if (sawAnyResponse) {
+    // 有响应但都没解析出模型（多候选全 404 等）：优雅降级为手动填写，不误报网络错误
+    return {
+      models: [],
+      hint: '该 API 未提供模型列表接口，不影响聊天使用；请直接手动填写模型名。',
+    };
   }
   return {
     models: [],

@@ -39,6 +39,7 @@ import { useUI } from '@/lib/ios/store';
 import { genId, localDB } from '@/lib/ios/db';
 import {
   DEFAULT_API_CONFIG,
+  OPENAI_STANDARD_VOICES,
   WALLPAPER_PRESETS,
   useSettings,
   type ApiPreset,
@@ -2016,10 +2017,10 @@ function AboutPage({ onBack }: { onBack: () => void }) {
 
 // ---------------- 语音 API（TTS） ----------------
 
-/** 服务商预设值（切换服务商时地址/模型名联动，用户仍可改） */
+/** 服务商预设值（切换服务商时地址/模型名联动，用户仍可改）；模型 chips 含常见第三方 OpenAI 兼容 TTS 模型，拉不到列表时也可直接点选 */
 const TTS_PROVIDER_PRESETS = {
   minimax: { baseUrl: 'https://api.minimax.chat', model: 'speech-01-turbo', modelChips: ['speech-01-turbo', 'speech-01-hd', 'speech-02-turbo', 'speech-02-hd'] },
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1', modelChips: ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts'] },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1', modelChips: ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts', 'qwen-tts-latest', 'FunAudioLLM/CosyVoice2-0.5B'] },
 } as const;
 
 /** 拉取不到模型列表时的降级提示（语音合成语境，区别于聊天 API 的提示文案） */
@@ -2113,12 +2114,20 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         return;
       }
       const list = data.voices ?? [];
-      setTtsVoices(list);
       if (list.length === 0) {
-        // OpenAI 兼容服务商无音色接口：优雅降级，手动填写
-        setVoicesHint('该服务商没有提供音色列表接口，请直接手动填写音色（如 alloy / 男声 等）');
-        setVoicePanelOpen(false);
+        if (!isMinimax) {
+          // 第三方 OpenAI 兼容服务商无音色接口：展示 OpenAI 标准六音色作点选建议（也可手动填）
+          setTtsVoices(OPENAI_STANDARD_VOICES);
+          setVoicesHint('该服务商没有提供音色列表接口，已展示 OpenAI 标准音色供点选；也可以在输入框直接手动填写任意音色名。');
+          setVoiceQuery('');
+          setVoicePanelOpen(true);
+        } else {
+          // MiniMax 拉不到（一般缺 GroupId）：优雅降级，手动填写
+          setVoicesHint('该服务商没有提供音色列表接口，请直接手动填写音色（如 female-shaonv 等）');
+          setVoicePanelOpen(false);
+        }
       } else {
+        setTtsVoices(list);
         setVoiceQuery('');
         setVoicePanelOpen(true);
       }

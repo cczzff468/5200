@@ -110,7 +110,6 @@ export async function POST(request: Request) {
     '该 API 未提供模型列表接口，不影响聊天使用；请在模型输入框直接手动填写模型名（可查阅服务商文档）。';
 
   let lastUrl = candidates[0];
-  let sawNotFound = false;
   let sawAnyResponse = false;
 
   for (const url of candidates) {
@@ -162,7 +161,6 @@ export async function POST(request: Request) {
     }
     if (res.status === 404 || res.status === 405 || res.status === 501) {
       // 该路径不存在：尝试下一个候选（很多反代只有 chat/completions）
-      sawNotFound = true;
       continue;
     }
     if (!res.ok) {
@@ -189,12 +187,6 @@ export async function POST(request: Request) {
       { status: 502 }
     );
   }
-  if (sawNotFound || candidates.length > 1) {
-    // 有响应但都不可用/无模型：优雅降级，不阻塞聊天
-    return NextResponse.json({ models: [], hint: MANUAL_HINT, url: lastUrl });
-  }
-  return NextResponse.json(
-    { error: '无法连接到目标 API：地址不可达或服务商网络受限', url: lastUrl },
-    { status: 502 }
-  );
+  // 有响应但拿不到模型列表（404/405/501、200 但非模型列表 JSON 等）：优雅降级，不阻塞使用
+  return NextResponse.json({ models: [], hint: MANUAL_HINT, url: lastUrl });
 }
