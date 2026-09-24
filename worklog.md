@@ -6506,3 +6506,28 @@ Stage Summary:
 - 自定义壁纸三层→两层：删除 blur(36px)+scale(1.1) 模糊延伸层，四周改为锐利拉伸原图延伸
 - 涉及文件：src/components/ios/PhoneShell.tsx、src/components/ios/LockScreen.tsx
 - 权衡：锐利拉伸在壁纸与延伸带衔接处有轻微形变观感（原 blur 的存在也掩盖了衔接），若用户不接受可再换 cover 裁切或纯色底
+
+---
+Task ID: 7
+Agent: main (Z.ai Code)
+Task: 壁纸延伸带「不容易看出来」方案（用户：「有没有不容易看出来的办法」）
+
+Work Log:
+- 方案：边缘色延伸带——取壁纸最外一行/列像素沿垂直方向千倍拉伸铺满整条延伸带（backgroundSize 千倍 + 贴边定位），无 blur 滤镜；接缝处延伸带颜色 = 前景边缘像素颜色，逐像素同色连续
+- 新建 src/components/ios/WallpaperLayers.tsx（CustomWallpaperLayers，主屏/锁屏共用）：
+  兜底层（拉伸原图+不透明底色，兼作 ResizeObserver 测量元素）→ 比例已知后渲染上/下/左/右四条延伸带 + contain 前景；
+  几何 = 实测壳尺寸 × 图片宽高比（模块级 ratio 缓存 + 渲染期派生状态模式，规避 react-hooks/set-state-in-effect）；
+  延伸带只在缺带侧有实际宽度（另一侧宽 0 藏于前景下），无需判断方向；全部图层置于 -2px 超采样盒，延伸带向前景下压 2px 杜绝亚像素接缝
+- PhoneShell.tsx / LockScreen.tsx 改为调用共用组件（删除各自的两层内联实现）
+- tsc + lint 零错误（lint 曾报 set-state-in-effect，已按官方模式重构）
+- 实测（agent-browser 360×800，三张测试壁纸）：
+  ① 800×800 色带图（黄描边）：延伸带=边缘行纯色，与前景描边完全融合，接缝不可见；四缘无黑带
+  ② 800×800 照片类（天空渐变+山脉）：顶接缝上下色差 Δ=1/255、底接缝 Δ≤3/255——数值上不可分辨，整屏如一张连续照片
+  ③ 360×840 窄图（触发左右带路径）：左右接缝两侧逐像素全等 (255,140,0)，上下缘前景直达
+  解锁手势正常、拍立得/小组件正常（D3/D4 不回退）
+- 排障：errors 面板 4 条 ReferenceError(CustomWallpaperLayers) 为编辑期间 HMR 中间态残留（JSX 先于 import 落盘）；关浏览器重开会话验证 0 错误
+
+Stage Summary:
+- D6：壁纸四周从「拉伸原图延伸」升级为「边缘色延伸带」——无模糊、无接缝、无内容跳变，肉眼几乎看不出垫了东西
+- 涉及文件：src/components/ios/WallpaperLayers.tsx（新增）、PhoneShell.tsx、LockScreen.tsx
+- 经验：agent-browser errors 为会话级累积且 --clear 可能不生效，验证需关会话重开；多文件协作改动应一次保存完（避免 HMR 中间态）

@@ -10,6 +10,7 @@ import { formatIOSTime, useNow } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
 import { weatherCodeInfo, useWeatherSnapshot } from '@/components/apps/weather-core';
 import PasscodePad from './PasscodePad';
+import { CustomWallpaperLayers } from './WallpaperLayers';
 
 // 锁屏直达相机：相机 App 懒加载（点开锁屏相机时才拉取，不拖累首屏）
 const CameraApp = dynamic(() => import('@/components/apps/camera'), { ssr: false });
@@ -211,34 +212,10 @@ export default function LockScreen() {
       aria-label="锁屏"
     >
       {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸）。
-          自定义壁纸两层绘制（与主屏 PhoneShell 同款，详见彼处注释）：
-          ① 不透明底垫（拉伸原图，无滤镜——四周延伸带为锐利原图，用户要求不做模糊延伸）；
-          ② contain 前景（完整不裁切）。
-          预设单层 cover。-inset-[2px] 超采样防边缘露底色细缝 */}
+          自定义壁纸绘制与主屏 PhoneShell 同用 CustomWallpaperLayers（D6 边缘色延伸带，详见彼处）；
+          预设单层 cover */}
       {lockCustomUrl ? (
-        <>
-          <div
-            aria-hidden="true"
-            className="absolute -inset-[2px]"
-            style={{
-              backgroundColor: '#1c1c1e',
-              backgroundImage: `url(${lockCustomUrl})`,
-              backgroundSize: '100% 100%',
-              backgroundPosition: 'center',
-              backgroundRepeat: 'no-repeat',
-            }}
-          />
-          <div
-            aria-hidden="true"
-            className="absolute -inset-[2px]"
-            style={{
-              backgroundImage: `url(${lockCustomUrl})`,
-              backgroundSize: 'contain',
-              backgroundPosition: 'center',
-              backgroundRepeat: 'no-repeat',
-            }}
-          />
-        </>
+        <CustomWallpaperLayers url={lockCustomUrl} />
       ) : (
         <div className="absolute -inset-[2px]" style={wallpaperStyle} aria-hidden="true" />
       )}

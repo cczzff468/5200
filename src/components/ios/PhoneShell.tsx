@@ -9,6 +9,7 @@ import { migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
 import StatusBar from './StatusBar';
 import HomeScreen from './HomeScreen';
+import { CustomWallpaperLayers } from './WallpaperLayers';
 import AppWindow from './AppWindow';
 import AppSwitcher from './AppSwitcher';
 import LockScreen from './LockScreen';
@@ -164,40 +165,11 @@ export default function PhoneShell() {
           dark ? 'dark' : ''
         }`}
       >
-        {/* 壁纸层：自定义壁纸两层绘制——
-            ① 不透明底垫：拉伸铺满原图（无滤镜无变换，元素边缘即原图边缘色，壳内绝对不透明）。
-               比例不一致时四周延伸带为锐利原图——用户要求不做模糊环境色延伸（旧版 blur(36px)
-               层会在壁纸四周垫一圈模糊光晕，已移除）；
-            ② contain 前景：完整显示原图不裁切（宽高比与屏幕一致时与底垫重合、视觉与 cover 一致；
-               不一致时屏幕边缘是原图边缘色的延伸而非被截断的设计元素，消除「分割线/套框」观感）。
-            预设壁纸保持单层 cover。前景/底垫 -inset-[2px] 超采样：超出部分被壳层
-            overflow-hidden 裁掉，任何缩放/像素比下四边都不会露出底色细缝 */}
+        {/* 壁纸层：自定义壁纸绘制见 CustomWallpaperLayers（D6：四周「边缘色延伸带」——
+            取原图最外一行/列像素拉伸铺出，无 blur、接缝逐像素同色，肉眼几乎看不出垫了东西；
+            预设壁纸保持单层 cover，-inset-[2px] 超采样防边缘细缝） */}
         {customWallpaperUrl ? (
-          <>
-            <div
-              aria-hidden="true"
-              className="absolute -inset-[2px]"
-              style={{
-                backgroundColor: '#1c1c1e',
-                backgroundImage: `url(${customWallpaperUrl})`,
-                // 拉伸铺满而非 cover：形变只出现在边缘延伸带里（0.45 比例下仅 ~5px 宽），
-                // 且元素边缘颜色与原图四边一致——与上层 contain 前景衔接无色差
-                backgroundSize: '100% 100%',
-                backgroundPosition: 'center',
-                backgroundRepeat: 'no-repeat',
-              }}
-            />
-            <div
-              aria-hidden="true"
-              className="absolute -inset-[2px]"
-              style={{
-                backgroundImage: `url(${customWallpaperUrl})`,
-                backgroundSize: 'contain',
-                backgroundPosition: 'center',
-                backgroundRepeat: 'no-repeat',
-              }}
-            />
-          </>
+          <CustomWallpaperLayers url={customWallpaperUrl} />
         ) : (
           <div className="absolute -inset-[2px]" style={wallpaperStyle} aria-hidden="true" />
         )}
