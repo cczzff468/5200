@@ -211,8 +211,10 @@ export default function LockScreen() {
       aria-label="锁屏"
     >
       {/* 锁屏自绘壁纸层（盖住主屏幕，只透出壁纸）。
-          自定义壁纸双层绘制（与主屏同款）：底层 cover+模糊+放大铺满，上层 contain 完整不裁切；
-          预设单层 cover。全部 -inset-[2px] 超采样防边缘露底色细缝 */}
+          自定义壁纸三层绘制（与主屏 PhoneShell 同款，详见彼处注释）：
+          ① 不透明底垫（拉伸原图，无滤镜——模糊层淡出环透出它而非黑底，四缘不生暗带）；
+          ② 模糊层（拉伸+blur+scale 作环境色延伸）；③ contain 前景（完整不裁切）。
+          预设单层 cover。-inset-[2px] 超采样防边缘露底色细缝 */}
       {lockCustomUrl ? (
         <>
           <div
@@ -221,8 +223,16 @@ export default function LockScreen() {
             style={{
               backgroundColor: '#1c1c1e',
               backgroundImage: `url(${lockCustomUrl})`,
-              // 拉伸铺满而非 cover：模糊后形变不可见，但边缘颜色与原图四边一致，
-              // 与上层 contain 前景衔接无色差（cover 会裁到中间色导致上下带异色）
+              backgroundSize: '100% 100%',
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat',
+            }}
+          />
+          <div
+            aria-hidden="true"
+            className="absolute -inset-[2px]"
+            style={{
+              backgroundImage: `url(${lockCustomUrl})`,
               backgroundSize: '100% 100%',
               backgroundPosition: 'center',
               backgroundRepeat: 'no-repeat',

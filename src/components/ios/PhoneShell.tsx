@@ -164,11 +164,16 @@ export default function PhoneShell() {
           dark ? 'dark' : ''
         }`}
       >
-        {/* 壁纸层：自定义壁纸双层绘制——底层 cover+模糊+放大（色彩延伸铺满全屏），
-            上层 contain 完整显示原图不裁切（宽高比与屏幕一致时两层重合、视觉与 cover 一致；
-            不一致时屏幕边缘是模糊自延伸而非被截断的设计元素，消除“分割线/套框”观感且不留白边）。
-            预设壁纸保持单层 cover。全部用 -inset-[2px] 四周超采样：
-            超出部分被壳层 overflow-hidden 裁掉，任何缩放/像素比下四边都不会露出底色细缝 */}
+        {/* 壁纸层：自定义壁纸三层绘制——
+            ① 不透明底垫：拉伸铺满原图（无滤镜无变换，元素边缘即原图边缘色，壳内绝对不透明）；
+            ② 模糊层：同样拉伸 + blur(36px) + scale(1.1) 作环境色延伸。blur 会在元素绘制边缘
+               ~2×半径内拉入透明度（scale(1.1) 只能把淡出环推出 ~20px），若直接叠在黑壳上，
+               屏幕四缘会出现一圈「黑黑的」渐变暗带（360/390 视口实测均在）——
+               有了 ① 的底垫，淡出环透出的是同图拉伸色而非黑底，暗带消失且边缘色保真；
+            ③ contain 前景：完整显示原图不裁切（宽高比与屏幕一致时与底垫重合、视觉与 cover 一致；
+               不一致时屏幕边缘是原图边缘色的延伸而非被截断的设计元素，消除「分割线/套框」观感）。
+            预设壁纸保持单层 cover。前景/底垫 -inset-[2px] 超采样：超出部分被壳层
+            overflow-hidden 裁掉，任何缩放/像素比下四边都不会露出底色细缝 */}
         {customWallpaperUrl ? (
           <>
             <div
@@ -177,8 +182,18 @@ export default function PhoneShell() {
               style={{
                 backgroundColor: '#1c1c1e',
                 backgroundImage: `url(${customWallpaperUrl})`,
-                // 拉伸铺满而非 cover：模糊后形变不可见，但边缘颜色与原图四边一致，
-                // 与上层 contain 前景衔接无色差（cover 会裁到中间色导致上下带异色）
+                // 拉伸铺满而非 cover：形变只出现在边缘延伸带里（0.45 比例下仅 ~5px 宽），
+                // 且元素边缘颜色与原图四边一致——与上层 contain 前景衔接无色差
+                backgroundSize: '100% 100%',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+              }}
+            />
+            <div
+              aria-hidden="true"
+              className="absolute -inset-[2px]"
+              style={{
+                backgroundImage: `url(${customWallpaperUrl})`,
                 backgroundSize: '100% 100%',
                 backgroundPosition: 'center',
                 backgroundRepeat: 'no-repeat',

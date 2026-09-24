@@ -6447,3 +6447,24 @@ Stage Summary:
 - 根因：分页视口只占屏幕中段约 600px，超高页面的底部小组件被 overflow-hidden 悬空裁掉（静止状态可见的「被盖住」）
 - 修复模式：视口全屏化（横+纵）+ 每页竖向滚动 + 页点/Dock 悬浮 + 拖拽期滚动冻结；scroll-top 静态布局零变化
 - 涉及文件：src/components/ios/HomeScreen.tsx（视口/页面结构、触控手势、拖拽冻结）
+
+---
+Task ID: D4-edge-artifacts
+Agent: Z.ai Code (main)
+Task: 用户反馈三个新问题——①屏幕边缘有「黑黑的东西」②拍立得小组件上面的角缺了③拍立得两侧背后有黑色影子。定位根因并修复（用户实机视口 360×800 CSS px，此前 E2E 全部在 390 宽下做导致漏网）
+
+Work Log:
+- 下载用户两张截图像素级测量：shot1（1080×2400 整机）四缘采样发现左右缘各有一条 ~4.3 CSS px 宽的暗带（131-176 灰 vs 壁纸 246），用灵动岛/Home 条（134 CSS px 实测 398px）+ 胶带宽度标定出用户视口 = 360 CSS px（s=3.0）
+- ①边缘黑带根因：自定义壁纸模糊延伸层（blur(36px)+scale(1.1)）的 CSS filter blur 会在元素绘制边缘 ~2×半径内拉入透明度，scale(1.1) 只能把淡出环推出 ~20px，壳边缘处该层仅 ~86% 不透明 → 黑色壳底透出形成暗带；壁纸本身左缘内容偏暗时更明显（即「黑黑的东西」与小组件两侧「黑影子」）
+- ①修复 PhoneShell/LockScreen：壁纸层改三层结构——新增不透明底垫（拉伸原图、无滤镜无变换，边缘色=原图边缘色，壳内绝对不透明），模糊层的淡出环透出底垫而非黑壳；contain 前景不变。灰壁纸实测 390/360 两视口四缘全部等于壁纸本色（204），黑带消失；用户壁纸下边缘色与原图边缘色一致（133/160 对照吻合），无黑色渗出
+- ②拍立得缺角根因：PolaroidCardWidget 行自然宽 324px（3×100+2×12）+ 斜置白框旋转包围盒左右各外扩 ~7px，需要容器 ≥338px；360 视口下格子只有 320px（px-5），flex justify-center 溢出 + 旋转外扩使左右两框的包围盒越过容器边缘 ~8px，被容器 overflow-hidden rounded-[24px] 在 x=20/340 处垂直切掉——正是左框左上角/右框右上角「缺了一块」且白框左边消失（DOM getBoundingClientRect 实测 frame1 bbox x=12 越过容器左缘 20）
+- ②修复 PolaroidCard：行改为固定设计宽 350px（3×100+2×12+两侧 13px 旋转余量）+ ResizeObserver 按容器宽等比缩放（scale=min(1, W/350)，useLayoutEffect 首帧前测量防闪烁）——390 视口 scale=1 与旧渲染逐像素一致（DOM 实测 frames x=27/143/248 全在容器内），360 视口 scale=0.914 整行完整缩小，四角全部可见；画廊 326px 预览格（旧版同样裁角）同步修复
+- ③「两侧黑影子」= ①的暗带在小组件两侧的观感 + 壁纸自身边缘深色内容的虚化延伸，①修复后黑色渗出消失，剩余为壁纸自身内容的正常模糊延伸（与相邻锐利内容同色衔接）
+- E2E 回归：390×844 scale=1 拍立得 DOM 逐项一致；编辑模式（长按进入、× 角标、画廊开关、完成退出）正常；拖拽冒烟测试正常；锁屏自定义壁纸四缘均匀；桌面 900×900 机身框模式正常；agent-browser errors 无页面错误；dev.log 无新增错误；tsc + lint 零错误
+- 测试数据清理：public/tmp-wallpaper.jpg、public/tmp-gray.jpg 已删除
+
+Stage Summary:
+- 根因一：CSS blur 的边缘透明淡出环叠在黑壳上 → 屏幕四缘暗带（修复：不透明底垫承接淡出环，三层壁纸结构）
+- 根因二：拍立得行 324px+旋转外扩 > 320px 格子（360 视口）→ overflow-hidden 裁掉左右两框的外上角（修复：设计宽 350 + ResizeObserver 等比缩放，≥350 视口零变化）
+- 关键教训：此前所有 E2E 只测 390×844；用户实机是 360 CSS px（Android 常见），凡「固定尺寸行 vs 随视口收缩的格子」都要在 360 下验证
+- 涉及文件：src/components/ios/PhoneShell.tsx、src/components/ios/LockScreen.tsx、src/components/ios/PolaroidCard.tsx

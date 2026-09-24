@@ -6,7 +6,7 @@
  * 点击（主屏）打开编辑弹层；数据存 localStorage，图片经 canvas 压缩控制体积。
  * 照片主体透明无底卡——直接浮在壁纸上（与参考图一致）。
  */
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { fileToScaledDataURL } from './ProfileCard';
 
 /** 拍立得小组件数据：三张照片 dataURL；null = 用内置默认图 */
@@ -48,28 +48,54 @@ const FRAMES = [
   { rot: 7, y: 9, tape: -5 },
 ];
 
+/** 行设计宽度：3×100px 白框 + 2×12px 间距 + 两侧旋转外扩余量（±13px）。
+ *  容器窄于该值时（如 360px 视口下格子只有 320px）整体等比缩小，
+ *  保证斜置白框的包围盒（旋转后左右各外扩 ~7px）不会被容器 overflow-hidden 裁掉角。 */
+const ROW_DESIGN_WIDTH = 350;
+
 export function PolaroidCardWidget({ data }: { data: PolaroidCardData }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+
+  // 容器宽度（=所在格子宽）不足 350px 时按比例缩小整行：
+  // 用 useLayoutEffect 首帧前量一次（避免窄屏首帧闪现被裁的布局），ResizeObserver 跟随后续变化
+  // （编辑拖拽的浮动副本、小组件画廊预览格等容器宽度各不相同，同一套逻辑自适应）。
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const measure = () => setScale(Math.min(1, box.clientWidth / ROW_DESIGN_WIDTH));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div className="relative flex h-[168px] w-full select-none items-center justify-center gap-[12px] overflow-hidden rounded-[24px]">
-      {FRAMES.map((f, i) => (
-        <div key={i} className="relative" style={{ transform: `rotate(${f.rot}deg) translateY(${f.y}px)` }}>
-          {/* 米色胶带（压在白框上缘） */}
-          <span
-            aria-hidden="true"
-            className="absolute -top-[8px] left-1/2 z-10 h-[15px] w-[46px] rounded-[2px] bg-[#ece4cd]/90 shadow-[0_1px_2px_rgba(0,0,0,0.2)]"
-            style={{ transform: `translateX(-50%) rotate(${f.tape}deg)` }}
-          />
-          {/* 白框拍立得（下缘留白更宽）；未自定义时回退内置胶片照 */}
-          <div className="w-[100px] rounded-[5px] bg-white p-[5px] pb-[17px] shadow-[0_5px_14px_rgba(0,0,0,0.3)]">
-            <img
-              src={data.photos[i] || POLAROID_PHOTO_DEFAULTS[i]}
-              alt={`拍立得照片 ${i + 1}`}
-              draggable={false}
-              className="h-[104px] w-full select-none rounded-[2px] object-cover"
+    <div ref={boxRef} className="relative h-[168px] w-full select-none overflow-hidden rounded-[24px]">
+      <div
+        className="absolute left-1/2 top-1/2 flex items-center justify-center gap-[12px]"
+        style={{ width: ROW_DESIGN_WIDTH, height: 168, transform: `translate(-50%, -50%) scale(${scale})` }}
+      >
+        {FRAMES.map((f, i) => (
+          <div key={i} className="relative" style={{ transform: `rotate(${f.rot}deg) translateY(${f.y}px)` }}>
+            {/* 米色胶带（压在白框上缘） */}
+            <span
+              aria-hidden="true"
+              className="absolute -top-[8px] left-1/2 z-10 h-[15px] w-[46px] rounded-[2px] bg-[#ece4cd]/90 shadow-[0_1px_2px_rgba(0,0,0,0.2)]"
+              style={{ transform: `translateX(-50%) rotate(${f.tape}deg)` }}
             />
+            {/* 白框拍立得（下缘留白更宽）；未自定义时回退内置胶片照 */}
+            <div className="w-[100px] rounded-[5px] bg-white p-[5px] pb-[17px] shadow-[0_5px_14px_rgba(0,0,0,0.3)]">
+              <img
+                src={data.photos[i] || POLAROID_PHOTO_DEFAULTS[i]}
+                alt={`拍立得照片 ${i + 1}`}
+                draggable={false}
+                className="h-[104px] w-full select-none rounded-[2px] object-cover"
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
