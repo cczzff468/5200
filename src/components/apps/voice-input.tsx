@@ -13,11 +13,12 @@
  *   未命中时右滑 → 转文字、明显上滑/左滑 → 取消，原松开 → 发送
  * - QqVoicePanel / QqVoiceHoldButton：QQ 风语音面板（参考 QQ App：工具栏下方展开
  *   「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签）。大圆钮按住开录且**原位不动**（原位光环）：
+ *   录音时**计时+两侧波形贴在面板内大圆钮正上方**（不飞到消息区顶部）；
  *   左滑/滑到浮层「文」→ 转文字，右滑/上滑/滑到「×」→ 取消，原松开 → 发送
  * - RecordOverlayWx：微信风录音浮层 —— 暗幕 + 绿色气泡实时波形（屏幕中部偏下）+ 底部「取消 / 滑到这里 转文字」
  *   + 浅色「松开 发送」条
- * - RecordOverlayQq：QQ 风录音浮层 —— 白幕只罩消息区，计时/两侧波形/左「文」右「×」贴白幕下缘
- *   （原位大圆钮正上方），底部透明窗露出语音面板：大圆钮不上移、原位可见
+ * - RecordOverlayQq：QQ 风录音浮层 —— 白幕只罩消息区，左「文」右「×」与「松开」提示贴白幕下缘；
+ *   计时/波形在面板内大圆钮正上方（QqVoicePanel 录音条），底部透明窗露出语音面板：大圆钮不上移、原位可见
  * - useSttPreview / SttPreviewOverlay：「划到转文字」松开后先识别再预览，用户决定发送文字 /
  *   发送语音（原始录音）/ 取消，不再直接发送
  * - 权限被拒/不支持录音：onStartError 提示，仍可继续用文字聊天
@@ -563,7 +564,8 @@ export function QqVoiceHoldButton({
   );
 }
 
-/** QQ 语音面板（工具栏下方展开）：「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签（装饰） */
+/** QQ 语音面板（工具栏下方展开）：「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签（装饰）
+ *  录音时：计时+两侧实时波形贴在面板内大圆钮正上方（绝对定位，不挤动大圆钮原位） */
 export function QqVoicePanel({
   rec,
   holdTestId = 'qq-voice-hold',
@@ -571,9 +573,41 @@ export function QqVoicePanel({
   rec: VoiceRecorder;
   holdTestId?: string;
 }) {
+  const recording = rec.phase === 'recording';
+  const bars = rec.levels.slice(-7);
+  while (bars.length < 7) bars.unshift(0.08);
+  const rightBars = [...bars].reverse();
   return (
     <div className="relative z-10 flex h-[290px] shrink-0 select-none flex-col items-center bg-white pb-4 dark:bg-[#1B1C1F]" data-testid="qq-voice-panel">
-      <p className="mt-4 text-[17px] text-black/40 dark:text-white/40">按住说话</p>
+      <p className="mt-4 text-[17px] text-black/40 dark:text-white/40">{rec.phase === 'starting' ? '准备中…' : '按住说话'}</p>
+      {/* 录音条：计时+波形贴在原位大圆钮正上方（面板内；面板 relative 已定位，大圆钮布局不受影响） */}
+      {recording && (
+        <div
+          className="pointer-events-none absolute left-0 right-0 top-[44px] flex h-[30px] items-center justify-center"
+          data-testid="qq-record-strip"
+        >
+          {bars.map((v, i) => (
+            <span
+              key={`l${i}`}
+              className="w-[3px] rounded-full bg-black/25 transition-[height] duration-150 ease-out dark:bg-white/35"
+              style={{ height: `${Math.max(3, v * 20)}px` }}
+            />
+          ))}
+          <span
+            className="mx-3 min-w-[56px] text-center text-[19px] font-light tabular-nums text-black/75 dark:text-white/75"
+            data-testid="voice-record-timer"
+          >
+            {timeLabelOf(rec.seconds)}
+          </span>
+          {rightBars.map((v, i) => (
+            <span
+              key={`r${i}`}
+              className="w-[3px] rounded-full bg-black/25 transition-[height] duration-150 ease-out dark:bg-white/35"
+              style={{ height: `${Math.max(3, v * 20)}px` }}
+            />
+          ))}
+        </div>
+      )}
       <div className="flex flex-1 items-center">
         <QqVoiceHoldButton rec={rec} testId={holdTestId} />
       </div>
@@ -593,13 +627,14 @@ function timeLabelOf(seconds: number): string {
   return `0:${String(Math.min(59, sec)).padStart(2, '0')}`;
 }
 
-/** 微信风录音浮层：暗幕 + 绿色气泡实时波形 + 底部「取消 / 滑到这里 转文字」+ 浅色「松开 发送」条 */
+/** 微信风录音浮层：暗幕 + 绿色气泡实时波形 + 底部「取消 / 滑到这里 转文字」+ 浅色「松开 发送」条
+ *  波形美化：更密的采样条 + 高度过渡平滑 morph + 两端渐隐 + 柔和投影 */
 export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
   if (rec.phase === 'idle') return null;
   const cancel = rec.zone === 'cancel';
   const stt = rec.zone === 'stt';
-  const bars = rec.levels.slice(-26);
-  while (bars.length < 26) bars.unshift(0.08);
+  const bars = rec.levels.slice(-30);
+  while (bars.length < 30) bars.unshift(0.08);
   return (
     <div
       data-testid="voice-record-overlay"
@@ -611,15 +646,21 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
       {/* 绿色录音气泡（转文字/取消时变色）+ 下指尾巴 */}
       <div className="relative">
         <div
-          className={`flex h-[92px] items-center justify-center gap-[3px] rounded-[24px] px-7 transition-colors ${
+          className={`flex h-[92px] items-center justify-center gap-[2.5px] overflow-hidden rounded-[20px] px-6 shadow-[0_18px_50px_rgba(0,0,0,0.4)] transition-colors ${
             cancel ? 'bg-[#FA5151]' : 'bg-[#95EC69]'
           }`}
         >
           {bars.map((v, i) => (
             <span
               key={i}
-              className={`w-[3px] rounded-full ${cancel ? 'bg-white/90' : 'bg-[#3CA135]/85'}`}
-              style={{ height: `${Math.max(4, v * 54)}px` }}
+              className={`w-[3.5px] rounded-full transition-[height] duration-150 ease-out ${
+                cancel ? 'bg-white/90' : 'bg-[#3CA135]/90'
+              }`}
+              style={{
+                height: `${Math.max(5, v * 58)}px`,
+                // 两端渐隐：首尾采样条透明度更低，波形更柔和（与微信录音浮层一致）
+                opacity: 0.4 + 0.6 * Math.min(1, Math.min(i, bars.length - 1 - i) / 6),
+              }}
             />
           ))}
         </div>
@@ -630,7 +671,7 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
         />
       </div>
       {/* 计时 */}
-      <p className="mt-5 text-[15px] tabular-nums text-white/70" data-testid="voice-record-timer">
+      <p className="mt-5 text-[16px] tabular-nums text-white/80" data-testid="voice-record-timer">
         {timeLabelOf(rec.seconds)}
       </p>
       <div className="min-h-0 flex-[2]" />
@@ -665,41 +706,25 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
 
 /**
  * QQ 风录音浮层：白幕只罩消息区，底部透明窗露出语音面板 —— 大圆麦克风不上移，就在原位呼吸；
- * 计时/两侧波形/左「文」右「×」全部贴白幕下缘排布（正上方就是原位的大圆钮，不再飞到顶部）。
+ * 左「文」右「×」与「松开」提示贴白幕下缘（正上方就是原位的大圆钮）；
+ * 计时/实时波形在面板内大圆钮正上方（见 QqVoicePanel 录音条，不在这里）。
  * bottomInset = 输入行 + 工具栏 + 语音面板的总高（QQ 单聊/群聊结构一致，约 400px）
  */
 export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder; bottomInset?: number }) {
   if (rec.phase === 'idle') return null;
   const stt = rec.zone === 'stt';
   const cancel = rec.zone === 'cancel';
-  const leftBars = rec.levels.slice(-12);
-  const rightBars = rec.levels.slice(-12).reverse();
   return (
     <div
       data-testid="voice-record-overlay"
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 z-40 flex flex-col"
     >
-      {/* 上部白幕：内容贴底排布，紧贴原位大圆钮上方 */}
+      {/* 上部白幕：文/× 与提示贴底排布，紧贴原位大圆钮上方（计时/波形在面板内，见 QqVoicePanel） */}
       <div className="flex min-h-0 flex-1 flex-col items-center bg-white/95 dark:bg-[#1B1C1F]/95">
         <div className="min-h-0 flex-1" />
-        {/* 计时 + 两侧波形：就在原位大圆钮正上方，不再往上飘 */}
-        <div className="flex h-8 items-center gap-[3px]">
-          {leftBars.map((v, i) => (
-            <span key={`l${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
-          ))}
-          <span
-            className="mx-2 min-w-[64px] text-center text-[26px] font-light tabular-nums text-black/80 dark:text-white/80"
-            data-testid="voice-record-timer"
-          >
-            {timeLabelOf(rec.seconds)}
-          </span>
-          {rightBars.map((v, i) => (
-            <span key={`r${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
-          ))}
-        </div>
         {/* 左「文」/ 右「×」（大圆钮本体在下方面板原位；标 data-voice-target 供手势目标命中判定） */}
-        <div className="mt-5 flex w-full items-center justify-center">
+        <div className="flex w-full items-center justify-center">
           <span
             data-voice-target="stt"
             className={`grid h-[64px] w-[64px] place-items-center rounded-full text-[20px] transition-colors ${

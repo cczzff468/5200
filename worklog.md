@@ -6825,3 +6825,21 @@ Stage Summary:
 - 四项反馈全部修复并 E2E 截图验证：微信绿气泡居中、QQ 录音浮层贴原位大圆钮上方、划到「转文字」显示「转文字」（走廊命中判定）且上滑取消不受干扰、微信气泡对齐原生（声波/尾巴/外置时长）、QQ 气泡对齐 QQ NT 紧凑点串样式
 - 手势判定升级为「目标走廊命中」通用方案（hitVoiceTarget + data-voice-target），视觉提示与手势分区严格一致
 - tsc/lint 零错误；duration 60s 钳制保险；测试均在 e2e 测试联系人「小测」会话内，用户数据未触碰
+---
+Task ID: 9
+Agent: 主协调者 (Z.ai Code)
+Task: 语音功能第三轮用户反馈精修——气泡头像空隙根治/微信气泡再美化（时长入内+动态宽度）/QQ录音波形计时入面板/微信录音波形美化
+
+Work Log:
+- 用户 5 项反馈：①微信语音气泡再美化（附参考截图：绿气泡内「4″ ((•))」）；②QQ 录音时波形和计时贴在大圆蓝色麦克风的上面、面板里面；③微信录音时波形再美化；④气泡与头像之间有很大的空隙；⑤让语音气泡根据语音时长变宽变窄
+- 反馈④（根因修复）：用 agent-browser 种子语音消息实测发现「大气泡↔头像空隙」根因——VoiceMsgBubble 外层包裹的 max-w-[calc(100%-92px)] 在微信/QQ 单聊里父容器是收缩包裹的 bubblePress div，百分比按「气泡自身宽度−92px」解析导致按钮向左溢出、头像侧留下 92px 幻影空隙（实测 own 气泡右缘 673 vs 头像左缘 773 = 100px）；移除该 max-w（各行/内容列已天然限宽：微信群聊内容列、QQ 行、信息 76% 列），复测 5 个气泡（own×4+peer×1）全部 gap=8px
+- 反馈①⑤：voice-bubble.tsx 重写——微信风时长移入气泡内部（own=[时长][镜像喇叭] / peer=[喇叭][时长]，16px font-medium tabular-nums）、气泡 h-[48px] rounded-[10px] px-5 gap-[10px] justify-center、保留尾巴与镜像方向；新增 bubbleWidth(duration,min,max)：1s→60s 线性钳制（微信 100→210px、QQ/信息 132→242px），style width 内联；QQ/信息新增 dotCountFor(duration)：点串 8→22 点随时长增多（gap 2.5px、点 3px），气泡 h-[42px] justify-center 紧凑不变；实测 4″→138px、17″→162px、32″→190px、1′00″→210px 全部命中线性公式
+- 反馈②：QqVoicePanel 面板内新增绝对定位录音条（top-[44px] h-[30px]，面板 relative）：计时（19px font-light tabular-nums，data-testid=voice-record-timer）+ 左右各 7 根实时波形（高度过渡 150ms），贴在原位大圆钮正上方（实测条底距钮顶 18px、insidePanel=true，大圆钮布局零影响）；「按住说话」提示 starting 时变「准备中…」；RecordOverlayQq 白幕里移除计时/波形（保留文/× + 松开提示贴下缘）
+- 反馈③：RecordOverlayWx 绿气泡波形美化——26→30 根、3.5px 宽 gap 2.5px、height 过渡 150ms ease-out 平滑 morph、两端渐隐（opacity 0.4+0.6·min(i,n-1-i)/6）、rounded-[20px]、柔和投影 shadow-[0_18px_50px_rgba(0,0,0,0.4)]、计时升为 16px white/80
+- E2E（agent-browser + 振荡器假麦克风每次新建流 + 真实鼠标按住）：微信单聊 5 气泡 gap 全 8px + 截图对齐参考图（时长入内/绿底/尾巴/贴头像）；微信群真实按住录音→浮层 30 条波形+0:11 计时→滑到「转文字」走廊→「松开 转文字」+蓝文高亮→松开→STT 预览三选一→发送语音→44″ 气泡入列且 transcriptCount=0（发送语音不自动转文字）；QQ 单聊种子气泡宽度 4″/17″/32″=138/162/190px 动态宽度+点数增减+贴头像；QQ 单聊按住大圆钮→面板内录音条（计时 0:02-0:08 贴钮上方 18px、insidePanel）→白幕文/×+松开发送→左滑「文」蓝高亮→三选一→发送语音→32″ 新气泡；/api/stt 200、/api/chat 200（AI 正常回复语音消息）
+- 调试坑：Fast Refresh 后主屏分页重置回第 1 页但 aria-label 查询会命中隐藏页元素（需先划页再 elementFromPoint 验证）；App 内滑动不能回主屏（必须底缘上滑退出）；假麦克风流 track 被上次录音 stop 后复用会静默失败（每次新建）；QQ 会话行用 data-testid=qq-session-* 定位最稳
+
+Stage Summary:
+- 五项反馈全部修复并 E2E 截图验证：气泡↔头像空隙根治（92px 幻影间隙→8px，根因是 max-w 百分比在收缩父容器中自引用）、微信气泡时长入内对齐参考图、双端气泡宽度随时长线性伸缩（点串点数同步增减）、QQ 录音计时+波形入面板贴大圆钮正上方（大圆钮原位不动）、微信录音波形平滑渐隐美化
+- 上轮遗留确认：转文字三选一预览（取消/发送语音/发送文字）微信+QQ 双端实测通过；发送语音不带转写（仅长按转文字才转）双端实测 transcriptCount=0
+- tsc/lint 零错误；改动仅 voice-bubble.tsx + voice-input.tsx，五端调用方零改动；测试均在测试会话「小测」内进行，用户数据未触碰

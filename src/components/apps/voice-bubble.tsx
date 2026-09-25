@@ -3,10 +3,12 @@
 /**
  * 语音消息气泡（微信 / QQ / 信息 / 两端群聊共用），对齐微信 / QQ NT 原生样式：
  * - 微信风（theme='wx'）：绿/白圆角气泡 + 喇叭声波图标（我方喇叭朝左、对方镜像朝右）+
- *   微信同款小尾巴；时长在气泡外侧小灰字（我方在左、对方在右）；
+ *   微信同款小尾巴；时长在气泡**内部**（我方 [4″ 🔊]、对方镜像），参考原生截图；
  *   播放中声波双弧交替闪烁（globals.css 的 wx-voice-arc-a/b）
  * - QQ / 信息风（theme='qq' | 'im'）：对齐 QQ NT —— 圆形播放钮 + 均匀点串音波 + 时长；
  *   播放中点串按进度填色（useVoicePlayback 全局进度，100ms 刷新）
+ * - 气泡宽度**随时长伸缩**（1s → 60s 线性变宽，两端钳制）：微信 100→210px、
+ *   QQ/信息 132→242px；QQ/信息点串点数也随时长增多（8→22 点），长语音更宽
  * - 点击气泡切换播放/暂停（全局单例：新播自动停旧，也停 TTS 朗读）
  * - 转文字结果（stt='done'）以小字显示在气泡下方；stt='pending' 显示「转文字中…」
  * - 长按菜单由外层 {...bubblePress} 提供，组件本身只处理点击播放
@@ -54,13 +56,22 @@ const THEME: Record<VoiceBubbleTheme, { own: string; peer: string; ownTranscript
   },
 };
 
-/** QQ NT 均匀点串音波的点数 */
-const WAVE_DOTS = 15;
+/** 时长 → 气泡宽度（px）：1s → min，60s → max 线性伸缩（两端钳制），气泡随语音长短变宽变窄 */
+function bubbleWidth(duration: number, min: number, max: number): number {
+  const d = Math.max(1, Math.min(60, Math.round(duration)));
+  return Math.round(min + ((d - 1) / 59) * (max - min));
+}
+
+/** QQ/信息 点串点数随时长增多：1s → 8 点 … 60s → 22 点（与宽度增长同步，长语音不显空旷） */
+function dotCountFor(duration: number): number {
+  const d = Math.max(1, Math.min(60, Math.round(duration)));
+  return Math.max(8, Math.min(22, Math.round(8 + ((d - 1) / 59) * 14)));
+}
 
 /** 微信风声波图标：喇叭 + 双弧（播放中双弧交替闪烁；mirrored = 我方喇叭朝左） */
 function WxVoiceIcon({ playing, mirrored }: { playing: boolean; mirrored?: boolean }) {
   return (
-    <svg viewBox="0 0 26 20" className={`h-[19px] w-[24px] ${mirrored ? '-scale-x-100' : ''}`} aria-hidden="true">
+    <svg viewBox="0 0 26 20" className={`h-[20px] w-[26px] shrink-0 ${mirrored ? '-scale-x-100' : ''}`} aria-hidden="true">
       <path
         d="M1.5 7.2h3.4L9.2 3.5a.95.95 0 0 1 1.55.74v11.5a.95.95 0 0 1-1.55.74L4.9 12.8H1.5a1 1 0 0 1-1-1v-3.6a1 1 0 0 1 1-1Z"
         fill="currentColor"
@@ -109,9 +120,13 @@ export function VoiceMsgBubble({
   const label = voiceDurationLabel(voice.duration);
   /** 对方气泡的播放钮品牌蓝：QQ 蓝 / 信息蓝 */
   const peerCircleCls = theme === 'im' ? 'bg-[#007AFF]' : 'bg-[#0099FF]';
+  /** 气泡宽度随时长伸缩（微信 100→210；QQ/信息 132→242） */
+  const width = isWx ? bubbleWidth(voice.duration, 100, 210) : bubbleWidth(voice.duration, 132, 242);
+  /** QQ/信息 点串点数随时长增多 */
+  const dots = isWx ? 0 : dotCountFor(voice.duration);
 
   const bubbleCls = isWx
-    ? `relative rounded-[8px] ${mine ? t.own : t.peer}`
+    ? `relative rounded-[10px] ${mine ? t.own : t.peer}`
     : theme === 'qq' && mine
       ? 'rounded-[14px] text-white'
       : theme === 'im' && mine
@@ -119,69 +134,76 @@ export function VoiceMsgBubble({
         : `rounded-[14px] ${t.peer}`;
 
   return (
-    <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
-      <div className={`flex min-w-0 items-center ${isWx ? 'gap-[5px]' : ''} ${isWx && mine ? 'flex-row-reverse' : ''}`}>
-        <button
-          type="button"
-          data-testid="voice-bubble"
-          data-voice-active={isPlaying ? 'true' : 'false'}
-          aria-label={isPlaying ? '暂停语音' : '播放语音'}
-          onClick={(e) => {
-            e.stopPropagation();
-            voicePlayer.toggle(msgId, voice.url);
-          }}
-          className={`flex w-fit select-none items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
-            isWx ? 'px-3.5 py-[10px]' : 'gap-2.5 px-3 py-[8px]'
-          }`}
-          style={style}
-        >
-          {isWx ? (
-            <>
-              {/* 微信同款小尾巴（指向发送者一侧，与文本气泡同规格） */}
-              <span
-                aria-hidden="true"
-                className={`absolute top-[13px] h-[8px] w-[8px] rotate-45 ${
-                  mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
-                }`}
-              />
-              <WxVoiceIcon playing={isPlaying} mirrored={mine} />
-            </>
-          ) : (
-            <>
-              {/* 圆形播放钮（我方半透明白底、对方品牌蓝底） */}
-              <span
-                className={`grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full ${
-                  mine ? 'bg-white/25' : peerCircleCls
-                }`}
-                aria-hidden="true"
-              >
-                {isPlaying ? (
-                  <Pause className="h-[13px] w-[13px] text-white" fill="white" strokeWidth={0} />
-                ) : (
-                  <Play className="h-[13px] w-[13px] translate-x-[1px] text-white" fill="white" strokeWidth={0} />
-                )}
-              </span>
-              {/* QQ NT 均匀点串音波：播放中按进度填色（未播段降透明度） */}
-              <span className="flex h-[18px] shrink-0 items-center gap-[3px]" aria-hidden="true">
-                {Array.from({ length: WAVE_DOTS }, (_, i) => {
-                  const filled = isActive && progress * WAVE_DOTS > i;
-                  return (
-                    <span
-                      key={i}
-                      className={`h-[3.5px] w-[3.5px] rounded-full bg-current transition-opacity duration-100 ${
-                        filled ? 'opacity-100' : 'opacity-40'
-                      }`}
-                    />
-                  );
-                })}
-              </span>
-              <span className="shrink-0 text-[14px] leading-none">{label}</span>
-            </>
-          )}
-        </button>
-        {/* 微信风：时长在气泡外侧小灰字（我方在左、对方在右，行容器已镜像） */}
-        {isWx && <span className="shrink-0 text-[13px] leading-none text-black/35 dark:text-white/40">{label}</span>}
-      </div>
+    <div className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+      <button
+        type="button"
+        data-testid="voice-bubble"
+        data-voice-active={isPlaying ? 'true' : 'false'}
+        aria-label={isPlaying ? '暂停语音' : '播放语音'}
+        onClick={(e) => {
+          e.stopPropagation();
+          voicePlayer.toggle(msgId, voice.url);
+        }}
+        className={`flex select-none items-center justify-center transition-transform active:scale-[0.98] ${bubbleCls} ${
+          isWx ? 'h-[48px] gap-[10px] px-5' : 'h-[42px] gap-2 px-3'
+        }`}
+        style={{ width, ...style }}
+      >
+        {isWx ? (
+          <>
+            {/* 微信同款小尾巴（指向发送者一侧，与文本气泡同规格） */}
+            <span
+              aria-hidden="true"
+              className={`absolute top-[13px] h-[8px] w-[8px] rotate-45 ${
+                mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
+              }`}
+            />
+            {/* 时长在气泡内部（参考原生截图）：我方 [4″ 🔊]、对方镜像 [🔊 4″] */}
+            {mine ? (
+              <>
+                <span className="shrink-0 text-[16px] font-medium leading-none tabular-nums">{label}</span>
+                <WxVoiceIcon playing={isPlaying} mirrored />
+              </>
+            ) : (
+              <>
+                <WxVoiceIcon playing={isPlaying} />
+                <span className="shrink-0 text-[16px] font-medium leading-none tabular-nums">{label}</span>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            {/* 圆形播放钮（我方半透明白底、对方品牌蓝底） */}
+            <span
+              className={`grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full ${
+                mine ? 'bg-white/25' : peerCircleCls
+              }`}
+              aria-hidden="true"
+            >
+              {isPlaying ? (
+                <Pause className="h-[13px] w-[13px] text-white" fill="white" strokeWidth={0} />
+              ) : (
+                <Play className="h-[13px] w-[13px] translate-x-[1px] text-white" fill="white" strokeWidth={0} />
+              )}
+            </span>
+            {/* QQ NT 均匀点串音波：点数随时长增多；播放中按进度填色（未播段降透明度） */}
+            <span className="flex h-4 shrink-0 items-center gap-[2.5px]" aria-hidden="true">
+              {Array.from({ length: dots }, (_, i) => {
+                const filled = isActive && progress * dots > i;
+                return (
+                  <span
+                    key={i}
+                    className={`h-[3px] w-[3px] rounded-full bg-current transition-opacity duration-100 ${
+                      filled ? 'opacity-100' : 'opacity-40'
+                    }`}
+                  />
+                );
+              })}
+            </span>
+            <span className="shrink-0 text-[14px] leading-none">{label}</span>
+          </>
+        )}
+      </button>
       {/* 转文字结果（气泡下方小字）：识别中提示 / 已完成的结果（长按菜单「复制」可复制） */}
       {voice.stt === 'pending' && (
         <span className="mt-[3px] px-1 text-[12px] leading-[1.4] opacity-50" data-testid="voice-stt-pending">
