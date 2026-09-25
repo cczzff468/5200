@@ -34,6 +34,7 @@ import {
   type ContactRecord,
 } from '@/lib/contacts';
 import { OPENAI_STANDARD_VOICES, useUI, useSettings } from '@/lib/ios/store';
+import { BUILTIN_VOICE_OPTIONS } from '@/lib/ios/builtin-voices';
 
 /**
  * 联系人 App：
@@ -943,10 +944,18 @@ function ContactFormView({
 
   const [form, setForm] = useState<ContactFormState>(initial ? formFromRecord(initial) : EMPTY_FORM);
   /** 设置「语音 API」拉取到的音色列表（点选填充 voiceId；也可手动填）；
+   *  内置语音服务商：展示内置免费男女声线；
    *  未拉取过/拉不到时：OpenAI 兼容服务商兜底展示标准六音色（大多数兼容网关都认这六个名字），MiniMax 需去设置里拉取 */
   const fetchedVoiceOptions = useSettings((s) => s.ttsVoices);
   const ttsProvider = useSettings((s) => s.ttsConfig.provider);
-  const voiceOptions = fetchedVoiceOptions.length > 0 ? fetchedVoiceOptions : ttsProvider === 'openai' ? OPENAI_STANDARD_VOICES : [];
+  const voiceOptions =
+    ttsProvider === 'builtin'
+      ? BUILTIN_VOICE_OPTIONS
+      : fetchedVoiceOptions.length > 0
+        ? fetchedVoiceOptions
+        : ttsProvider === 'openai'
+          ? OPENAI_STANDARD_VOICES
+          : [];
   const [avatar, setAvatar] = useState<string | null>(initial?.avatar ?? null);
   const [personaFileName, setPersonaFileName] = useState<string | null>(null);
   const [ownerId, setOwnerId] = useState<string>(initial?.ownerId ?? '');
@@ -1250,8 +1259,8 @@ function ContactFormView({
             </div>
           )}
           <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
-            该角色的说话声音，电话、微信、QQ 通用。可点选上方音色，也可手动填任意音色名（从「设置 › 语音 API」可拉取完整列表）；
-            没设置时用全局默认音色，全局也没设置时用系统安全默认。
+            该角色的说话声音，电话、微信、QQ 通用。可点选上方声线，也可手动填任意音色名（内置免费男女声线在「设置 › 语音 API」可试听）；
+            没设置时用全局默认声线，全局也没设置时内置语音按角色性别自动选男女声。
           </p>
         </div>
 

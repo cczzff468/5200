@@ -46,10 +46,10 @@ export interface VisionPreset {
 export const DEFAULT_VISION_CONFIG: VisionConfig = { baseUrl: '', apiKey: '', model: '' };
 
 /** 语音 API（TTS）配置：与聊天 API（apiConfig）/识图 API（visionConfig）相互独立、互不覆盖。
- *  服务商支持 MiniMax 与 OpenAI 兼容接口；保存后下一次播放即生效（每次播放现场读取，无缓存无重启） */
+ *  服务商支持 内置语音（免费、零配置）与 MiniMax / OpenAI 兼容接口；保存后下一次播放即生效（每次播放现场读取，无缓存无重启） */
 export interface TtsConfig {
-  /** 'minimax' = MiniMax（t2a_v2）；'openai' = OpenAI 兼容（/audio/speech） */
-  provider: 'minimax' | 'openai';
+  /** 'builtin' = 内置语音（浏览器本地引擎，男女声线免配置）；'minimax' = MiniMax（t2a_v2）；'openai' = OpenAI 兼容（/audio/speech） */
+  provider: 'builtin' | 'minimax' | 'openai';
   baseUrl: string;
   apiKey: string;
   /** MiniMax 专属：账户 GroupId（get_voice / t2a_v2 必填） */
@@ -67,7 +67,7 @@ export interface TtsVoiceOption {
 }
 
 export const DEFAULT_TTS_CONFIG: TtsConfig = {
-  provider: 'minimax',
+  provider: 'builtin',
   baseUrl: 'https://api.minimax.chat',
   apiKey: '',
   groupId: '',
@@ -77,6 +77,7 @@ export const DEFAULT_TTS_CONFIG: TtsConfig = {
 
 /** 各服务商的程序安全默认音色（角色/全局都没配时兑底；与服务端 /api/tts 保持一致） */
 export const SAFE_VOICE_BY_PROVIDER: Record<TtsConfig['provider'], string> = {
+  builtin: 'builtin:xiaoyue',
   minimax: 'female-shaonv',
   openai: 'alloy',
 };
@@ -476,7 +477,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       if (ttsRec && typeof ttsRec.value === 'object' && ttsRec.value !== null) {
         const v = ((await decryptValue<Partial<TtsConfig>>(ttsRec.value)) ?? ttsRec.value) as Partial<TtsConfig>;
         ttsConfig = {
-          provider: v.provider === 'openai' ? 'openai' : 'minimax',
+          provider: v.provider === 'builtin' || v.provider === 'openai' ? v.provider : 'minimax',
           baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : DEFAULT_TTS_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
           groupId: typeof v.groupId === 'string' ? v.groupId : '',

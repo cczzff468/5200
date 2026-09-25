@@ -11,13 +11,15 @@
 import { stopOtherAudio, registerAudioSource } from './audio-focus';
 import { getContact } from './contacts-store';
 import { SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings } from './store';
+import { isBuiltinVoiceSupported, speakBuiltin, BUILTIN_DEFAULT_FEMALE, BUILTIN_DEFAULT_MALE } from './builtin-voices';
 
 // 类型与默认值定义在 store（避免循环依赖），这里重导出供 UI 层使用
 export type { TtsConfig, TtsVoiceOption } from './store';
 
-/** 语音 API 是否已配置（有 Key 且有地址才走用户服务；否则用内置朗读兜底） */
+/** 语音 API 是否已配置：内置语音免配置恒可用；其余服务商有 Key 且有地址才走用户服务 */
 export function isTtsConfigured(cfg?: TtsConfig): boolean {
   const c = cfg ?? useSettings.getState().ttsConfig;
+  if (c.provider === 'builtin') return true;
   return Boolean(c.apiKey.trim() && c.baseUrl.trim());
 }
 
@@ -68,6 +70,8 @@ export interface ResolvedVoice {
   voiceId: string;
   /** 'contact' = 角色独立音色；'global' = 全局默认；'builtin' = 程序安全默认 */
   source: 'contact' | 'global' | 'builtin';
+  /** 联系人性别（男/女；未知为 null）——内置声线兜底时按性别选默认声线用 */
+  gender?: 'male' | 'female' | null;
 }
 
 /**
@@ -79,18 +83,21 @@ export interface ResolvedVoice {
  */
 export async function resolveVoiceForContact(contactId: string | null | undefined): Promise<ResolvedVoice> {
   const cfg = useSettings.getState().ttsConfig;
+  let gender: 'male' | 'female' | null = null;
   if (contactId) {
     try {
       const c = await getContact(contactId);
       const v = c?.voiceId?.trim();
-      if (v) return { voiceId: v, source: 'contact' };
+      const g = c?.gender?.trim() ?? '';
+      gender = g.includes('男') ? 'male' : g.includes('女') ? 'female' : null;
+      if (v) return { voiceId: v, source: 'contact', gender };
     } catch {
       // 联系人读取失败不阻塞：落到全局默认
     }
   }
   const global = cfg.defaultVoiceId.trim();
-  if (global) return { voiceId: global, source: 'global' };
-  return { voiceId: SAFE_VOICE_BY_PROVIDER[cfg.provider] ?? 'alloy', source: 'builtin' };
+  if (global) return { voiceId: global, source: 'global', gender };
+  return { voiceId: SAFE_VOICE_BY_PROVIDER[cfg.provider] ?? 'alloy', source: 'builtin', gender };
 }
 
 // ---------------- 单例播放器 ----------------
@@ -148,18 +155,49 @@ export interface SpeakOptions {
 }
 
 /**
- * 用用户配置的语音 API 播放一段文本（单例：自动停掉上一段）。
- * 失败抛错（含服务商中文文案）——调用方决定是否回退内置朗读；文字聊天不受影响。
+ * 播放一段文本（单例：自动停掉上一段）：
+ * - 服务商 = 内置语音，或 API 未配置 → 浏览器本地引擎（免费、零配置）；
+ * - 否则走用户语音 API（经本站代理 /api/tts）。
+ * 失败抛错（含服务商中文文案）——调用方决定是否回退服务端兜底；文字聊天不受影响。
  */
 export async function speakUserTts(opts: SpeakOptions): Promise<void> {
   const cfg = useSettings.getState().ttsConfig;
-  if (!isTtsConfigured(cfg)) {
-    throw new Error('语音 API 未配置');
-  }
+  const useBuiltinEngine = cfg.provider === 'builtin' || !isTtsConfigured(cfg);
   const cleaned = cleanTextForTts(opts.text);
   if (!cleaned) {
     throw new Error('没有可朗读的文本');
   }
+
+  // ① 内置语音（浏览器本地引擎）：男女声线免配置
+  if (useBuiltinEngine) {
+    if (!isBuiltinVoiceSupported()) {
+      throw new Error('当前浏览器不支持内置语音');
+    }
+    const rv = await resolveVoiceForContact(opts.contactId ?? null);
+    const explicit = opts.voiceId?.trim() ?? '';
+    let voiceId = explicit || rv.voiceId;
+    // 角色与全局都没设音色时，按联系人性别给默认声线（男→子川，女→晓月）
+    if (!explicit && rv.source === 'builtin' && rv.gender) {
+      voiceId = rv.gender === 'male' ? BUILTIN_DEFAULT_MALE : BUILTIN_DEFAULT_FEMALE;
+    }
+    let errorMessage: string | null = null;
+    await speakBuiltin({
+      text: cleaned,
+      voiceId,
+      volume: opts.volume,
+      speed: opts.speed,
+      onStart: opts.onStart,
+      onEnd: opts.onEnd,
+      onError: (m) => {
+        errorMessage = m;
+      },
+      cancelled: opts.cancelled,
+    });
+    if (errorMessage) throw new Error(errorMessage);
+    return;
+  }
+
+  // ② 用户语音 API（MiniMax / OpenAI 兼容）
   const voiceId =
     opts.voiceId?.trim() || (await resolveVoiceForContact(opts.contactId ?? null)).voiceId;
 

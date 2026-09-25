@@ -6954,3 +6954,21 @@ Stage Summary:
 - AI/对方文字气泡下方的「播放语音」按钮（含合成中/停止状态）已从微信单聊、QQ 单聊、微信群聊、QQ 群聊 4 端全部移除
 - 文字转语音开关（输入栏声波按钮）与语音消息气泡（VoiceMsgBubble）播放不受影响；电话 App 的 TTS 朗读不受影响
 - 产物：删除 voice-play.tsx；4 个聊天页面文件精简；无遗留引用，lint/编译/浏览器验证均通过
+
+---
+Task ID: 21
+Agent: Z.ai Code (main)
+Task: 用户消息21「内置几个免费的男女声音，不要API的」——TTS 新增内置免费男女声线服务商（零配置零 API）
+
+Work Log:
+- 新建 src/lib/ios/builtin-voices.ts：浏览器 Web Speech API（speechSynthesis）本地合成引擎；内置 6 声线（3 女：晓月/小溪/云舒，3 男：子川/墨阳/辰风），以音高/语速塑形区分；系统中文语音按性别线索（Kangkang/Yunxi/Yaoyao/Xiaoxiao/Tingting 等已知名单）就近挑选；单例播放 + stopBuiltinSpeech + 注册全局音频焦点与语音气泡互斥；builtin: 前缀 id 持久化，旧 API 音色名含 female/男 等可启发式映射
+- store.ts：TtsConfig.provider 增加 'builtin' 并设为默认（新用户开箱即用）；SAFE_VOICE_BY_PROVIDER 增加 builtin 兜底；载入归一化兼容 builtin
+- tts-client.ts：isTtsConfigured 对 builtin 恒真；speakUserTts 增加「内置/未配置 API → 本地引擎」分支——角色 voiceId 优先级链不变，全链路无声线时按联系人性别自动选默认男女声（男→子川、女→晓月）；失败抛错由调用方回退 /api/phone/tts 服务端免费语音
+- settings.tsx：服务商新增「内置语音（免费）」chip；builtin 模式下隐藏连接配置与拉取按钮，改为 6 声线卡片网格（性别徽标+点击设全局默认+逐个试听）；修复从 builtin 切出时 TTS_PROVIDER_PRESETS['builtin'] undefined 崩溃
+- contacts.tsx：角色编辑「语音音色」在 builtin 服务商下展示 6 内置声线 chips；文案同步更新
+- 验证：lint 通过；Agent Browser 实测——设置页 builtin 默认+6 卡片渲染、选中子川→重载持久化、逐个试听状态流转、builtin↔MiniMax 往返切换；联系人编辑表单 6 chips 显示、选择→保存→IndexedDB 写入 builtin:zichuan；电话实拨小艾→接通→「正在说话…」→播放结束状态回转（headless 无本地语音时按设计自动回退 /api/phone/tts 服务端免费语音，真实 Chrome/Edge 走纯本地引擎）
+
+Stage Summary:
+- TTS 现有三服务商：内置语音（免费/离线/零配置，默认）+ MiniMax + OpenAI 兼容；无需任何 API Key 即可有男女声线
+- 音色优先级不变：角色独立 voiceId → 全局默认 → 内置声线按性别兜底；电话/设置试听/角色音色选择全链路接入
+- 产物：builtin-voices.ts（新）+ store/tts-client/settings/contacts 修改；commit 待推送

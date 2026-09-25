@@ -55,6 +55,7 @@ import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { describeImages } from '@/lib/vision-client';
+import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 
 // ---------------- 常量与类型 ----------------
 
@@ -216,7 +217,10 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const apiModel = useSettings((s) => s.apiConfig.model);
   const visionConfigured = useSettings((s) => Boolean(s.visionConfig.baseUrl.trim()));
   const visionModel = useSettings((s) => s.visionConfig.model);
-  const ttsConfigured = useSettings((s) => Boolean(s.ttsConfig.apiKey.trim() && s.ttsConfig.baseUrl.trim()));
+  const ttsProvider = useSettings((s) => s.ttsConfig.provider);
+  const ttsConfigured = useSettings((s) =>
+    s.ttsConfig.provider === 'builtin' ? true : Boolean(s.ttsConfig.apiKey.trim() && s.ttsConfig.baseUrl.trim())
+  );
   const ttsModel = useSettings((s) => s.ttsConfig.model);
   const profile = useSettings((s) => s.profile);
 
@@ -356,7 +360,13 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             icon={AudioLines}
             tone={TONE_CYAN}
             label="语音 API"
-            value={ttsConfigured ? `已配置 · ${ttsModel.trim() || '未填模型名'}` : '未配置'}
+            value={
+              ttsProvider === 'builtin'
+                ? '内置语音 · 免费'
+                : ttsConfigured
+                  ? `已配置 · ${ttsModel.trim() || '未填模型名'}`
+                  : '未配置'
+            }
             onClick={() => onOpen('voice')}
           />
           <MainRow icon={Database} tone={TONE_GREEN} label="存储" onClick={() => onOpen('storage')} />
@@ -2029,7 +2039,8 @@ const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口；不需�
 
 /**
  * 语音 API 设置页（与聊天 API / 识图 API 相互独立、互不覆盖）：
- * - 服务商：MiniMax / OpenAI 兼容；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
+ * - 服务商：内置语音（免费）/ MiniMax / OpenAI 兼容；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
+ * - 内置语音：浏览器本地引擎（Web Speech），内置 3 女 3 男共 6 个声线，零配置免 API、离线可用，逐个可试听
  * - 音色列表：MiniMax get_voice 拉取；OpenAI 兼容尽力尝试、拉不到手动填
  * - 全局默认音色：角色未设独立 voiceId 时使用（联系人 App 可给角色单独设音色）
  * - 试听：用当前配置合成一句样例直接播放
@@ -2069,7 +2080,16 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const isMinimax = ttsConfig.provider === 'minimax';
-  const preset = TTS_PROVIDER_PRESETS[ttsConfig.provider];
+  const isBuiltin = ttsConfig.provider === 'builtin';
+  const preset = TTS_PROVIDER_PRESETS[ttsConfig.provider as 'minimax' | 'openai'];
+
+  // 内置声线逐个试听状态（在播的声线 id）
+  const [previewingBuiltinId, setPreviewingBuiltinId] = useState<string | null>(null);
+  // 内置引擎支持检测（客户端一次性）
+  const [builtinSupport, setBuiltinSupport] = useState<boolean | null>(null);
+  useEffect(() => {
+    setBuiltinSupport(isBuiltinVoiceSupported());
+  }, []);
 
   // 页面卸载：停掉试听音频并释放
   useEffect(
@@ -2078,20 +2098,30 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         previewAudioRef.current.pause();
         previewAudioRef.current = null;
       }
+      stopBuiltinSpeech();
     },
     []
   );
 
-  const switchProvider = (p: 'minimax' | 'openai') => {
+  const switchProvider = (p: 'builtin' | 'minimax' | 'openai') => {
     if (p === ttsConfig.provider) return;
-    // 地址是另一家的默认值时自动换成当前家的默认值；用户自定义过的地址原样保留
-    const otherDefault = TTS_PROVIDER_PRESETS[ttsConfig.provider].baseUrl;
-    const nextDefault = TTS_PROVIDER_PRESETS[p].baseUrl;
-    updateTtsConfig({
-      provider: p,
-      baseUrl: ttsConfig.baseUrl.trim() === otherDefault ? nextDefault : ttsConfig.baseUrl,
-      model: ttsConfig.model.trim() === TTS_PROVIDER_PRESETS[ttsConfig.provider].model ? TTS_PROVIDER_PRESETS[p].model : ttsConfig.model,
-    });
+    if (p === 'builtin') {
+      // 内置语音无需连接配置：清空 Key 之外的都不动（切回 API 服务商时原值还在）
+      updateTtsConfig({ provider: p });
+    } else {
+      // 地址是另一家的默认值时自动换成当前家的默认值；用户自定义过的地址原样保留
+      // 当前是内置语音时没有「本家默认值」概念（连接配置未展示），直接填目标服务商默认值
+      const prevDefault = ttsConfig.provider === 'builtin' ? '' : TTS_PROVIDER_PRESETS[ttsConfig.provider].baseUrl;
+      const prevModel = ttsConfig.provider === 'builtin' ? '' : TTS_PROVIDER_PRESETS[ttsConfig.provider].model;
+      const nextDefault = TTS_PROVIDER_PRESETS[p].baseUrl;
+      updateTtsConfig({
+        provider: p,
+        baseUrl: !ttsConfig.baseUrl.trim() || ttsConfig.baseUrl.trim() === prevDefault ? nextDefault : ttsConfig.baseUrl,
+        model: ttsConfig.model.trim() === '' || ttsConfig.model.trim() === prevModel ? TTS_PROVIDER_PRESETS[p].model : ttsConfig.model,
+      });
+    }
+    stopBuiltinSpeech();
+    setPreviewingBuiltinId(null);
     setVoicesError('');
     setVoicesHint('');
     setVoicePanelOpen(false);
@@ -2209,10 +2239,45 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     }
   };
 
+  /** 内置声线逐个试听 */
+  const previewBuiltinVoice = (voiceId: string) => {
+    if (previewingBuiltinId) {
+      stopBuiltinSpeech();
+      setPreviewingBuiltinId(null);
+      if (previewingBuiltinId === voiceId) return;
+    }
+    stopBuiltinSpeech();
+    setPreviewingBuiltinId(voiceId);
+    void speakBuiltin({
+      text: '你好，这是内置声线，很高兴认识你。',
+      voiceId,
+      onStart: () => setPreviewingBuiltinId(voiceId),
+      onEnd: () => setPreviewingBuiltinId(null),
+      onError: () => setPreviewingBuiltinId(null),
+    }).catch(() => setPreviewingBuiltinId(null));
+  };
+
   const runPreview = async () => {
     if (previewLoading) return;
     setPreviewLoading(true);
     setPreviewError('');
+    // 内置语音：浏览器本地引擎直接朗读，不走 API
+    if (isBuiltin) {
+      stopBuiltinSpeech();
+      try {
+        await speakBuiltin({
+          text: '你好，这是当前的语音音色，很高兴见到你。',
+          voiceId: ttsConfig.defaultVoiceId,
+          onStart: () => setPreviewingBuiltinId('preview'),
+        });
+      } catch (e) {
+        setPreviewError(e instanceof Error ? e.message : '内置语音播放失败');
+      } finally {
+        setPreviewingBuiltinId(null);
+        setPreviewLoading(false);
+      }
+      return;
+    }
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       previewAudioRef.current = null;
@@ -2259,6 +2324,16 @@ function VoicePage({ onBack }: { onBack: () => void }) {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              data-testid="tts-provider-builtin"
+              onClick={() => switchProvider('builtin')}
+              className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
+                isBuiltin ? 'border-foreground bg-foreground text-background' : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+              }`}
+            >
+              内置语音（免费）
+            </button>
+            <button
+              type="button"
               onClick={() => switchProvider('minimax')}
               className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
                 isMinimax ? 'border-foreground bg-foreground text-background' : 'border-border text-foreground/85 hover:border-muted-foreground/40'
@@ -2270,7 +2345,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               type="button"
               onClick={() => switchProvider('openai')}
               className={`rounded-full border px-3 py-1.5 text-[13px] transition-colors ${
-                !isMinimax ? 'border-foreground bg-foreground text-background' : 'border-border text-foreground/85 hover:border-muted-foreground/40'
+                !isMinimax && !isBuiltin ? 'border-foreground bg-foreground text-background' : 'border-border text-foreground/85 hover:border-muted-foreground/40'
               }`}
             >
               OpenAI 兼容
@@ -2278,7 +2353,117 @@ function VoicePage({ onBack }: { onBack: () => void }) {
           </div>
         </section>
 
-        {/* 连接配置（更改自动保存） */}
+        {/* 内置语音：免费零配置，男女声线网格 + 逐个试听 */}
+        {isBuiltin && (
+          <>
+            <section>
+              <div className="rounded-[12px] bg-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[14px] font-medium text-foreground">内置声线（3 女 · 3 男 · 免费）</div>
+                    <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/80">
+                      用浏览器内置语音引擎在本地合成，不需要 API、不需要联网、不产生费用；点击卡片设为全局默认，喇叭按钮可逐个试听。
+                    </p>
+                    {builtinSupport === false && (
+                      <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        当前浏览器不支持内置语音，播放将自动回退服务端语音；建议换 Chrome / Edge 体验。
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 dark:text-green-400">
+                    免费
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div className="grid grid-cols-2 gap-2">
+                {BUILTIN_TTS_VOICES.map((v) => {
+                  const active = ttsConfig.defaultVoiceId.trim() === v.id;
+                  const playing = previewingBuiltinId === v.id;
+                  return (
+                    <div
+                      key={v.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={active}
+                      data-testid={`builtin-voice-${v.id}`}
+                      onClick={() => updateTtsConfig({ defaultVoiceId: v.id })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          updateTtsConfig({ defaultVoiceId: v.id });
+                        }
+                      }}
+                      className={`flex flex-col gap-1.5 rounded-[12px] border p-3 transition-colors ${
+                        active ? 'border-foreground bg-foreground/[0.04]' : 'border-border/70 bg-card active:bg-muted/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-[15px] font-medium">{v.name}</span>
+                          <span
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                              v.gender === 'female' ? 'bg-pink-500/10 text-pink-600 dark:text-pink-400' : 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                            }`}
+                          >
+                            {v.gender === 'female' ? '女' : '男'}
+                          </span>
+                        </span>
+                        {active && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
+                      </div>
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="truncate text-[11px] text-muted-foreground">{v.label}</span>
+                        <button
+                          type="button"
+                          aria-label={`试听声线${v.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            previewBuiltinVoice(v.id);
+                          }}
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+                            playing ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground active:bg-muted/70'
+                          }`}
+                        >
+                          <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* 试听 */}
+            <section>
+              <button
+                type="button"
+                onClick={() => void runPreview()}
+                disabled={previewLoading}
+                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] border border-border bg-background text-[14px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+              >
+                {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
+                试听当前声线
+              </button>
+              {previewError && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {previewError}
+                </p>
+              )}
+              <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
+                音色优先级：联系人的独立声线（联系人 App 编辑）→ 内置声线按联系人性别自动选男女声。
+                电话、微信、QQ 的语音播放即时生效。
+              </p>
+            </section>
+          </>
+        )}
+
+        {/* 连接配置 + 全局默认音色（更改自动保存；内置语音无连接配置） */}
+        {!isBuiltin && (
+        <>
         <section>
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
@@ -2555,6 +2740,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
             </p>
           </div>
         </section>
+        </>
+        )}
 
         {/* 语音识别 STT（转文字）：与 TTS 配置相互独立、互不覆盖；内置识别免配置 */}
         <section>
