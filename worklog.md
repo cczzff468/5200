@@ -6918,3 +6918,22 @@ Stage Summary:
 - 文字转语音全链路零 API 依赖：开启声波开关 → 输入文字 → 发送 = 仿真语音气泡（估算时长+哈希波形+白色原文面板），点击只走静音进度动画，AI 仍通过 transcript 读取内容
 - agent-browser E2E 全过：①语音模式下声波图标紧贴按住说话右侧；②发送零 /api/tts 请求；③点击气泡播放→按时长自动结束（3s），无报错；④刷新后气泡保留未退化成 '[语音]'，可再次静音重播；⑤按住说话权限失败 toast 后干净回 idle，录音链路无回归
 - lint + tsc 全干净；改动文件：src/lib/ios/{voice-send,voice-player}.ts、src/components/apps/{voice-bubble,wechat,qq,chat,wx-group,qq-group}.tsx
+
+---
+Task ID: stt-webspeech-1
+Agent: Z.ai Code (main)
+Task: 第 20 条追问「能不能用 Web Speech API」——语音识别（转文字）接入浏览器 Web Speech API
+
+Work Log:
+- 先回答上一问（你用的什么语音识别）：读取 /api/stt/route.ts + stt-client.ts 确认现状 = 服务端识别两条路（① builtin 内置识别：blob→16kHz WAV→z-ai SDK ASR，免配置；② openai 兼容：multipart 转发 {baseUrl}/audio/transcriptions，whisper 系），仅「滑到转文字」预览与长按气泡转文字时手动触发
+- 新建 src/lib/ios/web-speech.ts：SpeechRecognition/webkitSpeechRecognition 封装（最小自包含类型，不依赖 TS DOM lib）；continuous+interimResults，onend 自动重启续录，致命错误（not-allowed/audio-capture）不重试；stop() 返回累计文本（onend 或 800ms 超时兜底）、abort() 静默丢弃；isWebSpeechSupported() 特性检测
+- store.ts：SttConfig 增加 webSpeech: boolean（默认 true），加密存档加载规范化兼容旧数据（缺省视为 true）
+- voice-input.tsx：useVoiceRecorder 按住开录时在指针手势调用栈内同步启动实时识别（兼容 Safari 手势上下文），与 MediaRecorder 并行共用麦克风；VoiceRecordResult 增加 transcript?、VoiceRecorder 增加 partial；finalize 分路：zone='stt' 等 stop() 拿文本（≤800ms）→ 直接秒出可编辑预览；zone=null/cancel/太短 → 静默收尾不附带文字（尊重此前「移除自动转文字」决策）；getUserMedia 失败/卸载路径 abort 会话；RecordOverlayWx 计时下固定高度行展示实时文字、QqVoicePanel 顶部提示位复用展示（防布局跳动）；useSttPreview.open 有 clip.transcript 直接 done 态，否则原服务端链路
+- settings.tsx：「语音识别 STT」区新增「浏览器实时识别（Web Speech）」Switch（默认开），描述含当前浏览器支持状态（useEffect 客户端检测防 SSR 水合不一致）
+- 验证：eslint ✓ tsc ✓；agent-browser E2E——设置开关渲染/切换/刷新持久化（IndexedDB 加密存档）✓、支持检测文案「当前浏览器：支持。」✓、信息 App 语音模式布局无回归 ✓、按住/滑动/松开全手势链路零 JS 错误 ✓、dev.log 见 POST /api/stt 200（服务端回退链路真实触发）✓、console/page errors 全空 ✓
+- 已知环境限制（如实记录）：headless 无真实麦克风音频输入，无法端到端验证「说话→识别出文字」；真实效果需用户在 Chrome/Edge/Safari 中试听验证；Firefox 不支持 Web Speech → 始终走服务端
+
+Stage Summary:
+- commit e3d14dc 已推送 origin main（d37dd2b..e3d14dc），4 files changed, +289/-4，新增 web-speech.ts
+- 语义：「划到转文字」= Web Speech 实时识别优先（零请求秒出、可编辑）→ 服务端 builtin/openai 兜底；原松开发送仍为纯语音；长按旧气泡转文字仍走服务端（Web Speech 不能转写已有文件）
+- 新增设置开关：语音 API → 语音识别 STT → 浏览器实时识别（Web Speech），默认开启
