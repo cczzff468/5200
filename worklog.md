@@ -7114,3 +7114,24 @@ Stage Summary:
 - 「我的音色」：语音API 里名字+音色ID 永久保存（内置声线/MiniMax/OpenAI 音色均可），联系人编辑与聊天设置「他的声音」都能点选
 - 「他的声音」：聊天设置新入口（wx/qq/sms 三端），内置音色（免费可试听）+保存的音色+API 音色选择，保存即写联系人 voiceId（电话/气泡朗读/语音消息全链路生效）
 - 「AI 语音频率」：他的声音页内（群聊在群信息页），五档；每角色×每会话独立计数、发语音后清零；命中→AI 回复第一条文字异步合成语音气泡（角色音色），失败自动降级文字；气泡点击播放（内置引擎实时朗读/API 真实音频）、长按转文字（本地原文秒出）；关闭=AI 只发文字
+---
+Task ID: 24
+Agent: main (Z.ai Code)
+Task: 语音功能完整审计（录音/气泡/播放/转文字/文字转语音/AI语音频率/音色/降级/回归）——逐项检查 + Agent Browser 实机验证，不许只报"已完成"
+
+Work Log:
+- 定位语音代码：voice-input.tsx（录音+手势+STT预览）、voice-bubble.tsx（气泡）、voice-player.ts（播放器单例）、voice-send.ts（文字转语音）、ai-voice.ts（频率+合成）、tts-client.ts、stt-client.ts、builtin-voices.ts、my-voices.ts、audio-focus.ts（互斥注册表）
+- 静态审查九大类：权限申请/拒绝降级、60s 上限(MAX_SEC)、取消/转文字手势分区、气泡宽度公式(60+3px/s封顶240)、播放单例+进度+暂停、长按菜单转文字/复制、AI 语音 5 档频率、counterKey 隔离、音色三级解析无缓存、TTS/STT 失败降级、退出聊天 cleanup(stopVoicePlayback/stopSpeaking)、消息持久化(url dataURL/localText/synth)
+- Agent Browser 实测（微信单聊）：气泡 3″→69px 与公式一致；点击 active=true+aria"暂停语音"+波形点亮；二次点击停止；长按菜单含转文字/复制/删除/多选等；AI 语音转文字显示朗读原文+toast
+- 文字转语音发送：开关 toast"已开启文字转语音"、发送生成我方绿色语音气泡(2″)+原文面板、AI 读到 transcript 正常回复
+- AI 语音频率端到端：设置页 5 档 UI 齐全；关闭→AI 纯文字；每条都发→AI 回复自动变语音气泡(4″)；经常档闭环实测 文字(c1)→文字(c2)→语音(c0重置)→文字(c1重新计数)；counter 持久化 localStorage
+- 我的音色：设置›语音API 添加"温柔御姐/female-shaony"→localStorage my-tts-voices 持久化→他的声音页即时出现→点选写入联系人 voiceId(IDB 验证)
+- QQ 端：语音面板(大圆钮+变声/对讲/录音页签)、聊天设置入口齐全；qq: 会话频率独立(wx:often 不影响 qq:off)；音色跨端同步
+- 持久化：刷新(模拟重启)后 4 条语音气泡全保留
+- 无麦克风错误路径：QQ 按住说话→toast"未找到可用麦克风"，文字聊天不受影响
+- bun run lint 通过；无功能性 bug，未改代码
+
+Stage Summary:
+- 九大类检查全部通过：录音链路（权限分类提示/60s 超时/手势分区/太短丢弃）、气泡（宽度公式/波形/时长/44px 触控高）、播放（单例互斥/进度/暂停/释放）、转文字（builtin 免配置直接显示原文/录音走 /api/stt/失败可重试/结果可复制）、文字转语音、AI 频率（5 档+计数按会话×角色隔离+发语音后重置）、音色（角色实时重读无缓存、内置/我的/API 三源）、降级（合成失败保持文字、权限拒绝不影响文字、网络失败 toast）、回归（消息持久化、四端共用组件、cleanup 释放）
+- headless 环境限制：真实出声/录音内容/识别质量无法实测（无麦克风无声卡），已用代码审查+错误路径实测覆盖
+- 代码无改动，本次为纯审计；全部证据截图存 /tmp/voice-audit-01~38.png
