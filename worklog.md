@@ -6882,3 +6882,21 @@ Work Log:
   - 六项反馈全部修复并 E2E 实测通过；语音气泡宽度严格按用户规格实现（60 基础+3px/秒、240 封顶、平滑伸缩、波形随宽缩放、时长固定右侧、播放进度点亮）
   - 转写场景气泡位移根治（滚底签名守卫 + QQ 行顶部对齐），转写面板出现时气泡视口位置零移动
   - lint 零错误；改动文件：voice-bubble.tsx、voice-input.tsx、qq.tsx、wechat.tsx、chat.tsx（群聊两端仅确认无需改）；用户数据未触碰
+---
+Task ID: 12
+Agent: 主协调者 (Z.ai Code)
+Task: 语音第六轮用户反馈——语音气泡圆角太圆（对齐各端文本气泡）+ 文字转语音功能可发现性（常驻开关 + 输入提示）
+
+Work Log:
+- 用户反馈（第18条）：①QQ/微信语音气泡圆角太圆；②发送语音添加文字转语音功能（输入框输入文字，发送后变成语音气泡）
+- 反馈②实况核查：文字转语音四端（wechat/qq/wx-group/qq-group/chat）此前已实现（ttsSend 状态 + sendTextAsVoice → synthesizeSelfVoice → /api/tts → 语音气泡），但开关**只在输入框有文字时才出现**，用户没发现 → 判定为可发现性问题
+- 反馈②修复（四端输入栏重构）：AudioLines 开关从「有文字时出现」改为**常驻键盘输入栏**（固定在输入框右侧、发送/表情按钮之前，空输入也可见，不再随输入跳位）；wechat/wx-group 将开关移入 voiceMode 条件分支的 Fragment 内（语音模式无输入框则不显示）；qq/qq-group 移除外层 input.trim() 条件直接常驻；chat.tsx 同构改造（开关常驻 + 发送箭头/Mic 按条件切换）
+- 反馈②配套：ttsSend 开启时输入框 placeholder 变为「输入文字，发送后转为语音」（微信原本为空、QQ 原本无 placeholder），开关加 aria-pressed；开启/关闭 toast 保留
+- 反馈①修复（voice-bubble.tsx bubbleCls）：圆角对齐各端文本气泡同规格——微信 10px→**5px**（wechat.tsx 文本气泡 rounded-[5px]）、QQ own/peer 14px→**12px**（qq.tsx 文本气泡 rounded-[12px]）、信息 own 17px/peer 14px→**18px**（chat.tsx 文本气泡 rounded-[18px]）；转写白面板 rounded-[10px] 保持
+- E2E（agent-browser）：微信群 2 个历史气泡 computed borderRadius=5px、宽度 192/63px；微信单聊截图确认绿气泡与白文本气泡圆角视觉一致、输入栏 [@][语音钮][输入框][AudioLines][表情][+] 常驻布局；空输入时开关可见（修复前隐藏）→ 点击开关 → toast「已开启文字转语音：发送后为语音气泡」+ placeholder 变提示语 + aria-pressed=true；未配置 TTS 时发送 → toast「请先配置语音 API」不发送（失败路径正确）；写入测试 ttsConfig（IndexedDB 明文，store 明文回退链路）+ network route mock /api/tts → 输入「今天不想打字也不想说话，直接发条语音给你」→ 发送 → 语音气泡入列（数量 5→6、宽 75px=60+5s×3 公式命中、圆角 5px、无报错、输入框清空），气泡下方白色面板显示原文 transcript，AI 正常回复「收到啦，语音我听着呢」；QQ 单聊 5 个气泡 radii 全 12px、宽 111/72/156/156/66px 全命中公式，蓝/白语音气泡与相邻文本气泡圆角一致；输入栏开关空输入时可见
+- 调试坑：主屏横向拖拽翻页在图标 cell 上不触发（cellPointerDown stopPropagation）→ 改用 JS 点击「第 N 页」页点按钮（pointer-events-none 不拦截 programmatic click）；elementFromPoint 在列表空白区返回容器（textContent 含整行文本，误判为行），点击须用行元素真实坐标（截图 1:1 视口坐标直接读）；store 明文 ttsConfig 载入时自动回写密文（无副作用）
+
+Stage Summary:
+- 两项反馈完成：语音气泡圆角与各端文本气泡统一（微信 5px / QQ 12px / 信息 18px，解决「太圆」）；文字转语音从隐藏功能变为**常驻可发现**——输入栏 AudioLines 图标（四端一致）+ 开启后输入框提示语 + toast 引导，输入文字点发送即变语音气泡（原链路复用，零行为变更）
+- E2E 全链路实测：开关常驻可见 → 开启（toast+placeholder）→ 文字发送 → 语音气泡（宽度公式/圆角/白面板原文）→ AI 回复；失败路径（未配置）只 toast 不发消息
+- lint 零错误；改动文件：voice-bubble.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx、chat.tsx；测试均在 agent-browser 自身 profile 的测试会话（小测/小e、小测群）内进行，用户数据未触碰

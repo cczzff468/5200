@@ -1682,34 +1682,35 @@ function ChatView({
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
             <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
           ) : (
+            <>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="iMessage信息"
+              placeholder={ttsSend ? '输入文字，发送后转为语音' : 'iMessage信息'}
               aria-label="消息输入框"
               className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
             />
+            {/* 文字转语音开关（常驻键盘输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
+            <button
+              type="button"
+              aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+              aria-pressed={ttsSend}
+              data-testid="sms-tts-toggle"
+              onClick={() => {
+                const nv = !ttsSend;
+                setTtsSend(nv);
+                showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+              }}
+              className={`mr-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
+                ttsSend ? 'text-[#007AFF]' : 'text-muted-foreground'
+              }`}
+            >
+              <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.3 : 1.8} aria-hidden="true" />
+            </button>
+            </>
           )}
           {!voiceMode && (input.trim() || canDispatch) ? (
             <>
-              {/* 文字转语音开关（有文字时出现）：开启后发送的文字变为语音气泡 */}
-              {input.trim() ? (
-                <button
-                  type="button"
-                  aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-                  data-testid="sms-tts-toggle"
-                  onClick={() => {
-                    const nv = !ttsSend;
-                    setTtsSend(nv);
-                    showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-                  }}
-                  className={`mr-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
-                    ttsSend ? 'text-[#007AFF]' : 'text-muted-foreground'
-                  }`}
-                >
-                  <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.3 : 1.8} aria-hidden="true" />
-                </button>
-              ) : null}
               <button
                 type="submit"
                 aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}

@@ -4045,29 +4045,29 @@ export function QqGroupChatPage({
                 send();
               }
             }}
+            placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
             aria-label="发送群聊消息"
             data-testid="qq-groupchat-input"
             className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
           />
+          {/* 文字转语音开关（常驻输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
+          <button
+            type="button"
+            aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+            aria-pressed={ttsSend}
+            data-testid="qqg-tts-toggle"
+            onClick={() => {
+              const nv = !ttsSend;
+              setTtsSend(nv);
+              onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+            }}
+            className="shrink-0 p-1 transition-colors active:opacity-60"
+            style={{ color: ttsSend ? '#0099FF' : undefined }}
+          >
+            <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
+          </button>
           {(draft.trim() || canDispatch) ? (
             <>
-              {/* 文字转语音开关（有文字时出现，发送钮左侧）：开启后发送的文字变为语音气泡 */}
-              {draft.trim() ? (
-                <button
-                  type="button"
-                  aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-                  data-testid="qqg-tts-toggle"
-                  onClick={() => {
-                    const nv = !ttsSend;
-                    setTtsSend(nv);
-                    onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-                  }}
-                  className="shrink-0 p-1 transition-colors active:opacity-60"
-                  style={{ color: ttsSend ? '#0099FF' : undefined }}
-                >
-                  <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
-                </button>
-              ) : null}
               <button
                 type="button"
                 onClick={send}

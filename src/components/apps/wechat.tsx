@@ -5488,6 +5488,7 @@ function ChatPage({
               /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
               <VoiceHoldBar rec={rec} testId="wx-voice-hold" />
             ) : (
+            <>
             <input
               data-testid="wx-chat-input"
               value={input}
@@ -5504,28 +5505,28 @@ function ChatPage({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void send();
               }}
-              placeholder=""
+              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
               className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
             />
+            {/* 文字转语音开关（常驻键盘输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
+            <button
+              type="button"
+              aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+              aria-pressed={ttsSend}
+              data-testid="wx-tts-toggle"
+              onClick={() => {
+                const nv = !ttsSend;
+                setTtsSend(nv);
+                onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+              }}
+              className={`shrink-0 transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/55 dark:text-white/55'}`}
+            >
+              <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
+            </button>
+            </>
             )}
             {(input.trim() || canDispatch) ? (
               <>
-                {/* 文字转语音开关（有文字时出现）：开启后发送的文字变为语音气泡 */}
-                {input.trim() ? (
-                  <button
-                    type="button"
-                    aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-                    data-testid="wx-tts-toggle"
-                    onClick={() => {
-                      const nv = !ttsSend;
-                      setTtsSend(nv);
-                      onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-                    }}
-                    className={`shrink-0 transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/55 dark:text-white/55'}`}
-                  >
-                    <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
-                  </button>
-                ) : null}
                 <button
                   type="button"
                   aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}

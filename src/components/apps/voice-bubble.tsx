@@ -4,6 +4,7 @@
  * 语音消息气泡（微信 / QQ / 信息 / 两端群聊共用），微信与 QQ 统一同款结构：
  * - 圆形播放钮（**三角/暂停图标，与 QQ 一致**）+ **随宽度伸缩的录音波形条**（voice.wave，
  *   播放中按进度逐根点亮，播放完成恢复默认）+ **固定在气泡右侧的时长**
+ * - 圆角与各端文本气泡同规格（微信 5px / QQ 12px / 信息 18px）
  * - 气泡宽度**随时长动态变化**：宽度 = 60 基础 + 时长 × 3px/秒（线性平滑不跳变），
  *   1s → 63px、60s → 240px 封顶，超过 60s 不再增长；波形条数随宽度增减（1→约 32 根）
  * - 点击气泡切换播放/暂停（全局单例：新播自动停旧，也停 TTS 朗读）
@@ -152,13 +153,12 @@ export function VoiceMsgBubble({
           ? 'bg-[#007AFF] text-white'
           : 'bg-[#0099FF] text-white';
 
+  /** 圆角与各端文本气泡同规格：微信 5px（绿/白气泡同款）、QQ 12px、信息 18px（iOS 圆气泡） */
   const bubbleCls = isWx
-    ? `relative rounded-[10px] ${mine ? t.own : t.peer}`
-    : theme === 'qq' && mine
-      ? 'rounded-[14px] text-white'
-      : theme === 'im' && mine
-        ? 'rounded-[17px] text-white'
-        : `rounded-[14px] ${t.peer}`;
+    ? `relative rounded-[5px] ${mine ? t.own : t.peer}`
+    : theme === 'im'
+      ? `rounded-[18px] ${mine ? 'text-white' : t.peer}`
+      : `rounded-[12px] ${mine ? 'text-white' : t.peer}`;
 
   return (
     <div className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
