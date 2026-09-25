@@ -28,6 +28,7 @@ import { BackToHome } from '@/components/ios/BackToHome';
 import { GlassButton } from '@/components/ios/GlassButton';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import {
   beginChatStream,
   clearChatStream,
@@ -921,6 +922,23 @@ function ChatView({
           saved.push({ id: aiMsgId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt });
         }
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
+        // 灵动岛全局通知：AI 每落盘一条消息弹一次（系统行/凭据卡不弹；同会话连发自动合并/排队）
+        for (const m of saved) {
+          const body = notifyPreviewText({
+            kind: m.kind,
+            content: m.content,
+            voiceText: m.voice?.transcript || m.voice?.localText || null,
+          });
+          if (body === null) continue;
+          pushChatNotification({
+            sessionKey: `sms:${storageKey}`,
+            app: 'chat',
+            title: peerLabel,
+            avatar: peer.avatarSrc ?? null,
+            body,
+            target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
+          });
+        }
         // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级）
         if (voiceDecision.speak) {
           const target = saved.find((m) => !m.error && !m.sys && !m.blkreq && (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
@@ -2678,6 +2696,23 @@ export default function ChatApp() {
     setPendingJump(null);
     if (c && c.kind !== 'user') openContactChat(c);
   }, [pendingJump, contactState, contacts]);
+
+  // 灵动岛通知点击跳转：打开通知对应的会话（信息 App 已打开时由事件驱动，
+  // 未打开时挂载后消费；联系人未就绪时复用 pendingJump 等载入后自动进入）
+  useEffect(() => {
+    const consume = () => {
+      const t = takeNotifyNavigation('chat');
+      if (!t) return;
+      if (t.contactId) {
+        setPendingJump(t.contactId);
+      } else {
+        openAssistantChat();
+      }
+    };
+    consume();
+    window.addEventListener(ISLAND_NAV_EVENT, consume);
+    return () => window.removeEventListener(ISLAND_NAV_EVENT, consume);
+  }, []);
 
   // 拉取联系人（CHAR/NPC 进信息 App，USER 不出现；本地 IndexedDB）
   const loadContacts = useCallback(async () => {

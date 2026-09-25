@@ -135,6 +135,7 @@ import {
   X,
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -2771,6 +2772,26 @@ function ChatPage({
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
         saveMsgs(peer.id, [...cur, ...all]);
+        // 灵动岛全局通知：AI 每落盘一条消息弹一次（系统行/凭据卡不弹；同会话连发自动合并/排队）
+        for (const m of all) {
+          const body = notifyPreviewText({
+            kind: m.kind,
+            content: m.content,
+            voiceText: m.voice?.transcript || m.voice?.localText || null,
+            amount: m.packet?.amount ?? null,
+            blessing: m.packet?.type === 'redpacket' ? m.packet.note : null,
+            note: m.packet?.type === 'transfer' ? m.packet.note : null,
+          });
+          if (body === null) continue;
+          pushChatNotification({
+            sessionKey: `qq:${peer.id}`,
+            app: 'qq',
+            title: peer.name,
+            avatar: peer.avatar ?? null,
+            body,
+            target: { app: 'qq', contactId: peer.id },
+          });
+        }
         // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级不影响聊天）
         if (voiceDecision.speak) {
           const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
@@ -10824,6 +10845,23 @@ function MainScreen({
   const openTabs = useCallback((tab: '消息' | '联系人' | '动态') => setRoute({ page: 'tabs', tab }), []);
   const openChatOf = useCallback((c: ContactRecord) => setRoute({ page: 'chat', contactId: c.id }), []);
   const openGroupOf = useCallback((g: ChatGroup) => setRoute({ page: 'group-chat', groupId: g.id }), []);
+
+  // 灵动岛通知点击跳转：打开通知对应的单聊/群聊（QQ 已打开时由事件驱动，未打开时挂载后自动消费 pending）
+  useEffect(() => {
+    const consume = () => {
+      const t = takeNotifyNavigation('qq');
+      if (!t) return;
+      if (t.groupId) {
+        const g = getGroup(t.groupId);
+        if (g) setRoute({ page: 'group-chat', groupId: g.id });
+      } else if (t.contactId) {
+        setRoute({ page: 'chat', contactId: t.contactId });
+      }
+    };
+    consume();
+    window.addEventListener(ISLAND_NAV_EVENT, consume);
+    return () => window.removeEventListener(ISLAND_NAV_EVENT, consume);
+  }, []);
   /** 群数据版本：updateGroupRecord 落盘后 bump，让当前打开的群页拿到最新群对象 */
   const [groupVersion, setGroupVersion] = useState(0);
   const patchGroup = useCallback(

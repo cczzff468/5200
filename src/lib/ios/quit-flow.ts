@@ -45,6 +45,7 @@ import {
 import { buildNpcPromptExtra } from './npc-bond';
 import { buildPersonaSystemPrompt } from './persona';
 import { kvDel, kvGet, kvSet } from './idb-kv';
+import { pushChatNotification } from './island-notify';
 
 // ---------------- 状态与存储 ----------------
 
@@ -588,6 +589,15 @@ async function sendQuitDm(st: QuitFlowState, contacts: ContactRecord[]): Promise
       );
       const finalText = clean || '……';
       persistPrivateAiMsg(app, contact.id, { id: result.aiMsgId, content: finalText, time: Date.now() });
+      // 灵动岛全局通知：AI 主动私信也弹（App 不打开也会推送；点击跳对应私聊）
+      pushChatNotification({
+        sessionKey: `${app}:${contact.id}`,
+        app: app === 'wx' ? 'wechat' : 'qq',
+        title: contact.name,
+        avatar: contact.avatar ?? null,
+        body: finalText,
+        target: app === 'wx' ? { app: 'wechat', contactId: contact.id } : { app: 'qq', contactId: contact.id },
+      });
       const cur2 = loadState(st.gid);
       if (cur2 && cur2.quitAt === quitAt && !cur2.dm.sentAt) {
         cur2.dm.sentAt = Date.now();

@@ -7135,3 +7135,25 @@ Stage Summary:
 - 九大类检查全部通过：录音链路（权限分类提示/60s 超时/手势分区/太短丢弃）、气泡（宽度公式/波形/时长/44px 触控高）、播放（单例互斥/进度/暂停/释放）、转文字（builtin 免配置直接显示原文/录音走 /api/stt/失败可重试/结果可复制）、文字转语音、AI 频率（5 档+计数按会话×角色隔离+发语音后重置）、音色（角色实时重读无缓存、内置/我的/API 三源）、降级（合成失败保持文字、权限拒绝不影响文字、网络失败 toast）、回归（消息持久化、四端共用组件、cleanup 释放）
 - headless 环境限制：真实出声/录音内容/识别质量无法实测（无麦克风无声卡），已用代码审查+错误路径实测覆盖
 - 代码无改动，本次为纯审计；全部证据截图存 /tmp/voice-audit-01~38.png
+---
+Task ID: 25
+Agent: main (Z.ai Code)
+Task: 全局灵动岛弹窗通知（模拟 iOS 灵动岛）：AI 每发一条消息（单聊/群聊）触发弹窗；从灵动岛位置弹出/收起后恢复；全局覆盖所有 App 与锁屏；显示 App 图标+头像+名字+内容；点击跳转对应聊天；离开网页用 Web Notification（不支持/拒绝降级应用内弹窗）；不刷屏（合并/节流）；不破坏既有功能
+
+Work Log:
+- 新建 src/lib/ios/island-notify.ts（核心模块）：zustand store（current/exiting/queue）；pushChatNotification 按 sessionKey 合并（同会话连发→正文取最新+计数+1+计时重置；队列中同会话原地合并；不同会话排队逐条展示，队列上限 4 丢最旧）；AUTO_DISMISS_MS=3000 自动收起（页面不可见/熄屏时冻结、恢复后续期）；ISLAND_NAV_EVENT 导航总线（pendingNav 60s TTL；takeNotifyNavigation 按 App 消费）；maybeWebNotification（页面 hidden 且 granted 才发系统通知，tag=sessionKey 系统级替换合并，icon=头像或 App 图标，onclick 聚焦+跳转；default 首次自动申请一次；denied/不支持/异常全部静默降级）；notifyPreviewText 统一消息→预览文本映射（sys/notice/blockreq→null 不弹，图片/语音/红包/转账/亲属卡/位置/表情/转发/群邀请占位符与各端列表预览口径一致）
+- 新建 src/components/ios/IslandNotification.tsx：无 AnimatePresence，exiting 标志驱动姿态补间——initial=灵动岛胶囊几何(118×33 圆角17)→spring 展开到 width/height auto(内容 336px 宽)，收起 0.24s tween 缩回胶囊，onAnimationComplete(exiting)→finishExit()；内容淡入 delay 0.14s（形变期内容不可见，无重排闪烁）；卡片 z-[93]（高于锁屏65/切换器60/闹钟90/状态栏70/灵动岛80，仅低于熄屏遮罩95）；布局：头像(38px 圆形,空则首字占位)+App 图标角标(16px 右下)+标题(13px semibold)+副标题(群名,白50%)+合并徽标「N 条」+正文(line-clamp-2)；role=button+aria-label+data-testid=island-notification；熄屏时冻结计时 effect
+- PhoneShell：islandCovered=useIslandNotify(current!==null) 条件渲染静态灵动岛（通知展开期间隐藏，收起动画缩回同几何位后 finishExit 恢复，同色无缝无闪烁）；挂载 <IslandNotificationLayer/>
+- 触发点 7 处（各 finalize 落盘后逐消息 push）：wechat.tsx 单聊（wx:<id>）、qq.tsx 单聊（qq:<id>）、chat.tsx 信息端含小助手（sms:<storageKey>，assistant 无 contactId→target 只带 app）、wx-group.tsx / qq-group.tsx 群聊每角色 finalize（sessionKey=群键，title=成员名，subtitle=群名，target groupId）、quit-flow.ts 退群挽留主动私信、group-social.ts AI 建群开场白；错误分支（落盘〔error〕文案）不弹通知
+- 导航消费 3 端：wechat MainScreen effect（挂载消费+事件监听；groupId→getGroup+setGroupPeer、contactId→contacts 反查+setChatPeer；重置 tab/page/detail/groupPage/hidden）；qq MainScreen（setRoute chat/group-chat）；chat.tsx（contactId→复用 pendingJump 等联系人载入后 openContactChat，无 contactId→openAssistantChat）
+- E2E（agent-browser 实测 13 项全部通过）：①微信单聊 AI 回复→1s 内弹出、持续 3.0s 自动收起（timeline 逐 250ms 采样）；②截图确认卡片视觉（头像+微信角标+名字+正文）；③几何测量 336×58 圆角 24 内容 opacity 1；④回复条数 5→AI 连发 3 条→单通知合并「3 条」徽标+正文取最新；⑤发消息→退回主屏→通知在主屏弹出→点击→微信打开并直达小艾聊天（nowInChat=true）；⑥锁屏：发送后按电源键熄屏→AI 回复→通知在熄屏期间冻结、轻点唤醒后横幅在锁屏上方可见 3s（截图）；⑦信息 App 小助手回复→通知 chat.png 角标；⑧QQ 单聊→qq.png 角标；⑨微信群聊（建群→发送→主屏→通知→点击→直达群聊「测试机主、小艾(2)」）；⑩QQ 群聊全链路同上（截图确认群页）；⑪visibilityState 模拟 hidden→通知出现后 4.2s 不收起（冻结）；⑫恢复 visible+visibilitychange→3s 续期收起；⑬本环境 Notification.permission=denied→应用内弹窗全程正常（五.5 拒绝后不影响应用内弹窗）
+- 验证限制（如实说明）：无头浏览器 Notification 权限固定 denied，系统通知实际弹出无法端到端截图（代码路径：hidden+granted→new Notification(tag=sessionKey) 系统级替换合并；onclick→window.focus+switchToApp+导航总线——与已验证的导航总线同一路径）；后台标签页 setTimeout 节流导致定时发送偶发不执行，改用 visibilityState patch 做确定性冻结/续期验证
+- bunx tsc --noEmit 全量通过；bun run lint 0 错误；浏览器 console/page errors 零；dev.log 无编译错误
+
+Stage Summary:
+- AI 每发一条消息（微信/QQ/信息单聊、微信群/QQ群、退群挽留私信、建群开场白）都会触发灵动岛通知：从灵动岛原位弹出（岛隐藏）、3 秒自动收起（点击可提前收起）、收起后灵动岛无缝恢复
+- 全局覆盖主屏/任意 App/锁屏上方（z-93），不阻塞操作；卡片显示 App 图标角标（微信/QQ/信息各自图标）+角色头像+名字+群名副标题+内容预览（截断 80 字/两行）+合并条数
+- 点击跳转：switchToApp+导航总线直达对应单聊/群聊（App 未打开时挂载后消费 pending，60s 有效）；锁屏/熄屏时点击只收起不跳转
+- 防刷屏：同会话连发合并（正文取最新+N 条徽标+计时重置）、跨会话排队逐条 3s、队列上限 4、系统通知 tag=会话键替换合并
+- 离开网页：hidden+已授权→Web Notification（头像/App 图标+群名前缀正文）；default 首次申请一次；denied/不支持全部降级应用内弹窗且不影响
+- 单聊群聊共用同一套弹窗组件与推送 API；语音频率/红包转账/拉黑/长按菜单等既有链路零改动（只在各端 finalize 落盘后追加只读推送）

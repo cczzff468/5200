@@ -158,6 +158,7 @@ import { getMemSettings, memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { useSettings } from '@/lib/ios/store';
+import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import {
   beginChatStream,
   clearChatStream,
@@ -2647,6 +2648,28 @@ export function QqGroupChatPage({
               all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
             }
             for (const m of all) appendMsg(m);
+            // 灵动岛全局通知：群成员每落盘一条消息弹一次（系统行不弹；同会话合并/排队；点击跳群聊）
+            for (const m of all) {
+              const body = notifyPreviewText({
+                kind: m.kind,
+                content: m.content,
+                voiceText: m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || null,
+                amount: m.rp?.amount ?? m.tr?.amount ?? null,
+                blessing: m.rp?.blessing ?? null,
+                note: m.tr?.note ?? null,
+                mergedFwd: m.fwd?.merged ?? false,
+              });
+              if (body === null) continue;
+              pushChatNotification({
+                sessionKey: sKey,
+                app: 'qq',
+                title: charName,
+                subtitle: g.name,
+                avatar: char.avatar ?? null,
+                body,
+                target: { app: 'qq', groupId: gid },
+              });
+            }
             // AI 语音频率（按群设置、按角色计数）：本轮命中 → 该成员第一条文字消息升级为语音气泡（异步合成；失败保持文字自动降级）
             if (voiceDecision.speak) {
               const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);

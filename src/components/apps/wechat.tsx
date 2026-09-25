@@ -58,6 +58,7 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { decideAiVoiceTurn, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
@@ -4107,6 +4108,27 @@ function ChatPage({
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
         saveMsgs(peer.id, [...cur, ...all]);
+        // 灵动岛全局通知：AI 每落盘一条消息弹一次（系统行/凭据卡不弹；同会话连发自动合并/排队）
+        for (const m of all) {
+          const body = notifyPreviewText({
+            kind: m.kind,
+            content: m.content,
+            voiceText: m.voice?.transcript || m.voice?.localText || null,
+            amount: m.rp?.amount ?? m.tr?.amount ?? null,
+            blessing: m.rp?.blessing ?? null,
+            note: m.tr?.note ?? null,
+            mergedFwd: m.fwd?.merged ?? false,
+          });
+          if (body === null) continue;
+          pushChatNotification({
+            sessionKey: `wx:${peer.id}`,
+            app: 'wechat',
+            title: peer.name,
+            avatar: peer.avatar ?? null,
+            body,
+            target: { app: 'wechat', contactId: peer.id },
+          });
+        }
         // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级不影响聊天）
         if (voiceDecision.speak) {
           const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
@@ -7596,6 +7618,38 @@ function MainScreen({
     setHidden(loadStrList(LS_CHAT_HIDDEN));
     setChatPeer(null);
   };
+
+  // 灵动岛通知点击跳转：打开通知对应的单聊/群聊（App 已打开时由事件驱动，未打开时挂载后自动消费 pending）
+  useEffect(() => {
+    const consume = () => {
+      const t = takeNotifyNavigation('wechat');
+      if (!t) return;
+      if (t.groupId) {
+        const g = getGroup(t.groupId);
+        if (!g) return;
+        setTab('chats');
+        setPage('main');
+        setDetail(null);
+        setGroupPage(null);
+        setHidden(loadStrList(LS_CHAT_HIDDEN));
+        setChatPeer(null);
+        setGroupPeer(g);
+      } else if (t.contactId) {
+        const c = contacts.find((x) => x.id === t.contactId);
+        if (!c) return;
+        setTab('chats');
+        setPage('main');
+        setDetail(null);
+        setGroupPage(null);
+        setHidden(loadStrList(LS_CHAT_HIDDEN));
+        setGroupPeer(null);
+        setChatPeer(c);
+      }
+    };
+    consume();
+    window.addEventListener(ISLAND_NAV_EVENT, consume);
+    return () => window.removeEventListener(ISLAND_NAV_EVENT, consume);
+  }, [contacts]);
 
   /** 好友（可聊天对象）：CHAR / NPC 中已添加微信好友的（微信好友独立，QQ/信息里添加的不算） */
   const friends = useMemo(

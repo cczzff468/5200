@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
+import { useIslandNotify } from '@/lib/ios/island-notify';
 import { isVoiceHoldActive } from '@/components/apps/voice-input';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
@@ -14,6 +15,7 @@ import { CustomWallpaperLayers } from './WallpaperLayers';
 import AppWindow from './AppWindow';
 import AppSwitcher from './AppSwitcher';
 import LockScreen from './LockScreen';
+import IslandNotificationLayer from './IslandNotification';
 
 // 闹钟监听懒加载：避免为一个小组件把整个时钟 App 拖进首屏包
 const AlarmWatcher = dynamic(() => import('@/components/apps/clock').then((m) => m.AlarmWatcher), { ssr: false });
@@ -46,6 +48,8 @@ export default function PhoneShell() {
   const wallpaperStyle = useWallpaperStyle();
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
   const barLight = useLightForeground('bottom');
+  // 灵动岛通知展示中（含收起动画）：灵动岛隐藏，通知卡在同一几何位无缝形变，收起后灵动岛恢复
+  const islandCovered = useIslandNotify((s) => s.current !== null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   /** 底部边缘上滑手势进行中状态（fired 防止同一次滑动重复触发） */
   const edgeGesture = useRef<{ x: number; y: number; fired: boolean } | null>(null);
@@ -225,12 +229,15 @@ export default function PhoneShell() {
           />
         )}
 
-        {/* 状态栏 + 灵动岛 */}
+        {/* 状态栏 + 灵动岛 + 全局灵动岛通知（通知展开期间灵动岛隐藏，收起后恢复） */}
         <StatusBar />
-        <div
-          className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
-          aria-hidden="true"
-        />
+        {!islandCovered && (
+          <div
+            className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
+            aria-hidden="true"
+          />
+        )}
+        <IslandNotificationLayer />
 
         {/* 全局闹钟监听（锁屏时也会响铃，铃声弹层 z-90 高于锁屏） */}
         <AlarmWatcher />

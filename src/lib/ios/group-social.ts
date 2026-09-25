@@ -27,6 +27,7 @@ import { cleanBubbleText, extractRichActionParts } from '../chat-rich';
 import { beginChatStream, isChatStreaming } from '../chat-stream-store';
 import { qqUnreads, wxUnreads } from '../unread-store';
 import { useSettings } from './store';
+import { pushChatNotification } from './island-notify';
 import { genId } from './db';
 import { ownerRealName } from './contacts-store';
 import { kvGet, kvSet } from './idb-kv';
@@ -574,6 +575,16 @@ async function sendGroupOpening(g: ChatGroup, char: ContactRecord): Promise<void
           time: Date.now(),
         };
         saveGroupMsgs(g.id, [...loadGroupMsgs(g.id), msg]);
+        // 灵动岛全局通知：建群开场白也是 AI 消息（点击跳群聊）
+        pushChatNotification({
+          sessionKey: sKey,
+          app: g.app === 'wx' ? 'wechat' : 'qq',
+          title: charName,
+          subtitle: g.name,
+          avatar: char.avatar ?? null,
+          body: finalText,
+          target: g.app === 'wx' ? { app: 'wechat', groupId: g.id } : { app: 'qq', groupId: g.id },
+        });
       },
     });
     void ok;
