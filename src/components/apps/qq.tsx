@@ -2407,7 +2407,13 @@ function ChatPage({
     };
   }, [bg.mode, flags.bgV, peer.id]);
 
+  // 滚底签名守卫：仅结构性变化（条数/末条 id/流式内容）才滚底；
+  // 转文字等原地更新（msgs 引用变但结构不变）不触发滚动，避免转写面板出现时气泡被拽上移
+  const scrollSigRef = useRef('');
   useEffect(() => {
+    const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id ?? ''}:${stream?.content ?? ''}`;
+    if (sig === scrollSigRef.current) return;
+    scrollSigRef.current = sig;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs, stream]);
@@ -3030,8 +3036,8 @@ function ChatPage({
     const isText = !m.kind || m.kind === 'text';
     const isVoice = m.kind === 'voice';
     const items: BubbleMenuItem[] = [];
-    // 语音消息首项「转文字」（已有结果时点击提示；识别失败可重试），随后仍是复制（复制转写结果）
-    if (isVoice) items.push({ key: 'stt', label: '转文字', icon: B.stt });
+    // 语音消息首项「转文字」/「取消转文字」（toggle：已转写→取消收起；未转写→识别；失败可重试）
+    if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });
@@ -3633,7 +3639,7 @@ function ChatPage({
                   />
                 </div>
               ) : (
-              <div className={`mb-3 flex items-end ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
+              <div className={`mb-3 flex ${m.kind === 'voice' ? 'items-start' : 'items-end'} ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
                 {selectMode && isSelectable(m) && !mine && (
                   /* 多选模式勾选圈（对方消息在行左侧） */
                   <span

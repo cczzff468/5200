@@ -670,7 +670,13 @@ function ChatView({
   }, [msgs, storageKey]);
 
   // 新消息/流式输出时自动滚到底部
+  // 滚底签名守卫：仅结构性变化（条数/末条 id/流式内容）才滚底；
+  // 转文字等原地更新（msgs 引用变但结构不变）不触发滚动，避免转写面板出现时气泡被拽上移
+  const scrollSigRef = useRef('');
   useEffect(() => {
+    const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id ?? ''}:${stream?.content ?? ''}`;
+    if (sig === scrollSigRef.current) return;
+    scrollSigRef.current = sig;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs, stream]);
@@ -1154,7 +1160,7 @@ function ChatView({
     const B = BUBBLE_MENU_ICONS;
     const isVoice = m.kind === 'voice';
     const items: BubbleMenuItem[] = [];
-    if (isVoice) items.push({ key: 'stt', label: '转文字', icon: B.stt });
+    if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if (!isVoice) {

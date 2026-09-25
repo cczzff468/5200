@@ -499,7 +499,7 @@ export function VoiceHoldBar({
   );
 }
 
-/** QQ 大圆麦克风钮：按住开录；左滑 → 「文」转文字，右滑/上滑 → 「×」取消，松开发送 */
+/** QQ 大圆麦克风钮：按住开录；左滑 → 「文」转文字，右滑/上滑 → 「×」取消，松开发送（无外圈光环） */
 export function QqVoiceHoldButton({
   rec,
   testId = 'qq-voice-hold',
@@ -544,19 +544,6 @@ export function QqVoiceHoldButton({
       onContextMenu={(e) => e.preventDefault()}
       className="relative grid h-[112px] w-[112px] touch-none select-none place-items-center rounded-full bg-gradient-to-b from-[#3AA0FF] to-[#1374F0] shadow-[0_10px_36px_rgba(31,143,255,0.45)] transition-transform active:scale-[0.97]"
     >
-      {/* 录音中原位光环：按钮不上浮不居中，就在面板原位置呼吸；滑到取消变红环、转文字变蓝环 */}
-      {holding && (
-        <span
-          aria-hidden="true"
-          className={`pointer-events-none absolute inset-[-14px] rounded-full border-[3px] transition-colors ${
-            rec.zone === 'cancel'
-              ? 'border-[#FA5151]'
-              : rec.zone === 'stt'
-                ? 'border-[#0099FF]'
-                : 'border-[#1F8FFF]/45'
-          } ${rec.phase === 'recording' ? 'animate-pulse' : ''}`}
-        />
-      )}
       <Mic className="h-12 w-12 text-white" strokeWidth={1.8} aria-hidden="true" />
     </button>
   );
@@ -613,9 +600,9 @@ export function QqVoicePanel({
           ))}
         </div>
       )}
-      {/* 中部：左「文」（转文字）+ 大圆麦克风 + 右「×」（取消）——全部在面板内；
+      {/* 中部：左「文」（转文字）+ 大圆麦克风 + 右「×」（取消）——全部在面板内、彼此远离；
           未按住时两侧隐藏但占位，大圆钮始终居中不跳；标 data-voice-target 供手势命中判定 */}
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-1 items-center justify-center gap-9">
         <span className="grid h-[64px] w-[64px] shrink-0 place-items-center">
           <span
             data-voice-target="stt"

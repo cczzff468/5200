@@ -3175,8 +3175,8 @@ export function QqGroupChatPage({
     const isText = !m.kind || m.kind === 'text';
     const isVoice = m.kind === 'voice';
     const items: BubbleMenuItem[] = [];
-    // 语音消息首项「转文字」（已有结果时点击提示；识别失败可重试），随后仍是复制（复制转写结果）
-    if (isVoice) items.push({ key: 'stt', label: '转文字', icon: B.stt });
+    // 语音消息首项「转文字」/「取消转文字」（toggle：已转写→取消收起；未转写→识别；失败可重试）
+    if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });

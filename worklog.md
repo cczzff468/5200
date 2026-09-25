@@ -6863,3 +6863,22 @@ Work Log:
   - 微信气泡新增真实录音波形条（播放进度点亮）+ 转写白面板；STT 预览文字可编辑后再发送
   - 转文字长按菜单三态 toggle（识别→取消收起→再识别）五端一致
   - lint 零错误；改动文件：voice-bubble.tsx、voice-input.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx、chat.tsx；测试均在测试会话内，用户数据未触碰
+---
+Task ID: 11
+Agent: 主协调者 (Z.ai Code)
+Task: 语音功能第五轮用户反馈精修——QQ文×间距/光环删除/转写气泡位移根治/微信三角钮/菜单取消转文字文案/宽度规格化
+
+Work Log:
+- 用户反馈（第17条，含宽度规格四节）：①QQ 转文字和 × 号远离一点；②外面的红色圆圈（大圆钮光环）删除；③语音气泡转文字的时候语音气泡不要往上移；④微信语音气泡里面的图标变成三角形（和 QQ 一样）；⑤长按转文字以后那个「转文字」变成「取消转文字」；⑥语音气泡宽度动态变化规格：宽度=基础60+时长×3px/秒、min60/max240 封顶、平滑不跳变；气泡内波形+时长、波形随宽度缩放、时长固定右侧；点击播放显示进度、播完恢复；长按菜单含转文字；不破坏现有功能、单聊群聊共用组件
+- ②光环删除：QqVoiceHoldButton 移除 holding 时的 absolute 光环 span（红/蓝呼吸环整体退役），大圆钮录音态干净原位
+- ①文×远离：QqVoicePanel 中部行加 gap-9（36px），文/× 与大圆钮及彼此间距明显拉开
+- ③气泡位移根治（两层根因）：a) QQ 单聊消息行 `items-end` → voice 消息改 `items-start`（群聊/微信本就顶部对齐）；b) 核心根因——5 端滚底 useEffect 依赖 [msgs,stream]，转写 setMsgs 原地更新 msgs 引用变化即触发 scrollTop=scrollHeight，把整个会话拽到底部、气泡视觉上移 37px。修复：qq/wechat/chat 三端滚底加签名守卫（scrollSigRef，sig=条数:末条id:流式内容，结构性变化才滚底；转写/取消转写/撤回等原地更新不滚）；qq-group/wx-group 依赖本就是 msgs.length 无此 bug 保持原样。E2E 实测：转写出现面板气泡 yTop 644→644 纹丝不动（修复前 354→317）
+- ④三角图标：voice-bubble.tsx 重写——WxVoiceIcon 喇叭声波 SVG 退役（globals.css wx-voice-arc-a/b keyframes 一并清理），微信/QQ/信息三主题统一结构 [圆形播放钮 20px（lucide Play/Pause 三角 9px）][波形条 flex-1][时长 12.5px 固定右侧]；配色：微信两端浅底黑系钮 bg-black/[0.08]、QQ/信息我方彩底 bg-white/25 白图标、对方品牌蓝钮（QQ #0099FF/信息 #007AFF）；微信保留小尾巴与绿色主题
+- ⑥宽度规格化：bubbleWidth = min(240, 60 + 时长×3)（1s→63px、10s→90px、32s→156px、60s→240px 封顶）；barCountFor 按气泡宽度与时长文本估算宽度计算波形条数（1s→2根…60s→约32根），waveBarsOf 线性插值保证相邻时长波形平滑变化；播放中按 useVoicePlayback 进度逐根点亮（0.9/0.35 双态过渡 150ms）、播完恢复默认
+- ⑤菜单文案：5 端 buildMsgMenuItems 语音首项 label 改为 m.voice?.stt==='done'&&m.voice.transcript ? '取消转文字' : '转文字'（toggle 行为上一轮已实现，本轮只改文案）
+- E2E（agent-browser 全流程）：QQ 实测宽度 4″=72px/17″=111px/32″=156px、微信 44″=192px(24根)/1″=63px(2根) 全部命中公式；录音态截图确认光环已删、文×远离、计时+波形贴面板内大圆钮上方；滑向文松开→预览→发送语音→2″ 新气泡 66px 入列；长按菜单「转文字」→白面板出现且气泡 yTop 644 不变→再长按菜单变「取消转文字」→点击收起→第三次长按「转文字」重新识别；点击播放 data-voice-active=true、再点暂停恢复 false
+- 调试坑：假麦克风流 track 被上次录音 cleanup stop 后需每次新建流；刷新后主屏分页重置需连滑两页；Bash 终端渲染会吞 "[m" 序列（[msgs 显示成 sgs），验证依赖数组必须用 od -c 看原始字节——本次因此发现 qq-group/wx-group 依赖实为 msgs.length（无此 bug）
+- Stage Summary:
+  - 六项反馈全部修复并 E2E 实测通过；语音气泡宽度严格按用户规格实现（60 基础+3px/秒、240 封顶、平滑伸缩、波形随宽缩放、时长固定右侧、播放进度点亮）
+  - 转写场景气泡位移根治（滚底签名守卫 + QQ 行顶部对齐），转写面板出现时气泡视口位置零移动
+  - lint 零错误；改动文件：voice-bubble.tsx、voice-input.tsx、qq.tsx、wechat.tsx、chat.tsx（群聊两端仅确认无需改）；用户数据未触碰
