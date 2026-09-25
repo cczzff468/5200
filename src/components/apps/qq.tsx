@@ -233,7 +233,7 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
-import { decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
+import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
@@ -2675,9 +2675,6 @@ function ChatPage({
       }
     }
 
-    // AI 语音频率（本会话独立设置，发送时现场读取）：本轮命中 → finalize 里把第一条文字消息升级为语音气泡；
-    // 发起被拒时 rollback 恢复计数
-    const voiceDecision = decideAiVoiceTurn(sessionKey);
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -2792,29 +2789,29 @@ function ChatPage({
             target: { app: 'qq', contactId: peer.id },
           });
         }
-        // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级不影响聊天）
-        if (voiceDecision.speak) {
-          const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
-          if (target) {
-            const targetId = target.id;
-            void synthesizeAiVoice(target.content, peer.id)
-              .then((clip) => {
-                if (!clip) return; // 合成失败 → 保持文字
-                const voice: VoiceMsgData = {
-                  url: clip.url,
-                  duration: clip.duration,
-                  wave: clip.wave,
-                  localText: clip.localText,
-                  synth: clip.synth,
-                  contactId: peer.id,
-                };
-                const upgrade = (list: QQMsg[]): QQMsg[] =>
-                  list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
-                setMsgs(upgrade);
-                saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
-              })
-              .catch(() => {});
-          }
+        // AI 语音频率：每条文字消息独立判断是否发语音（每条都发=全语音；经常/偶尔/不经常按周期命中；
+        // 异步合成，失败保持文字自动降级，不影响聊天）
+        for (const target of all) {
+          if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
+          if (!decideAiVoiceMessage(sessionKey)) continue;
+          const targetId = target.id;
+          void synthesizeAiVoice(target.content, peer.id)
+            .then((clip) => {
+              if (!clip) return; // 合成失败 → 保持文字
+              const voice: VoiceMsgData = {
+                url: clip.url,
+                duration: clip.duration,
+                wave: clip.wave,
+                localText: clip.localText,
+                synth: clip.synth,
+                contactId: peer.id,
+              };
+              const upgrade = (list: QQMsg[]): QQMsg[] =>
+                list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
+              setMsgs(upgrade);
+              saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+            })
+            .catch(() => {});
         }
         // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
         if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, all.length);
@@ -2836,9 +2833,8 @@ function ChatPage({
           );
       },
     });
-    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回；同时恢复语音频率计数
+    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started) {
-      voiceDecision.rollback();
       if (userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
     },

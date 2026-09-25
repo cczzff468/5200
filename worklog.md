@@ -7157,3 +7157,19 @@ Stage Summary:
 - 防刷屏：同会话连发合并（正文取最新+N 条徽标+计时重置）、跨会话排队逐条 3s、队列上限 4、系统通知 tag=会话键替换合并
 - 离开网页：hidden+已授权→Web Notification（头像/App 图标+群名前缀正文）；default 首次申请一次；denied/不支持全部降级应用内弹窗且不影响
 - 单聊群聊共用同一套弹窗组件与推送 API；语音频率/红包转账/拉黑/长按菜单等既有链路零改动（只在各端 finalize 落盘后追加只读推送）
+---
+Task ID: 26
+Agent: main (Z.ai Code)
+Task: ①灵动岛通知弹窗适配浅色模式；②修复 AI 语音频率控制（"每条都语音"只有第一条生效 → 每条 AI 消息独立判定）
+
+Work Log:
+- 根因定位：ai-voice.ts 的 decideAiVoiceTurn 是「每轮一次」决策（beginChatStream 前调用+rollback），5 端 finalize 只把「本轮第一条文字」升级语音 → 一轮多条消息时第二条起永远是文字；决策在流发起时消耗，流出错但已 started 时还会白耗一次机会
+- ai-voice.ts 重构：decideAiVoiceTurn/AiVoiceDecision 删除，新增 decideAiVoiceMessage(freqKey, counterKey)=boolean（每条消息独立调用）；计数语义 n=本周期已发消息数（语音也算 1 条），n%N===0→语音且 n 重置为 1，否则文字 n+1 → 第 1、N+1、2N+1…条是语音（经常=1/4/7、偶尔=1/8/15、不经常=1/13/25）；决策只在消息真正落盘时推进，流被拒/出错无消息落盘不消耗计数 → rollback 概念整体移除；always 档每条都 true（不碰计数器）；文件头注释与 always 档 desc 同步更新
+- 5 端接线改造（wechat/qq/chat/wx-group/qq-group）：删除 beginChatStream 前的 voiceDecision 行与 !started/!ok 分支的 rollback()；finalize 从「if (voiceDecision.speak) 挑第一条」改为 for 循环遍历本轮全部落盘消息，逐条过滤（非 error/sys/blkreq、kind 空或 text、content 非空）后 decideAiVoiceMessage 判定，命中即独立 synthesizeAiVoice 异步合成升级语音气泡（失败保持文字自动降级）；单聊 counterKey=会话键、群聊=`群键#角色id` 每角色独立不变
+- IslandNotification.tsx 浅色适配：NotifyCard 订阅 useSettings(theme)+useSystemDark，selectResolvedTheme 解析（auto 跟系统）；卡片背景改由 framer 补间——initial 恒为纯黑（灵动岛同色），展开终态 dark?'#000':'rgba(246,246,248,0.94)'（浅色磨砂+backdrop-blur-xl），收起 TWEEN_OUT 补间回纯黑与静态岛无缝交接（无白底闪变）；展开期背景色用 0.2s 短 tween、尺寸仍走 spring（SPRING_WITH_BG）；文字/副标题/合并徽标/头像占位/App 图标描环全部深浅双套配色
+- E2E（agent-browser 实测）：①QQ 单聊 always+回复3条 → AI 一轮连发 3 条**全部语音气泡**（1″/3″/2″，IndexedDB kind=voice 验证；旧逻辑只有第 1 条）——用户 bug 场景闭环；②微信 often 连续 4 轮 → 第 1 轮语音(counter=1)→第 2 轮文字(c2)→第 3 轮文字(c3)→第 4 轮语音(c 归 1)，第 1/4 条语音+计数器正确重置；③浅色主题弹窗：展开期颜色时间线采样 1500ms rgba(184)→3001ms rgba(246,246,248,0.94) 终态精确匹配、文字 rgb(0,0,0)，截图视觉确认磨砂浅卡+黑字+QQ 角标；④深色主题弹窗：rgb(0,0,0)+白字终态、截图确认；⑤收起期颜色补间回黑+宽度缩回胶囊（4501ms 采样捕捉到 rgba(188)→黑、w=246→118），与灵动岛同色无缝；⑥3 秒自动收起正常；⑦回归：微信/QQ 收发、语音气泡播放、灵动岛弹出/恢复全链路无异常
+- bunx tsc --noEmit 通过；bun run lint 0 错误；浏览器 console/page errors 零；dev.log 无编译错误（/api/chat 502 为上游代理偶发、forceSdk 兜底既有行为）
+
+Stage Summary:
+- AI 语音频率改为「每条消息独立判定」：always=每条全语音（一轮多条也全部语音）；often/sometimes/rarely 按全局消息序数周期命中（第 1/N+1/2N+1 条）；计数器按会话（群聊按角色）隔离持久化，语音落盘即重置为新周期第 1 条；决策只在消息真正落盘时消耗，流被拒/出错不白耗机会，TTS 失败单条降级文字不影响其他消息
+- 灵动岛通知弹窗跟随手机主题：浅色=iOS 浅色磨砂卡（黑字），深色=纯黑卡（白字），auto 跟系统；展开从灵动岛黑色胶囊淡变展开、收起补间回纯黑，深浅两套交接均无缝无闪烁

@@ -76,7 +76,7 @@ import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
-import { aiVoiceFreqLabel, decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
+import { aiVoiceFreqLabel, decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, contactNameVariants, type ContactRecord } from '@/lib/contacts';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
@@ -2843,9 +2843,6 @@ export function WxGroupChatPage({
           ...history,
         ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
-        // AI 语音频率（按群设置；群聊按「群会话键#角色 id」独立计数，成员互不影响）：
-        // 本轮命中 → finalize 里把该成员第一条文字消息升级为语音气泡；发起被拒时 rollback 恢复计数
-        const voiceDecision = decideAiVoiceTurn(sKey, `${sKey}#${char.id}`);
 
         const ok = beginChatStream({
           sessionKey: sKey,
@@ -3001,28 +2998,27 @@ export function WxGroupChatPage({
                 target: { app: 'wechat', groupId: gid },
               });
             }
-            // AI 语音频率（按群设置、按角色计数）：本轮命中 → 把该成员第一条文字消息升级为语音气泡
-            // （异步合成；失败保持文字自动降级。朗读原文同时冗余进 transcript，存储规范化丢 localText 后仍可转文字/进上下文）
-            if (voiceDecision.speak) {
-              const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
-              if (target) {
-                const targetId = target.id;
-                void synthesizeAiVoice(target.content, char.id)
-                  .then((clip) => {
-                    if (!clip) return; // 合成失败 → 保持文字
-                    const voice: VoiceMsgData = {
-                      url: clip.url,
-                      duration: clip.duration,
-                      wave: clip.wave,
-                      localText: clip.localText,
-                      transcript: clip.localText,
-                      synth: clip.synth,
-                      contactId: char.id,
-                    };
-                    patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
-                  })
-                  .catch(() => {});
-              }
+            // AI 语音频率（按群设置、按角色计数）：每条文字消息独立判断是否发语音（异步合成；
+            // 失败保持文字自动降级。朗读原文同时冗余进 transcript，存储规范化丢 localText 后仍可转文字/进上下文）
+            for (const target of all) {
+              if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
+              if (!decideAiVoiceMessage(sKey, `${sKey}#${char.id}`)) continue;
+              const targetId = target.id;
+              void synthesizeAiVoice(target.content, char.id)
+                .then((clip) => {
+                  if (!clip) return; // 合成失败 → 保持文字
+                  const voice: VoiceMsgData = {
+                    url: clip.url,
+                    duration: clip.duration,
+                    wave: clip.wave,
+                    localText: clip.localText,
+                    transcript: clip.localText,
+                    synth: clip.synth,
+                    contactId: char.id,
+                  };
+                  patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
+                })
+                .catch(() => {});
             }
             // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
             void (async () => {
@@ -3054,8 +3050,7 @@ export function WxGroupChatPage({
           },
         });
         if (!ok) {
-          voiceDecision.rollback(); // 发起被拒（同群该角色已有流）：回滚本次计数推进，不凭空消耗一次语音机会
-          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
+          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）；未落盘任何消息，不消耗语音计数
         }
       }),
      

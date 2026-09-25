@@ -60,7 +60,7 @@ import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteM
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { stopSpeaking } from '@/lib/ios/tts-client';
-import { decideAiVoiceTurn, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
+import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -4012,8 +4012,6 @@ function ChatPage({
       if (m.kind === 'image' && m.img?.src) turnImages.unshift(m.img.src);
     }
 
-    // AI 语音频率决策：本轮回复是否用语音发送（副作用推进计数器；流被拒绝时 rollback 恢复）
-    const voiceDecision = decideAiVoiceTurn(sessionKey);
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -4129,29 +4127,29 @@ function ChatPage({
             target: { app: 'wechat', contactId: peer.id },
           });
         }
-        // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级不影响聊天）
-        if (voiceDecision.speak) {
-          const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
-          if (target) {
-            const targetId = target.id;
-            void synthesizeAiVoice(target.content, peer.id)
-              .then((clip) => {
-                if (!clip) return; // 合成失败 → 保持文字
-                const voice: VoiceMsgData = {
-                  url: clip.url,
-                  duration: clip.duration,
-                  wave: clip.wave,
-                  localText: clip.localText,
-                  synth: clip.synth,
-                  contactId: peer.id,
-                };
-                const upgrade = (list: WxMsg[]): WxMsg[] =>
-                  list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
-                setMsgs(upgrade);
-                saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
-              })
-              .catch(() => {});
-          }
+        // AI 语音频率：每条文字消息独立判断是否发语音（每条都发=全语音；经常/偶尔/不经常按周期命中；
+        // 异步合成，失败保持文字自动降级，不影响聊天）
+        for (const target of all) {
+          if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
+          if (!decideAiVoiceMessage(sessionKey)) continue;
+          const targetId = target.id;
+          void synthesizeAiVoice(target.content, peer.id)
+            .then((clip) => {
+              if (!clip) return; // 合成失败 → 保持文字
+              const voice: VoiceMsgData = {
+                url: clip.url,
+                duration: clip.duration,
+                wave: clip.wave,
+                localText: clip.localText,
+                synth: clip.synth,
+                contactId: peer.id,
+              };
+              const upgrade = (list: WxMsg[]): WxMsg[] =>
+                list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
+              setMsgs(upgrade);
+              saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+            })
+            .catch(() => {});
         }
         // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
         if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, all.length);
@@ -4173,7 +4171,6 @@ function ChatPage({
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started && userMsg) {
-      voiceDecision.rollback(); // 本轮未真正发起：回滚语音计数推进，不凭空消耗一次语音机会
       setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
     },

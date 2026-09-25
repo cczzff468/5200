@@ -64,7 +64,7 @@ import {
   type BubbleMenuItem,
 } from '@/components/apps/bubble-menu';
 import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, contactNameVariants, type ContactRecord } from '@/lib/contacts';
-import { aiVoiceFreqLabel, decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
+import { aiVoiceFreqLabel, decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
@@ -2507,9 +2507,6 @@ export function QqGroupChatPage({
           .join('\n\n');
         // 回复条数（按群独立，发送时现场读取）：>1 时连发多条（一句一条），成员们像真人一样逐条刷屏
         const replyCount = getReplyCount(sKey);
-        // AI 语音频率（按群设置、按角色计数）：本轮命中 → finalize 阶段把该成员第一条文字消息升级为语音气泡；
-        // 流被拒时 rollback 恢复计数，避免凭空消耗一次语音机会
-        const voiceDecision = decideAiVoiceTurn(sKey, `${sKey}#${char.id}`);
         const payload: ChatPayloadMessage[] = [
           { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
           ...history,
@@ -2670,26 +2667,25 @@ export function QqGroupChatPage({
                 target: { app: 'qq', groupId: gid },
               });
             }
-            // AI 语音频率（按群设置、按角色计数）：本轮命中 → 该成员第一条文字消息升级为语音气泡（异步合成；失败保持文字自动降级）
-            if (voiceDecision.speak) {
-              const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
-              if (target) {
-                const targetId = target.id;
-                void synthesizeAiVoice(target.content, char.id)
-                  .then((clip) => {
-                    if (!clip) return;
-                    const voice: VoiceMsgData = {
-                      url: clip.url,
-                      duration: clip.duration,
-                      wave: clip.wave,
-                      localText: clip.localText,
-                      synth: clip.synth,
-                      contactId: char.id,
-                    };
-                    patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
-                  })
-                  .catch(() => {});
-              }
+            // AI 语音频率（按群设置、按角色计数）：每条文字消息独立判断是否发语音（异步合成；失败保持文字自动降级）
+            for (const target of all) {
+              if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
+              if (!decideAiVoiceMessage(sKey, `${sKey}#${char.id}`)) continue;
+              const targetId = target.id;
+              void synthesizeAiVoice(target.content, char.id)
+                .then((clip) => {
+                  if (!clip) return; // 合成失败 → 保持文字
+                  const voice: VoiceMsgData = {
+                    url: clip.url,
+                    duration: clip.duration,
+                    wave: clip.wave,
+                    localText: clip.localText,
+                    synth: clip.synth,
+                    contactId: char.id,
+                  };
+                  patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
+                })
+                .catch(() => {});
             }
             // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
             void (async () => {
@@ -2721,8 +2717,7 @@ export function QqGroupChatPage({
           },
         });
         if (!ok) {
-          voiceDecision.rollback(); // 流被拒（同会话已有流）：恢复计数，本轮不算一次语音机会
-          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
+          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）；未落盘任何消息，不消耗语音计数
         }
       }),
     [apiConfig, appendMsg, applyGroupAdminAction, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, patchGroupMsg, sKey]

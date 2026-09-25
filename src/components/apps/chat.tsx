@@ -83,7 +83,7 @@ import { stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
-import { decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
+import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 
 // ---------------- 类型与常量 ----------------
@@ -853,8 +853,6 @@ function ChatView({
       wbBlocks ?? WB_EMPTY_BLOCKS,
     );
     if (sysEvent) payload.push({ role: 'user', content: sysEvent });
-    // AI 语音频率：本轮回复是否用语音发送（每次 AI 回复轮推进一次计数；流被拒时回滚，避免凭空消耗机会）
-    const voiceDecision = decideAiVoiceTurn(sessionKey);
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -939,29 +937,29 @@ function ChatView({
             target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
           });
         }
-        // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级）
-        if (voiceDecision.speak) {
-          const target = saved.find((m) => !m.error && !m.sys && !m.blkreq && (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
-          if (target) {
-            const targetId = target.id;
-            void synthesizeAiVoice(target.content, memContactId)
-              .then((clip) => {
-                if (!clip) return; // 合成失败 → 保持文字
-                const voice: VoiceMsgData = {
-                  url: clip.url,
-                  duration: clip.duration,
-                  wave: clip.wave,
-                  localText: clip.localText,
-                  synth: clip.synth,
-                  contactId: memContactId ?? undefined,
-                };
-                const upgrade = (list: ChatMsg[]): ChatMsg[] =>
-                  list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
-                setMsgs(upgrade);
-                saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
-              })
-              .catch(() => {});
-          }
+        // AI 语音频率：每条文字消息独立判断是否发语音（每条都发=全语音；经常/偶尔/不经常按周期命中；
+        // 异步合成，失败保持文字自动降级）
+        for (const target of saved) {
+          if (!(!target.error && !target.sys && !target.blkreq && (target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
+          if (!decideAiVoiceMessage(sessionKey)) continue;
+          const targetId = target.id;
+          void synthesizeAiVoice(target.content, memContactId)
+            .then((clip) => {
+              if (!clip) return; // 合成失败 → 保持文字
+              const voice: VoiceMsgData = {
+                url: clip.url,
+                duration: clip.duration,
+                wave: clip.wave,
+                localText: clip.localText,
+                synth: clip.synth,
+                contactId: memContactId ?? undefined,
+              };
+              const upgrade = (list: ChatMsg[]): ChatMsg[] =>
+                list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
+              setMsgs(upgrade);
+              saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
+            })
+            .catch(() => {});
         }
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
         // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
@@ -980,9 +978,8 @@ function ChatView({
         }
       },
     });
-    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息 + 本轮语音计数推进，避免有去无回
+    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
     if (!started) {
-      voiceDecision.rollback();
       if (userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
   };

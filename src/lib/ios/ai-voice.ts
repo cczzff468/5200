@@ -5,16 +5,18 @@
  *
  * 一、频率设置（按会话独立，localStorage 持久化；群聊按群保存）：
  *   off      关闭        —— AI 不发语音，只发文字
- *   always   每条都发语音 —— AI 每次回复的第一条消息都是语音
+ *   always   每条都发语音 —— AI 的每一条消息都是语音
  *   often    经常        —— 每 3 条消息中，有 1 条是语音
  *   sometimes 偶尔       —— 每 7 条消息中，有 1 条是语音
  *   rarely   不经常      —— 每 12 条消息中，有 1 条是语音
  *
- * 二、计数规则（每个角色独立计数；每个会话独立计数）：
+ * 二、计数规则（每个角色独立计数；每个会话独立计数；每条消息独立判定）：
  *   - 计数器按 counterKey 隔离（单聊 = 会话键；群聊 = 「群会话键#角色 id」，群成员互不影响）；
- *   - 每次 AI 回复轮调用 decideAiVoiceTurn 推进一次：计数 +1，达到频率倍数 → 本轮发语音并把
- *     计数器清零（语音发送后计数器重置，重新开始计数）；
- *   - beginChatStream 拒绝（同会话已有流）时调用 rollback() 恢复计数，避免凭空消耗一次机会；
+ *   - 每条 AI 消息落盘前调用 decideAiVoiceMessage 判定一次：n = 本周期已发消息数（语音也算 1 条），
+ *     n % N === 0 → 本条发语音且计数器重置为 1（语音本身即新周期第 1 条）；否则文字、n+1。
+ *     于是第 1、N+1、2N+1…条是语音：经常=第 1/4/7 条，偶尔=第 1/8/15 条，不经常=第 1/13/25 条；
+ *   - 一轮生成多条消息时逐条判定（不能只判第一条）；决策只在消息真正落盘时推进，
+ *     流被拒绝/出错没有消息落盘就不消耗计数，因此无需回滚；
  *   - 切换角色/会话天然按 key 分别维护，无需手动重置。
  *
  * 三、语音合成 synthesizeAiVoice（用当前角色的音色）：
@@ -43,7 +45,7 @@ export interface AiVoiceFreqOption {
 
 export const AI_VOICE_FREQ_OPTIONS: readonly AiVoiceFreqOption[] = [
   { value: 'off', label: '关闭', desc: 'AI 不发语音，只发文字' },
-  { value: 'always', label: '每条都发语音', desc: 'AI 每次回复都用语音发送' },
+  { value: 'always', label: '每条都发语音', desc: 'AI 的每条消息都用语音发送' },
   { value: 'often', label: '经常', desc: '每 3 条消息中，有 1 条是语音' },
   { value: 'sometimes', label: '偶尔', desc: '每 7 条消息中，有 1 条是语音' },
   { value: 'rarely', label: '不经常', desc: '每 12 条消息中，有 1 条是语音' },
@@ -131,38 +133,24 @@ function saveCounters(map: Record<string, number>): void {
   }
 }
 
-export interface AiVoiceDecision {
-  /** 本轮 AI 回复是否用语音发送 */
-  speak: boolean;
-  /** 撤销本次计数推进（beginChatStream 被拒绝/回滚时调用；正常发起则不要调用） */
-  rollback: () => void;
-}
-
 /**
- * 决定本轮 AI 回复发文字还是语音（每次 AI 回复轮调用一次，副作用：推进计数器）：
+ * 决定「这一条」AI 消息发文字还是语音（每条消息独立调用一次，副作用：推进计数器）：
  * - 关闭 → 永远文字；
  * - 每条都发 → 永远语音；
- * - 经常/偶尔/不经常 → 计数 +1，达到 N（3/7/12）→ 本轮语音且计数清零，否则文字。
+ * - 经常/偶尔/不经常（每 N 条消息中 1 条语音）→ n % N === 0 → 本条语音且计数器重置为 1
+ *   （语音本身算新周期第 1 条），否则文字且 n+1；第 1、N+1、2N+1… 条是语音。
  */
-export function decideAiVoiceTurn(freqKey: string, counterKey: string = freqKey): AiVoiceDecision {
+export function decideAiVoiceMessage(freqKey: string, counterKey: string = freqKey): boolean {
   const freq = getAiVoiceFreq(freqKey);
-  if (freq === 'off') return { speak: false, rollback: () => {} };
-  if (freq === 'always') return { speak: true, rollback: () => {} };
+  if (freq === 'off') return false;
+  if (freq === 'always') return true;
   const every = FREQ_EVERY[freq];
   const map = loadCounters();
-  const prev = map[counterKey] ?? 0;
-  const next = prev + 1;
-  const speak = next >= every;
-  map[counterKey] = speak ? 0 : next;
+  const n = map[counterKey] ?? 0;
+  const speak = n % every === 0;
+  map[counterKey] = speak ? 1 : n + 1;
   saveCounters(map);
-  return {
-    speak,
-    rollback: () => {
-      const m = loadCounters();
-      m[counterKey] = prev;
-      saveCounters(m);
-    },
-  };
+  return speak;
 }
 
 // ---------------- AI 语音合成 ----------------

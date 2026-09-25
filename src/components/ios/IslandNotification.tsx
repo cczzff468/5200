@@ -24,7 +24,7 @@ import {
   NOTIFY_APP_ICON,
   type NotifyApp,
 } from '@/lib/ios/island-notify';
-import { useUI } from '@/lib/ios/store';
+import { selectResolvedTheme, useSettings, useSystemDark, useUI } from '@/lib/ios/store';
 
 const APP_NAME: Record<NotifyApp, string> = { wechat: '微信', qq: 'QQ', chat: '信息' };
 
@@ -32,12 +32,21 @@ const APP_NAME: Record<NotifyApp, string> = { wechat: '微信', qq: 'QQ', chat: 
 const EXPANDED = { width: 'auto', height: 'auto', borderRadius: 24 } as const;
 /** 收起姿态：回到灵动岛胶囊几何（与 PhoneShell 静态灵动岛完全一致） */
 const PILL = { width: 118, height: 33, borderRadius: 17 } as const;
+/** 深色卡片 = 灵动岛同色纯黑；浅色卡片 = iOS 浅色磨砂材质 */
+const CARD_BG_DARK = '#000000';
+const CARD_BG_LIGHT = 'rgba(246, 246, 248, 0.94)';
 const SPRING: Transition = { type: 'spring', stiffness: 420, damping: 34, mass: 0.9 };
 const TWEEN_OUT: Transition = { duration: 0.24, ease: [0.4, 0, 0.2, 1] };
+/** 展开时背景色用短补间（弹性只给尺寸）；收起时随 TWEEN_OUT 一同缩回纯黑，与灵动岛同色无缝交接 */
+const SPRING_WITH_BG: Transition = { ...SPRING, backgroundColor: { duration: 0.2, ease: 'easeOut' } };
 
 function NotifyCard() {
   const current = useIslandNotify((s) => s.current)!;
   const exiting = useIslandNotify((s) => s.exiting);
+  // 跟随手机主题（浅色=浅色磨砂卡片深色文字；深色=纯黑卡片白字），auto 跟随系统
+  const themeMode = useSettings((s) => s.theme);
+  const systemDark = useSystemDark();
+  const dark = selectResolvedTheme(themeMode, systemDark) === 'dark';
   // 熄屏时冻结自动收起，唤醒后续期（与页面不可见冻结同策略）
   const screenOff = useUI((s) => s.screenOff);
   useEffect(() => {
@@ -55,14 +64,19 @@ function NotifyCard() {
       data-testid="island-notification"
       role="button"
       aria-label={`${APP_NAME[current.app]}通知：${current.title} ${current.body}`}
-      initial={PILL}
-      animate={exiting ? PILL : EXPANDED}
-      transition={exiting ? TWEEN_OUT : SPRING}
+      initial={{ ...PILL, backgroundColor: CARD_BG_DARK }}
+      animate={{
+        ...(exiting ? PILL : EXPANDED),
+        backgroundColor: exiting || dark ? CARD_BG_DARK : CARD_BG_LIGHT,
+      }}
+      transition={exiting ? TWEEN_OUT : SPRING_WITH_BG}
       onAnimationComplete={() => {
         if (exiting) finishExit();
       }}
       onClick={activateCurrentNotification}
-      className="pointer-events-auto relative max-w-[calc(100%-16px)] cursor-pointer overflow-hidden bg-black text-white shadow-[0_12px_32px_-10px_rgba(0,0,0,0.55)] outline-none"
+      className={`pointer-events-auto relative max-w-[calc(100%-16px)] cursor-pointer overflow-hidden shadow-[0_12px_32px_-10px_rgba(0,0,0,0.45)] outline-none backdrop-blur-xl ${
+        dark ? 'text-white' : 'text-black'
+      }`}
     >
       {/* 内容：展开基本完成后淡入，收起立即淡出（避免形变过程内容重排可见） */}
       <motion.div
@@ -81,14 +95,20 @@ function NotifyCard() {
               draggable={false}
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center rounded-full bg-white/15 text-[16px] font-medium">
+            <div
+              className={`flex h-full w-full items-center justify-center rounded-full text-[16px] font-medium ${
+                dark ? 'bg-white/15 text-white' : 'bg-black/10 text-black/60'
+              }`}
+            >
               {current.title.slice(0, 1)}
             </div>
           )}
           <img
             src={NOTIFY_APP_ICON[current.app]}
             alt=""
-            className="absolute -bottom-[3px] -right-[3px] h-[16px] w-[16px] rounded-[4px] ring-1 ring-black/30"
+            className={`absolute -bottom-[3px] -right-[3px] h-[16px] w-[16px] rounded-[4px] ring-1 ${
+              dark ? 'ring-black/30' : 'ring-white/80'
+            }`}
             draggable={false}
           />
         </div>
@@ -96,18 +116,24 @@ function NotifyCard() {
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="shrink-0 text-[13px] font-semibold leading-[17px]">{current.title}</span>
             {current.subtitle ? (
-              <span className="truncate text-[11px] leading-[17px] text-white/50">{current.subtitle}</span>
+              <span className={`truncate text-[11px] leading-[17px] ${dark ? 'text-white/50' : 'text-black/45'}`}>
+                {current.subtitle}
+              </span>
             ) : null}
             {current.count > 1 ? (
               <span
                 data-testid="island-notification-count"
-                className="ml-auto shrink-0 rounded-full bg-white/15 px-1.5 text-[10px] leading-[16px] text-white/80"
+                className={`ml-auto shrink-0 rounded-full px-1.5 text-[10px] leading-[16px] ${
+                  dark ? 'bg-white/15 text-white/80' : 'bg-black/10 text-black/70'
+                }`}
               >
                 {current.count} 条
               </span>
             ) : null}
           </div>
-          <div className="mt-0.5 line-clamp-2 text-[12px] leading-[16px] text-white/85">{current.body}</div>
+          <div className={`mt-0.5 line-clamp-2 text-[12px] leading-[16px] ${dark ? 'text-white/85' : 'text-black/75'}`}>
+            {current.body}
+          </div>
         </div>
       </motion.div>
     </motion.div>
