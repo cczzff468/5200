@@ -159,6 +159,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
+import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import {
   beginChatStream,
   clearChatStream,
@@ -2053,6 +2054,14 @@ export function QqGroupChatPage({
     }
   }, [stream, gid, sKey]);
 
+  /** 逐条投递 tick：AI 回复由 ai-delivery 调度器按真人节奏逐条落盘（模块层，与页面是否存活无关）；
+   *  每条到达后从存储重读（appendMsg 已落盘），保证重进群聊页后投递中的消息继续上屏 */
+  useEffect(() => {
+    return subscribeAiDelivery(sKey, () => {
+      if (mountedRef.current) setMsgs(loadGroupMsgs(gid));
+    });
+  }, [sKey, gid]);
+
   /** 新消息滚动到底 */
   useEffect(() => {
     const el = listRef.current;
@@ -2644,75 +2653,89 @@ export function QqGroupChatPage({
             if (all.length === 0) {
               all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
             }
-            for (const m of all) appendMsg(m);
-            // 灵动岛全局通知：群成员每落盘一条消息弹一次（系统行不弹；同会话合并/排队；点击跳群聊）
-            for (const m of all) {
-              const body = notifyPreviewText({
-                kind: m.kind,
-                content: m.content,
-                voiceText: m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || null,
-                amount: m.rp?.amount ?? m.tr?.amount ?? null,
-                blessing: m.rp?.blessing ?? null,
-                note: m.tr?.note ?? null,
-                mergedFwd: m.fwd?.merged ?? false,
-              });
-              if (body === null) continue;
-              pushChatNotification({
-                sessionKey: sKey,
-                app: 'qq',
-                title: charName,
-                subtitle: g.name,
-                avatar: char.avatar ?? null,
-                body,
-                target: { app: 'qq', groupId: gid },
-              });
-            }
-            // AI 语音频率（按群设置、按角色计数）：每条文字消息独立判断是否发语音（异步合成；失败保持文字自动降级）
-            for (const target of all) {
-              if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
-              if (!decideAiVoiceMessage(sKey, `${sKey}#${char.id}`)) continue;
-              const targetId = target.id;
-              void synthesizeAiVoice(target.content, char.id)
-                .then((clip) => {
-                  if (!clip) return; // 合成失败 → 保持文字
-                  const voice: VoiceMsgData = {
-                    url: clip.url,
-                    duration: clip.duration,
-                    wave: clip.wave,
-                    localText: clip.localText,
-                    synth: clip.synth,
-                    contactId: char.id,
-                  };
-                  patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
-                })
-                .catch(() => {});
-            }
-            // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
-            void (async () => {
-              try {
-                const [u, p] = await Promise.all([ownerRealName(), contactRealName(char.id)]);
-                memAfterAiTurn(
-                  char.id,
-                  'qq',
-                  apiConfig,
-                  () =>
-                    loadGroupMsgs(gid)
-                      .filter((m) => m.kind !== 'notice' && !m.recalled)
-                      .slice(-30)
-                      .map((m) =>
-                        m.role === 'me'
-                          ? { role: 'me' as const, text: msgTextOf(m) }
-                          : { role: 'peer' as const, text: `${m.senderName}：${msgTextOf(m)}` }
-                      ),
-                  // 消息计数锚点用：未 slice/map 的有效消息数组（群消息流，含其他成员的消息）
-                  () => loadGroupMsgs(gid).filter((m) => m.kind !== 'notice' && !m.recalled),
-                  { user: u, peer: p },
-                  { roundScope: `group:${gid}`, group: { id: gid, members: [me.id, ...groupRef.current.memberIds] } }
-                );
-              } catch {
-                // 名字解析失败不影响落盘
-              }
-            })();
+            // 逐条投递（模拟真人连发）：每条到达时才落盘上屏 + 弹灵动岛通知 + 判定语音频率，
+            // 停顿按内容长度模拟打字节奏；调度器在模块层运行，与群聊页是否存活无关。
+            // 同会话批次串行排队：不同角色回合的消息按落盘顺序先后出现，不会交错
+            void scheduleAiDelivery<WxGroupMsg>(
+              sKey,
+              all,
+              (m) => {
+                appendMsg(m);
+                // 灵动岛通知：命中语音的消息直接显示[语音]，其余常规映射（系统行不弹）
+                const voiceTurn =
+                  (m.kind === undefined || m.kind === 'text') &&
+                  m.content.trim().length > 0 &&
+                  decideAiVoiceMessage(sKey, `${sKey}#${char.id}`);
+                const body = voiceTurn
+                  ? '[语音]'
+                  : notifyPreviewText({
+                      kind: m.kind,
+                      content: m.content,
+                      voiceText: m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || null,
+                      amount: m.rp?.amount ?? m.tr?.amount ?? null,
+                      blessing: m.rp?.blessing ?? null,
+                      note: m.tr?.note ?? null,
+                      mergedFwd: m.fwd?.merged ?? false,
+                    });
+                if (body !== null) {
+                  pushChatNotification({
+                    sessionKey: sKey,
+                    app: 'qq',
+                    title: charName,
+                    subtitle: g.name,
+                    avatar: char.avatar ?? null,
+                    body,
+                    target: { app: 'qq', groupId: gid },
+                  });
+                }
+                if (voiceTurn) {
+                  // 异步合成，失败保持文字自动降级
+                  const targetId = m.id;
+                  void synthesizeAiVoice(m.content, char.id)
+                    .then((clip) => {
+                      if (!clip) return; // 合成失败 → 保持文字
+                      const voice: VoiceMsgData = {
+                        url: clip.url,
+                        duration: clip.duration,
+                        wave: clip.wave,
+                        localText: clip.localText,
+                        synth: clip.synth,
+                        contactId: char.id,
+                      };
+                      patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
+                    })
+                    .catch(() => {});
+                }
+              },
+              { delay: (i) => (i + 1 < all.length ? typingDelayOf(all[i + 1].content ?? '') : 0) } // 首条立即出现，停顿按下一条长度模拟打字
+            ).then(() => {
+              // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记；全部消息投递完后执行，后台异步失败静默）
+              void (async () => {
+                try {
+                  const [u, p] = await Promise.all([ownerRealName(), contactRealName(char.id)]);
+                  memAfterAiTurn(
+                    char.id,
+                    'qq',
+                    apiConfig,
+                    () =>
+                      loadGroupMsgs(gid)
+                        .filter((m) => m.kind !== 'notice' && !m.recalled)
+                        .slice(-30)
+                        .map((m) =>
+                          m.role === 'me'
+                            ? { role: 'me' as const, text: msgTextOf(m) }
+                            : { role: 'peer' as const, text: `${m.senderName}：${msgTextOf(m)}` }
+                        ),
+                    // 消息计数锚点用：未 slice/map 的有效消息数组（群消息流，含其他成员的消息）
+                    () => loadGroupMsgs(gid).filter((m) => m.kind !== 'notice' && !m.recalled),
+                    { user: u, peer: p },
+                    { roundScope: `group:${gid}`, group: { id: gid, members: [me.id, ...groupRef.current.memberIds] } }
+                  );
+                } catch {
+                  // 名字解析失败不影响落盘
+                }
+              })();
+            });
             resolve();
           },
         });
@@ -4096,46 +4119,47 @@ export function QqGroupChatPage({
           </div>
         )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => {
-              const v = e.target.value;
-              setDraft(v);
-              // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
-              if (v.endsWith('@')) {
-                setStickerOpen(false);
-                setPlusOpen(false);
-                setAtOpen(true);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-            aria-label="发送群聊消息"
-            data-testid="qq-groupchat-input"
-            className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
-          />
-          {/* 文字转语音开关（常驻输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
-          <button
-            type="button"
-            aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-            aria-pressed={ttsSend}
-            data-testid="qqg-tts-toggle"
-            onClick={() => {
-              const nv = !ttsSend;
-              setTtsSend(nv);
-              onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-            }}
-            className="shrink-0 p-1 transition-colors active:opacity-60"
-            style={{ color: ttsSend ? '#0099FF' : undefined }}
-          >
-            <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
-          </button>
+          <div className="relative min-w-0 flex-1">
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft(v);
+                // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
+                if (v.endsWith('@')) {
+                  setStickerOpen(false);
+                  setPlusOpen(false);
+                  setAtOpen(true);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+              aria-label="发送群聊消息"
+              data-testid="qq-groupchat-input"
+              className="h-[40px] w-full rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] pl-3.5 pr-9 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+            />
+            {/* 文字转语音开关（声波图标收进输入框内部右侧）：开启后输入框文字发送为语音气泡 */}
+            <button
+              type="button"
+              aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+              aria-pressed={ttsSend}
+              data-testid="qqg-tts-toggle"
+              onClick={() => {
+                const nv = !ttsSend;
+                setTtsSend(nv);
+                onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+              }}
+              className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/40 dark:text-white/40'}`}
+            >
+              <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
+            </button>
+          </div>
           {(draft.trim() || canDispatch) ? (
             <>
               <button

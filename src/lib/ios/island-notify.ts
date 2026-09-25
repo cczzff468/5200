@@ -332,7 +332,8 @@ export function notifyPreviewText(m: NotifyMsgInfo): string | null {
     case 'image':
       return '[图片]';
     case 'voice':
-      return m.voiceText ? `[语音] ${m.voiceText}` : '[语音]';
+      // 语音消息预览只显示[语音]（iOS 原生行为）：不透出转写原文，与各端会话列表预览口径一致
+      return '[语音]';
     case 'redpacket':
       return m.amount != null ? `[红包] ¥${m.amount}${m.blessing ? ` ${m.blessing}` : ''}` : '[红包]';
     case 'transfer':

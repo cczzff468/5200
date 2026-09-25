@@ -136,6 +136,7 @@ import {
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
+import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -378,6 +379,7 @@ function msgPreview(m: QQMsg | undefined): string {
   if (m.kind === 'family') return '[亲属卡]';
   if (m.kind === 'notice') return m.notice ? `${m.notice.pre}${m.notice.accent}` : '';
   if (m.kind === 'image') return '[图片]';
+  if (m.kind === 'voice') return '[语音]';
   if (m.kind === 'location') return '[位置]';
   if (m.kind === 'sticker') return '[表情]';
   if (m.kind === 'forward') return m.fwd?.merged ? '[聊天记录]' : m.content;
@@ -2503,6 +2505,25 @@ function ChatPage({
     });
   }, [stream, sessionKey, peer.id]);
 
+  /** 逐条投递 tick：AI 回复由 ai-delivery 调度器按真人节奏逐条落盘（模块层，与页面是否存活无关），
+   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（动作状态/语音升级以存储为权威） */
+  useEffect(() => {
+    return subscribeAiDelivery(sessionKey, () => {
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        return [...prev.map((m) => savedMap.get(m.id) ?? m), ...saved.filter((m) => !prev.some((p) => p.id === m.id))];
+      });
+    });
+  }, [sessionKey, peer.id]);
+
+  /** 投递进行中（含排队批次）：标题维持「正在输入中…」，直到最后一条消息发出 */
+  const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey));
+  useEffect(() => {
+    setDelivering(isAiDelivering(sessionKey));
+    return subscribeAiDeliveryActive(() => setDelivering(isAiDelivering(sessionKey)));
+  }, [sessionKey]);
+
   /** 排队补跑：流进行中发来的消息（qqQueuedTurns）在本轮流结束后自动触发回复。
    *  页面存活时监听流结束广播；离开后流才收尾的，重进页面时补跑（消息已落盘不丢）。 */
   useEffect(() => {
@@ -2768,69 +2789,84 @@ function ChatPage({
         if (all.length === 0) {
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
-        saveMsgs(peer.id, [...cur, ...all]);
-        // 灵动岛全局通知：AI 每落盘一条消息弹一次（系统行/凭据卡不弹；同会话连发自动合并/排队）
-        for (const m of all) {
-          const body = notifyPreviewText({
-            kind: m.kind,
-            content: m.content,
-            voiceText: m.voice?.transcript || m.voice?.localText || null,
-            amount: m.packet?.amount ?? null,
-            blessing: m.packet?.type === 'redpacket' ? m.packet.note : null,
-            note: m.packet?.type === 'transfer' ? m.packet.note : null,
-          });
-          if (body === null) continue;
-          pushChatNotification({
-            sessionKey: `qq:${peer.id}`,
-            app: 'qq',
-            title: peer.name,
-            avatar: peer.avatar ?? null,
-            body,
-            target: { app: 'qq', contactId: peer.id },
-          });
-        }
-        // AI 语音频率：每条文字消息独立判断是否发语音（每条都发=全语音；经常/偶尔/不经常按周期命中；
-        // 异步合成，失败保持文字自动降级，不影响聊天）
-        for (const target of all) {
-          if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
-          if (!decideAiVoiceMessage(sessionKey)) continue;
-          const targetId = target.id;
-          void synthesizeAiVoice(target.content, peer.id)
-            .then((clip) => {
-              if (!clip) return; // 合成失败 → 保持文字
-              const voice: VoiceMsgData = {
-                url: clip.url,
-                duration: clip.duration,
-                wave: clip.wave,
-                localText: clip.localText,
-                synth: clip.synth,
-                contactId: peer.id,
-              };
-              const upgrade = (list: QQMsg[]): QQMsg[] =>
-                list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
-              setMsgs(upgrade);
-              saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
-            })
-            .catch(() => {});
-        }
-        // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
-        if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, all.length);
-        // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
-        addBondPoints(peer.id, BOND_MSG_POINTS);
-        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
-        // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
-        // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        void Promise.all([ownerRealName(), contactRealName(peer.id)])
-          .then(([owner, peerReal]) =>
-            memAfterAiTurn(
-              peer.id,
-              'qq',
-              apiConfig,
-              () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-              () => loadMsgs(peer.id),
-              { user: owner || me.realName || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
-            )
-          );
+        // 动作产生的卡片状态变化（红包领取/转账流转等）先落盘；消息本体逐条投递
+        saveMsgs(peer.id, cur);
+        // 逐条投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，
+        // 停顿按内容长度模拟打字节奏；调度器在模块层运行，与聊天页是否存活无关
+        void scheduleAiDelivery<QQMsg>(
+          sessionKey,
+          all,
+          (m) => {
+            saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
+            // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
+            const voiceTurn =
+              (m.kind === undefined || m.kind === 'text') &&
+              m.content.trim().length > 0 &&
+              decideAiVoiceMessage(sessionKey);
+            const body = voiceTurn
+              ? '[语音]'
+              : notifyPreviewText({
+                  kind: m.kind,
+                  content: m.content,
+                  voiceText: m.voice?.transcript || m.voice?.localText || null,
+                  amount: m.packet?.amount ?? null,
+                  blessing: m.packet?.type === 'redpacket' ? m.packet.note : null,
+                  note: m.packet?.type === 'transfer' ? m.packet.note : null,
+                });
+            if (body !== null) {
+              pushChatNotification({
+                sessionKey: `qq:${peer.id}`,
+                app: 'qq',
+                title: peer.name,
+                avatar: peer.avatar ?? null,
+                body,
+                target: { app: 'qq', contactId: peer.id },
+              });
+            }
+            if (voiceTurn) {
+              // 异步合成，失败保持文字自动降级，不影响聊天
+              const targetId = m.id;
+              void synthesizeAiVoice(m.content, peer.id)
+                .then((clip) => {
+                  if (!clip) return; // 合成失败 → 保持文字
+                  const voice: VoiceMsgData = {
+                    url: clip.url,
+                    duration: clip.duration,
+                    wave: clip.wave,
+                    localText: clip.localText,
+                    synth: clip.synth,
+                    contactId: peer.id,
+                  };
+                  const upgrade = (list: QQMsg[]): QQMsg[] =>
+                    list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+                  setMsgs(upgrade);
+                  saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+                })
+                .catch(() => {});
+            }
+            // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
+            if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, 1);
+          },
+          { delay: (i) => (i + 1 < all.length ? typingDelayOf(all[i + 1].content ?? '') : 0) } // 首条立即出现，停顿按下一条长度模拟打字
+        ).then(() => {
+          // 密友值 + 记忆库：一轮对话结束（全部消息投递完）后执行；后台异步，失败静默不打断聊天
+          // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
+          addBondPoints(peer.id, BOND_MSG_POINTS);
+          // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片；
+          // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
+          // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+          void Promise.all([ownerRealName(), contactRealName(peer.id)])
+            .then(([owner, peerReal]) =>
+              memAfterAiTurn(
+                peer.id,
+                'qq',
+                apiConfig,
+                () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
+                () => loadMsgs(peer.id),
+                { user: owner || me.realName || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
+              )
+            );
+        });
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -3602,9 +3638,9 @@ function ChatPage({
           <div className="flex items-center gap-1.5">
             <span
               data-testid="qq-chat-title"
-              className={`truncate text-[17px] font-semibold leading-tight ${streaming ? 'text-black/45 dark:text-white/45' : ''}`}
+              className={`truncate text-[17px] font-semibold leading-tight ${streaming || delivering ? 'text-black/45 dark:text-white/45' : ''}`}
             >
-              {streaming ? '正在输入中…' : peer.name}
+              {streaming || delivering ? '正在输入中…' : peer.name}
             </span>
             {flags.muted === true && (
               <BellOff
@@ -4006,41 +4042,43 @@ function ChatPage({
           </div>
         )}
         <div className="flex items-center gap-2 px-3 pb-1 pt-3">
-          <input
-            data-testid="qq-chat-input"
-            value={input}
-            onChange={(e) => {
-              const v = e.target.value;
-              setInput(v);
-              // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
-              if (v.endsWith('@')) {
-                setPlusOpen(false);
-                setStickerOpen(false);
-                setAtOpen(true);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void send();
-            }}
-            placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-            aria-label={`发送消息给${peer.name}`}
-            className="h-[40px] min-w-0 flex-1 rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] px-3.5 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
-          />
-          {/* 文字转语音开关（常驻输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
-          <button
-            type="button"
-            aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-            aria-pressed={ttsSend}
-            data-testid="qq-tts-toggle"
-            onClick={() => {
-              const nv = !ttsSend;
-              setTtsSend(nv);
-              onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-            }}
-            className={`shrink-0 p-1 transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/55 dark:text-white/55'}`}
-          >
-            <AudioLines className="h-[24px] w-[24px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
-          </button>
+          <div className="relative min-w-0 flex-1">
+            <input
+              data-testid="qq-chat-input"
+              value={input}
+              onChange={(e) => {
+                const v = e.target.value;
+                setInput(v);
+                // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+                if (v.endsWith('@')) {
+                  setPlusOpen(false);
+                  setStickerOpen(false);
+                  setAtOpen(true);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void send();
+              }}
+              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+              aria-label={`发送消息给${peer.name}`}
+              className="h-[40px] w-full rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] pl-3.5 pr-10 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+            />
+            {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入框文字发送为语音气泡 */}
+            <button
+              type="button"
+              aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+              aria-pressed={ttsSend}
+              data-testid="qq-tts-toggle"
+              onClick={() => {
+                const nv = !ttsSend;
+                setTtsSend(nv);
+                onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+              }}
+              className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/40 dark:text-white/40'}`}
+            >
+              <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
+            </button>
+          </div>
           <button
             type="button"
             data-testid="qq-chat-send"

@@ -29,6 +29,7 @@ import { GlassButton } from '@/components/ios/GlassButton';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
+import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import {
   beginChatStream,
   clearChatStream,
@@ -763,6 +764,25 @@ function ChatView({
     });
   }, [stream, sessionKey, storageKey]);
 
+  /** 逐条投递 tick：AI 回复由 ai-delivery 调度器按真人节奏逐条落盘（模块层，与页面是否存活无关），
+   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（语音升级以存储为权威） */
+  useEffect(() => {
+    return subscribeAiDelivery(sessionKey, () => {
+      setMsgs((prev) => {
+        const saved = loadMsgs(storageKey) ?? [];
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        return [...prev.map((m) => savedMap.get(m.id) ?? m), ...saved.filter((m) => !prev.some((p) => p.id === m.id))];
+      });
+    });
+  }, [sessionKey, storageKey]);
+
+  /** 投递进行中（含排队批次）：流结束后仍维持「正在输入」打字指示，直到最后一条消息发出 */
+  const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey));
+  useEffect(() => {
+    setDelivering(isAiDelivering(sessionKey));
+    return subscribeAiDeliveryActive(() => setDelivering(isAiDelivering(sessionKey)));
+  }, [sessionKey]);
+
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
    *  转写完成后（异步）触发回复时拿到的才是含语音消息与转写的最新历史 */
   const startAiTurnRef = useRef<((userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => void) | null>(null);
@@ -919,63 +939,76 @@ function ChatView({
         if (saved.length === 0) {
           saved.push({ id: aiMsgId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt });
         }
-        saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
-        // 灵动岛全局通知：AI 每落盘一条消息弹一次（系统行/凭据卡不弹；同会话连发自动合并/排队）
-        for (const m of saved) {
-          const body = notifyPreviewText({
-            kind: m.kind,
-            content: m.content,
-            voiceText: m.voice?.transcript || m.voice?.localText || null,
-          });
-          if (body === null) continue;
-          pushChatNotification({
-            sessionKey: `sms:${storageKey}`,
-            app: 'chat',
-            title: peerLabel,
-            avatar: peer.avatarSrc ?? null,
-            body,
-            target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
-          });
-        }
-        // AI 语音频率：每条文字消息独立判断是否发语音（每条都发=全语音；经常/偶尔/不经常按周期命中；
-        // 异步合成，失败保持文字自动降级）
-        for (const target of saved) {
-          if (!(!target.error && !target.sys && !target.blkreq && (target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
-          if (!decideAiVoiceMessage(sessionKey)) continue;
-          const targetId = target.id;
-          void synthesizeAiVoice(target.content, memContactId)
-            .then((clip) => {
-              if (!clip) return; // 合成失败 → 保持文字
-              const voice: VoiceMsgData = {
-                url: clip.url,
-                duration: clip.duration,
-                wave: clip.wave,
-                localText: clip.localText,
-                synth: clip.synth,
-                contactId: memContactId ?? undefined,
-              };
-              const upgrade = (list: ChatMsg[]): ChatMsg[] =>
-                list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
-              setMsgs(upgrade);
-              saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
-            })
-            .catch(() => {});
-        }
-        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
-        // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
-        // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        if (memContactId) {
-          void Promise.all([ownerRealName(), contactRealName(memContactId)]).then(([owner, peerReal]) =>
-            memAfterAiTurn(
-              memContactId,
-              'sms',
-              apiConfig,
-              () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
-              () => loadMsgs(storageKey) ?? [],
-              { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
-            )
-          );
-        }
+        // 逐条投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，
+        // 停顿按内容长度模拟打字节奏；调度器在模块层运行，与聊天页是否存活无关
+        void scheduleAiDelivery<ChatMsg>(
+          sessionKey,
+          saved,
+          (m) => {
+            saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), m]);
+            // 语音频率：每条文字消息独立判定（短路调用保持周期语义；命中 → 通知直接显示[语音]，未命中 → 常规文字预览）
+            const voiceTurn =
+              !m.error && !m.sys && !m.blkreq &&
+              (m.kind === undefined || m.kind === 'text') &&
+              m.content.trim().length > 0 &&
+              decideAiVoiceMessage(sessionKey);
+            const body = voiceTurn
+              ? '[语音]'
+              : notifyPreviewText({
+                  kind: m.kind,
+                  content: m.content,
+                  voiceText: m.voice?.transcript || m.voice?.localText || null,
+                });
+            if (body !== null) {
+              pushChatNotification({
+                sessionKey: `sms:${storageKey}`,
+                app: 'chat',
+                title: peerLabel,
+                avatar: peer.avatarSrc ?? null,
+                body,
+                target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
+              });
+            }
+            // 命中语音频率：异步合成，成功后就地升级为语音气泡（失败保持文字自动降级）
+            if (voiceTurn) {
+              const targetId = m.id;
+              void synthesizeAiVoice(m.content, memContactId)
+                .then((clip) => {
+                  if (!clip) return; // 合成失败 → 保持文字
+                  const voice: VoiceMsgData = {
+                    url: clip.url,
+                    duration: clip.duration,
+                    wave: clip.wave,
+                    localText: clip.localText,
+                    synth: clip.synth,
+                    contactId: memContactId ?? undefined,
+                  };
+                  const upgrade = (list: ChatMsg[]): ChatMsg[] =>
+                    list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+                  setMsgs(upgrade);
+                  saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
+                })
+                .catch(() => {});
+            }
+          },
+          { delay: (i) => (i + 1 < saved.length ? typingDelayOf(saved[i + 1].content ?? '') : 0) } // 首条立即出现，停顿按下一条长度模拟打字
+        ).then(() => {
+          // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（全部消息投递完后执行；AI 助手会话不参与；
+          // 后台异步，失败静默）。names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人
+          // name，均非昵称——展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用
+          if (memContactId) {
+            void Promise.all([ownerRealName(), contactRealName(memContactId)]).then(([owner, peerReal]) =>
+              memAfterAiTurn(
+                memContactId,
+                'sms',
+                apiConfig,
+                () => memConvoFromRaw(loadMsgs(storageKey) ?? [], ''),
+                () => loadMsgs(storageKey) ?? [],
+                { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
+              )
+            );
+          }
+        });
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -1699,6 +1732,34 @@ function ChatView({
               </motion.div>
             );
           })()}
+        {/* 逐条投递打字动画：流结束后 AI 回复按真人节奏逐条上屏，投递完成前维持打字中气泡
+            （信息端顶栏无「正在输入」标题，这个气泡就是投递期的输入指示；最后一条到达即消失） */}
+        {!streaming && delivering && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+            className="mt-2.5 flex justify-start"
+            data-testid="sms-deliver-typing"
+          >
+            <div className="relative rounded-[18px] rounded-bl-[5px] bg-muted px-4 py-3.5">
+              <span
+                aria-hidden="true"
+                className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
+                style={{ clipPath: TAIL_CLIP_LEFT }}
+              />
+              <div className="flex items-center gap-1">
+                {[0, 1, 2].map((d) => (
+                  <span
+                    key={d}
+                    className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
+                    style={{ animationDelay: `${d * 0.15}s` }}
+                  />
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
         <div aria-hidden="true" className="h-1" />
       </div>
 
@@ -1763,32 +1824,34 @@ function ChatView({
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
             <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
           ) : (
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={ttsSend ? '输入文字，发送后转为语音' : 'iMessage信息'}
-              aria-label="消息输入框"
-              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
-            />
+            <div className="relative min-w-0 flex-1 self-stretch">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={ttsSend ? '输入文字，发送后转为语音' : 'iMessage信息'}
+                aria-label="消息输入框"
+                className="h-full w-full bg-transparent pr-10 text-[15px] outline-none placeholder:text-muted-foreground/50"
+              />
+              {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入文字发送为语音气泡
+                  （本地仿真，无需配置语音 API，点击不出声）；切到「按住说话」模式时随输入框一起隐藏 */}
+              <button
+                type="button"
+                aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+                aria-pressed={ttsSend}
+                data-testid="sms-tts-toggle"
+                onClick={() => {
+                  const nv = !ttsSend;
+                  setTtsSend(nv);
+                  showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+                }}
+                className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${
+                  ttsSend ? 'text-[#007AFF]' : 'text-black/40 dark:text-white/40'
+                }`}
+              >
+                <AudioLines className="h-[16px] w-[16px]" strokeWidth={ttsSend ? 2.2 : 1.8} aria-hidden="true" />
+              </button>
+            </div>
           )}
-          {/* 文字转语音开关（声波图标放在「按住说话」旁，键盘输入栏同样可见）：
-              开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
-          <button
-            type="button"
-            aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-            aria-pressed={ttsSend}
-            data-testid="sms-tts-toggle"
-            onClick={() => {
-              const nv = !ttsSend;
-              setTtsSend(nv);
-              showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-            }}
-            className={`mr-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
-              ttsSend ? 'text-[#007AFF]' : 'text-muted-foreground'
-            }`}
-          >
-            <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.3 : 1.8} aria-hidden="true" />
-          </button>
           {!voiceMode && (input.trim() || canDispatch) ? (
             <>
               <button
@@ -2448,14 +2511,8 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
     const last = msgs[msgs.length - 1];
-    // 语音消息预览：[语音] + 转写/原文（AI 语音消息无转写时用本地原文兜底，与微信同语义）；都没有时只显示占位
-    const lastVoiceText = last?.voice?.transcript || last?.voice?.localText || '';
-    const lastText =
-      last?.kind === 'voice'
-        ? lastVoiceText
-          ? `[语音] ${lastVoiceText}`
-          : '[语音]'
-        : (last?.content ?? '');
+    // 语音消息预览统一显示 [语音]（与微信会话列表同口径；语音 content 为空串，不透出转写原文）
+    const lastText = last?.kind === 'voice' ? '[语音]' : (last?.content ?? '');
     out.push({
       contact: c,
       preview: last?.recalled
@@ -2618,9 +2675,10 @@ export default function ChatApp() {
     }
   }, [unreadN, mounted]);
 
-  // 全局流式回复落盘：小助手会话在聊天页外收到 AI 回复时，从存储刷新列表预览并按条数累计未读
-  // （联系人会话预览由 contactSessions 在进入列表时重算，无需额外订阅）
-  useChatStreamFinalized('sms:assistant', () => {
+  /** 小助手预览/未读推进（按落盘记录的水位增量）：流结束（finalized，错误路径一次性落盘）与逐条投递
+   *  tick（ai-delivery 每条落盘）两路共用——finalize 时刻只有首条在盘上，未读按条数累加必须逐条跟随，
+   *  全部投完才满足「AI 发了几条消息角标就是几」 */
+  const syncAssistantFromStore = useCallback(() => {
     const saved = loadMsgs('assistant');
     if (!saved || !saved.length) return;
     setAssistantMsgs(saved);
@@ -2636,7 +2694,16 @@ export default function ChatApp() {
       seenLenRef.current = saved.length;
       if (fresh > 0) setUnreadN((n) => Math.min(n + fresh, 99));
     }
-  });
+  }, [view, chatSession]);
+
+  // 全局流式回复落盘：小助手会话在聊天页外收到 AI 回复时，从存储刷新列表预览并按条数累计未读
+  // （联系人会话预览由 contactSessions 在进入列表时重算，无需额外订阅）
+  useChatStreamFinalized('sms:assistant', syncAssistantFromStore);
+
+  // 逐条投递 tick：AI 回复由 ai-delivery 调度器逐条落盘，每条到达即推进预览与未读水位
+  useEffect(() => {
+    return subscribeAiDelivery('sms:assistant', syncAssistantFromStore);
+  }, [syncAssistantFromStore]);
 
   // 置顶 / 删除标记持久化
   useEffect(() => {
@@ -2806,16 +2873,13 @@ export default function ChatApp() {
   ];
 
   const last = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : undefined;
-  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览 [语音] + 转写/原文兜底
-  const lastVoiceText = last?.voice?.transcript || last?.voice?.localText || '';
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览统一显示 [语音]（与微信同口径）
   const preview = last?.recalled
     ? last.role === 'user'
       ? '你撤回一条消息'
       : '对方撤回一条消息'
     : last?.kind === 'voice'
-      ? lastVoiceText
-        ? `[语音] ${lastVoiceText}`
-        : '[语音]'
+      ? '[语音]'
       : last?.content || SEED_MSGS[0].content;
   const listTime = mounted ? (last && last.time > 0 ? fmtTime(last.time) : '现在') : '';
 

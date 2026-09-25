@@ -7173,3 +7173,83 @@ Work Log:
 Stage Summary:
 - AI 语音频率改为「每条消息独立判定」：always=每条全语音（一轮多条也全部语音）；often/sometimes/rarely 按全局消息序数周期命中（第 1/N+1/2N+1 条）；计数器按会话（群聊按角色）隔离持久化，语音落盘即重置为新周期第 1 条；决策只在消息真正落盘时消耗，流被拒/出错不白耗机会，TTS 失败单条降级文字不影响其他消息
 - 灵动岛通知弹窗跟随手机主题：浅色=iOS 浅色磨砂卡（黑字），深色=纯黑卡（白字），auto 跟系统；展开从灵动岛黑色胶囊淡变展开、收起补间回纯黑，深浅两套交接均无缝无闪烁
+---
+Task ID: 27-b
+Agent: general-purpose
+Task: qq.tsx 接入 ai-delivery 逐条投递 + 声波图标入输入框 + 列表预览语音分支
+
+Work Log:
+- 通读 src/lib/ios/ai-delivery.ts（scheduleAiDelivery/subscribeAiDelivery/subscribeAiDeliveryActive/isAiDelivering/typingDelayOf 契约）与 wechat.tsx 样板（finalize 逐条投递 ~4133、tick 合并 effect ~3850、delivering state、标题条件 ~5186、输入框声波钮 ~5590）
+- qq.tsx 加 import：island-notify 行旁引入 ai-delivery 五个导出
+- finalize（~2792）按 wechat 样板重写：`saveMsgs(peer.id, cur)` 先落盘动作卡片状态 → `scheduleAiDelivery<QQMsg>(sessionKey, all, deliver, { delay: (i) => (i+1 < all.length ? typingDelayOf(all[i+1].content ?? '') : 0) })` 逐条投递；deliver 回调内做逐条落盘（loadMsgs+append）、decideAiVoiceMessage 语音频率判定（仅文字消息，短路调用保持周期语义）、notifyPreviewText 用 QQ 原字段映射（packet.amount / packet.type==='redpacket'?note / packet.type==='transfer'?note）、pushChatNotification（命中语音显示[语音]）、synthesizeAiVoice 异步升级为 voice 气泡（url/duration/wave/localText/synth/contactId 照抄原代码，setMsgs+saveMsgs 双写）、退出聊天页才 qqUnreads.bump(peer.id, 1)；删除原三段 for 循环与一次性 saveMsgs/未读批量 bump
+- 密友值 addBondPoints(BOND_MSG_POINTS) 与记忆提取 memAfterAiTurn（ownerRealName/contactRealName→memConvoFromRaw，原参数原样）搬到 scheduleAiDelivery(...).then() 内（全部投递完后执行）
+- 流结束合并 useLayoutEffect（clearChatStream）与排队补跑 effect 之间新增：subscribeAiDelivery tick 订阅（落盘消息按 id 合并进本地 state，落盘为权威）+ `const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey))` + subscribeAiDeliveryActive effect
+- 聊天页标题（qq-chat-title）：`streaming ? …` → `streaming || delivering ? '正在输入中…' : peer.name`（className 灰色态同步加 || delivering，文案不变）
+- 会话列表预览 msgPreview()：`if (m.kind === 'image')` 旁加 `if (m.kind === 'voice') return '[语音]';`
+- 输入栏键盘输入分支（voiceMode 语音面板分支未动）：input 包 `relative min-w-0 flex-1` 容器，input 改 `w-full pl-3.5 pr-10`，qq-tts-toggle 声波按钮改 absolute right-1.5 垂直居中入框内（图标 24→18px，色值 #0099FF/中性灰 40%），原 value/onChange/onKeyDown/placeholder/aria 全保留
+- 校验：`bunx tsc --noEmit` 零错误；`bun run lint`（eslint .）零错误
+
+Stage Summary:
+- qq.tsx AI 回复改为 ai-delivery 调度器逐条投递：每条到达才落盘+弹灵动岛+判语音+计未读，停顿按内容长度模拟打字节奏；模块层调度与页面存活无关，重进无缝接上；密友值/记忆提取延后到整批投递完
+- 聊天页投递期间标题维持「正在输入中…」（streaming || delivering）；会话列表语音消息预览显示[语音]；TTS 声波开关移入输入框内右侧（对齐微信样式）；仅改 src/components/apps/qq.tsx 一个文件，tsc/lint 全绿
+---
+Task ID: 27-d
+Agent: general-purpose
+Task: wx-group.tsx + qq-group.tsx 接入 ai-delivery 逐条投递 + 声波图标入输入框
+
+Work Log:
+- 读 src/lib/ios/ai-delivery.ts 全文与 wechat.tsx 单聊样板（finalize scheduleAiDelivery 改造点、组件侧 subscribeAiDelivery tick、delivering state 定义）
+- wx-group.tsx：finalize（runCharTurn 内）末尾的「appendMsg 循环 + 灵动岛通知循环 + 语音合成循环 + 群记忆提取」整体替换为 void scheduleAiDelivery<WxGroupMsg>(sKey, all, deliver, {delay}) 逐条投递：deliver 回调内 appendMsg 落盘上屏（未读 bump 逻辑保留在 appendMsg 内）→ voiceTurn 判定（kind text/undefined + 内容非空 + decideAiVoiceMessage(sKey, `${sKey}#${char.id})）→ 命中则通知 body 显示[语音]否则 notifyPreviewText 常规映射（voiceText/amount/blessing/note/mergedFwd 字段照抄原代码）→ pushChatNotification（app:'wechat'、title=charName、subtitle=g.name、target {app:'wechat', groupId}）→ voiceTurn 时 synthesizeAiVoice 异步升级 voice（含 transcript: clip.localText，patchGroupMsg 置 kind:'voice'）；delay 首条立即、后续按 typingDelayOf(all[i+1].content) 模拟打字
+- wx-group.tsx：记忆提取 memAfterAiTurn（'wx'、roundScope group:${gid}、按角色+按群隔离）原样搬进 .then()，全部消息投递完后执行；resolve() 保持原位置（投递在模块层后台跑，不阻塞下一角色回合，同会话批次由调度器串行排队保证不交错）
+- wx-group.tsx：流结束 effect 后新增 subscribeAiDelivery(sKey) tick 订阅——每条投递到达后 mountedRef 存活时 setMsgs(loadGroupMsgs(gid))，保证重进群聊页后投递中的消息继续上屏
+- qq-group.tsx：同构改造照搬（app:'qq'、target {app:'qq', groupId}、voice 对象无 transcript 字段、memAfterAiTurn 'qq'、通知字段映射照抄 qq 原代码）
+- 两个文件头部 island-notify import 行旁补 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery'
+- 「正在输入」指示：grep 两文件 header（groupDisplayName(n) 静态标题），均无 streaming/输入指示条件，按任务说明不强求、未加 delivering
+- 声波图标入输入框：wx-group.tsx 键盘输入分支 input（wx-groupchat-input）包进 <div className="relative min-w-0 flex-1">，className min-w-0 flex-1→w-full、px-3→pl-3 pr-9；wxg-tts-toggle 按钮移入框内 absolute right-1.5 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full，图标 AudioLines 22px→17px、strokeWidth 2.1/1.7→2.2/1.8，激活色 #07C160、非激活 text-black/40 dark:text-white/40（语音模式按住说话分支不动）；qq-group.tsx 同构（qq-groupchat-input、qqg-tts-toggle、px-3.5→pl-3.5 pr-9，激活色沿用 QQ 蓝 #0099FF，原 style 颜色写法并入 className）
+- 校验：bunx tsc --noEmit 0 错误；bun run lint（eslint .）0 报错
+
+Stage Summary:
+- 微信群聊/QQ 群聊 AI 回复接入 ai-delivery 逐条投递调度器：多条消息按真人打字节奏逐条落盘上屏，每条到达时才弹灵动岛通知（语音消息显示[语音]）并判定语音频率升级；群记忆提取挂全部投递完成之后；调度器在模块层运行，退出群聊页/切 App 投递继续，重进后靠 subscribeAiDelivery tick 无缝续显；同会话批次串行排队，多角色回合消息按落盘顺序出现不交错
+- 两端输入框声波（文字转语音）开关移入输入框内部右侧（微信绿 #07C160 / QQ 蓝 #0099FF），与单聊样板一致；未读 bump、语音字段口径、通知字段映射均保留各端原实现
+- 仅改动 src/components/apps/wx-group.tsx 与 src/components/apps/qq-group.tsx 两个文件；bunx tsc --noEmit 与 bun run lint 全绿
+---
+Task ID: 27-c
+Agent: general-purpose
+Task: chat.tsx 接入 ai-delivery 逐条投递 + 声波图标入输入框 + 列表预览语音分支
+
+Work Log:
+- 开工前读 src/lib/ios/ai-delivery.ts 全文与 wechat.tsx 样板（finalize scheduleAiDelivery 改造 ~4133、tick 合并 effect ~3850、delivering state ~3863、标题条件 ~5186、输入框声波钮 ~5590），并读 worklog.md 头部接口契约与 27-b/27-d 先例
+- chat.tsx 加 import：island-notify 行旁引入 ai-delivery 五个导出（scheduleAiDelivery/subscribeAiDelivery/subscribeAiDeliveryActive/isAiDelivering/typingDelayOf）
+- finalize（~943）按样板重写：删除「一次性 saveMsgs + 通知 for 循环 + 语音频率 for 循环」，改为 void scheduleAiDelivery<ChatMsg>(sessionKey, saved, deliver, { delay: (i) => (i+1 < saved.length ? typingDelayOf(saved[i+1].content ?? '') : 0) }) 逐条投递；deliver 回调内逐条落盘（loadMsgs+append，loadMsgs 可空故 ?? []）、voiceTurn 判定照抄原过滤条件（!error && !sys && !blkreq && kind 空/text && content 非空）短路调 decideAiVoiceMessage 保持周期语义、命中则通知 body 直接显示[语音]否则 notifyPreviewText 原字段映射、pushChatNotification（sessionKey sms:<storageKey>、title=peerLabel、target 联系人/小助手区分照抄）、synthesizeAiVoice 异步升级 voice 气泡（url/duration/wave/localText/synth/contactId 字段照抄，setMsgs+saveMsgs 双写）；错误分支（落盘 error 文案）保持 finalize 开头提前 return，不走投递
+- 记忆提取 memAfterAiTurn（ownerRealName/contactRealName → memConvoFromRaw，原参数原样、memContactId 条件保持）搬进 scheduleAiDelivery(...).then() 内，全部消息投递完后执行
+- 流结束合并 useLayoutEffect（clearChatStream）之后新增：subscribeAiDelivery(sessionKey) tick 订阅（落盘消息按 id 合并进本地 msgs，同 id 以落盘为权威——语音升级以存储为准）+ const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey)) + subscribeAiDeliveryActive effect
+- 「正在输入」指示：grep 确认信息端聊天页顶栏只有头像+手机号、无 streaming 标题条件 → 按任务说明不加标题条件；改为在消息流末尾用 delivering 复用 iMessage 打字点气泡（!streaming && delivering 时渲染 sms-deliver-typing 三点动画，最后一条到达即消失，延迟函数末条返回 0 所以无残留），delivering 状态因此有真实消费不悬空
+- 父级 ChatApp 未读水位改造：useChatStreamFinalized('sms:assistant') 的内联回调提取为 syncAssistantFromStore（useCallback [view, chatSession]），新增 subscribeAiDelivery('sms:assistant', syncAssistantFromStore) tick 订阅双路共用——finalize 时刻只有首条在盘上，未读按条数累加必须逐条跟随，保证「AI 发了几条消息角标就是几」不被逐条投递破坏（错误路径不走投递，仍由 finalized 事件兜底）
+- 会话列表预览语音分支统一 [语音]：scanContactSessions（联系人会话）与小助手 assistantMsgs 预览两处，原「[语音] + 转写/原文兜底」改为统一 '[语音]'（与 wechat 会话列表 ~714 同口径）；气泡长按菜单 quoteContentOf 的 [语音]+转写不属于列表预览，未动
+- 输入框声波图标入框：键盘输入分支 input 包进 <div className="relative min-w-0 flex-1 self-stretch">（self-stretch 撑满 36px 胶囊高度，input h-full 才有确定高度），input 去 flex-1 改 w-full pr-10（左 padding 沿用胶囊 pl-3.5 不重复加）、原 value/onChange/placeholder/aria-label 全保留；sms-tts-toggle 按钮移入该容器改 absolute right-1.5 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full，图标 AudioLines 18px→16px、strokeWidth 2.3/1.8→2.2/1.8，激活色保留信息端蓝 #007AFF、非激活 text-black/40 dark:text-white/40（对齐微信/QQ 样板），aria-label/aria-pressed/data-testid/onClick 原样保留；「按住说话」语音模式分支未动（声波钮随输入框一起隐藏，与微信行为一致，也避免按钮叠在 VoiceHoldBar 手势区上）
+- 校验：bunx tsc --noEmit（删 tsbuildinfo 全量重跑）零错误；bun run lint（eslint .）零错误；node 断言脚本核对全部插入区域恰好出现一次（发现工具输出管道对特定字节序列的显示性丢失，用 od -c 复核文件字节无误）
+
+Stage Summary:
+- chat.tsx（信息 App，小助手 + 联系人会话）AI 回复接入 ai-delivery 调度器逐条投递：多条消息按真人打字节奏逐条落盘上屏，每条到达时才弹灵动岛通知（语音命中显示[语音]）并独立判定语音频率升级语音气泡；记忆提取挂整批投递完成之后；调度器在模块层运行，退出聊天页/切 App 投递继续，重进靠 tick 订阅与落盘存储无缝接上；同会话批次串行排队
+- 投递期间消息流末尾维持 iMessage 打字点气泡（delivering 驱动，信息端无标题态故以气泡为输入指示）；小助手未读角标改为 finalized+tick 双路水位累计，逐条投递不再漏计；会话列表（小助手+联系人）语音消息预览统一显示[语音]；TTS 声波开关移入输入框内右侧（iMessage 蓝），语音模式随输入框隐藏
+- 仅改动 src/components/apps/chat.tsx 一个文件；bunx tsc --noEmit 与 bun run lint 全绿，未 git commit
+---
+Task ID: 27
+Agent: main (Z.ai Code) + 3 parallel subagents (27-b qq.tsx / 27-c chat.tsx / 27-d wx-group+qq-group)
+Task: ①输入框声波图标移到输入框内部；②语音API设置「我的音色」移到最下面+添加测试按钮；③AI 回复逐条发送（不一次性到达）；④AI 语音消息预览显示「语音」
+
+Work Log:
+- 新建 src/lib/ios/ai-delivery.ts：模块级逐条投递调度器——scheduleAiDelivery(sessionKey, items, deliver, {delay}) 同会话批次串行排队（上一批投完才跑下一批，多轮/群聊多角色消息不交错）；每批内首条立即投递、后续按 typingDelayOf(下一条内容长度) 模拟打字停顿（850ms~2.4s+随机）；每条投递后 emitTick 通知聊天页合并落盘记录；isAiDelivering/subscribeAiDeliveryActive 供「正在输入」指示；Promise 在批次投递完 resolve（记忆提取挂其后）；调度器在模块层运行与页面存活无关，退出聊天页/切 App 继续投递，重进后由 tick 无缝续显
+- 5 端 finalize 改造（wechat/qq/chat/wx-group/qq-group，后 4 端由并行子代理完成）：原「一次性 saveMsgs(全部)+通知循环+语音循环」改为——动作卡片状态先落盘(saveMsgs(cur))，消息本体走 scheduleAiDelivery 逐条投递；每条 deliver 回调内：落盘(loadMsgs+append) → 语音频率判定(命中→通知 body 直接显示[语音]，未命中→notifyPreviewText 常规映射) → pushChatNotification → synthesizeAiVoice 异步升级语音气泡(失败保持文字) → 未读 bump(每条+1)；密友值/记忆提取搬进 .then()（整批投递完才执行，读到完整落盘数据）；delay=(i)=>typingDelayOf(all[i+1].content)
+- 5 端组件侧新增：subscribeAiDelivery tick 合并 effect（落盘数据按 id 权威覆盖合并进本地 msgs——语音升级/卡片状态以存储为准）+ delivering state（subscribeAiDeliveryActive）+ 标题条件 streaming||delivering→「正在输入中…」持续到最后一条发出；微信群/QQ群 tick 直接 setMsgs(loadGroupMsgs(gid))
+- 声波图标（tts-toggle）移入输入框内部：5 端 input 包 relative 容器、按钮 absolute right-1.5 top-1/2 垂直居中、input px→pl+pr-9/pr-10、图标 22-24px→16-18px；激活色保留各端主题绿/蓝，「按住说话」语音模式时随输入框一起隐藏
+- settings.tsx 语音API页：「我的音色」section 从「服务商」下方移到页面最底部（STT 之后）；新增「测试」按钮（my-voice-test）——不保存直接试听当前表单填写的音色（内置声线本地朗读/其它走当前语音 API，复用 previewMyVoice({id:'__draft__'})），与「保存音色」并排，未填 ID 时禁用，测试中显示「测试中…」+旋转图标
+- island-notify.ts notifyPreviewText：voice 分支改 return '[语音]'（iOS 原生行为，不再透出转写原文）；微信 readPreview / QQ msgPreview / chat.tsx 会话预览补 voice→'[语音]' 分支（此前 AI 语音消息 content 为空串导致列表预览空白）
+- chat.tsx 附加正确性修复（子代理）：小助手未读水位原挂 useChatStreamFinalized（finalize 时刻只有首条落盘会漏计）→ 提取 syncAssistantFromStore 由 finalized+subscribeAiDelivery 双路共用
+- E2E（agent-browser 实测）：①mock 多句回复→4 条消息 t≈2916/4679/6441/7699ms 逐条落盘（间隔 1.5-1.8s），「正在输入中…」持续到最后一条才消失——逐条投递直接证据；②always 频率下 AI 连发 3 条全部转语音气泡，灵动岛通知显示「小艾 [语音]」+「2条/3条」合并徽标（不透出原文）；③微信列表预览「小艾 9:23 [语音]」+ QQ 列表「小艾 [语音]」（此前语音消息预览空白）；④微信 wxToggleInside/qq qqToggleInside=true（按钮几何在 input 边界内）；⑤语音API页「我的音色」位于「语音识别 STT」之后（页面最底部）；⑥测试按钮：填 builtin:xiaoyue→点击→「测试中…」状态流转→保存音色写入成功；⑦回归：微信/QQ 收发、always→语音气泡、off→文字降级、通知合并、记忆提取（/api/memory/extract 200）全链路正常
+- bunx tsc --noEmit 全量 0 错误；bun run lint 0 错误；reload 后 console 零错误零警告；dev.log 无编译错误（/api/chat 502 为上游代理偶发、既有兜底行为）
+
+Stage Summary:
+- AI 回复 5 端全部改为逐条投递：多条消息像真人连发一样一句一句陆续到达（首条立即、后续按内容长度停顿 0.85-2.4s），标题「正在输入中…」持续到发完；通知/语音判定/未读/记忆全部按条推进且与页面是否存活无关
+- 声波开关进输入框（5 端），「我的音色」移到语音API页最底部并新增不保存即可试听的「测试」按钮
+- AI 语音消息三处预览（微信列表/QQ列表/灵动岛通知）统一显示「[语音]」，修复此前列表预览空白与通知透出全文的问题

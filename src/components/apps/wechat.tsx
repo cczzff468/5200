@@ -59,6 +59,7 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
+import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
@@ -710,6 +711,7 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (last.kind === 'transfer') return { text: '[转账]', time: last.time };
   if (last.kind === 'family') return { text: '[亲属卡]', time: last.time };
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
+  if (last.kind === 'voice') return { text: '[语音]', time: last.time };
   if (last.kind === 'location') return { text: '[位置]', time: last.time };
   if (last.kind === 'sticker') return { text: '[表情]', time: last.time };
   if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };
@@ -3845,6 +3847,25 @@ function ChatPage({
     });
   }, [stream, sessionKey, peer.id]);
 
+  /** 逐条投递 tick：AI 回复由 ai-delivery 调度器按真人节奏逐条落盘（模块层，与页面是否存活无关），
+   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（动作状态/语音升级以存储为权威） */
+  useEffect(() => {
+    return subscribeAiDelivery(sessionKey, () => {
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        return [...prev.map((m) => savedMap.get(m.id) ?? m), ...saved.filter((m) => !prev.some((p) => p.id === m.id))];
+      });
+    });
+  }, [sessionKey, peer.id]);
+
+  /** 投递进行中（含排队批次）：标题维持「正在输入中…」，直到最后一条消息发出 */
+  const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey));
+  useEffect(() => {
+    setDelivering(isAiDelivering(sessionKey));
+    return subscribeAiDeliveryActive(() => setDelivering(isAiDelivering(sessionKey)));
+  }, [sessionKey]);
+
   /** 排队补跑：流进行中发来的消息（wxQueuedTurns）在本轮流结束后自动触发回复。
    *  页面存活时监听流结束广播；离开后流才收尾的，重进页面时补跑（消息已落盘不丢）。 */
   useEffect(() => {
@@ -4105,68 +4126,82 @@ function ChatPage({
         if (all.length === 0) {
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
-        saveMsgs(peer.id, [...cur, ...all]);
-        // 灵动岛全局通知：AI 每落盘一条消息弹一次（系统行/凭据卡不弹；同会话连发自动合并/排队）
-        for (const m of all) {
-          const body = notifyPreviewText({
-            kind: m.kind,
-            content: m.content,
-            voiceText: m.voice?.transcript || m.voice?.localText || null,
-            amount: m.rp?.amount ?? m.tr?.amount ?? null,
-            blessing: m.rp?.blessing ?? null,
-            note: m.tr?.note ?? null,
-            mergedFwd: m.fwd?.merged ?? false,
-          });
-          if (body === null) continue;
-          pushChatNotification({
-            sessionKey: `wx:${peer.id}`,
-            app: 'wechat',
-            title: peer.name,
-            avatar: peer.avatar ?? null,
-            body,
-            target: { app: 'wechat', contactId: peer.id },
-          });
-        }
-        // AI 语音频率：每条文字消息独立判断是否发语音（每条都发=全语音；经常/偶尔/不经常按周期命中；
-        // 异步合成，失败保持文字自动降级，不影响聊天）
-        for (const target of all) {
-          if (!((target.kind === undefined || target.kind === 'text') && target.content.trim().length > 0)) continue;
-          if (!decideAiVoiceMessage(sessionKey)) continue;
-          const targetId = target.id;
-          void synthesizeAiVoice(target.content, peer.id)
-            .then((clip) => {
-              if (!clip) return; // 合成失败 → 保持文字
-              const voice: VoiceMsgData = {
-                url: clip.url,
-                duration: clip.duration,
-                wave: clip.wave,
-                localText: clip.localText,
-                synth: clip.synth,
-                contactId: peer.id,
-              };
-              const upgrade = (list: WxMsg[]): WxMsg[] =>
-                list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
-              setMsgs(upgrade);
-              saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
-            })
-            .catch(() => {});
-        }
-        // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
-        if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, all.length);
-        // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
-        // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
-        // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        void Promise.all([ownerRealName(), contactRealName(peer.id)])
-          .then(([owner, peerReal]) =>
-            memAfterAiTurn(
-              peer.id,
-              'wx',
-              apiConfig,
-              () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
-              () => loadMsgs(peer.id),
-              { user: owner || me.realName || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
-            )
-          );
+        // 动作产生的卡片状态变化（红包领取/转账流转等）先落盘；消息本体逐条投递
+        saveMsgs(peer.id, cur);
+        // 逐条投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，
+        // 停顿按内容长度模拟打字节奏；调度器在模块层运行，与聊天页是否存活无关
+        void scheduleAiDelivery<WxMsg>(
+          sessionKey,
+          all,
+          (m) => {
+            saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
+            // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
+            const voiceTurn =
+              (m.kind === undefined || m.kind === 'text') &&
+              m.content.trim().length > 0 &&
+              decideAiVoiceMessage(sessionKey);
+            const body = voiceTurn
+              ? '[语音]'
+              : notifyPreviewText({
+                  kind: m.kind,
+                  content: m.content,
+                  voiceText: m.voice?.transcript || m.voice?.localText || null,
+                  amount: m.rp?.amount ?? m.tr?.amount ?? null,
+                  blessing: m.rp?.blessing ?? null,
+                  note: m.tr?.note ?? null,
+                  mergedFwd: m.fwd?.merged ?? false,
+                });
+            if (body !== null) {
+              pushChatNotification({
+                sessionKey: `wx:${peer.id}`,
+                app: 'wechat',
+                title: peer.name,
+                avatar: peer.avatar ?? null,
+                body,
+                target: { app: 'wechat', contactId: peer.id },
+              });
+            }
+            if (voiceTurn) {
+              // 异步合成，失败保持文字自动降级，不影响聊天
+              const targetId = m.id;
+              void synthesizeAiVoice(m.content, peer.id)
+                .then((clip) => {
+                  if (!clip) return; // 合成失败 → 保持文字
+                  const voice: VoiceMsgData = {
+                    url: clip.url,
+                    duration: clip.duration,
+                    wave: clip.wave,
+                    localText: clip.localText,
+                    synth: clip.synth,
+                    contactId: peer.id,
+                  };
+                  const upgrade = (list: WxMsg[]): WxMsg[] =>
+                    list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+                  setMsgs(upgrade);
+                  saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+                })
+                .catch(() => {});
+            }
+            // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
+            if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, 1);
+          },
+          { delay: (i) => (i + 1 < all.length ? typingDelayOf(all[i + 1].content ?? '') : 0) } // 首条立即出现，停顿按下一条长度模拟打字
+        ).then(() => {
+          // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（全部消息投递完后执行；后台异步，失败静默不打断聊天）；
+          // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
+          // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+          void Promise.all([ownerRealName(), contactRealName(peer.id)])
+            .then(([owner, peerReal]) =>
+              memAfterAiTurn(
+                peer.id,
+                'wx',
+                apiConfig,
+                () => memConvoFromRaw(loadMsgs(peer.id), peer.name),
+                () => loadMsgs(peer.id),
+                { user: owner || me.realName || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
+              )
+            );
+        });
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -5148,7 +5183,7 @@ function ChatPage({
             </span>
           )}
           <div className="flex flex-1 items-center justify-center gap-1.5" data-testid="wx-chat-peer-name">
-            <span className="truncate text-[17px] font-medium">{streaming ? '正在输入中…' : peer.name}</span>
+            <span className="truncate text-[17px] font-medium">{streaming || delivering ? '正在输入中…' : peer.name}</span>
             {flags.muted === true && (
               <BellOff
                 className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
@@ -5552,42 +5587,44 @@ function ChatPage({
               /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
               <VoiceHoldBar rec={rec} testId="wx-voice-hold" />
             ) : (
-              <input
-                data-testid="wx-chat-input"
-                value={input}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setInput(v);
-                  // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
-                  if (!selfChat && v.endsWith('@')) {
-                    setPlusOpen(false);
-                    setStickerOpen(false);
-                    setAtOpen(true);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void send();
-                }}
-                placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
-              />
+              <div className="relative min-w-0 flex-1">
+                <input
+                  data-testid="wx-chat-input"
+                  value={input}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setInput(v);
+                    // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+                    if (!selfChat && v.endsWith('@')) {
+                      setPlusOpen(false);
+                      setStickerOpen(false);
+                      setAtOpen(true);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void send();
+                  }}
+                  placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+                  className="h-[36px] w-full rounded-[5px] bg-white pl-3 pr-9 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+                />
+                {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入文字发送为语音气泡
+                    （本地仿真，无需配置语音 API）；切到「按住说话」模式时随输入框一起隐藏 */}
+                <button
+                  type="button"
+                  aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+                  aria-pressed={ttsSend}
+                  data-testid="wx-tts-toggle"
+                  onClick={() => {
+                    const nv = !ttsSend;
+                    setTtsSend(nv);
+                    onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+                  }}
+                  className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
+                >
+                  <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
+                </button>
+              </div>
             )}
-            {/* 文字转语音开关（声波图标放在「按住说话」旁，键盘输入栏同样可见）：
-                开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
-            <button
-              type="button"
-              aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-              aria-pressed={ttsSend}
-              data-testid="wx-tts-toggle"
-              onClick={() => {
-                const nv = !ttsSend;
-                setTtsSend(nv);
-                onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-              }}
-              className={`shrink-0 transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/55 dark:text-white/55'}`}
-            >
-              <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
-            </button>
             {(input.trim() || canDispatch) ? (
               <>
                 <button
