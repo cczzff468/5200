@@ -19,6 +19,9 @@
  *   + 浅色「松开 发送」条
  * - useSttPreview / SttPreviewOverlay：「划到转文字」松开后先识别再预览，结果**可编辑**，用户决定发送文字 /
  *   发送语音（原始录音）/ 取消，不再直接发送
+ * - Web Speech API 实时识别（sttConfig.webSpeech 开启且浏览器支持时）：按住录音期间并行跑
+ *   SpeechRecognition，「划到转文字」松手即得文本秒出预览（不请求 /api/stt）；浮层实时展示增量文字；
+ *   不支持/失败/关闭时静默回退服务端识别，录音本身不受影响；原松开发送不附带文字（保持纯语音）
  * - 权限被拒/不支持录音：onStartError 提示，仍可继续用文字聊天
  */
 
@@ -27,6 +30,8 @@ import { Loader2, Mic } from 'lucide-react';
 import { downsampleWave, pickRecorderMime } from '@/lib/ios/audio-utils';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { useSettings } from '@/lib/ios/store';
+import { isWebSpeechSupported, startWebSpeechSession, type WebSpeechSession } from '@/lib/ios/web-speech';
 
 export interface VoiceRecordResult {
   blob: Blob;
@@ -34,6 +39,8 @@ export interface VoiceRecordResult {
   duration: number;
   /** 气泡静态波形（22 根，0~1） */
   wave: number[];
+  /** Web Speech API 实时识别文本（录音期间浏览器内置识别；仅「划到转文字」时附带，可能为空/缺省） */
+  transcript?: string;
 }
 
 export type VoiceRecordZone = 'cancel' | 'stt' | null;
@@ -83,6 +90,8 @@ export interface VoiceRecorder {
   /** 手势目标区：null=原松开发送 / cancel=取消 / stt=转文字 */
   zone: VoiceRecordZone;
   setZone: (z: VoiceRecordZone) => void;
+  /** Web Speech 实时识别的增量文本（「划到转文字」分区时展示；未开启/不支持时恒为空） */
+  partial: string;
   start: () => void;
   finish: () => void;
 }
@@ -150,6 +159,7 @@ export function useVoiceRecorder(opts: {
   const [seconds, setSeconds] = useState(0);
   const [levels, setLevels] = useState<number[]>([]);
   const [zone, setZoneState] = useState<VoiceRecordZone>(null);
+  const [partial, setPartial] = useState('');
 
   const optsRef = useRef(opts);
   // 回调经 ref 透传（避免 useVoiceRecorder 返回的函数随 onResult 身份变化重建）
@@ -172,6 +182,8 @@ export function useVoiceRecorder(opts: {
   const zoneRef = useRef<VoiceRecordZone>(null);
   const stopRequestedRef = useRef(false);
   const deadRef = useRef(false);
+  const speechRef = useRef<WebSpeechSession | null>(null);
+  const partialRef = useRef('');
 
   const setPhaseSafe = (p: 'idle' | 'starting' | 'recording') => {
     phaseRef.current = p;
@@ -216,6 +228,8 @@ export function useVoiceRecorder(opts: {
         }
       }
       recRef.current = null;
+      speechRef.current?.abort();
+      speechRef.current = null;
       cleanupCapture();
     },
     [cleanupCapture],
@@ -227,13 +241,18 @@ export function useVoiceRecorder(opts: {
       const elapsed = (performance.now() - startRef.current) / 1000;
       const z = zoneRef.current;
       recRef.current = null;
+      const speech = speechRef.current;
+      speechRef.current = null;
       cleanupCapture();
       setPhaseSafe('idle');
       setZoneSafe(null);
       setSeconds(0);
       setLevels([]);
+      setPartial('');
+      partialRef.current = '';
       if (discard || !rec || elapsed < MIN_SEC) {
         // 太短：只有「原松开」才提示，取消手势静默
+        speech?.abort();
         chunksRef.current = [];
         if (!discard && z === null) optsRef.current.onResult(null, null);
         return;
@@ -241,6 +260,7 @@ export function useVoiceRecorder(opts: {
       const chunks = chunksRef.current;
       chunksRef.current = [];
       if (chunks.length === 0) {
+        speech?.abort();
         optsRef.current.onResult(null, z);
         return;
       }
@@ -251,6 +271,19 @@ export function useVoiceRecorder(opts: {
         duration: Math.max(1, Math.min(MAX_SEC, Math.round(elapsed))),
         wave: downsampleWave(levelBufRef.current, WAVE_BARS),
       };
+      if (z === 'stt' && speech) {
+        // 「划到转文字」：等实时识别收尾（≤800ms），拿到文本直接秒出预览（不再请求服务端）
+        void speech
+          .stop()
+          .then((liveText) => {
+            const transcript = liveText.trim();
+            optsRef.current.onResult(transcript ? { ...result, transcript } : result, z);
+          })
+          .catch(() => optsRef.current.onResult(result, z));
+        return;
+      }
+      // 原松开发送 / 取消：不需要文本，后台静默收尾（发送的语音不附带文字，保持纯语音）
+      void speech?.stop();
       optsRef.current.onResult(result, z);
     },
     [cleanupCapture, setZoneSafe],
@@ -265,6 +298,21 @@ export function useVoiceRecorder(opts: {
       return;
     }
     stopRequestedRef.current = false;
+    // Web Speech API 实时识别（设置开启且浏览器支持时）：在指针手势调用栈内同步启动（Safari 要求
+    // 用户手势上下文），与 MediaRecorder 并行共用麦克风；失败/不支持返回 null，静默走服务端兜底
+    partialRef.current = '';
+    setPartial('');
+    speechRef.current?.abort();
+    speechRef.current = null;
+    const sttCfg = useSettings.getState().sttConfig;
+    if (sttCfg.webSpeech && isWebSpeechSupported()) {
+      speechRef.current = startWebSpeechSession({
+        onPartial: (t) => {
+          partialRef.current = t;
+          setPartial(t);
+        },
+      });
+    }
     setPhaseSafe('starting');
     navigator.mediaDevices
       .getUserMedia({ audio: true })
@@ -272,6 +320,8 @@ export function useVoiceRecorder(opts: {
         if (phaseRef.current !== 'starting' || deadRef.current) {
           // 等权限期间已卸载/取消
           stream.getTracks().forEach((t) => t.stop());
+          speechRef.current?.abort();
+          speechRef.current = null;
           return;
         }
         streamRef.current = stream;
@@ -367,6 +417,8 @@ export function useVoiceRecorder(opts: {
           }
         }
         recRef.current = null;
+        speechRef.current?.abort();
+        speechRef.current = null;
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
         cleanupCapture();
@@ -399,7 +451,7 @@ export function useVoiceRecorder(opts: {
     }
   }, [finalize]);
 
-  return { phase, seconds, levels, zone, setZone: setZoneSafe, start, finish };
+  return { phase, seconds, levels, zone, setZone: setZoneSafe, partial, start, finish };
 }
 
 /* ───────────────────────── 按住手势（微信/信息胶囊 + QQ 大圆钮） ───────────────────────── */
@@ -568,9 +620,15 @@ export function QqVoicePanel({
   const rightBars = [...bars].reverse();
   return (
     <div className="relative z-10 flex h-[290px] shrink-0 select-none flex-col items-center bg-white pb-3 dark:bg-[#1B1C1F]" data-testid="qq-voice-panel">
-      {/* 顶部提示：录音时隐藏（计时/波形条绝对定位在同一高度，不挤动布局） */}
-      <p className={`mt-4 text-[17px] text-black/40 dark:text-white/40 ${recording ? 'invisible' : ''}`}>
-        {rec.phase === 'starting' ? '准备中…' : '按住说话'}
+      {/* 顶部提示：录音时隐藏（计时/波形条绝对定位在同一高度，不挤动布局）；
+          划到「文」且 Web Speech 已出文字时，同位置改为实时识别文字 */}
+      <p
+        className={`mt-4 truncate px-8 text-[17px] text-black/40 dark:text-white/40 ${
+          recording && !(stt && rec.partial) ? 'invisible' : ''
+        }`}
+        data-testid={recording && stt && rec.partial ? 'qq-live-partial' : undefined}
+      >
+        {recording ? (stt ? rec.partial : '') : rec.phase === 'starting' ? '准备中…' : '按住说话'}
       </p>
       {/* 录音条：计时+波形贴在原位大圆钮正上方（面板内；面板 relative 已定位，大圆钮布局不受影响） */}
       {recording && (
@@ -704,6 +762,13 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
       <p className="mt-5 text-[16px] tabular-nums text-white/80" data-testid="voice-record-timer">
         {timeLabelOf(rec.seconds)}
       </p>
+      {/* 实时识别文字（划到转文字时展示，Web Speech API；固定高度防布局跳动） */}
+      <p
+        className="mt-1 h-[20px] max-w-[72%] truncate px-6 text-center text-[13px] leading-[20px] text-white/70"
+        data-testid="voice-live-partial"
+      >
+        {stt ? rec.partial : ''}
+      </p>
       <div className="min-h-0 flex-[2]" />
       {/* 底部手势提示区（手势仍在按住的胶囊上，纯视觉；标 data-voice-target 供手势目标命中判定） */}
       <div className="mt-auto flex w-full items-end justify-between px-6 pb-[84px]">
@@ -770,6 +835,12 @@ export function useSttPreview(opts: {
     (clip: VoiceRecordResult) => {
       seqRef.current += 1;
       const seq = seqRef.current;
+      // Web Speech API 已在录音期间实时识别：直接出结果（可编辑），不再请求服务端
+      const live = (clip.transcript ?? '').trim();
+      if (live) {
+        apply({ status: 'done', text: live, clip });
+        return;
+      }
       apply({ status: 'pending', text: '', clip });
       void transcribeAudioBlob(clip.blob)
         .then((text) => {

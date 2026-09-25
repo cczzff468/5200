@@ -53,6 +53,7 @@ import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
+import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { describeImages } from '@/lib/vision-client';
 
 // ---------------- 常量与类型 ----------------
@@ -2041,6 +2042,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   // 语音识别（STT）独立配置：与 TTS 互不覆盖
   const sttConfig = useSettings((s) => s.sttConfig);
   const updateSttConfig = useSettings((s) => s.updateSttConfig);
+  // Web Speech API 支持检测：只在客户端测一次（避免 SSR 水合不一致）
+  const [wsSupport, setWsSupport] = useState<boolean | null>(null);
+  useEffect(() => {
+    setWsSupport(isWebSpeechSupported());
+  }, []);
 
   const [showKey, setShowKey] = useState(false);
   const [showSttKey, setShowSttKey] = useState(false);
@@ -2573,6 +2579,23 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   {p.label}
                 </button>
               ))}
+            </div>
+
+            {/* 浏览器实时识别（Web Speech API）：录音按住期间内置转文字，「划到转文字」秒出结果 */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[14px] font-medium text-foreground">浏览器实时识别（Web Speech）</div>
+                <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
+                  录音时用浏览器内置引擎实时转文字，「划到转文字」秒出结果、零请求；
+                  关闭或不支持时自动回退上方服务端识别。
+                  {wsSupport === null ? '' : wsSupport ? '当前浏览器：支持。' : '当前浏览器：不支持（将始终走服务端）。'}
+                </p>
+              </div>
+              <Switch
+                checked={sttConfig.webSpeech}
+                onCheckedChange={(v) => updateSttConfig({ webSpeech: v })}
+                aria-label="浏览器实时识别（Web Speech）"
+              />
             </div>
 
             {sttConfig.provider === 'builtin' ? (

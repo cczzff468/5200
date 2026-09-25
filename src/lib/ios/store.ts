@@ -91,6 +91,9 @@ export interface SttConfig {
   apiKey: string;
   /** 识别模型名（OpenAI 兼容用；空 = 服务端默认 whisper-1） */
   model: string;
+  /** 浏览器实时识别（Web Speech API）：录音按住期间内置转文字，「划到转文字」秒出结果；
+   *  关闭或浏览器不支持时回退服务端识别（builtin/openai） */
+  webSpeech: boolean;
 }
 
 export const DEFAULT_STT_CONFIG: SttConfig = {
@@ -98,6 +101,7 @@ export const DEFAULT_STT_CONFIG: SttConfig = {
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   model: 'whisper-1',
+  webSpeech: true,
 };
 
 /**
@@ -497,6 +501,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
           baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_STT_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
           model: typeof v.model === 'string' ? v.model : DEFAULT_STT_CONFIG.model,
+          // 旧存档无此字段：默认开启浏览器实时识别
+          webSpeech: typeof v.webSpeech === 'boolean' ? v.webSpeech : DEFAULT_STT_CONFIG.webSpeech,
         };
         const sttWasPlain = !('__enc' in (sttRec.value as object));
         if (sttWasPlain && sttConfig.apiKey.length > 0) {
