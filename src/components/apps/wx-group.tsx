@@ -68,7 +68,6 @@ import {
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
 import { stopSpeaking } from '@/lib/ios/tts-client';
-import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -4178,15 +4177,6 @@ export function WxGroupChatPage({
                       />
                       <span className="whitespace-pre-wrap break-words">{cleanBubbleText(m.content)}</span>
                     </div>
-                    {/* 语音播放：按发言人角色音色朗读（senderId 对应联系人 voiceId → 全局默认 → 安全默认） */}
-                    {!mine && m.content && (
-                      <VoicePlayButton
-                        contactId={m.senderId === 'me' ? null : m.senderId}
-                        text={m.content}
-                        className="mt-[3px]"
-                        onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
-                      />
-                    )}
                   </>,
                 )
               )}

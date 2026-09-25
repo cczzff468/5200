@@ -6937,3 +6937,20 @@ Stage Summary:
 - commit e3d14dc 已推送 origin main（d37dd2b..e3d14dc），4 files changed, +289/-4，新增 web-speech.ts
 - 语义：「划到转文字」= Web Speech 实时识别优先（零请求秒出、可编辑）→ 服务端 builtin/openai 兜底；原松开发送仍为纯语音；长按旧气泡转文字仍走服务端（Web Speech 不能转写已有文件）
 - 新增设置开关：语音 API → 语音识别 STT → 浏览器实时识别（Web Speech），默认开启
+
+---
+Task ID: 20
+Agent: Z.ai Code (main)
+Task: 用户消息20「ai气泡下面的播放语音删除」——移除微信/QQ（单聊与群聊）AI 气泡下方的「播放语音」按钮
+
+Work Log:
+- 定位「播放语音」按钮：src/components/apps/voice-play.tsx 的 VoicePlayButton（调 speakUserTts 按角色音色合成朗读），共 4 处使用：wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx（均渲染在对方/AI 气泡下方）
+- 删除 4 个文件中的 VoicePlayButton 渲染块与对应 import
+- 删除组件文件 src/components/apps/voice-play.tsx（已无任何引用；lib/ios/voice-player.ts 是录制语音气泡播放器，与此按钮无关，保留）
+- bun run lint 通过；dev server 热编译成功（✓ Compiled）
+- Agent Browser 端到端验证：重载页面→解锁→iMessage 信息应用确认 AI 气泡无按钮；种子测试联系人（IndexedDB 写入 user+char）→微信登录→与小艾聊天→AI 回复后确认无「播放语音」/无 [data-testid=chat-voice-play]；QQ 同样登录→聊天→AI 回复后确认无按钮；全页文本 hasPlay=false
+
+Stage Summary:
+- AI/对方文字气泡下方的「播放语音」按钮（含合成中/停止状态）已从微信单聊、QQ 单聊、微信群聊、QQ 群聊 4 端全部移除
+- 文字转语音开关（输入栏声波按钮）与语音消息气泡（VoiceMsgBubble）播放不受影响；电话 App 的 TTS 朗读不受影响
+- 产物：删除 voice-play.tsx；4 个聊天页面文件精简；无遗留引用，lint/编译/浏览器验证均通过

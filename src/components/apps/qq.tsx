@@ -136,7 +136,6 @@ import {
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
-import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -3801,15 +3800,6 @@ function ChatPage({
                         </span>
                       )}
                     </div>
-                    {/* 语音播放：按该角色音色朗读（角色 voiceId → 全局默认 → 安全默认；合成失败不影响文字聊天） */}
-                    {!mine && m.content && (
-                      <VoicePlayButton
-                        contactId={peer.id}
-                        text={m.content}
-                        className="mt-[4px]"
-                        onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
-                      />
-                    )}
                     {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                     {renderTranslations(m.id, m.content)}
                   </div>

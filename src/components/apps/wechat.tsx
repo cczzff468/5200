@@ -59,7 +59,6 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
-import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -5322,15 +5321,6 @@ function ChatPage({
                       </span>
                     )}
                   </div>
-                  {/* 语音播放：按该角色音色朗读（角色 voiceId → 全局默认 → 安全默认；合成失败不影响文字聊天） */}
-                  {m.role === 'peer' && m.content && (
-                    <VoicePlayButton
-                      contactId={peer.id}
-                      text={m.content}
-                      className="mt-[3px]"
-                      onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
-                    />
-                  )}
                   {/* 微信引用（截图样式）：独立半透明胶囊挂在气泡下方「名字：内容」（小圆角 + 细黑边框） */}
                   {m.quote && (
                     <div

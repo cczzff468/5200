@@ -132,7 +132,6 @@ import {
 import { canPay, executePayment, gainToWallet, loadBankCards, loadPayPwd, loadWallet, round2 } from './qq';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender, splitReplySegments } from '@/lib/reply-count';
 import { stopSpeaking } from '@/lib/ios/tts-client';
-import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -3894,15 +3893,6 @@ export function QqGroupChatPage({
                       })()}
                       <span>{cleanBubbleText(m.content)}</span>
                     </div>
-                    {/* 语音播放：按发言人角色音色朗读（senderId 对应联系人 voiceId → 全局默认 → 安全默认） */}
-                    {!mine && m.content && (
-                      <VoicePlayButton
-                        contactId={m.senderId === 'me' ? null : m.senderId}
-                        text={m.content}
-                        className="mt-[4px]"
-                        onError={() => onToast('语音播放失败，请检查「语音 API」配置')}
-                      />
-                    )}
                   </div>
                 </div>
               )}
