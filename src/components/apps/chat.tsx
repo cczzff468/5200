@@ -659,6 +659,9 @@ function ChatView({
   const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
   /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
   const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+  /** AI 语音频率设置键：联系人会话与微信同键（wx:<联系人 id>），信息端的频率跟随微信 App 里的设置；
+   *  AI 助手会话无微信对应会话，维持 sms: 会话独立 */
+  const voiceFreqKey = wbContactId ? `wx:${wbContactId}` : sessionKey;
   /** 双向拉黑状态（仅联系人会话；小助手会话无角色 ID 不参与；kv 持久化按联系人隔离） */
   const [blk, setBlk] = useState<BlockEntry>(() => (wbContactId ? loadBlock('sms', wbContactId) : {}));
   const [wbOpen, setWbOpen] = useState(false);
@@ -951,7 +954,7 @@ function ChatView({
               !m.error && !m.sys && !m.blkreq &&
               (m.kind === undefined || m.kind === 'text') &&
               m.content.trim().length > 0 &&
-              decideAiVoiceMessage(sessionKey);
+              decideAiVoiceMessage(voiceFreqKey);
             const body = voiceTurn
               ? '[语音]'
               : notifyPreviewText({
@@ -1260,7 +1263,7 @@ function ChatView({
         : '[语音]'
       : m.content;
 
-  /** 按发送方组装长按菜单项（语音首项转文字；复制 删除 编辑 引用 多选 撤回；语音无编辑/引用） */
+  /** 按发送方组装长按菜单项（语音首项转文字；复制 删除 编辑 引用 多选 撤回；语音可编辑转写文本、无引用） */
   const buildMsgMenuItems = (m: ChatMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isVoice = m.kind === 'voice';
@@ -1268,8 +1271,8 @@ function ChatView({
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
+    items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (!isVoice) {
-      items.push({ key: 'edit', label: '编辑', icon: B.edit });
       items.push({ key: 'quote', label: '引用', icon: B.quote });
     }
     items.push({ key: 'multi', label: '多选', icon: B.multi });
@@ -1378,8 +1381,9 @@ function ChatView({
         break;
       }
       case 'edit':
+        // 语音消息编辑转写/朗读文本；文字消息编辑正文
         setEditMsg(m);
-        setEditDraft(m.content);
+        setEditDraft(m.kind === 'voice' ? m.voice?.transcript ?? m.voice?.localText ?? '' : m.content);
         break;
       case 'quote':
         setQuote({ name: quoteNameOf(m), content: quoteContentOf(m) });
@@ -1400,7 +1404,7 @@ function ChatView({
     }
   };
 
-  /** 编辑保存：更新该条消息内容（quote 等字段保留），自动落盘 */
+  /** 编辑保存：文字消息更新正文；语音消息更新转写文本（无音频 URL 的同步朗读原文），置为已转写；自动落盘 */
   const saveEdit = () => {
     const t = editDraft.trim();
     if (!editMsg) return;
@@ -1410,6 +1414,18 @@ function ChatView({
     }
     if (isChatStreaming(sessionKey)) {
       showToast('对方正在回复，请稍后再试');
+      return;
+    }
+    if (editMsg.kind === 'voice' && editMsg.voice) {
+      setMsgs((prev) =>
+        prev.map((x) =>
+          x.id === editMsg.id && x.voice
+            ? { ...x, voice: { ...x.voice, localText: x.voice.url ? x.voice.localText : t, transcript: t, stt: 'done' as const } }
+            : x,
+        ),
+      );
+      setEditMsg(null);
+      showToast('已修改');
       return;
     }
     setMsgs((prev) => prev.map((x) => (x.id === editMsg.id ? { ...x, content: t } : x)));
@@ -1987,7 +2003,7 @@ function ChatView({
           variant="sms"
           peerName={peer.name ?? peer.title}
           voiceId={contactVoiceId ?? ''}
-          voiceFreq={getAiVoiceFreq(sessionKey)}
+          voiceFreq={getAiVoiceFreq(voiceFreqKey)}
           onBack={() => setVoiceOpen(false)}
           onSelect={(vid) => {
             saveVoiceId(vid);
@@ -1997,14 +2013,15 @@ function ChatView({
         />
       )}
 
-      {/* AI 语音频率页（他的声音页二级页）：本轮起按频率决定 AI 回复发语音还是文字（按会话独立保存） */}
+      {/* AI 语音频率页（他的声音页二级页）：本轮起按频率决定 AI 回复发语音还是文字；
+          联系人会话与微信同键读写（跟随微信 App 里的设置，两端改一处同步生效） */}
       {voiceFreqOpen && (
         <ChatVoiceFreqPage
           variant="sms"
-          value={getAiVoiceFreq(sessionKey)}
+          value={getAiVoiceFreq(voiceFreqKey)}
           onBack={() => setVoiceFreqOpen(false)}
           onSelect={(f) => {
-            saveAiVoiceFreq(sessionKey, f);
+            saveAiVoiceFreq(voiceFreqKey, f);
             setVoiceFreqOpen(false);
           }}
         />
@@ -2062,7 +2079,7 @@ function ChatView({
       )}
 
       {/* 录音浮层（按住说话期间）：计时 + 实时波形 + 手势提示（纯视觉，手势在按住的胶囊上） */}
-      {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
+      {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} theme="im" />}
       {sttPreview.state && (
         <SttPreviewOverlay
           state={sttPreview.state}

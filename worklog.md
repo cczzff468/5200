@@ -7253,3 +7253,23 @@ Stage Summary:
 - AI 回复 5 端全部改为逐条投递：多条消息像真人连发一样一句一句陆续到达（首条立即、后续按内容长度停顿 0.85-2.4s），标题「正在输入中…」持续到发完；通知/语音判定/未读/记忆全部按条推进且与页面是否存活无关
 - 声波开关进输入框（5 端），「我的音色」移到语音API页最底部并新增不保存即可试听的「测试」按钮
 - AI 语音消息三处预览（微信列表/QQ列表/灵动岛通知）统一显示「[语音]」，修复此前列表预览空白与通知透出全文的问题
+---
+Task ID: 28
+Agent: main (Z.ai Code)
+Task: ①语音API「保存音色（我的音色）」移到全局默认音色下面+新增「测试服务商连接」按钮（测试填写的服务商能不能用）；②长按转文字结果面板圆角减小；③长按语音气泡增加编辑功能（5 端）；④信息APP AI 语音频率跟随微信APP设置；⑤信息APP按住说话录音浮层波条变蓝色
+
+Work Log:
+- settings.tsx VoicePage：「我的音色」section 从页面最底部（STT 之后）剪切并移到「全局默认音色」正下方、STT 之前（API 服务商时顺序=服务商→连接配置→全局默认音色→我的音色→STT；内置语音时=内置声线→试听→我的音色→STT）；section 内容（音色列表/表单/内置声线 chips/测试+保存音色按钮）原样保留
+- settings.tsx 新增「测试服务商连接」按钮（data-testid=tts-provider-test）：位于我的音色卡片内描述段之后，仅 API 服务商显示（内置语音无连接配置）；新增 testProvider()——按当前连接配置+默认音色（留空回退服务商安全默认）POST /api/tts 合成一句样例，成功→播放音频+绿色「服务商可用，测试音频已播放。」，失败→红色展示服务端 error（如「请先填写 API Key」）；新增 testingProvider/providerTestError/providerTestOk 状态，switchProvider 切换服务商时清空测试状态
+- voice-bubble.tsx：转文字结果面板（voice-transcript，气泡下方白色小面板）rounded-[10px]→rounded-[4px]，5 端共用组件一次生效
+- 语音气泡长按编辑（5 端 wechat/qq/chat/wx-group/qq-group）：①buildMsgMenuItems 语音消息加「编辑」项（微信/QQ/群聊 isText→isText||isVoice；信息端 !isVoice 分支拆出 edit 恒加、quote 保持仅文字）；②case 'edit' 语音消息编辑草稿初始化为 transcript??localText??''（文字消息仍编辑正文）；③saveEdit 语音分支——更新 voice.transcript 并置 stt='done'（转写面板就地更新），无音频 URL（内置引擎/文字转语音）时同步 localText（朗读原文跟随），有音频 URL（录音/服务商音频）只改转写不动物；群聊走 patchGroupMsg(id,{voice:{...}})；复用既有编辑弹窗，自动落盘
+- 信息频率跟随微信（chat.tsx）：新增 voiceFreqKey = 联系人会话 ? `wx:${wbContactId}` : sessionKey（微信端 key 为 `wx:${peer.id}`，同一联系人 id 同键）——decideAiVoiceMessage/getAiVoiceFreq×2/saveAiVoiceFreq 全部改用 voiceFreqKey；信息端「他的声音→AI 语音频率」页与微信端读写同一 localStorage 键，两端改一处同步生效；AI 助手会话无微信对应会话维持 sms: 独立
+- 信息录音浮层变蓝（voice-input.tsx + chat.tsx）：RecordOverlayWx 新增 theme?: 'wx'|'im' prop——'wx' 微信绿（气泡 #95EC69/波条 #3CA135/尾巴绿，默认，微信端不受影响）；'im' 信息蓝（气泡 #0A84FF/波条 bg-white/95/尾巴 #0A84FF，取消态仍红）；chat.tsx 传 theme="im"
+- E2E（agent-browser 实测，种子联系人 test-ai-1）：①语音API页（OpenAI 兼容）标题顺序=服务商→连接配置→全局默认音色→我的音色（含测试按钮）→STT；点测试→红字「请先填写 API Key」（服务端错误正确透出）；②信息端发文字转语音消息+长按 AI 语音气泡→菜单含「编辑」→弹窗预填转写文本→改文本保存→toast「已修改」+转写面板就地更新且 rounded-[4px]；③频率共享：信息端「AI 语音频率」行显示微信此前设置的「每条都发语音」（localStorage wx:test-ai-1=always），信息端改「关闭」→wx:test-ai-1 键被删，改回「每条都发语音」→键恢复——读写同键双向验证；④mock getUserMedia 挂起捕获录音浮层：气泡 bg-[#0A84FF]+波条 bg-white/95+尾巴 border-t-[#0A84FF]，截图视觉确认为 iMessage 蓝而非微信绿；⑤always 频率下 AI 回复直接落为 11″语音气泡（逐条判定+升级链路正常）；⑥浅色模式下灵动岛通知白底黑字（此前 26-A 适配再次视觉确认）
+- 校验：bun run lint 零错误；dev.log 编译零错误、无运行时报错；无真实 API Key 无法验证测试按钮成功态音频播放（与既有 runPreview 同链路）
+
+Stage Summary:
+- 语音API页布局调整为：连接配置→全局默认音色→我的音色（含「测试服务商连接」）→语音识别 STT，保存音色紧贴全局默认音色下方
+- 长按语音气泡 5 端均可「编辑」：编辑的是转写/朗读文本，保存后转写面板就地更新（内置语音连朗读原文一起改）
+- 信息APP AI 语音频率与微信APP共用 wx:<联系人id> 键，任一端修改两端同步；信息端录音浮层（按住说话上面的波条）从微信绿改为 iMessage 蓝
+- 转文字结果面板圆角 10px→4px；改动文件：settings.tsx / voice-bubble.tsx / voice-input.tsx / chat.tsx / wechat.tsx / qq.tsx / wx-group.tsx / qq-group.tsx

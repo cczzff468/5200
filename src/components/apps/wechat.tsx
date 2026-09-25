@@ -4519,7 +4519,7 @@ function ChatPage({
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
-    if (isText) items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (isText || isVoice) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (isText) items.push({ key: 'quote', label: '引用', icon: B.quote });
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     items.push({ key: 'recall', label: '撤回', icon: B.recall });
@@ -4722,8 +4722,9 @@ function ChatPage({
         break;
       }
       case 'edit':
+        // 语音消息编辑转写/朗读文本；文字消息编辑正文
         setEditMsg(m);
-        setEditDraft(m.content);
+        setEditDraft(m.kind === 'voice' ? m.voice?.transcript ?? m.voice?.localText ?? '' : m.content);
         break;
       case 'quote':
         // id 带上源消息：删除/撤回后引用显示「原消息已删除」
@@ -4770,7 +4771,7 @@ function ChatPage({
     }
   };
 
-  /** 编辑保存：更新该条消息内容（quote 等字段保留），自动落盘 */
+  /** 编辑保存：文字消息更新正文；语音消息更新转写文本（无音频 URL 的同步朗读原文），置为已转写；自动落盘 */
   const saveEdit = () => {
     const t = editDraft.trim();
     if (!editMsg) return;
@@ -4780,6 +4781,18 @@ function ChatPage({
     }
     if (isChatStreaming(sessionKey)) {
       onToast('对方正在回复，请稍后再试');
+      return;
+    }
+    if (editMsg.kind === 'voice' && editMsg.voice) {
+      setMsgs((prev) =>
+        prev.map((x) =>
+          x.id === editMsg.id && x.voice
+            ? { ...x, voice: { ...x.voice, localText: x.voice.url ? x.voice.localText : t, transcript: t, stt: 'done' as const } }
+            : x,
+        ),
+      );
+      setEditMsg(null);
+      onToast('已修改');
       return;
     }
     setMsgs((prev) => prev.map((x) => (x.id === editMsg.id ? { ...x, content: t } : x)));

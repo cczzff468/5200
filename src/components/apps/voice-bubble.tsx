@@ -217,7 +217,7 @@ export function VoiceMsgBubble({
       {voice.stt === 'done' && voice.transcript && (
         <span
           data-testid="voice-transcript"
-          className={`mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[10px] bg-white px-2.5 py-[7px] text-[12.5px] leading-[1.5] shadow-[0_1px_4px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.05] dark:bg-[#2C2E33] dark:ring-white/[0.07] ${
+          className={`mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[4px] bg-white px-2.5 py-[7px] text-[12.5px] leading-[1.5] shadow-[0_1px_4px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.05] dark:bg-[#2C2E33] dark:ring-white/[0.07] ${
             mine ? t.ownTranscript : t.peerTranscript
           }`}
         >

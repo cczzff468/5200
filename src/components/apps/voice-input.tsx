@@ -715,35 +715,36 @@ function timeLabelOf(seconds: number): string {
   return `0:${String(Math.min(59, sec)).padStart(2, '0')}`;
 }
 
-/** 微信风录音浮层：暗幕 + 绿色气泡实时波形 + 底部「取消 / 滑到这里 转文字」+ 浅色「松开 发送」条
- *  波形美化：更密的采样条 + 高度过渡平滑 morph + 两端渐隐 + 柔和投影 */
-export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
+/** 微信风录音浮层：暗幕 + 录音气泡实时波形 + 底部「取消 / 滑到这里 转文字」+ 浅色「松开 发送」条
+ *  波形美化：更密的采样条 + 高度过渡平滑 morph + 两端渐隐 + 柔和投影
+ *  theme：'wx' = 微信绿气泡（默认）；'im' = 信息/iMessage 蓝气泡（信息 App 按住说话用） */
+export function RecordOverlayWx({ rec, theme = 'wx' }: { rec: VoiceRecorder; theme?: 'wx' | 'im' }) {
   if (rec.phase === 'idle') return null;
   const cancel = rec.zone === 'cancel';
   const stt = rec.zone === 'stt';
   const bars = rec.levels.slice(-30);
   while (bars.length < 30) bars.unshift(0.08);
+  const im = theme === 'im';
+  const bubbleCls = cancel ? 'bg-[#FA5151]' : im ? 'bg-[#0A84FF]' : 'bg-[#95EC69]';
+  const barCls = cancel ? 'bg-white/90' : im ? 'bg-white/95' : 'bg-[#3CA135]/90';
+  const tailCls = cancel ? 'border-t-[#FA5151]' : im ? 'border-t-[#0A84FF]' : 'border-t-[#95EC69]';
   return (
     <div
       data-testid="voice-record-overlay"
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center bg-black/75"
     >
-      {/* 顶部占位（与底部 5:2）：把绿气泡压到屏幕中部，不再贴顶 */}
+      {/* 顶部占位（与底部 5:2）：把录音气泡压到屏幕中部，不再贴顶 */}
       <div className="min-h-0 flex-[5]" />
-      {/* 绿色录音气泡（转文字/取消时变色）+ 下指尾巴 */}
+      {/* 录音气泡（转文字/取消时变色）+ 下指尾巴 */}
       <div className="relative">
         <div
-          className={`flex h-[92px] items-center justify-center gap-[2.5px] overflow-hidden rounded-[20px] px-6 shadow-[0_18px_50px_rgba(0,0,0,0.4)] transition-colors ${
-            cancel ? 'bg-[#FA5151]' : 'bg-[#95EC69]'
-          }`}
+          className={`flex h-[92px] items-center justify-center gap-[2.5px] overflow-hidden rounded-[20px] px-6 shadow-[0_18px_50px_rgba(0,0,0,0.4)] transition-colors ${bubbleCls}`}
         >
           {bars.map((v, i) => (
             <span
               key={i}
-              className={`w-[3.5px] rounded-full transition-[height] duration-150 ease-out ${
-                cancel ? 'bg-white/90' : 'bg-[#3CA135]/90'
-              }`}
+              className={`w-[3.5px] rounded-full transition-[height] duration-150 ease-out ${barCls}`}
               style={{
                 height: `${Math.max(5, v * 58)}px`,
                 // 两端渐隐：首尾采样条透明度更低，波形更柔和（与微信录音浮层一致）
@@ -753,9 +754,7 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
           ))}
         </div>
         <span
-          className={`absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[10px] border-t-[12px] border-x-transparent transition-colors ${
-            cancel ? 'border-t-[#FA5151]' : 'border-t-[#95EC69]'
-          }`}
+          className={`absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[10px] border-t-[12px] border-x-transparent transition-colors ${tailCls}`}
         />
       </div>
       {/* 计时 */}
