@@ -6997,3 +6997,120 @@ Stage Summary:
 - 内置 6 声线不再雷同：有声源池时 6 声线各用不同系统语音且风格对位；声源不足时按 音高≥0.3 间距 + 语速差 两级防撞；性别不可信时强塑形兜底男女方向
 - 卡片可见「声源」映射，用户可自查每个声线背后的实际系统语音
 - 产物：src/lib/ios/builtin-voices.ts 重写（新增 planBuiltinVoices/describeBuiltinVoiceMappings，公开 API 不变）+ settings.tsx 卡片声源行；commit 待推送
+---
+Task ID: 23-1
+Agent: main (Z.ai Code)
+Task: 消息23 基础层——我的音色库 + AI 语音频率/计数器 + AI 语音合成 + 播放器内置朗读通道 + 共享设置 UI
+
+Work Log:
+- 新建 src/lib/ios/my-voices.ts：我的音色库（名字+音色ID，localStorage 'my-tts-voices' 永久保存），zustand store（add/remove/voices）+ describeVoiceId 展示名帮助函数（内置声线→声线名）
+- 新建 src/lib/ios/ai-voice.ts：AI 语音频率五档（off/always/often=1/3/sometimes=1/7/rarely=1/12，localStorage 'ai-voice-freq' 按 freqKey 隔离）；计数器（'ai-voice-counters' 按 counterKey 隔离，群聊=群键#角色id）；decideAiVoiceTurn(freqKey, counterKey)→{speak,rollback}（达到倍数→语音+清零，流被拒→rollback）；synthesizeAiVoice(text, contactId)→AiVoiceClip|null（builtin 引擎→url='' + localText + synth='builtin' 点击实时朗读；API 服务商→/api/tts→dataURL+真实时长，失败→null 自动降级文字）；resolveAiVoiceIdForApi（角色音色优先级链 + builtin: id 替换为服务商安全默认）
+- builtin-voices.ts：speakBuiltin 增加 keepOthers 选项（语音气泡实时朗读通道用，跳过 stopOtherAudio 防止清掉气泡播放状态）
+- voice-player.ts：三通道重构——新增 toggleBuiltinTts（AI 语音内置引擎实时朗读：每次点击现场 resolveVoiceForContact 解析角色音色；再点=停止；进度 hold 机制=估算到点悬 98% 等真实播完，超 3 倍强停；引擎失败降级静音模拟）；toggle 增加 opts 参数（synth/contactId）；stopVoicePlayback/teardown 联动停语音引擎（activeBuiltinTts 标志）
+- voice-bubble.tsx：VoiceMsgData 增加 synth?/contactId? 字段并透传 voicePlayer.toggle
+- chat-settings.tsx：新增 ChatVoiceFreqPage（频率选择，三端 variant）与 ChatVoicePage（他的声音：AI 语音频率入口行 + 内置音色 6 卡（性别徽标+试听）+ 我的音色 chips + API 音色 chips + 默认说明）；ChatSettingsPage/SmsChatSettingsPage 增加可选「他的声音」入口行（voiceSummary/onOpenVoice props）
+- settings.tsx 语音API：新增「我的音色」管理区（列表+试听+删除、名字/ID 输入、内置声线快捷填充、永久保存）
+- contacts.tsx：角色音色选择 chips 追加我的音色
+- tsc 全量通过；待各聊天 App 接线（Task 23-2a~e）
+
+Stage Summary:
+- 共享层就绪：lib/ios/{my-voices,ai-voice}.ts 新建，builtin-voices/voice-player/voice-bubble/chat-settings/settings/contacts 扩展；接口契约：decideAiVoiceTurn/synthesizeAiVoice/ChatVoicePage/ChatVoiceFreqPage/VoiceMsgData(synth,contactId)
+---
+Task ID: 23-2a
+Agent: wechat 接线代理
+Task: 微信单聊接入 AI 语音频率/语音落盘/他的声音设置
+
+Work Log:
+- wechat.tsx imports（62-63、175-176 行）：新增 '@/lib/ios/ai-voice'（decideAiVoiceTurn/synthesizeAiVoice/getAiVoiceFreq/saveAiVoiceFreq/aiVoiceFreqLabel）与 '@/lib/ios/my-voices'（describeVoiceId/useMyVoices）；'./chat-settings' import 扩展 ChatVoicePage/ChatVoiceFreqPage
+- runAiTurn（约 4015 行）：beginChatStream 之前加 `const voiceDecision = decideAiVoiceTurn(sessionKey);`（每轮一次，副作用推进计数器）
+- runAiTurn 竞态防御（4152-4156 行）：!started 时先调 voiceDecision.rollback()（不凭空消耗语音机会）再回滚用户消息
+- runAiTurn finalize（4101-4124 行）：saveMsgs([...cur,...all]) 之后、wxUnreads.bump 之前插入 AI 语音升级块——voiceDecision.speak 时取本轮第一条文字消息（kind 空/text 且内容非空）异步 synthesizeAiVoice；成功→原地改为 kind='voice' 气泡（voice 带 url/duration/wave/localText/synth/contactId），setMsgs(upgrade) + saveMsgs(upgrade(loadMsgs))；失败（null/异常）→保持文字自动降级
+- loadMsgs voice 规范化块（476-477 行）：追加透传 synth（仅 'builtin'|'api'）与 contactId（string），落盘回读不丢通道信息；原 if 条件本就是 typeof url === 'string'（内置引擎 url 空串成立），未改条件
+- handleMenuAction case 'stt'（4615-4623 行）：「已有结果→取消」判断之后插入本地原文快捷路径——!v.url && v.localText（AI 语音/文字转语音消息）直接写 transcript+stt='done'，toast「已转文字」，跳过真实识别
+- 历史上下文映射（3906 行）：runAiTurn 的 history 语音分支改为 `m.voice?.transcript || m.voice?.localText || '[语音]'`（AI 能读到自己发过的语音内容）；quoteContentOf（复制/引用文案）未动
+- ChatPage 状态（3633-3638 行）：新增 voiceOpen/voiceFreqOpen + `myVoicesForSummary = useMyVoices((s) => s.voices)`
+- ChatPage props（3557/3572 行）：新增必填 onSaveVoiceId(vid)（与 onSaveRemark 同款 void | Promise<void>）
+- ChatSettingsPage 渲染（5719-5720 行）：加 voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)} 与 onOpenVoice={() => setVoiceOpen(true)}（共享层已备好入口行，不传则隐藏）
+- 二级页渲染（5806-5833 行）：仿 replyOpen 块（无包裹 div，absolute inset-0 z-50 同层级）在 ChatReplyCountPage 之后加 ChatVoicePage（voiceId=peer.voiceId ?? ''，voiceFreq=getAiVoiceFreq(sessionKey)，onSelect 调 onSaveVoiceId 后关页）与 ChatVoiceFreqPage（onSelect saveAiVoiceFreq(sessionKey,f) 后关频率页回「他的声音」页）；FreqPage 在 JSX 中后渲染，同开时自然覆盖
+- onSaveVoiceId 持久化（8124-8133 行，MainScreen 内 ChatPage 渲染处）：完全复用 onSaveRemark 路径——await updateContact(chatPeer.id, { voiceId: vid || null }) → await reloadContacts() → toast（vid 非空「已更新 TA 的声音」/空串「已恢复默认声音」，失败「声音保存失败」）；ChatPage 的 peer 由 contacts 反查（peer={contacts.find(...)}），reload 后 voiceSummary/选中态即时刷新
+
+Stage Summary:
+- 微信单聊 AI 语音全链路接通：频率决策（rollback 防空耗）→ finalize 首条文字升级语音气泡（builtin 引擎 url='' 实时朗读 / API dataURL 落盘，失败自动降级文字）→ loadMsgs 透传 synth/contactId → 长按转文字本地原文直显 → AI 历史上下文可读语音原文
+- 「他的声音」设置入口+二级页、AI 语音频率页接入（wx variant），音色选择复用备注同款持久化路径（updateContact voiceId + reloadContacts）
+- 验证：bunx tsc --noEmit 通过（exit 0）；src/components/apps/wechat.tsx 单文件 eslint 0 问题；项目级 bun run lint 仅剩 1 个既有错误（chat-settings.tsx:1688 react-hooks/set-state-in-effect，Task 23-1 的 ChatVoicePage 遗留，本任务禁改该文件未处理，需 23-1 侧修复）
+---
+Task ID: 23-2e
+Agent: qq-group 接线代理
+Task: QQ 群聊接入 AI 语音频率（按角色计数）/语音落盘/群频率设置
+
+Work Log:
+- import：新增 '@/lib/ios/ai-voice'（decideAiVoiceTurn/synthesizeAiVoice/getAiVoiceFreq/saveAiVoiceFreq/aiVoiceFreqLabel）；'./chat-settings' import 加入 ChatVoiceFreqPage
+- 模块级帮助函数 groupVoiceLocalText：WxGroupMsg.voice 的 lib 层同形声明不含 localText，宽松断言读取运行时携带的朗读原文（AI 语音/文字转语音消息）
+- 每角色频率决策：runCharTurn 内 beginChatStream 之前 `decideAiVoiceTurn(sKey, `${sKey}#${char.id}`)`（与 getReplyCount(sKey) 同键，每角色独立计数）；beginChatStream 被拒分支调用 voiceDecision.rollback() 恢复计数
+- finalize 语音升级：逐条 appendMsg 循环后，voiceDecision.speak 命中 → 取该成员第一条文字消息（kind 缺省/text 且非空）异步 synthesizeAiVoice(content, char.id)，成功后 patchGroupMsg 升级为 kind='voice'（url/duration/wave/localText/synth/contactId 全量写入），null=失败保持文字自动降级；patchGroupMsg 加入 runCharTurn deps
+- patchGroupMsg：Pick 扩展 'kind' | 'voice'；实现本就是「loadGroupMsgs 读改写→saveGroupMsgs 落盘 + mounted 时 setMsgs」双写，无需额外补落盘
+- 长按「转文字」快捷路径：case 'stt' 在「取消转文字」判断之后、fetch 识别之前，`!v.url && localText`（AI 语音/文字转语音）→ 直接 transcript=localText + stt='done' 落盘并 toast「已转文字」，避免 fetch('') 识别失败
+- 历史/引用映射兜底：msgTextOf（AI 上下文/记忆提取共用）与 msgSnapshotOf（复制/引用/转发/收藏）语音分支加 localText 兜底（transcript || localText || '[语音]'）
+- 群信息页：replyCountOpen 子页旁新增 voiceFreqOpen state +「AI 语音频率」InfoRow（value=aiVoiceFreqLabel(getAiVoiceFreq(sessionKeyOf(gid)))，testId=qq-groupinfo-voice-freq）+ ChatVoiceFreqPage(variant='qq') 二级页（onSelect 保存到群会话键并 toast）；按任务说明不加「他的声音」页（成员各有自己的人设音色）
+- 【任务 3 未做·超范围说明】群消息加载规范化（voice 重建块追加 synth/contactId 透传）位于共享层 src/lib/ios/groups.ts normalizeMsg（842-852 行），不在本任务允许修改的文件内，按「没有重建块则跳过」跳过。注意：groups.ts normalizeMsg 每次读取会丢弃 voice.localText/synth/contactId（存储侧 saveGroupMsgs 不清洗、原始数据仍在），导致重进群聊后内置引擎 AI 语音消息无法实时朗读（降级无播放）且 localText 历史兜底失效——需主代理在 groups.ts 的 voice 重建块补 synth（仅 'builtin'|'api'）/contactId（string）/localText（string）透传；该块 url 判断已是 typeof（非真值判断），无需放宽
+
+Stage Summary:
+- QQ 群聊 AI 语音全链路接通：群信息页可按群设置频率（off/always/often/sometimes/rarely）→ 每个成员按「群键#角色id」独立计数（流被拒回滚）→ 命中轮该成员第一条文字异步合成升级为语音气泡（builtin=点击实时朗读角色音色 / api=dataURL 真实音频；失败保持文字）→ 长按「转文字」直接用本地原文秒出结果；历史上下文/引用/复制对语音消息带 localText 兜底
+- 验证：bunx tsc --noEmit 全量通过（exit 0）；bunx eslint src/components/apps/qq-group.tsx 0 问题；bun run lint 全仓唯一 error 在 chat-settings.tsx:1688（Task 23-1 遗留，非本文件引入，未动）
+---
+Task ID: 23-2c
+Agent: chat(信息) 接线代理
+Task: 信息 App 接入 AI 语音频率/语音落盘/他的声音设置
+
+Work Log:
+- chat.tsx import：新增 '@/lib/ios/ai-voice'（decideAiVoiceTurn/getAiVoiceFreq/saveAiVoiceFreq/synthesizeAiVoice）与 '@/lib/ios/my-voices'（describeVoiceId/useMyVoices）；'./chat-settings' 加入 ChatVoicePage/ChatVoiceFreqPage（aiVoiceFreqLabel 未 import：信息端无频率摘要展示位，摘要行在 ChatVoicePage 内部渲染）
+- 频率决策：startAiTurn 内 beginChatStream 之前 `const voiceDecision = decideAiVoiceTurn(sessionKey)`（sessionKey 形如 sms:c:<id> / sms:assistant）；`!started` 竞态回滚分支同时调 voiceDecision.rollback()（不再要求 userMsg 非空，批次触发被拒也不漏计数）
+- finalize 升级：saveMsgs(saved) 落盘行之后，voiceDecision.speak 命中时挑本轮第一条普通文字消息（!error && !sys && !blkreq && kind 非 voice && content 非空），synthesizeAiVoice(content, memContactId) 异步合成；成功→content 清空 + kind='voice' + VoiceMsgData(url/duration/wave/localText/synth/contactId)，setMsgs + saveMsgs 双写（页面已关也能落盘）；null/异常→保持文字自动降级
+- loadMsgs voice 规范化：重建块追加透传 synth（仅 'builtin'|'api'）与 contactId（string）；既有「有 url 或有 localText 都保留」判断未动，AI 内置引擎消息（url='' + localText）不会被降级成 '[语音]'
+- 长按转文字：case 'stt' 在 fetch(url) 服务端识别之前插入本地快捷路径——!v.url && v.localText 时直接把 localText 写入 transcript + stt='done'，showToast('已转文字')，零网络零耗时
+- 历史映射兜底：发给 AI 的上下文（767 行）改为 `m.voice?.transcript || m.voice?.localText || '[语音]'`；两处会话列表预览（scanContactSessions 与小助手 preview）同样加 localText 兜底，AI 语音消息预览不再永远显示裸「[语音]」
+- SmsChatSettingsPage 接线：ChatView 新增 voiceOpen/voiceFreqOpen state、myVoicesForSummary = useMyVoices(s => s.voices)；新 props contactVoiceId（联系人 voiceId）与 onSaveVoiceId；设置页传入 voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)} 与 onOpenVoice={wbContactId ? … : undefined}（AI 助手会话自动隐藏入口）；ChatVoicePage/ChatVoiceFreqPage 两个覆盖层加在 ChatTranslatePage 之后（同 z-50 绝对覆盖结构，voiceFreq 用 getAiVoiceFreq(sessionKey) 现读现显）
+- voiceIdOfContact 来源：ChatView 本体只有 peer（无 ContactRecord），故由宿主（文件内同文件的 ChatApp 父组件）以 `contacts.find(c => c.id === chatSession.key.slice(2))?.voiceId ?? null` 算好传入（contacts 即 loadContacts→withDisplayNames 的列表，spread 保留 voiceId）
+- onSaveVoiceId 持久化：完全复用备注路径——父组件 updateContact(cid, { voiceId: vid || null }) + await loadContacts() 刷新（prop 随之更新）；ChatView 内 saveVoiceId 负责 toast：有值「已更新 TA 的声音」、空「已恢复默认声音」
+- 验证：bunx eslint src/components/apps/chat.tsx → 0 错误（bun run lint 全仓仅剩 chat-settings.tsx:1688 set-state-in-effect 一条，系 Task 23-1 共享层既有问题，非本任务文件）；bunx tsc --noEmit → 通过（exit 0）；未动其它文件、未启 dev、无 git 操作
+
+Stage Summary:
+- 信息 App AI 语音全链路可用：设置 › 聊天设置 › 「他的声音」选音色+设 AI 语音频率（按会话独立持久化）→ AI 回复按频率把第一条文字升级为语音气泡（builtin 引擎 url='' + localText 实时朗读 / API 服务商 dataURL，失败自动降级文字）→ 语音气泡可点击播放（voicePlayer 按 synth/contactId 分通道）、长按转文字本地直出原文、AI 上下文与列表预览均用转写/原文兜底；流被拒时语音计数回滚不漏机会
+---
+Task ID: 23-2d
+Agent: wx-group 接线代理
+Task: 微信群聊接入 AI 语音频率（按角色计数）/语音落盘/群频率设置
+
+Work Log:
+- imports：新增 '@/lib/ios/ai-voice'（decideAiVoiceTurn/synthesizeAiVoice/getAiVoiceFreq/saveAiVoiceFreq/aiVoiceFreqLabel）；'./chat-settings' import 加入 ChatVoiceFreqPage；文件头注释补 AI 语音频率说明（finalize 升级语音 + 群信息页入口）
+- runCharTurn（即任务书中的 runOneReply，单角色回复回合，~2820 行）：beginChatStream 前加 `const voiceDecision = decideAiVoiceTurn(sKey, `${sKey}#${char.id}`)`（freqKey=群会话键 wx:group:<gid>，counterKey=`${sKey}#${char.id}` 每角色独立计数）；beginChatStream 返回 false 的 `if (!ok)` 分支加 voiceDecision.rollback() 后再 resolve（不凭空消耗语音机会）
+- runCharTurn finalize（~2956 行）：`for (const m of all) appendMsg(m)` 之后插入 AI 语音升级块——voiceDecision.speak 时取该成员本轮第一条文字消息（kind 为空/text 且 content 非空；[SKIP] 早退不受影响；「（…）」占位因 cleanTextForTts 清洗为空自动降级保持文字），void synthesizeAiVoice(target.content, char.id) 异步合成，成功 → patchGroupMsg(targetId, { content:'', kind:'voice', voice })；失败/异常保持文字。voice 额外冗余写入 transcript: clip.localText（见下条）
+- 存储规范化适配（任务书第 3 条的替代实现）：voice 重建块实际在 src/lib/ios/groups.ts 的 normalizeMsg（~843 行，白名单只保留 url/duration/wave/transcript/stt，会丢 localText/synth/contactId），该文件不在本任务可改范围 → 改为两层在-file 兜底：① 创建 AI 语音时把朗读原文冗余进 transcript（normalizeMsg 保留，AI 上下文/复制/转文字全部经它恢复）；② 新增模块级 voiceViewOf(m)（~256 行）在渲染 VoiceMsgBubble 处重建完整 VoiceMsgData 视图：localText←localText??transcript、synth←synth??(url?'api':'builtin')、contactId←contactId??senderId（用户录音/文字转语音消息字段齐全时原样透传，行为不变；voice-player.toggle 对有 url 的消息仍走音频播放路径，synth 不影响）。遗留建议：groups.ts normalizeMsg 追加 localText/synth/contactId 透传（其 url 判断已是 typeof，无真值漏判问题）
+- patchGroupMsg（~2336 行）：Pick 类型加 'kind'；确认实现本就是「loadGroupMsgs 读改写 → saveGroupMsgs 落盘 + mountedRef 时 setMsgs 同步 state」双写，仅扩类型未动实现
+- 长按「转文字」快捷路径（onMenuSelect case 'stt'，~3790 行）：在「已有结果→取消转文字」判断之后、服务端识别之前插入：`!v.url && ((v as VoiceMsgData).localText || v.transcript)` → 直接 patchGroupMsg 写 transcript+stt:'done' 并 toast「已转文字」（仅内置引擎 AI 语音 url='' 命中；用户录音/文字转语音有 url 仍走真实识别）
+- 历史/预览兜底：新增组件内 voiceTextOf(m)（transcript 优先、localText 兜底）；msgTextOf 语音分支与 msgSnapshotOf（复制/引用/转发/收藏快照）语音分支均改用 voiceTextOf 兜底，未动三元链结构
+- 群信息页 WxGroupInfoPage：新增 voiceFreqOpen state；「回复条数」InfoRow 后加「AI 语音频率」行（value=aiVoiceFreqLabel(getAiVoiceFreq(sessionKeyOf(gid)))，testId=wx-groupinfo-voice-freq）；replyCountOpen 子页旁新增 ChatVoiceFreqPage（variant="wx"）子页，onSelect 时 saveAiVoiceFreq(sessionKeyOf(gid), f) + 关子页 + toast
+- 验证：bunx tsc --noEmit 全量通过；bun run lint 仅剩 chat-settings.tsx:1688 一条既有错误（Task 23-1 遗留，改动前基线已存在），wx-group.tsx 无新增错误
+
+Stage Summary:
+- 群聊 AI 语音全链路接通：按群频率设置（群信息页）→ runCharTurn 每角色独立计数决策（流被拒回滚）→ finalize 首条文字异步升级语音气泡（失败自动降级文字）→ 内置引擎点击实时朗读 / API 音频可播 → 长按转文字免识别直出原文 → 语音原文进 AI 上下文/复制/引用/转发/收藏
+- 因 groups.ts normalizeMsg 白名单重建不透传 localText/synth/contactId 且该文件本任务禁改，用「transcript 冗余 + voiceViewOf 渲染期重建视图」在 wx-group.tsx 内闭环解决，重载后播放/转文字/上下文均不失效；建议后续在 groups.ts 补三字段透传为治本
+---
+Task ID: 23
+Agent: main (Z.ai Code)
+Task: 消息23——语音API「我的音色」+ 聊天设置「他的声音」（内置/我的/API 音色）+ AI 语音发送频率（关闭/每条/经常1/3/偶尔1/7/不经常1/12，按角色按会话计数，语音气泡可播可转文字，TTS 失败降级文字）
+
+Work Log:
+- 基础层（Task 23-1，本人）：新建 my-voices.ts（我的音色库 zustand+localStorage 'my-tts-voices'，describeVoiceId 展示名）与 ai-voice.ts（五档频率 'ai-voice-freq' 按会话键隔离；计数器 'ai-voice-counters' 按会话键#角色id 隔离；decideAiVoiceTurn→{speak,rollback}；synthesizeAiVoice：builtin 引擎→url=''+localText+synth='builtin' 点击实时朗读 / API 服务商→/api/tts→dataURL+真实时长，失败→null 自动降级文字；resolveAiVoiceIdForApi 处理 builtin: id → 服务商安全默认）
+- builtin-voices.ts speakBuiltin 增加 keepOthers（语音气泡实时朗读时跳过互斥清态）；voice-player.ts 三通道重构（新增 toggleBuiltinTts：点击现场 resolveVoiceForContact 解析角色音色实时朗读，进度 hold 机制=估算到点悬 98% 等真实播完/超3倍强停，引擎失败降级静音模拟，stopVoicePlayback 联动停语音引擎）；voice-bubble.tsx VoiceMsgData 增加 synth/contactId 并透传
+- chat-settings.tsx：新增 ChatVoiceFreqPage（三端）与 ChatVoicePage（AI 语音频率入口行+内置音色 6 卡可试听+我的音色 chips+API 音色 chips）；ChatSettingsPage/SmsChatSettingsPage 加可选「他的声音」入口行（voiceSummary/onOpenVoice）
+- settings.tsx 语音API 新增「我的音色」管理区（添加/删除/试听/内置声线快捷填充）；contacts.tsx 角色音色 chips 追加我的音色
+- 五端接线（23-2a~2e，4 个子代理并行 + qq.tsx 本人补线）：每端 ①beginChatStream 前 decideAiVoiceTurn（!started 时 rollback）②finalize 落盘后异步 synthesizeAiVoice 把本轮第一条文字消息升级为 kind='voice' 气泡（voice 带 synth/contactId；失败保持文字）③loadMsgs/normalizeMsg 透传 synth/contactId（groups.ts 同形类型扩展+透传）④长按转文字本地快捷路径（!url && localText → 直出原文不调 STT）⑤AI 上下文/预览语音映射加 localText 兜底 ⑥聊天设置入口+二级页（单聊：他的声音页（onSelect→updateContact voiceId 复用备注持久化路径）+频率页；群聊：群信息页「AI 语音频率」行+频率子页，freqKey=群键、counterKey=群键#角色id）
+- 修正：chat-settings ChatVoicePage mount effect 内 setState → 惰性初始化（react-hooks/set-state-in-effect 归零）；wx-group voiceViewOf synth 兜底限定 peer 消息（防我方文字转语音消息被误判为内置朗读通道破坏静音模拟）；qq.tsx 接线时误删的 finalize error 块已当场恢复
+- E2E（agent-browser）：微信=always+选晓月→回复首条变语音气泡(3″)可点播放/暂停(data-voice-active 切换)、长按转文字秒出原文、刷新后气泡+转写+可播性均保留、voiceId 持久化 IndexedDB；信息端设置行/音色页渲染 OK；QQ=often→消息1/2 文字(counters 1→2)、消息3 语音(counters 归 0)计数周期精确；设置→我的音色 添加/刷新持久/试听/删除全通过；console/page errors 零、dev.log 无错误（/api/chat 502 为上游代理失败走 forceSdk 兜底的既有行为）
+- lint 0 错误、tsc 全量通过；产物：新文件 my-voices.ts/ai-voice.ts，改动 builtin-voices/voice-player/voice-bubble/chat-settings/settings/contacts/groups/wechat/qq/chat/wx-group/qq-group
+
+Stage Summary:
+- 「我的音色」：语音API 里名字+音色ID 永久保存（内置声线/MiniMax/OpenAI 音色均可），联系人编辑与聊天设置「他的声音」都能点选
+- 「他的声音」：聊天设置新入口（wx/qq/sms 三端），内置音色（免费可试听）+保存的音色+API 音色选择，保存即写联系人 voiceId（电话/气泡朗读/语音消息全链路生效）
+- 「AI 语音频率」：他的声音页内（群聊在群信息页），五档；每角色×每会话独立计数、发语音后清零；命中→AI 回复第一条文字异步合成语音气泡（角色音色），失败自动降级文字；气泡点击播放（内置引擎实时朗读/API 真实音频）、长按转文字（本地原文秒出）；关闭=AI 只发文字

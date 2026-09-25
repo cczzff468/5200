@@ -12,7 +12,8 @@
  *                      （按住说话录音 + 语音气泡 + 长按转文字 + 文字转语音开关，转写文本进成员上下文）；
  *                      聊天背景按群独立（入口在聊天信息页，与单聊同款 ChatBgPage）；
  * - WxGroupInfoPage    群聊信息：成员管理（邀请/移出）、群名、群公告（独立编辑页）、群头像、聊天背景、
- *                      记忆与私聊互通开关（按群独立）、时间感知、置顶/免打扰、清空记录、退出群聊。
+ *                      回复条数、AI 语音频率（按群设置，成员按角色独立计数）、记忆与私聊互通开关（按群独立）、
+ *                      时间感知、置顶/免打扰、清空记录、退出群聊。
  *
  * AI 管线（多角色，每个角色独立组装 system，绝不共用）：
  * - 谁来回复按人设自判：用户发言后被 @ 成员必答，其余成员逐个自判（无话可说只回 [SKIP]，整条丢弃不落盘）；
@@ -22,7 +23,8 @@
  *   （图片→[图片]、位置→[位置] 地点名、表情包→[发送了表情：意思]，与单聊占位一致）；
  * - 配置识图模型后，群里发的图片先经识图模型描述，每个成员再结合图片按人设回复（与单聊同管线）；
  * - finalize：回复落盘（senderId 区分发言人）+ 未读 + memAfterAiTurn（roundScope 按群隔离，
- *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）。
+ *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）；AI 语音频率（按群设置、按角色独立计数）
+ *   命中时把该成员本轮第一条文字消息异步升级为语音气泡（合成失败自动保持文字）。
  * - 范围限定：群内不提供红包/转账等资金功能（加号面板保留入口，点击提示不支持）。
  */
 
@@ -74,6 +76,7 @@ import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { aiVoiceFreqLabel, decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, contactNameVariants, type ContactRecord } from '@/lib/contacts';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
@@ -129,6 +132,7 @@ import {
   ChatBgPage,
   ChatReplyCountPage,
   ChatToggle,
+  ChatVoiceFreqPage,
   chatBgLayerStyle,
   WX_CHAT_BG_DEFAULT,
   type ChatSettingsBg,
@@ -241,6 +245,22 @@ const moneyCooldownKey = (sKey: string, charId: string) => `${sKey}:${charId}`;
 
 function memberNameOf(c: ContactRecord): string {
   return displayNameOf(c);
+}
+
+/**
+ * 语音消息的完整播放视图（VoiceMsgData）：群消息读取时 normalizeMsg（groups.ts）已透传
+ * localText/synth/contactId，这里只做旧数据兜底重建（规范化曾丢弃这些字段的时期）：
+ * AI 语音消息创建时已把朗读原文冗余进 transcript；synth 仅对「对方（peer）且无音频 url」的消息
+ * 兜底为内置引擎通道 —— 我方的文字转语音消息保持 synth 缺省（点击仍是静音模拟，行为不变）。
+ */
+function voiceViewOf(m: WxGroupMsg): VoiceMsgData {
+  const v = m.voice as VoiceMsgData;
+  return {
+    ...v,
+    localText: v.localText ?? v.transcript ?? '',
+    synth: v.synth ?? (m.role === 'peer' && !v.url ? 'builtin' : undefined),
+    contactId: v.contactId ?? (m.role === 'peer' ? m.senderId : undefined),
+  };
 }
 
 /** 剪贴板复制（clipboard API 不可用时回退 execCommand） */
@@ -799,6 +819,8 @@ export function WxGroupInfoPage({
   const [confirmQuit, setConfirmQuit] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const [replyCountOpen, setReplyCountOpen] = useState(false);
+  // AI 语音频率子页（按群独立保存；群聊里各成员按「群会话键#角色 id」独立计数）
+  const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
   const [sentenceOn, setSentenceOn] = useState(() => getSentenceSend(sessionKeyOf(group.id)));
   const gid = group.id;
@@ -1180,6 +1202,12 @@ export function WxGroupInfoPage({
           value={`${replyCount} 条`}
           onClick={() => setReplyCountOpen(true)}
           testId="wx-groupinfo-replycount"
+        />
+        <InfoRow
+          label="AI 语音频率"
+          value={aiVoiceFreqLabel(getAiVoiceFreq(sessionKeyOf(gid)))}
+          onClick={() => setVoiceFreqOpen(true)}
+          testId="wx-groupinfo-voice-freq"
         />
         <SwitchRow
           label="分句发送"
@@ -1609,6 +1637,22 @@ export function WxGroupInfoPage({
               setReplyCount(n);
               setReplyCountOpen(false);
               onToast(`回复条数已设为 ${n} 条`);
+            }}
+          />
+        </div>
+      )}
+
+      {/* AI 语音频率页（聊天信息二级页；按群独立保存，成员按角色独立计数） */}
+      {voiceFreqOpen && (
+        <div className="fixed inset-0 z-50">
+          <ChatVoiceFreqPage
+            variant="wx"
+            value={getAiVoiceFreq(sessionKeyOf(gid))}
+            onBack={() => setVoiceFreqOpen(false)}
+            onSelect={(f) => {
+              saveAiVoiceFreq(sessionKeyOf(gid), f);
+              setVoiceFreqOpen(false);
+              onToast(`AI 语音频率：${aiVoiceFreqLabel(f)}`);
             }}
           />
         </div>
@@ -2313,7 +2357,7 @@ export function WxGroupChatPage({
 
   /** 就地更新一条群消息的附加数据（红包/转账状态流转、语音转写结果用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
-    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'voice'>>) => {
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'voice' | 'kind'>>) => {
       const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -2582,11 +2626,16 @@ export function WxGroupChatPage({
   const parseMentions = (text: string): ContactRecord[] =>
     members.filter((c) => text.includes(`@${memberNameOf(c)}`));
 
+  /** 语音消息的可读文本（进 AI 上下文/复制/引用共用）：转写优先，其次本地朗读原文（AI 语音消息两者同源） */
+  const voiceTextOf = (m: WxGroupMsg): string =>
+    m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || '';
+
   /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账/语音有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
     if (m.kind === 'image') return '[图片]';
-    // 语音消息：AI 直接读转写文本（自然对话）；识别失败/未识别时用占位
-    if (m.kind === 'voice') return m.voice?.transcript || '[语音]';
+    // 语音消息：AI 直接读转写文本（自然对话；AI 语音消息的朗读原文同源冗余在 transcript/localText）；
+    // 识别失败/未识别时用占位
+    if (m.kind === 'voice') return voiceTextOf(m) || '[语音]';
     if (m.kind === 'sticker' && m.stk) {
       return m.role === 'me'
         ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -2614,8 +2663,8 @@ export function WxGroupChatPage({
     m.kind === 'image'
       ? '[图片]'
       : m.kind === 'voice'
-        ? m.voice?.transcript
-          ? `[语音] ${m.voice.transcript}`
+        ? voiceTextOf(m)
+          ? `[语音] ${voiceTextOf(m)}`
           : '[语音]'
         : m.kind === 'sticker' && m.stk
         ? m.stk.meaning
@@ -2793,6 +2842,9 @@ export function WxGroupChatPage({
           ...history,
         ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
+        // AI 语音频率（按群设置；群聊按「群会话键#角色 id」独立计数，成员互不影响）：
+        // 本轮命中 → finalize 里把该成员第一条文字消息升级为语音气泡；发起被拒时 rollback 恢复计数
+        const voiceDecision = decideAiVoiceTurn(sKey, `${sKey}#${char.id}`);
 
         const ok = beginChatStream({
           sessionKey: sKey,
@@ -2926,6 +2978,29 @@ export function WxGroupChatPage({
               all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
             }
             for (const m of all) appendMsg(m);
+            // AI 语音频率（按群设置、按角色计数）：本轮命中 → 把该成员第一条文字消息升级为语音气泡
+            // （异步合成；失败保持文字自动降级。朗读原文同时冗余进 transcript，存储规范化丢 localText 后仍可转文字/进上下文）
+            if (voiceDecision.speak) {
+              const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
+              if (target) {
+                const targetId = target.id;
+                void synthesizeAiVoice(target.content, char.id)
+                  .then((clip) => {
+                    if (!clip) return; // 合成失败 → 保持文字
+                    const voice: VoiceMsgData = {
+                      url: clip.url,
+                      duration: clip.duration,
+                      wave: clip.wave,
+                      localText: clip.localText,
+                      transcript: clip.localText,
+                      synth: clip.synth,
+                      contactId: char.id,
+                    };
+                    patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
+                  })
+                  .catch(() => {});
+              }
+            }
             // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
             void (async () => {
               try {
@@ -2955,7 +3030,10 @@ export function WxGroupChatPage({
             resolve();
           },
         });
-        if (!ok) resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
+        if (!ok) {
+          voiceDecision.rollback(); // 发起被拒（同群该角色已有流）：回滚本次计数推进，不凭空消耗一次语音机会
+          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
+        }
       }),
      
     [apiConfig, appendMsg, applyGroupAdminAction, applyGroupAiAction, collectGroupPending, gid, me, ownerLabelOf, sKey]
@@ -3733,6 +3811,13 @@ export function WxGroupChatPage({
           onToast('已取消转文字');
           break;
         }
+        // 本地已存原文的语音（AI 语音消息/文字转语音）：直接显示原文，无需识别
+        const localText = (v as VoiceMsgData).localText || v.transcript;
+        if (!v.url && localText) {
+          patchGroupMsg(m.id, { voice: { ...v, transcript: localText, stt: 'done' as const } });
+          onToast('已转文字');
+          break;
+        }
         onToast('正在转文字…');
         void (async () => {
           try {
@@ -4154,8 +4239,9 @@ export function WxGroupChatPage({
                 )
               ) : m.kind === 'voice' && m.voice ? (
                 /* 语音消息：播放/暂停 + 波形 + 时长（theme wx：我方绿/对方白，与单聊一致）；
-                   长按菜单由外层行容器的 bubblePress 提供（转文字/复制/…），转写结果显示在气泡下方 */
-                renderMsgRow(m, <VoiceMsgBubble msgId={m.id} voice={m.voice} side={mine ? 'me' : 'peer'} theme="wx" />)
+                   长按菜单由外层行容器的 bubblePress 提供（转文字/复制/…），转写结果显示在气泡下方；
+                   voice 经 voiceViewOf 兜底重建（存储规范化不透传 synth/contactId/localText，AI 语音重载后仍可播放） */
+                renderMsgRow(m, <VoiceMsgBubble msgId={m.id} voice={voiceViewOf(m)} side={mine ? 'me' : 'peer'} theme="wx" />)
               ) : (
                 renderMsgRow(
                   m,

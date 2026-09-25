@@ -162,8 +162,18 @@ export interface WxGroupMsg {
   time: number;
   kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer' | 'forward' | 'voice';
   /** 语音消息（kind = 'voice'）：音频/波形/时长/转写（结构等价于 components/apps/voice-bubble 的 VoiceMsgData，
-   *  lib 层不反向依赖 UI 组件，这里用同形本地类型；字段变动需两处同步） */
-  voice?: { url: string; duration: number; wave: number[]; transcript?: string; stt?: 'pending' | 'done' | 'failed' };
+   *  lib 层不反向依赖 UI 组件，这里用同形本地类型；字段变动需两处同步）。
+   *  localText = 朗读原文（文字转语音/AI 语音内置引擎消息）；synth = AI 语音合成通道；contactId = 发送者联系人 id */
+  voice?: {
+    url: string;
+    duration: number;
+    wave: number[];
+    localText?: string;
+    synth?: 'builtin' | 'api';
+    contactId?: string;
+    transcript?: string;
+    stt?: 'pending' | 'done' | 'failed';
+  };
   /** 群红包卡片数据（kind = 'redpacket' 时有值） */
   rp?: GroupRpData;
   /** 群转账卡片数据（kind = 'transfer' 时有值） */
@@ -839,13 +849,17 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
       r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward' || r.kind === 'voice'
         ? r.kind
         : 'text',
-    // 语音消息规范化（宽松字段兜底；音频 dataURL 随消息持久化，重启后仍可播放）
+    // 语音消息规范化（宽松字段兜底；音频 dataURL 随消息持久化，重启后仍可播放；
+    // localText/synth/contactId 支持 AI 语音内置引擎消息的重启朗读与角色音色解析）
     voice:
       r.kind === 'voice' && r.voice && typeof r.voice.url === 'string'
         ? {
             url: r.voice.url,
             duration: typeof r.voice.duration === 'number' && r.voice.duration > 0 ? r.voice.duration : 1,
             wave: Array.isArray(r.voice.wave) ? r.voice.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+            localText: typeof r.voice.localText === 'string' && r.voice.localText ? r.voice.localText : undefined,
+            synth: r.voice.synth === 'builtin' || r.voice.synth === 'api' ? r.voice.synth : undefined,
+            contactId: typeof r.voice.contactId === 'string' && r.voice.contactId ? r.voice.contactId : undefined,
             transcript: typeof r.voice.transcript === 'string' && r.voice.transcript ? r.voice.transcript : undefined,
             stt: r.voice.stt === 'pending' || r.voice.stt === 'done' || r.voice.stt === 'failed' ? r.voice.stt : undefined,
           }

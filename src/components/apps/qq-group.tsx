@@ -64,6 +64,7 @@ import {
   type BubbleMenuItem,
 } from '@/components/apps/bubble-menu';
 import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, contactNameVariants, type ContactRecord } from '@/lib/contacts';
+import { aiVoiceFreqLabel, decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
@@ -107,7 +108,7 @@ import { isGroupChatSocialAction } from '@/lib/chat-rich';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
-import { ChatBgPage, ChatReplyCountPage, ChatToggle, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
+import { ChatBgPage, ChatReplyCountPage, ChatToggle, ChatVoiceFreqPage, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
 import { loadStickers, type Sticker } from '@/lib/ios/stickers';
 import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { readImageFile } from './wechat';
@@ -169,6 +170,10 @@ import { Input } from '@/components/ui/input';
 /** 群会话 id（未读/标志/隐藏等以字符串 id 为键的设施共用，与微信群同构） */
 export const qqGroupRowId = (groupId: string) => `group:${groupId}`;
 const sessionKeyOf = (groupId: string) => `qq:group:${groupId}`;
+
+/** 群消息语音数据的本地原文（AI 语音消息/文字转语音运行时携带 localText；
+ *  WxGroupMsg.voice 的 lib 层同形声明未含该字段，宽松读取避免到处断言） */
+const groupVoiceLocalText = (v: WxGroupMsg['voice'] | undefined): string => (v as VoiceMsgData | undefined)?.localText ?? '';
 
 // ---------------- 群红包/转账（纯本地模拟；按群 ID 隔离，与单聊互不相通） ----------------
 
@@ -719,6 +724,8 @@ export function QqGroupInfoPage({
   const [confirmQuit, setConfirmQuit] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const [replyCountOpen, setReplyCountOpen] = useState(false);
+  // AI 语音频率子页（聊天信息二级页；按群独立保存，成员各自人设音色朗读，无需「他的声音」页）
+  const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   const [replyCount, setReplyCount] = useState(() => getReplyCount(sessionKeyOf(group.id)));
   const [sentenceOn, setSentenceOn] = useState(() => getSentenceSend(sessionKeyOf(group.id)));
   const gid = group.id;
@@ -1122,6 +1129,12 @@ export function QqGroupInfoPage({
           value={`${replyCount} 条`}
           onClick={() => setReplyCountOpen(true)}
           testId="qq-groupinfo-replycount"
+        />
+        <InfoRow
+          label="AI 语音频率"
+          value={aiVoiceFreqLabel(getAiVoiceFreq(sessionKeyOf(gid)))}
+          onClick={() => setVoiceFreqOpen(true)}
+          testId="qq-groupinfo-voice-freq"
         />
         <SwitchRow
           label="分句发送"
@@ -1670,6 +1683,22 @@ export function QqGroupInfoPage({
           />
         </div>
       )}
+
+      {/* AI 语音频率页（聊天信息二级页；按群独立保存，命中频率时成员回复的第一条文字升级为语音气泡） */}
+      {voiceFreqOpen && (
+        <div className="fixed inset-0 z-50">
+          <ChatVoiceFreqPage
+            variant="qq"
+            value={getAiVoiceFreq(sessionKeyOf(gid))}
+            onBack={() => setVoiceFreqOpen(false)}
+            onSelect={(f) => {
+              saveAiVoiceFreq(sessionKeyOf(gid), f);
+              setVoiceFreqOpen(false);
+              onToast(`AI 语音频率：${aiVoiceFreqLabel(f)}`);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -2042,9 +2071,9 @@ export function QqGroupChatPage({
     [gid, sKey]
   );
 
-  /** 就地更新一条群消息的附加数据（红包/转账状态流转用）：读改写存储 + 页面存活时同步 state */
+  /** 就地更新一条群消息的附加数据（红包/转账状态流转、AI 语音升级用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
-    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content'>>) => {
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice'>>) => {
       const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -2107,8 +2136,8 @@ export function QqGroupChatPage({
   /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
     if (m.kind === 'image') return '[图片]';
-    // 语音消息：转写直接作为文本内容进上下文（识别不出时用占位，成员知道 TA 发了语音）
-    if (m.kind === 'voice') return m.voice?.transcript || '[语音]';
+    // 语音消息：转写直接作为文本内容进上下文（识别不出时用本地原文兜底——AI 语音消息/文字转语音存了朗读原文；都没有时用占位，成员知道 TA 发了语音）
+    if (m.kind === 'voice') return m.voice?.transcript || groupVoiceLocalText(m.voice) || '[语音]';
     if (m.kind === 'sticker' && m.stk) {
       return m.role === 'me'
         ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -2136,8 +2165,8 @@ export function QqGroupChatPage({
     m.kind === 'image'
       ? '[图片]'
       : m.kind === 'voice'
-        ? m.voice?.transcript
-          ? `[语音] ${m.voice.transcript}`
+        ? m.voice?.transcript || groupVoiceLocalText(m.voice)
+          ? `[语音] ${m.voice?.transcript || groupVoiceLocalText(m.voice)}`
           : '[语音]'
         : m.kind === 'sticker' && m.stk
         ? m.stk.meaning
@@ -2477,6 +2506,9 @@ export function QqGroupChatPage({
           .join('\n\n');
         // 回复条数（按群独立，发送时现场读取）：>1 时连发多条（一句一条），成员们像真人一样逐条刷屏
         const replyCount = getReplyCount(sKey);
+        // AI 语音频率（按群设置、按角色计数）：本轮命中 → finalize 阶段把该成员第一条文字消息升级为语音气泡；
+        // 流被拒时 rollback 恢复计数，避免凭空消耗一次语音机会
+        const voiceDecision = decideAiVoiceTurn(sKey, `${sKey}#${char.id}`);
         const payload: ChatPayloadMessage[] = [
           { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
           ...history,
@@ -2615,6 +2647,27 @@ export function QqGroupChatPage({
               all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
             }
             for (const m of all) appendMsg(m);
+            // AI 语音频率（按群设置、按角色计数）：本轮命中 → 该成员第一条文字消息升级为语音气泡（异步合成；失败保持文字自动降级）
+            if (voiceDecision.speak) {
+              const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
+              if (target) {
+                const targetId = target.id;
+                void synthesizeAiVoice(target.content, char.id)
+                  .then((clip) => {
+                    if (!clip) return;
+                    const voice: VoiceMsgData = {
+                      url: clip.url,
+                      duration: clip.duration,
+                      wave: clip.wave,
+                      localText: clip.localText,
+                      synth: clip.synth,
+                      contactId: char.id,
+                    };
+                    patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
+                  })
+                  .catch(() => {});
+              }
+            }
             // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记）
             void (async () => {
               try {
@@ -2644,9 +2697,12 @@ export function QqGroupChatPage({
             resolve();
           },
         });
-        if (!ok) resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
+        if (!ok) {
+          voiceDecision.rollback(); // 流被拒（同会话已有流）：恢复计数，本轮不算一次语音机会
+          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）
+        }
       }),
-    [apiConfig, appendMsg, applyGroupAdminAction, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, sKey]
+    [apiConfig, appendMsg, applyGroupAdminAction, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, patchGroupMsg, sKey]
   );
 
   /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默）。
@@ -3413,6 +3469,12 @@ export function QqGroupChatPage({
             prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: undefined, stt: undefined } } : x)),
           );
           onToast('已取消转文字');
+          break;
+        }
+        // 本地已存原文的语音（AI 语音消息/文字转语音）：直接显示原文，无需识别
+        if (!v.url && (v as VoiceMsgData).localText) {
+          patchGroupMsg(m.id, { voice: { ...v, transcript: (v as VoiceMsgData).localText, stt: 'done' as const } });
+          onToast('已转文字');
           break;
         }
         onToast('正在转文字…');

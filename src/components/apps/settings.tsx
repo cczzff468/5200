@@ -25,6 +25,7 @@ import {
   Plus,
   ScanEye,
   Sun,
+  Trash2,
   Upload,
   User,
   Volume2,
@@ -55,7 +56,8 @@ import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { describeImages } from '@/lib/vision-client';
-import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { useMyVoices } from '@/lib/ios/my-voices';
 
 // ---------------- 常量与类型 ----------------
 
@@ -2334,6 +2336,72 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const mq = modelQuery.trim().toLowerCase();
   const filteredTtsModels = mq ? ttsModels.filter((m) => m.toLowerCase().includes(mq)) : ttsModels;
 
+  // ---- 我的音色（用户自建音色库，永久保存在本机；联系人/聊天设置「他的声音」可选用） ----
+  const myVoices = useMyVoices((s) => s.voices);
+  const addMyVoice = useMyVoices((s) => s.add);
+  const removeMyVoice = useMyVoices((s) => s.remove);
+  const [myVoiceName, setMyVoiceName] = useState('');
+  const [myVoiceId, setMyVoiceId] = useState('');
+  const [myVoiceError, setMyVoiceError] = useState('');
+  const [previewingMyId, setPreviewingMyId] = useState<string | null>(null);
+
+  const submitMyVoice = () => {
+    setMyVoiceError('');
+    const rec = addMyVoice(myVoiceName, myVoiceId);
+    if (!rec) {
+      setMyVoiceError('请填写音色名字与音色 ID（完全重复的音色不会重复保存）');
+      return;
+    }
+    setMyVoiceName('');
+    setMyVoiceId('');
+  };
+
+  /** 我的音色试听：内置声线 id / 内置服务商 → 浏览器引擎本地朗读；其它走当前语音 API */
+  const previewMyVoice = async (v: { id: string; voiceId: string }) => {
+    if (previewingMyId) {
+      stopBuiltinSpeech();
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+      setPreviewingMyId(null);
+      if (previewingMyId === v.id) return;
+    }
+    if (isBuiltinVoiceId(v.voiceId) || isBuiltin) {
+      setPreviewingMyId(v.id);
+      void speakBuiltin({
+        text: '你好，这是保存的音色，很高兴认识你。',
+        voiceId: isBuiltinVoiceId(v.voiceId) ? v.voiceId : undefined,
+        onEnd: () => setPreviewingMyId(null),
+        onError: () => setPreviewingMyId(null),
+      }).catch(() => setPreviewingMyId(null));
+      return;
+    }
+    setPreviewingMyId(v.id);
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: ttsConfig, voiceId: v.voiceId, text: '你好，这是保存的音色，很高兴认识你。' }),
+      });
+      if (!res.ok) {
+        setPreviewingMyId(null);
+        return;
+      }
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        if (previewAudioRef.current === audio) previewAudioRef.current = null;
+        setPreviewingMyId(null);
+      };
+      audio.onerror = () => setPreviewingMyId(null);
+      await audio.play().catch(() => setPreviewingMyId(null));
+    } catch {
+      setPreviewingMyId(null);
+    }
+  };
+
   return (
     <DetailShell title="语音 API" onBack={onBack}>
       <div className="flex flex-col gap-5">
@@ -2369,6 +2437,103 @@ function VoicePage({ onBack }: { onBack: () => void }) {
             >
               OpenAI 兼容
             </button>
+          </div>
+        </section>
+
+        {/* 我的音色：自建音色库（名字 + 音色 ID，永久保存；联系人/聊天设置「他的声音」可选用） */}
+        <section>
+          <div className="mb-2 text-[13px] font-medium text-muted-foreground">我的音色</div>
+          <div className="flex flex-col gap-3 rounded-[12px] bg-card p-4">
+            <p className="text-[12px] leading-relaxed text-muted-foreground/80">
+              把常用的音色存成自己的 preset：填一个名字 + 音色 ID（MiniMax / OpenAI 兼容音色名或内置声线都可），永久保存在本机；
+              在联系人编辑和聊天设置「他的声音」里都能点选使用。
+            </p>
+            {myVoices.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {myVoices.map((v) => (
+                  <div
+                    key={v.id}
+                    data-testid={`my-voice-item-${v.id}`}
+                    className="flex items-center gap-2 rounded-[10px] border border-border/60 bg-background/60 px-3 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[14px] font-medium">{v.name}</div>
+                      <div className="truncate text-[11px] text-muted-foreground">{v.voiceId}</div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`试听音色${v.name}`}
+                      data-testid={`my-voice-preview-${v.id}`}
+                      onClick={() => void previewMyVoice(v)}
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
+                        previewingMyId === v.id ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground active:bg-muted/70'
+                      }`}
+                    >
+                      <AudioLines className={`h-4 w-4 ${previewingMyId === v.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除音色${v.name}`}
+                      data-testid={`my-voice-delete-${v.id}`}
+                      onClick={() => removeMyVoice(v.id)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-[#FF3B30]"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-col gap-2">
+              <Input
+                value={myVoiceName}
+                onChange={(e) => setMyVoiceName(e.target.value)}
+                placeholder="音色名字，如 温柔御姐"
+                maxLength={20}
+                data-testid="my-voice-name"
+                aria-label="我的音色名字"
+                className="h-10 rounded-[10px] bg-background text-[14px]"
+              />
+              <Input
+                value={myVoiceId}
+                onChange={(e) => setMyVoiceId(e.target.value)}
+                placeholder="音色 ID，如 female-shaonv / alloy / builtin:xiaoyue"
+                data-testid="my-voice-id"
+                aria-label="我的音色 ID"
+                className="h-10 rounded-[10px] bg-background text-[14px]"
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {BUILTIN_TTS_VOICES.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setMyVoiceId(b.id)}
+                    className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                      myVoiceId.trim() === b.id
+                        ? 'border-foreground bg-foreground text-background'
+                        : 'border-border text-foreground/70 hover:border-muted-foreground/40'
+                    }`}
+                  >
+                    {b.name}·{b.gender === 'female' ? '女' : '男'}
+                  </button>
+                ))}
+              </div>
+              {myVoiceError && (
+                <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {myVoiceError}
+                </p>
+              )}
+              <button
+                type="button"
+                data-testid="my-voice-add"
+                onClick={submitMyVoice}
+                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-foreground text-[14px] font-medium text-background transition-opacity active:opacity-80"
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                保存音色
+              </button>
+            </div>
           </div>
         </section>
 

@@ -35,6 +35,7 @@ import {
 } from '@/lib/contacts';
 import { OPENAI_STANDARD_VOICES, useUI, useSettings } from '@/lib/ios/store';
 import { BUILTIN_VOICE_OPTIONS } from '@/lib/ios/builtin-voices';
+import { useMyVoices } from '@/lib/ios/my-voices';
 
 /**
  * 联系人 App：
@@ -945,10 +946,12 @@ function ContactFormView({
   const [form, setForm] = useState<ContactFormState>(initial ? formFromRecord(initial) : EMPTY_FORM);
   /** 设置「语音 API」拉取到的音色列表（点选填充 voiceId；也可手动填）；
    *  内置语音服务商：展示内置免费男女声线；
-   *  未拉取过/拉不到时：OpenAI 兼容服务商兜底展示标准六音色（大多数兼容网关都认这六个名字），MiniMax 需去设置里拉取 */
+   *  未拉取过/拉不到时：OpenAI 兼容服务商兜底展示标准六音色（大多数兼容网关都认这六个名字），MiniMax 需去设置里拉取；
+   *  我的音色（设置 › 语音 API 保存的自建音色）始终追加在后面 */
   const fetchedVoiceOptions = useSettings((s) => s.ttsVoices);
   const ttsProvider = useSettings((s) => s.ttsConfig.provider);
-  const voiceOptions =
+  const myVoices = useMyVoices((s) => s.voices);
+  const baseVoiceOptions =
     ttsProvider === 'builtin'
       ? BUILTIN_VOICE_OPTIONS
       : fetchedVoiceOptions.length > 0
@@ -956,6 +959,10 @@ function ContactFormView({
         : ttsProvider === 'openai'
           ? OPENAI_STANDARD_VOICES
           : [];
+  const voiceOptions = [
+    ...baseVoiceOptions,
+    ...myVoices.map((v) => ({ id: v.voiceId, name: v.name })).filter((v) => !baseVoiceOptions.some((b) => b.id === v.id)),
+  ];
   const [avatar, setAvatar] = useState<string | null>(initial?.avatar ?? null);
   const [personaFileName, setPersonaFileName] = useState<string | null>(null);
   const [ownerId, setOwnerId] = useState<string>(initial?.ownerId ?? '');

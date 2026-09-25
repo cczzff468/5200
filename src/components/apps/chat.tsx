@@ -60,7 +60,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
-import { ChatTranslatePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import { ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -82,6 +82,8 @@ import { stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { decideAiVoiceTurn, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
+import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 
 // ---------------- 类型与常量 ----------------
 
@@ -235,6 +237,8 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
             localText: hasLocal ? v.localText : undefined,
             transcript: typeof v.transcript === 'string' && v.transcript ? v.transcript : undefined,
             stt: v.stt === 'pending' || v.stt === 'done' || v.stt === 'failed' ? v.stt : undefined,
+            synth: v.synth === 'builtin' || v.synth === 'api' ? v.synth : undefined,
+            contactId: typeof v.contactId === 'string' && v.contactId ? v.contactId : undefined,
           },
         };
       } else {
@@ -574,6 +578,10 @@ function ChatView({
   systemPrompt,
   onBack,
   onSaveRemark,
+  /** 当前联系人音色（contact.voiceId；仅联系人会话传入，「他的声音」入口摘要与选择页用；AI 助手会话不传） */
+  contactVoiceId,
+  /** 保存 TA 的声音（仅联系人会话传入；空串 = 恢复默认；宿主复用备注的持久化路径写到联系人 voiceId） */
+  onSaveVoiceId,
 }: {
   /** 会话存储键：'assistant' | 'c:<contactId>'（key 变化 = 组件重挂载，互不串扰） */
   storageKey: string;
@@ -586,6 +594,10 @@ function ChatView({
   onBack: () => void;
   /** 保存备注（仅联系人会话传入；空串 = 清除；宿主负责持久化并刷新展示名） */
   onSaveRemark?: (v: string) => void;
+  /** 当前联系人音色（contact.voiceId；空 = 跟随全局默认） */
+  contactVoiceId?: string | null;
+  /** 保存 TA 的声音（空串 = 恢复默认；宿主负责持久化并刷新联系人列表） */
+  onSaveVoiceId?: (vid: string) => void;
 }) {
   const [input, setInput] = useState('');
   // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
@@ -652,6 +664,11 @@ function ChatView({
   useEffect(() => {
     setWbBound(wbContactId ? getBoundBookIds(wbContactId) : []);
   }, [wbContactId]);
+  /** 「他的声音」页（聊天设置二级页，仅联系人会话）与 AI 语音频率页（其下的频率选择页，按会话独立） */
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
+  /** 我的音色库（「他的声音」入口行摘要解析：音色 id → 展示名，见 @/lib/ios/my-voices） */
+  const myVoicesForSummary = useMyVoices((s) => s.voices);
   /** 分句发送批次「待 AI 回复」标记（跨页面切换持久，见 @/lib/sentence-send） */
   const [pendingDispatch, setPendingDispatch] = useState(() => hasPendingBatch(sessionKey));
   useEffect(() => {
@@ -764,7 +781,7 @@ function ChatView({
       .map((m) => ({
         role: m.role,
         content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
-          m.kind === 'voice' ? m.voice?.transcript || '[语音]' : m.content
+          m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content
         }`,
       }));
 
@@ -835,6 +852,8 @@ function ChatView({
       wbBlocks ?? WB_EMPTY_BLOCKS,
     );
     if (sysEvent) payload.push({ role: 'user', content: sysEvent });
+    // AI 语音频率：本轮回复是否用语音发送（每次 AI 回复轮推进一次计数；流被拒时回滚，避免凭空消耗机会）
+    const voiceDecision = decideAiVoiceTurn(sessionKey);
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -902,6 +921,30 @@ function ChatView({
           saved.push({ id: aiMsgId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt });
         }
         saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), ...saved]);
+        // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级）
+        if (voiceDecision.speak) {
+          const target = saved.find((m) => !m.error && !m.sys && !m.blkreq && (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
+          if (target) {
+            const targetId = target.id;
+            void synthesizeAiVoice(target.content, memContactId)
+              .then((clip) => {
+                if (!clip) return; // 合成失败 → 保持文字
+                const voice: VoiceMsgData = {
+                  url: clip.url,
+                  duration: clip.duration,
+                  wave: clip.wave,
+                  localText: clip.localText,
+                  synth: clip.synth,
+                  contactId: memContactId ?? undefined,
+                };
+                const upgrade = (list: ChatMsg[]): ChatMsg[] =>
+                  list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
+                setMsgs(upgrade);
+                saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
+              })
+              .catch(() => {});
+          }
+        }
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（AI 助手会话不参与；后台异步，失败静默）；
         // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
         // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
@@ -919,8 +962,11 @@ function ChatView({
         }
       },
     });
-    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
-    if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+    // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息 + 本轮语音计数推进，避免有去无回
+    if (!started) {
+      voiceDecision.rollback();
+      if (userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+    }
   };
   // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）；无依赖数组 = 每次渲染后同步最新闭包
   useEffect(() => {
@@ -1052,6 +1098,13 @@ function ChatView({
     },
     []
   );
+
+  /** 「他的声音」选择保存（仅联系人会话）：toast 反馈 + 交宿主持久化（与备注同路径：updateContact 写 voiceId + 刷新联系人） */
+  const saveVoiceId = (vid: string) => {
+    if (!wbContactId) return;
+    showToast(vid ? '已更新 TA 的声音' : '已恢复默认声音');
+    onSaveVoiceId?.(vid);
+  };
 
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字 ----------------
 
@@ -1208,6 +1261,15 @@ function ChatView({
             prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: undefined, stt: undefined } } : x)),
           );
           showToast('已取消转文字');
+          break;
+        }
+        // 本地已存原文的语音（AI 语音消息/文字转语音）：直接显示原文，无需识别
+        if (!v.url && v.localText) {
+          const local = v.localText;
+          setMsgs((prev) =>
+            prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: local, stt: 'done' as const } } : x)),
+          );
+          showToast('已转文字');
           break;
         }
         showToast('正在转文字…');
@@ -1799,6 +1861,8 @@ function ChatView({
             setStickersOnState(v);
           }}
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
+          voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)}
+          onOpenVoice={wbContactId ? () => setVoiceOpen(true) : undefined}
           blockedByUser={blk.byUser === true}
           onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
         />
@@ -1835,6 +1899,35 @@ function ChatView({
             const n = normalizeTranslateCfg(next);
             saveTranslateCfg(sessionKey, n);
             setTransCfgState(n);
+          }}
+        />
+      )}
+
+      {/* 他的声音页（聊天设置二级页，仅联系人会话）：角色音色选择 + AI 语音频率入口；选择结果交宿主写联系人 voiceId */}
+      {voiceOpen && wbContactId && (
+        <ChatVoicePage
+          variant="sms"
+          peerName={peer.name ?? peer.title}
+          voiceId={contactVoiceId ?? ''}
+          voiceFreq={getAiVoiceFreq(sessionKey)}
+          onBack={() => setVoiceOpen(false)}
+          onSelect={(vid) => {
+            saveVoiceId(vid);
+            setVoiceOpen(false);
+          }}
+          onOpenFreq={() => setVoiceFreqOpen(true)}
+        />
+      )}
+
+      {/* AI 语音频率页（他的声音页二级页）：本轮起按频率决定 AI 回复发语音还是文字（按会话独立保存） */}
+      {voiceFreqOpen && (
+        <ChatVoiceFreqPage
+          variant="sms"
+          value={getAiVoiceFreq(sessionKey)}
+          onBack={() => setVoiceFreqOpen(false)}
+          onSelect={(f) => {
+            saveAiVoiceFreq(sessionKey, f);
+            setVoiceFreqOpen(false);
           }}
         />
       )}
@@ -2340,11 +2433,12 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
     const last = msgs[msgs.length - 1];
-    // 语音消息预览：[语音] + 转写（与微信同语义）；未识别时只显示占位
+    // 语音消息预览：[语音] + 转写/原文（AI 语音消息无转写时用本地原文兜底，与微信同语义）；都没有时只显示占位
+    const lastVoiceText = last?.voice?.transcript || last?.voice?.localText || '';
     const lastText =
       last?.kind === 'voice'
-        ? last.voice?.transcript
-          ? `[语音] ${last.voice.transcript}`
+        ? lastVoiceText
+          ? `[语音] ${lastVoiceText}`
           : '[语音]'
         : (last?.content ?? '');
     out.push({
@@ -2680,14 +2774,15 @@ export default function ChatApp() {
   ];
 
   const last = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : undefined;
-  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览 [语音] + 转写
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览 [语音] + 转写/原文兜底
+  const lastVoiceText = last?.voice?.transcript || last?.voice?.localText || '';
   const preview = last?.recalled
     ? last.role === 'user'
       ? '你撤回一条消息'
       : '对方撤回一条消息'
     : last?.kind === 'voice'
-      ? last.voice?.transcript
-        ? `[语音] ${last.voice.transcript}`
+      ? lastVoiceText
+        ? `[语音] ${lastVoiceText}`
         : '[语音]'
       : last?.content || SEED_MSGS[0].content;
   const listTime = mounted ? (last && last.time > 0 ? fmtTime(last.time) : '现在') : '';
@@ -2726,6 +2821,20 @@ export default function ChatApp() {
           peer={chatSession.peer}
           systemPrompt={chatSession.systemPrompt}
           onBack={() => setView('main')}
+          contactVoiceId={isAssistant ? null : contacts.find((c) => c.id === chatSession.key.slice(2))?.voiceId ?? null}
+          onSaveVoiceId={(vid) => {
+            if (!chatSession || chatSession.key === 'assistant') return;
+            const cid = chatSession.key.slice(2);
+            void (async () => {
+              try {
+                // 与备注同路径：updateContact 写联系人 voiceId（空串 = 清除，回退全局默认）+ 刷新联系人列表（prop 随之更新）
+                await updateContact(cid, { voiceId: vid || null });
+                await loadContacts();
+              } catch {
+                // 持久化失败静默（音色为增强能力）
+              }
+            })();
+          }}
           onSaveRemark={(v) => {
             if (!chatSession || chatSession.key === 'assistant') return;
             const cid = chatSession.key.slice(2);

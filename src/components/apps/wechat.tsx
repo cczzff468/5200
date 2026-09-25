@@ -59,6 +59,8 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
+import { decideAiVoiceTurn, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
+import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -170,6 +172,8 @@ import {
   ChatSearchPage,
   ChatSettingsPage,
   ChatTranslatePage,
+  ChatVoiceFreqPage,
+  ChatVoicePage,
   WorldBookPickerPage,
   chatBgLayerStyle,
   type ChatSearchItem,
@@ -468,6 +472,9 @@ function loadMsgs(contactId: string): WxMsg[] {
               localText: typeof m.voice.localText === 'string' && m.voice.localText.trim() ? m.voice.localText : undefined,
               transcript: typeof m.voice.transcript === 'string' && m.voice.transcript ? m.voice.transcript : undefined,
               stt: m.voice.stt === 'pending' || m.voice.stt === 'done' || m.voice.stt === 'failed' ? m.voice.stt : undefined,
+              // AI 语音消息字段（synth 合成通道 / contactId 朗读音色归属）：落盘回读必须保留，否则丢失通道信息
+              synth: m.voice.synth === 'builtin' || m.voice.synth === 'api' ? m.voice.synth : undefined,
+              contactId: typeof m.voice.contactId === 'string' ? m.voice.contactId : undefined,
             },
           };
         }
@@ -3547,6 +3554,7 @@ function ChatPage({
   onBack,
   onOpenFriendDetail,
   onSaveRemark,
+  onSaveVoiceId,
   onOpenGroup,
 }: {
   me: WxUser;
@@ -3561,6 +3569,8 @@ function ChatPage({
   onOpenFriendDetail: (c: ContactRecord) => void;
   /** 保存备注（空串 = 清除；宿主持久化 + 刷新联系人展示名） */
   onSaveRemark: (v: string) => void | Promise<void>;
+  /** 保存「他的声音」音色（空串 = 恢复默认；宿主持久化到联系人 voiceId + 刷新联系人） */
+  onSaveVoiceId: (vid: string) => void | Promise<void>;
   /** 群聊卡片「接受邀请」后进入群聊（宿主刷新群列表并打开群页） */
   onOpenGroup?: (gid: string) => void;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
@@ -3620,6 +3630,12 @@ function ChatPage({
   const [bgOpen, setBgOpen] = useState(false);
   /** 回复条数页（设置页「回复条数」进入的独立二级页，按会话隔离） */
   const [replyOpen, setReplyOpen] = useState(false);
+  /** 他的声音页（设置页「他的声音」进入）：角色音色选择 + AI 语音频率入口 */
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  /** AI 语音频率页（他的声音页入口进入，按会话隔离保存） */
+  const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
+  /** 我的音色库（「他的声音」入口行摘要展示名用；zustand 响应式） */
+  const myVoicesForSummary = useMyVoices((s) => s.voices);
   /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
   const [replyCount, setReplyCountState] = useState(() => getReplyCount(sessionKey));
   useEffect(() => {
@@ -3886,8 +3902,8 @@ function ChatPage({
             : m.kind === 'image'
             ? '[图片]'
             : m.kind === 'voice'
-            ? // 语音消息：AI 直接读转写文本（自然对话）；识别失败/未识别时用占位
-              m.voice?.transcript || '[语音]'
+            ? // 语音消息：AI 直接读转写文本（自然对话）；未识别时读本地原文（AI 语音/文字转语音），再退回占位
+              m.voice?.transcript || m.voice?.localText || '[语音]'
             : m.kind === 'sticker' && m.stk
             ? m.role === 'me'
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -3995,6 +4011,8 @@ function ChatPage({
       if (m.kind === 'image' && m.img?.src) turnImages.unshift(m.img.src);
     }
 
+    // AI 语音频率决策：本轮回复是否用语音发送（副作用推进计数器；流被拒绝时 rollback 恢复）
+    const voiceDecision = decideAiVoiceTurn(sessionKey);
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
@@ -4089,6 +4107,30 @@ function ChatPage({
           all.push({ id: aiMsgId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt });
         }
         saveMsgs(peer.id, [...cur, ...all]);
+        // AI 语音频率：本轮命中 → 把本轮第一条文字消息升级为语音气泡（异步合成；失败保持文字，自动降级不影响聊天）
+        if (voiceDecision.speak) {
+          const target = all.find((m) => (m.kind === undefined || m.kind === 'text') && m.content.trim().length > 0);
+          if (target) {
+            const targetId = target.id;
+            void synthesizeAiVoice(target.content, peer.id)
+              .then((clip) => {
+                if (!clip) return; // 合成失败 → 保持文字
+                const voice: VoiceMsgData = {
+                  url: clip.url,
+                  duration: clip.duration,
+                  wave: clip.wave,
+                  localText: clip.localText,
+                  synth: clip.synth,
+                  contactId: peer.id,
+                };
+                const upgrade = (list: WxMsg[]): WxMsg[] =>
+                  list.map((m) => (m.id === targetId ? { ...m, content: '', kind: 'voice' as const, voice } : m));
+                setMsgs(upgrade);
+                saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+              })
+              .catch(() => {});
+          }
+        }
         // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
         if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, all.length);
         // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（后台异步，失败静默不打断聊天）；
@@ -4108,7 +4150,10 @@ function ChatPage({
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
-    if (!started && userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+    if (!started && userMsg) {
+      voiceDecision.rollback(); // 本轮未真正发起：回滚语音计数推进，不凭空消耗一次语音机会
+      setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
+    }
     },
     [apiConfig, msgs, me, ownerName, peer, contacts, sessionKey]
   );
@@ -4574,6 +4619,15 @@ function ChatPage({
             prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: undefined, stt: undefined } } : x)),
           );
           onToast('已取消转文字');
+          break;
+        }
+        // 本地已存原文的语音（AI 语音消息/文字转语音）：直接显示原文，无需识别
+        if (!v.url && v.localText) {
+          const local = v.localText;
+          setMsgs((prev) =>
+            prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: local, stt: 'done' as const } } : x)),
+          );
+          onToast('已转文字');
           break;
         }
         onToast('正在转文字…');
@@ -5662,6 +5716,8 @@ function ChatPage({
           sentenceSend={sentenceSend}
           timeAware={timeAware}
           stickersOn={stickersOn}
+          voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
+          onOpenVoice={() => setVoiceOpen(true)}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => wxChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
@@ -5743,6 +5799,35 @@ function ChatPage({
           onSelect={(n) => {
             saveReplyCount(sessionKey, n);
             setReplyCountState(n);
+          }}
+        />
+      )}
+
+      {/* 他的声音页（聊天设置二级页）：角色音色选择（内置/我的/API 音色）+ AI 语音频率入口 */}
+      {voiceOpen && (
+        <ChatVoicePage
+          variant="wx"
+          peerName={peer.name}
+          voiceId={peer.voiceId ?? ''}
+          voiceFreq={getAiVoiceFreq(sessionKey)}
+          onBack={() => setVoiceOpen(false)}
+          onSelect={(vid) => {
+            void onSaveVoiceId(vid);
+            setVoiceOpen(false);
+          }}
+          onOpenFreq={() => setVoiceFreqOpen(true)}
+        />
+      )}
+
+      {/* AI 语音频率页（他的声音二级页）：按会话独立保存；选完关频率页回「他的声音」页 */}
+      {voiceFreqOpen && (
+        <ChatVoiceFreqPage
+          variant="wx"
+          value={getAiVoiceFreq(sessionKey)}
+          onBack={() => setVoiceFreqOpen(false)}
+          onSelect={(f) => {
+            saveAiVoiceFreq(sessionKey, f);
+            setVoiceFreqOpen(false);
           }}
         />
       )}
@@ -8034,6 +8119,16 @@ function MainScreen({
             showToast(v ? '备注已保存' : '备注已清除');
           } catch {
             showToast('备注保存失败');
+          }
+        }}
+        onSaveVoiceId={async (vid) => {
+          try {
+            // 与备注同一条持久化路径：写入联系人库 voiceId → 重拉联系人（ChatPage 的 peer 由 contacts 反查，随之一并刷新）
+            await updateContact(chatPeer.id, { voiceId: vid || null });
+            await reloadContacts();
+            showToast(vid ? '已更新 TA 的声音' : '已恢复默认声音');
+          } catch {
+            showToast('声音保存失败');
           }
         }}
         onToast={showToast}

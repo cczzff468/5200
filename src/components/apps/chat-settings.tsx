@@ -14,16 +14,24 @@
  * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关 + 时间感知开关）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
+ * - ChatVoicePage：「他的声音」页（三端共用二级页）——选角色说话音色（默认/内置音色/
+ *   我的音色/API 音色，宿主持久化到联系人 voiceId）+「AI 语音频率」入口行
+ * - ChatVoiceFreqPage：AI 语音发送频率选择页（三端共用）—— 关闭/每条都发语音/经常(1/3)/
+ *   偶尔(1/7)/不经常(1/12)，按会话独立（群聊按群），发送时现场读取
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
  *   @/lib/reply-count / @/lib/chat-translate / @/lib/sentence-send（localStorage，按会话键隔离），
  *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeftRight, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { stickerToggleCaption } from '@/lib/sticker-toggle';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
+import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
+import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { useMyVoices } from '@/lib/ios/my-voices';
+import { useSettings } from '@/lib/ios/store';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
 
@@ -145,6 +153,10 @@ export function ChatSettingsPage({
   onOpenPeerProfile,
   blockedByUser,
   onToggleBlock,
+  /** 他的声音摘要（角色音色展示名；空 = 默认） */
+  voiceSummary,
+  /** 打开「他的声音」页；不传 = 隐藏该入口行 */
+  onOpenVoice,
 }: {
   variant: ChatSettingsVariant;
   /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
@@ -194,6 +206,10 @@ export function ChatSettingsPage({
   blockedByUser?: boolean;
   /** 拉黑开关切换（宿主负责持久化 + 生成系统消息） */
   onToggleBlock?: (v: boolean) => void;
+  /** 他的声音摘要（角色音色展示名；空 = 默认） */
+  voiceSummary?: string;
+  /** 打开「他的声音」页；不传 = 隐藏该入口行 */
+  onOpenVoice?: () => void;
 }) {
   const wx = variant === 'wx';
 
@@ -444,6 +460,26 @@ export function ChatSettingsPage({
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
           挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
         </p>
+
+        {/* 他的声音：角色说话音色（内置音色/我的音色/API 音色）+ AI 语音发送频率（独立二级页） */}
+        {onOpenVoice && (
+          <>
+            <div className={`${cardCls} mt-3 overflow-hidden`}>
+              <button type="button" data-testid={`${testPrefix}-settings-voice`} onClick={onOpenVoice} className={rowCls}>
+                <span>他的声音</span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span data-testid={`${testPrefix}-voice-summary`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+                    {voiceSummary || '默认'}
+                  </span>
+                  <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+                </span>
+              </button>
+            </div>
+            <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+              选择 TA 说话用的音色，并可设置 AI 发语音的频率（按本会话独立保存）。
+            </p>
+          </>
+        )}
 
         {/* 拉黑：双向拉黑开关（拉黑不拦截消息，只是关系状态；对方会知道被拉黑，AI 可申请解除） */}
         {onToggleBlock && (
@@ -1169,6 +1205,9 @@ export function SmsChatSettingsPage({
   onOpenWorldBooks,
   blockedByUser,
   onToggleBlock,
+  /** 他的声音摘要（角色音色展示名；空 = 默认）；不传 onOpenVoice = 隐藏该入口 */
+  voiceSummary,
+  onOpenVoice,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1197,6 +1236,10 @@ export function SmsChatSettingsPage({
   blockedByUser?: boolean;
   /** 拉黑开关切换（宿主负责持久化 + 生成系统消息） */
   onToggleBlock?: (v: boolean) => void;
+  /** 他的声音摘要（角色音色展示名；空 = 默认） */
+  voiceSummary?: string;
+  /** 打开「他的声音」页；不传 = 隐藏该入口行（AI 助手会话无角色音色） */
+  onOpenVoice?: () => void;
 }) {
   const t = translateTokens('sms');
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
@@ -1339,6 +1382,24 @@ export function SmsChatSettingsPage({
             <p className={t.captionCls}>
               挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
             </p>
+          </>
+        )}
+
+        {/* 他的声音：角色说话音色（内置音色/我的音色/API 音色）+ AI 语音发送频率（独立二级页） */}
+        {onOpenVoice && (
+          <>
+            <div className={`${t.cardCls} mt-3`}>
+              <button type="button" data-testid="sms-settings-voice" onClick={onOpenVoice} className={t.rowCls}>
+                <span>他的声音</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span data-testid="sms-voice-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+                    {voiceSummary || '默认'}
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+                </span>
+              </button>
+            </div>
+            <p className={t.captionCls}>选择 TA 说话用的音色，并可设置 AI 发语音的频率（按本会话独立保存）。</p>
           </>
         )}
 
@@ -1500,6 +1561,311 @@ export function WorldBookPickerPage({
         )}
         <p className={t.captionCls}>
           只有「局部」范围的世界书需要挂载：挂载后，聊天内容命中条目触发词时才注入对应设定（未命中不发送）。「全局」书无需挂载、对所有对话常驻生效；「专属」书仅对绑定的角色生效——都在「世界书」App 里设置。
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- AI 语音发送频率选择页（三端共用二级页） ----------------
+
+/**
+ * AI 语音发送频率选择页（他的声音二级页 / 群聊信息页进入）：
+ * 关闭 / 每条都发语音 / 经常（每 3 条 1 条语音）/ 偶尔（每 7 条 1 条语音）/ 不经常（每 12 条 1 条语音）。
+ * 按会话独立保存（群聊按群）；计数器按「会话×角色」隔离，语音发出后重新计数。
+ */
+export function ChatVoiceFreqPage({
+  variant,
+  value,
+  onBack,
+  onSelect,
+}: {
+  variant: ChatSettingsVariant;
+  /** 当前会话的 AI 语音频率 */
+  value: AiVoiceFreq;
+  onBack: () => void;
+  onSelect: (freq: AiVoiceFreq) => void;
+}) {
+  const t = translateTokens(variant);
+  const testPrefix = variant;
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className={`flex ${t.headerH} items-center px-2`}>
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid={`${testPrefix}-voice-freq-back`}
+            onClick={onBack}
+            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
+          >
+            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+          </button>
+          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>AI 语音频率</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        <div className={`${t.cardCls} overflow-hidden`}>
+          {AI_VOICE_FREQ_OPTIONS.map((opt, i) => (
+            <div key={opt.value}>
+              {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+              <button
+                type="button"
+                data-testid={`${testPrefix}-voice-freq-option-${opt.value}`}
+                aria-label={`AI 语音频率 ${opt.label}`}
+                onClick={() => onSelect(opt.value)}
+                className={t.rowCls}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate">{opt.label}</span>
+                  <span
+                    className={`mt-0.5 block truncate text-[12.5px] ${t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40'}`}
+                  >
+                    {opt.desc}
+                  </span>
+                </span>
+                {value === opt.value && (
+                  <span className="grid shrink-0 place-items-center pl-2" style={{ color: t.accent }} aria-label="已选中">
+                    <Check className="h-5 w-5" strokeWidth={2.4} />
+                  </span>
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+        <p className={t.captionCls}>
+          开启后，AI 生成回复时按该频率决定这条用语音还是文字发送：语音用 TA 的音色合成，显示为语音气泡，可点击播放、
+          长按转文字；合成失败会自动降级为文字。每个角色、每个会话独立计数，发出一条语音后重新计数；群聊里各成员互不影响。
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 他的声音页（三端共用二级页） ----------------
+
+/**
+ * 他的声音页（聊天设置二级页，微信 / QQ / 信息三端共用）：
+ * 选择该角色说话用的音色 —— 默认（跟随全局）/ 内置音色（6 个免费声线，可试听）/
+ * 我的音色（设置 › 语音 API 里保存的音色）/ API 音色（服务商拉取的列表）；
+ * 选择结果由宿主持久化到联系人 voiceId（点已选中的=取消，恢复「默认」）。
+ * 页内还有「AI 语音频率」入口行 → ChatVoiceFreqPage（按会话独立）。
+ */
+export function ChatVoicePage({
+  variant,
+  peerName,
+  voiceId,
+  voiceFreq,
+  onBack,
+  onSelect,
+  onOpenFreq,
+}: {
+  variant: ChatSettingsVariant;
+  /** 角色名（标题/说明用） */
+  peerName: string;
+  /** 当前角色的音色（contact.voiceId；空 = 跟随全局默认） */
+  voiceId: string;
+  /** 当前会话的 AI 语音频率（入口行摘要） */
+  voiceFreq: AiVoiceFreq;
+  onBack: () => void;
+  /** 选择音色（传空串 = 恢复「默认」；宿主负责持久化） */
+  onSelect: (voiceId: string) => void;
+  /** 打开 AI 语音频率选择页 */
+  onOpenFreq: () => void;
+}) {
+  const t = translateTokens(variant);
+  const testPrefix = variant;
+  const myVoices = useMyVoices((s) => s.voices);
+  const ttsProvider = useSettings((s) => s.ttsConfig.provider);
+  const apiVoices = useSettings((s) => s.ttsVoices);
+  /** 内置声线试听状态（播放中的声线 id） */
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  // 本页只在客户端渲染：直接惰性初始化（避免 effect 内 setState 的水合/告警问题）
+  const [builtinSupport] = useState<boolean | null>(() => (typeof window === 'undefined' ? null : isBuiltinVoiceSupported()));
+
+  useEffect(() => {
+    return () => stopBuiltinSpeech();
+  }, []);
+
+  const previewBuiltin = (id: string) => {
+    if (previewId) {
+      stopBuiltinSpeech();
+      setPreviewId(null);
+      if (previewId === id) return;
+    }
+    stopBuiltinSpeech();
+    setPreviewId(id);
+    void speakBuiltin({
+      text: '你好，用这个声音和你聊天，很高兴认识你。',
+      voiceId: id,
+      onEnd: () => setPreviewId(null),
+      onError: () => setPreviewId(null),
+    }).catch(() => setPreviewId(null));
+  };
+
+  const mutedText = t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40';
+  const current = voiceId.trim();
+
+  /** 音色 chip（我的音色 / API 音色共用）：点选即用，再点取消回「默认」 */
+  const voiceChip = (id: string, name: string, testId: string, key: string) => {
+    const active = current === id;
+    return (
+      <button
+        key={key}
+        type="button"
+        data-testid={testId}
+        aria-pressed={active}
+        title={name === id ? id : `${name}（${id}）`}
+        onClick={() => onSelect(active ? '' : id)}
+        className={`max-w-full truncate rounded-full border px-2.5 py-1.5 text-[13px] transition-colors ${
+          active ? 'border-transparent text-white' : 'border-black/10 bg-white/60 text-black/75 active:bg-black/[0.04] dark:border-white/15 dark:bg-white/10 dark:text-white/80 dark:active:bg-white/[0.06]'
+        }`}
+        style={active ? { backgroundColor: t.accent } : undefined}
+      >
+        {name}
+      </button>
+    );
+  };
+
+  return (
+    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 顶栏 */}
+      <div className="shrink-0 pt-[54px]">
+        <div className={`flex ${t.headerH} items-center px-2`}>
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid={`${testPrefix}-voice-back`}
+            onClick={onBack}
+            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
+          >
+            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
+          </button>
+          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>他的声音</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        {/* AI 语音频率入口（按会话独立；关闭时 AI 只发文字） */}
+        <div className={`${t.cardCls} overflow-hidden`}>
+          <button type="button" data-testid={`${testPrefix}-voice-freq-row`} onClick={onOpenFreq} className={t.rowCls}>
+            <span>AI 语音频率</span>
+            <span className="flex shrink-0 items-center gap-2">
+              <span data-testid={`${testPrefix}-voice-freq-value`} className={`max-w-[150px] truncate text-[14px] ${mutedText}`}>
+                {aiVoiceFreqLabel(voiceFreq)}
+              </span>
+              <ChevronRight className={`h-[18px] w-[18px] ${t.sms ? 'text-muted-foreground/50' : 'text-black/25 dark:text-white/25'}`} strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+        <p className={t.captionCls}>设置 TA 回复时用语音还是文字（关闭 = 只发文字）。</p>
+
+        {/* 默认 / 音色选择状态 */}
+        <p className={`px-1 pb-1.5 pt-4 text-[12.5px] ${mutedText}`}>
+          {current ? `当前音色已为 ${peerName} 单独设置` : '当前为「默认」：跟随全局默认音色（全局也没设时按 TA 的性别自动选内置男女声）'}
+        </p>
+
+        {/* 内置音色（免费 · 可试听） */}
+        <p className={`px-1 pb-1.5 text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>
+          内置音色（免费）
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          {BUILTIN_TTS_VOICES.map((v) => {
+            const active = current === v.id;
+            const playing = previewId === v.id;
+            return (
+              <div
+                key={v.id}
+                role="button"
+                tabIndex={0}
+                aria-pressed={active}
+                aria-label={`选择音色${v.name}`}
+                data-testid={`${testPrefix}-voice-builtin-${v.id.replace('builtin:', '')}`}
+                onClick={() => onSelect(active ? '' : v.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(active ? '' : v.id);
+                  }
+                }}
+                className={`flex flex-col gap-1 rounded-[12px] border p-2.5 transition-colors ${
+                  active
+                    ? 'border-transparent text-white'
+                    : 'border-black/10 bg-white/70 text-black/80 active:bg-black/[0.04] dark:border-white/15 dark:bg-white/10 dark:text-white/85 dark:active:bg-white/[0.06]'
+                }`}
+                style={active ? { backgroundColor: t.accent } : undefined}
+              >
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-[14px] font-medium">{v.name}</span>
+                    <span
+                      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                        active
+                          ? 'bg-white/25 text-white'
+                          : v.gender === 'female'
+                            ? 'bg-pink-500/10 text-pink-600 dark:text-pink-400'
+                            : 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                      }`}
+                    >
+                      {v.gender === 'female' ? '女' : '男'}
+                    </span>
+                  </span>
+                  {active && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
+                </div>
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className={`truncate text-[11px] ${active ? 'text-white/80' : mutedText}`}>{v.label}</span>
+                  <button
+                    type="button"
+                    aria-label={`试听声线${v.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      previewBuiltin(v.id);
+                    }}
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+                      active ? 'bg-white/25 text-white' : 'bg-black/[0.06] text-black/60 active:bg-black/[0.1] dark:bg-white/15 dark:text-white/75'
+                    }`}
+                  >
+                    <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {builtinSupport === false && (
+          <p className="mt-1.5 px-1 text-[12px] leading-relaxed text-[#FF3B30]">
+            当前浏览器不支持内置语音试听；语音消息将自动回退其它方式，不影响文字聊天。
+          </p>
+        )}
+
+        {/* 我的音色（设置 › 语音 API 保存的音色） */}
+        <p className={`px-1 pb-1.5 pt-4 text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>
+          我的音色
+        </p>
+        {myVoices.length === 0 ? (
+          <p className={`rounded-[12px] bg-black/[0.03] px-3 py-3 text-[12.5px] leading-relaxed ${mutedText} dark:bg-white/[0.06]`}>
+            还没有保存的音色。到「设置 › 语音 API › 我的音色」添加（填名字 + 音色 ID，永久保存），这里就能点选。
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">{myVoices.map((v, i) => voiceChip(v.voiceId, v.name, `${testPrefix}-voice-my-${i}`, v.id))}</div>
+        )}
+
+        {/* API 音色（服务商拉取的列表；内置语音服务商没有） */}
+        {ttsProvider !== 'builtin' && apiVoices.length > 0 && (
+          <>
+            <p className={`px-1 pb-1.5 pt-4 text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>
+              API 音色
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {apiVoices.map((v, i) => voiceChip(v.id, v.name, `${testPrefix}-voice-api-${i}`, v.id))}
+            </div>
+          </>
+        )}
+
+        <p className={t.captionCls}>
+          音色立即生效：TA 的语音消息、语音气泡朗读、语音通话都用这里的音色。需要自定义音色就到「设置 › 语音 API › 我的音色」添加。
         </p>
       </div>
     </div>

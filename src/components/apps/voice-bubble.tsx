@@ -19,14 +19,19 @@ import { voiceDurationLabel } from '@/lib/ios/audio-utils';
 
 /** 语音消息数据（各端消息结构统一挂 m.voice） */
 export interface VoiceMsgData {
-  /** 音频 dataURL（持久化在聊天记录里，重启后仍可播放）；文字转语音消息为空串 */
+  /** 音频 dataURL（持久化在聊天记录里，重启后仍可播放）；文字转语音/内置引擎 AI 语音消息为空串 */
   url: string;
   /** 秒（≥1） */
   duration: number;
   /** 静态波形（0~1，约 20 根；录音时真实振幅采样） */
   wave: number[];
-  /** 仿真朗读原文（文字转语音消息；点击气泡只走静音进度动画，无需语音 API） */
+  /** 仿真朗读原文（文字转语音消息；点击气泡只走静音进度动画，无需语音 API）；
+   *  AI 语音消息（synth='builtin'）点击时用浏览器引擎按此原文实时朗读（真实出声） */
   localText?: string;
+  /** AI 语音消息合成通道：'builtin' = 内置引擎实时朗读；'api' = 已存真实音频 dataURL */
+  synth?: 'builtin' | 'api';
+  /** 发送该语音的联系人 id（AI 语音消息实时朗读时解析角色音色用） */
+  contactId?: string;
   /** 转文字结果（长按「转文字」后写入 / 文字转语音的原文） */
   transcript?: string;
   /** pending = 识别中；done = 有结果；failed = 识别失败（可长按重试） */
@@ -171,7 +176,7 @@ export function VoiceMsgBubble({
         aria-label={isPlaying ? '暂停语音' : '播放语音'}
         onClick={(e) => {
           e.stopPropagation();
-          voicePlayer.toggle(msgId, voice.url, voice.localText);
+          voicePlayer.toggle(msgId, voice.url, voice.localText, { synth: voice.synth, contactId: voice.contactId });
         }}
         className={`flex select-none items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
           isWx ? 'h-[44px] gap-[4px] px-[6px]' : 'h-[40px] gap-[4px] px-[6px]'

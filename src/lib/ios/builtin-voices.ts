@@ -358,6 +358,12 @@ export interface BuiltinSpeakOptions {
   onError?: (message: string) => void;
   /** 出声前取消检查（电话挂断等）：返回 true 静默丢弃 */
   cancelled?: () => boolean;
+  /**
+   * 跳过「停掉其它音频源」的互斥（默认 false）：
+   * 语音消息气泡的 AI 语音通道自己已经停过其它音频，且要把播放状态留给气泡 UI，
+   * 传 true 避免把语音气泡自身的播放状态清掉；其它调用方保持默认互斥行为。
+   */
+  keepOthers?: boolean;
 }
 
 /**
@@ -378,7 +384,7 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
   }
   const preset = resolveBuiltinPreset(opts.voiceId, opts.gender);
   // 语音列表可能异步就绪：先 cancel 旧播放，再等一次 voices 就绪窗口
-  stopOtherAudio('builtin-tts');
+  if (!opts.keepOthers) stopOtherAudio('builtin-tts');
   stopBuiltinSpeech();
   const myToken = speakToken;
 
