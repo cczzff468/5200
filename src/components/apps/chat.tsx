@@ -217,18 +217,22 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
     );
     if (!ok) return null;
     const msgs = (parsed as ChatMsg[]).slice(-100);
-    // 语音消息规范化（旧记录/损坏记录兼容：url 非字符串的语音降级为文本占位，不再当语音渲染）
+    // 语音消息规范化（旧记录/损坏记录兼容：既无音频 url 也无 localText 的语音降级为文本占位；
+    // 文字转语音的本地仿真消息 url 为空串但带 localText —— 原样保留，重启后仍可静音重播）
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
       if (m.kind !== 'voice') continue;
       const v = m.voice;
-      if (v && typeof v.url === 'string' && v.url) {
+      const hasUrl = Boolean(v && typeof v.url === 'string' && v.url);
+      const hasLocal = Boolean(v && typeof v.localText === 'string' && v.localText.trim());
+      if (v && (hasUrl || hasLocal)) {
         msgs[i] = {
           ...m,
           voice: {
-            url: v.url,
+            url: hasUrl ? v.url : '',
             duration: typeof v.duration === 'number' && v.duration > 0 ? v.duration : 1,
             wave: Array.isArray(v.wave) ? v.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+            localText: hasLocal ? v.localText : undefined,
             transcript: typeof v.transcript === 'string' && v.transcript ? v.transcript : undefined,
             stt: v.stt === 'pending' || v.stt === 'done' || v.stt === 'failed' ? v.stt : undefined,
           },
@@ -1052,7 +1056,7 @@ function ChatView({
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字 ----------------
 
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
-  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
   /** 语音消息落库：入列 → 直接触发 AI 回复（语音不再自动转文字，长按「转文字」才识别）；
    *  presetTranscript = 文字转语音的原文；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
@@ -1060,8 +1064,8 @@ function ChatView({
     (clip: VoiceClip, presetTranscript?: string) => {
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
-        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
       const msg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
       // 消息已在列（history 映射无转写时用 '[语音]' 占位），userMsg 传 null
@@ -1682,7 +1686,6 @@ function ChatView({
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
             <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
           ) : (
-            <>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1690,25 +1693,25 @@ function ChatView({
               aria-label="消息输入框"
               className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground/50"
             />
-            {/* 文字转语音开关（常驻键盘输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
-            <button
-              type="button"
-              aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
-              aria-pressed={ttsSend}
-              data-testid="sms-tts-toggle"
-              onClick={() => {
-                const nv = !ttsSend;
-                setTtsSend(nv);
-                showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
-              }}
-              className={`mr-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
-                ttsSend ? 'text-[#007AFF]' : 'text-muted-foreground'
-              }`}
-            >
-              <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.3 : 1.8} aria-hidden="true" />
-            </button>
-            </>
           )}
+          {/* 文字转语音开关（声波图标放在「按住说话」旁，键盘输入栏同样可见）：
+              开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
+          <button
+            type="button"
+            aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
+            aria-pressed={ttsSend}
+            data-testid="sms-tts-toggle"
+            onClick={() => {
+              const nv = !ttsSend;
+              setTtsSend(nv);
+              showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
+            }}
+            className={`mr-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60 ${
+              ttsSend ? 'text-[#007AFF]' : 'text-muted-foreground'
+            }`}
+          >
+            <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.3 : 1.8} aria-hidden="true" />
+          </button>
           {!voiceMode && (input.trim() || canDispatch) ? (
             <>
               <button

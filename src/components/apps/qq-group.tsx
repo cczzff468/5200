@@ -2759,7 +2759,7 @@ export function QqGroupChatPage({
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字（与微信单聊/群聊同套共享组件） ----------------
 
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
-  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
   /** 语音消息落库：入列 → 直接触发群回合（语音不再自动转文字，长按「转文字」才识别）；
    *  禁言拦截；回合进行中则只落库并排队 */
@@ -2771,8 +2771,8 @@ export function QqGroupChatPage({
       }
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
-        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
       const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: '', time: Date.now(), kind: 'voice', voice };
       appendMsg(msg);
       // 消息已入库（无转写时成员历史映射用 '[语音]' 占位）

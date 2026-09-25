@@ -3074,7 +3074,7 @@ export function WxGroupChatPage({
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字（与微信单聊同链路，适配群聊 senderId） ----------------
 
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
-  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
   /** 语音消息落库：入列（senderId='me'）→ 直接触发群回合（语音不再自动转文字，长按「转文字」才识别）；
    *  回合进行中则只落库并排队（补跑从存储读最新消息） */
@@ -3086,8 +3086,8 @@ export function WxGroupChatPage({
       }
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
-        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
       const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: '', time: Date.now(), kind: 'voice', voice };
       appendMsg(msg);
       // 消息已入库（无转写时成员历史映射用 '[语音]' 占位）；trigger 传消息对象，content 为空 → 无 @，全员按人设自判
@@ -4367,31 +4367,32 @@ export function WxGroupChatPage({
               /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送；转写进群成员上下文） */
               <VoiceHoldBar rec={rec} testId="wxg-voice-hold" />
             ) : (
-            <>
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => {
-                const v = e.target.value;
-                setDraft(v);
-                // 键入 @ 直接唤起成员浮层（微信/QQ 同款：点选后替换该 @ 并插入「@名字 」）
-                if (v.endsWith('@')) {
-                  setStickerOpen(false);
-                  setPlusOpen(false);
-                  setAtOpen(true);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-              data-testid="wx-groupchat-input"
-              className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
-            />
-            {/* 文字转语音开关（常驻键盘输入栏，与单聊同款）：开启后输入框文字发送为语音气泡 */}
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraft(v);
+                  // 键入 @ 直接唤起成员浮层（微信/QQ 同款：点选后替换该 @ 并插入「@名字 」）
+                  if (v.endsWith('@')) {
+                    setStickerOpen(false);
+                    setPlusOpen(false);
+                    setAtOpen(true);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+                data-testid="wx-groupchat-input"
+                className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+              />
+            )}
+            {/* 文字转语音开关（声波图标放在「按住说话」旁，键盘输入栏同样可见，与单聊同款）：
+                开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
             <button
               type="button"
               aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
@@ -4406,8 +4407,6 @@ export function WxGroupChatPage({
             >
               <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
             </button>
-            </>
-            )}
             {draft.trim() || canDispatch ? (
               <>
                 <button

@@ -674,13 +674,14 @@ function loadMsgs(contactId: string): QQMsg[] {
           m.quote && typeof m.quote.name === 'string' && typeof m.quote.content === 'string'
             ? { name: m.quote.name, content: m.quote.content, id: typeof m.quote.id === 'string' ? m.quote.id : undefined }
             : undefined,
-        // 语音消息规范化（旧记录/损坏记录兼容：无 url 的语音字段直接丢弃）
+        // 语音消息规范化（旧记录/损坏记录兼容；url 为空串但带 localText 的是文字转语音本地仿真消息，保留可静音重播）
         voice:
           m.kind === 'voice' && m.voice && typeof m.voice.url === 'string'
             ? {
                 url: m.voice.url,
                 duration: typeof m.voice.duration === 'number' && m.voice.duration > 0 ? m.voice.duration : 1,
                 wave: Array.isArray(m.voice.wave) ? m.voice.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+                localText: typeof m.voice.localText === 'string' && m.voice.localText.trim() ? m.voice.localText : undefined,
                 transcript: typeof m.voice.transcript === 'string' && m.voice.transcript ? m.voice.transcript : undefined,
                 stt: m.voice.stt === 'pending' || m.voice.stt === 'done' || m.voice.stt === 'failed' ? m.voice.stt : undefined,
               }
@@ -2915,7 +2916,7 @@ function ChatPage({
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字 ----------------
 
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
-  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
   /** 语音消息落库：入列 → 直接触发 AI 回复（语音不再自动转文字，长按「转文字」才识别）；
    *  presetTranscript = 文字转语音的原文；selfChat 只记录；回复中排队补跑 */
@@ -2923,8 +2924,8 @@ function ChatPage({
     (clip: VoiceClip, presetTranscript?: string) => {
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
-        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
       const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
       // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复

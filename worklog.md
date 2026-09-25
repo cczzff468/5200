@@ -6900,3 +6900,21 @@ Stage Summary:
 - 两项反馈完成：语音气泡圆角与各端文本气泡统一（微信 5px / QQ 12px / 信息 18px，解决「太圆」）；文字转语音从隐藏功能变为**常驻可发现**——输入栏 AudioLines 图标（四端一致）+ 开启后输入框提示语 + toast 引导，输入文字点发送即变语音气泡（原链路复用，零行为变更）
 - E2E 全链路实测：开关常驻可见 → 开启（toast+placeholder）→ 文字发送 → 语音气泡（宽度公式/圆角/白面板原文）→ AI 回复；失败路径（未配置）只 toast 不发消息
 - lint 零错误；改动文件：voice-bubble.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx、chat.tsx；测试均在 agent-browser 自身 profile 的测试会话（小测/小e、小测群）内进行，用户数据未触碰
+---
+Task ID: voice-tts-local-1
+Agent: main (Z.ai Code)
+Task: 文字转语音去 API 依赖 + 声波图标放到「按住说话」旁（用户第 18、19 条反馈）
+
+Work Log:
+- 用户澄清：文字转语音不需要配置的语音 API，也不需要真的播放声音（第 19 条对第 18 条「声波图标放在按住说话那里」的补充澄清）
+- voice-send.ts 重写：不再调 /api/tts、不再校验 ttsConfig；本地生成仿真语音片段（dataUrl 恒空串 + duration 按字数估算约 4 字/秒 + hashWaveBars 波形 + localText 原文），新增导出 estimateSpeakDuration
+- voice-player.ts 重写：新增「静音模拟播放」通道（toggleSim）——点击文字转语音气泡只推进度动画（0~1 按估算时长），支持暂停/继续/单实例互斥/stopVoicePlayback 统一强停，全程不出声；真实录音气泡走音频文件通道不变
+- voice-bubble.tsx：VoiceMsgData 增加 localText?: string；点击气泡 toggle 时透传 localText
+- 五端聊天接入 localText：wechat/qq/chat/wx-group/qq-group 的 VoiceClip 类型与 commitVoiceMsg 落库均透传 localText（transcript=原文供 AI 读取，白色面板显示原文不变）
+- 声波图标（AudioLines 文字转语音开关）从「仅键盘输入栏」移到公共行：微信/信息/微信群聊三端在语音输入模式下紧贴「按住说话」胶囊右侧（QQ/QQ群端常驻输入栏、语音面板展开时本就可见，不改动）
+- 修复持久化 bug（E2E 发现）：chat.tsx loadMsgs 规范化把 url 为空的语音降级成 '[语音]' 文本且 AI 回复落库时写回存储 → 改为「有 url 或有 localText 都保留」；wechat.tsx / qq.tsx 的规范化块重建 voice 时丢弃 localText → 补上 localText 透传（wx-group/qq-group 无规范化块无需改）
+
+Stage Summary:
+- 文字转语音全链路零 API 依赖：开启声波开关 → 输入文字 → 发送 = 仿真语音气泡（估算时长+哈希波形+白色原文面板），点击只走静音进度动画，AI 仍通过 transcript 读取内容
+- agent-browser E2E 全过：①语音模式下声波图标紧贴按住说话右侧；②发送零 /api/tts 请求；③点击气泡播放→按时长自动结束（3s），无报错；④刷新后气泡保留未退化成 '[语音]'，可再次静音重播；⑤按住说话权限失败 toast 后干净回 idle，录音链路无回归
+- lint + tsc 全干净；改动文件：src/lib/ios/{voice-send,voice-player}.ts、src/components/apps/{voice-bubble,wechat,qq,chat,wx-group,qq-group}.tsx

@@ -25,7 +25,7 @@ export interface VoiceMsgData {
   duration: number;
   /** 静态波形（0~1，约 20 根；录音时真实振幅采样） */
   wave: number[];
-  /** 本地合成朗读原文（文字转语音消息；播放时走浏览器 speechSynthesis，无需语音 API） */
+  /** 仿真朗读原文（文字转语音消息；点击气泡只走静音进度动画，无需语音 API） */
   localText?: string;
   /** 转文字结果（长按「转文字」后写入 / 文字转语音的原文） */
   transcript?: string;

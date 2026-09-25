@@ -459,13 +459,14 @@ function loadMsgs(contactId: string): WxMsg[] {
           return m;
         }
         if (m.kind === 'voice' && m.voice && typeof m.voice.url === 'string') {
-          // 语音消息规范化（旧记录/损坏记录兼容：无 url 的语音直接当普通文本处理）
+          // 语音消息规范化（旧记录/损坏记录兼容；url 为空串但带 localText 的是文字转语音本地仿真消息，保留可静音重播）
           return {
             ...m,
             voice: {
               url: m.voice.url,
               duration: typeof m.voice.duration === 'number' && m.voice.duration > 0 ? m.voice.duration : 1,
               wave: Array.isArray(m.voice.wave) ? m.voice.wave.filter((x): x is number => typeof x === 'number' && x >= 0 && x <= 1) : [],
+              localText: typeof m.voice.localText === 'string' && m.voice.localText.trim() ? m.voice.localText : undefined,
               transcript: typeof m.voice.transcript === 'string' && m.voice.transcript ? m.voice.transcript : undefined,
               stt: m.voice.stt === 'pending' || m.voice.stt === 'done' || m.voice.stt === 'failed' ? m.voice.stt : undefined,
             },
@@ -4294,8 +4295,8 @@ function ChatPage({
 
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字 ----------------
 
-  /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
-  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[] };
+  /** 语音片段统一形态（录音带 blob 供转文字；文字转语音为本地仿真 localText，无音频） */
+  type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
   /** 语音消息落库：入列 → 直接触发 AI 回复（语音不再自动转文字，长按「转文字」才识别）；
    *  presetTranscript = 文字转语音的原文；selfChat 只记录；回复中排队补跑 */
@@ -4303,8 +4304,8 @@ function ChatPage({
     (clip: VoiceClip, presetTranscript?: string) => {
       const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
       const voice: VoiceMsgData = hasText
-        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave };
+        ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
       const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
       // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复
@@ -5488,27 +5489,28 @@ function ChatPage({
               /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
               <VoiceHoldBar rec={rec} testId="wx-voice-hold" />
             ) : (
-            <>
-            <input
-              data-testid="wx-chat-input"
-              value={input}
-              onChange={(e) => {
-                const v = e.target.value;
-                setInput(v);
-                // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
-                if (!selfChat && v.endsWith('@')) {
-                  setPlusOpen(false);
-                  setStickerOpen(false);
-                  setAtOpen(true);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void send();
-              }}
-              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-              className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
-            />
-            {/* 文字转语音开关（常驻键盘输入栏，不想说话时用）：开启后输入框文字发送为语音气泡 */}
+              <input
+                data-testid="wx-chat-input"
+                value={input}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setInput(v);
+                  // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
+                  if (!selfChat && v.endsWith('@')) {
+                    setPlusOpen(false);
+                    setStickerOpen(false);
+                    setAtOpen(true);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void send();
+                }}
+                placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+                className="h-[36px] min-w-0 flex-1 rounded-[5px] bg-white px-3 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+              />
+            )}
+            {/* 文字转语音开关（声波图标放在「按住说话」旁，键盘输入栏同样可见）：
+                开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
             <button
               type="button"
               aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
@@ -5523,8 +5525,6 @@ function ChatPage({
             >
               <AudioLines className="h-[22px] w-[22px]" strokeWidth={ttsSend ? 2.1 : 1.7} />
             </button>
-            </>
-            )}
             {(input.trim() || canDispatch) ? (
               <>
                 <button
