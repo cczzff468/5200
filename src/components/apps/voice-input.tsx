@@ -8,15 +8,16 @@
  *   边缘上滑手势读到 isVoiceHoldActive() 即中止 —— 「按住 说话」胶囊就在边缘带内，录音时
  *   上滑取消不再把多任务卡片拉起来
  * - VoiceHoldBar：微信/信息输入区「按住 说话」胶囊。按住开录，setPointerCapture + touch-none
- *   保证手指划出仍持续跟踪、不被浏览器滚动认领；手势主轴判定（斜滑不误判）：
- *   上滑 → 取消，右滑 → 转文字，左滑 → 取消，原松开 → 发送
+ *   保证手指划出仍持续跟踪、不被浏览器滚动认领；分区判定（所见即所得优先）：
+ *   滑到浮层「取消 / 滑到这里 转文字」视觉目标上直接命中（data-voice-target），
+ *   未命中时右滑 → 转文字、明显上滑/左滑 → 取消，原松开 → 发送
  * - QqVoicePanel / QqVoiceHoldButton：QQ 风语音面板（参考 QQ App：工具栏下方展开
  *   「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签）。大圆钮按住开录且**原位不动**（原位光环）：
- *   左滑 → 「文」转文字，右滑/上滑 → 「×」取消，原松开 → 发送
- * - RecordOverlayWx：微信风录音浮层 —— 暗幕 + 绿色气泡实时波形（屏幕中部）+ 底部「取消 / 滑到这里 转文字」
+ *   左滑/滑到浮层「文」→ 转文字，右滑/上滑/滑到「×」→ 取消，原松开 → 发送
+ * - RecordOverlayWx：微信风录音浮层 —— 暗幕 + 绿色气泡实时波形（屏幕中部偏下）+ 底部「取消 / 滑到这里 转文字」
  *   + 浅色「松开 发送」条
- * - RecordOverlayQq：QQ 风录音浮层 —— 白幕只罩消息区（计时/两侧波形/左「文」右「×」），
- *   底部透明窗露出语音面板：大圆钮不上移、原位可见
+ * - RecordOverlayQq：QQ 风录音浮层 —— 白幕只罩消息区，计时/两侧波形/左「文」右「×」贴白幕下缘
+ *   （原位大圆钮正上方），底部透明窗露出语音面板：大圆钮不上移、原位可见
  * - useSttPreview / SttPreviewOverlay：「划到转文字」松开后先识别再预览，用户决定发送文字 /
  *   发送语音（原始录音）/ 取消，不再直接发送
  * - 权限被拒/不支持录音：onStartError 提示，仍可继续用文字聊天
@@ -37,6 +38,42 @@ export interface VoiceRecordResult {
 }
 
 export type VoiceRecordZone = 'cancel' | 'stt' | null;
+
+/** 按住手势移动上下文：指针屏幕坐标 + 相对按下点的位移 */
+export interface VoiceHoldPoint {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+}
+
+/**
+ * 指针是否「划向」浮层手势目标（data-voice-target）：
+ * ① 指针进入目标矩形（含少量容差）→ 命中；
+ * ② 指针位于「按下点 → 目标中心」的走廊内（斜滑路径上的中间点也算）→ 命中，
+ *    途中不再被垂直分量抢先判成取消（修复「划到转文字却显示取消」），
+ *    同时走廊宽度收窄，正常上滑取消（偏离走廊）不受影响。
+ */
+function hitVoiceTarget(p: VoiceHoldPoint, kind: 'stt' | 'cancel'): boolean {
+  const el = document.querySelector(`[data-voice-target="${kind}"]`);
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  if (p.x >= r.left - 10 && p.x <= r.right + 10 && p.y >= r.top - 10 && p.y <= r.bottom + 10) return true;
+  // 走廊判定：按下点 = 当前位置 - 位移
+  const sx = p.x - p.dx;
+  const sy = p.y - p.dy;
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  const vx = cx - sx;
+  const vy = cy - sy;
+  const len2 = vx * vx + vy * vy;
+  if (len2 < 1) return false;
+  let t = ((p.x - sx) * vx + (p.y - sy) * vy) / len2;
+  if (t < 0.25) return false; // 还没离开按下点一段距离：不视为划向目标
+  t = Math.min(t, 1);
+  const dist = Math.hypot(p.x - (sx + vx * t), p.y - (sy + vy * t));
+  return dist <= 26;
+}
 
 export interface VoiceRecorder {
   phase: 'idle' | 'starting' | 'recording';
@@ -211,7 +248,8 @@ export function useVoiceRecorder(opts: {
       const blob = new Blob(chunks, { type: mimeRef.current.includes('audio') ? mimeRef.current : 'audio/webm' });
       const result: VoiceRecordResult = {
         blob,
-        duration: Math.max(1, Math.round(elapsed)),
+        // 时长钳制到 60s 上限：极端场景（后台页 timer 节流致自动停止延迟触发）下不超上限
+        duration: Math.max(1, Math.min(MAX_SEC, Math.round(elapsed))),
         wave: downsampleWave(levelBufRef.current, WAVE_BARS),
       };
       optsRef.current.onResult(result, z);
@@ -368,7 +406,7 @@ export function useVoiceRecorder(opts: {
 /* ───────────────────────── 按住手势（微信/信息胶囊 + QQ 大圆钮） ───────────────────────── */
 
 /** 按住手势通用接线：down 起录 + 标志，move 更新区，up/cancel 收尾 */
-function useHoldGesture(rec: VoiceRecorder, applyZone: (dx: number, dy: number) => void) {
+function useHoldGesture(rec: VoiceRecorder, applyZone: (p: VoiceHoldPoint) => void) {
   const startPt = useRef({ x: 0, y: 0 });
   const flag = useHoldFlag();
   const holding = rec.phase !== 'idle';
@@ -388,7 +426,12 @@ function useHoldGesture(rec: VoiceRecorder, applyZone: (dx: number, dy: number) 
   };
   const onPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!holding) return;
-    applyZone(e.clientX - startPt.current.x, e.clientY - startPt.current.y);
+    applyZone({
+      x: e.clientX,
+      y: e.clientY,
+      dx: e.clientX - startPt.current.x,
+      dy: e.clientY - startPt.current.y,
+    });
   };
   const onPointerUp = () => {
     if (!holding) return;
@@ -407,20 +450,30 @@ export function VoiceHoldBar({
   testId?: string;
 }) {
   const holding = rec.phase !== 'idle';
-  // 主轴判定：斜着滑（比如往右下滑到「转文字」胶囊时带一点上抬）不再被「上滑→取消」抢先误判 ——
-  // 水平位移占主导时按左右分属转文字/取消，只有垂直主导的上滑才取消
-  const applyZone = (dx: number, dy: number) => {
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
-    if (adx > ady) {
-      if (dx > 60) rec.setZone('stt'); // 右滑 → 转文字
-      else if (dx < -60) rec.setZone('cancel'); // 左滑 → 取消
-      else rec.setZone(null);
-    } else if (dy < -60) {
-      rec.setZone('cancel'); // 上滑 → 取消
-    } else {
-      rec.setZone(null);
+  // 分区判定（优先级从高到低）：
+  // ① 几乎垂直的上滑 → 取消（最先判：上滑取消不会被右侧目标走廊拦截）；
+  // ② 划向浮层「转文字」目标（矩形/走廊命中）→ 转文字；
+  // ③ 滑到「取消」胶囊上 → 取消；
+  // ④ 未命中时按方位兑底：右滑 → 转文字，明显上滑/左滑 → 取消，原松开 → 发送
+  const applyZone = (p: VoiceHoldPoint) => {
+    const adx = Math.abs(p.dx);
+    const ady = Math.abs(p.dy);
+    if (p.dy < -70 && adx < 24) {
+      rec.setZone('cancel');
+      return;
     }
+    if (hitVoiceTarget(p, 'stt')) {
+      rec.setZone('stt');
+      return;
+    }
+    if (hitVoiceTarget(p, 'cancel')) {
+      rec.setZone('cancel');
+      return;
+    }
+    if (p.dy < -70 && ady > adx) rec.setZone('cancel'); // 明显上滑 → 取消
+    else if (p.dx > 60) rec.setZone('stt'); // 右滑 → 转文字
+    else if (p.dx < -60) rec.setZone('cancel'); // 左滑 → 取消
+    else rec.setZone(null);
   };
   const g = useHoldGesture(rec, applyZone);
 
@@ -456,19 +509,27 @@ export function QqVoiceHoldButton({
   testId?: string;
 }) {
   const holding = rec.phase !== 'idle';
-  // 主轴判定（同 VoiceHoldBar）：左滑主导 → 「文」转文字，右滑/上滑主导 → 取消；斜滑不再误判成取消
-  const applyZone = (dx: number, dy: number) => {
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
-    if (adx > ady) {
-      if (dx < -60) rec.setZone('stt'); // 左滑 → 「文」转文字
-      else if (dx > 60) rec.setZone('cancel'); // 右滑 → 「×」取消
-      else rec.setZone(null);
-    } else if (dy < -60) {
-      rec.setZone('cancel'); // 上滑 → 取消
-    } else {
-      rec.setZone(null);
+  // 分区判定（同 VoiceHoldBar，方向镜像）：① 几乎垂直上滑 → 取消；② 划向浮层「文」→ 转文字；
+  // ③ 滑到「×」→ 取消；④ 兑底：左滑 → 转文字，明显上滑/右滑 → 取消
+  const applyZone = (p: VoiceHoldPoint) => {
+    const adx = Math.abs(p.dx);
+    const ady = Math.abs(p.dy);
+    if (p.dy < -70 && adx < 24) {
+      rec.setZone('cancel');
+      return;
     }
+    if (hitVoiceTarget(p, 'stt')) {
+      rec.setZone('stt');
+      return;
+    }
+    if (hitVoiceTarget(p, 'cancel')) {
+      rec.setZone('cancel');
+      return;
+    }
+    if (p.dy < -70 && ady > adx) rec.setZone('cancel'); // 明显上滑 → 取消
+    else if (p.dx < -60) rec.setZone('stt'); // 左滑 → 「文」转文字
+    else if (p.dx > 60) rec.setZone('cancel'); // 右滑 → 取消
+    else rec.setZone(null);
   };
   const g = useHoldGesture(rec, applyZone);
 
@@ -545,8 +606,10 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center bg-black/75"
     >
-      {/* 绿色录音气泡（转文字/取消时变色）+ 下指尾巴：整体下移到屏幕中部，不再贴顶 */}
-      <div className="relative mt-[28%]">
+      {/* 顶部占位（与底部 5:2）：把绿气泡压到屏幕中部，不再贴顶 */}
+      <div className="min-h-0 flex-[5]" />
+      {/* 绿色录音气泡（转文字/取消时变色）+ 下指尾巴 */}
+      <div className="relative">
         <div
           className={`flex h-[92px] items-center justify-center gap-[3px] rounded-[24px] px-7 transition-colors ${
             cancel ? 'bg-[#FA5151]' : 'bg-[#95EC69]'
@@ -570,9 +633,11 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
       <p className="mt-5 text-[15px] tabular-nums text-white/70" data-testid="voice-record-timer">
         {timeLabelOf(rec.seconds)}
       </p>
-      {/* 底部手势提示区（手势仍在按住的胶囊上，纯视觉） */}
+      <div className="min-h-0 flex-[2]" />
+      {/* 底部手势提示区（手势仍在按住的胶囊上，纯视觉；标 data-voice-target 供手势目标命中判定） */}
       <div className="mt-auto flex w-full items-end justify-between px-6 pb-[84px]">
         <span
+          data-voice-target="cancel"
           className={`rounded-full px-5 py-2 text-[15px] transition-colors ${
             cancel ? 'bg-white text-[#FA5151]' : 'bg-white/15 text-white/80'
           }`}
@@ -580,6 +645,7 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
           取消
         </span>
         <span
+          data-voice-target="stt"
           className={`rounded-full px-5 py-2 text-[15px] transition-colors ${
             stt ? 'bg-white text-[#07C160]' : 'bg-white/15 text-white/80'
           }`}
@@ -598,8 +664,8 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
 }
 
 /**
- * QQ 风录音浮层：白幕只罩消息区（上部），底部透明窗露出语音面板 —— 大圆麦克风不上移，
- * 就在原位呼吸（光环反馈见 QqVoiceHoldButton）；上部显示计时/两侧波形 + 左「文」右「×」。
+ * QQ 风录音浮层：白幕只罩消息区，底部透明窗露出语音面板 —— 大圆麦克风不上移，就在原位呼吸；
+ * 计时/两侧波形/左「文」右「×」全部贴白幕下缘排布（正上方就是原位的大圆钮，不再飞到顶部）。
  * bottomInset = 输入行 + 工具栏 + 语音面板的总高（QQ 单聊/群聊结构一致，约 400px）
  */
 export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder; bottomInset?: number }) {
@@ -614,9 +680,11 @@ export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 z-40 flex flex-col"
     >
-      {/* 上部白幕：计时 + 两侧波形 + 左「文」/ 右「×」 */}
+      {/* 上部白幕：内容贴底排布，紧贴原位大圆钮上方 */}
       <div className="flex min-h-0 flex-1 flex-col items-center bg-white/95 dark:bg-[#1B1C1F]/95">
-        <div className="mt-9 flex h-8 items-center gap-[3px]">
+        <div className="min-h-0 flex-1" />
+        {/* 计时 + 两侧波形：就在原位大圆钮正上方，不再往上飘 */}
+        <div className="flex h-8 items-center gap-[3px]">
           {leftBars.map((v, i) => (
             <span key={`l${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
           ))}
@@ -630,9 +698,10 @@ export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder
             <span key={`r${i}`} className="w-[3px] rounded-full bg-black/20 dark:bg-white/30" style={{ height: `${Math.max(3, v * 30)}px` }} />
           ))}
         </div>
-        {/* 左「文」/ 右「×」（大圆钮本体在下方面板原位，不再居中复刻一份） */}
-        <div className="mt-14 flex w-full items-center justify-center">
+        {/* 左「文」/ 右「×」（大圆钮本体在下方面板原位；标 data-voice-target 供手势目标命中判定） */}
+        <div className="mt-5 flex w-full items-center justify-center">
           <span
+            data-voice-target="stt"
             className={`grid h-[64px] w-[64px] place-items-center rounded-full text-[20px] transition-colors ${
               stt ? 'bg-[#0099FF] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
             }`}
@@ -641,6 +710,7 @@ export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder
           </span>
           <span className="mx-16 h-[2px] w-24 rounded-full bg-black/[0.06] dark:bg-white/[0.08]" aria-hidden="true" />
           <span
+            data-voice-target="cancel"
             className={`grid h-[64px] w-[64px] place-items-center rounded-full transition-colors ${
               cancel ? 'bg-[#FA5151] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
             }`}
@@ -648,8 +718,8 @@ export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder
             ✕
           </span>
         </div>
-        {/* 底部提示（贴白幕下缘，正上方就是原位的大圆钮） */}
-        <p className="mt-auto pb-4 text-[15px] text-black/45 dark:text-white/45">
+        {/* 提示（贴白幕下缘，正上方就是原位的大圆钮） */}
+        <p className="mt-4 pb-4 text-[15px] text-black/45 dark:text-white/45">
           {cancel ? '松开 取消' : stt ? '松开 转文字' : '松开 发送'}
         </p>
       </div>

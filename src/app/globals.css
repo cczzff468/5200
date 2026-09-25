@@ -174,3 +174,29 @@
     transform: rotate(360deg);
   }
 }
+
+/* 微信语音气泡：播放中声波双弧交替闪烁 */
+@keyframes wx-voice-arc-a {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes wx-voice-arc-b {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.wx-voice-arc-a {
+  animation: wx-voice-arc-a 1.1s ease-in-out infinite;
+}
+.wx-voice-arc-b {
+  animation: wx-voice-arc-b 1.1s ease-in-out infinite;
+}
