@@ -138,7 +138,7 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoicePlayButton } from '@/components/apps/voice-play';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { QqVoicePanel, RecordOverlayQq, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
+import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -3181,11 +3181,14 @@ function ChatPage({
     if (!m) return;
     switch (key) {
       case 'stt': {
-        // 语音消息「转文字」：已有结果 → 提示；否则现场识别（builtin 免配置），失败可重试
+        // 语音消息「转文字」：已有结果 → 再点一次=取消转文字（收起结果）；否则现场识别，失败可重试
         const v = m.voice;
         if (!v) break;
         if (v.stt === 'done' && v.transcript) {
-          onToast('转文字结果已显示在气泡下方');
+          setMsgs((prev) =>
+            prev.map((x) => (x.id === m.id && x.voice ? { ...x, voice: { ...x.voice, transcript: undefined, stt: undefined } } : x)),
+          );
+          onToast('已取消转文字');
           break;
         }
         onToast('正在转文字…');
@@ -4616,8 +4619,7 @@ function ChatPage({
         />
       )}
 
-      {/* 录音浮层（按住说话期间：计时 + 实时波形 + 取消/转文字手势区） */}
-      {rec.phase !== 'idle' && <RecordOverlayQq rec={rec} />}
+      {/* 转文字预览弹层：识别结果可编辑，发送文字/发送语音/取消三选一 */}
       {sttPreview.state && (
         <SttPreviewOverlay
           state={sttPreview.state}
@@ -4625,6 +4627,7 @@ function ChatPage({
           onCancel={sttPreview.close}
           onSendText={sttPreview.sendText}
           onSendVoice={sttPreview.sendVoice}
+          onChangeText={sttPreview.setText}
         />
       )}
 

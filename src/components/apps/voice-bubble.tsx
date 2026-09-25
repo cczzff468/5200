@@ -2,15 +2,16 @@
 
 /**
  * 语音消息气泡（微信 / QQ / 信息 / 两端群聊共用），对齐微信 / QQ NT 原生样式：
- * - 微信风（theme='wx'）：绿/白圆角气泡 + 喇叭声波图标（我方喇叭朝左、对方镜像朝右）+
- *   微信同款小尾巴；时长在气泡**内部**（我方 [4″ 🔊]、对方镜像），参考原生截图；
- *   播放中声波双弧交替闪烁（globals.css 的 wx-voice-arc-a/b）
+ * - 微信风（theme='wx'）：绿/白圆角气泡 + 时长 + **实时录音波形条**（voice.wave，播放中按进度
+ *   点亮）+ 喇叭声波图标（我方 [4″ ▂▅▇ 🔊]、对方镜像），微信同款小尾巴；播放中声波双弧
+ *   交替闪烁（globals.css 的 wx-voice-arc-a/b）
  * - QQ / 信息风（theme='qq' | 'im'）：对齐 QQ NT —— 圆形播放钮 + 均匀点串音波 + 时长；
  *   播放中点串按进度填色（useVoicePlayback 全局进度，100ms 刷新）
- * - 气泡宽度**随时长伸缩**（1s → 60s 线性变宽，两端钳制）：微信 100→210px、
+ * - 气泡宽度**随时长伸缩**（1s → 60s 线性变宽，两端钳制）：微信 148→238px、
  *   QQ/信息 132→242px；QQ/信息点串点数也随时长增多（8→22 点），长语音更宽
  * - 点击气泡切换播放/暂停（全局单例：新播自动停旧，也停 TTS 朗读）
- * - 转文字结果（stt='done'）以小字显示在气泡下方；stt='pending' 显示「转文字中…」
+ * - 转文字结果（stt='done'）以**白色圆角小面板**显示在气泡下方（微信原生同款）；
+ *   stt='pending' 显示「转文字中…」
  * - 长按菜单由外层 {...bubblePress} 提供，组件本身只处理点击播放
  */
 
@@ -62,10 +63,48 @@ function bubbleWidth(duration: number, min: number, max: number): number {
   return Math.round(min + ((d - 1) / 59) * (max - min));
 }
 
+/** 波形条数（微信气泡内）：12 根，2px 宽 + 2px 间隔 ≈ 46px，与时长标签/喇叭图标同排 */
+const WX_WAVE_BARS = 12;
+
+/** 语音波形 → 气泡内 N 根展示条（0~1）；旧数据无 wave 时用固定美观波形兑底 */
+function waveBarsOf(wave: number[] | undefined, count: number): number[] {
+  if (wave && wave.length > 0) {
+    const out: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const a = Math.floor((i * wave.length) / count);
+      const b = Math.max(a + 1, Math.floor(((i + 1) * wave.length) / count));
+      let sum = 0;
+      for (let j = a; j < b; j++) sum += wave[j] ?? 0.2;
+      out.push(Math.max(0.12, Math.min(1, sum / (b - a))));
+    }
+    return out;
+  }
+  return [0.55, 0.85, 0.4, 0.95, 0.6, 0.78, 0.42, 0.9, 0.58, 0.72, 0.46, 0.8];
+}
+
 /** QQ/信息 点串点数随时长增多：1s → 8 点 … 60s → 22 点（与宽度增长同步，长语音不显空旷） */
 function dotCountFor(duration: number): number {
   const d = Math.max(1, Math.min(60, Math.round(duration)));
   return Math.max(8, Math.min(22, Math.round(8 + ((d - 1) / 59) * 14)));
+}
+
+/** 微信风波形条：录音真实振幅（播放中按进度逐根点亮，未播段半透明；bg-current 自适应两端配色） */
+function WxWaveBars({ wave, active, playing, progress }: { wave: number[]; active: boolean; playing: boolean; progress: number }) {
+  const bars = waveBarsOf(wave, WX_WAVE_BARS);
+  return (
+    <span className="flex h-[18px] shrink-0 items-center gap-[2px]" aria-hidden="true">
+      {bars.map((v, i) => {
+        const filled = active && playing && progress * bars.length > i;
+        return (
+          <span
+            key={i}
+            className="w-[2px] rounded-full bg-current transition-opacity duration-150"
+            style={{ height: `${Math.round(4 + v * 14)}px`, opacity: filled ? 0.9 : 0.38 }}
+          />
+        );
+      })}
+    </span>
+  );
 }
 
 /** 微信风声波图标：喇叭 + 双弧（播放中双弧交替闪烁；mirrored = 我方喇叭朝左） */
@@ -120,8 +159,8 @@ export function VoiceMsgBubble({
   const label = voiceDurationLabel(voice.duration);
   /** 对方气泡的播放钮品牌蓝：QQ 蓝 / 信息蓝 */
   const peerCircleCls = theme === 'im' ? 'bg-[#007AFF]' : 'bg-[#0099FF]';
-  /** 气泡宽度随时长伸缩（微信 100→210；QQ/信息 132→242） */
-  const width = isWx ? bubbleWidth(voice.duration, 100, 210) : bubbleWidth(voice.duration, 132, 242);
+  /** 气泡宽度随时长伸缩（微信含波形条 148→238；QQ/信息 132→242） */
+  const width = isWx ? bubbleWidth(voice.duration, 148, 238) : bubbleWidth(voice.duration, 132, 242);
   /** QQ/信息 点串点数随时长增多 */
   const dots = isWx ? 0 : dotCountFor(voice.duration);
 
@@ -145,7 +184,7 @@ export function VoiceMsgBubble({
           voicePlayer.toggle(msgId, voice.url);
         }}
         className={`flex select-none items-center justify-center transition-transform active:scale-[0.98] ${bubbleCls} ${
-          isWx ? 'h-[48px] gap-[10px] px-5' : 'h-[42px] gap-2 px-3'
+          isWx ? 'h-[48px] gap-2 px-4' : 'h-[42px] gap-2 px-3'
         }`}
         style={{ width, ...style }}
       >
@@ -158,15 +197,17 @@ export function VoiceMsgBubble({
                 mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
               }`}
             />
-            {/* 时长在气泡内部（参考原生截图）：我方 [4″ 🔊]、对方镜像 [🔊 4″] */}
+            {/* 时长+波形+喇叭都在气泡内部：我方 [4″ ▂▅▇ 🔊]、对方镜像 [🔊 ▂▅▇ 4″] */}
             {mine ? (
               <>
                 <span className="shrink-0 text-[16px] font-medium leading-none tabular-nums">{label}</span>
+                <WxWaveBars wave={voice.wave} active={isActive} playing={isPlaying} progress={progress} />
                 <WxVoiceIcon playing={isPlaying} mirrored />
               </>
             ) : (
               <>
                 <WxVoiceIcon playing={isPlaying} />
+                <WxWaveBars wave={voice.wave} active={isActive} playing={isPlaying} progress={progress} />
                 <span className="shrink-0 text-[16px] font-medium leading-none tabular-nums">{label}</span>
               </>
             )}
@@ -213,7 +254,7 @@ export function VoiceMsgBubble({
       {voice.stt === 'done' && voice.transcript && (
         <span
           data-testid="voice-transcript"
-          className={`mt-[3px] w-fit min-w-[180px] max-w-full whitespace-pre-wrap break-words px-1 text-[12.5px] leading-[1.45] ${
+          className={`mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[10px] bg-white px-2.5 py-[7px] text-[12.5px] leading-[1.5] shadow-[0_1px_4px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.05] dark:bg-[#2C2E33] dark:ring-white/[0.07] ${
             mine ? t.ownTranscript : t.peerTranscript
           }`}
         >

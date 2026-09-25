@@ -6843,3 +6843,23 @@ Stage Summary:
 - 五项反馈全部修复并 E2E 截图验证：气泡↔头像空隙根治（92px 幻影间隙→8px，根因是 max-w 百分比在收缩父容器中自引用）、微信气泡时长入内对齐参考图、双端气泡宽度随时长线性伸缩（点串点数同步增减）、QQ 录音计时+波形入面板贴大圆钮正上方（大圆钮原位不动）、微信录音波形平滑渐隐美化
 - 上轮遗留确认：转文字三选一预览（取消/发送语音/发送文字）微信+QQ 双端实测通过；发送语音不带转写（仅长按转文字才转）双端实测 transcriptCount=0
 - tsc/lint 零错误；改动仅 voice-bubble.tsx + voice-input.tsx，五端调用方零改动；测试均在测试会话「小测」内进行，用户数据未触碰
+---
+Task ID: 10
+Agent: 主协调者 (Z.ai Code)
+Task: 语音功能第四轮用户反馈精修——微信气泡波形/白幕浮层退役（QQ文×入面板）/转文字可编辑/白面板/toggle取消
+
+Work Log:
+- 用户反馈（第16条）：①预览不显示；②微信语音气泡再美化+添加上波形；③QQ 转文字和取消放在面板里面；④录音完转文字的时候可以修改文字；⑤语音气泡转文字后下面的文字后面有白色面板；⑥长按转文字以后再点击转文字就是取消转文字
+- 预览修复：dev server 进程死亡（3000 端口无监听）→ `bun run dev` 重启恢复
+- 反馈②（微信气泡波形）：voice-bubble.tsx 新增 WxWaveBars——voice.wave 22 值降采样为 12 根 2px 波形条（无 wave 旧数据用固定美观波形兜底），插入时长与喇叭之间（own=[时长][波形][镜像喇叭]/peer 镜像），bg-current 自适应两端配色；播放中按 useVoicePlayback 进度逐根点亮（filled opacity 0.9 / 未播 0.38）；气泡宽度区间 100→210 调整为 148→238（容纳波形条），px-5→px-4 gap-[10px]→gap-2
+- 反馈⑤（白色面板）：VoiceMsgBubble 转文字结果改为白色圆角小面板（rounded-[10px] bg-white px-2.5 py-[7px] + 柔和阴影 + ring 描边，暗色 #2C2E33），对齐微信原生转写卡片
+- 反馈③（文/×入面板）：QqVoicePanel 重构——左「文」(data-voice-target=stt) 右「×」(data-voice-target=cancel) 58px 圆钮移入面板内大圆钮两侧（holding 时 scale/fade 显现，未按住占位隐藏大圆钮不跳），下方固定高度「松开 发送/取消/转文字」提示行；RecordOverlayQq 组件整体删除（白幕浮层退役，消息区录音全程可见，QQ App 原生体验）；qq.tsx/qq-group.tsx 移除 import 与渲染
+- 反馈④（可编辑）：useSttPreview 新增 setText（apply({...st,text})），SttPreviewOverlay 结果区从只读 <p> 改为受控 <textarea>（rows=4 min-h-88px max-h-180px + 「识别结果可编辑，修改后再发送」提示），5 个 App（wechat/qq/wx-group/qq-group/chat）全部接线 onChangeText={sttPreview.setText}；发送文字走编辑后文本
+- 反馈⑥（toggle 取消）：5 个 App 的 case 'stt' 改为三态——stt==='done'&&transcript → 再点一次收起（transcript:undefined, stt:undefined + toast「已取消转文字」）；pending → 提示；否则现场识别；transcript:undefined 在各端 sanitize（单聊内联 + groups.ts）中正确持久化为空
+- E2E（agent-browser + 振荡器假麦克风 + Playwright route mock /api/stt 返回固定文本 + 真实鼠标按住）：QQ 面板录音态截图确认计时+波形贴面板内大圆钮正上方、文/× 在钮两侧、大圆钮原位光环、消息区可见；滑向「文」松开→STT 预览 textarea 可编辑（原生 setter 触发 React onChange）→改文字「识别后我改过的文字」→发送文字→气泡内容=修改后文本；长按语音气泡→转文字→白面板「测试语音识别文本」出现→再长按转文字→面板收起（transcripts=[]）→第三次→重新识别出现（toggle 三态循环全通过）；微信群历史 44″ 气泡渲染真实波形条+白面板；按住说话 1.2s→浮层绿气泡在中部偏下+渐隐波形+0:01→松开→1″ 窄气泡（对比 44″ 宽气泡，宽度自适应双向生效）；播放中波形条按进度点亮；微信录音权限拒绝 toast 降级正常
+- 调试坑：假麦克风流 track 被录音 cleanup stop 后复用静默失败（需每次新建流再注入 getUserMedia）；底缘带上滑（y>840）起手会拉起多任务切换器（关闭=点空白）；主屏图标点击需先划到对应分页且用图标 cell 中心坐标；Fast Refresh 丢失 window 注入
+- Stage Summary:
+  - 六项反馈全部修复并 E2E 截图验证；RecordOverlayQq 退役后 QQ 录音 UI 完全收敛进语音面板（计时/波形/文/×/提示全在面板内）
+  - 微信气泡新增真实录音波形条（播放进度点亮）+ 转写白面板；STT 预览文字可编辑后再发送
+  - 转文字长按菜单三态 toggle（识别→取消收起→再识别）五端一致
+  - lint 零错误；改动文件：voice-bubble.tsx、voice-input.tsx、wechat.tsx、qq.tsx、wx-group.tsx、qq-group.tsx、chat.tsx；测试均在测试会话内，用户数据未触碰

@@ -13,13 +13,11 @@
  *   未命中时右滑 → 转文字、明显上滑/左滑 → 取消，原松开 → 发送
  * - QqVoicePanel / QqVoiceHoldButton：QQ 风语音面板（参考 QQ App：工具栏下方展开
  *   「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签）。大圆钮按住开录且**原位不动**（原位光环）：
- *   录音时**计时+两侧波形贴在面板内大圆钮正上方**（不飞到消息区顶部）；
- *   左滑/滑到浮层「文」→ 转文字，右滑/上滑/滑到「×」→ 取消，原松开 → 发送
+ *   录音时**计时+两侧波形贴在面板内大圆钮正上方**；左「文」/右「×」圆钮也在面板内大圆钮两侧
+ *   （不浮层不白幕，消息区全程可见）；滑向「文」→ 转文字、滑向「×」/上滑 → 取消，原松开 → 发送
  * - RecordOverlayWx：微信风录音浮层 —— 暗幕 + 绿色气泡实时波形（屏幕中部偏下）+ 底部「取消 / 滑到这里 转文字」
  *   + 浅色「松开 发送」条
- * - RecordOverlayQq：QQ 风录音浮层 —— 白幕只罩消息区，左「文」右「×」与「松开」提示贴白幕下缘；
- *   计时/波形在面板内大圆钮正上方（QqVoicePanel 录音条），底部透明窗露出语音面板：大圆钮不上移、原位可见
- * - useSttPreview / SttPreviewOverlay：「划到转文字」松开后先识别再预览，用户决定发送文字 /
+ * - useSttPreview / SttPreviewOverlay：「划到转文字」松开后先识别再预览，结果**可编辑**，用户决定发送文字 /
  *   发送语音（原始录音）/ 取消，不再直接发送
  * - 权限被拒/不支持录音：onStartError 提示，仍可继续用文字聊天
  */
@@ -565,7 +563,8 @@ export function QqVoiceHoldButton({
 }
 
 /** QQ 语音面板（工具栏下方展开）：「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签（装饰）
- *  录音时：计时+两侧实时波形贴在面板内大圆钮正上方（绝对定位，不挤动大圆钮原位） */
+ *  录音时全部在面板内：计时+两侧波形贴大圆钮正上方；左「文」（转文字）/右「×」（取消）在大圆钮两侧；
+ *  不再弹白幕浮层，消息区全程可见（QQ App 原生体验） */
 export function QqVoicePanel({
   rec,
   holdTestId = 'qq-voice-hold',
@@ -573,13 +572,19 @@ export function QqVoicePanel({
   rec: VoiceRecorder;
   holdTestId?: string;
 }) {
+  const holding = rec.phase !== 'idle';
   const recording = rec.phase === 'recording';
+  const cancel = rec.zone === 'cancel';
+  const stt = rec.zone === 'stt';
   const bars = rec.levels.slice(-7);
   while (bars.length < 7) bars.unshift(0.08);
   const rightBars = [...bars].reverse();
   return (
-    <div className="relative z-10 flex h-[290px] shrink-0 select-none flex-col items-center bg-white pb-4 dark:bg-[#1B1C1F]" data-testid="qq-voice-panel">
-      <p className="mt-4 text-[17px] text-black/40 dark:text-white/40">{rec.phase === 'starting' ? '准备中…' : '按住说话'}</p>
+    <div className="relative z-10 flex h-[290px] shrink-0 select-none flex-col items-center bg-white pb-3 dark:bg-[#1B1C1F]" data-testid="qq-voice-panel">
+      {/* 顶部提示：录音时隐藏（计时/波形条绝对定位在同一高度，不挤动布局） */}
+      <p className={`mt-4 text-[17px] text-black/40 dark:text-white/40 ${recording ? 'invisible' : ''}`}>
+        {rec.phase === 'starting' ? '准备中…' : '按住说话'}
+      </p>
       {/* 录音条：计时+波形贴在原位大圆钮正上方（面板内；面板 relative 已定位，大圆钮布局不受影响） */}
       {recording && (
         <div
@@ -608,9 +613,47 @@ export function QqVoicePanel({
           ))}
         </div>
       )}
-      <div className="flex flex-1 items-center">
+      {/* 中部：左「文」（转文字）+ 大圆麦克风 + 右「×」（取消）——全部在面板内；
+          未按住时两侧隐藏但占位，大圆钮始终居中不跳；标 data-voice-target 供手势命中判定 */}
+      <div className="flex flex-1 items-center justify-center">
+        <span className="grid h-[64px] w-[64px] shrink-0 place-items-center">
+          <span
+            data-voice-target="stt"
+            data-testid="qq-panel-stt"
+            aria-hidden={!holding}
+            className={`grid h-[58px] w-[58px] place-items-center rounded-full text-[19px] transition-all duration-150 ${
+              holding ? 'scale-100 opacity-100' : 'scale-50 opacity-0'
+            } ${
+              stt
+                ? 'bg-[#0099FF] text-white shadow-[0_6px_18px_rgba(0,153,255,0.4)]'
+                : 'bg-[#F2F3F5] text-black/70 dark:bg-white/10 dark:text-white/80'
+            }`}
+          >
+            文
+          </span>
+        </span>
         <QqVoiceHoldButton rec={rec} testId={holdTestId} />
+        <span className="grid h-[64px] w-[64px] shrink-0 place-items-center">
+          <span
+            data-voice-target="cancel"
+            data-testid="qq-panel-cancel"
+            aria-hidden={!holding}
+            className={`grid h-[58px] w-[58px] place-items-center rounded-full text-[20px] transition-all duration-150 ${
+              holding ? 'scale-100 opacity-100' : 'scale-50 opacity-0'
+            } ${
+              cancel
+                ? 'bg-[#FA5151] text-white shadow-[0_6px_18px_rgba(250,81,81,0.4)]'
+                : 'bg-[#F2F3F5] text-black/70 dark:bg-white/10 dark:text-white/80'
+            }`}
+          >
+            ✕
+          </span>
+        </span>
       </div>
+      {/* 松开提示行（固定高度防布局跳动） */}
+      <p className="h-[22px] text-[14px] text-black/40 dark:text-white/40" data-testid="qq-record-hint">
+        {holding ? (cancel ? '松开 取消' : stt ? '松开 转文字' : '松开 发送') : ''}
+      </p>
       <div className="flex w-full items-center justify-center gap-14 text-[15px]">
         <span className="text-black/30 dark:text-white/30">变声</span>
         <span className="font-medium text-black/85 dark:text-white/85">对讲</span>
@@ -620,7 +663,7 @@ export function QqVoicePanel({
   );
 }
 
-/* ───────────────────────── 录音浮层（微信风 / QQ 风） ───────────────────────── */
+/* ───────────────────────── 「划到转文字」识别预览（松开后不再直接发送） ───────────────────────── */
 
 function timeLabelOf(seconds: number): string {
   const sec = Math.floor(seconds);
@@ -704,56 +747,6 @@ export function RecordOverlayWx({ rec }: { rec: VoiceRecorder }) {
   );
 }
 
-/**
- * QQ 风录音浮层：白幕只罩消息区，底部透明窗露出语音面板 —— 大圆麦克风不上移，就在原位呼吸；
- * 左「文」右「×」与「松开」提示贴白幕下缘（正上方就是原位的大圆钮）；
- * 计时/实时波形在面板内大圆钮正上方（见 QqVoicePanel 录音条，不在这里）。
- * bottomInset = 输入行 + 工具栏 + 语音面板的总高（QQ 单聊/群聊结构一致，约 400px）
- */
-export function RecordOverlayQq({ rec, bottomInset = 400 }: { rec: VoiceRecorder; bottomInset?: number }) {
-  if (rec.phase === 'idle') return null;
-  const stt = rec.zone === 'stt';
-  const cancel = rec.zone === 'cancel';
-  return (
-    <div
-      data-testid="voice-record-overlay"
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 z-40 flex flex-col"
-    >
-      {/* 上部白幕：文/× 与提示贴底排布，紧贴原位大圆钮上方（计时/波形在面板内，见 QqVoicePanel） */}
-      <div className="flex min-h-0 flex-1 flex-col items-center bg-white/95 dark:bg-[#1B1C1F]/95">
-        <div className="min-h-0 flex-1" />
-        {/* 左「文」/ 右「×」（大圆钮本体在下方面板原位；标 data-voice-target 供手势目标命中判定） */}
-        <div className="flex w-full items-center justify-center">
-          <span
-            data-voice-target="stt"
-            className={`grid h-[64px] w-[64px] place-items-center rounded-full text-[20px] transition-colors ${
-              stt ? 'bg-[#0099FF] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
-            }`}
-          >
-            文
-          </span>
-          <span className="mx-16 h-[2px] w-24 rounded-full bg-black/[0.06] dark:bg-white/[0.08]" aria-hidden="true" />
-          <span
-            data-voice-target="cancel"
-            className={`grid h-[64px] w-[64px] place-items-center rounded-full transition-colors ${
-              cancel ? 'bg-[#FA5151] text-white' : 'bg-[#F2F3F5] text-black/80 dark:bg-white/10 dark:text-white/80'
-            }`}
-          >
-            ✕
-          </span>
-        </div>
-        {/* 提示（贴白幕下缘，正上方就是原位的大圆钮） */}
-        <p className="mt-4 pb-4 text-[15px] text-black/45 dark:text-white/45">
-          {cancel ? '松开 取消' : stt ? '松开 转文字' : '松开 发送'}
-        </p>
-      </div>
-      {/* 底部透明窗：语音面板与大圆钮原位可见 */}
-      <div className="shrink-0" style={{ height: bottomInset }} />
-    </div>
-  );
-}
-
 /* ───────────────────────── 「划到转文字」识别预览（松开后不再直接发送） ───────────────────────── */
 
 /** 预览状态：识别中 / 已出文字 / 识别失败（录音 blob 随状态保留，供「发送语音」用原始录音） */
@@ -765,7 +758,7 @@ export interface SttPreviewState {
 
 /**
  * 转文字预览流程：open(clip) → 识别 → 显示文字 → 用户决定：
- * - 发送文字：走各端正常文字发送链路（onSendText）
+ * - 发送文字：走各端正常文字发送链路（onSendText）；识别结果**可编辑**（setText）后再发
  * - 发送语音：原始录音照语音气泡发送（onSendVoice，不重新合成）
  * - 取消：整条丢弃
  */
@@ -809,6 +802,15 @@ export function useSttPreview(opts: {
     apply(null);
   }, [apply]);
 
+  /** 编辑识别结果（发送前可改文字） */
+  const setText = useCallback(
+    (text: string) => {
+      const st = stateRef.current;
+      if (st) apply({ ...st, text });
+    },
+    [apply],
+  );
+
   const sendText = useCallback(() => {
     const st = stateRef.current;
     close();
@@ -821,16 +823,17 @@ export function useSttPreview(opts: {
     if (st) optsRef.current.onSendVoice(st.clip);
   }, [close]);
 
-  return { state, open, close, sendText, sendVoice };
+  return { state, open, close, sendText, sendVoice, setText };
 }
 
-/** 转文字预览弹层：识别中转圈 / 结果可确认；失败仍可「发送语音」保住录音；accent 按各端主题色 */
+/** 转文字预览弹层：识别中转圈 / 结果**可编辑**（textarea，发送前可改文字）；失败仍可「发送语音」保住录音；accent 按各端主题色 */
 export function SttPreviewOverlay({
   state,
   accent = '#07C160',
   onCancel,
   onSendText,
   onSendVoice,
+  onChangeText,
 }: {
   state: SttPreviewState;
   /** 各端主题色（微信绿 / QQ 蓝 / 信息蓝） */
@@ -838,6 +841,8 @@ export function SttPreviewOverlay({
   onCancel: () => void;
   onSendText: () => void;
   onSendVoice: () => void;
+  /** 编辑识别结果（textarea onChange） */
+  onChangeText?: (text: string) => void;
 }) {
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 px-7" data-testid="stt-preview">
@@ -854,13 +859,17 @@ export function SttPreviewOverlay({
             <p className="mt-1.5 text-[12px] text-black/40 dark:text-white/40">仍可发送语音，或取消丢弃</p>
           </div>
         ) : (
-          <div
-            className="mt-3 max-h-[180px] overflow-y-auto rounded-[10px] bg-black/[0.04] p-3 dark:bg-white/[0.06]"
-            data-testid="stt-preview-text"
-          >
-            <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.5] text-black/85 dark:text-white/90">
-              {state.text}
-            </p>
+          <div className="mt-3">
+            <textarea
+              data-testid="stt-preview-text"
+              value={state.text}
+              onChange={(e) => onChangeText?.(e.target.value)}
+              rows={4}
+              aria-label="识别结果（可编辑）"
+              placeholder="识别结果"
+              className="block max-h-[180px] min-h-[88px] w-full resize-none overflow-y-auto rounded-[10px] bg-black/[0.04] p-3 text-[15px] leading-[1.5] text-black/85 outline-none placeholder:text-black/30 focus:ring-1 focus:ring-black/10 dark:bg-white/[0.06] dark:text-white/90 dark:placeholder:text-white/30 dark:focus:ring-white/15"
+            />
+            <p className="mt-1.5 text-[12px] text-black/35 dark:text-white/35">识别结果可编辑，修改后再发送</p>
           </div>
         )}
         <div className="mt-4 flex items-center gap-2.5">
