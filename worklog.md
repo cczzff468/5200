@@ -6972,3 +6972,28 @@ Stage Summary:
 - TTS 现有三服务商：内置语音（免费/离线/零配置，默认）+ MiniMax + OpenAI 兼容；无需任何 API Key 即可有男女声线
 - 音色优先级不变：角色独立 voiceId → 全局默认 → 内置声线按性别兜底；电话/设置试听/角色音色选择全链路接入
 - 产物：builtin-voices.ts（新）+ store/tts-client/settings/contacts 修改；commit 待推送
+
+---
+Task ID: 22
+Agent: Z.ai Code (main)
+Task: 用户消息22「内置声音有的和其他的声音一模一样，有的和描述的声音不一样，解决一下」——重写内置声线的声源分配逻辑
+
+Work Log:
+- 定位问题根因：旧 pickSystemVoice(gender) 对同性别所有声线永远返回同一支系统语音（首个名单命中），3 女声全靠 pitch 0.95/1.15/1.35 微调区分，部分引擎（如 Google 网络语音）忽略 pitch → 听感一模一样；名单未命中时兜底 pool[0] 可能是异性语音 → 与描述不符；「低沉男声」pitch 0.5 在部分引擎失真而非低沉
+- 重写 src/lib/ios/builtin-voices.ts 为「声源分配规划器」架构：
+  - 新增纯函数 planBuiltinVoices(system: SystemVoiceDescriptor[])（可脱离浏览器验证）：为 6 声线各分配【不同的】系统中文语音，排序规则 未占用 > 风格亲和度 > localService > 列表序；性别池为空时回退 未知名单池 → 全部中文池
+  - 风格亲和度名单（对位描述）：温柔→Xiaoxiao/瑶瑶、活泼→Xiaoyi/云夏/Sinji、知性→Yaoyao/MeiJia、清爽→Yunxi/康康、低沉→Yunyang/云健/雨叔、活力→Kangkang/云泽
+  - 性别启发式名单扩充：补 Yunxia/Yunye（女）、云扬、zh-HK HiuMaan/HiuGaai/WanLung、zh-TW HsiaoChen/YunJhe/Li-Mu 等；双名单同时命中判 unknown（宁可不猜不猜错）
+  - 性别可信度塑形：名单命中（可信）轻塑形贴近描述；不可信强塑形兜底（男 ≤0.8 / 女 ≥1.05）保证男女方向正确
+  - 声源复用防撞：同声源强制音高间距 ≥0.3——pickPitch 三段策略（期望值直接用 → 期望值附近找合规点 → 最大空闲间隙中点，分段只在可行区间内展开防边界 bug）；间距不足再按音高低→高叠 0.88~1.12 倍语速差补偿（防 pitch 被引擎忽略）
+  - 期望音高重调：墨阳 0.5→0.62（防失真）、子川 1.0（可信男声不塑形）；voice=null（无系统语音）按性别强塑形 + 参与语速差补偿
+- speakBuiltin 改用 planCache（按 voices signature 缓存，voiceschanged 自动重规划）；新增 describeBuiltinVoiceMappings() 导出本机实际声源分配
+- settings.tsx：6 张声线卡片新增「声源：{系统语音名}」子行（10px 灰字+title 悬浮全名），用户可直接看到每个声线背后的系统语音；mount 后 0/800/2000ms 三次重读（voices 异步就绪）
+- 纯函数验证（bun 脚本 4 场景）：Edge 全量 12 支声源 → 6 声线 6 声源全独立且性别全对、pitch 精确等于期望值；macOS 纯女声 → 女声 3 支独立、男声在 Tingting 上 0.5/0.65/0.8 阶梯 + 语速差（低沉最慢/活力最快，语义正确）；Chrome 极简 3 支 → Kangkang 上 0.62/0.81/1.0 均匀分布；空列表 → 强塑形 + 语速差
+- Agent Browser E2E：注入模拟 Edge speechSynthesis（含 FakeUtterance 修 mock 缺陷——真实构造器拒绝普通对象 voice）→ 重进语音页 6 卡片声源行全部显示对位系统语音 → 直接调用真实 React onClick 逐个试听 → speak 日志 6 条：Xiaoxiao@1.12/0.94、Xiaoyi@1.32/1.12、Yaoyao@0.92/0.96、Yunxi@1.0/1.0、Yunyang@0.62/0.9、Kangkang@0.82/1.14——互不相同、性别正确、风格对位；真实无语音环境（headless 原生）显示「系统默认声源」兜底正常；页面零错误
+- 验证环境备注：本会话 headless CDP 输入管线中途失灵（React 委托对新渲染子树不派发），改用解锁手势 + ref 点击 + 直接调用 __reactProps$ onClick 完成 E2E，应用代码本身无此问题
+
+Stage Summary:
+- 内置 6 声线不再雷同：有声源池时 6 声线各用不同系统语音且风格对位；声源不足时按 音高≥0.3 间距 + 语速差 两级防撞；性别不可信时强塑形兜底男女方向
+- 卡片可见「声源」映射，用户可自查每个声线背后的实际系统语音
+- 产物：src/lib/ios/builtin-voices.ts 重写（新增 planBuiltinVoices/describeBuiltinVoiceMappings，公开 API 不变）+ settings.tsx 卡片声源行；commit 待推送

@@ -55,7 +55,7 @@ import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { describeImages } from '@/lib/vision-client';
-import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 
 // ---------------- 常量与类型 ----------------
 
@@ -2090,6 +2090,25 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     setBuiltinSupport(isBuiltinVoiceSupported());
   }, []);
+  // 本机实际声源分配（每张声线卡片展示背后用的系统语音；voices 异步就绪后重读）
+  const [builtinVoiceMap, setBuiltinVoiceMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!isBuiltinVoiceSupported()) return;
+    let alive = true;
+    const read = () => {
+      if (!alive) return;
+      const m = describeBuiltinVoiceMappings();
+      if (Object.keys(m).length > 0) setBuiltinVoiceMap(m);
+    };
+    read();
+    const t1 = window.setTimeout(read, 800);
+    const t2 = window.setTimeout(read, 2000); // 部分引擎 voices 就绪较慢
+    return () => {
+      alive = false;
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, []);
 
   // 页面卸载：停掉试听音频并释放
   useEffect(
@@ -2430,6 +2449,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                           <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
                         </button>
                       </div>
+                      {builtinVoiceMap[v.id] && (
+                        <div className="truncate text-[10px] text-muted-foreground/60" title={`声源：${builtinVoiceMap[v.id]}`}>
+                          声源：{builtinVoiceMap[v.id]}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -1,9 +1,15 @@
 /**
  * 内置免费语音引擎（Web Speech API / speechSynthesis，纯浏览器本地合成）：
- * - 内置 6 个声线（3 女 + 3 男），零配置、免 API Key、离线可用；
- *   用「系统中文语音挑选 + 音高/语速塑形」让同一浏览器也能区分出不同声线
+ * - 内置 6 个声线（3 女 + 3 男），零配置、免 API Key、离线可用
+ * - 声线区分策略（解决「各声线听感雷同 / 与描述不符」）：
+ *   1) 独立声源分配：为每个声线尽量分配【不同的】系统中文语音（按风格亲和度排序：
+ *      温柔→Xiaoxiao、活泼→Xiaoyi、知性→Yaoyao、清爽→Yunxi、低沉→Yunyang、活力→Kangkang），
+ *      系统语音不够需要复用时，强制同声源上的音高间距 ≥ 0.3，并叠加语速差补偿
+ *      （部分引擎如 Google 网络语音会忽略音高，语速差是最后手段）；
+ *   2) 性别可信度塑形：已知名单判定的性别与声线一致 → 轻塑形贴近描述；
+ *      名单没命中（性别不可信）→ 强塑形兜底（男 ≤0.8 / 女 ≥1.05），保证男女听感方向正确
  * - 声线 id 以 builtin: 前缀持久化（defaultVoiceId / 联系人 voiceId），换浏览器仍语义成立：
- *   引擎按性别与声线特征就近挑系统语音，挑不到完全一致的也用音高塑形保证男女区分
+ *   引擎按上述策略在当前设备就近分配，挑不到理想声源也用塑形保证男女区分
  * - 单例播放：新播放自动停旧的；stopBuiltinSpeech() 供外部打断；
  *   注册到全局音频焦点（与语音消息气泡互斥）
  */
@@ -20,19 +26,19 @@ export interface BuiltinVoicePreset {
   gender: 'female' | 'male';
   /** 风格标签（如 温柔） */
   label: string;
-  /** 音高塑形（1 = 系统默认；女声略高、男声明显低） */
+  /** 期望音高（1 = 系统默认；最终值由声源分配结果在可信区间内调整） */
   pitch: number;
-  /** 语速（1 = 正常） */
+  /** 期望语速（1 = 正常） */
   rate: number;
 }
 
 export const BUILTIN_TTS_VOICES: BuiltinVoicePreset[] = [
-  { id: 'builtin:xiaoyue', name: '晓月', gender: 'female', label: '温柔女声', pitch: 1.15, rate: 0.95 },
-  { id: 'builtin:xiaoxi', name: '小溪', gender: 'female', label: '活泼女声', pitch: 1.35, rate: 1.08 },
-  { id: 'builtin:yunshu', name: '云舒', gender: 'female', label: '知性女声', pitch: 0.95, rate: 1 },
-  { id: 'builtin:zichuan', name: '子川', gender: 'male', label: '清爽男声', pitch: 0.75, rate: 1 },
-  { id: 'builtin:moyang', name: '墨阳', gender: 'male', label: '低沉男声', pitch: 0.5, rate: 0.92 },
-  { id: 'builtin:chenfeng', name: '辰风', gender: 'male', label: '活力男声', pitch: 0.85, rate: 1.12 },
+  { id: 'builtin:xiaoyue', name: '晓月', gender: 'female', label: '温柔女声', pitch: 1.12, rate: 0.94 },
+  { id: 'builtin:xiaoxi', name: '小溪', gender: 'female', label: '活泼女声', pitch: 1.32, rate: 1.12 },
+  { id: 'builtin:yunshu', name: '云舒', gender: 'female', label: '知性女声', pitch: 0.92, rate: 0.96 },
+  { id: 'builtin:zichuan', name: '子川', gender: 'male', label: '清爽男声', pitch: 1.0, rate: 1.0 },
+  { id: 'builtin:moyang', name: '墨阳', gender: 'male', label: '低沉男声', pitch: 0.62, rate: 0.9 },
+  { id: 'builtin:chenfeng', name: '辰风', gender: 'male', label: '活力男声', pitch: 0.82, rate: 1.14 },
 ];
 
 /** 无任何配置时的兜底声线（按性别：电话对端男/女默认不同声线） */
@@ -74,11 +80,203 @@ export function resolveBuiltinPreset(
   return BUILTIN_TTS_VOICES[0];
 }
 
-// ---------------- 系统语音挑选（zh 优先 + 性别启发式） ----------------
+// ---------------- 声源分配规划（纯函数，可独立验证） ----------------
+
+/** 系统语音的最小描述（SpeechSynthesisVoice 的结构子集，便于纯函数测试） */
+export interface SystemVoiceDescriptor {
+  name: string;
+  lang: string;
+  localService: boolean;
+}
+
+/** 一个声线在某台设备上的最终播放方案 */
+export interface BuiltinVoicePlan<T extends SystemVoiceDescriptor = SystemVoiceDescriptor> {
+  presetId: string;
+  /** 分配到的系统语音（null = 设备无可用语音，交给引擎默认 + 塑形） */
+  voice: T | null;
+  /** 最终音高（已做性别塑形 + 同声源防撞间距） */
+  pitch: number;
+  /** 最终语速（共享声源且音高间距不足时含语速差补偿） */
+  rate: number;
+  /** 底层声源性别是否与声线性别一致（启发式判定可信） */
+  genderConfident: boolean;
+}
 
 /** 已知常见中文系统音色的性别线索（覆盖 Win/Edge/macOS/Chrome/Android 主流引擎） */
-const FEMALE_HINTS = /yaoyao|huihui|xiaoxiao|xiaoyi|xiaoyou|xiaohan|xiaomo|xiaqiao|xiaorui|tingting|ting-ting|mei-?jia|sin-?ji|google\s*(普通话|中文)|female|女|婷婷|美佳|晓(晓|伊|涵|秋|睿|墨|宇)/i;
-const MALE_HINTS = /kangkang|yunxi|yunyang|yunjian|yunye|yunze|danny|zhiwei|yu-?shu|liang|\btao\b|tian-?qi|male|男|康康|云(希|野|健|枫|泽)|志威|雨叔/i;
+const FEMALE_HINTS =
+  /yaoyao|huihui|xiaoxiao|xiaoyi|xiaoyou|xiaohan|xiaomo|xiaqiao|xiaorui|xiaoxuan|yunxia|yunye|ting-?ting|mei-?jia|sin-?ji|hiu-?maan|hiu-?gaai|hsiao-?chen|hsiao-?yu|google|female|女|婷婷|美佳|晓(晓|伊|涵|秋|睿|墨|宇|萱)|云(夏|叶)/i;
+const MALE_HINTS =
+  /kangkang|yunxi|yunyang|yunjian|yunze|yunfeng|danny|zhiwei|yu-?shu|liang|\btao\b|tian-?qi|yun-?jhe|wan-?lung|li-?mu|male|男|康康|云(希|扬|健|野|枫|泽|杰)|志威|雨叔/i;
+
+/** 判定一支系统语音是否中文（zh 语种或名称含中文线索） */
+function isZhVoice(v: SystemVoiceDescriptor): boolean {
+  return /^zh([-_]|$)/i.test(v.lang) || /chinese|中文|普通话|国语|國語|粤语|粵語/i.test(v.name);
+}
+
+/** 启发式判定系统语音性别；两个名单都命中或都没命中 → unknown（宁可不猜也不猜错） */
+function guessGender(v: SystemVoiceDescriptor): 'female' | 'male' | 'unknown' {
+  const f = FEMALE_HINTS.test(v.name);
+  const m = MALE_HINTS.test(v.name);
+  if (f && !m) return 'female';
+  if (m && !f) return 'male';
+  return 'unknown';
+}
+
+/** 各声线的风格亲和度名单（有序：越靠前越贴合描述；用于在同性别多支系统语音里挑最像的） */
+const STYLE_AFFINITY: Record<string, RegExp[]> = {
+  // 晓月·温柔女声：Xiaoxiao 是最柔和的自然女声，其次瑶瑶/慧慧/婷婷
+  'builtin:xiaoyue': [/xiaoxiao|晓晓/i, /yaoyao|瑶瑶/i, /huihui|慧慧/i, /ting-?ting|婷婷/i, /hsiao-?chen/i, /google/i],
+  // 小溪·活泼女声：晓伊偏少女活泼，云夏清亮，Sinji/HiuGaai 港腔轻快
+  'builtin:xiaoxi': [/xiaoyi|晓伊/i, /yunxia|云夏/i, /sin-?ji/i, /hiu-?gaai/i, /xiaoyou/i, /google/i],
+  // 云舒·知性女声：瑶瑶偏成熟稳，MeiJia/美佳端正，慧慧平和
+  'builtin:yunshu': [/yaoyao|瑶瑶/i, /mei-?jia|美佳/i, /huihui|慧慧/i, /hiu-?maan/i, /hsiao-?yu/i, /google/i],
+  // 子川·清爽男声：云希是偏年轻清爽的男声，其次康康/云杰
+  'builtin:zichuan': [/yunxi|云希/i, /kangkang|康康/i, /yun-?jhe/i, /danny/i],
+  // 墨阳·低沉男声：云扬（新闻播音风）与云健都偏低沉浑厚，雨叔/万龙亦然
+  'builtin:moyang': [/yunyang|云扬/i, /yunjian|云健/i, /yu-?shu|雨叔/i, /wan-?lung/i, /li-?mu/i],
+  // 辰风·活力男声：康康明快有劲，云泽其次
+  'builtin:chenfeng': [/kangkang|康康/i, /yunze|云泽/i, /yunxi|云希/i, /danny/i, /tian-?qi/i],
+};
+
+/** 同一声源上两个声线的最小音高间距（低于该值听感易混，部分引擎还会忽略音高） */
+const MIN_PITCH_GAP = 0.3;
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+const clampNum = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
+
+/** 按性别与可信度给出音高的可行区间 */
+function genderClamp(gender: 'female' | 'male', confident: boolean): [number, number] {
+  if (gender === 'female') return confident ? [0.75, 1.6] : [1.05, 1.7];
+  return confident ? [0.5, 1.05] : [0.35, 0.8];
+}
+
+/**
+ * 在「期望音高附近 + 同声源防撞约束」内挑最终音高（保证自然度与排序语义）：
+ * ① 已占用音高都在安全间距外 → 直接用期望值；
+ * ② 否则优先取「距期望值最近、且与所有已占用点间距 ≥ 安全值」的位置（只小幅让位，不跳极端）；
+ * ③ 窗口内实在找不到安全位置 → 取最大空闲间隙的中点，让拥挤声源上的音高均匀分布。
+ */
+function pickPitch(desired: number, clamp: [number, number], existing: number[]): number {
+  const p = clampNum(desired, clamp[0], clamp[1]);
+  if (existing.length === 0 || existing.every((e) => Math.abs(e - p) >= MIN_PITCH_GAP)) return round2(p);
+  const sorted = [...existing].sort((a, b) => a - b);
+  const scoreAt = (c: number): number => Math.min(...sorted.map((e) => Math.abs(e - c)));
+  // ② 期望值附近（±安全间距×2）找合规点
+  const nearLo = Math.max(clamp[0], p - MIN_PITCH_GAP * 2);
+  const nearHi = Math.min(clamp[1], p + MIN_PITCH_GAP * 2);
+  const nearCandidates = [p, ...sorted.flatMap((e) => [e - MIN_PITCH_GAP, e + MIN_PITCH_GAP])]
+    .map((c) => clampNum(c, nearLo, nearHi))
+    .filter((c) => scoreAt(c) >= MIN_PITCH_GAP - 1e-9);
+  if (nearCandidates.length > 0) {
+    return round2(nearCandidates.reduce((a, b) => (Math.abs(b - p) < Math.abs(a - p) ? b : a)));
+  }
+  // ③ 最大空闲间隙的中点（分段只在可行区间内展开，区间外的占用点不参与）
+  const segments: [number, number][] = [];
+  let prev = clamp[0];
+  for (const e of sorted) {
+    if (e <= prev) continue;
+    const end = Math.min(e, clamp[1]);
+    if (end > prev) segments.push([prev, end]);
+    prev = Math.max(prev, end);
+    if (prev >= clamp[1]) break;
+  }
+  if (clamp[1] > prev) segments.push([prev, clamp[1]]);
+  if (segments.length === 0) return round2(p);
+  const [lo, hi] = segments.reduce((a, b) => (b[1] - b[0] > a[1] - a[0] ? b : a));
+  return round2(clampNum((lo + hi) / 2, clamp[0], clamp[1]));
+}
+
+/**
+ * 声源分配规划：给定设备上的系统语音列表，为 6 个内置声线各产出一份播放方案。
+ * 规则：未被占用的声源优先 → 风格亲和度高的优先 → 本地声源优先 → 列表顺序稳定排序；
+ * 同性别声源池为空时依次回退 未知名单池 → 全部中文池；声源复用时用 pickPitch 拉开音高。
+ */
+export function planBuiltinVoices<T extends SystemVoiceDescriptor>(system: T[]): Map<string, BuiltinVoicePlan<T>> {
+  const plans = new Map<string, BuiltinVoicePlan<T>>();
+  const presetById = new Map(BUILTIN_TTS_VOICES.map((p) => [p.id, p]));
+
+  if (system.length === 0) {
+    // 无可用系统语音：交给引擎默认声源，按性别强塑形兜底
+    for (const p of BUILTIN_TTS_VOICES) {
+      const clamp = genderClamp(p.gender, false);
+      plans.set(p.id, { presetId: p.id, voice: null, pitch: round2(clampNum(p.pitch, clamp[0], clamp[1])), rate: p.rate, genderConfident: false });
+    }
+    return plans;
+  }
+
+  const zh = system.filter(isZhVoice);
+  const pool = zh.length > 0 ? zh : system;
+  const female = pool.filter((v) => guessGender(v) === 'female');
+  const male = pool.filter((v) => guessGender(v) === 'male');
+  const unknown = pool.filter((v) => guessGender(v) === 'unknown');
+
+  const voicePitches = new Map<T, number[]>();
+  const usedVoices = new Set<T>();
+
+  const affinityRank = (presetId: string, v: T): number => {
+    const list = STYLE_AFFINITY[presetId];
+    if (!list) return 99;
+    const i = list.findIndex((re) => re.test(v.name));
+    return i === -1 ? 99 : i;
+  };
+
+  const assign = (presetId: string, groupPool: T[]) => {
+    const preset = presetById.get(presetId)!;
+    const ranked = [...groupPool].sort((a, b) => {
+      const ua = usedVoices.has(a) ? 1 : 0;
+      const ub = usedVoices.has(b) ? 1 : 0;
+      if (ua !== ub) return ua - ub;
+      const fa = affinityRank(presetId, a) - affinityRank(presetId, b);
+      if (fa !== 0) return fa;
+      const la = (a.localService ? 0 : 1) - (b.localService ? 0 : 1);
+      if (la !== 0) return la;
+      return pool.indexOf(a) - pool.indexOf(b);
+    });
+    const voice = ranked[0] ?? null;
+    if (!voice) {
+      const clamp = genderClamp(preset.gender, false);
+      plans.set(presetId, { presetId, voice: null, pitch: round2(clampNum(preset.pitch, clamp[0], clamp[1])), rate: preset.rate, genderConfident: false });
+      return;
+    }
+    const confident = guessGender(voice) === preset.gender;
+    const clamp = genderClamp(preset.gender, confident);
+    const pitch = pickPitch(preset.pitch, clamp, voicePitches.get(voice) ?? []);
+    voicePitches.set(voice, [...(voicePitches.get(voice) ?? []), pitch]);
+    usedVoices.add(voice);
+    plans.set(presetId, { presetId, voice, pitch, rate: preset.rate, genderConfident: confident });
+  };
+
+  // 性别池 → 未知名单池 → 全部中文池（逐级回退；女性组先分配并标记占用，男性组尽量避开）
+  const femalePool = female.length > 0 ? female : unknown.length > 0 ? unknown : pool;
+  const malePool = male.length > 0 ? male : unknown.length > 0 ? unknown : pool;
+  for (const id of ['builtin:xiaoyue', 'builtin:xiaoxi', 'builtin:yunshu']) assign(id, femalePool);
+  for (const id of ['builtin:zichuan', 'builtin:moyang', 'builtin:chenfeng']) assign(id, malePool);
+
+  // 同一声源被多个声线复用且音高间距不足（引擎可能忽略音高）→ 按音高从低到高叠语速差补偿
+  // （voice=null 的方案共用引擎默认声源，同样算一组）
+  const byVoice = new Map<string, BuiltinVoicePlan<T>[]>();
+  for (const plan of plans.values()) {
+    const key = plan.voice ? `${plan.voice.name}|${plan.voice.lang}` : '\0null';
+    const arr = byVoice.get(key) ?? [];
+    arr.push(plan);
+    byVoice.set(key, arr);
+  }
+  for (const arr of byVoice.values()) {
+    if (arr.length < 2) continue;
+    const pitches = arr.map((p) => p.pitch).sort((a, b) => a - b);
+    const separated = pitches.every((p, i) => i === 0 || p - pitches[i - 1] >= MIN_PITCH_GAP);
+    if (separated) continue;
+    arr.sort((a, b) => a.pitch - b.pitch);
+    arr.forEach((plan, i) => {
+      const f = arr.length === 1 ? 1 : 0.88 + (0.24 * i) / (arr.length - 1); // 0.88 → 1.12
+      plan.rate = round2(clampNum(plan.rate * f, 0.5, 2));
+    });
+  }
+
+  return plans;
+}
+
+// ---------------- 设备声源缓存与查询 ----------------
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
@@ -89,21 +287,29 @@ function listSystemVoices(): SpeechSynthesisVoice[] {
   return cachedVoices;
 }
 
-/** 按性别挑一支系统中文语音：性别线索命中 → 任意 zh → null（由音高塑形兜底） */
-function pickSystemVoice(gender: 'female' | 'male'): SpeechSynthesisVoice | null {
+let planCache: { signature: string; plans: Map<string, BuiltinVoicePlan<SpeechSynthesisVoice>> } | null = null;
+
+function getPlans(): Map<string, BuiltinVoicePlan<SpeechSynthesisVoice>> {
   const voices = listSystemVoices();
-  if (voices.length === 0) return null;
-  const zh = voices.filter((v) => /^zh\b|^zh[-_]/i.test(v.lang) || /chinese|中文|普通话|粤语/i.test(v.name));
-  const hint = gender === 'male' ? MALE_HINTS : FEMALE_HINTS;
-  const anti = gender === 'male' ? FEMALE_HINTS : MALE_HINTS;
-  const pool = zh.length > 0 ? zh : voices;
-  return (
-    pool.find((v) => hint.test(v.name) && !anti.test(v.name) && v.localService) ??
-    pool.find((v) => hint.test(v.name) && !anti.test(v.name)) ??
-    pool.find((v) => hint.test(v.name)) ??
-    pool[0] ??
-    null
-  );
+  const signature = voices.map((v) => `${v.name}|${v.lang}|${v.localService ? 1 : 0}`).join(';;');
+  if (planCache && planCache.signature === signature) return planCache.plans;
+  const plans = planBuiltinVoices(voices);
+  planCache = { signature, plans };
+  return plans;
+}
+
+/**
+ * 当前设备上 6 个声线的实际声源分配（设置页展示用，让用户看到每个声线背后的系统语音）：
+ * 返回 { 声线id: 声源名 }；设备语音未就绪/不支持时返回空对象。
+ */
+export function describeBuiltinVoiceMappings(): Record<string, string> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return {};
+  const plans = getPlans();
+  const out: Record<string, string> = {};
+  for (const [id, plan] of plans) {
+    out[id] = plan.voice ? plan.voice.name : '系统默认声源';
+  }
+  return out;
 }
 
 /** 浏览器是否支持内置语音（客户端调用；SSR 安全） */
@@ -194,11 +400,12 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
         return;
       }
       const utter = new SpeechSynthesisUtterance(text.slice(0, 900));
-      const sysVoice = pickSystemVoice(preset.gender);
+      const plan = getPlans().get(preset.id);
+      const sysVoice = plan?.voice ?? null;
       if (sysVoice) utter.voice = sysVoice;
       utter.lang = sysVoice?.lang || 'zh-CN';
-      utter.pitch = Math.min(2, Math.max(0, preset.pitch));
-      utter.rate = Math.min(3, Math.max(0.5, preset.rate * (opts.speed ?? 1)));
+      utter.pitch = Math.min(2, Math.max(0, plan?.pitch ?? preset.pitch));
+      utter.rate = Math.min(3, Math.max(0.5, (plan?.rate ?? preset.rate) * (opts.speed ?? 1)));
       utter.volume = Math.min(1, Math.max(0, opts.volume ?? 1));
       utter.onstart = () => {
         if (myToken === speakToken && !opts.cancelled?.()) opts.onStart?.();
