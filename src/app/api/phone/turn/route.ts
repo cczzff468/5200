@@ -339,7 +339,9 @@ function buildCallSystemPrompt(
   peer: PersonaSource,
   greeting: boolean,
   npcExtra?: { ownerLabel?: string; npcCircle?: InlineContact['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
-  multiApp?: boolean
+  multiApp?: boolean,
+  /** 调用方附加规则（微信/QQ 语音通话注入主动挂断标记规则等；电话 App 不传，行为不变） */
+  extraRules?: string[]
 ): string {
   const base = buildPersonaSystemPrompt(peer, {
     channel: '语音通话',
@@ -350,6 +352,7 @@ function buildCallSystemPrompt(
       '这是实时语音通话：用第一人称口语化说话，像真人打电话；每次只说 1-2 句（通常不超过 20 个字），一次只说一件事；',
       '禁止任何表情符号、emoji、引号、括号、列表；只输出要说出口的话；',
       '打电话会互相打招呼、寒暄、自然结束（如"那我先挂了啊"）；对方说的内容要自然回应。',
+      ...(Array.isArray(extraRules) ? extraRules.filter((r) => typeof r === 'string' && r.trim()).slice(0, 8) : []),
     ],
   });
   if (!greeting) return base;
@@ -415,7 +418,8 @@ export async function POST(req: NextRequest) {
       ownerCard: inline?.ownerCard,
       backgroundNotes: inline?.backgroundNotes,
     },
-    root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined
+    root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined,
+    Array.isArray(root.extraRules) ? (root.extraRules as unknown[]).filter((x): x is string => typeof x === 'string') : undefined
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';

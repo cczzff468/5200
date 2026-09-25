@@ -7273,3 +7273,72 @@ Stage Summary:
 - 长按语音气泡 5 端均可「编辑」：编辑的是转写/朗读文本，保存后转写面板就地更新（内置语音连朗读原文一起改）
 - 信息APP AI 语音频率与微信APP共用 wx:<联系人id> 键，任一端修改两端同步；信息端录音浮层（按住说话上面的波条）从微信绿改为 iMessage 蓝
 - 转文字结果面板圆角 10px→4px；改动文件：settings.tsx / voice-bubble.tsx / voice-input.tsx / chat.tsx / wechat.tsx / qq.tsx / wx-group.tsx / qq-group.tsx
+---
+Task ID: 29-a
+Agent: general-purpose
+Task: 微信 wechat.tsx 接入语音通话（入口/浮层/通话卡片/AI 主动发起/重拨）
+
+Work Log:
+- 导入（L206-207）：wechat-wallet import 之后新增 `import { VoiceCallScreen, CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen'` 与 `import type { ChatCallTurnMsg } from '@/lib/ios/chat-call'`
+- WxMsg 类型（L295-297 注释+联合、L321-322 字段）：kind 联合加 'call'（注释同步补说明）；`voice?: VoiceMsgData;` 之后加 `call?: { state: CallCardState; duration: number; direction: 'out' | 'in' }`
+- loadMsgs 规范化（L487-498）：voice 分支之后新增 call 分支——state 非法值回退 'ended'、direction 仅认 'in'/'out'（旧记录兼容）
+- readPreview（L731）：voice 分支后加 `if (last.kind === 'call') return { text: '[语音通话]', ... }`，会话列表预览正确
+- ChatPage 状态（L3622-3624）：plusOpen 旁加 `voiceCall`（浮层方向）与 `callCtx`（打开瞬间快照的 history/memoryBlock/momentsBlock/timeBlock/multiApp）
+- openVoiceCall（L3912-3936）：runAiTurn 定义之前新增 useCallback——过滤最近 8 条有效消息归并为 ChatCallTurnMsg（voice 读转写/原文兜底），现场组装 memRecallBlock('wx', interopOn: effectiveInterop)/buildMomentsChatBlock/buildTimeAwareBlock(getTimeAware)/getMemSettings(peer.id).share 四个上下文块后 setCallCtx+setVoiceCall；deps [msgs, peer, me.name, sessionKey]
+- runAiTurn 改造：
+  - 历史过滤（L3949）追加 `|| m.kind === 'call'`（通话卡片以 callCardAiText 文本进 AI 上下文）
+  - systemFull（L4057）socialRules 与 timeBlock 之间插入【语音通话能力】人设项（[语音通话] 标记约定 + 频率约束）
+  - finalize 开头（L4105-4108）：`let replyContent = content` + wantCall 判定 + 剥除 [语音通话] 标记；`extractRichActionParts(content)` → `extractRichActionParts(replyContent)`（L4110，finalize 内唯一 content 使用点）
+  - scheduleAiDelivery(...).then() 之后（L4256-4266）：wantCall 时按 `wx-vc-last:<peerId>` localStorage 做 5 分钟冷却，命中写时间戳并 1200ms 后 `openVoiceCall('in')` 弹出来电浮层
+  - useCallback deps（L4274）追加 openVoiceCall
+- 加号面板接线（L5114-5119）：location 块后新增 voicecall 分支（关面板/表情面板 + openVoiceCall('out')）；label 兜底表（L5120）删去 voicecall 键（videocall/favorite 保留原 toast）；PlusPanel 原有「语音通话」图标项从此可用
+- 通话卡片渲染（L5419-5428）：消息列表条件链 voice 分支后加 `m.kind === 'call' && m.call` 分支，`<div {...bubblePress}>` 包 `<CallCardBubble variant="wx" ...>`（与其它卡片同气泡容器，role=me 右侧/peer 左侧对齐；cancelled 整卡可点重拨；长按菜单走既有默认项：复制 content 文本/删除/多选等）
+- 通话浮层（L6348-6378）：ChatPage 根 JSX 末尾、LocalToast 之前渲染 `{voiceCall && callCtx && <VoiceCallScreen variant="wx" name={peer.name} avatar={peer.avatar ?? null} contact={peer} ... onEnd=...>}`——onEnd 用 callResultToCardState+callCardAiText 生成 kind='call' 消息（direction out→me / in→peer）并 setMsgs（saveMsgs effect 自动落盘），随后清空浮层状态
+- 白名单排查：quoteContentOf 对 call 走 content 兜底（callCardAiText 文本）、isSelectable 不排除 call（可删/可多选）、buildMsgMenuItems 默认项安全、notifyPreviewText/MsgFavorite kind 均为 string——均无需改动
+- 校验：`bunx tsc --noEmit`（删 tsbuildinfo 全量重跑）0 错误；`bun run lint` 0 错误（仅 chat-call.ts 既有 1 条 eslint-disable 冗余 warning，属共享模块非本任务文件，未动）；仅改 src/components/apps/wechat.tsx 一个文件，未 commit
+
+Stage Summary:
+- 微信单聊全链路接入语音通话：加号面板「语音通话」真实可拨（拨号→接通→麦克风对讲→挂断），结束后按结果落一张微信配色通话卡片进聊天记录（已取消可点重拨/未接听/已拒绝/通话时长），会话列表预览显示[语音通话]；通话携带最近 8 条上下文与记忆/朋友圈/时间感知/跨 App 互通四块 system 注入
+- AI 主动来电：system 注入【语音通话能力】人设项，AI 回复开头输出 [语音通话] 标记时剥除标记正常发消息，并按 wx-vc-last:<id> 5 分钟冷却弹出来电浮层（拒接/超时未接生成对应卡片）；通话记录文本（[语音通话：…]）进后续聊天上下文，AI 知道打过电话
+- 引擎/UI 零改动（chat-call.ts 与 voice-call-screen.tsx 未动），仅 wechat.tsx 接线；bunx tsc --noEmit 与 bun run lint 全绿
+---
+Task ID: 29-b
+Agent: general-purpose
+Task: QQ qq.tsx 接入语音通话（入口/浮层/通话卡片/AI 主动发起/重拨）
+
+Work Log:
+- 只改 src/components/apps/qq.tsx 一个文件（chat-call.ts / voice-call-screen.tsx 共享模块零改动；未 commit）；改动前先读 worklog.md 既有记录与两个共享模块全文，确认 useChatCall/ChatCallResult/CallCardState/callResultToCardState/callCardAiText 契约
+- import（142-143）：voice-bubble 行后新增 `./voice-call-screen`（VoiceCallScreen/CallCardBubble/callResultToCardState/callCardAiText/CallCardState）与 `@/lib/ios/chat-call`（ChatCallTurnMsg 类型）
+- QQMsg 类型（281、284-285）：kind 联合类型加 'call'；voice 字段后加 `call?: { state: CallCardState; duration: number; direction: 'out' | 'in' }`
+- msgPreview（387）：voice 分支后加 `if (m.kind === 'call') return '[语音通话]'`（会话列表预览）
+- loadMsgs 规范化（703-718）：任务给的 if-return 片段适配为该函数既有 .map 对象字面量风格——voice 键后加 `call:` 键，state 白名单（cancelled/no-answer/rejected/missed-in/ended）外回退 'ended'，direction 仅认 in/out，duration 非数字整条置 undefined；语义与任务片段一致
+- ChatPage 状态（2115-2117）：gate 后新增 voiceCall（direction）与 callCtx（history/memoryBlock/momentsBlock/timeBlock/multiApp 快照）两个 useState
+- openVoiceCall（2574-2598）：runAiTurn 定义之前新增 useCallback——快照最近 8 条非撤回/非空/非〔〕/非（AI 消息（语音取 transcript→localText→[语音]），组装 memoryBlock（memRecallBlock 'qq' + effectiveInterop）/momentsBlock（buildMomentsChatBlock app:'qq'）/timeBlock（getTimeAware+buildTimeAwareBlock）/multiApp（getMemSettings(peer.id).share），setCallCtx+setVoiceCall；依赖 [msgs, peer, me.name, sessionKey]
+- runAiTurn 改造：①历史 filter（2614）kind 白名单追加 `|| m.kind === 'call'`（与 voice 同级，其余不动）②systemFull（2722）socialRules 与 timeBlock 之间插入【语音通话能力】规则（[语音通话] 标记、偶尔一次）③finalize（2772-2777）if(error) 后、loadMsgs 前剥标记——replyContent=content、wantCall 判定、replace(/\[语音通话\]/g,' ').trim()，extractRichActionParts(content)→(replyContent)（finalize 内唯一 content 消费点）④scheduleAiDelivery(...).then 完（2925-2935）后追加 wantCall 触发：localStorage `qq-vc-last:<peerId>` 5 分钟冷却（Number.isFinite 校验）→ setItem 记时间 → 1200ms 后 openVoiceCall('in')，try/catch 吞 localStorage 异常⑤useCallback 依赖数组（2943）追加 openVoiceCall
+- 加号面板入口（3547-3556）：'call' 项 onClick 由 toast('语音通话暂未开放') 改为 setPlusOpen(false)+openVoiceCall('out')（'video' 保持原 toast 不动）
+- 通话卡片渲染（3852-3861）：消息列表 kind 条件链首位加 `m.kind === 'call' && m.call` 分支——外层 div {...bubblePress}（长按复制/删除/多选等菜单安全可用，copy/quoteContentOf 走 content 文本兜底、收藏 kind 字段为 string 均无需白名单改动）内嵌 CallCardBubble variant="qq"，state==='cancelled' 时 onRedial=openVoiceCall('out')；role=me 右/peer 左随既有容器自动成立
+- 通话浮层（4868-4898）：ChatPage 根 div 内、sttPreview 浮层与 LocalToast 之间加 `{voiceCall && callCtx && <VoiceCallScreen variant="qq" …/>}`——name 用顶栏同一表达式 peer.name、avatar=peer.avatar??null、contact=peer，onEnd 用 callResultToCardState 生成 CallCardState，setMsgs 追加 kind:'call' 消息（id=uid()、role=direction==='out'?'me':'peer'、content=callCardAiText(st,duration)、call={state,duration,direction}；既有 saveMsgs effect（~2399）自动落盘），随后清空 voiceCall/callCtx
+- 校验：bunx tsc --noEmit 全量 0 错误；bun run lint 0 错误（仅 chat-call.ts 既有 1 条 unused eslint-disable warning，属共享模块遗留非本次引入，按约定未动共享模块）；dev.log 编译通过；git status 确认本人仅改动 qq.tsx（wechat.tsx/api/phone/turn 为并行代理改动，未触碰）
+
+Stage Summary:
+- QQ 聊天全链路接入语音通话：加号面板「语音通话」可拨打（深色 QQ 皮肤通话页，麦克风说话→STT→/api/phone/turn→角色音色播报循环）、AI 回复开头带 [语音通话] 标记时剥标记并以 5 分钟冷却弹出来电浮层（25s 未接生成未接听卡片）、通话结束生成 QQ 配色通话卡片（已取消可点击重拨/对方未接听/已拒绝/未接听/通话时长）并随会话持久化，会话列表预览显示 [语音通话]
+- 通话上下文与聊天同源：打开瞬间快照最近 8 条对话 + 记忆召回/QQ 动态感知/时间感知/跨 App 互通开关，AI 按原人设通话；通话卡片消息以可读摘要进入后续聊天上下文
+- 仅改动 src/components/apps/qq.tsx；tsc/lint 全绿，未 commit、未重启 dev server
+---
+Task ID: 29
+Agent: main (Z.ai Code) + 2 parallel subagents (29-a wechat.tsx / 29-b qq.tsx)
+Task: 微信与 QQ 开发语音通话功能（发起/接听/挂断/通话状态/通话交互/通话卡片/音色/权限边界，对照用户 6 张截图）
+
+Work Log:
+- 扩展 /api/phone/turn（buildCallSystemPrompt 增加可选 extraRules 参数，请求体透传 root.extraRules，最多 8 条；电话 App 不传行为不变）
+- 新建 src/lib/ios/chat-call.ts：useChatCall 通话引擎（wx/qq 共用）——状态机 dialing（1.8~3.2s 模拟响铃自动接听）/incoming（25s 未接听对方取消）/active/ended；WebAudio 回铃音/接通/挂断提示音；MediaRecorder 录音→transcribeAudioBlob（与语音消息共用 STT 配置，builtin wav16k/OpenAI multipart）→/api/phone/turn（复用七要素人设+记忆/动态/时间感知块+跨 App 互通，服务端 SDK 兜底，内网 directOnly 走 directChatStream）→speakUserTts（角色 voiceId→全局默认→内置声线，与语音消息共用 TTS 配置）；TTS 失败字幕降级不中断；AI 告别语带〔挂断〕标记→播完自动结束（ai-hangup）；静音/扬声器切换；计时器；卸载/挂断全量释放（录音流/播报/铃声/计时）；formatCallDuration 工具
+- 新建 src/components/apps/voice-call-screen.tsx：VoiceCallScreen 双皮肤——微信（方形圆角头像、顶部居中计时、点按说话/长按静音「麦克风已开/关」、红色挂断、扬声器已开/关、来电页拒绝/接听圆形按钮+「1小时内隐藏他的来电」胶囊、拨号中「等待对方接受邀请」）；QQ（圆形大头像、「正在呼叫…」、接通后时长在按钮上方、四圆角方按钮 菜单/麦克风/扬声器/挂断、菜单底部弹层静音开关、来电页「消息回复」+红色拒绝/绿色接听）；状态区「正在说话/正在听/正在思考…/识别中…」；CallCardBubble 通话卡片（wx 绿/QQ 蓝电话图标；cancelled 可点击重拨）+ callResultToCardState/callCardAiText/文案映射
+- 29-a（wechat.tsx）：WxMsg 加 kind 'call'+call 字段+loadMsgs 规范化；加号面板 voicecall 入口真实打开通话；ChatPage voiceCall/callCtx 状态+openVoiceCall（快照最近 8 条上下文+记忆/朋友圈/时间感知/互通）；通话浮层渲染+onEnd 生成 call 卡片消息落盘；消息列表 CallCardBubble 渲染（cancelled 整卡重拨）；runAiTurn 历史过滤放行 call 卡片进 AI 上下文、人设注入【语音通话能力】[语音通话] 标记规则、finalize 剥标记+5 分钟冷却（wx-vc-last:<id>）触发 AI 来电；readPreview 会话预览 [语音通话]
+- 29-b（qq.tsx）：同构接线（qq 端 localStorage 键 qq-vc-last:<id>，msgPreview 预览分支，'call' 加号入口 qq-plus-call）；补 onMessageReply 接线（来电页「消息回复」→reject 生成已拒绝卡片+回聊天）
+- E2E（agent-browser 实测，wx+qq 双端）：①拨打→接通→AI 打招呼（SDK 兜底）→挂断→卡片「通话时长 00:41」方向正确（我发起右侧/peer 左侧）；②拨号中取消→「已取消，点击重拨 拨打」→点卡片重拨成功；③mock /api/chat 返回 [语音通话] → AI 消息标记剥除干净、来电浮层弹出、微信接听后 AI 先开口；④QQ 菜单静音/取消静音、来电「消息回复」→已拒绝卡片；⑤mock /api/phone/turn 返回告别语+〔挂断〕→播完自动挂断→「通话时长」卡片；⑥无麦环境点麦克风→「麦克风不可用」提示且通话继续；⑦刷新后卡片持久化、会话列表预览「[语音通话]」；⑧回归：文字收发、AI 回复正常
+- 校验：bun run lint 0 错误；bunx tsc --noEmit 0 错误；dev.log 无编译/运行时错误；修复 chat-call.ts 两处 react-hooks 违规（ref 渲染期写入移入 effect、phaseWasConnected 提升为模块级函数）
+
+Stage Summary:
+- 微信与 QQ 均具备完整语音通话：用户从加号面板发起（拨号→AI 自动接听→打招呼→STT/LLM/TTS 循环），AI 可按人设/上下文主动发起来电（[语音通话] 标记+5 分钟冷却）与主动挂断（〔挂断〕标记）；状态机含拨号中/已接通/已取消/已挂断/未接听/已拒绝，计时与状态文案实时显示；静音（微信长按麦克风、QQ 菜单开关）与扬声器可切换
+- 通话结束生成带电话图标的通话卡片持久化在各自聊天里（已取消可点击重拨/对方未接听/已拒绝/未接听/通话时长 MM:SS）；会话列表预览显示 [语音通话]；通话卡片摘要进入后续聊天上下文
+- 音色走角色 voiceId→全局默认→内置声线链路，与语音消息共用 TTS/STT 配置；TTS/STT 失败均不中断通话（字幕/提示降级）；麦克风权限拒绝只影响通话内录音；通话记录持久化、不影响两 App 任何既有功能

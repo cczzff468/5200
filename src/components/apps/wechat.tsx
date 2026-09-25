@@ -203,6 +203,8 @@ import {
   type WxFamilyCard,
   type WxFamilyCardIn,
 } from './wechat-wallet';
+import { VoiceCallScreen, CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
+import type { ChatCallTurnMsg } from '@/lib/ios/chat-call';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -291,8 +293,8 @@ interface WxMsg {
   content: string;
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写） */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice';
+   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向） */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -316,6 +318,8 @@ interface WxMsg {
   gcard?: GroupCardData;
   /** 语音消息（kind='voice'）：音频 dataURL 持久化在聊天记录里，重启后仍可播放 */
   voice?: VoiceMsgData;
+  /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
+  call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -477,6 +481,18 @@ function loadMsgs(contactId: string): WxMsg[] {
               // AI 语音消息字段（synth 合成通道 / contactId 朗读音色归属）：落盘回读必须保留，否则丢失通道信息
               synth: m.voice.synth === 'builtin' || m.voice.synth === 'api' ? m.voice.synth : undefined,
               contactId: typeof m.voice.contactId === 'string' ? m.voice.contactId : undefined,
+            },
+          };
+        }
+        if (m.kind === 'call' && m.call && typeof m.call.duration === 'number') {
+          // 通话卡片规范化（旧记录兼容；state/direction 非法值回退）
+          const st = m.call.state;
+          return {
+            ...m,
+            call: {
+              state: st === 'cancelled' || st === 'no-answer' || st === 'rejected' || st === 'missed-in' || st === 'ended' ? st : 'ended',
+              duration: m.call.duration,
+              direction: m.call.direction === 'in' ? ('in' as const) : ('out' as const),
             },
           };
         }
@@ -712,6 +728,7 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (last.kind === 'family') return { text: '[亲属卡]', time: last.time };
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
   if (last.kind === 'voice') return { text: '[语音]', time: last.time };
+  if (last.kind === 'call') return { text: '[语音通话]', time: last.time };
   if (last.kind === 'location') return { text: '[位置]', time: last.time };
   if (last.kind === 'sticker') return { text: '[表情]', time: last.time };
   if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };
@@ -3602,6 +3619,9 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 加号面板展开（输入框保持在面板上方） */
   const [plusOpen, setPlusOpen] = useState(false);
+  /** 语音通话浮层（out=我拨打 / in=AI 主动打来）；callCtx 为打开时一次性组装的上下文快照 */
+  const [voiceCall, setVoiceCall] = useState<null | { direction: 'out' | 'in' }>(null);
+  const [callCtx, setCallCtx] = useState<null | { history: ChatCallTurnMsg[]; memoryBlock?: string; momentsBlock?: string; timeBlock?: string; multiApp?: boolean }>(null);
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
@@ -3889,6 +3909,32 @@ function ChatPage({
     return unsub;
   }, [sessionKey, peer.id]);
 
+  /** 打开语音通话浮层（加号面板「语音通话」/ 通话卡片重拨 / AI 来电共用）：打开瞬间快照最近上下文 */
+  const openVoiceCall = useCallback(
+    (direction: 'out' | 'in') => {
+      const base = msgs;
+      const history: ChatCallTurnMsg[] = base
+        .filter((m) => !m.recalled && m.content.trim().length > 0 && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+        .slice(-8)
+        .map((m) => ({
+          role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
+          content: m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content,
+        }));
+      const memContext = history.map((h) => h.content).join(' ');
+      setCallCtx({
+        history,
+        memoryBlock: memRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
+        momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer }) || undefined,
+        timeBlock: getTimeAware(sessionKey)
+          ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
+          : '',
+        multiApp: getMemSettings(peer.id).share,
+      });
+      setVoiceCall({ direction });
+    },
+    [msgs, peer, me.name, sessionKey],
+  );
+
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息。
@@ -3900,7 +3946,7 @@ function ChatPage({
       .filter(
         (m) =>
           // 图片以 [图片] 占位、语音以转写文本/占位进入历史（本轮图片实际内容由识图模型描述追加在末尾）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'voice' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -4008,6 +4054,7 @@ function ChatPage({
       quitCtx?.section ?? '',
       kickSection,
       socialRules,
+      '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -4055,8 +4102,12 @@ function ChatPage({
         // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
         //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
         //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
+        // AI 主动发起语音通话：剥除 [语音通话] 标记（5 分钟冷却防骚扰），然后弹出来电浮层
+        let replyContent = content;
+        const wantCall = replyContent.includes('[语音通话]');
+        if (wantCall) replyContent = replyContent.replace(/\[语音通话\]/g, ' ').trim();
         const latest = loadMsgs(peer.id);
-        const parts = extractRichActionParts(content);
+        const parts = extractRichActionParts(replyContent);
         let cur = latest;
         const all: WxMsg[] = [];
         let t = startedAt;
@@ -4202,6 +4253,17 @@ function ChatPage({
               )
             );
         });
+        if (wantCall) {
+          try {
+            const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
+            if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
+              window.localStorage.setItem(`wx-vc-last:${peer.id}`, String(Date.now()));
+              window.setTimeout(() => openVoiceCall('in'), 1200);
+            }
+          } catch {
+            // localStorage 异常忽略
+          }
+        }
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -4209,7 +4271,7 @@ function ChatPage({
       setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
     },
-    [apiConfig, msgs, me, ownerName, peer, contacts, sessionKey]
+    [apiConfig, msgs, me, ownerName, peer, contacts, sessionKey, openVoiceCall]
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 execRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
@@ -5049,7 +5111,13 @@ function ChatPage({
       setCompose('location');
       return;
     }
-    const label: Record<string, string> = { voicecall: '语音通话', videocall: '视频通话', favorite: '收藏' };
+    if (a === 'voicecall') {
+      setPlusOpen(false);
+      setStickerOpen(false);
+      openVoiceCall('out');
+      return;
+    }
+    const label: Record<string, string> = { videocall: '视频通话', favorite: '收藏' };
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
 
@@ -5347,6 +5415,16 @@ function ChatPage({
                 /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方 */
                 <div {...bubblePress}>
                   <VoiceMsgBubble msgId={m.id} voice={m.voice} side={m.role} theme="wx" />
+                </div>
+              ) : m.kind === 'call' && m.call ? (
+                /* 语音通话卡片：微信配色电话卡；拨通前取消的卡整卡可点重拨；长按菜单复制/删除等默认项 */
+                <div {...bubblePress}>
+                  <CallCardBubble
+                    variant="wx"
+                    state={m.call.state}
+                    duration={m.call.duration}
+                    onRedial={m.call.state === 'cancelled' ? () => openVoiceCall('out') : undefined}
+                  />
                 </div>
               ) : m.kind === 'location' && m.loc ? (
                 <div {...bubblePress}>
@@ -6264,6 +6342,38 @@ function ChatPage({
           onSendText={sttPreview.sendText}
           onSendVoice={sttPreview.sendVoice}
           onChangeText={sttPreview.setText}
+        />
+      )}
+
+      {/* 语音通话浮层（加号面板拨打 / 通话卡片重拨 / AI 主动来电；结束时生成通话卡片消息并落盘） */}
+      {voiceCall && callCtx && (
+        <VoiceCallScreen
+          variant="wx"
+          name={peer.name}
+          avatar={peer.avatar ?? null}
+          contact={peer}
+          direction={voiceCall.direction}
+          initialHistory={callCtx.history}
+          memoryBlock={callCtx.memoryBlock}
+          momentsBlock={callCtx.momentsBlock}
+          timeBlock={callCtx.timeBlock}
+          multiApp={callCtx.multiApp}
+          onEnd={(r) => {
+            const st = callResultToCardState(r);
+            setMsgs((prev) => [
+              ...prev,
+              {
+                id: uid(),
+                role: r.direction === 'out' ? 'me' : 'peer',
+                content: callCardAiText(st, r.duration),
+                time: Date.now(),
+                kind: 'call' as const,
+                call: { state: st, duration: r.duration, direction: r.direction },
+              },
+            ]);
+            setVoiceCall(null);
+            setCallCtx(null);
+          }}
         />
       )}
 

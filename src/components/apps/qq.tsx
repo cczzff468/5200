@@ -139,6 +139,8 @@ import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_N
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
+import { VoiceCallScreen, CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
+import type { ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
@@ -276,9 +278,11 @@ interface QQMsg {
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
    *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片 */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq';
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call';
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
   voice?: VoiceMsgData;
+  /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
+  call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
   packet?: MsgPacket;
   /** 位置消息附加数据 */
@@ -380,6 +384,7 @@ function msgPreview(m: QQMsg | undefined): string {
   if (m.kind === 'notice') return m.notice ? `${m.notice.pre}${m.notice.accent}` : '';
   if (m.kind === 'image') return '[图片]';
   if (m.kind === 'voice') return '[语音]';
+  if (m.kind === 'call') return '[语音通话]';
   if (m.kind === 'location') return '[位置]';
   if (m.kind === 'sticker') return '[表情]';
   if (m.kind === 'forward') return m.fwd?.merged ? '[聊天记录]' : m.content;
@@ -693,6 +698,22 @@ function loadMsgs(contactId: string): QQMsg[] {
                 contactId: typeof m.voice.contactId === 'string' && m.voice.contactId ? m.voice.contactId : undefined,
                 transcript: typeof m.voice.transcript === 'string' && m.voice.transcript ? m.voice.transcript : undefined,
                 stt: m.voice.stt === 'pending' || m.voice.stt === 'done' || m.voice.stt === 'failed' ? m.voice.stt : undefined,
+              }
+            : undefined,
+        // 语音通话卡片规范化（kind='call'）：state 白名单外一律回退 ended，direction 仅认 in/out
+        call:
+          m.kind === 'call' && m.call && typeof m.call.duration === 'number'
+            ? {
+                state:
+                  m.call.state === 'cancelled' ||
+                  m.call.state === 'no-answer' ||
+                  m.call.state === 'rejected' ||
+                  m.call.state === 'missed-in' ||
+                  m.call.state === 'ended'
+                    ? m.call.state
+                    : ('ended' as const),
+                duration: m.call.duration,
+                direction: m.call.direction === 'in' ? ('in' as const) : ('out' as const),
               }
             : undefined,
         recalled: m.recalled === true || undefined,
@@ -2091,6 +2112,9 @@ function ChatPage({
   // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置）
   const [layer, setLayer] = useState<ChatLayer>(null);
   const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; packet: MsgPacket; methodId: string }>(null);
+  /** 语音通话浮层（out=我拨打 / in=AI 主动打来）；callCtx 为打开时一次性组装的上下文快照 */
+  const [voiceCall, setVoiceCall] = useState<null | { direction: 'out' | 'in' }>(null);
+  const [callCtx, setCallCtx] = useState<null | { history: ChatCallTurnMsg[]; memoryBlock?: string; momentsBlock?: string; timeBlock?: string; multiApp?: boolean }>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // 原生相机隐藏 input（capture 调起后置摄像头，对齐微信：不再使用自建取景浮层）
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -2547,6 +2571,32 @@ function ChatPage({
     return unsub;
   }, [sessionKey, peer.id]);
 
+  /** 打开语音通话浮层（加号面板「语音通话」/ 通话卡片重拨 / AI 来电共用）：打开瞬间快照最近上下文 */
+  const openVoiceCall = useCallback(
+    (direction: 'out' | 'in') => {
+      const base = msgs;
+      const history: ChatCallTurnMsg[] = base
+        .filter((m) => !m.recalled && m.content.trim().length > 0 && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+        .slice(-8)
+        .map((m) => ({
+          role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
+          content: m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content,
+        }));
+      const memContext = history.map((h) => h.content).join(' ');
+      setCallCtx({
+        history,
+        memoryBlock: memRecallBlock(peer.id, 'qq', memContext, { interopOn: effectiveInterop }) || undefined,
+        momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer }) || undefined,
+        timeBlock: getTimeAware(sessionKey)
+          ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
+          : '',
+        multiApp: getMemSettings(peer.id).share,
+      });
+      setVoiceCall({ direction });
+    },
+    [msgs, peer, me.name, sessionKey],
+  );
+
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息（要一并进上下文与待处理清单）。
@@ -2561,7 +2611,7 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -2669,6 +2719,7 @@ function ChatPage({
       quitCtx?.section ?? '',
       kickSection,
       socialRules,
+      '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -2718,8 +2769,12 @@ function ChatPage({
         // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；先合并被边界切碎的标记，
         //    再解析特殊消息标记（[红包:金额:祝福语]/[转账]/[亲属卡]/[位置]/[表情包:ID]）→ 对应类型的卡片消息
         //    （渲染与交互复用用户手动发送的同款卡片组件）；一条消息一个气泡、一条记录，像真人连发
+        // AI 主动发起语音通话：剥除 [语音通话] 标记（5 分钟冷却防骚扰），然后弹出来电浮层
+        let replyContent = content;
+        const wantCall = replyContent.includes('[语音通话]');
+        if (wantCall) replyContent = replyContent.replace(/\[语音通话\]/g, ' ').trim();
         const latest = loadMsgs(peer.id);
-        const parts = extractRichActionParts(content);
+        const parts = extractRichActionParts(replyContent);
         let cur = latest;
         const all: QQMsg[] = [];
         let t = startedAt;
@@ -2867,6 +2922,17 @@ function ChatPage({
               )
             );
         });
+        if (wantCall) {
+          try {
+            const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
+            if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
+              window.localStorage.setItem(`qq-vc-last:${peer.id}`, String(Date.now()));
+              window.setTimeout(() => openVoiceCall('in'), 1200);
+            }
+          } catch {
+            // localStorage 异常忽略
+          }
+        }
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -2874,7 +2940,7 @@ function ChatPage({
       if (userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
     },
-    [msgs, peer, me, apiConfig, ownerName, contacts, sessionKey]
+    [msgs, peer, me, apiConfig, ownerName, contacts, sessionKey, openVoiceCall]
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 sendRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
@@ -3478,7 +3544,16 @@ function ChatPage({
 
   // 加号面板五宫格（对照需求：语音通话/视频通话/红包/转账/位置；图片入口已移除）
   const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
-    { key: 'call', label: '语音通话', color: '#2FBF71', icon: <Phone className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('语音通话暂未开放') },
+    {
+      key: 'call',
+      label: '语音通话',
+      color: '#2FBF71',
+      icon: <Phone className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        setPlusOpen(false);
+        openVoiceCall('out');
+      },
+    },
     { key: 'video', label: '视频通话', color: '#1B9FF0', icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('视频通话暂未开放') },
     {
       key: 'rp',
@@ -3774,7 +3849,17 @@ function ChatPage({
                 {!mine && <QqAvatar src={peer.avatar} alt={peer.name} size={40} />}
                 {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧 */}
                 {mine && blockedIconOf(m)}
-                {m.kind === 'redpacket' && m.packet ? (
+                {m.kind === 'call' && m.call ? (
+                  /* 语音通话卡片（通话结束后插入聊天记录）：已取消（点击重拨）/ 对方未接听 / 已拒绝 / 未接听 / 通话时长 */
+                  <div {...bubblePress}>
+                    <CallCardBubble
+                      variant="qq"
+                      state={m.call.state}
+                      duration={m.call.duration}
+                      onRedial={m.call.state === 'cancelled' ? () => openVoiceCall('out') : undefined}
+                    />
+                  </div>
+                ) : m.kind === 'redpacket' && m.packet ? (
                   <div {...bubblePress}>
                     <RedPacketBubble
                       packet={m.packet}
@@ -4777,6 +4862,43 @@ function ChatPage({
           onSendText={sttPreview.sendText}
           onSendVoice={sttPreview.sendVoice}
           onChangeText={sttPreview.setText}
+        />
+      )}
+
+      {/* 语音通话浮层（加号面板「语音通话」/ 通话卡片重拨 / AI 主动来电共用；结束后生成通话卡片并落盘） */}
+      {voiceCall && callCtx && (
+        <VoiceCallScreen
+          variant="qq"
+          name={peer.name}
+          avatar={peer.avatar ?? null}
+          contact={peer}
+          direction={voiceCall.direction}
+          initialHistory={callCtx.history}
+          memoryBlock={callCtx.memoryBlock}
+          momentsBlock={callCtx.momentsBlock}
+          timeBlock={callCtx.timeBlock}
+          multiApp={callCtx.multiApp}
+          onEnd={(r) => {
+            const st = callResultToCardState(r);
+            setMsgs((prev) => [
+              ...prev,
+              {
+                id: uid(),
+                role: r.direction === 'out' ? 'me' : 'peer',
+                content: callCardAiText(st, r.duration),
+                time: Date.now(),
+                kind: 'call' as const,
+                call: { state: st, duration: r.duration, direction: r.direction },
+              },
+            ]);
+            setVoiceCall(null);
+            setCallCtx(null);
+          }}
+          onMessageReply={() => {
+            // 来电页「消息回复」：拒绝通话回到聊天（生成「已拒绝」卡片），用文字消息继续聊
+            setVoiceCall(null);
+            setCallCtx(null);
+          }}
         />
       )}
 
