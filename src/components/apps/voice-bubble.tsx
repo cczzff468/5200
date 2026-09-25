@@ -19,12 +19,14 @@ import { voiceDurationLabel } from '@/lib/ios/audio-utils';
 
 /** 语音消息数据（各端消息结构统一挂 m.voice） */
 export interface VoiceMsgData {
-  /** 音频 dataURL（持久化在聊天记录里，重启后仍可播放） */
+  /** 音频 dataURL（持久化在聊天记录里，重启后仍可播放）；文字转语音消息为空串 */
   url: string;
   /** 秒（≥1） */
   duration: number;
   /** 静态波形（0~1，约 20 根；录音时真实振幅采样） */
   wave: number[];
+  /** 本地合成朗读原文（文字转语音消息；播放时走浏览器 speechSynthesis，无需语音 API） */
+  localText?: string;
   /** 转文字结果（长按「转文字」后写入 / 文字转语音的原文） */
   transcript?: string;
   /** pending = 识别中；done = 有结果；failed = 识别失败（可长按重试） */
@@ -169,7 +171,7 @@ export function VoiceMsgBubble({
         aria-label={isPlaying ? '暂停语音' : '播放语音'}
         onClick={(e) => {
           e.stopPropagation();
-          voicePlayer.toggle(msgId, voice.url);
+          voicePlayer.toggle(msgId, voice.url, voice.localText);
         }}
         className={`flex select-none items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
           isWx ? 'h-[44px] gap-[4px] px-[6px]' : 'h-[40px] gap-[4px] px-[6px]'

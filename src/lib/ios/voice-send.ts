@@ -1,49 +1,39 @@
 /**
  * 文字转语音发送（不想说话时：输入文字 → 发出语音气泡）共用链路：
- * - 音色：全局默认音色（defaultVoiceId）→ 服务商安全默认音色（「我」的声音，不用角色 voiceId）
- * - TTS 配置未配置 → 抛「请先配置语音 API」（调用方 toast，不影响文字聊天）
- * - 成功返回 dataURL + 时长 + 波形；失败抛中文错误（不回显 Key）
+ * - **无需配置语音 API**：使用浏览器内置语音合成（speechSynthesis）本地朗读，
+ *   消息里持久化原文（localText），播放时即时合成，重启后仍可播放
+ * - 时长按字数估算（约 4 字/秒）；波形由文本哈希生成（与语音气泡波形同款）
+ * - 文本清洗后为空 → 抛「没有可转语音的内容」（调用方 toast，不影响文字聊天）
  */
 
-import { blobToDataUrl, hashWaveBars, measureAudioDuration } from './audio-utils';
-import { cleanTextForTts, isTtsConfigured } from './tts-client';
-import { SAFE_VOICE_BY_PROVIDER, useSettings } from './store';
+import { hashWaveBars } from './audio-utils';
+import { cleanTextForTts } from './tts-client';
 
 export interface SelfVoiceClip {
+  /** 本地合成无音频文件：url 恒为空字符串，播放器见到 localText 即走 speechSynthesis */
   dataUrl: string;
+  /** 秒（≥1，按字数估算） */
   duration: number;
+  /** 静态波形（0~1，22 根，文本哈希生成） */
   wave: number[];
+  /** 本地朗读原文（持久化在消息里，播放/重启后仍可合成） */
+  localText: string;
+}
+
+/** 本地朗读时长估算（约 4 字/秒，至少 1 秒）——消息里存的 duration 与播放进度共用同一公式 */
+export function estimateSpeakDuration(text: string): number {
+  return Math.max(1, Math.round(text.length / 4));
 }
 
 export async function synthesizeSelfVoice(text: string): Promise<SelfVoiceClip> {
-  const cfg = useSettings.getState().ttsConfig;
-  if (!isTtsConfigured(cfg)) {
-    throw new Error('请先配置语音 API');
-  }
-  const cleaned = cleanTextForTts(text);
+  const cleaned = cleanTextForTts(text).slice(0, 400);
   if (!cleaned) {
     throw new Error('没有可转语音的内容');
   }
-  const voiceId = cfg.defaultVoiceId.trim() || SAFE_VOICE_BY_PROVIDER[cfg.provider] || 'alloy';
-  const res = await fetch('/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config: cfg, voiceId, text: cleaned.slice(0, 900), speed: 1 }),
-  });
-  if (!res.ok) {
-    let msg = '语音生成失败';
-    try {
-      const j = (await res.json()) as { error?: string } | null;
-      if (j?.error) msg = j.error;
-    } catch {
-      // 非 JSON 错误体用默认文案
-    }
-    throw new Error(msg);
-  }
-  const blob = await res.blob();
-  const dataUrl = await blobToDataUrl(blob);
-  // 时长：优先读音频元数据；拿不到按字数估算（约 4 字/秒）
-  const duration = await measureAudioDuration(dataUrl, Math.max(1, Math.round(cleaned.length / 4)));
-  const wave = hashWaveBars(cleaned, 22);
-  return { dataUrl, duration, wave };
+  return {
+    dataUrl: '',
+    duration: estimateSpeakDuration(cleaned),
+    wave: hashWaveBars(cleaned, 22),
+    localText: cleaned,
+  };
 }
