@@ -7796,3 +7796,22 @@ Stage Summary:
 - 修改文件：src/app/api/phone/followup/route.ts（新增）、src/lib/ios/call-followup.ts（新增）、src/lib/ios/chat-call.ts、src/lib/ios/global-call.ts、src/components/ios/GlobalCallLayer.tsx、src/components/apps/voice-call-screen.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/phone.tsx
 - 关键决策：①续聊与挂断总结串行化（文字先入转写再总结）保证「通话+续聊」单次提取互通且不与 inflight guard 冲突；②direction out+reject/no-answer 不走 followup（决策 afterText 已覆盖，防双发）；③电话 App 续聊复用语音留言形态（无聊天面板，与拒接解释同机制、未读红点+toast）；④recentChatRef 用发起时快照避免通话轮次污染「最近聊天」上下文；⑤多端验证发现 headless 下 requestAnimationFrame 不跑导致 openApp 卡 'opening'（窗口 opacity 不可见但可命中）——E2E 用页面内合成 PointerEvent+innerText 全文检索规避
 - 测试技巧沉淀：微信联系人列表显示昵称（小雨）非真名（林小雨），IndexedDB 断言需按昵称；React 合成事件可经 el.dispatchEvent(new PointerEvent(...,{bubbles:true})) 直接触发（CDP 真实鼠标事件被自绘层 hit-test 干扰时用此法）；锁屏解锁/翻页/点图标全程可用合成 PointerEvent 完成
+
+---
+Task ID: 11
+Agent: Z.ai Code (main)
+Task: 挂断续聊条数接入聊天设置「回复条数」+ 排查预览不显示
+
+Work Log:
+- 排查「预览不显示」：dev 服务器已停止（3000 端口无监听）→ 后台重启 bun run dev，恢复 ✓ Ready
+- 全库检索「1~2条」Prompt 硬约束：仅存在于第八轮挂断续聊链路（route + 客户端解析）；其余「一两句/1~2 句」为单条消息长度提示/话量控制，不属于条数硬约束，保持不动
+- /api/phone/followup：新增 replyCount 入参（非法回退 2）；Prompt 改为「最多 N 条——上限不是任务，没话可以少发，哪怕只发 1 条」；JSON 输出说明随 N 动态；normalizeFollowup 上限从 2 改为 N；callUpstream maxTokens 抬至 max(config, N×250) 防截断
+- call-followup.ts：payload 增加 replyCount；followupMax 收窄 [1,30] 回退 2；parseFollowupText(raw, max) 与响应截断同步放开
+- chat-call.ts（微信/QQ 通话）：followupAndSummarize 按 sessionKey 现场读 getReplyCount('wx:<id>'/'qq:<id>') 直传（与文字聊天同一份设置）
+- phone.tsx（电话 App）：读 getReplyCount('sms:c:<id>', 1) 直传（与信息 App 同会话同回退）
+- 验证：bun run lint 通过；Agent Browser 实测锁屏→解锁→微信→聊天→聊天设置→回复条数页正常（小雨=5 条）；API 实测 replyCount:5→发 3 条、不传→2 条（旧行为）、replyCount:1→1 条
+- commit df0b14e 推送 origin main ✓
+
+Stage Summary:
+- 挂断续聊条数硬约束「1~2 条」全部移除，改为该会话聊天设置「回复条数」为上限、没话可少发；三端（微信/QQ/电话）各按自己会话的设置取值并按角色 ID 隔离
+- 「预览不显示」根因是 dev 服务器进程消失（非代码问题），已重启恢复
