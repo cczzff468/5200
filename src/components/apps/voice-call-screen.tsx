@@ -12,10 +12,10 @@
  *   来电页「邀请你语音通话」+「消息回复」+ 红挂断/绿接听圆角方按钮；长按麦克风静音。
  *
  * - 状态区：「正在说话」「正在听」「正在思考…」「识别中…」等。
- * - 通话字幕（居中单句，实时）：我说的话录音中经 Web Speech 增量识别逐字上屏（白字），松手识别
+ * - 通话字幕（单句弹幕，实时）：我说的话录音中经 Web Speech 增量识别逐字上屏（白字），松手识别
  *   完成后整句定格；AI 说的话在 TTS 播报的同时按播放进度逐字揭示（柔白字）；屏幕同一时刻只显示
- *   一句、位于头像名字上方的中部区域——任何人开新的一句，上一句立即消失（用户需求：字幕在中间，
- *   单句呈现、字号加大，我白 / AI 柔白居中对齐）。
+ *   一句、位于头像名字下方——任何人开新的一句，上一句立即消失（用户需求：头像名字居中，
+ *   字幕在其下方，单句呈现、字号加大，我白 / AI 柔白居中对齐）。
  * - 通话中文字聊天：接通后右上角信息图标开关——底部三个按钮上方出现内联输入条（消息区+输入框），
  *   开启期间字幕隐藏（用户需求）；AI 配置了第三方语音 API → 语音回复（TTS），没配 → 文字回复
  *   （消息区气泡）；关闭输入条字幕恢复，通话不断；QQ 电话同样。
@@ -169,7 +169,7 @@ function CaptionLine({ mine, children }: { mine: boolean; children: ReactNode })
 }
 
 /**
- * 通话字幕（居中单句；宿主用固定高度容器包裹，内容垂直水平居中、超高内部滚动并自动滚底）：
+ * 通话字幕（单句弹幕；宿主把容器放在头像名字下方，超高内部滚动并自动滚底）：
  * - 我说的话：录音中 Web Speech 增量识别逐字上屏（liveHeard，白字），识别完成后整句定格；
  * - AI 说的话：TTS 播报的同时按播放进度逐字揭示（aiReveal，柔白字），播完整句定格；
  * - 同一时刻只渲染当前活跃的一句（liveHeard 优先 → chatLog 最后一条）：
@@ -386,15 +386,8 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：接通后字幕单句居中在中部、头像名字往下（用户反馈）；拨号/来电保持头像名字居中 */}
+      {/* 中部：头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（用户反馈） */}
       <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-9">
-        <div className="min-h-4 flex-1" aria-hidden="true" />
-        {phase === 'active' && (
-          <div className="flex h-[128px] min-h-[44px] w-full shrink items-center justify-center overflow-hidden">
-            {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
-            {!textChatOpen && <CaptionStream variant="wx" call={call} />}
-          </div>
-        )}
         <div className="min-h-4 flex-1" aria-hidden="true" />
         <div className="relative mt-1">
           {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-[16px] bg-white/10" aria-hidden="true" />}
@@ -405,6 +398,17 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
           {statusLine(phase, status, 'wx')}
         </p>
         {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
+        {phase === 'active' ? (
+          <div
+            className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
+            aria-label="通话字幕"
+          >
+            {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
+            {!textChatOpen && <CaptionStream variant="wx" call={call} />}
+          </div>
+        ) : (
+          <div className="min-h-4 flex-1" aria-hidden="true" />
+        )}
       </div>
 
       {/* 通话中文字聊天输入条（信息图标开关；三按钮上方出现，字幕隐藏中） */}
@@ -557,15 +561,8 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：接通后字幕单句居中在中部、头像名字往下（与微信皮肤一致）；拨号/来电保持头像名字居中 */}
+      {/* 中部：头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（与微信皮肤一致） */}
       <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">
-        <div className="min-h-4 flex-1" aria-hidden="true" />
-        {phase === 'active' && (
-          <div className="flex h-[128px] min-h-[44px] w-full shrink items-center justify-center overflow-hidden">
-            {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
-            {!textChatOpen && <CaptionStream variant="qq" call={call} />}
-          </div>
-        )}
         <div className="min-h-4 flex-1" aria-hidden="true" />
         <div className="relative">
           {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />}
@@ -576,6 +573,17 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
           {statusLine(phase, status, 'qq')}
         </p>
         {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
+        {phase === 'active' ? (
+          <div
+            className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
+            aria-label="通话字幕"
+          >
+            {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
+            {!textChatOpen && <CaptionStream variant="qq" call={call} />}
+          </div>
+        ) : (
+          <div className="min-h-4 flex-1" aria-hidden="true" />
+        )}
       </div>
 
       {/* 通话中文字聊天输入条（信息图标开关；三按钮上方出现，字幕隐藏中） */}

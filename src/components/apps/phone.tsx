@@ -46,7 +46,7 @@ import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
-import { isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
+import { hasCustomTtsApi, isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -61,10 +61,14 @@ import type { ContactRecord } from '@/lib/contacts';
  * - 语音留言：列表只显示联系人/类型/时长（不剧透内容），点行进详情页回看完整谈话内容；
  *   拨号中挂断（对方未接听）自动生成对端留言；已接通挂断自动存档整通对话内容（kind='call'，永久保存），
  *   TTS 播报 / 已读未读 / 删除，未读数红点角标
- * - 通话全屏层：深色渐变 + 大头像 + 状态 + 逐句字幕气泡 + 六宫格控制（静音/键盘/扬声器…，打字输入时自动收起）+ 红色挂断
+ * - 通话全屏层：深色渐变 + 大头像/名字居中 + 单句弹幕字幕（微信同款：同一时刻只显示最新一句、
+ *   位于名字下方，新句出现旧句消失；文字聊天开启时隐藏）+ 六宫格控制（静音/键盘/扬声器…，
+ *   文字聊天时收起）+ 红色挂断
  * - AI 语音通话：点按说话 → 录音 → /api/phone/asr 识别 → /api/phone/turn（统一使用设置 App
  *   「API 设置」里配置的模型，按联系人人设回应；公网由服务器转发、内网自动浏览器直连，无内置模型）
  *   → /api/phone/tts 合成语音播放；麦克风不可用/识别失败可切换键盘文字输入
+ * - 通话中文字聊天：麦克风左侧信息图标开关——输入框出现在说话钮上方（消息区只显示文字轮次，
+ *   最近 8 条）；开启期间字幕隐藏；AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（消息区气泡）
  * - 音效：呼叫等待回铃音（450Hz 中国铃流节奏）、接通提示音、挂断提示音，全部 WebAudio 合成
  * - 通话记录持久化 IndexedDB call-logs（DB v3），语音留言持久化 voicemails（DB v4），个人收藏持久化 settings key=phoneFavorites
  */
@@ -82,6 +86,8 @@ interface CallBubble {
   text: string;
   /** 字幕产生时间（epoch ms）—— 时间感知用它计算通话内的说话间隔 */
   t: number;
+  /** 轮次渠道：'text' = 通话中文字聊天（消息区呈现）；undefined = 语音轮次（字幕呈现） */
+  via?: 'text';
 }
 
 const KEYS: { digit: string; letters: string }[] = [
@@ -516,6 +522,8 @@ function CallScreen({
 
   const endedRef = useRef(false);
   const emptyRef = useRef(false);
+  /** 文字聊天模式（信息图标开关）：回复形态判定用 ref（回调内读最新值，与微信 useChatCall 一致） */
+  const textModeRef = useRef(false);
   const ringRef = useRef<RingbackTone | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -524,7 +532,7 @@ function CallScreen({
   const secondsRef = useRef(0);
   const phaseRef = useRef<CallPhase>('dialing');
   const bubblesRef = useRef<CallBubble[]>([]);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const setCallActive = useUI((s) => s.setCallActive);
   // 设置 App「API 设置」里的 OpenAI 兼容接口配置（通话 AI 对话走该配置）
@@ -534,6 +542,7 @@ function CallScreen({
 
   phaseRef.current = phase;
   bubblesRef.current = bubbles;
+  textModeRef.current = textMode;
 
   const contact = target.contact;
   const gender = useMemo(() => contactGender(contact), [contact]);
@@ -595,21 +604,21 @@ function CallScreen({
     [contact?.id, gender, speaker]
   );
 
-  /** 发起一轮 AI 对话（userText = 用户刚说的话；greeting = 接通问候） */
+  /** 发起一轮 AI 对话（userText = 用户刚说的话；greeting = 接通问候；via='text' = 文字聊天轮次） */
   const runTurn = useCallback(
-    async (userText: string | null) => {
+    async (userText: string | null, userVia?: 'text') => {
       setError('');
       // 自己的号码（user）：对方不说话、也不用回复 —— 发出去的话只留字幕
       if (contact?.kind === 'user') {
         if (userText) {
-          setBubbles((b) => [...b, { id: genId(), role: 'user' as const, text: userText, t: Date.now() }]);
+          setBubbles((b) => [...b, { id: genId(), role: 'user' as const, text: userText, t: Date.now(), via: userVia }]);
         }
         setPeerStatus('listening');
         return;
       }
       setPeerStatus('thinking');
       const historyBefore: CallBubble[] = userText
-        ? [...bubblesRef.current, { id: genId(), role: 'user' as const, text: userText, t: Date.now() }]
+        ? [...bubblesRef.current, { id: genId(), role: 'user' as const, text: userText, t: Date.now(), via: userVia }]
         : bubblesRef.current;
       if (userText) {
         setBubbles((b) => [...b, historyBefore[historyBefore.length - 1]]);
@@ -740,9 +749,16 @@ function CallScreen({
               setPeerStatus('listening');
               return;
             }
-            setBubbles((b) => b.map((x) => (x.id === bubbleId ? { ...x, text: reply } : x)));
+            // 回复形态：文字聊天开着且没配语音 API → 文字回复；其余（语音轮次 / 配了语音 API）都播报
+            const asText = textModeRef.current && !hasCustomTtsApi();
+            setBubbles((b) => b.map((x) => (x.id === bubbleId ? { ...x, text: reply, via: asText ? ('text' as const) : x.via } : x)));
             memorizeTurn(reply);
-            await speak(reply);
+            if (asText) {
+              // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
+              setPeerStatus('listening');
+            } else {
+              await speak(reply);
+            }
           } catch (err) {
             if (endedRef.current) return;
             setBubbles((b) => b.filter((x) => x.id !== bubbleId));
@@ -757,9 +773,19 @@ function CallScreen({
           return;
         }
         const reply = data.reply;
-        setBubbles((b) => [...b, { id: genId(), role: 'assistant', text: reply, t: Date.now() }]);
+        // 回复形态：文字聊天开着且没配语音 API → 文字回复；其余（语音轮次 / 配了语音 API）都播报
+        const asText = textModeRef.current && !hasCustomTtsApi();
+        setBubbles((b) => [
+          ...b,
+          { id: genId(), role: 'assistant' as const, text: reply, t: Date.now(), ...(asText ? { via: 'text' as const } : {}) },
+        ]);
         memorizeTurn(reply);
-        await speak(reply);
+        if (asText) {
+          // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
+          setPeerStatus('listening');
+        } else {
+          await speak(reply);
+        }
       } catch (err) {
         if (!endedRef.current) {
           const msg = err instanceof Error && err.message ? err.message : '';
@@ -944,11 +970,11 @@ function CallScreen({
     return () => window.clearInterval(timer);
   }, [phase]);
 
-  // 字幕自动滚到底
+  // 文字聊天消息区自动滚到底
   useEffect(() => {
-    const el = scrollRef.current;
+    const el = textListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [bubbles, phase]);
+  }, [bubbles, textMode, busy]);
 
   // 开始/停止录音
   const toggleRecording = useCallback(async () => {
@@ -1028,7 +1054,7 @@ function CallScreen({
     const text = draft.trim();
     if (!text || phase !== 'connected' || busy) return;
     setDraft('');
-    void runTurn(text);
+    void runTurn(text, 'text'); // 文字聊天轮次：AI 按是否配置语音 API 决定语音/文字回复
   }, [draft, phase, busy, runTurn]);
 
   const statusText = (): string => {
@@ -1043,8 +1069,12 @@ function CallScreen({
 
   // 陌生号码：标题直接显示拨打的号码（iOS 一致）；空号后状态行提示
   const name = contact?.name || formatNumber(target.number);
-  /** 正在打字输入：静音/键盘/扬声器等六宫格按钮自动消失，给软键盘腾地方 */
-  const typing = textMode && (inputFocused || draft.trim().length > 0);
+  /** 最新一句字幕（单句弹幕：新句出现旧句消失） */
+  const lastBubble = bubbles.length > 0 ? bubbles[bubbles.length - 1] : null;
+  /** 文字聊天消息区：只显示文字轮次（via='text'） */
+  const textMsgs = bubbles.filter((b) => b.via === 'text');
+  /** 文字聊天模式：六宫格收起给消息区+输入框腾地方，关闭后恢复 */
+  const controlsCollapsed = textMode;
   const controlBtn = (icon: React.ReactNode, label: string, active: boolean, onClick: () => void, disabled = false) => (
     <button
       type="button"
@@ -1073,8 +1103,9 @@ function CallScreen({
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.08),transparent_55%)]" />
 
-      {/* 顶部：头像 + 名字 + 状态 */}
-      <div className="relative z-10 flex flex-col items-center px-6 pb-2 pt-[74px]">
+      {/* 中部：头像 + 名字 + 状态居中（上下对称弹性区），单句弹幕字幕在名字下方（微信同款） */}
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center px-6 pb-2 pt-[74px]">
+        <div className="min-h-2 flex-1" aria-hidden="true" />
         <div className="relative">
           {phase === 'dialing' && !emptyNumber && (
             <span className="absolute inset-0 animate-ping rounded-full bg-white/20" aria-hidden="true" />
@@ -1108,24 +1139,27 @@ function CallScreen({
             {error}
           </p>
         )}
-      </div>
-
-      {/* 字幕区 */}
-      <div ref={scrollRef} className="relative z-10 flex-1 space-y-2 overflow-y-auto no-scrollbar px-5 py-3" aria-label="通话字幕">
-        {bubbles.length === 0 && phase === 'dialing' && !emptyNumber && (
-          <p className="mt-6 text-center text-[13px] text-white/40">等待对方接听…</p>
-        )}
-        {bubbles.map((m) => (
-          <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <p
-              className={`max-w-[78%] rounded-[18px] px-3.5 py-2 text-[14.5px] leading-snug ${
-                m.role === 'user' ? 'rounded-br-[6px] bg-[#34C759]/25 text-white' : 'rounded-bl-[6px] bg-white/12 text-white/95'
-              }`}
-            >
-              {m.text}
-            </p>
+        {/* 字幕区：单句弹幕（只显示最新一句，新句出现旧句消失）；文字聊天开着时隐藏（占位保留布局稳定） */}
+        {phase !== 'dialing' && !textMode ? (
+          <div
+            className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-2 pt-3"
+            aria-label="通话字幕"
+            data-testid="call-captions"
+          >
+            {lastBubble && (
+              <p
+                key={lastBubble.id}
+                className={`animate-call-caption w-full whitespace-pre-wrap break-words text-center text-[17px] leading-[1.6] ${
+                  lastBubble.role === 'user' ? 'text-white' : 'text-white/60'
+                }`}
+              >
+                {lastBubble.text}
+              </p>
+            )}
           </div>
-        ))}
+        ) : (
+          <div className="min-h-2 flex-1" aria-hidden="true" />
+        )}
       </div>
 
       {/* 通话中 DTMF 键盘浮层 */}
@@ -1159,14 +1193,14 @@ function CallScreen({
         </div>
       )}
 
-      {/* 控制区（打字输入时自动收起，六宫格按钮消失） */}
+      {/* 控制区（文字聊天/打字输入时自动收起，六宫格按钮消失） */}
       <div
         className={`relative z-10 shrink-0 overflow-hidden px-8 transition-all duration-300 ease-out ${
-          typing
+          controlsCollapsed
             ? 'pointer-events-none max-h-0 -translate-y-2 scale-[0.98] opacity-0'
             : 'max-h-[240px] translate-y-0 scale-100 opacity-100'
         }`}
-        aria-hidden={typing}
+        aria-hidden={controlsCollapsed}
       >
         {phase !== 'ended' && (
           <div className="grid grid-cols-3 gap-y-5 pb-1">
@@ -1183,27 +1217,62 @@ function CallScreen({
       {/* 说话/文字输入 + 挂断 */}
       <div className="relative z-10 shrink-0 px-5 pb-[30px] pt-2">
         {phase === 'connected' && textMode && (
-          <div className="mb-2.5 flex items-center gap-2">
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && sendText()}
-              onFocus={() => setInputFocused(true)}
-              onBlur={() => setInputFocused(false)}
-              placeholder="输入要说的话…"
-              maxLength={200}
-              className="h-[42px] flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-white/40 focus:border-white/45"
-            />
-            <button
-              type="button"
-              onClick={sendText}
-              disabled={!draft.trim() || busy}
-              aria-label="发送"
-              className="flex h-[42px] w-[42px] items-center justify-center rounded-full bg-white text-black transition-opacity active:opacity-60 disabled:opacity-40"
-            >
-              <ArrowUpRight className="h-5 w-5" />
-            </button>
+          <div className="mb-2.5">
+            {/* 文字聊天消息区：只显示文字轮次（via='text'），最近 8 条，超高滚动；回应中三点动画 */}
+            {(textMsgs.length > 0 || busy) && (
+              <div ref={textListRef} className="no-scrollbar mx-1 mb-2 flex max-h-[132px] flex-col gap-1.5 overflow-y-auto">
+                {textMsgs.slice(-8).map((m) => (
+                  <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <p
+                      className={`max-w-[78%] whitespace-pre-wrap break-words px-3.5 py-2 text-[14.5px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
+                        m.role === 'user'
+                          ? 'rounded-[16px] rounded-br-[5px] bg-[#34C759] text-white'
+                          : 'rounded-[16px] rounded-bl-[5px] bg-white/15 text-white/95'
+                      }`}
+                    >
+                      {m.text}
+                    </p>
+                  </div>
+                ))}
+                {busy && (
+                  <div className="flex justify-start">
+                    <p
+                      className="flex items-center gap-1.5 rounded-[16px] rounded-bl-[5px] bg-white/15 px-3.5 py-2.5"
+                      aria-label="对方正在回应"
+                    >
+                      {[0, 150, 300].map((d) => (
+                        <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/60" style={{ animationDelay: `${d}ms` }} />
+                      ))}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && sendText()}
+                onFocus={() => setInputFocused(true)}
+                onBlur={() => setInputFocused(false)}
+                placeholder="输入要说的话…"
+                maxLength={200}
+                aria-label="输入要说的话"
+                data-testid="call-textbar-input"
+                className="h-[42px] flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-white/40 focus:border-white/45"
+              />
+              <button
+                type="button"
+                onClick={sendText}
+                disabled={!draft.trim() || busy}
+                aria-label="发送"
+                data-testid="call-textbar-send"
+                className="flex h-[42px] w-[42px] items-center justify-center rounded-full bg-white text-black transition-opacity active:opacity-60 disabled:opacity-40"
+              >
+                <ArrowUpRight className="h-5 w-5" />
+              </button>
+            </div>
           </div>
         )}
 

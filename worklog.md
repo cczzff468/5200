@@ -7579,3 +7579,22 @@ Stage Summary:
 - 通话字幕改为单句居中模式：同一时刻只显示一句、新句出现旧句消失（WX/QQ 一致），字号加大至 17px 居中排布，头像名字下沉、字幕占屏幕中部
 - 通话文字聊天改造完成：信息图标开关内联输入条（三按钮上方），开启时字幕隐藏；AI 配置了语音 API → TTS 语音回复，没配 → 文字回复进消息区；TTS 失败自动降级文字；关闭输入条字幕恢复、通话不中断
 - 语音模式行为保持：未配第三方 API 时语音通话仍走内置引擎播报（hasCustomTtsApi 只影响文字条场景），既有语音链路零破坏
+---
+Task ID: 12
+Agent: Z.ai Code (main)
+Task: 字幕回到头像名字下方（头像名字居中）+ 电话 APP 通话页加微信同款单句弹幕字幕与文字聊天（配语音 API 语音回复/否则文字回复）
+
+Work Log:
+- voice-call-screen.tsx（WX/QQ 双皮肤）中部布局再重排：改为「上弹性区 → 头像 → 名字 → 状态 → 字幕区(flex-1，接通时)」，头像+名字在上下两个弹性区之间垂直居中；单句字幕区（min-h-44px、顶部对齐 pt-4）从名字/状态正下方开始往下——用户需求「头像名字在中间，字幕在头像名字下面」；文字条开着时字幕区仍占位但不渲染内容（布局稳定、字幕隐藏）；非接通态保持对称弹性区居中
+- phone.tsx CallScreen 同构改造（用户需求「电话APP也添加弹幕字幕，和微信一样」）：删除旧的累积字幕气泡列表（逐句左/右气泡+滚动）与 scrollRef，中部改为头像/名字/状态居中 + 单句字幕区（17px 居中、animate-call-caption 弹跳、我白/AI 柔白），key=最新 bubble.id（流式 directOnly 时同 key 文字渐长，新句 key 变化自动替换旧句=「一句显示以后下一句出现旧句消失」）；删「等待对方接听…」提示（状态行「正在呼叫…」已覆盖）
+- phone.tsx 文字聊天：CallBubble 增加 via?: 'text'；runTurn 增加 userVia 参数（sendText 传 'text'，语音轮次不带）；回复形态 asText = textModeRef.current && !hasCustomTtsApi()（与微信 useChatCall 完全同构）——文字聊天开着且没配语音 API → 文字回复（via='text'，不出声）；配了语音 API → 语音回复（speak()：speakUserTts 走用户 API，失败回退内置 /api/phone/tts，不影响字幕链路）；信息图标（麦克风左侧 MessageSquare）开合 textMode：开启时字幕隐藏、六宫格收起（controlsCollapsed=textMode，关闭后恢复）、消息区（via='text' 最近 8 条+回应中三点动画，iOS 绿/灰气泡）+输入框出现在说话钮上方
+- 电话通话记录/语音留言转写不受影响：bubbles 数据仍记录全部轮次（含文字轮次），挂断转写照旧
+- E2E（agent-browser 实机）：①微信：登录(手机号13800138000/a123456)→添加好友 xiaoyu_wx→发起通话→接通后头像名字居中、greeting 单句字幕在名字下方（nameBottom=458 < capTop=501、capChildren=1、17px、水平居中）→点信息图标 textbar 出现+字幕隐藏(aria-pressed=true)→发「周末有空一起看电影吗」→AI 文字回复「好啊！你想看什么类型的电影呀？」进消息区（未配 API）→关闭信息图标→字幕恢复且只显示最新一句→挂断落卡「通话时长 02:49」②电话 APP：键盘拨 13900000002（须给注入联系人补 isFriend=true 才会匹配联系人）→接通后头像名字居中、字幕「喂，小明呀！最近怎么样？」在名字下方（347<370、单句）→点麦克风左侧信息图标→字幕隐藏+六宫格收起+输入框出现→发「今晚一起吃饭吗」→AI 文字回复「好啊！去哪儿吃呀？」进消息区→关字幕恢复③配假 OpenAI 兼容 TTS API(provider=openai/baseUrl=127.0.0.1:9)→重拨→文字聊天发「明天周末去哪里玩」→dev.log 出现 POST /api/phone/turn 200 → POST /api/tts 502（用户 API 尝试）→ POST /api/phone/tts 200（内置兜底播报）＝AI「发声音」回复，消息区只有我方文字无 AI 文字→关闭文字条后字幕显示该语音回复文本「可以去看电影呀～」④测试后恢复 ttsConfig=builtin；agent-browser errors/console 无错误
+- 测试备注：WX 登录页「同意并继续」按钮 JS click 无效，改对 password input 派发 Enter keydown 提交成功；电话 App 联系人匹配要求 kind='user'（小写）或 isFriend=true；桌面图标打开需 pointerdown/pointerup/click 完整序列
+- 质量检查：bunx tsc --noEmit 0 错误；bun run lint 通过；dev.log 无运行时错误
+
+Stage Summary:
+- 通话页（微信/QQ/电话 APP 三端一致）：头像名字垂直居中，单句弹幕字幕显示在头像名字正下方（新句出现旧句消失、字号 17px 居中、弹跳入场）
+- 电话 APP 补齐微信同款能力：通话实时弹幕字幕 + 麦克风左侧信息图标开关的文字聊天（消息区+输入框在说话钮上方、开启时字幕隐藏、六宫格自动收起）
+- 文字聊天回复形态统一（三端同构）：AI 配置了语音 API → 语音回复（播报，不落文字），没配 → 文字回复进消息区；TTS 失败自动兜底（微信降级为文字/电话回退内置引擎发声）；关闭文字条字幕恢复
+- 回归通过：语音模式播报、挂断卡片、通话记录/语音留言转写、来电页均未受影响
