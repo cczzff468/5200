@@ -2733,6 +2733,9 @@ export function WxGroupChatPage({
         const stickers = loadStickers('wx');
         const stickersOn = getStickersOn(sKey);
 
+        // 回复条数（按群独立，发送时现场读取）：条数约束跟随聊天设置——单条模式只发一条，
+        // 多条模式条数交给【连发短消息】指令（下方 system 拼装处），此处不再写死
+        const replyCount = getReplyCount(sKey);
         // 群聊规则（每个角色独立声明：当前是群聊、参与者有谁、只代表自己、禁复读、可互相对话）
         const others = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
@@ -2748,7 +2751,10 @@ export function WxGroupChatPage({
           '不复制、不复述、不换说法重复其他成员刚说过的内容（群里最忌跟风复读）。',
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
           '把群里的每个成员都当作真实的群友，绝不出戏：不说「用户」「AI」「角色」「人设」这类幕后词汇，也不表现出「我知道谁在操作」。',
-          '每次只发一条简短消息（一两句话），像真人在群里随手打字。',
+          // 条数跟随该群聊天设置的「回复条数」：多条模式不再写死「只发一条」
+          ...(replyCount > 1
+            ? ['像真人在群里随手打字：短句为主、一条消息只说一件事；连发几条按【连发短消息】指令执行，同时兼顾群聊节奏，别一个人长篇刷屏。']
+            : ['每次只发一条简短消息（一两句话），像真人在群里随手打字。']),
           '不要刷屏：每个话题只说一两句就够，没新内容不要为了说话而说话；需要连发多条时也只说值得说的话，绝不硬凑条数，更不要在别人正在说话时抢话打断。',
           '【隐私边界】其他成员私下告诉你的事、或你只在私聊里知道的私密内容，绝不在群里说出去；同理不替其他成员公开他们的秘密；别人之间有分歧时不搬弄是非、不传话挑事。',
           '群里的红包、转账都是真实卡片：谁发了什么、谁领了/收了，以卡片和系统通知为准；没有对应卡片或通知时，绝不凭空说自己发过或收到过钱。',
@@ -2862,8 +2868,7 @@ export function WxGroupChatPage({
         ]
           .filter(Boolean)
           .join('\n\n');
-        // 回复条数（按群独立，发送时现场读取）：>1 时连发多条（一句一条），成员们像真人一样逐条刷屏
-        const replyCount = getReplyCount(sKey);
+        // 回复条数 replyCount 已在群聊规则处提前读取（条数约束与连发指令共用同一份设置）
         const payload: ChatPayloadMessage[] = [
           { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
           ...history,
