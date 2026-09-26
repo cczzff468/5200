@@ -56,6 +56,8 @@ export interface VoiceCallScreenProps {
   multiApp?: boolean;
   /** 通话结束（恰好一次）：宿主生成通话卡片并关闭浮层 */
   onEnd: (r: ChatCallResult) => void;
+  /** 左上角小窗图标点击：收起为全局悬浮小窗（全局层传入；无则仅展示不可点） */
+  onMinimize?: () => void;
   /** QQ 来电页「消息回复」：挂断来电并回到聊天 */
   onMessageReply?: () => void;
 }
@@ -102,12 +104,19 @@ function CallAvatar({ variant, avatar, size }: { variant: 'wx' | 'qq'; avatar: s
   );
 }
 
-/** 左上角小窗图标（两 App 通话页都有） */
-function PipIcon() {
+/** 左上角小窗图标（两 App 通话页都有；点击收起为全局悬浮小窗，通话不断） */
+function PipIcon({ onClick }: { onClick?: () => void }) {
   return (
-    <span className="absolute left-5 top-16 flex h-10 w-10 items-center justify-center rounded-[12px] bg-white/10 text-white/80 backdrop-blur-sm" aria-hidden="true">
+    <button
+      type="button"
+      aria-label="收起为悬浮小窗"
+      data-testid="call-pip-btn"
+      onClick={onClick}
+      disabled={!onClick}
+      className="absolute left-5 top-16 z-10 flex h-10 w-10 items-center justify-center rounded-[12px] bg-white/10 text-white/80 backdrop-blur-sm transition-colors active:opacity-60"
+    >
       <PictureInPicture2 className="h-5 w-5" strokeWidth={1.8} />
-    </span>
+    </button>
   );
 }
 
@@ -135,7 +144,7 @@ function statusLine(
 
 // ---------------- 微信皮肤 ----------------
 
-function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd }: VoiceCallScreenProps) {
+function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
 
@@ -169,7 +178,7 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
   return (
     <div className="relative z-10 flex h-full flex-col">
-      <PipIcon />
+      <PipIcon onClick={onMinimize} />
       {/* 接通后顶部居中计时（对照截图 12:00:00） */}
       {phase === 'active' && (
         <div className="pt-[70px] text-center text-[20px] font-light tabular-nums text-white/95" data-testid="wx-call-duration">
@@ -286,7 +295,7 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
 // ---------------- QQ 皮肤 ----------------
 
-function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd, onMessageReply }: VoiceCallScreenProps) {
+function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
 
@@ -323,7 +332,7 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
   return (
     <div className="relative z-10 flex h-full flex-col">
-      <PipIcon />
+      <PipIcon onClick={onMinimize} />
 
       {/* 中部：圆形大头像 + 名字 + 状态 */}
       <div className="flex flex-1 flex-col items-center justify-center px-8 pb-20">
@@ -478,7 +487,7 @@ export function callCardAiText(state: CallCardState, duration: number): string {
  * 通话记录卡片（微信/QQ 聊天气泡内）：跟普通文字气泡完全同款——同底色、同圆角、同小三角尾巴，
  * 内容为电话图标 + 文案。图标位置对照两 App 原生：QQ 图标恒在文字前（我方蓝底白图标，
  * 对方白底深图标）；微信我方文字在前（绿底）、对方图标在前（白底）。
- * state==='cancelled' 且我方拨打时整卡可点（重拨）。
+ * 整卡可点：点击任意通话卡片即回拨（onRedial 由宿主传入；用户需求「点击通话卡片就能回拨电话」）。
  */
 export function CallCardBubble({
   variant,
@@ -494,13 +503,13 @@ export function CallCardBubble({
   onRedial?: () => void;
 }) {
   const mine = direction === 'out';
-  const clickable = state === 'cancelled' && mine && Boolean(onRedial);
+  const clickable = Boolean(onRedial);
   const text = callCardText(state, duration, direction, variant);
   const isWx = variant === 'wx';
   const iconFirst = variant === 'qq' || !mine;
   const phoneIcon = (
     <Phone
-      className={`${isWx ? 'h-[15px] w-[15px]' : 'h-[18px] w-[18px]'} shrink-0`}
+      className={`${isWx ? 'h-[17px] w-[17px]' : 'h-[18px] w-[18px]'} shrink-0`}
       strokeWidth={variant === 'qq' && mine ? 0 : 2}
       {...(variant === 'qq' && mine ? { fill: 'currentColor' } : {})}
       aria-hidden="true"
@@ -510,10 +519,9 @@ export function CallCardBubble({
     <button
       type="button"
       onClick={clickable ? onRedial : undefined}
-      disabled={!clickable}
-      aria-label={`语音通话：${text}${clickable ? '，点击重拨' : ''}`}
+      aria-label={`语音通话：${text}${clickable ? '，点击回拨' : ''}`}
       data-testid={`${variant}-call-card`}
-      className={`relative flex w-fit min-w-0 max-w-[calc(100%-92px)] select-none items-center gap-1.5 text-left transition-colors ${
+      className={`relative flex w-fit min-w-0 max-w-full select-none items-center gap-1.5 text-left transition-colors ${
         isWx
           ? `rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
               mine ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black' : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'

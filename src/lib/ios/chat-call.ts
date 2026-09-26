@@ -27,6 +27,7 @@ import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
 import { speakUserTts, stopSpeaking } from './tts-client';
+import { reportCallSeconds } from './global-call';
 
 // ---------------- 类型 ----------------
 
@@ -236,6 +237,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     setPhase('ended');
     setRecording(false);
     setStatus('listening');
+    reportCallSeconds(0);
     const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
     onEndRef.current({
       direction: optsRef.current.app === 'wx' || optsRef.current.app === 'qq' ? direction : 'out',
@@ -542,12 +544,14 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     };
   }, []);
 
-  // 接通后计时
+  // 接通后计时（秒数同时上报全局总线，悬浮小窗实时显示）
   useEffect(() => {
     if (phase !== 'active') return;
+    reportCallSeconds(secondsRef.current);
     const timer = window.setInterval(() => {
       secondsRef.current += 1;
       setSeconds(secondsRef.current);
+      reportCallSeconds(secondsRef.current);
     }, 1000);
     return () => window.clearInterval(timer);
   }, [phase]);

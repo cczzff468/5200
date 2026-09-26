@@ -26,6 +26,9 @@ const MomentsScheduler = dynamic(() => import('./MomentsScheduler'), { ssr: fals
 // 退群挽留全局调度（退群后 1 分钟内 AI 主动私信 + 私聊里拉回群）：同样懒加载，挂载即后台运行
 const QuitFlowScheduler = dynamic(() => import('./QuitFlowScheduler'), { ssr: false });
 
+// 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
+const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
+
 /** 底部边缘识别带高度：比 28px 可视横杠更高，按下点在屏幕最底部一段内即开始识别（真机好滑起见给了 72px） */
 const EDGE_ZONE = 72;
 /** 上滑超过该距离即打开多任务切换器（真机好滑：短距离即触发） */
@@ -194,6 +197,10 @@ export default function PhoneShell() {
 
         {/* App 窗口 */}
         <AppWindow />
+
+        {/* 全局语音通话层：全屏通话页（z-62）+ 悬浮小窗（z-64，可拖动/边缘吸附隐藏）——
+            与 App 窗口平级，退出聊天页/切换 App 电话不断；点小窗回通话页，拖到边缘只露一条边 */}
+        <GlobalCallLayer />
 
         {/* Home 指示条：所有界面常显，颜色由 useLightForeground 随身后背景明暗选黑/白
             （白底黑杠、黑底白杠；饱和色背景按明暗取色，不像 mix-blend-difference 那样变互补色）。

@@ -139,8 +139,9 @@ import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_N
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
-import { VoiceCallScreen, CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
-import type { ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
+import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { startGlobalCall } from '@/lib/ios/global-call';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
@@ -2112,9 +2113,6 @@ function ChatPage({
   // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置）
   const [layer, setLayer] = useState<ChatLayer>(null);
   const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; packet: MsgPacket; methodId: string }>(null);
-  /** 语音通话浮层（out=我拨打 / in=AI 主动打来）；callCtx 为打开时一次性组装的上下文快照 */
-  const [voiceCall, setVoiceCall] = useState<null | { direction: 'out' | 'in' }>(null);
-  const [callCtx, setCallCtx] = useState<null | { history: ChatCallTurnMsg[]; memoryBlock?: string; momentsBlock?: string; timeBlock?: string; multiApp?: boolean }>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // 原生相机隐藏 input（capture 调起后置摄像头，对齐微信：不再使用自建取景浮层）
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -2571,7 +2569,27 @@ function ChatPage({
     return unsub;
   }, [sessionKey, peer.id]);
 
-  /** 打开语音通话浮层（加号面板「语音通话」/ 通话卡片重拨 / AI 来电共用）：打开瞬间快照最近上下文 */
+  /** 通话结束（恰好一次，可能发生在聊天页已退出时）：通话卡片直写持久化 + 在场时同步本地 state。
+   *  全局通话层负责渲染通话页与悬浮小窗，宿主只关心把结果落成消息。 */
+  const writeCallCard = useCallback(
+    (r: ChatCallResult) => {
+      const st = callResultToCardState(r);
+      const card: QQMsg = {
+        id: uid(),
+        role: r.direction === 'out' ? 'me' : 'peer',
+        content: callCardAiText(st, r.duration),
+        time: Date.now(),
+        kind: 'call' as const,
+        call: { state: st, duration: r.duration, direction: r.direction },
+      };
+      saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
+      setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
+    },
+    [peer.id],
+  );
+
+  /** 发起全局语音通话（加号面板「语音通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
+   *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断 */
   const openVoiceCall = useCallback(
     (direction: 'out' | 'in') => {
       const base = msgs;
@@ -2583,18 +2601,23 @@ function ChatPage({
           content: m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
-      setCallCtx({
-        history,
+      startGlobalCall({
+        variant: 'qq',
+        name: peer.name,
+        avatar: peer.avatar ?? null,
+        contact: peer,
+        direction,
+        initialHistory: history,
         memoryBlock: memRecallBlock(peer.id, 'qq', memContext, { interopOn: effectiveInterop }) || undefined,
         momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer }) || undefined,
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
         multiApp: getMemSettings(peer.id).share,
+        onEnd: writeCallCard,
       });
-      setVoiceCall({ direction });
     },
-    [msgs, peer, me.name, sessionKey],
+    [msgs, peer, me.name, sessionKey, writeCallCard],
   );
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
@@ -3903,14 +3926,15 @@ function ChatPage({
                 {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧 */}
                 {mine && blockedIconOf(m)}
                 {m.kind === 'call' && m.call ? (
-                  /* 语音通话卡片（通话结束后插入聊天记录）：已取消（点击重拨）/ 对方未接听 / 已拒绝 / 未接听 / 通话时长 */
-                  <div {...bubblePress}>
+                  /* 语音通话卡片（通话结束后插入聊天记录）：整卡可点回拨（已取消（点击重拨）/ 对方未接听 / 已拒绝 / 未接听 / 通话时长）。
+                     宽度约束挂在本包装层（卡片内 max-w-full）：挂卡片自身会相对本层（随内容收缩）解析成循环约束，气泡被压窄文字溢出 */
+                  <div {...bubblePress} className="max-w-[calc(100%-92px)]">
                     <CallCardBubble
                       variant="qq"
                       state={m.call.state}
                       duration={m.call.duration}
                       direction={m.call.direction ?? (m.role === 'me' ? 'out' : 'in')}
-                      onRedial={m.call.state === 'cancelled' ? () => openVoiceCall('out') : undefined}
+                      onRedial={() => openVoiceCall('out')}
                     />
                   </div>
                 ) : m.kind === 'redpacket' && m.packet ? (
@@ -4897,42 +4921,8 @@ function ChatPage({
         />
       )}
 
-      {/* 语音通话浮层（加号面板「语音通话」/ 通话卡片重拨 / AI 主动来电共用；结束后生成通话卡片并落盘） */}
-      {voiceCall && callCtx && (
-        <VoiceCallScreen
-          variant="qq"
-          name={peer.name}
-          avatar={peer.avatar ?? null}
-          contact={peer}
-          direction={voiceCall.direction}
-          initialHistory={callCtx.history}
-          memoryBlock={callCtx.memoryBlock}
-          momentsBlock={callCtx.momentsBlock}
-          timeBlock={callCtx.timeBlock}
-          multiApp={callCtx.multiApp}
-          onEnd={(r) => {
-            const st = callResultToCardState(r);
-            setMsgs((prev) => [
-              ...prev,
-              {
-                id: uid(),
-                role: r.direction === 'out' ? 'me' : 'peer',
-                content: callCardAiText(st, r.duration),
-                time: Date.now(),
-                kind: 'call' as const,
-                call: { state: st, duration: r.duration, direction: r.direction },
-              },
-            ]);
-            setVoiceCall(null);
-            setCallCtx(null);
-          }}
-          onMessageReply={() => {
-            // 来电页「消息回复」：拒绝通话回到聊天（生成「已拒绝」卡片），用文字消息继续聊
-            setVoiceCall(null);
-            setCallCtx(null);
-          }}
-        />
-      )}
+      {/* 语音通话已迁移到全局通话层（PhoneShell › GlobalCallLayer）：加号面板/通话卡片回拨/AI 来电
+          均经 openVoiceCall → startGlobalCall 发起，退出聊天页电话不断；结束时 writeCallCard 落卡片 */}
 
       {/* 页内 toast（收藏成功/取消收藏/已复制/已转发给 xx 等操作提示） */}
       <LocalToast msg={chatToast} />

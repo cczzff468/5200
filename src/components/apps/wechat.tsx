@@ -203,8 +203,9 @@ import {
   type WxFamilyCard,
   type WxFamilyCardIn,
 } from './wechat-wallet';
-import { VoiceCallScreen, CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
-import type { ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
+import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { startGlobalCall } from '@/lib/ios/global-call';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -3619,9 +3620,6 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 加号面板展开（输入框保持在面板上方） */
   const [plusOpen, setPlusOpen] = useState(false);
-  /** 语音通话浮层（out=我拨打 / in=AI 主动打来）；callCtx 为打开时一次性组装的上下文快照 */
-  const [voiceCall, setVoiceCall] = useState<null | { direction: 'out' | 'in' }>(null);
-  const [callCtx, setCallCtx] = useState<null | { history: ChatCallTurnMsg[]; memoryBlock?: string; momentsBlock?: string; timeBlock?: string; multiApp?: boolean }>(null);
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
@@ -3909,7 +3907,27 @@ function ChatPage({
     return unsub;
   }, [sessionKey, peer.id]);
 
-  /** 打开语音通话浮层（加号面板「语音通话」/ 通话卡片重拨 / AI 来电共用）：打开瞬间快照最近上下文 */
+  /** 通话结束（恰好一次，可能发生在聊天页已退出时）：通话卡片直写持久化 + 在场时同步本地 state。
+   *  全局通话层负责渲染通话页与悬浮小窗，宿主只关心把结果落成消息。 */
+  const writeCallCard = useCallback(
+    (r: ChatCallResult) => {
+      const st = callResultToCardState(r);
+      const card: WxMsg = {
+        id: uid(),
+        role: r.direction === 'out' ? 'me' : 'peer',
+        content: callCardAiText(st, r.duration),
+        time: Date.now(),
+        kind: 'call' as const,
+        call: { state: st, duration: r.duration, direction: r.direction },
+      };
+      saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
+      setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
+    },
+    [peer.id],
+  );
+
+  /** 发起全局语音通话（加号面板「语音通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
+   *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断 */
   const openVoiceCall = useCallback(
     (direction: 'out' | 'in') => {
       const base = msgs;
@@ -3921,18 +3939,23 @@ function ChatPage({
           content: m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
-      setCallCtx({
-        history,
+      startGlobalCall({
+        variant: 'wx',
+        name: peer.name,
+        avatar: peer.avatar ?? null,
+        contact: peer,
+        direction,
+        initialHistory: history,
         memoryBlock: memRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
         momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer }) || undefined,
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
         multiApp: getMemSettings(peer.id).share,
+        onEnd: writeCallCard,
       });
-      setVoiceCall({ direction });
     },
-    [msgs, peer, me.name, sessionKey],
+    [msgs, peer, me.name, sessionKey, writeCallCard],
   );
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
@@ -5470,14 +5493,15 @@ function ChatPage({
                   <VoiceMsgBubble msgId={m.id} voice={m.voice} side={m.role} theme="wx" />
                 </div>
               ) : m.kind === 'call' && m.call ? (
-                /* 语音通话卡片：微信配色电话卡；拨通前取消的卡整卡可点重拨；长按菜单复制/删除等默认项 */
-                <div {...bubblePress}>
+                /* 语音通话卡片：微信配色电话卡；整卡可点回拨（用户需求：点击通话卡片就能回拨电话）；长按菜单复制/删除等默认项。
+                   宽度约束挂在本包装层（卡片内 max-w-full）：挂卡片自身会相对本层（随内容收缩）解析成循环约束，气泡被压窄文字溢出 */
+                <div {...bubblePress} className="max-w-[calc(100%-92px)]">
                   <CallCardBubble
                     variant="wx"
                     state={m.call.state}
                     duration={m.call.duration}
                     direction={m.call.direction ?? (m.role === 'me' ? 'out' : 'in')}
-                    onRedial={m.call.state === 'cancelled' ? () => openVoiceCall('out') : undefined}
+                    onRedial={() => openVoiceCall('out')}
                   />
                 </div>
               ) : m.kind === 'location' && m.loc ? (
@@ -6374,37 +6398,8 @@ function ChatPage({
         />
       )}
 
-      {/* 语音通话浮层（加号面板拨打 / 通话卡片重拨 / AI 主动来电；结束时生成通话卡片消息并落盘） */}
-      {voiceCall && callCtx && (
-        <VoiceCallScreen
-          variant="wx"
-          name={peer.name}
-          avatar={peer.avatar ?? null}
-          contact={peer}
-          direction={voiceCall.direction}
-          initialHistory={callCtx.history}
-          memoryBlock={callCtx.memoryBlock}
-          momentsBlock={callCtx.momentsBlock}
-          timeBlock={callCtx.timeBlock}
-          multiApp={callCtx.multiApp}
-          onEnd={(r) => {
-            const st = callResultToCardState(r);
-            setMsgs((prev) => [
-              ...prev,
-              {
-                id: uid(),
-                role: r.direction === 'out' ? 'me' : 'peer',
-                content: callCardAiText(st, r.duration),
-                time: Date.now(),
-                kind: 'call' as const,
-                call: { state: st, duration: r.duration, direction: r.direction },
-              },
-            ]);
-            setVoiceCall(null);
-            setCallCtx(null);
-          }}
-        />
-      )}
+      {/* 语音通话已迁移到全局通话层（PhoneShell › GlobalCallLayer）：加号面板/通话卡片回拨/AI 来电
+          均经 openVoiceCall → startGlobalCall 发起，退出聊天页电话不断；结束时 writeCallCard 落卡片 */}
 
       {/* 页内 toast（收藏成功/取消收藏/已复制/已转发给 xx 等操作提示） */}
       <LocalToast msg={chatToast} />

@@ -7380,3 +7380,36 @@ Work Log:
 Stage Summary:
 - 交付：通话界面两处修改 + 通话卡片按截图改为普通气泡 + 流式写入删除 + 分条逻辑改为「最多 N 条 + 边接收边逐条显示」
 - 架构：分段器为唯一切分源（onSegment 实时投递 + finish 交付尾巴），五端共用同一管线，退出页面继续接收机制保持不变
+
+---
+Task ID: 3
+Agent: Z.ai Code (main)
+Task: 通话卡片修复（全卡可点回拨）；拆条逻辑按新细则改造；全局通话小窗（左上角缩小/全局悬浮/边缘隐藏/点按回通话页）
+
+Work Log:
+- reply-count.ts：新增 replyMinTarget（5条→3、10条→7，floor(N×0.7) 夹在 [2,N]）；buildReplyCountPrompt 改「发 min~max 条、尽量发满、绝不能只发 1 条、条间递进、不重复、不空消息凑数」；分段器 finish() 兜底——整轮回复只有一条（流中 0 放出）且上限≥2 时按次级边界（逗号/顿号/分号）拆成 2~N 条经 onSegment 逐条投递、只留最后一条作返回值（调用方零改动、投递顺序不变）；含「[」标记的尾巴不拆防切碎红包/转账动作；bun 实测 8 组用例全过（minTargets=5:3/10:7/15:10、常规4句、逗号兜底、单句不拆、标记不拆、上限溢出合并、红包感叹号保护、连续去重）
+- 新建 src/lib/ios/global-call.ts：zustand 全局通话会话（session/seq/view(full|pip)/pipDocked/pipSide/pipPos + start/minimize/expand/dock/undock/close）+ startGlobalCall 入口 + 通话秒数总线（reportCallSeconds/useCallSeconds，引擎每秒上报→小窗实时显示）
+- 新建 src/components/ios/GlobalCallLayer.tsx 并挂载 PhoneShell（懒加载）：全屏通话页 z-[62]（key=seq 重挂载新通话；minimize 只切视图不卸载组件=电话不断，退出聊天页/切 App 均持续）；悬浮小窗 z-[64] 对照截图（微信=白卡+实心绿电话+绿时长、QQ=白卡+蓝色带波电话+蓝时长+底部灰色麦克风/摄像头图标条）；点小窗回全屏；pointer 拖拽（6px 判点击、夹紧边界、避开状态栏）；拖近左右边缘 ≤36px 吸附→只露 7px 白色边缘条，点边缘恢复小窗；初始位置右上（状态栏下方）
+- chat-call.ts：接通计时每秒 reportCallSeconds 上报全局总线，finish 归零
+- voice-call-screen.tsx：PipIcon 改按钮（onMinimize prop）；CallCardBubble 整卡可点回拨（原来仅 cancelled 我方卡可点），微信电话图标 15→17px
+- wechat.tsx / qq.tsx：删除本地 voiceCall/callCtx state 与页内 VoiceCallScreen 渲染，openVoiceCall 改为组装快照后 startGlobalCall(...)，新增 writeCallCard（loadMsgs/saveMsgs 直写持久化 + setMsgs 在场同步，聊天页卸载后通话结束也能落卡片）；消息列表通话卡片 onRedial 恒传（点击任意卡片回拨）
+- 校验：bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 编译通过
+
+Stage Summary:
+- 拆条=「最多 N 条 + 尽量发满（min~max 区间）+ 不能只发 1 条 + 递进/不重复/不空消息」，分段器兜底拆条对五端调用方透明，边接收边逐条显示与退出续收机制不变
+- 通话全局化：微信/QQ 通话页与悬浮小窗升至 PhoneShell 层，小窗样式对照用户截图（wx 绿/QQ 蓝+底部图标条），支持 点击回通话页/拖动/边缘吸附隐藏/边缘点击展开；通话卡片任意状态点击即回拨
+
+---
+Task ID: 3-验证修复
+Agent: Z.ai Code (main)
+Task: Agent Browser 实机验证与修复（通话卡片宽度塌陷、小窗化引擎自杀）
+
+Work Log:
+- 发现并修复通话卡片宽度 bug：CallCardBubble 的 max-w-[calc(100%-92px)] 相对包含块是外层 bubblePress 包装 div（随内容收缩），循环约束把气泡压到 63px、文字溢出绿底（用户反馈「通话卡片有问题」的根因）；修复=卡片内改 max-w-full，宽度约束上移到 wechat/qq 两处包装层
+- 发现并修复小窗化引擎自杀 bug：GlobalCallLayer 原实现 view==='pip' 时条件卸载 VoiceCallScreen，useChatCall 清理 effect 终止通话（小窗时长停在 00:20）；修复=全屏页保持挂载、仅 invisible+pointer-events-none 隐藏，小窗/边缘条另渲染
+- 边缘条加 ring-1 ring-black/15 提升浅色背景可见度
+- E2E 实测（微信+QQ 双端）：通话卡片完整渲染「通话时长 00:52📞」与用户截图一致；点任意卡片回拨成功（00:52 卡→新通话）；左上角小窗化→小窗走秒（00:08→00:11→00:13）；多任务切换器/主屏/其他 App 期间小窗全局悬浮电话不断；点小窗回全屏（AI 字幕在、对话持续）；拖到左/右边缘均吸附只露 7px 边缘条；点边缘恢复小窗；点小窗回通话页；挂断后卡片落盘（wx 01:22 / qq 01:43，组件卸载场景直写持久化生效）；QQ 小窗样式对照截图（蓝色带波电话+蓝时长+底部灰麦克风/摄像头条）；QQ 拆条实测 4 条逐条冒出（好啊！→火锅我最喜欢吃了！→你想吃什么口味的？→要不要叫上其他人）有递进无重复
+- 复查：浏览器 console 无错误（旧报错为修复前 Turbopack 缓存）；bunx tsc 0 错误；bun run lint 0 错误
+
+Stage Summary:
+- 三大需求全部实机验证通过：①通话卡片修复（宽度塌陷根因）+任意卡片点击回拨 ②拆条「最多N条+尽量发满+不能只发1条+递进不重复」双层保障（提示词区间+分段器兜底） ③全局通话小窗（左上角缩小/全局不断/点按回页/拖动/边缘吸附隐藏/边缘展开）

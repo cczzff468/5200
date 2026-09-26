@@ -6,9 +6,11 @@
  * - 每个会话独立保存自己的回复条数（sessionKey = wx:<contactId> / qq:<contactId> /
  *   sms:<storageKey>，天然按角色/App 隔离），localStorage 单键 JSON map 持久化；
  *   切换角色时各 App 在发送现场读取该角色自己的值，互不影响；
- * - buildReplyCountPrompt：追加在角色人设 system 消息之后，约定「最多 N 条」的上限语义
- *   （N 是上限不是任务：没话说可以少发，不硬凑、不重复、不空消息）——说什么内容完全
- *   交给角色人设自由发挥，不做「怎么铺开话题」之类的引导；
+ * - buildReplyCountPrompt：追加在角色人设 system 消息之后，约定「最多 N 条 + 尽量多写」的语义
+ *   （N 是上限不是任务：没话说可以少发，但绝不能只发 1 条就结束；尽量发满，条与条之间要有
+ *   递进，不重复、不空消息）——说什么内容完全交给角色人设自由发挥；
+ * - replyMinTarget：最低条数目标（设置 5 条 → 3~5 条、10 条 → 7~10 条，即 floor(N×0.7)，
+ *   至少 2 条）——提示词用「min~max」区间引导，客户端不再二次拆正文；
  * - 消息边界 = 「&&&」标记 或 换行 或 句末标点：AI 守「一句一行」约定时按行切；把多句话
  *   写在同一行里时按句子切开（句末标点保留在气泡文本里）—— 一句就是一条消息，逐条连发；
  * - splitReplySegments：把完整回复按边界切成多条消息文本（单条模式 multi=false 只按标记
@@ -86,16 +88,30 @@ export function saveReplyCount(sessionKey: string, n: number): void {
 }
 
 /**
+ * 最低条数目标：设置 5 条 → 至少 3 条、10 条 → 至少 7 条（floor(N×0.7)，夹在 [2, N]）。
+ * N=1 是单条模式没有「多条」概念；其余 N 都不能只发 1 条就结束。
+ */
+export function replyMinTarget(n: number): number {
+  const cap = Math.max(1, Math.floor(n) || 1);
+  if (cap <= 1) return 1;
+  return Math.min(cap, Math.max(2, Math.floor(cap * 0.7)));
+}
+
+/**
  * 追加在人设 system 消息之后的「回复条数」指令块。
  * 只约定连发的条数与格式（方便客户端按边界切成多个气泡），说什么内容完全
- * 由角色人设决定，不额外引导「怎么把话题铺开」。
+ * 由角色人设决定；条数语义 = 「最多 N 条 + 尽量发满 + 最少 replyMinTarget 条」，
+ * 条与条之间要有递进，不重复、不空消息凑数。
  */
 export function buildReplyCountPrompt(n: number): string {
+  const min = replyMinTarget(n);
+  const range = min >= n ? `${n} 条` : `${min}~${n} 条`;
   return [
     `【连发短消息】本次回复按你的人设，模仿真人在手机上聊天：把想说的话拆成一条一条的短消息，一句一条、连续发出来。`,
-    `本次最多发 ${n} 条——${n} 条是上限不是任务：没话说时就少发（哪怕只发 1 条），绝不要为了凑满 ${n} 条硬撑内容。`,
+    `本次发 ${range}：${n} 条是上限，尽量往多了发（每条哪怕很短）；内容实在不够时可以少发，但绝不能只发 1 条就结束（最少 ${min} 条）。`,
+    `多条消息之间要有递进：像真人连发那样把话题往前推（回应 → 补充 → 追问/展开新话题），不要原地重复、不要车轱辘话。`,
     `每条消息只写一句简短、口语化的话，单独占一行；消息内部不要换行，不要加序号、项目符号或任何分隔标记。`,
-    `不允许重复：不要把同一句话或同一个意思换个说法再发一遍；不允许发空消息。`,
+    `不允许重复：不要把同一句话或同一个意思换个说法再发一遍；不允许发空消息凑数。`,
   ].join('\n');
 }
 
@@ -142,6 +158,9 @@ export function splitReplySegments(content: string, multi = false): string[] {
  *
  * - 最多 N 条：已放出 N-1 条后停止切分，剩余内容（含后续溢出的句子）全部留给 finish()
  *   作为第 N 条 —— N 是上限不是任务，也绝不丢失正文；
+ * - 不能只发 1 条：整轮回复只有一条（流中一条都没放出）且上限 ≥2 时，finish() 内按次级
+ *   边界（逗号/顿号/分号）拆成多条逐条回调 onSegment、只把最后一条留作返回值 ——
+ *   调用方无需感知，投递顺序仍是 流中分段 → 拆条分段 → 最后一条；
  * - 空段跳过、连续重复段丢弃（不硬凑、不重复、不空消息）；
  * - 片段末尾停在未闭合标记里（祝福语「生日快乐！」的「！」切碎标记）不提前放出，
  *   游标先越过标记内边界等标记闭合后再重扫；
@@ -151,13 +170,42 @@ export function splitReplySegments(content: string, multi = false): string[] {
 export interface ReplySegmentScanner {
   /** 喂入上游增量（纯文本累计，与展示状态无关） */
   push: (delta: string) => void;
-  /** 流接收结束：返回剩余的最后一条（可为空串） */
+  /** 流接收结束：返回剩余的最后一条（可为空串；必要时先经 onSegment 放出兜底拆条） */
   finish: () => string;
 }
 
 /** 段内是否有未闭合的「[」（标记被边界切碎时先不放出，等闭合后再扫） */
 function hasOpenBracket(s: string): boolean {
   return s.lastIndexOf('[') > s.lastIndexOf(']');
+}
+
+/** 次级消息边界（正则源）：逗号/顿号/分号——整条回复只有一条时的拆条兜底用 */
+const SECONDARY_ONE_RE = /[，,；;、]/;
+
+/**
+ * 兜底拆条：整轮回复只有一条（流中一条都没放出）时，按次级边界（逗号/顿号/分号）
+ * 把这一条拆成 2~cap 条（标点留在前一条末尾后再剥掉尾随逗号，像真人连发）。
+ * 拆不出 ≥2 条时原样返回单条（内容真的只有一句，不硬拆）。
+ */
+function splitSingleIntoPieces(text: string, cap: number): string[] {
+  const parts: string[] = [];
+  let last = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (SECONDARY_ONE_RE.test(text[i])) {
+      parts.push(text.slice(last, i + 1));
+      last = i + 1;
+    }
+  }
+  parts.push(text.slice(last));
+  const segs = trimSegs(parts).map((s) => s.replace(/[，,；;、]+$/, '').trim()).filter((s) => s.length > 0);
+  if (segs.length < 2) return [text.trim()];
+  if (segs.length > cap) {
+    // 超上限：溢出内容并入最后一条（与主分段器的第 N 条策略一致）
+    const head = segs.slice(0, cap - 1);
+    head.push(segs.slice(cap - 1).join(''));
+    return head;
+  }
+  return segs;
 }
 
 export function createReplySegmentScanner(onSegment: (segment: string) => void, cap: number): ReplySegmentScanner {
@@ -210,6 +258,23 @@ export function createReplySegmentScanner(onSegment: (segment: string) => void, 
       let tail = full.slice(segStart).replace(MARKER_RE, '\n').trim();
       tail = tail.replace(HALF_MARKER_RE, '').trim();
       if (!tail || tail === lastEmitted) return '';
+      // 兜底「不能只发 1 条就结束」：整轮回复只有这一条（流中一条都没放出）且上限 ≥2 时，
+      // 按次级边界拆成多条：前面的条立刻经 onSegment 投递（顺序仍在最后一条之前），
+      // 只把最后一条留作返回值交给调用方。含「[」的尾巴可能是红包/转账等动作标记，
+      // 按逗号拆开会把标记切碎 —— 保持整条不动，交由各 App 的解析管线处理。
+      if (emitted === 0 && max >= 2 && !tail.includes('[')) {
+        const pieces = splitSingleIntoPieces(tail, max);
+        if (pieces.length >= 2) {
+          const last = pieces[pieces.length - 1];
+          for (const piece of pieces.slice(0, -1)) {
+            if (piece === lastEmitted) continue;
+            onSegment(piece);
+            emitted += 1;
+            lastEmitted = piece;
+          }
+          return last === lastEmitted ? '' : last;
+        }
+      }
       return tail;
     },
   };
