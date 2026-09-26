@@ -131,7 +131,7 @@ import {
   type MsgPacket,
 } from './qq';
 import { canPay, executePayment, gainToWallet, loadBankCards, loadPayPwd, loadWallet, round2 } from './qq';
-import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplyRender, splitReplySegments } from '@/lib/reply-count';
+import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -2522,14 +2522,211 @@ export function QqGroupChatPage({
         ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
 
+        // ---- 边接收边逐条投递（分段流式核心）----
+        // 流中每凑齐一条完整消息（分段器回调 onSegment）立刻解析并排队投递上屏；
+        // 流结束后 finalize 只处理剩余的最后一条（N 条上限的第 N 条）——
+        // 不再有「先全文显示、消失、再逐条重放」的流式气泡，流式与分条也不改同一块展示状态。
+        const aiMsgId = genId();
+        let deliveredAny = false; // 本轮是否已有分段消息排队投递（决定兜底文案）
+        let batchStarted = false; // 是否已排过批（首批立即上屏，后续批按打字节奏先停顿）
+        let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
+        // 发钱节流（落盘层）：同一轮最多一张红包/转账卡 + 冷却期内不再发（文字部分照常投递）
+        let moneySentThisTurn = false;
+        const inMoneyCooldown = Date.now() - (aiMoneyAt.get(moneyCooldownKey(sKey, char.id)) ?? 0) < AI_MONEY_COOLDOWN_MS;
+        // 群成员名字 → 成员解析（转账收款对象）：机主 + 全部 AI 成员（按显示名精确 → 包含逐级匹配）
+        const resolveMemberByName = (name: string): { id: string; name: string } | null => {
+          const n = name.trim();
+          if (!n) return null;
+          if (nameVariantHit(meVariants, n)) return { id: 'me', name: me.name };
+          const pool = (groupRef.current.memberIds ?? [])
+            .map((id) => contactsRef.current.find((c) => c.id === id))
+            .filter((c): c is ContactRecord => !!c && c.id !== char.id);
+          const exact = pool.find((c) => memberNameOf(c) === n);
+          if (exact) return { id: exact.id, name: memberNameOf(exact) };
+          const partial = pool.find((c) => memberNameOf(c).includes(n) || n.includes(memberNameOf(c)));
+          return partial ? { id: partial.id, name: memberNameOf(partial) } : null;
+        };
+        /** 单条成员消息投递：落盘上屏 + 灵动岛通知 + 语音频率判定/合成（模块层调用，与群聊页是否存活无关） */
+        const deliverGroupMsg = (m: WxGroupMsg) => {
+          appendMsg(m);
+          // 灵动岛通知：命中语音的消息直接显示[语音]，其余常规映射（系统行不弹）
+          const voiceTurn =
+            (m.kind === undefined || m.kind === 'text') &&
+            m.content.trim().length > 0 &&
+            decideAiVoiceMessage(sKey, `${sKey}#${char.id}`);
+          const body = voiceTurn
+            ? '[语音]'
+            : notifyPreviewText({
+                kind: m.kind,
+                content: m.content,
+                voiceText: m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || null,
+                amount: m.rp?.amount ?? m.tr?.amount ?? null,
+                blessing: m.rp?.blessing ?? null,
+                note: m.tr?.note ?? null,
+                mergedFwd: m.fwd?.merged ?? false,
+              });
+          if (body !== null) {
+            pushChatNotification({
+              sessionKey: sKey,
+              app: 'qq',
+              title: charName,
+              subtitle: g.name,
+              avatar: char.avatar ?? null,
+              body,
+              target: { app: 'qq', groupId: gid },
+            });
+          }
+          if (voiceTurn) {
+            // 异步合成，失败保持文字自动降级
+            const targetId = m.id;
+            void synthesizeAiVoice(m.content, char.id)
+              .then((clip) => {
+                if (!clip) return; // 合成失败 → 保持文字
+                const voice: VoiceMsgData = {
+                  url: clip.url,
+                  duration: clip.duration,
+                  wave: clip.wave,
+                  localText: clip.localText,
+                  synth: clip.synth,
+                  contactId: char.id,
+                };
+                patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
+              })
+              .catch(() => {});
+          }
+        };
+        /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
+        const enqueueBatch = (built: WxGroupMsg[]) => {
+          if (built.length === 0) return;
+          void scheduleAiDelivery<WxGroupMsg>(
+            sKey,
+            built,
+            deliverGroupMsg,
+            {
+              initialDelay: batchStarted ? typingDelayOf(built[0].content ?? '') : 0,
+              delay: (i) => (i + 1 < built.length ? typingDelayOf(built[i + 1].content ?? '') : 0),
+            },
+          );
+          batchStarted = true;
+        };
+        /**
+         * 把一段回复文本解析成待投递消息（流中分段与 finalize 最后一段共用同一套管线，不重不漏）：
+         * 动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置产出）；asSingle=true（单条模式）
+         * 时文字块再按边界切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
+         * [红包:总金额:个数:祝福语] 群红包卡片 / [转账:对象:金额:备注] 指定成员转账 / [位置…] / [表情包:ID]
+         */
+        const buildGroupReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): WxGroupMsg[] => {
+          const all: WxGroupMsg[] = [];
+          let t = baseTime;
+          for (const part of extractRichActionParts(rawText)) {
+            if (part.type === 'action') {
+              // 管理标记（禁言/解禁/移出/改群名/改公告）与卡片处理标记（领红包/收转账）分流入各自的执行器
+              if (isGroupAdminAction(part.action) || isGroupChatSocialAction(part.action)) applyGroupAdminAction(char, part.action);
+              else applyGroupAiAction(char, part.action);
+              continue;
+            }
+            const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, replyCount > 1)) : [part.text];
+            for (const seg of segs) {
+              for (const p of parseRichParts(seg, stickersOn ? stickers : [], { group: true })) {
+                const id = msgIdx === 0 ? aiMsgId : `${aiMsgId}-${msgIdx}`;
+                if (p.type === 'rich') {
+                  const isMoney = p.rich.kind === 'redpacket' || p.rich.kind === 'transfer';
+                  // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/位置卡片不受影响，与单聊同规则）
+                  if (!stickersOn && p.rich.kind === 'sticker') continue;
+                  // 发钱节流：同一轮已发过或冷却期内 → 丢弃钱卡（不影响其他内容）
+                  if (isMoney && (moneySentThisTurn || inMoneyCooldown)) continue;
+                  if (p.rich.kind === 'redpacket') {
+                    const count = p.rich.count ?? 1;
+                    all.push({
+                      id,
+                      role: 'peer',
+                      senderId: char.id,
+                      senderName: charName,
+                      content: '',
+                      time: t,
+                      kind: 'redpacket',
+                      rp: {
+                        amount: p.rich.amount,
+                        count,
+                        // 多份红包按拼手气发进群（每人随机一份，与真人玩法一致）；单个 = 普通红包
+                        mode: count > 1 ? 'lucky' : 'normal',
+                        blessing: p.rich.blessing || '恭喜发财',
+                        claims: [],
+                        sentAt: Date.now(),
+                        cid: nextGroupCid('rp'),
+                      },
+                    });
+                    moneySentThisTurn = true;
+                    aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
+                  } else if (p.rich.kind === 'transfer') {
+                    // 收款对象必须解析到群里真实成员（机主或 AI 成员），解析不到不成卡（资金真实性）
+                    const target = resolveMemberByName(p.rich.target ?? '');
+                    if (!target) continue;
+                    all.push({
+                      id,
+                      role: 'peer',
+                      senderId: char.id,
+                      senderName: charName,
+                      content: '',
+                      time: t,
+                      kind: 'transfer',
+                      tr: { amount: p.rich.amount, note: p.rich.note, toId: target.id, toName: target.name, cid: nextGroupCid('tr') },
+                    });
+                    moneySentThisTurn = true;
+                    aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
+                  } else if (p.rich.kind === 'location') {
+                    // 位置卡片（与用户手动发送同款渲染，全群可见）
+                    all.push({
+                      id,
+                      role: 'peer',
+                      senderId: char.id,
+                      senderName: charName,
+                      content: '',
+                      time: t,
+                      kind: 'location',
+                      loc: { name: p.rich.name, address: p.rich.coords || '地图上的一个位置' },
+                    });
+                  } else if (p.rich.kind === 'sticker') {
+                    // 表情包（从用户收藏清单按 ID 匹配；找不到时回退显示文字）
+                    const sid = p.rich.stickerId;
+                    const s = stickers.find((x) => x.id === sid);
+                    if (s) {
+                      all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: '', time: t, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } });
+                    } else {
+                      all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: '[表情包]', time: t });
+                    }
+                  }
+                } else {
+                  // 首尾清洗：剥掉模型偶尔输出的零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
+                  const cleaned = cleanBubbleText(p.text);
+                  if (!cleaned) continue;
+                  all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: cleaned, time: t });
+                }
+                msgIdx += 1;
+                t += 600 + Math.floor(Math.random() * 600);
+              }
+            }
+          }
+          return all;
+        };
+        /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻解析并排队上屏（边接收边逐条显示） */
+        const deliverSegment = (seg: string) => {
+          const built = buildGroupReplyMsgs(seg, false, Date.now());
+          if (built.length === 0) return;
+          deliveredAny = true;
+          enqueueBatch(built);
+        };
+
         const ok = beginChatStream({
           sessionKey: sKey,
-          aiMsgId: genId(),
+          aiMsgId,
           messages,
           apiConfig,
           replyCount,
           // 配置识图模型后：群里发的图片先识图，成员结合图片按人设回复（与单聊同管线）
           ...(turnImages.length > 0 ? { vision: { images: turnImages, text: lastUserText } } : {}),
+          // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
+          onSegment: deliverSegment,
           finalize: (result) => {
             const text = (result.content ?? '').trim();
             // 人设自判沉默：整条回复是 [SKIP] 标记 → 不落盘、不提取记忆（本轮对 TA 没有发生任何社交事件）
@@ -2537,177 +2734,27 @@ export function QqGroupChatPage({
               resolve();
               return;
             }
-            // 回复按出现顺序切「文字块 + 处理动作」：动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置落盘），
-            // 文字块按边界切分（回复条数>1 时一句一条）后再解析群聊特殊标记 →
-            // [红包:总金额:个数:祝福语] 群红包卡片 / [转账:对象:金额:备注] 指定成员转账 / [位置…] / [表情包:ID]
-            // （渲染与交互复用用户手动发送的同款卡片组件；位置/表情包全群可见）
-            const parts = extractRichActionParts(text);
-            const all: WxGroupMsg[] = [];
-            let t = result.startedAt;
-            let idx = 0;
-            // 发钱节流（落盘层）：同一轮最多一张红包/转账卡 + 冷却期内不再发（文字部分照常落盘）
-            let moneySentThisTurn = false;
-            const inMoneyCooldown = Date.now() - (aiMoneyAt.get(moneyCooldownKey(sKey, char.id)) ?? 0) < AI_MONEY_COOLDOWN_MS;
-            // 群成员名字 → 成员解析（转账收款对象）：机主 + 全部 AI 成员（按显示名精确 → 包含逐级匹配）
-            const resolveMemberByName = (name: string): { id: string; name: string } | null => {
-              const n = name.trim();
-              if (!n) return null;
-              if (nameVariantHit(meVariants, n)) return { id: 'me', name: me.name };
-              const pool = (groupRef.current.memberIds ?? [])
-                .map((id) => contactsRef.current.find((c) => c.id === id))
-                .filter((c): c is ContactRecord => !!c && c.id !== char.id);
-              const exact = pool.find((c) => memberNameOf(c) === n);
-              if (exact) return { id: exact.id, name: memberNameOf(exact) };
-              const partial = pool.find((c) => memberNameOf(c).includes(n) || n.includes(memberNameOf(c)));
-              return partial ? { id: partial.id, name: memberNameOf(partial) } : null;
-            };
-            for (const part of parts) {
-              if (part.type === 'action') {
-                // 管理标记（禁言/解禁/移出/改群名/改公告）与卡片处理标记（领红包/收转账）分流入各自的执行器
-                if (isGroupAdminAction(part.action) || isGroupChatSocialAction(part.action)) applyGroupAdminAction(char, part.action);
-                else applyGroupAiAction(char, part.action);
-                continue;
-              }
-              const segs = mergeRichSegments(splitReplySegments(part.text, replyCount > 1));
-              for (const seg of segs) {
-                for (const p of parseRichParts(seg, stickersOn ? stickers : [], { group: true })) {
-                  const id = idx === 0 ? result.aiMsgId : `${result.aiMsgId}-${idx}`;
-                  if (p.type === 'rich') {
-                    const isMoney = p.rich.kind === 'redpacket' || p.rich.kind === 'transfer';
-                    // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/位置卡片不受影响，与单聊同规则）
-                    if (!stickersOn && p.rich.kind === 'sticker') continue;
-                    // 发钱节流：同一轮已发过或冷却期内 → 丢弃钱卡（不影响其他内容）
-                    if (isMoney && (moneySentThisTurn || inMoneyCooldown)) continue;
-                    if (p.rich.kind === 'redpacket') {
-                      const count = p.rich.count ?? 1;
-                      all.push({
-                        id,
-                        role: 'peer',
-                        senderId: char.id,
-                        senderName: charName,
-                        content: '',
-                        time: t,
-                        kind: 'redpacket',
-                        rp: {
-                          amount: p.rich.amount,
-                          count,
-                          // 多份红包按拼手气发进群（每人随机一份，与真人玩法一致）；单个 = 普通红包
-                          mode: count > 1 ? 'lucky' : 'normal',
-                          blessing: p.rich.blessing || '恭喜发财',
-                          claims: [],
-                          sentAt: Date.now(),
-                          cid: nextGroupCid('rp'),
-                        },
-                      });
-                      moneySentThisTurn = true;
-                      aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
-                    } else if (p.rich.kind === 'transfer') {
-                      // 收款对象必须解析到群里真实成员（机主或 AI 成员），解析不到不成卡（资金真实性）
-                      const target = resolveMemberByName(p.rich.target ?? '');
-                      if (!target) continue;
-                      all.push({
-                        id,
-                        role: 'peer',
-                        senderId: char.id,
-                        senderName: charName,
-                        content: '',
-                        time: t,
-                        kind: 'transfer',
-                        tr: { amount: p.rich.amount, note: p.rich.note, toId: target.id, toName: target.name, cid: nextGroupCid('tr') },
-                      });
-                      moneySentThisTurn = true;
-                      aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
-                    } else if (p.rich.kind === 'location') {
-                      // 位置卡片（与用户手动发送同款渲染，全群可见）
-                      all.push({
-                        id,
-                        role: 'peer',
-                        senderId: char.id,
-                        senderName: charName,
-                        content: '',
-                        time: t,
-                        kind: 'location',
-                        loc: { name: p.rich.name, address: p.rich.coords || '地图上的一个位置' },
-                      });
-                    } else if (p.rich.kind === 'sticker') {
-                      // 表情包（从用户收藏清单按 ID 匹配；找不到时回退显示文字）
-                      const sid = p.rich.stickerId;
-                      const s = stickers.find((x) => x.id === sid);
-                      if (s) {
-                        all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: '', time: t, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } });
-                      } else {
-                        all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: '[表情包]', time: t });
-                      }
-                    }
-                  } else {
-                    // 首尾清洗：剥掉模型偶尔输出的零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-                    const cleaned = cleanBubbleText(p.text);
-                    if (!cleaned) continue;
-                    all.push({ id, role: 'peer', senderId: char.id, senderName: charName, content: cleaned, time: t });
-                  }
-                  idx += 1;
-                  t += 600 + Math.floor(Math.random() * 600);
-                }
-              }
-            }
-            if (all.length === 0) {
-              all.push({ id: result.aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt });
-            }
-            // 逐条投递（模拟真人连发）：每条到达时才落盘上屏 + 弹灵动岛通知 + 判定语音频率，
-            // 停顿按内容长度模拟打字节奏；调度器在模块层运行，与群聊页是否存活无关。
-            // 同会话批次串行排队：不同角色回合的消息按落盘顺序先后出现，不会交错
+            // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
+            // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复按旧管线落盘
+            const built = buildGroupReplyMsgs(replyCount > 1 ? (result.tail ?? '') : result.content, replyCount <= 1, Date.now());
+            // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给「（…）」占位兜底
+            const finalBatch: WxGroupMsg[] =
+              built.length > 0
+                ? built
+                : deliveredAny
+                  ? []
+                  : [{ id: aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt }];
+            // 逐条投递（模拟真人连发）：每条到达时才落盘上屏 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
+            // 模拟打字节奏；空批仅作占位，群记忆提取挂在全部消息投递完之后；
+            // 调度器在模块层运行，与群聊页是否存活无关；同会话批次串行排队，不同角色回合不会交错
             void scheduleAiDelivery<WxGroupMsg>(
               sKey,
-              all,
-              (m) => {
-                appendMsg(m);
-                // 灵动岛通知：命中语音的消息直接显示[语音]，其余常规映射（系统行不弹）
-                const voiceTurn =
-                  (m.kind === undefined || m.kind === 'text') &&
-                  m.content.trim().length > 0 &&
-                  decideAiVoiceMessage(sKey, `${sKey}#${char.id}`);
-                const body = voiceTurn
-                  ? '[语音]'
-                  : notifyPreviewText({
-                      kind: m.kind,
-                      content: m.content,
-                      voiceText: m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || null,
-                      amount: m.rp?.amount ?? m.tr?.amount ?? null,
-                      blessing: m.rp?.blessing ?? null,
-                      note: m.tr?.note ?? null,
-                      mergedFwd: m.fwd?.merged ?? false,
-                    });
-                if (body !== null) {
-                  pushChatNotification({
-                    sessionKey: sKey,
-                    app: 'qq',
-                    title: charName,
-                    subtitle: g.name,
-                    avatar: char.avatar ?? null,
-                    body,
-                    target: { app: 'qq', groupId: gid },
-                  });
-                }
-                if (voiceTurn) {
-                  // 异步合成，失败保持文字自动降级
-                  const targetId = m.id;
-                  void synthesizeAiVoice(m.content, char.id)
-                    .then((clip) => {
-                      if (!clip) return; // 合成失败 → 保持文字
-                      const voice: VoiceMsgData = {
-                        url: clip.url,
-                        duration: clip.duration,
-                        wave: clip.wave,
-                        localText: clip.localText,
-                        synth: clip.synth,
-                        contactId: char.id,
-                      };
-                      patchGroupMsg(targetId, { content: '', kind: 'voice', voice });
-                    })
-                    .catch(() => {});
-                }
+              finalBatch,
+              deliverGroupMsg,
+              {
+                initialDelay: finalBatch.length > 0 ? (batchStarted ? typingDelayOf(finalBatch[0].content ?? '') : 0) : 0,
+                delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
               },
-              { delay: (i) => (i + 1 < all.length ? typingDelayOf(all[i + 1].content ?? '') : 0) } // 首条立即出现，停顿按下一条长度模拟打字
             ).then(() => {
               // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记；全部消息投递完后执行，后台异步失败静默）
               void (async () => {
@@ -4012,64 +4059,29 @@ export function QqGroupChatPage({
           );
         })}
         {/* 流式气泡（当前发言角色）：回复条数>1 时按边界实时切成多个气泡，下一句没打完时显示打字中 */}
+        {/* 正在输入指示（流式接收期间，当前发言角色）：AI 回复为「边接收边逐条显示」——
+            完整分段直接作为真实消息逐条投递上屏（见 runCharTurn 的 onSegment/finalize），
+            不再有先全文显示后消失的流式气泡 */}
         {streaming && stream && (
-          <div data-testid="qq-group-stream">
-            {(() => {
-              const split = splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1);
-              return (
-                <>
-                  {split.texts.map((t, i) => (
-                    <div key={i} className="mb-3 flex gap-2">
-                      <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
-                      <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-                        <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
-                          <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
-                          {speaker && roleLabelOfId(speaker.id) && (
-                            <span
-                              className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
-                                roleLabelOfId(speaker.id) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
-                              }`}
-                            >
-                              {roleLabelOfId(speaker.id)}
-                            </span>
-                          )}
-                        </span>
-                        <div className="w-fit max-w-full whitespace-pre-wrap break-words rounded-[10px] bg-white px-3.5 py-[9px] text-[16px] leading-[1.5] text-[#1F2329] dark:bg-[#2A2C31] dark:text-white">
-                          {prettifyRichText(t)}
-                          {i === split.texts.length - 1 && <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-black/40 align-text-bottom dark:bg-white/40" />}
-                        </div>
-                      </div>
-                    </div>
+          <div className="mb-3 flex gap-2" data-testid="qq-group-stream-typing">
+            <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
+            <div className="flex min-w-0 max-w-[calc(100%-96px)] flex-col items-start">
+              <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/40 dark:text-white/40">
+                <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
+              </span>
+              <div className="max-w-full rounded-[10px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">
+                <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="正在输入">
+                  {[0, 1, 2].map((d) => (
+                    <span
+                      key={d}
+                      aria-hidden="true"
+                      className="h-[7px] w-[7px] rounded-full bg-black/35 dark:bg-white/45"
+                      style={{ animation: `qqTypingDot 1.1s ${d * 0.16}s ease-in-out infinite` }}
+                    />
                   ))}
-                  {(split.pending || split.texts.length === 0) && (
-                    <div className="mb-3 flex gap-2">
-                      <QqAvatar src={speaker?.avatar ?? null} alt={speaker ? memberNameOf(speaker) : '…'} size={40} />
-                      <div className="flex min-w-0 max-w-[72%] flex-col items-start">
-                        <span className="mb-0.5 flex max-w-full items-center gap-1 px-1 text-[12px] leading-none text-black/45 dark:text-white/45">
-                          <span className="truncate">{speaker ? memberNameOf(speaker) : '…'}</span>
-                          {speaker && roleLabelOfId(speaker.id) && (
-                            <span
-                              className={`shrink-0 rounded-[3px] px-1 text-[9px] leading-[14px] ${
-                                roleLabelOfId(speaker.id) === '群主' ? 'bg-[#FA9D3B]/15 text-[#D07818]' : 'bg-[#0099FF]/15 text-[#0072C7] dark:text-[#4AA3FF]'
-                              }`}
-                            >
-                              {roleLabelOfId(speaker.id)}
-                            </span>
-                          )}
-                        </span>
-                        <div className="w-fit rounded-[10px] bg-white px-3.5 py-[9px] dark:bg-[#2A2C31]">
-                          <span className="flex h-[23px] items-center gap-1" aria-label="正在输入">
-                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
-                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:150ms] dark:bg-white/35" />
-                            <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 [animation-delay:300ms] dark:bg-white/35" />
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
+                </span>
+              </div>
+            </div>
           </div>
         )}
       </div>

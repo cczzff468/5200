@@ -12,6 +12,11 @@
 export interface AiDeliveryOptions {
   /** 第 index 条（0 起）与上一条之间的停顿 ms（首条之前是首延迟）；缺省按内容长度模拟打字节奏 */
   delay?: (index: number, total: number) => number;
+  /**
+   * 本批第一条投递前的停顿 ms（模拟对方正在打字；首批传 0 立即上屏）。
+   * 分段流式投递（边接收边逐条显示）时，第二批起的停顿让消息像真人连发一样逐条冒出。
+   */
+  initialDelay?: number;
 }
 
 interface Batch {
@@ -90,13 +95,18 @@ function pump(sessionKey: string): void {
   };
   running.add(sessionKey);
   emitActive();
-  step();
+  // 首条前停顿（分段投递的批间打字节奏）；期间 running 保持，聊天页「正在输入」不闪断
+  if (opts?.initialDelay && opts.initialDelay > 0) {
+    window.setTimeout(step, Math.round(opts.initialDelay));
+  } else {
+    step();
+  }
 }
 
 /**
  * 调度一批逐条投递；同一会话的批次串行排队（上一批投完才跑本批）。
- * 返回的 Promise 在本批全部投递完（且此前排队的同会话批次也投完）时 resolve——
- * 记忆提取等「一轮结束」动作挂在它后面，保证读到完整落盘数据。
+ * 空批次也参与排队（仅作占位）：调用方靠返回的 Promise 等待「本批及此前排队的同会话批次
+ * 全部投递完」（记忆提取等「一轮结束」动作挂在它后面，保证读到完整落盘数据）。
  */
 export function scheduleAiDelivery<T>(
   sessionKey: string,
@@ -104,7 +114,6 @@ export function scheduleAiDelivery<T>(
   deliver: (item: T, index: number) => void,
   opts?: AiDeliveryOptions
 ): Promise<void> {
-  if (items.length === 0) return Promise.resolve();
   return new Promise<void>((resolve) => {
     let queue = queues.get(sessionKey);
     if (!queue) {

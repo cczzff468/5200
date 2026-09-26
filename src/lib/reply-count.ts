@@ -6,22 +6,19 @@
  * - 每个会话独立保存自己的回复条数（sessionKey = wx:<contactId> / qq:<contactId> /
  *   sms:<storageKey>，天然按角色/App 隔离），localStorage 单键 JSON map 持久化；
  *   切换角色时各 App 在发送现场读取该角色自己的值，互不影响；
- * - buildReplyCountPrompt：追加在角色人设 system 消息之后，只约定最基本的连发格式
- *   （这次发 N 条左右、一句一条单独占一行、不用分隔标记）——说什么内容完全交给
- *   角色人设自由发挥，不做「怎么铺开话题」之类的引导；
+ * - buildReplyCountPrompt：追加在角色人设 system 消息之后，约定「最多 N 条」的上限语义
+ *   （N 是上限不是任务：没话说可以少发，不硬凑、不重复、不空消息）——说什么内容完全
+ *   交给角色人设自由发挥，不做「怎么铺开话题」之类的引导；
  * - 消息边界 = 「&&&」标记 或 换行 或 句末标点：AI 守「一句一行」约定时按行切；把多句话
  *   写在同一行里时按句子切开（句末标点保留在气泡文本里）—— 一句就是一条消息，逐条连发；
- * - splitReplySegments：流结束后把完整回复按边界切成多条消息（一条消息一条记录、各自
- *   入库渲染）；单条模式（multi=false）沿用旧行为只按标记切分；切不出任何非空段时返回
- *   ['']（调用方沿用各自的空回复兜底文案），至少保证第一条消息正常显示；
- * - splitReplyRender：流式渲染期把已收内容实时切成多条气泡（句末标点保留在气泡文本里，
- *   末尾没凑齐的半截「&&」不闪现），收不到边界时自然回退为单气泡，不会混成一条长文；
- * - createReplyPacer：连发节奏器（聊天流总线使用）—— 一条消息输出完（边界出现）立即
- *   放出并显示「打字中」，停顿片刻后放出下一条【完整】消息，一句一句逐条连发；下一条
- *   还没打完（边界未出现）时保持「打字中」继续等、绝不放半截；流数据接收结束后，剩余
- *   未放出的消息也继续按同样节奏逐条放出（end 返回 Promise，全部放完后才 resolve，
- *   落盘收尾等它 —— 短回复也不会一口气全部弹出）；immediate 退出（失败路径）立刻放出
- *   全部剩余内容。全程不阻塞读取上游，退出页面后继续接收的逻辑不受影响。
+ * - splitReplySegments：把完整回复按边界切成多条消息文本（单条模式 multi=false 只按标记
+ *   切分）；切不出任何非空段时返回 ['']（调用方沿用各自的空回复兜底文案）；
+ * - createReplySegmentScanner：流式分段器（聊天流总线使用，「边接收边逐条显示」的核心）——
+ *   增量接收原文，每凑齐一条【完整】消息（边界出现、标记闭合）立刻回调 onSegment，由各 App
+ *   解析成真实消息排队投递上屏；已放出 N-1 条后停止切分，剩余内容（含后续溢出的句子）全部
+ *   留给 finish() 作为第 N 条（上限不是任务，也绝不丢失正文）；连续重复的段直接丢弃；
+ *   末尾停在未闭合标记里的片段（祝福语「！」切碎标记）不提前放出，等标记闭合后再扫。
+ *   全程不阻塞读取上游，退出页面后继续接收的逻辑不受影响。
  */
 
 /** 可选回复条数（默认 5 条） */
@@ -95,8 +92,10 @@ export function saveReplyCount(sessionKey: string, n: number): void {
  */
 export function buildReplyCountPrompt(n: number): string {
   return [
-    `【连发短消息】本次回复按你的人设，模仿真人在手机上聊天：把想说的话拆成一条一条的短消息，一句一条、连续发出来，这次发 ${n} 条左右。`,
+    `【连发短消息】本次回复按你的人设，模仿真人在手机上聊天：把想说的话拆成一条一条的短消息，一句一条、连续发出来。`,
+    `本次最多发 ${n} 条——${n} 条是上限不是任务：没话说时就少发（哪怕只发 1 条），绝不要为了凑满 ${n} 条硬撑内容。`,
     `每条消息只写一句简短、口语化的话，单独占一行；消息内部不要换行，不要加序号、项目符号或任何分隔标记。`,
+    `不允许重复：不要把同一句话或同一个意思换个说法再发一遍；不允许发空消息。`,
   ].join('\n');
 }
 
@@ -136,159 +135,82 @@ export function splitReplySegments(content: string, multi = false): string[] {
   return segs.length > 0 ? segs : [''];
 }
 
-/** 流式渲染期的切分结果：texts = 已收到的各条消息（最后一条可能仍在增长），pending = 下一条即将开始（渲染「打字中」气泡） */
-export interface ReplyRenderSplit {
-  texts: string[];
-  pending: boolean;
-}
-
 /**
- * 把流式接收中的内容切成多条气泡文本：边界（标记/换行/句末标点）后的空段 → pending；
- * 末尾没凑齐的半截「&&」不闪现；多条模式下句末标点保留在气泡文本里（「你好！」不会变「你好」）。
+ * 流式分段器（「边接收边逐条显示」的核心，聊天流总线使用）：
+ * 增量接收上游原文，每凑齐一条【完整】消息（边界出现、标记闭合）立刻回调 onSegment，
+ * 由各 App 解析成真实消息排队投递上屏 —— 用户看到的是逐条冒出来，不存在先全文后消失。
+ *
+ * - 最多 N 条：已放出 N-1 条后停止切分，剩余内容（含后续溢出的句子）全部留给 finish()
+ *   作为第 N 条 —— N 是上限不是任务，也绝不丢失正文；
+ * - 空段跳过、连续重复段丢弃（不硬凑、不重复、不空消息）；
+ * - 片段末尾停在未闭合标记里（祝福语「生日快乐！」的「！」切碎标记）不提前放出，
+ *   游标先越过标记内边界等标记闭合后再重扫；
+ * - finish()：返回剩余未放出的最后一条（标记换成换行、去掉末尾半截「&&」后 trim；
+ *   无剩余或与上一条重复时返回空串，调用方跳过投递）。
  */
-export function splitReplyRender(shown: string, multi = false): ReplyRenderSplit {
-  const parts = multi ? splitByBoundaryRaw(shown) : shown.split(MARKER_RE);
-  const lastIdx = parts.length - 1;
-  const pending = parts.length > 1 && (parts[lastIdx] ?? '').replace(HALF_MARKER_RE, '').trim().length === 0;
-  const texts = parts
-    .map((s, i) => (i === lastIdx ? s.replace(HALF_MARKER_RE, '') : s).trim())
-    .filter((s) => s.length > 0);
-  return { texts, pending };
-}
-
-/** 连发节奏器：把上游增量按「边界即放行、下一条先停顿」的节奏转为界面展示内容 */
-export interface ReplyPacer {
-  /** 喂入上游增量 */
+export interface ReplySegmentScanner {
+  /** 喂入上游增量（纯文本累计，与展示状态无关） */
   push: (delta: string) => void;
-  /**
-   * 流数据接收结束：剩余未放出的内容继续按连发节奏逐条放出（每条完整弹出、间隔停顿），
-   * 全部放完后 resolve（调用方 await 它之后再落盘收尾，短回复也是一句一句出现）。
-   * immediate=true（失败路径）：立刻放出全部剩余内容并 resolve，不等节奏。
-   */
-  end: (opts?: { immediate?: boolean }) => Promise<void>;
+  /** 流接收结束：返回剩余的最后一条（可为空串） */
+  finish: () => string;
 }
 
-/** 找到 from 之后第一个消息边界的结束位置；没有则 -1 */
-function nextBoundaryEnd(s: string, from: number): number {
-  const m = BOUNDARY_ONE_RE.exec(s.slice(from));
-  return m ? from + m.index + m[0].length : -1;
+/** 段内是否有未闭合的「[」（标记被边界切碎时先不放出，等闭合后再扫） */
+function hasOpenBracket(s: string): boolean {
+  return s.lastIndexOf('[') > s.lastIndexOf(']');
 }
 
-/**
- * 创建连发节奏器：
- * - 一条消息输出完（边界出现：标记/换行/句末标点）立即放出，渲染层据此在其后挂「打字中」气泡；
- * - 下一条消息输出完之前停顿片刻（期间渲染层显示「打字中」），到点只放出下一条【完整】消息
- *   再停顿 —— 一句一句逐条连发，每句之间都有真人打字的节奏感；下一条还没打完（边界未出现）
- *   时保持等待，绝不把半句话提前放出去；
- * - 流数据接收结束后（end）：剩余没放完的消息继续按同样节奏逐条放出，全部放完后才 resolve ——
- *   落盘收尾 await 它，短回复也不会在流结束瞬间一口气全部弹出；
- * - immediate=true（失败路径）：立刻放出全部剩余内容；
- * - 全程不阻塞读取上游，退出页面后继续接收不受影响。
- */
-export function createReplyPacer(onShown: (text: string) => void, pauseMs?: () => number): ReplyPacer {
-  const pause = pauseMs ?? (() => 600 + Math.floor(Math.random() * 500));
+export function createReplySegmentScanner(onSegment: (segment: string) => void, cap: number): ReplySegmentScanner {
+  const max = Math.max(1, Math.floor(cap) || 1);
   let full = ''; // 累计收到的原始内容
-  let shown = ''; // 已放出的内容（full 的前缀）
-  let scanned = 0; // full 中已完成边界扫描的位置（只向前扫，不回扫）
-  /** 最近一个边界的结束位置（其后出现新内容 → 先停顿再放出下一条） */
-  let awaiting = -1;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  /** 流数据是否已接收结束（结束后不再等下一增量，最后半条整体放出） */
-  let finished = false;
-  let doneResolve: (() => void) | null = null;
-
-  const clearTimer = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-  const show = (upto: number) => {
-    if (upto > shown.length) {
-      shown = full.slice(0, upto);
-      onShown(shown);
-    }
-  };
-  const resolveDone = () => {
-    const r = doneResolve;
-    doneResolve = null;
-    r?.();
-  };
-  const schedulePause = () => {
-    if (timer === null) timer = setTimeout(flushNext, pause());
-  };
-  /** 停顿结束：只放出下一条【完整】消息（到它的边界为止），随后继续停顿 —— 逐条连发 */
-  const flushNext = () => {
-    timer = null;
-    const end = nextBoundaryEnd(full, Math.max(awaiting, 0));
-    if (end >= 0) {
-      show(end);
-      scanned = Math.max(scanned, end);
-      awaiting = end;
-    } else if (finished) {
-      show(full.length); // 流已结束且最后一条没有边界收尾：整条放出（其后已无边界可切）
-    } else {
-      // 下一条还没打完（边界未出现）：保持「打字中」继续等，等它输出完或下个增量到达时再检查
-      return;
-    }
-    if (finished && shown.length >= full.length) {
-      awaiting = -1;
-      resolveDone();
-      return;
-    }
-    if (full.length > shown.length) schedulePause(); // 后面还有内容：继续停顿（逐条连发）
-  };
+  let segStart = 0; // 当前未放出片段的起点
+  let scanFrom = 0; // 边界搜索游标（≥ segStart；标记未闭合时先越过标记内边界等待闭合）
+  let emitted = 0; // 已放出的条数
+  let lastEmitted = ''; // 上一条放出的内容（连续重复去重）
 
   return {
     push(delta) {
       if (!delta) return;
       full += delta;
-      if (timer !== null) return; // 停顿中：缓冲的内容由 flushNext 逐段放出
-      const end = nextBoundaryEnd(full, scanned);
-      if (end >= 0) {
-        // 刚输出完一条（边界出现）：立即放出，渲染层据此显示「打字中」
-        show(end);
-        scanned = end;
-        awaiting = end;
-        if (full.length > end) schedulePause(); // 边界后已有新内容：安排停顿
-        return;
+      for (;;) {
+        const m = BOUNDARY_ONE_RE.exec(full.slice(scanFrom));
+        if (!m) break;
+        const end = scanFrom + m.index + m[0].length;
+        const isSentence = m[0] !== '\n' && !m[0].startsWith('&');
+        // 句末标点并入本条（「你好！」完整弹出）；标记/换行本身丢弃不进气泡
+        const candidate = full.slice(segStart, isSentence ? end : end - m[0].length);
+        if (hasOpenBracket(candidate)) {
+          // 停在未闭合的标记里：越过标记内边界，等标记闭合后重扫（祝福语带「！」的红包/转账标记）
+          scanFrom = end;
+          continue;
+        }
+        const trimmed = candidate.trim();
+        if (trimmed.length === 0) {
+          // 空段（连续换行/标记）：跳过不投、不占条数
+          segStart = end;
+          scanFrom = end;
+          continue;
+        }
+        if (emitted >= max - 1) break; // 已放出 N-1 条：剩余全部留给 finish() 的第 N 条（最多 N 条）
+        if (trimmed === lastEmitted) {
+          // 连续重复：丢弃不投（不重复）
+          segStart = end;
+          scanFrom = end;
+          continue;
+        }
+        onSegment(trimmed);
+        emitted += 1;
+        lastEmitted = trimmed;
+        segStart = end;
+        scanFrom = end;
       }
-      // 没有新边界：当前这条还在逐字输出，透传；但末尾 1-2 个「&」可能是被拆进
-      // 下个增量的半截分隔标记，scanned 先不越过它们（否则「&&&」跨增量拼齐时会漏检）
-      const tail = HALF_MARKER_RE.exec(full);
-      scanned = tail ? tail.index : full.length;
-      if (awaiting >= 0 && full.length > awaiting) {
-        schedulePause(); // 下一条已开始输出：先停顿、等它打完再放出（真人连发节奏）
-        return;
-      }
-      show(full.length); // 当前这条还在逐字输出：透传
     },
-    end(opts) {
-      if (opts?.immediate === true) {
-        // 失败路径：立刻放出全部剩余内容（错误信息要马上可见）
-        finished = true;
-        clearTimer();
-        awaiting = -1;
-        scanned = full.length;
-        show(full.length);
-        resolveDone();
-        return Promise.resolve();
-      }
-      if (finished) {
-        awaiting = -1;
-        return Promise.resolve();
-      }
-      finished = true;
-      if (shown.length >= full.length) {
-        awaiting = -1;
-        return Promise.resolve();
-      }
-      // 还有没放出的内容：继续按连发节奏逐条放出，全部放完后 resolve（落盘收尾等它）
-      clearTimer();
-      return new Promise<void>((resolve) => {
-        doneResolve = resolve;
-        schedulePause();
-      });
+    finish() {
+      // 剩余内容（最后一条 / 超出上限的溢出部分）：标记换成换行，半截「&&」不进气泡
+      let tail = full.slice(segStart).replace(MARKER_RE, '\n').trim();
+      tail = tail.replace(HALF_MARKER_RE, '').trim();
+      if (!tail || tail === lastEmitted) return '';
+      return tail;
     },
   };
 }

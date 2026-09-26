@@ -7342,3 +7342,41 @@ Stage Summary:
 - 微信与 QQ 均具备完整语音通话：用户从加号面板发起（拨号→AI 自动接听→打招呼→STT/LLM/TTS 循环），AI 可按人设/上下文主动发起来电（[语音通话] 标记+5 分钟冷却）与主动挂断（〔挂断〕标记）；状态机含拨号中/已接通/已取消/已挂断/未接听/已拒绝，计时与状态文案实时显示；静音（微信长按麦克风、QQ 菜单开关）与扬声器可切换
 - 通话结束生成带电话图标的通话卡片持久化在各自聊天里（已取消可点击重拨/对方未接听/已拒绝/未接听/通话时长 MM:SS）；会话列表预览显示 [语音通话]；通话卡片摘要进入后续聊天上下文
 - 音色走角色 voiceId→全局默认→内置声线链路，与语音消息共用 TTS/STT 配置；TTS/STT 失败均不中断通话（字幕/提示降级）；麦克风权限拒绝只影响通话内录音；通话记录持久化、不影响两 App 任何既有功能
+
+---
+Task ID: 1
+Agent: Z.ai Code (main)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库并恢复运行环境
+
+Work Log:
+- 使用 PAT 克隆 https://github.com/cczzff468/5200.git 到 /tmp/repo-5200
+- 确认仓库为「AI Phone 仿 iOS 智能助手」完整项目（最新提交 01e354b：微信/QQ 语音通话）
+- 停止本地 dev 服务器，替换 .git 为仓库历史（保留全部提交）
+- rsync 同步仓库文件到 /home/z/my-project（upload/ 为 OSS 挂载点已跳过，内容一致）
+- origin 远程已配置 token，可直接 git push
+- bun install（增量 14 包）+ prisma generate + prisma db push（schema 已同步）
+- 重启 dev server（端口 3000），GET / 200
+- Agent Browser 实机验证：锁屏渲染 → 上滑解锁 → 主屏幕 → 信息应用与 AI(Cove) 对话收发成功 → 灵动岛通知弹出 → 会话列表持久化 → 微信应用登录页正常
+- 日志核查：无浏览器 console 错误；天气 API 502 为沙箱外网限制（界面优雅降级）；chat 首次 502 后按内置降级机制切换内置模型成功（200）
+
+Stage Summary:
+- 项目已完整还原到沙箱并可正常运行，git 历史与远程推送权限就绪
+- 用户接下来将提出功能修改/新增需求
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: 通话界面/通话卡片改造 + AI 回复「最多 N 条 + 边接收边逐条显示」重构
+
+Work Log:
+- 语音通话界面（voice-call-screen.tsx）：QQ 删除三条横杠菜单按钮及其底部弹层，剩余麦克风/扬声器/挂断三按钮居中 gap-12 拉开间距，原菜单静音入口改为长按麦克风静音；微信删除麦克风按钮的 phase==='active' 条件，拨号中即显示（对照用户截图）
+- 通话卡片（CallCardBubble 重写）：改为与普通文字气泡完全同款样式——微信我方绿底文字在前图标在后、对方白底图标在前（带小三角尾巴）；QQ 我方蓝底白字实心图标在文字前、对方白底（无尾巴）；文案方向感知：cancelled 微信=已取消/QQ=已取消点击重拨，rejected out=对方已拒绝/in=已拒绝；取消卡整卡可点重拨
+- reply-count.ts：新增 createReplySegmentScanner 流式分段器（边接收边切分，N-1 条内实时放出，剩余留给 finish() 作第 N 条；空段跳过、连续重复丢弃、未闭合标记保护）；buildReplyCountPrompt 改为上限语义（最多 N 条、可少发、不硬凑/重复/空消息）；删除 createReplyPacer 与 splitReplyRender
+- chat-stream-store.ts：runStream 不再把原文写入展示状态（流式期间页面只显示正在输入），接入分段器 onSegment 实时回调；ChatStreamResult 新增 tail（未放出的最后一段）；单条模式（N=1）保持旧管线不变
+- ai-delivery.ts：AiDeliveryOptions 新增 initialDelay（分段批间打字节奏）；空批次参与排队（记忆提取挂钩全部投递完）
+- 五端（wechat/qq/chat/wx-group/qq-group）：runAiTurn/runCharTurn 新增 buildReplyMsgs+deliverAiMsg+enqueueBatch+deliverSegment 共用管线，onSegment 流中逐条投递，finalize 只处理 tail（N>1）/全文（N=1），不重放已投递分段；删除流式气泡渲染区，改为独立「正在输入」指示气泡（单聊 streaming||delivering，群聊 streaming 且显示当前发言角色）；识图失败提示移入指示区
+- 验证：eslint 0 错误、tsc 0 错误；bun 单测分段器 7 组边界用例全过（上限合并/空段/去重/标记保护/半截 &&/N=1）；Agent Browser 实机验证：微信单聊发消息 → 5 条回复逐条冒出（灵动岛计数 4 条→打字中→第 5 条完整），无先全文后消失；微信通话卡片=绿色普通气泡「通话时长 00:52📞」；QQ 通话拨号中/接通后均 3 按钮、无菜单、间距拉开；QQ 通话卡片=蓝色普通气泡「📞通话时长 00:50」；dev.log 无错误、浏览器 console 无错误
+
+Stage Summary:
+- 交付：通话界面两处修改 + 通话卡片按截图改为普通气泡 + 流式写入删除 + 分条逻辑改为「最多 N 条 + 边接收边逐条显示」
+- 架构：分段器为唯一切分源（onSegment 实时投递 + finish 交付尾巴），五端共用同一管线，退出页面继续接收机制保持不变

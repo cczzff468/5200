@@ -9,15 +9,17 @@
  * 1. 用户发送消息后，请求由 beginChatStream 在全局发起并接收流式数据；
  * 2. 退出聊天页 / 退出 App 不会中断请求（流与 React 组件生命周期完全解耦，
  *    读流循环跑在本模块的异步函数里，不依赖任何组件存活）；
- * 3. 重新进入聊天页时，useChatStream 读到该会话的实时流式内容继续渲染；
- * 4. 请求进行中（status==='streaming'）页面显示「正在输入…」（标题 + 空内容时的打字动画）；
- * 5. 请求完成或失败后，由发起方注册的 finalize 回调把最终消息【一次性】写入
+ * 3. 重新进入聊天页时，useChatStream 读到该会话的流状态继续渲染（流式期间只显示「正在输入」，
+ *    已收到的分段消息由各 App 经 onSegment 解析成真实消息逐条投递落盘，与页面是否存活无关）；
+ * 4. 回复条数 >1 时按「边接收边逐条显示」分段：分段器每凑齐一条完整消息立刻回调 onSegment
+ *    投递上屏（N 为上限不是任务），最后一条经 finalize 的 result.tail 交付；
+ * 5. 请求完成或失败后，由发起方注册的 finalize 回调把剩余消息写入
  *    对应角色的聊天记录（各 App 自己的 loadMsgs/saveMsgs，消息类型与错误文案按 App 区分），
  *    并广播 chat-stream-finalized 事件供会话列表刷新预览；
  * 6. 角色隔离：以 sessionKey（如 wx:<contactId> / qq:<contactId> / sms:<storageKey>）为键，
  *    每个会话同一时刻最多一条流（isChatStreaming 防重入），不同角色 / 不同 App 的流互不影响；
  *    人设 system 消息仍由各 App 在发送时组装后随 messages 传入（本模块原样透传，不感知人设）。
- * 7. 回复条数：条数指令由各 App 注入人设 system 消息，一轮发完、不做补发；
+ * 7. 回复条数：条数指令（N 条上限）由各 App 注入人设 system 消息，一轮发完、不做补发；
  *
  * 响应格式：/api/chat 返回 text/plain 纯文本增量流（服务端已把上游 SSE 解析为纯文本），
  * 客户端按「字节累积 = 已收内容」处理；上游不可达 / directOnly 时回退浏览器直连
@@ -28,7 +30,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ApiConfig } from '@/lib/ios/store';
 import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
-import { createReplyPacer } from '@/lib/reply-count';
+import { createReplySegmentScanner } from '@/lib/reply-count';
 import { describeImages } from '@/lib/vision-client';
 // ---------------- 公开类型 ----------------
 
@@ -40,14 +42,14 @@ export interface ChatStreamState {
   sessionKey: string;
   /** AI 回复消息 id（最终落盘沿用，页面渲染 key 用） */
   aiMsgId: string;
-  /** 已接收的流式内容（增量累计） */
+  /** 已接收的完整内容（流进行中不更新、结束时一次性写入；不再用于流式气泡展示） */
   content: string;
   status: ChatStreamStatus;
   /** status==='error' 时的友好错误文案（各 App 落盘时按自己的格式包裹） */
   error?: string;
   /** 流开始时间（= 用户消息发出时刻，落盘时作为消息时间） */
   startedAt: number;
-  /** 本次流请求的回复条数（>1 时流式气泡按「一行一条」实时切分渲染） */
+  /** 本次流请求的回复条数（>1 时按「边接收边逐条显示」分段投递，N 为上限） */
   replyCount?: number;
   /**
    * 识图失败提示（本轮图片交给识图模型失败时展示；只作系统提示，
@@ -72,6 +74,12 @@ export interface ChatStreamResult {
   aiMsgId: string;
   /** 流式接收的完整内容（可能为空串：由各 App 决定空回复兜底文案） */
   content: string;
+  /**
+   * 未随 onSegment 放出的最后一段：回复条数 >1 时 = 第 N 条（分段器已按上限留出，
+   * 可能包含溢出合并的后续句子；空串 = 流中分段已全部投递）；单条模式 = 完整 content。
+   * 各 App 的 finalize 只处理 tail（多条模式）/ content（单条模式），与流中已投递分段不重不漏。
+   */
+  tail: string;
   /** 失败原因（status==='error' 时存在） */
   error?: string;
   /** 流开始时间（消息 time 字段用） */
@@ -85,11 +93,17 @@ export interface BeginChatStreamOptions {
   messages: ChatPayloadMessage[];
   apiConfig: ApiConfig;
   /**
-   * 回复条数（>1 时启用）：本次要求 AI 连发多条消息，本模块会把流式增量经过
-   * 连发节奏器（一条消息输出完后先停顿片刻再放出下一条）再更新 content，
-   * 并抬高 max_tokens 下限防止多条被截断；条数切分与落盘由各 App 的 finalize 负责。
+   * 回复条数（>1 时启用）：本次要求 AI 连发多条消息（N 是上限不是任务），
+   * 本模块按「边接收边逐条显示」处理——每凑齐一条完整消息立刻回调 onSegment，
+   * 并抬高 max_tokens 下限防止多条被截断；最后一条经 finalize 的 result.tail 交付。
    */
   replyCount?: number;
+  /**
+   * 流中分段回调（回复条数 >1 时启用）：分段器每凑齐一条完整消息（边界出现、标记闭合）
+   * 立刻回调一次，各 App 在此把该段解析成真实消息排队逐条投递上屏（边接收边逐条显示，
+   * 不存在先全文后消失的流式气泡）；退出页面后本回调照常触发（模块层运行）。
+   */
+  onSegment?: (segment: string) => void;
   /**
    * 本轮识图输入（可选）：用户在聊天里发送的图片。提供时先用「设置 › 识图模型」
    * 把图片转成文字描述，再作为上下文交给聊天模型；识图模型只负责看图，
@@ -151,20 +165,22 @@ function patchState(rt: StreamRuntime, patch: Partial<ChatStreamState>): void {
 
 async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promise<void> {
   const { apiConfig, messages } = opts;
-  const acc = () => rt.state.content;
-  // 连发节奏器（回复条数 > 1 时启用）：分隔/句末边界后先停顿再放出下一条，
-  // 流数据接收结束后剩余消息也继续按节奏逐条放出（end 返回 Promise，全部放完才 resolve）
+  // 流式分段器（回复条数 > 1 时启用）：边接收边切分，每凑齐一条完整消息立刻经 onSegment
+  // 投递上屏；原文只在本模块累计（raw），不写入展示状态 —— 流式期间页面只显示「正在输入」，
+  // 不再有「先全文后消失」的流式气泡；分段与展示状态完全分离（流式和分条不改同一块状态）
   const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
-  const pacer = multi ? createReplyPacer((shown) => patchState(rt, { content: shown })) : null;
+  const scanner =
+    multi && opts.onSegment ? createReplySegmentScanner(opts.onSegment, opts.replyCount ?? 1) : null;
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
   const effConfig =
     multi && opts.replyCount
       ? { ...apiConfig, maxTokens: Math.max(apiConfig.maxTokens, opts.replyCount * 120) }
       : apiConfig;
-  /** 增量统一入口：多条模式进节奏器，单条模式直接透传 */
+  /** 增量统一入口：原文累计 + 多条模式进分段器（立刻放出已凑齐的完整消息） */
+  let raw = '';
   const onDelta = (delta: string): void => {
-    if (pacer) pacer.push(delta);
-    else patchState(rt, { content: acc() + delta });
+    raw += delta;
+    scanner?.push(delta);
   };
   /**
    * 发起一轮流式请求并读完整条流（增量统一交给 onDelta）。
@@ -209,7 +225,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
         throw new Error(detail || `请求失败（${res.status}）`);
       }
     } else {
-      // 纯文本流（text/plain）：字节增量统一交给 onDelta（多条模式经节奏器）
+      // 纯文本流（text/plain）：字节增量统一交给 onDelta（多条模式进分段器）
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       for (;;) {
@@ -266,20 +282,15 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     }
     // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）
     await streamOnce(workMessages);
-    // 流数据接收结束：剩余未放出的消息继续按连发节奏逐条放出（每条完整弹出、间隔停顿），
-    // 全部放完后才收尾落盘 —— 短回复也是一句一句出现，不会在流结束瞬间全部弹出
-    await pacer?.end();
     patchState(rt, { status: 'done' });
   } catch (err) {
     // 代理与浏览器直连都失败：最后用服务端内置模型兜底一次（forceSdk），救回本轮回复；
-    // 兜底成功按正常完成收尾，失败才落错误文案（保留最先的代理侧错误，便于区分原因）
+    // 兜底成功按正常完成收尾，失败才落错误文案（保留最先的代理侧错误，便于区分原因）；
+    // 流中已凑齐的分段已经过 onSegment 逐条投递上屏，出错不影响它们（不丢已到手的正文）
     const viaSdk = await sdkFallbackOnce(workMessages);
     if (viaSdk) {
-      await pacer?.end();
       patchState(rt, { status: 'done' });
     } else {
-      // 失败立刻放出已收内容（错误信息要马上可见；各 App 错误时按自己的文案落盘，不丢已到手的正文）
-      await pacer?.end({ immediate: true });
       patchState(rt, {
         status: 'error',
         error: err instanceof Error && err.message ? err.message : '消息没有送达，请稍后重试',
@@ -292,10 +303,14 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     try {
       opts.finalize({
         aiMsgId: rt.state.aiMsgId,
-        content: rt.state.content,
+        content: raw,
+        // 多条模式：tail = 分段器剩余的最后一条（第 N 条，可能含溢出合并的句子）；
+        // 单条模式：tail = 完整内容（finalize 按旧管线处理，行为与旧版一致）
+        tail: scanner ? scanner.finish() : raw,
         error: rt.state.error,
         startedAt: rt.state.startedAt,
       });
+      patchState(rt, { content: raw });
     } catch {
       // 落盘失败不影响状态广播（与各 App 持久化失败静默的既有策略一致）
     }

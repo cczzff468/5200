@@ -41,7 +41,7 @@ import {
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getReplyCount, buildReplyCountPrompt, splitReplySegments, splitReplyRender } from '@/lib/reply-count';
+import { getReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -876,125 +876,171 @@ function ChatView({
       wbBlocks ?? WB_EMPTY_BLOCKS,
     );
     if (sysEvent) payload.push({ role: 'user', content: sysEvent });
+    // ---- 边接收边逐条投递（分段流式核心）----
+    // 流中每凑齐一条完整消息（分段器回调 onSegment）立刻排队投递上屏；
+    // 流结束后 finalize 只处理剩余的最后一条（N 条上限的第 N 条）——
+    // 不再有「先全文显示、消失、再逐条重放」的流式气泡，流式与分条也不改同一块展示状态。
+    const peerLabel = peer.name ?? peer.title;
+    let deliveredAny = false; // 本轮是否已有分段消息排队投递（决定兜底文案）
+    let batchStarted = false; // 是否已排过批（首批立即上屏，后续批按打字节奏先停顿）
+    let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
+
+    /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成（模块层调用，与页面是否存活无关） */
+    const deliverAiMsg = (m: ChatMsg) => {
+      saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), m]);
+      // 语音频率：每条文字消息独立判定（短路调用保持周期语义；命中 → 通知直接显示[语音]，未命中 → 常规文字预览）
+      const voiceTurn =
+        !m.error && !m.sys && !m.blkreq &&
+        (m.kind === undefined || m.kind === 'text') &&
+        m.content.trim().length > 0 &&
+        decideAiVoiceMessage(voiceFreqKey);
+      const body = voiceTurn
+        ? '[语音]'
+        : notifyPreviewText({
+            kind: m.kind,
+            content: m.content,
+            voiceText: m.voice?.transcript || m.voice?.localText || null,
+          });
+      if (body !== null) {
+        pushChatNotification({
+          sessionKey: `sms:${storageKey}`,
+          app: 'chat',
+          title: peerLabel,
+          avatar: peer.avatarSrc ?? null,
+          body,
+          target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
+        });
+      }
+      // 命中语音频率：异步合成，成功后就地升级为语音气泡（失败保持文字自动降级）
+      if (voiceTurn) {
+        const targetId = m.id;
+        void synthesizeAiVoice(m.content, memContactId)
+          .then((clip) => {
+            if (!clip) return; // 合成失败 → 保持文字
+            const voice: VoiceMsgData = {
+              url: clip.url,
+              duration: clip.duration,
+              wave: clip.wave,
+              localText: clip.localText,
+              synth: clip.synth,
+              contactId: memContactId ?? undefined,
+            };
+            const upgrade = (list: ChatMsg[]): ChatMsg[] =>
+              list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+            setMsgs(upgrade);
+            saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
+          })
+          .catch(() => {});
+      }
+    };
+
+    /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
+    const enqueueBatch = (built: ChatMsg[]) => {
+      if (built.length === 0) return;
+      void scheduleAiDelivery<ChatMsg>(
+        sessionKey,
+        built,
+        deliverAiMsg,
+        {
+          initialDelay: batchStarted ? typingDelayOf(built[0].content ?? '') : 0,
+          delay: (i) => (i + 1 < built.length ? typingDelayOf(built[i + 1].content ?? '') : 0),
+        },
+      );
+      batchStarted = true;
+    };
+
+    /**
+     * 把一段回复文本解析成待投递消息（流中分段与 finalize 最后一段共用同一套管线，不重不漏）：
+     * 拉黑类动作标记就地应用（改状态 + 系统提示行/申请卡片）；asSingle=true（单条模式）时文字块
+     * 再按「&&&」标记切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
+     */
+    const buildReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): ChatMsg[] => {
+      const out: ChatMsg[] = [];
+      let t = baseTime;
+      for (const part of extractRichActionParts(rawText)) {
+        if (part.type === 'action') {
+          const bk = blockActionKindOf(part.action);
+          if (bk && wbContactId) {
+            const res = applyCharBlockAction('sms', wbContactId, bk, part.action.targetId);
+            setBlk(res.entry);
+            if (res.changed && bk === 'block') {
+              out.push({ id: `${aiId}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `你已被「${peerLabel}」拉黑` } });
+              t += 1;
+              msgIdx += 1;
+            } else if (res.changed && bk === 'unblock') {
+              out.push({ id: `${aiId}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `「${peerLabel}」解除了对你的拉黑` } });
+              t += 1;
+              msgIdx += 1;
+            } else if (res.reqCreated && bk === 'request') {
+              out.push({ id: `${aiId}-blk-${msgIdx}`, role: 'assistant', content: '', time: t, blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+              t += 1;
+              msgIdx += 1;
+            }
+          }
+          continue; // 信息端无红包/转账动作
+        }
+        const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text]).map((seg) =>
+          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
+        );
+        for (const seg of segs) {
+          out.push({
+            id: msgIdx === 0 ? aiId : `${aiId}-${msgIdx}`,
+            role: 'assistant',
+            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
+            time: t,
+          });
+          t += 600 + Math.floor(Math.random() * 600);
+          msgIdx += 1;
+        }
+      }
+      return out;
+    };
+
+    /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻排队上屏（边接收边逐条显示） */
+    const deliverSegment = (seg: string) => {
+      const built = buildReplyMsgs(seg, false, Date.now());
+      if (built.length === 0) return;
+      deliveredAny = true;
+      enqueueBatch(built);
+    };
+
     const started = beginChatStream({
       sessionKey,
       aiMsgId: aiId,
       messages: payload,
       apiConfig,
       replyCount,
-      finalize: ({ aiMsgId, content, error, startedAt }) => {
+      // 边接收边逐条显示：分段器每凑齐一条完整消息立刻排队投递（多条模式）
+      onSegment: deliverSegment,
+      finalize: ({ content, error, startedAt, tail }) => {
         if (error) {
           saveMsgs(storageKey, [
             ...(loadMsgs(storageKey) ?? []),
-            { id: aiMsgId, role: 'assistant', content: error, time: startedAt, error: true },
+            { id: aiId, role: 'assistant', content: error, time: startedAt, error: true },
           ]);
           return;
         }
-        // 1) 先按出现顺序切成「文字块 + 拉黑动作」交错片段：拉黑类标记就地应用（改状态 + 系统提示行/申请卡片），
-        //    保证落盘顺序与流式期间用户看到的顺序一致；信息端无红包/转账，其他动作标记忽略
-        // 2) 文字块按边界（分隔标记/换行/句末标点，一句一条）切成多条消息；表情包开关关闭时剥除 emoji
-        const peerLabel = peer.name ?? peer.title;
-        const saved: ChatMsg[] = [];
-        let t = startedAt;
-        let segIdx = 0;
-        const pushTextSegs = (text: string) => {
-          const segs = splitReplySegments(text, replyCount > 1).map((seg) =>
-            stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
-          );
-          for (const seg of segs) {
-            const msg: ChatMsg = {
-              id: segIdx === 0 ? aiMsgId : `${aiMsgId}-${segIdx}`,
-              role: 'assistant',
-              content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
-              time: t,
-            };
-            t += 600 + Math.floor(Math.random() * 600);
-            segIdx += 1;
-            saved.push(msg);
-          }
-        };
-        for (const part of extractRichActionParts(content)) {
-          if (part.type === 'action') {
-            const bk = blockActionKindOf(part.action);
-            if (bk && wbContactId) {
-              const res = applyCharBlockAction('sms', wbContactId, bk, part.action.targetId);
-              setBlk(res.entry);
-              if (res.changed && bk === 'block') {
-                saved.push({ id: `${aiMsgId}-sys-${segIdx}`, role: 'assistant', content: '', time: t, sys: { text: `你已被「${peerLabel}」拉黑` } });
-                t += 1;
-                segIdx += 1;
-              } else if (res.changed && bk === 'unblock') {
-                saved.push({ id: `${aiMsgId}-sys-${segIdx}`, role: 'assistant', content: '', time: t, sys: { text: `「${peerLabel}」解除了对你的拉黑` } });
-                t += 1;
-                segIdx += 1;
-              } else if (res.reqCreated && bk === 'request') {
-                saved.push({ id: `${aiMsgId}-blk-${segIdx}`, role: 'assistant', content: '', time: t, blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
-                t += 1;
-                segIdx += 1;
-              }
-              continue;
-            }
-            continue; // 信息端无红包/转账动作
-          }
-          pushTextSegs(part.text);
-        }
-        // 整段空白且没有任何拉黑产出时不算有效回复，给兑底文案
-        if (saved.length === 0) {
-          saved.push({ id: aiMsgId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt });
-        }
-        // 逐条投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，
-        // 停顿按内容长度模拟打字节奏；调度器在模块层运行，与聊天页是否存活无关
+        // 多条模式：流中分段已通过 onSegment 逐条排队投递上屏（边接收边逐条显示），
+        // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复在此按旧管线落盘
+        const built = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now());
+        // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
+        const finalBatch: ChatMsg[] =
+          built.length > 0
+            ? built
+            : deliveredAny
+              ? []
+              : [{ id: aiId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt }];
+        // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
+        // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
+        // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
         void scheduleAiDelivery<ChatMsg>(
           sessionKey,
-          saved,
-          (m) => {
-            saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), m]);
-            // 语音频率：每条文字消息独立判定（短路调用保持周期语义；命中 → 通知直接显示[语音]，未命中 → 常规文字预览）
-            const voiceTurn =
-              !m.error && !m.sys && !m.blkreq &&
-              (m.kind === undefined || m.kind === 'text') &&
-              m.content.trim().length > 0 &&
-              decideAiVoiceMessage(voiceFreqKey);
-            const body = voiceTurn
-              ? '[语音]'
-              : notifyPreviewText({
-                  kind: m.kind,
-                  content: m.content,
-                  voiceText: m.voice?.transcript || m.voice?.localText || null,
-                });
-            if (body !== null) {
-              pushChatNotification({
-                sessionKey: `sms:${storageKey}`,
-                app: 'chat',
-                title: peerLabel,
-                avatar: peer.avatarSrc ?? null,
-                body,
-                target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
-              });
-            }
-            // 命中语音频率：异步合成，成功后就地升级为语音气泡（失败保持文字自动降级）
-            if (voiceTurn) {
-              const targetId = m.id;
-              void synthesizeAiVoice(m.content, memContactId)
-                .then((clip) => {
-                  if (!clip) return; // 合成失败 → 保持文字
-                  const voice: VoiceMsgData = {
-                    url: clip.url,
-                    duration: clip.duration,
-                    wave: clip.wave,
-                    localText: clip.localText,
-                    synth: clip.synth,
-                    contactId: memContactId ?? undefined,
-                  };
-                  const upgrade = (list: ChatMsg[]): ChatMsg[] =>
-                    list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
-                  setMsgs(upgrade);
-                  saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
-                })
-                .catch(() => {});
-            }
+          finalBatch,
+          deliverAiMsg,
+          {
+            initialDelay: finalBatch.length > 0 ? (batchStarted ? typingDelayOf(finalBatch[0].content ?? '') : 0) : 0,
+            delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
           },
-          { delay: (i) => (i + 1 < saved.length ? typingDelayOf(saved[i + 1].content ?? '') : 0) } // 首条立即出现，停顿按下一条长度模拟打字
         ).then(() => {
           // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（全部消息投递完后执行；AI 助手会话不参与；
           // 后台异步，失败静默）。names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人
@@ -1683,74 +1729,10 @@ function ChatView({
             </div>
           );
         })}
-        {/* 全局流式回复气泡（聊天页外发起的流 / 退出后重进同样从这里实时渲染；
-            iMessage 语义：未收到内容时显示打字中动画，收到后变为流式文本气泡）。
-            回复条数 > 1 时按边界（标记/换行/句末标点，一句一条）实时切成多个气泡，下一句没打完时显示打字中动画（一句一句连发节奏） */}
-        {stream && stream.status === 'streaming' &&
-          (() => {
-            const split = splitReplyRender(stream.content, (stream.replyCount ?? 1) > 1);
-            const dots = (
-              <div className="relative rounded-[18px] rounded-bl-[5px] bg-muted px-4 py-3.5">
-                <span
-                  aria-hidden="true"
-                  className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
-                  style={{ clipPath: TAIL_CLIP_LEFT }}
-                />
-                <div className="flex items-center gap-1">
-                  {[0, 1, 2].map((d) => (
-                    <span
-                      key={d}
-                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
-                      style={{ animationDelay: `${d * 0.15}s` }}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-            return (
-              <motion.div
-                initial={{ opacity: 0, y: 10, scale: 0.97 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 36 }}
-                className="mt-2.5 flex justify-start"
-                data-testid="sms-stream-bubble"
-              >
-                <div className="flex max-w-[76%] flex-col items-start">
-                  {split.texts.map((t, i) => {
-                    const lastOfGroup = i === split.texts.length - 1 && !split.pending;
-                    return (
-                      <div
-                        key={i}
-                        data-testid={`sms-stream-bubble-${i}`}
-                        className="relative mb-[3px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] bg-muted px-3.5 py-2 text-[15px] leading-[1.45] text-foreground last:mb-0"
-                      >
-                        {lastOfGroup && (
-                          <span
-                            aria-hidden="true"
-                            className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
-                            style={{ clipPath: TAIL_CLIP_LEFT }}
-                          />
-                        )}
-                        <span className="relative">{stickersOn ? t : stripEmojiText(t)}</span>
-                      </div>
-                    );
-                  })}
-                  {(split.pending || split.texts.length === 0) && (
-                    <div data-testid="sms-stream-typing">{dots}</div>
-                  )}
-                  {/* 拉黑图标：流式期间与落盘消息一致，气泡出现即显示（不等回复完成） */}
-                  {(blockCoversAt(blk, 'byUser', stream.startedAt) || blockCoversAt(blk, 'byChar', stream.startedAt)) && (
-                    <div className="flex items-end gap-1.5">
-                      {blockIconSpan('peer', 'sms-stream-block-icon')}
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            );
-          })()}
-        {/* 逐条投递打字动画：流结束后 AI 回复按真人节奏逐条上屏，投递完成前维持打字中气泡
-            （信息端顶栏无「正在输入」标题，这个气泡就是投递期的输入指示；最后一条到达即消失） */}
-        {!streaming && delivering && (
+        {/* 正在输入指示（流式接收 + 逐条投递期间显示）：AI 回复为「边接收边逐条显示」——
+            完整分段直接作为真实消息逐条投递上屏（见 runTurn 的 onSegment/finalize），
+            不再有先全文显示后消失的流式气泡（信息端顶栏无「正在输入」标题，这个气泡就是输入指示） */}
+        {(streaming || delivering) && (
           <motion.div
             initial={{ opacity: 0, y: 10, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}

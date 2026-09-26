@@ -4,15 +4,17 @@
  * 微信 / QQ 语音通话界面（同一引擎 useChatCall，两种皮肤）：
  *
  * - 微信皮肤（对照用户截图）：深色背景；接通后顶部居中显示通话时长；方形圆角头像；
- *   底部三个圆形按钮（麦克风 / 挂断 / 扬声器）；来电页「邀请你语音通话」+ 红拒绝/绿接听圆形按钮 +
+ *   底部三个圆形按钮（麦克风 / 挂断 / 扬声器，麦克风任何时候都在，拨号中也可看可按）；
+ *   来电页「邀请你语音通话」+ 红拒绝/绿接听圆形按钮 +
  *   「1小时内隐藏他的来电」胶囊；点按麦克风说话、再点发送，长按麦克风静音。
  * - QQ 皮肤（对照用户截图）：深色背景；圆形大头像；呼叫中「正在呼叫…」；接通后时长显示在
- *   底部按钮上方；底部圆角方形按钮（菜单 / 麦克风 / 扬声器 / 挂断）；来电页「邀请你语音通话」+
- *   「消息回复」+ 红挂断/绿接听圆角方按钮；菜单里可静音。
+ *   底部按钮上方；底部三个圆角方形按钮（麦克风 / 扬声器 / 挂断，居中拉开间距）；
+ *   来电页「邀请你语音通话」+「消息回复」+ 红挂断/绿接听圆角方按钮；长按麦克风静音。
  *
  * - 状态区：「正在说话」「正在听」「正在思考…」「识别中…」等；TTS 失败时回复文字以字幕显示，通话不中断。
- * - 通话卡片（CallCardBubble）：结束后插入聊天记录——已取消（点击重拨）/ 对方未接听 / 已拒绝 /
- *   未接听 / 通话时长；带电话图标，微信/QQ 各自配色。
+ * - 通话卡片（CallCardBubble）：结束后插入聊天记录——普通文字气泡同款样式（跟普通气泡一样），
+ *   电话图标 + 文案（已取消（点击重拨）/ 对方未接听 / 对方已拒绝 / 已拒绝 / 未接听 / 通话时长）；
+ *   QQ 蓝底白字图标在文字前，微信我方绿底文字在前、对方白底图标在前。
  */
 
 import { useRef, useState } from 'react';
@@ -27,7 +29,6 @@ import {
   Plus,
   Volume2,
   VolumeX,
-  X,
 } from 'lucide-react';
 import { DefaultAvatar } from './default-avatar';
 import {
@@ -231,30 +232,28 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
       ) : (
         <div className="flex flex-col items-center px-8 pb-[max(34px,env(safe-area-inset-bottom))]">
           <div className="flex w-full items-end justify-center gap-12">
-            {/* 麦克风：点按说话 / 长按静音（拨号中禁用） */}
-            {phase === 'active' && (
-              <div className="flex flex-col items-center gap-2">
-                <button
-                  type="button"
-                  aria-label={muted ? '取消静音' : recording ? '发送' : '说话（长按静音）'}
-                  aria-pressed={muted}
-                  data-testid="wx-call-mic"
-                  onPointerDown={holdStart}
-                  onPointerUp={holdEnd}
-                  onPointerLeave={holdEnd}
-                  onContextMenu={(e) => e.preventDefault()}
-                  onClick={micClick}
-                  className={`${wxRound} select-none ${
-                    recording ? 'bg-white text-black ring-2 ring-[#07C160]' : muted ? 'bg-white/10 text-white/85' : 'bg-white/10 text-white'
-                  }`}
-                >
-                  {muted ? <MicOff className="h-7 w-7" strokeWidth={1.9} /> : <Mic className={`h-7 w-7 ${recording ? 'animate-pulse' : ''}`} strokeWidth={1.9} />}
-                </button>
-                <span className="max-w-[86px] text-center text-[12px] leading-tight text-white/75">
-                  {muted ? '麦克风已关' : recording ? '正在听…' : '麦克风已开'}
-                </span>
-              </div>
-            )}
+            {/* 麦克风：任何时候都在（拨号中也在，对照微信原生）；点按说话 / 长按静音 */}
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                aria-label={muted ? '取消静音' : recording ? '发送' : '说话（长按静音）'}
+                aria-pressed={muted}
+                data-testid="wx-call-mic"
+                onPointerDown={holdStart}
+                onPointerUp={holdEnd}
+                onPointerLeave={holdEnd}
+                onContextMenu={(e) => e.preventDefault()}
+                onClick={micClick}
+                className={`${wxRound} select-none ${
+                  recording ? 'bg-white text-black ring-2 ring-[#07C160]' : muted ? 'bg-white/10 text-white/85' : 'bg-white/10 text-white'
+                }`}
+              >
+                {muted ? <MicOff className="h-7 w-7" strokeWidth={1.9} /> : <Mic className={`h-7 w-7 ${recording ? 'animate-pulse' : ''}`} strokeWidth={1.9} />}
+              </button>
+              <span className="max-w-[86px] text-center text-[12px] leading-tight text-white/75">
+                {muted ? '麦克风已关' : recording ? '正在听…' : '麦克风已开'}
+              </span>
+            </div>
             <div className="flex flex-col items-center gap-2">
               <button type="button" onClick={call.hangup} aria-label="挂断" data-testid="wx-call-hangup" className={`${wxRound} bg-[#FA5151] text-white`}>
                 <PhoneOff className="h-8 w-8" strokeWidth={2} />
@@ -290,7 +289,32 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd, onMessageReply }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
-  const [menuOpen, setMenuOpen] = useState(false);
+
+  // 长按麦克风 = 静音切换（原三条横杠菜单里的静音入口移到长按手势）；点按 = 说话/发送
+  const holdTimer = useRef<number | null>(null);
+  const longFired = useRef(false);
+  const holdStart = () => {
+    longFired.current = false;
+    if (phase !== 'active') return;
+    holdTimer.current = window.setTimeout(() => {
+      longFired.current = true;
+      call.toggleMute();
+    }, 550);
+  };
+  const holdEnd = () => {
+    if (holdTimer.current !== null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  };
+  const micClick = () => {
+    if (longFired.current) return;
+    if (muted) {
+      call.toggleMute();
+      return;
+    }
+    call.tapMic();
+  };
 
   const qqSquare =
     'flex h-[72px] w-[72px] items-center justify-center rounded-[26px] transition-colors active:opacity-70';
@@ -354,27 +378,20 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
               {formatCallDuration(seconds)}
             </div>
           )}
-          <div className="flex w-full items-center justify-between px-1">
-            {/* 菜单（静音入口；拨号中隐藏） */}
-            {phase === 'active' ? (
-              <button type="button" onClick={() => setMenuOpen(true)} aria-label="更多" data-testid="qq-call-menu" className={darkBtn}>
-                <span className="flex flex-col gap-[5px]" aria-hidden="true">
-                  <span className="block h-[2px] w-[22px] rounded bg-current" />
-                  <span className="block h-[2px] w-[22px] rounded bg-current" />
-                  <span className="block h-[2px] w-[22px] rounded bg-current" />
-                </span>
-              </button>
-            ) : (
-              <span className="h-[72px] w-[72px]" aria-hidden="true" />
-            )}
-            {/* 麦克风：点按说话 / 发送 */}
+          {/* 三个按钮居中拉开间距（原三条横杠菜单按钮已删除，长按麦克风可静音） */}
+          <div className="flex w-full items-center justify-center gap-12">
+            {/* 麦克风：点按说话 / 发送，长按静音 */}
             <button
               type="button"
-              onClick={call.tapMic}
-              aria-label={recording ? '发送' : '说话'}
+              onClick={micClick}
+              onPointerDown={holdStart}
+              onPointerUp={holdEnd}
+              onPointerLeave={holdEnd}
+              onContextMenu={(e) => e.preventDefault()}
+              aria-label={recording ? '发送' : muted ? '取消静音' : '说话（长按静音）'}
               aria-pressed={recording}
               data-testid="qq-call-mic"
-              className={`${recording ? `${whiteBtn} ring-2 ring-[#2FBF71]` : muted ? `${darkBtn} opacity-60` : whiteBtn}`}
+              className={`${recording ? `${whiteBtn} ring-2 ring-[#2FBF71]` : muted ? `${darkBtn} opacity-60` : whiteBtn} select-none`}
             >
               <Mic className={`h-7 w-7 ${recording ? 'animate-pulse' : ''}`} strokeWidth={1.9} />
             </button>
@@ -392,34 +409,6 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
             {/* 挂断 */}
             <button type="button" onClick={call.hangup} aria-label="挂断" data-testid="qq-call-hangup" className={`${qqSquare} bg-[#F5455C] text-white`}>
               <PhoneOff className="h-8 w-8" strokeWidth={2} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 菜单底部弹层：静音 / 取消 */}
-      {menuOpen && (
-        <div className="absolute inset-0 z-20 flex flex-col justify-end bg-black/50" role="dialog" aria-label="通话菜单" onClick={() => setMenuOpen(false)} data-testid="qq-call-menu-sheet">
-          <div className="mx-3 mb-[max(14px,env(safe-area-inset-bottom))] overflow-hidden rounded-[14px] bg-[#F7F7F7] dark:bg-[#2A2A2E]" onClick={(e) => e.stopPropagation()}>
-            <button
-              type="button"
-              onClick={() => {
-                call.toggleMute();
-                setMenuOpen(false);
-              }}
-              className="flex w-full items-center justify-between px-5 py-4 text-[16px] text-black active:bg-black/5 dark:text-white dark:active:bg-white/10"
-              data-testid="qq-call-menu-mute"
-            >
-              <span>{muted ? '取消静音' : '静音麦克风'}</span>
-              {muted && <MicOff className="h-5 w-5 text-[#F5455C]" strokeWidth={1.9} />}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMenuOpen(false)}
-              className="flex w-full items-center justify-center border-t border-black/5 px-5 py-4 text-[16px] text-[#12B7F5] active:bg-black/5 dark:border-white/10 dark:active:bg-white/10"
-            >
-              <X className="mr-1 h-4 w-4" strokeWidth={2} />
-              取消
             </button>
           </div>
         </div>
@@ -449,14 +438,19 @@ export function callResultToCardState(r: ChatCallResult): CallCardState {
   }
 }
 
-export function callCardSubtitle(state: CallCardState, duration: number): string {
+/**
+ * 通话卡片文案（对照用户截图）：
+ * - QQ：我方取消 = 「已取消，点击重拨」（整卡可点重拨）；对方拒接 = 「对方已拒绝」；
+ * - 微信：我方取消 = 「已取消」；对方拒接 = 「对方已拒绝」、我方拒接来电 = 「已拒绝」。
+ */
+export function callCardText(state: CallCardState, duration: number, direction: 'out' | 'in', variant: 'wx' | 'qq'): string {
   switch (state) {
     case 'cancelled':
-      return '已取消，点击重拨';
+      return variant === 'qq' ? '已取消，点击重拨' : '已取消';
     case 'no-answer':
       return '对方未接听';
     case 'rejected':
-      return '已拒绝';
+      return direction === 'out' ? '对方已拒绝' : '已拒绝';
     case 'missed-in':
       return '未接听';
     default:
@@ -481,49 +475,69 @@ export function callCardAiText(state: CallCardState, duration: number): string {
 }
 
 /**
- * 通话记录卡片（微信/QQ 聊天气泡内；带电话图标，样式对照两 App）。
- * state==='cancelled' 时整卡可点（重拨）。
+ * 通话记录卡片（微信/QQ 聊天气泡内）：跟普通文字气泡完全同款——同底色、同圆角、同小三角尾巴，
+ * 内容为电话图标 + 文案。图标位置对照两 App 原生：QQ 图标恒在文字前（我方蓝底白图标，
+ * 对方白底深图标）；微信我方文字在前（绿底）、对方图标在前（白底）。
+ * state==='cancelled' 且我方拨打时整卡可点（重拨）。
  */
 export function CallCardBubble({
   variant,
   state,
   duration,
+  direction = 'out',
   onRedial,
 }: {
   variant: 'wx' | 'qq';
   state: CallCardState;
   duration: number;
+  direction?: 'out' | 'in';
   onRedial?: () => void;
 }) {
-  const accent = variant === 'wx' ? '#07C160' : '#12B7F5';
-  const clickable = state === 'cancelled' && Boolean(onRedial);
+  const mine = direction === 'out';
+  const clickable = state === 'cancelled' && mine && Boolean(onRedial);
+  const text = callCardText(state, duration, direction, variant);
+  const isWx = variant === 'wx';
+  const iconFirst = variant === 'qq' || !mine;
+  const phoneIcon = (
+    <Phone
+      className={`${isWx ? 'h-[15px] w-[15px]' : 'h-[18px] w-[18px]'} shrink-0`}
+      strokeWidth={variant === 'qq' && mine ? 0 : 2}
+      {...(variant === 'qq' && mine ? { fill: 'currentColor' } : {})}
+      aria-hidden="true"
+    />
+  );
   return (
     <button
       type="button"
       onClick={clickable ? onRedial : undefined}
       disabled={!clickable}
-      aria-label={`语音通话：${callCardSubtitle(state, duration)}${clickable ? '，点击重拨' : ''}`}
+      aria-label={`语音通话：${text}${clickable ? '，点击重拨' : ''}`}
       data-testid={`${variant}-call-card`}
-      className={`flex min-w-[190px] items-center gap-3 rounded-[10px] px-3.5 py-3 text-left transition-colors ${
-        variant === 'wx'
-          ? 'bg-white dark:bg-[#232324]'
-          : 'bg-white dark:bg-[#232326] rounded-[12px]'
+      className={`relative flex w-fit min-w-0 max-w-[calc(100%-92px)] select-none items-center gap-1.5 text-left transition-colors ${
+        isWx
+          ? `rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
+              mine ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black' : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
+            }`
+          : `rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+              mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
+            }`
       } ${clickable ? 'cursor-pointer active:opacity-70' : 'cursor-default'}`}
+      style={variant === 'qq' && mine ? { backgroundColor: '#0099FF' } : undefined}
     >
-      <span
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white"
-        style={{ backgroundColor: accent }}
-        aria-hidden="true"
-      >
-        <Phone className="h-5 w-5" strokeWidth={2} />
+      {/* 小三角尾巴（微信同款；QQ 无尾巴） */}
+      {isWx && (
+        <span
+          aria-hidden="true"
+          className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
+            mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
+          }`}
+        />
+      )}
+      {iconFirst && phoneIcon}
+      <span className="whitespace-nowrap" data-testid={`${variant}-call-card-sub`}>
+        {text}
       </span>
-      <span className="min-w-0">
-        <span className="block text-[15px] font-medium leading-tight text-black/90 dark:text-white/90">语音通话</span>
-        <span className="mt-1 block truncate text-[12px] leading-tight text-black/45 dark:text-white/45" data-testid={`${variant}-call-card-sub`}>
-          {callCardSubtitle(state, duration)}
-          {clickable && <span className="ml-1" style={{ color: accent }}>拨打</span>}
-        </span>
-      </span>
+      {!iconFirst && phoneIcon}
     </button>
   );
 }
