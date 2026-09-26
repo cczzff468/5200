@@ -7471,3 +7471,21 @@ Stage Summary:
 - 引擎层保证：文字轮与语音轮共用同一份 history 与 /api/phone/turn 链路，面板打开期间 in-flight 语音回复自动降级为文字气泡；AI 文字模式下输出〔挂断〕标记则显示告别文字后结束通话
 - 4 项审计修复复核确认已完成，无需改动
 - 验证结论：微信/QQ 双皮肤实机全流程通过，tsc/lint/dev.log 三重干净
+
+---
+Task ID: 6
+Agent: 主协调者 (Z.ai Code)
+Task: 通话中文字聊天面板布局优化（消息显示在头像名字下方 + 头像/名字/时长/三按钮/左上角按钮 + 气泡美化）+ 微信通话卡片电话图标朝下
+
+Work Log:
+- TextChatPanel 重构（src/components/apps/voice-call-screen.tsx）：面板改为与通话页同构布局——左上角小窗按钮（PiP，点击先 closeTextChat 退文字模式再 minimize 收起，避免 textMode 残留导致回屏后 AI 只出文字）+ 右上角 X 关闭 + 居中头像(CallAvatar 64px，微信方圆角/QQ 圆形) + 名字 + 「通话中 mm:ss」实时时长 + 下方三个小按钮（50px，微信 麦克风/挂断/扬声器、QQ 麦克风/扬声器/挂断 与各自通话页同序同色；面板内麦克风=点按切换静音，白底高亮=已静音；扬声器开=白底高亮）+ 细分隔线 + 消息列表（flex-1 滚动，自动滚底）+ 底部输入栏（h-10 圆角输入框 ring 描边 + 品牌色发送按钮）
+- 气泡美化：新增 TextChatAvatar（32px，微信 rounded-[6px]/QQ 圆形，无头像时 DefaultAvatar 兜底）；AI 气泡左侧挂联系人头像、我方气泡右侧挂机主头像（useSettings profile.avatar 直读，无需穿线）；微信气泡升级 rounded-[8px]+小三角尾巴（绿/白双色同款）、QQ rounded-[14px] 无尾巴；白底气泡加轻阴影在深色面板更立体；「对方正在输入」三点动画气泡改为带头像同款样式；去掉无效的 dark: 变体（面板恒为深色底）
+- 微信通话卡片（CallCardBubble）：微信卡片的电话图标加 rotate-180（Tailwind 4 独立 rotate 属性，computed rotate=180deg 验证通过）——图标朝下通话记录样式；QQ 卡片保持原方向不变
+- 测试环境备注：沙箱 headless Chromium 在通话接通（TTS/STT 启动）后 CDP 物理输入管线永久失效（mousedown/click 不再到达页面，reload/重启浏览器后首次通话依旧），JS 层 click()/fill() 正常——本轮双皮肤全流程改用 JS 点击+React 受控 input setter 完成验证；真机浏览器不受影响
+- E2E（agent-browser 实机，重建测试数据：联系人 App 建 USER 小明(13800138000/a123456/100010001) + CHAR 林小雨(13900139000/xiaoyu_wx/200020002) + 信息 App 加好友 + 微信添加朋友 xiaoyu_wx + QQ 登录加好友）：①微信：通话接通 → 信息图标 → 面板（PiP+头像+名字+时长 00:31+三按钮+问候语带联系人头像白气泡）→ 发「我刚吃完饭，你在干嘛呢」绿气泡+机主头像 → AI 文字回复「我刚吃完饭，在沙发上刷刷剧呢。」无 TTS → 面板内麦克风/扬声器切换 aria-pressed 正确高亮 → X 关闭回语音页 → 挂断 → 「通话时长 01:20」绿卡片，电话图标 rotate 180deg ②QQ：接通 → 面板（QQ 同构：圆形头像+mic/speaker/hangup 方形序）→ 发「晚上一起看电影吗」蓝气泡 → AI 文字回复「好啊，看什么电影？」→ X 关闭 → 挂断 → 「通话时长 00:58」卡片，QQ 图标方向不变
+- 质量检查：bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 全程 0 error（/api/phone/turn 全 200）；agent-browser errors 为空
+
+Stage Summary:
+- 通话中文字聊天面板按用户四点反馈完成：消息显示在头像/名字/时长下方、面板保留通话页三按钮与左上角小窗按钮、双方气泡带头像美化（微信尾巴/QQ 圆角/轻阴影）、微信通话卡片电话图标朝下（QQ 不变）
+- 面板小窗按钮安全语义：先退文字模式再收起，回全屏后必然是语音模式，不会出现「文字模式无面板可见」的回复黑洞
+- 功能回归：文字轮/语音轮共用 chatLog 与 /api/phone/turn 链路不变，AI 文字回复不 TTS，通话时长连续，挂断卡片照常落盘，可点击回拨
