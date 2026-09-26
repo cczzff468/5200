@@ -7815,3 +7815,21 @@ Work Log:
 Stage Summary:
 - 挂断续聊条数硬约束「1~2 条」全部移除，改为该会话聊天设置「回复条数」为上限、没话可少发；三端（微信/QQ/电话）各按自己会话的设置取值并按角色 ID 隔离
 - 「预览不显示」根因是 dev 服务器进程消失（非代码问题），已重启恢复
+
+---
+Task ID: 12
+Agent: Z.ai Code (main)
+Task: 续聊条数改 1~N 区间式 / 联系人表单删语音音色 / AI 真名-昵称认知（角色+机主）
+
+Work Log:
+- followup route：条数硬约束改为区间式「本次发 1~N 条消息（N=该会话回复条数设置）——N 是上限，没话可以少发（哪怕只发 1 条）」，JSON 输出说明同步 1~N；不破坏上轮的设置联动（默认 5 → 「1~5条」）
+- contacts.tsx：联系人新建/编辑表单删除「语音音色」整节（SectionTitle+voiceId 输入+声线点选+说明文字），清掉 OPENAI_STANDARD_VOICES/BUILTIN_VOICE_OPTIONS/useMyVoices/useSettings 相关死导入；voiceId 保留在表单状态里做隐形透传（编辑已有联系人不会清掉已设音色）
+- persona.ts：角色【名字】段重写——真实名字 vs 软件显示昵称，被问「你是谁/叫什么」报真实名字；【用户的称呼】段同规则——软件上显示的用户名只是昵称，问「TA 是谁」答真实名字
+- 三端通话链路打通身份字段：call-upstream InlineContact + turn/answer/followup 三路由接收 nickname/realName + userRealName/userNickname；chat-call.ts 与 phone.tsx 的 turn/接听决策/挂断续聊三处 payload 全部补传（ownerProfile() 新增于 contacts-store）
+- 验证：eslint ✓、tsc --noEmit ✓；bun 跑 buildPersonaSystemPrompt 快照确认注入文案；curl 实测 followup（带 nickname/realName/userRealName/userNickname）正常返回；Agent Browser 实测联系人表单已无语音音色节；dev.log 无错误
+- commit 推送 origin main ✓
+
+Stage Summary:
+- 挂断续聊 Prompt 硬约束现为「1~N 条」（N=聊天设置回复条数，默认 5 即 1~5 条），没话可少发
+- 联系人添加/编辑界面不再出现语音音色设置（既有音色数据不受影响，聊天设置里的声音仍可用）
+- AI 角色与机主均有「真名 vs 昵称」认知：昵称=软件上显示的名字，真名才是真名；被问身份一律报真名；文字聊天（微信/QQ/信息）+ 语音通话 + 挂断续聊全链路生效
