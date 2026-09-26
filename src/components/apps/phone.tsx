@@ -1069,8 +1069,14 @@ function CallScreen({
 
   // 陌生号码：标题直接显示拨打的号码（iOS 一致）；空号后状态行提示
   const name = contact?.name || formatNumber(target.number);
-  /** 最新一句字幕（单句弹幕：新句出现旧句消失） */
-  const lastBubble = bubbles.length > 0 ? bubbles[bubbles.length - 1] : null;
+  /** 最新一句字幕（单句弹幕：只显示 AI 最新一句——我方说话不上屏，与微信同款；新句出现旧句消失） */
+  let lastAiBubble: CallBubble | null = null;
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    if (bubbles[i].role === 'assistant') {
+      lastAiBubble = bubbles[i];
+      break;
+    }
+  }
   /** 文字聊天消息区：只显示文字轮次（via='text'） */
   const textMsgs = bubbles.filter((b) => b.via === 'text');
   /** 文字聊天模式：六宫格收起给消息区+输入框腾地方，关闭后恢复 */
@@ -1139,21 +1145,19 @@ function CallScreen({
             {error}
           </p>
         )}
-        {/* 字幕区：单句弹幕（只显示最新一句，新句出现旧句消失）；文字聊天开着时隐藏（占位保留布局稳定） */}
+        {/* 字幕区：单句弹幕（只显示 AI 最新一句，新句出现旧句消失）；文字聊天开着时隐藏（占位保留布局稳定） */}
         {phase !== 'dialing' && !textMode ? (
           <div
             className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-2 pt-3"
             aria-label="通话字幕"
             data-testid="call-captions"
           >
-            {lastBubble && (
+            {lastAiBubble && lastAiBubble.text && (
               <p
-                key={lastBubble.id}
-                className={`animate-call-caption w-full whitespace-pre-wrap break-words text-center text-[17px] leading-[1.6] ${
-                  lastBubble.role === 'user' ? 'text-white' : 'text-white/60'
-                }`}
+                key={lastAiBubble.id}
+                className="animate-call-caption w-full whitespace-pre-wrap break-words text-center text-[17px] leading-[1.6] text-white/60"
               >
-                {lastBubble.text}
+                {lastAiBubble.text}
               </p>
             )}
           </div>

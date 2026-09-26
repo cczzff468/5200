@@ -17,7 +17,8 @@
  * 二、音色：speakUserTts 现场解析（角色 voiceId → 全局默认 → 内置默认声线），与语音消息同一套
  *   TTS 配置；AI 回复在 TTS 播报的同时把文字逐字同步到字幕流（aiReveal，onProgress 驱动），
  *   TTS 失败不中断通话——回复文字整句直接显示在字幕流里，通话继续。
- *   用户录音期间并行跑 Web Speech 实时识别（liveHeard 增量上屏，逐字弹幕）；
+ *   用户录音期间并行跑 Web Speech 实时识别（liveHeard 增量更新；不再作为字幕上屏——字幕只显示
+ *   AI 说的话，实时文本仅作服务端 STT 失败兑底）；
  *   松手后仍以 transcribeAudioBlob 为准，识别失败时用实时识别结果兑底。
  *   STT 与语音消息转文字共用 transcribeAudioBlob（内置识别 / OpenAI 兼容）；识别失败给出提示，
  *   通话继续、可重试。
@@ -199,7 +200,7 @@ export interface ChatCallApi {
   speakerOn: boolean;
   /** 麦克风错误（权限拒绝/不可用等；只提示，不中断通话） */
   error: string;
-  /** 用户实时说话字幕（Web Speech 增量识别；录音中逐字更新，松手后保留到最终文字入列） */
+  /** 用户实时说话识别文本（Web Speech 增量；不再作为字幕渲染——我方说话不上屏，仅作 STT 失败兑底） */
   liveHeard: string;
   /** AI 回复逐字揭示（与 TTS 播放进度同步；null = 无揭示中的字幕） */
   aiReveal: ChatCallReveal | null;

@@ -12,10 +12,9 @@
  *   来电页「邀请你语音通话」+「消息回复」+ 红挂断/绿接听圆角方按钮；长按麦克风静音。
  *
  * - 状态区：「正在说话」「正在听」「正在思考…」「识别中…」等。
- * - 通话字幕（单句弹幕，实时）：我说的话录音中经 Web Speech 增量识别逐字上屏（白字），松手识别
- *   完成后整句定格；AI 说的话在 TTS 播报的同时按播放进度逐字揭示（柔白字）；屏幕同一时刻只显示
- *   一句、位于头像名字下方——任何人开新的一句，上一句立即消失（用户需求：头像名字居中，
- *   字幕在其下方，单句呈现、字号加大，我白 / AI 柔白居中对齐）。
+ * - 通话字幕（单句弹幕，实时）：只显示 AI 说的话——TTS 播报的同时按播放进度逐字揭示（柔白字），
+ *   我说的话不再上屏（用户反馈）；屏幕同一时刻只显示 AI 最新一句、位于头像名字下方——AI 开新口
+ *   上一句立即消失（用户需求：头像名字居中，字幕在其下方，单句呈现、字号加大、居中对齐）。
  * - 通话中文字聊天：接通后右上角信息图标开关——底部三个按钮上方出现内联输入条（消息区+输入框），
  *   开启期间字幕隐藏（用户需求）；AI 配置了第三方语音 API → 语音回复（TTS），没配 → 文字回复
  *   （消息区气泡）；关闭输入条字幕恢复，通话不断；QQ 电话同样。
@@ -154,15 +153,11 @@ function statusLine(
 
 // ---------------- 通话字幕（居中单句模式） ----------------
 
-/** 单句字幕（用户需求：字幕在中间、一次只显示一句，新句出现旧句消失，不管是我还是 AI）：
- *  居中对齐、字号加大（17px）；我方纯白、AI 柔白（颜色区分说话人）；弹跳入场；无头像无光标竖线 */
-function CaptionLine({ mine, children }: { mine: boolean; children: ReactNode }) {
+/** 单句字幕（只显示 AI 说的话——我方说话不上屏，用户反馈「不好看」）：
+ *  居中对齐、字号加大（17px）、柔白；弹跳入场；无头像无光标竖线 */
+function CaptionLine({ children }: { children: ReactNode }) {
   return (
-    <p
-      className={`animate-call-caption w-full whitespace-pre-wrap break-words px-1 text-center text-[17px] leading-[1.6] ${
-        mine ? 'text-white' : 'text-white/60'
-      }`}
-    >
+    <p className="animate-call-caption w-full whitespace-pre-wrap break-words px-1 text-center text-[17px] leading-[1.6] text-white/60">
       {children}
     </p>
   );
@@ -170,42 +165,37 @@ function CaptionLine({ mine, children }: { mine: boolean; children: ReactNode })
 
 /**
  * 通话字幕（单句弹幕；宿主把容器放在头像名字下方，超高内部滚动并自动滚底）：
- * - 我说的话：录音中 Web Speech 增量识别逐字上屏（liveHeard，白字），识别完成后整句定格；
- * - AI 说的话：TTS 播报的同时按播放进度逐字揭示（aiReveal，柔白字），播完整句定格；
- * - 同一时刻只渲染当前活跃的一句（liveHeard 优先 → chatLog 最后一条）：
- *   我开新口 AI 句消失，AI 开新口我句消失——「下一句出现，上一句消失」。
+ * - 只显示 AI 说的话（我说的话不再上屏——用户反馈；录音期间的 Web Speech 实时识别仅作
+ *   服务端 STT 失败兑底，不再作为字幕渲染）；
+ * - 同一时刻只渲染 AI 最新一句：揭示中（aiReveal 与 TTS 播放进度同步逐字）渲染部分文本，
+ *   否则渲染 chatLog 里最后一条 assistant 消息；AI 开新口，上一句自动被替换。
  */
 function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
-  const { chatLog, aiReveal, liveHeard } = call;
+  const { chatLog, aiReveal } = call;
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  // 逐字更新/新句替换时保持滚到底
+  // 新句替换/逐字揭示时保持滚到底（超长句内部滚动可见最新）
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [chatLog, aiReveal, liveHeard]);
+  }, [chatLog, aiReveal]);
 
-  // AI 揭示中：最后一条 assistant 消息由「揭示中的部分文本」呈现（避免整句提前闪现）
-  const lastIdx = chatLog.length - 1;
+  // AI 最新一句（chatLog 从尾部向前找 assistant；用户消息不入字幕）
+  let lastAsstIdx = -1;
+  for (let i = chatLog.length - 1; i >= 0; i--) {
+    if (chatLog[i].role === 'assistant') {
+      lastAsstIdx = i;
+      break;
+    }
+  }
   const revealing =
-    aiReveal !== null && lastIdx >= 0 && chatLog[lastIdx].role === 'assistant' && chatLog[lastIdx].content === aiReveal.text;
+    aiReveal !== null && lastAsstIdx >= 0 && chatLog[lastAsstIdx].content === aiReveal.text;
 
-  // 当前活跃的一句（liveHeard 说话中 → 揭示中/最近一条）
   let line: ReactNode = null;
-  if (liveHeard) {
-    line = (
-      <CaptionLine key="live" mine>
-        <span data-testid={`${variant}-call-liveheard`}>{liveHeard}</span>
-      </CaptionLine>
-    );
-  } else if (lastIdx >= 0) {
-    const m = chatLog[lastIdx];
+  if (lastAsstIdx >= 0) {
+    const m = chatLog[lastAsstIdx];
     const partial = revealing && aiReveal;
     const text = partial ? aiReveal.text.slice(0, aiReveal.shown) : m.content;
-    line = (
-      <CaptionLine key={`${m.at}-${lastIdx}`} mine={m.role === 'user'}>
-        {text}
-      </CaptionLine>
-    );
+    line = <CaptionLine key={`${m.at}-${lastAsstIdx}`}>{text}</CaptionLine>;
   }
 
   return (

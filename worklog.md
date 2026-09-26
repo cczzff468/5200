@@ -7598,3 +7598,21 @@ Stage Summary:
 - 电话 APP 补齐微信同款能力：通话实时弹幕字幕 + 麦克风左侧信息图标开关的文字聊天（消息区+输入框在说话钮上方、开启时字幕隐藏、六宫格自动收起）
 - 文字聊天回复形态统一（三端同构）：AI 配置了语音 API → 语音回复（播报，不落文字），没配 → 文字回复进消息区；TTS 失败自动兜底（微信降级为文字/电话回退内置引擎发声）；关闭文字条字幕恢复
 - 回归通过：语音模式播报、挂断卡片、通话记录/语音留言转写、来电页均未受影响
+---
+Task ID: 13
+Agent: Z.ai Code (main)
+Task: 通话实时弹幕字幕不再显示我方说的话（用户反馈「不好看」）+ 挂断电话后声音立刻截断（内置朗读引擎挂断漏停根因修复）
+
+Work Log:
+- 根因定位（挂断声音不停）：tts-client.ts 的 stopSpeaking() 只 pause 了 API 音频路径的 currentAudio（HTMLAudioElement），而内置免费引擎（speechSynthesis）由 builtin-voices.ts 的 stopBuiltinSpeech() 单独管理——挂断链路 finish()/hangup() 只调 stopSpeaking()，内置引擎播报中挂断后朗读继续播完，正是「挂断电话以后声音没有立刻截断」的根因
+- tts-client.ts 修复：stopSpeaking() 统一收口——在原有 API 音频 pause/释放之后追加调用 stopBuiltinSpeech()（speechSynthesis.cancel() 同步立即生效），API 音频与内置引擎一并立刻截断；全部 15 处 stopSpeaking() 调用点（三端挂断/打断/卸载/互斥）语义均为「立即停 TTS」，并入内置引擎取消无副作用；注释同步更新
+- voice-call-screen.tsx 字幕改造（用户反馈「我说的话就不要显示了」）：CaptionStream 不再渲染 liveHeard（我方实时说话字幕整路移除，data-testid={variant}-call-liveheard 一并消失）；单句字幕改为「chatLog 从尾部向前找最后一条 assistant 消息」——我说话/识别中/思考中期间上一句 AI 字幕保持显示，AI 开新口才被替换；CaptionLine 删 mine 参数（恒 AI 柔白 text-white/60）；aiReveal 揭示逻辑保留（与 TTS 播放进度逐字同步）；文件头注释同步
+- phone.tsx 电话 APP 同款改造：lastBubble（全量最后一条，含我方）→ lastAiBubble（从尾部向前找最后一条 assistant 气泡），字幕恒 AI 柔白 17px 居中；空文本气泡（directOnly 流式占位）不渲染避免空闪；文字轮次消息区/挂断转写/通话记录不受影响
+- chat-call.ts 引擎注释同步：liveHeard 降级为「仅作服务端 STT 失败兑底，不再作为字幕渲染」，引擎状态与兑底逻辑零改动（录音/识别/转写链路不动）
+- E2E（agent-browser 实机，沙箱 speechSynthesis voices=0、synthetic 点击无 trusted gesture 致 audio.play() 被 autoplay 策略拒绝——无法复现真实听觉，改用代码路径级实证）：①微信通话接通→问候语单句 AI 字幕（17px/居中/text-white/60）→文字条发「我今天去爬山了…」→AI 文字回复→关文字条→字幕 1 句=AI 回复、hasMine=false、liveheard 元素不存在→挂断落卡「通话时长 00:48」②挂断截断实证：monkeypatch speechSynthesis.cancel 计数→重新发起通话→点挂断→cancelCalled=3（修复前该路径为 0，即 finish→stopSpeaking 从不取消内置引擎）③电话 APP：recents「呼叫林小雨」回拨→接通 greeting 单句字幕→文字条发「晚上一起吃火锅吗」→AI 文字回复→关文字条→字幕仅 AI 回复（hasMine=false）→挂断→cancel 计数 +1、通话记录落卡「呼出 · 1:37」、无音频在播④console/errors 无错误，dev.log 无运行时错误
+- 测试环境备注：本机 IndexedDB 数据保留（林小雨/小明测试联系人仍在）；锁屏需对锁屏根元素派发异步步进 pointermove 序列（同步连发不触发 drag 状态）；微信图标点击后 AppWindow 恢复至上次会话视图；home dock 图标为 [role=button] 非 button 标签（querySelectorAll('button') 查不到，需合并选择器）
+
+Stage Summary:
+- 通话实时弹幕字幕（微信/QQ/电话 APP 三端一致）现在只显示 AI 说的话：我方说话、识别中文字一律不再上屏，AI 开新口才替换上一句；AI 逐字揭示与 TTS 播放进度同步的机制不变
+- 挂断电话声音立刻截断根因修复：stopSpeaking() 统一取消 API 音频与内置朗读引擎（speechSynthesis.cancel 立即生效），三端挂断/打断/卸载全部收口，实测挂断瞬间 cancel 必被调用
+- 回归通过：文字条收发与回复形态（没配 API→文字）、通话时长、挂断卡片、通话记录、recents 回拨均正常；tsc/lint/dev.log 三重干净

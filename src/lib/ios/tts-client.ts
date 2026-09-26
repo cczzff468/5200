@@ -11,7 +11,13 @@
 import { stopOtherAudio, registerAudioSource } from './audio-focus';
 import { getContact } from './contacts-store';
 import { SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings } from './store';
-import { isBuiltinVoiceSupported, speakBuiltin, BUILTIN_DEFAULT_FEMALE, BUILTIN_DEFAULT_MALE } from './builtin-voices';
+import {
+  isBuiltinVoiceSupported,
+  speakBuiltin,
+  stopBuiltinSpeech,
+  BUILTIN_DEFAULT_FEMALE,
+  BUILTIN_DEFAULT_MALE,
+} from './builtin-voices';
 
 // 类型与默认值定义在 store（避免循环依赖），这里重导出供 UI 层使用
 export type { TtsConfig, TtsVoiceOption } from './store';
@@ -119,7 +125,11 @@ let currentUrl: string | null = null;
 /** 当前播放的收尾回调：stopSpeaking() 暂停音频时同步 resolve 等待中的调用方（防 await 永久悬挂） */
 let currentFinish: (() => void) | null = null;
 
-/** 停止当前播放并释放资源（页面销毁/切聊天/新一轮播放前调用） */
+/**
+ * 停止当前播放并释放资源（页面销毁/挂断/切聊天/新一轮播放前调用）。
+ * API 音频与内置朗读引擎（speechSynthesis）一并【立刻】截断——挂断电话后声音必须立即停止（用户反馈），
+ * 内置引擎此前只被各播放函数自行管理、挂断时漏停，这里统一收口。
+ */
 export function stopSpeaking(): void {
   playToken += 1;
   const audio = currentAudio;
@@ -141,6 +151,7 @@ export function stopSpeaking(): void {
     currentUrl = null;
   }
   finish?.();
+  stopBuiltinSpeech();
 }
 
 export function isSpeaking(): boolean {
