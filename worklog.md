@@ -7489,3 +7489,23 @@ Stage Summary:
 - 通话中文字聊天面板按用户四点反馈完成：消息显示在头像/名字/时长下方、面板保留通话页三按钮与左上角小窗按钮、双方气泡带头像美化（微信尾巴/QQ 圆角/轻阴影）、微信通话卡片电话图标朝下（QQ 不变）
 - 面板小窗按钮安全语义：先退文字模式再收起，回全屏后必然是语音模式，不会出现「文字模式无面板可见」的回复黑洞
 - 功能回归：文字轮/语音轮共用 chatLog 与 /api/phone/turn 链路不变，AI 文字回复不 TTS，通话时长连续，挂断卡片照常落盘，可点击回拨
+---
+Task ID: 7
+Agent: 主协调者 (Z.ai Code)
+Task: 通话界面实时弹幕字幕（我说的话 STT 逐字上屏 + AI 说话 TTS 同步逐字灰色字幕，显示在头像/名字下面）+ 微信通话卡片电话图标转正朝下
+
+Work Log:
+- tts-client.ts：SpeakOptions 新增 onProgress（0~1 播放进度回调）；API 音频路径挂 audio.ontimeupdate（currentTime/duration，封顶 0.98）；内置声源路径透传 speakBuiltin；统一包装层提供估算兑底（启动 600ms 内无真实进度 → 按 字数/(3.8×语速) 每 120ms 推算，封顶 0.95），onStart 启动、onEnd/finally 清理
+- builtin-voices.ts：BuiltinSpeakOptions 新增 onProgress，utter.onboundary（charIndex/text.length）驱动逐字进度（Chrome/Edge 支持）
+- chat-call.ts 引擎：新增 liveHeard（录音期间并行 startWebSpeechSession，onPartial 增量上屏；松手不清空、保留到最终文字入列，识别失败/丢弃/新录音各路径清理）+ aiReveal{ text, shown }（speakReply 播报前挂整句，onProgress 按 ratio×字数单调揭示，onEnd/失败清空由 chatLog 整句接棒）；服务端 STT 失败时用 Web Speech 累计文本兑底（纯符号噪声过滤）；删除旧 caption 状态（TTS 失败=整句直出字幕流，语义不变）；setTextMode(true) 打断播报时同步清 aiReveal
+- voice-call-screen.tsx：新增 CaptionStream/CaptionLine/CaptionAvatar/Caret 组件——头像+名字下方的弹幕字幕流（AI 左侧灰色字 text-white/45，我方右侧白字 text-white/90，各挂 18px 小头像，逐条 animate-call-caption 浮现，mt-auto 底部贴齐、自动滚到最新，no-scrollbar）；揭示中最后一条 assistant 消息按 aiReveal.shown 渲染部分文本+闪烁光标▍，避免整句闪现；liveHeard 渲染 provisional 白字+光标；WX/QQ 双皮肤中部重构（头像+名字+字幕流+状态），WX 92px/QQ 138px(来电124px) 头像，WX 来电补 56px 顶部间距、QQ 补 pt-[62px] 防止头像顶进灵动岛；状态行仍钉在字幕区下方
+- CallCardBubble：微信卡片电话图标 rotate-180 → rotate-45（注入 0°/45°/135°/180°/225° 对比图实测确认：180° 仍倾斜、45° 为竖直朝下，即通话记录样式；QQ 保持原方向）
+- globals.css：新增 @keyframes call-caption-in + .animate-call-caption 逐条浮现动画
+- 质量检查：bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 无运行时错误
+- E2E（agent-browser 实机，沙箱后台进程须双重 fork 才能存活——本次用 ( sleep 1; setsid bun run dev & ) 方式拉起）：①微信：通话接通 → 字幕流出现 AI 问候「喂，是小明啊，最近怎么样？」灰色字+小头像，位于头像/名字下方、状态行上方 → 右上角信息图标进文字面板 → 发「我刚下班，晚上一起吃饭吗」→ AI 文字回复「好啊，你想吃什么？」（无 TTS）→ 关闭面板后字幕流同屏呈现双方三条（AI 灰 45%/我白 90%，computed color 验证通过；我方 flex-row-reverse 右对齐验证通过）→ 挂断生成「通话时长 01:20」卡片，图标 computed rotate=45deg；②QQ：接通后截图恰好抓到 aiReveal 初始态（字幕行仅显示光标▍，文字待 TTS 流出）——揭示机制实机可见；问候语「喂，小明呀，最近怎么样？」正常入列；QQ 卡片图标方向不变；③QQ 通话中部 pt 修正后头像不再被灵动岛裁切；④微信聊天页发文字回归：AI 拆条 3 条正常回复
+- 沙箱限制如实说明：真麦克风 STT 逐字（liveHeard 增量）与真实 TTS 音频的 boundary 同步无法在无麦克风/无声源（speechSynthesis.getVoices()=0）沙箱端到端复现；但三条路径均有覆盖——boundary 真实进度（真机 Chrome/Edge）、估算兑底（无 boundary 引擎）、TTS 失败整句直出（沙箱实测即此路径，问候语即时整句显示正常）；Web Speech 并行识别本身与语音消息「实时转文字」同一封装，录音链路不受影响
+
+Stage Summary:
+- 通话界面新增实时弹幕字幕流：双方说话内容实时显示在头像/名字下方——用户说话经 Web Speech 增量识别逐字上屏（白字），AI 说话与 TTS 播报同步逐字揭示（灰色字），逐条浮现、自动滚到最新；文字聊天轮次同屏可见
+- 微信语音通话卡片电话图标由倾斜（rotate-180 仍是 "\" 对角线）转正为竖直朝下（rotate-45）
+- 字幕与 TTS 失败兜底、文字面板、通话时长、挂断卡片、聊天回归全部实机验证通过；tsc/lint/dev.log 三重干净

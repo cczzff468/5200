@@ -150,6 +150,9 @@ export interface SpeakOptions {
   cancelled?: () => boolean;
   /** 真正开始出声前的回调（UI 置为「播放中」用）；播放失败不触发 */
   onStart?: () => void;
+  /** 播放进度回调（0~1，逐字字幕同步用）：API 音频走 timeupdate，内置引擎走 boundary 事件；
+   *  引擎不报进度时由内置估算兑底（按字数×语速推算），不触发则调用方自行处理 */
+  onProgress?: (ratio: number) => void;
   /** 播放自然结束后的回调（被 stopSpeaking 打断时不触发）；失败仍会抛错不走这里 */
   onEnd?: () => void;
 }
@@ -168,6 +171,44 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     throw new Error('没有可朗读的文本');
   }
 
+  // ---- 进度包装：真实进度（timeupdate / boundary）优先；启动后 600ms 仍无真实进度则按字数×语速估算兑底 ----
+  const estDurationMs = Math.max(600, (cleaned.length / (3.8 * (opts.speed ?? 1))) * 1000);
+  let realProgress = false;
+  let fallbackTimer: number | null = null;
+  let startedAt = 0;
+  const emitReal = (r: number) => {
+    realProgress = true;
+    opts.onProgress?.(r);
+  };
+  const startFallback = () => {
+    startedAt = Date.now();
+    if (fallbackTimer !== null) return;
+    fallbackTimer = window.setInterval(() => {
+      if (realProgress || opts.cancelled?.()) return;
+      const r = (Date.now() - startedAt) / estDurationMs;
+      if (r > 0.02 && r < 0.98) opts.onProgress?.(Math.min(0.95, r));
+    }, 120);
+  };
+  const stopFallback = () => {
+    if (fallbackTimer !== null) {
+      window.clearInterval(fallbackTimer);
+      fallbackTimer = null;
+    }
+  };
+  const wrapped = {
+    ...opts,
+    onProgress: emitReal,
+    onStart: () => {
+      startFallback();
+      opts.onStart?.();
+    },
+    onEnd: () => {
+      stopFallback();
+      opts.onEnd?.();
+    },
+  };
+
+  try {
   // ① 内置语音（浏览器本地引擎）：男女声线免配置
   if (useBuiltinEngine) {
     if (!isBuiltinVoiceSupported()) {
@@ -186,8 +227,9 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
       voiceId,
       volume: opts.volume,
       speed: opts.speed,
-      onStart: opts.onStart,
-      onEnd: opts.onEnd,
+      onStart: wrapped.onStart,
+      onEnd: wrapped.onEnd,
+      onProgress: wrapped.onProgress,
       onError: (m) => {
         errorMessage = m;
       },
@@ -237,6 +279,7 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     const finish = () => {
       if (finished) return;
       finished = true;
+      audio.ontimeupdate = null;
       if (currentUrl === url) {
         URL.revokeObjectURL(url);
         currentUrl = null;
@@ -248,11 +291,21 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     currentFinish = finish;
     audio.onended = finish;
     audio.onerror = finish;
-    if (myToken === playToken && !opts.cancelled?.()) opts.onStart?.();
+    if (myToken === playToken && !opts.cancelled?.()) wrapped.onStart?.();
+    // timeupdate → 真实播放进度（逐字字幕同步）
+    audio.ontimeupdate = () => {
+      const d = audio.duration;
+      if (myToken === playToken && Number.isFinite(d) && d > 0) {
+        emitReal(Math.min(0.98, audio.currentTime / d));
+      }
+    };
     audio.play().catch(finish); // 自动播放策略等导致的播放失败：静默结束
   });
   // 正常播完（未被 stopSpeaking 打断）才触发 onEnd；电话的「对方讲完→回到听」状态机依赖它
-  if (myToken === playToken) opts.onEnd?.();
+  if (myToken === playToken) wrapped.onEnd?.();
+  } finally {
+    stopFallback();
+  }
 }
 
 // 注册到全局音频焦点：语音消息气泡开始播放前会停掉这里的 TTS 朗读

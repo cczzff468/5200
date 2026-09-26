@@ -356,6 +356,8 @@ export interface BuiltinSpeakOptions {
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (message: string) => void;
+  /** 播放进度回调（0~1，boundary 事件驱动；逐字字幕同步用；部分引擎不触发则由调用方自行兑底） */
+  onProgress?: (ratio: number) => void;
   /** 出声前取消检查（电话挂断等）：返回 true 静默丢弃 */
   cancelled?: () => boolean;
   /**
@@ -415,6 +417,12 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
       utter.volume = Math.min(1, Math.max(0, opts.volume ?? 1));
       utter.onstart = () => {
         if (myToken === speakToken && !opts.cancelled?.()) opts.onStart?.();
+      };
+      // boundary 事件：朗读到某字/词边界时触发（Chrome/Edge 支持），用于逐字字幕同步
+      utter.onboundary = (e) => {
+        if (myToken !== speakToken || opts.cancelled?.()) return;
+        const total = Math.max(1, text.length);
+        opts.onProgress?.(Math.min(0.98, (e.charIndex || 0) / total));
       };
       utter.onend = () => {
         if (myToken === speakToken) opts.onEnd?.();

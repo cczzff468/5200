@@ -15,7 +15,10 @@
  *   文字模式下 AI 若输出〔挂断〕标记，显示告别文字后结束通话（与语音模式一致）。
  *
  * 二、音色：speakUserTts 现场解析（角色 voiceId → 全局默认 → 内置默认声线），与语音消息同一套
- *   TTS 配置；TTS 失败不中断通话——回复文字以字幕（caption）显示在状态区，通话继续。
+ *   TTS 配置；AI 回复在 TTS 播报的同时把文字逐字同步到字幕流（aiReveal，onProgress 驱动），
+ *   TTS 失败不中断通话——回复文字整句直接显示在字幕流里，通话继续。
+ *   用户录音期间并行跑 Web Speech 实时识别（liveHeard 增量上屏，逐字弹幕）；
+ *   松手后仍以 transcribeAudioBlob 为准，识别失败时用实时识别结果兑底。
  *   STT 与语音消息转文字共用 transcribeAudioBlob（内置识别 / OpenAI 兼容）；识别失败给出提示，
  *   通话继续、可重试。
  *
@@ -31,6 +34,7 @@ import type { ContactRecord } from '@/lib/contacts';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
+import { startWebSpeechSession, type WebSpeechSession } from './web-speech';
 import { speakUserTts, stopSpeaking } from './tts-client';
 import { reportCallSeconds } from './global-call';
 
@@ -67,6 +71,12 @@ export interface ChatCallTextMsg {
   role: 'user' | 'assistant';
   content: string;
   at: number;
+}
+
+/** AI 字幕逐字揭示状态（与 TTS 播放进度同步；null = 当前无揭示中的字幕） */
+export interface ChatCallReveal {
+  text: string;
+  shown: number;
 }
 
 export interface UseChatCallOptions {
@@ -186,9 +196,11 @@ export interface ChatCallApi {
   speakerOn: boolean;
   /** 麦克风错误（权限拒绝/不可用等；只提示，不中断通话） */
   error: string;
-  /** TTS 失败时显示的文字字幕（通话不中断） */
-  caption: string;
-  /** 最后一次识别出的「我说的话」（字幕用） */
+  /** 用户实时说话字幕（Web Speech 增量识别；录音中逐字更新，松手后保留到最终文字入列） */
+  liveHeard: string;
+  /** AI 回复逐字揭示（与 TTS 播放进度同步；null = 无揭示中的字幕） */
+  aiReveal: ChatCallReveal | null;
+  /** 最后一次识别出的「我说的话」（备用） */
   lastHeard: string;
   /** 通话内消息日志（语音轮次 + 文字聊天轮次；文字面板数据源） */
   chatLog: ChatCallTextMsg[];
@@ -217,7 +229,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [error, setError] = useState('');
-  const [caption, setCaption] = useState('');
+  const [liveHeard, setLiveHeard] = useState('');
+  const [aiReveal, setAiReveal] = useState<ChatCallReveal | null>(null);
   const [lastHeard, setLastHeard] = useState('');
   const [chatLog, setChatLog] = useState<ChatCallTextMsg[]>([]);
   const [textBusy, setTextBusy] = useState(false);
@@ -238,6 +251,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const ringRef = useRef<RingTone | null>(null);
+  /** 录音期间并行的 Web Speech 实时识别会话（liveHeard 字幕来源 + 服务端 STT 失败兑底） */
+  const wsRef = useRef<WebSpeechSession | null>(null);
   const busyRef = useRef(false); // STT/turn/TTS 循环进行中
   const historyRef = useRef<ChatCallTurnMsg[]>(initialHistory.slice(-16));
   const onEndRef = useRef(onEnd);
@@ -287,11 +302,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     });
   }, [direction]);
 
-  // ---------- TTS 播报（角色音色；失败转字幕不中断） ----------
+  // ---------- TTS 播报（角色音色；逐字字幕同步；失败整句直出字幕不中断） ----------
   const speakReply = useCallback(
     (text: string, onDone: () => void) => {
       const contactId = optsRef.current.contact?.id ?? null;
-      // 播报前剥挂断标记（识别在调用方）
+      // 播报前剥挂断标记（识别在调用方）；字幕流先挂上整句，随播放进度逐字揭示
+      if (!endedRef.current) setAiReveal({ text, shown: 0 });
       void speakUserTts({
         text,
         contactId,
@@ -299,13 +315,22 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         onStart: () => {
           if (!endedRef.current) setStatus('speaking');
         },
+        onProgress: (ratio) => {
+          if (endedRef.current) return;
+          setAiReveal((cur) =>
+            cur && cur.text === text ? { ...cur, shown: Math.max(cur.shown, Math.ceil(text.length * ratio)) } : cur,
+          );
+        },
         onEnd: () => {
-          if (!endedRef.current) onDone();
+          if (!endedRef.current) {
+            setAiReveal(null); // 揭示完成：整句由 chatLog 字幕流自然呈现
+            onDone();
+          }
         },
       }).catch(() => {
-        // TTS 失败：字幕显示文字，通话继续
+        // TTS 失败：整句直接显示在字幕流，通话继续
         if (!endedRef.current) {
-          setCaption(text);
+          setAiReveal(null);
           onDone();
         }
       });
@@ -385,7 +410,6 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       if (ended()) return;
       busyRef.current = true;
       setError('');
-      setCaption('');
       // 对端是「机主本人」联系人（自己给自己打）：不说话，只保留聆听
       if (optsRef.current.contact?.kind === 'user') {
         setStatus('listening');
@@ -397,6 +421,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         ? [...historyRef.current, { role: 'user' as const, content: userText }]
         : historyRef.current;
       if (userText) {
+        setLiveHeard(''); // 最终文字入列：实时 provisional 字幕让位
         historyRef.current = historyBefore.slice(-16);
         appendLog({ role: 'user', content: userText, at: Date.now() });
       }
@@ -491,11 +516,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     }
     if (statusRef.current === 'speaking') {
       stopSpeaking();
+      setAiReveal(null); // 播报被打断：揭示中的字幕让位（整句仍在 chatLog 里）
       setStatus('listening');
     }
   }, []);
 
-  // ---------- 录音（点按开始/发送；与语音消息共用 STT 配置） ----------
+  // ---------- 录音（点按开始/发送；与语音消息共用 STT 配置；并行 Web Speech 实时字幕） ----------
   const startRecording = useCallback(async () => {
     if (endedRef.current || busyRef.current) return;
     if (mutedRef.current) {
@@ -503,7 +529,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       return;
     }
     setError('');
-    setCaption('');
+    setAiReveal(null);
+    setLiveHeard('');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (endedRef.current) {
@@ -521,43 +548,82 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         setRecording(false);
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+        // 收实时识别会话：丢弃路径直接 abort；正常路径等转写失败时再 stop 取兑底文本
+        const ws = wsRef.current;
+        wsRef.current = null;
         const discard = discardRef.current;
         discardRef.current = false;
         if (endedRef.current || discard) {
+          ws?.abort();
+          setLiveHeard('');
           chunksRef.current = [];
           return;
         }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         chunksRef.current = [];
         if (blob.size < 1200) {
+          ws?.abort();
+          setLiveHeard('');
           setError('没听到声音，请再试一次');
           setStatus('listening');
           return;
         }
         setStatus('recognizing');
         busyRef.current = true;
-        void transcribeAudioBlob(blob)
-          .then((text) => {
-            if (endedRef.current) return;
-            if (!text) {
-              setError('没听清，请再说一遍');
-              setStatus('listening');
-              busyRef.current = false;
-              return;
+        void (async () => {
+          // 服务端 STT 为主；失败/超时时用录音期间 Web Speech 的实时文本兑底
+          let text = '';
+          let sttError: unknown = null;
+          try {
+            text = await transcribeAudioBlob(blob);
+          } catch (e) {
+            sttError = e;
+          }
+          if (endedRef.current) return;
+          if (!text && ws) {
+            try {
+              const fallback = (await ws.stop()).trim();
+              // 过滤 ASR 对静音/噪声的典型无意义输出（纯符号），避免当成有效转写
+              if (fallback && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(fallback)) text = fallback;
+            } catch {
+              // 兑底也失败：走统一错误提示
             }
-            setLastHeard(text);
-            return runTurn(text, false);
-          })
-          .catch((e: unknown) => {
-            if (endedRef.current) return;
-            setError(e instanceof Error && e.message ? e.message : '识别失败，请再试一次');
+          } else {
+            ws?.abort();
+          }
+          if (endedRef.current) return;
+          if (!text) {
+            setLiveHeard('');
+            setError(
+              sttError instanceof Error && sttError.message
+                ? sttError.message
+                : '没听清，请再说一遍',
+            );
             setStatus('listening');
             busyRef.current = false;
-          });
+            return;
+          }
+          setLiveHeard('');
+          setLastHeard(text);
+          return runTurn(text, false);
+        })().catch((e: unknown) => {
+          if (endedRef.current) return;
+          setLiveHeard('');
+          setError(e instanceof Error && e.message ? e.message : '识别失败，请再试一次');
+          setStatus('listening');
+          busyRef.current = false;
+        });
       };
       recorder.start();
       setRecording(true);
       setStatus('recording');
+      // 并行跑 Web Speech 实时识别（与 MediaRecorder 共享麦克风）：增量文字上屏做弹幕字幕；
+      // 不支持/启动失败返回 null —— 字幕退化为「松手后逐句出现」，录音本身不受影响
+      wsRef.current = startWebSpeechSession({
+        onPartial: (t) => {
+          if (!endedRef.current) setLiveHeard(t);
+        },
+      });
     } catch {
       setError('麦克风不可用，请检查权限后重试');
       setStatus('listening');
@@ -682,7 +748,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     muted,
     speakerOn,
     error,
-    caption,
+    liveHeard,
+    aiReveal,
     lastHeard,
     chatLog,
     textBusy,
