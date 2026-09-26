@@ -45,6 +45,8 @@ export interface GlobalCallSession {
   multiApp?: boolean;
   /** 通话结束（恰好一次）：宿主直写通话卡片并落盘，随后全局层自动 close() */
   onEnd: (r: ChatCallResult) => void;
+  /** 挂断后 AI 续聊文字生成完毕（引擎异步产出，紧随挂断）：宿主以聊天消息落盘 */
+  onFollowup?: (texts: string[]) => void;
 }
 
 interface GlobalCallState {

@@ -61,6 +61,7 @@ import {
   type VadHandle,
 } from './vad';
 import { requestAnswerDecision } from './call-decision';
+import { requestCallFollowup } from './call-followup';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds } from './global-call';
 
@@ -133,6 +134,9 @@ export interface UseChatCallOptions {
   multiApp?: boolean;
   /** 通话结束（恰好一次） */
   onEnd: (r: ChatCallResult) => void;
+  /** 挂断后 AI 续聊文字生成完毕（引擎异步产出，紧随挂断）：宿主负责呈现——
+   *  微信/QQ 以聊天消息落盘，电话 App 以语音留言呈现；文字已并入通话转写一同沉淀记忆 */
+  onFollowup?: (texts: string[]) => void;
 }
 
 // ---------------- 音效（回铃 / 接通 / 挂断；WebAudio 轻提示音） ----------------
@@ -258,7 +262,7 @@ export interface ChatCallApi {
 }
 
 export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
-  const { app, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd } = opts;
+  const { app, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onFollowup } = opts;
 
   const [phase, setPhase] = useState<ChatCallPhase>(direction === 'in' ? 'incoming' : 'dialing');
   const [status, setStatus] = useState<ChatCallStatus>('connecting');
@@ -307,7 +311,11 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const wsRef = useRef<WebSpeechSession | null>(null);
   const busyRef = useRef(false); // STT/turn/TTS 循环进行中
   const historyRef = useRef<ChatCallTurnMsg[]>(initialHistory.slice(-16));
+  /** 通话前的最近聊天快照（发起时；挂断续聊的「最近聊天记录」依据，不随通话轮次混入） */
+  const recentChatRef = useRef<ChatCallTurnMsg[]>(initialHistory.slice(-8));
   const onEndRef = useRef(onEnd);
+  /** 挂断后 AI 续聊文字回调（宿主呈现） */
+  const onFollowupRef = useRef(onFollowup);
   const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp });
   useEffect(() => {
     phaseRef.current = phase;
@@ -323,6 +331,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   }, []);
   useEffect(() => {
     onEndRef.current = onEnd;
+    onFollowupRef.current = onFollowup;
     optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp };
   });
 
@@ -388,6 +397,78 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       );
   }, [chatLogToConvo]);
 
+  /** 挂断后 AI 续聊（三端共用逻辑，挂断即触发）+ 记忆总结（一次提取「通话内容+续聊文字」）：
+   *  ① 接通后挂断（AI 主动挂断 / 用户挂断）→ 基于人设+通话内容+记忆+最近聊天生成 1~2 条文字，立刻发；
+   *  ② AI 打来的电话被拒/未接（direction in）、拨号被取消（direction out）→ 生成一条自然的反应消息；
+   *  ③ 拨出去被 AI 拒接/未接（direction out 的 reject/no-answer）→ 接听决策 afterText 已覆盖，不重复发。
+   *  续聊文字并入通话转写后交 summarizeCall 沉淀（同池互通、按联系人隔离）；请求失败也照常总结。 */
+  const followupAndSummarize = useCallback(
+    (endReason: ChatCallEndReason) => {
+      const peer = optsRef.current.contact;
+      const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
+      const eligible =
+        !!peer &&
+        peer.kind !== 'user' &&
+        (connected
+          ? endReason === 'hangup' || endReason === 'ai-hangup'
+          : (direction === 'in' && (endReason === 'reject' || endReason === 'missed-in')) ||
+            (direction === 'out' && endReason === 'cancel'));
+      if (!eligible) {
+        summarizeCall();
+        return;
+      }
+      void (async () => {
+        let texts: string[] = [];
+        try {
+          const transcript = chatLogRef.current.map((m) => ({ role: m.role, content: m.content }));
+          const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? null;
+          texts = await requestCallFollowup({
+            contact: {
+              name: peer.name,
+              kind: peer.kind,
+              gender: peer.gender,
+              age: peer.age,
+              occupation: peer.occupation,
+              region: peer.region,
+              relation: peer.relation,
+              relationToUser: peer.relationToUser ?? null,
+              birthday: peer.birthday ?? null,
+              persona: peer.persona,
+              background: peer.background,
+            },
+            direction,
+            endReason,
+            connected,
+            duration: secondsRef.current,
+            transcript: transcript.slice(-24),
+            recentChat: recentChatRef.current.map((m) => ({ role: m.role, content: m.content })),
+            memoryBlock: optsRef.current.memoryBlockFn?.(lastUser) || optsRef.current.memoryBlock || undefined,
+            worldbookBlock: optsRef.current.worldbookBlock || undefined,
+            timeBlock: optsRef.current.timeBlock || undefined,
+            multiApp: optsRef.current.multiApp,
+          });
+        } catch {
+          texts = []; // 续聊失败静默：不影响记忆总结
+        }
+        if (texts.length > 0) {
+          // 续聊文字并入通话转写（via='text'）：随后的总结把「通话内容+续聊」一起沉淀（互通）
+          const now = Date.now();
+          chatLogRef.current = [
+            ...chatLogRef.current,
+            ...texts.map((t, i) => ({ role: 'assistant' as const, content: t, at: now + i, via: 'text' as const })),
+          ];
+          try {
+            onFollowupRef.current?.(texts);
+          } catch {
+            // 宿主呈现失败不影响记忆沉淀
+          }
+        }
+        summarizeCall();
+      })();
+    },
+    [direction, summarizeCall],
+  );
+
   /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果（afterText = AI 拒接/未接后的解释文字） */
   const finish = useCallback((endReason: ChatCallEndReason, afterText?: string) => {
     if (endedRef.current) return;
@@ -409,8 +490,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     setStatus('listening');
     reportCallSeconds(0);
     const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
-    // 通话结束自动总结：整通电话的转写交给记忆管线提取关键信息（异步，不阻塞宿主落卡片）
-    summarizeCall();
+    // 挂断后 AI 续聊（立刻发）+ 通话结束自动总结：整通转写（含续聊文字）交给记忆管线提取关键信息（异步，不阻塞宿主落卡片）
+    followupAndSummarize(endReason);
     onEndRef.current({
       direction: optsRef.current.app === 'wx' || optsRef.current.app === 'qq' ? direction : 'out',
       endReason,
@@ -418,7 +499,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       duration: secondsRef.current,
       ...(afterText ? { afterText } : {}),
     });
-  }, [direction, stopAutoListenTimers, summarizeCall]);
+  }, [direction, stopAutoListenTimers, followupAndSummarize]);
 
   // ---------- TTS 播报（角色音色；逐字字幕同步；失败整句直出字幕不中断） ----------
   const speakReply = useCallback(

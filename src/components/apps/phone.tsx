@@ -61,6 +61,7 @@ import {
 } from '@/lib/ios/vad';
 import { CHAT_CALL_EXTRA_RULES, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
+import { requestCallFollowup } from '@/lib/ios/call-followup';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -982,22 +983,81 @@ function CallScreen({
     setPhase('ended');
     setPeerStatus('listening');
     setRecording(false);
-    // 通话结束自动总结：整通电话的转写交给记忆管线提取关键信息（通话记忆与文字聊天同池互通；
-    // 后台异步，失败静默——绝不阻塞挂断收尾）。机主自己（kind='user'）/没接通的不总结。
+    // 通话结束自动总结 + 挂断续聊（三端共用逻辑，挂断即触发）：
+    // AI 续聊文字紧随挂断生成（人设+通话内容+记忆+世界书+时间感知），以「语音留言」呈现
+    // （电话 App 无聊天面板，与拒接解释同机制）；文字并入转写后一次提取「通话内容+续聊」
+    // 沉淀记忆（同池互通、按联系人隔离）；全程失败静默——绝不阻塞挂断收尾。
+    // 机主自己（kind='user'）/没接通的不参与。
     if (contact?.id && contact.kind !== 'user' && wasConnected) {
-      const convo = bubblesRef.current
-        .filter((b) => b.text.trim())
-        .map((b): { role: 'me' | 'peer'; text: string } => ({ role: b.role === 'user' ? 'me' : 'peer', text: b.text }));
-      if (convo.length >= 2) {
-        void ownerRealName()
-          .catch(() => '')
-          .then((owner) =>
-            memSummarizeCallNow(contact.id, 'phone', apiConfig, convo, {
-              user: owner || profileName,
-              peer: contact.name,
-            })
-          );
-      }
+      const peerContact = contact;
+      void (async () => {
+        let followupTexts: string[] = [];
+        try {
+          const spoken = bubblesRef.current.filter((b) => b.text.trim());
+          const lastUser = [...spoken].reverse().find((b) => b.role === 'user')?.text ?? null;
+          const wb = collectWbBlocks(peerContact.id, wbScanText([lastUser, ...spoken.slice(-6).map((b) => b.text)]));
+          followupTexts = await requestCallFollowup({
+            contact: {
+              name: peerContact.name,
+              kind: peerContact.kind,
+              gender: peerContact.gender,
+              age: peerContact.age,
+              occupation: peerContact.occupation,
+              region: peerContact.region,
+              relation: peerContact.relation,
+              relationToUser: peerContact.relationToUser ?? null,
+              birthday: peerContact.birthday ?? null,
+              persona: peerContact.persona,
+              background: peerContact.background,
+            },
+            direction: 'out',
+            endReason: 'hangup',
+            connected: true,
+            duration: secondsRef.current,
+            transcript: spoken.slice(-24).map((b) => ({ role: b.role, content: b.text })),
+            recentChat: [],
+            memoryBlock: memRecallBlock(peerContact.id, 'phone', lastUser ?? '') || undefined,
+            worldbookBlock:
+              [wb.beforeSystem, wb.afterSystem, wb.beforeChar, wb.afterChar, wb.beforeUser, wb.afterUser, wbRulesBlock(wb)]
+                .filter(Boolean)
+                .join('\n\n') || undefined,
+            timeBlock: getTimeAware(`phone:${peerContact.id}`)
+              ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: peerContact.region || null })
+              : '',
+          });
+        } catch {
+          followupTexts = []; // 续聊失败静默：不影响记忆总结
+        }
+        // 续聊文字以「语音留言」呈现（未读红点+可回看；屏幕已关也不影响——onVoicemail 直写 IndexedDB）
+        for (const t of followupTexts) {
+          onVoicemail({
+            id: genId(),
+            number: target.number,
+            contactId: peerContact.id,
+            displayName: peerContact.name,
+            peerKind: peerContact.kind as VoicemailRecord['peerKind'],
+            avatar: peerContact.avatar ?? null,
+            text: t,
+            duration: Math.max(3, Math.ceil(t.length / 3.2)),
+            read: false,
+            createdAt: Date.now(),
+          });
+        }
+        const convo = bubblesRef.current
+          .filter((b) => b.text.trim())
+          .map((b): { role: 'me' | 'peer'; text: string } => ({ role: b.role === 'user' ? 'me' : 'peer', text: b.text }));
+        for (const t of followupTexts) convo.push({ role: 'peer', text: t }); // 续聊文字随转写一同沉淀（互通）
+        if (convo.length >= 2) {
+          void ownerRealName()
+            .catch(() => '')
+            .then((owner) =>
+              memSummarizeCallNow(peerContact.id, 'phone', apiConfig, convo, {
+                user: owner || profileName,
+                peer: peerContact.name,
+              })
+            );
+        }
+      })();
     }
     onEnd({
       id: genId(),

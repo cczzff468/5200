@@ -7771,3 +7771,28 @@ Stage Summary:
 - 修改文件：src/lib/ios/call-upstream.ts（新增）、src/app/api/phone/answer/route.ts（新增）、src/lib/ios/call-decision.ts（新增）、src/app/api/phone/turn/route.ts（话量+proactive+共享化）、src/lib/ios/chat-call.ts（决策+主动开口+afterText+export 规则）、src/lib/ios/vad.ts（+PROACTIVE_MIN/MAX_MS）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（writeCallCard afterText）、src/components/apps/phone.tsx（决策+endByPeer+主动开口+挂断标记+循环断链修复）
 - 关键决策：①决策 API 全失败兜底 answer（响铃体验优先）；②reject/miss 复用现有卡片状态（direction out → 「对方已拒绝/对方未接听」文案天然正确）；③电话 App 拒接解释复用语音留言机制（未读红点+可回看，贴合现有「未接通对端留言」设定）；④主动开口计数挂 ref 递增、用户开口归零，第 2 次起 system 提示可告别，防 AI 无限自言自语；⑤免提续听一律 250ms 延迟调度规避 busyRef 竞态
 - 测试技巧沉淀：headless E2E 通话循环必须 mock window.Audio（play→30ms onended）否则 onended 不可靠卡死循环；getUserMedia mock 必须工厂式（每次新流，track stop 后旧流不可复用）；动态 turn mock 用 window.fetch 覆写按 body 分支（agent-browser network route 只支持静态 body）
+---
+Task ID: 16
+Agent: Z.ai Code (main)
+Task: 通话挂断后 AI 续聊文字——三种挂断场景（AI主动挂断/用户挂断/被拒未接）立刻发、基于人设+通话内容+记忆+最近聊天、不复读、写入记忆互通、三端共用一套逻辑
+
+Work Log:
+- 新建 /api/phone/followup（三端共用）：入参 contact+direction+endReason+connected+duration+transcript+recentChat+memoryBlock/worldbookBlock/timeBlock+multiApp；system=buildPersonaSystemPrompt（channel=挂断电话后的文字消息）+场景说明（SCENE_TEXT 五种挂断原因）+硬规则（1~2条、衔接通话、禁复读原话、语气随人设情绪、口语短消息）；recap user 消息打包「最近聊天+通话转写」；输出严格 JSON {"messages":[...]}+extractJsonObject 宽松解析+按行兜底；上游策略与 turn 路由同款（未配置/私网/故障→内置 SDK 兜底，私网返回 directOnly 浏览器直连）；全失败静默 {messages:[]}
+- 新建 src/lib/ios/call-followup.ts（客户端封装）：requestCallFollowup fire-and-forget（任何失败返回 []）；directOnly 分支走 directChatStream 再 parseFollowupText；parseFollowupText 去挂断标记/markdown/包裹引号、上限 2 条
+- chat-call.ts（微信/QQ 引擎）：UseChatCallOptions+onFollowup 回调；recentChatRef=发起时 initialHistory 快照（通话前最近聊天，不随通话轮次混入）；followupAndSummarize()——eligible 判定=接通挂断（hangup/ai-hangup 双方向）∥ AI来电被拒/未接（direction in + reject/missed-in）∥ 拨号取消（direction out + cancel）；拨出被 AI 拒接/未接（direction out + reject/no-answer）仍走决策 afterText 不双发；请求成功→续聊文字并入 chatLogRef（via='text'）→onFollowup(texts)→summarizeCall() 一次提取「通话内容+续聊」沉淀；请求失败也照常总结；finish() 改调 followupAndSummarize
+- 透传链：global-call.ts GlobalCallSession+onFollowup → GlobalCallLayer props → voice-call-screen.tsx 两皮肤（Wx/QqCallScreen 解构+useChatCall 传参）
+- wechat.tsx/qq.tsx：sendCallFollowup 回调（400~900ms 首条、多条错开 1.4~2.5s 像手动连发；saveMsgs 直写+在场 setMsgs；消息照常进后续 AI 上下文）；startGlobalCall 传 onFollowup；afterText 插入延迟 3~8s→1.5~3s（对齐「挂断后立刻发」）
+- phone.tsx：hangup() 挂断收尾改造——wasConnected 时异步 requestCallFollowup（记忆召回 memRecallBlock('phone')+collectWbBlocks 世界书+timeBlock；transcript=气泡尾24）→ 续聊文字以「语音留言」呈现（read:false 未读红点+toast「发来留言」，屏幕已关不影响 onVoicemail 直写 IndexedDB）→ 续聊文字 push 进 convo 后 memSummarizeCallNow 一次提取（通话+续聊同沉淀）；拒接/未接 endByPeer afterText 留言机制不变
+- E2E（agent-browser，IndexedDB 种子陈默/林小雨，mock answer/turn/followup+删 speechSynthesis 让 TTS 快速失败降级文字）：
+  ①微信接通（文字条聊一轮）→ 用户挂断 → 卡片「通话时长 00:56」→ 续聊 2 条立刻上屏（「刚挂电话就想你了」「明天出门记得带伞呀」）→ IndexedDB mem-frag 4 条碎片含「小雨挂电话后想念陈默」「陈默明天出门需带伞」= 续聊文字入记忆 ✓
+  ②微信 AI 主动挂断（第二轮回复带〔挂断〕）→ 自动挂断 → 卡片 00:15 → 续聊 2 条上屏，followup 请求带记忆块（第一通碎片被动态召回）✓
+  ③QQ 接通即挂断 → 卡片 00:13 → 续聊 2 条以 QQ 气泡上屏，hasMemory=true（微信记忆互通到 QQ 同池）✓
+  ④电话 App：接通 greeting → 挂断 → 真实 LLM（未 mock followup）生成 2 条未读语音留言「你怎么挂这么快呀～我话都没说完呢」「刚看完剧想找你聊聊天嘛」（贴人设+衔接通话不复读）+ 通话内容存档留言（kind=call read=true 原有行为不变）+ 记忆 5 条沉淀 ✓
+  ⑤微信回拨被拒（mock reject+afterText）→ 卡片「对方已拒绝」→ 1.5~3s 解释上屏，followupReqs=[] 与续聊互斥无双发 ✓
+- lint+tsc 双绿；dev.log/浏览器 console/page errors 零错误
+
+Stage Summary:
+- 交付：通话挂断后 AI 续聊三端统一——①AI 主动挂断后立刻发 1~2 条衔接通话的文字；②用户挂断后同；③AI 拒接/未接沿用决策 afterText（时序提前），来电被拒/未接/拨号取消新增续聊反应；④生成依据=人设+本次通话转写+动态召回记忆+世界书+最近聊天+时间感知；⑤续聊文字并入通话转写一次提取入记忆（与文字记忆同池互通、按联系人隔离），下次聊天/通话可引用；⑥微信/QQ 以聊天消息落盘、电话 App 以未读语音留言呈现（贴合各自信息面形态）
+- 修改文件：src/app/api/phone/followup/route.ts（新增）、src/lib/ios/call-followup.ts（新增）、src/lib/ios/chat-call.ts、src/lib/ios/global-call.ts、src/components/ios/GlobalCallLayer.tsx、src/components/apps/voice-call-screen.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/phone.tsx
+- 关键决策：①续聊与挂断总结串行化（文字先入转写再总结）保证「通话+续聊」单次提取互通且不与 inflight guard 冲突；②direction out+reject/no-answer 不走 followup（决策 afterText 已覆盖，防双发）；③电话 App 续聊复用语音留言形态（无聊天面板，与拒接解释同机制、未读红点+toast）；④recentChatRef 用发起时快照避免通话轮次污染「最近聊天」上下文；⑤多端验证发现 headless 下 requestAnimationFrame 不跑导致 openApp 卡 'opening'（窗口 opacity 不可见但可命中）——E2E 用页面内合成 PointerEvent+innerText 全文检索规避
+- 测试技巧沉淀：微信联系人列表显示昵称（小雨）非真名（林小雨），IndexedDB 断言需按昵称；React 合成事件可经 el.dispatchEvent(new PointerEvent(...,{bubbles:true})) 直接触发（CDP 真实鼠标事件被自绘层 hit-test 干扰时用此法）；锁屏解锁/翻页/点图标全程可用合成 PointerEvent 完成

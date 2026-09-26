@@ -95,6 +95,7 @@ export default function GlobalCallLayer() {
           timeBlock={session.timeBlock}
           locBlock={session.locBlock}
           multiApp={session.multiApp}
+          onFollowup={session.onFollowup}
           onMinimize={() => useGlobalCall.getState().minimize()}
           onMessageReply={variant === 'qq' ? () => undefined : undefined}
           onEnd={(r) => {

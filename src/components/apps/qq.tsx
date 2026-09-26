@@ -2600,8 +2600,26 @@ function ChatPage({
           const msg: QQMsg = { id: uid(), role: 'peer', content: after, time: Date.now() };
           saveMsgs(peer.id, [...loadMsgs(peer.id), msg]);
           setMsgs((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-        }, 3000 + Math.floor(Math.random() * 5000));
+        }, 1500 + Math.floor(Math.random() * 1500));
       }
+    },
+    [peer.id],
+  );
+
+  /** 挂断后 AI 续聊文字（引擎生成完毕回调，紧随挂断）：立刻落盘+在场呈现；多条错开像手动连发。
+   *  文字已随通话转写一并沉淀记忆（chat-call 引擎），这里只负责呈现与持久化（照常进后续 AI 上下文） */
+  const sendCallFollowup = useCallback(
+    (texts: string[]) => {
+      texts.forEach((t, i) => {
+        window.setTimeout(
+          () => {
+            const msg: QQMsg = { id: uid(), role: 'peer', content: t, time: Date.now() };
+            saveMsgs(peer.id, [...loadMsgs(peer.id), msg]);
+            setMsgs((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          },
+          i === 0 ? 400 + Math.floor(Math.random() * 500) : i * (1400 + Math.floor(Math.random() * 1100)),
+        );
+      });
     },
     [peer.id],
   );
@@ -2666,9 +2684,10 @@ function ChatPage({
         locBlock: buildLocationBlock(base, { userLabel: me.name }) || undefined,
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
+        onFollowup: sendCallFollowup,
       });
     },
-    [msgs, peer, me.name, sessionKey, writeCallCard],
+    [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup],
   );
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
