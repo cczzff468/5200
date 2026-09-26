@@ -5,9 +5,12 @@
  *
  * 一、通话流程（与需求一致）：
  *   拨号（dialing，1.8~3.2s 模拟响铃后 AI 接听）/ 来电（incoming，用户接听或拒绝，25s 无应答对方取消）
- *   → 接通（active）：AI 先开口（greeting）→ 用户点麦克风说话（录音）→ 松开后 STT 转文字
- *   → 文字交给聊天模型（/api/phone/turn，复用人设/记忆/时间感知链路）→ 用当前角色音色 TTS 播报
- *   → 回到聆听，循环直到用户挂断或 AI 主动挂断（告别语后输出〔挂断〕标记）。
+ *   → 接通（active）：AI 先开口（greeting）→ 免提「自动对话」循环（VAD，无需点任何按钮）：
+ *   AI 播完自动开录音待命 → 用户直接说话 → 说完停顿 1.4s 自动结束录音 → STT 转文字
+ *   → 交给聊天模型（/api/phone/turn，复用人设/记忆/时间感知链路）→ 用当前角色音色 TTS 播报
+ *   → 播完自动回到聆听，循环直到用户挂断或 AI 主动挂断（告别语后输出〔挂断〕标记）。
+ *   控制：长按/点按麦克风可临时静音（恢复后自动续听）；说话中点麦克风立即发送；
+ *   一直没人说话自动丢弃重听；识别失败自动重试（连续失败暂停并提示，可切文字聊天）。
  *
  * 五、通话中文字聊天（右上角信息图标开关）：接通后底部按钮上方出现内联输入条（消息区+输入框），
  *   开启期间字幕隐藏；用户发文字 → AI 若配置了第三方语音 API（hasCustomTtsApi）则 TTS 语音回复，
@@ -36,13 +39,22 @@ import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
 import { startWebSpeechSession, type WebSpeechSession } from './web-speech';
+import {
+  startVad,
+  AUTO_MAX_MS,
+  AUTO_RETRY_DELAY_MS,
+  AUTO_SILENCE_MS,
+  AUTO_WAIT_MS,
+  STT_FAIL_LIMIT,
+  type VadHandle,
+} from './vad';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds } from './global-call';
 
 // ---------------- 类型 ----------------
 
 export type ChatCallPhase = 'dialing' | 'incoming' | 'active' | 'ended';
-/** 通话内细状态（状态区文案用） */
+/** 通话内细状态（状态区文案用；listening=免提待命听，recording=VAD 检测到你正在说话） */
 export type ChatCallStatus = 'connecting' | 'listening' | 'recording' | 'recognizing' | 'thinking' | 'speaking';
 /** 通话结束原因（宿主据此生成通话卡片状态） */
 export type ChatCallEndReason =
@@ -213,8 +225,9 @@ export interface ChatCallApi {
   accept: () => void;
   reject: () => void;
   hangup: () => void;
-  /** 麦克风主按钮：未录音→开始录音；录音中→发送识别；AI 播报中→打断并开始录音 */
+  /** 麦克风主按钮：说话中点一下=立即发送（不等停顿）；空闲（如识别失败暂停后）=立即开听 */
   tapMic: () => void;
+  /** 静音 = 临时关闭麦克风：暂停免提自动听并丢弃进行中的录音；取消静音自动恢复听 */
   toggleMute: () => void;
   toggleSpeaker: () => void;
   /** 进出文字聊天模式（输入条开合：打断进行中的录音/播报；期间字幕隐藏、回复走输入条） */
@@ -251,6 +264,14 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const textModeRef = useRef(false);
   /** 打开面板时丢弃进行中的录音 */
   const discardRef = useRef(false);
+  /** VAD 会话（免提自动听：检测开口/停顿/超时） */
+  const vadRef = useRef<VadHandle | null>(null);
+  /** 自动重听延迟定时器 */
+  const retryTimerRef = useRef<number | null>(null);
+  /** 连续识别失败计数（达上限暂停自动听） */
+  const sttFailRef = useRef(0);
+  /** 免提自动听调度（定义在 startRecording 之后，经 effect 同步进 ref 供上游回调调用） */
+  const autoListenRef = useRef<(delayMs?: number) => void>(() => {});
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -278,10 +299,21 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     optsRef.current = { app, contact, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp };
   });
 
+  /** 停 VAD + 清自动重听定时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
+  const stopAutoListenTimers = useCallback(() => {
+    vadRef.current?.stop();
+    vadRef.current = null;
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
   /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果 */
   const finish = useCallback((endReason: ChatCallEndReason) => {
     if (endedRef.current) return;
     endedRef.current = true;
+    stopAutoListenTimers();
     ringRef.current?.stop();
     stopSpeaking();
     try {
@@ -304,7 +336,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       connected,
       duration: secondsRef.current,
     });
-  }, [direction]);
+  }, [direction, stopAutoListenTimers]);
 
   // ---------- TTS 播报（角色音色；逐字字幕同步；失败整句直出字幕不中断） ----------
   const speakReply = useCallback(
@@ -448,6 +480,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         setError(turnError || '信号不好，请再试一次');
         setStatus('listening');
         busyRef.current = false;
+        autoListenRef.current(AUTO_RETRY_DELAY_MS); // 网络恢复后自动续听
         return;
       }
       // AI 主动挂断：告别语后输出〔挂断〕标记 → 播完告别自动结束通话
@@ -471,6 +504,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         }
         setStatus('listening');
         busyRef.current = false;
+        autoListenRef.current(); // 文字回复呈现完继续免提听（文字条开着时由开合逻辑接管）
         return;
       }
       speakReply(
@@ -483,6 +517,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           }
           setStatus('listening');
           busyRef.current = false;
+          autoListenRef.current(); // AI 说完 → 自动开始听（免提循环核心）
         },
         () => {
           // TTS 失败：字幕兜底整句 + 降级为文字（输入条开着时消息区同样可见）
@@ -494,6 +529,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           }
           setStatus('listening');
           busyRef.current = false;
+          autoListenRef.current(); // 播报失败也继续免提循环（文字已呈现）
         },
       );
     },
@@ -577,37 +613,48 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     [requestTurn, appendLog, finish, speakReply, demoteLastReplyToText],
   );
 
-  /** 进出文字聊天模式：开输入条时丢弃进行中的录音、打断播报；期间字幕隐藏、回复走输入条 */
-  const setTextMode = useCallback((on: boolean) => {
-    textModeRef.current = on;
-    if (!on || endedRef.current) return;
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      discardRef.current = true;
-      try {
-        recorderRef.current.stop();
-      } catch {
-        // 已停止
+  /** 进出文字聊天模式：开启=停免提自动听（清重听定时器）、丢弃进行中的录音、打断播报；
+   *  期间字幕隐藏、回复走输入条；关闭=恢复免提自动听 */
+  const setTextMode = useCallback(
+    (on: boolean) => {
+      textModeRef.current = on;
+      if (on) {
+        stopAutoListenTimers();
+        if (endedRef.current) return;
+        if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+          discardRef.current = true;
+          try {
+            recorderRef.current.stop();
+          } catch {
+            // 已停止
+          }
+        }
+        if (statusRef.current === 'speaking') {
+          stopSpeaking();
+          setAiReveal(null); // 播报被打断：揭示中的字幕让位（整句仍在 chatLog 里）
+          setStatus('listening');
+        }
+        return;
       }
-    }
-    if (statusRef.current === 'speaking') {
-      stopSpeaking();
-      setAiReveal(null); // 播报被打断：揭示中的字幕让位（整句仍在 chatLog 里）
-      setStatus('listening');
-    }
-  }, []);
+      if (!endedRef.current) autoListenRef.current(250); // 关输入条：恢复免提听
+    },
+    [stopAutoListenTimers],
+  );
 
-  // ---------- 录音（点按开始/发送；与语音消息共用 STT 配置；并行 Web Speech 实时字幕） ----------
+  // ---------- 免提自动听（VAD 循环）：AI 说完自动开录待命，说完停顿自动发送，全程无需点按钮 ----------
   const startRecording = useCallback(async () => {
     if (endedRef.current || busyRef.current) return;
-    if (mutedRef.current) {
-      setError('麦克风已静音，先取消静音再说话');
-      return;
-    }
+    if (mutedRef.current || textModeRef.current) return;
+    if (optsRef.current.contact?.kind === 'user') return;
+    if (recorderRef.current && recorderRef.current.state === 'recording') return;
     setError('');
     setAiReveal(null);
     setLiveHeard('');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // AEC/NS/AGC：回声消除（免提外放时 AI 尾音不进麦克）、降噪、自动增益
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       if (endedRef.current) {
         stream.getTracks().forEach((t) => t.stop());
         return;
@@ -626,12 +673,19 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         // 收实时识别会话：丢弃路径直接 abort；正常路径等转写失败时再 stop 取兑底文本
         const ws = wsRef.current;
         wsRef.current = null;
-        const discard = discardRef.current;
-        discardRef.current = false;
-        if (endedRef.current || discard) {
+        if (endedRef.current) {
           ws?.abort();
           setLiveHeard('');
           chunksRef.current = [];
+          return;
+        }
+        if (discardRef.current) {
+          // 静音/开文字条/超时无人说话：丢弃本轮；未被禁止时自动重新听（免提等待循环）
+          discardRef.current = false;
+          ws?.abort();
+          setLiveHeard('');
+          chunksRef.current = [];
+          if (!mutedRef.current && !textModeRef.current) autoListenRef.current();
           return;
         }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
@@ -639,8 +693,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         if (blob.size < 1200) {
           ws?.abort();
           setLiveHeard('');
-          setError('没听到声音，请再试一次');
+          setError('没听到声音，请再说一次');
           setStatus('listening');
+          autoListenRef.current(AUTO_RETRY_DELAY_MS);
           return;
         }
         setStatus('recognizing');
@@ -672,12 +727,17 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             setError(
               sttError instanceof Error && sttError.message
                 ? sttError.message
-                : '没听清，请再说一遍',
+                : '没听清，请再说一次',
             );
             setStatus('listening');
             busyRef.current = false;
+            // 自动对话：识别失败自动重听；连续失败达上限暂停（可点麦克风重试 / 切文字聊天）
+            sttFailRef.current += 1;
+            if (sttFailRef.current < STT_FAIL_LIMIT) autoListenRef.current(AUTO_RETRY_DELAY_MS);
+            else setError('连续几次没听清，点麦克风可重试，也可用输入条文字聊');
             return;
           }
+          sttFailRef.current = 0;
           setLiveHeard('');
           setLastHeard(text);
           return runTurn(text, false);
@@ -687,16 +747,38 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           setError(e instanceof Error && e.message ? e.message : '识别失败，请再试一次');
           setStatus('listening');
           busyRef.current = false;
+          autoListenRef.current(AUTO_RETRY_DELAY_MS);
         });
       };
       recorder.start();
       setRecording(true);
-      setStatus('recording');
-      // 并行跑 Web Speech 实时识别（与 MediaRecorder 共享麦克风）：增量文字上屏做弹幕字幕；
-      // 不支持/启动失败返回 null —— 字幕退化为「松手后逐句出现」，录音本身不受影响
+      setStatus('listening'); // 免提待命等你开口（VAD 检测到声音才进入 recording）
+      // 并行跑 Web Speech 实时识别（与 MediaRecorder 共享麦克风）：仅作服务端 STT 失败兑底，
+      // 不支持/启动失败返回 null，录音与 VAD 不受影响
       wsRef.current = startWebSpeechSession({
         onPartial: (t) => {
           if (!endedRef.current) setLiveHeard(t);
+        },
+      });
+      // VAD（免提核心）：检测你何时开口、何时说完
+      vadRef.current = startVad({
+        stream,
+        silenceMs: AUTO_SILENCE_MS,
+        waitMs: AUTO_WAIT_MS,
+        maxMs: AUTO_MAX_MS,
+        onSpeechStart: () => {
+          if (!endedRef.current) setStatus('recording');
+        },
+        onSpeechEnd: (reason) => {
+          vadRef.current = null;
+          if (endedRef.current) return;
+          // silent-timeout：一直没人说话，丢弃本轮重新听（不能一直录）；pause/maxlen：正常发送
+          if (reason === 'silent-timeout') discardRef.current = true;
+          try {
+            if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop();
+          } catch {
+            // 已停止
+          }
         },
       });
     } catch {
@@ -705,11 +787,40 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     }
   }, [runTurn]);
 
-  /** 麦克风主按钮：状态机总入口 */
+  /** 免提自动听调度：空闲且未被禁止（挂断/静音/文字条/自己）时开始新一轮聆听；delayMs 缓冲后执行 */
+  const scheduleAutoListen = useCallback(
+    (delayMs = 0) => {
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      const go = () => {
+        retryTimerRef.current = null;
+        if (endedRef.current || phaseRef.current !== 'active') return;
+        if (mutedRef.current || textModeRef.current) return;
+        if (busyRef.current) return;
+        if (optsRef.current.contact?.kind === 'user') return;
+        if (recorderRef.current && recorderRef.current.state === 'recording') return;
+        void startRecording();
+      };
+      if (delayMs > 0) retryTimerRef.current = window.setTimeout(go, delayMs);
+      else go();
+    },
+    [startRecording],
+  );
+  useEffect(() => {
+    autoListenRef.current = scheduleAutoListen;
+  });
+
+  /** 麦克风主按钮：说话中点一下=立即发送（不等停顿）；空闲（如识别失败暂停后）=立即开听；
+   *  待命等你说时无需操作；AI 播报/思考中不打断（免提顺序循环，播完自动听） */
   const tapMic = useCallback(() => {
     if (endedRef.current || phaseRef.current !== 'active') return;
     if (recording) {
-      // 发送：停录音触发 onstop → STT → turn
+      if (statusRef.current !== 'recording') return; // 待命等待说话：无需手动发送
+      vadRef.current?.stop();
+      vadRef.current = null;
+      // 立即发送：停录音触发 onstop → STT → turn
       try {
         recorderRef.current?.stop();
       } catch {
@@ -718,19 +829,31 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       return;
     }
     if (busyRef.current) return;
-    // AI 正在说 → 打断播报并开始录音
-    if (status === 'speaking') stopSpeaking();
+    sttFailRef.current = 0; // 手动重试清失败计数
     void startRecording();
-  }, [recording, status, startRecording]);
+  }, [recording, startRecording]);
 
+  /** 静音 = 临时关闭麦克风：停免提自动听（清定时器）、丢弃进行中的录音；取消静音自动恢复听 */
   const toggleMute = useCallback(() => {
     if (endedRef.current) return;
-    if (recording) return; // 录音中不切静音（先发送）
-    setMuted((m) => {
-      mutedRef.current = !m;
-      return !m;
-    });
-  }, [recording]);
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    if (next) {
+      stopAutoListenTimers();
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+        discardRef.current = true;
+        try {
+          recorderRef.current.stop();
+        } catch {
+          // 已停止
+        }
+      }
+      if (statusRef.current === 'recording') setStatus('listening');
+    } else {
+      autoListenRef.current(200);
+    }
+  }, [stopAutoListenTimers]);
 
   const toggleSpeaker = useCallback(() => {
     if (endedRef.current) return;
@@ -792,6 +915,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       window.clearTimeout(missTimer);
       ring.stop();
       endedRef.current = true;
+      stopAutoListenTimers();
       stopSpeaking();
       try {
         if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop();

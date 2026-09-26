@@ -11,7 +11,9 @@
  *   底部按钮上方；底部三个圆角方形按钮（麦克风 / 扬声器 / 挂断，居中拉开间距）；
  *   来电页「邀请你语音通话」+「消息回复」+ 红挂断/绿接听圆角方按钮；长按麦克风静音。
  *
- * - 状态区：「正在说话」「正在听」「正在思考…」「识别中…」等。
+ * - 免提「自动对话」模式（VAD）：AI 说完自动开始听 → 用户直接说话（无需点任何按钮）→
+ *   说完停顿 1.4s 自动发送 → AI 回复播完自动回到聆听，循环；麦克风按钮点一下=临时静音
+ *   （长按亦可）；说话中点麦克风立即发送；状态区「在听你说…/正在听/正在思考…/识别中…」等。
  * - 通话字幕（单句弹幕，实时）：只显示 AI 说的话——TTS 播报的同时按播放进度逐字揭示（柔白字），
  *   我说的话不再上屏（用户反馈）；屏幕同一时刻只显示 AI 最新一句、位于头像名字下方——AI 开新口
  *   上一句立即消失（用户需求：头像名字居中，字幕在其下方，单句呈现、字号加大、居中对齐）。
@@ -145,7 +147,7 @@ function statusLine(
     case 'recognizing':
       return '识别中…';
     case 'recording':
-      return '正在听（再点一下发送）';
+      return '在听你说…';
     default:
       return '正在听';
   }
@@ -309,7 +311,7 @@ function InlineCallChat({ variant, call, className = '' }: { variant: 'wx' | 'qq
 
 function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
-  const { phase, status, seconds, recording, muted, speakerOn, error } = call;
+  const { phase, status, seconds, muted, speakerOn, error } = call;
   const [textChatOpen, setTextChatOpen] = useState(false);
 
   const openTextChat = () => {
@@ -429,11 +431,11 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
       ) : (
         <div className="flex flex-col items-center px-8 pb-[max(34px,env(safe-area-inset-bottom))]">
           <div className="flex w-full items-end justify-center gap-12">
-            {/* 麦克风：任何时候都在（拨号中也在，对照微信原生）；点按说话 / 长按静音 */}
+            {/* 麦克风：任何时候都在（拨号中也在，对照微信原生）；免提自动听，点按/长按=临时静音 */}
             <div className="flex flex-col items-center gap-2">
               <button
                 type="button"
-                aria-label={muted ? '取消静音' : recording ? '发送' : '说话（长按静音）'}
+                aria-label={muted ? '取消静音' : status === 'recording' ? '立即发送' : '麦克风（免提自动听）'}
                 aria-pressed={muted}
                 data-testid="wx-call-mic"
                 onPointerDown={holdStart}
@@ -442,13 +444,13 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
                 onContextMenu={(e) => e.preventDefault()}
                 onClick={micClick}
                 className={`${wxRound} select-none ${
-                  recording ? 'bg-white text-black ring-2 ring-[#07C160]' : muted ? 'bg-white/10 text-white/85' : 'bg-white/10 text-white'
+                  status === 'recording' ? 'bg-white text-black ring-2 ring-[#07C160]' : muted ? 'bg-white/10 text-white/85' : 'bg-white/10 text-white'
                 }`}
               >
-                {muted ? <MicOff className="h-7 w-7" strokeWidth={1.9} /> : <Mic className={`h-7 w-7 ${recording ? 'animate-pulse' : ''}`} strokeWidth={1.9} />}
+                {muted ? <MicOff className="h-7 w-7" strokeWidth={1.9} /> : <Mic className={`h-7 w-7 ${status === 'recording' ? 'animate-pulse' : ''}`} strokeWidth={1.9} />}
               </button>
               <span className="max-w-[86px] text-center text-[12px] leading-tight text-white/75">
-                {muted ? '麦克风已关' : recording ? '正在听…' : '麦克风已开'}
+                {muted ? '麦克风已关' : '麦克风已开'}
               </span>
             </div>
             <div className="flex flex-col items-center gap-2">
@@ -473,7 +475,7 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
             </div>
           </div>
           {phase === 'active' && !muted && (
-            <p className="mt-4 text-[11px] text-white/35">点一下麦克风说话 · 长按可静音</p>
+            <p className="mt-4 text-[11px] text-white/35">免提自动对话 · 直接说话即可 · 点按/长按静音</p>
           )}
         </div>
       )}
@@ -486,7 +488,7 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
 function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
-  const { phase, status, seconds, recording, muted, speakerOn, error } = call;
+  const { phase, status, seconds, muted, speakerOn, error } = call;
   const [textChatOpen, setTextChatOpen] = useState(false);
 
   const openTextChat = () => {
@@ -616,7 +618,7 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
           )}
           {/* 三个按钮居中拉开间距（原三条横杠菜单按钮已删除，长按麦克风可静音） */}
           <div className="flex w-full items-center justify-center gap-12">
-            {/* 麦克风：点按说话 / 发送，长按静音 */}
+            {/* 麦克风：免提自动听（点按/长按=临时静音）；说话中高亮、点一下立即发送 */}
             <button
               type="button"
               onClick={micClick}
@@ -624,12 +626,12 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
               onPointerUp={holdEnd}
               onPointerLeave={holdEnd}
               onContextMenu={(e) => e.preventDefault()}
-              aria-label={recording ? '发送' : muted ? '取消静音' : '说话（长按静音）'}
-              aria-pressed={recording}
+              aria-label={status === 'recording' ? '立即发送' : muted ? '取消静音' : '麦克风（免提自动听）'}
+              aria-pressed={muted}
               data-testid="qq-call-mic"
-              className={`${recording ? `${whiteBtn} ring-2 ring-[#2FBF71]` : muted ? `${darkBtn} opacity-60` : whiteBtn} select-none`}
+              className={`${status === 'recording' ? `${whiteBtn} ring-2 ring-[#2FBF71]` : muted ? `${darkBtn} opacity-60` : whiteBtn} select-none`}
             >
-              <Mic className={`h-7 w-7 ${recording ? 'animate-pulse' : ''}`} strokeWidth={1.9} />
+              <Mic className={`h-7 w-7 ${status === 'recording' ? 'animate-pulse' : ''}`} strokeWidth={1.9} />
             </button>
             {/* 扬声器 */}
             <button

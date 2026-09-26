@@ -47,6 +47,15 @@ import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from 
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { hasCustomTtsApi, isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
+import {
+  startVad,
+  AUTO_MAX_MS,
+  AUTO_RETRY_DELAY_MS,
+  AUTO_SILENCE_MS,
+  AUTO_WAIT_MS,
+  STT_FAIL_LIMIT,
+  type VadHandle,
+} from '@/lib/ios/vad';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -515,6 +524,7 @@ function CallScreen({
   const [inputFocused, setInputFocused] = useState(false);
   const [draft, setDraft] = useState('');
   const [recording, setRecording] = useState(false);
+  const [vadSpeaking, setVadSpeaking] = useState(false); // VAD 检测到你正在说话
   const [busy, setBusy] = useState(false); // ASR/LLM/TTS 链路进行中
   const [error, setError] = useState('');
   /** 空号：拨打的号码不在联系人里，运营商播报「空号」后自动挂断 */
@@ -534,6 +544,16 @@ function CallScreen({
   const bubblesRef = useRef<CallBubble[]>([]);
   const textListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const mutedRef = useRef(false);
+  const busyRef = useRef(false);
+  /** 免提自动听（VAD 循环） */
+  const vadRef = useRef<VadHandle | null>(null);
+  const vadSpeakingRef = useRef(false);
+  const discardRef = useRef(false);
+  const retryTimerRef = useRef<number | null>(null);
+  const sttFailRef = useRef(0);
+  /** 免提自动听调度（定义在 toggleRecording 之后，经 effect 同步进 ref 供上游回调调用） */
+  const scheduleAutoListenRef = useRef<(delayMs?: number) => void>(() => {});
   const setCallActive = useUI((s) => s.setCallActive);
   // 设置 App「API 设置」里的 OpenAI 兼容接口配置（通话 AI 对话走该配置）
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -547,6 +567,16 @@ function CallScreen({
   const contact = target.contact;
   const gender = useMemo(() => contactGender(contact), [contact]);
 
+  /** 停 VAD + 清自动重听定时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
+  const stopAutoTimers = useCallback(() => {
+    vadRef.current?.stop();
+    vadRef.current = null;
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
   /** TTS 播放一句：优先用户语音 API（设置 › 语音 API；音色 = 联系人独立 voiceId → 全局默认 → 安全默认），
    *  未配置/合成失败回退内置朗读（按性别挑声线）——字幕与文字流程不受影响 */
   const speak = useCallback(
@@ -554,7 +584,10 @@ function CallScreen({
       setPeerStatus('speaking');
       const volume = speaker ? 1 : 0.45;
       const resume = () => {
-        if (!endedRef.current) setPeerStatus('listening');
+        if (!endedRef.current) {
+          setPeerStatus('listening');
+          scheduleAutoListenRef.current(); // AI 说完 → 自动开始听（免提循环核心）
+        }
       };
       // ① 用户语音 API：每次播放实时重读联系人 voiceId（切联系人/改音色后下一句即生效）
       if (isTtsConfigured()) {
@@ -624,6 +657,7 @@ function CallScreen({
         setBubbles((b) => [...b, historyBefore[historyBefore.length - 1]]);
       }
       setBusy(true);
+      busyRef.current = true;
       // 记忆库：本轮对话结束后的轮次计数与自动提取（后台异步，失败静默）；
       // 请求前先召回该联系人（互通开关范围）的记忆注入 system（服务端拼到人设后）
       const memoryBlock = contact?.id ? memRecallBlock(contact.id, 'phone', userText ?? '') : undefined;
@@ -747,6 +781,7 @@ function CallScreen({
               setBubbles((b) => b.filter((x) => x.id !== bubbleId));
               setError('对方没有回应，请稍后再试');
               setPeerStatus('listening');
+              scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
               return;
             }
             // 回复形态：文字聊天开着且没配语音 API → 文字回复；其余（语音轮次 / 配了语音 API）都播报
@@ -756,20 +791,23 @@ function CallScreen({
             if (asText) {
               // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
               setPeerStatus('listening');
+              scheduleAutoListenRef.current(); // 文字回复呈现完继续免提听（文字条开着时被拦截）
             } else {
-              await speak(reply);
+              await speak(reply); // speak 内部播完自动续听
             }
           } catch (err) {
             if (endedRef.current) return;
             setBubbles((b) => b.filter((x) => x.id !== bubbleId));
             setError(err instanceof Error && err.message ? err.message : '对方信号不好，稍后再试');
             setPeerStatus('listening');
+            scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
           }
           return;
         }
         if (!res.ok || !data.reply) {
           setError(data.error || '对方信号不好，稍后再试');
           setPeerStatus('listening');
+          scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
           return;
         }
         const reply = data.reply;
@@ -783,8 +821,9 @@ function CallScreen({
         if (asText) {
           // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
           setPeerStatus('listening');
+          scheduleAutoListenRef.current(); // 文字回复呈现完继续免提听（文字条开着时被拦截）
         } else {
-          await speak(reply);
+          await speak(reply); // speak 内部播完自动续听
         }
       } catch (err) {
         if (!endedRef.current) {
@@ -795,8 +834,10 @@ function CallScreen({
               : msg || '通话网络异常，请稍后再试'
           );
           setPeerStatus('listening');
+          scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
         }
       } finally {
+        busyRef.current = false;
         if (!endedRef.current) setBusy(false);
       }
     },
@@ -807,6 +848,7 @@ function CallScreen({
   const hangup = useCallback(() => {
     if (endedRef.current) return;
     endedRef.current = true;
+    stopAutoTimers();
     ringRef.current?.stop();
     stopSpeaking();
     if (audioRef.current) {
@@ -879,7 +921,7 @@ function CallScreen({
       });
     }
     window.setTimeout(onClose, 1100);
-  }, [contact, target.number, onEnd, onVoicemail, onClose]);
+  }, [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers]);
   /** 空号播报结束后的自动挂断要走最新的 hangup（mount effect 里引用） */
   const hangupRef = useRef<() => void>(() => {});
   hangupRef.current = hangup;
@@ -949,6 +991,7 @@ function CallScreen({
       window.clearTimeout(timer);
       window.clearTimeout(emptyTimer);
       if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+      stopAutoTimers();
       ring.stop();
       stopSpeaking();
       if (audioRef.current) {
@@ -976,17 +1019,24 @@ function CallScreen({
     if (el) el.scrollTop = el.scrollHeight;
   }, [bubbles, textMode, busy]);
 
-  // 开始/停止录音
+  // ---------- 免提自动听（VAD 循环）：AI 说完自动开录待命，说完停顿自动发送，全程无需点按钮 ----------
   const toggleRecording = useCallback(async () => {
-    if (phase !== 'connected' || busy) return;
-    if (recording) {
-      try {
-        recorderRef.current?.stop();
-      } catch {
-        // 忽略
+    if (phase !== 'connected' || endedRef.current) return;
+    if (recorderRef.current && recorderRef.current.state === 'recording') {
+      // 已在自动听：说话中点一下=立即发送（不等停顿）；待命等你说时无需操作
+      if (vadSpeakingRef.current) {
+        vadRef.current?.stop();
+        vadRef.current = null;
+        try {
+          recorderRef.current.stop();
+        } catch {
+          // 忽略
+        }
       }
       return;
     }
+    if (busyRef.current || mutedRef.current || emptyRef.current) return;
+    if (contact?.kind === 'user') return; // 自己的号码：对方不说话也不听
     setError('');
     stopSpeaking();
     if (audioRef.current) {
@@ -994,7 +1044,14 @@ function CallScreen({
       audioRef.current = null;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // AEC/NS/AGC：回声消除（免提外放时 AI 尾音不进麦克）、降噪、自动增益
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      if (endedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       streamRef.current = stream;
       const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
@@ -1004,16 +1061,27 @@ function CallScreen({
       };
       recorder.onstop = async () => {
         setRecording(false);
+        setVadSpeaking(false);
+        vadSpeakingRef.current = false;
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
         if (endedRef.current) return;
+        if (discardRef.current) {
+          // 静音/开文字条/超时无人说话：丢弃本轮；未被禁止时自动重新听（免提等待循环）
+          discardRef.current = false;
+          chunksRef.current = [];
+          scheduleAutoListenRef.current();
+          return;
+        }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         chunksRef.current = [];
         if (blob.size < 1200) {
-          setError('没听到声音，请再试一次');
+          setError('没听到声音，请再说一次');
+          scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS);
           return;
         }
         setBusy(true);
+        busyRef.current = true;
         setPeerStatus('thinking');
         try {
           const b64 = await blobToWavBase64(blob);
@@ -1025,30 +1093,147 @@ function CallScreen({
           const data = (await res.json()) as { text?: string; error?: string };
           if (endedRef.current) return;
           if (!res.ok || !data.text) {
-            setError(data.error || '没有听清，请用键盘输入');
-            setTextMode(true);
+            // 识别失败：提示后自动重听；连续失败达上限切键盘输入（不影响文字聊天）
+            setError(data.error || '没听清，请再说一次');
+            sttFailRef.current += 1;
             setPeerStatus('listening');
+            if (sttFailRef.current >= STT_FAIL_LIMIT) {
+              setTextMode(true);
+              setError('连续几次没听清，已切到键盘输入');
+            } else {
+              scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS);
+            }
             return;
           }
+          sttFailRef.current = 0;
           setBusy(false);
+          busyRef.current = false;
           await runTurn(data.text);
         } catch {
           if (!endedRef.current) {
-            setError('语音识别失败，请用键盘输入');
-            setTextMode(true);
+            setError('语音识别失败，请再说一次');
+            sttFailRef.current += 1;
             setPeerStatus('listening');
+            if (sttFailRef.current >= STT_FAIL_LIMIT) {
+              setTextMode(true);
+              setError('连续识别失败，已切到键盘输入');
+            } else {
+              scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS);
+            }
           }
         } finally {
+          busyRef.current = false;
           if (!endedRef.current) setBusy(false);
         }
       };
       recorder.start();
       setRecording(true);
+      // VAD（免提核心）：检测你何时开口、何时说完
+      vadRef.current = startVad({
+        stream,
+        silenceMs: AUTO_SILENCE_MS,
+        waitMs: AUTO_WAIT_MS,
+        maxMs: AUTO_MAX_MS,
+        onSpeechStart: () => {
+          if (endedRef.current) return;
+          vadSpeakingRef.current = true;
+          setVadSpeaking(true);
+        },
+        onSpeechEnd: (reason) => {
+          vadRef.current = null;
+          vadSpeakingRef.current = false;
+          setVadSpeaking(false);
+          if (endedRef.current) return;
+          // silent-timeout：一直没人说话，丢弃本轮重新听（不能一直录）；pause/maxlen：正常发送
+          if (reason === 'silent-timeout') discardRef.current = true;
+          try {
+            recorderRef.current?.stop();
+          } catch {
+            // 已停止
+          }
+        },
+      });
     } catch {
-      setError('麦克风不可用，请用键盘输入文字');
-      setTextMode(true);
+      setError('麦克风不可用，请检查权限或用键盘输入');
+      setTextMode(true); // 权限兜底：不影响文字聊天
     }
-  }, [phase, busy, recording, runTurn]);
+  }, [phase, contact, runTurn]);
+
+  /** 免提自动听调度：空闲且未被禁止（挂断/静音/文字条/空号/自己）时开始新一轮聆听 */
+  const scheduleAutoListen = useCallback(
+    (delayMs = 0) => {
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      const go = () => {
+        retryTimerRef.current = null;
+        if (endedRef.current || phaseRef.current !== 'connected' || emptyRef.current) return;
+        if (mutedRef.current || textModeRef.current) return;
+        if (busyRef.current) return;
+        if (contact?.kind === 'user') return;
+        if (recorderRef.current && recorderRef.current.state === 'recording') return;
+        void toggleRecording();
+      };
+      if (delayMs > 0) retryTimerRef.current = window.setTimeout(go, delayMs);
+      else go();
+    },
+    [contact, toggleRecording],
+  );
+  useEffect(() => {
+    scheduleAutoListenRef.current = scheduleAutoListen;
+  });
+
+  /** 静音 = 临时关闭麦克风：停免提自动听（清定时器）、丢弃进行中的录音；取消静音自动恢复听 */
+  const toggleMute = useCallback(() => {
+    if (endedRef.current || phaseRef.current !== 'connected') return;
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    if (next) {
+      stopAutoTimers();
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+        discardRef.current = true;
+        try {
+          recorderRef.current.stop();
+        } catch {
+          // 已停止
+        }
+      }
+      vadSpeakingRef.current = false;
+      setVadSpeaking(false);
+    } else {
+      scheduleAutoListenRef.current(200);
+    }
+  }, [stopAutoTimers]);
+
+  /** 信息图标：开/关文字聊天（开启停免提自动听并打断播报；关闭恢复自动听） */
+  const toggleTextMode = useCallback(() => {
+    if (endedRef.current || phaseRef.current !== 'connected') return;
+    const next = !textModeRef.current;
+    textModeRef.current = next;
+    setTextMode(next);
+    if (next) {
+      stopAutoTimers();
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+        discardRef.current = true;
+        try {
+          recorderRef.current.stop();
+        } catch {
+          // 已停止
+        }
+      }
+      stopSpeaking();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setPeerStatus('listening');
+      window.setTimeout(() => inputRef.current?.focus(), 60);
+    } else {
+      scheduleAutoListenRef.current(250);
+    }
+  }, [stopAutoTimers]);
 
   const sendText = useCallback(() => {
     const text = draft.trim();
@@ -1063,7 +1248,8 @@ function CallScreen({
     if (phase === 'ended') return '通话结束';
     if (peerStatus === 'speaking') return '正在说话…';
     if (peerStatus === 'thinking' || busy) return '…';
-    if (recording) return '正在聆听，再点一下发送';
+    if (recording && vadSpeaking) return '在听你说…';
+    if (recording) return '在听…';
     return callDurationText(seconds);
   };
 
@@ -1208,7 +1394,7 @@ function CallScreen({
       >
         {phase !== 'ended' && (
           <div className="grid grid-cols-3 gap-y-5 pb-1">
-            {controlBtn(muted ? <MicOff className="h-[22px] w-[22px]" /> : <Mic className="h-[22px] w-[22px]" />, '静音', muted, () => setMuted((v) => !v))}
+            {controlBtn(muted ? <MicOff className="h-[22px] w-[22px]" /> : <Mic className="h-[22px] w-[22px]" />, '静音', muted, () => toggleMute())}
             {controlBtn(<DialpadIcon className="h-[22px] w-[22px]" />, '键盘', keypadOpen, () => setKeypadOpen((v) => !v))}
             {controlBtn(speaker ? <Volume2 className="h-[22px] w-[22px]" /> : <VolumeX className="h-[22px] w-[22px]" />, '扬声器', speaker, () => setSpeaker((v) => !v))}
             {controlBtn(<UserPlus className="h-[22px] w-[22px]" />, '添加', false, () => setError('模拟通话暂不支持添加通话'))}
@@ -1284,10 +1470,7 @@ function CallScreen({
           <div className="mb-2.5 flex items-center justify-center gap-5">
             <button
               type="button"
-              onClick={() => {
-                setTextMode((v) => !v);
-                if (!textMode) setTimeout(() => inputRef.current?.focus(), 60);
-              }}
+              onClick={toggleTextMode}
               aria-label={textMode ? '切换到语音' : '切换到键盘输入'}
               aria-pressed={textMode}
               className={`flex h-[44px] w-[44px] items-center justify-center rounded-full backdrop-blur-md transition-colors ${
@@ -1300,13 +1483,16 @@ function CallScreen({
               type="button"
               onClick={() => void toggleRecording()}
               disabled={busy && !recording}
+              aria-label={recording && vadSpeaking ? '立即发送' : '麦克风（免提自动听）'}
               data-testid="talk-button"
               className={`flex h-[68px] w-[68px] items-center justify-center rounded-full transition-all active:scale-95 disabled:opacity-50 ${
-                recording ? 'animate-pulse bg-[#FF453A] text-white' : 'bg-white/15 text-white backdrop-blur-md'
+                recording && vadSpeaking ? 'animate-pulse bg-[#FF453A] text-white' : 'bg-white/15 text-white backdrop-blur-md'
               }`}
             >
               {busy && !recording ? (
                 <Loader2 className="h-6 w-6 animate-spin" />
+              ) : recording && vadSpeaking ? (
+                <AudioLines className="h-[26px] w-[26px]" />
               ) : (
                 <Mic className="h-[26px] w-[26px]" />
               )}
