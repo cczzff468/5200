@@ -89,6 +89,8 @@ export default function GlobalCallLayer() {
           direction={session.direction}
           initialHistory={session.initialHistory}
           memoryBlock={session.memoryBlock}
+          memoryBlockFn={session.memoryBlockFn}
+          worldbookBlock={session.worldbookBlock}
           momentsBlock={session.momentsBlock}
           timeBlock={session.timeBlock}
           locBlock={session.locBlock}

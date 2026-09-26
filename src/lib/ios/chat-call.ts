@@ -31,10 +31,20 @@
  *
  * 四、通话结果（onEnd 恰好一次回调）：direction / endReason / connected / duration（接通秒数），
  *   由宿主（微信/QQ 聊天页）生成通话卡片消息并持久化。
+ *
+ * 五、通话记忆（与文字聊天共用同一套记忆系统，同池存储 / 同互通开关 / 按联系人隔离）：
+ *   1) 每轮回复后 memorizeTurn：轮次计数（无持久消息数组固定计 2 条）→ 达提取间隔自动从
+ *      通话转写提取记忆碎片（后台异步，失败静默）；
+ *   2) 挂断时 summarizeCall：整通电话转写自动总结一次（memSummarizeCallNow），关键信息沉淀；
+ *   3) 每轮 requestTurn 前经 memoryBlockFn 以「用户刚说的话」动态召回相关记忆注入 system
+ *      （文字聊过的事通话里能接上；通话里说的事文字聊天也能接上——互通开关决定召回范围）；
+ *   4) worldbookBlock：宿主用 collectWbBlocks 组装的世界书设定，随人设注入（优先级高于记忆）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ContactRecord } from '@/lib/contacts';
+import { memAfterAiTurn, memConvoFromRaw, memSummarizeCallNow } from '@/lib/memory';
+import { ownerRealName } from './contacts-store';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
@@ -102,8 +112,14 @@ export interface UseChatCallOptions {
   direction: 'out' | 'in';
   /** 进入通话时携带的最近聊天上下文（按 user/assistant 归并），AI 按人设与上下文应答 */
   initialHistory: ChatCallTurnMsg[];
-  /** 宿主组装的 system 附加块（记忆召回 / 社交动态 / 时间感知 / 位置感知；发送时原样透传给 turn API） */
+  /** 宿主组装的 system 附加块（记忆召回 / 社交动态 / 时间感知 / 位置感知；发送时原样透传给 turn API）
+   *  memoryBlock 为发起时快照（兑底）；memoryBlockFn 每轮以「用户刚说的话」重新召回（优先使用）——
+   *  通话里 AI 能随话题变化召回相关记忆，主动提起之前聊过的事 */
   memoryBlock?: string;
+  /** 每轮动态召回记忆（宿主组装：memRecallBlock(contactId, app, userText)）；优先于 memoryBlock */
+  memoryBlockFn?: (userText: string | null) => string | undefined;
+  /** 世界书块（宿主用 collectWbBlocks 组装：全局/局部/专属命中条目 + 使用规则），透传 turn API */
+  worldbookBlock?: string;
   momentsBlock?: string;
   timeBlock?: string;
   /** 位置感知块（与文字聊天同一套 buildLocationBlock）：通话里 AI 知道“用户在哪” */
@@ -237,7 +253,7 @@ export interface ChatCallApi {
 }
 
 export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
-  const { app, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd } = opts;
+  const { app, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd } = opts;
 
   const [phase, setPhase] = useState<ChatCallPhase>(direction === 'in' ? 'incoming' : 'dialing');
   const [status, setStatus] = useState<ChatCallStatus>('connecting');
@@ -281,7 +297,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const busyRef = useRef(false); // STT/turn/TTS 循环进行中
   const historyRef = useRef<ChatCallTurnMsg[]>(initialHistory.slice(-16));
   const onEndRef = useRef(onEnd);
-  const optsRef = useRef({ app, contact, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp });
+  const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp });
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
@@ -296,7 +312,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   }, []);
   useEffect(() => {
     onEndRef.current = onEnd;
-    optsRef.current = { app, contact, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp };
+    optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp };
   });
 
   /** 停 VAD + 清自动重听定时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
@@ -308,6 +324,54 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       retryTimerRef.current = null;
     }
   }, []);
+
+  // ---------- 通话记忆接线（微信/QQ 与电话 App 同款）：轮次计数 + 自动提取 + 挂断总结 ----------
+
+  /** 通话转写 → 记忆对话轮次（chatLog 含语音轮次 + 文字轮次，统一转 me/peer） */
+  const chatLogToConvo = useCallback(() => {
+    return memConvoFromRaw(
+      chatLogRef.current.map((m) => ({ role: m.role, text: m.content })),
+      '',
+    );
+  }, []);
+
+  /** 一轮 AI 回复后的记忆管线（runTurn/sendText 成功分支调用；后台异步，失败静默）：
+   *  轮次计数（无持久消息数组，固定计 2 条）→ 达提取间隔自动从通话转写提取记忆碎片；
+   *  与文字聊天共用同一记忆库（同池存储 / 同互通开关），电话里说过的事文字聊天能接上 */
+  const memorizeTurn = useCallback(() => {
+    const cur = optsRef.current;
+    const cid = cur.contact?.id;
+    if (!cid || cur.contact?.kind === 'user') return;
+    void ownerRealName()
+      .catch(() => '')
+      .then((owner) =>
+        memAfterAiTurn(
+          cid,
+          cur.app,
+          useSettings.getState().apiConfig,
+          () => chatLogToConvo(),
+          () => null, // 无持久消息数组：每轮固定计 2 条（1 用户 + 1 AI）
+          { user: owner, peer: cur.contact?.name || '' },
+        ),
+      );
+  }, [chatLogToConvo]);
+
+  /** 挂断时自动总结整通电话：提取关键信息沉淀为记忆（通话结束自动触发一次；失败静默不阻塞收尾） */
+  const summarizeCall = useCallback(() => {
+    const cur = optsRef.current;
+    const cid = cur.contact?.id;
+    if (!cid || cur.contact?.kind === 'user') return;
+    const turns = chatLogToConvo();
+    if (turns.length < 2) return; // 通话太短没有可沉淀的内容
+    void ownerRealName()
+      .catch(() => '')
+      .then((owner) =>
+        memSummarizeCallNow(cid, cur.app, useSettings.getState().apiConfig, turns, {
+          user: owner,
+          peer: cur.contact?.name || '',
+        }),
+      );
+  }, [chatLogToConvo]);
 
   /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果 */
   const finish = useCallback((endReason: ChatCallEndReason) => {
@@ -330,13 +394,15 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     setStatus('listening');
     reportCallSeconds(0);
     const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
+    // 通话结束自动总结：整通电话的转写交给记忆管线提取关键信息（异步，不阻塞宿主落卡片）
+    summarizeCall();
     onEndRef.current({
       direction: optsRef.current.app === 'wx' || optsRef.current.app === 'qq' ? direction : 'out',
       endReason,
       connected,
       duration: secondsRef.current,
     });
-  }, [direction, stopAutoListenTimers]);
+  }, [direction, stopAutoListenTimers, summarizeCall]);
 
   // ---------- TTS 播报（角色音色；逐字字幕同步；失败整句直出字幕不中断） ----------
   const speakReply = useCallback(
@@ -391,6 +457,10 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const requestTurn = useCallback(
     async (historyBefore: ChatCallTurnMsg[], greeting: boolean): Promise<{ reply: string; error?: string }> => {
       const c = optsRef.current.contact;
+      // 本轮用户刚说的话（greeting 时不存）：供每轮动态召回相关记忆（主动提起之前聊过的事）
+      const lastUserText = greeting ? null : (historyBefore[historyBefore.length - 1]?.content ?? null);
+      const recalledBlock =
+        optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined;
       try {
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
@@ -414,7 +484,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             number: c?.phone || '10086',
             greeting,
             history: historyBefore.map((m) => ({ role: m.role, content: m.content })),
-            memoryBlock: optsRef.current.memoryBlock || undefined,
+            memoryBlock: recalledBlock,
+            worldbookBlock: optsRef.current.worldbookBlock || undefined,
             momentsBlock: optsRef.current.momentsBlock || undefined,
             timeBlock: optsRef.current.timeBlock || undefined,
             locBlock: optsRef.current.locBlock || undefined,
@@ -496,6 +567,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       // 文字输入条开着时按「是否配置语音 API」决定——配了语音回复，没配文字回复
       const asText = textModeRef.current && !hasCustomTtsApi();
       appendLog({ role: 'assistant', content: reply, at: Date.now(), via: asText ? 'text' : 'voice' });
+      memorizeTurn(); // 通话记忆：轮次计数 + 自动提取（后台异步，失败静默）
       if (asText) {
         // 文字回复：不出声（字幕/消息区已呈现整句）
         if (wantHangup) {
@@ -533,7 +605,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         },
       );
     },
-    [finish, speakReply, requestTurn, appendLog, demoteLastReplyToText],
+    [finish, speakReply, requestTurn, appendLog, demoteLastReplyToText, memorizeTurn],
   );
 
   // ---------- 通话中文字聊天：用户发文字 → LLM → 配了语音 API 语音回复，否则文字回复 ----------
@@ -574,6 +646,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       if (hasCustomTtsApi()) {
         // AI 配置了语音 API → 语音回复（不出文字）；播报期间保持「回应中」防止插发新消息
         appendLog({ role: 'assistant', content: reply, at: Date.now(), via: 'voice' });
+        memorizeTurn(); // 通话记忆：轮次计数 + 自动提取（后台异步，失败静默）
         speakReply(
           reply,
           () => {
@@ -604,13 +677,14 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       } else {
         // 没配语音 API → 文字回复（输入条消息区气泡呈现）
         appendLog({ role: 'assistant', content: reply, at: Date.now(), via: 'text' });
+        memorizeTurn(); // 通话记忆：轮次计数 + 自动提取（后台异步，失败静默）
         textBusyRef.current = false;
         busyRef.current = false;
         setTextBusy(false);
         if (wantHangup) finish('ai-hangup');
       }
     },
-    [requestTurn, appendLog, finish, speakReply, demoteLastReplyToText],
+    [requestTurn, appendLog, finish, speakReply, demoteLastReplyToText, memorizeTurn],
   );
 
   /** 进出文字聊天模式：开启=停免提自动听（清重听定时器）、丢弃进行中的录音、打断播报；

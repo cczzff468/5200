@@ -3954,6 +3954,27 @@ function ChatPage({
                   : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
+      // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
+      // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
+      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]));
+      const worldbookBlock =
+        [
+          callWb.beforeSystem,
+          callWb.afterSystem,
+          callWb.beforeChar,
+          callWb.afterChar,
+          callWb.beforeUser,
+          callWb.afterUser,
+          wbRulesBlock(callWb),
+        ]
+          .filter(Boolean)
+          .join('\n\n') || undefined;
+      // 每轮动态召回（引擎以「用户刚说的话」逐轮调用）：通话里 AI 能随话题变化召回相关记忆，
+      // 主动提起之前聊过的事（文字聊过的事通话里能接上——互通开关决定召回范围）
+      const memoryBlockFn = (userText: string | null) =>
+        memRecallBlock(peer.id, 'wx', wbScanText([userText, ...history.slice(-4).map((h) => h.content)]), {
+          interopOn: effectiveInterop,
+        }) || undefined;
       startGlobalCall({
         variant: 'wx',
         name: peer.name,
@@ -3962,6 +3983,8 @@ function ChatPage({
         direction,
         initialHistory: history,
         memoryBlock: memRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
+        memoryBlockFn,
+        worldbookBlock,
         momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer }) || undefined,
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })

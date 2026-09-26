@@ -43,7 +43,8 @@ import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
+import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { hasCustomTtsApi, isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
@@ -690,6 +691,32 @@ function CallScreen({
         contact?.id && getTimeAware(`phone:${contact.id}`)
           ? buildTimeAwareBlock({ lastMsgTime: lastChatTime, regionHint: contact.region || null })
           : '';
+      // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
+      // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
+      const callWb = contact?.id
+        ? collectWbBlocks(
+            contact.id,
+            wbScanText([
+              userText,
+              ...priorBubbles.slice(-6).map((b) => b.text),
+            ]),
+          )
+        : null;
+      const worldbookBlock = callWb
+        ? (
+            [
+              callWb.beforeSystem,
+              callWb.afterSystem,
+              callWb.beforeChar,
+              callWb.afterChar,
+              callWb.beforeUser,
+              callWb.afterUser,
+              wbRulesBlock(callWb),
+            ]
+              .filter(Boolean)
+              .join('\n\n') || undefined
+          )
+        : undefined;
       const memorizeTurn = (reply: string) => {
         if (!contact?.id) return;
         const turns = memConvoFromRaw(
@@ -748,6 +775,8 @@ function CallScreen({
             multiApp: contact?.id ? getMemSettings(contact.id).share : undefined,
             // 社交动态块（前端按互通开关现场构建；服务端拼到人设+记忆之后）
             momentsBlock: momentsBlock || undefined,
+            // 世界书块（与文字聊天同一套 collectWbBlocks；服务端拼到人设之后、记忆之前）
+            worldbookBlock,
             // 时间感知块（前端按联系人开关现场构建；服务端拼到人设+记忆之后）
             timeBlock,
             // 设置 App「API 设置」的配置：服务端优先用它调用户自己的 API
@@ -881,6 +910,23 @@ function CallScreen({
     setPhase('ended');
     setPeerStatus('listening');
     setRecording(false);
+    // 通话结束自动总结：整通电话的转写交给记忆管线提取关键信息（通话记忆与文字聊天同池互通；
+    // 后台异步，失败静默——绝不阻塞挂断收尾）。机主自己（kind='user'）/没接通的不总结。
+    if (contact?.id && contact.kind !== 'user' && wasConnected) {
+      const convo = bubblesRef.current
+        .filter((b) => b.text.trim())
+        .map((b): { role: 'me' | 'peer'; text: string } => ({ role: b.role === 'user' ? 'me' : 'peer', text: b.text }));
+      if (convo.length >= 2) {
+        void ownerRealName()
+          .catch(() => '')
+          .then((owner) =>
+            memSummarizeCallNow(contact.id, 'phone', apiConfig, convo, {
+              user: owner || profileName,
+              peer: contact.name,
+            })
+          );
+      }
+    }
     onEnd({
       id: genId(),
       number: target.number,
@@ -921,7 +967,7 @@ function CallScreen({
       });
     }
     window.setTimeout(onClose, 1100);
-  }, [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers]);
+  }, [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers, apiConfig, profileName]);
   /** 空号播报结束后的自动挂断要走最新的 hangup（mount effect 里引用） */
   const hangupRef = useRef<() => void>(() => {});
   hangupRef.current = hangup;

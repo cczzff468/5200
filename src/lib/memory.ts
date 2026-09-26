@@ -1332,6 +1332,48 @@ export async function memSummarizeNow(
   }
 }
 
+/**
+ * 通话挂断时的自动总结（「通话结束后，自动触发一次总结，提取通话中的关键信息」）：
+ * 把整通电话的对话转写交给提取管线入库（碎片 → 达阈值自动核心/长期总结），
+ * 与文字聊天共用同一套记忆系统（同池存储、同互通开关、同相似度合并去重——
+ * 通话里与之前轮次提取重复的内容自动合并为「加强」而不是重复占位）。
+ * 与 memSummarizeNow 的差异：guard 独立（不与手动总结互斥）、内容不足静默返回、
+ * 全程失败静默（console.warn）——通话记忆是增强能力，绝不影响挂断收尾。
+ * 返回 { added, merged } 供宿主 toast（可忽略）。
+ */
+export async function memSummarizeCallNow(
+  contactId: string,
+  app: MemApp,
+  apiConfig: ApiConfig,
+  convo: MemConvoTurn[],
+  names?: MemNames | null
+): Promise<{ added: number; merged: number }> {
+  const guard = `${contactId}:call`;
+  if (inflight.has(guard)) return { added: 0, merged: 0 };
+  if (convo.length < 2) return { added: 0, merged: 0 }; // 通话太短（<2 轮文本）没有可沉淀的内容
+  inflight.add(guard);
+  try {
+    memSweepExpiry(contactId);
+    const res = await callMemoryApi<ExtractApiResult>(
+      'extract',
+      { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
+      apiConfig
+    );
+    const items = normalizeExtract(res);
+    if (items.length === 0) return { added: 0, merged: 0 };
+    const { added, merged } = appendFragments(contactId, app, items, Date.now());
+    // 挂断总结后照常走层进管线：碎片积累达阈值 → 核心记忆；核心达阈值 → 长期记忆
+    await maybeAutoSummarize(contactId, apiConfig, names).catch(() => null);
+    await maybeAutoLongSummarize(contactId, apiConfig, names).catch(() => null);
+    return { added: added.length, merged };
+  } catch (err) {
+    console.warn('[memory] 通话结束自动总结失败（静默）', err);
+    return { added: 0, merged: 0 };
+  } finally {
+    inflight.delete(guard);
+  }
+}
+
 // ---------------- 手动「立即总结」（碎片页 / 核心页 / 长期页右上角各自独立入口） ----------------
 
 /** 手动提取碎片（碎片页右上角「立即总结」）：只把最近对话整理为记忆碎片入库，不触发核心记忆总结 */

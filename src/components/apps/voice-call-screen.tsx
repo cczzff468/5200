@@ -58,8 +58,13 @@ export interface VoiceCallScreenProps {
   direction: 'out' | 'in';
   /** 进入通话时携带的最近聊天上下文（宿主按会话消息归并） */
   initialHistory: ChatCallTurnMsg[];
-  /** 宿主组装的 system 附加块（记忆/动态/时间感知） */
+  /** 宿主组装的 system 附加块（记忆/动态/时间感知）
+   *  memoryBlock 为发起时快照（兑底）；memoryBlockFn 每轮以「用户刚说的话」重新召回（优先使用） */
   memoryBlock?: string;
+  /** 每轮动态召回记忆（宿主组装；引擎逐轮调用，优先于 memoryBlock） */
+  memoryBlockFn?: (userText: string | null) => string | undefined;
+  /** 世界书块（宿主 collectWbBlocks 组装；随人设注入 turn API） */
+  worldbookBlock?: string;
   momentsBlock?: string;
   timeBlock?: string;
   /** 位置感知块（与文字聊天同一套 buildLocationBlock）：通话里 AI 知道“用户在哪” */
@@ -309,8 +314,8 @@ function InlineCallChat({ variant, call, className = '' }: { variant: 'wx' | 'qq
 
 // ---------------- 微信皮肤 ----------------
 
-function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
-  const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
+function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
+  const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, muted, speakerOn, error } = call;
   const [textChatOpen, setTextChatOpen] = useState(false);
 
@@ -486,8 +491,8 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
 // ---------------- QQ 皮肤 ----------------
 
-function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
-  const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
+function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
+  const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, muted, speakerOn, error } = call;
   const [textChatOpen, setTextChatOpen] = useState(false);
 

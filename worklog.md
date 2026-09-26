@@ -7679,3 +7679,64 @@ Stage Summary:
   定时调度模拟说话节奏）+ agent-browser network route mock STT 端点 = 无麦克风环境完整验证
   VAD/STT/AI/TTS 全链路；App 已打开时 openApp 幂等拦截（store:1143）导致点其他图标无效，
   需先经切换器/刷新复位
+---
+Task ID: 14
+Agent: Z.ai Code (main)
+Task: 通话基于人设/记忆/世界书对话 + 通话内容写入记忆（挂断自动总结）+ 三端双向感知 + 通话记忆管理
+
+Work Log:
+- 现状盘点：电话 App 通话已有记忆接线（每轮 memRecallBlock 召回 + memAfterAiTurn 轮次提取），
+  微信/QQ 通话引擎（chat-call.ts）完全无记忆提取；三端通话均无世界书注入；无「挂断后自动总结」；
+  通话卡片回拨/持久化、记忆库管理页（查看/编辑/删除+App 来源标签）此前已具备
+- memory.ts 新增 memSummarizeCallNow()：通话挂断立即总结入口——整通转写交给 /api/memory/extract
+  提取碎片入库，随后走层进管线（达阈值自动核心/长期总结）；guard 独立（:call 不与手动总结互斥）、
+  convo<2 轮静默返回、全程失败 console.warn 静默（绝不阻塞挂断收尾）；与文字聊天同池存储 +
+  同相似度合并（重复内容自动合并为「加强」）
+- /api/phone/turn 新增 worldbookBlock 参数：拼进 systemFull（人设之后、记忆之前，与文字聊天
+  优先级顺序一致：人设/世界设定 > 记忆）
+- chat-call.ts（微信/QQ 通话引擎）四项接线：①opts 新增 memoryBlockFn（每轮动态召回，宿主以
+  「用户刚说的话」调 memRecallBlock；快照 memoryBlock 降为兑底）+ worldbookBlock；②requestTurn
+  每轮用 lastUserText 动态召回 + 世界书透传；③memorizeTurn()——runTurn/sendText 三个成功分支
+  appendLog assistant 后调用 memAfterAiTurn（app='wx'/'qq'，无持久消息数组固定计 2 条），
+  通话内容开始按联系人沉淀；④finish() 里 summarizeCall()——挂断时整通 chatLog 转写调
+  memSummarizeCallNow 自动总结一次；记忆接线块置于 finish 之前避免 useCallback 依赖 TDZ
+- 参数透传链：GlobalCallSession（global-call.ts）→ GlobalCallLayer → VoiceCallScreenProps
+  （voice-call-screen.tsx 两皮肤解构）→ useChatCall opts，均补 memoryBlockFn/worldbookBlock
+  两字段（memoryBlockFn 返回类型放宽 string|undefined）
+- wechat.tsx/qq.tsx openVoiceCall：与文字聊天同一套 collectWbBlocks（全局常驻+局部/专属触发词
+  命中）组装 worldbookBlock（六位置块+wbRulesBlock 拼接）；新增 memoryBlockFn 闭包
+  （userText+发起时 history 尾 4 条 → memRecallBlock）
+- phone.tsx：runTurn 每轮组装 worldbookBlock（collectWbBlocks(contact.id, [userText, ...气泡尾6])
+  ）传入 turn body；hangup() 在落卡前调 memSummarizeCallNow（wasConnected 且非机主、convo≥2），
+  挂断总结不阻塞 onEnd/语音留言落盘；deps 补 apiConfig/profileName
+- E2E（agent-browser 实机 + 真实内置 LLM + IndexedDB 种子数据：机主陈默/女友林小雨）：
+  ①种子微信碎片「学做提拉米苏」→ 发起微信通话 → 接通 greeting「喂～想我啦？」（人设 ✓）→
+  通话内文字条问「在学做什么甜点」→ AI 答「你学的是提拉米苏呀～」（文字记忆→通话召回 ✓）
+  ②通话中说「下周三去上海出差三天」→ AI 承诺「准备小惊喜」→ 挂断 → 通话卡片「通话时长 03:08」
+  落盘 → IndexedDB mem-frag 新增 3 条 wx 碎片（上海出差/出差视频/小雨惊喜，挂断总结 ✓）
+  ③点击卡片回拨 → 第二通接通 → 问「要去哪里来着」→ AI 答「你要去上海出差呀，三天呢～」
+  （通话1→记忆→通话2 闭环 ✓）→ 挂断（00:48 卡片）
+  ④文字聊天问「去哪个城市出差」→ AI 答「我记得是上海哦～」（电话→文字 ✓）
+  ⑤记忆库 App：小雨 5 条碎片全部可见，带「微信」来源标签/事件时间（模型自动解析下周三=9月27日
+  ）/过期时间，编辑+删除按钮齐备 ✓
+  ⑥电话 App：通讯录呼叫林小雨 → 接通 → 文字条发「到杭州，明天去西湖吃桂花糕」→ AI「真的呀？
+  我好期待～」→ 挂断 → mem-frag 新增 phone 碎片（到达杭州/西湖桂花糕/林小雨期待，且含「林小雨
+  记得陈默要去上海出差」= 跨端召回被再次沉淀）→ 碎片达阈值自动凝结出核心记忆（summarize API 
+  200，三层管线全自动 ✓）
+- lint + tsc 双绿；dev.log 无错误（extract/summarize 全 200）；page errors 为空
+
+Stage Summary:
+- 交付：三端通话（电话/微信/QQ）统一接入记忆系统——AI 说话基于人设+三层记忆+世界书+最近聊天
+  +时间/位置/动态感知，每轮按「用户刚说的话」动态召回；通话内容轮次提取 + 挂断自动总结双通道
+  沉淀；文字⇄电话⇄跨通通话记忆全双向打通（互通开关范围照旧、按联系人 ID 隔离）；通话记忆在
+  记忆库 App 可查看/编辑/删除（来源 App 标签区分端）；通话卡片时长/状态+点击回拨+持久化已验
+- 修改文件：src/lib/memory.ts（+memSummarizeCallNow）、src/app/api/phone/turn/route.ts（
+  +worldbookBlock）、src/lib/ios/chat-call.ts（动态召回+记忆提取+挂断总结）、src/lib/ios/
+  global-call.ts、src/components/apps/voice-call-screen.tsx、src/components/ios/GlobalCallLayer.tsx
+  （透传）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（世界书+动态召回组装）、
+  src/components/apps/phone.tsx（世界书+挂断总结）
+- 关键决策：①挂断总结独立 guard + 静默失败，通话收尾零阻塞；②与轮次提取的内容重叠靠相似度
+  合并（≥0.6）去重并「加强」语义正确；③记忆接线函数移到 finish 声明前规避 useCallback 依赖
+  TDZ；④世界书六位置块+规则整体拼接成一个块（预算 WB_INJECT_BUDGET 已在 collectWbBlocks 内控）
+- 测试环境：E2E 走通话内文字条（沙箱无麦克风），文字轮次与语音轮次同链路同 chatLog 同样被总结；
+  解锁手势=对 [aria-label=锁屏] 异步步进 pointermove；主屏 App 已开时 openApp 幂等拦截需刷新复位

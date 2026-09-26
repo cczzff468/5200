@@ -423,13 +423,16 @@ export async function POST(req: NextRequest) {
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
+  // 世界书块：前端与文字聊天同一套 collectWbBlocks 组装（全局/局部/专属命中条目 + 使用规则），
+  // 附加在人设之后、记忆之前（优先级：人设/世界设定 > 记忆，与文字聊天 systemFull 顺序一致）
+  const worldbookBlock = typeof root.worldbookBlock === 'string' ? root.worldbookBlock.trim() : '';
   // 社交动态块：前端按互通开关现场构建的「最近朋友圈/QQ动态 + 相关互动」（动态与聊天记忆双向打通）
   const momentsBlock = typeof root.momentsBlock === 'string' ? root.momentsBlock.trim() : '';
   // 时间感知块：前端按联系人开关现场构建（当前时间/季节/节日/事件时长/上次聊天间隔），附加在记忆之后
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
   // 位置感知块：前端与文字聊天同一套 buildLocationBlock（用户最近发过的位置：名称/地址/经纬度/时间）
   const locBlock = typeof root.locBlock === 'string' ? root.locBlock.trim() : '';
-  const systemFull = [system, memoryBlock, momentsBlock, timeBlock, locBlock].filter(Boolean).join('\n\n');
+  const systemFull = [system, worldbookBlock, memoryBlock, momentsBlock, timeBlock, locBlock].filter(Boolean).join('\n\n');
 
   // 上游要求 messages 必须以 user 消息收尾：
   // - 普通轮次：历史本身以用户刚说的话收尾，直接透传；

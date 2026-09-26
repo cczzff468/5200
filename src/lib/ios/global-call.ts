@@ -32,7 +32,12 @@ export interface GlobalCallSession {
   direction: 'out' | 'in';
   /** 进入通话时携带的最近聊天上下文（宿主按会话消息归并） */
   initialHistory: ChatCallTurnMsg[];
+  /** 记忆召回快照（发起时；兑底用） */
   memoryBlock?: string;
+  /** 每轮动态召回记忆（宿主组装；引擎以「用户刚说的话」逐轮调用，优先于 memoryBlock） */
+  memoryBlockFn?: (userText: string | null) => string | undefined;
+  /** 世界书块（宿主 collectWbBlocks 组装；随人设注入 turn API） */
+  worldbookBlock?: string;
   momentsBlock?: string;
   timeBlock?: string;
   /** 位置感知块（与文字聊天同一套 buildLocationBlock）：通话里 AI 知道“用户在哪” */
