@@ -175,17 +175,24 @@
   }
 }
 
-/* 通话弹幕字幕：逐条浮现（头像/名字下方实时字幕流） */
+/* 通话弹幕字幕：逐条弹跳入场（头像/名字下方实时字幕流，跳动特效——落下→弹起→回弹稳定） */
 @keyframes call-caption-in {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(14px) scale(0.85);
   }
-  to {
+  55% {
     opacity: 1;
-    transform: none;
+    transform: translateY(-5px) scale(1.06);
+  }
+  78% {
+    transform: translateY(2px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 .animate-call-caption {
-  animation: call-caption-in 0.22s ease-out both;
+  animation: call-caption-in 0.42s cubic-bezier(0.26, 0.68, 0.44, 0.94) both;
 }

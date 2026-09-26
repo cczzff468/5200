@@ -7509,3 +7509,20 @@ Stage Summary:
 - 通话界面新增实时弹幕字幕流：双方说话内容实时显示在头像/名字下方——用户说话经 Web Speech 增量识别逐字上屏（白字），AI 说话与 TTS 播报同步逐字揭示（灰色字），逐条浮现、自动滚到最新；文字聊天轮次同屏可见
 - 微信语音通话卡片电话图标由倾斜（rotate-180 仍是 "\" 对角线）转正为竖直朝下（rotate-45）
 - 字幕与 TTS 失败兜底、文字面板、通话时长、挂断卡片、聊天回归全部实机验证通过；tsc/lint/dev.log 三重干净
+---
+Task ID: 8
+Agent: Z.ai Code (main)
+Task: 通话弹幕字幕四点反馈修正——①头像/名字恢复原尺寸 ②字幕行去掉前面小头像 ③字幕跳动（弹跳入场）特效 ④微信通话卡片电话图标凹口朝下（不是朝右）
+
+Work Log:
+- voice-call-screen.tsx：删除 CaptionAvatar 组件；CaptionLine 重构为纯文字段落——AI 左对齐灰字（text-white/45）、我方右对齐白字（text-white/90），不再挂 18px 小头像；CaptionStream 签名收窄为 { variant, call }（删 peerAvatar/myAvatar props），liveHeard 的 data-testid 移入行内 span；WxCallScreen/QqCallScreen 删除仅供字幕使用的 myAvatar 声明
+- 头像/名字恢复原尺寸（对照 dca45bf 版本）：WX CallAvatar 92→104px、名字 text-[21px]→[22px]、mt-4→mt-5；QQ 138→168px（来电 124→132px）、text-[23px]→[24px]、mt-5→mt-6；computed 校验 104px/22px/mt20px/font-weight500（WX）与 168px/24px（QQ）
+- globals.css：call-caption-in 升级为弹跳入场 keyframes（0% 下落 14px+scale0.85 → 55% 弹起 -5px+scale1.06 → 78% 回弹 2px → 100% 稳定），时长 0.22s→0.42s cubic-bezier，逐条字幕弹跳出现（跳动特效）
+- CallCardBubble：微信电话图标 rotate-45→rotate-[135deg]——lucide Phone 默认凹口朝右上，rotate-45 凹口朝右（用户实测反馈），135° 才是凹口朝下（听筒横置、开口向下的通话记录样式）；QQ 卡片保持不转（computed rotate none 验证）
+- E2E（agent-browser 实机，微信+QQ 双皮肤）：微信进小雨会话→+面板发语音→接通问候「喂，是小明吗」入列（字幕区 imgs=0、animation call-caption-in/0.42s/both）→文字面板发「我刚下班了，晚上吃什么好」→AI 回「吃点清淡的吧」→关面板截图：104px 头像+22px 名字+三行无头像字幕（AI 左灰/我右白 computed 验证）→挂断落卡「通话时长 02:17」图标 rotate=135deg；QQ 侧经通话卡片回拨发起（回归点击回拨）→接通→文字面板发「在忙项目呢，你吃晚饭了吗」→AI 回「刚吃完，吃的火锅，挺香的。」→截图确认 168px 圆头像+24px 名字+三行无头像字幕→挂断落卡「通话时长 01:29」图标方向不变
+- 质量检查：bunx tsc --noEmit 0 错误；bun run lint 通过；dev.log 仅内置模型降级 502（设计行为），/api/phone/turn 全 200；agent-browser errors 为空
+- 测试环境备注：主屏指示条/AppWindow 关闭为 pointer 手势，JS .click() 无法关 App，本次用刷新页面重置状态后再进 QQ；文字面板发送按钮为图标按钮（aria-label=发送，textContent 为空），须按 data-testid 定位
+
+Stage Summary:
+- 通话弹幕字幕四点反馈全部落地：字幕流不再带头像（纯文字弹幕）、每条弹跳入场（跳动特效）、通话页头像/名字恢复上一轮原尺寸（WX 104/22px、QQ 168·132/24px）、微信通话卡片电话图标凹口朝下（135°，横置听筒开口向下）
+- 字幕引擎（liveHeard 逐字上屏/aiReveal 随 TTS 揭示/自动滚底）未动，仅改渲染层；文字面板、点击回拨、挂断卡片、QQ 卡片方向等回归项实测正常

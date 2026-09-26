@@ -157,38 +157,17 @@ function statusLine(
 
 // ---------------- 通话弹幕字幕（头像/名字下方实时流） ----------------
 
-/** 字幕小头像（18px；微信方圆角 / QQ 圆形） */
-function CaptionAvatar({ variant, avatar, mine }: { variant: 'wx' | 'qq'; avatar: string | null; mine: boolean }) {
-  const cls = `h-[18px] w-[18px] shrink-0 object-cover ${variant === 'wx' ? 'rounded-[4px]' : 'rounded-full'} ${
-    mine ? 'opacity-80' : 'opacity-60'
-  }`;
-  if (avatar) return <img src={avatar} alt="" className={cls} />;
-  return <DefaultAvatar size={18} shape={variant === 'wx' ? 'square' : 'circle'} className={cls} />;
-}
-
-/** 单条字幕：AI 左侧灰色字（需求：AI 说话同步显示、灰色），我方右侧白字，各挂小头像 */
-function CaptionLine({
-  variant,
-  mine,
-  avatar,
-  children,
-}: {
-  variant: 'wx' | 'qq';
-  mine: boolean;
-  avatar: string | null;
-  children: ReactNode;
-}) {
+/** 单条字幕（用户反馈：字幕前面不要显示头像）——AI 左侧灰色字（AI 说话同步显示、灰色），我方右侧白字；
+ *  整条弹跳入场（跳动特效，animate-call-caption） */
+function CaptionLine({ mine, children }: { mine: boolean; children: ReactNode }) {
   return (
-    <div className={`flex w-full items-end gap-1.5 ${mine ? 'flex-row-reverse' : ''}`}>
-      <CaptionAvatar variant={variant} avatar={avatar} mine={mine} />
-      <p
-        className={`max-w-[82%] whitespace-pre-wrap break-words text-left text-[13px] leading-[1.55] ${
-          mine ? 'text-white/90' : 'text-white/45'
-        }`}
-      >
-        {children}
-      </p>
-    </div>
+    <p
+      className={`animate-call-caption max-w-[85%] whitespace-pre-wrap break-words text-[13px] leading-[1.55] ${
+        mine ? 'ml-auto text-right text-white/90' : 'mr-auto text-left text-white/45'
+      }`}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -203,17 +182,7 @@ function Caret() {
  * - AI 说的话：TTS 播报的同时按播放进度逐字揭示（aiReveal，灰色字+光标），播完整句沉淀；
  * - 新字幕自动滚到最新；内容来自 chatLog（语音轮次 + 文字聊天轮次统一呈现）。
  */
-function CaptionStream({
-  variant,
-  call,
-  peerAvatar,
-  myAvatar,
-}: {
-  variant: 'wx' | 'qq';
-  call: ChatCallApi;
-  peerAvatar: string | null;
-  myAvatar: string | null;
-}) {
+function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
   const { chatLog, aiReveal, liveHeard } = call;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // 新字幕/逐字更新时自动滚到底
@@ -239,21 +208,19 @@ function CaptionStream({
           const partial = revealing && i === lastIdx;
           const text = partial && aiReveal ? aiReveal.text.slice(0, aiReveal.shown) : m.content;
           return (
-            <div key={`${m.at}-${i}`} className="animate-call-caption">
-              <CaptionLine variant={variant} mine={m.role === 'user'} avatar={m.role === 'user' ? myAvatar : peerAvatar}>
-                {text}
-                {partial && <Caret />}
-              </CaptionLine>
-            </div>
+            <CaptionLine key={`${m.at}-${i}`} mine={m.role === 'user'}>
+              {text}
+              {partial && <Caret />}
+            </CaptionLine>
           );
         })}
         {liveHeard && (
-          <div className="animate-call-caption" data-testid={`${variant}-call-liveheard`}>
-            <CaptionLine variant={variant} mine avatar={myAvatar}>
+          <CaptionLine mine>
+            <span data-testid={`${variant}-call-liveheard`}>
               {liveHeard}
               <Caret />
-            </CaptionLine>
-          </div>
+            </span>
+          </CaptionLine>
         )}
       </div>
     </div>
@@ -533,7 +500,6 @@ function TextChatPanel({
 function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error } = call;
-  const myAvatar = useSettings((s) => s.profile.avatar);
   const [textChatOpen, setTextChatOpen] = useState(false);
 
   const openTextChat = () => {
@@ -604,11 +570,11 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
         {phase === 'incoming' && <div className="h-[56px] shrink-0" aria-hidden="true" />}
         <div className="relative mt-1">
           {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-[16px] bg-white/10" aria-hidden="true" />}
-          <CallAvatar variant="wx" avatar={avatar} size={92} />
+          <CallAvatar variant="wx" avatar={avatar} size={104} />
         </div>
-        <h2 className="mt-4 max-w-[280px] truncate text-[21px] font-medium leading-tight">{name}</h2>
+        <h2 className="mt-5 max-w-[280px] truncate text-[22px] font-medium leading-tight">{name}</h2>
         {phase === 'active' ? (
-          <CaptionStream variant="wx" call={call} peerAvatar={avatar} myAvatar={myAvatar} />
+          <CaptionStream variant="wx" call={call} />
         ) : (
           <div className="min-h-4 flex-1" aria-hidden="true" />
         )}
@@ -715,7 +681,6 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error } = call;
-  const myAvatar = useSettings((s) => s.profile.avatar);
   const [textChatOpen, setTextChatOpen] = useState(false);
 
   const openTextChat = () => {
@@ -780,11 +745,11 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
       <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">
         <div className="relative">
           {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />}
-          <CallAvatar variant="qq" avatar={avatar} size={direction === 'in' ? 124 : 138} />
+          <CallAvatar variant="qq" avatar={avatar} size={direction === 'in' ? 132 : 168} />
         </div>
-        <h2 className="mt-5 max-w-[280px] truncate text-[23px] font-normal leading-tight">{name}</h2>
+        <h2 className="mt-6 max-w-[280px] truncate text-[24px] font-normal leading-tight">{name}</h2>
         {phase === 'active' ? (
-          <CaptionStream variant="qq" call={call} peerAvatar={avatar} myAvatar={myAvatar} />
+          <CaptionStream variant="qq" call={call} />
         ) : (
           <div className="min-h-4 flex-1" aria-hidden="true" />
         )}
@@ -964,9 +929,10 @@ export function CallCardBubble({
   const text = callCardText(state, duration, direction, variant);
   const isWx = variant === 'wx';
   const iconFirst = variant === 'qq' || !mine;
+  // 微信电话图标凹口朝下（lucide Phone 默认凹口朝右上，rotate-45 朝右，rotate-[135deg] 才朝下——用户反馈「凹的地方朝下，不是朝右」）；QQ 不转
   const phoneIcon = (
     <Phone
-      className={`${isWx ? 'h-[17px] w-[17px] rotate-45' : 'h-[18px] w-[18px]'} shrink-0`}
+      className={`${isWx ? 'h-[17px] w-[17px] rotate-[135deg]' : 'h-[18px] w-[18px]'} shrink-0`}
       strokeWidth={variant === 'qq' && mine ? 0 : 2}
       {...(variant === 'qq' && mine ? { fill: 'currentColor' } : {})}
       aria-hidden="true"
