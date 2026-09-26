@@ -7616,3 +7616,66 @@ Stage Summary:
 - 通话实时弹幕字幕（微信/QQ/电话 APP 三端一致）现在只显示 AI 说的话：我方说话、识别中文字一律不再上屏，AI 开新口才替换上一句；AI 逐字揭示与 TTS 播放进度同步的机制不变
 - 挂断电话声音立刻截断根因修复：stopSpeaking() 统一取消 API 音频与内置朗读引擎（speechSynthesis.cancel 立即生效），三端挂断/打断/卸载全部收口，实测挂断瞬间 cancel 必被调用
 - 回归通过：文字条收发与回复形态（没配 API→文字）、通话时长、挂断卡片、通话记录、recents 回拨均正常；tsc/lint/dev.log 三重干净
+---
+Task ID: 10
+Agent: 主协调者 (Z.ai Code)
+Task: 语音通话改为「自动对话」模式——VAD 免提全双工循环（微信/QQ/电话三端共用），用户无需点任何按钮
+
+Work Log:
+- 新建 src/lib/ios/vad.ts（三端共用 VAD 核心）：WebAudio AnalyserNode 实时 RMS 分析（50ms 轮询）；
+  开听后 600ms 底噪自适应校准（窗口混入强声如 AI 播报尾音→自动后移重采最多 3 次 + 阈值上限
+  clamp 0.055，修复「校准被尾音抬高导致永远听不见说话」bug）；连续 150ms 有声=开口
+  onSpeechStart；停顿 1.4s=说完 onSpeechEnd('pause')；7s 无人说话='silent-timeout'（丢弃重听，
+  VAD 检测不到声音不能一直录）；单次说话 30s='maxlen' 强制截断；WebAudio 不可用环境 20s 兜底；
+  stop() 只断分析节点不动 MediaStream（与 MediaRecorder 共享流）
+- 改造 chat-call.ts（微信/QQ 通话引擎）：免提循环全面接线——runTurn 的 speakReply onDone/onFail、
+  asText 文字回复、LLM 失败四个完成点均调 scheduleAutoListen()；startRecording 重写为自动听
+  （getUserMedia 加 echoCancellation/noiseSuppression/autoGainControl；recorder.start 后挂 VAD，
+  onSpeechStart→status='recording'，onSpeechEnd pause/maxlen→正常发送、silent-timeout→discard
+  重听）；startRecording 待命态 status='listening'；onstop 的 discard 分支（静音/文字条/超时）
+  未被禁止时自动重听；STT 失败/没听到声音/识别异常→提示+900ms 自动重听，sttFailRef 连续 3 次
+  达 STT_FAIL_LIMIT 暂停并提示「点麦克风可重试，也可用输入条文字聊」；tapMic 重定义（说话中
+  点一下=立即发送、待命=无操作、空闲=开听并清失败计数）；toggleMute 随时可切（静音=停 VAD+
+  清重听定时器+丢弃录音，取消静音 200ms 后恢复听）；setTextMode 开=stopAutoListenTimers+丢弃
+  录音+打断播报，关=250ms 恢复听；finish/卸载清理补 stopAutoListenTimers；新增 refs
+  vadRef/retryTimerRef/sttFailRef/autoListenRef（effect 同步供上游回调调用）
+- 改造 phone.tsx CallScreen（电话 App）：同一套免提循环——speak() 的 resume() 接 scheduleAuto
+  ListenRef（播完自动听）；toggleRecording 重写（VAD 挂接/onstop discard/没听到声音与 ASR 失败
+  自动重听/连续 3 次失败切键盘输入「不影响文字聊天」/AEC 约束）；新增 toggleMute（静音真正
+  停听+丢录音，替代原纯 UI setMuted）与 toggleTextMode（信息图标：开启停听+打断播报+focus
+  输入框，关闭恢复听）；runTurn busyRef 同步+四个失败/文字分支自动续听；hangup/mount cleanup
+  停 VAD；talk-button 说话中红色 pulse+AudioLines 图标+点一下立即发送；statusLine「在听你说…/
+  在听…/时长」
+- 改造 voice-call-screen.tsx（微信/QQ 皮肤 UI）：statusLine recording='在听你说…'；WX 麦克风
+  按钮免提语义（pulse 与高亮改绑 status==='recording'，小字恒「麦克风已开/已关」，aria 更新），
+  底部提示改「免提自动对话 · 直接说话即可 · 点按/长按静音」；QQ 麦克风同款处理；删除两个皮肤
+  组件未使用的 recording 解构
+- E2E 验证（agent-browser + 页面内 mock 麦克风 = OscillatorNode+Gain 节奏 2.6s 响/1.6s 静 +
+  route mock /api/stt 与 /api/phone/asr 固定转写；环境 OOM 导致独立 fake-device Chrome 反复被杀
+  后改用此方案；期间修复 agent-browser set viewport 导致鼠标事件失效问题——重启浏览器恢复）：
+  ①电话 App：接通→AI greeting「正在说话…」→播完自动「在听…」→mock 说话→「在听你说…」→
+  停顿自动发送→「…」→AI 新回复循环（连续 3 轮零按钮）；静音后自动听停止（状态只显示时长），
+  取消静音立即恢复且循环续跑；文字聊天开启（输入条出现+字幕隐藏+停听）→发送文字→AI 文字
+  回复（未配语音 API 正确分支）→关闭后字幕恢复+立即自动听；AI 说话中挂断→界面即时关闭
+  （stopSpeaking+audio pause 截音）；通话记录 1:06/0:20 落盘
+  ②微信：登录（IndexedDB 注入 kind=user 机主+char 好友）→发起通话→完整循环多轮；真实 STT
+  （/api/stt 502 第三方限流）恰好验证失败重试：3 次后自动暂停+错误行提示，点麦克风恢复后
+  mock STT 生效→循环续跑且 AI 回复语义连贯；文字聊天开关与字幕互斥 ✓；挂断→「通话时长」
+  卡片 ✓
+  ③QQ：登录（协议勾选）→小雨会话→语音通话→vc-screen-qq 正确渲染（此前 wx 皮肤系误判，
+  实际停留在微信聊天页发起）→完整循环（正在思考→在听→在听你说→…→新句替换）→文字聊天
+  ✓→挂断 ✓
+- lint + tsc 全绿；dev.log 无代码错误；commit 489b96a 推送
+
+Stage Summary:
+- 交付文件：src/lib/ios/vad.ts（新增，124 行核心+参数导出 AUTO_SILENCE_MS=1400/AUTO_WAIT_MS=
+  7000/AUTO_MAX_MS=30000/AUTO_RETRY_DELAY_MS=900/STT_FAIL_LIMIT=3）、src/lib/ios/chat-call.ts、
+  src/components/apps/phone.tsx、src/components/apps/voice-call-screen.tsx
+- 关键决策：①方案 A（开录+VAD 待命）而非 B（检测到说话才录）——避免吞字；②VAD 阈值双保险
+  （底噪×2.5 下限 0.012 + 上限 0.055 + 强声重采）解决外放尾音；③顺序循环不做 AI 播报中打断
+  （busy 拦截，与现有 tapMic 语义一致）；④scheduleAutoListen 用 ref 注入打破 runTurn/
+  startRecording 循环依赖；⑤三端共用同一 vad.ts 参数，节奏完全一致
+- 测试技巧沉淀：页面内 eval 替换 navigator.mediaDevices.getUserMedia（Oscillator+GainNode
+  定时调度模拟说话节奏）+ agent-browser network route mock STT 端点 = 无麦克风环境完整验证
+  VAD/STT/AI/TTS 全链路；App 已打开时 openApp 幂等拦截（store:1143）导致点其他图标无效，
+  需先经切换器/刷新复位
