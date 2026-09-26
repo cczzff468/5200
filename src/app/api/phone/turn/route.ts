@@ -49,11 +49,15 @@ function buildCallSystemPrompt(
   npcExtra?: { ownerLabel?: string; npcCircle?: InlineContact['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
   multiApp?: boolean,
   /** 调用方附加规则（微信/QQ 语音通话注入主动挂断标记规则等；电话 App 复用同一套） */
-  extraRules?: string[]
+  extraRules?: string[],
+  /** 机主身份（前端直传）：名字/真名/昵称——人设注入【用户的称呼】段（软件上显示的名字只是昵称） */
+  user?: { name: string | null; realName: string | null; nickname: string | null }
 ): string {
   const base = buildPersonaSystemPrompt(peer, {
     channel: '语音通话',
-    userName: null,
+    userName: user?.name ?? null,
+    userRealName: user?.realName ?? null,
+    userNickname: user?.nickname ?? null,
     ...npcExtra,
     multiApp,
     extraRules: [
@@ -110,6 +114,8 @@ export async function POST(req: NextRequest) {
         relation: inline.relation,
         relationToUser: inline.relationToUser,
         birthday: inline.birthday,
+        nickname: inline.nickname ?? null,
+        realName: inline.realName ?? null,
       }
     : (() => {
         const p = unknownPersona(number);
@@ -128,7 +134,14 @@ export async function POST(req: NextRequest) {
       backgroundNotes: inline?.backgroundNotes,
     },
     root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined,
-    Array.isArray(root.extraRules) ? (root.extraRules as unknown[]).filter((x): x is string => typeof x === 'string') : undefined
+    Array.isArray(root.extraRules) ? (root.extraRules as unknown[]).filter((x): x is string => typeof x === 'string') : undefined,
+    // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
+    (() => {
+      const real = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
+      const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
+      if (!real && !nick) return undefined;
+      return { name: real || nick, realName: real || null, nickname: nick || null };
+    })()
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';

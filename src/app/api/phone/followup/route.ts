@@ -49,16 +49,20 @@ function buildFollowupSystemPrompt(
   durationLabel: string,
   hasChat: boolean,
   maxCount: number,
-  multiApp?: boolean
+  multiApp?: boolean,
+  /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
+  user?: { name: string | null; realName: string | null; nickname: string | null }
 ): string {
   // 条数语义与主聊回复条数同源：上限 = 聊天设置里该会话的回复条数；上限不是任务，没话可以少
   const countRule =
     maxCount <= 1
       ? '条数硬约束：本次只发 1 条消息。'
-      : `条数硬约束：本次最多发 ${maxCount} 条消息——上限不是任务，没话可以少发，哪怕只发 1 条；话茬多、聊得投机就多发几条，条数以内容自然为准，绝不硬凑。`;
+      : `条数硬约束：本次发 1~${maxCount} 条消息——${maxCount} 条是上限，没话可以少发（哪怕只发 1 条）；话茬多、聊得投机就多发几条，条数以内容自然为准，绝不硬凑。`;
   return buildPersonaSystemPrompt(peer, {
     channel: '挂断电话后的文字消息',
-    userName: null,
+    userName: user?.name ?? null,
+    userRealName: user?.realName ?? null,
+    userNickname: user?.nickname ?? null,
     multiApp,
     extraRules: [
       `你刚结束一通语音通话（${scene}${connected ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这次通话：`,
@@ -74,7 +78,7 @@ function buildFollowupSystemPrompt(
       maxCount <= 1 ? '{"messages":["第一条"]}' : '{"messages":["第一条","第二条"]}',
       maxCount <= 1
         ? 'messages 数组只放 1 条消息文本。'
-        : `messages 数组放你要发的消息文本（每条一个元素），最多 ${maxCount} 条；没话可以少发，内容简短时 1 条也可以。`,
+        : `messages 数组放你要发的消息文本（每条一个元素），共 1~${maxCount} 条；没话可以少发，内容简短时 1 条也可以。`,
     ],
   });
 }
@@ -129,6 +133,8 @@ export async function POST(req: NextRequest) {
     relation: inline.relation,
     relationToUser: inline.relationToUser,
     birthday: inline.birthday,
+    nickname: inline.nickname ?? null,
+    realName: inline.realName ?? null,
   };
 
   // 条数上限：聊天设置「回复条数」（前端随请求直传该会话的设置值）；未传/非法回退 2（旧行为）
@@ -151,7 +157,14 @@ export async function POST(req: NextRequest) {
     durationLabel,
     recentChat.length > 0,
     maxCount,
-    root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined
+    root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined,
+    // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
+    (() => {
+      const real = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
+      const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
+      if (!real && !nick) return undefined;
+      return { name: real || nick, realName: real || null, nickname: nick || null };
+    })()
   );
   // 记忆 / 世界书 / 时间感知：前端组装注入（与通话轮次同一套来源，人设 > 世界书 > 记忆 > 时间）
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';

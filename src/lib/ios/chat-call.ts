@@ -44,7 +44,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ContactRecord } from '@/lib/contacts';
 import { memAfterAiTurn, memConvoFromRaw, memSummarizeCallNow } from '@/lib/memory';
-import { ownerRealName } from './contacts-store';
+import { ownerRealName, ownerProfile } from './contacts-store';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
@@ -424,6 +424,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         try {
           const transcript = chatLogRef.current.map((m) => ({ role: m.role, content: m.content }));
           const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? null;
+          const owner = await ownerProfile().catch(() => null);
           texts = await requestCallFollowup({
             contact: {
               name: peer.name,
@@ -437,6 +438,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
               birthday: peer.birthday ?? null,
               persona: peer.persona,
               background: peer.background,
+              nickname: peer.nickname ?? null,
+              realName: peer.realName ?? null,
             },
             direction,
             endReason,
@@ -450,6 +453,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             multiApp: optsRef.current.multiApp,
             // 条数上限 = 该会话聊天设置「回复条数」（wx:<id> / qq:<id>，与文字聊天同一份设置）
             replyCount: getReplyCount(`${optsRef.current.app}:${peer.id}`),
+            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+            userRealName: owner?.realName || undefined,
+            userNickname: owner?.nickname || undefined,
           });
         } catch {
           texts = []; // 续聊失败静默：不影响记忆总结
@@ -567,6 +573,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       const lastUserText = greeting || proactiveAttempt > 0 ? null : (historyBefore[historyBefore.length - 1]?.content ?? null);
       const recalledBlock =
         optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined;
+      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+      const owner = await ownerProfile().catch(() => null);
       try {
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
@@ -585,9 +593,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                   birthday: c.birthday ?? null,
                   persona: c.persona,
                   background: c.background,
+                  nickname: c.nickname ?? null,
+                  realName: c.realName ?? null,
                 }
               : undefined,
-            number: c?.phone || '10086',
+            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+            userRealName: owner?.realName || undefined,
+            userNickname: owner?.nickname || undefined,
             greeting,
             proactiveAttempt: proactiveAttempt > 0 ? proactiveAttempt : undefined,
             history: historyBefore.map((m) => ({ role: m.role, content: m.content })),
@@ -1132,25 +1144,34 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       const peer = optsRef.current.contact;
       const decision =
         peer && peer.kind !== 'user'
-          ? requestAnswerDecision({
-              number: peer.phone || '10086',
-              contact: {
-                name: peer.name,
-                kind: peer.kind,
-                gender: peer.gender,
-                age: peer.age,
-                occupation: peer.occupation,
-                region: peer.region,
-                relation: peer.relation,
-                relationToUser: peer.relationToUser ?? null,
-                birthday: peer.birthday ?? null,
-                persona: peer.persona,
-                background: peer.background,
-              },
-              recentChat: historyRef.current.map((m) => ({ role: m.role, content: m.content })),
-              timeBlock: optsRef.current.timeBlock || undefined,
-              config: useSettings.getState().apiConfig,
-            })
+          ? ownerProfile()
+              .then((owner) =>
+                requestAnswerDecision({
+                  number: peer.phone || '10086',
+                  contact: {
+                    name: peer.name,
+                    kind: peer.kind,
+                    gender: peer.gender,
+                    age: peer.age,
+                    occupation: peer.occupation,
+                    region: peer.region,
+                    relation: peer.relation,
+                    relationToUser: peer.relationToUser ?? null,
+                    birthday: peer.birthday ?? null,
+                    persona: peer.persona,
+                    background: peer.background,
+                    nickname: peer.nickname ?? null,
+                    realName: peer.realName ?? null,
+                  },
+                  recentChat: historyRef.current.map((m) => ({ role: m.role, content: m.content })),
+                  timeBlock: optsRef.current.timeBlock || undefined,
+                  // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+                  userRealName: owner?.realName || undefined,
+                  userNickname: owner?.nickname || undefined,
+                  config: useSettings.getState().apiConfig,
+                }),
+              )
+              .catch(() => ({ decision: 'answer' }) as const)
           : null;
       // 先响铃 1.8~3.2s（决策多半已返回；未返回则等它 settle，最长 ANSWER_DECISION_TIMEOUT_MS 兜底）
       answerTimer = window.setTimeout(() => {

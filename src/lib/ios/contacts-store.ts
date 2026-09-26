@@ -81,6 +81,20 @@ export async function ownerRealName(): Promise<string> {
 }
 
 /**
+ * 机主资料（真实名字 + 昵称）：通话链路注入【用户的称呼】段用（AI 知道「软件上显示的名字只是昵称，
+ * 真实名字才是真名；被问是谁就报真名」）。无 user 联系人或名字为空返回 null（调用方自行回退）。
+ */
+export async function ownerProfile(): Promise<{ realName: string; nickname: string | null } | null> {
+  try {
+    const me = (await listContacts()).find((c) => c.kind === 'user');
+    if (!me?.name?.trim()) return null;
+    return { realName: me.name.trim(), nickname: me.nickname?.trim() || null };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 联系人（AI 角色）的真实名字：记忆视角统一用它指代 AI（取 name 字段，非昵称）。
  * 与 ownerRealName() 同源同规则——QQ/微信等 App 的展示层会用昵称替换 name（withDisplayNames），
  * 记忆提取/总结不能被污染；联系人不存在或名字为空返回空串（调用方自行回退）。

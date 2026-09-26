@@ -247,6 +247,10 @@ export interface InlineContact {
   relationToUser: string | null;
   /** 生日（几月几号，如 6.20 / 6月20日；注入人设前归一化） */
   birthday: string | null;
+  /** 昵称（软件上显示的名字；人设注入「真名 vs 昵称」关系用） */
+  nickname?: string | null;
+  /** 真实姓名（展示副本 withDisplayNames 把原 name 存到这里；与 name 不同时注入真名/昵称关系） */
+  realName?: string | null;
   /** 配角圈注入（由前端 npc-bond 组装）：认识的配角/归属者资料卡/背景近况 */
   ownerLabel?: string;
   npcCircle?: { name: string; relation: string; relationToUser: string; persona: string }[];
@@ -270,6 +274,8 @@ export function parseInlineContact(raw: unknown): InlineContact | null {
     relation: typeof c.relation === 'string' ? c.relation : null,
     relationToUser: typeof c.relationToUser === 'string' ? c.relationToUser : null,
     birthday: typeof c.birthday === 'string' ? c.birthday : null,
+    nickname: typeof c.nickname === 'string' ? c.nickname : null,
+    realName: typeof c.realName === 'string' ? c.realName : null,
     ownerLabel: typeof c.ownerLabel === 'string' ? c.ownerLabel : undefined,
     npcCircle: parseNpcCircle(c.npcCircle),
     ownerCard: parseStrList(c.ownerCard),

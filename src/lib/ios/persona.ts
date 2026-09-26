@@ -111,8 +111,9 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   const nameLines =
     realName && realName !== shownName
       ? [
-          `【名字】${shownName}（真实姓名/大名：${realName}）`,
-          `「${realName}」是你的真实姓名，「${shownName}」是你的昵称——别人用哪个名字叫你都是在叫你；被叫到大名时可以按人设害羞、嫌弃或假装不习惯，但不能不知道、更不能否认「${realName}」就是你自己。`,
+          `【名字】你的真实名字是「${realName}」；软件上显示的「${shownName}」只是昵称，不是真实名字。`,
+          `「${realName}」和「${shownName}」都是你，别人用哪个名字叫你都是在叫你；被叫到大名时可以按人设害羞、嫌弃或假装不习惯，但不能不知道、更不能否认「${realName}」就是你自己。`,
+          `别人问「你是谁」「你叫什么名字」这类问题时，报你的真实名字「${realName}」（可以顺带说平时大家都叫你「${shownName}」）。`,
         ]
       : [`【名字】${name}`];
   const persona = clean(peer.persona);
@@ -152,11 +153,12 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     `请始终以「${shownName}」的身份、用第一人称口语化回复，严格保持角色，不要跳出。`,
     '',
     ...nameLines,
-    // 名字/昵称区分（用户数据同时有名字与昵称时注入）：明确告知两者指同一个人，杜绝「凑凑是谁」式混淆
+    // 名字/昵称区分（用户数据同时有名字与昵称时注入）：明确告知两者指同一个人，杜绝「凑凑是谁」式混淆；
+    // 软件上显示的名字只是昵称，被问「TA 是谁」时报真实名字
     ...(userNick && userReal && userNick !== userReal
       ? [
-          `【用户的称呼】用户的名字是${userReal}，昵称是${userNick}。`,
-          `「${userNick}」只是 TA 的昵称，不是另一个人，也不是什么正式名字——「${userReal}」和「${userNick}」指的都是同一位用户。别人（包括你在内）用哪个名字叫 TA 都是在叫同一个人；绝不能把「${userNick}」当成一个新出现的人，也不能把「${userNick}」当成正式名字。平时称呼这位用户用「${user}」${user === userNick ? '（TA 选择用昵称称呼）' : ''}。`,
+          `【用户的称呼】用户的名字（真实名字）是${userReal}，昵称是${userNick}——软件上显示的「${userNick}」只是昵称，不是真实名字。`,
+          `「${userNick}」只是 TA 的昵称，不是另一个人，也不是什么正式名字——「${userReal}」和「${userNick}」指的都是同一位用户；有人问「${userReal}」是谁、或问这位用户叫什么名字时，回答真实名字「${userReal}」；绝不能把「${userNick}」当成一个新出现的人，也不能把「${userNick}」当成正式名字。平时称呼这位用户用「${user}」${user === userNick ? '（TA 选择用昵称称呼）' : ''}。`,
         ]
       : []),
     `【身份】${identity.join('，')}`,

@@ -31,6 +31,9 @@ export interface AnswerDecisionArgs {
   recentChat: { role: 'user' | 'assistant'; content: string }[];
   /** 时间感知块（有开关时传；决策需要知道现在几点） */
   timeBlock?: string;
+  /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
+  userRealName?: string;
+  userNickname?: string;
   config: unknown;
 }
 

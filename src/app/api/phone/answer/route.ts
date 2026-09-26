@@ -36,10 +36,17 @@ export interface AnswerDecision {
   viaSdk?: boolean;
 }
 
-function buildDecisionSystemPrompt(peer: Parameters<typeof buildPersonaSystemPrompt>[0], hasChat: boolean): string {
+function buildDecisionSystemPrompt(
+  peer: Parameters<typeof buildPersonaSystemPrompt>[0],
+  hasChat: boolean,
+  /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
+  user?: { name: string | null; realName: string | null; nickname: string | null }
+): string {
   return buildPersonaSystemPrompt(peer, {
     channel: '决定是否接听一通来电',
-    userName: null,
+    userName: user?.name ?? null,
+    userRealName: user?.realName ?? null,
+    userNickname: user?.nickname ?? null,
     extraRules: [
       '机主（你的联系人）刚刚拨通了你的电话，你正在响铃。请完全代入你的人设、你们的关系和此刻的真实状态，判断你会不会接这通电话：',
       '大多数情况下应该接（熟人来电、正闲着、关系亲近、正聊得起劲……）；',
@@ -103,9 +110,18 @@ export async function POST(req: NextRequest) {
     relation: inline.relation,
     relationToUser: inline.relationToUser,
     birthday: inline.birthday,
+    nickname: inline.nickname ?? null,
+    realName: inline.realName ?? null,
   };
 
-  const system = buildDecisionSystemPrompt(peer, recentChat.length > 0);
+  // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
+  const userReal = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
+  const userNick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
+  const system = buildDecisionSystemPrompt(
+    peer,
+    recentChat.length > 0,
+    userReal || userNick ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null } : undefined
+  );
   const messages: CallApiMessage[] = [
     { role: 'system', content: [system, timeBlock].filter(Boolean).join('\n\n') },
     // 上游要求 user 消息收尾：把最近聊天作为判断依据 + 触发决策

@@ -30,6 +30,10 @@ export interface CallFollowupContact {
   birthday: string | null;
   persona: string | null;
   background: string | null;
+  /** 昵称（软件上显示的名字；人设注入「真名 vs 昵称」关系用） */
+  nickname?: string | null;
+  /** 真实姓名（与 name 不同时注入真名/昵称关系，被问是谁报真名） */
+  realName?: string | null;
 }
 
 export interface CallFollowupTurn {
@@ -55,6 +59,9 @@ export interface CallFollowupPayload {
   multiApp?: boolean;
   /** 续聊条数上限（该会话聊天设置「回复条数」；未传/非法时服务端与本地解析回退 2） */
   replyCount?: number;
+  /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
+  userRealName?: string;
+  userNickname?: string;
 }
 
 /** 条数上限收窄：非法/未传回退 2（旧行为），合法值夹在 [1, 30]（与回复条数选项同范围） */

@@ -41,7 +41,7 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
-import { createContact, deleteContact as deleteContactLocal, listContacts, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
+import { createContact, deleteContact as deleteContactLocal, listContacts, ownerProfile, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
@@ -779,12 +779,10 @@ function CallScreen({
           );
       };
       try {
-        // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡；需要全部联系人现场查一次，失败回退无注入）
-        const npcExtra = contact
-          ? await listContacts()
-              .then((all) => buildNpcPromptExtra(contact, all))
-              .catch(() => null)
-          : null;
+        // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡）+ 机主身份：全部联系人现场查一次（失败回退无注入/无身份）
+        const all = contact ? await listContacts().catch(() => [] as ContactRecord[]) : [];
+        const npcExtra = contact ? buildNpcPromptExtra(contact, all) : null;
+        const meUser = all.find((c) => c.kind === 'user') ?? null;
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -803,9 +801,14 @@ function CallScreen({
                   birthday: contact.birthday ?? null,
                   persona: contact.persona,
                   background: contact.background,
+                  nickname: contact.nickname ?? null,
+                  realName: contact.realName ?? null,
                   ...(npcExtra ?? {}),
                 }
               : undefined,
+            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+            userRealName: meUser?.name?.trim() || undefined,
+            userNickname: meUser?.nickname?.trim() || undefined,
             number: target.number,
             greeting: userText === null && !proactive,
             proactiveAttempt,
@@ -996,6 +999,7 @@ function CallScreen({
         try {
           const spoken = bubblesRef.current.filter((b) => b.text.trim());
           const lastUser = [...spoken].reverse().find((b) => b.role === 'user')?.text ?? null;
+          const owner = await ownerProfile().catch(() => null);
           const wb = collectWbBlocks(peerContact.id, wbScanText([lastUser, ...spoken.slice(-6).map((b) => b.text)]));
           followupTexts = await requestCallFollowup({
             contact: {
@@ -1010,6 +1014,8 @@ function CallScreen({
               birthday: peerContact.birthday ?? null,
               persona: peerContact.persona,
               background: peerContact.background,
+              nickname: peerContact.nickname ?? null,
+              realName: peerContact.realName ?? null,
             },
             direction: 'out',
             endReason: 'hangup',
@@ -1028,6 +1034,9 @@ function CallScreen({
             // 条数上限 = 该联系人「信息」会话聊天设置里的回复条数（sms:c:<id>，与信息 App 同一份数据，
             // 未设置时同信息 App 回退 1 条）；上限不是任务，没话可以少发
             replyCount: getReplyCount(`sms:c:${peerContact.id}`, 1),
+            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+            userRealName: owner?.realName || undefined,
+            userNickname: owner?.nickname || undefined,
           });
         } catch {
           followupTexts = []; // 续聊失败静默：不影响记忆总结
@@ -1209,27 +1218,36 @@ function CallScreen({
     // 失败或超时兜底 answer；机主打给自己（kind='user'）/陌生号码不决策
     const decision =
       contact && contact.kind !== 'user'
-        ? requestAnswerDecision({
-            number: target.number,
-            contact: {
-              name: contact.name,
-              kind: contact.kind,
-              gender: contact.gender,
-              age: contact.age,
-              occupation: contact.occupation,
-              region: contact.region,
-              relation: contact.relation,
-              relationToUser: contact.relationToUser ?? null,
-              birthday: contact.birthday ?? null,
-              persona: contact.persona,
-              background: contact.background,
-            },
-            recentChat: [],
-            timeBlock: contact.id && getTimeAware(`phone:${contact.id}`)
-              ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null })
-              : '',
-            config: apiConfig,
-          })
+        ? ownerProfile()
+            .then((owner) =>
+              requestAnswerDecision({
+                number: target.number,
+                contact: {
+                  name: contact.name,
+                  kind: contact.kind,
+                  gender: contact.gender,
+                  age: contact.age,
+                  occupation: contact.occupation,
+                  region: contact.region,
+                  relation: contact.relation,
+                  relationToUser: contact.relationToUser ?? null,
+                  birthday: contact.birthday ?? null,
+                  persona: contact.persona,
+                  background: contact.background,
+                  nickname: contact.nickname ?? null,
+                  realName: contact.realName ?? null,
+                },
+                recentChat: [],
+                timeBlock: contact.id && getTimeAware(`phone:${contact.id}`)
+                  ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null })
+                  : '',
+                // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+                userRealName: owner?.realName || undefined,
+                userNickname: owner?.nickname || undefined,
+                config: apiConfig,
+              }),
+            )
+            .catch(() => ({ decision: 'answer' }) as const)
         : null;
     const connect = () => {
       if (endedRef.current) return;
