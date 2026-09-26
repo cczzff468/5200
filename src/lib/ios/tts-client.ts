@@ -23,6 +23,16 @@ export function isTtsConfigured(cfg?: TtsConfig): boolean {
   return Boolean(c.apiKey.trim() && c.baseUrl.trim());
 }
 
+/**
+ * 用户是否「配置了语音 API」（设置 App「语音 API」里选了服务商并填了 Key+地址）。
+ * 与 isTtsConfigured 的区别：内置语音引擎免配置恒可用（isTtsConfigured 恒 true），
+ * 而通话文字聊天用它判定「AI 是否设置语音 API」——配了第三方 API 才语音回复，没配则文字回复。
+ */
+export function hasCustomTtsApi(cfg?: TtsConfig): boolean {
+  const c = cfg ?? useSettings.getState().ttsConfig;
+  return c.provider !== 'builtin' && Boolean(c.apiKey.trim() && c.baseUrl.trim());
+}
+
 // ---------------- 文本清理（剥离不可朗读的舞台动作与标记） ----------------
 
 /** 依次剥离：代码块/行内代码、舞台动作（*…* ＊…＊）、括号旁白（（…）(…)）、【…】标签、

@@ -9,10 +9,10 @@
  *   → 文字交给聊天模型（/api/phone/turn，复用人设/记忆/时间感知链路）→ 用当前角色音色 TTS 播报
  *   → 回到聆听，循环直到用户挂断或 AI 主动挂断（告别语后输出〔挂断〕标记）。
  *
- * 五、通话中文字聊天（右上角信息图标进入）：面板内用户发文字、AI 回文字（不 TTS）；
- *   共用同一条 /api/phone/turn 链路与人设/记忆上下文，文字轮次写入同一份通话历史；
- *   通话内语音轮次（用户说的话 / AI 的回复）同步进 chatLog，面板里可见，上下文无缝衔接；
- *   文字模式下 AI 若输出〔挂断〕标记，显示告别文字后结束通话（与语音模式一致）。
+ * 五、通话中文字聊天（右上角信息图标开关）：接通后底部按钮上方出现内联输入条（消息区+输入框），
+ *   开启期间字幕隐藏；用户发文字 → AI 若配置了第三方语音 API（hasCustomTtsApi）则 TTS 语音回复，
+ *   否则文字回复（显示在输入条上方消息区）；共用同一条 /api/phone/turn 链路与人设/记忆上下文，
+ *   文字/语音轮次写入同一份通话历史（via 标记）；AI 若输出〔挂断〕标记，呈现完告别后结束通话。
  *
  * 二、音色：speakUserTts 现场解析（角色 voiceId → 全局默认 → 内置默认声线），与语音消息同一套
  *   TTS 配置；AI 回复在 TTS 播报的同时把文字逐字同步到字幕流（aiReveal，onProgress 驱动），
@@ -35,7 +35,7 @@ import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
 import { startWebSpeechSession, type WebSpeechSession } from './web-speech';
-import { speakUserTts, stopSpeaking } from './tts-client';
+import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds } from './global-call';
 
 // ---------------- 类型 ----------------
@@ -66,11 +66,14 @@ export interface ChatCallTurnMsg {
   content: string;
 }
 
-/** 通话内文字聊天消息（面板气泡；含语音轮次同步展示） */
+/** 通话内消息日志条目（字幕/文字条消息区共用；via 区分轮次渠道） */
 export interface ChatCallTextMsg {
   role: 'user' | 'assistant';
   content: string;
   at: number;
+  /** 渠道：'voice' = 语音轮次（说话/播报，不出文字）；'text' = 文字聊天轮次（输入条消息区可见）。
+   *  缺省视为 'voice'（旧数据兼容） */
+  via?: 'voice' | 'text';
 }
 
 /** AI 字幕逐字揭示状态（与 TTS 播放进度同步；null = 当前无揭示中的字幕） */
@@ -213,9 +216,9 @@ export interface ChatCallApi {
   tapMic: () => void;
   toggleMute: () => void;
   toggleSpeaker: () => void;
-  /** 进出文字聊天模式（开面板时打断录音/播报，期间 AI 回复只出文字不出声） */
+  /** 进出文字聊天模式（输入条开合：打断进行中的录音/播报；期间字幕隐藏、回复走输入条） */
   setTextMode: (on: boolean) => void;
-  /** 文字聊天发送（面板输入框用；AI 以文字回复，不 TTS） */
+  /** 文字聊天发送（内联输入条用；AI 配了语音 API 则语音回复，否则文字回复进消息区） */
   sendText: (text: string) => void;
 }
 
@@ -243,7 +246,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const statusRef = useRef<ChatCallStatus>(status);
   const chatLogRef = useRef<ChatCallTextMsg[]>([]);
   const textBusyRef = useRef(false);
-  /** 文字聊天模式：面板打开期间为 true，AI 回复只出文字不出声 */
+  /** 文字聊天模式：输入条打开期间为 true（字幕隐藏；回复呈现形态见 hasCustomTtsApi） */
   const textModeRef = useRef(false);
   /** 打开面板时丢弃进行中的录音 */
   const discardRef = useRef(false);
@@ -304,7 +307,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
 
   // ---------- TTS 播报（角色音色；逐字字幕同步；失败整句直出字幕不中断） ----------
   const speakReply = useCallback(
-    (text: string, onDone: () => void) => {
+    (text: string, onDone: () => void, onFail?: () => void) => {
       const contactId = optsRef.current.contact?.id ?? null;
       // 播报前剥挂断标记（识别在调用方）；字幕流先挂上整句，随播放进度逐字揭示
       if (!endedRef.current) setAiReveal({ text, shown: 0 });
@@ -328,15 +331,28 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           }
         },
       }).catch(() => {
-        // TTS 失败：整句直接显示在字幕流，通话继续
+        // TTS 失败：整句直接显示在字幕流，通话继续；onFail 让调用方做额外降级（如消息区文字呈现）
         if (!endedRef.current) {
           setAiReveal(null);
-          onDone();
+          if (onFail) onFail();
+          else onDone();
         }
       });
     },
     [],
   );
+
+  /** TTS 失败兑底：把最后一条 assistant 消息降级为文字（via='text'）——
+   *  文字输入条开着时消息区可见；语音模式字幕本就渲染整句，降级无副作用 */
+  const demoteLastReplyToText = useCallback(() => {
+    const log = chatLogRef.current;
+    const last = log[log.length - 1];
+    if (last && last.role === 'assistant' && last.via === 'voice') {
+      const next = [...log.slice(0, -1), { ...last, via: 'text' as const }];
+      chatLogRef.current = next;
+      setChatLog(next);
+    }
+  }, []);
 
   // ---------- 请求一轮 LLM 回复（语音轮与文字轮共用；返回纯文本） ----------
   const requestTurn = useCallback(
@@ -423,7 +439,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       if (userText) {
         setLiveHeard(''); // 最终文字入列：实时 provisional 字幕让位
         historyRef.current = historyBefore.slice(-16);
-        appendLog({ role: 'user', content: userText, at: Date.now() });
+        appendLog({ role: 'user', content: userText, at: Date.now(), via: 'voice' });
       }
       const { reply: raw, error: turnError } = await requestTurn(historyBefore, greeting);
       if (ended()) return;
@@ -442,9 +458,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         return;
       }
       historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
-      appendLog({ role: 'assistant', content: reply, at: Date.now() });
-      // 文字聊天模式（面板打开中）：只出气泡不出声
-      if (textModeRef.current) {
+      // 回复形态：语音模式恒走 TTS（speakUserTts 内置引擎兜底，配了 API 用 API）；
+      // 文字输入条开着时按「是否配置语音 API」决定——配了语音回复，没配文字回复
+      const asText = textModeRef.current && !hasCustomTtsApi();
+      appendLog({ role: 'assistant', content: reply, at: Date.now(), via: asText ? 'text' : 'voice' });
+      if (asText) {
+        // 文字回复：不出声（字幕/消息区已呈现整句）
         if (wantHangup) {
           finish('ai-hangup');
           return;
@@ -453,20 +472,34 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         busyRef.current = false;
         return;
       }
-      speakReply(reply, () => {
-        if (ended()) return;
-        if (wantHangup) {
-          finish('ai-hangup');
-          return;
-        }
-        setStatus('listening');
-        busyRef.current = false;
-      });
+      speakReply(
+        reply,
+        () => {
+          if (ended()) return;
+          if (wantHangup) {
+            finish('ai-hangup');
+            return;
+          }
+          setStatus('listening');
+          busyRef.current = false;
+        },
+        () => {
+          // TTS 失败：字幕兜底整句 + 降级为文字（输入条开着时消息区同样可见）
+          demoteLastReplyToText();
+          if (ended()) return;
+          if (wantHangup) {
+            finish('ai-hangup');
+            return;
+          }
+          setStatus('listening');
+          busyRef.current = false;
+        },
+      );
     },
-    [finish, speakReply, requestTurn, appendLog],
+    [finish, speakReply, requestTurn, appendLog, demoteLastReplyToText],
   );
 
-  // ---------- 通话中文字聊天：用户发文字 → LLM → 文字气泡（不 TTS） ----------
+  // ---------- 通话中文字聊天：用户发文字 → LLM → 配了语音 API 语音回复，否则文字回复 ----------
   const sendText = useCallback(
     async (raw: string) => {
       const text = raw.trim().slice(0, 2000);
@@ -478,31 +511,72 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       busyRef.current = true;
       setTextBusy(true);
       setError('');
-      appendLog({ role: 'user', content: text, at: Date.now() });
+      appendLog({ role: 'user', content: text, at: Date.now(), via: 'text' });
       const historyBefore = [...historyRef.current, { role: 'user' as const, content: text }];
       historyRef.current = historyBefore.slice(-16);
       const { reply: rawReply, error: turnError } = await requestTurn(historyBefore, false);
       if (endedRef.current) return;
-      textBusyRef.current = false;
-      busyRef.current = false;
-      setTextBusy(false);
       if (!rawReply) {
+        textBusyRef.current = false;
+        busyRef.current = false;
+        setTextBusy(false);
         setError(turnError || '发送失败，请再试一次');
         return;
       }
       const wantHangup = HANGUP_MARK_RE.test(rawReply);
       const reply = rawReply.replace(HANGUP_MARK_RE, '').trim();
       HANGUP_MARK_RE.lastIndex = 0;
-      if (reply) {
-        historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
-        appendLog({ role: 'assistant', content: reply, at: Date.now() });
+      if (!reply) {
+        textBusyRef.current = false;
+        busyRef.current = false;
+        setTextBusy(false);
+        if (wantHangup) finish('ai-hangup');
+        return;
       }
-      if (wantHangup) finish('ai-hangup');
+      historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
+      if (hasCustomTtsApi()) {
+        // AI 配置了语音 API → 语音回复（不出文字）；播报期间保持「回应中」防止插发新消息
+        appendLog({ role: 'assistant', content: reply, at: Date.now(), via: 'voice' });
+        speakReply(
+          reply,
+          () => {
+            textBusyRef.current = false;
+            busyRef.current = false;
+            setTextBusy(false);
+            if (endedRef.current) return;
+            if (wantHangup) {
+              finish('ai-hangup');
+              return;
+            }
+            setStatus('listening');
+          },
+          () => {
+            // TTS 失败：降级为文字回复（消息区气泡可见）
+            demoteLastReplyToText();
+            textBusyRef.current = false;
+            busyRef.current = false;
+            setTextBusy(false);
+            if (endedRef.current) return;
+            if (wantHangup) {
+              finish('ai-hangup');
+              return;
+            }
+            setStatus('listening');
+          },
+        );
+      } else {
+        // 没配语音 API → 文字回复（输入条消息区气泡呈现）
+        appendLog({ role: 'assistant', content: reply, at: Date.now(), via: 'text' });
+        textBusyRef.current = false;
+        busyRef.current = false;
+        setTextBusy(false);
+        if (wantHangup) finish('ai-hangup');
+      }
     },
-    [requestTurn, appendLog, finish],
+    [requestTurn, appendLog, finish, speakReply, demoteLastReplyToText],
   );
 
-  /** 进出文字聊天模式：开面板时丢弃进行中的录音、打断播报；期间 AI 回复只出文字 */
+  /** 进出文字聊天模式：开输入条时丢弃进行中的录音、打断播报；期间字幕隐藏、回复走输入条 */
   const setTextMode = useCallback((on: boolean) => {
     textModeRef.current = on;
     if (!on || endedRef.current) return;
