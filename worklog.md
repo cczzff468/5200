@@ -7560,3 +7560,22 @@ Work Log:
 Stage Summary:
 - 通话页头像+名字恢复垂直居中且全阶段一致；弹幕字幕流回到头像名字正下方（贴名字排布、向上滚动）；文字聊天面板机主头像改与聊天 App 同源（联系人库 USER 头像），改头像后新开会话即生效
 - 弹幕字幕既有能力不变：逐字上屏/逐字揭示、弹跳入场、无头像无光标
+---
+Task ID: 11
+Agent: Z.ai Code (main)
+Task: 通话字幕单句居中模式（新句出现旧句消失）+ 通话文字聊天改造为内联输入条（AI 配语音 API 走 TTS，否则文字回复；开启时字幕隐藏；WX/QQ 一致）
+
+Work Log:
+- CaptionStream 重构为单句模式：不再渲染 chatLog 整个流，只渲染当前活跃一句（liveHeard 说话中 → aiReveal 揭示中部分文本 → chatLog 最后一条），新句入列时 key 变化自动替换旧句——「一句显示以后，说下一句的时候上一句消失，不管是我还是 AI」；CaptionLine 改居中对齐、字号 15→17px、我方纯白/AI 柔白（text-white/60），保留弹跳入场
+- WX/QQ 中部布局重排：字幕区固定 128px（min-h-[44px] shrink 防小视口溢出）插在上下两个弹性区之间（字幕位于头像上方空间垂直居中=屏幕中部），头像+名字整体下沉（WX 头像中心从屏幕中心下移 ~56px，QQ 同构）；文字条开启时字幕区保留占位但不渲染内容（布局稳定、字幕隐藏）
+- 文字聊天重构：删除全屏 TextChatPanel/TextChatBubble/TextChatAvatar/useOwnerAvatar（净删约 230 行），新增 InlineCallChat 内联条——消息区（via='text' 最近 8 条，微信绿白/QQ 蓝白小气泡 + AI 回应中三点动画）+ 圆角输入框+发送按钮，宿主渲染在底部三按钮上方；信息图标改 toggle（aria-pressed、激活态 bg-white/25 高亮）
+- chat-call.ts：ChatCallTextMsg 增加 via?: 'voice'|'text' 标记轮次渠道；runTurn 回复形态判定 asText = textMode && !hasCustomTtsApi()（语音模式恒 TTS 内置引擎兜底不受影响；文字条开着时配了 API→语音回复不出文字、没配→文字）；sendText 回复后 hasCustomTtsApi() 分支——配了 API 走 speakReply 播报（期间 textBusy 保持 true 防插发）、没配 appendLog via='text' 进消息区
+- tts-client.ts 新增 hasCustomTtsApi()：provider!=='builtin' 且 apiKey+baseUrl 齐全（内置引擎不算「配置」）；speakReply 增加 onFail 可选回调 + demoteLastReplyToText()——TTS 失败时最后一条 AI 消息 via 降级为 text，消息区/字幕兜底可见
+- E2E（agent-browser 实机，1280x900 视口）：①微信通话接通→greeting 单句居中显示（capChildren=1、y=289、字幕中心在头像上方空间中部、头像名字下沉）→AI 第二句自动替换第一句（实测「喂，是小明啊…」被「喂～是小明呀…」替换）②点信息图标→textbar 出现+captions 空透+aria-pressed=true→发「周末有空一起看电影吗」→AI 文字回复「好啊！你想看什么类型的呀？」显示消息区（未配 API→文字）③再点信息图标→输入条消失、字幕恢复显示最后一句④挂断→卡片落盘 kv wx-chat-msgs「[语音通话：通话时长 02:49]」⑤设置 App 配假 OpenAI 兼容 API→重打电话→dev.log 出现 POST /api/tts 502（TTS 分支触发）→失败降级：greeting 与文字条回复均以文字呈现⑥QQ 登录(100010001)→通话→同套验证通过（蓝白气泡、字幕隐藏、降级回复、挂断卡片「通话时长 01:02」）⑦删 ttsConfig 恢复默认 builtin→日志增量 233→234 仅 1 条 turn 无 /api/tts——语音模式内置引擎播报回归正常
+- 测试环境备注：agent-browser 刷新后锁屏需 JS 派发 pointer 序列解锁（dispatchEvent pointerdown+move+up 到 elementFromPoint 命中元素）；桌面 App 图标是普通 onClick 可直接 element.click()；测试联系人经 IndexedDB contacts store 直接写入（c_test_xiaoyu/c_test_user）；假 TTS 配置已删除恢复 builtin
+- 质量检查：bunx tsc --noEmit 0 错误；bun run lint 通过；dev.log 无运行时错误
+
+Stage Summary:
+- 通话字幕改为单句居中模式：同一时刻只显示一句、新句出现旧句消失（WX/QQ 一致），字号加大至 17px 居中排布，头像名字下沉、字幕占屏幕中部
+- 通话文字聊天改造完成：信息图标开关内联输入条（三按钮上方），开启时字幕隐藏；AI 配置了语音 API → TTS 语音回复，没配 → 文字回复进消息区；TTS 失败自动降级文字；关闭输入条字幕恢复、通话不中断
+- 语音模式行为保持：未配第三方 API 时语音通话仍走内置引擎播报（hasCustomTtsApi 只影响文字条场景），既有语音链路零破坏
