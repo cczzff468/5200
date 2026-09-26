@@ -7453,3 +7453,21 @@ Work Log:
 Stage Summary:
 - 16 项 AI 感知审计发现的问题全部修复：语音从「只传 [语音] 信号」变为「AI 当轮读到转写内容（失败时明确告知听不到、不编造）」；图片从「识图描述只在当轮、历史即失忆」变为「img.desc 随消息持久化、历史/记忆/通话全程可读（未配识图时 system 明确禁止编造图片内容）」；QQ 亲属卡补每月额度；群邀请卡片补邀请人+成员名单
 - 新共享模块：chat-media-rules.ts（占位防编造规则）、autoTranscribeForAi（stt-client）、chat-stream-store onVision 回调；五端共用一套口径，不影响回复条数/拆条/记忆/通话/群聊等既有机制
+
+---
+Task ID: 3
+Agent: 主协调者 (Z.ai Code)
+Task: 通话界面右上角图标改为信息图标，点击进入通话中文字聊天（用户发文字、AI 回文字不用语音，右上角关闭）；并复核此前批准的 4 项「AI 感知外部内容」审计修复
+
+Work Log:
+- 复核确认 4 项审计修复已在此前会话全部落地：① 语音转写回填（wechat/qq/wx-group/qq-group/chat 五端 commitVoiceMsg + autoTranscribeForAi + presetTranscript）② 识图描述落盘（onVision 回写 img.desc，五端历史映射读 desc）③ QQ 亲属卡历史文本含每月额度¥（qq.tsx:2696）④ 群邀请卡片含邀请人+成员名单（qq.tsx:2698 / wechat.tsx:4034）；五端均已接入 chat-media-rules.ts 的【语音占位】【图片占位】防编造规则
+- 改造 src/lib/ios/chat-call.ts 通话引擎：新增 ChatCallTextMsg 类型、chatLog/textBusy 状态、appendLog 日志；抽出 requestTurn（语音轮/文字轮共用 /api/phone/turn 链路，人设/记忆/时间/位置/多端感知全透传）；runTurn 语音轮同步写 chatLog，textModeRef 打开时 AI 回复只出气泡不出 TTS；新增 sendText（文字轮，不 TTS，〔挂断〕标记同样生效）与 setTextMode（开面板丢弃进行中录音 discardRef + 打断播报 stopSpeaking；关面板恢复语音模式）
+- 改造 src/components/apps/voice-call-screen.tsx：微信皮肤右上角原「更多」+ 号替换为信息图标（仅接通后显示，data-testid=wx-call-textchat-btn）；QQ 皮肤右上角新增同款信息图标（qq-call-textchat-btn）；两皮肤共用新 TextChatPanel 组件（覆盖层，顶栏姓名+通话中实时计时，右上角 X 关闭按钮，消息列表微信绿白/QQ 蓝白气泡与聊天页同款，语音轮次同步可见，「对方正在输入…」三点动画，错误提示行，输入栏回车/发送按钮）；TextChatBubble 独立组件
+- Agent Browser 实机验证（微信+QQ 双皮肤全流程）：锁屏上滑解锁 → 微信进小雨会话 → + 面板发语音通话 → 接通 AI greeting（TTS 字幕可见）→ 右上角信息图标 → 面板打开（计时继续 00:14）→ 输入「刚吃完饭，你那边天气怎么样？」回车 → 绿气泡入列 → AI 文字气泡回复「这边天气挺好的，阳光明媚的。」（无语音播报）→ 右上角 X 关闭回语音界面（按钮完好）→ 挂断生成「通话时长 00:54」卡片；QQ 皮肤同样验证（登录 100010001/凡凡 → 语音通话 → 文字面板蓝气泡「晚上一起吃饭吗？」→ AI 白底回复「好啊，去哪儿吃？」→ X 关闭 → 挂断生成「通话时长 00:32」卡片）
+- 质量检查：bunx tsc --noEmit 零错误；bun run lint 通过；dev.log 全程无运行时错误（/api/phone/turn 全部 200）；agent-browser errors 为空
+
+Stage Summary:
+- 通话中文字聊天功能完成：接通后右上角信息图标 → 文字面板（用户发文字、AI 文字回复不 TTS、语音轮次同屏可见、右上角 X 关闭），通话时长全程继续，挂断后照常生成通话卡片
+- 引擎层保证：文字轮与语音轮共用同一份 history 与 /api/phone/turn 链路，面板打开期间 in-flight 语音回复自动降级为文字气泡；AI 文字模式下输出〔挂断〕标记则显示告别文字后结束通话
+- 4 项审计修复复核确认已完成，无需改动
+- 验证结论：微信/QQ 双皮肤实机全流程通过，tsc/lint/dev.log 三重干净

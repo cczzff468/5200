@@ -12,29 +12,34 @@
  *   来电页「邀请你语音通话」+「消息回复」+ 红挂断/绿接听圆角方按钮；长按麦克风静音。
  *
  * - 状态区：「正在说话」「正在听」「正在思考…」「识别中…」等；TTS 失败时回复文字以字幕显示，通话不中断。
+ * - 通话中文字聊天：接通后右上角信息图标进入文字面板，用户发文字、AI 回文字（不 TTS），
+ *   共用同一套人设/记忆/时间/位置链路，语音轮次同步可见；右上角 X 关闭返回语音通话。
  * - 通话卡片（CallCardBubble）：结束后插入聊天记录——普通文字气泡同款样式（跟普通气泡一样），
  *   电话图标 + 文案（已取消（点击重拨）/ 对方未接听 / 对方已拒绝 / 已拒绝 / 未接听 / 通话时长）；
  *   QQ 蓝底白字图标在文字前，微信我方绿底文字在前、对方白底图标在前。
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   BellOff,
+  MessageSquare,
   Mic,
   MicOff,
-  MessageSquare,
   Phone,
   PhoneOff,
   PictureInPicture2,
-  Plus,
+  SendHorizontal,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { DefaultAvatar } from './default-avatar';
 import {
   formatCallDuration,
   useChatCall,
+  type ChatCallApi,
   type ChatCallResult,
+  type ChatCallTextMsg,
   type ChatCallTurnMsg,
 } from '@/lib/ios/chat-call';
 import type { ContactRecord } from '@/lib/contacts';
@@ -144,11 +149,173 @@ function statusLine(
   }
 }
 
+// ---------------- 通话中文字聊天面板（右上角信息图标进入；AI 文字回复不出声） ----------------
+
+/** 面板气泡（微信绿/白，QQ 蓝/白，与各自聊天页同款） */
+function TextChatBubble({ variant, msg }: { variant: 'wx' | 'qq'; msg: ChatCallTextMsg }) {
+  const mine = msg.role === 'user';
+  const isWx = variant === 'wx';
+  return (
+    <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[78%] whitespace-pre-wrap break-words text-left text-[15px] leading-[1.5] ${
+          isWx
+            ? `rounded-[5px] px-3 py-2 ${
+                mine
+                  ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
+                  : 'bg-white text-black dark:bg-[#2C2C2E] dark:text-white'
+              }`
+            : `rounded-[10px] px-3.5 py-[9px] ${
+                mine
+                  ? 'text-white'
+                  : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
+              }`
+        }`}
+        style={variant === 'qq' && mine ? { backgroundColor: '#0099FF' } : undefined}
+      >
+        {msg.content}
+      </div>
+    </div>
+  );
+}
+
+function TextChatPanel({
+  variant,
+  name,
+  call,
+  onClose,
+}: {
+  variant: 'wx' | 'qq';
+  name: string;
+  call: ChatCallApi;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const { chatLog, textBusy, error } = call;
+  const isWx = variant === 'wx';
+
+  // 新消息/输入中自动滚到底部
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chatLog.length, textBusy]);
+
+  const send = () => {
+    const t = draft.trim();
+    if (!t || textBusy) return;
+    call.sendText(t);
+    setDraft('');
+  };
+
+  return (
+    <div
+      className="absolute inset-0 z-20 flex flex-col bg-[#141416] text-white"
+      role="dialog"
+      aria-label="通话中文字聊天"
+      data-testid={`${variant}-call-textchat`}
+    >
+      {/* 顶栏：标题居中，右上角 X 关闭（用户需求：关闭就是点击右上角关闭） */}
+      <div className="border-b border-white/10 px-4 pb-3 pt-[54px]">
+        <div className="relative flex h-11 flex-col items-center justify-center">
+          <span className="max-w-[200px] truncate text-[16px] font-medium leading-tight">{name}</span>
+          <span className="text-[11px] tabular-nums text-white/50">通话中 {formatCallDuration(call.seconds)}</span>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭文字聊天"
+            data-testid={`${variant}-call-textchat-close`}
+            className="absolute right-0 top-0 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white/85 transition-colors active:opacity-60"
+          >
+            <X className="h-5 w-5" strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+
+      {/* 消息列表（语音轮次同步可见；空白时给引导文案） */}
+      <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
+        {chatLog.length === 0 && !textBusy && (
+          <p className="pt-10 text-center text-[13px] text-white/40">通话中也可以发消息，对方会以文字回复</p>
+        )}
+        {chatLog.map((m, i) => (
+          <TextChatBubble key={`${m.at}-${i}`} variant={variant} msg={m} />
+        ))}
+        {textBusy && (
+          <div className="flex justify-start" aria-label="对方正在输入">
+            <div
+              className={`flex items-center gap-1.5 px-3.5 py-2.5 ${
+                isWx ? 'rounded-[5px] bg-white dark:bg-[#2C2C2E]' : 'rounded-[10px] bg-white dark:bg-[#2A2C31]'
+              }`}
+            >
+              {[0, 150, 300].map((d) => (
+                <span
+                  key={d}
+                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/35 dark:bg-white/50"
+                  style={{ animationDelay: `${d}ms` }}
+                />
+              ))}
+              <span className="ml-1 text-[12px] text-black/45 dark:text-white/50">对方正在输入…</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 错误提示 + 输入栏 */}
+      <div className="pb-[max(10px,env(safe-area-inset-bottom))]">
+        {error && <p className="px-4 pb-1 text-center text-[12px] text-red-300">{error}</p>}
+        <div className="flex items-center gap-2 border-t border-white/10 px-3 pb-1 pt-3">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder="发消息…"
+            aria-label="输入消息"
+            data-testid={`${variant}-call-textchat-input`}
+            className="h-9 min-w-0 flex-1 rounded-full bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-white/35 focus:ring-1 focus:ring-white/25"
+          />
+          <button
+            type="button"
+            onClick={send}
+            disabled={!draft.trim() || textBusy}
+            aria-label="发送"
+            data-testid={`${variant}-call-textchat-send`}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:opacity-70 ${
+              draft.trim() && !textBusy
+                ? isWx
+                  ? 'bg-[#07C160] text-white'
+                  : 'bg-[#0099FF] text-white'
+                : 'bg-white/10 text-white/40'
+            }`}
+          >
+            <SendHorizontal className="h-[18px] w-[18px]" strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 微信皮肤 ----------------
 
 function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
+  const [textChatOpen, setTextChatOpen] = useState(false);
+
+  const openTextChat = () => {
+    if (phase !== 'active') return;
+    call.setTextMode(true); // 丢弃进行中的录音/播报；期间 AI 回复只出文字
+    setTextChatOpen(true);
+  };
+  const closeTextChat = () => {
+    call.setTextMode(false); // 回到语音模式（AI 回复恢复 TTS 播报）
+    setTextChatOpen(false);
+  };
 
   // 长按麦克风 = 静音切换；点按 = 说话/发送
   const holdTimer = useRef<number | null>(null);
@@ -190,13 +357,16 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
       {phase === 'dialing' && (
         <div className="pt-[70px] text-center text-[20px] font-light text-white/90">语音通话</div>
       )}
-      {phase !== 'incoming' && (
+      {/* 右上角信息图标：接通后可进入文字聊天（原「更多」+ 号换成信息图标） */}
+      {phase === 'active' && (
         <button
           type="button"
-          aria-label="更多"
-          className="absolute right-5 top-[64px] flex h-10 w-10 items-center justify-center rounded-full text-white/80 active:opacity-60"
+          aria-label="发消息"
+          data-testid="wx-call-textchat-btn"
+          onClick={openTextChat}
+          className="absolute right-5 top-[64px] z-10 flex h-10 w-10 items-center justify-center rounded-[12px] bg-white/10 text-white/80 backdrop-blur-sm transition-colors active:opacity-60"
         >
-          <Plus className="h-6 w-6" strokeWidth={1.6} />
+          <MessageSquare className="h-5 w-5" strokeWidth={1.8} />
         </button>
       )}
 
@@ -291,6 +461,9 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
           )}
         </div>
       )}
+
+      {/* 通话中文字聊天面板（覆盖层；通话不中断，时长继续走） */}
+      {textChatOpen && phase === 'active' && <TextChatPanel variant="wx" name={name} call={call} onClose={closeTextChat} />}
     </div>
   );
 }
@@ -300,6 +473,17 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
   const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
+  const [textChatOpen, setTextChatOpen] = useState(false);
+
+  const openTextChat = () => {
+    if (phase !== 'active') return;
+    call.setTextMode(true);
+    setTextChatOpen(true);
+  };
+  const closeTextChat = () => {
+    call.setTextMode(false);
+    setTextChatOpen(false);
+  };
 
   // 长按麦克风 = 静音切换（原三条横杠菜单里的静音入口移到长按手势）；点按 = 说话/发送
   const holdTimer = useRef<number | null>(null);
@@ -335,6 +519,19 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
   return (
     <div className="relative z-10 flex h-full flex-col">
       <PipIcon onClick={onMinimize} />
+
+      {/* 右上角信息图标：接通后可进入文字聊天（与微信皮肤一致） */}
+      {phase === 'active' && (
+        <button
+          type="button"
+          aria-label="发消息"
+          data-testid="qq-call-textchat-btn"
+          onClick={openTextChat}
+          className="absolute right-5 top-16 z-10 flex h-10 w-10 items-center justify-center rounded-[12px] bg-white/10 text-white/80 backdrop-blur-sm transition-colors active:opacity-60"
+        >
+          <MessageSquare className="h-5 w-5" strokeWidth={1.8} />
+        </button>
+      )}
 
       {/* 中部：圆形大头像 + 名字 + 状态 */}
       <div className="flex flex-1 flex-col items-center justify-center px-8 pb-20">
@@ -424,6 +621,9 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
           </div>
         </div>
       )}
+
+      {/* 通话中文字聊天面板（覆盖层；通话不中断，时长继续走） */}
+      {textChatOpen && phase === 'active' && <TextChatPanel variant="qq" name={name} call={call} onClose={closeTextChat} />}
     </div>
   );
 }

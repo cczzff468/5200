@@ -9,6 +9,11 @@
  *   → 文字交给聊天模型（/api/phone/turn，复用人设/记忆/时间感知链路）→ 用当前角色音色 TTS 播报
  *   → 回到聆听，循环直到用户挂断或 AI 主动挂断（告别语后输出〔挂断〕标记）。
  *
+ * 五、通话中文字聊天（右上角信息图标进入）：面板内用户发文字、AI 回文字（不 TTS）；
+ *   共用同一条 /api/phone/turn 链路与人设/记忆上下文，文字轮次写入同一份通话历史；
+ *   通话内语音轮次（用户说的话 / AI 的回复）同步进 chatLog，面板里可见，上下文无缝衔接；
+ *   文字模式下 AI 若输出〔挂断〕标记，显示告别文字后结束通话（与语音模式一致）。
+ *
  * 二、音色：speakUserTts 现场解析（角色 voiceId → 全局默认 → 内置默认声线），与语音消息同一套
  *   TTS 配置；TTS 失败不中断通话——回复文字以字幕（caption）显示在状态区，通话继续。
  *   STT 与语音消息转文字共用 transcribeAudioBlob（内置识别 / OpenAI 兼容）；识别失败给出提示，
@@ -55,6 +60,13 @@ export interface ChatCallResult {
 export interface ChatCallTurnMsg {
   role: 'user' | 'assistant';
   content: string;
+}
+
+/** 通话内文字聊天消息（面板气泡；含语音轮次同步展示） */
+export interface ChatCallTextMsg {
+  role: 'user' | 'assistant';
+  content: string;
+  at: number;
 }
 
 export interface UseChatCallOptions {
@@ -178,6 +190,10 @@ export interface ChatCallApi {
   caption: string;
   /** 最后一次识别出的「我说的话」（字幕用） */
   lastHeard: string;
+  /** 通话内消息日志（语音轮次 + 文字聊天轮次；文字面板数据源） */
+  chatLog: ChatCallTextMsg[];
+  /** 文字聊天回复中（面板「对方正在输入…」） */
+  textBusy: boolean;
   accept: () => void;
   reject: () => void;
   hangup: () => void;
@@ -185,6 +201,10 @@ export interface ChatCallApi {
   tapMic: () => void;
   toggleMute: () => void;
   toggleSpeaker: () => void;
+  /** 进出文字聊天模式（开面板时打断录音/播报，期间 AI 回复只出文字不出声） */
+  setTextMode: (on: boolean) => void;
+  /** 文字聊天发送（面板输入框用；AI 以文字回复，不 TTS） */
+  sendText: (text: string) => void;
 }
 
 export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
@@ -199,12 +219,21 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const [error, setError] = useState('');
   const [caption, setCaption] = useState('');
   const [lastHeard, setLastHeard] = useState('');
+  const [chatLog, setChatLog] = useState<ChatCallTextMsg[]>([]);
+  const [textBusy, setTextBusy] = useState(false);
 
   // ---------- refs（异步循环里读最新值，避免 stale closure；写 ref 一律入 effect，不在渲染期） ----------
   const endedRef = useRef(false);
   const phaseRef = useRef<ChatCallPhase>(phase);
   const secondsRef = useRef(0);
   const mutedRef = useRef(false);
+  const statusRef = useRef<ChatCallStatus>(status);
+  const chatLogRef = useRef<ChatCallTextMsg[]>([]);
+  const textBusyRef = useRef(false);
+  /** 文字聊天模式：面板打开期间为 true，AI 回复只出文字不出声 */
+  const textModeRef = useRef(false);
+  /** 打开面板时丢弃进行中的录音 */
+  const discardRef = useRef(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -216,6 +245,15 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  /** 追加通话内消息日志（语音轮次与文字轮次统一入口） */
+  const appendLog = useCallback((m: ChatCallTextMsg) => {
+    chatLogRef.current = [...chatLogRef.current, m].slice(-100);
+    setChatLog(chatLogRef.current);
+  }, []);
   useEffect(() => {
     onEndRef.current = onEnd;
     optsRef.current = { app, contact, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp };
@@ -275,26 +313,10 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     [],
   );
 
-  // ---------- 一轮对话：文字 → LLM → TTS ----------
-  const runTurn = useCallback(
-    async (userText: string | null, greeting: boolean) => {
-      const ended = () => endedRef.current;
-      if (ended()) return;
-      busyRef.current = true;
-      setError('');
-      setCaption('');
-      // 对端是「机主本人」联系人（自己给自己打）：不说话，只保留聆听
-      if (optsRef.current.contact?.kind === 'user') {
-        setStatus('listening');
-        busyRef.current = false;
-        return;
-      }
-      setStatus('thinking');
+  // ---------- 请求一轮 LLM 回复（语音轮与文字轮共用；返回纯文本） ----------
+  const requestTurn = useCallback(
+    async (historyBefore: ChatCallTurnMsg[], greeting: boolean): Promise<{ reply: string; error?: string }> => {
       const c = optsRef.current.contact;
-      const historyBefore = userText
-        ? [...historyRef.current, { role: 'user' as const, content: userText }]
-        : historyRef.current;
-      if (userText) historyRef.current = historyBefore.slice(-16);
       try {
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
@@ -333,57 +355,145 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           directOnly?: boolean;
           messages?: { role: 'system' | 'user' | 'assistant'; content: string }[];
         };
-        if (ended()) return;
-        let reply = '';
         if (res.ok && data.directOnly && Array.isArray(data.messages) && data.messages.length > 0) {
           // 内网 API：浏览器直连流式（与电话 App 同策略），取全量文本
           try {
             const full = await directChatStream(useSettings.getState().apiConfig, data.messages, () => undefined);
-            reply = full
-              .replace(/[*_`#>~]/g, '')
-              .replace(/^["'「『]+|["'」』]+$/g, '')
-              .trim();
+            return {
+              reply: full
+                .replace(/[*_`#>~]/g, '')
+                .replace(/^["'「『]+|["'」』]+$/g, '')
+                .trim(),
+            };
           } catch {
-            reply = '';
+            return { reply: '', error: data.error };
           }
-        } else if (res.ok && data.reply) {
-          reply = data.reply.trim();
         }
-        if (ended()) return;
-        if (!reply) {
-          setError(data.error || '信号不好，请再试一次');
-          setStatus('listening');
-          busyRef.current = false;
-          return;
-        }
-        // AI 主动挂断：告别语后输出〔挂断〕标记 → 播完告别自动结束通话
-        const wantHangup = HANGUP_MARK_RE.test(reply);
-        reply = reply.replace(HANGUP_MARK_RE, '').trim();
-        HANGUP_MARK_RE.lastIndex = 0;
-        if (!reply) {
-          finish(wantHangup ? 'ai-hangup' : 'hangup');
-          return;
-        }
-        historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
-        speakReply(reply, () => {
-          if (ended()) return;
-          if (wantHangup) {
-            finish('ai-hangup');
-            return;
-          }
-          setStatus('listening');
-          busyRef.current = false;
-        });
+        if (res.ok && data.reply) return { reply: data.reply.trim() };
+        return { reply: '', error: data.error || '信号不好，请再试一次' };
       } catch {
-        if (!ended()) {
-          setError('通话网络异常，请再试一次');
-          setStatus('listening');
-          busyRef.current = false;
-        }
+        return { reply: '', error: '通话网络异常，请再试一次' };
       }
     },
-    [finish, speakReply],
+    [],
   );
+
+  // ---------- 一轮对话：文字 → LLM → TTS ----------
+  const runTurn = useCallback(
+    async (userText: string | null, greeting: boolean) => {
+      const ended = () => endedRef.current;
+      if (ended()) return;
+      busyRef.current = true;
+      setError('');
+      setCaption('');
+      // 对端是「机主本人」联系人（自己给自己打）：不说话，只保留聆听
+      if (optsRef.current.contact?.kind === 'user') {
+        setStatus('listening');
+        busyRef.current = false;
+        return;
+      }
+      setStatus('thinking');
+      const historyBefore = userText
+        ? [...historyRef.current, { role: 'user' as const, content: userText }]
+        : historyRef.current;
+      if (userText) {
+        historyRef.current = historyBefore.slice(-16);
+        appendLog({ role: 'user', content: userText, at: Date.now() });
+      }
+      const { reply: raw, error: turnError } = await requestTurn(historyBefore, greeting);
+      if (ended()) return;
+      if (!raw) {
+        setError(turnError || '信号不好，请再试一次');
+        setStatus('listening');
+        busyRef.current = false;
+        return;
+      }
+      // AI 主动挂断：告别语后输出〔挂断〕标记 → 播完告别自动结束通话
+      const wantHangup = HANGUP_MARK_RE.test(raw);
+      const reply = raw.replace(HANGUP_MARK_RE, '').trim();
+      HANGUP_MARK_RE.lastIndex = 0;
+      if (!reply) {
+        finish(wantHangup ? 'ai-hangup' : 'hangup');
+        return;
+      }
+      historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
+      appendLog({ role: 'assistant', content: reply, at: Date.now() });
+      // 文字聊天模式（面板打开中）：只出气泡不出声
+      if (textModeRef.current) {
+        if (wantHangup) {
+          finish('ai-hangup');
+          return;
+        }
+        setStatus('listening');
+        busyRef.current = false;
+        return;
+      }
+      speakReply(reply, () => {
+        if (ended()) return;
+        if (wantHangup) {
+          finish('ai-hangup');
+          return;
+        }
+        setStatus('listening');
+        busyRef.current = false;
+      });
+    },
+    [finish, speakReply, requestTurn, appendLog],
+  );
+
+  // ---------- 通话中文字聊天：用户发文字 → LLM → 文字气泡（不 TTS） ----------
+  const sendText = useCallback(
+    async (raw: string) => {
+      const text = raw.trim().slice(0, 2000);
+      if (!text || endedRef.current) return;
+      if (phaseRef.current !== 'active') return;
+      if (busyRef.current || textBusyRef.current) return;
+      if (optsRef.current.contact?.kind === 'user') return; // 自己给自己发：不回
+      textBusyRef.current = true;
+      busyRef.current = true;
+      setTextBusy(true);
+      setError('');
+      appendLog({ role: 'user', content: text, at: Date.now() });
+      const historyBefore = [...historyRef.current, { role: 'user' as const, content: text }];
+      historyRef.current = historyBefore.slice(-16);
+      const { reply: rawReply, error: turnError } = await requestTurn(historyBefore, false);
+      if (endedRef.current) return;
+      textBusyRef.current = false;
+      busyRef.current = false;
+      setTextBusy(false);
+      if (!rawReply) {
+        setError(turnError || '发送失败，请再试一次');
+        return;
+      }
+      const wantHangup = HANGUP_MARK_RE.test(rawReply);
+      const reply = rawReply.replace(HANGUP_MARK_RE, '').trim();
+      HANGUP_MARK_RE.lastIndex = 0;
+      if (reply) {
+        historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
+        appendLog({ role: 'assistant', content: reply, at: Date.now() });
+      }
+      if (wantHangup) finish('ai-hangup');
+    },
+    [requestTurn, appendLog, finish],
+  );
+
+  /** 进出文字聊天模式：开面板时丢弃进行中的录音、打断播报；期间 AI 回复只出文字 */
+  const setTextMode = useCallback((on: boolean) => {
+    textModeRef.current = on;
+    if (!on || endedRef.current) return;
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      discardRef.current = true;
+      try {
+        recorderRef.current.stop();
+      } catch {
+        // 已停止
+      }
+    }
+    if (statusRef.current === 'speaking') {
+      stopSpeaking();
+      setStatus('listening');
+    }
+  }, []);
 
   // ---------- 录音（点按开始/发送；与语音消息共用 STT 配置） ----------
   const startRecording = useCallback(async () => {
@@ -411,7 +521,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         setRecording(false);
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
-        if (endedRef.current) return;
+        const discard = discardRef.current;
+        discardRef.current = false;
+        if (endedRef.current || discard) {
+          chunksRef.current = [];
+          return;
+        }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         chunksRef.current = [];
         if (blob.size < 1200) {
@@ -569,12 +684,16 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     error,
     caption,
     lastHeard,
+    chatLog,
+    textBusy,
     accept,
     reject,
     hangup,
     tapMic,
     toggleMute,
     toggleSpeaker,
+    setTextMode,
+    sendText,
   };
 }
 
