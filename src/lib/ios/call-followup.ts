@@ -3,7 +3,8 @@
 /**
  * 挂断后 AI 续聊文字（三端共用客户端封装）：
  *
- * 通话引擎在挂断收尾时调用，生成 1~2 条「AI 继续发的文字」——
+ * 通话引擎在挂断收尾时调用，生成「AI 继续发的文字」——条数上限 = 该会话聊天设置里的回复条数
+ * （replyCount 由调用方按 sessionKey 现场读取直传；上限不是任务，没话可以少发），
  * 依据：人设 + 本次通话内容 + 相关记忆（动态召回）+ 最近聊天 + 时间感知（服务端 /api/phone/followup 组装）。
  * 呈现由宿主负责：微信/QQ 以聊天消息落盘，电话 App 以语音留言呈现（无聊天面板，与拒接解释同机制）。
  *
@@ -52,10 +53,18 @@ export interface CallFollowupPayload {
   worldbookBlock?: string;
   timeBlock?: string;
   multiApp?: boolean;
+  /** 续聊条数上限（该会话聊天设置「回复条数」；未传/非法时服务端与本地解析回退 2） */
+  replyCount?: number;
 }
 
-/** 从模型文本提取续聊消息（宽松：JSON 平衡块优先，失败按行拆；去标记/符号/包裹引号，最多 2 条） */
-export function parseFollowupText(raw: string): string[] {
+/** 条数上限收窄：非法/未传回退 2（旧行为），合法值夹在 [1, 30]（与回复条数选项同范围） */
+function followupMax(n: unknown): number {
+  const v = typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : NaN;
+  return Number.isFinite(v) ? Math.min(30, Math.max(1, v)) : 2;
+}
+
+/** 从模型文本提取续聊消息（宽松：JSON 平衡块优先，失败按行拆；去标记/符号/包裹引号，最多 max 条） */
+export function parseFollowupText(raw: string, max = 2): string[] {
   const clean = (s: string) =>
     s
       .replace(/〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g, '')
@@ -88,7 +97,7 @@ export function parseFollowupText(raw: string): string[] {
                 .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
                 .map(clean)
                 .filter(Boolean);
-              if (out.length > 0) return out.slice(0, 2);
+              if (out.length > 0) return out.slice(0, max);
             }
           } catch {
             // JSON 不完整：走按行兜底
@@ -102,16 +111,17 @@ export function parseFollowupText(raw: string): string[] {
     .split('\n')
     .map((l) => clean(l))
     .filter(Boolean)
-    .slice(0, 2);
+    .slice(0, max);
 }
 
 /** 请求挂断续聊文字（fire-and-forget 友好：所有失败静默返回 []，由调用方决定总结时序） */
 export async function requestCallFollowup(p: CallFollowupPayload): Promise<string[]> {
+  const max = followupMax(p.replyCount);
   try {
     const res = await fetch('/api/phone/followup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...p, config: useSettings.getState().apiConfig }),
+      body: JSON.stringify({ ...p, replyCount: max, config: useSettings.getState().apiConfig }),
     });
     const data = (await res.json()) as {
       messages?: unknown;
@@ -122,7 +132,7 @@ export async function requestCallFollowup(p: CallFollowupPayload): Promise<strin
     if (res.ok && data.directOnly && Array.isArray(data.messages) && data.messages.length > 0) {
       try {
         const full = await directChatStream(useSettings.getState().apiConfig, data.messages as Parameters<typeof directChatStream>[1], () => undefined);
-        return parseFollowupText(full);
+        return parseFollowupText(full, max);
       } catch {
         return [];
       }
@@ -131,7 +141,7 @@ export async function requestCallFollowup(p: CallFollowupPayload): Promise<strin
       return (data.messages as unknown[])
         .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
         .map((x) => x.trim().slice(0, 200))
-        .slice(0, 2);
+        .slice(0, max);
     }
     return [];
   } catch {

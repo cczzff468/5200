@@ -5,7 +5,8 @@ export const runtime = 'nodejs';
 /**
  * 通话挂断后 AI 续聊文字（微信 / QQ / 电话 App 三端共用）：
  *
- * 挂断是通话的延续而不是终点——AI 按人设像平时发消息那样，紧接着再发 1~2 条文字：
+ * 挂断是通话的延续而不是终点——AI 按人设像平时发消息那样，紧接着再发文字（条数上限 =
+ * 该会话「聊天设置 › 回复条数」，由前端随请求直传 replyCount；上限不是任务，没话可以少发）：
  * 接着说通话里没聊完的话茬、补一句叮嘱/约定、表达关心，或对「被挂断/没接通」做自然反应。
  * 三种挂断场景共用本 API（由前端引擎区分场景注入说明）：
  *   1. AI 主动挂断（ai-hangup）；2. 用户挂断（hangup / 来电被拒 missed-in·reject / 拨号取消 cancel）；
@@ -47,30 +48,39 @@ function buildFollowupSystemPrompt(
   connected: boolean,
   durationLabel: string,
   hasChat: boolean,
+  maxCount: number,
   multiApp?: boolean
 ): string {
+  // 条数语义与主聊回复条数同源：上限 = 聊天设置里该会话的回复条数；上限不是任务，没话可以少
+  const countRule =
+    maxCount <= 1
+      ? '条数硬约束：本次只发 1 条消息。'
+      : `条数硬约束：本次最多发 ${maxCount} 条消息——上限不是任务，没话可以少发，哪怕只发 1 条；话茬多、聊得投机就多发几条，条数以内容自然为准，绝不硬凑。`;
   return buildPersonaSystemPrompt(peer, {
     channel: '挂断电话后的文字消息',
     userName: null,
     multiApp,
     extraRules: [
-      `你刚结束一通语音通话（${scene}${connected ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发 1~2 条文字，自然衔接这次通话：`,
+      `你刚结束一通语音通话（${scene}${connected ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这次通话：`,
       connected
         ? '可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心，或顺着通话里提到的事聊两句新的；'
-        : '这通电话没有真正聊起来：结合你的人设、你们的关系和最近聊天，发一条自然的消息（比如关心对方为什么没接/怎么挂了、带点小情绪或撒娇、约下次再聊）；',
+        : '这通电话没有真正聊起来：结合你的人设、你们的关系和最近聊天，发自然的反应消息（比如关心对方为什么没接/怎么挂了、带点小情绪或撒娇、约下次再聊）；',
+      countRule,
       '绝对不要复读通话里已经说过的原话；不要自我介绍；不要说「刚才我们通话了」这类出戏的话——就像平时聊微信/QQ 一样接着说；',
       '语气完全符合你的人设和此刻情绪（聊得开心就热络、被匆匆挂断可以有点小抱怨、深夜可以带着困意）；',
       '每条消息像真人随手发的：口语化、简短（一条一般 1~2 句），可以有语气词；不要 markdown 符号、不要引号包裹、不要表情符号；',
       hasChat ? '结合下方最近聊天内容让消息更有来由。' : '没有最近聊天记录时，就纯粹基于人设和这次通话发挥。',
       '严格输出一个 JSON 对象，不要输出任何其他文字：',
-      '{"messages":["第一条","第二条"]}',
-      'messages 数组放 1~2 条消息文本（通常 2 条更自然，内容简短时 1 条也可以）。',
+      maxCount <= 1 ? '{"messages":["第一条"]}' : '{"messages":["第一条","第二条"]}',
+      maxCount <= 1
+        ? 'messages 数组只放 1 条消息文本。'
+        : `messages 数组放你要发的消息文本（每条一个元素），最多 ${maxCount} 条；没话可以少发，内容简短时 1 条也可以。`,
     ],
   });
 }
 
-/** 生成结果清洗：JSON 优先（宽松平衡块），失败按行拆；统一去标记/符号/包裹引号，最多 2 条 */
-function normalizeFollowup(raw: string): string[] {
+/** 生成结果清洗：JSON 优先（宽松平衡块），失败按行拆；统一去标记/符号/包裹引号，最多 max 条（条数上限随会话设置） */
+function normalizeFollowup(raw: string, max: number): string[] {
   const clean = (s: string) =>
     s
       .replace(/〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g, '')
@@ -84,13 +94,13 @@ function normalizeFollowup(raw: string): string[] {
       .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
       .map(clean)
       .filter(Boolean);
-    if (out.length > 0) return out.slice(0, 2);
+    if (out.length > 0) return out.slice(0, max);
   }
   return raw
     .split('\n')
     .map((l) => clean(l))
     .filter(Boolean)
-    .slice(0, 2);
+    .slice(0, max);
 }
 
 export async function POST(req: NextRequest) {
@@ -121,6 +131,10 @@ export async function POST(req: NextRequest) {
     birthday: inline.birthday,
   };
 
+  // 条数上限：聊天设置「回复条数」（前端随请求直传该会话的设置值）；未传/非法回退 2（旧行为）
+  const rcRaw = typeof root.replyCount === 'number' && Number.isFinite(root.replyCount) ? Math.floor(root.replyCount) : NaN;
+  const maxCount = Number.isFinite(rcRaw) ? Math.min(30, Math.max(1, rcRaw)) : 2;
+
   const direction = root.direction === 'in' ? 'in' : 'out';
   const endReasonRaw = typeof root.endReason === 'string' ? root.endReason.trim() : '';
   const endReason = SCENE_TEXT[endReasonRaw] ? endReasonRaw : 'hangup';
@@ -136,6 +150,7 @@ export async function POST(req: NextRequest) {
     connected,
     durationLabel,
     recentChat.length > 0,
+    maxCount,
     root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined
   );
   // 记忆 / 世界书 / 时间感知：前端组装注入（与通话轮次同一套来源，人设 > 世界书 > 记忆 > 时间）
@@ -162,7 +177,7 @@ export async function POST(req: NextRequest) {
   const fail = () => NextResponse.json({ messages: [] });
   const viaSdk = async (): Promise<NextResponse> => {
     try {
-      return NextResponse.json({ messages: normalizeFollowup(await sdkTurn(messages)), viaSdk: true });
+      return NextResponse.json({ messages: normalizeFollowup(await sdkTurn(messages), maxCount), viaSdk: true });
     } catch {
       return fail();
     }
@@ -180,9 +195,10 @@ export async function POST(req: NextRequest) {
   if (isPrivateHost(hostname)) {
     return NextResponse.json({ directOnly: true, messages });
   }
-  const result = await callUpstream(config, messages);
+  // 条数多时输出更长：抬高 max_tokens 下限，防止多条消息被截断（与聊天流 bus 同策略）
+  const result = await callUpstream({ ...config, maxTokens: Math.max(config.maxTokens, maxCount * 250) }, messages);
   if (result.reply) {
-    const parsed = normalizeFollowup(result.reply);
+    const parsed = normalizeFollowup(result.reply, maxCount);
     if (parsed.length > 0) return NextResponse.json({ messages: parsed });
   }
   // 上游故障 / 解析不出：内置模型兜底，再失败静默

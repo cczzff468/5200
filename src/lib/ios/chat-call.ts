@@ -64,6 +64,7 @@ import { requestAnswerDecision } from './call-decision';
 import { requestCallFollowup } from './call-followup';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds } from './global-call';
+import { getReplyCount } from '../reply-count';
 
 // ---------------- 类型 ----------------
 
@@ -398,8 +399,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   }, [chatLogToConvo]);
 
   /** 挂断后 AI 续聊（三端共用逻辑，挂断即触发）+ 记忆总结（一次提取「通话内容+续聊文字」）：
-   *  ① 接通后挂断（AI 主动挂断 / 用户挂断）→ 基于人设+通话内容+记忆+最近聊天生成 1~2 条文字，立刻发；
-   *  ② AI 打来的电话被拒/未接（direction in）、拨号被取消（direction out）→ 生成一条自然的反应消息；
+   *  ① 接通后挂断（AI 主动挂断 / 用户挂断）→ 基于人设+通话内容+记忆+最近聊天生成文字，立刻发
+   *     （条数上限 = 该会话聊天设置「回复条数」，没话可以少发）；
+   *  ② AI 打来的电话被拒/未接（direction in）、拨号被取消（direction out）→ 生成自然的反应消息；
    *  ③ 拨出去被 AI 拒接/未接（direction out 的 reject/no-answer）→ 接听决策 afterText 已覆盖，不重复发。
    *  续聊文字并入通话转写后交 summarizeCall 沉淀（同池互通、按联系人隔离）；请求失败也照常总结。 */
   const followupAndSummarize = useCallback(
@@ -446,6 +448,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             worldbookBlock: optsRef.current.worldbookBlock || undefined,
             timeBlock: optsRef.current.timeBlock || undefined,
             multiApp: optsRef.current.multiApp,
+            // 条数上限 = 该会话聊天设置「回复条数」（wx:<id> / qq:<id>，与文字聊天同一份设置）
+            replyCount: getReplyCount(`${optsRef.current.app}:${peer.id}`),
           });
         } catch {
           texts = []; // 续聊失败静默：不影响记忆总结

@@ -62,6 +62,7 @@ import {
 import { CHAT_CALL_EXTRA_RULES, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
+import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -1024,6 +1025,9 @@ function CallScreen({
             timeBlock: getTimeAware(`phone:${peerContact.id}`)
               ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: peerContact.region || null })
               : '',
+            // 条数上限 = 该联系人「信息」会话聊天设置里的回复条数（sms:c:<id>，与信息 App 同一份数据，
+            // 未设置时同信息 App 回退 1 条）；上限不是任务，没话可以少发
+            replyCount: getReplyCount(`sms:c:${peerContact.id}`, 1),
           });
         } catch {
           followupTexts = []; // 续聊失败静默：不影响记忆总结
