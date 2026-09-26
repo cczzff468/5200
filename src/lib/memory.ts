@@ -1527,6 +1527,7 @@ interface RawishMsg {
   text?: unknown;
   recalled?: unknown;
   error?: unknown;
+  loc?: unknown;
 }
 
 function cardLabel(kind: unknown): string | null {
@@ -1535,8 +1536,17 @@ function cardLabel(kind: unknown): string | null {
   if (kind === 'family') return '[亲属卡]';
   if (kind === 'image') return '[图片]';
   if (kind === 'sticker') return '[表情]';
-  if (kind === 'location') return '[位置]';
   return null;
+}
+
+/** 位置消息的记忆标签：带地点名/地址（提取器能记住“用户去过哪/在哪”，后续聊天可引用）；解析不出地名回退 [位置] */
+function locLabelOf(loc: unknown): string {
+  if (!loc || typeof loc !== 'object') return '[位置]';
+  const o = loc as { name?: unknown; address?: unknown; addr?: unknown };
+  const name = typeof o.name === 'string' ? o.name.trim() : '';
+  if (!name) return '[位置]（无法识别该位置）';
+  const addr = typeof o.address === 'string' ? o.address.trim() : typeof o.addr === 'string' ? o.addr.trim() : '';
+  return `[发送了位置「${name}」${addr && addr !== name ? `（${addr}）` : ''}]`;
 }
 
 /** 把任意 App 的消息数组整理成 {role, text} 问答对（撤回/失败/空消息剔除） */
@@ -1546,7 +1556,8 @@ export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn
     if (!raw || typeof raw !== 'object') continue;
     const m = raw as RawishMsg;
     if (m.recalled === true || m.error === true) continue;
-    const label = cardLabel(m.kind);
+    // 位置消息带地名进记忆（后续聊天可引用）；其余卡片类映射为短标签
+    const label = m.kind === 'location' ? locLabelOf(m.loc) : cardLabel(m.kind);
     const text =
       label ??
       ((typeof m.content === 'string' ? m.content.trim() : '') ||

@@ -64,10 +64,12 @@ export interface UseChatCallOptions {
   direction: 'out' | 'in';
   /** 进入通话时携带的最近聊天上下文（按 user/assistant 归并），AI 按人设与上下文应答 */
   initialHistory: ChatCallTurnMsg[];
-  /** 宿主组装的 system 附加块（记忆召回 / 社交动态 / 时间感知；发送时原样透传给 turn API） */
+  /** 宿主组装的 system 附加块（记忆召回 / 社交动态 / 时间感知 / 位置感知；发送时原样透传给 turn API） */
   memoryBlock?: string;
   momentsBlock?: string;
   timeBlock?: string;
+  /** 位置感知块（与文字聊天同一套 buildLocationBlock）：通话里 AI 知道“用户在哪” */
+  locBlock?: string;
   /** 跨 App 身份感知互通开关（宿主按联系人读 getMemSettings；undefined = 不注入） */
   multiApp?: boolean;
   /** 通话结束（恰好一次） */
@@ -186,7 +188,7 @@ export interface ChatCallApi {
 }
 
 export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
-  const { app, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd } = opts;
+  const { app, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd } = opts;
 
   const [phase, setPhase] = useState<ChatCallPhase>(direction === 'in' ? 'incoming' : 'dialing');
   const [status, setStatus] = useState<ChatCallStatus>('connecting');
@@ -210,13 +212,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const busyRef = useRef(false); // STT/turn/TTS 循环进行中
   const historyRef = useRef<ChatCallTurnMsg[]>(initialHistory.slice(-16));
   const onEndRef = useRef(onEnd);
-  const optsRef = useRef({ app, contact, memoryBlock, momentsBlock, timeBlock, multiApp });
+  const optsRef = useRef({ app, contact, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp });
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
   useEffect(() => {
     onEndRef.current = onEnd;
-    optsRef.current = { app, contact, memoryBlock, momentsBlock, timeBlock, multiApp };
+    optsRef.current = { app, contact, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp };
   });
 
   /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果 */
@@ -319,6 +321,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             memoryBlock: optsRef.current.memoryBlock || undefined,
             momentsBlock: optsRef.current.momentsBlock || undefined,
             timeBlock: optsRef.current.timeBlock || undefined,
+            locBlock: optsRef.current.locBlock || undefined,
             multiApp: optsRef.current.multiApp,
             extraRules: CHAT_CALL_EXTRA_RULES,
             config: useSettings.getState().apiConfig,

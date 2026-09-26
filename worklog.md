@@ -7413,3 +7413,23 @@ Work Log:
 
 Stage Summary:
 - 三大需求全部实机验证通过：①通话卡片修复（宽度塌陷根因）+任意卡片点击回拨 ②拆条「最多N条+尽量发满+不能只发1条+递进不重复」双层保障（提示词区间+分段器兜底） ③全局通话小窗（左上角缩小/全局不断/点按回页/拖动/边缘吸附隐藏/边缘展开）
+
+---
+Task ID: 4
+Agent: Z.ai Code (main)
+Task: 通话小窗三处调优（贴边不自动隐藏/往里划才隐藏/圆角/尺寸）+ 位置消息 AI 感知全链路修复（地点名/经纬度/时间注入 system、记忆、通话、单聊群聊五端）
+
+Work Log:
+- 新建 src/lib/ios/chat-location.ts（五端共用）：locDataOf（兼容 wx address/qq addr 字段与「lat,lng」坐标串兜底解析）、locationAiText（历史可读文本「[位置]「公园」（地址）（经纬度 121.4,31.2），发送于 10:34」；地点名解析失败→「[位置]（无法识别该位置）」）、buildLocationBlock（system 注入块：回看最近 40 条找最新位置消息，告知 AI「这就是对方所在位置，问起时直接说出地点名」；无名→明确要求诚实说无法识别、禁止编造；全 try/catch 不阻断发送）、locFromRich（AI 标记 [位置:名:坐标或地址] → 结构化位置数据）
+- 根因修复（用户截图问题）：微信/QQ 单聊 runAiTurn 的历史过滤白名单不含 location 且位置消息 content 为空串 → 位置消息被整体丢出 AI 上下文；两端补 `m.kind === 'location'` 白名单 + locationAiText 映射分支 + systemFull 注入 locBlock + memContext/wbScanText 扫描文本升级（scanTextOf：语音取转写、位置取完整位置文本）
+- 群聊两端（wx-group/qq-group）：msgTextOf 位置分支升级为 locationAiText（补时间/经纬度）；runCharTurn systemFull 注入 buildLocationBlock(ctxMsgs)（带成员 senderName 感知谁发的位置）；AI 富标记位置落盘走 locFromRich（坐标串解析为经纬度）
+- 位置数据结构升级（四端 loc 类型 + 预设地点 + 持久化规范化保留 lat/lng）：wechat WX_LOCATIONS 6 地点、qq LOC_PRESETS 7 地点补真实经纬度；发送位置/自定义位置/联系人位置页 onSend 穿线 coords；wechat loadMsgs 位置规范化补 lat/lng 保留（旧记录兼容）；groups.ts WxGroupMsg.loc 类型+normalizeMsg 规范化保留经纬度；qq-group 单聊克隆/群富标记转换保留 lat/lng
+- 通话链路共用同一套注入：openVoiceCall（wx/qq）历史快照放行 location 消息（locationAiText 映射）+ GlobalCallSession/VoiceCallScreen/useChatCall 新增 locBlock 字段穿线 → /api/phone/turn 请求体新增 locBlock → route 并入 systemFull（语音回复与文字回复共用 buildLocationBlock）
+- 记忆参与：memory.ts memConvoFromRaw 位置消息由「[位置]」升级为「[发送了位置「公园」（地址）]」（locLabelOf；无名→[位置]（无法识别该位置）），后续聊天可被召回引用（实测 /api/memory/extract 正常提取）
+- 小窗调优（GlobalCallLayer）：①删除「拖到边缘≤36px 松手即吸附」逻辑，改为拖动中「顶住边缘往里推 ≥26px（EDGE_PUSH）」才吸附隐藏（主动手势），贴边松手小窗照常显示 ②圆角 20→12 ③尺寸缩小：86×98(wx)/128(qq) → 72×82/106，图标/字号/底部栏/边缘条同步缩放
+- 校验：bunx tsc --noEmit 0 错误；bunx eslint 全部改动文件 0 错误
+- E2E（agent-browser 实机，自建联系人+微信/QQ 双端登录实测）：①微信：发位置「西湖风景区」（预设带经纬度）→ 问「你知道我现在在哪吗，具体说说」→ AI 答复「哦，你在西湖风景区啊，龙井路1号那边」——直接说出地点名与地址，不再装糊涂 ②QQ：发位置「三里屯太古里」（预设带经纬度）→ 同问 → AI 答复「我知道啊，你在三里屯太古里呢，北京市朝阳区三里屯路19号」并自然续聊拆条 3 条（递进不重复、非空凑数）③IDB 落盘检查：loc 消息含 {name, address, lat:30.2429, lng:120.1476}，刷新后位置卡片/通话卡片仍在（持久化）④小窗手势全链路：小窗化→拖到边缘松手=保持显示（不再误隐藏）→顶边往里推=吸附只露边缘条→点边缘=恢复小窗→点小窗=回全屏（时长持续走、电话不断）⑤通话结束「通话时长 02:09」卡片正常落盘 ⑥dev.log 无错误（502→200 为内置模型降级设计行为）、浏览器 console 无错误
+
+Stage Summary:
+- 位置消息从「AI 只看到这是位置消息」修复为「AI 完整知道用户在哪」：地点名/地址/经纬度/发送时间随消息落盘，五端（微信/QQ 单聊+群聊、语音通话）共用 chat-location.ts 一套注入，AI 被问「我在哪」直接说出地点名；地点名解析失败时诚实说「无法识别该位置」不编造；位置消息参与记忆提取与召回；重启后保留
+- 小窗交互对照用户反馈完成三处调优：贴边松手不隐藏、往边缘里划才隐藏（26px 阈值防误触）、圆角 12px、整体缩小（72 宽）

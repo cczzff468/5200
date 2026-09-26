@@ -206,6 +206,7 @@ import {
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall } from '@/lib/ios/global-call';
+import { buildLocationBlock, locationAiText, locDataOf, locFromRich, type ChatLocData } from '@/lib/ios/chat-location';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
 
@@ -301,7 +302,7 @@ interface WxMsg {
   notice?: WxNoticeData;
   fam?: WxFamData;
   img?: { src: string };
-  loc?: { name: string; address: string };
+  loc?: { name: string; address: string; lat?: number; lng?: number };
   /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示 */
   sys?: { text: string };
   /** 申请解除拉黑卡片数据（kind = 'blockreq' 时有值）：status pending=待处理 accepted=已同意 rejected=已拒绝 */
@@ -498,7 +499,9 @@ function loadMsgs(contactId: string): WxMsg[] {
           };
         }
         if (m.kind === 'location' && m.loc && typeof m.loc.name === 'string') {
-          return { ...m, loc: { name: m.loc.name, address: typeof m.loc.address === 'string' ? m.loc.address : '' } };
+          // 位置消息规范化：保留地点名/地址/经纬度（旧记录无经纬度字段时照常兼容）
+          const locD = locDataOf(m.loc);
+          return { ...m, loc: { name: m.loc.name, address: typeof m.loc.address === 'string' ? m.loc.address : '', lat: locD.lat, lng: locD.lng } };
         }
         if (m.kind === 'sticker' && m.stk && typeof m.stk.url === 'string') {
           return { ...m, stk: { url: m.stk.url, meaning: typeof m.stk.meaning === 'string' ? m.stk.meaning : '' } };
@@ -932,8 +935,10 @@ function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
           used: 0,
         },
       };
-    case 'location':
-      return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: rich.name, address: rich.coords || '地图上的一个位置' } };
+    case 'location': {
+      const d = locFromRich(rich.name, rich.coords);
+      return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: d.name, address: d.address || '地图上的一个位置', lat: d.lat, lng: d.lng } };
+    }
     case 'sticker': {
       // parseRichParts 已保证 ID/意思能匹配上；取不到时兜底为文字
       const s = loadStickers('wx').find((x) => x.id === rich.stickerId);
@@ -1453,14 +1458,14 @@ function LoginScreen({ onLogin }: { onLogin: (u: WxUser) => void }) {
 
 // ---------------- 位置 + 亲属卡聊天卡片 ----------------
 
-/** 位置页内置地点（点击直接发送位置卡片） */
-const WX_LOCATIONS: Array<{ name: string; address: string }> = [
-  { name: '广州塔', address: '广东省广州市海珠区阅江西路222号' },
-  { name: '天安门广场', address: '北京市东城区东长安街' },
-  { name: '外滩', address: '上海市黄浦区中山东一路' },
-  { name: '深圳湾公园', address: '广东省深圳市南山区滨海大道' },
-  { name: '西湖风景区', address: '浙江省杭州市西湖区龙井路1号' },
-  { name: '春熙路', address: '四川省成都市锦江区' },
+/** 位置页内置地点（点击直接发送位置卡片；经纬度随消息落盘，AI 可读到“用户在哪”） */
+const WX_LOCATIONS: Array<ChatLocData> = [
+  { name: '广州塔', address: '广东省广州市海珠区阅江西路222号', lat: 23.1066, lng: 113.3245 },
+  { name: '天安门广场', address: '北京市东城区东长安街', lat: 39.9032, lng: 116.3916 },
+  { name: '外滩', address: '上海市黄浦区中山东一路', lat: 31.2336, lng: 121.4903 },
+  { name: '深圳湾公园', address: '广东省深圳市南山区滨海大道', lat: 22.5178, lng: 113.9367 },
+  { name: '西湖风景区', address: '浙江省杭州市西湖区龙井路1号', lat: 30.2429, lng: 120.1476 },
+  { name: '春熙路', address: '四川省成都市锦江区', lat: 30.657, lng: 104.081 },
 ];
 
 /** 简易地图艺术块（位置卡片 / 位置页 / 位置详情复用：米色底 + 道路线网 + 绿地水域 + 红色定位针） */
@@ -1578,7 +1583,7 @@ export function LocationPickerPage({
   onToast,
 }: {
   onClose: () => void;
-  onSend: (name: string, address: string) => void;
+  onSend: (name: string, address: string, coords?: { lat?: number; lng?: number }) => void;
   onToast: (m: string) => void;
 }) {
   const [custom, setCustom] = useState(false);
@@ -1640,7 +1645,7 @@ export function LocationPickerPage({
                 key={l.name}
                 type="button"
                 data-testid={`wx-loc-item-${i}`}
-                onClick={() => onSend(l.name, l.address)}
+                onClick={() => onSend(l.name, l.address, { lat: l.lat, lng: l.lng })}
                 className={`flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
                   i > 0 ? 'border-t border-black/[0.05] dark:border-white/[0.07]' : ''
                 }`}
@@ -3932,11 +3937,17 @@ function ChatPage({
     (direction: 'out' | 'in') => {
       const base = msgs;
       const history: ChatCallTurnMsg[] = base
-        .filter((m) => !m.recalled && m.content.trim().length > 0 && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+        .filter((m) => !m.recalled && (m.content.trim().length > 0 || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
         .slice(-8)
         .map((m) => ({
           role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
-          content: m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content,
+          // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间），通话里问“我在哪”AI 也能答
+          content:
+            m.kind === 'voice'
+              ? m.voice?.transcript || m.voice?.localText || '[语音]'
+              : m.kind === 'location'
+                ? locationAiText(m.loc, m.time)
+                : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
       startGlobalCall({
@@ -3951,6 +3962,8 @@ function ChatPage({
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
+        // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”
+        locBlock: buildLocationBlock(base, { userLabel: me.name }) || undefined,
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
       });
@@ -3968,8 +3981,8 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          // 图片以 [图片] 占位、语音以转写文本/占位进入历史（本轮图片实际内容由识图模型描述追加在末尾）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -3995,6 +4008,9 @@ function ChatPage({
             : m.kind === 'voice'
             ? // 语音消息：AI 直接读转写文本（自然对话）；未识别时读本地原文（AI 语音/文字转语音），再退回占位
               m.voice?.transcript || m.voice?.localText || '[语音]'
+            : m.kind === 'location'
+            ? // 位置消息：AI 读到完整位置文本（名称/地址/经纬度/发送时间），问“我在哪”能直接答出地点名
+              locationAiText(m.loc, m.time)
             : m.kind === 'sticker' && m.stk
             ? m.role === 'me'
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
@@ -4039,7 +4055,14 @@ function ChatPage({
     const socialRules = buildGroupSocialRules(peer, 'wx', contacts, meAddrName);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
-    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]
+    // 扫描文本口径：语音取转写、位置取完整位置文本（名称/地址/经纬度/时间），位置消息也能参与记忆召回
+    const scanTextOf = (m: WxMsg): string =>
+      m.kind === 'voice'
+        ? m.voice?.transcript || ''
+        : m.kind === 'location'
+          ? locationAiText(m.loc, m.time)
+          : m.content;
+    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按群级互通开关判断可见性
@@ -4063,7 +4086,10 @@ function ChatPage({
     // 世界书：扫描「最新用户消息 + 最近 8 条上下文」，命中触发词的条目按插入位置分组注入
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则）
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]));
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]));
+    // 位置感知：用户最近发过的位置消息（名称/地址/经纬度/发送时间）注入 system——
+    // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造
+    const locBlock = buildLocationBlock(base, { userLabel: meAddrName });
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，
     // 不拦截消息——角色仍可发消息，但要按人设表现出被拉黑/已拉黑的态度，并可输出对应标记）
     const blkBlock = buildBlockPromptBlock('wx', peer.id, me.name);
@@ -4072,6 +4098,7 @@ function ChatPage({
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
       memoryBlock,
       momentsBlock,
+      locBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
@@ -5108,10 +5135,10 @@ function ChatPage({
     }
   };
 
-  /** 发送位置卡片消息（内置地点 / 自定义位置） */
-  const sendLocation = (name: string, address: string) => {
+  /** 发送位置卡片消息（内置地点 / 自定义位置；经纬度随消息落盘供 AI 感知“用户在哪”） */
+  const sendLocation = (name: string, address: string, coords?: { lat?: number; lng?: number }) => {
     setPlusOpen(false);
-    setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'location', loc: { name, address } }]);
+    setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'location', loc: { name, address, lat: coords?.lat, lng: coords?.lng } }]);
     setCompose(null);
   };
 

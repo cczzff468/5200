@@ -142,6 +142,7 @@ import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubbl
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall } from '@/lib/ios/global-call';
+import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
@@ -319,10 +320,12 @@ interface QQNoticeData {
   accent: string;
 }
 
-/** 位置消息：名称 + 详细地址 */
+/** 位置消息：名称 + 详细地址 + 经纬度（AI 可读到“用户在哪”；旧记录无经纬度字段照常兼容） */
 interface MsgLoc {
   name: string;
   addr: string;
+  lat?: number;
+  lng?: number;
 }
 
 /** 亲属卡消息数据（AI 赠送；领取后 claimed=true；被收卡方退还后 rejected=true） */
@@ -426,8 +429,10 @@ function richToQqMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
           claimed: false,
         },
       };
-    case 'location':
-      return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: rich.name, addr: rich.coords || '地图上的一个位置' } };
+    case 'location': {
+      const d = locFromRich(rich.name, rich.coords);
+      return { id, role: 'peer', content: '[位置]', time, kind: 'location', loc: { name: d.name, addr: d.address || '地图上的一个位置', lat: d.lat, lng: d.lng } };
+    }
     case 'sticker': {
       // parseRichParts 已保证 ID/意思能匹配上；取不到时兑底为文字
       const s = loadStickers('qq').find((x) => x.id === rich.stickerId);
@@ -2594,11 +2599,17 @@ function ChatPage({
     (direction: 'out' | 'in') => {
       const base = msgs;
       const history: ChatCallTurnMsg[] = base
-        .filter((m) => !m.recalled && m.content.trim().length > 0 && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+        .filter((m) => !m.recalled && (m.content.trim().length > 0 || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
         .slice(-8)
         .map((m) => ({
           role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
-          content: m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content,
+          // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间），通话里问“我在哪”AI 也能答
+          content:
+            m.kind === 'voice'
+              ? m.voice?.transcript || m.voice?.localText || '[语音]'
+              : m.kind === 'location'
+                ? locationAiText(m.loc, m.time)
+                : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
       startGlobalCall({
@@ -2613,6 +2624,8 @@ function ChatPage({
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
+        // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”
+        locBlock: buildLocationBlock(base, { userLabel: me.name }) || undefined,
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
       });
@@ -2630,11 +2643,11 @@ function ChatPage({
     addBondPoints(peer.id, BOND_MSG_POINTS);
     const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
     // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
-    // 图片消息以 [图片] 占位进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
+    // 图片消息以 [图片] 占位、位置以完整位置文本进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -2664,6 +2677,9 @@ function ChatPage({
             : m.kind === 'voice'
             ? // 语音消息：AI 直接读转写文本（自然对话；AI 语音消息的朗读原文同源兑底）；识别失败/未识别时用占位
               m.voice?.transcript || m.voice?.localText || '[语音]'
+            : m.kind === 'location'
+            ? // 位置消息：AI 读到完整位置文本（名称/地址/经纬度/发送时间），问“我在哪”能直接答出地点名
+              locationAiText(m.loc, m.time)
             : m.kind === 'redpacket' && m.packet
               ? `[红包 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount} "${m.packet.note}"，${cardStateLabel(m)}]`
               : m.kind === 'transfer' && m.packet
@@ -2702,8 +2718,16 @@ function ChatPage({
     const socialRules = buildGroupSocialRules(peer, 'qq', contacts, meAddrName);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入；
-    // 图片消息以 [图片] 占位、语音消息以转写文本进上下文（防止 dataURL 大字符串进入记忆提取）
-    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'image' ? '[图片]' : m.content))]
+    // 图片消息以 [图片] 占位、语音消息以转写文本、位置以完整位置文本进上下文（防止 dataURL 大字符串进入记忆提取）
+    const scanTextOf = (m: QQMsg): string =>
+      m.kind === 'voice'
+        ? m.voice?.transcript || ''
+        : m.kind === 'image'
+          ? '[图片]'
+          : m.kind === 'location'
+            ? locationAiText(m.loc, m.time)
+            : m.content;
+    const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
     // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按群级互通开关判断可见性
@@ -2728,7 +2752,10 @@ function ChatPage({
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则；
     // 图片消息以 [图片] 占位、语音消息以转写文本参与，防 dataURL 进入触发词扫描）
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'image' ? '[图片]' : m.content))]));
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]));
+    // 位置感知：用户最近发过的位置消息（名称/地址/经纬度/发送时间）注入 system——
+    // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造
+    const locBlock = buildLocationBlock(base, { userLabel: meAddrName });
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，
     // 不拦截消息——角色仍可发消息，但要按人设表现出被拉黑/已拉黑的态度，并可输出对应标记）
     const blkBlock = buildBlockPromptBlock('qq', peer.id, me.name);
@@ -2737,6 +2764,7 @@ function ChatPage({
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
       memoryBlock,
       momentsBlock,
+      locBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
@@ -5965,14 +5993,14 @@ export function LocationBubble({ loc, onClick }: { loc: MsgLoc; onClick: () => v
 }
 
 /** 内置常用位置（发送位置页；与用户资料地域杭州呼应） */
-const LOC_PRESETS: Array<{ name: string; addr: string; dist: string }> = [
-  { name: '东方通信大厦', addr: '浙江省杭州市西湖区文三路398号', dist: '172米' },
-  { name: '西湖风景名胜区', addr: '浙江省杭州市西湖区龙井路1号', dist: '3.6公里' },
-  { name: '湖滨银泰in77', addr: '浙江省杭州市上城区延安路98号', dist: '5.4公里' },
-  { name: '钱江新城城市阳台', addr: '浙江省杭州市上城区之江路888号', dist: '8.2公里' },
-  { name: '滨江宝龙城', addr: '浙江省杭州市滨江区滨盛路3822号', dist: '9.8公里' },
-  { name: '三里屯太古里', addr: '北京市朝阳区三里屯路19号', dist: '1200公里' },
-  { name: '陆家嘴环球金融中心', addr: '上海市浦东新区世纪大道100号', dist: '1640公里' },
+const LOC_PRESETS: Array<{ name: string; addr: string; lat?: number; lng?: number; dist: string }> = [
+  { name: '东方通信大厦', addr: '浙江省杭州市西湖区文三路398号', lat: 30.2787, lng: 120.1244, dist: '172米' },
+  { name: '西湖风景名胜区', addr: '浙江省杭州市西湖区龙井路1号', lat: 30.2429, lng: 120.1476, dist: '3.6公里' },
+  { name: '湖滨银泰in77', addr: '浙江省杭州市上城区延安路98号', lat: 30.253, lng: 120.163, dist: '5.4公里' },
+  { name: '钱江新城城市阳台', addr: '浙江省杭州市上城区之江路888号', lat: 30.248, lng: 120.214, dist: '8.2公里' },
+  { name: '滨江宝龙城', addr: '浙江省杭州市滨江区滨盛路3822号', lat: 30.185, lng: 120.195, dist: '9.8公里' },
+  { name: '三里屯太古里', addr: '北京市朝阳区三里屯路19号', lat: 39.9368, lng: 116.4472, dist: '1200公里' },
+  { name: '陆家嘴环球金融中心', addr: '上海市浦东新区世纪大道100号', lat: 31.2354, lng: 121.5057, dist: '1640公里' },
 ];
 
 /** 发送位置页（内置地点一键发送 + 自定义位置表单，发送后聊天内出现位置卡片；单聊/群聊共用） */
@@ -6050,7 +6078,7 @@ export function LocationPickerPage({ onClose, onSend }: { onClose: () => void; o
                   key={l.name}
                   type="button"
                   data-testid={`qq-loc-item-${i}`}
-                  onClick={() => onSend({ name: l.name, addr: l.addr })}
+                  onClick={() => onSend({ name: l.name, addr: l.addr, lat: l.lat, lng: l.lng })}
                   className={`flex min-h-[60px] w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05] ${i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.06]' : ''}`}
                 >
                   <span className="min-w-0 flex-1">

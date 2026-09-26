@@ -427,7 +427,9 @@ export async function POST(req: NextRequest) {
   const momentsBlock = typeof root.momentsBlock === 'string' ? root.momentsBlock.trim() : '';
   // 时间感知块：前端按联系人开关现场构建（当前时间/季节/节日/事件时长/上次聊天间隔），附加在记忆之后
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
-  const systemFull = [system, memoryBlock, momentsBlock, timeBlock].filter(Boolean).join('\n\n');
+  // 位置感知块：前端与文字聊天同一套 buildLocationBlock（用户最近发过的位置：名称/地址/经纬度/时间）
+  const locBlock = typeof root.locBlock === 'string' ? root.locBlock.trim() : '';
+  const systemFull = [system, memoryBlock, momentsBlock, timeBlock, locBlock].filter(Boolean).join('\n\n');
 
   // 上游要求 messages 必须以 user 消息收尾：
   // - 普通轮次：历史本身以用户刚说的话收尾，直接透传；

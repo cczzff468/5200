@@ -7,8 +7,9 @@
  *   通话引擎（useChatCall）生命周期与 App 切换完全解耦 —— 退出聊天页 / 打开别的 App 电话不断；
  * - 悬浮小窗（z-[64]，对照用户截图）：微信 = 白色圆角卡 + 绿色电话图标 + 绿色时长；
  *   QQ = 白色圆角卡 + 蓝色带波电话图标 + 蓝色时长 + 底部麦克风/摄像头灰色图标条。
- *   点小窗回全屏通话页；可拖动；拖到屏幕左右边缘自动吸附，只露一条边缘；
- * - 边缘条：小窗被吸附到边缘后只显示一个边缘，点边缘恢复完整小窗（再次点小窗进全屏）。
+ *   点小窗回全屏通话页；可拖动；把小窗顶着左右边缘往里划（越过边缘再推进）才吸附隐藏，
+ *   只露一条边缘；拖到边缘松手不隐藏，小窗停在边缘处照常显示；
+ * - 边缘条：小窗被「往边缘里划」吸附后只显示一个边缘，点边缘恢复完整小窗（再次点小窗进全屏）。
  *   小窗未初始化位置时先隐藏一帧，由布局 effect 按壳尺寸摆到右上角。
  */
 
@@ -24,11 +25,14 @@ const VoiceCallScreen = dynamic(
   { ssr: false },
 );
 
-/** 小窗宽度（两皮肤一致）；高度：微信 98 / QQ 128（多一条底部图标栏） */
-const PIP_W = 86;
-const pipHeightOf = (variant: 'wx' | 'qq'): number => (variant === 'qq' ? 128 : 98);
-/** 拖到距左右边缘 ≤该像素时吸附隐藏 */
-const DOCK_THRESHOLD = 36;
+/** 小窗宽度（两皮肤一致）；高度：微信 82 / QQ 106（多一条底部图标栏） */
+const PIP_W = 72;
+const PIP_RADIUS = 12;
+const pipHeightOf = (variant: 'wx' | 'qq'): number => (variant === 'qq' ? 106 : 82);
+/** 往边缘里面划：拖动中越过边缘再往里推 ≥该像素 → 吸附隐藏（只露一条边缘）。
+ *  注意：只是拖到边缘松手不会隐藏，必须是「顶着边缘往里划」这个主动手势；
+ *  阈值给足余量，避免贴边拖动时的轻微越界被误判成往里划 */
+const EDGE_PUSH = 26;
 /** 小窗纵向活动范围上界（避开状态栏）/ 下界（避开底部横杠） */
 const PIP_TOP_MIN = 58;
 
@@ -87,6 +91,7 @@ export default function GlobalCallLayer() {
           memoryBlock={session.memoryBlock}
           momentsBlock={session.momentsBlock}
           timeBlock={session.timeBlock}
+          locBlock={session.locBlock}
           multiApp={session.multiApp}
           onMinimize={() => useGlobalCall.getState().minimize()}
           onMessageReply={variant === 'qq' ? () => undefined : undefined}
@@ -127,6 +132,16 @@ function CallPipWindow({
   /** 拖拽状态：起点 + 小窗原始位置 + 是否移动过（区分点击与拖动） */
   const drag = useRef<{ pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
 
+  /** 结束拖拽（释放指针捕获 + 清拖拽态）；吸附隐藏时与 pointerUp 共用 */
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // 已释放
+    }
+    drag.current = null;
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (drag.current || !pos) return;
     drag.current = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y, moved: false };
@@ -139,29 +154,32 @@ function CallPipWindow({
     const dy = e.clientY - d.sy;
     if (!d.moved && Math.hypot(dx, dy) < 6) return; // 位移过小 = 点击
     d.moved = true;
-    setPipPos(clampPipPos(rootRef.current, d.ox + dx, d.oy + dy, pipH));
+    // 往边缘里面划（顶着边缘继续往里推）→ 吸附隐藏，只露一条边缘；
+    // 只是拖到边缘松手不会隐藏，小窗停在边缘处照常显示
+    const w = rootRef.current?.clientWidth ?? 390;
+    const rawX = d.ox + dx;
+    if (rawX < -EDGE_PUSH) {
+      endDrag(e);
+      dock('left');
+      return;
+    }
+    if (rawX + PIP_W > w + EDGE_PUSH) {
+      endDrag(e);
+      dock('right');
+      return;
+    }
+    setPipPos(clampPipPos(rootRef.current, rawX, d.oy + dy, pipH));
   };
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d || e.pointerId !== d.pid) return;
-    drag.current = null;
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // 已释放
-    }
+    endDrag(e);
     if (!d.moved) {
       // 点小窗 → 进入打电话界面
       expand();
       return;
     }
-    // 拖到边缘（往边缘里划）→ 吸附：只显示一个边缘
-    const w = rootRef.current?.clientWidth ?? 390;
-    const p = useGlobalCall.getState().pipPos;
-    if (p) {
-      if (p.x <= DOCK_THRESHOLD) dock('left');
-      else if (w - (p.x + PIP_W) <= DOCK_THRESHOLD) dock('right');
-    }
+    // 松手不做任何吸附：拖到边缘松手 = 小窗停在边缘处继续显示
   };
 
   if (!pos) return null; // 等待布局 effect 初始化位置（渲染一帧空层）
@@ -172,7 +190,7 @@ function CallPipWindow({
       aria-label={`语音通话进行中 ${formatCallDuration(seconds)}，点击回到通话界面`}
       data-testid={`${variant}-call-pip`}
       className="pointer-events-auto absolute z-[64] cursor-pointer select-none overflow-hidden bg-white shadow-[0_12px_32px_rgba(0,0,0,0.24)] transition-opacity active:opacity-90"
-      style={{ left: pos.x, top: pos.y, width: PIP_W, height: pipH, borderRadius: 20, touchAction: 'none' }}
+      style={{ left: pos.x, top: pos.y, width: PIP_W, height: pipH, borderRadius: PIP_RADIUS, touchAction: 'none' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -182,21 +200,21 @@ function CallPipWindow({
       {isQQ ? (
         <div className="flex h-full flex-col">
           <div className="flex flex-1 flex-col items-center justify-center gap-1">
-            <PhoneCall className="h-[30px] w-[30px] text-[#0099FF]" strokeWidth={2.1} aria-hidden="true" />
-            <span className="text-[18px] font-medium leading-none tabular-nums text-[#0099FF]" data-testid="qq-pip-duration">
+            <PhoneCall className="h-[25px] w-[25px] text-[#0099FF]" strokeWidth={2.1} aria-hidden="true" />
+            <span className="text-[15px] font-medium leading-none tabular-nums text-[#0099FF]" data-testid="qq-pip-duration">
               {formatCallDuration(seconds)}
             </span>
           </div>
           {/* 底部图标条（对照截图：灰色麦克风静音 / 摄像头关闭） */}
-          <div className="flex h-[32px] items-center justify-around border-t border-black/[0.06] bg-black/[0.035]">
-            <MicOff className="h-[15px] w-[15px] text-black/25" strokeWidth={2} aria-hidden="true" />
-            <VideoOff className="h-[15px] w-[15px] text-black/25" strokeWidth={2} aria-hidden="true" />
+          <div className="flex h-[26px] items-center justify-around border-t border-black/[0.06] bg-black/[0.035]">
+            <MicOff className="h-[12px] w-[12px] text-black/25" strokeWidth={2} aria-hidden="true" />
+            <VideoOff className="h-[12px] w-[12px] text-black/25" strokeWidth={2} aria-hidden="true" />
           </div>
         </div>
       ) : (
-        <div className="flex h-full flex-col items-center justify-center gap-1.5">
-          <Phone className="h-[30px] w-[30px] text-[#07C160]" strokeWidth={0} fill="currentColor" aria-hidden="true" />
-          <span className="text-[18px] font-medium leading-none tabular-nums text-[#07C160]" data-testid="wx-pip-duration">
+        <div className="flex h-full flex-col items-center justify-center gap-1">
+          <Phone className="h-[25px] w-[25px] text-[#07C160]" strokeWidth={0} fill="currentColor" aria-hidden="true" />
+          <span className="text-[15px] font-medium leading-none tabular-nums text-[#07C160]" data-testid="wx-pip-duration">
             {formatCallDuration(seconds)}
           </span>
         </div>
@@ -222,7 +240,7 @@ function CallPipEdge() {
       className={`pointer-events-auto absolute z-[64] w-[7px] bg-white/90 ring-1 ring-black/15 shadow-[0_2px_12px_rgba(0,0,0,0.25)] transition-opacity active:opacity-70 ${
         side === 'left' ? 'left-0 rounded-r-full' : 'right-0 rounded-l-full'
       }`}
-      style={{ top, height: 64 }}
+      style={{ top, height: 56 }}
     />
   );
 }

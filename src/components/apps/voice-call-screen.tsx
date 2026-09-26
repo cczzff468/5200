@@ -53,6 +53,8 @@ export interface VoiceCallScreenProps {
   memoryBlock?: string;
   momentsBlock?: string;
   timeBlock?: string;
+  /** 位置感知块（与文字聊天同一套 buildLocationBlock）：通话里 AI 知道“用户在哪” */
+  locBlock?: string;
   multiApp?: boolean;
   /** 通话结束（恰好一次）：宿主生成通话卡片并关闭浮层 */
   onEnd: (r: ChatCallResult) => void;
@@ -144,8 +146,8 @@ function statusLine(
 
 // ---------------- 微信皮肤 ----------------
 
-function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
-  const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd });
+function WxCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize }: VoiceCallScreenProps) {
+  const call = useChatCall({ app: 'wx', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
 
   // 长按麦克风 = 静音切换；点按 = 说话/发送
@@ -295,8 +297,8 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
 // ---------------- QQ 皮肤 ----------------
 
-function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
-  const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, multiApp, onEnd });
+function QqCallScreen({ name, avatar, contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onMinimize, onMessageReply }: VoiceCallScreenProps) {
+  const call = useChatCall({ app: 'qq', contact, direction, initialHistory, memoryBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd });
   const { phase, status, seconds, recording, muted, speakerOn, error, caption } = call;
 
   // 长按麦克风 = 静音切换（原三条横杠菜单里的静音入口移到长按手势）；点按 = 说话/发送

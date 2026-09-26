@@ -163,6 +163,7 @@ import { wxUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
+import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -330,7 +331,7 @@ export interface WxSingleMsgShape {
   time: number;
   kind?: 'text' | 'image' | 'sticker' | 'location' | 'forward';
   img?: { src: string };
-  loc?: { name: string; address: string };
+  loc?: { name: string; address: string; lat?: number; lng?: number };
   stk?: { url: string; meaning: string };
   quote?: { name: string; content: string };
   fwd?: { from: string; merged?: boolean; title?: string; records?: GroupFwdRecord[] };
@@ -2651,7 +2652,7 @@ export function WxGroupChatPage({
         ? `[发送了表情：${m.stk.meaning || '无描述'}]`
         : `[表情]${m.stk.meaning ? ` ${m.stk.meaning}` : ''}`;
     }
-    if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`;
+    if (m.kind === 'location' && m.loc) return locationAiText(m.loc, m.time);
     if (m.kind === 'redpacket' && m.rp) {
       const rp = m.rp;
       return `[红包 ID:${rp.cid ?? m.id} ¥${rp.amount}${rp.count > 1 ? `x${rp.count}` : ''} "${rp.blessing}"，${groupRpStateLabel(rp)}]`;
@@ -2832,6 +2833,9 @@ export function WxGroupChatPage({
           interopOn: effectiveInterop,
         });
         const wbBlocks = collectWbBlocks(char.id, wbScanText([lastUserText, memContext]));
+        // 位置感知：群里最近发过的位置消息（谁发的/名称/地址/经纬度/发送时间）注入 system，
+        // 成员被问“我在哪”时直接说出地点名；解析失败时诚实说无法识别，不编造
+        const locBlock = buildLocationBlock(ctxMsgs);
         const timeBlock = getTimeAware(sKey)
           ? buildTimeAwareBlock({ lastMsgTime: ctxMsgs[ctxMsgs.length - 1]?.time ?? null, regionHint: char.region })
           : '';
@@ -2839,6 +2843,7 @@ export function WxGroupChatPage({
           wbBlocks.beforeSystem,
           [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
           memoryBlock,
+          locBlock,
           timeBlock,
           wbBlocks.afterSystem,
           wbRulesBlock(wbBlocks),
@@ -3007,7 +3012,8 @@ export function WxGroupChatPage({
                     moneySentThisTurn = true;
                     aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
                   } else if (p.rich.kind === 'location') {
-                    // 位置卡片（与用户手动发送同款渲染，全群可见）
+                    // 位置卡片（与用户手动发送同款渲染，全群可见；坐标串解析为经纬度）
+                    const locD = locFromRich(p.rich.name, p.rich.coords);
                     all.push({
                       id,
                       role: 'peer',
@@ -3016,7 +3022,7 @@ export function WxGroupChatPage({
                       content: '',
                       time: t,
                       kind: 'location',
-                      loc: { name: p.rich.name, address: p.rich.coords || '地图上的一个位置' },
+                      loc: { name: locD.name, address: locD.address || '地图上的一个位置', lat: locD.lat, lng: locD.lng },
                     });
                   } else if (p.rich.kind === 'sticker') {
                     // 表情包（从用户收藏清单按 ID 匹配；找不到时回退显示文字）
@@ -3398,7 +3404,7 @@ export function WxGroupChatPage({
   };
 
   /** 发送位置卡片消息（内置地点 / 自定义位置；群里所有角色都能看到） */
-  const sendLocation = (name: string, address: string) => {
+  const sendLocation = (name: string, address: string, coords?: { lat?: number; lng?: number }) => {
     setPlusOpen(false);
     setCompose(null);
     if (meMuted) {
@@ -3417,7 +3423,7 @@ export function WxGroupChatPage({
       content: '',
       time: Date.now(),
       kind: 'location',
-      loc: { name, address },
+      loc: { name, address, lat: coords?.lat, lng: coords?.lng },
     };
     appendMsg(msg);
     if (sentenceSend) {

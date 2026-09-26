@@ -157,6 +157,7 @@ import { qqUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
+import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -305,7 +306,7 @@ export interface QqSingleMsgShape {
   /** 语音消息数据（kind='voice'；与 VoiceMsgData 同构，qq.tsx loadMsgs 规范化可读回） */
   voice?: VoiceMsgData;
   img?: { src: string };
-  loc?: { name: string; addr: string };
+  loc?: { name: string; addr: string; lat?: number; lng?: number };
   stk?: { url: string; meaning: string };
   quote?: { name: string; content: string };
   fwd?: { from: string; merged?: boolean; title?: string; records?: GroupFwdRecord[] };
@@ -2153,7 +2154,7 @@ export function QqGroupChatPage({
         ? `[发送了表情：${m.stk.meaning || '无描述'}]`
         : `[表情]${m.stk.meaning ? ` ${m.stk.meaning}` : ''}`;
     }
-    if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`;
+    if (m.kind === 'location' && m.loc) return locationAiText(m.loc, m.time);
     if (m.kind === 'redpacket' && m.rp) {
       const rp = m.rp;
       return `[红包 ID:${rp.cid ?? m.id} ¥${rp.amount}${rp.count > 1 ? `x${rp.count}` : ''} "${rp.blessing}"，${groupRpStateLabel(rp)}]`;
@@ -2501,6 +2502,9 @@ export function QqGroupChatPage({
           interopOn: effectiveInterop,
         });
         const wbBlocks = collectWbBlocks(char.id, wbScanText([lastUserText, memContext]));
+        // 位置感知：群里最近发过的位置消息（谁发的/名称/地址/经纬度/发送时间）注入 system，
+        // 成员被问“我在哪”时直接说出地点名；解析失败时诚实说无法识别，不编造
+        const locBlock = buildLocationBlock(ctxMsgs);
         const timeBlock = getTimeAware(sKey)
           ? buildTimeAwareBlock({ lastMsgTime: ctxMsgs[ctxMsgs.length - 1]?.time ?? null, regionHint: char.region })
           : '';
@@ -2508,6 +2512,7 @@ export function QqGroupChatPage({
           wbBlocks.beforeSystem,
           [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
           memoryBlock,
+          locBlock,
           timeBlock,
           wbBlocks.afterSystem,
           wbRulesBlock(wbBlocks),
@@ -2675,7 +2680,8 @@ export function QqGroupChatPage({
                     moneySentThisTurn = true;
                     aiMoneyAt.set(moneyCooldownKey(sKey, char.id), Date.now());
                   } else if (p.rich.kind === 'location') {
-                    // 位置卡片（与用户手动发送同款渲染，全群可见）
+                    // 位置卡片（与用户手动发送同款渲染，全群可见；坐标串解析为经纬度）
+                    const locD = locFromRich(p.rich.name, p.rich.coords);
                     all.push({
                       id,
                       role: 'peer',
@@ -2684,7 +2690,7 @@ export function QqGroupChatPage({
                       content: '',
                       time: t,
                       kind: 'location',
-                      loc: { name: p.rich.name, address: p.rich.coords || '地图上的一个位置' },
+                      loc: { name: locD.name, address: locD.address || '地图上的一个位置', lat: locD.lat, lng: locD.lng },
                     });
                   } else if (p.rich.kind === 'sticker') {
                     // 表情包（从用户收藏清单按 ID 匹配；找不到时回退显示文字）
@@ -3061,7 +3067,7 @@ export function QqGroupChatPage({
   };
 
   /** 发送位置卡片消息（内置地点/自定义位置；群里所有角色都能看到） */
-  const sendLocation = (name: string, address: string) => {
+  const sendLocation = (name: string, address: string, coords?: { lat?: number; lng?: number }) => {
     setPlusOpen(false);
     setCompose(null);
     if (meMuted) {
@@ -3080,7 +3086,7 @@ export function QqGroupChatPage({
       content: '',
       time: Date.now(),
       kind: 'location',
-      loc: { name, address },
+      loc: { name, address, lat: coords?.lat, lng: coords?.lng },
     };
     appendMsg(msg);
     if (sentenceSend) {
@@ -3431,7 +3437,7 @@ export function QqGroupChatPage({
     if (m.fwd?.merged) return { ...base, content: m.content, kind: 'forward', fwd: { from: m.fwd.from, merged: true, title: m.fwd.title, records: m.fwd.records } };
     if (m.kind === 'sticker' && m.stk) return { ...base, content: '', kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { ...base, content: m.img.src, kind: 'image' };
-    if (m.kind === 'location' && m.loc) return { ...base, content: '', kind: 'location', loc: { name: m.loc.name, addr: m.loc.address } };
+    if (m.kind === 'location' && m.loc) return { ...base, content: '', kind: 'location', loc: { name: m.loc.name, addr: m.loc.address, lat: m.loc.lat, lng: m.loc.lng } };
     // 语音消息整条克隆（QQ 单聊同款 kind='voice'，qq.tsx loadMsgs 规范化可读回播放）
     if (m.kind === 'voice' && m.voice) return { ...base, content: '', kind: 'voice', voice: { ...m.voice } };
     const isCard = m.kind === 'redpacket' || m.kind === 'transfer';
@@ -4301,7 +4307,7 @@ export function QqGroupChatPage({
 
       {/* 位置页（与单聊共用同一套组件；位置卡片群里所有角色可见） */}
       {compose === 'location' && (
-        <LocationPickerPage onClose={() => setCompose(null)} onSend={(loc) => sendLocation(loc.name, loc.addr)} />
+        <LocationPickerPage onClose={() => setCompose(null)} onSend={(loc) => sendLocation(loc.name, loc.addr, { lat: loc.lat, lng: loc.lng })} />
       )}
 
       {/* 群红包/转账浮层流程（发红包页[复用单聊 RedPacketCompose 群模式] / 选人页 / 转账页[复用单聊 TransferCompose] / 开箱 / 详情） */}

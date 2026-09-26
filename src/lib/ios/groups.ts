@@ -187,7 +187,7 @@ export interface WxGroupMsg {
   notice?: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string };
   img?: { src: string };
   /** 位置卡片消息（群里所有角色可见，进上下文映射为 [位置] 文本） */
-  loc?: { name: string; address: string };
+  loc?: { name: string; address: string; lat?: number; lng?: number };
   /** 表情包消息（用户从表情面板发送；AI 上下文映射为 [发送了表情：意思]） */
   stk?: { url: string; meaning: string; sid?: string };
   quote?: {
@@ -920,7 +920,13 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
     img: r.img && typeof r.img.src === 'string' ? { src: r.img.src } : undefined,
     loc:
       r.loc && typeof r.loc.name === 'string' && typeof r.loc.address === 'string'
-        ? { name: r.loc.name, address: r.loc.address }
+        ? {
+            name: r.loc.name,
+            address: r.loc.address,
+            // 经纬度（可选）：随消息持久化，位置感知/记忆召回可读（旧记录无此字段照常兼容）
+            lat: typeof r.loc.lat === 'number' && Number.isFinite(r.loc.lat) ? r.loc.lat : undefined,
+            lng: typeof r.loc.lng === 'number' && Number.isFinite(r.loc.lng) ? r.loc.lng : undefined,
+          }
         : undefined,
     stk:
       r.stk && typeof r.stk.url === 'string'

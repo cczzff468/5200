@@ -35,6 +35,8 @@ export interface GlobalCallSession {
   memoryBlock?: string;
   momentsBlock?: string;
   timeBlock?: string;
+  /** 位置感知块（与文字聊天同一套 buildLocationBlock）：通话里 AI 知道“用户在哪” */
+  locBlock?: string;
   multiApp?: boolean;
   /** 通话结束（恰好一次）：宿主直写通话卡片并落盘，随后全局层自动 close() */
   onEnd: (r: ChatCallResult) => void;
