@@ -54,9 +54,13 @@ import {
   AUTO_RETRY_DELAY_MS,
   AUTO_SILENCE_MS,
   AUTO_WAIT_MS,
+  PROACTIVE_MAX_MS,
+  PROACTIVE_MIN_MS,
   STT_FAIL_LIMIT,
   type VadHandle,
 } from '@/lib/ios/vad';
+import { CHAT_CALL_EXTRA_RULES, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
+import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -547,6 +551,16 @@ function CallScreen({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const mutedRef = useRef(false);
   const busyRef = useRef(false);
+  /** AI 主动挂断：告别语播完后自动结束（〔挂断〕标记） */
+  const pendingHangupRef = useRef(false);
+  /** AI 主动开口：聆听状态挂「用户一直不说话」计时器；触发后转 AI 独白轮 */
+  const proactiveTimerRef = useRef<number | null>(null);
+  /** 主动开口已触发（等 recorder onstop 丢弃静默录音后发起） */
+  const proactivePendingRef = useRef(false);
+  /** 连续主动开口计数（用户真正说话后归零） */
+  const proactiveCountRef = useRef(0);
+  /** AI 拒接/未接：结束原因（状态区文案用） */
+  const [peerEnded, setPeerEnded] = useState<'reject' | 'no-answer' | null>(null);
   /** 免提自动听（VAD 循环） */
   const vadRef = useRef<VadHandle | null>(null);
   const vadSpeakingRef = useRef(false);
@@ -567,8 +581,10 @@ function CallScreen({
 
   const contact = target.contact;
   const gender = useMemo(() => contactGender(contact), [contact]);
+  /** 最新 hangup（mount effect / speak / runTurn 闭包内引用；定义在后面，运行时已赋值） */
+  const hangupRef = useRef<() => void>(() => {});
 
-  /** 停 VAD + 清自动重听定时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
+  /** 停 VAD + 清自动重听定时器 + 清主动开口计时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
   const stopAutoTimers = useCallback(() => {
     vadRef.current?.stop();
     vadRef.current = null;
@@ -576,18 +592,30 @@ function CallScreen({
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
+    if (proactiveTimerRef.current !== null) {
+      window.clearTimeout(proactiveTimerRef.current);
+      proactiveTimerRef.current = null;
+    }
   }, []);
 
   /** TTS 播放一句：优先用户语音 API（设置 › 语音 API；音色 = 联系人独立 voiceId → 全局默认 → 安全默认），
-   *  未配置/合成失败回退内置朗读（按性别挑声线）——字幕与文字流程不受影响 */
+   *  未配置/合成失败回退内置朗读（按性别挑声线）——字幕与文字流程不受影响。
+   *  resume 里免提续听延迟 250ms：TTS 失败路径（play reject → catch）同步调 resume 时，
+   *  runTurn 的 finally（busyRef=false）尚未执行，立即调度会被 busy 拦截导致免提循环断链 */
   const speak = useCallback(
     async (text: string) => {
       setPeerStatus('speaking');
       const volume = speaker ? 1 : 0.45;
       const resume = () => {
         if (!endedRef.current) {
+          // AI 主动挂断：告别语播完自动结束通话（不再回到聆听）
+          if (pendingHangupRef.current) {
+            pendingHangupRef.current = false;
+            hangupRef.current();
+            return;
+          }
           setPeerStatus('listening');
-          scheduleAutoListenRef.current(); // AI 说完 → 自动开始听（免提循环核心）
+          scheduleAutoListenRef.current(250); // AI 说完 → 自动开始听（免提循环核心）
         }
       };
       // ① 用户语音 API：每次播放实时重读联系人 voiceId（切联系人/改音色后下一句即生效）
@@ -638,10 +666,13 @@ function CallScreen({
     [contact?.id, gender, speaker]
   );
 
-  /** 发起一轮 AI 对话（userText = 用户刚说的话；greeting = 接通问候；via='text' = 文字聊天轮次） */
+  /** 发起一轮 AI 对话（userText = 用户刚说的话；greeting = 接通问候；via='text' = 文字聊天轮次；
+   *  proactive = AI 主动开口：用户一直不说话后的主动独白轮） */
   const runTurn = useCallback(
-    async (userText: string | null, userVia?: 'text') => {
+    async (userText: string | null, userVia?: 'text', opts?: { proactive?: boolean }) => {
+      const proactive = opts?.proactive === true;
       setError('');
+      if (userText) proactiveCountRef.current = 0; // 用户开口：主动连发计数归零
       // 自己的号码（user）：对方不说话、也不用回复 —— 发出去的话只留字幕
       if (contact?.kind === 'user') {
         if (userText) {
@@ -651,6 +682,12 @@ function CallScreen({
         return;
       }
       setPeerStatus('thinking');
+      // AI 主动开口：递增连续主动计数（用户开口时归零）——第 3 次起 system 会提示可告别挂断
+      let proactiveAttempt: number | undefined;
+      if (proactive) {
+        proactiveCountRef.current += 1;
+        proactiveAttempt = proactiveCountRef.current;
+      }
       const historyBefore: CallBubble[] = userText
         ? [...bubblesRef.current, { id: genId(), role: 'user' as const, text: userText, t: Date.now(), via: userVia }]
         : bubblesRef.current;
@@ -768,8 +805,11 @@ function CallScreen({
                 }
               : undefined,
             number: target.number,
-            greeting: userText === null,
+            greeting: userText === null && !proactive,
+            proactiveAttempt,
             history: historyBefore.map((m) => ({ role: m.role, content: m.text })),
+            // 主动挂断标记规则（与微信/QQ 语音通话同一套）：AI 可按人设/上下文自然告别后输出〔挂断〕
+            extraRules: CHAT_CALL_EXTRA_RULES,
             memoryBlock,
             // 跨 App 身份感知：互通开关（有联系人才注入；陌生号码单场景无需多端感知）
             multiApp: contact?.id ? getMemSettings(contact.id).share : undefined,
@@ -802,12 +842,20 @@ function CallScreen({
               );
             });
             if (endedRef.current) return;
-            const reply = full
+            // AI 主动挂断：剥〔挂断〕标记，播完告别自动结束
+            const rawFull = full
               .replace(/[*_`#>~[\]]/g, '')
               .replace(/^["'「『]+|["'」』]+$/g, '')
               .trim();
+            const wantHangup = HANGUP_MARK_RE.test(rawFull);
+            HANGUP_MARK_RE.lastIndex = 0;
+            const reply = rawFull.replace(HANGUP_MARK_RE, '').trim();
             if (!reply) {
               setBubbles((b) => b.filter((x) => x.id !== bubbleId));
+              if (wantHangup) {
+                finishByAiHangup();
+                return;
+              }
               setError('对方没有回应，请稍后再试');
               setPeerStatus('listening');
               scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
@@ -819,9 +867,14 @@ function CallScreen({
             memorizeTurn(reply);
             if (asText) {
               // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
+              if (wantHangup) {
+                finishByAiHangup();
+                return;
+              }
               setPeerStatus('listening');
               scheduleAutoListenRef.current(); // 文字回复呈现完继续免提听（文字条开着时被拦截）
             } else {
+              if (wantHangup) pendingHangupRef.current = true; // 播完告别自动挂断（speak resume 检查）
               await speak(reply); // speak 内部播完自动续听
             }
           } catch (err) {
@@ -839,7 +892,20 @@ function CallScreen({
           scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
           return;
         }
-        const reply = data.reply;
+        // AI 主动挂断：剥〔挂断〕标记，播完告别自动结束
+        const wantHangup = HANGUP_MARK_RE.test(data.reply);
+        HANGUP_MARK_RE.lastIndex = 0;
+        const reply = data.reply.replace(HANGUP_MARK_RE, '').trim();
+        if (!reply) {
+          if (wantHangup) {
+            finishByAiHangup();
+            return;
+          }
+          setError('对方没有回应，请稍后再试');
+          setPeerStatus('listening');
+          scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
+          return;
+        }
         // 回复形态：文字聊天开着且没配语音 API → 文字回复；其余（语音轮次 / 配了语音 API）都播报
         const asText = textModeRef.current && !hasCustomTtsApi();
         setBubbles((b) => [
@@ -848,10 +914,16 @@ function CallScreen({
         ]);
         memorizeTurn(reply);
         if (asText) {
-          // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
+          // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区；
+          // 延迟续听：同步调度会被自身 runTurn 的 busyRef 拦截（finally 尚未执行）
+          if (wantHangup) {
+            finishByAiHangup();
+            return;
+          }
           setPeerStatus('listening');
-          scheduleAutoListenRef.current(); // 文字回复呈现完继续免提听（文字条开着时被拦截）
+          scheduleAutoListenRef.current(250);
         } else {
+          if (wantHangup) pendingHangupRef.current = true; // 播完告别自动挂断（speak resume 检查）
           await speak(reply); // speak 内部播完自动续听
         }
       } catch (err) {
@@ -968,11 +1040,59 @@ function CallScreen({
     }
     window.setTimeout(onClose, 1100);
   }, [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers, apiConfig, profileName]);
-  /** 空号播报结束后的自动挂断要走最新的 hangup（mount effect 里引用） */
-  const hangupRef = useRef<() => void>(() => {});
   hangupRef.current = hangup;
 
-  // 挂载：白前景标记 + 回铃音；联系人 → 随机 1.4~2.6s 接通问候；陌生号码 → 运营商播报「空号」后自动挂断
+  /** AI 主动挂断（〔挂断〕标记）：与用户挂断同一套收尾（总结/落记录/对话存档），只是触发方是对端 */
+  const finishByAiHangup = useCallback(() => {
+    if (endedRef.current) return;
+    hangupRef.current();
+  }, []);
+
+  /** AI 拒接/未接收尾（接听决策）：响铃停止 → 显示原因 → 落「未接通」通话记录 → AI 语音留言解释。
+   *  与用户挂断不同：未接通、无对话、不触发记忆总结；afterText 来自决策（人设化解释），缺省用模板留言 */
+  const endByPeer = useCallback(
+    (reason: 'reject' | 'no-answer', afterText?: string) => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      ringRef.current?.stop();
+      stopAutoTimers();
+      setPeerEnded(reason);
+      setPhase('ended');
+      setPeerStatus('listening');
+      onEnd({
+        id: genId(),
+        number: target.number,
+        contactId: contact?.id ?? null,
+        displayName: contact?.name ?? '陌生号码',
+        peerKind: contact ? (contact.kind as CallLogRecord['peerKind']) : 'unknown',
+        avatar: contact?.avatar ?? null,
+        direction: 'out',
+        duration: 0,
+        createdAt: Date.now(),
+      });
+      const text = afterText?.trim() || buildVoicemailText(contact);
+      onVoicemail({
+        id: genId(),
+        number: target.number,
+        contactId: contact?.id ?? null,
+        displayName: contact?.name ?? '陌生号码',
+        peerKind: contact ? (contact.kind as VoicemailRecord['peerKind']) : 'unknown',
+        avatar: contact?.avatar ?? null,
+        text,
+        duration: Math.max(3, Math.ceil(text.length / 3.2)),
+        read: false,
+        createdAt: Date.now(),
+      });
+      window.setTimeout(onClose, 1400);
+    },
+    [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers],
+  );
+  /** mount effect 闭包内引用最新 endByPeer */
+  const endByPeerRef = useRef(endByPeer);
+  endByPeerRef.current = endByPeer;
+
+  // 挂载：白前景标记 + 回铃音；联系人 → AI 接听决策（接听·拒绝·不接）→ 接通问候；
+  // 陌生号码 → 运营商播报「空号」后自动挂断
   useEffect(() => {
     setCallActive(true);
     endedRef.current = false;
@@ -981,6 +1101,7 @@ function CallScreen({
     ring.start();
     ringRef.current = ring;
     let fallbackTimer: number | undefined;
+    let peerTimer: number | undefined;
     // 空号：响铃约 2.4~3.2s → TTS 播报「您拨打的号码是空号」→ 播完自动挂断
     const emptyTimer = contact
       ? undefined
@@ -1010,6 +1131,7 @@ function CallScreen({
                 };
                 await audio.play().catch(() => {
                   URL.revokeObjectURL(url);
+                  if (audioRef.current === audio) audioRef.current = null;
                   if (!endedRef.current) hangupRef.current();
                 });
               } catch {
@@ -1019,23 +1141,70 @@ function CallScreen({
           },
           2300 + Math.random() * 900
         );
-    // 联系人：响铃后接通 → AI 问候（自己的号码 user 接通但不说话、不回复）
+    // AI 接听决策：响铃开始就发（人设/关系/当前时间状态 → 接听/拒绝/不接），
+    // 失败或超时兜底 answer；机主打给自己（kind='user'）/陌生号码不决策
+    const decision =
+      contact && contact.kind !== 'user'
+        ? requestAnswerDecision({
+            number: target.number,
+            contact: {
+              name: contact.name,
+              kind: contact.kind,
+              gender: contact.gender,
+              age: contact.age,
+              occupation: contact.occupation,
+              region: contact.region,
+              relation: contact.relation,
+              relationToUser: contact.relationToUser ?? null,
+              birthday: contact.birthday ?? null,
+              persona: contact.persona,
+              background: contact.background,
+            },
+            recentChat: [],
+            timeBlock: contact.id && getTimeAware(`phone:${contact.id}`)
+              ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null })
+              : '',
+            config: apiConfig,
+          })
+        : null;
+    const connect = () => {
+      if (endedRef.current) return;
+      ring.stop();
+      playConnectBlip();
+      setPhase('connected');
+      secondsRef.current = 0;
+      setSeconds(0);
+      if (contact && contact.kind !== 'user') void runTurn(null);
+      else setPeerStatus('listening');
+    };
+    // 联系人：响铃 1.4~2.6s 后应用决策（决策多半已返回；未返回则等它 settle）
     const timer = contact
       ? window.setTimeout(() => {
-          if (endedRef.current) return;
-          ring.stop();
-          playConnectBlip();
-          setPhase('connected');
-          secondsRef.current = 0;
-          setSeconds(0);
-          if (contact.kind !== 'user') void runTurn(null);
-          else setPeerStatus('listening');
+          void (async () => {
+            if (endedRef.current) return;
+            const d = decision ? await decision : ({ decision: 'answer' } as const);
+            if (endedRef.current) return;
+            if (contact.kind === 'user') {
+              connect();
+              return;
+            }
+            if (d.decision === 'reject') {
+              // 对方拒绝：再响 0.8~1.6s 挂断（几声铃被挂断更真实），随后 AI 语音留言解释
+              peerTimer = window.setTimeout(() => endByPeerRef.current('reject', d.afterText), 800 + Math.random() * 800);
+            } else if (d.decision === 'miss') {
+              // 对方不接：继续响 9~15s 转「无人接听」，随后 AI 语音留言解释
+              peerTimer = window.setTimeout(() => endByPeerRef.current('no-answer', d.afterText), 9000 + Math.random() * 6000);
+            } else {
+              connect();
+            }
+          })();
         }, 1400 + Math.random() * 1200)
       : undefined;
     return () => {
       endedRef.current = true;
       window.clearTimeout(timer);
       window.clearTimeout(emptyTimer);
+      window.clearTimeout(peerTimer);
       if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
       stopAutoTimers();
       ring.stop();
@@ -1064,6 +1233,32 @@ function CallScreen({
     const el = textListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [bubbles, textMode, busy]);
+
+  /** AI 主动开口：聆听状态挂「用户一直不说话」计时器（3~5s 随机），触发后丢弃静默录音转 AI 独白轮 */
+  const armProactiveTimer = useCallback(() => {
+    if (proactiveTimerRef.current !== null) {
+      window.clearTimeout(proactiveTimerRef.current);
+      proactiveTimerRef.current = null;
+    }
+    proactiveTimerRef.current = window.setTimeout(
+      () => {
+        proactiveTimerRef.current = null;
+        if (endedRef.current || phaseRef.current !== 'connected' || emptyRef.current) return;
+        if (busyRef.current || mutedRef.current || textModeRef.current) return;
+        if (vadSpeakingRef.current) return; // VAD 已检测到你正在说
+        if (contact?.kind === 'user') return;
+        // 用户一直没说：丢弃当前静默录音（onstop 的 proactivePending 分支接管），转入主动开口
+        proactivePendingRef.current = true;
+        discardRef.current = true;
+        try {
+          if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+        } catch {
+          // 已停止
+        }
+      },
+      PROACTIVE_MIN_MS + Math.floor(Math.random() * Math.max(1, PROACTIVE_MAX_MS - PROACTIVE_MIN_MS)),
+    );
+  }, [contact]);
 
   // ---------- 免提自动听（VAD 循环）：AI 说完自动开录待命，说完停顿自动发送，全程无需点按钮 ----------
   const toggleRecording = useCallback(async () => {
@@ -1116,6 +1311,18 @@ function CallScreen({
           // 静音/开文字条/超时无人说话：丢弃本轮；未被禁止时自动重新听（免提等待循环）
           discardRef.current = false;
           chunksRef.current = [];
+          // AI 主动开口：用户一直没说，丢弃静默录音后转 AI 独白轮（第 N 次尝试）
+          if (proactivePendingRef.current) {
+            proactivePendingRef.current = false;
+            if (!mutedRef.current && !textModeRef.current && phaseRef.current === 'connected') {
+              busyRef.current = true;
+              setBusy(true);
+              void runTurn(null, undefined, { proactive: true });
+              return;
+            }
+            scheduleAutoListenRef.current(); // 已静音/开文字条：不主动开口，静默丢弃
+            return;
+          }
           scheduleAutoListenRef.current();
           return;
         }
@@ -1174,6 +1381,7 @@ function CallScreen({
       };
       recorder.start();
       setRecording(true);
+      armProactiveTimer(); // 用户若一直不说话（3~5s），AI 主动开口
       // VAD（免提核心）：检测你何时开口、何时说完
       vadRef.current = startVad({
         stream,
@@ -1181,6 +1389,10 @@ function CallScreen({
         waitMs: AUTO_WAIT_MS,
         maxMs: AUTO_MAX_MS,
         onSpeechStart: () => {
+          if (proactiveTimerRef.current !== null) {
+            window.clearTimeout(proactiveTimerRef.current); // 你开口了：取消主动开口
+            proactiveTimerRef.current = null;
+          }
           if (endedRef.current) return;
           vadSpeakingRef.current = true;
           setVadSpeaking(true);
@@ -1203,7 +1415,7 @@ function CallScreen({
       setError('麦克风不可用，请检查权限或用键盘输入');
       setTextMode(true); // 权限兜底：不影响文字聊天
     }
-  }, [phase, contact, runTurn]);
+  }, [phase, contact, runTurn, armProactiveTimer]);
 
   /** 免提自动听调度：空闲且未被禁止（挂断/静音/文字条/空号/自己）时开始新一轮聆听 */
   const scheduleAutoListen = useCallback(
@@ -1290,6 +1502,8 @@ function CallScreen({
 
   const statusText = (): string => {
     if (emptyNumber) return '您拨打的号码是空号';
+    if (peerEnded === 'reject') return '对方已拒绝';
+    if (peerEnded === 'no-answer') return '无人接听';
     if (phase === 'dialing') return '正在呼叫…';
     if (phase === 'ended') return '通话结束';
     if (peerStatus === 'speaking') return '正在说话…';

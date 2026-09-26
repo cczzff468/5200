@@ -3929,6 +3929,16 @@ function ChatPage({
       };
       saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
       setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
+      // AI 拒接/未接：过一会儿 AI 主动发一条人设化解释（接听决策产出 afterText）。
+      // 聊天页不在场也照常落盘（saveMsgs 直写；回来时 loadMsgs 恢复，消息照常进后续 AI 上下文）
+      if (r.afterText && r.direction === 'out' && !r.connected) {
+        const after = r.afterText;
+        window.setTimeout(() => {
+          const msg: WxMsg = { id: uid(), role: 'peer', content: after, time: Date.now() };
+          saveMsgs(peer.id, [...loadMsgs(peer.id), msg]);
+          setMsgs((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        }, 3000 + Math.floor(Math.random() * 5000));
+      }
     },
     [peer.id],
   );

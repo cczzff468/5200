@@ -55,9 +55,12 @@ import {
   AUTO_RETRY_DELAY_MS,
   AUTO_SILENCE_MS,
   AUTO_WAIT_MS,
+  PROACTIVE_MAX_MS,
+  PROACTIVE_MIN_MS,
   STT_FAIL_LIMIT,
   type VadHandle,
 } from './vad';
+import { requestAnswerDecision } from './call-decision';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds } from './global-call';
 
@@ -82,6 +85,8 @@ export interface ChatCallResult {
   connected: boolean;
   /** 接通后的通话秒数（未接通为 0） */
   duration: number;
+  /** AI 拒接/未接后的解释文字（接听决策产出；宿主稍后以聊天消息/语音留言呈现） */
+  afterText?: string;
 }
 
 export interface ChatCallTurnMsg {
@@ -208,11 +213,11 @@ function phaseWasConnected(endReason: ChatCallEndReason): boolean {
 
 // ---------------- 引擎 ----------------
 
-/** AI 告别语后的挂断标记（识别后从播报文本中剥除） */
-const HANGUP_MARK_RE = /〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g;
+/** AI 告别语后的挂断标记（识别后从播报文本中剥除；三端共用，电话 App 也复用） */
+export const HANGUP_MARK_RE = /〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g;
 
-/** 通话场景附加规则（聊天通话：允许 AI 按人设/上下文主动结束通话） */
-const CHAT_CALL_EXTRA_RULES = [
+/** 通话场景附加规则（聊天通话：允许 AI 按人设/上下文主动结束通话；三端共用） */
+export const CHAT_CALL_EXTRA_RULES = [
   '你在和很熟的朋友语音通话，保持人设，语气自然亲昵；',
   '如果你想结束通话（话题聊完、要去忙、困了等自然原因），先用一句话自然告别（如「那我先去洗澡啦，回头聊」），然后在告别语的最后单独输出〔挂断〕标记；除此之外的任何情况都不要输出〔挂断〕；',
   '正常聊天时绝对不要输出〔挂断〕标记；每轮只说出口语内容本身。',
@@ -288,6 +293,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const sttFailRef = useRef(0);
   /** 免提自动听调度（定义在 startRecording 之后，经 effect 同步进 ref 供上游回调调用） */
   const autoListenRef = useRef<(delayMs?: number) => void>(() => {});
+  /** AI 主动开口：聆听状态挂起「用户一直不说话」计时器；触发后转入 AI 独白轮 */
+  const proactiveTimerRef = useRef<number | null>(null);
+  /** 主动开口已触发（等 recorder onstop 丢弃静默录音后发起） */
+  const proactivePendingRef = useRef(false);
+  /** 连续主动开口计数（用户真正说话后归零；连续多次后 AI 会告别并挂断） */
+  const proactiveCountRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -315,13 +326,17 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp };
   });
 
-  /** 停 VAD + 清自动重听定时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
+  /** 停 VAD + 清自动重听定时器 + 清主动开口计时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
   const stopAutoListenTimers = useCallback(() => {
     vadRef.current?.stop();
     vadRef.current = null;
     if (retryTimerRef.current !== null) {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
+    }
+    if (proactiveTimerRef.current !== null) {
+      window.clearTimeout(proactiveTimerRef.current);
+      proactiveTimerRef.current = null;
     }
   }, []);
 
@@ -373,8 +388,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       );
   }, [chatLogToConvo]);
 
-  /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果 */
-  const finish = useCallback((endReason: ChatCallEndReason) => {
+  /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果（afterText = AI 拒接/未接后的解释文字） */
+  const finish = useCallback((endReason: ChatCallEndReason, afterText?: string) => {
     if (endedRef.current) return;
     endedRef.current = true;
     stopAutoListenTimers();
@@ -401,6 +416,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       endReason,
       connected,
       duration: secondsRef.current,
+      ...(afterText ? { afterText } : {}),
     });
   }, [direction, stopAutoListenTimers, summarizeCall]);
 
@@ -455,10 +471,15 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
 
   // ---------- 请求一轮 LLM 回复（语音轮与文字轮共用；返回纯文本） ----------
   const requestTurn = useCallback(
-    async (historyBefore: ChatCallTurnMsg[], greeting: boolean): Promise<{ reply: string; error?: string }> => {
+    async (
+      historyBefore: ChatCallTurnMsg[],
+      greeting: boolean,
+      /** AI 主动开口：用户一直不说话后的第 N 次主动尝试（0 = 正常轮次） */
+      proactiveAttempt = 0,
+    ): Promise<{ reply: string; error?: string }> => {
       const c = optsRef.current.contact;
-      // 本轮用户刚说的话（greeting 时不存）：供每轮动态召回相关记忆（主动提起之前聊过的事）
-      const lastUserText = greeting ? null : (historyBefore[historyBefore.length - 1]?.content ?? null);
+      // 本轮用户刚说的话（greeting/主动开口时不存）：供每轮动态召回相关记忆（主动提起之前聊过的事）
+      const lastUserText = greeting || proactiveAttempt > 0 ? null : (historyBefore[historyBefore.length - 1]?.content ?? null);
       const recalledBlock =
         optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined;
       try {
@@ -483,6 +504,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
               : undefined,
             number: c?.phone || '10086',
             greeting,
+            proactiveAttempt: proactiveAttempt > 0 ? proactiveAttempt : undefined,
             history: historyBefore.map((m) => ({ role: m.role, content: m.content })),
             memoryBlock: recalledBlock,
             worldbookBlock: optsRef.current.worldbookBlock || undefined,
@@ -525,11 +547,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
 
   // ---------- 一轮对话：文字 → LLM → TTS ----------
   const runTurn = useCallback(
-    async (userText: string | null, greeting: boolean) => {
+    async (userText: string | null, greeting: boolean, proactiveAttempt = 0) => {
       const ended = () => endedRef.current;
       if (ended()) return;
       busyRef.current = true;
       setError('');
+      if (userText) proactiveCountRef.current = 0; // 用户开口：主动连发计数归零
       // 对端是「机主本人」联系人（自己给自己打）：不说话，只保留聆听
       if (optsRef.current.contact?.kind === 'user') {
         setStatus('listening');
@@ -545,7 +568,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         historyRef.current = historyBefore.slice(-16);
         appendLog({ role: 'user', content: userText, at: Date.now(), via: 'voice' });
       }
-      const { reply: raw, error: turnError } = await requestTurn(historyBefore, greeting);
+      const { reply: raw, error: turnError } = await requestTurn(historyBefore, greeting, proactiveAttempt);
       if (ended()) return;
       if (!raw) {
         setError(turnError || '信号不好，请再试一次');
@@ -716,6 +739,32 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   );
 
   // ---------- 免提自动听（VAD 循环）：AI 说完自动开录待命，说完停顿自动发送，全程无需点按钮 ----------
+  /** AI 主动开口：聆听状态挂「用户一直不说话」计时器（3~5s 随机），触发后丢弃静默录音转 AI 独白轮 */
+  const armProactiveTimer = useCallback(() => {
+    if (proactiveTimerRef.current !== null) {
+      window.clearTimeout(proactiveTimerRef.current);
+      proactiveTimerRef.current = null;
+    }
+    proactiveTimerRef.current = window.setTimeout(
+      () => {
+        proactiveTimerRef.current = null;
+        if (endedRef.current || phaseRef.current !== 'active') return;
+        if (busyRef.current || mutedRef.current || textModeRef.current) return;
+        if (statusRef.current === 'recording') return; // VAD 已检测到你正在说
+        if (optsRef.current.contact?.kind === 'user') return;
+        // 用户一直没说：丢弃当前静默录音（onstop 的 proactivePending 分支接管），转入主动开口
+        proactivePendingRef.current = true;
+        discardRef.current = true;
+        try {
+          if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop();
+        } catch {
+          // 已停止
+        }
+      },
+      PROACTIVE_MIN_MS + Math.floor(Math.random() * Math.max(1, PROACTIVE_MAX_MS - PROACTIVE_MIN_MS)),
+    );
+  }, []);
+
   const startRecording = useCallback(async () => {
     if (endedRef.current || busyRef.current) return;
     if (mutedRef.current || textModeRef.current) return;
@@ -759,6 +808,19 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           ws?.abort();
           setLiveHeard('');
           chunksRef.current = [];
+          // AI 主动开口：用户一直没说，丢弃静默录音后转 AI 独白轮（第 N 次尝试，计数递增——
+          // 连续多次无回应时 system 会提示 AI 可自然告别并挂断）
+          if (proactivePendingRef.current) {
+            proactivePendingRef.current = false;
+            if (!mutedRef.current && !textModeRef.current && phaseRef.current === 'active') {
+              busyRef.current = true;
+              proactiveCountRef.current += 1;
+              void runTurn(null, false, proactiveCountRef.current);
+              return;
+            }
+            if (!mutedRef.current && !textModeRef.current) autoListenRef.current(); // 已挂断竞态：静默丢弃
+            return;
+          }
           if (!mutedRef.current && !textModeRef.current) autoListenRef.current();
           return;
         }
@@ -827,6 +889,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       recorder.start();
       setRecording(true);
       setStatus('listening'); // 免提待命等你开口（VAD 检测到声音才进入 recording）
+      armProactiveTimer(); // 用户若一直不说话（3~5s），AI 主动开口
       // 并行跑 Web Speech 实时识别（与 MediaRecorder 共享麦克风）：仅作服务端 STT 失败兑底，
       // 不支持/启动失败返回 null，录音与 VAD 不受影响
       wsRef.current = startWebSpeechSession({
@@ -841,6 +904,10 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         waitMs: AUTO_WAIT_MS,
         maxMs: AUTO_MAX_MS,
         onSpeechStart: () => {
+          if (proactiveTimerRef.current !== null) {
+            window.clearTimeout(proactiveTimerRef.current); // 你开口了：取消主动开口
+            proactiveTimerRef.current = null;
+          }
           if (!endedRef.current) setStatus('recording');
         },
         onSpeechEnd: (reason) => {
@@ -859,7 +926,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       setError('麦克风不可用，请检查权限后重试');
       setStatus('listening');
     }
-  }, [runTurn]);
+  }, [runTurn, armProactiveTimer]);
 
   /** 免提自动听调度：空闲且未被禁止（挂断/静音/文字条/自己）时开始新一轮聆听；delayMs 缓冲后执行 */
   const scheduleAutoListen = useCallback(
@@ -958,23 +1025,68 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     finish(phaseRef.current === 'dialing' ? 'cancel' : 'hangup');
   }, [finish]);
 
-  // ---------- 生命周期：铃声 / 自动接听 / 来电超时 / 计时 / 卸载清理 ----------
+  // ---------- 生命周期：铃声 / AI 接听决策（接听·拒绝·不接）/ 来电超时 / 计时 / 卸载清理 ----------
   useEffect(() => {
     ringRef.current = new RingTone();
     const ring = ringRef.current;
     let answerTimer: number | undefined;
     let missTimer: number | undefined;
+    let peerTimer: number | undefined;
 
     if (direction === 'out') {
       ring.start('out');
-      // 模拟对方响铃后接听（1.8~3.2s），接通即打招呼
-      answerTimer = window.setTimeout(() => {
-        if (endedRef.current) return;
+      const connect = () => {
         ring.stop();
         playConnectBlip();
         setPhase('active');
         setStatus('thinking');
         void runTurn(null, true);
+      };
+      // AI 接听决策：响铃开始就发（人设/关系/当前时间状态/最近聊天 → 接听/拒绝/不接），
+      // 失败或超时兜底 answer（宁可多接，不让用户白等）；机主打给自己（kind='user'）不决策
+      const peer = optsRef.current.contact;
+      const decision =
+        peer && peer.kind !== 'user'
+          ? requestAnswerDecision({
+              number: peer.phone || '10086',
+              contact: {
+                name: peer.name,
+                kind: peer.kind,
+                gender: peer.gender,
+                age: peer.age,
+                occupation: peer.occupation,
+                region: peer.region,
+                relation: peer.relation,
+                relationToUser: peer.relationToUser ?? null,
+                birthday: peer.birthday ?? null,
+                persona: peer.persona,
+                background: peer.background,
+              },
+              recentChat: historyRef.current.map((m) => ({ role: m.role, content: m.content })),
+              timeBlock: optsRef.current.timeBlock || undefined,
+              config: useSettings.getState().apiConfig,
+            })
+          : null;
+      // 先响铃 1.8~3.2s（决策多半已返回；未返回则等它 settle，最长 ANSWER_DECISION_TIMEOUT_MS 兜底）
+      answerTimer = window.setTimeout(() => {
+        void (async () => {
+          if (endedRef.current) return;
+          const d = decision ? await decision : ({ decision: 'answer' } as const);
+          if (endedRef.current) return;
+          if (d.decision === 'reject') {
+            // 对方拒绝：再响 0.8~1.6s 后挂断（已响过一阵铃，「几声铃被挂断」更真实）
+            peerTimer = window.setTimeout(() => {
+              if (!endedRef.current) finish('reject', d.afterText);
+            }, 800 + Math.floor(Math.random() * 800));
+          } else if (d.decision === 'miss') {
+            // 对方不接：继续响 9~15s 然后转「无人接听」
+            peerTimer = window.setTimeout(() => {
+              if (!endedRef.current) finish('no-answer', d.afterText);
+            }, 9000 + Math.floor(Math.random() * 6000));
+          } else {
+            connect();
+          }
+        })();
       }, 1800 + Math.floor(Math.random() * 1400));
     } else {
       ring.start('in');
@@ -987,6 +1099,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     return () => {
       window.clearTimeout(answerTimer);
       window.clearTimeout(missTimer);
+      window.clearTimeout(peerTimer);
       ring.stop();
       endedRef.current = true;
       stopAutoListenTimers();

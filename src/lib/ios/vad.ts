@@ -27,6 +27,9 @@ export const AUTO_MAX_MS = 30000;
 export const AUTO_RETRY_DELAY_MS = 900;
 /** 连续识别失败次数上限：达到后暂停自动听（避免无限空转），提示改用文字聊天或点麦克风重试 */
 export const STT_FAIL_LIMIT = 3;
+/** AI 主动开口：用户一直不说话超过该区间（随机取值避免机械感）后，AI 基于人设/记忆/上下文主动说一句 */
+export const PROACTIVE_MIN_MS = 3000;
+export const PROACTIVE_MAX_MS = 5000;
 
 export type VadEndReason = 'pause' | 'maxlen' | 'silent-timeout';
 

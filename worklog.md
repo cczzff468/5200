@@ -7740,3 +7740,34 @@ Stage Summary:
   TDZ；④世界书六位置块+规则整体拼接成一个块（预算 WB_INJECT_BUDGET 已在 collectWbBlocks 内控）
 - 测试环境：E2E 走通话内文字条（沙箱无麦克风），文字轮次与语音轮次同链路同 chatLog 同样被总结；
   解锁手势=对 [aria-label=锁屏] 异步步进 pointermove；主屏 App 已开时 openApp 幂等拦截需刷新复位
+
+---
+Task ID: 15
+Agent: Z.ai Code (main)
+Task: AI 通话主动行为五件套——主动拨打（已有对齐确认）、主动挂断（电话 App 对齐）、决定接听/拒绝/不接（三端新增）、主动开口（三端新增）、控制话量（1~5 句人设决定）
+
+Work Log:
+- 现状盘点：AI 主动来电（[语音通话] 标记+5 分钟冷却）微信/QQ 已具备；AI 主动挂断（〔挂断〕标记）chat-call 已具备但电话 App 缺失；话量为固定「1-2 句≤20 字」；用户打给 AI 恒为 1.8~3.2s 必接；用户不说话 7s 只是丢弃重听（无 AI 主动开口）
+- 新建 src/lib/ios/call-upstream.ts（服务端共享层）：从 turn route 抽出 extractUpstreamConfig/isPrivateHost/buildChatCandidates/extractReplyText/sdkTurn/cleanCallReply/friendlyUpstreamError/callUpstream/parseInlineContact/unknownPersona/normalizeHistory/extractJsonObject（宽松 JSON 平衡块提取）；turn route 改 import 零行为变化
+- turn route 增强：①话量规则改为「1~5 句，句数由人设性格和当下情绪决定，长短随话题起伏」；②新参数 proactiveAttempt（0~9）：>0 时注入主动开口规则（基于人设/关系/刚才内容/记忆主动说一句、禁止重复本通已说句子；第 2 次起提示「可自然告别并输出〔挂断〕」）；greeting 文案保持不变
+- 新建 /api/phone/answer（接听决策 API，三端共用）：人设+关系+timeBlock（当前时间状态）+最近聊天 → LLM 判定 answer/reject/miss；reject/miss 必附 afterText（人设化解释 1~2 句）；严格 JSON 输出+extractJsonObject 宽松解析+normalizeDecision 清洗（非法值兜底 answer）；上游失败/未配置 → 内置 SDK 决策 → 再失败 answer（宁可多接不让用户白等）；kind='user'/陌生号码直接 answer 不浪费决策
+- 新建 src/lib/ios/call-decision.ts（前端封装）：requestAnswerDecision 带 9s AbortSignal 超时，任何失败 settle answer；调用方（响铃开始即发）可安全 await
+- chat-call.ts（微信/QQ 共用引擎）四项接线：①ChatCallResult 新增 afterText、finish() 带第二参；②拨号 direction='out' 时响铃开始即发决策请求，answerTimer（1.8~3.2s）到点等决策 settle：answer 接通 / reject 再响 0.8~1.6s finish('reject') / miss 继续响 9~15s finish('no-answer')（卡片「对方已拒绝/对方未接听」复用现有状态映射，direction out 文案正确）；③主动开口：PROACTIVE_MIN/MAX_MS(3~5s 随机) 计时器挂在 startRecording 后、onSpeechStart 取消、触发时 discard 静默录音转 proactive 独白轮（proactiveCount 递增，用户开口归零）；④requestTurn 透传 proactiveAttempt（greeting/主动开口轮动态召回 lastUserText=null）
+- wechat.tsx/qq.tsx writeCallCard 扩展：r.afterText && direction==='out' && !connected → 延迟 3~8s 插入 AI 解释文字消息（saveMsgs 直写+在场 setMsgs；消息照常进后续 AI 上下文；聊天页不在场也落盘）
+- phone.tsx 四项接线：①mount effect 决策流（同 chat-call 时序）+ endByPeer(reason, afterText)——响铃停、显示「对方已拒绝/无人接听」、落 duration=0 通话记录、afterText||buildVoicemailText 落语音留言（未读）、1.4s 自动关闭；②runTurn 传 CHAT_CALL_EXTRA_RULES（从 chat-call.ts import，三端共用一套）+ HANGUP_MARK_RE 剥标记：wantHangup 时 pendingHangupRef=true，speak resume 播完告别自动 hangupRef()（走完整收尾：记忆总结+通话记录+对话存档）；asText 分支直接挂断；③主动开口同 chat-call（armProactiveTimer/onSpeechStart 清 timer/onstop proactivePending 分支）；④runTurn 签名加 opts.proactive、body 加 proactiveAttempt+greeting 修正（userText===null && !proactive）
+- E2E 修两个真 bug：①phone.tsx speak() TTS 失败路径（play reject→catch→resume 同步调 scheduleAutoListen）时 runTurn finally 未执行、busyRef=true 拦截调度导致免提循环断链——resume 与 asText 分支的续听改为 250ms 延迟（真实 TTS API 失败同样触发此 bug）；②proactiveCountRef 只读不写（wx/phone 两处 runTurn）导致主动开口计数恒 1、AI 永远等不到「第 N 次无回应可挂断」提示——改为触发分支显式递增
+- E2E（agent-browser，IndexedDB 种子陈默/林小雨）：
+  ①微信 mock answer reject → 响铃数秒 → 通话卡片「对方已拒绝」落盘 → AI 解释消息「刚看到，刚刚在忙，怎样了？」出现 ✓
+  ②微信 mock answer miss → 响铃 ~15s → 「对方未接听」卡片 → 解释消息「刚才没听到呢，打给我怎么说呀」✓
+  ③QQ（协议勾选+登录）mock miss → 深色皮肤通话页响铃 → 自动结束 → 蓝色卡片「对方未接听」+ 解释消息落盘、会话预览同步 ✓
+  ④电话 App mock miss → 「无人接听」状态 + 通话记录「未接来电」红字 + 语音留言未读（IndexedDB text=「刚才没听到呢，打给我怎么说呀」）✓
+  ⑤answer 决策真实 SDK 冒烟：空闲 persona → answer；深夜睡觉 persona → miss+「干嘛啊，大半夜的，刚睡着」✓
+  ⑥电话 App mock 静音麦克风+Audio mock：接通 greeting →「在听…」→ 3~5s AI 主动开口 p1「咦，你怎么不说话呀」→ p2「你是不是走开啦」→ p3 告别语「那我先挂了啊，你忙完打给我〔挂断〕」→ 播完自动挂断 → 通话记录 duration=19s 落盘 ✓
+  ⑦微信同套 mock：greeting → p1/p2/p3（turnLog 计数递增）→ AI 自动挂断 → 卡片「通话时长 00:18」落 IndexedDB ✓
+- lint + tsc 双绿；测试环境无麦克风，主动开口验证用页面内工厂式 getUserMedia mock（每次返回新静音流）+ window.Audio mock（play 后 30ms onended）+ 动态 turn mock（按 body.greeting/proactiveAttempt 返回不同文本）
+
+Stage Summary:
+- 交付：AI 通话主动行为三端统一——①用户打给 AI 时 AI 按人设/关系/时间状态/最近聊天决定接听·拒绝·不接（拒绝几声铃挂断/不接响到超时），拒绝或不接后 AI 稍后主动解释（微信/QQ 发文字消息、电话 App 留语音留言，决策兜底 answer 永不让用户白等）；②AI 主动挂断对齐电话 App（〔挂断〕标记三端共用 CHAT_CALL_EXTRA_RULES/HANGUP_MARK_RE，走完整挂断收尾含记忆总结）；③用户 3~5 秒不说话 AI 基于人设/记忆/上下文主动开口（不重复本通已说句子，连续多次无回应 AI 自行告别挂断）；④话量 1~5 句由人设性格/当下情绪决定（turn API 层三端生效）；⑤AI 主动来电（[语音通话] 标记+冷却）此前已具备本轮确认对齐
+- 修改文件：src/lib/ios/call-upstream.ts（新增）、src/app/api/phone/answer/route.ts（新增）、src/lib/ios/call-decision.ts（新增）、src/app/api/phone/turn/route.ts（话量+proactive+共享化）、src/lib/ios/chat-call.ts（决策+主动开口+afterText+export 规则）、src/lib/ios/vad.ts（+PROACTIVE_MIN/MAX_MS）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（writeCallCard afterText）、src/components/apps/phone.tsx（决策+endByPeer+主动开口+挂断标记+循环断链修复）
+- 关键决策：①决策 API 全失败兜底 answer（响铃体验优先）；②reject/miss 复用现有卡片状态（direction out → 「对方已拒绝/对方未接听」文案天然正确）；③电话 App 拒接解释复用语音留言机制（未读红点+可回看，贴合现有「未接通对端留言」设定）；④主动开口计数挂 ref 递增、用户开口归零，第 2 次起 system 提示可告别，防 AI 无限自言自语；⑤免提续听一律 250ms 延迟调度规避 busyRef 竞态
+- 测试技巧沉淀：headless E2E 通话循环必须 mock window.Audio（play→30ms onended）否则 onended 不可靠卡死循环；getUserMedia mock 必须工厂式（每次新流，track stop 后旧流不可复用）；动态 turn mock 用 window.fetch 覆写按 body 分支（agent-browser network route 只支持静态 body）
