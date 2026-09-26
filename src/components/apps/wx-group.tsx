@@ -4218,7 +4218,7 @@ export function WxGroupChatPage({
       </div>
 
       {/* 消息列表：自定义聊天背景时透出背景层 */}
-      <div ref={listRef} className="relative z-10 min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="wx-groupchat-list">
+      <div ref={listRef} className="no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="wx-groupchat-list">
         {msgs.length === 0 && (
           <div className="pt-16 text-center text-[13px] leading-relaxed text-black/35 dark:text-white/35">
             群聊已创建

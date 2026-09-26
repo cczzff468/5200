@@ -3934,7 +3934,7 @@ function ChatPage({
       {/* 消息流（页面任意位置左滑 → 好友互动标识页；自定义聊天背景时透出背景层） */}
       <div
         ref={scrollRef}
-        className="relative z-10 flex-1 overflow-y-auto px-3.5 py-3 select-none"
+        className="no-scrollbar relative z-10 flex-1 overflow-y-auto px-3.5 py-3 select-none"
         data-testid="qq-chat-list"
         style={{ touchAction: 'pan-y' }}
       >

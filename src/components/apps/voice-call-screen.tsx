@@ -155,14 +155,14 @@ function statusLine(
   }
 }
 
-// ---------------- 通话弹幕字幕（头像/名字下方实时流） ----------------
+// ---------------- 通话弹幕字幕（头像上方区域实时流） ----------------
 
 /** 单条字幕（用户反馈：字幕前面不要显示头像）——AI 左侧灰色字（AI 说话同步显示、灰色），我方右侧白字；
- *  整条弹跳入场（跳动特效，animate-call-caption） */
+ *  整条弹跳入场（跳动特效，animate-call-caption）；不带头像、不带光标竖线（用户反馈：字体显示时的竖线已删） */
 function CaptionLine({ mine, children }: { mine: boolean; children: ReactNode }) {
   return (
     <p
-      className={`animate-call-caption max-w-[85%] whitespace-pre-wrap break-words text-[13px] leading-[1.55] ${
+      className={`animate-call-caption max-w-[85%] whitespace-pre-wrap break-words text-[15px] leading-[1.5] ${
         mine ? 'ml-auto text-right text-white/90' : 'mr-auto text-left text-white/45'
       }`}
     >
@@ -171,15 +171,10 @@ function CaptionLine({ mine, children }: { mine: boolean; children: ReactNode })
   );
 }
 
-/** 逐字揭示中的光标 */
-function Caret() {
-  return <span className="animate-pulse" aria-hidden="true">▍</span>;
-}
-
 /**
- * 通话弹幕字幕流（头像/名字下方，跟实时弹幕一样逐条出现）：
- * - 我说的话：录音中 Web Speech 增量识别逐字上屏（liveHeard，白字+光标），识别完成后整句正式入列；
- * - AI 说的话：TTS 播报的同时按播放进度逐字揭示（aiReveal，灰色字+光标），播完整句沉淀；
+ * 通话弹幕字幕流（头像上方区域，跟实时弹幕一样逐条出现）：
+ * - 我说的话：录音中 Web Speech 增量识别逐字上屏（liveHeard，白字），识别完成后整句正式入列；
+ * - AI 说的话：TTS 播报的同时按播放进度逐字揭示（aiReveal，灰色字），播完整句沉淀；
  * - 新字幕自动滚到最新；内容来自 chatLog（语音轮次 + 文字聊天轮次统一呈现）。
  */
 function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
@@ -210,16 +205,12 @@ function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCall
           return (
             <CaptionLine key={`${m.at}-${i}`} mine={m.role === 'user'}>
               {text}
-              {partial && <Caret />}
             </CaptionLine>
           );
         })}
         {liveHeard && (
           <CaptionLine mine>
-            <span data-testid={`${variant}-call-liveheard`}>
-              {liveHeard}
-              <Caret />
-            </span>
+            <span data-testid={`${variant}-call-liveheard`}>{liveHeard}</span>
           </CaptionLine>
         )}
       </div>
@@ -424,7 +415,7 @@ function TextChatPanel({
       <div className="mx-5 mt-3.5 border-t border-white/10" aria-hidden="true" />
 
       {/* 消息列表（头像/名字/时长/按钮下方；语音轮次同步可见；空白时给引导文案） */}
-      <div ref={listRef} className="flex-1 space-y-3.5 overflow-y-auto px-4 py-4" aria-live="polite">
+      <div ref={listRef} className="no-scrollbar flex-1 space-y-3.5 overflow-y-auto px-4 py-4" aria-live="polite">
         {chatLog.length === 0 && !textBusy && (
           <p className="pt-8 text-center text-[13px] leading-relaxed text-white/40">
             通话中也可以发消息
@@ -549,9 +540,8 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
           {formatCallDuration(seconds)}
         </div>
       )}
-      {phase === 'dialing' && (
-        <div className="pt-[70px] text-center text-[20px] font-light text-white/90">语音通话</div>
-      )}
+      {/* 拨号中顶部「语音通话」文字已按需求删除，仅保留等高占位避免头像顶进灵动岛 */}
+      {phase === 'dialing' && <div className="h-[96px] shrink-0" aria-hidden="true" />}
       {/* 右上角信息图标：接通后可进入文字聊天（原「更多」+ 号换成信息图标） */}
       {phase === 'active' && (
         <button
@@ -565,19 +555,17 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：头像 + 名字 + 弹幕字幕流 + 状态（字幕显示在头像和名字下面，实时逐条出现） */}
+      {/* 中部：弹幕字幕流在上（大一号字号）、头像+名字往下（用户需求：字幕往上、头像名字往下）；
+          非接通态保持原布局（头像名字在上、状态行钉在下部） */}
       <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-9">
         {phase === 'incoming' && <div className="h-[56px] shrink-0" aria-hidden="true" />}
+        {phase === 'active' && <CaptionStream variant="wx" call={call} />}
         <div className="relative mt-1">
           {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-[16px] bg-white/10" aria-hidden="true" />}
           <CallAvatar variant="wx" avatar={avatar} size={104} />
         </div>
         <h2 className="mt-5 max-w-[280px] truncate text-[22px] font-medium leading-tight">{name}</h2>
-        {phase === 'active' ? (
-          <CaptionStream variant="wx" call={call} />
-        ) : (
-          <div className="min-h-4 flex-1" aria-hidden="true" />
-        )}
+        {phase !== 'active' && <div className="min-h-4 flex-1" aria-hidden="true" />}
         <p className="mt-1.5 text-[14px] text-white/60" aria-live="polite" data-testid="wx-call-status">
           {statusLine(phase, status, 'wx')}
         </p>
@@ -741,18 +729,16 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：圆形大头像 + 名字 + 弹幕字幕流 + 状态 */}
+      {/* 中部：弹幕字幕流在上、圆形大头像+名字往下（用户需求：字幕往上、头像名字往下）；
+          非接通态保持原布局（头像名字在上、状态行钉在下部） */}
       <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">
+        {phase === 'active' && <CaptionStream variant="qq" call={call} />}
         <div className="relative">
           {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />}
           <CallAvatar variant="qq" avatar={avatar} size={direction === 'in' ? 132 : 168} />
         </div>
         <h2 className="mt-6 max-w-[280px] truncate text-[24px] font-normal leading-tight">{name}</h2>
-        {phase === 'active' ? (
-          <CaptionStream variant="qq" call={call} />
-        ) : (
-          <div className="min-h-4 flex-1" aria-hidden="true" />
-        )}
+        {phase !== 'active' && <div className="min-h-4 flex-1" aria-hidden="true" />}
         <p className="mt-2 text-[15px] text-white/65" aria-live="polite" data-testid="qq-call-status">
           {statusLine(phase, status, 'qq')}
         </p>
