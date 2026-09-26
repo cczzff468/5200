@@ -282,7 +282,22 @@ export function useVoiceRecorder(opts: {
           .catch(() => optsRef.current.onResult(result, z));
         return;
       }
-      // 原松开发送 / 取消：不需要文本，后台静默收尾（发送的语音不附带文字，保持纯语音）
+      // 原松开发送：附带 Web Speech 实时转写（AI 能直接读到语音内容；失败照常发纯语音，App 层会补识别）
+      // 取消：不需要文本，后台静默收尾
+      if (z === null) {
+        if (!speech) {
+          optsRef.current.onResult(result, null);
+          return;
+        }
+        void speech
+          .stop()
+          .then((liveText) => {
+            const transcript = liveText.trim();
+            optsRef.current.onResult(transcript ? { ...result, transcript } : result, null);
+          })
+          .catch(() => optsRef.current.onResult(result, null));
+        return;
+      }
       void speech?.stop();
       optsRef.current.onResult(result, z);
     },
@@ -877,7 +892,10 @@ export function useSttPreview(opts: {
   const sendVoice = useCallback(() => {
     const st = stateRef.current;
     close();
-    if (st) optsRef.current.onSendVoice(st.clip);
+    if (!st) return;
+    // 预览确认过的识别文字并入语音消息（transcript）：AI 直接读到内容，长按「转文字」也无需再识别
+    const transcript = st.status === 'done' ? st.text.trim() : '';
+    optsRef.current.onSendVoice(transcript ? { ...st.clip, transcript } : st.clip);
   }, [close]);
 
   return { state, open, close, sendText, sendVoice, setText };

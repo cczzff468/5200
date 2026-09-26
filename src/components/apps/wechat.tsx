@@ -65,7 +65,8 @@ import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFre
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
-import { transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -301,7 +302,8 @@ interface WxMsg {
   tr?: WxTrData;
   notice?: WxNoticeData;
   fam?: WxFamData;
-  img?: { src: string };
+  /** 图片消息（kind='image'）：src = 压缩 dataURL；desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」，旧记录无此字段照常兼容） */
+  img?: { src: string; desc?: string };
   loc?: { name: string; address: string; lat?: number; lng?: number };
   /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示 */
   sys?: { text: string };
@@ -3937,17 +3939,19 @@ function ChatPage({
     (direction: 'out' | 'in') => {
       const base = msgs;
       const history: ChatCallTurnMsg[] = base
-        .filter((m) => !m.recalled && (m.content.trim().length > 0 || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
+        .filter((m) => !m.recalled && (m.content.trim().length > 0 || m.kind === 'location' || (m.kind === 'image' && m.img?.desc)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
         .slice(-8)
         .map((m) => ({
           role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
-          // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间），通话里问“我在哪”AI 也能答
+          // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间）；图片取识图描述，通话里 AI 同样知道聊过的图片内容
           content:
             m.kind === 'voice'
               ? m.voice?.transcript || m.voice?.localText || '[语音]'
               : m.kind === 'location'
                 ? locationAiText(m.loc, m.time)
-                : m.content,
+                : m.kind === 'image' && m.img?.desc
+                  ? `[图片]（图片内容：${m.img.desc}）`
+                  : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
       startGlobalCall({
@@ -4004,7 +4008,10 @@ function ChatPage({
           (m.kind === 'forward' && m.fwd?.merged
             ? `[聊天记录：${(m.fwd.records ?? []).slice(-8).map((r) => `${r.name}：${r.text}`).join(' ／ ')}]`
             : m.kind === 'image'
-            ? '[图片]'
+            ? // 图片消息：有识图描述时 AI 读到内容（历史可回看）；无描述时占位（防编造规则由 system 注入）
+              m.img?.desc
+              ? `[图片]（图片内容：${m.img.desc}）`
+              : '[图片]'
             : m.kind === 'voice'
             ? // 语音消息：AI 直接读转写文本（自然对话）；未识别时读本地原文（AI 语音/文字转语音），再退回占位
               m.voice?.transcript || m.voice?.localText || '[语音]'
@@ -4024,7 +4031,7 @@ function ChatPage({
                 : m.kind === 'family' && m.fam
                   ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m)}]`
                   : m.kind === 'groupcard' && m.gcard
-                    ? `[群聊邀请卡片：${m.gcard.name}，${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
+                    ? `[群聊邀请卡片：${m.gcard.name}（${m.gcard.inviterName || '群友'}邀请${m.gcard.memberNames?.length ? `，成员：${m.gcard.memberNames.join('、')}` : ''}），${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
                     : m.content),
         };
       });
@@ -4055,13 +4062,16 @@ function ChatPage({
     const socialRules = buildGroupSocialRules(peer, 'wx', contacts, meAddrName);
     // 记忆库：召回该联系人（互通开关限定范围）的记忆注入 system，让 AI 带着记忆回复；
     // 相关性上下文用本轮触发消息（用户消息/系统事件）+ 最近几条，没记忆时返回空串不注入
-    // 扫描文本口径：语音取转写、位置取完整位置文本（名称/地址/经纬度/时间），位置消息也能参与记忆召回
+    // 扫描文本口径：语音取转写、位置取完整位置文本（名称/地址/经纬度/时间）、图片取识图描述，
+    // 无文本内容的卡片也能参与记忆召回（位置消息也能参与记忆召回）
     const scanTextOf = (m: WxMsg): string =>
       m.kind === 'voice'
         ? m.voice?.transcript || ''
         : m.kind === 'location'
           ? locationAiText(m.loc, m.time)
-          : m.content;
+          : m.kind === 'image'
+            ? m.img?.desc || ''
+            : m.content;
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
@@ -4093,6 +4103,18 @@ function ChatPage({
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，
     // 不拦截消息——角色仍可发消息，但要按人设表现出被拉黑/已拉黑的态度，并可输出对应标记）
     const blkBlock = buildBlockPromptBlock('wx', peer.id, me.name);
+    // 占位防编造（AI 感知审计修复）：最近消息里有听不到内容的语音 / 看不到内容的图片时注入——
+    // AI 不得假装听过/看过并编造细节（本轮正在识图的图片排除：描述随后作为独立消息追加）
+    const turnImageIds = new Set<string>();
+    for (let i = base.length - 1; i >= 0 && turnImageIds.size < 3; i--) {
+      const m = base[i];
+      if (m.role !== 'me') break;
+      if (m.kind === 'image') turnImageIds.add(m.id);
+    }
+    const mediaRules = [
+      buildVoicePlaceholderRule(base),
+      buildImagePlaceholderRule(base, { excludeIds: turnImageIds }),
+    ].filter(Boolean);
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -4104,6 +4126,7 @@ function ChatPage({
       quitCtx?.section ?? '',
       kickSection,
       socialRules,
+      ...(mediaRules.length > 0 ? [mediaRules.join('\n\n')] : []),
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       wbBlocks.afterSystem,
@@ -4121,13 +4144,18 @@ function ChatPage({
     if (sysEvent) payloadMsgs.push({ role: 'user', content: sysEvent });
 
     // 识图输入：收集本轮的图片（从末尾向前、连续「我」的消息里的图片；遇到对方/AI 回复即停，
-    // 最多 3 张）。识图配置存在时，chat-stream-store 会先识图再把描述作为上下文交给聊天模型；
+    // 最多 3 张）。识图配置存在时，chat-stream-store 会先识图再把描述作为上下文交给聊天模型，
+    // 并经 onVision 把描述写回对应图片消息（img.desc 持久化，之后的聊天历史 AI 都能读到图片内容）；
     // 未配置时该字段不生效，行为与旧版一致
     const turnImages: string[] = [];
+    const turnImageMsgIds: string[] = [];
     for (let i = base.length - 1; i >= 0 && turnImages.length < 3; i--) {
       const m = base[i];
       if (m.role !== 'me') break;
-      if (m.kind === 'image' && m.img?.src) turnImages.unshift(m.img.src);
+      if (m.kind === 'image' && m.img?.src) {
+        turnImages.unshift(m.img.src);
+        turnImageMsgIds.unshift(m.id);
+      }
     }
 
     // ---- 边接收边逐条投递（分段流式核心）----
@@ -4305,7 +4333,19 @@ function ChatPage({
       messages: payloadMsgs,
       apiConfig,
       replyCount,
-      ...(turnImages.length > 0 ? { vision: { images: turnImages, text: userMsg?.content ?? '' } } : {}),
+      ...(turnImages.length > 0
+        ? {
+            vision: { images: turnImages, text: userMsg?.content ?? '' },
+            // 识图描述回写最后一张图片消息（img.desc 持久化）：之后的聊天历史 AI 都能读到图片内容
+            onVision: (desc: string) => {
+              const targetId = turnImageMsgIds[turnImageMsgIds.length - 1];
+              if (!targetId) return;
+              setMsgs((prev) =>
+                prev.map((x) => (x.id === targetId && x.img ? { ...x, img: { ...x.img, desc } } : x)),
+              );
+            },
+          }
+        : {}),
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
@@ -4561,24 +4601,43 @@ function ChatPage({
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音为本地仿真 localText，无音频） */
   type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
-  /** 语音消息落库：入列 → 直接触发 AI 回复（语音不再自动转文字，长按「转文字」才识别）；
-   *  presetTranscript = 文字转语音的原文；selfChat 只记录；回复中排队补跑 */
+  /** 语音消息落库：入列 → 直发语音先自动转写（AI 读内容）再触发回复；已有转写直接触发；
+   *  presetTranscript = 文字转语音/划转文字/Web Speech 实时结果；selfChat 只记录；回复中排队补跑 */
   const commitVoiceMsg = useCallback(
     (clip: VoiceClip, presetTranscript?: string) => {
-      const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
+      const hasText = typeof presetTranscript === 'string' && presetTranscript.trim().length > 0;
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, stt: 'pending' };
       const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
       // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复
       if (peer.id === me.id) return;
-      if (isChatStreaming(sessionKey)) {
-        wxQueuedTurns.add(peer.id); // 对方正在回复：本轮结束后自动补跑
+      /** 触发 AI 回复（对方正在回复则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
+      const kickTurn = () => {
+        if (isChatStreaming(sessionKey)) {
+          wxQueuedTurns.add(peer.id); // 对方正在回复：本轮结束后自动补跑
+          return;
+        }
+        window.setTimeout(() => runAiTurnRef.current?.(null), 80);
+      };
+      if (hasText) {
+        // 已带转写（文字转语音 / 划到转文字后发语音 / Web Speech 实时结果）：直接触发
+        kickTurn();
         return;
       }
-      // 消息已在列（history 映射无转写时用 '[语音]' 占位），userMsg 传 null
-      window.setTimeout(() => runAiTurnRef.current?.(null), 80);
+      // 直发语音：先自动转写（AI 当轮就能读到内容），成功回填 transcript 后触发回复；
+      // 失败/超时也照常触发——AI 按「语音占位」防编造规则回应，不假装听过
+      void autoTranscribeForAi(clip.blob).then((text) => {
+        setMsgs((prev) =>
+          prev.map((x) =>
+            x.id === msg.id && x.voice
+              ? { ...x, voice: text ? { ...x.voice, transcript: text, stt: 'done' as const } : { ...x.voice, stt: 'failed' as const } }
+              : x,
+          ),
+        );
+        window.setTimeout(kickTurn, 150); // 等重渲染 + runAiTurnRef 回填新闭包（含转写文本）
+      });
     },
     [me.id, peer.id, sessionKey],
   );
@@ -4605,7 +4664,9 @@ function ChatPage({
       runAiTurnRef.current?.(userMsg);
     },
     onSendVoice: (clip) => {
-      void blobToDataUrl(clip.blob).then((dataUrl) => commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave }));
+      void blobToDataUrl(clip.blob).then((dataUrl) =>
+        commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave }, clip.transcript),
+      );
     },
   });
 
@@ -4622,8 +4683,10 @@ function ChatPage({
         sttPreview.open(result);
         return;
       }
-      // 原松开：语音气泡入列（不自动转文字），直接触发回复
-      void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
+      // 原松开：语音气泡入列（附带 Web Speech 实时转写如有）；无转写由 commitVoiceMsg 自动补识别，再触发回复
+      void blobToDataUrl(result.blob).then((dataUrl) =>
+        commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }, result.transcript),
+      );
     },
     [commitVoiceMsg, me.id, onToast, peer.id, sessionKey, sttPreview.open],
   );
@@ -4652,7 +4715,9 @@ function ChatPage({
         ? `[表情] ${m.stk.meaning}`
         : '[表情]'
       : m.kind === 'image'
-        ? '[图片]'
+        ? m.img?.desc
+          ? `[图片] ${m.img.desc}`
+          : '[图片]'
         : m.kind === 'voice'
           ? m.voice?.transcript
             ? `[语音] ${m.voice.transcript}`

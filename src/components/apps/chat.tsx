@@ -79,7 +79,8 @@ import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
-import { transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
@@ -860,6 +861,8 @@ function ChatView({
       momentsBlock,
       // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，不拦截消息）
       wbContactId ? buildBlockPromptBlock('sms', wbContactId, profileName) : '',
+      // 语音占位防编造：最近消息里有听不到内容的语音时注入，AI 不假装听过、不编造内容
+      buildVoicePlaceholderRule(msgs),
       timeBlock,
       stickersOn ? '' : STICKER_OFF_RULE,
       ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
@@ -1208,19 +1211,37 @@ function ChatView({
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
   type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
-  /** 语音消息落库：入列 → 直接触发 AI 回复（语音不再自动转文字，长按「转文字」才识别）；
-   *  presetTranscript = 文字转语音的原文；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
+  /** 语音消息落库：入列 → 直发语音先自动转写（AI 读内容）再触发回复；已有转写直接触发；
+   *  presetTranscript = 文字转语音/划转文字/Web Speech 实时结果；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
   const commitVoiceMsg = useCallback(
     (clip: VoiceClip, presetTranscript?: string) => {
-      const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
+      const hasText = typeof presetTranscript === 'string' && presetTranscript.trim().length > 0;
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, stt: 'pending' };
       const msg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
-      // 消息已在列（history 映射无转写时用 '[语音]' 占位），userMsg 传 null
-      if (isChatStreaming(sessionKey)) return;
-      window.setTimeout(() => startAiTurnRef.current?.(null), 80);
+      /** 触发 AI 回复（对方正在回复则跳过，语音照常入列）；转写完成后再触发，AI 才能读到语音内容 */
+      const kickTurn = () => {
+        if (isChatStreaming(sessionKey)) return;
+        window.setTimeout(() => startAiTurnRef.current?.(null), 80);
+      };
+      if (hasText) {
+        kickTurn();
+        return;
+      }
+      // 直发语音：先自动转写（AI 当轮就能读到内容），成功回填 transcript 后触发回复；
+      // 失败/超时也照常触发——AI 按「语音占位」防编造规则回应，不假装听过
+      void autoTranscribeForAi(clip.blob).then((text) => {
+        setMsgs((prev) =>
+          prev.map((x) =>
+            x.id === msg.id && x.voice
+              ? { ...x, voice: text ? { ...x.voice, transcript: text, stt: 'done' as const } : { ...x.voice, stt: 'failed' as const } }
+              : x,
+          ),
+        );
+        window.setTimeout(kickTurn, 150); // 等重渲染 + startAiTurnRef 回填新闭包（含转写文本）
+      });
     },
     [sessionKey],
   );
@@ -1243,7 +1264,7 @@ function ChatView({
     },
     onSendVoice: (clip) => {
       void blobToDataUrl(clip.blob).then((dataUrl) =>
-        commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave })
+        commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave }, clip.transcript),
       );
     },
   });
@@ -1261,9 +1282,9 @@ function ChatView({
         sttPreview.open(result);
         return;
       }
-      // 原松开：语音气泡入列（不自动转文字），直接触发回复
+      // 原松开：语音气泡入列（附带 Web Speech 实时转写如有）；无转写由 commitVoiceMsg 自动补识别，再触发回复
       void blobToDataUrl(result.blob).then((dataUrl) =>
-        commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave })
+        commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }, result.transcript),
       );
     },
     [commitVoiceMsg, sessionKey, showToast, sttPreview.open],

@@ -135,7 +135,8 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegment
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
-import { transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -2084,7 +2085,7 @@ export function QqGroupChatPage({
 
   /** 就地更新一条群消息的附加数据（红包/转账状态流转、AI 语音升级用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
-    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice'>>) => {
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice' | 'img'>>) => {
       const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -2146,7 +2147,7 @@ export function QqGroupChatPage({
 
   /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
-    if (m.kind === 'image') return '[图片]';
+    if (m.kind === 'image') return m.img?.desc ? `[图片]（图片内容：${m.img.desc}）` : '[图片]';
     // 语音消息：转写直接作为文本内容进上下文（识别不出时用本地原文兜底——AI 语音消息/文字转语音存了朗读原文；都没有时用占位，成员知道 TA 发了语音）
     if (m.kind === 'voice') return m.voice?.transcript || groupVoiceLocalText(m.voice) || '[语音]';
     if (m.kind === 'sticker' && m.stk) {
@@ -2174,7 +2175,9 @@ export function QqGroupChatPage({
   /** 消息的可复制/引用文本快照（长按菜单复制、引用、转发占位、收藏共用） */
   const msgSnapshotOf = (m: WxGroupMsg): string =>
     m.kind === 'image'
-      ? '[图片]'
+      ? m.img?.desc
+        ? `[图片] ${m.img.desc}`
+        : '[图片]'
       : m.kind === 'voice'
         ? m.voice?.transcript || groupVoiceLocalText(m.voice)
           ? `[语音] ${m.voice?.transcript || groupVoiceLocalText(m.voice)}`
@@ -2365,7 +2368,7 @@ export function QqGroupChatPage({
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
   const runCharTurn = useCallback(
-    (char: ContactRecord, allowSkip: boolean, turnImages: string[]) =>
+    (char: ContactRecord, allowSkip: boolean, turnImageSrcs: { src: string; id: string }[]) =>
       new Promise<void>((resolve) => {
         const g = getGroup(gid);
         if (!g) {
@@ -2477,6 +2480,14 @@ export function QqGroupChatPage({
             '这些事件都是真实发生的，不要装作没看见：有新成员加入可以按人设自然打招呼，有人退群/被禁言/成为管理员/群主转让等也可以在合适的时机自然反应；但不必逐条点评事件，没有想说的就不用特意回应。'
           );
         }
+        // 占位防编造（AI 感知审计修复）：群里最近有听不到内容的语音 / 看不到内容的图片时注入——
+        // 不得假装听过/看过并编造细节（本轮正在识图的图片排除：描述随后作为独立消息追加）
+        const turnImageIdsForRules = new Set<string>(turnImageSrcs.map((x) => x.id));
+        const mediaRules = [
+          buildVoicePlaceholderRule(ctxMsgs),
+          buildImagePlaceholderRule(ctxMsgs, { excludeIds: turnImageIdsForRules }),
+        ].filter(Boolean);
+        if (mediaRules.length > 0) groupRules.push(...mediaRules);
         // 发言自判（按人设来）：未被 @ 的成员无话可说时只回 [SKIP]（finalize 阶段整条丢弃，不落盘）
         if (allowSkip) {
           groupRules.push('【发言判断】刚发出的这条消息如果与你无关、不需要你表态或你无话可说（比如别人在单独聊天），只回复 [SKIP] 两个词，不要说任何其他内容；有你要说的就正常回复。');
@@ -2730,7 +2741,17 @@ export function QqGroupChatPage({
           apiConfig,
           replyCount,
           // 配置识图模型后：群里发的图片先识图，成员结合图片按人设回复（与单聊同管线）
-          ...(turnImages.length > 0 ? { vision: { images: turnImages, text: lastUserText } } : {}),
+          ...(turnImageSrcs.length > 0
+            ? {
+                vision: { images: turnImageSrcs.map((x) => x.src), text: lastUserText },
+                // 描述回写最后一张图片消息（img.desc 持久化）：之后的聊天历史成员都能读到图片内容
+                onVision: (desc: string) => {
+                  const target = turnImageSrcs[turnImageSrcs.length - 1];
+                  if (!target) return;
+                  patchGroupMsg(target.id, { img: { ...(loadGroupMsgs(gid).find((m) => m.id === target.id)?.img ?? { src: target.src }), desc } });
+                },
+              }
+            : {}),
           // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
           onSegment: deliverSegment,
           finalize: (result) => {
@@ -2820,19 +2841,19 @@ export function QqGroupChatPage({
         const mentioned = trigger ? parseMentions(trigger.content) : [];
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
-        // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则）
-        const turnImages: string[] = [];
+        // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则；带消息 id，供规则排除与描述回写落盘）
+        const turnImageSrcs: { src: string; id: string }[] = [];
         const persisted = loadGroupMsgs(gid);
-        for (let i = persisted.length - 1; i >= 0 && turnImages.length < 3; i--) {
+        for (let i = persisted.length - 1; i >= 0 && turnImageSrcs.length < 3; i--) {
           const m = persisted[i];
           if (m.role !== 'me') break;
-          if (m.kind === 'image' && m.img?.src) turnImages.unshift(m.img.src);
+          if (m.kind === 'image' && m.img?.src) turnImageSrcs.unshift({ src: m.img.src, id: m.id });
         }
         for (const char of ordered) {
           if (!getGroup(gid)) break; // 群已被解散
           groupSpeaker.set(sKey, char.id);
           if (mountedRef.current) setSpeakerId(char.id);
-          await runCharTurn(char, !mentioned.includes(char), turnImages);
+          await runCharTurn(char, !mentioned.includes(char), turnImageSrcs);
           await sleep(420);
         }
       } finally {
@@ -2910,7 +2931,7 @@ export function QqGroupChatPage({
   /** 语音片段统一形态（录音带 blob 供转文字；文字转语音只有 dataURL） */
   type VoiceClip = { blob?: Blob; dataUrl: string; duration: number; wave: number[]; localText?: string };
 
-  /** 语音消息落库：入列 → 直接触发群回合（语音不再自动转文字，长按「转文字」才识别）；
+  /** 语音消息落库：入列 → 直发语音先自动转写（成员读内容）再触发群回合；已有转写直接触发；
    *  禁言拦截；回合进行中则只落库并排队 */
   const commitVoiceMsg = useCallback(
     (clip: VoiceClip, presetTranscript?: string) => {
@@ -2918,20 +2939,36 @@ export function QqGroupChatPage({
         onToast('你已被禁言，暂时无法发言');
         return;
       }
-      const hasText = typeof presetTranscript === 'string' && presetTranscript.length > 0;
+      const hasText = typeof presetTranscript === 'string' && presetTranscript.trim().length > 0;
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
-        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText };
+        : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, stt: 'pending' };
       const msg: WxGroupMsg = { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: '', time: Date.now(), kind: 'voice', voice };
       appendMsg(msg);
-      // 消息已入库（无转写时成员历史映射用 '[语音]' 占位）
-      if (runningRef.current || isChatStreaming(sKey)) {
-        groupQueuedRef.current = true; // 成员们还在回复：这轮结束后自动补跑
+      /** 触发群回合（回合进行中则排队补跑）；转写完成后再触发，成员才能读到语音内容 */
+      const kickTurn = () => {
+        if (runningRef.current || isChatStreaming(sKey)) {
+          groupQueuedRef.current = true; // 成员们还在回复：这轮结束后自动补跑
+          return;
+        }
+        window.setTimeout(() => runGroupTurnRef.current?.(), 80);
+      };
+      if (hasText) {
+        kickTurn();
         return;
       }
-      window.setTimeout(() => runGroupTurnRef.current?.(), 80);
+      // 直发语音：先自动转写（成员当轮就能读到内容），成功回填 transcript 后触发回合；
+      // 失败/超时也照常触发——成员按「语音占位」防编造规则回应，不假装听过
+      void autoTranscribeForAi(clip.blob).then((text) => {
+        patchGroupMsg(msg.id, {
+          voice: text
+            ? { ...voice, transcript: text, stt: 'done' as const }
+            : { ...voice, stt: 'failed' as const },
+        });
+        window.setTimeout(kickTurn, 150);
+      });
     },
-    [appendMsg, me.name, meMuted, onToast, sKey],
+    [appendMsg, me.name, meMuted, onToast, patchGroupMsg, sKey],
   );
 
   /** 「划到转文字」松开后：先识别再预览，由用户决定发送文字 / 发送语音（原始录音）/ 取消 */
@@ -2953,7 +2990,9 @@ export function QqGroupChatPage({
       runGroupTurnRef.current?.(msg);
     },
     onSendVoice: (clip) => {
-      void blobToDataUrl(clip.blob).then((dataUrl) => commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave }));
+      void blobToDataUrl(clip.blob).then((dataUrl) =>
+        commitVoiceMsg({ blob: clip.blob, dataUrl, duration: clip.duration, wave: clip.wave }, clip.transcript),
+      );
     },
   });
 
@@ -2974,8 +3013,10 @@ export function QqGroupChatPage({
         sttPreview.open(result);
         return;
       }
-      // 原松开：语音气泡入列（不自动转文字），直接触发群回合
-      void blobToDataUrl(result.blob).then((dataUrl) => commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }));
+      // 原松开：语音气泡入列（附带 Web Speech 实时转写如有）；无转写由 commitVoiceMsg 自动补识别，再触发回合
+      void blobToDataUrl(result.blob).then((dataUrl) =>
+        commitVoiceMsg({ blob: result.blob, dataUrl, duration: result.duration, wave: result.wave }, result.transcript),
+      );
     },
     [appendMsg, commitVoiceMsg, meMuted, onToast, sKey, sttPreview.open],
   );

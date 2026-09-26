@@ -70,3 +70,26 @@ export async function transcribeAudioBlob(blob: Blob): Promise<string> {
   const j = (await res.json()) as { text?: string };
   return typeof j.text === 'string' ? j.text.trim() : '';
 }
+
+/**
+ * 直发语音的自动转写（AI 感知用，五端共用）：
+ * 用户按住说话直接松手发出的语音没有转写文本，AI 历史里只剩「[语音]」占位——
+ * 本函数在消息入列后补一次识别（成功 → 回填 transcript，AI 当轮就能读到内容；
+ * 失败 / 超时 → 返回空串，AI 按「语音占位」防编造规则回应，绝不假装听过）。
+ * 与长按「转文字」共用同一套 STT 配置；不抛错，调用方无需 try/catch。
+ */
+export async function autoTranscribeForAi(blob: Blob | undefined, timeoutMs = 20000): Promise<string> {
+  if (!blob || !isSttReady()) return '';
+  try {
+    const text = await Promise.race([
+      transcribeAudioBlob(blob),
+      new Promise<string>((_, rej) => window.setTimeout(() => rej(new Error('转文字超时')), timeoutMs)),
+    ]);
+    const cleaned = text.trim();
+    // 过滤 ASR 对静音/噪声的典型无意义输出（纯符号，如 "#"、"…"），避免当成有效转写
+    if (!cleaned || /^[#\s*_\-.,!?~。？！，、…—·]+$/.test(cleaned)) return '';
+    return cleaned;
+  } catch {
+    return '';
+  }
+}

@@ -111,6 +111,12 @@ export interface BeginChatStreamOptions {
    */
   vision?: ChatVisionInput;
   /**
+   * 识图成功回调（可选）：desc = 本轮图片的完整描述文本。各 App 在此把描述写进
+   * 对应图片消息持久化（img.desc），之后的聊天历史 AI 都能读到图片内容，
+   * 不再只剩「[图片]」占位；与页面是否存活无关（模块层调用）。
+   */
+  onVision?: (desc: string) => void;
+  /**
    * 流结束（成功或失败，恰好一次）后把最终 AI 消息写入该角色的聊天记录。
    * 由各 App 在发起时提供：内部使用该 App 的 loadMsgs/saveMsgs 与消息类型，
    * 不依赖任何组件存活（页面已退出也能正确落盘）。
@@ -273,6 +279,12 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
             const n = opts.vision.images.length;
             const prefix = n > 1 ? `（我发了 ${n} 张图片，图片内容分别是：` : '（我发了一张图片，图片内容是：';
             workMessages = [...messages, { role: 'user' as const, content: `${prefix}${desc}）` }];
+            // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容
+            try {
+              opts.onVision?.(desc);
+            } catch {
+              // 落盘失败不影响本轮回复（描述已进上下文）
+            }
           }
         } catch (err) {
           const detail = err instanceof Error && err.message ? err.message : '未知原因';

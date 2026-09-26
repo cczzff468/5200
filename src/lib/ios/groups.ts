@@ -185,7 +185,8 @@ export interface WxGroupMsg {
   evt?: GroupEventDetail;
   /** 资金通知行数据（xx领取了你的红包/收下了你的转账；渲染用彩色尾词行） */
   notice?: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string };
-  img?: { src: string };
+  /** 图片消息（kind='image'）：src = 压缩 dataURL；desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」，旧记录无此字段照常兼容） */
+  img?: { src: string; desc?: string };
   /** 位置卡片消息（群里所有角色可见，进上下文映射为 [位置] 文本） */
   loc?: { name: string; address: string; lat?: number; lng?: number };
   /** 表情包消息（用户从表情面板发送；AI 上下文映射为 [发送了表情：意思]） */
@@ -917,7 +918,14 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
       r.notice && typeof r.notice.pre === 'string' && typeof r.notice.accent === 'string'
         ? { icon: r.notice.icon === 'tr' || r.notice.icon === 'fam' ? r.notice.icon : 'rp', pre: r.notice.pre, accent: r.notice.accent }
         : undefined,
-    img: r.img && typeof r.img.src === 'string' ? { src: r.img.src } : undefined,
+    img:
+      r.img && typeof r.img.src === 'string'
+        ? {
+            src: r.img.src,
+            // 识图描述（可选）：随消息持久化，之后的聊天历史 AI 都能读到图片内容
+            desc: typeof r.img.desc === 'string' && r.img.desc ? r.img.desc : undefined,
+          }
+        : undefined,
     loc:
       r.loc && typeof r.loc.name === 'string' && typeof r.loc.address === 'string'
         ? {

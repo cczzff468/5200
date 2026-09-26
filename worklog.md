@@ -7433,3 +7433,23 @@ Work Log:
 Stage Summary:
 - 位置消息从「AI 只看到这是位置消息」修复为「AI 完整知道用户在哪」：地点名/地址/经纬度/发送时间随消息落盘，五端（微信/QQ 单聊+群聊、语音通话）共用 chat-location.ts 一套注入，AI 被问「我在哪」直接说出地点名；地点名解析失败时诚实说「无法识别该位置」不编造；位置消息参与记忆提取与召回；重启后保留
 - 小窗交互对照用户反馈完成三处调优：贴边松手不隐藏、往边缘里划才隐藏（26px 阈值防误触）、圆角 12px、整体缩小（72 宽）
+
+---
+Task ID: 5
+Agent: Z.ai Code (main)
+Task: AI 感知审计修复——①直发语音自动转写（AI 读到语音内容）②识图描述落盘+占位防编造 ③QQ 亲属卡补额度 ④群邀请卡片补邀请人/成员
+
+Work Log:
+- 审计结论（16 项 AI 感知功能）：12 项正常（文字/位置/红包/转账/表情包/引用/群系统消息/通话记录/朋友圈/世界书/记忆/拉黑）、3 项部分正常（图片、亲属卡、群邀请）、1 项有问题（语音——直发语音 AI 只收到 [语音] 占位，0 内容传递）；本轮全部修复
+- 修复①语音：voice-input.tsx 直发路径附带 Web Speech 实时转写（原代码故意丢弃 liveText）、useSttPreview.sendVoice 把预览确认的文字并入 clip.transcript；stt-client.ts 新增 autoTranscribeForAi（20s 超时、纯符号噪声过滤、不抛错）；五端（wechat/qq/chat/wx-group/qq-group）commitVoiceMsg 重构——已有转写直接触发回复，无转写先自动转写（stt pending→转写中 UI）成功回填 transcript 再触发 AI 回复，失败/超时也触发（AI 按防编造规则回应）；录音松手/划转文字发语音两条路径均透传 transcript
+- 修复②图片：chat-stream-store.ts 新增 onVision 回调（识图成功后把描述交还各 App）；wechat/qq 单聊 runAiTurn 收集 turnImageMsgIds，onVision 把描述写回最后一张图片消息 img.desc（自动落盘持久化）；wx-group/qq-group runCharTurn 升级 turnImageSrcs {src,id}[]，onVision 经 patchGroupMsg 回写；groups.ts WxGroupMsg.img +desc 且 normalizeMsg 保留；wechat WxMsg.img/QQMsg.img 类型 +desc（loadMsgs spread 自动保留，QQ 转发克隆保留 img）；五端历史映射图片消息升级为「[图片]（图片内容：…）」（有 desc 时），记忆/世界书扫描文本图片分支取 desc；openVoiceCall 快照放行带 desc 的图片（wx/qq 通话里 AI 也能聊图片）；引用快照 quoteContentOf 带图片描述
+- 防编造规则：新建 src/lib/chat-media-rules.ts（buildVoicePlaceholderRule/buildImagePlaceholderRule，按「最近 12 条里是否真有内容缺失的占位」决定注入，有才占 token；本轮正在识图的图片按消息 id 排除避免自相矛盾；stt pending 的语音不算缺失）；wechat/qq 单聊注入 systemFull、wx-group/qq-group 注入 groupRules、chat.tsx 注入 baseSys
+- 修复③亲属卡：qq.tsx 历史映射 `[亲属卡，状态]` → `[亲属卡 ID:x 每月额度¥x "留言"，状态]`（与微信端同构）
+- 修复④群邀请卡片：wechat/qq 历史映射补邀请人与成员名单 `[群聊邀请卡片：群名（XX邀请，成员：A、B），状态]`
+- 校验：bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 编译通过
+- E2E（agent-browser 实机）：微信登录（注入 user+char 联系人）→ 发图片消息（SUNSET 2026）→ 未配识图按设计不触发回复 → 补发文字 → AI 拆条 4 条正常回复且未编造图片内容（泛泛回应+主动问"你是在哪里拍的呀"，符合【图片占位】规则期望行为）→ IndexedDB 落盘消息结构正确（含图片/文字/peer 回复）；/api/stt 内置识别 curl 实测可用（wav16k→文本）；信息 App 文字聊天回归正常
+- 说明：语音端到端录音需真麦克风（沙箱不支持），自动转写链路（autoTranscribeForAi → /api/stt → 回填 → 触发回复）经类型检查+服务端实测可用性覆盖；UI 层「转文字中…」/转写面板复用 VoiceMsgBubble 既有三态展示
+
+Stage Summary:
+- 16 项 AI 感知审计发现的问题全部修复：语音从「只传 [语音] 信号」变为「AI 当轮读到转写内容（失败时明确告知听不到、不编造）」；图片从「识图描述只在当轮、历史即失忆」变为「img.desc 随消息持久化、历史/记忆/通话全程可读（未配识图时 system 明确禁止编造图片内容）」；QQ 亲属卡补每月额度；群邀请卡片补邀请人+成员名单
+- 新共享模块：chat-media-rules.ts（占位防编造规则）、autoTranscribeForAi（stt-client）、chat-stream-store onVision 回调；五端共用一套口径，不影响回复条数/拆条/记忆/通话/群聊等既有机制
