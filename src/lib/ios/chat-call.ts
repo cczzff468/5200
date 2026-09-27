@@ -441,13 +441,16 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
 
   /** 挂断后 AI 续聊（三端共用逻辑，挂断即触发）+ 记忆总结（一次提取「通话内容+续聊文字」）：
    *  ① 接通后挂断（AI 主动挂断 / 用户挂断）→ 基于人设+通话内容+记忆+最近聊天生成文字，立刻发
-   *     （条数上限 = 该会话聊天设置「回复条数」，没话可以少发）；
+   *     （条数上限 = 该会话聊天设置「回复条数」，没话可以少发；真实通话时长随 duration 直传——
+   *     刚接通没聊起来的短通话由服务端注入「没聊起来+禁虚构」场景文，AI 打圆场而非接话茬，B-3）；
    *  ② AI 打来的电话被拒/未接（direction in）、拨号被取消（direction out）→ 生成自然的反应消息；
    *  ③ 拨出去被 AI 拒接/未接（direction out 的 reject/no-answer）→ 接听决策 afterText 已覆盖，不重复发。
    *  续聊文字并入通话转写后交 summarizeCall 沉淀（同池互通、按联系人隔离）；请求失败也照常总结。 */
   const followupAndSummarize = useCallback(
     (endReason: ChatCallEndReason) => {
       const peer = optsRef.current.contact;
+      // 接通判定（三态口径不变，Task 21）：挂断类原因只在接通后可达；0 秒短通话也如实上报 connected=true，
+      // 续聊的「没聊起来」场景由服务端按 duration 分档注入（B-3）——不在此伪造未接通
       const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
       const eligible =
         !!peer &&
@@ -540,6 +543,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     setRecording(false);
     setStatus('listening');
     reportCallSeconds(0);
+    // 接通判定（三态口径不变，Task 21）：'hangup'/'ai-hangup' 只在接通后可达，短通话（0 秒）保持 connected=true，
+    // 通话卡片三态不变——挂断续聊的「刚接通没聊起来」场景由服务端按 duration 分档处理（B-3）
     const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
     // 挂断后 AI 续聊（立刻发）+ 通话结束自动总结：整通转写（含续聊文字）交给记忆管线提取关键信息（异步，不阻塞宿主落卡片）
     followupAndSummarize(endReason);
@@ -1167,16 +1172,24 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     finish('reject');
   }, [finish]);
 
-  // 来电（direction='in'）：接听/拒绝方法与引擎阶段同步到全局通话 store ——
-  // 全局来电弹窗（微信大窗/胶囊）上的接听、忽略按钮经 useGlobalCall.engine 代理到本页引擎；
-  // phase 变化（incoming→active/ended）自动重注册/清空，来电弹窗随之出现/消失
+  /** 替换前收尾兜底（B-1）：startGlobalCall 检测到已有活动通话时经全局层句柄触发本方法——
+   *  按当前阶段映射真实结局走完整收尾（finish → onEnd 落卡片/挂断续聊/记忆总结），不让旧通话被静默杀死：
+   *  响铃中被打断 = 未接听（missed-in）/ 拨号中被打断 = 已取消（cancel）/ 已接通被打断 = 对方（机主）挂断（hangup）；
+   *  已结束（endedRef）时幂等跳过，绝不 double-finish */
+  const finishByReplacement = useCallback(() => {
+    if (endedRef.current) return;
+    finish(phaseRef.current === 'incoming' ? 'missed-in' : phaseRef.current === 'dialing' ? 'cancel' : 'hangup');
+  }, [finish]);
+
+  // 引擎句柄注册（所有方向都注册）：direction='in' 时全局来电弹窗（微信大窗/胶囊）上的接听/忽略按钮
+  // 经 useGlobalCall.engine 代理到本页引擎（accept/reject）；finishByReplacement 供全局层 startGlobalCall
+  // 替换旧通话前触发完整收尾（B-1 兜底）。phase 变化自动重注册，来电弹窗随 phase（incoming）出现/消失
   useEffect(() => {
-    if (direction !== 'in') return;
-    useGlobalCall.getState().setEngine({ accept, reject }, phase);
+    useGlobalCall.getState().setEngine({ accept, reject, finishByReplacement }, phase);
     return () => {
       useGlobalCall.getState().setEngine(null, null);
     };
-  }, [direction, accept, reject, phase]);
+  }, [accept, reject, finishByReplacement, phase]);
 
   const hangup = useCallback(() => {
     if (endedRef.current) return;

@@ -16,6 +16,7 @@
  *    恢复完整小窗，再点小窗进全屏通话页；
  * 4. 通话结束（恰好一次）：引擎回调 onEnd —— 宿主在回调里用各自的 loadMsgs/saveMsgs
  *    直写通话卡片（聊天页卸载了也能落盘），随后 close() 清理会话；
+ *    替换中的旧通话也走同一路径（startGlobalCall 替换前收尾兜底，B-1）——旧通话先完整收尾再被新通话顶替；
  * 5. 通话秒数总线：引擎每秒 reportCallSeconds 上报，悬浮小窗订阅显示实时时长
  *    （小窗与全屏页是两个组件，时长经此共享）。
  */
@@ -62,12 +63,15 @@ interface GlobalCallState {
   pipSide: 'left' | 'right';
   /** 小窗位置（相对手机壳左上角；null=未初始化，首次显示时按壳尺寸摆到右上） */
   pipPos: { x: number; y: number } | null;
-  /** 来电中全屏通话页引擎的接听/拒绝方法（direction='in' 时由 VoiceCallScreen 注册）：
-      全局来电弹窗（微信大窗/胶囊）上的接听、忽略按钮经此代理到页内引擎 */
-  engine: { accept: () => void; reject: () => void } | null;
+  /** 来电中全屏通话页引擎的接听/拒绝方法：全局来电弹窗（微信大窗/胶囊）上的接听、忽略按钮经此代理到页内引擎；
+   *  finishByReplacement 供 startGlobalCall 替换旧通话前触发完整收尾（B-1 兜底，所有方向都注册） */
+  engine: { accept: () => void; reject: () => void; finishByReplacement: () => void } | null;
   /** 全屏通话页引擎当前阶段（来电弹窗跟随：incoming 才显示，接通/结束后消失） */
   enginePhase: 'dialing' | 'incoming' | 'active' | 'ended' | null;
-  setEngine: (engine: { accept: () => void; reject: () => void } | null, phase: GlobalCallState['enginePhase']) => void;
+  setEngine: (
+    engine: { accept: () => void; reject: () => void; finishByReplacement: () => void } | null,
+    phase: GlobalCallState['enginePhase'],
+  ) => void;
   setEnginePhase: (phase: GlobalCallState['enginePhase']) => void;
   start: (s: GlobalCallSession, initialView?: 'full' | 'hidden') => void;
   minimize: () => void;
@@ -110,9 +114,26 @@ export const useGlobalCall = create<GlobalCallState>()((set) => ({
   },
 }));
 
-/** 发起一次全局通话（宿主入口；已有会话时直接替换为新一轮通话）。
- *  initialView='hidden'：微信 AI 来电用——响铃期间不显示全屏通话页，只留来电弹窗 */
+/** 发起一次全局通话（宿主入口）。initialView='hidden'：微信 AI 来电用——响铃期间不显示全屏通话页，只留来电弹窗。
+ *  已有活动通话时（B-1 兜底）：先让旧通话走完整收尾再启动新通话，绝不静默替换杀死旧通话（见下）。 */
 export function startGlobalCall(session: GlobalCallSession, initialView: 'full' | 'hidden' = 'full'): void {
+  const prev = useGlobalCall.getState();
+  if (!prev.session) {
+    prev.start(session, initialView);
+    return;
+  }
+  // —— 替换前收尾兜底（B-1）：已有活动通话时绝不静默替换（那会直接重挂引擎杀死旧通话，
+  // 旧通话的通话卡片/挂断续聊/记忆总结全部丢失）。先经引擎句柄让旧通话按当前阶段走完整收尾：
+  // finish（按阶段映射真实结局）→ onEnd（宿主写通话卡片 + 挂断续聊 + 记忆总结）→ 全局层回调 close()
+  // 清理会话，然后再启动新通话。防 double-finish：旧通话已结束（enginePhase==='ended'）直接放行，
+  // 引擎内 endedRef 幂等拦截；引擎句柄缺失（动态加载未挂载的亚秒窗口）无收尾可走，按旧行为直接替换。
+  if (prev.engine && prev.enginePhase !== 'ended') {
+    try {
+      prev.engine.finishByReplacement();
+    } catch {
+      // 收尾回调异常也不能吞掉新通话：照常启动
+    }
+  }
   useGlobalCall.getState().start(session, initialView);
 }
 

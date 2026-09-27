@@ -14,9 +14,14 @@ export const runtime = 'nodejs';
  *
  * 结局语义（call-outcome.ts 统一映射，严格区分绝不混淆）：
  *   已拒绝 reject = 对方按了拒接、没接通、一句话没说上；未接听 missed-in = 响了很久没人接、没接通；
- *   已取消 cancel = 对方拨给你又取消、没接通；已挂断 hangup/ai-hangup = 真实接通过、聊过之后才结束。
+ *   已取消 cancel = 对方拨给你又取消、没接通；已挂断 hangup/ai-hangup = 真实接通过后才结束。
  *   未知 endReason 绝不默认当「接通后挂断」：接通→按 hangup，未接通→按 missed-in；
  *   数据矛盾（如 hangup 但 connected=false）同样以未接通为准——宁可当没接通，也绝不编造一段被挂断的通话。
+ *
+ * 接通后结束按真实通话时长分档注入场景（B-3）：刚接通没聊起来（<3s，含 0 秒）→ 事实改成「电话刚接通
+ * （甚至还没说上话）就挂断了」+ 引导 AI 对「没聊起来」自然打圆场/找补 + 硬性禁止编造通话内容；
+ * 只说了几句（3~10s）→「只说了几句」+ 顺着茬自然接，不许渲染成长谈；聊了一会儿（>10s）→ 既有口径。
+ * 杜绝「0 秒通话也硬写聊了一会儿、还要求接着话茬」把 AI 逼到只能虚构通话内容。
  *
  * 生成依据：人设 + 本次通话内容 + 相关记忆（前端动态召回注入）+ 最近聊天记录 + 时间感知。
  * 硬约束：不复读通话里说过的原话；语气符合人设与情绪；每条像真人随手发的短消息。
@@ -40,14 +45,40 @@ import {
 } from '@/lib/ios/call-upstream';
 import { callOutcomeOf, outcomeConnected, type CallOutcome } from '@/lib/ios/call-outcome';
 
-/** 结局事实陈述（system 里向 AI 交代「这通电话最后怎么了」；AI 视角：你 = AI，对方 = 机主） */
+/** 未接通结局的事实陈述（system 里向 AI 交代「这通电话最后怎么了」；AI 视角：你 = AI，对方 = 机主）。
+ *  接通后结束（hangup/ai-hangup）不在此表——按真实通话时长分档由 connectedSceneText 生成（B-3） */
 const SCENE_TEXT: Record<string, string> = {
-  'ai-hangup': '电话接通了，你们聊了一会儿，你觉得聊得差不多了，自然告别后你主动挂断了电话',
-  hangup: '电话接通了，你们聊了一会儿，之后对方先挂断了电话',
   reject: '这通电话是你打给对方的，响了之后对方直接按了「拒绝」——电话从头到尾没有接通，你们一句话都没说上',
   'missed-in': '这通电话是你打给对方的，响了很久一直没人接，你等了一会儿把电话挂了——电话从头到尾没有接通，你们一句话都没说上',
   cancel: '对方拨给你，但还没接通就取消了——电话从头到尾没有接通，你们一句话都没说上',
 };
+
+/** 接通后结束的真实通话时长分档（B-3）：zero=刚接通没聊起来（<3s，含 0 秒）/ brief=只说了几句（3~10s）/ while=聊了一会儿（>10s） */
+type ConnectedTalkTier = 'zero' | 'brief' | 'while';
+
+function talkTierOf(duration: number): ConnectedTalkTier {
+  return duration < 3 ? 'zero' : duration <= 10 ? 'brief' : 'while';
+}
+
+/** 接通后结束（hangup/ai-hangup）的事实陈述：按真实通话时长分档，杜绝「0 秒通话也硬写聊了一会儿」——
+ *  短通话如实交代「没聊起来」，把 AI 的续聊从「接着话茬（转写为空只能虚构）」扭到「自然打圆场」 */
+function connectedSceneText(peerHungUp: boolean, tier: ConnectedTalkTier, hasTranscript: boolean): string {
+  if (tier === 'zero') {
+    // 转写为空 = 真的一句话都没说上；有转写 = 只来得及刚开口（如一声问候）就被挂断
+    const said = hasTranscript ? '只来得及刚开口' : '甚至还没说上话';
+    return peerHungUp
+      ? `电话刚接通（${said}），对方就把电话挂断了`
+      : `电话刚接通（${said}），你就主动把电话挂断了`;
+  }
+  if (tier === 'brief') {
+    return peerHungUp
+      ? '电话接通了，你们只说了几句，对方就先挂断了电话'
+      : '电话接通了，你们只说了几句，你觉得可以了就自然告别后主动挂断了电话';
+  }
+  return peerHungUp
+    ? '电话接通了，你们聊了一会儿，之后对方先挂断了电话'
+    : '电话接通了，你们聊了一会儿，你觉得聊得差不多了，自然告别后你主动挂断了电话';
+}
 
 /** 未接通结局（已拒绝/未接听/已取消）的反应引导：结局硬事实 + 该怎么反应（AI 视角）；'ended' 恒为空（接通场景走另一分支，仅为了让键类型完整） */
 const NOT_CONNECTED_RULES: Record<CallOutcome, string[]> = {
@@ -78,6 +109,10 @@ function buildFollowupSystemPrompt(
   scene: string,
   outcome: CallOutcome,
   ended: boolean,
+  /** 归一化 endReason（ended 场景 = 'hangup' | 'ai-hangup'）：区分「对方先挂」与「自己告别挂断」 */
+  endReason: string,
+  /** 接通后结束的真实时长分档（B-3）：zero=刚接通没聊起来 / brief=只说了几句 / while=聊了一会儿；未接通恒 null */
+  talkTier: ConnectedTalkTier | null,
   durationLabel: string,
   hasChat: boolean,
   maxCount: number,
@@ -90,6 +125,24 @@ function buildFollowupSystemPrompt(
     maxCount <= 1
       ? '条数硬约束：本次只发 1 条消息。'
       : `条数硬约束：本次发 1~${maxCount} 条消息——${maxCount} 条是上限，没话可以少发（哪怕只发 1 条）；话茬多、聊得投机就多发几条，条数以内容自然为准，绝不硬凑。`;
+  // 接通后结束：按真实时长分档给衔接引导（B-3）——只有「聊了一会儿」才有「接着话茬」资格；
+  // 「挂得快」类小情绪只允许「对方先挂」；没聊起来则要求打圆场并硬性禁止虚构通话内容
+  const endedRules: string[] =
+    talkTier === 'zero'
+      ? [
+          '这次通话的结局是【接通但没聊起来】：电话刚接通（甚至还没说上话）就结束了，通话里没有任何实际内容。',
+          '硬性禁止（这次通话没有实际内容，必须遵守）：禁止编造、复述或指代任何「通话里说过的话」，不要说「刚才电话里你说的…」，也不要把这次通话说成长聊或「聊了一会儿」；',
+          '你这条消息就是对「这次没聊起来」的自然打圆场/找补：可以约「晚点再打给你」「刚才正好有点事，没说两句就挂了，回头聊」，或自然关心对方一句；语气符合人设即可，不必过度道歉；',
+        ]
+      : talkTier === 'brief'
+        ? [
+            '你们真的说上了，但只聊了几句：可以顺着刚才那几句话的茬自然接一句（补一句没说完的事、约晚点细聊、叮嘱/关心），不要把这次通话说成长谈；',
+          ]
+        : [
+            endReason === 'hangup'
+              ? '你们真的聊过：可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心，也可以对「对方挂断」带点小情绪（比如嫌对方挂得快），但别过度纠缠；'
+              : '这通电话是你自己觉得聊得差不多、自然告别后主动挂断的：可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心；',
+          ];
   return buildPersonaSystemPrompt(peer, {
     channel: '挂断电话后的文字消息',
     userName: user?.name ?? null,
@@ -98,14 +151,7 @@ function buildFollowupSystemPrompt(
     multiApp,
     extraRules: [
       `你刚结束一通语音通话（${scene}${ended ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这件事：`,
-      ...(ended
-        ? [
-            // 接通后结束：才有「通话内容」可衔接；「挂得快」类小情绪只允许出现在「对方先挂」这里
-            scene.startsWith('电话接通了，你们聊了一会儿，之后对方先挂断')
-              ? '你们真的聊过：可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心，也可以对「对方挂断」带点小情绪（比如嫌对方挂得快），但别过度纠缠；'
-              : '这通电话是你自己觉得聊得差不多、自然告别后主动挂断的：可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心；',
-          ]
-        : [NOT_CONNECTED_RULES[outcome][0], NOT_CONNECTED_RULES[outcome][1], NOT_CONNECTED_BANS]),
+      ...(ended ? endedRules : [NOT_CONNECTED_RULES[outcome][0], NOT_CONNECTED_RULES[outcome][1], NOT_CONNECTED_BANS]),
       countRule,
       '绝对不要复读通话里已经说过的原话；不要自我介绍；不要说「刚才我们通话了」这类出戏的话——就像平时聊微信/QQ 一样接着说；',
       '语气完全符合你的人设和此刻情绪（聊得开心就热络、对方拒接/没接可以有点小委屈、深夜可以带着困意）；',
@@ -200,11 +246,21 @@ export async function POST(req: NextRequest) {
   const transcript = normalizeHistory(root.transcript);
   const recentChat = normalizeHistory(root.recentChat);
 
+  // B-3：接通后结束按真实通话时长分档注入场景文（0/极短=刚接通没聊起来，3~10s=只说了几句，>10s=聊了一会儿），
+  // 短通话同步注入「禁止编造通话内容」约束——AI 对「没聊起来」打圆场，不再被「聊了一会儿+接着话茬」逼着虚构
+  const ended = outcomeConnected(outcome);
+  const talkTier = ended ? talkTierOf(duration) : null;
+  const sceneText = ended
+    ? connectedSceneText(endReason === 'hangup', talkTier as ConnectedTalkTier, transcript.length > 0)
+    : SCENE_TEXT[endReason];
+
   const system = buildFollowupSystemPrompt(
     peer,
-    SCENE_TEXT[endReason],
+    sceneText,
     outcome,
-    outcomeConnected(outcome),
+    ended,
+    endReason,
+    talkTier,
     durationLabel,
     recentChat.length > 0,
     maxCount,
@@ -233,6 +289,15 @@ export async function POST(req: NextRequest) {
   if (!outcomeConnected(outcome)) {
     // 未接通：显式强调没有通话内容（与 system 的结局事实双重对齐）；误传的转写不进上下文（防自相矛盾）
     recap.push('【关于这次通话】没有接通，没有产生任何通话内容（上面的聊天记录是文字消息，不是通话内容）。');
+    recap.push('');
+  } else if (talkTier === 'zero') {
+    // 刚接通就结束（B-3）：与 system 的「没有实际内容」双重对齐，AI 无从把 0 秒通话脑补成一段聊天；
+    // 即使有一两句转写也只是刚开口的只言片语，明确「不算聊过什么」
+    recap.push('【关于这次通话】电话刚接通（甚至还没说上话）就结束了，没有实际通话内容（上面的聊天记录是文字消息，不是通话内容）。');
+    if (transcript.length > 0) {
+      recap.push('仅有的通话转写（刚接通时说出口的只言片语，不算聊过什么）：');
+      recap.push(...transcript.map((m) => `${m.role === 'user' ? '机主' : '你'}（说出口的话）：${m.content}`));
+    }
     recap.push('');
   } else if (transcript.length > 0) {
     recap.push('【这次通话里你们说的话】');
