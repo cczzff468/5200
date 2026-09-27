@@ -140,6 +140,24 @@ const activePayloads = new Map<string, { messages: ChatPayloadMessage[]; config:
 const subs = new Set<() => void>();
 const finalizedSubs = new Set<(sessionKey: string) => void>();
 
+/**
+ * 新流开始前，若服务端还有关页期间生成中的接力回复，上报 cancel 让其作废：
+ * 否则用户回到网页马上发新消息时，会先收到迟到的旧接力回复、再收到新回复（双回复）。
+ * 尽力而为：发失败（如刚关页重开时序颠倒）也不影响本轮聊天，接力回复只会多到一条。
+ */
+function cancelBgRelay(sessionKey: string): void {
+  try {
+    void fetch('/api/chat/bg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'cancel', sessionKey }),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // 同上：尽力而为
+  }
+}
+
 function emit(): void {
   subs.forEach((fn) => fn());
 }
@@ -370,6 +388,11 @@ export function beginChatStream(opts: BeginChatStreamOptions): boolean {
   streams.set(opts.sessionKey, rt);
   evictFinished();
   emit();
+  // 服务端可能还留着上一次关页接力的生成中回复：本轮用户已回页接管，让它作废（防双回复）
+  cancelBgRelay(opts.sessionKey);
+  // 流一开始就登记初始 payload：pagehide 接力不再漏掉识图前置阶段（发图后立刻关页的窗口）。
+  // 识图成功后 runStream 会用 workMessages/effConfig 覆盖为实际 payload。
+  activePayloads.set(opts.sessionKey, { messages: opts.messages, config: opts.apiConfig });
   void runStream(rt, opts);
   return true;
 }

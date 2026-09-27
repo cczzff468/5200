@@ -170,7 +170,7 @@ import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
 import { useUnreadMap, wxUnreads as wxUnreadStore } from '@/lib/unread-store';
-import { onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
+import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { useChatFlags, NO_FLAGS, wxChatFlags as wxChatFlagsStore } from '@/lib/chat-flags';
 import {
   ChatBgPage,
@@ -4619,6 +4619,9 @@ function ChatPage({
     const pull = () => {
       void pullBgPending(sessionKey).then((items) => {
         if (!mountedRef.current || items.length === 0) return;
+        // mounted 校验通过才消费：StrictMode 双挂载/快速切会话时先拉到的实例被卸载丢弃，
+        // pending 未清，重挂载的实例重新拉取投递（读拉/写清分离防吞消息）
+        consumeBgPending(sessionKey);
         deliverBgRef.current?.(items);
       });
     };

@@ -30,7 +30,7 @@ import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
-import { onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
+import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import {
   beginChatStream,
   clearChatStream,
@@ -1332,7 +1332,12 @@ function ChatView({
     let alive = true;
     const pull = () => {
       void pullBgPending(sessionKey).then((items) => {
-        if (alive && items.length > 0) bgDeliverRef.current(items);
+        if (alive && items.length > 0) {
+          // alive 校验通过才消费：StrictMode 双挂载/快速切会话时先拉到的实例被卸载丢弃，
+          // pending 未清，重挂载的实例重新拉取投递（读拉/写清分离防吞消息）
+          consumeBgPending(sessionKey);
+          bgDeliverRef.current(items);
+        }
       });
     };
     pull();

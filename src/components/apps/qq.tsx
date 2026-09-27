@@ -138,7 +138,7 @@ import {
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
-import { onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
+import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
@@ -3306,13 +3306,18 @@ function ChatPage({
     };
   }, [peer.name, sessionKey]);
 
-  // 挂载 + 回前台时拉取本会话待达消息（服务端即清除），经原投递管线逐条落盘
+  // 挂载 + 回前台时拉取本会话待达消息（只读拉取，确认投递后 consume 清除），经原投递管线逐条落盘
   //（灵动岛通知/语音频率/未读角标与页面内 AI 回复完全同口径；会话有活跃流/投递时 pull 内部返回空，等下次回前台再拉）
   useEffect(() => {
     let alive = true;
     const pull = () => {
       void pullBgPending(sessionKey).then((items) => {
-        if (alive && items.length > 0) bgDeliverRef.current(items);
+        if (alive && items.length > 0) {
+          // alive 校验通过才消费：StrictMode 双挂载/快速切会话时先拉到的实例被卸载丢弃，
+          // pending 未清，重挂载的实例重新拉取投递（读拉/写清分离防吞消息）
+          consumeBgPending(sessionKey);
+          bgDeliverRef.current(items);
+        }
       });
     };
     pull();

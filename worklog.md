@@ -8718,3 +8718,23 @@ Stage Summary:
 - 通知语义：每条 AI 消息一个独立弹窗（应用内横幅顶替制 + 页面隐藏 Web Notification 唯一 tag + 离线 Web Push 每条一推）
 - 发图：预览条只留缩略图+移除；文字与图片组合一次发送（四端一致）
 - 诚实备注：真机 Web Push 依赖「在新标签页打开 + 允许通知权限」且环境支持 SW/Push（预览面板 iframe 内会被静默降级）；服务重启清空 pending 与订阅（尽力而为的增强能力）
+---
+Task ID: 22
+Agent: 主协调者 (Z.ai Code)
+Task: 修复「系统通知弹窗不显示」+「打开网页以后 AI 才回复」两个用户反馈
+
+Work Log:
+- 读 dev.log 实锤两个根因：①`POST /api/chat/bg`（关页接力 beacon）到达后内部调 `/api/chat` 6-16ms 秒挂 502（上游为内网地址走 directOnly 分支，服务端不可达），接力只入队占位文案 → 关页后永远没有真回复；②`GET /api/push` 有多次但从未有 `POST /api/push` → pushManager.subscribe 在用户环境（预览 iframe）静默失败 → 服务端永远没有推送订阅者 → 系统通知不弹；③页面切走后投递 setTimeout 链被浏览器后台节流（1s→1次/分钟），回复卡到回页才上屏
+- ai-delivery.ts：新增 isPageHidden()；pump 首条前停顿在页面不可见时跳过；step() 页面不可见时同步循环投完本批剩余（每条立刻落盘+走 Web Notification 弹系统通知），回页恢复正常打字节奏
+- /api/chat/bg route：generateAndEnqueue 两级生成（原配置链路 → forceSdk 内置模型兜底，内网 502/上游故障/空回复都救回）；新增 mode='cancel'（用户回页发新消息接管，丢弃取消前已开始的生成防双回复，cancel 只杀 generate 不杀 deliver）；新增 mode='consume'（显式消费清队）
+- bg-turn.ts：sendBeacon 载荷 55KB 预算裁剪（保留 system 人设+尾部消息，修 64KB 静默丢弃）；群聊会话（wx:group:/qq:group:）跳过接力（无拉取管线，防幻影角标）；接力窗口登记（sessionStorage 持久化 90s）+ pullBgPending 窗口内轮询（2.5s 间隔，用户回页早于服务端生成完成也不丢回复）+ inflightPulls 同会话去重
+- chat-stream-store.ts：beginChatStream 时上报 cancel（防迟到旧接力+新回复双回复）；流一开始就登记 activePayloads（修发图后识图阶段关页接力漏报窗口）
+- push-client.ts：每次订阅尝试终态落 localStorage(ios-push-status)，新增 lastPushStatus()；island-notify.ts：页面加载时权限已 granted 即刻订阅（不再等第一条 AI 消息）
+- settings.tsx 通知页：授权后立即尝试订阅并回显诊断；新增「发送测试通知」（立即构造 Web Notification 验证通道）；iframe 检测提示（预览面板拦截说明+新标签页指引）；说明文案更新
+- 【E2E 中发现并修复严重竞态】首次接力 E2E 消息被吞：dev StrictMode 双挂载下，第一次 mount pull 的 GET「取走即清」服务端 pending，alive=false 又把消息丢弃，第二次 pull 拿空 → 读拉/写清分离：GET 只读，新增 consumeBgPending（alive 校验通过后调用），chat/wechat/qq 三端接入
+- 验证：lint+tsc 双绿；curl 实测 generate 无 config（内置模型回复入队）、generate 内网 config（502→SDK 兜底真回复）、deliver 入队、cancel 前置（清除标记正常生成）/后置（生成完丢弃）；agent-browser 全流程：解锁→发消息→AI 回复+灵动岛弹窗（1s 弹出 3s 收起）；monkey-patch visibilityState=hidden 验证立即投递；接力消息「重开网页→进聊天→送达上屏」全链路通过（GET→consume→GET空，无重复）；设置通知页新 UI 与权限拒绝路径正常
+
+Stage Summary:
+- 交付文件：src/lib/ios/ai-delivery.ts、src/lib/ios/bg-turn.ts、src/lib/ios/push-client.ts、src/lib/ios/island-notify.ts、src/lib/chat-stream-store.ts、src/app/api/chat/bg/route.ts、src/components/apps/settings.tsx、src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+- 关键决策：①relay 兜底用 forceSdk 而非复刻浏览器直连（服务端无法代连用户内网）；②cancel 只杀「取消前已开始的 generate」，deliver 永不取消（丢现成消息比多一条更糟）；③读拉/写清分离修 StrictMode 竞态（消费失败最多重复投递一次，不会丢）；④群聊接力整体跳过（待后续补群页拉取管线）；⑤系统通知在用户环境的最终解法=「新标签页打开」（iframe 权限策略限制无法从应用内突破），设置页已给出诊断与指引
+- 现在的体验：切走标签页→回复实时送达+系统通知逐条弹；关闭网页→服务端接力生成（上游挂了也有内置模型兜底）+Web Push 推送（订阅成功时）+重开网页自动补投

@@ -55,6 +55,7 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
+import { lastPushStatus, setupPushSubscription } from '@/lib/ios/push-client';
 import { describeImages } from '@/lib/vision-client';
 import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 import { useMyVoices } from '@/lib/ios/my-voices';
@@ -429,6 +430,26 @@ function ThemePage({ onBack }: { onBack: () => void }) {
 
 // ---------------- 通知 ----------------
 
+/** 推送订阅状态 → 中文描述（null = 状态未知/未尝试） */
+function pushStatusText(state: string, detail?: string): string {
+  switch (state) {
+    case 'subscribed':
+      return '推送已订阅：页面关闭后，新回复会以系统通知送达。';
+    case 'unsupported':
+      return `当前浏览器不支持后台推送${detail ? `（${detail}）` : ''}。`;
+    case 'no-permission':
+      return '尚未开启通知权限。';
+    case 'sw-failed':
+      return `后台服务注册失败${detail ? `（${detail}）` : ''}，多见于预览面板 iframe 环境 —— 用新标签页打开可解决。`;
+    case 'key-failed':
+      return `推送密钥获取失败${detail ? `（${detail}）` : ''}。`;
+    case 'subscribe-failed':
+      return `推送订阅被拦截${detail ? `（${detail}）` : ''}，多见于预览面板 iframe —— 用新标签页打开本页后重试。`;
+    default:
+      return '';
+  }
+}
+
 function NotificationPage({ onBack }: { onBack: () => void }) {
   const [enabled, setEnabled] = useState<boolean>(() =>
     typeof window !== 'undefined' && typeof Notification !== 'undefined'
@@ -440,6 +461,27 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
       ? Notification.permission === 'denied'
       : false
   );
+  // 测试通知结果：ok=已弹出 / fail=构造失败（iframe 权限策略拦截）
+  const [testResult, setTestResult] = useState<'idle' | 'busy' | 'ok' | 'fail'>('idle');
+  // 预览面板 iframe 提示：iframe 里系统通知/推送常被浏览器权限策略拦截
+  // （本页在客户端交互后才挂载，惰性初始化读 window 安全；跨域访问 window.top 抛错 → 必在 iframe）
+  const [inIframe] = useState<boolean>(() => {
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true;
+    }
+  });
+  // 推送订阅诊断（真实环境失败原因，不再静默）：setupPushSubscription 每次尝试后都会落盘
+  const [pushState, setPushState] = useState<string>(() => lastPushStatus()?.state ?? '');
+  const [pushDetail, setPushDetail] = useState<string>(() => lastPushStatus()?.detail ?? '');
+
+  /** 权限就绪后立即尝试订阅（并把诊断结果回显） */
+  const ensureSubscription = async (): Promise<void> => {
+    const s = await setupPushSubscription();
+    setPushState(s.state);
+    setPushDetail(s.detail ?? '');
+  };
 
   const handleToggle = async (checked: boolean) => {
     if (!checked) {
@@ -453,6 +495,7 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
     if (Notification.permission === 'granted') {
       setEnabled(true);
       setDenied(false);
+      void ensureSubscription();
       return;
     }
     if (Notification.permission === 'denied') {
@@ -465,9 +508,37 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
     if (result === 'granted') {
       setEnabled(true);
       setDenied(false);
+      void ensureSubscription();
     } else {
       setEnabled(false);
       setDenied(result === 'denied');
+    }
+  };
+
+  /** 测试系统通知：立即构造一条（不等切走标签页），验证本环境能否弹系统通知 */
+  const fireTestNotification = (): void => {
+    if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+      setTestResult('fail');
+      return;
+    }
+    if (Notification.permission !== 'granted') {
+      setTestResult('fail');
+      return;
+    }
+    setTestResult('busy');
+    try {
+      const n = new Notification('测试通知', {
+        body: '系统通知通道正常：切走标签页 / 最小化时，AI 的新消息会像这样弹出。',
+        tag: `test-${Date.now()}`,
+        icon: '/icons/chat.png',
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+      setTestResult('ok');
+    } catch {
+      setTestResult('fail');
     }
   };
 
@@ -488,8 +559,50 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
           通知已被浏览器拒绝，请在浏览器设置中恢复。
         </p>
       )}
+      {inIframe && (
+        <p className="mt-3 rounded-[10px] border border-border bg-muted/50 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground">
+          当前页面嵌在预览面板（iframe）里，部分浏览器会在这里拦截系统通知与后台推送。
+          点预览面板右上角「在新标签页打开」后重新开启通知，切走/关闭页面也能收到。
+        </p>
+      )}
+      <div className="mt-3">
+        <GroupCard>
+          <button
+            type="button"
+            onClick={fireTestNotification}
+            disabled={testResult === 'busy' || !enabled}
+            className="flex h-[46px] w-full items-center justify-between px-4 text-left disabled:opacity-50"
+          >
+            <span className="text-[16px]">发送测试通知</span>
+            {testResult === 'busy' ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            )}
+          </button>
+        </GroupCard>
+      </div>
+      {testResult === 'ok' && (
+        <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted-foreground">
+          已发送：如果没看到弹窗，检查系统/浏览器是否开了「勿扰」或隐藏了通知横幅。
+        </p>
+      )}
+      {testResult === 'fail' && (
+        <p className="mt-2 px-1 text-[12px] leading-relaxed" style={{ color: IOS_RED }}>
+          无法构造系统通知：当前环境（多为 iframe）被浏览器拦截，请用新标签页打开本页。
+        </p>
+      )}
+      {pushState && (
+        <p
+          className={`mt-2 px-1 text-[12px] leading-relaxed ${pushState === 'subscribed' ? 'text-muted-foreground' : ''}`}
+          style={pushState === 'subscribed' ? undefined : { color: IOS_RED }}
+        >
+          {pushStatusText(pushState, pushDetail) || `推送状态：${pushState}`}
+        </p>
+      )}
       <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
-        闹钟和计时器到点时将通过系统通知提醒。
+        切走标签页 / 最小化 / 锁屏时，AI 的新消息通过系统通知提醒（每条一条，不合并）；
+        页面完全关闭后，新回复由服务器接力生成并推送。闹钟和计时器到点时也会通过系统通知提醒。
       </p>
     </DetailShell>
   );

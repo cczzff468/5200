@@ -275,6 +275,12 @@ function ensurePushSubscription(): void {
   void setupPushSubscription();
 }
 
+if (typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+  // 页面加载时权限已授予（上次会话授权过）：启动即订阅，不等到第一条 AI 消息才补 ——
+  // 否则关页期间的接力回复永远没有订阅者可推（系统通知不弹的直接原因之一）
+  ensurePushSubscription();
+}
+
 // ---------------- 点击导航总线 ----------------
 
 /** 导航事件名（已挂载的聊天页监听；新挂载的聊天页挂载时消费 pending） */

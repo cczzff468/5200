@@ -6,8 +6,9 @@ import webpush from 'web-push';
  *
  * 用户关闭网页（pagehide）时，客户端用 sendBeacon 把「还没跑完的会话」上报到本端点：
  * - mode='generate'：该会话的流式请求还没 finalize（AI 回复没拿到/没拿全）→ 服务端用同一套
- *   生成链路（内部自调 /api/chat，含上游代理 + SDK 兜底）把回复生成出来；
+ *   生成链路（内部自调 /api/chat，含上游代理 + 内置模型兜底）把回复生成出来；
  * - mode='deliver'：流已 finalize 但逐条投递（打字节奏）还没落盘完 → 上报现成的消息文本。
+ * - mode='cancel'：用户回到网页后自己发了新消息接管了会话 → 丢弃还在生成中的接力回复（防双回复）。
  *
  * 两种方式最终都写入本会话的 pending 队列（内存态），并尽力给已订阅的浏览器发 Web Push
  * （每条消息一条系统通知；页面已关、浏览器还开着时也能弹）。
@@ -34,6 +35,8 @@ interface PendingItem {
 const pending = new Map<string, PendingItem[]>();
 /** 同一会话同时只跑一次服务端生成（防重复 beacon 叠加重複回复） */
 const generating = new Set<string>();
+/** 接力取消标记（会话键 → 取消时刻）：用户回到网页自己发消息接管后，仍在生成中的旧接力回复直接丢弃 */
+const cancelled = new Map<string, number>();
 
 const MAX_SESSIONS = 200;
 const MAX_ITEMS_PER_SESSION = 20;
@@ -152,24 +155,44 @@ interface BgPayload {
 }
 
 async function generateAndEnqueue(sessionKey: string, payload: BgPayload, title: string): Promise<void> {
+  // 生成开始时刻：cancel 只丢弃「取消前已开始的生成」（用户回页发新消息接管，迟到的旧接力回复作废）；
+  // 取消之后新开始的生成（用户接管后又关页）不受影响。deliver 模式永不取消（丢现成消息比多一条更糟）。
+  const startedAt = Date.now();
+  const isCancelled = (): boolean => {
+    const at = cancelled.get(sessionKey);
+    if (at === undefined) return false;
+    cancelled.delete(sessionKey);
+    return at > startedAt;
+  };
   try {
     const messages = Array.isArray(payload.messages) ? payload.messages : null;
     if (!messages) {
-      enqueue(sessionKey, ['〔对方暂时没有回复，请稍后再试〕'], true, title);
+      if (!isCancelled()) enqueue(sessionKey, ['〔对方暂时没有回复，请稍后再试〕'], true, title);
       return;
     }
     const port = process.env.PORT || '3000';
-    const body: Record<string, unknown> = { messages };
-    if (payload.config && typeof payload.config === 'object') body.config = payload.config;
-    const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const text = res.ok ? (await res.text()).trim() : '';
-    enqueue(sessionKey, [text || '〔对方暂时没有回复，请稍后再试〕'], true, title);
+    const call = async (extra: Record<string, unknown>): Promise<string> => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, ...extra }),
+      });
+      return res.ok ? (await res.text()).trim() : '';
+    };
+    // 先按用户配置的原链路生成（上游代理 / 内置模型）；失败（含局域网地址 directOnly 502、
+    // 上游断网、空回复）再用内置模型兜底一次 —— 用户关页前的最后一句话必须有人接，
+    // 否则重开网页前回复永远不出现（日志实测：上游为内网地址时第一路必然 502）
+    let text = await call(payload.config && typeof payload.config === 'object' ? { config: payload.config } : {});
+    if (!text) {
+      try {
+        text = await call({ forceSdk: true });
+      } catch {
+        // 兜底也失败 → 占位文案
+      }
+    }
+    if (!isCancelled()) enqueue(sessionKey, [text || '〔对方暂时没有回复，请稍后再试〕'], true, title);
   } catch {
-    enqueue(sessionKey, ['〔对方暂时没有回复，请稍后再试〕'], true, title);
+    if (!isCancelled()) enqueue(sessionKey, ['〔对方暂时没有回复，请稍后再试〕'], true, title);
   } finally {
     generating.delete(sessionKey);
   }
@@ -199,9 +222,23 @@ export async function POST(req: Request): Promise<NextResponse> {
     if (generating.has(sessionKey)) return NextResponse.json({ ok: true, scheduled: false });
     const messages = Array.isArray(body.payload?.messages) ? body.payload?.messages : null;
     if (!messages || messages.length === 0) return NextResponse.json({ error: 'payload 无效' }, { status: 400 });
+    // 新接力开始：清掉旧取消标记（上一轮的取消不应影响本轮）
+    cancelled.delete(sessionKey);
     generating.add(sessionKey);
     void generateAndEnqueue(sessionKey, { messages, config: body.payload?.config }, title);
     return NextResponse.json({ ok: true, scheduled: true });
+  }
+
+  if (body.mode === 'cancel') {
+    // 用户回页后自己发了新消息：正在生成中的接力回复作废（生成完成时发现标记即丢弃，防双回复）
+    cancelled.set(sessionKey, Date.now());
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.mode === 'consume') {
+    // 客户端已接手投递：清除该会话待拉取队列（读拉/写清分离，修复 StrictMode 双挂载竞态丢消息）
+    consumePending(sessionKey);
+    return NextResponse.json({ ok: true });
   }
 
   if (body.mode === 'deliver') {
@@ -236,6 +273,12 @@ export async function GET(req: Request): Promise<NextResponse> {
   const sessionKey = sp.get('sessionKey');
   if (!sessionKey) return NextResponse.json({ error: 'sessionKey 必填' }, { status: 400 });
   const items = pending.get(sessionKey) ?? [];
-  pending.delete(sessionKey);
+  // 只读拉取：确认投递（consume）后才清除 —— 拉取与消费之间存在卸载/StrictMode 双挂载竞态，
+  // 「取走即清」会让先拿到的客户端丢弃消息后 pending 已空（接力消息被吞）
   return NextResponse.json({ items });
+}
+
+/** 确认消费：客户端已把接力消息交给投递管线（alive 校验通过）后调用，服务端清除该会话队列 */
+function consumePending(sessionKey: string): void {
+  pending.delete(sessionKey);
 }

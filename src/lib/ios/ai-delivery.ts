@@ -42,6 +42,17 @@ function defaultDelay(): number {
   return 700 + Math.random() * 600;
 }
 
+/**
+ * 页面不可见（切走标签页 / 最小化）时浏览器会对后台 setTimeout 链强节流
+ * （先 1s 对齐、几分钟后降到 1 次/分钟），逐条打字节奏会被拖到分钟级——
+ * 用户感知就是「打开网页以后 AI 才回复」。页面不可见时改为立即同步投完：
+ * 每条立刻落盘 + 走 Web Notification 弹系统通知（页面隐藏时 island-notify 会发系统通知），
+ * 回到页面后恢复正常节奏。
+ */
+function isPageHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
 /** 按内容长度估算停顿（各端文字消息用；卡片类消息走默认） */
 export function typingDelayOf(text: string): number {
   const len = text.trim().length;
@@ -84,6 +95,25 @@ function pump(sessionKey: string): void {
       pump(sessionKey);
       return;
     }
+    // 页面不可见：跳过打字节奏，同步投完本批剩余（后台定时器被强节流，逐条等会是分钟级；
+    // 每条投递都会立刻走 Web Notification 弹系统通知，与真机离开屏幕时收通知的体验一致）
+    if (isPageHidden()) {
+      while (index < items.length) {
+        const item = items[index];
+        try {
+          deliver(item, index);
+        } catch {
+          // 单条投递异常不阻断后续
+        }
+        batch.deliveredIndex = index + 1;
+        emitTick(sessionKey);
+        index += 1;
+      }
+      q.shift();
+      resolve();
+      pump(sessionKey);
+      return;
+    }
     const item = items[index];
     try {
       deliver(item, index);
@@ -98,8 +128,9 @@ function pump(sessionKey: string): void {
   };
   running.add(sessionKey);
   emitActive();
-  // 首条前停顿（分段投递的批间打字节奏）；期间 running 保持，聊天页「正在输入」不闪断
-  if (opts?.initialDelay && opts.initialDelay > 0) {
+  // 首条前停顿（分段投递的批间打字节奏）；期间 running 保持，聊天页「正在输入」不闪断。
+  // 页面不可见时跳过停顿（定时器被节流，等不到；直接同步投递）
+  if (opts?.initialDelay && opts.initialDelay > 0 && !isPageHidden()) {
     window.setTimeout(step, Math.round(opts.initialDelay));
   } else {
     step();
