@@ -9078,3 +9078,86 @@ Work Log:
 
 Stage Summary:
 - Task 39 两项需求全部验证通过：信息 App 回复条数独立配置（默认 5 条、sms 键隔离、与微信解耦）+ 相册 App 三 tab 毛玻璃胶囊与自定义相册全功能；已推送 GitHub
+---
+Task ID: 40-c
+Agent: 相册设锁屏壁纸
+Task: 相册 App 查看器「更多」菜单新增「设为锁定屏幕」（照片可独立设为锁屏壁纸，与既有主屏「设为壁纸」并存互不干扰）
+
+Work Log:
+- 核实现状：store.ts 已有完整锁屏壁纸链路（lockWallpaperPreset/lockCustomWallpaperUrl + setLockCustomWallpaper(blob)，settings 表 lockWallpaper 键独立持久化），LockScreen 已消费——本任务零改动 store.ts/LockScreen/PhoneShell/db.ts，只在 photos.tsx 接入调用
+- photos.tsx「更多」菜单（viewer moreOpen）：在「设为壁纸」与「取消」之间新增「设为锁定屏幕」项，顺序=设为壁纸 → 设为锁定屏幕 → 取消；样式与既有壁纸项逐字对齐（h-12/border-b border-white/10/px-4/text-[15px]/gap-3/active:bg-white/10，图标 LockKeyhole 18px + opacity-80 对齐 Wallpaper，右侧成功反馈同为 #30D158 Check h-4 w-4 strokeWidth 3）；data-testid="lock-wallpaper-item"（lock-wallpaper 系列；既有壁纸项无 testid，此项补一个便于 E2E 定位，无样式/交互影响）
+- handleSetLockWallpaper（紧邻 handleSetWallpaper 同构）：useSettings.getState().setLockCustomWallpaper(rec.blob)——复用照片 rec.blob 同一引用（与主屏 setCustomWallpaper 同模式，IndexedDB 独立存 Blob，删照片不影响已设壁纸）；独立反馈 state lockWallpaperOk + lockWallpaperTimerRef（1.4s 绿勾自动消失，重复点击先清旧 timer），卸载清理 effect 内与 wallpaperTimerRef 并列 clearTimeout——两条反馈链完全独立，可同屏各自出勾
+- 「设为壁纸」既有行为零改动（只设主屏）；两 setter 各写各的 settings 键（wallpaper / lockWallpaper）天然互不干扰
+- 验证：bunx tsc --noEmit 全仓 exit 0；bunx eslint src/components/apps/photos.tsx exit 0；未启动/重启 dev server、未 git、未碰 wechat/qq/chat/phone 等并行任务文件
+
+Stage Summary:
+- 交付文件：仅 src/components/apps/photos.tsx（新增 LockKeyhole 导入、lockWallpaperOk/lockWallpaperTimerRef、handleSetLockWallpaper、菜单新项）
+- 修复语义：相册照片查看器「更多」菜单可直接「设为锁定屏幕」，锁屏壁纸与主屏幕壁纸完全独立设置；反馈/清理/样式与既有「设为壁纸」完全同构
+---
+Task ID: 40-d
+Agent: AI 主动来电调度
+Task: AI 根据人设/聊天内容/时间自主决策并真正拨打语音电话（决策 API + 调度核心 + 全局 Watcher + 设置开关）
+
+Work Log:
+- 契约核实（只读）：incoming-call.ts triggerIncomingCall/接听交接桥、chat.tsx triggerIncomingCall 用法与 recordMissedPhoneCall 落库模式（L338-422/L1297-1314）、phone.tsx takePendingPhoneAnswer 消费端、answer/route.ts 决策 API 范式与 call-upstream 工具、ContactRecord 人设字段（persona）、三端消息 kv 键与结构（wx-chat-msgs:<id>/qq-chat-msgs:<id>/ios-chat-msgs:c:<id>，数组时间升序末条最新，role=me|peer|user|assistant，语音转写 voice.transcript/localText）、call-logs/voicemails 表结构
+- 新建 src/app/api/phone/proactive/route.ts（决策 API，answer 路由同款代码风格）：POST {contact(InlineContact 同形), recentChats:[{app,text,time}](≤14条宽松解析), lastChatAt, lastInteractionLabel, now, config?} → buildPersonaSystemPrompt(channel='决定此刻要不要主动给机主打一通电话') + 决策规则（人设性格粘人/热情 vs 高冷/忙碌；没聊完的话题/该关心的事/约定/道歉；23点-8点不打/早上可问候/节日生日适合；距上次互动<2h 不打；大多数应 wait/skip 只有真有理由才 call）→ 强制 JSON {action:'call'|'wait'|'skip', reason:中文一句话}；解析容错 extractJsonObject（首个平衡块）+非法 action 视为 skip+reason 清洗截 120 字；上游策略照抄 answer：extractUpstreamConfig→公网 callUpstream→失败/未配置/内网 sdkTurn 兜底→最终兜底 {action:'skip',reason:'decide-failed'}；坏 body 400 {skip,'bad-request'}、非法/USER 联系人 400 {skip,'bad-contact'}
+- 新建 src/lib/ios/proactive-call.ts（调度核心，纯模块函数+模块级状态）：开关 kv 'proactive-call-enabled'（{value:boolean} 缺省开，isProactiveCallEnabled/setProactiveCallEnabled 导出与设置页共用）；runProactiveCallTick()：模块级 tickRunning 防重入 → 总开关 → 深夜硬闸[0,8) → useIncomingCall.call/useGlobalCall.session 守卫（document.hidden 有意不拦，后台照常） → 候选=有 persona 非空且 name 非空的非 USER 联系人，lastInteractionAt=max(三端消息键末条 time, call-logs 该联系人 max createdAt)，资格=48h 内有互动且 gap≥2h，冷却 kv 'proactive-call:<contactId>'（{at,action}：call/wait 6h、skip 24h、未知 action 按 6h 保守） → 选 lastInteractionAt 最小（最久没聊）一位 → 三端各取最近 4 条可读文本（撤回/系统行/卡片类剔除，语音取转写、图片取识图描述、表情取含义，单条截 60 字，带微信/QQ/信息标签+时间） → POST 决策（AbortSignal.timeout 75s 看门狗，fetch 失败按 wait 落 6h 冷却防 90s 重试轰炸） → 落冷却 → action='call' 时触发前再查一次通话守卫 → triggerIncomingCall({source:'phone',bannerStage:'pill',name,avatar,number,contact,onAnswer,onMissed})；number=contact.phone||id 派生 11 位占位号（chat.tsx derivePlaceholderNumber 同算法）；onAnswer=setPendingPhoneAnswer({contact,number,name,proactiveContext:decision.reason})+useUI.switchToApp('phone')（照抄 chat.tsx；notifyPendingPhoneAnswer 的接听兜底由 IncomingCallLayer.answerPhoneCall 承担）；onMissed=recordMissedPhoneCall 落 call-logs(missed)+requestCallFollowup(direction:'out',endReason reject/missed-in,connected:false,transcript:[],memoryBlock/timeBlock/multiApp/replyCount=sms:c:<id> 同信息端口径,userRealName/userNickname=ownerProfile) 逐条写 voicemails（现有签名，未传新字段）
+- 新建 src/components/ios/ProactiveCallWatcher.tsx：'use client' 无 UI 调度器，挂载后首次延迟 60s（避开机风暴）后递归 setTimeout 每 90s+0~30s 随机抖动调 tick；模块级单例 flag 防双实例（卸载清定时器并释放，StrictMode 双挂载可续上）；tick 内自查可见性无需 visibilitychange
+- PhoneShell.tsx：紧邻 QuitFlowScheduler 懒加载 dynamic(() => import('./ProactiveCallWatcher'), { ssr: false }) 并渲染（仅 +6 行）
+- settings.tsx 通知页：GroupCard「允许通知」下新增「AI 主动来电」Switch 行，副标题「AI 可能会根据聊天和心情主动打来电话」；useState 惰性初始化 isProactiveCallEnabled()（本页客户端交互后才挂载，kv 已注水同步读即真实值，无水合问题），切换先 setProactiveCallEnabled 持久化再 setState（+21 行）
+- incoming-call.ts：唯一改动=PendingPhoneAnswer 加可选字段 proactiveContext?: string（JSDoc 注明「AI 主动来电的拨打目的，电话 App 透传给通话引擎作为开场情境」）
+- 与 40-b 交接约定：proactiveContext 由本任务写入 pending（仅在 AI 主动来电路径非空），phone.tsx 消费端 takePendingPhoneAnswer 取到后透传通话引擎作开场情境（普通来电字段 undefined，消费端按可选处理即可）
+- 验证：dev server 已被沙箱回收（dev.log 无新请求、3000 端口无监听，按约未重启）——curl 验证改为 bun 直连 route.POST 等价覆盖：①坏 body → 400 {action:'skip',reason:'bad-request'}✓ ②无 name 联系人 → 400 bad-contact✓ ③上游返回 markdown 围栏 JSON → 容错解析出 call+reason✓ ④上游 500 → sdkTurn 兜底（真实内置模型实测返回 {"action":"call","reason":"想听听你面试结果，顺便晚上约你吃饭庆祝"}——粘人人设+未兑现约定+9h 间隔语义正确）✓；tick() 三分支 bun test+mock.module（stub kv/contacts/fetch/store/incoming-call/global-call）：无资格不发请求✓、冷却中不发✓、action=call 序列（决策 body 含最久没聊联系人+recentChats 标签+lastInteractionLabel『10 小时』+now 含星期+config、冷却落 6h 档、triggerIncomingCall source/bannerStage/占位号、onAnswer→pending.proactiveContext+switchToApp('phone')）✓、skip 落 24h 档不拨打✓、响铃中/深夜 3 点/总开关关三守卫✓（9 pass/42 expect，临时脚本已删）
+- bunx tsc --noEmit 全仓 exit 0；bunx eslint 六个改动文件零 error；未 git、未动 dev server、禁改文件（phone.tsx/chat.tsx/wechat.tsx/qq.tsx/call-followup.ts/global-call.ts/store.ts/memory.ts/contacts.ts/contacts-store.ts/db.ts 等）零触碰（git status 中它们的改动为并行代理所留）
+
+Stage Summary:
+- 交付文件：src/app/api/phone/proactive/route.ts（新建，决策 API：POST→{action:call|wait|skip,reason}，全失败兜底 skip）、src/lib/ios/proactive-call.ts（新建，调度核心：开关/深夜/通话中/48h·2h 资格/6h·24h 冷却/最久没聊优先/三端摘要/决策/真拨打）、src/components/ios/ProactiveCallWatcher.tsx（新建，60s 首延迟+90s+30s 抖动轮询）、src/components/ios/PhoneShell.tsx（+懒加载挂载）、src/components/apps/settings.tsx（通知组 AI 主动来电开关）、src/lib/ios/incoming-call.ts（PendingPhoneAnswer+proactiveContext?）
+- 能力语义：AI 联系人现在会「自己决定何时打电话」——调度器按人设/最近聊天/时间/互动间隔筛选候选，服务端以角色本人口吻输出 call/wait/skip 与拨打目的；call 时走与信息 AI 来电完全同一套 iOS 全屏来电界面（响铃/接听/拒绝/超时），接听经 pending.proactiveContext 把「为什么打来」交给电话 App 通话引擎作开场（40-b 消费端），拒接/超时自动落未接记录+人设化语音留言，通话内容/挂断续聊/记忆沉淀由既有引擎链路完成
+- 可调参数集中在 proactive-call.ts 常量区：ACTIVE_WINDOW_MS=48h、MIN_GAP_MS=2h、COOLDOWN_ACTIVE_MS=6h、COOLDOWN_SKIP_MS=24h、NIGHT_END_HOUR=8、tick 周期 90s+抖动 30s、首延迟 60s
+---
+Task ID: 40-a
+Agent: 拉黑重构·续跑收尾
+Task: 双向拉黑行为落地到微信/QQ（40-a 镜像 wechat.tsx/qq.tsx）：仅申请卡放行、用户↔角色解除申请闭环、全部发送入口拦截
+
+Work Log:
+- 前情核对：前代理已落地 block-state.ts（charRequestOnlyOf/applyUserBlockReq/resolveUserReqByChar/userReqActionKindOf + BlockEntry.userReq* 字段）、chat-rich.ts（[同意解除拉黑]/[拒绝解除拉黑] → approve-user-unblock/deny-user-unblock）、chat-stream-store.ts（byUser 且非仅申请卡模式不发起流的第二层兜底）与 chat.tsx 完整范本（主协调者已修其 settleUserBlockReq TDZ）；本次只镜像到 wechat.tsx/qq.tsx，三个 lib 与 chat.tsx 零改动（签名先读后用）
+- wechat.tsx（全部带「40-a」注释标记，共 26 处）：①WxMsg.blkreq 加 from?: 'char'|'user'（缺省视为 'char'，旧数据天然兼容）；②WxBlockReqCard 双向改造：from='user' 时 testid=wx-blockreq-card-mine、pending 显示「等待对方处理」/终态「对方已同意，拉黑已解除」「对方已拒绝」，无决策按钮；渲染分支按 from 分流——角色发起保持左侧（行头像+卡内头像），用户发起右侧机主侧（me.name/me.avatar，卡后行头像镜像）；③settleUserBlockReq（buildReplyMsgs 前声明，存储+state 双写把用户 pending 卡置终态）；④buildReplyMsgs 镜像解析管线：unblock 分支追加视同同意用户侧申请、新增 userReqActionKindOf 分支（resolveUserReqByChar('wx',…) + setBlk + 置卡终态 + 系统行「「XX」同意/拒绝了你的解除拉黑申请」）、仅申请卡模式正文/表情丢弃（loadBlock('wx',peer.id).byUser → continue，动作产出的申请卡/系统行除外）；⑤runAiTurn 入口 byUser 守卫（byUser && !charRequestOnlyOf → return；requestOnly 标记使 finalize 不落「〔对方暂时没有回复〕」兜底占位）+ deliverBgItems 接力兜底文案同守卫（wx 特有兜底路径，qq 无此兜底）；⑥用户发送入口 byChar 拦截共 7 处（send 主入口文字/组合图/tts、commitVoiceMsg 语音、sttPreview 划转文字、execRedPacket/execTransfer 扣款前、sendLocation、sendSticker）→ onToast「对方已将你拉黑，无法发送」+ 不落库不触发 AI；⑦writeCallCard/sendCallFollowup 落库前 byUser 守卫（含 afterText/连发 setTimeout 内二次复核）；⑧submitUserBlockReq：applyUserBlockReq('wx',…) 成功 → 落 role:'me' blkreq:{reason,status:'pending',from:'user'} 消息 + 注入「（系统事件：你之前把XX拉黑了，现在XX给你发来一条解除拉黑申请…[同意/拒绝解除拉黑]…）」事件（回复中随 wxQueueAdd 补跑排队）+ 面板收起；⑨输入区上方「你已被「XX」拉黑，无法发送消息」提示条 +「发送解除申请」展开理由输入面板（blk.byChar===true && userReqStatus!=='pending' && userReqRejectedCount<3 时显示；pending/达上限隐藏；多选模式下随底栏一起隐藏），testid=wx-user-blockreq-{bar,open,panel,input,cancel,send}，样式对齐微信黑白灰+绿#07C160；⑩resolveBlockReq 既有逻辑零改动（对照范本：chat.tsx 拒绝分支同样注入 AI 回应事件，wx 口径一致）；聊天设置页拉黑开关/系统行/红!图标/拒收行零回归
+- qq.tsx（完全同构镜像，'qq' 字面量，共 25 处 40-a 标记）：QqBlockReqCard from 改造（testid=qq-blockreq-card-mine，QQ 蓝 #0099FF）、QQMsg.blkreq.from、blk/userReqOpen/userReqText state、settleUserBlockReq（useCallback，deps=[peer.id]，已并入 buildReplyMsgs deps）、buildReplyMsgs（unblock 视同同意 + uk 决策分支 + byUser 正文丢弃）、runAiTurn 入口守卫（置于密友值 addBondPoints 之前：回合取消=不计互动）+ finalize requestOnly 不落兜底、submitUserBlockReq（qqQueueAdd 事件排队同构）、发送拦截 7 处（send 主入口、flushPendingImages 纯图路径、execAndSend 红包/转账扣款前、commitVoiceMsg、sttPreview、sendSticker、LocationPickerPage onSend 内联）、writeCallCard/sendCallFollowup byUser 守卫（含二次复核）、被拉黑提示条/申请面板（testid=qq-user-blockreq-*，样式对齐 QQ 底栏 #F6F7F8 圆角 10px + 蓝 #0099FF）、blockreq 卡渲染 from 分流（用户发起右侧 justify-end + me 头像在右）；QQ 亲属卡仅 AI 赠送无用户发送入口，无需拦截
+- 行为口径对齐范本：用户拉黑角色（byUser）后 AI 回合静默取消、角色唯一通道是 [申请解除拉黑:理由] 卡片（此时用户仍可正常发消息，与既有架构一致——wx/qq 的 send 先落消息再开回合，turn 取消仅表现为 AI 不回复）；角色拉黑用户（byChar）后用户所有发送入口拦截 toast、唯一通道是输入区上方「发送解除申请」；角色决策标记落库 + 卡片终态 + 系统行，三端文案一致
+- 验证：bunx tsc --noEmit 全仓 exit 0；bunx eslint src/components/apps/wechat.tsx src/components/apps/qq.tsx exit 0（零 error 零 warning）；rg 自查两文件拦截点齐全（wx 7 处 byChar 发送拦截 + 4 处 byUser 通话落库守卫 + 回合入口/解析管线/接力兜底守卫；qq 同构 7+4+回合/管线）；qq.tsx 早前 sed 输出疑似「sgs」损坏经 od -c 核实为终端 ANSI 显示伪影，文件实际内容完好未修未动；未启动/重启 dev server、未 git 操作、禁改清单（block-state/chat-rich/chat-stream-store/chat.tsx/phone/photos/call-followup/incoming-call/global-call/proactive-call/cross-app-context/api/**/PhoneShell/settings/store/memory/persona/groups/wx-group/qq-group/contacts*/db）零触碰
+Stage Summary:
+- 40-a 全量交付清单：①src/lib/ios/block-state.ts——双向拉黑状态机（byUser/byChar 独立、区间 Hist、防骚扰计数）+ charRequestOnlyOf（仅申请卡放行判定）+ applyUserBlockReq/resolveUserReqByChar（用户申请/角色决策落库）+ userReqActionKindOf/blockActionKindOf（标记解析）+ buildBlockPromptBlock 双向拦截语义提示词；②src/lib/chat-rich.ts——[同意解除拉黑]/[拒绝解除拉黑] 动作标记（approve-user-unblock/deny-user-unblock）；③src/lib/chat-stream-store.ts——byUser 非放行模式不发起流的第二层兜底；④src/components/apps/chat.tsx——信息端完整范本（主协调者修 settleUserBlockReq TDZ）；⑤src/components/apps/wechat.tsx——微信端镜像：blkreq.from 双向卡（右侧机主侧/等待对方处理/终态文案）、解析管线（角色决策/主动解除视同同意/仅申请卡正文丢弃）、runAiTurn+接力兜底守卫、7 处用户发送入口 byChar 拦截、通话卡片/续聊 byUser 守卫、被拉黑提示条+解除申请面板+submitUserBlockReq；⑥src/components/apps/qq.tsx——QQ 端完全同构镜像（QQ 蓝/QQ toast/qqQueueAdd 密友值口径）
+- 最终能力语义：拉黑在微信/QQ/信息三端成为真实拦截——用户拉黑角色后该 App 内 AI 静默（仅可发解除申请卡），角色拉黑用户后用户发不出任何消息（toast 提示）且唯一通道是「发送解除申请」（理由卡→AI 用 [同意/拒绝解除拉黑] 决策→卡片终态+系统行+闭环恢复或计数+1），三防骚扰（3 次拒绝上限、pending 去重、周期内计数）与既有拉黑开关/红!图标/拒收行/系统提示行零回归；单聊与群聊、三个 App、通话维度依旧按存储键天然隔离
+
+---
+Task ID: 40-b
+Agent: 跨App+群聊记忆携带（子代理超时于收尾，代码已全部落地，主协调者核验补记）
+Task: 新建 cross-app-context.ts（跨App原始消息携带+群聊近况块）+ 电话链路注入（chat-call/phone/turn/followup）
+
+Work Log:
+- 新建 src/lib/ios/cross-app-context.ts（374 行，文件头含完整职责/注入顺序约定/调用方清单注释）：①buildCrossAppBlock(contactId, currentApp, userName)——【当前环境】行恒存在（AI 永远知道自己在哪个 App，别混淆来源）；其他三个 App 各取最近 10 条原始消息（时间升序、机主=「用户：」/角色=「你：」），消息全类型归一化（text/voice 转写/image 识图描述/call 通话摘要/sticker 含义/location/红包转账亲属卡群邀请/blockreq 申请卡/forward，撤回与系统行跳过，dataURL 防泄漏）；电话来源=call-logs 最近 3 通摘要+末通 voicemails kind='call' 转写（我：→用户：/对方：→你：，2 分钟窗匹配）；share=false（用户关跨App互通）时只输出当前环境行；总预算 2600 字符超限从最早 App 的旧消息裁起；②buildGroupRecentBlock(contactId, userName)——扫描 wx/qq 群池筛「memberIds 含该联系人（ownerId 兜底）」的群，按群最近消息时间取前 3 个、每群最近 10 条（发言人=senderName，机主=用户），标注「微信群「群名」/QQ群「群名」」，按群 ID 天然隔离只读汇聚；无共同群返回空串；③buildCrossContextBlocks 打包（Promise.all 并行）
+- 电话链路注入：chat-call.ts（wx/qq 通话引擎 crossCtxRef 会话级缓存+runTurn/followup payload 附 crossAppBlock/groupBlock）、phone.tsx（电话引擎同构，currentApp='phone'，另透传 AI 主动来电 pending.proactiveContext 作开场情境）、api/phone/turn/route.ts（root 新增 crossAppBlock/groupBlock/proactiveContext 可选字段，拼装顺序=system→worldbook→memory→crossApp→group→proactive 段→moments→time→loc）、api/phone/followup/route.ts（同款位置）、call-followup.ts（入参与透传）
+- 验证：bunx tsc 全仓零错误（40-b 代理超时前自验 + 主协调者终验）；群聊块 memberIds 匹配口径与 memory.ts memRecentGroupConvo 一致；E2E 中信息端跨App块实测生效（见 40-e）
+
+Stage Summary:
+- 交付文件：src/lib/ios/cross-app-context.ts（新建）、src/lib/ios/chat-call.ts、src/components/apps/phone.tsx、src/lib/ios/call-followup.ts、src/app/api/phone/turn/route.ts、src/app/api/phone/followup/route.ts
+- 能力语义：AI 回复时可看到其他 App 与同一角色的最近原始聊天（每 App 10 条、标注来源、明确「现在在哪个 App」），共同群聊的最近 10 条群消息按群标注带入私聊/通话；跨App/群聊块在四端（微信/QQ/信息私聊 + 三种通话）统一注入，注入顺序=当前App记忆→跨App→群聊（长期/核心在 memoryBlock 内）
+---
+Task ID: 40-e
+Agent: 主协调者 (Z.ai Code)
+Task: 三端私聊注入跨App/群聊块 + chat.tsx TDZ 修复 + Task 40 汇总 E2E 验证 + 分主题提交推送
+
+Work Log:
+- 修复 40-a 落地遗留：chat.tsx buildReplyMsgs 的 useCallback 引用后声明的 settleUserBlockReq（TS2448/2454）——把 settleUserBlockReq 定义移至 buildReplyMsgs 之前并注释 TDZ 原因；tsc 恢复全绿
+- 40-e 三端私聊注入（与 40-a 同文件故串行执行）：wechat.tsx/qq.tsx/chat.tsx 各自 import buildCrossContextBlocks，ChatPage/ChatView 挂载时预热（crossCtxRef + useEffect [peer.id/me.name]，alive flag 防卸载后写入），runAiTurn/startAiTurn 开头（40-a 守卫之后）fire-and-forget 刷新供下一轮，systemFull/baseSys 拼装在 memoryBlock 之后插入 crossAppBlock+groupBlock（注入顺序=当前App记忆→其他App最近10条→群聊最近10条，长期/核心在 memoryBlock 内部）；systemFull 是同步拼装故读预热缓存（首轮流发生在打开会话数秒后预热必就绪；空结果不注入不阻断）；AI 助手会话（memContactId 空）跳过；顺手更新三端 buildBlockPromptBlock 调用处过时注释（「拉黑不拦截消息」→「40-a 重构后拦截本App消息发送」）
+- 汇总验证：bunx tsc --noEmit 全仓 exit 0；bun run lint 零 error；agent-browser E2E（视口 1300x950 才能覆盖手机壳全高，unlock 上滑手势 (645,780)→(645,300)；服务端空迁移会在 reload 后清 contacts，需 reload→seed 顺序；agent-browser daemon 存活跨 Bash 调用而 dev server 只在启动它的调用内存活→单调用脚本）最终 PASS=7 FAIL=0：
+  ①40-b 信息端跨App记忆：种微信消息（爬山话题）→信息端发消息→捕获 /api/chat system 含【当前环境】正在「信息」+【跨应用近况】▶微信 最近对话+原始消息「爬山」跨App携带（A1/A2/A3）；
+  ②40-a 拉黑双向（信息端实测，微信/QQ 同构）：byUser=true→AI 回合照常发起但正文全丢弃（kv assistant 文本消息数 1→1，仅申请卡放行语义——AI 只能发申请卡不能说话）；byChar=true→输入区上方提示条出现（sms-user-blockreq-bar）+发送被拦 toast「无法发送」+消息未落库（请求计数 0→0）+申请卡闭环：点「发送解除申请」→面板填理由→卡片落库→AI 回合触发且 system 含「解除拉黑申请」事件与 [同意解除拉黑]/[拒绝解除拉黑] 决策指引（C2-1~5）；
+  ③40-d 设置开关：通知页「AI 主动来电」Switch+副标题（E1）；run4 中曾观察到主屏图标被来电横幅 circle 元素遮挡——调度器端到端真实触发过一通来电（决策API→triggerIncomingCall→来电UI）的旁证；
+  ④40-c 相册锁屏：照片查看器更多菜单「设为锁定屏幕」→IndexedDB settings lockWallpaper.customBlob 落库（D1，与主屏壁纸键互相独立）；
+  ⑤40-b 微信端注入为与信息端完全同构的同一函数/模式，由 tsc+代码走查背书（微信登录墙无法在 E2E 稳定穿越，已记为环境限制）
+- 环境备注：微信 App 有登录墙（wx 登录页需手动登录），E2E 中微信端 UI 流程不可稳定自动化；agent-browser eval 的 IIFE 必须带调用括号 ()（缺省返回函数序列化为 {} 曾致脚本静默失效）；息屏/锁屏/登录墙三种状态叠加是本轮 E2E 主要调试成本
+- 分主题 commit：40-a 拉黑（lib 三件+三端 UI）、40-b 跨App记忆（lib+电话链路）、40-e 注入与三端、40-c 相册锁屏、40-d AI 主动来电、worklog；推送 GitHub origin main
+
+Stage Summary:
+- Task 40 全部五项需求交付：①相册照片可设为锁屏壁纸（与主屏独立）；②AI 主动打电话（人设/聊天/时间决策→真拨打→接听/拒绝/挂断→通话内容全注入→挂断落记忆，调度参数可调、设置有开关）；③拉黑重构（按 App×联系人隔离的双向真实拦截+双向解除申请卡+AI 决策标记+三防骚扰，跨App 不受限）；④跨App 记忆携带（其他 App 最近 10 条原始消息+当前 App 声明，share 开关门控）；⑤群聊记忆携带（共同群最近 10 条按群/发言人标注）+注入顺序合规+system 三要素文案；⑥四端通话/聊天管线零回归（tsc/lint/E2E 三重验证）
