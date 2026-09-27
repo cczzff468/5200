@@ -75,6 +75,15 @@ export function getReplyCount(sessionKey: string, fallback: number = DEFAULT_REP
   return typeof v === 'number' ? normalizeReplyCount(v, fallback) : normalizeReplyCount(fallback, fallback);
 }
 
+/**
+ * 某会话是否【设置过】回复条数（loadMap 已滤掉非法值，true 即存在合法存值）。
+ * 跨 App 跟随语义用：先探测「用户真的选过」，未选过才落到别的键/原 fallback——
+ * 例如信息会话未设置时跟随微信同联系人的设置（chat.tsx 的 sms > wx 回退链）。
+ */
+export function hasReplyCount(sessionKey: string): boolean {
+  return loadMap()[sessionKey] !== undefined;
+}
+
 /** 保存某会话的回复条数（持久化到 localStorage，按 sessionKey 隔离） */
 export function saveReplyCount(sessionKey: string, n: number): void {
   if (typeof window === 'undefined') return;

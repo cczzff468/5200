@@ -7,10 +7,11 @@
  *   搬完（全部落库成功后）才通知服务端清空对应数据——先搬后删，中途失败下次重来（put 幂等）
  */
 import { localDB, genId } from './db';
-import { kvDel } from './idb-kv';
+import { kvDel, kvGet, kvSet } from './idb-kv';
 import { clearContactBinding } from './worldbook';
 import { memPurgeContact } from '@/lib/memory';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
+import { wxUnreads, qqUnreads } from '@/lib/unread-store';
 import { wsHeaders } from './workspace';
 import {
   displayNameOf,
@@ -219,11 +220,25 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
 }
 
 /**
- * 删除联系人后清理其全部「聊天痕迹」（NPC 级联删除时对每个被删 id 各调一次）：
+ * 删除联系人后清理其全部「聊天痕迹」与「按联系人 id 派生的互动状态」
+ * （NPC 级联删除时对每个被删 id 各调一次）：
  * - 聊天记录（已迁 IndexedDB kv store）：微信 wx-chat-msgs:<id> / QQ qq-chat-msgs:<id> /
  *   信息 ios-chat-msgs:c:<id>（kvDel 同步删内存 + 异步删库；localStorage 旧键一并清扫兼容）；
  * - 会话级设置 map 条目：chat-time-aware（时间感知）与 chat-reply-counts（回复条数）里
  *   该联系人的 wx:<id> / qq:<id> / sms:c:<id> / phone:<id> 四个键；
+ * - 互动状态孤儿键（kv store，全部按裸联系人 id 派生）：转发感知事件 wx-ai-events:<id> /
+ *   qq-ai-events:<id>、QQ 好感 qq-bond:<id>、QQ 朋友圈点赞 qq-friend-likes:<id>、
+ *   被踢·回群感知 char-kick:<id>、AI 建群冷却/邀请/拒绝 ai-group-social:<id>、
+ *   三端拉黑状态 wx-block:<id> / qq-block:<id> / sms-block:<id>（block-state 的 `${app}-block:<id>`）；
+ * - 互动状态孤儿键（localStorage 直存）：AI 主动来电冷却时间戳 wx-vc-last:<id> /
+ *   qq-vc-last:<id> / sms-vc-last:<id>；
+ * - 单键 JSON map 里的按联系人条目（读-改-写）：chat-translate-cfg（翻译配置，wx:<id> /
+ *   qq:<id> / sms:c:<id>）、sms-queued-turns（信息排队补跑，c:<id>）、wx-queued-turns /
+ *   qq-queued-turns（微信/QQ 排队补跑，裸 id；注意 wechat.tsx/qq.tsx 内存单例在同会话内
+ *   下次队列写回可能复活条目——刷新后即彻底消失，无功能性影响）；
+ * - 朋友圈/QQ空间自动发动态配置（kv 单键 map moments-auto-cfg，条目 <id>:wx / <id>:qq）；
+ * - 会话未读角标：wx-chat-unreads / qq-chat-unreads 里的条目（走 unread-store 总线 clear，
+ *   内存单例与 localStorage 及订阅者同步，避免下次持久化写回复活）；
  * - 会话标志（置顶/免打扰/背景标记）：wx-chat-flags / qq-chat-flags 里的条目
  *   （走 chat-flags 总线的 reset，内存快照与 localStorage 同步，避免后续 update 写回复活）；
  * - 聊天背景图本体（IndexedDB settings store）：chat-bg:wx:<id> / chat-bg:qq:<id>。
@@ -259,6 +274,79 @@ function purgeChatTracesFor(id: string, name?: string): void {
       }
       if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
     }
+    // 互动状态孤儿键（IndexedDB kv store，全部按裸联系人 id 派生；38-c）：
+    // 转发感知事件（wechat/wx-group/qq/qq-group 各自的 lsAiEventsKey）/ QQ 好感（qq.tsx lsBondKey）/
+    // QQ 朋友圈点赞（qq.tsx LS_FRIEND_LIKE）/ 被踢·回群感知（group-social.ts kickKey）/
+    // AI 建群冷却·邀请·拒绝（group-social.ts SOCIAL_KEY）/ 三端拉黑状态（block-state.ts blockKey）
+    for (const k of [
+      `wx-ai-events:${id}`,
+      `qq-ai-events:${id}`,
+      `qq-bond:${id}`,
+      `qq-friend-likes:${id}`,
+      `char-kick:${id}`,
+      `ai-group-social:${id}`,
+      `wx-block:${id}`,
+      `qq-block:${id}`,
+      `sms-block:${id}`,
+    ]) {
+      kvDel(k);
+      // 兼容清扫：这些键均由迁移层/运行期直写 kv，localStorage 不会有意写入，这里兜底无害
+      window.localStorage.removeItem(k);
+    }
+    // AI 主动来电冷却时间戳（localStorage 直存，读取处每次现读无内存缓存）：三端同删
+    for (const k of [`wx-vc-last:${id}`, `qq-vc-last:${id}`, `sms-vc-last:${id}`]) {
+      window.localStorage.removeItem(k);
+    }
+    // 单键 JSON map 里的按联系人条目（读-改-写，与上方时间感知/回复条数同写法；38-c）：
+    // - chat-translate-cfg（翻译配置，chat-translate.ts CFG_KEY）：会话键 wx:<id> / qq:<id> / sms:c:<id>
+    //   （chat.tsx 的 sessionKey = `sms:${storageKey}`，联系人会话 storageKey = `c:<id>`）；
+    // - 排队补跑回合表：sms-queued-turns 条目键为 storageKey（c:<id>）、wx/qq-queued-turns 条目键为裸联系人 id；
+    //   注意 wechat.tsx/qq.tsx 持有内存单例，同会话内下次队列写回可能复活条目（刷新后即彻底消失，
+    //   条目对已删联系人不可再消费，无功能性影响）
+    for (const [mapKey, sessionKeys] of [
+      ['chat-translate-cfg', [`wx:${id}`, `qq:${id}`, `sms:c:${id}`]],
+      ['sms-queued-turns', [`c:${id}`]],
+      ['wx-queued-turns', [id]],
+      ['qq-queued-turns', [id]],
+    ] as const) {
+      const raw = window.localStorage.getItem(mapKey);
+      if (!raw) continue;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const obj = parsed as Record<string, unknown>;
+      let changed = false;
+      for (const sk of sessionKeys) {
+        if (sk in obj) {
+          delete obj[sk];
+          changed = true;
+        }
+      }
+      if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
+    }
+    // 朋友圈/QQ空间自动发动态配置（moments.ts AUTO_CFG_KEY，kv 单键 map，条目键 <contactId>:<platform>）
+    try {
+      const cfgRaw = kvGet<Record<string, unknown>>('moments-auto-cfg');
+      if (cfgRaw && typeof cfgRaw === 'object' && !Array.isArray(cfgRaw)) {
+        const cfgObj = cfgRaw as Record<string, unknown>;
+        let cfgChanged = false;
+        for (const sk of [`${id}:wx`, `${id}:qq`]) {
+          if (sk in cfgObj) {
+            delete cfgObj[sk];
+            cfgChanged = true;
+          }
+        }
+        if (cfgChanged) kvSet('moments-auto-cfg', cfgObj);
+      }
+    } catch {
+      // 清理失败不阻塞删除
+    }
+  } catch {
+    // 清理失败不阻塞删除
+  }
+  // 会话未读角标：走 unread-store 总线 clear（内存单例 + localStorage + 订阅广播同步）
+  try {
+    wxUnreads.clear(id);
+    qqUnreads.clear(id);
   } catch {
     // 清理失败不阻塞删除
   }
@@ -305,7 +393,8 @@ export async function deleteContact(id: string): Promise<boolean> {
   } catch {
     // 清理失败不阻塞删除
   }
-  // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/会话标志/背景图一并清理
+  // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/翻译配置/
+  // 排队补跑条目/转发事件/QQ好感·点赞/拉黑/被踢感知/建群冷却/来电冷却/未读角标/会话标志/背景图一并清理
   for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId);
   purgeChatTracesFor(id, existing.name);
   // 世界书：清理被删联系人（含级联 NPC）的挂载关系键；书籍本体与条目是用户创作，保留不删

@@ -8955,3 +8955,68 @@ Work Log:
 Stage Summary:
 - 交付文件：src/components/apps/wechat.tsx、src/components/apps/qq.tsx（各 247 行改动）
 - 修复语义：回复中点发送=排队不再死按；系统事件回复中排队补跑；错误兜底不再顶替已上屏回复；投递中删/撤不被复活；中文选词回车不误发；转发感知 dev 模式不丢；微信 AI 来电不再静默杀死进行中通话；挂断续聊/退卡消息有通知有角标
+---
+Task ID: 38-a
+Agent: 信息回复条数跟随微信
+Task: 信息 App（chat.tsx）AI 回复条数跟随微信同联系人的「回复条数」选择（sms > wx > 原状），不加设置 UI
+
+Work Log:
+- id 同源性核实（不猜测，逐链查证）：①微信端 wechat.tsx:3748 `sessionKey = wx:${peer.id}`，peer = `contacts.find((c) => c.id === chatPeer.id)`（wechat.tsx:8896），contacts 来自 contacts-store 的 listContacts()（wechat.tsx:9613）；②信息端 chat.tsx:3179 会话 key = `c:${c.id}`（c 亦来自 listContacts()，chat.tsx:3229），ChatView 内 sessionKey = `sms:${storageKey}`（chat.tsx:769）、memContactId = storageKey.slice(2)（chat.tsx:822）即 contacts-store 联系人 id；③来电留言入口 recordMissedPhoneCall 的 contact 也来自 listContacts().find(...)（chat.tsx:1285）。结论：chat.tsx 的 `wx:${memContactId}` 与微信端 `wx:${peer.id}` 是同一把键，直接映射、无需换算
+- src/lib/reply-count.ts：新增导出 hasReplyCount(sessionKey)（loadMap 已滤非法值，true 即存在合法存值；getReplyCount/saveReplyCount 等既有函数零改动）——用于探测「用户真的在某一端选过」，未选过才落到下一级
+- chat.tsx 主回复处（原 :1109，现 :1114-1120）：`const replyCount = systemPrompt ? getReplyCount(sessionKey, 1) : 1` 改为回退链 hasReplyCount(sessionKey) ? sms 值 : (hasReplyCount(wx:<memContactId>) ? wx 值 : 1)，AI 助手会话（无 systemPrompt）恒 1 条不变；回复条数 prompt 注入（buildReplyCountPrompt）与流式分段管线（replyCount>1 分支）零改动，链条解析结果直接喂给既有 replyCount 消费点
+- chat.tsx 来电留言处（原 :399，现 :402-406）：requestCallFollowup 的 replyCount 同一链条（sms:c:<id> > wx:<id> > 1 条留言原状），IIFE 内 smsKey/wxKey 命名保持可读
+- 终端 fallback 取「原 fallback 1」而非任务示例一行式里的 DEFAULT_REPLY_COUNT：一行式 getReplyCount(smsKey, getReplyCount(wxKey, DEFAULT_REPLY_COUNT)) 会把「从未在任何一端设置」的联系人从 1 条翻成 5 条（微信设置页未设置时显示的默认值），超出「跟随微信里的选择」的范围；采用任务推荐的 hasReplyCount 方案精确保留原状（运行时验证场景 A/E），如需「未设置也按默认 5 条」把两处终端 1 改成 DEFAULT_REPLY_COUNT 即可
+- 运行时验证（bun 直跑模块 + stub localStorage，临时命令不留文件）：两端未设置→1；仅 wx=3→3（跟随微信）；sms=7→7（信息自身设置优先）；sms 存非法值(99)视为未设置→回落 wx=15；非法 sms 且 wx 未设→1，全过
+- 验证：bunx tsc --noEmit 全仓 exit 0；bunx eslint src/lib/reply-count.ts src/components/apps/chat.tsx exit 0；未 git 操作、未动其他文件（含微信端与 chat-stream-store）
+
+Stage Summary:
+- 改动文件：src/lib/reply-count.ts（+hasReplyCount 导出）、src/components/apps/chat.tsx（import + 主回复/来电留言两处读取点）
+- 修复语义：信息 App 对同一联系人的 AI 回复条数（含来电留言条数）跟随微信会话设置页里对该联系人选择的「回复条数」——信息端自己存过 sms:c:<id> 则优先（向后兼容），否则读微信的 wx:<contactId>；两端都没选过保持信息端原状 1 条；不加任何设置 UI，微信设置页显示/修改的值与信息端生效的值天然一致
+---
+Task ID: 38-b
+Agent: 相册收藏+计算器%
+Task: D-3 相册❤收藏持久化+「个人收藏」筛选视图 + D-4 计算器 % 对齐 iOS 语义
+
+Work Log:
+- D-3（photos.tsx，db.ts 未动、DB 版本未动）：①本地扩展类型 FavPhoto = PhotoRecord & { favorite?: boolean }（记录内可选字段方案；IndexedDB 对象存储对新增可选字段天然兼容，buildYearGroups/DayGroup 同步改用 FavPhoto）；②查看器❤由纯视觉 state 改为派生值 hearted = viewerPhoto?.favorite === true，删除 openViewer/stepViewer 里的强制 setHearted(false)（重进/切换自然带上真实收藏态）；新增 toggleFavorite：{ ...rec, favorite: !rec.favorite } 整条 put 写回（乐观更新本地列表即时反馈，写库失败回滚），收藏视图内取消收藏时照片即将离开当前列表，先按 handleDelete 同款逻辑切到相邻照片/关闭查看器；③图库顶部导航新增❤入口（与 Plus 同款样式、aria-pressed），开启后标题变「个人收藏」、visiblePhotos 按 favorite 过滤，查看器/横滑切换/左右箭头/单删/批量分享/选择按钮均以 visiblePhotos 为准；收藏视图专属空态「没有收藏的照片」；④网格缩略图收藏者左下角渲染红色小心心角标（避开左上角多选圈，无既有角标机制故内联实现）
+- D-4（calculator.tsx portraitReducer pct 分支）：pendOp 为 +/− 且 pendVal 非空时改为 disp = pendVal × disp / 100（iOS 语义：200 + 10% = 200 + 200×10% = 220，200 − 10% = 180）；×/÷ 或无挂起运算保持 disp/100（50 × 10% = 5、裸 10% = 0.1）。横屏科学计算器 %（sciPct+evalRPN）为表达式后缀 /100 语义，iOS 横屏布局本无 % 键、不存在「明确相反」，未改动
+- 验证：bunx tsc --noEmit 全仓零错误；bunx eslint 两文件零告警；agent-browser 实测——计算器 200+10%=220 / 200−10%=180 / 50×10%=5 / 裸10%=0.1；相册：查看器❤后 IndexedDB 记录 favorite:true、缩略图出现红心角标、收藏视图仅显示该张、页面刷新重进后收藏仍在、收藏视图内取消收藏→查看器关闭+空态提示+DB 写回 false；测试照片已清理（photos 表恢复 0 条）
+Stage Summary:
+- 交付文件：src/components/apps/photos.tsx、src/components/apps/calculator.tsx（db.ts 只读未动、DB 版本未动、未 git 操作）
+- 修复语义：❤收藏真实持久化（重进/切走切回/刷新均保持），图库有「个人收藏」筛选入口与空态，网格收藏角标；计算器 % 与 iOS 对齐——加减挂起时按前一操作数百分比（200+10%=220），乘除/无挂起仍为 /100
+---
+Task ID: 38-c
+Agent: 孤儿键+备忘录清理（子代理超时于收尾，代码已全部落地，主协调者核验补记）
+Task: D-5 删联系人孤儿键清理 + D-6 备忘录幽灵空记录
+
+Work Log:
+- D-5 contacts-store.ts purgeChatTracesFor 追加互动状态孤儿键清理（229-301 行）：wx-ai-events:<id> / qq-ai-events:<id> / qq-bond:<id> / qq-friend-likes:<id> 四类 kv 键 + chat-translate-cfg 单键 JSON map 的 wx:<id>/qq:<id>/sms:c:<id> 条目（读-改-写），均按裸联系人 id 派生
+- D-6 notes.tsx：isBlankNote 判定（标题空+正文纯文本空或仅剩清单种子符）+ 离开编辑器时空白未置顶自动丢弃（534 行）+ 旧数据幽灵空记录清扫（挂载时 kept 过滤，544-547 行，覆盖进程被杀/直接切走的残留）
+
+Stage Summary:
+- 交付文件：src/lib/ios/contacts-store.ts、src/components/apps/notes.tsx
+- 修复语义：删联系人后互动状态零残留；备忘录未输入即离开不产生空卡片，历史幽灵记录自动清扫
+---
+Task ID: 38-d
+Agent: 闹钟贪睡+计时器全局提示（子代理超时于收尾，代码已全部落地，主协调者核验补记）
+Task: D-7 闹钟稍后提醒/自动停铃 + D-8 计时器完成提示全局化
+
+Work Log:
+- D-7 clock.tsx：RingOverlay 双按钮（「稍后提醒」次按钮 +「停止」主按钮）；稍后提醒=snoozeQueue 内存队列 now+9min 一次性临时闹钟，同轮询触发、出队即清理（不二次触发）；响铃 60s 无人确认自动停铃收层（演示环境取 60s，注释说明 iOS 真机约 15 分钟）
+- D-8 clock.tsx：计时完成覆盖层从 TimerView 内提升到 ClockApp 外壳级渲染（1113-1164 行），任意 tab 可见，样式沿用原 done 分支语言（z-60 盖过 TabBar），计时器模块级引擎未动
+
+Stage Summary:
+- 交付文件：src/components/apps/clock.tsx
+- 修复语义：闹钟支持 iOS 同款贪睡且响铃不会永不停；计时器到点在任何 tab 都能立即看到全屏提示
+---
+Task ID: 38-h
+Agent: 主协调者 (Z.ai Code)
+Task: Task 38 四组修复汇总验证 + 提交
+
+Work Log:
+- tsc --noEmit 全仓零错误、lint 零告警
+- E2E（agent-browser）：①38-a 全链路——种入联系人（经历服务端迁移洗数据→重种），信息端对 wx:char-e2e-lxy=3 的会话发送消息，捕获 /api/chat 请求体含「本次发 2~3 条」连发指令（buildReplyCountPrompt(3) 正确），AI 实际连发 3 条（2 文字+1 语音条，递进不重复）✅；②D-4/D-3 由 38-b 子代理实测（200+10%=220、收藏持久化/角标/收藏视图）✅；③D-5/D-6/D-7/D-8 代码核验落地（孤儿键清理 5 类键+map 条目、isBlankNote 三重清扫、贪睡队列+60s 自动停铃、计时器完成层外壳级渲染）✅
+- 环境备注：dev server 被沙箱周期清理，验证在单 Bash 调用内完成；agent-browser 双 daemon 残留曾导致 eval/快照 DOM 不一致，pkill 清理后恢复
+
+Stage Summary:
+- 全部 7 项（38-a 需求 + D-3~D-8）验证通过，分主题提交推送

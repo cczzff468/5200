@@ -42,7 +42,7 @@ import {
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
+import { getReplyCount, hasReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { hasVoiceCallMark, stripVoiceCallMark } from '@/lib/ios/chat-call';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
@@ -395,8 +395,15 @@ async function recordMissedPhoneCall(
       memoryBlock: memRecallBlock(contact.id, 'sms', recentChat.map((m) => m.content).join(' ')) || undefined,
       timeBlock: buildSmsTimeBlock({ lastMsgTime: recent.length > 0 ? recent[recent.length - 1].time : null, regionHint: contact.region || null }),
       multiApp: getMemSettings(contact.id).share,
-      // 条数上限 = 该会话聊天设置「回复条数」（sms:c:<id>，与信息聊天同一份设置；未设置回退 1 条留言）
-      replyCount: getReplyCount(`sms:c:${contact.id}`, 1),
+      // 条数上限（跟随微信，与信息聊天主回复同一回退链）：信息自己的设置（sms:c:<id>，向后兼容）
+      // 优先；信息端未设置时跟随微信同联系人的「回复条数」（wx:<id>，微信会话设置页读写的就是
+      // 该键，contact.id 与微信端 peer.id 同源：均取自 contacts-store）；两端都未设置回退
+      // 1 条留言（原状）。留言条数 = 会话回复条数，跟随微信里对该联系人的选择。
+      replyCount: (() => {
+        const smsKey = `sms:c:${contact.id}`;
+        const wxKey = `wx:${contact.id}`;
+        return hasReplyCount(smsKey) ? getReplyCount(smsKey, 1) : hasReplyCount(wxKey) ? getReplyCount(wxKey, 1) : 1;
+      })(),
       userRealName: owner?.realName || undefined,
       userNickname: owner?.nickname || undefined,
     });
@@ -1105,8 +1112,19 @@ function ChatView({
     if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
-    // 回复条数（本会话独立设置；信息端未提供设置入口，未设置时保持 1 条的现状）
-    const replyCount = systemPrompt ? getReplyCount(sessionKey, 1) : 1;
+    // 回复条数（跟随微信）：信息自己的设置（sms:c:<id>，向后兼容，暂无设置入口）优先；
+    // 信息端未设置时跟随微信同联系人的「回复条数」——微信会话设置页读写的正是
+    // wx:<contactId> 这个键（contactId 与本端联系人同源：均取自 contacts-store 的联系人
+    // id，本端 storageKey 形如 c:<contactId>），两端看到/改动的值一致；
+    // 两端都未设置时保持信息端原状 1 条（不把微信端「未设置时显示的默认 5 条」强加给信息端）。
+    // AI 助手会话（无 systemPrompt 人设）恒 1 条不变。
+    const wxReplyCountKey = memContactId ? `wx:${memContactId}` : null;
+    const followReplyCount = hasReplyCount(sessionKey)
+      ? getReplyCount(sessionKey, 1)
+      : wxReplyCountKey && hasReplyCount(wxReplyCountKey)
+        ? getReplyCount(wxReplyCountKey, 1)
+        : 1;
+    const replyCount = systemPrompt ? followReplyCount : 1;
     // 记忆库：联系人会话召回记忆（memContactId 为组件级常量：storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
     const memoryBlock = memContactId
       ? memRecallBlock(

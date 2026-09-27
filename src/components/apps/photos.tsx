@@ -25,10 +25,17 @@ import { BackToHome } from '@/components/ios/BackToHome';
 
 const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'] as const;
 
+/**
+ * 相册记录的本地扩展：收藏标记。
+ * favorite 以「记录内可选字段」直存 IndexedDB（put 整条记录带上该字段），
+ * 对象存储对新增可选字段天然兼容，无需升级 DB 版本；旧记录无该字段 = 未收藏。
+ */
+type FavPhoto = PhotoRecord & { favorite?: boolean };
+
 interface DayGroup {
   key: string;
   label: string;
-  photos: PhotoRecord[];
+  photos: FavPhoto[];
 }
 
 interface MonthGroup {
@@ -44,7 +51,7 @@ interface YearGroup {
 }
 
 /** 按 年 → 月 → 日 分组（传入的照片需已按 createdAt 倒序） */
-function buildYearGroups(photos: PhotoRecord[]): YearGroup[] {
+function buildYearGroups(photos: FavPhoto[]): YearGroup[] {
   const years: YearGroup[] = [];
   const yearMap = new Map<number, YearGroup>();
   const monthMap = new Map<string, MonthGroup>();
@@ -103,18 +110,19 @@ function photoViewerDate(ts: number): string {
 
 /** 相册 App：年/月/日分组图库 + 全屏照片查看器 */
 export default function PhotosApp() {
-  const [photos, setPhotos] = useState<PhotoRecord[]>([]);
+  const [photos, setPhotos] = useState<FavPhoto[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [zoomed, setZoomed] = useState(false);
   const [wallpaperOk, setWallpaperOk] = useState(false);
+  /** 「个人收藏」筛选视图开关（iOS 相册的个人收藏语义） */
+  const [favOnly, setFavOnly] = useState(false);
 
   // 多选模式
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  // 查看器视觉态：收藏心形（仅视觉）与"更多"菜单
-  const [hearted, setHearted] = useState(false);
+  // 查看器"更多"菜单
   const [moreOpen, setMoreOpen] = useState(false);
 
   /** 照片 id → ObjectURL（渲染用，随列表刷新整体更新） */
@@ -162,17 +170,23 @@ export default function PhotosApp() {
     };
   }, []);
 
-  const yearGroups = useMemo(() => buildYearGroups(photos), [photos]);
+  // 收藏筛选视图下仅显示已收藏照片；查看器/滑动切换/批量操作均以当前可见列表为准
+  const visiblePhotos = useMemo(
+    () => (favOnly ? photos.filter((p) => p.favorite) : photos),
+    [favOnly, photos]
+  );
+  const yearGroups = useMemo(() => buildYearGroups(visiblePhotos), [visiblePhotos]);
 
-  const viewerPhoto = viewerId ? (photos.find((p) => p.id === viewerId) ?? null) : null;
-  const viewerIdx = viewerPhoto ? photos.findIndex((p) => p.id === viewerPhoto.id) : -1;
+  const viewerPhoto = viewerId ? (visiblePhotos.find((p) => p.id === viewerId) ?? null) : null;
+  const viewerIdx = viewerPhoto ? visiblePhotos.findIndex((p) => p.id === viewerPhoto.id) : -1;
+  /** 当前查看照片的收藏态（持久化字段，写库后由列表状态驱动） */
+  const hearted = viewerPhoto?.favorite === true;
 
   // ---------------- 交互 ----------------
 
   const openViewer = (id: string) => {
     setViewerId(id);
     setZoomed(false);
-    setHearted(false);
     setMoreOpen(false);
   };
 
@@ -180,11 +194,31 @@ export default function PhotosApp() {
   const stepViewer = (delta: number) => {
     if (viewerIdx < 0) return;
     const nextIdx = viewerIdx + delta;
-    if (nextIdx < 0 || nextIdx >= photos.length) return;
-    setViewerId(photos[nextIdx].id);
+    if (nextIdx < 0 || nextIdx >= visiblePhotos.length) return;
+    setViewerId(visiblePhotos[nextIdx].id);
     setZoomed(false);
-    setHearted(false);
     setMoreOpen(false);
+  };
+
+  /**
+   * 查看器❤：切换收藏并整条写回 IndexedDB。
+   * 乐观更新本地列表（心形即时反馈），写库失败时回滚；
+   * 收藏视图内取消收藏时照片即将离开当前列表，先切到相邻照片（与删除同款行为）。
+   */
+  const toggleFavorite = async () => {
+    const rec = viewerPhoto;
+    if (!rec) return;
+    const next: FavPhoto = { ...rec, favorite: !rec.favorite };
+    if (favOnly && rec.favorite) {
+      const neighbor = visiblePhotos[viewerIdx + 1] ?? visiblePhotos[viewerIdx - 1] ?? null;
+      setViewerId(neighbor ? neighbor.id : null);
+    }
+    setPhotos((prev) => prev.map((p) => (p.id === rec.id ? next : p)));
+    try {
+      await localDB.put('photos', next);
+    } catch {
+      setPhotos((prev) => prev.map((p) => (p.id === rec.id ? rec : p)));
+    }
   };
 
   const enterSelectMode = () => {
@@ -241,7 +275,7 @@ export default function PhotosApp() {
 
   /** 多选批量分享：系统面板一次带全部文件，不支持时逐张下载 */
   const handleBatchShare = async () => {
-    const recs = photos.filter((p) => selectedIds.has(p.id));
+    const recs = visiblePhotos.filter((p) => selectedIds.has(p.id));
     if (recs.length === 0) return;
     const files = recs.map((r) => new File([r.blob], r.name || 'photo.jpg', { type: r.blob.type || 'image/jpeg' }));
     if (typeof navigator.share === 'function' && navigator.canShare?.({ files })) {
@@ -277,7 +311,7 @@ export default function PhotosApp() {
     const rec = viewerPhoto;
     if (!rec) return;
     if (!window.confirm('确定删除这张照片？删除后无法恢复。')) return;
-    const next = photos[viewerIdx + 1] ?? photos[viewerIdx - 1] ?? null;
+    const next = visiblePhotos[viewerIdx + 1] ?? visiblePhotos[viewerIdx - 1] ?? null;
     setViewerId(next ? next.id : null);
     await localDB.delete('photos', rec.id);
     setReloadKey((k) => k + 1);
@@ -342,7 +376,7 @@ export default function PhotosApp() {
         {/* 大标题随内容滚动（static! 覆盖内置 sticky），分组头在状态栏下方吸顶 */}
         <IOSNavBar
           inline
-          title="照片"
+          title={favOnly ? '个人收藏' : '照片'}
           className="static!"
           left={<BackToHome className="static!" />}
           right={
@@ -352,13 +386,25 @@ export default function PhotosApp() {
               <>
                 <button
                   type="button"
+                  aria-label={favOnly ? '显示全部照片' : '查看个人收藏'}
+                  aria-pressed={favOnly}
+                  onClick={() => setFavOnly((v) => !v)}
+                  className="text-foreground transition-opacity active:opacity-50"
+                >
+                  <Heart
+                    className={`h-6 w-6 ${favOnly ? 'fill-[#FF453A] text-[#FF453A]' : ''}`}
+                    strokeWidth={2.2}
+                  />
+                </button>
+                <button
+                  type="button"
                   aria-label="从本地上传照片"
                   onClick={() => fileInputRef.current?.click()}
                   className="text-foreground transition-opacity active:opacity-50"
                 >
                   <Plus className="h-6 w-6" strokeWidth={2.2} />
                 </button>
-                <IOSTextButton onClick={enterSelectMode} disabled={photos.length === 0}>
+                <IOSTextButton onClick={enterSelectMode} disabled={visiblePhotos.length === 0}>
                   选择
                 </IOSTextButton>
               </>
@@ -387,6 +433,14 @@ export default function PhotosApp() {
             <ImageIcon className="h-12 w-12 text-muted-foreground/50" aria-hidden="true" />
             <p className="text-[17px] font-semibold">没有照片</p>
             <p className="text-[13px] text-muted-foreground">从本地上传或使用相机拍摄</p>
+          </div>
+        )}
+
+        {loaded && photos.length > 0 && visiblePhotos.length === 0 && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-10 pb-24 text-center">
+            <Heart className="h-12 w-12 text-muted-foreground/50" aria-hidden="true" />
+            <p className="text-[17px] font-semibold">没有收藏的照片</p>
+            <p className="text-[13px] text-muted-foreground">查看照片时点击❤添加到个人收藏</p>
           </div>
         )}
 
@@ -436,6 +490,14 @@ export default function PhotosApp() {
                               draggable={false}
                               className="h-full w-full select-none object-cover"
                             />
+                            {/* 收藏角标（左下角，避开左上角多选圈） */}
+                            {p.favorite && (
+                              <Heart
+                                aria-hidden="true"
+                                className="absolute bottom-1 left-1 h-3.5 w-3.5 fill-[#FF453A] text-[#FF453A] drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]"
+                                strokeWidth={2}
+                              />
+                            )}
                             {selectMode && (
                               <span
                                 className={`absolute left-1 top-1 flex h-[22px] w-[22px] items-center justify-center rounded-full border-[1.5px] backdrop-blur-sm transition-colors ${
@@ -590,7 +652,8 @@ export default function PhotosApp() {
               <button
                 type="button"
                 aria-label={hearted ? '取消收藏' : '收藏照片'}
-                onClick={() => setHearted((v) => !v)}
+                aria-pressed={hearted}
+                onClick={() => void toggleFavorite()}
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white transition-opacity active:opacity-60"
               >
                 <Heart

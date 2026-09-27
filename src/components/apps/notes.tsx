@@ -78,6 +78,23 @@ function displayTitle(n: NoteRecord): { title: string; derived: boolean } {
   return { title: first.replace(/^#+\s*/, '').slice(0, 50) || '新备忘录', derived: first !== '' };
 }
 
+/** 清单笔记新建时的种子正文（htmlToText 归一后只剩这一个字符 = 用户未输入任何内容） */
+const CHECKLIST_SEED_TEXT = '☐';
+
+/**
+ * 备忘录是否「空白」（38-c 幽灵空记录判定）：标题为空 + 正文纯文本为空（或仅剩清单种子符）
+ * + 无图片/链接等非文本内容 + 未置顶 —— 与编辑器自身的空正文归一口径一致（编辑器同样把
+ * 残留 <br> 视为空、把 <img>/<a> 视为有内容）。空笔记没有任何内容，按 iOS 语义丢弃。
+ */
+function isBlankNote(n: NoteRecord): boolean {
+  if ((n.title ?? '').trim() !== '') return false;
+  if (n.pinned === true) return false;
+  const html = n.content ?? '';
+  if (/<(img|a)\b/i.test(html)) return false;
+  const text = htmlToText(html).trim();
+  return text === '' || text === CHECKLIST_SEED_TEXT;
+}
+
 /** 列表正文预览：标题为空时跳过被用作标题的首行 */
 function displayPreview(n: NoteRecord): string {
   const lines = htmlToText(n.content)
@@ -513,6 +530,9 @@ export default function NotesApp() {
   // 编辑器态
   const [active, setActive] = useState<NoteRecord | null>(null);
   const [focusOn, setFocusOn] = useState<'title' | 'body' | null>(null);
+  // 本轮新建草稿的 id（仅 createNote 置值；从列表点开已有备忘录时清空）：
+  // 离开编辑器时若草稿仍为空白未置顶 → 按 iOS 语义自动丢弃，不残留「新备忘录」空卡片（38-c）
+  const draftIdRef = useRef<string | null>(null);
 
   // 初次加载（await 之后再 setState）
   useEffect(() => {
@@ -521,7 +541,16 @@ export default function NotesApp() {
       try {
         const all = await localDB.getAll('notes');
         all.sort((a, b) => b.updatedAt - a.updatedAt);
-        if (alive) setNotes(all);
+        // 幽灵空记录清扫：旧版「新建即落库」在进程被杀 / 直接切走 App 等未走返回路径的场景
+        // 会残留空白卡片；标题与纯文本正文均为空、无图片链接且未置顶的记录没有任何内容，
+        // 按 iOS 语义（未输入即取消不创建）直接丢弃（38-c）
+        const kept = all.filter((n) => !isBlankNote(n));
+        if (kept.length !== all.length) {
+          for (const n of all) {
+            if (isBlankNote(n)) void localDB.delete('notes', n.id).catch(() => undefined);
+          }
+        }
+        if (alive) setNotes(kept);
       } catch {
         /* IndexedDB 不可用时保持空列表 */
       }
@@ -543,6 +572,7 @@ export default function NotesApp() {
   }
 
   function openNote(n: NoteRecord) {
+    draftIdRef.current = null; // 从列表点开已有备忘录：不属于新建草稿，离开时不做空白丢弃
     setActive(n);
     setFocusOn(null);
     setView('editor');
@@ -557,17 +587,32 @@ export default function NotesApp() {
       createdAt: now,
       updatedAt: now,
     };
+    draftIdRef.current = rec.id; // 标记为新建草稿：离开编辑器时按空白丢弃规则处理
     setActive(rec);
     setFocusOn(withChecklist ? 'body' : 'title');
     setView('editor');
     void localDB.put('notes', rec).catch(() => undefined);
   }
 
-  /** 回到列表（编辑器已先冲刷保存），重新加载 */
+  /** 回到列表（编辑器 onDone 前已冲刷保存）：新建草稿若仍为空白未置顶 → 按 iOS 语义丢弃；重新加载 */
   function backToList() {
+    const draftId = draftIdRef.current;
+    draftIdRef.current = null;
     setView('list');
     setActive(null);
-    void reloadNotes();
+    void (async () => {
+      if (draftId) {
+        try {
+          // 读回最终落盘记录判定（onDone 前编辑器已 await flushSave，此处拿到的是最新内容；
+          // 用户输入后又全部清空同样命中空白 → 一并丢弃）
+          const rec = (await localDB.get('notes', draftId)) as NoteRecord | undefined;
+          if (rec && isBlankNote(rec)) await localDB.delete('notes', draftId);
+        } catch {
+          /* 丢弃失败不阻塞：记录留在列表可手动删除 */
+        }
+      }
+      await reloadNotes();
+    })();
   }
 
   /** 写入更新后的记录并刷新列表 */

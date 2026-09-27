@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { create } from 'zustand';
 import {
   AlarmClock,
@@ -1061,18 +1061,7 @@ function TimerView() {
           </div>
         </div>
       )}
-      {phase === 'done' && (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-background/95 backdrop-blur-sm">
-          <Bell className="h-14 w-14 text-[#FF9F0A]" strokeWidth={1.5} />
-          <div className="text-[26px] font-semibold">计时完成</div>
-          <button
-            onClick={timerCancel}
-            className="rounded-full bg-muted px-10 py-3 text-[17px] text-foreground transition active:scale-[0.96]"
-          >
-            好
-          </button>
-        </div>
-      )}
+      {/* 计时完成覆盖层已提升到 ClockApp 外壳级渲染（任意 tab 可见），见 ClockApp 内 timerDone 分支 */}
     </div>
   );
 }
@@ -1121,6 +1110,10 @@ export default function ClockApp() {
   const [tab, setTab] = useState(0);
   const [cityAddOpen, setCityAddOpen] = useState(false);
   const [alarmEditor, setAlarmEditor] = useState<AlarmRecord | 'new' | null>(null);
+  // 计时完成覆盖层提升到 App 外壳级渲染（原在 TimerView 内，切 tab 即不可见）：
+  // done 态存于模块级 useTimerStore，到点瞬间人在世界时钟/闹钟/秒表任一 tab 都能立即看到；
+  // 提示音/震动/系统通知仍由模块级引擎 timerFinish 触发（既有铃声播放路径，引擎零改动）
+  const timerDone = useTimerStore((s) => s.phase === 'done');
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
@@ -1148,6 +1141,20 @@ export default function ClockApp() {
         {tab === 3 && <TimerView />}
       </div>
       <TabBar tab={tab} onChange={setTab} />
+      {/* 计时完成全屏覆盖层：盖过导航栏/内容/TabBar（z-60 > TabBar z-50），样式沿用原 done 分支语言，
+          点「好」timerCancel 复位；App 被退出时随窗口卸载（引擎与 done 态保留，重开即见） */}
+      {timerDone && (
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-5 bg-background/95 backdrop-blur-sm">
+          <Bell className="h-14 w-14 text-[#FF9F0A]" strokeWidth={1.5} />
+          <div className="text-[26px] font-semibold">计时完成</div>
+          <button
+            onClick={timerCancel}
+            className="rounded-full bg-muted px-10 py-3 text-[17px] text-foreground transition active:scale-[0.96]"
+          >
+            好
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1157,7 +1164,27 @@ export default function ClockApp() {
 /** 模块级防重集合：`${闹钟id}:${YYYY-MM-DD}` */
 const firedKeys = new Set<string>();
 
-function RingOverlay({ alarm, onStop }: { alarm: AlarmRecord; onStop: () => void }) {
+/** 贪睡间隔：iOS 标准 9 分钟 */
+const SNOOZE_MS = 9 * 60_000;
+/** 响铃自动停止时长：iOS 真机响铃约 15 分钟后自动停铃，演示环境按 60 秒收敛（全屏覆盖层
+ *  长时间占位扰人）。自动停按「未确认」处理——常规闹钟的防重键已在触发时写入 firedKeys，
+ *  贪睡则出队即清理，均不会二次触发，仅停铃并收起响铃层 */
+const RING_AUTO_STOP_MS = 60_000;
+
+/** 稍后提醒队列（纯内存，不落盘）：点「稍后提醒」生成 now+9min 的一次性临时闹钟，
+ *  不写入用户闹钟列表（IndexedDB alarms 零 schema 侵入、列表零污染），到点由 AlarmWatcher
+ *  轮询触发、出队即清理（「标记 done」的最小实现）。页面刷新会丢失未到点的贪睡——演示环境可接受 */
+const snoozeQueue: { at: number; alarm: AlarmRecord }[] = [];
+
+function RingOverlay({
+  alarm,
+  onStop,
+  onSnooze,
+}: {
+  alarm: AlarmRecord;
+  onStop: () => void;
+  onSnooze: () => void;
+}) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const iv = window.setInterval(() => setNow(new Date()), 1000);
@@ -1171,20 +1198,32 @@ function RingOverlay({ alarm, onStop }: { alarm: AlarmRecord; onStop: () => void
       </div>
       <div className="text-lg text-foreground/85 dark:text-white/85">{alarm.label || '闹钟'}</div>
       <div className="text-[15px] text-muted-foreground dark:text-white/50">{alarm.time}</div>
-      <button
-        onClick={onStop}
-        className="flex h-24 w-24 items-center justify-center rounded-full bg-muted text-[17px] text-foreground transition active:scale-[0.95]"
-      >
-        停止
-      </button>
+      {/* iOS 同款双按钮并排：「稍后提醒」次按钮（+9 分钟再响），「停止」主按钮（填充色更重） */}
+      <div className="flex items-center gap-8">
+        <button
+          onClick={onSnooze}
+          className="flex h-24 w-24 items-center justify-center rounded-full bg-muted text-[17px] text-foreground transition active:scale-[0.95]"
+        >
+          稍后提醒
+        </button>
+        <button
+          onClick={onStop}
+          className="flex h-24 w-24 items-center justify-center rounded-full bg-foreground text-[17px] font-medium text-background transition active:scale-[0.95]"
+        >
+          停止
+        </button>
+      </div>
     </div>
   );
 }
 
-/** 全局闹钟监听：每 5 秒轮询 IndexedDB，命中即全屏响铃（App 未打开也能触发） */
+/** 全局闹钟监听：每 5 秒轮询 IndexedDB，命中即全屏响铃（App 未打开也能触发）；
+ *  稍后提醒队列（内存）同轮询检查。响铃持续 60s 无人确认则自动停铃收层（不重复响） */
 export function AlarmWatcher() {
   const [ringing, setRinging] = useState<AlarmRecord | null>(null);
   const teardownRef = useRef<() => void>(() => undefined);
+  /** 当前响铃态的同步镜像：供 5s 轮询闭包读取（响铃中不叠加触发新的响铃，防双响/音频循环泄漏） */
+  const ringingRef = useRef<AlarmRecord | null>(null);
 
   useEffect(() => {
     let beepIv: number | null = null;
@@ -1231,6 +1270,7 @@ export function AlarmWatcher() {
     };
 
     const beginRing = (alarm: AlarmRecord) => {
+      ringingRef.current = alarm; // 轮询闭包可读的响铃态镜像（stop 时清空）
       setRinging(alarm);
       // 蜂鸣循环：880/660Hz 交替
       try {
@@ -1273,6 +1313,17 @@ export function AlarmWatcher() {
     };
 
     const check = async () => {
+      // 稍后提醒（内存队列）优先：到点即响、出队即清理（响铃后自动删除，不会二次触发）；
+      // 响铃中不叠加；本轮触发过贪睡则直接返回，常规闹钟留待下一轮 5s 轮询（防双响）
+      const nowMs = Date.now();
+      if (ringingRef.current === null) {
+        const idx = snoozeQueue.findIndex((s) => nowMs >= s.at);
+        if (idx >= 0) {
+          const [s] = snoozeQueue.splice(idx, 1);
+          beginRing(s.alarm);
+          return;
+        }
+      }
       try {
         const alarms = await localDB.getAll('alarms');
         const now = new Date();
@@ -1283,6 +1334,8 @@ export function AlarmWatcher() {
           if (!a.enabled || a.time !== t) continue;
           // repeat 为空 = 仅一次（当日首次）；否则需包含今天
           if (a.repeat.length > 0 && !a.repeat.includes(day)) continue;
+          // 已在响铃：不再叠加触发（不登记防重键，本轮停铃后若仍在该分钟内下一轮可补响）
+          if (ringingRef.current !== null) break;
           const key = `${a.id}:${tk}`;
           if (firedKeys.has(key)) continue;
           firedKeys.add(key);
@@ -1304,15 +1357,55 @@ export function AlarmWatcher() {
     };
   }, []);
 
-  const stop = () => {
+  const stop = useCallback(() => {
     teardownRef.current();
+    ringingRef.current = null;
     setRinging(null);
-  };
+  }, []);
+
+  // 稍后提醒：生成「当前时间 +9 分钟」的一次性临时闹钟（内存 snoozeQueue，不进用户闹钟列表），
+  // 随后与「停止」同一收尾路径停铃收层；到点由上方轮询触发、出队即清理，可连续贪睡
+  const snooze = useCallback((alarm: AlarmRecord) => {
+    const fireAt = new Date(Date.now() + SNOOZE_MS);
+    snoozeQueue.push({
+      at: fireAt.getTime(),
+      alarm: {
+        id: `snooze-${Date.now()}`,
+        time: hhmm(fireAt),
+        label: alarm.label ? `${alarm.label}（稍后提醒）` : '稍后提醒',
+        enabled: true,
+        repeat: [],
+        createdAt: Date.now(),
+      },
+    });
+    stop();
+  }, [stop]);
+
+  // 响铃自动停止（iOS 真机约 15 分钟自动停铃，演示环境按 60 秒收敛，见 RING_AUTO_STOP_MS）：
+  // 「未确认」不重复响——防重键已在触发时登记（贪睡则出队即清理），仅停铃并收起全屏覆盖层；
+  // ringing 被替换时定时器重挂，手动停止时随 ringing 置空自动清除
+  useEffect(() => {
+    if (!ringing) return;
+    const t = window.setTimeout(stop, RING_AUTO_STOP_MS);
+    return () => window.clearTimeout(t);
+  }, [ringing, stop]);
 
   // 响铃弹层为全屏背景色覆盖层：同步到全局 store，状态栏/横杠前景随主题变色
   useEffect(() => {
     useUI.getState().setAlarmRinging(ringing !== null);
   }, [ringing]);
 
-  return <>{ringing && <RingOverlay alarm={ringing} onStop={stop} />}</>;
+  return (
+    <>
+      {ringing && (
+        <RingOverlay
+          alarm={ringing}
+          onStop={stop}
+          onSnooze={() => {
+            if (ringing) snooze(ringing);
+          }}
+        />
+      )}
+    </>
+  );
 }

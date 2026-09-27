@@ -82,7 +82,13 @@ function portraitReducer(s: PState, a: PAction): PState {
     }
     case 'pct': {
       if (s.err) return s;
-      const v = Number(s.disp) / 100;
+      // iOS 语义：+/− 挂起时按前一操作数的百分比换算（200 + 10% = 200 + 200×10% = 220，
+      // 200 − 10% = 180）；×/÷ 或无挂起运算时 % 即 /100（50 × 10% = 50 × 0.1 = 5）
+      const cur = Number(s.disp);
+      const v =
+        (s.pendOp === '+' || s.pendOp === '−') && s.pendVal !== null
+          ? (s.pendVal * cur) / 100
+          : cur / 100;
       return { ...s, disp: numToString(Math.round(v * 1e10) / 1e10), typing: false };
     }
     case 'op': {
