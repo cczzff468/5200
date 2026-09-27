@@ -45,6 +45,7 @@ import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { hasVoiceCallMark, stripVoiceCallMark } from '@/lib/ios/chat-call';
+import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import { localDB, genId, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
@@ -58,12 +59,17 @@ import { extractRichActionParts } from '@/lib/chat-rich';
 import {
   acceptBlockReq,
   applyCharBlockAction,
+  applyUserBlockReq,
   blockActionKindOf,
   blockCoversAt,
+  BLOCK_REQ_MAX_REJECTED,
   buildBlockPromptBlock,
+  charRequestOnlyOf,
   loadBlock,
   rejectBlockReq,
+  resolveUserReqByChar,
   setUserBlock,
+  userReqActionKindOf,
   type BlockEntry,
 } from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -118,16 +124,18 @@ interface ChatMsg {
   recalled?: boolean;
   /** 系统提示行（拉黑/解除拉黑等状态变更；居中灰字胶囊，不参与上下文） */
   sys?: { text: string };
-  /** 申请解除拉黑卡片（角色被拉黑后发起）：status pending=待处理 accepted=已同意 rejected=已拒绝 */
-  blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected' };
+  /** 申请解除拉黑卡片：40-a 起双向——from 缺省视为 'char'（角色发起，用户点同意/拒绝）；
+   *  from='user'（用户发起，角色用 [同意/拒绝解除拉黑] 标记决策） */
+  blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected'; from?: 'char' | 'user' };
 }
 
-/** 申请解除拉黑卡片（角色被用户拉黑后发起；同意→解除拉黑，拒绝→保持并让角色知道） */
+/** 申请解除拉黑卡片：from='char' 角色发起（用户点同意/拒绝）；from='user' 用户发起（角色 AI 决策，仅展示状态） */
 function SmsBlockReqCard({
   name,
   avatar,
   reason,
   status,
+  from = 'char',
   onAccept,
   onReject,
 }: {
@@ -135,12 +143,14 @@ function SmsBlockReqCard({
   avatar: string | null;
   reason: string;
   status: 'pending' | 'accepted' | 'rejected';
+  from?: 'char' | 'user';
   onAccept: () => void;
   onReject: () => void;
 }) {
+  const mine = from === 'user';
   return (
     <div
-      data-testid="sms-blockreq-card"
+      data-testid={mine ? 'sms-blockreq-card-mine' : 'sms-blockreq-card'}
       className="w-fit max-w-full rounded-[18px] rounded-bl-[5px] bg-muted px-3.5 py-2.5"
       aria-label={`${name}申请解除拉黑`}
     >
@@ -158,7 +168,12 @@ function SmsBlockReqCard({
       {reason && (
         <p className="mt-2 rounded-[10px] bg-black/[0.04] px-2 py-1.5 text-[13px] leading-[1.5] text-black/70 dark:bg-white/[0.08] dark:text-white/70">「{reason}」</p>
       )}
-      {status === 'pending' ? (
+      {mine ? (
+        /* 40-a：用户发起的申请——决策方是角色（AI 标记），这里只展示状态 */
+        <p className="mt-2 text-[12px] text-black/35 dark:text-white/35">
+          {status === 'pending' ? '等待对方处理' : status === 'accepted' ? '对方已同意，拉黑已解除' : '对方已拒绝'}
+        </p>
+      ) : status === 'pending' ? (
         <div className="mt-2.5 flex gap-2">
           <button
             type="button"
@@ -359,6 +374,9 @@ async function recordMissedPhoneCall(
     // 记录落盘失败静默
   }
   if (!contact) return;
+  // 40-a 拉黑拦截：用户拉黑了该角色（byUser）后，被拒/未接的 AI 语音留言不再落库
+  //（通话记录本身属于电话维度照常落；这里只拦「AI 发到留言信箱的聊天内容」）
+  if (loadBlock('sms', contact.id).byUser) return;
   try {
     const [owner, recent] = await Promise.all([
       ownerProfile().catch(() => null),
@@ -783,6 +801,8 @@ function ChatView({
   const apiConfig = useSettings((s) => s.apiConfig);
   /** 机主名字（记忆提取视角统一用：碎片一律用真实名字指代用户；设置 › Apple 账户可改） */
   const profileName = useSettings((s) => s.profile.name);
+  /** 机主头像（40-a：用户发起的解除拉黑申请卡头像用） */
+  const profileAvatar = useSettings((s) => s.profile.avatar);
   /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 回复条数入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
@@ -836,6 +856,24 @@ function ChatView({
   const voiceFreqKey = wbContactId ? `wx:${wbContactId}` : sessionKey;
   /** 双向拉黑状态（仅联系人会话；小助手会话无角色 ID 不参与；kv 持久化按联系人隔离） */
   const [blk, setBlk] = useState<BlockEntry>(() => (wbContactId ? loadBlock('sms', wbContactId) : {}));
+  // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
+  // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（仅联系人会话；助手会话不参与）
+  const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string }>({ crossAppBlock: '', groupBlock: '' });
+  useEffect(() => {
+    if (!memContactId) return;
+    let alive = true;
+    buildCrossContextBlocks(memContactId, 'sms', profileName)
+      .then((b) => {
+        if (alive) crossCtxRef.current = b;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [memContactId, profileName]);
+  // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；会话切换随组件重挂载复位）
+  const [userReqOpen, setUserReqOpen] = useState(false);
+  const [userReqText, setUserReqText] = useState('');
   const [wbOpen, setWbOpen] = useState(false);
   const [wbBound, setWbBound] = useState<string[]>(() => (wbContactId ? getBoundBookIds(wbContactId) : []));
   useEffect(() => {
@@ -1021,6 +1059,24 @@ function ChatView({
     [memContactId, peer, peerLabel, storageKey, voiceFreqKey],
   );
 
+  /** 40-a：把「用户发起的解除拉黑申请卡」置为终态（存储 + 本地 state 同步；无 pending 卡时空操作）。
+   *  buildReplyMsgs 内部使用（角色决策/角色主动解除拉黑时调用）——声明须在其之前（TDZ） */
+  const settleUserBlockReq = useCallback(
+    (status: 'accepted' | 'rejected') => {
+      if (!wbContactId) return;
+      const saved = (loadMsgs(storageKey) ?? []).map((x) =>
+        x.blkreq?.from === 'user' && x.blkreq.status === 'pending' ? { ...x, blkreq: { ...x.blkreq, status } } : x,
+      );
+      saveMsgs(storageKey, saved);
+      setMsgs((prev) =>
+        prev.map((x) =>
+          x.blkreq?.from === 'user' && x.blkreq.status === 'pending' ? { ...x, blkreq: { ...x.blkreq, status } } : x,
+        ),
+      );
+    },
+    [storageKey, wbContactId],
+  );
+
   /**
    * 把一段回复文本解析成待投递消息（startAiTurn 流中分段/finalize 与退出网页接力的后台回复共用同一套管线，不重不漏）：
    * 拉黑类动作标记就地应用（改状态 + 系统提示行/申请卡片）；asSingle=true（单条模式）时文字块
@@ -1051,14 +1107,37 @@ function ChatView({
               out.push({ id: `${idBase}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `「${peerLabel}」解除了对你的拉黑` } });
               t += 1;
               msgIdx += 1;
+              // 40-a：角色主动解除拉黑 = 视同同意用户侧待处理申请（有的话置终态，避免卡片永远「等待对方处理」）
+              settleUserBlockReq('accepted');
             } else if (res.reqCreated && bk === 'request') {
               out.push({ id: `${idBase}-blk-${msgIdx}`, role: 'assistant', content: '', time: t, blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
               t += 1;
               msgIdx += 1;
             }
           }
+          // 40-a：角色对「用户发来的解除拉黑申请」的决策（[同意解除拉黑]/[拒绝解除拉黑]）
+          const uk = userReqActionKindOf(part.action);
+          if (uk && wbContactId) {
+            const res = resolveUserReqByChar('sms', wbContactId, uk === 'approve');
+            setBlk(res.entry);
+            if (res.changed) {
+              settleUserBlockReq(uk === 'approve' ? 'accepted' : 'rejected');
+              out.push({
+                id: `${idBase}-sys-${msgIdx}`,
+                role: 'assistant',
+                content: '',
+                time: t,
+                sys: { text: uk === 'approve' ? `「${peerLabel}」同意了你的解除拉黑申请` : `「${peerLabel}」拒绝了你的解除拉黑申请` },
+              });
+              t += 1;
+              msgIdx += 1;
+            }
+          }
           continue; // 信息端无红包/转账动作
         }
+        // 40-a：仅申请卡模式（用户拉黑了角色）——AI 的正文/表情一律丢弃，只有上面动作分支产出的
+        // 申请卡片与系统行能落盘（入口守卫已保证：能走到这里的 byUser 回合必然处于可申请状态）
+        if (wbContactId && loadBlock('sms', wbContactId).byUser) continue;
         const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text]).map((seg) =>
           stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
         );
@@ -1075,7 +1154,7 @@ function ChatView({
       }
       return { msgs: out, nextIdx: msgIdx };
     },
-    [peerLabel, stickersOn, wbContactId],
+    [peerLabel, settleUserBlockReq, stickersOn, wbContactId],
   );
 
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
@@ -1088,6 +1167,22 @@ function ChatView({
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  baseMsgs：显式传入最新消息数组（语音转写完成后调用时避免闭包旧状态漏掉刚落库的语音消息） */
   const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => {
+    // 40-a 拉黑拦截（第一层）：用户拉黑角色（byUser）后，本 App 内 AI 不能发任何消息——回合静默取消。
+    // 唯一例外=「解除拉黑申请卡片」仍可发起（charRequestOnlyOf 放行模式：回合照常请求，但回复中
+    // 除申请卡片/系统行外的正文由 buildReplyMsgs 丢弃）；申请同意后的回应回合因 byUser 已清自然放行。
+    // 小助手会话（wbContactId 为空）不参与拉黑；群聊不用本组件（wx-group/qq-group 自有管线）。
+    const blkEntry = wbContactId ? loadBlock('sms', wbContactId) : null;
+    if (blkEntry?.byUser && !charRequestOnlyOf(blkEntry)) return;
+    // 40-b：跨 App/群聊近况刷新（fire-and-forget，供下一轮使用；本轮用预热缓存；仅联系人会话）
+    if (memContactId) {
+      void buildCrossContextBlocks(memContactId, 'sms', profileName)
+        .then((b) => {
+          crossCtxRef.current = b;
+        })
+        .catch(() => {});
+    }
+    // 40-a：本轮是否处于「仅申请卡」放行模式（byUser 命中且守卫放行）——finalize 不落兑底占位
+    const requestOnly = blkEntry?.byUser === true;
     // #35 上下文补投递尾巴（群聊 #22 已修，单聊同款）：上一轮的回复还在打字节奏投递队列里（未落盘）时，
     // 只读 msgs state 会漏看——AI 看不到自己刚说的话，把旧话题再答一遍（自言自语/像没读到用户最新消息）。
     // 队列尾巴按序拼进 base（时序上属于上一轮，排在最新用户消息之前）；同一消息要么已落盘/进 state、
@@ -1156,8 +1251,11 @@ function ChatView({
       ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
       charBlock,
       memoryBlock,
+      // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
+      crossCtxRef.current.crossAppBlock,
+      crossCtxRef.current.groupBlock,
       momentsBlock,
-      // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；拉黑是关系状态，不拦截消息）
+      // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；40-a 重构后拉黑会拦截本 App 内的消息发送）
       wbContactId ? buildBlockPromptBlock('sms', wbContactId, profileName) : '',
       // 语音占位防编造：最近消息里有听不到内容的语音时注入，AI 不假装听过、不编造内容
       buildVoicePlaceholderRule(msgs),
@@ -1245,7 +1343,9 @@ function ChatView({
             ? built
             : deliveredAny
               ? []
-              : [{ id: aiId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt }];
+              : requestOnly
+                ? []
+                : [{ id: aiId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt }];
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -1496,6 +1596,31 @@ function ChatView({
     startAiTurn(null, ev);
   };
 
+  /**
+   * 40-a：发送「解除拉黑申请」（用户→角色；被拉黑后唯一放行的发送通道）：
+   * 落一张用户发起的申请卡（from:'user'）+ 系统事件触发角色决策回合
+   *（角色用 [同意解除拉黑]/[拒绝解除拉黑] 标记回复，见 buildReplyMsgs 的决策分支）。
+   * applyUserBlockReq 未受理（并发/已达上限）时静默收起面板；对方正在回复时事件随补跑回合排队。
+   */
+  const submitUserBlockReq = () => {
+    if (!wbContactId) return;
+    const res = applyUserBlockReq('sms', wbContactId, userReqText);
+    setUserReqOpen(false);
+    setUserReqText('');
+    if (!res.created) return;
+    setBlk(res.entry);
+    setMsgs((prev) => [
+      ...prev,
+      { id: uid(), role: 'user' as const, content: '', time: Date.now(), blkreq: { reason: res.entry.userReqReason ?? '', status: 'pending' as const, from: 'user' as const } },
+    ]);
+    const ev = `（系统事件：你之前把对方拉黑了，现在对方发来一条解除拉黑申请，理由：「${res.entry.userReqReason ?? ''}」。如果你愿意解除拉黑给对方一个机会，请在回复的最开头单独加上标记 [同意解除拉黑]；如果决定拒绝，请在回复的最开头单独加上标记 [拒绝解除拉黑]。先用你的方式自然回应这件事）`;
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      enqueueQueuedTurn({ kind: 'kick', event: ev });
+      return;
+    }
+    startAiTurn(null, ev);
+  };
+
   /** 拉黑标记（红色 ! 圆点紧贴气泡——拉黑关系存续期间（任一方向），该期间内的双方气泡都带图标；
    *  按拉黑区间判定：拉黑前的历史消息不标，拉黑期间发的消息恒标（解除后也不消失），解除后新消息不标；
    *  系统提示行/申请卡片/撤回行不显示 */
@@ -1544,6 +1669,13 @@ function ChatView({
   const send = () => {
     const text = input.trim();
     if (!text) return;
+
+    // 40-a 拉黑拦截：被角色拉黑（byChar）后本 App 内不能发送任何消息（toast + 不落库）；
+    // 唯一例外是「解除拉黑申请」，走输入区上方独立入口，不在 send 链上
+    if (wbContactId && loadBlock('sms', wbContactId).byChar) {
+      showToast('对方已将你拉黑，无法发送');
+      return;
+    }
 
     // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
     if (ttsSend) {
@@ -1625,6 +1757,11 @@ function ChatView({
    *  presetTranscript = 文字转语音/划转文字/Web Speech 实时结果；对方正在回复时不打断（语音照常入列，仅跳过本轮触发） */
   const commitVoiceMsg = useCallback(
     (clip: VoiceClip, presetTranscript?: string) => {
+      // 40-a 拉黑拦截：被角色拉黑（byChar）后语音消息也不能发（按住说话/文字转语音/划转文字共用本入口）
+      if (wbContactId && loadBlock('sms', wbContactId).byChar) {
+        showToast('对方已将你拉黑，无法发送');
+        return;
+      }
       const hasText = typeof presetTranscript === 'string' && presetTranscript.trim().length > 0;
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
@@ -1658,12 +1795,17 @@ function ChatView({
         window.setTimeout(kickTurn, 150); // 等重渲染 + startAiTurnRef 回填新闭包（含转写文本）
       });
     },
-    [sessionKey, enqueueQueuedTurn],
+    [enqueueQueuedTurn, sessionKey, showToast, wbContactId],
   );
 
   /** 「划到转文字」松开后：先识别再预览，由用户决定发送文字 / 发送语音（原始录音）/ 取消 */
   const sttPreview = useSttPreview({
     onSendText: (text) => {
+      // 40-a 拉黑拦截：被角色拉黑（byChar）后不能发送
+      if (wbContactId && loadBlock('sms', wbContactId).byChar) {
+        showToast('对方已将你拉黑，无法发送');
+        return;
+      }
       const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
       // #8 对方正在回复：消息照常上屏并排队补跑（对齐微信，不再弹提示丢弃）。#35：标记插入边界
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
@@ -2019,18 +2161,20 @@ function ChatView({
                   </span>
                 </div>
               ) : m.blkreq ? (
-                /* 申请解除拉黑卡片（角色发起）：头像+名字+理由+同意/拒绝 */
+                /* 申请解除拉黑卡片：40-a 双向——角色发起（左侧，用户点同意/拒绝）/
+                   用户发起（右侧，角色用标记决策，仅展示状态） */
                 <motion.div
                   initial={{ opacity: 0, y: 10, scale: 0.97 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   transition={{ type: 'spring', stiffness: 500, damping: 36 }}
-                  className="mt-2.5 flex justify-start"
+                  className={`mt-2.5 flex ${m.blkreq.from === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <SmsBlockReqCard
-                    name={peer.name ?? peer.title}
-                    avatar={peer.avatarSrc}
+                    name={m.blkreq.from === 'user' ? profileName || '我' : (peer.name ?? peer.title)}
+                    avatar={m.blkreq.from === 'user' ? profileAvatar : peer.avatarSrc}
                     reason={m.blkreq.reason}
                     status={m.blkreq.status}
+                    from={m.blkreq.from}
                     onAccept={() => resolveBlockReq(m, true)}
                     onReject={() => resolveBlockReq(m, false)}
                   />
@@ -2222,6 +2366,62 @@ function ChatView({
         </div>
       ) : (
       <>
+      {/* 40-a：被角色拉黑提示条 + 用户发起「解除拉黑申请」入口（仅联系人会话；pending 或已达拒绝上限时隐藏，
+          会话内改用跨 App/电话联系方式不受影响）。展开的小面板 = 理由输入 + 发送/取消 */}
+      {wbContactId && blk.byChar === true && blk.userReqStatus !== 'pending' && (blk.userReqRejectedCount ?? 0) < BLOCK_REQ_MAX_REJECTED && (
+        userReqOpen ? (
+          <div
+            className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-3 py-2 backdrop-blur-xl"
+            data-testid="sms-user-blockreq-panel"
+          >
+            <input
+              value={userReqText}
+              onChange={(e) => setUserReqText(e.target.value)}
+              maxLength={80}
+              autoFocus
+              placeholder={`向「${peerLabel}」写一句申请理由…`}
+              aria-label="解除拉黑申请理由"
+              data-testid="sms-user-blockreq-input"
+              className="h-[34px] min-w-0 flex-1 rounded-full border border-border/70 bg-background px-3.5 text-[14px] outline-none placeholder:text-muted-foreground/50"
+            />
+            <button
+              type="button"
+              data-testid="sms-user-blockreq-cancel"
+              onClick={() => {
+                setUserReqOpen(false);
+                setUserReqText('');
+              }}
+              className="shrink-0 text-[14px] text-muted-foreground"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              data-testid="sms-user-blockreq-send"
+              disabled={!userReqText.trim()}
+              onClick={submitUserBlockReq}
+              className="h-[30px] shrink-0 rounded-full bg-[#007AFF] px-3.5 text-[13px] font-medium text-white transition active:opacity-80 disabled:opacity-40"
+            >
+              发送
+            </button>
+          </div>
+        ) : (
+          <div
+            className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-3 py-1.5 backdrop-blur-xl"
+            data-testid="sms-user-blockreq-bar"
+          >
+            <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">你已被「{peerLabel}」拉黑，无法发送消息</p>
+            <button
+              type="button"
+              data-testid="sms-user-blockreq-open"
+              onClick={() => setUserReqOpen(true)}
+              className="shrink-0 rounded-full bg-[#007AFF]/10 px-3 py-1 text-[12px] font-medium text-[#007AFF] transition active:opacity-70"
+            >
+              发送解除申请
+            </button>
+          </div>
+        )
+      )}
       {/* 引用条（长按菜单「引用」后显示在输入栏上方；发送时挂到新消息上） */}
       {quote && (
         <div
