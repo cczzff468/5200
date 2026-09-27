@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
+import { useGlobalCall } from './global-call';
 import type { AddressMode } from '../contacts';
 
 // ---------------- 类型 ----------------
@@ -1165,6 +1166,15 @@ export const useUI = create<UIState>((set, get) => ({
     // 主屏幕或 App 内都可打开（打开/关闭动画进行中除外；锁定时禁止）
     if (get().locked) return;
     if (get().switcherOpen || get().phase === 'opening' || get().phase === 'closing') return;
+    // 全局语音通话全屏页守卫（C-4）：全屏通话页 z-62 在切换器 z-60 之上（层级表既定设计，不改数值），
+    // 此刻打开切换器会被通话页完全盖住 → 「隐形切换器」（Home 横杠消失、界面无变化，
+    // 且 switcherOpen 后边缘手势被 onDown 短路、z-60 遮罩在 z-62 之下点不到，挂断后才凭空出现）。
+    // 处理：直接忽略本次手势——通话页保持最前、Home 横杠不隐藏；用户先点通话页左上角小窗图标
+    // 收成悬浮小窗（view='pip'，z-64）后，上滑即可正常打开切换器。
+    // 不采用「先最小化再打开」：小窗 z-64 悬在切换器之上，切换器开着时点小窗 expand() 回全屏
+    // （z-62）又落到切换器之下，同样复现隐形切换器卡死，而 expand 在 global-call store 无法在此守卫。
+    const gCall = useGlobalCall.getState();
+    if (gCall.session && gCall.view === 'full') return;
     set({ switcherOpen: true });
   },
   closeSwitcher: () => {

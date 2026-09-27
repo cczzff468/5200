@@ -11,6 +11,12 @@
  * - 3 秒自动收起（计时在页面不可见/熄屏时冻结）；点击立即收起并跳转对应聊天。
  *
  * 层级 z-[93]：高于锁屏/切换器/闹钟/状态栏，仅低于熄屏黑遮罩（熄屏=屏幕关了，不看）。
+ *
+ * 来电互斥暂缓（C-3）：电话来电响铃全程（全屏来电界面 z-84 / 退出后的顶部横幅 z-94 都占住
+ * 通知锚位或整屏）与微信来电响铃阶段（来电弹窗 z-94 / 展开的来电页）展示期间，本层整体
+ * 隐身（visibility:hidden，不卸载——卸载会让收起动画的 onAnimationComplete 永不回调、
+ * exiting 卡死）且自动收起计时冻结：当前通知原位保留、队列不推进，来电层消失后恢复展示。
+ * 只读引用 incoming-call / global-call 的 store 做互斥判断，不改层级数值、不改通知队列语义。
  */
 
 import { useEffect } from 'react';
@@ -24,6 +30,8 @@ import {
   NOTIFY_APP_ICON,
   type NotifyApp,
 } from '@/lib/ios/island-notify';
+import { useGlobalCall } from '@/lib/ios/global-call';
+import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI } from '@/lib/ios/store';
 
 const APP_NAME: Record<NotifyApp, string> = { wechat: '微信', qq: 'QQ', chat: '信息' };
@@ -40,23 +48,41 @@ const TWEEN_OUT: Transition = { duration: 0.24, ease: [0.4, 0, 0.2, 1] };
 /** 展开时背景色用短补间（弹性只给尺寸）；收起时随 TWEEN_OUT 一同缩回纯黑，与灵动岛同色无缝交接 */
 const SPRING_WITH_BG: Transition = { ...SPRING, backgroundColor: { duration: 0.2, ease: 'easeOut' } };
 
-function NotifyCard() {
+/**
+ * 来电展示中（互斥暂缓判断，只读引用两个通话 store）：
+ * - 电话来电（source='phone'）：响铃全程视为展示中——全屏来电界面（!screenHidden，z-84）
+ *   或退出界面后的顶部横幅（screenHidden，z-94）二者必居其一，都占住通知锚位/整屏；
+ * - 微信来电（source='wx'）：页内引擎响铃阶段（enginePhase==='incoming'）——
+ *   顶部大窗/胶囊弹窗（z-94，view!=='full'）或点弹窗展开的来电页（view==='full'）都算；
+ *   接通后（enginePhase 变 active）不再暂缓，通知卡按既有设计正常展示在通话页（z-62）之上；
+ * - QQ 通话/微信接通后的通话页不在此列（通知 z-93 高于 z-62 是既定设计，正常展示）；
+ * - 锁屏/熄屏本身不触发暂缓（通知 z-93 高于锁屏 z-65 是既定设计，本守卫只看来电层可见性）。
+ */
+function useIncomingCallPresenting(): boolean {
+  const call = useIncomingCall((s) => s.call);
+  const enginePhase = useGlobalCall((s) => s.enginePhase);
+  if (call?.source === 'phone') return true;
+  if (call?.source === 'wx') return enginePhase === 'incoming';
+  return false;
+}
+
+function NotifyCard({ held }: { held: boolean }) {
   const current = useIslandNotify((s) => s.current)!;
   const exiting = useIslandNotify((s) => s.exiting);
   // 跟随手机主题（浅色=浅色磨砂卡片深色文字；深色=纯黑卡片白字），auto 跟随系统
   const themeMode = useSettings((s) => s.theme);
   const systemDark = useSystemDark();
   const dark = selectResolvedTheme(themeMode, systemDark) === 'dark';
-  // 熄屏时冻结自动收起，唤醒后续期（与页面不可见冻结同策略）
+  // 熄屏/来电暂缓期间冻结自动收起，唤醒（熄屏）/来电层消失（暂缓解除）后续期（与页面不可见冻结同策略）
   const screenOff = useUI((s) => s.screenOff);
   useEffect(() => {
-    if (screenOff || exiting) {
+    if (screenOff || held || exiting) {
       clearAutoDismiss();
     } else {
       armAutoDismiss();
     }
     return clearAutoDismiss;
-  }, [screenOff, exiting, current]);
+  }, [screenOff, held, exiting, current]);
 
   return (
     <motion.div
@@ -142,13 +168,29 @@ function NotifyCard() {
 
 export default function IslandNotificationLayer() {
   const current = useIslandNotify((s) => s.current);
+  const presenting = useIncomingCallPresenting();
+
+  // 暂缓期间的补冻结：切走标签页再切回时 island-notify 的 visibilitychange 监听会给
+  // 幸存通知重新续期（armAutoDismiss），本监听在其之后注册（组件挂载晚于其模块初始化，
+  // 同名事件按注册顺序回调）→ 再冻结一次，保证暂缓期间计时永不走动
+  useEffect(() => {
+    if (!presenting) return;
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') clearAutoDismiss();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [presenting]);
+
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 top-[11px] z-[93] flex flex-col items-center"
+      className={`pointer-events-none absolute inset-x-0 top-[11px] z-[93] flex flex-col items-center ${
+        presenting ? 'invisible' : ''
+      }`}
       role="status"
       aria-live="polite"
     >
-      {current ? <NotifyCard key={current.id} /> : null}
+      {current ? <NotifyCard key={current.id} held={presenting} /> : null}
     </div>
   );
 }
