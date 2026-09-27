@@ -50,8 +50,18 @@ export function lastPushStatus(): PushSetupStatus | null {
 
 let tried = false;
 
-export async function setupPushSubscription(): Promise<PushSetupStatus> {
-  if (tried) return lastPushStatus() ?? { state: 'unsupported', detail: '本页已尝试过', at: 0 };
+export interface PushSetupOptions {
+  /**
+   * true = 重置「本页只尝试一次」单次锁，重跑完整订阅链路。
+   * 修复：首次订阅瞬时失败后 tried 锁死，设置页所有恢复路径短路只能回显旧失败诊断，
+   * 唯一办法刷新整页。仅用户主动恢复入口（设置页开关重开/重试按钮）传 force；
+   * 首次自动订阅路径（island-notify）不传，保持只试一次，防每条消息都重试刷屏。
+   */
+  force?: boolean;
+}
+
+export async function setupPushSubscription(opts?: PushSetupOptions): Promise<PushSetupStatus> {
+  if (tried && !opts?.force) return lastPushStatus() ?? { state: 'unsupported', detail: '本页已尝试过', at: 0 };
   tried = true;
   try {
     if (typeof window === 'undefined') return { state: 'unsupported', detail: '非浏览器环境', at: 0 };
@@ -111,6 +121,48 @@ export async function setupPushSubscription(): Promise<PushSetupStatus> {
     const s = { state: 'subscribe-failed' as const, detail: err instanceof Error ? err.message : String(err) };
     saveStatus(s);
     return { ...s, at: Date.now() };
+  }
+}
+
+/**
+ * 退订 Web Push（设置 › 通知关闭「允许通知」时调用）：
+ * - pushSubscription.unsubscribe + 通知服务端删除该订阅（/api/push DELETE，离线不再推）；
+ * - 终态落 localStorage（ios-push-status，设置页回显）；全程尽力而为，失败不阻塞开关本身。
+ * 返回退订后的状态（state 恒为 'no-permission'，detail 描述退订结果）。
+ */
+export async function teardownPushSubscription(): Promise<PushSetupStatus> {
+  const off = (detail: string): PushSetupStatus => ({
+    state: 'no-permission' as const,
+    detail,
+    at: Date.now(),
+  });
+  try {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      const s = off('已在设置中关闭系统通知');
+      saveStatus(s);
+      return s;
+    }
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (!sub) {
+      const s = off('已在设置中关闭系统通知');
+      saveStatus(s);
+      return s;
+    }
+    const removed = await sub.unsubscribe().catch(() => false);
+    if (removed) {
+      // 服务端同步删除：页面关闭后服务端不再向本浏览器推送
+      await fetch('/api/push', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      }).catch(() => null);
+    }
+    const s = off(removed ? '已在设置中关闭系统通知，后台推送已退订' : '已在设置中关闭系统通知');
+    saveStatus(s);
+    return s;
+  } catch {
+    return off('已在设置中关闭系统通知');
   }
 }
 

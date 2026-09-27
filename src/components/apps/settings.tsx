@@ -55,7 +55,9 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
-import { lastPushStatus, setupPushSubscription } from '@/lib/ios/push-client';
+import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
+import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
+import { LocalToast, useLocalToast } from './page-toast';
 import { describeImages } from '@/lib/vision-client';
 import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 import { useMyVoices } from '@/lib/ios/my-voices';
@@ -438,7 +440,7 @@ function pushStatusText(state: string, detail?: string): string {
     case 'unsupported':
       return `当前浏览器不支持后台推送${detail ? `（${detail}）` : ''}。`;
     case 'no-permission':
-      return '尚未开启通知权限。';
+      return detail || '尚未开启通知权限。';
     case 'sw-failed':
       return `后台服务注册失败${detail ? `（${detail}）` : ''}，多见于预览面板 iframe 环境 —— 用新标签页打开可解决。`;
     case 'key-failed':
@@ -451,11 +453,10 @@ function pushStatusText(state: string, detail?: string): string {
 }
 
 function NotificationPage({ onBack }: { onBack: () => void }) {
-  const [enabled, setEnabled] = useState<boolean>(() =>
-    typeof window !== 'undefined' && typeof Notification !== 'undefined'
-      ? Notification.permission === 'granted'
-      : false
-  );
+  // 开关 = 持久化的「系统级通知总闸」（localStorage ios-sys-notify-enabled，缺省开）。
+  // 修复：原实现是组件局部 state，退出页面再进来又显示「开」，关掉后 Web Notification 照弹。
+  // 该开关只管系统级通道（Web Notification / Web Push）；应用内灵动岛弹窗不受影响。
+  const [enabled, setEnabled] = useState<boolean>(() => isSysNotifyEnabled());
   const [denied, setDenied] = useState<boolean>(() =>
     typeof window !== 'undefined' && typeof Notification !== 'undefined'
       ? Notification.permission === 'denied'
@@ -475,17 +476,27 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   // 推送订阅诊断（真实环境失败原因，不再静默）：setupPushSubscription 每次尝试后都会落盘
   const [pushState, setPushState] = useState<string>(() => lastPushStatus()?.state ?? '');
   const [pushDetail, setPushDetail] = useState<string>(() => lastPushStatus()?.detail ?? '');
+  // 页内 toast（关闭开关后的说明）
+  const [toastMsg, showToast] = useLocalToast();
 
-  /** 权限就绪后立即尝试订阅（并把诊断结果回显） */
+  /** 权限就绪后立即尝试订阅（并把诊断结果回显）。用户主动入口一律 force=true：
+   *  重置单次锁重跑订阅链路，首次订阅瞬时失败后不再被锁死到刷新整页 */
   const ensureSubscription = async (): Promise<void> => {
-    const s = await setupPushSubscription();
+    const s = await setupPushSubscription({ force: true });
     setPushState(s.state);
     setPushDetail(s.detail ?? '');
   };
 
   const handleToggle = async (checked: boolean) => {
+    // 先持久化用户意图（无论环境是否支持，退出页面/下次进来都保持本次选择）
+    setSysNotifyEnabled(checked);
     if (!checked) {
       setEnabled(false);
+      showToast('已关闭系统通知，应用内提醒不受影响');
+      // 关闭系统级通知的同时退订 Web Push（服务端离线不再向本浏览器推送）
+      const s = await teardownPushSubscription();
+      setPushState(s.state);
+      setPushDetail(s.detail ?? '');
       return;
     }
     if (typeof window === 'undefined' || typeof Notification === 'undefined') {
@@ -518,6 +529,11 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   /** 测试系统通知：立即构造一条（不等切走标签页），验证本环境能否弹系统通知 */
   const fireTestNotification = (): void => {
     if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+      setTestResult('fail');
+      return;
+    }
+    // 系统级通知总闸：开关关闭时测试通知同样不投递（与真实通知同口径）
+    if (!enabled || !isSysNotifyEnabled()) {
       setTestResult('fail');
       return;
     }
@@ -600,10 +616,22 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
           {pushStatusText(pushState, pushDetail) || `推送状态：${pushState}`}
         </p>
       )}
+      {/* 订阅失败重试入口（force 重跑订阅链路，不再被单次锁锁死到刷新整页） */}
+      {enabled && pushState && pushState !== 'subscribed' && (
+        <button
+          type="button"
+          onClick={() => void ensureSubscription()}
+          className="mt-1.5 px-1 text-[12px] text-foreground underline underline-offset-2 transition-opacity active:opacity-50"
+        >
+          重新尝试订阅后台推送
+        </button>
+      )}
       <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
         切走标签页 / 最小化 / 锁屏时，AI 的新消息通过系统通知提醒（每条一条，不合并）；
         页面完全关闭后，新回复由服务器接力生成并推送。闹钟和计时器到点时也会通过系统通知提醒。
+        关闭「允许通知」只停用系统级提醒，应用内灵动岛弹窗照常。
       </p>
+      <LocalToast msg={toastMsg} />
     </DetailShell>
   );
 }
@@ -3265,7 +3293,7 @@ export default function SettingsApp() {
   const [page, setPage] = useState<Page>('root');
 
   return (
-    <IOSScreen>
+    <IOSScreen className="relative">
       {page === 'root' && <RootPage onOpen={setPage} />}
       {page === 'profile' && <ProfilePage onBack={() => setPage('root')} />}
       {page === 'theme' && <ThemePage onBack={() => setPage('root')} />}

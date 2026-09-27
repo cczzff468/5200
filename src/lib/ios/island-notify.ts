@@ -20,6 +20,8 @@
  *    权限 granted 后尽力注册 Service Worker + Web Push 订阅（/api/push）——
  *    页面已关闭时由服务端接力生成的回复也能逐条推送系统通知（不支持的环境静默降级）；
  *    拒绝/不支持/申请失败都不影响应用内灵动岛弹窗。
+ *    设置 › 通知「允许通知」开关是系统级通道总闸（isSysNotifyEnabled，localStorage 持久化）：
+ *    关闭后 Web Notification / Web Push / 预提示卡全部跳过，应用内灵动岛弹窗不受影响。
  * 6. 点击跳转：卡片点击 → switchToApp 到目标 App + 经导航总线（ISLAND_NAV_EVENT +
  *    takeNotifyNavigation）让对应聊天页打开该会话（单聊 / 群聊）；锁屏/熄屏/闹钟响铃时点击只收起不跳转。
  */
@@ -237,6 +239,35 @@ let webPermAsked = false;
  */
 const PREPROMPT_KEY = 'ios-notify-preprompt';
 
+// ---------------- 系统级通知偏好（设置 › 通知「允许通知」开关；只管系统级通道） ----------------
+
+/**
+ * 持久化偏好键（localStorage）：'on' / 'off'，缺省视为 'on'（老用户无记录 = 开）。
+ * 这是「系统级通知总闸」：只管 Web Notification / Web Push / 预提示卡；
+ * 应用内灵动岛弹窗（模拟 iOS 锁屏通知）不经过此闸门。
+ * 修复：原实现开关只是设置页组件局部 state，退出页面即失效，
+ * 关闭后切走标签页 Web Notification 照弹、离线 Web Push 照推。
+ */
+const SYS_NOTIFY_KEY = 'ios-sys-notify-enabled';
+
+/** 系统级通知是否开启（Web Notification / Web Push 投递前必须过此闸门） */
+export function isSysNotifyEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(SYS_NOTIFY_KEY) !== 'off';
+  } catch {
+    return true; // 存储不可用：保持默认开（与历史行为一致）
+  }
+}
+
+/** 写入系统级通知偏好（设置 › 通知开关切换时调用） */
+export function setSysNotifyEnabled(on: boolean): void {
+  try {
+    window.localStorage.setItem(SYS_NOTIFY_KEY, on ? 'on' : 'off');
+  } catch {
+    // 存储不可用：仅本次会话生效
+  }
+}
+
 interface NotifyPromptState {
   open: boolean;
   show: () => void;
@@ -375,6 +406,9 @@ async function postWebNotification(n: IslandNotification): Promise<void> {
 
 function maybeWebNotification(n: IslandNotification): void {
   if (typeof window === 'undefined' || !('Notification' in window)) return; // 不支持 → 应用内弹窗
+  // 系统级通知总闸：用户在设置里关了「允许通知」→ Web Notification / Web Push /
+  // 预提示卡全部跳过（应用内灵动岛弹窗已在 pushChatNotification 完成，不受影响）
+  if (!isSysNotifyEnabled()) return;
   try {
     const perm = Notification.permission;
     if (perm === 'granted') {
@@ -399,15 +433,21 @@ function maybeWebNotification(n: IslandNotification): void {
   }
 }
 
-/** Web Push 订阅（权限 granted 后尽力一次；不支持/iframe 环境静默失败） */
+/** Web Push 订阅（权限 granted 后尽力一次；不支持/iframe 环境静默失败；关闭偏好时不订阅） */
 let pushSetupDone = false;
 function ensurePushSubscription(): void {
   if (pushSetupDone) return;
   pushSetupDone = true;
+  if (!isSysNotifyEnabled()) return; // 设置里关了系统通知：不订阅（重开走设置页 force 路径）
   void setupPushSubscription();
 }
 
-if (typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+if (
+  typeof window !== 'undefined' &&
+  typeof Notification !== 'undefined' &&
+  Notification.permission === 'granted' &&
+  isSysNotifyEnabled()
+) {
   // 页面加载时权限已授予（上次会话授权过）：启动即订阅，不等到第一条 AI 消息才补 ——
   // 否则关页期间的接力回复永远没有订阅者可推（系统通知不弹的直接原因之一）
   ensurePushSubscription();

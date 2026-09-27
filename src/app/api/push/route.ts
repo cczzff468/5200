@@ -39,12 +39,37 @@ async function writeJson(file: string, value: unknown): Promise<void> {
   }
 }
 
+/**
+ * VAPID 密钥加载（模块级单飞）：
+ * vapid.json 缺失时并发首个 GET 只生成一次密钥 —— 原实现「读→生成→写」无并发保护，
+ * 两个客户端同时 GET 会各自 generateVAPIDKeys 先后写盘互相覆盖，
+ * 用旧公钥订阅的客户端离线推送从此 401/403。进程内缓存 in-flight Promise；
+ * 写盘前再读一次盘上是否已有密钥（双保险，防多进程窗口期覆盖）。
+ * 文件级原子性不强求（单进程 Next 服务够用）。
+ */
+let vapidInflight: Promise<{ publicKey: string; privateKey: string }> | null = null;
+
 async function getVapid(): Promise<{ publicKey: string; privateKey: string }> {
-  const saved = await readJson<{ publicKey?: string; privateKey?: string }>('vapid.json', {});
-  if (saved.publicKey && saved.privateKey) return { publicKey: saved.publicKey, privateKey: saved.privateKey };
-  const keys = webpush.generateVAPIDKeys();
-  await writeJson('vapid.json', keys);
-  return { publicKey: keys.publicKey, privateKey: keys.privateKey };
+  if (!vapidInflight) {
+    vapidInflight = (async () => {
+      const saved = await readJson<{ publicKey?: string; privateKey?: string }>('vapid.json', {});
+      if (saved.publicKey && saved.privateKey) {
+        return { publicKey: saved.publicKey, privateKey: saved.privateKey };
+      }
+      // 双保险：生成前再读一次（另一个进程 / 上次启动可能刚好已写入）
+      const recheck = await readJson<{ publicKey?: string; privateKey?: string }>('vapid.json', {});
+      if (recheck.publicKey && recheck.privateKey) {
+        return { publicKey: recheck.publicKey, privateKey: recheck.privateKey };
+      }
+      const keys = webpush.generateVAPIDKeys();
+      await writeJson('vapid.json', keys);
+      return { publicKey: keys.publicKey, privateKey: keys.privateKey };
+    })().catch((err: unknown) => {
+      vapidInflight = null; // 失败不缓存，下次请求重试
+      throw err;
+    });
+  }
+  return vapidInflight;
 }
 
 export async function GET(): Promise<NextResponse> {
