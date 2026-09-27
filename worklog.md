@@ -8809,3 +8809,149 @@ Stage Summary:
 - P0×1：微信 AI 来电缺通话中防御，替换后活动通话被静默杀死（B-1）
 - P1×9：A-1 发送按钮流式禁用 / A-2 拉黑申请退还事件流式丢弃 / B-2 信息来电双通话并存 / B-3 零秒通话诱导虚构 / B-4 禁言踢出成员旁路开口 / C-1 通知开关摆设 / C-2 Push 失败锁死无法重试 / D-1 相机滤镜 Safari 失效 / D-2 提醒事项日历无到点提醒
 - P2×20：A-3~A-8（finalize aiId 冲突、删撤不守卫投递、小助手未读水位、IME 组合态、转发事件 StrictMode、小助手列表时间）、B-5~B-9（孤儿键、realName、群表情位置不排队、续聊无通知、空号码）、C-3~C-5（灵动岛压来电、通话中边缘手势、VAPID 并发）、D-3~D-8（相册收藏摆设、计算器%、删联系人孤儿键、备忘录幽灵记录、闹钟贪睡、计时器全局提示）
+---
+Task ID: 37-e
+Agent: 通知设置修复
+Task: 修「允许通知」开关是摆设 + Web Push 订阅失败锁死 + /api/push VAPID 并发双密钥
+
+Work Log:
+- C-1【P1】开关持久化 + 系统级总闸：island-notify.ts 新增持久化偏好（localStorage 'ios-sys-notify-enabled'，缺省视为 'on' 兼容老用户）及导出 isSysNotifyEnabled()/setSysNotifyEnabled()；maybeWebNotification 投递前先过该闸门（关闭 → Web Notification / Web Push 补订阅 / 预提示卡全部跳过，应用内灵动岛弹窗在 pushChatNotification 中已完成不受影响）；页面加载时权限 granted 的启动订阅路径同样过闸（ensurePushSubscription 内 + 模块加载条件双重校验），denied 降级/复合图标/预提示卡等既有管线不动
+- C-1【P1】关闭顺带退订 Web Push：push-client.ts 新增 teardownPushSubscription()（getRegistration → getSubscription → unsubscribe → DELETE /api/push 同步删服务端订阅，离线不再推；全程尽力而为）；终态照旧落 localStorage(ios-push-status)（state='no-permission'，detail 描述退订结果）
+- C-1 settings.tsx 通知页：开关初始值从持久化偏好读（不再退页即失效）；切换时先 setSysNotifyEnabled 持久化意图；关闭分支 toast「已关闭系统通知，应用内提醒不受影响」（复用 page-toast 的 useLocalToast/LocalToast，SettingsApp 根 IOSScreen 加 relative 供浮层定位）+ await 退订并回显状态；「发送测试通知」同样过 isSysNotifyEnabled() 闸门（与真实通知同口径）；说明文案补「关闭只停用系统级提醒，应用内灵动岛弹窗照常」；pushStatusText 的 no-permission 改为优先显示 detail（退订文案可读）
+- C-2【P1】订阅失败锁死：setupPushSubscription 新增 opts?: { force?: boolean }，force=true 重置模块级 tried 单次锁重跑完整订阅链路；设置页全部用户主动恢复入口（开关重开、requestPermission 成功后、新增「重新尝试订阅后台推送」文字按钮）传 force:true；首次自动订阅路径（island-notify ensurePushSubscription）不传 force，保持只试一次防每条消息重试刷屏
+- C-5【P2】VAPID 并发双密钥：/api/push getVapid 改模块级单飞（in-flight Promise 进程内缓存，并发 GET 只生成一次；失败不缓存下次可重试），写盘前再读一次盘上密钥双保险防多进程窗口期覆盖；文件级原子性不强求（单进程 Next 服务）
+- 验证：bunx tsc --noEmit 零错误；eslint 对 4 个改动文件零告警；clock.tsx 闹钟自建的 Web Notification 不在本次范围未动（闸门模块已导出，后续可复用）
+
+Stage Summary:
+- 改动文件：src/lib/ios/island-notify.ts（系统级通知持久化总闸 isSysNotifyEnabled/setSysNotifyEnabled + maybeWebNotification/启动订阅过闸）、src/lib/ios/push-client.ts（setupPushSubscription force 重试 + teardownPushSubscription 退订）、src/components/apps/settings.tsx（开关读写持久化偏好、关闭退订+toast、测试通知过闸、重试订阅入口）、src/app/api/push/route.ts（getVapid 单飞防并发双密钥）
+- 修复语义：①设置›通知「允许通知」成为真实生效的持久化系统级总闸——关掉后切走标签页不弹 Web Notification、离线不收 Web Push，重进页面开关状态保持，应用内灵动岛弹窗不受影响；②订阅首次失败后用户可在设置页一键 force 重试，无需刷新整页；③vapid.json 首次并发生成不再互相覆盖，已发公钥的客户端订阅永不失效
+---
+Task ID: 37-b
+Agent: chat.tsx 信息App修复
+Task: 信息 App（chat.tsx）7 项审计问题修复（A-3/A-4/A-5/A-8/B-2/B-6/B-9）
+
+Work Log:
+- A-3 finalize 错误路径与分段消息 id 冲突（~1216-1228）：错误路径先判 deliveredAny——流中已投递出分段（首条 id 恰为 aiId）时整跳静默收尾，不再落错误消息顶替已上屏回复（投递队列无取消路径，已排队分段必然落盘，用户已拿到部分回复）；仍需落盘（未投递出任何分段）时 id 改用全新 `${aiId}-err`，消除存储双 id 刷新后重复渲染
+- A-4 投递进行中删/撤/编辑/批量删除被复活（~1850/1871/1890/1914）：del/recall/saveEdit/batchDelete 四处守卫由 isChatStreaming 扩为 isChatStreaming || isAiDelivering，拒绝时 toast 维持与 regenerate 同款「对方正在回复，请稍后再试」——杜绝投递 tick 用旧存储把被删/被撤消息合并复活
+- A-5 小助手未读水位失配（~274-283/3041/3087/3107-3139/3166/3285）：水位从「已见消息条数 seenLenRef」改为「最后一条已计数 assistant 消息键 seenRef{id,time}」（新增模块级 lastAssistantMarkOf）；syncAssistantFromStore 按水位键之后的 assistant 消息数累加未读（id 在盘上找不到=该条被删，按时间戳兜底；水位为空=首轮/清空后全量计入，与旧 prevLen=0 语义一致）；水位推进点同步改造：挂载初始化/openAssistantChat 推进到盘上最后一条 assistant 消息、deleteChat 归零为 null；只统计 assistant 消息，与微信/QQ「AI 发几条角标加几」口径一致（顺带修复 loadMsgs 100 条封顶截断后长度恒等导致的同症状）
+- A-8 小助手会话行跨天时间（~3342）：listTime 由 fmtTime 改为 fmtListTime（今天 HH:MM / 跨天 M月D日，与上方联系人行 2948 同口径），保留无时间时「现在」兜底不变
+- B-2 信息 AI 来电不查进行中 wx/qq 通话（~1279-1286）：来电 setTimeout 内 triggerIncomingCall 前补双查 useIncomingCall.getState().call + useGlobalCall.getState().session（与 qq.tsx #29 既有幂等防御同口径），有通话进行中整跳取消本次来电，消除接听后电话 CallScreen 与 wx/qq 通话引擎并存的双麦克风双 TTS；跳过时〔语音通话〕标记已在 buildReplyMsgs 剥除，与 qq/wechat 现行同场景行为一致（冷却时间戳仍照记）
+- B-6 来电留言把显示名当真名注入人设（~378）：recordMissedPhoneCall 的 realName 由误写的 contact.name || null 改为 contact.realName ?? null（ContactRecord.realName 字段已确认存在）
+- B-9 联系人无手机号来电号码空串（~327-333/1277）：新增模块级 derivePlaceholderNumber（联系人 id 哈希派生 11 位稳定号码，同一联系人恒定同号、不同联系人不串号）；number = contact?.phone || derivePlaceholderNumber(contact?.id ?? 'sms-ai')，来电界面/通话记录/语音留言不再出现空串
+- 验证：bunx tsc --noEmit 全仓零错误、eslint chat.tsx 零告警；未触碰 qq.tsx/wechat.tsx（仅只读参照）
+
+Stage Summary:
+- 交付文件：src/components/apps/chat.tsx（唯一改动文件）
+- 修复语义：finalize 错误消息不再顶替已上屏分段（deliveredAny 守卫 + 全新 -err id）；删/撤/编辑/批量删除在流式与投递期一律拒绝防复活；小助手未读水位改为按最后一条已计数 assistant 消息键增量统计（删除消息后角标恢复增长、跨 100 条封顶也正确）；小助手会话行跨天显示 M月D日；信息 AI 来电与 wx/qq 通话互斥；留言人设注入真名字段；无手机号联系人来电用 id 派生占位号
+---
+Task ID: 37-f
+Agent: 系统层手势/层级修复
+Task: C-3 来电响铃期间灵动岛通知互斥暂缓 + C-4 全屏通话中边缘上滑打开「隐形切换器」守卫
+
+Work Log:
+- C-3（IslandNotification.tsx）：新增 useIncomingCallPresenting() 只读订阅 incoming-call/global-call
+  两个 store 判断「来电层是否正在展示」——电话来电响铃全程（call 非空 ⇒ 全屏来电界面 z-84 或
+  退出后的顶部横幅 z-94 二者必居其一，都占住通知锚位/整屏）；微信来电取页内引擎响铃阶段
+  （source='wx' && enginePhase==='incoming'：大窗/胶囊弹窗 z-94 或点弹窗展开的来电页）；
+  接通后（enginePhase→active）与 QQ/微信接通后的通话页（z-62）不暂缓（通知 z-93 盖通话页是
+  既定设计），锁屏/熄屏不触发暂缓（z-93>z-65 是既定设计，未扩大化）。暂缓实现为「互斥隐身」
+  而非卸载：容器加 invisible（visibility:hidden 不参与命中测试，顺带修掉「点横幅在响铃中跳去
+  聊天页」——卡片不可点且移出无障碍树）——不能卸载的原因：卸载会让收起动画的
+  onAnimationComplete 永不回调 → exiting 卡死 → 队列永不推进。同时冻结自动收起计时：
+  NotifyCard 的 hold 分支 clearAutoDismiss（覆盖 pushChatNotification 替换/入队、finishExit
+  队列推进等所有武装路径），组件内补一个 visibilitychange 监听（注册晚于 island-notify 模块
+  监听、按序后回调）挡掉「暂缓中切走标签页再切回被 armAutoDismiss 续期」的漏冻路径。
+  通知不丢弃：current 原位保留+队列不推进，来电层消失后恢复展示并续满 3s；队列超过
+  MAX_QUEUE=4 丢最旧是 island-notify 既有顺延机制，未改其语义（island-notify.ts 未动）。
+  z-index 数值未动（层级表既定设计，纯互斥暂缓）。
+- C-4（store.ts openSwitcher 内部加通话态守卫，PhoneShell.tsx 未动）：useGlobalCall.getState()
+  的 session 存在且 view==='full'（⇔全屏通话页 z-62 可见，z-62>切换器 z-60）时直接忽略本次
+  openSwitcher（不置 switcherOpen）——Home 横杠不隐藏、通话页保持最前、边缘手势不被短路，
+  用户先点通话页左上角小窗图标收成小窗（view='pip'，z-64）后上滑即可正常打开切换器；
+  AppSwitcher 遮罩点击/卡片切换/关闭动画等既有交互零改动。wx 来电 view='hidden' 响铃中、
+  pip 小窗态、电话 App 内通话页（App 窗口 z-40<60）均不拦截，切换器照常打开。
+- 方案选择理由（C-4 二选一）：不采用「先最小化再打开切换器」——minimize 虽是既有动作、引擎
+  不停，但小窗 z-64 悬在切换器 z-60 之上，切换器开着时点小窗 expand() 回全屏（z-62）又落到
+  切换器之下、遮罩点不到，会经另一条路径复现同一「隐形切换器卡死」，而 expand 在 global-call
+  store（本任务禁改）里无法守卫；「直接忽略」无新增卡死路径、实现风险最小。
+- 验证：bunx tsc --noEmit 全仓零错误；bunx eslint 两个改动文件零告警；store.ts→global-call.ts
+  无循环依赖（global-call 运行时仅依赖 react+zustand，chat-call/contacts 均为 type-only import）。
+
+Stage Summary:
+- 交付文件：src/components/ios/IslandNotification.tsx、src/lib/ios/store.ts
+- 修复语义：C-3 电话/微信来电响铃展示期间灵动岛通知互斥隐身+计时冻结，来电层消失后原位恢复
+  展示（不丢弃、不改 z-index、不扩大到锁屏/接通通话页）；C-4 全屏语音通话（z-62）中底部边缘
+  上滑不再产生「隐形切换器」，openSwitcher 直接忽略，Home 横杠保持显示，先收小窗再上滑可用。
+- 遗留备注：切换器开着时点悬浮小窗（z-64>60）expand 回全屏仍会复现隐形切换器——属 global-call
+  expand（禁改文件）与 AppSwitcher（既有设计不动）交汇的既有洞，需后续任务在通话引擎侧收口。
+---
+Task ID: 37-d
+Agent: 群聊修复
+Task: 群聊三项修复——B-4 禁言/被踢成员旁路开口封堵（regenerate/nudgeAiSender）、B-5 回合中解散群写 wx- 孤儿键、B-7 发表情/发位置/分句批次回合中硬挡改排队补跑
+
+Work Log:
+- B-4（wx-group.tsx / qq-group.tsx 同构，复用 runGroupTurn 既有判定口径 memberIds + isGroupMuted，以 getGroup(gid) 实时群为准）：①regenerate——busy 检查后新增两道守卫：`!g || !g.memberIds.includes(m.senderId)` → toast「该成员已不在群里」（沿用既有文案；被踢成员不再靠 contactsRef.find 兜底放回来），`isGroupMuted(g, m.senderId)` → toast「TA 被禁言了」；原 `memberById ?? contactsRef.find` 解析链保留但在成员表校验之后（此时必然命中当前成员），`!char` 兜底 toast 不变；②nudgeAiSender——入口加同款两道守卫（非成员/被禁言一律静默 return：自动触发的回应不加 toast，不打断「已收款/已退还」提示），80ms setTimeout 回调内在既有 runningRef/isChatStreaming 复核之外再核一次 gNow（成员表+禁言，防窗口内 AI 管理标记/退群生效）；③修复覆盖任务三现象：禁言后长按旧消息重新生成、被踢后 regenerate 兜底复活、禁言期间收款/退还 X 早前转账的回应旁路
+- B-5（groups.ts loadGroupMsgs/saveGroupMsgs）：去掉 `getGroup(groupId)?.app ?? 'wx'` 的 wx 回退——loadGroupMsgs 群不存在直接 return []（不再回读 wx- 前缀孤儿键）；saveGroupMsgs 群不存在直接 return（跳过写盘，消息随群消失=解散已删真实键的合理语义；与同文件 pushGroupEvent 的 `if (!g) return null` 同口径）。回合中解散 QQ 群后投递尾巴的 saveGroupMsgs(gid) 不再写 `wx-group-msgs:<id>` 孤儿键。正常读写路径零影响：群存在时 g.app 即原 app（wx 群读写的键与回退值完全相同）；全部调用点核查（wx-group/qq-group/group-social/memory.ts）均传入现存群 id 或依赖群空即空数组语义；restoreQuitGroup 直接走 groupMsgsKey 不经这两个函数不受影响
+- B-7（wx-group.tsx / qq-group.tsx 同构，对齐文字路径的 groupQueuedRef 排队 + runGroupTurn finally 按 lastMe 补跑机制）：①sendSticker/sendLocation——「runningRef||isChatStreaming → toast『成员们还在回复，稍等一下』丢弃」改为消息照常 appendMsg 上屏 + groupQueuedRef.current=true + toast「消息已发出，成员们回完这轮就聊」，回合结束后 finally 自动补跑（补跑 trigger=lastMe 即该表情/位置消息，content 为空无 @，与原直发 runGroupTurn(msg) 语义一致）；非回合路径（sentenceSend 入列/直接触发）原样保留；②dispatchBatch——原 `!pendingDispatch || running || streaming` 整体 return（回合中批次静默不触发）拆开：先清 pendingDispatch/markPendingBatch（防补跑后重复触发），回合中改入 groupQueuedRef 队列 + 同款 toast；批次消息本已在群消息库，补跑从存储读整批、内容完整
+- 验证：bunx tsc --noEmit 全项目零错误（exit 0）；bunx eslint 三个专属文件零输出；bun run lint 全项目仅 ReminderWatcher.tsx 1 个报错（并行任务文件，非本任务范围）；python3 repr 校验三文件 0 个 ESC 字符、全部关键片段命中（B-4 守卫串/新增 toast 文案/sticker·location 结构）、新旧 toast 计数核对（「稍等一下」wx/qq 各余 5 处=regenerate busy+del/recall/saveEdit/batchDelete 既有守卫，「回完这轮就聊」新增 3 处/文件）；dev.log 热编译正常无报错；未 git、未动 dev server
+
+Stage Summary:
+- wx-group.tsx / qq-group.tsx：regenerate 与 nudgeAiSender（收款/退还转账回应）两处 runCharTurn 旁路入口补上与 runGroupTurn 同一口径的成员表+禁言守卫——被禁言成员重新生成给 toast「TA 被禁言了」、被踢成员 toast「该成员已不在群里」（nudge 自动路径静默跳过），禁言/退群对「重新生成」「转账回应」物理生效
+- groups.ts：loadGroupMsgs 群不存在返回空、saveGroupMsgs 群不存在跳过写盘，回合中解散群不再产生 wx- 前缀孤儿键（数据随群消失），wx 群正常读写路径不变
+- wx-group.tsx / qq-group.tsx：发表情、发位置、分句批次（dispatchBatch）在群回合进行中与文字/语音/图片同口径——照常上屏落库并入 groupQueuedRef 排队，回合结束后自动补跑（toast「消息已发出，成员们回完这轮就聊」），不再硬挡丢弃；分句批次补跑时批次内容完整
+- 修改文件：src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx、src/lib/ios/groups.ts；tsc 零错误、专属文件 lint 干净
+---
+Task ID: 37-c
+Agent: 通话引擎修复
+Task: B-3 零秒通话被描述成「聊了一会儿」诱导 AI 虚构（场景文按真实时长分档+禁虚构）+ B-1 startGlobalCall 替换前收尾兜底（不静默杀死旧通话）
+
+Work Log:
+- B-3 链路核实：chat-call.ts finish/followupAndSummarize 的 connected = secondsRef>0 || phaseWasConnected('hangup'|'ai-hangup')，对「AI 第一句问候就带〔挂断〕标记」「用户接通即挂」的 0 秒通话恒 true 且转写常为空；服务端 SCENE_TEXT 硬写「电话接通了，你们聊了一会儿」+ 要求「接着通话里的话茬」→ AI 只能虚构通话内容
+- B-3 客户端核查：phone.tsx:1016 wasConnected = phaseAtEnd === 'connected'（阶段制而非秒数制，未进入 connected 的挂断落 endReason='cancel'）——三态口径本来就正确，零改动；call-outcome.ts 三态语义不动；chat-call.ts 两处 connected 计算保留（0 秒短通话如实 connected=true，三态不变），仅补注释对齐口径：续聊「没聊起来」场景交给服务端按 duration 分档
+- B-3 服务端 /api/phone/followup：接通后结束（hangup/ai-hangup）场景文按真实时长分档 connectedSceneText——<3s（含 0 秒）「电话刚接通（甚至还没说上话/只来得及刚开口）就挂断了」（按转写有无自适应措辞）；3~10s「只说了几句」；>10s 保持既有「聊了一会儿」；SCENE_TEXT 收窄为未接通三场景
+- B-3 服务端引导分档：buildFollowupSystemPrompt 新增 endReason/talkTier 参数——zero 档不再要求「接着话茬」，改为「对这次没聊起来自然打圆场/找补」（约晚点再打/刚好有事没说两句）并硬性禁止编造/复述/指代任何通话内容、禁止说成长聊；brief 档「顺着几句的茬自然接、不渲染成长谈」；while 档保留既有口径（对方先挂才可嫌挂得快）；recap zero 档显式注入「没有实际通话内容，仅有的只言片语不算聊过什么」与 system 双重对齐（防 0 秒+残句转写仍被脑补成聊天）；未接通场景措辞/禁令零改动
+- B-1 global-call.ts：startGlobalCall 开头加「替换前收尾兜底」——已有 session 且 enginePhase!=='ended' 时先经引擎句柄 finishByReplacement() 让旧通话走完整收尾（finish → onEnd 落通话卡片/挂断续聊/记忆总结 → GlobalCallLayer 回调 close()），再 start() 新通话；防 double-finish：enginePhase==='ended' 直接放行 + 引擎 endedRef 幂等拦截；引擎句柄缺失（动态加载未挂载的亚秒窗口）无收尾可走按旧行为放行；GlobalCallState.engine 类型扩展 finishByReplacement
+- B-1 chat-call.ts：引擎句柄注册从「仅 direction='in'」扩为所有方向并新增 finishByReplacement——按当前阶段映射真实结局（响铃被打断=missed-in / 拨号被打断=cancel / 已接通被打断=hangup），绝不给被替换的通话伪造「接通后被挂断」；回调定义置于注册 effect 之前（deps 数组引用，避免 TDZ）
+- 验证：bunx tsc --noEmit 零错误（EXIT=0）；eslint 三个改动文件零告警；IncomingCallLayer 仅在 enginePhase==='incoming' 读 engine.accept/reject，全方向注册不影响来电弹窗行为
+
+Stage Summary:
+- 交付文件：src/app/api/phone/followup/route.ts（B-3 主修：时长分档场景文+禁虚构引导+recap 对齐）、src/lib/ios/global-call.ts（B-1 兜底+engine 类型）、src/lib/ios/chat-call.ts（B-1 引擎句柄 finishByReplacement+B-3 口径注释）；src/components/apps/phone.tsx 核实后零改动（connected 判定为阶段制，三态口径本就正确）
+- 修复语义：①0 秒/极短通话的挂断续聊不再说「聊了一会儿+接话茬」逼 AI 虚构——场景文按真实时长三档注入，短通话改为自然打圆场且硬性禁虚构，转写与事实双重对齐；通话记录三态（call-outcome.ts）与 phone.tsx connected 判定原口径不动、无回归；②微信/QQ 发起新通话撞上活动通话时，引擎层先让旧通话按阶段映射真实结局走完整收尾（卡片/续聊/记忆不丢）再顶替，不再静默吞掉旧通话
+- 边界：微信/QQ 侧入口双查由 37-a 在 wechat.tsx/chat.tsx 侧处理，本层兜底与之互补；严禁修改的 wechat/qq/chat/wx-group 四文件未触碰；未做 git 操作
+---
+Task ID: 37-g
+Agent: 相机+提醒修复
+Task: 修复相机滤镜 Safari/iOS 失效（D-1）与提醒事项/日历到点无提醒（D-2）
+
+Work Log:
+- D-1 相机滤镜：camera.tsx 新增 detectCanvasFilterSupport()——1×1 红色像素 + grayscale 滤镜自绘后实测像素值（支持时 R≈54，Safari 空实现仍是 255），结果按页缓存只测一次（比仅 `'filter' in ctx` 稳，规避 Safari「属性存在但空实现」）；handleCapture 仅在支持时设置 ctx.filter，不支持时拍照照常但：①快门后 toast「已存储到图库（当前浏览器不支持滤镜，照片为原图）」②滤镜条底部常驻说明行。不用 WebGL 重实现，提示+能力检测闭环
+- D-2 ReminderWatcher：新建 src/components/ios/ReminderWatcher.tsx（仿 clock.tsx AlarmWatcher 的全局监听位），PhoneShell 在 AlarmWatcher 旁 dynamic 懒加载挂载；10s 轮询 IndexedDB reminders+events 两表
+  - 触发口径：提醒事项 completed 不触发；dueDate+dueTime 按其时刻、仅日期按当天 09:00、仅时间按今天该时刻（与列表红色文案口径一致）；日历事件按 date+startTime 触发一次、全天事件（startTime=''）按 09:00；日期解析用显式 Date 构造规避 Safari 'YYYY-MM-DD HH:mm' 缺陷
+  - 到期动作：①顶部 iOS 风格横幅（z-93 与灵动岛通知同层，锁屏也显示，队列上限 4，4.5s 自动收起且页面不可见/熄屏冻结，点击收起）②页面切走时 Web Notification（Notification.permission==='granted' 且过 island-notify 新增的 isSysNotifyEnabled() 系统通知总闸，tag 唯一）③一次性双音短促提示音 + 单次震动（不做持续响铃/贪睡，最小闭环）
+  - 防重复：触发键 `rw:r|e:{id}:{到期分钟}` 记 localStorage kv（ios-reminder-fired，24h 滚动清理）+ 内存 Map，刷新/重挂载不重响；过期超 2 分钟不补弹；熄屏期间不触发不标记（唤醒后下轮补弹）
+  - 设计取舍：未走 island-notify 的 pushChatNotification——其 IslandNotification.app 限定 wechat/qq/chat（会显示错误的聊天 App 角标）且卡片 onClick 固定 activateCurrentNotification 跳聊天（点提醒会误入信息 App 的 AI 助手会话）；改为在自有文件内实现同层级同风格的顶部横幅（tap 仅收起，符合「不做点击跳转」的范围控制）
+- 验证（agent-browser 实测）：注入 1 分钟前到期的提醒→10s 内横幅弹出（岛位 y=11、336px 卡、「提醒事项 10:43 开会带笔记本：三楼会议室」）；注入 15s 后开始的日历事件→到点触发；点击收起 ✓；刷新后不重响（kv 标记持久）✓；completed 提醒不触发 ✓；patch 掉 canvas filter 模拟 Safari→滤镜条说明行出现 ✓、真实 Chromium 探针 255→54（支持→不显示提示）✓；测试数据已清理
+- bunx tsc --noEmit 零错误；eslint 三文件零错；dev.log 无异常
+
+Stage Summary:
+- 交付文件：src/components/apps/camera.tsx（滤镜能力实测 + 不支持时 toast/滤镜条提示，拍照与存照链路不变）、src/components/ios/ReminderWatcher.tsx（新增，全局提醒/日历到期监听：横幅+系统通知+短提示音+localStorage kv 防重）、src/components/ios/PhoneShell.tsx（仅追加 ReminderWatcher 懒加载挂载两处行）
+- 修复语义：Safari/iOS 上「取景器有滤镜、照片是原图」从静默变成有明确预期提示；提醒事项/日历到点在任何界面（含锁屏）弹横幅+提示音，切走标签页有系统通知，App 不打开也生效，刷新不重复响
+- reminders.tsx / calendar.tsx 未改动（D-2 根因是全项目无全局监听，App 内列表红色文案即其全部既有到期反馈，无需变更）
+---
+Task ID: 37-a
+Agent: wechat/qq 单聊修复（子代理超时于收尾，代码已全部落地，主协调者核验补记）
+Task: wechat.tsx/qq.tsx 修复 A-1/A-2/A-3/A-4/A-6/A-7/B-1/B-8 共 8 项
+
+Work Log:
+- A-1 发送按钮：wechat.tsx:6314 / qq.tsx 对应处去掉 disabled={streaming}，回复中点击走 send() 内部排队补跑分支并给 toast（对齐 chat.tsx 口径）；canDispatch 残留 streaming 同步去除（wechat.tsx:4963/5475）
+- A-2 事件排队：WxQueuedTurn/QqQueuedTurn 队列项扩展 event 字段（wechat.tsx:378-424），resolveBlockReq/refundPeerCard 回复中触发时事件随补跑回合排队保留（wechat.tsx:4785/4857，对齐 chat.tsx resolveBlockReq），不再被占用中的流静默丢弃
+- A-3 finalize：deliveredAny 守卫（wechat.tsx:4656/4699、qq.tsx:3259/3321）——已投递过分段则错误整跳静默收尾；未投递才落错误消息且改用新 id `${aiId}-err`（wechat.tsx:4702）
+- A-4 删/撤/编辑/批量删除守卫扩为 isChatStreaming||isAiDelivering（wechat/qq 各 18/20 处引用点覆盖）
+- A-6 IME：Enter 补 !e.nativeEvent.isComposing（wechat.tsx:6283、qq.tsx:4756）
+- A-7 转发事件 drain：改「读全部+内存登记已消费（按联系人\n事件文本计数）+延迟清除」，回合定时器不随卸载取消（wechat.tsx:625-633/3899、qq.tsx:851-897），StrictMode 重挂载不丢事件也不双跑
+- B-1 微信来电双查：AI 触发处（wechat.tsx:4313）与 openVoiceCall 入口（wechat.tsx:4151）补 useGlobalCall.getState().session 守卫，对齐 QQ 既有口径，不再静默替换进行中通话
+- B-8 续聊/退卡直写消息补走 pushChatNotification 通知管线+未读角标（wechat.tsx:4071-4078/4251，qq 同构）
+
+Stage Summary:
+- 交付文件：src/components/apps/wechat.tsx、src/components/apps/qq.tsx（各 247 行改动）
+- 修复语义：回复中点发送=排队不再死按；系统事件回复中排队补跑；错误兜底不再顶替已上屏回复；投递中删/撤不被复活；中文选词回车不误发；转发感知 dev 模式不丢；微信 AI 来电不再静默杀死进行中通话；挂断续聊/退卡消息有通知有角标
