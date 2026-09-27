@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChevronRight,
   CircleCheck,
+  Download,
   FileText,
   HardDrive,
   Image as ImageIcon,
@@ -334,6 +335,8 @@ function ItemRow({
   onTap,
   onDelete,
   deleteLabel,
+  onDownload,
+  downloadLabel,
 }: {
   title: string;
   sub: string;
@@ -342,6 +345,9 @@ function ItemRow({
   onTap?: () => void;
   onDelete: () => void;
   deleteLabel: string;
+  /** #29：可选下载按钮（照片/录音/音乐） */
+  onDownload?: () => void;
+  downloadLabel?: string;
 }) {
   return (
     <div className="flex items-stretch">
@@ -360,6 +366,17 @@ function ItemRow({
         </span>
         {stateIcon}
       </button>
+      {/* #29：下载按钮（仅在传入 onDownload 时渲染） */}
+      {onDownload && (
+        <button
+          type="button"
+          onClick={onDownload}
+          aria-label={downloadLabel ?? '下载'}
+          className="flex w-11 shrink-0 items-center justify-center"
+        >
+          <Download className="h-[18px] w-[18px] text-foreground/70" strokeWidth={1.9} />
+        </button>
+      )}
       <button
         type="button"
         onClick={onDelete}
@@ -700,6 +717,18 @@ function LibraryView({
     playLibAudio(blob, () => setPlayingId(null));
   }
 
+  /** #29：下载 Blob 到本地（a.download 兑底；点击后创建临时 ObjectURL 并触发下载） */
+  function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   function deleteById(id: string, label: string) {
     if (!window.confirm(`确定删除"${label}"吗？`)) return;
     if (lib === 'photos') {
@@ -857,6 +886,8 @@ function LibraryView({
                     onTap={() => setPreviewId(p.id)}
                     onDelete={() => deleteById(p.id, p.name || '未命名照片')}
                     deleteLabel="删除照片"
+                    onDownload={() => downloadBlob(p.blob, p.name || `photo-${p.id}.jpg`)}
+                    downloadLabel="下载照片"
                   />
                 ))}
 
@@ -876,6 +907,8 @@ function LibraryView({
                     onTap={() => togglePlay(r.blob, r.id)}
                     onDelete={() => deleteById(r.id, r.name || '未命名录音')}
                     deleteLabel="删除录音"
+                    onDownload={() => downloadBlob(r.blob, `${r.name || 'recording'}.webm`)}
+                    downloadLabel="下载录音"
                   />
                 ))}
 
@@ -897,6 +930,8 @@ function LibraryView({
                     onTap={() => togglePlay(m.blob, m.id)}
                     onDelete={() => deleteById(m.id, m.title || m.name || '未命名音乐')}
                     deleteLabel="删除音乐"
+                    onDownload={() => downloadBlob(m.blob, `${m.title || m.name || 'music'}.mp3`)}
+                    downloadLabel="下载音乐"
                   />
                 ))}
 
@@ -951,7 +986,20 @@ function LibraryView({
       {/* 照片大图预览层（点击任意处关闭） */}
       {previewUrl && (
         <div className="absolute inset-0 z-50 flex flex-col bg-black" onClick={() => setPreviewId(null)}>
-          <div className="flex h-[54px] shrink-0 items-center justify-end px-4">
+          <div className="flex h-[54px] shrink-0 items-center justify-between px-4">
+            {/* #29：预览层左上角“下载”按钮（与右上角关闭按钮对称） */}
+            <button
+              type="button"
+              aria-label="下载照片"
+              onClick={(e) => {
+                e.stopPropagation();
+                const p = photos.find((x) => x.id === previewId);
+                if (p) downloadBlob(p.blob, p.name || `photo-${p.id}.jpg`);
+              }}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/90 transition-opacity active:opacity-60"
+            >
+              <Download className="h-5 w-5" strokeWidth={2.2} />
+            </button>
             <button aria-label="关闭预览" className="rounded-full p-1.5 transition-opacity active:opacity-60">
               <X className="h-6 w-6 text-white/90" strokeWidth={2} />
             </button>

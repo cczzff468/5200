@@ -2616,6 +2616,8 @@ export function WxGroupChatPage({
       switch (action.kind) {
         case 'mute-member': {
           const t = resolveTarget(action.targetId);
+          // #81：AI 误写多人禁言时，parser 在 warn 字段记录警告 → 调用方 toast 提示（不影响禁言动作本身）
+          if (action.warn) onToast(action.warn);
           if (!t || !canModerateTarget(g, char.id, t.id)) return;
           muteGroupMember(gid, t.id, parseMuteDuration(action.arg ?? ''), { name: t.name });
           break;

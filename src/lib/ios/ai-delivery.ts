@@ -74,7 +74,9 @@ function pump(sessionKey: string): void {
   const queue = queues.get(sessionKey);
   const batch = queue?.[0];
   if (!batch) {
+    // 队列空：释放 running 与 queues 的空数组引用（避免 Map 保留空数组永不释放）
     running.delete(sessionKey);
+    queues.delete(sessionKey);
     emitActive();
     return;
   }
@@ -95,23 +97,34 @@ function pump(sessionKey: string): void {
       pump(sessionKey);
       return;
     }
-    // 页面不可见：跳过打字节奏，同步投完本批剩余（后台定时器被强节流，逐条等会是分钟级；
-    // 每条投递都会立刻走 Web Notification 弹系统通知，与真机离开屏幕时收通知的体验一致）
+    // 页面不可见：跳过打字节奏，分块异步投完本批剩余（后台定时器被强节流，逐条等会是分钟级；
+    // 每条投递都会立刻走 Web Notification 弹系统通知，与真机离开屏幕时收通知的体验一致）；
+    // 大批量（如 30 条）若一次性 while 同步投完会阻塞主线程，按 CHUNK=5 分块、每块后
+    // await new Promise(r => setTimeout(r, 0)) 让出事件循环，保持投递顺序不变
     if (isPageHidden()) {
-      while (index < items.length) {
-        const item = items[index];
-        try {
-          deliver(item, index);
-        } catch {
-          // 单条投递异常不阻断后续
+      const CHUNK = 5;
+      void (async () => {
+        while (index < items.length) {
+          for (let k = 0; k < CHUNK && index < items.length; k++) {
+            const item = items[index];
+            try {
+              deliver(item, index);
+            } catch {
+              // 单条投递异常不阻断后续
+            }
+            batch.deliveredIndex = index + 1;
+            emitTick(sessionKey);
+            index += 1;
+          }
+          if (index < items.length) {
+            await new Promise<void>((r) => window.setTimeout(r, 0));
+          }
         }
-        batch.deliveredIndex = index + 1;
-        emitTick(sessionKey);
-        index += 1;
-      }
-      q.shift();
-      resolve();
-      pump(sessionKey);
+        const q = queues.get(sessionKey);
+        if (q && q[0] === batch) q.shift();
+        resolve();
+        pump(sessionKey);
+      })();
       return;
     }
     const item = items[index];

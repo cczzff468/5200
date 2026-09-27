@@ -2225,6 +2225,55 @@ interface WxPayPwdData {
 
 export const WX_LS_PAY_PWD = 'wx-pay-pwd';
 
+// #48：支付密码暴力试错保护——失败次数与锁定到期时间戳（5 次失败 30s 锁定），存 localStorage 跨组件共享
+export const WX_LS_PAY_PWD_LOCK = 'wx-pay-pwd-lock';
+export const WX_PAY_PWD_MAX_FAIL = 5;
+export const WX_PAY_PWD_LOCK_MS = 30 * 1000;
+
+interface WxPayPwdLockData {
+  /** 累计失败次数（成功后清零） */
+  fails: number;
+  /** 锁定到期时间戳（Date.now() + LOCK_MS）；未锁定时为 0 */
+  lockedUntil: number;
+}
+
+export function wxLoadPayPwdLock(): WxPayPwdLockData {
+  try {
+    const raw = window.localStorage.getItem(WX_LS_PAY_PWD_LOCK);
+    if (!raw) return { fails: 0, lockedUntil: 0 };
+    const p = JSON.parse(raw) as Partial<WxPayPwdLockData>;
+    return {
+      fails: typeof p.fails === 'number' && p.fails >= 0 ? p.fails : 0,
+      lockedUntil: typeof p.lockedUntil === 'number' && p.lockedUntil > 0 ? p.lockedUntil : 0,
+    };
+  } catch {
+    return { fails: 0, lockedUntil: 0 };
+  }
+}
+
+export function wxSavePayPwdLock(d: WxPayPwdLockData): void {
+  try {
+    window.localStorage.setItem(WX_LS_PAY_PWD_LOCK, JSON.stringify(d));
+  } catch {
+    // 忽略
+  }
+}
+
+/** 清零失败次数与锁定（成功支付 / 修改密码成功 / 关闭支付密码时调用） */
+export function wxClearPayPwdLock(): void {
+  wxSavePayPwdLock({ fails: 0, lockedUntil: 0 });
+}
+
+/** 记录一次失败：累加 fails，达到 5 次设 lockedUntil = now + 30s；返回更新后的状态 */
+export function wxRecordPayPwdFail(): WxPayPwdLockData {
+  const cur = wxLoadPayPwdLock();
+  const fails = cur.fails + 1;
+  const lockedUntil = fails >= WX_PAY_PWD_MAX_FAIL ? Date.now() + WX_PAY_PWD_LOCK_MS : cur.lockedUntil;
+  const next = { fails, lockedUntil };
+  wxSavePayPwdLock(next);
+  return next;
+}
+
 export function wxLoadPayPwd(): WxPayPwdData {
   try {
     const p: unknown = kvGet(WX_LS_PAY_PWD);
@@ -2249,6 +2298,7 @@ export function WxPwdSheet({
   sub,
   hint,
   errorKey,
+  locked = false,
   onComplete,
   onClose,
 }: {
@@ -2256,6 +2306,8 @@ export function WxPwdSheet({
   sub?: string;
   hint?: string;
   errorKey: number;
+  /** #48：锁定期间禁用输入（键位 click 失效、视觉灰显） */
+  locked?: boolean;
   onComplete: (pwd: string) => void;
   onClose: () => void;
 }) {
@@ -2263,6 +2315,7 @@ export function WxPwdSheet({
   // 用 ref 累加避免同一 tick 内连点被 React 批处理吞掉（每次 push 都基于最新串）
   const acc = useRef('');
   const push = (d: string) => {
+    if (locked) return;
     const next = (acc.current + d).slice(0, 6);
     acc.current = next;
     setDigits(next);
@@ -2274,6 +2327,8 @@ export function WxPwdSheet({
   };
   const keyBtn =
     'flex h-[52px] items-center justify-center bg-white text-[22px] font-medium text-black active:bg-black/[0.07] dark:bg-[#1E1E1E] dark:text-white dark:active:bg-white/10';
+  const keyBtnLocked =
+    'flex h-[52px] items-center justify-center bg-white/60 text-[22px] font-medium text-black/30 dark:bg-[#1E1E1E]/60 dark:text-white/30';
   return (
     <div className="rounded-t-[18px] bg-[#F7F7F7] pb-7 dark:bg-[#1B1B1B]" onClick={(e) => e.stopPropagation()} data-testid="wx-keypad">
       <style>{'@keyframes wxShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}'}</style>
@@ -2283,7 +2338,8 @@ export function WxPwdSheet({
           aria-label="关闭"
           data-testid="wx-keypad-close"
           onClick={onClose}
-          className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-black/45 active:bg-black/5 dark:text-white/50 dark:active:bg-white/10"
+          disabled={locked}
+          className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-black/45 active:bg-black/5 dark:text-white/50 dark:active:bg-white/10 disabled:opacity-40"
         >
           <X className="h-5 w-5" strokeWidth={2.2} />
         </button>
@@ -2306,15 +2362,22 @@ export function WxPwdSheet({
       </p>
       <div className="grid grid-cols-3 gap-[1px] border-t border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10">
         {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => (
-          <button key={k} type="button" data-testid={`wx-keypad-${k}`} onClick={() => push(k)} className={keyBtn}>
+          <button key={k} type="button" data-testid={`wx-keypad-${k}`} onClick={() => push(k)} disabled={locked} className={locked ? keyBtnLocked : keyBtn}>
             {k}
           </button>
         ))}
         <span className="bg-white dark:bg-[#1E1E1E]" aria-hidden="true" />
-        <button type="button" data-testid="wx-keypad-0" onClick={() => push('0')} className={keyBtn}>
+        <button type="button" data-testid="wx-keypad-0" onClick={() => push('0')} disabled={locked} className={locked ? keyBtnLocked : keyBtn}>
           0
         </button>
-        <button type="button" aria-label="删除" data-testid="wx-keypad-del" onClick={() => { acc.current = acc.current.slice(0, -1); setDigits(acc.current); }} className={keyBtn}>
+        <button
+          type="button"
+          aria-label="删除"
+          data-testid="wx-keypad-del"
+          disabled={locked}
+          onClick={() => { acc.current = acc.current.slice(0, -1); setDigits(acc.current); }}
+          className={locked ? keyBtnLocked : keyBtn}
+        >
           <Delete className="h-6 w-6" strokeWidth={1.8} aria-hidden="true" />
         </button>
       </div>
@@ -2322,22 +2385,51 @@ export function WxPwdSheet({
   );
 }
 
-/** 支付密码验证浮层（发红包/转账支付前调用；正确回调 onOk，错误清空重输） */
+/** 支付密码验证浮层（发红包/转账支付前调用；正确回调 onOk，错误清空重输）。
+ *  #48：5 次失败 30s 锁定——锁定期间禁用输入并显示倒计时，防止暴力试错 */
 export function WxPayPwdGate({ label, onOk, onClose }: { label: string; onOk: () => void; onClose: () => void }) {
   const [errKey, setErrKey] = useState(0);
+  const [lock, setLock] = useState<WxPayPwdLockData>(() => wxLoadPayPwdLock());
+  // 倒计时（秒）：每秒刷新一次让 UI 显示剩余时间
+  const [remainSec, setRemainSec] = useState(0);
+  useEffect(() => {
+    if (lock.lockedUntil <= 0) return;
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((lock.lockedUntil - Date.now()) / 1000));
+      setRemainSec(remain);
+      if (remain <= 0) {
+        // 锁到期：清掉 lockedUntil（fails 也一并清零，给用户重新试的机会）
+        const cleared = { fails: 0, lockedUntil: 0 };
+        wxSavePayPwdLock(cleared);
+        setLock(cleared);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [lock.lockedUntil]);
+  const isLocked = lock.lockedUntil > 0 && Date.now() < lock.lockedUntil;
   return (
-    <div className="absolute inset-0 z-[60] flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={onClose}>
+    <div className="absolute inset-0 z-[60] flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={isLocked ? undefined : onClose}>
       <WxPwdSheet
         key={errKey}
         title="请输入支付密码"
         sub={label}
-        hint={errKey > 0 ? '密码错误，请重新输入' : undefined}
+        hint={isLocked ? `密码错误次数过多，请 ${remainSec} 秒后再试` : errKey > 0 ? `密码错误，请重新输入${lock.fails > 0 ? `（已失败 ${lock.fails} 次，5 次后将锁定 30 秒）` : ''}` : undefined}
         errorKey={errKey}
+        locked={isLocked}
         onClose={onClose}
         onComplete={(pwd) => {
+          if (isLocked) return;
           const d = wxLoadPayPwd();
-          if (d.pwd && pwd === d.pwd) onOk();
-          else setErrKey((k) => k + 1);
+          if (d.pwd && pwd === d.pwd) {
+            wxClearPayPwdLock();
+            onOk();
+          } else {
+            const next = wxRecordPayPwdFail();
+            setLock(next);
+            setErrKey((k) => k + 1);
+          }
         }}
       />
     </div>

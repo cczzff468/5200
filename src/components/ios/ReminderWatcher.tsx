@@ -214,7 +214,6 @@ export default function ReminderWatcher() {
           if (due === null || due > now || now - due > GRACE_MS) continue;
           const key = `rw:r:${r.id}:${Math.floor(due / 60000)}`;
           if (firedMap().has(key)) continue;
-          markFired(key);
           const notes = r.notes.trim();
           notices.push({
             key,
@@ -222,13 +221,15 @@ export default function ReminderWatcher() {
             body: notes ? `${r.title}：${notes}` : r.title,
             time: `${pad2(new Date(due).getHours())}:${pad2(new Date(due).getMinutes())}`,
           });
+          // #57：先入队 notices 再标记 fired——若 markFired 抛错（quota 等），
+          // 通知已入数组，下一轮 setQueue 仍会展示；不会出现「已标记 fired 但横幅未弹」的永久丢失。
+          markFired(key);
         }
         for (const ev of await localDB.getAll('events')) {
           const due = eventDueMs(ev);
           if (due === null || due > now || now - due > GRACE_MS) continue;
           const key = `rw:e:${ev.id}:${Math.floor(due / 60000)}`;
           if (firedMap().has(key)) continue;
-          markFired(key);
           const note = ev.note.trim();
           notices.push({
             key,
@@ -236,6 +237,7 @@ export default function ReminderWatcher() {
             body: note ? `${ev.title}：${note}` : ev.title,
             time: `${pad2(new Date(due).getHours())}:${pad2(new Date(due).getMinutes())}`,
           });
+          markFired(key); // 同 #57：先 push 再 markFired
         }
       } catch {
         return; // IndexedDB 不可用时静默（与 AlarmWatcher 一致）
@@ -271,7 +273,7 @@ export default function ReminderWatcher() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -10, scale: 0.95, transition: { duration: 0.18, ease: 'easeIn' } }}
           transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.9 }}
-          className="pointer-events-none absolute inset-x-0 top-[11px] z-[93] flex justify-center px-2"
+          className="pointer-events-none absolute inset-x-0 top-[11px] z-[92] flex justify-center px-2"
         >
           <button
             type="button"

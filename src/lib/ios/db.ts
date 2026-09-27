@@ -37,6 +37,12 @@ export interface MusicRecord {
   /** 秒 */
   duration: number;
   createdAt: number;
+  /**
+   * 歌词文本（可选，LRC 格式带 [mm:ss.xx] 时间戳，或纯文本）。
+   * 由用户在音乐 App 内手工编辑或导入时填入；旧记录无此字段 = 无歌词。
+   * IndexedDB 新增可选字段无需升版本，向后兼容。
+   */
+  lyrics?: string;
 }
 
 export interface NoteRecord {
@@ -62,6 +68,11 @@ export interface CalendarEventRecord {
   endTime: string;
   note: string;
   createdAt: number;
+  /**
+   * 重复的星期，0=周日..6=周六（[]/undefined=不重复，与 AlarmRecord/ReminderRecord 同语义）。
+   * 旧记录无此字段 = 不重复；IndexedDB 新增可选字段无需升版本。
+   */
+  repeat?: number[];
 }
 
 export interface ChatSessionRecord {
@@ -111,6 +122,13 @@ export interface ReminderRecord {
   dueTime: string;
   createdAt: number;
   completedAt: number | null;
+  /**
+   * 重复的星期，0=周日..6=周六（[]/undefined=不重复，与 AlarmRecord 同语义）。
+   * 用于「每天/工作日/周末/自定义 weekday 多选」重复提醒：到期判定时按 repeat
+   * 字段计算下一次触发（若当日 weekday 不在 repeat 中则跳过当日提醒）。
+   * 旧记录无此字段 = 不重复；IndexedDB 新增可选字段无需升版本，向后兼容。
+   */
+  repeat?: number[];
 }
 
 export interface CallLogRecord {

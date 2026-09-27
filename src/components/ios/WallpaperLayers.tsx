@@ -4,6 +4,28 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode }
 
 /** 模块级缓存：壁纸 URL → 自然宽高比（同一 URL 只解码一次图片） */
 const ratioCache = new Map<string, number>();
+/** LRU 上限（#59）：同一会话内壁纸切换/自定义上传产生大量 URL，无上限会持续增长。16 条够典型多档壁纸往返 */
+const RATIO_CACHE_MAX = 16;
+
+/** LRU 读写：写入时若超限删最旧；命中时把 key 移到末尾（Map 保持插入序，重插即升序）。 */
+function ratioCacheGet(url: string): number | undefined {
+  const v = ratioCache.get(url);
+  if (v !== undefined) {
+    // 命中后重插使其成为最新（Map 的迭代序保留插入顺序，delete + set 即可移到末尾）
+    ratioCache.delete(url);
+    ratioCache.set(url, v);
+  }
+  return v;
+}
+function ratioCacheSet(url: string, ratio: number): void {
+  if (ratioCache.has(url)) ratioCache.delete(url);
+  ratioCache.set(url, ratio);
+  while (ratioCache.size > RATIO_CACHE_MAX) {
+    const oldest = ratioCache.keys().next().value;
+    if (oldest === undefined) break;
+    ratioCache.delete(oldest);
+  }
+}
 
 /** 超采样量（px）：全部图层画在比壳大 4px 的盒内再被壳层 overflow-hidden 裁掉，四边绝不露底色细缝 */
 const OVER = 2;
@@ -24,12 +46,12 @@ export function CustomWallpaperLayers({ url }: { url: string }) {
   // 避免 effect 内同步 setState 触发级联渲染；缓存命中时首次渲染即拿到比例，零闪烁）
   const [ratioState, setRatioState] = useState<{ url: string; ratio: number | null }>(() => ({
     url,
-    ratio: ratioCache.get(url) ?? null,
+    ratio: ratioCacheGet(url) ?? null,
   }));
   if (ratioState.url !== url) {
-    setRatioState({ url, ratio: ratioCache.get(url) ?? null });
+    setRatioState({ url, ratio: ratioCacheGet(url) ?? null });
   }
-  const ratio = ratioState.url === url ? ratioState.ratio : (ratioCache.get(url) ?? null);
+  const ratio = ratioState.url === url ? ratioState.ratio : (ratioCacheGet(url) ?? null);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
 
@@ -41,7 +63,7 @@ export function CustomWallpaperLayers({ url }: { url: string }) {
     img.onload = () => {
       if (!alive || !img.naturalWidth || !img.naturalHeight) return;
       const r = img.naturalWidth / img.naturalHeight;
-      ratioCache.set(url, r);
+      ratioCacheSet(url, r);
       setRatioState({ url, ratio: r });
     };
     img.src = url;

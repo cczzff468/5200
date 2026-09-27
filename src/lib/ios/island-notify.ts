@@ -308,12 +308,34 @@ export async function requestNotifyPermission(): Promise<NotificationPermission 
  * 降级为 App 图标（与旧行为一致）。
  */
 const compositeIconCache = new Map<string, string>();
+/** LRU 上限（#59）：合成图标是 dataURL（约 1~3KB/条），无淘汰上限长会话持续增长。32 条足够多角色×多 App 命中。 */
+const COMPOSITE_ICON_CACHE_MAX = 32;
+
+function compositeIconCacheGet(key: string): string | undefined {
+  const v = compositeIconCache.get(key);
+  if (v !== undefined) {
+    // 命中后重插使其成为最新（Map 迭代序 = 插入序）
+    compositeIconCache.delete(key);
+    compositeIconCache.set(key, v);
+  }
+  return v;
+}
+
+function compositeIconCacheSet(key: string, value: string): void {
+  if (compositeIconCache.has(key)) compositeIconCache.delete(key);
+  compositeIconCache.set(key, value);
+  while (compositeIconCache.size > COMPOSITE_ICON_CACHE_MAX) {
+    const oldest = compositeIconCache.keys().next().value;
+    if (oldest === undefined) break;
+    compositeIconCache.delete(oldest);
+  }
+}
 
 async function buildNotifyIcon(n: IslandNotification): Promise<string> {
   const appIcon = NOTIFY_APP_ICON[n.app];
   if (!n.avatar) return appIcon; // 无头像：直接用 App 图标
   const key = `${n.app}|${n.avatar}`;
-  const cached = compositeIconCache.get(key);
+  const cached = compositeIconCacheGet(key);
   if (cached) return cached;
   try {
     const [avatarImg, appImg] = await Promise.all(
@@ -378,7 +400,7 @@ async function buildNotifyIcon(n: IslandNotification): Promise<string> {
     ctx.drawImage(appImg, bx, by, badge, badge);
     ctx.restore();
     const url = canvas.toDataURL('image/png');
-    compositeIconCache.set(key, url);
+    compositeIconCacheSet(key, url);
     return url;
   } catch {
     return n.avatar;

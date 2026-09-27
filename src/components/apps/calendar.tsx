@@ -74,7 +74,17 @@ interface EventFormState {
   start: string;
   end: string;
   note: string;
+  /** #30：重复 weekday（0=周日..6=周六；空数组=不重复） */
+  repeat: number[];
 }
+
+/** #30：重复预设 */
+const CAL_REPEAT_PRESETS: { key: string; label: string; weekdays: number[] }[] = [
+  { key: 'none', label: '不重复', weekdays: [] },
+  { key: 'daily', label: '每天', weekdays: [0, 1, 2, 3, 4, 5, 6] },
+  { key: 'weekday', label: '工作日', weekdays: [1, 2, 3, 4, 5] },
+  { key: 'weekly', label: '每周', weekdays: [] /* 占位：选每周后按“当前 weekday”设置 */ },
+];
 
 const FIELD_CLASS =
   'mt-1 h-10 w-full rounded-[10px] border border-input bg-transparent px-3 text-[15px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/50 [color-scheme:light] dark:[color-scheme:dark]';
@@ -121,25 +131,6 @@ export default function CalendarApp() {
     return dateKey(n.getFullYear(), n.getMonth(), n.getDate());
   }, []);
 
-  /** date → events 有序映射（全天在前，其余按开始时间） */
-  const eventsByDate = useMemo(() => {
-    const map = new Map<string, CalendarEventRecord[]>();
-    for (const ev of events) {
-      const list = map.get(ev.date);
-      if (list) list.push(ev);
-      else map.set(ev.date, [ev]);
-    }
-    for (const list of map.values()) {
-      list.sort((a, b) => {
-        if (a.startTime === '' && b.startTime !== '') return -1;
-        if (b.startTime === '' && a.startTime !== '') return 1;
-        if (a.startTime !== b.startTime) return a.startTime < b.startTime ? -1 : 1;
-        return a.createdAt - b.createdAt;
-      });
-    }
-    return map;
-  }, [events]);
-
   /** 42 格月网格（固定 6 周，含前后月补位） */
   const cells = useMemo<Cell[]>(() => {
     const first = new Date(viewYM.y, viewYM.m, 1);
@@ -160,6 +151,44 @@ export default function CalendarApp() {
     }
     return out;
   }, [viewYM]);
+
+  /** date → events 有序映射（全天在前，其余按开始时间）。
+   *  #30：含 repeat 字段的事件按 weekday 展开到本月（与下月衔接格）的每个匹配日，
+   *      避免逐日手工建事件——展开副本仅用于月视图展示，不写回 DB。 */
+  const eventsByDate = useMemo(() => {
+    const map = new Map<string, CalendarEventRecord[]>();
+    // 本月（含前后补位格）的日期范围：cells 已生成（lead 之前/next 之后最多 6 周）
+    const seenDates = new Set<string>();
+    for (const c of cells) seenDates.add(c.key);
+    const addEvent = (dateKey: string, ev: CalendarEventRecord) => {
+      const list = map.get(dateKey);
+      if (list) list.push(ev);
+      else map.set(dateKey, [ev]);
+    };
+    for (const ev of events) {
+      // 原始日期始终加入
+      addEvent(ev.date, ev);
+      // #30：repeat 字段非空 → 展开到本月每个匹配 weekday
+      if (ev.repeat && ev.repeat.length > 0) {
+        for (const dk of seenDates) {
+          if (dk === ev.date) continue;
+          const [y, m, d] = dk.split('-').map((v) => parseInt(v, 10));
+          if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) continue;
+          const wd = new Date(y, m - 1, d).getDay();
+          if (ev.repeat.includes(wd)) addEvent(dk, ev);
+        }
+      }
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => {
+        if (a.startTime === '' && b.startTime !== '') return -1;
+        if (b.startTime === '' && a.startTime !== '') return 1;
+        if (a.startTime !== b.startTime) return a.startTime < b.startTime ? -1 : 1;
+        return a.createdAt - b.createdAt;
+      });
+    }
+    return map;
+  }, [events, cells]);
 
   const selectedDayEvents = eventsByDate.get(selectedKey) ?? [];
 
@@ -197,6 +226,7 @@ export default function CalendarApp() {
           start: ev.startTime || '09:00',
           end: ev.endTime || '10:00',
           note: ev.note,
+          repeat: ev.repeat ?? [],
         }
       : {
           id: null,
@@ -207,6 +237,7 @@ export default function CalendarApp() {
           start: '09:00',
           end: '10:00',
           note: '',
+          repeat: [],
         };
     setFormError('');
     setForm(base);
@@ -238,6 +269,7 @@ export default function CalendarApp() {
       setFormError('结束时间需晚于开始时间');
       return;
     }
+    // #30：保存 repeat 字段（“每周”预设选择时 UI 已将其设为当日 weekday 单一数组）
     const rec: CalendarEventRecord = {
       id: form.id ?? genId(),
       title,
@@ -246,6 +278,7 @@ export default function CalendarApp() {
       endTime: form.allDay ? '' : form.end,
       note: form.note.trim(),
       createdAt: form.createdAt,
+      repeat: form.repeat,
     };
     void (async () => {
       try {
@@ -500,6 +533,48 @@ export default function CalendarApp() {
             <div className="mt-3 flex items-center justify-between rounded-[10px] border border-input px-3 py-2">
               <span className="text-[15px]">全天</span>
               <Switch checked={form.allDay} onCheckedChange={(v) => patchForm({ allDay: v })} aria-label="全天" />
+            </div>
+
+            {/* #30：重复选择——不重复/每天/每周/工作日；每周按 form.date 的 weekday 单选 */}
+            <div className="mt-3 rounded-[10px] border border-input px-3 py-2">
+              <div className="text-[15px]">重复</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {CAL_REPEAT_PRESETS.map((p) => {
+                  const active =
+                    (p.key === 'none' && form.repeat.length === 0) ||
+                    (p.key === 'daily' &&
+                      form.repeat.length === 7 &&
+                      p.weekdays.every((d) => form.repeat.includes(d))) ||
+                    (p.key === 'weekday' &&
+                      form.repeat.length === 5 &&
+                      p.weekdays.every((d) => form.repeat.includes(d))) ||
+                    (p.key === 'weekly' &&
+                      form.repeat.length === 1 &&
+                      form.repeat[0] === new Date(form.date).getDay());
+                  return (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => {
+                        if (p.key === 'weekly') {
+                          const wd = new Date(form.date).getDay();
+                          patchForm({ repeat: [wd] });
+                        } else {
+                          patchForm({ repeat: p.weekdays });
+                        }
+                      }}
+                      aria-pressed={active}
+                      className={`rounded-full px-3 py-[5px] text-[12px] leading-none transition-colors ${
+                        active
+                          ? 'bg-foreground font-medium text-background'
+                          : 'bg-muted text-foreground/80 active:opacity-60'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {!form.allDay && (

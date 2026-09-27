@@ -202,12 +202,19 @@ function sseToTextStream(upstreamBody: ReadableStream<Uint8Array>): ReadableStre
         } catch {
           // 已关闭
         }
-      } catch {
-        // 上游中断或客户端断开：静默结束，不报错
+      } catch (err) {
+        // 上游异常：把错误传播到下游 reader.read()，让客户端 streamOnce 外层 catch 捕获并
+        // 走 SDK 兜底（配合 chat-stream-store 重建 raw/scanner 后由 SDK 文本接管）；
+        // 不再静默 close()，否则客户端会把「截断回复」当成完整回复落地
         try {
-          controller.close();
+          controller.error(err);
         } catch {
-          // 已关闭
+          // 已关闭/已取消：尽力传播
+          try {
+            controller.close();
+          } catch {
+            // 已关闭
+          }
         }
       }
     },
@@ -277,7 +284,12 @@ async function proxyToUpstream(config: UpstreamConfig, messages: ChatApiMessage[
     let lastErr: unknown = null;
     for (const endpoint of candidates) {
       try {
-        const res = await fetch(endpoint, { method: 'POST', headers, body: makeBody() });
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: makeBody(),
+          signal: AbortSignal.timeout(60_000),
+        });
         if (res.status === 404 && endpoint !== candidates[candidates.length - 1]) {
           continue; // 路径不存在：尝试下一个候选端点
         }
@@ -452,8 +464,8 @@ async function sdkChat(messages: ChatApiMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   const completion = await zai.chat.completions.create({
-    // SDK 不接收 system 角色：人设并入 assistant 首条（与 server-llm.ts 同策略）
-    messages: messages.map((m) => ({ role: m.role === 'system' ? ('assistant' as const) : m.role, content: m.content })),
+    // z-ai SDK 的 ChatMessage 类型实际接受 system 角色，直接传人设/世界书/记忆 system 块
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
     thinking: { type: 'disabled' },
   });
   const text = completion.choices[0]?.message?.content ?? '';
@@ -494,8 +506,13 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  // 只保留最近 40 条，防止超长上下文
-  const messages: ChatApiMessage[] = (root.messages as ChatApiMessage[]).slice(-40);
+  // 上下文裁剪：保留首条 system（人设 + 世界书 + 记忆块）+ 末 39 条，避免 App 传入 >40 条时
+  // 直接 slice(-40) 裁掉首条 system 导致 AI 失忆；首条非 system 时仍走 slice(-40)
+  const allMsgs = root.messages as ChatApiMessage[];
+  const messages: ChatApiMessage[] =
+    allMsgs.length > 40 && allMsgs[0]?.role === 'system'
+      ? allMsgs.slice(0, 1).concat(allMsgs.slice(-39))
+      : allMsgs.slice(-40);
 
   // forceSdk：前端在代理 + 浏览器直连都失败后的最终兜底请求（直接用内置模型生成）
   if (root.forceSdk === true) {

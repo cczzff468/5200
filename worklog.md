@@ -9182,3 +9182,225 @@ Work Log:
 Stage Summary:
 - 交付状态：项目文件已从 GitHub 全量同步到 /home/z/my-project；git origin 已用 PAT 配置（push 可直推 origin/main）；bun install + prisma generate 完成；dev server 后台运行中（http://localhost:3000，HTTP 200）；Agent Browser E2E 验证锁屏→解锁→主页→打开 App 全链路 PASS
 - 环境备注：仓库自带已播种 db/custom.db（含 Contact/WxBackground 等服务端持久数据，客户端 IndexedDB/localStorage 在新浏览器 profile 下为空属预期）；/api/weather 外部依赖在沙箱不可达返 502，不影响 iOS 模拟主体功能；.env 保留沙箱 DATABASE_URL，未触碰；本地 HEAD 与 origin/main 同步 e50e181，等待用户指示后续要修改/新增的功能
+
+---
+Task ID: 42-a
+Agent: AI/记忆/人设修复子代理
+Task: 修复 AI/LLM/记忆/人设/翻译/识图模块的 20 条审计问题（#2-#84）
+
+Work Log:
+- #2 三处删除 system→assistant 映射：server-llm.ts:97 / chat/route.ts:456 / translate/route.ts:142，直接传 system 角色（z-ai SDK 的 ChatMessage 类型实际接受 system，见 node_modules/z-ai-web-dev-sdk/dist/index.d.ts）
+- #3 四处上游 fetch 加 AbortSignal.timeout(60_000)：server-llm.ts:66（upstreamComplete）/ chat/route.ts:280（proxyToUpstream tryCandidates）/ vision/route.ts:212 / translate/route.ts:245；超时抛 AbortError 由既有 catch 接住走 SDK 兜底
+- #4 chat-stream-store.ts:runStream 的 catch 块在调 sdkFallbackOnce 前先 raw='' 并重建 scanner（const→let），避免「半截上游文本 + 完整 SDK 文本」拼接乱文；旧分段器已投递的分段保留上屏、不计入新分段器的条数计数
+- #5 chat/route.ts:sseToTextStream 的 catch 由静默 controller.close() 改为 controller.error()，上游异常时把 error 传播到下游 reader.read() → 客户端 streamOnce 外层 catch → sdkFallbackOnce（配合 #4 清空 raw/scanner 后让 SDK 文本接管）
+- #6 memory.ts:appendFragments 的「seen 命中后查 list 漏 added」穿透 bug：step 1 精确重复判定改为同时查 list 与 added；step 2 相似判定的 list 改为 [...list, ...added]，避免本批次同 key/相似的碎片穿透到 step 3 重复入库
+- #7 memory.ts:callMemoryApi fetch 加 signal: AbortSignal.timeout(75_000)；memAfterAiTurn 的 IIFE 外层加 setTimeout 90s 看门狗强制 inflight.delete(guard) 兜底，finally 内 clearTimeout + inflight.delete 幂等清理
+- #40 ai-delivery.ts:isPageHidden 分支由同步 while 一次性投完改为分块异步：CHUNK=5 条同步处理后 setTimeout(0) 让出事件循环，30 条切成 6 块、每块约几十 ms，主线程不冻结；保持投递顺序不变
+- #45 chat-stream-store.ts:blockSessionOf 补注释：群聊会话无拉黑关系天然放行（拉黑按 App×单联系人 ID 隔离）；AI 助手会话同理（sms:assistant/assistant）
+- #68 chat/route.ts:messages 处理由 slice(-40) 改为「首条 system + 末 39 条」，避免 App 传入 >40 条时裁掉首条 system（人设/世界书/记忆块）致 AI 失忆；首条非 system 时仍走 slice(-40)
+- #69 memory.ts:memAfterAiTurn 达到间隔后先评估 convo 是否足够，群聊短会话（convo < 4）保留计数等下次（不清零），避免短群聊永远到不了 interval 不沉淀记忆；buildConvo 与跨 App 兜底提前到清零前判断，IIFE 内复用外层 convo
+- #70 memory.ts:memDedupeNow 由 while(changed)+双层 for（O(n²×合并次数)≈O(n³)）改为单次两两比较去重 + 200 条预算上限；用 Set 跟踪 removed，最后一次性过滤；超出预算部分原样保留
+- #71 translate/route.ts:lang 校验错误文案由「lang 不能为空」改为「lang 不能为空或过长（≤30 字符）」，统一空与过长场景
+- #72 worldbook.ts:超预算截断提示由「附到 lastKey 残留位置」改为独立附到截断发生的位置（truncatedKey），即便该位置 kept 为空也注入提示行，避免提示附到上一个有内容的位置块
+- #73 chat/route.ts:核查后确认既有 textResponse helper 已为所有三处 SDK 兜底路径（forceSdk/no-config/upstream-fail catch）加 X-Reply-Via: sdk-fallback header（line 469）；无需新增
+- #74 ai-delivery.ts:pump 在 !batch 分支由 running.delete 改为 running.delete + queues.delete(sessionKey)，避免队列空时 Map 保留空数组引用永不释放
+- #75 persona.ts:buildPersonaSystemPrompt 在 userName 为空回退字面量「用户」时，注入占位说明行（「机主尚未设置称呼，'用户'只是占位词…请按你与对方的关系自然地称呼对方，不要把'用户'当成对方的真名使用」），AI 不再把「用户」当真名
+- #76 api/memory/extract/route.ts:saneTimeStr 由 Date.parse(s.replace(' ', 'T'))（按服务器本地时区）改为 parseBeijingTime（按北京时间 UTC+8 解析），与客户端 parseMemTime 同口径；YYYY-MM-DD 补 T00:00:00+08:00，YYYY-MM-DD HH:mm 替换空格为 T 加 +08:00；已带时区标识原样解析；collect 内 etMs/exMs 比较也用 parseBeijingTime 保持口径一致
+- #77 worldbook.ts:超预算截断由「按 '\n\n' 还原条目」改为「保留每块对应的原始 entries 列表逐条累加」，避免条目内容本身含 '\n\n' 被误拆成多条目造成内容截断在错误位置；WbGroupInfo 接口 { formatted, entries } 同时承载格式化字符串与原始条目
+- #83 api/chat/bg/route.ts:cancelled Map 加 MAX_CANCELLED=50 上限，cancel 时超过上限淘汰最旧条目（旧 cancel 标记的对应 generate 早已完成，淘汰无副作用）
+- #84 api/chat/bg/route.ts:MAX_ITEMS_PER_SESSION 由 20 调高到 50，避免单会话 pending >20 条触发丢最早条时 Web Push 通知已发出但重开网页看不到对应消息（通知与 pending 不一致）
+- 验证：bunx tsc --noEmit 全项目当前仍有并行子代理 WIP 错误（calendar/reminders/AppSwitcher/chat.tsx 等非本任务文件），过滤本任务 14 个文件后零错误；bunx eslint 14 个文件 exit 0 零 error 零 warning；未启动/重启 dev server、未 git 操作、未碰禁改文件
+
+Stage Summary:
+- 修复文件清单：src/lib/server-llm.ts、src/lib/memory.ts、src/lib/chat-stream-store.ts、src/lib/ios/persona.ts、src/lib/ios/ai-delivery.ts、src/lib/ios/worldbook.ts、src/app/api/chat/route.ts、src/app/api/chat/bg/route.ts、src/app/api/memory/extract/route.ts、src/app/api/translate/route.ts、src/app/api/vision/route.ts（共 11 个文件；summarize/tts/stt 路由本任务无需改动）
+- 已修复问题编号：#2,#3,#4,#5,#6,#7,#40,#45,#68,#69,#70,#71,#72,#73（核查后确认既有实现已满足）,#74,#75,#76,#77,#83,#84（共 20 条全部完成）
+- 未完成/跳过：无；#73 经核查既有 textResponse helper 已含 X-Reply-Via: sdk-fallback header，无需新增代码
+- tsc/eslint 状态：本任务 14 个文件 tsc 零错误、eslint exit 0 零 error 零 warning；全项目 tsc 残留错误均在并行子代理文件（calendar/reminders/AppSwitcher/chat.tsx 等），不在本任务 14 个文件范围内
+
+---
+Task ID: 42-c
+Agent: 电话/通话修复子代理
+Task: 修复电话/通话/AI主动来电模块的 16 条审计问题（#14-#80）
+
+Work Log:
+- #14 phone.tsx:1099 挂断续聊 replyCount 去掉第二参数 `, 1`，让全局 DEFAULT_REPLY_COUNT=5 生效（与 chat.tsx:418/1214、proactive-call.ts:325 默认口径一致）；同步更新注释（「未设置时同信息 App 回退 1 条」→「未设置走全局 DEFAULT_REPLY_COUNT=5」）
+- #15 phone.tsx:1066-1103 挂断续聊 requestCallFollowup 调用补 crossAppBlock/groupBlock + multiApp 三字段（与 chat-call.ts:494-498 同位路径同源）：hangup 内联读 crossCtxRef.current（runTurn:793-797 已构建，未构建时现算 buildCrossContextBlocks 兑底），multiApp 取 getMemSettings(peerContact.id).share（memory.ts 只读不改）
+- #16 proactive-call.ts:408-411 候选筛选增加 `!loadBlock('wx'|'qq'|'sms', c.id).byUser` 三 App 短路（任一 App byUser=true 即跳过，loadBlock 从 block-state.ts 导入只读不改）
+- #17 proactive-call.ts:265-347 recordMissedPhoneCall 落库前先 `loadBlock('sms', contactId).byUser` 短路：call-logs(missed) 仍写留历史记录，但 voicemails（AI 留言）被拦截——避免「我已把你拉黑，你却还在给我语音留言」的体验断裂
+- #18 chat-call.ts:1304-1320 生命周期 effect cleanup 增加 `if (!endedRef.current) finishRef.current(incoming?missed-in : dialing?cancel : hangup)` 再置 endedRef（与 finishByReplacement:1205 同款三态映射）；新增 finishRef（useEffect 同步最新 finish，deps=[] 避免重跑初始化）——浏览器关闭/页面刷新/PhoneShell 卸载时进行中通话也落卡片+续聊+记忆总结
+- #19 phone.tsx:3730 startCall 守卫从静默 `if (callTarget) return;` 改为 `showToast('通话进行中，请先挂断')` 并增加 `useGlobalCall.getState().session` 守卫（防与微信/QQ 通话并发导致音频叠加）；导入 useGlobalCall from '@/lib/ios/global-call'
+- #34 proactive-call.ts:401-406 守卫链增加 `if (useUI.getState().alarmRinging) return;`（useUI 已从 store.ts 导入只读不改）；触发前再守卫一次（决策期间可能刚响起来）同样短路
+- #49 phone.tsx:1241-1398 CallScreen mount effect deps `[]` 捕获初始 runTurn（含 apiConfig）问题：新增 runTurnRef（useRef + 同步最新 runTurn），mount effect 内 `void runTurn(null)` 两处改 `void runTurnRef.current(null)`（hangupRef 同款模式）——通话中改 API 设置后首轮问候用最新 apiConfig
+- #50 phone.tsx:1680 sendText 守卫从 state `busy` 改为 `busyRef.current`（防止并发 runTurn 毫秒级窗口：state 异步，两处同时点可都读到 false），deps 同步去掉 busy
+- #51 chat-call.ts:1218-1222 hangup 三态映射改与 finishByReplacement:1205 同款（incoming→missed-in / dialing→cancel / active→hangup）——修复宿主在 incoming 相位调 call.hangup 把从未接通的电话记成 endReason='hangup' → connected=true 的语义错位
+- #52 proactive-call.ts:467-474 setCooldown 移到守卫之后：决策失败（null）→wait 6h；wait/skip→对应冷却；call 进入守卫分支：useIncomingCall.call/useGlobalCall.session/alarmRinging 命中 → setShortCooldown(5min) 不写 6h；真拨打 → setCooldown('call') 6h。新增 SHORT_COOLDOWN_MS=5min 常量 + setShortCooldown（kv record 带 window 字段优先于 action 推导，isCoolingDown 同步识别）
+- #53 proactive-call.ts:436-440 「最久没聊」单一最优选取改为加权随机：candidates[] 收集合格者（weight=gap 毫秒），累计权重 + Math.random() 落点选中——避免同一最久者每 90s 被反复占用直到进入冷却，其余合格者饿死
+- #54 phone.tsx:1042-1048 挂断时 transcript 空的接通场景补占位：新增 callArchiveText = transcript || (wasConnected && contact?.id ? '（通话刚接通即结束，没有对话内容）' : '')，onVoicemail 增加 `else if (callArchiveText)` 分支落一条 kind='call' 存档留言（与 followup 留言 kind='voicemail' 区分）
+- #78 proactive-call.ts:318 recordMissedPhoneCall 内 memRecallBlock(contact.id, 'sms', …) 改 'phone'（与 phone.tsx:1089 挂断续聊一致，电话通话的 missed 留言记忆召回应走 phone app）
+- #79 proactive-call.ts:351-367 contactPayloadOf 增加 npcExtra 参数（默认 null），返回对象尾部 `...(npcExtra ?? {})`（与 phone.tsx:847 同模式）；tickInner 在调用前 `buildNpcPromptExtra(contact, allContacts)` 现算传入（allContacts = listContacts() 全量，包含 NPC/USER/配角）——NPC 角色的 ownerLabel/npcCircle/ownerCard/backgroundNotes 在主动来电决策里也注入
+- #80 phone.tsx:868 runTurn body 内 proactiveContext 从「每轮 always 注入」改为「仅首轮 greeting 注入」：`proactiveContext: userText === null && !proactive ? (target.proactiveContext || undefined) : undefined`——避免第 N 轮重复「这通电话是你主动打来的，你想：X」过度框定话题走向，后续轮次靠 history 自带语境
+- 验证：bunx eslint 23 个分配文件 exit 0（零 error 零 warning）；bunx tsc --noEmit 我负责的 3 个文件（phone.tsx/chat-call.ts/proactive-call.ts）零错误；剩余 tsc 错误仅在 src/components/apps/calendar.tsx 与 reminders.tsx（其他子代理并行 WIP，不在本任务分配文件清单内，按禁改约定未触碰）；dev server 未重启、未 git、未运行 bun run build/db:push
+
+Stage Summary:
+- 修复文件清单：src/components/apps/phone.tsx（+70 行，#14/#15/#19/#49/#50/#54/#80 + useGlobalCall 导入 + runTurnRef）、src/lib/ios/chat-call.ts（+31 行，#18 finishRef+cleanup 三态收尾、#51 hangup 三态映射）、src/lib/ios/proactive-call.ts（+108 行，#16 byUser 候选筛选、#17 voicemails 拉黑守卫、#34 alarmRinging 守卫、#52 setShortCooldown+冷却重排、#53 加权随机选取、#78 memRecallBlock app='phone'、#79 contactPayloadOf NPC 字段）
+- 已修复问题编号：#14, #15, #16, #17, #18, #19, #34, #49, #50, #51, #52, #53, #54, #78, #79, #80（16 条全部完成）
+- 未完成/跳过：无（16 条全部完成；calendar.tsx/reminders.tsx 的 tsc 错误属其他子代理 WIP，按禁改约定未触碰）
+- tsc/eslint 状态：分配的 23 个文件 eslint 零 error；3 个本任务改动文件 tsc 零错误；仓库级 tsc exit 2 但所有错误集中在非本任务文件（calendar.tsx/reminders.tsx），不影响本任务交付质量
+
+---
+Task ID: 42-d
+Agent: 系统层修复子代理
+Task: 修复锁屏/设置/通知/壁纸/Push/天气等系统层模块的 13 条审计问题（#1-#64）
+
+Work Log:
+- #1（P0，store.ts + PhoneShell.tsx）：openSwitcher 内追加 `if (useIncomingCall.getState().call) return;`，store.ts 顶部 import useIncomingCall（只读不改 incoming-call.ts）；PhoneShell onDown/onMove 守卫并列加 `useIncomingCall.getState().call` 与 `ui.callActive`（通话中接听后也防边缘上滑）
+- #31（weather/route.ts + geocode/route.ts）：catch 块内若 `cache.get(key)` 命中过期条目优先返回 + `stale: true` 标记，502 仅在无任何缓存时使用，沙箱上游被回收后天气小组件仍能展示旧数据
+- #33（ReminderWatcher.tsx）：横幅 z-index 从 z-[93] 降至 z-[92]，IslandNotification 保持 z-[93]，避免同时触发时 DOM 后渲染的 ReminderWatcher 盖住灵动岛通知卡
+- #55（push/route.ts）：新增模块级 `subsInflight: Promise<void>` 单飞链 + `runSubsMutation` 包装函数，POST/DELETE 都接到上一笔尾巴后立即替换本笔，串行化读-改-写防后写覆盖前写
+- #56（push/route.ts）：POST 入参最小形状校验——endpoint 非空字符串 + keys.p256dh/auth 均为字符串，缺失返 400 不占用订阅槽位
+- #57（ReminderWatcher.tsx）：markFired(key) 从 notices.push 之前移到之后（reminders/events 双 for 各处），markFired 抛错时通知已入数组下一轮 setQueue 仍会展示，不再出现「已标记 fired 但横幅未弹」的永久丢失
+- #58（LockScreen.tsx）：新增 MAX_FAILS=5 + LOCK_MS=60s + failCount/lockUntil state + lockedOut/lockRemaining 派生；verify 错误时累计 failCount 达 5 触发 lockUntil=now+60s 并清零 failCount，errText 显示「请 N 秒后再试」倒计时（useNow 每秒驱动重渲染），PasscodePad disabled + 「忘记密码？」按钮隐藏；解锁成功/锁定到期 useEffect 自动清零（依赖 [lockUntil, now]）
+- #59（WallpaperLayers.tsx + island-notify.ts）：ratioCache 加 LRU 上限 16 条 + ratioCacheGet/Set 重插升序淘汰最旧；compositeIconCache 加 LRU 上限 32 条 + compositeIconCacheGet/Set 同款 LRU
+- #60（store.ts load）：apiConfig.temperature 校验加范围守卫 `v.temperature >= 0 && v.temperature <= 2`，越界回退 DEFAULT_API_CONFIG.temperature，防 999 被照单全收导致下游请求被上游拒
+- #61（secure-store.ts）：getKey() 改为「进程内 keyPromise 仅并发去重、落定后立即清掉缓存」模式——下次调用重新读 IndexedDB，检测到 cryptoKey 被外部清掉时自动生成新 key 落库（旧密文 decryptValue 静默 null 走默认值），不再持旧密钥永续加密
+- #62（idb-kv.ts kvGet）：极早期同步读（!readyDone && idbAvailable）不再回退读 localStorage，一律返回 null，避免注水前读到迁移尚未发生的陈旧值与注水后 IndexedDB 值不一致导致后续 kvSet 覆盖新值丢失
+- #63（settings.tsx LockPage）：Switch onCheckedChange 关锁屏时若 `lockConfig.enabled && lockConfig.code` 先弹 AlertDialog 确认框（仿 themes.tsx「恢复全部默认图标」对话框样式），用户显式「关闭锁屏」按钮才调用 setLockScreen(false)，避免误关丢失已设密码
+- #64（AppSwitcher.tsx onScroll）：新增 scrollRafRef + requestAnimationFrame 节流，一个 frame 内多次 scroll 事件合批为单次 setActiveIdx；卸载 useEffect 清理挂起的 rAF
+- 环境异常备注：本轮修复过程中曾观察到除 AppSwitcher.tsx 外其余 12 个改动文件的编辑被外部 reset（git reflog 显示 HEAD@{0/1}: reset: moving to HEAD），所有 Edit 工具调用均报告成功但实际未持久化，已一次性重应用全部 13 条修复并 grep 验证 marker 齐全；持续验证未再发生回滚
+
+Stage Summary:
+- 修复文件清单：src/lib/ios/store.ts、src/components/ios/PhoneShell.tsx、src/app/api/weather/route.ts、src/app/api/weather/geocode/route.ts、src/components/ios/ReminderWatcher.tsx、src/app/api/push/route.ts、src/components/ios/LockScreen.tsx、src/components/ios/WallpaperLayers.tsx、src/lib/ios/island-notify.ts、src/lib/ios/secure-store.ts、src/lib/ios/idb-kv.ts、src/components/apps/settings.tsx、src/components/ios/AppSwitcher.tsx
+- 已修复问题编号：#1、#31、#33、#55、#56、#57、#58、#59、#60、#61、#62、#63、#64（共 13 条全部完成）
+- 未完成/跳过：无
+- tsc/eslint 状态：本任务 13 个文件涉及的源码 eslint 零 error；bunx tsc --noEmit 仅在 browser.tsx/calendar.tsx/reminders.tsx 三处报错（均不在本任务可改文件清单内，为并行代理 WIP 未完成，非本任务改动引入）
+
+---
+Task ID: 42-b
+Agent: 聊天 App 修复子代理
+Task: 修复微信/QQ/信息三端聊天模块的 20 条审计问题（#8-#82）
+
+Work Log:
+- #8 群聊输入框 isComposing 守卫：wx-group.tsx:4753 与 qq-group.tsx:4386 的 onKeyDown 已补 `!e.nativeEvent.isComposing`，中文 IME 选词回车不再误发半截拼音（参照 wechat.tsx:6512 / qq.tsx:4983 单聊写法）
+- #9 chat.tsx tryFlushQueuedTurns 批量合并：原本 shift 一条 kick 跑一个回合，busy 中连发 N 条触发 N 个串行补跑回合（AI 看到自己上一回复产出冗余「嗯」「还有」）。现改为清空整批 turns，event 用 '\n' 合并成单个 sysEvent，dispatch 标志归零后只跑一回合（对齐 wechat.tsx:4074 / qq.tsx:2767）
+- #10 chat-settings.tsx 拉黑开关文案与注释更新：两处（ChatSettingsPage 与 SmsChatSettingsPage）注释「拉黑不拦截消息」与描述「你们仍可以互相发消息」均改为「拉黑后 AI 不能给你发消息，仅可通过申请卡回应」（40-a 重构后真实行为）
+- #11 三端 triggerAiVoiceCall byUser 守卫：chat.tsx/wechat.tsx/qq.tsx 在 finalize 前补 `loadBlock(app, contactId).byUser` 守卫，byUser=true 时跳过来电触发（wantCallSeenRef.current=false + 提前 return），避免流式中已发标记后用户拉黑、finalize 仍弹来电 UI 打扰
+- #12 群聊 del/recall/saveEdit/batchDelete 补 isAiDelivering：wx-group.tsx 与 qq-group.tsx 各四处守卫由 `runningRef.current || isChatStreaming(sKey)` 扩为 `runningRef.current || isChatStreaming(sKey) || isAiDelivering(sKey)`，与单聊一致（连发投递中也禁止删/撤/编辑）
+- #13 AI 主动来电冷却写入移到双查通过之后：chat.tsx/wechat.tsx/qq.tsx 三处原本 `localStorage.setItem(vc-last)` 写在 setTimeout 之前（1200ms 后才双查），双查失败整跳时冷却已消费但未真打。现冷却写入移到双查通过之后的同步块内，双查失败不消费冷却
+- #35 wechat.tsx/qq.tsx runAiTurn 改 msgsRef 模式：wechat.tsx 与 qq.tsx 新增 `const msgsRef = useRef(msgs); useEffect(() => { msgsRef.current = msgs; }, [msgs]);`，runAiTurn 内部 `baseMsgs ?? msgs` / `priorMsgs = baseMsgs ?? msgs` 均改 `msgsRef.current`，deps 移除 msgs——每条消息变化不再重建 runAiTurn 实例（超大文件性能隐患消除）；wechat.tsx deps 现 `[apiConfig, me, ownerName, peer, contacts, sessionKey, openVoiceCall]`，qq.tsx deps 现 `[peer, me, apiConfig, ownerName, contacts, sessionKey, openVoiceCall, deliverAiMsg, buildReplyMsgs]`
+- #36 group-social.ts sendGroupOpening 开始前再核群已解散/已接收：`if (isChatStreaming(sKey)) return;` 之后补 `const cur1 = getGroup(g.id); if (!cur1) return;`（群被拒绝卡片后本机解散则不发，节省流式请求）+ `if (loadGroupMsgs(g.id).some((m) => m.role === 'me')) return;`（用户已先发话则让 runGroupTurn 接管，避免与用户首条消息竞争同一 sKey 被 beginChatStream 互斥拒绝）
+- #37 block-state.ts setUserBlock 缺 byUserAt 兜底归档：旧数据只缺 byUserAt 时用 `Date.now()` 兜底归档进 Hist（保留缺 until 时不归档的语义边界，但允许「只有 byUserUntil 无 byUserAt」的旧数据进 Hist，旧区间不再丢）
+- #38 chat-rich.ts 群红包最小单份兜底：parseMarker 红包分支补最小单份金额兜底——若 `amount/count < 0.01` 则按 `Math.max(1, Math.ceil(amount/0.01))` 回退 count，避免 AI 误写 `[红包:1:100:...]` 拆 100 份 ¥0.01 刷屏（最低单份 ¥0.01）；总金额 < 0.01 时退化为 1 份
+- #39 chat-settings.tsx 拉黑申请计数重置入口：block-state.ts 新增 `resetBlockReqCount(app, contactId)` 函数（清零 reqCount + rejectedAt，其他拉黑状态不动）；chat-settings.tsx 两处拉黑开关下增加「重置申请计数」按钮（blockReqCount>0 且提供 onResetBlockReqCount 时显示，testid 含 wx/qq/sms-settings-reset-block-req，附副标题显示「对方已申请被拒 N 次」/「对方已被拒达到上限，彻底沉默」）；chat.tsx/wechat.tsx/qq.tsx 三端都新增 resetBlockReqCountFromSettings 回调并传 props
+- #41 npc-bond.ts bondNotesFor 关键词长度放宽：原 `filter(k => k.length >= 2)` 漏掉中文单字人名（「凡」「安」），改为按字符类型分支：含 CJK 字符的关键词允许单字（`/[\u4e00-\u9fff]/.test(k)`），纯 ASCII 仍 ≥2（避免「a」「1」噪声）
+- #42 死代码 stickersOn?seg 清理（注释标注）：chat.tsx/wechat.tsx/qq.tsx 三处在 byUser continue 之后加显式注释「下方 segs/stripEmojiText 仅正常模式（byUser=false）执行——byUser continue 上面已拦，不再在三元里再判 byUser；保留 stickersOn 三元用于表情开关关闭时剥 emoji」
+- #43 voice-input.tsx Safari audio/mp4 兜底：原 `mimeRef.current.includes('audio') ? mimeRef.current : 'audio/webm'` 的 webm 兜底不适合 Safari（实际录 audio/mp4）。新增 fallbackMime 计算——UA 含 Safari/WebKit 且不含 Chrome 时返 'audio/mp4'，其他返 'audio/webm'
+- #44 chat-settings.tsx ChatVoicePage previewBuiltin 函数式 setState：原 `setPreviewId(null)` 与 `setPreviewId(id)` 在同一同步块被 React 合并为最终 id，onEnd/onError 回调里 setPreviewId(null) 可能清掉刚换的 id。改为 `setPreviewId(prev => prev === id ? (stopBuiltinSpeech(), null) : (stopBuiltinSpeech(), void speakBuiltin(...), id))` 函数式 setState + 回调里 `setPreviewId(p => p === id ? null : p)`，避免清掉刚换的 id
+- #46 group-social.ts parseMemberNames 精确优先级：原 `c.name === n || c.name.includes(n) || n.includes(c.name)` 三档并列，若两个候选名互为子串（「红红」与「红红2」）解析「红红」时先匹配到列表顺序首位。改为按 exact → startsWith → includes 逐级回退，保证短名优先匹配到精确同名的候选
+- #47 api/moments/generate/route.ts 统一 stripEmojiText：原 `kind === 'post' ? stripEmojiText(cleanContent(text)) : cleanContent(text)` post 强剥 emoji 但 comment/reply 不剥。改为统一 `stripEmojiText(cleanContent(text))`，朋友圈文字干净（comment/reply 也剥 emoji）
+- #48 wechat-wallet.tsx 支付密码 5 次失败 30s 锁定：新增 `WX_LS_PAY_PWD_LOCK` localStorage 键 + `wxLoadPayPwdLock/wxSavePayPwdLock/wxClearPayPwdLock/wxRecordPayPwdFail` 函数；WxPwdSheet 新增 `locked?: boolean` prop（锁定时 push 守卫 return + 键位 disabled + 视觉灰显 keyBtnLocked）；WxPayPwdGate 集成 lock state + 倒计时 useEffect（每秒刷新 remainSec，锁到期自动清零）+ onComplete 错误时 wxRecordPayPwdFail 累加 fails，达 5 次设 lockedUntil=now+30s，正确时 wxClearPayPwdLock；hint 显示「密码错误次数过多，请 N 秒后再试」+ 平时显示「已失败 N 次，5 次后将锁定 30 秒」
+- #81 chat-rich.ts 禁言多人解析警告：RichAction 新增 `warn?: string` 字段；parseMarker mute-member 分支检测 segs[1] 是否合法时长（DURATION_RE = 数字+单位 或 永久/infinite），不合法则当人名收集到 extraNames，parser 在 warn 字段记录「单次只能禁言一名成员，已忽略多余成员：X、Y」；wx-group.tsx 与 qq-group.tsx 的 mute-member 执行分支补 `if (action.warn) onToast(action.warn)`，让用户看到 AI 误写多人时的截断提示（不影响禁言动作本身）
+- #82 block-state.ts applyCharBlockAction request 缺理由不发起：原 `(reason ?? '').trim().slice(0, 80) || '想和你和好'` 强制落默认理由，AI 输出空标记 `[申请解除拉黑:]` 时与实际意图不符。改为 `reasonTrim = (reason ?? '').trim().slice(0, 80); if (!reasonTrim) return { entry: cur, changed: false, reqCreated: false };` —— 缺理由时不发起申请（changed=false，让 AI 下轮重写）
+
+Stage Summary:
+- 修复文件清单：src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat-settings.tsx、src/components/apps/voice-input.tsx、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx、src/components/apps/wechat-wallet.tsx、src/lib/ios/block-state.ts、src/lib/chat-rich.ts、src/lib/ios/group-social.ts、src/lib/ios/npc-bond.ts、src/app/api/moments/generate/route.ts
+- 已修复问题编号：#8, #9, #10, #11, #12, #13, #35, #36, #37, #38, #39, #41, #42, #43, #44, #46, #47, #48, #81, #82（共 20 条全部完成）
+- 未完成/跳过：全部完成
+- tsc/eslint 状态：bunx tsc --noEmit 全仓 exit 0；bunx eslint 上述 13 文件 + 其余可改文件（voice-bubble/forward-sheet/sticker-batch/wx-icons/chat-flags/chat-media-rules/group-admin/groups）零 error 零 warning（仅 qq.tsx 因超大文件 babel deopt 提示，非错误）
+
+---
+Task ID: 42-e
+Agent: 其他 App 修复子代理
+Task: 修复相册/计算器/时钟/音乐/浏览器/文件/提醒/天气等 App 的 21 条审计问题（#20-#90）
+
+Work Log:
+- 读取 worklog 末尾（Task 39/40/41 背景），核对 db.ts 是 idb 而非 Dexie；逐文件 Read 确认行号上下文
+- #23 calculator.tsx：PState 加 pendingNeg?: boolean；case 'neg' 在 typing=false 且 pendOp 已设时 toggle pendingNeg；case 'digit'/'dot' 在 !typing 时按 pendingNeg 拼 '-' 到新操作数；case 'op'/'eq'/'pct'/'clear' 在 compute b 时乘 (pendingNeg?-1:1)，结尾清零 pendingNeg。5 + +/- 3 = 2 ✓
+- #20 clock.tsx：check() 内对 repeat.length===0 的命中闹钟 `void localDB.put('alarms', { ...a, enabled: false })` 写回禁用，firedKey 仍登记防当日重响
+- #66 clock.tsx：模块级 firedKeyExpireDays=7 + pruneFiredKeys()（按 key 末尾 YYYY-MM-DD 与 cutoff 比较），每次 check() 末尾调用清理
+- #67 clock.tsx：模块级 pendingRingers: AlarmRecord[]；check() 收集同分钟所有命中闹钟到 matched 数组，首只 beginRing，rest 压 pendingRingers；beginRingRef 暴露给 stop()/auto-stop，stop 时 shift 队列续响下一只，否则收起覆盖层
+- #21 music.tsx：模块级 playedShuffleIds Set；pickNextId 优先返回未播放过的；ended 事件在 repeat==='off' && shuffle 时若 playedShuffleIds 覆盖全库则停止并 clear；setShuffle 开关时重置集合
+- #22 music.tsx：模块级 playHistory string[]；play(id) 切歌前 push 当前 currentId；shuffle prev 时若 currentTime<=3 则 pop 历史栈返回上一首，栈空 fallback 随机
+- #26 music.tsx + db.ts：MusicRecord 加 lyrics?: string；新增 parseLyrics() 解析 [mm:ss.xx] LRC 时间戳；PlayerView 顶部新增 Mic2 歌词切换按钮（无歌词置灰），开启时 LyricsPanel 替换封面圆盘区，按 position 同步高亮当前行 + smooth 滚动居中
+- #88 music.tsx：handleDelete 加 window.confirm 二次确认（与 photos.tsx 同模式）
+- #24 reminders.tsx + db.ts：ReminderRecord 加 repeat?: number[]；REPEAT_PRESETS（不重复/每天/工作日/周末）+ 自定义 weekday 多选 UI；repeatLabel 显示「每天/工作日/周一周三」；mount 时同步重复提醒 dueDate 到下一个匹配 weekday（ReminderWatcher 只读不改、只看 dueDate+dueTime，由本同步驱动）
+- #25 reminders.tsx：mount 时静默 Notification.requestPermission()；新增本地 useEffect 10s 轮询，document.visible 且 permission==='granted' 时，对到期（now-2min ≤ due ≤ now）且未在 'ios-reminder-fired' localStorage 防重集合的提醒 new Notification('提醒', { body: title })（与 ReminderWatcher 共享防重键避免重复）
+- #30 calendar.tsx + db.ts：CalendarEventRecord 加 repeat?: number[]；EventFormState 加 repeat 字段；CAL_REPEAT_PRESETS 4 项（不重复/每天/工作日/每周=按 form.date 的 weekday 单选）；saveForm 写入 repeat；eventsByDate useMemo 把含 repeat 的事件按 weekday 展开到本月 cells 每个匹配日（cells 已提前到 eventsByDate 之前避免 TDZ）
+- #85 notes.tsx：displayPreview 改为 lines.slice(0,2).join('；')（保留首两行段落结构，原 lines.join(' ') 把换行拍平为空格）
+- #86 notes.tsx + recorder.tsx：notes deleteNote 加 window.confirm 二次确认；recorder 删除改用本地 ConfirmDialog 组件（iOS 风格模态，#FF453A 红色删除按钮），新增 confirmTarget state + confirmDelete callback + 弹窗 JSX
+- #27 appstore.tsx：browse 视图顶部加 amber 色演示版提示横幅（安装/更新/评分/版本号/排行榜均为装饰性模拟）；详情页底部加演示版说明（"打开"/"恢复"为真实能力，"安装"/"更新"为模拟效果）
+- #28 browser.tsx：localStorage 'ios-browser-bookmarks' 存 Bookmark[]；新增 Bookmark 类型 + readBookmarks/writeBookmarks/bookmarkNameFromUrl 工具；底部工具栏「新窗口」改为「书签」按钮 + 旁边「重载」按钮（原 window.open 改为同 App 内 refresh）；书签面板弹出层：完成/添加/列表/删除/点击导航
+- #87 browser.tsx：startEditing onFocus 后用 requestAnimationFrame 调 inputRef.current.select() 选中全部文本
+- #29 files.tsx：ItemRow 加可选 onDownload/downloadLabel，渲染 Download 图标按钮（位于内容按钮与删除按钮之间）；LibraryView 加 downloadBlob() 工具（a.download 兜底）；照片/录音/音乐行传 onDownload；照片预览层左上角加下载按钮
+- #32 weather.tsx：WeatherApp 新增 useEffect，可见时 setInterval(load, 10*60*1000) 自动刷新；visibilitychange 监听切换；卸载/隐藏时 clear
+- #89 weather.tsx：WeatherWidget failed=true 时整面替换为「天气加载失败」+ CloudOff 图标 + 稍后自动重试占位，不再与缓存数据 + "—" 并存
+- #65 photos.tsx：模块级 pruneLock Promise 链 + withPruneLock(task) 封装；pruneDeletedFromAlbums 改为 await withPruneLock(async () => { 读-改-写 })，连点删除多张照片时按序排队，避免并发竞态丢更新
+- #90 photos.tsx：`activeTab !== 'albums' && activeTab === 'photos'` 简化为 `activeTab === 'photos'`
+- tsc 全仓 `bunx tsc --noEmit` exit 0；eslint 36 个归属文件零 error 零 warning；未重启 dev server、未 git、未运行 db:push/build
+
+Stage Summary:
+- 修复文件清单：src/lib/ios/db.ts（MusicRecord.lyrics / CalendarEventRecord.repeat / ReminderRecord.repeat 三个可选字段，向后兼容无升版本）；src/components/apps/calculator.tsx（pendingNeg）；src/components/apps/clock.tsx（#20/#66/#67）；src/components/apps/music.tsx（#21/#22/#26/#88）；src/components/apps/reminders.tsx（#24/#25）；src/components/apps/calendar.tsx（#30）；src/components/apps/notes.tsx（#85/#86）；src/components/apps/recorder.tsx（#86 ConfirmDialog）；src/components/apps/appstore.tsx（#27）；src/components/apps/browser.tsx（#28/#87）；src/components/apps/files.tsx（#29）；src/components/apps/weather.tsx（#32/#89）；src/components/apps/photos.tsx（#65/#90）
+- 已修复问题编号：#20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #32, #65, #66, #67, #85, #86, #87, #88, #89, #90（共 21 条全部完成）
+- 未完成/跳过：无
+- tsc/eslint 状态：tsc exit 0 / eslint 36 文件零 error 零 warning
+
+---
+Task ID: 42-a-redo
+Agent: AI/记忆/人设修复子代理（重做）
+Task: 重做 42-a 因 git reset 丢失的 20 条修复，确保持久化
+
+Work Log:
+- 读 worklog 末尾 120 行确认上一轮 42-a 的修复范围与全部 20 条记录；git status 确认 14 个分配文件全部不在 modified 列表（11 文件 0 diff，证实已被外部 reset 回滚）
+- #2 三处删除 system→assistant 映射：server-llm.ts:97 / chat/route.ts:455-456 / translate/route.ts:142，改为 `role: m.role, content: m.content` 直接传 system（z-ai SDK ChatMessage 类型实际接受 system）
+- #3 四处上游 fetch 加 AbortSignal.timeout(60_000)：server-llm.ts:66（upstreamComplete）/ chat/route.ts:280（proxyToUpstream tryCandidates）/ vision/route.ts:212 / translate/route.ts:245，超时抛 AbortError 由既有 catch 接住走 SDK 兜底
+- #4 chat-stream-store.ts:runStream 的 catch 块在调 sdkFallbackOnce 前先 `raw=''` 并 `scanner = createReplySegmentScanner(...)` 重建分段器（const→let），避免「半截上游文本 + 完整 SDK 文本」拼接乱文；旧分段器已放出的分段保留上屏、不计入新分段器的条数计数
+- #5 chat/route.ts:sseToTextStream 的 catch 由静默 controller.close() 改为 controller.error(err)，上游异常时把 error 传播到下游 reader.read() → 客户端 streamOnce 外层 catch → sdkFallbackOnce（配合 #4 清空 raw/scanner 后让 SDK 文本接管）；保留 close() 兜底以防 controller 已取消
+- #6 memory.ts:appendFragments 的「seen 命中后查 list 漏 added」穿透 bug：step 1 精确重复判定改为同时查 list 与 added（`[...list, ...added].find(...)`）；step 2 相似判定同样把 added 并入查找范围，避免本批次同 key/相似的碎片穿透到 step 3 重复入库
+- #7 memory.ts:callMemoryApi fetch 加 signal: AbortSignal.timeout(75_000)；memAfterAiTurn 在 inflight.add(guard) 后启动 watchdog `setTimeout(() => inflight.delete(guard), 90_000)`，finally 内 clearTimeout + inflight.delete 幂等清理，异常/超时都释放 inflight
+- #40 ai-delivery.ts:isPageHidden 分支由同步 while 一次性投完改为分块异步：CHUNK=5 条同步处理后 `await new Promise<void>((r) => window.setTimeout(r, 0))` 让出事件循环，30 条切成 6 块、主线程不冻结；保持投递顺序不变
+- #45 chat-stream-store.ts:blockSessionOf 补注释：群聊会话无拉黑关系天然放行（拉黑按 App × 单联系人 ID 隔离）；AI 助手会话同理（sms:assistant/assistant 是系统侧角色，不进入「角色 ↔ 用户」拉黑图谱）
+- #68 chat/route.ts:messages 处理由 slice(-40) 改为「首条 system + 末 39 条」（`allMsgs.length > 40 && allMsgs[0]?.role === 'system' ? allMsgs.slice(0,1).concat(allMsgs.slice(-39)) : allMsgs.slice(-40)`），避免 App 传入 >40 条时裁掉首条 system（人设/世界书/记忆块）致 AI 失忆
+- #69 memory.ts:memAfterAiTurn 达到间隔后先评估 convo 是否足够（buildConvo + 互通跨 App 兜底），群聊短会话（convo < 4）保留计数等下次（不清零，writeJSON(cKey, count) 后 return），避免短群聊永远到不了 interval 不沉淀记忆；内容充足才清零并启动异步提取
+- #70 memory.ts:memDedupeNow 由 while(changed)+双层 for break outer（O(n²×合并次数)≈O(n³)）改为单次两两比较去重 + 200 条预算上限（BUDGET=200）：先按「已入核心优先 + 更早创建优先」排序确定正本候选，再单次 i<j 扫描，命中相似把 j 合并进 i 并用 Set 跟踪 removed，最后一次性过滤；超出 200 条的 tail 原样保留
+- #71 translate/route.ts:lang 校验错误文案由「lang 不能为空」改为「lang 不能为空或过长（≤30 字符）」，统一空与过长场景
+- #72 worldbook.ts:超预算截断提示由「附到 lastKey 残留位置」改为独立附到截断发生的位置（truncatedKey），即便该位置 kept 为空也注入提示行（`existing ? ${existing}\n\n${notice} : notice`），避免提示附到上一个有内容的位置块
+- #73 chat/route.ts:核查后确认既有 textResponse helper 已为所有三处 SDK 兜底路径加 X-Reply-Via: sdk-fallback header（line 469 textResponse 定义 + line 520 forceSdk / line 530 no-config / line 570 upstream-fail catch 三处都走 textResponse）；无需新增代码
+- #74 ai-delivery.ts:pump 在 !batch 分支由 running.delete 改为 running.delete + queues.delete(sessionKey)，避免队列空时 Map 保留空数组引用永不释放
+- #75 persona.ts:buildPersonaSystemPrompt 在 userName 为空回退字面量「用户」时，注入占位说明行（`（注：机主尚未设置称呼，上文里的「用户」只是占位词，不是对方的真名。请按你与对方的关系自然地称呼对方，不要把「用户」当成对方的真名使用。）`），AI 不再把「用户」当真名；新增 userFallback 派生标志
+- #76 api/memory/extract/route.ts:saneTimeStr 由 Date.parse(s.replace(' ', 'T'))（按服务器本地时区）改为 parseBeijingTime（按北京时间 UTC+8 解析），与客户端 parseMemTime 同口径；YYYY-MM-DD 补 T00:00:00+08:00，YYYY-MM-DD HH:mm 替换空格为 T 加 +08:00；已带时区标识原样解析；collect 内 etMs/exMs 比较也用 parseBeijingTime 保持口径一致
+- #77 worldbook.ts:超预算截断由「按 '\n\n' 还原条目（slice 包裹块 + split）」改为「保留每块对应的原始 entries 列表逐条累加」：新增 WbGroupInfo 接口 { formatted, entries } 同时承载格式化字符串与原始条目，groupsByPosition 类型由 string[] 改为 WbGroupInfo[]；截断时遍历 group.entries 累加 content.trim()，避免条目内容本身含 '\n\n' 被误拆成多条目
+- #83 api/chat/bg/route.ts:cancelled Map 加 MAX_CANCELLED=50 上限，cancel 时超过上限淘汰最旧条目（旧 cancel 标记对应的 generate 早已完成，淘汰无副作用）
+- #84 api/chat/bg/route.ts:MAX_ITEMS_PER_SESSION 由 20 调高到 50，避免单会话 pending >20 条触发丢最早条时 Web Push 通知已发出但重开网页看不到对应消息（通知与 pending 不一致）
+- 每条 Edit 后立即用 `git diff --stat HEAD -- <file>` 验证该文件出现在 modified 列表且 diff 行数 > 0；全部 20 条修完后 11 个文件 diff 行数均 > 0，改动 100% 持久化
+- 验证：bunx tsc --noEmit exit 0（全项目零错误，含本任务 14 个分配文件）；bunx eslint 14 个分配文件 exit 0（零 error 零 warning）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修复文件清单：src/lib/server-llm.ts（+2/-1）、src/lib/memory.ts（+96/-13）、src/lib/chat-stream-store.ts（+11/-1）、src/lib/ios/persona.ts（+10/-1）、src/lib/ios/ai-delivery.ts（+28/-15）、src/lib/ios/worldbook.ts（+29/-17）、src/app/api/chat/route.ts（+26/-9）、src/app/api/chat/bg/route.ts（+10/-1）、src/app/api/memory/extract/route.ts（+31/-4）、src/app/api/translate/route.ts（+9/-4）、src/app/api/vision/route.ts（+6/-1）（共 11 个文件 +231/-94；summarize/tts/stt 路由本任务无需改动）
+- 已修复问题编号：#2,#3,#4,#5,#6,#7,#40,#45,#68,#69,#70,#71,#72,#73（核查后确认既有实现已满足）,#74,#75,#76,#77,#83,#84（共 20 条全部完成）
+- 未完成/跳过：无；#73 经核查既有 textResponse helper 已含 X-Reply-Via: sdk-fallback header，无需新增代码
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（零错误）；bunx eslint 14 个分配文件 exit 0（零 error 零 warning）
+- 持久化验证：git diff --stat HEAD 确认 11 个改动文件 diff 行数全部 > 0（chat/bg 11+/vision 7+/extract 35+/memory 109+/worldbook 46+/ai-delivery 43+/persona 11+/chat 35+/translate 13+/server-llm 3+/chat-stream-store 12+），改动 100% 持久化未发生回滚
+
+---
+Task ID: 42-e-redo
+Agent: clock/music 修复子代理（重做）
+Task: 重做 42-e 因 git reset 丢失的 clock.tsx(3条)+music.tsx(4条) 共 7 条修复
+
+Work Log:
+- 读 worklog 末尾 80 行确认 42-e 的 21 条已记录（其中 #20/#21/#22/#26/#66/#67/#88 文件 0 diff 需重做、#23 由主协调者已重做通过 E2E）；db.ts 已有 18 行 diff（MusicRecord.lyrics / CalendarEventRecord.repeat / ReminderRecord.repeat 均在），无需再动
+- 逐文件 Read clock.tsx / music.tsx / db.ts 确认行号与上下文（check/beginRing/stop/snooze/pickNextId/ended/prev/setShuffle/handleDelete/PlayerView 均定位）
+- #20 clock.tsx：check() 内 for-loop 改写为收集 matched 数组时，对 `a.repeat.length === 0` 的命中闹钟 `void localDB.put('alarms', { ...a, enabled: false })` 写回禁用；firedKey 仍登记防当日重响
+- #66 clock.tsx：模块级 `const firedKeyExpireDays = 7` + `pruneFiredKeys()`（按 key 末尾 YYYY-MM-DD 与 cutoff 比较，删 7 天前的 key），每次 check() 末尾（含 snooze 命中后早返回前）都调用
+- #67 clock.tsx：模块级 `let pendingRingers: AlarmRecord[] = []`；check() 收集同分钟所有命中闹钟到 matched，首只 beginRing，rest 压入 pendingRingers；新增 `beginRingRef` 把 beginRing 暴露给 stop()，stop() 时 `pendingRingers.shift()` 续响下一只，空则收起覆盖层（auto-stop useEffect 共用同一 stop 回调，自动为新闹钟重挂 60s 定时器）
+- #21 music.tsx：模块级 `playedShuffleIds: Set<string>`；pickNextId shuffle 分支优先返回 `library.filter(t => t.id !== currentId && !playedShuffleIds.has(t.id))` 中随机一只，全已播放过则回退随机；ended 事件在 `repeat==='off' && shuffle` 时先把 currentId 加入集合，若 `library.every(t => playedShuffleIds.has(t.id))` 则停止并 clear 集合；setShuffle 切换时 clear 集合
+- #22 music.tsx：模块级 `playHistory: string[]`；play(id) 切歌前 `if (s.currentId) playHistory.push(s.currentId)`；prev shuffle 分支若 currentTime<=3 则 `playHistory.pop()` 返回上一首，栈空 fallback `pickNextId(...,true)` 随机；非 shuffle prev 仍走 library[idx-1]
+- #26 music.tsx + db.ts：db.ts 的 MusicRecord.lyrics 字段已存在（42-e 改动保留）；music.tsx 新增 `parseLyrics()` 解析 `[mm:ss.xx]` LRC 时间戳（支持一行多时间戳、毫秒位可省、stripRe 剥离后取文本）为按 time 升序的 {time,text}[]；新增 LyricsPanel 组件按 position reduce 找当前行（最后一个 time<=position），useEffect[activeIdx] 触发 scrollIntoView smooth block:center；PlayerView 加 `Mic2` 歌词切换按钮（无歌词 disabled+opacity-30 置灰），开启时 `showLyrics && hasLyrics` 渲染 LyricsPanel 替换封面圆盘区
+- #88 music.tsx：LibraryView.handleDelete 在 stopIfPlaying 前加 `if (!window.confirm(\`确定从资料库删除「${record.title}」吗？\`)) return;`，与 photos.tsx 同模式
+- 每条 Edit 后立即 `git diff --stat HEAD -- <file>` 验证：clock.tsx +51/-11，music.tsx +151/-13（最终 164 行总改动），db.ts 18 行（保留 42-e 已存在改动，本轮未动）；改动 100% 持久化
+- 验证：bunx tsc --noEmit exit 0（全项目零错误）；bunx eslint 三个分配文件 exit 0（零 error 零 warning）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修复文件清单：src/components/apps/clock.tsx（+51/-11）、src/components/apps/music.tsx（+151/-13）、src/lib/ios/db.ts（+18/-0，42-e 既有改动本轮保留未动）
+- 已修复问题编号：#20, #21, #22, #26, #66, #67, #88（共 7 条全部完成）
+- 未完成/跳过：无
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（零错误）；bunx eslint clock.tsx/music.tsx/db.ts exit 0（零 error 零 warning）
+- 持久化验证：clock.tsx git diff 62 行改动（+51/-11）、music.tsx git diff 164 行改动（+151/-13）、db.ts git diff 18 行改动（保留 42-e 既有）；三文件 diff 均 > 0

@@ -190,37 +190,48 @@ export function WeatherWidget() {
       className="mx-auto flex h-[152px] w-[152px] flex-col justify-between overflow-hidden rounded-[24px] p-3.5 text-white"
       style={{ backgroundImage: gradient }}
     >
-      {/* 上行：温度数字 + °C；右 天气图标（晴/局部多云显黄色） */}
-      <div className="flex items-start justify-between">
-        <span className="flex items-start gap-[2px]">
-          <span className="text-[42px] font-semibold leading-[40px] tabular-nums">
-            {data ? Math.round(data.current.temperature) : '--'}
+      {/* #89：失败时显示明确“加载失败”占位（不再与缓存数据并存混淆） */}
+      {failed ? (
+        <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
+          <CloudOff className="h-7 w-7 text-white/70" strokeWidth={1.8} aria-hidden="true" />
+          <span className="text-[12px] font-medium leading-tight text-white/85">天气加载失败</span>
+          <span className="text-[10px] leading-tight text-white/55">稍后自动重试</span>
+        </div>
+      ) : (
+        <>
+          {/* 上行：温度数字 + °C；右 天气图标（晴/局部多云显黄色） */}
+          <div className="flex items-start justify-between">
+            <span className="flex items-start gap-[2px]">
+              <span className="text-[42px] font-semibold leading-[40px] tabular-nums">
+                {data ? Math.round(data.current.temperature) : '--'}
+              </span>
+              <span className="text-[13px] font-medium leading-[14px]">°C</span>
+            </span>
+            {Icon ? (
+              <Icon
+                className={`h-[32px] w-[32px] shrink-0 ${data && data.current.code <= 2 ? 'text-[#F7D24B]' : ''}`}
+                strokeWidth={1.6}
+                aria-hidden="true"
+              />
+            ) : (
+              <Cloud className="h-[32px] w-[32px] shrink-0 text-white/50" strokeWidth={1.6} aria-hidden="true" />
+            )}
+          </div>
+          {/* 中行：天气名（单行省略，禁止逐字竖排换行） */}
+          <span className="truncate text-[13px] font-medium leading-none text-white/90">
+            {info ? info.label : '…'}
           </span>
-          <span className="text-[13px] font-medium leading-[14px]">°C</span>
-        </span>
-        {Icon ? (
-          <Icon
-            className={`h-[32px] w-[32px] shrink-0 ${data && data.current.code <= 2 ? 'text-[#F7D24B]' : ''}`}
-            strokeWidth={1.6}
-            aria-hidden="true"
-          />
-        ) : (
-          <Cloud className="h-[32px] w-[32px] shrink-0 text-white/50" strokeWidth={1.6} aria-hidden="true" />
-        )}
-      </div>
-      {/* 中行：天气名（单行省略，禁止逐字竖排换行） */}
-      <span className="truncate text-[13px] font-medium leading-none text-white/90">
-        {failed ? '—' : info ? info.label : '…'}
-      </span>
-      {/* 下行：今日温度范围 + 城市（半透明） */}
-      <div className="flex items-end justify-between gap-1">
-        <span className="text-[12px] leading-none tabular-nums">
-          {today ? `${Math.round(today.min)}~${Math.round(today.max)}°` : '--~--°'}
-        </span>
-        <span className="shrink-0 truncate text-[12px] leading-none text-white/55">
-          {failed ? '' : data ? data.name || '当前位置' : ''}
-        </span>
-      </div>
+          {/* 下行：今日温度范围 + 城市（半透明） */}
+          <div className="flex items-end justify-between gap-1">
+            <span className="text-[12px] leading-none tabular-nums">
+              {today ? `${Math.round(today.min)}~${Math.round(today.max)}°` : '--~--°'}
+            </span>
+            <span className="shrink-0 truncate text-[12px] leading-none text-white/55">
+              {data ? data.name || '当前位置' : ''}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -748,6 +759,33 @@ export default function WeatherApp() {
       cancelled = true;
     };
   }, [load]);
+
+  // #32：可见时每 10 分钟自动刷新一次（卸载或隐藏时清理；不可见时不发请求避免浪费）
+  useEffect(() => {
+    let timer: number | null = null;
+    const start = () => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = window.setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          const pick = city ?? FALLBACK_CITY;
+          void load(pick).catch(() => undefined);
+        }
+      }, 10 * 60 * 1000);
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'visible') start();
+      else if (timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    };
+    start();
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [city, load]);
 
   const refresh = useCallback(() => {
     const pick = city ?? FALLBACK_CITY;

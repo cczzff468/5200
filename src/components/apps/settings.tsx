@@ -53,6 +53,16 @@ import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
@@ -1861,6 +1871,8 @@ function LockPage({ onBack }: { onBack: () => void }) {
   const [tempCode, setTempCode] = useState('');
   const [errText, setErrText] = useState('');
   const [errSignal, setErrSignal] = useState(0);
+  // #63：关锁屏总开关前弹确认框（仅在 enabled && code 已设时，避免误关丢失已设密码）
+  const [confirmLockOff, setConfirmLockOff] = useState(false);
 
   const fail = (msg: string) => {
     setErrSignal((s) => s + 1);
@@ -1886,6 +1898,13 @@ function LockPage({ onBack }: { onBack: () => void }) {
                 checked={lockConfig.lockScreen}
                 onCheckedChange={(v) => {
                   setErrText('');
+                  // #63：关锁屏总开关时若已设密码（enabled && code），先弹确认框——
+                  // store.setLockScreen(false) 会静默清空 enabled/code，误关会丢失已设密码。
+                  // 仅打开或未设密码时直接走原逻辑。
+                  if (!v && lockConfig.enabled && lockConfig.code) {
+                    setConfirmLockOff(true);
+                    return;
+                  }
                   setLockScreen(v);
                 }}
                 aria-label="锁屏开关"
@@ -1975,6 +1994,41 @@ function LockPage({ onBack }: { onBack: () => void }) {
             {errText}
           </p>
         )}
+
+        {/* #63：关闭锁屏总开关前确认（仿 themes.tsx「恢复全部默认图标」对话框） */}
+        <AlertDialog open={confirmLockOff} onOpenChange={setConfirmLockOff}>
+          <AlertDialogContent className="w-[270px] gap-0 rounded-[14px] p-0 sm:w-[270px] sm:max-w-[270px]">
+            <AlertDialogHeader className="gap-1.5 px-5 pb-4 pt-5 sm:text-center">
+              <AlertDialogTitle className="text-center text-[17px] font-semibold leading-snug">
+                关闭锁屏？
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-center text-[13px] leading-snug">
+                已设置的锁屏密码将被清除，下次开启锁屏后需重新设置密码。此操作不可撤销。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="flex-row gap-0 border-t border-border sm:flex-row">
+              <AlertDialogCancel className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-normal text-foreground shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0">
+                取消
+              </AlertDialogCancel>
+              <span aria-hidden="true" className="w-px shrink-0 self-stretch bg-border" />
+              <AlertDialogAction
+                className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-medium shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0"
+                style={{ color: IOS_RED }}
+                onClick={() => {
+                  try {
+                    navigator.vibrate?.(10);
+                  } catch {
+                    /* 震动不可用 */
+                  }
+                  setLockScreen(false);
+                  setConfirmLockOff(false);
+                }}
+              >
+                关闭锁屏
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DetailShell>
     );
   }

@@ -934,6 +934,8 @@ async function callMemoryApi<T extends ExtractApiResult & SummarizeApiResult>(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, config: apiConfig }),
+    // 上游挂起时 75s 超时强制 abort，否则 inflight Set 永不释放
+    signal: AbortSignal.timeout(75_000),
   });
   const data = (await res.json().catch(() => ({}))) as T;
   if (!res.ok) throw new Error(data?.error || `请求失败（${res.status}）`);
@@ -1005,7 +1007,11 @@ function appendFragments(
     }
     // 1) 精确重复 → 加强已有记忆（已更新/已过期的旧条目不是目标）
     if (seen.has(key)) {
-      const hit = list.find((f) => normText(f.content) === key && !f.supersededAt && !isMemExpired(f, now));
+      // seen 命中后既要查原始 list，也要查本批次已新增的 added
+      // （否则同批次模型返回两条相同碎片时，第二条穿透到下方「全新」分支重复入库）
+      const hit = [...list, ...added].find(
+        (f) => normText(f.content) === key && !f.supersededAt && !isMemExpired(f, now)
+      );
       if (hit) {
         hit.reinforcedAt = now;
         hit.reinforceCount = (hit.reinforceCount ?? 0) + 1;
@@ -1022,7 +1028,8 @@ function appendFragments(
       // 命中的只是已更新/已过期的旧条目 → 落到下面按新增处理
     }
     // 2) 相似说法 → 合并进已有记忆（优先未消费的；内容保留更完整的一条）
-    const simHit = list
+    // 相似判定同样需要把本批次 added 并入查找范围，否则本批次同义碎片穿透到「全新」分支
+    const simHit = [...list, ...added]
       .filter((f) => !f.supersededAt && !isMemExpired(f, now) && f.content.length >= 4 && content.length >= 4)
       .sort((a, b) => Number(Boolean(a.consumedAt)) - Number(Boolean(b.consumedAt)) || a.createdAt - b.createdAt)
       .find((f) => similarity(f.content, content) >= SIMILAR_MERGE_THRESHOLD);
@@ -1261,19 +1268,29 @@ export function memAfterAiTurn(
       writeJSON(cKey, count);
       return;
     }
-    // 达到间隔：清零重新累计并异步提取（清零在先避免每轮重试轰炸；提取失败不回滚，下个窗口重新累计）
+    // 达到间隔：先评估 convo 是否足够；不足（如群聊短会话 convo<4）保留计数等下次不清零，
+    // 避免群聊短会话永远到不了 interval 不沉淀记忆（count 已清零但没有足够内容触发提取）
+    let convo = buildConvo();
+    // 互通开且当前会话内容太少（合并计数可能主要来自其他 App）：跨 App 取该联系人最近活跃会话
+    if (convo.length < 4 && share && !scope) {
+      const recent = memMostRecentApp(contactId);
+      if (recent && recent.convo.length > convo.length) convo = recent.convo;
+    }
+    if (convo.length < 4) {
+      // 内容不足：保留计数等下次（不清零），下次达到更多累计时再尝试
+      writeJSON(cKey, count);
+      return;
+    }
+    // 内容充足：清零重新累计并异步提取（清零在先避免每轮重试轰炸；提取失败不回滚，下个窗口重新累计）
     writeJSON(cKey, 0);
     const guard = `${contactId}:${app}${scope}`;
     if (inflight.has(guard)) return;
     inflight.add(guard);
+    // 看门狗：上游挂起 / 异常未走到 finally 时，90s 后强制清理 inflight，避免永远占着下一窗口
+    const watchdog = setTimeout(() => inflight.delete(guard), 90_000);
     void (async () => {
       try {
-        let convo = buildConvo();
-        // 互通开且当前会话内容太少（合并计数可能主要来自其他 App）：跨 App 取该联系人最近活跃会话
-        if (convo.length < 4 && share && !scope) {
-          const recent = memMostRecentApp(contactId);
-          if (recent && recent.convo.length > convo.length) convo = recent.convo;
-        }
+        // convo 已在外层评估完毕（长度 ≥ 4 才到这里），直接使用
         if (convo.length >= 4) {
           const sourceMsgId = msgs ? memLastMsgId(msgs) : undefined;
           const res = await callMemoryApi<ExtractApiResult>(
@@ -1314,6 +1331,7 @@ export function memAfterAiTurn(
       } catch (err) {
         console.warn('[memory] 自动总结长期记忆失败（下个窗口重试）', err);
       } finally {
+        clearTimeout(watchdog);
         inflight.delete(guard);
       }
     })();
@@ -1481,40 +1499,51 @@ export async function memSummarizeLongNow(contactId: string, apiConfig: ApiConfi
 export function memDedupeNow(contactId: string): number {
   let list = readFragments(contactId);
   const before = list.length;
-  let changed = true;
-  while (changed) {
-    changed = false;
-    outer: for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const a = list[i];
-        const b = list[j];
-        if (!a.content || !b.content || a.content.length < 4 || b.content.length < 4) continue;
-        if (similarity(a.content, b.content) < SIMILAR_MERGE_THRESHOLD) continue;
-        // 正本：已入核心者优先，其次更早创建者
-        const keep = Number(Boolean(a.consumedAt)) - Number(Boolean(b.consumedAt)) !== 0
-          ? (a.consumedAt ? a : b)
-          : (a.createdAt <= b.createdAt ? a : b);
-        const drop = keep === a ? b : a;
-        if (drop.content.length > keep.content.length) keep.content = drop.content;
-        keep.weight = higherWeight(keep.weight, drop.weight);
-        // 时间感知（手动优先）：正本未被手动编辑时从副本补齐缺失的时间字段；
-        // 副本被手动编辑过则把时间连同标记一并继承（合并体继续受用户设置保护）
-        if (!keep.timeEditedAt) {
-          if (keep.eventTime == null && drop.eventTime != null) keep.eventTime = drop.eventTime;
-          if (keep.expiresAt == null && drop.expiresAt != null) keep.expiresAt = drop.expiresAt;
-          if (drop.timeEditedAt) keep.timeEditedAt = drop.timeEditedAt;
-        }
-        keep.reinforceCount = (keep.reinforceCount ?? 0) + 1 + (drop.reinforceCount ?? 0);
-        keep.reinforcedAt = Math.max(keep.reinforcedAt ?? 0, drop.reinforcedAt ?? 0);
-        keep.sourceMsgId = keep.sourceMsgId ?? drop.sourceMsgId;
-        keep.consumedAt = keep.consumedAt ?? drop.consumedAt;
-        list = list.filter((f) => f.id !== drop.id);
-        changed = true;
-        break outer;
+  // 预算上限：碎片过多时只对前 200 条做两两比较，避免 O(n²×合并次数)≈O(n³) 卡顿；
+  // 超出 200 条的部分原样保留（下次调用或下次新增自然处理）
+  const BUDGET = 200;
+  // 已入核心者优先保留、其次更早创建者优先：先排序，靠前的成为正本候选
+  const working = list.slice(0, BUDGET);
+  const tail = list.slice(BUDGET);
+  working.sort((a, b) => {
+    const ca = Number(Boolean(a.consumedAt));
+    const cb = Number(Boolean(b.consumedAt));
+    if (ca !== cb) return cb - ca; // 已入核心排前面（保留方）
+    return a.createdAt - b.createdAt; // 更早创建排前面
+  });
+  const removed = new Set<string>();
+  // 单次两两比较：i < j，i 在前为正本候选；命中相似把 j 合并进 i 并把 j 标记删除
+  for (let i = 0; i < working.length; i++) {
+    const a = working[i];
+    if (removed.has(a.id)) continue;
+    if (!a.content || a.content.length < 4) continue;
+    for (let j = i + 1; j < working.length; j++) {
+      const b = working[j];
+      if (removed.has(b.id)) continue;
+      if (!b.content || b.content.length < 4) continue;
+      if (similarity(a.content, b.content) < SIMILAR_MERGE_THRESHOLD) continue;
+      // 正本 a（已入核心且靠前者，由上面排序保证）；副本 b 合并进 a
+      const keep = a;
+      const drop = b;
+      if (drop.content.length > keep.content.length) keep.content = drop.content;
+      keep.weight = higherWeight(keep.weight, drop.weight);
+      // 时间感知（手动优先）：正本未被手动编辑时从副本补齐缺失的时间字段；
+      // 副本被手动编辑过则把时间连同标记一并继承（合并体继续受用户设置保护）
+      if (!keep.timeEditedAt) {
+        if (keep.eventTime == null && drop.eventTime != null) keep.eventTime = drop.eventTime;
+        if (keep.expiresAt == null && drop.expiresAt != null) keep.expiresAt = drop.expiresAt;
+        if (drop.timeEditedAt) keep.timeEditedAt = drop.timeEditedAt;
       }
+      keep.reinforceCount = (keep.reinforceCount ?? 0) + 1 + (drop.reinforceCount ?? 0);
+      keep.reinforcedAt = Math.max(keep.reinforcedAt ?? 0, drop.reinforcedAt ?? 0);
+      keep.sourceMsgId = keep.sourceMsgId ?? drop.sourceMsgId;
+      keep.consumedAt = keep.consumedAt ?? drop.consumedAt;
+      removed.add(drop.id);
     }
   }
-  if (list.length !== before) writeJSON(fragKey(contactId), list);
+  if (removed.size === 0) return 0;
+  list = [...working.filter((f) => !removed.has(f.id)), ...tail];
+  writeJSON(fragKey(contactId), list);
   return before - list.length;
 }
 

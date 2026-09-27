@@ -70,6 +70,7 @@ async function upstreamComplete(config: UpstreamConfig, messages: LLMMessage[]):
           ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
         },
         body,
+        signal: AbortSignal.timeout(60_000),
       });
       if (!res.ok) {
         lastErr = `上游 ${res.status}`;
@@ -94,7 +95,7 @@ async function sdkComplete(messages: LLMMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   const completion = await zai.chat.completions.create({
-    messages: messages.map((m) => ({ role: m.role === 'system' ? 'assistant' : m.role, content: m.content })),
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
     thinking: { type: 'disabled' },
   });
   const text = completion.choices[0]?.message?.content ?? '';

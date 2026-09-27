@@ -5,6 +5,7 @@ import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties 
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
 import { useGlobalCall } from './global-call';
+import { useIncomingCall } from './incoming-call';
 import type { AddressMode } from '../contacts';
 
 // ---------------- 类型 ----------------
@@ -400,7 +401,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
           baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_API_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
           model: typeof v.model === 'string' && v.model ? v.model : DEFAULT_API_CONFIG.model,
-          temperature: typeof v.temperature === 'number' ? v.temperature : DEFAULT_API_CONFIG.temperature,
+          temperature:
+            typeof v.temperature === 'number' && v.temperature >= 0 && v.temperature <= 2
+              ? v.temperature
+              : DEFAULT_API_CONFIG.temperature,
           maxTokens: typeof v.maxTokens === 'number' ? v.maxTokens : DEFAULT_API_CONFIG.maxTokens,
         };
         // 旧版明文静默升级：立即以密文回写（有 apiKey 才有必要；无 key 的占位配置不动）
@@ -1175,6 +1179,9 @@ export const useUI = create<UIState>((set, get) => ({
     // （z-62）又落到切换器之下，同样复现隐形切换器卡死，而 expand 在 global-call store 无法在此守卫。
     const gCall = useGlobalCall.getState();
     if (gCall.session && gCall.view === 'full') return;
+    // 来电响铃中守卫（#1）：来电界面挂 z-94，比切换器 z-60 高得多，且 onDown 也会守卫——
+    // 此处双保险：响铃中 openSwitcher 永不应被触发（即使旧调用方绕过边缘手势直接调用本 action）。
+    if (useIncomingCall.getState().call) return;
     set({ switcherOpen: true });
   },
   closeSwitcher: () => {

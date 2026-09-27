@@ -1138,6 +1138,8 @@ function ChatView({
         // 40-a：仅申请卡模式（用户拉黑了角色）——AI 的正文/表情一律丢弃，只有上面动作分支产出的
         // 申请卡片与系统行能落盘（入口守卫已保证：能走到这里的 byUser 回合必然处于可申请状态）
         if (wbContactId && loadBlock('sms', wbContactId).byUser) continue;
+        // #42：下方 segs/stripEmojiText 仅正常模式（byUser=false）执行——byUser continue 上面已拦，
+        // 不再在三元里再判 byUser；保留 stickersOn 三元用于表情开关关闭时剥 emoji
         const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text]).map((seg) =>
           stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
         );

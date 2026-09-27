@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Camera, CloudSun, Flashlight, FlashlightOff } from 'lucide-react';
@@ -48,6 +48,14 @@ export default function LockScreen() {
   const [errSignal, setErrSignal] = useState(0);
   /** 忘记密码重设流程中第一次输入的新密码 */
   const [resetCode, setResetCode] = useState('');
+  // #58：连续输错锁定（仿 iOS 真机——5 次后 1 分钟）。failCount 仅累计密码错误，
+  // 解锁成功/进入重设流程均清零；锁定到期后自动放行（用 Date.now() 推算，无需额外定时器）。
+  const MAX_FAILS = 5;
+  const LOCK_MS = 60 * 1000;
+  const [failCount, setFailCount] = useState(0);
+  const [lockUntil, setLockUntil] = useState(0);
+  const lockedOut = lockUntil > Date.now();
+  const lockRemaining = lockedOut ? Math.ceil((lockUntil - Date.now()) / 1000) : 0;
 
   // 上滑手势（ref 供事件处理器同步读取，state 供渲染）
   const [dy, setDy] = useState(0);
@@ -80,6 +88,14 @@ export default function LockScreen() {
   // 日期行含农历换算：直接计算，React Compiler 会按真实依赖自动记忆化
   const dateLine = now ? `${formatSolarShort(now)} · ${formatLunarDate(now)}` : '';
   const weekShort = now ? WEEK_FMT.format(now) : '';
+
+  // #58：锁定到期自动清理提示文案。useNow 每秒驱动重渲染，到期瞬间落到 0 + 清掉旧 errText。
+  useEffect(() => {
+    if (lockUntil > 0 && Date.now() >= lockUntil) {
+      setLockUntil(0);
+      setErrText('');
+    }
+  }, [lockUntil, now]);
 
   // ---------------- 上滑解锁手势 ----------------
 
@@ -124,8 +140,12 @@ export default function LockScreen() {
   // ---------------- 密码验证 / 忘记密码重设 ----------------
 
   const verify = (code: string) => {
+    // #58：锁定中直接忽略输入（键盘按钮也已 disabled，这里是双保险）。
+    if (lockUntil > Date.now()) return;
     if (code === lockConfig.code) {
       setErrText('');
+      setFailCount(0);
+      setLockUntil(0);
       setMode('lock');
       try {
         navigator.vibrate?.(10);
@@ -134,12 +154,21 @@ export default function LockScreen() {
       }
       unlock();
     } else {
+      const next = failCount + 1;
+      setFailCount(next);
       setErrSignal((s) => s + 1);
-      setErrText('密码错误，请重试');
       try {
         navigator.vibrate?.([60, 40, 60]);
       } catch {
         /* 震动不可用 */
+      }
+      if (next >= MAX_FAILS) {
+        // 累计达到 MAX_FAILS 次错误：锁定 1 分钟，期间禁用输入并显示倒计时。
+        setLockUntil(Date.now() + LOCK_MS);
+        setFailCount(0);
+        setErrText('密码错误次数过多，请 1 分钟后再试');
+      } else {
+        setErrText(`密码错误，请重试（剩 ${MAX_FAILS - next} 次）`);
       }
     }
   };
@@ -347,10 +376,13 @@ export default function LockScreen() {
               light
               onComplete={onPadComplete}
               errorSignal={errSignal}
+              disabled={lockedOut && mode === 'passcode'}
               className="mt-4"
             />
             <p className="mt-3 min-h-[20px] text-[13px] font-medium text-[#FF453A]" role="alert">
-              {errText}
+              {lockedOut && mode === 'passcode'
+                ? `请 ${lockRemaining} 秒后再试`
+                : errText}
             </p>
             <button
               type="button"
@@ -359,7 +391,7 @@ export default function LockScreen() {
             >
               取消
             </button>
-            {mode === 'passcode' && (
+            {mode === 'passcode' && !lockedOut && (
               <button
                 type="button"
                 onClick={openForgot}

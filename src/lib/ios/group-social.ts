@@ -417,15 +417,22 @@ function resolveByName(name: string, pool: ContactRecord[]): ContactRecord | nul
   return partial ?? null;
 }
 
-/** 成员名单文本 → 联系人数组（逗号/顿号/空格/分号分隔；逐个解析，解析不到的忽略） */
+/** 成员名单文本 → 联系人数组（逗号/顿号/空格/分号分隔；逐个解析，解析不到的忽略）。
+ *  #46：候选匹配加精确优先级——若两个候选名互为子串（「红红」与「红红2」）解析「红红」时先匹配到列表顺序首位；
+ *  现按 exact → startsWith → includes 逐级回退，保证短名优先匹配到精确同名的候选。 */
 function parseMemberNames(raw: string | undefined, candidates: GroupSocialCandidate[], contacts: ContactRecord[]): ContactRecord[] {
   if (!raw) return [];
   const names = raw.split(/[,，、;；\s]+/).map((s) => s.trim()).filter(Boolean);
   const out: ContactRecord[] = [];
   for (const n of names.slice(0, 10)) {
-    const cand = candidates.find((c) => c.name === n || c.name.includes(n) || n.includes(c.name));
+    // 第一档：精确匹配（c.name === n）
+    let cand = candidates.find((c) => c.name === n);
+    // 第二档：候选名以 n 开头（如「红红2」匹配「红红」）
+    if (!cand) cand = candidates.find((c) => c.name.startsWith(n));
+    // 第三档：候选名包含 n（最宽松）
+    if (!cand) cand = candidates.find((c) => c.name.includes(n) || n.includes(c.name));
     if (!cand) continue;
-    const rec = contacts.find((c) => c.id === cand.id);
+    const rec = contacts.find((c) => c.id === cand!.id);
     if (rec && !out.some((x) => x.id === rec.id)) out.push(rec);
   }
   return out;

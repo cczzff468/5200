@@ -39,18 +39,28 @@ function fromB64(s: string): Uint8Array<ArrayBuffer> {
 
 let keyPromise: Promise<CryptoKey> | null = null;
 
-/** 取（或首次生成并落库）AES-GCM 非可提取密钥 */
+/** 取（或首次生成并落库）AES-GCM 非可提取密钥
+ * #61：进程内 keyPromise 仅用于并发去重——同一 tick 内多调用共享同一个 async 操作；
+ * 操作落定后立即清掉缓存，下次调用会重新读 IndexedDB。
+ * 这样既保留了「并发单飞」语义，又能检测到 IndexedDB 中密钥被外部清掉的情况：
+ * 清掉后再调用 getKey 会读到无 key → 重新生成一把新 key 落库，
+ * 调用方拿到的密文与新 key 配套（旧密文 decryptValue 会静默返回 null 走默认值）。 */
 function getKey(): Promise<CryptoKey> {
-  if (!keyPromise) {
-    keyPromise = (async () => {
-      const rec = (await localDB.get('settings', 'cryptoKey')) as AppSettingRecord | undefined;
-      if (rec && rec.value instanceof CryptoKey) return rec.value;
-      const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-      await localDB.put('settings', { key: 'cryptoKey', value: key });
-      return key;
-    })();
-  }
-  return keyPromise;
+  if (keyPromise) return keyPromise;
+  const p = (async () => {
+    const rec = (await localDB.get('settings', 'cryptoKey')) as AppSettingRecord | undefined;
+    if (rec && rec.value instanceof CryptoKey) return rec.value;
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await localDB.put('settings', { key: 'cryptoKey', value: key });
+    return key;
+  })();
+  keyPromise = p;
+  // 落定后清掉缓存，下次调用重新读 IndexedDB——若密钥被外部清掉，会重新生成。
+  void p.then(
+    () => { if (keyPromise === p) keyPromise = null; },
+    () => { if (keyPromise === p) keyPromise = null; },
+  );
+  return p;
 }
 
 function isEnvelope(v: unknown): v is EncEnvelope {

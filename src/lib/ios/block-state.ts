@@ -238,8 +238,12 @@ export function applyCharBlockAction(
   if ((cur.reqCount ?? 0) >= BLOCK_REQ_MAX_REJECTED) {
     return { entry: cur, changed: false, reqCreated: false };
   }
+  // #82：标记缺理由（空/纯空白）时不发起申请（changed=false，让 AI 下轮重写），
+  // 避免强制落「想和你和好」默认理由与 AI 实际意图不符（AI 输出空标记 [申请解除拉黑:] 时不受理）
+  const reasonTrim = (reason ?? '').trim().slice(0, 80);
+  if (!reasonTrim) return { entry: cur, changed: false, reqCreated: false };
   return {
-    entry: saveBlock(app, contactId, { ...cur, reqReason: (reason ?? '').trim().slice(0, 80) || '想和你和好', reqAt: Date.now() }),
+    entry: saveBlock(app, contactId, { ...cur, reqReason: reasonTrim, reqAt: Date.now() }),
     changed: true,
     reqCreated: true,
   };

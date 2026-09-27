@@ -1164,6 +1164,24 @@ export default function ClockApp() {
 /** 模块级防重集合：`${闹钟id}:${YYYY-MM-DD}` */
 const firedKeys = new Set<string>();
 
+/** #66: firedKeys 过期天数（按 key 末尾 YYYY-MM-DD 比较，7 天前的清理掉，避免长期内存增长） */
+const firedKeyExpireDays = 7;
+
+/** #66: 清理 firedKeys 中超过 firedKeyExpireDays 天的条目（key 格式 `${id}:${YYYY-MM-DD}`） */
+function pruneFiredKeys(): void {
+  const cutoff = new Date(Date.now() - firedKeyExpireDays * 24 * 60 * 60 * 1000);
+  const cutoffStr = `${cutoff.getFullYear()}-${pad2(cutoff.getMonth() + 1)}-${pad2(cutoff.getDate())}`;
+  for (const key of Array.from(firedKeys)) {
+    const sep = key.lastIndexOf(':');
+    if (sep < 0) continue;
+    const ymd = key.slice(sep + 1);
+    if (ymd < cutoffStr) firedKeys.delete(key);
+  }
+}
+
+/** #67: 同分钟内多只闹钟排队续响（首只 beginRing，rest 压入此队列；stop/auto-stop 时 shift 续响） */
+let pendingRingers: AlarmRecord[] = [];
+
 /** 贪睡间隔：iOS 标准 9 分钟 */
 const SNOOZE_MS = 9 * 60_000;
 /** 响铃自动停止时长：iOS 真机响铃约 15 分钟后自动停铃，演示环境按 60 秒收敛（全屏覆盖层
@@ -1224,6 +1242,8 @@ export function AlarmWatcher() {
   const teardownRef = useRef<() => void>(() => undefined);
   /** 当前响铃态的同步镜像：供 5s 轮询闭包读取（响铃中不叠加触发新的响铃，防双响/音频循环泄漏） */
   const ringingRef = useRef<AlarmRecord | null>(null);
+  /** #67: 暴露 beginRing 给 stop()/auto-stop，stop 时若 pendingRingers 非空则 shift 续响下一只 */
+  const beginRingRef = useRef<((a: AlarmRecord) => void) | null>(null);
 
   useEffect(() => {
     let beepIv: number | null = null;
@@ -1311,6 +1331,7 @@ export function AlarmWatcher() {
         /* 通知不可用时静默 */
       }
     };
+    beginRingRef.current = beginRing;
 
     const check = async () => {
       // 稍后提醒（内存队列）优先：到点即响、出队即清理（响铃后自动删除，不会二次触发）；
@@ -1321,6 +1342,7 @@ export function AlarmWatcher() {
         if (idx >= 0) {
           const [s] = snoozeQueue.splice(idx, 1);
           beginRing(s.alarm);
+          pruneFiredKeys();
           return;
         }
       }
@@ -1330,21 +1352,33 @@ export function AlarmWatcher() {
         const t = hhmm(now);
         const day = now.getDay();
         const tk = todayKey(now);
-        for (const a of alarms) {
-          if (!a.enabled || a.time !== t) continue;
-          // repeat 为空 = 仅一次（当日首次）；否则需包含今天
-          if (a.repeat.length > 0 && !a.repeat.includes(day)) continue;
-          // 已在响铃：不再叠加触发（不登记防重键，本轮停铃后若仍在该分钟内下一轮可补响）
-          if (ringingRef.current !== null) break;
-          const key = `${a.id}:${tk}`;
-          if (firedKeys.has(key)) continue;
-          firedKeys.add(key);
-          beginRing(a);
-          break;
+        if (ringingRef.current === null) {
+          // #67: 收集同分钟内所有命中闹钟，首只 beginRing，rest 压入 pendingRingers 续响
+          const matched: AlarmRecord[] = [];
+          for (const a of alarms) {
+            if (!a.enabled || a.time !== t) continue;
+            // repeat 为空 = 仅一次（当日首次）；否则需包含今天
+            if (a.repeat.length > 0 && !a.repeat.includes(day)) continue;
+            const key = `${a.id}:${tk}`;
+            if (firedKeys.has(key)) continue;
+            firedKeys.add(key);
+            // #20: 一次性闹钟（repeat 为空数组）触发后自动禁用，第二天不再响
+            if (a.repeat.length === 0) {
+              void localDB.put('alarms', { ...a, enabled: false });
+            }
+            matched.push(a);
+          }
+          if (matched.length > 0) {
+            const [first, ...rest] = matched;
+            pendingRingers = rest;
+            beginRing(first);
+          }
         }
       } catch {
         /* IndexedDB 不可用时静默 */
       }
+      // #66: 每轮 check 末尾清理过期 firedKeys（7 天前）
+      pruneFiredKeys();
     };
 
     const iv = window.setInterval(() => void check(), 5000);
@@ -1360,6 +1394,12 @@ export function AlarmWatcher() {
   const stop = useCallback(() => {
     teardownRef.current();
     ringingRef.current = null;
+    // #67: 同分钟内多只闹钟，停掉当前后续响队列里下一只；队列空才收起覆盖层
+    const nextAlarm = pendingRingers.shift();
+    if (nextAlarm) {
+      beginRingRef.current?.(nextAlarm);
+      return;
+    }
     setRinging(null);
   }, []);
 

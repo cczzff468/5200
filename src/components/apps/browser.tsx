@@ -16,12 +16,15 @@ import {
   PawPrint,
   RotateCw,
   Search,
+  X,
   type LucideIcon,
 } from 'lucide-react';
 import { BackToHome } from '@/components/ios/BackToHome';
 
 /** localStorage 键：记住上次选择的搜索引擎 */
 const ENGINE_STORAGE_KEY = 'ios-browser-engine';
+/** #28：书签数据 localStorage 键（书签数组：{name, url, createdAt}） */
+const BOOKMARKS_KEY = 'ios-browser-bookmarks';
 /** iframe 加载超时：超过仍未触发 onLoad 则提示可能被禁止内嵌 */
 const LOAD_TIMEOUT_MS = 6000;
 
@@ -32,6 +35,49 @@ const ENGINES = [
 ] as const;
 
 type EngineId = (typeof ENGINES)[number]['id'];
+
+/** #28：书签记录（localStorage 持久化） */
+interface Bookmark {
+  url: string;
+  name: string;
+  createdAt: number;
+}
+
+function readBookmarks(): Bookmark[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(BOOKMARKS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (b): b is Bookmark =>
+          typeof b === 'object' && b !== null && typeof (b as Bookmark).url === 'string' && typeof (b as Bookmark).name === 'string'
+      )
+      .sort((a, b) => b.createdAt - a.createdAt);
+  } catch {
+    return [];
+  }
+}
+
+function writeBookmarks(list: Bookmark[]): void {
+  try {
+    window.localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(list));
+  } catch {
+    /* 隐私模式等场景忽略 */
+  }
+}
+
+/** 从 URL 提取显示名（主机名去掉 www.；非法 URL 返回原字符串） */
+function bookmarkNameFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./, '') || url;
+  } catch {
+    return url;
+  }
+}
 
 const QUICK_LINKS: { name: string; host: string; icon: LucideIcon }[] = [
   { name: '维基百科', host: 'zh.wikipedia.org', icon: BookOpen },
@@ -185,6 +231,9 @@ export default function BrowserApp() {
   const [loading, setLoading] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [nonce, setNonce] = useState(0);
+  // #28：书签面板 + 书签列表
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   /** 标记当前 iframe 是否已触发 onLoad（供超时检测读取） */
@@ -246,7 +295,30 @@ export default function BrowserApp() {
 
   const openInNewWindow = () => {
     if (!currentUrl) return;
-    window.open(currentUrl, '_blank', 'noopener');
+    // #28：不再调 window.open 跳出到系统浏览器；同 App 内重新 navigate 当前页（强制刷新一次）
+    refresh();
+  };
+
+  // #28：书签 CRUD
+  const addBookmark = () => {
+    if (!currentUrl) return;
+    setBookmarks((prev) => {
+      const next = prev.filter((b) => b.url !== currentUrl);
+      next.unshift({ url: currentUrl, name: bookmarkNameFromUrl(currentUrl), createdAt: Date.now() });
+      writeBookmarks(next);
+      return next;
+    });
+  };
+  const removeBookmark = (url: string) => {
+    setBookmarks((prev) => {
+      const next = prev.filter((b) => b.url !== url);
+      writeBookmarks(next);
+      return next;
+    });
+  };
+  const openBookmark = (url: string) => {
+    setBookmarksOpen(false);
+    navigate(url);
   };
 
   const chooseEngine = (id: EngineId) => {
@@ -263,6 +335,14 @@ export default function BrowserApp() {
   const startEditing = () => {
     setDraft(displayValue);
     setEditing(true);
+    // #87：聚焦时选中全部文本，用户可直接输入新 URL 覆盖原值
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    });
   };
 
   /** 取消：恢复原值并 blur（onMouseDown preventDefault 防止按钮先于点击被卸载） */
@@ -301,6 +381,11 @@ export default function BrowserApp() {
     }, LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [srcUrl]);
+
+  // #28：首次挂载时从 localStorage 载入书签列表
+  useEffect(() => {
+    setBookmarks(readBookmarks());
+  }, []);
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
@@ -432,11 +517,79 @@ export default function BrowserApp() {
           <ToolButton label="主页" onClick={goHome} disabled={history.index < 0}>
             <House className="h-6 w-6" strokeWidth={2.2} />
           </ToolButton>
-          <ToolButton label="新窗口" onClick={openInNewWindow} disabled={!currentUrl}>
+          <ToolButton label="书签" onClick={() => setBookmarksOpen(true)}>
+            <BookOpen className="h-6 w-6" strokeWidth={2.2} />
+          </ToolButton>
+          {/* #28：原“新窗口”调 window.open 跳出本 App，现改为同 App 内重新 navigate 当前页（与刷新等价） */}
+          <ToolButton label="重载" onClick={openInNewWindow} disabled={!currentUrl}>
             <ArrowUpRight className="h-6 w-6" strokeWidth={2.2} />
           </ToolButton>
         </div>
       </footer>
+
+      {/* #28：书签面板（同 App 内弹出层） */}
+      {bookmarksOpen && (
+        <div className="absolute inset-0 z-50 flex flex-col bg-background">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-4 pt-[54px]">
+            <button
+              type="button"
+              onClick={() => setBookmarksOpen(false)}
+              className="text-[15px] text-foreground active:opacity-60"
+            >
+              完成
+            </button>
+            <span className="text-[15px] font-semibold">书签</span>
+            <button
+              type="button"
+              onClick={addBookmark}
+              disabled={!currentUrl}
+              className={`text-[15px] font-medium active:opacity-60 ${currentUrl ? 'text-[#007aff]' : 'text-muted-foreground/40'}`}
+            >
+              添加
+            </button>
+          </div>
+          <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pt-3">
+            {bookmarks.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 pt-20 text-muted-foreground">
+                <BookOpen className="h-10 w-10 opacity-40" strokeWidth={1.2} />
+                <div className="text-[15px] font-medium text-foreground/70">没有书签</div>
+                <div className="text-[13px]">在地址栏访问任意页面后点「添加」可收藏</div>
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-1.5">
+                {bookmarks.map((b) => (
+                  <li
+                    key={b.url}
+                    className="flex items-center gap-3 rounded-[12px] bg-card px-3 py-2.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => openBookmark(b.url)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left active:opacity-60"
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-muted">
+                        <Globe className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] leading-snug text-foreground">{b.name}</span>
+                        <span className="mt-0.5 block truncate text-[12px] leading-snug text-muted-foreground">{b.url}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除书签 ${b.name}`}
+                      onClick={() => removeBookmark(b.url)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground/70 active:opacity-50"
+                    >
+                      <X className="h-4 w-4" strokeWidth={2.2} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

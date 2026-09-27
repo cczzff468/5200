@@ -39,7 +39,10 @@ const generating = new Set<string>();
 const cancelled = new Map<string, number>();
 
 const MAX_SESSIONS = 200;
-const MAX_ITEMS_PER_SESSION = 20;
+// 单会话 pending 上限 50：客户端 Web Push 通知已发出但 pending 队列被裁掉时会出现「通知有但重开网页看不到对应消息」
+// 的不一致——拉高上限让短时多轮接力不再丢最早条
+const MAX_ITEMS_PER_SESSION = 50;
+const MAX_CANCELLED = 50; // cancelled Map 上限：超过淘汰最旧条目（旧 cancel 标记对应的 generate 早已完成）
 const MAX_TEXTS = 20;
 const TEXT_MAX = 4000;
 
@@ -232,6 +235,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (body.mode === 'cancel') {
     // 用户回页后自己发了新消息：正在生成中的接力回复作废（生成完成时发现标记即丢弃，防双回复）
     cancelled.set(sessionKey, Date.now());
+    // 上限淘汰最旧条目：cancelled Map 按 sessionKey 累积永不释放，超过 MAX_CANCELLED 时
+    // 丢掉最早写入的（旧 cancel 标记对应的 generate 早已完成，淘汰无副作用）
+    if (cancelled.size > MAX_CANCELLED) {
+      const firstKey = cancelled.keys().next().value;
+      if (firstKey) cancelled.delete(firstKey);
+    }
     return NextResponse.json({ ok: true });
   }
 

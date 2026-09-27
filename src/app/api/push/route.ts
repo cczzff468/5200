@@ -82,22 +82,62 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const body = (await req.json().catch(() => null)) as { subscription?: { endpoint?: unknown } } | null;
+  const body = (await req.json().catch(() => null)) as {
+    subscription?: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+  } | null;
   const endpoint = body?.subscription?.endpoint;
-  if (typeof endpoint !== 'string' || !endpoint) {
+  // 最小形状校验（#56）：endpoint 必须为非空字符串，且 keys.p256dh/auth 必须为字符串——
+  // web-push 协议必需这两项作为加密材料，缺失会让发送时 422 直接报错且占用订阅槽位。
+  if (
+    typeof endpoint !== 'string' ||
+    !endpoint ||
+    typeof body?.subscription?.keys?.p256dh !== 'string' ||
+    !body.subscription.keys.p256dh ||
+    typeof body?.subscription?.keys?.auth !== 'string' ||
+    !body.subscription.keys.auth
+  ) {
     return NextResponse.json({ error: 'subscription 无效' }, { status: 400 });
   }
-  const subs = await readJson<SubRec[]>('push-subs.json', []);
-  const next = Array.isArray(subs) ? subs.filter((s) => s && s.endpoint !== endpoint) : [];
-  next.push(body.subscription as SubRec);
-  await writeJson('push-subs.json', next.slice(-50));
-  return NextResponse.json({ ok: true });
+  // 串行化读-改-写（#55）：两个并发 POST 各自 read→filter→write 后写覆盖前写、
+  // 订阅会丢失。用模块级 in-flight Promise 链把所有 POST/DELETE 排队串行执行。
+  const result = await runSubsMutation(async () => {
+    const subs = await readJson<SubRec[]>('push-subs.json', []);
+    const next = Array.isArray(subs) ? subs.filter((s) => s && s.endpoint !== endpoint) : [];
+    next.push(body!.subscription as SubRec);
+    await writeJson('push-subs.json', next.slice(-50));
+    return NextResponse.json({ ok: true });
+  });
+  return result;
 }
 
 export async function DELETE(req: Request): Promise<NextResponse> {
   const body = (await req.json().catch(() => null)) as { endpoint?: unknown } | null;
   if (typeof body?.endpoint !== 'string') return NextResponse.json({ error: 'endpoint 无效' }, { status: 400 });
-  const subs = await readJson<SubRec[]>('push-subs.json', []);
-  await writeJson('push-subs.json', subs.filter((s) => s && s.endpoint !== body.endpoint));
-  return NextResponse.json({ ok: true });
+  // 与 POST 同一 in-flight 链（#55），避免 DELETE 与 POST 互撞。
+  const result = await runSubsMutation(async () => {
+    const subs = await readJson<SubRec[]>('push-subs.json', []);
+    await writeJson('push-subs.json', subs.filter((s) => s && s.endpoint !== body!.endpoint));
+    return NextResponse.json({ ok: true });
+  });
+  return result;
+}
+
+/**
+ * 订阅列表读-改-写单飞链（#55）：
+ * 任意一次 POST/DELETE 都先 await 上一笔完成再开始，确保 read→write 之间无并发窗口。
+ * subsInflight 持久化为「完成时清空」的 Promise<void>：每次新调用接到上一笔的尾巴后
+ * 立即替换为本笔，链式串行；任务内异常被吞成 500 响应并解链，不影响后续请求。
+ */
+let subsInflight: Promise<void> = Promise.resolve();
+
+function runSubsMutation(task: () => Promise<NextResponse>): Promise<NextResponse> {
+  const curr = subsInflight.then(task, () => task()).then(
+    (r) => r,
+    () => NextResponse.json({ error: '订阅存储失败' }, { status: 500 }),
+  );
+  subsInflight = curr.then(
+    () => undefined,
+    () => undefined,
+  );
+  return curr;
 }

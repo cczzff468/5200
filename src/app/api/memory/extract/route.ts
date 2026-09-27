@@ -51,12 +51,38 @@ function nowAnchor(now: Date): string {
   return raw.replace('星期', ' 星期');
 }
 
+/**
+ * 按北京时间（UTC+8）解析时间字符串，与客户端 parseMemTime 同口径；
+ * 支持两种格式：
+ *   - "YYYY-MM-DD" → 补 T00:00:00+08:00
+ *   - "YYYY-MM-DD HH:mm" → 空格替换为 T，附 +08:00
+ * 已带时区标识（Z / ±HH:mm）的原样解析，避免重复偏移导致时间错位
+ */
+function parseBeijingTime(s: string): number {
+  const trimmed = s.trim();
+  // 已带时区标识：原样解析（Date.parse 能识别 ISO 8601 带时区）
+  if (/[zZ]$/.test(trimmed) || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    return Date.parse(trimmed);
+  }
+  // "YYYY-MM-DD" → 补 T00:00:00+08:00
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return Date.parse(`${trimmed}T00:00:00+08:00`);
+  }
+  // "YYYY-MM-DD HH:mm" → 替换空格为 T，附 +08:00
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(trimmed)) {
+    return Date.parse(trimmed.replace(' ', 'T') + '+08:00');
+  }
+  // 其余格式尽力解析（仍按服务器本地时区，作为兜底）
+  return Date.parse(trimmed);
+}
+
 /** 时间字符串合法性与范围校验（±MEM_TIME_RANGE_YEARS 年），非法返回 null */
 function saneTimeStr(v: unknown, nowMs: number): string | null {
   if (typeof v !== 'string') return null;
   const s = v.trim();
   if (!s || s === 'null' || s === 'undefined') return null;
-  const t = Date.parse(s.replace(' ', 'T'));
+  // 按北京时间解析（与客户端 parseMemTime 同口径），避免服务器本地时区导致偏移
+  const t = parseBeijingTime(s);
   if (Number.isNaN(t)) return null;
   const span = MEM_TIME_RANGE_YEARS * 366 * 86_400_000;
   if (t < nowMs - span || t > nowMs + span) return null;
@@ -130,9 +156,10 @@ function collect(parsedFragments: unknown[], nowMs: number, validIds: Set<string
         const item: OutItem = { text: o.text.trim(), weight: normalizeWeight(o.weight, o.text) };
         const et = saneTimeStr(o.eventTime, nowMs);
         const ex = saneTimeStr(o.expiresAt, nowMs);
-        // 过期时间不得早于事件时间（荒谬组合防幻觉）：两者都有效且 ex < et 时丢弃 expiresAt
-        const etMs = et != null ? Date.parse(et.replace(' ', 'T')) : null;
-        const exMs = ex != null ? Date.parse(ex.replace(' ', 'T')) : null;
+        // 过期时间不得早于事件时间（荒谬组合防幻觉）：两者都有效且 ex < et 时丢弃 expiresAt；
+        // 同样按北京时间解析（与 saneTimeStr 同口径）
+        const etMs = et != null ? parseBeijingTime(et) : null;
+        const exMs = ex != null ? parseBeijingTime(ex) : null;
         if (et) item.eventTime = et;
         if (ex && (etMs == null || exMs == null || exMs >= etMs)) item.expiresAt = ex;
         if (Array.isArray(o.supersedes)) {

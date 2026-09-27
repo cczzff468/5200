@@ -69,7 +69,16 @@ export function ownerCardFor(npc: ContactRecord, all: ContactRecord[]): string[]
  * 时间格式 M月D日，最新在前（listFragments 本身 createdAt 倒序）。
  */
 export function bondNotesFor(contactId: string, keywords: string[], limit = 3): string[] {
-  const words = keywords.map((k) => (k ?? '').trim()).filter((k) => k.length >= 2);
+  // #41：放宽关键词长度过滤——原 ≥2 漏掉中文单字人名（「凡」「安」），改为按字符类型分支：
+  // 含中文字符的关键词允许单字（中文单字人名/物名是合法关键词），纯英文/数字仍 ≥2（避免「a」「1」噪声）
+  const words = keywords
+    .map((k) => (k ?? '').trim())
+    .filter((k) => {
+      if (!k) return false;
+      // 含中文字符 → 允许单字；纯 ASCII（英文/数字/符号）→ 至少 2 字
+      const hasCJK = /[\u4e00-\u9fff]/.test(k);
+      return hasCJK ? k.length >= 1 : k.length >= 2;
+    });
   if (words.length === 0) return [];
   const frags = listFragments(contactId).filter((f) => {
     const content = f.content ?? '';

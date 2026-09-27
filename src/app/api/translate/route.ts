@@ -132,14 +132,14 @@ function isPrivateHost(hostname: string): boolean {
 
 /**
  * 内置模型兜底（z-ai-web-dev-sdk）：上游故障 / 未配置时把翻译救回来，
- * 与 /api/chat、server-llm.ts 同策略；SDK 不接收 system 角色，并入 assistant。
+ * 与 /api/chat、server-llm.ts 同策略；z-ai SDK 实际接受 system 角色，直接传翻译指令。
  */
 async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   const completion = await zai.chat.completions.create({
     messages: messages.map((m) => ({
-      role: m.role === 'system' ? ('assistant' as const) : m.role,
+      role: m.role,
       content: m.content,
     })),
     thinking: { type: 'disabled' },
@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'text 不能为空且不超过 5000 字' }, { status: 400 });
   }
   if (!lang || lang.length > 30) {
-    return NextResponse.json({ error: 'lang 不能为空' }, { status: 400 });
+    return NextResponse.json({ error: 'lang 不能为空或过长（≤30 字符）' }, { status: 400 });
   }
   // 组装翻译 messages（供上游与内置模型兜底共用）
   const messages: UpstreamMessage[] = [
@@ -242,7 +242,12 @@ export async function POST(req: NextRequest) {
     for (let attempt = 0; attempt < 3; attempt++) {
       let res: Response;
       try {
-        res = await fetch(endpoint, { method: 'POST', headers, body: makeBody() });
+        res = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: makeBody(),
+          signal: AbortSignal.timeout(60_000),
+        });
       } catch (err) {
         lastErr = err;
         break; // 网络不通：换下一个候选端点

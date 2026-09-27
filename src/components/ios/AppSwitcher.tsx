@@ -52,6 +52,8 @@ export default function AppSwitcher() {
   const movedRef = useRef(false);
   // 主屏幕指示条：上滑返回主屏幕
   const barY = useRef<number | null>(null);
+  // #64：onScroll rAF 节流——避免每个 scroll 事件都 setState 触发重渲染（快速横滑密集触发）
+  const scrollRafRef = useRef<number | null>(null);
 
   // 进场动画 + 打开时重置轮播位置（setState 均在 rAF 回调内，非 effect 同步调用）
   useEffect(() => {
@@ -64,6 +66,16 @@ export default function AppSwitcher() {
     );
     return () => cancelAnimationFrame(raf);
   }, [open]);
+
+  // #64：组件卸载时清理 onScroll rAF 节流挂起的回调
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, []);
 
   if (!open && !closing) return null;
 
@@ -97,9 +109,14 @@ export default function AppSwitcher() {
   const STEP = CARD_W + CARD_GAP;
 
   const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setActiveIdx(Math.round(el.scrollLeft / STEP));
+    // #64：rAF 节流——一个 frame 内多次 scroll 事件合批为单次 setActiveIdx。
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = scrollRef.current;
+      if (!el) return;
+      setActiveIdx(Math.round(el.scrollLeft / STEP));
+    });
   };
 
   // ---------------- 卡片手势：纵向拖动 = 上滑关闭；横向交给原生滚动 ----------------

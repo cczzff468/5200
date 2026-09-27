@@ -350,6 +350,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const ringRef = useRef<RingTone | null>(null);
+  /** #18 finishRef：生命周期 cleanup 调最新 finish 走完整收尾（页面关闭/PhoneShell 卸载时
+   *  进行中通话也落卡片+续聊+记忆总结，不让通话静默消失） */
+  const finishRef = useRef<(endReason: ChatCallEndReason, afterText?: string) => void>(() => {});
   /** 录音期间并行的 Web Speech 实时识别会话（liveHeard 字幕来源 + 服务端 STT 失败兑底） */
   const wsRef = useRef<WebSpeechSession | null>(null);
   const busyRef = useRef(false); // STT/turn/TTS 循环进行中
@@ -571,6 +574,10 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       ...(afterText ? { afterText } : {}),
     });
   }, [direction, stopAutoListenTimers, followupAndSummarize]);
+  // #18 finishRef：同步最新 finish，供生命周期 cleanup 调用（effect deps=[] 避免重跑组件初始化）
+  useEffect(() => {
+    finishRef.current = finish;
+  });
 
   // ---------- TTS 播报（角色音色；逐字字幕同步；失败整句直出字幕不中断） ----------
   const speakReply = useCallback(
@@ -1217,8 +1224,17 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
 
   const hangup = useCallback(() => {
     if (endedRef.current) return;
-    // 拨号中挂断 = 取消（对方接听前）；接通后挂断 = 正常结束
-    finish(phaseRef.current === 'dialing' ? 'cancel' : 'hangup');
+    // #51 三态映射（与 finishByReplacement:1205 同款）：incoming 阶段挂断 = 未接听（missed-in）/
+    // dialing 阶段挂断 = 已取消（cancel）/ 接通后挂断 = 正常结束（hangup）。
+    // UI 不暴露 incoming 阶段挂断钮，但 call.hangup 被 useChatCall 导出，宿主在 incoming 相位调它
+    // 会把从未接通的电话记成 endReason='hangup' → connected=true，与拒接语义不一致。
+    finish(
+      phaseRef.current === 'incoming'
+        ? 'missed-in'
+        : phaseRef.current === 'dialing'
+          ? 'cancel'
+          : 'hangup'
+    );
   }, [finish]);
 
   // ---------- 生命周期：铃声 / AI 接听决策（接听·拒绝·不接）/ 来电超时 / 计时 / 卸载清理 ----------
@@ -1306,6 +1322,17 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       window.clearTimeout(missTimer);
       window.clearTimeout(peerTimer);
       ring.stop();
+      // #18 卸载/页面关闭/PhoneShell 卸载时进行中通话也要走完整收尾（落卡片+续聊+记忆总结），
+      // 不让进行中通话静默消失。finishRef 读最新 finish（deps=[] 避免重跑初始化）；finish 内幂等置 endedRef。
+      if (!endedRef.current) {
+        finishRef.current(
+          phaseRef.current === 'incoming'
+            ? 'missed-in'
+            : phaseRef.current === 'dialing'
+              ? 'cancel'
+              : 'hangup',
+        );
+      }
       endedRef.current = true;
       stopAutoListenTimers();
       stopSpeaking();

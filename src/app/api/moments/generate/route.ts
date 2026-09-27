@@ -186,8 +186,8 @@ export async function POST(req: Request) {
   try {
     const config = extractUpstreamConfig(body.config);
     const { text } = await completeWithFallback(config, messages);
-    // 发动态（含有感而发/让TA发一条/自动发布）硬性不加 emoji：提示词禁令之外再剥一次（模型偶尔无视禁令）
-    const content = kind === 'post' ? stripEmojiText(cleanContent(text)) : cleanContent(text);
+    // #47：发动态 / 评论 / 回复统一硬性剥 emoji——朋友圈文字干净；提示词禁令之外再剥一次（模型偶尔无视禁令）
+    const content = stripEmojiText(cleanContent(text));
     if (!content) return NextResponse.json({ error: '生成结果为空' }, { status: 502 });
     return NextResponse.json({ content });
   } catch (err) {

@@ -264,7 +264,14 @@ export function useVoiceRecorder(opts: {
         optsRef.current.onResult(null, z);
         return;
       }
-      const blob = new Blob(chunks, { type: mimeRef.current.includes('audio') ? mimeRef.current : 'audio/webm' });
+      // #43：Safari 录音实际是 'audio/mp4'，原兜底 'audio/webm' 会让 Safari 录音 blob 失去正确 MIME。
+      // 探测失败（mimeRef 不含 audio）时按浏览器分支兜底：Safari/WebKit → 'audio/mp4'，其他 → 'audio/webm'
+      const fallbackMime = (() => {
+        const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+        const isSafari = /^((?!chrome|android).)*safari/i.test(ua) || /AppleWebKit/i.test(ua) && !/Chrome/i.test(ua);
+        return isSafari ? 'audio/mp4' : 'audio/webm';
+      })();
+      const blob = new Blob(chunks, { type: mimeRef.current.includes('audio') ? mimeRef.current : fallbackMime });
       const result: VoiceRecordResult = {
         blob,
         // 时长钳制到 60s 上限：极端场景（后台页 timer 节流致自动停止延迟触发）下不超上限

@@ -27,6 +27,8 @@ import { requestCallFollowup } from './call-followup';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from './incoming-call';
 import { useGlobalCall } from './global-call';
 import { useSettings, useUI } from './store';
+import { buildNpcPromptExtra } from './npc-bond';
+import { loadBlock } from './block-state';
 import { getMemSettings, memRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { getReplyCount } from '@/lib/reply-count';
@@ -56,6 +58,9 @@ export const PROACTIVE_FIRST_TICK_DELAY_MS = 60_000;
 export const PROACTIVE_TICK_INTERVAL_MS = 90_000;
 /** 每次 tick 的随机抖动上限（0~30s，避免整点齐刷刷） */
 export const PROACTIVE_TICK_JITTER_MS = 30_000;
+
+/** 决策为 call 但触发前发现已有通话/闹钟时落短冷却（#52）：避免 90s 重试再次决策 */
+const SHORT_COOLDOWN_MS = 5 * 60 * 1000;
 
 /** 决策 API 返回（与 /api/phone/proactive 契约一致） */
 interface ProactiveDecision {
@@ -220,14 +225,22 @@ function cooldownKey(contactId: string): string {
 }
 
 function isCoolingDown(contactId: string, nowMs: number): boolean {
-  const c = kvGet<{ at?: unknown; action?: unknown }>(cooldownKey(contactId));
+  const c = kvGet<{ at?: unknown; action?: unknown; window?: unknown }>(cooldownKey(contactId));
   if (!c || typeof c.at !== 'number') return false;
+  // #52 自定义窗口（短冷却）：record 同时写 window 时优先用它而非 action 推导
+  if (typeof c.window === 'number' && c.window > 0) return nowMs - c.at < c.window;
   const window = c.action === 'skip' ? COOLDOWN_SKIP_MS : COOLDOWN_ACTIVE_MS; // 未知 action 按活跃口径保守处理
   return nowMs - c.at < window;
 }
 
 function setCooldown(contactId: string, at: number, action: ProactiveDecision['action']): void {
   kvSet(cooldownKey(contactId), { at, action });
+}
+
+/** #52 短冷却（5min）：决策为 call 但触发前发现已有通话/闹钟时使用——
+ *  联系人未被真拨打不应被记 6h 冷却，但完全无冷却会 90s 后又选到同一联系人再次决策浪费一次 API 调用。 */
+function setShortCooldown(contactId: string, at: number): void {
+  kvSet(cooldownKey(contactId), { at, action: 'wait', window: SHORT_COOLDOWN_MS });
 }
 
 // ---------------- 决策请求 ----------------
@@ -270,6 +283,9 @@ async function recordMissedPhoneCall(
 ): Promise<void> {
   const contactId = contact.id;
   const displayName = contact.name || fallbackName;
+  // #17 拉黑守卫：用户在「信息」App 拉黑了该角色 → 仍落 call-logs 留历史记录，但 voicemails（AI 留言）不写
+  // （避免「我已把你拉黑，你却还在给我语音留言」的体验断裂；call-logs 保留以便用户回看未接来电历史）
+  const blockedByUser = loadBlock('sms', contactId).byUser === true;
   try {
     await localDB.put('call-logs', {
       id: genId(),
@@ -285,6 +301,7 @@ async function recordMissedPhoneCall(
   } catch {
     // 记录落盘失败静默
   }
+  if (blockedByUser) return; // 用户拉黑了角色：不写语音留言（call-logs 已留历史记录）
   try {
     const [owner, recent] = await Promise.all([
       ownerProfile().catch(() => null),
@@ -315,7 +332,8 @@ async function recordMissedPhoneCall(
       duration: 0,
       transcript: [],
       recentChat,
-      memoryBlock: memRecallBlock(contact.id, 'sms', recentChat.map((m) => m.content).join(' ')) || undefined,
+      // #78 电话通话的 missed 留言记忆召回 app 应是 'phone'（与 phone.tsx:1089 挂断续聊一致），原 'sms' 误写
+      memoryBlock: memRecallBlock(contact.id, 'phone', recentChat.map((m) => m.content).join(' ')) || undefined,
       timeBlock: buildTimeAwareBlock({
         lastMsgTime: recent.length > 0 ? recent[recent.length - 1].time : null,
         regionHint: contact.region || null,
@@ -348,7 +366,12 @@ async function recordMissedPhoneCall(
 
 // ---------------- 决策 prompt 的联系人资料（与 chat.tsx 同字段口径） ----------------
 
-function contactPayloadOf(c: ContactRecord): Record<string, unknown> {
+/** #79 NPC 配角圈/归属者资料卡（与 phone.tsx:847 同款 `...(npcExtra ?? {})` 模式）。
+ *  npcExtra 由调用方现场构建（需要全部联系人列表，调用方在 tickInner 已加载） */
+function contactPayloadOf(
+  c: ContactRecord,
+  npcExtra: ReturnType<typeof buildNpcPromptExtra> = null,
+): Record<string, unknown> {
   return {
     name: c.name,
     kind: c.kind,
@@ -363,6 +386,9 @@ function contactPayloadOf(c: ContactRecord): Record<string, unknown> {
     background: c.background || null,
     nickname: c.nickname || null,
     realName: c.realName ?? null,
+    // NPC 字段（ownerLabel/npcCircle/ownerCard/backgroundNotes）：NPC 角色的归属者/配角圈上下文
+    // 在主动来电决策里与电话 App 通话 turn 同款注入（与 phone.tsx:847 `...(npcExtra ?? {})` 同模式）
+    ...(npcExtra ?? {}),
   };
 }
 
@@ -404,10 +430,19 @@ async function tickInner(): Promise<void> {
   // ③ 交互中守卫：已有来电响铃或通话进行中不发起（页面后台 document.hidden 照常——真实手机行为）
   if (useIncomingCall.getState().call) return;
   if (useGlobalCall.getState().session) return;
+  // #34 闹钟响铃中不主动拨出：闹钟铃声与通话音频重叠体验差，等闹钟被处理后再考虑
+  if (useUI.getState().alarmRinging) return;
 
-  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除）
-  const contacts = (await listContacts()).filter(
-    (c) => c.kind !== 'user' && !!c.name?.trim() && !!c.persona?.trim()
+  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除；#16 任一 App 被 byUser 拉黑即跳过）
+  const allContacts = await listContacts();
+  const contacts = allContacts.filter(
+    (c) =>
+      c.kind !== 'user' &&
+      !!c.name?.trim() &&
+      !!c.persona?.trim() &&
+      !loadBlock('wx', c.id).byUser &&
+      !loadBlock('qq', c.id).byUser &&
+      !loadBlock('sms', c.id).byUser
   );
   if (contacts.length === 0) return;
 
@@ -423,8 +458,9 @@ async function tickInner(): Promise<void> {
     // 通话记录读不到时仅按三端消息判互动
   }
 
-  // 资格筛选 + 选「最久没聊」的一位
-  let best: { contact: ContactRecord; lastInteractionAt: number } | null = null;
+  // 资格筛选（#53 满足条件的联系人为候选；按「最久没聊」加权随机选取，
+  // 避免同一最久者每 90s 被反复占用直到进入冷却，其余合格者饿死）
+  const candidates: { contact: ContactRecord; lastInteractionAt: number; weight: number }[] = [];
   for (const c of contacts) {
     const lastInteractionAt = Math.max(
       lastTimeOf(readKvMsgs(WX_MSGS_KEY(c.id))),
@@ -437,9 +473,23 @@ async function tickInner(): Promise<void> {
     if (gap > ACTIVE_WINDOW_MS) continue; // 48h 内无互动
     if (gap < MIN_GAP_MS) continue; // 刚聊完不久
     if (isCoolingDown(c.id, nowMs)) continue; // 冷却中
-    if (!best || lastInteractionAt < best.lastInteractionAt) best = { contact: c, lastInteractionAt };
+    // 权重 = gap（毫秒）：越久没聊权重越高（线性，与「最久没聊」单调一致但带随机性）
+    candidates.push({ contact: c, lastInteractionAt, weight: gap });
   }
-  if (!best) return;
+  if (candidates.length === 0) return;
+  // 加权随机：累计权重 + 随机落点（权重越大越可能命中，最久者最可能但不独占）
+  const totalWeight = candidates.reduce((s, c) => s + c.weight, 0);
+  let best = candidates[0];
+  if (totalWeight > 0) {
+    let r = Math.random() * totalWeight;
+    for (const cand of candidates) {
+      r -= cand.weight;
+      if (r <= 0) {
+        best = cand;
+        break;
+      }
+    }
+  }
 
   const contact = best.contact;
 
@@ -457,21 +507,43 @@ async function tickInner(): Promise<void> {
   );
 
   const decision = await requestProactiveDecision({
-    contact: contactPayloadOf(contact),
+    contact: contactPayloadOf(contact, buildNpcPromptExtra(contact, allContacts)),
     recentChats,
     lastChatAt: best.lastInteractionAt,
     lastInteractionLabel: gapLabel(nowMs - best.lastInteractionAt),
     now: fmtNow(nowMs),
   });
 
-  // 落冷却：决策 call/wait 记 6h；skip 记 24h；决策失败（null）按 wait 口径退避，不每 90s 重试上游
-  const action: ProactiveDecision['action'] = decision ? decision.action : 'wait';
-  setCooldown(contact.id, nowMs, action);
-  if (action !== 'call' || !decision) return;
+  // 决策失败（null）：按 wait 口径落 6h 冷却，防止 90s 重试上游轰炸
+  if (!decision) {
+    setCooldown(contact.id, nowMs, 'wait');
+    return;
+  }
+  // wait/skip：落对应冷却（6h/24h），不发起来电
+  if (decision.action !== 'call') {
+    setCooldown(contact.id, nowMs, decision.action);
+    return;
+  }
 
   // ⑥ 发起真来电（决策期间可能刚出现通话/来电，触发前再守卫一次）
-  if (useIncomingCall.getState().call) return;
-  if (useGlobalCall.getState().session) return;
+  // #52 修复：决策为 call 但触发前发现已有通话/闹钟 → 联系人未被真拨打，不应被记 6h 冷却。
+  //   落 5min 短冷却（避免 90s 重试又命中同一联系人浪费一次决策 API；足够下一 tick 选到其他候选）。
+  //   真拨打才落 6h call 冷却。
+  if (useIncomingCall.getState().call) {
+    setShortCooldown(contact.id, nowMs);
+    return;
+  }
+  if (useGlobalCall.getState().session) {
+    setShortCooldown(contact.id, nowMs);
+    return;
+  }
+  // 闹钟响铃中也不拨出（与③守卫同款，#34；决策期间可能刚响起来）
+  if (useUI.getState().alarmRinging) {
+    setShortCooldown(contact.id, nowMs);
+    return;
+  }
+  // 真拨打：落 6h 冷却（call action）
+  setCooldown(contact.id, nowMs, 'call');
   const number = contact.phone || derivePlaceholderNumber(contact.id);
   const name = contact.name;
   triggerIncomingCall({

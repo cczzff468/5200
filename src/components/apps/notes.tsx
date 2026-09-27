@@ -95,14 +95,15 @@ function isBlankNote(n: NoteRecord): boolean {
   return text === '' || text === CHECKLIST_SEED_TEXT;
 }
 
-/** 列表正文预览：标题为空时跳过被用作标题的首行 */
+/** 列表正文预览：标题为空时跳过被用作标题的首行。
+ *  #85：保留首两行的段落结构——用「；」分隔代替 join(' ')（原写法把段落拍平为空格丢失结构） */
 function displayPreview(n: NoteRecord): string {
   const lines = htmlToText(n.content)
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l !== '');
   if (!(n.title ?? '').trim() && lines.length > 0) lines.shift();
-  return lines.join(' ');
+  return lines.slice(0, 2).join('；');
 }
 
 /** 列表第二行日期：今天 HH:mm / 昨天"昨天"/ 本周周X / 否则 M月d日 */
@@ -637,8 +638,9 @@ export default function NotesApp() {
     putNote(withPatch(n, { category: c }));
   }
 
-  /** 删除笔记：动作表本身即确认，直接删除（不再 window.confirm） */
+  /** 删除笔记：#86 与 photos.tsx 删除确认模式一致——window.confirm 二次确认 */
   function deleteNote(n: NoteRecord) {
+    if (!window.confirm(`删除“${n.title || '备忘录'}”？此操作不可撤销。`)) return;
     void (async () => {
       try {
         await localDB.delete('notes', n.id);

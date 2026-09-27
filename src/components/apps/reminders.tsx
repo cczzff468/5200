@@ -14,6 +14,11 @@ import { Switch } from '@/components/ui/switch';
  * - 未完成列表（createdAt 升序）+ 已完成折叠区（自动沉底）
  * - 行内圆圈完成切换（scale 过渡）+ Info 打开详情编辑底部 Sheet
  * - 底部圆角快速新建栏（Enter / 失焦非空即创建）
+ * - #24：支持「不重复/每天/工作日/周末/自定义 weekday 多选」重复提醒；
+ *   保存后 mount 时自动同步 dueDate 到下一个匹配 weekday（ReminderWatcher 只读不改、
+ *   只看 dueDate+dueTime，重复语义由本 App 同步驱动）
+ * - #25：挂载时静默请求 Notification 权限，全局到期通知由 ReminderWatcher 负责
+ *   （src/components/ios/ReminderWatcher.tsx 只读；同一 IndexedDB 表）
  * 数据持久化于 IndexedDB reminders 表。
  */
 
@@ -26,11 +31,49 @@ function todayKey(): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** 到期副标题：今天/过期红色，其他日期 muted；仅时间视为今天的提醒 */
+/** #24：重复预设选项 */
+const REPEAT_PRESETS: { key: string; label: string; weekdays: number[] }[] = [
+  { key: 'none', label: '不重复', weekdays: [] },
+  { key: 'daily', label: '每天', weekdays: [0, 1, 2, 3, 4, 5, 6] },
+  { key: 'weekday', label: '工作日', weekdays: [1, 2, 3, 4, 5] },
+  { key: 'weekend', label: '周末', weekdays: [0, 6] },
+];
+const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+
+/** #24：给定起始日与 weekday 集合，返回下一个匹配的 YYYY-MM-DD（从 from 起始包含当天） */
+function nextMatchingDate(from: Date, weekdays: number[]): string {
+  if (weekdays.length === 0) return `${from.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}`;
+  const set = new Set(weekdays);
+  for (let i = 0; i < 8; i++) {
+    const d = new Date(from);
+    d.setDate(d.getDate() + i);
+    if (set.has(d.getDay())) return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+  return `${from.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}`;
+}
+
+/** #24：重复提醒的简短描述（“每天”、“工作日”、“周一周三…”） */
+function repeatLabel(r: ReminderRecord): string {
+  if (!r.repeat || r.repeat.length === 0) return '';
+  for (const p of REPEAT_PRESETS) {
+    if (p.weekdays.length > 0 && p.weekdays.every((d) => r.repeat!.includes(d)) && r.repeat!.length === p.weekdays.length) {
+      return p.label;
+    }
+  }
+  return r.repeat.map((d) => `周${WEEKDAY_LABELS[d] ?? ''}`).join('');
+}
+
+/** 到期副标题：今天/过期红色，其他日期 muted；仅时间视为今天的提醒。
+ *  #24：有 repeat 字段时显示重复描述（“每天 09:00” / “工作日” 等），不再逐天标红。 */
 function dueInfo(r: ReminderRecord): { text: string; red: boolean } | null {
+  const repLabel = repeatLabel(r);
   const today = todayKey();
   if (r.dueDate) {
     const timePart = r.dueTime ? ` ${r.dueTime}` : '';
+    if (repLabel) {
+      // 重复提醒：不逐天标红，仅提示重复语义 + 时间
+      return { text: `${repLabel}${timePart}`, red: false };
+    }
     if (r.dueDate === today) return { text: `今天${timePart}`, red: true };
     const parts = r.dueDate.split('-').map((v) => parseInt(v, 10));
     if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
@@ -153,6 +196,9 @@ function ReminderSheet({
   const [dueDate, setDueDate] = useState(reminder.dueDate);
   const [dueTime, setDueTime] = useState(reminder.dueTime);
   const [flagged, setFlagged] = useState(reminder.flagged);
+  // #24：重复 weekday 数组（0=周日..6=周六；[]/undefined=不重复）
+  const [repeat, setRepeat] = useState<number[]>(reminder.repeat ?? []);
+  const [customOpen, setCustomOpen] = useState(false);
 
   // 双 rAF 触发上滑动画（setState 在 rAF 回调内）
   useEffect(() => {
@@ -169,6 +215,15 @@ function ReminderSheet({
   }, []);
 
   const canSave = title.trim().length > 0;
+
+  /** #24：选中预设或自定义时计算 repeat 数组 */
+  const applyPreset = (weekdays: number[]) => setRepeat(weekdays);
+  const toggleWeekday = (d: number) =>
+    setRepeat((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d].sort()));
+
+  const matchedPreset = REPEAT_PRESETS.find(
+    (p) => p.weekdays.length === repeat.length && p.weekdays.every((d) => repeat.includes(d))
+  );
 
   return (
     <div className="absolute inset-0 z-40">
@@ -233,6 +288,77 @@ function ReminderSheet({
             <span className="text-[15px]">标记</span>
             <Switch checked={flagged} onCheckedChange={setFlagged} aria-label="标记提醒" />
           </div>
+          {/* #24：重复选择——预设 4 项 + 自定义 weekday 多选 */}
+          <div className="rounded-[12px] bg-muted px-4 py-3">
+            <div className="text-[15px]">重复</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {REPEAT_PRESETS.map((p) => {
+                const active =
+                  matchedPreset?.key === p.key ||
+                  (p.key === 'none' && repeat.length === 0) ||
+                  (p.key !== 'none' &&
+                    p.weekdays.length === repeat.length &&
+                    p.weekdays.every((d) => repeat.includes(d)));
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => applyPreset(p.weekdays)}
+                    aria-pressed={active}
+                    className={`rounded-full px-3.5 py-[7px] text-[13px] leading-none transition-colors ${
+                      active
+                        ? 'bg-foreground font-medium text-background'
+                        : 'bg-background/70 text-foreground/80 active:opacity-60'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setCustomOpen((v) => !v)}
+                aria-pressed={customOpen}
+                aria-label="自定义重复星期"
+                className={`rounded-full px-3.5 py-[7px] text-[13px] leading-none transition-colors ${
+                  customOpen || (repeat.length > 0 && !matchedPreset)
+                    ? 'bg-foreground font-medium text-background'
+                    : 'bg-background/70 text-foreground/80 active:opacity-60'
+                }`}
+              >
+                自定义
+              </button>
+            </div>
+            {(customOpen || (repeat.length > 0 && !matchedPreset)) && (
+              <div className="mt-3 flex items-center gap-1.5">
+                {WEEKDAY_LABELS.map((lbl, idx) => {
+                  const on = repeat.includes(idx);
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => toggleWeekday(idx)}
+                      aria-pressed={on}
+                      aria-label={`周${lbl}`}
+                      className={`flex h-8 w-8 items-center justify-center rounded-full text-[13px] transition-colors ${
+                        on
+                          ? 'bg-foreground font-medium text-background'
+                          : 'bg-background/70 text-foreground/70 active:opacity-60'
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {repeat.length > 0 && (
+              <div className="mt-2 text-[12px] leading-snug text-muted-foreground">
+                {matchedPreset ? matchedPreset.label : `每 ${repeat.map((d) => `周${WEEKDAY_LABELS[d] ?? ''}`).join('、')}`}
+                {dueDate && ' · 保存后将自动同步到下一个匹配日'}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => onDelete(reminder.id)}
@@ -244,7 +370,7 @@ function ReminderSheet({
             type="button"
             disabled={!canSave}
             onClick={() =>
-              onSave({ ...reminder, title: title.trim(), notes: notes.trim(), dueDate, dueTime, flagged })
+              onSave({ ...reminder, title: title.trim(), notes: notes.trim(), dueDate, dueTime, flagged, repeat })
             }
             className="mt-1 h-11 rounded-full bg-foreground text-[17px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-40"
           >
@@ -266,13 +392,46 @@ export default function RemindersApp() {
   const [editing, setEditing] = useState<ReminderRecord | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // 初次加载（await 之后再 setState）
+  // 初次加载（await 之后再 setState）+ #24 同步重复提醒的 dueDate 到下一个匹配 weekday +
+  // #25 静默请求 Notification 权限（全局到期通知由 ReminderWatcher 负责）
   useEffect(() => {
     let alive = true;
     void (async () => {
+      // #25：静默请求通知权限（不阻塞；用户未授权时 ReminderWatcher 仍可用应用内横幅）
+      try {
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+          void Notification.requestPermission().catch(() => undefined);
+        }
+      } catch {
+        /* 权限 API 不可用 */
+      }
       try {
         const all = await localDB.getAll('reminders');
-        if (alive) setReminders(sortReminders(all));
+        // #24：对启用了 repeat 且未完成的提醒，若 dueDate 已过期或不在 repeat weekday 上，
+        // 同步 dueDate 到「今天/未来最近匹配 weekday」——ReminderWatcher 仅看 dueDate+dueTime，
+        // 由本同步保证下一次触发对齐 weekday 语义
+        const today = new Date();
+        const todayStr = todayKey();
+        let mutated = false;
+        const synced = all.map((r) => {
+          if (!r.repeat || r.repeat.length === 0 || r.completed || !r.dueDate) return r;
+          // dueDate 已是未来且匹配 weekday → 不动；否则同步到下一个匹配日
+          if (r.dueDate >= todayStr && r.repeat.includes(new Date(r.dueDate).getDay())) return r;
+          const next = nextMatchingDate(today, r.repeat);
+          if (next !== r.dueDate) {
+            mutated = true;
+            return { ...r, dueDate: next };
+          }
+          return r;
+        });
+        if (mutated) {
+          await Promise.all(
+            synced
+              .filter((r, i) => r !== all[i])
+              .map((r) => localDB.put('reminders', r).catch(() => undefined))
+          );
+        }
+        if (alive) setReminders(sortReminders(synced));
       } catch {
         /* IndexedDB 不可用时保持空列表 */
       }
@@ -282,6 +441,66 @@ export default function RemindersApp() {
       alive = false;
     };
   }, []);
+
+  // #25：本应用可见时（document.visible）的本地到期通知触发——ReminderWatcher 仅在 document.hidden
+  // 时发系统级 Notification，可见时只发横幅；为满足「到期时 new Notification('提醒', ...)」要求，
+  // 本应用打开时每 10s 轮询，命中到期即发 Notification（与 ReminderWatcher 的 localStorage 防重键
+  // 'ios-reminder-fired' 共享，避免重复触发）；权限未授予/熄屏/不可见时跳过。
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    const FIRED_KEY = 'ios-reminder-fired';
+    const firedSet = new Set<string>();
+    try {
+      const raw = window.localStorage.getItem(FIRED_KEY);
+      if (raw) {
+        const obj = JSON.parse(raw) as Record<string, unknown>;
+        for (const k of Object.keys(obj)) firedSet.add(k);
+      }
+    } catch {
+      /* 无标记/解析失败视为空 */
+    }
+    const markFired = (key: string) => {
+      firedSet.add(key);
+      try {
+        const obj: Record<string, number> = {};
+        for (const k of firedSet) obj[k] = Date.now();
+        window.localStorage.setItem(FIRED_KEY, JSON.stringify(obj));
+      } catch {
+        /* 存储不可用：本次会话内存防重仍生效 */
+      }
+    };
+    const check = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Notification.permission !== 'granted') return;
+      const now = Date.now();
+      for (const r of reminders) {
+        if (r.completed) continue;
+        let due: number | null = null;
+        if (r.dueDate) {
+          const [y, mo, d] = r.dueDate.split('-').map((v) => parseInt(v, 10));
+          const [h, mi] = (r.dueTime || '09:00').split(':').map((v) => parseInt(v, 10));
+          if ([y, mo, d, h, mi].every((v) => Number.isFinite(v))) {
+            due = new Date(y, mo - 1, d, h, mi).getTime();
+          }
+        } else if (r.dueTime) {
+          const n = new Date();
+          due = new Date(n.getFullYear(), n.getMonth(), n.getDate(), parseInt(r.dueTime.slice(0, 2), 10), parseInt(r.dueTime.slice(3, 5), 10)).getTime();
+        }
+        if (due === null || due > now || now - due > 2 * 60_000) continue;
+        const key = `rw:r:${r.id}:${Math.floor(due / 60000)}`;
+        if (firedSet.has(key)) continue;
+        try {
+          new Notification('提醒', { body: r.title, tag: key });
+          markFired(key);
+        } catch {
+          /* 构造失败静默 */
+        }
+      }
+    };
+    void check();
+    const iv = window.setInterval(check, 10_000);
+    return () => window.clearInterval(iv);
+  }, [reminders]);
 
   const pending = reminders.filter((r) => !r.completed);
   const completed = reminders.filter((r) => r.completed);

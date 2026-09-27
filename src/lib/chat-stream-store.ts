@@ -135,6 +135,8 @@ export interface BeginChatStreamOptions {
  * 拉黑状态按 App × 联系人 ID 隔离，这里的解析与各 App 的会话键同源同义。
  */
 function blockSessionOf(sessionKey: string): { app: BlockApp; contactId: string } | null {
+  // 群聊会话无拉黑关系天然放行（拉黑按 App × 单联系人 ID 隔离，群成员不参与拉黑）；
+  // AI 助手会话同理（sms:assistant / assistant）：助手是系统侧角色，不进入「角色 ↔ 用户」拉黑图谱
   if (sessionKey.startsWith('wx:group:') || sessionKey.startsWith('qq:group:')) return null;
   if (sessionKey === 'sms:assistant' || sessionKey === 'assistant') return null;
   if (sessionKey.startsWith('sms:c:')) return { app: 'sms', contactId: sessionKey.slice('sms:c:'.length) };
@@ -214,7 +216,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   // 投递上屏；原文只在本模块累计（raw），不写入展示状态 —— 流式期间页面只显示「正在输入」，
   // 不再有「先全文后消失」的流式气泡；分段与展示状态完全分离（流式和分条不改同一块状态）
   const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
-  const scanner =
+  let scanner =
     multi && opts.onSegment ? createReplySegmentScanner(opts.onSegment, opts.replyCount ?? 1) : null;
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
   const effConfig =
@@ -350,6 +352,14 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 代理与浏览器直连都失败：最后用服务端内置模型兜底一次（forceSdk），救回本轮回复；
     // 兜底成功按正常完成收尾，失败才落错误文案（保留最先的代理侧错误，便于区分原因）；
     // 流中已凑齐的分段已经过 onSegment 逐条投递上屏，出错不影响它们（不丢已到手的正文）
+    // 关键：进入 SDK 兜底前清空 raw 并重建分段器，避免「半截上游文本 + 完整 SDK 文本」拼接成乱文；
+    // 旧分段器已放出的分段保留上屏、不计入新分段器的条数计数
+    raw = '';
+    if (multi && opts.onSegment) {
+      scanner = createReplySegmentScanner(opts.onSegment, opts.replyCount ?? 1);
+    } else {
+      scanner = null;
+    }
     const viaSdk = await sdkFallbackOnce(workMessages);
     if (viaSdk) {
       patchState(rt, { status: 'done' });

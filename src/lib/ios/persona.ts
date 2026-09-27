@@ -99,7 +99,9 @@ function clean(v?: string | null): string {
  * 保证任何 App 里角色的人设表述完全一致。
  */
 export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPromptCtx): string {
-  const user = clean(ctx.userName) || '用户';
+  const userNameRaw = clean(ctx.userName);
+  const userFallback = !userNameRaw; // userName 为空回退到字面量「用户」：需要注明是占位词
+  const user = userNameRaw || '用户';
   // 用户的名字/昵称（【用户的称呼】段注入用）：两者都存在且不同时才注入
   const userReal = clean(ctx.userRealName);
   const userNick = clean(ctx.userNickname);
@@ -154,6 +156,13 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   const lines: string[] = [
     `你现在是${user}${ctx.channel}里的联系人「${shownName}」，正在${ctx.channel}上和${user}互动。${roleplayNote}`,
     `请始终以「${shownName}」的身份、用第一人称口语化回复，严格保持角色，不要跳出。`,
+    // userName 为空回退到字面量「用户」时明确告知这是占位词：AI 不应把「用户」当真名使用，
+    // 而应按你与对方的关系自然称呼对方（如「你」「亲爱的」「老板」等）
+    ...(userFallback
+      ? [
+          `（注：机主尚未设置称呼，上文里的「用户」只是占位词，不是对方的真名。请按你与对方的关系自然地称呼对方，不要把「用户」当成对方的真名使用。）`,
+        ]
+      : []),
     '',
     ...nameLines,
     // 名字/昵称区分（用户数据同时有名字与昵称时注入）：明确告知两者指同一个人，杜绝「凑凑是谁」式混淆；

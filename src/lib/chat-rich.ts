@@ -127,6 +127,9 @@ export interface RichAction {
   targetId: string;
   /** 禁言时长文本（mute-member 专用，如「1 小时」「永久」；空 = 调用方兑底） */
   arg?: string;
+  /** #81：解析时记录的警告文本（如多人禁言「已忽略多余成员」），调用方可选择 toast 提示。
+   *  不影响动作执行本身，仅作人机反馈，缺失则忽略不显示 */
+  warn?: string;
 }
 
 /** 群管理动作（群聊页执行器负责权限校验与落盘；grant-owner = 群主 AI 转让群主给指定成员） */
@@ -242,9 +245,40 @@ export function extractRichActionParts(text: string): RichActionPart[] {
       parts.push({ type: 'action', action: { kind, targetId: kind === 'request-unblock' ? raw : '' } });
     } else if (kind === 'mute-member') {
       // [禁言:成员:时长]：名字取第一段，时长取剩余整段（兼容写法丢时长由执行器兑底）
+      // #81：AI 误写多人 [禁言:张三:李四:1小时] 时只禁言张三、李四被静默丢弃——解析时检测 segs[1]
+      // 不是合法时长（含第二个看起来像人名的字段）则截断并记录 warn，调用方可 toast 提示
       const segs = raw.split(/[:：]/);
       const name = (segs[0] ?? '').trim();
-      if (name) parts.push({ type: 'action', action: { kind, targetId: name, arg: segs.slice(1).join(':').trim() || undefined } });
+      // 时长判定：合法时长需含数字 + 单位（小时/分钟/天/小时/分/秒/永久/infinite）或「永久/infinite」
+      const DURATION_RE = /^\s*(?:\d+\s*(?:小时|分钟|分|秒|天|周|个月|月)|永久|infinite|∞)\s*$/i;
+      const extraNames: string[] = [];
+      let durationSeg = segs.slice(1).join(':').trim();
+      if (segs.length >= 3) {
+        // 逐段判断：第二段起若不像时长则当作误填的人名收集
+        const collected: string[] = [];
+        for (let i = 1; i < segs.length; i++) {
+          const s = segs[i].trim();
+          if (!s) continue;
+          if (DURATION_RE.test(s)) {
+            // 看起来是时长，剩余段统一作为 duration（保留原口径）
+            durationSeg = segs.slice(i).join(':').trim();
+            break;
+          }
+          collected.push(s);
+        }
+        if (collected.length > 0) extraNames.push(...collected);
+      }
+      if (name) {
+        parts.push({
+          type: 'action',
+          action: {
+            kind,
+            targetId: name,
+            arg: durationSeg || undefined,
+            warn: extraNames.length > 0 ? `单次只能禁言一名成员，已忽略多余成员：${extraNames.join('、')}` : undefined,
+          },
+        });
+      }
     } else if (kind === 'unmute-member' || kind === 'kick-member' || kind === 'rename-group' || kind === 'announce-group') {
       // [解禁/移出群聊/改群名/改公告:内容]：内容整段保留（公告/群名里可能出现冒号）
       if (raw) parts.push({ type: 'action', action: { kind, targetId: raw } });

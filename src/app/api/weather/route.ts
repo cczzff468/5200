@@ -198,6 +198,13 @@ export async function GET(request: NextRequest) {
     setCache(key, payload);
     return NextResponse.json(payload);
   } catch {
+    // 上游不可达回退过期缓存（#31）：沙箱/断网环境下 open-meteo 经常被回收，
+    // 直接返 502 会让天气小组件长期空白；命中过期缓存条目时优先返回 + stale 标记，
+    // 502 仅在「无任何缓存」时使用——下游可继续展示旧数据并提示已脱机。
+    const stale = hit;
+    if (stale) {
+      return NextResponse.json({ ...stale.data, stale: true });
+    }
     return NextResponse.json({ error: '天气服务暂时不可用' }, { status: 502 });
   }
 }

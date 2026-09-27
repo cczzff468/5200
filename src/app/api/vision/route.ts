@@ -209,7 +209,12 @@ export async function POST(req: NextRequest) {
     });
     for (const endpoint of buildChatCandidates(config.baseUrl)) {
       try {
-        const res = await fetch(endpoint, { method: 'POST', headers, body: requestBody });
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: requestBody,
+          signal: AbortSignal.timeout(60_000),
+        });
         if (!res.ok) {
           const raw = await res.text().catch(() => '');
           let msg = '';

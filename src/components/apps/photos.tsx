@@ -32,6 +32,15 @@ const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四
 /** 自定义相册数据在 kv store 的键（value = PhotoAlbum[]，整体读写；照片本体仍在 photos 表） */
 const ALBUMS_KV_KEY = 'ios-photo-albums';
 
+/** #65：pruneDeletedFromAlbums 串行化锁——模块级 Promise 链，连点删除多张照片时
+ *  读-改-写按序排队，避免最后写回覆盖前一次清理结果 */
+let pruneLock: Promise<void> = Promise.resolve();
+/** 模块级封装：把任务挂到 pruneLock 链尾，避免在组件内重赋模块变量触发 eslint react-hooks/globals */
+function withPruneLock(task: () => Promise<void>): Promise<void> {
+  pruneLock = pruneLock.then(task).catch(() => undefined);
+  return pruneLock;
+}
+
 /**
  * 相册记录的本地扩展：收藏标记。
  * favorite 以「记录内可选字段」直存 IndexedDB（put 整条记录带上该字段），
@@ -443,24 +452,27 @@ export default function PhotosApp() {
     if (next.length === 0) setAlbumsEditMode(false);
   };
 
-  /** 数据卫生：照片本体删除后，把被删 id 从所有相册 photoIds 里清掉（读 kv 最新值再写回，防闭包旧态覆盖） */
+  /** 数据卫生：照片本体删除后，把被删 id 从所有相册 photoIds 里清掉（读 kv 最新值再写回，防闭包旧态覆盖）
+   *  #65：用模块级 pruneLock 串行化读-改-写——连点删除多张照片时按序排队，避免并发读-改-写竞态丢更新 */
   const pruneDeletedFromAlbums = async (ids: string[]) => {
     if (ids.length === 0) return;
-    const removed = new Set(ids);
-    try {
-      const kv = await localDB.get('kv', ALBUMS_KV_KEY);
-      const current = parseAlbums(kv?.value);
-      let changed = false;
-      const next = current.map((alb) => {
-        const kept = alb.photoIds.filter((pid) => !removed.has(pid));
-        if (kept.length === alb.photoIds.length) return alb;
-        changed = true;
-        return { ...alb, photoIds: kept };
-      });
-      if (changed) await localDB.put('kv', { key: ALBUMS_KV_KEY, value: next });
-    } catch {
-      /* 卫生清理失败不影响删除主流程；悬空 id 由「只渲染仍存在照片」兜底 */
-    }
+    await withPruneLock(async () => {
+      const removed = new Set(ids);
+      try {
+        const kv = await localDB.get('kv', ALBUMS_KV_KEY);
+        const current = parseAlbums(kv?.value);
+        let changed = false;
+        const next = current.map((alb) => {
+          const kept = alb.photoIds.filter((pid) => !removed.has(pid));
+          if (kept.length === alb.photoIds.length) return alb;
+          changed = true;
+          return { ...alb, photoIds: kept };
+        });
+        if (changed) await localDB.put('kv', { key: ALBUMS_KV_KEY, value: next });
+      } catch {
+        /* 卫生清理失败不影响删除主流程；悬空 id 由「只渲染仍存在照片」兜底 */
+      }
+    });
   };
 
   // ---------------- 相册详情：添加照片选择器 ----------------
@@ -804,7 +816,8 @@ export default function PhotosApp() {
         )}
 
         {/* ---------- 照片 / 收藏 tab：年月日分组图库 ---------- */}
-        {loaded && !openAlbum && activeTab !== 'albums' && activeTab === 'photos' && photos.length === 0 && (
+        {/* #90：原 `activeTab !== 'albums' && activeTab === 'photos'` 冗余（=== 'photos' 已隐含 !== 'albums'），简化为单条件 */}
+        {loaded && !openAlbum && activeTab === 'photos' && photos.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 px-10 pb-24 text-center">
             <ImageIcon className="h-12 w-12 text-muted-foreground/50" aria-hidden="true" />
             <p className="text-[17px] font-semibold">没有照片</p>

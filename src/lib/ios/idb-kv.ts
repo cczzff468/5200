@@ -90,21 +90,14 @@ let readyDone = false;
 /**
  * 同步读（内存缓存）。开机门控保证 ready 后内存里已有全量数据；
  * ready 之前的读取（理论上只发生在极早期渲染）返回 null，与旧代码 localStorage 无键时行为一致。
+ *
+ * #62：极早期同步读（!readyDone）不再回退读 localStorage——
+ * 注水前读到的是迁移尚未发生的「陈旧值」（迁移成功后内存里应是 IndexedDB 的最新值），
+ * 用陈旧值会与稍后注水的 IndexedDB 值不一致，后续 kvSet 写入还会覆盖新值导致数据丢失。
+ * 一律返回 null，让消费方等 ready（loaded）后再读（与原无键时行为一致）。
  */
 export function kvGet<T = unknown>(key: string): T | null {
   if (memStore.has(key)) return (memStore.get(key) ?? null) as T | null;
-  if (!readyDone && idbAvailable) {
-    // 极早期同步读（未注水）：回退读 localStorage（此时迁移未删键或已删但内存应有——两种情况都覆盖）
-    if (typeof window === 'undefined') return null;
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (raw == null) return null;
-      const parsed: unknown = JSON.parse(raw);
-      return parsed as T;
-    } catch {
-      return null;
-    }
-  }
   return null;
 }
 

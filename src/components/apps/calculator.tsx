@@ -32,9 +32,11 @@ interface PState {
   typing: boolean;
   lastOp: { op: OpSym; val: number } | null;
   err: boolean;
+  // #23: 运算符挂起中按 +/- 后，下一数字/点/等号应作负数处理
+  pendingNeg?: boolean;
 }
 
-const P_INIT: PState = { disp: '0', hist: '', pendOp: null, pendVal: null, typing: false, lastOp: null, err: false };
+const P_INIT: PState = { disp: '0', hist: '', pendOp: null, pendVal: null, typing: false, lastOp: null, err: false, pendingNeg: false };
 const P_ERR: PState = { ...P_INIT, disp: '错误', err: true };
 
 function pCompute(a: number, b: number, op: OpSym): number | null {
@@ -59,14 +61,16 @@ function portraitReducer(s: PState, a: PAction): PState {
   switch (a.t) {
     case 'digit': {
       const base = s.err ? P_INIT : s;
-      if (!base.typing) return { ...base, disp: a.d, typing: true };
+      // #23: pendingNeg 时新操作数前缀负号
+      if (!base.typing) return { ...base, disp: base.pendingNeg ? `-${a.d}` : a.d, typing: true, pendingNeg: false };
       if (base.disp.length >= 9) return base;
       if (base.disp === '0') return { ...base, disp: a.d === '0' ? '0' : a.d };
       return { ...base, disp: base.disp + a.d };
     }
     case 'dot': {
       const base = s.err ? P_INIT : s;
-      if (!base.typing) return { ...base, disp: '0.', typing: true };
+      // #23: pendingNeg 时小数点前缀负号
+      if (!base.typing) return { ...base, disp: base.pendingNeg ? '-0.' : '0.', typing: true, pendingNeg: false };
       if (base.disp.includes('.') || base.disp.length >= 9) return base;
       return { ...base, disp: `${base.disp}.` };
     }
@@ -76,6 +80,11 @@ function portraitReducer(s: PState, a: PAction): PState {
         if (s.disp === '0') return s;
         return s.disp.startsWith('-') ? { ...s, disp: s.disp.slice(1) } : { ...s, disp: `-${s.disp}` };
       }
+      // #23: typing=false 时，若运算符挂起中（正在输入第二操作数），标记下一数字为负而非翻转当前显示
+      if (s.pendOp !== null && s.pendVal !== null) {
+        return { ...s, pendingNeg: !s.pendingNeg };
+      }
+      // 无挂起运算符（第一操作数/等号后）：直接取反当前显示值
       const v = Number(s.disp);
       if (v === 0) return s;
       return { ...s, disp: numToString(-v) };
@@ -84,18 +93,20 @@ function portraitReducer(s: PState, a: PAction): PState {
       if (s.err) return s;
       // iOS 语义：+/− 挂起时按前一操作数的百分比换算（200 + 10% = 200 + 200×10% = 220，
       // 200 − 10% = 180）；×/÷ 或无挂起运算时 % 即 /100（50 × 10% = 50 × 0.1 = 5）
-      const cur = Number(s.disp);
+      // #23: pendingNeg 时当前值取反
+      const cur = Number(s.disp) * (s.pendingNeg ? -1 : 1);
       const v =
         (s.pendOp === '+' || s.pendOp === '−') && s.pendVal !== null
           ? (s.pendVal * cur) / 100
           : cur / 100;
-      return { ...s, disp: numToString(Math.round(v * 1e10) / 1e10), typing: false };
+      return { ...s, disp: numToString(Math.round(v * 1e10) / 1e10), typing: false, pendingNeg: false };
     }
     case 'op': {
       if (s.err) return s;
       let disp = s.disp;
       let pendVal = s.pendVal;
       if (s.typing) {
+        // #23: typing=true 时 pendingNeg 已在 digit 阶段消费（disp 含负号），无需再乘
         if (s.pendOp !== null && pendVal !== null) {
           const r = pCompute(pendVal, Number(s.disp), s.pendOp);
           if (r === null) return P_ERR;
@@ -106,14 +117,16 @@ function portraitReducer(s: PState, a: PAction): PState {
         }
       } else if (s.pendOp === null || pendVal === null) {
         // 等号后/首次输入：以当前显示值作为第一操作数；换运算符/清零后保持原值
-        pendVal = Number(s.disp);
+        // #23: pendingNeg 作用于第一操作数
+        pendVal = Number(s.disp) * (s.pendingNeg ? -1 : 1);
       }
-      return { ...s, disp, pendVal, pendOp: a.op, typing: false, lastOp: null, hist: `${fmt(pendVal)} ${a.op}` };
+      return { ...s, disp, pendVal, pendOp: a.op, typing: false, lastOp: null, hist: `${fmt(pendVal)} ${a.op}`, pendingNeg: false };
     }
     case 'eq': {
       if (s.err) return s;
       if (s.pendOp !== null && s.pendVal !== null) {
-        const b = Number(s.disp);
+        // #23: pendingNeg 作用于第二操作数 b
+        const b = Number(s.disp) * (s.pendingNeg ? -1 : 1);
         const r = pCompute(s.pendVal, b, s.pendOp);
         if (r === null) return P_ERR;
         return {
@@ -124,15 +137,16 @@ function portraitReducer(s: PState, a: PAction): PState {
           pendVal: null,
           typing: false,
           lastOp: { op: s.pendOp, val: b },
+          pendingNeg: false,
         };
       }
       if (s.lastOp !== null) {
-        const cur = Number(s.disp);
+        const cur = Number(s.disp) * (s.pendingNeg ? -1 : 1);
         const r = pCompute(cur, s.lastOp.val, s.lastOp.op);
         if (r === null) return P_ERR;
-        return { ...s, disp: numToString(r), hist: `${fmt(cur)} ${s.lastOp.op} ${fmt(s.lastOp.val)} =`, typing: false };
+        return { ...s, disp: numToString(r), hist: `${fmt(cur)} ${s.lastOp.op} ${fmt(s.lastOp.val)} =`, typing: false, pendingNeg: false };
       }
-      return { ...s, typing: false };
+      return { ...s, typing: false, pendingNeg: false };
     }
     case 'clear': {
       if (s.err) return P_INIT;
@@ -412,7 +426,13 @@ function sciNeg(s: SciState): SciState {
     return sciSeed(s, seed.startsWith('−') ? seed.slice(1) : `−${seed}`);
   }
   const m = /(?:\d+\.?\d*|\.\d+)(?:e[+\-−]?\d+)?$/.exec(s.expr);
-  if (!m || m[0] === '') return s;
+  if (!m || m[0] === '') {
+    // #23: 无尾随数字时（空表达式或运算符后），插入 − 开启负的下一操作数（如 5+ +/- 3 = → 5+−3 = 2）
+    if (s.expr === '' || OP_END.test(s.expr.slice(-1))) {
+      return sciSeed(s, s.expr + '−');
+    }
+    return s;
+  }
   const i = m.index;
   const before = s.expr.charAt(i - 1);
   if (before === '−') {

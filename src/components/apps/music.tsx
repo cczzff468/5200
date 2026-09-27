@@ -11,11 +11,12 @@
  *   封面 URL 在 loadLibrary 刷新资料库时回收不在库中的项。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import {
   ChevronDown,
   Loader2,
+  Mic2,
   MoreHorizontal,
   Music,
   Pause,
@@ -70,6 +71,12 @@ let audioUrl: string | null = null;
 /** 封面 Blob → ObjectURL 缓存（loadLibrary 刷新时回收失效项） */
 const coverUrls = new Map<Blob, string>();
 
+/** #21: shuffle 模式下记录已播放过的曲目 id，遍历完所有曲目后停止（避免无限随机） */
+const playedShuffleIds = new Set<string>();
+
+/** #22: shuffle 模式下的播放历史栈，prev 时回到上一首（栈空 fallback 随机） */
+const playHistory: string[] = [];
+
 function getCoverUrl(blob: Blob): string {
   const cached = coverUrls.get(blob);
   if (cached) return cached;
@@ -83,6 +90,12 @@ function pickNextId(library: MusicRecord[], currentId: string | null, shuffle: b
   const idx = library.findIndex((t) => t.id === currentId);
   if (shuffle) {
     if (library.length === 1) return library[0].id;
+    // #21: 优先返回未播放过的 id；全部已播放过则回退随机（不重复当前）
+    const unplayed = library.filter((t) => t.id !== currentId && !playedShuffleIds.has(t.id));
+    if (unplayed.length > 0) {
+      const pick = unplayed[Math.floor(Math.random() * unplayed.length)];
+      return pick.id;
+    }
     let r = idx;
     while (r === idx) r = Math.floor(Math.random() * library.length);
     return library[r].id;
@@ -146,6 +159,16 @@ function getAudio(): HTMLAudioElement {
         return;
       }
     }
+    // #21: shuffle + repeat off：若已遍历完所有曲目则停止并清空集合，否则继续随机未播放过的
+    if (s.repeat === 'off' && s.shuffle) {
+      if (s.currentId) playedShuffleIds.add(s.currentId);
+      const allPlayed = s.library.every((t) => playedShuffleIds.has(t.id));
+      if (allPlayed) {
+        playedShuffleIds.clear();
+        usePlayer.setState({ playing: false, position: s.duration > 0 ? s.duration : el.duration });
+        return;
+      }
+    }
     const nextId = pickNextId(s.library, s.currentId, s.shuffle);
     if (nextId) {
       s.play(nextId);
@@ -200,6 +223,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       get().toggle();
       return;
     }
+    // #22: 切歌前把当前曲目压入播放历史栈，供 shuffle prev 回退
+    if (s.currentId) playHistory.push(s.currentId);
     const el = getAudio();
     // 释放上一首的 ObjectURL
     if (audioUrl) {
@@ -263,6 +288,12 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     if (s.shuffle) {
+      // #22: 优先回退到播放历史栈中的上一首；栈空则 fallback 随机
+      const last = playHistory.pop();
+      if (last) {
+        get().play(last);
+        return;
+      }
       const prevId = pickNextId(s.library, s.currentId, true);
       if (prevId) get().play(prevId);
       return;
@@ -288,6 +319,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   setShuffle: (v) => {
+    // #21: 切换 shuffle 开关时重置已播放集合，避免上轮残留导致下一轮立刻停止
+    playedShuffleIds.clear();
     set({ shuffle: v });
   },
 
@@ -571,6 +604,8 @@ function LibraryView({ onOpenPlayer }: { onOpenPlayer: () => void }) {
   };
 
   const handleDelete = async (record: MusicRecord) => {
+    // #88: 删除前二次确认（与 photos.tsx 同模式）
+    if (!window.confirm(`确定从资料库删除「${record.title}」吗？`)) return;
     usePlayer.getState().stopIfPlaying(record.id);
     await localDB.delete('music', record.id);
     await usePlayer.getState().loadLibrary();
@@ -646,6 +681,66 @@ function LibraryView({ onOpenPlayer }: { onOpenPlayer: () => void }) {
   );
 }
 
+// ---------------- 歌词解析（#26） ----------------
+
+/** 解析 LRC 歌词文本（`[mm:ss.xx]` 时间戳）为按时间排序的 { time, text } 数组；
+ *  支持一行多时间戳、毫秒位可省略；无时间戳的行（如 [ti:..] 元数据）忽略 */
+function parseLyrics(lrc: string | undefined): { time: number; text: string }[] {
+  if (!lrc) return [];
+  const lines = lrc.split(/\r?\n/);
+  const out: { time: number; text: string }[] = [];
+  const tagRe = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  const stripRe = /\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g;
+  for (const raw of lines) {
+    const stamps: number[] = [];
+    let m: RegExpExecArray | null;
+    tagRe.lastIndex = 0;
+    while ((m = tagRe.exec(raw)) !== null) {
+      const mm = parseInt(m[1], 10);
+      const ss = parseInt(m[2], 10);
+      const frac = m[3] ? parseInt(m[3].padEnd(3, '0').slice(0, 3), 10) / 1000 : 0;
+      stamps.push(mm * 60 + ss + frac);
+    }
+    if (stamps.length === 0) continue;
+    const text = raw.replace(stripRe, '').trim();
+    for (const t of stamps) out.push({ time: t, text });
+  }
+  out.sort((a, b) => a.time - b.time);
+  return out;
+}
+
+/** 歌词面板：按当前播放时间高亮当前行并 smooth 滚动居中 */
+function LyricsPanel({ lines, position }: { lines: { time: number; text: string }[]; position: number }) {
+  const activeRef = useRef<HTMLDivElement | null>(null);
+  // 当前时间对应的歌词行：最后一个 time <= position 的行（-1 表示尚未到首行）
+  const activeIdx = lines.reduce((acc, line, i) => (line.time <= position ? i : acc), -1);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [activeIdx]);
+  if (lines.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-[14px] text-black/45 dark:text-white/45">
+        无歌词
+      </div>
+    );
+  }
+  return (
+    <div className="thin-scrollbar h-full overflow-y-auto px-6 py-6 text-center">
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          ref={i === activeIdx ? activeRef : null}
+          className={`py-2 text-[17px] leading-relaxed transition-colors ${
+            i === activeIdx ? 'font-semibold text-black dark:text-white' : 'text-black/45 dark:text-white/45'
+          }`}
+        >
+          {line.text || ' '}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---------------- 播放器视图 ----------------
 
 function PlayerView({ onBack }: { onBack: () => void }) {
@@ -663,6 +758,11 @@ function PlayerView({ onBack }: { onBack: () => void }) {
   const setShuffle = usePlayer((s) => s.setShuffle);
   const setRepeat = usePlayer((s) => s.setRepeat);
 
+  // #26: 歌词切换开关 + 解析当前曲目歌词
+  const [showLyrics, setShowLyrics] = useState(false);
+  const lyrics = useMemo(() => parseLyrics(track?.lyrics), [track?.lyrics]);
+  const hasLyrics = lyrics.length > 0;
+
   const total = duration > 0 ? duration : track?.duration ?? 0;
   const pos = total > 0 ? Math.min(position, total) : position;
 
@@ -674,7 +774,7 @@ function PlayerView({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="flex h-full w-full flex-col bg-gradient-to-b from-white to-[#ECECF1] text-black dark:from-[#1c1c1e] dark:to-black dark:text-white">
-      {/* 顶部：返回 + 正在播放 */}
+      {/* 顶部：返回 + 正在播放 + 歌词切换 */}
       <div className="shrink-0 pt-[54px]">
         <div className="relative flex h-11 items-center px-2">
           <button
@@ -688,31 +788,51 @@ function PlayerView({ onBack }: { onBack: () => void }) {
           <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] font-semibold uppercase tracking-[0.2em] text-black/50 dark:text-white/55">
             正在播放
           </span>
+          <button
+            type="button"
+            onClick={() => hasLyrics && setShowLyrics((v) => !v)}
+            aria-label="歌词"
+            aria-pressed={showLyrics}
+            disabled={!hasLyrics}
+            className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+              hasLyrics
+                ? showLyrics
+                  ? 'text-black dark:text-white'
+                  : 'text-black/55 dark:text-white/55 hover:bg-black/10 dark:hover:bg-white/10'
+                : 'cursor-not-allowed opacity-30'
+            }`}
+          >
+            <Mic2 className="h-5 w-5" />
+          </button>
         </div>
       </div>
 
-      {/* 封面大圆盘（黑胶唱片，旋转） */}
+      {/* #26: 歌词面板 / 封面大圆盘（黑胶唱片，旋转）—— 开启歌词时替换封面区 */}
       <div className="flex min-h-0 flex-1 items-center justify-center py-2">
-        <div className="relative h-[280px] w-[280px]">
-          <div
-            className="h-full w-full animate-[spin_16s_linear_infinite]"
-            style={{ animationPlayState: playing ? 'running' : 'paused' }}
-          >
-            {track?.cover ? (
-              <img
-                src={getCoverUrl(track.cover)}
-                alt={`${track.title} 封面`}
-                className="h-full w-full rounded-full border-[6px] border-black/10 object-cover shadow-[0_18px_50px_rgba(0,0,0,0.25)] dark:border-white/10 dark:shadow-[0_18px_50px_rgba(0,0,0,0.65)]"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center rounded-full border-[6px] border-black/10 bg-[radial-gradient(circle_at_50%_35%,#3a3a3c_0%,#232325_55%,#0a0a0b_100%)] shadow-[0_18px_50px_rgba(0,0,0,0.25)] dark:border-white/10 dark:shadow-[0_18px_50px_rgba(0,0,0,0.65)]">
-                <Music className="h-14 w-14 text-white/20" />
-              </div>
-            )}
-            {/* 中心圆孔 */}
-            <div className="absolute left-1/2 top-1/2 h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black ring-1 ring-black/10 dark:ring-white/20" />
+        {showLyrics && hasLyrics ? (
+          <LyricsPanel lines={lyrics} position={position} />
+        ) : (
+          <div className="relative h-[280px] w-[280px]">
+            <div
+              className="h-full w-full animate-[spin_16s_linear_infinite]"
+              style={{ animationPlayState: playing ? 'running' : 'paused' }}
+            >
+              {track?.cover ? (
+                <img
+                  src={getCoverUrl(track.cover)}
+                  alt={`${track.title} 封面`}
+                  className="h-full w-full rounded-full border-[6px] border-black/10 object-cover shadow-[0_18px_50px_rgba(0,0,0,0.25)] dark:border-white/10 dark:shadow-[0_18px_50px_rgba(0,0,0,0.65)]"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center rounded-full border-[6px] border-black/10 bg-[radial-gradient(circle_at_50%_35%,#3a3a3c_0%,#232325_55%,#0a0a0b_100%)] shadow-[0_18px_50px_rgba(0,0,0,0.25)] dark:border-white/10 dark:shadow-[0_18px_50px_rgba(0,0,0,0.65)]">
+                  <Music className="h-14 w-14 text-white/20" />
+                </div>
+              )}
+              {/* 中心圆孔 */}
+              <div className="absolute left-1/2 top-1/2 h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black ring-1 ring-black/10 dark:ring-white/20" />
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* 标题 + 歌手 */}

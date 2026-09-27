@@ -14,6 +14,46 @@ import { formatDuration, genId, localDB, type RecordingRecord } from '@/lib/ios/
 import { IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 
+// ---------------- #86：iOS 风格确认弹窗（代替 window.confirm） ----------------
+
+function ConfirmDialog({
+  message,
+  onCancel,
+  onConfirm,
+}: {
+  message: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-[70] grid place-items-center px-8" role="dialog" aria-label="确认删除">
+      <button type="button" aria-label="取消" onClick={onCancel} className="absolute inset-0 bg-black/40" />
+      <div className="relative w-full rounded-[14px] bg-background p-4 shadow-2xl">
+        <p className="text-center text-[15px] leading-relaxed text-foreground">{message}</p>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-10 flex-1 rounded-[10px] bg-muted text-[15px] active:opacity-70"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onCancel();
+              onConfirm();
+            }}
+            className="h-10 flex-1 rounded-[10px] bg-[#FF453A] text-[15px] font-medium text-white active:opacity-80"
+          >
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 模块级播放单例 ----------------
 
 let pbAudio: HTMLAudioElement | null = null;
@@ -341,6 +381,8 @@ export default function RecorderApp() {
   const [playId, setPlayId] = useState<string | null>(null);
   const [playActive, setPlayActive] = useState(false);
   const [playPos, setPlayPos] = useState(0);
+  // #86：删除确认弹窗目标录音
+  const [confirmTarget, setConfirmTarget] = useState<RecordingRecord | null>(null);
 
   // 录音相关 refs
   const recRef = useRef<MediaRecorder | null>(null);
@@ -590,13 +632,23 @@ export default function RecorderApp() {
 
   const deleteRecording = useCallback(
     async (rec: RecordingRecord) => {
-      if (!window.confirm(`删除「${rec.name}」？此操作不可撤销。`)) return;
-      if (playId === rec.id) stopPlaybackRow();
-      await localDB.delete('recordings', rec.id);
-      await reload();
+      // #86：与 photos/worldbook 同样的 iOS 风格确认弹窗（取代原 window.confirm）
+      setConfirmTarget(rec);
     },
-    [playId, reload, stopPlaybackRow]
+    []
   );
+
+  const confirmDelete = useCallback(async () => {
+    const rec = confirmTarget;
+    if (!rec) return;
+    if (playId === rec.id) stopPlaybackRow();
+    try {
+      await localDB.delete('recordings', rec.id);
+    } catch {
+      /* 忽略删除异常 */
+    }
+    await reload();
+  }, [confirmTarget, playId, reload, stopPlaybackRow]);
 
   // ---------------- 波形 / 计时循环 ----------------
 
@@ -804,6 +856,15 @@ export default function RecorderApp() {
           <div className="h-[72px] w-[72px]" />
         </div>
       </div>
+
+      {/* #86：删除确认弹窗（iOS 风格，取代 window.confirm） */}
+      {confirmTarget && (
+        <ConfirmDialog
+          message={`删除「${confirmTarget.name}」？此操作不可撤销。`}
+          onCancel={() => setConfirmTarget(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
     </IOSScreen>
   );
 }

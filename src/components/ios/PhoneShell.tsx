@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useIslandNotify } from '@/lib/ios/island-notify';
+import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { isVoiceHoldActive } from '@/components/apps/voice-input';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
@@ -98,8 +99,10 @@ export default function PhoneShell() {
       if (dy > OPEN_DELTA && dy > Math.abs(e.clientX - g.x) * 0.85) {
         g.fired = true;
         const ui = useUI.getState();
-        // 主屏幕编辑模式：上滑不进多任务（用户要求，避免整理图标时误触）
-        if (!ui.locked && !ui.screenOff && !ui.switcherOpen && !ui.alarmRinging && !ui.homeEdit) {
+        // 来电响铃中守卫（#1）：来电界面挂 z-94，比切换器 z-60 高得多。
+        // 边缘上滑若不拦会「隐形打开切换器」——切换器在来电界面之下，挂断后才凭空出现。
+        // 与 store.openSwitcher 内守卫成双保险：onMove 先短路手势，避免 openSwitcher 再走一遭。
+        if (!ui.locked && !ui.screenOff && !ui.switcherOpen && !ui.alarmRinging && !ui.homeEdit && !ui.callActive && !useIncomingCall.getState().call) {
           try {
             navigator.vibrate?.(8);
           } catch {
@@ -129,7 +132,9 @@ export default function PhoneShell() {
     const onDown = (e: PointerEvent) => {
       edgeGesture.current = null; // 上一次未正常收尾的手势作废
       const ui = useUI.getState();
-      if (ui.locked || ui.screenOff || ui.switcherOpen || ui.alarmRinging) return;
+      // 来电响铃中守卫（#1）：onDown 直接不认领手势，避免后续 onMove/finish 绑定 window。
+      // ui.callActive=电话 App 通话全屏层显示中（接听后），同样不应被边缘手势打断。
+      if (ui.locked || ui.screenOff || ui.switcherOpen || ui.alarmRinging || ui.callActive || useIncomingCall.getState().call) return;
       // 录音按住进行中（如另一根手指按下）：不启动边缘手势
       if (isVoiceHoldActive()) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;

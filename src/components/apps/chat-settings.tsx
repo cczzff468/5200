@@ -152,7 +152,9 @@ export function ChatSettingsPage({
   onOpenBg,
   onOpenPeerProfile,
   blockedByUser,
+  blockReqCount,
   onToggleBlock,
+  onResetBlockReqCount,
   /** 他的声音摘要（角色音色展示名；空 = 默认） */
   voiceSummary,
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
@@ -204,8 +206,12 @@ export function ChatSettingsPage({
   onOpenPeerProfile?: () => void;
   /** 双向拉黑：当前是否已拉黑对方（不传 = 该会话不支持拉黑，隐藏开关） */
   blockedByUser?: boolean;
+  /** #39：角色被拒申请计数（调用方从 BlockEntry.reqCount 传入；>0 且 onResetBlockReqCount 提供时显示重置入口） */
+  blockReqCount?: number;
   /** 拉黑开关切换（宿主负责持久化 + 生成系统消息） */
   onToggleBlock?: (v: boolean) => void;
+  /** #39：手动重置角色被拒申请计数回调（被拒 3 次后角色彻底沉默，给用户恢复通道入口） */
+  onResetBlockReqCount?: () => void;
   /** 他的声音摘要（角色音色展示名；空 = 默认） */
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
@@ -481,7 +487,8 @@ export function ChatSettingsPage({
           </>
         )}
 
-        {/* 拉黑：双向拉黑开关（拉黑不拦截消息，只是关系状态；对方会知道被拉黑，AI 可申请解除） */}
+        {/* 拉黑：双向拉黑开关（40-a 重构后真实拦截：byUser=true → AI 静默不发普通消息、仅可发申请卡回应；
+            byChar=true → 用户所有发送入口被拦 toast。开关只控制 byUser；对方拉黑时 byChar 由 AI 决策） */}
         {onToggleBlock && (
           <>
             <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -495,9 +502,30 @@ export function ChatSettingsPage({
                   label="拉黑"
                 />
               </div>
+              {/* #39：被拒申请计数 > 0 且提供回调时显示重置入口——角色被拒 3 次后彻底沉默，给用户恢复通道入口 */}
+              {onResetBlockReqCount && blockReqCount && blockReqCount > 0 ? (
+                <>
+                  <div className={`h-px ${dividerCls}`} />
+                  <button
+                    type="button"
+                    onClick={onResetBlockReqCount}
+                    className={`flex w-full items-center justify-between ${rowCls}`}
+                    data-testid={`${testPrefix}-settings-reset-block-req`}
+                    aria-label="重置申请计数"
+                  >
+                    <span className="flex flex-col gap-0.5 text-left">
+                      <span>重置申请计数</span>
+                      <span className="text-[12px] text-black/40 dark:text-white/40">
+                        {blockReqCount >= 3 ? '对方已被拒达到上限，彻底沉默' : `对方已申请被拒 ${blockReqCount} 次`}
+                      </span>
+                    </span>
+                    <span className="text-[14px]" style={{ color: accent }}>点击重置</span>
+                  </button>
+                </>
+              ) : null}
             </div>
             <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-              开启后你将拉黑「{peerName}」：你们仍可以互相发消息，但对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
+              开启后你将拉黑「{peerName}」：拉黑后 AI 不能给你发消息，仅可通过申请卡回应；对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
             </p>
           </>
         )}
@@ -1207,7 +1235,9 @@ export function SmsChatSettingsPage({
   onToggleStickers,
   onOpenWorldBooks,
   blockedByUser,
+  blockReqCount,
   onToggleBlock,
+  onResetBlockReqCount,
   /** 他的声音摘要（角色音色展示名；空 = 默认）；不传 onOpenVoice = 隐藏该入口 */
   voiceSummary,
   onOpenVoice,
@@ -1241,8 +1271,12 @@ export function SmsChatSettingsPage({
   onOpenWorldBooks?: () => void;
   /** 双向拉黑：当前是否已拉黑对方（不传 = 该会话不支持拉黑，隐藏开关） */
   blockedByUser?: boolean;
+  /** #39：角色被拒申请计数（调用方从 BlockEntry.reqCount 传入；>0 且 onResetBlockReqCount 提供时显示重置入口） */
+  blockReqCount?: number;
   /** 拉黑开关切换（宿主负责持久化 + 生成系统消息） */
   onToggleBlock?: (v: boolean) => void;
+  /** #39：手动重置角色被拒申请计数回调（被拒 3 次后角色彻底沉默，给用户恢复通道入口） */
+  onResetBlockReqCount?: () => void;
   /** 他的声音摘要（角色音色展示名；空 = 默认） */
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行（AI 助手会话无角色音色） */
@@ -1421,7 +1455,8 @@ export function SmsChatSettingsPage({
           </>
         )}
 
-        {/* 拉黑：双向拉黑开关（拉黑不拦截消息，只是关系状态；对方会知道被拉黑，AI 可申请解除） */}
+        {/* 拉黑：双向拉黑开关（40-a 重构后真实拦截：byUser=true → AI 静默不发普通消息、仅可发申请卡回应；
+            byChar=true → 用户所有发送入口被拦 toast。开关只控制 byUser；对方拉黑时 byChar 由 AI 决策） */}
         {onToggleBlock && (
           <>
             <div className={`${t.cardCls} mt-3`}>
@@ -1435,9 +1470,30 @@ export function SmsChatSettingsPage({
                   label="拉黑"
                 />
               </div>
+              {/* #39：被拒申请计数 > 0 且提供回调时显示重置入口——角色被拒 3 次后彻底沉默，给用户恢复通道入口 */}
+              {onResetBlockReqCount && blockReqCount && blockReqCount > 0 ? (
+                <>
+                  <div className={t.dividerCls} />
+                  <button
+                    type="button"
+                    onClick={onResetBlockReqCount}
+                    className={`flex w-full items-center justify-between ${t.rowCls}`}
+                    data-testid="sms-settings-reset-block-req"
+                    aria-label="重置申请计数"
+                  >
+                    <span className="flex flex-col gap-0.5 text-left">
+                      <span>重置申请计数</span>
+                      <span className="text-[12px] text-black/40 dark:text-white/40">
+                        {blockReqCount >= 3 ? '对方已被拒达到上限，彻底沉默' : `对方已申请被拒 ${blockReqCount} 次`}
+                      </span>
+                    </span>
+                    <span className="text-[14px] text-[#34C759]">点击重置</span>
+                  </button>
+                </>
+              ) : null}
             </div>
             <p className={t.captionCls}>
-              开启后你将拉黑「{peerName}」：你们仍可以互相发消息，但对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
+              开启后你将拉黑「{peerName}」：拉黑后 AI 不能给你发消息，仅可通过申请卡回应；对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
             </p>
           </>
         )}
@@ -1708,19 +1764,23 @@ export function ChatVoicePage({
   }, []);
 
   const previewBuiltin = (id: string) => {
-    if (previewId) {
+    // #44：切换声线时连续点同一 id 会先 stop 再 speak，原实现 setPreviewId(null) 与 setPreviewId(id)
+    // 在同一同步块内被 React 合并为最终 id，onEnd/onError 回调里 setPreviewId(null) 可能清掉刚换的 id——
+    // 改用函数式 setState：当前 id === id 视为「点同一个」→ 停止并置 null；否则停止并切到新 id。
+    setPreviewId((prev) => {
+      if (prev === id) {
+        stopBuiltinSpeech();
+        return null;
+      }
       stopBuiltinSpeech();
-      setPreviewId(null);
-      if (previewId === id) return;
-    }
-    stopBuiltinSpeech();
-    setPreviewId(id);
-    void speakBuiltin({
-      text: '你好，用这个声音和你聊天，很高兴认识你。',
-      voiceId: id,
-      onEnd: () => setPreviewId(null),
-      onError: () => setPreviewId(null),
-    }).catch(() => setPreviewId(null));
+      void speakBuiltin({
+        text: '你好，用这个声音和你聊天，很高兴认识你。',
+        voiceId: id,
+        onEnd: () => setPreviewId((p) => (p === id ? null : p)),
+        onError: () => setPreviewId((p) => (p === id ? null : p)),
+      }).catch(() => setPreviewId((p) => (p === id ? null : p)));
+      return id;
+    });
   };
 
   const mutedText = t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40';

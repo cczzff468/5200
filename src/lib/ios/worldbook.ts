@@ -589,7 +589,13 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
   activeBooks.sort((a, b) => WB_SCOPE_RANK[a.scope] - WB_SCOPE_RANK[b.scope]); // Array.sort 稳定
 
   // 每个位置上收集「书级注入块」（已按范围顺序追加）：一本书在同一位置最多贡献一个包裹块
-  const groupsByPosition: Record<WbPosition, string[]> = {
+  // WbGroupInfo 同时承载格式化字符串与原始条目列表，截断时按条目累加，
+  // 不再依赖 '\n\n' 分隔还原（条目内容本身含 '\n\n' 会被误拆成多条目）
+  interface WbGroupInfo {
+    formatted: string;
+    entries: WbEntry[];
+  }
+  const groupsByPosition: Record<WbPosition, WbGroupInfo[]> = {
     before_system: [],
     after_system: [],
     before_char: [],
@@ -611,7 +617,8 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
       const list = inBook[pos];
       if (!list || list.length === 0) continue;
       list.sort((a, b) => b.priority - a.priority); // 数字大的排前面；同优先级保持书内顺序（sort 稳定）
-      groupsByPosition[pos].push(formatBookGroup(list));
+      const formatted = formatBookGroup(list);
+      groupsByPosition[pos].push({ formatted, entries: list });
     }
   }
 
@@ -626,41 +633,46 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
   const blocks = { ...WB_EMPTY_BLOCKS };
   let used = 0;
   let truncated = false;
-  let lastKey: keyof WbBlocks | null = null;
+  let truncatedKey: keyof WbBlocks | null = null; // 截断发生的位置：提示独立注入到这里
   for (const pos of WB_PROMPT_ORDER) {
     const key = keyFor(pos);
     const kept: string[] = [];
     for (const group of groupsByPosition[pos]) {
-      if (used + group.length <= WB_INJECT_BUDGET) {
-        kept.push(group);
-        used += group.length;
+      if (used + group.formatted.length <= WB_INJECT_BUDGET) {
+        kept.push(group.formatted);
+        used += group.formatted.length;
         continue;
       }
-      // 本块放不下：保留书内排在前面的（高优先级）条目直到预算耗尽，剩余块全部舍弃
+      // 本块放不下：保留书内排在前面的（高优先级）条目直到预算耗尽，剩余块全部舍弃；
+      // 按原始 entries 逐条累加（不再依赖 '\n\n' 分隔还原，条目内容含 '\n\n' 不会被误拆）
       truncated = true;
-      const inner = group.slice(WB_WRAP_OPEN.length + 1, group.length - WB_WRAP_CLOSE.length - 1);
-      const parts = inner.split('\n\n');
-      const keepParts: string[] = [];
+      truncatedKey = key;
+      const keepEntries: string[] = [];
       let partialUsed = used + WB_WRAP_OPEN.length + WB_WRAP_CLOSE.length + 2; // 包裹标记与换行开销
-      for (const part of parts) {
-        const add = (keepParts.length > 0 ? 2 : 0) + part.length;
+      for (const entry of group.entries) {
+        const part = entry.content.trim();
+        const add = (keepEntries.length > 0 ? 2 : 0) + part.length;
         if (partialUsed + add > WB_INJECT_BUDGET) break;
-        keepParts.push(part);
+        keepEntries.push(part);
         partialUsed += add;
       }
-      if (keepParts.length > 0 && partialUsed >= used + 200) {
-        kept.push(`${WB_WRAP_OPEN}\n${keepParts.join('\n\n')}\n${WB_WRAP_CLOSE}`);
+      if (keepEntries.length > 0 && partialUsed >= used + 200) {
+        kept.push(`${WB_WRAP_OPEN}\n${keepEntries.join('\n\n')}\n${WB_WRAP_CLOSE}`);
         used = partialUsed;
       }
       break;
     }
     if (kept.length > 0) {
       blocks[key] = kept.join('\n\n');
-      lastKey = key;
     }
     if (truncated) break;
   }
-  if (truncated && lastKey) blocks[lastKey] += `\n\n${WB_TRUNCATE_NOTICE}`;
+  // 截断提示独立附到截断发生的位置（truncatedKey），即便该位置 kept 为空也注入提示行，
+  // 避免提示附到上一个有内容的位置块造成「提示落在错误位置」
+  if (truncated && truncatedKey) {
+    const existing = blocks[truncatedKey];
+    blocks[truncatedKey] = existing ? `${existing}\n\n${WB_TRUNCATE_NOTICE}` : WB_TRUNCATE_NOTICE;
+  }
   return blocks;
 }
 
