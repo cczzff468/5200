@@ -676,38 +676,67 @@ function nextCid(prefix: 'rp' | 'tr' | 'fam'): string {
 
 /** 当前正在查看的 QQ 聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
 let qqActiveChatId: string | null = null;
-/** 排队回复表：对方正在回复时用户又发了消息的联系人 id —— 本轮流结束后由聊天页自动补跑一轮回复。
+/** 排队补跑回合：对方正在回复时用户又发了消息 / 在回复中处理了「解除拉黑申请、退还红包转账亲属卡」
+ *  等需要 AI 后续回应的事项 —— 本轮流结束后由聊天页自动补跑一轮回复。
  *  #28 localStorage 持久化（key: qq-queued-turns）：模块加载时恢复，增删即同步写回——刷新后排队中的
- *  消息不再丢失（补跑依赖聊天页被打开：刷新后重新进入该会话，kick effect 挂载即自动补跑） */
+ *  消息不再丢失（补跑依赖聊天页被打开：刷新后重新进入该会话，kick effect 挂载即自动补跑）。
+ *  37-a：队列项扩展 event 字段——回复中触发的系统事件（拉黑申请同意/拒绝、退卡）随补跑回合保留
+ *  （原实现直接 runAiTurn：同会话已有流时 beginChatStream 返回 false，事件被静默丢弃、AI 绝口不提） */
+type QqQueuedTurn = { kind: 'kick'; event?: string };
 const QQ_QUEUED_TURNS_KEY = 'qq-queued-turns';
 
-function readQqQueuedTurns(): Set<string> {
+/** 读取并规范化排队表（兼容旧格式：contactId 字符串数组 = 纯消息补跑，无事件） */
+function readQqQueuedTurns(): Record<string, QqQueuedTurn[]> {
   try {
-    const raw: unknown = JSON.parse(window.localStorage.getItem(QQ_QUEUED_TURNS_KEY) ?? '[]');
-    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []);
+    const raw: unknown = JSON.parse(window.localStorage.getItem(QQ_QUEUED_TURNS_KEY) ?? '{}');
+    const out: Record<string, QqQueuedTurn[]> = {};
+    if (Array.isArray(raw)) {
+      // 旧版 Set 序列化（contactId 数组）：逐条迁移为无事件的补跑回合
+      for (const x of raw) if (typeof x === 'string') out[x] = [{ kind: 'kick' }];
+      return out;
+    }
+    if (!raw || typeof raw !== 'object') return {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof k !== 'string') continue;
+      if (typeof v === 'string') {
+        out[k] = [{ kind: 'kick' }];
+        continue;
+      }
+      if (!Array.isArray(v)) continue;
+      const turns = v
+        .filter((x): x is QqQueuedTurn => Boolean(x) && typeof x === 'object' && (x as QqQueuedTurn).kind === 'kick')
+        .map((x) => (typeof x.event === 'string' && x.event.trim() ? { kind: 'kick' as const, event: x.event } : { kind: 'kick' as const }));
+      if (turns.length > 0) out[k] = turns;
+    }
+    return out;
   } catch {
-    return new Set();
+    return {};
   }
 }
 
 const qqQueuedTurns = readQqQueuedTurns();
 
-function qqQueueAdd(id: string): void {
-  qqQueuedTurns.add(id);
+function qqQueueWrite(): void {
   try {
-    window.localStorage.setItem(QQ_QUEUED_TURNS_KEY, JSON.stringify([...qqQueuedTurns]));
+    window.localStorage.setItem(QQ_QUEUED_TURNS_KEY, JSON.stringify(qqQueuedTurns));
   } catch {
     // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
   }
 }
 
+/** 排队一条补跑回合（event = 系统事件文本，随补跑回合注入上下文；不带事件 = 普通消息补跑） */
+function qqQueueAdd(id: string, event?: string): void {
+  const turn: QqQueuedTurn = event ? { kind: 'kick', event } : { kind: 'kick' };
+  const list = qqQueuedTurns[id] ?? [];
+  list.push(turn);
+  qqQueuedTurns[id] = list;
+  qqQueueWrite();
+}
+
 function qqQueueDelete(id: string): void {
-  qqQueuedTurns.delete(id);
-  try {
-    window.localStorage.setItem(QQ_QUEUED_TURNS_KEY, JSON.stringify([...qqQueuedTurns]));
-  } catch {
-    // localStorage 异常忽略
-  }
+  if (!qqQueuedTurns[id]) return;
+  delete qqQueuedTurns[id];
+  qqQueueWrite();
 }
 
 function loadMsgs(contactId: string): QQMsg[] {
@@ -814,12 +843,61 @@ function pushAiEvent(contactId: string, text: string): void {
   }
 }
 
+/** 37-a：已消费转发事件登记（内存，按「联系人\n事件文本」计数）——drain 取走即在内存标记已消费，
+ *  存储里的事件延迟约 1s 再清。修复 dev StrictMode 双挂载吞事件：旧实现 drain 取走即清，
+ *  首跑消费后 400ms 回合定时器被卸载 cleanup 清掉，重挂载的第二次 drain 返回空 → 「回应转发」回合丢失。
+ *  现在重挂载 drain 到的已消费事件被本登记过滤（不双跑），首跑的回合定时器不随卸载取消（不丢）；
+ *  生产环境（单次挂载单次消费）行为不变。 */
+const consumedQqAiEvents = new Map<string, number>();
+const keyOfQqAiEvent = (contactId: string, text: string) => `${contactId}\n${text}`;
+
 function drainAiEvents(contactId: string): string[] {
   try {
     const parsed: unknown = kvGet<string[]>(lsAiEventsKey(contactId));
     if (!Array.isArray(parsed)) return [];
-    kvDel(lsAiEventsKey(contactId));
-    return parsed.filter((x): x is string => typeof x === 'string');
+    const all = parsed.filter((x): x is string => typeof x === 'string');
+    if (all.length === 0) return [];
+    const out: string[] = [];
+    // 同文多条目：本地影子额度每键只初始化一次（快照登记值），仅被「跳过已消费条目」递减；
+    // 返回新条目时只递增登记本身、不动影子——否则第二条同文事件会被第一条的登记误过滤
+    const localBudget = new Map<string, number>();
+    for (const text of all) {
+      const key = keyOfQqAiEvent(contactId, text);
+      if (!localBudget.has(key)) localBudget.set(key, consumedQqAiEvents.get(key) ?? 0);
+      const budget = localBudget.get(key) ?? 0;
+      if (budget > 0) {
+        localBudget.set(key, budget - 1);
+        continue;
+      }
+      out.push(text);
+      consumedQqAiEvents.set(key, (consumedQqAiEvents.get(key) ?? 0) + 1);
+    }
+    if (out.length === 0) return [];
+    // 延迟清除（约 1s）：只移除已消费条目——期间新推入的事件保留，不被误删（模块级定时器，不随组件卸载取消）
+    window.setTimeout(() => {
+      const touched: string[] = [];
+      try {
+        const cur: unknown = kvGet<string[]>(lsAiEventsKey(contactId));
+        if (!Array.isArray(cur)) return;
+        const rest = (cur as unknown[]).filter((x) => {
+          if (typeof x !== 'string') return false;
+          const key = keyOfQqAiEvent(contactId, x);
+          if (!touched.includes(key)) touched.push(key);
+          const used = consumedQqAiEvents.get(key) ?? 0;
+          if (used > 0) {
+            consumedQqAiEvents.set(key, used - 1);
+            return false;
+          }
+          return true;
+        });
+        if (rest.length === 0) kvDel(lsAiEventsKey(contactId));
+        else kvSet(lsAiEventsKey(contactId), rest.slice(-10));
+      } catch {
+        // 清除失败：释放登记（宁可极端情况下重复回应一次，不让登记卡死后续同文事件）
+        for (const key of touched) consumedQqAiEvents.delete(key);
+      }
+    }, 1000);
+    return out;
   } catch {
     return [];
   }
@@ -2277,10 +2355,19 @@ function ChatPage({
 
   /**
    * 退还 AI 发来的红包/转账/亲属卡（红包弹窗「退还」、转账收款页「退还」、亲属卡详情「退还」共用）：
-   * 原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应（AI 能感知退还并自然接话）
+   * 原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应（AI 能感知退还并自然接话）。
+   * 37-a：回复中（流式/投递）时事件随补跑回合排队（对齐 chat.tsx resolveBlockReq）——
+   * 直接 runAiTurn 会被占用中的 beginChatStream 拒绝，系统提示行已上屏但 AI 绝口不提
    */
   const refundPeerCard = useCallback(
     (m: QQMsg) => {
+      const kickRefund = (ev: string) => {
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          qqQueueAdd(peer.id, ev);
+          return;
+        }
+        runAiTurnRef.current?.(null, [], ev);
+      };
       if (m.kind === 'redpacket' && m.packet) {
         patchPacket(m.id, { status: 'returned' });
         setMsgs((prev) => [
@@ -2289,9 +2376,7 @@ function ChatPage({
         ]);
         setLayer(null);
         onToast('红包已退还给对方');
-        runAiTurnRef.current?.(
-          null,
-          [],
+        kickRefund(
           `（系统事件：你发给对方的红包被对方退还了（¥${m.packet.amount}，祝福语"${m.packet.note}"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）`
         );
       } else if (m.kind === 'transfer' && m.packet) {
@@ -2313,9 +2398,7 @@ function ChatPage({
         ]);
         setLayer(null);
         onToast('转账已退还给对方');
-        runAiTurnRef.current?.(
-          null,
-          [],
+        kickRefund(
           `（系统事件：你发给对方的转账被对方退还了（¥${trAmt}${trNote ? `，备注"${trNote}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`
         );
       } else if (m.kind === 'family' && m.fam) {
@@ -2326,14 +2409,10 @@ function ChatPage({
         ]);
         setLayer(null);
         onToast('亲属卡已退还');
-        runAiTurnRef.current?.(
-          null,
-          [],
-          `（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`
-        );
+        kickRefund(`（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
       }
     },
-    [patchPacket, peer.name, onToast]
+    [patchPacket, peer.id, peer.name, onToast, sessionKey]
   );
 
   // 发红包消息（生成 AI 可引用的短 ID）：AI 在回复里用动作标记决定领取/退回/拒收（不再定时自动领取），
@@ -2499,15 +2578,18 @@ function ChatPage({
     [peer.id, onOpenGroup, onToast],
   );
 
-  // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）
+  // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）。
+  // 37-a：drain 改为「读全部 + 内存登记已消费 + 延迟清除」，回合定时器不随卸载取消——
+  // dev StrictMode 双挂载时：首跑消费的事件在重挂载第二次 drain 中被登记过滤（不双跑），
+  // 首跑的回合定时器不再被 cleanup 清掉（不丢）；ChatPage 按 peer.id keyed 重挂载，定时器闭包
+  // 持有的 runAiTurnRef 恒指向本会话实现，模块层投递管线与页面存活无关
   useEffect(() => {
     const evs = drainAiEvents(peer.id);
     if (evs.length === 0) return;
-    const t = window.setTimeout(() => {
+    window.setTimeout(() => {
       // 连发投递未清空时同样不开新回合（与发送排队同口径：上一轮尾部还没落盘完）；错过的事件随本轮上下文丢失，与流式中占用的既有口径一致
       if (!isChatStreaming(sessionKey) && !isAiDelivering(sessionKey)) runAiTurnRef.current?.(null, [], evs.join('\n'));
     }, 400);
-    return () => window.clearTimeout(t);
   }, [peer.id, sessionKey]);
 
   // 聊天背景图片加载（bgMode = image 时从 IndexedDB 读；bgV 变化 = 重新上传，重读）
@@ -2636,17 +2718,24 @@ function ChatPage({
    *  旧回复尾巴进不了新回合上下文（AI 新回复自相矛盾），旧气泡也会倒挂在用户新消息下面。 */
   useEffect(() => {
     const kick = () => {
-      if (!qqQueuedTurns.has(peer.id)) return;
+      const turns = qqQueuedTurns[peer.id];
+      if (!turns || turns.length === 0) return;
       if (isChatStreaming(sessionKey)) return; // 本轮流还没收尾：等结束广播再跑
       if (isAiDelivering(sessionKey)) return; // 上一轮连发还在投递：等投递完成事件再跑
       qqQueueDelete(peer.id);
+      // 37-a：队列项可带系统事件（回复中处理拉黑申请/退卡时入队）——合并注入补跑回合上下文
+      const sysEvent =
+        turns
+          .map((t) => t.event)
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          .join('\n') || undefined;
       window.setTimeout(() => {
         const saved = loadMsgs(peer.id);
         setMsgs((prev) => {
           const ids = new Set(prev.map((m) => m.id));
           return [...prev, ...saved.filter((m) => !ids.has(m.id))];
         });
-        runAiTurnRef.current?.(null, [], undefined, saved);
+        runAiTurnRef.current?.(null, [], sysEvent, saved);
       }, 260);
     };
     const unsub = subscribeChatStreamFinalized((sKey) => {
@@ -2663,6 +2752,27 @@ function ChatPage({
     };
   }, [sessionKey, peer.id]);
 
+  /** 37-a：直写落盘的通话消息补走通知管线（灵动岛/Web 通知）+ 未读角标——与 deliverAiMsg 同一口径
+   *  （notifyPreviewText 映射预览、不在本会话才 bump 角标，在场不重复计）。用户切走时，挂断续聊/
+   *  拒接解释/通话结束卡片也能弹通知、动角标（此前直写库绕过了这两条） */
+  const notifyDirectSave = useCallback(
+    (m: { kind?: string; content: string }) => {
+      const body = notifyPreviewText({ kind: m.kind, content: m.content });
+      if (body) {
+        pushChatNotification({
+          sessionKey: `qq:${peer.id}`,
+          app: 'qq',
+          title: peer.name,
+          avatar: peer.avatar ?? null,
+          body,
+          target: { app: 'qq', contactId: peer.id },
+        });
+      }
+      if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, 1);
+    },
+    [peer],
+  );
+
   /** 通话结束（恰好一次，可能发生在聊天页已退出时）：通话卡片直写持久化 + 在场时同步本地 state。
    *  全局通话层负责渲染通话页与悬浮小窗，宿主只关心把结果落成消息。 */
   const writeCallCard = useCallback(
@@ -2678,6 +2788,7 @@ function ChatPage({
       };
       saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
       setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
+      notifyDirectSave(card);
       // AI 拒接/未接：过一会儿 AI 主动发一条人设化解释（接听决策产出 afterText）。
       // 聊天页不在场也照常落盘（saveMsgs 直写；回来时 loadMsgs 恢复，消息照常进后续 AI 上下文）
       if (r.afterText && r.direction === 'out' && !r.connected) {
@@ -2686,10 +2797,11 @@ function ChatPage({
           const msg: QQMsg = { id: uid(), role: 'peer', content: after, time: Date.now() };
           saveMsgs(peer.id, [...loadMsgs(peer.id), msg]);
           setMsgs((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          notifyDirectSave(msg);
         }, 1500 + Math.floor(Math.random() * 1500));
       }
     },
-    [peer.id],
+    [peer.id, notifyDirectSave],
   );
 
   /** 挂断后 AI 续聊文字（引擎生成完毕回调，紧随挂断）：立刻落盘+在场呈现；多条错开像手动连发。
@@ -2702,18 +2814,31 @@ function ChatPage({
             const msg: QQMsg = { id: uid(), role: 'peer', content: t, time: Date.now() };
             saveMsgs(peer.id, [...loadMsgs(peer.id), msg]);
             setMsgs((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+            notifyDirectSave(msg);
           },
           i === 0 ? 400 + Math.floor(Math.random() * 500) : i * (1400 + Math.floor(Math.random() * 1100)),
         );
       });
     },
-    [peer.id],
+    [peer.id, notifyDirectSave],
   );
 
   /** 发起全局语音通话（加号面板「语音通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
    *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断 */
   const openVoiceCall = useCallback(
     (direction: 'out' | 'in') => {
+      // B-1 通话中防御：已有全局通话（通话中/拨号中）时不发起新通话——
+      // startGlobalCall 会直接替换旧 session，旧通话的卡片/记录/续聊/记忆总结全部静默丢失。
+      // AI 来电（direction='in'）由触发处先行双查后放行，这里只拦手动拨出
+      if (useGlobalCall.getState().session) {
+        if (direction === 'out') onToast('已在通话中，请先挂断再拨');
+        return;
+      }
+      // 手动拨出（加号面板「语音通话」/通话卡片回拨）：有来电正在响铃（电话来电弹窗）同样不叠加
+      if (direction === 'out' && useIncomingCall.getState().call) {
+        onToast('有来电正在响铃，请先处理');
+        return;
+      }
       const base = msgs;
       const history: ChatCallTurnMsg[] = base
         .filter((m) => !m.recalled && (m.content.trim().length > 0 || m.kind === 'location' || (m.kind === 'image' && m.img?.desc && !m.content.startsWith('data:'))) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
@@ -2773,7 +2898,7 @@ function ChatPage({
         onFollowup: sendCallFollowup,
       });
     },
-    [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup],
+    [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup, onToast],
   );
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
@@ -3190,9 +3315,13 @@ function ChatPage({
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
         if (error) {
+          // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
+          // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
+          // 必然逐条落盘，此刻静默收尾即可。仍未投递出任何分段时才落盘，且用全新 id 防冲突
+          if (deliveredAny) return;
           saveMsgs(peer.id, [
             ...loadMsgs(peer.id),
-            { id: aiId, role: 'peer', content: `〔消息发送失败：${error}〕`, time: startedAt },
+            { id: `${aiId}-err`, role: 'peer', content: `〔消息发送失败：${error}〕`, time: startedAt },
           ]);
           return;
         }
@@ -3362,24 +3491,31 @@ function ChatPage({
   );
 
   /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
-   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」 */
+   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」。
+   *  37-a：回复中（流式/投递）时事件随补跑回合排队（对齐 chat.tsx resolveBlockReq），不再被占用中的流静默丢弃 */
   const resolveBlockReq = useCallback(
     (m: QQMsg, accept: boolean) => {
       if (m.blkreq?.status !== 'pending') return;
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x))
       );
+      const ev = accept
+        ? `（系统事件：${me.name}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`
+        : `（系统事件：${me.name}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`;
       if (accept) {
         setBlk(acceptBlockReq('qq', peer.id));
         pushSysMsg(`你同意了「${peer.name}」的解除拉黑申请`);
-        runAiTurnRef.current?.(null, [], `（系统事件：${me.name}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`);
       } else {
         setBlk(rejectBlockReq('qq', peer.id));
         pushSysMsg(`你拒绝了「${peer.name}」的解除拉黑申请`);
-        runAiTurnRef.current?.(null, [], `（系统事件：${me.name}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`);
       }
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        qqQueueAdd(peer.id, ev); // 事件随补跑回合保留，流收尾且投递完毕后自动触发回应
+        return;
+      }
+      runAiTurnRef.current?.(null, [], ev);
     },
-    [peer.id, peer.name, me.name, pushSysMsg]
+    [peer.id, peer.name, me.name, pushSysMsg, sessionKey]
   );
 
   /** 拉黑标记（对照用户截图）：红色 ! 圆点紧贴气泡——拉黑关系存续期间（任一方向），该期间内的
@@ -3488,6 +3624,8 @@ function ChatPage({
       setMsgs((prev) => [...prev, userMsg]);
       markDeliverBoundary(sessionKey, userMsg.id);
       qqQueueAdd(peer.id);
+      // 37-a：按钮流式中不再禁用，排队补跑统一给 toast 反馈（消息已上屏但回复要等上一轮走完）
+      onToast('消息已发出，对方回完这轮就聊');
       return;
     }
     setInput('');
@@ -3858,7 +3996,8 @@ function ChatPage({
         copyTextWithToast(quoteContentOf(m), onToast);
         break;
       case 'del': {
-        if (isChatStreaming(sessionKey)) {
+        // A-4：投递进行中同样拒绝——投递 tick 的 loadMsgs 读旧存储会把被删消息合并回来落盘（消息复活）
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
           onToast('对方正在回复，请稍后再试');
           return;
         }
@@ -3886,7 +4025,8 @@ function ChatPage({
         setSelectedIds([m.id]);
         break;
       case 'recall': {
-        if (isChatStreaming(sessionKey)) {
+        // A-4：投递进行中同样拒绝（同删除：避免投递 tick 把撤回前的内容合并回来）
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
           onToast('对方正在回复，请稍后再试');
           return;
         }
@@ -3930,7 +4070,8 @@ function ChatPage({
       onToast('内容不能为空');
       return;
     }
-    if (isChatStreaming(sessionKey)) {
+    // A-4：投递进行中同样拒绝（编辑写入的内容会被投递 tick 用旧存储覆盖回去）
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       onToast('对方正在回复，请稍后再试');
       return;
     }
@@ -3954,7 +4095,8 @@ function ChatPage({
   /** 多选批量删除 */
   const batchDelete = () => {
     if (selectedIds.length === 0) return;
-    if (isChatStreaming(sessionKey)) {
+    // A-4：投递进行中同样拒绝（同删除：避免投递 tick 读旧存储把被删消息合并回来）
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       onToast('对方正在回复，请稍后再试');
       return;
     }
@@ -3990,8 +4132,8 @@ function ChatPage({
     setFwdFlow('choose');
   };
 
-  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；自己会话除外） */
-  const canDispatch = sentenceSend && pendingDispatch && !streaming && peer.id !== me.id;
+  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；自己会话除外；37-a 去掉流式禁用） */
+  const canDispatch = sentenceSend && pendingDispatch && peer.id !== me.id;
 
   // 发送表情消息（表情面板点选；AI 通过 stk.meaning 理解表情含义并据此回复）。
   // #35：对方正在回复（流式/连发投递）时与文字发送同一口径——消息入列并排队补跑，
@@ -4610,7 +4752,8 @@ function ChatPage({
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void send();
+                // A-6：中文输入法选词回车（isComposing）不发送，避免半截拼音被当消息发出
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) void send();
               }}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
               aria-label={`发送消息给${peer.name}`}
@@ -4636,10 +4779,10 @@ function ChatPage({
             type="button"
             data-testid="qq-chat-send"
             aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : pendingImgs.length > 0 ? '发送图片' : '发送（让对方回复）'}
-            disabled={(!input.trim() && !canDispatch && pendingImgs.length === 0) || streaming}
+            disabled={!input.trim() && !canDispatch && pendingImgs.length === 0}
             onClick={() => {
               // 有文字（含与待发图组合发送）或预览条还有待发图都走 send（内部分流：组合发/只发图/只发文字）；
-              // 真正空输入才触发分句批次
+              // 真正空输入才触发分句批次。37-a：去掉流式禁用——AI 回复中点击走 send() 内部的排队补跑分支（与 chat.tsx 口径一致）
               if (input.trim() || pendingImgs.length > 0) void send();
               else dispatchBatch();
             }}
