@@ -4,13 +4,17 @@
  * 双向拉黑状态（QQ / 微信 / 信息三个 App 的单聊；按 App × 角色 ID 隔离持久化）：
  *
  * - 两方向独立：byUser = 用户拉黑了角色；byChar = 角色拉黑了用户（可同时为真 = 互拉）。
- * - 拉黑只是「关系状态」：不拦截消息——被拉黑的一方仍然可以发消息、对方也看得到，
- *   但双方都要知道当前处于拉黑状态（UI 气泡拉黑图标 + system 注入 + 系统消息）。
+ * - 40-a 重构：拉黑会拦截「本 App 内」的消息发送——byUser=true 时角色不能给用户发任何消息
+ *   （各 App 的 AI 回合入口前置守卫 + chat-stream-store 第二层兜底 + 通话续聊落库守卫）；
+ *   byChar=true 时用户不能给角色发任何消息（各 App 的用户发送入口前置守卫 + toast 提示）。
+ *   唯一例外是「解除拉黑申请卡片」：双向都可以发（角色用 [申请解除拉黑:理由] 标记，
+ *   用户用输入区上方的「发送解除申请」入口），由对方决定同意或拒绝——
+ *   角色侧决策标记 [同意解除拉黑]/[拒绝解除拉黑] 由 AI 在回复里输出。
+ *   拉黑只限制当前 App：微信拉黑不影响 QQ/信息/电话联系（存储键即隔离边界，跨 App 天然不受限）。
  * - 单聊和群聊完全独立：群聊不读不写这里的任何状态；三个 App 之间也互相独立
  *   （存储键即隔离边界：wx-block:<id> / qq-block:<id> / sms-block:<id>）。
  * - 持久化在 IndexedDB kv store（idb-kv 内存同步读 + 异步写穿），重启 App 后保留。
- * - 角色侧行为：被拉黑时可通过标记 [申请解除拉黑:理由] 发起「解除申请卡片」，用户同意/拒绝；
- *   角色可主动 [拉黑] / [解除拉黑]，所有状态变更都生成系统消息。
+ * - 角色可主动 [拉黑] / [解除拉黑]，所有状态变更都生成系统消息。
  * - 无拉黑状态时 system 也会注入「拉黑能力声明」（buildBlockPromptBlock）：告知角色可以
  *   输出 [拉黑]/[解除拉黑] 标记、且说到必须做到（只在嘴上说拉黑而不输出标记 = 系统不记录 = 说话是假的），
  *   这是「角色说拉黑就真的拉黑」的一致性保证。
@@ -59,6 +63,14 @@ export interface BlockEntry {
   rejectedAt?: number;
   /** 当前拉黑周期内被拒绝的申请次数（防骚扰：达到上限后不再受理新申请） */
   reqCount?: number;
+  /** 用户发起的解除拉黑申请：理由（有值且 userReqStatus==='pending' = 正等角色处理；终态后保留供追溯） */
+  userReqReason?: string;
+  /** 用户申请发起时间 */
+  userReqAt?: number;
+  /** 用户申请状态：pending=待角色决策 accepted=角色同意（byChar 已清） rejected=角色拒绝 */
+  userReqStatus?: 'pending' | 'accepted' | 'rejected';
+  /** 当前 byChar 拉黑周期内用户申请被角色拒绝的次数（防骚扰：达到上限后不再受理新申请） */
+  userReqRejectedCount?: number;
 }
 
 /** 当前拉黑周期内申请被拒绝次数上限：达到后彻底不再受理（用户解除拉黑后重新拉黑才重置）。
@@ -94,6 +106,15 @@ function normalize(v: unknown): BlockEntry {
     reqAt: typeof e.reqAt === 'number' ? e.reqAt : undefined,
     rejectedAt: typeof e.rejectedAt === 'number' ? e.rejectedAt : undefined,
     reqCount: typeof e.reqCount === 'number' && e.reqCount > 0 ? e.reqCount : undefined,
+    userReqReason:
+      typeof e.userReqReason === 'string' && e.userReqReason.trim() ? e.userReqReason.trim().slice(0, 80) : undefined,
+    userReqAt: typeof e.userReqAt === 'number' ? e.userReqAt : undefined,
+    userReqStatus:
+      e.userReqStatus === 'pending' || e.userReqStatus === 'accepted' || e.userReqStatus === 'rejected'
+        ? e.userReqStatus
+        : undefined,
+    userReqRejectedCount:
+      typeof e.userReqRejectedCount === 'number' && e.userReqRejectedCount > 0 ? e.userReqRejectedCount : undefined,
   };
 }
 
@@ -113,7 +134,8 @@ export function saveBlock(app: BlockApp, contactId: string, entry: BlockEntry): 
     !n.byUser && !n.byChar &&
     !n.byUserAt && !n.byUserUntil && !n.byUserHist &&
     !n.byCharAt && !n.byCharUntil && !n.byCharHist &&
-    !n.reqReason && !n.reqAt && !n.rejectedAt && !n.reqCount;
+    !n.reqReason && !n.reqAt && !n.rejectedAt && !n.reqCount &&
+    !n.userReqReason && !n.userReqAt && !n.userReqStatus && !n.userReqRejectedCount;
   try {
     if (empty) kvDel(blockKey(app, contactId));
     else kvSet(blockKey(app, contactId), n);
@@ -178,14 +200,37 @@ export function applyCharBlockAction(
     const hist = [...(cur.byCharHist ?? [])];
     if (cur.byCharAt !== undefined && cur.byCharUntil !== undefined) hist.push({ at: cur.byCharAt, until: cur.byCharUntil });
     return {
-      entry: saveBlock(app, contactId, { ...cur, byChar: true, byCharAt: Date.now(), byCharUntil: undefined, byCharHist: hist.length ? hist : undefined }),
+      // 40-a：重新拉黑 = 开新的 byChar 周期 → 用户侧申请记录（终态/被拒计数）一并清零（与角色侧 reqCount 同口径）
+      entry: saveBlock(app, contactId, {
+        ...cur,
+        byChar: true,
+        byCharAt: Date.now(),
+        byCharUntil: undefined,
+        byCharHist: hist.length ? hist : undefined,
+        userReqReason: undefined,
+        userReqAt: undefined,
+        userReqStatus: undefined,
+        userReqRejectedCount: undefined,
+      }),
       changed: true,
       reqCreated: false,
     };
   }
   if (kind === 'unblock') {
     if (!cur.byChar) return { entry: cur, changed: false, reqCreated: false };
-    return { entry: saveBlock(app, contactId, { ...cur, byChar: undefined, byCharUntil: Date.now() }), changed: true, reqCreated: false };
+    // 40-a：角色主动解除拉黑时，用户侧待处理申请自然失效（清掉 pending，避免悬挂状态挡住后续申请）
+    return {
+      entry: saveBlock(app, contactId, {
+        ...cur,
+        byChar: undefined,
+        byCharUntil: Date.now(),
+        userReqReason: undefined,
+        userReqAt: undefined,
+        userReqStatus: undefined,
+      }),
+      changed: true,
+      reqCreated: false,
+    };
   }
   // request：必须当前真的被用户拉黑，且没有还没处理的申请（避免连环申请刷屏）；
   // 冷却期已按用户要求移除（被拒后可立即再申请）；拒绝次数达上限后彻底不再受理（新周期由用户重新拉黑开启）
@@ -227,6 +272,75 @@ export function rejectBlockReq(app: BlockApp, contactId: string): BlockEntry {
   });
 }
 
+/**
+ * 40-a：AI「仅申请卡」放行模式判定——用户拉黑了角色（byUser）后，本 App 内 AI 不能发任何消息，
+ * 但角色仍可发起「解除拉黑申请卡片」（需求：拉黑后只保留解除拉黑申请通道）：
+ * 当前没有待处理申请（reqReason 为空）且本周期被拒次数未达上限时，AI 回合仍会发起
+ *（角色需要看到消息才有机会申请解除），但回复中除申请卡片/系统行外的所有正文由调用方丢弃。
+ * 该函数同时被各 App 的回合入口守卫与 chat-stream-store 第二层兜底使用（两处条件必须一致）。
+ */
+export function charRequestOnlyOf(b: BlockEntry): boolean {
+  return b.byUser === true && !b.reqReason && (b.reqCount ?? 0) < BLOCK_REQ_MAX_REJECTED;
+}
+
+/**
+ * 40-a：用户→角色发起「解除拉黑申请」（双向对等；byChar 拉黑下用户唯一的例外发送通道）：
+ * 只在确实被角色拉黑（byChar=true）、没有待处理申请、本周期被拒次数未达上限时受理；
+ * created=false = 未创建（未拉黑/已有 pending/已达上限，调用方不落卡不注入事件）。
+ */
+export function applyUserBlockReq(app: BlockApp, contactId: string, reason?: string): { entry: BlockEntry; created: boolean } {
+  const cur = loadBlock(app, contactId);
+  if (!cur.byChar || cur.userReqStatus === 'pending') return { entry: cur, created: false };
+  if ((cur.userReqRejectedCount ?? 0) >= BLOCK_REQ_MAX_REJECTED) return { entry: cur, created: false };
+  return {
+    entry: saveBlock(app, contactId, {
+      ...cur,
+      userReqReason: (reason ?? '').trim().slice(0, 80) || '想和你和好',
+      userReqAt: Date.now(),
+      userReqStatus: 'pending',
+    }),
+    created: true,
+  };
+}
+
+/**
+ * 40-a：角色对「用户发来的解除拉黑申请」的决策落库（AI 标记 [同意解除拉黑]/[拒绝解除拉黑] 触发）：
+ * - accept：解除 byChar（区间照常记录）+ 申请置为 accepted + 被拒计数清零；
+ * - reject：拉黑保持 + 申请置为 rejected + 本周期被拒计数 +1（防骚扰上限与角色侧同口径）。
+ * 没有 pending 申请时 changed=false（调用方跳过系统消息/卡片终态——标记与状态对不上时静默忽略）。
+ */
+export function resolveUserReqByChar(app: BlockApp, contactId: string, accept: boolean): { entry: BlockEntry; changed: boolean } {
+  const cur = loadBlock(app, contactId);
+  if (cur.userReqStatus !== 'pending') return { entry: cur, changed: false };
+  if (accept) {
+    return {
+      entry: saveBlock(app, contactId, {
+        ...cur,
+        byChar: undefined,
+        byCharUntil: Date.now(),
+        userReqStatus: 'accepted',
+        userReqRejectedCount: undefined,
+      }),
+      changed: true,
+    };
+  }
+  return {
+    entry: saveBlock(app, contactId, {
+      ...cur,
+      userReqStatus: 'rejected',
+      userReqRejectedCount: (cur.userReqRejectedCount ?? 0) + 1,
+    }),
+    changed: true,
+  };
+}
+
+/** AI 处理「用户发来的解除拉黑申请」的决策标记 → 动作种类（approve=同意 / deny=拒绝） */
+export function userReqActionKindOf(a: RichAction): 'approve' | 'deny' | null {
+  if (a.kind === 'approve-user-unblock') return 'approve';
+  if (a.kind === 'deny-user-unblock') return 'deny';
+  return null;
+}
+
 function spanCovers(h: BlockSpan[] | undefined, t: number): boolean {
   if (!h) return false;
   return h.some((r) => t >= r.at && (r.until === undefined || t < r.until));
@@ -250,7 +364,7 @@ export function blockCoversAt(b: BlockEntry, dir: 'byUser' | 'byChar', t: number
   return spanCovers(b.byCharHist, t);
 }
 
-/** AI 拉黑类动作标记 → applyCharBlockAction 的动作种类 */
+/** AI 拉黑类动作标记（角色侧：拉黑/解除拉黑/申请解除）→ applyCharBlockAction 的动作种类 */
 export function blockActionKindOf(a: RichAction): 'block' | 'unblock' | 'request' | null {
   if (a.kind === 'block-user') return 'block';
   if (a.kind === 'unblock-user') return 'unblock';
@@ -259,12 +373,15 @@ export function blockActionKindOf(a: RichAction): 'block' | 'unblock' | 'request
 }
 
 /**
- * 双向拉黑的 system 注入块（每轮请求现场读取）：
+ * 双向拉黑的 system 注入块（每轮请求现场读取；40-a 起拉黑会真实拦截消息，提示词与拦截语义对齐）：
  * - 无拉黑状态时也注入「拉黑能力声明」（短，几行）：告知角色可以真的拉黑/解除拉黑用户，
  *   且说到必须做到——决定拉黑就必须输出 [拉黑] 标记，只嘴上说而系统不记录 = 说话是假的。
  *   这是「角色说拉黑就真的拉黑」的一致性保证（没有这段，角色只会口头配合，状态永远写不进去）。
- * - 有拉黑状态时注入当前关系（谁拉黑了谁）、拉黑不拦截消息这一事实；
- *   允许语气态度按人设变化；给出对应方向的标记（被拉黑 → 可申请解除；拉黑别人 → 可解除）。
+ * - byUser（角色被拉黑）：回合入口只在「仍可发起解除申请」时放行（charRequestOnlyOf），
+ *   且回复中除申请卡片外的正文一律被系统丢弃——明确告知角色普通消息送不到、
+ *   唯一通道是 [申请解除拉黑:理由]（既有申请/被拒/达上限提示保留，文案改为拦截语义）。
+ * - byChar（角色拉黑了用户）：告知用户的普通消息发不进来、自己仍可发消息；
+ *   用户可能发来解除拉黑申请，收到后用 [同意解除拉黑]/[拒绝解除拉黑] 决策（有 pending 申请时给决策指引）。
  */
 export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName: string): string {
   const b = loadBlock(app, contactId);
@@ -277,6 +394,7 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
       `- 严禁只在文字上说"拉黑了"却不输出 [拉黑] 标记——那样系统不会记录，你的说法就是假的。`,
       `- 已经拉黑后想恢复关系时，单独输出一行 [解除拉黑]。`,
       `- 只在对话真实发展到这一步时才输出上述标记；没有这个意图时不要输出。`,
+      `- 拉黑生效后，${user} 在${ch}上就发不出消息给你了（系统会拦截）；你仍然可以给 TA 发消息。`,
     ].join('\n');
   }
   const lines: string[] = [];
@@ -285,21 +403,38 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
   if (b.byUser) {
     lines.push(
       `【拉黑状态】${user} 已经在${ch}上把你拉黑了。`,
-      `- 拉黑只是关系状态，不拦截消息：你仍然可以给 ${user} 发消息，TA 也看得到；但你要清楚知道自己是被拉黑的一方，不要装作什么都没发生。`,
-      `- 你的语气、态度可以因此变化（委屈、赌气、冷淡、破罐破摔、诚恳道歉……都按你的人设来）。`,
-      `- 你可以申请让 ${user} 解除拉黑：在回复里单独输出一行标记 [申请解除拉黑:你的理由]（标记里用一句话写真诚的理由，不要加引号）。系统会把申请做成卡片展示给 ${user}，由 TA 决定同不同意。`,
+      `- 你发出的普通消息（文字/语音/表情/红包/转账等一切）都会被系统拦截，${user} 收不到；不要假装消息已送达。`,
+      `- 你唯一能传话的方式：在回复里单独输出一行标记 [申请解除拉黑:你的理由]（标记里用一句话写真诚的理由，不要加引号）。系统会把申请做成卡片展示给 ${user}，由 TA 决定同不同意；是否申请、何时申请按你的人设和你们的关系来定。`,
       `- 申请还没结果时不要重复输出申请标记；`
     );
     if (b.rejectedAt) lines.push(`- 你上次申请解除拉黑被 ${user} 拒绝了。先按人设消化这件事（失落、赌气、反思都行）；想再次申请时可以再输出申请标记。`);
     if (capped) lines.push(`- 你已经多次申请被拒绝，系统不会再转达新的申请，不要输出申请标记。`);
   }
   if (b.byChar) {
-    lines.push(
-      `【拉黑状态】你已经在${ch}上把 ${user} 拉黑了。`,
-      `- 拉黑只是关系状态，不拦截消息：你仍然可以给 ${user} 发消息，TA 也看得到。不要编造「消息发不出去」之类的效果。`,
-      `- 你可以按人设表现出拉黑后的态度（赌气、冷淡、嘴硬……），但不要跳出人设。`,
-      `- 想解除拉黑时：在回复里单独输出一行标记 [解除拉黑]，系统会生成解除提示；没想好就继续保持。`
-    );
+    const userCapped = (b.userReqRejectedCount ?? 0) >= BLOCK_REQ_MAX_REJECTED;
+    if (b.userReqStatus === 'pending') {
+      // 40-a：用户发来的解除拉黑申请正等角色决策——给出两个决策标记与「按人设自由判断」的指引
+      lines.push(
+        `【拉黑状态】你已经在${ch}上把 ${user} 拉黑了，而 ${user} 刚刚给你发来一条「解除拉黑申请」（理由见系统事件）。你的决定：`,
+        `- 愿意给对方一个机会 → 在回复的最开头单独输出一行 [同意解除拉黑]，系统会立即解除拉黑、恢复正常聊天；`,
+        `- 决定拒绝 → 在回复的最开头单独输出一行 [拒绝解除拉黑]，拉黑继续保持。`,
+        `- 同意还是拒绝，结合你的人设、你们的关系和这件事的前因后果自由判断，不要无脑顺从；无论同不同意，先用你的方式自然回应这件事。`,
+        `- ${user} 在${ch}上发不出普通消息给你（系统拦截），只有这张申请卡能送达。`
+      );
+    } else {
+      lines.push(
+        `【拉黑状态】你已经在${ch}上把 ${user} 拉黑了。`,
+        `- ${user} 在${ch}上发不出消息给你（系统会拦截）；你仍然可以给 ${user} 发消息，TA 看得到。`,
+        `- ${user} 可能给你发来「解除拉黑申请」卡片：收到后你可以决定同意或拒绝——同意就在回复的最开头单独输出一行 [同意解除拉黑]，拒绝就单独输出一行 [拒绝解除拉黑]，无论同不同意都先用你的方式自然回应。`,
+        `- 你可以按人设表现出拉黑后的态度（赌气、冷淡、嘴硬……），但不要跳出人设。`,
+        `- 想主动解除拉黑时：在回复里单独输出一行标记 [解除拉黑]，系统会生成解除提示；没想好就继续保持。`
+      );
+      if ((b.userReqRejectedCount ?? 0) > 0) {
+        lines.push(userCapped
+          ? `- ${user} 的解除申请已经被你拒绝多次，系统不会再转达新的申请。`
+          : `- ${user} 的解除申请已经被你拒绝过 ${b.userReqRejectedCount} 次。`);
+      }
+    }
   }
   return lines.join('\n');
 }

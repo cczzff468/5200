@@ -33,6 +33,7 @@ import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { createReplySegmentScanner } from '@/lib/reply-count';
 import { describeImages } from '@/lib/vision-client';
 import { clearDeliverBoundary } from '@/lib/ios/ai-delivery';
+import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
 // ---------------- 公开类型 ----------------
 
 export type ChatStreamStatus = 'streaming' | 'done' | 'error';
@@ -124,6 +125,22 @@ export interface BeginChatStreamOptions {
    * 不依赖任何组件存活（页面已退出也能正确落盘）。
    */
   finalize: (result: ChatStreamResult) => void;
+}
+
+// ---------------- 40-a 拉黑第二层兜底 ----------------
+
+/**
+ * 从 sessionKey 解析参与拉黑的会话（wx:<contactId> / qq:<contactId> / sms:c:<contactId>）；
+ * 群聊（wx:group: / qq:group:）、小助手（sms:assistant）及其他非联系人会话返回 null（不参与拉黑）。
+ * 拉黑状态按 App × 联系人 ID 隔离，这里的解析与各 App 的会话键同源同义。
+ */
+function blockSessionOf(sessionKey: string): { app: BlockApp; contactId: string } | null {
+  if (sessionKey.startsWith('wx:group:') || sessionKey.startsWith('qq:group:')) return null;
+  if (sessionKey === 'sms:assistant' || sessionKey === 'assistant') return null;
+  if (sessionKey.startsWith('sms:c:')) return { app: 'sms', contactId: sessionKey.slice('sms:c:'.length) };
+  if (sessionKey.startsWith('sms:')) return null; // 其余 sms 键（历史助手兼容等）不参与拉黑
+  const m = /^(wx|qq):(.+)$/.exec(sessionKey);
+  return m ? { app: m[1] as BlockApp, contactId: m[2] } : null;
 }
 
 // ---------------- 内部状态 ----------------
@@ -373,6 +390,15 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
  * 同一会话已有进行中的流时拒绝并返回 false（调用方应回滚刚插入的用户消息）。
  */
 export function beginChatStream(opts: BeginChatStreamOptions): boolean {
+  // 40-a 第二层兜底：用户拉黑角色（byUser）后，该 App 内 AI 不得发消息——除「申请解除拉黑」放行模式
+  //（charRequestOnlyOf，与各 App 回合入口守卫同一条件）外，这里不发起流。静默处理：返回 true 让
+  // 调用方按「已开始」收尾（不回滚已上屏的用户消息、不触发 useChatStream 错误显示路径），
+  // 实际不发请求、不产生任何流状态——挡住 bg-turn 接力等间接路径，群聊/助手会话天然放行。
+  const blkSession = blockSessionOf(opts.sessionKey);
+  if (blkSession) {
+    const blkEntry = loadBlock(blkSession.app, blkSession.contactId);
+    if (blkEntry.byUser && !charRequestOnlyOf(blkEntry)) return true;
+  }
   const existing = streams.get(opts.sessionKey);
   if (existing && existing.state.status === 'streaming') return false;
   // 新回合接管：清除投递插入边界（#35）——之后投递的消息都是对本回合上下文里最新用户消息的回复，
