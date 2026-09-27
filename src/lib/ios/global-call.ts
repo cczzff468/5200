@@ -8,6 +8,8 @@
  * 1. 宿主（微信/QQ 聊天页）用 start() 发起通话（携带联系人/方向/上下文快照与 onEnd 回调），
  *    全屏通话页由 PhoneShell 挂载的 GlobalCallLayer 渲染 —— 退出聊天页 / 退出 App /
  *    打开别的 App 都不会卸载通话引擎，电话不断（全局化）；
+ *    微信 AI 来电以 view='hidden' 启动：响铃期间引擎照常跑但任何通话 UI 都不显示，
+ *    只留全局来电弹窗（点弹窗非按钮区域 expand() 展开全屏来电页，弹窗接听则收成小窗）；
  * 2. 通话中点左上角小窗图标 minimize()：全屏页隐藏（组件保持挂载，引擎不停），悬浮小窗
  *    （PiP）出现在屏幕上；点小窗 expand() 回到全屏通话页；
  * 3. 小窗可拖动；拖到屏幕左右边缘 dock() 后只露一条边缘（edge sliver），点边缘 undock()
@@ -53,8 +55,9 @@ interface GlobalCallState {
   session: GlobalCallSession | null;
   /** 会话序号：每次 start 递增，VoiceCallScreen 用 key 重挂载新通话 */
   seq: number;
-  /** full=全屏通话页 / pip=悬浮小窗（小窗被推到边缘时只露一条边） */
-  view: 'full' | 'pip';
+  /** full=全屏通话页 / pip=悬浮小窗（小窗被推到边缘时只露一条边） /
+   *  hidden=完全隐藏（微信 AI 来电响铃中：引擎挂载运行但全屏页与小窗都不显示） */
+  view: 'full' | 'pip' | 'hidden';
   pipDocked: boolean;
   pipSide: 'left' | 'right';
   /** 小窗位置（相对手机壳左上角；null=未初始化，首次显示时按壳尺寸摆到右上） */
@@ -66,7 +69,7 @@ interface GlobalCallState {
   enginePhase: 'dialing' | 'incoming' | 'active' | 'ended' | null;
   setEngine: (engine: { accept: () => void; reject: () => void } | null, phase: GlobalCallState['enginePhase']) => void;
   setEnginePhase: (phase: GlobalCallState['enginePhase']) => void;
-  start: (s: GlobalCallSession) => void;
+  start: (s: GlobalCallSession, initialView?: 'full' | 'hidden') => void;
   minimize: () => void;
   expand: () => void;
   dock: (side: 'left' | 'right') => void;
@@ -86,11 +89,11 @@ export const useGlobalCall = create<GlobalCallState>()((set) => ({
   enginePhase: null,
   setEngine: (engine, phase) => set({ engine, enginePhase: phase }),
   setEnginePhase: (phase) => set({ enginePhase: phase }),
-  start: (s) =>
+  start: (s, initialView = 'full') =>
     set((prev) => ({
       session: s,
       seq: prev.seq + 1,
-      view: 'full',
+      view: initialView,
       pipDocked: false,
       pipPos: null,
       engine: null,
@@ -107,9 +110,10 @@ export const useGlobalCall = create<GlobalCallState>()((set) => ({
   },
 }));
 
-/** 发起一次全局通话（宿主入口；已有会话时直接替换为新一轮通话） */
-export function startGlobalCall(session: GlobalCallSession): void {
-  useGlobalCall.getState().start(session);
+/** 发起一次全局通话（宿主入口；已有会话时直接替换为新一轮通话）。
+ *  initialView='hidden'：微信 AI 来电用——响铃期间不显示全屏通话页，只留来电弹窗 */
+export function startGlobalCall(session: GlobalCallSession, initialView: 'full' | 'hidden' = 'full'): void {
+  useGlobalCall.getState().start(session, initialView);
 }
 
 // ---------------- 通话秒数总线（引擎 → 悬浮小窗） ----------------

@@ -3,23 +3,26 @@
 /**
  * 全局来电层（PhoneShell 挂载，覆盖所有 App / 主屏幕 / 锁屏）：
  *
- * - 顶部来电弹窗（z-[94]，对照用户截图）：
+ * - 顶部来电弹窗（z-[94]）：
  *   · 电话来电 = iOS 胶囊（黑色胶囊：头像+名字+红色拒接+绿色接听）；
  *   · 微信语音来电 = 微信大窗（深色圆角卡：头像+名字+「邀请你语音通话...」+忽略+拒接/接听），
- *     显示 5 秒后自动缩成同款胶囊小窗继续响铃；QQ 来电无弹窗（不经过本模块）；
- *   · 弹窗上的接听/忽略按钮直接操作：电话走来电快照回调；微信经全局通话引擎转发
- *     （useGlobalCall.engine.accept / reject → 页内 WxCallScreen 的 accept/reject）；
- * - iOS 全屏来电界面（z-[84]，仅电话来电渲染；对照第二张截图）：深灰渐变背景 + 右上 ⓘ +
- *   头像/名字/「语音通话邀请…」+ 信息/提醒我 + 拒绝/接听大圆钮；
- *   微信语音来电的全屏界面由现有全局通话层（WxCallScreen incoming 态）承担；
- * - 自动跳转：AI 来电触发即渲染全屏来电界面（电话）/ 全局通话层已是全屏（微信）——
- *   不管在哪个 App、哪个界面都会被来电界面覆盖；
+ *     显示 5 秒后自动缩成胶囊小窗（比电话胶囊左右更宽）继续响铃；QQ 来电无弹窗（不经过本模块）；
+ *   · 弹窗从灵动岛弹出：初始为灵动岛几何（118×33 @ top 11），弹性放大+下移成弹窗；
+ *     消失时缩回灵动岛几何，与真灵动岛同位同色无缝交接（形变范式同 IslandNotification）；
+ *   · 弹窗上的接听/拒绝/忽略按钮直接操作、不跳界面：电话走来电快照回调；微信经全局通话引擎
+ *     转发（engine.accept / reject）——微信接听后不进全屏通话页，收成悬浮小窗（点小窗回全屏）；
+ *   · 点弹窗除挂断/接听/忽略按钮外的区域 → 跳转到来电界面：微信把全局通话层从 view='hidden'
+ *     展开为全屏来电页（expand()）；电话来电的全屏来电界面本就自动显示，无需处理；
+ * - iOS 全屏来电界面（z-[84]，仅电话来电渲染）：深灰渐变背景 + 右上 ⓘ + 头像/名字/
+ *   「语音通话邀请…」+ 信息/提醒我 + 拒绝/接听大圆钮；
+ *   微信语音来电的来电界面不自动显示（全局通话层 view='hidden' 启动，引擎挂载但不可见），
+ *   点弹窗非按钮区域才展开；
  * - 电话来电响铃 25 秒无人处理 → 超时未接（onMissed('timeout')：落未接记录 + AI 语音留言）。
  */
 
 import { useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, type Transition } from 'framer-motion';
 import { Bell, BellOff, Info, MessageCircle, Phone, PhoneOff } from 'lucide-react';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import {
@@ -31,6 +34,20 @@ import {
 
 // iOS 全屏来电页较重，按需加载（无来电不进包）
 const IncomingCallScreen = dynamic(() => Promise.resolve(IncomingCallScreenImpl), { ssr: false });
+
+/** 灵动岛几何/颜色（与 PhoneShell 静态灵动岛完全一致）：弹窗弹出与收回的起点/终点 */
+const ISLAND = { width: 118, height: 33, borderRadius: 17, y: 0 } as const;
+const ISLAND_BG = '#000000';
+/** 弹性形变（尺寸用 spring；背景色短补间，与灵动岛纯黑无缝交接） */
+const SPRING_WITH_BG: Transition = {
+  type: 'spring',
+  stiffness: 420,
+  damping: 34,
+  mass: 0.9,
+  backgroundColor: { duration: 0.2, ease: 'easeOut' },
+};
+/** 收回灵动岛用短补间（缩回终点与静态灵动岛同位同色） */
+const TWEEN_OUT: Transition = { duration: 0.24, ease: [0.4, 0, 0.2, 1] };
 
 export default function IncomingCallLayer() {
   const call = useIncomingCall((s) => s.call);
@@ -74,21 +91,29 @@ export default function IncomingCallLayer() {
 
   return (
     <>
-      <AnimatePresence>{showBanner && call ? <CallBanner key={call.id} call={call} /> : null}</AnimatePresence>
+      {/* 弹窗锚定容器：顶边与灵动岛同位（top 11），弹窗从这里弹出/收回 */}
+      <div className="pointer-events-none absolute inset-x-0 top-[11px] z-[94] flex flex-col items-center">
+        <AnimatePresence>{showBanner && call ? <CallBanner key={call.id} call={call} /> : null}</AnimatePresence>
+      </div>
       {isPhone && call ? <IncomingCallScreen call={call} /> : null}
     </>
   );
 }
 
-// ---------------- 顶部来电弹窗（胶囊 / 微信大窗） ----------------
+// ---------------- 顶部来电弹窗（胶囊 / 微信大窗；从灵动岛弹出，收回灵动力交接无缝） ----------------
 
 function CallBanner({ call }: { call: IncomingCallSnapshot }) {
   const big = call.source === 'wx' && call.bannerStage === 'big';
+  // 微信胶囊比电话胶囊更宽（左右 padding 更大 + 名字区更宽）
+  const wide = call.source === 'wx';
 
-  /** 接听：电话走快照回调（打开电话 App 进通话）；微信代理到页内引擎 accept */
+  /** 接听：电话走快照回调（打开电话 App 进通话）；微信代理到页内引擎 accept——
+   *  点按钮不跳界面：接听后全局通话层收成悬浮小窗（点小窗可回全屏通话页） */
   const answer = () => {
     if (call.source === 'wx') {
-      useGlobalCall.getState().engine?.accept();
+      const g = useGlobalCall.getState();
+      g.engine?.accept();
+      if (g.session) g.minimize();
       return;
     }
     useIncomingCall.getState().answer();
@@ -101,66 +126,80 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
     }
     useIncomingCall.getState().dismiss('declined');
   };
+  /** 点弹窗除挂断/接听按钮外的区域 → 跳转到来电界面：
+   *  微信展开全局通话层全屏来电页（view 'hidden' → 'full'）；电话的全屏来电界面本就自动显示 */
+  const openScreen = () => {
+    if (call.source === 'wx') useGlobalCall.getState().expand();
+  };
 
-  if (big) {
-    // 微信大窗（对照第三张截图）：深色圆角卡 + 头像/名字/邀请文案 + 忽略 + 拒接/接听
-    return (
-      <motion.div
-        initial={{ y: -76, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: -76, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-        className="pointer-events-auto absolute left-1/2 top-[58px] z-[94] w-[344px] -translate-x-1/2 rounded-[22px] bg-[#1c1c1e]/95 pb-3 pt-3.5 shadow-[0_18px_44px_rgba(0,0,0,0.5)] ring-1 ring-white/10 backdrop-blur-xl"
-        role="alertdialog"
-        aria-label={`微信语音通话邀请：${call.name}`}
-        data-testid="incoming-banner-wx-big"
-      >
-        <div className="flex items-center gap-3 px-4">
-          <BannerAvatar name={call.name} avatar={call.avatar} wx />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[17px] font-semibold leading-[22px] text-white">{call.name}</div>
-            <div className="mt-0.5 text-[13px] leading-[18px] text-white/50">邀请你语音通话...</div>
-          </div>
-        </div>
-        <div className="mt-3.5 flex items-center justify-between pl-5 pr-4">
-          <button
-            type="button"
-            onClick={decline}
-            aria-label="忽略"
-            data-testid="incoming-ignore"
-            className="flex h-[44px] items-center gap-1.5 rounded-full bg-white/10 pl-4 pr-5 text-[15px] text-white active:bg-white/15"
-          >
-            <BellOff className="h-[17px] w-[17px]" strokeWidth={2} aria-hidden="true" />
-            忽略
-          </button>
-          <div className="flex items-center gap-3">
-            <CircleBtn tone="red" onClick={decline} label="拒绝" />
-            <CircleBtn tone="green" onClick={answer} label="接听" />
-          </div>
-        </div>
-      </motion.div>
-    );
-  }
+  // 展开姿态：微信大窗 344 宽 @ y47（top 58）/ 胶囊 56 高 @ y45（top 56）；
+  // 初始与退场都是灵动岛几何——弹出/收回与灵动岛同位同色无缝形变
+  const expanded = big
+    ? { width: 344, height: 'auto' as const, borderRadius: 22, y: 47, backgroundColor: 'rgba(28,28,30,0.96)' }
+    : { width: 'auto' as const, height: 56, borderRadius: 28, y: 45, backgroundColor: 'rgba(0,0,0,0.92)' };
 
-  // 胶囊弹窗（对照第一张截图左：响铃态）：黑色胶囊 + 头像 + 名字 + 拒接/接听
   return (
     <motion.div
-      initial={{ y: -64, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      exit={{ y: -64, opacity: 0 }}
-      transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-      className="pointer-events-auto absolute left-1/2 top-[56px] z-[94] flex h-[56px] -translate-x-1/2 items-center gap-2.5 rounded-full bg-black/92 pl-2.5 pr-2 shadow-[0_14px_36px_rgba(0,0,0,0.45)] ring-1 ring-white/10 backdrop-blur-xl"
+      initial={{ ...ISLAND, backgroundColor: ISLAND_BG }}
+      animate={{ ...expanded, transition: SPRING_WITH_BG }}
+      exit={{ ...ISLAND, backgroundColor: ISLAND_BG, transition: TWEEN_OUT }}
+      onClick={openScreen}
+      className="pointer-events-auto relative cursor-pointer overflow-hidden shadow-[0_18px_44px_rgba(0,0,0,0.5)] ring-1 ring-white/10 backdrop-blur-xl"
       role="alertdialog"
-      aria-label={`来电：${call.name}`}
-      data-testid="incoming-banner-pill"
-      onClick={answer}
+      aria-label={big ? `微信语音通话邀请：${call.name}` : `来电：${call.name}`}
+      data-testid={big ? 'incoming-banner-wx-big' : 'incoming-banner-pill'}
     >
-      <BannerAvatar name={call.name} avatar={call.avatar} />
-      <span className="max-w-[104px] truncate text-[15px] font-medium leading-none text-white">{call.name}</span>
-      <div className="flex items-center gap-1.5">
-        <CircleBtn tone="red" onClick={decline} label="拒绝" testId="incoming-pill-reject" />
-        <CircleBtn tone="green" onClick={answer} label="接听" testId="incoming-pill-accept" />
-      </div>
+      {/* 内容：弹出基本完成后淡入（形变过程不露内容）；大窗↔胶囊切换时重新淡入 */}
+      <motion.div
+        key={big ? 'big' : 'pill'}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1, transition: { duration: 0.16, delay: 0.12 } }}
+        exit={{ opacity: 0, transition: { duration: 0.08 } }}
+      >
+        {big ? (
+          <div className="w-[344px] pb-3 pt-3.5">
+            <div className="flex items-center gap-3 px-4">
+              <BannerAvatar name={call.name} avatar={call.avatar} wx />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[17px] font-semibold leading-[22px] text-white">{call.name}</div>
+                <div className="mt-0.5 text-[13px] leading-[18px] text-white/50">邀请你语音通话...</div>
+              </div>
+            </div>
+            <div className="mt-3.5 flex items-center justify-between pl-5 pr-4">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  decline();
+                }}
+                aria-label="忽略"
+                data-testid="incoming-ignore"
+                className="flex h-[44px] items-center gap-1.5 rounded-full bg-white/10 pl-4 pr-5 text-[15px] text-white active:bg-white/15"
+              >
+                <BellOff className="h-[17px] w-[17px]" strokeWidth={2} aria-hidden="true" />
+                忽略
+              </button>
+              <div className="flex items-center gap-3">
+                <CircleBtn tone="red" onClick={decline} label="拒绝" />
+                <CircleBtn tone="green" onClick={answer} label="接听" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className={`flex h-[56px] items-center ${wide ? 'min-w-[300px] gap-3 pl-4 pr-3' : 'gap-2.5 pl-2.5 pr-2'}`}>
+            <BannerAvatar name={call.name} avatar={call.avatar} />
+            <span
+              className={`${wide ? 'max-w-[150px]' : 'max-w-[104px]'} truncate text-[15px] font-medium leading-none text-white`}
+            >
+              {call.name}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <CircleBtn tone="red" onClick={decline} label="拒绝" testId="incoming-pill-reject" />
+              <CircleBtn tone="green" onClick={answer} label="接听" testId="incoming-pill-accept" />
+            </div>
+          </div>
+        )}
+      </motion.div>
     </motion.div>
   );
 }

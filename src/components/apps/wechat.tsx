@@ -207,7 +207,7 @@ import {
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall } from '@/lib/ios/global-call';
-import { triggerIncomingCall } from '@/lib/ios/incoming-call';
+import { triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich, type ChatLocData } from '@/lib/ios/chat-location';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
@@ -3963,9 +3963,11 @@ function ChatPage({
   );
 
   /** 发起全局语音通话（加号面板「语音通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
-   *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断 */
+   *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断。
+   *  opts.hiddenView：AI 来电用——响铃期间不显示全屏通话页（view='hidden'），只留全局来电弹窗，
+   *  点弹窗非按钮区域才展开全屏来电页；弹窗接听则收成悬浮小窗 */
   const openVoiceCall = useCallback(
-    (direction: 'out' | 'in') => {
+    (direction: 'out' | 'in', opts?: { hiddenView?: boolean }) => {
       const base = msgs;
       const history: ChatCallTurnMsg[] = base
         .filter((m) => !m.recalled && (m.content.trim().length > 0 || m.kind === 'location' || (m.kind === 'image' && m.img?.desc)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))
@@ -4023,7 +4025,7 @@ function ChatPage({
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
         onFollowup: sendCallFollowup,
-      });
+      }, opts?.hiddenView ? 'hidden' : 'full');
     },
     [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup],
   );
@@ -4449,13 +4451,17 @@ function ChatPage({
             );
         });
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
-        // （全局来电弹窗 = 微信大窗 5 秒→胶囊；全屏来电页由全局通话层承担；QQ 侧同结构但不弹窗）
+        // （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
+        // 点弹窗非按钮区域才展开全屏来电页；QQ 侧同结构但不弹窗）
         if (wantCallSeen) {
           try {
             const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
             if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
               window.localStorage.setItem(`wx-vc-last:${peer.id}`, String(Date.now()));
               window.setTimeout(() => {
+                // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
+                // 双触发会产生叠层僵尸来电）——弹窗被忽略就整跳取消
+                if (useIncomingCall.getState().call) return;
                 triggerIncomingCall({
                   source: 'wx',
                   name: displayNameOf(peer) || peer.name,
@@ -4463,7 +4469,7 @@ function ChatPage({
                   contact: peer,
                   bannerStage: 'big',
                 });
-                openVoiceCall('in');
+                openVoiceCall('in', { hiddenView: true });
               }, 1200);
             }
           } catch {

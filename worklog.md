@@ -7937,3 +7937,45 @@ Stage Summary:
   操作浮层叠加（iOS 顶部胶囊形态），接听/拒绝代理到页内引擎（engine 注册转发，不改动 useChatCall
   内部状态机）；③未接留言复用挂断续聊 followup（direction:'out'+reject/missed-in 场景文案语义正确：
   AI 主叫视角「对方按掉了/没人接」）；④phone 来电接通直接复用 runTurn(null) 的 greeting=true 链路
+
+---
+Task ID: 19
+Agent: Z.ai Code (main)
+Task: 来电弹窗四项细化——微信语音来电不自动显示通话界面/来电界面（弹窗即全部）、弹窗从灵动岛弹出/收回、微信胶囊小窗加宽、点弹窗非按钮区域跳转来电界面（按钮直接操作不跳转）
+
+Work Log:
+- global-call.ts：view 增加 'hidden' 态（full/pip/hidden）——微信 AI 来电以 hidden 启动：全屏通话页组件照常挂载
+  （引擎响铃/25s 超时/接听拒绝全正常），但任何通话 UI 都不显示；startGlobalCall(session, initialView='full') 新增第二参
+- wechat.tsx：openVoiceCall(direction, opts?: { hiddenView }) 透传；AI 来电触发改 openVoiceCall('in', { hiddenView: true })；
+  setTimeout 触发回调加幂等防御（useIncomingCall 已有来电时整跳取消——openVoiceCall 会替换全局会话，
+  双触发会产生叠层僵尸来电，实测复现过一次并用 mock 恒定标记+手动清冷却放大验证）
+- IncomingCallLayer.tsx 重写弹窗：单 motion 包裹器三态形变（复用 IslandNotification 范式）——
+  初始=灵动岛几何（118×33 @top11 纯黑）→ 弹性放大+下移成弹窗（大窗 344 宽 @y47 / 胶囊 56 高 @y45）→
+  exit 缩回灵动岛几何（与真灵动岛同位同色无缝交接）；内容淡入淡出防形变露馅；锚定容器 top-[11px] 与灵动岛同位
+- 微信胶囊加宽：min-w-[300px] + gap-3 pl-4 pr-3 + 名字 max-w-[150px]（电话胶囊保持原样 217 内容宽）
+- 弹窗点击分区：挂断/接听/忽略按钮 stopPropagation 直接操作；点弹窗其他区域 openScreen——
+  wx → useGlobalCall.expand()（view hidden→full 展开全屏来电页）；phone → 无操作（全屏来电界面本就自动显示）；
+  移除旧版胶囊整体 onClick=answer（点哪都接听，不符合新交互）
+- 微信弹窗接听新语义：engine.accept() + minimize()——不进全屏通话页，收成悬浮小窗（72×82 白卡+绿色时长），
+  点小窗可回全屏；拒绝照旧 engine.reject()
+- E2E（agent-browser，IndexedDB 种子 + network route mock /api/chat 回复带 [语音通话]）：
+  ①微信 AI 来电：大窗弹出（rAF 采样 t=544ms 时 118×33 灵动岛几何 → 弹性展开 344×123），全屏通话页
+  fullHidden=true（不显示）✓；5 秒后胶囊 300×56 @top56 ✓；点胶囊主体 → 全屏微信来电页展开（fullVisible=true）✓
+  ②点胶囊绿钮接听：不跳界面，悬浮小窗出现（00:01 计时跳动），弹窗缩回灵动岛 ✓；点小窗回全屏通话页，
+  挂断 → 已拒绝/通话卡片+AI 续聊留言落盘 ✓
+  ③点胶囊红钮拒绝：弹窗缩回灵动岛、会话关闭、聊天落「已拒绝」卡片 ✓
+  ④电话（信息 App）回归：mock 标记 → 胶囊 217 宽 + iOS 全屏来电界面同框自动显示（z-94/z-84 全局覆盖）✓；
+  点胶囊主体无副作用（不误接听）✓；接听 → 跳转电话 App 通话界面（挂断按钮在）✓；挂断 → 通话记录「in · 11s」✓；
+  另一通等满 25s 超时 → 通话记录「missed」+ AI 语音留言「你刚才怎么不接电话呀…」（未读）落盘 ✓
+  ⑤10086 小助手会话不触来电（memContactId 为空跳过，设计如此）；真实 LLM 回复无标记不触来电 ✓
+- lint + tsc 双绿；dev.log 无错误；无控制台报错
+
+Stage Summary:
+- 微信语音 AI 来电交互重构：响铃期间「只有弹窗」（大窗 5s→加宽胶囊），全屏通话页 hidden 挂载引擎不停；
+  弹窗三区交互——按钮=直接操作（接听收成悬浮小窗/拒绝直接挂）、主体=跳转来电界面；弹窗从灵动岛弹出、
+  消失缩回灵动岛无缝交接
+- 电话来电保持「弹窗+全屏来电界面」同显（对照原第二张截图需求），胶囊主体点击不再误接听
+- 修复潜在叠层来电竞态：重复触发时 openVoiceCall 不再叠加会话
+- 修改文件：src/lib/ios/global-call.ts、src/components/apps/wechat.tsx、
+  src/components/ios/IncomingCallLayer.tsx、src/components/ios/PhoneShell.tsx（注释）、
+  src/components/ios/GlobalCallLayer.tsx（注释）
