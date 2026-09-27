@@ -8,6 +8,7 @@ import {
   Heart,
   Image as ImageIcon,
   Images,
+  LockKeyhole,
   Minus,
   MoreHorizontal,
   Plus,
@@ -220,6 +221,7 @@ export default function PhotosApp() {
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [zoomed, setZoomed] = useState(false);
   const [wallpaperOk, setWallpaperOk] = useState(false);
+  const [lockWallpaperOk, setLockWallpaperOk] = useState(false);
 
   // 底部三 tab 与自定义相册
   const [activeTab, setActiveTab] = useState<TabKey>('photos');
@@ -247,6 +249,7 @@ export default function PhotosApp() {
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const lastTapRef = useRef(0);
   const wallpaperTimerRef = useRef<number | null>(null);
+  const lockWallpaperTimerRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // 加载照片列表 + 相册 kv（并行读取），并同步管理 ObjectURL（await 之后再 setState）
@@ -285,6 +288,7 @@ export default function PhotosApp() {
   useEffect(() => {
     return () => {
       if (wallpaperTimerRef.current !== null) window.clearTimeout(wallpaperTimerRef.current);
+      if (lockWallpaperTimerRef.current !== null) window.clearTimeout(lockWallpaperTimerRef.current);
       for (const url of urlsRef.current.values()) URL.revokeObjectURL(url);
     };
   }, []);
@@ -589,6 +593,16 @@ export default function PhotosApp() {
     setWallpaperOk(true);
     if (wallpaperTimerRef.current !== null) window.clearTimeout(wallpaperTimerRef.current);
     wallpaperTimerRef.current = window.setTimeout(() => setWallpaperOk(false), 1400);
+  };
+
+  /** 设为锁定屏幕壁纸：与主屏壁纸完全独立（store 的 lockWallpaper 键），复用同一 Blob 引用 */
+  const handleSetLockWallpaper = () => {
+    const rec = viewerPhoto;
+    if (!rec) return;
+    useSettings.getState().setLockCustomWallpaper(rec.blob);
+    setLockWallpaperOk(true);
+    if (lockWallpaperTimerRef.current !== null) window.clearTimeout(lockWallpaperTimerRef.current);
+    lockWallpaperTimerRef.current = window.setTimeout(() => setLockWallpaperOk(false), 1400);
   };
 
   const handleDelete = async () => {
@@ -1088,7 +1102,7 @@ export default function PhotosApp() {
             <ChevronRight className="h-5 w-5" />
           </button>
 
-          {/* "更多"操作菜单（含设为壁纸） */}
+          {/* "更多"操作菜单（含设为壁纸 / 设为锁定屏幕） */}
           {moreOpen && (
             <>
               <div className="absolute inset-0 z-20" aria-hidden="true" onClick={() => setMoreOpen(false)} />
@@ -1102,6 +1116,16 @@ export default function PhotosApp() {
                     <Wallpaper className="h-[18px] w-[18px] opacity-80" />
                     <span className="flex-1 text-left">设为壁纸</span>
                     {wallpaperOk && <Check className="h-4 w-4 text-[#30D158]" strokeWidth={3} />}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="lock-wallpaper-item"
+                    onClick={handleSetLockWallpaper}
+                    className="flex h-12 w-full items-center gap-3 border-b border-white/10 px-4 text-[15px] text-white transition-colors active:bg-white/10"
+                  >
+                    <LockKeyhole className="h-[18px] w-[18px] opacity-80" />
+                    <span className="flex-1 text-left">设为锁定屏幕</span>
+                    {lockWallpaperOk && <Check className="h-4 w-4 text-[#30D158]" strokeWidth={3} />}
                   </button>
                   <button
                     type="button"
