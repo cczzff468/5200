@@ -13,6 +13,24 @@ import { useSettings, type SttConfig } from './store';
 
 export type { SttConfig } from './store';
 
+/**
+ * fetch + 超时看门狗（#20）：上游卡住时到点必失败，不无限等待。
+ * AbortSignal.timeout 到点抛 DOMException TimeoutError（message 各浏览器不一致）——
+ * 错误文本可能直接进 UI/气泡，统一映射成友好中文再抛出。
+ */
+async function fetchWithTimeout(input: RequestInfo, init: RequestInit, timeoutMs = 60000): Promise<Response> {
+  try {
+    return await fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name ?? '';
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    if (name === 'TimeoutError' || /timeout|timed out/i.test(msg)) {
+      throw new Error('请求超时，请检查网络或稍后再试');
+    }
+    throw err;
+  }
+}
+
 /** 语音识别是否开箱可用（builtin 恒可用；openai 需要地址 + Key） */
 export function isSttReady(cfg?: SttConfig): boolean {
   const c = cfg ?? useSettings.getState().sttConfig;
@@ -43,18 +61,24 @@ export async function transcribeAudioBlob(blob: Blob): Promise<string> {
     } catch {
       throw new Error('音频解码失败，无法识别');
     }
-    res = await fetch('/api/stt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: configPart, audioBase64: wavBase64 }),
-    });
+    // #20 通话链路超时看门狗：识别请求 60s 到点必失败
+    res = await fetchWithTimeout(
+      '/api/stt',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: configPart, audioBase64: wavBase64 }),
+      },
+      60000,
+    );
   } else {
     // OpenAI 兼容：multipart 原样转发（webm/m4a whisper 系直接吃）
     const fd = new FormData();
     fd.append('config', JSON.stringify(configPart));
     const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
     fd.append('audio', blob, `voice.${ext}`);
-    res = await fetch('/api/stt', { method: 'POST', body: fd });
+    // #20 通话链路超时看门狗：识别请求 60s 到点必失败
+    res = await fetchWithTimeout('/api/stt', { method: 'POST', body: fd }, 60000);
   }
 
   if (!res.ok) {

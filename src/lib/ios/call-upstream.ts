@@ -136,13 +136,21 @@ export function extractReplyText(raw: string): string {
 export async function sdkTurn(messages: CallApiMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    messages: messages.map((m) => ({
-      role: m.role === 'system' ? ('assistant' as const) : m.role,
-      content: m.content,
-    })),
-    thinking: { type: 'disabled' },
-  });
+  // #20 通话请求超时看门狗：SDK 不接收 signal 参数，用 Promise.race 包 60s 硬超时——
+  // 内置模型卡死时抛「内置模型响应超时」，让 /api/phone/turn 等路由走既有错误兜底（502 + 友好文案），
+  // 前端不再永远「正在思考」
+  const completion = await Promise.race([
+    zai.chat.completions.create({
+      messages: messages.map((m) => ({
+        role: m.role === 'system' ? ('assistant' as const) : m.role,
+        content: m.content,
+      })),
+      thinking: { type: 'disabled' },
+    }),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('内置模型响应超时')), 60000);
+    }),
+  ]);
   const text = completion.choices[0]?.message?.content ?? '';
   if (!text.trim()) throw new Error('内置模型返回空内容');
   return text;

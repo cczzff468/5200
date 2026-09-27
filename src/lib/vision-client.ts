@@ -15,9 +15,48 @@
 import type { VisionConfig } from '@/lib/ios/store';
 import { directVisionDescribe, isPrivateApiUrl } from '@/lib/ios/direct-api';
 
-/** 识图 system 提示：客观、简洁、不寒暄，输出描述本身（服务端 /api/vision 用同一份文案） */
+/** 识图 system 提示：客观、简洁、不寒暄，输出描述本身（服务端 /api/vision 用同一份文案）；
+ *  多张图片时要求按「图N：」分行逐张描述（splitVisionDesc 按此格式拆分回写各图） */
 export const VISION_SYSTEM_PROMPT =
-  '你是聊天应用内置的图片识别助手。用户在聊天中发来图片，请用中文客观、简洁地描述图片内容（有什么人/物/场景/可见文字），150 字以内；不要寒暄、不要评论、只输出描述本身。如果消息附带了文字问题，请结合图片回答该问题。';
+  '你是聊天应用内置的图片识别助手。用户在聊天中发来图片，请用中文客观、简洁地描述图片内容（有什么人/物/场景/可见文字），不要寒暄、不要评论、只输出描述本身；单张图片 150 字以内。如果一次发来了多张图片，必须逐张分行描述：每行以「图1：」「图2：」等编号开头、按图片顺序排列，每行 80 字以内。如果消息附带了文字问题，请结合图片回答该问题。';
+
+/**
+ * 把一次识图返回的描述拆分到本回合的各张图片（多图识图 #25 修复）：
+ * - 单张：原样返回；
+ * - 多张：模型按「图N：」分行逐张描述时按行拆分（解析出的段数多于/少于图片数时合并/留空对齐）；
+ *   模型没按编号输出时整段描述挂到第一张、其余留空（描述已覆盖全部图片，AI 上下文不丢信息）。
+ * 返回数组长度恒等于 count，与本回合图片消息顺序一一对应。
+ */
+export function splitVisionDesc(desc: string, count: number): string[] {
+  const full = desc.trim();
+  if (count <= 1) return [full];
+  const lines = full
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const parts: string[] = [];
+  let cur = '';
+  for (const line of lines) {
+    const m = line.match(/^(?:图|第)\s*(\d+)\s*[：:、.．]\s*(.*)$/);
+    if (m) {
+      if (cur) parts.push(cur);
+      cur = m[2].trim();
+    } else {
+      cur = cur ? `${cur} ${line}` : line; // 首行无编号：当作第一张（或整段描述）的开头
+    }
+  }
+  if (cur) parts.push(cur);
+  if (parts.length <= 1) return [full, ...Array.from({ length: count - 1 }, () => '')];
+  if (parts.length === count) return parts;
+  if (parts.length > count) {
+    // 编号段比图片多（模型多拆了）：多余内容合并进最后一张
+    const head = parts.slice(0, count - 1);
+    head.push(parts.slice(count - 1).join('；'));
+    return head;
+  }
+  // 编号段比图片少：后面几张留空（未覆盖的图走「[图片]」占位防编造规则）
+  return [...parts, ...Array.from({ length: count - parts.length }, () => '')];
+}
 
 /** 识图请求：图片 data URL（仅接受 data:image/ 前缀）+ 用户随图附言（可空） */
 export interface VisionRequest {

@@ -67,6 +67,7 @@ import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubbl
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
+import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -368,8 +369,39 @@ function uid(): string {
 
 /** 当前正在查看的微信聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
 let wxActiveChatId: string | null = null;
-/** 排队回复表：对方正在回复时用户又发了消息的联系人 id —— 本轮流结束后由聊天页自动补跑一轮回复 */
-const wxQueuedTurns = new Set<string>();
+/** 排队回复表：对方正在回复时用户又发了消息的联系人 id —— 本轮流结束后由聊天页自动补跑一轮回复。
+ *  #28 localStorage 持久化（key: wx-queued-turns）：模块加载时恢复，增删即同步写回——刷新后排队中的
+ *  消息不再丢失（补跑依赖聊天页被打开：刷新后重新进入该会话，kick effect 挂载即自动补跑） */
+const WX_QUEUED_TURNS_KEY = 'wx-queued-turns';
+
+function readWxQueuedTurns(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(WX_QUEUED_TURNS_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const wxQueuedTurns = readWxQueuedTurns();
+
+function wxQueueAdd(id: string): void {
+  wxQueuedTurns.add(id);
+  try {
+    window.localStorage.setItem(WX_QUEUED_TURNS_KEY, JSON.stringify([...wxQueuedTurns]));
+  } catch {
+    // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
+  }
+}
+
+function wxQueueDelete(id: string): void {
+  wxQueuedTurns.delete(id);
+  try {
+    window.localStorage.setItem(WX_QUEUED_TURNS_KEY, JSON.stringify([...wxQueuedTurns]));
+  } catch {
+    // localStorage 异常忽略
+  }
+}
 
 function loadMsgs(contactId: string): WxMsg[] {
   try {
@@ -3902,7 +3934,7 @@ function ChatPage({
       if (!wxQueuedTurns.has(peer.id)) return;
       if (isChatStreaming(sessionKey)) return; // 本轮流还没收尾：等结束广播再跑
       if (isAiDelivering(sessionKey)) return; // 上一轮连发还在投递：等投递完成事件再跑
-      wxQueuedTurns.delete(peer.id);
+      wxQueueDelete(peer.id);
       window.setTimeout(() => {
         const saved = loadMsgs(peer.id);
         setMsgs((prev) => {
@@ -4047,7 +4079,11 @@ function ChatPage({
    *  sysEvent：用户退还 AI 的红包/转账/亲属卡后注入的系统事件说明（只进本轮上下文，不落盘） */
   const runAiTurn = useCallback(
     (userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string, baseMsgs?: WxMsg[]) => {
-    const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    // base 按 id 去重（保留后出现者）：extra/userMsg 里的消息通常已先一步进了 msgs state，
+    // 不去重会把同一条消息算两遍——多图识图时重复 id 污染 turnImageMsgIds 映射，描述回写错位（#25）
+    const baseRaw = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    const baseSeen = new Set<string>();
+    const base = baseRaw.reverse().filter((m) => (baseSeen.has(m.id) ? false : (baseSeen.add(m.id), true))).reverse();
     const history = base
       .filter(
         (m) =>
@@ -4404,13 +4440,18 @@ function ChatPage({
       ...(turnImages.length > 0
         ? {
             vision: { images: turnImages, text: userMsg?.content ?? '' },
-            // 识图描述回写最后一张图片消息（img.desc 持久化）：之后的聊天历史 AI 都能读到图片内容
+            // 识图描述按「图N：」行拆分后逐张回写（img.desc 持久化）：turnImageMsgIds 与 turnImages
+            // 一一对应，每张图各得自己的描述（#25）；某张拆不出（空串）就跳过、保持 [图片] 占位，
+            // 防编造规则兜住，之后的聊天历史 AI 都能读到图片内容
             onVision: (desc: string) => {
-              const targetId = turnImageMsgIds[turnImageMsgIds.length - 1];
-              if (!targetId) return;
-              setMsgs((prev) =>
-                prev.map((x) => (x.id === targetId && x.img ? { ...x, img: { ...x.img, desc } } : x)),
-              );
+              const parts = splitVisionDesc(desc, turnImageMsgIds.length);
+              turnImageMsgIds.forEach((targetId, i) => {
+                const part = parts[i]?.trim();
+                if (!targetId || !part) return;
+                setMsgs((prev) =>
+                  prev.map((x) => (x.id === targetId && x.img ? { ...x, img: { ...x.img, desc: part } } : x)),
+                );
+              });
             },
           }
         : {}),
@@ -4651,7 +4692,7 @@ function ChatPage({
       setInput('');
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
-      wxQueuedTurns.add(peer.id);
+      wxQueueAdd(peer.id);
       return;
     }
     setInput('');
@@ -4700,7 +4741,7 @@ function ChatPage({
       /** 触发 AI 回复（对方正在回复——流式或连发投递中——则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
       const kickTurn = () => {
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-          wxQueuedTurns.add(peer.id); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
+          wxQueueAdd(peer.id); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
           return;
         }
         window.setTimeout(() => runAiTurnRef.current?.(null), 80);
@@ -4736,7 +4777,7 @@ function ChatPage({
       }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
         setMsgs((prev) => [...prev, userMsg]);
-        wxQueuedTurns.add(peer.id);
+        wxQueueAdd(peer.id);
         return;
       }
       if (sentenceSend) {
@@ -5260,8 +5301,8 @@ function ChatPage({
   };
 
   /** 原生相机/相册选到的图片发送（压缩 dataURL，最多 9 张；相机拍摄单张也走这里）。
-   *  已配置识图模型时：发图触发 AI 回合（识图模型先看图，聊天模型再回复）；
-   *  未配置时保持旧行为（图片只入聊天记录，不触发回复） */
+   *  发图照常触发 AI 回合：已配置识图模型时识图模型先看图、聊天模型再回复；未配置时
+   *  chat-stream-store 注入「我发了图片但你看不到内容」临时上下文，AI 同样自然回应（#26） */
   const sendImageFiles = async (files: FileList) => {
     const created: WxMsg[] = [];
     for (const f of Array.from(files).slice(0, 9)) {
@@ -5274,14 +5315,14 @@ function ChatPage({
         onToast('图片发送失败');
       }
     }
-    if (
-      created.length > 0 &&
-      peer.id !== me.id &&
-      !isChatStreaming(sessionKey) &&
-      useSettings.getState().visionConfig.baseUrl.trim()
-    ) {
-      runAiTurnRef.current?.(null, created);
+    if (created.length === 0 || peer.id === me.id) return;
+    // 对方正在回复（流式/投递中）：与文字消息同口径排队补跑——本轮「流收尾且投递完毕」后自动回复图片消息
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      wxQueueAdd(peer.id);
+      onToast('消息已发出，对方回完这轮就聊');
+      return;
     }
+    runAiTurnRef.current?.(null, created);
   };
 
   /** 发送位置卡片消息（内置地点 / 自定义位置；经纬度随消息落盘供 AI 感知“用户在哪”） */

@@ -260,6 +260,15 @@ export function chatCallExtraRules(
   ];
 }
 
+/** 请求超时错误识别（#20）：AbortSignal.timeout 抛 DOMException TimeoutError，
+ *  name 各浏览器一致优先判，message 兑底（Chromium「signal timed out」/Safari「The operation timed out.」） */
+function isTimeoutError(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name ?? '';
+  if (name === 'TimeoutError') return true;
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /timeout|timed out/i.test(msg);
+}
+
 export interface ChatCallApi {
   phase: ChatCallPhase;
   status: ChatCallStatus;
@@ -649,6 +658,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             extraRules: chatCallExtraRules(c),
             config: useSettings.getState().apiConfig,
           }),
+          // #20 通话链路超时看门狗：LLM 轮次 45s 到点必失败（AbortSignal.timeout → DOMException
+          // TimeoutError）——上游卡住不再永远「正在思考」，错误文案进通话界面已映射为友好中文
+          signal: AbortSignal.timeout(45000),
         });
         const data = (await res.json()) as {
           reply?: string;
@@ -672,7 +684,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         }
         if (res.ok && data.reply) return { reply: data.reply.trim() };
         return { reply: '', error: data.error || '信号不好，请再试一次' };
-      } catch {
+      } catch (err) {
+        // 超时（DOMException TimeoutError）映射成友好中文：错误文案会直接进通话界面顶部
+        if (isTimeoutError(err)) return { reply: '', error: '请求超时，请检查网络或稍后再试' };
         return { reply: '', error: '通话网络异常，请再试一次' };
       }
     },

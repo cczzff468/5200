@@ -161,7 +161,8 @@ import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
-import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { peekPendingMsgs, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { splitVisionDesc } from '@/lib/vision-client';
 import {
   beginChatStream,
   clearChatStream,
@@ -2366,19 +2367,25 @@ export function QqGroupChatPage({
   );
 
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
-   *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。 */
+   *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。
+   *  返回值（#21）：'ok'=正常产出消息；'skip'=[SKIP] 自判沉默/群已解散/流被占用；'error'=流失败
+   *  （runGroupTurn 据此收口：整轮无人成功且存在错误时落一条系统提示）。 */
   const runCharTurn = useCallback(
     (char: ContactRecord, allowSkip: boolean, turnImageSrcs: { src: string; id: string }[]) =>
-      new Promise<void>((resolve) => {
+      new Promise<'ok' | 'skip' | 'error'>((resolve) => {
         const g = getGroup(gid);
         if (!g) {
-          resolve();
+          resolve('skip');
           return;
         }
         const charName = memberNameOf(char);
         // 名字/昵称区分：AI 侧统一用称呼名指代机主（默认真名「凡凡」；用户选了用昵称才是「凑凑」）
         const meName = addressNameOf(me, useSettings.getState().addressMode);
-        const ctxMsgs = loadGroupMsgs(gid)
+        // #22 组连发修复：上一位成员的消息正按打字节奏逐条投递（可能还没落盘）时，只读已落盘历史
+        // 会漏看一截——把投递队列里未落盘的尾巴拼进历史再过滤截断。同一消息要么已落盘要么在队列里
+        // （deliveredIndex 在每条投递后同步推进），不会重复；lastMeMsg/lastUserText/memContext 均派生自此
+        const pending = peekPendingMsgs<WxGroupMsg>(sKey);
+        const ctxMsgs = [...loadGroupMsgs(gid), ...pending]
           .filter((m) => m.kind !== 'notice' && !m.recalled)
           .slice(-24);
         // 上下文映射：自己 → assistant；机主/其他成员 → 「发言者：内容」user 消息（富媒体按占位文本；
@@ -2752,21 +2759,33 @@ export function QqGroupChatPage({
           ...(turnImageSrcs.length > 0
             ? {
                 vision: { images: turnImageSrcs.map((x) => x.src), text: lastUserText },
-                // 描述回写最后一张图片消息（img.desc 持久化）：之后的聊天历史成员都能读到图片内容
+                // 多图识图（#25）：一次识图返回的完整描述按「图N：」分行拆到本回合各张图片
+                // （splitVisionDesc 返回长度恒等于图片数），每张图的 img.desc 各自持久化，
+                // 之后的聊天历史里每张图都有内容可读，不再把整段描述只挂到最后一张
                 onVision: (desc: string) => {
-                  const target = turnImageSrcs[turnImageSrcs.length - 1];
-                  if (!target) return;
-                  patchGroupMsg(target.id, { img: { ...(loadGroupMsgs(gid).find((m) => m.id === target.id)?.img ?? { src: target.src }), desc } });
+                  const parts = splitVisionDesc(desc, turnImageSrcs.length);
+                  turnImageSrcs.forEach((t, i) => {
+                    const d = (parts[i] ?? '').trim();
+                    if (!d) return;
+                    patchGroupMsg(t.id, { img: { ...(loadGroupMsgs(gid).find((m) => m.id === t.id)?.img ?? { src: t.src }), desc: d } });
+                  });
                 },
               }
             : {}),
           // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
           onSegment: deliverSegment,
           finalize: (result) => {
+            // #21 流失败（网络/接口错误）：本轮不落任何成员消息（也不走「（…）」占位兜底，
+            // 避免 N 个成员挨个发假消息污染聊天历史和记忆），结果标记为 'error' 交给
+            // runGroupTurn 统一收口——整轮无人成功时才落一条系统提示
+            if (result.error) {
+              resolve('error');
+              return;
+            }
             const text = (result.content ?? '').trim();
             // 人设自判沉默：整条回复是 [SKIP] 标记 → 不落盘、不提取记忆（本轮对 TA 没有发生任何社交事件）
             if (allowSkip && SKIP_RE.test(text)) {
-              resolve();
+              resolve('skip');
               return;
             }
             // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
@@ -2837,11 +2856,11 @@ export function QqGroupChatPage({
                 }
               })();
             });
-            resolve();
+            resolve('ok');
           },
         });
         if (!ok) {
-          resolve(); // 会话流被占用（不应发生：队列串行 + 防重入）；未落盘任何消息，不消耗语音计数
+          resolve('skip'); // 会话流被占用（不应发生：队列串行 + 防重入）；未落盘任何消息，不消耗语音计数
         }
       }),
     [apiConfig, appendMsg, applyGroupAdminAction, applyGroupAiAction, collectGroupPending, gid, me.id, me.name, ownerLabelOf, patchGroupMsg, sKey]
@@ -2850,7 +2869,8 @@ export function QqGroupChatPage({
   /** 一个群回合：@ 成员必答优先，其余成员逐个按人设自判是否发言（无话可说 [SKIP] 沉默）。
    *  trigger 可省略（分句发送批次触发/红包/转账卡片入群时无文字可 @）：此时全员按人设自判。
    *  兜底约定（异常与边界）：全员都 [SKIP] 时不落盘不提示（真实群聊发消息也可能没人接）；
-   *  单条回复为空时 finalize 已有占位兜底；群已解散/无成员时静默返回。 */
+   *  单条回复为空时 finalize 已有占位兜底；整轮无任何成员成功产出且存在流错误时落一条
+   *  「网络开小差」系统提示（#21）；群已解散/无成员时静默返回。 */
   const runGroupTurn = useCallback(
     async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
@@ -2865,7 +2885,10 @@ export function QqGroupChatPage({
           .map((id) => contactsRef.current.find((c) => c.id === id))
           .filter((c): c is ContactRecord => !!c)
           .filter((c) => !isGroupMuted(fresh, c.id));
-        const mentioned = trigger ? parseMentions(trigger.content) : [];
+        // #24 被 @ 也要与本轮可发言名单求交集：被 @ 不豁免物理禁言（all 已过滤禁言成员）；
+        // 这层交集同时挡住「被踢出群的成员残留在 mention 解析来源里」——parseMentions 读组件
+        // state members（踢人后靠 onUpdate({}) 触发宿主刷新），可能短暂滞后于群成员变动
+        const mentioned = (trigger ? parseMentions(trigger.content) : []).filter((m) => all.includes(m));
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
         // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则；带消息 id，供规则排除与描述回写落盘）
@@ -2876,12 +2899,29 @@ export function QqGroupChatPage({
           if (m.role !== 'me') break;
           if (m.kind === 'image' && m.img?.src) turnImageSrcs.unshift({ src: m.img.src, id: m.id });
         }
+        // 收集每个成员的回合结果（#21）：'ok'=有产出 / 'skip'=自判沉默等 / 'error'=流失败
+        const results: ('ok' | 'skip' | 'error')[] = [];
         for (const char of ordered) {
           if (!getGroup(gid)) break; // 群已被解散
           groupSpeaker.set(sKey, char.id);
           if (mountedRef.current) setSpeakerId(char.id);
-          await runCharTurn(char, !mentioned.includes(char), turnImageSrcs);
+          results.push(await runCharTurn(char, !mentioned.includes(char), turnImageSrcs));
           await sleep(420);
+        }
+        // #21 整轮没有任何成员成功产出且存在流错误 → 落一条系统提示（notice 消息不进 AI 上下文
+        // 也不进记忆：群历史构建与 memAfterAiTurn 都 filter 了 notice）；部分成员成功时保持静默——
+        // 那几位只是没说话，符合真实群聊，也不给聊天记录添噪音
+        if (results.length > 0 && !results.includes('ok') && results.includes('error')) {
+          appendMsg({
+            id: uid(),
+            role: 'me',
+            senderId: 'me',
+            senderName: '',
+            content: '',
+            time: Date.now(),
+            kind: 'notice',
+            noticeText: '（网络开小差了，这条消息没有得到回复）',
+          });
         }
       } finally {
         runningRef.current = false;
@@ -2895,7 +2935,7 @@ export function QqGroupChatPage({
         }
       }
     },
-    [expireStalePackets, gid, runCharTurn, sKey]
+    [appendMsg, expireStalePackets, gid, runCharTurn, sKey]
   );
   runGroupTurnRef.current = runGroupTurn;
 
@@ -3063,7 +3103,7 @@ export function QqGroupChatPage({
   );
   sendTextAsVoiceRef.current = sendTextAsVoice;
 
-  /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；配置识图模型后触发群回合） */
+  /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；发图照常触发群回合，未配置识图也有回应 #26） */
   const sendImageFiles = async (files: FileList) => {
     if (meMuted) {
       onToast('你已被禁言，暂时无法发言');
@@ -3099,9 +3139,9 @@ export function QqGroupChatPage({
       markPendingBatch(sKey, true);
       return;
     }
-    if (useSettings.getState().visionConfig.baseUrl.trim()) {
-      void runGroupTurn(created[created.length - 1]);
-    }
+    // 未配置识图模型也照常触发回复（#26）：chat-stream-store 会注入「我发了图片但你看不到内容」
+    // 的临时上下文，成员按人设自然回应，不再让发图石沉大海
+    void runGroupTurn(created[created.length - 1]);
   };
 
   /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应） */

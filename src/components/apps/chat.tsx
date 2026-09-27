@@ -269,6 +269,47 @@ function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
   kvSet(lsMsgsKey(sessionKey), msgs.slice(-100));
 }
 
+// ---------------- #8 排队补跑回合的持久化（#28） ----------------
+
+/** 待补跑回合：kick = 消息已入列（文字/语音/划转文字），只需补一轮 AI 回复；dispatch = 分句发送批次统一触发 */
+type QueuedTurn = { kind: 'kick' | 'dispatch' };
+
+/** 排队补跑持久化（key: sms-queued-turns）：Record<storageKey, QueuedTurn[]> JSON 落 localStorage。
+ *  刷新后队列不丢：重新进入该会话时恢复进 ref、既有 flush effect 自动补跑；会话没打开就等下次进入
+ *  （补跑依赖聊天页组件挂载，这是与 wx/qq 一致的既有边界） */
+const SMS_QUEUED_TURNS_KEY = 'sms-queued-turns';
+
+function readSmsQueuedTurns(storageKey: string): QueuedTurn[] {
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(SMS_QUEUED_TURNS_KEY) ?? '{}');
+    const slot = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[storageKey] : null;
+    if (!Array.isArray(slot)) return [];
+    return slot.filter((x): x is QueuedTurn => {
+      const k = (x as QueuedTurn | null)?.kind;
+      return k === 'kick' || k === 'dispatch';
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writeSmsQueuedTurns(storageKey: string, turns: QueuedTurn[]): void {
+  try {
+    const map: Record<string, QueuedTurn[]> = {};
+    try {
+      const raw: unknown = JSON.parse(window.localStorage.getItem(SMS_QUEUED_TURNS_KEY) ?? '{}');
+      if (raw && typeof raw === 'object') Object.assign(map, raw);
+    } catch {
+      // 旧数据损坏则从空重建
+    }
+    if (turns.length > 0) map[storageKey] = [...turns];
+    else delete map[storageKey];
+    window.localStorage.setItem(SMS_QUEUED_TURNS_KEY, JSON.stringify(map));
+  } catch {
+    // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
+  }
+}
+
 /** AI 打来的电话被拒接 / 响铃超时未接（信息 App AI 语音通话标记触发）：
  *  落「未接来电」通话记录 + AI 语音留言（人设化解释，走挂断续聊 followup 链路），
  *  留言逐条落 voicemails（未读红点），电话 App 打开时可见；失败静默（记录已落，留言缺失可接受） */
@@ -1214,16 +1255,19 @@ function ChatView({
 
   // ---------------- #8 流式接收期间的发送排队（对齐微信 wxQueuedTurns：消息照常上屏，回复自动补跑） ----------------
 
-  /** 排队的补跑回合：kick = 消息已入列（文字/语音/划转文字），只需补一轮 AI 回复；dispatch = 分句发送批次统一触发 */
-  type QueuedTurn = { kind: 'kick' | 'dispatch' };
-  /** 待补跑回合队列（组件按会话 key 重挂载天然按会话隔离；卸载即弃——与 wx/qq 排队消息刷新即丢口径一致） */
+  /** 待补跑回合队列（组件按会话 key 重挂载天然按会话隔离）：#28 localStorage 持久化——
+   *  入队/消费即写回 sms-queued-turns，挂载时恢复：刷新后重新进入该会话自动补跑，不丢补跑回合 */
   const queuedTurnsRef = useRef<QueuedTurn[]>([]);
 
   /** 入队一条补跑回合（dispatch 幂等：批次触发只排一次，回复中连点「发送」不重复排队） */
-  const enqueueQueuedTurn = useCallback((t: QueuedTurn) => {
-    if (t.kind === 'dispatch' && queuedTurnsRef.current.some((x) => x.kind === 'dispatch')) return;
-    queuedTurnsRef.current.push(t);
-  }, []);
+  const enqueueQueuedTurn = useCallback(
+    (t: QueuedTurn) => {
+      if (t.kind === 'dispatch' && queuedTurnsRef.current.some((x) => x.kind === 'dispatch')) return;
+      queuedTurnsRef.current.push(t);
+      writeSmsQueuedTurns(storageKey, queuedTurnsRef.current); // #28 同步持久化
+    },
+    [storageKey],
+  );
 
   /**
    * 消费补跑队列（串行）：仅当「回复流已收尾 + 本轮消息全部投递完」时放行下一条——
@@ -1234,12 +1278,20 @@ function ChatView({
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
     const next = queuedTurnsRef.current.shift();
     if (!next) return;
+    writeSmsQueuedTurns(storageKey, queuedTurnsRef.current); // #28 消费即从持久化移除
     if (next.kind === 'dispatch') {
       setPendingDispatch(false);
       markPendingBatch(sessionKey, false);
     }
     startAiTurnRef.current?.(null);
-  }, [sessionKey]);
+  }, [sessionKey, storageKey]);
+
+  // 挂载时恢复持久化队列（#28）：声明在补跑触发 effect 之前——挂载帧先恢复、后尝试消费，
+  // 队列非空且不在流式/投递中即自动开跑；刷新后重新进入该会话会自动补跑，会话没打开则等下次进入
+  useEffect(() => {
+    const saved = readSmsQueuedTurns(storageKey);
+    if (saved.length > 0) queuedTurnsRef.current = [...saved, ...queuedTurnsRef.current];
+  }, [storageKey]);
 
   // 补跑触发点（各尝试一次，重复触发被流/投递状态守卫挡住；声明在 startAiTurnRef 同步 effect 之后，
   // 放行时读到的闭包一定已含最后一次投递 tick 合并进来的落盘消息）：

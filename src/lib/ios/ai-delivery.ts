@@ -24,6 +24,8 @@ interface Batch {
   deliver: (item: unknown, index: number) => void;
   opts?: AiDeliveryOptions;
   resolve: () => void;
+  /** 已投递条数（peekPendingMsgs 用：运行中批的未投递尾部 = items.slice(deliveredIndex)） */
+  deliveredIndex: number;
 }
 
 /** 每会话待投递批次队列（首批 = 正在跑） */
@@ -88,6 +90,7 @@ function pump(sessionKey: string): void {
     } catch {
       // 单条投递异常不阻断后续（与逐条落盘的容错口径一致）
     }
+    batch.deliveredIndex = index + 1;
     emitTick(sessionKey);
     index += 1;
     const wait = Math.max(0, Math.round(delayOf(index - 1, items.length)));
@@ -125,6 +128,7 @@ export function scheduleAiDelivery<T>(
       deliver: deliver as (item: unknown, index: number) => void,
       opts,
       resolve,
+      deliveredIndex: 0,
     });
     if (!running.has(sessionKey)) pump(sessionKey);
   });
@@ -133,6 +137,25 @@ export function scheduleAiDelivery<T>(
 /** 该会话是否正在投递（含排队中的批次）——聊天页用来显示「正在输入」 */
 export function isAiDelivering(sessionKey: string): boolean {
   return running.has(sessionKey) || (queues.get(sessionKey)?.length ?? 0) > 0;
+}
+
+/**
+ * 偷看某会话「已调度但还没落盘投递」的消息（按投递顺序）：
+ * - 运行中批：返回未投递尾部（deliveredIndex 之后的部分）；
+ * - 排队中的后续批：全部返回。
+ * 群聊多成员回合用（#22 修复）：下一位成员组装上下文时，上一位成员的消息可能还在打字节奏的
+ * 投递队列里（逐条停顿几百毫秒到几秒）——只读已落盘消息会漏看，把队列尾部拼进历史即可完整衔接。
+ */
+export function peekPendingMsgs<T>(sessionKey: string): T[] {
+  const out: T[] = [];
+  const queue = queues.get(sessionKey);
+  if (!queue) return out;
+  queue.forEach((batch, i) => {
+    const items = batch.items as readonly T[];
+    const start = i === 0 ? Math.max(0, batch.deliveredIndex) : 0;
+    for (let j = start; j < items.length; j++) out.push(items[j]);
+  });
+  return out;
 }
 
 /** 订阅每条投递后的 tick（返回退订函数） */

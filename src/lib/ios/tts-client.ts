@@ -275,11 +275,25 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
   stopOtherAudio('tts');
   const myToken = playToken;
 
-  const res = await fetch('/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config: cfg, voiceId, text: cleaned.slice(0, 900), speed: opts.speed ?? 1 }),
-  });
+  let res: Response;
+  try {
+    // #20 通话链路超时看门狗：合成请求 30s 到点必失败（AbortSignal.timeout 抛 DOMException TimeoutError），
+    // 上游卡死不再让通话状态机无限等待；正常请求不受影响
+    res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfg, voiceId, text: cleaned.slice(0, 900), speed: opts.speed ?? 1 }),
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (err) {
+    // 超时错误映射成友好中文（错误文案可能直接进 UI/气泡提示）
+    const name = (err as { name?: string } | null)?.name ?? '';
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    if (name === 'TimeoutError' || /timeout|timed out/i.test(msg)) {
+      throw new Error('语音合成超时，请稍后再试');
+    }
+    throw err;
+  }
   if (!res.ok) {
     let msg = '语音生成失败';
     try {
@@ -303,9 +317,18 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
 
   await new Promise<void>((resolve) => {
     let finished = false;
+    // 轻量硬超时兜底（#19 同类风险）：HTMLAudioElement 的 onended 在个别引擎/流异常下也可能丢失
+    // （播放卡死 → await 永久悬挂、通话状态机停在「正在说话」）——按文本量估算音频时长
+    // （estDurationMs 已在上方按字数×语速算好）+ 15s 富余，到点静默 finish；
+    // 正常 onended / onerror / stopSpeaking 路径都会在 finish 里清掉它
+    let audioHardTimer: number | null = null;
     const finish = () => {
       if (finished) return;
       finished = true;
+      if (audioHardTimer !== null) {
+        window.clearTimeout(audioHardTimer);
+        audioHardTimer = null;
+      }
       audio.ontimeupdate = null;
       if (currentUrl === url) {
         URL.revokeObjectURL(url);
@@ -327,6 +350,7 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
       }
     };
     audio.play().catch(finish); // 自动播放策略等导致的播放失败：静默结束
+    audioHardTimer = window.setTimeout(finish, estDurationMs + 15000);
   });
   // 正常播完（未被 stopSpeaking 打断）才触发 onEnd；电话的「对方讲完→回到听」状态机依赖它
   if (myToken === playToken) wrapped.onEnd?.();

@@ -8278,3 +8278,167 @@ Stage Summary:
 - 18 项审计问题全部修复完毕：2 个 P0（来电永响、群红包金额）E2E 实测通过；核心规则面（发钱纪律+硬上限、群记忆按实际发言人归因、群聊 persona/连发节奏、内置声线第三方 TTS 替换、通话关系语气、语音通话标记全半角、turn 方向视角）在 lib 层统一落地，三端共享
 - 关键工程经验：本环境工具输出会把 [x 形如 ANSI 序列吞掉（[muted→uted），编辑大文件时用 python3 repr 校验真实源码；MultiEdit 实际非原子（失败时部分编辑已应用），失败后必须先核对文件状态再重试
 - 修改文件：chat-call.ts、chat-rich.ts、memory.ts、persona.ts、reply-count.ts、tts-client.ts、api/phone/turn、api/memory/extract、api/memory/summarize、wechat.tsx、qq.tsx、chat.tsx、wx-group.tsx、qq-group.tsx、phone.tsx、IncomingCallLayer.tsx、GlobalCallLayer.tsx、incoming-call.ts、island-notify.ts
+
+---
+Task ID: 24-b
+Agent: 群聊正确性修复代理
+Task: wx-group/qq-group 修复审计清单 #21/#22/#24/#25(群内)/#26(群内) 共 5 个问题（两文件同步同构）
+
+Work Log:
+- 只改 src/components/apps/wx-group.tsx 与 src/components/apps/qq-group.tsx（lib 层 peekPendingMsgs/splitVisionDesc/chat-stream-store 临时上下文均已就绪，纯接线）：
+- #21 流错误不再挨个发「（…）」假消息：runCharTurn 的 Promise 泛型 void → 'ok'|'skip'|'error'（wx:2707 / qq:2375，各带注释）；finalize 开头先判 result.error → 直接 resolve('error') 不落任何成员消息、不走「（…）」兜底（wx:3111-3118 / qq:2777-2784）；[SKIP]→resolve('skip')、正常产出末尾 resolve('ok')（wx:3193 / qq:2859）、beginChatStream 返回 false → resolve('skip')（wx:3197 / qq:2863）、群已解散早退 → resolve('skip')；非 error 的空回复「（…）」兜底按既有设计保留。runGroupTurn 收集每个成员结果（wx:3237-3245 / qq:2902-2910），整轮无任何 'ok' 且存在 'error' 时落一条 kind='notice'、noticeText='（网络开小差了，这条消息没有得到回复）' 的系统消息（wx:3246-3260 / qq:2911-2925，shape 与文件内既有 notice 一致，带注释：notice 不进 AI 上下文也不进记忆——群历史构建与 memAfterAiTurn 都 filter 了 notice）；部分成员成功时保持静默；deps 各加 appendMsg（wx:3274 / qq:2938）
+- #22 组连发漏看消息：runCharTurn 组上下文改为 [...loadGroupMsgs(gid), ...peekPendingMsgs<WxGroupMsg>(sKey)] 再 filter(notice/recalled).slice(-24)（wx:2716-2722 / qq:2384-2390，带中文注释：上一位成员的消息还在打字节奏投递队列里时只读落盘历史会缺一截；同一消息要么已落盘要么在队列，deliveredIndex 投递后同步推进不会重复）；lastMeMsg/lastUserText/memContext 派生自 ctxMsgs 自动受益
+- #24 被 @ 绕过禁言：runGroupTurn 的 mentioned 改为 (trigger ? parseMentions(trigger.content) : []).filter((m) => all.includes(m))（wx:3223-3226 / qq:2888-2891，注释：被 @ 不豁免物理禁言；交集同时挡住被踢成员残留在 mention 来源——parseMentions 读组件 state members(wx:2348/qq:2026，由 group.memberIds+contacts 派生，踢人后 onUpdate({}) 宿主刷新)，可能短暂滞后）。核查确认：普通成员路径 all 已 filter isGroupMuted（两文件同款）；被踢成员 memberIds 已移除不会进 all，无需另改
+- #25 多图识图只回写最后一张：finalize 的 onVision 改用 splitVisionDesc(desc, turnImageSrcs.length) 按「图N：」分行拆分，forEach 逐张 patchGroupMsg(t.id, { img: {...原图, desc: d} })（wx:3096-3106 / qq:2762-2772），每张图 img.desc 各自持久化
+- #26 未配置识图模型发图无回应：sendImageFiles 删掉 useSettings.getState().visionConfig.baseUrl.trim() 前置条件，发图照常 runGroupTurn（wx:3481-3483 / qq:3142-3144，注释：chat-stream-store 会注入「看不到图片内容」临时上下文）；两文件函数头注释同步更新
+- 已知工程坑核对：编辑后用 python3 repr 校验了 [SKIP]/（…）/results 泛型等含特殊字符区域，内容无损
+
+Stage Summary:
+- 群聊 5 项正确性修复 wx/qq 双端共 12 处改动：流错误不再污染历史（每人一条假消息 → 整轮最多一条系统提示）✓、连发模式成员上下文补齐投递队列尾巴 ✓、被 @ 禁言/被踢成员无法再进发言队列 ✓、多图描述按图拆分回写 ✓、未配置识图发图必有回应 ✓
+- 验证：bunx tsc --noEmit 零错误（exit 0）；bun run lint 通过（exit 0）；dev.log 编译正常；未动 dev server/git/其他文件
+- 修改文件：src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx
+---
+Task ID: 24-d
+Agent: 记忆总结修复代理
+Task: memory.ts 修复审计 #23——记忆库手动「立即总结」不认群消息（memRecentConvo/memMostRecentApp 只读私聊 kv，群聊过的角色永远提示「没有可总结的对话」）
+
+Work Log:
+- 只改 src/lib/memory.ts 一个文件；先只读确认数据源与调用方：
+  - 群消息 kv key 确认（src/lib/ios/groups.ts）：groupMsgsKey = `${app}-group-msgs:${groupId}`（app∈wx/qq，219 行），落盘 saveGroupMsgs 保留 200 条、读取 loadGroupMsgs（内部按 getGroup(gid)?.app ?? 'wx' 推宿主）；「列出全部群」既有 API = listGroups(app?)（284 行，群池 wx-chat-groups/qq-chat-groups）；群事件行（进群/踢人/转让等）kind 恒为 'notice'（pushGroupEvent 481 行），过滤 kind==='notice' 即同时剔除资金通知行与系统事件行
+  - WxGroupMsg 字段确认（156-205 行）：role 'me'/'peer'、senderId/senderName、content、time、kind、recalled、voice{transcript,localText}、img{desc}、stk{meaning}、loc{name,address}、rp/tr/fwd——与任务书一致
+  - 调用方兼容性结论：memRecentConvo 仅 moments.ts:1046（AI 发动态取最近聊天，slice(-10) 消费，wx/qq 平台自然受益于群聊兜底）；memMostRecentApp 三处——memory.ts memAfterAiTurn:1274（只比 convo.length）、memExtractNow:1422（要求 convo.length≥2 后原样交给 extract API）、memory-bank.tsx:1103 设置页「全部执行」（!recent 提示 + memSummarizeNow(recent.app, recent.convo)）——返回结构 {app, convo} 不变即全部兼容，组件无需改
+  - sms 无群聊概念确认（chat.tsx 无群聊，仅气泡视觉分组），维持原样；phone 仍返回 []
+- memory.ts 三处改动（均标 #23 注释）：
+  ① import 行并入 listGroups / loadGroupMsgs / type WxGroupMsg（既有 getGroup/onGroupDissolved 保留）
+  ② 新增内部 helper memGroupMsgText + memRecentGroupConvo(contactId, 'wx'|'qq')：遍历 listGroups(app) 找 memberIds 含该联系人的群（ownerId 兜底防群主转让后数据缺员），取最后一条消息时间最新的群；过滤 notice 与 recalled（与 wx-group.tsx 群聊页 AI 上下文 m.kind!=='notice' && !m.recalled 同口径），映射 MemConvoTurn[]——role 'me' → 消息文本原文；role 'peer' → 「senderName：文本」（群聊按实际发言人归因，与 Task 23 #12 口径一致；senderName 空回退「成员」，与群聊页历史构建同兜底）；富媒体占位：image→[图片]（识图 desc 有则带「图片内容」）、voice→transcript 优先→localText→[语音]、sticker→[表情]+meaning、location→locLabelOf 带地名（与私聊 memConvoFromRaw 同口径）、redpacket/transfer→[红包]/[转账]、forward→[聊天记录]/[转发]+content；单条 400 字、总截尾 60 条与 memConvoFromRaw 同口径；返回 {convo, ts}（ts=群最后一条消息时间供竞选），无可用群返回 null
+  ③ memRecentConvo：私聊有可用对话 → 原样返回；为空（含 kv 读失败/全部被过滤）→ wx/qq 回退群聊 helper，sms/phone 维持原样；memMostRecentApp：私聊 wx/qq/sms 竞选逻辑不变，追加 wx/qq 群聊候选同台竞选（按最后一条消息时间最新者胜），群来源 convo 记宿主 app，返回结构不变
+- 工程坑复现与规避：repr 打印含 msgs[m… 的行时，工具输出通道把 [m（ANSI reset 序列）吞掉、显示成 msgssgs.length 假象——python3 校验文件本体 0 个 ESC 字符、方括号全部完好（把 [ ] 替换成 <L>/<R> 再打印核验），确认只是显示层吞字，文件无损
+- 未改组件、未写测试、未 git、未动 dev server
+
+Stage Summary:
+- #23 修复落地（仅 src/lib/memory.ts）：手动「立即总结」（碎片页）与设置页「全部执行」的数据源 memMostRecentApp 现在同时看 wx/qq/sms 私聊与该联系人在 wx/qq 的群聊、取最近活跃者；memRecentConvo 私聊为空时回退群聊——只在群里聊过的角色不再误报「没有可总结的对话」，组件层零改动自然生效
+- 群对话映射口径与既有管线对齐：notice/撤回剔除（群聊页同口径）、peer 轮「发言人：」前缀归因（#12 一致）、富媒体占位、400 字/条、60 条截尾（同 memConvoFromRaw）
+- 已知边界（按任务约束只读确认、未越界处理）：①手动链路 memExtractNow/memSummarizeNow 不传 participants（#12 的群聊归因 prompt 仅自动提取轮次接线），群来源 convo 以「发言人：」前缀文本走私聊二人视角 extract prompt——extract route 没有 summarize route 那条「原文第三人名保留原样」兜底，第三方事实有轻微串味风险（Task 22-c 已列同类问题）；②手动提取的群来源碎片不带 source:'group' 互通标记（群 extra 仅自动管线传），互通召回按私聊来源处理。两者对齐需改返回结构或 extract route，超出本任务授权范围，仅汇报
+- 验证：bunx tsc --noEmit 零错误（TSC_OK）；bun run lint 通过（LINT_OK，无输出）
+---
+Task ID: 24-c
+Agent: 单聊修复代理
+Task: wechat.tsx/qq.tsx/chat.tsx 修复 #25 多图识图只回写最后一张 / #26 未配置识图发图无回应 / #28 排队补跑表刷新即丢 / #29 QQ AI 来电缺幂等防御
+
+Work Log:
+- 先读 worklog（Task 23-a/23-b 的排队补跑与防重入口径）+ 主线程前置成果核实：vision-client.ts 的
+  splitVisionDesc（按「图N：」行拆分、返回长度恒等于 count）、VISION_SYSTEM_PROMPT 多图分行要求；
+  chat-stream-store.ts 识图未配置时自动注入「我发了图片但你看不到内容」临时上下文（297-302 行，与
+  识图成功路径同在 opts.vision 分支下，组件端只需保证发图必触发 AI 回合）；grep 三端确认现状：
+  wechat turnImageMsgIds/turnImages（4216-4225 + onVision 4408 只写最后一张）、qq 同构（2879-2886 +
+  onVision 3070）、chat.tsx 无任何发图入口（grep kind:'image'/visionConfig/onVision/sendImage 全部
+  零命中——信息 App 没有图片消息类型，#25/#26 对它不适用，未动）
+- #25（wechat 4436-4453 / qq 3099-3116 同构）：onVision 改 splitVisionDesc(desc, turnImageMsgIds.length)
+  拆分后 forEach 逐张回写——turnImageMsgIds 与 turnImages 一一对应，每张图各得自己的描述；某张拆不出
+  （空串）就跳过、保持 [图片] 占位（防编造规则兜住）；新增 import { splitVisionDesc } from '@/lib/vision-client'
+  （两端 chat-media-rules import 行后各加一行）
+- #26（wechat sendImageFiles 5299-5322 / qq sendImageFiles 2354-2381）：删掉
+  useSettings.getState().visionConfig.baseUrl.trim() 条件，保留 created.length/peer.id!==me.id 守卫；
+  并补齐与文字消息同口径的流式/投递中排队——原条件链里 !isChatStreaming 为假时静默不触发（图片发了
+  没人理），现在改为 isChatStreaming(sessionKey)||isAiDelivering(sessionKey) → wxQueueAdd/qqQueueAdd +
+  toast「消息已发出，对方回完这轮就聊」（群聊同款文案语义的单聊版），由既有 kick 补跑 effect 在
+  「流收尾且投递完毕」后自动回复图片消息（kick 传 saved 落盘消息，runAiTurn 从 base 收集 turnImages，
+  发图消息 setMsgs 后由落盘 effect 写穿 IndexedDB，补跑时识图上下文齐全）；注释更新为「未配置识图时
+  chat-stream-store 注入『我发了图片但你看不到内容』临时上下文，AI 同样自然回应（#26）」
+- #28（三端统一 localStorage 持久化）：
+  ① wechat（372-404 重写模块级 Set）：wxQueuedTurns 改 readWxQueuedTurns() 初始化（JSON.parse
+  localStorage['wx-queued-turns']，非字符串元素过滤，try/catch 兜底空 Set）；封装 wxQueueAdd/wxQueueDelete
+  （add/delete 后 JSON.stringify 同步写回，try/catch 吞异常）；4 个调用点全换——kick 消费 3937 wxQueueDelete、
+  send 4691 / commitVoiceMsg 4740 / sttPreview 4776 wxQueueAdd、sendImageFiles 5317 wxQueueAdd（#26 新增）；
+  wxQueuedTurns.has 只读（3934）保留不动
+  ② qq（677-709 同构）：key 'qq-queued-turns'，qqQueueAdd/qqQueueDelete；调用点 kick 消费 2602 delete、
+  send 3302 / commitVoiceMsg 3351 / sttPreview 3386 add、sendImageFiles 2374 add（#26 新增）；has 只读 2599
+  ③ chat（模块层 272-311 新增工具 + 组件 1256-1294 改造）：QueuedTurn 类型从组件内提升到模块层；
+  SMS_QUEUED_TURNS_KEY='sms-queued-turns' 存 Record<storageKey, QueuedTurn[]>（每会话独立 slot，
+  readSmsQueuedTurns 按 kind 白名单过滤恢复、writeSmsQueuedTurns 入队/消费即整表写回，空 slot 删除）；
+  enqueueQueuedTurn push 后写回、tryFlushQueuedTurns shift 后写回（消费即从持久化移除）；挂载恢复 effect
+  （1291-1294）声明在两个 flush 触发 effect 之前——挂载帧先恢复进 ref、后尝试消费，队列非空且不在
+  流式/投递中即自动开跑；组件按 chatSession.key 重挂载的隔离设计不受影响（storageKey 不变 effect 只跑
+  一次），Task 23-b 的「卸载即弃」语义升级为「卸载保留、重进恢复」（未消费项留在 localStorage）
+- #29（qq 3170-3181）：AI 来电 setTimeout 回调从直接 openVoiceCall('in') 改为先查
+  useIncomingCall.getState().call（来电弹窗还在响）再查 useGlobalCall.getState().session（已有全局通话
+  进行中，start() 会直接替换旧会话），任一存在即 return——注释与微信版同口径：幂等防御——上一通还没
+  处理完时不再叠加新会话，防叠层僵尸来电（#29，对齐微信 4477 同款 + global-call session 这一层微信在
+  triggerIncomingCall 之外同样有 openVoiceCall→startGlobalCall 替换风险，此处一并覆盖）；import 补
+  useIncomingCall（新增 '@/lib/ios/incoming-call' 行）、useGlobalCall（并入既有 global-call import 行）
+- 验证：bunx tsc --noEmit 零错误（exit 0）；bun run lint 通过（exit 0）；python3 repr 校验三端关键块
+  （toast 文案/onVision 拆分块/持久化函数）无工具吞字符；grep 复核：wx/qq 封装函数外无残留 Set 直调、
+  三端 visionConfig 发图门控零残留、chat.tsx QueuedTurn 类型仅模块层一处；dev.log 编译无错误；未 git 操作
+
+Stage Summary:
+- #25：多图识图描述按「图N：」行拆分（splitVisionDesc）逐张回写各图 img.desc，微信/QQ 两端同构；
+  单张行为不变（splitVisionDesc 原样返回），某张拆不出保持 [图片] 占位由防编造规则兜住——之后的历史
+  与通话上下文（openVoiceCall 的 img.desc 分支）每张图内容都能被 AI 读到
+- #26：微信/QQ 发图照常触发 AI 回合（删 visionConfig 门控）——配置了识图走识图，未配置由
+  chat-stream-store 注入「看不到图片内容」上下文自然回应，不再「发图石沉大海」；流式/投递中发图与
+  文字消息同口径入排队表补跑并 toast，kick 补跑链路对图片消息透明复用
+- #28：三端排队补跑表全部 localStorage 持久化（wx-queued-turns / qq-queued-turns / sms-queued-turns）——
+  wx/qq 模块级 Set 恢复+增删写回，chat 组件 ref 挂载恢复+入队/消费写回；边界保持现状：补跑依赖聊天页
+  被打开，刷新后重新进入该会话自动补跑（已在代码注释说明）
+- #29：QQ AI 来电触发补齐微信同款幂等防御（useIncomingCall.call + useGlobalCall.session 双查），
+  响铃未处理时不再叠层产生僵尸来电
+- chat.tsx 无发图入口（无 kind:'image'/visionConfig/onVision），#25/#26 对信息 App 不适用，仅做 #28；
+  wx-group.tsx / qq-group.tsx 也有同款 onVision 只写最后一张，但不在本任务允许修改的文件清单内，未动
+- 修改文件：仅 src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx；
+  tsc + lint 双绿
+---
+Task ID: 24-a
+Agent: 通话稳健性修复代理
+Task: 第二轮功能审计 3 项修复——#19 内置 TTS 三重看门狗（iOS Safari onend 丢失防卡死）/ #20 通话链路全量 fetch 超时（turn/TTS/STT/answer/followup + 服务端 sdkTurn）/ #27 电话 App 通话记录三态（已拒绝/已取消/未接听/通话时长）
+
+Work Log:
+- #19（builtin-voices.ts speakBuiltin）：原实现 utter.onend/onerror 是唯一收尾路径，iOS Safari 长文本下两个事件都可能不触发 → Promise 永挂 → 免提通话卡死「正在说话」。重写 Promise 执行体（393-543）加三重看门狗，全部定时器在 finish() 统一清理（stopBuiltinSpeech 打断路径同走 finish，无泄漏）：①无启动兜底——speak() 后 8s 内 onstart 未触发（引擎没真正出声）→ cancel 掉迟到播放并静默 finish()，不调 opts.onEnd/不调 onError（没出声就不算说过话，调用方状态机正常往下走）；②引擎状态轮询——onstart 后每 1.2s 查 speechSynthesis.speaking/pending，两者都 false（onend 已丢）→ 走 finishNatural()「自然结束」路径；③硬性兜底——onstart 后按 text.length/(3.0×有效语速)×1000+20000ms 挂硬超时（有效语速=(plan?.rate??preset.rate)×(opts.speed??1)，plan 在 start() 闭包内取），同样走自然结束。finishNatural 与 onend 路径共用 endedNotified/erroredNotified 局部布尔防重：onEnd 绝不重复触发、onError 后不再触发 onEnd、启动兜底后迟到的 onend 也不会补发 onEnd（!finished 判定）；onEnd 回调包 try/catch（回调异常不影响 resolve）。speakBuiltin 头注释（371-379）同步写明三重兜底语义。tts-client.ts speakUserTts 内置分支依赖 speakBuiltin 的 resolve/onEnd，零改动自动受益
+- #19 顺带（tts-client.ts 第三方 API 音频分支，任务允许的非强制项）：HTMLAudioElement 的 onended 在流异常下同样可能丢失 → await 永挂。复用函数内已有的 estDurationMs（按字数×语速估算音频时长）+15s 富余挂 audioHardTimer 硬超时（318-354），到点静默 finish（后续 onEnd 照常触发一次）；正常 onended/onerror/stopSpeaking 都在 finish 里清掉该定时器
+- #20 客户端 fetch 全量加 signal: AbortSignal.timeout(ms)（带注释）：phone.tsx 5 处——speak 兜底 /api/phone/tts 30s（665-670）、runTurn /api/phone/turn 45s（812/860）、空号播报 /api/phone/tts 30s（1255-1265）、/api/phone/asr 60s（1496-1506）、留言 /api/phone/tts 30s（3743-3786）；chat-call.ts requestTurn /api/phone/turn 45s（663，该文件唯一 fetch，微信/QQ 通话界面 turn/tts/asr 全走本引擎与 tts-client/stt-client，voice-call-screen.tsx grep 证实无直接 fetch 无需改）；call-followup.ts /api/phone/followup 45s（134）；call-decision.ts /api/phone/answer 45s（27，原 ANSWER_DECISION_TIMEOUT_MS=9000 按任务指示调为 45000）；tts-client.ts /api/tts 30s（286）；stt-client.ts 新增 fetchWithTimeout 封装（21-32）两处 /api/stt 全部 60s（65-81）
+- #20 超时错误文案映射（DOMException TimeoutError 的 message 各浏览器不一致，直接进 UI 会漏英文）：phone.tsx 新增 isTimeoutError 帮助函数（163-170，name==='TimeoutError' 优先 + /timeout|timed out/i 兜底），runTurn 两处 catch（directOnly 流分支 916-929、主 catch 972-984）超时 → 「请求超时，请检查网络或稍后再试」；chat-call.ts 同名帮助函数（263-270）+ requestTurn catch（687-691）同映射；tts-client.ts /api/tts fetch 超时 → 「语音合成超时，请稍后再试」（288-296）；stt-client.ts fetchWithTimeout 统一映射「请求超时，请检查网络或稍后再试」；call-followup（catch 静默 []）、空号 TTS（catch 自动挂断）、ASR（catch「语音识别失败」）、留言 TTS（catch toast）四类调用点错误文案本就友好/不进 UI，只加超时不改文案
+- #20 服务端（call-upstream.ts sdkTurn 136-157）：z-ai SDK 无 signal 参数 → Promise.race 包 60s 硬超时，超时抛 new Error('内置模型响应超时')，turn/answer/followup 三路由共用该函数，超时走各自既有 catch → 502 友好文案（路由侧无改动）
+- #27 数据层（db.ts 132-138）：CallLogRecord 增加可选字段 endReason?: string（注释：'cancel'/'hangup'/'ai-hangup'/'reject'/'no-answer'/'missed-in'，与 call-outcome.ts 取值对齐；旧记录无此字段走兜底渲染）；IndexedDB 新增可选字段直接存、无需迁移
+- #27 写入点（phone.tsx 全部 2 处 CallLogRecord 构造，grep direction: 复核无遗漏）：①hangup 收尾 onEnd（1118-1132）——未接通（phaseAtEnd='dialing'，含拨号中用户取消与空号播报后自动挂断）→ 'cancel'；接通后 → 真实挂断方 endReason（'hangup' 用户手动 / 'ai-hangup' AI 主动，Task 23-d 已接好）；②endByPeer（AI 接听决策拒接/未接收尾，1183-1195）→ endReason: reason（'reject' / 'no-answer'）
+- #27 渲染（phone.tsx，import callOutcomeOf 第 66 行）：①主列表行（2145-2217）——const outcome = callOutcomeOf(log.endReason ?? '', log.duration > 0)，ended → 「呼入/呼出 · 时长」（原文案）+绿箭头；rejected → 「已拒绝」；cancelled → 「已取消」；missed → 「未接听」；颜色：未接听保持红色（iOS 惯例，名字+箭头 #FF3B30），已取消/已拒绝中性灰（text-muted-foreground，非红——呼出未接通不算未接来电，参照微信/QQ CallCardBubble 普通文本样式）；②联系人详情通话记录卡片（3036-3069）同 outcome 三态（missed 显示「未接来电」红色，ended 才显示时长）；③「未接来电」筛选 tab（2081-2091）——由 duration===0 改为按 outcome（missed+rejected 算未接，cancelled 不算），旧记录（无 endReason）callOutcomeOf('') 自然回落：接通→ended、未接通→missed，行为兼容
+- 验证：bunx tsc --noEmit 零错误（exit 0，修复了一处 window.clearInterval(number|null) 收窄报错）；bun run lint 通过（exit 0）；大文件编辑后按 worklog 已知坑用 python3 repr 逐段校验 phone.tsx 关键区（主列表/详情卡片/两写入点/5 处 signal）真实落盘无损；未启动/重启 dev server、无 git 操作、无运行时 E2E（本会话 dev server 未在跑，dev.log 无新增内容）
+
+Stage Summary:
+- #19：speakBuiltin 三重看门狗（8s 无启动静默收尾 / 1.2s 引擎状态轮询 / 文本量硬超时）保证 Promise 必 resolve——iOS Safari 长文本 onend 丢失时免提通话从「正在说话」正常流转回「聆听」，onEnd 单次触发语义与 onend 路径完全一致；第三方 API 音频分支同享 estDurationMs+15s 硬兜底
+- #20：通话链路 13 处客户端 fetch 全部有界（tts 30s / turn·answer·followup 45s / asr·stt 60s）+ 服务端 sdkTurn 60s Promise.race；TimeoutError 统一映射「请求超时，请检查网络或稍后再试」类友好中文，上游卡死不再出现「永远正在思考/正在说话」，最坏情况到点自动恢复到可操作状态
+- #27：电话 App 通话记录与微信/QQ 通话卡片同一套三态语义（call-outcome.ts 唯一映射）——已拒绝/已取消/未接听/通话时长 各有专属文案与颜色（未接红、取消/拒绝中性灰）；写入端按真实挂断语义落 endReason（取消/挂断/AI挂断/拒接/未接）；旧记录无 endReason 自然回落，未接来电筛选改按结局（cancelled 不再混入未接）
+- 需上级知悉的取舍：call-decision.ts 按任务指示把 ANSWER_DECISION_TIMEOUT_MS 从 9000 提到 45000（原本 9s 兜底 answer 是刻意的响铃体验调优）——决策请求最坏 45s 才兜底，用户拨打 wx/qq 联系人时「响铃→接通/拒接」最长约 47s（正常快速返回不受影响）；如嫌久可改回 9s，一行常量即可
+- 修改文件（全部在允许清单内）：src/lib/ios/builtin-voices.ts、tts-client.ts、stt-client.ts、call-followup.ts、call-decision.ts、chat-call.ts、call-upstream.ts、db.ts、src/components/apps/phone.tsx；voice-call-screen.tsx 与 api/phone/turn/route.ts 经核查无需改动（前者零 fetch，后者走 sdkTurn/既有错误兜底）
+
+---
+Task ID: 24
+Agent: Z.ai Code (main) + 4 并行子代理
+Task: 第二轮审计清单 #19–#29 共 11 项修复（2 个 P1 稳健性 + 4 个群聊/记忆正确性 + 5 个功能缺陷）
+
+Work Log:
+- 主线程先做共享 lib 前置（子代理依赖）：
+  - ai-delivery.ts 新增 peekPendingMsgs<T>(sessionKey)（Batch 增加 deliveredIndex 跟踪，返回「已调度未投递」消息按序）——#22 依赖
+  - vision-client.ts：VISION_SYSTEM_PROMPT 多图改按「图N：」分行逐张描述（/api/vision/route.ts 同步文案）；新增 splitVisionDesc(desc,count) 拆分 helper（编号行解析/多于合并/少于留空对齐）——#25 依赖
+  - chat-stream-store.ts：未配置识图模型但本轮有图时注入临时上下文「我发了图片但你看不到内容，请自然回应别编造」——#26 兜底（群聊防全员 [SKIP] 石沉大海）
+- 并行子代理（文件互不重叠，各自 tsc+lint 双绿后追加 worklog）：
+  - 24-a（#19/#20/#27）：speakBuiltin 三重看门狗（8s 无 onstart 静默收尾 / 1.2s 引擎状态轮询 / 文本量估算硬兜底，onEnd 防重不泄漏）；通话链路 11 处客户端 fetch 加 AbortSignal.timeout（turn 45s/tts 30s/stt 60s/followup 45s）+ 超时文案友好映射 + sdkTurn Promise.race 60s；CallLogRecord.endReason 可选字段 + phone.tsx 写入点真实语义 + 通话记录三态渲染（已拒绝/已取消/未接听/时长，旧记录自然回落，未接 tab 改按 outcome）
+  - 24-b（#21/#22/#24 + 群内 #25/#26）：runCharTurn 返回 'ok'|'skip'|'error'，error 不落（…）假消息，整轮无 ok 且有 error 落一条 kind='notice'（不进上下文/记忆）；组上下文拼 peekPendingMsgs 修复投递窗口内历史冻结；mentioned ∩ all 修复 @ 绕过禁言；wx-group/qq-group onVision 用 splitVisionDesc 逐张回写；删发图触发的 visionConfig 门控
+  - 24-c（#25/#26/#28/#29）：wechat/qq onVision 拆分逐张回写；删发图 visionConfig 门控 + 流式中发图转排队补跑；wxQueuedTurns/qqQueuedTurns/chat.tsx 队列 localStorage 持久化（wx-queued-turns / qq-queued-turns / sms-queued-turns，恢复后重进会话自动补跑）；QQ AI 来电触发补幂等防御（useIncomingCall.call + 全局通话进行中即 return）
+  - 24-d（#23）：memory.ts 新增 memRecentGroupConvo（遍历 listGroups 找 memberIds 含该联系人、按最后消息时间取最新群、notice/recalled 过滤、peer 按「发言人：」归因、富媒体占位）；memRecentConvo 私聊空时回退群聊；memMostRecentApp 私聊∪群聊同台竞选；调用方返回结构不变零改动
+- 主线程集成期修复（E2E 揪出的真 bug）：wechat.tsx/qq.tsx runAiTurn 的 base = [...msgs, ...extra] 重复计数——extra 里的图片已先一步进 msgs state，重复 id 污染 turnImageMsgIds 映射导致多图识图描述回写错位（E2E 实测识图请求带 3 张图 vs 实发 2 张）；修复为 base 按 id 去重（保留后出现者），两文件同构
+- 主线程微调：call-decision.ts ANSWER_DECISION_TIMEOUT_MS 45s→15s（响铃期间的交互决策，刻意短于 turn 45s，原 9s 本就有超时）
+- E2E（agent-browser 实机，IndexedDB 种子 陈默/林小雨/苏晴 + E2E测试群(林小雨永久禁言) + 5 条通话记录 + network route mock /api/chat + 本地 :3999 识图 mock）：
+  ① #27 通话记录三态：呼出·1:15 / 已取消 / 已拒绝 / 未接听 / 旧数据兜底未接听 全部正确渲染 ✓
+  ② #24 @ 被永久禁言的林小雨 → 苏晴正常回复、林小雨零发言（禁言未被 @ 绕过）✓
+  ③ #28 预置 wx-queued-turns=['c-yu'] 刷新重进会话 → 自动补出回复（无需手动发送）✓
+  ④ 冒烟 文字发送→mock 回复 ✓；#26 未配置识图发图 → 图片上屏 + AI 正常回复（desc=null 走「看不到图片」上下文）✓
+  ⑤ #25 配置识图指向本地 mock：单图 desc=完整描述；两图一次发送 → 请求 imgs=2（修复前 3 张幽灵图）、img1.desc=图1 文案、img2.desc=图2 文案 逐张正确 ✓
+  ⑥ #23 记忆库选「只在群里聊过的」苏晴点立即总结 → POST /api/memory/extract 实际发出（修复前直接「没有可总结的对话」拒绝），0 碎片为 LLM 对 3 条闲聊的正常输出 ✓
+- 未做实机验证（诚实备注）：#19/#20（iOS Safari onend 丢失/上游挂死无法在无头浏览器确定性复现，靠代码审查+tsc）；#21（API 全挂需代理+直连+内置兜底同时失败，sdk 兜底在沙箱总能救回，靠 finalize 分流逻辑审查）；#22（成员 B 看到 A 的消息在请求 payload 内部，外部只可观察间接行为）；#29 QQ 侧（需 QQ 登录+标记触发，代码与微信已验证的同构防御一致）
+- 集成验证：bunx tsc --noEmit 零错误、bun run lint 通过、页面 console 无错误、dev.log 无异常
+
+Stage Summary:
+- 11 项全部落地：通话稳健性（TTS 看门狗三重防护 + 通话链路全量请求超时）杜绝「卡死在正在说话/正在思考」；电话通话记录与微信/QQ 对齐三态语义
+- 群聊正确性：API 故障不再按成员数量产出「（…）」假消息（改单条 notice 且不进上下文/记忆）；连发/投递窗口内成员互看消息完整；禁言物理生效（@ 不豁免）
+- 识图链路补完：多图逐张描述拆分回写（连带修掉 runAiTurn base 重复计数的存量 bug）；未配置识图模型发图必有回应（临时上下文引导）且群聊不再全员沉默
+- 数据健壮性：三端排队补跑表 localStorage 持久化（刷新后重进会话自动补跑）；记忆手动总结认群消息（群聊按实际发言人归因）
+- 修改文件：ai-delivery.ts、vision-client.ts、chat-stream-store.ts、api/vision/route.ts、builtin-voices.ts、tts-client.ts、stt-client.ts、call-followup.ts、call-decision.ts、chat-call.ts、call-upstream.ts、db.ts、phone.tsx、wx-group.tsx、qq-group.tsx、wechat.tsx、qq.tsx、memory.ts

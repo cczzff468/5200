@@ -129,6 +129,13 @@ export interface CallLogRecord {
   direction: 'out' | 'in' | 'missed';
   /** 通话秒数（未接通为 0） */
   duration: number;
+  /**
+   * 通话引擎上报的挂断原因（#27 三态展示用）：'cancel'=拨号中取消 / 'hangup'=接通后用户挂断 /
+   * 'ai-hangup'=AI 主动挂断 / 'reject'=被拒接 / 'no-answer'·'missed-in'=响铃无人接；
+   * 旧记录无此字段 → 渲染端按 callOutcomeOf('', duration>0) 兜底（接通=ended / 未接通=missed），
+   * IndexedDB 新增可选字段直接存、无需迁移
+   */
+  endReason?: string;
   createdAt: number;
 }
 

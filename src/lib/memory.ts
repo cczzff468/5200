@@ -46,7 +46,7 @@
 
 import type { ApiConfig } from '@/lib/ios/store';
 import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
-import { getGroup, onGroupDissolved } from '@/lib/ios/groups';
+import { getGroup, listGroups, loadGroupMsgs, onGroupDissolved, type WxGroupMsg } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
   MEM_APP_LABEL,
@@ -1649,10 +1649,64 @@ export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn
   return out.slice(-60);
 }
 
-/** 读取某个联系人在指定 App 的最近对话（手动「立即总结」用；电话通话不留全文，返回空） */
-export function memRecentConvo(contactId: string, app: MemApp): MemConvoTurn[] {
+/** 【#23】群消息进记忆的文本快照：content 优先，富媒体 kind 给占位（口径与群聊页构建 AI 上下文一致，能省则省） */
+function memGroupMsgText(m: WxGroupMsg): string {
+  if (m.kind === 'image') return m.img?.desc ? `[图片]（图片内容：${m.img.desc}）` : '[图片]';
+  // 语音：转写优先（stt 完成后可读），其次朗读原文（AI 语音消息同源冗余）；都识别不出用占位
+  if (m.kind === 'voice') return m.voice?.transcript || m.voice?.localText || '[语音]';
+  if (m.kind === 'sticker') return m.stk?.meaning ? `[表情] ${m.stk.meaning}` : '[表情]';
+  // 位置：带地名进记忆（与私聊 memConvoFromRaw 的 locLabelOf 同口径，提取器能记住「去过哪」）
+  if (m.kind === 'location') return locLabelOf(m.loc);
+  if (m.kind === 'redpacket') return '[红包]';
+  if (m.kind === 'transfer') return '[转账]';
+  if (m.kind === 'forward') {
+    const brief = m.content.trim();
+    return m.fwd?.merged ? '[聊天记录]' : brief ? `[转发] ${brief}` : '[转发]';
+  }
+  return m.content.trim();
+}
+
+/**
+ * 【#23】读某个联系人在 wx/qq 群聊里的最近对话（修复「记忆库手动立即总结不认群消息」：
+ * 此前只读私聊 kv，只在群里聊过的角色点「立即总结」永远提示没有可总结的对话）。
+ * 遍历该 App 全部群（listGroups），找 memberIds 含该联系人的群（ownerId 兜底防转让后数据缺员），
+ * 取「最后一条消息时间最新」的那个群；过滤 notice 系统行与撤回（与群聊页构建 AI 上下文同口径），
+ * 映射为 MemConvoTurn[]：机主消息 → role 'me'；成员消息 → role 'peer' 且文本带「发言人：」前缀
+ * （群聊按实际发言人归因，与 Task 23 #12 的群记忆口径一致）；空文本条目跳过；
+ * 最多 60 条，与私聊 memConvoFromRaw 截尾同口径。
+ * 返回 ts = 该群最后一条消息时间（memMostRecentApp 里与私聊同台竞选）；无可用群返回 null。
+ */
+function memRecentGroupConvo(contactId: string, app: 'wx' | 'qq'): { convo: MemConvoTurn[]; ts: number } | null {
   try {
-    if (app === 'phone') return [];
+    let best: { ts: number; msgs: WxGroupMsg[] } | null = null;
+    for (const g of listGroups(app)) {
+      if (!g.memberIds.includes(contactId) && g.ownerId !== contactId) continue;
+      const msgs = loadGroupMsgs(g.id);
+      if (msgs.length === 0) continue;
+      const ts = msgs[msgs.length - 1]?.time ?? 0;
+      if (!best || ts > best.ts) best = { ts, msgs };
+    }
+    if (!best) return null;
+    const convo: MemConvoTurn[] = [];
+    for (const m of best.msgs) {
+      if (m.kind === 'notice' || m.recalled === true) continue; // 系统行/撤回剔除（群聊页同口径）
+      const text = memGroupMsgText(m).slice(0, 400);
+      if (!text) continue;
+      if (m.role === 'me') convo.push({ role: 'me', text });
+      else convo.push({ role: 'peer', text: `${m.senderName || '成员'}：${text}` });
+    }
+    return { convo: convo.slice(-60), ts: best.ts };
+  } catch {
+    return null;
+  }
+}
+
+/** 读取某个联系人在指定 App 的最近对话（手动「立即总结」用；电话通话不留全文，返回空）。
+ *  【#23】私聊没有可用对话时回退该联系人的群聊（仅 wx/qq 有群聊概念；sms/phone 维持原样） */
+export function memRecentConvo(contactId: string, app: MemApp): MemConvoTurn[] {
+  if (app === 'phone') return [];
+  let convo: MemConvoTurn[] = [];
+  try {
     // 聊天记录已迁 IndexedDB kv store（内存同步读，启动时由 idb-kv 迁移）
     const parsed: unknown = kvGet(
       app === 'wx'
@@ -1661,14 +1715,18 @@ export function memRecentConvo(contactId: string, app: MemApp): MemConvoTurn[] {
           ? `qq-chat-msgs:${contactId}`
           : `ios-chat-msgs:c:${contactId}`
     );
-    if (!Array.isArray(parsed)) return [];
-    return memConvoFromRaw(parsed, '');
+    if (Array.isArray(parsed)) convo = memConvoFromRaw(parsed, '');
   } catch {
-    return [];
+    // 私聊读失败不中断，继续尝试群聊兜底
   }
+  if (convo.length > 0) return convo;
+  // 【#23】私聊为空 → 群聊兜底：只在群里聊过的角色也能取到最近对话
+  if (app === 'wx' || app === 'qq') return memRecentGroupConvo(contactId, app)?.convo ?? [];
+  return [];
 }
 
-/** 手动总结用：挑该联系人最近有对话的 App（wx/qq/sms 中最后一条消息时间最新者） */
+/** 手动总结用：挑该联系人最近有对话的 App（wx/qq/sms 私聊 + 【#23】wx/qq 群聊中最后一条消息时间最新者）。
+ *  返回结构不变：app 仍为 'wx'|'qq'|'sms'（convo 来自群聊时记其宿主 App），convo 可能来自群聊。 */
 export function memMostRecentApp(contactId: string): { app: MemApp; convo: MemConvoTurn[] } | null {
   let best: { app: MemApp; ts: number; convo: MemConvoTurn[] } | null = null;
   for (const app of ['wx', 'qq', 'sms'] as MemApp[]) {
@@ -1687,6 +1745,14 @@ export function memMostRecentApp(contactId: string): { app: MemApp; convo: MemCo
     } catch {
       continue;
     }
+  }
+  // 【#23】群聊候选与私聊同台竞选：该联系人在 wx/qq 的群最近对话（群消息 kv 键形如
+  // wx-group-msgs:<gid> / qq-group-msgs:<gid>，经 listGroups + loadGroupMsgs 读取）；
+  // 群来源 convo 的 app 记宿主 'wx'|'qq'，调用方（memExtractNow / memSummarizeNow / memory-bank）
+  // 按既有结构原样入库，无需感知来源是群聊
+  for (const app of ['wx', 'qq'] as const) {
+    const g = memRecentGroupConvo(contactId, app);
+    if (g && g.convo.length > 0 && (!best || g.ts > best.ts)) best = { app, ts: g.ts, convo: g.convo };
   }
   return best ? { app: best.app, convo: best.convo } : null;
 }

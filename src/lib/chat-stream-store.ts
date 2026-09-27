@@ -111,8 +111,9 @@ export interface BeginChatStreamOptions {
    */
   vision?: ChatVisionInput;
   /**
-   * 识图成功回调（可选）：desc = 本轮图片的完整描述文本。各 App 在此把描述写进
-   * 对应图片消息持久化（img.desc），之后的聊天历史 AI 都能读到图片内容，
+   * 识图成功回调（可选）：desc = 本轮全部图片的完整描述文本（多张时为按「图N：」分行的逐张描述）。
+   * 各 App 在此把描述拆分写进对应图片消息持久化（img.desc，多图用 vision-client 的
+   * splitVisionDesc(desc, images.length) 对应各图），之后的聊天历史 AI 都能读到图片内容，
    * 不再只剩「[图片]」占位；与页面是否存活无关（模块层调用）。
    */
   onVision?: (desc: string) => void;
@@ -290,6 +291,16 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
           const detail = err instanceof Error && err.message ? err.message : '未知原因';
           patchState(rt, { visionNotice: `图片识别失败，本次回复未结合图片（${detail}）` });
         }
+      } else {
+        // 未配置识图模型（#26 兜底）：图片只以「[图片]」占位进历史，模型容易无话可说
+        //（群聊甚至可能全员 [SKIP] → 发图石沉大海）。注入一条临时上下文：明确图片已收到但
+        // 看不到内容，引导自然回应（不发编造细节）；临时消息不落盘，与识图描述上下文同口径
+        const n = opts.vision.images.length;
+        const note =
+          n > 1
+            ? `（我刚刚发了 ${n} 张图片给你，你还没有配置识图模型，看不到图片内容；请自然回应收到图片这件事，可以问我图片拍了什么，不要编造图片细节）`
+            : '（我刚刚发了一张图片给你，你还没有配置识图模型，看不到图片内容；请自然回应收到图片这件事，可以问我图片拍了什么，不要编造图片细节）';
+        workMessages = [...messages, { role: 'user' as const, content: note }];
       }
     }
     // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）

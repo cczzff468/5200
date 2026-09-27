@@ -20,8 +20,13 @@ export interface AnswerDecisionResult {
   afterText?: string;
 }
 
-/** 决策等待上限：超过视为「接听」（响铃体验不能被决策拖太久） */
-export const ANSWER_DECISION_TIMEOUT_MS = 9000;
+/**
+ * 决策等待上限（#20 通话请求超时看门狗）：到点必失败（AbortSignal.timeout → DOMException
+ * TimeoutError），catch 统一兜底 answer——上游卡死时绝不无限等待。
+ * 取值 15s：原 9s 是「有超时」的既有调优（决策是快请求，不能拖响铃体验），本轮只把它收进
+ * 统一常量并放宽到 15s 兼顾慢上游；这是响铃期间的交互决策，刻意短于 turn 的 45s。
+ */
+export const ANSWER_DECISION_TIMEOUT_MS = 15000;
 
 export interface AnswerDecisionArgs {
   number: string;

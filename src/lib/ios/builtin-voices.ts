@@ -371,6 +371,11 @@ export interface BuiltinSpeakOptions {
 /**
  * 用浏览器内置引擎朗读一段文本（单例）。
  * 不支持/无文本时走 onError 并抛错；正常结束走 onEnd；被打断（stopBuiltinSpeech）只 resolve 不回调。
+ * iOS Safari 看门狗（#19）：onend 在长文本下可能永不触发 ——
+ * ① 无启动兜底（onstart ~8s 未触发 → 静默 finish，不算说过话）；
+ * ② onstart 后每 ~1.2s 轮询 speaking/pending（引擎既不说也没排队 → 走「自然结束」触发 onEnd）；
+ * ③ 按文本量估算的硬超时（强制自然结束）——三重兜底保证本 Promise 一定能 resolve，
+ *   免提通话状态机不再卡死在「正在说话」。
  */
 export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
   if (!isBuiltinVoiceSupported()) {
@@ -392,12 +397,54 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
 
   await new Promise<void>((resolve) => {
     let finished = false;
+    // ---- 看门狗（iOS Safari 坑：长文本朗读 utter.onend/onerror 可能一个都不触发，原实现里两者是唯一收尾路径，
+    // ---- Promise 永不 resolve → 免提通话状态机卡死在「正在说话」）。三重兜底，全部定时器在 finish() 统一清理
+    // ---- （stopBuiltinSpeech 打断路径同样调 finish，不会泄漏）。----
+    let startFallbackTimer: number | null = null; // ① 无启动兜底：onstart 一直不触发（引擎根本没出声）
+    let enginePollTimer: number | null = null; // ② 引擎状态轮询：onstart 后每 ~1.2s 查 speaking/pending
+    let hardStopTimer: number | null = null; // ③ 硬性兜底：按文本量估算的超时
+    // onEnd / onError 防重（局部布尔）：onEnd 绝不重复触发、onError 后不再触发 onEnd
+    let endedNotified = false;
+    let erroredNotified = false;
+    const clearWatchdogs = () => {
+      if (startFallbackTimer !== null) {
+        window.clearTimeout(startFallbackTimer);
+        startFallbackTimer = null;
+      }
+      if (enginePollTimer !== null) {
+        window.clearInterval(enginePollTimer);
+        enginePollTimer = null;
+      }
+      if (hardStopTimer !== null) {
+        window.clearTimeout(hardStopTimer);
+        hardStopTimer = null;
+      }
+    };
     const finish = () => {
       if (finished) return;
       finished = true;
+      clearWatchdogs();
       if (activePresetId === preset.id) activePresetId = null;
       if (activeFinish === finish) activeFinish = null;
       resolve();
+    };
+    /**
+     * 「自然结束」路径：语义与收到 onend 完全一致——先触发 opts.onEnd（保证只触发一次）再 finish。
+     * 引擎状态轮询与硬性兜底都走这里，让调用方状态机（说完→回到听）正常往下走。
+     */
+    const finishNatural = () => {
+      if (finished || erroredNotified) return;
+      if (!endedNotified) {
+        endedNotified = true;
+        if (myToken === speakToken) {
+          try {
+            opts.onEnd?.();
+          } catch {
+            // 回调异常不影响收尾
+          }
+        }
+      }
+      finish();
     };
     activeFinish = finish;
     activePresetId = preset.id;
@@ -416,7 +463,43 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
       utter.rate = Math.min(3, Math.max(0.5, (plan?.rate ?? preset.rate) * (opts.speed ?? 1)));
       utter.volume = Math.min(1, Math.max(0, opts.volume ?? 1));
       utter.onstart = () => {
-        if (myToken === speakToken && !opts.cancelled?.()) opts.onStart?.();
+        if (myToken !== speakToken || opts.cancelled?.()) {
+          finish();
+          return;
+        }
+        // 引擎真正出声：清掉「无启动兜底」
+        if (startFallbackTimer !== null) {
+          window.clearTimeout(startFallbackTimer);
+          startFallbackTimer = null;
+        }
+        opts.onStart?.();
+        // ② 引擎状态轮询：iOS Safari 长文本 onend 丢失后，引擎的 speaking/pending 状态仍会归位——
+        // 既不在说也没排队 = 播放其实已结束只是事件没触发 → 走「自然结束」路径
+        if (enginePollTimer === null) {
+          enginePollTimer = window.setInterval(() => {
+            if (finished) return;
+            try {
+              const ss = window.speechSynthesis;
+              if (!ss.speaking && !ss.pending) {
+                const id = enginePollTimer;
+                if (id !== null) window.clearInterval(id);
+                enginePollTimer = null;
+                finishNatural();
+              }
+            } catch {
+              // 引擎状态读不到：继续靠硬性兜底
+            }
+          }, 1200);
+        }
+        // ③ 硬性兜底：按文本量估算朗读时长（约 3 字/秒 × 有效语速）+ 20s 富余，超时强制自然结束——
+        // 保证 await speakBuiltin 一定能 resolve，即使轮询状态也被引擎卡住
+        if (hardStopTimer === null) {
+          const effRate = Math.max(0.1, (plan?.rate ?? preset.rate) * (opts.speed ?? 1));
+          hardStopTimer = window.setTimeout(() => {
+            hardStopTimer = null;
+            finishNatural();
+          }, Math.round((text.length / (3.0 * effRate)) * 1000) + 20000);
+        }
       };
       // boundary 事件：朗读到某字/词边界时触发（Chrome/Edge 支持），用于逐字字幕同步
       utter.onboundary = (e) => {
@@ -425,11 +508,22 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
         opts.onProgress?.(Math.min(0.98, (e.charIndex || 0) / total));
       };
       utter.onend = () => {
-        if (myToken === speakToken) opts.onEnd?.();
+        // 正常结束路径：同样走防重判定（若看门狗先到/已 onError 则不重复触发 onEnd）
+        if (myToken === speakToken && !finished && !erroredNotified && !endedNotified) {
+          endedNotified = true;
+          try {
+            opts.onEnd?.();
+          } catch {
+            // 回调异常不影响收尾
+          }
+        }
         finish();
       };
       utter.onerror = () => {
-        if (myToken === speakToken) opts.onError?.('内置语音播放失败');
+        if (myToken === speakToken && !erroredNotified) {
+          erroredNotified = true;
+          opts.onError?.('内置语音播放失败');
+        }
         finish();
       };
       try {
@@ -437,7 +531,21 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
       } catch {
         opts.onError?.('内置语音播放失败');
         finish();
+        return;
       }
+      // ① 无启动兜底：iOS Safari 引擎可能根本没真正出声且 onstart/onerror 都不触发——
+      // ~8s 内 onstart 没来就静默 finish（不调 onEnd/onError：没出声就不算说过话，
+      // 让调用方状态机正常往下走），并 cancel 掉万一「迟到才开始」的播放
+      startFallbackTimer = window.setTimeout(() => {
+        startFallbackTimer = null;
+        if (finished) return;
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // 引擎不可用时静默
+        }
+        finish();
+      }, 8000);
     };
 
     // voiceschanged 首次触发前 getVoices() 可能为空：最多等 600ms 再开播

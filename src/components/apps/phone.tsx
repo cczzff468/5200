@@ -63,6 +63,7 @@ import {
 import { chatCallExtraRules, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
+import { callOutcomeOf } from '@/lib/ios/call-outcome';
 import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer } from '@/lib/ios/incoming-call';
 import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
@@ -157,6 +158,15 @@ function formatNumber(raw: string): string {
 function callDurationText(seconds: number): string {
   if (seconds <= 0) return '';
   return formatDuration(seconds);
+}
+
+/** 请求超时错误识别（#20）：AbortSignal.timeout 抛 DOMException TimeoutError，
+ *  name 各浏览器一致优先判，message 兑底（Chromium「signal timed out」/Safari「The operation timed out.」） */
+function isTimeoutError(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name ?? '';
+  if (name === 'TimeoutError') return true;
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /timeout|timed out/i.test(msg);
 }
 
 /** 日志时间：今天 HH:mm / 昨天 / 一周内周X / 跨年 YYYY/M/d / M月d日 */
@@ -651,10 +661,12 @@ function CallScreen({
       // ② 内置朗读（原有链路）
       try {
         stopSpeaking();
+        // #20 通话链路超时看门狗：兜底合成 30s 到点必失败（catch 后回退内置朗读，文案不进 UI）
         const res = await fetch('/api/phone/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, gender }),
+          signal: AbortSignal.timeout(30000),
         });
         if (!res.ok) throw new Error('tts failed');
         const blob = await res.blob();
@@ -795,6 +807,8 @@ function CallScreen({
         const all = contact ? await listContacts().catch(() => [] as ContactRecord[]) : [];
         const npcExtra = contact ? buildNpcPromptExtra(contact, all) : null;
         const meUser = all.find((c) => c.kind === 'user') ?? null;
+        // #20 通话链路超时看门狗：LLM 轮次 45s 到点必失败（AbortSignal.timeout 抛 DOMException
+        // TimeoutError）——上游卡住不再永远「正在思考」，catch 里已映射为友好中文
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -843,6 +857,7 @@ function CallScreen({
             // 设置 App「API 设置」的配置：服务端优先用它调用户自己的 API
             config: apiConfig,
           }),
+          signal: AbortSignal.timeout(45000),
         });
         const data = (await res.json()) as {
           reply?: string;
@@ -901,7 +916,14 @@ function CallScreen({
           } catch (err) {
             if (endedRef.current) return;
             setBubbles((b) => b.filter((x) => x.id !== bubbleId));
-            setError(err instanceof Error && err.message ? err.message : '对方信号不好，稍后再试');
+            // 超时（DOMException TimeoutError）映射成友好中文，英文原始错误不进字幕/提示
+            setError(
+              isTimeoutError(err)
+                ? '请求超时，请检查网络或稍后再试'
+                : err instanceof Error && err.message
+                  ? err.message
+                  : '对方信号不好，稍后再试',
+            );
             setPeerStatus('listening');
             scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
           }
@@ -951,9 +973,11 @@ function CallScreen({
         if (!endedRef.current) {
           const msg = err instanceof Error && err.message ? err.message : '';
           setError(
-            /failed to fetch|networkerror|load failed/i.test(msg)
-              ? '通话网络异常，请稍后再试'
-              : msg || '通话网络异常，请稍后再试'
+            isTimeoutError(err)
+              ? '请求超时，请检查网络或稍后再试'
+              : /failed to fetch|networkerror|load failed/i.test(msg)
+                ? '通话网络异常，请稍后再试'
+                : msg || '通话网络异常，请稍后再试'
           );
           setPeerStatus('listening');
           scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
@@ -1100,6 +1124,10 @@ function CallScreen({
       avatar: contact?.avatar ?? null,
       direction: isIncoming ? 'in' : 'out',
       duration: wasConnected ? secondsRef.current : 0,
+      // #27 三态记录：真实挂断原因随记录落盘（渲染端按 callOutcomeOf 分三态展示）——
+      // 拨号中挂断（含空号播报后自动挂断，未接通）= 'cancel'（已取消，不算未接来电）；
+      // 接通后挂断按真实挂断方：'hangup' = 用户手动 / 'ai-hangup' = AI 主动告别挂断
+      endReason: wasConnected ? endReason : 'cancel',
       createdAt: Date.now(),
     });
     if (unanswered) {
@@ -1161,6 +1189,8 @@ function CallScreen({
         avatar: contact?.avatar ?? null,
         direction: 'out',
         duration: 0,
+        // #27 三态记录：'reject' = 对方拒接 / 'no-answer' = 响铃超时无人接（与 call-outcome.ts 取值一致）
+        endReason: reason,
         createdAt: Date.now(),
       });
       const text = afterText?.trim() || buildVoicemailText(contact);
@@ -1227,10 +1257,12 @@ function CallScreen({
             setEmptyNumber(true);
             void (async () => {
               try {
+                // #20 通话链路超时看门狗：空号播报合成 30s 到点必失败（catch 走自动挂断兑底，文案不进 UI）
                 const res = await fetch('/api/phone/tts', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ text: '您好，您拨打的号码是空号，请查证后再拨。', gender: null }),
+                  signal: AbortSignal.timeout(30000),
                 });
                 if (!res.ok || endedRef.current) throw new Error('tts failed');
                 const blob = await res.blob();
@@ -1465,10 +1497,13 @@ function CallScreen({
         setPeerStatus('thinking');
         try {
           const b64 = await blobToWavBase64(blob);
+          // #20 通话链路超时看门狗：识别请求 60s 到点必失败（AbortSignal.timeout → DOMException
+          // TimeoutError，catch 里映射成「语音识别失败」友好文案后自动重听）
           const res = await fetch('/api/phone/asr', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ audioBase64: b64 }),
+            signal: AbortSignal.timeout(60000),
           });
           const data = (await res.json()) as { text?: string; error?: string };
           if (endedRef.current) return;
@@ -2045,7 +2080,15 @@ function RecentsTab({
 
   const shown = useMemo(() => {
     let list = logs ?? [];
-    if (filter === 'missed') list = list.filter((l) => l.duration === 0);
+    if (filter === 'missed') {
+      // 未接来电 tab 按结局筛选（#27 三态）：未接听 + 已拒绝 算未接来电；
+      // 已取消（呼出未接通，如拨号中自己取消/空号）不算——呼出未接通不算未接来电；
+      // 旧记录无 endReason → callOutcomeOf('') 自然回落（接通=ended / 未接通=missed），行为兼容
+      list = list.filter((l) => {
+        const o = callOutcomeOf(l.endReason ?? '', l.duration > 0);
+        return o === 'missed' || o === 'rejected';
+      });
+    }
     const q = query.trim().toLowerCase();
     if (q) {
       list = list.filter((l) => {
@@ -2102,7 +2145,11 @@ function RecentsTab({
             {shown.map((log, idx) => {
               const live = resolve(log);
               const name = live?.name || log.displayName || log.number;
-              const unanswered = log.duration === 0;
+              // #27 三态展示：endReason → 结局（rejected/cancelled/missed/ended）；旧记录无 endReason 自然回落
+              const outcome = callOutcomeOf(log.endReason ?? '', log.duration > 0);
+              // 颜色语义（iOS 惯例 + 对齐微信/QQ 通话卡片）：未接听保持红色；
+              // 已取消/已拒绝用中性色非红（呼出未接通不算未接来电，拒接也不是「未接」）
+              const missRed = outcome === 'missed';
               const region = live?.region?.trim();
               return (
                 <li key={log.id} className={idx > 0 ? 'border-t border-border/50' : ''}>
@@ -2124,34 +2171,46 @@ function RecentsTab({
                       <span className="min-w-0 flex-1">
                         <span
                           className={`block truncate text-[16px] font-semibold leading-snug ${
-                            unanswered ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''
+                            missRed ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''
                           }`}
                         >
                           {name}
                         </span>
                         <span className="mt-0.5 flex items-center gap-1 text-[12.5px] text-muted-foreground">
-                          {/* 方向图标/文案：out=呼出↗、in=呼入↙、missed/未接通=红色↙；未接来电红色是 iOS 语义 */}
+                          {/* 方向图标：out=呼出↗、in=呼入↙；未接听红色↗/↙（iOS 语义），
+                              已拒绝/已取消用中性灰（非红非绿），接通绿 */}
                           {log.direction === 'out' ? (
                             <ArrowUpRight
                               className={`h-[13px] w-[13px] shrink-0 ${
-                                unanswered ? 'text-[#FF3B30] dark:text-[#FF453A]' : 'text-[#34C759]'
+                                missRed
+                                  ? 'text-[#FF3B30] dark:text-[#FF453A]'
+                                  : outcome === 'ended'
+                                    ? 'text-[#34C759]'
+                                    : 'text-muted-foreground'
                               }`}
                               aria-hidden="true"
                             />
                           ) : (
                             <ArrowDownLeft
                               className={`h-[13px] w-[13px] shrink-0 ${
-                                log.direction === 'missed' || (unanswered && log.direction !== 'in')
+                                missRed
                                   ? 'text-[#FF3B30] dark:text-[#FF453A]'
-                                  : 'text-[#34C759]'
+                                  : outcome === 'ended'
+                                    ? 'text-[#34C759]'
+                                    : 'text-muted-foreground'
                               }`}
                               aria-hidden="true"
                             />
                           )}
                           <span className="truncate tabular-nums">
-                            {log.direction === 'missed' || (unanswered && log.direction !== 'in')
-                              ? '未接通'
-                              : `${log.direction === 'in' ? '呼入' : '呼出'} · ${callDurationText(log.duration)}`}
+                            {/* 文案三态：接通=呼入/呼出·时长；未接听/已拒绝/已取消各显示专属文案（#27） */}
+                            {outcome === 'ended'
+                              ? `${log.direction === 'in' ? '呼入' : '呼出'} · ${callDurationText(log.duration)}`
+                              : outcome === 'rejected'
+                                ? '已拒绝'
+                                : outcome === 'cancelled'
+                                  ? '已取消'
+                                  : '未接听'}
                             {region ? ` · ${region}` : ''}
                           </span>
                         </span>
@@ -2975,7 +3034,20 @@ function ContactDetail({
                 </header>
                 <ul className="border-t border-border/50">
                   {contactLogs.map((log, idx) => {
-                    const unanswered = log.duration === 0;
+                    // #27 三态展示：endReason → 结局；旧记录无 endReason 自然回落（接通=ended / 未接通=missed）
+                    const outcome = callOutcomeOf(log.endReason ?? '', log.duration > 0);
+                    // 未接听保持红色（iOS 惯例）；已拒绝/已取消非红（对齐微信/QQ 通话卡片样式）
+                    const missRed = outcome === 'missed';
+                    const stateText =
+                      outcome === 'ended'
+                        ? log.direction === 'in'
+                          ? '呼入'
+                          : '呼出'
+                        : outcome === 'rejected'
+                          ? '已拒绝'
+                          : outcome === 'cancelled'
+                            ? '已取消'
+                            : '未接来电';
                     return (
                       <li key={log.id} className={idx > 0 ? 'border-t border-border/50' : ''}>
                         <button
@@ -2984,16 +3056,12 @@ function ContactDetail({
                           className="flex w-full items-center justify-between px-4 py-2.5 text-left transition-colors active:bg-muted/60"
                           aria-label={`重新呼叫${contact.name}`}
                         >
-                          <span className={`text-[14.5px] ${unanswered ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''}`}>
-                            {log.direction === 'missed' || (unanswered && log.direction !== 'in')
-                              ? '未接来电'
-                              : log.direction === 'in'
-                                ? '呼入'
-                                : '呼出'}
+                          <span className={`text-[14.5px] ${missRed ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''}`}>
+                            {stateText}
                           </span>
                           <span className="text-[13px] text-muted-foreground tabular-nums">
                             {formatLogTime(log.createdAt)}
-                            {!unanswered && log.duration > 0 ? ` · ${callDurationText(log.duration)}` : ''}
+                            {outcome === 'ended' ? ` · ${callDurationText(log.duration)}` : ''}
                           </span>
                         </button>
                       </li>
@@ -3710,10 +3778,12 @@ export default function PhoneApp() {
         if (!played) {
           try {
             const contact = contacts?.find((c) => c.id === vm.contactId) ?? null;
+            // #20 通话链路超时看门狗：留言合成 30s 到点必失败（catch 后 toast 友好提示）
             const res = await fetch('/api/phone/tts', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ text: vm.text, gender: contactGender(contact) }),
+              signal: AbortSignal.timeout(30000),
             });
             if (!res.ok) throw new Error('tts failed');
             const blob = await res.blob();

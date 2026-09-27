@@ -141,11 +141,13 @@ import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import { hasVoiceCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
-import { startGlobalCall } from '@/lib/ios/global-call';
+import { startGlobalCall, useGlobalCall } from '@/lib/ios/global-call';
+import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
+import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -672,8 +674,39 @@ function nextCid(prefix: 'rp' | 'tr' | 'fam'): string {
 
 /** 当前正在查看的 QQ 聊天（ChatPage 挂载时写入/卸载时清除）：AI 回复落盘时不在该会话 → 未读角标 +1 */
 let qqActiveChatId: string | null = null;
-/** 排队回复表：对方正在回复时用户又发了消息的联系人 id —— 本轮流结束后由聊天页自动补跑一轮回复 */
-const qqQueuedTurns = new Set<string>();
+/** 排队回复表：对方正在回复时用户又发了消息的联系人 id —— 本轮流结束后由聊天页自动补跑一轮回复。
+ *  #28 localStorage 持久化（key: qq-queued-turns）：模块加载时恢复，增删即同步写回——刷新后排队中的
+ *  消息不再丢失（补跑依赖聊天页被打开：刷新后重新进入该会话，kick effect 挂载即自动补跑） */
+const QQ_QUEUED_TURNS_KEY = 'qq-queued-turns';
+
+function readQqQueuedTurns(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(QQ_QUEUED_TURNS_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const qqQueuedTurns = readQqQueuedTurns();
+
+function qqQueueAdd(id: string): void {
+  qqQueuedTurns.add(id);
+  try {
+    window.localStorage.setItem(QQ_QUEUED_TURNS_KEY, JSON.stringify([...qqQueuedTurns]));
+  } catch {
+    // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
+  }
+}
+
+function qqQueueDelete(id: string): void {
+  qqQueuedTurns.delete(id);
+  try {
+    window.localStorage.setItem(QQ_QUEUED_TURNS_KEY, JSON.stringify([...qqQueuedTurns]));
+  } catch {
+    // localStorage 异常忽略
+  }
+}
 
 function loadMsgs(contactId: string): QQMsg[] {
   try {
@@ -2319,8 +2352,8 @@ function ChatPage({
   );
 
   // 相册选图发送（图片消息，压缩 dataURL，最多 9 张）。
-  //  已配置识图模型时：发图触发 AI 回合（识图模型先看图，聊天模型再回复）；
-  //  未配置时保持旧行为（图片只入聊天记录，不触发回复）
+  //  发图照常触发 AI 回合：已配置识图模型时识图模型先看图、聊天模型再回复；未配置时
+  //  chat-stream-store 注入「我发了图片但你看不到内容」临时上下文，AI 同样自然回应（#26）
   const sendImageFiles = useCallback(
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
@@ -2335,14 +2368,14 @@ function ChatPage({
           onToast('图片发送失败');
         }
       }
-      if (
-        created.length > 0 &&
-        peer.id !== me.id &&
-        !isChatStreaming(sessionKey) &&
-        useSettings.getState().visionConfig.baseUrl.trim()
-      ) {
-        runAiTurnRef.current?.(null, created);
+      if (created.length === 0 || peer.id === me.id) return;
+      // 对方正在回复（流式/投递中）：与文字消息同口径排队补跑——本轮「流收尾且投递完毕」后自动回复图片消息
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        qqQueueAdd(peer.id);
+        onToast('消息已发出，对方回完这轮就聊');
+        return;
       }
+      runAiTurnRef.current?.(null, created);
     },
     [onToast, peer.id, me.id, sessionKey]
   );
@@ -2566,7 +2599,7 @@ function ChatPage({
       if (!qqQueuedTurns.has(peer.id)) return;
       if (isChatStreaming(sessionKey)) return; // 本轮流还没收尾：等结束广播再跑
       if (isAiDelivering(sessionKey)) return; // 上一轮连发还在投递：等投递完成事件再跑
-      qqQueuedTurns.delete(peer.id);
+      qqQueueDelete(peer.id);
       window.setTimeout(() => {
         const saved = loadMsgs(peer.id);
         setMsgs((prev) => {
@@ -2711,7 +2744,11 @@ function ChatPage({
     (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => {
     // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）；批次触发（null）同样计一轮互动
     addBondPoints(peer.id, BOND_MSG_POINTS);
-    const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    // base 按 id 去重（保留后出现者）：extra/userMsg 里的消息通常已先一步进了 msgs state，
+    // 不去重会把同一条消息算两遍——多图识图时重复 id 污染 turnImageMsgIds 映射，描述回写错位（#25）
+    const baseRaw = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    const baseSeen = new Set<string>();
+    const base = baseRaw.reverse().filter((m) => (baseSeen.has(m.id) ? false : (baseSeen.add(m.id), true))).reverse();
     // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
     // 图片消息以 [图片] 占位、位置以完整位置文本进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
     const history = base
@@ -3066,13 +3103,18 @@ function ChatPage({
       ...(turnImages.length > 0
         ? {
             vision: { images: turnImages, text: userMsg?.content ?? '' },
-            // 识图描述回写最后一张图片消息（img.desc 持久化）：之后的聊天历史 AI 都能读到图片内容
+            // 识图描述按「图N：」行拆分后逐张回写（img.desc 持久化）：turnImageMsgIds 与 turnImages
+            // 一一对应，每张图各得自己的描述（#25）；某张拆不出（空串）就跳过、保持 [图片] 占位，
+            // 防编造规则兜住，之后的聊天历史 AI 都能读到图片内容
             onVision: (desc: string) => {
-              const targetId = turnImageMsgIds[turnImageMsgIds.length - 1];
-              if (!targetId) return;
-              setMsgs((prev) =>
-                prev.map((x) => (x.id === targetId && x.kind === 'image' ? { ...x, img: { ...x.img, desc } } : x)),
-              );
+              const parts = splitVisionDesc(desc, turnImageMsgIds.length);
+              turnImageMsgIds.forEach((targetId, i) => {
+                const part = parts[i]?.trim();
+                if (!targetId || !part) return;
+                setMsgs((prev) =>
+                  prev.map((x) => (x.id === targetId && x.kind === 'image' ? { ...x, img: { ...x.img, desc: part } } : x)),
+                );
+              });
             },
           }
         : {}),
@@ -3134,7 +3176,13 @@ function ChatPage({
             const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
             if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
               window.localStorage.setItem(`qq-vc-last:${peer.id}`, String(Date.now()));
-              window.setTimeout(() => openVoiceCall('in'), 1200);
+              window.setTimeout(() => {
+                // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
+                // 双触发会产生叠层僵尸来电）——来电弹窗还在响或已有全局通话进行中就整跳取消（#29，对齐微信）
+                if (useIncomingCall.getState().call) return;
+                if (useGlobalCall.getState().session) return;
+                openVoiceCall('in');
+              }, 1200);
             }
           } catch {
             // localStorage 异常忽略
@@ -3255,7 +3303,7 @@ function ChatPage({
       setInput('');
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
-      qqQueuedTurns.add(peer.id);
+      qqQueueAdd(peer.id);
       return;
     }
     setInput('');
@@ -3304,7 +3352,7 @@ function ChatPage({
       /** 触发 AI 回复（对方正在回复——流式或连发投递中——则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
       const kickTurn = () => {
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-          qqQueuedTurns.add(peer.id); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
+          qqQueueAdd(peer.id); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
           return;
         }
         window.setTimeout(() => runAiTurnRef.current?.(null), 80);
@@ -3339,7 +3387,7 @@ function ChatPage({
       }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
         setMsgs((prev) => [...prev, userMsg]);
-        qqQueuedTurns.add(peer.id);
+        qqQueueAdd(peer.id);
         return;
       }
       if (sentenceSend) {

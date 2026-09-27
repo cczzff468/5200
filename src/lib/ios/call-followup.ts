@@ -129,6 +129,9 @@ export async function requestCallFollowup(p: CallFollowupPayload): Promise<strin
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...p, replyCount: max, config: useSettings.getState().apiConfig }),
+      // #20 通话链路超时看门狗：续聊请求 45s 到点必失败（AbortSignal.timeout → DOMException TimeoutError），
+      // 上游卡死不再拖住挂断收尾；本函数 catch 后静默返回 []，文案无需进 UI
+      signal: AbortSignal.timeout(45000),
     });
     const data = (await res.json()) as {
       messages?: unknown;
