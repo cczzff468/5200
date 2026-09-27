@@ -9020,3 +9020,61 @@ Work Log:
 
 Stage Summary:
 - 全部 7 项（38-a 需求 + D-3~D-8）验证通过，分主题提交推送
+---
+Task ID: 39-a
+Agent: 信息回复条数独立
+Task: 撤销 sms>wx 跟随链；信息聊天设置页新增回复条数入口（独立配置，默认 5 条与微信同口径）
+
+Work Log:
+- chat.tsx import（:45）：reply-count 导入删 hasReplyCount、加 saveReplyCount；./chat-settings 导入（:73）加 ChatReplyCountPage（字母序置首）
+- chat.tsx 来电留言（:398-400）：sms>wx>1 回退 IIFE 整体删除，改一行 replyCount: getReplyCount(`sms:c:${contact.id}`)，注释改写为两行「留言条数 = 该联系人在信息聊天设置页选定的回复条数（未设置默认 5 条，与微信端默认口径一致）」
+- chat.tsx 主发送路径（:1115-1118）：删 wxReplyCountKey/followReplyCount 回退链及「跟随微信/暂无设置入口」过时注释，改 const replyCount = systemPrompt ? getReplyCount(sessionKey) : 1（sessionKey=sms:c:<contactId> 只读信息自己的键；未设置默认 5 条；AI 助手会话无 systemPrompt 恒 1 条）；buildReplyCountPrompt 注入与流式分段管线等 replyCount 消费点零改动
+- chat.tsx state（:790-797）：完全照 transCfg/sentenceSend 既有会话级模式新增 replyCountOpen 与 replyCountValue（useState 惰性初始化 getReplyCount(sessionKey)）+ useEffect(..., [sessionKey]) 会话切换重读同步（ChatView 本身按 key 重挂载、settingsOpen 等随之复位，effect 与既有五个会话级 state 同构，保证换会话后设置页显示新会话的值）
+- chat.tsx 渲染：SmsChatSettingsPage（:2358-2359）传 replyCount={replyCountValue} 与 onOpenReplyCount；其闭合 )} 之后、世界书页之前新增 ChatReplyCountPage（variant="sms"，onSelect 内 saveReplyCount(sessionKey,n)+setReplyCountValue(n) 立即持久化生效，onBack 返回设置页；同为 z-50 绝对定位，后者自然盖在设置页上）
+- chat-settings.tsx：SmsChatSettingsPage props 增 replyCount:number 与 onOpenReplyCount:()=>void（含 JSDoc，同步补进类型定义、函数头注释与文件头注释）；「翻译入口」卡片之后、「分句发送」卡片之前插入同构回复条数入口卡片（testid sms-settings-reply-count / sms-reply-count-value，显示「{replyCount} 条」）
+- chat-settings.tsx ChatReplyCountPage（:572）：accent 改三元 wx ? '#07C160' : variant === 'sms' ? '#34C759' : '#0099FF'——信息端勾选色用 iOS 绿与 SmsChatSettingsPage 内 ChatToggle accent 一致；wx/qq 分支值不变（wechat/qq/wx-group/qq-group 既有四处用法零影响）
+- reply-count.ts（:78-81）：hasReplyCount JSDoc 删「信息未设置时跟随微信（chat.tsx 的 sms > wx 回退链）」过时表述，改「预留：跨键探测『用户是否真的选过』的场景用」；文件头注释无 sms/wx 跟随表述、函数本体与导出零改动（hasReplyCount 现全仓无调用方，按要求保留导出）
+- 边界备注：AI 助手会话（sms:assistant）也能打开聊天设置页并看到回复条数入口，但主路径恒 1 条故选择不生效（任务清单为无条件必传 props 的既定设计，未额外隐藏）；信息端 AI 语音频率的 wx:<id> 同键跟随是另一独立特性（voiceFreqKey），本任务未触碰
+- 验证：bunx tsc --noEmit 全仓 exit 0；bunx eslint chat.tsx/chat-settings.tsx/reply-count.ts 三文件 exit 0；rg 自查 chat.tsx 中 hasReplyCount / wxReplyCountKey / followReplyCount 均 0 处引用；未 git、未动 dev server、未碰 photos/wechat/qq/clock/notes/contacts-store 等其他文件
+
+Stage Summary:
+- 交付文件：src/components/apps/chat.tsx、src/components/apps/chat-settings.tsx、src/lib/reply-count.ts
+- 修复语义：信息 App 回复条数与微信彻底解耦——只读写本会话 sms:c:<id> 键（未设置默认 5 条，与微信端默认口径一致），信息聊天设置页新增「回复条数」入口进入同款选择页（sms 勾选色 iOS 绿），主回复与来电留言条数同源生效；AI 助手会话恒 1 条；微信/QQ 端行为零变化
+---
+Task ID: 39-b
+Agent: 相册三tab+相册管理
+Task: 相册 App 底部毛玻璃胶囊三 tab（照片/相册/收藏）+ 自定义相册（新建/重命名/删除/加照片/移出）
+
+Work Log:
+- 数据模型：文件顶部新增 PhotoAlbum{id,name,createdAt,photoIds[]} + TabKey；kv 读写键统一为模块常量 ALBUMS_KV_KEY='ios-photo-albums'（严禁动 db.ts/DB 版本，走现成 kv store 整体读写）；parseAlbums() 运行时校验（整体非数组→[]；逐项须 string id/string name/Array photoIds，不合格项丢弃；photoIds 再滤非 string；createdAt 缺省 0）
+- 加载：原照片加载 effect 改 Promise.all 并行读 photos getAll + kv get('ios-photo-albums')，reloadKey 变化同刷相册；卸载 ObjectURL 回收等原逻辑零改动
+- 底部胶囊三 tab：activeTab state（photos/albums/favorites）；底部居中悬浮 nav（bottom-[34px] z-30，rounded-full border-black/10 bg-white/60 p-1 shadow-lg backdrop-blur-xl + dark: 成对）；三按钮 Image/Images/Heart 图标+文字，px-4 py-1.5 text-[12px]，选中 bg-black/10 dark:bg-white/15 + aria-current='page'，未选中 text-muted-foreground，均有 aria-label；胶囊在查看器/多选/相册详情/照片选择器任一打开时隐藏（capsuleVisible）；滚动容器恒 pb-[120px]；switchTab 收查看器/多选/编辑模式/选择器/弹窗并复位 openAlbumId
+- 照片/收藏 tab 合并复用：删除顶栏 ❤ 切换按钮与 favOnly state；visiblePhotos 派生改为 openAlbum?相册有效列表 : (activeTab==='favorites'?favorite 过滤:全部)——查看器/横滑 stepViewer/左右箭头/单删/批量分享/❤/网格全部以该上下文列表为准；顺手修正既有 bug：下一张箭头 disabled 原用 photos.length，改 visiblePhotos.length（收藏/相册上下文边界才正确）；顶栏标题随 tab（照片/相册/个人收藏）；收藏空态去掉 photos.length>0 前置条件；照片 tab 空态保持
+- 相册 tab：2 列网格（grid-cols-2 gap-3 px-5），封面=photoIds 里第一张仍存在照片（validAlbumPhotos+photoMap 防悬空），无照片灰块+ImageIcon，下方 truncate 相册名+「N张」（N=有效照片数）；空态「没有相册/点右上角「+」新建相册」；顶栏 Plus=新建相册、编辑/完成=管理模式（无相册时 disabled）
+- 新建/重命名弹窗：AlbumDialogState（create|rename）单一居中弹窗 z-[60] bg-black/40 backdrop-blur-sm + rounded-[14px] bg-background 卡片；标题 新建相册/重新命名、按钮 创建/存储、sr-only label+autoFocus+回车提交+trim 空 disabled；创建 photoIds=[] 前插
+- 编辑模式：每张相册卡左上红色 − 圆钮（独立按钮防嵌套 button，aria-label 删除相册 X）→ window.confirm(`删除相册「X」？照片不会删除。`) 后仅删相册记录；编辑中点卡片=重命名弹窗（预填现名、确认「存储」）；删空自动退编辑
+- 相册详情（openAlbumId 覆盖三 tab 二级页，tab 栏收起）：返回箭头（BackToHome 同款样式）回相册 tab、标题=相册名、Plus=添加照片、选择=多选；3 列网格只渲染 photoIds 中仍存在照片；空态「没有照片/点右上角「+」添加照片」；进出详情滚动复位
+- 添加照片选择器：z-50 全屏 overlay（取消/已选 N 项/完成 + 3 列全量照片+多选圈），已在相册照片默认勾选可取消；完成按最终勾选态覆盖式写回 photoIds（旧成员保序+新增按图库顺序追加，天然去重；悬空 id 顺带清除）；空图库有「没有照片可添加」提示
+- 相册详情多选：底部工具栏换成「移出相册」+「已选 N 项」+「取消」，不提供删除照片本体；移出=所选 id 从该相册 photoIds 移除写 kv 后退多选
+- 数据卫生：handleDelete/handleBatchDelete 成功后 pruneDeletedFromAlbums（重读 kv 最新值→清除被删 id→有变化才写回，防闭包旧态覆盖；失败不影响删除主流程，悬空由「只渲染仍存在照片」兜底）
+- 复用组件：抽 PhotoTile（图库/相册详情/选择器三方共用，❤角标+多选圈样式统一）；toggleFavorite 收藏视图判断改 !openAlbum&&activeTab==='favorites'
+- E2E（agent-browser，dev server 为既有实例未重启）：建相册「旅行」→kv 落库；详情空态；选择器勾 2 张→kv photoIds 去重落库；列表封面/计数正确；重命名→卡片+标题同步；查看器❤→收藏 tab 1 张+标题个人收藏；收藏内取消❤→查看器关闭+空态+选择 disabled；图库多选工具栏正常+胶囊隐藏；详情多选移出→kv 同步；详情内删照片本体→photos 表删+相册 photoIds 剪枝；编辑删相册→kv=[]+空态+编辑 disabled；坏 kv 值({bad:...})→按空相册容忍不崩；测试照片与 kv 键已全部清理
+- 验证：bunx tsc --noEmit 零错误；bunx eslint src/components/apps/photos.tsx 零告警；仅改 photos.tsx 一个文件，db.ts 只读，无 git 操作
+
+Stage Summary:
+- 交付文件：src/components/apps/photos.tsx（687→1245 行，唯一改动文件）
+- 最终能力：相册 App 底部毛玻璃胶囊三 tab（照片=年月日图库 / 相册=自定义相册管理 / 收藏=❤聚合），相册支持新建/重命名/删除/添加照片选择器/移出，相册详情二级页（tab 栏收起）含多选移出、查看器与单删（删照片本体后全相册 photoIds 自动剪枝），全部数据持久化于 IndexedDB kv 'ios-photo-albums'，既有上传/分组/批量/壁纸/收藏功能零回归
+---
+Task ID: 39-h
+Agent: 主协调者 (Z.ai Code)
+Task: Task 39 汇总验证（E2E）+ 胶囊文字换行小修 + 分主题提交推送
+
+Work Log:
+- 全仓 bunx tsc --noEmit exit 0；eslint chat.tsx/chat-settings.tsx/photos.tsx/reply-count.ts 四文件零告警；dev.log 无错误行
+- E2E（agent-browser）：①39-b 相册——毛玻璃胶囊三 tab 渲染与选中态正确；canvas+DataTransfer 注入 2 张测试照片；查看器❤收藏→收藏 tab 仅显该张+红心角标；新建相册「旅行」→kv 键 ios-photo-albums 落库（读回「旅行:2」）；相册详情选择器勾 2 张→网格显示+列表封面(首张)/「2张」计数正确；多选移出 1 张→只剩 1 tile（0 选中时移出按钮正确禁用）；②39-a 信息——聊天设置页出现「回复条数 5 条」入口（翻译与分句发送之间，data-testid sms-settings-reply-count）；进入选择页（sms 勾选色 iOS 绿）选 3 条→localStorage chat-reply-counts 写入 {"sms:c:<contactId>":3}、返回行值变「3 条」；真实发送消息→AI 连发 3 条（1 语音+2 文字气泡，iMessage「已送达」），端到端生效
+- 小修：photos.tsx 胶囊 tab 文字节点包 <span class=whitespace-nowrap>，修复「照片/相册/收藏」两字被挤成竖排换行
+- 环境备注：agent-browser daemon 重启=全新浏览器 profile，IndexedDB 被服务端空迁移重置（本地优先设计在真实浏览器无此问题，测试数据跨 profile 不持久为预期）；测试联系人/会话/回复条数键已在当前 profile 内清理（contacts store 删除+3 个关联 kv 键+chat-reply-counts 条目）；eval 与截图偶发 DOM 不同步，改真实坐标点击+snapshot ref 规避
+- 分主题 commit：39-a（chat.tsx/chat-settings.tsx/reply-count.ts）、39-b（photos.tsx）、worklog 文档提交；推送 GitHub origin main
+
+Stage Summary:
+- Task 39 两项需求全部验证通过：信息 App 回复条数独立配置（默认 5 条、sms 键隔离、与微信解耦）+ 相册 App 三 tab 毛玻璃胶囊与自定义相册全功能；已推送 GitHub
