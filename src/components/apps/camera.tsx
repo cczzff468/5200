@@ -54,6 +54,42 @@ function makePhotoName(): string {
   )}${pad(d.getSeconds())}.jpg`;
 }
 
+// ---------------- 拍照滤镜能力检测（Safari/iOS 的 Canvas2D filter 长期不支持） ----------------
+
+let filterSupportCache: boolean | null = null;
+
+/**
+ * 实测当前环境 Canvas 2D 是否真正支持 filter 合成：
+ * Safari/iOS 的 ctx.filter 属性存在但为空实现（画了等于没画），仅 `'filter' in ctx` 判不出来，
+ * 因此画一次 1×1 红色像素 + grayscale 滤镜自绘后对比像素值（支持时红≈(54,54,54)，
+ * 未生效仍是纯红 (255,0,0)）。结果按页缓存，整个生命周期只测一次（1×1 画布开销可忽略）。
+ */
+function detectCanvasFilterSupport(): boolean {
+  if (filterSupportCache !== null) return filterSupportCache;
+  filterSupportCache = false;
+  try {
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = 1;
+    srcCanvas.height = 1;
+    const src = srcCanvas.getContext('2d');
+    if (!src || !('filter' in src)) return filterSupportCache;
+    src.fillStyle = '#ff0000';
+    src.fillRect(0, 0, 1, 1);
+    const dstCanvas = document.createElement('canvas');
+    dstCanvas.width = 1;
+    dstCanvas.height = 1;
+    const dst = dstCanvas.getContext('2d');
+    if (!dst) return filterSupportCache;
+    dst.filter = 'grayscale(1)';
+    dst.drawImage(srcCanvas, 0, 0);
+    const r = dst.getImageData(0, 0, 1, 1).data[0];
+    filterSupportCache = r < 200; // 灰化生效 R≈54；空实现 R=255
+  } catch {
+    filterSupportCache = false;
+  }
+  return filterSupportCache;
+}
+
 /**
  * 相机 App：getUserMedia 取景 + 滤镜 + 拍照存入图库。
  * - onExit：覆盖返回键行为（锁屏直达相机时传「回锁屏」回调）；不传时默认 closeApp 回主屏幕；
@@ -78,6 +114,9 @@ export default function CameraApp({
   const [thumbKey, setThumbKey] = useState(0);
   const [flashVisible, setFlashVisible] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
+  const [toastMsg, setToastMsg] = useState('已存储到图库');
+  // 拍照滤镜是否真正可用（一次性实测；Safari 等不支持时取景器预览仍有 CSS 滤镜，但存照为原图，需明确提示）
+  const [filterSupported] = useState(detectCanvasFilterSupport);
   // —— 新增功能状态 ——
   const [gridOn, setGridOn] = useState(false);
   const [timerSec, setTimerSec] = useState<TimerSec>(0);
@@ -228,10 +267,11 @@ export default function CameraApp({
     flashTimerRef.current = window.setTimeout(() => setFlashVisible(false), ms);
   }, []);
 
-  const showToastHint = useCallback(() => {
+  const showToastHint = useCallback((msg: string = '已存储到图库') => {
+    setToastMsg(msg);
     setToastVisible(true);
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToastVisible(false), 1500);
+    toastTimerRef.current = window.setTimeout(() => setToastVisible(false), 2200);
   }, []);
 
   /** 拍照：canvas 同步滤镜+画幅裁剪 → JPEG → 存入图库 → 震动/闪灯 → 刷新缩略图 */
@@ -261,7 +301,8 @@ export default function CameraApp({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const css = FILTERS[filterIndex].css;
-    if (css !== 'none') ctx.filter = css;
+    // Safari/iOS 的 Canvas2D filter 属性存在但空实现：不支持时跳过设置（存原图属预期，快门后有 toast 提示）
+    if (css !== 'none' && filterSupported) ctx.filter = css;
     // 前摄：预览是镜像的，保存的照片同步镜像，与取景器所见一致（修复“翻转拍照画面反了”）
     if (facing === 'user') {
       ctx.translate(sw, 0);
@@ -276,8 +317,12 @@ export default function CameraApp({
     await localDB.put('photos', { id: genId(), blob, name: makePhotoName(), createdAt: Date.now() });
 
     setThumbKey((k) => k + 1);
-    showToastHint();
-  }, [aspect, facing, filterIndex, flashOn, showToastHint, showFlash, status]);
+    showToastHint(
+      filterIndex > 0 && !filterSupported
+        ? '已存储到图库（当前浏览器不支持滤镜，照片为原图）'
+        : '已存储到图库'
+    );
+  }, [aspect, facing, filterIndex, filterSupported, flashOn, showToastHint, showFlash, status]);
 
   // 倒计时拍摄：每秒递减，到 0 自动快门（点击取景器任意处可取消）
   useEffect(() => {
@@ -464,6 +509,12 @@ export default function CameraApp({
               </button>
             ))}
           </div>
+          {/* 滤镜合成不支持的环境（如 Safari/iOS）：取景器预览仍有滤镜，但保存的照片为原图，需提前说明 */}
+          {!filterSupported && (
+            <p className="px-5 pt-2 text-center text-[11px] leading-4 text-white/55">
+              当前浏览器不支持拍摄滤镜，保存的照片将为原图
+            </p>
+          )}
         </div>
       )}
 
@@ -600,7 +651,7 @@ export default function CameraApp({
           className="pointer-events-none absolute left-1/2 top-[116px] z-30 -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-[13px] text-white backdrop-blur-sm"
           role="status"
         >
-          已存储到图库
+          {toastMsg}
         </div>
       )}
 

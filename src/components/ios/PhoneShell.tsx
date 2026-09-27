@@ -23,6 +23,9 @@ const NotifyPermissionCard = dynamic(() => import('./NotifyPermissionCard'), { s
 // 闹钟监听懒加载：避免为一个小组件把整个时钟 App 拖进首屏包
 const AlarmWatcher = dynamic(() => import('@/components/apps/clock').then((m) => m.AlarmWatcher), { ssr: false });
 
+// 提醒事项/日历到期全局监听：轮询 IndexedDB，到期弹横幅+系统通知+提示音（App 不打开也生效）
+const ReminderWatcher = dynamic(() => import('./ReminderWatcher'), { ssr: false });
+
 // 朋友圈/QQ动态全局调度（AI 互动结算 + 自动发布）：同样懒加载，挂载即后台运行
 const MomentsScheduler = dynamic(() => import('./MomentsScheduler'), { ssr: false });
 
@@ -262,6 +265,9 @@ export default function PhoneShell() {
 
         {/* 全局闹钟监听（锁屏时也会响铃，铃声弹层 z-90 高于锁屏） */}
         <AlarmWatcher />
+
+        {/* 全局提醒事项/日历到期监听：到点弹横幅 + 系统通知 + 短提示音（App 不打开也生效） */}
+        <ReminderWatcher />
 
         {/* 朋友圈/QQ动态全局调度：AI 好友的点赞/评论/回复延迟队列结算 + 三种触发自动发动态（App 不打开也生效） */}
         <MomentsScheduler />
