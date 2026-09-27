@@ -580,6 +580,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            // 对端号码标识（/api/phone/turn 必填）：微信/QQ 语音联系人往往只有微信号/QQ 号没有手机号，
+            // 依次用 手机号→微信号→QQ号→联系人 id 兜底，避免接口 400「缺少号码」
+            number: c ? c.phone || c.wechatId || c.qqId || c.id : 'unknown',
             contact: c
               ? {
                   name: c.name,

@@ -4,8 +4,10 @@
  * 全局来电中心（AI 主动打来的电话 / 微信语音通话邀请）：
  *
  * - 电话来电（source='phone'，信息 App 的 AI 回复带 [语音通话] 标记触发）：
- *   顶部胶囊弹窗（响铃态：头像+名字+拒接/接听）+ iOS 全屏来电界面（IncomingCallLayer 渲染），
- *   响铃 25 秒无人处理 → 超时未接；接听 → 回调 onAnswer（打开电话 App 进通话界面）；
+ *   iOS 全屏来电界面自动显示（IncomingCallLayer 渲染，来电界面不叠加弹窗）；
+ *   点界面左上「退出」收起来电界面 → 只剩顶部横幅弹窗（头像左/拒接接听右，锚定灵动岛原位），
+ *   点弹窗非按钮区可回到来电界面；响铃 25 秒无人处理 → 超时未接；
+ *   接听 → 回调 onAnswer（打开电话 App 进通话界面）；
  *   拒绝/超时 → 回调 onMissed（落未接通话记录 + AI 语音留言）；
  * - 微信语音来电（source='wx'，AI 回复带 [语音通话] 标记触发）：微信大窗弹窗显示 5 秒 →
  *   缩成胶囊小窗（继续响铃）；全屏来电界面由现有全局通话层（WxCallScreen incoming 态）承担，
@@ -39,10 +41,16 @@ export interface IncomingCallSnapshot {
 
 interface IncomingCallState {
   call: IncomingCallSnapshot | null;
+  /** 电话全屏来电界面是否已退出：退出后只显示顶部弹窗（来电继续响铃），点弹窗非按钮区回到来电界面 */
+  screenHidden: boolean;
   /** 触发一次来电（已有来电时忽略——同一时刻只有一通） */
   trigger: (call: IncomingCallSnapshot) => void;
   /** 微信大窗 → 胶囊（5 秒定时器到点由 Layer 调用） */
   setStage: (stage: 'big' | 'pill') => void;
+  /** 退出全屏来电界面（仅电话来电有此界面）：来电保持响铃，只剩顶部弹窗 */
+  hideScreen: () => void;
+  /** 回到全屏来电界面（点弹窗除按钮外的区域） */
+  showScreen: () => void;
   /** 用户接听（弹窗或全屏来电界面）：走快照回调后清层 */
   answer: () => void;
   /** 用户拒绝 / 响铃超时：走快照回调后清层 */
@@ -53,19 +61,25 @@ interface IncomingCallState {
 
 export const useIncomingCall = create<IncomingCallState>()((set, get) => ({
   call: null,
+  screenHidden: false,
   trigger: (call) => {
     if (get().call) return; // 通话中/响铃中忽略新来电
-    set({ call });
+    set({ call, screenHidden: false });
   },
   setStage: (stage) => {
     const call = get().call;
     if (!call || call.bannerStage === stage) return;
     set({ call: { ...call, bannerStage: stage } });
   },
+  hideScreen: () => {
+    if (get().call?.source !== 'phone') return;
+    set({ screenHidden: true });
+  },
+  showScreen: () => set({ screenHidden: false }),
   answer: () => {
     const call = get().call;
     if (!call) return;
-    set({ call: null });
+    set({ call: null, screenHidden: false });
     try {
       call.onAnswer?.();
     } catch {
@@ -75,14 +89,14 @@ export const useIncomingCall = create<IncomingCallState>()((set, get) => ({
   dismiss: (reason) => {
     const call = get().call;
     if (!call) return;
-    set({ call: null });
+    set({ call: null, screenHidden: false });
     try {
       call.onMissed?.(reason);
     } catch {
       // 回调异常不阻塞清层
     }
   },
-  clear: () => set({ call: null }),
+  clear: () => set({ call: null, screenHidden: false }),
 }));
 
 /** 触发一次全局来电（微信/电话 AI 来电共用入口；QQ 不用） */

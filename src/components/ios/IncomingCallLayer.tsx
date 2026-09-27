@@ -3,18 +3,20 @@
 /**
  * 全局来电层（PhoneShell 挂载，覆盖所有 App / 主屏幕 / 锁屏）：
  *
- * - 顶部来电弹窗（z-[94]）：
- *   · 电话来电 = iOS 胶囊（黑色胶囊：头像+名字+红色拒接+绿色接听）；
+ * - 顶部来电弹窗（z-[94]，锚定灵动岛原位——弹出时盖住灵动岛，收回时无缝交还）：
+ *   · 电话来电 = iOS 横幅弹窗（黑色圆角胶囊：头像+名字在左、拒接/接听在右，与灵动岛同宽体系 344）；
  *   · 微信语音来电 = 微信大窗（深色圆角卡：头像+名字+「邀请你语音通话...」+忽略+拒接/接听），
- *     显示 5 秒后自动缩成胶囊小窗（比电话胶囊左右更宽）继续响铃；QQ 来电无弹窗（不经过本模块）；
- *   · 弹窗从灵动岛弹出：初始为灵动岛几何（118×33 @ top 11），弹性放大+下移成弹窗；
- *     消失时缩回灵动岛几何，与真灵动岛同位同色无缝交接（形变范式同 IslandNotification）；
+ *     显示 5 秒后自动缩成胶囊小窗（同 344 宽）继续响铃；QQ 来电无弹窗（不经过本模块）；
+ *   · 弹窗从灵动岛原位弹出：初始为灵动岛几何（118×33 @ top 11）原地弹性放大，全程覆盖灵动岛；
+ *     消失时原地缩回灵动岛几何，与真灵动岛同位同色无缝交接（形变范式同 IslandNotification）；
+ *   · 弹窗与全屏来电界面互斥：全屏来电界面（电话自动显示/微信点弹窗展开）可见时不显示弹窗；
  *   · 弹窗上的接听/拒绝/忽略按钮直接操作、不跳界面：电话走来电快照回调；微信经全局通话引擎
  *     转发（engine.accept / reject）——微信接听后不进全屏通话页，收成悬浮小窗（点小窗回全屏）；
- *   · 点弹窗除挂断/接听/忽略按钮外的区域 → 跳转到来电界面：微信把全局通话层从 view='hidden'
- *     展开为全屏来电页（expand()）；电话来电的全屏来电界面本就自动显示，无需处理；
- * - iOS 全屏来电界面（z-[84]，仅电话来电渲染）：深灰渐变背景 + 右上 ⓘ + 头像/名字/
- *   「语音通话邀请…」+ 信息/提醒我 + 拒绝/接听大圆钮；
+ *   · 点弹窗除挂断/接听/忽略按钮外的区域 → 回到/跳转到来电界面：微信把全局通话层从 view='hidden'
+ *     展开为全屏来电页（expand()）；电话把已退出的全屏来电界面重新展开（showScreen()）；
+ * - iOS 全屏来电界面（z-[84]，仅电话来电自动渲染）：深灰渐变背景 + 左上「退出」+ 右上 ⓘ +
+ *   头像/名字/「语音通话邀请…」+ 信息/提醒我 + 拒绝/接听大圆钮；
+ *   点「退出」收起来电界面（来电继续响铃，只剩顶部弹窗）；
  *   微信语音来电的来电界面不自动显示（全局通话层 view='hidden' 启动，引擎挂载但不可见），
  *   点弹窗非按钮区域才展开；
  * - 电话来电响铃 25 秒无人处理 → 超时未接（onMissed('timeout')：落未接记录 + AI 语音留言）。
@@ -23,7 +25,7 @@
 import { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion, type Transition } from 'framer-motion';
-import { Bell, BellOff, Info, MessageCircle, Phone, PhoneOff } from 'lucide-react';
+import { Bell, BellOff, ChevronLeft, Info, MessageCircle, Phone, PhoneOff } from 'lucide-react';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import {
   startIncomingRing,
@@ -51,12 +53,16 @@ const TWEEN_OUT: Transition = { duration: 0.24, ease: [0.4, 0, 0.2, 1] };
 
 export default function IncomingCallLayer() {
   const call = useIncomingCall((s) => s.call);
+  const screenHidden = useIncomingCall((s) => s.screenHidden);
   const enginePhase = useGlobalCall((s) => s.enginePhase);
   const hasWxSession = useGlobalCall((s) => s.session !== null);
+  const gView = useGlobalCall((s) => s.view);
   const isPhone = call?.source === 'phone';
   const isWx = call?.source === 'wx';
-  // 微信弹窗只在页内引擎处于「来电响铃」阶段显示（接通/结束后随引擎阶段消失）
-  const wxRinging = isWx && enginePhase === 'incoming';
+  // 微信弹窗只在页内引擎「来电响铃」且全屏来电页未展开时显示（接通/结束后随引擎阶段消失）
+  const wxRinging = isWx && enginePhase === 'incoming' && gView !== 'full';
+  // 电话弹窗只在全屏来电界面被「退出」后显示（界面可见时不叠加弹窗）
+  const phoneBanner = isPhone && screenHidden;
 
   // 电话来电：铃声循环 + 25 秒响铃超时（微信铃声/超时由页内引擎自理）
   useEffect(() => {
@@ -87,25 +93,23 @@ export default function IncomingCallLayer() {
     useIncomingCall.getState().clear();
   }, [isWx, hasWxSession]);
 
-  const showBanner = isPhone || wxRinging;
+  const showBanner = phoneBanner || wxRinging;
 
   return (
     <>
-      {/* 弹窗锚定容器：顶边与灵动岛同位（top 11），弹窗从这里弹出/收回 */}
+      {/* 弹窗锚定容器：顶边与灵动岛同位（top 11），弹窗原地弹出/收回、全程覆盖灵动岛 */}
       <div className="pointer-events-none absolute inset-x-0 top-[11px] z-[94] flex flex-col items-center">
         <AnimatePresence>{showBanner && call ? <CallBanner key={call.id} call={call} /> : null}</AnimatePresence>
       </div>
-      {isPhone && call ? <IncomingCallScreen call={call} /> : null}
+      {isPhone && call && !screenHidden ? <IncomingCallScreen call={call} /> : null}
     </>
   );
 }
 
-// ---------------- 顶部来电弹窗（胶囊 / 微信大窗；从灵动岛弹出，收回灵动力交接无缝） ----------------
+// ---------------- 顶部来电弹窗（胶囊 / 微信大窗；从灵动岛原位弹出，收回无缝交接） ----------------
 
 function CallBanner({ call }: { call: IncomingCallSnapshot }) {
   const big = call.source === 'wx' && call.bannerStage === 'big';
-  // 微信胶囊比电话胶囊更宽（左右 padding 更大 + 名字区更宽）
-  const wide = call.source === 'wx';
 
   /** 接听：电话走快照回调（打开电话 App 进通话）；微信代理到页内引擎 accept——
    *  点按钮不跳界面：接听后全局通话层收成悬浮小窗（点小窗可回全屏通话页） */
@@ -126,17 +130,18 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
     }
     useIncomingCall.getState().dismiss('declined');
   };
-  /** 点弹窗除挂断/接听按钮外的区域 → 跳转到来电界面：
-   *  微信展开全局通话层全屏来电页（view 'hidden' → 'full'）；电话的全屏来电界面本就自动显示 */
+  /** 点弹窗除挂断/接听/忽略按钮外的区域 → 回到/跳转到来电界面：
+   *  微信展开全局通话层全屏来电页（view 'hidden' → 'full'）；电话把退出的来电界面重新展开 */
   const openScreen = () => {
     if (call.source === 'wx') useGlobalCall.getState().expand();
+    else useIncomingCall.getState().showScreen();
   };
 
-  // 展开姿态：微信大窗 344 宽 @ y47（top 58）/ 胶囊 56 高 @ y45（top 56）；
-  // 初始与退场都是灵动岛几何——弹出/收回与灵动岛同位同色无缝形变
+  // 展开姿态：统一 344 宽（与灵动岛同轴心，原地放大），大窗高自适应 / 胶囊 56 高；
+  // 初始与退场都是灵动岛几何——弹出/收回与灵动岛同位同色无缝形变（全程覆盖灵动岛）
   const expanded = big
-    ? { width: 344, height: 'auto' as const, borderRadius: 22, y: 47, backgroundColor: 'rgba(28,28,30,0.96)' }
-    : { width: 'auto' as const, height: 56, borderRadius: 28, y: 45, backgroundColor: 'rgba(0,0,0,0.92)' };
+    ? { width: 344, height: 'auto' as const, borderRadius: 22, y: 0, backgroundColor: 'rgba(28,28,30,0.96)' }
+    : { width: 344, height: 56, borderRadius: 28, y: 0, backgroundColor: 'rgba(0,0,0,0.94)' };
 
   return (
     <motion.div
@@ -186,14 +191,13 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
             </div>
           </div>
         ) : (
-          <div className={`flex h-[56px] items-center ${wide ? 'min-w-[300px] gap-3 pl-4 pr-3' : 'gap-2.5 pl-2.5 pr-2'}`}>
-            <BannerAvatar name={call.name} avatar={call.avatar} />
-            <span
-              className={`${wide ? 'max-w-[150px]' : 'max-w-[104px]'} truncate text-[15px] font-medium leading-none text-white`}
-            >
-              {call.name}
-            </span>
-            <div className="flex items-center gap-1.5">
+          <div className="flex h-[56px] w-[344px] items-center justify-between gap-3 pl-4 pr-3">
+            {/* 头像+名字靠左，拒接/接听靠右 */}
+            <div className="flex min-w-0 items-center gap-2.5">
+              <BannerAvatar name={call.name} avatar={call.avatar} />
+              <span className="max-w-[170px] truncate text-[15px] font-medium leading-none text-white">{call.name}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
               <CircleBtn tone="red" onClick={decline} label="拒绝" testId="incoming-pill-reject" />
               <CircleBtn tone="green" onClick={answer} label="接听" testId="incoming-pill-accept" />
             </div>
@@ -287,8 +291,18 @@ function IncomingCallScreenImpl({ call }: { call: IncomingCallSnapshot }) {
       aria-label={`来自${call.name}的电话`}
       data-testid="incoming-call-screen"
     >
-      {/* 状态栏预留 + 右上信息角标 */}
+      {/* 顶部操作行：左上「退出」（收起来电界面，来电继续响铃只剩弹窗）+ 右上信息角标 */}
       <div className="relative pt-[64px]">
+        <button
+          type="button"
+          aria-label="退出来电界面"
+          data-testid="incoming-screen-exit"
+          onClick={() => useIncomingCall.getState().hideScreen()}
+          className="absolute left-5 top-[70px] flex h-8 items-center gap-1 rounded-full bg-black/25 pl-2 pr-3 ring-1 ring-white/30 backdrop-blur-sm active:bg-black/45"
+        >
+          <ChevronLeft className="h-[17px] w-[17px] text-white/85" strokeWidth={2.2} aria-hidden="true" />
+          <span className="text-[13px] leading-none text-white/85">退出</span>
+        </button>
         <button
           type="button"
           aria-label="通话信息"

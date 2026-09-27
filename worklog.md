@@ -7979,3 +7979,27 @@ Stage Summary:
 - 修改文件：src/lib/ios/global-call.ts、src/components/apps/wechat.tsx、
   src/components/ios/IncomingCallLayer.tsx、src/components/ios/PhoneShell.tsx（注释）、
   src/components/ios/GlobalCallLayer.tsx（注释）
+
+---
+Task ID: 20
+Agent: Z.ai Code (main)
+Task: 来电系统四项修复——微信/QQ 语音通话「缺少号码」、弹窗锚定灵动岛原位（盖住灵动岛）、电话弹窗加宽+头像左/按钮右、全屏来电界面加左上退出按钮且不叠加弹窗；顺带修复 dev server 存活问题（用户报「预览不显示」的根因）
+
+Work Log:
+- 排查「缺少号码」：/api/phone/turn 强制要求 number 字段（400 兜底），但 chat-call.ts requestTurn 的请求体没传——微信/QQ 语音通话（用户主叫与 AI 来电接通后）每轮 LLM 请求都 400，通话界面顶部报「缺少号码」。修复：requestTurn 补传 number: c.phone || c.wechatId || c.qqId || c.id（语音联系人常无手机号，逐级兜底），无联系人传 'unknown'；电话 App 自有链路（phone.tsx 传 target.number）不受影响
+- 弹窗位置重构（IncomingCallLayer）：弹出姿态 y 45/47→0——弹窗原地从灵动岛几何（118×33 @top11）弹性放大，全程覆盖灵动岛（z-94 > 灵动岛 z-80），用户语义「弹窗在灵动岛的上面、灵动岛消失」达成；收回时原地缩回灵动岛几何无缝交接
+- 弹窗尺寸统一：胶囊（电话+微信）与微信大窗统一 344 宽（原电话胶囊仅 ~270 内容宽）——电话弹窗「左右宽一点」；胶囊内容改 justify-between 两段式：头像+名字靠左、拒接/接听 44px 圆钮靠右（「头像在左面，接听挂断按钮在右面」）；微信胶囊同步 344（大→胶囊形变仅变高度）
+- 弹窗与来电界面互斥（「来电界面也不要显示来电弹窗」）：incoming-call.ts store 新增 screenHidden + hideScreen()/showScreen()；电话来电横幅仅在全屏来电界面被退出后显示（phoneBanner = isPhone && screenHidden），微信横幅在 view==='full'（点弹窗展开的全屏通话页）时隐藏（wxRinging 增加 gView !== 'full' 门控）
+- 全屏来电界面左上「退出」按钮：IncomingCallScreenImpl 顶部操作行左侧新增 < 退出 胶囊钮（ChevronLeft+文字，data-testid=incoming-screen-exit）→ hideScreen()：来电继续响铃（铃声/25s 超时不变），只剩顶部弹窗；点弹窗非按钮区域 showScreen() 回到来电界面（openScreen 对 phone 源从 no-op 变为 showScreen）
+- dev server 存活修复（用户「预览不显示」根因）：平台在工具调用结束时会清掉仍挂在调用进程树上的子进程——nohup/裸 setsid & 方式启动的 next dev 全部秒死（实验确认：sleep/python 均被清，setsid -f 与子壳包裹可存活）。正确姿势：setsid -f bun run dev > dev.log 2>&1 < /dev/null（先 fork 脱离进程树再启动），实测跨工具调用稳定存活；登录微信（13800138000/wx123456）验证页面渲染正常——预览面板刷新即可见
+- E2E（agent-browser 500×900 移动全屏，IndexedDB 种子机主+林小雨，network route mock /api/chat 带 [语音通话]，信息 App 有 sms-vc-last 5 分钟冷却需清除）：
+  ①微信 AI 来电：大窗弹出即覆盖灵动岛（截图确认岛不可见）→ 5s 后胶囊 344×56 @y11（头像 x94 左、拒绝 x314/接听 x366 右）；点胶囊主体 → 全屏语音通话页展开+弹窗消失；接听 → /api/phone/turn 200（修复前必 400），AI 真实问候「喂？陈默呀…」00:19 计时；挂断 → 通话卡片+AI 续聊两条落盘
+  ②电话 AI 来电（信息 App 触发）：全屏来电界面自动显示且无弹窗（bannerVisible:false）+ 左上「退出」；点退出 → 界面消失、344 弹窗出现在灵动岛位（用户停留在信息 App）；点弹窗主体 → 回到来电界面；再退出 → 弹窗接听 → 自动跳转电话 App iOS 通话界面，AI 开口问候；挂断 ✓；响铃 25s 超时未接路径顺带复验（followup/留言 200 落盘）
+  ③灰色胶囊疑云澄清：来电界面顶部的灰色横幅是「灵动岛消息通知」（AI 回复到达的原有通知功能），非来电弹窗——来电弹窗互斥门控工作正常
+- lint + tsc 双绿；console 无错误；dev.log 无异常
+
+Stage Summary:
+- 「缺少号码」根因是前端漏传字段而非接口问题——三端通话（电话/微信/QQ）LLM 轮次现在都带 number 标识
+- 来电弹窗体系最终形态：弹窗=灵动岛原位放大（弹出期间灵动岛被盖住）、344 宽统一体系、头像左按钮右；全屏来电界面与弹窗互斥（界面优先，退出后弹窗兜底）；退出按钮只收界面不挂断
+- 沙箱后台进程存活规律（重要经验）：工具调用结束清进程树——setsid -f 或「子壳内 & 后立即退出」使进程在调用结束前被 init 收养才能存活
+- 修改文件：src/lib/ios/chat-call.ts、src/lib/ios/incoming-call.ts、src/components/ios/IncomingCallLayer.tsx、src/components/ios/PhoneShell.tsx（注释）
