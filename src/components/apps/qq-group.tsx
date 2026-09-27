@@ -1968,6 +1968,8 @@ export function QqGroupChatPage({
   const [voiceMode, setVoiceMode] = useState(false);
   // 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用）
   const [ttsSend, setTtsSend] = useState(false);
+  // 发图预览暂存：相机/相册选图先读图压缩进输入框下方预览条（不直接发出），点「发送(N)」才上屏并触发群回合
+  const [pendingImgs, setPendingImgs] = useState<Array<{ id: string; src: string }>>([]);
   const [speakerId, setSpeakerId] = useState<string | null>(() => groupSpeaker.get(sKey) ?? null);
   const stream = useChatStream(sKey);
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -2939,6 +2941,73 @@ export function QqGroupChatPage({
   );
   runGroupTurnRef.current = runGroupTurn;
 
+  /** 相机/相册选图（需求2 发图先预览）：只读图压缩进输入框下方预览条暂存，不直接发出、不触发任何回复；
+   *  暂存总数上限 9 张（超出 toast「一次最多发 9 张图片」，放得下的照收），单张读取失败沿用原
+   *  「图片发送失败」toast，失败的图不进预览 */
+  const stageImageFiles = async (files: FileList) => {
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    const room = 9 - pendingImgs.length;
+    if (room <= 0) {
+      onToast('一次最多发 9 张图片');
+      return;
+    }
+    const batch = list.slice(0, room);
+    if (list.length > room) onToast('一次最多发 9 张图片');
+    const staged: Array<{ id: string; src: string }> = [];
+    for (const f of batch) {
+      try {
+        const d = await readImageFile(f);
+        staged.push({ id: uid(), src: d });
+      } catch {
+        onToast('图片发送失败');
+      }
+    }
+    if (staged.length > 0) setPendingImgs((prev) => [...prev, ...staged]);
+  };
+
+  /** 预览条「发送(N)」/主发送按钮真正发图：逐张转图片消息上屏 → 清空预览 → 回合进行中排队补跑
+   *  （与文字消息同款「回完这轮就聊」toast）→ 分句发送开启只入列不触发回复 → 否则触发群 AI 回合
+   *  （trigger=最后一张图，与旧版直发逻辑一致；未配置识图模型也照常触发，#26） */
+  const flushPendingImages = () => {
+    if (pendingImgs.length === 0) return;
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
+    const created: WxGroupMsg[] = pendingImgs.map((p) => ({
+      id: uid(),
+      role: 'me',
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'image',
+      img: { src: p.src },
+    }));
+    setPendingImgs([]);
+    for (const m of created) appendMsg(m);
+    if (runningRef.current || isChatStreaming(sKey)) {
+      // 成员们还在回复：图片照常发出并入队，本回合结束后自动再起一轮（与文字消息同款）
+      groupQueuedRef.current = true;
+      onToast('消息已发出，成员们回完这轮就聊');
+      return;
+    }
+    // 分句发送开启：只入列不触发回复（与文字消息同规则）
+    if (sentenceSend) {
+      setPendingDispatch(true);
+      markPendingBatch(sKey, true);
+      return;
+    }
+    // 未配置识图模型也照常触发回复（#26）：chat-stream-store 会注入「我发了图片但你看不到内容」
+    // 的临时上下文，成员按人设自然回应，不再让发图石沉大海
+    runGroupTurnRef.current(created[created.length - 1]);
+  };
+
   /** 分句发送批次触发：把已发出的整批消息交给成员统一回复（输入框为空时点「发送」） */
   const dispatchBatch = () => {
     if (!pendingDispatch || runningRef.current || isChatStreaming(sKey)) return;
@@ -2955,8 +3024,12 @@ export function QqGroupChatPage({
       return;
     }
     const text = draft.trim();
-    // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
+    // 空输入点「发送」= 先发预览条待发图（需求2 发图先预览）；无图再触发分句发送批次回复（分句开启且有未回复的批次时）
     if (!text) {
+      if (pendingImgs.length > 0) {
+        flushPendingImages();
+        return;
+      }
       if (sentenceSend && pendingDispatch) dispatchBatch();
       return;
     }
@@ -3102,47 +3175,6 @@ export function QqGroupChatPage({
     [commitVoiceMsg, onToast],
   );
   sendTextAsVoiceRef.current = sendTextAsVoice;
-
-  /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；发图照常触发群回合，未配置识图也有回应 #26） */
-  const sendImageFiles = async (files: FileList) => {
-    if (meMuted) {
-      onToast('你已被禁言，暂时无法发言');
-      return;
-    }
-    if (runningRef.current || isChatStreaming(sKey)) {
-      onToast('成员们还在回复，稍等一下');
-      return;
-    }
-    const created: WxGroupMsg[] = [];
-    for (const f of Array.from(files).slice(0, 9)) {
-      try {
-        const d = await readImageFile(f);
-        created.push({
-          id: uid(),
-          role: 'me',
-          senderId: 'me',
-          senderName: me.name,
-          content: '',
-          time: Date.now(),
-          kind: 'image',
-          img: { src: d },
-        });
-      } catch {
-        onToast('图片发送失败');
-      }
-    }
-    for (const m of created) appendMsg(m);
-    if (created.length === 0) return;
-    // 分句发送开启：只入列不触发回复（与文字消息同规则）
-    if (sentenceSend) {
-      setPendingDispatch(true);
-      markPendingBatch(sKey, true);
-      return;
-    }
-    // 未配置识图模型也照常触发回复（#26）：chat-stream-store 会注入「我发了图片但你看不到内容」
-    // 的临时上下文，成员按人设自然回应，不再让发图石沉大海
-    void runGroupTurn(created[created.length - 1]);
-  };
 
   /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应） */
   const sendSticker = (s: Sticker) => {
@@ -4295,24 +4327,62 @@ export function QqGroupChatPage({
               <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
             </button>
           </div>
-          {(draft.trim() || canDispatch) ? (
+          {(draft.trim() || canDispatch || pendingImgs.length > 0) ? (
             <>
               <button
                 type="button"
                 onClick={send}
-                disabled={streaming || runningRef.current || (!draft.trim() && !canDispatch)}
+                disabled={streaming || runningRef.current || (!draft.trim() && !canDispatch && pendingImgs.length === 0)}
                 data-testid="qq-groupchat-send"
                 aria-label={ttsSend ? '发送（转语音）' : '发送'}
                 className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
-                  (draft.trim() || canDispatch) && !streaming && !runningRef.current ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
+                  (draft.trim() || canDispatch || pendingImgs.length > 0) && !streaming && !runningRef.current ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95' : 'opacity-90'
                 }`}
-                style={{ backgroundColor: (draft.trim() || canDispatch) && !streaming && !runningRef.current ? '#0099FF' : '#8AD4F7' }}
+                style={{ backgroundColor: (draft.trim() || canDispatch || pendingImgs.length > 0) && !streaming && !runningRef.current ? '#0099FF' : '#8AD4F7' }}
               >
                 发送
               </button>
             </>
           ) : null}
         </div>
+        {/* 发图预览条（需求2 发图先预览）：选图先暂存这里不上屏，点「发送(N)」或主发送按钮才真正发出并触发群回合；
+            不做堆叠/大图查看（微信专属需求，QQ 跳过）；语音/表情/加号面板展开时隐藏 */}
+        {pendingImgs.length > 0 && !voiceMode && !stickerOpen && !plusOpen && (
+          <div
+            data-testid="qqg-img-preview-bar"
+            className="flex items-center gap-2.5 border-t border-black/[0.05] px-3 py-2 dark:border-white/[0.06]"
+          >
+            <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto py-1">
+              {pendingImgs.map((p, k) => (
+                <div key={p.id} className="relative h-[62px] w-[62px] shrink-0">
+                  <img
+                    src={p.src}
+                    alt={`待发送图片${k + 1}`}
+                    className="h-full w-full rounded-[8px] border border-black/[0.06] object-cover dark:border-white/[0.08]"
+                  />
+                  <button
+                    type="button"
+                    aria-label="移除图片"
+                    data-testid={`qqg-img-preview-remove-${k}`}
+                    onClick={() => setPendingImgs((prev) => prev.filter((x) => x.id !== p.id))}
+                    className="absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#1F2329]/80 text-white active:opacity-70 dark:bg-white/80 dark:text-[#1F2329]"
+                  >
+                    <X className="h-3 w-3" strokeWidth={2.6} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              data-testid="qqg-img-preview-send"
+              onClick={flushPendingImages}
+              className="h-[34px] shrink-0 rounded-[10px] px-4 text-[14px] font-medium text-white shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95"
+              style={{ backgroundColor: '#0099FF' }}
+            >
+              发送({pendingImgs.length})
+            </button>
+          </div>
+        )}
         {/* 工具栏（与单聊同款六图标：语音/图片/拍摄/点缀/表情/加号） */}
         <div className="flex items-center justify-between px-7 pb-[18px] pt-2 text-black/80 dark:text-white/80">
           <button
@@ -4532,7 +4602,7 @@ export function QqGroupChatPage({
         hidden
         data-testid="qq-groupchat-camera"
         onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) void sendImageFiles(e.target.files);
+          if (e.target.files && e.target.files.length > 0) void stageImageFiles(e.target.files);
           e.target.value = '';
         }}
       />
@@ -4544,7 +4614,7 @@ export function QqGroupChatPage({
         hidden
         data-testid="qq-groupchat-photo"
         onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) void sendImageFiles(e.target.files);
+          if (e.target.files && e.target.files.length > 0) void stageImageFiles(e.target.files);
           e.target.value = '';
         }}
       />

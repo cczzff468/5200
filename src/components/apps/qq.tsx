@@ -22,7 +22,8 @@
  *   卡内余额/持卡人/卡号复制/银行/类型/添加时间）/提现（余额→可选到账银行卡）/充值（可选付款银行卡→余额，卡内余额校验）/账单流水；localStorage 持久化）
  *   设置 → 账号与安全（账号管理切换账号/账号关联/安全管理）；设置底部「退出当前账号」回登录页
  * - 聊天页对照 QQ 真机美化（名字+在线、蓝白圆气泡带头像、
- *   底部六图标工具栏：图片=相册选图发送（压缩 dataURL）、拍摄=input capture 直调手机原生相机（对齐微信，无自建取景）；
+ *   底部六图标工具栏：图片=相册选图、拍摄=input capture 直调手机原生相机（对齐微信，无自建取景）——
+ *   选图先压缩进输入框下方待发预览条（最多 9 张可移除），点「发送」才真正发出并触发 AI 回复（发图先预览）；
  *   加号 → 底部弹出面板（语音通话/视频通话/红包/转账/位置），输入行跟随上浮；
  *   位置 → 发送位置页（内置常用地点 + 自定义位置表单，发送后聊天内出现位置卡片气泡）；
  *   红包 → 发红包页（普通/拼手气/专属 tab、祝福语、支付方式[余额/银行卡]、塞钱进红包）→ 聊天内红色 QQ红包卡片
@@ -2140,6 +2141,10 @@ function ChatPage({
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
   const [ttsSend, setTtsSend] = useState(false);
+  /** 待发送图片预览（发图先预览）：工具栏「图片/拍摄」选图后先进输入框下方预览条，点「发送」才真正发出并触发 AI 回合 */
+  const [pendingImgs, setPendingImgs] = useState<Array<{ id: string; src: string }>>([]);
+  // pendingImgs 的同步镜像：异步压缩/移除/发出多处并发改写，统一以 ref 为准再同步回 state（避免闭包读到旧值）
+  const pendingImgsRef = useRef<Array<{ id: string; src: string }>>([]);
   /** 全局流式回复状态（请求由 chat-stream-store 发起并接收，退出聊天页/退出 App 不中断） */
   const sessionKey = `qq:${peer.id}`;
   const stream = useChatStream(sessionKey);
@@ -2351,34 +2356,62 @@ function ChatPage({
     [peer.id, me.id]
   );
 
-  // 相册选图发送（图片消息，压缩 dataURL，最多 9 张）。
-  //  发图照常触发 AI 回合：已配置识图模型时识图模型先看图、聊天模型再回复；未配置时
+  // 发图先预览：工具栏「图片/拍摄」选图后只压缩进待发预览条（输入框下方，最多 9 张，可逐张移除），
+  //  不上屏也不触发 AI；点预览条或主发送按钮的「发送」才由 flushPendingImages 真正发出并触发 AI 回合。
+  //  发出后照常触发 AI 回合：已配置识图模型时识图模型先看图、聊天模型再回复；未配置时
   //  chat-stream-store 注入「我发了图片但你看不到内容」临时上下文，AI 同样自然回应（#26）
-  const sendImageFiles = useCallback(
+  const stageImageFiles = useCallback(
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
-      const created: QQMsg[] = [];
-      for (const f of Array.from(files).slice(0, 9)) {
+      let overflow = 0;
+      for (const f of Array.from(files)) {
+        // 上限 9 张（含已在预览条里的）：超出不再读图，最后统一 toast 提示
+        if (pendingImgsRef.current.length >= 9) {
+          overflow += 1;
+          continue;
+        }
         try {
           const d = await compressImageFile(f);
-          const msg: QQMsg = { id: uid(), role: 'me', content: d, time: Date.now(), kind: 'image' };
-          created.push(msg);
-          setMsgs((prev) => [...prev, msg]);
+          // 压缩等待期间预览条可能已变化（移除/发出），入列前再核一次上限
+          if (pendingImgsRef.current.length >= 9) {
+            overflow += 1;
+            continue;
+          }
+          const item = { id: uid(), src: d };
+          pendingImgsRef.current = [...pendingImgsRef.current, item];
+          setPendingImgs(pendingImgsRef.current);
         } catch {
           onToast('图片发送失败');
         }
       }
-      if (created.length === 0 || peer.id === me.id) return;
-      // 对方正在回复（流式/投递中）：与文字消息同口径排队补跑——本轮「流收尾且投递完毕」后自动回复图片消息
-      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-        qqQueueAdd(peer.id);
-        onToast('消息已发出，对方回完这轮就聊');
-        return;
-      }
-      runAiTurnRef.current?.(null, created);
+      if (overflow > 0) onToast('一次最多发 9 张图片');
     },
-    [onToast, peer.id, me.id, sessionKey]
+    [onToast]
   );
+
+  /** 把预览条里的待发图片逐张转成图片消息发出（消息结构同旧版直发：content=dataURL，无 img 字段）并触发 AI 回合 */
+  const flushPendingImages = useCallback(() => {
+    const staged = pendingImgsRef.current;
+    if (staged.length === 0) return;
+    pendingImgsRef.current = [];
+    setPendingImgs([]);
+    const created: QQMsg[] = staged.map((p) => ({ id: uid(), role: 'me', content: p.src, time: Date.now(), kind: 'image' }));
+    for (const msg of created) setMsgs((prev) => [...prev, msg]);
+    if (peer.id === me.id) return;
+    // 对方正在回复（流式/投递中）：与文字消息同口径排队补跑——本轮「流收尾且投递完毕」后自动回复图片消息
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      qqQueueAdd(peer.id);
+      onToast('消息已发出，对方回完这轮就聊');
+      return;
+    }
+    runAiTurnRef.current?.(null, created);
+  }, [me.id, onToast, peer.id, sessionKey]);
+
+  /** 从预览条移除一张待发图片 */
+  const removePendingImg = (id: string) => {
+    pendingImgsRef.current = pendingImgsRef.current.filter((p) => p.id !== id);
+    setPendingImgs(pendingImgsRef.current);
+  };
 
   // 按所选支付方式扣款并发送卡片消息
   const execAndSend = useCallback(
@@ -4439,22 +4472,58 @@ function ChatPage({
           <button
             type="button"
             data-testid="qq-chat-send"
-            aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}
-            disabled={(!input.trim() && !canDispatch) || streaming}
+            aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : pendingImgs.length > 0 ? '发送图片' : '发送（让对方回复）'}
+            disabled={(!input.trim() && !canDispatch && pendingImgs.length === 0) || streaming}
             onClick={() => {
+              // 发图先预览：有文字先发文字；无文字有待发图片就发出图片；最后才是分句批次触发
               if (input.trim()) void send();
+              else if (pendingImgs.length > 0) flushPendingImages();
               else dispatchBatch();
             }}
             className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
-              (input.trim() || canDispatch) && !streaming
+              (input.trim() || canDispatch || pendingImgs.length > 0) && !streaming
                 ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95'
                 : 'opacity-90'
             }`}
-            style={{ backgroundColor: (input.trim() || canDispatch) && !streaming ? QQ_BLUE : '#8AD4F7' }}
+            style={{ backgroundColor: (input.trim() || canDispatch || pendingImgs.length > 0) && !streaming ? QQ_BLUE : '#8AD4F7' }}
           >
             发送
           </button>
         </div>
+        {/* 待发图片预览条（发图先预览）：显示在输入行下方，点「发送」才真正发出；表情/加号面板打开时隐藏 */}
+        {!stickerOpen && !plusOpen && pendingImgs.length > 0 && (
+          <div data-testid="qq-img-preview-bar" className="flex items-center gap-2 overflow-x-auto px-3 pb-1 pt-2">
+            {pendingImgs.map((p, k) => (
+              <div key={p.id} className="relative shrink-0">
+                <img
+                  src={p.src}
+                  alt={`待发送图片 ${k + 1}`}
+                  data-testid={`qq-img-preview-item-${k}`}
+                  className="h-[62px] w-[62px] rounded-[10px] object-cover ring-1 ring-black/[0.06] dark:ring-white/10"
+                />
+                <button
+                  type="button"
+                  aria-label="移除图片"
+                  data-testid={`qq-img-preview-remove-${k}`}
+                  onClick={() => removePendingImg(p.id)}
+                  className="absolute -right-1 -top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-black/55 text-white active:opacity-70"
+                >
+                  <X className="h-[11px] w-[11px]" strokeWidth={2.6} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              data-testid="qq-img-preview-send"
+              aria-label={`发送 ${pendingImgs.length} 张图片`}
+              onClick={flushPendingImages}
+              className="ml-auto h-[32px] shrink-0 rounded-[10px] px-4 text-[14px] font-medium text-white shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95"
+              style={{ backgroundColor: QQ_BLUE }}
+            >
+              发送({pendingImgs.length})
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between px-7 pb-[18px] pt-2 text-black/80 dark:text-white/80">
           <button
             type="button"
@@ -4891,7 +4960,7 @@ function ChatPage({
           onJumpTo={jumpToMessage}
         />
       ) : null}
-      {/* 相册选图隐藏 input（工具栏图片按钮）+ 原生相机隐藏 input（拍摄按钮 capture 直调后置摄像头） */}
+      {/* 相册选图隐藏 input（工具栏图片按钮）+ 原生相机隐藏 input（拍摄按钮 capture 直调后置摄像头）：选图先入待发预览条，不直接发出 */}
       <input
         ref={fileRef}
         type="file"
@@ -4900,7 +4969,7 @@ function ChatPage({
         className="hidden"
         data-testid="qq-chat-file"
         onChange={(e) => {
-          void sendImageFiles(e.target.files);
+          void stageImageFiles(e.target.files);
           e.target.value = '';
         }}
       />
@@ -4912,7 +4981,7 @@ function ChatPage({
         className="hidden"
         data-testid="qq-chat-camera"
         onChange={(e) => {
-          void sendImageFiles(e.target.files);
+          void stageImageFiles(e.target.files);
           e.target.value = '';
         }}
       />

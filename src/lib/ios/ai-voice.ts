@@ -4,6 +4,7 @@
  * AI 语音消息（AI 回复按频率用语音发送）+ AI 语音发送频率设置：
  *
  * 一、频率设置（按会话独立，localStorage 持久化；群聊按群保存）：
+ *   未设置任何档位时默认 = often 经常——未配置语音 API 也照发语音条（静音展示），用户显式选过「关闭」才不发
  *   off      关闭        —— AI 不发语音，只发文字
  *   always   每条都发语音 —— AI 的每一条消息都是语音
  *   often    经常        —— 每 3 条消息中，有 1 条是语音
@@ -21,8 +22,8 @@
  *
  * 三、语音合成 synthesizeAiVoice（用当前角色的音色）：
  *   - 文本清洗（剥离舞台动作/表情标记等不可朗读内容）后为空 → null（保持文字）；
- *   - 服务商 = 内置语音，或 API 未配置 → 内置引擎通道：不出音频文件，语音气泡点击时用
- *     浏览器本地引擎按存储的原文实时朗读（真实出声，synth='builtin'）；
+ *   - 内置引擎 / 未配置语音 API → 静音语音条：不出音频文件、点击只走静音进度动画（不出声），
+ *     长按「转文字」仍可看原文；新版内置通道不再产出 synth 标记（synth='builtin' 仅历史存量）；
  *   - MiniMax / OpenAI 兼容 → 调 /api/tts 合成真实音频 → dataURL 存进消息（synth='api'，
  *     重启后仍可播放）；时长读音频元数据，读不到按字数估算；
  *   - 任何失败 → 返回 null，调用方保留文字消息（自动降级为文字，不影响聊天）。
@@ -62,7 +63,7 @@ const FREQ_STORE_KEY = 'ai-voice-freq';
 const COUNTER_STORE_KEY = 'ai-voice-counters';
 
 export function normalizeAiVoiceFreq(v: unknown): AiVoiceFreq {
-  return v === 'always' || v === 'often' || v === 'sometimes' || v === 'rarely' ? v : 'off';
+  return v === 'always' || v === 'often' || v === 'sometimes' || v === 'rarely' || v === 'off' ? v : 'often';
 }
 
 function loadFreqMap(): Record<string, string> {
@@ -82,7 +83,7 @@ function loadFreqMap(): Record<string, string> {
   }
 }
 
-/** 读取某会话的 AI 语音频率（未设置时 = 关闭，AI 只发文字，与旧行为一致） */
+/** 读取某会话的 AI 语音频率（未设置时默认『经常』——未配置语音 API 也照发语音条，静音展示；用户显式关闭过才不发） */
 export function getAiVoiceFreq(freqKey: string): AiVoiceFreq {
   return normalizeAiVoiceFreq(loadFreqMap()[freqKey]);
 }
@@ -91,7 +92,7 @@ export function getAiVoiceFreq(freqKey: string): AiVoiceFreq {
 export function saveAiVoiceFreq(freqKey: string, freq: AiVoiceFreq): void {
   if (typeof window === 'undefined') return;
   const map = loadFreqMap();
-  if (freq === 'off') delete map[freqKey];
+  if (freq === 'off') map[freqKey] = 'off'; // 显式关闭也要落盘：与「从未设置」区分（未设置=默认发语音，off=用户明确关闭）
   else map[freqKey] = freq;
   try {
     window.localStorage.setItem(FREQ_STORE_KEY, JSON.stringify(map));
@@ -157,16 +158,17 @@ export function decideAiVoiceMessage(freqKey: string, counterKey: string = freqK
 
 /** AI 语音消息数据（落库时展开进消息的 voice 字段） */
 export interface AiVoiceClip {
-  /** 音频 dataURL（服务商 TTS）；内置引擎通道为空串（点击时实时朗读） */
+  /** 音频 dataURL（服务商 TTS）；内置引擎/未配置 API 通道为空串（静音语音条，点击只走静音进度动画） */
   url: string;
   /** 秒（≥1） */
   duration: number;
   /** 静态波形（0~1，22 根，文本哈希） */
   wave: number[];
-  /** 清洗后的朗读原文（内置引擎点击朗读 / 长按转文字直接用） */
+  /** 清洗后的朗读原文（静音语音条长按转文字直接用 / 历史存量内置引擎点击朗读用） */
   localText: string;
-  /** 'builtin' = 点击时浏览器引擎实时朗读；'api' = 已存真实音频 dataURL */
-  synth: 'builtin' | 'api';
+  /** 'api' = 已存真实音频 dataURL；'builtin' 仅存在于历史存量消息（旧版内置引擎实时朗读），
+   *  新消息内置通道不再产出（留空 = 静音语音条，点击只走静音进度动画） */
+  synth?: 'builtin' | 'api';
 }
 
 /** 仿真朗读时长估算（约 4 字/秒，至少 1 秒）——与文字转语音消息同一公式 */
@@ -238,9 +240,11 @@ export async function synthesizeAiVoice(text: string, contactId: string | null |
   const useBuiltinEngine = cfg.provider === 'builtin' || !isTtsConfigured(cfg);
   const wave = hashWaveBars(cleaned, 22);
 
-  // ① 内置引擎：不出音频文件，语音气泡点击时实时朗读（真实出声、零费用）
+  // ① 内置引擎 / 未配置语音 API：静音语音条——不出音频文件、点击只走静音进度动画
+  //    （voice-player 对无 synth 标记的 localText 气泡走 toggleSim 静音模拟，不出声），
+  //    长按「转文字」仍可看原文；真实发声需要用户配置 MiniMax / OpenAI 语音 API
   if (useBuiltinEngine) {
-    return { url: '', duration: estimateDuration(cleaned), wave, localText: cleaned, synth: 'builtin' };
+    return { url: '', duration: estimateDuration(cleaned), wave, localText: cleaned };
   }
 
   // ② 用户语音 API（MiniMax / OpenAI 兼容）：合成真实音频 → dataURL 持久化

@@ -159,6 +159,7 @@ import {
   wxMethodLabel,
   wxPatchBalance,
 } from './wechat';
+import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack';
 import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, loadFamilyCardsIn } from './wechat-wallet';
 import { wxUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memRecallBlock } from '@/lib/memory';
@@ -255,15 +256,17 @@ function memberNameOf(c: ContactRecord): string {
 /**
  * 语音消息的完整播放视图（VoiceMsgData）：群消息读取时 normalizeMsg（groups.ts）已透传
  * localText/synth/contactId，这里只做旧数据兜底重建（规范化曾丢弃这些字段的时期）：
- * AI 语音消息创建时已把朗读原文冗余进 transcript；synth 仅对「对方（peer）且无音频 url」的消息
- * 兜底为内置引擎通道 —— 我方的文字转语音消息保持 synth 缺省（点击仍是静音模拟，行为不变）。
+ * AI 语音消息创建时已把朗读原文冗余进 transcript。synth 按白名单透传（仅历史存量里显式
+ * 存过 'builtin' 的消息继续实时朗读）——内置通道的新版 AI 语音消息为静音语音条（synth 留空），
+ * 刷新后不得被补写 'builtin' 变成朗读（与 wechat/qq/chat 三端的 normalize 口径一致）；
+ * 我方的文字转语音消息同样保持 synth 缺省（点击仍是静音模拟，行为不变）。
  */
 function voiceViewOf(m: WxGroupMsg): VoiceMsgData {
   const v = m.voice as VoiceMsgData;
   return {
     ...v,
     localText: v.localText ?? v.transcript ?? '',
-    synth: v.synth ?? (m.role === 'peer' && !v.url ? 'builtin' : undefined),
+    synth: v.synth === 'builtin' || v.synth === 'api' ? v.synth : undefined,
     contactId: v.contactId ?? (m.role === 'peer' ? m.senderId : undefined),
   };
 }
@@ -2276,7 +2279,12 @@ export function WxGroupChatPage({
   const [stickerOpen, setStickerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [compose, setCompose] = useState<'location' | null>(null);
-  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  // 大图查看器（与单聊共用 WxPhotoViewer）：urls 全部图片 + index 当前下标；表情包单图入口也走这里
+  const [viewer, setViewer] = useState<{ urls: string[]; index: number } | null>(null);
+  // 照片堆叠「展开」过的组（头部消息 id 集合）：展开后恢复逐条平铺（与微信一致，展开后不收回）
+  const [expandedStacks, setExpandedStacks] = useState<Set<string>>(() => new Set());
+  // 发图先预览（需求2）：相机/相册选图先进待发列表（缩略图条显示在输入行下方），点「发送」才真正发出
+  const [pendingImgs, setPendingImgs] = useState<{ id: string; src: string }[]>([]);
   const [locView, setLocView] = useState<{ name: string; address: string } | null>(null);
   // 群红包/转账浮层流程：发红包页 / 转账选人页→转账页 / 红包开箱 / 红包详情 / 转账详情
   const [layer, setLayer] = useState<
@@ -2354,6 +2362,45 @@ export function WxGroupChatPage({
     [contacts, group.memberIds]
   );
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+
+  // ---------------- 照片堆叠分组（需求3）：连续 ≥4 张同一发送者的照片折叠成堆叠卡（渲染前算好索引） ----------------
+  // isPhoto：图片消息且带图且未撤回；joined：同一发送者（senderId 恒有值：'me'/联系人 id，相等即同堆——
+  // me 对 me 同堆，peer 按发送者 id 相等；空值兜底按 role 相等）且相邻间隔 ≤5 分钟（与时间分隔行同口径）
+  const photoStackSpans = useMemo<Array<[number, number]>>(() => {
+    if (selectMode) return []; // 多选模式不折叠：逐条勾选需要每条独立可点
+    return findPhotoStackSpans(
+      msgs.length,
+      (i) => {
+        const m = msgs[i];
+        return m.kind === 'image' && !!m.img?.src && !m.recalled;
+      },
+      (a, b) => {
+        const x = msgs[a];
+        const y = msgs[b];
+        const sameSender = x.senderId && y.senderId ? x.senderId === y.senderId : x.role === y.role;
+        return sameSender && y.time - x.time <= 5 * 60_000;
+      },
+    );
+  }, [msgs, selectMode]);
+  /** 堆叠头部下标 → 该组全部照片（顺序 = 消息时间顺序） */
+  const stackHead = useMemo(() => {
+    const map = new Map<number, PhotoStackItem[]>();
+    for (const [a, b] of photoStackSpans) {
+      map.set(
+        a,
+        msgs.slice(a, b + 1).map((m) => ({ id: m.id, src: m.img?.src ?? '' })),
+      );
+    }
+    return map;
+  }, [photoStackSpans, msgs]);
+  /** 堆叠成员下标 → 头部下标（折叠态成员行不渲染；按头部 id 判断展开后恢复平铺） */
+  const stackMember = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const [a, b] of photoStackSpans) {
+      for (let k = a + 1; k <= b; k++) map.set(k, a);
+    }
+    return map;
+  }, [photoStackSpans]);
 
   // 六.5：机主被禁言时的输入阻断（当前权限体系下机主通常为群主，此处为防御性支持；禁言过期自动恢复）
   // 兼容双键：挽留流程旧版曾以字面量 'me' 写入禁言表，联系人 ID 与 'me' 任一命中即视为被禁
@@ -3293,8 +3340,13 @@ export function WxGroupChatPage({
       return;
     }
     const text = draft.trim();
-    // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
     if (!text) {
+      // 文字优先：无文字时先发待发图片（发图先预览），其次退回分句批次触发
+      if (pendingImgs.length > 0) {
+        flushPendingImages();
+        return;
+      }
+      // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
       if (sentenceSend && pendingDispatch) dispatchBatch();
       return;
     }
@@ -3442,44 +3494,66 @@ export function WxGroupChatPage({
   );
   sendTextAsVoiceRef.current = sendTextAsVoice;
 
-  /** 相机/相册图片发送（与单聊同一套 readImageFile 压缩；发图照常触发群回合，未配置识图也有回应 #26） */
-  const sendImageFiles = async (files: FileList) => {
+  // ---------------- 发图先预览（需求2）：相机/相册选图 → 待发列表（输入行下缩略图条）→ 点「发送」才上屏 ----------------
+
+  /** 相机/相册选图入待发列表：与单聊同一套 readImageFile 压缩；上限 9 张，超出提示（此步不发出） */
+  const stageImageFiles = async (files: FileList) => {
     if (meMuted) {
       onToast('你已被禁言，暂时无法发言');
       return;
     }
-    if (runningRef.current || isChatStreaming(sKey)) {
-      onToast('成员们还在回复，稍等一下');
-      return;
-    }
-    const created: WxGroupMsg[] = [];
-    for (const f of Array.from(files).slice(0, 9)) {
+    const added: { id: string; src: string }[] = [];
+    let overflow = false;
+    for (const f of Array.from(files)) {
+      if (pendingImgs.length + added.length >= 9) {
+        overflow = true;
+        break;
+      }
       try {
         const d = await readImageFile(f);
-        created.push({
-          id: uid(),
-          role: 'me',
-          senderId: 'me',
-          senderName: me.name,
-          content: '',
-          time: Date.now(),
-          kind: 'image',
-          img: { src: d },
-        });
+        added.push({ id: uid(), src: d });
       } catch {
         onToast('图片发送失败');
       }
     }
+    if (added.length > 0) setPendingImgs((prev) => [...prev, ...added].slice(0, 9));
+    if (overflow) onToast('最多发送 9 张图片');
+  };
+
+  /** 预览条「发送」→ 真正逐张上屏；语义与文字消息同口径：分句发送只入列不触发回复；
+   *  回合进行中/流式接收中 → 消息照常上屏并入队补跑，本回合结束后自动再起一轮（与文字排队同文案）；
+   *  否则直接触发群回合。未配置识图也照常触发回复（#26）：chat-stream-store 会注入
+   *  「我发了图片但你看不到内容」的临时上下文，成员按人设自然回应，不再让发图石沉大海 */
+  const flushPendingImages = () => {
+    if (pendingImgs.length === 0) return;
+    if (meMuted) {
+      onToast('你已被禁言，暂时无法发言');
+      return;
+    }
+    const created: WxGroupMsg[] = pendingImgs.map((p) => ({
+      id: p.id,
+      role: 'me' as const,
+      senderId: 'me',
+      senderName: me.name,
+      content: '',
+      time: Date.now(),
+      kind: 'image' as const,
+      img: { src: p.src },
+    }));
+    setPendingImgs([]);
     for (const m of created) appendMsg(m);
-    if (created.length === 0) return;
     // 分句发送开启：只入列不触发回复（与文字消息同规则，空输入点「发送」统一触发）
     if (sentenceSend) {
       setPendingDispatch(true);
       markPendingBatch(sKey, true);
       return;
     }
-    // 未配置识图模型也照常触发回复（#26）：chat-stream-store 会注入「我发了图片但你看不到内容」
-    // 的临时上下文，成员按人设自然回应，不再让发图石沉大海
+    if (runningRef.current || isChatStreaming(sKey)) {
+      // 成员们还在回复：消息照常发出并入队，本回合结束后自动再起一轮（补跑从存储读最新消息）
+      groupQueuedRef.current = true;
+      onToast('消息已发出，成员们回完这轮就聊');
+      return;
+    }
     void runGroupTurn(created[created.length - 1]);
   };
 
@@ -4316,20 +4390,31 @@ export function WxGroupChatPage({
             );
           }
           const mine = m.role === 'me';
+          // 照片堆叠成员行（需求3）：折叠态由头部堆叠卡统一渲染 → 成员行不再单独出块；该组被「展开」后恢复平铺
+          const memberHeadIdx = stackMember.get(i);
+          if (memberHeadIdx !== undefined) {
+            const headMsg = msgs[memberHeadIdx];
+            if (headMsg && !expandedStacks.has(headMsg.id)) return null;
+          }
+          // 照片堆叠头部（折叠态）：整行替换为堆叠卡（不挂头像/名字行与长按手势，避免与堆叠内部左右滑动冲突）
+          const stackItems = stackHead.get(i);
+          const isStackHead = Boolean(stackItems) && !expandedStacks.has(m.id);
           return (
             <div
               key={m.id}
               data-mid={m.id}
               onClickCapture={
-                selectMode && isSelectable(m)
-                  ? (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      toggleSelect(m.id);
-                    }
-                  : pressClickCapture
+                isStackHead
+                  ? undefined
+                  : selectMode && isSelectable(m)
+                    ? (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleSelect(m.id);
+                      }
+                    : pressClickCapture
               }
-              {...bubblePress}
+              {...(isStackHead ? {} : bubblePress)}
             >
               {showTime && (
                 <div className="py-2 text-center">
@@ -4342,10 +4427,26 @@ export function WxGroupChatPage({
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>
+              ) : m.kind === 'image' && m.img && stackItems && !expandedStacks.has(m.id) ? (
+                /* 照片堆叠卡（需求3）：左「展开 N」胶囊 + 主图右缘扇形露边；左滑下一张/右滑上一张、
+                   点击开大图（大图内同样可滑动切换）；点「展开 N」取消折叠恢复逐条平铺 */
+                <WxPhotoStack
+                  items={stackItems}
+                  onOpenAt={(k) => {
+                    if (stackItems) setViewer({ urls: stackItems.map((p) => p.src), index: k });
+                  }}
+                  onExpand={() => setExpandedStacks((ps) => new Set(ps).add(m.id))}
+                />
               ) : m.kind === 'image' && m.img ? (
                 renderMsgRow(
                   m,
-                  <ImageMsgBubble src={m.img.src} onClick={() => setViewerSrc(m.img?.src ?? null)} />
+                  <ImageMsgBubble
+                    src={m.img.src}
+                    onClick={() => {
+                      const src = m.img?.src;
+                      if (src) setViewer({ urls: [src], index: 0 });
+                    }}
+                  />
                 )
               ) : m.kind === 'location' && m.loc ? (
                 renderMsgRow(
@@ -4363,7 +4464,8 @@ export function WxGroupChatPage({
                     src={m.stk.url}
                     meaning={m.stk.meaning}
                     onClick={() => {
-                      setViewerSrc(m.stk?.url ?? null);
+                      const url = m.stk?.url;
+                      if (url) setViewer({ urls: [url], index: 0 });
                       if (m.stk?.meaning) onToast(`表情：${m.stk.meaning}`);
                     }}
                   />
@@ -4661,7 +4763,7 @@ export function WxGroupChatPage({
                 </button>
               </div>
             )}
-            {draft.trim() || canDispatch ? (
+            {draft.trim() || canDispatch || pendingImgs.length > 0 ? (
               <>
                 <button
                   type="button"
@@ -4706,6 +4808,36 @@ export function WxGroupChatPage({
               </div>
             )}
           </div>
+          {/* 发图预览条（需求2）：选图后先列在输入行下方（62px 缩略图 + 右上角 × 移除），点「发送(N)」才真正发出；
+              加号/表情面板打开时隐藏（面板优先展示） */}
+          {pendingImgs.length > 0 && !plusOpen && !stickerOpen && (
+            <div className="mt-2 flex items-center gap-2.5" data-testid="wxg-img-preview-bar">
+              <div className="no-scrollbar flex min-w-0 flex-1 gap-2 overflow-x-auto py-1">
+                {pendingImgs.map((p, k) => (
+                  <div key={p.id} className="relative shrink-0">
+                    <img src={p.src} alt={`待发送图片 ${k + 1}`} className="block h-[62px] w-[62px] rounded-[6px] object-cover" />
+                    <button
+                      type="button"
+                      aria-label="移除图片"
+                      data-testid={`wxg-img-preview-remove-${k}`}
+                      onClick={() => setPendingImgs((prev) => prev.filter((x) => x.id !== p.id))}
+                      className="absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-black/60 text-white active:opacity-70"
+                    >
+                      <X className="h-3 w-3" strokeWidth={2.5} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                data-testid="wxg-img-preview-send"
+                onClick={flushPendingImages}
+                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-3.5 text-[13px] font-medium text-white active:bg-[#06AD56]"
+              >
+                发送({pendingImgs.length})
+              </button>
+            </div>
+          )}
         </div>
         {/* 表情面板 / 加号面板（与单聊共用同一套组件与布局） */}
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
@@ -4821,7 +4953,7 @@ export function WxGroupChatPage({
         capture="environment"
         hidden
         onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) void sendImageFiles(e.target.files);
+          if (e.target.files && e.target.files.length > 0) void stageImageFiles(e.target.files);
           e.target.value = '';
         }}
       />
@@ -4832,15 +4964,19 @@ export function WxGroupChatPage({
         multiple
         hidden
         onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) void sendImageFiles(e.target.files);
+          if (e.target.files && e.target.files.length > 0) void stageImageFiles(e.target.files);
           e.target.value = '';
         }}
       />
-      {/* 图片/表情全屏预览 */}
-      {viewerSrc && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black" data-testid="wx-group-img-view" onClick={() => setViewerSrc(null)}>
-          <img src={viewerSrc} alt="图片预览" className="max-h-full max-w-full object-contain" />
-        </div>
+      {/* 图片/表情全屏预览（与单聊共用 WxPhotoViewer：左滑下一张/右滑上一张/点击关闭，支持键盘 ←→/Esc） */}
+      {viewer && (
+        <WxPhotoViewer
+          urls={viewer.urls}
+          index={viewer.index}
+          testId="wx-group-img-view"
+          onClose={() => setViewer(null)}
+          onIndexChange={(k) => setViewer((v) => (v ? { ...v, index: k } : v))}
+        />
       )}
       {/* 位置详情页（点位置卡片进入；与单聊共用同一套组件） */}
       {locView && <LocViewLayer name={locView.name} address={locView.address} onClose={() => setLocView(null)} />}

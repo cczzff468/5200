@@ -5,7 +5,9 @@
  * - 三通道：普通语音 = 音频文件（dataURL，真实出声）；文字转语音消息（带 localText）=
  *   **静音模拟播放**——不出声、不需要语音 API，点击只按估算时长推进波形进度动画；
  *   AI 语音消息（synth='builtin'，内置引擎）= **实时朗读**——点击时用浏览器引擎按角色
- *   音色把 localText 真实读出来（进度按估算推进，真实播完自动收尾，引擎失败降级静音模拟）
+ *   音色把 localText 真实读出来（进度按估算推进，真实播完自动收尾，引擎失败降级静音模拟）。
+ *   注意：synth='builtin'（浏览器实时朗读）自 2024 改版后仅存在于历史存量 AI 语音消息；
+ *   新版内置通道的 AI 语音消息不带 synth 标记，点击走 toggleSim 静音模拟（不出声）
  * - 与 TTS 朗读（电话等）互斥：播放前 stopOtherAudio 停掉对方
  * - stopVoicePlayback() 供聊天页卸载/切换会话/开录前释放（同时会停掉 AI 语音的实时朗读）
  */
@@ -165,7 +167,9 @@ function startPlay(id: string, src: string, fromPause: boolean): void {
  * AI 语音消息（内置引擎通道）：点击 → 用角色音色把 localText 实时朗读出来（真实出声）。
  * - 再次点击 = 停止（TTS 无法真暂停，再次点击从头播）；
  * - 进度按估算时长推进（hold：到点悬在 98% 等真实播完收尾）；
- * - 引擎不可用/播放失败 → simState 保留，进度动画按静音模拟继续走完（不打断 UI）。
+ * - 引擎不可用/播放失败 → simState 保留，进度动画按静音模拟继续走完（不打断 UI）；
+ * - synth='builtin'（浏览器实时朗读）自 2024 改版后仅存在于历史存量 AI 语音消息；新版内置通道
+ *   的 AI 语音消息不带 synth 标记，点击走 toggleSim 静音模拟（不出声），不再进入本函数。
  */
 function toggleBuiltinTts(id: string, text: string, contactId: string | null): void {
   const st = useVoicePlayback.getState();

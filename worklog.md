@@ -8442,3 +8442,131 @@ Stage Summary:
 - 识图链路补完：多图逐张描述拆分回写（连带修掉 runAiTurn base 重复计数的存量 bug）；未配置识图模型发图必有回应（临时上下文引导）且群聊不再全员沉默
 - 数据健壮性：三端排队补跑表 localStorage 持久化（刷新后重进会话自动补跑）；记忆手动总结认群消息（群聊按实际发言人归因）
 - 修改文件：ai-delivery.ts、vision-client.ts、chat-stream-store.ts、api/vision/route.ts、builtin-voices.ts、tts-client.ts、stt-client.ts、call-followup.ts、call-decision.ts、chat-call.ts、call-upstream.ts、db.ts、phone.tsx、wx-group.tsx、qq-group.tsx、wechat.tsx、qq.tsx、memory.ts
+
+---
+Task ID: 26-a
+Agent: AI 静音语音代理
+Task: AI 默认发静音语音——未配置语音 API 时 AI 也按频率发语音条（不出声，点击走静音进度动画），用户显式选「关闭」才不发
+
+Work Log:
+- 只改 3 个文件（ai-voice.ts 逻辑 + voice-player.ts/voice-bubble.tsx 仅注释）：
+- ai-voice.ts ①normalizeAiVoiceFreq：'off' 加入白名单，非法值兜底 'off'→'often'——「从未设置」的会话从此默认『经常』，AI 照发语音条（静音展示）
+- ai-voice.ts ②saveAiVoiceFreq：'off' 不再 delete key，改为显式落盘 map[freqKey]='off'——显式关闭与「从未设置」可区分（否则用户关了会被默认『经常』顶掉）
+- ai-voice.ts ③getAiVoiceFreq JSDoc 同步新默认语义；④文件头注释：第一部分补默认档位说明、第三部分内置引擎通道描述改为「静音语音条：不出音频文件、点击只走静音进度动画（不出声），长按转文字仍可看原文」
+- ai-voice.ts ⑤AiVoiceClip.synth 改为可选 synth?: 'builtin' | 'api'（'api'=已存真实音频；'builtin' 仅历史存量消息，新消息内置通道不再产出）；url/localText 字段注释同步
+- ai-voice.ts ⑥synthesizeAiVoice 内置分支（provider==='builtin' 或 !isTtsConfigured，判定逻辑不动）：返回值去掉 synth 字段 → 新 AI 语音消息不带 synth 标记，voice-player.toggle 对无标记 localText 气泡走 toggleSim 静音模拟（不出声）
+- voice-player.ts（仅注释）：文件头三通道描述与 toggleBuiltinTts JSDoc 各补一段「synth='builtin' 自 2024 改版后仅存在于历史存量 AI 语音消息；新版不带 synth 标记，点击走 toggleSim 静音模拟（不出声）」；toggleBuiltinTts/toggleSim 逻辑一行未动
+- voice-bubble.tsx（仅注释）：VoiceMsgData 的 localText/synth 字段注释同步（'builtin'=历史存量实时朗读，留空=静音语音条）；逻辑未动
+- 工程坑规避：编辑后按 worklog 惯例用 python3 repr 逐段校验三文件真实落盘（0 个 ESC 字符、中文字符/全角括号无损）
+- 验证：bunx tsc --noEmit 零错误（exit 0）；bun run lint 通过（exit 0，仅 qq.tsx >500KB babel 提示非错误）；grep 复核 5 处 synthesizeAiVoice 调用点（wechat 4304/qq 2967/wx-group 2945/qq-group 2613/chat 1059）的 synth: clip.synth 透传——clip.synth 变为 'builtin'|'api'|undefined，VoiceMsgData.synth 本就可选，天然兼容（tsc 全绿即证）；AiVoiceClip 无其他引用点；未改调用方文件、未 git、未动 dev server
+
+Stage Summary:
+- 未配置语音 API（或选内置声线）时 AI 默认按频率发语音：新会话默认档位 off→often，AI 语音条照常上屏但为静音语音条——无音频文件、点击只走 toggleSim 静音进度动画（不出声、按时长推进波形）、长按「转文字」可看原文
+- 用户显式选「关闭」仍完全不发（'off' 落盘与未设置区分）；配置 MiniMax/OpenAI 语音 API 后 synth='api' 真实音频行为不变；历史存量 synth='builtin' 旧消息点击仍走 toggleBuiltinTts 浏览器实时朗读（逻辑保留）
+- 修改文件：src/lib/ios/ai-voice.ts（逻辑+注释）、src/lib/ios/voice-player.ts（仅注释）、src/components/apps/voice-bubble.tsx（仅注释）；tsc + lint 双绿
+---
+Task ID: 26-b
+Agent: 微信单聊图片体验代理
+Task: wechat.tsx 落地需求2（发图先预览再发送）+ 需求3（连续≥4张照片折叠堆叠卡片+多图大图查看器）
+
+Work Log:
+- 先读 worklog 前情与共享组件 src/components/apps/photo-stack.tsx（WxPhotoStack/WxPhotoViewer/findPhotoStackSpans/PhotoStackItem 的 props 与行为），再按内容定位 wechat.tsx 全部锚点（viewerSrc 状态/渲染、sendImageFiles、msgs.map 图片分支、输入栏、隐藏 input、发送按钮）
+- 需求2（发图先预览）：①新状态 pendingImgs: PhotoStackItem[]（复用 photo-stack 的条目类型）；②sendImageFiles 拆为 stageImageFiles（只读图入预览条，不上屏不触发 AI，累计上限 9 张、超限 toast「一次最多发 9 张图片」、读取失败 toast「图片读取失败」）+ flushPendingImages（沿用原发送段语义：逐张 setMsgs 上屏 → 自己会话直接返回 → isChatStreaming||isAiDelivering 时 wxQueueAdd+排队 toast → 否则 runAiTurnRef.current?.(null, created)）；③相机/相册两个隐藏 input onChange 改 stageImageFiles；④输入行 flex 之后、px-2.5 容器关闭之前插入预览条（wx-img-preview-bar：62px 缩略图+右上角 X 移除钮+绿色「发送(N)」按钮；plusOpen/stickerOpen 展开时隐藏）；⑤主发送按钮条件加 || pendingImgs.length > 0，onClick 三分支 input.trim()→send / pendingImgs→flushPendingImages / dispatchBatch，aria-label 补「发送 N 张图片」
+- 需求3（照片堆叠）：①import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack'；②viewerSrc 单图状态 → viewer:{urls,index}，新增 expandedStacks:Set<string>（展开后不收回）；③return 前算 photoSpans（selectMode 时空数组不折叠；isPhoto=kind==='image'&&img.src&&!recalled；joined=同 role+间隔≤5min，与时间分隔行同口径）→ stackHead(Map 头下标→全组照片) + stackMember(Set 成员下标)；④msgs.map 回调改块体，最前面 stackMember.has(i) return null（成员行整行跳过，组内 joined 保证无时间分隔行穿插）；⑤图片分支前插堆叠分支：stackHead.has(i)&&!expandedStacks.has(m.id) 渲染 WxPhotoStack（onOpenAt 开大图 onExpand 展开），不套 {...bubblePress} 长按；展开后落回原单图分支逐条平铺仍带长按；⑥viewer 渲染整块换 WxPhotoViewer（testId 保持 wx-img-view，onIndexChange 回写 index）；图片/表情包两处 onClick 改 setViewer({urls:[src],index:0}) 带空串保护
+- 验证：bunx tsc --noEmit 零错误（exit 0，跑两次含注释修正后复跑）；bun run lint 通过（exit 0）；grep 复核 sendImageFiles=0、viewerSrc=0、无 ESC 字符；按 worklog 已知吞字符坑用 python3 repr 逐段校验 8 个编辑区段（stage/flush、photoSpans、map 开/闭、堆叠分支、表情 onClick、发送按钮、预览条、viewer）真实落盘无损；未动 dev server、未 git、未改其他文件（ai-voice.ts 等并行代理文件未触碰且 tsc/lint 全绿无需适配）
+
+Stage Summary:
+- 需求2：微信单聊「+→图片/相机」选图后不再直发——图片以缩略图条显示在输入框下面（可逐张移除），点缩略图条「发送(N)」或主发送按钮才真正上屏并触发 AI 回合（流式/投递中沿用排队补跑口径，自己会话只上屏不触发）；上限 9 张
+- 需求3：聊天里连续照片 ≥4 张（同发送者+间隔≤5 分钟）自动折叠成堆叠卡片——左侧「展开 N」半透明胶囊 + 主图右侧扇形露出后面照片边缘；堆叠上左滑下一张/右滑上一张（拖动跟手）、点击开大图；大图内同样左滑翻页（底部 i/N 指示）；点「展开 N」恢复逐条平铺且不收回（同原生微信），展开后每张仍带长按菜单；多选转发模式下不折叠；表情包/单图入口兼容进新大图查看器（单图无指示器）
+- 修改文件：仅 src/components/apps/wechat.tsx（9355→9427 行）；tsc + lint 双绿
+---
+Task ID: 26-d
+Agent: QQ 单聊发图预览代理
+Task: 需求2（发图先预览）——QQ 单聊点「图片/拍摄」选图后不再直接发出，先进输入框下方缩略图预览条，点「发送」才真正发出并触发 AI 回合（仅改 src/components/apps/qq.tsx）
+
+Work Log:
+- 读 worklog 末 200 行对齐现状锚点（Task 23/24 的排队补跑口径、吞字符坑、ChatPage key=peer.id 每次换人重挂载）
+- Grep 核对实际写法：sendImageFiles(L2357) / compressImageFile(L917) / qqQueueAdd / isChatStreaming||isAiDelivering / runAiTurnRef / onToast / QQ_BLUE=#12B7F5 / 面板状态 plusOpen·stickerOpen / 隐藏 input L4895-4918 / 主发送按钮 L4439-4456（canDispatch+dispatchBatch 分句批次兜底）
+- 新增状态：pendingImgs（Array<{id,src}>）+ pendingImgsRef 镜像 ref——异步压缩/移除/发出多处并发改写统一以 ref 为准再同步回 state，规避闭包旧值；ChatPage 按 peer.id keyed 重挂载，预览条天然随会话隔离，无需清场 effect
+- sendImageFiles 拆两段：stageImageFiles(files)（逐张 compressImageFile 压缩入预览条，上限 9 张含已暂存、超出发「一次最多发 9 张图片」、压缩等待后再核一次上限，读图失败沿用原文案「图片发送失败」，不上屏不触发 AI）；flushPendingImages()（逐张转 QQMsg{content=dataURL, kind:'image'} 上屏 → 清空预览条 → 自聊 early-return → 流式/投递中走 qqQueueAdd+toast「消息已发出，对方回完这轮就聊」→ 否则 runAiTurnRef.current?.(null, created)，参数与排队口径照旧）；另加 removePendingImg 逐张移除
+- 两个隐藏 input（相册/拍摄）onChange 改调 void stageImageFiles(e.target.files)，e.target.value='' 复位保留
+- 预览条插入输入行 flex 关闭之后、六图标工具栏之前（输入栏容器内）：data-testid qq-img-preview-bar / qq-img-preview-send / qq-img-preview-remove-${k}（另加 qq-img-preview-item-${k}）；62px 圆角缩略图 ring-1 ring-black/[0.06] dark:ring-white/10、右上 18px 黑色半透明(bg-black/55)×移除钮、右侧「发送(N)」按钮用主发送按钮同款 QQ 蓝(QQ_BLUE)+阴影+active 缩放；!stickerOpen && !plusOpen 时才显示（表情/加号面板打开隐藏）
+- 主发送按钮：disabled/aria-label/className/style 四处条件补 || pendingImgs.length > 0；onClick 改「有文字先 void send() → 无文字有待发图 flushPendingImages() → 否则 dispatchBatch()」原分支结构保留（ttsSend 语音、分句批次逻辑不动）
+- 文件头注释 L25-26 与隐藏 input 注释同步描述「发图先预览」；旧 sendImageFiles 标识符 grep 清零
+- 验证：bunx tsc --noEmit —— qq.tsx 零错误（中途一轮全绿 exit 0；收尾时余 7 个错误全在 wx-group.tsx/qq-group.tsx，为并行代理在改文件，按任务书忽略）；bun run lint exit 0（仅文件>500KB 的 BABEL 提示）；python3 repr 校验关键区（状态块/stage+flush/发送按钮+预览条/隐藏 input/依赖数组行）方括号替换 <L>/<R> 后打印无损——复现并识别了输出通道吞 [m 序列的显示假象（}, [me.id… 显示成 }, e.id…），文件本体经 <L>/<R> 校验完好；dev.log 热编译 ✓ 无重启、未 git
+
+Stage Summary:
+- QQ 单聊发图改为「先预览后发送」：工具栏图片/拍摄选图 → 压缩进输入框下方预览条（≤9 张、可逐张移除、超限 toast、失败 toast，不触 AI）→ 点预览条「发送(N)」或主发送按钮逐张上屏并按原口径触发 AI 回合（流式/投递中自动排队补跑 + toast、自聊只上屏、消息结构与旧版完全一致 content=dataURL）
+- 主发送按钮三段式分发：文字优先 → 待发图 → 分句批次兜底，语音(voiceMode/ttsSend)与分句功能零回退；QQ 蓝 #12B7F5 风格一致，未加微信式照片堆叠/大图查看器
+- 修改文件：仅 src/components/apps/qq.tsx（11666→11735 行）；本文件 tsc/lint 双绿
+---
+Task ID: 26-c
+Agent: 微信群聊图片体验代理
+Task: wx-group.tsx 接入共享照片堆叠组件（连续≥4张同发送者照片折叠堆叠卡）+ 发图先预览（选图先进输入行下方待发条，点「发送」才上屏）
+
+Work Log:
+- 只改 src/components/apps/wx-group.tsx 一个文件；先读 worklog 尾部 + photo-stack.tsx（WxPhotoStack/WxPhotoViewer/findPhotoStackSpans/PhotoStackItem props）+ wechat.tsx ImageMsgBubble 用法（只读）+ groups.ts WxGroupMsg 类型（role/senderId/senderName/time/kind/img/recalled）
+- import 共享组件：import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack'（'./wechat' import 行后）
+- 需求3 状态改造：viewerSrc:string|null → viewer:{urls:string[];index:number}|null；新增 expandedStacks:Set<string>（头部消息 id，展开后不收回）；全文件 setViewerSrc 清零——图片气泡 onClick → setViewer({urls:[src],index:0})（空串保护：src 存在才开）；表情包 onClick 同构（url 存在才开，meaning toast 保留）；viewer 渲染块替换为 WxPhotoViewer（testId="wx-group-img-view" 保持，onIndexChange 回写 index）
+- 需求3 分组逻辑（memberById 后、渲染前，useMemo×3）：photoStackSpans = findPhotoStackSpans(msgs.length, isPhoto, joined)——isPhoto = kind==='image' && img?.src && !recalled；joined = 同发送者 && 时间差≤5*60_000（同发送者口径：senderId 恒有值按字段相等（me 对 me 同堆、peer 按联系人 id 相等），空值兜底按 role 相等；时间口径与时间分隔行一致 y.time-x.time<=5*60_000）；selectMode 时分组为空（多选逐条勾选）；stackHead: 头部下标→PhotoStackItem[]（id+src）；stackMember: 成员下标→头部下标
+- 需求3 渲染接线（msgs.map 内）：成员行在折叠态 return null（按头部 id 判断展开后恢复平铺）；头部行条件分支 m.kind==='image' && m.img && stackItems && !expandedStacks.has(m.id) → 整行替换为 <WxPhotoStack items onOpenAt(开大图 urls=items.map(src) index=k) onExpand(add m.id)>，不套 renderMsgRow（无头像/名字行）且 onClickCapture/bubblePress 对堆叠头不挂载（{...(isStackHead ? {} : bubblePress)}，避免与堆叠内部左右滑动手势冲突）；展开后头部与成员都走原 ImageMsgBubble 平铺分支；时间分隔行仍在头部行上方正常显示
+- 需求2 发图拆分：sendImageFiles → stageImageFiles（meMuted 拦截同文案；逐张 readImageFile 压缩入 pendingImgs，总上限 9 张，超出 toast「最多发送 9 张图片」；读取失败 toast「图片发送失败」保留）+ flushPendingImages（pendingImgs 逐张上屏 → 分句发送只 markPendingBatch 入列 → runningRef/isChatStreaming 中 groupQueuedRef=true + toast「消息已发出，成员们回完这轮就聊」（群聊既有排队口径与文案）→ 否则 runGroupTurn(最后一张)；#26 语义保留：未配置识图照常触发回合）；全文件 sendImageFiles 引用清零
+- 需求2 UI：两个隐藏 input（相机/相册）onChange 改调 stageImageFiles；预览条插在输入行之下（px-2.5 容器内），pendingImgs 非空且 !plusOpen && !stickerOpen 才显示；62px 圆角缩略图横向滚动 + 右上角 × 移除（bg-black/60 白叉）+ 右侧绿色「发送(N)」按钮（#07C160/active #06AD56）；testid：wxg-img-preview-bar / wxg-img-preview-send / wxg-img-preview-remove-${k}
+- 需求2 主发送按钮：显示条件 draft.trim() || canDispatch || pendingImgs.length>0；send() 空文字分支改为 文字优先→有待发图 flushPendingImages→其次分句批次 dispatchBatch（原有顺序语义不变）；输入框 Enter 键同走 send() 自动受益
+- 验证：bunx tsc --noEmit exit 0（零错误，含并行代理文件当前也无错）；bun run lint exit 0；grep setViewerSrc/sendImageFiles 双清零；python3 校验 0 个 ESC 字符、22 处关键片段 repr 全命中、方括号配平（954/954）、三元链顺序正确；dev.log 编译正常无新增报错；未动 dev server/git/其他文件
+
+Stage Summary:
+- 需求2：群聊「+→图片/相机」选图不再直接发出——先进输入行下方待发预览条（≤9 张、可逐张 × 移除），点预览条「发送(N)」或主发送按钮（空文字时）才逐张上屏；上屏语义与文字消息完全同口径（分句批次入列、回合中排队补跑+既有 toast、#26 未配置识图必有回应）
+- 需求3：群里连续 ≥4 张同一发送者（相邻、间隔≤5 分钟，me/me 与 peer 按 senderId 归堆）的图片折叠为堆叠卡——左「展开 N」胶囊+主图右缘扇形露边，左滑下一张/右滑上一张/点击开大图（大图左滑切换、Esc/键盘/点击关闭），「展开 N」恢复逐条平铺且不收回；AI 群成员连发图片同样进堆叠；多选模式自动解除折叠
+- 复用共享 photo-stack.tsx 零复制；表情包/单图大图入口迁移到 WxPhotoViewer（wx-group-img-view testid 保留）；tsc+lint 双绿，setViewerSrc/sendImageFiles 残留清零
+- 修改文件：仅 src/components/apps/wx-group.tsx（5053→5188 行）
+
+---
+Task ID: 26-e
+Agent: QQ 群聊发图预览代理
+Task: QQ 群聊发图先预览——选图不再直接发出，缩略图条暂存输入框下方，点「发送(N)」/主发送按钮才上屏并触发群 AI 回合
+
+Work Log:
+- 先读 worklog 尾部 200 行对齐工程坑（ANSI 吞字用 python3 repr 校验、MultiEdit 非原子需核对状态）与既有口径（群排队=groupQueuedRef+「消息已发出，成员们回完这轮就聊」toast、#26 未配置识图照常触发、#25 多图识图逐张回写）
+- Grep 定位：sendImageFiles(3106-3145) 直发实现、隐藏 input(相机/相册 onChange)、主发送按钮(draft.trim()||canDispatch 条件)、runGroupTurnRef<(trigger?: WxGroupMsg)、appendMsg/uid/readImageFile(import 自 wechat)——确认群图片消息结构 img:{src:dataURL}、排队机制为 groupQueuedRef（单聊式 qqQueueAdd/isAiDelivering 不适用本文件，照本文件实际写法）
+- 拆两段（原位 3106 整块删除，新函数放 runGroupTurnRef 赋值之后、send 之前，避免 use-before-define）：
+  - stageImageFiles：禁言拦截（原 toast）→ 读图 readImageFile 压缩入 pendingImgs 暂存（不落屏不触发任何回复）→ 总量上限 9 张（room=9-已有，超出 toast「一次最多发 9 张图片」，放得下的照收；满 9 再选整批拒收同 toast）→ 单张失败沿用「图片发送失败」toast 且不进预览
+  - flushPendingImages：pendingImgs 逐张转 WxGroupMsg(kind:'image', img:{src}) 上屏（appendMsg 落盘）→ 清空预览 → runningRef||isChatStreaming → groupQueuedRef=true+toast「消息已发出，成员们回完这轮就聊」（与文字消息排队完全同款）→ sentenceSend 开启只入列(setPendingDispatch+markPendingBatch) → 否则 runGroupTurnRef.current(最后一张图) 触发群 AI 回合（trigger 与旧直发一致；#26 未配置识图照常触发语义保留）
+- send() 空输入分支改「文字优先→发图→原有兜底」：有文字走原路径不动；空文字先判 pendingImgs→flushPendingImages；无图再走原 dispatchBatch 分句兜底；meMuted/ttsSend/排队/引用等其余分支原样保留（@ 浮层等未触碰）
+- 主发送按钮：显示条件加 || pendingImgs.length>0，disabled 加 && pendingImgs.length===0（streaming/running 仍禁用，语义同文字），QQ 蓝 #0099FF 高亮/浅蓝 #8AD4F7 置灰样式随条件联动
+- 预览条插在输入行之下、工具栏之上：data-testid qqg-img-preview-bar / qqg-img-preview-send / qqg-img-preview-remove-${k}（按索引）；62px 圆角缩略图横向滚动 + 右上角 ×(dark 反色) 移除 + 「发送(N)」QQ 蓝同款按钮（#0099FF+同款阴影/按压动效）；voiceMode/stickerOpen/plusOpen 任一面板展开时整条隐藏；不做堆叠/大图查看（微信专属，QQ 跳过），图片气泡渲染未动
+- 隐藏 input onChange（相机 capture 单张 / 相册 multiple 多选）改调 void stageImageFiles(e.target.files)
+- 验证：bunx tsc --noEmit 零错误（exit 0，当前其他并行文件也无错）；bun run lint 通过（exit 0，qq.tsx>500KB babel 提示为既有非错误）；grep sendImageFiles 在 qq-group.tsx 及全 src 零残留；python3 repr 逐段校验 stage/flush/send 分支/预览条 JSX/两个隐藏 input/发送按钮条件区，0 个 ESC 字符、中文与 testid 模板串无损（新增后文件 4824 行）；关键计数核对：「一次最多发 9 张图片」×3（两处 toast+注释）、「消息已发出，成员们回完这轮就聊」新增 1 处、「成员们还在回复，稍等一下」7 处均为其他发送路径原有保留
+- 诚实备注：未做浏览器实机 E2E（并行代理正在改同项目其他文件，dev server 状态不可控且任务未要求）；流式/投递窗口的排队语义严格对齐本文件文字消息既有行为（runningRef||isChatStreaming 入队由回合 finally 补跑；投递完成后窗口与文字一致直开新回合，runCharTurn ctx 已拼 peekPendingMsgs 不会漏消息），未引入单聊式 isAiDelivering 入队以免 groupQueuedRef 无回合消费而石沉大海
+
+Stage Summary:
+- QQ 群聊发图改为「先预览后发送」：相机/相册选图→62px 缩略图预览条（输入行下方，上限 9 张超出 toast、失败沿用原文案不上屏）→点预览条「发送(N)」或主发送按钮（空文字时）才逐张上屏并触发群 AI 回合；回合进行中与文字消息同款排队+toast，分句发送只入列，未配置识图照常有回应
+- 主发送按钮三态兼容（文字/待发图/分句批次），原有功能分支（禁言、TTS 转语音、@ 浮层、引用、分句、排队补跑）全部保留；图片气泡渲染与微信专属堆叠/大图查看零改动
+- 修改文件：仅 src/components/apps/qq-group.tsx（4754→4824 行）；tsc + lint 双绿、sendImageFiles 旧引用清零、关键区 repr 校验无损；未 git、未动 dev server
+---
+Task ID: 26
+Agent: Z.ai Code (main) + 5 并行子代理
+Task: 第三轮 3 项新需求——AI 未配置语音 API 也默认发语音（静音语音条）/ 四端发图先预览再发送 / 微信连续照片 >3 张折叠堆叠（左滑切图+大图左滑+展开平铺）
+
+Work Log:
+- 主线程前置：先探明链路（ai-voice.ts 默认 off / voice-player 已有 toggleSim 静音模拟机制 / 四端 sendImageFiles 选完即发 / 微信单图 Lightbox 无多图能力），再写共享组件 src/components/apps/photo-stack.tsx（WxPhotoStack 堆叠卡：左「展开 N」胶囊+右缘扇形露边+pointer 左右滑切图+点击开大图；WxPhotoViewer 多图大图：跟手拖动+阈值翻页+首末张阻尼+i/N 指示+键盘操作；findPhotoStackSpans 连续照片分组 helper）——单聊/群聊共用
+- 并行子代理（文件互不重叠，各自 tsc+lint）：
+  - 26-a（ai-voice.ts+voice-player/voice-bubble 注释）：默认频率 off→often（未设置即发语音，显式关闭才不发，saveAiVoiceFreq 落盘 off）；内置通道不再产出 synth:'builtin'（AiVoiceClip.synth 改可选），新 AI 语音走 toggleSim 静音进度动画；synth:'api' 真音频不变；历史存量 builtin 保留朗读
+  - 26-b（wechat.tsx）：sendImageFiles 拆 stageImageFiles（入预览不上屏）+flushPendingImages（原发送段语义+排队口径）；预览条 wx-img-preview-* 在输入行下方；viewerSrc→viewer{urls,index}；照片堆叠分组+堆叠卡接入；WxPhotoViewer 替换旧单图 Lightbox（testid 保留 wx-img-view）
+  - 26-c（wx-group.tsx）：群聊同构（senderId 判同发送者；禁言/分句/群排队口径保留）；预览条 wxg-img-preview-*；堆叠+viewer（testid wx-group-img-view）；成员行跳过已按头部展开状态判断
+  - 26-d（qq.tsx）/ 26-e（qq-group.tsx）：仅发图预览（QQ 不做堆叠）；QQ 蓝「发送(N)」；禁言/排队/@ 等原有分支零改动
+- 主线程集成修复 2 处：
+  ① wx-group.tsx voiceViewOf 的 synth 兜底 `v.synth ?? (peer&&!url?'builtin':undefined)` 会把新静音语音刷新后补写 builtin 变朗读——改白名单透传（与 wechat/qq/chat normalize 口径一致）
+  ② wechat.tsx 堆叠成员行 `stackMember.has(i)→return null` 未判展开状态，「展开」后 5/6 张消失（E2E 实测 flatImgs:1）——stackMember 改 Map 成员→头部下标，跳过前判 expandedStacks.has(headId)（对齐 26-c 群聊写法）；修复后 flatImgs:6
+- E2E（agent-browser 实机，mock /api/chat + IndexedDB 种子）：
+  ① 需求1：清频设置后发文字 → AI 首条回复即语音气泡（落库 voice.synth=null 静音通道）；点击 → data-voice-active=true 静音进度动画；频率计数逐条推进（voice/text/voice 交替符合每 3 条 1 语音）
+  ② 需求2：注入 2 张 → 预览条 2 缩略图+聊天区 0 图（未直发）；移除 1 张 → 发送 → 1 张上屏+AI 回合触发；群聊预览条 wxg 同样工作（截图确认输入框下方 3 缩略图+×+「发送(3)」）
+  ③ 需求3：种子 6 张连续图 → 折叠堆叠（count=6、「展开 6」、平铺 0 张）；堆叠左滑 idx0→1；点击开大图（viewIndex=1、指示器「2 / 6」）；大图左滑→index 2；点击关闭；「展开 6」→ 6 张全平铺（修复后）；刷新回折叠态；3 张批不折叠（被 AI 回复打断时 run=3）；群聊种子 5 张 → 折叠/左滑/展开全通
+  - console 报错经查为子代理编辑期间的陈旧编译错误（dev.log 同期可见，已修复），errors 命令当前为空
+- 验证：bunx tsc --noEmit 零错误、bun run lint 通过、dev.log 编译正常
+
+Stage Summary:
+- AI 语音：未配置语音 API 也默认发语音条（默认「经常」每 3 条 1 条），点击只走静音进度动画不出声，长按转文字仍可看原文；配置 MiniMax/OpenAI API 才有真实声音；显式关闭仍完全不发
+- 发图预览：微信单聊/群聊、QQ 单聊/群聊四端统一——选图先入输入框下方预览条（可移除、上限 9 张），点「发送(N)」或主发送按钮才真正发出；排队/AI 回合触发语义与原直发完全一致
+- 照片堆叠：微信单聊+群聊连续照片 ≥4 张（同发送者、间隔≤5 分钟）折叠成「展开 N」堆叠卡；堆叠左滑下一张/右滑上一张/点击开大图；大图支持左右滑切换+索引指示+键盘操作；展开恢复平铺不收回；多选模式自动不折叠
+- 修改文件：新增 photo-stack.tsx；ai-voice.ts、voice-player.ts、voice-bubble.tsx、wechat.tsx、wx-group.tsx、qq.tsx、qq-group.tsx
