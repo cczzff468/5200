@@ -9161,3 +9161,24 @@ Work Log:
 
 Stage Summary:
 - Task 40 全部五项需求交付：①相册照片可设为锁屏壁纸（与主屏独立）；②AI 主动打电话（人设/聊天/时间决策→真拨打→接听/拒绝/挂断→通话内容全注入→挂断落记忆，调度参数可调、设置有开关）；③拉黑重构（按 App×联系人隔离的双向真实拦截+双向解除申请卡+AI 决策标记+三防骚扰，跨App 不受限）；④跨App 记忆携带（其他 App 最近 10 条原始消息+当前 App 声明，share 开关门控）；⑤群聊记忆携带（共同群最近 10 条按群/发言人标注）+注入顺序合规+system 三要素文案；⑥四端通话/聊天管线零回归（tsc/lint/E2E 三重验证）
+
+---
+Task ID: 41-setup
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 仓库 cczzff468/5200 拉取项目文件到当前沙箱 /home/z/my-project，配置 git 远端（PAT 鉴权）以便后续推送，并验证项目可正常运行
+
+Work Log:
+- 克隆 https://github.com/cczzff468/5200.git 到 /tmp/5200-repo 检视内容；确认是 Next.js 16 iOS 仿手机模拟项目（已含 Task 40 全量历史）
+- 停止沙箱内已运行的 dev server（PID 1175/1178/1181）
+- 清理 /home/z/my-project 旧文件（src/prisma/public/mini-services/package.json 等均删），保留 .env（沙箱 DATABASE_URL=file:/home/z/my-project/db/custom.db）
+- rsync 同步 /tmp/5200-repo/ → /home/z/my-project/（排除 .env，保留沙箱运行时 .zscripts/Caddyfile 与仓内一致）；repo 自带 .git 全量历史（HEAD=e50e181）与已播种的 db/custom.db（49KB）一并落地
+- 配置 git remote：origin = https://cczzff468:<PAT>@github.com/cczzff468/5200.git，分支重命名为 main；git fetch origin 成功（拉到 main + 两个 backup 分支）；本地 HEAD 与 origin/main 完全一致 e50e181
+- bun install：855 包 2.81s 装完；bunx prisma generate 成功
+- 跳过 prisma db push（沙箱 dev.sh 会跑 --accept-data-loss 清数据，但本仓 db/custom.db 已正确播种，schema 4 model 与 DB 表完全一致：User/Post/WxBackground/Contact，无数据丢失必要）
+- 启动 dev server：用 (bun run dev > dev.log 2>&1 &) 子 shell 后台启动，进程跨 tool call 存活（PID 2080/2082/2083）；HTTP 200 首编译 3.0s、后续 50ms 内
+- Agent Browser E2E 验证：①锁屏渲染正确（VLM 确认：状态栏/日期/大时钟/电池+天气+日历 widget/手电筒+相机按钮/灵动岛/向上轻扫以解锁）；②mouse drag 上滑解锁成功→主页（VLM 确认：app 图标网格/搜索栏/Dock 含信息角标/联系人/电话/设置）；③点击设置 app→iOS 设置页正确（VLM 确认：Apple ID/飞行模式/Wi-Fi/蓝牙/锁屏与密码/显示与亮度/壁纸/通知/开发者 API 配置）；④dev.log 仅 /api/weather 返 502（外部天气上游服务在沙箱不可达，非致命，weather widget 仅无实时数据，不影响主流程）
+- 浏览器关闭，验证完成
+
+Stage Summary:
+- 交付状态：项目文件已从 GitHub 全量同步到 /home/z/my-project；git origin 已用 PAT 配置（push 可直推 origin/main）；bun install + prisma generate 完成；dev server 后台运行中（http://localhost:3000，HTTP 200）；Agent Browser E2E 验证锁屏→解锁→主页→打开 App 全链路 PASS
+- 环境备注：仓库自带已播种 db/custom.db（含 Contact/WxBackground 等服务端持久数据，客户端 IndexedDB/localStorage 在新浏览器 profile 下为空属预期）；/api/weather 外部依赖在沙箱不可达返 502，不影响 iOS 模拟主体功能；.env 保留沙箱 DATABASE_URL，未触碰；本地 HEAD 与 origin/main 同步 e50e181，等待用户指示后续要修改/新增的功能
