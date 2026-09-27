@@ -42,7 +42,7 @@ import {
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getReplyCount, hasReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
+import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { hasVoiceCallMark, stripVoiceCallMark } from '@/lib/ios/chat-call';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
@@ -70,7 +70,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
-import { ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -395,15 +395,9 @@ async function recordMissedPhoneCall(
       memoryBlock: memRecallBlock(contact.id, 'sms', recentChat.map((m) => m.content).join(' ')) || undefined,
       timeBlock: buildSmsTimeBlock({ lastMsgTime: recent.length > 0 ? recent[recent.length - 1].time : null, regionHint: contact.region || null }),
       multiApp: getMemSettings(contact.id).share,
-      // 条数上限（跟随微信，与信息聊天主回复同一回退链）：信息自己的设置（sms:c:<id>，向后兼容）
-      // 优先；信息端未设置时跟随微信同联系人的「回复条数」（wx:<id>，微信会话设置页读写的就是
-      // 该键，contact.id 与微信端 peer.id 同源：均取自 contacts-store）；两端都未设置回退
-      // 1 条留言（原状）。留言条数 = 会话回复条数，跟随微信里对该联系人的选择。
-      replyCount: (() => {
-        const smsKey = `sms:c:${contact.id}`;
-        const wxKey = `wx:${contact.id}`;
-        return hasReplyCount(smsKey) ? getReplyCount(smsKey, 1) : hasReplyCount(wxKey) ? getReplyCount(wxKey, 1) : 1;
-      })(),
+      // 留言条数 = 该联系人在信息聊天设置页选定的回复条数
+      // （未设置默认 5 条，与微信端默认口径一致）。
+      replyCount: getReplyCount(`sms:c:${contact.id}`),
       userRealName: owner?.realName || undefined,
       userNickname: owner?.nickname || undefined,
     });
@@ -789,10 +783,18 @@ function ChatView({
   const apiConfig = useSettings((s) => s.apiConfig);
   /** 机主名字（记忆提取视角统一用：碎片一律用真实名字指代用户；设置 › Apple 账户可改） */
   const profileName = useSettings((s) => s.profile.name);
-  /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */
+  /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 回复条数入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
   const [translateOpen, setTranslateOpen] = useState(false);
+  /** 回复条数选择页（设置页「回复条数」进入的独立二级页，按会话隔离） */
+  const [replyCountOpen, setReplyCountOpen] = useState(false);
+  /** 当前会话的回复条数（信息端每会话独立；未设置默认 5 条，与微信端同口径） */
+  const [replyCountValue, setReplyCountValue] = useState(() => getReplyCount(sessionKey));
+  // 切换会话时重读新会话的回复条数（与 transCfg/sentenceSend 既有会话级 state 同模式）
+  useEffect(() => {
+    setReplyCountValue(getReplyCount(sessionKey));
+  }, [sessionKey]);
   /** 当前会话的翻译配置（开启后文字消息气泡下方显示所选语言的译文） */
   const [transCfg, setTransCfgState] = useState<ChatTranslateCfg>(() => getTranslateCfg(sessionKey));
   useEffect(() => {
@@ -1112,19 +1114,9 @@ function ChatView({
     if (userMsg) setMsgs((prev) => [...prev, userMsg]);
 
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
-    // 回复条数（跟随微信）：信息自己的设置（sms:c:<id>，向后兼容，暂无设置入口）优先；
-    // 信息端未设置时跟随微信同联系人的「回复条数」——微信会话设置页读写的正是
-    // wx:<contactId> 这个键（contactId 与本端联系人同源：均取自 contacts-store 的联系人
-    // id，本端 storageKey 形如 c:<contactId>），两端看到/改动的值一致；
-    // 两端都未设置时保持信息端原状 1 条（不把微信端「未设置时显示的默认 5 条」强加给信息端）。
-    // AI 助手会话（无 systemPrompt 人设）恒 1 条不变。
-    const wxReplyCountKey = memContactId ? `wx:${memContactId}` : null;
-    const followReplyCount = hasReplyCount(sessionKey)
-      ? getReplyCount(sessionKey, 1)
-      : wxReplyCountKey && hasReplyCount(wxReplyCountKey)
-        ? getReplyCount(wxReplyCountKey, 1)
-        : 1;
-    const replyCount = systemPrompt ? followReplyCount : 1;
+    // 回复条数：信息端每会话独立设置（信息聊天设置页 → 回复条数，读写 sms:c:<id> 键），
+    // 未设置默认 5 条（与微信端同口径）；AI 助手会话（无 systemPrompt 人设）恒 1 条不变。
+    const replyCount = systemPrompt ? getReplyCount(sessionKey) : 1;
     // 记忆库：联系人会话召回记忆（memContactId 为组件级常量：storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
     const memoryBlock = memContactId
       ? memRecallBlock(
@@ -2363,6 +2355,8 @@ function ChatView({
           }
           onBack={() => setSettingsOpen(false)}
           onOpenTranslate={() => setTranslateOpen(true)}
+          replyCount={replyCountValue}
+          onOpenReplyCount={() => setReplyCountOpen(true)}
           onToggleSentenceSend={(v) => {
             saveSentenceSend(sessionKey, v);
             setSentenceSendState(v);
@@ -2387,6 +2381,19 @@ function ChatView({
           onOpenVoice={wbContactId ? () => setVoiceOpen(true) : undefined}
           blockedByUser={blk.byUser === true}
           onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
+        />
+      )}
+
+      {/* 回复条数选择页（聊天设置二级页）：信息端每会话独立，选择后立即持久化生效 */}
+      {replyCountOpen && (
+        <ChatReplyCountPage
+          variant="sms"
+          value={replyCountValue}
+          onBack={() => setReplyCountOpen(false)}
+          onSelect={(n) => {
+            saveReplyCount(sessionKey, n);
+            setReplyCountValue(n);
+          }}
         />
       )}
 

@@ -11,7 +11,7 @@
  * - ChatTranslatePage：翻译语言页（三端共用，参考 iOS 翻译语言页）—— 总开关 + 语言对选择：
  *   上方左右两个语言槽可点选（点一侧再在下方列表选语言），中间 ⇄ 一键互换；
  *   聊天中按消息语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧
- * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 分句发送开关 + 时间感知开关）
+ * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 回复条数入口 + 分句发送开关 + 时间感知开关）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - ChatVoicePage：「他的声音」页（三端共用二级页）——选角色说话音色（默认/内置音色/
@@ -568,8 +568,8 @@ export function ChatReplyCountPage({
   const rowCls = wx
     ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
     : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
-  // 选中勾色：微信绿 / QQ 蓝
-  const accent = wx ? '#07C160' : '#0099FF';
+  // 选中勾色：微信绿 / 信息 iOS 绿 / QQ 蓝
+  const accent = wx ? '#07C160' : variant === 'sms' ? '#34C759' : '#0099FF';
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
   const headerH = wx ? 'h-11' : 'h-12';
   const testPrefix = variant;
@@ -1184,7 +1184,8 @@ export function ChatTranslatePage({
 
 /**
  * 信息 App 的聊天设置页（聊天页顶栏摄像机图标进入）：
- * 对方信息卡片 + 翻译入口（ChatTranslatePage，variant=sms）+ 分句发送开关。
+ * 对方信息卡片 + 翻译入口（ChatTranslatePage，variant=sms）+ 回复条数入口
+ * （ChatReplyCountPage，variant=sms，信息端每会话独立）+ 分句发送开关。
  */
 export function SmsChatSettingsPage({
   peerName,
@@ -1192,6 +1193,7 @@ export function SmsChatSettingsPage({
   phone,
   remark,
   translateSummary,
+  replyCount,
   sentenceSend,
   timeAware,
   stickersOn,
@@ -1199,6 +1201,7 @@ export function SmsChatSettingsPage({
   onBack,
   onSaveRemark,
   onOpenTranslate,
+  onOpenReplyCount,
   onToggleSentenceSend,
   onToggleTimeAware,
   onToggleStickers,
@@ -1216,6 +1219,8 @@ export function SmsChatSettingsPage({
   /** 备注名（仅机主自己可见；空 = 未设置） */
   remark: string;
   translateSummary: string;
+  /** 当前会话的回复条数（信息端每会话独立；未设置时宿主传默认 5） */
+  replyCount: number;
   sentenceSend: boolean;
   /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
   timeAware: boolean;
@@ -1227,6 +1232,8 @@ export function SmsChatSettingsPage({
   /** 保存备注（空串 = 清除备注；宿主负责持久化并刷新展示名） */
   onSaveRemark: (v: string) => void;
   onOpenTranslate: () => void;
+  /** 打开回复条数选择页（ChatReplyCountPage，variant=sms；信息端每会话独立） */
+  onOpenReplyCount: () => void;
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
   onToggleStickers: (v: boolean) => void;
@@ -1308,6 +1315,17 @@ export function SmsChatSettingsPage({
               <span data-testid="sms-translate-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
                 {translateSummary}
               </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+            </span>
+          </button>
+        </div>
+
+        {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择，信息端每会话独立） */}
+        <div className={`${t.cardCls} mt-3`}>
+          <button type="button" data-testid="sms-settings-reply-count" onClick={onOpenReplyCount} className={t.rowCls}>
+            <span>回复条数</span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span data-testid="sms-reply-count-value" className="max-w-[150px] truncate text-[14px] text-muted-foreground">{replyCount} 条</span>
               <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
             </span>
           </button>
