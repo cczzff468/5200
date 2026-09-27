@@ -59,6 +59,13 @@ interface GlobalCallState {
   pipSide: 'left' | 'right';
   /** 小窗位置（相对手机壳左上角；null=未初始化，首次显示时按壳尺寸摆到右上） */
   pipPos: { x: number; y: number } | null;
+  /** 来电中全屏通话页引擎的接听/拒绝方法（direction='in' 时由 VoiceCallScreen 注册）：
+      全局来电弹窗（微信大窗/胶囊）上的接听、忽略按钮经此代理到页内引擎 */
+  engine: { accept: () => void; reject: () => void } | null;
+  /** 全屏通话页引擎当前阶段（来电弹窗跟随：incoming 才显示，接通/结束后消失） */
+  enginePhase: 'dialing' | 'incoming' | 'active' | 'ended' | null;
+  setEngine: (engine: { accept: () => void; reject: () => void } | null, phase: GlobalCallState['enginePhase']) => void;
+  setEnginePhase: (phase: GlobalCallState['enginePhase']) => void;
   start: (s: GlobalCallSession) => void;
   minimize: () => void;
   expand: () => void;
@@ -75,6 +82,10 @@ export const useGlobalCall = create<GlobalCallState>()((set) => ({
   pipDocked: false,
   pipSide: 'right',
   pipPos: null,
+  engine: null,
+  enginePhase: null,
+  setEngine: (engine, phase) => set({ engine, enginePhase: phase }),
+  setEnginePhase: (phase) => set({ enginePhase: phase }),
   start: (s) =>
     set((prev) => ({
       session: s,
@@ -82,6 +93,8 @@ export const useGlobalCall = create<GlobalCallState>()((set) => ({
       view: 'full',
       pipDocked: false,
       pipPos: null,
+      engine: null,
+      enginePhase: null,
     })),
   minimize: () => set({ view: 'pip', pipDocked: false }),
   expand: () => set({ view: 'full' }),
@@ -90,7 +103,7 @@ export const useGlobalCall = create<GlobalCallState>()((set) => ({
   setPipPos: (p) => set({ pipPos: p }),
   close: () => {
     reportCallSeconds(0);
-    set({ session: null, view: 'full', pipDocked: false, pipPos: null });
+    set({ session: null, view: 'full', pipDocked: false, pipPos: null, engine: null, enginePhase: null });
   },
 }));
 

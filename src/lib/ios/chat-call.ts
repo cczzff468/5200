@@ -63,7 +63,7 @@ import {
 import { requestAnswerDecision } from './call-decision';
 import { requestCallFollowup } from './call-followup';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
-import { reportCallSeconds } from './global-call';
+import { reportCallSeconds, useGlobalCall } from './global-call';
 import { getReplyCount } from '../reply-count';
 
 // ---------------- 类型 ----------------
@@ -1115,6 +1115,17 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     if (endedRef.current || phaseRef.current !== 'incoming') return;
     finish('reject');
   }, [finish]);
+
+  // 来电（direction='in'）：接听/拒绝方法与引擎阶段同步到全局通话 store ——
+  // 全局来电弹窗（微信大窗/胶囊）上的接听、忽略按钮经 useGlobalCall.engine 代理到本页引擎；
+  // phase 变化（incoming→active/ended）自动重注册/清空，来电弹窗随之出现/消失
+  useEffect(() => {
+    if (direction !== 'in') return;
+    useGlobalCall.getState().setEngine({ accept, reject }, phase);
+    return () => {
+      useGlobalCall.getState().setEngine(null, null);
+    };
+  }, [direction, accept, reject, phase]);
 
   const hangup = useCallback(() => {
     if (endedRef.current) return;

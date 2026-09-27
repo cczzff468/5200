@@ -42,6 +42,11 @@ import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
+import { requestCallFollowup } from '@/lib/ios/call-followup';
+import { setPendingPhoneAnswer, triggerIncomingCall } from '@/lib/ios/incoming-call';
+import { localDB, genId, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
+import { ownerProfile } from '@/lib/ios/contacts-store';
+import { buildTimeAwareBlock as buildSmsTimeBlock } from '@/lib/time-aware';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -261,6 +266,93 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
 function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
   // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
   kvSet(lsMsgsKey(sessionKey), msgs.slice(-100));
+}
+
+/** AI 打来的电话被拒接 / 响铃超时未接（信息 App AI 语音通话标记触发）：
+ *  落「未接来电」通话记录 + AI 语音留言（人设化解释，走挂断续聊 followup 链路），
+ *  留言逐条落 voicemails（未读红点），电话 App 打开时可见；失败静默（记录已落，留言缺失可接受） */
+async function recordMissedPhoneCall(
+  contact: ContactRecord | null,
+  number: string,
+  fallbackName: string,
+  reason: 'declined' | 'timeout',
+): Promise<void> {
+  const contactId = contact?.id ?? null;
+  const displayName = contact?.name ?? fallbackName;
+  try {
+    await localDB.put('call-logs', {
+      id: genId(),
+      number,
+      contactId,
+      displayName,
+      peerKind: (contact?.kind as CallLogRecord['peerKind']) ?? 'unknown',
+      avatar: contact?.avatar ?? null,
+      direction: 'missed',
+      duration: 0,
+      createdAt: Date.now(),
+    });
+  } catch {
+    // 记录落盘失败静默
+  }
+  if (!contact) return;
+  try {
+    const [owner, recent] = await Promise.all([
+      ownerProfile().catch(() => null),
+      Promise.resolve(loadMsgs(`c:${contact.id}`) ?? []),
+    ]);
+    const recentChat = recent
+      .filter((m) => !m.sys && !m.blkreq && !m.recalled && (m.content ?? '').trim().length > 0)
+      .slice(-6)
+      .map((m) => ({ role: m.role === 'user' ? ('user' as const) : ('assistant' as const), content: m.content }));
+    const texts = await requestCallFollowup({
+      contact: {
+        name: contact.name,
+        kind: contact.kind,
+        gender: contact.gender || null,
+        age: contact.age || null,
+        occupation: contact.occupation || null,
+        region: contact.region || null,
+        relation: contact.relation || null,
+        relationToUser: contact.relationToUser || null,
+        birthday: contact.birthday || null,
+        persona: contact.persona || null,
+        background: contact.background || null,
+        nickname: contact.nickname || null,
+        realName: contact.name || null,
+      },
+      // AI 是主叫（direction='out'）；被拒接 = reject、响铃超时 = missed-in（与现有场景文案语义一致）
+      direction: 'out',
+      endReason: reason === 'declined' ? 'reject' : 'missed-in',
+      connected: false,
+      duration: 0,
+      transcript: [],
+      recentChat,
+      memoryBlock: memRecallBlock(contact.id, 'sms', recentChat.map((m) => m.content).join(' ')) || undefined,
+      timeBlock: buildSmsTimeBlock({ lastMsgTime: recent.length > 0 ? recent[recent.length - 1].time : null, regionHint: contact.region || null }),
+      multiApp: getMemSettings(contact.id).share,
+      // 条数上限 = 该会话聊天设置「回复条数」（sms:c:<id>，与信息聊天同一份设置；未设置回退 1 条留言）
+      replyCount: getReplyCount(`sms:c:${contact.id}`, 1),
+      userRealName: owner?.realName || undefined,
+      userNickname: owner?.nickname || undefined,
+    });
+    for (const text of texts) {
+      await localDB.put('voicemails', {
+        id: genId(),
+        number,
+        contactId,
+        displayName,
+        peerKind: (contact.kind as CallLogRecord['peerKind']) ?? 'unknown',
+        avatar: contact.avatar ?? null,
+        text,
+        kind: 'voicemail',
+        read: false,
+        duration: Math.max(1, Math.ceil(text.length / 4)),
+        createdAt: Date.now(),
+      });
+    }
+  } catch {
+    // 留言失败静默
+  }
 }
 
 /** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
@@ -863,6 +955,10 @@ function ChatView({
       wbContactId ? buildBlockPromptBlock('sms', wbContactId, profileName) : '',
       // 语音占位防编造：最近消息里有听不到内容的语音时注入，AI 不假装听过、不编造内容
       buildVoicePlaceholderRule(msgs),
+      // 语音通话能力（仅联系人会话）：AI 想马上说话时可在回复开头加 [语音通话] 给机主打一次电话
+      wbContactId
+        ? '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 打一次电话给对方，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。'
+        : '',
       timeBlock,
       stickersOn ? '' : STICKER_OFF_RULE,
       ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
@@ -887,6 +983,7 @@ function ChatView({
     let deliveredAny = false; // 本轮是否已有分段消息排队投递（决定兜底文案）
     let batchStarted = false; // 是否已排过批（首批立即上屏，后续批按打字节奏先停顿）
     let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
+    let wantCallSeen = false; // [语音通话] 标记是否出现过（流中分段或最后一段；AI 主动打来电话）
 
     /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成（模块层调用，与页面是否存活无关） */
     const deliverAiMsg = (m: ChatMsg) => {
@@ -958,9 +1055,13 @@ function ChatView({
      * 再按「&&&」标记切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
      */
     const buildReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): ChatMsg[] => {
+      // AI 主动打来电话（[语音通话] 标记）：从气泡文本里剥除，只作为来电信号
+      const wantCall = rawText.includes('[语音通话]');
+      if (wantCall) wantCallSeen = true;
+      const text = wantCall ? rawText.replace(/\[[【]?语音通话[\]】]?/g, ' ').trim() : rawText;
       const out: ChatMsg[] = [];
       let t = baseTime;
-      for (const part of extractRichActionParts(rawText)) {
+      for (const part of extractRichActionParts(text)) {
         if (part.type === 'action') {
           const bk = blockActionKindOf(part.action);
           if (bk && wbContactId) {
@@ -1059,6 +1160,43 @@ function ChatView({
                 { user: owner || profileName, peer: peerReal || (peer.name ?? peer.title) }
               )
             );
+          }
+          // AI 主动打来电话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电——
+          // 全局胶囊弹窗 + iOS 全屏来电界面（PhoneShell › IncomingCallLayer），任何界面都会被覆盖
+          if (wantCallSeen && memContactId) {
+            void (async () => {
+              try {
+                const lastCallAt = Number(window.localStorage.getItem(`sms-vc-last:${memContactId}`) ?? '0');
+                if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
+                  window.localStorage.setItem(`sms-vc-last:${memContactId}`, String(Date.now()));
+                  const contact = (await listContacts()).find((c) => c.id === memContactId) ?? null;
+                  const number = contact?.phone ?? '';
+                  const name = contact?.name ?? peerLabel;
+                  window.setTimeout(() => {
+                    triggerIncomingCall({
+                      source: 'phone',
+                      name,
+                      avatar: contact?.avatar ?? null,
+                      number,
+                      contact,
+                      bannerStage: 'pill',
+                      // 接听：打开电话 App，由其消费 pending 进「来电方向」的通话界面（AI 先开口）；
+                      // 用 switchToApp（跨 App 强制切换）——当前正在任何 App 里都要跳转到来电通话
+                      onAnswer: () => {
+                        setPendingPhoneAnswer({ contact, number, name });
+                        useUI.getState().switchToApp('phone');
+                      },
+                      // 拒绝 / 响铃 25 秒超时：落未接记录 + AI 语音留言
+                      onMissed: (reason) => {
+                        void recordMissedPhoneCall(contact, number, name, reason);
+                      },
+                    });
+                  }, 1200);
+                }
+              } catch {
+                // localStorage 异常忽略
+              }
+            })();
           }
         });
       },

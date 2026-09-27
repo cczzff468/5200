@@ -7862,3 +7862,78 @@ Stage Summary:
 - 群聊修复点：条数规则动态化（单条=只发一条；多条=连发指令接管），消除与【连发短消息】的矛盾指令
 - 「预览不显示」实测不存在（页面渲染/接口/console 全部正常）；若用户侧仍空白，建议刷新预览面板或
   用「Open in New Tab」新标签打开
+
+---
+Task ID: 18
+Agent: Z.ai Code (main)
+Task: AI 来电全局弹窗系统——电话弹窗（iOS 胶囊）+ iOS 全屏来电界面 + 微信语音大窗 5s→胶囊（QQ 无弹窗）+ 任何 App/界面自动跳转来电界面 + 电话 App 新增 AI 来电功能（三张参考截图复刻）
+
+Work Log:
+- 现状盘点：微信/QQ 的 AI 主动来电（[语音通话] 标记）直接 startGlobalCall 全屏（无弹窗、无全局胶囊）；
+  电话 App 完全没有 AI 来电功能（CallScreen 仅支持用户拨出）；useChatCall 已有来电 accept/reject/25s
+  超时/来电铃声（ring.start('in')）引擎能力，缺的是全局展示层与电话侧触发源
+- 新建 src/lib/ios/incoming-call.ts（全局来电中心，zustand）：IncomingCallSnapshot（id/source=
+  phone|wx/name/avatar/number/contact/bannerStage/startedAt/onAnswer/onMissed 回调快照）+ trigger/
+  answer/dismiss/clear；triggerIncomingCall 生成 id（幂等：响铃中忽略新来电）；模块级 pending 桥
+  （setPendingPhoneAnswer/takePendingPhoneAnswer：来电层接听 → 电话 App 消费）；WebAudio 来电铃声
+  （1180Hz 双短鸣 4s 周期循环，startIncomingRing/stopIncomingRing——电话来电专用，微信铃声由引擎自理）
+- 新建 src/components/ios/IncomingCallLayer.tsx（PhoneShell 挂载，两块 UI）：
+  ①顶部弹窗 z-[94]：胶囊（黑色 h-56 圆角 full：头像40+名字+红拒/绿接 44px 圆钮，spring 滑入，
+  对照第一张图左）+ 微信大窗（w-344 深 #1c1c1e 圆角 22：头像+名字+「邀请你语音通话...」+「🔕忽略」
+  胶囊+红/绿圆钮，对照第三张图）；微信大窗 5 秒后自动缩成同款胶囊（bannerStage 定时切换）
+  ②iOS 全屏来电界面 z-[84]（仅 source=phone 渲染，对照第二张图）：深灰渐变 + 右上 ⓘ + 头像124 +
+  「主号 手机来电」标签 + 名字 38px + 「语音通话邀请…」+ 信息/提醒我圆钮（信息=挂断并打开信息 App）+
+  拒绝/接听 76px 红/绿大圆钮
+  弹窗按钮分发：wx → useGlobalCall.engine.accept/reject 代理页内引擎；phone → 来电快照回调；
+  电话 25 秒响铃超时自动 dismiss('timeout')；微信弹窗跟随 enginePhase（incoming 显示/接通消失）
+  且 session 关闭时兜底清层
+- global-call.ts 引擎转发：GlobalCallState 加 engine（accept/reject 方法对）+ enginePhase +
+  setEngine/setEnginePhase；start/close 时清空
+- chat-call.ts useChatCall 注册：direction='in' 时 effect 把 {accept,reject}+phase 注册进全局 store
+  （phase 变化自动重注册/卸载清空）——微信/QQ 两皮肤一处生效；弹窗接听即代理到 WxCallScreen 引擎
+- wechat.tsx：AI 来电冷却分支（5 分钟）在 openVoiceCall('in') 前加 triggerIncomingCall(source='wx',
+  bannerStage='big')——大窗弹窗 + 全屏来电页同时出现；QQ 对应分支不动（QQ 无弹窗 ✓）
+- chat.tsx（信息 App）新增 AI 打电话能力：①轮次 system 注入【语音通话能力】段（同微信文案）；
+  ②buildReplyMsgs 剥除 [语音通话] 标记（正则兼容 [【 两种括号）+ wantCallSeen 记录；③finalize 后
+  5 分钟冷却（sms-vc-last:<id>）→ 1.2s 后 triggerIncomingCall(source='phone')：onAnswer=
+  setPendingPhoneAnswer+switchToApp('phone')（openApp 会被「已有 App 打开」拦截，switchToApp 才能跨
+  App 强制切换=「不管在哪个 APP 都跳转」）；onMissed=recordMissedPhoneCall
+- chat.tsx 新增 recordMissedPhoneCall：落「未接来电」通话记录（direction:'missed'）+ requestCallFollowup
+  生成 AI 语音留言（direction:'out' + reject/missed-in 场景复用现有 SCENE_TEXT 文案、recentChat 取
+  该会话消息、replyCount 跟随 sms:c:<id> 聊天设置）逐条落 voicemails（未读红点）
+- phone.tsx 来电方向：CallTarget 加 direction?:'in'；CallScreen isIncoming 分支——跳过拨号回铃/接听
+  决策/空号流程，进入即 playConnectBlip+connected+runTurn(null)（与拨出接通同一 greeting 链路，AI 先
+  开口）；挂断落盘 direction:'in'；mount effect 消费 takePendingPhoneAnswer 自动进来电通话；通话记录
+  两处列表 UI 按 direction 显示「呼入（绿↙）/未接通（红↙）/呼出（↗）」；语音留言红点/留言列表天然
+  兼容
+- PhoneShell 挂载 IncomingCallLayer（dynamic，GlobalCallLayer 之后）
+- E2E（agent-browser，IndexedDB 种子陈默/林小雨 + mock /api/chat 回复带 [语音通话]、/api/phone/turn
+  与 /api/phone/followup）：
+  ①信息 App 发消息 → AI 回复带标记 → 1.2s 后来电：胶囊弹窗（头像+林小雨+红/绿）+ iOS 全屏来电界面
+  （主号/手机来电/林小雨/语音通话邀请…/信息/提醒我/拒绝/接听）同框覆盖信息 App ✓
+  ②25 秒超时 → 自动结束 → 通话记录「未接来电」+ AI 留言「你怎么不接我电话呀」（未读）落盘 ✓
+  ③再次触发点接听 → 跨 App 跳转电话 App → 通话界面 connected → AI 先开口「喂喂～听得到吗？…」（mock
+  turn）→ 挂断 → 通话记录「呼入 · 0:23」✓
+  ④修复真 bug：openApp 在已有 App 前台时静默 return（store 的 activeApp 拦截）导致接听后电话 App 不
+  打开——改 switchToApp（切换器同款跨 App 强制切换）
+  ⑤微信发消息 → AI 回复带标记 → 大窗弹窗（头像+小雨+邀请你语音通话...+忽略+红/绿）+ 全屏微信来电页
+  同框 ✓ → 5 秒后大窗自动缩成胶囊 ✓ → 点胶囊绿钮接听 → engine 代理 accept → WxCallScreen 接通计时
+  00:02 + AI 说话 ✓；挂断 → AI 续聊留言「哼，那我再打一次哦」上屏 ✓
+  ⑥胶囊红钮拒绝 → 弹窗+来电界面消失 → 未接记录+留言落盘 ✓
+- lint + tsc 双绿；QQ 无弹窗（不调 triggerIncomingCall，静态确认）；dev.log 无错误
+
+Stage Summary:
+- AI 来电全局弹窗系统三端形态：①电话 App AI 来电（信息 App [语音通话] 标记新增触发源）= iOS 胶囊
+  弹窗 + iOS 全屏来电界面（第二张图复刻），接听跨 App 跳转电话 App 通话（AI 先开口），拒绝/25s 超时
+  落未接记录+AI 语音留言；②微信 AI 语音来电 = 微信大窗弹窗 5 秒→胶囊小窗（第一/三张图复刻）+ 全屏
+  微信通话页，弹窗接听/忽略经引擎转发代理；③QQ 来电无弹窗（保持直接全屏）
+- 「不管在哪个 APP、哪个界面都跳转到来电界面 + 弹窗全局显示」：弹窗 z-94/全屏来电页 z-84 挂在
+  PhoneShell 顶层（高于锁屏/一切 App/灵动岛通知，仅低于熄屏），接听跳转用 switchToApp 强制切换
+- 修改文件：src/lib/ios/incoming-call.ts（新增）、src/components/ios/IncomingCallLayer.tsx（新增）、
+  src/lib/ios/global-call.ts、src/lib/ios/chat-call.ts、src/components/ios/PhoneShell.tsx、
+  src/components/apps/wechat.tsx、src/components/apps/chat.tsx、src/components/apps/phone.tsx
+- 关键决策：①电话 AI 来电触发源选在信息 App（电话 App 无聊天 LLM 轮次，信息会话的 AI 想说话就打电话，
+  语义自然且复用 [语音通话] 标记）；②微信来电保留 startGlobalCall 立即全屏（现状），弹窗作为顶层快捷
+  操作浮层叠加（iOS 顶部胶囊形态），接听/拒绝代理到页内引擎（engine 注册转发，不改动 useChatCall
+  内部状态机）；③未接留言复用挂断续聊 followup（direction:'out'+reject/missed-in 场景文案语义正确：
+  AI 主叫视角「对方按掉了/没人接」）；④phone 来电接通直接复用 runTurn(null) 的 greeting=true 链路

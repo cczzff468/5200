@@ -29,6 +29,9 @@ const QuitFlowScheduler = dynamic(() => import('./QuitFlowScheduler'), { ssr: fa
 // 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
 const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
 
+// 全局来电层（AI 来电弹窗胶囊/微信大窗 + iOS 全屏来电界面）：懒加载，仅在有来电时渲染内容
+const IncomingCallLayer = dynamic(() => import('./IncomingCallLayer'), { ssr: false });
+
 /** 底部边缘识别带高度：比 28px 可视横杠更高，按下点在屏幕最底部一段内即开始识别（真机好滑起见给了 72px） */
 const EDGE_ZONE = 72;
 /** 上滑超过该距离即打开多任务切换器（真机好滑：短距离即触发） */
@@ -201,6 +204,10 @@ export default function PhoneShell() {
         {/* 全局语音通话层：全屏通话页（z-62）+ 悬浮小窗（z-64，可拖动/边缘吸附隐藏）——
             与 App 窗口平级，退出聊天页/切换 App 电话不断；点小窗回通话页，拖到边缘只露一条边 */}
         <GlobalCallLayer />
+
+        {/* 全局来电层：AI 来电弹窗（胶囊/微信大窗 5s→胶囊，z-94）+ iOS 全屏来电界面（z-84，
+            仅电话来电；微信来电全屏由上方全局通话层承担）——高于一切 App/锁屏，任何界面都显示 */}
+        <IncomingCallLayer />
 
         {/* Home 指示条：所有界面常显，颜色由 useLightForeground 随身后背景明暗选黑/白
             （白底黑杠、黑底白杠；饱和色背景按明暗取色，不像 mix-blend-difference 那样变互补色）。

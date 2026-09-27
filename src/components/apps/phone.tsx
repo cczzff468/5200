@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDownLeft,
   ArrowUpRight,
   AudioLines,
   Check,
@@ -62,6 +63,7 @@ import {
 import { CHAT_CALL_EXTRA_RULES, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
+import { takePendingPhoneAnswer } from '@/lib/ios/incoming-call';
 import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
 
@@ -94,6 +96,8 @@ type PhoneTab = 'favorites' | 'recents' | 'contacts' | 'keypad' | 'voicemail';
 interface CallTarget {
   number: string;
   contact: ContactRecord | null;
+  /** 来电方向：'in' = AI 打来的电话（跳过拨号，进入即接通，AI 先开口）；缺省 'out' = 机主拨出 */
+  direction?: 'out' | 'in';
 }
 
 interface CallBubble {
@@ -582,6 +586,7 @@ function CallScreen({
   textModeRef.current = textMode;
 
   const contact = target.contact;
+  const isIncoming = target.direction === 'in';
   const gender = useMemo(() => contactGender(contact), [contact]);
   /** 最新 hangup（mount effect / speak / runTurn 闭包内引用；定义在后面，运行时已赋值） */
   const hangupRef = useRef<() => void>(() => {});
@@ -1079,7 +1084,7 @@ function CallScreen({
       displayName: isEmpty ? '空号' : (contact?.name ?? '陌生号码'),
       peerKind: contact ? (contact.kind as CallLogRecord['peerKind']) : 'unknown',
       avatar: contact?.avatar ?? null,
-      direction: 'out',
+      direction: isIncoming ? 'in' : 'out',
       duration: wasConnected ? secondsRef.current : 0,
       createdAt: Date.now(),
     });
@@ -1165,11 +1170,28 @@ function CallScreen({
   endByPeerRef.current = endByPeer;
 
   // 挂载：白前景标记 + 回铃音；联系人 → AI 接听决策（接听·拒绝·不接）→ 接通问候；
-  // 陌生号码 → 运营商播报「空号」后自动挂断
+  // 陌生号码 → 运营商播报「空号」后自动挂断；
+  // AI 打来的电话（direction='in'）：接听动作已发生在全局来电层，进入这里即已接通——
+  // 跳过拨号回铃/接听决策/空号流程，接通音 + AI 先开口（与拨出接通同一 runTurn(null) greeting 链路）
   useEffect(() => {
     setCallActive(true);
     endedRef.current = false;
     emptyRef.current = false;
+    if (isIncoming) {
+      playConnectBlip();
+      setPhase('connected');
+      secondsRef.current = 0;
+      setSeconds(0);
+      if (contact && contact.kind !== 'user') void runTurn(null);
+      else setPeerStatus('listening');
+      return () => {
+        endedRef.current = true;
+        stopAutoTimers();
+        stopSpeaking();
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        setCallActive(false);
+      };
+    }
     const ring = new RingbackTone();
     ring.start();
     ringRef.current = ring;
@@ -2085,14 +2107,28 @@ function RecentsTab({
                           {name}
                         </span>
                         <span className="mt-0.5 flex items-center gap-1 text-[12.5px] text-muted-foreground">
-                          <ArrowUpRight
-                            className={`h-[13px] w-[13px] shrink-0 ${
-                              unanswered ? 'text-[#FF3B30] dark:text-[#FF453A]' : 'text-[#34C759]'
-                            }`}
-                            aria-hidden="true"
-                          />
+                          {/* 方向图标/文案：out=呼出↗、in=呼入↙、missed/未接通=红色↙；未接来电红色是 iOS 语义 */}
+                          {log.direction === 'out' ? (
+                            <ArrowUpRight
+                              className={`h-[13px] w-[13px] shrink-0 ${
+                                unanswered ? 'text-[#FF3B30] dark:text-[#FF453A]' : 'text-[#34C759]'
+                              }`}
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <ArrowDownLeft
+                              className={`h-[13px] w-[13px] shrink-0 ${
+                                log.direction === 'missed' || (unanswered && log.direction !== 'in')
+                                  ? 'text-[#FF3B30] dark:text-[#FF453A]'
+                                  : 'text-[#34C759]'
+                              }`}
+                              aria-hidden="true"
+                            />
+                          )}
                           <span className="truncate tabular-nums">
-                            {unanswered ? '未接通' : `呼出 · ${callDurationText(log.duration)}`}
+                            {log.direction === 'missed' || (unanswered && log.direction !== 'in')
+                              ? '未接通'
+                              : `${log.direction === 'in' ? '呼入' : '呼出'} · ${callDurationText(log.duration)}`}
                             {region ? ` · ${region}` : ''}
                           </span>
                         </span>
@@ -2926,7 +2962,11 @@ function ContactDetail({
                           aria-label={`重新呼叫${contact.name}`}
                         >
                           <span className={`text-[14.5px] ${unanswered ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''}`}>
-                            {unanswered ? '未接来电' : '呼出'}
+                            {log.direction === 'missed' || (unanswered && log.direction !== 'in')
+                              ? '未接来电'
+                              : log.direction === 'in'
+                                ? '呼入'
+                                : '呼出'}
                           </span>
                           <span className="text-[13px] text-muted-foreground tabular-nums">
                             {formatLogTime(log.createdAt)}
@@ -3451,6 +3491,14 @@ export default function PhoneApp() {
   const [voicemails, setVoicemails] = useState<VoicemailRecord[] | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [callTarget, setCallTarget] = useState<CallTarget | null>(null);
+  // 全局来电层接听的 AI 电话：进入电方向的通话界面（接听时全局层已 openApp 打开本 App；
+  // 本 effect 在挂载时消费待接听来电，AI 先开口）
+  useEffect(() => {
+    const pending = takePendingPhoneAnswer();
+    if (pending) {
+      setCallTarget({ number: pending.number, contact: pending.contact, direction: 'in' });
+    }
+  }, []);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editSheetOpen, setEditSheetOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);

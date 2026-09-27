@@ -207,6 +207,7 @@ import {
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall } from '@/lib/ios/global-call';
+import { triggerIncomingCall } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich, type ChatLocData } from '@/lib/ios/chat-location';
 
 // ---------------- 类型 / 常量 / 工具 ----------------
@@ -4448,12 +4449,22 @@ function ChatPage({
             );
         });
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
+        // （全局来电弹窗 = 微信大窗 5 秒→胶囊；全屏来电页由全局通话层承担；QQ 侧同结构但不弹窗）
         if (wantCallSeen) {
           try {
             const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
             if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
               window.localStorage.setItem(`wx-vc-last:${peer.id}`, String(Date.now()));
-              window.setTimeout(() => openVoiceCall('in'), 1200);
+              window.setTimeout(() => {
+                triggerIncomingCall({
+                  source: 'wx',
+                  name: displayNameOf(peer) || peer.name,
+                  avatar: peer.avatar ?? null,
+                  contact: peer,
+                  bannerStage: 'big',
+                });
+                openVoiceCall('in');
+              }, 1200);
             }
           } catch {
             // localStorage 异常忽略
