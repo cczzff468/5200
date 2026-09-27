@@ -1,0 +1,495 @@
+'use client';
+
+/**
+ * AI 主动来电调度（Task 40-d）——让 AI 真正「自主决定 + 定时拨打」语音电话：
+ *
+ * ProactiveCallWatcher（PhoneShell 挂载）定期调 runProactiveCallTick()：
+ * ① 总开关（设置 › 通知「AI 主动来电」，kv 'proactive-call-enabled'，默认开）关闭 → 返回；
+ * ② 深夜硬闸（本地时间 0~8 点不打；23 点后的晚间分寸交给决策 API 按人设判断）；
+ * ③ 已有来电响铃（useIncomingCall.call）或全局通话进行中（useGlobalCall.session）→ 返回；
+ *    页面切后台（document.hidden）不拦——真实手机来电不看屏幕（本模块不做可见性检查）；
+ * ④ 候选筛选：有「人设」的联系人（persona 非空；USER/无名排除）中，取 48h 内有互动且
+ *    距上次互动 ≥2h（刚聊完不马上打）、且不在冷却期（call/wait 冷却 6h、skip 冷却 24h）
+ *    的联系人里「最久没聊」的一位；
+ * ⑤ 组三端最近聊天摘要（微信/QQ/信息各取最近 4 条文本/转写，单条截 60 字）POST
+ *    /api/phone/proactive 决策 → 落冷却 kv → action='call' 时经 triggerIncomingCall
+ *    真正发起 iOS 全屏来电（接听/拒绝/超时回调与信息 App AI 来电同一套链路）。
+ *
+ * 接听 → setPendingPhoneAnswer(含 proactiveContext=决策 reason 作为开场情境) + 切电话 App
+ * （照抄 chat.tsx onAnswer 做法）；拒绝/超时 → recordMissedPhoneCall 落未接记录 + AI 语音留言
+ * （照抄 chat.tsx 同名函数的落库模式）。通话内容/挂断收尾/记忆沉淀由电话 App 既有引擎承担。
+ */
+
+import { localDB, genId, type CallLogRecord } from './db';
+import { kvGet, kvSet } from './idb-kv';
+import { listContacts, ownerProfile } from './contacts-store';
+import { requestCallFollowup } from './call-followup';
+import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from './incoming-call';
+import { useGlobalCall } from './global-call';
+import { useSettings, useUI } from './store';
+import { getMemSettings, memRecallBlock } from '@/lib/memory';
+import { buildTimeAwareBlock } from '@/lib/time-aware';
+import { getReplyCount } from '@/lib/reply-count';
+import type { ContactRecord } from '@/lib/contacts';
+
+// ---------------- 常量（调参集中在这里） ----------------
+
+/** 总开关 kv 键（与设置 › 通知「AI 主动来电」开关共用；值 { value: boolean }，缺省=开） */
+const ENABLED_KEY = 'proactive-call-enabled';
+/** 单联系人冷却 kv 键前缀（值 { at: number, action: string }） */
+const COOLDOWN_PREFIX = 'proactive-call:';
+
+/** 资格窗口：48h 内有过互动的联系人才会被考虑 */
+const ACTIVE_WINDOW_MS = 48 * 60 * 60_000;
+/** 最小间隔：距上次互动不足 2h 不打（刚聊完不久别马上又来） */
+const MIN_GAP_MS = 2 * 60 * 60_000;
+/** 决策为 call / wait 后的冷却（别反复骚扰） */
+const COOLDOWN_ACTIVE_MS = 6 * 60 * 60_000;
+/** 决策为 skip 后的冷却（没理由打就等一天再说） */
+const COOLDOWN_SKIP_MS = 24 * 60 * 60_000;
+/** 深夜硬闸起点：本地时间 [0, 8) 点不打 */
+const NIGHT_END_HOUR = 8;
+
+/** Watcher 首次 tick 延迟（避开开机风暴：等 IndexedDB 注水/各 App 就绪） */
+export const PROACTIVE_FIRST_TICK_DELAY_MS = 60_000;
+/** Watcher 基础轮询间隔 */
+export const PROACTIVE_TICK_INTERVAL_MS = 90_000;
+/** 每次 tick 的随机抖动上限（0~30s，避免整点齐刷刷） */
+export const PROACTIVE_TICK_JITTER_MS = 30_000;
+
+/** 决策 API 返回（与 /api/phone/proactive 契约一致） */
+interface ProactiveDecision {
+  action: 'call' | 'wait' | 'skip';
+  reason: string;
+}
+
+// ---------------- 开关（settings.tsx 共用） ----------------
+
+/** AI 主动来电总开关（kv 'proactive-call-enabled'，无记录/非法值=默认开） */
+export function isProactiveCallEnabled(): boolean {
+  const v = kvGet<{ value?: unknown }>(ENABLED_KEY);
+  return typeof v?.value === 'boolean' ? v.value : true;
+}
+
+/** 写入 AI 主动来电总开关（设置页切换时调用） */
+export function setProactiveCallEnabled(value: boolean): void {
+  kvSet(ENABLED_KEY, { value });
+}
+
+// ---------------- 消息读取（wx / qq / 信息三端 kv 键；数组按时间升序，末条=最新） ----------------
+
+const WX_MSGS_KEY = (id: string): string => `wx-chat-msgs:${id}`;
+const QQ_MSGS_KEY = (id: string): string => `qq-chat-msgs:${id}`;
+/** 信息 App 会话键：storageKey = `c:<contactId>`（AI 助手会话不在候选范围，无需处理） */
+const SMS_MSGS_KEY = (id: string): string => `ios-chat-msgs:c:${id}`;
+
+/** 三端消息归一化后的最小形状 */
+interface NormMsg {
+  role: 'user' | 'assistant';
+  text: string;
+  time: number;
+}
+
+function readKvMsgs(key: string): unknown[] {
+  const raw = kvGet<unknown>(key);
+  return Array.isArray(raw) ? raw : [];
+}
+
+/** 末条时间戳（数组按时间升序持久化，末条=最新；空会话返回 0） */
+function lastTimeOf(list: unknown[]): number {
+  const last = list[list.length - 1] as { time?: unknown } | undefined;
+  return last && typeof last.time === 'number' ? last.time : 0;
+}
+
+/** 单条消息 → 可读文本（转写/描述优先；撤回/系统行/卡片类返回空串 = 不进摘要） */
+function extractMsgText(r: Record<string, unknown>): string {
+  if (r.recalled === true || r.error === true) return '';
+  if (r.sys || r.blkreq || r.notice) return '';
+  const kind = typeof r.kind === 'string' ? r.kind : 'text';
+  // 卡片类（红包/转账/通话卡/转发/群邀请）不产生可聊文本
+  if (
+    kind === 'call' ||
+    kind === 'redpacket' ||
+    kind === 'transfer' ||
+    kind === 'family' ||
+    kind === 'forward' ||
+    kind === 'groupcard' ||
+    kind === 'blockreq' ||
+    kind === 'sys'
+  ) {
+    return '';
+  }
+  const content = typeof r.content === 'string' ? r.content.trim() : '';
+  const voice = r.voice as { transcript?: unknown; localText?: unknown } | undefined;
+  const voiceText = (): string => {
+    const t = typeof voice?.transcript === 'string' ? voice.transcript.trim() : '';
+    if (t) return t;
+    const l = typeof voice?.localText === 'string' ? voice.localText.trim() : '';
+    if (l) return l;
+    return content && !content.startsWith('data:') ? content : '[语音]';
+  };
+  switch (kind) {
+    case 'voice':
+      return voiceText();
+    case 'image': {
+      const img = r.img as { desc?: unknown } | undefined;
+      const d = typeof img?.desc === 'string' ? img.desc.trim() : '';
+      if (d) return `[图片] ${d}`;
+      return content && !content.startsWith('data:') ? `[图片] ${content}` : '[图片]';
+    }
+    case 'sticker': {
+      const stk = r.stk as { meaning?: unknown } | undefined;
+      const d = typeof stk?.meaning === 'string' ? stk.meaning.trim() : '';
+      return d ? `[表情包] ${d}` : '[表情]';
+    }
+    case 'location': {
+      const loc = r.loc as { name?: unknown } | undefined;
+      const d = typeof loc?.name === 'string' ? loc.name.trim() : '';
+      return d ? `[位置] ${d}` : '[位置]';
+    }
+    default:
+      if (!content) return '';
+      return content.startsWith('data:') ? '[图片]' : content; // 旧图片消息 content 直接存 dataURL
+  }
+}
+
+function toNormMsg(m: unknown): NormMsg | null {
+  if (!m || typeof m !== 'object') return null;
+  const r = m as Record<string, unknown>;
+  // 微信/QQ 用 me/peer，信息用 user/assistant
+  const role =
+    r.role === 'user' || r.role === 'me'
+      ? ('user' as const)
+      : r.role === 'assistant' || r.role === 'peer'
+        ? ('assistant' as const)
+        : null;
+  if (!role || typeof r.time !== 'number') return null;
+  const text = extractMsgText(r);
+  if (!text.trim()) return null;
+  return { role, text, time: r.time };
+}
+
+function readNormMsgs(key: string): NormMsg[] {
+  return readKvMsgs(key)
+    .map(toNormMsg)
+    .filter((m): m is NormMsg => m !== null)
+    .sort((a, b) => a.time - b.time); // 防御性排序（投递尾巴可能轻微乱序），slice(-N) 才是真正的「最近」
+}
+
+// ---------------- 展示格式化 ----------------
+
+function pad2(n: number): string {
+  return n.toString().padStart(2, '0');
+}
+
+/** 摘要条目时间：今天 HH:MM，跨天 M月D日 HH:MM */
+function fmtChatTime(t: number, nowMs: number): string {
+  const d = new Date(t);
+  const hhmm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return new Date(nowMs).toDateString() === d.toDateString() ? hhmm : `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
+}
+
+/** 距上次互动的人类口径（「约 N 小时」，决策 prompt 用） */
+function gapLabel(gapMs: number): string {
+  const mins = Math.max(1, Math.round(gapMs / 60000));
+  if (mins < 60) return `${mins} 分钟`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours} 小时`;
+  return `${Math.floor(hours / 24)} 天`;
+}
+
+const WEEK_CN = ['日', '一', '二', '三', '四', '五', '六'];
+
+/** 当前时间完整表述（决策 prompt 用：年月日+星期+时刻） */
+function fmtNow(nowMs: number): string {
+  const d = new Date(nowMs);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 星期${WEEK_CN[d.getDay()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 联系人无手机号时的稳定占位号（与 chat.tsx derivePlaceholderNumber 同算法：同一联系人恒定同号） */
+function derivePlaceholderNumber(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return `1${String(h % 10000000000).padStart(10, '0')}`;
+}
+
+// ---------------- 冷却 kv ----------------
+
+function cooldownKey(contactId: string): string {
+  return `${COOLDOWN_PREFIX}${contactId}`;
+}
+
+function isCoolingDown(contactId: string, nowMs: number): boolean {
+  const c = kvGet<{ at?: unknown; action?: unknown }>(cooldownKey(contactId));
+  if (!c || typeof c.at !== 'number') return false;
+  const window = c.action === 'skip' ? COOLDOWN_SKIP_MS : COOLDOWN_ACTIVE_MS; // 未知 action 按活跃口径保守处理
+  return nowMs - c.at < window;
+}
+
+function setCooldown(contactId: string, at: number, action: ProactiveDecision['action']): void {
+  kvSet(cooldownKey(contactId), { at, action });
+}
+
+// ---------------- 决策请求 ----------------
+
+/** 决策失败（网络/超时/非 200）返回 null，由调用方按 wait 口径落冷却 */
+async function requestProactiveDecision(args: {
+  contact: Record<string, unknown>;
+  recentChats: { app: string; text: string; time: string }[];
+  lastChatAt: number;
+  lastInteractionLabel: string;
+  now: string;
+}): Promise<ProactiveDecision | null> {
+  try {
+    const res = await fetch('/api/phone/proactive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...args, config: useSettings.getState().apiConfig }),
+      // 看门狗：决策卡死 75s 必失败（覆盖上游 30s + 内置模型 60s 的最坏组合不再拖住调度）
+      signal: AbortSignal.timeout(75_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { action?: unknown; reason?: unknown };
+    const action =
+      data.action === 'call' || data.action === 'wait' || data.action === 'skip' ? data.action : 'skip';
+    const reason = typeof data.reason === 'string' && data.reason.trim() ? data.reason.trim().slice(0, 120) : '';
+    return { action, reason };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------- 未接留言（照抄 chat.tsx recordMissedPhoneCall 的落库模式） ----------------
+
+/** AI 主动打来的电话被拒接 / 响铃超时未接：落「未接来电」记录 + AI 语音留言（失败静默） */
+async function recordMissedPhoneCall(
+  contact: ContactRecord,
+  number: string,
+  fallbackName: string,
+  reason: 'declined' | 'timeout'
+): Promise<void> {
+  const contactId = contact.id;
+  const displayName = contact.name || fallbackName;
+  try {
+    await localDB.put('call-logs', {
+      id: genId(),
+      number,
+      contactId,
+      displayName,
+      peerKind: (contact.kind as CallLogRecord['peerKind']) ?? 'unknown',
+      avatar: contact.avatar ?? null,
+      direction: 'missed',
+      duration: 0,
+      createdAt: Date.now(),
+    });
+  } catch {
+    // 记录落盘失败静默
+  }
+  try {
+    const [owner, recent] = await Promise.all([
+      ownerProfile().catch(() => null),
+      Promise.resolve(readNormMsgs(SMS_MSGS_KEY(contact.id))),
+    ]);
+    const recentChat = recent.slice(-6).map((m) => ({ role: m.role, content: m.text }));
+    const texts = await requestCallFollowup({
+      contact: {
+        name: contact.name,
+        kind: contact.kind,
+        gender: contact.gender || null,
+        age: contact.age || null,
+        occupation: contact.occupation || null,
+        region: contact.region || null,
+        relation: contact.relation || null,
+        relationToUser: contact.relationToUser || null,
+        birthday: contact.birthday || null,
+        persona: contact.persona || null,
+        background: contact.background || null,
+        nickname: contact.nickname || null,
+        // 真实姓名用 realName 字段（name 在展示层可能已被昵称/备注替换，注入人设必须是真名）
+        realName: contact.realName ?? null,
+      },
+      // AI 是主叫（direction='out'）；被拒接 = reject、响铃超时 = missed-in（与现有场景文案语义一致）
+      direction: 'out',
+      endReason: reason === 'declined' ? 'reject' : 'missed-in',
+      connected: false,
+      duration: 0,
+      transcript: [],
+      recentChat,
+      memoryBlock: memRecallBlock(contact.id, 'sms', recentChat.map((m) => m.content).join(' ')) || undefined,
+      timeBlock: buildTimeAwareBlock({
+        lastMsgTime: recent.length > 0 ? recent[recent.length - 1].time : null,
+        regionHint: contact.region || null,
+      }),
+      multiApp: getMemSettings(contact.id).share,
+      // 留言条数 = 该联系人在信息聊天设置页选定的回复条数（与信息 App 来电留言同口径）
+      replyCount: getReplyCount(`sms:c:${contact.id}`),
+      userRealName: owner?.realName || undefined,
+      userNickname: owner?.nickname || undefined,
+    });
+    for (const text of texts) {
+      await localDB.put('voicemails', {
+        id: genId(),
+        number,
+        contactId,
+        displayName,
+        peerKind: (contact.kind as CallLogRecord['peerKind']) ?? 'unknown',
+        avatar: contact.avatar ?? null,
+        text,
+        kind: 'voicemail',
+        read: false,
+        duration: Math.max(1, Math.ceil(text.length / 4)),
+        createdAt: Date.now(),
+      });
+    }
+  } catch {
+    // 留言失败静默（记录已落，留言缺失可接受）
+  }
+}
+
+// ---------------- 决策 prompt 的联系人资料（与 chat.tsx 同字段口径） ----------------
+
+function contactPayloadOf(c: ContactRecord): Record<string, unknown> {
+  return {
+    name: c.name,
+    kind: c.kind,
+    gender: c.gender || null,
+    age: c.age || null,
+    occupation: c.occupation || null,
+    region: c.region || null,
+    relation: c.relation || null,
+    relationToUser: c.relationToUser || null,
+    birthday: c.birthday || null,
+    persona: c.persona || null,
+    background: c.background || null,
+    nickname: c.nickname || null,
+    realName: c.realName ?? null,
+  };
+}
+
+// ---------------- tick 主流程 ----------------
+
+/** 模块级防重入：tick 进行中（含决策请求期间）再次调用直接返回 */
+let tickRunning = false;
+
+/** 测试/调试辅助：tick 是否正在执行 */
+export function isProactiveCallTickRunning(): boolean {
+  return tickRunning;
+}
+
+/**
+ * 调度 tick（ProactiveCallWatcher 定期调用；决策到 call 才真正响铃，全链路失败静默）。
+ * 时序：守卫 → 选人 → 决策 → 落冷却 → 发起来电（接听/未接回调与既有链路对接）。
+ */
+export async function runProactiveCallTick(): Promise<void> {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
+    await tickInner();
+  } catch {
+    // 后台增强能力：任何异常静默（IndexedDB/网络故障不影响正常使用）
+  } finally {
+    tickRunning = false;
+  }
+}
+
+async function tickInner(): Promise<void> {
+  const nowMs = Date.now();
+
+  // ① 总开关
+  if (!isProactiveCallEnabled()) return;
+
+  // ② 深夜硬闸：本地时间 [0, 8) 不打（23 点后的晚间分寸交给决策 API 按人设/时间判断）
+  if (new Date(nowMs).getHours() < NIGHT_END_HOUR) return;
+
+  // ③ 交互中守卫：已有来电响铃或通话进行中不发起（页面后台 document.hidden 照常——真实手机行为）
+  if (useIncomingCall.getState().call) return;
+  if (useGlobalCall.getState().session) return;
+
+  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除）
+  const contacts = (await listContacts()).filter(
+    (c) => c.kind !== 'user' && !!c.name?.trim() && !!c.persona?.trim()
+  );
+  if (contacts.length === 0) return;
+
+  // 各联系人最近一通电话时间（IndexedDB 一次 getAll，按联系人取 max createdAt）
+  const lastCallAtByContact = new Map<string, number>();
+  try {
+    for (const log of await localDB.getAll('call-logs')) {
+      if (!log || typeof log.contactId !== 'string' || typeof log.createdAt !== 'number') continue;
+      const prev = lastCallAtByContact.get(log.contactId) ?? 0;
+      if (log.createdAt > prev) lastCallAtByContact.set(log.contactId, log.createdAt);
+    }
+  } catch {
+    // 通话记录读不到时仅按三端消息判互动
+  }
+
+  // 资格筛选 + 选「最久没聊」的一位
+  let best: { contact: ContactRecord; lastInteractionAt: number } | null = null;
+  for (const c of contacts) {
+    const lastInteractionAt = Math.max(
+      lastTimeOf(readKvMsgs(WX_MSGS_KEY(c.id))),
+      lastTimeOf(readKvMsgs(QQ_MSGS_KEY(c.id))),
+      lastTimeOf(readKvMsgs(SMS_MSGS_KEY(c.id))),
+      lastCallAtByContact.get(c.id) ?? 0
+    );
+    if (lastInteractionAt <= 0) continue; // 从未互动（新联系人先聊过天再说）
+    const gap = nowMs - lastInteractionAt;
+    if (gap > ACTIVE_WINDOW_MS) continue; // 48h 内无互动
+    if (gap < MIN_GAP_MS) continue; // 刚聊完不久
+    if (isCoolingDown(c.id, nowMs)) continue; // 冷却中
+    if (!best || lastInteractionAt < best.lastInteractionAt) best = { contact: c, lastInteractionAt };
+  }
+  if (!best) return;
+
+  const contact = best.contact;
+
+  // ⑤ 三端最近聊天摘要（各取最近 4 条，单条截 60 字，带 App 标签与时间）
+  const recentChats = (
+    [
+      { key: WX_MSGS_KEY(contact.id), app: '微信' },
+      { key: QQ_MSGS_KEY(contact.id), app: 'QQ' },
+      { key: SMS_MSGS_KEY(contact.id), app: '信息' },
+    ] as const
+  ).flatMap(({ key, app }) =>
+    readNormMsgs(key)
+      .slice(-4)
+      .map((m) => ({ app, text: m.text.slice(0, 60), time: fmtChatTime(m.time, nowMs) }))
+  );
+
+  const decision = await requestProactiveDecision({
+    contact: contactPayloadOf(contact),
+    recentChats,
+    lastChatAt: best.lastInteractionAt,
+    lastInteractionLabel: gapLabel(nowMs - best.lastInteractionAt),
+    now: fmtNow(nowMs),
+  });
+
+  // 落冷却：决策 call/wait 记 6h；skip 记 24h；决策失败（null）按 wait 口径退避，不每 90s 重试上游
+  const action: ProactiveDecision['action'] = decision ? decision.action : 'wait';
+  setCooldown(contact.id, nowMs, action);
+  if (action !== 'call' || !decision) return;
+
+  // ⑥ 发起真来电（决策期间可能刚出现通话/来电，触发前再守卫一次）
+  if (useIncomingCall.getState().call) return;
+  if (useGlobalCall.getState().session) return;
+  const number = contact.phone || derivePlaceholderNumber(contact.id);
+  const name = contact.name;
+  triggerIncomingCall({
+    source: 'phone',
+    bannerStage: 'pill',
+    name,
+    avatar: contact.avatar ?? null,
+    number,
+    contact,
+    // 接听：写 pending（带 proactiveContext=决策 reason 作为开场情境，电话 App 消费端透传通话引擎）
+    // + 切到电话 App 进「来电方向」通话界面（照抄 chat.tsx onAnswer；接听交接兜底由 IncomingCallLayer 承担）
+    onAnswer: () => {
+      setPendingPhoneAnswer({ contact, number, name, proactiveContext: decision.reason });
+      useUI.getState().switchToApp('phone');
+    },
+    // 拒绝 / 响铃 25 秒超时：落未接记录 + AI 语音留言（人设化解释，照抄 chat.tsx 同款链路）
+    onMissed: (reason) => {
+      void recordMissedPhoneCall(contact, number, name, reason);
+    },
+  });
+}

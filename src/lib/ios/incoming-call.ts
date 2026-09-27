@@ -118,6 +118,9 @@ export interface PendingPhoneAnswer {
   contact: ContactRecord | null;
   number: string;
   name: string;
+  /** AI 主动来电的拨打目的（AI 决策 API 的 reason）：电话 App 透传给通话引擎作为开场情境；
+   *  普通来电（聊天标记触发的 AI 来电 / 用户操作）无此字段 */
+  proactiveContext?: string;
 }
 
 let pendingPhoneAnswer: PendingPhoneAnswer | null = null;

@@ -32,6 +32,9 @@ const MomentsScheduler = dynamic(() => import('./MomentsScheduler'), { ssr: fals
 // 退群挽留全局调度（退群后 1 分钟内 AI 主动私信 + 私聊里拉回群）：同样懒加载，挂载即后台运行
 const QuitFlowScheduler = dynamic(() => import('./QuitFlowScheduler'), { ssr: false });
 
+// AI 主动来电全局调度（根据人设/聊天/时间自主决策并真正拨打电话）：同样懒加载，挂载即后台运行
+const ProactiveCallWatcher = dynamic(() => import('./ProactiveCallWatcher'), { ssr: false });
+
 // 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
 const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
 
@@ -274,6 +277,9 @@ export default function PhoneShell() {
 
         {/* 退群挽留全局调度：退群后 1 分钟内群成员按人设主动私信 + 私聊里拉回群（App 不打开也生效） */}
         <QuitFlowScheduler />
+
+        {/* AI 主动来电全局调度：根据人设/聊天内容/时间自主决策并真正拨打（接听/拒接/超时走全局来电层） */}
+        <ProactiveCallWatcher />
 
         {/* 电源键（桌面端机身右侧：熄屏 ↔ 亮屏锁定） */}
         <button

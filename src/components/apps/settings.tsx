@@ -57,6 +57,7 @@ import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
 import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
+import { isProactiveCallEnabled, setProactiveCallEnabled } from '@/lib/ios/proactive-call';
 import { LocalToast, useLocalToast } from './page-toast';
 import { describeImages } from '@/lib/vision-client';
 import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
@@ -476,6 +477,9 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   // 推送订阅诊断（真实环境失败原因，不再静默）：setupPushSubscription 每次尝试后都会落盘
   const [pushState, setPushState] = useState<string>(() => lastPushStatus()?.state ?? '');
   const [pushDetail, setPushDetail] = useState<string>(() => lastPushStatus()?.detail ?? '');
+  // AI 主动来电开关：读写 IndexedDB kv 'proactive-call-enabled'（与 proactive-call 调度器共用；缺省开）。
+  // 本页在客户端交互后才挂载（同上方 isSysNotifyEnabled 的惰性初始化模式），kv 已注水，同步读即真实值
+  const [proactive, setProactive] = useState<boolean>(() => isProactiveCallEnabled());
   // 页内 toast（关闭开关后的说明）
   const [toastMsg, showToast] = useLocalToast();
 
@@ -567,6 +571,23 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
             checked={enabled}
             onCheckedChange={(v) => void handleToggle(v)}
             aria-label="允许通知"
+          />
+        </div>
+        {/* AI 主动来电（Task 40-d）：调度器与决策 API 的总闸，关闭后不再自动拨打 */}
+        <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+          <span className="min-w-0 flex-1 text-[16px] leading-tight">
+            AI 主动来电
+            <span className="mt-0.5 block text-[12px] leading-[16px] text-muted-foreground">
+              AI 可能会根据聊天和心情主动打来电话
+            </span>
+          </span>
+          <Switch
+            checked={proactive}
+            onCheckedChange={(v) => {
+              setProactiveCallEnabled(v); // 先持久化（kv 'proactive-call-enabled'，与调度器同源）
+              setProactive(v);
+            }}
+            aria-label="AI 主动来电"
           />
         </div>
       </GroupCard>
