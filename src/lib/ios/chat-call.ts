@@ -62,6 +62,7 @@ import {
 } from './vad';
 import { requestAnswerDecision } from './call-decision';
 import { requestCallFollowup } from './call-followup';
+import { buildCrossContextBlocks } from './cross-app-context';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds, useGlobalCall } from './global-call';
 import { getReplyCount } from '../reply-count';
@@ -358,6 +359,11 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const onEndRef = useRef(onEnd);
   /** 挂断后 AI 续聊文字回调（宿主呈现） */
   const onFollowupRef = useRef(onFollowup);
+  /** 跨 App 近况块 + 群聊近况块（Task 40-b，会话级懒构建一次缓存）：
+   *  【跨应用近况】（其他 App 最近 10 条原始消息）+【群聊近况】（共同群最近 10 条）随每轮 turn
+   *  与挂断续聊注入。跟会话生命周期走：引擎实例 = 一通通话（finishByReplacement 换新引擎/重挂
+   *  VoiceCallScreen 时 ref 随之新建自动重建）；通话期间不重算（几秒内的外部变化不影响本通话）。 */
+  const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string } | null>(null);
   const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp });
   useEffect(() => {
     phaseRef.current = phase;
@@ -469,6 +475,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           const transcript = chatLogRef.current.map((m) => ({ role: m.role, content: m.content }));
           const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? null;
           const owner = await ownerProfile().catch(() => null);
+          // 跨 App 近况块 + 群聊近况块（Task 40-b）：通话内已建则复用缓存；从未发过请求的短通话现算一次
+          if (!crossCtxRef.current) {
+            crossCtxRef.current = peer?.id
+              ? await buildCrossContextBlocks(peer.id, optsRef.current.app, owner?.realName || '')
+              : { crossAppBlock: '', groupBlock: '' };
+          }
           texts = await requestCallFollowup({
             contact: {
               name: peer.name,
@@ -492,6 +504,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             transcript: transcript.slice(-24),
             recentChat: recentChatRef.current.map((m) => ({ role: m.role, content: m.content })),
             memoryBlock: optsRef.current.memoryBlockFn?.(lastUser) || optsRef.current.memoryBlock || undefined,
+            // 跨 App 近况 + 群聊近况（Task 40-b）：与通话轮次同源同位置（当前 App 记忆之后）
+            crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
+            groupBlock: crossCtxRef.current.groupBlock || undefined,
             worldbookBlock: optsRef.current.worldbookBlock || undefined,
             timeBlock: optsRef.current.timeBlock || undefined,
             multiApp: optsRef.current.multiApp,
@@ -621,6 +636,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined;
       // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
       const owner = await ownerProfile().catch(() => null);
+      // 跨 App 近况块 + 群聊近况块（Task 40-b）：首次请求时构建并缓存（联系人/机主名现场取）
+      if (!crossCtxRef.current) {
+        crossCtxRef.current = c?.id
+          ? await buildCrossContextBlocks(c.id, optsRef.current.app, owner?.realName || '')
+          : { crossAppBlock: '', groupBlock: '' };
+      }
       try {
         const res = await fetch('/api/phone/turn', {
           method: 'POST',
@@ -653,6 +674,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             proactiveAttempt: proactiveAttempt > 0 ? proactiveAttempt : undefined,
             history: historyBefore.map((m) => ({ role: m.role, content: m.content })),
             memoryBlock: recalledBlock,
+            // 跨 App 近况 + 群聊近况（Task 40-b）：注入在当前 App 记忆之后（服务端同序拼装）
+            crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
+            groupBlock: crossCtxRef.current.groupBlock || undefined,
             worldbookBlock: optsRef.current.worldbookBlock || undefined,
             momentsBlock: optsRef.current.momentsBlock || undefined,
             timeBlock: optsRef.current.timeBlock || undefined,

@@ -64,6 +64,7 @@ import { chatCallExtraRules, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { callOutcomeOf } from '@/lib/ios/call-outcome';
+import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer } from '@/lib/ios/incoming-call';
 import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
@@ -104,6 +105,9 @@ interface CallTarget {
   contact: ContactRecord | null;
   /** 来电方向：'in' = AI 打来的电话（跳过拨号，进入即接通，AI 先开口）；缺省 'out' = 机主拨出 */
   direction?: 'out' | 'in';
+  /** AI 主动来电目的（Task 40-b 预留：全局来电层写入 pending.proactiveContext，接听后经
+   *  consumePendingAnswer 透传；非空时随该通电话所有 turn payload 注入【来电目的】段） */
+  proactiveContext?: string;
 }
 
 interface CallBubble {
@@ -580,6 +584,9 @@ function CallScreen({
   const proactivePendingRef = useRef(false);
   /** 连续主动开口计数（用户真正说话后归零） */
   const proactiveCountRef = useRef(0);
+  /** 跨 App 近况块 + 群聊近况块（Task 40-b）：每通电话懒构建一次缓存
+   *  （CallScreen 实例 = 一通电话，挂断后卸载；【当前环境】行让 AI 知道「现在在电话里」） */
+  const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string } | null>(null);
   /** AI 拒接/未接：结束原因（状态区文案用） */
   const [peerEnded, setPeerEnded] = useState<'reject' | 'no-answer' | null>(null);
   /** 免提自动听（VAD 循环） */
@@ -780,6 +787,14 @@ function CallScreen({
               .join('\n\n') || undefined
           )
         : undefined;
+      // 跨 App 近况块 + 群聊近况块（Task 40-b）：每通电话懒构建一次缓存。
+      // 【当前环境】行让 AI 知道「现在在电话里」；其他 App 最近原始消息/共同群最近消息仅供衔接话题，
+      // 按联系人现场读取（share 互通开关关闭时块内只保留当前环境行）
+      if (!crossCtxRef.current) {
+        crossCtxRef.current = contact?.id
+          ? await buildCrossContextBlocks(contact.id, 'phone', profileName)
+          : { crossAppBlock: '', groupBlock: '' };
+      }
       const memorizeTurn = (reply: string) => {
         if (!contact?.id) return;
         const turns = memConvoFromRaw(
@@ -846,6 +861,11 @@ function CallScreen({
             // 语气按联系人关系动态生成（不再硬编码「很熟的朋友」）
             extraRules: chatCallExtraRules(contact),
             memoryBlock,
+            // 跨 App 近况 + 群聊近况（Task 40-b）：注入在当前 App 记忆之后（服务端同序拼装）
+            crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
+            groupBlock: crossCtxRef.current.groupBlock || undefined,
+            // AI 主动来电目的（全局来电层经 pending/CallTarget 透传；普通来电/拨出无此字段不注入）
+            proactiveContext: target.proactiveContext || undefined,
             // 跨 App 身份感知：互通开关（有联系人才注入；陌生号码单场景无需多端感知）
             multiApp: contact?.id ? getMemSettings(contact.id).share : undefined,
             // 社交动态块（前端按互通开关现场构建；服务端拼到人设+记忆之后）
@@ -987,7 +1007,7 @@ function CallScreen({
         if (!endedRef.current) setBusy(false);
       }
     },
-    [contact, target.number, isIncoming, speak, apiConfig]
+    [contact, target.number, isIncoming, speak, apiConfig, profileName]
   );
 
   // 挂断（保存记录 → ended → 回调关闭）。endReason：'hangup' = 用户手动挂断（缺省）/
@@ -3591,8 +3611,18 @@ export default function PhoneApp() {
   const consumePendingAnswer = useCallback(() => {
     const pending = takePendingPhoneAnswer();
     if (!pending) return;
-    // 已有通话进行中：丢弃新 pending，不替换正在进行的通话（与 startCall 的防替换口径一致）
-    setCallTarget((prev) => prev ?? { number: pending.number, contact: pending.contact, direction: 'in' });
+    // 已有通话进行中：丢弃新 pending，不替换正在进行的通话（与 startCall 的防替换口径一致）。
+    // AI 主动来电目的（pending.proactiveContext，Task 40-d 写入）：随 CallTarget 透传进
+    // 该通电话所有 turn payload 的 proactiveContext（普通来电/拨出无此字段，不注入）
+    const proactive = pending.proactiveContext;
+    setCallTarget((prev) =>
+      prev ?? {
+        number: pending.number,
+        contact: pending.contact,
+        direction: 'in',
+        ...(proactive ? { proactiveContext: proactive } : {}),
+      },
+    );
   }, []);
   useEffect(() => {
     consumePendingAnswer();

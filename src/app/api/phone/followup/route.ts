@@ -27,7 +27,7 @@ export const runtime = 'nodejs';
  * 硬约束：不复读通话里说过的原话；语气符合人设与情绪；每条像真人随手发的短消息。
  *
  * POST { contact, number?, direction, endReason, connected, duration,
- *        transcript, recentChat, memoryBlock?, worldbookBlock?, timeBlock?, multiApp?, config? }
+ *        transcript, recentChat, memoryBlock?, crossAppBlock?, groupBlock?, worldbookBlock?, timeBlock?, multiApp?, config? }
  * 返回 { messages: string[] } 或 { directOnly: true, messages: CallApiMessage[] }（内网 API 浏览器直连）。
  * 任何失败 → { messages: [] }（续聊是体验增强，静默失败，绝不阻塞挂断收尾与记忆总结）。
  */
@@ -275,9 +275,12 @@ export async function POST(req: NextRequest) {
   );
   // 记忆 / 世界书 / 时间感知：前端组装注入（与通话轮次同一套来源，人设 > 世界书 > 记忆 > 时间）
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
+  // 跨 App 近况块 + 群聊近况块（Task 40-b）：与通话轮次同位置（当前 App 记忆之后）注入，空串跳过
+  const crossAppBlock = typeof root.crossAppBlock === 'string' ? root.crossAppBlock.trim() : '';
+  const groupBlock = typeof root.groupBlock === 'string' ? root.groupBlock.trim() : '';
   const worldbookBlock = typeof root.worldbookBlock === 'string' ? root.worldbookBlock.trim() : '';
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
-  const systemFull = [system, worldbookBlock, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
+  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, timeBlock].filter(Boolean).join('\n\n');
 
   // 触发消息：把「最近聊天 + 通话转写」打包成一段上下文（user/assistant 双方已标注），避免与消息角色混淆
   const recap: string[] = [];

@@ -8,6 +8,11 @@ export const runtime = 'nodejs';
  *        number: string, greeting?: boolean,
  *        proactiveAttempt?: number,          // AI 主动开口：用户超过几秒没说话后的第 N 次主动（1 起）
  *        history: { role: 'user' | 'assistant', content: string }[],
+ *        memoryBlock?: string,               // 当前 App 记忆召回块（前端组装）
+ *        crossAppBlock?: string,             // 跨 App 近况块（其他 App 最近原始消息，前端 cross-app-context 组装）
+ *        groupBlock?: string,                // 群聊近况块（共同群最近原始消息，前端组装）
+ *        proactiveContext?: string,          // AI 主动来电目的（非空 = 这通电话是 AI 主动拨出，注入来电目的段）
+ *        worldbookBlock?: string, momentsBlock?: string, timeBlock?: string, locBlock?: string,
  *        config: { baseUrl, apiKey, model, temperature, maxTokens } }
  * 返回 { reply, name } 或 { directOnly: true, messages, name }
  * 联系人资料由前端直传（联系人存浏览器本地 IndexedDB，服务端不查库）；不传则按陌生号码处理。
@@ -157,6 +162,15 @@ export async function POST(req: NextRequest) {
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
+  // 跨 App 近况块：其他 App 最近原始消息（前端 cross-app-context 组装，含【当前环境】行——AI 知道在哪个 App）
+  const crossAppBlock = typeof root.crossAppBlock === 'string' ? root.crossAppBlock.trim() : '';
+  // 群聊近况块：共同群最近原始消息（已标注群名与发言人，前端按群 ID 隔离读取）
+  const groupBlock = typeof root.groupBlock === 'string' ? root.groupBlock.trim() : '';
+  // AI 主动来电目的（另一任务写入）：非空 = 这通电话是 AI 主动打来的，注入来电目的段
+  const proactiveContext = typeof root.proactiveContext === 'string' ? root.proactiveContext.trim() : '';
+  const proactiveBlock = proactiveContext
+    ? `【来电目的】这通电话是你主动打来的，你打电话来是想：${proactiveContext}。自然地围绕这个目的开启对话。`
+    : '';
   // 世界书块：前端与文字聊天同一套 collectWbBlocks 组装（全局/局部/专属命中条目 + 使用规则），
   // 附加在人设之后、记忆之前（优先级：人设/世界设定 > 记忆，与文字聊天 systemFull 顺序一致）
   const worldbookBlock = typeof root.worldbookBlock === 'string' ? root.worldbookBlock.trim() : '';
@@ -166,7 +180,11 @@ export async function POST(req: NextRequest) {
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
   // 位置感知块：前端与文字聊天同一套 buildLocationBlock（用户最近发过的位置：名称/地址/经纬度/时间）
   const locBlock = typeof root.locBlock === 'string' ? root.locBlock.trim() : '';
-  const systemFull = [system, worldbookBlock, memoryBlock, momentsBlock, timeBlock, locBlock].filter(Boolean).join('\n\n');
+  // 拼装顺序（Task 40-b 注入约定）：人设 → 世界书 → 当前 App 记忆 → 跨 App 近况 → 群聊近况 →
+  // 来电目的（主动电话）→ 动态 → 时间 → 位置；空串/缺字段自动跳过
+  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, proactiveBlock, momentsBlock, timeBlock, locBlock]
+    .filter(Boolean)
+    .join('\n\n');
 
   // 上游要求 messages 必须以 user 消息收尾：
   // - 普通轮次：历史本身以用户刚说的话收尾，直接透传；

@@ -6,6 +6,8 @@
  * 通话引擎在挂断收尾时调用，生成「AI 继续发的文字」——条数上限 = 该会话聊天设置里的回复条数
  * （replyCount 由调用方按 sessionKey 现场读取直传；上限不是任务，没话可以少发），
  * 依据：人设 + 本次通话内容 + 相关记忆（动态召回）+ 最近聊天 + 时间感知（服务端 /api/phone/followup 组装）。
+ * 另可携带跨 App 近况块与群聊近况块（crossAppBlock/groupBlock，前端 cross-app-context 组装；
+ * 服务端按「人设 > 世界书 > 记忆 > 跨 App > 群聊 > 时间」拼装）。
  * 呈现由宿主负责：微信/QQ 以聊天消息落盘，电话 App 以语音留言呈现（无聊天面板，与拒接解释同机制）。
  *
  * 续聊文字同时并入通话转写 → 挂断总结把「通话内容 + 续聊文字」一起沉淀入记忆
@@ -54,6 +56,10 @@ export interface CallFollowupPayload {
   recentChat: CallFollowupTurn[];
   /** 动态召回的记忆块（宿主按联系人组装；互通开关范围已过滤） */
   memoryBlock?: string;
+  /** 跨 App 近况块（其他 App 最近原始消息；Task 40-b，前端 cross-app-context 组装；空缺不注入） */
+  crossAppBlock?: string;
+  /** 群聊近况块（共同群最近原始消息，已标注群名与发言人；空缺不注入） */
+  groupBlock?: string;
   worldbookBlock?: string;
   timeBlock?: string;
   multiApp?: boolean;
