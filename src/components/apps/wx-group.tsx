@@ -168,7 +168,7 @@ import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
-import { peekPendingMsgs, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { splitVisionDesc } from '@/lib/vision-client';
 import {
   beginChatStream,
@@ -2762,11 +2762,13 @@ export function WxGroupChatPage({
         const meName = addressNameOf(me, useSettings.getState().addressMode);
         // #22 组连发修复：上一位成员的消息正按打字节奏逐条投递（可能还没落盘）时，只读已落盘历史
         // 会漏看一截——把投递队列里未落盘的尾巴拼进历史再过滤截断。同一消息要么已落盘要么在队列里
-        // （deliveredIndex 在每条投递后同步推进），不会重复；lastMeMsg/lastUserText/memContext 均派生自此
+        // （deliveredIndex 在每条投递后同步推进），不会重复；lastMeMsg/lastUserText/memContext 均派生自此。
+        // #35：按创建时间稳定排序——用户在上一轮投递中插话时，队列尾巴落库晚于用户消息（落库顺序倒挂），
+        // 排序把尾巴放回用户消息之前，成员读到的对话时序才正确
         const pending = peekPendingMsgs<WxGroupMsg>(sKey);
-        const ctxMsgs = [...loadGroupMsgs(gid), ...pending]
-          .filter((m) => m.kind !== 'notice' && !m.recalled)
-          .slice(-24);
+        const ctxMsgs = sortMsgsByTime(
+          [...loadGroupMsgs(gid), ...pending].filter((m) => m.kind !== 'notice' && !m.recalled),
+        ).slice(-24);
         // 上下文映射：自己 → assistant；机主/其他成员 → 「发言者：内容」user 消息（富媒体按占位文本；
         // 任何成员引用了别的消息都带「（引用 名字：「内容」）」前缀，群里 AI 也能理解引用关系）
         const history: ChatPayloadMessage[] = ctxMsgs.map((m): ChatPayloadMessage => {

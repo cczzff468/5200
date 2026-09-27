@@ -29,7 +29,7 @@ import { GlassButton } from '@/components/ios/GlassButton';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
-import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import {
   beginChatStream,
@@ -272,8 +272,9 @@ function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
 
 // ---------------- #8 排队补跑回合的持久化（#28） ----------------
 
-/** 待补跑回合：kick = 消息已入列（文字/语音/划转文字），只需补一轮 AI 回复；dispatch = 分句发送批次统一触发 */
-type QueuedTurn = { kind: 'kick' | 'dispatch' };
+/** 待补跑回合：kick = 消息已入列（文字/语音/划转文字），只需补一轮 AI 回复；dispatch = 分句发送批次统一触发；
+ *  event = 随回合注入的系统事件（拉黑申请同意/拒绝在回复中排队时保留事件，不丢语义） */
+type QueuedTurn = { kind: 'kick' | 'dispatch'; event?: string };
 
 /** 排队补跑持久化（key: sms-queued-turns）：Record<storageKey, QueuedTurn[]> JSON 落 localStorage。
  *  刷新后队列不丢：重新进入该会话时恢复进 ref、既有 flush effect 自动补跑；会话没打开就等下次进入
@@ -909,13 +910,18 @@ function ChatView({
   }, [stream, sessionKey, storageKey]);
 
   /** 逐条投递 tick：AI 回复由 ai-delivery 调度器按真人节奏逐条落盘（模块层，与页面是否存活无关），
-   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（语音升级以存储为权威） */
+   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（语音升级以存储为权威）。
+   *  #35：合并后按创建时间稳定排序——投递插入边界让落库时序正确，但 state 合并是新项尾部追加，
+   *  排序把「插在边界前的旧回复」放回正确位置，显示与下一轮上下文都按真实对话时序 */
   useEffect(() => {
     return subscribeAiDelivery(sessionKey, () => {
       setMsgs((prev) => {
         const saved = loadMsgs(storageKey) ?? [];
         const savedMap = new Map(saved.map((m) => [m.id, m]));
-        return [...prev.map((m) => savedMap.get(m.id) ?? m), ...saved.filter((m) => !prev.some((p) => p.id === m.id))];
+        return sortMsgsByTime([
+          ...prev.map((m) => savedMap.get(m.id) ?? m),
+          ...saved.filter((m) => !prev.some((p) => p.id === m.id)),
+        ]);
       });
     });
   }, [sessionKey, storageKey]);
@@ -935,7 +941,8 @@ function ChatView({
    *  startAiTurn 的投递批次与退出网页接力的后台回复（bg-turn 拉取）共用同一套管线 */
   const deliverAiMsg = useCallback(
     (m: ChatMsg) => {
-      saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), m]);
+      // #35：有插入边界时（用户在上一轮投递中插话）插到边界用户消息之前，落库顺序即对话时序
+      saveMsgs(storageKey, appendWithBoundary(sessionKey, loadMsgs(storageKey) ?? [], m));
       // 语音频率：每条文字消息独立判定（短路调用保持周期语义；命中 → 通知直接显示[语音]，未命中 → 常规文字预览）
       const voiceTurn =
         !m.error && !m.sys && !m.blkreq &&
@@ -1051,11 +1058,18 @@ function ChatView({
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  baseMsgs：显式传入最新消息数组（语音转写完成后调用时避免闭包旧状态漏掉刚落库的语音消息） */
   const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => {
-    const base = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : [])];
+    // #35 上下文补投递尾巴（群聊 #22 已修，单聊同款）：上一轮的回复还在打字节奏投递队列里（未落盘）时，
+    // 只读 msgs state 会漏看——AI 看不到自己刚说的话，把旧话题再答一遍（自言自语/像没读到用户最新消息）。
+    // 队列尾巴按序拼进 base（时序上属于上一轮，排在最新用户消息之前）；同一消息要么已落盘/进 state、
+    // 要么还在队列里（deliveredIndex 逐条同步推进），不会重复。
+    const pendingTail = peekPendingMsgs<ChatMsg>(sessionKey);
+    const base = [...(baseMsgs ?? msgs), ...pendingTail, ...(userMsg ? [userMsg] : [])];
     // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知；
-    // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位）
+    // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位）。
+    // #35：按创建时间稳定排序还原对话时序（旧气泡倒挂的历史数据），保证上下文顺序正确
     const history = base
       .filter((m) => !m.error && !m.recalled && (m.content || m.kind === 'voice'))
+      .sort((a, b) => a.time - b.time)
       .slice(-20)
       .map((m) => ({
         role: m.role,
@@ -1378,7 +1392,7 @@ function ChatView({
       setPendingDispatch(false);
       markPendingBatch(sessionKey, false);
     }
-    startAiTurnRef.current?.(null);
+    startAiTurnRef.current?.(null, next.event);
   }, [sessionKey, storageKey]);
 
   // 挂载时恢复持久化队列（#28）：声明在补跑触发 effect 之前——挂载帧先恢复、后尝试消费，
@@ -1415,19 +1429,26 @@ function ChatView({
   };
 
   /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
-   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」 */
+   *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」。
+   *  #35：对方正在回复（流式/连发投递）时事件随补跑回合排队（event 随队列持久化），不丢语义也不开交错回合 */
   const resolveBlockReq = (m: ChatMsg, accept: boolean) => {
     if (!wbContactId || m.blkreq?.status !== 'pending') return;
     setMsgs((prev) => prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x)));
+    const ev = accept
+      ? `（系统事件：对方同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`
+      : `（系统事件：对方拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`;
     if (accept) {
       setBlk(acceptBlockReq('sms', wbContactId));
       pushSysMsg(`你同意了「${peer.name ?? peer.title}」的解除拉黑申请`);
-      startAiTurn(null, `（系统事件：对方同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`);
     } else {
       setBlk(rejectBlockReq('sms', wbContactId));
       pushSysMsg(`你拒绝了「${peer.name ?? peer.title}」的解除拉黑申请`);
-      startAiTurn(null, `（系统事件：对方拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`);
     }
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      enqueueQueuedTurn({ kind: 'kick', event: ev });
+      return;
+    }
+    startAiTurn(null, ev);
   };
 
   /** 拉黑标记（红色 ! 圆点紧贴气泡——拉黑关系存续期间（任一方向），该期间内的双方气泡都带图标；
@@ -1488,11 +1509,13 @@ function ChatView({
     const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now(), quote: quote ?? undefined };
     // #8 对方正在回复（流式接收或连发投递未清空，投递可拖到流结束后数秒）：消息照常上屏并排队补跑，
     // 「流收尾且投递完毕」后自动触发回复——不再静默丢弃（对齐微信：消息发出去了，AI 稍后回复；
-    // 投递中也排队，否则旧回复尾部进不了新回合上下文、旧 AI 气泡还会倒挂在用户新消息下面）
+    // 投递中也排队，否则旧回复尾部进不了新回合上下文、旧 AI 气泡还会倒挂在用户新消息下面）。
+    // #35：标记投递插入边界——上一轮还在队列里的回复落库时插到这条新消息之前（时序归属上一轮）
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       setInput('');
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
+      markDeliverBoundary(sessionKey, userMsg.id);
       enqueueQueuedTurn({ kind: 'kick' });
       return;
     }
@@ -1567,6 +1590,7 @@ function ChatView({
        *  转写完成后再触发，AI 才能读到语音内容 */
       const kickTurn = () => {
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          markDeliverBoundary(sessionKey, msg.id); // #35：语音消息也作插入边界，旧回复落库时插到它前面
           enqueueQueuedTurn({ kind: 'kick' }); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
           return;
         }
@@ -1596,9 +1620,10 @@ function ChatView({
   const sttPreview = useSttPreview({
     onSendText: (text) => {
       const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
-      // #8 对方正在回复：消息照常上屏并排队补跑（对齐微信，不再弹提示丢弃）
+      // #8 对方正在回复：消息照常上屏并排队补跑（对齐微信，不再弹提示丢弃）。#35：标记插入边界
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
         setMsgs((prev) => [...prev, userMsg]);
+        markDeliverBoundary(sessionKey, userMsg.id);
         enqueueQueuedTurn({ kind: 'kick' });
         return;
       }

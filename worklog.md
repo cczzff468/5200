@@ -8754,3 +8754,44 @@ Stage Summary:
 - 交付文件：src/lib/ios/island-notify.ts、src/components/ios/NotifyPermissionCard.tsx（新增）、src/components/ios/PhoneShell.tsx
 - 关键决策：①预提示卡只在用户手势内调 requestPermission（浏览器不会被拦、不被误拒）；②「暂不」/×/15s 超时三种收起全部持久化，授权与否都不再骚扰；③Web 通知图标用 canvas 合成（头像+App 角标），与灵动岛通知卡同构，多重降级保证任何环境都能弹
 - 需求清单全项落地：切 App/锁屏（灵动岛）+ 切走/关页（Web Notification/Push）+ 友好申请 + 拒绝降级 + 角色名/内容/App 图标 + 每条消息独立通知
+
+---
+Task ID: 35
+Agent: 主协调者 (Z.ai Code)
+Task: 修复「AI 回复逻辑错乱：没看到用户最新消息、回复了自己」
+
+Work Log:
+- 根因定位（两个叠加缺陷）：
+  ①单聊上下文漏投递尾巴：wechat/qq/chat 三端 runAiTurn/startAiTurn 只读 msgs state 组装历史；
+    上一轮回复（回复条数>1 或 &&& 分条）还在 ai-delivery 打字节奏队列里（逐条停顿 0.85~2.4s）时未落盘，
+    新回合上下文漏看 AI 自己刚说的话 → 把旧话题再答一遍/自言自语（群聊 #22 已修 peekPendingMsgs，单聊漏修）
+  ②落库时序倒挂：用户在流式/投递中发消息（busy 排队路径）立刻落库，之后才投递的上一轮回复 append 到
+    存储末尾 → 落库顺序 ≠ 对话时序（旧 AI 气泡倒挂在用户新消息下面）→ 下一轮上下文以 assistant 旧消息
+    收尾 → 模型无视用户最新消息、续写自己（用户截图场景：AI 说"别催嘛/我正在想呢/哪家店记不清了"）
+- ai-delivery.ts 新增共享能力：markDeliverBoundary/clearDeliverBoundary/appendWithBoundary（投递插入边界：
+  busy 排队路径用户消息为界，之后投递的旧回复插到边界之前，落库顺序即时序；同会话第一条边界优先）+
+  sortMsgsByTime（按创建时间稳定排序，只修复倒置不改正常数据）
+- chat-stream-store.ts：beginChatStream 开新回合时 clearDeliverBoundary（此后投递的都是对新消息的回复，照旧追加）
+- wechat.tsx：runAiTurn base 拼接 peekPendingMsgs 尾巴+按时间稳定排序；deliverAiMsg 走 appendWithBoundary；
+  投递 tick 合并后排序；send/commitVoiceMsg/sttPreview busy 分支 markDeliverBoundary；sendSticker 补
+  isChatStreaming/isAiDelivering 守卫（原来裸 runAiTurn：流中发表情会被回滚消失、投递中开新回合漏尾巴）+
+  排队口径；regenerate 补 isAiDelivering 拒绝（防截断时把队列尾巴拽进新轮）
+- qq.tsx：同款全套（runAiTurn 尾巴+排序/deliverAiMsg/tick/send/组合图/语音/sttPreview 边界、sendSticker 守卫、regenerate 守卫）
+- chat.tsx：startAiTurn 尾花+排序/deliverAiMsg/tick/send/语音/sttPreview 边界；QueuedTurn 扩展 event 字段，
+  resolveBlockReq（拉黑申请同意/拒绝）在回复中排队时事件随补跑回合保留（原来裸 startAiTurn：流中被静默丢弃）
+- wx-group/qq-group：runCharTurn 的 ctxMsgs（loadGroupMsgs+pending）增加 sortMsgsByTime——用户在上一轮
+  投递中插话时队列尾巴落库晚于用户消息，排序放回正确位置（群聊上下文时序同款防护）
+- 验证：bunx tsc --noEmit 零错误、bun run lint 通过；agent-browser E2E（mock /api/chat 捕获请求体）：
+  ①普通多轮上下文正确（旧回复全部在最新用户消息之前）
+  ②严格竞态（第一条发出后 200ms 内发第二条，落在打字节奏投递窗口内）：第二次请求消息顺序
+    [assistant 回复甲, assistant 回复乙, user 第二条] ✓，第三轮持续正确
+  ③气泡显示顺序正确（旧回复在用户新消息上方、无倒挂；回复乙升级语音后位置仍在正确时序位）
+  ④刷新后进会话回归发消息 + 语音频率/投递管线正常；console 无错误、dev.log 无异常
+
+Stage Summary:
+- 交付文件：src/lib/ios/ai-delivery.ts、src/lib/chat-stream-store.ts、src/components/apps/wechat.tsx、
+  qq.tsx、chat.tsx、wx-group.tsx、qq-group.tsx
+- 修复语义：AI 回合上下文 = 已落盘消息 + 投递队列未落盘尾巴（按真实时序），最新用户消息永远收尾；
+  用户在上一轮投递中插话时，旧回复落库插入到用户消息之前（边界），显示与上下文都不再倒挂；
+  表情/拉黑申请/重新生成等旁路触发全部补上与文字发送一致的守卫
+- 单聊/群聊同一套逻辑（尾巴拼接+时间排序），语音/文字混合时序由时间戳保证（转写文本按消息原位进上下文）

@@ -32,6 +32,7 @@ import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { createReplySegmentScanner } from '@/lib/reply-count';
 import { describeImages } from '@/lib/vision-client';
+import { clearDeliverBoundary } from '@/lib/ios/ai-delivery';
 // ---------------- 公开类型 ----------------
 
 export type ChatStreamStatus = 'streaming' | 'done' | 'error';
@@ -374,6 +375,9 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
 export function beginChatStream(opts: BeginChatStreamOptions): boolean {
   const existing = streams.get(opts.sessionKey);
   if (existing && existing.state.status === 'streaming') return false;
+  // 新回合接管：清除投递插入边界（#35）——之后投递的消息都是对本回合上下文里最新用户消息的回复，
+  // 照旧追加落库（边界只在「上一轮投递未完时用户插话」的窗口内生效）
+  clearDeliverBoundary(opts.sessionKey);
   const rt: StreamRuntime = {
     state: {
       sessionKey: opts.sessionKey,

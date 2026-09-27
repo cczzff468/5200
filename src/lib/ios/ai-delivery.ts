@@ -199,6 +199,47 @@ export function peekPendingMsgs<T>(sessionKey: string): T[] {
   return out;
 }
 
+/**
+ * 投递插入边界（#35 上下文时序修复）：
+ * 用户在「上一轮还在流式/连发投递」时发消息（busy 排队路径），该消息立刻落库上屏，
+ * 而上一轮的回复还在投递队列里、之后才逐条落库——若照旧追加到末尾，旧回复会排在
+ * 用户新消息之后（落库顺序 ≠ 对话时序）：显示上旧气泡倒挂在用户新消息下面，
+ * 下一轮 AI 上下文以自己的旧消息收尾 → 无视用户最新消息、自言自语。
+ *
+ * 边界 = busy 路径里那条（批）用户消息的 id：之后投递的 AI 消息插到它前面而不是追加，
+ * 落库顺序即对话时序。同会话第一条用户消息为界（连发多条时都插在第一条之前）；
+ * 新回合开始（beginChatStream）时清除——此后投递的都是对新消息的回复，照旧追加。
+ */
+const insertBeforeIds = new Map<string, string>();
+
+/** 标记插入边界（busy 排队路径调用；已有边界时保留第一条——连发的多条用户消息都在边界之后） */
+export function markDeliverBoundary(sessionKey: string, userMsgId: string): void {
+  if (!userMsgId) return;
+  if (!insertBeforeIds.has(sessionKey)) insertBeforeIds.set(sessionKey, userMsgId);
+}
+
+/** 清除插入边界（新回合开始时调用；此后投递照旧追加） */
+export function clearDeliverBoundary(sessionKey: string): void {
+  insertBeforeIds.delete(sessionKey);
+}
+
+/** 带边界的落库拼接：有边界且边界消息还在列表里时，把 item 插到边界消息之前；否则照旧追加 */
+export function appendWithBoundary<T extends { id: string }>(sessionKey: string, list: readonly T[], item: T): T[] {
+  const boundaryId = insertBeforeIds.get(sessionKey);
+  const idx = boundaryId ? list.findIndex((x) => x.id === boundaryId) : -1;
+  if (idx < 0) return [...list, item];
+  return [...list.slice(0, idx), item, ...list.slice(idx)];
+}
+
+/**
+ * 按消息创建时间稳定排序（#35 时序兜底）：落库合并/state 合并历史上可能把「上一轮还在投递
+ * 队列里的回复」排到用户新消息之后（旧数据或竞态窗口），时间戳记录的是真实创建顺序，
+ * 稳定排序只修复倒置、不改动正常数据（同时间戳保持原相对顺序）。历史构建与 state 合并共用。
+ */
+export function sortMsgsByTime<T extends { time: number }>(list: readonly T[]): T[] {
+  return [...list].sort((a, b) => a.time - b.time);
+}
+
 /** 订阅每条投递后的 tick（返回退订函数） */
 export function subscribeAiDelivery(sessionKey: string, cb: () => void): () => void {
   let set = tickListeners.get(sessionKey);

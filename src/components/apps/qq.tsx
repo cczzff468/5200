@@ -137,7 +137,7 @@ import {
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
-import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
@@ -2607,13 +2607,18 @@ function ChatPage({
   }, [stream, sessionKey, peer.id]);
 
   /** 逐条投递 tick：AI 回复由 ai-delivery 调度器按真人节奏逐条落盘（模块层，与页面是否存活无关），
-   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（动作状态/语音升级以存储为权威） */
+   *  每条到达后把落盘记录合并进本地 state；同 id 用落盘数据覆盖（动作状态/语音升级以存储为权威）。
+   *  #35：合并后按创建时间稳定排序——投递插入边界让落库时序正确，但 state 合并是新项尾部追加，
+   *  排序把「插在边界前的旧回复」放回正确位置，显示与下一轮上下文都按真实对话时序 */
   useEffect(() => {
     return subscribeAiDelivery(sessionKey, () => {
       setMsgs((prev) => {
         const saved = loadMsgs(peer.id);
         const savedMap = new Map(saved.map((m) => [m.id, m]));
-        return [...prev.map((m) => savedMap.get(m.id) ?? m), ...saved.filter((m) => !prev.some((p) => p.id === m.id))];
+        return sortMsgsByTime([
+          ...prev.map((m) => savedMap.get(m.id) ?? m),
+          ...saved.filter((m) => !prev.some((p) => p.id === m.id)),
+        ]);
       });
     });
   }, [sessionKey, peer.id]);
@@ -2783,7 +2788,8 @@ function ChatPage({
    *  runAiTurn 的投递批次与退出网页接力的后台回复（bg-turn 拉取）共用同一套管线 */
   const deliverAiMsg = useCallback(
     (m: QQMsg) => {
-      saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
+      // #35：有插入边界时（用户在上一轮投递中插话）插到边界用户消息之前，落库顺序即对话时序
+      saveMsgs(peer.id, appendWithBoundary(sessionKey, loadMsgs(peer.id), m));
       // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
       const voiceTurn =
         (m.kind === undefined || m.kind === 'text') &&
@@ -2931,9 +2937,20 @@ function ChatPage({
     addBondPoints(peer.id, BOND_MSG_POINTS);
     // base 按 id 去重（保留后出现者）：extra/userMsg 里的消息通常已先一步进了 msgs state，
     // 不去重会把同一条消息算两遍——多图识图时重复 id 污染 turnImageMsgIds 映射，描述回写错位（#25）
-    const baseRaw = [...(baseMsgs ?? msgs), ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
+    // #35 上下文补投递尾巴（群聊 #22 已修，单聊同款）：上一轮的回复还在打字节奏投递队列里（未落盘）时，
+    // 只读 msgs state 会漏看——AI 看不到自己刚说的话，把旧话题再答一遍（自言自语/像没读到用户最新消息）。
+    // 队列尾巴按序拼进 base（时序上属于上一轮，排在最新用户消息之前）；同一消息要么已落盘/进 state、
+    // 要么还在队列里（deliveredIndex 逐条同步推进），不会重复。
+    const pendingTail = peekPendingMsgs<QQMsg>(sessionKey);
+    const baseRaw = [...(baseMsgs ?? msgs), ...pendingTail, ...(userMsg ? [userMsg] : []), ...(extra ?? [])];
     const baseSeen = new Set<string>();
-    const base = baseRaw.reverse().filter((m) => (baseSeen.has(m.id) ? false : (baseSeen.add(m.id), true))).reverse();
+    const base = baseRaw
+      .reverse()
+      .filter((m) => (baseSeen.has(m.id) ? false : (baseSeen.add(m.id), true)))
+      .reverse()
+      // #35 时序兑底：历史数据/合并竞态可能把上一轮未投递完的回复排在用户新消息之后（旧气泡倒挂），
+      // 按创建时间稳定排序还原对话时序（正常数据 time 单调，排序为空操作），保证上下文顺序正确
+      .sort((a, b) => a.time - b.time);
     // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
     // 图片消息以 [图片] 占位、位置以完整位置文本进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
     const history = base
@@ -3437,8 +3454,10 @@ function ChatPage({
       for (const msg of [textMsg, ...created]) setMsgs((prev) => [...prev, msg]);
       // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
       if (peer.id === me.id) return;
-      // 对方正在回复（流式接收或连发投递未清空）：文字+图片整批走排队补跑口径（与单发文字/图片一致）
+      // 对方正在回复（流式接收或连发投递未清空）：文字+图片整批走排队补跑口径（与单发文字/图片一致）。
+      // #35：整批第一条作投递插入边界，旧回复落库时插到整批之前
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        markDeliverBoundary(sessionKey, textMsg.id);
         qqQueueAdd(peer.id);
         onToast('消息已发出，对方回完这轮就聊');
         return;
@@ -3461,11 +3480,13 @@ function ChatPage({
     // 对方正在回复（流式接收或连发投递未清空，投递可拖到流结束后数秒）：消息照常入列并排队，
     // 「流收尾且投递完毕」后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
     // 看起来像「发了消息没人理」，AI 下一轮自然接不上话）。投递中也排队：否则旧回复尾部
-    // 进不了新回合上下文，旧 AI 气泡还会倒挂在用户新消息下面
+    // 进不了新回合上下文，旧 AI 气泡还会倒挂在用户新消息下面。
+    // #35：标记投递插入边界——上一轮还在队列里的回复落库时插到这条新消息之前（时序归属上一轮）
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       setInput('');
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
+      markDeliverBoundary(sessionKey, userMsg.id);
       qqQueueAdd(peer.id);
       return;
     }
@@ -3515,6 +3536,7 @@ function ChatPage({
       /** 触发 AI 回复（对方正在回复——流式或连发投递中——则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
       const kickTurn = () => {
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          markDeliverBoundary(sessionKey, msg.id); // #35：语音消息也作插入边界，旧回复落库时插到它前面
           qqQueueAdd(peer.id); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
           return;
         }
@@ -3550,6 +3572,7 @@ function ChatPage({
       }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
         setMsgs((prev) => [...prev, userMsg]);
+        markDeliverBoundary(sessionKey, userMsg.id); // #35
         qqQueueAdd(peer.id);
         return;
       }
@@ -3690,9 +3713,10 @@ function ChatPage({
   });
 
   /** 重新生成：删除该条 AI 回复所在轮次及其后的全部消息（包括我又发出去的消息），
-   *  以剩余历史重新发起请求（回复条数按本会话设置重新连发）；任意历史 AI 气泡都可触发 */
+   *  以剩余历史重新发起请求（回复条数按本会话设置重新连发）；任意历史 AI 气泡都可触发。
+   *  连发投递中也拒绝：旧回复尾巴还在队列里逐条落盘，此刻截断会把队列尾部拽进新轮上下文 */
   const regenerate = (m: QQMsg) => {
-    if (isChatStreaming(sessionKey)) {
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       onToast('对方正在回复，请稍后再试');
       return;
     }
@@ -3969,7 +3993,9 @@ function ChatPage({
   /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；自己会话除外） */
   const canDispatch = sentenceSend && pendingDispatch && !streaming && peer.id !== me.id;
 
-  // 发送表情消息（表情面板点选；AI 通过 stk.meaning 理解表情含义并据此回复）
+  // 发送表情消息（表情面板点选；AI 通过 stk.meaning 理解表情含义并据此回复）。
+  // #35：对方正在回复（流式/连发投递）时与文字发送同一口径——消息入列并排队补跑，
+  // 不再直接开新回合（旧回复尾巴会漏出上下文 + 表情气泡在流中会被回滚消失）
   const sendSticker = useCallback(
     (st: Sticker) => {
       setStickerOpen(false);
@@ -3979,9 +4005,16 @@ function ChatPage({
         setMsgs((prev) => [...prev, msg]);
         return;
       }
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        setMsgs((prev) => [...prev, msg]);
+        markDeliverBoundary(sessionKey, msg.id);
+        qqQueueAdd(peer.id);
+        onToast('表情已发出，对方回完这轮就聊');
+        return;
+      }
       void runAiTurn(msg);
     },
-    [me.id, peer.id, runAiTurn]
+    [me.id, peer.id, runAiTurn, sessionKey, onToast]
   );
 
   // 加号面板五宫格（对照需求：语音通话/视频通话/红包/转账/位置；图片入口已移除）
