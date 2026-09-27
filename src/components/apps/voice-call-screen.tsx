@@ -704,17 +704,21 @@ export function callCardText(state: CallCardState, duration: number, direction: 
   }
 }
 
-/** AI 可读的通话摘要（进聊天上下文；中立措辞，role=me/peer 两侧都通顺） */
+/**
+ * AI 可读的通话摘要（进聊天上下文）：主叫者口吻（卡片 role 恒与主叫一致——我方打出=me、AI 打出=peer，
+ * 历史映射后正好是主叫者的声音），结局措辞与 call-outcome.ts 三态严格对齐：
+ * 拒接/未接/取消都写明「没接通、一句话没说上」，防止 AI 把「被拒接」误读成「接通后被挂断」。
+ */
 export function callCardAiText(state: CallCardState, duration: number): string {
   switch (state) {
     case 'cancelled':
-      return '[语音通话：拨通前取消了]';
+      return '[语音通话：我打给你，还没接通就取消了，没有说上话]';
     case 'no-answer':
-      return '[语音通话：对方未接听]';
+      return '[语音通话：我打给你，你没接听，没有接通]';
     case 'rejected':
-      return '[语音通话：来电被拒绝]';
+      return '[语音通话：我打给你，你按了拒接，电话没有接通，一句话都没说上]';
     case 'missed-in':
-      return '[语音通话：未接听]';
+      return '[语音通话：我打给你，响了很久没人接，没有接通，一句话都没说上]';
     default:
       return `[语音通话：通话时长 ${formatCallDuration(duration)}]`;
   }

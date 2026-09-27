@@ -8,9 +8,15 @@ export const runtime = 'nodejs';
  * 挂断是通话的延续而不是终点——AI 按人设像平时发消息那样，紧接着再发文字（条数上限 =
  * 该会话「聊天设置 › 回复条数」，由前端随请求直传 replyCount；上限不是任务，没话可以少发）：
  * 接着说通话里没聊完的话茬、补一句叮嘱/约定、表达关心，或对「被挂断/没接通」做自然反应。
- * 三种挂断场景共用本 API（由前端引擎区分场景注入说明）：
- *   1. AI 主动挂断（ai-hangup）；2. 用户挂断（hangup / 来电被拒 missed-in·reject / 拨号取消 cancel）；
+ * 各挂断场景共用本 API（由前端引擎区分场景注入说明）：
+ *   1. AI 主动挂断（ai-hangup）；2. 用户挂断（hangup / 来电被拒 reject / 未接 missed-in / 拨号取消 cancel）；
  *   3. 拨出去被 AI 拒接/未接（reject / no-answer——该场景的 afterText 由 /api/phone/answer 决策产出，不走这里）。
+ *
+ * 结局语义（call-outcome.ts 统一映射，严格区分绝不混淆）：
+ *   已拒绝 reject = 对方按了拒接、没接通、一句话没说上；未接听 missed-in = 响了很久没人接、没接通；
+ *   已取消 cancel = 对方拨给你又取消、没接通；已挂断 hangup/ai-hangup = 真实接通过、聊过之后才结束。
+ *   未知 endReason 绝不默认当「接通后挂断」：接通→按 hangup，未接通→按 missed-in；
+ *   数据矛盾（如 hangup 但 connected=false）同样以未接通为准——宁可当没接通，也绝不编造一段被挂断的通话。
  *
  * 生成依据：人设 + 本次通话内容 + 相关记忆（前端动态召回注入）+ 最近聊天记录 + 时间感知。
  * 硬约束：不复读通话里说过的原话；语气符合人设与情绪；每条像真人随手发的短消息。
@@ -32,20 +38,46 @@ import {
   parseInlineContact,
   sdkTurn,
 } from '@/lib/ios/call-upstream';
+import { callOutcomeOf, outcomeConnected, type CallOutcome } from '@/lib/ios/call-outcome';
 
-/** 挂断场景说明（system 里向 AI 交代「这通电话是怎么结束的」） */
+/** 结局事实陈述（system 里向 AI 交代「这通电话最后怎么了」；AI 视角：你 = AI，对方 = 机主） */
 const SCENE_TEXT: Record<string, string> = {
-  'ai-hangup': '你觉得聊得差不多了，自然告别后主动挂断了电话',
-  hangup: '对方先挂断了电话',
-  reject: '你打给对方，对方没有接（按掉了）',
-  'missed-in': '你打给对方，响了很久都没人接，你把电话挂了',
-  cancel: '对方拨给你，但还没接通就取消了',
+  'ai-hangup': '电话接通了，你们聊了一会儿，你觉得聊得差不多了，自然告别后你主动挂断了电话',
+  hangup: '电话接通了，你们聊了一会儿，之后对方先挂断了电话',
+  reject: '这通电话是你打给对方的，响了之后对方直接按了「拒绝」——电话从头到尾没有接通，你们一句话都没说上',
+  'missed-in': '这通电话是你打给对方的，响了很久一直没人接，你等了一会儿把电话挂了——电话从头到尾没有接通，你们一句话都没说上',
+  cancel: '对方拨给你，但还没接通就取消了——电话从头到尾没有接通，你们一句话都没说上',
 };
+
+/** 未接通结局（已拒绝/未接听/已取消）的反应引导：结局硬事实 + 该怎么反应（AI 视角）；'ended' 恒为空（接通场景走另一分支，仅为了让键类型完整） */
+const NOT_CONNECTED_RULES: Record<CallOutcome, string[]> = {
+  ended: [],
+  rejected: [
+    '这次通话的结局是【已拒绝】：对方看到了来电、主动按了「拒绝」按钮——这不是没听到，也不是接通后挂断，就是对方选择不接。',
+    '你这条消息就是对「被拒接」这件事的反应：结合你的人设和你们的关系，可以带点小委屈/撒娇/小情绪问问「怎么拒接我呀」「是不是在忙呀」，也可以大度地说等对方方便了再打；情绪浓淡符合人设即可，不要上纲上线。',
+  ],
+  missed: [
+    '这次通话的结局是【未接听】：响了很久一直没人接（不是对方故意按掉拒接，可能是没听到/在忙）。',
+    '你这条消息就是对「没接到电话」的反应：可以关心对方在忙什么、提醒「看到未接来电回我一下」，或者约晚点再打；情绪符合人设即可。',
+  ],
+  cancelled: [
+    '这次通话的结局是【已取消】：对方拨给你，但还没等你接就取消了。',
+    '你这条消息就是对「对方想找你又取消」的反应：可以自然问问「刚才怎么取消啦」「是不是按错了」，关心对方是不是有什么事；情绪符合人设即可。',
+  ],
+};
+
+/** 未接通场景的硬性禁止（防止 AI 把「被拒接/没接」说成「接通后被挂断」） */
+const NOT_CONNECTED_BANS = [
+  '硬性禁止（这次电话没有接通，必须遵守）：',
+  '— 禁止说「怎么挂这么快」「刚挂电话」「都没聊上几句」「打了个寂寞」「怎么不说话就挂了」这类把结局说成「接通后被挂断」的话：电话从没接通，根本不存在「挂」这个动作；',
+  '— 禁止复述、引用或虚构任何「通话里说过的话」：这次通话没有产生任何对话，不存在任何通话内容，也不要说「刚才电话里你说的…」这类指代；',
+].join('\n');
 
 function buildFollowupSystemPrompt(
   peer: PersonaSource,
   scene: string,
-  connected: boolean,
+  outcome: CallOutcome,
+  ended: boolean,
   durationLabel: string,
   hasChat: boolean,
   maxCount: number,
@@ -65,13 +97,18 @@ function buildFollowupSystemPrompt(
     userNickname: user?.nickname ?? null,
     multiApp,
     extraRules: [
-      `你刚结束一通语音通话（${scene}${connected ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这次通话：`,
-      connected
-        ? '可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心，或顺着通话里提到的事聊两句新的；'
-        : '这通电话没有真正聊起来：结合你的人设、你们的关系和最近聊天，发自然的反应消息（比如关心对方为什么没接/怎么挂了、带点小情绪或撒娇、约下次再聊）；',
+      `你刚结束一通语音通话（${scene}${ended ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这件事：`,
+      ...(ended
+        ? [
+            // 接通后结束：才有「通话内容」可衔接；「挂得快」类小情绪只允许出现在「对方先挂」这里
+            scene.startsWith('电话接通了，你们聊了一会儿，之后对方先挂断')
+              ? '你们真的聊过：可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心，也可以对「对方挂断」带点小情绪（比如嫌对方挂得快），但别过度纠缠；'
+              : '这通电话是你自己觉得聊得差不多、自然告别后主动挂断的：可以接着说通话里没聊完的话茬、补一句刚才没说完的事、叮嘱/约定/关心；',
+          ]
+        : [NOT_CONNECTED_RULES[outcome][0], NOT_CONNECTED_RULES[outcome][1], NOT_CONNECTED_BANS]),
       countRule,
       '绝对不要复读通话里已经说过的原话；不要自我介绍；不要说「刚才我们通话了」这类出戏的话——就像平时聊微信/QQ 一样接着说；',
-      '语气完全符合你的人设和此刻情绪（聊得开心就热络、被匆匆挂断可以有点小抱怨、深夜可以带着困意）；',
+      '语气完全符合你的人设和此刻情绪（聊得开心就热络、对方拒接/没接可以有点小委屈、深夜可以带着困意）；',
       '每条消息像真人随手发的：口语化、简短（一条一般 1~2 句），可以有语气词；不要 markdown 符号、不要引号包裹、不要表情符号；',
       hasChat ? '结合下方最近聊天内容让消息更有来由。' : '没有最近聊天记录时，就纯粹基于人设和这次通话发挥。',
       '严格输出一个 JSON 对象，不要输出任何其他文字：',
@@ -143,8 +180,21 @@ export async function POST(req: NextRequest) {
 
   const direction = root.direction === 'in' ? 'in' : 'out';
   const endReasonRaw = typeof root.endReason === 'string' ? root.endReason.trim() : '';
-  const endReason = SCENE_TEXT[endReasonRaw] ? endReasonRaw : 'hangup';
   const connected = root.connected === true;
+  // 结局唯一映射（call-outcome.ts）：未知 endReason 绝不默认当「接通后挂断」——
+  // 接通→按 hangup/ai-hangup 描述；未接通→按 reject/missed-in/cancel 描述；数据矛盾以未接通为准。
+  // endReason 一律由 outcome 反推，保证事实陈述与反应引导永远一致、不自相矛盾
+  const outcome = callOutcomeOf(endReasonRaw, connected);
+  const endReason =
+    outcome === 'ended'
+      ? endReasonRaw === 'ai-hangup'
+        ? 'ai-hangup'
+        : 'hangup'
+      : outcome === 'rejected'
+        ? 'reject'
+        : outcome === 'cancelled'
+          ? 'cancel'
+          : 'missed-in';
   const duration = typeof root.duration === 'number' && Number.isFinite(root.duration) ? Math.max(0, Math.floor(root.duration)) : 0;
   const durationLabel = duration >= 60 ? `${Math.floor(duration / 60)} 分 ${duration % 60} 秒` : `${duration} 秒`;
   const transcript = normalizeHistory(root.transcript);
@@ -153,7 +203,8 @@ export async function POST(req: NextRequest) {
   const system = buildFollowupSystemPrompt(
     peer,
     SCENE_TEXT[endReason],
-    connected,
+    outcome,
+    outcomeConnected(outcome),
     durationLabel,
     recentChat.length > 0,
     maxCount,
@@ -179,7 +230,11 @@ export async function POST(req: NextRequest) {
     recap.push(...recentChat.map((m) => `${m.role === 'user' ? '机主' : '你'}：${m.content}`));
     recap.push('');
   }
-  if (transcript.length > 0) {
+  if (!outcomeConnected(outcome)) {
+    // 未接通：显式强调没有通话内容（与 system 的结局事实双重对齐）；误传的转写不进上下文（防自相矛盾）
+    recap.push('【关于这次通话】没有接通，没有产生任何通话内容（上面的聊天记录是文字消息，不是通话内容）。');
+    recap.push('');
+  } else if (transcript.length > 0) {
     recap.push('【这次通话里你们说的话】');
     recap.push(...transcript.map((m) => `${m.role === 'user' ? '机主' : '你'}（说出口的话）：${m.content}`));
     recap.push('');

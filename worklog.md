@@ -8003,3 +8003,22 @@ Stage Summary:
 - 来电弹窗体系最终形态：弹窗=灵动岛原位放大（弹出期间灵动岛被盖住）、344 宽统一体系、头像左按钮右；全屏来电界面与弹窗互斥（界面优先，退出后弹窗兜底）；退出按钮只收界面不挂断
 - 沙箱后台进程存活规律（重要经验）：工具调用结束清进程树——setsid -f 或「子壳内 & 后立即退出」使进程在调用结束前被 init 收养才能存活
 - 修改文件：src/lib/ios/chat-call.ts、src/lib/ios/incoming-call.ts、src/components/ios/IncomingCallLayer.tsx、src/components/ios/PhoneShell.tsx（注释）
+
+---
+Task ID: 21
+Agent: Z.ai Code (main)
+Task: 修复电话拒绝逻辑——AI 把「已拒绝」误判成「接通后立刻挂断」（说「怎么挂这么快」「打了个寂寞」）；系统明确区分 已拒绝/未接听/已挂断 三态，拒绝状态注入 system，三端共用一套状态逻辑
+
+Work Log:
+- 根因定位（三处）：① /api/phone/followup 未接通分支的引导语自己举例「关心对方为什么没接/怎么挂了」——「怎么挂了」直接教 AI 说「怎么挂这么快」；② route 兜底 `SCENE_TEXT[endReasonRaw] ? endReasonRaw : 'hangup'`——任何未知 endReason 都被当成「接通后对方挂断」；③ 通话卡片 AI 上下文文案（callCardAiText）「[语音通话：来电被拒绝]」没说清谁拒接/没接通，后续聊天轮次照样糊涂
+- 新增 src/lib/ios/call-outcome.ts：通话结局唯一映射 callOutcomeOf(endReason, connected) → rejected(已拒绝=按了拒接)/missed(未接听=响铃无人接)/cancelled(已取消=拨通前取消)/ended(已挂断=真实接通过)；未知原因宁可按未接听处理，绝不编造「接通后被挂断」的通话；数据矛盾（如 hangup+connected=false）以未接通为准
+- 重写 /api/phone/followup 场景注入：endReason 一律由 outcome 反推（事实陈述与反应引导永一致）；SCENE_TEXT 事实陈述改为明确「电话从头到尾没有接通，一句话都没说上」；新增 NOT_CONNECTED_RULES 按结局给反应引导（rejected=对方主动拒接不是没听到、可小委屈问「怎么拒接我呀」；missed=响铃没人接不是故意按掉；cancelled=对方想找你又取消）+ NOT_CONNECTED_BANS 硬性禁止（禁说「怎么挂这么快/刚挂电话/都没聊上几句/打了个寂寞/怎么不说话就挂了」，禁复述/虚构任何通话内容）；接通分支才允许「嫌对方挂得快」类小情绪（hangup=对方先挂 / ai-hangup=自己告的别分述）；recap 未接通时显式注入「没有接通，没有产生任何通话内容」且丢弃误传转写（防自相矛盾）；删掉旧的「被匆匆挂断可以有点小抱怨」误导示例
+- callCardAiText 改主叫者口吻（卡片 role 恒与主叫一致，历史映射后正好是主叫者声音）：rejected=「我打给你，你按了拒接，电话没有接通，一句话都没说上」；missed-in=「响了很久没人接，没有接通」；no-answer/cancelled 同风格——后续聊天轮次 AI 一眼看清结局
+- 覆盖三端共用链路：微信/QQ AI 来电被拒（chat-call 引擎 direction='in' reject/missed-in）、信息 App AI 来电被拒/超时（chat.tsx recordMissedPhoneCall direction='out' reject/missed-in）都走同一 followup API 与同一套结局语义；电话 App 接通后挂断链路（phone.tsx wasConnected→hangup）不变；通话记录持久化（call-logs/卡片消息）原有机制不动
+- E2E（agent-browser 实机 + 真实内置 LLM，IndexedDB 种子 + fetch 钩子捕获 + mock /api/chat 回「好好好，这就给你打哦～ [语音通话]」）：微信 AI 来电弹窗出现→点拒绝→followup 请求断言 { direction:'in', endReason:'reject', connected:false, duration:0 }✓，AI 真实续聊回复「喂怎么不接我电话呀，是不是在忙呀？」——正确理解「被拒接」，无「怎么挂这么快/打了个寂寞」✓；聊天落盘「已拒绝」卡片+续聊消息，截图留档 e2e-reject-call.png ✓；dev.log 无错误、console 无报错
+- lint + tsc 双绿
+
+Stage Summary:
+- 三态语义全链路统一：已拒绝（对方按了拒接）/未接听（响铃没人接）/已挂断（真实接通过后结束）由 call-outcome.ts 唯一映射，followup system 注入结局硬事实+反应引导+硬性禁止，AI 不再把「被拒接」说成「接通后很快挂断」；未知/矛盾数据一律按未接通兜底（宁可当没接通，不编造通话）
+- 接通后挂断场景不受影响：真实聊过→对方先挂时 AI 仍可自然抱怨「挂得快」（仅限该场景）
+- 修改文件：src/lib/ios/call-outcome.ts（新增）、src/app/api/phone/followup/route.ts、src/components/apps/voice-call-screen.tsx（callCardAiText）
