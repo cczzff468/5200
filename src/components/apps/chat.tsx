@@ -45,7 +45,8 @@ import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { hasVoiceCallMark, stripVoiceCallMark } from '@/lib/ios/chat-call';
-import { setPendingPhoneAnswer, triggerIncomingCall } from '@/lib/ios/incoming-call';
+import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
+import { useGlobalCall } from '@/lib/ios/global-call';
 import { localDB, genId, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { ownerProfile } from '@/lib/ios/contacts-store';
 import { buildTimeAwareBlock as buildSmsTimeBlock } from '@/lib/time-aware';
@@ -270,6 +271,17 @@ function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
   kvSet(lsMsgsKey(sessionKey), msgs.slice(-100));
 }
 
+/** 会话内最后一条 assistant 消息（小助手未读水位键）：返回 id+时间，无 assistant 消息返回 null。
+ *  A-5：水位从「已见消息条数」改为「最后一条已计数的 assistant 消息键」——条数水位假设消息只增
+ *  不减，会话内删过消息（或 loadMsgs 的 100 条封顶截断）后 saved.length 与水位错位，
+ *  saved.length > prevLen 长期不成立 → 未读角标从此不再增长 */
+function lastAssistantMarkOf(list: ChatMsg[]): { id: string; time: number } | null {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === 'assistant' && list[i].id) return { id: list[i].id, time: list[i].time };
+  }
+  return null;
+}
+
 // ---------------- #8 排队补跑回合的持久化（#28） ----------------
 
 /** 待补跑回合：kick = 消息已入列（文字/语音/划转文字），只需补一轮 AI 回复；dispatch = 分句发送批次统一触发；
@@ -310,6 +322,14 @@ function writeSmsQueuedTurns(storageKey: string, turns: QueuedTurn[]): void {
   } catch {
     // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
   }
+}
+
+/** 联系人无手机号（phone 为 null/空串）时的稳定占位号：联系人 id 哈希派生 11 位号码（1 开头、
+ *  同一联系人恒定同号）——来电界面与通话记录/留言不出现空串，不同联系人的记录互不串号 */
+function derivePlaceholderNumber(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return `1${String(h % 10000000000).padStart(10, '0')}`;
 }
 
 /** AI 打来的电话被拒接 / 响铃超时未接（信息 App AI 语音通话标记触发）：
@@ -362,7 +382,8 @@ async function recordMissedPhoneCall(
         persona: contact.persona || null,
         background: contact.background || null,
         nickname: contact.nickname || null,
-        realName: contact.name || null,
+        // 真实姓名用 realName 字段（name 在展示层可能已被昵称/备注替换，注入人设必须是真名）
+        realName: contact.realName ?? null,
       },
       // AI 是主叫（direction='out'）；被拒接 = reject、响铃超时 = missed-in（与现有场景文案语义一致）
       direction: 'out',
@@ -1194,9 +1215,14 @@ function ChatView({
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
         if (error) {
+          // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
+          // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
+          // 必然逐条落盘，此刻静默收尾即可。仍需落盘（未投递出任何分段）时用全新 id，避免与
+          // 已存在/将来同序列的消息冲突
+          if (deliveredAny) return;
           saveMsgs(storageKey, [
             ...(loadMsgs(storageKey) ?? []),
-            { id: aiId, role: 'assistant', content: error, time: startedAt, error: true },
+            { id: `${aiId}-err`, role: 'assistant', content: error, time: startedAt, error: true },
           ]);
           return;
         }
@@ -1246,9 +1272,18 @@ function ChatView({
                 if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
                   window.localStorage.setItem(`sms-vc-last:${memContactId}`, String(Date.now()));
                   const contact = (await listContacts()).find((c) => c.id === memContactId) ?? null;
-                  const number = contact?.phone ?? '';
+                  // B-9：联系人无手机号（null/空串）时用 id 派生的稳定占位号，来电界面与
+                  // 通话记录/留言不出现空串（电话 App 联系人列表同场景显示「无号码」）
+                  const number = contact?.phone || derivePlaceholderNumber(contact?.id ?? 'sms-ai');
                   const name = contact?.name ?? peerLabel;
                   window.setTimeout(() => {
+                    // B-2：幂等防御（对齐 qq.tsx/wechat.tsx 既有双查口径）——上一通来电还在响铃
+                    // （useIncomingCall.call）或微信/QQ 全局通话进行中（useGlobalCall.session）时
+                    // 整跳取消本次来电：triggerIncomingCall 只互斥来电弹窗不查全局通话，放行会出现
+                    // 电话 CallScreen 与 wx/qq 通话引擎同时存活的 双麦克风双 TTS 僵尸会话。
+                    // 跳过时回复文本里的〔语音通话〕标记已剥除，与 qq/wechat 现行同场景行为一致
+                    if (useIncomingCall.getState().call) return;
+                    if (useGlobalCall.getState().session) return;
                     triggerIncomingCall({
                       source: 'phone',
                       name,
@@ -1812,7 +1847,7 @@ function ChatView({
         break;
       }
       case 'del': {
-        if (isChatStreaming(sessionKey)) {
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
           showToast('对方正在回复，请稍后再试');
           return;
         }
@@ -1833,7 +1868,7 @@ function ChatView({
         setSelectedIds([m.id]);
         break;
       case 'recall': {
-        if (isChatStreaming(sessionKey)) {
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
           showToast('对方正在回复，请稍后再试');
           return;
         }
@@ -1852,7 +1887,7 @@ function ChatView({
       showToast('内容不能为空');
       return;
     }
-    if (isChatStreaming(sessionKey)) {
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       showToast('对方正在回复，请稍后再试');
       return;
     }
@@ -1876,7 +1911,7 @@ function ChatView({
   /** 多选批量删除 */
   const batchDelete = () => {
     if (selectedIds.length === 0) return;
-    if (isChatStreaming(sessionKey)) {
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       showToast('对方正在回复，请稍后再试');
       return;
     }
@@ -3003,8 +3038,9 @@ export default function ChatApp() {
   /** 小助手会话未读条数（AI 发了几条消息角标就是几；0 = 已读） */
   const [unreadN, setUnreadN] = useState(0);
   const unread = unreadN > 0;
-  /** 已读水位：最后一次「已见」的小助手消息条数（AI 回复落盘时按增量累计未读） */
-  const seenLenRef = useRef(0);
+  /** 已读水位：最后一条已计数的 assistant 消息（id+时间）。AI 回复落盘时统计该键之后的 assistant
+   *  消息数累加未读（id 在盘上找不到 = 该条已被删除，按时间戳兑底）；null = 首轮/清空后全量计入 */
+  const seenRef = useRef<{ id: string; time: number } | null>(null);
   /** 会话被删除后隐藏（从联系人重新进入聊天即恢复） */
   const [hidden, setHidden] = useState(false);
   /** 置顶 */
@@ -3047,7 +3083,8 @@ export default function ChatApp() {
       setUnreadN(n);
       const saved = loadMsgs('assistant');
       if (saved && saved.length) setAssistantMsgs(saved);
-      seenLenRef.current = saved ? saved.length : 0;
+      // 水位初始化：盘上最后一条 assistant 消息（持久化未读计数已含它，这里只记录键不重复计数）
+      seenRef.current = saved ? lastAssistantMarkOf(saved) : null;
       setMounted(true);
     });
     return () => {
@@ -3067,25 +3104,38 @@ export default function ChatApp() {
     }
   }, [unreadN, mounted]);
 
-  /** 小助手预览/未读推进（按落盘记录的水位增量）：流结束（finalized，错误路径一次性落盘）与逐条投递
-   *  tick（ai-delivery 每条落盘）两路共用——finalize 时刻只有首条在盘上，未读按条数累加必须逐条跟随，
-   *  全部投完才满足「AI 发了几条消息角标就是几」 */
+  /** 小助手预览/未读推进（按「最后一条已计数 assistant 消息」增量，A-5）：流结束（finalized，错误路径
+   *  一次性落盘）与逐条投递 tick（ai-delivery 每条落盘）两路共用——finalize 时刻只有首条在盘上，
+   *  未读按条数累加必须逐条跟随，全部投完才满足「AI 发了几条消息角标就是几」（只统计 assistant 消息，
+   *  与微信/QQ 端口径一致；旧实现按数组长度做水位，会话内删过消息后未读从此不再增长） */
   const syncAssistantFromStore = useCallback(() => {
     const saved = loadMsgs('assistant');
     if (!saved || !saved.length) return;
     setAssistantMsgs(saved);
-    const prevLen = seenLenRef.current;
+    const lastMark = lastAssistantMarkOf(saved);
+    if (!lastMark) return;
     if (view === 'chat' && chatSession?.key === 'assistant') {
       // 小助手聊天页正开着：消息实时可见，不计未读，只推进已读水位
-      seenLenRef.current = Math.max(prevLen, saved.length);
+      seenRef.current = lastMark;
       return;
     }
-    // AI 在聊天页外回复：未读条数按本轮 AI 实际发来的消息条数累加（进聊天即清零）
-    if (saved.length > prevLen) {
-      const fresh = saved.slice(prevLen).filter((m) => m.role === 'assistant').length;
-      seenLenRef.current = saved.length;
-      if (fresh > 0) setUnreadN((n) => Math.min(n + fresh, 99));
+    // AI 在聊天页外回复：未读条数按「水位键之后的 assistant 消息」累加（进聊天即清零）。
+    // 水位键在盘上找不到（该条已被删除）时按时间戳兑底统计其后的消息；水位为空（首次/清空后）全量计入
+    const seen = seenRef.current;
+    let fresh: number;
+    if (!seen) {
+      fresh = saved.filter((m) => m.role === 'assistant').length;
+    } else {
+      const seenIdx = saved.findIndex((m) => m.role === 'assistant' && m.id === seen.id);
+      fresh =
+        seenIdx >= 0
+          ? saved.slice(seenIdx + 1).filter((m) => m.role === 'assistant').length
+          : lastMark.time > seen.time
+            ? saved.filter((m) => m.role === 'assistant' && m.time > seen.time).length
+            : 0;
     }
+    seenRef.current = lastMark;
+    if (fresh > 0) setUnreadN((n) => Math.min(n + fresh, 99));
   }, [view, chatSession]);
 
   // 全局流式回复落盘：小助手会话在聊天页外收到 AI 回复时，从存储刷新列表预览并按条数累计未读
@@ -3112,7 +3162,8 @@ export default function ChatApp() {
   const openAssistantChat = () => {
     setUnreadN(0);
     const cur = loadMsgs('assistant');
-    if (cur) seenLenRef.current = cur.length;
+    // 进聊天即全部已读：水位推进到盘上最后一条 assistant 消息
+    if (cur) seenRef.current = lastAssistantMarkOf(cur);
     // 已删除/隐藏的会话重新进入即恢复显示
     setHidden(false);
     setChatSession({ key: 'assistant', peer: { title: ASSISTANT.phone, avatarSrc: null, name: ASSISTANT.name }, systemPrompt: null });
@@ -3231,7 +3282,7 @@ export default function ChatApp() {
     setAssistantMsgs([]);
     saveMsgs('assistant', []);
     setHidden(true);
-    seenLenRef.current = 0;
+    seenRef.current = null; // 记录已清空：水位归零，下一轮 AI 回复从零计数
     setUnreadN(0);
   };
 
@@ -3287,7 +3338,8 @@ export default function ChatApp() {
     : last?.kind === 'voice'
       ? '[语音]'
       : last?.content || SEED_MSGS[0].content;
-  const listTime = mounted ? (last && last.time > 0 ? fmtTime(last.time) : '现在') : '';
+  // 跨天显示 M月D日（与上方联系人行 fmtListTime 同口径，A-8；无时间落盘时保留「现在」兑底）
+  const listTime = mounted ? (last && last.time > 0 ? fmtListTime(last.time) : '现在') : '';
 
   // 跨 App 跳转中（等联系人载入）：先不渲染主界面，避免闪一下会话列表
   if (pendingJump) {
