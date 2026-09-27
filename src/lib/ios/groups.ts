@@ -977,16 +977,24 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
 }
 
 export function loadGroupMsgs(groupId: string): WxGroupMsg[] {
-  const app = getGroup(groupId)?.app ?? 'wx';
-  const raw = readJSON<WxGroupMsg[]>(groupMsgsKey(app, groupId));
+  // B-5：群不存在（已解散/已退出）直接返回空——不再回退 wx- 前缀键读孤儿数据（消息随群消失）
+  const g = getGroup(groupId);
+  if (!g) return [];
+  const raw = readJSON<WxGroupMsg[]>(groupMsgsKey(g.app, groupId));
   if (!Array.isArray(raw)) return [];
   return raw.map(normalizeMsg).filter((m): m is WxGroupMsg => m != null);
 }
 
-/** 落盘（保留最后 200 条，与私聊同量级） */
+/**
+ * 落盘（保留最后 200 条，与私聊同量级）。
+ * B-5：群已不存在（群回合进行中解散/退群，投递尾巴随后完成落盘等）跳过写盘——
+ * 原实现回退 app='wx' 会把 QQ 群尾巴写进 wx-group-msgs:<id> 孤儿键（不可见也不清理）；
+ * 消息随群消失是合理语义（解散路径 dissolveGroup 已删真实键），与 pushGroupEvent 的群空判同口径。
+ */
 export function saveGroupMsgs(groupId: string, msgs: WxGroupMsg[]): void {
-  const app = getGroup(groupId)?.app ?? 'wx';
-  writeJSON(groupMsgsKey(app, groupId), msgs.slice(-MSGS_CAP));
+  const g = getGroup(groupId);
+  if (!g) return;
+  writeJSON(groupMsgsKey(g.app, groupId), msgs.slice(-MSGS_CAP));
 }
 
 /** 该群最后一条非通知消息（会话列表预览用）；群里只有系统事件时回退显示最近事件文案（预览不空白） */

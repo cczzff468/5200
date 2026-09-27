@@ -3323,11 +3323,19 @@ export function WxGroupChatPage({
     [appendMsg, expireStalePackets, gid, runCharTurn, sKey]
   );
 
-  /** 分句发送批次触发：把已发出的整批消息交给成员统一回复（输入框为空时点「发送」） */
+  /** 分句发送批次触发：把已发出的整批消息交给成员统一回复（输入框为空时点「发送」）。
+   *  B-7：回合进行中不再硬挡丢弃——与文字消息同口径入 groupQueuedRef 排队补跑（批次消息已在
+   *  群消息库，补跑时内容完整可见，runGroupTurn finally 按 lastMe 触发整批回复），
+   *  并清掉待派发标记防止补跑后重复触发。 */
   const dispatchBatch = () => {
-    if (!pendingDispatch || runningRef.current || isChatStreaming(sKey)) return;
+    if (!pendingDispatch) return;
     setPendingDispatch(false);
     markPendingBatch(sKey, false);
+    if (runningRef.current || isChatStreaming(sKey)) {
+      groupQueuedRef.current = true;
+      onToast('消息已发出，成员们回完这轮就聊');
+      return;
+    }
     const persisted = loadGroupMsgs(gid);
     const lastMe = [...persisted].reverse().find((m) => m.role === 'me');
     void runGroupTurn(lastMe);
@@ -3535,15 +3543,12 @@ export function WxGroupChatPage({
     if (overflow) onToast('最多发送 9 张图片');
   };
 
-  /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应） */
+  /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应）。
+   *  B-7：回合进行中与文字消息同口径——表情照常上屏并入队，本回合结束后自动补跑（不再硬挡丢弃）。 */
   const sendSticker = (s: Sticker) => {
     setStickerOpen(false);
     if (meMuted) {
       onToast('你已被禁言，暂时无法发言');
-      return;
-    }
-    if (runningRef.current || isChatStreaming(sKey)) {
-      onToast('成员们还在回复，稍等一下');
       return;
     }
     const msg: WxGroupMsg = {
@@ -3556,6 +3561,13 @@ export function WxGroupChatPage({
       kind: 'sticker',
       stk: { url: s.url, meaning: s.meaning },
     };
+    if (runningRef.current || isChatStreaming(sKey)) {
+      // 成员们还在回复：入队，本回合结束后自动再起一轮（runGroupTurn finally 按 lastMe 补跑）
+      appendMsg(msg);
+      groupQueuedRef.current = true;
+      onToast('消息已发出，成员们回完这轮就聊');
+      return;
+    }
     appendMsg(msg);
     if (sentenceSend) {
       setPendingDispatch(true);
@@ -3565,16 +3577,13 @@ export function WxGroupChatPage({
     void runGroupTurn(msg);
   };
 
-  /** 发送位置卡片消息（内置地点 / 自定义位置；群里所有角色都能看到） */
+  /** 发送位置卡片消息（内置地点 / 自定义位置；群里所有角色都能看到）。
+   *  B-7：回合进行中与文字消息同口径——位置照常上屏并入队，本回合结束后自动补跑（不再硬挡丢弃）。 */
   const sendLocation = (name: string, address: string, coords?: { lat?: number; lng?: number }) => {
     setPlusOpen(false);
     setCompose(null);
     if (meMuted) {
       onToast('你已被禁言，暂时无法发言');
-      return;
-    }
-    if (runningRef.current || isChatStreaming(sKey)) {
-      onToast('成员们还在回复，稍等一下');
       return;
     }
     const msg: WxGroupMsg = {
@@ -3587,6 +3596,13 @@ export function WxGroupChatPage({
       kind: 'location',
       loc: { name, address, lat: coords?.lat, lng: coords?.lng },
     };
+    if (runningRef.current || isChatStreaming(sKey)) {
+      // 成员们还在回复：入队，本回合结束后自动再起一轮（runGroupTurn finally 按 lastMe 补跑）
+      appendMsg(msg);
+      groupQueuedRef.current = true;
+      onToast('消息已发出，成员们回完这轮就聊');
+      return;
+    }
     appendMsg(msg);
     if (sentenceSend) {
       setPendingDispatch(true);
@@ -3759,13 +3775,22 @@ export function WxGroupChatPage({
     nudgeAiSender(m.senderId);
   };
 
-  /** 我处理完成员发来的转账后，让发起成员按人设自然回应一轮（只叫 TA 一个人；红包领取回应同款节奏） */
+  /** 我处理完成员发来的转账后，让发起成员按人设自然回应一轮（只叫 TA 一个人；红包领取回应同款节奏）。
+   *  B-4 旁路守卫：发起人已被禁言或已不在群（以群当前成员表为准，不用 contactsRef 兜底放非成员进来）
+   *  一律静默跳过——与 runGroupTurn 的禁言/成员过滤同一口径（isGroupMuted + memberIds），
+   *  禁言/退群都能物理拦住「收款/退还回应」这条旁路开口（自动触发不 toast，不打断收款/退还提示）。 */
   const nudgeAiSender = (senderId: string) => {
     if (runningRef.current || isChatStreaming(sKey)) return;
+    const g = getGroup(gid);
+    if (!g || !g.memberIds.includes(senderId)) return;
+    if (isGroupMuted(g, senderId)) return;
     const char = memberById.get(senderId) ?? contactsRef.current.find((c) => c.id === senderId) ?? null;
     if (!char) return;
     window.setTimeout(() => {
       if (runningRef.current || isChatStreaming(sKey)) return;
+      // 80ms 窗口内群可能解散/成员变动/被禁言（AI 管理标记随时生效），触发前再核一次
+      const gNow = getGroup(gid);
+      if (!gNow || !gNow.memberIds.includes(senderId) || isGroupMuted(gNow, senderId)) return;
       groupSpeaker.set(sKey, char.id);
       if (mountedRef.current) setSpeakerId(char.id);
       void runCharTurn(char, false, []).finally(() => {
@@ -3882,10 +3907,21 @@ export function WxGroupChatPage({
     time: m.time,
   });
 
-  /** 重新生成（仅 AI 气泡）：只删除该条成员回复（不影响其他成员的消息），以剩余历史重新请求该角色生成 */
+  /** 重新生成（仅 AI 气泡）：只删除该条成员回复（不影响其他成员的消息），以剩余历史重新请求该角色生成。
+   *  B-4 旁路守卫：以群当前成员表/禁言表为准——被踢出群的成员不再靠 contactsRef 兜底放回来，
+   *  被禁言成员也不能借「重新生成」开口（与 runGroupTurn 的过滤同一口径：memberIds + isGroupMuted）。 */
   const regenerate = (m: WxGroupMsg) => {
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
+      return;
+    }
+    const g = getGroup(gid);
+    if (!g || !g.memberIds.includes(m.senderId)) {
+      onToast('该成员已不在群里');
+      return;
+    }
+    if (isGroupMuted(g, m.senderId)) {
+      onToast('TA 被禁言了');
       return;
     }
     const char = memberById.get(m.senderId) ?? contactsRef.current.find((c) => c.id === m.senderId) ?? null;
