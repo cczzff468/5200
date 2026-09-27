@@ -8570,3 +8570,151 @@ Stage Summary:
 - 发图预览：微信单聊/群聊、QQ 单聊/群聊四端统一——选图先入输入框下方预览条（可移除、上限 9 张），点「发送(N)」或主发送按钮才真正发出；排队/AI 回合触发语义与原直发完全一致
 - 照片堆叠：微信单聊+群聊连续照片 ≥4 张（同发送者、间隔≤5 分钟）折叠成「展开 N」堆叠卡；堆叠左滑下一张/右滑上一张/点击开大图；大图支持左右滑切换+索引指示+键盘操作；展开恢复平铺不收回；多选模式自动不折叠
 - 修改文件：新增 photo-stack.tsx；ai-voice.ts、voice-player.ts、voice-bubble.tsx、wechat.tsx、wx-group.tsx、qq.tsx、qq-group.tsx
+---
+Task ID: 27-b
+Agent: QQ/信息组合发送+接力代理
+Task: qq.tsx/qq-group.tsx 预览条删「发送(N)」+ 文字图片组合发送；qq.tsx/chat.tsx 接退出网页接力拉取管线与会话列表待达角标
+
+Work Log:
+- 读 worklog 末 250 行 + 基建（bg-turn.ts 的 register/pull/visible/peek 语义与 api/chat/bg 的 single/deliver 约定），
+  再逐文件审计现状时确认：三文件的 27-b 代码改动在工作树中已全部就位（上一轮未收尾的执行留痕：
+  worklog 无 27-b 条目、qq.tsx 11735→11862 行含 bg 接线/组合发送/角标 effect）——本轮按任务书逐条
+  对照实际代码做完备性审计（不重复改动），并补齐缺失的验证与 worklog
+- 任务1 审计：qq.tsx 预览条（qq-img-preview-bar，L4620-4640）与 qq-group.tsx（qqg-img-preview-bar，
+  L4396-4422）现在只剩 62px 缩略图+右上 × 移除钮，两个「发送(N)」按钮（qq-img-preview-send /
+  qqg-img-preview-send）已整个删除，全 src grep 双清零；flushPendingImages 两文件均仍被 send() 的
+  「只有图」分支引用（qq L3417 / qqg L3030），按任务书条件保留未并入
+- 任务2 审计（组合发送）：qq.tsx send()（L3412-3482）——有文字+待发图 → textMsg 在前、图片按
+  flushPendingImages 同构（content=dataURL kind:'image'）在后一起上屏，清 pendingImgs/输入/引用后只
+  runAiTurnRef.current?.(textMsg, created) 一轮；读 runAiTurn 内部确认：baseRaw=[msgs,userMsg,extra]
+  按 id 去重（组合时 textMsg 已上屏，幂等跳过不双气泡），上下文顺序=文字在前图片在后，turnImages
+  从 base 尾部向前收集连续我发图片（文字不截断识图窗口），vision.text=textMsg.content——两者都进
+  上下文 ✓；纯图分支照旧（flushPendingImages：自聊 early-return → 流式/投递中 qqQueueAdd+toast →
+  runAiTurnRef(null, created)）；纯文字分支不动（ttsSend/排队/分句/自聊全保留）；组合遇排队整批
+  qqQueueAdd 口径、遇分句整批 markPendingBatch 口径均在组合分支内先行判断 ✓；主发送按钮
+  disabled/aria-label/className/style 四处条件含 pendingImgs.length>0，onClick=
+  「input.trim()||pendingImgs.length → send()，否则 dispatchBatch()」✓；pendingImgs 发送后清空 ✓。
+  qq-group.tsx send()（L3021-3080）同构：meMuted 拦截在最前，组合分支 trigger 用 textMsg
+  （runGroupTurnRef.current(textMsg)——@ 提及从 trigger.content 解析，传图会丢 @ 必答；图片已落库，
+  识图按尾部连续我发图自动带上）、groupQueuedRef 排队+「成员们回完这轮就聊」toast、分句
+  markPendingBatch、ttsSend 仅纯文字 ✓；主发送按钮显示/disabled/配色三处条件含 pendingImgs ✓
+- 任务3 审计（接力拉取）：qq.tsx L3254-3324——bgEnqueueBatch 与 runAiTurn 的 enqueueBatch 首批同参数
+  （scheduleAiDelivery initialDelay:0 + typingDelayOf 节奏）；deliverBgItems：item.single →
+  buildReplyMsgs(item.texts.join(''), true, …) 整条解析（&&& 分段/动作标记与 finalize 单条模式完全
+  同管线，r.dirty 时 saveMsgs 落盘卡片状态），否则逐条 buildReplyMsgs(t, false)；稳定回调走
+  bgDeliverRef；挂载 effect registerBgSession(sessionKey,{title:peer.name,app:'qq'})、cleanup
+  unregister（[peer.name,sessionKey] 依赖，ChatPage 按 peer.id keyed 重挂载切人先卸旧）；拉取 effect
+  挂载 pull()+onBgPageVisible(pull)，alive 标志+offVisible 进 cleanup（[sessionKey] 依赖）✓。
+  chat.tsx L1276-1344 同构接线：sessionKey=`sms:${storageKey}`（L747）、title=peerLabel（peer.name ??
+  peer.title，L802）、app:'chat'；bgDeliverRef 更新包 useEffect（react-hooks/refs 口径）；该文件
+  buildReplyMsgs 返回 {msgs,nextIdx}（无 cur/dirty——信息端无红包/转账卡片动作，注释 L1023），bg
+  投递只取 .msgs 与本文件 finalize（L1191）取法完全一致 ✓。qq-group.tsx 无 pull（群聊无服务端
+  pending，任务书明确不做；pagehide 的群流式上报由 bg-turn.ts 模块级监听全局处理，meta 走服务端
+  「QQ群聊」回退）✓
+- 任务4 审计（列表角标）：qq.tsx 首页挂载 effect（L7413-7420）——peekBgBadgeCounts().then 过滤
+  qq: 前缀且跳过 qq:group:，qqUnreads.bump(key.slice(3), n)（与 deliverAiMsg L2834 的 bump 用法同
+  源，qqUnreads=qqUnreadStore 别名 L7262）；chat.tsx 信息列表 effect（L3218-3226）——sms: 前缀，
+  key.slice(4)==='assistant' 时 setUnreadN((prev)=>min(prev+n,99))（该文件未读 store 的真实 API；
+  联系人会话无未读表，待达消息由聊天页拉取投递+灵动岛通知覆盖，注释已写明口径）；mounted 守卫
+  防本地未读载入前被覆盖 ✓
+- 验证：bunx tsc --noEmit exit 0（全项目零错误，含并行代理文件当前状态）；bun run lint exit 0
+  （仅 qq.tsx >500KB babel 提示非错误）；grep 复核 qq-img-preview-send/qqg-img-preview-send 全 src
+  零残留、bg-turn 五个 API 在两文件引用点齐全；python3 repr 抽查 8 个关键区段（两处组合发送/两处
+  预览条/两处 bg 接线/两处角标 effect）：0 个 ESC/控制字符、中文与全角标点无损、方括号配平
+  （chat.tsx 529/530 的 1 个「失配」与 git HEAD 基线 515/516 同源，为字符串内字面量非本轮引入）；
+  dev.log 编译正常无报错；未 git 操作、未动 dev server
+- 诚实备注：本轮未做浏览器实机 E2E（并行代理在改 wechat/wx-group，dev server 状态不可控且任务书
+  未要求）；代码主体为上一轮未收尾执行所留，本轮以「逐条对照任务书的审计+验证」方式收尾而非重写，
+  审计未发现任何缺口或与本文件既有口径的偏离
+
+Stage Summary:
+- 任务1：QQ 单聊/群聊发图预览条删除右侧「发送(N)」按钮——发送入口只留主发送按钮与 Enter，
+  预览条仅剩缩略图+逐张移除；flushPendingImages 因仍被「只有图」分支引用而保留
+- 任务2：输入框有文字且预览条有待发图时组合发送——文字消息在前、图片在后一起上屏+落盘，只触发
+  一轮 AI 回复（单聊 runAiTurn(textMsg, created) 上下文同时含两者且识图窗口不被语音/顺序问题截断；
+  群聊 trigger=textMsg 保 @ 必答）；只有图/只有文字/语音转文字/分句/排队（含组合整批排队）/自聊
+  等既有分支全部保留；pendingImgs 发送后清空；主发送按钮显示条件含待发图
+- 任务3：QQ 单聊与信息聊天页接入「退出网页后继续回复」拉取管线——挂载注册会话元数据（beacon 带
+  联系人名供 Web Push 标题）、挂载+回前台 pullBgPending（服务端即清除；活跃流/投递中内部防重入），
+  拉到的条目按 single 分流走与 finalize 完全同管线的 buildReplyMsgs→排队投递（逐条落盘+灵动岛+未读）；
+  群聊按设计不做 pull
+- 任务4：QQ 会话列表首页与信息列表挂载时 peekBgBadgeCounts 点亮「待达消息」未读角标（qq: 私聊键
+  bump 联系人 id；信息端小助手会话累加 unreadN，同一批条目 peek 内部 localStorage 去重只提示一次，
+  正式拉取后自动解除）
+- 修改文件：src/components/apps/qq.tsx、src/components/apps/qq-group.tsx、src/components/apps/chat.tsx
+  （工作树中已含全部改动）；tsc + lint 双绿
+---
+Task ID: 27-a
+Agent: 微信组合发送+接力代理
+Task: 微信单聊/群聊组合发送（文字+待发图一起上屏、只触发一轮回复）+ 删预览条「发送(N)」按钮 + 单聊接力拉取/首页待达角标接线复核
+
+Work Log:
+- 先读 worklog 尾部（26-b/26-c/26/24-c 的发图预览、排队补跑、吞字符坑）与主线程基建：bg-turn.ts
+  （registerBgSession/unregisterBgSession、pullBgPending 内部防重入、onBgPageVisible、peekBgBadgeCounts
+  带 localStorage 去重）+ api/chat/bg/route.ts（generate/deliver 两种模式、pending 内存队列、Web Push）。
+  grep 复核发现 wechat.tsx 四项任务主线程已全部接线（预览条发送按钮已删、send() 已含组合发送、
+  deliverBgItems/pull/回前台/首页角标齐备），本轮对其逐项核实（见 Stage Summary），实际编码落在 wx-group.tsx
+- wx-group.tsx 任务1：删预览条右侧 data-testid="wxg-img-preview-send" 的「发送(N)」按钮（发送入口只留
+  主发送按钮 wx-groupchat-send 与输入框 Enter）；预览条容器/缩略图/× 移除钮与 wxg-img-preview-bar/
+  wxg-img-preview-remove-* testid 全部保留；三处注释同步为「点主发送按钮才真正发出（可与文字组合发送）」
+- wx-group.tsx 任务2：send() 重写为组合口径——开头 `!text && pendingImgs.length===0` 才走分句批次兜底；
+  ttsSend && text 仍优先转语音（待发图留预览条，与单聊 wechat.tsx 同语义）；组合时构造 userMsg（带 quote）
+  + created 图片消息（沿用原 flush 的消息构造：id=p.id/kind:'image'/img.src），文字在前图片在后整批
+  appendMsg 落盘（同步写穿群消息库），只触发一次群回合；runGroupTurn trigger 传 userMsg（@ 解析吃
+  trigger.content，纯图才传最后一张图，对齐原 flush）；回合内历史与识图输入 runCharTurn/runGroupTurn
+  本就从群消息库收集（整批 role='me' 连续，turnImageSrcs 扫描不破），文字图片成员都能读到。
+  排队口径保留：runningRef||isChatStreaming → 整批照常上屏 + groupQueuedRef=true +「成员们回完这轮就聊」
+  toast；分句开启只入列 markPendingBatch；禁言拦截置顶；pendingImgs 发送后随 clearComposer 清空（组合/纯图同径）。
+  删除 flushPendingImages 整个函数（其唯一存活引用 send() 已内联其逻辑）；主发送按钮 onClick 改
+  「draft.trim()||pendingImgs.length → send()，否则 dispatchBatch()」，aria-label 按 ttsSend/组合/纯图/
+  批次四态细分（与 wechat.tsx 同款），显示条件保持 draft.trim()||canDispatch||pendingImgs.length>0
+- wx-group.tsx 任务3：确认群聊会话键（wx:group:*）永远没有服务端 pending（群聊不上报接力），
+  不加 pull、不动 bg 相关代码；任务4：未读角标接线在微信首页组件（wechat.tsx L8154），wx-group 无需改动
+- 验证：bunx tsc --noEmit 零错误（exit 0）；bun run lint 通过（exit 0，仅 qq.tsx>500KB BABEL 提示非错误）；
+  grep 复核 wx-group.tsx 内 flushPendingImages/wxg-img-preview-send 清零、wechat.tsx 内
+  flushPendingImages/wx-img-preview-send/sendImageFiles 清零；python3 校验 wx-group.tsx：0 个 ESC/控制字符、
+  13 处关键片段 repr 全命中、三括号配平（5189→5162 行）；dev.log 编译正常无报错（未重启、未 git）
+
+Stage Summary:
+- 微信群聊发图与文字统一一个发送入口：主发送按钮/Enter 触发时若同时有输入文字与待发图 → 文字消息在前、
+  图片在后整批上屏落盘，只触发一次群回合（@ 必答按文字消息解析，识图按本轮图片收集，分句/禁言/排队补跑
+  口径与文字消息完全一致）；只有图照旧纯图路径、只有文字照旧；预览条「发送(N)」按钮删除（单聊/群聊一致，
+  发送入口收敛到主发送按钮 + Enter），pendingImgs 上屏后清空
+- wechat.tsx 四项任务核实为已由主线程接线完成且无残留：预览条仅缩略图+移除钮；send() 组合发送
+  （userMsg+created 整批、排队走 wxQueueAdd、ttsSend 优先转语音、runAiTurn(userMsg, created) 双入上下文）；
+  ChatPage registerBgSession/unregisterBgSession + deliverBgItems（single 走 buildReplyMsgs(…,true)/多条逐段
+  false，空段兜底〔对方暂时没有回复〕，与 finalize 同管线）+ 挂载/回前台 pullBgPending（mountedRef 守卫、
+  onBgPageVisible 退订入 cleanup）；首页 peekBgBadgeCounts → wxUnreads.bump（wx: 前缀且排除 wx:group:）
+- wx-group.tsx 不接接力拉取（群聊不上报接力，无服务端 pending），无需其它改动
+- 修改文件：仅 src/components/apps/wx-group.tsx（5189→5162 行）；wechat.tsx 本轮零编辑仅复核；
+  tsc + lint 双绿
+---
+Task ID: 27-main
+Agent: Z.ai Code (main) + 2 并行子代理
+Task: 第四轮 4 项新需求——预览条删发送钮 / 文字+图片组合发送 / 退出网页后继续回复（服务端接力）/ 每条消息独立通知弹窗（含离线 Web Push）
+
+Work Log:
+- 主线程基建（先行）：
+  - src/app/api/chat/bg/route.ts：POST mode='generate'（服务端 self-fetch /api/chat 复用上游代理+SDK 兜底全链路生成）/ mode='deliver'（现成消息文本直接入队）；GET ?sessionKey=（拉取即清除）/?peekAll=1（各会话条数）；内存 pending 队列 + Web Push 推送（web-push，VAPID 持久化 .data/vapid.json，订阅存 .data/push-subs.json，404/410 自动剔除，每条消息一条独立 tag 的系统通知）
+  - src/app/api/push/route.ts：GET 公钥 / POST 订阅 / DELETE 退订；public/sw.js：push 事件逐条 showNotification + 点击聚焦
+  - src/lib/ios/bg-turn.ts（客户端接线）：pagehide 时遍历 chat-stream-store 活跃流 payload（mode=generate）与 ai-delivery 未落盘尾部（mode=deliver）sendBeacon 上报；pullBgPending（内部防重入：有活跃流/投递返回 []）/onBgPageVisible/peekBgBadgeCounts（localStorage 去重，会话+数量为批次键，拉取后按会话解除）
+  - chat-stream-store.ts：activePayloads 记录进行中流的真实 payload（workMessages+effConfig），导出 getActiveStreamPayloads；ai-delivery.ts：导出 getDeliveringSessionKeys
+  - island-notify.ts：pushChatNotification 去合并逻辑——每条消息独立弹窗（展示中直接顶替）；Web Notification tag 改唯一（不再按会话替换）；权限 granted 后尽力注册 SW+Web Push 订阅（push-client.ts，iframe/不支持环境静默降级）
+- 并行子代理（首轮派发传输超时但实际已完成，重派代理逐条审计确认）：
+  - 27-a（wechat/wx-group）：删预览条「发送(N)」钮；send() 组合发送（文字在前图片在后、runAiTurn(textMsg, created) 一轮、排队/分句/ttsSend/引用口径保留）；单聊挂载 registerBgSession+pullBgPending+onBgPageVisible→deliverBgItems（single→buildReplyMsgs(join,'',true)/逐条 false→enqueueBatch，与 finalize 完全同管线）；首页 peekBgBadgeCounts→wxUnreads.bump；wx-group 组合发送对齐 runGroupTurn
+  - 27-b（qq/qq-group/chat）：同构（qq/chat 单聊拉取+角标；qq-group 仅删钮+组合发送）；chat.tsx sms: 前缀→setUnreadN
+- E2E（agent-browser 实机；教训：network route "**/api/chat*" 会误伤 /api/chat/bg，mock 收窄为 "**/api/chat"）：
+  ① 预览条无发送钮 ✓（注入 2 图：thumbs=2、preview-send 不存在、聊天区 0 图）
+  ② 组合发送 ✓：文字「看看这两张」+2 图一轮上屏（落库顺序 text→img→img），AI 一轮回复正常投递
+  ③ 每条消息独立横幅 ✓：8s 轮询捕获同一轮回复的 2 个不同横幅（「[语音]」与文本各弹一次——旧合并逻辑只会 count=2 一条）
+  ④ 接力 deliver ✓：curl POST deliver 2 条 → reload 重进会话 → 两条消息完整落屏（走投递管线）
+  ⑤ 接力 generate ✓：发「关页测试」→ 400ms 后 dispatch pagehide（beacon 上报 payload）→ reload 杀流 → 服务端 self-fetch 真 LLM 生成 → peekAll=1 → 重进会话收到「关页测试是什么呀？」+第二条语音（全链路）
+  ⑥ 角标 ✓：POST pending → reload → 微信首页行首出现未读「1」→ 进会话投递并清空服务器 pending
+  ⑦ /api/push GET 返回 VAPID 公钥 ✓（SW 订阅在 headless/iframe 下静默降级，无法实机验证真推送）
+- 验证：bunx tsc --noEmit 零错误、bun run lint 通过、dev.log 无异常、.data/ 已加 .gitignore
+
+Stage Summary:
+- 关页续复：pagehide beacon 上报未完成会话 → 服务端同链路生成/暂存 → Web Push 逐条离线通知 → 重开网页进会话自动拉取走原投递管线（落盘+灵动岛+语音频率+角标）
+- 通知语义：每条 AI 消息一个独立弹窗（应用内横幅顶替制 + 页面隐藏 Web Notification 唯一 tag + 离线 Web Push 每条一推）
+- 发图：预览条只留缩略图+移除；文字与图片组合一次发送（四端一致）
+- 诚实备注：真机 Web Push 依赖「在新标签页打开 + 允许通知权限」且环境支持 SW/Push（预览面板 iframe 内会被静默降级）；服务重启清空 pending 与订阅（尽力而为的增强能力）

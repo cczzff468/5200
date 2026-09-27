@@ -138,6 +138,7 @@ import {
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
@@ -2357,7 +2358,8 @@ function ChatPage({
   );
 
   // 发图先预览：工具栏「图片/拍摄」选图后只压缩进待发预览条（输入框下方，最多 9 张，可逐张移除），
-  //  不上屏也不触发 AI；点预览条或主发送按钮的「发送」才由 flushPendingImages 真正发出并触发 AI 回合。
+  //  不上屏也不触发 AI；点主发送按钮才由 send()/flushPendingImages 真正发出（可与输入框文字组合发送：
+  //  文字在前、图片在后，只触发一轮 AI 回合）。
   //  发出后照常触发 AI 回合：已配置识图模型时识图模型先看图、聊天模型再回复；未配置时
   //  chat-stream-store 注入「我发了图片但你看不到内容」临时上下文，AI 同样自然回应（#26）
   const stageImageFiles = useCallback(
@@ -2773,6 +2775,156 @@ function ChatPage({
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息（要一并进上下文与待处理清单）。
    *  sysEvent：用户退还 AI 的红包/转账/亲属卡后注入的系统事件说明（只进本轮上下文，不落盘），让 AI 人设化地回应退还 */
+  /** [语音通话] 标记本轮是否出现过（流中分段/最后一段/接力回复共用同一 ref）：runAiTurn 开回合时重置，
+   *  buildReplyMsgs 解析到标记时置位——原来是回合内局部变量，buildReplyMsgs 提升到组件层后改用 ref 传递 */
+  const wantCallSeenRef = useRef(false);
+
+  /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（ai-delivery 调度器模块层调用，与页面是否存活无关）。
+   *  runAiTurn 的投递批次与退出网页接力的后台回复（bg-turn 拉取）共用同一套管线 */
+  const deliverAiMsg = useCallback(
+    (m: QQMsg) => {
+      saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
+      // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
+      const voiceTurn =
+        (m.kind === undefined || m.kind === 'text') &&
+        m.content.trim().length > 0 &&
+        decideAiVoiceMessage(sessionKey);
+      const body = voiceTurn
+        ? '[语音]'
+        : notifyPreviewText({
+            kind: m.kind,
+            content: m.content,
+            voiceText: m.voice?.transcript || m.voice?.localText || null,
+            amount: m.packet?.amount ?? null,
+            blessing: m.packet?.type === 'redpacket' ? m.packet.note : null,
+            note: m.packet?.type === 'transfer' ? m.packet.note : null,
+          });
+      if (body !== null) {
+        pushChatNotification({
+          sessionKey: `qq:${peer.id}`,
+          app: 'qq',
+          title: peer.name,
+          avatar: peer.avatar ?? null,
+          body,
+          target: { app: 'qq', contactId: peer.id },
+        });
+      }
+      if (voiceTurn) {
+        // 异步合成，失败保持文字自动降级，不影响聊天
+        const targetId = m.id;
+        void synthesizeAiVoice(m.content, peer.id)
+          .then((clip) => {
+            if (!clip) return; // 合成失败 → 保持文字
+            const voice: VoiceMsgData = {
+              url: clip.url,
+              duration: clip.duration,
+              wave: clip.wave,
+              localText: clip.localText,
+              synth: clip.synth,
+              contactId: peer.id,
+            };
+            const upgrade = (list: QQMsg[]): QQMsg[] =>
+              list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+            setMsgs(upgrade);
+            saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+          })
+          .catch(() => {});
+      }
+      // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
+      if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, 1);
+    },
+    [peer, sessionKey],
+  );
+
+  /**
+   * 把一段回复文本解析成待投递消息（runAiTurn 流中分段/finalize 与退出网页接力的后台回复共用同一套管线，不重不漏）：
+   * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式）
+   * 时文字块再按「&&&」标记切分，false（多条模式）时一段就是一条消息 —— 分段器已按边界切好，
+   * 不再二次切分（N 条上限的最后一段可能含溢出合并的句子，切开会破上限）。
+   * idBase/idStart：本轮 AI 消息 id 序列（首条 = idBase，后续 = idBase-N；返回 nextIdx 供调用方续接，
+   * 接力回复每次投递用全新 uid() 起一段新序列，与回合内序列互不冲突）
+   */
+  const buildReplyMsgs = useCallback(
+    (rawText: string, asSingle: boolean, baseTime: number, idBase: string, idStart: number): { msgs: QQMsg[]; cur: QQMsg[]; dirty: boolean; nextIdx: number } => {
+      // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
+      // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
+      const wantCall = hasVoiceCallMark(rawText);
+      if (wantCall) wantCallSeenRef.current = true;
+      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
+      const latest = loadMsgs(peer.id);
+      let cur = latest;
+      const out: QQMsg[] = [];
+      let t = baseTime;
+      let msgIdx = idStart;
+      // 表情包开关与贴纸清单现场读取（与 runAiTurn 开回合同源；接力回复投递时读到的同样是当前值）
+      const stickersOnNow = getStickersOn(sessionKey);
+      const stickersNow = loadStickers('qq');
+      for (const part of extractRichActionParts(text)) {
+        if (part.type === 'action') {
+          // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
+          // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
+          const bk = blockActionKindOf(part.action);
+          if (bk) {
+            const res = applyCharBlockAction('qq', peer.id, bk, part.action.targetId);
+            setBlk(res.entry);
+            if (res.changed && bk === 'block') {
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `你已被「${peer.name}」拉黑` } });
+              t += 1;
+            } else if (res.changed && bk === 'unblock') {
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」解除了对你的拉黑` } });
+              t += 1;
+            } else if (res.reqCreated && bk === 'request') {
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'blockreq', blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+              t += 1;
+            }
+            continue;
+          }
+          // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
+          //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
+          if (isQuitWinbackAction(part.action)) {
+            applyQuitWinbackAction(peer.id, part.action);
+            continue;
+          }
+          // 群社交动作（[建群:群名:成员] 等）：建群 → 卡片消息随本回复落盘（权限/冷却/拒绝表在执行器硬校验）
+          if (isGroupSocialAction(part.action)) {
+            const card = applyGroupSocialAction(peer, 'qq', part.action.kind, part.action.targetId, part.action.arg);
+            if (card) {
+              out.push({ id: msgIdx === 0 ? idBase : `${idBase}-${msgIdx}`, role: 'peer', content: '', time: t, kind: 'groupcard', gcard: card });
+              msgIdx += 1;
+              t += 600 + Math.floor(Math.random() * 600);
+            }
+            continue;
+          }
+          const applied = applyAiActions([part.action], cur, peer, t);
+          cur = applied.msgs;
+          out.push(...applied.notices, ...applied.extras);
+          continue;
+        }
+        const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, false)) : [part.text];
+        for (const seg of segs) {
+          for (const p of parseRichParts(seg, stickersOnNow ? stickersNow : [])) {
+            const id = msgIdx === 0 ? idBase : `${idBase}-${msgIdx}`;
+            if (p.type === 'rich') {
+              // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/亲属卡/位置卡片不受影响）
+              if (!stickersOnNow && p.rich.kind === 'sticker') continue;
+              out.push(richToQqMsg(p.rich, id, t, peer));
+            } else {
+              // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
+              // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
+              const clean = cleanBubbleText(stickersOnNow ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
+              if (!clean) continue;
+              out.push({ id, role: 'peer', content: clean, time: t });
+            }
+            msgIdx += 1;
+            t += 600 + Math.floor(Math.random() * 600);
+          }
+        }
+      }
+      return { msgs: out, cur, dirty: cur !== latest, nextIdx: msgIdx };
+    },
+    [peer, sessionKey],
+  );
+
   const runAiTurn = useCallback(
     (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => {
     // 密友值：对照 QQ 规则，我方每发一条消息 +2（每日上限 20）；批次触发（null）同样计一轮互动
@@ -2838,8 +2990,9 @@ function ChatPage({
     const aiId = uid();
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）。
-    // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）
-    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
+    // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）。
+    // 幂等入列：组合发送（文字+待发图一起发）时文字消息已先行上屏，按 id 去重跳过避免双气泡
+    if (userMsg) setMsgs((prev) => (prev.some((x) => x.id === userMsg.id) ? prev : [...prev, userMsg]));
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
     // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入；
@@ -2964,60 +3117,8 @@ function ChatPage({
     let deliveredAny = false; // 本轮是否已有分段消息排队投递（决定兜底文案）
     let batchStarted = false; // 是否已排过批（首批立即上屏，后续批按打字节奏先停顿）
     let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
-    let wantCallSeen = false; // [语音通话] 标记是否出现过（流中分段或最后一段）
-
-    /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（模块层调用，与页面是否存活无关） */
-    const deliverAiMsg = (m: QQMsg) => {
-      saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
-      // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
-      const voiceTurn =
-        (m.kind === undefined || m.kind === 'text') &&
-        m.content.trim().length > 0 &&
-        decideAiVoiceMessage(sessionKey);
-      const body = voiceTurn
-        ? '[语音]'
-        : notifyPreviewText({
-            kind: m.kind,
-            content: m.content,
-            voiceText: m.voice?.transcript || m.voice?.localText || null,
-            amount: m.packet?.amount ?? null,
-            blessing: m.packet?.type === 'redpacket' ? m.packet.note : null,
-            note: m.packet?.type === 'transfer' ? m.packet.note : null,
-          });
-      if (body !== null) {
-        pushChatNotification({
-          sessionKey: `qq:${peer.id}`,
-          app: 'qq',
-          title: peer.name,
-          avatar: peer.avatar ?? null,
-          body,
-          target: { app: 'qq', contactId: peer.id },
-        });
-      }
-      if (voiceTurn) {
-        // 异步合成，失败保持文字自动降级，不影响聊天
-        const targetId = m.id;
-        void synthesizeAiVoice(m.content, peer.id)
-          .then((clip) => {
-            if (!clip) return; // 合成失败 → 保持文字
-            const voice: VoiceMsgData = {
-              url: clip.url,
-              duration: clip.duration,
-              wave: clip.wave,
-              localText: clip.localText,
-              synth: clip.synth,
-              contactId: peer.id,
-            };
-            const upgrade = (list: QQMsg[]): QQMsg[] =>
-              list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
-            setMsgs(upgrade);
-            saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
-          })
-          .catch(() => {});
-      }
-      // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
-      if (qqActiveChatId !== peer.id) qqUnreads.bump(peer.id, 1);
-    };
+    // [语音通话] 标记本轮是否出现过（组件级 ref，开回合时重置；buildReplyMsgs 解析到标记时置位）
+    wantCallSeenRef.current = false;
 
     /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
     const enqueueBatch = (built: QQMsg[]) => {
@@ -3034,93 +3135,10 @@ function ChatPage({
       batchStarted = true;
     };
 
-    /**
-     * 把一段回复文本解析成待投递消息（流中分段与 finalize 最后一段共用同一套管线，不重不漏）：
-     * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式）
-     * 时文字块再按「&&&」标记切分，false（多条模式）时一段就是一条消息 —— 分段器已按边界切好，
-     * 不再二次切分（N 条上限的最后一段可能含溢出合并的句子，切开会破上限）。
-     */
-    const buildReplyMsgs = (
-      rawText: string,
-      asSingle: boolean,
-      baseTime: number,
-    ): { msgs: QQMsg[]; cur: QQMsg[]; dirty: boolean } => {
-      // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
-      // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
-      const wantCall = hasVoiceCallMark(rawText);
-      if (wantCall) wantCallSeen = true;
-      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
-      const latest = loadMsgs(peer.id);
-      let cur = latest;
-      const out: QQMsg[] = [];
-      let t = baseTime;
-      for (const part of extractRichActionParts(text)) {
-        if (part.type === 'action') {
-          // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
-          // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
-          const bk = blockActionKindOf(part.action);
-          if (bk) {
-            const res = applyCharBlockAction('qq', peer.id, bk, part.action.targetId);
-            setBlk(res.entry);
-            if (res.changed && bk === 'block') {
-              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `你已被「${peer.name}」拉黑` } });
-              t += 1;
-            } else if (res.changed && bk === 'unblock') {
-              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」解除了对你的拉黑` } });
-              t += 1;
-            } else if (res.reqCreated && bk === 'request') {
-              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'blockreq', blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
-              t += 1;
-            }
-            continue;
-          }
-          // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
-          //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
-          if (isQuitWinbackAction(part.action)) {
-            applyQuitWinbackAction(peer.id, part.action);
-            continue;
-          }
-          // 群社交动作（[建群:群名:成员] 等）：建群 → 卡片消息随本回复落盘（权限/冷却/拒绝表在执行器硬校验）
-          if (isGroupSocialAction(part.action)) {
-            const card = applyGroupSocialAction(peer, 'qq', part.action.kind, part.action.targetId, part.action.arg);
-            if (card) {
-              out.push({ id: msgIdx === 0 ? aiId : `${aiId}-${msgIdx}`, role: 'peer', content: '', time: t, kind: 'groupcard', gcard: card });
-              msgIdx += 1;
-              t += 600 + Math.floor(Math.random() * 600);
-            }
-            continue;
-          }
-          const applied = applyAiActions([part.action], cur, peer, t);
-          cur = applied.msgs;
-          out.push(...applied.notices, ...applied.extras);
-          continue;
-        }
-        const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, false)) : [part.text];
-        for (const seg of segs) {
-          for (const p of parseRichParts(seg, stickersOn ? stickers : [])) {
-            const id = msgIdx === 0 ? aiId : `${aiId}-${msgIdx}`;
-            if (p.type === 'rich') {
-              // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/亲属卡/位置卡片不受影响）
-              if (!stickersOn && p.rich.kind === 'sticker') continue;
-              out.push(richToQqMsg(p.rich, id, t, peer));
-            } else {
-              // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
-              // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-              const clean = cleanBubbleText(stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
-              if (!clean) continue;
-              out.push({ id, role: 'peer', content: clean, time: t });
-            }
-            msgIdx += 1;
-            t += 600 + Math.floor(Math.random() * 600);
-          }
-        }
-      }
-      return { msgs: out, cur, dirty: cur !== latest };
-    };
-
     /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻解析并排队上屏（边接收边逐条显示） */
     const deliverSegment = (seg: string) => {
-      const { msgs: built, cur, dirty } = buildReplyMsgs(seg, false, Date.now());
+      const { msgs: built, cur, dirty, nextIdx } = buildReplyMsgs(seg, false, Date.now(), aiId, msgIdx);
+      msgIdx = nextIdx;
       if (dirty) saveMsgs(peer.id, cur);
       if (built.length === 0) return;
       deliveredAny = true;
@@ -3164,7 +3182,7 @@ function ChatPage({
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子）；
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
-        const { msgs: built, cur, dirty } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now());
+        const { msgs: built, cur, dirty } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now(), aiId, msgIdx);
         if (dirty) saveMsgs(peer.id, cur);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         const finalBatch: QQMsg[] =
@@ -3204,7 +3222,7 @@ function ChatPage({
             );
         });
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
-        if (wantCallSeen) {
+        if (wantCallSeenRef.current) {
           try {
             const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
             if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
@@ -3228,10 +3246,82 @@ function ChatPage({
       if (userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
     },
-    [msgs, peer, me, apiConfig, ownerName, contacts, sessionKey, openVoiceCall]
+    [msgs, peer, me, apiConfig, ownerName, contacts, sessionKey, openVoiceCall, deliverAiMsg, buildReplyMsgs]
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 sendRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
+
+  // ---------------- 退出网页接力（bg-turn）：服务端代跑的回复拉取 + 原管线投递 ----------------
+
+  /** 排队投递一批接力回复（首条立即上屏，后续按打字节奏）——与 runAiTurn 的 enqueueBatch
+   *  首批（batchStarted=false）完全同参数口径 */
+  const bgEnqueueBatch = useCallback(
+    (built: QQMsg[]) => {
+      if (built.length === 0) return;
+      void scheduleAiDelivery<QQMsg>(
+        sessionKey,
+        built,
+        deliverAiMsg,
+        {
+          initialDelay: 0,
+          delay: (i) => (i + 1 < built.length ? typingDelayOf(built[i + 1].content ?? '') : 0),
+        },
+      );
+    },
+    [deliverAiMsg, sessionKey],
+  );
+
+  /** 接力回复投递：与 finalize 完全同管线（buildReplyMsgs 解析 → 排队投递）。
+   *  single=true：texts[0] 是一次完整回复原文（可能含 &&& 分段与动作标记）→ 单条模式；
+   *  single=false：每项就是一条独立消息文本 → 多条模式逐条投递。
+   *  动作标记（红包领取/拉黑等）就地应用，卡片状态变更随 dirty 落盘——与 finalize 同款 */
+  const deliverBgItems = useCallback(
+    (items: BgPendingItem[]) => {
+      for (const item of items) {
+        if (item.single) {
+          const r = buildReplyMsgs(item.texts.join(''), true, Date.now(), uid(), 0);
+          if (r.dirty) saveMsgs(peer.id, r.cur);
+          bgEnqueueBatch(r.msgs);
+        } else {
+          for (const t of item.texts) {
+            const r = buildReplyMsgs(t, false, Date.now(), uid(), 0);
+            if (r.dirty) saveMsgs(peer.id, r.cur);
+            bgEnqueueBatch(r.msgs);
+          }
+        }
+      }
+    },
+    [bgEnqueueBatch, buildReplyMsgs, peer.id],
+  );
+
+  const bgDeliverRef = useRef<(items: BgPendingItem[]) => void>(() => undefined);
+  bgDeliverRef.current = deliverBgItems;
+
+  // 挂载注册会话元数据（pagehide 上报 beacon 携带显示名，Web Push 标题用联系人名）；
+  // 卸载/会话切换时解除（ChatPage 按 peer.id keyed 重挂载，切人先卸旧再挂新）
+  useEffect(() => {
+    registerBgSession(sessionKey, { title: peer.name, app: 'qq' });
+    return () => {
+      unregisterBgSession(sessionKey);
+    };
+  }, [peer.name, sessionKey]);
+
+  // 挂载 + 回前台时拉取本会话待达消息（服务端即清除），经原投递管线逐条落盘
+  //（灵动岛通知/语音频率/未读角标与页面内 AI 回复完全同口径；会话有活跃流/投递时 pull 内部返回空，等下次回前台再拉）
+  useEffect(() => {
+    let alive = true;
+    const pull = () => {
+      void pullBgPending(sessionKey).then((items) => {
+        if (alive && items.length > 0) bgDeliverRef.current(items);
+      });
+    };
+    pull();
+    const offVisible = onBgPageVisible(pull);
+    return () => {
+      alive = false;
+      offVisible();
+    };
+  }, [sessionKey]);
 
   // ---------------- 双向拉黑（用户开关 / 角色申请卡片的同意与拒绝） ----------------
 
@@ -3321,7 +3411,42 @@ function ChatPage({
 
   const send = useCallback(() => {
     const text = input.trim();
-    if (!text) return;
+    const staged = pendingImgsRef.current;
+    // 预览条还有待发图、输入框没文字：只发图（照原 flushPendingImages 口径）
+    if (!text) {
+      if (staged.length > 0) flushPendingImages();
+      return;
+    }
+    // 组合发送：输入框有文字且预览条有待发图 → 文字消息在前、图片在后一起上屏+落盘，只触发一轮 AI 回复
+    //（runAiTurnRef(textMsg, created)：上下文按消息数组顺序「文字在前图片在后」，识图收集本轮图片、
+    // 请求附带文字取输入框原文；textMsg 已先行上屏 → runAiTurn 的 userMsg 入列按 id 幂等跳过）。
+    // 组合时文字按普通文字消息发出（ttsSend 只对纯文字生效：语音气泡异步落屏会让图片/语音顺序颠倒，
+    // 且语音消息会截断「从末尾向前收集连续图片」的识图窗口）
+    if (staged.length > 0) {
+      const textMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
+      const created: QQMsg[] = staged.map((p) => ({ id: uid(), role: 'me', content: p.src, time: Date.now(), kind: 'image' }));
+      pendingImgsRef.current = [];
+      setPendingImgs([]);
+      setInput('');
+      setQuote(null);
+      for (const msg of [textMsg, ...created]) setMsgs((prev) => [...prev, msg]);
+      // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
+      if (peer.id === me.id) return;
+      // 对方正在回复（流式接收或连发投递未清空）：文字+图片整批走排队补跑口径（与单发文字/图片一致）
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        qqQueueAdd(peer.id);
+        onToast('消息已发出，对方回完这轮就聊');
+        return;
+      }
+      // 分句发送开启：整批入列不触发回复，等输入框为空再点一次「发送」统一触发
+      if (sentenceSend) {
+        setPendingDispatch(true);
+        markPendingBatch(sessionKey, true);
+        return;
+      }
+      runAiTurnRef.current?.(textMsg, created);
+      return;
+    }
     // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
     if (ttsSend) {
       sendTextAsVoiceRef.current(text);
@@ -3354,7 +3479,7 @@ function ChatPage({
       return;
     }
     runAiTurn(userMsg);
-  }, [input, me.id, peer.id, runAiTurn, sessionKey, sentenceSend, quote, ttsSend]);
+  }, [flushPendingImages, input, me.id, peer.id, runAiTurn, sessionKey, sentenceSend, quote, ttsSend]);
 
   /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」）；
    *  连发投递未清空时同样不开新回合（与流式中的口径一致：等上一轮投递完毕再点一次） */
@@ -4475,9 +4600,9 @@ function ChatPage({
             aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : pendingImgs.length > 0 ? '发送图片' : '发送（让对方回复）'}
             disabled={(!input.trim() && !canDispatch && pendingImgs.length === 0) || streaming}
             onClick={() => {
-              // 发图先预览：有文字先发文字；无文字有待发图片就发出图片；最后才是分句批次触发
-              if (input.trim()) void send();
-              else if (pendingImgs.length > 0) flushPendingImages();
+              // 有文字（含与待发图组合发送）或预览条还有待发图都走 send（内部分流：组合发/只发图/只发文字）；
+              // 真正空输入才触发分句批次
+              if (input.trim() || pendingImgs.length > 0) void send();
               else dispatchBatch();
             }}
             className={`h-[40px] shrink-0 rounded-[12px] px-5 text-[16px] font-medium text-white transition-all duration-150 ${
@@ -4490,7 +4615,7 @@ function ChatPage({
             发送
           </button>
         </div>
-        {/* 待发图片预览条（发图先预览）：显示在输入行下方，点「发送」才真正发出；表情/加号面板打开时隐藏 */}
+        {/* 待发图片预览条（发图先预览）：显示在输入行下方，主发送按钮才真正发出（文字与待发图可组合发送）；表情/加号面板打开时隐藏 */}
         {!stickerOpen && !plusOpen && pendingImgs.length > 0 && (
           <div data-testid="qq-img-preview-bar" className="flex items-center gap-2 overflow-x-auto px-3 pb-1 pt-2">
             {pendingImgs.map((p, k) => (
@@ -4512,16 +4637,6 @@ function ChatPage({
                 </button>
               </div>
             ))}
-            <button
-              type="button"
-              data-testid="qq-img-preview-send"
-              aria-label={`发送 ${pendingImgs.length} 张图片`}
-              onClick={flushPendingImages}
-              className="ml-auto h-[32px] shrink-0 rounded-[10px] px-4 text-[14px] font-medium text-white shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95"
-              style={{ backgroundColor: QQ_BLUE }}
-            >
-              发送({pendingImgs.length})
-            </button>
           </div>
         )}
         <div className="flex items-center justify-between px-7 pb-[18px] pt-2 text-black/80 dark:text-white/80">
@@ -7291,6 +7406,18 @@ function MessagesPage({
   useEffect(() => {
     qqUnreads.prune(baseConversations.map((row) => row.key));
   }, [baseConversations]);
+
+  // 退出网页接力：服务端代跑的回复已待达的会话 → 未读角标（同一批条目只在第一次查询时提示，
+  // peek 内部 localStorage 去重；进聊天页正式拉取投递后自动解除）。只认 QQ 私聊会话键
+  //（qq:<联系人 id>，bump 用未读表的真实键 = 联系人 id）；群聊没有会话页拉取，qq:group: 键过滤兜底
+  useEffect(() => {
+    void peekBgBadgeCounts().then((counts) => {
+      for (const [key, n] of Object.entries(counts)) {
+        if (!key.startsWith('qq:') || key.startsWith('qq:group:')) continue;
+        qqUnreads.bump(key.slice(3), n);
+      }
+    });
+  }, []);
 
   // 长按检测：按住 480ms 弹出会话操作菜单；移动超 12px 视为滚动取消
   const clearPress = () => {

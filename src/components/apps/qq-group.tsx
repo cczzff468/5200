@@ -2970,7 +2970,7 @@ export function QqGroupChatPage({
     if (staged.length > 0) setPendingImgs((prev) => [...prev, ...staged]);
   };
 
-  /** 预览条「发送(N)」/主发送按钮真正发图：逐张转图片消息上屏 → 清空预览 → 回合进行中排队补跑
+  /** 预览条待发图/主发送按钮真正发图：逐张转图片消息上屏 → 清空预览 → 回合进行中排队补跑
    *  （与文字消息同款「回完这轮就聊」toast）→ 分句发送开启只入列不触发回复 → 否则触发群 AI 回合
    *  （trigger=最后一张图，与旧版直发逻辑一致；未配置识图模型也照常触发，#26） */
   const flushPendingImages = () => {
@@ -3031,6 +3031,51 @@ export function QqGroupChatPage({
         return;
       }
       if (sentenceSend && pendingDispatch) dispatchBatch();
+      return;
+    }
+    // 组合发送：输入框有文字且预览条有待发图 → 文字消息在前、图片在后一起上屏+落盘，只触发一轮群回复。
+    //  触发方式照 flushPendingImages 对齐（runGroupTurnRef(trigger)）；trigger 用文字消息——@ 提及从
+    //  trigger.content 解析，传最后一张图（content 为空）会丢 @ 必答；图片已落群消息库，
+    //  识图按「从末尾向前收集连续我发图片」自动带上（文字在前图片在后，识图窗口不被截断）。
+    //  组合时文字按普通文字消息发出（ttsSend 只对纯文字生效：语音气泡异步落屏会让图片/语音顺序颠倒，
+    //  且语音消息会截断识图窗口）
+    if (pendingImgs.length > 0) {
+      const textMsg: WxGroupMsg = {
+        id: uid(),
+        role: 'me',
+        senderId: 'me',
+        senderName: me.name,
+        content: text,
+        time: Date.now(),
+        quote: quote ?? undefined,
+      };
+      const created: WxGroupMsg[] = pendingImgs.map((p) => ({
+        id: uid(),
+        role: 'me',
+        senderId: 'me',
+        senderName: me.name,
+        content: '',
+        time: Date.now(),
+        kind: 'image',
+        img: { src: p.src },
+      }));
+      setPendingImgs([]);
+      setDraft('');
+      setQuote(null);
+      for (const m of [textMsg, ...created]) appendMsg(m);
+      if (runningRef.current || isChatStreaming(sKey)) {
+        // 成员们还在回复：整批消息照常发出并入队，本回合结束后自动再起一轮（与文字消息同款）
+        groupQueuedRef.current = true;
+        onToast('消息已发出，成员们回完这轮就聊');
+        return;
+      }
+      // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发
+      if (sentenceSend) {
+        setPendingDispatch(true);
+        markPendingBatch(sKey, true);
+        return;
+      }
+      runGroupTurnRef.current(textMsg);
       return;
     }
     // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
@@ -4345,8 +4390,9 @@ export function QqGroupChatPage({
             </>
           ) : null}
         </div>
-        {/* 发图预览条（需求2 发图先预览）：选图先暂存这里不上屏，点「发送(N)」或主发送按钮才真正发出并触发群回合；
-            不做堆叠/大图查看（微信专属需求，QQ 跳过）；语音/表情/加号面板展开时隐藏 */}
+        {/* 发图预览条（需求2 发图先预览）：选图先暂存这里不上屏，主发送按钮才真正发出并触发群回合
+            （文字与待发图可组合发送：文字在前、图片在后）；不做堆叠/大图查看（微信专属需求，QQ 跳过）；
+            语音/表情/加号面板展开时隐藏 */}
         {pendingImgs.length > 0 && !voiceMode && !stickerOpen && !plusOpen && (
           <div
             data-testid="qqg-img-preview-bar"
@@ -4372,15 +4418,6 @@ export function QqGroupChatPage({
                 </div>
               ))}
             </div>
-            <button
-              type="button"
-              data-testid="qqg-img-preview-send"
-              onClick={flushPendingImages}
-              className="h-[34px] shrink-0 rounded-[10px] px-4 text-[14px] font-medium text-white shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95"
-              style={{ backgroundColor: '#0099FF' }}
-            >
-              发送({pendingImgs.length})
-            </button>
           </div>
         )}
         {/* 工具栏（与单聊同款六图标：语音/图片/拍摄/点缀/表情/加号） */}

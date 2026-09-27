@@ -2283,7 +2283,7 @@ export function WxGroupChatPage({
   const [viewer, setViewer] = useState<{ urls: string[]; index: number } | null>(null);
   // 照片堆叠「展开」过的组（头部消息 id 集合）：展开后恢复逐条平铺（与微信一致，展开后不收回）
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(() => new Set());
-  // 发图先预览（需求2）：相机/相册选图先进待发列表（缩略图条显示在输入行下方），点「发送」才真正发出
+  // 发图先预览（需求2）：相机/相册选图先进待发列表（缩略图条显示在输入行下方），主发送按钮才真正发出（可与输入框文字一起发送，组合发送见 send）
   const [pendingImgs, setPendingImgs] = useState<{ id: string; src: string }[]>([]);
   const [locView, setLocView] = useState<{ name: string; address: string } | null>(null);
   // 群红包/转账浮层流程：发红包页 / 转账选人页→转账页 / 红包开箱 / 红包详情 / 转账详情
@@ -3340,47 +3340,60 @@ export function WxGroupChatPage({
       return;
     }
     const text = draft.trim();
-    if (!text) {
-      // 文字优先：无文字时先发待发图片（发图先预览），其次退回分句批次触发
-      if (pendingImgs.length > 0) {
-        flushPendingImages();
-        return;
-      }
+    if (!text && pendingImgs.length === 0) {
       // 空输入点「发送」= 触发分句发送批次回复（分句开启且有未回复的批次时）
       if (sentenceSend && pendingDispatch) dispatchBatch();
       return;
     }
-    // 文字转语音发送：合成语音气泡（transcript 带原文，成员直接读得到内容）；失败只 toast 不发文字
-    if (ttsSend) {
+    // 文字转语音发送：合成语音气泡（transcript 带原文，成员直接读得到内容）；失败只 toast 不发文字。
+    // 开着转语音时文字优先走语音（待发图片留在预览条，再点一次「发送」走纯图路径）
+    if (ttsSend && text) {
       sendTextAsVoiceRef.current(text);
       return;
     }
-    const msg: WxGroupMsg = {
-      id: uid(),
-      role: 'me',
+    // 组合发送（输入框文字 + 待发图片一起发）：文字消息在前、图片在后全部落盘上屏，只触发一次群回合
+    //（回合内历史与识图输入都从群消息库收集，整批 role='me' 连续，文字、图片成员都能读到；
+    //  trigger 传文字消息——@ 解析吃 trigger.content，纯图才传最后一张图）
+    const userMsg: WxGroupMsg | null = text
+      ? { id: uid(), role: 'me', senderId: 'me', senderName: me.name, content: text, time: Date.now(), quote: quote ?? undefined }
+      : null;
+    const created: WxGroupMsg[] = pendingImgs.map((p) => ({
+      id: p.id,
+      role: 'me' as const,
       senderId: 'me',
       senderName: me.name,
-      content: text,
+      content: '',
       time: Date.now(),
-      quote: quote ?? undefined,
+      kind: 'image' as const,
+      img: { src: p.src },
+    }));
+    const batch = [...(userMsg ? [userMsg] : []), ...created];
+    const clearComposer = () => {
+      setDraft('');
+      setQuote(null);
+      setPendingImgs([]);
     };
-    setDraft('');
-    setQuote(null);
+    // 成员们还在回复（回合进行中/流式接收中）：消息照常发出并排队，本回合结束后自动再起一轮。
+    // 组合发送遇排队整批走同一口径（消息已在群消息库，补跑从存储读最新消息，成员都能看到）
     if (runningRef.current || isChatStreaming(sKey)) {
-      // 成员们还在回复：消息照常发出并排队，本回合结束后自动再起一轮（不再拦截后让用户重发）
-      appendMsg(msg);
+      clearComposer();
+      for (const m of batch) appendMsg(m);
       groupQueuedRef.current = true;
       onToast('消息已发出，成员们回完这轮就聊');
       return;
     }
-    appendMsg(msg);
+    clearComposer();
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
     if (sentenceSend) {
+      for (const m of batch) appendMsg(m);
       setPendingDispatch(true);
       markPendingBatch(sKey, true);
       return;
     }
-    void runGroupTurn(msg);
+    for (const m of batch) appendMsg(m);
+    // 未配置识图也照常触发回复（#26）：chat-stream-store 会注入「我发了图片但你看不到内容」的临时上下文，
+    // 成员按人设自然回应，不再让发图石沉大海
+    void runGroupTurn(userMsg ?? created[created.length - 1]);
   };
 
   // ---------------- 语音消息：按住说话录音 / 文字转语音 / 转文字（与微信单聊同链路，适配群聊 senderId） ----------------
@@ -3494,7 +3507,7 @@ export function WxGroupChatPage({
   );
   sendTextAsVoiceRef.current = sendTextAsVoice;
 
-  // ---------------- 发图先预览（需求2）：相机/相册选图 → 待发列表（输入行下缩略图条）→ 点「发送」才上屏 ----------------
+  // ---------------- 发图先预览（需求2）：相机/相册选图 → 待发列表（输入行下缩略图条）→ 主发送按钮才上屏（可与文字组合发送，见 send） ----------------
 
   /** 相机/相册选图入待发列表：与单聊同一套 readImageFile 压缩；上限 9 张，超出提示（此步不发出） */
   const stageImageFiles = async (files: FileList) => {
@@ -3518,43 +3531,6 @@ export function WxGroupChatPage({
     }
     if (added.length > 0) setPendingImgs((prev) => [...prev, ...added].slice(0, 9));
     if (overflow) onToast('最多发送 9 张图片');
-  };
-
-  /** 预览条「发送」→ 真正逐张上屏；语义与文字消息同口径：分句发送只入列不触发回复；
-   *  回合进行中/流式接收中 → 消息照常上屏并入队补跑，本回合结束后自动再起一轮（与文字排队同文案）；
-   *  否则直接触发群回合。未配置识图也照常触发回复（#26）：chat-stream-store 会注入
-   *  「我发了图片但你看不到内容」的临时上下文，成员按人设自然回应，不再让发图石沉大海 */
-  const flushPendingImages = () => {
-    if (pendingImgs.length === 0) return;
-    if (meMuted) {
-      onToast('你已被禁言，暂时无法发言');
-      return;
-    }
-    const created: WxGroupMsg[] = pendingImgs.map((p) => ({
-      id: p.id,
-      role: 'me' as const,
-      senderId: 'me',
-      senderName: me.name,
-      content: '',
-      time: Date.now(),
-      kind: 'image' as const,
-      img: { src: p.src },
-    }));
-    setPendingImgs([]);
-    for (const m of created) appendMsg(m);
-    // 分句发送开启：只入列不触发回复（与文字消息同规则，空输入点「发送」统一触发）
-    if (sentenceSend) {
-      setPendingDispatch(true);
-      markPendingBatch(sKey, true);
-      return;
-    }
-    if (runningRef.current || isChatStreaming(sKey)) {
-      // 成员们还在回复：消息照常发出并入队，本回合结束后自动再起一轮（补跑从存储读最新消息）
-      groupQueuedRef.current = true;
-      onToast('消息已发出，成员们回完这轮就聊');
-      return;
-    }
-    void runGroupTurn(created[created.length - 1]);
   };
 
   /** 表情面板点选发送（表情包消息按群聊会话独立保存；成员结合表情含义按人设回应） */
@@ -4767,10 +4743,14 @@ export function WxGroupChatPage({
               <>
                 <button
                   type="button"
-                  onClick={send}
-                  disabled={streaming || runningRef.current}
+                  aria-label={ttsSend && draft.trim() ? '发送（转语音）' : pendingImgs.length > 0 ? (draft.trim() ? `发送文字和 ${pendingImgs.length} 张图片` : `发送 ${pendingImgs.length} 张图片`) : draft.trim() ? '发送' : '发送（让成员回复）'}
                   data-testid="wx-groupchat-send"
-                  aria-label="发送"
+                  disabled={streaming || runningRef.current}
+                  onClick={() => {
+                    // 有文字或待发图 → send()（内部处理组合/纯文字/纯图）；否则分句批次兜底
+                    if (draft.trim() || pendingImgs.length) send();
+                    else dispatchBatch();
+                  }}
                   className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
                 >
                   发送
@@ -4808,8 +4788,8 @@ export function WxGroupChatPage({
               </div>
             )}
           </div>
-          {/* 发图预览条（需求2）：选图后先列在输入行下方（62px 缩略图 + 右上角 × 移除），点「发送(N)」才真正发出；
-              加号/表情面板打开时隐藏（面板优先展示） */}
+          {/* 发图预览条（需求2）：选图后先列在输入行下方（62px 缩略图 + 右上角 × 移除），点主发送按钮才真正发出
+              （可与输入框文字一起发送，见 send）；加号/表情面板打开时隐藏（面板优先展示） */}
           {pendingImgs.length > 0 && !plusOpen && !stickerOpen && (
             <div className="mt-2 flex items-center gap-2.5" data-testid="wxg-img-preview-bar">
               <div className="no-scrollbar flex min-w-0 flex-1 gap-2 overflow-x-auto py-1">
@@ -4828,14 +4808,6 @@ export function WxGroupChatPage({
                   </div>
                 ))}
               </div>
-              <button
-                type="button"
-                data-testid="wxg-img-preview-send"
-                onClick={flushPendingImages}
-                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-3.5 text-[13px] font-medium text-white active:bg-[#06AD56]"
-              >
-                发送({pendingImgs.length})
-              </button>
             </div>
           )}
         </div>

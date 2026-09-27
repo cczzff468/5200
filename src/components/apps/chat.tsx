@@ -30,6 +30,7 @@ import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import {
   beginChatStream,
   clearChatStream,
@@ -794,6 +795,11 @@ function ChatView({
   const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
   /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
   const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+  /** 联系人 id（记忆库/拉黑/语音合成用；AI 助手会话为 null）——原在 startAiTurn 内定义，
+   *  提升 bg 接线后与组件级 deliverAiMsg 共用 */
+  const memContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+  /** 会话对方显示名（灵动岛通知标题 / 接力 Web Push 标题 / 拉黑系统行文案共用） */
+  const peerLabel = peer.name ?? peer.title;
   /** AI 语音频率设置键：联系人会话与微信同键（wx:<联系人 id>），信息端的频率跟随微信 App 里的设置；
    *  AI 助手会话无微信对应会话，维持 sms: 会话独立 */
   const voiceFreqKey = wbContactId ? `wx:${wbContactId}` : sessionKey;
@@ -921,6 +927,120 @@ function ChatView({
     return subscribeAiDeliveryActive(() => setDelivering(isAiDelivering(sessionKey)));
   }, [sessionKey]);
 
+  /** [语音通话] 标记本轮是否出现过（流中分段/最后一段/接力回复共用同一 ref）：startAiTurn 开回合时重置，
+   *  buildReplyMsgs 解析到标记时置位——原来是回合内局部变量，buildReplyMsgs 提升到组件层后改用 ref 传递 */
+  const wantCallSeenRef = useRef(false);
+
+  /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成（ai-delivery 调度器模块层调用，与页面是否存活无关）。
+   *  startAiTurn 的投递批次与退出网页接力的后台回复（bg-turn 拉取）共用同一套管线 */
+  const deliverAiMsg = useCallback(
+    (m: ChatMsg) => {
+      saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), m]);
+      // 语音频率：每条文字消息独立判定（短路调用保持周期语义；命中 → 通知直接显示[语音]，未命中 → 常规文字预览）
+      const voiceTurn =
+        !m.error && !m.sys && !m.blkreq &&
+        (m.kind === undefined || m.kind === 'text') &&
+        m.content.trim().length > 0 &&
+        decideAiVoiceMessage(voiceFreqKey);
+      const body = voiceTurn
+        ? '[语音]'
+        : notifyPreviewText({
+            kind: m.kind,
+            content: m.content,
+            voiceText: m.voice?.transcript || m.voice?.localText || null,
+          });
+      if (body !== null) {
+        pushChatNotification({
+          sessionKey: `sms:${storageKey}`,
+          app: 'chat',
+          title: peerLabel,
+          avatar: peer.avatarSrc ?? null,
+          body,
+          target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
+        });
+      }
+      // 命中语音频率：异步合成，成功后就地升级为语音气泡（失败保持文字自动降级）
+      if (voiceTurn) {
+        const targetId = m.id;
+        void synthesizeAiVoice(m.content, memContactId)
+          .then((clip) => {
+            if (!clip) return; // 合成失败 → 保持文字
+            const voice: VoiceMsgData = {
+              url: clip.url,
+              duration: clip.duration,
+              wave: clip.wave,
+              localText: clip.localText,
+              synth: clip.synth,
+              contactId: memContactId ?? undefined,
+            };
+            const upgrade = (list: ChatMsg[]): ChatMsg[] =>
+              list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+            setMsgs(upgrade);
+            saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
+          })
+          .catch(() => {});
+      }
+    },
+    [memContactId, peer, peerLabel, storageKey, voiceFreqKey],
+  );
+
+  /**
+   * 把一段回复文本解析成待投递消息（startAiTurn 流中分段/finalize 与退出网页接力的后台回复共用同一套管线，不重不漏）：
+   * 拉黑类动作标记就地应用（改状态 + 系统提示行/申请卡片）；asSingle=true（单条模式）时文字块
+   * 再按「&&&」标记切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
+   * idBase/idStart：本轮 AI 消息 id 序列（首条 = idBase，后续 = idBase-N；返回 nextIdx 供调用方续接，
+   * 接力回复每次投递用全新 uid() 起一段新序列，与回合内序列互不冲突）
+   */
+  const buildReplyMsgs = useCallback(
+    (rawText: string, asSingle: boolean, baseTime: number, idBase: string, idStart: number): { msgs: ChatMsg[]; nextIdx: number } => {
+      // AI 主动打来电话（[语音通话] 标记，全半角括号变体都认）：从气泡文本里剥除，只作为来电信号
+      const wantCall = hasVoiceCallMark(rawText);
+      if (wantCall) wantCallSeenRef.current = true;
+      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
+      const out: ChatMsg[] = [];
+      let t = baseTime;
+      let msgIdx = idStart;
+      for (const part of extractRichActionParts(text)) {
+        if (part.type === 'action') {
+          const bk = blockActionKindOf(part.action);
+          if (bk && wbContactId) {
+            const res = applyCharBlockAction('sms', wbContactId, bk, part.action.targetId);
+            setBlk(res.entry);
+            if (res.changed && bk === 'block') {
+              out.push({ id: `${idBase}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `你已被「${peerLabel}」拉黑` } });
+              t += 1;
+              msgIdx += 1;
+            } else if (res.changed && bk === 'unblock') {
+              out.push({ id: `${idBase}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `「${peerLabel}」解除了对你的拉黑` } });
+              t += 1;
+              msgIdx += 1;
+            } else if (res.reqCreated && bk === 'request') {
+              out.push({ id: `${idBase}-blk-${msgIdx}`, role: 'assistant', content: '', time: t, blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+              t += 1;
+              msgIdx += 1;
+            }
+          }
+          continue; // 信息端无红包/转账动作
+        }
+        const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text]).map((seg) =>
+          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
+        );
+        for (const seg of segs) {
+          out.push({
+            id: msgIdx === 0 ? idBase : `${idBase}-${msgIdx}`,
+            role: 'assistant',
+            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
+            time: t,
+          });
+          t += 600 + Math.floor(Math.random() * 600);
+          msgIdx += 1;
+        }
+      }
+      return { msgs: out, nextIdx: msgIdx };
+    },
+    [peerLabel, stickersOn, wbContactId],
+  );
+
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
    *  转写完成后（异步）触发回复时拿到的才是含语音消息与转写的最新历史 */
   const startAiTurnRef = useRef<((userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => void) | null>(null);
@@ -952,8 +1072,7 @@ function ChatView({
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
     // 回复条数（本会话独立设置；信息端未提供设置入口，未设置时保持 1 条的现状）
     const replyCount = systemPrompt ? getReplyCount(sessionKey, 1) : 1;
-    // 记忆库：联系人会话召回记忆（storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
-    const memContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+    // 记忆库：联系人会话召回记忆（memContactId 为组件级常量：storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
     const memoryBlock = memContactId
       ? memRecallBlock(
           memContactId,
@@ -1021,60 +1140,11 @@ function ChatView({
     // 流中每凑齐一条完整消息（分段器回调 onSegment）立刻排队投递上屏；
     // 流结束后 finalize 只处理剩余的最后一条（N 条上限的第 N 条）——
     // 不再有「先全文显示、消失、再逐条重放」的流式气泡，流式与分条也不改同一块展示状态。
-    const peerLabel = peer.name ?? peer.title;
     let deliveredAny = false; // 本轮是否已有分段消息排队投递（决定兜底文案）
     let batchStarted = false; // 是否已排过批（首批立即上屏，后续批按打字节奏先停顿）
     let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
-    let wantCallSeen = false; // [语音通话] 标记是否出现过（流中分段或最后一段；AI 主动打来电话）
-
-    /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成（模块层调用，与页面是否存活无关） */
-    const deliverAiMsg = (m: ChatMsg) => {
-      saveMsgs(storageKey, [...(loadMsgs(storageKey) ?? []), m]);
-      // 语音频率：每条文字消息独立判定（短路调用保持周期语义；命中 → 通知直接显示[语音]，未命中 → 常规文字预览）
-      const voiceTurn =
-        !m.error && !m.sys && !m.blkreq &&
-        (m.kind === undefined || m.kind === 'text') &&
-        m.content.trim().length > 0 &&
-        decideAiVoiceMessage(voiceFreqKey);
-      const body = voiceTurn
-        ? '[语音]'
-        : notifyPreviewText({
-            kind: m.kind,
-            content: m.content,
-            voiceText: m.voice?.transcript || m.voice?.localText || null,
-          });
-      if (body !== null) {
-        pushChatNotification({
-          sessionKey: `sms:${storageKey}`,
-          app: 'chat',
-          title: peerLabel,
-          avatar: peer.avatarSrc ?? null,
-          body,
-          target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
-        });
-      }
-      // 命中语音频率：异步合成，成功后就地升级为语音气泡（失败保持文字自动降级）
-      if (voiceTurn) {
-        const targetId = m.id;
-        void synthesizeAiVoice(m.content, memContactId)
-          .then((clip) => {
-            if (!clip) return; // 合成失败 → 保持文字
-            const voice: VoiceMsgData = {
-              url: clip.url,
-              duration: clip.duration,
-              wave: clip.wave,
-              localText: clip.localText,
-              synth: clip.synth,
-              contactId: memContactId ?? undefined,
-            };
-            const upgrade = (list: ChatMsg[]): ChatMsg[] =>
-              list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
-            setMsgs(upgrade);
-            saveMsgs(storageKey, upgrade(loadMsgs(storageKey) ?? []));
-          })
-          .catch(() => {});
-      }
-    };
+    // [语音通话] 标记本轮是否出现过（组件级 ref，开回合时重置；buildReplyMsgs 解析到标记时置位）
+    wantCallSeenRef.current = false;
 
     /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
     const enqueueBatch = (built: ChatMsg[]) => {
@@ -1091,60 +1161,10 @@ function ChatView({
       batchStarted = true;
     };
 
-    /**
-     * 把一段回复文本解析成待投递消息（流中分段与 finalize 最后一段共用同一套管线，不重不漏）：
-     * 拉黑类动作标记就地应用（改状态 + 系统提示行/申请卡片）；asSingle=true（单条模式）时文字块
-     * 再按「&&&」标记切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
-     */
-    const buildReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): ChatMsg[] => {
-      // AI 主动打来电话（[语音通话] 标记，全半角括号变体都认）：从气泡文本里剥除，只作为来电信号
-      const wantCall = hasVoiceCallMark(rawText);
-      if (wantCall) wantCallSeen = true;
-      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
-      const out: ChatMsg[] = [];
-      let t = baseTime;
-      for (const part of extractRichActionParts(text)) {
-        if (part.type === 'action') {
-          const bk = blockActionKindOf(part.action);
-          if (bk && wbContactId) {
-            const res = applyCharBlockAction('sms', wbContactId, bk, part.action.targetId);
-            setBlk(res.entry);
-            if (res.changed && bk === 'block') {
-              out.push({ id: `${aiId}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `你已被「${peerLabel}」拉黑` } });
-              t += 1;
-              msgIdx += 1;
-            } else if (res.changed && bk === 'unblock') {
-              out.push({ id: `${aiId}-sys-${msgIdx}`, role: 'assistant', content: '', time: t, sys: { text: `「${peerLabel}」解除了对你的拉黑` } });
-              t += 1;
-              msgIdx += 1;
-            } else if (res.reqCreated && bk === 'request') {
-              out.push({ id: `${aiId}-blk-${msgIdx}`, role: 'assistant', content: '', time: t, blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
-              t += 1;
-              msgIdx += 1;
-            }
-          }
-          continue; // 信息端无红包/转账动作
-        }
-        const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text]).map((seg) =>
-          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
-        );
-        for (const seg of segs) {
-          out.push({
-            id: msgIdx === 0 ? aiId : `${aiId}-${msgIdx}`,
-            role: 'assistant',
-            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
-            time: t,
-          });
-          t += 600 + Math.floor(Math.random() * 600);
-          msgIdx += 1;
-        }
-      }
-      return out;
-    };
-
     /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻排队上屏（边接收边逐条显示） */
     const deliverSegment = (seg: string) => {
-      const built = buildReplyMsgs(seg, false, Date.now());
+      const { msgs: built, nextIdx } = buildReplyMsgs(seg, false, Date.now(), aiId, msgIdx);
+      msgIdx = nextIdx;
       if (built.length === 0) return;
       deliveredAny = true;
       enqueueBatch(built);
@@ -1168,7 +1188,7 @@ function ChatView({
         }
         // 多条模式：流中分段已通过 onSegment 逐条排队投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复在此按旧管线落盘
-        const built = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now());
+        const { msgs: built } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now(), aiId, msgIdx);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         const finalBatch: ChatMsg[] =
           built.length > 0
@@ -1205,7 +1225,7 @@ function ChatView({
           }
           // AI 主动打来电话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电——
           // 全局胶囊弹窗 + iOS 全屏来电界面（PhoneShell › IncomingCallLayer），任何界面都会被覆盖
-          if (wantCallSeen && memContactId) {
+          if (wantCallSeenRef.current && memContactId) {
             void (async () => {
               try {
                 const lastCallAt = Number(window.localStorage.getItem(`sms-vc-last:${memContactId}`) ?? '0');
@@ -1252,6 +1272,76 @@ function ChatView({
   useEffect(() => {
     startAiTurnRef.current = startAiTurn;
   });
+
+  // ---------------- 退出网页接力（bg-turn）：服务端代跑的回复拉取 + 原管线投递 ----------------
+
+  /** 排队投递一批接力回复（首条立即上屏，后续按打字节奏）——与 startAiTurn 的 enqueueBatch
+   *  首批（batchStarted=false）完全同参数口径 */
+  const bgEnqueueBatch = useCallback(
+    (built: ChatMsg[]) => {
+      if (built.length === 0) return;
+      void scheduleAiDelivery<ChatMsg>(
+        sessionKey,
+        built,
+        deliverAiMsg,
+        {
+          initialDelay: 0,
+          delay: (i) => (i + 1 < built.length ? typingDelayOf(built[i + 1].content ?? '') : 0),
+        },
+      );
+    },
+    [deliverAiMsg, sessionKey],
+  );
+
+  /** 接力回复投递：与 finalize 完全同管线（buildReplyMsgs 解析 → 排队投递）。
+   *  single=true：texts[0] 是一次完整回复原文（可能含 &&& 分段与动作标记）→ 单条模式；
+   *  single=false：每项就是一条独立消息文本 → 多条模式逐条投递 */
+  const deliverBgItems = useCallback(
+    (items: BgPendingItem[]) => {
+      for (const item of items) {
+        if (item.single) {
+          bgEnqueueBatch(buildReplyMsgs(item.texts.join(''), true, Date.now(), uid(), 0).msgs);
+        } else {
+          for (const t of item.texts) {
+            bgEnqueueBatch(buildReplyMsgs(t, false, Date.now(), uid(), 0).msgs);
+          }
+        }
+      }
+    },
+    [bgEnqueueBatch, buildReplyMsgs],
+  );
+
+  const bgDeliverRef = useRef<(items: BgPendingItem[]) => void>(() => undefined);
+  // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）
+  useEffect(() => {
+    bgDeliverRef.current = deliverBgItems;
+  });
+
+  // 挂载注册会话元数据（pagehide 上报 beacon 携带显示名，Web Push 标题用对方名字）；
+  // 卸载/会话切换时解除（ChatView 按 storageKey keyed 重挂载，切会话先卸旧再挂新）
+  useEffect(() => {
+    registerBgSession(sessionKey, { title: peerLabel, app: 'chat' });
+    return () => {
+      unregisterBgSession(sessionKey);
+    };
+  }, [peerLabel, sessionKey]);
+
+  // 挂载 + 回前台时拉取本会话待达消息（服务端即清除），经原投递管线逐条落盘
+  //（灵动岛通知/语音频率与页面内 AI 回复完全同口径；会话有活跃流/投递时 pull 内部返回空，等下次回前台再拉）
+  useEffect(() => {
+    let alive = true;
+    const pull = () => {
+      void pullBgPending(sessionKey).then((items) => {
+        if (alive && items.length > 0) bgDeliverRef.current(items);
+      });
+    };
+    pull();
+    const offVisible = onBgPageVisible(pull);
+    return () => {
+      alive = false;
+      offVisible();
+    };
+  }, [sessionKey]);
 
   // ---------------- #8 流式接收期间的发送排队（对齐微信 wxQueuedTurns：消息照常上屏，回复自动补跑） ----------------
 
@@ -3120,6 +3210,20 @@ export default function ChatApp() {
     if (!mounted) return; // 等本地已读状态载入后再同步，避免默认 true 造成误闪
     chatBadge.set(unreadN > 0 && !hidden ? Math.min(unreadN, 99) : 0);
   }, [unreadN, hidden, mounted]);
+
+  // 退出网页接力：服务端代跑的回复已待达 → 未读角标（同一批条目只在第一次查询时提示，
+  // peek 内部 localStorage 去重；进聊天页正式拉取投递后自动解除）。信息 App 只有「小助手」
+  // 会话有未读表（sms:assistant → unreadN/setUnreadN），联系人会话没有未读 store（待达消息由
+  // 聊天页挂载拉取投递 + 灵动岛通知覆盖），其余 sms: 键不打角标
+  useEffect(() => {
+    if (!mounted) return; // 等本地未读状态载入后再叠加，避免被初始化覆盖
+    void peekBgBadgeCounts().then((counts) => {
+      for (const [key, n] of Object.entries(counts)) {
+        if (!key.startsWith('sms:')) continue;
+        if (key.slice(4) === 'assistant') setUnreadN((prev) => Math.min(prev + n, 99));
+      }
+    });
+  }, [mounted]);
 
   /** 打开微信风格长按菜单：锚定在会话行下方、水平对齐触点 */
   const openMenuAt = (x: number, rowBottom: number) => {

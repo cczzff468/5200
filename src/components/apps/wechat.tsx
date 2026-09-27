@@ -170,6 +170,7 @@ import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
 import { useUnreadMap, wxUnreads as wxUnreadStore } from '@/lib/unread-store';
+import { onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { useChatFlags, NO_FLAGS, wxChatFlags as wxChatFlagsStore } from '@/lib/chat-flags';
 import {
   ChatBgPage,
@@ -3607,6 +3608,17 @@ function WxBlockReqCard({
   );
 }
 
+/**
+ * 一轮 AI 回复的投递上下文（runAiTurn 与「退出网页后继续回复」的拉取投递共用）：
+ * aiId/msgIdx 生成回复消息 id 序列；batchStarted 控制首批立即上屏（后续批按打字节奏停顿）；
+ * wantCallSeen 记录 [语音通话] 标记是否出现过（finalize/拉取投递收尾时触起来电） */
+interface WxTurnCtx {
+  aiId: string;
+  msgIdx: number;
+  batchStarted: boolean;
+  wantCallSeen: boolean;
+}
+
 function ChatPage({
   me,
   peer,
@@ -4078,6 +4090,234 @@ function ChatPage({
     [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup],
   );
 
+  // ---------------- AI 回复投递管线（runAiTurn 与「退出网页后继续回复」的拉取投递共用同一套，见 deliverBgItems） ----------------
+
+  /** 挂载/存活标记：接力拉取是异步的，回调只在聊天页仍挂载时投递（卸载后置 false，避免写进已离开的会话） */
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（模块层调用，与页面是否存活无关） */
+  const deliverAiMsg = (m: WxMsg) => {
+    saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
+    // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
+    const voiceTurn =
+      (m.kind === undefined || m.kind === 'text') &&
+      m.content.trim().length > 0 &&
+      decideAiVoiceMessage(sessionKey);
+    const body = voiceTurn
+      ? '[语音]'
+      : notifyPreviewText({
+          kind: m.kind,
+          content: m.content,
+          voiceText: m.voice?.transcript || m.voice?.localText || null,
+          amount: m.rp?.amount ?? m.tr?.amount ?? null,
+          blessing: m.rp?.blessing ?? null,
+          note: m.tr?.note ?? null,
+          mergedFwd: m.fwd?.merged ?? false,
+        });
+    if (body !== null) {
+      pushChatNotification({
+        sessionKey: `wx:${peer.id}`,
+        app: 'wechat',
+        title: peer.name,
+        avatar: peer.avatar ?? null,
+        body,
+        target: { app: 'wechat', contactId: peer.id },
+      });
+    }
+    if (voiceTurn) {
+      // 异步合成，失败保持文字自动降级，不影响聊天
+      const targetId = m.id;
+      void synthesizeAiVoice(m.content, peer.id)
+        .then((clip) => {
+          if (!clip) return; // 合成失败 → 保持文字
+          const voice: VoiceMsgData = {
+            url: clip.url,
+            duration: clip.duration,
+            wave: clip.wave,
+            localText: clip.localText,
+            synth: clip.synth,
+            contactId: peer.id,
+          };
+          const upgrade = (list: WxMsg[]): WxMsg[] =>
+            list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
+          setMsgs(upgrade);
+          saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
+        })
+        .catch(() => {});
+    }
+    // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
+    if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, 1);
+  };
+
+  /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来）；
+   *  batchStarted 记在轮次上下文 ctx 里（runAiTurn 每轮新建、接力投递单独建，互不影响） */
+  const enqueueBatch = (built: WxMsg[], ctx: WxTurnCtx) => {
+    if (built.length === 0) return;
+    void scheduleAiDelivery<WxMsg>(
+      sessionKey,
+      built,
+      deliverAiMsg,
+      {
+        initialDelay: ctx.batchStarted ? typingDelayOf(built[0].content ?? '') : 0,
+        delay: (i) => (i + 1 < built.length ? typingDelayOf(built[i + 1].content ?? '') : 0),
+      },
+    );
+    ctx.batchStarted = true;
+  };
+
+  /** AI 主动发起语音通话（[语音通话] 标记出现在回复任一分段/整条，标记原文已剥除）：按 5 分钟冷却弹出来电浮层
+   *  （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
+   *  点弹窗非按钮区域才展开全屏来电页；QQ 侧同结构但不弹窗）。finalize 与接力拉取投递共用 */
+  const triggerAiVoiceCall = () => {
+    try {
+      const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
+      if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
+        window.localStorage.setItem(`wx-vc-last:${peer.id}`, String(Date.now()));
+        window.setTimeout(() => {
+          // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
+          // 双触发会产生叠层僵尸来电）——弹窗被忽略就整跳取消
+          if (useIncomingCall.getState().call) return;
+          triggerIncomingCall({
+            source: 'wx',
+            name: displayNameOf(peer) || peer.name,
+            avatar: peer.avatar ?? null,
+            contact: peer,
+            bannerStage: 'big',
+          });
+          openVoiceCall('in', { hiddenView: true });
+        }, 1200);
+      }
+    } catch {
+      // localStorage 异常忽略
+    }
+  };
+
+  /**
+   * 把一段回复文本解析成待投递消息（流中分段、finalize 最后一段与接力拉取投递共用同一套管线，不重不漏）：
+   * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式）
+   * 时文字块再按「&&&」标记切分，false（多条模式）时一段就是一条消息 —— 分段器已按边界切好，
+   * 不再二次切分（N 条上限的最后一段可能含溢出合并的句子，切开会破上限）。
+   * ctx 承载本轮 aiId/msgIdx（回复消息 id 序列）与 wantCallSeen（[语音通话] 标记收集）。
+   */
+  const buildReplyMsgs = (
+    rawText: string,
+    asSingle: boolean,
+    baseTime: number,
+    ctx: WxTurnCtx,
+  ): { msgs: WxMsg[]; cur: WxMsg[]; dirty: boolean } => {
+    // 表情包清单/开关（本会话独立，投递时现场读取；关闭后 AI 发的表情包卡片丢弃、emoji 硬性剥除）
+    const stickers = loadStickers('wx');
+    const stickersOn = getStickersOn(sessionKey);
+    // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
+    // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
+    const wantCall = hasVoiceCallMark(rawText);
+    if (wantCall) ctx.wantCallSeen = true;
+    const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
+    const latest = loadMsgs(peer.id);
+    let cur = latest;
+    const out: WxMsg[] = [];
+    let t = baseTime;
+    for (const part of extractRichActionParts(text)) {
+      if (part.type === 'action') {
+        // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
+        // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
+        const bk = blockActionKindOf(part.action);
+        if (bk) {
+          const res = applyCharBlockAction('wx', peer.id, bk, part.action.targetId);
+          setBlk(res.entry);
+          if (res.changed && bk === 'block') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `你已被「${peer.name}」拉黑` } });
+            t += 1;
+          } else if (res.changed && bk === 'unblock') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」解除了对你的拉黑` } });
+            t += 1;
+          } else if (res.reqCreated && bk === 'request') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'blockreq', blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
+            t += 1;
+          }
+          continue;
+        }
+        // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
+        //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
+        if (isQuitWinbackAction(part.action)) {
+          applyQuitWinbackAction(peer.id, part.action);
+          continue;
+        }
+        // 群社交动作（[建群:群名:成员] 等）：建群 → 卡片消息随本回复落盘（权限/冷却/拒绝表在执行器硬校验）
+        if (isGroupSocialAction(part.action)) {
+          const card = applyGroupSocialAction(peer, 'wx', part.action.kind, part.action.targetId, part.action.arg);
+          if (card) {
+            out.push({ id: ctx.msgIdx === 0 ? ctx.aiId : `${ctx.aiId}-${ctx.msgIdx}`, role: 'peer', content: '', time: t, kind: 'groupcard', gcard: card });
+            ctx.msgIdx += 1;
+            t += 600 + Math.floor(Math.random() * 600);
+          }
+          continue;
+        }
+        const applied = wxApplyAiActions([part.action], cur, peer, t);
+        cur = applied.msgs;
+        out.push(...applied.notices, ...applied.extras);
+        continue;
+      }
+      const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, false)) : [part.text];
+      for (const seg of segs) {
+        for (const p of parseRichParts(seg, stickersOn ? stickers : [])) {
+          const id = ctx.msgIdx === 0 ? ctx.aiId : `${ctx.aiId}-${ctx.msgIdx}`;
+          if (p.type === 'rich') {
+            // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/亲属卡/位置卡片不受影响）
+            if (!stickersOn && p.rich.kind === 'sticker') continue;
+            out.push(richToWxMsg(p.rich, id, t, peer));
+          } else {
+            // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
+            // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
+            const clean = cleanBubbleText(stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
+            if (!clean) continue;
+            out.push({ id, role: 'peer', content: clean, time: t });
+          }
+          ctx.msgIdx += 1;
+          t += 600 + Math.floor(Math.random() * 600);
+        }
+      }
+    }
+    return { msgs: out, cur, dirty: cur !== latest };
+  };
+
+  /** 退出网页后继续回复（服务端接力）：把拉取到的待达消息按与正常回复完全一致的管线投递
+   *  （buildReplyMsgs 解析动作标记/&&& 分段/表情包 → enqueueBatch 排队逐条落盘+灵动岛通知+语音频率判定）。
+   *  single=true：texts[0] 是一次完整回复原文（generate 模式，与 finalize 单条模式同管线）；
+   *  single=false：每项就是一条独立消息文本（deliver 模式，一段一条不再二次切分） */
+  const deliverBgItems = (items: BgPendingItem[]) => {
+    if (items.length === 0) return;
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false };
+    let queuedAny = false;
+    const deliverOne = (rawText: string, asSingle: boolean) => {
+      // 与 finalize 同写法：动作标记可能已改状态（cur 变化先落盘），解析出的消息排队投递
+      const { msgs: built, cur, dirty } = buildReplyMsgs(rawText, asSingle, Date.now(), ctx);
+      if (dirty) saveMsgs(peer.id, cur);
+      if (built.length === 0) return; // 纯动作标记等解析不出消息：只落盘状态变化，不造占位消息
+      queuedAny = true;
+      enqueueBatch(built, ctx);
+    };
+    for (const item of items) {
+      if (item.single) {
+        deliverOne(item.texts.join(''), true);
+      } else {
+        for (const t of item.texts) deliverOne(t, false);
+      }
+    }
+    // 空段保护（照 finalize 的兜底写法）：整批拉取都没解析出任何消息 → 给兜底文案，不至于毫无回应
+    if (!queuedAny) {
+      enqueueBatch([{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: Date.now() }], ctx);
+    }
+    // 回复原文名带 [语音通话] 标记（剥除后不在气泡里）：同样按 5 分钟冷却弹出来电邀请
+    if (ctx.wantCallSeen) triggerAiVoiceCall();
+  };
+  /** 稳定引用（同 runAiTurnRef 模式）：挂载拉取 effect 经此调用最新闭包的投递函数 */
+  const deliverBgRef = useRef<((items: BgPendingItem[]) => void) | null>(null);
+  deliverBgRef.current = deliverBgItems;
+
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  extra：发红包/转账随消息触发回复时，刚入列还没进 state 的消息。
@@ -4143,11 +4383,13 @@ function ChatPage({
         };
       });
 
-    const aiId = uid();
+    // 本轮投递上下文（投递管线与接力拉取共用，见组件层 deliverAiMsg/enqueueBatch/buildReplyMsgs）
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false };
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）。
-    // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）
-    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
+    // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）；
+    // 组合发送（文字+图片一起发）时 userMsg 已随图片一并上屏——按 id 判重，不重复入列
+    if (userMsg) setMsgs((prev) => (prev.some((m) => m.id === userMsg.id) ? prev : [...prev, userMsg]));
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
     // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入；
@@ -4270,175 +4512,20 @@ function ChatPage({
     // 流结束后 finalize 只处理剩余的最后一条（N 条上限的第 N 条）——
     // 不再有「先全文显示、消失、再逐条重放」的流式气泡，流式与分条也不改同一块展示状态。
     let deliveredAny = false; // 本轮是否已有分段消息排队投递（决定兜底文案）
-    let batchStarted = false; // 是否已排过批（首批立即上屏，后续批按打字节奏先停顿）
-    let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
-    let wantCallSeen = false; // [语音通话] 标记是否出现过（流中分段或最后一段）
-
-    /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（模块层调用，与页面是否存活无关） */
-    const deliverAiMsg = (m: WxMsg) => {
-      saveMsgs(peer.id, [...loadMsgs(peer.id), m]);
-      // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
-      const voiceTurn =
-        (m.kind === undefined || m.kind === 'text') &&
-        m.content.trim().length > 0 &&
-        decideAiVoiceMessage(sessionKey);
-      const body = voiceTurn
-        ? '[语音]'
-        : notifyPreviewText({
-            kind: m.kind,
-            content: m.content,
-            voiceText: m.voice?.transcript || m.voice?.localText || null,
-            amount: m.rp?.amount ?? m.tr?.amount ?? null,
-            blessing: m.rp?.blessing ?? null,
-            note: m.tr?.note ?? null,
-            mergedFwd: m.fwd?.merged ?? false,
-          });
-      if (body !== null) {
-        pushChatNotification({
-          sessionKey: `wx:${peer.id}`,
-          app: 'wechat',
-          title: peer.name,
-          avatar: peer.avatar ?? null,
-          body,
-          target: { app: 'wechat', contactId: peer.id },
-        });
-      }
-      if (voiceTurn) {
-        // 异步合成，失败保持文字自动降级，不影响聊天
-        const targetId = m.id;
-        void synthesizeAiVoice(m.content, peer.id)
-          .then((clip) => {
-            if (!clip) return; // 合成失败 → 保持文字
-            const voice: VoiceMsgData = {
-              url: clip.url,
-              duration: clip.duration,
-              wave: clip.wave,
-              localText: clip.localText,
-              synth: clip.synth,
-              contactId: peer.id,
-            };
-            const upgrade = (list: WxMsg[]): WxMsg[] =>
-              list.map((x) => (x.id === targetId ? { ...x, content: '', kind: 'voice' as const, voice } : x));
-            setMsgs(upgrade);
-            saveMsgs(peer.id, upgrade(loadMsgs(peer.id)));
-          })
-          .catch(() => {});
-      }
-      // 用户已退出该聊天才计数（在聊天页内实时可见，不重复计）：AI 发了几条消息角标就是几
-      if (wxActiveChatId !== peer.id) wxUnreads.bump(peer.id, 1);
-    };
-
-    /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
-    const enqueueBatch = (built: WxMsg[]) => {
-      if (built.length === 0) return;
-      void scheduleAiDelivery<WxMsg>(
-        sessionKey,
-        built,
-        deliverAiMsg,
-        {
-          initialDelay: batchStarted ? typingDelayOf(built[0].content ?? '') : 0,
-          delay: (i) => (i + 1 < built.length ? typingDelayOf(built[i + 1].content ?? '') : 0),
-        },
-      );
-      batchStarted = true;
-    };
-
-    /**
-     * 把一段回复文本解析成待投递消息（流中分段与 finalize 最后一段共用同一套管线，不重不漏）：
-     * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式）
-     * 时文字块再按「&&&」标记切分，false（多条模式）时一段就是一条消息 —— 分段器已按边界切好，
-     * 不再二次切分（N 条上限的最后一段可能含溢出合并的句子，切开会破上限）。
-     */
-    const buildReplyMsgs = (
-      rawText: string,
-      asSingle: boolean,
-      baseTime: number,
-    ): { msgs: WxMsg[]; cur: WxMsg[]; dirty: boolean } => {
-      // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
-      // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
-      const wantCall = hasVoiceCallMark(rawText);
-      if (wantCall) wantCallSeen = true;
-      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
-      const latest = loadMsgs(peer.id);
-      let cur = latest;
-      const out: WxMsg[] = [];
-      let t = baseTime;
-      for (const part of extractRichActionParts(text)) {
-        if (part.type === 'action') {
-          // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
-          // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
-          const bk = blockActionKindOf(part.action);
-          if (bk) {
-            const res = applyCharBlockAction('wx', peer.id, bk, part.action.targetId);
-            setBlk(res.entry);
-            if (res.changed && bk === 'block') {
-              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `你已被「${peer.name}」拉黑` } });
-              t += 1;
-            } else if (res.changed && bk === 'unblock') {
-              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」解除了对你的拉黑` } });
-              t += 1;
-            } else if (res.reqCreated && bk === 'request') {
-              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'blockreq', blkreq: { reason: res.entry.reqReason ?? '', status: 'pending' } });
-              t += 1;
-            }
-            continue;
-          }
-          // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
-          //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
-          if (isQuitWinbackAction(part.action)) {
-            applyQuitWinbackAction(peer.id, part.action);
-            continue;
-          }
-          // 群社交动作（[建群:群名:成员] 等）：建群 → 卡片消息随本回复落盘（权限/冷却/拒绝表在执行器硬校验）
-          if (isGroupSocialAction(part.action)) {
-            const card = applyGroupSocialAction(peer, 'wx', part.action.kind, part.action.targetId, part.action.arg);
-            if (card) {
-              out.push({ id: msgIdx === 0 ? aiId : `${aiId}-${msgIdx}`, role: 'peer', content: '', time: t, kind: 'groupcard', gcard: card });
-              msgIdx += 1;
-              t += 600 + Math.floor(Math.random() * 600);
-            }
-            continue;
-          }
-          const applied = wxApplyAiActions([part.action], cur, peer, t);
-          cur = applied.msgs;
-          out.push(...applied.notices, ...applied.extras);
-          continue;
-        }
-        const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, false)) : [part.text];
-        for (const seg of segs) {
-          for (const p of parseRichParts(seg, stickersOn ? stickers : [])) {
-            const id = msgIdx === 0 ? aiId : `${aiId}-${msgIdx}`;
-            if (p.type === 'rich') {
-              // 表情包开关关闭：AI 发的表情包卡片直接丢弃（红包/转账/亲属卡/位置卡片不受影响）
-              if (!stickersOn && p.rich.kind === 'sticker') continue;
-              out.push(richToWxMsg(p.rich, id, t, peer));
-            } else {
-              // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
-              // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-              const clean = cleanBubbleText(stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
-              if (!clean) continue;
-              out.push({ id, role: 'peer', content: clean, time: t });
-            }
-            msgIdx += 1;
-            t += 600 + Math.floor(Math.random() * 600);
-          }
-        }
-      }
-      return { msgs: out, cur, dirty: cur !== latest };
-    };
+    //（batchStarted/msgIdx/wantCallSeen 移入本轮投递上下文 ctx：投递管线与接力拉取投递共用，见组件层）
 
     /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻解析并排队上屏（边接收边逐条显示） */
     const deliverSegment = (seg: string) => {
-      const { msgs: built, cur, dirty } = buildReplyMsgs(seg, false, Date.now());
+      const { msgs: built, cur, dirty } = buildReplyMsgs(seg, false, Date.now(), ctx);
       if (dirty) saveMsgs(peer.id, cur);
       if (built.length === 0) return;
       deliveredAny = true;
-      enqueueBatch(built);
+      enqueueBatch(built, ctx);
     };
 
     const started = beginChatStream({
       sessionKey,
-      aiMsgId: aiId,
+      aiMsgId: ctx.aiId,
       messages: payloadMsgs,
       apiConfig,
       replyCount,
@@ -4466,14 +4553,14 @@ function ChatPage({
         if (error) {
           saveMsgs(peer.id, [
             ...loadMsgs(peer.id),
-            { id: aiId, role: 'peer', content: `〔${error}〕`, time: startedAt },
+            { id: ctx.aiId, role: 'peer', content: `〔${error}〕`, time: startedAt },
           ]);
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子）；
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
-        const { msgs: built, cur, dirty } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now());
+        const { msgs: built, cur, dirty } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now(), ctx);
         if (dirty) saveMsgs(peer.id, cur);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         const finalBatch: WxMsg[] =
@@ -4481,7 +4568,7 @@ function ChatPage({
             ? built
             : deliveredAny
               ? []
-              : [{ id: aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt }];
+              : [{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt }];
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -4490,7 +4577,7 @@ function ChatPage({
           finalBatch,
           deliverAiMsg,
           {
-            initialDelay: finalBatch.length > 0 ? (batchStarted ? typingDelayOf(finalBatch[0].content ?? '') : 0) : 0,
+            initialDelay: finalBatch.length > 0 ? (ctx.batchStarted ? typingDelayOf(finalBatch[0].content ?? '') : 0) : 0,
             delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
           },
         ).then(() => {
@@ -4510,31 +4597,8 @@ function ChatPage({
             );
         });
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
-        // （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
-        // 点弹窗非按钮区域才展开全屏来电页；QQ 侧同结构但不弹窗）
-        if (wantCallSeen) {
-          try {
-            const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
-            if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
-              window.localStorage.setItem(`wx-vc-last:${peer.id}`, String(Date.now()));
-              window.setTimeout(() => {
-                // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
-                // 双触发会产生叠层僵尸来电）——弹窗被忽略就整跳取消
-                if (useIncomingCall.getState().call) return;
-                triggerIncomingCall({
-                  source: 'wx',
-                  name: displayNameOf(peer) || peer.name,
-                  avatar: peer.avatar ?? null,
-                  contact: peer,
-                  bannerStage: 'big',
-                });
-                openVoiceCall('in', { hiddenView: true });
-              }, 1200);
-            }
-          } catch {
-            // localStorage 异常忽略
-          }
-        }
+        //（与接力拉取投递共用 triggerAiVoiceCall，见组件层）
+        if (ctx.wantCallSeen) triggerAiVoiceCall();
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -4546,6 +4610,26 @@ function ChatPage({
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 execRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
+
+  // 退出网页后继续回复（服务端接力）：挂载时注册会话显示名（pagehide beacon 携带，Web Push 标题用联系人名）
+  // 并拉取本会话待达消息（关页前没跑完的回复，服务端生成/暂存后在这里送达）；回前台/重新聚焦再拉一次。
+  // 拉取走 deliverBgRef → 与正常回复完全一致的投递管线（逐条落盘 + 灵动岛通知 + 语音频率判定）
+  useEffect(() => {
+    registerBgSession(sessionKey, { title: peer.name, app: 'wechat' });
+    const pull = () => {
+      void pullBgPending(sessionKey).then((items) => {
+        if (!mountedRef.current || items.length === 0) return;
+        deliverBgRef.current?.(items);
+      });
+    };
+    void pull(); // 挂载时立即拉（内部已防重入：会话有活跃流/投递时返回 []，等回前台再拉）
+    const offVisible = onBgPageVisible(pull);
+    return () => {
+      offVisible();
+      unregisterBgSession(sessionKey);
+    };
+  }, [sessionKey, peer.name]);
+
 
   /** 退还 AI 发来的红包/转账/亲属卡（红包弹窗「退还」、转账收款页「退还」、亲属卡领取页「退还」共用）：
    *  原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应 */
@@ -4682,40 +4766,52 @@ function ChatPage({
 
   const send = useCallback(() => {
     const text = input.trim();
-    if (!text) return;
-    // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
-    if (ttsSend) {
+    if (!text && pendingImgs.length === 0) return;
+    // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字。
+    // 开着转语音时文字优先走语音（待发图片留在预览条，再点一次「发送」走纯图路径）
+    if (ttsSend && text) {
       sendTextAsVoiceRef.current(text);
       return;
     }
-    const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
+    // 组合发送（输入框文字 + 待发图片一起发）：文字消息在前、图片在后全部上屏+落盘，只触发一轮 AI 回复
+    //（runAiTurn 的 base 按 id 去重，(userMsg, created) 两个都进上下文——文字、图片同一轮被 AI 读到）
+    const userMsg: WxMsg | null = text
+      ? { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined }
+      : null;
+    const created: WxMsg[] = pendingImgs.map((p) => ({ id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image' as const, img: { src: p.src } }));
+    const batch = [...(userMsg ? [userMsg] : []), ...created];
+    const clearComposer = () => {
+      setInput('');
+      setQuote(null);
+      setPendingImgs([]);
+    };
     // 对方正在回复（流式接收或连发投递未清空，投递可拖到流结束后数秒）：消息照常入列并排队，
     // 「流收尾且投递完毕」后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
     // 看起来像「发了消息没人理」，AI 下一轮自然接不上话）。投递中也排队：否则旧回复尾部
-    // 进不了新回合上下文，旧 AI 气泡还会倒挂在用户新消息下面
+    // 进不了新回合上下文，旧 AI 气泡还会倒挂在用户新消息下面。组合发送遇排队整批走同一口径
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-      setInput('');
-      setQuote(null);
-      setMsgs((prev) => [...prev, userMsg]);
+      clearComposer();
+      setMsgs((prev) => [...prev, ...batch]);
       wxQueueAdd(peer.id);
+      if (created.length > 0) onToast('消息已发出，对方回完这轮就聊');
       return;
     }
-    setInput('');
-    setQuote(null);
+    clearComposer();
     // 给自己发消息（「我」详情页「发消息」入口）：只记录，不触发 AI 回复
     if (peer.id === me.id) {
-      setMsgs((prev) => [...prev, userMsg]);
+      setMsgs((prev) => [...prev, ...batch]);
       return;
     }
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
     if (sentenceSend) {
-      setMsgs((prev) => [...prev, userMsg]);
+      setMsgs((prev) => [...prev, ...batch]);
       setPendingDispatch(true);
       markPendingBatch(sessionKey, true);
       return;
     }
-    runAiTurn(userMsg);
-  }, [input, me, peer, runAiTurn, sessionKey, sentenceSend, quote, ttsSend]);
+    setMsgs((prev) => [...prev, ...batch]);
+    runAiTurnRef.current?.(userMsg, created);
+  }, [input, me, peer, sessionKey, sentenceSend, quote, ttsSend, pendingImgs, onToast]);
 
   /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」）；
    *  连发投递未清空时同样不开新回合（与流式中的口径一致：等上一轮投递完毕再点一次） */
@@ -5305,8 +5401,8 @@ function ChatPage({
     onToast(`已收款 ¥${fmtMoney(m.tr.amount)}`);
   };
 
-  /** 原生相机/相册选到的图片（需求2）：只读图入输入框下方预览条，不上屏也不触发 AI；点预览条「发送」才真正发出。
-   *  压缩 dataURL，累计最多 9 张（相机拍摄单张也走这里） */
+  /** 原生相机/相册选到的图片（需求2）：只读图入输入框下方预览条，不上屏也不触发 AI；
+   *  点主发送按钮/输入框回车才真正发出（可与输入框文字一起发送，组合发送见 send）。压缩 dataURL，累计最多 9 张 */
   const stageImageFiles = async (files: FileList) => {
     const staged: PhotoStackItem[] = [];
     for (const f of Array.from(files).slice(0, Math.max(0, 9 - pendingImgs.length))) {
@@ -5319,24 +5415,6 @@ function ChatPage({
     }
     if (pendingImgs.length >= 9) onToast('一次最多发 9 张图片');
     if (staged.length > 0) setPendingImgs((prev) => [...prev, ...staged].slice(0, 9));
-  };
-
-  /** 预览条「发送」：把待发送图片逐张上屏并触发 AI 回合（保留原直发路径的发送段语义）。
-   *  发图照常触发 AI 回合：已配置识图模型时识图模型先看图、聊天模型再回复；未配置时
-   *  chat-stream-store 注入「我发了图片但你看不到内容」临时上下文，AI 同样自然回应（#26） */
-  const flushPendingImages = () => {
-    if (pendingImgs.length === 0) return;
-    const created: WxMsg[] = pendingImgs.map((p) => ({ id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image' as const, img: { src: p.src } }));
-    setPendingImgs([]);
-    for (const msg of created) setMsgs((prev) => [...prev, msg]);
-    if (peer.id === me.id) return;
-    // 对方正在回复（流式/投递中）：与文字消息同口径排队补跑——本轮「流收尾且投递完毕」后自动回复图片消息
-    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-      wxQueueAdd(peer.id);
-      onToast('消息已发出，对方回完这轮就聊');
-      return;
-    }
-    runAiTurnRef.current?.(null, created);
   };
 
   /** 发送位置卡片消息（内置地点 / 自定义位置；经纬度随消息落盘供 AI 感知“用户在哪”） */
@@ -6044,12 +6122,12 @@ function ChatPage({
               <>
                 <button
                   type="button"
-                  aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : pendingImgs.length > 0 ? `发送 ${pendingImgs.length} 张图片` : '发送（让对方回复）'}
+                  aria-label={ttsSend && input.trim() ? '发送（转语音）' : pendingImgs.length > 0 ? (input.trim() ? `发送文字和 ${pendingImgs.length} 张图片` : `发送 ${pendingImgs.length} 张图片`) : input.trim() ? '发送' : '发送（让对方回复）'}
                   data-testid="wx-chat-send"
                   disabled={streaming}
                   onClick={() => {
-                    if (input.trim()) void send();
-                    else if (pendingImgs.length > 0) flushPendingImages();
+                    // 有文字或待发图 → send()（内部处理组合/纯文字/纯图）；否则分句批次兜底
+                    if (input.trim() || pendingImgs.length) void send();
                     else dispatchBatch();
                   }}
                   className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
@@ -6087,7 +6165,7 @@ function ChatPage({
               </div>
             )}
           </div>
-          {/* 待发送图片预览条（需求2：选图后先显示在输入框下面，点「发送」才真正发出；面板展开时隐藏避免遮挡） */}
+          {/* 待发送图片预览条（需求2：选图后先显示在输入框下面，点主发送按钮才真正发出；面板展开时隐藏避免遮挡） */}
           {pendingImgs.length > 0 && !plusOpen && !stickerOpen && (
             <div className="mt-2 flex items-center gap-2 overflow-x-auto pb-0.5" data-testid="wx-img-preview-bar">
               {pendingImgs.map((p, k) => (
@@ -6100,10 +6178,6 @@ function ChatPage({
                   </button>
                 </div>
               ))}
-              <button type="button" data-testid="wx-img-preview-send" onClick={flushPendingImages}
-                className="h-[32px] shrink-0 rounded-[4px] bg-[#07C160] px-3.5 text-[13.5px] font-medium text-white active:bg-[#06AD56]">
-                发送{pendingImgs.length > 1 ? `(${pendingImgs.length})` : ''}
-              </button>
             </div>
           )}
         </div>
@@ -8075,6 +8149,16 @@ function MainScreen({
   useEffect(() => wxUnreads.subscribe(() => setMsgTick((t) => t + 1)), []);
   // 全局流式回复落盘 tick：聊天页外收到的 AI 回复写入存储后刷新会话预览/排序
   useChatStreamFinalized('wx:', () => setMsgTick((t) => t + 1));
+  // 退出网页后继续回复（服务端接力）：挂载时拉各会话「待达消息」条数点亮未读角标
+  //（同一批条目只在第一次查询时提示，正式拉取投递后自动解除；群聊会话不上报接力，天然无待达）
+  useEffect(() => {
+    void peekBgBadgeCounts().then((counts) => {
+      for (const [key, n] of Object.entries(counts)) {
+        if (!key.startsWith('wx:') || key.startsWith('wx:group:')) continue;
+        wxUnreads.bump(key.slice(3), n);
+      }
+    });
+  }, []);
   /** 长按菜单（QQ 同款竖向卡片：标为未读/置顶该聊天/不显示该聊天/删除该聊天；浅色白底黑字/深色深底白字） */
   const [ctx, setCtx] = useState<null | { contact: ContactRecord; x: number; y: number }>(null);
   const rootRef = useRef<HTMLDivElement>(null);

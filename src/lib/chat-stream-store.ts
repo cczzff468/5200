@@ -135,6 +135,8 @@ interface StreamRuntime {
 
 /** 全部流（含已结束未清理的：留给页面重进时同步，超量后按时间淘汰） */
 const streams = new Map<string, StreamRuntime>();
+/** 进行中流的实际请求 payload（workMessages + effConfig）：pagehide 时上报服务端接力生成用（bg-turn） */
+const activePayloads = new Map<string, { messages: ChatPayloadMessage[]; config: ApiConfig }>();
 const subs = new Set<() => void>();
 const finalizedSubs = new Set<(sessionKey: string) => void>();
 
@@ -303,7 +305,9 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
         workMessages = [...messages, { role: 'user' as const, content: note }];
       }
     }
-    // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）
+    // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）；
+    // 记录实际 payload：用户在流结束前关闭网页时，pagehide 上报服务端接力生成（bg-turn）
+    activePayloads.set(rt.state.sessionKey, { messages: workMessages, config: effConfig });
     await streamOnce(workMessages);
     patchState(rt, { status: 'done' });
   } catch (err) {
@@ -321,6 +325,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     }
   }
   // ---- 收尾（status 补丁与 finalize 在同一微任务里，订阅方重渲染时落盘已完成）----
+  activePayloads.delete(rt.state.sessionKey);
   if (!rt.finalized) {
     rt.finalized = true;
     try {
@@ -377,6 +382,24 @@ export function getChatStream(sessionKey: string): ChatStreamState | null {
 /** 某会话是否正在流式接收中（发送按钮防重入；同步读取，无 stale closure 问题） */
 export function isChatStreaming(sessionKey: string): boolean {
   return streams.get(sessionKey)?.state.status === 'streaming';
+}
+
+/** 进行中流的实际请求 payload（pagehide 接力上报用，bg-turn 调用） */
+export interface ActiveStreamPayload {
+  sessionKey: string;
+  messages: ChatPayloadMessage[];
+  config: ApiConfig;
+}
+
+/** 全部进行中流的 payload 快照（仅 status==='streaming'；已结束的不返回） */
+export function getActiveStreamPayloads(): ActiveStreamPayload[] {
+  const out: ActiveStreamPayload[] = [];
+  streams.forEach((rt, key) => {
+    if (rt.state.status !== 'streaming') return;
+    const p = activePayloads.get(key);
+    if (p) out.push({ sessionKey: key, messages: p.messages, config: p.config });
+  });
+  return out;
 }
 
 /** 清除某会话已结束的流状态（页面完成落盘同步后调用；进行中的流不可清除） */

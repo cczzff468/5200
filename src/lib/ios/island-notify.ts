@@ -11,12 +11,14 @@
  *    收起动画结束后灵动岛恢复——全程无闪烁。
  * 3. 全局覆盖：层级 z-93 高于锁屏(65)/切换器(60)/闹钟(90)/状态栏(70)/灵动岛(80)，
  *    仅低于熄屏黑遮罩(95)；不阻塞操作（卡片外全部可正常交互，仅卡片本身可点击）。
- * 4. 节流合并（不刷屏）：
- *    - 同一会话（sessionKey）短时间内多条消息 → 合并为一条通知（正文取最新一条，计数 +1，计时重置）；
+ * 4. 每条消息独立弹窗（需求：每发一条信息都要有通知弹窗，不是每次回复一条）：
+ *    - 同一会话短时间内多条消息 → 每条消息各弹一次（不再合并计数，后到替换展示中的前一条）；
  *    - 不同会话 → 排队逐条展示（每条 3 秒），队列上限 4 条，超出丢最旧；
  *    - 自动收起计时在页面不可见（切走标签页）或熄屏时冻结，回来自动续期。
  * 5. 离开网页也通知：页面不可见且浏览器支持 Web Notification 且已授权 → 发系统通知
- *    （tag = 会话键，同会话多条系统级替换合并）；权限 default 时首次自动申请一次，
+ *    （tag 每条唯一，每条消息一个独立系统通知，不互相替换）；权限 default 时首次自动申请一次；
+ *    权限 granted 后尽力注册 Service Worker + Web Push 订阅（/api/push）——
+ *    页面已关闭时由服务端接力生成的回复也能逐条推送系统通知（不支持的环境静默降级）；
  *    拒绝/不支持/申请失败都不影响应用内灵动岛弹窗。
  * 6. 点击跳转：卡片点击 → switchToApp 到目标 App + 经导航总线（ISLAND_NAV_EVENT +
  *    takeNotifyNavigation）让对应聊天页打开该会话（单聊 / 群聊）；锁屏/熄屏/闹钟响铃时点击只收起不跳转。
@@ -24,6 +26,7 @@
 
 import { create } from 'zustand';
 import { useUI } from './store';
+import { setupPushSubscription } from './push-client';
 
 // ---------------- 类型 ----------------
 
@@ -179,41 +182,37 @@ export function truncateBody(s: string, max = BODY_MAX): string {
 }
 
 /**
- * 推送一条 AI 消息通知：
- * - 与正在展示的通知同会话 → 原地合并（正文取最新、计数 +1、计时重置）；
- * - 与队列中待展示的同会话 → 原地合并；
- * - 否则立即展示（无正在展示的）或入队排队。
- * 页面不可见时同时走 Web Notification 通道（支持且已授权时）。
+ * 推送一条 AI 消息通知（每条消息独立弹窗，不合并计数）：
+ * - 有正在展示的通知 → 直接替换为本次内容（旧条立即让位，视觉上每条消息都弹了一次）；
+ * - 无正在展示的 → 立即展示；否则入队排队（不同会话轮流展示）。
+ * 页面不可见时同时走 Web Notification 通道（支持且已授权时，每条一个独立系统通知）。
  */
 export function pushChatNotification(input: ChatNotifyInput): void {
   const body = truncateBody(input.body);
   if (!body) return;
   const st = useIslandNotify.getState();
-  const base = {
+  const n: IslandNotification = {
+    id: genNotifyId(),
     mergeKey: input.sessionKey,
     app: input.app,
     avatar: input.avatar ?? null,
     title: input.title,
     subtitle: input.subtitle ?? '',
     body,
+    count: 1,
     target: input.target,
   };
-  if (st.current && !st.exiting && st.current.mergeKey === base.mergeKey) {
-    st.mergeCurrent({ ...base, count: st.current.count + 1 });
-    armAutoDismiss();
-    return;
-  }
-  const qi = st.queue.findIndex((q) => q.mergeKey === base.mergeKey);
-  if (qi >= 0) {
-    st.mergeQueued(base.mergeKey, { ...base, count: st.queue[qi].count + 1 });
-    return;
-  }
-  const n: IslandNotification = { id: genNotifyId(), count: 1, ...base };
   if (!st.current && !st.exiting) {
     st.show(n);
     armAutoDismiss();
   } else {
-    st.enqueue(n);
+    // 展示中/收起动画中：直接顶替当前（当前条未展示完也算弹过了）→ 每条消息都有一次弹出
+    if (st.current) {
+      st.show(n);
+      if (!st.exiting) armAutoDismiss();
+    } else {
+      st.enqueue(n);
+    }
   }
   maybeWebNotification(n);
 }
@@ -233,7 +232,7 @@ function postWebNotification(n: IslandNotification): void {
   try {
     const notif = new Notification(n.title, {
       body: n.subtitle ? `【${n.subtitle}】${n.body}` : n.body,
-      tag: n.mergeKey, // 同一会话短时间多条 → 系统级替换合并，不刷屏
+      tag: n.id, // 每条消息一个独立系统通知（不再按会话替换合并）
       icon: n.avatar || NOTIFY_APP_ICON[n.app],
       silent: true,
     });
@@ -252,16 +251,28 @@ function maybeWebNotification(n: IslandNotification): void {
   try {
     const perm = Notification.permission;
     if (perm === 'granted') {
+      ensurePushSubscription();
       // 页面可见时灵动岛弹窗足够，不重复打扰；只有用户切走/锁屏才发系统通知
       if (document.visibilityState === 'hidden') postWebNotification(n);
     } else if (perm === 'default' && !webPermAsked) {
-      // 首次使用时申请一次；拒绝后不再申请，应用内弹窗不受影响
+      // 首次使用时申请一次；拒绝后不再申请，应用内弹窗不受影响；
+      // 授权成功后尽力注册 Service Worker + Web Push（页面关闭后服务端接力回复也能逐条推送）
       webPermAsked = true;
-      void Notification.requestPermission();
+      void Notification.requestPermission().then((p) => {
+        if (p === 'granted') ensurePushSubscription();
+      });
     }
   } catch {
     // 权限查询异常（旧浏览器）静默降级
   }
+}
+
+/** Web Push 订阅（权限 granted 后尽力一次；不支持/iframe 环境静默失败） */
+let pushSetupDone = false;
+function ensurePushSubscription(): void {
+  if (pushSetupDone) return;
+  pushSetupDone = true;
+  void setupPushSubscription();
 }
 
 // ---------------- 点击导航总线 ----------------

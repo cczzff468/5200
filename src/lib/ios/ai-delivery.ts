@@ -139,6 +139,16 @@ export function isAiDelivering(sessionKey: string): boolean {
   return running.has(sessionKey) || (queues.get(sessionKey)?.length ?? 0) > 0;
 }
 
+/** 全部正在投递（含排队）的会话键快照：pagehide 时逐会话上报未落盘尾部（bg-turn 接力用） */
+export function getDeliveringSessionKeys(): string[] {
+  const out: string[] = [];
+  running.forEach((key) => out.push(key));
+  queues.forEach((_q, key) => {
+    if (!out.includes(key)) out.push(key);
+  });
+  return out;
+}
+
 /**
  * 偷看某会话「已调度但还没落盘投递」的消息（按投递顺序）：
  * - 运行中批：返回未投递尾部（deliveredIndex 之后的部分）；
