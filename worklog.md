@@ -8086,3 +8086,195 @@ Stage Summary:
 - P1：锁屏/电话 App 在前台时接听 AI 电话无效且留下幽灵 pending；电话 App 通话被切 App/锁屏静默杀死且零记录；AI 主动挂断的挂断续聊被说成「对方先挂」；QQ 来电「消息回复」按钮是空函数；turn greeting 对 AI 主叫来电视角颠倒
 - 规则面：0 秒通话 followup 场景矛盾、[语音通话] 标记括号宽容度不一致、通话场景规则「很熟的朋友」硬编码；条数语义干净无残留
 - 未改任何代码，全部为只读审计结论
+---
+Task ID: 23-c
+Agent: 群聊接线修复代理
+Task: wx-group/qq-group 接线 #13 groupTurn / #14 groupMode / #12 memberNames
+
+Work Log:
+- 只改 wx-group.tsx / qq-group.tsx 两个文件（lib 层 groupTurn/groupMode/memberNames 已就绪，本次纯接线）：
+- #13 persona 群聊失真：wx-group.tsx:2835 / qq-group.tsx:2503 的 buildPersonaSystemPrompt ctx 加
+  groupTurn: true（各带注释）——成员回合禁止事项改用群聊语义（先看最后一条是谁说的，不再把其他成员
+  的话当成机主说的）
+- #14 连发指令逐成员注入：wx-group.tsx:2876 / qq-group.tsx:2544 的 buildReplyCountPrompt(replyCount)
+  加第二参 { groupMode: true }——群聊节奏语义（上限收敛 min(n,5)、不再注入「尽量往多了发/绝不能只发1条」）
+- #12 群记忆成员名：wx-group.tsx:3147-3166 / qq-group.tsx:2814-2833 的 memAfterAiTurn opts.group 加
+  memberNames——按 members 同源数组 [me.id, ...groupRef.current.memberIds] 逐 id 映射：id===me.id||'me'
+  → meName（runCharTurn 内已有的 addressNameOf(me, addressMode) 显示名，兜底 me.name||'我'）；其他成员
+  → contactsRef.current 里 find(c.id===id) 后取 memberNameOf(rec)（displayNameOf：备注/昵称/名字，两组件
+  既有成员名函数，模块级 250/231 行）；查无联系人映射 '' 再 filter(Boolean)，外层 [...new Set()] 去重保序。
+  机主可能同时出现在 memberIds 旧数据里也不产生重名
+- 红包代码未动（#金额修复在别处已完成）
+
+Stage Summary:
+- 群聊三处规则接线补齐：persona 群回合语义（#13）✓、连发指令群聊节奏（#14）✓、群记忆提取按实际发言人
+  归因（#12）✓，wx/qq 双端共 6 处改动
+- 成员名取值来源：机主=runCharTurn 内 meName（addressNameOf 显示名，与聊天历史「凡凡：」前缀同口径，
+  兜底 me.name/'我'）；AI 成员=contactsRef.current 按 id 查表后 memberNameOf（备注>昵称>名字），与消息
+  senderName 落盘口径一致；去空+去重，extract/summarize 的 participants 名单真实可信
+- 验证：bunx tsc --noEmit 零错误（exit 0）；bun run lint 通过（exit 0，无新增告警）；未动 dev server/git
+- 修改文件：src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx
+
+---
+Task ID: 23-a
+Agent: 单聊竞态/文案过滤/标记修复代理
+Task: wechat.tsx + qq.tsx 修复 #7 投递竞态 / #15 兜底文案统一 / #18 语音通话标记全半角
+
+Work Log:
+- 先读 worklog（Task 22-b 审计结论 + Task 21 三态语义）与 src/lib/ios/ai-delivery.ts（isAiDelivering/
+  scheduleAiDelivery/subscribeAiDeliveryActive 的语义：running+queue 判定、批完 emitActive）、
+  src/lib/chat-stream-store.ts（finalize 回调先于 emitFinalized 广播——finalize 内 scheduleAiDelivery
+  同步入队后才广播，因此广播到达时 isAiDelivering 已为 true，等投递完成事件再补跑即可）；
+  通读两端 ChatPage 的 send/runAiTurn/排队补跑 effect/历史组装过滤
+- #7 竞态（两端同构，微信 3895-3926/3977-3780/4651-4668/4673-4680/4699-4706/4736-4740，QQ 2557-2588/2438-2441/3251-3257/3275-3282/3300-3307/3336-3340）：
+  ① send() 防重入条件 isChatStreaming → isChatStreaming || isAiDelivering（投递未清空走既有排队路径
+  wxQueuedTurns/qqQueuedTurns.add）；② 同口径纳入 commitVoiceMsg 的 kickTurn（语音发送）、
+  sttPreview.onSendText（划到转文字后发文字）、dispatchBatch（分句批次触发，与流式中一致仅拦截不排队）；
+  ③ 转发感知进聊触发（drainAiEvents 后的 runAiTurn）同步加 !isAiDelivering 门控（错过事件与流式中占用口径一致丢弃）；
+  ④ 排队补跑 effect（kick）：补跑条件加 isAiDelivering 拦截，触发面从「subscribeChatStreamFinalized + 挂载」
+  扩到「+ subscribeAiDeliveryActive（投递状态变化即尝试 kick，kick 自带 queued 门控，其他会话事件空跑即返回）」——
+  投递队列清空（running.delete→emitActive）时自动补跑排队 turn；流式中的排队语义原样保留
+- #15 兜底文案（QQ 3083/3100 改格式，2474-2476/2500 补过滤；微信 4423 已是〔…〕无需动、4438 补漏）：
+  ① QQ finalize 错误兜底 （消息发送失败：…）→〔消息发送失败：…〕、空回复兜底 （对方暂时没有回复，请稍后再试）→
+  〔对方暂时没有回复，请稍后再试〕——历史组装过滤（qq 2646/2720 本就排除〔开头）从此自然生效，401/429 等接口
+  报错不再进 AI 上下文；② 微信空回复兜底同样由（对方暂时…改为〔对方暂时…（此前不在 4044/4055 历史过滤表内，
+  同样会漏进上下文）；③ QQ 翻译过滤 isErrText/renderTranslations 补 startsWith('〔')（保留旧格式判定兼容已落盘
+  历史消息）；④ 微信 3811/3835 isErrText 原本就含〔开头，未动
+- #18 语音通话标记（微信 208/4305-4309，QQ 143/2965-2969）：
+  ① import { hasVoiceCallMark, stripVoiceCallMark } 合并进两端既有的 '@/lib/ios/chat-call' 导入行；
+  ② buildReplyMsgs 的 wantCall 检测 rawText.includes('[语音通话]') → hasVoiceCallMark(rawText)（流中 onSegment
+  分段与 finalize 最后一段共用该函数，wantCallSeen 流中检测自动覆盖全半角变体）；③ 剥除
+  rawText.replace(/\[语音通话\]/g,' ').trim() → stripVoiceCallMark(rawText)；④ 纯展示占位（微信 738/QQ 394
+  通话卡片预览文本）与规则提示词示例（微信 4196/QQ 2859）确认未动
+- 验证：bunx tsc --noEmit 零错误；bun run lint 零输出通过；grep 复核两端各 4 处「|| isAiDelivering」、
+  1 处补跑拦截 + 1 处投递事件订阅、兜底文案 4 处全部 〔 开头；未启动 dev server、未 git 操作
+
+Stage Summary:
+- #7 修法：把「AI 连发投递未清空」纳入两端 send/语音/转文字/分句批次/转发感知的防重入口径——投递中用户消息
+  照常入列并进 wxQueuedTurns/qqQueuedTurns 排队；补跑触发面从「流结束广播」扩大到「投递完成事件」
+  （ai-delivery pump 清空会话队列时 emitActive → kick 补跑），流收尾且投递完毕才开新回合——旧回复尾部
+  完整落盘后才组装新上下文，消除「AI 新回复自相矛盾 + 旧气泡倒挂在新消息下面」；排队 turn 内存态刷新即丢
+  为已知既有限制（按指示未扩大范围修持久化）
+- #15 修法：QQ 错误兜底文案与微信统一为〔…〕全角方括号包裹，两端历史组装的〔开头过滤自然生效，
+  接口报错详情不再泄进 AI 上下文；展示侧（翻译过滤）保留旧格式兼容
+- #18 修法：语音通话触发标记检测/剥除改用 chat-call.ts 共用工具，[语音通话]【语音通话】〔语音通话〕
+  （语音通话）(语音通话) 全半角变体都能来电且不漏进气泡
+- tsc --noEmit 零错误、lint 通过；仅改 src/components/apps/wechat.tsx 与 src/components/apps/qq.tsx 两个文件
+
+---
+Task ID: 23-d
+Agent: 通话体系修复代理
+Task: phone.tsx/IncomingCallLayer/GlobalCallLayer 修 #4 ai-hangup / #5 direction / #3 卸载收尾 / #6 接听交接 / #9 QQ消息回复 / #10 短信回复跳转
+
+Work Log:
+- 先读 worklog（Task 20 来电弹窗体系 / Task 21 三态语义 / Task 22-a 通话审计清单）与关联 lib：
+  incoming-call.ts（pending 桥=setPendingPhoneAnswer/takePendingPhoneAnswer 模块级单变量）、
+  store.ts（useUI.switchToApp 仅 locked 拦截；openApp 才有前台占用拦截）、island-notify.ts（导航总线）、
+  global-call.ts、call-followup.ts、call-outcome.ts、/api/phone/turn（direction 已支持）与
+  /api/phone/followup（endReason 五语义已支持，direction 解析后未参与场景注入）
+- #4（phone.tsx）：hangup 签名加可选 endReason（972，缺省 'hangup'）→ followup 请求传真实值
+  （1038-1040，direction 同步改 isIncoming?'in':'out'）；AI 主动挂断两处触发点传 'ai-hangup'：
+  speak resume 播完告别自动结束（628）、finishByAiHangup〔挂断〕标记分支（1139-1141）；
+  hangupRef 类型改 (endReason?)=>void（596-599）；空号自动挂断（1244/1249/1252）与卸载守卫
+  （1206/1330）不传（缺省 'hangup'，未接通场景 followup 本就不触发）；红色挂断钮改
+  onClick={() => hangup()}（1894）防事件对象误入参；grep 全库复核 endReason 无其他写死点
+  （chat-call.ts 引擎与 chat.tsx recordMissedPhoneCall 本就传真实值）
+- #5（phone.tsx）：runTurn 的 /api/phone/turn body 加 direction: isIncoming ? 'in' : 'out'
+  （822-827，isIncoming=target.direction==='in'，AI 来电接听交接进来的 CallTarget 带 direction:'in'；
+  缺省 'out'=用户主动拨打），runTurn 依赖数组补 isIncoming（966）
+- #3（phone.tsx）：CallScreen 两条 mount effect 清理路径（AI 来电分支 1203-1211 / 拨号主分支
+  1327-1335）顶部加卸载守卫——卸载时若 !endedRef.current（通话仍 dialing/connected）先调
+  hangupRef.current()（与用户点挂断完全同一函数：通话卡片+followup+记忆总结+对话存档，
+  endReason='hangup'，connected/duration 读 phaseRef/secondsRef/bubblesRef 当时真实值），
+  再置 endedRef.current=true；幂等性=endedRef 双重判断（守卫判断+hangup 首行判断），正常挂断/
+  AI 挂断/对端拒接（endedRef 已 true）不重复收尾；挂断后 1.1s 内切 App 的窗口期也不会重复
+- #6（incoming-call.ts +137-153 新增三个导出：PENDING_PHONE_ANSWER_EVENT 常量、
+  hasPendingPhoneAnswer() 只读查询、notifyPendingPhoneAnswer() 派发消费事件）：
+  ①phone.tsx 把 mount-only 消费改 consumePendingAnswer（3523-3528，取走即清幂等；已有通话时
+  丢弃新 pending 防替换，与 startCall 口径一致）+ 挂载消费 + 监听 PENDING_PHONE_ANSWER_EVENT
+  （3529-3533）；②IncomingCallLayer 新增 answerPhoneCall（72-77，弹窗绿钮 163 与全屏来电界面
+  接听钮 312 共用）：answer() 走原快照回调（写 pending+switchToApp）后，非锁屏立即派发消费
+  事件（电话 App 已在前台时 switchToApp 无事发生，事件让已挂载的电话 App 当场进通话界面）；
+  ③锁屏兜底：IncomingCallLayer 加 useUI.subscribe 解锁监听（121-134），仅在「锁屏/熄屏→解锁」
+  跳变时若 pending 仍在则 switchToApp('phone')+派发消费事件——pending 保留到解锁绝不残留；
+  ④拒绝/25s 超时路径 pending 本就不写入（只在 onAnswer 写），无幽灵来源
+- #9（GlobalCallLayer.tsx 107-115）：QQ「消息回复」onMessageReply 从 () => undefined 改为真实现
+  （通话页 onClick 已先 call.reject() 拒接+落「已拒绝」卡片）：session.contact?.id 存在 →
+  navigateToChatSession('qq', contactId) 切 QQ 并打开该联系人会话；无联系人兜底 switchToApp('qq')
+- #10（IncomingCallLayer.tsx 314-323）：全屏来电页「短信回复」replyBySms 重写——先 decline()
+  收尾（清层/停铃/onMissed 落未接记录+AI 留言）再 navigateToChatSession('chat', contact.id)；
+  旧实现 openApp('chat') 在已有前台 App 时被静默拦截且从不打开会话
+- 配套（island-notify.ts 306-314 新增 navigateToChatSession(app, contactId) 导出，复用既有私有
+  navigateToNotifyTarget 的 pendingNav+switchToApp+ISLAND_NAV_EVENT 协议）：#9/#10 共用——
+  目标 App 未打开时挂载后消费 pending、已打开时事件驱动立即进会话；QQ/信息打开指定会话的
+  唯一既有入口就是该导航总线（qq.tsx:11179-11193 / chat.tsx:2924-2937 的 takeNotifyNavigation
+  消费），写入端此前未导出，故加此 6 行出口（不引入任何新全局状态）
+- 验证：bunx tsc --noEmit 零错误（exit 0）；bun run lint 通过（exit 0）；grep 复核
+  direction/endReason/挂断调用点如上；未启动 dev server、未 git 操作
+
+Stage Summary:
+- #4：AI 主动挂断（告别播完/〔挂断〕标记）的挂断续聊 endReason='ai-hangup'——followup 按
+  「你自己觉得聊得差不多主动挂断」注入，AI 不再说「对方先挂/怎么挂这么快」；用户手动挂断仍
+  'hangup'（保留 Task 21 允许的小抱怨语义）
+- #5：电话 App 通话轮次带 direction——AI 来电（信息 App 触发、pending 桥接）='in'（AI 主叫视角
+  问候「你拨出的电话对方已接听」），用户拨打='out'（缺省不变）；挂断续聊 direction 同步传真实方向
+- #3：通话中切 App/锁屏 → CallScreen 卸载守卫自动按「用户挂断」优雅收尾（有通话卡片/对话存档/
+  AI 续聊留言/记忆总结），不再静默消失；ref 读最新态不踩过期闭包，endedRef 保证与正常挂断互斥幂等
+- #6：接听交接三态闭环——前台接听=事件驱动当场进通话（mount-only 消费补齐）；锁屏接听=pending
+  保留+解锁监听自动消费；拒绝/超时从不写 pending；消费幂等（取走即清）杜绝双消费
+- #9：QQ 来电「消息回复」= 拒接落卡片 + 切 QQ 并直达该联系人聊天会话（导航总线协议）
+- #10：全屏来电页「短信回复」= 先拒接收尾（不残留响铃）再切信息 App 直达该联系人会话
+- 修改文件：src/components/apps/phone.tsx、src/components/ios/IncomingCallLayer.tsx、
+  src/components/ios/GlobalCallLayer.tsx + 配套 src/lib/ios/incoming-call.ts（事件桥接，任务指示允许）、
+  src/lib/ios/island-notify.ts（6 行导航出口，#9/#10 复用既有协议的必要前提）
+---
+Task ID: 23-b
+Agent: 信息App修复代理
+Task: chat.tsx 修复 #8 流式期间发送丢弃 / #18 语音通话标记全半角
+
+Work Log:
+- 通读 worklog 背景（Task 22-b 审计结论：信息 App 流式期间发消息/语音被静默丢弃，wx/qq 有 wxQueuedTurns/qqQueuedTurns 排队补跑而 chat.tsx 没有）+ chat-stream-store.ts / ai-delivery.ts 机制核实：beginChatStream 同会话防重入且同步置位 streaming；finalize 在 runStream 内同步 scheduleAiDelivery（空批也占位）→ isAiDelivering 立即为真；投递完毕 pump 才 delete running + emitActive
+- #18：chat.tsx:46 合并新增 import { hasVoiceCallMark, stripVoiceCallMark } from '@/lib/ios/chat-call'（本文件原本无 chat-call 导入行，故新增一行）；1059-1062 buildReplyMsgs 检测改 hasVoiceCallMark(rawText)、剥除改 stripVoiceCallMark(rawText)（替换残缺正则 /\[[【]?语音通话[\]】]?/g）——流式 onSegment 分段与 finalize 最终段落共用 buildReplyMsgs、wantCallSeen 标志由 wantCall 驱动，一处改动全链路生效；960 行规则提示词示例与注释按约定不动
+- #8 排队机制（chat.tsx:1215-1254，对齐 wxQueuedTurns 语义）：新增 queuedTurnsRef（useRef<QueuedTurn[]>，kick=消息已入列只需补一轮回复 / dispatch=分句批次统一触发；组件按会话 key 重挂载天然隔离）+ enqueueQueuedTurn（dispatch 幂等去重）+ tryFlushQueuedTurns（守卫 !isChatStreaming && !isAiDelivering 才 shift 放行，放行即同步开新流 → 重复触发被模块级状态挡住，串行由此保证）；触发点两个 effect：①streaming 变 false（流结束成功/失败；失败路径无投递批次只有这里能放行）②delivering 变 false（本轮消息全部投递完，正常路径的实际放行点）——声明在 startAiTurnRef 同步 effect 之后，放行时闭包必含最后一次投递 tick 合并的落盘消息
+- #8 四个发送入口全部改排队（不再静默丢弃）：send() 1331-1361（流式/投递中：消息照常上屏入列 + 入队 kick，对齐微信「消息发出去了，AI 稍后回复」；投递中也排队，避免旧回复尾部进不了新回合上下文、旧气泡倒挂）；dispatchBatch() 1366-1375（流式/投递中入队 dispatch，执行时清 pendingDispatch/pendingBatch 标记再补跑）；commitVoiceMsg 的 kickTurn 1419-1427（语音照常入列，流式/投递中转写完成后入队 kick）+ deps 补 enqueueQueuedTurn；sttPreview.onSendText 1450-1465（划转文字发送由「toast 提示后丢弃」改为照常上屏+排队）
+- UI 配套：发送按钮去掉 disabled={streaming}（2077-2081，流式期间可点发送=排队），canDispatch 去掉 !streaming（1378，流式期间分句批次也能触发补跑）；排队无复杂 UI——用户气泡即时上屏、「正在输入」指示持续，回复延后自动到
+- 竞态核查：flush 放行与旧流收尾微任务（merge+clearChatStream）同帧时，clearChatStream 对进行中新流是 no-op（store 内置 streaming 守卫）不会误清新流；错误路径无投递，仅靠触发点①放行；语音转写慢于流收尾时 kickTurn 在转写完成后才判断（未流式则走原直发路径），队列项均为「转写已就绪」状态
+- 已知限制（与 wx/qq 口径一致）：排队队列存组件 ref，聊天页卸载（退出会话）后未消费的补跑回合即弃（气泡已落盘不丢，重进后可手动再触发）；未做跨卸载持久化
+- 验证：bunx tsc --noEmit 零错误；bun run lint 零错误；未启动 dev server、无 git 操作
+
+Stage Summary:
+- #18 修复：[语音通话] 触发标记识别/剥除改用 chat-call.ts 的 hasVoiceCallMark/stripVoiceCallMark，全半角方括号/圆括号六种变体（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话) 等）都能来电且标记不漏进气泡；流中分段与最终段落、wantCallSeen 共用同一管线一处覆盖
+- #8 修复：信息 App 补齐微信同款排队补跑——流式接收或连发投递期间发出的文字/语音/划转文字/分句批次不再被静默丢弃：气泡即时上屏入列，当前回复「流收尾+投递完毕」后按入队顺序串行自动补跑（上一条补跑的回复完整走完才放行下一条），失败路径也能继续消费队列；语音链路与文字链路在 kickTurn 汇合点统一入队
+- 修改文件：仅 src/components/apps/chat.tsx（3220→3281 行）；tsc + lint 双绿
+---
+Task ID: 23
+Agent: Z.ai Code (main) + 4 并行子代理
+Task: 用户全选修复功能审计清单 18 项（2 个 P0 bug + 7 个功能 bug + 6 个规则问题 + 3 个交互缺陷）
+
+Work Log:
+- 主线程先修 lib/api 层（保证子代理接线时不踩半成品）：
+  - #1 [P0] chat-call.ts:1215 来电 25s 超时条件写反（if (endedRef.current)→if (!endedRef.current)）——修复后未接来电正常落「未接听」+ 触发续聊留言（E2E 实测通过）
+  - #2 [P0] 群普通红包×多份领取金额错误：wx-group/qq-group 共 4 处 `amt` 由 remaining（剩余总额）改为非 lucky 模式取 rp.amount（单份）——修复后 10 元×3 份第一人领 10 元而非 30 元（E2E 实测：陈默领取 ¥10.00 ✓）
+  - #11 chat-rich.ts：新增 AI_AMOUNT_CAP 红包≤200/转账≤2000/亲属卡≤1000 解析层硬上限（capAmount 静默收敛）+ 单聊版 buildRichRules 补【发钱纪律】（对齐群聊版）
+  - #12 memory.ts memAfterAiTurn 提取请求带 participants（新 MemTurnOpts.group.memberNames）；maybeAutoSummarize/maybeAutoLongSummarize/summarizePendingIntoCore/summarizeCoresIntoLong 全链路透传；extract 路由 buildSystem 按有无 participants 切换「群聊按实际发言人归因」vs「私聊二人视角」；summarize 路由同构 + 私聊场景补「原文第三人名保留原样」兜底规则
+  - #13 persona.ts PersonaPromptCtx 新增 groupTurn：群成员回合不再注入「最后一条就是用户刚发给你的话」，改为群聊语义（看清最后一条是谁说的，别把其他成员的话当成用户说的）
+  - #14 reply-count.ts buildReplyCountPrompt(n, {groupMode})：群聊上限收敛 min(n,5)、不再注入「尽量往多了发/绝不能只发1条」，改为群聊节奏语义
+  - #16 tts-client.ts：第三方 API 分支（speakUserTts ②）对 builtin: 声线 id 替换为 SAFE_VOICE_BY_PROVIDER[cfg.provider]——修复全局默认设为内置声线时切 MiniMax/OpenAI 全部静默降级文字
+  - #17 chat-call.ts CHAT_CALL_EXTRA_RULES 常量 → chatCallExtraRules(peer) 函数（按 relation/relationToUser 动态生成语气疏密规则，删除硬编码「很熟的朋友」）；phone.tsx 调用点同步
+  - #18 chat-call.ts 新导出 hasVoiceCallMark/stripVoiceCallMark/VOICE_CALL_MARK_RE（兼容 [语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）
+  - #5 api/phone/turn 支持 direction: 'in'|'out'：buildCallSystemPrompt 问候语按方向区分主被动（AI 主叫=「你拨出的电话对方已接听」），触发 user 消息同步分支
+- 子代理并行修复（文件互不重叠，各自 tsc+lint 双绿后追加 worklog）：
+  - 23-a（wechat.tsx+qq.tsx）：#7 send()/语音/划转文字/分句批次 4 处防重入扩为 isChatStreaming||isAiDelivering + subscribeAiDeliveryActive 投递完成补跑（微信 4651~4736/QQ 3251~3336）；#15 QQ 兜底文案改〔…〕格式+翻译过滤补〔开头（修复 API 报错详情泄漏进 AI 上下文）；#18 两端标记检测/剥除换共用函数
+  - 23-b（chat.tsx）：#8 流式期间发送/语音不再丢弃——queuedTurnsRef 排队 + 流结束/投递完成双触发 flush，四个发送入口全覆盖（发送按钮去 disabled）；#18 标记全半角
+  - 23-c（wx-group+qq-group）：#13 buildPersonaSystemPrompt ctx 加 groupTurn:true；#14 buildReplyCountPrompt 加 {groupMode:true}；#12 memAfterAiTurn opts.group.memberNames 按成员 id 映射显示名（机主 meName、AI 成员 contactsRef+memberNameOf，与 senderName 同口径）
+  - 23-d（phone.tsx+IncomingCallLayer+GlobalCallLayer+incoming-call.ts+island-notify.ts）：#4 AI 主动挂断 followup 传 'ai-hangup'（两处触发点）；#5 phone turn body 加 direction:isIncoming?'in':'out'；#3 CallScreen 卸载守卫（切 App/锁屏时未结束通话走与手动挂断同一收尾：卡片+存档+followup+记忆总结，幂等）；#6 pending 接听协议补事件驱动消费（PENDING_PHONE_ANSWER_EVENT）+ 锁屏解锁跳变监听消费 + takePending 取走即清（消灭幽灵来电）；#9 QQ 来电「消息回复」= 拒接 + navigateToChatSession('qq',contactId) 直达会话；#10 全屏来电「短信回复」= decline() 收尾 + navigateToChatSession('chat',contactId)（换掉前台会被静默吞掉的 openApp）
+- E2E（agent-browser 实机，IndexedDB 种子 陈默+林小雨+E2E红包群）：
+  ① 群普通红包 10元×3份：林小雨发的红包我点开领 → 详情页「陈默 ¥10.00」「3个红包共30.00元，已领取1/3」——单份金额正确（修复前领走全部 30 元）✓
+  ② 信息 mock /api/chat 回「在忙吗？【语音通话】」：气泡只显示「在忙吗？」（全角标记剥除）且成功触发 AI 来电弹窗（#18）✓；不接不拒等 26s → 响铃自动结束、聊天落「未接听」卡片、followup 200、AI 留言「喂，怎么不接我电话呀？是不是在忙呀？」（#1+#4 续聊语义）✓
+  ③ console 无错误、dev.log 无异常
+- 集成验证：bunx tsc --noEmit 零错误、bun run lint 零输出（全部子代理完成后统一复跑）
+
+Stage Summary:
+- 18 项审计问题全部修复完毕：2 个 P0（来电永响、群红包金额）E2E 实测通过；核心规则面（发钱纪律+硬上限、群记忆按实际发言人归因、群聊 persona/连发节奏、内置声线第三方 TTS 替换、通话关系语气、语音通话标记全半角、turn 方向视角）在 lib 层统一落地，三端共享
+- 关键工程经验：本环境工具输出会把 [x 形如 ANSI 序列吞掉（[muted→uted），编辑大文件时用 python3 repr 校验真实源码；MultiEdit 实际非原子（失败时部分编辑已应用），失败后必须先核对文件状态再重试
+- 修改文件：chat-call.ts、chat-rich.ts、memory.ts、persona.ts、reply-count.ts、tts-client.ts、api/phone/turn、api/memory/extract、api/memory/summarize、wechat.tsx、qq.tsx、chat.tsx、wx-group.tsx、qq-group.tsx、phone.tsx、IncomingCallLayer.tsx、GlobalCallLayer.tsx、incoming-call.ts、island-notify.ts

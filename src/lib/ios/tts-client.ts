@@ -13,6 +13,7 @@ import { getContact } from './contacts-store';
 import { SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings } from './store';
 import {
   isBuiltinVoiceSupported,
+  isBuiltinVoiceId,
   speakBuiltin,
   stopBuiltinSpeech,
   BUILTIN_DEFAULT_FEMALE,
@@ -261,8 +262,13 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
   }
 
   // ② 用户语音 API（MiniMax / OpenAI 兼容）
-  const voiceId =
-    opts.voiceId?.trim() || (await resolveVoiceForContact(opts.contactId ?? null)).voiceId;
+  let voiceId = opts.voiceId?.trim() || (await resolveVoiceForContact(opts.contactId ?? null)).voiceId;
+  // 内置声线 id（builtin:…）第三方服务商不认识：替换成该服务商的安全默认音色——
+  // 否则全局默认/联系人音色设为内置声线时，通话与试听会因 API 报错静默降级成文字
+  // （与 ai-voice.resolveAiVoiceIdForApi 对 AI 语音消息的替换规则保持一致）
+  if (cfg.provider !== 'builtin' && isBuiltinVoiceId(voiceId)) {
+    voiceId = SAFE_VOICE_BY_PROVIDER[cfg.provider] ?? voiceId;
+  }
 
   stopSpeaking();
   // 与语音消息气泡播放互斥：开始 TTS 朗读前停掉在播的语音气泡

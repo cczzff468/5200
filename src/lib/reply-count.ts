@@ -103,8 +103,19 @@ export function replyMinTarget(n: number): number {
  * 由角色人设决定；条数语义 = 「最多 N 条 + 尽量发满 + 最少 replyMinTarget 条」，
  * 条与条之间要有递进，不重复、不空消息凑数。
  */
-export function buildReplyCountPrompt(n: number): string {
+export function buildReplyCountPrompt(n: number, opts?: { groupMode?: boolean }): string {
   const min = replyMinTarget(n);
+  if (opts?.groupMode) {
+    // 群聊模式：单成员发言要给其他成员留空间——上限收敛到 min(N,5)，不再注入「尽量往多了发/
+    // 绝不能只发 1 条」，改成「按群聊节奏，1~N 条即可，别一个人刷屏」（与群规则「兼顾群聊节奏」一致）
+    const cap = Math.max(1, Math.min(Math.floor(n) || 1, 5));
+    return [
+      `【连发短消息·群聊节奏】这是群聊，把你这次想说的话拆成一条一条的短消息，一句一条、连续发出来。`,
+      `本次发 1~${cap} 条：${cap} 条是硬上限；其他群成员也要说话，按群聊节奏来，一两句能说清就发一两条，绝不要一个人连发刷屏。`,
+      `多条消息之间要有递进：回应 → 补充 → 追问/展开，不要原地重复、不要车轱辘话；不允许发空消息凑数。`,
+      `每条消息只写一句简短、口语化的话，单独占一行；消息内部不要换行，不要加序号、项目符号或任何分隔标记。`,
+    ].join('\n');
+  }
   const range = min >= n ? `${n} 条` : `${min}~${n} 条`;
   return [
     `【连发短消息】本次回复按你的人设，模仿真人在手机上聊天：把想说的话拆成一条一条的短消息，一句一条、连续发出来。`,

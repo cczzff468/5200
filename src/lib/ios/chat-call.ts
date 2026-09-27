@@ -221,12 +221,44 @@ function phaseWasConnected(endReason: ChatCallEndReason): boolean {
 /** AI 告别语后的挂断标记（识别后从播报文本中剥除；三端共用，电话 App 也复用） */
 export const HANGUP_MARK_RE = /〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g;
 
-/** 通话场景附加规则（聊天通话：允许 AI 按人设/上下文主动结束通话；三端共用） */
-export const CHAT_CALL_EXTRA_RULES = [
-  '你在和很熟的朋友语音通话，保持人设，语气自然亲昵；',
-  '如果你想结束通话（话题聊完、要去忙、困了等自然原因），先用一句话自然告别（如「那我先去洗澡啦，回头聊」），然后在告别语的最后单独输出〔挂断〕标记；除此之外的任何情况都不要输出〔挂断〕；',
-  '正常聊天时绝对不要输出〔挂断〕标记；每轮只说出口语内容本身。',
-];
+/**
+ * AI 主动发起语音通话的触发标记：识别与剥除均兼容半角/全角方括号与圆括号变体
+ * （[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)——模型偶尔输出全角变体，
+ * 只认半角会导致「该来电时不来电、标记原文漏进气泡」）。
+ */
+const VOICE_CALL_MARK_ONE_RE = /[〔\[【（(]\s*语音通话\s*[〕\]】）)]/;
+/** 全局替换用（剥除标记本身，标记不进气泡） */
+export const VOICE_CALL_MARK_RE = new RegExp(VOICE_CALL_MARK_ONE_RE.source, 'g');
+/** 是否包含语音通话触发标记（全角/半角括号变体都算） */
+export function hasVoiceCallMark(t: string): boolean {
+  return VOICE_CALL_MARK_ONE_RE.test(t);
+}
+/** 剥除语音通话触发标记（返回 trim 后文本） */
+export function stripVoiceCallMark(t: string): string {
+  return t.replace(VOICE_CALL_MARK_RE, ' ').trim();
+}
+
+/**
+ * 通话场景附加规则（聊天通话：允许 AI 按人设/上下文主动结束通话；三端共用）。
+ * 按联系人关系动态生成——不再硬编码「很熟的朋友」：疏远/同事/刚吵架的人设接通后语气
+ * 跟着关系走，亲近才亲昵，不熟保持分寸，杜绝「人设疏远、开口熟络」的出戏感。
+ */
+export function chatCallExtraRules(
+  peer?: { relation?: string | null; relationToUser?: string | null } | null,
+): string[] {
+  const rel = [peer?.relationToUser, peer?.relation]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter(Boolean)
+    .join('/');
+  const closeness = rel
+    ? `你们的关系是「${rel}」——语气疏密按这个关系来：亲近关系才自然亲昵随意，普通/疏远/紧张的关系保持应有的分寸感，不要装熟；`
+    : '语气疏密按你们人设与资料里的关系亲疏来：亲近才自然随意，不熟就保持分寸，不要装熟；';
+  return [
+    `你正在和对方进行实时语音通话，保持人设，像真人打电话；${closeness}`,
+    '如果你想结束通话（话题聊完、要去忙、困了等自然原因），先用一句话自然告别（如「那我先去洗澡啦，回头聊」），然后在告别语的最后单独输出〔挂断〕标记；除此之外的任何情况都不要输出〔挂断〕；',
+    '正常聊天时绝对不要输出〔挂断〕标记；每轮只说出口语内容本身。',
+  ];
+}
 
 export interface ChatCallApi {
   phase: ChatCallPhase;
@@ -612,7 +644,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             timeBlock: optsRef.current.timeBlock || undefined,
             locBlock: optsRef.current.locBlock || undefined,
             multiApp: optsRef.current.multiApp,
-            extraRules: CHAT_CALL_EXTRA_RULES,
+            // 通话方向（AI 视角）：out=用户打来的 / in=你打出去的——接通问候语按方向区分主被动
+            direction,
+            extraRules: chatCallExtraRules(c),
             config: useSettings.getState().apiConfig,
           }),
         });
@@ -642,7 +676,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         return { reply: '', error: '通话网络异常，请再试一次' };
       }
     },
-    [],
+    [direction],
   );
 
   // ---------- 一轮对话：文字 → LLM → TTS ----------
@@ -1212,7 +1246,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       ring.start('in');
       // 来电 25s 未处理：对方取消（生成「未接听」卡片）
       missTimer = window.setTimeout(() => {
-        if (endedRef.current) finish('missed-in');
+        if (!endedRef.current) finish('missed-in'); // 仍在响铃（未接未拒）→ 超时按「未接听」收尾；已接/已拒/已挂则不动
       }, 25000);
     }
 

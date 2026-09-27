@@ -19,21 +19,30 @@ function cleanName(v: unknown, fallback: string): string {
   return t || fallback;
 }
 
-function perspectiveRules(userName: string, peerName: string): string[] {
+function perspectiveRules(userName: string, peerName: string, participants: string[] = []): string[] {
+  if (participants.length) {
+    return [
+      '【视角规则（最高优先级，违反即无效）】',
+      `- 这些记忆来自群聊场景，涉及的人物可能不止两位：除了「${userName}」（用户本人）与「${peerName}」（AI角色），还可能提到这些群成员：${participants.slice(0, 12).join('、')}（或记忆原文里已出现的其他具体成员名字）。`,
+      '- 指代人物只允许用具体名字（上面列出的成员名或原文里已有的名字），严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等代称。',
+      '- 每条信息必须保留原文的归属：谁的事就写谁的名字，严禁把其他成员的事改写成「' + userName + '」或「' + peerName + '」的事。',
+    ];
+  }
   return [
     '【视角规则（最高优先级，违反即无效）】',
     `- 只允许用「${userName}」（用户本人）和「${peerName}」（AI角色）这两个名字指代两人。`,
     '- 严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等任何代称。',
     '- 每条信息必须写明属于谁：先判断说的是谁的事，再把名字写进主语。',
+    `- 若原文里出现这两人之外的其他具体人名，保留原名字、照实归因，不要改写成两人的事。`,
     `- 例：${userName}明天不上班、${peerName}喜欢打球、${peerName}称${userName}为唯一交心的朋友。`,
   ];
 }
 
-function buildSystem(level: 'core' | 'long', userName: string, peerName: string): string {
+function buildSystem(level: 'core' | 'long', userName: string, peerName: string, participants: string[] = []): string {
   if (level === 'long') {
     return [
       '你是记忆总结助手。把多条「核心记忆」浓缩成一条「长期记忆」（最稳定的人物画像）。',
-      ...perspectiveRules(userName, peerName),
+      ...perspectiveRules(userName, peerName, participants),
       '要求：',
       '- 一段话，120 字以内，只保留长期稳定的事实、偏好、承诺与关系本质，省略已经过时的临时细节',
       '- 信息冲突时以更晚的核心记忆为准；禁止推测和编造',
@@ -58,13 +67,20 @@ export async function POST(req: NextRequest) {
   const level: 'core' | 'long' = body.level === 'long' ? 'long' : 'core';
   const userName = cleanName(body.userName, '用户');
   const peerName = cleanName(body.peerName, '对方');
+  // 群聊来源：成员显示名（有名单时按实际人物归因，不强制二人视角）
+  const participants = Array.isArray(body.participants)
+    ? body.participants
+        .map((v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 20) : ''))
+        .filter((v: string) => v.length > 0)
+        .slice(0, 20)
+    : [];
   const items = Array.isArray(body.fragments)
     ? body.fragments.filter((x: unknown): x is string => typeof x === 'string' && x.trim().length > 0)
     : [];
   if (items.length < 2) return NextResponse.json({ error: '数量太少，无需总结' }, { status: 400 });
 
   const messages = [
-    { role: 'system' as const, content: buildSystem(level, userName, peerName) },
+    { role: 'system' as const, content: buildSystem(level, userName, peerName, participants) },
     {
       role: 'user' as const,
       content: `${level === 'long' ? '核心记忆' : '记忆碎片'}：\n${items

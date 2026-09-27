@@ -19,7 +19,11 @@
  *   点「退出」收起来电界面（来电继续响铃，只剩顶部弹窗）；
  *   微信语音来电的来电界面不自动显示（全局通话层 view='hidden' 启动，引擎挂载但不可见），
  *   点弹窗非按钮区域才展开；
- * - 电话来电响铃 25 秒无人处理 → 超时未接（onMissed('timeout')：落未接记录 + AI 语音留言）。
+ * - 电话来电响铃 25 秒无人处理 → 超时未接（onMissed('timeout')：落未接记录 + AI 语音留言）；
+ * - 接听交接（幽灵来电修复）：接听回调只写 pending + switchToApp('phone')，两种场景会
+ *   「弹层清了、通话界面没开」——①电话 App 已在前台（switchToApp 无事发生，mount-only 消费
+ *   不重跑）→ 接听后派发消费事件让已挂载的电话 App 立即进通话；②锁屏/熄屏（switchToApp 被
+ *   拦截）→ pending 原样保留，解锁监听在解锁瞬间自动切电话 App 并派发消费事件。
  */
 
 import { useEffect } from 'react';
@@ -28,11 +32,15 @@ import { AnimatePresence, motion, type Transition } from 'framer-motion';
 import { Bell, BellOff, ChevronLeft, Info, MessageCircle, Phone, PhoneOff } from 'lucide-react';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import {
+  hasPendingPhoneAnswer,
+  notifyPendingPhoneAnswer,
   startIncomingRing,
   stopIncomingRing,
   useIncomingCall,
   type IncomingCallSnapshot,
 } from '@/lib/ios/incoming-call';
+import { useUI } from '@/lib/ios/store';
+import { navigateToChatSession } from '@/lib/ios/island-notify';
 
 // iOS 全屏来电页较重，按需加载（无来电不进包）
 const IncomingCallScreen = dynamic(() => Promise.resolve(IncomingCallScreenImpl), { ssr: false });
@@ -50,6 +58,23 @@ const SPRING_WITH_BG: Transition = {
 };
 /** 收回灵动岛用短补间（缩回终点与静态灵动岛同位同色） */
 const TWEEN_OUT: Transition = { duration: 0.24, ease: [0.4, 0, 0.2, 1] };
+
+// ---------------- 电话来电接听（幽灵来电修复：交接兜底） ----------------
+
+/**
+ * 接听电话来电（顶部弹窗绿钮 / 全屏来电界面绿钮共用）：
+ * ① answer() 清层 + 走快照回调（chat.tsx 的 onAnswer：写 pending + switchToApp('phone')）；
+ * ② 交接兜底：switchToApp 帮不上忙的两种场景在这里补齐——
+ *    · 电话 App 已在前台：switchToApp 无事发生，pending 只由电话 App 挂载时消费（mount-only）
+ *      → 派发消费事件让已挂载的电话 App 立即进通话界面；
+ *    · 锁屏/熄屏：switchToApp 被拦截 → pending 原样保留，由下方解锁监听在解锁后自动消费。
+ */
+function answerPhoneCall(): void {
+  useIncomingCall.getState().answer();
+  const ui = useUI.getState();
+  if (ui.locked || ui.screenOff) return; // 锁屏/熄屏：保留 pending，解锁监听兜底
+  notifyPendingPhoneAnswer();
+}
 
 export default function IncomingCallLayer() {
   const call = useIncomingCall((s) => s.call);
@@ -93,6 +118,21 @@ export default function IncomingCallLayer() {
     useIncomingCall.getState().clear();
   }, [isWx, hasWxSession]);
 
+  // 锁屏接听兜底：锁屏/熄屏时点接听，switchToApp 被拦截、pending 滞留成幽灵来电
+  // （下次打开电话 App 突然冒出来）——监听 useUI：在「锁屏/熄屏 → 解锁」跳变瞬间若 pending
+  // 还在（未被电话 App 消费），自动切到电话 App 并派发消费事件打开通话界面
+  useEffect(() => {
+    let prevBlocked = useUI.getState().locked || useUI.getState().screenOff;
+    return useUI.subscribe((s) => {
+      const wasBlocked = prevBlocked;
+      prevBlocked = s.locked || s.screenOff;
+      if (!wasBlocked || prevBlocked) return; // 只在解锁跳变时兜底，平时不动
+      if (!hasPendingPhoneAnswer()) return;
+      s.switchToApp('phone');
+      notifyPendingPhoneAnswer();
+    });
+  }, []);
+
   const showBanner = phoneBanner || wxRinging;
 
   return (
@@ -120,7 +160,7 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
       if (g.session) g.minimize();
       return;
     }
-    useIncomingCall.getState().answer();
+    answerPhoneCall();
   };
   /** 拒绝/忽略：电话走快照回调（落未接记录+留言）；微信代理到页内引擎 reject */
   const decline = () => {
@@ -268,16 +308,18 @@ function CircleBtn({
 // ---------------- iOS 全屏来电界面（电话来电；对照第二张截图） ----------------
 
 function IncomingCallScreenImpl({ call }: { call: IncomingCallSnapshot }) {
-  const answer = () => useIncomingCall.getState().answer();
+  // 接听：走 answerPhoneCall（含电话 App 已在前台/锁屏的交接兜底，避免幽灵来电）
+  const answer = () => answerPhoneCall();
   const decline = () => useIncomingCall.getState().dismiss('declined');
-  /** 「信息」：挂断来电并打开信息 App（iOS 语义：改用短信回复） */
+  /** 「信息」：拒接来电后跨 App 跳到信息 App 与该联系人的会话（iOS 语义：改用短信回复）。
+   *  先 decline() 收尾（清层/停铃/落未接记录+AI 留言）再跳转，不残留响铃；
+   *  跳转走灵动岛通知同款导航总线（navigateToChatSession = switchToApp + pending 导航事件）：
+   *  信息 App 未打开时挂载后自动进会话、已打开时事件驱动立即打开——
+   *  旧实现 openApp 在已有前台 App 时被静默拦截（不跳转），且从不打开对应会话 */
   const replyBySms = () => {
     decline();
-    try {
-      import('@/lib/ios/store').then(({ useUI }) => useUI.getState().openApp('chat'));
-    } catch {
-      // 打开失败不影响挂断
-    }
+    const contactId = call.contact?.id;
+    if (contactId) navigateToChatSession('chat', contactId);
   };
 
   return (

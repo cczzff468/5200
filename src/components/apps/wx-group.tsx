@@ -2507,7 +2507,7 @@ export function WxGroupChatPage({
         if (rp.mode === 'exclusive' && rp.targetId !== char.id) return;
         const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
         const left = rp.count - rp.claims.length;
-        const amt = rp.mode === 'lucky' && left > 1 ? splitLuckyAmount(remaining, left) : remaining;
+        const amt = rp.mode === 'lucky' ? (left > 1 ? splitLuckyAmount(remaining, left) : remaining) : rp.amount;
         patchGroupMsg(m.id, { rp: { ...rp, claims: [...rp.claims, { contactId: char.id, name: charName, avatar: char.avatar, amount: amt, ts: Date.now() }] } });
         appendFundNotice('rp', `${charName}领取了${m.senderId === 'me' ? '你' : m.senderName || '群友'}的`, rp.mode === 'exclusive' ? '专属红包' : '红包');
         return;
@@ -2834,6 +2834,9 @@ export function WxGroupChatPage({
         const npcExtra = buildNpcPromptExtra(char, contactsRef.current);
         const system = buildPersonaSystemPrompt(char, {
           channel: '微信',
+          // 群聊成员回合（#13）：最后一条消息可能是其他群成员发的，persona 禁止事项改用群聊语义
+          // （先看清最后一条是谁说的，不把其他成员的话当成机主对你说的）
+          groupTurn: true,
           userName: meName,
           // 名字/昵称区分：群聊同样注入【用户的称呼】段（名字是凡凡，昵称是凑凑）
           userRealName: me.realName ?? me.name,
@@ -2870,7 +2873,7 @@ export function WxGroupChatPage({
           .join('\n\n');
         // 回复条数 replyCount 已在群聊规则处提前读取（条数约束与连发指令共用同一份设置）
         const payload: ChatPayloadMessage[] = [
-          { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
+          { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount, { groupMode: true })}` : systemFull },
           ...history,
         ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
@@ -3141,7 +3144,26 @@ export function WxGroupChatPage({
                     // 消息计数锚点用：未 slice/map 的有效消息数组（群消息流，含其他成员的消息）
                     () => loadGroupMsgs(gid).filter((m) => m.kind !== 'notice' && !m.recalled),
                     { user: u, peer: p },
-                    { roundScope: `group:${gid}`, group: { id: gid, members: [me.id, ...groupRef.current.memberIds] } }
+                    {
+                      roundScope: `group:${gid}`,
+                      group: {
+                        id: gid,
+                        members: [me.id, ...groupRef.current.memberIds],
+                        // 群记忆成员名（#12）：按 members 顺序映射显示名（机主用称呼名，其他成员用备注/昵称/名字），
+                        // 提取/总结 prompt 据此按实际发言人归因，不再强制「用户/角色」二人视角（防跨成员串味）
+                        memberNames: [
+                          ...new Set(
+                            [me.id, ...groupRef.current.memberIds]
+                              .map((id) => {
+                                if (id === me.id || id === 'me') return meName || me.name || '我';
+                                const rec = contactsRef.current.find((c) => c.id === id);
+                                return rec ? memberNameOf(rec) : '';
+                              })
+                              .filter(Boolean)
+                          ),
+                        ],
+                      },
+                    }
                   );
                 } catch {
                   // 名字解析失败不影响落盘
@@ -3599,7 +3621,7 @@ export function WxGroupChatPage({
     }
     const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
     const left = rp.count - rp.claims.length;
-    const amt = rp.mode === 'lucky' && left > 1 ? splitLuckyAmount(remaining, left) : remaining;
+    const amt = rp.mode === 'lucky' ? (left > 1 ? splitLuckyAmount(remaining, left) : remaining) : rp.amount;
     patchGroupMsg(msgId, { rp: { ...rp, claims: [...rp.claims, { contactId: 'me', name: me.name, avatar: me.avatar, amount: amt, ts: Date.now() }] } });
     wxPatchBalance(amt, { kind: '红包', amount: amt });
     appendFundNotice('rp', `你领取了${m.senderId === 'me' ? '自己发的' : m.senderName || '群友'}的`, '红包');

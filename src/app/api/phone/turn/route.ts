@@ -44,6 +44,8 @@ import {
 function buildCallSystemPrompt(
   peer: PersonaSource,
   greeting: boolean,
+  /** 通话方向：'out' = 用户打来的（AI 接电话方）/ 'in' = AI 打出去的（AI 主叫方）；缺省 'out' */
+  direction: 'in' | 'out',
   /** AI 主动开口：用户几秒没说话后的第 N 次主动尝试（0/undefined = 正常轮次） */
   proactiveAttempt: number,
   npcExtra?: { ownerLabel?: string; npcCircle?: InlineContact['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
@@ -78,7 +80,14 @@ function buildCallSystemPrompt(
     ],
   });
   if (!greeting) return base;
-  return base + '\n现在用户刚拨通电话，请你像接到电话一样先开口打招呼（先喂一声，再说一句自然的话）。';
+  // 问候视角按通话方向区分：AI 主叫（direction='in'）是「你打给对方」，
+  // 不再恒定「用户刚拨通电话」——否则 AI 打来的电话它自己却说「你居然主动打给我」
+  return (
+    base +
+    (direction === 'in'
+      ? '\n这通电话是你主动打给对方的：你拨出电话后对方刚刚接听。请你像主动打电话的人一样先开口（先喂一声，再自然说一句开场白，可以顺带说明你为什么打来）。'
+      : '\n现在用户刚拨通电话，请你像接到电话一样先开口打招呼（先喂一声，再说一句自然的话）。')
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -94,6 +103,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '缺少号码' }, { status: 400 });
   }
   const greeting = root.greeting === true;
+  // 通话方向：AI 打出去（direction='in'，来电侧）还是用户打来（缺省）——影响接通问候语的主被动视角
+  const direction: 'in' | 'out' = root.direction === 'in' ? 'in' : 'out';
   const proactiveAttempt = typeof root.proactiveAttempt === 'number' && Number.isFinite(root.proactiveAttempt)
     ? Math.max(0, Math.min(9, Math.floor(root.proactiveAttempt)))
     : 0;
@@ -126,6 +137,7 @@ export async function POST(req: NextRequest) {
   const system = buildCallSystemPrompt(
     peer,
     greeting,
+    direction,
     proactiveAttempt,
     {
       ownerLabel: inline?.ownerLabel,
@@ -161,7 +173,10 @@ export async function POST(req: NextRequest) {
   // - 接通问候 / AI 主动开口：补一条 user 消息触发开口。
   const messages: CallApiMessage[] = [{ role: 'system', content: systemFull }, ...history];
   if (greeting && (messages.length === 1 || messages[messages.length - 1].role !== 'user')) {
-    messages.push({ role: 'user', content: '（电话已拨通，请先开口打招呼）' });
+    messages.push({
+      role: 'user',
+      content: direction === 'in' ? '（你拨出的电话对方已接听，请先开口说话）' : '（电话已拨通，请先开口打招呼）',
+    });
   } else if (!greeting && messages.length > 1 && messages[messages.length - 1].role === 'assistant') {
     // 兜底：正常轮次历史不该以 assistant 收尾，补一条 user 触发回应
     messages.push({ role: 'user', content: proactiveAttempt >= 1 ? '（对方迟迟没有说话，请主动开口）' : '（请继续用口语回应）' });

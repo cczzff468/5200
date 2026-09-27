@@ -43,6 +43,7 @@ import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
+import { hasVoiceCallMark, stripVoiceCallMark } from '@/lib/ios/chat-call';
 import { setPendingPhoneAnswer, triggerIncomingCall } from '@/lib/ios/incoming-call';
 import { localDB, genId, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { ownerProfile } from '@/lib/ios/contacts-store';
@@ -1055,10 +1056,10 @@ function ChatView({
      * 再按「&&&」标记切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
      */
     const buildReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): ChatMsg[] => {
-      // AI 主动打来电话（[语音通话] 标记）：从气泡文本里剥除，只作为来电信号
-      const wantCall = rawText.includes('[语音通话]');
+      // AI 主动打来电话（[语音通话] 标记，全半角括号变体都认）：从气泡文本里剥除，只作为来电信号
+      const wantCall = hasVoiceCallMark(rawText);
       if (wantCall) wantCallSeen = true;
-      const text = wantCall ? rawText.replace(/\[[【]?语音通话[\]】]?/g, ' ').trim() : rawText;
+      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
       const out: ChatMsg[] = [];
       let t = baseTime;
       for (const part of extractRichActionParts(text)) {
@@ -1211,6 +1212,47 @@ function ChatView({
     startAiTurnRef.current = startAiTurn;
   });
 
+  // ---------------- #8 流式接收期间的发送排队（对齐微信 wxQueuedTurns：消息照常上屏，回复自动补跑） ----------------
+
+  /** 排队的补跑回合：kick = 消息已入列（文字/语音/划转文字），只需补一轮 AI 回复；dispatch = 分句发送批次统一触发 */
+  type QueuedTurn = { kind: 'kick' | 'dispatch' };
+  /** 待补跑回合队列（组件按会话 key 重挂载天然按会话隔离；卸载即弃——与 wx/qq 排队消息刷新即丢口径一致） */
+  const queuedTurnsRef = useRef<QueuedTurn[]>([]);
+
+  /** 入队一条补跑回合（dispatch 幂等：批次触发只排一次，回复中连点「发送」不重复排队） */
+  const enqueueQueuedTurn = useCallback((t: QueuedTurn) => {
+    if (t.kind === 'dispatch' && queuedTurnsRef.current.some((x) => x.kind === 'dispatch')) return;
+    queuedTurnsRef.current.push(t);
+  }, []);
+
+  /**
+   * 消费补跑队列（串行）：仅当「回复流已收尾 + 本轮消息全部投递完」时放行下一条——
+   * 放行即开新流（beginChatStream 同步置位 streaming），上一条补跑的回复完全走完之前
+   * 重复触发都会被这两个模块级状态守卫挡住，串行由此保证。
+   */
+  const tryFlushQueuedTurns = useCallback(() => {
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
+    const next = queuedTurnsRef.current.shift();
+    if (!next) return;
+    if (next.kind === 'dispatch') {
+      setPendingDispatch(false);
+      markPendingBatch(sessionKey, false);
+    }
+    startAiTurnRef.current?.(null);
+  }, [sessionKey]);
+
+  // 补跑触发点（各尝试一次，重复触发被流/投递状态守卫挡住；声明在 startAiTurnRef 同步 effect 之后，
+  // 放行时读到的闭包一定已含最后一次投递 tick 合并进来的落盘消息）：
+  // ① 回复流结束（成功/失败；失败路径没有投递批次，只有这里能放行）② 本轮消息全部投递完（正常路径的实际放行点）
+  useEffect(() => {
+    if (streaming) return;
+    tryFlushQueuedTurns();
+  }, [streaming, tryFlushQueuedTurns]);
+  useEffect(() => {
+    if (delivering) return;
+    tryFlushQueuedTurns();
+  }, [delivering, tryFlushQueuedTurns]);
+
   // ---------------- 双向拉黑（仅联系人会话；小助手会话不参与） ----------------
 
   /** 追加一条系统提示行（拉黑状态变更提示；居中灰字胶囊，不参与上下文） */
@@ -1288,7 +1330,7 @@ function ChatView({
 
   const send = () => {
     const text = input.trim();
-    if (!text || isChatStreaming(sessionKey)) return;
+    if (!text) return;
 
     // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
     if (ttsSend) {
@@ -1297,6 +1339,16 @@ function ChatView({
     }
 
     const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now(), quote: quote ?? undefined };
+    // #8 对方正在回复（流式接收或连发投递未清空，投递可拖到流结束后数秒）：消息照常上屏并排队补跑，
+    // 「流收尾且投递完毕」后自动触发回复——不再静默丢弃（对齐微信：消息发出去了，AI 稍后回复；
+    // 投递中也排队，否则旧回复尾部进不了新回合上下文、旧 AI 气泡还会倒挂在用户新消息下面）
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      setInput('');
+      setQuote(null);
+      setMsgs((prev) => [...prev, userMsg]);
+      enqueueQueuedTurn({ kind: 'kick' });
+      return;
+    }
     setInput('');
     setQuote(null);
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
@@ -1309,16 +1361,21 @@ function ChatView({
     startAiTurn(userMsg);
   };
 
-  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
+  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」）；
+   *  对方正在回复（流式/投递中）时排队等上一轮走完自动触发，不再静默无响应 */
   const dispatchBatch = () => {
-    if (!pendingDispatch || isChatStreaming(sessionKey)) return;
+    if (!pendingDispatch) return;
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      enqueueQueuedTurn({ kind: 'dispatch' });
+      return;
+    }
     setPendingDispatch(false);
     markPendingBatch(sessionKey, false);
     startAiTurn(null);
   };
 
-  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次） */
-  const canDispatch = sentenceSend && pendingDispatch && !streaming;
+  /** 空输入时可点「发送」触发批次回复（分句发送开启且有未回复的批次；回复中也可点，走排队补跑） */
+  const canDispatch = sentenceSend && pendingDispatch;
 
   // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回（信息端无转发/收藏/重新生成） ----------------
 
@@ -1359,9 +1416,13 @@ function ChatView({
         : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, stt: 'pending' };
       const msg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'voice', voice };
       setMsgs((prev) => [...prev, msg]);
-      /** 触发 AI 回复（对方正在回复则跳过，语音照常入列）；转写完成后再触发，AI 才能读到语音内容 */
+      /** 触发 AI 回复（对方正在回复——流式/投递中——则排队补跑，语音照常入列不丢弃）；
+       *  转写完成后再触发，AI 才能读到语音内容 */
       const kickTurn = () => {
-        if (isChatStreaming(sessionKey)) return;
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          enqueueQueuedTurn({ kind: 'kick' }); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
+          return;
+        }
         window.setTimeout(() => startAiTurnRef.current?.(null), 80);
       };
       if (hasText) {
@@ -1381,17 +1442,19 @@ function ChatView({
         window.setTimeout(kickTurn, 150); // 等重渲染 + startAiTurnRef 回填新闭包（含转写文本）
       });
     },
-    [sessionKey],
+    [sessionKey, enqueueQueuedTurn],
   );
 
   /** 「划到转文字」松开后：先识别再预览，由用户决定发送文字 / 发送语音（原始录音）/ 取消 */
   const sttPreview = useSttPreview({
     onSendText: (text) => {
-      if (isChatStreaming(sessionKey)) {
-        showToast('对方正在回复，请稍后再试');
+      const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
+      // #8 对方正在回复：消息照常上屏并排队补跑（对齐微信，不再弹提示丢弃）
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        setMsgs((prev) => [...prev, userMsg]);
+        enqueueQueuedTurn({ kind: 'kick' });
         return;
       }
-      const userMsg: ChatMsg = { id: uid(), role: 'user', content: text, time: Date.now() };
       if (sentenceSend) {
         setMsgs((prev) => [...prev, userMsg]);
         setPendingDispatch(true);
@@ -2014,7 +2077,6 @@ function ChatView({
               <button
                 type="submit"
                 aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}
-                disabled={streaming}
                 className="flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90 disabled:opacity-40"
                 style={{ backgroundColor: SELF_BLUE }}
               >

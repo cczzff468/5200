@@ -19,6 +19,8 @@ import dynamic from 'next/dynamic';
 import { MicOff, Phone, PhoneCall, VideoOff } from 'lucide-react';
 import { formatCallDuration } from '@/lib/ios/chat-call';
 import { useCallSeconds, useGlobalCall } from '@/lib/ios/global-call';
+import { navigateToChatSession } from '@/lib/ios/island-notify';
+import { useUI } from '@/lib/ios/store';
 
 // 通话页较重（TTS/STT/录音链路），按需加载；该层仅在有会话时渲染内容
 const VoiceCallScreen = dynamic(
@@ -98,7 +100,19 @@ export default function GlobalCallLayer() {
           multiApp={session.multiApp}
           onFollowup={session.onFollowup}
           onMinimize={() => useGlobalCall.getState().minimize()}
-          onMessageReply={variant === 'qq' ? () => undefined : undefined}
+          // QQ 来电「消息回复」：通话页已先 call.reject()（拒接 +「已拒绝」卡片落盘），
+          // 这里切到 QQ App 并打开与该来电联系人的聊天会话（灵动岛通知同款导航总线：
+          // switchToApp + pending 导航——QQ 未打开时挂载后自动进会话，已打开时事件驱动立即打开；
+          // 旧实现传空函数，拒接后停在原界面什么都不发生）
+          onMessageReply={
+            variant === 'qq'
+              ? () => {
+                  const contactId = session.contact?.id;
+                  if (contactId) navigateToChatSession('qq', contactId);
+                  else useUI.getState().switchToApp('qq');
+                }
+              : undefined
+          }
           onEnd={(r) => {
             // 宿主直写通话卡片（聊天页卸载了也能落盘），随后清理全局会话
             const s = useGlobalCall.getState().session;

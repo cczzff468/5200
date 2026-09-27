@@ -60,10 +60,10 @@ import {
   STT_FAIL_LIMIT,
   type VadHandle,
 } from '@/lib/ios/vad';
-import { CHAT_CALL_EXTRA_RULES, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
+import { chatCallExtraRules, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
-import { takePendingPhoneAnswer } from '@/lib/ios/incoming-call';
+import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer } from '@/lib/ios/incoming-call';
 import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
 
@@ -88,6 +88,11 @@ import type { ContactRecord } from '@/lib/contacts';
  * - 通话中文字聊天：麦克风左侧信息图标开关——输入框出现在说话钮上方（消息区只显示文字轮次，
  *   最近 8 条）；开启期间字幕隐藏；AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（消息区气泡）
  * - 音效：呼叫等待回铃音（450Hz 中国铃流节奏）、接通提示音、挂断提示音，全部 WebAudio 合成
+ * - 通话方向：turn 请求带 direction（AI 来电接听交接='in' / 用户主动拨打='out'，缺省 'out'），
+ *   接通问候语按方向区分主被动视角；挂断续聊 endReason 传真实挂断方
+ *   （AI 主动挂断〔挂断〕标记='ai-hangup' / 用户手动挂断='hangup'）
+ * - 卸载守卫：通话中切 App/锁屏导致 CallScreen 随 App 卸载时，若通话仍在进行（未 ended）自动
+ *   走与「用户点挂断」完全相同的收尾（通话卡片+AI 续聊+记忆总结+对话存档），不再静默消失
  * - 通话记录持久化 IndexedDB call-logs（DB v3），语音留言持久化 voicemails（DB v4），个人收藏持久化 settings key=phoneFavorites
  */
 
@@ -588,8 +593,10 @@ function CallScreen({
   const contact = target.contact;
   const isIncoming = target.direction === 'in';
   const gender = useMemo(() => contactGender(contact), [contact]);
-  /** 最新 hangup（mount effect / speak / runTurn 闭包内引用；定义在后面，运行时已赋值） */
-  const hangupRef = useRef<() => void>(() => {});
+  /** 最新 hangup（mount effect / speak / runTurn 闭包内引用；定义在后面，运行时已赋值）。
+   *  可选 endReason：AI 主动挂断传 'ai-hangup'（挂断续聊按「自己告别收尾」注入，不再说「对方先挂」），
+   *  用户手动挂断/卸载守卫不传（缺省 'hangup'） */
+  const hangupRef = useRef<(endReason?: 'hangup' | 'ai-hangup') => void>(() => {});
 
   /** 停 VAD + 清自动重听定时器 + 清主动开口计时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
   const stopAutoTimers = useCallback(() => {
@@ -615,10 +622,10 @@ function CallScreen({
       const volume = speaker ? 1 : 0.45;
       const resume = () => {
         if (!endedRef.current) {
-          // AI 主动挂断：告别语播完自动结束通话（不再回到聆听）
+          // AI 主动挂断：告别语播完自动结束通话（不再回到聆听）；endReason='ai-hangup'
           if (pendingHangupRef.current) {
             pendingHangupRef.current = false;
-            hangupRef.current();
+            hangupRef.current('ai-hangup');
             return;
           }
           setPeerStatus('listening');
@@ -815,11 +822,15 @@ function CallScreen({
             userRealName: meUser?.name?.trim() || undefined,
             userNickname: meUser?.nickname?.trim() || undefined,
             number: target.number,
+            // 通话方向（谁发起）：'in' = AI 打来的电话（AI 来电接听交接进来的，AI 主叫视角问候）/
+            // 'out' = 用户在电话 App 里主动拨打（缺省）——服务端按方向区分接通问候语的主被动视角
+            direction: isIncoming ? 'in' : 'out',
             greeting: userText === null && !proactive,
             proactiveAttempt,
             history: historyBefore.map((m) => ({ role: m.role, content: m.text })),
-            // 主动挂断标记规则（与微信/QQ 语音通话同一套）：AI 可按人设/上下文自然告别后输出〔挂断〕
-            extraRules: CHAT_CALL_EXTRA_RULES,
+            // 主动挂断标记规则（与微信/QQ 语音通话同一套）：AI 可按人设/上下文自然告别后输出〔挂断〕；
+            // 语气按联系人关系动态生成（不再硬编码「很熟的朋友」）
+            extraRules: chatCallExtraRules(contact),
             memoryBlock,
             // 跨 App 身份感知：互通开关（有联系人才注入；陌生号码单场景无需多端感知）
             multiApp: contact?.id ? getMemSettings(contact.id).share : undefined,
@@ -952,11 +963,13 @@ function CallScreen({
         if (!endedRef.current) setBusy(false);
       }
     },
-    [contact, target.number, speak, apiConfig]
+    [contact, target.number, isIncoming, speak, apiConfig]
   );
 
-  // 挂断（保存记录 → ended → 回调关闭）
-  const hangup = useCallback(() => {
+  // 挂断（保存记录 → ended → 回调关闭）。endReason：'hangup' = 用户手动挂断（缺省）/
+  // 'ai-hangup' = AI 自己主动挂断（〔挂断〕标记/告别后自动结束）——挂断续聊按真实挂断方注入场景，
+  // 只有「对方先挂」（'hangup'）才允许 AI 抱怨挂得快（Task 21 三态语义）
+  const hangup = useCallback((endReason: 'hangup' | 'ai-hangup' = 'hangup') => {
     if (endedRef.current) return;
     endedRef.current = true;
     stopAutoTimers();
@@ -1022,8 +1035,9 @@ function CallScreen({
               nickname: peerContact.nickname ?? null,
               realName: peerContact.realName ?? null,
             },
-            direction: 'out',
-            endReason: 'hangup',
+            direction: isIncoming ? 'in' : 'out',
+            // 真实挂断方：'ai-hangup' = AI 自己主动挂断（告别收尾）/'hangup' = 用户手动挂断（对方先挂）
+            endReason,
             connected: true,
             duration: secondsRef.current,
             transcript: spoken.slice(-24).map((b) => ({ role: b.role, content: b.text })),
@@ -1117,13 +1131,14 @@ function CallScreen({
       });
     }
     window.setTimeout(onClose, 1100);
-  }, [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers, apiConfig, profileName]);
+  }, [contact, target.number, isIncoming, onEnd, onVoicemail, onClose, stopAutoTimers, apiConfig, profileName]);
   hangupRef.current = hangup;
 
-  /** AI 主动挂断（〔挂断〕标记）：与用户挂断同一套收尾（总结/落记录/对话存档），只是触发方是对端 */
+  /** AI 主动挂断（〔挂断〕标记）：与用户挂断同一套收尾（总结/落记录/对话存档），只是触发方是对端；
+   *  endReason='ai-hangup'：挂断续聊按「AI 自己告别收尾」注入（不说「对方先挂/挂得快」） */
   const finishByAiHangup = useCallback(() => {
     if (endedRef.current) return;
-    hangupRef.current();
+    hangupRef.current('ai-hangup');
   }, []);
 
   /** AI 拒接/未接收尾（接听决策）：响铃停止 → 显示原因 → 落「未接通」通话记录 → AI 语音留言解释。
@@ -1185,6 +1200,10 @@ function CallScreen({
       if (contact && contact.kind !== 'user') void runTurn(null);
       else setPeerStatus('listening');
       return () => {
+        // 卸载守卫（切 App/锁屏时本组件随 App 卸载）：通话仍在进行（未 ended）→
+        // 走与「用户点挂断按钮」完全相同的收尾（通话卡片+AI 续聊+记忆总结+对话存档），
+        // 像用户自己挂断了电话而不是静默消失；endedRef 幂等（正常挂断已收尾则跳过）
+        if (!endedRef.current) hangupRef.current();
         endedRef.current = true;
         stopAutoTimers();
         stopSpeaking();
@@ -1305,6 +1324,10 @@ function CallScreen({
         }, 1400 + Math.random() * 1200)
       : undefined;
     return () => {
+      // 卸载守卫（切 App/锁屏时本组件随 App 卸载）：通话仍在进行（未 ended，含拨号中/接通后）→
+      // 走与「用户点挂断按钮」完全相同的收尾（同 hangup：拨号中=取消+对端留言、接通后=卡片+续聊+总结）；
+      // 用 ref 读最新通话状态（卸载时 state 闭包已过期）；endedRef 幂等，正常挂断/对端拒接不重复收尾
+      if (!endedRef.current) hangupRef.current();
       endedRef.current = true;
       window.clearTimeout(timer);
       window.clearTimeout(emptyTimer);
@@ -1868,7 +1891,7 @@ function CallScreen({
         <div className="flex justify-center">
           <button
             type="button"
-            onClick={hangup}
+            onClick={() => hangup()}
             data-testid="call-end"
             aria-label="挂断"
             className="flex h-[66px] w-[66px] items-center justify-center rounded-full bg-[#FF3B30] text-white shadow-[0_8px_24px_rgba(255,59,48,0.4)] transition-transform active:scale-95"
@@ -3491,14 +3514,23 @@ export default function PhoneApp() {
   const [voicemails, setVoicemails] = useState<VoicemailRecord[] | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [callTarget, setCallTarget] = useState<CallTarget | null>(null);
-  // 全局来电层接听的 AI 电话：进入电方向的通话界面（接听时全局层已 openApp 打开本 App；
-  // 本 effect 在挂载时消费待接听来电，AI 先开口）
-  useEffect(() => {
+  // 全局来电层接听的 AI 电话：进入电方向的通话界面（接听时全局层已 switchToApp 打开本 App，
+  // AI 先开口）。消费幂等（取走即清），两个时机：
+  // ① 挂载时消费——跨 App 接听：来电层 switchToApp 打开本 App 后由这里取走 pending；
+  // ② 监听消费事件——本 App 已在前台时接听，switchToApp 无事发生、挂载消费不会重跑，
+  //    来电层派发 PENDING_PHONE_ANSWER_EVENT 让这里立即进通话界面（幽灵来电修复）；
+  //    锁屏时接听的 pending 由来电层在解锁后兜底派发，同样走这里。
+  const consumePendingAnswer = useCallback(() => {
     const pending = takePendingPhoneAnswer();
-    if (pending) {
-      setCallTarget({ number: pending.number, contact: pending.contact, direction: 'in' });
-    }
+    if (!pending) return;
+    // 已有通话进行中：丢弃新 pending，不替换正在进行的通话（与 startCall 的防替换口径一致）
+    setCallTarget((prev) => prev ?? { number: pending.number, contact: pending.contact, direction: 'in' });
   }, []);
+  useEffect(() => {
+    consumePendingAnswer();
+    window.addEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
+    return () => window.removeEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
+  }, [consumePendingAnswer]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editSheetOpen, setEditSheetOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);

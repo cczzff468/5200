@@ -134,6 +134,24 @@ export function takePendingPhoneAnswer(): PendingPhoneAnswer | null {
   return p;
 }
 
+// ---------------- 接听交接事件（幽灵来电修复：电话 App 已在前台/锁屏时接听的兜底） ----------------
+
+/** 「消费 pending 来电」事件名（电话 App 已挂载时监听；来电层派发，事件驱动立即进通话界面） */
+export const PENDING_PHONE_ANSWER_EVENT = 'pending-phone-answer';
+
+/** 是否有待接听的电话来电（解锁兜底/派发事件前判断用；只读不消费） */
+export function hasPendingPhoneAnswer(): boolean {
+  return pendingPhoneAnswer !== null;
+}
+
+/** 派发「消费 pending 来电」事件：已挂载的电话 App 立即消费进通话界面；
+ *  未挂载时无人监听（无害），由其挂载 effect 消费。接听交接时 switchToApp 帮不上忙的场景
+ *  （电话 App 已在前台 = 无事发生 / 锁屏 = 被拦截保留 pending）由来电层调用这里补齐 */
+export function notifyPendingPhoneAnswer(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(PENDING_PHONE_ANSWER_EVENT));
+}
+
 // ---------------- 电话来电铃声（iOS「嘟—嘟—嘟」循环；微信来电铃声由 WxCallScreen 自理） ----------------
 
 let audioCtx: AudioContext | null = null;

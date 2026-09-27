@@ -63,15 +63,29 @@ function saneTimeStr(v: unknown, nowMs: number): string | null {
   return s;
 }
 
-function buildSystem(userName: string, peerName: string, nowLabel: string): string {
+function buildSystem(userName: string, peerName: string, nowLabel: string, participants: string[] = []): string {
+  // 视角规则：群聊轮次（传了成员名单）允许按实际发言人归因，不再强制「用户/角色」二人视角；
+  // 私聊轮次维持两人视角不变
+  const perspective = participants.length
+    ? [
+        '【视角规则（最高优先级，违反即无效）】',
+        `- 这段聊天记录来自群聊，发言者可能不止两个人：除了「${userName}」（用户本人）和「${peerName}」（AI角色），发言者还可能是这些群成员：${participants.slice(0, 12).join('、')}。`,
+        '- 每条碎片必须写明说的是谁：主语用聊天记录里实际说话人/被提及者的名字（上面列出的成员名或「' + userName + '」「' + peerName + '」均可）。',
+        '- 严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等任何代称，严禁混用不同称呼。',
+        `- 严禁把其他成员说的话强行归因给「${userName}」或「${peerName}」：群里 C 说的事就写 C，绝不能写成${userName}或${peerName}的事。`,
+        `- 例：${userName}明天不上班、${peerName}喜欢打球、${participants[0] ?? '群成员小张'}约了周末爬山。`,
+      ]
+    : [
+        '【视角规则（最高优先级，违反即无效）】',
+        `- 这段对话发生在两个人之间：「${userName}」（用户本人）和「${peerName}」（AI角色）。`,
+        `- 每条碎片必须写明说的是谁：只允许用「${userName}」和「${peerName}」这两个名字指代两人。`,
+        '- 严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等任何代称，严禁混用不同称呼。',
+        `- 落笔前先判断这条信息是关于谁的（${userName} 还是 ${peerName}），再把名字写进碎片主语。`,
+        `- 例：${userName}明天不上班、${peerName}喜欢打球、${peerName}称${userName}为唯一交心的朋友。`,
+      ];
   return [
     '你是聊天记忆整理助手。从一段聊天记录中提取值得长期记住的关键信息，形成「记忆碎片」。',
-    '【视角规则（最高优先级，违反即无效）】',
-    `- 这段对话发生在两个人之间：「${userName}」（用户本人）和「${peerName}」（AI角色）。`,
-    `- 每条碎片必须写明说的是谁：只允许用「${userName}」和「${peerName}」这两个名字指代两人。`,
-    '- 严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等任何代称，严禁混用不同称呼。',
-    `- 落笔前先判断这条信息是关于谁的（${userName} 还是 ${peerName}），再把名字写进碎片主语。`,
-    `- 例：${userName}明天不上班、${peerName}喜欢打球、${peerName}称${userName}为唯一交心的朋友。`,
+    ...perspective,
     '【时间规则（时间感知：记忆要与当前时间联动）】',
     `- 现在是：${nowLabel}（北京时间）。对话里的相对时间（明天/今晚/下周一/3天后/月底）必须按当前时间换算成绝对时间。`,
     '- eventTime：这条信息所指事件的发生时间。有明确或相对时间信息的都填（含日期即可）。',
@@ -143,6 +157,13 @@ export async function POST(req: NextRequest) {
   // 视角统一：me=用户本人（真实名字优先），peer=AI 角色；缺省回退固定称呼且全批一致
   const userName = cleanName(body.userName, '用户');
   const peerName = cleanName(body.peerName, '对方');
+  // 群聊轮次：发言者名单（成员显示名）——有名单时按实际发言人归因，不再强制二人视角
+  const participants = Array.isArray(body.participants)
+    ? body.participants
+        .map((v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 20) : ''))
+        .filter((v: string) => v.length > 0)
+        .slice(0, 20)
+    : [];
 
   const nowMs = Date.now();
   const now = new Date();
@@ -173,7 +194,7 @@ export async function POST(req: NextRequest) {
       : '';
 
   const messages = [
-    { role: 'system' as const, content: buildSystem(userName, peerName, nowAnchor(now)) },
+    { role: 'system' as const, content: buildSystem(userName, peerName, nowAnchor(now), participants) },
     { role: 'user' as const, content: `聊天记录：\n${convoText}${existingText}` },
   ];
 

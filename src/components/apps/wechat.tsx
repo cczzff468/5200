@@ -205,7 +205,7 @@ import {
   type WxFamilyCardIn,
 } from './wechat-wallet';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
-import type { ChatCallResult, ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { hasVoiceCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall } from '@/lib/ios/global-call';
 import { triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich, type ChatLocData } from '@/lib/ios/chat-location';
@@ -3773,7 +3773,8 @@ function ChatPage({
     const evs = drainAiEvents(peer.id);
     if (evs.length === 0) return;
     const t = window.setTimeout(() => {
-      if (!isChatStreaming(sessionKey)) runAiTurnRef.current?.(null, [], evs.join('\n'));
+      // 连发投递未清空时同样不开新回合（与发送排队同口径：上一轮尾部还没落盘完）；错过的事件随本轮上下文丢失，与流式中占用的既有口径一致
+      if (!isChatStreaming(sessionKey) && !isAiDelivering(sessionKey)) runAiTurnRef.current?.(null, [], evs.join('\n'));
     }, 400);
     return () => window.clearTimeout(t);
   }, [peer.id, sessionKey]);
@@ -3892,12 +3893,15 @@ function ChatPage({
     return subscribeAiDeliveryActive(() => setDelivering(isAiDelivering(sessionKey)));
   }, [sessionKey]);
 
-  /** 排队补跑：流进行中发来的消息（wxQueuedTurns）在本轮流结束后自动触发回复。
-   *  页面存活时监听流结束广播；离开后流才收尾的，重进页面时补跑（消息已落盘不丢）。 */
+  /** 排队补跑：流进行中/连发投递中发来的消息（wxQueuedTurns）在「流收尾且投递队列清空」后自动触发回复。
+   *  页面存活时监听流结束广播与投递状态变化；离开后流才收尾的，重进页面时补跑（消息已落盘不丢）。
+   *  投递未清空时不能开新回合：上一轮的尾部消息还卡在投递队列里逐条落盘，此刻开新流——
+   *  旧回复尾巴进不了新回合上下文（AI 新回复自相矛盾），旧气泡也会倒挂在用户新消息下面。 */
   useEffect(() => {
     const kick = () => {
       if (!wxQueuedTurns.has(peer.id)) return;
       if (isChatStreaming(sessionKey)) return; // 本轮流还没收尾：等结束广播再跑
+      if (isAiDelivering(sessionKey)) return; // 上一轮连发还在投递：等投递完成事件再跑
       wxQueuedTurns.delete(peer.id);
       window.setTimeout(() => {
         const saved = loadMsgs(peer.id);
@@ -3911,8 +3915,15 @@ function ChatPage({
     const unsub = subscribeChatStreamFinalized((sKey) => {
       if (sKey === sessionKey) kick();
     });
+    // 投递状态变化（本会话批次开跑/投递完毕）也尝试补跑：finalize 广播到达时最后一批常常才刚入队，
+    // 投递完毕的 emitActive 才是「上一轮彻底写完」的可靠触发点（subscribeAiDeliveryActive 是全局广播，
+    // kick 自带 wxQueuedTurns 门控，其他会话的事件空跑即返回）
+    const unsubActive = subscribeAiDeliveryActive(() => kick());
     kick(); // 挂载时：之前排队但流已结束（离开页面后流才收尾）→ 立即补跑
-    return unsub;
+    return () => {
+      unsub();
+      unsubActive();
+    };
   }, [sessionKey, peer.id]);
 
   /** 通话结束（恰好一次，可能发生在聊天页已退出时）：通话卡片直写持久化 + 在场时同步本地 state。
@@ -4302,9 +4313,11 @@ function ChatPage({
       asSingle: boolean,
       baseTime: number,
     ): { msgs: WxMsg[]; cur: WxMsg[]; dirty: boolean } => {
-      const wantCall = rawText.includes('[语音通话]');
+      // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
+      // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
+      const wantCall = hasVoiceCallMark(rawText);
       if (wantCall) wantCallSeen = true;
-      const text = wantCall ? rawText.replace(/\[语音通话\]/g, ' ').trim() : rawText;
+      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
       const latest = loadMsgs(peer.id);
       let cur = latest;
       const out: WxMsg[] = [];
@@ -4422,7 +4435,7 @@ function ChatPage({
             ? built
             : deliveredAny
               ? []
-              : [{ id: aiId, role: 'peer', content: '（对方暂时没有回复，请稍后再试）', time: startedAt }];
+              : [{ id: aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt }];
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -4630,10 +4643,11 @@ function ChatPage({
       return;
     }
     const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
-    // 对方正在回复（连发短消息的逐条播放也占用流，可持续数秒）：消息照常入列并排队，
-    // 本轮流结束后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
-    // 看起来像「发了消息没人理」，AI 下一轮自然接不上话）
-    if (isChatStreaming(sessionKey)) {
+    // 对方正在回复（流式接收或连发投递未清空，投递可拖到流结束后数秒）：消息照常入列并排队，
+    // 「流收尾且投递完毕」后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
+    // 看起来像「发了消息没人理」，AI 下一轮自然接不上话）。投递中也排队：否则旧回复尾部
+    // 进不了新回合上下文，旧 AI 气泡还会倒挂在用户新消息下面
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       setInput('');
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
@@ -4657,9 +4671,10 @@ function ChatPage({
     runAiTurn(userMsg);
   }, [input, me, peer, runAiTurn, sessionKey, sentenceSend, quote, ttsSend]);
 
-  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」） */
+  /** 分句发送批次触发：把已发出的整批消息交给 AI 统一回复（输入框为空时点「发送」）；
+   *  连发投递未清空时同样不开新回合（与流式中的口径一致：等上一轮投递完毕再点一次） */
   const dispatchBatch = useCallback(() => {
-    if (!pendingDispatch || isChatStreaming(sessionKey)) return;
+    if (!pendingDispatch || isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
     setPendingDispatch(false);
     markPendingBatch(sessionKey, false);
     runAiTurn(null);
@@ -4682,10 +4697,10 @@ function ChatPage({
       setMsgs((prev) => [...prev, msg]);
       // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复
       if (peer.id === me.id) return;
-      /** 触发 AI 回复（对方正在回复则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
+      /** 触发 AI 回复（对方正在回复——流式或连发投递中——则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
       const kickTurn = () => {
-        if (isChatStreaming(sessionKey)) {
-          wxQueuedTurns.add(peer.id); // 对方正在回复：本轮结束后自动补跑
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          wxQueuedTurns.add(peer.id); // 对方正在回复：本轮「流收尾且投递完毕」后自动补跑
           return;
         }
         window.setTimeout(() => runAiTurnRef.current?.(null), 80);
@@ -4719,7 +4734,7 @@ function ChatPage({
         setMsgs((prev) => [...prev, userMsg]);
         return;
       }
-      if (isChatStreaming(sessionKey)) {
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
         setMsgs((prev) => [...prev, userMsg]);
         wxQueuedTurns.add(peer.id);
         return;

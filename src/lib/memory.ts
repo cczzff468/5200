@@ -1061,7 +1061,13 @@ function appendFragments(
 }
 
 /** 把当前待总结（未被更新/未过期/未消费/未归档）的碎片总结为核心记忆，并标记来源碎片已消费（阈值判断由调用方负责） */
-async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<MemCore> {
+async function summarizePendingIntoCore(
+  contactId: string,
+  apiConfig: ApiConfig,
+  names?: MemNames | null,
+  /** 群聊来源成员显示名（透传总结 prompt：保留其他成员的名字，不强制二人视角） */
+  participants?: string[]
+): Promise<MemCore> {
   const { forget } = getMemSettings(contactId);
   const now = Date.now();
   const pending = readFragments(contactId).filter(
@@ -1079,6 +1085,7 @@ async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig,
       fragments: pending.map((f) => f.content),
       userName,
       peerName,
+      ...(participants?.length ? { participants } : {}),
     },
     apiConfig
   );
@@ -1113,7 +1120,13 @@ async function summarizePendingIntoCore(contactId: string, apiConfig: ApiConfig,
 }
 
 /** 把当前未归档且未过期的核心记忆总结为一条长期记忆，并标记来源核心已归档（方案A：不重复总结） */
-async function summarizeCoresIntoLong(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<MemLongTerm> {
+async function summarizeCoresIntoLong(
+  contactId: string,
+  apiConfig: ApiConfig,
+  names?: MemNames | null,
+  /** 群聊来源成员显示名（透传总结 prompt：保留其他成员的名字，不强制二人视角） */
+  participants?: string[]
+): Promise<MemLongTerm> {
   const now = Date.now();
   const pending = readCores(contactId).filter((m) => !m.archivedAt && !isMemExpired(m, now));
   const { userName, peerName } = namesOf(names);
@@ -1124,6 +1137,7 @@ async function summarizeCoresIntoLong(contactId: string, apiConfig: ApiConfig, n
       fragments: pending.map((m) => m.content),
       userName,
       peerName,
+      ...(participants?.length ? { participants } : {}),
     },
     apiConfig
   );
@@ -1153,16 +1167,26 @@ async function summarizeCoresIntoLong(contactId: string, apiConfig: ApiConfig, n
 }
 
 /** 检查未消费且未归档的碎片是否达到核心阈值；达到则自动触发核心总结 */
-async function maybeAutoSummarize(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<MemCore | null> {
+async function maybeAutoSummarize(
+  contactId: string,
+  apiConfig: ApiConfig,
+  names?: MemNames | null,
+  participants?: string[]
+): Promise<MemCore | null> {
   if (pendingFragmentCount(contactId) < getMemSettings(contactId).threshold) return null;
-  return summarizePendingIntoCore(contactId, apiConfig, names);
+  return summarizePendingIntoCore(contactId, apiConfig, names, participants);
 }
 
 /** 检查未归档的核心记忆是否达到长期阈值；达到则自动触发长期记忆总结 */
-async function maybeAutoLongSummarize(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<MemLongTerm | null> {
+async function maybeAutoLongSummarize(
+  contactId: string,
+  apiConfig: ApiConfig,
+  names?: MemNames | null,
+  participants?: string[]
+): Promise<MemLongTerm | null> {
   const { longThreshold } = getMemSettings(contactId);
   if (pendingCoreCount(contactId) < longThreshold) return null;
-  return summarizeCoresIntoLong(contactId, apiConfig, names);
+  return summarizeCoresIntoLong(contactId, apiConfig, names, participants);
 }
 
 /** 群聊会话的来源/作用域选项（memAfterAiTurn opts）：群记忆碎片带来源标记，消息计数与私聊分开 */
@@ -1170,7 +1194,12 @@ export interface MemTurnOpts {
   /** 计数隔离作用域（如 `group:<gid>` → mem-msgcount:<cid>:wx:group:<gid>，与私聊计数互不干扰） */
   roundScope?: string;
   /** 群聊来源标记：碎片写 source='group' + sourceGroupId + groupMembers */
-  group?: { id: string; members: string[] };
+  group?: {
+    id: string;
+    members: string[];
+    /** 群成员显示名（供提取 prompt 按实际发言人归因：允许用任意成员名字，不再强制「用户/角色」二人视角） */
+    memberNames?: string[];
+  };
 }
 
 /**
@@ -1249,7 +1278,15 @@ export function memAfterAiTurn(
           const sourceMsgId = msgs ? memLastMsgId(msgs) : undefined;
           const res = await callMemoryApi<ExtractApiResult>(
             'extract',
-            { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
+            {
+              conversation: convo,
+              app,
+              existing: existingForConflict(contactId),
+              ...namesOf(names),
+              // 群聊轮次：把成员显示名交给提取 prompt——碎片按聊天记录里实际的说话人归因，
+              // 其他成员说的话不再被强行归成「用户/角色」二人之一（防跨成员串味进长期记忆）
+              ...(opts?.group?.memberNames?.length ? { participants: opts.group.memberNames } : {}),
+            },
             apiConfig
           );
           const items = normalizeExtract(res);
@@ -1267,13 +1304,13 @@ export function memAfterAiTurn(
       // 核心总结与提取相互独立：即使本轮提取失败，只要已积累的未消费碎片达到阈值，
       // 仍应尝试凝结核心记忆（否则一次提取故障会连带把总结也卡到下个窗口）
       try {
-        await maybeAutoSummarize(contactId, apiConfig, names);
+        await maybeAutoSummarize(contactId, apiConfig, names, opts?.group?.memberNames);
       } catch (err) {
         console.warn('[memory] 自动总结核心记忆失败（下个窗口重试）', err);
       }
       // 长期总结与核心总结相互独立：核心达到长期阈值即触发（失败下个窗口重试）
       try {
-        await maybeAutoLongSummarize(contactId, apiConfig, names);
+        await maybeAutoLongSummarize(contactId, apiConfig, names, opts?.group?.memberNames);
       } catch (err) {
         console.warn('[memory] 自动总结长期记忆失败（下个窗口重试）', err);
       } finally {

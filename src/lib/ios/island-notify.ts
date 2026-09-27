@@ -303,6 +303,16 @@ export function takeNotifyNavigation(app: NotifyApp): NotifyTarget | null {
   return t;
 }
 
+/**
+ * 通话层跳转入口（QQ 来电「消息回复」/ 电话来电「短信回复」共用）：
+ * 与通知卡片点击完全同一套导航协议——写 pendingNav + switchToApp + 派发导航事件：
+ * 目标 App 未打开时由其挂载后消费 pending，已打开时事件驱动立即打开会话。
+ * 锁屏/熄屏时不跳转（与通知点击一致）。
+ */
+export function navigateToChatSession(app: NotifyApp, contactId: string): void {
+  navigateToNotifyTarget({ app, contactId });
+}
+
 // ---------------- 消息 → 通知预览文本（各端共用映射；返回 null = 不弹） ----------------
 
 export interface NotifyMsgInfo {

@@ -283,6 +283,22 @@ function parseAmount(v: string | undefined): number {
 }
 
 /**
+ * AI 发钱硬上限（解析层强制；与提示词纪律一致，双保险）——
+ * 红包 ≤200（与用户发红包同一上限）；转账 ≤2000；亲属卡月额度 ≤1000。
+ * AI 写出再大的金额也按上限出卡，防止一句 [转账:9999999] 刷爆零钱。
+ */
+export const AI_AMOUNT_CAP: Record<'redpacket' | 'transfer' | 'family', number> = {
+  redpacket: 200,
+  transfer: 2000,
+  family: 1000,
+};
+
+/** 金额上限收敛（超限不报错不拒发，静默按上限出卡） */
+function capAmount(v: number, cap: number): number {
+  return Math.min(v, cap);
+}
+
+/**
  * 气泡文本首尾清洗：剥掉首尾的空白与「看不见的占位字符」（零宽空格 U+200B-200F、
  * 词连接符 U+2060、盲文空格 U+2800、韩文填充符 U+3164/U+FFA0 等——模型偶尔会输出，
  * String.trim 不认识它们，残留在气泡开头就是一条「前面有空隙」的消息）。
@@ -324,8 +340,11 @@ function parseMarker(kind: string, inner: string, stickers: Sticker[] | null, gr
   const segs = inner.split(/[:：]/);
   switch (kind) {
     case '红包': {
-      // 金额缺失/非法时兑底随机金额：AI 常写成裸的 [红包]，照文字显示会让「AI 发红包」看起来失效
-      const amount = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('redpacket');
+      // 金额缺失/非法时兑底随机金额：AI 常写成裸的 [红包]，照文字显示会让「AI 发红包」看起来失效；超上限按上限出卡
+      const amount = capAmount(
+        Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('redpacket'),
+        AI_AMOUNT_CAP.redpacket,
+      );
       if (group) {
         const cntRaw = (segs[1] ?? '').trim();
         const cnt = Number(cntRaw);
@@ -344,14 +363,23 @@ function parseMarker(kind: string, inner: string, stickers: Sticker[] | null, gr
         // 群聊格式：[转账:对象:金额:备注]——对象必须是群成员名字（调用方解析），写不出对象就不成卡
         const target = (segs[0] ?? '').trim();
         if (!target) return null;
-        const amount = Number.isFinite(parseAmount(segs[1])) ? parseAmount(segs[1]) : fallbackAmount('transfer');
+        const amount = capAmount(
+          Number.isFinite(parseAmount(segs[1])) ? parseAmount(segs[1]) : fallbackAmount('transfer'),
+          AI_AMOUNT_CAP.transfer,
+        );
         return { kind: 'transfer', amount, note: segs.slice(2).join(':').trim(), target };
       }
-      const amount = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('transfer');
+      const amount = capAmount(
+        Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('transfer'),
+        AI_AMOUNT_CAP.transfer,
+      );
       return { kind: 'transfer', amount, note: segs.slice(1).join(':').trim() };
     }
     case '亲属卡': {
-      const monthlyLimit = Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('family');
+      const monthlyLimit = capAmount(
+        Number.isFinite(parseAmount(segs[0])) ? parseAmount(segs[0]) : fallbackAmount('family'),
+        AI_AMOUNT_CAP.family,
+      );
       return { kind: 'family', monthlyLimit, message: segs.slice(1).join(':').trim() };
     }
     case '位置': {
@@ -462,6 +490,8 @@ export function buildRichRules(stickers: Sticker[]): string[] {
       '。金额和额度写数字（可带小数）；没有合适的理由时不要发这些。',
     '【发红包/转账·格式铁律】红包/转账/亲属卡标记里必须写数字金额，例如 [红包:8.88:拿去买奶茶]、[转账:66:上次饭钱]；' +
       '只输出 [红包] 或 [转账] 不带金额是无效的，你想发钱就务必带金额，不要用单独的 [红包] 当作表情或代称。',
+    '【发钱纪律】红包/转账/亲属卡按你的人设、你们的关系和当下话题自主决定，没有合适的理由就不要发，不是每轮都要发；' +
+      '一轮回复最多发一次红包或转账；金额要符合你们的关系与你的经济状况：单个红包不超过 200 元、单笔转账不超过 2000 元、亲属卡每月额度不超过 1000 元，绝不写夸张的天文数字。',
     ...(stickers.length > 0
       ? [
           '【发表情包·格式强调】聊天记录里的「[发送了表情：XX]」只是对方发表情的存档记录，不是你的输出格式，禁止模仿！' +
