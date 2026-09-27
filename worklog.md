@@ -8022,3 +8022,67 @@ Stage Summary:
 - 三态语义全链路统一：已拒绝（对方按了拒接）/未接听（响铃没人接）/已挂断（真实接通过后结束）由 call-outcome.ts 唯一映射，followup system 注入结局硬事实+反应引导+硬性禁止，AI 不再把「被拒接」说成「接通后很快挂断」；未知/矛盾数据一律按未接通兜底（宁可当没接通，不编造通话）
 - 接通后挂断场景不受影响：真实聊过→对方先挂时 AI 仍可自然抱怨「挂得快」（仅限该场景）
 - 修改文件：src/lib/ios/call-outcome.ts（新增）、src/app/api/phone/followup/route.ts、src/components/apps/voice-call-screen.tsx（callCardAiText）
+---
+Task ID: 22-d
+Agent: Explore 审计员（语音链路与基础App）
+Task: 只读审计语音链路与基础 App
+
+Work Log:
+- 通读语音链路全部 11 个 lib（tts-client/stt-client/ai-voice/voice-send/voice-player/vad/web-speech/my-voices/builtin-voices/audio-focus/audio-utils）、5 个 API 路由（api/tts、api/tts/voices、api/stt、api/phone/tts、api/phone/asr）与 lib/server-tts，并核对调用方 phone.tsx/chat-call.ts/voice-input.tsx/voice-call-screen.tsx 的降级链
+- 发现 P1：tts-client API 路径未像 ai-voice.resolveAiVoiceIdForApi 那样把 builtin: 声线 id 替换为服务商安全默认音色——全局默认设为内置声线后切 MiniMax/OpenAI，wx/qq 通话 AI 语音全静默降级文字
+- 发现 P1：speakBuiltin 无超时看门狗（iOS Safari 长文本 onend 不触发时 Promise 永挂），免提通话会卡死在「正在说话」
+- 记录 P2 一批：voice-player toggleBuiltinTts 竞态无令牌、voice-input stopRequested 路径 onResult 双触发、/api/phone/asr 与 /api/stt builtin 分支重复且空结果契约分叉（200+error vs {text:''}）、VAD waitMs 含底噪校准时间、chat-call 无视 sttConfig.webSpeech 开关、ai-voice 计数器在合成失败时空耗、phone.tsx 兜底音频未接 audio-focus
+- 基础 App（settings/photos/camera/music/recorder/notes/calendar/clock/files/reminders/themes/appstore/contacts/memory-bank）+ db/store/contacts-store/secure-store 快速过审：清理模式（stream/ctx/ObjectURL/interval）规范，未发现 P0/P1 级问题
+
+Stage Summary:
+- 未改任何代码（纯只读审计）。最值得修 Top5：① tts-client API 路径 builtin 音色 id 漏替换（P1 规则）；② speakBuiltin 缺超时看门狗致免提卡死（P1 bug）；③ /api/phone/asr 与 /api/stt 重复实现+契约分叉（P2 规则）；④ voice-player toggleBuiltinTts 竞态（P2 bug）；⑤ phone.tsx 兜底音频/audio-focus 互斥盲区（P2 bug）
+---
+Task ID: 22-b
+Agent: Explore 审计员（聊天核心）
+Task: 只读审计单聊核心代码与规则（wechat/qq/chat + ai-delivery/chat-stream-store/reply-count/block-state/quit-flow/npc-bond/persona + chat/vision/translate API + 钱包）
+
+Work Log:
+- 通读 ai-delivery.ts / chat-stream-store.ts / reply-count.ts / block-state.ts / npc-bond.ts / persona.ts / quit-flow.ts 与三个 API 路由；逐段审 wechat.tsx ChatPage（3577-6574）、qq.tsx ChatPage（2061-4900）、chat.tsx ChatView（660-1560）、bubble-menu/voice-bubble/forward-sheet/sticker-batch、wechat-wallet 金额链路
+- 复核投递/流式竞态：ai-delivery 串行队列本身无泄漏；但 wx/qq 的 send() 只挡 isChatStreaming 不挡 isAiDelivering——AI 连发投递期间用户发消息会立即开新流，旧回复尾部（还在投递队列里）不进新回合上下文，且落盘/上屏顺序倒挂（旧 AI 气泡跑到用户新消息下面）
+- 复核兜底文案过滤三端口径：wechat 错误用〔〕会被历史过滤排除；qq 错误文案「（消息发送失败：…）」与「（对方暂时…」都不在过滤表里（qq.tsx:2707 只滤〔和（AI）→ 下轮进 AI 上下文；chat.tsx 历史过滤无任何前缀排除
+- 复核红包/转账边界：用户侧完整（sanitizeAmount 7位+2位小数、红包≤200、wxCanPay/wxExecutePayment 余额预检+扣款、0 元拒绝）；AI 侧 parseAmount 只要求 >0 无上限，且单聊版 buildRichRules 没有群聊版的【发钱纪律】，用户打开 AI 红包/转账即全额入账——AI 可无限刷钱
+- 复核拉黑恢复（kv 持久化+区间图标判定正确）、引用/转发空内容兜底（quoteContentOf 全类型占位）、识图降级链（proxy→直连→内置 SDK 三级+占位防编造规则）、长按菜单（pointer 事件+480ms+点击拦截，iOS 图片气泡缺 select-none/-webkit-touch-callout）
+- 条数语义核查：单聊三端全部 buildReplyCountPrompt（min~max 区间式、无写死条数残留）；未修任何代码
+
+Stage Summary:
+- 未改任何代码（纯审计）。Top findings：①wx/qq 投递期发消息竞态（上下文缺尾部+顺序倒挂）；②信息 App 流式期间发消息/语音被静默丢弃（无排队补跑，wx/qq 有）；③AI 单聊发钱无上限无纪律、打开即入账可刷穿零钱；④QQ 错误兜底文案泄漏进 AI 上下文（三端过滤口径不一）；⑤wxQueuedTurns/qqQueuedTurns 刷新即丢（排队消息永无回复）+ QQ AI 来电缺幂等防御 + onVision 只写最后一张图
+---
+Task ID: 22-c
+Agent: Explore 审计员（群聊与记忆）
+Task: 只读审计群聊/记忆/世界书/朋友圈（wx-group/qq-group/groups/group-admin/group-social/memory-bank/worldbook/extract/summarize/moments generate/moments-shared + wechat/qq 关联调用点）
+
+Work Log:
+- 通读 groups.ts（群数据层/事件/踢人禁言/解散退出/恢复）、group-admin.ts（AI 管理权限硬校验完整）、group-social.ts（建群/拉人/冷却拒绝表/开场白）、memory.ts 的 memAfterAiTurn/memRecallBlock/群来源可见性、worldbook.ts（扫描/预算/六位置注入）、reply-count.ts、chat-stream-store.ts、ai-delivery.ts、moments.ts 调度段与两个群聊组件的 runGroupTurn/runCharTurn/finalize 全链路；互查 wechat.tsx/qq.tsx 私聊 finalize 对照
+- 验证为真的 bug：①群红包「普通红包×多份」领取金额取 remaining（剩余总额）而非单份 rp.amount——wx/qq 双端用户领取与 AI 领取共 4 处同错，第一人拿走全部、后续领 0 元（compose UI 明确支持普通多份，AI 待办清单展示的单份金额与入账还自相矛盾）；②群回合循环只查群存在不查成员表快照后变动——AI [移出群聊:B] 执行后 B 仍拿完整回合发言；③被 @ 的禁言成员绕过禁言（mentioned 未过 isGroupMuted，与代码注释"被 @ 也不行"相反）；④群聊 finalize 无 result.error 分支（私聊 wechat.tsx:4406 有），API 失败时每个成员落一条「（…）」假消息且进历史/记忆；⑤replyCount>1 时 finalize 尾批 initialDelay≈0.85~2.4s 而成员间仅 sleep 420ms，后一成员在回合开始即冻结历史→几乎必漏看前一成员最后一条消息；⑥saveGroupMsgs 对已解散 QQ 群回退 app='wx' 写孤儿键
+- 规则层问题：群记忆提取把含其他成员发言的群转写交给 extract route，而 prompt 强制"只允许 userName/peerName 两个名字、必须二选一归主语"→第三方事实被硬塞进两人视角（串味风险，extract/summarize 两个 route 同构）；persona.ts:218"最后一条就是{user}刚发给你的话"在群成员回合（上一条常是其他成员消息）为假；buildReplyCountPrompt 的"绝不能只发 1 条/尽量发满"逐成员原样注入与群规则"兼顾群聊节奏"方向相反；memory-bank 手动总结链路依赖 memMostRecentApp 只读三个私聊消息库（不含 wx/qq-group-msgs）→只聊过群的角色手动"立即总结/全部执行"永远报没有对话；局部/专属世界书在群聊按角色私聊绑定生效且扫描文本含其他成员发言→私设可泄漏进群
+- 验证为健康的面（未列入 findings）：群记忆互通开关确实按联系人/群隔离（mem-frag:<cid> 存储键 + mode=group 只读本群 + 被踢成员 groupMemVisible=false），effectiveInterop 双端接线正确；群管理权限硬校验（owner>admin>member、越权标记丢弃、普通成员注入"无权限如实说明"）完整；Task 17 的「每次只发一条」动态化在 wx-group:2755/qq-group:2423 均已正确落地；朋友圈手动生成失败有 toast、评论防串台有 author==='user' 校验与旧数据修复
+- 朋友圈自动发布（runAutoPosts）失败静默仅 10 分钟退避、无任何用户提示；nudge/regenerate 不校验禁言与在群状态——列为完善建议
+
+Stage Summary:
+- 【P0】群红包普通多份领取金额错误（4 处同构：wx-group 2508/3596 + qq-group 2250/3252），第一领取者拿走全部剩余、后续领 0
+- 【P1】被踢/被禁言成员在本轮快照里仍会发言（循环仅查群存在；mentioned 绕过禁言过滤）；群聊 finalize 无错误分支致 API 失败时每成员落「（…）」假消息；连发模式下后一成员看不到前一成员最后一条消息（resolve 先于投递、尾批延迟>420ms sleep）；群记忆提取两人视角规则 vs 多人转写→跨成员串味；persona 基础规则"最后一条是用户的话"在群回合为假；连发指令逐成员强制最少 3 条与群节奏规则冲突；记忆库手动总结不含群消息库致群聊角色入口失效
+- 【P2】解散瞬间回合写错消息池孤儿键、局部世界书群聊泄漏、自动发动态失败零反馈、nudge/regenerate 绕过禁言/在群校验、[SKIP] 全员冷场无反馈
+- 未改任何代码（纯只读审计）
+---
+Task ID: 22-a
+Agent: Explore 审计员（通话体系）
+Task: 只读审计通话体系代码与规则
+
+Work Log:
+- 通读 worklog 背景（Task 13~21 免提循环/记忆/主动行为/续聊/来电弹窗/三态语义）后全量审计通话体系：chat-call.ts、phone.tsx CallScreen、incoming-call/global-call/call-decision/call-followup/call-outcome/vad、IncomingCallLayer/GlobalCallLayer、voice-call-screen、phone 三 API 路由、chat.tsx 来电触发段
+- 确认 1 个 P0：chat-call.ts:1215 来电 25s 超时条件写反（if (endedRef.current) 应为 !endedRef.current）——微信/QQ AI 来电响铃永不超时结束（不落未接卡片/不触发续聊/弹窗挂死），电话来源因 IncomingCallLayer 自带 25s 计时器而幸免
+- 确认 4 个 P1 bug：电话 App 接听交接桥 mount-only 消费（电话 App 已在前台/锁屏时接听→switchToApp 被 locked/同 App 拦截→弹层清了通话界面不开+pending 滞留成幽灵来电）；电话 App 通话中切 App/锁屏→CallScreen 卸载静默杀死通话（无记录/无总结/无续聊，wx/qq 全局层无此问题）；phone.tsx AI 主动挂断的 followup endReason 硬编码 'hangup'（应为 ai-hangup，AI 会说「对方先挂/挂得快」与 Task 21 语义冲突）；QQ 来电「消息回复」按钮在 GlobalCallLayer 传空函数（只拒接不回聊天）
+- 规则审计：turn API greeting 恒「用户刚拨通电话」且无 direction 字段（AI 主叫视角颠倒）；0 秒接通即挂时 followup「聊了一会儿+0 秒」自相矛盾且易虚构通话；[语音通话] 标记识别仅认半角方括号（挂断标记兼容五种括号）；CHAT_CALL_EXTRA_RULES 硬编码「很熟的朋友」与疏远人设冲突；未发现硬编码条数残留（1~5 句/1~2 句均为句数语义）
+- 其余 P2：recordMissedPhoneCall realName 传成 contact.name（复制粘贴错）、replyBySms 用 openApp（前台占用时静默无效）、AI 来电 number 可为空串、双击接听竞态、活动通话中被「回拨」替换、拨号取消落对端留言、turn/STT/TTS 无超时看门狗、localDB.put 无 catch、0 秒通话被误分类「未接通」等
+- 未改任何代码（纯审计）
+
+Stage Summary:
+- P0：微信/QQ AI 来电 25s 超时永不触发（chat-call.ts:1215 条件取反）——不接的来电永远响铃
+- P1：锁屏/电话 App 在前台时接听 AI 电话无效且留下幽灵 pending；电话 App 通话被切 App/锁屏静默杀死且零记录；AI 主动挂断的挂断续聊被说成「对方先挂」；QQ 来电「消息回复」按钮是空函数；turn greeting 对 AI 主叫来电视角颠倒
+- 规则面：0 秒通话 followup 场景矛盾、[语音通话] 标记括号宽容度不一致、通话场景规则「很熟的朋友」硬编码；条数语义干净无残留
+- 未改任何代码，全部为只读审计结论
