@@ -17,6 +17,9 @@ import AppSwitcher from './AppSwitcher';
 import LockScreen from './LockScreen';
 import IslandNotificationLayer from './IslandNotification';
 
+// 通知权限友好申请卡（首次使用时应用内说明卡，代替裸浏览器授权框）：常驻挂载，不弹时不渲染内容
+const NotifyPermissionCard = dynamic(() => import('./NotifyPermissionCard'), { ssr: false });
+
 // 闹钟监听懒加载：避免为一个小组件把整个时钟 App 拖进首屏包
 const AlarmWatcher = dynamic(() => import('@/components/apps/clock').then((m) => m.AlarmWatcher), { ssr: false });
 
@@ -253,6 +256,9 @@ export default function PhoneShell() {
           />
         )}
         <IslandNotificationLayer />
+
+        {/* 通知权限友好申请卡（首次使用时展示，应用内说明 → 用户手势内才弹浏览器授权框） */}
+        <NotifyPermissionCard />
 
         {/* 全局闹钟监听（锁屏时也会响铃，铃声弹层 z-90 高于锁屏） */}
         <AlarmWatcher />

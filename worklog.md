@@ -8738,3 +8738,19 @@ Stage Summary:
 - 交付文件：src/lib/ios/ai-delivery.ts、src/lib/ios/bg-turn.ts、src/lib/ios/push-client.ts、src/lib/ios/island-notify.ts、src/lib/chat-stream-store.ts、src/app/api/chat/bg/route.ts、src/components/apps/settings.tsx、src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
 - 关键决策：①relay 兜底用 forceSdk 而非复刻浏览器直连（服务端无法代连用户内网）；②cancel 只杀「取消前已开始的 generate」，deliver 永不取消（丢现成消息比多一条更糟）；③读拉/写清分离修 StrictMode 竞态（消费失败最多重复投递一次，不会丢）；④群聊接力整体跳过（待后续补群页拉取管线）；⑤系统通知在用户环境的最终解法=「新标签页打开」（iframe 权限策略限制无法从应用内突破），设置页已给出诊断与指引
 - 现在的体验：切走标签页→回复实时送达+系统通知逐条弹；关闭网页→服务端接力生成（上游挂了也有内置模型兜底）+Web Push 推送（订阅成功时）+重开网页自动补投
+---
+Task ID: 23
+Agent: 主协调者 (Z.ai Code)
+Task: 通知模块需求清单落地审计：补齐「首次友好申请权限」与「Web 通知 App 来源图标」
+
+Work Log:
+- 逐条审计需求：①切 App/锁屏能通知 ✅（灵动岛 z-93>锁屏 z-65；切标签页/关页走 Web Notification/Web Push）②Web Notification API ✅ ③首次友好申请 ❌（原实现第一条 AI 消息直接弹裸浏览器授权框）④拒绝降级应用内弹窗 ✅ ⑤通知含角色名/内容/App 图标 ⚠️（灵动岛有角标，Web 通知只有头像）⑥同角色多条每条都通知 ✅（灵动岛后到顶替逐条展示；Web tag 每条唯一不合并）
+- island-notify.ts：新增 useNotifyPrompt store + dismissNotifyPrompt（localStorage 'ios-notify-preprompt' 持久化「暂不」）+ requestNotifyPermission（用户手势内 requestPermission，granted 顺带 ensurePushSubscription）；maybeWebNotification 的 default 分支改为触发应用内预提示卡（不再直接弹浏览器框）；新增 buildNotifyIcon 复合图标（canvas 144px：角色头像圆形裁切 + 右下角 App 来源图标白圈角标，按 头像+App 缓存，加载失败/画布不可用多重降级）；postWebNotification 改 async 用复合图标
+- 新增 src/components/ios/NotifyPermissionCard.tsx：iOS 风格说明卡（铃铛图标+标题+说明+暂不/开启通知按钮+右上×），z-92（灵动岛通知之下、锁屏之上），15s 无操作自动收起且与「暂不」同口径持久化（防每次刷新第一条消息都弹=骚扰），「开启」结果展示（已开启/未开启降级文案）1.6s 后收起
+- PhoneShell.tsx：dynamic 懒加载挂载 NotifyPermissionCard
+- E2E（monkey-patch Notification.permission='default' 模拟首次使用）：卡片在第一条 AI 消息投递时弹出、视觉正确；「暂不」→ flag=later + 卡片关 + 刷新不再弹；「开启通知」→ 无头拒绝 → 显示「未开启：将在应用内弹窗提醒，不影响聊天」→ 自动收起；聊天主链路无回归；lint+tsc 双绿、浏览器零报错
+
+Stage Summary:
+- 交付文件：src/lib/ios/island-notify.ts、src/components/ios/NotifyPermissionCard.tsx（新增）、src/components/ios/PhoneShell.tsx
+- 关键决策：①预提示卡只在用户手势内调 requestPermission（浏览器不会被拦、不被误拒）；②「暂不」/×/15s 超时三种收起全部持久化，授权与否都不再骚扰；③Web 通知图标用 canvas 合成（头像+App 角标），与灵动岛通知卡同构，多重降级保证任何环境都能弹
+- 需求清单全项落地：切 App/锁屏（灵动岛）+ 切走/关页（Web Notification/Push）+ 友好申请 + 拒绝降级 + 角色名/内容/App 图标 + 每条消息独立通知

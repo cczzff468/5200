@@ -228,12 +228,139 @@ export const NOTIFY_APP_ICON: Record<NotifyApp, string> = {
 
 let webPermAsked = false;
 
-function postWebNotification(n: IslandNotification): void {
+// ---------------- 友好权限申请（首次使用：应用内说明卡 → 用户点「开启」才弹浏览器授权框） ----------------
+
+/**
+ * 首次使用时不直接弹浏览器授权框（无说明、无用户手势，容易被浏览器拦/被用户误拒），
+ * 先展示应用内说明卡（NotifyPermissionCard 渲染），用户点「开启通知」才 requestPermission。
+ * 点「暂不」写入 localStorage，本浏览器不再主动弹（设置›通知页随时可开）。
+ */
+const PREPROMPT_KEY = 'ios-notify-preprompt';
+
+interface NotifyPromptState {
+  open: boolean;
+  show: () => void;
+  hide: () => void;
+}
+
+export const useNotifyPrompt = create<NotifyPromptState>((set) => ({
+  open: false,
+  show: () => set({ open: true }),
+  hide: () => set({ open: false }),
+}));
+
+/** 用户在预提示卡点「暂不」后调用：本浏览器不再主动弹（设置页开关仍可用） */
+export function dismissNotifyPrompt(): void {
   try {
+    window.localStorage.setItem(PREPROMPT_KEY, 'later');
+  } catch {
+    // 存储不可用：仅本次会话不再弹（webPermAsked 已挡）
+  }
+  useNotifyPrompt.getState().hide();
+}
+
+/** 浏览器授权申请（预提示卡「开启」按钮调用；成功后顺带完成 Web Push 订阅） */
+export async function requestNotifyPermission(): Promise<NotificationPermission | 'unsupported'> {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  try {
+    const p = await Notification.requestPermission();
+    if (p === 'granted') ensurePushSubscription();
+    return p;
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/**
+ * Web Notification 复合图标：角色头像圆底 + App 来源图标角标（右下角白圈），
+ * 满足「通知内容包含 App 来源图标」。合成结果按 头像+App 缓存；头像缺失/画布不可用时
+ * 降级为 App 图标（与旧行为一致）。
+ */
+const compositeIconCache = new Map<string, string>();
+
+async function buildNotifyIcon(n: IslandNotification): Promise<string> {
+  const appIcon = NOTIFY_APP_ICON[n.app];
+  if (!n.avatar) return appIcon; // 无头像：直接用 App 图标
+  const key = `${n.app}|${n.avatar}`;
+  const cached = compositeIconCache.get(key);
+  if (cached) return cached;
+  try {
+    const [avatarImg, appImg] = await Promise.all(
+      [n.avatar, appIcon].map(
+        (src) =>
+          new Promise<HTMLImageElement | null>((resolve) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            const done = (v: HTMLImageElement | null) => resolve(v);
+            const t = setTimeout(() => done(null), 600);
+            img.onload = () => {
+              clearTimeout(t);
+              done(img);
+            };
+            img.onerror = () => {
+              clearTimeout(t);
+              done(null);
+            };
+            img.src = src;
+          }),
+      ),
+    );
+    if (!avatarImg || !appImg) return n.avatar; // 任一图加载失败：退回头像原图
+    const S = 144;
+    const canvas = document.createElement('canvas');
+    canvas.width = S;
+    canvas.height = S;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return n.avatar;
+    // 角色头像：圆形裁切铺满
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    const side = Math.min(avatarImg.width, avatarImg.height);
+    ctx.drawImage(
+      avatarImg,
+      (avatarImg.width - side) / 2,
+      (avatarImg.height - side) / 2,
+      side,
+      side,
+      0,
+      0,
+      S,
+      S,
+    );
+    ctx.restore();
+    // App 来源角标：右下角圆角方块 + 白色描边（与灵动岛通知卡同构）
+    const badge = Math.round(S * 0.36);
+    const bx = S - badge - 2;
+    const by = S - badge - 2;
+    const r = Math.round(badge * 0.24);
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(bx - 3, by - 3, badge + 6, badge + 6, r + 3);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.roundRect(bx, by, badge, badge, r);
+    ctx.clip();
+    ctx.drawImage(appImg, bx, by, badge, badge);
+    ctx.restore();
+    const url = canvas.toDataURL('image/png');
+    compositeIconCache.set(key, url);
+    return url;
+  } catch {
+    return n.avatar;
+  }
+}
+
+async function postWebNotification(n: IslandNotification): Promise<void> {
+  try {
+    const icon = await buildNotifyIcon(n);
     const notif = new Notification(n.title, {
       body: n.subtitle ? `【${n.subtitle}】${n.body}` : n.body,
       tag: n.id, // 每条消息一个独立系统通知（不再按会话替换合并）
-      icon: n.avatar || NOTIFY_APP_ICON[n.app],
+      icon,
       silent: true,
     });
     notif.onclick = () => {
@@ -253,14 +380,19 @@ function maybeWebNotification(n: IslandNotification): void {
     if (perm === 'granted') {
       ensurePushSubscription();
       // 页面可见时灵动岛弹窗足够，不重复打扰；只有用户切走/锁屏才发系统通知
-      if (document.visibilityState === 'hidden') postWebNotification(n);
+      if (document.visibilityState === 'hidden') void postWebNotification(n);
     } else if (perm === 'default' && !webPermAsked) {
-      // 首次使用时申请一次；拒绝后不再申请，应用内弹窗不受影响；
-      // 授权成功后尽力注册 Service Worker + Web Push（页面关闭后服务端接力回复也能逐条推送）
+      // 首次使用友好申请：不直接弹浏览器授权框，先展示应用内说明卡，
+      // 用户点「开启」才 requestPermission（用户手势内触发，浏览器不会被拦）；
+      // 拒绝/暂不后不再申请，应用内灵动岛弹窗不受影响
       webPermAsked = true;
-      void Notification.requestPermission().then((p) => {
-        if (p === 'granted') ensurePushSubscription();
-      });
+      let skipped = false;
+      try {
+        skipped = window.localStorage.getItem(PREPROMPT_KEY) === 'later';
+      } catch {
+        // 存储不可用：仍展示一次预提示
+      }
+      if (!skipped) useNotifyPrompt.getState().show();
     }
   } catch {
     // 权限查询异常（旧浏览器）静默降级
