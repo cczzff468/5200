@@ -8771,6 +8771,8 @@ function MainScreen({
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */
   const [friendMoments, setFriendMoments] = useState<ContactRecord | null>(null);
   const [page, setPage] = useState<Page>('main');
+  /** 朋友圈页内容范围：all = 全部动态（发现页入口）；mine = 只看我发的（「我」页/自己详情页入口） */
+  const [momentsScope, setMomentsScope] = useState<'all' | 'mine'>('all');
   const [menuOpen, setMenuOpen] = useState(false);
   const [moments, setMoments] = useState<WxMoment[]>(() => loadMoments());
   /** 用户 API 配置（让 AI 发动态时按人设生成内容用） */
@@ -9029,6 +9031,7 @@ function MainScreen({
       const post = addUserMomentPost('wx', { userName: me.name, avatar: me.avatar, content: text, images });
       enqueuePostInteractions('wx', post.id);
       reloadMoments();
+      setMomentsScope('mine');
       setPage('moments');
       showToast('已发表到朋友圈');
     },
@@ -9164,9 +9167,11 @@ function MainScreen({
           setChatPeer(c);
         }}
         onOpenMoments={(c) => {
-          // 自己的详情页：「朋友圈」进自己的朋友圈；好友才自动补示例动态
-          if (c.id === me.id) setPage('moments');
-          else openFriendMoments(c);
+          // 自己的详情页：「朋友圈」进自己的朋友圈（只看我发的动态）；好友才自动补示例动态
+          if (c.id === me.id) {
+            setMomentsScope('mine');
+            setPage('moments');
+          } else openFriendMoments(c);
         }}
         onToast={showToast}
       />
@@ -9180,7 +9185,7 @@ function MainScreen({
       <>
         <MomentsPage
           me={me}
-          posts={moments}
+          posts={momentsScope === 'mine' ? moments.filter((p) => p.authorName === me.name) : moments}
           onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
           onCompose={() => setPage('compose')}
           onToggleLike={toggleLike}
@@ -9437,6 +9442,8 @@ function MainScreen({
         onToast={showToast}
         onOpenPostNow={() => {
           setAskOpen(true);
+          // 让好友发的动态要在信息流里看见：打开全量动态页
+          setMomentsScope('all');
           setPage('moments');
         }}
       />
@@ -9797,7 +9804,11 @@ function MainScreen({
                 first
                 label="朋友圈"
                 testId="wx-moments-entry"
-                onClick={() => setPage('moments')}
+                onClick={() => {
+                  // 发现页入口：全量朋友圈信息流（自己+好友的动态）
+                  setMomentsScope('all');
+                  setPage('moments');
+                }}
                 icon={<WxIcMoments small />}
               />
             </div>
@@ -9902,7 +9913,11 @@ function MainScreen({
               <WxMenuRow
                 label="朋友圈"
                 testId="wx-me-moments"
-                onClick={() => setPage('moments')}
+                onClick={() => {
+                  // 「我」页入口：我的朋友圈（只显示我发的动态）
+                  setMomentsScope('mine');
+                  setPage('moments');
+                }}
                 icon={<WxIcMoments small />}
               />
               <WxMenuRow

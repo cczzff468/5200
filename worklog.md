@@ -10227,3 +10227,30 @@ Stage Summary:
 - 项目已完整拉取并运行：iOS 手机模拟器（AI Phone — 仿 iOS 智能助手），内含 QQ/微信等 AI 角色聊天应用
 - 本地 git 与 origin/main 完全对齐（b91690c），可直接修改后 git push
 - 待办：等待用户提出需要修改或添加的功能
+
+---
+Task ID: feat-60
+Agent: 主协调者（Z.ai Code）
+Task: QQ资料页边缘渲染修复 + 朋友圈/空间「我的/TA的」入口贯通（5 项需求）
+
+Work Log:
+- Task 1（边缘渲染）：好友资料页 FriendProfilePage 两处 h-2 分隔条（互动标识上方/他的QQ空间上方）加 -mx-5 贴满屏宽，与个人资料页 ProfilePage 分隔条写法一致
+- Task 5（他的QQ空间）：FriendProfilePage 新增 onOpenZone prop，「他的QQ空间」按钮从 toast 改为 onOpenZone（testid=qq-fprofile-zone）；MainScreen 调用站传 setRoute({ page: 'zone-peer', contactId })
+- Task 3（QQ空间→我的）：ProfilePage QQ空间行调用站改为 setRoute({ page: 'zone', scope: 'mine', from: 'profile' })
+- Task 4（编辑资料）：ProfilePage 新增 useUI 的 switchToApp/setPendingContactEdit，openEditProfile = setPendingContactEdit(me.id)+switchToApp('contacts')；「资料完成度60%」行（testid=qq-profile-completion）与底部「编辑资料」按钮（testid=qq-profile-edit）均接 openEditProfile，替换原 toast
+- ZonePage 扩展：新增 owner?: ContactRecord（TA的空间：头部个人卡换 TA 头像/名字 shownUser；动态按 displayNameOf(owner)/owner.name 过滤；隐藏宫格/分享新鲜事/AskPostSheet）+ mineOnly?: boolean（我的空间：按 p.authorName === me.name 过滤）
+- 路由类型：{ page: 'zone'; scope?: 'mine'; from?: 'profile' } + { page: 'zone-peer'; contactId: string } + zone-compose 同 scope/from（写说说往返保留语境）；MainScreen 增加 zonePeer/staleZonePeer（联系人被删回 tab 兜底）与 zoneScope/zoneFrom
+- 返回链：zone(from=profile)→个人资料页；zone(默认)→动态 tab；zone-peer→好友资料页
+- Task 2（微信我的朋友圈）：wechat.tsx MainScreen 新增 momentsScope state（'all'|'mine'）；「我」页朋友圈入口(testid=wx-me-moments)与自己的详情页朋友圈入口设 'mine'；发现页入口(wx-moments-entry)设 'all'；朋友圈设置 onOpenPostNow 设 'all'（让好友发的动态要可见）；publishMoment 发表后设 'mine'；moments 页 posts 按 scope 过滤 p.authorName === me.name
+- 验证：bunx tsc --noEmit exit 0；bunx eslint qq.tsx wechat.tsx exit 0（仅 Babel 大小提示非错误）
+- 浏览器端到端验证（agent-browser + JS PointerEvent 注入登录/导航）：
+  - 好友资料页分隔条已贴边；他的QQ空间→苏晴空间页（苏晴头部/无我的动态/无发布入口/还没有动态）→返回回好友资料页
+  - 个人资料页资料完成度/编辑资料→联系人 App 编辑USER页（小陆）；QQ空间→我的空间（小陆头部）→发说说「今天天气不错」→发表后回我的空间并显示该动态→返回回个人资料页
+  - 苏晴空间不显示我的动态（hasMyPost:false）；动态 tab→空间动态全量流显示我的动态+发布入口
+  - 微信：我→朋友圈只显示我发的动态（含陈默 AI 点赞/评论正常出现在我的动态上，苏晴帖子被过滤）；发现→朋友圈显示我的+苏晴的全部动态
+- dev.log 无运行时错误；HTTP 200
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx、src/components/apps/wechat.tsx
+- 5 项需求全部落地并浏览器验证：①QQ好友资料页分隔条贴边修复 ②微信「我」→我的朋友圈 ③QQ个人资料页QQ空间→我的空间动态 ④资料完成度/编辑资料→联系人App编辑页 ⑤他的QQ空间→TA的空间
+- QQ空间写说说往返保留 mine 语境；zone/zone-compose/zone-peer 返回链完整

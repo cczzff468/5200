@@ -7699,6 +7699,7 @@ function FriendProfilePage({
   onBack,
   onOpenChat,
   onOpenBond,
+  onOpenZone,
   onToast,
 }: {
   me: QQUser;
@@ -7706,6 +7707,8 @@ function FriendProfilePage({
   onBack: () => void;
   onOpenChat: () => void;
   onOpenBond: () => void;
+  /** 他的QQ空间：进该好友的空间动态页（只显示 TA 发的动态） */
+  onOpenZone: () => void;
   onToast: (m: string) => void;
 }) {
   // 跨 App 跳转：点「编辑资料」→ 打开联系人 App 后直接进入该联系人的编辑页
@@ -7867,8 +7870,8 @@ function FriendProfilePage({
         {/* 徽章行（QQ 等级图标；SVIP8/勋章/LV8/LV3 已删除） */}
         <QqBadgeWall testid="qq-fprofile-badges" mtClass="mt-5" padClass="pl-5" onOpen={() => onToast('勋章墙暂未开放')} />
 
-        {/* 你们的互动标识 → 好友互动标识页 */}
-        <div className="mt-5 h-2 bg-black/[0.045] dark:bg-white/[0.05]" aria-hidden="true" />
+        {/* 你们的互动标识 → 好友互动标识页（分隔条 -mx-5 贴满屏宽，与个人资料页一致） */}
+        <div className="-mx-5 mt-5 h-2 bg-black/[0.045] dark:bg-white/[0.05]" aria-hidden="true" />
         <button
           type="button"
           data-testid="qq-fprofile-bond"
@@ -7883,11 +7886,12 @@ function FriendProfilePage({
           <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
         </button>
 
-        {/* 他的QQ空间 */}
-        <div className="h-2 bg-black/[0.045] dark:bg-white/[0.05]" aria-hidden="true" />
+        {/* 他的QQ空间（分隔条 -mx-5 贴满屏宽） */}
+        <div className="-mx-5 h-2 bg-black/[0.045] dark:bg-white/[0.05]" aria-hidden="true" />
         <button
           type="button"
-          onClick={() => onToast('他的QQ空间暂未开放')}
+          data-testid="qq-fprofile-zone"
+          onClick={onOpenZone}
           className="flex h-[58px] w-full items-center gap-3 px-5 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
         >
           <Star className="h-[22px] w-[22px] shrink-0 text-black/70 dark:text-white/70" strokeWidth={1.9} aria-hidden="true" />
@@ -8739,6 +8743,13 @@ function ProfilePage({
   const [signDraft, setSignDraft] = useState(me.persona ?? '');
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const bgFileRef = useRef<HTMLInputElement | null>(null);
+  // 跨 App 跳转：点「资料完成度/编辑资料」→ 打开联系人 App 后直接进入机主（user）的编辑页
+  const switchToApp = useUI((s) => s.switchToApp);
+  const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
+  const openEditProfile = useCallback(() => {
+    setPendingContactEdit(me.id);
+    switchToApp('contacts');
+  }, [me.id, setPendingContactEdit, switchToApp]);
 
   // 背景图：IndexedDB 永久保存，进页时恢复
   useEffect(() => {
@@ -8920,11 +8931,12 @@ function ProfilePage({
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
 
-        {/* 资料完成度 */}
+        {/* 资料完成度（点击 → 联系人 App 机主编辑页） */}
         <div className="-mx-5 mt-5 h-2 bg-black/[0.04] dark:bg-white/[0.05]" aria-hidden="true" />
         <button
           type="button"
-          onClick={() => onToast('资料完善请到「联系人」App')}
+          data-testid="qq-profile-completion"
+          onClick={openEditProfile}
           className="flex h-[54px] w-full items-center gap-3 text-left active:opacity-70"
         >
           <FileText className="h-5 w-5 shrink-0 text-black/70 dark:text-white/70" aria-hidden="true" />
@@ -8959,7 +8971,8 @@ function ProfilePage({
         </button>
         <button
           type="button"
-          onClick={() => onToast('编辑资料请到「联系人」App')}
+          data-testid="qq-profile-edit"
+          onClick={openEditProfile}
           className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
         >
           编辑资料
@@ -9619,6 +9632,10 @@ function ZonePage({
   onToast,
   askOpen,
   setAskOpen,
+  /** 传入 = 该好友的QQ空间（个人卡换成 TA；只显示 TA 发的动态；隐藏发布入口/让好友发一条） */
+  owner,
+  /** true = 只显示机主自己发的动态（个人资料页 QQ空间进入「我的空间动态」） */
+  mineOnly,
 }: {
   me: QQUser;
   /** 联系人列表（「让好友发一条」候选 + 平台好友过滤） */
@@ -9629,6 +9646,8 @@ function ZonePage({
   /** 「让好友发一条」开关（lift 到 MainScreen，供「空间动态设置 → 立即发帖」复用） */
   askOpen: boolean;
   setAskOpen: (b: boolean) => void;
+  owner?: ContactRecord;
+  mineOnly?: boolean;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
   const [userPosts, setUserPosts] = useState<ZonePost[]>(loadZonePosts);
@@ -9696,7 +9715,21 @@ function ZonePage({
     });
   }, []);
 
-  const posts: ZonePost[] = useMemo(() => [...userPosts, ...ZONE_SEEDS], [userPosts]);
+  /** 动态过滤：TA 的空间（owner）→ 只看 TA 发的；我的空间（mineOnly）→ 只看我发的；默认全量 */
+  const posts: ZonePost[] = useMemo(() => {
+    const all = [...userPosts, ...ZONE_SEEDS];
+    if (owner) {
+      const dn = displayNameOf(owner);
+      return all.filter((p) => p.authorName === dn || p.authorName === owner.name);
+    }
+    if (mineOnly) return all.filter((p) => p.authorName === me.name);
+    return all;
+  }, [userPosts, owner, mineOnly, me.name]);
+
+  /** 空间页头展示的用户（TA 的空间换头像/名字） */
+  const shownUser = owner
+    ? { name: displayNameOf(owner), avatar: owner.avatar }
+    : { name: me.name, avatar: me.avatar };
 
   const addComment = (p: ZonePost) => {
     const t = (commentDrafts[p.id] ?? '').trim();
@@ -9777,12 +9810,12 @@ function ZonePage({
           </button>
         </div>
 
-        {/* 个人卡 */}
+        {/* 个人卡（TA 的空间时换成 TA 的头像/名字） */}
         <div className="mt-3 flex items-center gap-3 px-4">
-          <QqAvatar src={me.avatar} alt={me.name} size={60} />
+          <QqAvatar src={shownUser.avatar} alt={shownUser.name} size={60} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="truncate text-[19px] font-semibold">{me.name}</span>
+              <span className="truncate text-[19px] font-semibold">{shownUser.name}</span>
             </div>
             <div className="mt-1 flex items-center gap-1 text-[13px] text-black/50 dark:text-white/50">
               <Eye className="h-4 w-4" aria-hidden="true" />
@@ -9791,7 +9824,8 @@ function ZonePage({
           </div>
         </div>
 
-        {/* 宫格：说说/日志/相册/留言/更多（说说 → 写说说页） */}
+        {/* 宫格：说说/日志/相册/留言/更多（说说 → 写说说页）；TA 的空间隐藏发布类入口 */}
+        {!owner && (
         <div className="mt-3 flex px-1">
           {[
             { label: '说说', icon: <MessageSquare className="h-[22px] w-[22px]" strokeWidth={1.8} />, fn: onCompose, testid: 'qq-zone-shuoshuo' },
@@ -9812,8 +9846,10 @@ function ZonePage({
             </button>
           ))}
         </div>
+        )}
 
-        {/* 分享新鲜事：点击进入「写说说」页 */}
+        {/* 分享新鲜事：点击进入「写说说」页（TA 的空间不显示） */}
+        {!owner && (
         <div className="mx-4 mt-3">
           <button
             type="button"
@@ -9829,6 +9865,7 @@ function ZonePage({
             </span>
           </button>
         </div>
+        )}
       </div>
 
       {/* 动态流（与头部同一滚动容器） */}
@@ -10001,8 +10038,8 @@ function ZonePage({
         {posts.length === 0 && <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">还没有动态</p>}
       </div>
 
-      {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑/删除说说（六.4） */}
-      {askOpen && (
+      {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑/删除说说（六.4）；TA 的空间不显示 */}
+      {askOpen && !owner && (
         <AskPostSheet
           title="让好友发一条"
           friends={momentFriendsOf(contacts, 'qq')}
@@ -12108,8 +12145,9 @@ type MainRoute =
   | { page: 'friend-profile'; contactId: string }
   | { page: 'addfriend' }
   | { page: 'newfriends' }
-  | { page: 'zone' }
-  | { page: 'zone-compose' }
+  | { page: 'zone'; /** mine = 只看自己发的动态（个人资料页 QQ空间进入） */ scope?: 'mine'; /** 从哪进入（决定返回键去向） */ from?: 'profile' }
+  | { page: 'zone-peer'; contactId: string }
+  | { page: 'zone-compose'; /** 与 zone 同源（写说说返回时保留「我的空间」语境） */ scope?: 'mine'; from?: 'profile' }
   | { page: 'momentsSettings' }
   | { page: 'settings' }
   | { page: 'security' }
@@ -12198,6 +12236,12 @@ function MainScreen({
   );
   // 群路由但群已不在（被 AI 移出群聊 / 群已解散）：渲染期按消息 tab 兜底，避免空页面
   const staleGroupRoute = !groupPeer && (route.page === 'group-chat' || route.page === 'group-info');
+  /** 当前打开的「TA的QQ空间」联系人（zone-peer 路由；联系人被删时回 tab 兜底） */
+  const zonePeer = route.page === 'zone-peer' ? contacts.find((c) => c.id === route.contactId) ?? null : null;
+  const staleZonePeer = route.page === 'zone-peer' && !zonePeer;
+  /** zone 路由的 scope/from（供 zone ↔ zone-compose 往返保留「我的空间」语境） */
+  const zoneScope = route.page === 'zone' ? route.scope : route.page === 'zone-compose' ? route.scope : undefined;
+  const zoneFrom = route.page === 'zone' ? route.from : route.page === 'zone-compose' ? route.from : undefined;
   const activeTab: '消息' | '联系人' | '动态' = route.page === 'tabs' ? route.tab : '消息';
   // 写说说发表：统一走动态引擎（入库 + 记忆 + 排 AI 互动队列），回空间动态流（ZonePage 订阅 moments-changed 自动刷新）
   const handlePublishZonePost = useCallback(
@@ -12294,13 +12338,14 @@ function MainScreen({
           onBack={() => openTabs('联系人')}
           onOpenChat={() => openChatOf(chatPeer)}
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
+          onOpenZone={() => setRoute({ page: 'zone-peer', contactId: chatPeer.id })}
           onToast={showToast}
         />
       ) : route.page === 'profile' ? (
         <ProfilePage
           me={me}
           onBack={() => openTabs('消息')}
-          onOpenZone={() => setRoute({ page: 'zone' })}
+          onOpenZone={() => setRoute({ page: 'zone', scope: 'mine', from: 'profile' })}
           onOpenSettings={() => setRoute({ page: 'settings' })}
           onOpenChat={meContact ? () => openChatOf(meContact) : () => showToast('找不到当前账号的联系人资料')}
           onPatchUser={onPatchUser}
@@ -12329,14 +12374,32 @@ function MainScreen({
         <ZonePage
           me={me}
           contacts={contacts}
-          onBack={() => openTabs('动态')}
-          onCompose={() => setRoute({ page: 'zone-compose' })}
+          mineOnly={route.scope === 'mine'}
+          onBack={route.from === 'profile' ? () => setRoute({ page: 'profile' }) : () => openTabs('动态')}
+          onCompose={() => setRoute({ page: 'zone-compose', scope: route.scope, from: route.from })}
           onToast={showToast}
           askOpen={askOpen}
           setAskOpen={setAskOpen}
         />
+      ) : route.page === 'zone-peer' && zonePeer ? (
+        <ZonePage
+          key={`zone-peer-${zonePeer.id}`}
+          me={me}
+          contacts={contacts}
+          owner={zonePeer}
+          onBack={() => setRoute({ page: 'friend-profile', contactId: zonePeer.id })}
+          onCompose={() => setRoute({ page: 'zone-compose' })}
+          onToast={showToast}
+          askOpen={false}
+          setAskOpen={setAskOpen}
+        />
       ) : route.page === 'zone-compose' ? (
-        <WritePostPage me={me} onBack={() => setRoute({ page: 'zone' })} onPublish={handlePublishZonePost} onToast={showToast} />
+        <WritePostPage
+          me={me}
+          onBack={() => setRoute({ page: 'zone', scope: zoneScope, from: zoneFrom })}
+          onPublish={handlePublishZonePost}
+          onToast={showToast}
+        />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"
@@ -12423,7 +12486,7 @@ function MainScreen({
           title={route.logTitle}
           onClose={() => openTabs('消息')}
         />
-      ) : route.page === 'tabs' || staleGroupRoute ? (
+      ) : route.page === 'tabs' || staleGroupRoute || staleZonePeer ? (
         <>
           <div className="min-h-0 flex-1 overflow-hidden pt-[54px]">
             {activeTab === '消息' && (
