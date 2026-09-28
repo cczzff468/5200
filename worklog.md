@@ -10207,3 +10207,23 @@ Stage Summary:
 - tsc：bunx tsc --noEmit exit 0（零错误）
 - eslint：bunx eslint 两个文件 exit 0（零 error 零 warning）
 - 未完成/留待主协调者：无；如需 qq.tsx 同款设置页入口仍属另一子任务范畴
+
+---
+Task ID: setup-pull
+Agent: 主协调者（Z.ai Code）
+Task: 从 https://github.com/cczzff468/5200.git 拉取仓库到本地工作目录，配置 git 远程，启动并验证项目
+
+Work Log:
+- 使用用户提供的 GitHub PAT 克隆仓库到 /tmp/repo-5200（59 个提交，最新 b91690c fix(59): QQ资料页底部/深色模式色差边缘修复）
+- rsync 同步全部工作区文件（排除 .git/node_modules/.next/dev.log）到 /home/z/my-project，共 1397+ 文件（src/components/apps 42 个应用组件、db/custom.db、upload 12 个文件等全部一致）
+- 发现 package.json 与现有环境一致（Next.js 16 + Prisma + shadcn/ui），依赖无需重装
+- 补装运行时缺失包：idb@8.0.3、jsmediatags@3.9.7（music.tsx 需要）
+- prisma generate 成功；db/custom.db（SQLite 49KB）已随仓库同步，DATABASE_URL=file:/home/z/my-project/db/custom.db
+- git remote add origin（带 PAT）；git fetch origin main 成功；git reset --hard origin/main 对齐到 b91690c，工作区 clean
+- bun run dev 启动（端口 3000），curl 返回 HTTP 200
+- agent-browser 打开 http://localhost:3000 验证：锁屏渲染正常（时间/日期/电量/天气/日历小组件），点击解锁后主屏幕应用图标齐全（时钟/天气/浏览器/备忘录/相机/照片/文件/计算器/信息/联系人/电话/设置），snapshot 可交互
+
+Stage Summary:
+- 项目已完整拉取并运行：iOS 手机模拟器（AI Phone — 仿 iOS 智能助手），内含 QQ/微信等 AI 角色聊天应用
+- 本地 git 与 origin/main 完全对齐（b91690c），可直接修改后 git push
+- 待办：等待用户提出需要修改或添加的功能
