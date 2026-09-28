@@ -9636,7 +9636,6 @@ function ZonePage({
   me,
   contacts,
   onBack,
-  onOpenSettings,
   onCompose,
   onToast,
   askOpen,
@@ -9646,7 +9645,6 @@ function ZonePage({
   /** 联系人列表（「让好友发一条」候选 + 平台好友过滤） */
   contacts: ContactRecord[];
   onBack: () => void;
-  onOpenSettings: () => void;
   onCompose: () => void;
   onToast: (m: string) => void;
   /** 「让好友发一条」开关（lift 到 MainScreen，供「空间动态设置 → 立即发帖」复用） */
@@ -9792,30 +9790,11 @@ function ZonePage({
           </button>
           <button
             type="button"
-            aria-label="让好友发一条动态"
-            title="让好友发一条动态"
-            data-testid="qq-zone-ask"
-            onClick={() => setAskOpen(true)}
-            className="ml-auto grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
-          >
-            <Sparkles className="h-[18px] w-[18px]" strokeWidth={2} />
-          </button>
-          <button
-            type="button"
             aria-label="消息通知"
             onClick={() => onToast('通知暂未开放')}
-            className="ml-2 grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
+            className="ml-auto grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
           >
             <Bell className="h-[18px] w-[18px]" strokeWidth={2} />
-          </button>
-          <button
-            type="button"
-            aria-label="设置"
-            data-testid="qq-zone-settings"
-            onClick={onOpenSettings}
-            className="grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
-          >
-            <Settings className="h-[18px] w-[18px]" strokeWidth={2} />
           </button>
         </div>
 
@@ -12372,7 +12351,6 @@ function MainScreen({
           me={me}
           contacts={contacts}
           onBack={() => openTabs('动态')}
-          onOpenSettings={() => setRoute({ page: 'settings' })}
           onCompose={() => setRoute({ page: 'zone-compose' })}
           onToast={showToast}
           askOpen={askOpen}

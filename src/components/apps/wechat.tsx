@@ -40,10 +40,8 @@ import {
   Radar,
   ScanLine,
   Search,
-  Settings,
   Smartphone,
   Smile,
-  Sparkles,
   Star,
   Tag,
   Trash2,
@@ -7652,8 +7650,6 @@ function MomentsPage({
   onDelete,
   onDeleteComment,
   onEditRequest,
-  onOpenAsk,
-  onOpenMomentsSettings,
   onToast,
 }: {
   me: WxUser;
@@ -7671,10 +7667,6 @@ function MomentsPage({
   onDeleteComment?: (postId: string, commentId: string) => void;
   /** 编辑动态正文（仅自己的动态；好友朋友圈页不传） */
   onEditRequest?: (post: WxMoment) => void;
-  /** 顶部「让好友发一条」入口（仅自己的朋友圈页传入） */
-  onOpenAsk?: () => void;
-  /** 顶部「朋友圈设置」齿轮入口（仅自己的朋友圈页传入，48-6） */
-  onOpenMomentsSettings?: () => void;
   onToast: (m: string) => void;
 }) {
   const isMine = !owner;
@@ -7907,20 +7899,6 @@ function MomentsPage({
           <span className={`text-[17px] font-medium ${scrolled ? '' : 'hidden'}`}>朋友圈</span>
           {isMine ? (
             <div className="flex items-center gap-1">
-              {onOpenAsk && (
-                <button
-                  type="button"
-                  aria-label="让好友发一条动态"
-                  title="让好友发一条动态"
-                  data-testid="wx-moments-ask"
-                  onClick={onOpenAsk}
-                  className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
-                    scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
-                  }`}
-                >
-                  <Sparkles className="h-[21px] w-[21px]" strokeWidth={1.8} />
-                </button>
-              )}
               <button
                 type="button"
                 aria-label="发布朋友圈"
@@ -7932,20 +7910,6 @@ function MomentsPage({
               >
                 <Camera className="h-[22px] w-[22px]" strokeWidth={1.8} />
               </button>
-              {onOpenMomentsSettings && (
-                <button
-                  type="button"
-                  aria-label="朋友圈设置"
-                  title="朋友圈设置"
-                  data-testid="wx-moments-settings"
-                  onClick={onOpenMomentsSettings}
-                  className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
-                    scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
-                  }`}
-                >
-                  <Settings className="h-[21px] w-[21px]" strokeWidth={1.8} />
-                </button>
-              )}
             </div>
           ) : (
             <div className="flex shrink-0 items-center justify-end gap-1" style={{ minWidth: 60 }}>
@@ -9224,8 +9188,6 @@ function MainScreen({
           onDelete={deleteMoment}
           onDeleteComment={deleteComment}
           onEditRequest={(p) => setEditingPost({ id: p.id, text: p.text })}
-          onOpenAsk={() => setAskOpen(true)}
-          onOpenMomentsSettings={() => setPage('momentsSettings')}
           onToast={showToast}
         />
         {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑动态（六.4） */}

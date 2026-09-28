@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Bot,
   Calendar,
@@ -21,15 +21,8 @@ import {
 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { Switch } from '@/components/ui/switch';
-import { IOSActionSheet, type ActionSheetAction } from '@/components/ios/ActionSheet';
 import {
   DEFAULT_BILINGUAL_PROMPT,
-  DELAY_OPTIONS_SEC,
-  MAX_POST_INTERVAL_OPTIONS,
-  MIN_POST_INTERVAL_OPTIONS,
-  PROBABILITY_OPTIONS,
-  formatDelaySec,
-  formatProbability,
   getMomentsSettings,
   resetMomentsSettings,
   saveMomentsSettings,
@@ -80,7 +73,8 @@ function RowIcon({ color, Icon }: { color: string; Icon: LucideIcon }) {
   );
 }
 
-/** 行：左图标 + 标签（可带副标题）/ 右侧值 / ChevronRight / 自定义 right（开关等） */
+/** 行：左图标 + 标签（可带副标题）/ 右侧值 / ChevronRight / 自定义 right（开关、输入框等）。
+ *  无 onClick 时渲染为 div（避免 input/switch 嵌在 disabled button 中导致不可交互）。 */
 function Row({
   icon,
   label,
@@ -100,15 +94,11 @@ function Row({
   /** 红色文字（恢复默认等破坏性动作） */
   danger?: boolean;
 }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!onClick}
-      className={`flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/40 disabled:opacity-100 ${
-        danger ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''
-      }`}
-    >
+  const className = `flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/40 ${
+    danger ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''
+  }`;
+  const inner = (
+    <>
       <span className="shrink-0">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block text-[16px] leading-tight">{label}</span>
@@ -121,8 +111,86 @@ function Row({
       {value && (
         <span className="shrink-0 text-[15px] text-muted-foreground">{value}</span>
       )}
-      {right ?? (onClick && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />)}
+      {onClick
+        ? right ?? <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        : right}
+    </>
+  );
+  if (!onClick) {
+    return <div className={className}>{inner}</div>;
+  }
+  return (
+    <button type="button" onClick={onClick} className={className}>
+      {inner}
     </button>
+  );
+}
+
+// ---------------- 数值输入框 ----------------
+
+/**
+ * 通用数值输入框：本地维护输入文本，失焦/回车时按 [min,max] 范围 clamp 后调 onCommit。
+ * displayValue 是“显示空间”的当前值；toStored 把显示空间的整数映射回存储空间。
+ * - 小时/秒：identity 映射；显示与存储一致。
+ * - 概率：存储 0-1，显示 0-100，toStored = n => n / 100。
+ */
+function NumberField({
+  displayValue,
+  min,
+  max,
+  step,
+  unit,
+  toStored,
+  onCommit,
+}: {
+  displayValue: number;
+  min: number;
+  max: number;
+  step: number;
+  unit: string;
+  toStored: (n: number) => number;
+  onCommit: (v: number) => void;
+}) {
+  const [text, setText] = useState(String(displayValue));
+
+  // 外部值变化时（如恢复默认）同步本地文本
+  useEffect(() => {
+    setText(String(displayValue));
+  }, [displayValue]);
+
+  const commit = () => {
+    if (text.trim() === '') {
+      setText(String(displayValue));
+      return;
+    }
+    const n = Number(text);
+    if (Number.isNaN(n)) {
+      setText(String(displayValue));
+      return;
+    }
+    const clamped = Math.max(min, Math.min(max, Math.round(n)));
+    onCommit(toStored(clamped));
+    setText(String(clamped));
+  };
+
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <input
+        type="number"
+        value={text}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        }}
+        className="w-[60px] rounded-[8px] border border-border/60 bg-background px-2 py-1 text-right text-[15px] tabular-nums focus:border-[#0A84FF] focus:outline-none"
+        inputMode="numeric"
+      />
+      <span className="text-[15px] text-muted-foreground">{unit}</span>
+    </span>
   );
 }
 
@@ -182,67 +250,6 @@ function PromptEditPage({
 
 // ---------------- 主页面 ----------------
 
-/** 选择器类型：每个数值字段对应一个 picker kind */
-type PickerKind =
-  | 'minPostInterval'
-  | 'maxPostInterval'
-  | 'firstCommentDelay'
-  | 'followCommentDelay'
-  | 'commentProbability'
-  | 'likeProbability'
-  | 'npcInteractDelay'
-  | 'replyNpcCommentDelay';
-
-/** 按 kind 构造 ActionSheet 选项；每分支显式 update({ 字段: 值 })，类型完全静态 */
-function buildPickerActions(
-  kind: PickerKind,
-  settings: MomentsSettings,
-  update: (patch: Partial<MomentsSettings>) => void,
-): ActionSheetAction[] {
-  switch (kind) {
-    case 'minPostInterval':
-      return MIN_POST_INTERVAL_OPTIONS.map((h) => ({
-        label: `${h} 小时${h === settings.minPostInterval ? '（当前）' : ''}`,
-        onSelect: () => update({ minPostInterval: h }),
-      }));
-    case 'maxPostInterval':
-      return MAX_POST_INTERVAL_OPTIONS.map((h) => ({
-        label: `${h} 小时${h === settings.maxPostInterval ? '（当前）' : ''}`,
-        onSelect: () => update({ maxPostInterval: h }),
-      }));
-    case 'firstCommentDelay':
-      return DELAY_OPTIONS_SEC.map((s) => ({
-        label: `${formatDelaySec(s)}${s === settings.firstCommentDelay ? '（当前）' : ''}`,
-        onSelect: () => update({ firstCommentDelay: s }),
-      }));
-    case 'followCommentDelay':
-      return DELAY_OPTIONS_SEC.map((s) => ({
-        label: `${formatDelaySec(s)}${s === settings.followCommentDelay ? '（当前）' : ''}`,
-        onSelect: () => update({ followCommentDelay: s }),
-      }));
-    case 'commentProbability':
-      return PROBABILITY_OPTIONS.map((p) => ({
-        label: `${formatProbability(p)}${p === settings.commentProbability ? '（当前）' : ''}`,
-        onSelect: () => update({ commentProbability: p }),
-      }));
-    case 'likeProbability':
-      return PROBABILITY_OPTIONS.map((p) => ({
-        label: `${formatProbability(p)}${p === settings.likeProbability ? '（当前）' : ''}`,
-        onSelect: () => update({ likeProbability: p }),
-      }));
-    case 'npcInteractDelay':
-      return DELAY_OPTIONS_SEC.map((s) => ({
-        label: `${formatDelaySec(s)}${s === settings.npcInteractDelay ? '（当前）' : ''}`,
-        onSelect: () => update({ npcInteractDelay: s }),
-      }));
-    case 'replyNpcCommentDelay':
-      return DELAY_OPTIONS_SEC.map((s) => ({
-        label: `${formatDelaySec(s)}${s === settings.replyNpcCommentDelay ? '（当前）' : ''}`,
-        onSelect: () => update({ replyNpcCommentDelay: s }),
-      }));
-  }
-}
-
 export function MomentsSettingsPage({
   app,
   onBack,
@@ -250,7 +257,6 @@ export function MomentsSettingsPage({
   onOpenPostNow,
 }: MomentsSettingsPageProps) {
   const [settings, setSettings] = useState<MomentsSettings>(() => getMomentsSettings());
-  const [picker, setPicker] = useState<PickerKind | null>(null);
   const [promptEditing, setPromptEditing] = useState(false);
 
   /** 局部更新 + 持久化 */
@@ -287,14 +293,32 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_BLUE} Icon={Clock} />}
             label="最小发帖间隔"
-            value={`${settings.minPostInterval} 小时`}
-            onClick={() => setPicker('minPostInterval')}
+            right={
+              <NumberField
+                displayValue={settings.minPostInterval}
+                min={1}
+                max={24}
+                step={1}
+                unit="小时"
+                toStored={(n) => n}
+                onCommit={(v) => update({ minPostInterval: v })}
+              />
+            }
           />
           <Row
             icon={<RowIcon color={TONE_BLUE} Icon={Calendar} />}
             label="最长发帖间隔"
-            value={`${settings.maxPostInterval} 小时`}
-            onClick={() => setPicker('maxPostInterval')}
+            right={
+              <NumberField
+                displayValue={settings.maxPostInterval}
+                min={1}
+                max={24}
+                step={1}
+                unit="小时"
+                toStored={(n) => n}
+                onCommit={(v) => update({ maxPostInterval: v })}
+              />
+            }
           />
           <Row
             icon={<RowIcon color={TONE_ORANGE} Icon={Sparkles} />}
@@ -326,26 +350,62 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_GREEN} Icon={MessageCircle} />}
             label="首条评论延迟"
-            value={formatDelaySec(settings.firstCommentDelay)}
-            onClick={() => setPicker('firstCommentDelay')}
+            right={
+              <NumberField
+                displayValue={settings.firstCommentDelay}
+                min={1}
+                max={3600}
+                step={1}
+                unit="秒"
+                toStored={(n) => n}
+                onCommit={(v) => update({ firstCommentDelay: v })}
+              />
+            }
           />
           <Row
             icon={<RowIcon color={TONE_GREEN} Icon={Repeat} />}
             label="后续评论间隔"
-            value={formatDelaySec(settings.followCommentDelay)}
-            onClick={() => setPicker('followCommentDelay')}
+            right={
+              <NumberField
+                displayValue={settings.followCommentDelay}
+                min={1}
+                max={3600}
+                step={1}
+                unit="秒"
+                toStored={(n) => n}
+                onCommit={(v) => update({ followCommentDelay: v })}
+              />
+            }
           />
           <Row
             icon={<RowIcon color={TONE_PURPLE} Icon={Dice5} />}
             label="评论概率"
-            value={formatProbability(settings.commentProbability)}
-            onClick={() => setPicker('commentProbability')}
+            right={
+              <NumberField
+                displayValue={Math.round(settings.commentProbability * 100)}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                toStored={(n) => n / 100}
+                onCommit={(v) => update({ commentProbability: v })}
+              />
+            }
           />
           <Row
             icon={<RowIcon color={TONE_PINK} Icon={Heart} />}
             label="点赞概率"
-            value={formatProbability(settings.likeProbability)}
-            onClick={() => setPicker('likeProbability')}
+            right={
+              <NumberField
+                displayValue={Math.round(settings.likeProbability * 100)}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                toStored={(n) => n / 100}
+                onCommit={(v) => update({ likeProbability: v })}
+              />
+            }
           />
         </GroupCard>
 
@@ -354,14 +414,32 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_INDIGO} Icon={Bot} />}
             label="NPC 互动延迟"
-            value={formatDelaySec(settings.npcInteractDelay)}
-            onClick={() => setPicker('npcInteractDelay')}
+            right={
+              <NumberField
+                displayValue={settings.npcInteractDelay}
+                min={1}
+                max={3600}
+                step={1}
+                unit="秒"
+                toStored={(n) => n}
+                onCommit={(v) => update({ npcInteractDelay: v })}
+              />
+            }
           />
           <Row
             icon={<RowIcon color={TONE_INDIGO} Icon={Reply} />}
             label="角色回复 NPC 评论延迟"
-            value={formatDelaySec(settings.replyNpcCommentDelay)}
-            onClick={() => setPicker('replyNpcCommentDelay')}
+            right={
+              <NumberField
+                displayValue={settings.replyNpcCommentDelay}
+                min={1}
+                max={3600}
+                step={1}
+                unit="秒"
+                toStored={(n) => n}
+                onCommit={(v) => update({ replyNpcCommentDelay: v })}
+              />
+            }
           />
         </GroupCard>
 
@@ -395,13 +473,6 @@ export function MomentsSettingsPage({
           />
         </GroupCard>
       </div>
-
-      {/* 底部动作表：数值选择 */}
-      <IOSActionSheet
-        open={picker !== null}
-        actions={picker ? buildPickerActions(picker, settings, update) : []}
-        onCancel={() => setPicker(null)}
-      />
     </IOSScreen>
   );
 }

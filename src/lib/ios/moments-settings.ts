@@ -90,26 +90,48 @@ export function resetMomentsSettings(): MomentsSettings {
   return { ...DEFAULT_MOMENTS_SETTINGS };
 }
 
-// ---------------- UI 选择项常量 ----------------
+// ---------------- UI 选择项常量（已废弃） ----------------
+// Task 49-a：UI 改为可输入任意数值的输入框，不再使用固定选项 ActionSheet。
+// 以下常量与格式化函数保留导出以防外部引用（grep 确认当前仅本模块定义、UI 不再使用），
+// 不再被推荐使用。
 
-/** 最小/最长发帖间隔选项（小时） */
+/**
+ * 最小/最长发帖间隔选项（小时）
+ * @deprecated Task 49-a：UI 改为输入框，不再使用固定选项。
+ */
 export const MIN_POST_INTERVAL_OPTIONS = [1, 2, 3, 6, 12, 18, 24];
+
+/**
+ * @deprecated Task 49-a：UI 改为输入框，不再使用固定选项。
+ */
 export const MAX_POST_INTERVAL_OPTIONS = [1, 2, 3, 6, 12, 18, 24];
 
-/** 延迟选项（秒）：3s / 10s / 30s / 1min / 3min / 10min / 30min / 60min */
+/**
+ * 延迟选项（秒）：3s / 10s / 30s / 1min / 3min / 10min / 30min / 60min
+ * @deprecated Task 49-a：UI 改为输入框，不再使用固定选项。
+ */
 export const DELAY_OPTIONS_SEC = [3, 10, 30, 60, 180, 600, 1800, 3600];
 
-/** 概率选项 */
+/**
+ * 概率选项
+ * @deprecated Task 49-a：UI 改为输入框，不再使用固定选项。
+ */
 export const PROBABILITY_OPTIONS = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0];
 
-/** 延迟秒数 → 显示文案 */
+/**
+ * 延迟秒数 → 显示文案
+ * @deprecated Task 49-a：UI 改为输入框直接显示数字，不再格式化显示。
+ */
 export function formatDelaySec(sec: number): string {
   if (sec < 60) return `${sec} 秒`;
   if (sec < 3600) return `${Math.round(sec / 60)} 分钟`;
   return `${Math.round(sec / 3600)} 小时`;
 }
 
-/** 概率 → 百分比文案 */
+/**
+ * 概率 → 百分比文案
+ * @deprecated Task 49-a：UI 改为输入框直接显示百分比数字，不再格式化显示。
+ */
 export function formatProbability(p: number): string {
   return `${Math.round(p * 100)}%`;
 }

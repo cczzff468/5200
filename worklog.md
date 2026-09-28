@@ -10119,3 +10119,91 @@ Stage Summary:
   - 每条 comment.text 后追加 <BilingualTranslation zh={c.contentZh ?? ''} foldByDefault={foldByDefault} />
 - tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/wechat.tsx exit 0（零 error 零 warning）
 - 未完成/留待主协调者：UI 层与 moments.ts 引擎（48-2）+ moments-shared BilingualTranslation（48-4）+ MomentsSettingsPage（48-5）已贯通；qq.tsx 同款入口未实现（属于另一子任务范畴）
+
+---
+Task ID: 49-b
+Agent: wechat 删顶栏图标子代理
+Task: 删除微信朋友圈右上角 Sparkles 五角星 + Settings 齿轮按钮
+
+Work Log:
+- 读 worklog 末尾 40 行确认 48-6 引入的 MomentsPage 顶栏齿轮/Sparkles 按钮上下文
+- Read wechat.tsx 三段：props 接口（7658-7678）、顶栏 JSX（7895-7964）、调用站（9220-9239）
+- Grep `Sparkles|Settings` 全文件确认：Sparkles 仅 MomentsPage 一处使用；Settings 仅 MomentsPage 一处使用（其余命中均为 WxIcSettings/ChatSettingsPage/setSettingsOpen 等不同标识符）→ 两个 import 均可删
+- Edit 1：删除 MomentsPage 顶栏 `isMine` 分支内 `{onOpenAsk && (<button>...<Sparkles/>...</button>)}` 与 `{onOpenMomentsSettings && (<button>...<Settings/>...</button>)}` 两个条件块，保留 Camera 发布按钮与外层 `<div className="flex items-center gap-1">`（-28 行）
+- MultiEdit 4 处：
+  1. props 解构删除 `onOpenAsk,` 与 `onOpenMomentsSettings,`（line 7655-7656）
+  2. props 接口删除 `/** 顶部「让好友发一条」入口... */` 注释 + `onOpenAsk?: () => void;` + `/** 顶部「朋友圈设置」齿轮入口... */` 注释 + `onOpenMomentsSettings?: () => void;` 共 4 行
+  3. 调用站删除 `onOpenAsk={() => setAskOpen(true)}` 与 `onOpenMomentsSettings={() => setPage('momentsSettings')}` 两行
+  4. lucide-react import 删除 `Settings,` 与 `Sparkles,` 两行（MultiEdit 内合计 -10 行）
+- 保留：askOpen state / setAskOpen / AskPostSheet（momentsSettings 页 onOpenPostNow 仍调用 setAskOpen(true)）；「我」界面 WxMenuRow label="朋友圈设置" 入口（line 9955 附近）与 `page === 'momentsSettings'` 渲染分支未动
+- 验证持久化：git diff --stat HEAD -- src/components/apps/wechat.tsx → 1 file changed, 38 deletions(-)（共 -38 行）
+- 验证 grep：`Sparkles|onOpenAsk|onOpenMomentsSettings|\bSettings\b` 文件内 0 命中
+- 验证 tsc：bunx tsc --noEmit 全项目 exit 0（零输出）
+- 验证 eslint：bunx eslint src/components/apps/wechat.tsx exit 0（零输出）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/wechat.tsx（-38 行；git diff --stat HEAD 确认持久化）
+- tsc/eslint 状态：tsc 全项目 exit 0；eslint wechat.tsx exit 0（零 error 零 warning）
+- 入口收敛：朋友圈顶栏不再有齿轮/Sparkles；「朋友圈设置」仅由「我」界面 WxMenuRow 进入；「让好友发一条」仅由 momentsSettings 页 onOpenPostNow 弹 AskPostSheet
+
+---
+Task ID: 49-c
+Agent: qq 删顶栏图标子代理
+Task: 删除 QQ 空间动态右上角 Sparkles 五角星按钮
+
+Work Log:
+- 读 worklog 末尾 40 行 + Read qq.tsx 找 ZonePage 顶栏（line 9784-9820 顶部渐变区导航行）
+- grep Sparkles 全文件：line 121 import、5193（chat 输入栏「点缀」非 ZonePage）、9801（ZonePage 顶栏「让好友发一条」目标）、10248（WritePostPage AI配文）、11313（WalletPage 标题）→ 只删 9801，保留 import + 其他三处
+- grep onOpenAsk 全文件：无匹配（QQ 用 lift 状态 askOpen/setAskOpen 而非 callback prop），改动 3 不适用
+- grep Settings + ZonePage 顶栏确认：line 9811-9819 确有 Settings 齿轮按钮（aria-label="设置" data-testid="qq-zone-settings" onClick={onOpenSettings}）→ 按改动 2 删除
+- grep onOpenSettings 全文件：ZonePage 内仅 9815 一处使用，删除按钮后变未使用 → 同步删 prop 定义（9639 destructure + 9649 type）+ 调用站传递（12375 onOpenSettings={() => setRoute({ page: 'settings' })}）
+- askOpen/setAskOpen 保留：AskPostSheet 仍渲染（line 10047 askOpen && <AskPostSheet>），且 MomentsSettingsPage onOpenPostNow 走 setAskOpen(true)+setRoute({page:'zone'})（12388-12390），ZonePage 内 askMomentPost 成功后 setAskOpen(false)（9770）+ cleanup useEffect（9692）仍需
+- 布局修复：删 Sparkles（ml-auto）+ Settings 后，Bell 按钮原 ml-2 改为 ml-auto，保持「返回左 + 通知右」两端布局
+- 改动 5 保留：DISCOVER_ITEMS「空间动态设置」项（line 8678）+ route.page==='momentsSettings' 渲染分支（line 12383）未动
+- 验证持久化：git diff --stat HEAD -- src/components/apps/qq.tsx → 1 file changed, 1 insertion(+), 23 deletions(-)
+- 验证 grep：qq-zone-ask / qq-zone-settings testid 已 0 处；Sparkles 仍 4 处（import + 3 处其他场景）；onOpenSettings 在 ZonePage 0 处（ProfilePage 8856 / DrawerPage 9243 不受影响）
+- 验证 tsc：bunx tsc --noEmit exit 0（零错误无输出）
+- 验证 eslint：bunx eslint src/components/apps/qq.tsx exit 0（零 error 零 warning；仅 Babel 文件大小 deoptimization 提示非错误）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx（+1/-23 共 24 行；git diff --stat HEAD 确认持久化）
+- 删除内容：ZonePage 顶栏 Sparkles「让好友发一条」按钮（原 line 9793-9802，含 qq-zone-ask testid）+ Settings 齿轮按钮（原 line 9811-9819，含 qq-zone-settings testid）+ onOpenSettings prop（destructure + type + 调用站）
+- 保留内容：Sparkles import（line 121）+ 其他 3 处 Sparkles 使用（chat 输入栏点缀 / WritePostPage AI配文 / WalletPage 标题）；askOpen/setAskOpen prop（AskPostSheet 仍需）；DISCOVER_ITEMS「空间动态设置」入口 + momentsSettings 渲染分支（设置从动态 tab 进）
+- 布局：返回按钮（左）+ 消息通知 Bell（ml-auto 右），与原两端布局一致
+- tsc/eslint 状态：bunx tsc --noEmit exit 0；bunx eslint src/components/apps/qq.tsx exit 0
+
+---
+Task ID: 49-a
+Agent: 设置页改输入框子代理
+Task: 数值项改为可输入任意值（不再用固定选项 ActionSheet）
+
+Work Log:
+- 读取 worklog 末尾确认 Task 48 已贯通「我」→朋友圈设置入口与朋友圈顶栏齿轮入口
+- Read src/components/apps/moments-settings.tsx 与 src/lib/ios/moments-settings.ts 完整结构
+- grep 确认 IOSActionSheet 仅本组件 + phone/clock/notes/weather 使用（删 import 不影响他处）；OPTIONS/format 函数仅 .ts 定义 + .tsx 引用，无其他文件依赖
+- 改动 1（.tsx 数值项改输入框）：
+  - 删除 `PickerKind` 类型、`buildPickerActions` 函数、`picker` state、底部 `<IOSActionSheet>` 渲染
+  - 新增 `NumberField` 通用数值输入组件：本地维护 text，useEffect 监听 displayValue 同步（恢复默认时刷新），失焦/回车时 clamp 到 [min,max] 再 onCommit；空串/NaN 回退当前值
+  - 8 个数值行 right 改为 <NumberField>：小时项 min=1 max=24 / 秒项 min=1 max=3600 / 概率项 displayValue=round(p*100) min=0 max=100，toStored=n=>n/100，单位 "%"
+  - 输入框样式：w-[60px] rounded-[8px] border border-border/60 bg-background px-2 py-1 text-right text-[15px] tabular-nums focus:border-[#0A84FF] focus:outline-none + inputMode="numeric"
+- 改动 2/3：双语翻译/折叠译文/双语提示词三个 Switch 与提示词二级编辑页保留不动；自动发帖角色（说明项）/立即发帖/恢复默认保持 onClick 行不变
+- 改动 4（清理 import）：
+  - 删除 `IOSActionSheet, type ActionSheetAction` import
+  - 删除 `MIN_POST_INTERVAL_OPTIONS/MAX_POST_INTERVAL_OPTIONS/DELAY_OPTIONS_SEC/PROBABILITY_OPTIONS/formatDelaySec/formatProbability` import
+  - 追加 `useEffect` 到 react import（NumberField 同步外部值用）
+  - 重构 `Row`：无 onClick 时渲染为 `<div>`（避免 input/switch 嵌在 disabled button 中导致不可交互），有 onClick 时仍为 `<button>`
+- 改动 5（.ts 数据层）：保留 MIN_POST_INTERVAL_OPTIONS / MAX_POST_INTERVAL_OPTIONS / DELAY_OPTIONS_SEC / PROBABILITY_OPTIONS / formatDelaySec / formatProbability 导出，每个加 `@deprecated Task 49-a` JSDoc 注释，标题区加说明段
+- 验证持久化：git diff --stat HEAD → moments-settings.tsx 279 行变更（+204/-111 之比修正：实际两文件共 204 insertions / 111 deletions）；moments-settings.ts +36 行（注释）
+- 验证 tsc：bunx tsc --noEmit 全项目 exit 0（零错误无输出）
+- 验证 eslint：bunx eslint src/components/apps/moments-settings.tsx src/lib/ios/moments-settings.ts exit 0（零 error 零 warning 无输出）
+- grep 验证 tsx 内已无 IOSActionSheet/ActionSheetAction/PickerKind/buildPickerActions/setPicker/各 OPTIONS/format 函数残留
+- 未重启 dev server、未运行 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/moments-settings.tsx（重写为 480 行，原 410 行；git diff --stat HEAD 持久化）+ src/lib/ios/moments-settings.ts（137 行，仅追加 @deprecated 注释）
+- 数值项 8 项全部改为可输入任意值（小时 1-24 / 秒 1-3600 / 概率 0-100%），失焦或回车时按范围 clamp 保存
+- tsc：bunx tsc --noEmit exit 0（零错误）
+- eslint：bunx eslint 两个文件 exit 0（零 error 零 warning）
+- 未完成/留待主协调者：无；如需 qq.tsx 同款设置页入口仍属另一子任务范畴
