@@ -14,9 +14,7 @@
 
 import { useEffect } from 'react';
 import {
-  PROACTIVE_FIRST_TICK_DELAY_MS,
-  PROACTIVE_TICK_INTERVAL_MS,
-  PROACTIVE_TICK_JITTER_MS,
+  getProactiveTickParams,
   runProactiveCallTick,
 } from '@/lib/ios/proactive-call';
 
@@ -30,14 +28,16 @@ export default function ProactiveCallWatcher() {
     owned = true;
 
     let timer: number | null = null;
-    /** 递归 setTimeout（而非固定 setInterval）：每次 tick 后按 90s+抖动 重新排程 */
+    /** 递归 setTimeout（而非固定 setInterval）：每次 tick 后按档位当前值 + 抖动 重新排程。
+     *  动态读取参数：用户在设置页切换「主动来电频率」档位后，下次 tick 即用新间隔（切档即时生效）。 */
     const schedule = (delay: number): void => {
       timer = window.setTimeout(() => {
         void runProactiveCallTick();
-        schedule(PROACTIVE_TICK_INTERVAL_MS + Math.floor(Math.random() * PROACTIVE_TICK_JITTER_MS));
+        const { interval, jitter } = getProactiveTickParams();
+        schedule(interval + Math.floor(Math.random() * jitter));
       }, delay);
     };
-    schedule(PROACTIVE_FIRST_TICK_DELAY_MS);
+    schedule(getProactiveTickParams().firstDelay);
 
     return () => {
       if (timer !== null) window.clearTimeout(timer);

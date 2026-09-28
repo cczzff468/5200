@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     const contacts = await db.contact.deleteMany({ where: { workspaceId } });
     // 背景图无工作区归属（全局两键）：首个完成迁移的浏览器带走并清空（后迁移的浏览器用默认背景）
     const backgrounds = await db.wxBackground.deleteMany();
-    console.log(`[contacts:migrate-done] ws=${workspaceId} purgedContacts=${contacts.count} purgedBg=${backgrounds.count}`);
+    // #99 移除 console.log 调试残留（保留下方 console.error 错误日志用于诊断）
     return NextResponse.json({ ok: true, purgedContacts: contacts.count, purgedBg: backgrounds.count });
   } catch (err) {
     console.error('[contacts:migrate-done]', err);

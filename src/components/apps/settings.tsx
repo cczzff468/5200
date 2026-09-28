@@ -67,7 +67,7 @@ import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
 import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
-import { isProactiveCallEnabled, setProactiveCallEnabled } from '@/lib/ios/proactive-call';
+import { isProactiveCallEnabled, setProactiveCallEnabled, getProactiveLevel, setProactiveLevel, type ProactiveLevel } from '@/lib/ios/proactive-call';
 import { LocalToast, useLocalToast } from './page-toast';
 import { describeImages } from '@/lib/vision-client';
 import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
@@ -490,6 +490,14 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   // AI 主动来电开关：读写 IndexedDB kv 'proactive-call-enabled'（与 proactive-call 调度器共用；缺省开）。
   // 本页在客户端交互后才挂载（同上方 isSysNotifyEnabled 的惰性初始化模式），kv 已注水，同步读即真实值
   const [proactive, setProactive] = useState<boolean>(() => isProactiveCallEnabled());
+  // 主动来电频率档位（4 档）：保守/标准/积极/无冷却——切档即时生效，下次 tick 用新间隔与冷却
+  const [proactiveLevel, setProactiveLevelState] = useState<ProactiveLevel>(() => getProactiveLevel());
+  const PROACTIVE_LEVEL_OPTIONS: { value: ProactiveLevel; label: string; desc: string }[] = [
+    { value: 'conservative', label: '保守', desc: '2h 间隔·6h 冷却·120s 轮询' },
+    { value: 'standard', label: '标准', desc: '30min 间隔·1h 冷却·60s 轮询（推荐）' },
+    { value: 'eager', label: '积极', desc: '10min 间隔·15min 冷却·45s 轮询' },
+    { value: 'off', label: '无冷却', desc: '仅 10min 自然间隔·60s 轮询' },
+  ];
   // 页内 toast（关闭开关后的说明）
   const [toastMsg, showToast] = useLocalToast();
 
@@ -600,6 +608,30 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
             aria-label="AI 主动来电"
           />
         </div>
+        {/* 主动来电频率档位（Task 43）：4 档可切换，切档即时生效（下次 tick 用新间隔与冷却） */}
+        <button
+          type="button"
+          disabled={!proactive}
+          onClick={() => {
+            const idx = PROACTIVE_LEVEL_OPTIONS.findIndex((o) => o.value === proactiveLevel);
+            const next = PROACTIVE_LEVEL_OPTIONS[(idx + 1) % PROACTIVE_LEVEL_OPTIONS.length];
+            setProactiveLevel(next.value);
+            setProactiveLevelState(next.value);
+          }}
+          aria-label="主动来电频率"
+          className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left disabled:opacity-40"
+        >
+          <span className="min-w-0 flex-1 text-[16px] leading-tight">
+            主动来电频率
+            <span className="mt-0.5 block text-[12px] leading-[16px] text-muted-foreground">
+              {PROACTIVE_LEVEL_OPTIONS.find((o) => o.value === proactiveLevel)?.desc ?? ''}
+            </span>
+          </span>
+          <span className="shrink-0 text-[15px] text-muted-foreground">
+            {PROACTIVE_LEVEL_OPTIONS.find((o) => o.value === proactiveLevel)?.label ?? '标准'}
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
       </GroupCard>
       {denied && (
         <p className="mt-3 px-1 text-[13px] leading-relaxed" style={{ color: IOS_RED }}>

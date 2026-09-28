@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
         backgrounds[row.key] = row.data;
       }
     }
-    console.log(`[contacts:migrate] ws=${workspaceId} contacts=${contacts.length} bg=${bgRows.length}`);
+    // #98 移除 console.log 调试残留（保留下方 console.error 错误日志用于诊断）
     return NextResponse.json({ ok: true, contacts, backgrounds });
   } catch (err) {
     console.error('[contacts:migrate]', err);

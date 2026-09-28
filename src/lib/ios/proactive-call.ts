@@ -34,33 +34,120 @@ import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
 
-// ---------------- 常量（调参集中在这里） ----------------
+// ---------------- 常量与档位（调参集中在这里） ----------------
 
 /** 总开关 kv 键（与设置 › 通知「AI 主动来电」开关共用；值 { value: boolean }，缺省=开） */
 const ENABLED_KEY = 'proactive-call-enabled';
-/** 单联系人冷却 kv 键前缀（值 { at: number, action: string }） */
+/** 频率档位 kv 键（值 { level: ProactiveLevel }，缺省='standard'）；设置页可切换 4 档 */
+const LEVEL_KEY = 'proactive-call-level';
+/** 单联系人冷却 kv 键前缀（值 { at: number, action: string, window?: number }） */
 const COOLDOWN_PREFIX = 'proactive-call:';
 
-/** 资格窗口：48h 内有过互动的联系人才会被考虑 */
-const ACTIVE_WINDOW_MS = 48 * 60 * 60_000;
-/** 最小间隔：距上次互动不足 2h 不打（刚聊完不久别马上又来） */
-const MIN_GAP_MS = 2 * 60 * 60_000;
-/** 决策为 call / wait 后的冷却（别反复骚扰） */
-const COOLDOWN_ACTIVE_MS = 6 * 60 * 60_000;
-/** 决策为 skip 后的冷却（没理由打就等一天再说） */
-const COOLDOWN_SKIP_MS = 24 * 60 * 60_000;
-/** 深夜硬闸起点：本地时间 [0, 8) 点不打 */
-const NIGHT_END_HOUR = 8;
+/** 频率档位（设置页「主动来电频率」4 档）：
+ *  - conservative 保守：冷却长，几乎不主动打（6h/24h，最小间隔 2h，tick 120s）
+ *  - standard 标准（缺省，体验优先）：30min 最小间隔、1h 冷却、tick 60s——AI 主动但不暴走
+ *  - eager 积极：10min 最小间隔、15min 冷却、tick 45s——AI 非常主动
+ *  - off 无冷却：仅留 10min per-contact 自然冷却 + 60s tick 全局节流（防 90s 内连拨同一人）
+ */
+export type ProactiveLevel = 'conservative' | 'standard' | 'eager' | 'off';
 
-/** Watcher 首次 tick 延迟（避开开机风暴：等 IndexedDB 注水/各 App 就绪） */
-export const PROACTIVE_FIRST_TICK_DELAY_MS = 60_000;
-/** Watcher 基础轮询间隔 */
-export const PROACTIVE_TICK_INTERVAL_MS = 90_000;
-/** 每次 tick 的随机抖动上限（0~30s，避免整点齐刷刷） */
+interface ProactiveLevelPreset {
+  /** 资格窗口：48h 内有互动才考虑（各档一致，不动） */
+  activeWindowMs: number;
+  /** 最小间隔：距上次互动不足此时长不打（per-contact 自然冷却底线，去冷却方案唯一保护） */
+  minGapMs: number;
+  /** 决策为 call / wait 后的冷却 */
+  cooldownActiveMs: number;
+  /** 决策为 skip 后的冷却 */
+  cooldownSkipMs: number;
+  /** 深夜硬闸终点小时（0~N 点不打） */
+  nightEndHour: number;
+  /** Watcher 首次 tick 延迟 */
+  firstTickDelayMs: number;
+  /** Watcher 基础轮询间隔 */
+  tickIntervalMs: number;
+  /** 每次 tick 的随机抖动上限 */
+  tickJitterMs: number;
+  /** 决策为 call 但触发前已有通话/闹钟时的短冷却 */
+  shortCooldownMs: number;
+}
+
+const LEVEL_PRESETS: Record<ProactiveLevel, ProactiveLevelPreset> = {
+  conservative: {
+    activeWindowMs: 48 * 60 * 60_000,
+    minGapMs: 2 * 60 * 60_000, // 2h
+    cooldownActiveMs: 6 * 60 * 60_000, // 6h
+    cooldownSkipMs: 24 * 60 * 60_000, // 24h
+    nightEndHour: 8,
+    firstTickDelayMs: 60_000,
+    tickIntervalMs: 120_000,
+    tickJitterMs: 30_000,
+    shortCooldownMs: 5 * 60 * 1000,
+  },
+  standard: {
+    activeWindowMs: 48 * 60 * 60_000,
+    minGapMs: 30 * 60_000, // 30min（刚聊完 30min 内不打）
+    cooldownActiveMs: 60 * 60_000, // 1h
+    cooldownSkipMs: 60 * 60_000, // 1h
+    nightEndHour: 8,
+    firstTickDelayMs: 20_000, // 20s
+    tickIntervalMs: 60_000, // 60s
+    tickJitterMs: 30_000,
+    shortCooldownMs: 120_000, // 2min
+  },
+  eager: {
+    activeWindowMs: 48 * 60 * 60_000,
+    minGapMs: 10 * 60_000, // 10min
+    cooldownActiveMs: 15 * 60_000, // 15min
+    cooldownSkipMs: 15 * 60_000, // 15min
+    nightEndHour: 8,
+    firstTickDelayMs: 15_000, // 15s
+    tickIntervalMs: 45_000, // 45s
+    tickJitterMs: 15_000,
+    shortCooldownMs: 60_000, // 1min
+  },
+  off: {
+    activeWindowMs: 48 * 60 * 60_000,
+    minGapMs: 10 * 60_000, // 10min（per-contact 自然冷却底线——防 90s 内连拨同一人）
+    cooldownActiveMs: 0, // 无冷却
+    cooldownSkipMs: 0, // 无冷却
+    nightEndHour: 8, // 深夜硬闸仍保留（防吵醒）
+    firstTickDelayMs: 15_000,
+    tickIntervalMs: 60_000, // 60s（全局节流）
+    tickJitterMs: 15_000,
+    shortCooldownMs: 60_000, // 1min（防同 tick 重复选同一联系人）
+  },
+};
+
+/** 读取当前档位（kv 'proactive-call-level'，缺省='standard' 体验优先） */
+export function getProactiveLevel(): ProactiveLevel {
+  const v = kvGet<{ level?: unknown }>(LEVEL_KEY);
+  const lv = v?.level;
+  if (lv === 'conservative' || lv === 'standard' || lv === 'eager' || lv === 'off') return lv;
+  return 'standard';
+}
+
+/** 写入当前档位（设置页切换时调用） */
+export function setProactiveLevel(level: ProactiveLevel): void {
+  kvSet(LEVEL_KEY, { level });
+}
+
+/** 取当前档位预设（运行时所有常量从这里读，切档即时生效——下次 tick 即用新值） */
+function preset(): ProactiveLevelPreset {
+  return LEVEL_PRESETS[getProactiveLevel()];
+}
+
+/** 兼容外部读取（ProactiveCallWatcher 用）——首延迟与 tick 间隔随档位变。
+ *  注意：这是 fallback 默认值；调度器应优先用下面的动态 getter，以支持运行时切档即时生效。 */
+export const PROACTIVE_FIRST_TICK_DELAY_MS = 20_000;
+export const PROACTIVE_TICK_INTERVAL_MS = 60_000;
 export const PROACTIVE_TICK_JITTER_MS = 30_000;
 
-/** 决策为 call 但触发前发现已有通话/闹钟时落短冷却（#52）：避免 90s 重试再次决策 */
-const SHORT_COOLDOWN_MS = 5 * 60 * 1000;
+/** 动态读取档位的 tick 调度参数（切档后下次 tick 即用新值）——ProactiveCallWatcher 用 */
+export function getProactiveTickParams(): { firstDelay: number; interval: number; jitter: number } {
+  const p = preset();
+  return { firstDelay: p.firstTickDelayMs, interval: p.tickIntervalMs, jitter: p.tickJitterMs };
+}
 
 /** 决策 API 返回（与 /api/phone/proactive 契约一致） */
 interface ProactiveDecision {
@@ -229,7 +316,8 @@ function isCoolingDown(contactId: string, nowMs: number): boolean {
   if (!c || typeof c.at !== 'number') return false;
   // #52 自定义窗口（短冷却）：record 同时写 window 时优先用它而非 action 推导
   if (typeof c.window === 'number' && c.window > 0) return nowMs - c.at < c.window;
-  const window = c.action === 'skip' ? COOLDOWN_SKIP_MS : COOLDOWN_ACTIVE_MS; // 未知 action 按活跃口径保守处理
+  const p = preset();
+  const window = c.action === 'skip' ? p.cooldownSkipMs : p.cooldownActiveMs; // 未知 action 按活跃口径保守处理
   return nowMs - c.at < window;
 }
 
@@ -240,7 +328,7 @@ function setCooldown(contactId: string, at: number, action: ProactiveDecision['a
 /** #52 短冷却（5min）：决策为 call 但触发前发现已有通话/闹钟时使用——
  *  联系人未被真拨打不应被记 6h 冷却，但完全无冷却会 90s 后又选到同一联系人再次决策浪费一次 API 调用。 */
 function setShortCooldown(contactId: string, at: number): void {
-  kvSet(cooldownKey(contactId), { at, action: 'wait', window: SHORT_COOLDOWN_MS });
+  kvSet(cooldownKey(contactId), { at, action: 'wait', window: preset().shortCooldownMs });
 }
 
 // ---------------- 决策请求 ----------------
@@ -425,7 +513,7 @@ async function tickInner(): Promise<void> {
   if (!isProactiveCallEnabled()) return;
 
   // ② 深夜硬闸：本地时间 [0, 8) 不打（23 点后的晚间分寸交给决策 API 按人设/时间判断）
-  if (new Date(nowMs).getHours() < NIGHT_END_HOUR) return;
+  if (new Date(nowMs).getHours() < preset().nightEndHour) return;
 
   // ③ 交互中守卫：已有来电响铃或通话进行中不发起（页面后台 document.hidden 照常——真实手机行为）
   if (useIncomingCall.getState().call) return;
@@ -470,11 +558,12 @@ async function tickInner(): Promise<void> {
     );
     if (lastInteractionAt <= 0) continue; // 从未互动（新联系人先聊过天再说）
     const gap = nowMs - lastInteractionAt;
-    if (gap > ACTIVE_WINDOW_MS) continue; // 48h 内无互动
-    if (gap < MIN_GAP_MS) continue; // 刚聊完不久
+    const p = preset();
+    if (gap > p.activeWindowMs) continue; // 48h 内无互动
+    if (gap < p.minGapMs) continue; // 刚聊完不久
     if (isCoolingDown(c.id, nowMs)) continue; // 冷却中
-    // 权重 = gap（毫秒）：越久没聊权重越高（线性，与「最久没聊」单调一致但带随机性）
-    candidates.push({ contact: c, lastInteractionAt, weight: gap });
+    // 权重 = sqrt(gap)（#94 收敛偏度）：最久者与次久者权重差距从线性 24:1 缩到 √24:1 ≈ 5:1，让次久没聊者也有合理机会
+    candidates.push({ contact: c, lastInteractionAt, weight: Math.sqrt(gap) });
   }
   if (candidates.length === 0) return;
   // 加权随机：累计权重 + 随机落点（权重越大越可能命中，最久者最可能但不独占）

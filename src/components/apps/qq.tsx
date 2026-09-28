@@ -6931,11 +6931,12 @@ export function PayMethodSheet({ wallet, cards, selectedId, onClose, onPick }: {
 }
 
 /** 微信风格 6 位支付密码自绘数字键盘（不唤起系统键盘；校验逻辑由父级完成，errorKey 变化时父级重挂载本组件 → 清空并抖动） */
-function PayPwdSheet({ title, sub, hint, errorKey, onComplete, onClose }: { title: string; sub?: string; hint?: string; errorKey: number; onComplete: (pwd: string) => void; onClose: () => void }) {
+function PayPwdSheet({ title, sub, hint, errorKey, locked = false, onComplete, onClose }: { title: string; sub?: string; hint?: string; errorKey: number; locked?: boolean; onComplete: (pwd: string) => void; onClose: () => void }) {
   const [digits, setDigits] = useState('');
   // 用 ref 累加避免同一 tick 内连点被 React 批处理吞掉（每次 push 都基于最新串）
   const acc = useRef('');
   const push = (d: string) => {
+    if (locked) return;
     const next = (acc.current + d).slice(0, 6);
     acc.current = next;
     setDigits(next);
@@ -6967,17 +6968,17 @@ function PayPwdSheet({ title, sub, hint, errorKey, onComplete, onClose }: { titl
       <p className="mt-2 h-5 text-center text-[13px] text-[#F5455C]" aria-live="polite">
         {hint ?? ''}
       </p>
-      <div className="grid grid-cols-3 gap-[1px] border-t border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10">
+      <div className={`grid grid-cols-3 gap-[1px] border-t border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10 ${locked ? 'opacity-40 pointer-events-none' : ''}`}>
         {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => (
-          <button key={k} type="button" data-testid={`qq-keypad-${k}`} onClick={() => push(k)} className={keyBtn}>
+          <button key={k} type="button" data-testid={`qq-keypad-${k}`} onClick={() => push(k)} className={keyBtn} disabled={locked}>
             {k}
           </button>
         ))}
         <span className="bg-white dark:bg-[#2A2C31]" aria-hidden="true" />
-        <button type="button" data-testid="qq-keypad-0" onClick={() => push('0')} className={keyBtn}>
+        <button type="button" data-testid="qq-keypad-0" onClick={() => push('0')} className={keyBtn} disabled={locked}>
           0
         </button>
-        <button type="button" aria-label="删除" data-testid="qq-keypad-del" onClick={() => { acc.current = acc.current.slice(0, -1); setDigits(acc.current); }} className={keyBtn}>
+        <button type="button" aria-label="删除" data-testid="qq-keypad-del" onClick={() => { if (!locked) { acc.current = acc.current.slice(0, -1); setDigits(acc.current); } }} className={keyBtn} disabled={locked}>
           <Delete className="h-6 w-6" strokeWidth={1.8} aria-hidden="true" />
         </button>
       </div>
@@ -6985,22 +6986,49 @@ function PayPwdSheet({ title, sub, hint, errorKey, onComplete, onClose }: { titl
   );
 }
 
-/** 支付密码验证浮层（红包/转账/充值/提现/小金库支付前调用；正确回调 onOk，错误清空重输） */
+/** 支付密码验证浮层（红包/转账/充值/提现/小金库支付前调用；正确回调 onOk，错误清空重输）。
+ *  #97：5 次失败 30s 锁定——锁定期间禁用输入并显示倒计时，防止暴力试错 */
 export function PayPwdGate({ label, onOk, onClose }: { label: string; onOk: () => void; onClose: () => void }) {
   const [errKey, setErrKey] = useState(0);
+  const [lock, setLock] = useState<QqPayPwdLockData>(() => qqLoadPayPwdLock());
+  const [remainSec, setRemainSec] = useState(0);
+  useEffect(() => {
+    if (lock.lockedUntil <= 0) return;
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((lock.lockedUntil - Date.now()) / 1000));
+      setRemainSec(remain);
+      if (remain <= 0) {
+        const cleared = { fails: 0, lockedUntil: 0 };
+        qqSavePayPwdLock(cleared);
+        setLock(cleared);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [lock.lockedUntil]);
+  const isLocked = lock.lockedUntil > 0 && Date.now() < lock.lockedUntil;
   return (
-    <div className="absolute inset-0 z-[60] flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={onClose}>
+    <div className="absolute inset-0 z-[60] flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={isLocked ? undefined : onClose}>
       <PayPwdSheet
         key={errKey}
         title="请输入支付密码"
         sub={label}
-        hint={errKey > 0 ? '密码错误，请重新输入' : undefined}
+        hint={isLocked ? `密码错误次数过多，请 ${remainSec} 秒后再试` : errKey > 0 ? `密码错误，请重新输入${lock.fails > 0 ? `（已失败 ${lock.fails} 次，5 次后将锁定 30 秒）` : ''}` : undefined}
         errorKey={errKey}
+        locked={isLocked}
         onClose={onClose}
         onComplete={(pwd) => {
+          if (isLocked) return;
           const d = loadPayPwd();
-          if (d.pwd && pwd === d.pwd) onOk();
-          else setErrKey((k) => k + 1);
+          if (d.pwd && pwd === d.pwd) {
+            qqClearPayPwdLock();
+            onOk();
+          } else {
+            const next = qqRecordPayPwdFail();
+            setLock(next);
+            setErrKey((k) => k + 1);
+          }
         }}
       />
     </div>
@@ -7012,6 +7040,25 @@ function PaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
   const [data, setData] = useState(() => loadPayPwd());
   const [flow, setFlow] = useState<null | { mode: 'set' | 'confirm' | 'verify-off' | 'verify-change'; first?: string }>(null);
   const [errKey, setErrKey] = useState(0);
+  // #97 锁定状态（verify-off/verify-change 失败累加，成功清零；5 次 30s 锁定）
+  const [lock, setLock] = useState<QqPayPwdLockData>(() => qqLoadPayPwdLock());
+  const [remainSec, setRemainSec] = useState(0);
+  useEffect(() => {
+    if (lock.lockedUntil <= 0) return;
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((lock.lockedUntil - Date.now()) / 1000));
+      setRemainSec(remain);
+      if (remain <= 0) {
+        const cleared = { fails: 0, lockedUntil: 0 };
+        qqSavePayPwdLock(cleared);
+        setLock(cleared);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [lock.lockedUntil]);
+  const isLocked = lock.lockedUntil > 0 && Date.now() < lock.lockedUntil;
   const enabled = data.enabled && !!data.pwd;
   const meta = flow
     ? flow.mode === 'set'
@@ -7074,10 +7121,12 @@ function PaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
               key={`${flow.mode}-${errKey}`}
               title={meta.title}
               sub={meta.sub}
-              hint={errKey > 0 ? '密码错误，请重新输入' : undefined}
+              hint={isLocked ? `密码错误次数过多，请 ${remainSec} 秒后再试` : errKey > 0 ? `密码错误，请重新输入${lock.fails > 0 ? `（已失败 ${lock.fails} 次，5 次后将锁定 30 秒）` : ''}` : undefined}
               errorKey={errKey}
+              locked={isLocked}
               onClose={() => setFlow(null)}
               onComplete={(pwd) => {
+                if (isLocked) return;
                 if (flow.mode === 'set') {
                   setErrKey(0);
                   setFlow({ mode: 'confirm', first: pwd });
@@ -7085,6 +7134,7 @@ function PaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
                   if (pwd === flow.first) {
                     savePayPwd({ enabled: true, pwd });
                     setData(loadPayPwd());
+                    qqClearPayPwdLock();
                     setFlow(null);
                     onToast('支付密码已开启');
                   } else {
@@ -7096,13 +7146,21 @@ function PaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
                   if (pwd === data.pwd) {
                     savePayPwd({ enabled: false, pwd: null });
                     setData(loadPayPwd());
+                    qqClearPayPwdLock();
                     setFlow(null);
                     onToast('支付密码已关闭');
-                  } else setErrKey((k) => k + 1);
+                  } else {
+                    setLock(qqRecordPayPwdFail());
+                    setErrKey((k) => k + 1);
+                  }
                 } else if (pwd === data.pwd) {
                   setErrKey(0);
+                  qqClearPayPwdLock();
                   setFlow({ mode: 'set' });
-                } else setErrKey((k) => k + 1);
+                } else {
+                  setLock(qqRecordPayPwdFail());
+                  setErrKey((k) => k + 1);
+                }
               }}
             />
           </div>
@@ -10442,6 +10500,53 @@ function savePayPwd(d: PayPwdData): void {
   } catch {
     // 忽略
   }
+}
+
+// #97 支付密码暴力试错保护——照搬微信 #48 同款：5 次失败 30s 锁定（localStorage 跨组件共享）
+export const QQ_LS_PAY_PWD_LOCK = 'qq-pay-pwd-lock';
+export const QQ_PAY_PWD_MAX_FAIL = 5;
+export const QQ_PAY_PWD_LOCK_MS = 30 * 1000;
+
+interface QqPayPwdLockData {
+  fails: number;
+  lockedUntil: number;
+}
+
+export function qqLoadPayPwdLock(): QqPayPwdLockData {
+  try {
+    const raw = window.localStorage.getItem(QQ_LS_PAY_PWD_LOCK);
+    if (!raw) return { fails: 0, lockedUntil: 0 };
+    const p = JSON.parse(raw) as Partial<QqPayPwdLockData>;
+    return {
+      fails: typeof p.fails === 'number' && p.fails >= 0 ? p.fails : 0,
+      lockedUntil: typeof p.lockedUntil === 'number' && p.lockedUntil > 0 ? p.lockedUntil : 0,
+    };
+  } catch {
+    return { fails: 0, lockedUntil: 0 };
+  }
+}
+
+export function qqSavePayPwdLock(d: QqPayPwdLockData): void {
+  try {
+    window.localStorage.setItem(QQ_LS_PAY_PWD_LOCK, JSON.stringify(d));
+  } catch {
+    // 忽略
+  }
+}
+
+/** 清零失败次数与锁定（成功支付/修改密码成功/关闭支付密码时调用） */
+export function qqClearPayPwdLock(): void {
+  qqSavePayPwdLock({ fails: 0, lockedUntil: 0 });
+}
+
+/** 记录一次失败：累加 fails，达到 5 次设 lockedUntil = now + 30s；返回更新后的状态 */
+export function qqRecordPayPwdFail(): QqPayPwdLockData {
+  const cur = qqLoadPayPwdLock();
+  const fails = cur.fails + 1;
+  const lockedUntil = fails >= QQ_PAY_PWD_MAX_FAIL ? Date.now() + QQ_PAY_PWD_LOCK_MS : cur.lockedUntil;
+  const next = { fails, lockedUntil };
+  qqSavePayPwdLock(next);
+  return next;
 }
 
 /** 从指定银行卡扣款（红包/转账选卡支付用），同步写账单；卡不存在或余额不足返回 false */
