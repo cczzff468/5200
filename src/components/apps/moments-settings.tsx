@@ -19,7 +19,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
-import { Switch } from '@/components/ui/switch';
 import {
   DEFAULT_BILINGUAL_PROMPT,
   getMomentsSettings,
@@ -39,7 +38,7 @@ export interface MomentsSettingsPageProps {
   onOpenPostNow: () => void;
 }
 
-// ---------------- 色板（iOS 设置风：纯色圆角方块 + 白色线性图标） ----------------
+// ---------------- 色板（iOS 设置风：渐变圆角方块 + 白色线性图标） ----------------
 const TONE_BLUE = '#007AFF';
 const TONE_GREEN = '#34C759';
 const TONE_ORANGE = '#FF9500';
@@ -49,6 +48,15 @@ const TONE_INDIGO = '#5856D6';
 const TONE_TEAL = '#5AC8FA';
 const TONE_RED = '#FF3B30';
 const TONE_YELLOW = '#FFCC00';
+
+/** 给纯色生成更深一点的渐变末端（供 RowIcon 背景渐变用） */
+function darken(hex: string, amount = 0.18): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.max(0, Math.round(((n >> 16) & 0xff) * (1 - amount)));
+  const g = Math.max(0, Math.round(((n >> 8) & 0xff) * (1 - amount)));
+  const b = Math.max(0, Math.round((n & 0xff) * (1 - amount)));
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
 
 // ---------------- 通用小组件（本地实现，不 import settings.tsx 内部组件） ----------------
 
@@ -70,14 +78,17 @@ function GroupCard({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 主列表行图标：纯色圆角方块 + 白色线性图标 */
+/** 主列表行图标：渐变圆角方块 + 白色线性图标（深色投影 + 高光） */
 function RowIcon({ color, Icon }: { color: string; Icon: LucideIcon }) {
   return (
     <span
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] shadow-sm"
-      style={{ backgroundColor: color }}
+      className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]"
+      style={{
+        background: `linear-gradient(135deg, ${color} 0%, ${darken(color, 0.22)} 100%)`,
+        boxShadow: `0 2px 6px ${color}40, inset 0 1px 0 rgba(255,255,255,0.3)`,
+      }}
     >
-      <Icon className="h-[17px] w-[17px] text-white" strokeWidth={2.1} />
+      <Icon className="h-[18px] w-[18px] text-white" strokeWidth={2.2} />
     </span>
   );
 }
@@ -135,7 +146,34 @@ function Row({
   );
 }
 
-// ---------------- 数值输入框 ----------------
+/** 大号绿色开关（iOS 风格自绘，比 shadcn Switch 默认更大 + 微信/iOS 绿 #34C759） */
+function BigGreenSwitch({
+  checked,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  onCheckedChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onCheckedChange(!checked)}
+      className={`relative h-[30px] w-[52px] shrink-0 rounded-full transition-colors duration-200 active:scale-95 ${
+        checked
+          ? 'bg-[#34C759] shadow-[0_2px_8px_rgba(52,199,89,0.4)]'
+          : 'bg-black/15 dark:bg-white/25'
+      }`}
+    >
+      <span
+        className={`absolute top-[2px] h-[26px] w-[26px] rounded-full bg-white shadow-md transition-transform duration-200 ${
+          checked ? 'left-[24px]' : 'left-[2px]'
+        }`}
+      />
+    </button>
+  );
+}
 
 /**
  * 通用数值输入框：本地维护输入文本，失焦/回车时按 [min,max] 范围 clamp 后调 onCommit。
@@ -454,7 +492,7 @@ export function MomentsSettingsPage({
             label="朋友圈双语翻译"
             description="外语帖子、评论和回复自动附中文译文"
             right={
-              <Switch
+              <BigGreenSwitch
                 checked={settings.bilingualEnabled}
                 onCheckedChange={(v) => update({ bilingualEnabled: v })}
               />
@@ -465,7 +503,7 @@ export function MomentsSettingsPage({
             label="折叠中文译文"
             description="关闭后默认直接展开中文"
             right={
-              <Switch
+              <BigGreenSwitch
                 checked={settings.foldChineseTranslation}
                 onCheckedChange={(v) => update({ foldChineseTranslation: v })}
               />

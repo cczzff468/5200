@@ -7798,8 +7798,9 @@ function FriendProfilePage({
 
       <div className="flex-1 overflow-y-auto" data-testid="qq-fprofile-body">
         {/* 46-f：封面 banner（getPeerBg 读出按 peer.id 隔离的专属背景；无则渐变兜底；右上"恢复默认"按钮调 removePeerBg）。
-            47-c 改动 4：banner 整体可点击触发文件选择上传封面；hover 显示相机图标 + 「点击更换」提示；上传期间禁用 */}
-        <div className="group relative h-32 w-full overflow-hidden">
+            47-c 改动 4：banner 整体可点击触发文件选择上传封面；hover 显示相机图标 + 「点击更换」提示；上传期间禁用。
+            51-b 美化：圆角卡片式 + 加高 160px + 常驻左上「点击更换」提示 + 底部渐变遮罩 */}
+        <div className="group relative mx-3 mt-3 h-[160px] w-[calc(100%-24px)] overflow-hidden rounded-[16px] shadow-md">
           <div
             role="button"
             tabIndex={0}
@@ -7826,11 +7827,18 @@ function FriendProfilePage({
                 aria-hidden="true"
               />
             )}
-            {/* hover 提示：相机图标 + 「点击更换」文案 */}
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/30 group-hover:opacity-100">
-              <div className="flex items-center gap-1.5 rounded-full bg-black/40 px-3 py-1.5 text-white backdrop-blur-sm">
+            {/* 底部渐变遮罩（让后续信息层更易读 + 增强封面层次感） */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/35 to-transparent" aria-hidden="true" />
+            {/* 常驻左上提示：相机图标 + 「点击更换」文案（半透明毛玻璃胶囊） */}
+            <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 backdrop-blur-sm">
+              <Camera className="h-3.5 w-3.5 text-white" strokeWidth={1.8} />
+              <span className="text-[11px] font-medium text-white">点击更换</span>
+            </div>
+            {/* hover 加深遮罩（鼠标悬停时更显眼） */}
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/20 group-hover:opacity-100">
+              <div className="flex items-center gap-1.5 rounded-full bg-black/50 px-3 py-1.5 text-white backdrop-blur-sm">
                 <Camera className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-                <span className="text-[13px] font-medium">点击更换</span>
+                <span className="text-[13px] font-medium">点击更换封面</span>
               </div>
             </div>
           </div>
