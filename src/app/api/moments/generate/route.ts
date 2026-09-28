@@ -18,10 +18,10 @@ export const runtime = 'nodejs';
  *   thread?: { authorName?: string, content?: string }[], // 评论区上下文（回复时）
  *   replyTo?: { authorName?: string, content?: string },  // 被回复的评论
  *   hint?: string,                     // 触发语境提示（如「结合最近聊天有感而发」）
- *   bilingual?: boolean,               // 48-3：是否附简体中文译文（true 时返回 { content, contentZh }）
- *   bilingualPrompt?: string,          // 48-3：双语提示词（空则用默认）
+ *   bilingual?: boolean,               // 48-3/53：是否启用双语规则（true 时返回 { content, contentZh }）
+ *   bilingualPrompt?: string,          // 48-3/53：双语提示词（空则用 DEFAULT_BILINGUAL_PROMPT 新规则）
  * }
- * → { content: string, contentZh: string }（contentZh 为空串表示无译文；bilingual=true 时译文以「中文：」前缀行附在原文后）
+ * → { content: string, contentZh: string }（contentZh 为空串表示中文正文无译文；非中文时 LLM 按「原文|中文译文」格式输出，splitBilingual 按 | 拆分）
  *
  * 设计约束：
  * - 内容完全由传入的 persona 驱动：不同角色人设不同 → 动态/评论风格天然不同（一.5）；
@@ -73,16 +73,21 @@ function cleanContent(raw: string): string {
 }
 
 /**
- * 48-3 双语拆分：LLM 返回「原文 + 空行 + 中文：译文」时，
- * 找首个 `\n中文：`/`\n中文:` 标记切分为原文与译文；找不到标记则 contentZh='' 容错。
+ * 48-3 / 53 双语拆分：LLM 按「原文|简体中文译文」格式输出时，
+ * 找最后一个 `|` 切分为原文与译文（译文是中文不会含 |，故取最后一个最安全）；
+ * 无 `|` 视为中文正文无译文，contentZh='' 容错。
+ * 注意：照片标签 [照片:...] 内的描述也可能含 |，但描述在 `]` 之内，
+ *   且正文末尾的 | 才是原文/译文分隔符——取最后一个 | 能避开标签内的 |。
  */
 function splitBilingual(raw: string): { content: string; contentZh: string } {
-  const m = raw.match(/\n\s*中文[：:]\s*/);
-  if (m && m.index !== undefined) {
-    return {
-      content: raw.slice(0, m.index),
-      contentZh: raw.slice(m.index + m[0].length),
-    };
+  const idx = raw.lastIndexOf('|');
+  if (idx > 0) {
+    const content = raw.slice(0, idx);
+    const contentZh = raw.slice(idx + 1);
+    // 译文必须非空且是中文才视为有效（避免正文里的 | 被误判）
+    if (contentZh.trim() && /[\u4e00-\u9fa5]/.test(contentZh)) {
+      return { content: content.trim(), contentZh: contentZh.trim() };
+    }
   }
   return { content: raw, contentZh: '' };
 }
@@ -139,10 +144,15 @@ export async function POST(req: Request) {
     ? (body.memories as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0).slice(0, 10).map((m) => m.trim().slice(0, 80))
     : [];
   const hint = s(body.hint, 80);
-  // 48-3：双语翻译支持
+  // 48-3 / 53：双语翻译支持（新规则：原文|中文译文，用 | 分隔；中文正文无译文）
   const bilingual = body.bilingual === true;
-  const DEFAULT_BILINGUAL_PROMPT = '将下面这条动态/评论的正文翻译成简体中文，只输出译文，不要解释、不要原文、不要引号包裹。';
-  const bilingualPrompt = s(body.bilingualPrompt, 300) || DEFAULT_BILINGUAL_PROMPT;
+  const DEFAULT_BILINGUAL_PROMPT = `【朋友圈双语规则（仅非中文角色使用，中文角色忽略此规则）】
+- **不改变协议头和结构标签**：只对你实际输出的正文内容使用双语格式，不要翻译或改动协议头和结构标签，不要改动 [回复 昵称]、[不回复]、[NPC点赞]、[NPC评论]、昵称、以及"昵称 回复 被回复者昵称:"这类结构。
+- **中文正常输出无需译文**：如果正文是中文，直接正常输出，不要添加译文
+- **非中文语言译文输出格式**：非中文语言，正文必须使用"原文|对应的简体中文译文"的格式输出，必须有|分割符号。
+- **朋友圈正文双语补充**：如果朋友圈正文、评论正文或回复正文使用非中文，必须在同一段正文里写成"完整外文原文|完整简体中文译文"。
+- **照片双语规则**：如果输出 [照片:使用参考图:描述] 或 [照片:不使用参考图:描述]，只允许描述部分使用双语格式，不要改动照片标签外层结构。`;
+  const bilingualPrompt = s(body.bilingualPrompt, 1200) || DEFAULT_BILINGUAL_PROMPT;
 
   const user: string[] = [];
   if (kind === 'post') {
@@ -199,9 +209,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // 48-3：bilingual=true 时在 user message 末尾追加译文要求（原文 + 空行 + 「中文：」前缀行）
+  // 48-3 / 53：bilingual=true 时直接追加双语规则全文（规则自含格式说明：原文|中文译文，用 | 分隔）
   if (bilingual) {
-    user.push(`（同时输出：先原文，再空一行，最后一行以「中文：」开头的简体中文译文；${bilingualPrompt}）`);
+    user.push(bilingualPrompt);
   }
 
   const messages: LLMMessage[] = [
@@ -213,7 +223,7 @@ export async function POST(req: Request) {
     const config = extractUpstreamConfig(body.config);
     const { text } = await completeWithFallback(config, messages);
     // #47：发动态 / 评论 / 回复统一硬性剥 emoji——朋友圈文字干净；提示词禁令之外再剥一次（模型偶尔无视禁令）
-    // 48-3：bilingual=true 时 LLM 返回「原文 + 空行 + 中文：译文」，先按标记拆分再各自 cleanContent
+    // 48-3 / 53：bilingual=true 时 LLM 按「原文|中文译文」格式输出，splitBilingual 按 | 拆分；中文正文无 | 则 contentZh=''
     let rawContent = text;
     let rawZh = '';
     if (bilingual) {

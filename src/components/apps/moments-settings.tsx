@@ -266,7 +266,7 @@ function PromptEditPage({
           />
         </div>
         <p className="mt-2 px-1 text-[13px] leading-snug text-muted-foreground">
-          留空保存即使用默认提示词：{DEFAULT_BILINGUAL_PROMPT}
+          留空保存即使用默认双语规则（上方占位文为本规则全文，可参考编辑自定义）。
         </p>
         <div className="mt-6 overflow-hidden rounded-[12px] bg-card divide-y divide-border/60">
           <button
