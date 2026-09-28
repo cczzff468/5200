@@ -49,15 +49,6 @@ const TONE_TEAL = '#5AC8FA';
 const TONE_RED = '#FF3B30';
 const TONE_YELLOW = '#FFCC00';
 
-/** 给纯色生成更深一点的渐变末端（供 RowIcon 背景渐变用） */
-function darken(hex: string, amount = 0.18): string {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.max(0, Math.round(((n >> 16) & 0xff) * (1 - amount)));
-  const g = Math.max(0, Math.round(((n >> 8) & 0xff) * (1 - amount)));
-  const b = Math.max(0, Math.round((n & 0xff) * (1 - amount)));
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-}
-
 // ---------------- 通用小组件（本地实现，不 import settings.tsx 内部组件） ----------------
 
 /** 分组标题（iOS 风格：分组上方小字说明） */
@@ -78,17 +69,13 @@ function GroupCard({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 主列表行图标：渐变圆角方块 + 白色线性图标（深色投影 + 高光） */
+/** 主列表行图标：简约风格——浅色填充圆角方块 + 主色线性图标（iOS 系统设置同款，无投影无渐变） */
 function RowIcon({ color, Icon }: { color: string; Icon: LucideIcon }) {
   return (
     <span
-      className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.12)]"
-      style={{
-        background: `linear-gradient(135deg, ${color} 0%, ${darken(color, 0.22)} 100%)`,
-        boxShadow: `0 2px 6px ${color}40, inset 0 1px 0 rgba(255,255,255,0.3)`,
-      }}
+      className="grid h-[28px] w-[28px] shrink-0 place-items-center rounded-[7px] bg-muted/60 dark:bg-white/[0.08]"
     >
-      <Icon className="h-[18px] w-[18px] text-white" strokeWidth={2.2} />
+      <Icon className="h-[17px] w-[17px]" strokeWidth={2} style={{ color }} />
     </span>
   );
 }
