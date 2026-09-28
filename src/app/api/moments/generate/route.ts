@@ -7,7 +7,7 @@ export const runtime = 'nodejs';
  *
  * POST {
  *   config?: UpstreamConfig,           // 用户 API 配置（设置 App 里配的；缺省服务端 SDK 兜底）
- *   kind: 'post' | 'comment' | 'reply',
+ *   kind: 'post' | 'comment' | 'reply' | 'repost',
  *   platform: 'wx' | 'qq',
  *   userName?: string,                 // 机主展示名（prompt 指代用）
  *   peer: { name, nickname?, gender?, age?, occupation?, company?, region?,
@@ -102,7 +102,10 @@ export async function POST(req: Request) {
   }
   if (!body) return NextResponse.json({ error: '请求体不能为空' }, { status: 400 });
 
-  const kind = body.kind === 'comment' || body.kind === 'reply' ? (body.kind as 'comment' | 'reply') : 'post';
+  const kind =
+    body.kind === 'comment' || body.kind === 'reply' || body.kind === 'repost'
+      ? (body.kind as 'comment' | 'reply' | 'repost')
+      : 'post';
   const platform = body.platform === 'qq' ? 'qq' : 'wx';
   const label = PLATFORM_LABEL[platform];
   const peerRaw = (body.peer && typeof body.peer === 'object' ? body.peer : {}) as PeerInput;
@@ -184,7 +187,25 @@ export async function POST(req: Request) {
           .map((c) => `${s(c.authorName, 20) || userName}：${s(c.content, 80)}`)
           .filter(Boolean)
       : [];
-    if (kind === 'comment') {
+    if (kind === 'repost') {
+      // 转发：把别人的动态转到自己空间，生成一句转发理由（正文短、不复述原文）
+      const postRaw = (body.post && typeof body.post === 'object' ? body.post : {}) as { authorName?: unknown; author?: unknown; content?: unknown };
+      const postContent = s(postRaw.content, 200);
+      if (!postContent) return NextResponse.json({ error: '缺少要转发的动态内容' }, { status: 400 });
+      const postAuthorName = s(postRaw.authorName, 20);
+      const postAuthor = postRaw.author === 'char' ? postAuthorName || '对方' : userName;
+      if (postRaw.author === 'char' && postAuthorName && postAuthorName === name) {
+        return NextResponse.json({ error: '不能转发自己的动态' }, { status: 400 });
+      }
+      user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
+      user.push(`请以「${name}」的身份把这条动态转发到你的${label}，写一句你转发时想说的话（转发理由）。`);
+      user.push('- 8~30 字，口语化：可以感叹、安利、调侃、吐槽或补一句你的看法；不要复述原文内容；');
+      user.push('- 只输出转发理由这句话本身，不要「转发：」之类前缀，不要话题标签，不要@任何人，不要 emoji；');
+      if (memories.length > 0)
+        user.push(
+          `【你记得的关于${userName}和你们之间的事（理由不得与这些已知事实矛盾）】\n${memories.map((m) => `- ${m}`).join('\n')}`
+        );
+    } else if (kind === 'comment') {
       user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
       user.push(`请以「${name}」的身份（你是评论人，不是发帖人）给这条动态写一条评论。`);
       user.push(`- 身份提醒：这条动态是「${postAuthor}」发的，你不是TA——以你「${name}」自己的口吻回应TA的内容，不要模仿作者的口吻、不要替TA说话、不要自问自答；`);

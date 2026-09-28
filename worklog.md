@@ -10458,3 +10458,36 @@ Stage Summary:
 - 修改文件：src/lib/moments.ts（+326/-37 主体）、src/lib/memory.ts（+42）、src/app/api/moments/generate/route.ts（+20）、src/components/ios/MomentsScheduler.tsx（+4）
 - 核心成果：①发帖人永不能评论/点赞自己的动态（调度候选排除+引擎+数据+API 四层防线）②LLM prompt 身份正确（评论人≠发帖人）③记忆句式归属真实发帖人/被回复人，关系无法建立宁缺勿错④历史错误数据（自评论/自点赞/错误关系记忆）启动时自动修复⑤微信+QQ 双平台、发帖→评论→回复→记忆全链路浏览器验证通过
 - 已提交 df5a3c5 并推送 origin/main
+
+---
+Task ID: feat-65-moments-interactions
+Agent: 主协调者 (Z.ai Code)
+Task: 完善 QQ 动态与微信朋友圈互动能力（发动态加位置/表情；QQ 转发；两平台互动消息收件箱 + 「1条新消息」气泡；分类空间消息页；回复入口）
+
+Work Log:
+- 引擎（src/lib/moments.ts）：
+  1) 数据模型扩展：MomentPostView / WxRawPost / QqRawPost 新增 location（位置名）与 repostOf（MomentRepostRef 转发引用快照：postId/author/authorName/content/images≤3），persistMomentPosts 无损往返；parseRepostRef 宽容解析旧/坏数据
+  2) addUserMomentPost / addCharMomentPost 接受 location + repostOf（QQ 空间转发 = 新动态（转发理由）+ repostOf 原动态摘要卡）
+  3) 互动消息收件箱（新）：moments-inbox:wx / :qq 两键，MomentNotice{kind: like|comment|reply|repost|official|system, actor(name/kind/peerId/avatar), postId, postAuthorName, postSummary, postImage, commentId, replyToName, content, read}，容量 120，新消息置顶；导出 listMomentNotices / unreadMomentNoticeCount / markAllMomentNoticesRead；QQ 首读自动种一条「QQ空间官方」欢迎消息（官方分类；修复 kvGet 缺键返回 null 而非 undefined 导致种子不触发的 bug）
+  4) 推送时机（actor≠user 且与机主相关）：addCharMomentLike→like（仅 user 动态）；addCharMomentComment→comment（user 动态）/reply（parent 为用户评论，不论原动态归属）；addCharMomentPost(repostOf.author==='user')→repost；每次推送 emitMomentsChanged 实时刷新气泡
+  5) AI 转发：aiRepostMoment（仅转用户原创动态、非转发链、同角色同动态去重）+ drainInteractions QQ 平台 22% 概率触发；purgeMomentsForContact 级联清理收件箱中该联系人发出的消息
+- API（/api/moments/generate）：新增 kind='repost'（8~30 字转发理由；身份守卫复用：不能转自己的动态；stripEmojiText 照常剥离）
+- 共享 UI（moments-shared.tsx）：
+  1) MomentsEmojiPanel（~130 常用 unicode 表情网格）+ insertEmojiAtCursor（光标处插入）
+  2) MomentInteractionsPage 双平台共用：wx「与我的互动消息」（灰头白行：头像/蓝名/♥或内容/时间/右侧原动态缩略图；点评论行展开「回复X：」输入框）；qq「空间消息」（分类 tab 全部/赞和推/评论和@/转发/官方/其他 + 蓝色下划线；每条含头像/昵称/时间/内容/原动态摘要引用块/常驻回复输入框 + 右上「回复」按钮；时间 今天HH:mm/昨天/M月D日HH:mm）
+- 微信（wechat.tsx）：WxMoment 加 location/repostOf；MomentRow 渲染位置行（MapPin 蓝字）+ 转发引用卡；ComposeMomentsPage 底部四行（所在位置复用聊天 LocationPickerPage 选点回填、表情行开面板、提醒谁看/谁可以看保持占位）+ 已选位置可清除；MomentsPage 顶栏新增铃铛（未读红点）+ 封面下「N条新消息」深色胶囊（头像+条数，点开即全部已读）；新增 page='momentNotices'；publishMoment 透传 location；MainScreen 订阅维护 wxNotices/角标/replyToWxNotice（回复走引擎自动触发 AI 再回复）
+- QQ（qq.tsx）：ZonePost 加 location/repostOf；ZonePage 铃铛激活（开空间消息+红点）+ 头部下白色胶囊「N条新消息 >」；动态卡渲染转发引用卡/位置行；转发按钮打开转发弹层（理由输入+原动态预览+发表→addUserMomentPost(repostOf)，转发动态不可再转发）；WritePostPage 新增 所在位置（复用 QQ LocationPickerPage）/表情 pill + 已选位置 chip + 面板；路由新增 zone-notices；handlePublishZonePost 透传 location；MainScreen 维护 qqNotices/角标/replyToQqNotice
+- 记忆句式修正：memoryContentOf 中 like/char-comment/user-comment 平台名不再重复接「动态」（qq→「QQ空间动态」，避免「QQ动态动态」）
+- 环境备注：dev server 中途被杀重启过一次；contacts 存储被清空后重新种入 凡凡(user)+乐乐/陈默(char, wx+qq 好友) 测试数据
+
+浏览器端到端验证（420×900；本机 mouse 命令失效，全程 eval 合成 PointerEvent / Playwright ref click）：
+- 朋友圈：发「周末去湖边走走，风很舒服😁 + 广州塔」→ 动态卡显示 emoji+蓝色位置行 → 30s 后乐乐点赞 → 深色胶囊「1条新消息」+铃铛红点出现 → 与我的互动消息页（乐乐/♥/时间/原动态摘要）→ 点评论区回复陈默 → AI 再回复（「陈默 回复 凡凡：…」）→ reply 消息进收件箱 → 从收件箱点行展开回复框回复 → 消息落库 → AI 又回复（多轮闭环）
+- QQ空间：首进空间消息自动种官方欢迎消息 → 白色胶囊「1条新消息 >」→ 写说说「加班到现在，头都秃了😦 + 东方通信大厦」→ 发表后乐乐点赞+评论、陈默评论且 AI 自动转发我的动态（转发理由+引用卡，22% 概率路径实测触发）→ 空间消息页五类消息齐全（转发/评论×2/赞/官方）→ 分类 tab 过滤全部正确（其他=空态）→ 从收件箱回复乐乐 → AI 再回复且新 reply 消息未读置顶
+- 记忆抽查：「乐乐给凡凡的朋友圈动态点了赞」「乐乐评论了凡凡的QQ空间动态」「陈默发了一条QQ动态：转发理由」「乐乐回复了凡凡的评论」归属全部正确；朋友圈侧「乐乐评论了陈默的」「陈默给乐乐的」跨角色归属正确
+- 回归：微信单聊发消息 → AI 语音+文字回复正常（动态注入块含新字段无报错）；dev.log 无运行时错误
+- bunx tsc --noEmit exit 0；bun run lint exit 0
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts（+340 主体：repost/notice 引擎）、src/app/api/moments/generate/route.ts（+21 repost kind）、src/components/apps/moments-shared.tsx（+300：表情面板+互动消息页）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（发布/展示/入口/路由）
+- 核心成果：①两平台发动态支持 文字/图片/位置/表情 ②QQ 支持点赞/评论/转发（用户转发弹层 + AI 自动转发）③互动消息收件箱：微信「与我的互动消息」+ QQ「空间消息」六分类，每条含头像/昵称/时间/内容/原动态摘要/回复入口，收件箱内可直接回复评论并触发 AI 多轮再回复 ④「1条新消息」气泡按平台样式区分（微信深色胶囊 / QQ 白色胶囊+箭头）+ 铃铛红点 ⑤身份/记忆关系规则不受影响，归属依旧全对
+- 已提交并推送 origin/main

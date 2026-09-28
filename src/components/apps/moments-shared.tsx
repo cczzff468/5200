@@ -11,8 +11,8 @@
  * 深浅色都适配（与微信/QQ 页面同一套 dark: 前缀）。
  */
 
-import { useState, type ReactNode } from 'react';
-import { CalendarClock, ChevronRight, Clock3, Languages, Loader2, MessageSquareQuote, Settings2, Sparkles, Trash2, X } from 'lucide-react';
+import { useState, type ReactNode, useRef } from 'react';
+import { CalendarClock, ChevronLeft, ChevronRight, Clock3, Heart, Languages, Loader2, MessageSquareQuote, Settings2, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { DefaultAvatar } from './default-avatar';
 import {
@@ -20,6 +20,7 @@ import {
   getMomentAutoCfg,
   saveMomentAutoCfg,
   type MomentAutoCfg,
+  type MomentNotice,
   type MomentPlatform,
 } from '@/lib/moments';
 
@@ -394,6 +395,326 @@ export function BilingualTranslation({
         <span>{open ? '收起译文' : '展开译文'}</span>
       </button>
       {open && <p className="mt-1 leading-relaxed">{zh}</p>}
+    </div>
+  );
+}
+
+// ---------------- 表情面板（朋友圈/写说说 发布页共用：点选插入光标处） ----------------
+
+/** 常用表情（纯 unicode，直接拼进动态正文；AI 生成的动态仍会剥 emoji，用户手选的不受限） */
+export const MOMENT_EMOJIS: readonly string[] =
+  '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🤫 🤔 🤐 😐 😑 😶 😏 😒 🙄 😬 😌 😔 😪 😴 😷 🤒 🤕 🤢 🤮 🥵 🥶 😵 🤯 🤠 🥳 😎 🤓 🧐 😕 😟 🙁 😮 😯 😲 😳 🥺 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 🤬 👍 👎 👌 ✌️ 🤞 🤟 🤘 🤙 👏 🙌 🤝 🙏 💪 ❤️ 🧡 💛 💚 💙 💜 🖤 💔 💯 💥 💫 🎉 🎊 🎁 🌹 🌸 🌼 🌻 ☀️ 🌈 ⭐ 🌙 ✨ 🔥 💧 🍉 🍓 🍦 🎂 ☕ 🍺 ⚽ 🏀 🎮 🎤 🎵 📱 💻 ✈️ 🚗 🌊 🏔️ 🎈 🐶 🐱 🐼 🐰 🦢 🌴'.split(
+    ' '
+  );
+
+/** 表情面板（网格 + 关闭按钮；选中通过 onPick 交给宿主插入正文光标处） */
+export function MomentsEmojiPanel({ onPick, onClose }: { onPick: (emoji: string) => void; onClose: () => void }) {
+  return (
+    <div data-testid="moments-emoji-panel" className="overflow-hidden rounded-[12px] bg-black/[0.035] dark:bg-white/[0.06]">
+      <div className="flex items-center justify-between px-3 pt-1.5">
+        <span className="text-[12px] text-black/40 dark:text-white/40">表情</span>
+        <button type="button" aria-label="收起表情" onClick={onClose} className="rounded-full p-1 text-black/40 active:bg-black/10 dark:text-white/40 dark:active:bg-white/10">
+          <X className="h-3.5 w-3.5" strokeWidth={2.2} />
+        </button>
+      </div>
+      <div className="max-h-[150px] overflow-y-auto px-2 pb-2 pt-1">
+        <div className="grid grid-cols-8 gap-0.5">
+          {MOMENT_EMOJIS.map((e, i) => (
+            <button
+              key={`${e}-${i}`}
+              type="button"
+              aria-label={`插入表情 ${e}`}
+              data-testid={`moments-emoji-${i}`}
+              onClick={() => onPick(e)}
+              className="grid h-9 place-items-center rounded-[6px] text-[22px] leading-none active:bg-black/10 dark:active:bg-white/10"
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 把表情插入 textarea 光标处（失焦/无光标时追加到末尾；插入后光标落到表情后面） */
+export function insertEmojiAtCursor(
+  ref: React.RefObject<HTMLTextAreaElement | null>,
+  value: string,
+  emoji: string,
+  setValue: (v: string) => void
+): void {
+  const el = ref.current;
+  if (!el) {
+    setValue(value + emoji);
+    return;
+  }
+  const start = el.selectionStart ?? value.length;
+  const end = el.selectionEnd ?? start;
+  const next = value.slice(0, start) + emoji + value.slice(end);
+  setValue(next);
+  requestAnimationFrame(() => {
+    el.focus();
+    try {
+      el.setSelectionRange(start + emoji.length, start + emoji.length);
+    } catch {
+      // 忽略
+    }
+  });
+}
+
+// ---------------- 互动消息页（微信「与我的互动消息」/ QQ「空间消息」共用） ----------------
+
+/** 互动消息时间：今天 → HH:mm；昨天 → 昨天HH:mm；更早 → M月D日HH:mm */
+function fmtNoticeTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(d, now)) return hm;
+  const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (sameDay(d, yest)) return `昨天${hm}`;
+  return `${d.getMonth() + 1}月${d.getDate()}日${hm}`;
+}
+
+const QQ_NOTICE_TABS = ['全部', '赞和推', '评论和@', '转发', '官方', '其他'] as const;
+type QqNoticeTab = (typeof QQ_NOTICE_TABS)[number];
+
+function noticeMatchTab(n: MomentNotice, tab: QqNoticeTab): boolean {
+  switch (tab) {
+    case '全部':
+      return true;
+    case '赞和推':
+      return n.kind === 'like';
+    case '评论和@':
+      return n.kind === 'comment' || n.kind === 'reply';
+    case '转发':
+      return n.kind === 'repost';
+    case '官方':
+      return n.kind === 'official';
+    case '其他':
+      return n.kind === 'system';
+  }
+}
+
+/**
+ * 互动消息页（双平台共用，variant 由 platform 决定）：
+ * - wx「与我的互动消息」：谁赞了我（心形）/ 谁评论了我 / 回复了我；点行内展开回复框，点击可回复评论；
+ * - qq「空间消息」：分类 tab（全部/赞和推/评论和@/转发/官方/其他）+ 每条含头像/昵称/时间/内容/原动态摘要 + 回复入口（输入框常驻）。
+ * 回复提交走 onReply（宿主接引擎 addUserMomentComment，AI 会自动再回复）。
+ */
+export function MomentInteractionsPage({
+  platform,
+  title,
+  notices,
+  onBack,
+  onReply,
+  renderAvatar,
+}: {
+  platform: MomentPlatform;
+  title: string;
+  /** 收件箱列表（引擎 listMomentNotices 的结果，新消息在前） */
+  notices: MomentNotice[];
+  onBack: () => void;
+  /** 提交回复（仅 comment/reply 消息会出现回复入口） */
+  onReply: (notice: MomentNotice, text: string) => void;
+  /** 宿主 App 的头像组件（微信/QQ 各自的圆角风格） */
+  renderAvatar: (src: string | null, name: string, size: number) => ReactNode;
+}) {
+  const isWx = platform === 'wx';
+  const [tab, setTab] = useState<QqNoticeTab>('全部');
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /** wx：展开回复框的消息 id（点行切换） */
+  const [replyFor, setReplyFor] = useState<string | null>(null);
+  const replyInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  const shown = isWx ? notices : notices.filter((n) => noticeMatchTab(n, tab));
+  const replyable = (n: MomentNotice) => (n.kind === 'comment' || n.kind === 'reply') && !!n.postId;
+
+  const submitReply = (n: MomentNotice) => {
+    const text = (drafts[n.id] ?? '').trim();
+    if (!text || !replyable(n)) return;
+    onReply(n, text);
+    setDrafts((d) => ({ ...d, [n.id]: '' }));
+    setReplyFor(null);
+  };
+
+  /** 消息正文行（like → 图标+赞了我；其余 → 内容文本） */
+  const renderBody = (n: MomentNotice) => {
+    if (n.kind === 'like') {
+      return isWx ? (
+        <span className="mt-0.5 block text-[#7B8BA6]" aria-label="赞了我">
+          <Heart className="h-[19px] w-[19px]" strokeWidth={1.7} aria-hidden="true" />
+        </span>
+      ) : (
+        <span className="mt-1 flex items-center gap-1.5 text-[15px] text-[#1E6FFF] dark:text-[#4AA3FF]">
+          <ThumbsUp className="h-[17px] w-[17px] fill-current" strokeWidth={0} aria-hidden="true" />
+          赞了我
+        </span>
+      );
+    }
+    if (n.kind === 'reply') {
+      return (
+        <p className="mt-0.5 text-[14.5px] leading-[1.5]">
+          <span className="text-black/45 dark:text-white/45">{isWx ? '回复了我：' : `回复了${n.replyToName ?? '我'}的评论：`}</span>
+          <span>{n.content}</span>
+        </p>
+      );
+    }
+    if (n.kind === 'repost') {
+      return (
+        <p className="mt-0.5 text-[14.5px] leading-[1.5]">
+          <span className="text-black/45 dark:text-white/45">{isWx ? '转发了我的动态：' : '转发了我的动态'}</span>
+          {n.content && <span className={isWx ? '' : ' block'}>{n.content}</span>}
+        </p>
+      );
+    }
+    if (n.kind === 'comment') {
+      return <p className="mt-0.5 text-[14.5px] leading-[1.5]">{n.content}</p>;
+    }
+    // official / system
+    return <p className="mt-0.5 text-[14.5px] leading-[1.5]">{n.content}</p>;
+  };
+
+  /** 原动态摘要（引用块；official 无原动态不渲染） */
+  const renderQuote = (n: MomentNotice) => {
+    if (!n.postSummary.trim()) return null;
+    return (
+      <div className="mt-2 rounded-[8px] bg-black/[0.035] px-3 py-2 dark:bg-white/[0.05]" data-testid={`notice-quote-${n.id}`}>
+        <p className="line-clamp-2 text-[13.5px] leading-[1.5]">
+          {n.postAuthorName && <span className="text-[#576B95] dark:text-[#8FA5C9]">{n.postAuthorName}：</span>}
+          <span className="text-black/55 dark:text-white/55">{n.postSummary}</span>
+        </p>
+      </div>
+    );
+  };
+
+  /** 回复输入区（qq 常驻；wx 点行展开） */
+  const renderReplyBox = (n: MomentNotice) => {
+    if (!replyable(n)) return null;
+    if (isWx && replyFor !== n.id) return null;
+    return (
+      <div className="mt-2 flex items-center gap-2" data-testid={`notice-replybox-${n.id}`}>
+        <input
+          ref={(el) => {
+            replyInputRefs.current[n.id] = el;
+          }}
+          value={drafts[n.id] ?? ''}
+          onChange={(e) => setDrafts((d) => ({ ...d, [n.id]: e.target.value }))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submitReply(n);
+            }
+          }}
+          placeholder={`回复${n.actorName}：`}
+          aria-label={`回复${n.actorName}`}
+          data-testid={`notice-reply-input-${n.id}`}
+          className={`h-9 min-w-0 flex-1 rounded-[8px] bg-black/[0.04] px-3 text-[14px] outline-none placeholder:text-black/30 focus:bg-white focus:ring-1 focus:ring-black/10 dark:bg-white/[0.07] dark:placeholder:text-white/30 dark:focus:bg-[#1F1F1F] dark:focus:ring-white/15 ${
+            isWx ? '' : 'rounded-full border border-transparent focus:border-[#1E6FFF]/30 dark:focus:border-[#4AA3FF]/40'
+          }`}
+        />
+        {(drafts[n.id] ?? '').trim() && (
+          <button
+            type="button"
+            data-testid={`notice-reply-send-${n.id}`}
+            onClick={() => submitReply(n)}
+            className={`shrink-0 rounded-[8px] px-3 py-[7px] text-[13px] font-medium text-white active:opacity-80 ${isWx ? 'bg-[#07C160]' : 'bg-[#1E6FFF] dark:bg-[#1B6BDD]'}`}
+          >
+            发送
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className={`absolute inset-0 z-20 flex h-full w-full flex-col pt-[54px] ${isWx ? 'bg-[#F7F7F7] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F2F3F5] text-[#1F2329] dark:bg-[#111214] dark:text-white'}`}>
+      {/* 顶栏：返回 + 居中标题 */}
+      <div className={`relative flex h-11 shrink-0 items-center justify-center ${isWx ? 'bg-[#F7F7F7] dark:bg-[#111111]' : 'bg-white dark:bg-[#16171A]'}`}>
+        <button
+          type="button"
+          aria-label="返回"
+          data-testid="moments-notices-back"
+          onClick={onBack}
+          className="absolute left-2 rounded-full p-1.5 active:bg-black/[0.06] dark:active:bg-white/10"
+        >
+          <ChevronLeft className="h-[22px] w-[22px]" strokeWidth={2.2} />
+        </button>
+        <span className="text-[16.5px] font-medium">{title}</span>
+      </div>
+
+      {/* QQ：分类 tab（全部/赞和推/评论和@/转发/官方/其他） */}
+      {!isWx && (
+        <div className="shrink-0 border-b border-black/[0.06] bg-white dark:border-white/[0.08] dark:bg-[#16171A]">
+          <div className="flex items-center gap-6 overflow-x-auto px-4">
+            {QQ_NOTICE_TABS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                data-testid={`qq-notice-tab-${t}`}
+                onClick={() => setTab(t)}
+                className={`relative shrink-0 py-2.5 text-[15px] ${tab === t ? 'font-semibold text-[#1E6FFF] dark:text-[#4AA3FF]' : 'text-black/70 dark:text-white/70'}`}
+              >
+                {t}
+                {tab === t && <span className="absolute inset-x-0 -bottom-px mx-auto h-[3px] w-6 rounded-full bg-[#1E6FFF] dark:bg-[#4AA3FF]" aria-hidden="true" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 消息列表 */}
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid={`moments-notices-list-${platform}`}>
+        {shown.length === 0 ? (
+          <p className="mt-16 text-center text-[13.5px] text-black/30 dark:text-white/30">还没有消息</p>
+        ) : (
+          <div className="space-y-2 py-2">
+            {shown.map((n) => (
+              <div
+                key={n.id}
+                data-testid={`notice-row-${n.kind}-${n.id}`}
+                onClick={() => {
+                  // wx：点评论/回复行展开回复框（再点收起）
+                  if (isWx && replyable(n)) setReplyFor((cur) => (cur === n.id ? null : n.id));
+                }}
+                className={`px-4 py-3 ${isWx ? 'bg-white dark:bg-[#1A1A1A]' : 'bg-white dark:bg-[#1B1C1F]'} ${!isWx && replyable(n) ? 'cursor-text' : ''}`}
+              >
+                <div className="flex items-start gap-3">
+                  {renderAvatar(n.actorAvatar, n.actorName, 44)}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className={`truncate text-[15px] font-medium ${isWx ? 'text-[#576B95] dark:text-[#8FA5C9]' : 'text-[#4A78B8] dark:text-[#7FA8D9]'}`}>{n.actorName}</p>
+                        <p className="mt-0.5 text-[12px] text-black/35 dark:text-white/35">{fmtNoticeTime(n.createdAt)}</p>
+                      </div>
+                      {!isWx && replyable(n) && (
+                        <button
+                          type="button"
+                          data-testid={`notice-reply-btn-${n.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            replyInputRefs.current[n.id]?.focus();
+                          }}
+                          className="shrink-0 text-[14px] text-[#1E6FFF] active:opacity-60 dark:text-[#4AA3FF]"
+                        >
+                          回复
+                        </button>
+                      )}
+                    </div>
+                    {renderBody(n)}
+                  </div>
+                  {/* wx：右侧原动态缩略图 */}
+                  {isWx && n.postImage && <img src={n.postImage} alt="原动态配图" className="h-16 w-16 shrink-0 rounded-[2px] object-cover" />}
+                </div>
+                {renderQuote(n)}
+                {renderReplyBox(n)}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

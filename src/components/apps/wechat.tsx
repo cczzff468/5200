@@ -53,6 +53,7 @@ import {
   Video,
   Wallet,
   X,
+  Bell,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -164,12 +165,16 @@ import {
   deleteMomentPost,
   enqueuePostInteractions,
   isPostByPeer,
+  listMomentNotices,
   listMomentPosts,
+  markAllMomentNoticesRead,
   subscribeMomentsChanged,
   toggleUserMomentLike,
   updateMomentPostContent,
+  type MomentNotice,
+  type MomentRepostRef,
 } from '@/lib/moments';
-import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
+import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
@@ -362,6 +367,10 @@ interface WxMoment {
   /** AI 双语译文（中文译文；空串 = 无译文）；48-6 渲染折叠块 */
   contentZh?: string;
   images: string[];
+  /** 发动态时附的位置名（可选） */
+  location?: string;
+  /** 转发引用（QQ 空间转发用；微信引擎层支持，UI 不发） */
+  repostOf?: MomentRepostRef;
   time: number;
   likes: string[];
   comments: WxMomentComment[];
@@ -7468,6 +7477,31 @@ function MomentRow({
           </div>
         )}
 
+        {/* 转发引用卡（引擎层支持；QQ 空间转发，微信侧仅兼容展示） */}
+        {post.repostOf && (
+          <div className="mt-2 rounded-[4px] bg-[#F7F7F7] px-2.5 py-2 dark:bg-[#242424]">
+            <p className="text-[13.5px] leading-[1.5]">
+              <span className="text-[#576B95] dark:text-[#8FA5C9]">{post.repostOf.authorName}：</span>
+              <span className="text-black/70 dark:text-white/70">{post.repostOf.content}</span>
+            </p>
+            {post.repostOf.images.length > 0 && (
+              <div className="mt-1.5 flex gap-1">
+                {post.repostOf.images.slice(0, 3).map((src, i) => (
+                  <img key={i} src={src} alt="转发配图" className="h-14 w-14 rounded-[3px] object-cover" />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 位置行（发动态时选了「所在位置」才显示，微信同款蓝字） */}
+        {post.location && (
+          <p className="mt-1.5 flex items-center gap-1 text-[13px] text-[#576B95] dark:text-[#8FA5C9]" data-testid={`wx-moment-location-${post.id}`}>
+            <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+            <span className="truncate">{post.location}</span>
+          </p>
+        )}
+
         <div className="mt-1.5 flex items-center justify-between">
           <span className="text-[12.5px] text-black/35 dark:text-white/35">{fmtMomentsTime(post.time)}</span>
           <button
@@ -7653,6 +7687,8 @@ function MomentsPage({
   onDeleteComment,
   onEditRequest,
   onToast,
+  noticeBadge,
+  onOpenNotices,
 }: {
   me: WxUser;
   /** 传入 = 好友的朋友圈：界面同款，但名字/头像换好友、无发布与换封面入口 */
@@ -7670,6 +7706,10 @@ function MomentsPage({
   /** 编辑动态正文（仅自己的动态；好友朋友圈页不传） */
   onEditRequest?: (post: WxMoment) => void;
   onToast: (m: string) => void;
+  /** 互动消息未读数 + 最新一条消息人的头像（「1条新消息」气泡；好友朋友圈不显示） */
+  noticeBadge: { count: number; avatar: string | null };
+  /** 打开「与我的互动消息」页（气泡/铃铛入口） */
+  onOpenNotices: () => void;
 }) {
   const isMine = !owner;
   const shownName = owner?.name ?? me.name;
@@ -7825,6 +7865,23 @@ function MomentsPage({
           </div>
         </div>
 
+        {/* 「1条新消息」气泡（微信同款深色胶囊：最新互动人头像 + 条数；点开互动消息页并全部已读）。
+            放在封面之下、动态列表之前，与真机一致 */}
+        {isMine && noticeBadge.count > 0 && (
+          <div className="flex justify-center pb-1 pt-3">
+            <button
+              type="button"
+              data-testid="wx-moments-pill"
+              aria-label={`${noticeBadge.count}条新消息`}
+              onClick={onOpenNotices}
+              className="flex items-center gap-2.5 rounded-[10px] bg-black/70 px-3 py-2 text-white shadow-md backdrop-blur active:bg-black/80 dark:bg-white/20"
+            >
+              <WxAvatar src={noticeBadge.avatar} alt="" size={26} />
+              <span className="text-[14px]">{noticeBadge.count}条新消息</span>
+            </button>
+          </div>
+        )}
+
         {posts.length === 0 ? (
           <div className="flex flex-col items-center pt-[88px] text-black/35 dark:text-white/35">
             <Camera className="h-9 w-9" strokeWidth={1.2} />
@@ -7903,6 +7960,19 @@ function MomentsPage({
             <div className="flex items-center gap-1">
               <button
                 type="button"
+                aria-label="互动消息"
+                title="与我的互动消息"
+                data-testid="wx-moments-notices"
+                onClick={onOpenNotices}
+                className={`relative rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
+                  scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
+                }`}
+              >
+                <Bell className="h-[21px] w-[21px]" strokeWidth={1.8} />
+                {noticeBadge.count > 0 && <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-[#FA5151]" aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
                 aria-label="发布朋友圈"
                 data-testid="wx-moments-compose"
                 onClick={onCompose}
@@ -7946,14 +8016,19 @@ function ComposeMomentsPage({
   onToast,
 }: {
   onCancel: () => void;
-  onPublish: (text: string, images: string[]) => void;
+  /** 发表：正文 + 配图 + 位置名（可选；入库/互动队列由动态引擎统一处理） */
+  onPublish: (text: string, images: string[], location?: string) => void;
   onToast: (m: string) => void;
 }) {
   const [text, setText] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [location, setLocation] = useState('');
+  const [showLoc, setShowLoc] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
 
   const canPost = (text.trim().length > 0 || images.length > 0) && !busy;
 
@@ -7992,7 +8067,7 @@ function ComposeMomentsPage({
             type="button"
             data-testid="wx-compose-submit"
             disabled={!canPost}
-            onClick={() => onPublish(text.trim(), images)}
+            onClick={() => onPublish(text.trim(), images, location.trim() || undefined)}
             className={`rounded-[5px] px-4 py-1.5 text-[15px] font-medium transition-colors ${
               canPost
                 ? 'bg-[#07C160] text-white active:bg-[#06AD56]'
@@ -8006,6 +8081,7 @@ function ComposeMomentsPage({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4">
         <textarea
+          ref={textRef}
           data-testid="wx-compose-text"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -8058,29 +8134,75 @@ function ComposeMomentsPage({
         />
       </div>
 
-      {/* 底部：所在位置 / 提醒谁看 / 谁可以看（预留底部横杠安全区） */}
+      {/* 底部：表情面板 + 所在位置 / 表情 / 提醒谁看 / 谁可以看（预留底部横杠安全区） */}
       <div className="shrink-0 border-t border-black/[0.06] pb-[14px] dark:border-white/[0.08]">
+        {showEmoji && (
+          <div className="px-3 pt-2">
+            <MomentsEmojiPanel
+              onPick={(e) => insertEmojiAtCursor(textRef, text, e, setText)}
+              onClose={() => setShowEmoji(false)}
+            />
+          </div>
+        )}
         {(
           [
-            ['所在位置', '', <MapPin key="l" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
-            ['提醒谁看', '', <AtSign key="a" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
-            ['谁可以看', '公开', <User key="u" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
-          ] as Array<[string, string, React.ReactNode]>
-        ).map(([label, value, icon], i) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => onToast(label === '谁可以看' ? '谁可以看：公开' : `「${label}」暂未开放`)}
-            className="relative flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
-          >
+            ['所在位置', location, 'loc', <MapPin key="l" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
+            ['表情', '', 'emoji', <Smile key="e" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
+            ['提醒谁看', '', 'todo', <AtSign key="a" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
+            ['谁可以看', '公开', 'todo', <User key="u" className="h-[19px] w-[19px]" strokeWidth={1.8} />],
+          ] as Array<[string, string, string, React.ReactNode]>
+        ).map(([label, value, act, icon], i) => (
+          <div key={label} className="relative">
             {i > 0 && <span className="absolute left-0 right-0 top-0 h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />}
-            <span className="text-black/55 dark:text-white/55">{icon}</span>
-            <span className="min-w-0 flex-1 text-[15.5px]">{label}</span>
-            {value && <span className="text-[15px] text-black/45 dark:text-white/45">{value}</span>}
-            <ChevronRight className="h-4 w-4 shrink-0 text-black/20 dark:text-white/20" strokeWidth={2} />
-          </button>
+            <button
+              type="button"
+              data-testid={`wx-compose-${label}`}
+              onClick={() => {
+                if (act === 'loc') setShowLoc(true);
+                else if (act === 'emoji') setShowEmoji((v) => !v);
+                else if (label === '谁可以看') onToast('谁可以看：公开');
+                else onToast(`「${label}」暂未开放`);
+              }}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+            >
+              <span className="text-black/55 dark:text-white/55">{icon}</span>
+              <span className="min-w-0 flex-1 text-[15.5px]">{label}</span>
+              {value && act === 'loc' && (
+                <>
+                  <span className="max-w-[160px] truncate text-[15px] text-black/45 dark:text-white/45" data-testid="wx-compose-location-value">{value}</span>
+                  <span
+                    role="button"
+                    aria-label="清除位置"
+                    data-testid="wx-compose-location-clear"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLocation('');
+                    }}
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/25 text-white active:bg-black/40 dark:bg-white/25"
+                  >
+                    <X className="h-3 w-3" strokeWidth={2.6} />
+                  </span>
+                </>
+              )}
+              {!value && <ChevronRight className="h-4 w-4 shrink-0 text-black/20 dark:text-white/20" strokeWidth={2} />}
+            </button>
+          </div>
         ))}
       </div>
+
+      {/* 位置选择（复用聊天发送位置的内置地点/自定义位置页；选中即回填位置名） */}
+      {showLoc && (
+        <div className="absolute inset-0 z-30">
+          <LocationPickerPage
+            onClose={() => setShowLoc(false)}
+            onSend={(name) => {
+              setLocation(name);
+              setShowLoc(false);
+            }}
+            onToast={onToast}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -8719,6 +8841,7 @@ type Page =
   | 'main'
   | 'moments'
   | 'compose'
+  | 'momentNotices'
   | 'newFriends'
   | 'addFriend'
   | 'friendDetail'
@@ -9474,20 +9597,62 @@ function MainScreen({
 
   /** 朋友圈更新：改由动态引擎写入，这里只从存储重读刷新视图（引擎每次落盘也广播 moments-changed） */
   const reloadMoments = useCallback(() => setMoments(loadMoments()), []);
+
+  // ---------------- 互动消息（与我的互动消息：谁赞了我/评论了我/回复了我） ----------------
+  const [wxNotices, setWxNotices] = useState<MomentNotice[]>(() => listMomentNotices('wx'));
+  const refreshWxNotices = useCallback(() => setWxNotices(listMomentNotices('wx')), []);
+  /** 气泡角标：未读条数 + 最新一条消息人的头像（「1条新消息」气泡展示用） */
+  const wxNoticeBadge = useMemo(
+    () => ({
+      count: wxNotices.filter((n) => !n.read).length,
+      avatar: wxNotices.find((n) => !n.read)?.actorAvatar ?? null,
+    }),
+    [wxNotices]
+  );
+  /** 打开互动消息页：全部标记已读（气泡随之消失）+ 刷新列表 */
+  const openWxNotices = useCallback(() => {
+    markAllMomentNoticesRead('wx');
+    refreshWxNotices();
+    setPage('momentNotices');
+  }, [refreshWxNotices]);
+  /** 从互动消息页回复一条评论/回复（走引擎：AI 会自动再回复，新回复会进收件箱） */
+  const replyToWxNotice = useCallback(
+    (n: MomentNotice, text: string) => {
+      if (!n.postId) {
+        showToast('原动态已删除，无法回复');
+        return;
+      }
+      const added = addUserMomentComment('wx', n.postId, {
+        userName: me.name,
+        content: text,
+        replyTo: n.commentId ? { commentId: n.commentId, name: n.actorName } : undefined,
+      });
+      if (!added) {
+        showToast('原动态已删除，无法回复');
+        return;
+      }
+      refreshWxNotices();
+      reloadMoments();
+      showToast('已回复');
+    },
+    [me.name, refreshWxNotices, reloadMoments, showToast]
+  );
+
   // 引擎（调度器/AI）在别处写入动态后同步本地视图（点赞/评论/新动态实时出现）
   useEffect(
     () =>
       subscribeMomentsChanged((platform) => {
         if (platform && platform !== 'wx') return;
         reloadMoments();
+        refreshWxNotices();
       }),
-    [reloadMoments]
+    [reloadMoments, refreshWxNotices]
   );
 
   const publishMoment = useCallback(
-    (text: string, images: string[]) => {
-      // 统一走动态引擎：入库 + 写看到它的角色记忆（聊天时懒入库）+ 排 AI 互动队列（8~18s 后好友点赞/评论）
-      const post = addUserMomentPost('wx', { userName: me.name, avatar: me.avatar, content: text, images });
+    (text: string, images: string[], location?: string) => {
+      // 统一走动态引擎：入库（含位置）+ 写看到它的角色记忆（聊天时懒入库）+ 排 AI 互动队列（8~18s 后好友点赞/评论）
+      const post = addUserMomentPost('wx', { userName: me.name, avatar: me.avatar, content: text, images, location });
       enqueuePostInteractions('wx', post.id);
       reloadMoments();
       setMomentsScope('mine');
@@ -9653,6 +9818,8 @@ function MainScreen({
           onDeleteComment={deleteComment}
           onEditRequest={(p) => setEditingPost({ id: p.id, text: p.text })}
           onToast={showToast}
+          noticeBadge={wxNoticeBadge}
+          onOpenNotices={openWxNotices}
         />
         {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑动态（六.4） */}
         {askOpen && (
@@ -9699,6 +9866,18 @@ function MainScreen({
       />
     );
   }
+  if (page === 'momentNotices') {
+    return (
+      <MomentInteractionsPage
+        platform="wx"
+        title="与我的互动消息"
+        notices={wxNotices}
+        onBack={() => setPage('moments')}
+        onReply={replyToWxNotice}
+        renderAvatar={(src, name, size) => <WxAvatar src={src} alt={name} size={size} />}
+      />
+    );
+  }
   if (page === 'friendMoments' && friendMoments) {
     return (
       <>
@@ -9713,6 +9892,8 @@ function MainScreen({
           onComment={addComment}
           onDelete={deleteMoment}
           onToast={showToast}
+          noticeBadge={{ count: 0, avatar: null }}
+          onOpenNotices={openWxNotices}
         />
         {editingPost && (
           <EditPostDialog

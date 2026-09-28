@@ -176,12 +176,16 @@ import {
   deleteMomentComment,
   deleteMomentPost,
   enqueuePostInteractions,
+  listMomentNotices,
+  markAllMomentNoticesRead,
   repairLegacyMomentData,
   subscribeMomentsChanged,
   toggleUserMomentLike,
   updateMomentPostContent,
+  type MomentNotice,
+  type MomentRepostRef,
 } from '@/lib/moments';
-import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
+import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -608,6 +612,10 @@ interface ZonePost {
   likedBy: string[];
   /** 说说配图（压缩后的 dataURL，最多 9 张） */
   images?: string[];
+  /** 发说说时附的位置名（可选） */
+  location?: string;
+  /** 转发引用（转发是「理由 + 原动态摘要卡」） */
+  repostOf?: MomentRepostRef;
   /** 引擎写入的双语译文（中文），渲染时折叠展示 */
   contentZh?: string;
 }
@@ -9945,6 +9953,10 @@ function ZonePage({
   owner,
   /** true = 只显示机主自己发的动态（个人资料页 QQ空间进入「我的空间动态」） */
   mineOnly,
+  /** 互动消息未读数 + 最新一条消息人的头像（「1条新消息」气泡） */
+  noticeBadge,
+  /** 打开「空间消息」页（铃铛/气泡入口） */
+  onOpenNotices,
 }: {
   me: QQUser;
   /** 联系人列表（「让好友发一条」候选 + 平台好友过滤） */
@@ -9957,6 +9969,8 @@ function ZonePage({
   setAskOpen: (b: boolean) => void;
   owner?: ContactRecord;
   mineOnly?: boolean;
+  noticeBadge: { count: number; avatar: string | null };
+  onOpenNotices: () => void;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
   const [userPosts, setUserPosts] = useState<ZonePost[]>(loadZonePosts);
@@ -9980,6 +9994,9 @@ function ZonePage({
   const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
   /** 长按删除的评论（确认弹层） */
   const [delComment, setDelComment] = useState<{ postId: string; commentId: string; author: string } | null>(null);
+  /** 转发目标动态（转发弹层；转发 = 新说说（理由）+ 原动态摘要卡） */
+  const [repostTarget, setRepostTarget] = useState<ZonePost | null>(null);
+  const [repostDraft, setRepostDraft] = useState('');
   /** 朋友圈/空间动态设置缓存（mount 时读一次 kv，避免每次 render 重读）。
    *  feat-64：设置按平台独立（只读 QQ 空间这一份） */
   const [momentsSettings] = useState(() => getMomentsSettings('qq'));
@@ -10112,11 +10129,13 @@ function ZonePage({
           </button>
           <button
             type="button"
-            aria-label="消息通知"
-            onClick={() => onToast('通知暂未开放')}
-            className="ml-auto grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
+            aria-label="空间消息"
+            data-testid="qq-zone-bell"
+            onClick={onOpenNotices}
+            className="relative ml-auto grid h-9 w-9 place-items-center rounded-full bg-white/70 text-black/75 backdrop-blur active:bg-white dark:bg-white/10 dark:text-white/80"
           >
             <Bell className="h-[18px] w-[18px]" strokeWidth={2} />
+            {noticeBadge.count > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[#FA5151]" aria-hidden="true" />}
           </button>
         </div>
 
@@ -10178,6 +10197,23 @@ function ZonePage({
         )}
       </div>
 
+      {/* 「1条新消息」气泡（QQ 同款白色胶囊：头像 + 条数 + 箭头；点开空间消息页并全部已读） */}
+      {!owner && !mineOnly && noticeBadge.count > 0 && (
+        <div className="flex justify-center py-1">
+          <button
+            type="button"
+            data-testid="qq-zone-pill"
+            aria-label={`${noticeBadge.count}条新消息`}
+            onClick={onOpenNotices}
+            className="flex items-center gap-2 rounded-full bg-white px-3.5 py-2 shadow-[0_1px_5px_rgba(0,0,0,0.08)] active:bg-black/[0.04] dark:bg-[#2A2C33]"
+          >
+            <QqAvatar src={noticeBadge.avatar} alt="" size={24} />
+            <span className="text-[14px]">{noticeBadge.count}条新消息</span>
+            <ChevronRight className="h-4 w-4 text-black/35 dark:text-white/35" aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
       {/* 动态流（与头部同一滚动容器） */}
         {posts.map((p) => {
           const liked = likedOf(p);
@@ -10203,12 +10239,37 @@ function ZonePage({
                   <p className="mt-1 whitespace-pre-wrap text-[15px] leading-[1.55]">{p.content}</p>
                   <BilingualTranslation zh={p.contentZh ?? ''} foldByDefault={momentsSettings.foldChineseTranslation} />
 
+                  {/* 转发引用卡：原动态摘要（作者 + 内容 + 最多 3 张配图快照） */}
+                  {p.repostOf && (
+                    <div className="mt-2 rounded-[10px] bg-black/[0.035] px-3 py-2.5 dark:bg-white/[0.05]" data-testid={`qq-zone-repost-${p.id}`}>
+                      <p className="text-[14px] leading-[1.5]">
+                        <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">{p.repostOf.authorName}</span>
+                        <span className="text-black/75 dark:text-white/75">：{p.repostOf.content}</span>
+                      </p>
+                      {p.repostOf.images.length > 0 && (
+                        <div className="mt-2 flex gap-1.5">
+                          {p.repostOf.images.slice(0, 3).map((src, i) => (
+                            <img key={i} src={src} alt="转发配图" className="h-16 w-16 rounded-[6px] object-cover" />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {p.images && p.images.length > 0 && (
                     <div className={`mt-2 grid gap-1.5 ${p.images.length === 1 ? 'max-w-[240px]' : 'grid-cols-3'}`}>
                       {p.images.map((src, i) => (
                         <img key={i} src={src} alt="动态配图" className="aspect-square w-full rounded-[8px] object-cover" />
                       ))}
                     </div>
+                  )}
+
+                  {/* 位置行（发说说时选了「所在位置」才显示） */}
+                  {p.location && (
+                    <p className="mt-1.5 flex items-center gap-1 text-[13px] text-[#4A78B8] dark:text-[#7FA8D9]" data-testid={`qq-zone-location-${p.id}`}>
+                      <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                      <span className="truncate">{p.location}</span>
+                    </p>
                   )}
 
                   <div className="mt-2 flex items-center">
@@ -10232,7 +10293,20 @@ function ZonePage({
                       >
                         <MessageCircle className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
                       </button>
-                      <button type="button" aria-label="转发" onClick={() => onToast('转发暂未开放')} className="active:opacity-60">
+                      <button
+                        type="button"
+                        aria-label="转发"
+                        data-testid={`qq-zone-repost-btn-${p.id}`}
+                        onClick={() => {
+                          if (p.repostOf) {
+                            onToast('转发动态不可再转发');
+                            return;
+                          }
+                          setRepostDraft('');
+                          setRepostTarget(p);
+                        }}
+                        className="active:opacity-60"
+                      >
                         <Share2 className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
                       </button>
                     </div>
@@ -10407,6 +10481,64 @@ function ZonePage({
           }}
         />
       )}
+      {/* 转发弹层：理由输入 + 原动态预览；发表后进我的空间（好友会收到转发互动） */}
+      {repostTarget && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" role="dialog" aria-label="转发到我的空间" onClick={() => setRepostTarget(null)}>
+          <div className="rounded-t-[16px] bg-white p-4 pb-8 dark:bg-[#1C1C1E]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <button type="button" data-testid="qq-repost-cancel" onClick={() => setRepostTarget(null)} className="text-[15px] text-black/55 active:opacity-60 dark:text-white/55">
+                取消
+              </button>
+              <span className="text-[15.5px] font-medium">转发到我的空间</span>
+              <button
+                type="button"
+                data-testid="qq-repost-confirm"
+                onClick={() => {
+                  addUserMomentPost('qq', {
+                    userName: me.name,
+                    avatar: me.avatar,
+                    content: repostDraft.trim() || '转发动态',
+                    repostOf: {
+                      postId: repostTarget.id,
+                      author: repostTarget.authorName === me.name ? 'user' : 'char',
+                      authorName: repostTarget.authorName,
+                      content: repostTarget.content.slice(0, 80),
+                      images: (repostTarget.images ?? []).slice(0, 3),
+                    },
+                  });
+                  setRepostTarget(null);
+                  onToast('已转发到空间');
+                }}
+                className="h-9 rounded-[10px] bg-[#1B9FF0] px-4 text-[14px] font-medium text-white active:brightness-95"
+              >
+                发表
+              </button>
+            </div>
+            <input
+              value={repostDraft}
+              onChange={(e) => setRepostDraft(e.target.value.slice(0, 200))}
+              placeholder="说点什么吧…（可不填）"
+              aria-label="转发理由"
+              data-testid="qq-repost-input"
+              autoFocus
+              className="mt-4 h-10 w-full rounded-full bg-black/[0.04] px-4 text-[14.5px] outline-none placeholder:text-black/30 focus:bg-black/[0.06] dark:bg-white/[0.07] dark:placeholder:text-white/30 dark:focus:bg-white/[0.1]"
+            />
+            <div className="mt-3 rounded-[10px] bg-black/[0.035] px-3 py-2.5 dark:bg-white/[0.05]">
+              <p className="text-[14px] leading-[1.5]">
+                <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">@{repostTarget.authorName}</span>
+                <span className="text-black/75 dark:text-white/75">：{repostTarget.content.slice(0, 60)}</span>
+              </p>
+              {(repostTarget.images ?? []).length > 0 && (
+                <div className="mt-2 flex gap-1.5">
+                  {(repostTarget.images ?? []).slice(0, 3).map((src, i) => (
+                    <img key={i} src={src} alt="原动态配图" className="h-14 w-14 rounded-[6px] object-cover" />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -10421,14 +10553,18 @@ function WritePostPage({
 }: {
   me: QQUser;
   onBack: () => void;
-  /** 发表：正文 + 配图（入库/记忆/互动队列由动态引擎统一处理） */
-  onPublish: (text: string, images: string[]) => void;
+  /** 发表：正文 + 配图 + 位置名（可选；入库/记忆/互动队列由动态引擎统一处理） */
+  onPublish: (text: string, images: string[], location?: string) => void;
   onToast: (m: string) => void;
 }) {
   const [text, setText] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [location, setLocation] = useState('');
+  const [showLoc, setShowLoc] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
   const canPost = text.trim().length > 0 || images.length > 0;
 
   const pickImages = async (files: FileList | null) => {
@@ -10447,13 +10583,13 @@ function WritePostPage({
 
   const publish = () => {
     if (!canPost || busy) return;
-    onPublish(text.trim(), images);
+    onPublish(text.trim(), images, location.trim() || undefined);
     onToast('已发表到空间');
     onBack();
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F2F3F5] pt-[54px] dark:bg-[#111214]">
+    <div className="relative flex h-full flex-col bg-[#F2F3F5] pt-[54px] dark:bg-[#111214]">
       {/* 顶栏：取消 / 写说说 / 发表 */}
       <div className="relative flex h-12 shrink-0 items-center px-4">
         <button type="button" data-testid="qq-compose-cancel" onClick={onBack} className="text-[16px] active:opacity-60">
@@ -10480,6 +10616,7 @@ function WritePostPage({
         {/* 内容卡：文字 + 照片/视频 + pills */}
         <div className="rounded-[14px] bg-white px-3 pb-4 pt-4 dark:bg-[#1B1C1F]">
           <textarea
+            ref={textRef}
             data-testid="qq-compose-text"
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -10529,11 +10666,26 @@ function WritePostPage({
             tabIndex={-1}
             aria-hidden="true"
           />
-          <div className="mt-4 flex items-center gap-1">
+          {/* 已选位置 chip（可移除） */}
+          {location && (
+            <div className="mt-3 flex w-fit items-center gap-1 rounded-full bg-[#1B9FF0]/10 px-2.5 py-1 text-[12.5px] text-[#1B9FF0]" data-testid="qq-compose-location-value">
+              <MapPin className="h-3 w-3" strokeWidth={2.2} aria-hidden="true" />
+              <span className="max-w-[180px] truncate">{location}</span>
+              <button
+                type="button"
+                aria-label="清除位置"
+                data-testid="qq-compose-location-clear"
+                onClick={() => setLocation('')}
+                className="ml-0.5 rounded-full p-0.5 active:bg-black/10"
+              >
+                <X className="h-3 w-3" strokeWidth={2.6} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          <div className="mt-3 flex items-center gap-1">
             {[
               { label: '@好友', icon: null, toast: '@好友暂未开放' },
               { label: '添加标签', icon: <Tag className="h-3 w-3" strokeWidth={2} aria-hidden="true" />, toast: '添加标签暂未开放' },
-              { label: '所在位置', icon: <MapPin className="h-3 w-3" strokeWidth={2} aria-hidden="true" />, toast: '所在位置暂未开放' },
             ].map((x) => (
               <button
                 key={x.label}
@@ -10545,6 +10697,26 @@ function WritePostPage({
                 {x.label}
               </button>
             ))}
+            {/* 所在位置（可选内置地点/自定义位置） */}
+            <button
+              type="button"
+              data-testid="qq-compose-location"
+              onClick={() => setShowLoc(true)}
+              className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-black/[0.045] px-2.5 text-[12.5px] whitespace-nowrap text-black/55 active:opacity-60 dark:bg-white/[0.08] dark:text-white/55"
+            >
+              <MapPin className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+              所在位置
+            </button>
+            {/* 表情（unicode 表情面板，插入光标处） */}
+            <button
+              type="button"
+              data-testid="qq-compose-emoji"
+              onClick={() => setShowEmoji((v) => !v)}
+              className={`flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-[12.5px] whitespace-nowrap active:opacity-60 ${showEmoji ? 'bg-[#1B9FF0]/15 text-[#1B9FF0]' : 'bg-black/[0.045] text-black/55 dark:bg-white/[0.08] dark:text-white/55'}`}
+            >
+              <Smile className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+              表情
+            </button>
             <button
               type="button"
               onClick={() => onToast('AI配文暂未开放')}
@@ -10554,6 +10726,14 @@ function WritePostPage({
               AI配文
             </button>
           </div>
+          {showEmoji && (
+            <div className="mt-3">
+              <MomentsEmojiPanel
+                onPick={(e) => insertEmojiAtCursor(textRef, text, e, setText)}
+                onClose={() => setShowEmoji(false)}
+              />
+            </div>
+          )}
         </div>
 
         {/* 权限/发表设置卡 */}
@@ -10580,6 +10760,19 @@ function WritePostPage({
           </button>
         </div>
       </div>
+
+      {/* 位置选择（复用聊天发送位置的内置地点/自定义位置页；选中即回填位置名） */}
+      {showLoc && (
+        <div className="absolute inset-0 z-40">
+          <LocationPickerPage
+            onClose={() => setShowLoc(false)}
+            onSend={(loc) => {
+              setLocation(loc.name);
+              setShowLoc(false);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -12459,6 +12652,7 @@ type MainRoute =
   | { page: 'zone'; /** mine = 只看自己发的动态（个人资料页 QQ空间进入） */ scope?: 'mine'; /** 从哪进入（决定返回键去向） */ from?: 'profile' }
   | { page: 'zone-peer'; contactId: string }
   | { page: 'zone-compose'; /** 与 zone 同源（写说说返回时保留「我的空间」语境） */ scope?: 'mine'; from?: 'profile' }
+  | { page: 'zone-notices' }
   | { page: 'momentsSettings' }
   | { page: 'settings' }
   | { page: 'security' }
@@ -12554,13 +12748,52 @@ function MainScreen({
   const zoneScope = route.page === 'zone' ? route.scope : route.page === 'zone-compose' ? route.scope : undefined;
   const zoneFrom = route.page === 'zone' ? route.from : route.page === 'zone-compose' ? route.from : undefined;
   const activeTab: '消息' | '联系人' | '动态' = route.page === 'tabs' ? route.tab : '消息';
-  // 写说说发表：统一走动态引擎（入库 + 记忆 + 排 AI 互动队列），回空间动态流（ZonePage 订阅 moments-changed 自动刷新）
+  // 写说说发表：统一走动态引擎（入库含位置 + 记忆 + 排 AI 互动队列），回空间动态流（ZonePage 订阅 moments-changed 自动刷新）
   const handlePublishZonePost = useCallback(
-    (text: string, images: string[]) => {
-      const post = addUserMomentPost('qq', { userName: me.name, avatar: me.avatar, content: text, images });
+    (text: string, images: string[], location?: string) => {
+      const post = addUserMomentPost('qq', { userName: me.name, avatar: me.avatar, content: text, images, location });
       enqueuePostInteractions('qq', post.id);
     },
     [me.avatar, me.name]
+  );
+
+  // ---------------- 互动消息（空间消息：赞和推/评论和@/转发/官方） ----------------
+  const [qqNotices, setQqNotices] = useState<MomentNotice[]>(() => listMomentNotices('qq'));
+  const refreshQqNotices = useCallback(() => setQqNotices(listMomentNotices('qq')), []);
+  /** 气泡角标：未读条数 + 最新一条消息人的头像（「1条新消息」气泡展示用） */
+  const qqNoticeBadge = useMemo(
+    () => ({
+      count: qqNotices.filter((n) => !n.read).length,
+      avatar: qqNotices.find((n) => !n.read)?.actorAvatar ?? null,
+    }),
+    [qqNotices]
+  );
+  /** 打开空间消息页：全部标记已读（气泡随之消失）+ 刷新列表 */
+  const openQqNotices = useCallback(() => {
+    markAllMomentNoticesRead('qq');
+    refreshQqNotices();
+    setRoute({ page: 'zone-notices' });
+  }, [refreshQqNotices]);
+  /** 从空间消息页回复一条评论/回复（走引擎：AI 会自动再回复，新回复会进收件箱） */
+  const replyToQqNotice = useCallback(
+    (n: MomentNotice, text: string) => {
+      if (!n.postId) {
+        showToast('原动态已删除，无法回复');
+        return;
+      }
+      const added = addUserMomentComment('qq', n.postId, {
+        userName: me.name,
+        content: text,
+        replyTo: n.commentId ? { commentId: n.commentId, name: n.actorName } : undefined,
+      });
+      if (!added) {
+        showToast('原动态已删除，无法回复');
+        return;
+      }
+      refreshQqNotices();
+      showToast('已回复');
+    },
+    [me.name, refreshQqNotices, showToast]
   );
 
   const chatPeer =
@@ -12703,6 +12936,8 @@ function MainScreen({
           onToast={showToast}
           askOpen={askOpen}
           setAskOpen={setAskOpen}
+          noticeBadge={qqNoticeBadge}
+          onOpenNotices={openQqNotices}
         />
       ) : route.page === 'zone-peer' && zonePeer ? (
         <ZonePage
@@ -12715,6 +12950,8 @@ function MainScreen({
           onToast={showToast}
           askOpen={false}
           setAskOpen={setAskOpen}
+          noticeBadge={qqNoticeBadge}
+          onOpenNotices={openQqNotices}
         />
       ) : route.page === 'zone-compose' ? (
         <WritePostPage
@@ -12722,6 +12959,15 @@ function MainScreen({
           onBack={() => setRoute({ page: 'zone', scope: zoneScope, from: zoneFrom })}
           onPublish={handlePublishZonePost}
           onToast={showToast}
+        />
+      ) : route.page === 'zone-notices' ? (
+        <MomentInteractionsPage
+          platform="qq"
+          title="空间消息"
+          notices={qqNotices}
+          onBack={() => openTabs('动态')}
+          onReply={replyToQqNotice}
+          renderAvatar={(src, name, size) => <QqAvatar src={src} alt={name} size={size} />}
         />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage

@@ -86,9 +86,61 @@ export interface MomentPostView {
   /** 双语翻译（简体中文译文；空串/缺失表示无译文，旧数据兼容） */
   contentZh?: string;
   images: string[];
+  /** 发动态时附的位置名（如「广州塔」；可选） */
+  location?: string;
+  /** 转发引用（QQ 空间转发：本条是转发理由，原动态摘要嵌在里面；可选） */
+  repostOf?: MomentRepostRef;
   createdAt: number;
   likes: MomentLikeView[];
   comments: MomentCommentView[];
+}
+
+/** 转发引用：指向被转发的原动态（摘要快照，原动态删除后仍可展示） */
+export interface MomentRepostRef {
+  postId: string;
+  author: MomentAuthor;
+  authorName: string;
+  /** 原动态内容摘要（截短） */
+  content: string;
+  /** 原动态配图快照（最多 3 张） */
+  images: string[];
+}
+
+/**
+ * 互动消息（与我的互动收件箱一条记录）：
+ * - like：有人赞了「我发的」动态；
+ * - comment：有人评论了「我发的」动态；
+ * - reply：有人回复了「我的评论」（不论原动态是谁发的）；
+ * - repost：有人转发了「我发的」动态（QQ 空间）；
+ * - official：平台官方消息（QQ 空间官方等）；system：保留分类。
+ * 每条带原动态摘要快照（postSummary/postImage），原动态删除后消息仍可读；
+ * 回复入口仅对 comment/reply 有效（postId 还在时）。
+ */
+export interface MomentNotice {
+  id: string;
+  platform: MomentPlatform;
+  kind: 'like' | 'comment' | 'reply' | 'repost' | 'official' | 'system';
+  actorName: string;
+  actorKind: MomentAuthor;
+  /** char 互动时 = 联系人 id；official/system = null */
+  actorPeerId: string | null;
+  actorAvatar: string | null;
+  /** 相关动态 id（official/system 为空串） */
+  postId: string;
+  /** 原动态作者名（谁发的被互动的动态） */
+  postAuthorName: string;
+  /** 原动态内容摘要快照 */
+  postSummary: string;
+  /** 原动态首图快照（微信互动页右侧缩略图用） */
+  postImage: string | null;
+  /** comment/reply：互动的那条评论 id（回复入口定位） */
+  commentId?: string;
+  /** reply：被回复的那条评论是谁发的 */
+  replyToName?: string | null;
+  /** 消息正文：评论/回复/转发理由/官方文案（like 为空串） */
+  content: string;
+  createdAt: number;
+  read?: boolean;
 }
 
 /** 平台中文标签（prompt/记忆标注用） */
@@ -107,6 +159,10 @@ function isMomentPlatform(v: unknown): v is MomentPlatform {
 const WX_MOMENTS_KEY = 'wx-moments';
 const QQ_POSTS_KEY = 'qq-zone-posts';
 const QQ_COMMENTS_KEY = 'qq-zone-comments';
+/** 互动消息收件箱（与我的互动 / 空间消息），按平台分库 */
+const noticesKey = (platform: MomentPlatform) => `moments-inbox:${platform}`;
+/** 收件箱容量上限（新消息在前） */
+const NOTICE_CAP = 120;
 /** 各平台机主展示名（写入时记住，legacy 数据作者推断用） */
 const USER_NAMES_KEY = 'moments-user-names';
 /** 互动/回复延迟队列 */
@@ -164,6 +220,8 @@ interface WxRawPost {
   comments?: unknown;
   author?: unknown;
   peerId?: unknown;
+  location?: unknown;
+  repostOf?: unknown;
 }
 interface QqRawComment {
   id?: unknown;
@@ -189,6 +247,8 @@ interface QqRawPost {
   author?: unknown;
   peerId?: unknown;
   createdAt?: unknown;
+  location?: unknown;
+  repostOf?: unknown;
 }
 
 const PLATFORM_USER_NAMES: Record<MomentPlatform, string> = { wx: '', qq: '' };
@@ -250,6 +310,21 @@ function strArr(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
+/** 宽容解析转发引用快照（旧数据/损坏数据安全回退 undefined） */
+function parseRepostRef(v: unknown): MomentRepostRef | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const r = v as Record<string, unknown>;
+  if (typeof r.postId !== 'string' || !r.postId) return undefined;
+  const author = r.author === 'user' || r.author === 'char' ? r.author : 'char';
+  return {
+    postId: r.postId,
+    author,
+    authorName: str(r.authorName, '好友'),
+    content: str(r.content),
+    images: strArr(r.images).slice(0, 3),
+  };
+}
+
 /**
  * 读某平台全部动态（统一视图）。
  * userName = 机主展示名（作者推断候选之一；与记住的各平台机主名一起参与 legacy 推断）。
@@ -289,6 +364,8 @@ export function listMomentPosts(
           content: str(p.text),
           contentZh: str(p.contentZh) || undefined,
           images: strArr(p.images),
+          location: str(p.location) || undefined,
+          repostOf: parseRepostRef(p.repostOf),
           createdAt,
           likes: strArr(p.likes).map((name) => ({
             name,
@@ -362,6 +439,8 @@ export function listMomentPosts(
         content: p.content,
         contentZh: str(p.contentZh) || undefined,
         images: strArr(p.images),
+        location: str(p.location) || undefined,
+        repostOf: parseRepostRef(p.repostOf),
         createdAt,
         likes: strArr(p.likedBy).map((name) => ({
           name,
@@ -392,6 +471,8 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
         time: p.createdAt,
         author: p.author,
         peerId: p.peerId ?? undefined,
+        location: p.location || undefined,
+        repostOf: p.repostOf ?? undefined,
         likes: p.likes.map((l) => l.name),
         comments: p.comments.map((c) => ({
           id: c.id,
@@ -434,6 +515,8 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
           author: p.author,
           peerId: p.peerId ?? undefined,
           createdAt: p.createdAt,
+          location: p.location || undefined,
+          repostOf: p.repostOf ?? undefined,
         };
       });
       kvSet(QQ_POSTS_KEY, raw);
@@ -443,6 +526,99 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
   } catch {
     // 存储失败静默（动态是增强能力）
   }
+}
+
+// ---------------- 互动消息收件箱（与我的互动 / 空间消息；谁赞了我/评论了我/回复了我/转发了我） ----------------
+
+function loadNoticesSafe(platform: MomentPlatform): MomentNotice[] | null {
+  try {
+    const raw = kvGet<MomentNotice[]>(noticesKey(platform));
+    if (raw === undefined || raw === null) return null; // 从未建立过收件箱（kvGet 缺键返回 null）
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(
+        (n): n is MomentNotice =>
+          Boolean(n) &&
+          typeof n === 'object' &&
+          typeof n.id === 'string' &&
+          typeof n.actorName === 'string' &&
+          typeof n.createdAt === 'number' &&
+          typeof n.content === 'string' &&
+          (n.kind === 'like' || n.kind === 'comment' || n.kind === 'reply' || n.kind === 'repost' || n.kind === 'official' || n.kind === 'system')
+      )
+      .slice(0, NOTICE_CAP);
+  } catch {
+    return [];
+  }
+}
+
+/** QQ 空间首次打开收件箱时种一条官方欢迎消息（「官方」分类内容；微信无官方分类不种） */
+function seedOfficialNotice(platform: MomentPlatform, now: number): MomentNotice[] {
+  if (platform !== 'qq') return [];
+  return [
+    {
+      id: uid(),
+      platform,
+      kind: 'official',
+      actorName: 'QQ空间官方',
+      actorKind: 'char',
+      actorPeerId: null,
+      actorAvatar: null,
+      postId: '',
+      postAuthorName: '',
+      postSummary: '',
+      postImage: null,
+      content: '欢迎来到QQ空间！好友的新动态会实时更新在这里，去逛逛吧。',
+      createdAt: now - 60_000,
+      read: false,
+    },
+  ];
+}
+
+/** 读收件箱（新消息在前；QQ 首次读取自动种一条官方欢迎消息） */
+export function listMomentNotices(platform: MomentPlatform): MomentNotice[] {
+  const existing = loadNoticesSafe(platform);
+  if (existing !== null) return existing;
+  const seeded = seedOfficialNotice(platform, Date.now());
+  if (seeded.length > 0) {
+    try {
+      kvSet(noticesKey(platform), seeded);
+    } catch {
+      // 忽略
+    }
+  }
+  return seeded;
+}
+
+function saveNotices(platform: MomentPlatform, list: MomentNotice[]): void {
+  try {
+    kvSet(noticesKey(platform), list.slice(0, NOTICE_CAP));
+    emitMomentsChanged(platform);
+  } catch {
+    // 忽略
+  }
+}
+
+/** 追加一条互动消息（引擎在角色点赞/评论/回复/转发用户相关内容时调用；未读，置顶） */
+function pushMomentNotice(platform: MomentPlatform, n: Omit<MomentNotice, 'id' | 'platform' | 'createdAt' | 'read'>): void {
+  const list = loadNoticesSafe(platform);
+  const next: MomentNotice = { ...n, id: uid(), platform, createdAt: Date.now(), read: false };
+  saveNotices(platform, [next, ...(list ?? [])]);
+}
+
+/** 未读互动消息条数（「1条新消息」气泡） */
+export function unreadMomentNoticeCount(platform: MomentPlatform): number {
+  return (loadNoticesSafe(platform) ?? []).filter((n) => !n.read).length;
+}
+
+/** 全部标记已读（打开互动消息页时调用；气泡随之消失） */
+export function markAllMomentNoticesRead(platform: MomentPlatform): void {
+  const list = loadNoticesSafe(platform);
+  if (!list || !list.some((n) => !n.read)) return;
+  saveNotices(
+    platform,
+    list.map((n) => (n.read ? n : { ...n, read: true }))
+  );
 }
 
 // ---------------- 角色匹配小工具 ----------------
@@ -518,6 +694,8 @@ function memoryContentOf(
   const peer = peerReal || f.peerDisplay || '对方';
   const user = userReal || f.userName || '用户';
   const label = MOMENT_PLATFORM_LABEL[f.platform];
+  // 平台 + 动态名（朋友圈→朋友圈动态；QQ动态→不重复接「动态」，避免「QQ动态动态」）
+  const labelPost = f.platform === 'qq' ? 'QQ空间动态' : `${label}动态`;
   switch (f.shape) {
     case 'char-post':
       return `${peer}发了一条${label}：「${f.detail}」`;
@@ -527,12 +705,12 @@ function memoryContentOf(
       // 归属人：角色动态用真实发帖人真名（解析失败用展示名；都无法确定返回空串→不写入，宁缺勿错）
       const target = f.postAuthorPeerId ? extraReal?.postAuthor || f.postAuthorDisplay || '' : user;
       if (!target) return '';
-      return `${peer}给${target}的${label}动态点了赞（动态：「${f.postDetail ?? f.detail}」）`;
+      return `${peer}给${target}的${labelPost}点了赞（动态：「${f.postDetail ?? f.detail}」）`;
     }
     case 'char-comment': {
       const target = f.postAuthorPeerId ? extraReal?.postAuthor || f.postAuthorDisplay || '' : user;
       if (!target) return '';
-      return `${peer}评论了${target}的${label}动态：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
+      return `${peer}评论了${target}的${labelPost}：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
     }
     case 'char-reply': {
       const target = f.replyTargetPeerId ? extraReal?.replyTarget || f.replyTargetDisplay || '' : user;
@@ -540,7 +718,7 @@ function memoryContentOf(
       return `${peer}回复了${target}的评论：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
     }
     case 'user-comment':
-      return `${user}评论了${peer}的${label}动态：「${f.detail}」`;
+      return `${user}评论了${peer}的${labelPost}：「${f.detail}」`;
     case 'user-reply':
       return `${user}回复了${peer}的评论：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
   }
@@ -578,10 +756,11 @@ function writeMomentMemory(fact: MomentMemoryFact): void {
 
 // ---------------- 读写操作（UI 与调度器统一入口；每次变更后广播 moments-changed） ----------------
 
-/** 用户发一条动态（广播：peerId=null；记忆由「看到它的角色」在互动/聊天时入库，见 buildMomentsChatBlock） */
+/** 用户发一条动态（广播：peerId=null；记忆由「看到它的角色」在互动/聊天时入库，见 buildMomentsChatBlock）。
+ *  location = 位置名（可选）；repostOf = 转发引用（QQ 空间转发别人的动态时传） */
 export function addUserMomentPost(
   platform: MomentPlatform,
-  args: { userName: string; avatar: string | null; content: string; images?: string[] }
+  args: { userName: string; avatar: string | null; content: string; images?: string[]; location?: string; repostOf?: MomentRepostRef }
 ): MomentPostView {
   rememberMomentUserName(platform, args.userName);
   const post: MomentPostView = {
@@ -593,6 +772,8 @@ export function addUserMomentPost(
     peerId: null,
     content: args.content,
     images: args.images ?? [],
+    location: args.location || undefined,
+    repostOf: args.repostOf,
     createdAt: Date.now(),
     likes: [],
     comments: [],
@@ -615,6 +796,10 @@ export function addCharMomentPost(
     /** 双语译文（可选；写入 post.contentZh，旧调用方不传则无译文） */
     contentZh?: string;
     images?: string[];
+    /** 位置名（可选） */
+    location?: string;
+    /** 转发引用（AI 转发用户动态时传；QQ 空间） */
+    repostOf?: MomentRepostRef;
     /** 补示例动态时传（不入记忆） */
     writeMemory?: boolean;
     /** 示例动态的回溯时间 */
@@ -633,12 +818,29 @@ export function addCharMomentPost(
     content: args.content,
     contentZh: args.contentZh,
     images: args.images ?? [],
+    location: args.location || undefined,
+    repostOf: args.repostOf,
     createdAt,
     likes: [],
     comments: [],
   };
   const list = listMomentPosts(platform, args.userName);
   persistMomentPosts(platform, [post, ...list]);
+  // 转发了用户的动态 → 给机主推一条「转发」互动消息（QQ 空间消息·转发分类）
+  if (args.repostOf && args.repostOf.author === 'user') {
+    pushMomentNotice(platform, {
+      kind: 'repost',
+      actorName: displayNameOf(args.peer),
+      actorKind: 'char',
+      actorPeerId: args.peer.id,
+      actorAvatar: args.peer.avatar ?? null,
+      postId: args.repostOf.postId,
+      postAuthorName: args.repostOf.authorName,
+      postSummary: args.repostOf.content,
+      postImage: args.repostOf.images[0] ?? null,
+      content: args.content.slice(0, 80),
+    });
+  }
   if (args.writeMemory !== false) {
     writeMomentMemory({
       peerId: args.peer.id,
@@ -734,6 +936,21 @@ export function addCharMomentLike(
         : p
     )
   );
+  // 赞了机主的动态 → 推一条「赞」互动消息（与我的互动 / 空间消息·赞和推）
+  if (post.author === 'user') {
+    pushMomentNotice(platform, {
+      kind: 'like',
+      actorName: displayNameOf(args.peer),
+      actorKind: 'char',
+      actorPeerId: args.peer.id,
+      actorAvatar: args.peer.avatar ?? null,
+      postId: post.id,
+      postAuthorName: post.authorName,
+      postSummary: post.content.slice(0, 60),
+      postImage: post.images[0] ?? null,
+      content: '',
+    });
+  }
   // 角色动态时记忆句式带真实发帖人（「X给乐乐的动态点了赞」而非错写到机主头上）
   const postAuthorPeerId = post.author === 'char' ? post.peerId ?? undefined : undefined;
   if (post.author === 'char' && !postAuthorPeerId) return true; // 发帖人无法定位 → 跳过记忆，不写错误关系
@@ -867,6 +1084,24 @@ export function addCharMomentComment(
     platform,
     list.map((p) => (p.id === postId ? { ...p, comments: [...p.comments, comment] } : p))
   );
+  // 互动消息：评论了机主的动态 / 回复了机主的评论（不论原动态是谁发的）→ 推一条消息
+  const parentIsUserComment = parent?.author === 'user';
+  if (post.author === 'user' || parentIsUserComment) {
+    pushMomentNotice(platform, {
+      kind: parent ? 'reply' : 'comment',
+      actorName: displayNameOf(args.peer),
+      actorKind: 'char',
+      actorPeerId: args.peer.id,
+      actorAvatar: args.peer.avatar ?? null,
+      postId: post.id,
+      postAuthorName: post.authorName,
+      postSummary: post.content.slice(0, 60),
+      postImage: post.images[0] ?? null,
+      commentId: comment.id,
+      replyToName: parent ? parent.authorName : null,
+      content: text.slice(0, 80),
+    });
+  }
   if (args.writeMemory !== false) {
     // 归属人：角色动态 → 真实发帖人；无法定位（legacy 无 peerId）→ 不写记忆
     const postAuthorPeerId = post.author === 'char' ? post.peerId ?? undefined : undefined;
@@ -1218,6 +1453,50 @@ export async function aiCommentOnMoment(args: {
   return added;
 }
 
+/**
+ * AI 转发用户的动态到自己的空间（QQ 空间；带一句转发理由，生成走 /api/moments/generate kind='repost'）。
+ * 转发是一条新动态（转发理由为正文 + repostOf 引用原动态摘要），原动态作者收到「转发」互动消息。
+ * 只转发用户（机主）发的、且不是转发链的动态；同一角色不重复转发同一条。
+ */
+export async function aiRepostMoment(args: {
+  apiConfig: ApiConfig;
+  platform: MomentPlatform;
+  peer: ContactRecord;
+  post: MomentPostView;
+  userName: string;
+}): Promise<MomentPostView | null> {
+  const { apiConfig, platform, peer, post, userName } = args;
+  if (post.author !== 'user' || post.repostOf) return null; // 只转发用户的原创动态
+  if (isPostByPeer(post, peer)) return null; // 不能转发自己的动态（防御）
+  // 同一角色已转过同一条 → 不重复转发
+  const already = listMomentPosts(platform, userName).some((x) => x.repostOf?.postId === post.id && x.peerId === peer.id);
+  if (already) return null;
+  const settings = getMomentsSettings(platform);
+  const { content, contentZh } = await callGenerateApi(apiConfig, {
+    kind: 'repost',
+    platform,
+    userName,
+    peer: personaOf(peer),
+    post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 120) },
+    memories: memorySnippets(peer.id, 4),
+    bilingual: settings.bilingualEnabled,
+    bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
+  });
+  return addCharMomentPost(platform, {
+    peer,
+    userName,
+    content,
+    contentZh: contentZh || undefined,
+    repostOf: {
+      postId: post.id,
+      author: post.author,
+      authorName: post.authorName,
+      content: post.content.slice(0, 80),
+      images: post.images.slice(0, 3),
+    },
+  });
+}
+
 // ---------------- 调度结算（MomentsScheduler 每 5s 调一次） ----------------
 
 export interface MomentTickDeps {
@@ -1320,6 +1599,15 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
           // 评论：按 commentProbability 决定（旧版硬编码 70%）
           if (Math.random() < settings.commentProbability) {
             await aiCommentOnMoment({ apiConfig: deps.apiConfig, platform: item.platform, peer, post, userName });
+          }
+          // QQ 空间转发（新）：好友刷到你的动态，可能转发到 TA 的空间（带一句转发理由）；
+          // 只转用户的原创动态，转发会让原动态作者收到「空间消息·转发」通知
+          if (item.platform === 'qq' && post.author === 'user' && !post.repostOf && Math.random() < 0.22) {
+            try {
+              await aiRepostMoment({ apiConfig: deps.apiConfig, platform: 'qq', peer, post, userName });
+            } catch {
+              // 转发失败不影响点赞/评论
+            }
           }
         } catch {
           // 单个角色失败不影响其他角色
@@ -1765,7 +2053,7 @@ export async function repairMomentIdentityData(): Promise<void> {
 
 // ---------------- 联系人删除级联清理（contacts-store.deleteContact 动态引入调用） ----------------
 
-/** 删除该联系人的全部动态痕迹：TA 的动态、TA 的点赞/评论、队列里的待回复项与计数器 */
+/** 删除该联系人的全部动态痕迹：TA 的动态、TA 的点赞/评论、队列里的待回复项与计数器、互动消息收件箱里的痕迹 */
 export function purgeMomentsForContact(contactId: string): void {
   if (!contactId) return;
   try {
@@ -1782,6 +2070,11 @@ export function purgeMomentsForContact(contactId: string): void {
         }))
         .filter((p) => !(p.author === 'char' && p.peerId === contactId));
       persistMomentPosts(platform, next);
+      // 收件箱里 TA 发出的互动消息一并清掉（联系人已删，消息不该还在）
+      const notices = loadNoticesSafe(platform);
+      if (notices && notices.some((n) => n.actorPeerId === contactId)) {
+        saveNotices(platform, notices.filter((n) => n.actorPeerId !== contactId));
+      }
     }
     const q = loadQueueSafe().filter((x) => x.type !== 'reply' || x.peerId !== contactId);
     saveQueue(q);
