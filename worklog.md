@@ -10392,3 +10392,27 @@ Work Log:
 Stage Summary:
 - 修改文件：src/lib/ios/moments-settings.ts、src/lib/moments.ts、src/components/apps/moments-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
 - 核心成果：①微信/QQ 动态设置完全分离（存储/引擎/立即发帖三层全部按平台独立，含旧共享数据无损拆分迁移）②设置页简约化精修（chip 输入框、作用域标注、平台文案集中管理）③dev server 挂掉重启恢复预览
+
+---
+Task ID: setup-repo-deploy-2
+Agent: 主协调者 (Z.ai Code)
+Task: 重新从 GitHub 拉取 cczzff468/5200 仓库并部署到新工作区，验证运行与推送凭据
+
+Work Log:
+- git clone（嵌入 PAT）https://github.com/cczzff468/5200.git → /home/z/cloned-5200，HEAD=fa26d50（feat-64）
+- rsync 全量同步到 /home/z/my-project（--no-g --no-p 绕过沙箱文件系统限制；node_modules/.next/dev.log 排除；upload 目录 timeset 报 IO error 属预期，文件已传输）
+- .env 已就绪（DATABASE_URL=file:/home/z/my-project/db/custom.db）；bun install 补装 29 包（jsmediatags/remark-gfm/web-push）
+- prisma generate + db:push 成功（schema 与数据库已同步）
+- git remote set-url origin 嵌入用户 PAT，git ls-remote 验证通过（HEAD=fa26d50 与本地一致，可推送）
+- git config core.filemode false：rsync 未保留权限导致的全树 mode 100755→100644 差异（内容零变化）不再污染 git status
+- dev server :3000 自动拉起，GET / 200；agent-browser 端到端验证（420×900，合成 PointerEvent 交互）：
+  - 锁屏（时间/日期/天气/电量组件齐全）→ 上滑解锁 → 主屏（widget + 图标网格 + Dock）
+  - 打开聊天 App → 小助手会话 → 输入「你好呀，今天天气怎么样？」→ 点 form 内 button[type=submit] 发送
+  - 用户消息自动转语音（3" 气泡，「已送达」），AI 回复 32" 语音条 → 文字转语音发送链路完整
+  - dev.log：POST /api/chat 502（冷编译瞬时）→ 200 自愈，weather/contacts-migrate/chat-bg 全部 200，浏览器 0 console error
+- bun run lint exit 0（qq.tsx >500KB 仅 Babel 提示非错误）
+
+Stage Summary:
+- 仓库代码已完整部署到 /home/z/my-project 并浏览器端到端验证通过（锁屏/主屏/聊天/AI+TTS 链路）
+- git push 凭据就绪：origin remote 已嵌入 PAT，改动 commit 后可直接 git push origin main
+- 注意事项：agent-browser 本环境 mouse 命令失效，需用 eval 合成 PointerEvent；聊天发送需点 form 内 button[type=submit]
