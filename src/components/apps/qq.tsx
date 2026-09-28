@@ -7779,7 +7779,7 @@ function FriendProfilePage({
         data-testid="qq-fprofile-upload-banner"
         title="点击更换封面"
         onClick={handleUploadBanner}
-        className="absolute inset-x-0 top-0 h-[320px] cursor-pointer"
+        className="absolute inset-x-0 top-0 h-[340px] cursor-pointer"
       >
         {peerBg ? (
           <img src={peerBg} alt="封面" className="h-full w-full object-cover" />
@@ -7797,6 +7797,8 @@ function FriendProfilePage({
             aria-hidden="true"
           />
         )}
+        {/* 底部渐变过渡到白色（消除背景图与主卡衔接处的边缘空白） */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-white dark:from-[#1B1C1F] to-transparent" aria-hidden="true" />
         <input
           ref={bannerFileRef}
           type="file"
