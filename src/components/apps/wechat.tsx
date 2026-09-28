@@ -7868,13 +7868,13 @@ function MomentsPage({
         {/* 「1条新消息」气泡（微信同款深色胶囊：最新互动人头像 + 条数；点开互动消息页并全部已读）。
             放在封面之下、动态列表之前，与真机一致 */}
         {isMine && noticeBadge.count > 0 && (
-          <div className="flex justify-center pb-1 pt-3">
+          <div className="flex justify-center pb-1 pt-6">
             <button
               type="button"
               data-testid="wx-moments-pill"
               aria-label={`${noticeBadge.count}条新消息`}
               onClick={onOpenNotices}
-              className="flex items-center gap-2.5 rounded-[10px] bg-black/70 px-3 py-2 text-white shadow-md backdrop-blur active:bg-black/80 dark:bg-white/20"
+              className="flex items-center gap-2.5 rounded-[4px] bg-black/70 px-3 py-2 text-white shadow-md backdrop-blur active:bg-black/80 dark:bg-white/20"
             >
               <WxAvatar src={noticeBadge.avatar} alt="" size={26} />
               <span className="text-[14px]">{noticeBadge.count}条新消息</span>

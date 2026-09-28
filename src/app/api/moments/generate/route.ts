@@ -200,8 +200,9 @@ export async function POST(req: Request) {
     // 绝不能用 name（那是本次要评论的评论人）——旧版把评论人当发帖人，导致「AI 自己给自己评论」。
     const postAuthorName = s(postRaw.authorName, 20);
     const postAuthor = postRaw.author === 'char' ? postAuthorName || '对方' : userName;
-    // 服务端硬性守卫：发帖人不能评论自己的动态（旧版 bug 的直接根因，双保险）
-    if (postRaw.author === 'char' && postAuthorName && postAuthorName === name) {
+    // 服务端硬性守卫：发帖人不能「主动评论」自己的动态（旧版 bug 的直接根因，双保险）；
+    // reply 放行——作者回复用户在自己动态下的评论是正常多轮互动（不能拦，否则用户评论 AI 动态后 AI 永远不回）
+    if (kind !== 'reply' && postRaw.author === 'char' && postAuthorName && postAuthorName === name) {
       return NextResponse.json({ error: '发帖人不能评论自己的动态' }, { status: 400 });
     }
     // 评论区上下文（评论和回复都用：别人说过的话不能再重复/附和）

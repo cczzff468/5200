@@ -1065,8 +1065,9 @@ export function addCharMomentComment(
   const post = list.find((p) => p.id === postId);
   if (!post) return null;
   if (post.comments.some((c) => c.content.trim() === text)) return null; // 已有一模一样的内容 → 不重复写入
-  // 发帖人不能评论自己的动态（防「AI 自己给自己评论」的历史 bug）
-  if (isPostByPeer(post, args.peer)) return null;
+  // 发帖人不能「主动评论」自己的动态（防「AI 自己给自己评论」的历史 bug）；
+  // 带回复目标的放行：作者回复用户在自己动态下的评论是正常互动（引擎层 drainReplies 已保证只回用户的评论）
+  if (!args.replyTo?.commentId && isPostByPeer(post, args.peer)) return null;
   // 回复目标详情（记忆句式的被回复人身份用）
   const parent = args.replyTo?.commentId ? (post.comments.find((c) => c.id === args.replyTo?.commentId) ?? null) : null;
   const comment: MomentCommentView = {
@@ -1556,8 +1557,10 @@ export async function aiCommentOnMoment(args: {
   replyTo?: { commentId: string; name: string; content: string } | null;
 }): Promise<MomentCommentView> {
   const { apiConfig, platform, peer, post, userName, replyTo } = args;
-  // 发帖人不能评论/回复自己的动态（防「AI 自己给自己评论」的历史 bug）
-  if (isPostByPeer(post, peer)) throw new Error('发帖人不能评论自己的动态');
+  // 发帖人不能「主动评论」自己的动态（防「AI 自己给自己评论」的历史 bug）；
+  // 但带 replyTo 的回复放行——作者回复访客在自己动态下的评论是正常多轮互动（用户评论 AI 动态 → AI 回）。
+  // 误伤后果（已修复的 bug）：用户评论 AI 的动态后队列排了回复，这里却把作者本人拦下 → AI 永远不回。
+  if (!replyTo && isPostByPeer(post, peer)) throw new Error('发帖人不能评论自己的动态');
   // feat-64：设置按平台独立（朋友圈/空间各一份）
   const settings = getMomentsSettings(platform);
   // 评论串（回复时带上下文，让 AI 接得住多轮）
@@ -2035,14 +2038,24 @@ function stripSelfInteractionsFromPosts(platform: MomentPlatform, contacts: Cont
     const isSelf = (x: { author: MomentAuthor; peerId: string | null; authorName?: string; name?: string }) =>
       x.author === 'char' &&
       ((x.peerId && x.peerId === p.peerId) || (!x.peerId && (x.authorName ?? x.name ?? '') === p.authorName));
-    const selfComments = p.comments.filter((c) => isSelf(c));
+    // 自评论判定：发帖人本人的评论；但「回复用户评论」的作者回复是正常互动（用户评论 AI 动态 → AI 回），
+    // 不能当历史自评论 bug 摘掉（作者回复作者自己的评论仍算异常，照摘）
+    const shouldStripComment = (c: MomentPostView['comments'][number]): boolean => {
+      if (!isSelf(c)) return false;
+      if (c.parentId) {
+        const parent = p.comments.find((pc) => pc.id === c.parentId);
+        if (parent && parent.author === 'user') return false;
+      }
+      return true;
+    };
+    const selfComments = p.comments.filter(shouldStripComment);
     const selfLikes = p.likes.filter((l) => isSelf(l));
     if (selfComments.length === 0 && selfLikes.length === 0) return p;
     changed = true;
     for (const c of selfComments) purgedCommentIds.push({ postId: p.id, commentId: c.id });
     return {
       ...p,
-      comments: p.comments.filter((c) => !isSelf(c)),
+      comments: p.comments.filter((c) => !shouldStripComment(c)),
       likes: p.likes.filter((l) => !isSelf(l)),
     };
   });

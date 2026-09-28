@@ -10526,3 +10526,35 @@ Work Log:
 Stage Summary:
 - 修改文件：src/lib/moments.ts（+210：avoid/variation/ownRecentPosts 素材收集与去重校验、App 过滤记忆、失败日志）、src/app/api/moments/generate/route.ts（+40：新字段解析、扣题/防矛盾/禁复读/角度四段 prompt、温度≥0.9）
 - 核心成果：①评论必须扣题（prompt 双重强调 + 每次随机切入角度）②同一角色微信/QQ 评论内容必然不同（App 过滤记忆 + 跨平台禁复读名单 + 随机角度 + 温度抬升四重保证，生成后再校验兜底）③角色连发动态不重复不矛盾（ownRecentPosts 注入 + 去重校验）④记忆写入带 App 来源且三方关系正确（原 fix-moments-identity 逻辑不受影响）⑤发帖人自评/自赞防线、单聊/群聊/红包/语音等受保护功能全回归通过
+---
+Task ID: fix-moments-author-reply
+Agent: 主协调者 (Z.ai Code)
+Task: ①修复「AI 发的动态，用户评论后 AI 不回复」（身份守卫误伤合法回复链路）②微信朋友圈「N条新消息」深色胶囊下移 + 圆角改小
+
+Work Log:
+- 根因排查（用户评论 AI 动态 → 队列正确 enqueueCharReply，但回复生成被三层守卫全部拦截）：
+  1. moments.ts aiCommentOnMoment L1560：`isPostByPeer(post, peer)` 无条件 throw——回复场景中 peer 正是动态作者本人 → 必 throw；drainReplies 重试 3 次（90s 顺延）全被拦后静默丢弃
+  2. moments.ts addCharMomentComment L1069 数据层守卫：同条件 return null → 即使引擎放行也写不进去
+  3. route.ts L204 API 守卫：postAuthorName===name → 400，comment 与 reply kind 共用该检查 → 服务端也拦
+  4. 连带发现 repairMomentIdentityData 的 stripSelfInteractionsFromPosts 会把「作者回复用户评论」的合法回复当历史自评论 bug 摘除（启动时修复会误删新产生的正常回复）
+  5. 「AI 不回复」仅发生在 AI 自己的动态下：用户动态下 AI 评论的回复链路（post.author='user'）不触发任何守卫，故此前回归测试未暴露
+- 四处修复（原则：守卫只拦「主动评论」，放行「回复」）：
+  1. aiCommentOnMoment：`if (!replyTo && isPostByPeer(post, peer)) throw`——带 replyTo 的回复放行（drainReplies 已保证只回用户评论：parent.author!=='user' continue）
+  2. addCharMomentComment：`if (!args.replyTo?.commentId && isPostByPeer(post, args.peer)) return null`
+  3. route.ts：守卫加 `kind !== 'reply'` 条件（repost 的独立守卫不变；replyFrom===name 不能回复自己评论的守卫保留）
+  4. stripSelfInteractionsFromPosts：shouldStripComment 对「parentId 指向用户评论」的自评论放行不摘（作者回复作者自己评论的异常数据仍照摘）
+  - 记忆无需改动：char-reply 句式「陈默回复了凡凡的评论（动态：…）」归属本就正确；互动消息 push（parentIsUserComment → kind='reply'）本就覆盖该场景
+- UI 微调（wechat.tsx WxMoment 深色胶囊）：容器 pt-3 → pt-6（下移 12px），按钮 rounded-[10px] → rounded-[4px]（更方正贴真机）；QQ 白色胶囊用户未反馈，保持不动
+- 浏览器端到端验证（420×900，合成 PointerEvent；种入 凡凡(user 13800001234/123456) + 陈默/乐乐(char wx+qq 好友)）：
+  - 调度器自动让陈默/乐乐各发一条动态 → 用户在陈默动态下评论「写了一天代码辛苦啦…晚上请你喝奶茶！」
+  - followCommentDelay 30s 后 → 「陈默 回复 凡凡：debug模式不需要奶茶，需要重启。」✓（修复前此处永远静默）
+  - 互动消息收件箱出现「陈默 回复了我：…」+ 原动态摘要 ✓；从收件箱回复陈默 → AI 再回复「刚解决了bug，感觉像系统终于不报错了。奶茶我接受，但大脑重启时间得算O(1)复杂度。」✓（多轮闭环，回复均带「X 回复 Y」正确指向）
+  - 记忆抽查（mem-frag:seed-char-chen）：「凡凡评论了陈默的朋友圈动态：…」「陈默回复了凡凡的评论：…（动态：…）」三方关系正确 ✓
+  - 防自评回归：陈默动态下顶层评论仅凡凡一条，陈默的发言全部是带 parentId 的回复，顶层自评未复现 ✓
+  - 胶囊样式：getComputedStyle 确认 borderRadius 4px、容器 paddingTop 24px ✓；未读时出现、点开已读后消失、新回复再出现 ✓
+  - dev.log generate 全 200 无错误；agent-browser errors 空；bunx tsc --noEmit exit 0；bun run lint exit 0
+- QQ 空间共用同一引擎（qq.tsx 3 处调用 addUserMomentComment），修复天然覆盖 QQ，无需单独改动
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts（3 处守卫修复）、src/app/api/moments/generate/route.ts（kind!=='reply' 条件）、src/components/apps/wechat.tsx（胶囊下移+圆角）
+- 核心成果：①用户评论 AI 的动态 → AI 作者正常回复（多轮闭环），修复前被身份守卫三层拦截永不应答 ②「AI 自己给自己评论」防线保持完整（仅放行带 replyTo 的回复）③启动修复不再误删合法作者回复 ④微信「N条新消息」胶囊下移 12px、圆角 10px→4px
