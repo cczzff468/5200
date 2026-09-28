@@ -109,6 +109,7 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegment
 import {
   buildRichRules,
   buildActionRules,
+  buildVisionRules,
   cleanBubbleText,
   extractRichActionParts,
   actionVerb,
@@ -170,7 +171,11 @@ import {
   updateMomentPostContent,
 } from '@/lib/moments';
 import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
-import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
+import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import type { AlbumRecord } from '@/lib/ios/db';
+import AlbumPage from './album';
+import VisionLogPage from './vision-log';
 import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -3767,6 +3772,21 @@ function ChatPage({
       alive = false;
     };
   }, [peer.id, me.name]);
+  /** 视觉相册缓存（按 peer.id 隔离的 AlbumRecord[]）：会话打开即预热，每轮 AI 回合开头异步刷新；
+   *  buildVisionRules 据此注入「视觉自主决策 + 相册清单」system 规则；buildReplyMsgs 据此同步查
+   *  pick-album-* 标记的目标图 src（buildReplyMsgs 是同步函数，无法 await getAlbum） */
+  const albumCacheRef = useRef<AlbumRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void listAlbums(peer.id)
+      .then((list) => {
+        if (alive) albumCacheRef.current = list;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [peer.id]);
   /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
   const [blk, setBlk] = useState<BlockEntry>(() => loadBlock('wx', peer.id));
   // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；ChatPage 按 peer.id keyed 重挂载，会话切换自然复位）
@@ -3823,6 +3843,10 @@ function ChatPage({
   const [voiceOpen, setVoiceOpen] = useState(false);
   /** AI 语音频率页（他的声音页入口进入，按会话隔离保存） */
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
+  /** 46-e 相册覆盖层（聊天设置「相册管理」进入）：peer.id 的相册页（只读浏览；onClose 关回聊天设置） */
+  const [albumOverlay, setAlbumOverlay] = useState<{ contactId: string; title: string } | null>(null);
+  /** 46-e 视觉决策日志覆盖层（聊天设置「视觉决策日志」进入）：peer.id 的决策日志页 */
+  const [visionLogOverlay, setVisionLogOverlay] = useState<{ contactId: string; title: string } | null>(null);
   /** 我的音色库（「他的声音」入口行摘要展示名用；zustand 响应式） */
   const myVoicesForSummary = useMyVoices((s) => s.voices);
   /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
@@ -4463,6 +4487,109 @@ function ChatPage({
           }
           continue;
         }
+        // 46-e 视觉自主决策动作（[换头像]/[换朋友圈背景]/[存相册] 取用户当回合发的图；[选图设头像]/
+        // [选图设背景]/[选图发送] 从相册缓存挑图）：sys 通知行同步入列（队列投递时按 t 排序），
+        // 异步写入（updateContact/setPeerBg/addAlbum + addVisionDecision）fire-and-forget；
+        // save-to-album 落盘后刷新 albumCacheRef，下一轮 pick-album-* 才能命中新加入的图。
+        const vKind = part.action.kind;
+        if (vKind === 'change-avatar' || vKind === 'change-moments-bg' || vKind === 'save-to-album') {
+          // 找图片消息：targetId 非空按 id 找；空则兜底取当回合最后一条「我」发的图片消息
+          let imgMsg: WxMsg | null = null;
+          if (part.action.targetId) {
+            imgMsg = cur.find((m) => m.id === part.action.targetId && m.kind === 'image') ?? null;
+          }
+          if (!imgMsg) {
+            for (let i = cur.length - 1; i >= 0; i--) {
+              const m = cur[i];
+              if (m.kind === 'image' && m.role === 'me' && m.img?.src) {
+                imgMsg = m;
+                break;
+              }
+            }
+          }
+          if (!imgMsg || !imgMsg.img?.src) continue; // 无图静默丢弃
+          const src = imgMsg.img.src;
+          const imgDesc = imgMsg.img.desc;
+          const imgMsgId = imgMsg.id;
+          if (vKind === 'change-avatar') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了头像` } });
+            t += 1;
+            void (async () => {
+              try {
+                await updateContact(peer.id, { avatar: src });
+                void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-avatar', targetId: imgMsgId, imgSrc: src });
+              } catch {
+                /* 写入失败不阻塞主流程 */
+              }
+            })();
+          } else if (vKind === 'change-moments-bg') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」更换了朋友圈封面` } });
+            t += 1;
+            void (async () => {
+              try {
+                await setPeerBg('wx', peer.id, src);
+                void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-moments-bg', targetId: imgMsgId, imgSrc: src });
+              } catch {
+                /* 写入失败不阻塞主流程 */
+              }
+            })();
+          } else {
+            // save-to-album：存图到 peer 相册 + 决策日志；落盘后刷新 albumCacheRef 供下一轮选图
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」存了一张图到相册` } });
+            t += 1;
+            void (async () => {
+              try {
+                await addAlbum(peer.id, src, { origin: 'ai', desc: imgDesc });
+                void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'save-to-album', targetId: imgMsgId, imgSrc: src });
+                const list = await listAlbums(peer.id);
+                albumCacheRef.current = list;
+              } catch {
+                /* 写入失败不阻塞主流程 */
+              }
+            })();
+          }
+          continue;
+        }
+        if (vKind === 'pick-album-avatar' || vKind === 'pick-album-bg' || vKind === 'pick-album-send') {
+          // [选图设头像/背景/发送:相册条目ID]：targetId 必须原样抄自【相册清单】，空 body 已在解析时丢弃
+          if (!part.action.targetId) continue;
+          // buildReplyMsgs 是同步函数无法 await getAlbum，改读 albumCacheRef（挂载预热 + 每轮开头刷新）；
+          // 跨角色/不存在的条目静默丢弃（album.contactId !== peer.id 防跨角色越权操作）
+          const albumRec = albumCacheRef.current.find((a) => a.id === part.action.targetId) ?? null;
+          if (!albumRec || albumRec.contactId !== peer.id) continue;
+          const aSrc = albumRec.src;
+          const aDesc = albumRec.desc;
+          const aId = albumRec.id;
+          if (vKind === 'pick-album-avatar') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换头像` } });
+            t += 1;
+            void (async () => {
+              try {
+                await updateContact(peer.id, { avatar: aSrc });
+                void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'pick-album-avatar', targetId: aId, imgSrc: aSrc });
+              } catch {
+                /* 写入失败不阻塞主流程 */
+              }
+            })();
+          } else if (vKind === 'pick-album-bg') {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换朋友圈封面` } });
+            t += 1;
+            void (async () => {
+              try {
+                await setPeerBg('wx', peer.id, aSrc);
+                void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'pick-album-bg', targetId: aId, imgSrc: aSrc });
+              } catch {
+                /* 写入失败不阻塞主流程 */
+              }
+            })();
+          } else {
+            // pick-album-send：相册图作为 peer 图片消息发到聊天（无 sys 通知行；队列按 t 投递）
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'image', img: { src: aSrc, desc: aDesc } });
+            t += 600 + Math.floor(Math.random() * 600);
+            void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'pick-album-send', targetId: aId, imgSrc: aSrc });
+          }
+          continue;
+        }
         const applied = wxApplyAiActions([part.action], cur, peer, t);
         cur = applied.msgs;
         out.push(...applied.notices, ...applied.extras);
@@ -4546,6 +4673,13 @@ function ChatPage({
     void buildCrossContextBlocks(peer.id, 'wx', me.name)
       .then((b) => {
         crossCtxRef.current = b;
+      })
+      .catch(() => {});
+    // 46-e：相册缓存刷新（fire-and-forget）：上一轮 save-to-album 落盘后下一轮才能选图；
+    // 本轮用预热缓存（同 crossCtxRef 模式），首轮可能为空数组（buildVisionRules 退回基础规则）
+    void listAlbums(peer.id)
+      .then((list) => {
+        albumCacheRef.current = list;
       })
       .catch(() => {});
     // 40-a：本轮是否处于「仅申请卡」放行模式（byUser 命中且守卫放行）——finalize 不落兑底占位
@@ -4701,6 +4835,14 @@ function ChatPage({
       buildVoicePlaceholderRule(base),
       buildImagePlaceholderRule(base, { excludeIds: turnImageIds }),
     ].filter(Boolean);
+    // 46-e：AI 视觉自主决策规则（换头像/换朋友圈背景/存相册；相册非空时附「选图操作 + 相册清单」）。
+    // albumCacheRef 由挂载/peer 切换 effect 预热 + 本轮开头 fire-and-forget 刷新（同 crossCtxRef 模式）；
+    // 取 albumCacheRef 当前值派生 albumSummary（slice 20，desc/name 缺失兜底「图片」），首轮可能为空——
+    // 此时 buildVisionRules 返回「视觉自主决策」基础规则（无选图操作与清单），不阻断发送
+    const albumSummary = albumCacheRef.current.length > 0
+      ? albumCacheRef.current.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+      : null;
+    const visionRules = buildVisionRules(albumSummary);
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -4716,6 +4858,8 @@ function ChatPage({
       kickSection,
       socialRules,
       ...(mediaRules.length > 0 ? [mediaRules.join('\n\n')] : []),
+      // 46-e 视觉自主决策规则（在语音通话能力之前；让 AI 看图后可自主换头像/换背景/存相册/挑相册发聊天）
+      ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       wbBlocks.afterSystem,
@@ -4952,6 +5096,38 @@ function ChatPage({
     },
     [peer.id, peer.name, pushSysMsg]
   );
+
+  /** 46-e 聊天设置「相册管理」：打开 peer.id 的相册页（只读浏览；AI 自主存进相册的图，用户可挑图或查看） */
+  const handleOpenAlbum = useCallback(() => {
+    setAlbumOverlay({ contactId: peer.id, title: `${peer.name}的相册` });
+  }, [peer.id, peer.name]);
+  /** 46-e 聊天设置「视觉决策日志」：打开 peer.id 的决策日志页（最近一次换头像/换背景/存相册记录） */
+  const handleOpenVisionLog = useCallback(() => {
+    setVisionLogOverlay({ contactId: peer.id, title: `${peer.name}的视觉决策日志` });
+  }, [peer.id, peer.name]);
+  /** 46-e 聊天设置「恢复默认头像」：清空 peer.avatar（chat-settings.tsx 已 window.confirm 二次确认） */
+  const handleResetAvatar = useCallback(() => {
+    void (async () => {
+      try {
+        await updateContact(peer.id, { avatar: null });
+        void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-avatar', targetId: '', imgSrc: '' });
+        onToast?.('已恢复默认头像');
+      } catch {
+        onToast?.('恢复失败');
+      }
+    })();
+  }, [peer.id, onToast]);
+  /** 46-e 聊天设置「恢复默认朋友圈封面」：清掉 peer 专属背景（chat-settings.tsx 已 window.confirm 二次确认） */
+  const handleResetPeerBg = useCallback(() => {
+    void (async () => {
+      try {
+        await removePeerBg('wx', peer.id);
+        onToast?.('已恢复默认封面');
+      } catch {
+        onToast?.('恢复失败');
+      }
+    })();
+  }, [peer.id, onToast]);
 
   /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
    *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」。
@@ -6733,6 +6909,11 @@ function ChatPage({
             .map((b) => b.name)
             .join('、') || '未选择'}
           onOpenPeerProfile={() => onOpenFriendDetail(peer)}
+          // 46-e 视觉管理入口：相册/决策日志/恢复默认头像/恢复默认封面（chat-settings.tsx 46-h 已加 prop）
+          onOpenAlbum={handleOpenAlbum}
+          onOpenVisionLog={handleOpenVisionLog}
+          onResetAvatar={handleResetAvatar}
+          onResetBg={handleResetPeerBg}
         />
       )}
 
@@ -6781,6 +6962,26 @@ function ChatPage({
             saveReplyCount(sessionKey, n);
             setReplyCountState(n);
           }}
+        />
+      )}
+
+      {/* 46-e 相册页（聊天设置「相册管理」二级页）：peer.id 的相册，用户可查看/管理 AI 自主存的图；
+       *  46-h 由 chat-settings 入口触发，覆盖在聊天设置之上，关闭后回聊天设置（保持 settingsOpen） */}
+      {albumOverlay && (
+        <AlbumPage
+          contactId={albumOverlay.contactId}
+          title={albumOverlay.title}
+          onClose={() => setAlbumOverlay(null)}
+          allowEdit
+        />
+      )}
+
+      {/* 46-e 视觉决策日志页（聊天设置「视觉决策日志」二级页）：peer.id 的最近一次换头像/换背景/存相册记录 */}
+      {visionLogOverlay && (
+        <VisionLogPage
+          contactId={visionLogOverlay.contactId}
+          title={visionLogOverlay.title}
+          onClose={() => setVisionLogOverlay(null)}
         />
       )}
 
@@ -7478,6 +7679,7 @@ function MomentRow({
 function MomentsPage({
   me,
   owner,
+  peerId,
   posts,
   onBack,
   onCompose,
@@ -7492,6 +7694,8 @@ function MomentsPage({
   me: WxUser;
   /** 传入 = 好友的朋友圈：界面同款，但名字/头像换好友、无发布与换封面入口 */
   owner?: { name: string; avatar: string | null } | null;
+  /** 好友的联系人 ID（owner 非空时用于读/重置 peer 专属朋友圈封面） */
+  peerId?: string;
   posts: WxMoment[];
   onBack: () => void;
   onCompose: () => void;
@@ -7516,13 +7720,18 @@ function MomentsPage({
   const [coverBusy, setCoverBusy] = useState(false);
   const coverRef = useRef<HTMLInputElement>(null);
 
-  // 启动读取本地封面
+  // 启动读取本地封面（自己的朋友圈用 getWxBg('moments')；好友的用 getPeerBg('wx', peerId)）
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
-        const bg = await getWxBg('moments');
-        if (alive && bg) setCover(bg.data);
+        if (isMine) {
+          const bg = await getWxBg('moments');
+          if (alive && bg) setCover(bg.data);
+        } else if (peerId) {
+          const bg = await getPeerBg('wx', peerId);
+          if (alive && bg) setCover(bg);
+        }
       } catch {
         // 忽略，用默认封面
       }
@@ -7530,7 +7739,23 @@ function MomentsPage({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [isMine, peerId]);
+
+  /** 好友朋友圈「恢复默认封面」：清掉 peer 专属背景 → 刷新 cover state */
+  const resetPeerCover = async () => {
+    if (!peerId) return;
+    if (!window.confirm('确定恢复该好友的默认朋友圈封面？')) return;
+    setCoverBusy(true);
+    try {
+      await removePeerBg('wx', peerId);
+      setCover(null);
+      onToast('已恢复默认封面');
+    } catch {
+      onToast('恢复失败');
+    } finally {
+      setCoverBusy(false);
+    }
+  };
 
   /** 从手机相册选图换封面：压缩 → 存本地 IndexedDB → 立即生效 */
   const pickCover = async (files: FileList | null) => {
@@ -7578,7 +7803,7 @@ function MomentsPage({
             </button>
           ) : (
             <img
-              src="/wx/moments-cover.png"
+              src={cover ?? '/wx/moments-cover.png'}
               alt={`${shownName}的朋友圈封面`}
               className="absolute inset-0 h-full w-full object-cover"
             />
@@ -7690,7 +7915,23 @@ function MomentsPage({
               </button>
             </div>
           ) : (
-            <span className="w-[60px] shrink-0" aria-hidden="true" />
+            <div className="flex shrink-0 items-center justify-end gap-1" style={{ minWidth: 60 }}>
+              {peerId && cover && (
+                <button
+                  type="button"
+                  aria-label="恢复默认封面"
+                  title="恢复默认封面"
+                  data-testid="wx-moments-reset-cover"
+                  onClick={() => void resetPeerCover()}
+                  disabled={coverBusy}
+                  className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
+                    scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
+                  }`}
+                >
+                  <Undo2 className="h-[20px] w-[20px]" strokeWidth={1.8} />
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -8487,7 +8728,8 @@ type Page =
   | 'settings'
   | 'services'
   | 'stickers'
-  | 'favorites';
+  | 'favorites'
+  | 'album';
 
 function MainScreen({
   me,
@@ -9002,6 +9244,7 @@ function MainScreen({
         <MomentsPage
           me={me}
           owner={{ name: friendMoments.name, avatar: friendMoments.avatar }}
+          peerId={friendMoments.id}
           posts={moments.filter((p) => p.authorName === friendMoments.name)}
           onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
           onCompose={() => setPage('compose')}
@@ -9182,6 +9425,10 @@ function MainScreen({
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
+  if (page === 'album') {
+    // 我的主页「相册」入口：当前用户自己的相册（可增删改）
+    return <AlbumPage contactId={me.id} title="我的相册" onClose={() => setPage('main')} allowEdit />;
+  }
 
   const TITLES: Record<Tab, string> = { chats: '微信', contacts: '通讯录', discover: '发现', me: '我' };
 
@@ -9646,8 +9893,9 @@ function MainScreen({
                 icon={<WxIcMoments small />}
               />
               <WxMenuRow
-                label="作品"
-                onClick={() => showToast('「作品」暂未开放')}
+                label="相册"
+                testId="wx-me-album"
+                onClick={() => setPage('album')}
                 icon={<WxIcWorks />}
               />
               <WxMenuRow

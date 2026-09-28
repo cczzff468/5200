@@ -52,6 +52,13 @@ export interface WxBgLocal {
   version: string;
 }
 
+/**
+ * 联系人专属背景图 settings store 前缀（微信朋友圈/资料页 或 QQ 空间等「按角色隔离」的背景）。
+ * key 形如 peer-bg:wx:<contactId> / peer-bg:qq:<contactId>，value 为 data URL（字符串）。
+ * 联系人删除时由 purgeChatTracesFor 清扫。
+ */
+const PEER_BG_PREFIX = 'peer-bg:';
+
 function sortDesc(list: ContactRecord[]): ContactRecord[] {
   return [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
 }
@@ -363,6 +370,19 @@ function purgeChatTracesFor(id: string, name?: string): void {
   // 聊天背景图本体（IndexedDB）：异步清理，失败忽略
   void localDB.delete('settings', `chat-bg:wx:${id}`).catch(() => undefined);
   void localDB.delete('settings', `chat-bg:qq:${id}`).catch(() => undefined);
+  // AI 视觉相册 + 视觉决策日志（按联系人隔离）：动态 import 避免与 album-store 循环引用
+  //（与 moments 同模式）；级联删除该联系人的全部相册条目与决策历史
+  void (async () => {
+    try {
+      const { deleteAlbumsByContact, deleteVisionDecisionsByContact } = await import('./album-store');
+      await Promise.all([deleteAlbumsByContact(id), deleteVisionDecisionsByContact(id)]);
+    } catch {
+      // 清理失败不阻塞删除
+    }
+  })();
+  // 联系人专属背景图（微信朋友圈/资料页 + QQ 空间等按角色隔离的背景）
+  void localDB.delete('settings', `${PEER_BG_PREFIX}wx:${id}`).catch(() => undefined);
+  void localDB.delete('settings', `${PEER_BG_PREFIX}qq:${id}`).catch(() => undefined);
 }
 
 /** 删除联系人（归属对象被删时其名下 NPC 一并级联删除，同旧服务端 DELETE）；删除了返回 true */
@@ -561,6 +581,37 @@ export async function setChatBgImage(app: 'wx' | 'qq', contactId: string, data: 
 
 export async function removeChatBgImage(app: 'wx' | 'qq', contactId: string): Promise<void> {
   await localDB.delete('settings', `${CHAT_BG_PREFIX}${app}:${contactId}`);
+}
+
+/**
+ * 联系人专属背景图（微信朋友圈/资料页 或 QQ 空间等「按角色隔离」的背景）：本地 settings store
+ * 存 data URL，永久保存。与 wx-bg-（全局微信背景） / chat-bg:（聊天会话背景）不同——这里按联系人
+ * id 隔离，联系人删除时随级联清理。value 为纯字符串 data URL（不裹 {data,version} 结构，轻量化存取）。
+ */
+export async function getPeerBg(app: 'wx' | 'qq', contactId: string): Promise<string | null> {
+  try {
+    const rec = await localDB.get('settings', `${PEER_BG_PREFIX}${app}:${contactId}`);
+    const v = (rec as { value?: unknown } | undefined)?.value;
+    return typeof v === 'string' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setPeerBg(app: 'wx' | 'qq', contactId: string, data: string): Promise<void> {
+  try {
+    await localDB.put('settings', { key: `${PEER_BG_PREFIX}${app}:${contactId}`, value: data });
+  } catch {
+    // 写入失败不阻塞调用方主流程
+  }
+}
+
+export async function removePeerBg(app: 'wx' | 'qq', contactId: string): Promise<void> {
+  try {
+    await localDB.delete('settings', `${PEER_BG_PREFIX}${app}:${contactId}`);
+  } catch {
+    // 删除失败不阻塞调用方主流程
+  }
 }
 
 /** QQ 个人资料页背景图（本地 settings store 存 data URL，永久保存） */

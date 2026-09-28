@@ -55,7 +55,7 @@ import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLab
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { stripEmojiText } from '@/lib/emoji';
-import { extractRichActionParts } from '@/lib/chat-rich';
+import { buildVisionRules, extractRichActionParts } from '@/lib/chat-rich';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -77,6 +77,8 @@ import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import AlbumPage from './album';
+import VisionLogPage from './vision-log';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -88,6 +90,7 @@ import {
   wbScanText,
 } from '@/lib/ios/worldbook';
 import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
+import { listAlbums, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -871,10 +874,40 @@ function ChatView({
       alive = false;
     };
   }, [memContactId, profileName]);
+  // 46-g 视觉管理：AI peer 的相册清单（预加载，供 startAiTurn 注入 buildVisionRules 视觉自主决策规则；
+  // 同时供 buildReplyMsgs 内 pick-album-avatar 同步预检 targetId 是否命中相册条目）。每轮 AI 回合开头
+  // fire-and-forget 刷新一次（供下一轮使用）；信息端通常 albumSummary 为空 → buildVisionRules 只注入换头像规则
+  const albumSummaryRef = useRef<{ id: string; desc: string }[] | null>(null);
+  useEffect(() => {
+    if (!memContactId) {
+      albumSummaryRef.current = null;
+      return;
+    }
+    let alive = true;
+    void listAlbums(memContactId)
+      .then((list) => {
+        if (!alive) return;
+        albumSummaryRef.current =
+          list.length > 0
+            ? list.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+            : null;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [memContactId]);
   // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；会话切换随组件重挂载复位）
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [wbOpen, setWbOpen] = useState(false);
+  // 46-g 视觉管理：相册页 / 视觉决策日志页 / 头像本地覆盖（pick-album-avatar 落库后即时刷新顶栏头像）
+  // TODO 46-h 接通：把 handleOpenAlbum / handleOpenVisionLog / handleResetAvatar 接到 SmsChatSettingsPage 的入口
+  const [albumOpen, setAlbumOpen] = useState(false);
+  const [visionLogOpen, setVisionLogOpen] = useState(false);
+  const [avatarOverride, setAvatarOverride] = useState<string | null>(null);
+  /** 顶栏头像（pick-album-avatar 落库后本地 override 优先；切会话随组件重挂载复位 → 自动回退 peer.avatarSrc） */
+  const peerAvatarSrc = avatarOverride ?? peer.avatarSrc;
   const [wbBound, setWbBound] = useState<string[]>(() => (wbContactId ? getBoundBookIds(wbContactId) : []));
   useEffect(() => {
     setWbBound(wbContactId ? getBoundBookIds(wbContactId) : []);
@@ -1077,6 +1110,21 @@ function ChatView({
     [storageKey, wbContactId],
   );
 
+  // 46-g 视觉管理：相册 / 视觉决策日志 / 重置头像回调（容器层准备，prop 接通留给 46-h）
+  const handleOpenAlbum = useCallback(() => setAlbumOpen(true), []);
+  const handleOpenVisionLog = useCallback(() => setVisionLogOpen(true), []);
+  /** 重置 AI peer 头像为默认：清空 contact.avatar（updateContact 传 null）+ 清本地 override + 系统行
+   *  TODO 46-h 接通：SmsChatSettingsPage 加 onResetAvatar 入口（或在头像长按菜单里触发） */
+  const handleResetAvatar = useCallback(async () => {
+    if (!wbContactId) return;
+    try {
+      await updateContact(wbContactId, { avatar: null });
+      setAvatarOverride(null);
+    } catch {
+      /* 持久化失败静默 */
+    }
+  }, [wbContactId]);
+
   /**
    * 把一段回复文本解析成待投递消息（startAiTurn 流中分段/finalize 与退出网页接力的后台回复共用同一套管线，不重不漏）：
    * 拉黑类动作标记就地应用（改状态 + 系统提示行/申请卡片）；asSingle=true（单条模式）时文字块
@@ -1133,6 +1181,45 @@ function ChatView({
               msgIdx += 1;
             }
           }
+          // 46-g 视觉自主决策动作（信息端无图片消息也无朋友圈）：
+          // - change-avatar / change-moments-bg / save-to-album / pick-album-bg / pick-album-send：信息端静默丢弃
+          //   （无图无朋友圈，extractRichActionParts 已解析但无分支处理则跳过到下方 continue）
+          // - pick-album-avatar：信息端唯一支持的视觉动作（从 AI peer 相册选图设头像）；
+          //   用预加载相册清单 albumSummaryRef 同步预检 targetId 命中后推 sys 行 + 异步落 updateContact + addVisionDecision
+          if (part.action.kind === 'pick-album-avatar' && wbContactId) {
+            if (!part.action.targetId) continue;
+            const cached = albumSummaryRef.current;
+            const hit = cached?.some((a) => a.id === part.action.targetId) ?? false;
+            if (hit) {
+              out.push({
+                id: `${idBase}-sys-${msgIdx}`,
+                role: 'assistant',
+                content: '',
+                time: t,
+                sys: { text: `「${peerLabel}」从相册选了张图换头像` },
+              });
+              t += 1;
+              msgIdx += 1;
+              void (async () => {
+                try {
+                  const album = await getAlbum(part.action.targetId);
+                  if (!album || album.contactId !== wbContactId) return;
+                  await updateContact(wbContactId, { avatar: album.src });
+                  setAvatarOverride(album.src); // 即时刷新顶栏头像（其他 UI 表面留给 46-h）
+                  void addVisionDecision({
+                    contactId: wbContactId,
+                    app: 'sms',
+                    action: 'pick-album-avatar',
+                    targetId: album.id,
+                    imgSrc: album.src,
+                  });
+                } catch {
+                  /* 持久化失败静默（视觉动作为增强能力） */
+                }
+              })();
+            }
+            continue;
+          }
           continue; // 信息端无红包/转账动作
         }
         // 40-a：仅申请卡模式（用户拉黑了角色）——AI 的正文/表情一律丢弃，只有上面动作分支产出的
@@ -1156,7 +1243,7 @@ function ChatView({
       }
       return { msgs: out, nextIdx: msgIdx };
     },
-    [peerLabel, settleUserBlockReq, stickersOn, wbContactId],
+    [peerLabel, settleUserBlockReq, stickersOn, wbContactId, setAvatarOverride],
   );
 
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
@@ -1180,6 +1267,15 @@ function ChatView({
       void buildCrossContextBlocks(memContactId, 'sms', profileName)
         .then((b) => {
           crossCtxRef.current = b;
+        })
+        .catch(() => {});
+      // 46-g 视觉管理：同步刷新 AI peer 相册清单（fire-and-forget，供下一轮 buildVisionRules 用）
+      void listAlbums(memContactId)
+        .then((list) => {
+          albumSummaryRef.current =
+            list.length > 0
+              ? list.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+              : null;
         })
         .catch(() => {});
     }
@@ -1267,6 +1363,9 @@ function ChatView({
         : '',
       timeBlock,
       stickersOn ? '' : STICKER_OFF_RULE,
+      // 46-g 视觉自主决策规则（仅联系人会话；信息端无图无朋友圈，albumSummary 通常为空 → 只注入换头像规则；
+      // 相册非空时额外注入【选图操作】+【相册清单】，让 AI 可用 [选图设头像:alb-xxx] 从相册挑图换头像）
+      ...(wbContactId ? buildVisionRules(albumSummaryRef.current) : []),
       ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
     ]
       .filter(Boolean)
@@ -2085,8 +2184,8 @@ function ChatView({
         <div className="relative flex h-[64px] items-center px-3">
           <IOSBackButton label="" onClick={onBack} />
           <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
-            {peer.avatarSrc ? (
-              <img src={peer.avatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
+            {peerAvatarSrc ? (
+              <img src={peerAvatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
             ) : (
               <DefaultAvatar size={40} />
             )}
@@ -2173,7 +2272,7 @@ function ChatView({
                 >
                   <SmsBlockReqCard
                     name={m.blkreq.from === 'user' ? profileName || '我' : (peer.name ?? peer.title)}
-                    avatar={m.blkreq.from === 'user' ? profileAvatar : peer.avatarSrc}
+                    avatar={m.blkreq.from === 'user' ? profileAvatar : peerAvatarSrc}
                     reason={m.blkreq.reason}
                     status={m.blkreq.status}
                     from={m.blkreq.from}
@@ -2529,11 +2628,13 @@ function ChatView({
       </>
       )}
 
-      {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
+      {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关
+          TODO 46-h 接通：补 onOpenAlbum={handleOpenAlbum} / onOpenVisionLog={handleOpenVisionLog}
+            / onResetAvatar={handleResetAvatar} 三个入口（需先在 chat-settings.tsx 的 SmsChatSettingsPage 加 props） */}
       {settingsOpen && (
         <SmsChatSettingsPage
           peerName={peer.name ?? peer.title}
-          peerAvatar={peer.avatarSrc}
+          peerAvatar={peerAvatarSrc}
           phone={peer.title}
           remark={peer.remark ?? ''}
           onSaveRemark={(v) => {
@@ -2732,6 +2833,29 @@ function ChatView({
       {toastMsg && (
         <div className="pointer-events-none absolute bottom-28 left-1/2 z-[90] -translate-x-1/2" data-testid="sms-toast">
           <span className="rounded-full bg-black/75 px-3.5 py-1.5 text-[13px] text-white shadow-lg dark:bg-white/85 dark:text-black">{toastMsg}</span>
+        </div>
+      )}
+
+      {/* 46-g 视觉管理：相册页（容器层渲染，prop 接通留给 46-h；allowEdit 默认 true 让用户可手动加图，
+          让 pick-album-avatar 在信息端有相册可用——AI 才会注入【选图操作】+【相册清单】规则） */}
+      {albumOpen && wbContactId && (
+        <div className="absolute inset-0 z-[60]">
+          <AlbumPage
+            contactId={wbContactId}
+            title={`${peerLabel}的相册`}
+            onClose={() => setAlbumOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* 46-g 视觉管理：视觉决策日志页（容器层渲染，prop 接通留给 46-h；只读浏览 AI 的视觉决策历史） */}
+      {visionLogOpen && wbContactId && (
+        <div className="absolute inset-0 z-[60]">
+          <VisionLogPage
+            contactId={wbContactId}
+            title={`${peerLabel}的视觉决策日志`}
+            onClose={() => setVisionLogOpen(false)}
+          />
         </div>
       )}
     </div>

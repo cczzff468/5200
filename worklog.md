@@ -9404,3 +9404,250 @@ Stage Summary:
 - 未完成/跳过：无
 - tsc/eslint 状态：bunx tsc --noEmit exit 0（零错误）；bunx eslint clock.tsx/music.tsx/db.ts exit 0（零 error 零 warning）
 - 持久化验证：clock.tsx git diff 62 行改动（+51/-11）、music.tsx git diff 164 行改动（+151/-13）、db.ts git diff 18 行改动（保留 42-e 既有）；三文件 diff 均 > 0
+
+---
+Task ID: 46-b
+Agent: chat-rich 动作标记扩展子代理
+Task: RichActionKind 加 6 种视觉动作 + ACTION_LABELS/正则/parseMarker 扩展 + buildVisionRules 导出
+
+Work Log:
+- 读 worklog 末尾 80 行确认项目背景（iOS 仿手机模拟器、子代理并行修改 db.ts/contacts-store.ts/wechat.tsx）；完整 Read src/lib/chat-rich.ts 确认 RichActionKind 联合（30+ 种）、ACTION_LABELS 手动 Record、ACTION_RE/ACTION_TAIL_RE/OPEN_TAIL_RE 均为**手动列举正则**（非动态派生）、动作解析在 extractRichActionParts 内联（文件内 parseMarker 函数是富消息解析器，动作解析没有同名函数——任务描述的 "parseMarker(kind,body)" 实指 extractRichActionParts 内的 kind 分支）、prettifyRichText 基于三个静态正则隐藏
+- 改动 1：RichActionKind 联合追加 6 种（change-avatar / change-moments-bg / save-to-album / pick-album-avatar / pick-album-bg / pick-album-send），带「视觉自主决策动作」注释说明 targetId 语义（图片消息 ID 或相册条目 ID）
+- 改动 2：ACTION_LABELS 末尾追加 6 个中文标签，按从长到短排列：换朋友圈背景(6)→选图设头像(5)→选图设背景(5)→选图发送(4)→换头像(3)→存相册(3)；新词之间互不为子串、也不与既有词互为前缀（无词以「换/选/存」开头），但保留长词在前规则与既有「拉黑族」同模式
+- 改动 3：ACTION_RE / ACTION_TAIL_RE / OPEN_TAIL_RE 三个手动列举正则的词组交替里追加 6 个新中文词（顺序与 LABELS 一致），保证前缀敏感的 `换朋友圈背景` 在 `换头像` 之前；同时 ACTION_RE 的捕获组 1 自动包含新词
+- 改动 4：extractRichActionParts 在 create-group 分支后、最终 else 前插入两个新分支：(a) change-avatar/change-moments-bg/save-to-album 取 body 第一段为 targetId，空 body 也入栈（执行器兜底取当回合最后一张图）；(b) pick-album-avatar/pick-album-bg/pick-album-send 取 body 第一段为 targetId，空 body 静默丢弃（if(targetId) 兜底，不允许选不存在的图）
+- 改动 5：文件末尾新增导出函数 buildVisionRules(albumSummary: {id,desc}[]|null): string[]——默认注入【视觉自主决策】规则（换头像/换背景/存相册）；albumSummary 非空时追加【选图操作】+【相册清单】两条规则（清单 slice(0,20) 防提示词过长，desc 截 30 字）
+- 改动 6：核查 prettifyRichText 已基于 ACTION_RE/ACTION_TAIL_RE/OPEN_TAIL_RE 三个静态正则隐藏动作标记（.replace(ACTION_RE,'').replace(ACTION_TAIL_RE,'').replace(OPEN_TAIL_RE,'')），改动 3 已把新词加入这三个正则，prettifyRichText 自动隐藏新标记，无需额外改动
+- node 正则 sanity 测试：8 个用例（[换头像:msg-x7k2]/[换朋友圈背景:msg-abc]/[存相册:msg-123]/[选图设头像:alb-01]/[选图设背景:alb-02]/[选图发送:alb-03]/空 body 两种）全部正确匹配；前缀敏感交叉验证（换朋友圈背景优先于换头像、同意解除拉黑优先于解除拉黑优先于拉黑）全部通过
+- 每步 Edit 后 `git diff --stat HEAD -- src/lib/chat-rich.ts` 验证：最终 +66/-4 共 70 行改动持久化
+- 验证：bunx eslint src/lib/chat-rich.ts exit 0（零 error 零 warning）；bunx tsc --noEmit 全项目仅 1 个错误位于 src/lib/ios/db.ts(1,74) IDBValidKey（另一并行子代理的归属文件，不在本任务范围内），chat-rich.ts 本身零 tsc 错误（rg "chat-rich" 在 tsc 输出里无任何匹配）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/lib/chat-rich.ts（+66/-4 共 70 行；git diff --stat HEAD 确认持久化）
+- 新增 kind：change-avatar / change-moments-bg / save-to-album / pick-album-avatar / pick-album-bg / pick-album-send（共 6 种）
+- 新增导出函数：buildVisionRules(albumSummary)（视觉自主决策规则注入 system prompt）
+- tsc/eslint 状态：chat-rich.ts 本身 tsc 零错误 / eslint exit 0；项目仅剩 db.ts 的 IDBValidKey 错误（归属另一并行子代理，本任务不涉及）
+
+---
+Task ID: 46-a
+Agent: AI 视觉管理数据层子代理
+Task: 实现 albums + vision-decisions 两个 IndexedDB store + album-store CRUD + contacts-store peer-bg 函数
+
+Work Log:
+- 读 worklog 末尾 100 行了解 Task 42-a/42-e 背景；Read src/lib/ios/db.ts 确认项目用 idb（非 Dexie）—— IOSDB 是 DBSchema interface、DB_VERSION=6、localDB 封装 get/put/delete/getAll/count/clear 但无按 index 查询方法；Read src/lib/ios/contacts-store.ts 确认 settings store 读写模式（localDB.get/put/delete('settings', {key,value})）与 purgeChatTracesFor(id, name?) 同步函数末尾的异步 void + .catch 模式
+- db.ts 改动（按 idb 而非 Dexie 风格，因任务文档给的 Dexie schema 语法 &id, contactId, createdAt 在本项目不适用）：
+  - import 加 IndexNames 类型（idb 8.x 提供）；IDBValidKey 用 lib.dom.d.ts 全局类型，不 import（首次 import 报 TS2305 已修正）
+  - DB_VERSION 6 → 7
+  - 新增 AlbumRecord interface（id/contactId/src/desc/name/origin('user'|'ai')/createdAt，desc/name 可选）
+  - 新增 VisionDecisionRecord interface（id/contactId/app('wx'|'qq'|'sms')/action(6 种 union)/targetId/imgSrc?/reason?/createdAt）
+  - IOSDB schema 新增 albums: { key; value: AlbumRecord; indexes: { contactId: string; createdAt: number } } + visionDecisions 同结构
+  - IOSStoreName union 新增 'albums' | 'visionDecisions'
+  - upgrade 回调新增 if (oldVersion < 7) 块：用 !db.objectStoreNames.contains 守卫创建 albums/visionDecisions 两个 store（keyPath='id'）+ 各自 contactId/createdAt 索引
+  - localDB 封装对象扩展 getAllFromIndex<K>(store, index: IndexNames<IOSDB,K>, query: IDBValidKey) 方法（idb 的 db.getAllFromIndex 包装），调用方按 contactId 索引取条目后自行排序；内部 query as unknown as IDBKeyRange cast（idb 的 query 类型严格限定为该 index value 类型，放宽到 IDBValidKey 需 cast；初次尝试直接 as IDBKeyRange 报 TS2352 insufficient overlap，改 unknown 中介后通过）
+  - git diff --stat HEAD -- src/lib/ios/db.ts → 1 file changed, 59 insertions(+), 2 deletions(-)，持久化确认
+- album-store.ts 新建（109 行）：albums + vision-decisions 的 CRUD
+  - listAlbums(contactId) 用 localDB.getAllFromIndex('albums', 'contactId', contactId) 查询，结果按 createdAt 升序排（相册流"按时间正序展示"）
+  - addAlbum(contactId, src, opts?) 构造 AlbumRecord（id=genId() / origin 默认 'user' / createdAt=Date.now()）→ localDB.put('albums', rec) 返回完整记录
+  - getAlbum(id) localDB.get 失败返 null 不抛
+  - updateAlbum(id, patch) 读出 cur 后 {...cur, ...patch} put 回（条目不存在静默忽略）
+  - deleteAlbum(id) / deleteAlbumsByContact(contactId) 失败静默忽略（级联删除时单条失败不阻塞整体）
+  - listVisionDecisions(contactId) 同模式但按 createdAt 倒序（"最近一次换头像是哪张"用）
+  - addVisionDecision(rec: Omit<...,'id'|'createdAt'>) 失败静默忽略（决策日志属审计/历史信息，写入失败不应影响 AI 回复主流程）
+  - deleteVisionDecisionsByContact(contactId) 级联清理用
+  - 文件创建为 untracked，git status 显示 ?? src/lib/ios/album-store.ts
+- contacts-store.ts 改动（+51 insertions）：
+  - PEER_BG_PREFIX='peer-bg:' 常量定义在 WX_BG_SETTING_PREFIX 附近（line 60），早于 purgeChatTracesFor（line 264）使用，避免 TDZ
+  - 新增 getPeerBg/setPeerBg/removePeerBg 三函数：用 localDB.get('settings', `${prefix}${app}:${contactId}`) 取（value 是纯字符串 data URL，不裹 {data,version} 结构，轻量化存取；与 wx-bg-/chat-bg: 不同）；put/delete 同模式 try/catch 失败静默
+  - purgeChatTracesFor 末尾追加（保持同步函数签名，用现有 void + .catch() 与 void (async ()=>{...})() 模式不阻塞）：
+    1. void (async () => { try { const { deleteAlbumsByContact, deleteVisionDecisionsByContact } = await import('./album-store'); await Promise.all([...]); } catch {} })() —— 动态 import 避免与 album-store 循环引用（与 moments 同模式）
+    2. void localDB.delete('settings', `peer-bg:wx:${id}`).catch(() => undefined)
+    3. void localDB.delete('settings', `peer-bg:qq:${id}`).catch(() => undefined)
+  - git diff --stat HEAD -- src/lib/ios/contacts-store.ts → 1 file changed, 51 insertions(+)，持久化确认
+- 验证：bunx tsc --noEmit 全仓 exit 0（零错误，含本任务 3 个文件 + 其他子代理并行修改文件零冲突）；bunx eslint src/lib/ios/db.ts src/lib/ios/album-store.ts src/lib/ios/contacts-store.ts exit 0（零 error 零 warning，无输出）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修复文件清单：src/lib/ios/db.ts（+59/-2，DB_VERSION 6→7 + 2 个 interface + 2 个 IOSDB schema + 2 个 IOSStoreName union + oldVersion<7 升级块 + localDB.getAllFromIndex 方法封装）、src/lib/ios/album-store.ts（新建 +109，albums + vision-decisions 全套 CRUD）、src/lib/ios/contacts-store.ts（+51/-0，PEER_BG_PREFIX 常量 + getPeerBg/setPeerBg/removePeerBg 三函数 + purgeChatTracesFor 末尾追加 peer-bg delete 与 album-store 动态 import 级联清理）
+- tsc/eslint 状态：bunx tsc --noEmit 全仓 exit 0（零错误）；bunx eslint 3 个归属文件 exit 0（零 error 零 warning）
+- 持久化验证：db.ts git diff 59+/2-、contacts-store.ts git diff 51+/0- 均 > 0 持久化确认；album-store.ts 为新建文件，git status 显示 ?? untracked 状态存在；改动 100% 持久化未发生回滚
+- 未完成/跳过：无；任务文档给的 Dexie schema 字符串语法（&id, contactId, createdAt）不适用本项目（项目用 idb 非 Dexie），按 idb 风格实现并保持等价索引（id keyPath + contactId/createdAt 两 index）；任务文档给的 localDB.where(store, index, value) API 不存在，扩展 localDB 加 getAllFromIndex 方法实现等价查询
+
+---
+Task ID: 46-c
+Agent: 相册页 UI 子代理
+Task: 新建 src/components/apps/album.tsx 相册组件（网格/查看器/多选/添加/删除/编辑）
+
+Work Log:
+- 读 worklog 末尾 80 行确认 Task 46-a 已实现 albums/vision-decisions 表 + album-store CRUD（listAlbums/addAlbum/getAlbum/updateAlbum/deleteAlbum/deleteAlbumsByContact + vision-decisions 同模式）；Task 46-b 已扩展 chat-rich 6 种视觉动作 + buildVisionRules
+- Read src/lib/ios/album-store.ts（113 行）确认导出函数签名：listAlbums(contactId)→AlbumRecord[]（按 createdAt 升序）、addAlbum(contactId, src, opts?:{desc?,name?,origin?})→AlbumRecord、getAlbum(id)→AlbumRecord|null、updateAlbum(id, patch:{desc?,name?})→void、deleteAlbum(id)→void；全部带 try/catch 静默兜底
+- Read src/lib/ios/db.ts 第 195-219 行确认 AlbumRecord interface 字段：id/contactId/src/desc?/name?/origin('user'|'ai')/createdAt
+- Read src/components/apps/photos.tsx 前 200 行 + 540-650 行 + 1059-1180 行参考样式：'use client' + IOSNavBar/IOSScreen/IOSTextButton 用法 + inline 大标题模式 + PhotoTile 多选圈样式（左上角 22px 圆 + Check 图标）+ 全屏查看器 absolute inset-0 z-40 bg-black + 顶部渐变黑栏 + 底部渐变 + 触摸滑切（Math.abs(dx)>50 且 dx>dy）+ window.confirm 删除
+- 检查 photos.tsx 无现成 readImageFile/compressImage——photos.tsx 用 localDB.put('photos', { blob: File }) 直存原始 File；album-store 的 src 字段是 data URL 字符串（不是 Blob），故 album.tsx 内自实现 readImageFile：FileReader.readAsDataURL → Image.onload → canvas drawImage（按 max=1280px 等比缩放）→ canvas.toDataURL('image/jpeg', 0.8)；空描述/空名称用 undefined 落库
+- 实现 src/components/apps/album.tsx（515 行）：
+  - 组件 API：AlbumPageProps（contactId/title/onClose/allowEdit?/onPick?）符合任务文档
+  - 状态：items（AlbumRecord[]|null）/selectMode/selected（Set<string>）/viewerIdx（number|null）/adding（上传中 spinner）/editingId+descDraft（编辑描述弹窗）
+  - 加载：useEffect[reload] 调 listAlbums(contactId) → setItems；items=null 时显示 Loader2 spinner 居中
+  - 添加：hidden input accept="image/*" multiple → handleUpload 遍历文件（跳过非 image/*）→ readImageFile 压缩 → addAlbum(contactId, src, {origin:'user', name:f.name}) → reload；单张失败不阻塞后续
+  - 网格：grid-cols-3 gap-1 p-1，每张 button aspect-square overflow-hidden bg-muted → img object-cover；selectMode 时左上角显示 22px 勾选圈（与 photos.tsx PhotoTile 同款样式）
+  - 多选删除：右上「选择」切到 selectMode → 缩略图点击 toggleSelect → 底部 inset-x-0 bottom-0 z-20 bg-background/95 backdrop-blur 删除栏（红色 #FF453A 文字 + 数量），window.confirm 二次确认
+  - 查看器：current && items 时渲染 absolute inset-0 z-40 bg-black 全屏层：图片 object-contain + onTouchStart/End 横滑切换（dx>50 且 dx>dy）+ 顶部渐变栏（X 关闭 + 中间序号「N/M」+ 右上 allowEdit 时 Pencil/Trash2）+ 左右白色圆形切换箭头（边界 disabled opacity-20）+ 底部渐变栏（current.desc 文本 + onPick 存在时显示「选这张」按钮）
+  - 编辑描述：startEdit(current) → 弹窗（textarea maxLength=200 + 字数计数 + 取消/保存按钮），confirmEdit 调 updateAlbum(id, {desc: text||undefined})（空字符串落 undefined，避免存空字符串脏数据）
+  - allowEdit=false：nav 右侧不渲染 +/选择按钮，查看器无 Pencil/Trash2，空态文案「该相册暂无图片」
+  - IOSScreen 加 className="relative"（确保内部 absolute 查看器/编辑弹窗/删除栏相对容器定位，与 photos.tsx 外层 div 用 relative 同模式）
+- IOSScreen/IOSNavBar/IOSTextButton 三件套从 '@/components/ios/IOSNavBar' 导入；icon 从 lucide-react；album-store CRUD 直接 import；AlbumRecord 用 type-only import
+- 验证：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/album.tsx exit 0（零 error 零 warning）；git status 显示 ?? src/components/apps/album.tsx（新建 untracked 文件存在）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 新建文件：src/components/apps/album.tsx（515 行，git status ?? untracked 状态存在确认）
+- 实现组件 API：AlbumPage({contactId, title, onClose, allowEdit=true, onPick?}) 完整支持网格/查看器/多选/添加/删除/编辑描述/onPick 选择回调
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（全项目零错误）；bunx eslint src/components/apps/album.tsx exit 0（零 error 零 warning）
+- 未完成/跳过：getAlbum 函数未使用故未 import（任务文档给的 `type getAlbum` 语法也不正确——getAlbum 是值导出而非类型）；任务文档给的「BackToHome」未加（AlbumPage 是子页面，左侧 onClose 已返回上层，BackToHome 会绕过 onClose 直达主屏，不符合子页面语义）
+
+---
+Task ID: 46-d
+Agent: 决策日志页 UI 子代理
+Task: 新建 src/components/apps/vision-log.tsx 视觉决策日志组件
+
+Work Log:
+- 读 worklog 末尾 80 行确认项目背景（iOS 仿手机模拟器 + Task 46-a 已实现 albums/vision-decisions 表 + album-store CRUD）；Read src/lib/ios/album-store.ts 确认 listVisionDecisions(contactId): Promise<VisionDecisionRecord[]>（按 createdAt 倒序）/ deleteVisionDecisionsByContact(contactId) 签名；Read src/lib/ios/db.ts 确认 VisionDecisionRecord 字段（id/contactId/app('wx'|'qq'|'sms')/action(6 种 union)/targetId/imgSrc?/reason?/createdAt）；Read src/components/apps/photos.tsx 前 100 行 + reminders.tsx 头 60 行参考 IOSNavBar/IOSScreen 用法（photos.tsx inline+static! 模式、reminders.tsx 只用 IOSNavBar inline 不包 IOSScreen）；Read src/components/ios/IOSNavBar.tsx 确认 IOSNavBar(large/inline/left/right)/IOSBackButton/IOSTextButton/IOSScreen API
+- 检查项目时间格式化 helper：rg "formatTime|relativeTime" 在 src/components/apps 无匹配；rg "分钟前|刚刚" 命中 src/lib/ios/groups.ts groupEventAgo（专为群事件用、含「昨天」分支，本组件不复用以避免引入 groups 模块依赖）；按任务描述在组件内实现简版 formatTime（刚刚/X 分钟前/X 小时前/X 天前/M 月 D 日 HH:MM）
+- eslint 配置检查：cat eslint.config.mjs 确认 @next/next/no-img-element 与 @typescript-eslint/* 多条规则均已 off，本组件可直接用 <img> 不加 eslint-disable 注释
+- 新建 src/components/apps/vision-log.tsx（248 行）：'use client'；IOSScreen(relative) + IOSNavBar(large=false)；左 ChevronLeft 返回按钮 / 右 Trash2 清空按钮（仅 items 非空时渲染）；中部列表区有 3 态（null=Loader2 旋转、[]=ImageOff+「暂无视觉决策记录」、非空=ul>li 卡片列表）；卡片左 14×14 缩略图（imgSrc 缺失占位 ImageIcon）/ 中 动作中文描述+formatTime 时间+APP_LABELS 标签（背景色 meta.color+1A 透明度）/ 右 9×9 圆形动作图标；点击卡片 setDetail(it) 弹详情面板
+- 详情面板：absolute inset-0 z-50 + bg-black/50 backdrop-blur 居中弹窗（max-w-340px），点遮罩或 X 关闭、卡片 onClick stopPropagation；内容含 aspect-square 大图预览 + 动作图标圆+动作中文 + App 标签+时间 + reason 块（仅当 detail.reason） + targetId 末尾小字（仅当存在）
+- ACTION_LABELS Record: 6 个动作中文文案/图标/主色（change-avatar=换了头像/UserCircle/#0A84FF、change-moments-bg=换了朋友圈背景/ImageIcon/#34C759、save-to-album=存入相册/Bookmark/#FF9500、pick-album-avatar=从相册选图设头像/UserCircle/#5856D6、pick-album-bg=从相册选图设背景/ImageIcon/#AF52DE、pick-album-send=从相册选图发送/Send/#FF3B30）；APP_LABELS: wx→微信/qq→QQ/sms→信息
+- eslint react-hooks/set-state-in-effect 报错（useEffect 内 void reload() → reload 内 setItems 触发 cascading renders 警告）：按 qq.tsx/wechat.tsx 同模式把 setItems 包进 Promise.resolve().then(() => setItems(list)) 微任务，规避规则；重跑 eslint exit 0
+- 每步 Edit 后用 git status --short 验证：?? src/components/apps/vision-log.tsx 存在；git status 全局仅 6 处变更（chat-rich.ts/contacts-store.ts/db.ts/worklog.md/album.tsx/album-store.ts/vision-log.tsx），均归属本任务或并行子代理，未误改任何其他文件
+- 验证：bunx tsc --noEmit exit 0（全项目零错误，含本任务新建文件）；bunx eslint src/components/apps/vision-log.tsx exit 0（零 error 零 warning，无输出）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 新建文件：src/components/apps/vision-log.tsx（248 行；git status 显示 ?? untracked 状态存在；持久化确认）
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/vision-log.tsx exit 0（零 error 零 warning）
+- 未完成/跳过：无；本组件只读不写 visionDecisions 表（写入由各聊天 App 调 addVisionDecision），符合「数据层属审计/历史信息」定位；详情面板含大图预览 + 动作描述 + 时间 + reason + targetId 完整字段
+
+---
+Task ID: 46-h
+Agent: chat-settings 入口子代理
+Task: ChatSettingsPage 加 4 入口 + SmsChatSettingsPage 加 2 入口 + 对应可选 prop
+
+Work Log:
+- 读 worklog 末尾 120 行确认 Task 46-a/b/c/d 已实现 albums/vision-decisions 表 + album-store CRUD + chat-rich 6 种视觉动作 + buildVisionRules + album.tsx 相册页 + vision-log.tsx 视觉决策日志页；本任务仅在 chat-settings.tsx 加入口触发，由 46-e/f/g 在各 App 容器层定义回调函数渲染子页面
+- 完整 Read src/components/apps/chat-settings.tsx（1951 行 → 改后 2055 行）：定位 ChatSettingsPage（line 122 起）props 接口内联展开（非独立 interface，用 `: { ... }` 解构 + 类型注解同参数列表内联）+ 现有入口行模式（聊天背景/回复条数/翻译/分句发送/时间感知/表情包/世界书/他的声音/拉黑），每行 cardCls+rowCls 模式，多行组用 `<div className={`border-t ${dividerCls}`} />` 分割；SmsChatSettingsPage（line 1218 起）用 `t.cardCls/t.rowCls/t.dividerCls/t.captionCls` translateTokens('sms') 主题，多行组用 `<div className={t.dividerCls} />` 分割
+- 改动 1：lucide-react import 行追加 3 个图标 Activity/Images/RotateCcw（按字母序插入：Activity 最前，Images 在 Image as ImageIcon 之后，RotateCcw 在 Loader2 与 Search 之间）；node require('lucide-react') 三图标均 object 类型确认存在
+- 改动 2：ChatSettingsPage props 解构列表末尾追加 4 个可选 prop（onOpenAlbum/onOpenVisionLog/onResetAvatar/onResetBg，每项带 JSDoc 说明语义 + 「不传 = 隐藏对应入口行」）；类型注解段（`: { ... }` 内）同样位置追加 4 个 `?: () => void` 类型声明，加注释明确 window.confirm 二次确认语义
+- 改动 3：ChatSettingsPage 渲染区在「聊天背景」组之后、「回复条数」组之前插入 2 个新分组卡片：
+  - 组 A：相册管理（Images 图标 + data-testid=`${testPrefix}-settings-album`）+ 视觉决策日志（Activity 图标 + data-testid=`${testPrefix}-settings-vision-log`），两行同存时中间 `<div className={`border-t ${dividerCls}`} />` 分割；外层卡片用 `(onOpenAlbum || onOpenVisionLog) && (<div>...</div>)` 条件渲染（任一回调存在即渲染外层），每行内部再 `{onOpenAlbum && (<button>...</button>)}` 单独条件渲染
+  - 组 B：恢复默认头像（RotateCcw + data-testid=`${testPrefix}-settings-reset-avatar`）+ 恢复默认朋友圈封面（RotateCcw + data-testid=`${testPrefix}-settings-reset-bg`），onClick 均用 `if (window.confirm(`确认恢复「${peerName}」的默认XX？将清除 AI 自主换过的XX。`)) { onResetXX(); }` 二次确认模式；同样外层条件渲染 + 内层单行条件渲染 + 中间分割线
+- 改动 4：SmsChatSettingsPage props 解构列表末尾追加 2 个可选 prop（onOpenAlbum/onOpenVisionLog）；类型注解段同样追加 2 个 `?: () => void`；信息端无朋友圈背景故不加 onResetBg（任务文档明确豁免）
+- 改动 5：SmsChatSettingsPage 渲染区在「翻译入口」组之后、「回复条数」组之前插入 1 个新分组卡片：相册管理（Images + data-testid=`sms-settings-album`）+ 视觉决策日志（Activity + data-testid=`sms-settings-vision-log`），样式遵循 SMS 主题用 `t.rowCls/t.cardCls/t.dividerCls` + `text-muted-foreground` 图标色 + `text-muted-foreground/50` chevron 色 + `h-4 w-4` chevron 尺寸 + `gap-1.5` 间距（与既有 SMS 行同模式）；外层 `(onOpenAlbum || onOpenVisionLog) &&` 条件渲染 + 内层单行条件渲染 + 中间 `<div className={t.dividerCls} />` 分割
+- 每步 Edit 后 `git diff --stat HEAD -- src/components/apps/chat-settings.tsx` 验证：import +1/-1（1 行替换）、ChatSettingsPage props +12 行、ChatSettingsPage 入口组 +74 行、SmsChatSettingsPage props +6 行、SmsChatSettingsPage 入口组 +37 行 → 最终 +142/-1 共 143 行改动持久化
+- 误删 const wx = variant === 'wx'; 一次（MultiEdit 重排时 old_str 把该行误纳入但未在 new_str 恢复），立即 Edit 重新插入；改后 git diff 验证完整
+- 验证：bunx tsc --noEmit exit 0（全项目零错误，含本任务改动）；bunx eslint src/components/apps/chat-settings.tsx exit 0（零 error 零 warning，无输出）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/chat-settings.tsx（+142/-1 共 143 行；git diff --stat HEAD 确认持久化，git status 显示 M 状态）
+- 新增入口清单：
+  - ChatSettingsPage（微信/QQ）：相册管理 / 视觉决策日志 / 恢复默认头像 / 恢复默认朋友圈封面（共 4 行，2 个分组卡片）
+  - SmsChatSettingsPage（信息）：相册管理 / 视觉决策日志（共 2 行，1 个分组卡片；信息端无朋友圈故无「恢复默认朋友圈封面」入口）
+- 新增 prop 清单：ChatSettingsPage 加 onOpenAlbum/onOpenVisionLog/onResetAvatar/onResetBg（均 `?: () => void` 可选）；SmsChatSettingsPage 加 onOpenAlbum/onOpenVisionLog（均 `?: () => void` 可选）
+- 容错策略：所有新 prop 都用条件渲染（外层 `(prop1 || prop2) &&` 渲染分组卡片、内层 `{propX && (<button>...</button>)}` 渲染单行），调用方未传时入口行不渲染（与既有 onOpenVoice/onToggleBlock 同模式），避免显示无效入口
+- 二次确认：恢复默认头像/恢复默认朋友圈封面两行 onClick 内均加 window.confirm，文案包含 peerName 个性化提示（`确认恢复「${peerName}」的默认XX？将清除 AI 自主换过的XX。`），避免误触撤销 AI 视觉自主决策
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（全项目零错误）；bunx eslint src/components/apps/chat-settings.tsx exit 0（零 error 零 warning）
+- 未完成/跳过：无；任务文档明确豁免 SmsChatSettingsPage 的 onResetBg（信息端无朋友圈背景）；回调函数本体由 46-e/f/g 在 wechat.tsx/qq.tsx/chat.tsx 容器层定义（渲染 AlbumPage/VisionLogPage 子页面 + 持久化重置），本任务仅完成 prop 定义 + 入口行 + 触发回调的契约
+
+---
+Task ID: 46-e
+Agent: wechat.tsx 视觉管理集成子代理
+Task: 微信端接通 6 种视觉动作执行器 + 相册入口 + 朋友圈 peer-bg + 决策日志
+
+Work Log:
+- 读 worklog 末尾 120 行确认 Task 46-a/b/c/d 已完成（albums/vision-decisions 表 + album-store CRUD + contacts-store peer-bg + chat-rich 6 种 kind + buildVisionRules + AlbumPage/VisionLogPage 组件）
+- Read src/lib/chat-rich.ts 确认 buildVisionRules(albumSummary): string[]；RichActionKind 6 种 kind（change-avatar / change-moments-bg / save-to-album / pick-album-avatar / pick-album-bg / pick-album-send）；extractRichActionParts 返回 RichActionPart（type:'text'|'action'，action 含 kind/targetId）
+- Read src/lib/ios/album-store.ts 确认 listAlbums/addAlbum/getAlbum/addVisionDecision 签名（全部 try/catch 静默兜底）
+- Read src/lib/ios/contacts-store.ts 确认 getPeerBg/setPeerBg/removePeerBg(app:'wx'|'qq', contactId, data?) 签名 + updateContact(id, patch:Partial<ContactPayload>) 签名
+- Read src/components/apps/album.tsx + vision-log.tsx 确认 AlbumPage 默认导出 props（contactId/title/onClose/allowEdit?/onPick?）、VisionLogPage 默认导出 props（contactId/title/onClose）
+- Read wechat.tsx（9928 行）找：page state 机制（MainScreen line 8533 `useState<Page>('main')` + 11 个 Page 分支早返）；"作品"入口（line 9649 WxMenuRow label="作品" showToast「暂未开放」）；MomentsPage（line 7478，owner prop + isMine 分支 + 默认封面 `/wx/moments-cover.png`）；runAiTurn（line 4538 useCallback 非异步，与 crossCtxRef 模式 fire-and-forget 刷新）；buildReplyMsgs（line 4391 同步函数，for 循环 part.type==='action' 内 bk/uk/quit/groupSocial/wxApplyAiActions 五分支；out/cur/t/msgs/uid 变量名）；ChatSettingsPage 调用处（line 6675，已 46-h 加 4 个可选 prop onOpenAlbum/onOpenVisionLog/onResetAvatar/onResetBg）
+- 改动 1（"作品"→"相册" + 'album' page state）：
+  - Page 联合末尾追加 `| 'album'`
+  - WxMenuRow label="作品" onClick=showToast → label="相册" testId="wx-me-album" onClick=()=>setPage('album')
+  - 在 page==='favorites' 早返之后新增 `if (page === 'album') return <AlbumPage contactId={me.id} title="我的相册" onClose={() => setPage('main')} allowEdit />`（我自己的相册可增删改；onClose 回 main 屏 tab 仍为 'me'）
+- 改动 2（朋友圈 peer 视图读 peer-bg + 恢复默认按钮）：
+  - MomentsPage 加 `peerId?: string` prop（owner 非空时用于读/重置 peer 专属封面）
+  - useEffect 读封面分支：isMine 走 getWxBg('moments')；!isMine && peerId 走 getPeerBg('wx', peerId)，分别 setCover
+  - peer 封面 img 从硬编码 `/wx/moments-cover.png` 改为 `cover ?? '/wx/moments-cover.png'`（peer 有专属背景时显示，无则用默认）
+  - 新增 resetPeerCover：window.confirm 二次确认 → removePeerBg('wx', peerId) + setCover(null) + onToast('已恢复默认封面')
+  - 顶部右侧 !isMine 分支：原占位 `<span className="w-[60px] shrink-0" />` 替换为 `<div>` 容器，`peerId && cover` 时显示 Undo2 图标按钮（aria-label "恢复默认封面" / data-testid="wx-moments-reset-cover" / onClick=resetPeerCover / disabled={coverBusy}）
+  - 调用方 line 9047 MomentsPage 加 `peerId={friendMoments.id}` prop（friendMoments 是 ContactRecord，.id 即 peer 联系人 ID）
+- 改动 3（runAiTurn 注入 buildVisionRules）：
+  - ChatPage 顶层新增 `albumCacheRef = useRef<AlbumRecord[]>([])` + useEffect[peer.id] 预热 listAlbums → 写入 ref（同 crossCtxRef 模式）
+  - runAiTurn 顶部 fire-and-forget 刷新 albumCacheRef（listAlbums(peer.id).then(list => albumCacheRef.current = list)，供下一轮 pick-album-* 命中）
+  - runAiTurn 中段（systemFull 数组组装处）派生 albumSummary：`albumCacheRef.current.length > 0 ? albumCacheRef.current.slice(0, 20).map(a => ({ id: a.id, desc: a.desc || a.name || '图片' })) : null`，调 buildVisionRules(albumSummary) 得 visionRules[]
+  - systemFull 数组在 mediaRules 之后、语音通话能力之前插入 `...(visionRules.length > 0 ? [visionRules.join('\n\n')] : [])`（基础视觉决策规则 + 相册非空时附选图操作 + 相册清单）
+- 改动 4（buildReplyMsgs 新增 6 种 action 分支）：
+  - 在 isGroupSocialAction 分支之后、wxApplyAiActions 之前插入两组分支
+  - change-avatar / change-moments-bg / save-to-album：找图片消息（targetId 非空按 id 找 cur；空则从末尾向前找 role='me' && kind='image' && img.src 的最近一条）→ 无图 continue 静默丢弃 → 同步 push sys 通知行（t += 1）→ fire-and-forget IIFE 调 updateContact/setPeerBg/addAlbum + addVisionDecision；save-to-album 完成后刷新 albumCacheRef 供下一轮选图
+  - pick-album-avatar / pick-album-bg / pick-album-send：targetId 空继续丢弃；同步查 albumCacheRef.current.find(id === targetId)（buildReplyMsgs 非异步无法 await getAlbum）→ 跨角色/不存在 continue 静默丢弃 → avatar/bg 同步 push sys 通知行（t += 1）+ fire-and-forget updateContact/setPeerBg + addVisionDecision；send 同步 push 图片消息（kind:'image', img:{src,desc}, t += 600+random*600）+ fire-and-forget addVisionDecision（无需等写入）
+  - 关键设计：buildReplyMsgs 同步函数无法 await，sys 通知行需立刻入队列按 t 排序投递；async 写入（IndexedDB 持久化）走 fire-and-forget 不阻塞队列；save-to-album 落盘后刷新缓存保证下一轮 pick 命中
+- 改动 5（ChatSettingsPage 4 个回调 + AlbumPage/VisionLogPage 覆盖层）：
+  - ChatPage 顶层新增 albumOverlay / visionLogOverlay 两个 state（{ contactId, title } | null）
+  - 新增 4 个 useCallback：handleOpenAlbum（setAlbumOverlay({contactId:peer.id, title:`${peer.name}的相册`})）/ handleOpenVisionLog（setVisionLogOverlay 同模式）/ handleResetAvatar（fire-and-forget updateContact(peer.id, {avatar:null}) + addVisionDecision + onToast「已恢复默认头像」）/ handleResetPeerBg（fire-and-forget removePeerBg('wx', peer.id) + onToast「已恢复默认封面」—— 命名 PeerBg 避开 line 6039 既有 handleResetBg 聊天背景重置函数）
+  - ChatSettingsPage 调用处追加 4 个 prop：onOpenAlbum={handleOpenAlbum} / onOpenVisionLog={handleOpenVisionLog} / onResetAvatar={handleResetAvatar} / onResetBg={handleResetPeerBg}（chat-settings.tsx 46-h 已加可选 prop 定义 + window.confirm 二次确认）
+  - 渲染覆盖层（在 replyOpen 之后）：`albumOverlay && <AlbumPage contactId title onClose={() => setAlbumOverlay(null)} allowEdit />` + `visionLogOverlay && <VisionLogPage contactId title onClose={() => setVisionLogOverlay(null)} />`
+  - 导入：buildVisionRules（chat-rich）+ listAlbums/addAlbum/getAlbum/addVisionDecision（album-store）+ type AlbumRecord（db）+ AlbumPage（./album）+ VisionLogPage（./vision-log）+ getPeerBg/setPeerBg/removePeerBg（contacts-store 既有 updateContact 同 module 追加）
+- 验证：bunx tsc --noEmit 全项目 exit 0；wechat.tsx 零 tsc 错误（剩余错误均在 chat.tsx 46-g 与 qq.tsx 46-f 归属文件，本任务不涉及）；bunx eslint src/components/apps/wechat.tsx exit 0（零 error 零 warning）；git diff --stat HEAD -- src/components/apps/wechat.tsx → 1 file changed, 258 insertions(+), 10 deletions(-)，持久化确认；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/wechat.tsx（+258/-10 共 268 行；git diff --stat HEAD 确认持久化）
+- 接通的 6 种 action 执行器：change-avatar（updateContact + sys + decision）/ change-moments-bg（setPeerBg + sys + decision）/ save-to-album（addAlbum + sys + decision + 刷新缓存）/ pick-album-avatar（缓存查 + updateContact + sys + decision）/ pick-album-bg（缓存查 + setPeerBg + sys + decision）/ pick-album-send（缓存查 + image msg + decision）
+- 接通的入口：MainScreen 我 tab「相册」→ AlbumPage（me.id 自己相册，allowEdit）；ChatSettingsPage 4 个新 prop → handleOpenAlbum/handleOpenVisionLog/handleResetAvatar/handleResetPeerBg → albumOverlay/visionLogOverlay 覆盖层渲染 AlbumPage/VisionLogPage（peer.id 的相册与决策日志）；MomentsPage peer 视图 peerId + getPeerBg 读专属封面 + 「恢复默认」按钮 removePeerBg
+- runAiTurn 注入：albumCacheRef（挂载预热 + 每轮 fire-and-forget 刷新）→ albumSummary（slice 20，desc/name 兜底「图片」）→ buildVisionRules → systemFull 数组「mediaRules 后/语音通话能力前」插入
+- tsc/eslint 状态：wechat.tsx 零 tsc 错误（exit 0）；eslint exit 0（零 error 零 warning）；剩余 tsc 错误均归属 chat.tsx（46-g）与 qq.tsx（46-f），不在本任务范围
+- 未完成/跳过：无；buildReplyMsgs 同步函数无法 await getAlbum，改读 albumCacheRef 缓存（save-to-album 落盘后刷新保证下一轮命中）；首轮 albumCacheRef 可能为空（buildVisionRules 退回基础规则，不阻断）；自聊 peer.id===me.id 路径在 commit*/send 函数已早返，buildReplyMsgs 视觉动作不会落到自聊场景
+
+---
+Task ID: 46-g
+Agent: chat.tsx 视觉管理集成子代理
+Task: 信息端接通 pick-album-avatar + runAiTurn 注入 buildVisionRules + 相册/日志回调
+
+Work Log:
+- 读 worklog 末尾 120 行确认 Task 46-a/b/c/d 成果（album-store CRUD + chat-rich 6 种视觉动作 + buildVisionRules + AlbumPage + VisionLogPage）；完整 Read 依赖文件确认签名：buildVisionRules(albumSummary: {id,desc}[]|null) 返回 string[]（默认注入【视觉自主决策】换头像/换背景/存相册；albumSummary 非空时追加【选图操作】+【相册清单】）；listAlbums/getAlbum/addVisionDecision 同 album-store；updateContact(id, {avatar}) 经 normalizeAvatar 校验 data URL 格式后落库；AlbumPage/VisionLogPage 均 default export（非 named）+ props 为 {contactId, title, onClose, allowEdit?, onPick?}
+- Read chat.tsx（3746 行）关键点：buildReplyMsgs 在 line 1087 useCallback、变量名 out/t/msgIdx、SmsMsg 系统行用 role:'assistant' + content:'' + sys:{text}（与 wx/qq 不同）；for 循环 `if (part.type === 'action')` 块结尾有 `continue; // 信息端无红包/转账动作`；ChatPeer interface 无 id 字段（peer.id 不存在，需用 wbContactId = storageKey.slice(2)）；startAiTurn 是同步函数（非 async），baseSys 数组在 line 1252 组装；crossCtxRef 在 line 864 useRef + useEffect 预热模式可参考
+- 改动 1（imports）：line 58 `import { extractRichActionParts } from '@/lib/chat-rich'` → `import { buildVisionRules, extractRichActionParts } from '@/lib/chat-rich'`；line 79 后加 `import AlbumPage from './album'` + `import VisionLogPage from './vision-log'`（default export 故无 {}）；line 90 后加 `import { listAlbums, getAlbum, addVisionDecision } from '@/lib/ios/album-store'`
+- 改动 2（albumSummaryRef + useEffect 预热）：在 crossCtxRef useEffect（line 876）后新增 albumSummaryRef + useEffect 块——memContactId 为空时 ref 置 null；非空时 listAlbums → slice(0,20).map({id, desc: desc||name||'图片'}) → 写 ref；带 alive 守卫避免卸载后写
+- 改动 3（容器层 state + handlers）：在 wbOpen 后新增 albumOpen/visionLogOpen/avatarOverride 三 state + 衍生 peerAvatarSrc = avatarOverride ?? peer.avatarSrc（顶栏头像 override 优先，切会话随组件重挂载复位回退 peer.avatarSrc）；在 settleUserBlockReq 后新增 handleOpenAlbum/handleOpenVisionLog（useCallback 简单切 state）+ handleResetAvatar（useCallback async：updateContact 传 avatar:null + 清 override）；两处 TODO 46-h 注释：state 块上方 + SmsChatSettingsPage JSX 上方各一条，注明需先在 chat-settings.tsx 加 onOpenAlbum/onOpenVisionLog/onResetAvatar props
+- 改动 4（startAiTurn 注入 buildVisionRules）：在 crossCtxRef fire-and-forget 刷新块（line 1266）后追加同模式 listAlbums fire-and-forget 刷新 albumSummaryRef（供下一轮使用）；在 baseSys 数组 stickersOn 行后、wbBlocks 行前插入 `...(wbContactId ? buildVisionRules(albumSummaryRef.current) : [])`——仅联系人会话注入（AI 助手 wbContactId 为 null 不注入）；信息端 albumSummary 通常为空 → buildVisionRules 只注入换头像规则（相册清单部分跳过），与任务文档预期一致
+- 改动 5（buildReplyMsgs pick-album-avatar 分支）：在 `if (part.type === 'action')` 块内、`continue; // 信息端无红包/转账动作` 之前插入新分支——`if (part.action.kind === 'pick-album-avatar' && wbContactId)` 块：targetId 为空 continue；用 albumSummaryRef.current 同步预检 targetId 命中（避免 await getAlbum 阻塞同步函数）；命中后推 sys 消息 `「${peerLabel}」从相册选了张图换头像` + t/msgIdx 自增；fire-and-forget void (async () => {...})()：getAlbum 二次校验 + album.contactId === wbContactId 校验 + updateContact(wbContactId, {avatar: album.src}) + setAvatarOverride(album.src) 即时刷新顶栏 + addVisionDecision 记审计日志；change-avatar / change-moments-bg / save-to-album / pick-album-bg / pick-album-send 5 种无分支处理则自然跳过到下方 continue（信息端静默丢弃）；deps 追加 setAvatarOverride（state 稳定）
+- 改动 6（渲染层接通）：JSX return 中 3 处 peer.avatarSrc 替换为 peerAvatarSrc（顶栏头像 line 2187-2188、SmsBlockReqCard avatar line 2275、SmsChatSettingsPage peerAvatar line 2635）——通知 avatar（line 1065 deliverAiMsg 内）保留 peer.avatarSrc 不动（46-h 再处理）；末尾 `</div>` 之前插入 albumOpen/visionLogOpen 渲染分支——`<div className="absolute inset-0 z-[60]"><AlbumPage contactId={wbContactId} title={`${peerLabel}的相册`} onClose={...} /></div>` 与 VisionLogPage 同模式；allowEdit 默认 true 让用户可手动加图（信息端无图，AI 不存相册——这是用户唯一给 AI peer 相册添图的入口，否则 pick-album-avatar 在信息端永远无相册可用）
+- 验证：bunx tsc --noEmit chat.tsx 零错误（全项目仅剩 qq.tsx 2 个 TS2614 错误——并行 46-f 子代理用了 named import 而非 default import，本任务不涉及）；bunx eslint src/components/apps/chat.tsx exit 0（零 error 零 warning）；git diff --stat HEAD -- src/components/apps/chat.tsx 显示 1 file changed, 131 insertions(+), 7 deletions(-) 持久化确认；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/chat.tsx（+131/-7 共 138 行改动；git diff --stat HEAD 确认持久化）
+- tsc/eslint 状态：chat.tsx 本身 tsc 零错误 / eslint exit 0（零 error 零 warning）；项目仅剩 qq.tsx 2 个 TS2614 错误（46-f 子代理 territory，本任务不涉及）
+- 接通能力：pick-album-avatar 落库（updateContact 写 contact.avatar + addVisionDecision 记审计）+ 即时顶栏头像刷新（avatarOverride state）；change-avatar/change-moments-bg/save-to-album/pick-album-bg/pick-album-send 5 种信息端静默丢弃；runAiTurn 注入 buildVisionRules 视觉自主决策规则（仅联系人会话）；AlbumPage/VisionLogPage 容器层渲染已就绪（z-60 覆盖层）
+- 未完成/留给 46-h：SmsChatSettingsPage 加 onOpenAlbum/onOpenVisionLog/onResetAvatar 三个 prop 入口（需先在 chat-settings.tsx 的 SmsChatSettingsPage 加 props，本任务不修改 chat-settings.tsx）；通知 avatar 与联系人列表 avatar 的 UI 刷新（pick-album-avatar 落库后父层 contacts state 刷新由 46-h 接通）
+
+---
+Task ID: 46-f
+Agent: qq.tsx 视觉管理集成子代理
+Task: QQ 端接通 6 种视觉动作执行器 + 抽屉相册入口 + 资料页封面 + 决策日志
+
+Work Log:
+- 读 worklog 末尾 120 行确认 Task 46-a/b/c/d 成果（albums/visionDecisions 表 + album-store CRUD + chat-rich 6 种动作 + buildVisionRules + album.tsx/vision-log.tsx UI）；确认本任务文件归属仅 src/components/apps/qq.tsx，wechat.tsx 由 46-e 独占、chat.tsx 由 46-g 独占、chat-settings.tsx 由 46-h 独占；dev server 后台运行不重启，绝对禁止 git 修改命令
+- Read 依赖文件确认签名：src/lib/chat-rich.ts（buildVisionRules(albumSummary:{id,desc}[]|null):string[]，6 种 RichActionKind）；src/lib/ios/album-store.ts（listAlbums/addAlbum/getAlbum/addVisionDecision）；src/lib/ios/contacts-store.ts（getPeerBg/setPeerBg/removePeerBg('qq', id) + updateContact）；src/components/apps/album.tsx（AlbumPage 默认导出，props {contactId,title,onClose,allowEdit?,onPick?}）；src/components/apps/vision-log.tsx（VisionLogPage 默认导出，props {contactId,title,onClose}）
+- rg 定位 qq.tsx 关键位置（12400+ 行超大文件）：MeDrawer listRows "相册" 项（line 8842）、FriendProfilePage（line 7583）、runAiTurn useCallback（line 3170）、buildReplyMsgs useCallback（line 3045）、MainRoute type（line 11902）、MainScreen（line 11923）、MeDrawer 调用（line 12456）；确认 QQMsg.img={src?,desc?} 但实际图片 dataURL 存 content（QqImageBubble 读 m.content，line 4690），与微信端不同；sys 消息写法 {id,role:'peer',content:'',time,kind:'sys',sys:{text}}；buildReplyMsgs 用 cur（loadMsgs 加载）作为消息查找源
+- 改动 1（导入）：contacts-store 加 getPeerBg/setPeerBg/removePeerBg；新增 album-store 的 listAlbums/addAlbum/getAlbum/addVisionDecision + AlbumRecord type；chat-rich 加 buildVisionRules；AlbumPage/VisionLogPage 用默认导入（首次 named import 报 TS2614，已改 default import）
+- 改动 2（MainRoute）：追加两条 union 成员 { page: 'album'; albumContactId; albumTitle } 和 { page: 'vision-log'; logContactId; logTitle }，与既有 17 条 union 并列
+- 改动 3（MeDrawer 相册入口）：MeDrawer 函数签名追加 onOpenAlbum: () => void；listRows "相册" 项 onClick 从 onToast 占位改为 close()+setTimeout(onOpenAlbum, 240)（与"收藏/表情/钱包"同款延时关闭抽屉模式）；MainScreen 渲染 MeDrawer 时 onOpenAlbum 传 () => { setDrawerOpen(false); handleOpenAlbum(me.id, '我的相册') }
+- 改动 4（FriendProfilePage 封面 banner）：在顶栏与头像行之间插入 banner——useState peerBg + useEffect 调 getPeerBg('qq', peer.id) 异步加载（reloadPeerBg useCallback 含 [peer.id] dep）+ handleResetBanner useCallback 调 removePeerBg 后 setPeerBg(null) + onToast；banner 高度 h-32，有 peerBg 渲 <img object-cover>，无则 linear-gradient(135deg,#5B7CFA→#8A6BFF→#C8A8FF) 渐变兜底；peerBg 存在时右上角渲染"恢复默认"按钮（Undo2 图标 + bg-black/40 backdrop-blur）；头像行从 pt-4 改 pt-2 -mt-10 配 ring-4 ring-white 让头像叠在 banner 下边缘（对照微信朋友圈 peer 视图布局）
+- 改动 5（ChatPage albumCacheRef + runAiTurn async + buildVisionRules 注入）：ChatPage 加 albumCacheRef=useRef<AlbumRecord[]>([])，挂载时预热 listAlbums，避免接力回复（bgEnqueueBatch 路径未走 runAiTurn）发生时缓存为空导致查不到；runAiTurn 改 async 函数签名（调用方 void 忽略 Promise，runAiTurnRef 类型 () => void 仍兼容 async）；systemFull 组装前 await listAlbums(peer.id) 拿本联系人相册 + 同步写 albumCacheRef.current；albumSummary 用 albumList.slice(0,20).map({id, desc: a.desc||a.name||'图片'})；visionRules=buildVisionRules(albumSummary) 末尾 spread 进 systemFull 数组（紧跟 timeBlock 之后、wbBlocks.afterSystem 之前）
+- 改动 6（buildReplyMsgs 6 种动作分支）：在 isGroupSocialAction 分支与 applyAiActions 兜底之间插入两段分支
+  - 分支 A（change-avatar/change-moments-bg/save-to-album）：targetId 按 id 在 cur 找对应图片消息，空则倒序找最后一条 role='me' 的 image 兜底；QQ 图片 dataURL 在 content（不是 img.src），校验 content.startsWith('data:image/') 才用；change-avatar 调 updateContact + sys 文案「${peer.name}」换了头像 + addVisionDecision；change-moments-bg 调 setPeerBg('qq',peer.id,src) + sys「${peer.name}」更换了背景封面 + addVisionDecision；save-to-album 调 addAlbum({origin:'ai',desc:imgMsg.img?.desc}) + then 回调把新条目 push 进 albumCacheRef.current（避免本回合后续 pick-album-* 引用刚存的条目查不到）+ sys「${peer.name}」存了一张图到相册 + addVisionDecision；sys 时间 t+=1（与既有 sys 写法一致）
+  - 分支 B（pick-album-avatar/pick-album-bg/pick-album-send）：targetId 必须原样抄自【相册清单】，在 albumCacheRef.current 同步 find；校验 album.contactId === peer.id 防跨角色引用，查不到/不属于本角色 continue 静默丢弃；pick-album-avatar 调 updateContact + sys「从相册选了张图换头像」+ addVisionDecision；pick-album-bg 调 setPeerBg + sys「从相册选了张图换背景」+ addVisionDecision；pick-album-send out.push image 消息（content=src + img:{src,desc:album.desc}，QQ content 存 dataURL 同时 img.src 也填以保持与微信端一致）+ 时间 t+=600+random（与普通图片消息同款节奏，非 sys +1）+ addVisionDecision
+  - 每个分支末尾 continue 跳过 applyAiActions 兜底；change-avatar/pick-album-avatar 的 updateContact 不立即 refreshContacts（peer.avatar 反应式刷新留 // TODO 46-h 接通，避免改 ChatPage API 边界）
+- 改动 7（容器层状态与回调 + 渲染）：MainScreen 加 4 个 useCallback：handleOpenAlbum(contactId,title) 调 setRoute({page:'album',...})；handleOpenVisionLog(contactId,title) 调 setRoute({page:'vision-log',...})；handleResetAvatar(_contactId) 占位 toast「相册选图换头像：TODO 46-h 接通」；handleResetPeerBg(contactId) 调 removePeerBg('qq',contactId)+toast「已恢复默认封面」（FriendProfilePage banner 自带 useEffect 仅刷新本组件，46-h 接通后由 46-h 统一从 ChatSettingsPage 调用）；MainScreen route switch 在 group-chat 与 tabs 之间插入 album/vision-log 两分支：album 调 <AlbumPage contactId=albumContactId title=albumTitle onClose=()=>openTabs('消息') allowEdit={albumContactId===me.id} />（用户自己相册可编辑，peer 相册只读），vision-log 调 <VisionLogPage contactId=logContactId title=logTitle onClose=()=>openTabs('消息') />；prop 接通处加注释 // TODO 46-h 接通（onPick→handleResetAvatar/handleResetPeerBg 分流）
+- 每步 Edit 后 `git diff --stat HEAD -- src/components/apps/qq.tsx` 验证：最终 211 行改动（+204/-7）持久化确认
+- 验证：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/qq.tsx exit 0（零 error 零 warning，超大文件 [BABEL] Note 提示正常）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx（+204/-7 共 211 行；git diff --stat HEAD 确认持久化）
+- 5 处改动：①MainRoute 加 album/vision-log 两条 union ②MeDrawer 加 onOpenAlbum prop + 相册 onClick 接通 ③FriendProfilePage 加封面 banner + 恢复默认按钮 ④ChatPage 加 albumCacheRef + runAiTurn 改 async 注入 buildVisionRules ⑤buildReplyMsgs 加 6 种视觉动作分支 + MainScreen 加 4 个容器层回调 + 渲染 AlbumPage/VisionLogPage
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（全项目零错误）；bunx eslint src/components/apps/qq.tsx exit 0（零 error 零 warning）
+- 未完成/留 46-h：①change-avatar/pick-album-avatar 后调 refreshContacts 让聊天页 peer.avatar 反应式刷新（需把 refreshContacts 通过新 prop 传入 ChatPage，留 // TODO 46-h 接通）；②AlbumPage 的 onPick 回调分流 handleResetAvatar/handleResetPeerBg（需 AlbumPage 选择模式 + onPick 类型扩展，留 // TODO 46-h 接通）；③FriendProfilePage 加 peer 相册入口（点击「他的QQ空间」→ handleOpenAlbum(peer.id, '${peer.name}的相册') 只读模式，留 46-h 一起做）；④ChatSettingsPage 接入「视觉决策日志」「相册」入口（chat-settings.tsx 由 46-h 独占）

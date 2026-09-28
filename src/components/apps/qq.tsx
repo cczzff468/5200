@@ -186,7 +186,9 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import type { AlbumRecord } from '@/lib/ios/db';
 import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -194,6 +196,7 @@ import type { Sticker } from '@/lib/ios/stickers';
 import {
   buildRichRules,
   buildActionRules,
+  buildVisionRules,
   cleanBubbleText,
   extractRichActionParts,
   actionVerb,
@@ -256,6 +259,8 @@ import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLon
 import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import { QqGroupChatPage, QqGroupCreatePage, QqGroupInfoPage, QqGroupAvatar, qqGroupRowId } from './qq-group';
+import AlbumPage from './album';
+import VisionLogPage from './vision-log';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import {
   dissolveGroup as dissolveGroupRecord,
@@ -2242,6 +2247,19 @@ function ChatPage({
       alive = false;
     };
   }, [peer.id, me.name]);
+  // 46-f：相册缓存——runAiTurn 开回合时刷新本联系人相册（listAlbums），buildReplyMsgs
+  // 同步查 pick-album-* 目标（getAlbum 是 async 不能在同步循环里 await，改预取缓存）。挂载时
+  // 也预热一次，避免接力回复（bgEnqueueBatch 路径，未走 runAiTurn）发生时缓存为空导致查不到
+  const albumCacheRef = useRef<AlbumRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void listAlbums(peer.id).then((list) => {
+      if (alive) albumCacheRef.current = list;
+    });
+    return () => {
+      alive = false;
+    };
+  }, [peer.id]);
   /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
   const [blk, setBlk] = useState<BlockEntry>(() => loadBlock('qq', peer.id));
   // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；ChatPage 按 peer.id keyed 重挂载，会话切换自然复位）
@@ -3114,6 +3132,76 @@ function ChatPage({
             }
             continue;
           }
+          // 46-f：视觉自主决策动作——[换头像:图片消息ID] / [换朋友圈背景:图片消息ID] / [存相册:图片消息ID]
+          // targetId 按 id 在 cur 里找对应图片消息（AI 必须从最近用户发来的图片消息里原样抄 ID）；
+          // 空 targetId 兜底取当回合最后一条图片消息（连续多图时取最新的一张）。QQ 端图片 dataURL
+          // 存在 content 字段（QqImageBubble 读 m.content），与微信端 img.src 不同——这里取 content。
+          if (part.action.kind === 'change-avatar' || part.action.kind === 'change-moments-bg' || part.action.kind === 'save-to-album') {
+            const targetId = part.action.targetId;
+            let imgMsg: QQMsg | null = null;
+            if (targetId) {
+              imgMsg = cur.find((m) => m.id === targetId && m.kind === 'image') ?? null;
+            }
+            if (!imgMsg) {
+              for (let i = cur.length - 1; i >= 0; i--) {
+                if (cur[i].kind === 'image' && cur[i].role === 'me') {
+                  imgMsg = cur[i];
+                  break;
+                }
+              }
+            }
+            if (!imgMsg || !imgMsg.content || !imgMsg.content.startsWith('data:image/')) continue;
+            const src = imgMsg.content;
+            if (part.action.kind === 'change-avatar') {
+              // TODO 46-h 接通：调 MainScreen 的 handleResetAvatar 链路 + refreshContacts 反应式刷新聊天页 peer.avatar
+              void updateContact(peer.id, { avatar: src }).catch(() => {});
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了头像` } });
+              t += 1;
+              void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'change-avatar', targetId: imgMsg.id, imgSrc: src });
+            } else if (part.action.kind === 'change-moments-bg') {
+              void setPeerBg('qq', peer.id, src).catch(() => {});
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」更换了背景封面` } });
+              t += 1;
+              void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'change-moments-bg', targetId: imgMsg.id, imgSrc: src });
+            } else {
+              void addAlbum(peer.id, src, { origin: 'ai', desc: imgMsg.img?.desc }).then((rec) => {
+                // 同步刷新相册缓存，避免本回合后续 [选图设头像/背景/发送] 引用刚存的条目时查不到
+                albumCacheRef.current = [...albumCacheRef.current, rec];
+              }).catch(() => {});
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」存了一张图到相册` } });
+              t += 1;
+              void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'save-to-album', targetId: imgMsg.id, imgSrc: src });
+            }
+            continue;
+          }
+          // 46-f：从相册选图——[选图设头像:相册条目ID] / [选图设背景:相册条目ID] / [选图发送:相册条目ID]
+          // targetId 必须原样抄自【相册清单】；用 albumCacheRef.current 同步查（runAiTurn 开回合时刷新）。
+          // 校验 album.contactId === peer.id 防止跨角色引用；查不到/不属于本角色静默丢弃，避免误发他图。
+          if (part.action.kind === 'pick-album-avatar' || part.action.kind === 'pick-album-bg' || part.action.kind === 'pick-album-send') {
+            const albumTargetId = part.action.targetId;
+            if (!albumTargetId) continue;
+            const album = albumCacheRef.current.find((a) => a.id === albumTargetId) ?? null;
+            if (!album || album.contactId !== peer.id) continue;
+            const src = album.src;
+            if (part.action.kind === 'pick-album-avatar') {
+              // TODO 46-h 接通：handleResetAvatar + refreshContacts 反应式刷新 peer.avatar
+              void updateContact(peer.id, { avatar: src }).catch(() => {});
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换头像` } });
+              t += 1;
+              void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'pick-album-avatar', targetId: album.id, imgSrc: src });
+            } else if (part.action.kind === 'pick-album-bg') {
+              void setPeerBg('qq', peer.id, src).catch(() => {});
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换背景` } });
+              t += 1;
+              void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'pick-album-bg', targetId: album.id, imgSrc: src });
+            } else {
+              // 选图发送：QQ 端图片 dataURL 存 content（QqImageBubble 读 m.content），同时 img.src 也填上以保持与微信端一致
+              out.push({ id: uid(), role: 'peer', content: src, time: t, kind: 'image', img: { src, desc: album.desc } });
+              t += 600 + Math.floor(Math.random() * 600);
+              void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'pick-album-send', targetId: album.id, imgSrc: src });
+            }
+            continue;
+          }
           const applied = applyAiActions([part.action], cur, peer, t);
           cur = applied.msgs;
           out.push(...applied.notices, ...applied.extras);
@@ -3150,7 +3238,7 @@ function ChatPage({
   );
 
   const runAiTurn = useCallback(
-    (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => {
+    async (userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => {
     // 40-a 拉黑拦截（第一层）：用户拉黑角色（byUser）后，本 App 内 AI 不能发任何消息——回合静默取消。
     // 唯一例外=「解除拉黑申请卡片」仍可发起（charRequestOnlyOf 放行模式：回合照常请求，但回复中
     // 除申请卡片/系统行外的正文由 buildReplyMsgs 丢弃）；申请同意后的回应回合因 byUser 已清自然放行。
@@ -3316,6 +3404,21 @@ function ChatPage({
       buildVoicePlaceholderRule(base),
       buildImagePlaceholderRule(base, { excludeIds: turnImageIds }),
     ].filter(Boolean);
+    // 46-f：相册清单预取 + 视觉自主决策规则注入。buildVisionRules 默认注入【换头像/换背景/存相册】规则；
+    // 相册非空时追加【选图设头像/背景/发送】+【相册清单】（最多 20 条，desc 截 30 字防提示词过长）。
+    // 同时刷新 albumCacheRef 给 buildReplyMsgs 的 pick-album-* 分支同步查用（getAlbum async 不能在
+    // 同步循环里 await，改预取缓存：本回合 buildReplyMsgs 读到的就是本次 listAlbums 的结果）
+    let albumSummary: { id: string; desc: string }[] | null = null;
+    try {
+      const albumList = await listAlbums(peer.id);
+      albumCacheRef.current = albumList;
+      if (albumList.length > 0) {
+        albumSummary = albumList.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
+      }
+    } catch {
+      // 读相册失败不阻塞聊天主流程，仅放弃本回合的【选图操作】规则
+    }
+    const visionRules = buildVisionRules(albumSummary);
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -3333,6 +3436,7 @@ function ChatPage({
       ...(mediaRules.length > 0 ? [mediaRules.join('\n\n')] : []),
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
+      ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
     ]
@@ -7593,6 +7697,21 @@ function FriendProfilePage({
   // 跨 App 跳转：点「编辑资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
+  // 46-f：好友资料页顶部封面 banner——getPeerBg 读出该联系人专属背景（按 peer.id 隔离）；
+  // 无则渐变兜底（QQ 蓝紫色调）；右上角"恢复默认"按钮调 removePeerBg 后刷新本组件 + toast
+  const [peerBg, setPeerBg] = useState<string | null>(null);
+  const reloadPeerBg = useCallback(() => {
+    void getPeerBg('qq', peer.id).then((bg) => setPeerBg(bg ?? null));
+  }, [peer.id]);
+  useEffect(() => {
+    reloadPeerBg();
+  }, [reloadPeerBg]);
+  const handleResetBanner = useCallback(() => {
+    void removePeerBg('qq', peer.id).then(() => {
+      setPeerBg(null);
+      onToast('已恢复默认封面');
+    });
+  }, [peer.id, onToast]);
   // 点赞数：本地持久化，点击 +1（对照 QQ 资料卡点赞）
   const [likes, setLikes] = useState<number>(() => {
     try {
@@ -7634,9 +7753,35 @@ function FriendProfilePage({
       </div>
 
       <div className="flex-1 overflow-y-auto" data-testid="qq-fprofile-body">
-        {/* 头像 + 名字/QQ号 + 点赞 */}
-        <div className="flex items-start gap-4 px-5 pt-4">
-          <QqAvatar src={peer.avatar} alt={peer.name} size={84} />
+        {/* 46-f：封面 banner（getPeerBg 读出按 peer.id 隔离的专属背景；无则渐变兜底；右上"恢复默认"按钮调 removePeerBg） */}
+        <div className="relative h-32 w-full overflow-hidden">
+          {peerBg ? (
+            <img src={peerBg} alt="封面" className="absolute inset-0 h-full w-full object-cover" />
+          ) : (
+            <div
+              className="absolute inset-0"
+              style={{ background: 'linear-gradient(135deg, #5B7CFA 0%, #8A6BFF 50%, #C8A8FF 100%)' }}
+              aria-hidden="true"
+            />
+          )}
+          {peerBg && (
+            <button
+              type="button"
+              data-testid="qq-fprofile-reset-banner"
+              onClick={handleResetBanner}
+              className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-black/40 px-3 py-1 text-[12px] text-white backdrop-blur-sm active:bg-black/60"
+            >
+              <Undo2 className="h-3.5 w-3.5" strokeWidth={2.2} />
+              恢复默认
+            </button>
+          )}
+        </div>
+
+        {/* 头像 + 名字/QQ号 + 点赞（头像叠在 banner 下边缘，对照微信朋友圈 peer 视图布局） */}
+        <div className="relative flex items-start gap-4 px-5 pt-2 -mt-10">
+          <div className="shrink-0 rounded-full ring-4 ring-white dark:ring-[#111214]">
+            <QqAvatar src={peer.avatar} alt={peer.name} size={84} />
+          </div>
           <div className="min-w-0 flex-1 pt-2">
             <div className="flex items-center gap-1.5">
               <span className="min-w-0 truncate text-[20px] font-bold leading-tight">{peer.name}</span>
@@ -8776,6 +8921,7 @@ function MeDrawer({
   onOpenStickers,
   onOpenFavorites,
   onOpenSettings,
+  onOpenAlbum,
   onSwitchAccount,
   onPatchUser,
   onToast,
@@ -8787,6 +8933,7 @@ function MeDrawer({
   onOpenStickers: () => void;
   onOpenFavorites: () => void;
   onOpenSettings: () => void;
+  onOpenAlbum: () => void;
   onSwitchAccount: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
   onToast: (m: string) => void;
@@ -8833,7 +8980,7 @@ function MeDrawer({
   };
 
   const listRows: { icon: React.ReactNode; label: string; hint?: string; onClick: () => void }[] = [
-    { icon: <ImageIcon className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '相册', onClick: () => onToast('相册暂未开放') },
+    { icon: <ImageIcon className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '相册', onClick: () => { close(); window.setTimeout(onOpenAlbum, 240); } },
     { icon: <Star className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '收藏', onClick: () => { close(); window.setTimeout(onOpenFavorites, 240); } },
     { icon: <Smile className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '表情', onClick: () => { close(); window.setTimeout(onOpenStickers, 240); } },
     { icon: <Wallet className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '钱包', onClick: () => { close(); window.setTimeout(onOpenWallet, 240); } },
@@ -11911,7 +12058,9 @@ type MainRoute =
   | { page: 'favorites' }
   | { page: 'group-create' }
   | { page: 'group-chat'; groupId: string }
-  | { page: 'group-info'; groupId: string };
+  | { page: 'group-info'; groupId: string }
+  | { page: 'album'; albumContactId: string; albumTitle: string }
+  | { page: 'vision-log'; logContactId: string; logTitle: string };
 
 function MainScreen({
   me,
@@ -11955,6 +12104,36 @@ function MainScreen({
   const openTabs = useCallback((tab: '消息' | '联系人' | '动态') => setRoute({ page: 'tabs', tab }), []);
   const openChatOf = useCallback((c: ContactRecord) => setRoute({ page: 'chat', contactId: c.id }), []);
   const openGroupOf = useCallback((g: ChatGroup) => setRoute({ page: 'group-chat', groupId: g.id }), []);
+
+  // 46-f：相册 / 视觉决策日志 / 头像 / 朋友圈背景的容器层回调（prop 接通由 46-h 完成）。
+  // 容器层只定义状态与函数，子组件（MeDrawer/FriendProfilePage/ChatSettingsPage）的 prop 接通
+  // 留注释 // TODO 46-h 接通，避免本任务跨越多个文件边界。
+  const handleOpenAlbum = useCallback((contactId: string, title: string) => {
+    setRoute({ page: 'album', albumContactId: contactId, albumTitle: title });
+  }, []);
+  const handleOpenVisionLog = useCallback((contactId: string, title: string) => {
+    setRoute({ page: 'vision-log', logContactId: contactId, logTitle: title });
+  }, []);
+  const handleResetAvatar = useCallback(
+    async (_contactId: string) => {
+      // TODO 46-h 接通：从相册选图重设头像（打开相册 onPick → getAlbum → updateContact → refreshContacts）
+      showToast('相册选图换头像：TODO 46-h 接通');
+    },
+    [showToast]
+  );
+  const handleResetPeerBg = useCallback(
+    async (contactId: string) => {
+      // TODO 46-h 接通：含 FriendProfilePage banner 反应式刷新（banner 组件自有 useEffect 已刷新本组件，
+      // 此处仅做容器层 toast；46-h 接通后由 46-h 统一从 ChatSettingsPage 调用）
+      try {
+        await removePeerBg('qq', contactId);
+        showToast('已恢复默认封面');
+      } catch {
+        showToast('恢复失败');
+      }
+    },
+    [showToast]
+  );
 
   // 灵动岛通知点击跳转：打开通知对应的单聊/群聊（QQ 已打开时由事件驱动，未打开时挂载后自动消费 pending）
   useEffect(() => {
@@ -12188,6 +12367,20 @@ function MainScreen({
           }}
           onToast={showToast}
         />
+      ) : route.page === 'album' ? (
+        <AlbumPage
+          contactId={route.albumContactId}
+          title={route.albumTitle}
+          onClose={() => openTabs('消息')}
+          allowEdit={route.albumContactId === me.id}
+          // TODO 46-h 接通：onPick → handleResetAvatar / handleResetPeerBg（按选择模式分流）
+        />
+      ) : route.page === 'vision-log' ? (
+        <VisionLogPage
+          contactId={route.logContactId}
+          title={route.logTitle}
+          onClose={() => openTabs('消息')}
+        />
       ) : route.page === 'tabs' || staleGroupRoute ? (
         <>
           <div className="min-h-0 flex-1 overflow-hidden pt-[54px]">
@@ -12269,6 +12462,10 @@ function MainScreen({
           onOpenWallet={() => setRoute({ page: 'wallet' })}
           onOpenStickers={() => setRoute({ page: 'stickers' })}
           onOpenFavorites={() => setRoute({ page: 'favorites' })}
+          onOpenAlbum={() => {
+            setDrawerOpen(false);
+            handleOpenAlbum(me.id, '我的相册');
+          }}
           onOpenSettings={() => {
             setDrawerOpen(false);
             setRoute({ page: 'settings' });

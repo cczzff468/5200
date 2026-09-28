@@ -1,4 +1,4 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, type DBSchema, type IDBPDatabase, type IndexNames } from 'idb';
 import type { ContactRecord } from '@/lib/contacts';
 
 /**
@@ -195,6 +195,29 @@ export interface KvRecord {
 /** 联系人记录：CHAR（AI 角色）/ USER（我自己）/ NPC（配角），四 App 共享（存本地 IndexedDB） */
 export type { ContactRecord };
 
+/** 相册条目：按联系人（AI 角色）隔离的图片库，可被 AI 视觉决策引用作头像/朋友圈背景/聊天图等 */
+export interface AlbumRecord {
+  id: string;            // 条目 ID（genId()）
+  contactId: string;     // 拥有者联系人 ID（按角色隔离）
+  src: string;           // 图片本体 data URL
+  desc?: string;         // 识图描述（可选）
+  name?: string;         // 备注/文件名（可选）
+  origin: 'user' | 'ai';  // 来源：用户手动 / AI 存入
+  createdAt: number;
+}
+
+/** 视觉决策日志：AI 调用视觉理解后选择的目标操作（换头像/换朋友圈背景/存入相册/挑相册作头像/背景/发送） */
+export interface VisionDecisionRecord {
+  id: string;
+  contactId: string;
+  app: 'wx' | 'qq' | 'sms';
+  action: 'change-avatar' | 'change-moments-bg' | 'save-to-album' | 'pick-album-avatar' | 'pick-album-bg' | 'pick-album-send';
+  targetId: string;     // album 条目 id 或图片消息 id
+  imgSrc?: string;      // 涉及图片 src（小图存档）
+  reason?: string;      // AI 理由（可选）
+  createdAt: number;
+}
+
 // ---------------- Schema ----------------
 
 interface IOSDB extends DBSchema {
@@ -211,6 +234,8 @@ interface IOSDB extends DBSchema {
   'call-logs': { key: string; value: CallLogRecord; indexes: { createdAt: number } };
   voicemails: { key: string; value: VoicemailRecord; indexes: { createdAt: number } };
   contacts: { key: string; value: ContactRecord };
+  albums: { key: string; value: AlbumRecord; indexes: { contactId: string; createdAt: number } };
+  visionDecisions: { key: string; value: VisionDecisionRecord; indexes: { contactId: string; createdAt: number } };
   settings: { key: string; value: AppSettingRecord };
   kv: { key: string; value: KvRecord };
 }
@@ -229,11 +254,13 @@ export type IOSStoreName =
   | 'call-logs'
   | 'voicemails'
   | 'contacts'
+  | 'albums'
+  | 'visionDecisions'
   | 'settings'
   | 'kv';
 
 const DB_NAME = 'ios-phone-db';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 let dbPromise: Promise<IDBPDatabase<IOSDB>> | null = null;
 
@@ -282,6 +309,19 @@ function getDB(): Promise<IDBPDatabase<IOSDB>> {
           // localStorage → IndexedDB 迁移目标（聊天消息/记忆/表情包/钱包等中大容量模块）
           db.createObjectStore('kv', { keyPath: 'key' });
         }
+        if (oldVersion < 7) {
+          // AI 视觉相册（按联系人隔离）+ 视觉决策日志：头像/朋友圈背景/聊天图等场景的图片本体与决策历史
+          if (!db.objectStoreNames.contains('albums')) {
+            const albums = db.createObjectStore('albums', { keyPath: 'id' });
+            albums.createIndex('contactId', 'contactId');
+            albums.createIndex('createdAt', 'createdAt');
+          }
+          if (!db.objectStoreNames.contains('visionDecisions')) {
+            const vds = db.createObjectStore('visionDecisions', { keyPath: 'id' });
+            vds.createIndex('contactId', 'contactId');
+            vds.createIndex('createdAt', 'createdAt');
+          }
+        }
       },
     });
   }
@@ -319,6 +359,21 @@ export const localDB = {
   async count<K extends IOSStoreName>(store: K): Promise<number> {
     const db = await getDB();
     return db.count(store);
+  },
+
+  /**
+   * 按 index 取全部条目（idb getAllFromIndex 封装）：用于按 contactId 查某联系人的所有相册/视觉决策。
+   * 返回值按索引顺序（非按 createdAt 排序），调用方需自行排序。
+   * query 类型 idb 限定为该 index 对应的 value 类型（string/number 等），这里放宽到 IDBValidKey
+   *（string/number/Date 等），运行时由 IndexedDB 原生 API 校验，调用方需保证 query 类型与 index 匹配。
+   */
+  async getAllFromIndex<K extends IOSStoreName>(
+    store: K,
+    index: IndexNames<IOSDB, K>,
+    query: IDBValidKey,
+  ): Promise<IOSDB[K]['value'][]> {
+    const db = await getDB();
+    return db.getAllFromIndex(store, index, query as unknown as IDBKeyRange);
   },
 };
 
