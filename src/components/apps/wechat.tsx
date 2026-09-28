@@ -7373,8 +7373,9 @@ function MomentRow({
   /** 编辑动态正文（自己的和 AI 的都可以编辑；好友朋友圈页不传） */
   onEditRequest?: () => void;
 }) {
-  /** 48-6：朋友圈设置·折叠中文译文（组件挂载时读一次，避免每次 render 读 kv；用户改设置后跳回本页重新挂载可生效） */
-  const [foldByDefault] = useState(() => getMomentsSettings().foldChineseTranslation);
+  /** 48-6：朋友圈设置·折叠中文译文（组件挂载时读一次，避免每次 render 读 kv；用户改设置后跳回本页重新挂载可生效）。
+   *  feat-64：设置按平台独立（只读微信朋友圈这一份） */
+  const [foldByDefault] = useState(() => getMomentsSettings('wx').foldChineseTranslation);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState('');
   /** 回复目标：点某条评论设置（再点一次取消），带评论 id（回复 AI 评论可触发多轮） */

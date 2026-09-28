@@ -9980,8 +9980,9 @@ function ZonePage({
   const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
   /** 长按删除的评论（确认弹层） */
   const [delComment, setDelComment] = useState<{ postId: string; commentId: string; author: string } | null>(null);
-  /** 朋友圈/空间动态设置缓存（mount 时读一次 kv，避免每次 render 重读） */
-  const [momentsSettings] = useState(() => getMomentsSettings());
+  /** 朋友圈/空间动态设置缓存（mount 时读一次 kv，避免每次 render 重读）。
+   *  feat-64：设置按平台独立（只读 QQ 空间这一份） */
+  const [momentsSettings] = useState(() => getMomentsSettings('qq'));
   /** 长按计时器 + 起点坐标（移动超阈值视为滚动取消）+ 长按后拦截紧随的 click */
   const pressRef = useRef<{ timer: number | null; x: number; y: number }>({ timer: null, x: 0, y: 0 });
   const suppressClickRef = useRef(false);

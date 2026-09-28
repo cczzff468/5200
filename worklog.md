@@ -10358,3 +10358,37 @@ Work Log:
 Stage Summary:
 - 修改文件：src/components/apps/moments-settings.tsx（204 insertions / 191 deletions）
 - 核心成果：①设置页极简化（去图标/去副标题/去渐变，iOS 原生风纯文字分组）②节奏预设确认分钟级区间 活跃30分钟-2小时/自然2-4小时/安静6-12小时，改用 Segmented Control 呈现③自定义间隔交叉钳制 + 脏数据自愈④总开关联动淡出⑤wx/qq 双平台主题色适配 + 深色模式全链路浏览器验证通过
+
+---
+Task ID: feat-64
+Agent: 主协调者（Z.ai Code）
+Task: ①修复预览不显示（dev server 挂掉）②微信APP与QQAPP发表动态完全分开（设置存储/引擎调度/立即发帖互不影响）③朋友圈/空间动态互动设置界面再美化（简约风）
+
+Work Log:
+- 预览修复：dev server 进程退出（curl 0000），nohup bun run dev 重启恢复 HTTP 200
+- 数据层（src/lib/ios/moments-settings.ts 重写存储部分）：
+  - 存储键从共享单键 moments-settings → 每平台独立键 moments-settings:wx / moments-settings:qq
+  - 旧共享键一次性拆分迁移：首次读某平台时若平台键不存在且旧共享键存在 → 解析（含 v1/v2 小时→分钟迁移）后作为该平台初始副本写入，两平台各拿一份相同起点后互不影响；旧键保留不再读取
+  - API 加平台参数：getMomentsSettings(app) / saveMomentsSettings(app, patch) / resetMomentsSettings(app)；本地定义 MomentsApp='wx'|'qq' 防与 moments.ts 循环 import
+- 引擎层（src/lib/moments.ts，6 处调用点）：
+  - enqueuePostInteractions / enqueueCharReply / aiPostMoment / aiCommentOnMoment / drainInteractions 全部改为按 platform 读取该平台设置（评论延迟、双语、点赞/评论概率等）
+  - runAutoPosts 重构：设置读取移入平台循环内——每平台各自的 autoPostEnabled / min/max 间隔独立判定，微信关了自动发帖不影响 QQ 照发
+- UI 层（src/components/apps/moments-settings.tsx 重写）：
+  - 所有读写带 app 参数；PLATFORM_META 集中管理平台主题色+文案（scopeName/otherName/postAction）
+  - 页脚标注作用域：「…（仅作用于微信朋友圈）/（仅作用于QQ空间）」；底部两行提示「本页设置仅作用于X，与Y互不影响」
+  - 恢复默认确认弹窗文案明确「只重置当前平台，另一 App 不受影响」
+  - NumberField 改 chip 风：数字+单位同在一个浅灰圆角容器（bg-black/5 dark:bg-white/9），无边框，隐藏原生 spinner，加 aria-label
+  - 立即发帖按钮加 font-medium；Segmented/滑杆/开关保持 feat-63 形态
+- App 侧两处调用点：wechat.tsx MomentsPage foldByDefault → getMomentsSettings('wx')；qq.tsx ZonePage momentsSettings → getMomentsSettings('qq')
+- 浏览器端到端验证（agent-browser 420×900，合成 PointerEvent 解锁/翻页/点按——本环境鼠标子系统失效，全部交互改 eval 合成事件）：
+  - 种子数据：IndexedDB 直写 ios-phone-db/contacts（小陆 user 123456/123456 + 陈默/苏晴 char，wx+qq 双好友）
+  - 分离验证：微信切「安静」→ kv moments-settings:wx = 360/720 ✓；QQ 打开仍「活跃 30分钟-2小时」→ moments-settings:qq = 30/120 未受影响 ✓；QQ 点赞概率拉 80% → wx 仍 50% ✓（IndexedDB 双键确认）
+  - 立即发帖分开验证：微信设置页「立即发帖」→ 微信自己的 AskPostSheet（微信好友，点陈默 → POST /api/moments/generate 200，动态进朋友圈信息流）✓；QQ 设置页「立即发帖」→ QQ 自己的 AskPostSheet（Q 头像好友列表）✓
+  - 输入框渲染：QQ 设置页数字框 30/30/30/3、滑杆 80/50 ✓
+  - VLM 视觉检查：简约专业 iOS 分组风、无排版错乱、分段控制器选中态清晰、整体协调 ✓
+  - bunx tsc --noEmit exit 0；bun run lint exit 0；dev.log 无运行时错误
+- 注意事项（后续会话）：agent-browser 的 mouse 命令在本环境为空操作（事件不达页面），需用 eval 合成 PointerEvent/MouseEvent 交互；主屏翻页起手点选 y=500 空白区；App 打开需完整 pointerdown+pointerup+click 序列；退 App 用底部上滑开切换器后上滑卡片
+
+Stage Summary:
+- 修改文件：src/lib/ios/moments-settings.ts、src/lib/moments.ts、src/components/apps/moments-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+- 核心成果：①微信/QQ 动态设置完全分离（存储/引擎/立即发帖三层全部按平台独立，含旧共享数据无损拆分迁移）②设置页简约化精修（chip 输入框、作用域标注、平台文案集中管理）③dev server 挂掉重启恢复预览

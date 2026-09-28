@@ -20,20 +20,35 @@ import {
 } from '@/lib/ios/moments-settings';
 
 export interface MomentsSettingsPageProps {
-  /** 平台：wx=朋友圈设置 / qq=空间动态设置 */
+  /** 平台：wx=朋友圈设置 / qq=空间动态设置（feat-64：两个 App 的设置各自独立存储，互不影响） */
   app: 'wx' | 'qq';
   /** 返回上一级 */
   onBack: () => void;
   /** 弹一条本地提示 */
   onToast: (m: string) => void;
-  /** 立即发帖入口（父级打开 AskPostSheet title="立即发帖"） */
+  /** 立即发帖入口（父级打开本 App 自己的 AskPostSheet——朋友圈只发朋友圈、空间只发空间） */
   onOpenPostNow: () => void;
 }
 
-/** 平台主色：wx 微信绿 / qq QQ 蓝（分段选中、滑杆填充、立即发帖文字） */
-const PLATFORM_ACCENT: Record<'wx' | 'qq', { main: string; deep: string }> = {
-  wx: { main: '#07C160', deep: '#059A4C' },
-  qq: { main: '#0099FF', deep: '#0079CC' },
+/** 平台主题：wx 微信绿 / qq QQ 蓝（分段选中、滑杆填充、立即发帖文字）+ 文案 */
+const PLATFORM_META: Record<
+  'wx' | 'qq',
+  { accent: string; title: string; scopeName: string; otherName: string; postAction: string }
+> = {
+  wx: {
+    accent: '#07C160',
+    title: '朋友圈设置',
+    scopeName: '微信朋友圈',
+    otherName: 'QQ空间',
+    postAction: '立即发帖',
+  },
+  qq: {
+    accent: '#0099FF',
+    title: '空间动态设置',
+    scopeName: 'QQ空间',
+    otherName: '微信朋友圈',
+    postAction: '立即发帖',
+  },
 };
 
 // ---------------- 通用小组件（极简：纯文字行，无图标） ----------------
@@ -46,7 +61,7 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
 /** iOS 分组卡片 */
 function GroupCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-[14px] bg-card shadow-sm ring-1 ring-black/[0.03] divide-y divide-border/50 dark:ring-white/[0.06]">
+    <div className="overflow-hidden rounded-[14px] bg-card shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
       {children}
     </div>
   );
@@ -112,8 +127,8 @@ function BigGreenSwitch({
 }
 
 /**
- * 通用数值输入框：本地维护输入文本，失焦/回车时按 [min,max] 范围 clamp 后调 onCommit。
- * displayValue 是“显示空间”的当前值；toStored 把显示空间的整数映射回存储空间。
+ * 数值输入（chip 风：数字 + 单位同在一个浅灰圆角容器里，无外边框）。
+ * 本地维护输入文本，失焦/回车时按 [min,max] 范围 clamp 后调 onCommit。
  */
 function NumberField({
   displayValue,
@@ -121,6 +136,7 @@ function NumberField({
   max,
   step,
   unit,
+  ariaLabel,
   toStored,
   onCommit,
 }: {
@@ -129,6 +145,7 @@ function NumberField({
   max: number;
   step: number;
   unit: string;
+  ariaLabel: string;
   toStored: (n: number) => number;
   onCommit: (v: number) => void;
 }) {
@@ -155,22 +172,23 @@ function NumberField({
   };
 
   return (
-    <span className="flex shrink-0 items-center gap-1.5">
+    <span className="flex shrink-0 items-center gap-1 rounded-[9px] bg-black/[0.05] py-1 pl-2.5 pr-2 dark:bg-white/[0.09]">
       <input
         type="number"
         value={text}
         min={min}
         max={max}
         step={step}
+        aria-label={ariaLabel}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         }}
-        className="w-[64px] rounded-[9px] border border-border/50 bg-muted/40 px-2.5 py-1.5 text-right text-[15px] tabular-nums transition-colors focus:border-[#0A84FF] focus:bg-background focus:outline-none focus:ring-2 focus:ring-[#0A84FF]/20"
+        className="w-[44px] bg-transparent text-right text-[15px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         inputMode="numeric"
       />
-      <span className="w-[32px] text-[13.5px] text-muted-foreground">{unit}</span>
+      <span className="w-[26px] text-[12.5px] leading-none text-muted-foreground">{unit}</span>
     </span>
   );
 }
@@ -286,7 +304,7 @@ function RhythmSegmented({
 /** 自定义间隔的内嵌子行（最短/最长，位于分段控制器下方；跟随总开关一起淡出） */
 function IntervalRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-[40px] items-center justify-between pl-4 pr-2">
+    <div className="flex min-h-[44px] items-center justify-between pl-4 pr-2">
       <span className="text-[15px] text-muted-foreground">{label}</span>
       {children}
     </div>
@@ -363,9 +381,10 @@ export function MomentsSettingsPage({
   onToast,
   onOpenPostNow,
 }: MomentsSettingsPageProps) {
+  const meta = PLATFORM_META[app];
   const [settings, setSettings] = useState<MomentsSettings>(() => {
     // 容错：历史数据可能最短 > 最长（旧 UI 未强校验），加载时对调，保证区间合法
-    const s = getMomentsSettings();
+    const s = getMomentsSettings(app);
     if (s.minPostInterval > s.maxPostInterval) {
       return { ...s, minPostInterval: s.maxPostInterval, maxPostInterval: s.minPostInterval };
     }
@@ -377,9 +396,9 @@ export function MomentsSettingsPage({
   /** 将主动发动态的好友数（当前平台；null = 还在统计） */
   const [activeFriends, setActiveFriends] = useState<number | null>(null);
 
-  /** 局部更新 + 持久化 */
+  /** 局部更新 + 持久化（只写当前平台这一份，另一 App 不受影响） */
   const update = (patch: Partial<MomentsSettings>) => {
-    const next = saveMomentsSettings(patch);
+    const next = saveMomentsSettings(app, patch);
     setSettings(next);
   };
 
@@ -417,9 +436,6 @@ export function MomentsSettingsPage({
     );
   }
 
-  const title = app === 'wx' ? '朋友圈设置' : '空间动态设置';
-  const accent = PLATFORM_ACCENT[app];
-
   const matchedPreset = MOMENT_RHYTHM_PRESETS.find(
     (p) => p.min === settings.minPostInterval && p.max === settings.maxPostInterval,
   );
@@ -447,7 +463,7 @@ export function MomentsSettingsPage({
 
   return (
     <IOSScreen className="relative">
-      <IOSNavBar title={title} large={false} left={<IOSBackButton onClick={onBack} label="" />} />
+      <IOSNavBar title={meta.title} large={false} left={<IOSBackButton onClick={onBack} label="" />} />
       <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-[80px]">
         {/* 卡1：自动发动态 + 发布节奏分段（活跃 30分钟-2小时 / 自然 2-4小时 / 安静 6-12小时） */}
         <div className="mt-5">
@@ -468,7 +484,7 @@ export function MomentsSettingsPage({
               }`}
             >
               <div className="px-4">
-                <RhythmSegmented accent={accent.main} activeKey={activeKey} onPick={pickSeg} />
+                <RhythmSegmented accent={meta.accent} activeKey={activeKey} onPick={pickSeg} />
               </div>
               {activeKey === 'custom' && (
                 <div className="mt-1 divide-y divide-border/40">
@@ -480,6 +496,7 @@ export function MomentsSettingsPage({
                       max={settings.maxPostInterval}
                       step={5}
                       unit="分钟"
+                      ariaLabel="最短发帖间隔（分钟）"
                       toStored={(n) => n}
                       onCommit={(v) => update({ minPostInterval: v })}
                     />
@@ -491,6 +508,7 @@ export function MomentsSettingsPage({
                       max={MAX_POST_INTERVAL_MIN}
                       step={5}
                       unit="分钟"
+                      ariaLabel="最长发帖间隔（分钟）"
                       toStored={(n) => n}
                       onCommit={(v) => update({ maxPostInterval: v })}
                     />
@@ -499,19 +517,22 @@ export function MomentsSettingsPage({
               )}
             </div>
           </GroupCard>
-          <GroupFooter>{footer}</GroupFooter>
+          <GroupFooter>
+            {footer}
+            <span className="text-muted-foreground/70">（仅作用于{meta.scopeName}）</span>
+          </GroupFooter>
         </div>
 
-        {/* 立即发帖（独立动作卡：平台色居中文字） */}
+        {/* 立即发帖（独立动作卡：平台色居中文字；只发到本 App 的动态） */}
         <div className="mt-4">
           <GroupCard>
             <button
               type="button"
               onClick={() => onOpenPostNow()}
-              className="flex min-h-[50px] w-full items-center justify-center text-[16px] transition-colors active:bg-muted/50"
-              style={{ color: accent.main }}
+              className="flex min-h-[50px] w-full items-center justify-center text-[16px] font-medium transition-colors active:bg-muted/50"
+              style={{ color: meta.accent }}
             >
-              立即发帖
+              {meta.postAction}
             </button>
           </GroupCard>
         </div>
@@ -522,13 +543,13 @@ export function MomentsSettingsPage({
           <SliderRow
             label="点赞概率"
             value={settings.likeProbability}
-            accent={accent.main}
+            accent={meta.accent}
             onChange={(v) => update({ likeProbability: v })}
           />
           <SliderRow
             label="评论概率"
             value={settings.commentProbability}
-            accent={accent.main}
+            accent={meta.accent}
             onChange={(v) => update({ commentProbability: v })}
           />
           <Row
@@ -540,6 +561,7 @@ export function MomentsSettingsPage({
                 max={3600}
                 step={1}
                 unit="秒"
+                ariaLabel="首条评论延迟（秒）"
                 toStored={(n) => n}
                 onCommit={(v) => update({ firstCommentDelay: v })}
               />
@@ -554,6 +576,7 @@ export function MomentsSettingsPage({
                 max={3600}
                 step={1}
                 unit="秒"
+                ariaLabel="后续评论间隔（秒）"
                 toStored={(n) => n}
                 onCommit={(v) => update({ followCommentDelay: v })}
               />
@@ -573,6 +596,7 @@ export function MomentsSettingsPage({
                 max={3600}
                 step={1}
                 unit="秒"
+                ariaLabel="NPC 互动延迟（秒）"
                 toStored={(n) => n}
                 onCommit={(v) => update({ npcInteractDelay: v })}
               />
@@ -587,6 +611,7 @@ export function MomentsSettingsPage({
                 max={3600}
                 step={1}
                 unit="秒"
+                ariaLabel="回复 NPC 评论延迟（秒）"
                 toStored={(n) => n}
                 onCommit={(v) => update({ replyNpcCommentDelay: v })}
               />
@@ -622,14 +647,14 @@ export function MomentsSettingsPage({
           />
         </GroupCard>
 
-        {/* 恢复默认（居中红字动作卡） */}
+        {/* 恢复默认（居中红字动作卡；只重置当前平台） */}
         <div className="mt-6">
           <GroupCard>
             <button
               type="button"
               onClick={() => {
-                if (window.confirm('确定恢复所有设置为默认值？')) {
-                  const next = resetMomentsSettings();
+                if (window.confirm(`确定将${meta.scopeName}设置恢复为默认值？${meta.otherName}的设置不受影响。`)) {
+                  const next = resetMomentsSettings(app);
                   setSettings(next);
                   setCustomMode(false);
                   onToast('已恢复默认设置');
@@ -642,10 +667,11 @@ export function MomentsSettingsPage({
           </GroupCard>
         </div>
 
-        {/* 单行小提示：每好友单独节奏入口 */}
-        <p className="mt-5 px-4 text-center text-[12px] leading-relaxed text-muted-foreground/80">
-          每位好友的节奏，可在「立即发帖」列表中单独设置
-        </p>
+        {/* 两行小提示：平台独立 + 每好友单独节奏 */}
+        <div className="mt-5 px-2 text-center text-[12px] leading-relaxed text-muted-foreground/80">
+          <p>本页设置仅作用于{meta.scopeName}，与{meta.otherName}互不影响</p>
+          <p>每位好友的节奏，可在「{meta.postAction}」列表中单独设置</p>
+        </div>
       </div>
     </IOSScreen>
   );

@@ -920,7 +920,8 @@ export function enqueuePostInteractions(
   /** 显式指定延迟秒数（如 aiPostMoment 用 npcInteractDelay 触发 NPC 互动）；省略则用 settings.firstCommentDelay */
   delaySec?: number
 ): void {
-  const settings = getMomentsSettings();
+  // feat-64：设置按平台独立（朋友圈/空间各一份）
+  const settings = getMomentsSettings(platform);
   const delay = (delaySec ?? settings.firstCommentDelay) * 1000;
   const q = loadQueueSafe();
   if (q.some((x) => x.type === 'interact' && x.postId === postId)) return;
@@ -944,7 +945,8 @@ export function enqueueCharReply(
   userName: string,
   kind: 'user' | 'npc' = 'user'
 ): void {
-  const settings = getMomentsSettings();
+  // feat-64：设置按平台独立（朋友圈/空间各一份）
+  const settings = getMomentsSettings(platform);
   const delaySec = kind === 'npc' ? settings.replyNpcCommentDelay : settings.followCommentDelay;
   const delay = delaySec * 1000;
   const q = loadQueueSafe();
@@ -1085,7 +1087,8 @@ export async function aiPostMoment(args: {
   hint?: string;
 }): Promise<MomentPostView> {
   const { apiConfig, platform, peer, userName, hint } = args;
-  const settings = getMomentsSettings();
+  // feat-64：设置按平台独立（朋友圈/空间各一份）
+  const settings = getMomentsSettings(platform);
   const recentChat = memRecentConvo(peer.id, platformApp(platform))
     .slice(-10)
     .map((t) => ({ role: t.role, text: t.text }));
@@ -1122,7 +1125,8 @@ export async function aiCommentOnMoment(args: {
   replyTo?: { commentId: string; name: string; content: string } | null;
 }): Promise<MomentCommentView> {
   const { apiConfig, platform, peer, post, userName, replyTo } = args;
-  const settings = getMomentsSettings();
+  // feat-64：设置按平台独立（朋友圈/空间各一份）
+  const settings = getMomentsSettings(platform);
   // 评论串（回复时带上下文，让 AI 接得住多轮）
   const thread = post.comments.slice(-6).map((c) => ({ authorName: c.authorName, content: c.content }));
   // 记忆素材（四.1）：评论/回复也参考记忆库，避免评论内容与已知事实矛盾
@@ -1234,7 +1238,8 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
       // 随机挑 1-2 位（动态像真人刷到一样陆续有互动）
       const shuffled = [...candidates].sort(() => Math.random() - 0.5);
       const picked = shuffled.slice(0, Math.random() < 0.5 ? 1 : 2);
-      const settings = getMomentsSettings();
+      // feat-64：点赞/评论概率按平台独立
+      const settings = getMomentsSettings(item.platform);
       for (const peer of picked) {
         try {
           // 点赞：按 likeProbability 决定（旧版硬编码 100%）
@@ -1257,14 +1262,15 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
   return keep;
 }
 
-/** 到点检查自动发布（定时 / 频率 / 聊天灵感；一次 tick 最多发 1 条，防突发轰炸） */
+/** 到点检查自动发布（定时 / 频率 / 聊天灵感；一次 tick 最多发 1 条，防突发轰炸）
+ *  feat-64：开关与节奏按平台独立 —— 朋友圈/空间各自的 autoPostEnabled 与 min/max 间隔互不影响 */
 async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
-  const settings = getMomentsSettings();
-  if (!settings.autoPostEnabled) return;
-  const minMs = settings.minPostInterval * 60_000; // 分钟 → 毫秒
-  const maxMs = settings.maxPostInterval * 60_000;
   const plan: { peer: ContactRecord; platform: MomentPlatform; cfg: MomentAutoCfg; hint?: string }[] = [];
   for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+    const settings = getMomentsSettings(platform);
+    if (!settings.autoPostEnabled) continue;
+    const minMs = settings.minPostInterval * 60_000; // 分钟 → 毫秒
+    const maxMs = settings.maxPostInterval * 60_000;
     const userName = platform === 'wx' ? deps.wxUserName : deps.qqUserName;
     if (!userName) continue;
     for (const peer of peersForPlatform(deps.contacts, platform)) {
