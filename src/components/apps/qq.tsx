@@ -7797,8 +7797,8 @@ function FriendProfilePage({
       </div>
 
       <div className="flex-1 overflow-y-auto" data-testid="qq-fprofile-body">
-        {/* 54：封面 banner 对齐个人资料页风格——全宽无圆角 + 高 200px + 头像模糊兜底（无 peerBg 时用好友头像放大模糊） + 点击整块换；保留右上「恢复默认」浮钮 */}
-        <div className="group relative h-[200px] w-full overflow-hidden">
+        {/* 54/55：顶部全宽横向背景图（无圆角无遮罩，纯背景图） */}
+        <div className="group relative h-[180px] w-full overflow-hidden">
           <div
             role="button"
             tabIndex={0}
@@ -7833,8 +7833,6 @@ function FriendProfilePage({
               />
             )}
           </div>
-          {/* 底部渐变遮罩（让头像/名字层更易读） */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/40 to-transparent" aria-hidden="true" />
           {peerBg && (
             <button
               type="button"
@@ -7860,31 +7858,33 @@ function FriendProfilePage({
           />
         </div>
 
-        {/* 头像 + 名字/QQ号 + 点赞（头像叠在 banner 下边缘，对照个人资料页布局） */}
-        <div className="relative flex items-start gap-4 px-5 pt-2 -mt-12">
-          <div className="shrink-0 rounded-full ring-4 ring-white dark:ring-[#111214]">
-            <QqAvatar src={peer.avatar} alt={peer.name} size={84} />
-          </div>
-          <div className="min-w-0 flex-1 pt-2">
-            <div className="flex items-center gap-1.5">
-              <span className="min-w-0 truncate text-[20px] font-bold leading-tight">{peer.name}</span>
+        {/* 55：白色圆角卡片——左上角圆形头像 + 名字/QQ号 + 右侧大拇指和点赞数 */}
+        <div className="mx-3 mt-3 overflow-hidden rounded-[14px] bg-white p-4 shadow-sm dark:bg-[#1E1E1E]">
+          <div className="flex items-center gap-4">
+            <div className="shrink-0 overflow-hidden rounded-full ring-2 ring-black/[0.04] dark:ring-white/10">
+              <QqAvatar src={peer.avatar} alt={peer.name} size={64} />
             </div>
-            <div className="mt-2 truncate text-[13px] text-black/45 dark:text-white/45" data-testid="qq-fprofile-qqid">
-              QQ:{peer.qqId ?? '未设置'}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="min-w-0 truncate text-[18px] font-bold leading-tight">{peer.name}</span>
+              </div>
+              <div className="mt-1.5 truncate text-[12px] text-black/45 dark:text-white/45" data-testid="qq-fprofile-qqid">
+                QQ:{peer.qqId ?? '未设置'}
+              </div>
             </div>
+            <button
+              type="button"
+              aria-label="点赞"
+              data-testid="qq-fprofile-like"
+              onClick={giveLike}
+              className="flex shrink-0 flex-col items-center gap-0.5 text-black/70 active:opacity-60 dark:text-white/70"
+            >
+              <ThumbsUp className="h-6 w-6" strokeWidth={1.9} />
+              <span className="text-[12px]" data-testid="qq-fprofile-like-count">
+                {likes}
+              </span>
+            </button>
           </div>
-          <button
-            type="button"
-            aria-label="点赞"
-            data-testid="qq-fprofile-like"
-            onClick={giveLike}
-            className="flex shrink-0 flex-col items-center gap-0.5 pt-1 text-black/70 active:opacity-60 dark:text-white/70"
-          >
-            <ThumbsUp className="h-6 w-6" strokeWidth={1.9} />
-            <span className="text-[12px]" data-testid="qq-fprofile-like-count">
-              {likes}
-            </span>
-          </button>
         </div>
 
         {/* 徽章行（QQ 等级图标；SVIP8/勋章/LV8/LV3 已删除） */}
