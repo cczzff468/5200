@@ -7868,7 +7868,7 @@ function MomentsPage({
         {/* 「1条新消息」气泡（微信同款深色胶囊：最新互动人头像 + 条数；点开互动消息页并全部已读）。
             放在封面之下、动态列表之前，与真机一致 */}
         {isMine && noticeBadge.count > 0 && (
-          <div className="flex justify-center pb-1 pt-6">
+          <div className="flex justify-center pb-1 pt-8">
             <button
               type="button"
               data-testid="wx-moments-pill"

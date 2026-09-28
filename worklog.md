@@ -10558,3 +10558,31 @@ Work Log:
 Stage Summary:
 - 修改文件：src/lib/moments.ts（3 处守卫修复）、src/app/api/moments/generate/route.ts（kind!=='reply' 条件）、src/components/apps/wechat.tsx（胶囊下移+圆角）
 - 核心成果：①用户评论 AI 的动态 → AI 作者正常回复（多轮闭环），修复前被身份守卫三层拦截永不应答 ②「AI 自己给自己评论」防线保持完整（仅放行带 replyTo 的回复）③启动修复不再误删合法作者回复 ④微信「N条新消息」胶囊下移 12px、圆角 10px→4px
+---
+Task ID: fix-moments-reply-quality
+Agent: 主协调者 (Z.ai Code)
+Task: ①朋友圈回复不搭评论/复读自己的动态 ②回复每句都喊名字（「财啊，」）太生硬 ③「N条新消息」胶囊再下移一点
+
+Work Log:
+- 根因排查（用户实锤：财评「辛苦你了」，陈回「财啊，项目算搞定了，但下一个任务啥时候来啊？」——整句复读动态+喊名字）：
+  1. route.ts 回复 prompt 结构失衡：动态原文放开头最显眼处（「动态（「…」）的评论区里」），被回复的评论只一句话带过 → 模型顺势把动态改写一遍当回复；被回复评论内容本就传入（drainReplies→aiCommentOnMoment→API replyTo 链路完好），问题不在传参在 prompt 权重
+  2. 无任何「禁止喊名字」指令：界面「陈 回复 财：」前缀已标明对象，模型仍每句「财啊，」开头
+  3. moments.ts recentSelfTextsOf 禁复读名单只含评论+转发理由，不含自己发的动态 → 复读动态无硬校验
+  4. randomVariation('comment') 的 8 个角度全是「从动态里挑细节/顺着动态开玩笑」类——用在回复场景把模型进一步拉回动态本身
+- 四处修复：
+  1. route.ts 回复 prompt 重写：被回复的那句话提为「唯一的话题中心」放最前（【要回复的那句话】「…」），逐条要求 直接接住内容/情绪/问题、动态原文只是背景禁止复述内容/意思/句式、正文不喊名字（前缀已标明）、8~40 字口语短句；动态原文降为末尾「（背景，仅供理解语境，禁止复述）」一行
+  2. route.ts 评论 prompt 补一条「不要用「名字+语气词」开头喊人，直接说话」（评论与回复统一自然化）
+  3. moments.ts：新增 VARIATION_ANGLES_REPLY 8 个回复专用角度（接情绪/补近况/抛反问/认怂自嘲/关系梗…），randomVariation 支持 'reply'；aiCommentOnMoment 中 replyTo ? 'reply' : 'comment'
+  4. moments.ts aiCommentOnMoment：回复自己动态下的评论时把 post.content 加入 avoid（isDupText 硬校验 ≥12 字包含即拦截重试）；新增 stripLeadingAddress 确定性兜底——剥回复正文开头的「名字+语气词/标点」（「财啊，」「财呀！」），保守规则（名字≤12字、语气词白名单、剥后剩余≥4字、正文中间名字不动、译文同步剥），9 个单测边界全过（含「财哈哈哈」不误剥）
+  5. wechat.tsx 胶囊容器 pt-6 → pt-8（下移再 8px，累计 20px），圆角保持 4px
+- 浏览器端到端验证（420×900，合成 PointerEvent；凡凡登录，陈默既有动态）：
+  - 评论「辛苦你了」（复刻用户场景）→ 30s 后陈默回「奶茶收到，bug清除，系统正常运行。」——直接回应评论（接住感谢+延续评论区奶茶梗）、无名字开头、无动态复读 ✓
+  - 再回复「不知道呢」→ 陈默回「行，奶茶我请，毕竟bug修复成功，内存泄漏问题终于解决了。」——连续两条回复均无名字开头、给出新细节（内存泄漏）不复读动态、人设连贯 ✓
+  - 胶囊 getComputedStyle：paddingTop 32px / borderRadius 4px ✓
+  - 记忆抽查：「陈默回复了凡凡的评论：「行，奶茶我请…」（动态：…）」三方关系标明正确 ✓；防自评/身份守卫未受影响（陈默顶层发言零新增）✓
+  - dev.log generate 全 200；bunx tsc --noEmit exit 0；bun run lint exit 0；weather 502 为沙箱上游已知外部限制非回归
+- QQ 空间共用同一引擎与 API（prompt 与兜底对 qq platform 同样生效），无需单独改动
+
+Stage Summary:
+- 修改文件：src/app/api/moments/generate/route.ts（回复 prompt 重构+评论禁喊名）、src/lib/moments.ts（回复角度池/动态入禁复读/stripLeadingAddress 兜底）、src/components/apps/wechat.tsx（胶囊 pt-8）
+- 核心成果：①回复以被回复评论为唯一话题中心，不再复读自己动态（prompt 权重重构 + 动态入 avoid 硬校验双保险）②回复不再每句喊名字（prompt 禁令 + stripLeadingAddress 确定性剥离兜底）③回复随机角度与评论场景解耦（8 个专用接话角度）④记忆关系标注、身份守卫、防自评等既有防线全部回归通过

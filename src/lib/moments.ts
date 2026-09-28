@@ -1385,6 +1385,31 @@ function isDupText(text: string, avoid: string[]): boolean {
   });
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 剥掉回复正文开头的「喊名字」（用户实锤：每句回复都「财啊，」开头，像客服）。
+ * 界面已显示「X 回复 Y：」前缀，正文再喊名字既生硬又多余。
+ * 仅保守处理开头一次「名字 + 语气词/标点」（如「财啊，」「财呀！」「财，」）；
+ * 剥完剩余太短（<4 字）视为误判不剥。正文中间自然出现的名字不动。
+ */
+function stripLeadingAddress(text: string, name: string): string {
+  const n = (name ?? '').trim();
+  if (!n || n.length > 12) return text;
+  let re: RegExp;
+  try {
+    re = new RegExp(`^${escapeRegExp(n)}[啊呀呢哦哇嘛呗嗯~～，,。．！!？?、\\s]+`);
+  } catch {
+    return text;
+  }
+  const m = text.match(re);
+  if (!m) return text;
+  const rest = text.slice(m[0].length).trim();
+  return rest.length >= 4 ? rest : text;
+}
+
 /**
  * 随机切入角度（每次生成都随机指定一个，让同样的 prompt 基础每次产出不同方向的内容——
  * 同一角色在微信/QQ 两平台、甚至两次触发之间，内容不再一字不差）。
@@ -1399,6 +1424,18 @@ const VARIATION_ANGLES_COMMENT: string[] = [
   '关心式地追问后续（像真的好奇结果）',
   '顺着动态内容开一个玩笑或抖个机灵',
 ];
+// 回复专用角度：围绕「被回复的那句话」接话——评论场景的角度（挑动态细节等）用在回复上
+// 会把模型拉回动态本身，导致「回复不搭评论、复读自己的动态」（用户实锤）
+const VARIATION_ANGLES_REPLY: string[] = [
+  '直接回应对方话里的情绪（把TA的关心/调侃/疑问接住）',
+  '顺着对方的话头自然补一句近况或想法',
+  '向对方抛一个轻松的反问，把话递回去',
+  '简短地认怂或自嘲一句',
+  '带点得意或撒娇的口吻回应TA',
+  '用你们关系里的梗接TA这句话',
+  '爽快答应/拒绝TA话里的事，再加半句理由',
+  '对TA这句评价给一个出人意料的反应',
+];
 const VARIATION_ANGLES_POST: string[] = [
   '写今天遇到的一件具体小事',
   '写此刻的心情（结合当下的时间/天气/场景）',
@@ -1407,8 +1444,8 @@ const VARIATION_ANGLES_POST: string[] = [
   '对某个日常场景发一句吐槽',
   '写一个突然冒出来的念头',
 ];
-function randomVariation(kind: 'post' | 'comment'): string {
-  const pool = kind === 'post' ? VARIATION_ANGLES_POST : VARIATION_ANGLES_COMMENT;
+function randomVariation(kind: 'post' | 'comment' | 'reply'): string {
+  const pool = kind === 'post' ? VARIATION_ANGLES_POST : kind === 'reply' ? VARIATION_ANGLES_REPLY : VARIATION_ANGLES_COMMENT;
   return pool[Math.floor(Math.random() * pool.length)] ?? '';
 }
 
@@ -1569,6 +1606,9 @@ export async function aiCommentOnMoment(args: {
   // 同一条动态在微信和 QQ 里各生成一次评论时，后生成的一方读到了先落盘的那条，
   // 被明令禁止再说一样的话（修复「QQ 和微信的评论一字不差」）
   const avoid = recentSelfTextsOf(peer.id);
+  // 回复自己动态下的评论时，把自己动态原文也列入禁复读——回复是接话，
+  // 不能把动态改写一遍再说（用户实锤：「财啊，项目算搞定了，但下一个任务啥时候来啊」整句复读动态）
+  if (replyTo && isPostByPeer(post, peer)) avoid.push(post.content.slice(0, 80));
   // 生成后校验：与最近发言完全一致/高度雷同 → 带禁令重试一次；仍重复 → 抛错（队列按原策略处理）
   let banned = '';
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1582,16 +1622,21 @@ export async function aiCommentOnMoment(args: {
       replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content } : null,
       memories: memorySnippets(peer.id, platformApp(platform)),
       avoid: attempt === 0 ? avoid : [...avoid, banned].filter(Boolean),
-      variation: randomVariation('comment'),
+      variation: randomVariation(replyTo ? 'reply' : 'comment'),
       bilingual: settings.bilingualEnabled,
       bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
     });
-    if (!isDupText(content, avoid)) {
+    // 回复正文剥掉开头的「喊名字」——界面已有「X 回复 Y：」前缀，再喊名字像客服；
+    // prompt 禁令之外的确定性兜底（译文同步剥，保持双语一致）
+    const clean = replyTo
+      ? { content: stripLeadingAddress(content, replyTo.name), contentZh: stripLeadingAddress(contentZh, replyTo.name) }
+      : { content, contentZh };
+    if (!isDupText(clean.content, avoid)) {
       const added = addCharMomentComment(platform, post.id, {
         peer,
         userName,
-        content,
-        contentZh: contentZh || undefined,
+        content: clean.content,
+        contentZh: clean.contentZh || undefined,
         replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
       });
       if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');
