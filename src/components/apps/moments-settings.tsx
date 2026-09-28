@@ -16,7 +16,6 @@ import {
   Repeat,
   Reply,
   RotateCcw,
-  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
@@ -49,13 +48,23 @@ const TONE_PINK = '#FF2D55';
 const TONE_INDIGO = '#5856D6';
 const TONE_TEAL = '#5AC8FA';
 const TONE_RED = '#FF3B30';
+const TONE_YELLOW = '#FFCC00';
 
 // ---------------- 通用小组件（本地实现，不 import settings.tsx 内部组件） ----------------
+
+/** 分组标题（iOS 风格：分组上方小字说明） */
+function GroupHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mt-7 mb-2 px-4 text-[13px] font-medium uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
+  );
+}
 
 /** iOS 分组卡片 */
 function GroupCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-6 overflow-hidden rounded-[12px] bg-card divide-y divide-border/60">
+    <div className="overflow-hidden rounded-[14px] bg-card shadow-sm divide-y divide-border/50">
       {children}
     </div>
   );
@@ -65,10 +74,10 @@ function GroupCard({ children }: { children: React.ReactNode }) {
 function RowIcon({ color, Icon }: { color: string; Icon: LucideIcon }) {
   return (
     <span
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px]"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] shadow-sm"
       style={{ backgroundColor: color }}
     >
-      <Icon className="h-[17px] w-[17px] text-white" strokeWidth={2} />
+      <Icon className="h-[17px] w-[17px] text-white" strokeWidth={2.1} />
     </span>
   );
 }
@@ -94,7 +103,7 @@ function Row({
   /** 红色文字（恢复默认等破坏性动作） */
   danger?: boolean;
 }) {
-  const className = `flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/40 ${
+  const className = `flex min-h-[54px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors active:bg-muted/50 ${
     danger ? 'text-[#FF3B30] dark:text-[#FF453A]' : ''
   }`;
   const inner = (
@@ -186,10 +195,10 @@ function NumberField({
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         }}
-        className="w-[60px] rounded-[8px] border border-border/60 bg-background px-2 py-1 text-right text-[15px] tabular-nums focus:border-[#0A84FF] focus:outline-none"
+        className="w-[64px] rounded-[9px] border border-border/50 bg-background/60 px-2.5 py-1.5 text-right text-[15px] tabular-nums transition-colors focus:border-[#0A84FF] focus:bg-background focus:outline-none focus:ring-2 focus:ring-[#0A84FF]/20"
         inputMode="numeric"
       />
-      <span className="text-[15px] text-muted-foreground">{unit}</span>
+      <span className="w-[28px] text-[14px] text-muted-foreground">{unit}</span>
     </span>
   );
 }
@@ -287,12 +296,14 @@ export function MomentsSettingsPage({
   return (
     <IOSScreen className="relative">
       <IOSNavBar title={title} large={false} left={<IOSBackButton onClick={onBack} label="" />} />
-      <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-[40px]">
+      <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-[120px]">
         {/* 分组1：发布频率 */}
+        <GroupHeader>一、发布频率</GroupHeader>
         <GroupCard>
           <Row
             icon={<RowIcon color={TONE_BLUE} Icon={Clock} />}
             label="最小发帖间隔"
+            description="自动发帖两次之间的最短等待时间"
             right={
               <NumberField
                 displayValue={settings.minPostInterval}
@@ -308,6 +319,7 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_BLUE} Icon={Calendar} />}
             label="最长发帖间隔"
+            description="超过此时间未发帖将强制触发一次"
             right={
               <NumberField
                 displayValue={settings.maxPostInterval}
@@ -321,35 +333,20 @@ export function MomentsSettingsPage({
             }
           />
           <Row
-            icon={<RowIcon color={TONE_ORANGE} Icon={Sparkles} />}
-            label="自动发帖角色"
-            description="所有好友角色按间隔自动发帖"
-          />
-          <Row
             icon={<RowIcon color={TONE_GREEN} Icon={PenLine} />}
             label="立即发帖"
             description={postNowDesc}
             onClick={() => onOpenPostNow()}
           />
-          <Row
-            icon={<RowIcon color={TONE_RED} Icon={RotateCcw} />}
-            label="恢复默认"
-            danger
-            onClick={() => {
-              if (window.confirm('确定恢复所有朋友圈设置为默认值？')) {
-                const next = resetMomentsSettings();
-                setSettings(next);
-                onToast('已恢复默认设置');
-              }
-            }}
-          />
         </GroupCard>
 
         {/* 分组2：评论与点赞 */}
+        <GroupHeader>二、评论与点赞</GroupHeader>
         <GroupCard>
           <Row
             icon={<RowIcon color={TONE_GREEN} Icon={MessageCircle} />}
             label="首条评论延迟"
+            description="动态发布后第一条评论的等待时间"
             right={
               <NumberField
                 displayValue={settings.firstCommentDelay}
@@ -365,6 +362,7 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_GREEN} Icon={Repeat} />}
             label="后续评论间隔"
+            description="连续评论之间的等待时间"
             right={
               <NumberField
                 displayValue={settings.followCommentDelay}
@@ -380,6 +378,7 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_PURPLE} Icon={Dice5} />}
             label="评论概率"
+            description="角色看到动态后发表评论的概率"
             right={
               <NumberField
                 displayValue={Math.round(settings.commentProbability * 100)}
@@ -395,6 +394,7 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_PINK} Icon={Heart} />}
             label="点赞概率"
+            description="角色看到动态后点赞的概率"
             right={
               <NumberField
                 displayValue={Math.round(settings.likeProbability * 100)}
@@ -410,10 +410,12 @@ export function MomentsSettingsPage({
         </GroupCard>
 
         {/* 分组3：NPC 互动 */}
+        <GroupHeader>三、NPC 互动</GroupHeader>
         <GroupCard>
           <Row
             icon={<RowIcon color={TONE_INDIGO} Icon={Bot} />}
             label="NPC 互动延迟"
+            description="NPC 对动态产生互动的等待时间"
             right={
               <NumberField
                 displayValue={settings.npcInteractDelay}
@@ -429,6 +431,7 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_INDIGO} Icon={Reply} />}
             label="角色回复 NPC 评论延迟"
+            description="角色回复 NPC 评论前的等待时间"
             right={
               <NumberField
                 displayValue={settings.replyNpcCommentDelay}
@@ -444,10 +447,12 @@ export function MomentsSettingsPage({
         </GroupCard>
 
         {/* 分组4：双语翻译 */}
+        <GroupHeader>四、双语翻译</GroupHeader>
         <GroupCard>
           <Row
             icon={<RowIcon color={TONE_TEAL} Icon={Languages} />}
             label="朋友圈双语翻译"
+            description="外语帖子、评论和回复自动附中文译文"
             right={
               <Switch
                 checked={settings.bilingualEnabled}
@@ -458,6 +463,7 @@ export function MomentsSettingsPage({
           <Row
             icon={<RowIcon color={TONE_TEAL} Icon={ChevronDown} />}
             label="折叠中文译文"
+            description="关闭后默认直接展开中文"
             right={
               <Switch
                 checked={settings.foldChineseTranslation}
@@ -470,6 +476,23 @@ export function MomentsSettingsPage({
             label="朋友圈双语提示词"
             value={settings.bilingualPrompt.trim() ? '自定义' : '默认'}
             onClick={() => setPromptEditing(true)}
+          />
+        </GroupCard>
+
+        {/* 恢复默认（移到页面底部，单独分组） */}
+        <GroupCard>
+          <Row
+            icon={<RowIcon color={TONE_RED} Icon={RotateCcw} />}
+            label="恢复默认"
+            description="将所有设置恢复为默认值"
+            danger
+            onClick={() => {
+              if (window.confirm('确定恢复所有朋友圈设置为默认值？')) {
+                const next = resetMomentsSettings();
+                setSettings(next);
+                onToast('已恢复默认设置');
+              }
+            }}
           />
         </GroupCard>
       </div>
