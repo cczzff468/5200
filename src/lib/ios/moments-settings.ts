@@ -2,11 +2,11 @@ import { kvGet, kvSet } from './idb-kv';
 
 /** 朋友圈/空间动态互动设置（wx + qq 共享一份） */
 export interface MomentsSettings {
-  // 一、发布频率
-  /** 最短发帖间隔（小时，1-24）；自动发帖调度时强制等待 ≥ 此值 */
-  minPostInterval: number;        // 默认 12
-  /** 最长发帖间隔（小时，1-24）；自动发帖等待时间上限 */
-  maxPostInterval: number;        // 默认 24
+  // 一、发布节奏
+  /** 最短发帖间隔（分钟，15-1440）；自动发帖调度时强制等待 ≥ 此值 */
+  minPostInterval: number;        // 默认 30（活跃节奏）
+  /** 最长发帖间隔（分钟，15-1440）；超过后强制触发一次，保证好友一直主动发动态 */
+  maxPostInterval: number;        // 默认 120（活跃节奏）
   /** 自动发帖总开关；关闭后所有角色不再自动发帖 */
   autoPostEnabled: boolean;       // 默认 true
 
@@ -36,8 +36,8 @@ export interface MomentsSettings {
 }
 
 export const DEFAULT_MOMENTS_SETTINGS: MomentsSettings = {
-  minPostInterval: 12,
-  maxPostInterval: 24,
+  minPostInterval: 30,
+  maxPostInterval: 120,
   autoPostEnabled: true,
   firstCommentDelay: 30,
   followCommentDelay: 30,
@@ -60,13 +60,67 @@ export const DEFAULT_BILINGUAL_PROMPT = `【朋友圈双语规则（仅非中文
 /** kv 键名 */
 const MOMENTS_SETTINGS_KEY = 'moments-settings';
 
-/** 同步读取设置（合并默认值，每字段容错） */
+/** 设置结构版本：v3 = 间隔改用「分钟」存储（v1/v2 为小时，读取时自动迁移） */
+const SETTINGS_SCHEMA_VERSION = 3;
+
+/** 间隔允许的分钟范围 */
+export const MIN_POST_INTERVAL_MIN = 15;
+export const MAX_POST_INTERVAL_MIN = 1440;
+
+/** 发布节奏预设（一键切换 min/max 间隔，单位分钟；活跃 = 新默认） */
+export const MOMENT_RHYTHM_PRESETS: { key: string; label: string; desc: string; min: number; max: number }[] = [
+  { key: 'active', label: '活跃', desc: '常常发，像刷屏达人', min: 30, max: 120 },
+  { key: 'natural', label: '自然', desc: '一天几条，真实感强', min: 120, max: 240 },
+  { key: 'calm', label: '安静', desc: '偶尔发一条', min: 360, max: 720 },
+];
+
+/** 当前 min/max 对应的节奏名（无匹配 = 自定义） */
+export function rhythmLabelOf(min: number, max: number): string {
+  const hit = MOMENT_RHYTHM_PRESETS.find((p) => p.min === min && p.max === max);
+  return hit ? hit.label : '自定义';
+}
+
+/** 分钟 → 紧凑文案：30 →「30分钟」；120 →「2小时」；90 →「1.5小时」 */
+export function formatIntervalMin(min: number): string {
+  if (min < 60) return `${Math.round(min)}分钟`;
+  const h = min / 60;
+  return `${Number.isInteger(h) ? h : h.toFixed(1).replace(/\.0$/, '')}小时`;
+}
+
+/** 区间 → 紧凑文案：30/120 →「30分钟-2小时」；120/240 →「2-4小时」 */
+export function formatIntervalRange(min: number, max: number): string {
+  if (min < 60 && max < 60) return `${min}-${max}分钟`;
+  if (min < 60) return `${formatIntervalMin(min)}-${formatIntervalMin(max)}`;
+  return `${min / 60}-${formatIntervalMin(max)}`;
+}
+
+/** 同步读取设置（合并默认值，每字段容错；v1/v2 小时值自动迁移为分钟） */
 export function getMomentsSettings(): MomentsSettings {
-  const v = kvGet<{ [K in keyof MomentsSettings]?: unknown }>(MOMENTS_SETTINGS_KEY);
+  const v = kvGet<{ [K in keyof MomentsSettings]?: unknown } & { schemaVersion?: unknown }>(MOMENTS_SETTINGS_KEY);
   if (!v || typeof v !== 'object') return { ...DEFAULT_MOMENTS_SETTINGS };
+  const num = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+  const inRange = (n: number, lo: number, hi: number) => n >= lo && n <= hi;
+  let minPostInterval = DEFAULT_MOMENTS_SETTINGS.minPostInterval;
+  let maxPostInterval = DEFAULT_MOMENTS_SETTINGS.maxPostInterval;
+  if (v.schemaVersion === SETTINGS_SCHEMA_VERSION) {
+    // v3：分钟存储
+    const mn = num(v.minPostInterval);
+    const mx = num(v.maxPostInterval);
+    if (mn !== null && inRange(mn, MIN_POST_INTERVAL_MIN, MAX_POST_INTERVAL_MIN)) minPostInterval = Math.round(mn);
+    if (mx !== null && inRange(mx, MIN_POST_INTERVAL_MIN, MAX_POST_INTERVAL_MIN)) maxPostInterval = Math.round(mx);
+  } else {
+    // v1/v2：小时存储 → 迁移为分钟；旧默认（v1 12/24、v2 2/6）直接落新默认
+    const hMin = num(v.minPostInterval);
+    const hMax = num(v.maxPostInterval);
+    if (hMin !== null && hMax !== null && inRange(hMin, 1, 24) && inRange(hMax, 1, 24)) {
+      const isOldDefault = (hMin === 12 && hMax === 24) || (hMin === 2 && hMax === 6);
+      minPostInterval = isOldDefault ? DEFAULT_MOMENTS_SETTINGS.minPostInterval : Math.round(hMin * 60);
+      maxPostInterval = isOldDefault ? DEFAULT_MOMENTS_SETTINGS.maxPostInterval : Math.round(hMax * 60);
+    }
+  }
   return {
-    minPostInterval: typeof v.minPostInterval === 'number' && v.minPostInterval >= 1 && v.minPostInterval <= 24 ? v.minPostInterval : DEFAULT_MOMENTS_SETTINGS.minPostInterval,
-    maxPostInterval: typeof v.maxPostInterval === 'number' && v.maxPostInterval >= 1 && v.maxPostInterval <= 24 ? v.maxPostInterval : DEFAULT_MOMENTS_SETTINGS.maxPostInterval,
+    minPostInterval,
+    maxPostInterval,
     autoPostEnabled: typeof v.autoPostEnabled === 'boolean' ? v.autoPostEnabled : DEFAULT_MOMENTS_SETTINGS.autoPostEnabled,
     firstCommentDelay: typeof v.firstCommentDelay === 'number' && v.firstCommentDelay >= 1 && v.firstCommentDelay <= 3600 ? v.firstCommentDelay : DEFAULT_MOMENTS_SETTINGS.firstCommentDelay,
     followCommentDelay: typeof v.followCommentDelay === 'number' && v.followCommentDelay >= 1 && v.followCommentDelay <= 3600 ? v.followCommentDelay : DEFAULT_MOMENTS_SETTINGS.followCommentDelay,
@@ -80,17 +134,17 @@ export function getMomentsSettings(): MomentsSettings {
   };
 }
 
-/** 同步写入设置（patch 部分字段，合并后写 kv） */
+/** 同步写入设置（patch 部分字段，合并后写 kv；同时落 schemaVersion 标记，避免旧默认值被反复迁移） */
 export function saveMomentsSettings(patch: Partial<MomentsSettings>): MomentsSettings {
   const cur = getMomentsSettings();
   const next = { ...cur, ...patch };
-  kvSet(MOMENTS_SETTINGS_KEY, next);
+  kvSet(MOMENTS_SETTINGS_KEY, { ...next, schemaVersion: SETTINGS_SCHEMA_VERSION });
   return next;
 }
 
 /** 恢复默认 */
 export function resetMomentsSettings(): MomentsSettings {
-  kvSet(MOMENTS_SETTINGS_KEY, DEFAULT_MOMENTS_SETTINGS);
+  kvSet(MOMENTS_SETTINGS_KEY, { ...DEFAULT_MOMENTS_SETTINGS, schemaVersion: SETTINGS_SCHEMA_VERSION });
   return { ...DEFAULT_MOMENTS_SETTINGS };
 }
 

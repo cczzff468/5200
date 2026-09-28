@@ -10278,3 +10278,33 @@ Stage Summary:
 - 修改文件：src/components/apps/qq.tsx、src/components/apps/wechat.tsx、src/components/apps/browser.tsx、src/lib/ios/store.ts、新增 src/app/api/search/route.ts
 - 微信/QQ 全局搜索页全部落地并浏览器验证：布局对照用户截图1/截图2、本地结果（联系人/群聊/聊天记录/朋友圈）+ 微信真实网络结果 + 跨 App 浏览器打开
 - 好友资料页：位置大小统一修复 + 右上角设置图标删除（用户新增需求）
+
+---
+Task ID: feat-62
+Agent: 主协调者（Z.ai Code）
+Task: ①朋友圈/空间动态互动设置界面再美化（简约风）②节奏预设改分钟级（活跃30分钟-2小时/自然2-4小时/安静6-12小时）③让好友一直主动发动态（引擎默认开启+高频聊天灵感触发）
+
+Work Log:
+- 引擎（src/lib/moments.ts）：
+  - DEFAULT_MOMENT_AUTO_CFG 从 {enabled:false, trigger:'schedule'} 改为 {enabled:true, trigger:'chat'}——每位好友默认一直主动发动态（聊天后有感而发），可在每好友弹层单独关闭
+  - getMomentAutoCfg 容错改为 enabled: raw.enabled !== false（缺省跟随新默认 true，显式 false 保留）；trigger 缺省回退 'chat'
+  - runAutoPosts 聊天灵感触发概率 1/240 → 1/80（5s tick，期望约 6 分钟一次，配合全局最短间隔形成自然节奏）
+  - min/max 间隔乘数 3_600_000（小时）→ 60_000（分钟）
+- 数据层（src/lib/ios/moments-settings.ts）：
+  - 存储单位小时 → 分钟：schemaVersion 升 v3；v1(12/24h) 与 v2(2/6h) 旧默认自动迁移为新默认(30/120min)，自定义小时值 ×60 无损迁移；save/reset 均落 schemaVersion 标记防反复迁移
+  - 新预设 MOMENT_RHYTHM_PRESETS：活跃 30-120 分钟 / 自然 120-240 / 安静 360-720（按用户指定）；新增 MIN/MAX_POST_INTERVAL_MIN(15..1440) 边界、formatIntervalMin（30→30分钟、120→2小时、90→1.5小时）、formatIntervalRange（30/120→30分钟-2小时、120/240→2-4小时）
+- UI（src/components/apps/moments-settings.tsx 简约化重写，+311/-141 三文件合计）：
+  - 删除装饰性 hero 卡片（渐变光斑/大图标/信息行）与彩色分区标题 SectionTitle → 总开关+节奏+间隔+立即发帖合并为第一张 GroupCard，其余分组仅保留 12.5px 浅灰 GroupLabel（iOS 原生分组风）
+  - 预设按钮副行显示 formatIntervalRange（活跃 30分钟-2小时…），选中态保留平台主色（wx 绿 #07C160 / qq 蓝 #0099FF）
+  - min/max 间隔 NumberField 单位改「分钟」（15-1440，step 5）；总开关行副标题实时显示「N 位好友将一直主动发朋友圈 · 活跃节奏」（listContacts+isFriendIn+getMomentAutoCfg 按平台统计）
+  - 保留：概率滑杆（自绘轨道+绿色填充）、NPC 互动、双语翻译三行、恢复默认、双语提示词二级页（加字数统计）；底部提示精简
+- 浏览器端到端验证（agent-browser 420×900）：
+  - wx 朋友圈设置：hero 行「2 位好友将一直主动发朋友圈 · 活跃节奏」；预设切换 安静→360/720 分钟 ✓；总开关 off/on ✓；滑杆 50→85% 持久化 ✓；v2 小时值 2/6 自动迁移为 30/120 分钟 ✓
+  - qq 空间动态设置：同构渲染蓝色主题 ✓；设置 wx/qq 共享一致（85% 点赞概率同步显示）
+  - 自动发动态持续运转实证（IndexedDB kv 数据）：陈默 wx 动态 08:03 自动发布 → 30s 后（08:04）苏晴+陈默自动评论（精确遵循 firstCommentDelay=30s）；苏晴 QQ 动态 08:09 自动发布 → 85% 点赞生效；07:33 首轮爆发后按 30 分钟最小间隔陆续发帖，调度器后台运行（App 未打开也发）
+  - dev.log 累计 8 次 POST /api/moments/generate 全 200，无运行时错误；bunx tsc --noEmit exit 0；bunx eslint 3 文件 + bun run lint exit 0
+- 提交并推送 origin/main
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts、src/lib/ios/moments-settings.ts、src/components/apps/moments-settings.tsx（311 insertions / 141 deletions）
+- 核心成果：①设置页简约化（去装饰、iOS 原生分组风、信息密度更高）②节奏预设分钟级+按用户指定区间 ③好友默认一直主动发动态（默认开启+聊天灵感高频触发+最小间隔 30 分钟），全链路（发帖→点赞→评论→多轮回复）浏览器验证通过

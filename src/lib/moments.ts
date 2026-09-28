@@ -977,9 +977,10 @@ export interface MomentAutoCfg {
   intervalHours: number;
 }
 
+/** 默认开启：每位好友都会一直主动发动态（聊天后有感而发），可在每好友设置里单独关闭 */
 export const DEFAULT_MOMENT_AUTO_CFG: MomentAutoCfg = {
-  enabled: false,
-  trigger: 'schedule',
+  enabled: true,
+  trigger: 'chat',
   hh: 21,
   mm: 0,
   intervalHours: 24,
@@ -1003,8 +1004,9 @@ export function getMomentAutoCfg(contactId: string, platform: MomentPlatform): M
   const raw = loadAutoCfgMap()[cfgKeyOf(contactId, platform)];
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_MOMENT_AUTO_CFG };
   return {
-    enabled: raw.enabled === true,
-    trigger: raw.trigger === 'interval' || raw.trigger === 'chat' ? raw.trigger : 'schedule',
+    // 缺省（历史数据未写过 enabled）跟随新默认 true；显式 false（用户手动关过）保持关闭
+    enabled: raw.enabled !== false,
+    trigger: raw.trigger === 'interval' || raw.trigger === 'schedule' ? raw.trigger : 'chat',
     hh: typeof raw.hh === 'number' && raw.hh >= 0 && raw.hh <= 23 ? Math.floor(raw.hh) : DEFAULT_MOMENT_AUTO_CFG.hh,
     mm: typeof raw.mm === 'number' && raw.mm >= 0 && raw.mm <= 59 ? Math.floor(raw.mm) : DEFAULT_MOMENT_AUTO_CFG.mm,
     intervalHours: MOMENT_INTERVAL_OPTIONS.includes(raw.intervalHours)
@@ -1259,8 +1261,8 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
 async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
   const settings = getMomentsSettings();
   if (!settings.autoPostEnabled) return;
-  const minMs = settings.minPostInterval * 3_600_000;
-  const maxMs = settings.maxPostInterval * 3_600_000;
+  const minMs = settings.minPostInterval * 60_000; // 分钟 → 毫秒
+  const maxMs = settings.maxPostInterval * 60_000;
   const plan: { peer: ContactRecord; platform: MomentPlatform; cfg: MomentAutoCfg; hint?: string }[] = [];
   for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
     const userName = platform === 'wx' ? deps.wxUserName : deps.qqUserName;
@@ -1286,11 +1288,12 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
         if (now - last >= cfg.intervalHours * 3_600_000) plan.push({ peer, platform, cfg });
       } else {
         // 聊天灵感（有感而发）：不攒轮次、不设时间门槛——AI 心血来潮想发就发。
-        // 实现为每次 tick 小概率触发（期望约 20 分钟一次）；下面的 15 分钟最小间隔只是防连发刷屏的保险，不是触发条件
+        // 实现为每次 tick 小概率触发（期望约 6 分钟一次，配合全局最短间隔形成自然节奏）；
+        // 下面的 15 分钟最小间隔只是防连发刷屏的保险，不是触发条件
         if (sinceLast >= maxMs) {
           // 最大间隔兜底：超过 maxPostInterval 强制触发（chat 模式无显式间隔）
           plan.push({ peer, platform, cfg, hint: '结合你们最近聊过的话题和你的近况，有感而发' });
-        } else if (now - last >= 15 * 60_000 && Math.random() < 1 / 240) {
+        } else if (now - last >= 15 * 60_000 && Math.random() < 1 / 80) {
           plan.push({ peer, platform, cfg, hint: '结合你们最近聊过的话题和你的近况，有感而发' });
         }
       }
