@@ -7771,7 +7771,7 @@ function FriendProfilePage({
   };
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-white dark:bg-[#111214]">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-white dark:bg-[#1B1C1F]">
       {/* 56：背景图 absolute 铺顶（对齐个人资料页真机 QQ 风格，高 320px） */}
       <div
         role="button"
@@ -7896,8 +7896,9 @@ function FriendProfilePage({
         </button>
       </div>
 
-      {/* 底部三按钮：音视频通话 / 编辑资料（跳联系人 App 编辑页）/ 发消息 */}
-      <div className="flex shrink-0 gap-3 bg-white px-4 pb-[40px] pt-3 dark:bg-[#111214]">
+      {/* 底部三按钮：音视频通话 / 编辑资料（跳联系人 App 编辑页）/ 发消息
+          底色与主卡一致（深色 #1B1C1F），消除主卡与按钮区衔接处的色差边缘 */}
+      <div className="flex shrink-0 gap-3 bg-white px-4 pb-[40px] pt-3 dark:bg-[#1B1C1F]">
         <button
           type="button"
           onClick={() => onToast('音视频通话暂未开放')}
