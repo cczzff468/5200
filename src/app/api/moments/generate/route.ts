@@ -18,6 +18,10 @@ export const runtime = 'nodejs';
  *   thread?: { authorName?: string, content?: string }[], // 评论区上下文（回复时）
  *   replyTo?: { authorName?: string, content?: string },  // 被回复的评论
  *   hint?: string,                     // 触发语境提示（如「结合最近聊天有感而发」）
+ *   ownRecentPosts?: string[],         // 该角色最近已发过的动态（发动态时防重复/防自相矛盾）
+ *   avoid?: string[],                  // 禁复读名单：该角色最近说过的话（评论/回复/转发不与已说过的重复；
+ *                                      //   微信/QQ 两平台各自独立生成，后生成方会读到先落盘方的同一角色发言）
+ *   variation?: string,                // 随机切入角度（每次生成都不同——两平台/两次触发不再产出一字不差的内容）
  *   bilingual?: boolean,               // 48-3/53：是否启用双语规则（true 时返回 { content, contentZh }）
  *   bilingualPrompt?: string,          // 48-3/53：双语提示词（空则用 DEFAULT_BILINGUAL_PROMPT 新规则）
  * }
@@ -147,6 +151,22 @@ export async function POST(req: Request) {
     ? (body.memories as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0).slice(0, 10).map((m) => m.trim().slice(0, 80))
     : [];
   const hint = s(body.hint, 80);
+  // 禁复读名单：该角色最近已说过的话（评论/回复/转发绝不重复自己——微信/QQ 独立生成的硬保证之一）
+  const avoid = Array.isArray(body.avoid)
+    ? (body.avoid as unknown[])
+        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        .slice(0, 8)
+        .map((x) => x.trim().slice(0, 80))
+    : [];
+  // 该角色最近已发过的动态（发动态防重复/防自相矛盾：同一个人是连续的生活）
+  const ownRecentPosts = Array.isArray(body.ownRecentPosts)
+    ? (body.ownRecentPosts as unknown[])
+        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        .slice(0, 6)
+        .map((x) => x.trim().slice(0, 100))
+    : [];
+  // 随机切入角度（引擎每次随机指定，同样的 prompt 基础产出不同方向）
+  const variation = s(body.variation, 40);
   // 48-3 / 53：双语翻译支持（新规则：原文|中文译文，用 | 分隔；中文正文无译文）
   const bilingual = body.bilingual === true;
   const DEFAULT_BILINGUAL_PROMPT = `【朋友圈双语规则（仅非中文角色使用，中文角色忽略此规则）】
@@ -162,8 +182,13 @@ export async function POST(req: Request) {
     user.push(`请以「${name}」的口吻，现在发一条${label}动态。`);
     user.push('- 第一人称、口语化，20~120 字；禁止使用任何 emoji 或表情符号（如 😀😂🎉✨🔥👍❤☀ 之类一律不用），正文一律纯文字；');
     user.push('- 内容是你自己的近况、心情、见闻或想法，要贴合你的身份、职业和生活；');
+    user.push('- 这是你自己在发动态，不是去评论别人的动态、也不是回复谁的消息；');
     if (chat.length > 0) user.push('- 可以自然融入你们最近的相处与共同话题（下方素材），但绝不能逐字复述聊天记录，也不要写「你说过…」这种引用句式；');
     user.push(`- 这是发在动态广场的公开内容，不是发给某人的私聊，不要直接对${userName}说心里话式的称呼。`);
+    if (ownRecentPosts.length > 0)
+      user.push(
+        `【你最近已经发过的动态（新动态绝不能与它们重复，也不能在事实/心情/境遇上前后矛盾——你始终是同一个连续生活的人）】\n${ownRecentPosts.map((p) => `- ${p}`).join('\n')}`
+      );
     if (hint) user.push(`（本次灵感提示：${hint}）`);
     if (chat.length > 0) user.push(`【你们最近的聊天（素材，不必全用）】\n${chat.join('\n')}`);
     if (memories.length > 0) user.push(`【你记得的关于${userName}和你们之间的事（素材）】\n${memories.map((m) => `- ${m}`).join('\n')}`);
@@ -217,6 +242,7 @@ export async function POST(req: Request) {
           `【你记得的关于${userName}和其他好友的事（评论不得与这些已知事实矛盾；能自然顺带一句最好，但不能生硬复述）】\n${memories.map((m) => `- ${m}`).join('\n')}`
         );
       user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」这类套话，也不要纯夸奖；');
+      user.push(`- 再次强调（最重要）：你要评论的动态是${postAuthor}发的「${postContent.slice(0, 80)}」，评论必须让人一眼看出你看懂了这条动态，与这条动态无关的话一句都不要说——跑题的评论是无效输出；`);
       user.push('- 只输出评论文本，不要任何解释。');
     } else {
       const replyRaw = (body.replyTo && typeof body.replyTo === 'object' ? body.replyTo : {}) as { authorName?: unknown; content?: unknown };
@@ -242,6 +268,17 @@ export async function POST(req: Request) {
     }
   }
 
+  // 禁复读名单（评论/回复/转发/发动态通用）：与已说过的话一字不差是硬性废品
+  if (avoid.length > 0) {
+    user.push(
+      `【禁复读（硬性要求）：下面是你最近已经说过的话（可能在另一个 App 或别的动态下说的）。你这次输出的话必须换一个完全不同的角度和说法，与它们一个字都不能相同，意思和句式也不能雷同】\n${avoid.map((t) => `- ${t}`).join('\n')}`
+    );
+  }
+  // 随机切入角度（引擎每次随机指定）：同样的素材也能产出不同方向的内容
+  if (variation) {
+    user.push(`（本次切入角度（内部指定，直接照此发挥即可，输出里不要出现“角度/要求”这类字眼）：${variation}）`);
+  }
+
   // 48-3 / 53：bilingual=true 时直接追加双语规则全文（规则自含格式说明：原文|中文译文，用 | 分隔）
   if (bilingual) {
     user.push(bilingualPrompt);
@@ -254,6 +291,9 @@ export async function POST(req: Request) {
 
   try {
     const config = extractUpstreamConfig(body.config);
+    // 动态/评论是创意短文本：温度过低（或上游缓存）会让同一角色在微信/QQ 两平台产出一字不差的内容，
+    // 这里抬高到 ≥0.9 保证多样性（仅影响本端点，不改用户全局配置）
+    if (config) config.temperature = Math.max(config.temperature, 0.9);
     const { text } = await completeWithFallback(config, messages);
     // #47：发动态 / 评论 / 回复统一硬性剥 emoji——朋友圈文字干净；提示词禁令之外再剥一次（模型偶尔无视禁令）
     // 48-3 / 53：bilingual=true 时 LLM 按「原文|中文译文」格式输出，splitBilingual 按 | 拆分；中文正文无 | 则 contentZh=''

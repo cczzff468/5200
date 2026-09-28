@@ -10491,3 +10491,38 @@ Stage Summary:
 - 修改文件：src/lib/moments.ts（+340 主体：repost/notice 引擎）、src/app/api/moments/generate/route.ts（+21 repost kind）、src/components/apps/moments-shared.tsx（+300：表情面板+互动消息页）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（发布/展示/入口/路由）
 - 核心成果：①两平台发动态支持 文字/图片/位置/表情 ②QQ 支持点赞/评论/转发（用户转发弹层 + AI 自动转发）③互动消息收件箱：微信「与我的互动消息」+ QQ「空间消息」六分类，每条含头像/昵称/时间/内容/原动态摘要/回复入口，收件箱内可直接回复评论并触发 AI 多轮再回复 ④「1条新消息」气泡按平台样式区分（微信深色胶囊 / QQ 白色胶囊+箭头）+ 铃铛红点 ⑤身份/记忆关系规则不受影响，归属依旧全对
 - 已提交并推送 origin/main
+---
+Task ID: fix-moments-content-dup
+Agent: 主协调者 (Z.ai Code)
+Task: 修复动态/评论内容问题——①评论与动态主题对不上、角色评论不读动态内容 ②同一角色同时发多条前后矛盾的动态 ③QQ 与微信同一条动态的评论一字不差（跨 App 复读）
+
+Work Log:
+- 根因排查（3 处）：
+  1. 跨 App 评论一字不差：微信/QQ 两平台各自独立生成（无复制），但 prompt 基础几乎完全相同（同一人设 + 同一动态内容 + 同一份混合记忆），上游 LLM 确定性/缓存 → 输出一字不差；且无任何「禁复读」机制
+  2. 评论跑题：动态内容在 prompt 里只出现一次，评论区 thread/记忆素材多，LLM 容易被带跑；无扣题末尾强调
+  3. 角色连发矛盾动态：aiPostMoment 生成时看不到该角色最近已发的动态（尤其另一平台的），前后内容矛盾/雷同（测试数据里乐乐 4 条「秃头/CPU」变体实锤）
+- 引擎修复（src/lib/moments.ts）：
+  1) memorySnippets(contactId, app?, limit?)：记忆素材按「当前 App」优先过滤（同 App ≥3 条才纯用；不足混入其他 App 补齐去重）——微信/QQ 素材池天然分离
+  2) 新增 recentSelfTextsOf(peerId)：收集该角色最近在两平台说过的全部话（评论+转发理由，新→旧去重 ≤8 条）作为禁复读名单 avoid，随评论/回复/转发请求传入
+  3) 新增 ownRecentPostsOf(peerId)：收集该角色最近两平台原创动态（≤6 条，带「N分钟前发在朋友圈/QQ空间」标签）作为防矛盾素材传入发动态请求
+  4) 新增随机切入角度 randomVariation：评论 8 种角度（追问细节/关系梗/带情绪/分享近况/唱反调/神回复/关心追问/开玩笑）+ 发动态 6 种题材，每次生成随机指定 → 同样的 prompt 基础产出不同方向
+  5) 生成后硬校验 isDupText（归一化去标点/小写比较：完全相等或 ≥12 字相互包含 = 雷同）：评论/回复与 avoid 雷同 → 带禁令重试 1 次 → 仍雷同抛错不入库（队列按原策略重试/放弃）；转发雷同直接放弃；发动态与自己已发动态雷同同理
+  6) aiPostMoment/aiCommentOnMoment/aiRepostMoment 全部接入 avoid + variation + App 过滤记忆；drain 三处 catch 加 console.warn 便于后续排查
+- API 修复（src/app/api/moments/generate/route.ts）：
+  1) 解析新字段 avoid/ownRecentPosts/variation
+  2) comment prompt 末尾加「再次强调（最重要）：你要评论的动态是X发的「…」，跑题的评论是无效输出」；post prompt 加「这是你自己在发动态，不是去评论别人的动态」+ ownRecentPosts 防矛盾段；四类生成共用禁复读段 + 随机角度段
+  3) 本端点温度抬到 ≥0.9（Math.max(config.temperature, 0.9)，仅影响动态生成，不改用户全局配置）——防上游低温度/缓存导致的确定性输出
+- 浏览器端到端验证（420×900，合成 PointerEvent；本环境锁屏需在「向上轻扫以解锁」元素上直接派发 pointer 序列，主屏翻页用页点按钮更稳）：
+  - 种子：凡凡(user)+陈默/乐乐(char)，两平台全好友；两平台首评延迟 3s、概率全开
+  - 扣题验证：发「愿得一人心，白首不分离」→ 陈默评「找到了？还是又在debug感情bug？」、乐乐评「凡凡这是在暗示我帮你找对象吗？白首不分离，我先来当个媒婆怎么样？」——全部扣住动态主题+人设 ✓
+  - 跨 App 独立验证：QQ 发同内容 → 陈默 QQ 评「最近也在写程序，发现白头偕老比写一辈子代码还难。」、乐乐 QQ 评「凡凡这是想脱单了吗？…」——同一角色两平台评论完全不同 ✓
+  - 记忆抽查（mem-frag）：四条碎片「陈默评论了凡凡的朋友圈动态(app=wx)」「陈默评论了凡凡的QQ空间动态(app=qq)」「乐乐评论了…」三方关系全对 + app 来源标记正确 ✓
+  - 防矛盾验证：设置页「立即发帖」让陈默连续在 QQ（13:46）和微信（13:47）发帖 → 两条内容完全不同且人设连续（凌晨三点 debug 的咖啡杯 / 生活像代码一样有 undo），不与历史帖重复 ✓
+  - 回复链路：回复乐乐评论「哈哈可以，随时来问」→ 乐乐 3~8s 后再回复（语境衔接、不复读）✓；互动消息收件箱回复/评论/赞五条记录全对 ✓
+  - 回归：微信单聊发消息 → AI 两条语音回复正常（动态注入块无报错）；dev.log generate 全 200、无运行时错误
+- bunx tsc --noEmit exit 0；bun run lint exit 0
+- 环境备注：①kvGet 走内存缓存（memStore 启动注水），运行期直接写 IndexedDB 对引擎不可见——测试种数据必须经引擎写入或重启页面后再入 ②锁屏态下主屏内容照常在 DOM 底层（innerText 检测会误判），判状态优先 screenshot
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts（+210：avoid/variation/ownRecentPosts 素材收集与去重校验、App 过滤记忆、失败日志）、src/app/api/moments/generate/route.ts（+40：新字段解析、扣题/防矛盾/禁复读/角度四段 prompt、温度≥0.9）
+- 核心成果：①评论必须扣题（prompt 双重强调 + 每次随机切入角度）②同一角色微信/QQ 评论内容必然不同（App 过滤记忆 + 跨平台禁复读名单 + 随机角度 + 温度抬升四重保证，生成后再校验兜底）③角色连发动态不重复不矛盾（ownRecentPosts 注入 + 去重校验）④记忆写入带 App 来源且三方关系正确（原 fix-moments-identity 逻辑不受影响）⑤发帖人自评/自赞防线、单聊/群聊/红包/语音等受保护功能全回归通过

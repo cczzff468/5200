@@ -1363,12 +1363,131 @@ async function callGenerateApi(
   };
 }
 
-/** 记忆素材：该角色最近的活跃记忆（截短，喂给生成 prompt） */
-function memorySnippets(contactId: string, limit = 8): string[] {
-  return listFragments(contactId)
-    .filter((f) => !f.supersededAt && !f.expiredAt)
+/** 文本去重归一：去空白/标点/符号、转小写——判定「内容完全一致（除标点外）」用 */
+function normalizeForDupText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
+    .trim();
+}
+
+/** 是否与禁复读列表里的某条「完全一致或高度雷同」（完全相等，或较长相互包含） */
+function isDupText(text: string, avoid: string[]): boolean {
+  const t = normalizeForDupText(text);
+  if (!t) return false;
+  return avoid.some((a) => {
+    const n = normalizeForDupText(a);
+    if (!n) return false;
+    if (n === t) return true;
+    // 一方明显更长且完整包含另一方（≥12 字才判雷同，避免短评“哈哈哈”误伤）
+    return Math.min(n.length, t.length) >= 12 && (n.includes(t) || t.includes(n));
+  });
+}
+
+/**
+ * 随机切入角度（每次生成都随机指定一个，让同样的 prompt 基础每次产出不同方向的内容——
+ * 同一角色在微信/QQ 两平台、甚至两次触发之间，内容不再一字不差）。
+ */
+const VARIATION_ANGLES_COMMENT: string[] = [
+  '从这条动态里挑一个具体的细节追问或调侃',
+  '用你们关系里的梗接话，损友式拆台',
+  '带点情绪地反应（羡慕/吃醋/不服气/幸灾乐祸任选其一）',
+  '顺势分享一句你自己相关的近况来呼应',
+  '故意唱反调或认真吐槽一句',
+  '只回一句简短但扎心/好笑的神回复',
+  '关心式地追问后续（像真的好奇结果）',
+  '顺着动态内容开一个玩笑或抖个机灵',
+];
+const VARIATION_ANGLES_POST: string[] = [
+  '写今天遇到的一件具体小事',
+  '写此刻的心情（结合当下的时间/天气/场景）',
+  '写工作或生活里的一点小感慨',
+  '写最近在折腾的一件事（吃的/剧/游戏/运动都行）',
+  '对某个日常场景发一句吐槽',
+  '写一个突然冒出来的念头',
+];
+function randomVariation(kind: 'post' | 'comment'): string {
+  const pool = kind === 'post' ? VARIATION_ANGLES_POST : VARIATION_ANGLES_COMMENT;
+  return pool[Math.floor(Math.random() * pool.length)] ?? '';
+}
+
+function agoLabelOf(ts: number): string {
+  const mins = Math.max(1, Math.round((Date.now() - ts) / 60_000));
+  if (mins < 60) return `${mins}分钟前`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return `${h}小时前`;
+  return `${Math.round(h / 24)}天前`;
+}
+
+/**
+ * 该角色最近发过的原创动态（跨微信/QQ 两平台，新→旧）：
+ * 喂给发动态 prompt——同一角色是「同一段连续生活」，新动态不能与自己已发的重复或矛盾
+ * （修复「同一角色同时发了多条前后矛盾的动态」）。
+ */
+function ownRecentPostsOf(peerId: string, limit = 6): { label: string; raw: string }[] {
+  const out: { platform: MomentPlatform; content: string; createdAt: number }[] = [];
+  for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+    for (const p of listMomentPosts(platform)) {
+      if (p.author !== 'char' || p.peerId !== peerId || p.repostOf) continue;
+      out.push({ platform, content: p.content, createdAt: p.createdAt });
+    }
+  }
+  return out
+    .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, limit)
-    .map((f) => f.content.replace(/\s+/g, ' ').slice(0, 60));
+    .map((p) => ({
+      label: `「${p.content.slice(0, 60)}」（${agoLabelOf(p.createdAt)}发在${MOMENT_PLATFORM_LABEL[p.platform]}）`,
+      raw: p.content,
+    }));
+}
+
+/**
+ * 该角色最近说过的所有话（评论 + 转发理由，跨两平台，新→旧，去重）：
+ * 喂给评论/回复/转发的 prompt 作禁复读名单——同一条动态在微信和 QQ 里的评论必须不同，
+ * 一个字都不能与 TA 最近说过的话完全一致（修复「QQ 和微信的评论一字不差」）。
+ */
+function recentSelfTextsOf(peerId: string, limit = 8): string[] {
+  const items: { text: string; createdAt: number }[] = [];
+  for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+    for (const p of listMomentPosts(platform)) {
+      if (p.author === 'char' && p.peerId === peerId && p.repostOf) {
+        items.push({ text: p.content, createdAt: p.createdAt });
+      }
+      for (const c of p.comments) {
+        if (c.author !== 'char' || c.peerId !== peerId) continue;
+        items.push({ text: c.content, createdAt: c.createdAt });
+      }
+    }
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const it of items.sort((a, b) => b.createdAt - a.createdAt)) {
+    const t = it.text.trim();
+    if (!t) continue;
+    const key = normalizeForDupText(t);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t.slice(0, 60));
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** 记忆素材：该角色最近的活跃记忆——优先取「当前 App」的记忆（评论/发动态要基于该 App 的上下文），
+ *  同 App 记忆不足 3 条时再混入其他 App 的记忆补齐（微信和 QQ 的素材池因此天然不同） */
+function memorySnippets(contactId: string, app?: MemApp, limit = 8): string[] {
+  const all = listFragments(contactId).filter((f) => !f.supersededAt && !f.expiredAt);
+  let picked = all;
+  if (app) {
+    const inApp = all.filter((f) => f.app === app);
+    if (inApp.length >= Math.min(3, limit)) {
+      picked = inApp;
+    } else {
+      const seen = new Set(inApp.map((f) => f.content.trim()));
+      picked = [...inApp, ...all.filter((f) => f.app !== app && !seen.has(f.content.trim()))];
+    }
+  }
+  return picked.slice(0, limit).map((f) => f.content.replace(/\s+/g, ' ').slice(0, 60));
 }
 
 /**
@@ -1389,26 +1508,40 @@ export async function aiPostMoment(args: {
   const recentChat = memRecentConvo(peer.id, platformApp(platform))
     .slice(-10)
     .map((t) => ({ role: t.role, text: t.text }));
-  const { content, contentZh } = await callGenerateApi(apiConfig, {
-    kind: 'post',
-    platform,
-    userName,
-    peer: personaOf(peer),
-    recentChat,
-    memories: memorySnippets(peer.id),
-    hint: hint ?? null,
-    bilingual: settings.bilingualEnabled,
-    bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
-  });
-  const post = addCharMomentPost(platform, {
-    peer,
-    userName,
-    content,
-    contentZh: contentZh || undefined,
-  });
-  // NPC 互动：角色发完动态后，其他 NPC 好友延迟（npcInteractDelay 秒）来点赞/评论
-  enqueuePostInteractions(platform, post.id, settings.npcInteractDelay);
-  return post;
+  // 反自相矛盾素材：TA 最近在两个平台发过的全部原创动态（新动态不得与之重复/矛盾——同一个人是连续的生活）
+  const ownPosts = ownRecentPostsOf(peer.id);
+  const ownRaw = ownPosts.map((p) => p.raw);
+  // 生成后去重重试：与已发动态一字不差 → 带禁令重试一次；仍重复则放弃（调度器退避后重来）
+  let banned = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { content, contentZh } = await callGenerateApi(apiConfig, {
+      kind: 'post',
+      platform,
+      userName,
+      peer: personaOf(peer),
+      recentChat,
+      memories: memorySnippets(peer.id, platformApp(platform)),
+      ownRecentPosts: ownPosts.map((p) => p.label),
+      avoid: banned ? [banned] : [],
+      variation: randomVariation('post'),
+      hint: hint ?? null,
+      bilingual: settings.bilingualEnabled,
+      bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
+    });
+    if (!isDupText(content, ownRaw)) {
+      const post = addCharMomentPost(platform, {
+        peer,
+        userName,
+        content,
+        contentZh: contentZh || undefined,
+      });
+      // NPC 互动：角色发完动态后，其他 NPC 好友延迟（npcInteractDelay 秒）来点赞/评论
+      enqueuePostInteractions(platform, post.id, settings.npcInteractDelay);
+      return post;
+    }
+    banned = content;
+  }
+  throw new Error('动态与最近发过的内容重复');
 }
 
 /** AI 给用户的动态写一条评论/回复（二.1/二.3；内容贴合人设、动态内容与记忆——不与已知事实矛盾）。
@@ -1429,28 +1562,41 @@ export async function aiCommentOnMoment(args: {
   const settings = getMomentsSettings(platform);
   // 评论串（回复时带上下文，让 AI 接得住多轮）
   const thread = post.comments.slice(-6).map((c) => ({ authorName: c.authorName, content: c.content }));
-  // 记忆素材（四.1）：评论/回复也参考记忆库，避免评论内容与已知事实矛盾
-  const { content, contentZh } = await callGenerateApi(apiConfig, {
-    kind: replyTo ? 'reply' : 'comment',
-    platform,
-    userName,
-    peer: personaOf(peer),
-    post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 200) },
-    thread,
-    replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content } : null,
-    memories: memorySnippets(peer.id),
-    bilingual: settings.bilingualEnabled,
-    bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
-  });
-  const added = addCharMomentComment(platform, post.id, {
-    peer,
-    userName,
-    content,
-    contentZh: contentZh || undefined,
-    replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
-  });
-  if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');
-  return added;
+  // 禁复读名单：TA 最近在两个平台说过的全部话（评论+转发理由）——
+  // 同一条动态在微信和 QQ 里各生成一次评论时，后生成的一方读到了先落盘的那条，
+  // 被明令禁止再说一样的话（修复「QQ 和微信的评论一字不差」）
+  const avoid = recentSelfTextsOf(peer.id);
+  // 生成后校验：与最近发言完全一致/高度雷同 → 带禁令重试一次；仍重复 → 抛错（队列按原策略处理）
+  let banned = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { content, contentZh } = await callGenerateApi(apiConfig, {
+      kind: replyTo ? 'reply' : 'comment',
+      platform,
+      userName,
+      peer: personaOf(peer),
+      post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 200) },
+      thread,
+      replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content } : null,
+      memories: memorySnippets(peer.id, platformApp(platform)),
+      avoid: attempt === 0 ? avoid : [...avoid, banned].filter(Boolean),
+      variation: randomVariation('comment'),
+      bilingual: settings.bilingualEnabled,
+      bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
+    });
+    if (!isDupText(content, avoid)) {
+      const added = addCharMomentComment(platform, post.id, {
+        peer,
+        userName,
+        content,
+        contentZh: contentZh || undefined,
+        replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
+      });
+      if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');
+      return added;
+    }
+    banned = content;
+  }
+  throw new Error('评论与最近发言重复，已阻止写入');
 }
 
 /**
@@ -1472,16 +1618,24 @@ export async function aiRepostMoment(args: {
   const already = listMomentPosts(platform, userName).some((x) => x.repostOf?.postId === post.id && x.peerId === peer.id);
   if (already) return null;
   const settings = getMomentsSettings(platform);
+  // 禁复读：TA 最近说过的话（评论/转发理由，跨平台）——转发理由不与自己其他平台的话雷同
+  const avoid = recentSelfTextsOf(peer.id);
   const { content, contentZh } = await callGenerateApi(apiConfig, {
     kind: 'repost',
     platform,
     userName,
     peer: personaOf(peer),
     post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 120) },
-    memories: memorySnippets(peer.id, 4),
+    memories: memorySnippets(peer.id, platformApp(platform), 4),
+    avoid,
+    variation: randomVariation('comment'),
     bilingual: settings.bilingualEnabled,
     bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
   });
+  if (isDupText(content, avoid)) {
+    // 转发是锦上添花：理由与最近发言雷同 → 直接放弃本次转发（不影响点赞/评论）
+    return null;
+  }
   return addCharMomentPost(platform, {
     peer,
     userName,
@@ -1553,8 +1707,9 @@ async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentT
         replyTo: { commentId: parent.id, name: parent.authorName, content: parent.content },
       });
       emitMomentsChanged(item.platform);
-    } catch {
+    } catch (err) {
       // 失败重试：最多 3 次，每次顺延 90s
+      console.warn('[moments] reply 生成失败（将重试）', err);
       if (item.tries < 2) keep.push({ ...item, tries: item.tries + 1, fireAt: now + 90_000 });
     }
   }
@@ -1609,13 +1764,15 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
               // 转发失败不影响点赞/评论
             }
           }
-        } catch {
+        } catch (err) {
           // 单个角色失败不影响其他角色
+          console.warn('[moments] 单个角色互动失败', peer.name, err);
         }
       }
       if (picked.length > 0) emitMomentsChanged(item.platform);
-    } catch {
+    } catch (err) {
       // 队列项整体失败：不重试（互动是锦上添花）
+      console.warn('[moments] 互动队列项失败', item.postId, err);
     }
   }
   return keep;
@@ -1685,8 +1842,9 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
       hint: pick.hint,
     });
     emitMomentsChanged(pick.platform);
-  } catch {
+  } catch (err) {
     // 保留退避标记（10 分钟后重试）
+    console.warn('[moments] 自动发帖失败', pick.peer.name, pick.platform, err);
   }
 }
 
