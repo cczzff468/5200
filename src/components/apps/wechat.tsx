@@ -8905,15 +8905,15 @@ function WxSearchPage({
       .slice(0, 3);
   }, [moments, key]);
 
-  /** 记录搜索词：去重后置顶，最多保留 10 条 */
+  /** 记录搜索词：去重后置顶，最多保留 10 条。
+   *  注意直接同步写 localStorage（不走 setHist updater）——点网页结果会立刻切到浏览器 App、
+   *  本页随之卸载，updater 会被 React 丢弃导致历史丢失 */
   const pushHist = (raw: string) => {
     const t = raw.trim();
     if (!t) return;
-    setHist((prev) => {
-      const next = [t, ...prev.filter((x) => x !== t)].slice(0, WX_SEARCH_HISTORY_MAX);
-      saveStrList(WX_SEARCH_HISTORY_KEY, next);
-      return next;
-    });
+    const next = [t, ...hist.filter((x) => x !== t)].slice(0, WX_SEARCH_HISTORY_MAX);
+    saveStrList(WX_SEARCH_HISTORY_KEY, next);
+    setHist(next);
   };
   const clearHist = () => {
     saveStrList(WX_SEARCH_HISTORY_KEY, []);

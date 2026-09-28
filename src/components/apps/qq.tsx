@@ -7818,7 +7818,8 @@ function FriendProfilePage({
           }}
         />
       </div>
-      {/* 顶部浮钮：返回 / 个人资料标题 / 设置（叠在背景图上，避开状态栏 pt-[50px]，深色玻璃圆钮） */}
+      {/* 顶部浮钮：返回 / 个人资料标题（叠在背景图上，避开状态栏 pt-[50px]，深色玻璃圆钮；
+          右上角设置图标已按需求删除，用同宽占位保持标题居中） */}
       <div className="relative z-10 flex items-center justify-between px-3 pt-[50px] pb-2">
         <button
           type="button"
@@ -7832,14 +7833,7 @@ function FriendProfilePage({
         <span className="pointer-events-none text-[17px] font-semibold text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           个人资料
         </span>
-        <button
-          type="button"
-          aria-label="设置"
-          onClick={() => onToast('资料卡设置暂未开放')}
-          className="grid h-9 w-9 place-items-center rounded-full bg-black/30 text-white shadow-sm backdrop-blur-md transition-transform active:scale-90 active:bg-black/50"
-        >
-          <Settings className="h-[18px] w-[18px]" strokeWidth={2} />
-        </button>
+        <span aria-hidden="true" className="h-9 w-9 shrink-0" />
       </div>
 
       {/* 白色圆角主卡（从背景图中间叠上来：mt-[125px] 露出顶部约 195px 背景，rounded-t-[22px] 圆角顶） */}
