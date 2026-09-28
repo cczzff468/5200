@@ -7777,114 +7777,109 @@ function FriendProfilePage({
   };
 
   return (
-    <div className="flex h-full w-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
-      {/* 顶栏：返回 / 个人资料 / 设置 */}
-      <div className="relative flex h-12 shrink-0 items-center bg-white px-3 dark:bg-[#111214]">
-        <button type="button" aria-label="返回" data-testid="qq-fprofile-back" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
-          <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-white dark:bg-[#111214]">
+      {/* 56：背景图 absolute 铺顶（对齐个人资料页真机 QQ 风格，高 320px） */}
+      <div
+        role="button"
+        aria-label="点击更换封面"
+        data-testid="qq-fprofile-upload-banner"
+        title="点击更换封面"
+        onClick={handleUploadBanner}
+        className="absolute inset-x-0 top-0 h-[320px] cursor-pointer"
+      >
+        {peerBg ? (
+          <img src={peerBg} alt="封面" className="h-full w-full object-cover" />
+        ) : peer.avatar ? (
+          <img
+            src={peer.avatar}
+            alt=""
+            aria-hidden="true"
+            className="h-full w-full scale-125 object-cover blur-2xl brightness-[0.62]"
+          />
+        ) : (
+          <div
+            className="h-full w-full"
+            style={{ background: 'linear-gradient(180deg, #93A9CC 0%, #5E6D88 100%)' }}
+            aria-hidden="true"
+          />
+        )}
+        <input
+          ref={bannerFileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          data-testid="qq-fprofile-banner-file"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(e) => {
+            void handleBannerFile(e.target.files);
+            e.target.value = '';
+          }}
+        />
+      </div>
+      {/* 恢复默认浮钮（仅 peerBg 时显示，叠在背景图右上） */}
+      {peerBg && (
+        <button
+          type="button"
+          data-testid="qq-fprofile-reset-banner"
+          onClick={handleResetBanner}
+          disabled={bannerBusy}
+          className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-full bg-black/40 px-3 py-1 text-[12px] text-white backdrop-blur-sm active:bg-black/60 disabled:opacity-50"
+        >
+          <Undo2 className="h-3.5 w-3.5" strokeWidth={2.2} />
+          恢复默认
         </button>
-        <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">
+      )}
+
+      {/* 顶部浮钮：返回 / 个人资料标题 / 设置（叠在背景图上，深色玻璃圆钮） */}
+      <div className="relative z-10 flex items-center justify-between px-3 pt-3">
+        <button
+          type="button"
+          aria-label="返回"
+          data-testid="qq-fprofile-back"
+          onClick={onBack}
+          className="grid h-9 w-9 place-items-center rounded-full bg-black/25 text-white backdrop-blur active:bg-black/40"
+        >
+          <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
+        </button>
+        <span className="pointer-events-none text-[17px] font-semibold text-white drop-shadow">
           个人资料
         </span>
         <button
           type="button"
           aria-label="设置"
           onClick={() => onToast('资料卡设置暂未开放')}
-          className="ml-auto rounded-full p-1.5 active:bg-black/5"
+          className="grid h-9 w-9 place-items-center rounded-full bg-black/25 text-white backdrop-blur active:bg-black/40"
         >
-          <Settings className="h-[22px] w-[22px] text-black/70 dark:text-white/70" strokeWidth={2} />
+          <Settings className="h-[18px] w-[18px]" strokeWidth={2} />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto" data-testid="qq-fprofile-body">
-        {/* 54/55：顶部全宽横向背景图（无圆角无遮罩，纯背景图） */}
-        <div className="group relative h-[180px] w-full overflow-hidden">
-          <div
-            role="button"
-            tabIndex={0}
-            data-testid="qq-fprofile-upload-banner"
-            aria-label="点击更换封面"
-            title="点击更换封面"
-            onClick={handleUploadBanner}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleUploadBanner();
-              }
-            }}
-            className={`absolute inset-0 h-full w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
-              bannerBusy ? 'opacity-60' : ''
-            }`}
+      {/* 白色圆角主卡（从背景图中间叠上来：mt-[125px] 露出顶部约 195px 背景，rounded-t-[22px] 圆角顶） */}
+      <div className="relative z-10 mt-[125px] flex-1 overflow-y-auto rounded-t-[22px] bg-white px-5 pb-4 pt-6 dark:bg-[#1B1C1F]" data-testid="qq-fprofile-body">
+        {/* 头像 + 名字/QQ号 + 点赞（卡片内，对齐个人资料页布局） */}
+        <div className="flex items-start gap-4">
+          <QqAvatar src={peer.avatar} alt={peer.name} size={84} />
+          <div className="min-w-0 flex-1 pt-1">
+            <div className="flex items-center gap-1.5">
+              <span className="min-w-0 truncate text-[20px] font-bold leading-tight">{peer.name}</span>
+            </div>
+            <div className="mt-1.5 truncate text-[13px] text-black/45 dark:text-white/45" data-testid="qq-fprofile-qqid">
+              QQ:{peer.qqId ?? '未设置'}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="点赞"
+            data-testid="qq-fprofile-like"
+            onClick={giveLike}
+            className="flex shrink-0 flex-col items-center gap-0.5 pt-1 text-black/65 active:opacity-60 dark:text-white/65"
           >
-            {peerBg ? (
-              <img src={peerBg} alt="封面" className="h-full w-full object-cover" />
-            ) : peer.avatar ? (
-              <img
-                src={peer.avatar}
-                alt=""
-                aria-hidden="true"
-                className="h-full w-full scale-125 object-cover blur-2xl brightness-[0.62]"
-              />
-            ) : (
-              <div
-                className="h-full w-full"
-                style={{ background: 'linear-gradient(180deg, #93A9CC 0%, #5E6D88 100%)' }}
-                aria-hidden="true"
-              />
-            )}
-          </div>
-          {peerBg && (
-            <button
-              type="button"
-              data-testid="qq-fprofile-reset-banner"
-              onClick={handleResetBanner}
-              disabled={bannerBusy}
-              className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-full bg-black/40 px-3 py-1 text-[12px] text-white backdrop-blur-sm active:bg-black/60 disabled:opacity-50"
-            >
-              <Undo2 className="h-3.5 w-3.5" strokeWidth={2.2} />
-              恢复默认
-            </button>
-          )}
-          <input
-            ref={bannerFileRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            data-testid="qq-fprofile-banner-file"
-            onChange={(e) => {
-              void handleBannerFile(e.target.files);
-              e.target.value = '';
-            }}
-          />
-        </div>
-
-        {/* 55：白色圆角卡片——左上角圆形头像 + 名字/QQ号 + 右侧大拇指和点赞数 */}
-        <div className="mx-3 mt-3 overflow-hidden rounded-[14px] bg-white p-4 shadow-sm dark:bg-[#1E1E1E]">
-          <div className="flex items-center gap-4">
-            <div className="shrink-0 overflow-hidden rounded-full ring-2 ring-black/[0.04] dark:ring-white/10">
-              <QqAvatar src={peer.avatar} alt={peer.name} size={64} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="min-w-0 truncate text-[18px] font-bold leading-tight">{peer.name}</span>
-              </div>
-              <div className="mt-1.5 truncate text-[12px] text-black/45 dark:text-white/45" data-testid="qq-fprofile-qqid">
-                QQ:{peer.qqId ?? '未设置'}
-              </div>
-            </div>
-            <button
-              type="button"
-              aria-label="点赞"
-              data-testid="qq-fprofile-like"
-              onClick={giveLike}
-              className="flex shrink-0 flex-col items-center gap-0.5 text-black/70 active:opacity-60 dark:text-white/70"
-            >
-              <ThumbsUp className="h-6 w-6" strokeWidth={1.9} />
-              <span className="text-[12px]" data-testid="qq-fprofile-like-count">
-                {likes}
-              </span>
-            </button>
-          </div>
+            <ThumbsUp className="h-5 w-5" strokeWidth={1.9} />
+            <span className="text-[12px]" data-testid="qq-fprofile-like-count">
+              {likes}
+            </span>
+          </button>
         </div>
 
         {/* 徽章行（QQ 等级图标；SVIP8/勋章/LV8/LV3 已删除） */}
