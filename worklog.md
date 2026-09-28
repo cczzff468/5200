@@ -10330,3 +10330,31 @@ Stage Summary:
 - 测试账号（仅本浏览器 profile）：小陆 手机号/密码 123456/123456，好友 陈默/苏晴
 - 新用户首次使用流程：联系人 App → 新建 user 类型联系人（需设微信密码/QQ密码）→ 微信/QQ App 登录
 - git push 凭据已就绪：origin remote 已嵌入 PAT，后续改动 commit 后可直接 git push origin main
+
+---
+Task ID: feat-63
+Agent: 主协调者 (Z.ai Code)
+Task: 朋友圈/空间动态互动设置界面再美化（极简风）；确认节奏预设为 活跃30分钟-2小时 / 自然2-4小时 / 安静6-12小时
+
+Work Log:
+- 核对 src/lib/ios/moments-settings.ts：MOMENT_RHYTHM_PRESETS 已是 active 30-120 / natural 120-240 / calm 360-720 分钟（feat-62 落地，与用户本次要求一致），数据层无需改动
+- 重写 src/components/apps/moments-settings.tsx（+204/-191，唯一改动文件）：
+  - 删除全部 7 色行图标（TONE_* 色板 + RowIcon 组件整体移除）与所有行内副标题描述 → 纯文字行（微信原生设置风）
+  - 节奏预设从 3 个渐变按钮 → iOS Segmented Control（灰底轨道 + 白底浮起选中段 + framer-motion layoutId 滑块动画），4 段：活跃(30分钟-2小时)/自然(2-4小时)/安静(6-12小时)/自定义(手动)，每段两行（节奏名+区间）
+  - 自定义段：下方内嵌 最短/最长间隔 输入行（仅自定义时出现），交叉钳制（最短≤当前最长、最长≥当前最短）保证区间合法；加载时 min>max 历史脏数据自动对调
+  - 总开关关闭 → 节奏区整体 opacity-40 + pointer-events-none 淡出禁点（iOS 依赖设置联动风）
+  - 状态信息合并为卡片下方一行 GroupFooter：「N 位好友 · 每隔约 X发一条」/「已关闭…」/「正在统计好友…」
+  - 「立即发帖」独立动作卡（平台色居中文字）；「恢复默认设置」居中红字动作卡；底部提示压缩为一行居中小字
+  - 滑杆去图标全宽化，填充色改平台主色（wx 绿 #07C160 / qq 蓝 #0099FF）
+- 浏览器端到端验证（agent-browser 420×900）：
+  - wx 朋友圈设置：分段切换 活跃/自然/安静 footer 即时更新（30分钟-2小时→2-4小时→6-12小时）✓；自定义 90/180 分钟 →「每隔约 1.5-3小时发一条」✓；输入 800 钳到 720 ✓
+  - 持久化：刷新页面自定义段保持选中、90/180 值保留 ✓；恢复默认 → 回活跃段、隐藏自定义行、值回 30/120 ✓
+  - 总开关 off → 节奏区 opacity 0.4 + pointerEvents none ✓；footer「已关闭，好友将不再主动发布动态」✓
+  - 立即发帖 → 打开 AskPostSheet 好友列表（苏晴/陈默）✓；滑杆 50→85→50 即时生效 ✓；双语提示词二级页正常 ✓
+  - QQ 空间动态设置：同构渲染、立即发帖/分段选中色 rgb(0,153,255) QQ 蓝 ✓；wx/qq 设置共享一致 ✓
+  - 深色模式（IndexedDB theme=dark + 刷新）：卡片 #141414、分段滑块 #5b5b60（iOS 深色分段控件色）、平台色不变 ✓
+  - bunx tsc --noEmit exit 0；bun run lint exit 0；dev.log 无运行时错误
+
+Stage Summary:
+- 修改文件：src/components/apps/moments-settings.tsx（204 insertions / 191 deletions）
+- 核心成果：①设置页极简化（去图标/去副标题/去渐变，iOS 原生风纯文字分组）②节奏预设确认分钟级区间 活跃30分钟-2小时/自然2-4小时/安静6-12小时，改用 Segmented Control 呈现③自定义间隔交叉钳制 + 脏数据自愈④总开关联动淡出⑤wx/qq 双平台主题色适配 + 深色模式全链路浏览器验证通过
