@@ -2441,6 +2441,25 @@ function WxPaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (
   const [data, setData] = useState(() => wxLoadPayPwd());
   const [flow, setFlow] = useState<null | { mode: 'set' | 'confirm' | 'verify-off' | 'verify-change'; first?: string }>(null);
   const [errKey, setErrKey] = useState(0);
+  // #100 锁定状态（verify-off/verify-change 失败累加，成功清零；5 次 30s 锁定，对称 QQ #97）
+  const [lock, setLock] = useState<WxPayPwdLockData>(() => wxLoadPayPwdLock());
+  const [remainSec, setRemainSec] = useState(0);
+  useEffect(() => {
+    if (lock.lockedUntil <= 0) return;
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((lock.lockedUntil - Date.now()) / 1000));
+      setRemainSec(remain);
+      if (remain <= 0) {
+        const cleared = { fails: 0, lockedUntil: 0 };
+        wxSavePayPwdLock(cleared);
+        setLock(cleared);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [lock.lockedUntil]);
+  const isLocked = lock.lockedUntil > 0 && Date.now() < lock.lockedUntil;
   const enabled = data.enabled && !!data.pwd;
   const meta = flow
     ? flow.mode === 'set'
@@ -2504,10 +2523,12 @@ function WxPaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (
               key={`${flow.mode}-${errKey}`}
               title={meta.title}
               sub={meta.sub}
-              hint={errKey > 0 ? '密码错误，请重新输入' : undefined}
+              hint={isLocked ? `密码错误次数过多，请 ${remainSec} 秒后再试` : errKey > 0 ? `密码错误，请重新输入${lock.fails > 0 ? `（已失败 ${lock.fails} 次，5 次后将锁定 30 秒）` : ''}` : undefined}
               errorKey={errKey}
+              locked={isLocked}
               onClose={() => setFlow(null)}
               onComplete={(pwd) => {
+                if (isLocked) return;
                 if (flow.mode === 'set') {
                   setErrKey(0);
                   setFlow({ mode: 'confirm', first: pwd });
@@ -2515,6 +2536,7 @@ function WxPaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (
                   if (pwd === flow.first) {
                     wxSavePayPwd({ enabled: true, pwd });
                     setData(wxLoadPayPwd());
+                    wxClearPayPwdLock();
                     setFlow(null);
                     onToast('支付密码已开启');
                   } else {
@@ -2526,13 +2548,21 @@ function WxPaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (
                   if (pwd === data.pwd) {
                     wxSavePayPwd({ enabled: false, pwd: null });
                     setData(wxLoadPayPwd());
+                    wxClearPayPwdLock();
                     setFlow(null);
                     onToast('支付密码已关闭');
-                  } else setErrKey((k) => k + 1);
+                  } else {
+                    setLock(wxRecordPayPwdFail());
+                    setErrKey((k) => k + 1);
+                  }
                 } else if (pwd === data.pwd) {
                   setErrKey(0);
+                  wxClearPayPwdLock();
                   setFlow({ mode: 'set' });
-                } else setErrKey((k) => k + 1);
+                } else {
+                  setLock(wxRecordPayPwdFail());
+                  setErrKey((k) => k + 1);
+                }
               }}
             />
           </div>

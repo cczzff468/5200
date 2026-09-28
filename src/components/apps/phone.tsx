@@ -23,6 +23,7 @@ import {
   Play,
   Plus,
   Search,
+  Settings as SettingsIcon,
   Star,
   Trash2,
   UserPlus,
@@ -38,6 +39,7 @@ import { IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { IOSActionSheet } from '@/components/ios/ActionSheet';
+import { isProactiveCallEnabled, setProactiveCallEnabled, getProactiveLevel, setProactiveLevel, type ProactiveLevel } from '@/lib/ios/proactive-call';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
@@ -3682,6 +3684,16 @@ export default function PhoneApp() {
   const [playingVmId, setPlayingVmId] = useState<string | null>(null);
   const [loadingVmId, setLoadingVmId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
+  // 电话 App 右上角设置图标 Sheet（主动来电开关 + 频率档位，从设置 › 通知页迁移到此）
+  const [proactiveSheetOpen, setProactiveSheetOpen] = useState(false);
+  const [proactive, setProactive] = useState<boolean>(() => isProactiveCallEnabled());
+  const [proactiveLevel, setProactiveLevelState] = useState<ProactiveLevel>(() => getProactiveLevel());
+  const PROACTIVE_LEVEL_OPTIONS: { value: ProactiveLevel; label: string; desc: string }[] = [
+    { value: 'conservative', label: '保守', desc: '2h 间隔·6h 冷却·120s 轮询' },
+    { value: 'standard', label: '标准', desc: '30min 间隔·1h 冷却·60s 轮询（推荐）' },
+    { value: 'eager', label: '积极', desc: '10min 间隔·15min 冷却·45s 轮询' },
+    { value: 'off', label: '无冷却', desc: '仅 10min 自然间隔·60s 轮询' },
+  ];
   const toastTimer = useRef<number | null>(null);
   const vmAudioRef = useRef<HTMLAudioElement | null>(null);
   const switchToApp = useUI((s) => s.switchToApp);
@@ -4000,27 +4012,39 @@ export default function PhoneApp() {
             </>
           }
           right={
-            tab === 'contacts' ? (
+            <div className="flex items-center gap-1">
+              {/* 电话 App 右上角设置图标（所有 tab 常驻）：点开弹 Sheet 配置 AI 主动来电开关 + 频率档位 */}
               <button
                 type="button"
-                onClick={() => setNewContact({ open: true, phone: '' })}
-                aria-label="新建联系人（添加好友）"
-                data-testid="add-contact"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-[#0A84FF] transition-colors active:bg-[#0A84FF]/10"
+                onClick={() => setProactiveSheetOpen(true)}
+                aria-label="主动来电设置"
+                data-testid="phone-proactive-settings"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-foreground transition-colors active:bg-foreground/10"
               >
-                <Plus className="h-[24px] w-[24px]" strokeWidth={2} />
+                <SettingsIcon className="h-[22px] w-[22px]" strokeWidth={2} />
               </button>
-            ) : tab === 'recents' && logs && logs.length > 0 ? (
-              /* 最近通话的「编辑」：右上角（用户要求从左侧移过来） */
-              <button
-                type="button"
-                onClick={() => setEditOpen(true)}
-                className="rounded-full bg-foreground/[0.08] px-4 py-[7px] text-[15px] font-medium leading-none text-foreground transition-all active:scale-95 active:bg-foreground/[0.16]"
-                data-testid="edit-logs"
-              >
-                编辑
-              </button>
-            ) : undefined
+              {tab === 'contacts' ? (
+                <button
+                  type="button"
+                  onClick={() => setNewContact({ open: true, phone: '' })}
+                  aria-label="新建联系人（添加好友）"
+                  data-testid="add-contact"
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-[#0A84FF] transition-colors active:bg-[#0A84FF]/10"
+                >
+                  <Plus className="h-[24px] w-[24px]" strokeWidth={2} />
+                </button>
+              ) : tab === 'recents' && logs && logs.length > 0 ? (
+                /* 最近通话的「编辑」：右上角（用户要求从左侧移过来） */
+                <button
+                  type="button"
+                  onClick={() => setEditOpen(true)}
+                  className="rounded-full bg-foreground/[0.08] px-4 py-[7px] text-[15px] font-medium leading-none text-foreground transition-all active:scale-95 active:bg-foreground/[0.16]"
+                  data-testid="edit-logs"
+                >
+                  编辑
+                </button>
+              ) : null}
+            </div>
           }
         />
 
@@ -4186,6 +4210,76 @@ export default function PhoneApp() {
           ]}
           onCancel={() => setEditOpen(false)}
         />
+
+        {/* 电话 App 右上角设置：AI 主动来电开关 + 频率档位（从设置 › 通知页迁移到此） */}
+        {proactiveSheetOpen && (
+          <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/50" role="dialog" aria-label="主动来电设置" onClick={() => setProactiveSheetOpen(false)}>
+            <div className="rounded-t-[18px] bg-background pb-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <div className="relative flex h-12 items-center justify-center border-b border-border/60">
+                <button
+                  type="button"
+                  aria-label="关闭"
+                  onClick={() => setProactiveSheetOpen(false)}
+                  className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-muted-foreground active:bg-foreground/10"
+                >
+                  <X className="h-5 w-5" strokeWidth={2.2} />
+                </button>
+                <p className="text-[16px] font-medium">主动来电设置</p>
+              </div>
+              <div className="px-4 pt-4">
+                {/* AI 主动来电总开关 */}
+                <div className="flex min-h-[52px] items-center gap-3 rounded-[12px] bg-foreground/[0.04] px-4 py-2 dark:bg-foreground/[0.06]">
+                  <span className="min-w-0 flex-1 text-[16px] leading-tight">
+                    AI 主动来电
+                    <span className="mt-0.5 block text-[12px] leading-[16px] text-muted-foreground">
+                      AI 可能会根据聊天和心情主动打来电话
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={proactive}
+                    aria-label="AI 主动来电"
+                    onClick={() => {
+                      const v = !proactive;
+                      setProactiveCallEnabled(v);
+                      setProactive(v);
+                    }}
+                    className={`relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors ${proactive ? 'bg-[#34C759]' : 'bg-foreground/20'}`}
+                  >
+                    <span className={`absolute top-[2px] h-[27px] w-[27px] rounded-full bg-white shadow transition-all ${proactive ? 'left-[22px]' : 'left-[2px]'}`} />
+                  </button>
+                </div>
+                {/* 频率档位 4 选 1（iOS 风格单选列表，比点按循环更直观） */}
+                <p className="px-1 pb-2 pt-4 text-[13px] font-medium text-muted-foreground">频率</p>
+                <div className="overflow-hidden rounded-[12px] bg-foreground/[0.04] dark:bg-foreground/[0.06]">
+                  {PROACTIVE_LEVEL_OPTIONS.map((opt, i) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      disabled={!proactive}
+                      data-testid={`proactive-level-${opt.value}`}
+                      onClick={() => {
+                        setProactiveLevel(opt.value);
+                        setProactiveLevelState(opt.value);
+                      }}
+                      className={`flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors disabled:opacity-40 ${i > 0 ? 'border-t border-border/40' : ''} ${proactiveLevel === opt.value ? 'bg-foreground/[0.06] dark:bg-foreground/[0.1]' : 'active:bg-foreground/[0.04]'}`}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[16px] leading-tight">{opt.label}</span>
+                        <span className="mt-0.5 block text-[12px] leading-[16px] text-muted-foreground">{opt.desc}</span>
+                      </span>
+                      {proactiveLevel === opt.value ? <Check className="h-5 w-5 shrink-0 text-[#34C759]" strokeWidth={2.5} aria-hidden="true" /> : null}
+                    </button>
+                  ))}
+                </div>
+                <p className="px-1 pt-3 text-[12px] leading-relaxed text-muted-foreground">
+                  切换档位即时生效，下次调度即用新间隔与冷却。「无冷却」仅保留 10min 自然间隔 + 深夜 0-8 点不打扰。
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 通话全屏层 */}
         {callTarget && (

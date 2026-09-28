@@ -115,7 +115,7 @@ const LEVEL_PRESETS: Record<ProactiveLevel, ProactiveLevelPreset> = {
     firstTickDelayMs: 15_000,
     tickIntervalMs: 60_000, // 60s（全局节流）
     tickJitterMs: 15_000,
-    shortCooldownMs: 60_000, // 1min（防同 tick 重复选同一联系人）
+    shortCooldownMs: 120_000, // #101 2min（> tickInterval 60s，防触发被阻后 60s 后又选同候选重击决策 API）
   },
 };
 
@@ -136,12 +136,6 @@ export function setProactiveLevel(level: ProactiveLevel): void {
 function preset(): ProactiveLevelPreset {
   return LEVEL_PRESETS[getProactiveLevel()];
 }
-
-/** 兼容外部读取（ProactiveCallWatcher 用）——首延迟与 tick 间隔随档位变。
- *  注意：这是 fallback 默认值；调度器应优先用下面的动态 getter，以支持运行时切档即时生效。 */
-export const PROACTIVE_FIRST_TICK_DELAY_MS = 20_000;
-export const PROACTIVE_TICK_INTERVAL_MS = 60_000;
-export const PROACTIVE_TICK_JITTER_MS = 30_000;
 
 /** 动态读取档位的 tick 调度参数（切档后下次 tick 即用新值）——ProactiveCallWatcher 用 */
 export function getProactiveTickParams(): { firstDelay: number; interval: number; jitter: number } {
@@ -314,15 +308,21 @@ function cooldownKey(contactId: string): string {
 function isCoolingDown(contactId: string, nowMs: number): boolean {
   const c = kvGet<{ at?: unknown; action?: unknown; window?: unknown }>(cooldownKey(contactId));
   if (!c || typeof c.at !== 'number') return false;
-  // #52 自定义窗口（短冷却）：record 同时写 window 时优先用它而非 action 推导
+  // #103 优先用 record 内固化的 window（setCooldown/setShortCooldown 写入），跨档切换语义清晰：
+  //   conservative 设的 6h 冷却不会被切到 standard 后缩短为 1h；off 档设的 0 不会被切到 conservative 后变长
   if (typeof c.window === 'number' && c.window > 0) return nowMs - c.at < c.window;
+  if (typeof c.window === 'number' && c.window === 0) return false; // off 档固化 0=无冷却
+  // 兜底：旧 record 无 window 字段，按当前档位 action 推导（向后兼容）
   const p = preset();
-  const window = c.action === 'skip' ? p.cooldownSkipMs : p.cooldownActiveMs; // 未知 action 按活跃口径保守处理
+  const window = c.action === 'skip' ? p.cooldownSkipMs : p.cooldownActiveMs;
   return nowMs - c.at < window;
 }
 
+/** #103 setCooldown 固化当前档位的冷却时长到 record.window，跨档切换不改变已有冷却的剩余时长 */
 function setCooldown(contactId: string, at: number, action: ProactiveDecision['action']): void {
-  kvSet(cooldownKey(contactId), { at, action });
+  const p = preset();
+  const window = action === 'skip' ? p.cooldownSkipMs : p.cooldownActiveMs;
+  kvSet(cooldownKey(contactId), { at, action, window });
 }
 
 /** #52 短冷却（5min）：决策为 call 但触发前发现已有通话/闹钟时使用——
@@ -548,6 +548,8 @@ async function tickInner(): Promise<void> {
 
   // 资格筛选（#53 满足条件的联系人为候选；按「最久没聊」加权随机选取，
   // 避免同一最久者每 90s 被反复占用直到进入冷却，其余合格者饿死）
+  // #104 preset() hoist 到循环外（避免每个候选调一次；isCoolingDown 内部仍会调但属必要读取）
+  const p = preset();
   const candidates: { contact: ContactRecord; lastInteractionAt: number; weight: number }[] = [];
   for (const c of contacts) {
     const lastInteractionAt = Math.max(
@@ -558,7 +560,6 @@ async function tickInner(): Promise<void> {
     );
     if (lastInteractionAt <= 0) continue; // 从未互动（新联系人先聊过天再说）
     const gap = nowMs - lastInteractionAt;
-    const p = preset();
     if (gap > p.activeWindowMs) continue; // 48h 内无互动
     if (gap < p.minGapMs) continue; // 刚聊完不久
     if (isCoolingDown(c.id, nowMs)) continue; // 冷却中
