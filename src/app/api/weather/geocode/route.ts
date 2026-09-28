@@ -14,6 +14,10 @@ interface CitySearchResult {
   name: string;
   country: string;
   admin1: string;
+  /** 省内下一级行政区（地级市/州/盟），open-meteo admin2 字段 */
+  admin2?: string;
+  /** 县/区/县级市，open-meteo admin3 字段（部分结果才有） */
+  admin3?: string;
   latitude: number;
   longitude: number;
 }
@@ -80,12 +84,14 @@ export async function GET(request: NextRequest) {
 
   try {
     const raw = (await fetchJsonHttps(url, 10_000)) as {
-      results?: { name?: string; country?: string; admin1?: string; latitude?: number; longitude?: number }[];
+      results?: { name?: string; country?: string; admin1?: string; admin2?: string; admin3?: string; latitude?: number; longitude?: number }[];
     };
     const results: CitySearchResult[] = (raw.results ?? []).map((r) => ({
       name: typeof r.name === 'string' ? r.name : '',
       country: typeof r.country === 'string' ? r.country : '',
       admin1: typeof r.admin1 === 'string' ? r.admin1 : '',
+      admin2: typeof r.admin2 === 'string' && r.admin2 ? r.admin2 : undefined,
+      admin3: typeof r.admin3 === 'string' && r.admin3 ? r.admin3 : undefined,
       latitude: typeof r.latitude === 'number' && Number.isFinite(r.latitude) ? r.latitude : 0,
       longitude: typeof r.longitude === 'number' && Number.isFinite(r.longitude) ? r.longitude : 0,
     }));

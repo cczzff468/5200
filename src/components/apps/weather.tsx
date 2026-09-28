@@ -34,12 +34,14 @@ import {
   FALLBACK_CITY,
   asCityPick,
   cityKeyOf,
+  citySubtitleOf,
   fetchWeather,
+  publishWeatherSnap,
   readWeatherCache,
   resolveCityPick,
   searchCity,
+  useWeatherSnapshot,
   weatherCodeInfo,
-  writeWeatherCache,
   type CityPick,
   type CitySearchResult,
   type WeatherData,
@@ -138,51 +140,20 @@ function isNightNow(data: WeatherData): boolean {
  * 数据获取：① localStorage 缓存(<10min) ② 已选城市/定位 ③ 北京兜底。
  */
 export function WeatherWidget() {
-  const [data, setData] = useState<WeatherData | null>(null);
-  const [failed, setFailed] = useState(false);
+  // 用 useWeatherSnapshot 订阅模块级快照：天气 App 切换城市后 publishWeatherSnap 广播，
+  // 本组件即时收到新城市天气（无需刷新网页）。挂载时若无快照，ensureWeatherLoaded 会后台拉取。
+  const data = useWeatherSnapshot();
+  const failed = data === null && (() => {
+    // 失败判定：快照 null 且无任何缓存（含过期）时才算失败；有缓存则显示缓存
+    return readWeatherCache(Number.POSITIVE_INFINITY) === null;
+  })();
+  // 兜底：快照 null 但有过期缓存时显示缓存（避免 widget 空白）
+  const display = data ?? readWeatherCache(Number.POSITIVE_INFINITY);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      // ① localStorage 缓存（< 10 分钟）直接使用
-      const cached = readWeatherCache(10 * 60 * 1000);
-      if (cached) {
-        if (!cancelled) {
-          setData(cached);
-          setFailed(false);
-        }
-        return;
-      }
-      // ② 已选城市 → 浏览器定位 → 北京兜底
-      const pick = await resolveCityPick();
-      if (cancelled) return;
-      try {
-        const fresh = await fetchWeather(pick.lat, pick.lon, pick.name);
-        if (cancelled) return;
-        writeWeatherCache(fresh);
-        setData(fresh);
-        setFailed(false);
-      } catch {
-        if (cancelled) return;
-        // 请求失败时回退到过期缓存
-        const stale = readWeatherCache(Number.POSITIVE_INFINITY);
-        if (stale) {
-          setData(stale);
-          setFailed(false);
-        } else {
-          setFailed(true);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const isNight = data ? isNightNow(data) : false;
-  const gradient = weatherGradient(data ? data.current.code : 0, isNight);
-  const info = data ? weatherCodeInfo(data.current.code) : null;
-  const today = data?.daily[0];
+  const isNight = display ? isNightNow(display) : false;
+  const gradient = weatherGradient(display ? display.current.code : 0, isNight);
+  const info = display ? weatherCodeInfo(display.current.code) : null;
+  const today = display?.daily[0];
   const Icon = info?.Icon;
 
   return (
@@ -190,7 +161,7 @@ export function WeatherWidget() {
       className="mx-auto flex h-[152px] w-[152px] flex-col justify-between overflow-hidden rounded-[24px] p-3.5 text-white"
       style={{ backgroundImage: gradient }}
     >
-      {/* #89：失败时显示明确“加载失败”占位（不再与缓存数据并存混淆） */}
+      {/* #89：失败时显示明确"加载失败"占位（不再与缓存数据并存混淆） */}
       {failed ? (
         <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
           <CloudOff className="h-7 w-7 text-white/70" strokeWidth={1.8} aria-hidden="true" />
@@ -203,13 +174,13 @@ export function WeatherWidget() {
           <div className="flex items-start justify-between">
             <span className="flex items-start gap-[2px]">
               <span className="text-[42px] font-semibold leading-[40px] tabular-nums">
-                {data ? Math.round(data.current.temperature) : '--'}
+                {display ? Math.round(display.current.temperature) : '--'}
               </span>
               <span className="text-[13px] font-medium leading-[14px]">°C</span>
             </span>
             {Icon ? (
               <Icon
-                className={`h-[32px] w-[32px] shrink-0 ${data && data.current.code <= 2 ? 'text-[#F7D24B]' : ''}`}
+                className={`h-[32px] w-[32px] shrink-0 ${display && display.current.code <= 2 ? 'text-[#F7D24B]' : ''}`}
                 strokeWidth={1.6}
                 aria-hidden="true"
               />
@@ -227,7 +198,7 @@ export function WeatherWidget() {
               {today ? `${Math.round(today.min)}~${Math.round(today.max)}°` : '--~--°'}
             </span>
             <span className="shrink-0 truncate text-[12px] leading-none text-white/55">
-              {data ? data.name || '当前位置' : ''}
+              {display ? display.name || '当前位置' : ''}
             </span>
           </div>
         </>
@@ -316,13 +287,12 @@ function CitySearchPanel({ onClose, onPick }: { onClose: () => void; onPick: (pi
           results.map((r, i) => (
             <button
               key={`${r.latitude},${r.longitude},${i}`}
-              onClick={() => onPick({ lat: r.latitude, lon: r.longitude, name: r.name })}
+              onClick={() => onPick({ lat: r.latitude, lon: r.longitude, name: r.name, admin1: r.admin1 || undefined, admin2: r.admin2 || undefined, admin3: r.admin3 || undefined })}
               className="w-full rounded-[12px] px-3 py-2.5 text-left transition-colors active:bg-white/10"
             >
               <span className="block text-[16px] text-white">{r.name}</span>
               <span className="mt-0.5 block text-[12px] text-white/55">
-                {[r.admin1, r.country].filter(Boolean).join(' · ') || '—'} · {r.latitude.toFixed(2)}°,{' '}
-                {r.longitude.toFixed(2)}°
+                {[r.admin1, r.admin2, r.admin3].filter(Boolean).join(' · ') || r.country || '—'} · {r.latitude.toFixed(2)}°, {r.longitude.toFixed(2)}°
               </span>
             </button>
           ))}
@@ -580,7 +550,7 @@ function CityManagerPage({
 
   /** 把搜索结果加入列表（按经纬度两位小数去重），并清空搜索框与结果 */
   const addCity = (r: CitySearchResult) => {
-    const pick: CityPick = { lat: r.latitude, lon: r.longitude, name: r.name };
+    const pick: CityPick = { lat: r.latitude, lon: r.longitude, name: r.name, admin1: r.admin1 || undefined, admin2: r.admin2 || undefined, admin3: r.admin3 || undefined };
     const key = cityKeyOf(pick);
     if (!cities.some((c) => cityKeyOf(c) === key)) {
       const next = [...cities, pick];
@@ -666,7 +636,7 @@ function CityManagerPage({
               >
                 <span className="block text-[16px] leading-tight text-foreground">{r.name}</span>
                 <span className="mt-0.5 block text-[12px] text-muted-foreground">
-                  {[r.admin1, r.country].filter(Boolean).join(' · ') || '—'}
+                  {[r.admin1, r.admin2, r.admin3].filter(Boolean).join(' · ') || r.country || '—'}
                 </span>
               </button>
             ))}
@@ -736,7 +706,8 @@ export default function WeatherApp() {
     try {
       const fresh = await fetchWeather(pick.lat, pick.lon, pick.name, force);
       if (reqRef.current !== req) return;
-      writeWeatherCache(fresh);
+      // 用 publishWeatherSnap 统一写缓存+更新快照+广播，小组件即时收到新城市天气（无需刷新网页）
+      publishWeatherSnap(fresh);
       setData(fresh);
       setStatus('ready');
     } catch (e) {
@@ -829,9 +800,12 @@ export default function WeatherApp() {
     >
       <main className="no-scrollbar flex-1 overflow-y-auto" aria-label="天气内容">
         <div className="px-5 pb-[40px] pt-[64px]">
-          {/* 顶部城市栏：居中城市名 + 右上角搜索/刷新 */}
-          <header className="relative flex h-[48px] items-center justify-center">
+          {/* 顶部城市栏：居中城市名（+ 省/市/县副标题）+ 右上角搜索/刷新 */}
+          <header className="relative flex h-[48px] flex-col items-center justify-center">
             <h1 className="max-w-[190px] truncate text-[34px] font-normal leading-none">{city ? city.name : '天气'}</h1>
+            {city && citySubtitleOf(city) ? (
+              <p className="mt-0.5 max-w-[220px] truncate text-[12px] leading-none text-white/60">{citySubtitleOf(city)}</p>
+            ) : null}
             {/* 左侧：返回主屏幕（底部横杠点击关闭已禁用，根界面需显式返回键）+ 城市管理入口 */}
             <div className="absolute inset-y-0 left-[-10px] flex items-center">
               <button

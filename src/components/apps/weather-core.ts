@@ -44,6 +44,10 @@ export interface CitySearchResult {
   name: string;
   country: string;
   admin1: string;
+  /** 地级市/州/盟（open-meteo admin2） */
+  admin2?: string;
+  /** 县/区/县级市（open-meteo admin3） */
+  admin3?: string;
   latitude: number;
   longitude: number;
 }
@@ -51,7 +55,14 @@ export interface CitySearchResult {
 export interface CityPick {
   lat: number;
   lon: number;
+  /** 显示名（城市/县城名，定位后经 reverse geocode 反查，不再显示「当前位置」） */
   name: string;
+  /** 省/直辖市（可选，搜索结果携带） */
+  admin1?: string;
+  /** 地级市/州/盟（可选） */
+  admin2?: string;
+  /** 县/区/县级市（可选） */
+  admin3?: string;
 }
 
 export const FALLBACK_CITY: CityPick = { lat: 39.9042, lon: 116.4074, name: '北京' };
@@ -59,6 +70,18 @@ export const FALLBACK_CITY: CityPick = { lat: 39.9042, lon: 116.4074, name: '北
 /** 城市去重/天气缓存键：经纬度保留两位小数 */
 export function cityKeyOf(c: CityPick): string {
   return `${c.lat.toFixed(2)},${c.lon.toFixed(2)}`;
+}
+
+/** 城市副标题：省/市/县拼接（去重，去掉与 name 重复的层级）。
+ *  例：name='海淀区' + admin2='北京市' + admin1='北京市' → '北京市'（去重）
+ *      name='昆山' + admin2='苏州市' + admin1='江苏省' → '江苏省 苏州市'
+ *  用于天气 App 主页大标题下方、城市管理页城市卡片副标题。 */
+export function citySubtitleOf(c: CityPick): string {
+  const parts: string[] = [];
+  for (const p of [c.admin1, c.admin2, c.admin3]) {
+    if (p && p !== c.name && !parts.includes(p)) parts.push(p);
+  }
+  return parts.join(' ');
 }
 
 // ==================== 天气码映射 ====================
@@ -163,7 +186,14 @@ export function asCityPick(v: unknown): CityPick | null {
   if (typeof v !== 'object' || v === null) return null;
   const o = v as Record<string, unknown>;
   if (typeof o.lat === 'number' && Number.isFinite(o.lat) && typeof o.lon === 'number' && Number.isFinite(o.lon) && typeof o.name === 'string') {
-    return { lat: o.lat, lon: o.lon, name: o.name };
+    return {
+      lat: o.lat,
+      lon: o.lon,
+      name: o.name,
+      admin1: typeof o.admin1 === 'string' && o.admin1 ? o.admin1 : undefined,
+      admin2: typeof o.admin2 === 'string' && o.admin2 ? o.admin2 : undefined,
+      admin3: typeof o.admin3 === 'string' && o.admin3 ? o.admin3 : undefined,
+    };
   }
   return null;
 }
@@ -181,7 +211,28 @@ function getPosition(timeoutMs = 5000): Promise<GeolocationPosition> {
   });
 }
 
-/** 依次尝试：IndexedDB 中用户选择过的城市 → 浏览器定位 → 北京兜底（定位失败静默） */
+/** 反向地理编码：经纬度 → 城市/县城名（调 /api/weather/reverse 代理 BigDataCloud）。
+ *  失败时返回 null，调用方兜底「当前位置」或 FALLBACK_CITY。 */
+async function reverseGeocode(lat: number, lon: number): Promise<{ name: string; admin1?: string; admin2?: string; admin3?: string } | null> {
+  try {
+    const res = await fetch(`/api/weather/reverse?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`);
+    if (!res.ok) return null;
+    const data = (await res.json()) as { name?: string; admin1?: string; admin2?: string; admin3?: string };
+    if (typeof data.name === 'string' && data.name) {
+      return {
+        name: data.name,
+        admin1: data.admin1 || undefined,
+        admin2: data.admin2 || undefined,
+        admin3: data.admin3 || undefined,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 依次尝试：IndexedDB 中用户选择过的城市 → 浏览器定位（反查城市县名） → 北京兜底（定位失败静默） */
 export async function resolveCityPick(): Promise<CityPick> {
   try {
     const rec = await localDB.get('settings', 'weatherCity');
@@ -192,7 +243,14 @@ export async function resolveCityPick(): Promise<CityPick> {
   }
   try {
     const pos = await getPosition(5000);
-    return { lat: pos.coords.latitude, lon: pos.coords.longitude, name: '当前位置' };
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    // 定位后反查城市县名（不再显示「当前位置」），反查失败才兜底「当前位置」
+    const rev = await reverseGeocode(lat, lon);
+    if (rev) {
+      return { lat, lon, name: rev.name, admin1: rev.admin1, admin2: rev.admin2, admin3: rev.admin3 };
+    }
+    return { lat, lon, name: '当前位置' };
   } catch {
     /* 定位失败静默，走兜底城市 */
   }
@@ -218,6 +276,16 @@ function emitWeather(): void {
   for (const listener of weatherListeners) listener();
 }
 
+/** 写缓存 + 更新模块级快照 + 广播给所有小组件订阅者（即时刷新，无需刷新网页）。
+ *  天气 App 的 load()/switchCity()/ensureWeatherLoaded() 成功后调此函数，
+ *  HomeScreen/LockScreen 的小组件通过 useWeatherSnapshot 订阅，立即收到新城市天气。 */
+export function publishWeatherSnap(data: WeatherData): void {
+  writeWeatherCache(data);
+  weatherSnap = data;
+  weatherSnapRead = true;
+  emitWeather();
+}
+
 /** 无缓存时后台拉取一次（已选城市→定位→北京兜底），成功写缓存并广播；失败回退过期缓存 */
 function ensureWeatherLoaded(): void {
   if (weatherFetchStarted) return;
@@ -227,9 +295,7 @@ function ensureWeatherLoaded(): void {
     try {
       const pick = await resolveCityPick();
       const fresh = await fetchWeather(pick.lat, pick.lon, pick.name);
-      writeWeatherCache(fresh);
-      weatherSnap = fresh;
-      emitWeather();
+      publishWeatherSnap(fresh); // 统一走 publishWeatherSnap（写缓存+更新快照+广播）
     } catch {
       const stale = readWeatherCache(Number.POSITIVE_INFINITY);
       if (stale) {
