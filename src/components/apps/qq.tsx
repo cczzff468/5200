@@ -188,7 +188,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
@@ -7720,14 +7720,8 @@ function FriendProfilePage({
   useEffect(() => {
     reloadPeerBg();
   }, [reloadPeerBg]);
-  const handleResetBanner = useCallback(() => {
-    void removePeerBg('qq', peer.id).then(() => {
-      setPeerBgState(null);
-      onToast('已恢复默认封面');
-    });
-  }, [peer.id, onToast]);
   // 47-c 改动 4：好友资料页封面点击上传——点 banner 弹文件选择 → 压缩 → setPeerBg 持久化 + 刷新本组件 banner state → toast
-  // 保留既有"恢复默认"按钮；banner 加 hover 提示（相机图标 + 文案）；上传期间禁用点击防重复触发
+  // 56：恢复默认按钮已删除（用户要求），handleResetBanner 一并移除
   const bannerFileRef = useRef<HTMLInputElement>(null);
   const [bannerBusy, setBannerBusy] = useState(false);
   const handleUploadBanner = useCallback(() => {
@@ -7817,39 +7811,25 @@ function FriendProfilePage({
           }}
         />
       </div>
-      {/* 恢复默认浮钮（仅 peerBg 时显示，叠在背景图右上） */}
-      {peerBg && (
-        <button
-          type="button"
-          data-testid="qq-fprofile-reset-banner"
-          onClick={handleResetBanner}
-          disabled={bannerBusy}
-          className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-full bg-black/40 px-3 py-1 text-[12px] text-white backdrop-blur-sm active:bg-black/60 disabled:opacity-50"
-        >
-          <Undo2 className="h-3.5 w-3.5" strokeWidth={2.2} />
-          恢复默认
-        </button>
-      )}
-
-      {/* 顶部浮钮：返回 / 个人资料标题 / 设置（叠在背景图上，深色玻璃圆钮） */}
-      <div className="relative z-10 flex items-center justify-between px-3 pt-3">
+      {/* 顶部浮钮：返回 / 个人资料标题 / 设置（叠在背景图上，避开状态栏 pt-[50px]，深色玻璃圆钮） */}
+      <div className="relative z-10 flex items-center justify-between px-3 pt-[50px] pb-2">
         <button
           type="button"
           aria-label="返回"
           data-testid="qq-fprofile-back"
           onClick={onBack}
-          className="grid h-9 w-9 place-items-center rounded-full bg-black/25 text-white backdrop-blur active:bg-black/40"
+          className="grid h-9 w-9 place-items-center rounded-full bg-black/30 text-white shadow-sm backdrop-blur-md transition-transform active:scale-90 active:bg-black/50"
         >
           <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
         </button>
-        <span className="pointer-events-none text-[17px] font-semibold text-white drop-shadow">
+        <span className="pointer-events-none text-[17px] font-semibold text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           个人资料
         </span>
         <button
           type="button"
           aria-label="设置"
           onClick={() => onToast('资料卡设置暂未开放')}
-          className="grid h-9 w-9 place-items-center rounded-full bg-black/25 text-white backdrop-blur active:bg-black/40"
+          className="grid h-9 w-9 place-items-center rounded-full bg-black/30 text-white shadow-sm backdrop-blur-md transition-transform active:scale-90 active:bg-black/50"
         >
           <Settings className="h-[18px] w-[18px]" strokeWidth={2} />
         </button>
