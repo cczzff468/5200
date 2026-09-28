@@ -10416,3 +10416,45 @@ Stage Summary:
 - 仓库代码已完整部署到 /home/z/my-project 并浏览器端到端验证通过（锁屏/主屏/聊天/AI+TTS 链路）
 - git push 凭据就绪：origin remote 已嵌入 PAT，改动 commit 后可直接 git push origin main
 - 注意事项：agent-browser 本环境 mouse 命令失效，需用 eval 合成 PointerEvent；聊天发送需点 form 内 button[type=submit]
+
+---
+Task ID: fix-moments-identity
+Agent: 主协调者 (Z.ai Code)
+Task: 修复「AI 自己给自己评论」bug + 记忆关系张冠李戴（乐乐发+乐乐评，记忆却写「乐乐评论了凡凡的动态」）
+
+Work Log:
+- 根因排查（5 处）：
+  1. moments.ts drainInteractions：互动候选不排除发帖人 → 角色发完动态，调度器可抽中发帖人自己点赞/评论
+  2. route.ts L170 `postAuthor = author==='char' ? name : userName`：name 是评论人——把评论人当发帖人传给 LLM，prompt 变「你评论你自己发的动态」
+  3. memoryContentOf：like/char-comment/char-reply 三句式硬编码机主为动态归属 → 「X评论了凡凡的动态」实际动态是别的角色发的
+  4. addCharMomentComment/addCharMomentLike 无发帖人守卫
+  5. 历史脏数据（自评论 + 错误关系记忆）无清理
+- 四层防线阻止发帖人互动自己的动态：
+  - drainInteractions 候选过滤 `!(post.author==='char' && isPostByPeer(post, p))`（isPostByPeer 含 legacy 名字兜底）
+  - aiCommentOnMoment 开头 isPostByPeer 守卫 throw（拦截在调 LLM 之前）
+  - addCharMomentComment/addCharMomentLike 数据层 isPostByPeer 守卫 return null/false
+  - route.ts 服务端守卫：comment 且 postAuthorName===name → 400「发帖人不能评论自己的动态」；reply 且 replyFrom===name → 400
+- route.ts prompt 修复：postAuthor 用传入的真实 authorName；comment prompt 加显式身份提醒（你是评论人不是发帖人/不要模仿作者口吻/不要自问自答）
+- 记忆关系修复（moments.ts + memory.ts）：
+  - MomentMemoryFact 新增 postAuthorPeerId/postAuthorDisplay/replyTargetPeerId/replyTargetDisplay
+  - writeMomentMemory 解析发帖人/被回复人真实名字；解析失败 → 不写入（宁缺勿错）
+  - memoryContentOf 新句式：「陈默评论了乐乐的朋友圈动态」「陈默给乐乐的动态点了赞」「陈默回复了乐乐的评论」（角色动态归属真实发帖人；用户动态保持归属机主）
+  - addCharMomentComment 记忆带 parent（被回复人）身份；角色动态但发帖人无法定位（legacy 无 peerId）→ 跳过记忆
+- 历史数据修复 repairMomentIdentityData（MomentsScheduler 启动时幂等执行一次）：
+  - stripSelfInteractionsFromPosts：摘除角色动态下发帖人自评论/自点赞（peerId 或名字匹配），级联 purge 记忆
+  - 记忆碎片逐条按 sourcePostId/sourceCommentId 回溯重算正确文案：关系错 → memRewriteMomentFragmentTexts 改写；原始评论/点赞已不在 → 删除；碎片主人不是当事人 → 删除；动态查不到（200 条滚动窗口淘汰）→ 保留不动防误删
+  - memory.ts 新增 memRewriteMomentFragmentTexts / memDeleteFragmentByIds
+- 浏览器端到端验证（420×900，合成 PointerEvent；种入 凡凡(user)+乐乐/陈默(char)）：
+  - 立即发帖→乐乐发动态→3 秒后 ♥陈默 点赞 + 陈默评论（非乐乐本人）✓
+  - 自动发动态同样跨角色互动（陈默帖←乐乐评；乐乐帖←陈默评）✓
+  - QQ 空间同构验证：乐乐帖←陈默赞+评、陈默帖←乐乐赞+评 ✓（共用引擎）
+  - 记忆抽查（IndexedDB mem-frag:*）：「乐乐给陈默的朋友圈动态点了赞」「陈默给乐乐的…点了赞」「乐乐评论了陈默的…」「陈默评论了凡凡的…（凡凡发的动态）」全部归属正确 ✓
+  - 用户发动态回归：凡凡发帖 → 乐乐/陈默点赞评论，记忆「乐乐评论了凡凡的」「陈默评论了凡凡的」✓（原有正确路径未破坏）
+  - 修复函数验证：注入①错误关系记忆（真实评论但归属写成凡凡）→ 刷新后被改写为「乐乐评论了陈默的…」②孤儿自评论记忆（评论 id 不存在）→ 被删除 ③注入动态里的自评论 → 被摘除 ✓
+  - 已知既有设计：同动态先赞后评时 appendFragments 相似合并为一条（commentId 回填溯源，级联清理不漏），修复函数按 sourceKind 重算文案关系仍正确
+- bunx tsc --noEmit exit 0；eslint 4 文件 exit 0；dev.log 无运行时错误（generate 全 200）
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts（+326/-37 主体）、src/lib/memory.ts（+42）、src/app/api/moments/generate/route.ts（+20）、src/components/ios/MomentsScheduler.tsx（+4）
+- 核心成果：①发帖人永不能评论/点赞自己的动态（调度候选排除+引擎+数据+API 四层防线）②LLM prompt 身份正确（评论人≠发帖人）③记忆句式归属真实发帖人/被回复人，关系无法建立宁缺勿错④历史错误数据（自评论/自点赞/错误关系记忆）启动时自动修复⑤微信+QQ 双平台、发帖→评论→回复→记忆全链路浏览器验证通过
+- 已提交 df5a3c5 并推送 origin/main
