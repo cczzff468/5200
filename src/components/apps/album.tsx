@@ -41,6 +41,7 @@ export interface AlbumPageProps {
 
 /** 读图片文件并 canvas 压缩到最大边 max px 的 JPEG data URL（quality 0.8）。
  *  album-store 的 src 字段是 data URL 字符串（不是 Blob），故与 photos.tsx 的 File 直存不同，这里需读+压缩+toDataURL。 */
+// NOTE: wechat.tsx:1255 也有同款 readImageFile（max=720），未来可抽到 src/lib/ios/image-compress.ts 共用
 function readImageFile(file: File, max = 1280): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -56,6 +57,9 @@ function readImageFile(file: File, max = 1280): Promise<string> {
           reject(new Error('canvas 不可用'));
           return;
         }
+        // 白底填底，避免透明 PNG 转 JPEG 后变黑底（#118）
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         try {
           resolve(canvas.toDataURL('image/jpeg', 0.8));

@@ -9651,3 +9651,163 @@ Stage Summary:
 - 5 处改动：①MainRoute 加 album/vision-log 两条 union ②MeDrawer 加 onOpenAlbum prop + 相册 onClick 接通 ③FriendProfilePage 加封面 banner + 恢复默认按钮 ④ChatPage 加 albumCacheRef + runAiTurn 改 async 注入 buildVisionRules ⑤buildReplyMsgs 加 6 种视觉动作分支 + MainScreen 加 4 个容器层回调 + 渲染 AlbumPage/VisionLogPage
 - tsc/eslint 状态：bunx tsc --noEmit exit 0（全项目零错误）；bunx eslint src/components/apps/qq.tsx exit 0（零 error 零 warning）
 - 未完成/留 46-h：①change-avatar/pick-album-avatar 后调 refreshContacts 让聊天页 peer.avatar 反应式刷新（需把 refreshContacts 通过新 prop 传入 ChatPage，留 // TODO 46-h 接通）；②AlbumPage 的 onPick 回调分流 handleResetAvatar/handleResetPeerBg（需 AlbumPage 选择模式 + onPick 类型扩展，留 // TODO 46-h 接通）；③FriendProfilePage 加 peer 相册入口（点击「他的QQ空间」→ handleOpenAlbum(peer.id, '${peer.name}的相册') 只读模式，留 46-h 一起做）；④ChatSettingsPage 接入「视觉决策日志」「相册」入口（chat-settings.tsx 由 46-h 独占）
+
+---
+Task ID: 47-c
+Agent: qq 视觉管理修复子代理
+Task: 删 chat-settings 4入口 + #108 头像刷新 + #112 相册最近20 + 资料页封面点击上传 + #110 清TODO
+
+Work Log:
+- 读 worklog 末尾 120 行确认 46-e/f/g/h + 47-a 已完成；本任务文件归属仅 src/components/apps/qq.tsx；dev server 后台运行不重启，绝对禁止 git 修改命令
+- rg 定位 qq.tsx（12625 行）关键位置：ChatPage 定义（2194）+ ChatSettingsPage 调用站（5438，4 个 prop 未传，无需删）/ buildReplyMsgs（3063）+ 6 种视觉动作 IIFE（3155/3191 change-avatar/pick-album-avatar）/ runAiTurn（3247）buildVisionRules 注入处（3429 slice 20）/ FriendProfilePage（7690）封面 banner（7765）/ 4 个容器层 handler（12119-12144，含 stub）/ MeDrawer onOpenAlbum 调用（12444 handleOpenAlbum）/ album 路由（12349，含 TODO 注释）
+- 改动 1（删除 chat-settings 4 入口接线痕迹）：删 MainScreen 的 4 个容器层 handler（handleOpenAlbum/handleOpenVisionLog/handleResetAvatar/handleResetPeerBg）+ 顶部注释块（含 TODO 46-h 提及）；MeDrawer onOpenAlbum 从 handleOpenAlbum(me.id,'我的相册') 改内联 setRoute({page:'album',albumContactId:me.id,albumTitle:'我的相册'}）；album 路由删除 "// TODO 46-h 接通：onPick → handleResetAvatar / handleResetPeerBg" 注释；ChatSettingsPage 调用站确认未传 4 prop（46-h 从未接通，无需删）；listAlbums/addAlbum/addVisionDecision 等 import 保留（buildReplyMsgs 6 种动作仍用）；AlbumPage/VisionLogPage import 保留（MeDrawer 相册入口 + album/vision-log 路由仍用）
+- 改动 2（#108 AI 换头像后顶栏头像即时刷新）：ChatPage props 加 refreshContacts: () => Promise<void>（解构 + 类型 + JSDoc「47-c #108：AI 自主换头像后即时刷新 contacts state」）；MainScreen ChatPage 调用站加 refreshContacts={refreshContacts}（line 12251）；buildReplyMsgs 内 change-avatar/pick-album-avatar 两处 IIFE：从 `void updateContact(peer.id,{avatar:src}).catch(()=>{})` 改 `void updateContact(peer.id,{avatar:src}).then(()=>refreshContacts()).catch(()=>{})`，同步删原 "// TODO 46-h 接通" 注释行；buildReplyMsgs deps 数组追加 refreshContacts（[peer, sessionKey, settleUserBlockReq, refreshContacts]）
+- 改动 3（#112 albumSummary 取最近 20 张）：runAiTurn 内 `albumList.slice(0, 20)` 改 `albumList.slice(-20)`（line 3424），加注释「47-c #112：取最近 20 张（末尾 20 条），而非最早的 20 张——AI 看到的是相册新增的最新内容」
+- 改动 4（QQ 好友资料页封面点击上传）：FriendProfilePage 加 bannerFileRef + bannerBusy state + handleUploadBanner（busy 时阻止重复点击 → fileRef.click()）+ handleBannerFile（compressImageFile 压缩 → setPeerBg('qq',peer.id,src) 持久化 → setPeerBgState(src) 刷新本组件 banner → toast「已设置封面」；异常 toast「上传失败」/「图片读取失败」）；banner JSX 重构：外层 div 加 `group` class；内层 role="button" tabIndex=0 + aria-label/「点击更换封面」+ onClick=handleUploadBanner + onKeyDown Enter/Space 触发；hover 提示用 group-hover:opacity-100 + group-hover:bg-black/30 浮层（Camera 图标 + 「点击更换」文案，pointer-events-none 不抢点击）；保留既有"恢复默认"按钮（z-10 上层避免被 banner click 拦截，disabled={bannerBusy}）；新增隐藏 `<input type="file" accept="image/*">` data-testid="qq-fprofile-banner-file"；setPeerBg 与 useState setter 命名冲突（FriendProfilePage 内 `const [peerBg, setPeerBg]` 遮蔽 import 的 setPeerBg），把本地 state setter 重命名为 setPeerBgState 解 TS2554（3 个引用点全部改名：reloadPeerBg/handleResetBanner/handleBannerFile）
+- 改动 5（#110 清 TODO 46-h 注释）：删 buildReplyMsgs 内 change-avatar IIFE 原 TODO 注释（line 3156）+ pick-album-avatar IIFE 原 TODO 注释（line 3187）+ MainScreen handler 块顶部 3 行 TODO 注释 + handleResetAvatar 内 TODO 注释 + handleResetPeerBg 内 TODO 注释 + album 路由 TODO 注释；rg 验证全文件 0 处 TODO 46-h 残留
+- 验证：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/qq.tsx exit 0（零 error 零 warning，超大文件 [BABEL] Note 提示正常）；git diff --stat HEAD -- src/components/apps/qq.tsx → 1 file changed, 99 insertions(+), 53 deletions(-)，持久化确认；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx（+99/-53 共 152 行；git diff --stat HEAD 确认持久化，git status 显示 M 状态）
+- 删除清单：MainScreen 4 个容器层 handler（handleOpenAlbum/handleOpenVisionLog/handleResetAvatar/handleResetPeerBg，含 stub toast「相册选图换头像：TODO 46-h 接通」）+ 顶部注释块；album 路由 "// TODO 46-h 接通" 注释；buildReplyMsgs change-avatar/pick-album-avatar IIFE 内两处 "// TODO 46-h 接通" 注释
+- 新增清单：ChatPage props 加 refreshContacts: () => Promise<void>（#108）；buildReplyMsgs change-avatar/pick-album-avatar 后链 refreshContacts().then；buildReplyMsgs deps 数组追加 refreshContacts；runAiTurn albumSummary slice(-20)（#112）；FriendProfilePage banner 整体可点击触发文件选择 → 压缩 → setPeerBg 持久化 + setPeerBgState 刷新 + toast；banner hover 提示（Camera 图标 + 「点击更换」文案，group/group-hover 实现）；隐藏 file input data-testid="qq-fprofile-banner-file"；bannerBusy state 防重复触发 + disabled 恢复默认按钮；setPeerBg 本地 state setter 改名 setPeerBgState 解 import 遮蔽
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（全项目零错误）；bunx eslint src/components/apps/qq.tsx exit 0（零 error 零 warning）
+- 未完成/跳过：ChatSettingsPage 调用站未传 4 prop（46-h 从未接通，47-a 会从 chat-settings.tsx 删 4 入口定义），本任务无需删调用站 prop；AlbumPage/VisionLogPage import + album/vision-log 路由保留（MeDrawer 我 tab「相册」入口仍用，route.albumContactId===me.id 时 allowEdit=true）；listAlbums/addAlbum/addVisionDecision import 保留（buildReplyMsgs 6 种视觉动作仍用）
+
+---
+Task ID: 47-b
+Agent: wechat 视觉管理修复子代理
+Task: #108/#109 头像刷新 + #112 相册最近20 + 删 chat-settings 4入口 + 朋友圈封面点击上传
+
+Work Log:
+- 读 worklog 末尾 120 行确认 Task 46-e/46-h 已完成（chat-settings.tsx 4 个可选 prop + wechat.tsx 容器层 4 个 handler + albumOverlay/visionLogOverlay state）；本任务文件归属仅 wechat.tsx，chat-settings.tsx 由 47-a 处理、chat.tsx 由 47-d、qq.tsx 由 47-c、album.tsx 由 47-e
+- Read wechat.tsx（10176 行）找：buildReplyMsgs change-avatar/pick-album-avatar IIFE（line 4517/4566）、容器层 4 handler（line 5101-5130）、albumOverlay/visionLogOverlay state（line 3847/3849）、ChatSettingsPage 调用站 4 prop（line 6913-6916）、AlbumPage/VisionLogPage 覆盖层渲染（line 6970-6986）、runAiTurn buildVisionRules 调用 albumSummary slice(0,20)（line 4842）、MomentsPage peer 封面渲染处（line 7804-7809）、readImageFile（line 1255 max=720/1280）、contacts state setter 在 WeChatApp 顶层（line 10061 setContacts，line 10098 reloadContacts = useCallback wraps loadContacts+setContacts，deps=[loadContacts] 稳定）
+- 改动 1+#108：buildReplyMsgs 的 change-avatar IIFE（line 4517）在 `await updateContact` 后追加 `await onContactsChanged?.()` —— ChatPage 新增 `onContactsChanged?: () => Promise<void>` prop（line 3730 解构 + line 3752 类型注解），MainScreen ChatPage 调用站传 `onContactsChanged={reloadContacts}`（line 9406）。reloadContacts useCallback 稳定（deps=[loadContacts]，loadContacts useCallback 空 deps 稳定），runAiTurn deps=[sessionKey, peer.name] 闭包捕获 onContactsChanged 引用稳定，无 stale closure
+- 改动 1+#108：pick-album-avatar IIFE（line 4566→现 line 4569）同样追加 `await onContactsChanged?.()` 在 updateContact 之后
+- 改动 2+#109：handleResetAvatar/handleResetPeerBg 在改动 4+5 中删除（随 chat-settings 4 入口废弃，不再被调用）→ #109「即时刷新」需求由 #108 的 onContactsChanged 机制 + MomentsPage peer 封面 pickPeerCover setCover 本地刷新共同覆盖
+- 改动 3+#112：runAiTurn albumSummary 从 `albumCacheRef.current.slice(0, 20)`（取最旧 20，listAlbums 升序）改为 `albumCacheRef.current.slice(-20)`（取最近 20），同时更新注释说明 47-b 由来与建图清单时序
+- 改动 4+#116：handleResetAvatar/handleResetPeerBg 被删（不再误记 addVisionDecision('change-avatar', …) 为「AI 换头像」——死代码清零，#116 误记问题随之消失）
+- 改动 5：容器层删除 4 个 useCallback（handleOpenAlbum/handleOpenVisionLog/handleResetAvatar/handleResetPeerBg，原 line 5101-5135 共 35 行）+ 2 个 state（albumOverlay/visionLogOverlay，原 line 3847/3849 共 4 行）+ ChatSettingsPage 调用站 4 个 prop 传递（原 line 6912-6916 共 5 行）+ AlbumPage/VisionLogPage 两个 overlay 渲染（原 line 6970-6986 共 19 行）+ VisionLogPage import（原 line 178 共 1 行，AlbumPage import 保留——我 tab「相册」入口仍用 line 9383）；ChatSettingsPage 调用站保留 47-b 注释说明 4 个 prop 由 47-a 决定是否彻底删 prop，本任务不传即入口行不渲染
+- 改动 6：MomentsPage peer 视图封面点击上传
+  - 新增 `peerCoverRef = useRef<HTMLInputElement>(null)`（line 7673），与 coverRef 分开避免 onChange 混淆
+  - 新增 `pickPeerCover = async (files: FileList | null)` 函数（line 7732）：readImageFile(file, 1280) 压缩 → `setPeerBg('wx', peerId, dataUrl)` 落库 → `setCover(dataUrl)` 本地 state 即时刷新 → onToast(`已为${shownName}更换朋友圈封面`) → finally 清空 peerCoverRef.current.value
+  - peer 封面 `<img>`（原 line 7804-7809）替换为 button 包装：data-testid="wx-moments-peer-cover-change" / aria-label=`更换${shownName}的朋友圈封面` / title="点击上传封面" / onClick=peerCoverRef.current?.click() / disabled={coverBusy || !peerId}（无 peerId 兜底保险）
+  - 视觉提示徽标：peerId 存在时 button 内左上角 `<div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 backdrop-blur">` 含 Camera 图标 + 「点击更换」白字文案（pointer-events-none 让点击穿透到 button 触发文件选择）
+  - 新增 peer 专属文件 input：`{!isMine && peerId && (<input ref={peerCoverRef} type="file" accept="image/*" hidden onChange={(e) => void pickPeerCover(e.target.files)} />)}`（line 7859-7867，与 isMine 的 coverRef input 分开）
+  - 保留原「恢复默认封面」按钮（顶部右侧 Undo2 图标，peerId && cover 时显示，removePeerBg → setCover(null) → onToast「已恢复默认封面」），与 peer 上传按钮独立工作
+- 改动 7：搜索 `TODO 46-h` 注释 → 无匹配（wechat.tsx 全文件无 TODO 注释，46-e/46-h 当时未留 TODO 标记，无需清理）；删除两处「46-h 由 chat-settings 入口触发」相关旧注释随 overlay 渲染块一并清掉
+- 每步 Edit 后 `git diff --stat HEAD -- src/components/apps/wechat.tsx` 验证：最终 1 file changed, 75 insertions(+), 71 deletions(-) 持久化确认（M 状态）
+- 验证：bunx tsc --noEmit wechat.tsx 零错误（项目仅剩 chat.tsx 8 个错误 + qq.tsx 1 个错误，均在 47-c/47-d 文件归属，本任务不涉及）；bunx eslint src/components/apps/wechat.tsx exit 0（零 error 零 warning，无输出）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/wechat.tsx（+75/-71 共 146 行；git diff --stat HEAD 确认持久化）
+- 已修复问题编号：#108（AI 换头像/选图设头像后顶栏头像即时刷新，通过 onContactsChanged prop 调 reloadContacts）/ #109（handleResetAvatar/handleResetPeerBg 删除随 4 入口废弃，#109 即时刷新需求由 #108 机制 + MomentsPage 本地 cover state 共同覆盖）/ #112（albumSummary slice(0,20) → slice(-20)，AI 看到最近 20 张）/ #116（handleResetAvatar 删除，不再误记 addVisionDecision('change-avatar') 为「AI 换头像」）/ #110（无 TODO 46-h 注释需清理，代码搜索零匹配）
+- 新需求「删 chat-settings 4 入口」：容器层删 4 个 useCallback + 2 个 state + 4 个 prop 传递 + 2 个 overlay 渲染 + VisionLogPage import；ChatSettingsPage 调用站保留 47-b 注释，4 个 prop 不传即入口行不渲染（chat-settings.tsx 的 prop 由 47-a 决定是否彻底删）
+- 新需求「朋友圈 peer 视图封面点击上传」：peerCoverRef + pickPeerCover + button 包装 peer img + 左上角相机徽标（「点击更换」）+ peer 专属文件 input；保留顶部右侧「恢复默认封面」按钮；isMine 路径不动（沿用 setWxBg('moments')）
+- tsc/eslint 状态：wechat.tsx 零 tsc 错误（exit 0 过滤）；eslint exit 0（零 error 零 warning）；剩余 tsc 错误均归属 chat.tsx（47-d）与 qq.tsx（47-c），不在本任务范围
+- 未完成/跳过：无；AlbumPage import 保留（我 tab「相册」入口 line 9383 仍用）；listAlbums/addAlbum/getAlbum/addVisionDecision 等 import 保留（buildReplyMsgs IIFE 仍用）；onContactsChanged 通过 useCallback 稳定引用 + runAiTurn deps=[sessionKey, peer.name] 闭包捕获，无 stale closure 风险
+
+---
+Task ID: 47-d
+Agent: chat(SMS) 视觉管理修复子代理
+Task: 删 chat-settings 2入口 + #106/#111/#108/#113/#119/#112/#110 修复
+
+Work Log:
+- 读 worklog 末尾 120 行确认 46-g/h 已建好 SMS 端视觉管理基线（buildVisionRules 注入 + pick-album-avatar 落库 + AlbumPage/VisionLogPage 容器层渲染 + chat-settings 4/2 入口 prop 已就绪）
+- Read chat.tsx（3870 行）找：SmsChatSettingsPage 调用站（line 2635）、容器层 handler（line 1113 handleOpenAlbum/handleResetAvatar）、buildReplyMsgs pick-album-avatar 分支（line 1189）、startAiTurn buildVisionRules 调用（line 1368）、deliverAiMsg 通知 avatar（line 1065）、peer.avatarSrc 快照处（line 3531 openContactChat）、albumSummary 构建（line 892/1277）、contacts setter（line 3410 setContacts + line 3414 setChatSession）
+- 确认 avatarOverride 用途：line 1208 setAvatarOverride(album.src) 用于 pick-album-avatar 即时刷新顶栏（保留必需）；line 1122 setAvatarOverride(null) 在 handleResetAvatar 内（随 reset 入口删除一并移除）；故 avatarOverride state + peerAvatarSrc derivation 保留
+- 改动 1（删 chat-settings 入口配套 + #106）：
+  - 删除 import AlbumPage from './album' + import VisionLogPage from './vision-log'（line 80-81）
+  - 删除 albumOpen/visionLogOpen state（line 906-907）+ 顶部 2 行 TODO 46-h 注释（line 904-905），保留 avatarOverride state + peerAvatarSrc derivation
+  - 删除 handleOpenAlbum/handleOpenVisionLog/handleResetAvatar 3 个 useCallback（line 1113-1126）+ 1 行 TODO 46-h 注释（line 1117）
+  - 删除 SmsChatSettingsPage JSX 上方 3 行 TODO 46-h 注释（line 2631-2633），保留 settingsOpen 条件渲染（与 chat-settings.tsx 47-a 后续删除入口正交，本任务不动 chat-settings.tsx）
+  - 删除 AlbumPage/VisionLogPage 覆盖层渲染（line 2839-2860，共 22 行 JSX）
+- 改动 2（#111 信息端只支持 pick-album-avatar）：startAiTurn baseSys 数组在 buildVisionRules 注入后追加一条信息端限制规则
+  `【信息端限制】当前会话只支持 [选图设头像:相册条目ID]，[选图设背景] 与 [选图发送] 在信息端不可用，请不要使用这两个标记。`
+  采用 chat.tsx 内追加规则方案（不改 chat-rich.ts，避免与 47-a 文件归属冲突），通用 buildVisionRules 仍调用保证规则基础部分一致
+- 改动 3（#108 + #113 AI pick-album-avatar 后头像即时刷新 + 通知 avatar）：
+  - ChatView 函数签名追加可选 prop `onContactChanged?: (contactId: string) => void`（destructure + 类型注解，line 765/783）
+  - buildReplyMsgs pick-album-avatar 分支调 updateContact 后追加 `onContactChanged?.(wbContactId)`（line 1192）触发父级刷新 contacts state + chatSession.peer.avatarSrc
+  - deps 追加 onContactChanged（line 1230）
+  - deliverAiMsg 通知 avatar 改用 peerAvatarSrc 替代 peer.avatarSrc（line 1066），deps 追加 peerAvatarSrc（line 1090）—— `peerAvatarSrc = avatarOverride ?? peer.avatarSrc` 经 avatarOverride 即时反映 pick-album-avatar 后的新头像
+- 改动 4（#119 peer.avatarSrc 同步）：父级 ChatApp 的 ChatView 调用处追加 onContactChanged 回调（line 3733-3753）：listContacts() → 找 cid → loadContacts() 刷新 contacts state → setChatSession 同步 peer.{avatarSrc,name,remark}（与既有 onSaveRemark 模式同款，但补上 avatarSrc 字段；onSaveRemark 只更 name/remark，本回调专补 avatarSrc）。reset 入口已删故 #119 原 reset-avatar 影响场景不再存在；AI pick-album-avatar 即时刷新由 avatarOverride 兜底、durable 同步由 onContactChanged 兜底，双保险
+- 改动 5（#112 albumSummary 取最近 20 张）：listAlbums 返回按 createdAt 升序（旧→新），slice(0,20) 取最旧 20 → 改 slice(-20) 取最新 20。两处 useEffect 预热（line 893）与 startAiTurn fire-and-forget 刷新（line 1261）同步替换
+- 改动 6（#110 清理 TODO 46-h）：3 处 TODO 46-h 注释 + 4 处 46-h 接通字样全部删除（line 905/1117/2632 三处主注释；line 1113/1208/2839/2851 四处附带「46-h」字样一并清理），改写为更清晰的 #108/#111/#119 注释
+- 验证：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/chat.tsx exit 0（零 error 零 warning，无输出）；git diff --stat HEAD -- src/components/apps/chat.tsx → 1 file changed, 45 insertions(+), 53 deletions(-) 共 98 行改动持久化；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/chat.tsx（+45/-53 共 98 行；git diff --stat HEAD 确认持久化）
+- 改动清单：
+  - 改动 1：删除 AlbumPage/VisionLogPage import + albumOpen/visionLogOpen state + handleOpenAlbum/handleOpenVisionLog/handleResetAvatar 3 handler + AlbumPage/VisionLogPage 覆盖层渲染 + 3 处 TODO 46-h 注释；保留 avatarOverride state + peerAvatarSrc derivation + buildReplyMsgs pick-album-avatar 分支 + albumSummaryRef
+  - 改动 2 (#111)：startAiTurn baseSys 在 buildVisionRules 后追加一条 `【信息端限制】...不要使用 [选图设背景]/[选图发送]` 规则（chat.tsx 内追加，不改 chat-rich.ts 避免与 47-a 冲突）
+  - 改动 3 (#108 #113)：ChatView 加 onContactChanged prop + buildReplyMsgs pick-album-avatar 分支调 onContactChanged 触发父级刷新 + deliverAiMsg 通知 avatar 改用 peerAvatarSrc + deps 同步追加
+  - 改动 4 (#119)：父级 ChatApp 加 onContactChanged 回调（listContacts → loadContacts → setChatSession 同步 peer.{avatarSrc,name,remark}）；reset 入口已删故 #119 原 reset 场景不再适用，AI pick-album-avatar 由 avatarOverride（即时）+ onContactChanged（durable）双保险
+  - 改动 5 (#112)：albumSummary slice(0,20) → slice(-20)（两处：useEffect 预热 + startAiTurn 刷新），取最新 20 张而非最旧 20 张
+  - 改动 6 (#110)：3 处 `// TODO 46-h` 主注释 + 4 处附带「46-h」字样全部删除/改写
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/chat.tsx exit 0（零 error 零 warning）
+- 未完成/留给 47-a：chat-settings.tsx 内 SmsChatSettingsPage 的 onOpenAlbum/onOpenVisionLog 入口行删除 + 对应 prop 类型删除（本任务仅删 chat.tsx 容器层的 handler 与调用，chat-settings.tsx 的入口 prop 定义与渲染由 47-a 处理；当前 chat-settings.tsx 仍保留 onOpenAlbum/onOpenVisionLog 可选 prop，调用方未传则入口行不渲染，无悬空入口风险）
+
+---
+Task ID: 47-e
+Agent: album 透明PNG修复子代理
+Task: #118 readImageFile 白底填底避免透明 PNG 黑底
+
+Work Log:
+- 读 worklog 末尾 60 行确认 47-c/47-d 已清掉 wechat.tsx/chat.tsx 两侧冗余入口与 overlay，本任务专注 album.tsx 内 readImageFile（line 44-72）
+- Read src/components/apps/album.tsx（516 行）定位 readImageFile 函数：原 line 42-72，drawImage 前 canvas 默认透明，toDataURL('image/jpeg', 0.8) 对带 alpha 的 PNG 会得到黑底 JPEG
+- 改动 1（#118 白底填底）：在 ctx.drawImage(img, …) 之前插入 `ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);` 两行 + 一行注释 `// 白底填底，避免透明 PNG 转 JPEG 后变黑底（#118）`。JPEG 不支持 alpha 通道，canvas 默认透明像素经 toDataURL 转 JPEG 时浏览器会以黑色填充，先主动填白可保证透明区域转白而非黑
+- 改动 2（#117 标记注释，可选）：在 readImageFile 函数上方 doc 注释后追加单行 `// NOTE: wechat.tsx:1255 也有同款 readImageFile（max=720），未来可抽到 src/lib/ios/image-compress.ts 共用`，明确标记重复点 + 未来抽取路径建议。#117 实际抽取因跨文件归属（需改 wechat.tsx/qq.tsx import + 新建 image-compress.ts）本任务不做，仅留标记待主协调者后续处理
+- git diff --stat HEAD -- src/components/apps/album.tsx → 1 file changed, 4 insertions(+) 持久化确认（M 状态，仅 +4 行：1 行 NOTE 注释 + 1 行白底注释 + 2 行 fillStyle/fillRect）
+- 验证：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/album.tsx exit 0（零 error 零 warning，无输出）；未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/album.tsx（+4 行；git diff --stat HEAD 确认持久化）
+- 修复问题：#118 透明 PNG 经 canvas toDataURL JPEG 出现黑底 → drawImage 前先 ctx.fillRect 白底填底，JPEG 无 alpha 故透明区域转白
+- #117（readImageFile 抽共用）：本任务仅加 NOTE 注释标记 wechat.tsx 重复点 + 建议未来抽到 src/lib/ios/image-compress.ts，实际抽取留给主协调者（涉及新建文件 + 改 wechat.tsx/qq.tsx import，跨文件归属）
+- tsc/eslint 状态：tsc exit 0（零错误）；eslint exit 0（零 error 零 warning）
+- 未完成/留待主协调者：#117 实际抽取共用（新建 src/lib/ios/image-compress.ts + wechat.tsx:1255 / qq.tsx 同款函数 import 替换）
+
+---
+Task ID: 47-a
+Agent: chat-settings 删入口子代理
+Task: 删除 ChatSettingsPage 4 入口 + SmsChatSettingsPage 2 入口 + 对应 prop + 清理 import
+
+Work Log:
+- 读 worklog 末尾 80 行确认 Task 46-h 已建好 chat-settings 4+2 入口 prop + JSX，47-b/c/d 已删 wechat/qq/chat 三端容器层的 handler/state/调用站 prop/overlay 渲染（chat-settings 调用站已不传 4 prop，入口行不再渲染，本任务彻底删 chat-settings.tsx 内的 prop 定义与入口 JSX）
+- Read chat-settings.tsx（2093 行）定位：
+  - import 行 line 26：含 Activity/Images/RotateCcw 三个仅用于 4+2 入口的图标
+  - ChatSettingsPage destructure line 162-169（onOpenAlbum/onOpenVisionLog/onResetAvatar/onResetBg 4 prop + 4 行注释）
+  - ChatSettingsPage type annotation line 227-234（同 4 prop + 4 行注释，含 `?: () => void;`）
+  - ChatSettingsPage render JSX line 379-457（两个分组卡片：相册管理+视觉决策日志 条件渲染块 + 恢复默认头像+恢复默认朋友圈封面 条件渲染块，含 window.confirm 二次确认）
+  - SmsChatSettingsPage destructure line 1340-1343（onOpenAlbum/onOpenVisionLog 2 prop + 2 行注释）
+  - SmsChatSettingsPage type annotation line 1384-1387（同 2 prop + 2 行注释，注释带「信息端无朋友圈背景故无『恢复默认朋友圈封面』入口」说明）
+  - SmsChatSettingsPage render JSX line 1461-1496（相册管理+视觉决策日志 条件渲染块，信息端无 reset 块）
+  - ChatBgPage line 751-880 的 onResetBg prop（line 759/769/880）确认是「聊天背景页」的背景重置 prop，与本次删除的「恢复默认朋友圈封面」入口无关，保留不动
+- grep `\bActivity\b|\bImages\b|\bRotateCcw\b` 全文件确认 3 个图标只在 4+2 入口行使用（ChatSettingsPage line 391/406/431/450 + SmsChatSettingsPage line 1474/1489），删除入口后变未使用，必须从 import 清理
+- 改动 1（import 清理）：line 26 `import { Activity, ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Images, Loader2, RotateCcw, Search } from 'lucide-react';` → 删除 Activity/Images/RotateCcw 三个图标，保留 ArrowLeftRight/AudioLines/BookMarked/Check/ChevronLeft/ChevronRight/Image as ImageIcon/Loader2/Search（ImageIcon 仍用于 ChatBgPage 上传按钮 line 855）
+- 改动 2（ChatSettingsPage destructure 删 4 prop）：`  onOpenVoice,\n  /** 打开该角色的相册…相册管理入口行 */\n  onOpenAlbum,\n  /** …视觉决策日志入口行 */\n  onOpenVisionLog,\n  /** …恢复默认头像入口行 */\n  onResetAvatar,\n  /** …恢复默认朋友圈封面入口行 */\n  onResetBg,\n}: {` → `  onOpenVoice,\n}: {`（删除 8 行 = 4 注释 + 4 prop，保留 onOpenVoice 锚点确保 SmsChatSettingsPage destructure 同模式字符串仍唯一）
+- 改动 3（ChatSettingsPage type annotation 删 4 prop）：`  onOpenVoice?: () => void;\n  …4 个 prop?…\n}) {` → `  onOpenVoice?: () => void;\n}) {`（删除 8 行）
+- 改动 4（ChatSettingsPage render JSX 删 4 入口行）：删除从 `{/* 相册管理 + 视觉决策日志… */}` 起到 `)}` 收尾的两个分组卡片（line 379-457 共 79 行 JSX，含 album/vision-log 条件渲染块 + reset-avatar/reset-bg 条件渲染块 + 中间空行），保留前后空行与「回复条数」入口卡片紧接聊天背景卡；删除后 line 378 空行 + `{/* 回复条数… */}` 直接衔接聊天背景卡 `</div>`
+- 改动 5（SmsChatSettingsPage destructure 删 2 prop）：`  onOpenVoice,\n  /** …相册管理入口行 */\n  onOpenAlbum,\n  /** …视觉决策日志入口行 */\n  onOpenVisionLog,\n}: {` → `  onOpenVoice,\n}: {`（删除 4 行）
+- 改动 6（SmsChatSettingsPage type annotation 删 2 prop）：`  onOpenVoice?: () => void;\n  /** …相册管理入口行（信息端无朋友圈背景故无『恢复默认朋友圈封面』入口） */\n  onOpenAlbum?: () => void;\n  /** …视觉决策日志入口行 */\n  onOpenVisionLog?: () => void;\n}) {` → `  onOpenVoice?: () => void;\n}) {`（删除 4 行）
+- 改动 7（SmsChatSettingsPage render JSX 删 2 入口行）：删除从 `{/* 相册管理 + 视觉决策日志… */}` 起到 `)}` 收尾的分组卡片（line 1461-1496 共 36 行 JSX，含 album/vision-log 条件渲染块），保留前后空行与「回复条数」入口卡片衔接
+- MultiEdit 一次原子应用 7 个 edit（顺序：import → ChatSettingsPage destructure → type annotation → render JSX → SmsChatSettingsPage destructure → type annotation → render JSX），每个 edit 后续唯一性由前序 edit 已删除同模式文本保证
+- 验证持久化：git diff --stat HEAD -- src/components/apps/chat-settings.tsx → 1 file changed, 1 insertion(+), 142 deletions(-)（M 状态确认）
+- 验证 tsc：bunx tsc --noEmit 2>&1 | head -20 全项目零错误（exit 0，无输出）
+- 验证 eslint：bunx eslint src/components/apps/chat-settings.tsx 2>&1 | tail -15 零 error 零 warning（exit 0，无输出）
+- 验证清理彻底：grep `\bActivity\b|\bImages\b|\bRotateCcw\b|onOpenAlbum|onOpenVisionLog|onResetAvatar|相册管理|视觉决策日志|恢复默认头像|恢复默认朋友圈封面` 全文件零匹配；`onResetBg` 仅剩 ChatBgPage line 663/673/784（聊天背景重置 prop，保留正确）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/chat-settings.tsx（+1/-142 共 143 行；git diff --stat HEAD 确认持久化）
+- 删除清单：
+  - import 行清理：删除 Activity/Images/RotateCcw 3 个图标（仅用于 4+2 入口，无其他引用）
+  - ChatSettingsPage destructure：删 onOpenAlbum/onOpenVisionLog/onResetAvatar/onResetBg 4 prop + 4 行 JSDoc 注释（共 8 行）
+  - ChatSettingsPage type annotation：删同 4 prop + 4 行 JSDoc 注释（共 8 行）
+  - ChatSettingsPage render JSX：删「相册管理+视觉决策日志」分组卡片 + 「恢复默认头像+恢复默认朋友圈封面」分组卡片（含 window.confirm 二次确认、Images/Activity/RotateCcw 图标、ChevronRight 箭头，共 79 行 JSX）
+  - SmsChatSettingsPage destructure：删 onOpenAlbum/onOpenVisionLog 2 prop + 2 行 JSDoc 注释（共 4 行）
+  - SmsChatSettingsPage type annotation：删同 2 prop + 2 行 JSDoc 注释（共 4 行）
+  - SmsChatSettingsPage render JSX：删「相册管理+视觉决策日志」分组卡片（共 36 行 JSX）
+- 保留清单（无关现有功能）：聊天背景卡（含 ChatBgPage 二级页及其 onResetBg 背景重置 prop）、回复条数入口、翻译入口、分句发送开关、时间感知开关、表情包开关、世界书入口、查找聊天记录、置顶/免打扰、拉黑/重置申请计数、备注编辑、他的声音、信息卡片，全部原样保留
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/chat-settings.tsx exit 0（零 error 零 warning）
+- 未完成/跳过：无；47-b/c/d 已删三端容器层的 handler/state/调用站 prop/overlay 渲染，本任务从 chat-settings.tsx 彻底删 prop 定义 + 入口 JSX + 清理 import，4+2 入口全链路清零完成

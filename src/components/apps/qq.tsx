@@ -2203,6 +2203,7 @@ function ChatPage({
   onSaveRemark,
   onSaveVoiceId,
   onOpenGroup,
+  refreshContacts,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -2221,6 +2222,8 @@ function ChatPage({
   onSaveVoiceId: (vid: string) => void | Promise<void>;
   /** 群聊卡片「接受邀请」后进入群聊（宿主刷新群列表并打开群页） */
   onOpenGroup?: (gid: string) => void;
+  /** 47-c #108：AI 自主换头像后即时刷新 contacts state，让聊天页 peer.avatar 反应式同步 */
+  refreshContacts: () => Promise<void>;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
 }) {
@@ -3153,8 +3156,10 @@ function ChatPage({
             if (!imgMsg || !imgMsg.content || !imgMsg.content.startsWith('data:image/')) continue;
             const src = imgMsg.content;
             if (part.action.kind === 'change-avatar') {
-              // TODO 46-h 接通：调 MainScreen 的 handleResetAvatar 链路 + refreshContacts 反应式刷新聊天页 peer.avatar
-              void updateContact(peer.id, { avatar: src }).catch(() => {});
+              // 47-c #108：调 updateContact 后刷新 contacts state，让聊天页 peer.avatar 反应式同步（顶栏头像即时刷新）
+              void updateContact(peer.id, { avatar: src })
+                .then(() => refreshContacts())
+                .catch(() => {});
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了头像` } });
               t += 1;
               void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'change-avatar', targetId: imgMsg.id, imgSrc: src });
@@ -3184,8 +3189,10 @@ function ChatPage({
             if (!album || album.contactId !== peer.id) continue;
             const src = album.src;
             if (part.action.kind === 'pick-album-avatar') {
-              // TODO 46-h 接通：handleResetAvatar + refreshContacts 反应式刷新 peer.avatar
-              void updateContact(peer.id, { avatar: src }).catch(() => {});
+              // 47-c #108：从相册选图换头像后同样刷新 contacts state（顶栏头像即时同步）
+              void updateContact(peer.id, { avatar: src })
+                .then(() => refreshContacts())
+                .catch(() => {});
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换头像` } });
               t += 1;
               void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'pick-album-avatar', targetId: album.id, imgSrc: src });
@@ -3234,7 +3241,7 @@ function ChatPage({
       }
       return { msgs: out, cur, dirty: cur !== latest, nextIdx: msgIdx };
     },
-    [peer, sessionKey, settleUserBlockReq],
+    [peer, sessionKey, settleUserBlockReq, refreshContacts],
   );
 
   const runAiTurn = useCallback(
@@ -3413,7 +3420,8 @@ function ChatPage({
       const albumList = await listAlbums(peer.id);
       albumCacheRef.current = albumList;
       if (albumList.length > 0) {
-        albumSummary = albumList.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
+        // 47-c #112：取最近 20 张（末尾 20 条），而非最早的 20 张——AI 看到的是相册新增的最新内容
+        albumSummary = albumList.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
       }
     } catch {
       // 读相册失败不阻塞聊天主流程，仅放弃本回合的【选图操作】规则
@@ -7699,19 +7707,49 @@ function FriendProfilePage({
   const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
   // 46-f：好友资料页顶部封面 banner——getPeerBg 读出该联系人专属背景（按 peer.id 隔离）；
   // 无则渐变兜底（QQ 蓝紫色调）；右上角"恢复默认"按钮调 removePeerBg 后刷新本组件 + toast
-  const [peerBg, setPeerBg] = useState<string | null>(null);
+  const [peerBg, setPeerBgState] = useState<string | null>(null);
   const reloadPeerBg = useCallback(() => {
-    void getPeerBg('qq', peer.id).then((bg) => setPeerBg(bg ?? null));
+    void getPeerBg('qq', peer.id).then((bg) => setPeerBgState(bg ?? null));
   }, [peer.id]);
   useEffect(() => {
     reloadPeerBg();
   }, [reloadPeerBg]);
   const handleResetBanner = useCallback(() => {
     void removePeerBg('qq', peer.id).then(() => {
-      setPeerBg(null);
+      setPeerBgState(null);
       onToast('已恢复默认封面');
     });
   }, [peer.id, onToast]);
+  // 47-c 改动 4：好友资料页封面点击上传——点 banner 弹文件选择 → 压缩 → setPeerBg 持久化 + 刷新本组件 banner state → toast
+  // 保留既有"恢复默认"按钮；banner 加 hover 提示（相机图标 + 文案）；上传期间禁用点击防重复触发
+  const bannerFileRef = useRef<HTMLInputElement>(null);
+  const [bannerBusy, setBannerBusy] = useState(false);
+  const handleUploadBanner = useCallback(() => {
+    if (bannerBusy) return;
+    bannerFileRef.current?.click();
+  }, [bannerBusy]);
+  const handleBannerFile = useCallback(
+    async (files: FileList | null) => {
+      const f = files?.[0];
+      if (!f) return;
+      setBannerBusy(true);
+      try {
+        const src = await compressImageFile(f);
+        if (!src) {
+          onToast('图片读取失败');
+          return;
+        }
+        await setPeerBg('qq', peer.id, src);
+        setPeerBgState(src);
+        onToast('已设置封面');
+      } catch {
+        onToast('上传失败');
+      } finally {
+        setBannerBusy(false);
+      }
+    },
+    [peer.id, onToast]
+  );
   // 点赞数：本地持久化，点击 +1（对照 QQ 资料卡点赞）
   const [likes, setLikes] = useState<number>(() => {
     try {
@@ -7753,28 +7791,66 @@ function FriendProfilePage({
       </div>
 
       <div className="flex-1 overflow-y-auto" data-testid="qq-fprofile-body">
-        {/* 46-f：封面 banner（getPeerBg 读出按 peer.id 隔离的专属背景；无则渐变兜底；右上"恢复默认"按钮调 removePeerBg） */}
-        <div className="relative h-32 w-full overflow-hidden">
-          {peerBg ? (
-            <img src={peerBg} alt="封面" className="absolute inset-0 h-full w-full object-cover" />
-          ) : (
-            <div
-              className="absolute inset-0"
-              style={{ background: 'linear-gradient(135deg, #5B7CFA 0%, #8A6BFF 50%, #C8A8FF 100%)' }}
-              aria-hidden="true"
-            />
-          )}
+        {/* 46-f：封面 banner（getPeerBg 读出按 peer.id 隔离的专属背景；无则渐变兜底；右上"恢复默认"按钮调 removePeerBg）。
+            47-c 改动 4：banner 整体可点击触发文件选择上传封面；hover 显示相机图标 + 「点击更换」提示；上传期间禁用 */}
+        <div className="group relative h-32 w-full overflow-hidden">
+          <div
+            role="button"
+            tabIndex={0}
+            data-testid="qq-fprofile-upload-banner"
+            aria-label="点击更换封面"
+            title="点击更换封面"
+            onClick={handleUploadBanner}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleUploadBanner();
+              }
+            }}
+            className={`absolute inset-0 h-full w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
+              bannerBusy ? 'opacity-60' : ''
+            }`}
+          >
+            {peerBg ? (
+              <img src={peerBg} alt="封面" className="h-full w-full object-cover" />
+            ) : (
+              <div
+                className="h-full w-full"
+                style={{ background: 'linear-gradient(135deg, #5B7CFA 0%, #8A6BFF 50%, #C8A8FF 100%)' }}
+                aria-hidden="true"
+              />
+            )}
+            {/* hover 提示：相机图标 + 「点击更换」文案 */}
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/30 group-hover:opacity-100">
+              <div className="flex items-center gap-1.5 rounded-full bg-black/40 px-3 py-1.5 text-white backdrop-blur-sm">
+                <Camera className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                <span className="text-[13px] font-medium">点击更换</span>
+              </div>
+            </div>
+          </div>
           {peerBg && (
             <button
               type="button"
               data-testid="qq-fprofile-reset-banner"
               onClick={handleResetBanner}
-              className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-black/40 px-3 py-1 text-[12px] text-white backdrop-blur-sm active:bg-black/60"
+              disabled={bannerBusy}
+              className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-full bg-black/40 px-3 py-1 text-[12px] text-white backdrop-blur-sm active:bg-black/60 disabled:opacity-50"
             >
               <Undo2 className="h-3.5 w-3.5" strokeWidth={2.2} />
               恢复默认
             </button>
           )}
+          <input
+            ref={bannerFileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            data-testid="qq-fprofile-banner-file"
+            onChange={(e) => {
+              void handleBannerFile(e.target.files);
+              e.target.value = '';
+            }}
+          />
         </div>
 
         {/* 头像 + 名字/QQ号 + 点赞（头像叠在 banner 下边缘，对照微信朋友圈 peer 视图布局） */}
@@ -12105,36 +12181,6 @@ function MainScreen({
   const openChatOf = useCallback((c: ContactRecord) => setRoute({ page: 'chat', contactId: c.id }), []);
   const openGroupOf = useCallback((g: ChatGroup) => setRoute({ page: 'group-chat', groupId: g.id }), []);
 
-  // 46-f：相册 / 视觉决策日志 / 头像 / 朋友圈背景的容器层回调（prop 接通由 46-h 完成）。
-  // 容器层只定义状态与函数，子组件（MeDrawer/FriendProfilePage/ChatSettingsPage）的 prop 接通
-  // 留注释 // TODO 46-h 接通，避免本任务跨越多个文件边界。
-  const handleOpenAlbum = useCallback((contactId: string, title: string) => {
-    setRoute({ page: 'album', albumContactId: contactId, albumTitle: title });
-  }, []);
-  const handleOpenVisionLog = useCallback((contactId: string, title: string) => {
-    setRoute({ page: 'vision-log', logContactId: contactId, logTitle: title });
-  }, []);
-  const handleResetAvatar = useCallback(
-    async (_contactId: string) => {
-      // TODO 46-h 接通：从相册选图重设头像（打开相册 onPick → getAlbum → updateContact → refreshContacts）
-      showToast('相册选图换头像：TODO 46-h 接通');
-    },
-    [showToast]
-  );
-  const handleResetPeerBg = useCallback(
-    async (contactId: string) => {
-      // TODO 46-h 接通：含 FriendProfilePage banner 反应式刷新（banner 组件自有 useEffect 已刷新本组件，
-      // 此处仅做容器层 toast；46-h 接通后由 46-h 统一从 ChatSettingsPage 调用）
-      try {
-        await removePeerBg('qq', contactId);
-        showToast('已恢复默认封面');
-      } catch {
-        showToast('恢复失败');
-      }
-    },
-    [showToast]
-  );
-
   // 灵动岛通知点击跳转：打开通知对应的单聊/群聊（QQ 已打开时由事件驱动，未打开时挂载后自动消费 pending）
   useEffect(() => {
     const consume = () => {
@@ -12245,6 +12291,7 @@ function MainScreen({
               showToast('声音保存失败');
             }
           }}
+          refreshContacts={refreshContacts}
           onToast={showToast}
         />
       ) : route.page === 'bond' && chatPeer ? (
@@ -12373,7 +12420,6 @@ function MainScreen({
           title={route.albumTitle}
           onClose={() => openTabs('消息')}
           allowEdit={route.albumContactId === me.id}
-          // TODO 46-h 接通：onPick → handleResetAvatar / handleResetPeerBg（按选择模式分流）
         />
       ) : route.page === 'vision-log' ? (
         <VisionLogPage
@@ -12464,7 +12510,7 @@ function MainScreen({
           onOpenFavorites={() => setRoute({ page: 'favorites' })}
           onOpenAlbum={() => {
             setDrawerOpen(false);
-            handleOpenAlbum(me.id, '我的相册');
+            setRoute({ page: 'album', albumContactId: me.id, albumTitle: '我的相册' });
           }}
           onOpenSettings={() => {
             setDrawerOpen(false);

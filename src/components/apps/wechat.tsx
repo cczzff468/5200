@@ -175,7 +175,6 @@ import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeCh
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
-import VisionLogPage from './vision-log';
 import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -3728,6 +3727,7 @@ function ChatPage({
   onSaveRemark,
   onSaveVoiceId,
   onOpenGroup,
+  onContactsChanged,
 }: {
   me: WxUser;
   peer: ContactRecord;
@@ -3747,6 +3747,9 @@ function ChatPage({
   onOpenGroup?: (gid: string) => void;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
+  /** 47-b 联系人刷新回调（宿主 reloadContacts）：buildReplyMsgs 的 change-avatar/pick-album-avatar
+   *  IIFE 调 updateContact 落库后，调用此回调刷新 MainScreen 的 contacts state，让顶栏/会话列表头像即时更新 */
+  onContactsChanged?: () => Promise<void>;
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
@@ -3843,10 +3846,6 @@ function ChatPage({
   const [voiceOpen, setVoiceOpen] = useState(false);
   /** AI 语音频率页（他的声音页入口进入，按会话隔离保存） */
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
-  /** 46-e 相册覆盖层（聊天设置「相册管理」进入）：peer.id 的相册页（只读浏览；onClose 关回聊天设置） */
-  const [albumOverlay, setAlbumOverlay] = useState<{ contactId: string; title: string } | null>(null);
-  /** 46-e 视觉决策日志覆盖层（聊天设置「视觉决策日志」进入）：peer.id 的决策日志页 */
-  const [visionLogOverlay, setVisionLogOverlay] = useState<{ contactId: string; title: string } | null>(null);
   /** 我的音色库（「他的声音」入口行摘要展示名用；zustand 响应式） */
   const myVoicesForSummary = useMyVoices((s) => s.voices);
   /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
@@ -4518,6 +4517,8 @@ function ChatPage({
               try {
                 await updateContact(peer.id, { avatar: src });
                 void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-avatar', targetId: imgMsgId, imgSrc: src });
+                // 47-b：刷新 MainScreen 的 contacts state，让顶栏 peer.avatar 与会话列表头像即时更新
+                await onContactsChanged?.();
               } catch {
                 /* 写入失败不阻塞主流程 */
               }
@@ -4567,6 +4568,8 @@ function ChatPage({
               try {
                 await updateContact(peer.id, { avatar: aSrc });
                 void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'pick-album-avatar', targetId: aId, imgSrc: aSrc });
+                // 47-b：刷新 MainScreen 的 contacts state，让顶栏 peer.avatar 与会话列表头像即时更新
+                await onContactsChanged?.();
               } catch {
                 /* 写入失败不阻塞主流程 */
               }
@@ -4837,10 +4840,11 @@ function ChatPage({
     ].filter(Boolean);
     // 46-e：AI 视觉自主决策规则（换头像/换朋友圈背景/存相册；相册非空时附「选图操作 + 相册清单」）。
     // albumCacheRef 由挂载/peer 切换 effect 预热 + 本轮开头 fire-and-forget 刷新（同 crossCtxRef 模式）；
-    // 取 albumCacheRef 当前值派生 albumSummary（slice 20，desc/name 缺失兜底「图片」），首轮可能为空——
-    // 此时 buildVisionRules 返回「视觉自主决策」基础规则（无选图操作与清单），不阻断发送
+    // 47-b：albumSummary 取最近 20 张（slice(-20)，listAlbums 升序时末尾为最新），让 AI 看到的清单
+    // 反映相册最新状态（新存的图优先选）；desc/name 缺失兜底「图片」，首轮可能为空——此时
+    // buildVisionRules 返回「视觉自主决策」基础规则（无选图操作与清单），不阻断发送
     const albumSummary = albumCacheRef.current.length > 0
-      ? albumCacheRef.current.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+      ? albumCacheRef.current.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
       : null;
     const visionRules = buildVisionRules(albumSummary);
     const systemFull = [
@@ -5096,38 +5100,6 @@ function ChatPage({
     },
     [peer.id, peer.name, pushSysMsg]
   );
-
-  /** 46-e 聊天设置「相册管理」：打开 peer.id 的相册页（只读浏览；AI 自主存进相册的图，用户可挑图或查看） */
-  const handleOpenAlbum = useCallback(() => {
-    setAlbumOverlay({ contactId: peer.id, title: `${peer.name}的相册` });
-  }, [peer.id, peer.name]);
-  /** 46-e 聊天设置「视觉决策日志」：打开 peer.id 的决策日志页（最近一次换头像/换背景/存相册记录） */
-  const handleOpenVisionLog = useCallback(() => {
-    setVisionLogOverlay({ contactId: peer.id, title: `${peer.name}的视觉决策日志` });
-  }, [peer.id, peer.name]);
-  /** 46-e 聊天设置「恢复默认头像」：清空 peer.avatar（chat-settings.tsx 已 window.confirm 二次确认） */
-  const handleResetAvatar = useCallback(() => {
-    void (async () => {
-      try {
-        await updateContact(peer.id, { avatar: null });
-        void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-avatar', targetId: '', imgSrc: '' });
-        onToast?.('已恢复默认头像');
-      } catch {
-        onToast?.('恢复失败');
-      }
-    })();
-  }, [peer.id, onToast]);
-  /** 46-e 聊天设置「恢复默认朋友圈封面」：清掉 peer 专属背景（chat-settings.tsx 已 window.confirm 二次确认） */
-  const handleResetPeerBg = useCallback(() => {
-    void (async () => {
-      try {
-        await removePeerBg('wx', peer.id);
-        onToast?.('已恢复默认封面');
-      } catch {
-        onToast?.('恢复失败');
-      }
-    })();
-  }, [peer.id, onToast]);
 
   /** 处理「申请解除拉黑」卡片：同意 → 解除拉黑；拒绝 → 保持并记录拒绝（角色下一轮知道被拒绝）。
    *  两种结果都会立刻注入系统事件触发角色人设化回应，避免「点了没反应」。
@@ -6909,11 +6881,9 @@ function ChatPage({
             .map((b) => b.name)
             .join('、') || '未选择'}
           onOpenPeerProfile={() => onOpenFriendDetail(peer)}
-          // 46-e 视觉管理入口：相册/决策日志/恢复默认头像/恢复默认封面（chat-settings.tsx 46-h 已加 prop）
-          onOpenAlbum={handleOpenAlbum}
-          onOpenVisionLog={handleOpenVisionLog}
-          onResetAvatar={handleResetAvatar}
-          onResetBg={handleResetPeerBg}
+          // 47-b：删 chat-settings 4 个视觉管理入口（相册/决策日志/恢复默认头像/恢复默认封面）。
+          // chat-settings.tsx 的 4 个 prop 仍可选（未传则入口行不渲染），由 47-a 决定是否彻底删 prop；
+          // 容器层的 4 个 handler 已删，新需求改为「进他朋友圈点击封面上传换封面」（MomentsPage !isMine 分支）。
         />
       )}
 
@@ -6962,26 +6932,6 @@ function ChatPage({
             saveReplyCount(sessionKey, n);
             setReplyCountState(n);
           }}
-        />
-      )}
-
-      {/* 46-e 相册页（聊天设置「相册管理」二级页）：peer.id 的相册，用户可查看/管理 AI 自主存的图；
-       *  46-h 由 chat-settings 入口触发，覆盖在聊天设置之上，关闭后回聊天设置（保持 settingsOpen） */}
-      {albumOverlay && (
-        <AlbumPage
-          contactId={albumOverlay.contactId}
-          title={albumOverlay.title}
-          onClose={() => setAlbumOverlay(null)}
-          allowEdit
-        />
-      )}
-
-      {/* 46-e 视觉决策日志页（聊天设置「视觉决策日志」二级页）：peer.id 的最近一次换头像/换背景/存相册记录 */}
-      {visionLogOverlay && (
-        <VisionLogPage
-          contactId={visionLogOverlay.contactId}
-          title={visionLogOverlay.title}
-          onClose={() => setVisionLogOverlay(null)}
         />
       )}
 
@@ -7719,6 +7669,8 @@ function MomentsPage({
   const [cover, setCover] = useState<string | null>(null);
   const [coverBusy, setCoverBusy] = useState(false);
   const coverRef = useRef<HTMLInputElement>(null);
+  /** 47-b peer 朋友圈封面专属文件 input 引用（与自己的 coverRef 分开避免 onChange 混淆） */
+  const peerCoverRef = useRef<HTMLInputElement>(null);
 
   // 启动读取本地封面（自己的朋友圈用 getWxBg('moments')；好友的用 getPeerBg('wx', peerId)）
   useEffect(() => {
@@ -7775,6 +7727,26 @@ function MomentsPage({
     }
   };
 
+  /** 47-b 进他朋友圈点击封面上传：压缩 → setPeerBg('wx', peerId) → 刷新 cover state → toast。
+   *  新需求取代了 chat-settings 的「恢复默认朋友圈封面」入口（恢复默认按钮仍保留在顶部右侧）。 */
+  const pickPeerCover = async (files: FileList | null) => {
+    if (!peerId) return;
+    const file = files?.[0];
+    if (!file) return;
+    setCoverBusy(true);
+    try {
+      const dataUrl = await readImageFile(file, 1280);
+      await setPeerBg('wx', peerId, dataUrl);
+      setCover(dataUrl);
+      onToast(`已为${shownName}更换朋友圈封面`);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : '封面保存失败');
+    } finally {
+      setCoverBusy(false);
+      if (peerCoverRef.current) peerCoverRef.current.value = '';
+    }
+  };
+
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-white text-black dark:bg-[#111111] dark:text-white">
       {/* 滚动容器：封面 + 动态列表（封面随内容滚动，同微信） */}
@@ -7783,7 +7755,8 @@ function MomentsPage({
         data-testid="wx-moments-list"
         onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 230)}
       >
-        {/* 封面：自定义上传图（无则默认风景照）+ 底部渐晕；点击封面图直接换（从手机上传，永久保存） */}
+        {/* 封面：自定义上传图（无则默认风景照）+ 底部渐晕；点击封面图直接换（从手机上传，永久保存）。
+         *  47-b：!isMine（进他朋友圈）也支持点击封面图上传换封面（新需求，替代 chat-settings 的「恢复默认朋友圈封面」入口） */}
         <div className="relative h-[300px]">
           {isMine ? (
             <button
@@ -7802,11 +7775,29 @@ function MomentsPage({
               />
             </button>
           ) : (
-            <img
-              src={cover ?? '/wx/moments-cover.png'}
-              alt={`${shownName}的朋友圈封面`}
-              className="absolute inset-0 h-full w-full object-cover"
-            />
+            <button
+              type="button"
+              data-testid="wx-moments-peer-cover-change"
+              aria-label={`更换${shownName}的朋友圈封面`}
+              title="点击上传封面"
+              onClick={() => peerCoverRef.current?.click()}
+              disabled={coverBusy || !peerId}
+              className="absolute inset-0 block h-full w-full cursor-pointer disabled:cursor-default"
+            >
+              <img
+                src={cover ?? '/wx/moments-cover.png'}
+                alt={`${shownName}的朋友圈封面，点击可更换`}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              {/* 47-b 视觉提示徽标：左上角相机图标 + 「点击更换」文案，让用户知道封面可点击上传。
+               *  pointer-events-none 让点击穿透到 button 本身触发文件选择 */}
+              {peerId && (
+                <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 backdrop-blur">
+                  <Camera className="h-4 w-4 text-white" strokeWidth={1.8} />
+                  <span className="text-[11px] text-white">点击更换</span>
+                </div>
+              )}
+            </button>
           )}
           <div
             className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/30 to-transparent"
@@ -7861,6 +7852,17 @@ function MomentsPage({
             accept="image/*"
             hidden
             onChange={(e) => void pickCover(e.target.files)}
+          />
+        )}
+        {/* 47-b 进他朋友圈点击封面上传：peer 专属文件 input（与 coverRef 分开，避免 onChange 混淆）。
+         *  无 peerId 时（owner 但无 peerId 的兜底场景）不渲染，按钮 disabled 已保险 */}
+        {!isMine && peerId && (
+          <input
+            ref={peerCoverRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => void pickPeerCover(e.target.files)}
           />
         )}
       </div>
@@ -9400,6 +9402,8 @@ function MainScreen({
             showToast('声音保存失败');
           }
         }}
+        // 47-b 联系人刷新回调：ChatPage 内 AI 换头像/选图设头像后调此回调让顶栏/会话列表头像即时刷新
+        onContactsChanged={reloadContacts}
         onToast={showToast}
       />
     );

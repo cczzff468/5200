@@ -23,7 +23,7 @@
  *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Activity, ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Images, Loader2, RotateCcw, Search } from 'lucide-react';
+import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { stickerToggleCaption } from '@/lib/sticker-toggle';
@@ -159,14 +159,6 @@ export function ChatSettingsPage({
   voiceSummary,
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice,
-  /** 打开该角色的相册（peer.id 的相册）；不传 = 隐藏「相册管理」入口行 */
-  onOpenAlbum,
-  /** 打开该角色的视觉决策日志；不传 = 隐藏「视觉决策日志」入口行 */
-  onOpenVisionLog,
-  /** 恢复默认头像（window.confirm 二次确认后由宿主执行重置）；不传 = 隐藏「恢复默认头像」入口行 */
-  onResetAvatar,
-  /** 恢复默认朋友圈封面（window.confirm 二次确认后由宿主执行重置）；不传 = 隐藏「恢复默认朋友圈封面」入口行 */
-  onResetBg,
 }: {
   variant: ChatSettingsVariant;
   /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
@@ -224,14 +216,6 @@ export function ChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice?: () => void;
-  /** 打开该角色的相册（peer.id 的相册）；不传 = 隐藏「相册管理」入口行 */
-  onOpenAlbum?: () => void;
-  /** 打开该角色的视觉决策日志；不传 = 隐藏「视觉决策日志」入口行 */
-  onOpenVisionLog?: () => void;
-  /** 恢复默认头像（window.confirm 二次确认后由宿主执行重置）；不传 = 隐藏「恢复默认头像」入口行 */
-  onResetAvatar?: () => void;
-  /** 恢复默认朋友圈封面（window.confirm 二次确认后由宿主执行重置）；不传 = 隐藏「恢复默认朋友圈封面」入口行 */
-  onResetBg?: () => void;
 }) {
   const wx = variant === 'wx';
 
@@ -375,86 +359,6 @@ export function ChatSettingsPage({
             </span>
           </button>
         </div>
-
-        {/* 相册管理 + 视觉决策日志：peer.id 的相册（46-c 相册页）/视觉决策日志（46-d 日志页）入口组
-            —— 仅在宿主传入对应回调时渲染该行；任一存在即渲染外层卡片，两行同存时中间加分割线 */}
-        {(onOpenAlbum || onOpenVisionLog) && (
-          <div className={`${cardCls} mt-3 overflow-hidden`}>
-            {onOpenAlbum && (
-              <button
-                type="button"
-                data-testid={`${testPrefix}-settings-album`}
-                onClick={onOpenAlbum}
-                className={rowCls}
-              >
-                <span className="flex items-center gap-2.5">
-                  <Images className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-                  相册管理
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
-              </button>
-            )}
-            {onOpenAlbum && onOpenVisionLog && <div className={`border-t ${dividerCls}`} />}
-            {onOpenVisionLog && (
-              <button
-                type="button"
-                data-testid={`${testPrefix}-settings-vision-log`}
-                onClick={onOpenVisionLog}
-                className={rowCls}
-              >
-                <span className="flex items-center gap-2.5">
-                  <Activity className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-                  视觉决策日志
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* 恢复默认头像 / 恢复默认朋友圈封面：重置 AI 视觉自主决策留下的视觉变更
-            —— 仅在宿主传入对应回调时渲染该行；点击前 window.confirm 二次确认（避免误触） */}
-        {(onResetAvatar || onResetBg) && (
-          <div className={`${cardCls} mt-3 overflow-hidden`}>
-            {onResetAvatar && (
-              <button
-                type="button"
-                data-testid={`${testPrefix}-settings-reset-avatar`}
-                onClick={() => {
-                  if (window.confirm(`确认恢复「${peerName}」的默认头像？将清除 AI 自主换过的头像。`)) {
-                    onResetAvatar();
-                  }
-                }}
-                className={rowCls}
-              >
-                <span className="flex items-center gap-2.5">
-                  <RotateCcw className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-                  恢复默认头像
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
-              </button>
-            )}
-            {onResetAvatar && onResetBg && <div className={`border-t ${dividerCls}`} />}
-            {onResetBg && (
-              <button
-                type="button"
-                data-testid={`${testPrefix}-settings-reset-bg`}
-                onClick={() => {
-                  if (window.confirm(`确认恢复「${peerName}」的默认朋友圈封面？将清除 AI 自主换过的封面。`)) {
-                    onResetBg();
-                  }
-                }}
-                className={rowCls}
-              >
-                <span className="flex items-center gap-2.5">
-                  <RotateCcw className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-                  恢复默认朋友圈封面
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
-              </button>
-            )}
-          </div>
-        )}
 
         {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1337,10 +1241,6 @@ export function SmsChatSettingsPage({
   /** 他的声音摘要（角色音色展示名；空 = 默认）；不传 onOpenVoice = 隐藏该入口 */
   voiceSummary,
   onOpenVoice,
-  /** 打开该角色的相册（peer.id 的相册）；不传 = 隐藏「相册管理」入口行 */
-  onOpenAlbum,
-  /** 打开该角色的视觉决策日志；不传 = 隐藏「视觉决策日志」入口行 */
-  onOpenVisionLog,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1381,10 +1281,6 @@ export function SmsChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行（AI 助手会话无角色音色） */
   onOpenVoice?: () => void;
-  /** 打开该角色的相册（peer.id 的相册）；不传 = 隐藏「相册管理」入口行（信息端无朋友圈背景故无「恢复默认朋友圈封面」入口） */
-  onOpenAlbum?: () => void;
-  /** 打开该角色的视觉决策日志；不传 = 隐藏「视觉决策日志」入口行 */
-  onOpenVisionLog?: () => void;
 }) {
   const t = translateTokens('sms');
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
@@ -1457,43 +1353,6 @@ export function SmsChatSettingsPage({
             </span>
           </button>
         </div>
-
-        {/* 相册管理 + 视觉决策日志：peer.id 的相册（46-c 相册页）/视觉决策日志（46-d 日志页）入口组
-            —— 仅在宿主传入对应回调时渲染该行；信息端无朋友圈背景故无「恢复默认朋友圈封面」入口；
-            任一存在即渲染外层卡片，两行同存时中间加分割线 */}
-        {(onOpenAlbum || onOpenVisionLog) && (
-          <div className={`${t.cardCls} mt-3`}>
-            {onOpenAlbum && (
-              <button
-                type="button"
-                data-testid="sms-settings-album"
-                onClick={onOpenAlbum}
-                className={t.rowCls}
-              >
-                <span className="flex items-center gap-2.5">
-                  <Images className="h-[18px] w-[18px] text-muted-foreground" strokeWidth={1.9} aria-hidden="true" />
-                  相册管理
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
-              </button>
-            )}
-            {onOpenAlbum && onOpenVisionLog && <div className={t.dividerCls} />}
-            {onOpenVisionLog && (
-              <button
-                type="button"
-                data-testid="sms-settings-vision-log"
-                onClick={onOpenVisionLog}
-                className={t.rowCls}
-              >
-                <span className="flex items-center gap-2.5">
-                  <Activity className="h-[18px] w-[18px] text-muted-foreground" strokeWidth={1.9} aria-hidden="true" />
-                  视觉决策日志
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
-              </button>
-            )}
-          </div>
-        )}
 
         {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择，信息端每会话独立） */}
         <div className={`${t.cardCls} mt-3`}>

@@ -77,8 +77,6 @@ import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
-import AlbumPage from './album';
-import VisionLogPage from './vision-log';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -764,6 +762,9 @@ function ChatView({
   contactVoiceId,
   /** 保存 TA 的声音（仅联系人会话传入；空串 = 恢复默认；宿主复用备注的持久化路径写到联系人 voiceId） */
   onSaveVoiceId,
+  /** 联系人资料变更后通知父级刷新 contacts state + chatSession.peer.avatarSrc（仅联系人会话传入；
+   *  AI 自主换头像后调用，保证退出会话再回主列表 / 重新进入会话时数据一致；#108/#119） */
+  onContactChanged,
 }: {
   /** 会话存储键：'assistant' | 'c:<contactId>'（key 变化 = 组件重挂载，互不串扰） */
   storageKey: string;
@@ -780,6 +781,9 @@ function ChatView({
   contactVoiceId?: string | null;
   /** 保存 TA 的声音（空串 = 恢复默认；宿主负责持久化并刷新联系人列表） */
   onSaveVoiceId?: (vid: string) => void;
+  /** 联系人资料变更后通知父级刷新 contacts state + chatSession.peer.avatarSrc（仅联系人会话传入；
+   *  AI 自主换头像后调用，保证退出会话再回主列表 / 重新进入会话时数据一致；#108/#119） */
+  onContactChanged?: (contactId: string) => void;
 }) {
   const [input, setInput] = useState('');
   // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
@@ -889,7 +893,7 @@ function ChatView({
         if (!alive) return;
         albumSummaryRef.current =
           list.length > 0
-            ? list.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+            ? list.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
             : null;
       })
       .catch(() => {});
@@ -901,10 +905,7 @@ function ChatView({
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [wbOpen, setWbOpen] = useState(false);
-  // 46-g 视觉管理：相册页 / 视觉决策日志页 / 头像本地覆盖（pick-album-avatar 落库后即时刷新顶栏头像）
-  // TODO 46-h 接通：把 handleOpenAlbum / handleOpenVisionLog / handleResetAvatar 接到 SmsChatSettingsPage 的入口
-  const [albumOpen, setAlbumOpen] = useState(false);
-  const [visionLogOpen, setVisionLogOpen] = useState(false);
+  // 46-g 视觉管理：头像本地覆盖（pick-album-avatar 落库后即时刷新顶栏头像；reset 入口已移除）
   const [avatarOverride, setAvatarOverride] = useState<string | null>(null);
   /** 顶栏头像（pick-album-avatar 落库后本地 override 优先；切会话随组件重挂载复位 → 自动回退 peer.avatarSrc） */
   const peerAvatarSrc = avatarOverride ?? peer.avatarSrc;
@@ -1062,7 +1063,7 @@ function ChatView({
           sessionKey: `sms:${storageKey}`,
           app: 'chat',
           title: peerLabel,
-          avatar: peer.avatarSrc ?? null,
+          avatar: peerAvatarSrc ?? null,
           body,
           target: storageKey.startsWith('c:') ? { app: 'chat', contactId: storageKey.slice(2) } : { app: 'chat' },
         });
@@ -1089,7 +1090,7 @@ function ChatView({
           .catch(() => {});
       }
     },
-    [memContactId, peer, peerLabel, storageKey, voiceFreqKey],
+    [memContactId, peer, peerLabel, peerAvatarSrc, storageKey, voiceFreqKey],
   );
 
   /** 40-a：把「用户发起的解除拉黑申请卡」置为终态（存储 + 本地 state 同步；无 pending 卡时空操作）。
@@ -1109,21 +1110,6 @@ function ChatView({
     },
     [storageKey, wbContactId],
   );
-
-  // 46-g 视觉管理：相册 / 视觉决策日志 / 重置头像回调（容器层准备，prop 接通留给 46-h）
-  const handleOpenAlbum = useCallback(() => setAlbumOpen(true), []);
-  const handleOpenVisionLog = useCallback(() => setVisionLogOpen(true), []);
-  /** 重置 AI peer 头像为默认：清空 contact.avatar（updateContact 传 null）+ 清本地 override + 系统行
-   *  TODO 46-h 接通：SmsChatSettingsPage 加 onResetAvatar 入口（或在头像长按菜单里触发） */
-  const handleResetAvatar = useCallback(async () => {
-    if (!wbContactId) return;
-    try {
-      await updateContact(wbContactId, { avatar: null });
-      setAvatarOverride(null);
-    } catch {
-      /* 持久化失败静默 */
-    }
-  }, [wbContactId]);
 
   /**
    * 把一段回复文本解析成待投递消息（startAiTurn 流中分段/finalize 与退出网页接力的后台回复共用同一套管线，不重不漏）：
@@ -1205,7 +1191,8 @@ function ChatView({
                   const album = await getAlbum(part.action.targetId);
                   if (!album || album.contactId !== wbContactId) return;
                   await updateContact(wbContactId, { avatar: album.src });
-                  setAvatarOverride(album.src); // 即时刷新顶栏头像（其他 UI 表面留给 46-h）
+                  setAvatarOverride(album.src); // #108 即时刷新顶栏头像（peerAvatarSrc 经 avatarOverride 优先取新图）
+                  onContactChanged?.(wbContactId); // #108/#119 同步父级 contacts state + chatSession.peer.avatarSrc
                   void addVisionDecision({
                     contactId: wbContactId,
                     app: 'sms',
@@ -1243,7 +1230,7 @@ function ChatView({
       }
       return { msgs: out, nextIdx: msgIdx };
     },
-    [peerLabel, settleUserBlockReq, stickersOn, wbContactId, setAvatarOverride],
+    [peerLabel, settleUserBlockReq, stickersOn, wbContactId, setAvatarOverride, onContactChanged],
   );
 
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
@@ -1274,7 +1261,7 @@ function ChatView({
         .then((list) => {
           albumSummaryRef.current =
             list.length > 0
-              ? list.slice(0, 20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+              ? list.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
               : null;
         })
         .catch(() => {});
@@ -1365,7 +1352,15 @@ function ChatView({
       stickersOn ? '' : STICKER_OFF_RULE,
       // 46-g 视觉自主决策规则（仅联系人会话；信息端无图无朋友圈，albumSummary 通常为空 → 只注入换头像规则；
       // 相册非空时额外注入【选图操作】+【相册清单】，让 AI 可用 [选图设头像:alb-xxx] 从相册挑图换头像）
-      ...(wbContactId ? buildVisionRules(albumSummaryRef.current) : []),
+      // #111 信息端仅支持 pick-album-avatar：通用 buildVisionRules 列了 3 个 pick-album-* 动作，但 chat.tsx
+      // 只接 pick-album-avatar；另两个标记会被 buildReplyMsgs 静默吞掉无反馈。这里在规则末尾追加一条
+      // 信息端限制，明确禁止 [选图设背景]/[选图发送]，避免 AI 反复尝试生成不支持的标记
+      ...(wbContactId
+        ? [
+            ...buildVisionRules(albumSummaryRef.current),
+            '【信息端限制】当前会话只支持 [选图设头像:相册条目ID]，[选图设背景] 与 [选图发送] 在信息端不可用，请不要使用这两个标记。',
+          ]
+        : []),
       ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
     ]
       .filter(Boolean)
@@ -2628,9 +2623,7 @@ function ChatView({
       </>
       )}
 
-      {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关
-          TODO 46-h 接通：补 onOpenAlbum={handleOpenAlbum} / onOpenVisionLog={handleOpenVisionLog}
-            / onResetAvatar={handleResetAvatar} 三个入口（需先在 chat-settings.tsx 的 SmsChatSettingsPage 加 props） */}
+      {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
       {settingsOpen && (
         <SmsChatSettingsPage
           peerName={peer.name ?? peer.title}
@@ -2836,28 +2829,6 @@ function ChatView({
         </div>
       )}
 
-      {/* 46-g 视觉管理：相册页（容器层渲染，prop 接通留给 46-h；allowEdit 默认 true 让用户可手动加图，
-          让 pick-album-avatar 在信息端有相册可用——AI 才会注入【选图操作】+【相册清单】规则） */}
-      {albumOpen && wbContactId && (
-        <div className="absolute inset-0 z-[60]">
-          <AlbumPage
-            contactId={wbContactId}
-            title={`${peerLabel}的相册`}
-            onClose={() => setAlbumOpen(false)}
-          />
-        </div>
-      )}
-
-      {/* 46-g 视觉管理：视觉决策日志页（容器层渲染，prop 接通留给 46-h；只读浏览 AI 的视觉决策历史） */}
-      {visionLogOpen && wbContactId && (
-        <div className="absolute inset-0 z-[60]">
-          <VisionLogPage
-            contactId={wbContactId}
-            title={`${peerLabel}的视觉决策日志`}
-            onClose={() => setVisionLogOpen(false)}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -3759,6 +3730,27 @@ export default function ChatApp() {
                 }
               } catch {
                 // 持久化失败静默（备注为增强能力）
+              }
+            })();
+          }}
+          onContactChanged={(cid) => {
+            // #108/#119：AI 自主换头像后同步父级 contacts state + chatSession.peer.avatarSrc，
+            // 保证退出会话再回主列表 / 重新进入会话时头像数据一致（avatarOverride 已在 ChatView 内即时刷新顶栏）
+            void (async () => {
+              try {
+                const raw = await listContacts();
+                const c = raw.find((x) => x.id === cid);
+                await loadContacts();
+                if (c) {
+                  const shown = withDisplayNames([c])[0];
+                  setChatSession((prev) =>
+                    prev && prev.key === `c:${cid}`
+                      ? { ...prev, peer: { ...prev.peer, avatarSrc: shown.avatar, name: displayNameOf(shown) || shown.name, remark: shown.remark ?? '' } }
+                      : prev,
+                  );
+                }
+              } catch {
+                /* 持久化失败静默（视觉动作为增强能力） */
               }
             })();
           }}
