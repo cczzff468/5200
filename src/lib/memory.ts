@@ -840,6 +840,48 @@ export function memPurgeMomentSources(contactId: string, filter: { postId: strin
   }
 }
 
+/**
+ * 批量改写「动态来源」记忆碎片的文本内容（身份关系修复用：句式归属人写错时按正确关系重写）。
+ * 只改 source==='moments' 的碎片，不动其他来源；文本与已存一致的跳过。
+ * 返回实际改写条数。
+ */
+export function memRewriteMomentFragmentTexts(contactId: string, fixes: { id: string; content: string }[]): number {
+  if (fixes.length === 0) return 0;
+  try {
+    const fixMap = new Map(fixes.map((f) => [f.id, f.content]));
+    const list = readFragments(contactId);
+    let changed = 0;
+    const next = list.map((f) => {
+      const text = fixMap.get(f.id);
+      if (f.source !== 'moments' || !text || f.content === text) return f;
+      changed += 1;
+      return { ...f, content: text };
+    });
+    if (changed > 0) writeJSON(fragKey(contactId), next);
+    return changed;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 按 id 删除记忆碎片（身份修复用：关系张冠李戴且无法可靠重写的碎片直接删除，宁缺勿错）。
+ * 返回实际删除条数。
+ */
+export function memDeleteFragmentByIds(contactId: string, ids: string[]): number {
+  if (ids.length === 0) return 0;
+  try {
+    const set = new Set(ids);
+    const list = readFragments(contactId);
+    const next = list.filter((f) => !set.has(f.id));
+    if (next.length === list.length) return 0;
+    writeJSON(fragKey(contactId), next);
+    return list.length - next.length;
+  } catch {
+    return 0;
+  }
+}
+
 // ---------------- 轮次计数 + 自动提取 ----------------
 
 /** 防并发：同一联系人同一 App 正在提取/总结时跳过新触发 */

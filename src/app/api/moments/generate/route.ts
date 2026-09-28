@@ -167,8 +167,15 @@ export async function POST(req: Request) {
   } else {
     const postRaw = (body.post && typeof body.post === 'object' ? body.post : {}) as { authorName?: unknown; author?: unknown; content?: unknown };
     const postContent = s(postRaw.content, 200);
-    const postAuthor = postRaw.author === 'char' ? name : userName;
     if (!postContent) return NextResponse.json({ error: '缺少要评论的动态内容' }, { status: 400 });
+    // 身份修复：动态作者是谁必须用传入的 authorName（角色动态的真实发帖人），
+    // 绝不能用 name（那是本次要评论的评论人）——旧版把评论人当发帖人，导致「AI 自己给自己评论」。
+    const postAuthorName = s(postRaw.authorName, 20);
+    const postAuthor = postRaw.author === 'char' ? postAuthorName || '对方' : userName;
+    // 服务端硬性守卫：发帖人不能评论自己的动态（旧版 bug 的直接根因，双保险）
+    if (postRaw.author === 'char' && postAuthorName && postAuthorName === name) {
+      return NextResponse.json({ error: '发帖人不能评论自己的动态' }, { status: 400 });
+    }
     // 评论区上下文（评论和回复都用：别人说过的话不能再重复/附和）
     const thread = Array.isArray(body.thread)
       ? (body.thread as unknown[])
@@ -179,13 +186,14 @@ export async function POST(req: Request) {
       : [];
     if (kind === 'comment') {
       user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
-      user.push(`请以「${name}」的身份给这条动态写一条评论。`);
+      user.push(`请以「${name}」的身份（你是评论人，不是发帖人）给这条动态写一条评论。`);
+      user.push(`- 身份提醒：这条动态是「${postAuthor}」发的，你不是TA——以你「${name}」自己的口吻回应TA的内容，不要模仿作者的口吻、不要替TA说话、不要自问自答；`);
       user.push('- 15~50 字，口语化，像熟人随手打的：接梗、调侃、吐槽、反问、拆台都行，也可以就一短句；');
-      user.push('- 必须扣住这条动态里的具体内容（事情/细节/情绪/人物），结合你们的关系，禁止空泛夸赞；');
+      user.push('- 必须扣住这条动态里的具体内容（事情/细节/情绪/人物），结合你和动态作者的关系，禁止空泛夸赞；');
       if (thread.length > 0) user.push(`【评论区已有的发言（这些话和类似的话术你都不能再说）】\n${thread.join('\n')}`);
       if (memories.length > 0)
         user.push(
-          `【你记得的关于${userName}和你们之间的事（评论不得与这些已知事实矛盾；能自然顺带一句最好，但不能生硬复述）】\n${memories.map((m) => `- ${m}`).join('\n')}`
+          `【你记得的关于${userName}和其他好友的事（评论不得与这些已知事实矛盾；能自然顺带一句最好，但不能生硬复述）】\n${memories.map((m) => `- ${m}`).join('\n')}`
         );
       user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」这类套话，也不要纯夸奖；');
       user.push('- 只输出评论文本，不要任何解释。');
@@ -194,6 +202,10 @@ export async function POST(req: Request) {
       const replyFrom = s(replyRaw.authorName, 20) || userName;
       const replyContent = s(replyRaw.content, 120);
       if (!replyContent) return NextResponse.json({ error: '缺少要回复的评论内容' }, { status: 400 });
+      // 服务端硬性守卫：不能回复自己的评论（防「AI 自己回复自己」）
+      if (replyFrom === name) {
+        return NextResponse.json({ error: '不能回复自己的评论' }, { status: 400 });
+      }
       user.push(`你是「${name}」。${label}动态（「${postContent}」）的评论区里，${replyFrom}对你说：「${replyContent}」。`);
       user.push(
         `你现在回复的对象就是「${replyFrom}」这个人——不是你自己，也不是评论区里的其他人；这条回复会显示为「${name} 回复 ${replyFrom}」。`

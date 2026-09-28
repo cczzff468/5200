@@ -14,7 +14,7 @@ import { useEffect } from 'react';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { useSettings } from '@/lib/ios/store';
-import { repairLegacyMomentData, runMomentsTick, type MomentTickDeps } from '@/lib/moments';
+import { repairLegacyMomentData, repairMomentIdentityData, runMomentsTick, type MomentTickDeps } from '@/lib/moments';
 
 const TICK_MS = 5000;
 const CONTACTS_REFRESH_MS = 60_000;
@@ -67,6 +67,8 @@ export default function MomentsScheduler() {
     const timer = window.setInterval(() => void tick(), TICK_MS);
     // 旧版遗留数据修复（AI「回复自己」的错误指向）：一次性执行，幂等
     repairLegacyMomentData();
+    // 身份关系修复（「AI 自己给自己评论」历史数据清理 + 记忆里错误关系纠错）：一次性执行，幂等
+    void repairMomentIdentityData();
     void tick();
     return () => {
       alive = false;
