@@ -247,14 +247,29 @@ export async function POST(req: Request) {
       user.push(`- 再次强调（最重要）：你要评论的动态是${postAuthor}发的「${postContent.slice(0, 80)}」，评论必须让人一眼看出你看懂了这条动态，与这条动态无关的话一句都不要说——跑题的评论是无效输出；`);
       user.push('- 只输出评论文本，不要任何解释。');
     } else {
-      const replyRaw = (body.replyTo && typeof body.replyTo === 'object' ? body.replyTo : {}) as { authorName?: unknown; content?: unknown };
+      const replyRaw = (body.replyTo && typeof body.replyTo === 'object' ? body.replyTo : {}) as {
+        authorName?: unknown;
+        content?: unknown;
+        realName?: unknown;
+      };
       const replyFrom = s(replyRaw.authorName, 20) || userName;
+      const replyRealName = s(replyRaw.realName, 20);
       const replyContent = s(replyRaw.content, 120);
       if (!replyContent) return NextResponse.json({ error: '缺少要回复的评论内容' }, { status: 400 });
       // 服务端硬性守卫：不能回复自己的评论（防「AI 自己回复自己」）
       if (replyFrom === name) {
         return NextResponse.json({ error: '不能回复自己的评论' }, { status: 400 });
       }
+      // 称呼规则（三）：默认不叫名字；只有评论区有多人发言、需要区分对象时才允许喊名字，
+      // 且必须叫对方真实名字（引擎传 allowAddressByName；兜底用原始 thread 的说话人数判断）
+      const rawThread = Array.isArray(body.thread) ? (body.thread as unknown[]) : [];
+      const threadSpeakers = new Set(
+        rawThread
+          .filter((c): c is { authorName?: unknown } => Boolean(c) && typeof c === 'object')
+          .map((c) => s((c as { authorName?: unknown }).authorName, 20))
+          .filter((n) => n && n !== name)
+      );
+      const allowAddressByName = body.allowAddressByName === true || threadSpeakers.size >= 2;
       // 回复的结构（修复「回复不搭/复读自己动态」）：被回复的评论是唯一话题中心，放最前面；
       // 动态原文降为末尾的背景参考。旧版把动态放开头最显眼处，模型顺势把动态改写一遍
       // 当回复（用户实锤：财评「辛苦你了」，陈回「财啊，项目算搞定了…」——整句复读动态）
@@ -262,8 +277,14 @@ export async function POST(req: Request) {
       user.push(`【要回复的那句话（你唯一的话题中心，回复必须直接接住它的内容/情绪/问题）】${replyFrom}对你说：「${replyContent}」`);
       user.push('- 像聊天接话一样自然衔接：让人一眼看出你回的是上面那句话，而不是随便又说了段别的；');
       user.push('- 动态原文只是背景不是话题：动态里已经写过的内容、意思、句式一律不要再重复（再说一遍是复读机，不是回复）；');
-      user.push('- 界面已显示「X 回复 Y：」前缀，正文里不要再喊对方的名字/昵称，也不要「XX啊，」「XX，」这类开头，直接说内容；');
-      user.push('- 8~40 字，口语化短句，像真人随手回消息：可以接梗、调侃、反问、敷衍、装傻；禁止客套模板（「谢谢」「说得好」「祝你…」这类）；');
+      if (allowAddressByName) {
+        user.push(
+          `- 评论区有多人发言：默认还是直接说内容不喊名字；只有不喊名字会让人分不清你在回谁时，才在开头叫一次名字区分——要叫就叫TA的真实名字「${replyRealName || replyFrom}」，绝不要用昵称/网名，也不要每句都叫；`
+        );
+      } else {
+        user.push('- 界面已显示「X 回复 Y：」前缀，正文里不要再喊对方的名字/昵称，也不要「XX啊，」「XX，」这类开头，直接说内容；');
+      }
+      user.push('- 8~40 字，口语化短句，像真人随手回消息：可以接梗、调侃、反问、敷衍、装傻；禁止客套模板（「谢谢」「说得好」「祝你…」「这句话说得真好啊」这类）；');
       user.push(`（背景，仅供理解语境，禁止复述：这条动态是${postAuthor}发的：「${postContent.slice(0, 60)}」）`);
       if (thread.length > 0) user.push(`【评论区最近的发言（按先后；里面已有的话和类似话术不要再重复）】\n${thread.join('\n')}`);
       if (memories.length > 0)

@@ -10586,3 +10586,30 @@ Work Log:
 Stage Summary:
 - 修改文件：src/app/api/moments/generate/route.ts（回复 prompt 重构+评论禁喊名）、src/lib/moments.ts（回复角度池/动态入禁复读/stripLeadingAddress 兜底）、src/components/apps/wechat.tsx（胶囊 pt-8）
 - 核心成果：①回复以被回复评论为唯一话题中心，不再复读自己动态（prompt 权重重构 + 动态入 avoid 硬校验双保险）②回复不再每句喊名字（prompt 禁令 + stripLeadingAddress 确定性剥离兜底）③回复随机角度与评论场景解耦（8 个专用接话角度）④记忆关系标注、身份守卫、防自评等既有防线全部回归通过
+---
+Task ID: feat-moments-unread-badges
+Agent: 主协调者 (Z.ai Code)
+Task: ①微信「N条新消息」胶囊再下移 ②按真机截图给微信/QQ 加未读角标（发现tab/朋友圈行/动态tab/空间动态行） ③评论回复七组规则核查补齐（称呼条件化+真实名字）
+
+Work Log:
+- 未读角标（对照用户三张真机截图）：
+  1. wechat.tsx WxMenuRow 新增 badge?: number prop（红色圆角数字，紧随标题之后，>99 显示 99+，带 data-testid/aria-label）；发现页「朋友圈」行传 wxNoticeBadge.count
+  2. wechat.tsx 底部 TabBar「发现」tab 复用 chats 角标样式（#FA5151 圆形，图标右上），data-testid=wx-tab-badge-discover
+  3. qq.tsx DiscoverPage 新增 zoneBadge prop：「空间动态」行红色 #F5455C 数字角标（data-testid=qq-discover-zone-badge）；底部「动态」tab 角标（data-testid=qq-tab-badge-动态），MainScreen 传 qqNoticeBadge.count
+  4. 胶囊 pt-8 → pt-10（40px，第三次下移累计 28px）
+- 称呼规则补齐（三.2/三.5，其余规则审计确认已在前几轮落地）：
+  1. moments.ts aiCommentOnMoment：计算 otherSpeakers（评论区非本角色的说话人集合）→ allowAddressByName = ≥2 人（多人评论需区分对象才允许叫名字）；传 API allowAddressByName
+  2. moments.ts：回复对象是角色时 await contactRealName 解析真实名字，replyTo.realName 传 API（要称呼就叫真名，不用昵称/网名）
+  3. route.ts 回复块：allowAddressByName 条件化——多人时「默认仍不喊名字；分不清才叫一次，必须叫真实名字X，不用昵称，不要每句都叫」；单人时维持「不要再喊名字直接说内容」；客套模板禁令补「这句话说得真好啊」
+  4. stripLeadingAddress 兜底同步条件化：单人回复剥开头喊名，多人回复不剥（允许区分对象）
+- 七组规则审计结论（均已落地，本轮验证）：一评论人身份（四层防线+peer 显式传入）；二回复对象（评论原文传入+禁复读动态+avoid 禁复读上一句+多轮指向正确）；四 App 隔离（按平台独立生成+avoid 跨平台+记忆带 app）；五记忆（三方关系+宁缺勿错+启动修复）；六概率延迟（likeProbability/commentProbability/firstCommentDelay/followCommentDelay/npcInteractDelay/replyNpcCommentDelay 按平台真实生效）；七人设（persona 驱动+模板句式禁令）
+- 浏览器端到端验证（420×900，合成 PointerEvent）：
+  - 微信：发现 tab 红标「3」+朋友圈行红标「3」（与截图一致）→ 进朋友圈胶囊「3条新消息」paddingTop 40px ✓ → 点胶囊全部已读 → 两处角标消失 ✓
+  - QQ：登录（种 fankf2026/123456）→ 动态 tab 红标「1」+空间动态行红标「1」（与截图一致）✓
+  - 回复质量回归（QQ 空间）：评论乐乐「辛苦啦，黑眼圈都掉到下巴了…」→ 乐乐回「哎呦，被你发现了，这黑眼圈确实有点过分了！」——接住评论梗、无名字开头、不复读动态、人设贴合 ✓
+  - bunx tsc --noEmit exit 0；eslint 3 文件 exit 0；dev.log 无新增错误
+- 环境备注：QQ 登录按钮文本为「登 录」（含空格），automation 匹配需用 /登\s*录/；协议勾选圆圈是「已阅读」span 的 previousElementSibling
+
+Stage Summary:
+- 修改文件：src/components/apps/wechat.tsx（WxMenuRow badge prop+发现tab角标+朋友圈行角标+胶囊pt-10）、src/components/apps/qq.tsx（DiscoverPage zoneBadge+动态tab角标）、src/lib/moments.ts（allowAddressByName/replyRealName 解析与传递+strip条件化）、src/app/api/moments/generate/route.ts（称呼条件化+真名指令+模板禁令补充）
+- 核心成果：①微信发现tab/朋友圈行、QQ动态tab/空间动态行四处未读数字角标，真机同款样式，已读联动消除 ②胶囊下移至 40px ③称呼规则完整落地：默认不叫名字→多人评论区才允许（且叫真实名字不叫昵称、不每句都叫）→单人回复引擎兜底剥离 ④七组规则全数核查通过

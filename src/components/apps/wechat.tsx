@@ -1349,6 +1349,7 @@ function WxMenuRow({
   first = false,
   right,
   redDot = false,
+  badge,
   testId,
 }: {
   label: string;
@@ -1357,6 +1358,8 @@ function WxMenuRow({
   first?: boolean;
   right?: React.ReactNode;
   redDot?: boolean;
+  /** 未读数角标（红色圆点数字，紧随标题之后；同真机「发现→朋友圈 3」样式） */
+  badge?: number;
   testId?: string;
 }) {
   return (
@@ -1369,6 +1372,15 @@ function WxMenuRow({
       {!first && <span className="absolute left-[66px] right-0 top-0 h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />}
       {icon}
       <span className="min-w-0 flex-1 truncate text-[16px]">{label}</span>
+      {typeof badge === 'number' && badge > 0 && (
+        <span
+          data-testid={testId ? `${testId}-badge` : undefined}
+          aria-label={`${badge} 条新消息`}
+          className="mr-0.5 flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[10.5px] font-semibold leading-none text-white"
+        >
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
       {redDot && <span className="mr-0.5 h-2 w-2 shrink-0 rounded-full bg-[#FA5151]" aria-hidden="true" />}
       {right ?? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />}
     </button>
@@ -7868,7 +7880,7 @@ function MomentsPage({
         {/* 「1条新消息」气泡（微信同款深色胶囊：最新互动人头像 + 条数；点开互动消息页并全部已读）。
             放在封面之下、动态列表之前，与真机一致 */}
         {isMine && noticeBadge.count > 0 && (
-          <div className="flex justify-center pb-1 pt-8">
+          <div className="flex justify-center pb-1 pt-10">
             <button
               type="button"
               data-testid="wx-moments-pill"
@@ -10471,6 +10483,7 @@ function MainScreen({
                 first
                 label="朋友圈"
                 testId="wx-moments-entry"
+                badge={wxNoticeBadge.count}
                 onClick={() => {
                   // 发现页入口：全量朋友圈信息流（自己+好友的动态）
                   setMomentsScope('all');
@@ -10652,6 +10665,15 @@ function MainScreen({
                       className="absolute -right-[9px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10.5px] font-semibold leading-none text-white ring-2 ring-[#F7F7F7] dark:ring-[#1A1A1A]"
                     >
                       {totalUnread > 99 ? '99+' : totalUnread}
+                    </span>
+                  )}
+                  {id === 'discover' && wxNoticeBadge.count > 0 && (
+                    <span
+                      data-testid="wx-tab-badge-discover"
+                      aria-label={`朋友圈 ${wxNoticeBadge.count} 条新消息`}
+                      className="absolute -right-[9px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10.5px] font-semibold leading-none text-white ring-2 ring-[#F7F7F7] dark:ring-[#1A1A1A]"
+                    >
+                      {wxNoticeBadge.count > 99 ? '99+' : wxNoticeBadge.count}
                     </span>
                   )}
                 </span>

@@ -1609,6 +1609,26 @@ export async function aiCommentOnMoment(args: {
   // 回复自己动态下的评论时，把自己动态原文也列入禁复读——回复是接话，
   // 不能把动态改写一遍再说（用户实锤：「财啊，项目算搞定了，但下一个任务啥时候来啊」整句复读动态）
   if (replyTo && isPostByPeer(post, peer)) avoid.push(post.content.slice(0, 80));
+  // 称呼规则（三）：默认不叫名字；只有评论区有多人发言（≥2 个非本角色的说话人）、
+  // 不喊名字会分不清在回谁时，才允许开头叫一次名字区分（此时引擎不做剥名字处理）
+  const otherSpeakers = new Set(
+    post.comments
+      .filter((c) => c.authorName && c.authorName !== displayNameOf(peer) && c.authorName !== peer.name)
+      .map((c) => c.authorName)
+  );
+  const allowAddressByName = otherSpeakers.size >= 2;
+  // 称呼用真实名字（三.5）：回复对象是角色时解析 TA 的真实名字传给 prompt（要称呼就叫真名，不用昵称/网名）
+  let replyRealName = '';
+  if (replyTo) {
+    const parentComment = post.comments.find((c) => c.id === replyTo.commentId);
+    if (parentComment?.author === 'char' && parentComment.peerId) {
+      try {
+        replyRealName = (await contactRealName(parentComment.peerId)) || replyTo.name;
+      } catch {
+        replyRealName = '';
+      }
+    }
+  }
   // 生成后校验：与最近发言完全一致/高度雷同 → 带禁令重试一次；仍重复 → 抛错（队列按原策略处理）
   let banned = '';
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1619,7 +1639,8 @@ export async function aiCommentOnMoment(args: {
       peer: personaOf(peer),
       post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 200) },
       thread,
-      replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content } : null,
+      replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content, realName: replyRealName || undefined } : null,
+      allowAddressByName: replyTo ? allowAddressByName : false,
       memories: memorySnippets(peer.id, platformApp(platform)),
       avoid: attempt === 0 ? avoid : [...avoid, banned].filter(Boolean),
       variation: randomVariation(replyTo ? 'reply' : 'comment'),
@@ -1627,10 +1648,12 @@ export async function aiCommentOnMoment(args: {
       bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
     });
     // 回复正文剥掉开头的「喊名字」——界面已有「X 回复 Y：」前缀，再喊名字像客服；
-    // prompt 禁令之外的确定性兜底（译文同步剥，保持双语一致）
-    const clean = replyTo
-      ? { content: stripLeadingAddress(content, replyTo.name), contentZh: stripLeadingAddress(contentZh, replyTo.name) }
-      : { content, contentZh };
+    // prompt 禁令之外的确定性兜底（译文同步剥，保持双语一致）。
+    // 多人评论区（allowAddressByName）允许用名字区分对象，不剥
+    const clean =
+      replyTo && !allowAddressByName
+        ? { content: stripLeadingAddress(content, replyTo.name), contentZh: stripLeadingAddress(contentZh, replyTo.name) }
+        : { content, contentZh };
     if (!isDupText(clean.content, avoid)) {
       const added = addCharMomentComment(platform, post.id, {
         peer,

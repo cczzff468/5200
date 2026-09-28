@@ -8987,12 +8987,15 @@ function DiscoverPage({
   onAvatar,
   onZone,
   onOpenMomentsSettings,
+  zoneBadge = 0,
   onToast,
 }: {
   me: QQUser;
   onAvatar: () => void;
   onZone: () => void;
   onOpenMomentsSettings: () => void;
+  /** 空间动态未读互动消息数（红色数字角标，同真机「空间动态 1」样式） */
+  zoneBadge?: number;
   onToast: (m: string) => void;
 }) {
   return (
@@ -9028,6 +9031,15 @@ function DiscoverPage({
                 {it.icon}
               </span>
               <span className="flex-1 truncate text-[16px]">{it.label}</span>
+              {it.key === 'zone' && zoneBadge > 0 && (
+                <span
+                  data-testid="qq-discover-zone-badge"
+                  aria-label={`空间动态 ${zoneBadge} 条新消息`}
+                  className="mr-0.5 flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#F5455C] px-[5px] text-[10.5px] font-semibold leading-none text-white"
+                >
+                  {zoneBadge > 99 ? '99+' : zoneBadge}
+                </span>
+              )}
               <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
             </button>
           </div>
@@ -13091,6 +13103,7 @@ function MainScreen({
                 onAvatar={() => setDrawerOpen(true)}
                 onZone={() => setRoute({ page: 'zone' })}
                 onOpenMomentsSettings={() => setRoute({ page: 'momentsSettings' })}
+                zoneBadge={qqNoticeBadge.count}
                 onToast={showToast}
               />
             )}
@@ -13119,6 +13132,15 @@ function MainScreen({
                         className="absolute -right-[10px] -top-[6px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[11px] font-semibold leading-none text-white ring-2 ring-white dark:ring-[#1B1C1F]"
                       >
                         {totalUnread > 99 ? '99+' : totalUnread}
+                      </span>
+                    )}
+                    {t.id === '动态' && qqNoticeBadge.count > 0 && (
+                      <span
+                        data-testid="qq-tab-badge-动态"
+                        aria-label={`空间动态 ${qqNoticeBadge.count} 条新消息`}
+                        className="absolute -right-[10px] -top-[6px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[11px] font-semibold leading-none text-white ring-2 ring-white dark:ring-[#1B1C1F]"
+                      >
+                        {qqNoticeBadge.count > 99 ? '99+' : qqNoticeBadge.count}
                       </span>
                     )}
                   </span>
