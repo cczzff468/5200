@@ -40,6 +40,7 @@ import {
   Radar,
   ScanLine,
   Search,
+  Settings,
   Smartphone,
   Smile,
   Sparkles,
@@ -101,7 +102,6 @@ import {
   WxIcServices,
   WxIcFavorites,
   WxIcWorks,
-  WxIcShop,
   WxIcSticker,
   WxIcSettings,
 } from './wx-icons';
@@ -170,7 +170,9 @@ import {
   toggleUserMomentLike,
   updateMomentPostContent,
 } from '@/lib/moments';
-import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
+import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, momentFriendsOf } from './moments-shared';
+import { MomentsSettingsPage } from './moments-settings';
+import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
@@ -346,6 +348,8 @@ interface WxMomentComment {
   id: string;
   author: string;
   text: string;
+  /** AI 双语译文（中文译文；空串 = 无译文）；48-6 渲染折叠块 */
+  contentZh?: string;
   time: number;
   replyTo: string | null;
 }
@@ -356,6 +360,8 @@ interface WxMoment {
   authorName: string;
   avatar: string | null;
   text: string;
+  /** AI 双语译文（中文译文；空串 = 无译文）；48-6 渲染折叠块 */
+  contentZh?: string;
   images: string[];
   time: number;
   likes: string[];
@@ -756,6 +762,7 @@ function loadMoments(): WxMoment[] {
       .map((p) => ({
         ...p,
         text: typeof p.text === 'string' ? p.text : '',
+        contentZh: typeof p.contentZh === 'string' ? p.contentZh : undefined,
         avatar: typeof p.avatar === 'string' ? p.avatar : null,
         authorName: typeof p.authorName === 'string' ? p.authorName : '微信用户',
         images: Array.isArray(p.images) ? p.images.filter((i) => typeof i === 'string') : [],
@@ -778,6 +785,7 @@ function loadMoments(): WxMoment[] {
                   id: typeof c.id === 'string' ? c.id : uid(),
                   author: c.author,
                   text: c.text,
+                  contentZh: typeof c.contentZh === 'string' ? c.contentZh : undefined,
                   time: c.time,
                   replyTo: selfReplyBug ? null : rawReplyTo,
                 };
@@ -7366,6 +7374,8 @@ function MomentRow({
   /** 编辑动态正文（自己的和 AI 的都可以编辑；好友朋友圈页不传） */
   onEditRequest?: () => void;
 }) {
+  /** 48-6：朋友圈设置·折叠中文译文（组件挂载时读一次，避免每次 render 读 kv；用户改设置后跳回本页重新挂载可生效） */
+  const [foldByDefault] = useState(() => getMomentsSettings().foldChineseTranslation);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState('');
   /** 回复目标：点某条评论设置（再点一次取消），带评论 id（回复 AI 评论可触发多轮） */
@@ -7437,6 +7447,7 @@ function MomentRow({
         {post.text && (
           <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-[1.5]">{post.text}</p>
         )}
+        <BilingualTranslation zh={post.contentZh ?? ''} foldByDefault={foldByDefault} />
         {post.images.length === 1 && (
           <img
             src={post.images[0]}
@@ -7543,36 +7554,39 @@ function MomentRow({
               {post.comments.length > 0 && (
                 <div className="min-w-0">
                   {post.comments.map((c) => (
-                    <div key={c.id} className="flex items-start gap-1">
-                      <button
-                        type="button"
-                        data-testid={`wx-moment-comment-${post.id}-${c.id}`}
-                        title={`回复 ${c.author}（长按删除）`}
-                        onPointerDown={startCommentPress(c)}
-                        onPointerUp={clearPress}
-                        onPointerLeave={clearPress}
-                        onPointerCancel={clearPress}
-                        onPointerMove={onCommentPointerMove}
-                        onClick={() => {
-                          // 长按后拦截紧随的 click（不弹出回复框）
-                          if (suppressClickRef.current) {
-                            suppressClickRef.current = false;
-                            return;
-                          }
-                          setComposerOpen(true);
-                          setReplyTarget((r) => (r && r.commentId === c.id ? null : { commentId: c.id, name: c.author }));
-                        }}
-                        className="min-w-0 flex-1 text-left text-[13px] leading-[1.6] active:opacity-70"
-                      >
-                        <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.author}</span>
-                        {c.replyTo && (
-                          <>
-                            <span className="text-black/85 dark:text-white/85"> 回复 </span>
-                            <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.replyTo}</span>
-                          </>
-                        )}
-                        <span className="text-black/85 dark:text-white/85">：{c.text}</span>
-                      </button>
+                    <div key={c.id}>
+                      <div className="flex items-start gap-1">
+                        <button
+                          type="button"
+                          data-testid={`wx-moment-comment-${post.id}-${c.id}`}
+                          title={`回复 ${c.author}（长按删除）`}
+                          onPointerDown={startCommentPress(c)}
+                          onPointerUp={clearPress}
+                          onPointerLeave={clearPress}
+                          onPointerCancel={clearPress}
+                          onPointerMove={onCommentPointerMove}
+                          onClick={() => {
+                            // 长按后拦截紧随的 click（不弹出回复框）
+                            if (suppressClickRef.current) {
+                              suppressClickRef.current = false;
+                              return;
+                            }
+                            setComposerOpen(true);
+                            setReplyTarget((r) => (r && r.commentId === c.id ? null : { commentId: c.id, name: c.author }));
+                          }}
+                          className="min-w-0 flex-1 text-left text-[13px] leading-[1.6] active:opacity-70"
+                        >
+                          <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.author}</span>
+                          {c.replyTo && (
+                            <>
+                              <span className="text-black/85 dark:text-white/85"> 回复 </span>
+                              <span className="text-[#576B95] dark:text-[#8FA5C9]">{c.replyTo}</span>
+                            </>
+                          )}
+                          <span className="text-black/85 dark:text-white/85">：{c.text}</span>
+                        </button>
+                      </div>
+                      <BilingualTranslation zh={c.contentZh ?? ''} foldByDefault={foldByDefault} />
                     </div>
                   ))}
                 </div>
@@ -7639,6 +7653,7 @@ function MomentsPage({
   onDeleteComment,
   onEditRequest,
   onOpenAsk,
+  onOpenMomentsSettings,
   onToast,
 }: {
   me: WxUser;
@@ -7658,6 +7673,8 @@ function MomentsPage({
   onEditRequest?: (post: WxMoment) => void;
   /** 顶部「让好友发一条」入口（仅自己的朋友圈页传入） */
   onOpenAsk?: () => void;
+  /** 顶部「朋友圈设置」齿轮入口（仅自己的朋友圈页传入，48-6） */
+  onOpenMomentsSettings?: () => void;
   onToast: (m: string) => void;
 }) {
   const isMine = !owner;
@@ -7915,6 +7932,20 @@ function MomentsPage({
               >
                 <Camera className="h-[22px] w-[22px]" strokeWidth={1.8} />
               </button>
+              {onOpenMomentsSettings && (
+                <button
+                  type="button"
+                  aria-label="朋友圈设置"
+                  title="朋友圈设置"
+                  data-testid="wx-moments-settings"
+                  onClick={onOpenMomentsSettings}
+                  className={`rounded-full p-1 active:bg-black/10 dark:active:bg-white/10 ${
+                    scrolled ? 'text-black/75 dark:text-white/75' : 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]'
+                  }`}
+                >
+                  <Settings className="h-[21px] w-[21px]" strokeWidth={1.8} />
+                </button>
+              )}
             </div>
           ) : (
             <div className="flex shrink-0 items-center justify-end gap-1" style={{ minWidth: 60 }}>
@@ -8731,7 +8762,8 @@ type Page =
   | 'services'
   | 'stickers'
   | 'favorites'
-  | 'album';
+  | 'album'
+  | 'momentsSettings';
 
 function MainScreen({
   me,
@@ -9193,6 +9225,7 @@ function MainScreen({
           onDeleteComment={deleteComment}
           onEditRequest={(p) => setEditingPost({ id: p.id, text: p.text })}
           onOpenAsk={() => setAskOpen(true)}
+          onOpenMomentsSettings={() => setPage('momentsSettings')}
           onToast={showToast}
         />
         {/* 让好友发一条（一.2）+ 每角色自动发动态设置（一.3）+ 编辑动态（六.4） */}
@@ -9432,6 +9465,20 @@ function MainScreen({
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
     return <AlbumPage contactId={me.id} title="我的相册" onClose={() => setPage('main')} allowEdit />;
+  }
+  if (page === 'momentsSettings') {
+    // 48-6：朋友圈设置页（替换原「小店与卡包」入口）；onOpenPostNow 复用 moments 页 AskPostSheet
+    return (
+      <MomentsSettingsPage
+        app="wx"
+        onBack={() => setPage('main')}
+        onToast={showToast}
+        onOpenPostNow={() => {
+          setAskOpen(true);
+          setPage('moments');
+        }}
+      />
+    );
   }
 
   const TITLES: Record<Tab, string> = { chats: '微信', contacts: '通讯录', discover: '发现', me: '我' };
@@ -9903,9 +9950,10 @@ function MainScreen({
                 icon={<WxIcWorks />}
               />
               <WxMenuRow
-                label="小店与卡包"
-                onClick={() => showToast('「小店与卡包」暂未开放')}
-                icon={<WxIcShop />}
+                label="朋友圈设置"
+                testId="wx-me-moments-settings"
+                onClick={() => setPage('momentsSettings')}
+                icon={<WxIcSettings />}
               />
               <WxMenuRow
                 label="表情"

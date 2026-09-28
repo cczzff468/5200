@@ -9811,3 +9811,311 @@ Stage Summary:
 - 保留清单（无关现有功能）：聊天背景卡（含 ChatBgPage 二级页及其 onResetBg 背景重置 prop）、回复条数入口、翻译入口、分句发送开关、时间感知开关、表情包开关、世界书入口、查找聊天记录、置顶/免打扰、拉黑/重置申请计数、备注编辑、他的声音、信息卡片，全部原样保留
 - tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/chat-settings.tsx exit 0（零 error 零 warning）
 - 未完成/跳过：无；47-b/c/d 已删三端容器层的 handler/state/调用站 prop/overlay 渲染，本任务从 chat-settings.tsx 彻底删 prop 定义 + 入口 JSX + 清理 import，4+2 入口全链路清零完成
+
+---
+Task ID: 48-4
+Agent: BilingualTranslation 共享 UI 子代理
+Task: moments-shared.tsx 新增 BilingualTranslation 组件（折叠/展开译文）
+
+Work Log:
+- 读 worklog 末尾 50 行确认 47-a 已完成 chat-settings 入口清理；本任务在 moments-shared.tsx 末尾追加双语译文共用组件
+- Read src/components/apps/moments-shared.tsx（371 行）确认：
+  - 顶部已有 `'use client';`（line 1）无需重复
+  - line 14 已 `import { useState, type ReactNode } from 'react';` useState 已有，无需重复
+  - line 15 lucide-react import 行：`CalendarClock, ChevronRight, Clock3, Loader2, MessageSquareQuote, Settings2, Sparkles, Trash2, X`，缺 `Languages`，需追加
+  - 文件末尾 line 369-370 为 `/** 简单头像（无宿主头像组件时的兜底） */ export { ChevronRight };`，新组件放其后
+- 改动 1（lucide-react import）：在 Clock3 与 Loader2 之间追加 `Languages`（保持字母序：CalendarClock, ChevronRight, Clock3, Languages, Loader2, …）
+- 改动 2（末尾追加 BilingualTranslation）：line 370 后追加分组注释 + 组件，复用现有样式约定（text-black/55 dark:text-white/55 文本色、active:opacity-60 触感、leading-relaxed 行高，与 EditPostDialog/CommentDeleteDialog 的 13px 13.5px 14px 文字层级一致）
+- 验证持久化：git diff --stat HEAD -- src/components/apps/moments-shared.tsx → 1 file changed, 30 insertions(+), 1 deletion(-)（M 状态确认）
+- 验证 tsc：bunx tsc --noEmit 2>&1 | head -15 无输出（exit 0，零错误）
+- 验证 eslint：bunx eslint src/components/apps/moments-shared.tsx 2>&1 | tail -10 无输出（exit 0，零 error 零 warning）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/moments-shared.tsx（+30/-1 共 31 行；git diff --stat HEAD 确认持久化）
+- 新增组件：BilingualTranslation（zh 空串不渲染；foldByDefault=true 默认折叠点击展开；Languages 图标 + "收起/展开译文" 按钮 + leading-relaxed 译文段）
+- import 变更：lucide-react import 行追加 Languages（其余 import 不动）
+- 样式与现有 moments-shared 组件风格一致：text-black/55 dark:text-white/55 文本色、active:opacity-60 触感、text-[12px]/[13.5px] 字号层级，深色模式 dark: 前缀全适配
+- tsc/eslint 状态：bunx tsc --noEmit exit 0（零错误）；bunx eslint src/components/apps/moments-shared.tsx exit 0（零 error 零 warning）
+- 未完成/留待主协调者：实际接入 wechat.tsx / qq.tsx 朋友圈动态卡片渲染（在正文下渲染 BilingualTranslation 并传 zh + foldByDefault prop）
+
+---
+Task ID: 48-1
+Agent: 朋友圈设置数据层子代理
+Task: 新建 src/lib/ios/moments-settings.ts（MomentsSettings 类型 + 默认值 + get/save/reset + OPTIONS 常量）
+
+Work Log:
+- 读 worklog 末尾 60 行确认 Task 47-a/47-c 已收尾 album.tsx readImageFile 白底填底 + chat-settings 4+2 入口删尽，48-1 专注新建朋友圈互动设置数据层
+- Read src/lib/ios/idb-kv.ts 确认签名：kvGet<T = unknown>(key: string): T | null（line 99-102，同步内存读）、kvSet(key: string, value: unknown): void（line 105-119，写内存 + 异步写穿 IndexedDB），与本任务的 get/save/reset 模式完全匹配
+- LS src/lib/ios 确认目录存在（同目录已有 db.ts/idb-kv.ts/store.ts 等 40+ 兄弟文件，import './idb-kv' 路径正确）
+- Write src/lib/ios/moments-settings.ts（5746 字节，95 行），完整内容按任务详情原样实现：
+  - MomentsSettings 接口（12 字段分四组：发布频率 3 / 评论点赞 4 / NPC 互动 2 / 双语翻译 3）
+  - DEFAULT_MOMENTS_SETTINGS 常量（12 字段默认值）
+  - DEFAULT_BILINGUAL_PROMPT 常量（中文翻译提示词）
+  - getMomentsSettings()：kvGet 读 → 每字段 typeof + 范围校验容错 → 不合法回退默认值；v 非 object 直接返回默认副本
+  - saveMomentsSettings(patch)：get 当前 → 浅合并 patch → kvSet 写回 → 返回 next
+  - resetMomentsSettings()：kvSet 写 DEFAULT → 返回默认副本
+  - UI 常量：MIN/MAX_POST_INTERVAL_OPTIONS、DELAY_OPTIONS_SEC、PROBABILITY_OPTIONS
+  - formatDelaySec(sec)：秒/分钟/小时显示文案
+  - formatProbability(p)：百分比文案
+  - MOMENTS_SETTINGS_KEY = 'moments-settings'（kv 键名）
+- 验证：ls -la src/lib/ios/moments-settings.ts → -rw-rw-r-- 1 z z 5746 ... 文件存在
+- 验证：bunx tsc --noEmit 2>&1 | head -15 全项目零错误（exit 0，无输出）
+- 验证：bunx eslint src/lib/ios/moments-settings.ts 2>&1 | tail -10 零 error 零 warning（exit 0，无输出）
+- 验证持久化：git status --short src/lib/ios/moments-settings.ts → ?? src/lib/ios/moments-settings.ts（新文件未追踪，确认已在磁盘落盘）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 新建文件：src/lib/ios/moments-settings.ts（95 行 / 5746 字节；git status --short 确认 ?? 状态持久化）
+- 导出清单：MomentsSettings 接口、DEFAULT_MOMENTS_SETTINGS、DEFAULT_BILINGUAL_PROMPT、getMomentsSettings / saveMomentsSettings / resetMomentsSettings 三函数、MIN_POST_INTERVAL_OPTIONS / MAX_POST_INTERVAL_OPTIONS / DELAY_OPTIONS_SEC / PROBABILITY_OPTIONS 四 UI 常量、formatDelaySec / formatProbability 二格式化函数
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/lib/ios/moments-settings.ts exit 0（零 error 零 warning）
+- 未完成/留待主协调者：UI 消费层（朋友圈设置页组件，下一任务 48-2 范畴）尚未接入；'moments-settings' kv 键暂未加入 idb-kv MIGRATE_EXACT 清单（首次启动无迁移需求，kvSet 即落 kv，后续若需要预置可由主协调者决定是否加入清单）
+
+---
+Task ID: 48-3
+Agent: 朋友圈生成 API bilingual 子代理
+Task: moments/generate route 接受 bilingual/bilingualPrompt，解析返回 {content, contentZh}
+
+Work Log:
+- 读 worklog 末尾 60 行确认 47-a chat-settings 入口删除任务已完成；本任务专注 moments/generate route 单文件
+- Read src/app/api/moments/generate/route.ts（197 行）完整了解：POST body 解析（kind/platform/peer/recentChat/memories/post/thread/replyTo/hint）、sys 数组 + user 数组分段构建、cleanContent 辅助函数（去围栏/引号/舞台指示/markdown 痕迹、压成自然段、slice 320）、stripEmojiText 硬剥、返回 { content }
+- 改动 1（JSDoc 注释块补充）：在 `hint?: string` 行后追加两行字段说明 `bilingual?: boolean` / `bilingualPrompt?: string`（48-3 标注），响应签名 `→ { content: string }` 改为 `→ { content: string, contentZh: string }` 并补「contentZh 为空串表示无译文」说明
+- 改动 2（新增 splitBilingual 辅助函数）：在 cleanContent 函数 `}` 与 `export async function POST` 之间插入 14 行函数：用正则 `/\n\s*中文[：:]\s*/` 找首个 `中文：`/`中文:` 标记，match.index 切分前后 → { content: raw.slice(0, m.index), contentZh: raw.slice(m.index + m[0].length) }；找不到标记则 { content: raw, contentZh: '' } 容错
+- 改动 3（POST body 解析新字段）：在 `const hint = s(body.hint, 80);` 后追加 3 行：`const bilingual = body.bilingual === true;` 严格布尔；`const DEFAULT_BILINGUAL_PROMPT = '将下面这条动态/评论的正文翻译成简体中文，只输出译文，不要解释、不要原文、不要引号包裹。';`（任务给的默认提示词）；`const bilingualPrompt = s(body.bilingualPrompt, 300) || DEFAULT_BILINGUAL_PROMPT;`（空则用默认，max 300 容纳较长提示词）
+- 改动 4（user message 末尾追加译文要求）：在 kind if/else 块结束 `}` 后、`const messages: LLMMessage[]` 前插入 3 行：`if (bilingual) user.push('（同时输出：先原文，再空一行，最后一行以「中文：」开头的简体中文译文；${bilingualPrompt}）')`，追加在 user 数组末尾（不破坏 system prompt，bilingual=false 时不追加）
+- 改动 5（响应解析拆分 content / contentZh）：try 块内原 `const content = stripEmojiText(cleanContent(text));` 前插入 5 行：声明 `let rawContent = text; let rawZh = '';`，bilingual=true 时 `const parts = splitBilingual(text); rawContent = parts.content; rawZh = parts.contentZh;`；原文部分走原有 `stripEmojiText(cleanContent(rawContent))` 流程，译文部分 `cleanContent(rawZh)`（去首尾空白 + 现有清理逻辑，未 stripEmoji 因译文本身是中文无需剥 emoji）；返回 `NextResponse.json({ content, contentZh })`（contentZh 空串表示无译文）
+- MultiEdit 一次原子应用 5 个 edit（JSDoc → splitBilingual 函数 → body 解析 → user 追加 → 响应解析），所有 old_str 唯一匹配成功
+- 验证持久化：git diff --stat HEAD -- src/app/api/moments/generate/route.ts → 1 file changed, 38 insertions(+), 3 deletions(-)（M 状态确认）
+- 验证 tsc：bunx tsc --noEmit 2>&1 | head -15 全项目零错误（exit 0，无输出）
+- 验证 eslint：bunx eslint src/app/api/moments/generate/route.ts 2>&1 | tail -10 零 error 零 warning（exit 0，无输出）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/app/api/moments/generate/route.ts（+38/-3 共 41 行；git diff --stat HEAD 确认持久化）
+- 新增能力：POST body 接受 `bilingual?: boolean` + `bilingualPrompt?: string`（空则用默认）；bilingual=true 时 user message 末尾追加译文要求（原文 + 空行 + 「中文：」前缀行）；响应解析用正则 `/\n\s*中文[：:]\s*/` 切分原文 / 译文，各自 cleanContent；返回 `{ content, contentZh }`，contentZh 空串表示无译文（bilingual=false 或未传 → contentZh=''；标记缺失 → contentZh='' 容错）
+- 兼容性：bilingual=false / 未传 时行为与原版完全一致（不追加 prompt、不拆分、contentZh=''），现有调用站不传 bilingual 不受影响；返回多一个 contentZh 字段（空串）对前端解构无破坏
+- tsc/eslint 状态：tsc exit 0（零错误）；eslint exit 0（零 error 零 warning）
+- 未完成/留待主协调者：调用站（朋友圈前端组件）传 bilingual=true 并展示 contentZh 的接入工作，本任务只做 API 侧
+
+---
+Task ID: 48-5
+Agent: MomentsSettingsPage UI 子代理
+Task: 新建 src/components/apps/moments-settings.tsx（4 分组设置页 + 二级提示词页）
+
+Work Log:
+- 读 worklog 末尾 60 行确认 48-1 数据层 / 48-3 bilingual API 已收尾，本任务专注 UI 消费层（朋友圈/空间动态设置页）
+- Read src/lib/ios/moments-settings.ts 确认 12 字段 MomentsSettings 接口、DEFAULT_MOMENTS_SETTINGS、DEFAULT_BILINGUAL_PROMPT、get/save/reset 三函数、MIN/MAX_POST_INTERVAL_OPTIONS / DELAY_OPTIONS_SEC / PROBABILITY_OPTIONS 四常量、formatDelaySec / formatProbability 二格式化函数全部导出
+- Read src/components/ios/ActionSheet.tsx 确认 IOSActionSheet props：open: boolean、actions: { label, destructive?, onSelect }[]、onCancel: () => void；点击 action 先调 onCancel 再调 onSelect（onCancel 触发退场动画后卸载，无需额外清理）
+- Read src/components/apps/settings.tsx 前 250 行参考 GroupCard/Row/RowIcon/MainRow/DetailShell 视觉（mt-6 / rounded-[12px] / bg-card / divide-y / min-h-[52px] / RowIcon 30x30 圆角方块 + 白色 17x17 线性图标）—— 本任务本地实现，不 import 内部组件
+- Read src/components/ios/IOSNavBar.tsx 确认 IOSNavBar（title/left/right/large/inline）+ IOSBackButton（onClick/label）+ IOSScreen（children/className，append 末尾）三导出；为让 IOSActionSheet absolute inset-0 找到定位父，对 IOSScreen 传 className="relative"
+- node 验证 lucide-react 15 个图标全部存在（Bot/Calendar/ChevronDown/ChevronRight/Clock/Dice5/Heart/Languages/MessageCircle/PenLine/PenSquare/Repeat/Reply/RotateCcw/Sparkles + LucideIcon 类型）
+- Write src/components/apps/moments-settings.tsx（13758 字节，约 360 行），完整实现：
+  - 顶部 'use client' + 17 个 import（lucide 15 图标 + LucideIcon 类型 / IOSNavBar/IOSScreen/IOSBackButton / Switch / IOSActionSheet + ActionSheetAction / 8 个 moments-settings 数据层导出）
+  - 8 色 iOS 色板常量（蓝/绿/橙/紫/粉/靛/青/红）
+  - GroupCard / RowIcon / Row 三小组件本地实现（Row 在任务给定签名基础上加 description 副标题 + danger 红色文字两可选 prop，用于「自动发帖角色」说明项与「恢复默认」破坏性动作）
+  - PromptEditPage 二级页（IOSScreen 包裹 + IOSNavBar「双语提示词」标题 + 保存按钮 / textarea 初始值 = settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT / placeholder 显示默认提示词 / 「清空（恢复默认提示词）」独立卡片 / 留空保存即回退默认）
+  - PickerKind 8 字段联合类型 + buildPickerActions(kind, settings, update) switch 8 分支，每分支显式 update({ 字段: 值 }) 静态类型，无 as 断言风险
+  - MomentsSettingsPage 主组件：useState 初始化 getMomentsSettings()，update(patch) = saveMomentsSettings + setState；promptEditing=true 时整页替换为 PromptEditPage；4 分组按任务要求布局（发布频率 5 行 / 评论点赞 4 行 / NPC 互动 2 行 / 双语翻译 3 行）；自动发帖角色 description-only 行（无 onClick，disabled）；恢复默认行 window.confirm('确定恢复所有朋友圈设置为默认值？') 二次确认 + resetMomentsSettings + setState + onToast；双语翻译 / 折叠中文译文 两行用 Switch 右侧替代 ChevronRight；双语提示词行 value 显示「自定义」/「默认」根据 settings.bilingualPrompt.trim() 判定
+  - app='wx' → 标题「朋友圈设置」+ 立即发帖 description「选择角色立即发一条朋友圈」；app='qq' → 标题「空间动态设置」+ description「选择角色立即发一条空间动态」
+  - 立即发帖行 onClick 直接调 onOpenPostNow()（父级接 AskPostSheet）
+- 验证持久化：ls -la src/components/apps/moments-settings.tsx → -rw-rw-r-- 1 z z 13758 ... 文件存在
+- 验证 tsc：bunx tsc --noEmit 2>&1 | head -20 全项目零错误（exit 0，无输出）
+- 验证 eslint：bunx eslint src/components/apps/moments-settings.tsx 2>&1 | tail -20 零 error 零 warning（exit 0，无输出）
+- 验证 git 持久化：git status --short src/components/apps/moments-settings.tsx → ?? src/components/apps/moments-settings.tsx（新文件未追踪，确认已在磁盘落盘）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 新建文件：src/components/apps/moments-settings.tsx（约 360 行 / 13758 字节；git status --short 确认 ?? 状态持久化）
+- 实现要点：4 分组（发布频率 / 评论点赞 / NPC 互动 / 双语翻译）+ 二级双语提示词编辑页 + 底部 IOSActionSheet 数值选择器（PickerKind 8 分支静态类型）+ Switch 双语/折叠开关 + window.confirm 恢复默认二次确认 + IOSScreen className="relative" 让 ActionSheet absolute inset-0 找到定位父
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/moments-settings.tsx exit 0（零 error 零 warning）
+- 未完成/留待主协调者：将 <MomentsSettingsPage app="wx|qq" onBack={} onToast={} onOpenPostNow={} /> 接入 wechat.tsx / qq.tsx 朋友圈动态页（触发入口、AskPostSheet 父级实现、onToast 桥接）
+
+---
+Task ID: 48-2
+Agent: moments.ts 引擎接线子代理
+Task: 引擎读取新设置（autoPost/min/max interval + 评论点赞延迟概率 + NPC互动 + bilingual + contentZh）
+
+Work Log:
+- 读 worklog 末尾 80 行确认 48-1（moments-settings.ts 数据层）/48-3（moments/generate route bilingual）已完成，本任务只接 moments.ts 引擎
+- Read src/lib/ios/moments-settings.ts（116 行）确认 getMomentsSettings / DEFAULT_BILINGUAL_PROMPT 签名 + 字段名（autoPostEnabled/minPostInterval/maxPostInterval/firstCommentDelay/followCommentDelay/commentProbability/likeProbability/npcInteractDelay/replyNpcCommentDelay/bilingualEnabled/bilingualPrompt）
+- Read src/lib/moments.ts（1448 行）完整了解 9 个改动点定位：
+  - MomentPostView（line 72-85）/ MomentCommentView（line 58-70）接口需加 contentZh
+  - runAutoPosts（line 1199-1249）调度逻辑无 master 开关，trigger 三分支：schedule（today HH:mm）/ interval（cfg.intervalHours）/ chat（随机 1/240 + 15min 最小）
+  - enqueuePostInteractions（line 893-906）硬编码 8_000 + random(10_000)
+  - enqueueCharReply（line 908-930）硬编码 3_000 + random(5_000)
+  - drainInteractions（line 1158-1197）硬编码点赞 100%、评论 0.7
+  - callGenerateApi（line 1013-1023）返回 string
+  - aiPostMoment（line 1037-1059）/ aiCommentOnMoment（line 1062-1093）调 callGenerateApi，aiPostMoment 末尾无 NPC enqueue
+  - addCharMomentPost（line 556-599）/ addCharMomentComment（line 764-812）写入 post/comment，不接收 contentZh
+  - 4 个 raw shape（WxRawPost/WxRawComment/QqRawPost/QqRawComment）字段需加 contentZh 才能读
+  - persistMomentPosts（line 366-427）写回旧键，需加 contentZh 字段以无损往返
+- 改动 1（import 顶部追加）：line 44 `import { DEFAULT_BILINGUAL_PROMPT, getMomentsSettings } from '@/lib/ios/moments-settings';`
+- 改动 2（接口加 contentZh）：MomentCommentView line 65-67 加 `contentZh?: string`；MomentPostView line 83-85 同
+- 改动 2.5（4 个 raw shape 加 contentZh? : unknown）：WxRawComment line 145 / WxRawPost line 158 / QqRawComment line 170 / QqRawPost line 183
+- 改动 3（listMomentPosts 读 contentZh）：wx post（line 288）/ wx comment（line 311）/ qq comment（line 347）/ qq post（line 361）各加 `contentZh: str(p.contentZh) || undefined,`（empty 兼容 legacy → undefined，不污染存储）
+- 改动 4（persistMomentPosts 写 contentZh）：wx post raw（line 388）/ wx comment raw（line 398）/ qq comment raw（line 415）/ qq post raw（line 428）各加 `contentZh: ... || undefined,`（undefined 字段 JSON 序列化时自动省略，无存储开销）
+- 改动 5（addCharMomentPost 接收 contentZh）：args 加 `contentZh?: string;`（line 580），post 对象加 `contentZh: args.contentZh,`（line 598）
+- 改动 6（addCharMomentComment 接收 contentZh）：args 加 `contentZh?: string;`（line 792），comment 对象加 `contentZh: args.contentZh,`（line 811）
+- 改动 7（enqueuePostInteractions 接收 delaySec）：签名加 `delaySec?: number`（line 920），函数体改 `const settings = getMomentsSettings(); const delay = (delaySec ?? settings.firstCommentDelay) * 1000; fireAt: Date.now() + delay`（去掉 8s+random(10s) 硬编码）
+- 改动 8（enqueueCharReply 接收 kind）：签名加 `kind: 'user' | 'npc' = 'user'`（line 945），函数体改 `const settings = getMomentsSettings(); const delaySec = kind === 'npc' ? settings.replyNpcCommentDelay : settings.followCommentDelay; const delay = delaySec * 1000; fireAt: Date.now() + delay`（去掉 3s+random(5s) 硬编码）
+- 改动 9（callGenerateApi 返回 { content, contentZh }）：返回类型改 `Promise<{ content: string; contentZh: string }>`，data 类型加 `contentZh?: unknown`，返回 `{ content: ..., contentZh: typeof data.contentZh === 'string' ? data.contentZh.trim().slice(0, 500) : '' }`
+- 改动 10（aiPostMoment 传 bilingual + 写 contentZh + enqueue NPC）：函数体加 `const settings = getMomentsSettings();`，payload 加 `bilingual: settings.bilingualEnabled, bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT`，返回改为 `const { content, contentZh } = await callGenerateApi(...)`，addCharMomentPost 传 `contentZh: contentZh || undefined`，末尾 `enqueuePostInteractions(platform, post.id, settings.npcInteractDelay)` 触发 NPC 互动（用 npcInteractDelay 作为延迟）
+- 改动 11（aiCommentOnMoment 传 bilingual + 写 contentZh）：函数体加 `const settings = getMomentsSettings();`，payload 加 bilingual 字段，返回改为 `const { content, contentZh } = await callGenerateApi(...)`，addCharMomentComment 传 `contentZh: contentZh || undefined`
+- 改动 12（drainInteractions 用 likeProbability + commentProbability）：picked 后加 `const settings = getMomentsSettings();`，for 循环体改：点赞前先 `if (Math.random() < settings.likeProbability) addCharMomentLike(...)`（旧版 100% → 新版可配），评论改 `if (Math.random() < settings.commentProbability) aiCommentOnMoment(...)`（旧版 0.7 → 新版可配）
+- 改动 13（runAutoPosts master 开关 + min/max 间隔）：函数开头加 `const settings = getMomentsSettings(); if (!settings.autoPostEnabled) return; const minMs = settings.minPostInterval * 3_600_000; const maxMs = settings.maxPostInterval * 3_600_000;`，每个 peer 内加 `const sinceLast = now - last; if (last > 0 && sinceLast < minMs) continue;`（最小间隔跳过，last=0 首次发帖不受限）；schedule 模式加 `else if (sinceLast >= maxMs) plan.push(...)` 兜底；chat 模式加 `if (sinceLast >= maxMs) plan.push(...hint)` 兜底（最强优先）；interval 模式不变（仍按 cfg.intervalHours）
+- MultiEdit 一次原子应用 16 个 edit（import + 接口 ×2 + raw shape ×4 + listMomentPosts ×4 + persistMomentPosts ×4 + addCharMomentPost + addCharMomentComment + enqueuePostInteractions + enqueueCharReply + callGenerateApi + aiPostMoment + aiCommentOnMoment + drainInteractions + runAutoPosts），所有 old_str 唯一匹配成功
+- 验证持久化：git diff --stat HEAD -- src/lib/moments.ts → 1 file changed, 91 insertions(+), 17 deletions(-)（M 状态确认）
+- 验证 tsc：bunx tsc --noEmit 2>&1 | head -20 全项目零错误（exit 0，无输出）
+- 验证 eslint：bunx eslint src/lib/moments.ts 2>&1 | tail -15 零 error 零 warning（exit 0，无输出）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts（+91/-17 共 108 行；git diff --stat HEAD 确认持久化）
+- 新设置接入清单：
+  - autoPostEnabled（master 开关）：runAutoPosts 开头 `if (!settings.autoPostEnabled) return`
+  - minPostInterval（最小发帖间隔 h）：runAutoPosts 每角色 `if (last > 0 && sinceLast < minMs) continue`（首次发帖 last=0 不受限）
+  - maxPostInterval（最大发帖间隔 h）：runAutoPosts schedule/chat 模式兜底 `if (sinceLast >= maxMs) plan.push(...)`（interval 模式仍按 cfg.intervalHours）
+  - firstCommentDelay（首条评论延迟 s）：enqueuePostInteractions `delaySec ?? settings.firstCommentDelay`（默认延迟）
+  - followCommentDelay（后续评论延迟 s）：enqueueCharReply kind='user' 时使用
+  - replyNpcCommentDelay（角色回复 NPC 评论延迟 s）：enqueueCharReply kind='npc' 时使用
+  - commentProbability（评论概率 0-1）：drainInteractions `if (Math.random() < settings.commentProbability)`（旧 0.7）
+  - likeProbability（点赞概率 0-1）：drainInteractions `if (Math.random() < settings.likeProbability)`（旧 1.0）
+  - npcInteractDelay（NPC 互动延迟 s）：aiPostMoment 末尾 `enqueuePostInteractions(platform, post.id, settings.npcInteractDelay)` 触发 NPC 好友互动
+  - bilingualEnabled（双语开关）：aiPostMoment/aiCommentOnMoment 调 callGenerateApi 时传 `bilingual: settings.bilingualEnabled`
+  - bilingualPrompt（双语提示词）：传 `settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT`（空串回退默认）
+  - foldChineseTranslation：本任务不接入（UI 层渲染折叠，48-4/48-5 范畴）
+- contentZh 数据贯通：listMomentPosts（4 处读）→ MomentPostView/MomentCommentView（接口可选）→ addCharMomentPost/Comment（写入）→ persistMomentPosts（4 处写，`|| undefined` 序列化时省略字段，无存储开销）→ 旧数据 str() 兜底空串 → undefined，无损兼容
+- callGenerateApi 返回类型变更：string → `{ content: string; contentZh: string }`；aiPostMoment/aiCommentOnMoment 解构为 `{ content, contentZh }`；旧调用方（wechat.tsx/qq.tsx 的 aiPostMoment 调用）忽略返回值或仅用 id，不依赖 contentZh，零破坏
+- aiPostMoment NPC 互动新增：角色自动发帖后立即 enqueuePostInteractions（用 npcInteractDelay 延迟），其他 NPC 好友延迟来点赞/评论；现网调用站（wechat 9034 / qq 12221）未传 delaySec → 用 firstCommentDelay，行为与默认设置一致
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/lib/moments.ts exit 0（零 error 零 warning）
+- 未完成/留待主协调者：UI 消费层（朋友圈设置页组件 + 朋友圈动态卡片渲染 BilingualTranslation）尚未接入；'moments-settings' kv 键暂未加入 idb-kv MIGRATE_EXACT 清单（48-1 留言，主协调者决定）
+
+---
+Task ID: 48-7
+Agent: qq 空间动态设置入口子代理
+Task: 「小游戏」→「空间动态设置」入口 + MainRoute + 渲染分支 + BilingualTranslation
+
+Work Log:
+- 读 worklog 末尾 80 行确认 48-1/48-2/48-3/48-4/48-5 已完成；本任务接 qq.tsx 入口与渲染
+- Read src/lib/ios/moments-settings.ts（116 行）确认 getMomentsSettings 签名 + foldChineseTranslation 字段
+- Read src/components/apps/moments-shared.tsx 确认 BilingualTranslation 导出（zh + foldByDefault 两 props，空串返回 null）
+- Read src/components/apps/moments-settings.tsx 确认 MomentsSettingsPageProps：app/onBack/onToast/onOpenPostNow（48-5 已建）
+- Read qq.tsx 找到所有改动点定位：
+  - DISCOVER_ITEMS（line 8669-8677）含「小游戏」(key='mini') 行
+  - DiscoverPage 函数（line 8679-8688）+ onClick（line 8712）
+  - ZonePage 函数（line 9623-9637）+ 内部 askOpen state（line 9657）+ setAskOpen 三处调用（9750/9778/10028）
+  - ZonePost/ZoneComment 接口（line 598-619）无 contentZh 字段
+  - post.content 渲染（line 9878）+ 评论 c.content 渲染（line 9927-9970 块）
+  - MainRoute 联合类型（line 12120-12139）+ route 渲染分支（line 12260-12497）+ DiscoverPage 调用站（line 12460）
+  - CircleUser 仍用于 line 1328（账密登录 icon）→ 不能删 import
+  - Settings 已 import（line 113）
+- 改动 1（DISCOVER_ITEMS）：key='mini'/小游戏 → key='moments-settings'/'空间动态设置'，icon=Settings，color 沿用 #1E6FFF；CircleUser 保留（line 1328 仍用）
+- 改动 2（DiscoverPage props + onClick）：props 加 onOpenMomentsSettings: () => void；onClick 改为三分支 if-else（zone→onZone / moments-settings→onOpenMomentsSettings / 其他→onToast）
+- 改动 3（MainRoute）：加 `| { page: 'momentsSettings' }` 成员（在 zone-compose 后）
+- 改动 4（route 渲染分支 + lift askOpen）：因 setAskOpen 原本只活在 ZonePage 内部，MomentsSettingsPage 在 MainScreen 渲染无法直接调用 → 设计为「lift askOpen 到 MainScreen + MainScreen 调 onOpenPostNow 时同时 setAskOpen(true) + setRoute({page:'zone'})」：
+  - MainScreen 加 `const [askOpen, setAskOpen] = useState(false);`
+  - ZonePage props 加 `askOpen: boolean; setAskOpen: (b: boolean) => void`，删除本地 useState
+  - ZonePage 加 `useEffect(() => () => setAskOpen(false), [setAskOpen])` 卸载时清理（防止 lift 状态在下次进 ZonePage 时残留弹层）
+  - momentsSettings 渲染分支：`onBack={() => openTabs('动态')}`（'discover' 不是 MainRoute 成员，用 tabs+动态 tab 兜底）；`onOpenPostNow` 调 setAskOpen(true) + setRoute({page:'zone'})
+  - ZonePage 调用站加 askOpen/setAskOpen 两 prop
+- 改动 5（DiscoverPage 调用站）：传 onOpenMomentsSettings={() => setRoute({ page: 'momentsSettings' })}
+- 改动 6（ZonePage post/comment 追加 BilingualTranslation）：
+  - ZonePost/ZoneComment 接口加 `contentZh?: string`（引擎 48-2 已写 kv，本接口与引擎共用 'qq-zone-posts'/'qq-zone-comments' key，cast 即可读出）
+  - ZonePage 内 `const [momentsSettings] = useState(() => getMomentsSettings())`（mount 时读一次 kv，避免每次 render 重读）
+  - post.content 后追加 `<BilingualTranslation zh={p.contentZh ?? ''} foldByDefault={momentsSettings.foldChineseTranslation} />`
+  - 评论块外层 div 由 `flex items-start gap-2` 改为纯容器 `text-[14px] leading-[1.5]`，内部包一层 `<div className="flex items-start gap-2">` 装 p+button，外层 div 末尾追加 BilingualTranslation（保持原 flex 横向布局 + 译文换行不挤进 flex 行）
+- 改动 7（import 清理）：line 183 追加 BilingualTranslation；line 184 新增 `import { MomentsSettingsPage } from './moments-settings'`；line 185 新增 `import { getMomentsSettings } from '@/lib/ios/moments-settings'`；Settings 已存在；CircleUser 保留（line 1328 仍用）
+- 一次性 MultiEdit 14 个原子 edit 应用，所有 old_str 唯一匹配
+- 验证持久化：git diff --stat HEAD -- src/components/apps/qq.tsx → 1 file changed, 91 insertions(+), 46 deletions(-)（M 状态确认 137 行净变化）
+- 验证 tsc：bunx tsc --noEmit 2>&1 | head -30 全项目零错误（exit 0，无输出）
+- 验证 eslint：bunx eslint src/components/apps/qq.tsx 2>&1 | tail -20 exit=0（仅 BABEL 文件超 500KB deoptimize 提示，零 error 零 warning）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx（+91/-46 共 137 行；git diff --stat HEAD 确认持久化）
+- 入口接通清单：
+  - DISCOVER_ITEMS：「小游戏」→「空间动态设置」(key='moments-settings', icon=Settings)
+  - DiscoverPage onClick：zone→onZone / moments-settings→onOpenMomentsSettings / 其他→onToast
+  - DiscoverPage props：加 onOpenMomentsSettings: () => void
+  - MainRoute 联合类型：加 { page: 'momentsSettings' }
+  - MainScreen：lift askOpen state（供 momentsSettings 与 ZonePage 共享 AskPostSheet）+ route.page==='momentsSettings' 渲染 MomentsSettingsPage（onBack→openTabs('动态')，onOpenPostNow→setAskOpen(true)+setRoute({page:'zone'})）
+  - DiscoverPage 调用站：传 onOpenMomentsSettings={() => setRoute({ page: 'momentsSettings' })}
+- ZonePage 双语渲染清单：
+  - ZonePost/ZoneComment 接口加 contentZh?: string（与引擎 48-2 共用 kv key，cast 即读出）
+  - mount 时 useState lazy init 缓存 getMomentsSettings()（避免每次 render 读 kv）
+  - post.content 后追加 BilingualTranslation
+  - 评论块重构：外层 div 改纯容器 + 内层 flex div 包 p+button，外层末尾追加 BilingualTranslation（译文不挤进 flex 横向行）
+  - lift askOpen：ZonePage 删除本地 useState，加 useEffect 卸载清理（防 lift 状态残留）
+- import 清理：moments-shared 加 BilingualTranslation；新 import MomentsSettingsPage（./moments-settings）+ getMomentsSettings（@/lib/ios/moments-settings）；Settings 已存在；CircleUser 保留（line 1334 账密登录仍用）
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/qq.tsx exit=0（零 error 零 warning，仅 BABEL 超大文件 deoptimize 提示）
+- 未完成/留待主协调者：实际打开 QQ 模拟器点「空间动态设置」入口验证交互流（dev server 后台运行，本子代理未手动验证）
+
+---
+Task ID: 48-6
+Agent: wechat 朋友圈设置入口子代理
+Task: 「小店与卡包」→「朋友圈设置」入口 + type Page + 渲染分支 + 顶栏齿轮 + BilingualTranslation
+
+Work Log:
+- 读 worklog 末尾 80 行确认 48-1（moments-settings.ts 数据层）/48-2（moments.ts 引擎 contentZh 贯通）/48-3（moments/generate route bilingual）/48-4（moments-shared BilingualTranslation 导出）/48-5（MomentsSettingsPage 组件已就绪），本任务接 wechat.tsx UI 入口与渲染层
+- Read src/components/apps/wechat.tsx 关键段确认现状：
+  - WxMoment 接口（line 354）字段名是 text/comments/likes/images，不是 content；WxMomentComment（line 345）字段名也是 text；与 moments.ts 引擎 MomentPostView.contentZh 字段贯通需在 UI 接口加可选 contentZh
+  - 「小店与卡包」WxMenuRow（line 9905）使用 WxIcShop 图标，且 WxIcShop 全文件仅此一处使用 → 可安全移除 import
+  - type Page 联合类型（line 8721）共 12 个分支，需加 'momentsSettings'
+  - MomentsPage 顶栏 isMine 分支（line 7891-7918）：已有 Sparkles（让好友发）+ Camera（发布）两个按钮，需追加 Settings 齿轮
+  - MomentsPage props（line 7629-7662）已有 onOpenAsk?: () => void 可选 prop，模式参照追加 onOpenMomentsSettings
+  - askOpen state（line 8783）/ setAskOpen / AskPostSheet 渲染在 page==='moments' 分支（line 9199）；momentsSettings 分支调 setAskOpen(true) 后必须同时 setPage('moments') 才能让 AskPostSheet 真正渲染
+  - MomentRow 子组件（line 7345）才是 post.text 与 c.text 实际渲染处；post.text 渲染在 line 7437，comments 渲染在 line 7545-7577
+  - loadMoments（line 750）从 LS_MOMENTS kv 读取，.map((p) => ({ ...p, ...overrides })) 已 spread，但 comments 显式构造对象不 spread → 需在两处显式加 contentZh 归一
+- Read src/lib/ios/moments-settings.ts 确认 getMomentsSettings() 签名 + foldChineseTranslation 字段
+- Read src/components/apps/moments-settings.tsx 确认 MomentsSettingsPage 是 named + default 双导出（采用 named import 与现有 import 风格一致），props: app='wx'|'qq' / onBack / onToast / onOpenPostNow
+- Read src/components/apps/moments-shared.tsx 确认 BilingualTranslation 导出签名：props zh:string + foldByDefault:boolean，zh 空串 return null
+- 改动 1（imports）：lucide-react 加 Settings；./wx-icons 删 WxIcShop（grep 确认全文件仅 line 9908 使用，删除后无残留）；./moments-shared 追加 BilingualTranslation；新增 import { MomentsSettingsPage } from './moments-settings'；新增 import { getMomentsSettings } from '@/lib/ios/moments-settings'
+- 改动 2（type Page）：line 8721 联合类型末尾追加 | 'momentsSettings'
+- 改动 3（小店与卡包 → 朋友圈设置）：line 9905 WxMenuRow label="小店与卡包" / onClick={() => showToast('「小店与卡包」暂未开放')} / icon={<WxIcShop />} 改为 label="朋友圈设置" / testId="wx-me-moments-settings" / onClick={() => setPage('momentsSettings')} / icon={<WxIcSettings />}（WxIcSettings 已 import 并已用于「设置」入口，蓝色齿轮）
+- 改动 4（WxMoment/WxMomentComment 接口 + loadMoments 读 contentZh）：
+  - WxMomentComment 接口加 contentZh?: string（line 352）
+  - WxMoment 接口加 contentZh?: string（line 363）
+  - loadMoments 的 post map 显式加 contentZh: typeof p.contentZh === 'string' ? p.contentZh : undefined（防 storage 非字符串污染）
+  - loadMoments 的 comment map 显式加 contentZh: typeof c.contentZh === 'string' ? c.contentZh : undefined
+- 改动 5（MomentsPage props + 顶栏齿轮）：
+  - MomentsPage 解构参数与类型签名追加 onOpenMomentsSettings?: () => void
+  - 顶栏 isMine 分支 Camera 按钮之后追加 Settings 齿轮按钮（仅 onOpenMomentsSettings 传入时渲染）：aria-label="朋友圈设置" data-testid="wx-moments-settings" <Settings className="h-[21px] w-[21px]" strokeWidth={1.8} />，className 与 Sparkles/Camera 同款（scrolled 状态切换黑白）
+- 改动 6（MomentRow BilingualTranslation 渲染）：
+  - MomentRow 顶部 useState 初始化 const [foldByDefault] = useState(() => getMomentsSettings().foldChineseTranslation)（每条动态挂载时读一次，避免每次 render 读 kv；用户改设置后返回朋友圈页 MainScreen 重挂载 → 新值生效）
+  - post.text 段落后追加 <BilingualTranslation zh={post.contentZh ?? ''} foldByDefault={foldByDefault} />（zh 空串 return null，零开销）
+  - comment 列表每条原 <div className="flex items-start gap-1"> 包裹改为外层 <div key={c.id}> 包 <div className="flex items-start gap-1"> + <BilingualTranslation zh={c.contentZh ?? ''} foldByDefault={foldByDefault} />，translation 作为按钮行的下方兄弟块（mt-1 视觉间距，bg #F7F7F7 区块内）
+- 改动 7（page==='moments' 分支传 onOpenMomentsSettings）：line 9228 在 onOpenAsk 后追加 onOpenMomentsSettings={() => setPage('momentsSettings')}（仅自己的朋友圈页有齿轮入口，好友朋友圈页不传 → 齿轮不渲染）
+- 改动 8（page==='momentsSettings' 渲染分支）：在 page==='album' 分支后追加：
+  if (page === 'momentsSettings') {
+    return (
+      <MomentsSettingsPage
+        app="wx"
+        onBack={() => setPage('main')}
+        onToast={showToast}
+        onOpenPostNow={() => {
+          setAskOpen(true);
+          setPage('moments');  // AskPostSheet 渲染在 moments 分支，需切回 moments 才能弹层
+        }}
+      />
+    );
+  }
+- 验证持久化：git diff --stat HEAD -- src/components/apps/wechat.tsx → 1 file changed, 84 insertions(+), 36 deletions(-)
+- 验证 tsc：bunx tsc --noEmit 全项目 exit 0（零错误，无输出）
+- 验证 eslint：bunx eslint src/components/apps/wechat.tsx exit 0（零 error 零 warning，无输出）
+- grep 验证：WxIcShop 在文件中已 0 处引用；小店与卡包 仅出现在 9470 行注释中；onOpenMomentsSettings 在 5 处（解构/类型/按钮渲染/调用/onOpenMomentsSettings setPage）；MomentsSettingsPage 2 处（import + 渲染）；BilingualTranslation 3 处（import + 2 处渲染）；getMomentsSettings 2 处（import + useState init）
+- 未重启 dev server、未运行任何 git 修改命令、未运行 bun run build/db:push
+
+Stage Summary:
+- 修改文件：src/components/apps/wechat.tsx（+84/-36 共 120 行；git diff --stat HEAD 确认持久化；10228 行）
+- 入口贯通清单：
+  - 「我」界面：WxMenuRow label="朋友圈设置" testId="wx-me-moments-settings" → setPage('momentsSettings')（替换原「小店与卡包」暂未开放 toast）
+  - 朋友圈顶栏：Settings 齿轮按钮 data-testid="wx-moments-settings" → onOpenMomentsSettings → setPage('momentsSettings')（仅自己朋友圈页显示）
+  - 朋友圈设置页：MomentsSettingsPage app="wx" onBack={() => setPage('main')} onOpenPostNow={() => { setAskOpen(true); setPage('moments'); }}（切回 moments 让 AskPostSheet 渲染）
+- 渲染贯通清单：
+  - WxMoment.contentZh?: string / WxMomentComment.contentZh?: string 接口加可选字段
+  - loadMoments 读 contentZh（post + comment 各一处显式归一）
+  - MomentRow 顶部 useState 缓存 foldByDefault = getMomentsSettings().foldChineseTranslation
+  - post.text 段落后追加 <BilingualTranslation zh={post.contentZh ?? ''} foldByDefault={foldByDefault} />
+  - 每条 comment.text 后追加 <BilingualTranslation zh={c.contentZh ?? ''} foldByDefault={foldByDefault} />
+- tsc/eslint 状态：bunx tsc --noEmit 全项目 exit 0（零错误）；bunx eslint src/components/apps/wechat.tsx exit 0（零 error 零 warning）
+- 未完成/留待主协调者：UI 层与 moments.ts 引擎（48-2）+ moments-shared BilingualTranslation（48-4）+ MomentsSettingsPage（48-5）已贯通；qq.tsx 同款入口未实现（属于另一子任务范畴）

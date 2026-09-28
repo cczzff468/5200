@@ -12,7 +12,7 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { CalendarClock, ChevronRight, Clock3, Loader2, MessageSquareQuote, Settings2, Sparkles, Trash2, X } from 'lucide-react';
+import { CalendarClock, ChevronRight, Clock3, Languages, Loader2, MessageSquareQuote, Settings2, Sparkles, Trash2, X } from 'lucide-react';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { DefaultAvatar } from './default-avatar';
 import {
@@ -368,3 +368,32 @@ export function PostMoreMenu({
 
 /** 简单头像（无宿主头像组件时的兜底） */
 export { ChevronRight };
+
+// ---------------- 双语译文折叠/展开（微信朋友圈 + QQ 空间动态共用） ----------------
+
+/** 双语译文折叠/展开组件（微信朋友圈 + QQ 空间动态共用）
+ *  zh 为空串时不渲染；foldByDefault=true 时默认折叠，点击展开 */
+export function BilingualTranslation({
+  zh,
+  foldByDefault,
+}: {
+  zh: string;
+  foldByDefault: boolean;
+}) {
+  const [open, setOpen] = useState(!foldByDefault);
+  if (!zh.trim()) return null;
+  return (
+    <div className="mt-1 text-[13.5px] text-black/55 dark:text-white/55">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 text-[12px] active:opacity-60"
+        aria-label={open ? '收起译文' : '展开译文'}
+      >
+        <Languages className="h-3.5 w-3.5" aria-hidden="true" />
+        <span>{open ? '收起译文' : '展开译文'}</span>
+      </button>
+      {open && <p className="mt-1 leading-relaxed">{zh}</p>}
+    </div>
+  );
+}

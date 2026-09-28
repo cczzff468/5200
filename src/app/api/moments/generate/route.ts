@@ -18,8 +18,10 @@ export const runtime = 'nodejs';
  *   thread?: { authorName?: string, content?: string }[], // 评论区上下文（回复时）
  *   replyTo?: { authorName?: string, content?: string },  // 被回复的评论
  *   hint?: string,                     // 触发语境提示（如「结合最近聊天有感而发」）
+ *   bilingual?: boolean,               // 48-3：是否附简体中文译文（true 时返回 { content, contentZh }）
+ *   bilingualPrompt?: string,          // 48-3：双语提示词（空则用默认）
  * }
- * → { content: string }（动态正文 / 评论文本，纯文本）
+ * → { content: string, contentZh: string }（contentZh 为空串表示无译文；bilingual=true 时译文以「中文：」前缀行附在原文后）
  *
  * 设计约束：
  * - 内容完全由传入的 persona 驱动：不同角色人设不同 → 动态/评论风格天然不同（一.5）；
@@ -68,6 +70,21 @@ function cleanContent(raw: string): string {
   // 多行压成自然段（动态/评论都不该有排版）
   t = t.replace(/\n{2,}/g, '\n').trim();
   return t.slice(0, 320);
+}
+
+/**
+ * 48-3 双语拆分：LLM 返回「原文 + 空行 + 中文：译文」时，
+ * 找首个 `\n中文：`/`\n中文:` 标记切分为原文与译文；找不到标记则 contentZh='' 容错。
+ */
+function splitBilingual(raw: string): { content: string; contentZh: string } {
+  const m = raw.match(/\n\s*中文[：:]\s*/);
+  if (m && m.index !== undefined) {
+    return {
+      content: raw.slice(0, m.index),
+      contentZh: raw.slice(m.index + m[0].length),
+    };
+  }
+  return { content: raw, contentZh: '' };
 }
 
 export async function POST(req: Request) {
@@ -122,6 +139,10 @@ export async function POST(req: Request) {
     ? (body.memories as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0).slice(0, 10).map((m) => m.trim().slice(0, 80))
     : [];
   const hint = s(body.hint, 80);
+  // 48-3：双语翻译支持
+  const bilingual = body.bilingual === true;
+  const DEFAULT_BILINGUAL_PROMPT = '将下面这条动态/评论的正文翻译成简体中文，只输出译文，不要解释、不要原文、不要引号包裹。';
+  const bilingualPrompt = s(body.bilingualPrompt, 300) || DEFAULT_BILINGUAL_PROMPT;
 
   const user: string[] = [];
   if (kind === 'post') {
@@ -178,6 +199,11 @@ export async function POST(req: Request) {
     }
   }
 
+  // 48-3：bilingual=true 时在 user message 末尾追加译文要求（原文 + 空行 + 「中文：」前缀行）
+  if (bilingual) {
+    user.push(`（同时输出：先原文，再空一行，最后一行以「中文：」开头的简体中文译文；${bilingualPrompt}）`);
+  }
+
   const messages: LLMMessage[] = [
     { role: 'system', content: sys.join('\n') },
     { role: 'user', content: user.join('\n') },
@@ -187,9 +213,18 @@ export async function POST(req: Request) {
     const config = extractUpstreamConfig(body.config);
     const { text } = await completeWithFallback(config, messages);
     // #47：发动态 / 评论 / 回复统一硬性剥 emoji——朋友圈文字干净；提示词禁令之外再剥一次（模型偶尔无视禁令）
-    const content = stripEmojiText(cleanContent(text));
+    // 48-3：bilingual=true 时 LLM 返回「原文 + 空行 + 中文：译文」，先按标记拆分再各自 cleanContent
+    let rawContent = text;
+    let rawZh = '';
+    if (bilingual) {
+      const parts = splitBilingual(text);
+      rawContent = parts.content;
+      rawZh = parts.contentZh;
+    }
+    const content = stripEmojiText(cleanContent(rawContent));
+    const contentZh = cleanContent(rawZh);
     if (!content) return NextResponse.json({ error: '生成结果为空' }, { status: 502 });
-    return NextResponse.json({ content });
+    return NextResponse.json({ content, contentZh });
   } catch (err) {
     const msg = err instanceof Error && err.message ? err.message : '生成失败';
     return NextResponse.json({ error: msg }, { status: 502 });

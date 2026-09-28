@@ -41,6 +41,7 @@ import {
   memRecentConvo,
   type MemApp,
 } from '@/lib/memory';
+import { DEFAULT_BILINGUAL_PROMPT, getMomentsSettings } from '@/lib/ios/moments-settings';
 
 // ---------------- 统一数据模型（视图层） ----------------
 
@@ -62,6 +63,8 @@ export interface MomentCommentView {
   /** char 评论时 = 该角色联系人 id（legacy 数据可能为 null） */
   peerId: string | null;
   content: string;
+  /** 双语翻译（简体中文译文；空串/缺失表示无译文，旧数据兼容） */
+  contentZh?: string;
   createdAt: number;
   /** 多轮回复：父评论 id（根评论为 null） */
   parentId: string | null;
@@ -78,6 +81,8 @@ export interface MomentPostView {
   /** char 发的动态 = 该角色联系人 id；用户广播动态 = null */
   peerId: string | null;
   content: string;
+  /** 双语翻译（简体中文译文；空串/缺失表示无译文，旧数据兼容） */
+  contentZh?: string;
   images: string[];
   createdAt: number;
   likes: MomentLikeView[];
@@ -137,6 +142,7 @@ interface WxRawComment {
   id?: unknown;
   author?: unknown;
   text?: unknown;
+  contentZh?: unknown;
   time?: unknown;
   replyTo?: unknown;
   authorKind?: unknown;
@@ -149,6 +155,7 @@ interface WxRawPost {
   authorName?: unknown;
   avatar?: unknown;
   text?: unknown;
+  contentZh?: unknown;
   images?: unknown;
   time?: unknown;
   likes?: unknown;
@@ -160,6 +167,7 @@ interface QqRawComment {
   id?: unknown;
   author?: unknown;
   content?: unknown;
+  contentZh?: unknown;
   time?: unknown;
   replyTo?: unknown;
   authorKind?: unknown;
@@ -172,6 +180,7 @@ interface QqRawPost {
   authorName?: unknown;
   avatar?: unknown;
   content?: unknown;
+  contentZh?: unknown;
   time?: unknown;
   likedBy?: unknown;
   images?: unknown;
@@ -276,6 +285,7 @@ export function listMomentPosts(
           avatar: typeof p.avatar === 'string' ? p.avatar : null,
           peerId: typeof p.peerId === 'string' ? p.peerId : author === 'char' ? peerIdByName(authorName) : null,
           content: str(p.text),
+          contentZh: str(p.contentZh) || undefined,
           images: strArr(p.images),
           createdAt,
           likes: strArr(p.likes).map((name) => ({
@@ -298,6 +308,7 @@ export function listMomentPosts(
                 authorName: nm,
                 peerId: typeof c.peerId === 'string' ? c.peerId : kind === 'char' ? peerIdByName(nm) : null,
                 content: str(c.text),
+                contentZh: str(c.contentZh) || undefined,
                 createdAt:
                   typeof c.createdAt === 'number' ? c.createdAt : typeof c.time === 'number' ? c.time : createdAt,
                 parentId: selfReply ? null : typeof c.parentId === 'string' ? c.parentId : null,
@@ -333,6 +344,7 @@ export function listMomentPosts(
             authorName: nm,
             peerId: typeof c.peerId === 'string' ? c.peerId : kind === 'char' ? peerIdByName(nm) : null,
             content: str(c.content),
+            contentZh: str(c.contentZh) || undefined,
             createdAt: typeof c.createdAt === 'number' ? c.createdAt : (qqTimeToTs(c.time) ?? createdAt),
             parentId: selfReply ? null : typeof c.parentId === 'string' ? c.parentId : null,
             replyToName: selfReply ? null : rawReplyTo,
@@ -346,6 +358,7 @@ export function listMomentPosts(
         avatar: typeof p.avatar === 'string' ? p.avatar : null,
         peerId: typeof p.peerId === 'string' ? p.peerId : author === 'char' ? peerIdByName(authorName) : null,
         content: p.content,
+        contentZh: str(p.contentZh) || undefined,
         images: strArr(p.images),
         createdAt,
         likes: strArr(p.likedBy).map((name) => ({
@@ -372,6 +385,7 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
         authorName: p.authorName,
         avatar: p.avatar,
         text: p.content,
+        contentZh: p.contentZh || undefined,
         images: p.images,
         time: p.createdAt,
         author: p.author,
@@ -381,6 +395,7 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
           id: c.id,
           author: c.authorName,
           text: c.content,
+          contentZh: c.contentZh || undefined,
           time: c.createdAt,
           replyTo: c.replyToName,
           authorKind: c.author,
@@ -397,6 +412,7 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
           id: c.id,
           author: c.authorName,
           content: c.content,
+          contentZh: c.contentZh || undefined,
           time: qqTsToTime(c.createdAt),
           replyTo: c.replyToName ?? undefined,
           authorKind: c.author,
@@ -409,6 +425,7 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
           authorName: p.authorName,
           avatar: p.avatar,
           content: p.content,
+          contentZh: p.contentZh || undefined,
           time: qqTsToTime(p.createdAt),
           likedBy: p.likes.map((l) => l.name),
           images: p.images,
@@ -559,6 +576,8 @@ export function addCharMomentPost(
     peer: Pick<ContactRecord, 'id' | 'name' | 'nickname' | 'avatar'>;
     userName: string;
     content: string;
+    /** 双语译文（可选；写入 post.contentZh，旧调用方不传则无译文） */
+    contentZh?: string;
     images?: string[];
     /** 补示例动态时传（不入记忆） */
     writeMemory?: boolean;
@@ -576,6 +595,7 @@ export function addCharMomentPost(
     avatar: args.peer.avatar,
     peerId: args.peer.id,
     content: args.content,
+    contentZh: args.contentZh,
     images: args.images ?? [],
     createdAt,
     likes: [],
@@ -768,6 +788,8 @@ export function addCharMomentComment(
     peer: Pick<ContactRecord, 'id' | 'name' | 'nickname' | 'avatar'>;
     userName: string;
     content: string;
+    /** 双语译文（可选；写入 comment.contentZh） */
+    contentZh?: string;
     /** 回复目标（用户或角色的评论 id+名字） */
     replyTo?: { commentId: string; name: string } | null;
     writeMemory?: boolean;
@@ -786,6 +808,7 @@ export function addCharMomentComment(
     authorName: displayNameOf(args.peer),
     peerId: args.peer.id,
     content: text,
+    contentZh: args.contentZh,
     createdAt: Date.now(),
     parentId: args.replyTo?.commentId ?? null,
     replyToName: args.replyTo?.name ?? null,
@@ -890,8 +913,15 @@ function saveQueue(list: MomentQueueItem[]): void {
   }
 }
 
-/** 用户发了新动态：8~18 秒后由调度结算（1-2 位平台好友来点赞/评论，像真人刷到） */
-export function enqueuePostInteractions(platform: MomentPlatform, postId: string): void {
+/** 用户/角色发了新动态：延迟（默认 firstCommentDelay 秒）后由调度结算（1-2 位平台好友来点赞/评论，像真人刷到） */
+export function enqueuePostInteractions(
+  platform: MomentPlatform,
+  postId: string,
+  /** 显式指定延迟秒数（如 aiPostMoment 用 npcInteractDelay 触发 NPC 互动）；省略则用 settings.firstCommentDelay */
+  delaySec?: number
+): void {
+  const settings = getMomentsSettings();
+  const delay = (delaySec ?? settings.firstCommentDelay) * 1000;
   const q = loadQueueSafe();
   if (q.some((x) => x.type === 'interact' && x.postId === postId)) return;
   q.push({
@@ -899,20 +929,24 @@ export function enqueuePostInteractions(platform: MomentPlatform, postId: string
     id: uid(),
     platform,
     postId,
-    fireAt: Date.now() + 8_000 + Math.floor(Math.random() * 10_000),
+    fireAt: Date.now() + delay,
     tries: 0,
   });
   saveQueue(q);
 }
 
-/** 用户回复了 AI 的评论：3~8 秒后生成 AI 的再回复（多轮互动） */
+/** 用户/NPC 回复了 AI 的评论：延迟（followCommentDelay / replyNpcCommentDelay 秒）后生成 AI 的再回复（多轮互动） */
 export function enqueueCharReply(
   platform: MomentPlatform,
   postId: string,
   peerId: string,
   parentCommentId: string,
-  userName: string
+  userName: string,
+  kind: 'user' | 'npc' = 'user'
 ): void {
+  const settings = getMomentsSettings();
+  const delaySec = kind === 'npc' ? settings.replyNpcCommentDelay : settings.followCommentDelay;
+  const delay = delaySec * 1000;
   const q = loadQueueSafe();
   if (q.some((x) => x.type === 'reply' && x.parentCommentId === parentCommentId)) return;
   q.push({
@@ -923,7 +957,7 @@ export function enqueueCharReply(
     peerId,
     parentCommentId,
     userName,
-    fireAt: Date.now() + 3_000 + Math.floor(Math.random() * 5_000),
+    fireAt: Date.now() + delay,
     tries: 0,
   });
   saveQueue(q);
@@ -1010,16 +1044,22 @@ function personaOf(peer: ContactRecord): Record<string, string | null> {
   };
 }
 
-async function callGenerateApi(apiConfig: ApiConfig, payload: Record<string, unknown>): Promise<string> {
+async function callGenerateApi(
+  apiConfig: ApiConfig,
+  payload: Record<string, unknown>
+): Promise<{ content: string; contentZh: string }> {
   const res = await fetch('/api/moments/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, config: apiConfig }),
   });
-  const data = (await res.json().catch(() => ({}))) as { content?: unknown; error?: unknown };
+  const data = (await res.json().catch(() => ({}))) as { content?: unknown; contentZh?: unknown; error?: unknown };
   if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : `请求失败（${res.status}）`);
   if (typeof data.content !== 'string' || !data.content.trim()) throw new Error('生成结果为空');
-  return data.content.trim().slice(0, 500);
+  return {
+    content: data.content.trim().slice(0, 500),
+    contentZh: typeof data.contentZh === 'string' ? data.contentZh.trim().slice(0, 500) : '',
+  };
 }
 
 /** 记忆素材：该角色最近的活跃记忆（截短，喂给生成 prompt） */
@@ -1043,10 +1083,11 @@ export async function aiPostMoment(args: {
   hint?: string;
 }): Promise<MomentPostView> {
   const { apiConfig, platform, peer, userName, hint } = args;
+  const settings = getMomentsSettings();
   const recentChat = memRecentConvo(peer.id, platformApp(platform))
     .slice(-10)
     .map((t) => ({ role: t.role, text: t.text }));
-  const content = await callGenerateApi(apiConfig, {
+  const { content, contentZh } = await callGenerateApi(apiConfig, {
     kind: 'post',
     platform,
     userName,
@@ -1054,8 +1095,18 @@ export async function aiPostMoment(args: {
     recentChat,
     memories: memorySnippets(peer.id),
     hint: hint ?? null,
+    bilingual: settings.bilingualEnabled,
+    bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
   });
-  return addCharMomentPost(platform, { peer, userName, content });
+  const post = addCharMomentPost(platform, {
+    peer,
+    userName,
+    content,
+    contentZh: contentZh || undefined,
+  });
+  // NPC 互动：角色发完动态后，其他 NPC 好友延迟（npcInteractDelay 秒）来点赞/评论
+  enqueuePostInteractions(platform, post.id, settings.npcInteractDelay);
+  return post;
 }
 
 /** AI 给用户的动态写一条评论/回复（二.1/二.3；内容贴合人设、动态内容与记忆——不与已知事实矛盾） */
@@ -1069,10 +1120,11 @@ export async function aiCommentOnMoment(args: {
   replyTo?: { commentId: string; name: string; content: string } | null;
 }): Promise<MomentCommentView> {
   const { apiConfig, platform, peer, post, userName, replyTo } = args;
+  const settings = getMomentsSettings();
   // 评论串（回复时带上下文，让 AI 接得住多轮）
   const thread = post.comments.slice(-6).map((c) => ({ authorName: c.authorName, content: c.content }));
   // 记忆素材（四.1）：评论/回复也参考记忆库，避免评论内容与已知事实矛盾
-  const content = await callGenerateApi(apiConfig, {
+  const { content, contentZh } = await callGenerateApi(apiConfig, {
     kind: replyTo ? 'reply' : 'comment',
     platform,
     userName,
@@ -1081,11 +1133,14 @@ export async function aiCommentOnMoment(args: {
     thread,
     replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content } : null,
     memories: memorySnippets(peer.id),
+    bilingual: settings.bilingualEnabled,
+    bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
   });
   const added = addCharMomentComment(platform, post.id, {
     peer,
     userName,
     content,
+    contentZh: contentZh || undefined,
     replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
   });
   if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');
@@ -1177,11 +1232,15 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
       // 随机挑 1-2 位（动态像真人刷到一样陆续有互动）
       const shuffled = [...candidates].sort(() => Math.random() - 0.5);
       const picked = shuffled.slice(0, Math.random() < 0.5 ? 1 : 2);
+      const settings = getMomentsSettings();
       for (const peer of picked) {
         try {
-          addCharMomentLike(item.platform, post.id, { peer, userName });
-          // 70% 概率附一条评论（不是每个好友都爱说话）
-          if (Math.random() < 0.7) {
+          // 点赞：按 likeProbability 决定（旧版硬编码 100%）
+          if (Math.random() < settings.likeProbability) {
+            addCharMomentLike(item.platform, post.id, { peer, userName });
+          }
+          // 评论：按 commentProbability 决定（旧版硬编码 70%）
+          if (Math.random() < settings.commentProbability) {
             await aiCommentOnMoment({ apiConfig: deps.apiConfig, platform: item.platform, peer, post, userName });
           }
         } catch {
@@ -1198,6 +1257,10 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
 
 /** 到点检查自动发布（定时 / 频率 / 聊天灵感；一次 tick 最多发 1 条，防突发轰炸） */
 async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
+  const settings = getMomentsSettings();
+  if (!settings.autoPostEnabled) return;
+  const minMs = settings.minPostInterval * 3_600_000;
+  const maxMs = settings.maxPostInterval * 3_600_000;
   const plan: { peer: ContactRecord; platform: MomentPlatform; cfg: MomentAutoCfg; hint?: string }[] = [];
   for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
     const userName = platform === 'wx' ? deps.wxUserName : deps.qqUserName;
@@ -1206,17 +1269,28 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
       const cfg = getMomentAutoCfg(peer.id, platform);
       if (!cfg.enabled) continue;
       const last = lastCharPostAt(platform, userName, peer);
+      const sinceLast = now - last;
+      // 最小间隔：距离上次发帖不足 minPostInterval 则跳过（首次发帖 last=0 不受限）
+      if (last > 0 && sinceLast < minMs) continue;
       if (cfg.trigger === 'schedule') {
         // 定时：今天 HH:mm 已到且那之后没发过 → 到点（App 当时没开也补发）
         const due = new Date(now);
         due.setHours(cfg.hh, cfg.mm, 0, 0);
-        if (now >= due.getTime() && last < due.getTime()) plan.push({ peer, platform, cfg });
+        if (now >= due.getTime() && last < due.getTime()) {
+          plan.push({ peer, platform, cfg });
+        } else if (sinceLast >= maxMs) {
+          // 最大间隔兜底：超过 maxPostInterval 强制触发（schedule 模式无显式间隔）
+          plan.push({ peer, platform, cfg });
+        }
       } else if (cfg.trigger === 'interval') {
         if (now - last >= cfg.intervalHours * 3_600_000) plan.push({ peer, platform, cfg });
       } else {
         // 聊天灵感（有感而发）：不攒轮次、不设时间门槛——AI 心血来潮想发就发。
         // 实现为每次 tick 小概率触发（期望约 20 分钟一次）；下面的 15 分钟最小间隔只是防连发刷屏的保险，不是触发条件
-        if (now - last >= 15 * 60_000 && Math.random() < 1 / 240) {
+        if (sinceLast >= maxMs) {
+          // 最大间隔兜底：超过 maxPostInterval 强制触发（chat 模式无显式间隔）
+          plan.push({ peer, platform, cfg, hint: '结合你们最近聊过的话题和你的近况，有感而发' });
+        } else if (now - last >= 15 * 60_000 && Math.random() < 1 / 240) {
           plan.push({ peer, platform, cfg, hint: '结合你们最近聊过的话题和你的近况，有感而发' });
         }
       }

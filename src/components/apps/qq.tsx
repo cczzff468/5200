@@ -180,7 +180,9 @@ import {
   toggleUserMomentLike,
   updateMomentPostContent,
 } from '@/lib/moments';
-import { AskPostSheet, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
+import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, PostMoreMenu, momentFriendsOf } from './moments-shared';
+import { MomentsSettingsPage } from './moments-settings';
+import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { stripEmojiText } from '@/lib/emoji';
@@ -604,6 +606,8 @@ interface ZonePost {
   likedBy: string[];
   /** 说说配图（压缩后的 dataURL，最多 9 张） */
   images?: string[];
+  /** 引擎写入的双语译文（中文），渲染时折叠展示 */
+  contentZh?: string;
 }
 
 /** QQ空间帖子评论（种子帖/用户帖统一按 postId 存 map，localStorage 持久化） */
@@ -616,6 +620,8 @@ interface ZoneComment {
   replyTo?: string;
   /** 作者类型（引擎写入；legacy 数据可能缺失，读时按名字推断） */
   authorKind?: 'user' | 'char';
+  /** 引擎写入的双语译文（中文），渲染时折叠展示 */
+  contentZh?: string;
 }
 
 /** 空间种子动态（原「卖萌磕到牙」示例帖已按需求移除，空间仅显示用户自己发布的动态） */
@@ -8669,7 +8675,7 @@ function ContactsPage({
 const DISCOVER_ITEMS: { key: string; label: string; icon: React.ReactNode; color: string }[] = [
   { key: 'zone', label: '空间动态', icon: <Star className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#FFC300' },
   { key: 'game', label: '游戏中心', icon: <Gamepad2 className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#1E6FFF' },
-  { key: 'mini', label: '小游戏', icon: <CircleUser className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#1E6FFF' },
+  { key: 'moments-settings', label: '空间动态设置', icon: <Settings className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#1E6FFF' },
   { key: 'farm', label: 'QQ经典农场', icon: <Sprout className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#34C759' },
   { key: 'nearby', label: '结伴与附近', icon: <Users className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#7D5FFF' },
   { key: 'novel', label: '小说与动漫', icon: <BookOpen className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#FF9F0A' },
@@ -8680,11 +8686,13 @@ function DiscoverPage({
   me,
   onAvatar,
   onZone,
+  onOpenMomentsSettings,
   onToast,
 }: {
   me: QQUser;
   onAvatar: () => void;
   onZone: () => void;
+  onOpenMomentsSettings: () => void;
   onToast: (m: string) => void;
 }) {
   return (
@@ -8709,7 +8717,11 @@ function DiscoverPage({
             <button
               type="button"
               data-testid={`qq-discover-${it.key}`}
-              onClick={() => (it.key === 'zone' ? onZone() : onToast(`${it.label}暂未开放`))}
+              onClick={() => {
+                if (it.key === 'zone') onZone();
+                else if (it.key === 'moments-settings') onOpenMomentsSettings();
+                else onToast(`${it.label}暂未开放`);
+              }}
               className="flex w-full items-center gap-4 bg-transparent px-4 py-3.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05]"
             >
               <span className="grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[10px]" style={{ color: it.color }} aria-hidden="true">
@@ -9627,6 +9639,8 @@ function ZonePage({
   onOpenSettings,
   onCompose,
   onToast,
+  askOpen,
+  setAskOpen,
 }: {
   me: QQUser;
   /** 联系人列表（「让好友发一条」候选 + 平台好友过滤） */
@@ -9635,6 +9649,9 @@ function ZonePage({
   onOpenSettings: () => void;
   onCompose: () => void;
   onToast: (m: string) => void;
+  /** 「让好友发一条」开关（lift 到 MainScreen，供「空间动态设置 → 立即发帖」复用） */
+  askOpen: boolean;
+  setAskOpen: (b: boolean) => void;
 }) {
   const apiConfig = useSettings((s) => s.apiConfig);
   const [userPosts, setUserPosts] = useState<ZonePost[]>(loadZonePosts);
@@ -9654,11 +9671,12 @@ function ZonePage({
   /** 「…」操作菜单 / 编辑说说 / 让好友发一条 / 自动发布设置 */
   const [menuPostId, setMenuPostId] = useState<string | null>(null);
   const [editingPost, setEditingPost] = useState<{ id: string; content: string } | null>(null);
-  const [askOpen, setAskOpen] = useState(false);
   const [askBusyId, setAskBusyId] = useState<string | null>(null);
   const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
   /** 长按删除的评论（确认弹层） */
   const [delComment, setDelComment] = useState<{ postId: string; commentId: string; author: string } | null>(null);
+  /** 朋友圈/空间动态设置缓存（mount 时读一次 kv，避免每次 render 重读） */
+  const [momentsSettings] = useState(() => getMomentsSettings());
   /** 长按计时器 + 起点坐标（移动超阈值视为滚动取消）+ 长按后拦截紧随的 click */
   const pressRef = useRef<{ timer: number | null; x: number; y: number }>({ timer: null, x: 0, y: 0 });
   const suppressClickRef = useRef(false);
@@ -9670,6 +9688,8 @@ function ZonePage({
     }
   };
   useEffect(() => clearPress, []);
+  // 离开空间动态页时关闭「让好友发一条」弹层（防止 lift 状态在下次进页时残留）
+  useEffect(() => () => setAskOpen(false), [setAskOpen]);
 
   /** 长按评论（480ms）→ 删除确认；移动超 10px 视为滚动取消 */
   const startCommentPress = (p: ZonePost, c: ZoneComment) => (e: React.PointerEvent) => {
@@ -9876,6 +9896,7 @@ function ZonePage({
                     </button>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap text-[15px] leading-[1.55]">{p.content}</p>
+                  <BilingualTranslation zh={p.contentZh ?? ''} foldByDefault={momentsSettings.foldChineseTranslation} />
 
                   {p.images && p.images.length > 0 && (
                     <div className={`mt-2 grid gap-1.5 ${p.images.length === 1 ? 'max-w-[240px]' : 'grid-cols-3'}`}>
@@ -9925,47 +9946,50 @@ function ZonePage({
                       data-testid={`qq-zone-comments-${p.id}`}
                     >
                       {(commentsMap[p.id] ?? []).map((c) => (
-                        <div key={c.id} className="flex items-start gap-2 text-[14px] leading-[1.5]">
-                          <p
-                            className="min-w-0 flex-1 active:opacity-70"
-                            title="点击回复，长按删除"
-                            onPointerDown={startCommentPress(p, c)}
-                            onPointerUp={clearPress}
-                            onPointerLeave={clearPress}
-                            onPointerCancel={clearPress}
-                            onPointerMove={onCommentPointerMove}
-                            onClick={() => {
-                              // 长按后拦截紧随的 click（不设置回复目标）
-                              if (suppressClickRef.current) {
-                                suppressClickRef.current = false;
-                                return;
-                              }
-                              setReplyTarget((r) => ({ ...r, [p.id]: { id: c.id, name: c.author } }));
-                              commentInputRefs.current[p.id]?.focus();
-                            }}
-                          >
-                            <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">{c.author}</span>
-                            {c.replyTo && (
-                              <>
-                                <span className="mx-0.5 text-black/40 dark:text-white/40">回复</span>
-                                <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">{c.replyTo}</span>
-                              </>
-                            )}
-                            <span className="text-black/80 dark:text-white/80">：{c.content}</span>
-                            <span className="ml-2 text-[11px] text-black/30 dark:text-white/30">{c.time}</span>
-                          </p>
-                          <button
-                            type="button"
-                            aria-label={`回复${c.author}的评论`}
-                            data-testid={`qq-zone-reply-${p.id}-${c.id}`}
-                            onClick={() => {
-                              setReplyTarget((r) => ({ ...r, [p.id]: { id: c.id, name: c.author } }));
-                              commentInputRefs.current[p.id]?.focus();
-                            }}
-                            className="shrink-0 pt-0.5 text-[12px] text-black/40 active:opacity-60 dark:text-white/40"
-                          >
-                            回复
-                          </button>
+                        <div key={c.id} className="text-[14px] leading-[1.5]">
+                          <div className="flex items-start gap-2">
+                            <p
+                              className="min-w-0 flex-1 active:opacity-70"
+                              title="点击回复，长按删除"
+                              onPointerDown={startCommentPress(p, c)}
+                              onPointerUp={clearPress}
+                              onPointerLeave={clearPress}
+                              onPointerCancel={clearPress}
+                              onPointerMove={onCommentPointerMove}
+                              onClick={() => {
+                                // 长按后拦截紧随的 click（不设置回复目标）
+                                if (suppressClickRef.current) {
+                                  suppressClickRef.current = false;
+                                  return;
+                                }
+                                setReplyTarget((r) => ({ ...r, [p.id]: { id: c.id, name: c.author } }));
+                                commentInputRefs.current[p.id]?.focus();
+                              }}
+                            >
+                              <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">{c.author}</span>
+                              {c.replyTo && (
+                                <>
+                                  <span className="mx-0.5 text-black/40 dark:text-white/40">回复</span>
+                                  <span className="font-medium text-[#4A78B8] dark:text-[#7FA8D9]">{c.replyTo}</span>
+                                </>
+                              )}
+                              <span className="text-black/80 dark:text-white/80">：{c.content}</span>
+                              <span className="ml-2 text-[11px] text-black/30 dark:text-white/30">{c.time}</span>
+                            </p>
+                            <button
+                              type="button"
+                              aria-label={`回复${c.author}的评论`}
+                              data-testid={`qq-zone-reply-${p.id}-${c.id}`}
+                              onClick={() => {
+                                setReplyTarget((r) => ({ ...r, [p.id]: { id: c.id, name: c.author } }));
+                                commentInputRefs.current[p.id]?.focus();
+                              }}
+                              className="shrink-0 pt-0.5 text-[12px] text-black/40 active:opacity-60 dark:text-white/40"
+                            >
+                              回复
+                            </button>
+                          </div>
+                          <BilingualTranslation zh={c.contentZh ?? ''} foldByDefault={momentsSettings.foldChineseTranslation} />
                         </div>
                       ))}
                     </div>
@@ -12128,6 +12152,7 @@ type MainRoute =
   | { page: 'newfriends' }
   | { page: 'zone' }
   | { page: 'zone-compose' }
+  | { page: 'momentsSettings' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -12152,6 +12177,8 @@ function MainScreen({
   refreshContacts: () => Promise<void>;
 }) {
   const [route, setRoute] = useState<MainRoute>({ page: 'tabs', tab: '消息' });
+  /** 「让好友发一条」开关：lift 到 MainScreen，供「空间动态设置 → 立即发帖」复用 ZonePage 的 AskPostSheet */
+  const [askOpen, setAskOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [toast, setToast] = useState('');
   const toastTimer = useRef<number | null>(null);
@@ -12348,9 +12375,21 @@ function MainScreen({
           onOpenSettings={() => setRoute({ page: 'settings' })}
           onCompose={() => setRoute({ page: 'zone-compose' })}
           onToast={showToast}
+          askOpen={askOpen}
+          setAskOpen={setAskOpen}
         />
       ) : route.page === 'zone-compose' ? (
         <WritePostPage me={me} onBack={() => setRoute({ page: 'zone' })} onPublish={handlePublishZonePost} onToast={showToast} />
+      ) : route.page === 'momentsSettings' ? (
+        <MomentsSettingsPage
+          app="qq"
+          onBack={() => openTabs('动态')}
+          onToast={showToast}
+          onOpenPostNow={() => {
+            setAskOpen(true);
+            setRoute({ page: 'zone' });
+          }}
+        />
       ) : route.page === 'wallet' ? (
         <WalletPage me={me} onBack={() => openTabs('消息')} onToast={showToast} />
       ) : route.page === 'stickers' ? (
@@ -12457,7 +12496,13 @@ function MainScreen({
               />
             )}
             {activeTab === '动态' && (
-              <DiscoverPage me={me} onAvatar={() => setDrawerOpen(true)} onZone={() => setRoute({ page: 'zone' })} onToast={showToast} />
+              <DiscoverPage
+                me={me}
+                onAvatar={() => setDrawerOpen(true)}
+                onZone={() => setRoute({ page: 'zone' })}
+                onOpenMomentsSettings={() => setRoute({ page: 'momentsSettings' })}
+                onToast={showToast}
+              />
             )}
           </div>
 
