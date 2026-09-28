@@ -24,6 +24,7 @@ import {
   EyeOff,
   Forward,
   Gift,
+  Globe,
   Heart,
   Image as ImageIcon,
   Loader2,
@@ -70,7 +71,7 @@ import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
-import { groupPreview, getGroup, listGroups, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
+import { groupPreview, getGroup, listGroups, loadGroupMsgs, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -8727,7 +8728,464 @@ type Page =
   | 'stickers'
   | 'favorites'
   | 'album'
+  | 'search'
   | 'momentsSettings';
+
+// ---------------- 搜索页（对照微信真机：返回 + 搜索框「搜索本地或网络结果」+ 最近在搜 + 本地/网络结果） ----------------
+
+/** 搜索历史持久化键（最近 10 条，新搜在前去重） */
+const WX_SEARCH_HISTORY_KEY = 'wx-search-history';
+const WX_SEARCH_HISTORY_MAX = 10;
+
+/** 网络结果条目（GET /api/search 返回） */
+interface WebSearchResult {
+  name: string;
+  url: string;
+  snippet: string;
+  host_name: string;
+  date: string;
+  favicon: string;
+}
+
+/** 聊天记录搜索命中（含所属会话，点击跳回对应聊天） */
+interface MsgSearchHit {
+  key: string;
+  title: string;
+  avatar: string | null;
+  isGroup: boolean;
+  group: ChatGroup | null;
+  contact: ContactRecord | null;
+  senderLabel: string;
+  text: string;
+  time: number;
+}
+
+/** 各类消息规整成可搜索文本（图片/撤回不入搜索，与聊天页 ChatSearchItem 同口径） */
+function wxMsgSearchText(m: WxMsg): string {
+  if (m.kind === 'sticker' && m.stk) return m.stk.meaning ? `[表情] ${m.stk.meaning}` : '[表情]';
+  if (m.kind === 'redpacket' && m.rp) return `[红包] ${m.rp.blessing}`;
+  if (m.kind === 'transfer' && m.tr) return `[转账] ${m.tr.note}`;
+  if (m.kind === 'family') return '[亲属卡]';
+  if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.address ? ` ${m.loc.address}` : ''}`;
+  if (m.kind === 'notice' && m.notice) return `${m.notice.pre}${m.notice.accent}`;
+  if (m.kind === 'voice') return m.voice?.transcript || m.voice?.localText ? `[语音] ${m.voice?.transcript || m.voice?.localText}` : '[语音]';
+  return m.content;
+}
+
+function WxSearchPage({
+  me,
+  friends,
+  groups,
+  moments,
+  onBack,
+  onOpenChat,
+  onOpenGroup,
+  onOpenMoments,
+  onToast,
+}: {
+  me: WxUser;
+  friends: ContactRecord[];
+  groups: ChatGroup[];
+  moments: WxMoment[];
+  onBack: () => void;
+  onOpenChat: (c: ContactRecord) => void;
+  onOpenGroup: (g: ChatGroup) => void;
+  onOpenMoments: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [kw, setKw] = useState('');
+  const [hist, setHist] = useState<string[]>(() => loadStrList(WX_SEARCH_HISTORY_KEY));
+  /** 网络结果：null = 未请求；配合 webState 渲染加载/失败/空态 */
+  const [webResults, setWebResults] = useState<WebSearchResult[]>([]);
+  const [webState, setWebState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const reqSeqRef = useRef(0);
+  // 跨 App：点网络结果 → 打开浏览器 App 导航到该网页
+  const switchToApp = useUI((s) => s.switchToApp);
+  const setPendingBrowserUrl = useUI((s) => s.setPendingBrowserUrl);
+
+  const key = kw.trim().toLowerCase();
+
+  /** 网络结果：关键词变化防抖 600ms 请求 /api/search（竞态用序号守卫；setState 均在定时器/异步回调内） */
+  useEffect(() => {
+    const q = kw.trim();
+    const seq = ++reqSeqRef.current;
+    const timer = window.setTimeout(() => {
+      if (!q) {
+        setWebState('idle');
+        setWebResults([]);
+        return;
+      }
+      setWebState('loading');
+      fetch(`/api/search?q=${encodeURIComponent(q)}&num=5`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((data: { results?: WebSearchResult[] }) => {
+          if (seq !== reqSeqRef.current) return;
+          setWebResults(Array.isArray(data.results) ? data.results : []);
+          setWebState('done');
+        })
+        .catch(() => {
+          if (seq !== reqSeqRef.current) return;
+          setWebResults([]);
+          setWebState('error');
+        });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [kw]);
+
+  /** 命中联系人：备注/昵称/名字/微信号匹配（微信好友） */
+  const hitContacts = useMemo<ContactRecord[]>(() => {
+    if (!key) return [];
+    return friends
+      .filter(
+        (c) =>
+          displayNameOf(c).toLowerCase().includes(key) ||
+          c.name.toLowerCase().includes(key) ||
+          (c.wechatId ?? '').toLowerCase().includes(key)
+      )
+      .slice(0, 5);
+  }, [friends, key]);
+
+  /** 命中群聊：群备注/群名匹配 */
+  const hitGroups = useMemo<ChatGroup[]>(() => {
+    if (!key) return [];
+    return groups.filter((g) => (g.remark || g.name).toLowerCase().includes(key)).slice(0, 5);
+  }, [groups, key]);
+
+  /** 命中聊天记录：全量会话（好友 + 群）按摘要文本匹配，最新在前取 6 条 */
+  const hitMsgs = useMemo<MsgSearchHit[]>(() => {
+    if (!key) return [];
+    const hits: MsgSearchHit[] = [];
+    for (const c of friends) {
+      for (const m of loadMsgs(c.id)) {
+        if (m.kind === 'image' || m.recalled) continue;
+        const text = wxMsgSearchText(m);
+        if (!text || !text.toLowerCase().includes(key)) continue;
+        hits.push({
+          key: c.id,
+          title: displayNameOf(c) || c.name,
+          avatar: c.avatar,
+          isGroup: false,
+          group: null,
+          contact: c,
+          senderLabel: m.role === 'me' ? '我' : '',
+          text,
+          time: m.time,
+        });
+      }
+    }
+    for (const g of groups) {
+      for (const m of loadGroupMsgs(g.id)) {
+        if (m.kind === 'image' || m.kind === 'notice') continue;
+        const text = (m.content ?? '').trim();
+        if (!text || !text.toLowerCase().includes(key)) continue;
+        hits.push({
+          key: groupRowId(g.id),
+          title: g.remark || g.name,
+          avatar: g.avatar,
+          isGroup: true,
+          group: g,
+          contact: null,
+          senderLabel: m.role === 'me' ? '我' : m.senderName,
+          text,
+          time: m.time,
+        });
+      }
+    }
+    hits.sort((a, b) => b.time - a.time);
+    return hits.slice(0, 6);
+    // key 变化才重算（loadMsgs 同步读缓存，不进依赖）
+     
+  }, [key, friends, groups]);
+
+  /** 命中朋友圈：正文/作者匹配取 3 条 */
+  const hitMoments = useMemo<WxMoment[]>(() => {
+    if (!key) return [];
+    return moments
+      .filter((p) => p.text.toLowerCase().includes(key) || p.authorName.toLowerCase().includes(key))
+      .slice(0, 3);
+  }, [moments, key]);
+
+  /** 记录搜索词：去重后置顶，最多保留 10 条 */
+  const pushHist = (raw: string) => {
+    const t = raw.trim();
+    if (!t) return;
+    setHist((prev) => {
+      const next = [t, ...prev.filter((x) => x !== t)].slice(0, WX_SEARCH_HISTORY_MAX);
+      saveStrList(WX_SEARCH_HISTORY_KEY, next);
+      return next;
+    });
+  };
+  const clearHist = () => {
+    saveStrList(WX_SEARCH_HISTORY_KEY, []);
+    setHist([]);
+    onToast('已清空搜索历史');
+  };
+  const openWeb = (url: string) => {
+    setPendingBrowserUrl(url);
+    switchToApp('browser');
+  };
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  };
+
+  const hasLocal = hitContacts.length + hitGroups.length + hitMsgs.length + hitMoments.length > 0;
+  // 输入被清空时立即隐藏「网页」分区（webState 复位在防抖回调里，渲染层先拉住不闪旧结果）
+  const showWeb = kw.trim() !== '' && webState !== 'idle';
+
+  return (
+    <div className="absolute inset-0 z-40 flex h-full w-full flex-col bg-white text-black dark:bg-[#111111] dark:text-white">
+      {/* 顶栏：返回 + 搜索框（对照截图 1） */}
+      <div className="shrink-0 pt-[54px]">
+        <div className="flex h-12 items-center gap-1.5 px-2 pb-1">
+          <button
+            type="button"
+            aria-label="返回"
+            data-testid="wx-search-back"
+            onClick={onBack}
+            className="shrink-0 rounded-full p-1 active:opacity-50"
+          >
+            <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
+          </button>
+          <div className="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-[8px] bg-black/[0.05] px-3 dark:bg-white/[0.08]">
+            <Search className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} aria-hidden="true" />
+            <input
+              autoFocus
+              type="text"
+              value={kw}
+              onChange={(e) => setKw(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') pushHist(kw);
+              }}
+              placeholder="搜索本地或网络结果"
+              data-testid="wx-search-input"
+              aria-label="搜索本地或网络结果"
+              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+            />
+            {kw && (
+              <button type="button" aria-label="清空" data-testid="wx-search-clear" onClick={() => setKw('')} className="shrink-0 active:opacity-60">
+                <span className="grid h-[16px] w-[16px] place-items-center rounded-full bg-black/25 text-[10px] leading-none text-white dark:bg-white/30">
+                  ×
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 内容 */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+        {!key ? (
+          /* 最近在搜（对照截图 1：标题 + 垃圾桶清空 + 时钟历史项） */
+          hist.length > 0 && (
+            <div className="px-4 pt-3" data-testid="wx-search-history">
+              <div className="flex items-center justify-between">
+                <span className="text-[15px] text-black/45 dark:text-white/45">最近在搜</span>
+                <button
+                  type="button"
+                  aria-label="清空搜索历史"
+                  data-testid="wx-search-history-clear"
+                  onClick={clearHist}
+                  className="p-1 text-black/35 active:opacity-60 dark:text-white/35"
+                >
+                  <Trash2 className="h-[18px] w-[18px]" strokeWidth={1.9} />
+                </button>
+              </div>
+              <div className="mt-1">
+                {hist.map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    data-testid="wx-search-history-item"
+                    onClick={() => setKw(h)}
+                    className="flex h-[46px] w-full items-center gap-3 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+                  >
+                    <Clock className="h-[18px] w-[18px] shrink-0 text-black/30 dark:text-white/30" strokeWidth={1.8} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-[15px]">{h}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        ) : (
+          <>
+            {!hasLocal && !showWeb && (
+              <p className="mt-16 text-center text-[14px] text-black/35 dark:text-white/35" data-testid="wx-search-empty">
+                暂无搜索结果
+              </p>
+            )}
+
+            {/* 联系人 */}
+            {hitContacts.length > 0 && (
+              <section data-testid="wx-search-contacts">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">联系人</p>
+                {hitContacts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    data-testid={`wx-search-contact-${c.id}`}
+                    onClick={() => {
+                      pushHist(kw);
+                      onOpenChat(c);
+                    }}
+                    className="flex h-[54px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    <WxAvatar src={c.avatar} alt={displayNameOf(c) || c.name} size={38} />
+                    <span className="min-w-0 flex-1 truncate text-[15.5px]">{displayNameOf(c) || c.name}</span>
+                    <span className="shrink-0 text-[12px] text-black/30 dark:text-white/30">发消息</span>
+                  </button>
+                ))}
+              </section>
+            )}
+
+            {/* 群聊 */}
+            {hitGroups.length > 0 && (
+              <section data-testid="wx-search-groups">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">群聊</p>
+                {hitGroups.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    data-testid={`wx-search-group-${g.id}`}
+                    onClick={() => {
+                      pushHist(kw);
+                      onOpenGroup(g);
+                    }}
+                    className="flex h-[54px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    <GroupAvatar group={g} contacts={friends} size={38} />
+                    <span className="min-w-0 flex-1 truncate text-[15.5px]">{g.remark || g.name}</span>
+                    <span className="shrink-0 text-[12px] text-black/30 dark:text-white/30">{g.memberIds.length + 1}人</span>
+                  </button>
+                ))}
+              </section>
+            )}
+
+            {/* 聊天记录 */}
+            {hitMsgs.length > 0 && (
+              <section data-testid="wx-search-msgs">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">聊天记录</p>
+                {hitMsgs.map((h, i) => (
+                  <button
+                    key={`${h.key}-${h.time}-${i}`}
+                    type="button"
+                    data-testid="wx-search-msg-item"
+                    onClick={() => {
+                      pushHist(kw);
+                      if (h.isGroup && h.group) onOpenGroup(h.group);
+                      else if (h.contact) onOpenChat(h.contact);
+                    }}
+                    className="flex w-full items-start gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    {h.isGroup && h.group ? (
+                      <span className="shrink-0">
+                        <GroupAvatar group={h.group} contacts={friends} size={38} />
+                      </span>
+                    ) : (
+                      <WxAvatar src={h.avatar} alt={h.title} size={38} />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-black/45 dark:text-white/45">
+                          {h.senderLabel ? `${h.title} · ${h.senderLabel}` : h.title}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-black/25 dark:text-white/25">{fmtTime(h.time)}</span>
+                      </span>
+                      <span className="mt-0.5 line-clamp-2 block text-[14.5px] leading-snug">{h.text}</span>
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+
+            {/* 朋友圈 */}
+            {hitMoments.length > 0 && (
+              <section data-testid="wx-search-moments">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">朋友圈</p>
+                {hitMoments.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    data-testid="wx-search-moment-item"
+                    onClick={() => {
+                      pushHist(kw);
+                      onOpenMoments();
+                    }}
+                    className="flex w-full items-start gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    <WxAvatar src={p.avatar} alt={p.authorName} size={38} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-black/45 dark:text-white/45">{p.authorName}</span>
+                        <span className="shrink-0 text-[11px] text-black/25 dark:text-white/25">{fmtTime(p.time)}</span>
+                      </span>
+                      <span className="mt-0.5 line-clamp-2 block text-[14.5px] leading-snug">{p.text}</span>
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+
+            {/* 网页（网络结果） */}
+            {showWeb && (
+              <section data-testid="wx-search-web">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">网页</p>
+                {webState === 'loading' && (
+                  <div className="px-4 py-4" data-testid="wx-search-web-loading">
+                    {[0, 1, 2].map((i) => (
+                      <div key={i} className="mb-4 animate-pulse">
+                        <div className="h-[14px] w-3/4 rounded bg-black/10 dark:bg-white/10" />
+                        <div className="mt-2 h-[12px] w-full rounded bg-black/[0.06] dark:bg-white/[0.06]" />
+                        <div className="mt-1.5 h-[12px] w-2/3 rounded bg-black/[0.06] dark:bg-white/[0.06]" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {webState === 'error' && (
+                  <p className="px-4 py-3 text-[13px] text-black/35 dark:text-white/35">网络搜索失败，请稍后重试</p>
+                )}
+                {webState === 'done' && webResults.length === 0 && (
+                  <p className="px-4 py-3 text-[13px] text-black/35 dark:text-white/35">没有相关网页</p>
+                )}
+                {webState === 'done' &&
+                  webResults.map((r) => (
+                    <button
+                      key={r.url}
+                      type="button"
+                      data-testid="wx-search-web-item"
+                      onClick={() => {
+                        pushHist(kw);
+                        openWeb(r.url);
+                      }}
+                      className="flex w-full items-start gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                    >
+                      <span className="mt-0.5 grid h-[38px] w-[38px] shrink-0 place-items-center overflow-hidden rounded-[8px] bg-black/[0.05] dark:bg-white/[0.08]">
+                        {r.favicon ? (
+                          <img src={r.favicon} alt="" aria-hidden="true" className="h-5 w-5 object-contain" />
+                        ) : (
+                          <Globe className="h-5 w-5 text-black/35 dark:text-white/35" strokeWidth={1.8} aria-hidden="true" />
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="line-clamp-1 block text-[15px] font-medium leading-snug">{r.name || r.host_name}</span>
+                        <span className="mt-0.5 line-clamp-2 block text-[13px] leading-snug text-black/50 dark:text-white/50">{r.snippet}</span>
+                        <span className="mt-1 block truncate text-[11px] text-black/30 dark:text-white/30">
+                          {r.host_name}
+                          {r.date ? ` · ${r.date}` : ''}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+              </section>
+            )}
+          </>
+        )}
+      </div>
+      <span className="sr-only">{me.name}的微信搜索</span>
+    </div>
+  );
+}
 
 function MainScreen({
   me,
@@ -9423,6 +9881,32 @@ function MainScreen({
       />
     );
   }
+  if (page === 'search') {
+    return (
+      <WxSearchPage
+        me={me}
+        friends={friends}
+        groups={wxGroups}
+        moments={moments}
+        onBack={() => setPage('main')}
+        onOpenChat={(c) => {
+          setPage('main');
+          setChatPeer(c);
+        }}
+        onOpenGroup={(g) => {
+          setPage('main');
+          setTab('chats');
+          setHidden(loadStrList(LS_CHAT_HIDDEN));
+          setGroupPeer(g);
+        }}
+        onOpenMoments={() => {
+          setMomentsScope('all');
+          setPage('moments');
+        }}
+        onToast={showToast}
+      />
+    );
+  }
   if (page === 'profile')
     return <ProfilePage me={me} record={meRecord} onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'settings') return <WxSettingsPage onBack={() => setPage('main')} onLogout={onLogout} />;
@@ -9474,7 +9958,8 @@ function MainScreen({
               <button
                 type="button"
                 aria-label="搜索"
-                onClick={() => showToast('搜索暂未开放')}
+                data-testid="wx-search-entry"
+                onClick={() => setPage('search')}
                 className="text-black/75 active:opacity-50 dark:text-white/75"
               >
                 <Search className="h-[21px] w-[21px]" strokeWidth={1.9} />

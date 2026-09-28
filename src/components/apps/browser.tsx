@@ -20,6 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { BackToHome } from '@/components/ios/BackToHome';
+import { useUI } from '@/lib/ios/store';
 
 /** localStorage 键：记住上次选择的搜索引擎 */
 const ENGINE_STORAGE_KEY = 'ios-browser-engine';
@@ -224,7 +225,17 @@ function ToolButton({
 
 /** 内置浏览器 App（仿 iOS Safari 简化版） */
 export default function BrowserApp() {
-  const [history, setHistory] = useState<HistoryState>({ urls: [], index: -1 });
+  // 跨 App 跳转：微信搜索页点网络结果 → setPendingBrowserUrl(url) + switchToApp('browser')。
+  // 本 App 每次打开都重新挂载（AppWindow 不保活），在此初始化器里直接消费 pending URL 并作为首屏历史，
+  // 无需 effect（也避免在 effect 体内同步 setState）。
+  const [history, setHistory] = useState<HistoryState>(() => {
+    const pending = useUI.getState().pendingBrowserUrl;
+    if (pending && /^https?:\/\//i.test(pending)) {
+      useUI.getState().setPendingBrowserUrl(null);
+      return { urls: [pending], index: 0 };
+    }
+    return { urls: [], index: -1 };
+  });
   const [engine, setEngine] = useState<EngineId>(readStoredEngine);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');

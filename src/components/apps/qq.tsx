@@ -60,6 +60,7 @@ import {
   CircleUser,
   ClipboardList,
   Clock,
+  Compass,
   CloudSun,
   CornerRightDown,
   CreditCard,
@@ -271,6 +272,7 @@ import {
   getGroup,
   groupPreview,
   listGroups as listChatGroups,
+  loadGroupMsgs,
   updateGroup as updateGroupRecord,
   type ChatGroup,
 } from '@/lib/ios/groups';
@@ -7782,7 +7784,7 @@ function FriendProfilePage({
         data-testid="qq-fprofile-upload-banner"
         title="点击更换封面"
         onClick={handleUploadBanner}
-        className="absolute inset-x-0 top-0 h-[340px] cursor-pointer"
+        className="absolute inset-x-0 top-0 h-[320px] cursor-pointer"
       >
         {peerBg ? (
           <img src={peerBg} alt="封面" className="h-full w-full object-cover" />
@@ -7867,8 +7869,8 @@ function FriendProfilePage({
           </button>
         </div>
 
-        {/* 徽章行（QQ 等级图标；SVIP8/勋章/LV8/LV3 已删除） */}
-        <QqBadgeWall testid="qq-fprofile-badges" mtClass="mt-5" padClass="pl-5" onOpen={() => onToast('勋章墙暂未开放')} />
+        {/* 徽章行（QQ 等级图标；SVIP8/勋章/LV8/LV3 已删除；与卡片其他行同一 20px 内边距，不再二次缩进） */}
+        <QqBadgeWall testid="qq-fprofile-badges" mtClass="mt-5" onOpen={() => onToast('勋章墙暂未开放')} />
 
         {/* 你们的互动标识 → 好友互动标识页（分隔条 -mx-5 贴满屏宽，与个人资料页一致） */}
         <div className="-mx-5 mt-5 h-2 bg-black/[0.045] dark:bg-white/[0.05]" aria-hidden="true" />
@@ -7876,11 +7878,11 @@ function FriendProfilePage({
           type="button"
           data-testid="qq-fprofile-bond"
           onClick={onOpenBond}
-          className="flex h-[58px] w-full items-center gap-3 px-5 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+          className="flex h-[54px] w-full items-center gap-3 text-left active:opacity-70"
         >
-          <span className="shrink-0 text-[16px]">你们的互动标识</span>
-          <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[14px] text-black/40 dark:text-white/40">
-            <span className="truncate">立刻点亮你们的第一个标识</span>
+          <span className="shrink-0 text-[15px]">你们的互动标识</span>
+          <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[13px] text-black/40 dark:text-white/40">
+            <span className="truncate">点亮你们的第一个标识</span>
             <span aria-hidden="true">🌸</span>
           </span>
           <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
@@ -7892,10 +7894,10 @@ function FriendProfilePage({
           type="button"
           data-testid="qq-fprofile-zone"
           onClick={onOpenZone}
-          className="flex h-[58px] w-full items-center gap-3 px-5 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+          className="flex h-[54px] w-full items-center gap-3 text-left active:opacity-70"
         >
-          <Star className="h-[22px] w-[22px] shrink-0 text-black/70 dark:text-white/70" strokeWidth={1.9} aria-hidden="true" />
-          <span className="flex-1 text-[16px]">他的QQ空间</span>
+          <Star className="h-5 w-5 shrink-0 text-black/70 dark:text-white/70" strokeWidth={1.9} aria-hidden="true" />
+          <span className="flex-1 text-[15px]">他的QQ空间</span>
           <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
         </button>
       </div>
@@ -7906,7 +7908,7 @@ function FriendProfilePage({
         <button
           type="button"
           onClick={() => onToast('音视频通话暂未开放')}
-          className="h-11 flex-1 rounded-[12px] border border-black/15 text-[15px] active:bg-black/5 dark:border-white/25"
+          className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
         >
           音视频通话
         </button>
@@ -7917,7 +7919,7 @@ function FriendProfilePage({
             setPendingContactEdit(peer.id);
             switchToApp('contacts');
           }}
-          className="h-11 flex-1 rounded-[12px] border border-black/15 text-[15px] active:bg-black/5 dark:border-white/25"
+          className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
         >
           编辑资料
         </button>
@@ -7932,6 +7934,313 @@ function FriendProfilePage({
         </button>
       </div>
       <span className="sr-only">{me.name}查看{peer.name}的个人资料</span>
+    </div>
+  );
+}
+
+// ---------------- 搜索页（对照 QQ 真机：搜索框 + 取消 + 搜索指定内容 + 本地结果） ----------------
+
+/** 各类消息规整成可搜索文本（图片/撤回不入搜索，与聊天页 ChatSearchItem 同口径） */
+function qqMsgSearchText(m: QQMsg): string {
+  if (m.kind === 'sticker' && m.stk) return m.stk.meaning ? `[表情] ${m.stk.meaning}` : '[表情]';
+  if (m.kind === 'redpacket' && m.packet) return `[QQ红包] ${m.packet.note}`;
+  if (m.kind === 'transfer' && m.packet) return `[转账] ${m.packet.note}`;
+  if (m.kind === 'family' && m.fam) return `[亲属卡] 每月额度 ${m.fam.monthlyLimit} 元`;
+  if (m.kind === 'location' && m.loc) return `[位置] ${m.loc.name}${m.loc.addr ? ` ${m.loc.addr}` : ''}`;
+  if (m.kind === 'notice' && m.notice) return `${m.notice.pre}${m.notice.accent}`;
+  if (m.kind === 'voice') return m.voice?.transcript || m.voice?.localText ? `[语音] ${m.voice?.transcript || m.voice?.localText}` : '[语音]';
+  return m.content;
+}
+
+/** 关键词命中高亮（QQ 蓝色，对照真 QQ 搜索结果） */
+function QqHighlight({ text, kw }: { text: string; kw: string }) {
+  const k = kw.trim().toLowerCase();
+  const idx = k ? text.toLowerCase().indexOf(k) : -1;
+  if (idx < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <span className="text-[#0099FF]" data-testid="qq-search-hit-mark">
+        {text.slice(idx, idx + k.length)}
+      </span>
+      {text.slice(idx + k.length)}
+    </>
+  );
+}
+
+function QqSearchPage({
+  me,
+  contacts,
+  groups,
+  onClose,
+  onOpenChat,
+  onOpenGroup,
+  onAddFriend,
+  onOpenStickers,
+  onToast,
+}: {
+  me: QQUser;
+  contacts: ContactRecord[];
+  groups: ChatGroup[];
+  /** 取消 / 返回键：回消息 tab */
+  onClose: () => void;
+  onOpenChat: (c: ContactRecord) => void;
+  onOpenGroup: (g: ChatGroup) => void;
+  /** 快捷入口「找人/群」→ 加好友/群页 */
+  onAddFriend: () => void;
+  /** 快捷入口「表情」→ 表情商城 */
+  onOpenStickers: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [kw, setKw] = useState('');
+  const key = kw.trim().toLowerCase();
+
+  /** QQ 好友（与消息页会话同口径；自己也在内） */
+  const friends = useMemo(
+    () => contacts.filter((c) => (isFriendIn(c, 'qq') && c.kind !== 'user') || c.id === me.id),
+    [contacts, me.id]
+  );
+
+  /** 命中联系人：名字/备注/QQ号匹配 */
+  const hitContacts = useMemo<ContactRecord[]>(() => {
+    if (!key) return [];
+    return friends
+      .filter(
+        (c) =>
+          displayNameOf(c).toLowerCase().includes(key) ||
+          c.name.toLowerCase().includes(key) ||
+          (c.qqId ?? '').includes(key)
+      )
+      .slice(0, 8);
+  }, [friends, key]);
+
+  /** 命中群聊：群备注/群名匹配 */
+  const hitGroups = useMemo<ChatGroup[]>(() => {
+    if (!key) return [];
+    return groups.filter((g) => (g.remark || g.name).toLowerCase().includes(key)).slice(0, 5);
+  }, [groups, key]);
+
+  /** 命中聊天记录：全量会话（好友 + 群）按摘要文本匹配，最新在前取 6 条 */
+  const hitMsgs = useMemo<Array<{ key: string; title: string; avatar: string | null; isGroup: boolean; group: ChatGroup | null; contact: ContactRecord | null; senderLabel: string; text: string; time: number }>>(() => {
+    if (!key) return [];
+    const hits: Array<{ key: string; title: string; avatar: string | null; isGroup: boolean; group: ChatGroup | null; contact: ContactRecord | null; senderLabel: string; text: string; time: number }> = [];
+    for (const c of friends) {
+      if (c.id === me.id) continue; // 自己的会话没有聊天记录分区入口（从联系人进）
+      for (const m of loadMsgs(c.id)) {
+        if (m.kind === 'image' || m.recalled) continue;
+        const text = qqMsgSearchText(m);
+        if (!text || !text.toLowerCase().includes(key)) continue;
+        hits.push({
+          key: c.id,
+          title: displayNameOf(c) || c.name,
+          avatar: c.avatar,
+          isGroup: false,
+          group: null,
+          contact: c,
+          senderLabel: m.role === 'me' ? '我' : '',
+          text,
+          time: m.time,
+        });
+      }
+    }
+    for (const g of groups) {
+      for (const m of loadGroupMsgs(g.id)) {
+        if (m.kind === 'image' || m.kind === 'notice') continue;
+        const text = (m.content ?? '').trim();
+        if (!text || !text.toLowerCase().includes(key)) continue;
+        hits.push({
+          key: qqGroupRowId(g.id),
+          title: g.remark || g.name,
+          avatar: g.avatar,
+          isGroup: true,
+          group: g,
+          contact: null,
+          senderLabel: m.role === 'me' ? '我' : m.senderName,
+          text,
+          time: m.time,
+        });
+      }
+    }
+    hits.sort((a, b) => b.time - a.time);
+    return hits.slice(0, 6);
+    // key 变化才重算（loadMsgs 同步读缓存，不进依赖）
+     
+  }, [key, friends, groups, me.id]);
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  };
+
+  const hasResults = hitContacts.length + hitGroups.length + hitMsgs.length > 0;
+
+  return (
+    <div className="absolute inset-0 z-40 flex h-full w-full flex-col bg-white text-[#1F2329] dark:bg-[#16171A] dark:text-white">
+      {/* 顶栏：搜索框 + 取消（对照截图 2） */}
+      <div className="shrink-0 pt-[54px]">
+        <div className="flex h-12 items-center gap-3 px-3 pb-1">
+          <div className="flex h-[36px] min-w-0 flex-1 items-center gap-2 rounded-[8px] bg-[#EEF1F6] px-3 dark:bg-white/[0.08]">
+            <Search className="h-[17px] w-[17px] shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} aria-hidden="true" />
+            <input
+              autoFocus
+              type="text"
+              value={kw}
+              onChange={(e) => setKw(e.target.value)}
+              placeholder="搜索"
+              data-testid="qq-search-input"
+              aria-label="搜索"
+              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+            />
+            {kw && (
+              <button type="button" aria-label="清空" data-testid="qq-search-clear" onClick={() => setKw('')} className="shrink-0 active:opacity-60">
+                <span className="grid h-[16px] w-[16px] place-items-center rounded-full bg-black/25 text-[10px] leading-none text-white dark:bg-white/30">
+                  ×
+                </span>
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            data-testid="qq-search-cancel"
+            onClick={onClose}
+            className="shrink-0 text-[16px] text-[#0099FF] active:opacity-60"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+
+      {/* 内容 */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+        {!key ? (
+          /* 搜索指定内容（对照截图 2：标题 + 找人/群、表情、小程序三个快捷入口） */
+          <div data-testid="qq-search-shortcuts">
+            <p className="border-b border-black/[0.06] px-4 pb-3 pt-5 text-[15px] text-black/45 dark:border-white/[0.07] dark:text-white/45">
+              搜索指定内容
+            </p>
+            <div className="flex items-start px-2 pt-5">
+              {(
+                [
+                  { label: '找人/群', icon: <UserPlus className="h-[26px] w-[26px]" strokeWidth={1.6} />, testid: 'qq-search-sc-find', action: onAddFriend },
+                  { label: '表情', icon: <Smile className="h-[26px] w-[26px]" strokeWidth={1.6} />, testid: 'qq-search-sc-sticker', action: onOpenStickers },
+                  { label: '小程序', icon: <Compass className="h-[26px] w-[26px]" strokeWidth={1.6} />, testid: 'qq-search-sc-miniapp', action: () => onToast('小程序暂未开放') },
+                ] as const
+              ).map((it) => (
+                <button
+                  key={it.label}
+                  type="button"
+                  data-testid={it.testid}
+                  onClick={it.action}
+                  className="flex flex-1 flex-col items-center gap-2 rounded-[12px] py-2 text-black/60 active:bg-black/[0.04] dark:text-white/60 dark:active:bg-white/[0.06]"
+                >
+                  {it.icon}
+                  <span className="text-[13px]">{it.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            {!hasResults && (
+              <p className="mt-16 text-center text-[14px] text-black/35 dark:text-white/35" data-testid="qq-search-empty">
+                暂无搜索结果
+              </p>
+            )}
+
+            {/* 联系人 */}
+            {hitContacts.length > 0 && (
+              <section data-testid="qq-search-contacts">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">联系人</p>
+                {hitContacts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    data-testid={`qq-search-contact-${c.id}`}
+                    onClick={() => onOpenChat(c)}
+                    className="flex h-[56px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    <QqAvatar src={c.avatar} alt={displayNameOf(c) || c.name} size={40} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15.5px]">
+                        <QqHighlight text={displayNameOf(c) || c.name} kw={kw} />
+                      </span>
+                      <span className="mt-0.5 block truncate text-[12px] text-black/35 dark:text-white/35">QQ:{c.qqId || '未设置'}</span>
+                    </span>
+                    {c.id !== me.id && (
+                      <span
+                        className="shrink-0 rounded-full px-3.5 py-[5px] text-[12px] text-white"
+                        style={{ backgroundColor: QQ_BLUE }}
+                        aria-hidden="true"
+                      >
+                        发消息
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </section>
+            )}
+
+            {/* 群聊 */}
+            {hitGroups.length > 0 && (
+              <section data-testid="qq-search-groups">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">群聊</p>
+                {hitGroups.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    data-testid={`qq-search-group-${g.id}`}
+                    onClick={() => onOpenGroup(g)}
+                    className="flex h-[56px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    <QqGroupAvatar group={g} contacts={contacts} size={40} />
+                    <span className="min-w-0 flex-1 truncate text-[15.5px]">
+                      <QqHighlight text={g.remark || g.name} kw={kw} />
+                    </span>
+                    <span className="shrink-0 text-[12px] text-black/30 dark:text-white/30">{g.memberIds.length + 1}人</span>
+                  </button>
+                ))}
+              </section>
+            )}
+
+            {/* 聊天记录 */}
+            {hitMsgs.length > 0 && (
+              <section data-testid="qq-search-msgs">
+                <p className="px-4 pb-1 pt-4 text-[13px] text-black/40 dark:text-white/40">聊天记录</p>
+                {hitMsgs.map((h, i) => (
+                  <button
+                    key={`${h.key}-${h.time}-${i}`}
+                    type="button"
+                    data-testid="qq-search-msg-item"
+                    onClick={() => {
+                      if (h.isGroup && h.group) onOpenGroup(h.group);
+                      else if (h.contact) onOpenChat(h.contact);
+                    }}
+                    className="flex w-full items-start gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+                  >
+                    {h.isGroup && h.group ? (
+                      <span className="shrink-0">
+                        <QqGroupAvatar group={h.group} contacts={contacts} size={40} />
+                      </span>
+                    ) : (
+                      <QqAvatar src={h.avatar} alt={h.title} size={40} />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-black/45 dark:text-white/45">
+                          {h.senderLabel ? `${h.title} · ${h.senderLabel}` : h.title}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-black/25 dark:text-white/25">{fmtTime(h.time)}</span>
+                      </span>
+                      <span className="mt-0.5 line-clamp-2 block text-[14.5px] leading-snug">{h.text}</span>
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+          </>
+        )}
+      </div>
+      <span className="sr-only">{me.name}的QQ搜索</span>
     </div>
   );
 }
@@ -7972,6 +8281,7 @@ function MessagesPage({
   onAvatar,
   onAddFriend,
   onCreateGroup,
+  onOpenSearch,
   onToast,
 }: {
   me: QQUser;
@@ -7984,9 +8294,10 @@ function MessagesPage({
   onAddFriend: () => void;
   /** 发起群聊（建群页）——入口在消息页右上角加号菜单 */
   onCreateGroup: () => void;
+  /** 点击搜索框：进全屏搜索页（对照真 QQ，搜索在独立页里做） */
+  onOpenSearch: () => void;
   onToast: (m: string) => void;
 }) {
-  const [q, setQ] = useState('');
   // 右上角加号菜单（对照真 QQ：创建群聊/创建频道/加好友/群/扫一扫/传文件/收付款）
   const [plusMenu, setPlusMenu] = useState(false);
   // 右滑手势：页面任意位置（输入控件除外）水平右滑 → 个人中心抽屉
@@ -8076,13 +8387,7 @@ function MessagesPage({
     });
     return rows;
   }, [contacts, me.id, hiddenSet, pinSet, msgTick, chatGroups]);
-  const conversations = useMemo(() => {
-    const kw = q.trim().toLowerCase();
-    if (!kw) return baseConversations;
-    return baseConversations.filter(
-      (x) => x.name.toLowerCase().includes(kw) || (x.contact?.qqId ?? '').includes(kw) || x.text.toLowerCase().includes(kw)
-    );
-  }, [baseConversations, q]);
+  const conversations = baseConversations;
 
   /** 幽灵未读清理：只保留当前会话列表里的未读（已删除会话/已删联系人的残留计数没有行可清，
    *  会让底部 tab 与主屏图标角标卡死；prune 无变化时不写入，可安全随 baseConversations 重算触发） */
@@ -8250,7 +8555,17 @@ function MessagesPage({
         }
       />
       <div className="px-4 pb-2 pt-1">
-        <QqSearch value={q} onChange={setQ} />
+        {/* 搜索框（点击进全屏搜索页，对照真 QQ 与需求截图 2） */}
+        <button
+          type="button"
+          data-testid="qq-search-entry"
+          aria-label="搜索"
+          onClick={onOpenSearch}
+          className="flex h-[36px] w-full items-center gap-1.5 rounded-full bg-black/[0.05] px-3 text-left active:bg-black/[0.08] dark:bg-white/[0.08] dark:active:bg-white/[0.12]"
+        >
+          <Search className="h-4 w-4 shrink-0 text-black/35 dark:text-white/35" strokeWidth={2.2} aria-hidden="true" />
+          <span className="text-[15px] text-black/30 dark:text-white/30">搜索</span>
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto" style={{ touchAction: 'pan-y' }}>
         {conversations.length === 0 && (
@@ -12139,6 +12454,7 @@ function QqFavoritesPage({ onBack }: { onBack: () => void; onToast?: (m: string)
 type MainRoute =
   | { page: 'tabs'; tab: '消息' | '联系人' | '动态' }
   | { page: 'profile' }
+  | { page: 'search' }
   | { page: 'wallet' }
   | { page: 'chat'; contactId: string }
   | { page: 'bond'; contactId: string }
@@ -12341,6 +12657,18 @@ function MainScreen({
           onOpenZone={() => setRoute({ page: 'zone-peer', contactId: chatPeer.id })}
           onToast={showToast}
         />
+      ) : route.page === 'search' ? (
+        <QqSearchPage
+          me={me}
+          contacts={contacts}
+          groups={listChatGroups('qq')}
+          onClose={() => openTabs('消息')}
+          onOpenChat={openChatOf}
+          onOpenGroup={openGroupOf}
+          onAddFriend={() => setRoute({ page: 'addfriend' })}
+          onOpenStickers={() => setRoute({ page: 'stickers' })}
+          onToast={showToast}
+        />
       ) : route.page === 'profile' ? (
         <ProfilePage
           me={me}
@@ -12499,6 +12827,7 @@ function MainScreen({
                 onAvatar={closeApp}
                 onAddFriend={() => setRoute({ page: 'addfriend' })}
                 onCreateGroup={() => setRoute({ page: 'group-create' })}
+                onOpenSearch={() => setRoute({ page: 'search' })}
                 onToast={showToast}
               />
             )}

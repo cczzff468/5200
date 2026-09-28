@@ -1117,6 +1117,9 @@ interface UIState {
   /** 跨 App 跳转：世界书「绑定角色」名单为空的「去创建」→ 打开联系人 App 后直接进入对应类型的新建表单（恒为 char），消费后置回 null */
   pendingContactCreate: 'char' | 'user' | 'npc' | null;
   setPendingContactCreate: (v: 'char' | 'user' | 'npc' | null) => void;
+  /** 跨 App 跳转：微信搜索页网络结果 → 打开浏览器 App 后直接导航到该网页，消费后置回 null */
+  pendingBrowserUrl: string | null;
+  setPendingBrowserUrl: (url: string | null) => void;
 }
 
 export const useUI = create<UIState>((set, get) => ({
@@ -1142,6 +1145,10 @@ export const useUI = create<UIState>((set, get) => ({
   pendingContactCreate: null,
   setPendingContactCreate: (v) => {
     set({ pendingContactCreate: v });
+  },
+  pendingBrowserUrl: null,
+  setPendingBrowserUrl: (v) => {
+    set({ pendingBrowserUrl: v });
   },
   openApp: (id) => {
     if (get().locked) return; // 锁屏时禁止打开 App（锁屏直达相机走 lockCameraOpen）
