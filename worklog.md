@@ -10308,3 +10308,25 @@ Work Log:
 Stage Summary:
 - 修改文件：src/lib/moments.ts、src/lib/ios/moments-settings.ts、src/components/apps/moments-settings.tsx（311 insertions / 141 deletions）
 - 核心成果：①设置页简约化（去装饰、iOS 原生分组风、信息密度更高）②节奏预设分钟级+按用户指定区间 ③好友默认一直主动发动态（默认开启+聊天灵感高频触发+最小间隔 30 分钟），全链路（发帖→点赞→评论→多轮回复）浏览器验证通过
+
+---
+Task ID: setup-repo-deploy
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库，部署到当前工作区并验证运行，配置回推凭据
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git → /home/z/repo-5200（最新提交 ca9cd3c feat-62）
+- rsync 全量同步到 /home/z/my-project（保留 .git 历史、db/custom.db 已有数据、--no-g --no-p 绕过文件系统 chgrp 限制）
+- 创建 .env（DATABASE_URL=file:/home/z/my-project/db/custom.db）
+- bun install（29 包补装 jsmediatags/remark-gfm/web-push）+ prisma generate + db:push（schema 已同步）
+- dev server 由环境自动拉起于 :3000（手动 nohup 重复启动 EADDRINUSE 失败属预期，避免双实例）
+- git remote set-url origin 嵌入用户提供的 PAT（git ls-remote 验证通过，HEAD=ca9cd3c）
+- agent-browser 端到端验证：锁屏（合成 PointerEvent 上滑解锁）→ 主屏 → 微信 App → 登录（种入测试联系人：小陆 user 123456/123456 + 陈默/苏晴 char）→ 会话列表 → 打开陈默聊天 → 发消息 → AI 回复成功（POST /api/chat 200，一次瞬时 502 后自愈）
+- 朋友圈自动发帖引擎实证运转（dev.log 多次 POST /api/moments/generate 200）；天气/聊天背景/联系人迁移 API 全部 200；浏览器 0 JS error
+- 注意：微信挂载时缓存联系人列表，种子数据需在登录前写入或刷新页面后生效
+
+Stage Summary:
+- 项目完全部署成功并浏览器端到端验证通过（聊天 AI 链路、朋友圈引擎、登录体系）
+- 测试账号（仅本浏览器 profile）：小陆 手机号/密码 123456/123456，好友 陈默/苏晴
+- 新用户首次使用流程：联系人 App → 新建 user 类型联系人（需设微信密码/QQ密码）→ 微信/QQ App 登录
+- git push 凭据已就绪：origin remote 已嵌入 PAT，后续改动 commit 后可直接 git push origin main
