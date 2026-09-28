@@ -10254,3 +10254,27 @@ Stage Summary:
 - 修改文件：src/components/apps/qq.tsx、src/components/apps/wechat.tsx
 - 5 项需求全部落地并浏览器验证：①QQ好友资料页分隔条贴边修复 ②微信「我」→我的朋友圈 ③QQ个人资料页QQ空间→我的空间动态 ④资料完成度/编辑资料→联系人App编辑页 ⑤他的QQ空间→TA的空间
 - QQ空间写说说往返保留 mine 语境；zone/zone-compose/zone-peer 返回链完整
+
+---
+Task ID: feat-61
+Agent: 主协调者（Z.ai Code）
+Task: 微信/QQ 全局搜索页开发（用户截图1/截图2）+ QQ联系人详细界面位置大小整理 + 封面右上角设置图标删除
+
+Work Log:
+- QQ 好友资料页（联系人详细界面）布局整理：徽章行/互动标识行/他的QQ空间行与卡片左缘统一 20px 内边距（原 px-5/pl-5 双重缩进 40px）；行高 58→54px、字号 16→15px 对齐个人资料页；封面高度 340→320px（注释原写 320 与代码不符）；底部「音视频通话/编辑资料」按钮从描边改灰底样式（与个人资料页统一）；互动标识描述缩短避免截断
+- 用户追加需求：封面右上角设置图标删除（aria-label=设置按钮移除，用同宽 span 占位保持「个人资料」标题居中，浏览器验证 titleX=640=屏宽中心）
+- 新增后端 GET /api/search/route.ts：z-ai-web-dev-sdk web_search 透传（SDK 仅服务端），q/num 参数校验、结果字段规整、http(s) URL 过滤
+- src/lib/ios/store.ts useUI 新增 pendingBrowserUrl/setPendingBrowserUrl（跨 App 打开网页）
+- browser.tsx：AppWindow 不保活每次打开重挂载，BrowserApp 的 useState 初始化器直接消费 pendingBrowserUrl 作为首屏历史（避免 effect 内同步 setState 的 lint 错误）
+- 微信搜索页（WxSearchPage，对照截图1）：Page 路由加 'search'；chats tab 顶栏搜索按钮接 setPage('search')；返回+搜索框（placeholder 搜索本地或网络结果，autoFocus，清空×）；「最近在搜」+ 垃圾桶清空 + 时钟历史项（wx-search-history localStorage 最多10条去重，点击回填）；结果分区：联系人/群聊/聊天记录（loadMsgs+loadGroupMsgs 全量扫描，wxMsgSearchText 各类消息规整摘要，图片/撤回不入搜索）/朋友圈/网页（防抖600ms+/api/search，竞态序号守卫，loading 骨架屏/失败文案/空态）；点网页结果 setPendingBrowserUrl+switchToApp('browser')
+- QQ 搜索页（QqSearchPage，对照截图2）：MainRoute 加 {page:'search'}；消息页搜索框改假输入（点击进全屏搜索页，移除内联过滤 q 状态）；搜索框+「取消」(#0099FF)；「搜索指定内容」+ 找人/群（→addfriend 页）/表情（→stickers 页）/小程序（toast）；结果分区：联系人（QqHighlight 关键词蓝色高亮+QQ号+发消息胶囊）/群聊/聊天记录（qqMsgSearchText 摘要）；点击结果/快捷项分别 openChatOf/openGroupOf/setRoute
+- 修复：私聊聊天记录命中 senderLabel「陈默 · 陈默」重复（peer 消息 label 置空，渲染三元判断）；微信搜索历史丢失（点网页结果立即 switchToApp 导致组件卸载、setHist updater 被 React 丢弃 → pushHist 改为同步写 localStorage 再 setState）
+- 调试过程：dev server 两次被 OOM killer 杀死（4GB 限制，next-server RSS 2GB）→ setsid+子 shell 双派生重启 + rm -rf .next 清 Turbopack 陈旧 chunk；浏览器 profile 丢失联系人数据 → 用 JS 直接种入 IndexedDB（小陆 user 账号 123456/123456 + 陈默/苏晴好友 + wx/qq 聊天记录 + 苏晴朋友圈）
+- 浏览器端到端验证：QQ搜索页布局与截图2一致；输「青岛」命中聊天记录2条（发送者标签修复后「陈默」/「陈默 · 我」）；输「陈」联系人蓝色高亮命中+发消息按钮；点结果打开陈默聊天；找人/群→加好友页、表情→表情页；微信搜索页布局与截图1一致；输「海洋馆」本地聊天记录命中+真实网页搜索结果（kkday/tripadvisor 等5条）；点网页结果→内置浏览器地址栏 kkday.com；Enter 记录历史、历史项回填、垃圾桶清空（ls=[]）；好友资料页无设置图标、标题居中、行对齐修复生效
+- bunx tsc --noEmit exit 0；eslint 5 个改动文件 0 error 0 warning；dev.log 无运行时错误
+- 提交：fd83155（环境自动收编大改动）+ 8fc89a3（收尾修复），已推送 origin/main
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx、src/components/apps/wechat.tsx、src/components/apps/browser.tsx、src/lib/ios/store.ts、新增 src/app/api/search/route.ts
+- 微信/QQ 全局搜索页全部落地并浏览器验证：布局对照用户截图1/截图2、本地结果（联系人/群聊/聊天记录/朋友圈）+ 微信真实网络结果 + 跨 App 浏览器打开
+- 好友资料页：位置大小统一修复 + 右上角设置图标删除（用户新增需求）
