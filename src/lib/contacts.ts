@@ -40,6 +40,10 @@ export interface ContactRecord {
   qqId: string | null;
   qqPassword: string | null;
   avatar: string | null;
+  /** 按 App 隔离的头像槽位（可选；历史数据无此键）。
+   *  某个 App 没有单独设置头像时回退到全局 avatar（联系人 App 里设置的那张）。
+   *  微信里 AI/用户换头像只写 avatars.wx，不影响 QQ/信息/电话。 */
+  avatars?: ContactAvatarMap | null;
   /** 是否已添加为好友（手机级状态：联系人/电话 App 用；CHAR/NPC 创建后默认 false；USER 恒为 true） */
   isFriend: boolean;
   /** 微信好友标记（QQ/微信/信息好友相互独立；缺省 = 沿用旧全局 isFriend） */
@@ -86,6 +90,8 @@ export interface ContactPayload {
   qqId?: string | null;
   qqPassword?: string | null;
   avatar?: string | null;
+  /** 按 App 隔离的头像槽位（合并写入：传 { wx: dataUrl } 只改微信槽，传 { wx: null } 清除回退全局） */
+  avatars?: ContactAvatarMap | null;
   isFriend?: boolean;
   friendWx?: boolean;
   friendQq?: boolean;
@@ -286,4 +292,62 @@ export function normalizeAvatar(v: unknown): string | null {
   if (!/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v)) return null;
   if (v.length > 400 * 1024) return null;
   return v;
+}
+
+// ---------------- 按 App 隔离的头像（微信/QQ/信息/电话各自独立，回退全局默认） ----------------
+
+/** 拥有独立头像槽位的 App（与 FriendApp / GroupApp 同一套短标识；phone = 电话 App） */
+export type ContactAvatarApp = 'wx' | 'qq' | 'sms' | 'phone';
+
+export const CONTACT_AVATAR_APPS: ContactAvatarApp[] = ['wx', 'qq', 'sms', 'phone'];
+
+/** 按 App 头像槽位：键缺省/不存在 = 该 App 未单独设置（读时回退全局 avatar）；null = 显式清除 */
+export type ContactAvatarMap = { [K in ContactAvatarApp]?: string | null };
+
+/**
+ * 某 App 里应该显示的头像：App 槽位优先，没有单独设置才回退全局默认（联系人 App 里那张）。
+ * 全部读点统一走这里，保证「微信换头像只影响微信」。
+ */
+export function avatarFor(
+  c: Pick<ContactRecord, 'avatar' | 'avatars'> | null | undefined,
+  app: ContactAvatarApp
+): string | null {
+  if (!c) return null;
+  const per = c.avatars?.[app];
+  if (per) return per;
+  return c.avatar ?? null;
+}
+
+/** 单个联系人按 App 投影（把 avatar 替换成该 App 应显示的那张；未变化时原样返回，不产生新对象） */
+export function withAvatarForApp<T extends ContactRecord>(c: T, app: ContactAvatarApp): T {
+  const av = avatarFor(c, app);
+  return (av ?? null) === (c.avatar ?? null) ? c : ({ ...c, avatar: av } as T);
+}
+
+/** 一组联系人按 App 投影（与 withDisplayNames 同款展示层手法；配合使用：withDisplayNames(withAvatarsForApp(list, app))） */
+export function withAvatarsForApp(list: ContactRecord[], app: ContactAvatarApp): ContactRecord[] {
+  return list.map((c) => withAvatarForApp(c, app));
+}
+
+/** 头像槽位归一化：非法键丢弃、字符串过 normalizeAvatar、null 表示显式清除（保留键）。无有效条目返回 null */
+export function normalizeAvatarMap(v: unknown): ContactAvatarMap | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const src = v as Record<string, unknown>;
+  const out: ContactAvatarMap = {};
+  let any = false;
+  for (const k of Object.keys(src)) {
+    if (!(CONTACT_AVATAR_APPS as string[]).includes(k)) continue;
+    const val = src[k];
+    if (val == null) {
+      out[k as ContactAvatarApp] = null;
+      any = true;
+      continue;
+    }
+    const norm = normalizeAvatar(val);
+    if (norm) {
+      out[k as ContactAvatarApp] = norm;
+      any = true;
+    }
+  }
+  return any ? out : null;
 }

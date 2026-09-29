@@ -90,7 +90,8 @@ import {
   wbRulesBlock,
   wbScanText,
 } from '@/lib/ios/worldbook';
-import { deleteContact, listContacts, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
+// listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
+import { deleteContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
@@ -1209,7 +1210,8 @@ function ChatView({
                 try {
                   const album = await getAlbum(part.action.targetId);
                   if (!album || album.contactId !== wbContactId) return;
-                  await updateContact(wbContactId, { avatar: album.src });
+                  // 头像按 App 隔离：只写信息槽位（联系人 App 的全局默认头像不受影响；updateContact 对 avatars 合并写入）
+                  await updateContact(wbContactId, { avatars: { sms: album.src } });
                   setAvatarOverride(album.src); // #108 即时刷新顶栏头像（peerAvatarSrc 经 avatarOverride 优先取新图）
                   onContactChanged?.(wbContactId); // #108/#119 同步父级 contacts state + chatSession.peer.avatarSrc
                   void addVisionDecision({
@@ -1517,7 +1519,8 @@ function ChatView({
                 const lastCallAt = Number(window.localStorage.getItem(`sms-vc-last:${memContactId}`) ?? '0');
                 if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
                   window.localStorage.setItem(`sms-vc-last:${memContactId}`, String(Date.now()));
-                  const contact = (await listContacts()).find((c) => c.id === memContactId) ?? null;
+                  // 头像按 App 投影：信息端发起的来电读 sms 槽位（无槽位回退全局默认头像）
+                  const contact = (await listContactsFor('sms')).find((c) => c.id === memContactId) ?? null;
                   // B-9：联系人无手机号（null/空串）时用 id 派生的稳定占位号，来电界面与
                   // 通话记录/留言不出现空串（电话 App 联系人列表同场景显示「无号码」）
                   const number = contact?.phone || derivePlaceholderNumber(contact?.id ?? 'sms-ai');
@@ -3652,8 +3655,9 @@ export default function ChatApp() {
   const loadContacts = useCallback(async () => {
     setContactState('loading');
     try {
-      // 信息 App 内显示昵称（昵称优先于真实名字，与 QQ/微信一致）
-      setContacts(withDisplayNames(await listContacts()));
+      // 信息 App 内显示昵称（昵称优先于真实名字，与 QQ/微信一致）；
+      // 头像按 App 投影：读 sms 槽位（无槽位回退全局默认头像）
+      setContacts(withDisplayNames(await listContactsFor('sms')));
       setContactState('ready');
     } catch {
       setContactState('error');
@@ -3823,7 +3827,7 @@ export default function ChatApp() {
             void (async () => {
               try {
                 await updateContact(cid, { remark: v || null });
-                const raw = await listContacts();
+                const raw = await listContactsFor('sms');
                 const c = raw.find((x) => x.id === cid);
                 await loadContacts();
                 if (c) {
@@ -3844,7 +3848,8 @@ export default function ChatApp() {
             // 保证退出会话再回主列表 / 重新进入会话时头像数据一致（avatarOverride 已在 ChatView 内即时刷新顶栏）
             void (async () => {
               try {
-                const raw = await listContacts();
+                // 头像按 App 投影：AI 换头像只写 sms 槽位，这里重读也按 sms 投影取 avatarSrc
+                const raw = await listContactsFor('sms');
                 const c = raw.find((x) => x.id === cid);
                 await loadContacts();
                 if (c) {

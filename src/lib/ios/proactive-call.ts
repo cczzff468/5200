@@ -23,6 +23,7 @@
 import { localDB, genId, type CallLogRecord } from './db';
 import { kvGet, kvSet } from './idb-kv';
 import { listContacts, ownerProfile } from './contacts-store';
+import { avatarFor } from '@/lib/contacts';
 import { requestCallFollowup } from './call-followup';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from './incoming-call';
 import { useGlobalCall } from './global-call';
@@ -382,7 +383,7 @@ async function recordMissedPhoneCall(
       contactId,
       displayName,
       peerKind: (contact.kind as CallLogRecord['peerKind']) ?? 'unknown',
-      avatar: contact.avatar ?? null,
+      avatar: avatarFor(contact, 'phone'),
       direction: 'missed',
       duration: 0,
       createdAt: Date.now(),
@@ -440,7 +441,7 @@ async function recordMissedPhoneCall(
         contactId,
         displayName,
         peerKind: (contact.kind as CallLogRecord['peerKind']) ?? 'unknown',
-        avatar: contact.avatar ?? null,
+        avatar: avatarFor(contact, 'phone'),
         text,
         kind: 'voicemail',
         read: false,
@@ -656,7 +657,7 @@ async function tickInner(): Promise<void> {
     source: 'phone',
     bannerStage: 'pill',
     name,
-    avatar: contact.avatar ?? null,
+    avatar: avatarFor(contact, 'phone'),
     number,
     contact,
     // 接听：写 pending（带 proactiveContext=决策 reason 作为开场情境，电话 App 消费端透传通话引擎）

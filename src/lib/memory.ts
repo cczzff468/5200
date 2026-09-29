@@ -890,7 +890,7 @@ export function memAddEventFragment(
   contactId: string,
   app: MemApp,
   content: string,
-  opts?: { eventTime?: number; sourceMsgId?: string }
+  opts?: { eventTime?: number; sourceMsgId?: string; sourceTag?: string }
 ): MemFragment | null {
   try {
     const text = content.trim();
@@ -902,7 +902,9 @@ export function memAddEventFragment(
       // 与 normalizeExtract 产物同形：text + 权重自动分类 + 事件时间（无则 null）
       [{ text, weight: autoWeight(text), eventTime }],
       eventTime ?? Date.now(),
-      opts?.sourceMsgId
+      opts?.sourceMsgId,
+      // sourceTag：同源事件标签（如亲属卡消费 'fc-spend'）——同标签碎片互不相似合并，只做精确强化
+      opts?.sourceTag ? { sourceTag: opts.sourceTag } : undefined
     );
     // 被去重合并/加强（added 为空）同样视为未新增，返回 null（调用方不依赖重复写入）
     return res.added[0] ?? null;
@@ -1215,8 +1217,8 @@ function appendFragments(
   items: ExtractItem[],
   sourceTime: number,
   sourceMsgId?: string,
-  /** 额外字段（动态/群聊来源记忆用：source/sourcePostId/sourceKind/sourceCommentId/sourceGroupId/groupMembers 直通新碎片） */
-  extra?: Partial<Pick<MemFragment, 'source' | 'sourcePostId' | 'sourceKind' | 'sourceCommentId' | 'sourceGroupId' | 'groupMembers'>>
+  /** 额外字段（动态/群聊来源记忆用：source/sourcePostId/sourceKind/sourceCommentId/sourceGroupId/groupMembers/sourceTag 直通新碎片） */
+  extra?: Partial<Pick<MemFragment, 'source' | 'sourcePostId' | 'sourceKind' | 'sourceCommentId' | 'sourceGroupId' | 'groupMembers' | 'sourceTag'>>
 ): { added: MemFragment[]; merged: number; superseded: number } {
   const list = readFragments(contactId);
   const now = Date.now();
@@ -1287,8 +1289,12 @@ function appendFragments(
     }
     // 2) 相似说法 → 合并进已有记忆（优先未消费的；内容保留更完整的一条）
     // 相似判定同样需要把本批次 added 并入查找范围，否则本批次同义碎片穿透到「全新」分支
+    // 同源事件标签（sourceTag）非空且两侧相同时跳过相似合并：同模板的不同事件（如每笔亲属卡消费）
+    // 互不吞并，只靠步骤 1 的精确重复强化；与无标签/异标签碎片的合并行为不变
+    const inTag = (extra?.sourceTag ?? '') as string;
     const simHit = [...list, ...added]
       .filter((f) => !f.supersededAt && !isMemExpired(f, now) && f.content.length >= 4 && content.length >= 4)
+      .filter((f) => !(inTag && f.sourceTag && f.sourceTag === inTag))
       .sort((a, b) => Number(Boolean(a.consumedAt)) - Number(Boolean(b.consumedAt)) || a.createdAt - b.createdAt)
       .find((f) => similarity(f.content, content) >= SIMILAR_MERGE_THRESHOLD);
     if (simHit) {
@@ -1895,6 +1901,8 @@ export function memDedupeNow(contactId: string): number {
       const b = working[j];
       if (removed.has(b.id)) continue;
       if (!b.content || b.content.length < 4) continue;
+      // 同源事件标签（sourceTag）相同的不同事件互不合并（同 appendFragments 步骤 2 的豁免口径）
+      if (a.sourceTag && b.sourceTag && a.sourceTag === b.sourceTag) continue;
       if (similarity(a.content, b.content) < SIMILAR_MERGE_THRESHOLD) continue;
       // 正本 a（已入核心且靠前者，由上面排序保证）；副本 b 合并进 a
       const keep = a;

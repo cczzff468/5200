@@ -179,7 +179,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
-import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContacts, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
@@ -223,9 +223,12 @@ import {
   saveFamilyCardsIn,
   wxLoadPayPwd,
   WxPayPwdGate,
+  recordFcSpend,
   type WxCard,
   type WxFamilyCard,
   type WxFamilyCardIn,
+  type WxFcPayPart,
+  type WxFcPayResult,
 } from './wechat-wallet';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import { hasVoiceCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
@@ -898,7 +901,7 @@ function wxLoadBalance(): number {
 const LS_CARDS = 'wx-wallet-cards';
 
 /** 零钱增减 + 可选写一条零钱明细账单；余额不足返回 false（单聊/群聊共用） */
-export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账'; amount: number }): boolean {
+export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账' | '亲属卡付款'; amount: number }): boolean {
   const next = Math.round((wxLoadBalance() + delta) * 100) / 100;
   if (next < 0) return false;
   saveJSON(LS_WALLET, { balance: next });
@@ -907,7 +910,7 @@ export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账'
 }
 
 /** 追加一条零钱明细账单（新的在前，最多 100 条） */
-function wxPushBill(kind: '红包' | '转账', amount: number): void {
+function wxPushBill(kind: '红包' | '转账' | '亲属卡付款', amount: number): void {
   const bills = loadJSON<{ id?: string; kind?: string; amount?: number; time?: number }[]>(LS_BILLS, []).filter(
     (b) => Boolean(b) && typeof b.kind === 'string' && typeof b.amount === 'number' && typeof b.time === 'number'
   );
@@ -953,37 +956,43 @@ export function wxCanPay(methodId: string, amount: number): boolean {
   return Boolean(c) && (c?.balance ?? 0) >= amount;
 }
 
-/** 按所选支付方式扣款（零钱 / 银行卡 / 亲属卡额度；亲属卡不动零钱不写账单，其余写零钱明细）；单聊/群聊共用 */
-export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账'): boolean {
-  if (!(amount > 0)) return false;
-  if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount });
+/** 按所选支付方式扣款（零钱 / 银行卡 / 亲属卡额度；亲属卡不动零钱不写账单，其余写零钱明细）；单聊/群聊共用。
+ *  成功返回 { ok:true, fc? }：fc 存在 = 本次用亲属卡扣款（含分摊明细，调用方据此插通知行 + 落消费流水/赠卡人记忆）；
+ *  金额非法 / 额度不足 / 卡不存在等失败一律返回 null */
+export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账' | '亲属卡付款'): WxFcPayResult | null {
+  if (!(amount > 0)) return null;
+  if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount }) ? { ok: true } : null;
   if (methodId.startsWith('fcin-')) {
     // 审计 #6：扣款前先做跨月惰性重置（重置后额度足够才扣）；写回时保留 lastResetMonth 字段。
-    // #22：额度按赠卡人聚合，扣款依序分摊到名下各卡（先扣第一张剩余，扣完顺延下一张；金额均两位小数，无残差）
+    // #22：额度按赠卡人聚合，扣款依序分摊到名下各卡（先扣第一张剩余，扣完顺延下一张；金额均两位小数，无残差）；
+    // 分摊明细收集为 parts（take>0 才记），供亲属卡消费感知用
     const list = resetFamilyCardsInMonth();
     const g = wxFcGroupOf(list, methodId);
-    if (g.cards.length === 0 || g.available < amount) return false;
+    if (g.cards.length === 0 || g.available < amount) return null;
     let remain = Math.round(amount * 100) / 100;
     const ids = new Set(g.cards.map((f) => f.id));
+    const parts: WxFcPayPart[] = [];
     saveFamilyCardsIn(
       list.map((f) => {
         if (!ids.has(f.id) || remain <= 0) return f;
         const take = Math.min(Math.max(0, f.monthlyLimit - f.used), remain);
         remain = Math.round((remain - take) * 100) / 100;
+        if (take > 0) parts.push({ cardInId: f.id, giverId: f.friendId ?? null, giverName: f.fromName, amount: take });
         return { ...f, used: Math.round((f.used + take) * 100) / 100 };
       })
     );
-    return true;
+    return { ok: true, fc: { total: amount, parts } };
   }
   const list = loadCards();
   const c = list.find((x) => x.id === methodId);
-  if (!c || c.balance < amount) return false;
+  if (!c || c.balance < amount) return null;
   saveJSON(
     LS_CARDS,
     list.map((x) => (x.id === methodId ? { ...x, balance: Math.round((x.balance - amount) * 100) / 100 } : x))
   );
+  // 零钱/银行卡不产生亲属卡明细，只写账单
   wxPushBill(kind, -amount);
-  return true;
+  return { ok: true };
 }
 
 /** 支付方式展示名（发送页支付方式行 / 支付密码验证浮层副标题用）；单聊/群聊共用 */
@@ -1274,7 +1283,8 @@ async function wxExpireStalePeerCards(): Promise<string[]> {
   try {
     const now = Date.now();
     const changed: string[] = [];
-    const contacts = await listContacts().catch(() => [] as ContactRecord[]);
+    // 过期清算的通知行文案用联系人展示名 → 同样走 wx 投影（头像隔离不影响其余字段）
+    const contacts = await listContactsFor('wx').catch(() => [] as ContactRecord[]);
     for (const c of contacts) {
       const msgs = loadMsgs(c.id);
       if (msgs.length === 0) continue;
@@ -4790,7 +4800,8 @@ function ChatPage({
             t += 1;
             void (async () => {
               try {
-                await updateContact(peer.id, { avatar: src });
+                // 头像按 App 隔离：AI 换头像只写微信槽位（合并语义），不影响 QQ/信息/电话的全局头像
+                await updateContact(peer.id, { avatars: { wx: src } });
                 void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-avatar', targetId: imgMsgId, imgSrc: src });
                 // 47-b：刷新 MainScreen 的 contacts state，让顶栏 peer.avatar 与会话列表头像即时更新
                 await onContactsChanged?.();
@@ -4841,7 +4852,8 @@ function ChatPage({
             t += 1;
             void (async () => {
               try {
-                await updateContact(peer.id, { avatar: aSrc });
+                // 头像按 App 隔离：AI 从相册选图换头像只写微信槽位（合并语义），不影响 QQ/信息/电话的全局头像
+                await updateContact(peer.id, { avatars: { wx: aSrc } });
                 void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'pick-album-avatar', targetId: aId, imgSrc: aSrc });
                 // 47-b：刷新 MainScreen 的 contacts state，让顶栏 peer.avatar 与会话列表头像即时更新
                 await onContactsChanged?.();
@@ -5351,21 +5363,12 @@ function ChatPage({
 
 
   /** 退还 AI 发来的红包/转账/亲属卡（红包弹窗「退还」、转账收款页「退还」、亲属卡领取页「退还」共用）：
-   *  原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应。
-   *  37-a：回复中（流式/投递）时事件随补跑回合排队（对齐 chat.tsx resolveBlockReq）——
-   *  直接 runAiTurn 会被占用中的 beginChatStream 拒绝，系统提示行已上屏但 AI 绝口不提 */
+   *  原卡标记终态（变灰）+ 聊天里追加通知行。
+   *  退还后 AI 不再被注入系统事件自动跟发回应（用户不希望退回动作立刻招来一串 AI 消息）；
+   *  AI 对卡片终态的感知来自聊天历史序列化（wxCardStateLabel 带「（{名}退还）」执行者）与既有记忆管线，
+   *  下一轮对话自然可见「卡已被退回」，无需即时打断 */
   const refundPeerCard = useCallback(
     (m: WxMsg) => {
-      const kickRefund = (ev: string) => {
-        // #25：被对方拉黑（byChar）后不再注入系统事件/触发回应——退回动作本身照常（资金语义不变），
-        // 只是对方不想收到任何消息；byUser 已由 runAiTurn 入口拦（含 requestOnly 放行口径），此处不重复拦
-        if (loadBlock('wx', peer.id).byChar) return;
-        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-          wxQueueAdd(peer.id, ev);
-          return;
-        }
-        runAiTurnRef.current?.(null, [], ev);
-      };
       if (m.kind === 'redpacket' && m.rp) {
         setMsgs((prev) => [
           ...prev.map((x) => (x.id === m.id && x.rp ? { ...x, rp: { ...x.rp, status: 'returned' as const } } : x)),
@@ -5375,7 +5378,6 @@ function ChatPage({
         setReceiveId(null);
         setDetailId(null);
         onToast('红包已退还给对方');
-        kickRefund(`（系统事件：你发给对方的红包被对方退还了（¥${m.rp.amount}，祝福语"${m.rp.blessing}"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）`);
       } else if (m.kind === 'transfer' && m.tr) {
         const refundedAt = Date.now();
         const trAmt = m.tr.amount;
@@ -5395,7 +5397,6 @@ function ChatPage({
         setReceiveId(null);
         setDetailId(null);
         onToast('转账已退还给对方');
-        kickRefund(`（系统事件：你发给对方的转账被对方退还了（¥${m.tr.amount}${m.tr.note ? `，备注"${m.tr.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`);
       } else if (m.kind === 'family' && m.fam) {
         setMsgs((prev) => [
           ...prev.map((x) => (x.id === m.id && x.fam ? { ...x, fam: { ...x.fam, rejected: true } } : x)),
@@ -5410,10 +5411,9 @@ function ChatPage({
         if (nextIn.length !== inList.length) saveFamilyCardsIn(nextIn);
         setDetailId(null);
         onToast('亲属卡已退还');
-        kickRefund(`（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
       }
     },
-    [peer.id, peer.name, onToast, sessionKey]
+    [peer.id, peer.name, onToast]
   );
 
   // ---------------- 双向拉黑（用户开关 / 角色申请卡片的同意与拒绝） ----------------
@@ -6123,13 +6123,25 @@ function ChatPage({
       onToast('对方已将你拉黑，无法发送');
       return;
     }
-    if (!wxExecutePayment(methodId, amount, '红包')) {
+    const pay = wxExecutePayment(methodId, amount, '红包');
+    if (!pay) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
       return;
     }
     // 生成 AI 可引用的短 ID；发出后立即触发 AI 回复（红包进待处理清单，AI 按人设决定领取/退回/拒收）
     const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'redpacket', rp: { amount, blessing, opened: false, cid: nextWxCid('rp') } };
-    setMsgs((prev) => [...prev, msg]);
+    if (pay.fc && peer.id !== me.id) {
+      // 亲属卡付款：消息 + 「消费感知」通知行一次写入（对齐 openRedPacket 的 notice 行形状），
+      // 同时落消费流水与按赠卡人的记忆碎片（recordFcSpend 内部绝不触发 AI 回合）；
+      // 自聊（发给自己）无感知对象：不插通知行不落流水
+      const givers = new Set(pay.fc.parts.map((p) => p.giverName));
+      const pre = givers.size === 1 ? `你用${[...givers][0]}送的亲属卡支付了` : '你用亲属卡支付了';
+      const noticeRow: WxMsg = { id: uid(), role: 'peer' as const, content: '', time: Date.now(), kind: 'notice' as const, notice: { icon: 'fam' as const, pre, accent: `¥${fmtMoney(pay.fc.total)}` } };
+      setMsgs((prev) => [...prev, msg, noticeRow]);
+      recordFcSpend({ total: pay.fc.total, scene: '红包', where: `发给「${peer.name}」的红包`, note: blessing || undefined, parts: pay.fc.parts, ownerName: me.realName || me.name });
+    } else {
+      setMsgs((prev) => [...prev, msg]);
+    }
     setCompose(null);
     if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
   };
@@ -6154,31 +6166,27 @@ function ChatPage({
       onToast('对方已将你拉黑，无法发送');
       return;
     }
-    if (!wxExecutePayment(methodId, amount, '转账')) {
+    const pay = wxExecutePayment(methodId, amount, '转账');
+    if (!pay) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
       return;
     }
     // 生成 AI 可引用的短 ID；发出后立即触发 AI 回复（AI 按人设决定收款/退回/拒收）
     const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'transfer', tr: { amount, note, received: false, cid: nextWxCid('tr') } };
-    setMsgs((prev) => [...prev, msg]);
+    if (pay.fc && peer.id !== me.id) {
+      // 亲属卡付款：消息 + 「消费感知」通知行一次写入（对齐 openRedPacket 的 notice 行形状），
+      // 同时落消费流水与按赠卡人的记忆碎片（recordFcSpend 内部绝不触发 AI 回合）；
+      // 自聊（发给自己）无感知对象：不插通知行不落流水
+      const givers = new Set(pay.fc.parts.map((p) => p.giverName));
+      const pre = givers.size === 1 ? `你用${[...givers][0]}送的亲属卡支付了` : '你用亲属卡支付了';
+      const noticeRow: WxMsg = { id: uid(), role: 'peer' as const, content: '', time: Date.now(), kind: 'notice' as const, notice: { icon: 'fam' as const, pre, accent: `¥${fmtMoney(pay.fc.total)}` } };
+      setMsgs((prev) => [...prev, msg, noticeRow]);
+      recordFcSpend({ total: pay.fc.total, scene: '转账', where: `转给「${peer.name}」的转账`, note: note || undefined, parts: pay.fc.parts, ownerName: me.realName || me.name });
+    } else {
+      setMsgs((prev) => [...prev, msg]);
+    }
     setCompose(null);
     if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
-  };
-
-  /** 卡片被领取/收款/接受后的 AI 感知（审计 #16）：投递与 refundPeerCard 的 kickRefund 同款——
-   *  回复中（流式/连发投递）先入补跑队列，空闲直接注入系统事件开回合；自聊（无对方）不触发。
-   *  不用 pushAiEvent：事件仅在会话挂载时 drain，用户就在当前会话里操作，「等重进才有反应」
-   *  正是审计抱怨的「无即时反应」，故直接走回合注入/补跑队列 */
-  const notifyPeerClaimed = (ev: string) => {
-    if (peer.id === me.id) return;
-    // #25：被对方拉黑（byChar）后不再注入感知事件/触发回应（领取/收款本身照常，仅跳过 AI 回应；
-    // runAiTurn 入口只拦 byUser，byChar 的感知事件此前会穿透触发回应）
-    if (loadBlock('wx', peer.id).byChar) return;
-    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-      wxQueueAdd(peer.id, ev); // 对方正在回复：事件随补跑回合保留，流收尾且投递完毕后自动触发回应
-      return;
-    }
-    runAiTurnRef.current?.(null, [], ev);
   };
 
   /** 領红包（仅限对方发的）：金额存入零钱 + 记收入账单 + 聊天里发「你领取了XX的红包」提示行 → 进详情；自己发的红包不能自己领 */
@@ -6194,8 +6202,6 @@ function ChatPage({
     ]);
     setOpeningId(null);
     setDetailId(id);
-    // 审计 #16：AI 即时感知「红包被领取」并人设化回应（文案对齐既有系统事件风格）
-    notifyPeerClaimed(`（系统事件：对方领取了你发的红包（¥${m.rp.amount}）。请用符合人设的一两句话自然回应这件事。）`);
   };
 
   /** 打开红包详情（我发的红包由 AI 用动作标记处理，这里只看详情） */
@@ -6236,10 +6242,6 @@ function ChatPage({
     setReceiveId(null);
     setDetailId(id);
     onToast(`已收款 ¥${fmtMoney(m.tr.amount)}`);
-    // 审计 #16：AI 即时感知「转账被收下」并人设化回应（仅对方发的卡；收款页只对 peer 卡开放，这里再拦一道）
-    if (m.role === 'peer') {
-      notifyPeerClaimed(`（系统事件：对方收下了你的转账（¥${m.tr.amount}）。请用符合人设的一两句话自然回应这件事。）`);
-    }
   };
 
   /** 原生相机/相册选到的图片（需求2）：只读图入输入框下方预览条，不上屏也不触发 AI；
@@ -6338,10 +6340,6 @@ function ChatPage({
       ]);
     }
     onToast('已领取，发红包/转账时可用它支付');
-    // 审计 #16：AI 即时感知「亲属卡被接受」并人设化回应（领取页只对 peer 卡开放，这里再拦一道）
-    if (m.role === 'peer') {
-      notifyPeerClaimed(`（系统事件：对方接受了你的亲属卡。请用符合人设的一两句话自然回应这件事。）`);
-    }
   };
 
   const handlePlusAction = (a: PlusAction) => {
@@ -11237,8 +11235,9 @@ export default function WeChatApp() {
   }, [contacts]);
 
   const loadContacts = useCallback(async (): Promise<ContactRecord[]> => {
-    // 微信内显示昵称（昵称优先于真实名字）；真实名字另存映射供钱包持卡人使用
-    const raw = await listContacts();
+    // 微信内显示昵称（昵称优先于真实名字）；真实名字另存映射供钱包持卡人使用。
+    // 头像按 App 隔离：读 wx 投影（App 槽位优先、回退全局 avatar），微信里看到的头像独立于 QQ/信息/电话
+    const raw = await listContactsFor('wx');
     setRealNameById(Object.fromEntries(raw.map((c) => [c.id, c.name])));
     return withDisplayNames(raw);
   }, []);

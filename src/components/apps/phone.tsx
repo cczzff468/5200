@@ -44,7 +44,8 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
-import { createContact, deleteContact as deleteContactLocal, listContacts, ownerProfile, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
+// listContactsFor：按 App 投影联系人（phone 槽位优先，回退全局 avatar）——电话 App 内一律用它加载
+import { createContact, deleteContact as deleteContactLocal, listContactsFor, ownerProfile, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
@@ -71,7 +72,7 @@ import { useGlobalCall } from '@/lib/ios/global-call';
 import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer, useIncomingCall } from '@/lib/ios/incoming-call';
 import { loadBlock } from '@/lib/ios/block-state';
 import { getReplyCount } from '@/lib/reply-count';
-import type { ContactRecord } from '@/lib/contacts';
+import { withAvatarForApp, type ContactRecord } from '@/lib/contacts';
 
 /**
  * 电话 App（iOS 电话风格）：
@@ -881,7 +882,8 @@ function CallScreen({
       };
       try {
         // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡）+ 机主身份：全部联系人现场查一次（失败回退无注入/无身份）
-        const all = contact ? await listContacts().catch(() => [] as ContactRecord[]) : [];
+        // 头像按 App 投影：电话通话链路读 phone 槽位（无槽位回退全局默认头像）
+        const all = contact ? await listContactsFor('phone').catch(() => [] as ContactRecord[]) : [];
         const npcExtra = contact ? buildNpcPromptExtra(contact, all) : null;
         const meUser = all.find((c) => c.kind === 'user') ?? null;
         // #20 通话链路超时看门狗：LLM 轮次 45s 到点必失败（AbortSignal.timeout 抛 DOMException
@@ -3848,7 +3850,9 @@ export default function PhoneApp() {
     let alive = true;
     void (async () => {
       try {
-        const all = await listContacts();
+        // 头像按 App 投影：电话 App（通讯录/拨号/收藏/详情/通话记录渲染共用本 state）读 phone 槽位，
+        // 无槽位回退全局默认头像；联系人 App 里的全局默认头像不受影响
+        const all = await listContactsFor('phone');
         if (alive) {
           setContacts(all.filter((c) => c.kind === 'user' || c.isFriend));
         }
@@ -4332,7 +4336,10 @@ export default function PhoneApp() {
             contact={detailContact}
             onClose={() => setEditSheetOpen(false)}
             onSaved={(c) => {
-              setContacts((prev) => (prev ? prev.map((x) => (x.id === c.id ? c : x)) : prev));
+              // 快捷编辑不含头像（不写 avatar/avatars），但 updateContact 返回的是未投影原始记录：
+              // 若该联系人设过 phone 槽位头像，直接回写 state 会让头像闪回全局默认——按 phone 投影后再入列表
+              const shown = withAvatarForApp(c, 'phone');
+              setContacts((prev) => (prev ? prev.map((x) => (x.id === shown.id ? shown : x)) : prev));
               setEditSheetOpen(false);
               showToast('已保存');
             }}

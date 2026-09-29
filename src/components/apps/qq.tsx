@@ -200,7 +200,8 @@ import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
-import { getQqProfileBg, loginQQ, listContacts, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
+// 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
+import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
@@ -690,7 +691,8 @@ async function expireStaleSingleCards(): Promise<boolean> {
     const now = Date.now();
     let raw: ContactRecord[];
     try {
-      raw = await listContacts();
+      // 头像按 App 隔离：QQ 侧读 qq 槽位投影（过期提示行里的展示名/头像与聊天页同源）
+      raw = await listContactsFor('qq');
     } catch {
       return false;
     }
@@ -2609,42 +2611,21 @@ function ChatPage({
    *  直接引用会产生先定义后声明的循环依赖，用 ref 中转（runAiTurn 定义后回填） */
   const runAiTurnRef = useRef<((userMsg: QQMsg | null, extra?: QQMsg[], sysEvent?: string, baseMsgs?: QQMsg[]) => void) | null>(null);
 
-  /**
-   * #16 卡片被用户处理后（领取红包/收款/领亲属卡/退还）注入系统事件触发 AI 人设化回应的统一入口。
-   * 37-a：回复中（流式/投递）时事件随补跑回合排队（对齐 chat.tsx resolveBlockReq）——
-   * 直接 runAiTurn 会被占用中的 beginChatStream 拒绝，系统提示行已上屏但 AI 绝口不提
-   */
-  const kickAiEvent = useCallback(
-    (ev: string) => {
-      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-        qqQueueAdd(peer.id, ev);
-        return;
-      }
-      runAiTurnRef.current?.(null, [], ev);
-    },
-    [peer.id, sessionKey],
-  );
-
   /** 领取亲属卡（对方/AI 赠送的卡）：标记已领取 + 时间；纯本地模拟，无资金流转。
-   *  #16 领取后 AI 即时人设化回应（系统事件随补跑排队，同退款入口 kickAiEvent；自聊无 AI 不触发）
-   *  #29 领取后关闭详情浮层：领取判重在持久层（loadMsgs）存在「setMsgs 已更新、落盘未完成」窗口，
-   *  浮层停留时连点会二次触发 kickAiEvent（双份 AI 回应）——关浮层移除按钮消除连点窗口（与退还路径同款） */
+   *  #29 领取后关闭详情浮层：浮层停留时连点可能重复触发——关浮层移除按钮消除连点窗口（与退还路径同款）。
+   *  用户操作后 AI 不再自动跟发；AI 感知来自聊天历史卡片终态序列化与既有记忆管线 */
   const claimFam = useCallback(
     (msgId: string) => {
       setMsgs((prev) => prev.map((m) => (m.id === msgId && m.fam && !m.fam.claimed ? { ...m, fam: { ...m.fam, claimed: true, claimedAt: Date.now() } } : m)));
       setLayer(null);
-      const m = loadMsgs(peer.id).find((x) => x.id === msgId);
-      if (peer.id !== me.id && m?.fam && !m.fam.claimed) {
-        kickAiEvent(`（系统事件：你送给对方的亲属卡被对方收下了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
-      }
     },
-    [kickAiEvent, me.id, peer.id],
+    [],
   );
 
   /**
    * 退还 AI 发来的红包/转账/亲属卡（红包弹窗「退还」、转账收款页「退还」、亲属卡详情「退还」共用）：
-   * 原卡标记终态（变灰）+ 聊天里追加通知行 + 注入系统事件触发 AI 人设化回应（AI 能感知退还并自然接话）。
-   * 事件随补跑排队走 kickAiEvent（#16 提取的统一入口，与领取/收款同款）
+   * 原卡标记终态（变灰）+ 聊天里追加通知行 + toast。用户操作后 AI 不再自动跟发；
+   * AI 感知来自聊天历史卡片终态序列化与既有记忆管线
    */
   const refundPeerCard = useCallback(
     (m: QQMsg) => {
@@ -2656,9 +2637,6 @@ function ChatPage({
         ]);
         setLayer(null);
         onToast('红包已退还给对方');
-        kickAiEvent(
-          `（系统事件：你发给对方的红包被对方退还了（¥${m.packet.amount}，祝福语"${m.packet.note}"），金额已退回你的账户。请用符合人设的一两句话自然回应这件事。）`
-        );
       } else if (m.kind === 'transfer' && m.packet) {
         const refundedAt = Date.now();
         const trAmt = m.packet.amount;
@@ -2678,9 +2656,6 @@ function ChatPage({
         ]);
         setLayer(null);
         onToast('转账已退还给对方');
-        kickAiEvent(
-          `（系统事件：你发给对方的转账被对方退还了（¥${trAmt}${trNote ? `，备注"${trNote}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`
-        );
       } else if (m.kind === 'family' && m.fam) {
         setMsgs((prev) => prev.map((x) => (x.id === m.id && x.fam ? { ...x, fam: { ...x.fam, rejected: true } } : x)));
         setMsgs((prev) => [
@@ -2689,10 +2664,9 @@ function ChatPage({
         ]);
         setLayer(null);
         onToast('亲属卡已退还');
-        kickAiEvent(`（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
       }
     },
-    [kickAiEvent, patchPacket, peer.id, peer.name, onToast]
+    [patchPacket, peer.name, onToast]
   );
 
   // 发红包消息（生成 AI 可引用的短 ID）：AI 在回复里用动作标记决定领取/退回/拒收（不再定时自动领取），
@@ -3459,7 +3433,8 @@ function ChatPage({
             const src = imgMsg.content;
             if (part.action.kind === 'change-avatar') {
               // 47-c #108：调 updateContact 后刷新 contacts state，让聊天页 peer.avatar 反应式同步（顶栏头像即时刷新）
-              void updateContact(peer.id, { avatar: src })
+              // 头像按 App 隔离：只写 QQ 槽位（updateContact 对 avatars 做合并写入），不影响微信/信息/电话与联系人 App 的头像
+              void updateContact(peer.id, { avatars: { qq: src } })
                 .then(() => refreshContacts())
                 .catch(() => {});
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了头像` } });
@@ -3492,7 +3467,8 @@ function ChatPage({
             const src = album.src;
             if (part.action.kind === 'pick-album-avatar') {
               // 47-c #108：从相册选图换头像后同样刷新 contacts state（顶栏头像即时同步）
-              void updateContact(peer.id, { avatar: src })
+              // 头像按 App 隔离：只写 QQ 槽位（合并写入，不影响其他 App 的头像）
+              void updateContact(peer.id, { avatars: { qq: src } })
                 .then(() => refreshContacts())
                 .catch(() => {});
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换头像` } });
@@ -5702,10 +5678,7 @@ function ChatPage({
                     notice,
                   ]);
                   setLayer({ view: 'rp-detail', msgId: m.id });
-                  // #16 领取后 AI 即时人设化回应（自聊无 AI 不触发；与退还同款系统事件文案风格）
-                  if (peer.id !== me.id && m.packet) {
-                    kickAiEvent(`（系统事件：你发给对方的红包被对方领取了（¥${m.packet.amount}${m.packet.note ? `，祝福语"${m.packet.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`);
-                  }
+                  // 用户领取红包后 AI 不再自动跟发；AI 感知来自聊天历史卡片终态序列化与既有记忆管线
                 }}
               />
             );
@@ -5743,13 +5716,10 @@ function ChatPage({
                   ]);
                   onToast(`已收款 ${fmtMoney(p?.amount ?? 0)} 元`);
                   setLayer({ view: 'tr-detail', msgId: id });
-                  // #16 收款后 AI 即时人设化回应（自聊无 AI 不触发）
-                  if (peer.id !== me.id) {
-                    kickAiEvent(`（系统事件：你发给对方的转账被对方收下了（¥${p?.amount ?? 0}${p?.note ? `，备注"${p.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`);
-                  }
+                  // 用户收款后 AI 不再自动跟发；AI 感知来自聊天历史卡片终态序列化与既有记忆管线
                 }}
                 onRefund={() => {
-                  // 收款页「退还」：原卡标记已退回（变灰）+ 通知行 + AI 人设化回应
+                  // 收款页「退还」：原卡标记已退回（变灰）+ 通知行 + toast（AI 感知走卡片终态序列化/记忆管线，不即时跟发）
                   refundPeerCard(m);
                 }}
               />
@@ -5790,10 +5760,7 @@ function ChatPage({
                       packet: { type: 'transfer', amount: p?.amount ?? 0, note: p?.note ?? '', received: true, receivedAt: Date.now(), receiptOf: 'peer' },
                     },
                   ]);
-                  // #16 兑底收款后 AI 同样即时人设化回应（与收款页主路径同口径）
-                  if (peer.id !== me.id) {
-                    kickAiEvent(`（系统事件：你发给对方的转账被对方收下了（¥${p?.amount ?? 0}${p?.note ? `，备注"${p.note}"` : ''}）。请用符合人设的一两句话自然回应这件事。）`);
-                  }
+                  // 用户兜底收款后 AI 不再自动跟发；AI 感知来自聊天历史卡片终态序列化与既有记忆管线
                 }}
               />
             );
@@ -13844,7 +13811,8 @@ export default function QQApp() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const raw = await listContacts().catch(() => [] as ContactRecord[]);
+      // 头像按 App 隔离：启动加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
+      const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
       const list = withDisplayNames(raw);
       if (!alive) return;
       setContacts(list);
@@ -13900,9 +13868,9 @@ export default function QQApp() {
     }
   }, []);
 
-  // 添加好友后刷新联系人列表（同步换成昵称展示名）
+  // 添加好友后刷新联系人列表（同步换成昵称展示名；头像按 App 隔离读 qq 槽位投影）
   const refreshContacts = useCallback(async () => {
-    const raw = await listContacts().catch(() => [] as ContactRecord[]);
+    const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
     setContacts(withDisplayNames(raw));
   }, []);
 

@@ -163,7 +163,7 @@ import {
   wxPatchBalance,
 } from './wechat';
 import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack';
-import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, resetFamilyCardsInMonth } from './wechat-wallet';
+import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, resetFamilyCardsInMonth, recordFcSpend } from './wechat-wallet';
 import { wxUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -266,6 +266,12 @@ const moneyCooldownKey = (sKey: string, charId: string) => `${sKey}:${charId}`;
 
 function memberNameOf(c: ContactRecord): string {
   return displayNameOf(c);
+}
+
+/** 亲属卡扣款通知行前缀（与单聊同款）：扣款 parts 按赠卡人名去重后恰一个 → 「你用{名}送的亲属卡支付了」；多个赠卡人 → 「你用亲属卡支付了」 */
+function fcNoticePreOf(parts: Array<{ giverName: string }>): string {
+  const givers = [...new Set(parts.map((p) => p.giverName))];
+  return givers.length === 1 ? `你用${givers[0]}送的亲属卡支付了` : '你用亲属卡支付了';
 }
 
 /** 正则元字符转义（@ 提及边界匹配用：成员显示名可能含 . * + 等正则特殊字符） */
@@ -2608,7 +2614,7 @@ export function WxGroupChatPage({
 
   /** 追加一条带图标的资金通知行（xx领取了你的红包 / 收下了你的转账） */
   const appendFundNotice = useCallback(
-    (icon: 'rp' | 'tr', pre: string, accent: string) => {
+    (icon: 'rp' | 'tr' | 'fam', pre: string, accent: string) => {
       appendMsg({ id: uid(), role: 'me', senderId: 'me', senderName: '', content: '', time: Date.now(), kind: 'notice', notice: { icon, pre, accent } });
     },
     [appendMsg]
@@ -3929,7 +3935,8 @@ export function WxGroupChatPage({
       return;
     }
     const total = groupRpTotal(p.mode, p.amount, p.count);
-    if (!wxExecutePayment(methodId, total, '红包')) {
+    const pay = wxExecutePayment(methodId, total, '红包');
+    if (!pay) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : '余额不足，请更换支付方式');
       return;
     }
@@ -3955,6 +3962,14 @@ export function WxGroupChatPage({
     };
     setLayer(null);
     appendMsg(msg);
+    if (pay.fc) {
+      // 亲属卡扣款感知：资金通知行（与单聊同款句式）+ 消费流水/赠卡人记忆碎片（fire-and-forget，绝不触发 AI 回合）
+      const fc = pay.fc;
+      appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`);
+      void ownerRealName().then((o) => {
+        recordFcSpend({ total: fc.total, scene: '红包', where: `发进「${groupDisplayName(group)}」的群红包`, note: p.blessing || undefined, parts: fc.parts, ownerName: o });
+      });
+    }
     onToast(p.mode === 'exclusive' && p.target ? `专属红包已发给${memberNameOf(p.target)}` : `红包已发出 ${fmtMoney(total)} 元`);
     if (sentenceSend) {
       setPendingDispatch(true);
@@ -3982,7 +3997,8 @@ export function WxGroupChatPage({
       onToast('你已被禁言，暂时无法发言');
       return;
     }
-    if (!wxExecutePayment(methodId, amount, '转账')) {
+    const pay = wxExecutePayment(methodId, amount, '转账');
+    if (!pay) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : '余额不足，请更换支付方式');
       return;
     }
@@ -3998,6 +4014,14 @@ export function WxGroupChatPage({
     };
     setLayer(null);
     appendMsg(msg);
+    if (pay.fc) {
+      // 亲属卡扣款感知：资金通知行（与单聊同款句式）+ 消费流水/赠卡人记忆碎片（fire-and-forget，绝不触发 AI 回合）
+      const fc = pay.fc;
+      appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`);
+      void ownerRealName().then((o) => {
+        recordFcSpend({ total: fc.total, scene: '转账', where: `转给「${memberNameOf(member)}」的转账`, note: note || undefined, parts: fc.parts, ownerName: o });
+      });
+    }
     onToast(`已向 ${memberNameOf(member)} 转账 ${fmtMoney(amount)} 元`);
     if (sentenceSend) {
       setPendingDispatch(true);
@@ -4028,8 +4052,7 @@ export function WxGroupChatPage({
     patchGroupMsg(msgId, { rp: { ...rp, claims: [...rp.claims, { contactId: 'me', name: me.name, avatar: me.avatar, amount: amt, ts: Date.now() }] } });
     wxPatchBalance(amt, { kind: '红包', amount: amt });
     appendFundNotice('rp', `你领取了${m.senderId === 'me' ? '自己发的' : m.senderName || '群友'}的`, '红包');
-    // #16 领取成员（AI）发的红包后给发起成员一次回应回合（对照 receiveGroupTr/returnGroupTr 的 nudge 口径）
-    if (m.senderId !== 'me') nudgeAiSender(m.senderId);
+    // 用户领取后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线
     setLayer({ view: 'rp-detail', msgId });
   };
 
@@ -4048,7 +4071,8 @@ export function WxGroupChatPage({
     setLayer({ view: 'rp-detail', msgId: m.id });
   };
 
-  /** 我收款：成员（AI）转账给我的卡片 → 状态已收款 + 金额入零钱（记账单）+ 通知行 → 发起成员按人设回应 */
+  /** 我收款：成员（AI）转账给我的卡片 → 状态已收款 + 金额入零钱（记账单）+ 通知行。
+   *  用户操作后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线 */
   const receiveGroupTr = (m: WxGroupMsg) => {
     const tr = m.tr;
     if (!tr || tr.toId !== 'me' || tr.received || tr.status) return;
@@ -4057,10 +4081,10 @@ export function WxGroupChatPage({
     appendFundNotice('tr', `你收下了${m.senderName || '群友'}发的`, '转账');
     setLayer(null);
     onToast(`已收款 ${fmtMoney(tr.amount)} 元`);
-    nudgeAiSender(m.senderId);
   };
 
-  /** 我退还：成员（AI）转账给我的卡片 → 终态已退回 + 通知行 → 发起成员按人设回应（纯本地模拟，不动钱包） */
+  /** 我退还：成员（AI）转账给我的卡片 → 终态已退回 + 通知行（纯本地模拟，不动钱包）。
+   *  用户操作后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线 */
   const returnGroupTr = (m: WxGroupMsg) => {
     const tr = m.tr;
     if (!tr || tr.toId !== 'me' || tr.received || tr.status) return;
@@ -4068,48 +4092,6 @@ export function WxGroupChatPage({
     appendFundNotice('tr', `你退回了${m.senderName || '群友'}的`, '转账');
     setLayer(null);
     onToast('转账已退还');
-    nudgeAiSender(m.senderId);
-  };
-
-  /** 我处理完成员发来的转账后，让发起成员按人设自然回应一轮（只叫 TA 一个人；红包领取回应同款节奏）。
-   *  B-4 旁路守卫：发起人已被禁言或已不在群（以群当前成员表为准，不用 contactsRef 兜底放非成员进来）
-   *  一律静默跳过——与 runGroupTurn 的禁言/成员过滤同一口径（isGroupMuted + memberIds），
-   *  禁言/退群都能物理拦住「收款/退还回应」这条旁路开口（自动触发不 toast，不打断收款/退还提示）。 */
-  const nudgeAiSender = (senderId: string) => {
-    if (runningRef.current || isChatStreaming(sKey)) return;
-    const g = getGroup(gid);
-    if (!g || !g.memberIds.includes(senderId)) return;
-    if (isGroupMuted(g, senderId)) return;
-    const char = memberById.get(senderId) ?? contactsRef.current.find((c) => c.id === senderId) ?? null;
-    if (!char) return;
-    window.setTimeout(() => {
-      if (runningRef.current || isChatStreaming(sKey)) return;
-      // 80ms 窗口内群可能解散/成员变动/被禁言（AI 管理标记随时生效），触发前再核一次
-      const gNow = getGroup(gid);
-      if (!gNow || !gNow.memberIds.includes(senderId) || isGroupMuted(gNow, senderId)) return;
-      // #7/#35 旁路回合双保险（与级联 kickCascade 同款）：等连发投递尾巴落库完再开新流
-      //（beginChatStream 清插入边界，尾巴未清就开流会让旧回复倒挂在排队用户消息之后）；
-      // 等待中被其他回合占用则放弃（与原守卫同口径）；回合收尾检查排队补跑标记
-      const kickNudge = () => {
-        if (runningRef.current || isChatStreaming(sKey)) return;
-        if (isAiDelivering(sKey)) {
-          window.setTimeout(kickNudge, 400);
-          return;
-        }
-        groupSpeaker.set(sKey, char.id);
-        if (mountedRef.current) setSpeakerId(char.id);
-        void runCharTurn(char, false, []).finally(() => {
-          groupSpeaker.delete(sKey);
-          if (mountedRef.current) setSpeakerId(null);
-          // #35 旁路回合排队补跑：回合进行中用户发过消息 → 同款兜底补跑
-          if (groupQueuedRef.current) {
-            groupQueuedRef.current = false;
-            kickMakeup();
-          }
-        });
-      };
-      kickNudge();
-    }, 80);
   };
 
   /** 加号面板动作（图片/相机/位置同前；红包/转账 → 群级流程：发红包页 / 先选收款成员） */

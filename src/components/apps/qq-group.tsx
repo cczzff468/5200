@@ -3704,8 +3704,7 @@ export function QqGroupChatPage({
     patchGroupMsg(msgId, { rp: { ...rp, claims: [...rp.claims, { contactId: 'me', name: me.name, avatar: me.avatar, amount: amt, ts: Date.now() }] } });
     gainToWallet(amt, '红包');
     appendFundNotice('rp', `你领取了${m.senderId === 'me' ? '自己发的' : m.senderName || '群友'}的`, '红包');
-    // #16 领取成员（AI）发的红包后给发起成员一次回应回合（对照 receiveGroupTr/returnGroupTr 的 nudge 口径）
-    if (m.senderId !== 'me') nudgeAiSender(m.senderId);
+    // 用户领取后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线
     setLayer({ view: 'rp-detail', msgId });
   };
 
@@ -3724,7 +3723,8 @@ export function QqGroupChatPage({
     setLayer({ view: 'rp-detail', msgId: m.id });
   };
 
-  /** 我收款：成员（AI）转账给我的卡片 → 状态已收款 + 金额入钱包（记账单）+ 通知行 → 发起成员按人设回应 */
+  /** 我收款：成员（AI）转账给我的卡片 → 状态已收款 + 金额入钱包（记账单）+ 通知行。
+   *  用户操作后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线 */
   const receiveGroupTr = (m: WxGroupMsg) => {
     const tr = m.tr;
     if (!tr || tr.toId !== 'me' || tr.received || tr.status) return;
@@ -3733,10 +3733,10 @@ export function QqGroupChatPage({
     appendFundNotice('tr', `你收下了${m.senderName || '群友'}发的`, '转账');
     setLayer(null);
     onToast(`已收款 ${fmtMoney(tr.amount)} 元`);
-    nudgeAiSender(m.senderId);
   };
 
-  /** 我退还：成员（AI）转账给我的卡片 → 终态已退回 + 通知行 → 发起成员按人设回应（纯本地模拟，不动钱包） */
+  /** 我退还：成员（AI）转账给我的卡片 → 终态已退回 + 通知行（纯本地模拟，不动钱包）。
+   *  用户操作后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线 */
   const returnGroupTr = (m: WxGroupMsg) => {
     const tr = m.tr;
     if (!tr || tr.toId !== 'me' || tr.received || tr.status) return;
@@ -3744,48 +3744,6 @@ export function QqGroupChatPage({
     appendFundNotice('tr', `你退回了${m.senderName || '群友'}的`, '转账');
     setLayer(null);
     onToast('转账已退还');
-    nudgeAiSender(m.senderId);
-  };
-
-  /** 我处理完成员发来的转账后，让发起成员按人设自然回应一轮（只叫 TA 一个人；红包领取回应同款节奏）。
-   *  B-4 旁路守卫：发起人已被禁言或已不在群（以群当前成员表为准，不用 contactsRef 兜底放非成员进来）
-   *  一律静默跳过——与 runGroupTurn 的禁言/成员过滤同一口径（isGroupMuted + memberIds），
-   *  禁言/退群都能物理拦住「收款/退还回应」这条旁路开口（自动触发不 toast，不打断收款/退还提示）。 */
-  const nudgeAiSender = (senderId: string) => {
-    if (runningRef.current || isChatStreaming(sKey)) return;
-    const g = getGroup(gid);
-    if (!g || !g.memberIds.includes(senderId)) return;
-    if (isGroupMuted(g, senderId)) return;
-    const char = memberById.get(senderId) ?? contactsRef.current.find((c) => c.id === senderId) ?? null;
-    if (!char) return;
-    window.setTimeout(() => {
-      if (runningRef.current || isChatStreaming(sKey)) return;
-      // 80ms 窗口内群可能解散/成员变动/被禁言（AI 管理标记随时生效），触发前再核一次
-      const gNow = getGroup(gid);
-      if (!gNow || !gNow.memberIds.includes(senderId) || isGroupMuted(gNow, senderId)) return;
-      // #7/#35 旁路回合双保险（与级联 kickCascade 同款）：等连发投递尾巴落库完再开新流
-      //（beginChatStream 清插入边界，尾巴未清就开流会让旧回复倒挂在排队用户消息之后）；
-      // 等待中被其他回合占用则放弃（与原守卫同口径）；回合收尾检查排队补跑标记
-      const kickNudge = () => {
-        if (runningRef.current || isChatStreaming(sKey)) return;
-        if (isAiDelivering(sKey)) {
-          window.setTimeout(kickNudge, 400);
-          return;
-        }
-        groupSpeaker.set(sKey, char.id);
-        if (mountedRef.current) setSpeakerId(char.id);
-        void runCharTurn(char, false, []).finally(() => {
-          groupSpeaker.delete(sKey);
-          if (mountedRef.current) setSpeakerId(null);
-          // #35 旁路回合排队补跑：回合进行中用户发过消息 → 同款兑底补跑
-          if (groupQueuedRef.current) {
-            groupQueuedRef.current = false;
-            kickMakeup();
-          }
-        });
-      };
-      kickNudge();
-    }, 80);
   };
 
   // 加号面板五宫格（与单聊完全一致的入口与配色；红包/转账 → 群级流程：发红包页 / 先选收款成员）

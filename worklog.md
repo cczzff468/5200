@@ -12047,3 +12047,95 @@ Stage Summary:
 - 需求逐条达成：三端共用一套组件与 API ✓；每次点击重新生成（open/nonce 触发新请求，无缓存）✓；依据=人设(buildPersonaSystemPrompt 七要素+NPC 配角圈)+最近聊天(memRecentConvo 实时 kv)+记忆(memRecallBlock)+当前时间(fmtDate 北京时间)+App 上下文(channel+QQ bondHint) ✓；内容随种子+温度扰动变化但不脱离人设（E2E 三端×2 次生成全部不同且角色细节连贯）✓；不同角色不同风格（prompt 强制角色专属口吻，禁止通用小作文）✓；心情用颜文字禁 emoji（prompt 硬约束+实测）✓；好感度数值+等级短语 ✓；心声/动作/穿着/位置(可选)/时间全齐 ✓；关闭不影响聊天（纯浮层，无消息/状态副作用）✓；状态卡不写记忆，仅用户主动「存入记忆」落一条归属标注事件碎片 ✓
 - 现有功能零破坏：只新增头像点击与浮层渲染，bubblePress 长按/多选勾选/群成员管理弹层/群聊消息行头像均未触碰；范围限定（单聊、群聊、记忆、世界书、时间感知、回复条数、朋友圈、识图、红包转账、长按菜单、群管理、拉黑、语音、通话）全部不受影响
 - 验证：npx tsc --noEmit 0 错；eslint 5 个改动文件 0 错 0 警；三端 E2E 全通过；git commit + push origin main
+---
+Task ID: 5-d
+Agent: sms-phone-fixer
+Task: chat.tsx(sms)/phone.tsx 联系人加载改按 App 投影 + 信息端 AI 换头像写 sms 槽
+
+Work Log:
+- chat.tsx（信息 App，'sms' 槽）4 处 listContacts( 全部改 listContactsFor('sms')：L93-94 import 换签名（原 listContacts 已无调用点，从 import 移除）+ 注释；L1522 AI 主动来电联系人现场查询（来电界面 name/avatar/number 来源，contact.avatar 经投影后流入 L1539 triggerIncomingCall 与 recordMissedPhoneCall 的 call-logs/voicemails 快照）；L3660 loadContacts（信息 App 全量联系人 state，withDisplayNames(await listContactsFor('sms'))，会话列表/面板/打开会话 peer.avatarSrc 全部经此 state 投影）；L3830 onSaveRemark 备注保存后重读（name/remark 同步路径）；L3851-3852 onContactChanged AI 换头像后重读（peer.avatarSrc 取 sms 投影 avatar）
+- chat.tsx AI 换头像写入点 L1213-1214：updateContact(wbContactId,{avatar:album.src}) → { avatars:{ sms: album.src } }（pick-album-avatar 动作，注释「头像按 App 隔离：只写信息槽位」）；setAvatarOverride(album.src)/addVisionDecision 不变；Grep 全文 avatar: 复核——L372/L437（call-logs/voicements 快照读 contact.avatar，数据源已是投影记录）、L1079（通知读 peerAvatarSrc）、L1538（来电触发读投影 contact）均为读取/构造非写联系人；updateContact 其余 4 处（L3003 friendSms、L3817 voiceId、L3829 remark）与 onAddFriend 新建（全局头像）均不需动，无 createContact
+- phone.tsx（电话 App，'phone' 槽）2 处 listContacts( 全部改 listContactsFor('phone')：L47-48 import 换签名（listContacts 移除）；L886 通话链路现场查全量联系人（buildNpcPromptExtra 配角圈注入 + meUser 机主身份）；L3853-3855 初始加载（contacts state 为通讯录/拨号匹配 findContactByNumber/收藏 L2638/通话记录渲染 L2256 live/留言行 L2859/详情 L4130 共用数据源，全部经投影）
+- phone.tsx 防投影回退 1 处：L4338-4342 QuickEditSheet onSaved 原样回写 updateContact 返回的未投影原始记录，若联系人设过 phone 槽位头像会闪回全局默认——改 withAvatarForApp(c,'phone')（L75 从 '@/lib/contacts' 引入）后再入 state；无 phone 槽位时该函数原样返回（恒等），行为零变化
+- phone.tsx 明确不动：L3570-3574 createContact({avatar}) 新建联系人写全局默认头像（按任务书保留）；L3401 QuickEditSheet updateContact 只写 phone/relation/occupation/region；L3578 isFriend；电话端无 AI 换头像动作
+
+Stage Summary:
+- 信息/电话两端联系人加载全量走 listContactsFor('sms'|'phone')（chat 4 处 + phone 2 处），App 槽位优先、回退全局 avatar，联系人 App 的全局默认头像读写路径零改动
+- 信息端 AI pick-album-avatar 只写 avatars.sms 槽位（updateContact 合并写入），换头像不再污染全局默认；换完后的 onContactChanged 重读/会话 peer.avatarSrc 均按 sms 投影，头像即时一致
+- 验证：npx tsc --noEmit 两文件 0 错；npx eslint 两文件 0 错 0 警；chat.tsx/phone.tsx 已无任何裸 listContacts 残留（grep 复核）
+---
+Task ID: 5-b
+Agent: qq-fixer
+Task: qq.tsx 头像qq投影/AI换头像写qq槽/摘除7处kickAiEvent自动跟发
+
+Work Log:
+- A1 头像读隔离（3 处 listContacts 全改 listContactsFor('qq')）：import L203-204（listContacts 换为 listContactsFor 并加契约注释）；expireStaleSingleCards 过期清扫 ~L693-695（读投影保证过期提示行展示名/头像与聊天页同源）；QQApp 启动恢复 ~L13849-13850（登录恢复/账号信息展示用 qq 槽位头像）；refreshContacts ~L13906-13908（添加好友/AI 换头像后的刷新链同步走投影）。登录页 loginQQ 路径无需改（contacts-store.ts L732 已内部做 avatarFor(hit,'qq') 投影），无其他 listContacts 残留
+- A2 AI 换头像写隔离（2 处 updateContact 全改 avatars.qq 合并写入）：runAiTurn 视觉动作 [换头像:图片消息ID] ~L3465、相册选图 [选图设头像] ~L3499，均改为 updateContact(peer.id, { avatars: { qq: src } }) 并补注释「头像按 App 隔离：只写 QQ 槽位（合并写入，不影响其他 App 的头像）」；先 rg 全量核实 updateContact 其余 6 处写点（persona/friendQq/remark/voiceId）均不带 avatar 键，无漏网
+- B 摘除「接收/退还后 AI 自动跟发」7 处 kickAiEvent（通知行/toast/资金/状态逻辑全保留）：claimFam 领亲属卡 ~L2617-2623（连带删除仅为其服务的 loadMsgs 查找+判重 if 块，deps 收敛 []）；refundPeerCard 退红包 ~L2638-2639/退转账 ~L2657-2658/退亲属卡 ~L2665-2666（deps 收敛 [patchPacket, peer.name, onToast]）；红包领取 onOpen ~L5680-5681；转账收款页 onAccept ~L5718-5719；转账详情页兜底收款 ~L5763。kickAiEvent 函数定义+JSDoc（原 L2612-2626）删净后 rg 证实全文件 0 残留；注释同步改写为「用户操作后 AI 不再自动跟发；AI 感知来自聊天历史卡片终态序列化与既有记忆管线」（claimFam/refundPeerCard 函数头 + 3 处行内注释 + 收款页 onRefund 注释）
+- B4 保护项核实：用户发送侧 AI 回合全部保留——sendRedPacket/sendTransfer 尾部 runAiTurnRef.current?.(null,[msg])（L2678/2688，经 node 按字符码逐字核验 [msg] 完好）、execAndSend→send* 链路、runAiTurnRef 11 处触发点、qqQueueAdd 队列基建 9 处调用（表情/排队/拉黑申请等）零改动；resolveBlockReq（解除拉黑申请）不在任务 7 处清单内，其系统事件回应机制按原样保留
+- 验证：npx tsc --noEmit | grep qq.tsx = 0 错；npx eslint qq.tsx 仅既有 BABEL>500KB 提示 0 错 0 警；node 字节级核验关键行（2678/2688 发送侧回合、refundPeerCard 收尾与 deps）；改动仅 src/components/apps/qq.tsx 单文件（13936→13905 行）
+
+Stage Summary:
+- QQ 头像读写全面按 App 隔离：3 处读取走 listContactsFor('qq') 投影（含过期清扫/启动恢复/refreshContacts），2 处 AI 自主换头像只写 avatars.qq 槽位（updateContact 合并语义，null 清槽位不受影响）；微信/信息/电话/联系人 App 头像与 QQ 互不干扰
+- QQ 收发卡片链路的「AI 自动跟发」7 处全部摘除：用户领红包/收转账/兜底收款/领亲属卡/退红包/退转账/退亲属卡后 AI 不再即时插话，资金入账、钱包、卡片终态、通知行、toast 行为零变化；AI 对这些事件的感知改由聊天历史卡片终态序列化与既有记忆管线承担（与其他端口径一致）
+- 队列基建（qqQueueAdd/补跑回合）与发送侧正常 AI 回应（用户主动发红包/转账后 AI 回合）完整保留；tsc/eslint 干净，未 git 操作、未动 dev server
+---
+Task ID: 5-c
+Agent: group-fixer2
+Task: wx-group/qq-group 群头像投影/摘除nudgeAiSender自动回应/wx-group群亲属卡消费感知
+
+Work Log:
+- A【头像按 App 隔离】跳过并注明：wx-group.tsx / qq-group.tsx 全文 rg 无任何 listContacts( 调用（contacts 均以 props 从宿主接收：WxGroupChatPage 等组件签名 contacts: ContactRecord[]，wx-group.tsx:2294 / qq-group.tsx:1976；contactsRef 仅镜像该 prop）——真正的 listContacts() 调用点在宿主 wechat.tsx（1277/11241）与 qq.tsx（693/13847/13905），均属并行代理只读文件，本任务不动。宿主若改投影，群聊自动跟着生效，无需本文件改动
+- B【摘除 nudgeAiSender】wx-group.tsx：删 3 处调用——claimGroupRp 领红包内 if (m.senderId !== 'me') nudgeAiSender(m.senderId)（原 L4032）、receiveGroupTr（原 L4060）、returnGroupTr（原 L4071）；nudgeAiSender 函数体（原 L4074-4113，含 4 行 doc 注释）确认再无引用后整函数删除；kickMakeup/groupQueuedRef/groupSpeaker/memberById/isAiDelivering/runCharTurn 等基建在 runGroupTurn/kickCascade/重新生成等路径仍有使用，全部保留（逐符号 rg 核实）。qq-group.tsx 同构处理（原 L3708/L3736/L3747 三处调用 + 原 L3750-3789 函数体删除）
+- B【注释同步】三处注释改写为「用户领取后/用户操作后成员不再自动跟发回应；感知来自群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线」——wx-group.tsx 现 L4055（claimGroupRp 内联注释）、L4074-4075（receiveGroupTr doc）、L4086-4087（returnGroupTr doc）；qq-group.tsx 现 L3707/L3726-3727/L3738-3739。资金入账（wxPatchBalance/gainToWallet）、状态流转（patchGroupMsg）、通知行（appendFundNotice）、toast、进详情全部保留不动
+- B【群回合保留】用户「发」群红包/转账后的 void runGroupTurn(msg) 原样保留（wx-group 现 L3979/L4031；qq-group 现 L3684），正常群回合（成员按人设领取/收款/回应）不受影响
+- C【群亲属卡消费感知，仅 wx-group】execGroupRp（现 L3926）与 execGroupTr（现 L3993）的 if (!wxExecutePayment(...)) 改为 const pay = wxExecutePayment(methodId, total, '红包')/(methodId, amount, '转账') + if (!pay) { onToast 原文案; return; }；appendMsg(msg) 之后、onToast/分句发送 early-return/runGroupTurn 之前插入 if (pay.fc) 块（放 early-return 前保证分句发送模式下扣款感知不丢）：①通知行 appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`)，新增模块级 fcNoticePreOf（现 L271-275，memberNameOf 之后）：parts 按 giverName 去重恰一个 → 「你用{名}送的亲属卡支付了」、多个 → 「你用亲属卡支付了」（与单聊同款）；②void ownerRealName().then((o) => recordFcSpend({...})) fire-and-forget——execGroupRp：scene '红包'、where `发进「${groupDisplayName(group)}」的群红包`（groupDisplayName 已在 import，remark 优先口径与群头显示一致）、note: p.blessing || undefined；execGroupTr：scene '转账'、where `转给「${memberNameOf(member)}」的转账`、note: note || undefined；ownerRealName async 失败仅跳过记忆不阻塞（recordFcSpend 内部 owner 空守卫+try/catch 双保险）。appendFundNotice 图标参数类型放宽 'rp'|'tr' → 'rp'|'tr'|'fam'（wx-group 现 L2617；WxGroupMsg.notice 与 WxNoticeRow 的 icon 联合类型本就含 'fam'，渲染零改动）；'./wechat-wallet' 既有 import 块补 recordFcSpend（现 L166）
+- C【零 AI 回合】消费感知仅落库（kv 流水 + memAddEventFragment 记忆碎片），recordFcSpend 内部无任何回合触发；通知行为 kind:'notice' 不进 AI 上下文不进记忆；未新增任何 runCharTurn/beginChatStream 调用
+- 契约对齐：wxExecutePayment 调用与协调者契约逐字匹配 (methodId, amount, kind): WxFcPayResult | null；执行期间并行代理已把 wechat.tsx:962 新签名落库，tsc 实测零冲突
+- 验证：npx tsc --noEmit 全仓 0 错（含 wx-group/qq-group，grep 过滤无输出）；npx eslint 两文件 0 错 0 警；rg 复核 nudgeAiSender 双文件零残留、runGroupTurn 群回合调用点完整、删除接缝上下文（rp-detail/加号面板）无残缺
+
+Stage Summary:
+- 交付：仅改 src/components/apps/wx-group.tsx 与 src/components/apps/qq-group.tsx 两个文件
+- wx-group.tsx：亲属卡群消费感知三件套（'fam' 通知行 + 消费流水 + 按赠卡人记忆碎片）接入群红包/群转账；nudgeAiSender 三处调用与函数本体摘除（-45 行）；fcNoticePreOf 新增；appendFundNotice 放宽 'fam'
+- qq-group.tsx：nudgeAiSender 三处调用与函数本体摘除（-45 行）；无亲属卡支付故 C 部分不适用
+- A 部分按任务书预案跳过：群聊组件不直接调 listContacts，contacts 由宿主投影传入（宿主文件不在本任务可改范围）
+- 成员对用户领取/收款/退还的自动跟发回应全面停止：AI 感知改走群历史卡片终态（claims/已收款/已退回）序列化与既有记忆管线，杜绝旁路开口；资金/状态/通知行/toast 语义零变化
+---
+Task ID: 5-a
+Agent: wechat-fixer
+Task: wechat.tsx 头像wx投影/AI换头像写wx槽/摘除6处自动跟发/wxExecutePayment返回明细/单聊亲属卡消费感知
+
+Work Log:
+- 先读 worklog.md 末段与任务书，逐项 grep 重新定位（行号与任务书基本吻合）；全程只改 src/components/apps/wechat.tsx 一个文件
+- 【A 头像按 App 隔离】L182 contacts-store import：listContacts→listContactsFor（原 listContacts 已无引用，直接替换避免 unused）；L11240 loadContacts 读 raw 改 listContactsFor('wx')（realNameById 仍取 raw 的 name 字段，投影不影响 name；withDisplayNames 保持）；L1287 单聊 24h 过期清算 wxExpireStalePeerCards 的 contacts 读取同步改 wx 投影（通知行文案用展示名，投影只动 avatar 无副作用）；L4804/L4856 AI 换头像两处写入 updateContact(peer.id,{avatar:src|aSrc})→{avatars:{wx:src|aSrc}}（合并语义只写微信槽位），各补注释「头像按 App 隔离…不影响 QQ/信息/电话」
+- 【B 摘除接收/退还后自动跟发】refundPeerCard（L5360-5408）：删除 kickRefund 闭包本体 + 红包/转账/亲属卡 3 处调用，函数头注释改写为「退还后 AI 不再被注入系统事件自动跟发；AI 对卡片终态的感知来自聊天历史序列化（wxCardStateLabel 带『（{名}退还）』执行者）与既有记忆管线」，useCallback 依赖清理掉不再使用的 sessionKey（[peer.id, peer.name, onToast]）；notifyPeerClaimed 整函数（原 L6171-6185）删除，3 个调用点（openRedPacket 领红包 / acceptTransfer 收转账 / claimFamily 领亲属卡）连同「审计 #16」注释行一并删除；资金/状态/通知行/onToast 逻辑全部保留；wxQueueAdd 队列基建未动（表情/位置等处仍有引用），execRedPacket/execTransfer 的 runAiTurnRef.current?.(null,[msg]) 用户主动发卡回合原样保留
+- 【C wxExecutePayment 返回明细】L962 签名改 (methodId, amount, kind: '红包'|'转账'|'亲属卡付款'): WxFcPayResult | null：失败一律 return null（金额非法/额度不足/卡不存在）；balance 分支 wxPatchBalance 成功 ? {ok:true} : null；fcin- 分支分摊循环收集 parts（take>0 才 push {cardInId, giverId: friendId??null, giverName, amount}），成功 return {ok:true, fc:{total, parts}}；银行卡分支 wxPushBill 后 return {ok:true}（零钱/银行卡不产生 fc）；L226-231 wechat-wallet import 补 recordFcSpend + type WxFcPayPart/WxFcPayResult
+- 【D 单聊亲属卡消费感知】execRedPacket（L6126-6147）/execTransfer（L6169-6190）：if(!wxExecutePayment(...)) 改 const pay = … + if(!pay)（toast 文案不变）；pay.fc 存在且非自聊（peer.id!==me.id）时：parts 按 giverName 去重（Set）恰一个→pre=「你用{giverName}送的亲属卡支付了」、多个→「你用亲属卡支付了」，noticeRow（role:'peer'/kind:'notice'/notice:{icon:'fam',pre,accent:`¥${fmtMoney(pay.fc.total)}`}，形状对齐 openRedPacket）与消息一次写入 setMsgs(prev=>[...prev,msg,noticeRow])，随后 recordFcSpend({total, scene:'红包'|'转账', where:'发给「{peer.name}」的红包'|'转给「{peer.name}」的转账', note: blessing/note（空串传 undefined）, parts, ownerName: me.realName||me.name})；无 fc 或自聊保持原 setMsgs(prev=>[...prev,msg])；runAiTurn 回合保留
+- 【E WxFcManagePage 详情按钮】L2835 已是目标态 onClick=onToast(used>0?'消费记录详情暂未开放':'本月暂无消费')，未改动（收到的卡的消费记录 UI 由协调者在 wechat-wallet.tsx 完成）
+- 验证：npx tsc --noEmit 全仓 0 错（含 wx-group 旧调用点——if(!wxExecutePayment(...)) 真值判断与新对象返回类型天然兼容，无类型错误）；npx eslint wechat.tsx 0 错 0 警；bash 工具输出中 [msg] 曾显示为 sg] 属 ANSI 剥离显示伪影，Read 工具核对原文完好
+
+Stage Summary:
+- 微信端头像读写闭环对齐 wx 投影：读（loadContacts/过期清算）走 listContactsFor('wx')、写（AI 换头像×2）只写 avatars.wx 槽位，微信内换头像不再波及 QQ/信息/电话的全局头像
+- 接收/退还三类卡片的 6 处「AI 自动跟发」全部摘除：资金退回、卡片终态、通知行、toast 不变，AI 对卡片终态的感知回归聊天历史序列化与记忆管线，用户不再被即时连环消息打扰
+- wxExecutePayment 升级为 WxFcPayResult：亲属卡扣款返回分摊明细（cardInId/giverId/giverName/amount），单聊发红包/转账用亲属卡支付时聊天内插入「你用XX送的亲属卡支付了 ¥N」通知行 + recordFcSpend 落消费流水与按赠卡人记忆碎片（绝不触发 AI 回合），自聊无感知对象不插行不落流水
+- 与任务书差异：①E 按钮经核验已是目标文案，无需改动；②wx-group 两处旧调用 if(!wxExecutePayment(...)) 与新返回类型兼容（tsc 全仓 0 错），其 fc 消费感知接线（群聊侧）由并行代理按需跟进
+- 只改 wechat.tsx；未 git commit、未启停 dev server、未 build
+---
+Task ID: 6
+Agent: 主协调者 (Z.ai Code) + 4 路并行实现（5-a wechat / 5-b qq / 5-c 群聊 / 5-d 信息+电话）
+Task: ①红包/转账/亲属卡接收退还后 AI 不自动跟发；②亲属卡消费感知（写入记忆+参与聊天）；③消费记录（聊天系统消息+持久化流水+钱包详情）；④头像按 角色ID+App 隔离（微信/QQ/信息/电话各自独立，回退全局默认）
+
+Work Log:
+- 核心层（主代理）：contacts.ts 新增 ContactAvatarApp/'avatars' 槽位/normalizeAvatarMap/withAvatarsForApp；contacts-store.ts 新增 listContactsFor(app) 投影加载、updateContact avatars 合并写入（null=清槽回退）、loginWechat/loginQQ 返回各自 App 头像；wechat-wallet.tsx 新增 WxFcPayPart/WxFcPayResult/消费流水 kv 'wx-family-ledger'（上限300）/recordFcSpend（流水+按赠卡人聚合写 memAddEventFragment 记忆，绝不触发 AI 回合）；WxBill kind 扩 '亲属卡付款'
+- 5-a wechat.tsx：loadContacts 及全部联系人读取改 listContactsFor('wx')；AI [换头像]/[选图设头像] 改写 avatars.wx；删 notifyPeerClaimed（3处：领红包/收转账/领亲属卡）与 refundPeerCard 内 kickRefund（3处：退红包/退转账/退亲属卡），资金/状态/通知行/toast 全保留；wxExecutePayment 改返回 WxFcPayResult|null（fcin- 分支收集分摊明细 parts）；execRedPacket/execTransfer 用亲属卡支付时插 icon:'fam' 通知行（「你用XX送的亲属卡支付了 ¥N」）+ recordFcSpend（where=发给「peer」的红包/转给「peer」的转账）
+- 5-b qq.tsx：listContactsFor('qq') 全投影；AI 换头像两处写 avatars.qq；删 kickAiEvent 7 处（claimFam/退红包/退转账/退亲属卡/领红包/收转账/详情页兜底收款）+ 函数本体；QQ 无亲属卡支付无需消费接线
+- 5-c wx-group/qq-group：群联系人由宿主投影自动生效（群文件无 listContacts）；删 nudgeAiSender 双群 3+3 处调用与函数本体；wx-group execGroupRp/execGroupTr 接消费感知（appendFundNotice('fam',…)+recordFcSpend，where=发进「群名」的群红包/转给「成员」的转账），appendFundNotice icon 扩 'fam'；用户主动发的 runGroupTurn 保留
+- 5-d chat.tsx/phone.tsx：信息 listContactsFor('sms') 4 处 + AI 换头像写 avatars.sms；电话 listContactsFor('phone') 2 处 + QuickEdit onSaved 用 withAvatarForApp 防投影回退；contacts.tsx 保持全局默认（联系人 App=基座）
+- 钱包侧（主代理）：FamilyManagePage 收到的卡新增「亲属卡付款|消费记录」双入口；FcPaySheet（商户/金额/备注→wxExecutePayment(card.id,'亲属卡付款')→recordFcSpend+appendWxChatMsg 赠卡人聊天通知行「你用XX送的亲属卡在「商户」消费 ¥N」）；FcLedgerSheet（该赠卡人流水：花在哪+备注+时间+金额）；修复 methodId 双前缀 bug（卡 id 本身已带 fcin-）
+- 记忆修复：发现 appendFragments 相似合并（bigram≥0.6）会把同模板的不同消费事件吞并（肯德基45 被红包66 覆盖）→ MemFragment 新增 sourceTag（'fc-spend'），appendFragments 步骤2 与全库去重压缩对同标签对跳过相似合并（只做精确重复强化），recordFcSpend 落标；实测两笔消费记忆共存
+- proactive-call.ts 三处头像快照改 avatarFor(contact,'phone')
+
+Stage Summary:
+- 需求逐条达成：领取/接收/退还（红包/转账/亲属卡）后 AI 零跟发（E2E 各等 8-10 秒验证）✓；用户主动发卡 AI 正常回复 ✓；消费感知=流水+记忆（归属句式「机主「凡凡」于X在微信里用你（AI角色本人）送的亲属卡支付了…」eventTime 落库）✓；消费记录=聊天系统通知行（持久化）+钱包消费记录详情+kv 流水（重启保留）✓；AI 经召回自然提及亲属卡消费（E2E 实测「下次直接用亲属卡付钱就好啦」）✓；头像按 角色ID+App 隔离（base 红→四端红；wx 绿→仅微信；qq 黄→仅 QQ；回退+持久化 E2E 三轮刷新验证）✓；单聊群聊共用逻辑 ✓
+- 范围限定：记忆/世界书/时间感知/回复条数/朋友圈/识图/长按菜单/群管理/拉黑/语音/通话链路未触碰；AI 处理用户发的卡（wxApplyAiActions/applyAiActions）与用户发送触发的正常回合全部保留
+- 验证：npx tsc --noEmit 0 错；eslint 12 个改动文件 0 错；Agent Browser E2E（微信红包领取/转账收款/亲属卡领取/红包退还/钱包付款×2/红包亲属卡支付/AI 感知回复）全过、零控制台错误；dev.log 干净

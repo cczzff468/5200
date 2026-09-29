@@ -43,6 +43,8 @@ import {
 } from 'lucide-react';
 import { WxIcChange, WxIcFund, WxIcBankCard, WxIcFamilyCard } from './wx-icons';
 import type { ContactRecord } from '@/lib/contacts';
+// 亲属卡付款（商户消费）扣款：wxExecutePayment 定义在 wechat.tsx（循环引用仅在事件回调中运行时调用，安全）
+import { wxExecutePayment } from './wechat';
 
 // ---------------- 数据层 ----------------
 
@@ -60,7 +62,7 @@ export interface WxCard {
 
 interface WxBill {
   id: string;
-  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账';
+  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款';
   amount: number; // 正 = 零钱增加
   time: number;
 }
@@ -266,6 +268,133 @@ export function loadFamilyCards(): WxFamilyCard[] {
 
 export function saveFamilyCards(list: WxFamilyCard[]): void {
   saveJSON(LS_FC, list);
+}
+
+// ---------------- 亲属卡消费感知（账本流水 + 赠卡人记忆） ----------------
+
+import { memAddEventFragment } from '@/lib/memory';
+
+/** wxExecutePayment 亲属卡扣款明细中的一张卡（分摊时多张） */
+export interface WxFcPayPart {
+  /** 来源卡 id（WxFamilyCardIn.id） */
+  cardInId: string;
+  /** 赠卡人联系人 id（旧数据可能缺失） */
+  giverId: string | null;
+  /** 赠卡人展示名 */
+  giverName: string;
+  /** 本卡分摊金额（两位小数） */
+  amount: number;
+}
+
+/** wxExecutePayment 成功结果：fc 存在 = 本次用了亲属卡（消费感知依据） */
+export interface WxFcPayResult {
+  ok: true;
+  /** 亲属卡扣款明细；零钱/银行卡支付时省略 */
+  fc?: { total: number; parts: WxFcPayPart[] };
+}
+
+/** 亲属卡消费流水（kv 'wx-family-ledger'，IndexedDB 持久化，重启后仍在；上限 300 条，新的在前） */
+export interface WxFcLedgerRec {
+  id: string;
+  ts: number;
+  amount: number;
+  /** 消费场景：'红包' | '转账' | '亲属卡付款' */
+  scene: '红包' | '转账' | '亲属卡付款';
+  /** 花在哪（发给「小雪」的红包 / 转给「小雪」的转账 / 在「肯德基」的消费） */
+  where: string;
+  /** 备注（祝福语 / 转账留言 / 付款备注；无则省略） */
+  note?: string;
+  /** 首张扣款卡的赠卡人（多卡分摊时取第一张） */
+  giverId?: string;
+  giverName: string;
+  /** 首张扣款卡 id */
+  cardInId?: string;
+}
+
+const LS_FC_LEDGER = 'wx-family-ledger';
+
+export function loadFcLedger(): WxFcLedgerRec[] {
+  const list = loadJSON<Partial<WxFcLedgerRec>[]>(LS_FC_LEDGER, []);
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((r) => r && typeof r.ts === 'number' && typeof r.amount === 'number')
+    .map((r) => ({
+      id: typeof r.id === 'string' ? r.id : uid(),
+      ts: r.ts as number,
+      amount: r.amount as number,
+      scene: r.scene === '转账' || r.scene === '亲属卡付款' ? r.scene : '红包',
+      where: typeof r.where === 'string' ? r.where : '',
+      note: typeof r.note === 'string' ? r.note : undefined,
+      giverId: typeof r.giverId === 'string' ? r.giverId : undefined,
+      giverName: typeof r.giverName === 'string' ? r.giverName : '亲属卡',
+      cardInId: typeof r.cardInId === 'string' ? r.cardInId : undefined,
+    }));
+}
+
+/** 追加一条消费流水（新的在前；超容量丢弃最旧） */
+export function addFcLedgerRec(rec: Omit<WxFcLedgerRec, 'id'>): void {
+  const list = loadFcLedger();
+  list.unshift({ ...rec, id: uid() });
+  saveJSON(LS_FC_LEDGER, list.slice(0, 300));
+}
+
+function fmtFcWhen(ts: number): string {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+}
+
+/**
+ * 亲属卡消费感知（需求三件套中的两件：账本流水 + 赠卡人记忆碎片；聊天内系统通知行由调用方按端插入）：
+ * - 每次亲属卡扣款成功落一条流水（金额/场景/花在哪/时间/赠卡人），持久化，重启后仍在；
+ * - 按赠卡人聚合金额各写一条记忆碎片（归属句式：「机主…用你（AI角色本人）送的亲属卡支付了…」），
+ *   AI 下一轮聊天经记忆召回感知「用户花钱了」，按人设反应或沉默——本函数绝不触发 AI 回合（不跟发消息）；
+ * - giverId 缺失（旧卡数据）只记账不写记忆。
+ */
+export function recordFcSpend(opts: {
+  total: number;
+  scene: WxFcLedgerRec['scene'];
+  /** 花在哪短语，如 发给「小雪」的红包 / 转给「小雪」的转账 / 在「肯德基」的消费 */
+  where: string;
+  /** 原始备注（祝福语/留言），流水展示用 */
+  note?: string;
+  parts: WxFcPayPart[];
+  /** 机主真实名字（记忆句式用；空则跳过记忆只记账） */
+  ownerName: string;
+}): void {
+  const ts = Date.now();
+  const first = opts.parts[0];
+  addFcLedgerRec({
+    ts,
+    amount: Math.round(opts.total * 100) / 100,
+    scene: opts.scene,
+    where: opts.where,
+    note: opts.note?.trim() ? opts.note.trim() : undefined,
+    giverId: first?.giverId ?? undefined,
+    giverName: first?.giverName ?? '亲属卡',
+    cardInId: first?.cardInId ?? undefined,
+  });
+  const owner = opts.ownerName.trim();
+  if (!owner) return;
+  const byGiver = new Map<string, { giverId: string | null; name: string; amount: number }>();
+  for (const p of opts.parts) {
+    const k = p.giverId ?? `name:${p.giverName}`;
+    const cur = byGiver.get(k);
+    if (cur) cur.amount = Math.round((cur.amount + p.amount) * 100) / 100;
+    else byGiver.set(k, { giverId: p.giverId, name: p.giverName, amount: p.amount });
+  }
+  const note = opts.note?.trim();
+  for (const g of byGiver.values()) {
+    if (!g.giverId) continue;
+    const text = `机主「${owner}」于${fmtFcWhen(ts)}在微信里用你（AI角色本人）送的亲属卡支付了${opts.where}，金额¥${fmtMoney(g.amount)}${note ? `（备注「${note}」）` : ''}。`;
+    try {
+      // sourceTag 'fc-spend'：同模板的不同消费事件互不相似合并（每笔消费都是独立记忆）
+      memAddEventFragment(g.giverId, 'wx', text, { eventTime: ts, sourceTag: 'fc-spend' });
+    } catch {
+      /* 记忆写入失败不阻塞支付主流程 */
+    }
+  }
 }
 
 // ---------------- 日期工具（零钱通每日收益结算） ----------------
@@ -910,6 +1039,7 @@ function BillIcon({ kind }: { kind: WxBill['kind'] }) {
     零钱通转出: ['#8E8E93', <Gem key="i" className="h-4 w-4" strokeWidth={2.2} />],
     红包: ['#F04A3A', <Heart key="i" className="h-4 w-4" strokeWidth={2.2} />],
     转账: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
+    亲属卡付款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
   };
   const [color, icon] = map[kind];
   return (
@@ -1675,15 +1805,19 @@ function FamilySetupPage({
 function FamilyManagePage({
   cards,
   received,
+  myRealName,
   onBack,
   onUnbind,
   onUnbindReceived,
   onSimulateReceive,
   onAdd,
   onToast,
+  onPaid,
 }: {
   cards: WxFamilyCard[];
   received: WxFamilyCardIn[];
+  /** 机主真实名字（消费记忆句式用） */
+  myRealName: string;
   onBack: () => void;
   onUnbind: (id: string) => void;
   /** 解除（退回）收到的亲属卡：从列表移除 + 同步把聊天卡片标记已退回 */
@@ -1691,9 +1825,13 @@ function FamilyManagePage({
   onSimulateReceive: () => void;
   onAdd: () => void;
   onToast: (m: string) => void;
+  /** 亲属卡付款成功后刷新「本月剩余」（父级重读 kv） */
+  onPaid: () => void;
 }) {
   const [unbind, setUnbind] = useState<WxFamilyCard | null>(null);
   const [unbindIn, setUnbindIn] = useState<WxFamilyCardIn | null>(null);
+  const [payIn, setPayIn] = useState<WxFamilyCardIn | null>(null);
+  const [ledgerIn, setLedgerIn] = useState<WxFamilyCardIn | null>(null);
   return (
     <div className="relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-fc-manage">
       <WxNav
@@ -1771,6 +1909,26 @@ function FamilyManagePage({
                       <p className="mt-1 text-[20px] font-semibold">¥ {fmtMoney(Math.max(0, c.monthlyLimit - c.used))}</p>
                     </div>
                   </div>
+                  {/* 亲属卡付款（商户消费）+ 消费记录（金额/商户/时间/花在哪，持久化） */}
+                  <div className="mt-3 flex items-stretch border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+                    <button
+                      type="button"
+                      data-testid="wx-fc-pay-open"
+                      onClick={() => setPayIn(c)}
+                      className="flex-1 text-center text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
+                    >
+                      亲属卡付款
+                    </button>
+                    <div className="w-px bg-black/[0.06] dark:bg-white/[0.08]" aria-hidden="true" />
+                    <button
+                      type="button"
+                      data-testid="wx-fc-ledger-open"
+                      onClick={() => setLedgerIn(c)}
+                      className="flex-1 text-center text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
+                    >
+                      消费记录
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1833,6 +1991,164 @@ function FamilyManagePage({
           onClose={() => setUnbindIn(null)}
         />
       )}
+      {payIn && (
+        <FcPaySheet
+          card={payIn}
+          myRealName={myRealName}
+          onDone={() => {
+            setPayIn(null);
+            onPaid();
+          }}
+          onClose={() => setPayIn(null)}
+          onToast={onToast}
+        />
+      )}
+      {ledgerIn && <FcLedgerSheet card={ledgerIn} onClose={() => setLedgerIn(null)} />}
+    </div>
+  );
+}
+
+/** 输入行统一样式（付款弹层用） */
+const FC_PAY_INPUT_CLS =
+  'w-full rounded-[8px] bg-white px-3 py-2.5 text-[16px] outline-none placeholder:text-black/25 dark:bg-[#2A2A2A] dark:placeholder:text-white/25';
+
+/**
+ * 亲属卡付款（商户消费）弹层：用收到的亲属卡向商户付款 →
+ * wxExecutePayment 扣款（亲属卡额度）→ 消费流水 + 赠卡人记忆碎片（recordFcSpend）
+ * + 赠卡人聊天内通知行（appendWxChatMsg，持久化）。绝不触发 AI 回合（不跟发消息）。
+ */
+function FcPaySheet({
+  card,
+  myRealName,
+  onDone,
+  onClose,
+  onToast,
+}: {
+  card: WxFamilyCardIn;
+  myRealName: string;
+  onDone: () => void;
+  onClose: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [merchant, setMerchant] = useState('');
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const remain = Math.max(0, card.monthlyLimit - card.used);
+  const submit = () => {
+    const m = merchant.trim().slice(0, 30);
+    const n = Math.round(Number(amount) * 100) / 100;
+    if (!m) {
+      onToast('请填写商户名');
+      return;
+    }
+    if (!amount || Number.isNaN(n) || n <= 0) {
+      onToast('请输入正确的金额');
+      return;
+    }
+    if (n > remain) {
+      onToast('亲属卡本月额度不足');
+      return;
+    }
+    // 支付方式行的 methodId 就是卡自身 id（claimFamily 生成的 id 已带 fcin- 前缀），不可再拼前缀
+    const pay = wxExecutePayment(card.id, n, '亲属卡付款');
+    if (!pay || !pay.fc) {
+      onToast('亲属卡本月额度不足');
+      return;
+    }
+    recordFcSpend({ total: n, scene: '亲属卡付款', where: `在「${m}」的消费`, note: note.trim() || undefined, parts: pay.fc.parts, ownerName: myRealName });
+    if (card.friendId) {
+      // 赠卡人聊天里也能看到这条消费记录（系统通知行，持久化；不触发 AI 回合）
+      appendWxChatMsg(card.friendId, {
+        id: uid(),
+        role: 'peer',
+        content: '',
+        time: Date.now(),
+        kind: 'notice',
+        notice: { icon: 'fam', pre: `你用${card.fromName}送的亲属卡在「${m}」消费`, accent: `¥${fmtMoney(n)}` },
+      });
+    }
+    onToast('付款成功');
+    onDone();
+  };
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col justify-end bg-black/45" onClick={onClose} data-testid="wx-fc-pay-sheet">
+      <div className="rounded-t-[14px] bg-[#EDEDED] px-4 pb-8 pt-4 dark:bg-[#1C1C1C]" onClick={(e) => e.stopPropagation()}>
+        <p className="pb-3 text-center text-[17px]">亲属卡付款</p>
+        <p className="pb-3 text-center text-[13px] text-black/45 dark:text-white/45">
+          {card.fromName}（{card.relation}）· 本月剩余 ¥{fmtMoney(remain)}
+        </p>
+        <div className="space-y-2">
+          <input
+            value={merchant}
+            onChange={(e) => setMerchant(e.target.value)}
+            placeholder="商户名（如：肯德基）"
+            maxLength={30}
+            className={FC_PAY_INPUT_CLS}
+            data-testid="wx-fc-pay-merchant"
+          />
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="金额（元）"
+            inputMode="decimal"
+            className={FC_PAY_INPUT_CLS}
+            data-testid="wx-fc-pay-amount"
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="备注（选填）"
+            maxLength={40}
+            className={FC_PAY_INPUT_CLS}
+            data-testid="wx-fc-pay-note"
+          />
+        </div>
+        <button
+          type="button"
+          data-testid="wx-fc-pay-submit"
+          onClick={submit}
+          className="mt-4 h-12 w-full rounded-[8px] bg-[#07C160] text-[17px] text-white active:opacity-80"
+        >
+          付款
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 消费记录弹层：该赠卡人名下的亲属卡消费流水（金额/花在哪/备注/时间；kv 持久化，重启后仍在） */
+function FcLedgerSheet({ card, onClose }: { card: WxFamilyCardIn; onClose: () => void }) {
+  const recs = loadFcLedger().filter((r) =>
+    r.giverId ? r.giverId === card.friendId : r.cardInId ? r.cardInId === card.id : r.giverName === card.fromName
+  );
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col justify-end bg-black/45" onClick={onClose} data-testid="wx-fc-ledger-sheet">
+      <div className="max-h-[72%] overflow-hidden rounded-t-[14px] bg-[#EDEDED] pb-6 pt-4 dark:bg-[#1C1C1C]" onClick={(e) => e.stopPropagation()}>
+        <p className="pb-1 text-center text-[17px]">消费记录</p>
+        <p className="pb-3 text-center text-[13px] text-black/45 dark:text-white/45">
+          {card.fromName}（{card.relation}）送的亲属卡
+        </p>
+        {recs.length === 0 ? (
+          <p className="py-10 text-center text-[14px] text-black/35 dark:text-white/35" data-testid="wx-fc-ledger-empty">
+            暂无消费记录
+          </p>
+        ) : (
+          <div className="max-h-[52vh] overflow-y-auto px-4">
+            {recs.map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-3 border-b border-black/[0.05] py-3 last:border-0 dark:border-white/[0.06]">
+                <div className="min-w-0">
+                  <p className="truncate text-[15px]">
+                    {r.where}
+                    {r.note ? <span className="text-black/40 dark:text-white/40">（{r.note}）</span> : null}
+                  </p>
+                  <p className="mt-0.5 text-[12px] text-black/35 dark:text-white/35">{fmtBillTime(r.ts)}</p>
+                </div>
+                <span className="shrink-0 text-[16px] font-medium">¥{fmtMoney(r.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2162,6 +2478,8 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
         <FamilyManagePage
           cards={familyCards}
           received={familyIn}
+          myRealName={myRealName}
+          onPaid={() => setFamilyIn(resetFamilyCardsInMonth())}
           onBack={() => setView('wallet')}
           onUnbind={(id) => commitFamily((list) => list.filter((c) => c.id !== id))}
           onUnbindReceived={(id) => {

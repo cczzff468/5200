@@ -14,13 +14,18 @@ import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
 import { phoneBadge, qqUnreads, wxUnreads } from '@/lib/unread-store';
 import { wsHeaders } from './workspace';
 import {
+  avatarFor,
   displayNameOf,
   genPhone,
   genQQ,
   genWechatId,
   isContactKind,
   normalizeAvatar,
+  normalizeAvatarMap,
   normalizeText,
+  withAvatarsForApp,
+  type ContactAvatarApp,
+  type ContactAvatarMap,
   type ContactPayload,
   type ContactRecord,
 } from '@/lib/contacts';
@@ -71,6 +76,15 @@ function sortDesc(list: ContactRecord[]): ContactRecord[] {
 export async function listContacts(): Promise<ContactRecord[]> {
   const all = await localDB.getAll('contacts');
   return sortDesc(all as ContactRecord[]);
+}
+
+/**
+ * 按 App 投影的联系人列表：avatar 已替换成该 App 应显示的那张
+ * （App 槽位优先，没单独设置回退全局默认）。微信/QQ/信息/电话的加载点统一用它，
+ * 保证「微信里换的头像只影响微信」。
+ */
+export async function listContactsFor(app: ContactAvatarApp): Promise<ContactRecord[]> {
+  return withAvatarsForApp(await listContacts(), app);
 }
 
 export async function getContact(id: string): Promise<ContactRecord | null> {
@@ -205,6 +219,7 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     qqId: normalizeText(payload.qqId, 16) ?? genQQ(),
     qqPassword: normalizeText(payload.qqPassword, 64),
     avatar: normalizeAvatar(payload.avatar),
+    avatars: normalizeAvatarMap(payload.avatars),
     remark: normalizeText(payload.remark, 60),
     voiceId: normalizeText(payload.voiceId, 120),
     isFriend: payload.kind === 'user',
@@ -247,6 +262,19 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if ('qqId' in patch) next.qqId = normalizeText(patch.qqId, 16);
   if ('qqPassword' in patch) next.qqPassword = normalizeText(patch.qqPassword, 64);
   if ('avatar' in patch) next.avatar = normalizeAvatar(patch.avatar);
+  // 按 App 隔离的头像槽位：合并写入（patch 里只传要改的 App；null = 清除该 App 槽位回退全局）
+  if ('avatars' in patch) {
+    const merged: ContactAvatarMap = { ...(existing.avatars ?? {}) };
+    const inc = normalizeAvatarMap(patch.avatars);
+    if (inc) {
+      for (const k of Object.keys(inc) as ContactAvatarApp[]) {
+        const v = inc[k];
+        if (v == null) delete merged[k];
+        else merged[k] = v;
+      }
+    }
+    next.avatars = Object.keys(merged).length > 0 ? merged : null;
+  }
   // 手机号可编辑但留空不自动生成（避免编辑时悄悄换号）
   if ('phone' in patch) next.phone = normalizeText(patch.phone, 20);
   if ('remark' in patch) next.remark = normalizeText(patch.remark, 60);
@@ -637,7 +665,7 @@ export async function loginWechat(mode: 'phone' | 'wechat' | 'qq', rawAccount: s
       name: displayNameOf(hit),
       realName: hit.name,
       nickname: hit.nickname ?? null,
-      avatar: hit.avatar,
+      avatar: avatarFor(hit, 'wx'),
       wechatId: hit.wechatId,
       phone: hit.phone,
       qqId: hit.qqId,
@@ -701,7 +729,7 @@ export async function loginQQ(mode: 'phone' | 'account', rawAccount: string, pas
       name: displayNameOf(hit),
       realName: hit.name,
       nickname: hit.nickname ?? null,
-      avatar: hit.avatar,
+      avatar: avatarFor(hit, 'qq'),
       qqId: hit.qqId,
       phone: hit.phone,
       persona: hit.persona,
