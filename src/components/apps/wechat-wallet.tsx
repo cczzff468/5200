@@ -82,7 +82,8 @@ export interface WxFamilyCard {
   relation: string;
   monthlyLimit: number;
   used: number;
-  status: 'pending' | 'active';
+  /** #23：returned = AI 退回/拒收（终态，管理页灰显「已退回」；此前该状态缺失，卡面 pending 永挂） */
+  status: 'pending' | 'active' | 'returned';
   message: string;
   createdAt: number;
 }
@@ -166,6 +167,8 @@ export interface WxFamilyCardIn {
   used: number;
   /** 本月额度已重置到的月份（'YYYY-MM' 本地时区；审计 #6 跨月惰性重置；旧数据缺失视为需重置） */
   lastResetMonth?: string;
+  /** #22：来源卡消息 id（领取幂等去重键 + 解除时精确反查聊天卡片；旧数据缺失） */
+  msgId?: string;
   createdAt: number;
 }
 
@@ -185,6 +188,7 @@ export function loadFamilyCardsIn(): WxFamilyCardIn[] {
       monthlyLimit: typeof f.monthlyLimit === 'number' ? f.monthlyLimit : 0,
       used: typeof f.used === 'number' ? f.used : 0,
       lastResetMonth: typeof f.lastResetMonth === 'string' ? f.lastResetMonth : undefined,
+      msgId: typeof f.msgId === 'string' ? f.msgId : undefined,
       createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now(),
     }));
 }
@@ -242,7 +246,7 @@ export function loadFamilyCards(): WxFamilyCard[] {
       relation: typeof f.relation === 'string' ? f.relation : '其他亲人',
       monthlyLimit: typeof f.monthlyLimit === 'number' ? f.monthlyLimit : 0,
       used: typeof f.used === 'number' ? f.used : 0,
-      status: f.status === 'active' ? 'active' : 'pending',
+      status: f.status === 'active' ? 'active' : f.status === 'returned' ? 'returned' : 'pending',
       message: typeof f.message === 'string' ? f.message : '我为你准备了亲属卡，你消费我买单',
       createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now(),
     }));
@@ -1702,8 +1706,17 @@ function FamilyManagePage({
                     <span className="min-w-0 flex-1 truncate text-[17px]">
                       {c.friendName}（{c.relation}）
                     </span>
-                    <span className={`shrink-0 text-[15px] ${c.status === 'pending' ? 'text-[#FA9D3B]' : 'text-[#07C160]'}`}>
-                      {c.status === 'pending' ? '待对方领取' : '使用中'}
+                    {/* #23：returned=AI 退回/拒收终态，灰显「已退回」（与 pending/active 同构渲染） */}
+                    <span
+                      className={`shrink-0 text-[15px] ${
+                        c.status === 'pending'
+                          ? 'text-[#FA9D3B]'
+                          : c.status === 'returned'
+                            ? 'text-black/35 dark:text-white/35'
+                            : 'text-[#07C160]'
+                      }`}
+                    >
+                      {c.status === 'pending' ? '待对方领取' : c.status === 'returned' ? '已退回' : '使用中'}
                     </span>
                   </button>
                   <div className="mt-4 flex items-stretch">
@@ -1857,15 +1870,26 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
     toastTimer.current = setTimeout(() => setToast(''), 1600);
   };
 
-  const commitWallet = (next: { balance: number }) => {
-    setWallet(next);
-    saveJSON(LS_WALLET, next);
+  // #4（audit3-wx）：钱包页 React state 只是打开页面那一刻的快照，后台回合（AI 领取/退款/24h 过期
+  // 清算、聊天里发红包/转账扣款）随时经 wxPatchBalance/wxPushBill/wxExecutePayment 直写存储。
+  // 三个提交入口改为「重读存储现值 → 应用本次增量 → 持久化」的读改写合并（与 wxPatchBalance/
+  // wxPushBill 同口径）——不再以快照整表覆盖，后台新增的退款/账单/银行卡变动不被旧快照吞掉。
+  const commitWalletDelta = (delta: number): boolean => {
+    const next = Math.round((loadWallet().balance + delta) * 100) / 100;
+    if (next < 0) return false; // 与 wxPatchBalance 同款不足拦截：快照预检与提交之间余额可能已被后台变动
+    const nextWallet = { balance: next };
+    setWallet(nextWallet);
+    saveJSON(LS_WALLET, nextWallet);
+    return true;
   };
-  const commitCards = (next: WxCard[]) => {
+  const commitCards = (updater: (list: WxCard[]) => WxCard[]) => {
+    const next = updater(loadCards());
     setCards(next);
     saveJSON(LS_CARDS, next);
   };
-  const commitBills = (next: WxBill[]) => {
+  const pushBill = (kind: WxBill['kind'], amount: number) => {
+    // 账单以存储现值为基准前插（快照里没有后台新账单，基于快照拼接会吞掉它们）；展示态保留全量、落盘截断 100 条
+    const next = [{ id: uid(), kind, amount, time: Date.now() }, ...loadBills()];
     setBills(next);
     saveJSON(LS_BILLS, next.slice(0, 100));
   };
@@ -1876,9 +1900,6 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
   const commitFamily = (next: WxFamilyCard[]) => {
     setFamilyCards(next);
     saveJSON(LS_FC, next);
-  };
-  const pushBill = (kind: WxBill['kind'], amount: number) => {
-    commitBills([{ id: uid(), kind, amount, time: Date.now() }, ...bills]);
   };
 
   const payCard = cards.find((c) => c.id === (payCardId ?? cards[0]?.id)) ?? null;
@@ -1913,8 +1934,8 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
       showToast('银行卡余额不足');
       return;
     }
-    commitCards(cards.map((c) => (c.id === payCard.id ? { ...c, balance: Math.round((c.balance - amount) * 100) / 100 } : c)));
-    commitWallet({ balance: Math.round((wallet.balance + amount) * 100) / 100 });
+    commitCards((list) => list.map((c) => (c.id === payCard.id ? { ...c, balance: Math.round((c.balance - amount) * 100) / 100 } : c)));
+    commitWalletDelta(amount);
     pushBill('充值', amount);
     setMoneySheet(null);
     showToast('充值成功');
@@ -1926,8 +1947,12 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
       showToast('零钱余额不足');
       return;
     }
-    commitCards(cards.map((c) => (c.id === payCard.id ? { ...c, balance: Math.round((c.balance + amount) * 100) / 100 } : c)));
-    commitWallet({ balance: Math.round((wallet.balance - amount) * 100) / 100 });
+    // 先扣零钱（以存储现值为基准，不足即拦）再回填银行卡：避免先回填后扣款失败的资金不一致
+    if (!commitWalletDelta(-amount)) {
+      showToast('零钱余额不足');
+      return;
+    }
+    commitCards((list) => list.map((c) => (c.id === payCard.id ? { ...c, balance: Math.round((c.balance + amount) * 100) / 100 } : c)));
     pushBill('提现', -amount);
     setMoneySheet(null);
     showToast('提现成功，已到账银行卡');
@@ -1939,7 +1964,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
       return;
     }
     commitLcq({ ...lcq, balance: Math.round((lcq.balance + amount) * 100) / 100 });
-    commitWallet({ balance: Math.round((wallet.balance - amount) * 100) / 100 });
+    commitWalletDelta(-amount);
     pushBill('转入零钱通', -amount);
     setMoneySheet(null);
     showToast('已转入零钱通');
@@ -1951,7 +1976,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
       return;
     }
     commitLcq({ ...lcq, balance: Math.round((lcq.balance - amount) * 100) / 100 });
-    commitWallet({ balance: Math.round((wallet.balance + amount) * 100) / 100 });
+    commitWalletDelta(amount);
     pushBill('零钱通转出', amount);
     setMoneySheet(null);
     showToast('已转出到零钱');
@@ -2028,7 +2053,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
           myRealName={myRealName}
           onBack={() => setView('wallet')}
           onAdd={(c) => {
-            commitCards([...cards, { id: uid(), bank: c.bank, no: c.no, tail: c.tail, holder: c.holder, balance: c.balance, createdAt: Date.now() }]);
+            commitCards((list) => [...list, { id: uid(), bank: c.bank, no: c.no, tail: c.tail, holder: c.holder, balance: c.balance, createdAt: Date.now() }]);
           }}
           onOpenCard={(c) => {
             setDetailCardId(c.id);
@@ -2042,7 +2067,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
           card={detailCard}
           onBack={() => setView('cards')}
           onUnbind={() => {
-            commitCards(cards.filter((c) => c.id !== detailCard.id));
+            commitCards((list) => list.filter((x) => x.id !== detailCard.id));
             showToast('已解除绑定');
             setView('cards');
           }}
@@ -2128,11 +2153,13 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
                   let nowTs = Date.now();
                   const updated = msgs.map((m) => {
                     const f = m.fam as Record<string, unknown> | undefined;
-                    if (m.kind === 'family' && f && f.monthlyLimit === fam.monthlyLimit && f.claimed === true && !f.rejected) {
-                      nowTs += 1;
-                      return { ...m, fam: { ...f, rejected: true } };
-                    }
-                    return m;
+                    if (m.kind !== 'family' || !f || f.claimed !== true || f.rejected) return m;
+                    // #22：领取时记录了来源卡消息 id → 按消息精确反查（同一联系人多张同额度卡不再误标其余卡）；
+                    // 旧数据无 msgId 时退回「同额度+已领取」启发式（原口径）
+                    const matched = fam.msgId ? m.id === fam.msgId : f.monthlyLimit === fam.monthlyLimit;
+                    if (!matched) return m;
+                    nowTs += 1;
+                    return { ...m, fam: { ...f, rejected: true } };
                   });
                   updated.push({
                     id: `${nowTs.toString(36)}-notice`,

@@ -155,13 +155,13 @@ import {
   type RichAction,
 } from '@/lib/chat-rich';
 import { qqUnreads } from '@/lib/unread-store';
-import { getMemSettings, memAfterAiTurn, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
-import { peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { splitVisionDesc } from '@/lib/vision-client';
 import {
   beginChatStream,
@@ -175,6 +175,9 @@ import { Input } from '@/components/ui/input';
 /** 群会话 id（未读/标志/隐藏等以字符串 id 为键的设施共用，与微信群同构） */
 export const qqGroupRowId = (groupId: string) => `group:${groupId}`;
 const sessionKeyOf = (groupId: string) => `qq:group:${groupId}`;
+
+/** 群聊单成员每轮回复条数硬上限（#10/#34）：引擎侧 Math.min(N,5)，信息页展示与设置页加注同口径 */
+const GROUP_REPLY_CAP = 5;
 
 /** 群消息语音数据的本地原文（AI 语音消息/文字转语音运行时携带 localText；
  *  WxGroupMsg.voice 的 lib 层同形声明未含该字段，宽松读取避免到处断言） */
@@ -1136,7 +1139,7 @@ export function QqGroupInfoPage({
       <div className="mx-3 mt-2.5 divide-y divide-black/[0.05] rounded-[12px] bg-white dark:divide-white/[0.06] dark:bg-[#1B1C1F]">
         <InfoRow
           label="回复条数"
-          value={`${replyCount} 条`}
+          value={`${Math.min(replyCount, GROUP_REPLY_CAP)} 条`}
           onClick={() => setReplyCountOpen(true)}
           testId="qq-groupinfo-replycount"
         />
@@ -1681,12 +1684,13 @@ export function QqGroupInfoPage({
         </div>
       )}
 
-      {/* 回复条数页（聊天信息二级页；按群独立，与单聊互不影响） */}
+      {/* 回复条数页（聊天信息二级页；按群独立，与单聊互不影响；#34 groupMode 群语义：高档位按每轮 5 条生效） */}
       {replyCountOpen && (
         <div className="fixed inset-0 z-50">
           <ChatReplyCountPage
             variant="qq"
             value={replyCount}
+            groupMode
             onBack={() => setReplyCountOpen(false)}
             onSelect={(n) => {
               saveReplyCount(sessionKeyOf(gid), n);
@@ -2089,10 +2093,18 @@ export function QqGroupChatPage({
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs.length, stream?.content]);
 
-  /** 落盘一条消息（finalize 与本地发送共用；组件不在也正确写存储） */
+  /** 落盘一条消息（finalize 与本地发送共用；组件不在也正确写存储）。
+   *  #7 投递插入边界（对照单聊 qq.tsx 同款）：机主消息（所有发送路径共用本函数，含回合中排队/分句入列）
+   *  落库即标记边界——上一轮还在投递队列里的回复落库时插到边界消息之前，落库顺序=对话时序，
+   *  旧气泡不再倒挂在用户新消息之后随存储持久化；系统通知行不是用户发言不作边界。
+   *  其余消息（AI 投递/通知行）走 appendWithBoundary：有边界且边界消息还在列表里时插到其前面，
+   *  否则照旧追加；新回合 beginChatStream 清边界后照旧追加。 */
   const appendMsg = useCallback(
     (m: WxGroupMsg) => {
-      const next = [...loadGroupMsgs(gid), m];
+      const isMeMsg = m.role === 'me' && m.kind !== 'notice';
+      const cur = loadGroupMsgs(gid);
+      const next = isMeMsg ? [...cur, m] : appendWithBoundary(sKey, cur, m);
+      if (isMeMsg) markDeliverBoundary(sKey, m.id);
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
       if (activeGroupKey !== sKey && m.kind !== 'notice') {
@@ -2478,7 +2490,7 @@ export function QqGroupChatPage({
         // #10 客户端硬上限：群聊单成员连发条数收敛 min(N,5)——提示词层 buildReplyCountPrompt groupMode
         // 已同口径收敛，这里对传给 chat-stream-store 的分段器 cap 与 maxTokens 同步收敛（原实现把
         // 原始 replyCount（最大 30）直接传下去，分段器 cap/maxTokens 不受限，单成员可连发 30 条刷屏）
-        const replyCount = Math.min(getReplyCount(sKey), 5);
+        const replyCount = Math.min(getReplyCount(sKey), GROUP_REPLY_CAP);
         // 群聊规则（每个角色独立声明：当前是群聊、参与者有谁、只代表自己、禁复读、可互相对话）
         const others = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
@@ -2948,6 +2960,14 @@ export function QqGroupChatPage({
   const runGroupTurn = useCallback(
     async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
+      // #7 投递边界保护：上一轮的连发投递尾巴还没落库完时不开新回合（延迟重试）——新回合
+      // beginChatStream 会清除投递插入边界，尾巴未清就开流会让旧回复落库到用户新消息之后
+      // （倒挂随存储持久化）；等尾巴按边界归位（插到用户消息之前）落库完再起本轮，
+      // 与单聊「流收尾且投递完毕再补跑」同口径
+      if (isAiDelivering(sKey)) {
+        window.setTimeout(() => void runGroupTurn(trigger), 400);
+        return;
+      }
       const g = getGroup(gid);
       if (!g) return; // 群已解散：无会话可提示，静默返回
       if (g.memberIds.length === 0) {
@@ -3070,14 +3090,35 @@ export function QqGroupChatPage({
                 if (!gNow || !gNow.memberIds.includes(target.id) || isGroupMuted(gNow, target.id)) return;
                 const cascadeChar = contactsRef.current.find((c) => c.id === target.id) ?? null;
                 if (!cascadeChar) return;
-                groupSpeaker.set(sKey, target.id);
-                if (mountedRef.current) setSpeakerId(target.id);
-                groupCascadeDepth = 1; // 深度标记：级联回合内不再触发下一跳
-                void runCharTurn(cascadeChar, true, []).finally(() => {
-                  groupCascadeDepth = 0;
-                  groupSpeaker.delete(sKey);
-                  if (mountedRef.current) setSpeakerId(null);
-                });
+                groupCascadeDepth = 1; // 深度标记：级联回合内（含投递尾巴等待）不再触发下一跳
+                // #7/#35 旁路回合双保险：a) 开新流前等连发投递尾巴落库完（延迟重试）——
+                // beginChatStream 会清投递插入边界，尾巴未清就开流会让旧回复倒挂在排队用户消息之后；
+                // 等待中被其他回合占用则放弃（与原守卫同口径），级联深度标记一并复位。
+                // b) 回合收尾检查排队补跑标记（runGroupTurn finally 同款兜底）。
+                const kickCascade = () => {
+                  if (runningRef.current || isChatStreaming(sKey)) {
+                    groupCascadeDepth = 0;
+                    return;
+                  }
+                  if (isAiDelivering(sKey)) {
+                    window.setTimeout(kickCascade, 400);
+                    return;
+                  }
+                  groupSpeaker.set(sKey, target.id);
+                  if (mountedRef.current) setSpeakerId(target.id);
+                  void runCharTurn(cascadeChar, true, []).finally(() => {
+                    groupCascadeDepth = 0;
+                    groupSpeaker.delete(sKey);
+                    if (mountedRef.current) setSpeakerId(null);
+                    // #35 旁路回合排队补跑：级联回合进行中用户发过消息（排队标记+toast 承诺）
+                    // → 同款兜底补跑，不让排队消息石沉大海
+                    if (groupQueuedRef.current) {
+                      groupQueuedRef.current = false;
+                      kickMakeup();
+                    }
+                  });
+                };
+                kickCascade();
               }, 80);
             }
           }
@@ -3086,17 +3127,33 @@ export function QqGroupChatPage({
         runningRef.current = false;
         groupSpeaker.delete(sKey);
         if (mountedRef.current) setSpeakerId(null);
-        // 排队补跑：回合进行中用户又发了消息 → 本回合结束后自动再起一轮（消息已在群消息库，成员都能看到）
+        // 排队补跑：回合进行中用户又发了消息 → 本回合结束后自动再起一轮（消息已在群消息库，成员都能看到）。
+        // #35 走 kickMakeup 统一入口：撞上占用中的回合（级联/催促等旁路回合）时改回排队标记自愈，
+        // 不再静默丢弃（「回完这轮就聊」承诺兑现）；lastMe 由补跑现场重读（等待期间可能又有新消息）
         if (groupQueuedRef.current) {
           groupQueuedRef.current = false;
-          const lastMe = [...loadGroupMsgs(gid)].reverse().find((m) => m.role === 'me');
-          if (lastMe && getGroup(gid)) window.setTimeout(() => void runGroupTurn(lastMe), 500);
+          if (getGroup(gid)) kickMakeup();
         }
       }
     },
     [appendMsg, expireStalePackets, gid, runCharTurn, sKey]
   );
   runGroupTurnRef.current = runGroupTurn;
+
+  /** 排队补跑统一入口（#35）：500ms 后按最后一条机主消息起一轮补跑回合；撞上占用中的回合
+   *  （级联/催促/重新生成等旁路回合，或下一个正常回合）时改回排队标记，由占用回合收尾时的
+   *  排队检查重新触发——自愈不丢承诺（「回完这轮就聊」toast）；lastMe 在补跑现场重读，
+   *  等待期间用户又发的消息一并覆盖。投递尾巴未清时由 runGroupTurn 入口的延迟重试兜住（#7）。 */
+  const kickMakeup = () => {
+    window.setTimeout(() => {
+      if (runningRef.current || isChatStreaming(sKey)) {
+        groupQueuedRef.current = true; // 占用中：改回排队标记，占用回合收尾时重新触发补跑
+        return;
+      }
+      const lastMe = [...loadGroupMsgs(gid)].reverse().find((m) => m.role === 'me');
+      if (lastMe && getGroup(gid)) runGroupTurnRef.current(lastMe);
+    }, 500);
+  };
 
   /** 相机/相册选图（需求2 发图先预览）：只读图压缩进输入框下方预览条暂存，不直接发出、不触发任何回复；
    *  暂存总数上限 9 张（超出 toast「一次最多发 9 张图片」，放得下的照收），单张读取失败沿用原
@@ -3626,12 +3683,28 @@ export function QqGroupChatPage({
       // 80ms 窗口内群可能解散/成员变动/被禁言（AI 管理标记随时生效），触发前再核一次
       const gNow = getGroup(gid);
       if (!gNow || !gNow.memberIds.includes(senderId) || isGroupMuted(gNow, senderId)) return;
-      groupSpeaker.set(sKey, char.id);
-      if (mountedRef.current) setSpeakerId(char.id);
-      void runCharTurn(char, false, []).finally(() => {
-        groupSpeaker.delete(sKey);
-        if (mountedRef.current) setSpeakerId(null);
-      });
+      // #7/#35 旁路回合双保险（与级联 kickCascade 同款）：等连发投递尾巴落库完再开新流
+      //（beginChatStream 清插入边界，尾巴未清就开流会让旧回复倒挂在排队用户消息之后）；
+      // 等待中被其他回合占用则放弃（与原守卫同口径）；回合收尾检查排队补跑标记
+      const kickNudge = () => {
+        if (runningRef.current || isChatStreaming(sKey)) return;
+        if (isAiDelivering(sKey)) {
+          window.setTimeout(kickNudge, 400);
+          return;
+        }
+        groupSpeaker.set(sKey, char.id);
+        if (mountedRef.current) setSpeakerId(char.id);
+        void runCharTurn(char, false, []).finally(() => {
+          groupSpeaker.delete(sKey);
+          if (mountedRef.current) setSpeakerId(null);
+          // #35 旁路回合排队补跑：回合进行中用户发过消息 → 同款兑底补跑
+          if (groupQueuedRef.current) {
+            groupQueuedRef.current = false;
+            kickMakeup();
+          }
+        });
+      };
+      kickNudge();
     }, 80);
   };
 
@@ -3787,19 +3860,27 @@ export function QqGroupChatPage({
       if (mountedRef.current) setSpeakerId(char.id);
       void runCharTurn(char, false, [])
         .then((r) => {
-          // #28 极端竞态兜底：预检通过但 runCharTurn 仍 skip（如流被其他回合抢占）→ 原消息按原文回滚
-          if (r === 'skip') {
+          // #28 极端竞态兜底：预检通过但 runCharTurn 仍 skip（如流被其他回合抢占）→ 原消息按原文回滚。
+          // #6 流失败（'error'）同构回滚：原消息已删、流失败不落任何成员消息也不走占位兜底，
+          // 不回滚会让原消息凭空消失——与 skip 同款按原文回滚落盘，仅提示文案按网络口径区分
+          if (r === 'skip' || r === 'error') {
             const cur = loadGroupMsgs(gid);
             if (!cur.some((x) => x.id === m.id)) {
               saveGroupMsgs(gid, sortMsgsByTime([...cur, m]));
               if (mountedRef.current) setMsgs(loadGroupMsgs(gid));
-              onToast('成员们还在回复，稍等一下');
+              onToast(r === 'skip' ? '成员们还在回复，稍等一下' : '网络开小差了，已恢复原消息');
             }
           }
         })
         .finally(() => {
           groupSpeaker.delete(sKey);
           if (mountedRef.current) setSpeakerId(null);
+          // #35 重新生成也是 runCharTurn 直调旁路回合：进行中用户发过消息（排队标记+toast 承诺）
+          // → 与 runGroupTurn finally 同款兜底补跑，不让排队消息石沉大海
+          if (groupQueuedRef.current) {
+            groupQueuedRef.current = false;
+            kickMakeup();
+          }
         });
     }, 80);
   };
@@ -4033,6 +4114,16 @@ export function QqGroupChatPage({
         // 二.3/二.5：撤回不删原始记录（标记 recalled 渲染为居中灰字「谁撤回了一条消息」）；引用联动改写
         recallMsg(m.id);
         onToast('已撤回');
+        // #13 撤回同步清除记忆素材（对照单聊 #17/qq.tsx 同款 memPurgeMessageSources）：
+        // 群消息会进每个 AI 成员各自的记忆库（mem-frag:<成员 id>），已提取成记忆的撤回内容
+        // 不再留在召回结果里；memberIds 不含机主，逐成员按来源消息 id 清理（异步静默失败不提示）
+        const gRc = getGroup(gid);
+        if (gRc) {
+          for (const cid of gRc.memberIds) {
+            if (!cid || cid === 'me') continue;
+            void memPurgeMessageSources(cid, m.id);
+          }
+        }
         break;
       }
       case 'forward':

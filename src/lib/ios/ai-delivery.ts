@@ -236,6 +236,30 @@ export function clearDeliverBoundary(sessionKey: string): void {
   insertBeforeIds.delete(sessionKey);
 }
 
+/**
+ * 清空会话键以 prefix 开头的全部待投递批次并复位投递状态（换号 purge 用，审计 #3）：
+ * - 运行中批：队列被移除后，step 的下一节拍会发现「队列头 ≠ 当前批」而自行 resolve 退出
+ *  （现有重入校验，无需新增取消标记），未投递的尾巴不再落盘——旧账号会话的回复不会
+ *   在换号后写进对应聊天记录键；
+ * - 排队中的后续批：随队列整体丢弃，各批 resolve 按「投递完成」收尾（不 reject，
+ *   挂在其后的回合结算/记忆提取不阻塞）；
+ * - 投递插入边界（markDeliverBoundary）一并清除。
+ * 只影响前缀匹配的会话（如 'qq:'），其他端（wx: / sms:）的投递队列不受影响。
+ * 返回被清理的会话键数量（0 = 该前缀无待投递项）。
+ */
+export function purgeDeliveryQueueByPrefix(prefix: string): number {
+  const keys: string[] = [];
+  queues.forEach((_queue, key) => {
+    if (key.startsWith(prefix)) keys.push(key);
+  });
+  for (const key of keys) {
+    queues.delete(key);
+    insertBeforeIds.delete(key);
+  }
+  if (keys.length > 0) emitActive();
+  return keys.length;
+}
+
 /** 带边界的落库拼接：有边界且边界消息还在列表里时，把 item 插到边界消息之前；否则照旧追加 */
 export function appendWithBoundary<T extends { id: string }>(sessionKey: string, list: readonly T[], item: T): T[] {
   const boundaryId = insertBeforeIds.get(sessionKey);

@@ -911,14 +911,40 @@ function wxPushBill(kind: '红包' | '转账', amount: number): void {
   saveJSON(LS_BILLS, [{ id: uid(), kind, amount, time: Date.now() }, ...bills].slice(0, 100));
 }
 
+// ---- #22 亲属卡多卡聚合：同一赠卡人（friendId）名下可有多张收到的亲属卡（每张卡消息独立入表）----
+// 可用额度按赠卡人聚合（全部卡「月额度-已用」求和），扣款依序分摊到各卡；
+// 分组键缺失（旧数据无 friendId）时以卡自身 id 为组，退化为单卡行为。
+function wxFcGroupKey(f: WxFamilyCardIn): string {
+  return f.friendId ?? f.id;
+}
+
+function wxFcGroups(list: WxFamilyCardIn[]): Map<string, WxFamilyCardIn[]> {
+  const groups = new Map<string, WxFamilyCardIn[]>();
+  for (const f of list) {
+    const k = wxFcGroupKey(f);
+    const arr = groups.get(k);
+    if (arr) arr.push(f);
+    else groups.set(k, [f]);
+  }
+  return groups;
+}
+
+/** methodId（fcin-<卡 id>，组内任一张）→ 该赠卡人名下全部卡 + 聚合可用额度 */
+function wxFcGroupOf(list: WxFamilyCardIn[], methodId: string): { cards: WxFamilyCardIn[]; available: number } {
+  const anchor = list.find((f) => f.id === methodId);
+  if (!anchor) return { cards: [], available: 0 };
+  const cards = wxFcGroups(list).get(wxFcGroupKey(anchor)) ?? [anchor];
+  return { cards, available: cards.reduce((s, f) => s + Math.max(0, f.monthlyLimit - f.used), 0) };
+}
+
 /** 支付方式可用性预检：零钱 / 银行卡 / 我收到的亲属卡（本月剩余额度）；单聊/群聊共用 */
 export function wxCanPay(methodId: string, amount: number): boolean {
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return wxLoadBalance() >= amount;
   if (methodId.startsWith('fcin-')) {
-    // 审计 #6：读取可用额度前先做跨月惰性重置（跨月后额度恢复再预检）
-    const fc = resetFamilyCardsInMonth().find((f) => f.id === methodId);
-    return Boolean(fc) && Math.max(0, (fc?.monthlyLimit ?? 0) - (fc?.used ?? 0)) >= amount;
+    // 审计 #6：读取可用额度前先做跨月惰性重置（跨月后额度恢复再预检）；#22：按赠卡人聚合名下全部卡
+    const g = wxFcGroupOf(resetFamilyCardsInMonth(), methodId);
+    return g.cards.length > 0 && g.available >= amount;
   }
   const c = loadCards().find((x) => x.id === methodId);
   return Boolean(c) && (c?.balance ?? 0) >= amount;
@@ -929,11 +955,21 @@ export function wxExecutePayment(methodId: string, amount: number, kind: '红包
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount });
   if (methodId.startsWith('fcin-')) {
-    // 审计 #6：扣款前先做跨月惰性重置（重置后额度足够才扣）；写回时保留 lastResetMonth 字段
+    // 审计 #6：扣款前先做跨月惰性重置（重置后额度足够才扣）；写回时保留 lastResetMonth 字段。
+    // #22：额度按赠卡人聚合，扣款依序分摊到名下各卡（先扣第一张剩余，扣完顺延下一张；金额均两位小数，无残差）
     const list = resetFamilyCardsInMonth();
-    const fc = list.find((f) => f.id === methodId);
-    if (!fc || Math.max(0, fc.monthlyLimit - fc.used) < amount) return false;
-    saveFamilyCardsIn(list.map((f) => (f.id === methodId ? { ...f, used: Math.round((f.used + amount) * 100) / 100 } : f)));
+    const g = wxFcGroupOf(list, methodId);
+    if (g.cards.length === 0 || g.available < amount) return false;
+    let remain = Math.round(amount * 100) / 100;
+    const ids = new Set(g.cards.map((f) => f.id));
+    saveFamilyCardsIn(
+      list.map((f) => {
+        if (!ids.has(f.id) || remain <= 0) return f;
+        const take = Math.min(Math.max(0, f.monthlyLimit - f.used), remain);
+        remain = Math.round((remain - take) * 100) / 100;
+        return { ...f, used: Math.round((f.used + take) * 100) / 100 };
+      })
+    );
     return true;
   }
   const list = loadCards();
@@ -951,9 +987,10 @@ export function wxExecutePayment(methodId: string, amount: number, kind: '红包
 export function wxMethodLabel(methodId: string): string {
   if (methodId === 'balance') return `零钱（可用 ${fmtMoney(wxLoadBalance())} 元）`;
   if (methodId.startsWith('fcin-')) {
-    // 审计 #6：展示「本月可用」前先做跨月惰性重置（跨月后不再显示上月剩余）
-    const f = resetFamilyCardsInMonth().find((x) => x.id === methodId);
-    return f ? `${f.fromName}的亲属卡（本月可用 ${fmtMoney(Math.max(0, f.monthlyLimit - f.used))} 元）` : '亲属卡';
+    // 审计 #6：展示「本月可用」前先做跨月惰性重置（跨月后不再显示上月剩余）；#22：聚合名下全部卡总额度
+    const g = wxFcGroupOf(resetFamilyCardsInMonth(), methodId);
+    if (g.cards.length === 0) return '亲属卡';
+    return `${g.cards[0].fromName}的亲属卡${g.cards.length > 1 ? `×${g.cards.length}` : ''}（本月可用 ${fmtMoney(g.available)} 元）`;
   }
   const c = loadCards().find((x) => x.id === methodId);
   return c ? `${c.bank}（尾号${c.tail}）` : '支付方式';
@@ -1358,6 +1395,12 @@ function wxApplyAiActions(
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'fam', pre: `${peer.name}收下了你的`, accent: '亲属卡' } });
       } else {
         next[idx] = { ...m, content: '[亲属卡]（已退回）', fam: { ...fam, rejected: true } };
+        // #23：AI 退回/拒收亲属卡 → 钱包「我送出的」卡同步置 returned 终态（此前无该状态，
+        // 管理页「待对方领取」永挂）。定位对齐上方 claim 分支：同额度精确匹配 → 退而该联系人第一张待领取卡
+        const fcOut = loadFamilyCards();
+        let fcIdx = fcOut.findIndex((f) => f.friendId === peer.id && f.status === 'pending' && f.monthlyLimit === fam.monthlyLimit);
+        if (fcIdx < 0) fcIdx = fcOut.findIndex((f) => f.friendId === peer.id && f.status === 'pending');
+        if (fcIdx >= 0) saveFamilyCards(fcOut.map((f, i) => (i === fcIdx ? { ...f, status: 'returned' as const } : f)));
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'fam', pre: `${peer.name}拒收了你的`, accent: '亲属卡' } });
       }
     } else {
@@ -2899,10 +2942,11 @@ export function WxPayMethodSheet({
       sub: `尾号${c.tail} · 可用 ${fmtMoney(c.balance)} 元`,
       icon: <BankDot bank={c.bank} size={36} />,
     })),
-    ...familyIn.map((f) => ({
-      id: f.id,
-      name: `${f.fromName}的亲属卡`,
-      sub: `${f.relation} · 本月可用 ${fmtMoney(Math.max(0, f.monthlyLimit - f.used))} 元`,
+    // #22：同一赠卡人名下多张收到的亲属卡聚合为一行（行 id 取组内第一张卡，额度求和）；旧数据无 friendId 各自成行
+    ...[...wxFcGroups(familyIn).values()].map((g) => ({
+      id: g[0].id,
+      name: `${g[0].fromName}的亲属卡${g.length > 1 ? `×${g.length}` : ''}`,
+      sub: `${g[0].relation} · 本月可用 ${fmtMoney(g.reduce((s, f) => s + Math.max(0, f.monthlyLimit - f.used), 0))} 元`,
       icon: (
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#F7B500] to-[#F79C00] text-white" aria-hidden="true">
           <Heart className="h-[17px] w-[17px]" strokeWidth={2} />
@@ -4264,6 +4308,13 @@ function ChatPage({
           const ids = new Set(prev.map((m) => m.id));
           return [...prev, ...saved.filter((m) => !ids.has(m.id))];
         });
+        // #21：wxQueueDelete 与本回调之间的 260ms 窗口内可能出现新流/新投递（窗口内新事件会直接
+        // runAiTurn 抢流，本回合 beginChatStream 必失败）——到点先复查忙闲，已忙则把系统事件重新
+        // 入队（消息本体已落盘不丢，事件随下一轮补跑回合注入），不再静默丢弃；与排队补跑重试口径一致
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          wxQueueAdd(peer.id, sysEvent);
+          return;
+        }
         runAiTurnRef.current?.(null, [], sysEvent, saved);
       }, 260);
     };
@@ -5221,6 +5272,9 @@ function ChatPage({
   const refundPeerCard = useCallback(
     (m: WxMsg) => {
       const kickRefund = (ev: string) => {
+        // #25：被对方拉黑（byChar）后不再注入系统事件/触发回应——退回动作本身照常（资金语义不变），
+        // 只是对方不想收到任何消息；byUser 已由 runAiTurn 入口拦（含 requestOnly 放行口径），此处不重复拦
+        if (loadBlock('wx', peer.id).byChar) return;
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
           wxQueueAdd(peer.id, ev);
           return;
@@ -6025,6 +6079,9 @@ function ChatPage({
    *  正是审计抱怨的「无即时反应」，故直接走回合注入/补跑队列 */
   const notifyPeerClaimed = (ev: string) => {
     if (peer.id === me.id) return;
+    // #25：被对方拉黑（byChar）后不再注入感知事件/触发回应（领取/收款本身照常，仅跳过 AI 回应；
+    // runAiTurn 入口只拦 byUser，byChar 的感知事件此前会穿透触发回应）
+    if (loadBlock('wx', peer.id).byChar) return;
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       wxQueueAdd(peer.id, ev); // 对方正在回复：事件随补跑回合保留，流收尾且投递完毕后自动触发回应
       return;
@@ -6063,7 +6120,13 @@ function ChatPage({
    *  + 追加我的「已收款」接收卡片（receiptOf=peer，详情页显示「你已收款」）——与 AI 收我转账的凭据卡同款、方向相反 */
   const acceptTransfer = (id: string) => {
     const m = msgs.find((x) => x.id === id);
-    if (!m?.tr || m.tr.received) return;
+    // #24：终态复核（对照 openRedPacket 的 opened/status/role 三查）——已收款/已退回/已拒收/已撤回/
+    // 非对方发的卡一律拦截。24h 过期清算会把未收款转账置 returned，但已开着的收款浮层不会自动感知，
+    // 旧代码只查 received，浮层里再点「收款」会凭空多得一笔资金
+    if (!m?.tr || m.tr.received || m.tr.status || m.recalled || m.role !== 'peer') {
+      if (m?.tr && !m.tr.received && m.tr.status === 'returned') onToast('该转账已退回');
+      return;
+    }
     wxPatchBalance(m.tr.amount, { kind: '转账', amount: m.tr.amount });
     const receipt: WxMsg = {
       id: uid(),
@@ -6156,14 +6219,17 @@ function ChatPage({
     setDetailId(id);
   };
 
-  /** 领取好友发来的亲属卡：claimed=true + 存入「我收到的亲属卡」（发红包/转账可用它支付） */
+  /** 领取好友发来的亲属卡：claimed=true + 存入「我收到的亲属卡」（发红包/转账可用它支付）。
+   *  #22：入表按「同一条卡消息」幂等（卡消息 id 唯一），同一联系人多张卡各自独立成卡、
+   *  同名不同人也不再串卡——旧实现按 fromName 查重，同一联系人第二张卡会被静默吞掉；
+   *  msgId 随卡记录，钱包解除时可精确反查对应聊天卡片。可用额度按赠卡人聚合，见 wxFcGroupOf */
   const claimFamily = (id: string) => {
     const m = msgs.find((x) => x.id === id);
     if (!m?.fam || m.fam.claimed) return;
     const now = Date.now();
     setMsgs((prev) => prev.map((x) => (x.id === id && x.fam ? { ...x, fam: { ...x.fam, claimed: true, claimedAt: now } } : x)));
     const list = loadFamilyCardsIn();
-    if (!list.some((f) => f.fromName === peer.name)) {
+    if (!list.some((f) => f.msgId === m.id)) {
       saveFamilyCardsIn([
         ...list,
         {
@@ -6174,6 +6240,7 @@ function ChatPage({
           relation: m.fam.relation,
           monthlyLimit: m.fam.monthlyLimit,
           used: 0,
+          msgId: m.id,
           createdAt: now,
         },
       ]);
@@ -7219,8 +7286,8 @@ function ChatPage({
         />
       )}
 
-      {/* 收款页（对方发来的未收款转账） */}
-      {receiveMsg?.tr && (
+      {/* 收款页（对方发来的未收款转账）；#24：24h 过期清算把卡置 returned 后浮层自动关闭（清算落盘会合并进 msgs） */}
+      {receiveMsg?.tr && !receiveMsg.tr.status && (
         <WxTrReceivePage
           peerName={peer.name}
           amount={receiveMsg.tr.amount}

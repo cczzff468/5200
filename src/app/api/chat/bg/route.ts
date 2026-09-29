@@ -16,9 +16,34 @@ import webpush from 'web-push';
  * （逐条落盘 + 灵动岛弹窗 + 未读角标）；会话列表页 GET ?peekAll=1 拉各会话条数点亮未读。
  *
  * pending 队列与订阅都存内存/本地文件（.data/），服务重启清空 —— 接力是尽力而为的增强能力。
+ *
+ * 鉴权（#16，可选共享 token，与 api/push 同款口径）：配置了环境变量 PUSH_SHARED_TOKEN 时，
+ * GET/POST 均校验请求头 x-shared-token 必须等于该值，否则 401（防公网部署上被第三方任意
+ * 读写接力队列：GET ?sessionKey 读消息体、POST deliver 注入、cancel 清态、peekAll 枚举会话）；
+ * 未配置（本地沙箱默认）行为完全不变。前端链路（bg-turn.ts / chat-stream-store.ts）为同源
+ * fetch / sendBeacon、不带 token——配置 token 的公网部署上 sendBeacon（无法设自定义头）与
+ * 轮询链路会被 401 拒绝，需部署方同步把 token 暴露给前端（与 push 订阅链路 push-client.ts
+ * 的既有妥协同一口径）。
  */
 
 export const runtime = 'nodejs';
+
+/** 可选共享 token（#16；环境变量未配置 = 不启用鉴权，历史行为不变；与 api/push 的 PUSH_SHARED_TOKEN 同一变量） */
+const TOKEN = process.env.PUSH_SHARED_TOKEN;
+
+/** 共享 token 校验：未配置恒通过；已配置时请求头 x-shared-token 必须精确匹配（同 api/push tokenOk 写法） */
+function tokenOk(req: Request): boolean {
+  if (!TOKEN) return true;
+  try {
+    return req.headers.get('x-shared-token') === TOKEN;
+  } catch {
+    return false;
+  }
+}
+
+function unauthorized(): NextResponse {
+  return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+}
 
 interface PendingItem {
   id: string;
@@ -46,7 +71,7 @@ const MAX_CANCELLED = 50; // cancelled Map 上限：超过淘汰最旧条目（�
 const MAX_TEXTS = 20;
 const TEXT_MAX = 4000;
 
-/* ---------------- generate 限流（#13：防随机 sessionKey 绕过 generating 去重烧内置模型） ---------------- */
+/* ---------------- generate 限流（#13/#16：防随机/轮换 sessionKey 绕过 generating 去重烧内置模型） ---------------- */
 
 /** 每 sessionKey 每分钟最多发起的真实接力生成次数 */
 const GENERATE_RATE_LIMIT = 5;
@@ -56,6 +81,22 @@ const GENERATE_WINDOW_MS = 60_000;
 const generateHits = new Map<string, number[]>();
 /** 限流 Map 上限（只增不减的会话键淘汰最旧，与 cancelled 同款策略） */
 const MAX_GENERATE_TRACKED = 500;
+
+/** 全局每分钟最多真实接力生成次数（#16：换 sessionKey 绕过 per-session 限流的总闸） */
+const GLOBAL_GENERATE_RATE_LIMIT = 30;
+/** 全局滑动窗口内最近请求时刻（模块级数组，内存态，服务重启清空；单线程事件循环内读写） */
+const globalGenerateHits: number[] = [];
+
+/** 全局滑动窗口限流：语义与 generateRateLimited 一致——未超限记一笔并返回 false；超限返回 true（本次不记，不刷新窗口） */
+function globalGenerateRateLimited(): boolean {
+  const now = Date.now();
+  while (globalGenerateHits.length > 0 && now - globalGenerateHits[0] >= GENERATE_WINDOW_MS) {
+    globalGenerateHits.shift();
+  }
+  if (globalGenerateHits.length >= GLOBAL_GENERATE_RATE_LIMIT) return true;
+  globalGenerateHits.push(now);
+  return false;
+}
 
 /** 滑动窗口限流：未超限记一笔并返回 false；超限返回 true（本次不记，不刷新窗口） */
 function generateRateLimited(sessionKey: string): boolean {
@@ -232,6 +273,7 @@ async function generateAndEnqueue(sessionKey: string, payload: BgPayload, title:
 /* ---------------- 路由 ---------------- */
 
 export async function POST(req: Request): Promise<NextResponse> {
+  if (!tokenOk(req)) return unauthorized();
   const body = (await req.json().catch(() => null)) as
     | {
         mode?: unknown;
@@ -254,6 +296,12 @@ export async function POST(req: Request): Promise<NextResponse> {
     // 内存限流（#13）：每 sessionKey 每分钟 ≤5 次真实接力生成，超限 429
     // （放在 generating 去重之后：去重命中的空 beacon 不占限流额度）
     if (generateRateLimited(sessionKey)) {
+      return NextResponse.json({ error: 'rate limited' }, { status: 429 });
+    }
+    // 全局限流（#16）：全部会话合计每分钟 ≤30 次真实接力生成，防轮换 sessionKey 绕过
+    // per-session 限流烧内置模型；同样放在去重之后（空 beacon 不占全局额度），且 per-session
+    // 限流命中时在这之前已 429 返回，不消耗全局额度
+    if (globalGenerateRateLimited()) {
       return NextResponse.json({ error: 'rate limited' }, { status: 429 });
     }
     const messages = Array.isArray(body.payload?.messages) ? body.payload?.messages : null;
@@ -300,6 +348,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
+  if (!tokenOk(req)) return unauthorized();
   const sp = new URL(req.url).searchParams;
 
   // 会话列表角标查询：各会话待拉取消息条数（不清除；客户端对已提示过的条目去重）

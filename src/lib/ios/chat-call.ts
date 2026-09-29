@@ -68,6 +68,13 @@ import { reportCallSeconds, useGlobalCall } from './global-call';
 import { loadBlock } from './block-state';
 import { getReplyCount } from '../reply-count';
 
+/** fix3-D #42：拉黑静默轮连续上限——拉黑期（byChar/byUser）免提开录循环 + 主动开口计时器
+ *  每 3~7s 空转一次（AUTO_WAIT_MS=7000 静默超时/PROACTIVE 3~5s + 250ms 续听），不请求 LLM
+ *  但通话永不结束，只能等用户手动挂断。静默轮连续达该阈值自动收尾挂断（落正常结束记录、
+ *  通话总结照常，followup 由 #41 守卫跳过）。12 次 ≈ 1~1.5 分钟死寂；正常轮清零计数，
+ *  正常通话不受影响 */
+const BLOCKED_SILENT_TURN_LIMIT = 12;
+
 // ---------------- 类型 ----------------
 
 export type ChatCallPhase = 'dialing' | 'incoming' | 'active' | 'ended';
@@ -347,6 +354,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const proactivePendingRef = useRef(false);
   /** 连续主动开口计数（用户真正说话后归零；连续多次后 AI 会告别并挂断） */
   const proactiveCountRef = useRef(0);
+  /** fix3-D #42 连续静默轮计数（拉黑守卫命中的轮次累计，正常轮清零；达 BLOCKED_SILENT_TURN_LIMIT 自动挂断收尾） */
+  const silentTurnCountRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -470,6 +479,16 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           : (direction === 'in' && (endReason === 'reject' || endReason === 'missed-in')) ||
             (direction === 'out' && endReason === 'cancel'));
       if (!eligible) {
+        summarizeCall();
+        return;
+      }
+      // fix3-D #41 拉黑守卫（引擎层入口，宿主展示拦截 wechat.tsx:4345 / qq.tsx:3028 保持不动）：
+      // wx/qq 通话挂断续聊在拉黑存续期间不再白跑 /api/phone/followup LLM 请求——直接跳到通话总结
+      // （沉淀真实发生过的通话内容，与 #33① 记忆总结口径一致）。byChar||byUser 双向同拦，与
+      // #33② runTurn 静默轮的双向语义对齐；从 optsRef 现场读取防挂断瞬间状态变更。
+      // 电话端同场景由 phone.tsx hangup 内 byUser 前置拦截（#33，仅 byUser 的既有口径不动）
+      const blkAtEnd = peer && peer.id ? loadBlock(optsRef.current.app, peer.id) : null;
+      if (blkAtEnd?.byChar || blkAtEnd?.byUser) {
         summarizeCall();
         return;
       }
@@ -759,11 +778,19 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         }
         setStatus('listening');
         busyRef.current = false;
+        // fix3-D #42 连续静默轮计数：拉黑期免提开录循环空转永不结束，达阈值自动收尾——
+        // finish 落正常结束记录（ai-hangup，卡片同为 ended），followup 由 #41 守卫跳过、总结照常
+        silentTurnCountRef.current += 1;
+        if (silentTurnCountRef.current >= BLOCKED_SILENT_TURN_LIMIT && !ended()) {
+          finish('ai-hangup');
+          return;
+        }
         // 延迟 250ms 续听：accept/connect 路径 setPhase('active') 尚未经 effect 同步进 phaseRef，
         // 立即调度会被 scheduleAutoListen 的 phase 检查吞掉（同 setTextMode 恢复听延迟口径）
         autoListenRef.current(250);
         return;
       }
+      silentTurnCountRef.current = 0; // fix3-D #42：正常轮（守卫放行）清零连续静默计数
       setStatus('thinking');
       const historyBefore = userText
         ? [...historyRef.current, { role: 'user' as const, content: userText }]
@@ -868,6 +895,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         setTextBusy(false);
         return;
       }
+      silentTurnCountRef.current = 0; // fix3-D #42：正常文字轮（AI 应答）清零连续静默计数
       const { reply: rawReply, error: turnError } = await requestTurn(historyBefore, false);
       if (endedRef.current) return;
       if (!rawReply) {

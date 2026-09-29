@@ -473,6 +473,37 @@ export function clearChatStream(sessionKey: string): void {
   emit();
 }
 
+/**
+ * 中止全部会话键以 prefix 开头的流并清掉对应流状态（换号 purge 用，审计 #3）：
+ * - 进行中的流：预先登记「已收尾」（finalized）并从状态表移除——HTTP 请求本身无法取消，
+ *   但收尾时的 finalize 回调不再执行（旧账号会话的回复不会落盘写进对应聊天记录键），
+ *   服务端关页接力生成（bg relay）一并上报 cancel 作废（防换号后迟到回复）；
+ * - 已结束未清理的流状态（重进页面同步用）：换号后不再需要，一并移除。
+ * 只影响前缀匹配的会话（如 'qq:'），其他端（wx: / sms:）的流不受影响。
+ * 返回被中止的进行中流数量（0 = 该前缀无在途流）。
+ */
+export function abortStreamsByPrefix(prefix: string): number {
+  let aborted = 0;
+  const keys: string[] = [];
+  streams.forEach((rt, key) => {
+    if (!key.startsWith(prefix)) return;
+    keys.push(key);
+    if (rt.state.status === 'streaming') {
+      rt.finalized = true; // runStream 收尾时跳过 finalize（防旧会话回复落盘）
+      cancelBgRelay(key); // 服务端接力生成一并作废
+      aborted += 1;
+    }
+  });
+  if (keys.length > 0) {
+    for (const key of keys) {
+      streams.delete(key);
+      activePayloads.delete(key);
+    }
+    emit();
+  }
+  return aborted;
+}
+
 /** 订阅任意流状态变化（useChatStream 用） */
 export function subscribeChatStreams(fn: () => void): () => void {
   subs.add(fn);

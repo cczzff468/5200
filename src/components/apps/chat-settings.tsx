@@ -573,19 +573,25 @@ export function ChatSettingsPage({
   );
 }
 
-/** 回复条数选择页（聊天设置二级页）：AI 像真人一样按选定条数连发多条消息 */
+/** 回复条数选择页（聊天设置二级页）：AI 像真人一样按选定条数连发多条消息。
+ *  groupMode = 群聊语义（#34）：群引擎对单成员每轮硬上限 5 条（群页 Math.min(N,5)，
+ *  buildReplyCountPrompt groupMode 同口径），高档位就地加注 + 页脚说明，展示不再与实际不符；
+ *  单聊不传该参，行为与旧版完全一致（向后兼容）。 */
 
 export function ChatReplyCountPage({
   variant,
   value,
   onBack,
   onSelect,
+  groupMode = false,
 }: {
   variant: ChatSettingsVariant;
   /** 当前会话的回复条数 */
   value: number;
   onBack: () => void;
   onSelect: (n: number) => void;
+  /** 群聊语义：高档位按每轮 5 条生效（群聊中每位成员每轮最多 5 条） */
+  groupMode?: boolean;
 }) {
   const wx = variant === 'wx';
 
@@ -632,7 +638,13 @@ export function ChatReplyCountPage({
                 onClick={() => onSelect(n)}
                 className={rowCls}
               >
-                <span>{n} 条</span>
+                <span>
+                  {n} 条
+                  {/* #34 群聊语义：引擎单成员每轮上限 5 条（群页 runCharTurn 的 Math.min(N,5)），高档位就地加注 */}
+                  {groupMode && n > 5 && (
+                    <span className="ml-1 text-[12px] text-black/35 dark:text-white/35">群聊按 5 条生效</span>
+                  )}
+                </span>
                 {value === n && (
                   <span className="grid place-items-center" style={{ color: accent }} aria-label="已选中">
                     <Check className="h-5 w-5" strokeWidth={2.4} />
@@ -643,7 +655,9 @@ export function ChatReplyCountPage({
           ))}
         </div>
         <p className="px-1 pt-3 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-          对方将按选定条数像真人一样连续发送多条消息，每条独立一个气泡；换一个聊天对象需要单独设置。
+          {groupMode
+            ? '群聊中每位成员每轮最多发 5 条（给其他成员留出发言空间，避免一个人刷屏）：选择更高档位时也按每轮 5 条生效；换一个群需要单独设置。'
+            : '对方将按选定条数像真人一样连续发送多条消息，每条独立一个气泡；换一个聊天对象需要单独设置。'}
         </p>
       </div>
     </div>

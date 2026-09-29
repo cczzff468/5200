@@ -138,14 +138,14 @@ import {
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
-import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
 import { hasVoiceCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall, useGlobalCall } from '@/lib/ios/global-call';
-import { useIncomingCall } from '@/lib/ios/incoming-call';
+import { triggerIncomingCall, useIncomingCall, type IncomingCallSnapshot } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -155,6 +155,7 @@ import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
 import {
+  abortStreamsByPrefix,
   beginChatStream,
   clearChatStream,
   isChatStreaming,
@@ -556,24 +557,32 @@ function applyAiActions(
     const time = timeBase + notices.length + extras.length;
     if (m.kind === 'redpacket') {
       const p = m.packet;
+      const claims = p.claims ?? [];
+      const count = p.count ?? 1;
       if (verb === 'claim') {
         // AI 领取：单人群按现有自动领取规则（普通领全额；拼手气随机拆一份），写入领取记录 + 通知行
-        const claims = p.claims ?? [];
-        const count = p.count ?? 1;
         if (claims.length < count) {
           const remaining = round2(p.amount - claims.reduce((s, c) => s + c.amount, 0));
-          const amt = p.mode === 'lucky' && count > 1 ? Math.max(0.01, round2(Math.random() * remaining)) : remaining;
-          next[idx] = { ...m, content: `[QQ红包]（${peer.name}已领取）`, packet: { ...p, claims: [...claims, { name: peer.name, avatar: peer.avatar, amount: amt, ts: Date.now() }] } };
-          notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } });
+          // #27 剩余额度已拿空（<0.01）时跳过该份额不记账：旧实现 Math.max(0.01,…) 会在拿空后
+          // 仍虚记 0.01 份额（连领累积虚增）；随机拆分同时用 remaining 封顶防四舍五入越界。
+          // 拿空后不再追加 claims：卡保持非终态，后续领取同跳过，24h 后走过期清算（总额-已领=0）
+          if (remaining >= 0.01) {
+            const amt = p.mode === 'lucky' && count > 1 ? Math.min(remaining, Math.max(0.01, round2(Math.random() * remaining))) : remaining;
+            next[idx] = { ...m, content: `[QQ红包]（${peer.name}已领取）`, packet: { ...p, claims: [...claims, { name: peer.name, avatar: peer.avatar, amount: amt, ts: Date.now() }] } };
+            notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } });
+          }
         }
       } else {
-        next[idx] = { ...m, content: `[QQ红包]（${verb === 'return' ? '已退回' : '已拒收'}）`, packet: { ...p, status: verb === 'return' ? 'returned' : 'rejected' } };
+        // #32 拼手气（多份）部分领取后退回/拒收：按「总额-已领」退剩余并清空 claims（对齐过期清算
+        // expireStaleSingleCards 的「总额-已领」口径），详情页不再出现「已领 X 元 + 已退回全额」矛盾展示；
+        // 单份红包不存在部分领取，保持全额退（行为不变）
+        const refund = count > 1 ? round2(p.amount - claims.reduce((s, c) => s + c.amount, 0)) : p.amount;
+        next[idx] = { ...m, content: `[QQ红包]（${verb === 'return' ? '已退回' : '已拒收'}）`, packet: { ...p, status: verb === 'return' ? 'returned' : 'rejected', ...(count > 1 ? { claims: [] } : {}) } };
+        if (refund > 0) gainToWallet(refund, '红包退回');
         if (verb === 'return') {
-          gainToWallet(p.amount, '红包退回');
           notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}退回了你的`, accent: '红包' } });
         } else {
           // #3 AI 拒收我发的红包：拒收即原路退回（发卡时已扣款，不退则钱凭空消失）
-          gainToWallet(p.amount, '红包退回');
           notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}拒收了你的红包，已`, accent: '退回' } });
         }
       }
@@ -2551,10 +2560,13 @@ function ChatPage({
   );
 
   /** 领取亲属卡（对方/AI 赠送的卡）：标记已领取 + 时间；纯本地模拟，无资金流转。
-   *  #16 领取后 AI 即时人设化回应（系统事件随补跑排队，同退款入口 kickAiEvent；自聊无 AI 不触发） */
+   *  #16 领取后 AI 即时人设化回应（系统事件随补跑排队，同退款入口 kickAiEvent；自聊无 AI 不触发）
+   *  #29 领取后关闭详情浮层：领取判重在持久层（loadMsgs）存在「setMsgs 已更新、落盘未完成」窗口，
+   *  浮层停留时连点会二次触发 kickAiEvent（双份 AI 回应）——关浮层移除按钮消除连点窗口（与退还路径同款） */
   const claimFam = useCallback(
     (msgId: string) => {
       setMsgs((prev) => prev.map((m) => (m.id === msgId && m.fam && !m.fam.claimed ? { ...m, fam: { ...m.fam, claimed: true, claimedAt: Date.now() } } : m)));
+      setLayer(null);
       const m = loadMsgs(peer.id).find((x) => x.id === msgId);
       if (peer.id !== me.id && m?.fam && !m.fam.claimed) {
         kickAiEvent(`（系统事件：你送给对方的亲属卡被对方收下了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
@@ -3045,8 +3057,9 @@ function ChatPage({
 
   /** 发起全局语音通话（加号面板「语音通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
    *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断。
-   *  opts.hiddenView（#35，与微信 openVoiceCall 同款）：AI 来电用——响铃期间不显示全屏通话页
-   *  （view='hidden'），只留全局来电弹窗，点弹窗非按钮区域才展开全屏来电页；弹窗接听则收成悬浮小窗 */
+   *  opts.hiddenView（#35 引入，与微信 openVoiceCall 同款能力）：响铃期间不显示全屏通话页（view='hidden'），
+   *  只留全局来电弹窗——#2 起 AI 来电不再传该参数（QQ 曾因此零 UI 幽灵响铃），改走可见来电；
+   *  参数保留兼容（能力与微信对齐，供后续路径按需启用） */
   const openVoiceCall = useCallback(
     (direction: 'out' | 'in', opts?: { hiddenView?: boolean }) => {
       // B-1 通话中防御：已有全局通话（通话中/拨号中）时不发起新通话——
@@ -3133,32 +3146,53 @@ function ChatPage({
 
   /**
    * AI 来电触发（#34 从 finalize 抽出共用：runAiTurn 收尾与 bg 接力投递同款）：
-   * [语音通话] 标记出现过时按 5 分钟冷却弹出来电浮层。requestOnly=true（仅申请卡放行模式）不触发——
+   * [语音通话] 标记出现过时按 5 分钟冷却弹出来电。requestOnly=true（仅申请卡放行模式）不触发——
    * 正文已被拦截，来电若照常弹出会绕过拉黑语义；现场读拉黑状态防回合内变更。
    * #8 前置防御：电话 App 通话全屏层显示中（callActive）不叠加 QQ AI 来电。
-   * #35 来电以 hiddenView 启动（响铃只弹全局来电弹窗，不直弹全屏通话页，与微信同口径）。
+   * #2 来电改走可见路径：不传 hiddenView（响铃零 UI 已废弃），直接展开 QQ 全屏来电页，
+   * 并列注册全局来电横幅（锁屏等全屏页不在前台时兜底），与微信来电同构。
+   * #11 函数末尾（finally）必清 wantCallSeenRef：标记只对本次投递批次有效，消费完即复位。
    */
   const maybeTriggerAiCall = useCallback(
     (requestOnly: boolean) => {
-      if (!wantCallSeenRef.current || requestOnly || loadBlock('qq', peer.id).byUser) return;
+      // #11 标记消费完即清（所有路径，含提前 return / 冷却拦截）：buildReplyMsgs 置位的
+      // [语音通话] 标记只对「本次投递批次」有效——旧实现残留 true 会让后续不带标记的
+      // bg 回复也凭空触发来电。判定/调度完成即复位；带标记的正常触发先完成调度再清，不受影响
       try {
-        const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
-        if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
-          window.localStorage.setItem(`qq-vc-last:${peer.id}`, String(Date.now()));
-          window.setTimeout(() => {
-            // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
-            // 双触发会产生叠层僵尸来电）——电话通话中/来电弹窗响铃中/已有全局通话进行中就整跳取消（#29/#8）
-            if (useUI.getState().callActive) return;
-            if (useIncomingCall.getState().call) return;
-            if (useGlobalCall.getState().session) return;
-            openVoiceCall('in', { hiddenView: true });
-          }, 1200);
+        if (wantCallSeenRef.current && !requestOnly && !loadBlock('qq', peer.id).byUser) {
+          const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
+          if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
+            window.localStorage.setItem(`qq-vc-last:${peer.id}`, String(Date.now()));
+            window.setTimeout(() => {
+              // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
+              // 双触发会产生叠层僵尸来电）——电话通话中/来电弹窗响铃中/已有全局通话进行中就整跳取消（#29/#8）
+              if (useUI.getState().callActive) return;
+              if (useIncomingCall.getState().call) return;
+              if (useGlobalCall.getState().session) return;
+              // #2 QQ AI 来电改走可见来电：不再传 hiddenView（旧实现响铃期间 view='hidden' 零 UI，
+              // 25s 幽灵铃声必未接），来电直接展开 QQ 全屏来电页（响铃/接听/拒绝/超时未接由通话引擎自理）。
+              // 全局来电横幅（IncomingCallLayer 的 'qq' 来源）并列注册：全屏来电页不在前台时
+              //（如锁屏）由横幅兜底显示响铃 UI；微信路径同构参照 wechat.tsx triggerAiVoiceCall
+              triggerIncomingCall({
+                // incoming-call.ts 的快照类型联合未列 'qq'（该文件不在本任务允许修改清单内）：
+                // 运行时写入 'qq'，IncomingCallLayer 按字符串宽化识别并渲染 QQ 来电横幅
+                source: 'qq' as unknown as IncomingCallSnapshot['source'],
+                name: peer.name,
+                avatar: peer.avatar ?? null,
+                contact: peer,
+                bannerStage: 'big',
+              });
+              openVoiceCall('in');
+            }, 1200);
+          }
         }
       } catch {
         // localStorage 异常忽略
+      } finally {
+        wantCallSeenRef.current = false;
       }
     },
-    [peer.id, openVoiceCall],
+    [peer, openVoiceCall],
   );
 
   /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（ai-delivery 调度器模块层调用，与页面是否存活无关）。
@@ -6912,9 +6946,10 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
               type="button"
               data-testid="qq-tr-detail-accept"
               onClick={() => {
-                // 收款：标记 received + 入钱包余额（写账单）；卡片与详情同步更新
+                // 收款全部由父级 onAccept 完成（标记 received + 入钱包余额 + 追加接收卡片，与收款页主路径同一处理器）。
+                // #28 这里不得再本地 gainToWallet：旧实现按钮内重复入账一次（潜伏双计）；当前详情页兑底入口
+                // 只在收款后可达、本按钮不可达，仍按父级路径收敛并注释防未来接线回归
                 onAccept(msg.id);
-                gainToWallet(p.amount, '转账收入');
                 onToast(`已收款 ${fmtMoney(p.amount)} 元`);
               }}
               className="mt-4 h-10 w-[140px] rounded-full text-[16px] font-medium text-white active:brightness-95"
@@ -8685,6 +8720,7 @@ function MessagesPage({
   const markRead = (id: string) => qqUnreads.clear(id);
   const removeSession = (id: string) => {
     saveMsgs(id, []); // 清空聊天记录；有新消息时该会话自动重新出现
+    qqQueueDelete(id); // #30 排队补跑一并清除：旧实现留着，流空闲后会对已删除会话凭空补跑一轮 AI 回复
     const nextHidden = hidden.includes(id) ? hidden : [...hidden, id];
     saveStrList(LS_CHAT_HIDDEN, nextHidden);
     setHidden(nextHidden);
@@ -13306,7 +13342,7 @@ function MainScreen({
         <QqGroupChatPage
           key={groupPeer.id}
           group={groupPeer}
-          me={{ id: me.id, name: me.name, avatar: me.avatar }}
+          me={{ id: me.id, name: me.name, avatar: me.avatar, realName: me.realName, nickname: me.nickname }}
           contacts={contacts}
           ownerLabelOf={ownerNameOf}
           onBack={() => openTabs('消息')}
@@ -13463,6 +13499,50 @@ function MainScreen({
 const QQ_LAST_LOGIN_ID_KEY = 'qq-last-login-id';
 
 /**
+ * #31 会话级设置键（localStorage 单键 JSON map，键 = sessionKey）：按 'qq:' 前缀剔除本 App 条目。
+ * 这些键是多端混存的整键 JSON（wx:/qq:/sms: 同存一 map），不能整键删除——只剔除 qq: 条目
+ *（含 qq:group: 群会话条目，与群消息同批清理），保留微信/信息等其他端的设置。
+ * 键名与各设置模块的真实存储键逐一核对：
+ * chat-reply-counts（reply-count.ts）/ chat-sentence-send、chat-sentence-pending（sentence-send.ts）/
+ * chat-sticker-on（sticker-toggle.ts）/ chat-time-aware（time-aware.ts）/ chat-translate-cfg（chat-translate.ts）/
+ * ai-voice-freq、ai-voice-counters（ai-voice.ts，单聊键 = 会话键、群聊键 = 会话键#成员 id）。
+ * 注意不碰聊天消息/收藏等已单独列的键（qq-chat-msgs:、qq-favorites 等）；
+ * chat-translate-cache 是 IndexedDB kv 且键为「语言|文本」哈希（不含会话键），不在本清单。
+ */
+const QQ_SESSION_SETTING_MAP_KEYS = [
+  'chat-reply-counts',
+  'chat-sentence-send',
+  'chat-sentence-pending',
+  'chat-sticker-on',
+  'chat-time-aware',
+  'chat-translate-cfg',
+  'ai-voice-freq',
+  'ai-voice-counters',
+] as const;
+
+function pruneQqSessionSettingMaps(): void {
+  for (const storeKey of QQ_SESSION_SETTING_MAP_KEYS) {
+    try {
+      const raw = window.localStorage.getItem(storeKey);
+      if (!raw) continue;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const map = parsed as Record<string, unknown>;
+      let changed = false;
+      for (const k of Object.keys(map)) {
+        if (k.startsWith('qq:')) {
+          delete map[k];
+          changed = true;
+        }
+      }
+      if (changed) window.localStorage.setItem(storeKey, JSON.stringify(map));
+    } catch {
+      // 单键解析失败不影响其他键
+    }
+  }
+}
+
+/**
  * 清理全部 QQ 会话态数据（#11：数据键无账号命名空间，换号即串号——上一个账号的聊天记录/
  * 空间动态/钱包余额/未读角标会原样出现在新账号里）。
  * 覆盖 IndexedDB kv 与 localStorage 双层 + 内存单例总线（未读表/会话 flags/排队补跑表）：
@@ -13471,16 +13551,32 @@ const QQ_LAST_LOGIN_ID_KEY = 'qq-last-login-id';
  * 跨平台键（moments-queue / moments-auto-cfg 等 wx+qq 混存）不动，避免误伤微信侧数据。
  */
 function purgeQqSessionData(): void {
-  // IndexedDB kv：按前缀清（聊天消息 / 转发 AI 事件 / 密友值 / 好友点赞数——均含会话 id 后缀）
-  for (const prefix of ['qq-chat-msgs:', 'qq-ai-events:', 'qq-bond:', 'qq-friend-likes:']) {
+  // #3 换号时在途流式/投递尾巴一并作废：旧账号会话（qq:<id> 单聊与 qq:group:<id> 群聊同前缀）
+  // 的活跃流不再 finalize 落盘、待投递批次清空——否则换号后旧账号回复仍会写进刚清空的
+  // qq-chat-msgs:* / qq-group-msgs:*（新账号看到旧账号的对话尾巴）。只影响 qq: 前缀，wx:/sms: 不受影响
+  try {
+    abortStreamsByPrefix('qq:');
+  } catch {
+    // 忽略
+  }
+  try {
+    purgeDeliveryQueueByPrefix('qq:');
+  } catch {
+    // 忽略
+  }
+  // IndexedDB kv：按前缀清（聊天消息 / 群聊消息 / 转发 AI 事件 / 密友值 / 好友点赞数——均含会话 id 后缀；
+  // #9 补 qq-group-msgs:：群聊消息与单聊同批清（防串号），群本体（qq-groups 表）按保守处理不清——
+  // 只清消息不清群定义，新账号打开群聊历史为空但群仍可从联系人 › 群聊 进入
+  for (const prefix of ['qq-chat-msgs:', 'qq-group-msgs:', 'qq-ai-events:', 'qq-bond:', 'qq-friend-likes:']) {
     try {
       kvDelByPrefix(prefix);
     } catch {
       // 忽略
     }
   }
-  // IndexedDB kv：整键清（空间动态/评论/点赞、打卡、钱包余额/银行卡/账单、小金库收益、空间互动收件箱）
-  for (const key of [LS_ZONE_POSTS, LS_ZONE_COMMENTS, LS_ZONE_LIKES, LS_QQ_CHECKIN, LS_WALLET, LS_WALLET_CARDS, LS_WALLET_BILLS, LS_VAULT_EARN, 'moments-inbox:qq']) {
+  // IndexedDB kv：整键清（空间动态/评论/点赞、打卡、钱包余额/银行卡/账单、小金库收益、空间互动收件箱、
+  // #10 消息收藏 qq-favorites——旧账号收藏残留会出现在新账号收藏页）
+  for (const key of [LS_ZONE_POSTS, LS_ZONE_COMMENTS, LS_ZONE_LIKES, LS_QQ_CHECKIN, LS_WALLET, LS_WALLET_CARDS, LS_WALLET_BILLS, LS_VAULT_EARN, 'moments-inbox:qq', 'qq-favorites']) {
     try {
       kvDel(key);
     } catch {
@@ -13522,6 +13618,18 @@ function purgeQqSessionData(): void {
   }
   try {
     for (const qid of Object.keys(qqQueuedTurns)) delete qqQueuedTurns[qid];
+  } catch {
+    // 忽略
+  }
+  // #31 会话级设置键（localStorage 混存 map）：按 qq: 前缀剔除旧账号的回复条数/分句/表情包/时间感知/翻译/语音频率与计数
+  try {
+    pruneQqSessionSettingMaps();
+  } catch {
+    // 忽略
+  }
+  // #33 转发事件已消费登记（内存单例 Map）一并清空：旧账号的登记会把新账号同文事件误判为已消费而吞掉回应
+  try {
+    consumedQqAiEvents.clear();
   } catch {
     // 忽略
   }

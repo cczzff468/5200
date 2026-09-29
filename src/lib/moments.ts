@@ -1332,10 +1332,11 @@ interface MomentQueueReply {
 }
 type MomentQueueItem = MomentQueueInteract | MomentQueueReply;
 
-function loadQueueSafe(): MomentQueueItem[] {
+/** 读队列原始形状：键不存在/形状不对返回 null（区别于「空队列」，tick 合并写回 #1 用） */
+function loadQueueOrNull(): MomentQueueItem[] | null {
   try {
     const raw = kvGet<MomentQueueItem[]>(QUEUE_KEY);
-    if (!Array.isArray(raw)) return [];
+    if (!Array.isArray(raw)) return null;
     return raw.filter(
       (x): x is MomentQueueItem =>
         Boolean(x) &&
@@ -1345,15 +1346,20 @@ function loadQueueSafe(): MomentQueueItem[] {
         isMomentPlatform(x.platform)
     );
   } catch {
-    return [];
+    return null;
   }
+}
+
+function loadQueueSafe(): MomentQueueItem[] {
+  return loadQueueOrNull() ?? [];
 }
 
 function saveQueue(list: MomentQueueItem[]): void {
   try {
-    // #41f：容量上限 40 → 200，且按 fireAt 升序排序后保留最近（最晚到期）的 200 条——
-    // 旧版 slice(-40) 会把列表尾之外的大量未到期项直接截丢（互动/回复永远不结算）
-    const capped = [...list].sort((a, b) => (a.fireAt || 0) - (b.fireAt || 0)).slice(-200);
+    // #41f：容量上限 40 → 200。#17：按 fireAt 升序排序后保留「最先到期」的前 200 条——
+    // 旧版升序后 slice(-200) 截掉的恰是最小 fireAt（最先该结算的项），方向反了：
+    // 队列积压时越紧急的项越先被丢、新入队的紧急项反而永不结算
+    const capped = [...list].sort((a, b) => (a.fireAt || 0) - (b.fireAt || 0)).slice(0, 200);
     kvSet(QUEUE_KEY, capped);
   } catch {
     // 忽略
@@ -1706,6 +1712,27 @@ export async function aiPostMoment(args: {
   throw new Error('动态与最近发过的内容重复');
 }
 
+/**
+ * #18：转发动态（QQ 手动转发为主路径 / AI 转发）的统一文本口径。
+ * 转发动态的正文只是「转发理由」，被转发的原文摘要才是理解这条动态的关键——
+ * AI 评论素材、聊天注入块、记忆 detail 三处共用本函数，保证对转发动态的理解一致：
+ *   「转发@原作者：<原文摘要（截 80 字）>｜理由：<转发理由（截 reasonLimit 字）>」
+ * 原动态纯图无文字时注明，防 AI 把转发理由当成原动态正文去评论；
+ * 无原文摘要也无理由时返回空串（调用方按无事可做处理）。
+ */
+function repostContextText(ref: MomentRepostRef, reason: string, reasonLimit: number): string {
+  const author = ref.authorName || '原作者';
+  const summary = ref.content.trim().slice(0, 80);
+  const refPart = summary
+    ? `转发@${author}：${summary}`
+    : ref.images.length > 0
+      ? `转发@${author}：（原动态仅配图无文字）`
+      : '';
+  const reasonPart = reason.trim().slice(0, reasonLimit);
+  if (!refPart) return reasonPart;
+  return reasonPart ? `${refPart}｜理由：${reasonPart}` : refPart;
+}
+
 /** AI 给用户的动态写一条评论/回复（二.1/二.3；内容贴合人设、动态内容与记忆——不与已知事实矛盾）。
  *  发帖人不能评论自己的动态（引擎层守卫，把问题拦截在调 LLM 之前） */
 export async function aiCommentOnMoment(args: {
@@ -1726,15 +1753,25 @@ export async function aiCommentOnMoment(args: {
     : null;
   if (!parentComment && isPostByPeer(post, peer)) throw new Error('发帖人不能评论自己的动态');
   // #14：纯图动态也要能评论——「动态内容」按需组装：有文字用原文（有配图时附张数标记）；
-  // 无文字但有配图传标记文案（route 端识别后注入防编造规则）；文字与配图都空才跳过（无事可评）
+  // 文字与配图都空才跳过（无事可评）。#19：纯图动态不再往文案里塞「（该动态仅配图…」
+  // 协议标记（前缀可被用户正文伪造、标记原文也会漏进 prompt）——payload 改带显式布尔
+  // imagesOnly，route 按布尔注入防编造规则
   const postText = post.content.trim();
-  const postContent = postText
-    ? post.images.length > 0
-      ? `${postText}（配图${post.images.length}张）`
-      : postText
-    : post.images.length > 0
-      ? `（该动态仅配图无文字，共${post.images.length}张图）`
-      : '';
+  const imagesOnly = !postText && post.images.length > 0 && !post.repostOf;
+  // #18：转发动态的正文只是转发理由——评论素材用统一口径带上被转发的原文摘要（见 repostContextText）
+  const postContent = post.repostOf
+    ? repostContextText(
+        post.repostOf,
+        postText && post.images.length > 0 ? `${postText}（配图${post.images.length}张）` : postText,
+        120
+      )
+    : postText
+      ? post.images.length > 0
+        ? `${postText}（配图${post.images.length}张）`
+        : postText
+      : imagesOnly
+        ? `（该动态仅配图无文字，共${post.images.length}张图）`
+        : '';
   if (!postContent) throw new Error('动态没有文字也没有配图，跳过评论');
   // feat-64：设置按平台独立（朋友圈/空间各一份）
   const settings = getMomentsSettings(platform);
@@ -1759,8 +1796,9 @@ export async function aiCommentOnMoment(args: {
       platform,
       userName,
       peer: personaOf(peer),
-      // #14：纯图动态传标记文案（route 端识别后注入防编造）；文字动态传原文（有配图附张数标记）
-      post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 200) },
+      // #14/#19：纯图动态传显式布尔 imagesOnly（route 按布尔注入防编造）；文字动态传原文（有配图附张数标记）；
+      // #18：转发动态 content 为统一口径（转发@原作者：原文摘要｜理由：转发理由）
+      post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 200), imagesOnly },
       thread,
       // #41d：只把「真实存在的用户评论」作为回复目标传给服务端（parentAuthor 供服务端同口径校验）
       replyTo: parentComment
@@ -1814,13 +1852,15 @@ export async function aiRepostMoment(args: {
   // #42：反自相矛盾素材——TA 最近发过的原创动态（转发理由不得与之重复/在事实与心情上矛盾，对照 aiPostMoment）
   const ownPosts = ownRecentPostsOf(peer.id);
   // #14：纯图动态也可被转发——组「原动态内容」：有文字用原文（有配图附张数标记），
-  // 无文字但有配图传标记文案（route 端识别后注入防编造）；两者都空则无从转发（静默跳过，不算失败）
+  // 无文字但有配图为纯图动态（#19：payload 显式布尔 imagesOnly，不再靠文案前缀传标记）；
+  // 两者都空则无从转发（静默跳过，不算失败）
   const postText = post.content.trim();
+  const imagesOnly = !postText && post.images.length > 0;
   const postContent = postText
     ? post.images.length > 0
       ? `${postText}（配图${post.images.length}张）`
       : postText
-    : post.images.length > 0
+    : imagesOnly
       ? `（该动态仅配图无文字，共${post.images.length}张图）`
       : '';
   if (!postContent) return null;
@@ -1829,7 +1869,7 @@ export async function aiRepostMoment(args: {
     platform,
     userName,
     peer: personaOf(peer),
-    post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 120) },
+    post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 120), imagesOnly },
     memories: memorySnippets(peer.id, platformApp(platform), 4),
     ownRecentPosts: ownPosts.map((p) => p.label),
     avoid,
@@ -1873,6 +1913,13 @@ export interface MomentTickDeps {
 
 let ticking = false;
 
+/** #20：单次 tick 的总时间预算——tick 全程持跨标签页互斥锁（withTickMutex）且 drain 的
+ *  多次 LLM 往返串行，无预算最坏可把锁占住数分钟。超预算即停止开新的 LLM 往返
+ *  （不中断在途请求、不影响单条请求内部重试），剩余到期项顺延一个轮询周期，下个 tick 续做 */
+const TICK_TIME_BUDGET_MS = 90_000;
+/** 调度轮询周期（MomentsScheduler TICK_MS = 5s）：#20 超预算顺延与 #5 拉黑顺延共用这一步长 */
+const TICK_POLL_INTERVAL_MS = 5_000;
+
 function lastCharPostAt(platform: MomentPlatform, userName: string, peer: ContactRecord): number {
   const hit = listMomentPosts(platform, userName)
     .filter((p) => isPostByPeer(p, peer))
@@ -1880,16 +1927,26 @@ function lastCharPostAt(platform: MomentPlatform, userName: string, peer: Contac
   return hit?.createdAt ?? 0;
 }
 
-function peersForPlatform(contacts: ContactRecord[], platform: MomentPlatform): ContactRecord[] {
-  // 拉黑过滤：被拉黑（双向）的角色不进候选——drainInteractions（互动结算）与 runAutoPosts（自动发帖）
-  // 两处枚举共用本函数，候选集中在此一处过滤即可覆盖两条链路的全部分支
-  return contacts.filter(
-    (c) => (c.kind === 'char' || c.kind === 'npc') && isFriendIn(c, platform) && !isPeerBlocked(platform, c.id)
-  );
+/** 平台好友全集（char/npc 且为该平台好友，不过滤拉黑）：drainInteractions 需要区分
+ *  「真没候选」与「拉黑导致候选为空」（#5），先拿全集再分步过滤 */
+function contactsForPlatform(contacts: ContactRecord[], platform: MomentPlatform): ContactRecord[] {
+  return contacts.filter((c) => (c.kind === 'char' || c.kind === 'npc') && isFriendIn(c, platform));
 }
 
-/** 结算到期的 AI 回复（用户评论/回复了 AI → AI 再回复）；未到期/未处理的项原样保留 */
-async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentTickDeps): Promise<MomentQueueItem[]> {
+function peersForPlatform(contacts: ContactRecord[], platform: MomentPlatform): ContactRecord[] {
+  // 拉黑过滤：被拉黑（双向）的角色不进候选——runAutoPosts（自动发帖）枚举用；
+  // drainInteractions（互动结算）需区分两种空态（#5），改为从 contactsForPlatform 自行分步过滤
+  return contactsForPlatform(contacts, platform).filter((c) => !isPeerBlocked(platform, c.id));
+}
+
+/** 结算到期的 AI 回复（用户评论/回复了 AI → AI 再回复）；未到期/未处理的项原样保留。
+ *  #20：overBudget 为 true 时不再开新的 LLM 往返，剩余到期项顺延一个轮询周期（下个 tick 续做） */
+async function drainReplies(
+  queue: MomentQueueItem[],
+  now: number,
+  deps: MomentTickDeps,
+  overBudget: () => boolean
+): Promise<MomentQueueItem[]> {
   const keep: MomentQueueItem[] = [];
   for (const item of queue) {
     if (item.type !== 'reply') {
@@ -1906,13 +1963,22 @@ async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentT
       const post = listMomentPosts(item.platform, item.userName, deps.contacts).find((p) => p.id === item.postId);
       const parent = post?.comments.find((c) => c.id === item.parentCommentId);
       if (!peer || !post || !parent) continue; // 动态/评论已被删 → 丢弃
-      // 拉黑期间（双向）引擎不产生 AI 回复用户评论的结算（状态现场读取，解除后自然恢复）
-      if (isPeerBlocked(item.platform, item.peerId)) continue;
+      // #5：拉黑期间（双向）不结算也不丢弃——顺延一个轮询周期，解除后下个 tick 自然恢复
+      //（与 isPeerBlocked 文档「解除后互动自然恢复」对齐；旧版 continue 整丢，拉黑解除后回复永远不来）
+      if (isPeerBlocked(item.platform, item.peerId)) {
+        keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
+        continue;
+      }
       // 防串台（一.1）：AI 只回「用户发的评论」。旧版本遗留的队列项指向 AI 自己/别人的评论
       // （会生成「乐乐 回复 乐乐」这种错误指向），直接丢弃不生成
       if (parent.author !== 'user') continue;
       // 该角色已经回复过这条评论（重试/遗留重复）→ 不再生成
       if (post.comments.some((c) => c.peerId === item.peerId && c.parentId === parent.id)) continue;
+      // #20：超时间预算 → 停止本轮结算：不再开新的 LLM 往返，本项顺延一个轮询周期（不计失败次数）
+      if (overBudget()) {
+        keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
+        continue;
+      }
       await aiCommentOnMoment({
         apiConfig: deps.apiConfig,
         platform: item.platform,
@@ -1933,8 +1999,14 @@ async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentT
 
 /** 结算到期的用户动态互动（1-2 位平台好友点赞 + 可能评论）。
  *  结算失败（生成抛错 / 选了候选却零互动产生）不丢弃该项，而是顺延 60~90 秒重试，
- *  最多重试 2 次（第三次失败才丢弃）——修复「首战全失败该动态永远没有 AI 互动」。 */
-async function drainInteractions(queue: MomentQueueItem[], now: number, deps: MomentTickDeps): Promise<MomentQueueItem[]> {
+ *  最多重试 2 次（第三次失败才丢弃）——修复「首战全失败该动态永远没有 AI 互动」。
+ *  #20：overBudget 为 true 时不再开新的 LLM 往返，剩余到期项顺延一个轮询周期（下个 tick 续做） */
+async function drainInteractions(
+  queue: MomentQueueItem[],
+  now: number,
+  deps: MomentTickDeps,
+  overBudget: () => boolean
+): Promise<MomentQueueItem[]> {
   const keep: MomentQueueItem[] = [];
   const retryDelayMs = () => 60_000 + Math.floor(Math.random() * 30_000); // 60~90 秒随机
   for (const item of queue) {
@@ -1957,14 +2029,25 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
       // 传 contacts：legacy 数据的角色动态也能解析出 peerId（发帖人排除/记忆归属都依赖它）
       const post = listMomentPosts(item.platform, userName, deps.contacts).find((p) => p.id === item.postId);
       if (!post) continue; // 已删除
-      const candidates = peersForPlatform(deps.contacts, item.platform).filter(
-        (p) =>
-          // 发帖人不能给自己的动态点赞/评论（防「AI 自己给自己评论」的核心修复）
-          !(post.author === 'char' && isPostByPeer(post, p)) &&
-          !post.likes.some((l) => isInteractionByPeer(l, p)) &&
-          !post.comments.some((c) => isInteractionByPeer(c, p))
-      );
-      if (candidates.length === 0) continue; // 好友都已互动过/无候选：无事可做，正常结束（不算失败，不重试）
+      const eligible = (p: ContactRecord): boolean =>
+        // 发帖人不能给自己的动态点赞/评论（防「AI 自己给自己评论」的核心修复）
+        !(post.author === 'char' && isPostByPeer(post, p)) &&
+        !post.likes.some((l) => isInteractionByPeer(l, p)) &&
+        !post.comments.some((c) => isInteractionByPeer(c, p));
+      // #5：候选分两步算——先按资格（不看拉黑）算「本可候选」，再过滤拉黑得「实际候选」：
+      // 实际候选为空而本可候选非空 = 拉黑导致的空 → 顺延一个轮询周期（解除后自然恢复，不消耗重试次数）；
+      // 本可候选也为空 = 好友都已互动过/无候选 → 正常结束（不算失败，不重试不无限顺延）
+      const platformPeers = contactsForPlatform(deps.contacts, item.platform);
+      const candidates = platformPeers.filter((p) => !isPeerBlocked(item.platform, p.id) && eligible(p));
+      if (candidates.length === 0) {
+        if (platformPeers.some(eligible)) keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
+        continue;
+      }
+      // #20：超时间预算 → 停止本轮结算：不再开新的 LLM 往返，本项顺延一个轮询周期（不消耗重试次数）
+      if (overBudget()) {
+        keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
+        continue;
+      }
       // 随机挑 1-2 位（动态像真人刷到一样陆续有互动）
       const shuffled = [...candidates].sort(() => Math.random() - 0.5);
       const picked = shuffled.slice(0, Math.random() < 0.5 ? 1 : 2);
@@ -2126,6 +2209,7 @@ async function withTickMutex(fn: () => Promise<void>): Promise<void> {
  * 调度 tick（全局唯一入口，MomentsScheduler 每 5s 调用）：
  * 1) 结算到期的 AI 回复（多轮互动）；2) 结算用户动态的 AI 互动；3) 检查自动发布三种触发。
  * 防重入：同标签页 ticking 标志 + 跨标签页互斥（#43）；任何失败不外抛（动态是增强能力）。
+ * #20：tick 有总时间预算（TICK_TIME_BUDGET_MS），超预算停止本轮结算，剩余到期项顺延下个 tick 续做。
  */
 export async function runMomentsTick(deps: MomentTickDeps): Promise<void> {
   if (ticking) return;
@@ -2133,14 +2217,35 @@ export async function runMomentsTick(deps: MomentTickDeps): Promise<void> {
   try {
     await withTickMutex(async () => {
       const now = Date.now();
+      const startedAt = now;
+      const overBudget = (): boolean => Date.now() - startedAt > TICK_TIME_BUDGET_MS;
       const queue = loadQueueSafe();
-      const afterReplies = await drainReplies(queue, now, deps);
-      const remaining = await drainInteractions(afterReplies, now, deps);
-      // #1：内容级判断是否落盘——重试顺延/retry 变异（fireAt/attempts/tries 变化）不改队列长度，
+      const afterReplies = await drainReplies(queue, now, deps, overBudget);
+      const remaining = await drainInteractions(afterReplies, now, deps, overBudget);
+      // #1：落盘前重读存储最新队列做合并——drain 期间（多次 LLM 往返）enqueuePostInteractions /
+      // enqueueCharReply 会直接读-改-写存储入队（AI 转发的 NPC 互动、用户新发动态的互动等），
+      // 旧版直接 saveQueue(remaining) 会用陈旧快照把这些 drain 期间入队的新项覆盖吞掉。
+      // 合并规则（按队列项唯一 id）：
+      // - remaining 中的项以 remaining 为准（tick 已结算/已顺延的状态）；
+      //   其中 drain 期间被删动态/删评论/删联系人连带从存储清掉的项（latest 已无）不复活；
+      // - latest 中「快照里没有」的项 = drain 期间新入队 → 追加保留（enqueue 的 postId /
+      //   parentCommentId 去重以存储为准，不受本次合并影响）。
+      // 存储读不到（键不存在/异常）时退回旧行为直接落 remaining。
+      const latest = loadQueueOrNull();
+      let merged: MomentQueueItem[];
+      if (latest === null) {
+        merged = remaining;
+      } else {
+        const latestIds = new Set(latest.map((x) => x.id));
+        const snapshotIds = new Set(queue.map((x) => x.id));
+        merged = [...remaining.filter((x) => latestIds.has(x.id)), ...latest.filter((x) => !snapshotIds.has(x.id))];
+      }
+      // 内容级判断是否落盘——重试顺延/retry 变异（fireAt/attempts/tries 变化）不改队列长度，
       // 旧版「长度变了才 saveQueue」把纯顺延的变异丢弃 → 退避失效、attempts 永不累计、无限重试。
       // 队列项都是普通对象且变异走同序 spread（不改键序），JSON 序列化对比即可精确判定「是否有任何变化」。
-      if (JSON.stringify(remaining) !== JSON.stringify(queue)) saveQueue(remaining);
-      await runAutoPosts(deps, now);
+      if (JSON.stringify(merged) !== JSON.stringify(latest ?? queue)) saveQueue(merged);
+      // #20：预算耗尽时跳过自动发布检查（下个 tick 自然续做；一次 tick 本就最多发 1 条）
+      if (!overBudget()) await runAutoPosts(deps, now);
     });
   } catch {
     // 静默
@@ -2201,8 +2306,10 @@ export function buildMomentsChatBlock(args: {
   ];
   for (const p of picked) {
     const who = p.author === 'user' ? userName : p.authorName;
+    // #18：转发动态（QQ 手动转发为主路径）的正文只是转发理由——主行用统一口径带上被转发的原文摘要
+    const lineText = p.repostOf ? repostContextText(p.repostOf, p.content, 60) : p.content.slice(0, 60);
     lines.push(
-      `- ${momentTimeLabel(p.createdAt)} ${who}发了一条${MOMENT_PLATFORM_LABEL[p.platform]}：「${p.content.slice(0, 60)}」`
+      `- ${momentTimeLabel(p.createdAt)} ${who}发了一条${MOMENT_PLATFORM_LABEL[p.platform]}：「${lineText}」`
     );
     // 相关互动：该角色的点赞 + 最近的评论（最多 3 条，多轮回复按顺序）
     if (p.likes.some((l) => isInteractionByPeer(l, peer))) lines.push('  （你赞过这条动态）');
@@ -2234,7 +2341,8 @@ export function buildMomentsChatBlock(args: {
       shape: 'user-post',
       peerDisplay,
       userName,
-      detail: p.content.slice(0, 60),
+      // #18：转发动态的记忆 detail 同口径（原文摘要 + 理由），不是只有理由
+      detail: p.repostOf ? repostContextText(p.repostOf, p.content, 30) : p.content.slice(0, 60),
       extra,
     });
   }

@@ -74,7 +74,7 @@ import {
 } from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
@@ -1251,6 +1251,11 @@ function ChatView({
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  baseMsgs：显式传入最新消息数组（语音转写完成后调用时避免闭包旧状态漏掉刚落库的语音消息） */
   const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => {
+    // fix3-D #8：用户消息先入列再判拉黑守卫（对齐微信 wechat.tsx send「先 setMsgs 再 runAiTurn」同口径）——
+    // 拉黑期（byUser）用户消息照常进记录上屏、AI 不回（回合静默取消）。此前守卫在前会把文字消息一并吞掉
+    // （send 与 sttPreview 两条文字路都把落库委托给本函数；语音路 commitVoiceMsg 已先入列不受累，
+    // 此处入列的 userMsg 只来自这两条文字路，无双入列）。入列后经 msgs 持久化 effect 自动落盘。
+    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
     // 40-a 拉黑拦截（第一层）：用户拉黑角色（byUser）后，本 App 内 AI 不能发任何消息——回合静默取消。
     // 唯一例外=「解除拉黑申请卡片」仍可发起（charRequestOnlyOf 放行模式：回合照常请求，但回复中
     // 除申请卡片/系统行外的正文由 buildReplyMsgs 丢弃）；申请同意后的回应回合因 byUser 已清自然放行。
@@ -1297,9 +1302,8 @@ function ChatView({
       }));
 
     const aiId = uid();
-    // 用户消息立即入列并落盘；AI 回复交给全局 store 流式接收（退出聊天页不中断），
-    // 结束/失败后由 finalize 写入本会话聊天记录（与页面是否存活无关）
-    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
+    // 用户消息已在函数入口入列（fix3-D #8：先于拉黑守卫，拉黑期照常落库上屏）——AI 回复交给全局
+    // store 流式接收（退出聊天页不中断），结束/失败后由 finalize 写入本会话聊天记录，此处不重复入列
 
     // 联系人聊天：人设作为 system 消息插在上下文最前（/api/chat 支持 system 透传）
     // 回复条数：信息端每会话独立设置（信息聊天设置页 → 回复条数，读写 sms:c:<id> 键），
@@ -2136,6 +2140,9 @@ function ChatView({
         }
         setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, recalled: true } : x)));
         showToast('已撤回');
+        // fix3-D #12 撤回级联撤记忆（对齐微信 #17 wechat.tsx:5861 / QQ qq.tsx:4504 同口径）：
+        // 该消息若已被提取成记忆碎片，一并清掉，AI 不再引用已撤回内容（异步不阻塞主流程，失败静默）
+        if (memContactId) void memPurgeMessageSources(memContactId, m.id);
         break;
       }
     }

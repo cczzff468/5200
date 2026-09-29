@@ -149,6 +149,11 @@ const DTMF_FREQ: Record<string, [number, number]> = {
 
 const FAV_KEY = 'phoneFavorites';
 
+/** fix3-D #40/#42：拉黑静默轮连续上限（与 chat-call.ts BLOCKED_SILENT_TURN_LIMIT 同阈值同口径）——
+ *  拉黑期（byChar/byUser）免提开录循环/主动开口计时器每 3~7s 空转一次且通话永不结束，
+ *  连续静默轮达该阈值自动挂断收尾（落正常结束记录、总结照常）；正常轮清零计数，正常通话不受影响 */
+const BLOCKED_SILENT_TURN_LIMIT = 12;
+
 function stripDigits(s: string): string {
   return s.replace(/\D/g, '');
 }
@@ -588,6 +593,8 @@ function CallScreen({
   const proactivePendingRef = useRef(false);
   /** 连续主动开口计数（用户真正说话后归零） */
   const proactiveCountRef = useRef(0);
+  /** fix3-D #42 连续静默轮计数（拉黑守卫命中的轮次累计，正常轮清零；达 BLOCKED_SILENT_TURN_LIMIT 自动挂断收尾） */
+  const silentTurnCountRef = useRef(0);
   /** 跨 App 近况块 + 群聊近况块（Task 40-b）：每通电话懒构建一次缓存
    *  （CallScreen 实例 = 一通电话，挂断后卸载；【当前环境】行让 AI 知道「现在在电话里」） */
   const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string } | null>(null);
@@ -723,6 +730,40 @@ function CallScreen({
         setPeerStatus('listening');
         return;
       }
+      // fix3-D #40 电话自有引擎拉黑守卫（此前 runTurn/sendText 全程无 loadBlock，与 chat-call.ts #33② 口径不一致）：
+      // byChar（角色拉黑用户）/ byUser（用户拉黑角色）→ 静默轮：不请求 LLM、不产生回复、不做逐轮记忆——
+      // - 语音/接通问候/主动开口轮：用户语音照常进气泡（挂断后随转写进通话存档，等价 chat-call appendLog），
+      //   回聆听并延时 250ms 续听（phase 刚切 connected 时 phaseRef 尚未同步，立即调度会被吞，对齐 #33②）；
+      // - 文字轮（userVia==='text'）：byChar 与信息端 send / chat-call sendText 同口径拦截（提示不落转写）；
+      //   byUser 文字照常进转写、AI 不回（等价单聊 runAiTurn byUser 静默取消分支）。
+      // 解除拉黑后下一轮自然恢复应答；挂断总结照常沉淀真实通话内容（#33① 既有口径不动）。
+      const blkEntry = contact?.id ? loadBlock('sms', contact.id) : null;
+      const blockedByChar = blkEntry?.byChar === true;
+      const blockedByUser = blkEntry?.byUser === true;
+      if (blockedByChar || blockedByUser) {
+        if (blockedByChar && userVia === 'text') {
+          setError('对方已将你拉黑，无法发送');
+          return;
+        }
+        if (userText) {
+          setBubbles((b) => [...b, { id: genId(), role: 'user' as const, text: userText, t: Date.now(), via: userVia }]);
+        }
+        // fix3-D #42 电话端同款连续静默轮计数：达阈值自动挂断收尾，防止拉黑期免提循环
+        // 死寂空转到用户手动挂断；正常轮在下方清零，正常通话不受影响
+        silentTurnCountRef.current += 1;
+        // 主动开口路径调用前已置 busy（onstop discard 分支），静默轮提前返回需自行清位
+        //（对齐 runTurn finally 口径），否则 scheduleAutoListen 的 busy 检查会吞掉续听调度、免提循环断链
+        busyRef.current = false;
+        if (!endedRef.current) setBusy(false);
+        if (silentTurnCountRef.current >= BLOCKED_SILENT_TURN_LIMIT && !endedRef.current) {
+          finishByAiHangup(); // 落正常结束记录（endReason='ai-hangup'），总结在 hangup 内照常执行
+          return;
+        }
+        setPeerStatus('listening');
+        scheduleAutoListenRef.current(250);
+        return;
+      }
+      silentTurnCountRef.current = 0; // fix3-D #42：正常轮（守卫放行）清零连续静默计数
       setPeerStatus('thinking');
       // AI 主动开口：递增连续主动计数（用户开口时归零）——第 3 次起 system 会提示可告别挂断
       let proactiveAttempt: number | undefined;

@@ -6,7 +6,9 @@
  * - 顶部来电弹窗（z-[94]，锚定灵动岛原位——弹出时盖住灵动岛，收回时无缝交还）：
  *   · 电话来电 = iOS 横幅弹窗（黑色圆角胶囊：头像+名字在左、拒接/接听在右，与灵动岛同宽体系 344）；
  *   · 微信语音来电 = 微信大窗（深色圆角卡：头像+名字+「邀请你语音通话...」+忽略+拒接/接听），
- *     显示 5 秒后自动缩成胶囊小窗（同 344 宽）继续响铃；QQ 来电无弹窗（不经过本模块）；
+ *     显示 5 秒后自动缩成胶囊小窗（同 344 宽）继续响铃；
+ *   · QQ 语音来电 = 复用微信同款大窗/胶囊形态（QQ 主 UI 是全局通话层的全屏来电页，横幅在
+ *     全屏页不在前台（如锁屏/被最小化）时兜底显示响铃铃 UI）；
  *   · 弹窗从灵动岛原位弹出：初始为灵动岛几何（118×33 @ top 11）原地弹性放大，全程覆盖灵动岛；
  *     消失时原地缩回灵动岛几何，与真灵动岛同位同色无缝交接（形变范式同 IslandNotification）；
  *   · 弹窗与全屏来电界面互斥：全屏来电界面（电话自动显示/微信点弹窗展开）可见时不显示弹窗；
@@ -84,8 +86,16 @@ export default function IncomingCallLayer() {
   const gView = useGlobalCall((s) => s.view);
   const isPhone = call?.source === 'phone';
   const isWx = call?.source === 'wx';
-  // 微信弹窗只在页内引擎「来电响铃」且全屏来电页未展开时显示（接通/结束后随引擎阶段消失）
+  // QQ 来电（source 运行时值 'qq'，快照类型联合未列——见 qq.tsx 触发处注释）：
+  // 与微信同走全局通话引擎代理（engine.accept / reject），微信/电话分支零改动
+  const callSource = (call?.source ?? '') as string;
+  const isQq = callSource === 'qq';
+  // 锁屏时全局通话层的全屏来电页（z-62）在锁屏之下不可见：QQ 横幅（z-94）解锁屏场景兜底响铃铃 UI
+  const uiLocked = useUI((s) => s.locked);
+  // 微信弹窗只在页内引擎「来电响铃」且全屏来电页未展开时显示（接通/结束后随引擎阶段消失）；
+  // QQ 弹窗同条件，但全屏来电页已在前台（view='full'）且未锁屏时不叠加（避免双份接听/拒接 UI）
   const wxRinging = isWx && enginePhase === 'incoming' && gView !== 'full';
+  const qqRinging = isQq && enginePhase === 'incoming' && (gView !== 'full' || uiLocked);
   // 电话弹窗只在全屏来电界面被「退出」后显示（界面可见时不叠加弹窗）
   const phoneBanner = isPhone && screenHidden;
 
@@ -102,21 +112,21 @@ export default function IncomingCallLayer() {
     };
   }, [isPhone, call?.id]);
 
-  // 微信来电：大窗 5 秒后自动缩成胶囊小窗（响铃继续，直至接听/忽略/超时）
+  // 微信/QQ 来电：大窗 5 秒后自动缩成胶囊小窗（响铃继续，直至接听/忽略/超时）
   useEffect(() => {
-    if (!isWx || call?.bannerStage !== 'big') return;
+    if ((!isWx && !isQq) || call?.bannerStage !== 'big') return;
     const timer = window.setTimeout(() => {
       useIncomingCall.getState().setStage('pill');
     }, 5000);
     return () => window.clearTimeout(timer);
-  }, [isWx, call?.id, call?.bannerStage]);
+  }, [isWx, isQq, call?.id, call?.bannerStage]);
 
-  // 微信来电收尾兜底：页内引擎超时未接（missed-in）会关闭全局会话——
+  // 微信/QQ 来电收尾兜底：页内引擎超时未接（missed-in）会关闭全局会话——
   // 会话消失（session=null）时若弹窗还挂着就同步清掉
   useEffect(() => {
-    if (!isWx || hasWxSession) return;
+    if ((!isWx && !isQq) || hasWxSession) return;
     useIncomingCall.getState().clear();
-  }, [isWx, hasWxSession]);
+  }, [isWx, isQq, hasWxSession]);
 
   // 锁屏接听兜底：锁屏/熄屏时点接听，switchToApp 被拦截、pending 滞留成幽灵来电
   // （下次打开电话 App 突然冒出来）——监听 useUI：在「锁屏/熄屏 → 解锁」跳变瞬间若 pending
@@ -133,7 +143,7 @@ export default function IncomingCallLayer() {
     });
   }, []);
 
-  const showBanner = phoneBanner || wxRinging;
+  const showBanner = phoneBanner || wxRinging || qqRinging;
 
   return (
     <>
@@ -149,11 +159,21 @@ export default function IncomingCallLayer() {
 // ---------------- 顶部来电弹窗（胶囊 / 微信大窗；从灵动岛原位弹出，收回无缝交接） ----------------
 
 function CallBanner({ call }: { call: IncomingCallSnapshot }) {
-  const big = call.source === 'wx' && call.bannerStage === 'big';
+  // 来源按字符串宽化读取（快照类型联合未列 'qq'——运行时值由 qq.tsx 触发处写入；微信分支保持原样）
+  const source = call.source as string;
+  const qq = source === 'qq';
+  const big = (call.source === 'wx' || qq) && call.bannerStage === 'big';
 
   /** 接听：电话走快照回调（打开电话 App 进通话）；微信代理到页内引擎 accept——
-   *  点按钮不跳界面：接听后全局通话层收成悬浮小窗（点小窗可回全屏通话页） */
+   *  点按钮不跳界面：接听后全局通话层收成悬浮小窗（点小窗可回全屏通话页）；
+   *  QQ 接听同样代理引擎 accept，但直接展开全屏通话页（QQ 接听即进通话界面，可挂断） */
   const answer = () => {
+    if (qq) {
+      const g = useGlobalCall.getState();
+      g.engine?.accept();
+      g.expand();
+      return;
+    }
     if (call.source === 'wx') {
       const g = useGlobalCall.getState();
       g.engine?.accept();
@@ -162,18 +182,19 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
     }
     answerPhoneCall();
   };
-  /** 拒绝/忽略：电话走快照回调（落未接记录+留言）；微信代理到页内引擎 reject */
+  /** 拒绝/忽略：电话走快照回调（落未接记录+留言）；微信/QQ 代理到页内引擎 reject
+   *  （QQ 拒接经引擎 onEnd 落「已拒绝」通话卡片，与响铃超时未接同口径） */
   const decline = () => {
-    if (call.source === 'wx') {
+    if (call.source === 'wx' || qq) {
       useGlobalCall.getState().engine?.reject();
       return;
     }
     useIncomingCall.getState().dismiss('declined');
   };
   /** 点弹窗除挂断/接听/忽略按钮外的区域 → 回到/跳转到来电界面：
-   *  微信展开全局通话层全屏来电页（view 'hidden' → 'full'）；电话把退出的来电界面重新展开 */
+   *  微信/QQ 展开全局通话层全屏来电页（view 'hidden'/'pip' → 'full'）；电话把退出的来电界面重新展开 */
   const openScreen = () => {
-    if (call.source === 'wx') useGlobalCall.getState().expand();
+    if (call.source === 'wx' || qq) useGlobalCall.getState().expand();
     else useIncomingCall.getState().showScreen();
   };
 
@@ -191,8 +212,8 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
       onClick={openScreen}
       className="pointer-events-auto relative cursor-pointer overflow-hidden shadow-[0_18px_44px_rgba(0,0,0,0.5)] ring-1 ring-white/10 backdrop-blur-xl"
       role="alertdialog"
-      aria-label={big ? `微信语音通话邀请：${call.name}` : `来电：${call.name}`}
-      data-testid={big ? 'incoming-banner-wx-big' : 'incoming-banner-pill'}
+      aria-label={big ? `${qq ? 'QQ' : '微信'}语音通话邀请：${call.name}` : `来电：${call.name}`}
+      data-testid={big ? (qq ? 'incoming-banner-qq-big' : 'incoming-banner-wx-big') : 'incoming-banner-pill'}
     >
       {/* 内容：弹出基本完成后淡入（形变过程不露内容）；大窗↔胶囊切换时重新淡入 */}
       <motion.div

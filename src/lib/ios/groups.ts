@@ -20,6 +20,11 @@
 import { kvDel, kvGet, kvSet } from './idb-kv';
 import { genId, localDB } from './db';
 import { purgeFavoritesForContact } from '../msg-favorites';
+// 未读/会话标志内存单例总线（#36）：解散/退群清条目必须走单例 API 同步内存+持久化，
+// 直接改 localStorage 会与单例脱节（单例下次 update 整表写回复活已删条目）。
+// 依赖方向仍是 memory → groups 单向：unread-store/chat-flags 只依赖 react，无反向依赖。
+import { qqUnreads, wxUnreads } from '../unread-store';
+import { qqChatFlags, wxChatFlags } from '../chat-flags';
 
 // ---------------- 类型 ----------------
 
@@ -701,8 +706,11 @@ export function onMemberJoined(fn: MemberJoinedHook): void {
  * （未读/标志/隐藏/时间感知/回复条数/表情包开关/分句发送/AI 语音频率与计数器/收藏页本群条目/
  * 每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
  * （通过 onGroupDissolved 钩子级联，见 memory 层 memPurgeGroupSource）。
- * opts.purgeMemory = false 时跳过群来源记忆清理（用于「退出群聊」：群对其他成员仍然存在，
- * AI 成员的群记忆应当保留，只有机主本机删除该群）。
+ * 未读/标志走内存单例总线 API 清理（#36：removeLocalMapKey 直改 localStorage 与单例内存表脱节，
+ * 单例下次 update 整表写回会复活已删条目——幽灵未读/残留免打扰；clear/reset 同步内存+持久化+广播）。
+ * opts.purgeMemory = false 时跳过群来源记忆与各成员提取计数/锚点清理（#38：用于「退出群聊」，
+ * 群对其他成员仍然存在，AI 成员的群记忆应当保留——只清计数键会在挽留拉回后重复提取；
+ * 只有机主本机删除该群）。
  * 返回被解散的群（供 UI 提示），群不存在返回 null。
  */
 export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean }): ChatGroup | null {
@@ -711,11 +719,17 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
   writePool(g.app, readPool(g.app).filter((x) => x.id !== groupId));
   try {
     kvDel(groupMsgsKey(g.app, groupId));
-    // 未读/标志/隐藏为 localStorage JSON map（键 = 会话 id；群会话 id = `group:<gid>`）
+    // 未读/标志为内存单例总线（unread-store/chat-flags）+ localStorage 持久化：
+    // #36 必须走单例 API 删除（同步内存表+整表持久化+广播订阅方），只直改 localStorage 会与
+    // 单例内存表脱节——单例下次 update 整表写回会复活已删条目（幽灵未读/残留免打扰）。
+    // removeLocalMapKey 兼容兜底（单例内存表缺条目但 localStorage 有残留时直清），隐藏表无单例仍直清
     const maps = LS_MAPS[g.app];
-    removeLocalMapKey(maps.unreads, `group:${groupId}`);
-    removeLocalMapKey(maps.flags, `group:${groupId}`);
-    removeLocalMapKey(maps.hidden, `group:${groupId}`);
+    const rowKey = `group:${groupId}`;
+    removeLocalMapKey(maps.unreads, rowKey);
+    (g.app === 'wx' ? wxUnreads : qqUnreads).clear(rowKey);
+    removeLocalMapKey(maps.flags, rowKey);
+    (g.app === 'wx' ? wxChatFlags : qqChatFlags).reset(rowKey);
+    removeLocalMapKey(maps.hidden, rowKey);
     // 时间感知开关（localStorage map 里的键）
     removeLocalMapKey('chat-time-aware', `${g.app}:group:${groupId}`);
     // #26 会话级偏好键清理（键 = 会话键 `<app>:group:<gid>`）：回复条数 / 表情包开关 / 分句发送+
@@ -734,10 +748,14 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
     // 收藏页（IndexedDB kv，wx-favorites/qq-favorites 数组）：来源会话为本群的收藏项整批移除
     purgeFavoritesForContact(g.app, groupId);
     // 每个成员的群记忆提取计数（旧 mem-round 轮次键 + 新 mem-msgcount 消息计数 / mem-anchor 锚点，均按群 scope）
-    for (const cid of g.memberIds) {
-      kvDel(`mem-round:${cid}:${g.app}:group:${groupId}`);
-      kvDel(`mem-msgcount:${cid}:${g.app}:group:${groupId}`);
-      kvDel(`mem-anchor:${cid}:${g.app}:group:${groupId}`);
+    // #38 与群来源记忆同生命周期：purgeMemory:false（退群保留记忆，挽留可拉回）时一并保留——
+    // 只清计数/锚点会让拉回群后从零计数，对已保留的群来源碎片重复提取
+    if (opts?.purgeMemory !== false) {
+      for (const cid of g.memberIds) {
+        kvDel(`mem-round:${cid}:${g.app}:group:${groupId}`);
+        kvDel(`mem-msgcount:${cid}:${g.app}:group:${groupId}`);
+        kvDel(`mem-anchor:${cid}:${g.app}:group:${groupId}`);
+      }
     }
     // 群聊天背景图片本体（IndexedDB settings store，键同 contacts-store 的 chat-bg 前缀；群背景与单聊相互独立）
     void localDB.delete('settings', `chat-bg:${g.app}:group:${groupId}`).catch(() => undefined);

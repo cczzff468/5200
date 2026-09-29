@@ -420,10 +420,25 @@ export function updateFragment(contactId: string, id: string, content: string, w
   hit.content = content.trim();
   hit.editedAt = Date.now();
   if (weight === 'high' || weight === 'normal' || weight === 'low') hit.weight = weight;
-  // 用户显式编辑保存 = 意图明确的「救回」：清除被更新标记（supersededAt/supersededBy），
-  // 让该碎片重新参与召回/总结（否则编辑过内容也永不召回，#40）
+  // 用户显式编辑保存 = 意图明确的「救回」。先记下更新者（supersededBy 指向的新记忆）再清标记：
+  // 1) 清被更新标记（supersededAt/supersededBy）让碎片重新参与召回/总结（否则编辑过内容也永不召回，#40）；
+  // 2) 清已入核心标记（consumedAt，#15）：已入核心的碎片此前编辑保存仍报「碎片已更新」，但召回
+  //    （memRecallBlock）与待总结统计/自动总结（pendingFragmentCount/summarizePendingIntoCore）均按
+  //    consumedAt 排除，编辑实际不生效——编辑救回后重新参与召回/总结；核心记忆里的旧总结滞后可接受。
+  const successorId = hit.supersededBy;
   delete hit.supersededAt;
   delete hit.supersededBy;
+  delete hit.consumedAt;
+  // 【#43】救回矛盾链只留一条活跃：A 原被 B 更新（supersededBy=B）→ A 救回后若 B 仍活跃，A/B 会
+  // 同时参与召回/总结形成矛盾对 → 反向压制 B（标记 B 被 A 更新），保证矛盾链同一时刻只有一条活跃。
+  // 妥协点（只处理一层）：若 B 自身已被 C 更新（B.supersededAt 已置、supersededBy=C），B 本就不参与
+  // 召回，保持其指向 C 的既有溯源不动；此时救回的 A 与 C 理论上可并存（链深 ≥2 罕见），由召回块
+  // 头部「同一事实新旧矛盾时以时间更近的为准」的注入提示兜底，不递归清理更深层。
+  const successor = successorId ? list.find((f) => f.id === successorId && f.id !== id) : undefined;
+  if (successor && successor.supersededAt == null) {
+    successor.supersededAt = Date.now();
+    successor.supersededBy = id;
+  }
   writeJSON(fragKey(contactId), list);
   return true;
 }
@@ -867,18 +882,71 @@ export function memPurgeMomentSources(contactId: string, filter: { postId: strin
 }
 
 /**
+ * 撤回消息原文找回（#26② 文本兜底用）：在该联系人的私聊消息存档（wx/qq/sms 三个 kv 键）里
+ * 按 id 从尾反向找消息，取其文本（content/text；语音取转写/朗读原文，与 memConvoFromRaw 的
+ * voiceLabel 同源）。图片/表情/卡片类消息无原文返回 ''（不做文本兜底，宁少删）；群消息不在
+ * 私聊存档内找不回——调用方手里有原文时建议直接传 text。找不到返回 ''。
+ */
+function memFindMsgText(contactId: string, msgId: string): string {
+  for (const key of [`wx-chat-msgs:${contactId}`, `qq-chat-msgs:${contactId}`, `ios-chat-msgs:c:${contactId}`]) {
+    try {
+      const parsed: unknown = kvGet(key);
+      if (!Array.isArray(parsed)) continue;
+      for (let i = parsed.length - 1; i >= 0; i--) {
+        const m = parsed[i] as { id?: unknown; content?: unknown; text?: unknown; kind?: unknown; voice?: unknown } | null;
+        if (!m || typeof m !== 'object') continue;
+        const mid = typeof m.id === 'string' ? m.id : typeof m.id === 'number' ? String(m.id) : '';
+        if (mid !== msgId) continue;
+        if (m.kind === 'voice' && m.voice && typeof m.voice === 'object') {
+          const v = m.voice as { transcript?: unknown; localText?: unknown };
+          const t = (typeof v.transcript === 'string' ? v.transcript : '') || (typeof v.localText === 'string' ? v.localText : '');
+          if (t.trim()) return t;
+        }
+        return typeof m.content === 'string' ? m.content : typeof m.text === 'string' ? m.text : '';
+      }
+    } catch {
+      // 单个存档读取失败继续尝试下一个
+    }
+  }
+  return '';
+}
+
+/**
  * 按来源消息 ID 清理记忆碎片（消息撤回时级联调用，fix2-b/fix2-c 契约函数）：
  * 撤回的消息若已被提取成记忆碎片，撤回后一并清掉，保证 AI 不再引用已撤回内容。
  * 含已消费/已归档/已过期的残留项一并清（与 memPurgeMomentSources 同口径：它们虽不参与
  * 召回，但保留着已撤回内容的痕迹）；无命中返回 0，全程 try/catch 不抛（撤回主流程不因
  * 记忆清理失败中断）。
+ *
+ * 【#26 撤回清记忆的两层口径与妥协点】
+ * ① 内容面（提取前过滤，不在本函数）：发给提取的对话素材一律剔除 recalled 消息——私聊经
+ *    memConvoFromRaw（recalled/error 双滤）、群聊由各调用方 buildConvo 自行 !m.recalled 过滤；
+ *    计数与锚点（countSinceAnchor/memLastMsgId）仍按原始数组从末条推进（撤回消息不计数），
+ *    过滤只作用于提取内容——撤回的内容不会再进入后续提取窗口。
+ * ② 残留面（提取后清理，本函数）：按 sourceMsgId 精确匹配删除。妥协点：自动提取是「批次提取」，
+ *    一个提取窗口内多条消息共同产出碎片时，碎片只记窗口末条消息 id（memLastMsgId），批次中间的
+ *    消息被撤回时精确匹配删不到碎片 → 兜底：用被撤回消息文本（trim 后取前 50 字）在碎片 content
+ *    中做包含匹配删除。宁少删不多删的三重约束：(a) 文本不足 8 字不匹配（「好的」这类超短原文
+ *    包含匹配的误删风险大于收益）；(b) 只删 content 确实包含该原文的碎片——LLM 转述型碎片不含
+ *    原文则保留，宁可漏删；(c) 仅在精确匹配零命中时才走兜底，精确命中时不动其他碎片。
+ *    text 缺省时尝试从私聊消息存档按 id 找回原文（memFindMsgText）；调用方持原文时建议直接传。
  */
-export async function memPurgeMessageSources(contactId: string, sourceMsgId: string): Promise<number> {
+export async function memPurgeMessageSources(contactId: string, sourceMsgId: string, text?: string): Promise<number> {
   if (!sourceMsgId) return 0;
   try {
-    const ids = readFragments(contactId)
-      .filter((f) => f.sourceMsgId === sourceMsgId)
-      .map((f) => f.id);
+    const list = readFragments(contactId);
+    const ids = list.filter((f) => f.sourceMsgId === sourceMsgId).map((f) => f.id);
+    // 兜底（#26②）：精确匹配零命中时按撤回消息文本包含匹配（批次提取只记末条 id 的粒度妥协）
+    if (ids.length === 0) {
+      const needle = ((typeof text === 'string' && text.trim()) || memFindMsgText(contactId, sourceMsgId))
+        .trim()
+        .slice(0, 50);
+      if (needle.length >= 8) {
+        for (const f of list) {
+          if (f.content.includes(needle)) ids.push(f.id);
+        }
+      }
+    }
     return memDeleteFragmentByIds(contactId, ids);
   } catch {
     return 0;
@@ -1358,7 +1426,9 @@ function countSinceAnchor(msgs: unknown[], anchorId?: string): number {
  * 4) 核心积累达到长期阈值 → 自动总结长期记忆。失败静默（console.warn），不打断聊天。
  * buildConvo 惰性调用：只有真的需要提取时才读取/整理对话文本。
  * getMsgs 惰性调用：返回本会话原始消息数组（增量计数 + 来源消息 ID 用）；
- *   返回 null（电话通话等无持久消息数组的会话）时本轮固定计 2 条（1 用户 + 1 AI）。
+ *   返回 null（电话通话等无持久消息数组的会话）时本轮固定计 2 条（1 用户 + 1 AI）；
+ *   返回空数组（会话已清空/群已解散）时直接返回不写任何键（#37：防解散/删除后在途回调
+ *   把刚清掉的 mem-msgcount/mem-anchor 键复活）。
  * names：用户真实名字 + 角色名字（视角统一注入提取/总结 prompt；缺省回退固定称呼）。
  * opts：群聊传 roundScope + group（群记忆来源标记，计数与私聊互不干扰）。
  */
@@ -1380,8 +1450,12 @@ export function memAfterAiTurn(
     const cKey = countKey(contactId, app, scope, share);
     const aKey = anchorKey(contactId, app, scope);
     const msgs = getMsgs?.() ?? null;
+    // 【#37】消息数组存在但为空（群已解散 loadGroupMsgs 返回 [] / 会话刚被删除清空）：
+    // 直接返回且不写任何计数/锚点键——既无数可数，也防止解散/删除后的在途回调把刚清掉的
+    // mem-msgcount / mem-anchor 键复活；与「返回 null」（电话通话等无持久消息数组，固定计 2）严格区分
+    if (msgs && msgs.length === 0) return;
     let added: number;
-    if (msgs && msgs.length > 0) {
+    if (msgs) {
       added = countSinceAnchor(msgs, readJSON<string>(aKey) ?? undefined);
       const lastId = memLastMsgId(msgs);
       if (lastId) writeJSON(aKey, lastId);

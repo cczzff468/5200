@@ -953,6 +953,10 @@ function ContactFormView({
   const [conflictMsg, setConflictMsg] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
   const personaFileRef = useRef<HTMLInputElement | null>(null);
+  /** 保存重入同步挡（#45）：submitting 置位在两段查重 await 之后，双击会双双穿过旧守卫各自落库；
+   *  入口用同步 ref 挡住（不提前 setSubmitting，避免查重期间按钮闪「保存中…」破坏现有 UI 时序），
+   *  finally 释放；警示确认后的「仍要保存」是新一次点击（此时 ref 已释放），不受影响 */
+  const saveBusyRef = useRef(false);
 
   // 警示后 6s 未确认自动复位（同详情页删除二次确认的防误触口径；文本更长，给足阅读时间）
   useEffect(() => {
@@ -995,64 +999,71 @@ function ContactFormView({
   };
 
   const save = async () => {
-    if (submitting) return;
-    if (!form.name.trim()) {
-      setError('名字不能为空');
-      return;
-    }
-    if (isNpc && !ownerId) {
-      setError('请选择为谁添加 NPC');
-      return;
-    }
-    // 密码规则：密码只是微信/QQ 的登录凭据，仅 kind='user' 需要——
-    // CHAR/NPC 不能登录，不再强制填密码（否则「只改个人设/背景」也会被拦死，实测复现）；
-    // 编辑 USER 时清空密码框 = 保持原密码（表单已回显原值，误清会导致无法登录，按未修改处理）
-    const wechatPassword = form.wechatPassword.trim() || (editing && initial ? initial.wechatPassword ?? '' : '');
-    const qqPassword = form.qqPassword.trim() || (editing && initial ? initial.qqPassword ?? '' : '');
-    if (kind === 'user' && !wechatPassword) {
-      setError('请填写微信密码（密码为必填项）');
-      return;
-    }
-    if (kind === 'user' && !qqPassword) {
-      setError('请填写QQ密码（密码为必填项）');
-      return;
-    }
-    // 账号唯一性查重（审计 #12）：登录与电话拨号都按值取第一个命中，重复账号会静默串号——
-    // 首次保存先警示，点「仍要保存」二次确认后才落库；空值（新建留空自动生成）不查；
-    // 编辑时传 excludeId 排除自身，不误报
-    if (!conflictMsg) {
-      const dupChecks: Array<{ kind: 'phone' | 'wxid' | 'qq'; label: string; value: string }> = [
-        { kind: 'phone', label: '手机号', value: form.phone },
-        { kind: 'wxid', label: '微信号', value: form.wechatId },
-        { kind: 'qq', label: 'QQ号', value: form.qqId },
-      ];
-      const dupMsgs: string[] = [];
-      for (const f of dupChecks) {
-        const other = await findContactValueConflict(f.kind, f.value, editing ? initial!.id : undefined);
-        if (other) dupMsgs.push(`该${f.label}已用于联系人「${other.name}」`);
-      }
-      if (dupMsgs.length > 0) {
-        setConflictMsg(`${dupMsgs.join('；')}，保存后登录/拨号可能匹配到对方。仍要保存吗？`);
+    // #45 重入保护：入口先用同步 ref 挡（旧 submitting 守卫置位前有两段查重 await 窗口，
+    // 双击会双双通过）；ref 在 finally 释放，冲突警示/报错/成功各路径都能再次发起保存
+    if (saveBusyRef.current || submitting) return;
+    saveBusyRef.current = true;
+    try {
+      if (!form.name.trim()) {
+        setError('名字不能为空');
         return;
       }
-    }
-    setSubmitting(true);
-    setError('');
-    try {
-      const saved = editing
-        ? await updateContact(initial!.id, {
-            ...form,
-            wechatPassword,
-            qqPassword,
-            ownerId: isNpc ? ownerId : null,
-            avatar,
-          })
-        : await createContact({ kind, ownerId: isNpc ? ownerId : null, avatar, ...form, wechatPassword, qqPassword });
-      if (!saved) throw new Error('联系人不存在');
-      onSaved(saved);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '保存失败，请重试');
-      setSubmitting(false);
+      if (isNpc && !ownerId) {
+        setError('请选择为谁添加 NPC');
+        return;
+      }
+      // 密码规则：密码只是微信/QQ 的登录凭据，仅 kind='user' 需要——
+      // CHAR/NPC 不能登录，不再强制填密码（否则「只改个人设/背景」也会被拦死，实测复现）；
+      // 编辑 USER 时清空密码框 = 保持原密码（表单已回显原值，误清会导致无法登录，按未修改处理）
+      const wechatPassword = form.wechatPassword.trim() || (editing && initial ? initial.wechatPassword ?? '' : '');
+      const qqPassword = form.qqPassword.trim() || (editing && initial ? initial.qqPassword ?? '' : '');
+      if (kind === 'user' && !wechatPassword) {
+        setError('请填写微信密码（密码为必填项）');
+        return;
+      }
+      if (kind === 'user' && !qqPassword) {
+        setError('请填写QQ密码（密码为必填项）');
+        return;
+      }
+      // 账号唯一性查重（审计 #12）：登录与电话拨号都按值取第一个命中，重复账号会静默串号——
+      // 首次保存先警示，点「仍要保存」二次确认后才落库；空值（新建留空自动生成）不查；
+      // 编辑时传 excludeId 排除自身，不误报
+      if (!conflictMsg) {
+        const dupChecks: Array<{ kind: 'phone' | 'wxid' | 'qq'; label: string; value: string }> = [
+          { kind: 'phone', label: '手机号', value: form.phone },
+          { kind: 'wxid', label: '微信号', value: form.wechatId },
+          { kind: 'qq', label: 'QQ号', value: form.qqId },
+        ];
+        const dupMsgs: string[] = [];
+        for (const f of dupChecks) {
+          const other = await findContactValueConflict(f.kind, f.value, editing ? initial!.id : undefined);
+          if (other) dupMsgs.push(`该${f.label}已用于联系人「${other.name}」`);
+        }
+        if (dupMsgs.length > 0) {
+          setConflictMsg(`${dupMsgs.join('；')}，保存后登录/拨号可能匹配到对方。仍要保存吗？`);
+          return;
+        }
+      }
+      setSubmitting(true);
+      setError('');
+      try {
+        const saved = editing
+          ? await updateContact(initial!.id, {
+              ...form,
+              wechatPassword,
+              qqPassword,
+              ownerId: isNpc ? ownerId : null,
+              avatar,
+            })
+          : await createContact({ kind, ownerId: isNpc ? ownerId : null, avatar, ...form, wechatPassword, qqPassword });
+        if (!saved) throw new Error('联系人不存在');
+        onSaved(saved);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '保存失败，请重试');
+        setSubmitting(false);
+      }
+    } finally {
+      saveBusyRef.current = false;
     }
   };
 

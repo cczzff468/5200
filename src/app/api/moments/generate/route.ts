@@ -14,8 +14,9 @@ export const runtime = 'nodejs';
  *           persona?, background?, relation?, relationToUser?, kind? },
  *   recentChat?: { role: 'me'|'peer', text: string }[],   // 最近私聊（灵感素材，≤12 条）
  *   memories?: string[],               // 记忆库素材（≤10 条）
- *   post?: { authorName?: string, author?: 'user'|'char', content?: string },  // 要评论的动态；
- *                                      content 为「（该动态仅配图无文字，共N张图）」标记时=纯图动态（#14：放行并注入防编造）
+ *   post?: { authorName?: string, author?: 'user'|'char', content?: string, imagesOnly?: boolean },  // 要评论的动态；
+ *                                      // imagesOnly=true = 纯图动态（#14：放行并注入防编造；
+ *                                      // #19：引擎显式布尔声明，不再按 content 文案前缀识别——前缀可被正文伪造）
  *   thread?: { authorName?: string, content?: string }[], // 评论区上下文（回复时）
  *   replyTo?: { authorName?: string, content?: string, realName?: string, parentAuthor?: 'user' },
  *                                      // 被回复的评论（realName=对方真实名字，称呼用）；
@@ -222,11 +223,17 @@ export async function POST(req: Request) {
     if (chat.length > 0) user.push(`【你们最近的聊天（素材，不必全用）】\n${chat.join('\n')}`);
     if (memories.length > 0) user.push(`【你记得的关于${userName}和你们之间的事（素材）】\n${memories.map((m) => `- ${m}`).join('\n')}`);
   } else {
-    const postRaw = (body.post && typeof body.post === 'object' ? body.post : {}) as { authorName?: unknown; author?: unknown; content?: unknown };
+    const postRaw = (body.post && typeof body.post === 'object' ? body.post : {}) as {
+      authorName?: unknown;
+      author?: unknown;
+      content?: unknown;
+      imagesOnly?: unknown;
+    };
     const postContent = s(postRaw.content, 200);
-    // #14：引擎组不出文字的纯图动态会传「（该动态仅配图…」标记文案——放行进下方分支，
-    // 由各分支注入防编造规则；彻底无内容仍然 400
-    const imagesOnly = postContent.startsWith('（该动态仅配图');
+    // #14/#19：纯图动态由引擎 payload 显式布尔声明（仅纯图动态 true）——
+    // 旧版按「（该动态仅配图」文案前缀识别，用户正文伪造前缀即可误触发；
+    // 改布尔后标记原文也不再进 prompt（各分支按布尔自组文案）
+    const imagesOnly = postRaw.imagesOnly === true;
     if (!postContent) return NextResponse.json({ error: '缺少要评论的动态内容' }, { status: 400 });
     // 身份修复：动态作者是谁必须用传入的 authorName（角色动态的真实发帖人），
     // 绝不能用 name（那是本次要评论的评论人）——旧版把评论人当发帖人，导致「AI 自己给自己评论」。
@@ -247,12 +254,12 @@ export async function POST(req: Request) {
       : [];
     if (kind === 'repost') {
       // 转发：把别人的动态转到自己空间，生成一句转发理由（正文短、不复述原文）。
-      // postRaw/postContent/postAuthorName/postAuthor 复用外层解析（#14：纯图标记文案同样放行）
+      // postRaw/postContent/postAuthorName/postAuthor 复用外层解析（#14：纯图动态同样放行；#19：布尔识别）
       if (postRaw.author === 'char' && postAuthorName && postAuthorName === name) {
         return NextResponse.json({ error: '不能转发自己的动态' }, { status: 400 });
       }
       if (imagesOnly) {
-        user.push(`${postAuthor}发了一条${label}动态（只有配图，没有文字）：${postContent}。`);
+        user.push(`${postAuthor}发了一条${label}动态（只有配图，没有文字）。`);
         user.push('- 防编造：这条动态只有配图没有文字：转发理由不要编造图片里的具体人物、文字或细节，只围绕配图呈现的主题/氛围与你的关系写一句感想；');
       } else {
         user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
@@ -271,7 +278,7 @@ export async function POST(req: Request) {
         );
     } else if (kind === 'comment') {
       if (imagesOnly) {
-        user.push(`${postAuthor}发了一条${label}动态（只有配图，没有文字）：${postContent}。`);
+        user.push(`${postAuthor}发了一条${label}动态（只有配图，没有文字）。`);
         user.push('- 防编造（最重要）：这条动态只有配图没有文字：不要编造图片里的具体人物、文字或细节，只围绕配图呈现的主题/氛围与你的关系自然评论；');
       } else {
         user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
@@ -290,7 +297,11 @@ export async function POST(req: Request) {
         );
       user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」「这句话说得真好啊」这类套话，也不要纯夸奖；');
       user.push('- 你怎么评这条动态，要一眼认得出是你这个人评的：换别的角色来评，评法和语气必须完全不同；');
-      user.push(`- 再次强调（最重要）：你要评论的动态是${postAuthor}发的「${postContent.slice(0, 80)}」，评论必须让人一眼看出你看懂了这条动态，与这条动态无关的话一句都不要说——跑题的评论是无效输出；`);
+      user.push(
+        `- 再次强调（最重要）：你要评论的动态是${postAuthor}发的${
+          imagesOnly ? '（纯图动态，只有配图没有文字）' : `「${postContent.slice(0, 80)}」`
+        }，评论必须让人一眼看出你看懂了这条动态，与这条动态无关的话一句都不要说——跑题的评论是无效输出；`
+      );
       user.push('- 只输出评论文本，不要任何解释。');
     } else {
       const replyRaw = (body.replyTo && typeof body.replyTo === 'object' ? body.replyTo : {}) as {
@@ -328,7 +339,11 @@ export async function POST(req: Request) {
         `- 要不要称呼对方，由你的人设、说话习惯和TA这句话的语气决定：平时爱喊人的角色可以喊一句（要喊就叫TA的真实名字「${replyRealName || replyFrom}」，绝不要用昵称/网名），平时不喊人的就直接说内容；无论哪种都不要每句都喊，整个回复里称呼最多出现一次；`
       );
       user.push('- 8~40 字，口语化短句，像真人随手回消息：可以接梗、调侃、反问、敷衍、装傻；禁止客套模板（「谢谢」「说得好」「祝你…」「这句话说得真好啊」这类）；');
-      user.push(`（背景，仅供理解语境，禁止复述：这条动态是${postAuthor}发的：「${postContent.slice(0, 60)}」）`);
+      user.push(
+        imagesOnly
+          ? `（背景，仅供理解语境，禁止复述：这条动态是${postAuthor}发的，只有配图没有文字。）`
+          : `（背景，仅供理解语境，禁止复述：这条动态是${postAuthor}发的：「${postContent.slice(0, 60)}」）`
+      );
       if (thread.length > 0) user.push(`【评论区最近的发言（按先后；里面已有的话和类似话术不要再重复）】\n${thread.join('\n')}`);
       if (memories.length > 0)
         user.push(

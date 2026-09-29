@@ -25,6 +25,10 @@ import {
   type ContactRecord,
 } from '@/lib/contacts';
 import { purgeContactFromGroups } from './groups';
+// #46：删联系人时精确中止该联系人单聊会话的在途流式回复与投递尾巴
+//（chat-stream-store / ai-delivery 均无对本模块的反向依赖，不引入循环引用）
+import { abortStreamsByPrefix } from '@/lib/chat-stream-store';
+import { purgeDeliveryQueueByPrefix } from './ai-delivery';
 
 const MIGRATED_KEY = 'ios-contacts-migrated';
 
@@ -117,11 +121,27 @@ export async function contactRealName(id: string): Promise<string> {
 }
 
 /**
+ * 手机号归一化比较键（#14）：与 phone.tsx 的 phoneKey/stripDigits 同款实现——去非数字字符；
+ * 13 位且 86 开头去国码；12 位且 0 开头去长途前缀（+86/空格/横线均可对上）。
+ * phone.tsx 的 phoneKey 未导出（该文件本任务只读不改），这里复制同款逻辑，
+ * 两处任一改动必须同步（注释即契约）。
+ */
+function normalizePhoneKey(raw: string | null | undefined): string {
+  const d = (raw ?? '').replace(/\D/g, '');
+  if (d.length === 13 && d.startsWith('86')) return d.slice(2);
+  if (d.length === 12 && d.startsWith('0')) return d.slice(1);
+  return d;
+}
+
+/**
  * 账号唯一性查重（审计 #12）：手机号/微信号/QQ号是否已被其他联系人占用。
  * 登录（loginWechat/loginQQ 的 hits[0]）与电话按号码解析（phone.tsx）都取「第一个命中」，
  * 账号重复时登录/拨号会静默串到别人——这里供联系人保存流程在落库前警示（确认后仍可保存）。
  * 命中返回占用该值的联系人（listContacts 的 createdAt 倒序 = 与登录解析同款取序），无冲突返回 null；
  * value 空串/纯空白不算冲突（新建留空会自动生成）；excludeId 传编辑中的联系人 id 以排除自身不误报。
+ * #14：phone 改按拨号解析同款归一化后比较（裸号码/+86/国码/长途 0/空格横线视为同一号码）——
+ * 否则「拨号会解析到同一个人」的两个写法能同时保存，查重口径与 phone.tsx phoneKey 漂移；
+ * 归一化后为空（纯符号等）不查重；wxid/qq 维持存值精确匹配（登录解析就是全等比较）。
  */
 export async function findContactValueConflict(
   kind: 'phone' | 'wxid' | 'qq',
@@ -130,11 +150,14 @@ export async function findContactValueConflict(
 ): Promise<ContactRecord | null> {
   const v = typeof value === 'string' ? value.trim() : '';
   if (!v) return null;
+  const vKey = kind === 'phone' ? normalizePhoneKey(v) : '';
+  if (kind === 'phone' && !vKey) return null;
   const all = await listContacts();
   const hit = all.find((c) => {
     if (excludeId && c.id === excludeId) return false;
-    // 与登录解析同口径的精确匹配（存值已经 normalizeText 去首尾空白）
-    if (kind === 'phone') return c.phone === v;
+    // phone：按拨号归一化键比较（vKey 非空，对端归一化为空不可能相等）；
+    // wxid/qq：与登录解析同口径的精确匹配（存值已经 normalizeText 去首尾空白）
+    if (kind === 'phone') return normalizePhoneKey(c.phone) === vKey;
     if (kind === 'wxid') return c.wechatId === v;
     return c.qqId === v;
   });
@@ -252,6 +275,26 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
 }
 
 /**
+ * #46：按联系人 id 精确中止其单聊会话（wx/qq/sms 三端）的在途流式回复与投递尾巴。
+ * fix3-B 的 abortStreamsByPrefix / purgeDeliveryQueueByPrefix 均为裸前缀（startsWith）语义——
+ * 传 'wx:c1' 会误伤另一联系人 'wx:c12' 的在途回复；这里加精确边界判断：三端单聊会话键都是
+ * 「固定前缀 + 裸联系人 id」，仅当「没有其他存活联系人 id 以本 id 为字符串前缀」时前缀调用
+ * 才与精确匹配等价，可安全调用；存在前缀碰撞的存活联系人时跳过中止（宁漏勿伤：本联系人的
+ * 数据随后本就被清除，不能为它误中止别人的在途回复）。存活 id 由 genId 生成（21 位定长、
+ * 不含冒号），结构上不可能互为前缀，该守卫主要覆盖服务端迁移来的旧格式 id；
+ * 极短的旧 id 也可能前缀命中 'wx:group:<gid>' 群会话键，一并防御。
+ */
+function abortInFlightForContact(id: string, survivingContactIds: readonly string[]): void {
+  if (!id) return;
+  if (survivingContactIds.some((other) => other && other.startsWith(id))) return;
+  if ('group:'.startsWith(id)) return; // 防御极短旧 id 前缀命中群会话键
+  for (const sk of [`wx:${id}`, `qq:${id}`, `sms:c:${id}`]) {
+    abortStreamsByPrefix(sk);
+    purgeDeliveryQueueByPrefix(sk);
+  }
+}
+
+/**
  * 删除联系人后清理其全部「聊天痕迹」与「按联系人 id 派生的互动状态」
  * （NPC 级联删除时对每个被删 id 各调一次）：
  * - 聊天记录（已迁 IndexedDB kv store）：微信 wx-chat-msgs:<id> / QQ qq-chat-msgs:<id> /
@@ -283,12 +326,32 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
  *   条目 friendId）与 wx-family-cards-in（我收到的，条目 friendId 旧数据可缺省）按 friendId 过滤删除；
  *   注意钱包页持有 useState 快照，同会话内再次保存可能复活条目（同下方排队补跑条目口径，
  *   刷新后彻底消失，条目对已删联系人不可再消费）；
- * - 通话记录 call-logs 按 iOS 惯例保留不删（记录已带名字/号码/头像快照字段，历史可查）。
- * 全部尽力而为（单键失败不阻塞删除）；记忆库由 memPurgeContact 负责不在本函数范围。
+ * - 通话记录 call-logs 按 iOS 惯例保留不删（记录已带名字/号码/头像快照字段，历史可查）；
+ * - 在途中止（#46，放在最前）：该联系人单聊会话（wx:<id> / qq:<id> / sms:c:<id>）的在途流式回复
+ *   预置已收尾（finalize 不再落盘）并作废服务端接力生成，投递队列未投递尾巴一并丢弃——
+ *   防止清除后的落盘回调把刚清掉的聊天记录复活（经前缀碰撞守卫，见 abortInFlightForContact）；
+ * - 记忆计数/锚点兜底（#46）：mem-msgcount / mem-anchor 按 memory.ts 键构成精确 kvDel 再清一次
+ *   （「已读旧消息尚未写键」的在途回调可能把 memPurgeContact 已清的键写回）；
+ * - AI 语音频率/计数器（#44）：ai-voice-freq / ai-voice-counters（localStorage 单键 JSON map）里
+ *   的单聊条目 wx:<id> / qq:<id> / sms:c:<id>（信息端联系人会话跟随微信键系）。
+ * 全部尽力而为（单键失败不阻塞删除）；记忆库主体由 memPurgeContact 负责不在本函数范围。
  */
-function purgeChatTracesFor(id: string, name?: string): void {
+function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], name?: string): void {
   if (!id) return;
   try {
+    // #46 在途中止（放在最前，先于一切清除）：见函数头注释与 abortInFlightForContact——
+    // 中止后 runStream 收尾跳过 finalize（fix3-B 实现预置 finalized=true），
+    // 旧会话回复不会写回下方刚清掉的聊天记录键
+    abortInFlightForContact(id, survivingContactIds);
+    // #46 记忆计数/锚点兜底：memPurgeContact（deleteContact 里先于本函数执行）已清一次，
+    // 但在途回调仍可能在其后写回（deleteContact 的 await import('@/lib/moments') 窗口
+    // 足以让排队的 memAfterAiTurn 插进同步块之间）——按 memory.ts countKey/anchorKey 键构成
+    // 再精确清一次；精确 kvDel 避免 'mem-msgcount:c1' 误伤 'mem-msgcount:c12'
+    kvDel(`mem-msgcount:${id}`);
+    for (const app of ['wx', 'qq', 'sms', 'phone'] as const) {
+      kvDel(`mem-msgcount:${id}:${app}`);
+      kvDel(`mem-anchor:${id}:${app}`);
+    }
     // 聊天记录（IndexedDB kv store；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫）
     for (const k of [
       `wx-chat-msgs:${id}`,
@@ -309,6 +372,26 @@ function purgeChatTracesFor(id: string, name?: string): void {
       const obj = parsed as Record<string, unknown>;
       let changed = false;
       for (const sk of [`wx:${id}`, `qq:${id}`, `sms:c:${id}`, `phone:${id}`]) {
+        if (sk in obj) {
+          delete obj[sk];
+          changed = true;
+        }
+      }
+      if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
+    }
+    // AI 语音频率/计数器（ai-voice.ts FREQ_STORE_KEY / COUNTER_STORE_KEY，localStorage 单键
+    // JSON map，#44）：单聊条目键 = 会话键——微信 wx:<id> / QQ qq:<id>；信息端联系人会话跟随
+    // 微信键系（chat.tsx voiceFreqKey = `wx:<联系人 id>`，频率与微信同键），历史 sms:c:<id>
+    // 形式一并清扫；群条目键带 'group:' 前缀 / '#' 成员后缀（wx:group:<gid>、<群会话键>#<成员 id>），
+    // 精确键删除不会误伤其他联系人或群聊（写法对照 groups.ts 群解散的 removeLocalMapKey 同口径）
+    for (const mapKey of ['ai-voice-freq', 'ai-voice-counters']) {
+      const raw = window.localStorage.getItem(mapKey);
+      if (!raw) continue;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const obj = parsed as Record<string, unknown>;
+      let changed = false;
+      for (const sk of [`wx:${id}`, `qq:${id}`, `sms:c:${id}`]) {
         if (sk in obj) {
           delete obj[sk];
           changed = true;
@@ -487,9 +570,12 @@ export async function deleteContact(id: string): Promise<boolean> {
     // 清理失败不阻塞删除
   }
   // 聊天痕迹：被删联系人（含级联删除的名下 NPC）的聊天记录/时间感知/回复条数/翻译配置/
-  // 排队补跑条目/转发事件/QQ好感·点赞/拉黑/被踢感知/建群冷却/来电冷却/未读角标/会话标志/背景图一并清理
-  for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId);
-  purgeChatTracesFor(id, existing.name);
+  // 排队补跑条目/转发事件/QQ好感·点赞/拉黑/被踢感知/建群冷却/来电冷却/未读角标/会话标志/背景图/
+  // AI 语音频率·计数器/在途流式回复与投递尾巴（先中止再清）/记忆计数锚点兜底 一并清理；
+  // #46 传清库后的存活联系人 id（本联系人与名下 NPC 已删），供在途中止的前缀碰撞精确边界检查
+  const survivingContactIds = (await localDB.getAll('contacts')).map((c) => c.id);
+  for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId, survivingContactIds);
+  purgeChatTracesFor(id, survivingContactIds, existing.name);
   // 世界书：清理被删联系人（含级联 NPC）的挂载关系键；书籍本体与条目是用户创作，保留不删
   //（专属条目目标指向已删联系人时永远不激活，属无害死配置，用户可在条目编辑里改）
   clearContactBinding(id);
