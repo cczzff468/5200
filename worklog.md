@@ -11725,3 +11725,23 @@ Stage Summary:
 - 关键设计决策：①M6 根因修复用「空批占位+排空后清边界」（代理升级为 onDrained 钩子消除微任务空隙），群聊端不加尾巴等待避免冗余；②M2 复核全部下沉 moments.ts 数据面（4 层：drain/调度/生成/落库），addCharMomentPost 保持同步签名（清单外同步调用点），由上游复核等效覆盖；③L13 锁屏横幅「忽略」统一改 dismiss-only（wx/qq 共享实现）；④L11 用阶段跳变 effect 清快照（wx/qq 同 benefit）；⑤L4 以 msgId 关联聊天卡与钱包卡达成 per-card 精度，旧数据退回 friendId 行为
 - E2E 未覆盖（静态验证替代）：换号中段流实际中止、群 notice 实景、红包详情终态实景、拉黑留言实景——均属多步长链路场景，修复点不触及已验证的正常路径
 - 全部 5 路代理 + fix4-a2 工作记录见本文件上方各 Task ID 条目（fix4-a / fix4-a2 / fix4-b / fix4-c / fix4-d / fix4-e）
+
+---
+Task ID: setup-1
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取仓库 cczzff468/5200 到沙箱工作目录，恢复开发环境并验证可运行
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git（使用用户提供的 PAT）到 temp-repo
+- 停止沙箱默认脚手架 dev server，备份沙箱专用文件（.env / Caddyfile / .zscripts）
+- 清除脚手架文件后把 temp-repo 全量内容（含 .git 历史）复制为 /home/z/my-project 主项目，删除 temp-repo
+- bun install 补装差异依赖（jsmediatags / remark-gfm / web-push 等 29 包）
+- 启动 dev server（next dev -p 3000）
+- 发现 POST /api/contacts/migrate 500（db.contact undefined）——根因：dev server 启动早于 prisma generate，运行中进程持有旧客户端；bunx prisma generate + db:push（schema 已同步）后重启 dev server，接口恢复 200
+- Agent Browser E2E：锁屏渲染正常 → 上滑手势解锁 → 主屏（天气组件实时 26°、App 网格、Dock）→ 信息 App 打开、会话列表「小助手」带未读角标；console 零错误
+- bun run lint 通过（仅 qq.tsx 超 500KB 的 BABEL 提示，非错误）；/api/contacts/migrate、/api/weather、/api/chat/bg 均 200
+
+Stage Summary:
+- 仓库已就位：/home/z/my-project 即 cczzff468/5200 的 main 工作副本（HEAD=280e536 四轮审计27项全修），origin 已配置 PAT 可直接 push
+- 项目状态：dev server 运行中（端口3000），lint/tsc 干净，浏览器 E2E 核心链路（解锁→聊天App）通过
+- 等待用户提出具体的功能修改/新增需求
