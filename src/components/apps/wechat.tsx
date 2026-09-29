@@ -151,6 +151,8 @@ import {
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
+import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
@@ -1138,8 +1140,9 @@ function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
 /** 联系人 AI 人设（微信聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
  *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入（表情包开关关闭时不下发表情包规则，
  *  并注入禁用 emoji/表情包的显式规则）；
+ *  actionDescOn：动作描写开关（开启注入 *...* 格式约定、关闭注入显式禁令，见 @/lib/action-desc）；
  *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况） */
-function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, npcExtra?: NpcPromptExtra | null): string {
+function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, actionDescOn: boolean, npcExtra?: NpcPromptExtra | null): string {
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
   // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
   const mode = useSettings.getState().addressMode;
@@ -1156,6 +1159,7 @@ function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string |
       '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
       ...buildRichRules(stickersOn ? stickers : []),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
+      ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE]),
     ],
   });
 }
@@ -4052,6 +4056,8 @@ function ChatPage({
   useEffect(() => {
     setStickersOnState(getStickersOn(sessionKey));
   }, [sessionKey]);
+  // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效
+  const actionDescOn = useActionDescOn(sessionKey);
   /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
   const [wbOpen, setWbOpen] = useState(false);
   /** 当前联系人挂载的世界书 id（切换联系人/挂载变化时重读） */
@@ -4999,7 +5005,9 @@ function ChatPage({
     const stickers = loadStickers('wx');
     // 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji）
     const stickersOn = getStickersOn(sessionKey);
-    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
+    // 动作描写开关（发送时现场读取）：开启注入格式约定、关闭注入显式禁令（见 @/lib/action-desc）
+    const actionDescOn = getActionDescOn(sessionKey);
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(peer, contacts));
     // 40-a 拉黑拦截（仅申请卡模式）：待处理卡清单不注入（buildActionRules 空清单返回空数组）——
     // 否则 AI 照提示词输出 [领取红包:ID]/[收款转账:ID] 等标记；动作分支虽已拦截，提示词层面也不该给。
     // 拉黑类动作说明由 blkBlock（buildBlockPromptBlock）单独注入，与此处无关
@@ -6496,6 +6504,12 @@ function ChatPage({
           // 该组被「展开」后（头部 id 记入 expandedStacks）成员恢复逐条平铺（与群聊 wx-group 同口径）
           const memberHeadIdx = stackMemberIdx.get(i);
           if (memberHeadIdx !== undefined && !expandedStacks.has(msgs[memberHeadIdx]?.id ?? '')) return null;
+          // 动作描写视图（仅对方 AI 的纯文本消息；我的消息/其他类型/无星号内容 → null 走原路径）
+          const actView = !m.recalled && m.role === 'peer' && (!m.kind || m.kind === 'text') ? actionDescViewOf(m.content, actionDescOn) : null;
+          const actLines = actView ? [...actView.before, ...actView.after] : [];
+          // 动作描写开启时气泡正文（剥离描写并整理空白；actView 为 null 时保持原文）
+          const actBody = actView && actView.text ? actView.text : null;
+          const bubbleContent = actBody ?? m.content;
           return (
           <div
             key={m.id}
@@ -6519,7 +6533,34 @@ function ChatPage({
                 <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
               </div>
             )}
-            {m.recalled ? (
+            {actView && !actView.text ? (
+              /* 整条只有动作描写（或关闭态过滤后无正文）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
+              selectMode && isSelectable(m) ? (
+                <div className={`flex items-center gap-2 py-1.5 ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
+                  <span
+                    aria-hidden="true"
+                    data-testid={`wx-select-${m.id}`}
+                    className={`flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full border ${
+                      fwdFlow === 'choose' && m.role === 'me' ? 'order-last' : ''
+                    } ${selectedIds.includes(m.id) ? 'border-[#07C160] bg-[#07C160] text-white' : 'border-black/25 dark:border-white/35'}`}
+                  >
+                    {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {actLines.map((a, k) => (
+                      <ActionDescLine key={k} text={a} testId={`wx-action-${m.id}-${k}`} />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                actLines.map((a, k) => <ActionDescLine key={k} text={a} testId={`wx-action-${m.id}-${k}`} />)
+              )
+            ) : (
+              <>
+                {actView?.before.map((a, k) => (
+                  <ActionDescLine key={`b${k}`} text={a} testId={`wx-action-${m.id}-${k}`} />
+                ))}
+                {m.recalled ? (
               /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
               <div data-testid="wx-recall-row" className="py-1.5 text-center">
                 <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
@@ -6746,8 +6787,8 @@ function ChatPage({
                           : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                       }`}
                     />
-                    {m.content ? (
-                      cleanBubbleText(m.content) || m.content
+                    {bubbleContent ? (
+                      cleanBubbleText(bubbleContent) || bubbleContent
                     ) : (
                       <span className="flex h-[23px] items-center gap-1" aria-label="对方正在输入">
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
@@ -6772,6 +6813,11 @@ function ChatPage({
               {/* 拉黑图标（红色 ! 圆点紧贴气泡，微信发送失败图标同位） */}
               {blockedIconOf(m)}
             </div>
+            )}
+                {actView?.after.map((a, k) => (
+                  <ActionDescLine key={`a${k}`} text={a} testId={`wx-action-${m.id}-${k}`} />
+                ))}
+              </>
             )}
             {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
             {blockedLineOf(m)}
@@ -7146,6 +7192,8 @@ function ChatPage({
           sentenceSend={sentenceSend}
           timeAware={timeAware}
           stickersOn={stickersOn}
+          actionDescOn={actionDescOn}
+          onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
           onBack={() => setSettingsOpen(false)}

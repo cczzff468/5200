@@ -11745,3 +11745,106 @@ Stage Summary:
 - 仓库已就位：/home/z/my-project 即 cczzff468/5200 的 main 工作副本（HEAD=280e536 四轮审计27项全修），origin 已配置 PAT 可直接 push
 - 项目状态：dev server 运行中（端口3000），lint/tsc 干净，浏览器 E2E 核心链路（解锁→聊天App）通过
 - 等待用户提出具体的功能修改/新增需求
+---
+Task ID: 5-a
+Agent: wechat 接线代理
+Task: 微信单聊接入动作描写（hook+提示词+设置绑定+渲染剥离）
+
+Work Log:
+- 先读 worklog.md 最后 200 行了解此前工作；Read @/lib/action-desc.ts（共享库，禁改）与 ./action-desc-line.tsx 确认 API（getActionDescOn/saveActionDescOn/useActionDescOn/ACTION_DESC_RULE/ACTION_DESC_OFF_RULE/actionDescViewOf/ActionDescLine，单聊不带 actorName）；grep 确认 chat-settings.tsx 的 actionDescOn/onToggleActionDesc 必填 props 已由协调者就位
+- 全部落点先 grep 再 Read 现场确认（任务书行号有 +~45 行漂移，以 grep 实际定位为准），只改 wechat.tsx（11179→11228 行），共 8 处修改：
+  · import（:154-155）：紧邻 sticker-toggle import 新增 '@/lib/action-desc' 六具 + './action-desc-line' 的 ActionDescLine
+  · 组件内 hook（:4059-4060）：stickersOn useState/useEffect 之后加 const actionDescOn = useActionDescOn(sessionKey)（sessionKey 定义 :3986 `wx:${peer.id}`），设置页切换后经事件即时刷新历史消息显示
+  · buildPersonaPrompt（:1145 签名 + :1162 extraRules）：stickersOn 后加必填参数 actionDescOn: boolean；extraRules 追加 ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE])；头注释补一行说明
+  · 唯一调用点（:5008-5010）：runAiTurn 作用域内 stickersOn = getStickersOn(sessionKey) 紧邻处加 const actionDescOn = getActionDescOn(sessionKey)（同作用域同名 sessionKey，无需改名），调用改为第 6 参传入
+  · ChatSettingsPage 绑定（:7157-7158）：stickersOn={stickersOn} 后加 actionDescOn={actionDescOn} 与 onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
+  · 渲染层 msgs.map（:6505-6513 map 顶部视图计算）：memberHeadIdx 早退之后、return 之前计算 actView（m.role === 'peer' && (!m.kind || m.kind === 'text') 门控，其余消息 null 走原路径零改动）+ actLines + actBody + bubbleContent（actBody ?? m.content）
+  · 渲染层三分支包裹（:6536-6563 包裹头 + :6813-6821 收尾）：{m.recalled ? ( 整条三元链外包 actView && !actView.text 早出分支（整条只有动作/关闭态过滤后无正文 → 居中灰字行；selectMode && isSelectable 时带勾选圈行保证可勾选）；else 分支 <> 包裹 actView?.before.map → 原三元链（撤回/notice/sys/blockreq/气泡行，内容未动）→ actView?.after.map → </>；气泡行收尾保留 blockedIconOf + </div> + )} 原样
+  · 气泡正文（:6790-6792）：{m.content ? cleanBubbleText(m.content) || m.content : ...} 三元仅把表达式内 m.content 换成 bubbleContent；renderTranslations(m.id, m.content) 与引用块 m.quote 保持原文未改
+- 编辑后 Read 回读核对 JSX 配对（外层 actView 三元 :6536 开 → :6821 闭；内层原三元 :6563 开 → :6816 闭；actView 为 null 时 ?. 短路 before/after 均渲染 undefined 走原路径）；跑 npx tsc --noEmit 过滤 wechat.tsx = 零输出；bunx eslint src/components/apps/wechat.tsx = exit 0 零错误零警告
+
+Stage Summary:
+- 微信单聊动作描写全链路接入完成：设置页开关（订阅式即时刷新）→ 提示词（开启注格式约定/关闭注显式禁令，发送时现场读取）→ 渲染（仅对方纯文本消息解析 *...*，描写剥离为居中灰字独立行 before/after，正文留气泡；关闭态硬剥离不残留；解析失败原样显示；整条只有动作时不渲染气泡行，多选模式保留可勾选）；翻译/引用/转发/记忆/上下文均保持原文带星号
+- 全仓 tsc 现存 2 错均在 chat.tsx:2652 与 qq.tsx:5708（共享 ChatSettingsPage 新增必填 props 后该两文件尚未接线，属 Task 5-b/5-c 范围，非本任务引入）；wechat.tsx 本身 tsc/eslint 全绿
+- 偏离 spec 决策：无——buildPersonaPrompt 头注释同步补 actionDescOn 一行说明（文档性，非行为变更）；其余全部按任务书落点执行
+---
+Task ID: 5-c
+Agent: sms(信息) 接线代理
+Task: 信息端接入动作描写（hook+提示词+设置绑定+渲染剥离）
+
+Work Log:
+- 先读 worklog 末 200 行与 src/lib/action-desc.ts 全文（只读，未改共享库）；Read chat.tsx 各锚点现场（imports 56 / sessionKey 798 / stickersOn state 847 / startAiTurn 1256+1350 / msgs.map 2246 / SmsChatSettingsPage 2652），grep 确认全部 old_str 唯一后一次性 MultiEdit 落 9 处
+- ① import（现 57-58 行，紧邻 sticker-toggle）：getActionDescOn/saveActionDescOn/useActionDescOn/ACTION_DESC_RULE/ACTION_DESC_OFF_RULE/actionDescViewOf + './action-desc-line' 的 ActionDescLine
+- ② 组件 hook（现 853-854 行，stickersOn useEffect 之后）：const actionDescOn = useActionDescOn(sessionKey)（渲染订阅，设置页切换经事件即时刷新历史消息）
+- ③ 提示词注入（startAiTurn 内）：现 1354-1355 行发送时现场读取 const actionDescOn = getActionDescOn(sessionKey)（与同函数 getTimeAware 现场读取同款；此处 stickersOn 经核实为组件 state 闭包引用，动作描写按任务书用现场读取）；现 1374-1375 行 baseSys 内 STICKER_OFF_RULE 下一行加 actionDescOn ? ACTION_DESC_RULE : ACTION_DESC_OFF_RULE
+- ④ SmsChatSettingsPage 绑定（现 2676-2677 行）：actionDescOn={actionDescOn} + onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}（渲染体取 hook 值，与 chat-settings.tsx:1298/1311 必填 props 对齐）
+- ⑤ 渲染层 msgs.map：5a 现 2262-2266 行 map 回调顶部算 actView（门控 !mine && !m.sys && !m.blkreq && !m.error）/actLines/bubbleContent；5b 现 2282-2313 行 {m.recalled ? ( 前包 actView && !actView.text 三分支（selectMode 勾选圈行 + actLines.map / 非 selectMode 纯 actLines.map），else 侧 <> 包 actView?.before.map 后接原三分支链；5d 现 2451 行气泡正文 {text}→{bubbleContent}（仅此一处，996 行翻译 text 另一作用域未动）；5c 现 2475-2479 行三分支链收尾 )} 后加 actView?.after.map + </> 闭合
+- 逐处 Read 回读核对括号/JSX 配对；跑 npx tsc --noEmit（apps/chat.tsx 零输出）与 bunx eslint src/components/apps/chat.tsx（exit 0 零错误）；未运行 git/dev server，只改 chat.tsx 一个文件
+
+Stage Summary:
+- 信息端动作描写四件套全部在位：hook 订阅、发送时现场读取双口径、开关规则注入 system（开=格式约定/关=显式禁令）、渲染层 before/after 剥离 + 整条纯动作时居中灰字行（多选模式保留勾选圈）+ 气泡正文剥离显示；我的消息/系统行/申请卡/错误占位/语音（content 恒空）经门控走原路径零改动，翻译/已送达/拉黑图标原样保留
+- 偏离任务书 1 处：5b 多选勾选圈 span 的 className 按任务书快照只有未选中灰边样式，落码改为与文件内既有四处勾选圈同款三元（选中 #007AFF 蓝底白字），保证多选 UI 一致性；其余与 spec 逐字一致
+- tsc 全项目仅 1 条错误且在 qq.tsx:5708（QQ 设置页缺 actionDescOn/onToggleActionDesc props，属并行任务 5-b 范围，与本任务无关）；apps/chat.tsx 零错误零警告
+---
+Task ID: 5-b
+Agent: qq 接线代理
+Task: QQ单聊接入动作描写（hook+提示词+设置绑定+渲染剥离）
+
+Work Log:
+- 先读 worklog.md 最后 200 行（setup-1/fix4-* 条目）与共享库 /src/lib/action-desc.ts 全文；微信端（Task 5-a）已完成同功能，逐段 Read wechat.tsx 的 import(154-155)/JSDoc+签名(1140-1165)/hook(4059-4060)/调用点(5008-5010)/渲染层(6502-6579、6790-6821)/设置绑定(7194-7196) 作为同构模板
+- grep 定位 qq.tsx 全部锚点（行号为改后现状）：sticker-toggle import:194、buildPersonaPrompt:1228、stickersOn state:2465、sessionKey:2411、调用点:3591、ChatSettingsPage:5742、msgs.map:4927
+- import（:195-196）：新增 @/lib/action-desc 六导出 + ./action-desc-line 组件
+- hook（:2469-2470）：const actionDescOn = useActionDescOn(sessionKey) 置于 stickersOn useEffect 之后（组件顶层，hooks 顺序稳定，设置页切换经事件即时刷新历史消息显示）
+- buildPersonaPrompt（:1223-1228、:1245）：签名在 stickersOn 后加 actionDescOn: boolean；JSDoc 补一行说明；extraRules 追加 ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE])
+- 调用点（:3589-3591）：runAiTurn 作用域内 stickersOn 读取处紧邻加 const actionDescOn = getActionDescOn(sessionKey)（发送时现场读取），调用改为 buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(...))
+- ChatSettingsPage 绑定（:5743-5744）：stickersOn 行后加 actionDescOn={actionDescOn} 与 onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}（设置页必填 props 已由协调者在 chat-settings.tsx 就绪，已 grep 核实）
+- 渲染层 msgs.map 回调（:4933-4938）：return 前插 actView（门控 m.role==='peer' && (!m.kind || m.kind==='text')，QQMsg.role 联合类型实测为 'me'|'peer'、kind 缺省=文本，与 spec 一致）/actLines/actBody/bubbleContent 四变量（无命名冲突）
+- 渲染层三分支链起点（:4961-4988）：actView && !actView.text 纯动作分支——selectMode && isSelectable(m) 时渲染勾选圈行（照抄 QQ 现有多选勾选圈：选中 border-[#0099FF] bg-[#0099FF] text-white、未选 border-black/25 dark:border-white/35、Check 图标 strokeWidth={3}、testId qq-select-${m.id}；spec 预写的未选色 border-white/40 与 QQ 实码不符，按铁律「照抄 QQ 现有写法」取实码配色）+ actLines 序列，否则 actLines.map(ActionDescLine)（testId qq-action-${m.id}-${k}，单聊不带 actorName）；否则 <> fragment + actView?.before.map（key b${k}）+ 原 {m.recalled ? ( 链原样保留
+- 渲染层三分支链收尾（:5234-5239）：原 )} 之后、</> 之前插 actView?.after.map（key a${k}，与 before 的 key 前缀错开防 React 重复 key），再 </> 与 )} 闭合
+- 气泡正文（:5197-5199）：m.content→bubbleContent（该表达式 2 处）；引用卡内容(:5192)、renderTranslations(:5213)、转发卡片等分支的 m.content 均未动
+- 结构与同构核对：与 wechat.tsx 逐段比对（纯动作行结构/勾选圈行结构/key 前缀/testId 命名法/comment 文案全同构，仅 QQ 配色与 grid place-items-center 惯用法取 QQ 实码）；tsc --noEmit 全仓 exit 0（rg "qq.tsx" 零输出）；bunx eslint qq.tsx exit 0（仅既有 BABEL 500KB 提示非错误）；全文 13784→13832 行
+
+Stage Summary:
+- QQ 单聊动作描写四层接线全部落地：渲染订阅 hook（设置页切换即时生效于历史消息）+ 提示词（开启注格式约定/关闭注显式禁令）+ 设置页开关绑定 + 渲染层剥离（开启：*...* 描写剥离为居中灰字独立行、正文留气泡；关闭：整段过滤不残留星号；解析失败按原文零改动）
+- 纯动作消息（整条只有描写/关闭态过滤后无正文）不渲染气泡行，多选模式下渲染 QQ 配色勾选圈行保证可勾选；气泡「正在输入点点点」占位（content 为空）不受影响（actionDescViewOf 对空串返回 null）
+- 决策记录：①actView 门控按 spec 与 wechat 端逐字一致（未加 !m.recalled）——已知微边缘：QQ/微信双端长按菜单均对 AI 气泡提供「撤回」且撤回保留原文，若撤回一条含星号消息会在撤回行上方残留 before 动作行（双端行为一致，如需修建议五端统一补 !m.recalled，未擅自偏离同构）；②QQ 勾选圈未选色用实码 border-black/25 dark:border-white/35 而非 spec 预写值（spec 自身指令「照抄 QQ 现有写法」优先）
+- 验证：npx tsc --noEmit 全仓 0 错误、bunx eslint qq.tsx 0 错误；全部落点 Read 回读核对括号配对与 JSX 完整性；只改 src/components/apps/qq.tsx 一个文件，未跑 git/dev server
+---
+Task ID: 5-d
+Agent: 群聊接线代理
+Task: 微信群聊+QQ群聊接入动作描写（群设置开关+提示词+渲染剥离，带发言者前缀）
+
+Work Log:
+- 先读 worklog.md 最后 200 行与共享库 src/lib/action-desc.ts 全文（只读，未改）确认 API（getActionDescOn/saveActionDescOn/useActionDescOn/ACTION_DESC_RULE/ACTION_DESC_OFF_RULE/actionDescViewOf + ActionDescLine 组件，群聊传 actorName）；grep 重定位两文件现状行号（与任务书锚点基本一致，无漂移）
+- import（双端同构）：sticker-toggle import 行后追加 `@/lib/action-desc` 与 `./action-desc-line` 两行——wx-group.tsx:125-126、qq-group.tsx:114-115；偏离任务书 1 处：import 补上了 saveActionDescOn（任务书 import 清单漏列但设置页 onChange 用到，tsc 首轮 TS2552 定位后即补）
+- 群设置页开关（双端同构）：GroupInfoPage/QqGroupInfoPage 组件体内 timeAwareOn state 旁加渲染订阅 hook `const actionDescOn = useActionDescOn(sessionKeyOf(gid));`（wx:848、qq:776），时间感知 SwitchRow 后追加「动作描写」SwitchRow（caption 按任务书文案，onChange 调 saveActionDescOn(sessionKeyOf(gid), v)，testId wx-groupinfo-action-desc wx:1254-1262 / qq-groupinfo-action-desc qq:1178-1186；各自复用本文件 SwitchRow 定义，accent 自动随 ChatToggle wx绿/QQ蓝）
+- 提示词注入（双端同构）：回合构建处 stickersOn 现场读取后加 `const actionDescOn = getActionDescOn(sKey);`（wx:2889、qq:2510，回合内局部变量与组件顶层渲染订阅 hook 同名不冲突——内层独立作用域遮蔽，各取所需：回合用落盘值、渲染用订阅值）；groupRules 数组 STICKER_OFF_RULE 展开项后追加 `actionDescOn ? ACTION_DESC_RULE : ACTION_DESC_OFF_RULE`（wx:2922-2923、qq:2543-2544）；未动 buildActionRules（红包/转账规则同名概念）
+- 渲染层（核心，双端同构）：①聊天页组件顶层加渲染订阅 hook `useActionDescOn(sKey)`（wx:2291、qq:1964）；②msgs.map 回调顶部（early return 与 mine/sender 等局部量之后）加 actView/actLines/actBody 三局部量（wx:4733-4736、qq:4408-4411），actView 门控 `!m.recalled && m.role === 'peer' && (!m.kind || m.kind === 'text')`（已撤回消息不出幽灵动作行，见偏离点②）；③三分支链包裹：`{m.recalled ? (` 前插 pure-action 分支（`actView && !actView.text`）+ `<>` fragment + before 行（wx:4759-4788、qq:4432-4461）——pure-action 多选分支照抄各文件多选勾选圈 span（testId wx/qq-grp-select-${m.id}、wx绿#07C160/QQ蓝#0099FF、Check 图标），右侧 `min-w-0 flex-1` 放 actLines.map；正常模式仅 actLines.map 居中灰字行（ActionDescLine，actorName=wx 用 m.senderName（与 renderMsgRow 名字行同源）/qq 用 map 内 senderName（memberNameOf 解析链同源），testId wx/qq-grp-action-${m.id}-${k}）；④文本分支气泡正文改 `cleanBubbleText(actBody ?? m.content)`（wx:4942、qq:4630），引用块（wx renderMsgRow 的 m.quote 块 / qq 气泡内引用卡）与消息行结构原样保留；⑤原链收尾 `)}` 后补 after 行 + `</>` + `)` 闭合（wx:4946-4951、qq:4634-4639），混合情形 before 行在链前、after 行在链后
+- 验证：每处编辑后 Read 回读核对括号配对与 JSX 完整性（wx 纯 action 分支 4759-4782、fragment 4783-4951；qq 4432-4455、4456-4639 逐段复读）；`npx tsc --noEmit` 全仓零错误、`bunx eslint wx-group.tsx qq-group.tsx` 零错误零警告；未运行 git/dev server，未改这两个文件以外的任何文件
+
+Stage Summary:
+- 双群聊动作描写全链路接入完成（wx-group.tsx 5497→5554 行、qq-group.tsx 5195→5252 行，各 10 处落点）：群设置开关（按群独立、切换经事件即时刷新聊天页渲染）→ 回合 system 注入（开启=ACTION_DESC_RULE 格式约定、关闭=ACTION_DESC_OFF_RULE 显式禁令）→ 渲染层剥离（AI 成员文本消息 *...* 动作以居中灰色小字独立成行、带发言者名字前缀；pure-action 整条消息只有动作时不出气泡/头像、多选模式保留勾选圈；关闭态渲染层硬剥离过滤不残留，解析失败走原路径零改动）
+- 偏离任务书决策：①import 行补列 saveActionDescOn（任务书 import 清单遗漏但第 2 节 onChange 需要）；②actView 门控额外加 `!m.recalled`（已撤回消息仍保留原文，若不挡会以幽灵动作行/灰字浮在「撤回了一条消息」提示上下，语义错误；代价为撤回消息不做动作剥离——撤回提示本就不显示正文，无剥离需求）；③before/after 行 testId 后缀区分（`-${k}` 与 `-aft-${k}`）避免混合消息 before/after 同序号撞 testId
+- 妥协点（按任务书口径保留）：pure-action 且带引用块的消息（AI 全动作回复+引用，极罕见）不渲染引用卡（spec pure-action 分支未含引用块渲染）；记忆/上下文/长按菜单复制等非显示层链路保持原文带星号（共享库设计语义）
+
+---
+Task ID: feat-action-desc
+Agent: 主协调者 (Z.ai Code)
+Task: 用户需求两项——①天气App城市名下方不再显示省/市/县层级副标题；②五端（微信/QQ/信息/微信群聊/QQ群聊）新增「动作描写」开关：开启时 AI 回复里 *星号* 包裹的动作/情景描写以灰色小字居中独立成行显示（正文留气泡），关闭时自动过滤不残留
+
+Work Log:
+- 设计先行：共享约定格式定为「一对星号 *...* 包裹动作描写」（星号成对、不跨行、内部非空）；渲染层解析方案（storage/上下文/记忆/引用/翻译全保持原文，只动显示层）——开关切换即时生效于历史消息，且对既有链路零侵入
+- 新建 src/lib/action-desc.ts：localStorage 单键 JSON map 持久化（chat-action-desc-on，sessionKey 隔离，默认开启）+ useSyncExternalStore 渲染订阅 hook（saveActionDescOn 派发 EVT + storage 事件，设置页切换即时刷新）+ ACTION_DESC_RULE/ACTION_DESC_OFF_RULE 提示词对 + splitActionDescParts（成对解析：**加粗**片段跳过防误伤、不成对星号解析失败按原文显示不丢失）+ actionDescViewOf（开启：before/after 动作行+整理后正文；关闭：成对整段剥离+散落星号/空括号残留清理，CJK 相邻与行首尾星号清除、5*3 数学星号保留）+ actionDescCaption
+- 新建 src/components/apps/action-desc-line.tsx：ActionDescLine 居中灰色小字独立行（12.5px text-black/40 dark:text-white/40，群聊带 actorName 发言者前缀）
+- chat-settings.tsx：ChatSettingsPage 与 SmsChatSettingsPage 各新增必填 props actionDescOn/onToggleActionDesc + 开关行（testId wx/qq/sms-settings-action-desc）+ 说明文案
+- 并行派发 4 路接线代理（文件互不相交）：5-a wechat.tsx（hook+buildPersonaPrompt 加参注入+设置绑定+渲染：map 回调顶部 actView/actLines/actBody/bubbleContent 计算，三分支链 pure-action 分支+before/after 行包裹，气泡正文换 bubbleContent，多选模式 pure-action 消息给勾选圈行保证可勾选）；5-b qq.tsx 同构（勾选圈配色照抄 QQ 实码 #0099FF）；5-c chat.tsx 同构（门控加 !m.error）；5-d wx-group.tsx + qq-group.tsx（群设置页 SwitchRow + groupRules 注入 + 渲染带 senderName 前缀，testId wx/qq-grp-action-*）
+- 协调者补刀：wx/qq/chat 三端 actView 门控统一补 !m.recalled（撤回消息不渲染幽灵动作行，与群聊端对齐）；action-desc.ts lint 报 react-hooks/set-state-in-effect → hook 重构为 useSyncExternalStore + storage 跨标签页同步
+- 验证：bun -e 直测 18 个解析用例全过（前置/后置/纯动作/多行/加粗不误伤/解析失败保留/关闭剥离/残留清理/数学星号保留等）；npx tsc --noEmit 全仓 0 错；bun run lint 0 错（仅 qq.tsx>500KB 既有 BABEL 提示）
+- Agent Browser E2E：①天气App「北京」标题下副标题已消失，页面正常；②信息App（IndexedDB 注入 3 类动作消息）：前缀动作（灰字在上+气泡）、纯动作（仅居中灰字行无气泡）、中缀动作（气泡+后置灰字）三形态渲染正确，星号零残留；③聊天设置关闭「动作描写」→ 返回后灰字行全消失、纯动作消息整条隐藏；④重启（reload+解锁）后开关保持关闭（localStorage {"sms:assistant":false}）过滤仍生效；⑤微信登录 13800138000 → 小晴会话同构渲染正确 + 聊天信息页开关存在（aria-checked=true）；console/page errors 零输出；dev.log 干净
+
+Stage Summary:
+- 两项需求全部落地：天气App城市副标题移除（citySubtitleOf 函数一并删除）；动作描写功能五端共用 src/lib/action-desc.ts + ActionDescLine，开关默认开启、按会话独立持久化，开启=灰色小字居中独立成行不占气泡，关闭=自动过滤无半截描写无符号残留，解析失败按普通文字显示不丢失
+- 明确默认：动作描写开关默认「开启」（与表情包开关同款默认态）；关闭时提示词注入显式禁令 + 渲染层硬剥离双保险
+- 范围限定达成：只动显示层——记忆/世界书/上下文/复制/引用/转发/收藏/翻译/识图/红包转账/长按菜单/群管理/拉黑/语音/通话等链路全部保持原文不变；用户自己的消息不做解析
+- 已知妥协：①pure-action 消息（整条只有动作）在关闭态整条不显示；②会话列表预览与引用块显示原文含星号（与复制/记忆同源，保持原文语义）；③群聊 pure-action 消息多选时以「勾选圈+灰字行」渲染（无头像无气泡）
+- 提交：git add + commit + push origin main

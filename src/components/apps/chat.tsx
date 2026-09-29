@@ -54,6 +54,8 @@ import { buildTimeAwareBlock as buildSmsTimeBlock } from '@/lib/time-aware';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
+import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { buildVisionRules, extractRichActionParts } from '@/lib/chat-rich';
 import {
@@ -848,6 +850,8 @@ function ChatView({
   useEffect(() => {
     setStickersOnState(getStickersOn(sessionKey));
   }, [sessionKey]);
+  // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效
+  const actionDescOn = useActionDescOn(sessionKey);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（右侧 Mic 钮切换，原装饰图标位置） */
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
@@ -1347,6 +1351,8 @@ function ChatView({
       wbBlocks && systemPrompt
         ? [wbBlocks.beforeChar, systemPrompt, wbBlocks.afterChar].filter(Boolean).join('\n\n')
         : systemPrompt ?? '';
+    // 动作描写开关：发送时现场读取（与上方 getTimeAware 现场读取同款），开启下发格式约定、关闭下发禁令
+    const actionDescOn = getActionDescOn(sessionKey);
     const baseSys = [
       ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
       charBlock,
@@ -1365,6 +1371,8 @@ function ChatView({
         : '',
       timeBlock,
       stickersOn ? '' : STICKER_OFF_RULE,
+      // 动作描写：开启下发 *...* 格式约定（灰色小字居中显示），关闭下发显式禁令（渲染层另有硬剥离兜底）
+      actionDescOn ? ACTION_DESC_RULE : ACTION_DESC_OFF_RULE,
       // 46-g 视觉自主决策规则（仅联系人会话；信息端无图无朋友圈，albumSummary 通常为空 → 只注入换头像规则；
       // 相册非空时额外注入【选图操作】+【相册清单】，让 AI 可用 [选图设头像:alb-xxx] 从相册挑图换头像）
       // #111 信息端仅支持 pick-album-avatar：通用 buildVisionRules 列了 3 个 pick-album-* 动作，但 chat.tsx
@@ -2251,6 +2259,11 @@ function ChatView({
           const lastOfGroup = next === undefined || next.role !== m.role;
           const mine = m.role === 'user';
           const text = m.content.trim();
+          // 动作描写视图（仅对方 AI 的文本消息；我的消息/系统行/申请卡/错误占位/无星号内容 → null 走原路径）
+          const actView = !mine && !m.recalled && !m.sys && !m.blkreq && !m.error ? actionDescViewOf(m.content, actionDescOn) : null;
+          const actLines = actView ? [...actView.before, ...actView.after] : [];
+          // 动作描写开启时气泡正文（剥离描写并整理空白；actView 为 null 时保持原文）
+          const bubbleContent = actView && actView.text ? actView.text : text;
           return (
             <div
               key={m.id}
@@ -2266,6 +2279,38 @@ function ChatView({
               }
             >
               {newDay && <DaySeparator time={m.time} />}
+              {actView && !actView.text ? (
+                /* 整条只有动作描写（或关闭态过滤后无正文）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
+                selectMode && !m.recalled && !m.sys && !m.blkreq ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+                    className="flex justify-start"
+                  >
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`mr-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      {actLines.map((a, k) => (
+                        <ActionDescLine key={k} text={a} testId={`sms-action-${m.id}-${k}`} />
+                      ))}
+                    </div>
+                  </motion.div>
+                ) : (
+                  actLines.map((a, k) => <ActionDescLine key={k} text={a} testId={`sms-action-${m.id}-${k}`} />)
+                )
+              ) : (
+              <>
+                {actView?.before.map((a, k) => (
+                  <ActionDescLine key={`b${k}`} text={a} testId={`sms-action-${m.id}-${k}`} />
+                ))}
               {m.recalled ? (
                 /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
                 <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
@@ -2403,7 +2448,7 @@ function ChatView({
                           style={{ clipPath: TAIL_CLIP_RIGHT }}
                         />
                       )}
-                      <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{text}</span>
+                      <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{bubbleContent}</span>
                     </div>
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                   {renderTranslations(m.id, m.content, m.error && !mine)}
@@ -2426,6 +2471,11 @@ function ChatView({
                   </span>
                 )}
               </motion.div>
+              )}
+                {actView?.after.map((a, k) => (
+                  <ActionDescLine key={`a${k}`} text={a} testId={`sms-action-${m.id}-${k}`} />
+                ))}
+              </>
               )}
               {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
               {blockedLineOf(m)}
@@ -2665,6 +2715,8 @@ function ChatView({
           sentenceSend={sentenceSend}
           timeAware={timeAware}
           stickersOn={stickersOn}
+          actionDescOn={actionDescOn}
+          onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           worldBooksSummary={
             wbContactId
               ? loadBooks()

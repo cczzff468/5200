@@ -27,6 +27,7 @@ import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRigh
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { stickerToggleCaption } from '@/lib/sticker-toggle';
+import { actionDescCaption } from '@/lib/action-desc';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
 import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
@@ -147,6 +148,8 @@ export function ChatSettingsPage({
   onToggleSentenceSend,
   onToggleTimeAware,
   onToggleStickers,
+  actionDescOn,
+  onToggleActionDesc,
   onOpenWorldBooks,
   onOpenSearch,
   onOpenBg,
@@ -187,6 +190,8 @@ export function ChatSettingsPage({
   timeAware: boolean;
   /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
   stickersOn: boolean;
+  /** 动作描写开关状态（开启后 AI 回复里的动作描写以灰色小字居中显示，关闭后自动过滤，见 @/lib/action-desc） */
+  actionDescOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
   worldBooksSummary: string;
   onBack: () => void;
@@ -199,6 +204,8 @@ export function ChatSettingsPage({
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
   onToggleStickers: (v: boolean) => void;
+  /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
+  onToggleActionDesc: (v: boolean) => void;
   onOpenWorldBooks: () => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
@@ -447,6 +454,21 @@ export function ChatSettingsPage({
           </div>
         </div>
         <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{stickerToggleCaption(stickersOn)}</p>
+
+        {/* 动作描写：AI 回复中动作/情景描写的显示开关（开启时 *...* 包裹的描写以灰色小字居中独立成行，关闭时自动过滤；按会话独立） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <div className={`flex items-center justify-between ${rowCls}`}>
+            <span>动作描写</span>
+            <ChatToggle
+              on={actionDescOn}
+              onChange={onToggleActionDesc}
+              accent={accent}
+              testId={`${testPrefix}-settings-action-desc`}
+              label="动作描写"
+            />
+          </div>
+        </div>
+        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{actionDescCaption(actionDescOn)}</p>
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1247,6 +1269,8 @@ export function SmsChatSettingsPage({
   onToggleSentenceSend,
   onToggleTimeAware,
   onToggleStickers,
+  actionDescOn,
+  onToggleActionDesc,
   onOpenWorldBooks,
   blockedByUser,
   blockReqCount,
@@ -1270,6 +1294,8 @@ export function SmsChatSettingsPage({
   timeAware: boolean;
   /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
   stickersOn: boolean;
+  /** 动作描写开关状态（开启后 AI 回复里的动作描写以灰色小字居中显示，关闭后自动过滤，见 @/lib/action-desc） */
+  actionDescOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
   worldBooksSummary: string;
   onBack: () => void;
@@ -1281,6 +1307,8 @@ export function SmsChatSettingsPage({
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
   onToggleStickers: (v: boolean) => void;
+  /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
+  onToggleActionDesc: (v: boolean) => void;
   /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
   onOpenWorldBooks?: () => void;
   /** 双向拉黑：当前是否已拉黑对方（不传 = 该会话不支持拉黑，隐藏开关） */
@@ -1427,6 +1455,21 @@ export function SmsChatSettingsPage({
           </div>
         </div>
         <p className={t.captionCls}>{stickerToggleCaption(stickersOn)}</p>
+
+        {/* 动作描写：AI 回复中动作/情景描写的显示开关（与微信/QQ 同套逻辑，按会话独立） */}
+        <div className={`${t.cardCls} mt-3`}>
+          <div className={`flex items-center justify-between ${t.rowCls}`}>
+            <span>动作描写</span>
+            <ChatToggle
+              on={actionDescOn}
+              onChange={onToggleActionDesc}
+              accent="#34C759"
+              testId="sms-settings-action-desc"
+              label="动作描写"
+            />
+          </div>
+        </div>
+        <p className={t.captionCls}>{actionDescCaption(actionDescOn)}</p>
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择）；AI 助手会话无此入口 */}
         {onOpenWorldBooks && (

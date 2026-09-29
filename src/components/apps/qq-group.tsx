@@ -111,6 +111,8 @@ import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
 import { ChatBgPage, ChatReplyCountPage, ChatToggle, ChatVoiceFreqPage, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
 import { loadStickers, type Sticker } from '@/lib/ios/stickers';
 import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
+import { ActionDescLine } from './action-desc-line';
 import { readImageFile } from './wechat';
 import {
   LocationBubble,
@@ -770,6 +772,8 @@ export function QqGroupInfoPage({
   };
   const [flags, setFlags] = useState<ChatFlags>(() => qqChatFlags.get());
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
+  // 动作描写开关（渲染订阅版：切换后经事件即时刷新聊天页渲染）
+  const actionDescOn = useActionDescOn(sessionKeyOf(gid));
   const fileRef = useRef<HTMLInputElement>(null);
   const [bgOpen, setBgOpen] = useState(false);
 
@@ -1170,6 +1174,15 @@ export function QqGroupInfoPage({
             setTimeAware(sessionKeyOf(gid), v);
             setTimeAwareOn(v);
           }}
+        />
+        <SwitchRow
+          label="动作描写"
+          caption="开启后成员回复中的动作与情景描写会以灰色小字居中显示；关闭后自动过滤（按群独立）"
+          checked={actionDescOn}
+          onChange={(v) => {
+            saveActionDescOn(sessionKeyOf(gid), v);
+          }}
+          testId="qq-groupinfo-action-desc"
         />
       </div>
 
@@ -1947,6 +1960,8 @@ export function QqGroupChatPage({
 }) {
   const gid = group.id;
   const sKey = sessionKeyOf(gid);
+  // 动作描写开关（渲染订阅版：群设置页切换后经事件即时刷新渲染）
+  const actionDescOn = useActionDescOn(sKey);
   // 退出群聊页/切群：停止 TTS 朗读与语音气泡播放并释放播放器（单例，防跨群串音）
   useEffect(() => () => {
     stopSpeaking();
@@ -2491,6 +2506,8 @@ export function QqGroupChatPage({
         // 关闭时不下发清单也不让 AI 发表情包卡片（与单聊同规则）
         const stickers = loadStickers('qq');
         const stickersOn = getStickersOn(sKey);
+        // 动作描写（按群独立，回合现场读取）：开启下发 *...* 格式约定，关闭下发显式禁令
+        const actionDescOn = getActionDescOn(sKey);
 
         // 回复条数（按群独立，发送时现场读取）：条数约束跟随聊天设置——单条模式只发一条，
         // 多条模式条数交给【连发短消息】指令（下方 system 拼装处），此处不再写死。
@@ -2523,6 +2540,8 @@ export function QqGroupChatPage({
           // 特殊消息标记（群聊格式：红包带个数、转账带收款对象；表情包清单按本群表情开关下发）
           ...buildGroupRichRules(stickersOn ? stickers : []),
           ...(stickersOn ? [] : [STICKER_OFF_RULE]),
+          // 动作描写：开启下发 *...* 格式约定（灰色小字居中显示），关闭下发显式禁令（渲染层另有硬剥离兑底）
+          actionDescOn ? ACTION_DESC_RULE : ACTION_DESC_OFF_RULE,
         ];
         // 发钱节流（提示词层）：冷却期内提醒这轮不要再发红包/转账（落盘层另有硬节流兑底）
         const lastMoneyAt = aiMoneyAt.get(moneyCooldownKey(sKey, char.id)) ?? 0;
@@ -4386,6 +4405,10 @@ export function QqGroupChatPage({
           const sender = mine ? null : m.senderId === 'unknown' ? null : memberById.get(m.senderId) ?? null;
           const senderName = mine ? me.name : sender ? memberNameOf(sender) : m.senderName;
           const senderAvatar = mine ? me.avatar : sender?.avatar ?? null;
+          // 动作描写视图（仅 AI 成员的文本消息；机主/已撤回/其他类型/无星号内容 → null 走原渲染路径）
+          const actView = !m.recalled && m.role === 'peer' && (!m.kind || m.kind === 'text') ? actionDescViewOf(m.content, actionDescOn) : null;
+          const actLines = actView ? [...actView.before, ...actView.after] : [];
+          const actBody = actView && actView.text ? actView.text : null;
           return (
             <div
               key={m.id}
@@ -4406,6 +4429,35 @@ export function QqGroupChatPage({
                   <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
+              {actView && !actView.text ? (
+                /* 整条消息只有动作描写（pure-action）：多选=行首勾选圈+动作灰字列表；正常=仅居中灰字行（不出气泡/头像） */
+                selectMode && isSelectable(m) ? (
+                  <div className="mb-3 flex gap-2">
+                    <span
+                      aria-hidden="true"
+                      data-testid={`qq-grp-select-${m.id}`}
+                      className={`mt-2.5 flex h-[20px] w-[20px] shrink-0 self-start items-center justify-center rounded-full border ${
+                        fwdFlow === 'choose' && mine ? 'order-last' : ''
+                      } ${selectedIds.includes(m.id) ? 'border-[#0099FF] bg-[#0099FF] text-white' : 'border-black/25 dark:border-white/35'}`}
+                    >
+                      {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      {actLines.map((a, k) => (
+                        <ActionDescLine key={k} text={a} actorName={senderName} testId={`qq-grp-action-${m.id}-${k}`} />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  actLines.map((a, k) => (
+                    <ActionDescLine key={k} text={a} actorName={senderName} testId={`qq-grp-action-${m.id}-${k}`} />
+                  ))
+                )
+              ) : (
+                <>
+                  {(actView?.before ?? []).map((a, k) => (
+                    <ActionDescLine key={k} text={a} actorName={senderName} testId={`qq-grp-action-${m.id}-${k}`} />
+                  ))}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
                   <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
@@ -4575,10 +4627,15 @@ export function QqGroupChatPage({
                           </div>
                         );
                       })()}
-                      <span>{cleanBubbleText(m.content)}</span>
+                      <span>{cleanBubbleText(actBody ?? m.content)}</span>
                     </div>
                   </div>
                 </div>
+              )}
+                  {(actView?.after ?? []).map((a, k) => (
+                    <ActionDescLine key={k} text={a} actorName={senderName} testId={`qq-grp-action-${m.id}-aft-${k}`} />
+                  ))}
+                </>
               )}
             </div>
           );

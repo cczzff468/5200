@@ -34,7 +34,6 @@ import {
   FALLBACK_CITY,
   asCityPick,
   cityKeyOf,
-  citySubtitleOf,
   fetchWeather,
   publishWeatherSnap,
   readWeatherCache,
@@ -800,12 +799,9 @@ export default function WeatherApp() {
     >
       <main className="no-scrollbar flex-1 overflow-y-auto" aria-label="天气内容">
         <div className="px-5 pb-[40px] pt-[64px]">
-          {/* 顶部城市栏：居中城市名（+ 省/市/县副标题）+ 右上角搜索/刷新 */}
+          {/* 顶部城市栏：居中城市名 + 右上角搜索/刷新（用户需求：城市名下方不再显示省/市/县层级副标题） */}
           <header className="relative flex h-[48px] flex-col items-center justify-center">
             <h1 className="max-w-[190px] truncate text-[34px] font-normal leading-none">{city ? city.name : '天气'}</h1>
-            {city && citySubtitleOf(city) ? (
-              <p className="mt-0.5 max-w-[220px] truncate text-[12px] leading-none text-white/60">{citySubtitleOf(city)}</p>
-            ) : null}
             {/* 左侧：返回主屏幕（底部横杠点击关闭已禁用，根界面需显式返回键）+ 城市管理入口 */}
             <div className="absolute inset-y-0 left-[-10px] flex items-center">
               <button

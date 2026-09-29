@@ -72,18 +72,6 @@ export function cityKeyOf(c: CityPick): string {
   return `${c.lat.toFixed(2)},${c.lon.toFixed(2)}`;
 }
 
-/** 城市副标题：省/市/县拼接（去重，去掉与 name 重复的层级）。
- *  例：name='海淀区' + admin2='北京市' + admin1='北京市' → '北京市'（去重）
- *      name='昆山' + admin2='苏州市' + admin1='江苏省' → '江苏省 苏州市'
- *  用于天气 App 主页大标题下方、城市管理页城市卡片副标题。 */
-export function citySubtitleOf(c: CityPick): string {
-  const parts: string[] = [];
-  for (const p of [c.admin1, c.admin2, c.admin3]) {
-    if (p && p !== c.name && !parts.includes(p)) parts.push(p);
-  }
-  return parts.join(' ');
-}
-
 // ==================== 天气码映射 ====================
 
 /** Open-Meteo WMO 天气码 → 中文描述 + lucide 图标 */
