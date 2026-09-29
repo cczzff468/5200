@@ -6510,6 +6510,11 @@ function ChatPage({
           // 动作描写开启时气泡正文（剥离描写并整理空白；actView 为 null 时保持原文）
           const actBody = actView && actView.text ? actView.text : null;
           const bubbleContent = actBody ?? m.content;
+          // 空白气泡防御：对方纯文本消息清洗后没有任何可见内容（历史脏数据/空段/纯不可见字符）
+          // → 整行不渲染气泡（与「整条只有动作描写」同分支：多选模式保留勾选圈行，其余渲染为空）
+          const bubbleBlank =
+            m.role === 'peer' && !m.recalled && (!m.kind || m.kind === 'text') && !cleanBubbleText(bubbleContent);
+          const lineOnly = (actView && !actView.text) || bubbleBlank;
           return (
           <div
             key={m.id}
@@ -6533,8 +6538,8 @@ function ChatPage({
                 <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
               </div>
             )}
-            {actView && !actView.text ? (
-              /* 整条只有动作描写（或关闭态过滤后无正文）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
+            {lineOnly ? (
+              /* 整条只有动作描写（或关闭态过滤后无正文 / 空白脏数据）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
               selectMode && isSelectable(m) ? (
                 <div className={`flex items-center gap-2 py-1.5 ${m.role === 'me' ? 'flex-row-reverse' : ''}`}>
                   <span

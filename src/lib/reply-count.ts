@@ -46,6 +46,17 @@ const BOUNDARY_ONE_RE = new RegExp(BOUNDARY_SRC);
 /** 末尾 1-2 个「&」：可能被拆进下个增量的半截分隔标记 */
 const HALF_MARKER_RE = /&{1,2}$/;
 
+/** 看不见的占位字符（与 chat-rich 的 BLANK_CHARS 同集合）：零宽/双向控制/词连接符/盲文空格/韩文填充符等。
+ *  String.trim() 不认识它们——只含这些字符的段会穿透「空白过滤」，落成一条完全空白的气泡/语音 */
+const BLANK_CHARS = '\u200B\u200C\u200D\u200E\u200F\u2060\u2800\u3164\uFFA0';
+
+/** 首尾空白 + 不可见占位字符一并剥掉（空白段判定与段内容清洗统一用） */
+function trimBlank(s: string): string {
+  const head = new RegExp(`^[\\s${BLANK_CHARS}]+`);
+  const tail = new RegExp(`[\\s${BLANK_CHARS}]+$`);
+  return s.replace(head, '').replace(tail, '');
+}
+
 /** 把任意值收窄为合法的回复条数（非法/未提供时回退 fallback） */
 export function normalizeReplyCount(v: unknown, fallback: number = DEFAULT_REPLY_COUNT): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : NaN;
@@ -153,9 +164,9 @@ function splitByBoundaryRaw(text: string): string[] {
   return out;
 }
 
-/** 去掉首尾空白并滤掉空段 */
+/** 去掉首尾空白与不可见占位字符并滤掉空段（切不出任何可见内容时整段丢弃，不生成空白气泡） */
 function trimSegs(parts: string[]): string[] {
-  return parts.map((s) => s.trim()).filter((s) => s.length > 0);
+  return parts.map(trimBlank).filter((s) => s.length > 0);
 }
 
 /**
@@ -216,8 +227,8 @@ function splitSingleIntoPieces(text: string, cap: number): string[] {
     }
   }
   parts.push(text.slice(last));
-  const segs = trimSegs(parts).map((s) => s.replace(/[，,；;、]+$/, '').trim()).filter((s) => s.length > 0);
-  if (segs.length < 2) return [text.trim()];
+  const segs = trimSegs(parts).map((s) => trimBlank(s.replace(/[，,；;、]+$/, ''))).filter((s) => s.length > 0);
+  if (segs.length < 2) return [trimBlank(text)];
   if (segs.length > cap) {
     // 超上限：溢出内容并入最后一条（与主分段器的第 N 条策略一致）
     const head = segs.slice(0, cap - 1);
@@ -251,9 +262,11 @@ export function createReplySegmentScanner(onSegment: (segment: string) => void, 
           scanFrom = end;
           continue;
         }
-        const trimmed = candidate.trim();
+        // 首尾空白 + 不可见占位字符一并剥掉：只含空白/零宽字符的段按空段处理（不投不占条数），
+        // 放出的段内容也不再携带不可见字符（下游各 App 不会再落出空白气泡）
+        const trimmed = trimBlank(candidate);
         if (trimmed.length === 0) {
-          // 空段（连续换行/标记）：跳过不投、不占条数
+          // 空段（连续换行/标记/不可见字符）：跳过不投、不占条数
           segStart = end;
           scanFrom = end;
           continue;
@@ -273,9 +286,9 @@ export function createReplySegmentScanner(onSegment: (segment: string) => void, 
       }
     },
     finish() {
-      // 剩余内容（最后一条 / 超出上限的溢出部分）：标记换成换行，半截「&&」不进气泡
-      let tail = full.slice(segStart).replace(MARKER_RE, '\n').trim();
-      tail = tail.replace(HALF_MARKER_RE, '').trim();
+      // 剩余内容（最后一条 / 超出上限的溢出部分）：标记换成换行，半截「&&」与首尾不可见字符不进气泡
+      let tail = trimBlank(full.slice(segStart).replace(MARKER_RE, '\n'));
+      tail = trimBlank(tail.replace(HALF_MARKER_RE, ''));
       if (!tail || tail === lastEmitted) return '';
       // 兜底「不能只发 1 条就结束」：整轮回复只有这一条（流中一条都没放出）且上限 ≥2 时，
       // 按次级边界拆成多条：前面的条立刻经 onSegment 投递（顺序仍在最后一条之前），

@@ -76,6 +76,9 @@ export function cleanTextForTts(raw: string): string {
     /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/gu,
     ' '
   );
+  // 看不见的占位字符（零宽/双向控制/词连接符/盲文空格/韩文填充符等）：Trim 不认识它们，
+  // 残留在朗读文本里就是一段「空白语音」（AI 动作剥离后只留下这些字符时尤其会出现）
+  t = t.replace(/[\u200B\u200C\u200D\u200E\u200F\u2060\u2800\u3164\uFFA0]+/g, ' ');
   // 压缩空白（换行变空格，多空格合一）
   t = t.replace(/\s+/g, ' ').trim();
   return t;

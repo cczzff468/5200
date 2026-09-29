@@ -745,13 +745,25 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   // 头部说明按互通状态分文案（跨 App 互通修复）：角色必须被告知「多端同一个人」以及
   // 本次能看到哪些来源的记忆——否则带「·微信」标注的碎片会被当成无关信息，甚至否认在别处的对话
   const headScope = isGroupMode
-    ? '记忆库自动整理'
+    ? '群聊模式：只注入本群可见的记忆'
     : share
       ? '跨应用记忆库：你在微信/QQ/信息/电话都和TA聊过，下面带App标注的记忆可能来自任何一端，都是你亲身经历的事'
       : '仅本App记忆（跨应用互通已关闭）：你在其他App和TA聊过的内容这里看不到';
+  // 归属标注说明（朋友圈/QQ动态来源记忆自带「（AI角色本人）/（用户本人）」标注）：
+  // 只要注入内容里出现这类标注，就附一行解释——AI 必须能区分「是我自己发的动态」还是「用户发的」，
+  // 绝不能把自己（记忆库主人）发的动态当成用户的行为（反之亦然）
+  const hasRoleTag = (s: string) => s.includes('（AI角色本人）') || s.includes('（用户本人）');
+  const showRoleTagNote =
+    [...keepLongs, ...keepCores].some(({ m }) => hasRoleTag(m.content)) ||
+    keepFrags.some(({ f }) => hasRoleTag(f.content));
   const lines: string[] = [
-    `【关于对方的记忆（${headScope}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
+    `【记忆库（${headScope}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
     '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
+    ...(showRoleTagNote
+      ? [
+          '（归属标注说明：标了「AI角色本人」的事，就是你自己（这份记忆库的主人）做的；标了「用户本人」的事，是和你聊天的用户本人做的——谁做的就归谁，绝不能张冠李戴）',
+        ]
+      : []),
   ];
   if (keepLongs.length > 0) {
     lines.push('◇ 长期记忆（最稳定的画像；回复时应始终符合这些事实）：');

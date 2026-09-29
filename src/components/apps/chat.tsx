@@ -57,7 +57,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
-import { buildVisionRules, extractRichActionParts } from '@/lib/chat-rich';
+import { buildVisionRules, cleanBubbleText, extractRichActionParts } from '@/lib/chat-rich';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -1227,17 +1227,20 @@ function ChatView({
         if (wbContactId && loadBlock('sms', wbContactId).byUser) continue;
         // #42：下方 segs/stripEmojiText 仅正常模式（byUser=false）执行——byUser continue 上面已拦，
         // 不再在三元里再判 byUser；保留 stickersOn 三元用于表情开关关闭时剥 emoji
-        const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text]).map((seg) =>
-          stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
-        );
+        // 首尾清洗（与微信/QQ 同款）：剥掉首尾空白与零宽/盲文空格等「看不见的占位字符」——
+        // 只含空白/不可见字符的段直接跳过，不生成空白气泡（动作描写被剥离后只剩空段时尤其必要）
+        const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text])
+          .map((seg) =>
+            stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
+          )
+          .map(cleanBubbleText)
+          .filter((seg) => seg.length > 0);
         for (const seg of segs) {
           out.push({
             id: msgIdx === 0 ? idBase : `${idBase}-${msgIdx}`,
             role: 'assistant',
-            content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
+            content: seg,
             time: t,
-            // #31 兜底占位标 error:true（与 finalize 错误消息同口径）：不进上下文/记忆素材，红字显示
-            ...(seg ? null : { error: true }),
           });
           t += 600 + Math.floor(Math.random() * 600);
           msgIdx += 1;
@@ -2264,6 +2267,11 @@ function ChatView({
           const actLines = actView ? [...actView.before, ...actView.after] : [];
           // 动作描写开启时气泡正文（剥离描写并整理空白；actView 为 null 时保持原文）
           const bubbleContent = actView && actView.text ? actView.text : text;
+          // 空白气泡防御：对方纯文本消息清洗后没有任何可见内容（历史脏数据/空段/纯不可见字符）
+          // → 整行不渲染气泡（与「整条只有动作描写」同分支：多选模式保留勾选圈行，其余渲染为空）
+          const bubbleBlank =
+            !mine && !m.recalled && !m.sys && !m.blkreq && !m.error && !m.kind && !cleanBubbleText(bubbleContent);
+          const lineOnly = (actView && !actView.text) || bubbleBlank;
           return (
             <div
               key={m.id}
@@ -2279,8 +2287,8 @@ function ChatView({
               }
             >
               {newDay && <DaySeparator time={m.time} />}
-              {actView && !actView.text ? (
-                /* 整条只有动作描写（或关闭态过滤后无正文）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
+              {lineOnly ? (
+                /* 整条只有动作描写（或关闭态过滤后无正文 / 空白脏数据）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
                 selectMode && !m.recalled && !m.sys && !m.blkreq ? (
                   <motion.div
                     initial={{ opacity: 0, y: 10, scale: 0.97 }}

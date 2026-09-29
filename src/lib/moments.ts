@@ -650,6 +650,22 @@ function platformApp(platform: MomentPlatform): MemApp {
   return platform === 'wx' ? 'wx' : 'qq';
 }
 
+/** 平台 → 完整 App 名（记忆/注入块标注「在哪个 App 发的」：朋友圈=微信、QQ动态=QQ空间，杜绝只写「朋友圈」时归属含糊） */
+const MOMENT_APP_FULL_LABEL: Record<MomentPlatform, string> = { wx: '微信朋友圈', qq: 'QQ空间' };
+
+/**
+ * 动态记忆里的绝对时间标注（「什么时间发的」）：M月D日 HH:mm；跨年补年份。
+ * 用本机时区格式化（与动态列表展示时间同口径）；ts 缺失返回空串（调用方省略时间段）。
+ */
+function momentMemoryTimeLabel(ts: number | undefined | null): string {
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return `${sameYear ? '' : `${d.getFullYear()}年`}${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
 /**
  * 该角色是否处于拉黑状态（双向）：byUser = 用户拉黑了角色；byChar = 角色拉黑了用户。
  * 真实语义都是双向不可见——拉黑期间动态引擎停止该角色的一切主动互动
@@ -670,15 +686,18 @@ function isPeerBlocked(platform: MomentPlatform, peerId: string): boolean {
 
 /**
  * 记忆事实（展示名传入，真实名字在入库前解析替换——与聊天记忆的视角统一规则一致）。
- * shape 决定记忆句式：
- * - char-post：{peer}发了一条{平台}：「detail」
- * - user-post：{user}发了一条{平台}：「detail」{extra（该角色的互动摘要）}
- * - like：{peer}给{归属人}的{平台}动态点了赞（动态：「postDetail」）——归属人默认机主，角色动态用 postAuthorPeerId 解析
- * - char-comment：{peer}评论了{归属人}的{平台}动态：「detail」（动态：「postDetail」）——归属人同上
- * - char-reply：{peer}回复了{被回复人}的评论：「detail」（动态：「postDetail」）——被回复人默认机主，回复角色评论用 replyTargetPeerId 解析
- * - user-comment：{user}评论了{peer}的{平台}动态：「detail」
- * - user-reply：{user}回复了{peer}的评论：「detail」（动态：「postDetail」）
- * - user-like：{user}给{peer}的{平台}动态点了赞（动态：「postDetail」）——机主赞了该角色（记忆主人）发的动态
+ * shape 决定记忆句式。归属标注铁律（谁发的绝不能含糊）：每条记忆都写明
+ * 「谁（角色标注）+ 在哪个 App（微信朋友圈/QQ空间）+ 什么时间」——
+ * 「（AI角色本人）」= 记忆库主人自己，「（用户本人）」= 机主用户；AI 私聊读记忆时据此
+ * 区分「是我自己发的动态」还是「用户发的动态」，绝不把自己的动态当成用户的行为：
+ * - char-post：{peer}（AI角色本人）于{time}在微信朋友圈发了一条动态：「detail」
+ * - user-post：{user}（用户本人）于{time}在微信朋友圈发了一条动态：「detail」{extra（该角色的互动摘要）}
+ * - like：{peer}（AI角色本人）于{time}给{归属人（标注）}的微信朋友圈动态点了赞（动态：「postDetail」）——归属人默认机主，角色动态用 postAuthorPeerId 解析
+ * - char-comment：{peer}（AI角色本人）于{time}评论了{归属人（标注）}的微信朋友圈动态：「detail」（动态：「postDetail」）——归属人同上
+ * - char-reply：{peer}（AI角色本人）于{time}回复了{被回复人（标注）}的评论：「detail」（动态：「postDetail」）——被回复人默认机主，回复角色评论用 replyTargetPeerId 解析
+ * - user-comment：{user}（用户本人）于{time}评论了{peer}（AI角色本人）的微信朋友圈动态：「detail」
+ * - user-reply：{user}（用户本人）于{time}回复了{peer}（AI角色本人）的评论：「detail」（动态：「postDetail」）
+ * - user-like：{user}（用户本人）于{time}给你的微信朋友圈动态点了赞（动态：「postDetail」）——机主赞了该角色（记忆主人）发的动态
  */
 interface MomentMemoryFact {
   peerId: string;
@@ -719,37 +738,46 @@ function memoryContentOf(
 ): string {
   const peer = peerReal || f.peerDisplay || '对方';
   const user = userReal || f.userName || '用户';
-  const label = MOMENT_PLATFORM_LABEL[f.platform];
-  // 平台 + 动态名（朋友圈→朋友圈动态；QQ动态→不重复接「动态」，避免「QQ动态动态」）
-  const labelPost = f.platform === 'qq' ? 'QQ空间动态' : `${label}动态`;
+  const app = MOMENT_APP_FULL_LABEL[f.platform];
+  const t = momentMemoryTimeLabel(f.sourceTime);
+  const at = t ? `于${t}` : ''; // 时间段（记忆必须标时间；无来源时间时省略）
+  // 主语角色标注：「AI角色本人」= 记忆库主人（AI）自己；「用户本人」= 机主；其余 AI 角色标「AI角色」
+  const peerTagged = `${peer}（AI角色本人）`;
+  const userTagged = `${user}（用户本人）`;
+  // 动态归属人标注（like/char-comment 的「谁的动态」）：角色动态 →（AI角色）；机主动态 →（用户本人）
+  const authorTag = f.postAuthorPeerId ? '（AI角色）' : '（用户本人）';
+  const replyTargetTag = f.replyTargetPeerId ? '（AI角色）' : '（用户本人）';
   switch (f.shape) {
     case 'char-post':
-      return `${peer}发了一条${label}：「${f.detail}」`;
+      return `${peerTagged}${at}在${app}发了一条动态：「${f.detail}」`;
     case 'user-post':
-      return `${user}发了一条${label}：「${f.detail}」${f.extra ?? ''}`;
+      return `${userTagged}${at}在${app}发了一条动态：「${f.detail}」${f.extra ?? ''}`;
     case 'like': {
       // 归属人：角色动态用真实发帖人真名（解析失败用展示名；都无法确定返回空串→不写入，宁缺勿错）
       const target = f.postAuthorPeerId ? extraReal?.postAuthor || f.postAuthorDisplay || '' : user;
       if (!target) return '';
-      return `${peer}给${target}的${labelPost}点了赞（动态：「${f.postDetail ?? f.detail}」）`;
+      const targetTagged = f.postAuthorPeerId ? `${target}（AI角色）` : `${target}${authorTag}`;
+      return `${peerTagged}${at}给${targetTagged}的${app}动态点了赞（动态：「${f.postDetail ?? f.detail}」）`;
     }
     case 'user-like':
       // 机主赞了该角色（记忆主人）的动态：以角色为中心的视角（「凡凡给你的朋友圈动态点了赞」）
-      return `${user}给你的${labelPost}点了赞（动态：「${f.postDetail ?? f.detail}」）`;
+      return `${userTagged}${at}给你的${app}动态点了赞（动态：「${f.postDetail ?? f.detail}」）`;
     case 'char-comment': {
       const target = f.postAuthorPeerId ? extraReal?.postAuthor || f.postAuthorDisplay || '' : user;
       if (!target) return '';
-      return `${peer}评论了${target}的${labelPost}：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
+      const targetTagged = f.postAuthorPeerId ? `${target}（AI角色）` : `${target}${authorTag}`;
+      return `${peerTagged}${at}评论了${targetTagged}的${app}动态：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
     }
     case 'char-reply': {
       const target = f.replyTargetPeerId ? extraReal?.replyTarget || f.replyTargetDisplay || '' : user;
       if (!target) return '';
-      return `${peer}回复了${target}的评论：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
+      const targetTagged = f.replyTargetPeerId ? `${target}（AI角色）` : `${target}${replyTargetTag}`;
+      return `${peerTagged}${at}回复了${targetTagged}的评论：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
     }
     case 'user-comment':
-      return `${user}评论了${peer}的${labelPost}：「${f.detail}」`;
+      return `${userTagged}${at}评论了${peerTagged}的${app}动态：「${f.detail}」`;
     case 'user-reply':
-      return `${user}回复了${peer}的评论：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
+      return `${userTagged}${at}回复了${peerTagged}的评论：「${f.detail}」${f.postDetail ? `（动态：「${f.postDetail}」）` : ''}`;
   }
 }
 
@@ -2335,26 +2363,32 @@ export function buildMomentsChatBlock(args: {
   if (picked.length === 0) return '';
 
   const peerDisplay = displayNameOf(peer);
+  const appLabels = allowed.map((p) => MOMENT_APP_FULL_LABEL[p]).join('/');
   const lines: string[] = [
-    `【最近的社交动态（${allowed.map((p) => MOMENT_PLATFORM_LABEL[p]).join('/')}；这些是动态广场内容，不是你们私聊的消息）】`,
+    `【最近的社交动态（${appLabels}；这些是动态广场内容，不是你们私聊的消息）】`,
   ];
   for (const p of picked) {
-    const who = p.author === 'user' ? userName : p.authorName;
+    const who = p.author === 'user' ? userName : p.authorName ?? '';
+    // 归属标注铁律：每条动态必须一眼看出是谁发的——「AI角色本人，就是你自己」= 读到这段的 AI 自己，
+    // 「用户本人」= 机主用户，其余 = 其他 AI 角色；杜绝 AI 把自己发的动态当成用户发的（反之亦然）
+    const roleTag = p.author === 'user' ? '用户本人' : p.peerId && p.peerId === peer.id ? 'AI角色本人，就是你自己' : 'AI角色';
     // #18：转发动态（QQ 手动转发为主路径）的正文只是转发理由——主行用统一口径带上被转发的原文摘要
     const lineText = p.repostOf ? repostContextText(p.repostOf, p.content, 60) : p.content.slice(0, 60);
     lines.push(
-      `- ${momentTimeLabel(p.createdAt)} ${who}发了一条${MOMENT_PLATFORM_LABEL[p.platform]}：「${lineText}」`
+      `- ${momentTimeLabel(p.createdAt)} ${who}（${roleTag}）在${MOMENT_APP_FULL_LABEL[p.platform]}发了动态：「${lineText}」`
     );
     // 相关互动：该角色的点赞 + 最近的评论（最多 3 条，多轮回复按顺序）
     if (p.likes.some((l) => isInteractionByPeer(l, peer))) lines.push('  （你赞过这条动态）');
     for (const c of p.comments.slice(-3)) {
       const cWho = c.author === 'user' ? userName : c.authorName;
+      const cTag = c.author === 'user' ? '用户本人' : 'AI角色';
       const arrow = c.replyToName ? ` 回复 ${c.replyToName}` : '';
-      lines.push(`  （评论：${cWho}${arrow}：「${c.content.slice(0, 50)}」）`);
+      lines.push(`  （评论：${cWho}（${cTag}）${arrow}：「${c.content.slice(0, 50)}」）`);
     }
   }
   lines.push(
-    `（这些是你们在${allowed.map((p) => MOMENT_PLATFORM_LABEL[p]).join('/')}里的公开动态与互动，聊天时可以像真人一样自然提起（关心、调侃、接着聊都行），但不要把它们当成私聊内容，也不要生硬复述。）`
+    `（这些是你们在${appLabels}里的公开动态与互动，聊天时可以像真人一样自然提起（关心、调侃、接着聊都行），但不要把它们当成私聊内容，也不要生硬复述。` +
+      `归属标注必须看清：标了「AI角色本人，就是你自己」的动态是你自己发的，标了「用户本人」的是${userName}发的——绝不能把自己发的动态说成${userName}发的，也不能把${userName}发的说成自己发的。）`
   );
 
   // 懒写入记忆：这次「被看到」的用户广播动态写进该角色记忆（去重：已入过库的动态跳过）

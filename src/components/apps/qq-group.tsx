@@ -4409,6 +4409,11 @@ export function QqGroupChatPage({
           const actView = !m.recalled && m.role === 'peer' && (!m.kind || m.kind === 'text') ? actionDescViewOf(m.content, actionDescOn) : null;
           const actLines = actView ? [...actView.before, ...actView.after] : [];
           const actBody = actView && actView.text ? actView.text : null;
+          // 空白气泡防御：AI 成员纯文本消息清洗后没有任何可见内容（历史脏数据/空段/纯不可见字符）
+          // → 整行不渲染气泡（与「整条只有动作描写」同分支：多选模式保留勾选圈行，其余渲染为空）
+          const bubbleBlank =
+            m.role === 'peer' && !m.recalled && (!m.kind || m.kind === 'text') && !cleanBubbleText(actBody ?? m.content);
+          const lineOnly = (actView && !actView.text) || bubbleBlank;
           return (
             <div
               key={m.id}
@@ -4429,8 +4434,8 @@ export function QqGroupChatPage({
                   <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
-              {actView && !actView.text ? (
-                /* 整条消息只有动作描写（pure-action）：多选=行首勾选圈+动作灰字列表；正常=仅居中灰字行（不出气泡/头像） */
+              {lineOnly ? (
+                /* 整条消息只有动作描写（pure-action）或空白脏数据：多选=行首勾选圈+动作灰字列表；正常=仅居中灰字行（不出气泡/头像） */
                 selectMode && isSelectable(m) ? (
                   <div className="mb-3 flex gap-2">
                     <span

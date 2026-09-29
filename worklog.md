@@ -11848,3 +11848,31 @@ Stage Summary:
 - 范围限定达成：只动显示层——记忆/世界书/上下文/复制/引用/转发/收藏/翻译/识图/红包转账/长按菜单/群管理/拉黑/语音/通话等链路全部保持原文不变；用户自己的消息不做解析
 - 已知妥协：①pure-action 消息（整条只有动作）在关闭态整条不显示；②会话列表预览与引用块显示原文含星号（与复制/记忆同源，保持原文语义）；③群聊 pure-action 消息多选时以「勾选圈+灰字行」渲染（无头像无气泡）
 - 提交：git add + commit + push origin main
+
+---
+Task ID: fix-blank-bubble-moments-attrib
+Agent: 主协调者 (Z.ai Code)
+Task: 用户报告两问题——①AI 回复中动作描写旁出现完全空白气泡（语音也可能空白/含动作描写）；②AI 把自己发的朋友圈动态当成用户发的（记忆归属不清）
+
+Work Log:
+- 根因定位（三处）：
+  ① 流式分段器（reply-count.ts）用 String.trim() 判空——零宽空格/盲文空格 U+2800/韩文填充符 U+3164 等「不可见占位字符」trim 不认识，纯不可见字符段穿透空白过滤被放出（bun 直测复现：['⠀','嗯，看到啦']）；
+  ② 信息端（chat.tsx）buildReplyMsgs 是五端唯一不过 cleanBubbleText 的管线，seg 原样入库 → 空白气泡；微信/QQ/双群聊创建层本就过滤；
+  ③ 渲染层对「对方纯文本消息且可见内容为空」直接渲染空壳气泡（微信是 typing 点点占位、信息端纯空），存量脏数据无兜底。
+- 修复（纵深防御四层）：
+  1a reply-count.ts：新增 BLANK_CHARS + trimBlank()，trimSegs/流式扫描器空段判定/finish() 尾段/splitSingleIntoPieces 全部空白感知——不可见字符段在源头即被丢弃，放出的段也不再携带不可见字符（五端共用）；
+  1b chat.tsx：segs 管线对齐微信（.map(cleanBubbleText).filter(非空)），删掉 per-seg『（AI 暂时没有返回内容…）』占位（整轮全空由 finalize 的 deliveredAny/requestOnly 兜底文案接管，已核实）；
+  1c 渲染层五端（wechat/qq/chat/wx-group/qq-group）：新增 bubbleBlank = 对方纯文本 && 未撤回 && cleanBubbleText(bubbleContent) 为空 → 并入既有「整条只有动作描写」分支（lineOnly）：正常模式渲染为空（空白气泡彻底消失），多选模式保留勾选圈行可勾选；同时修好已落库的历史脏数据；
+  1d tts-client.ts cleanTextForTts：追加不可见占位字符清洗——纯动作/纯不可见字符消息合成为语音时 cleaned 为空 → synthesizeAiVoice 返回 null 保持文字，绝不产出空白语音条；AI 语音 localText/朗读文本继续经既有 *…* 剥离（无动作描写）。
+- 朋友圈归属修复（三处）：
+  2a moments.ts memoryContentOf：全部八种句式重写为「谁（角色标注）+ 于{时间} + 在微信朋友圈/QQ空间 + 动作」——char-post→「L（AI角色本人）于9月29日 15:55在微信朋友圈发了一条动态：「…」」、user-post→「凡凡（用户本人）…」；like/char-comment 的归属人按 postAuthorPeerId 标（AI角色）/（用户本人）；新增 MOMENT_APP_FULL_LABEL 与 momentMemoryTimeLabel（跨年补年份）；
+  2b buildMomentsChatBlock：注入块每行动态带（AI角色本人，就是你自己）/（用户本人）/（AI角色）标注 + 尾注明示「绝不能把自己发的动态说成用户发的，反之亦然」；评论行同样带角色标注；
+  2c memory.ts memRecallBlock：头部「关于对方的记忆」→「记忆库」（原措辞让 AI 把记忆内容都归到「对方=用户」头上，是归属混淆的推手），群聊模式 headScope 改「只注入本群可见的记忆」；当注入内容含角色标注时自动附一行解释（AI角色本人=你自己/用户本人=聊天对面的用户）；存量旧格式碎片由 repairMomentIdentityData（MomentsScheduler 启动时）比对 memoryContentOf 新句式自动重写。
+- 验证：bun 直测 13 用例全过（盲文/零宽/韩文填充段丢弃、段首尾剥除、splitReplySegments 全空白回退、信息端管线端到端不再落空白段、TTS 纯动作/纯不可见清洗为空、动作+正文剥离正确）；memoryContentOf 从源码提取实跑 6 句式全带归属标注；npx tsc --noEmit 0 错；bun run lint 0 错（仅 qq.tsx>500KB 既有 BABEL 提示）；
+- Agent Browser E2E（信息端）：注入 content=''、U+2800、零宽+韩文填充三条空白消息 + 纯动作消息 + 正常消息 → 重载后三条空白全部不渲染、纯动作显示为居中灰字行、正常消息完好；发真实消息走新管线 → AI 回复语音条（19"）localText 干净无动作无空白；控制台/page errors 零输出；dev.log 无新增错误（/api/settings/models 502 为用户预览侧探测上游的既有行为）。
+- 事故记录：验证期间 dev server 两次消亡——一次 OOM（dmesg 实锤 next-server 1.6GB 被内核杀）、一次随 Bash 工具会话回收；最终用 setsid bash .zscripts/dev.sh（沙箱官方脚本，写 dev.pid）启动后跨会话稳定存活。
+
+Stage Summary:
+- 空白气泡三层根因（分段器不可见字符穿透 / 信息端未清洗 / 渲染层无兜底）全部修复，五端共用逻辑一致：解析时空段直接跳过不生成气泡、切分过滤空白内容、动作描写与正文之间不可能再产生空消息，且已落库的存量空白消息在渲染层也不再显示；语音条不包含动作描写（cleanTextForTts 既剥离 *…* 也剥离不可见字符，清洗后为空则不转语音）
+- 朋友圈动态写入记忆时明确标注「谁发的（AI角色本人/用户本人/其他AI角色）+ 在哪个 App（微信朋友圈/QQ空间）+ 什么时间（于M月D日 HH:mm）」，私聊召回时头部与解释行保证 AI 能区分「是我自己发的」还是「用户发的」；存量错格式碎片由启动期 repair 自动重写
+- 范围限定达成：只动「空白内容判定/清洗」与「朋友圈记忆句式/注入块文案」，动作描写开关、回复条数、红包转账、长按菜单、群管理、拉黑、语音通话、识图、翻译等链路零改动；QQ 与微信（含群聊）沿用同一套分段器/清洗/渲染分支
