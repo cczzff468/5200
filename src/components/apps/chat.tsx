@@ -1237,7 +1237,7 @@ function ChatView({
         // 不再在三元里再判 byUser；保留 stickersOn 三元用于表情开关关闭时剥 emoji
         // 首尾清洗（与微信/QQ 同款）：剥掉首尾空白与零宽/盲文空格等「看不见的占位字符」——
         // 只含空白/不可见字符的段直接跳过，不生成空白气泡（动作描写被剥离后只剩空段时尤其必要）
-        const segs = (asSingle ? splitReplySegments(part.text, false) : [part.text])
+        const segs = splitReplySegments(part.text, !asSingle)
           .map((seg) =>
             stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
           )
@@ -1598,9 +1598,12 @@ function ChatView({
    *  single=false：每项就是一条独立消息文本 → 多条模式逐条投递 */
   const deliverBgItems = useCallback(
     (items: BgPendingItem[]) => {
+      // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与 finalize 同语义；
+      // AI 助手会话运行时恒为单条（无人设不给条数指令），接力投递同口径不切句）
+      const bgAsSingle = sessionKey === 'sms:assistant' || getReplyCount(sessionKey) <= 1;
       for (const item of items) {
         if (item.single) {
-          bgEnqueueBatch(buildReplyMsgs(item.texts.join(''), true, Date.now(), uid(), 0).msgs);
+          bgEnqueueBatch(buildReplyMsgs(item.texts.join(''), bgAsSingle, Date.now(), uid(), 0).msgs);
         } else {
           for (const t of item.texts) {
             bgEnqueueBatch(buildReplyMsgs(t, false, Date.now(), uid(), 0).msgs);
@@ -1608,7 +1611,7 @@ function ChatView({
         }
       }
     },
-    [bgEnqueueBatch, buildReplyMsgs],
+    [bgEnqueueBatch, buildReplyMsgs, sessionKey],
   );
 
   const bgDeliverRef = useRef<(items: BgPendingItem[]) => void>(() => undefined);

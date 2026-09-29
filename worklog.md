@@ -12139,3 +12139,45 @@ Stage Summary:
 - 需求逐条达成：领取/接收/退还（红包/转账/亲属卡）后 AI 零跟发（E2E 各等 8-10 秒验证）✓；用户主动发卡 AI 正常回复 ✓；消费感知=流水+记忆（归属句式「机主「凡凡」于X在微信里用你（AI角色本人）送的亲属卡支付了…」eventTime 落库）✓；消费记录=聊天系统通知行（持久化）+钱包消费记录详情+kv 流水（重启保留）✓；AI 经召回自然提及亲属卡消费（E2E 实测「下次直接用亲属卡付钱就好啦」）✓；头像按 角色ID+App 隔离（base 红→四端红；wx 绿→仅微信；qq 黄→仅 QQ；回退+持久化 E2E 三轮刷新验证）✓；单聊群聊共用逻辑 ✓
 - 范围限定：记忆/世界书/时间感知/回复条数/朋友圈/识图/长按菜单/群管理/拉黑/语音/通话链路未触碰；AI 处理用户发的卡（wxApplyAiActions/applyAiActions）与用户发送触发的正常回合全部保留
 - 验证：npx tsc --noEmit 0 错；eslint 12 个改动文件 0 错；Agent Browser E2E（微信红包领取/转账收款/亲属卡领取/红包退还/钱包付款×2/红包亲属卡支付/AI 感知回复）全过、零控制台错误；dev.log 干净
+
+---
+Task ID: seg-fix-1
+Agent: 主协调者 (Z.ai Code)
+Task: 修复聊天气泡分段逻辑（一句一条、语音/文字/动作分离、稳定切分、五端共用）
+
+Work Log:
+- 定位根因（reply-count.ts + chat-stream-store.ts + 五端 buildReplyMsgs）：
+  1) 流式分段器 createReplySegmentScanner 有「N-1 条后停止切分」上限，且 [换头像] 这类动作标记段
+     也计入已放条数 —— 到上限后剩余所有句子全部堆进 finish() 尾段，最终一个气泡里塞多句话（\n 分隔）；
+  2) 五端多条模式对每段直接 [part.text] 落一条消息，尾段/接力整段不再细切 —— 拥挤落盘；
+  3) finish() 的兜底按逗号/顿号把整句碎成短句（节奏不均匀、乱切）；
+  4) 省略号 … 在句末标点类里，「我……好吧。」被撕成两半；
+  5) 动作描写与正文混在同一段时，消息升级语音会吞掉动作描写。
+
+Work Log（修复）:
+- src/lib/reply-count.ts：
+  - BOUNDARY_SRC 句末标点类改为 [。！？!? ～〜]+收尾引号（全角波浪号算口语句终；半角 ~ 与省略号、
+    逗号顿号分号明确不算边界 —— 切分稳定，不撕「我……好吧。」「3~5分钟」）；
+  - 新增 splitMultiSegments：先用 splitActionDescParts（复用 action-desc.ts）把成对 *...* 动作描写
+    整段摘出独立成条（消息内容保持 *...* 原格式，渲染为居中灰字行、TTS 读不到），正文再按
+    「&&& + 换行 + 句末标点」切句；动作贴合处残留的句中逗号从段首/段尾剥掉；
+  - splitReplySegments(multi=true) = splitMultiSegments + 连续重复段去重；multi=false（条数=1 单条模式）维持只按 &&& 切；
+  - createReplySegmentScanner 去掉条数上限（每凑齐一句立刻放出，绝不把溢出句堆进最后一条）、
+    删除 splitSingleIntoPieces 逗号碎句兜底；保留未闭合「[」标记保护与空段/重复段过滤；
+- src/lib/chat-stream-store.ts：适配新 scanner 签名（2 处），文档口径同步；
+- 五端接入（一段文本统一过 splitReplySegments(part.text, !asSingle) 再 mergeRichSegments 修半截标记）：
+  wechat.tsx / qq.tsx / wx-group.tsx / qq-group.tsx / chat.tsx(信息)；单条模式（回复条数=1）行为不变；
+- 接力回复（关页 generate）三条路径（wechat/qq/chat deliverBgItems）改按该会话自己的回复条数决定
+  解析模式（bgAsSingle = getReplyCount(sessionKey)<=1；信息端 AI 助手会话恒单条）—— 修复接力整段
+  回复被挤成一个气泡的问题；
+- action-desc.ts ACTION_DESC_RULE 增补「动作描写尽量单独占一行，不要和正文挤在同一句」。
+- 验证：单测 14 场景全过（截图场景两句一段/省略号稳定/逗号不切/动作独立/动作含句号/&&&/标记祝福语
+  不撕/溢出不挤压/重复去重/半角~保护）；bun run lint 0 错误；agent-browser 实测微信小雪与 QQ 小雪
+  真实对话：一句一条逐条上屏、动作描写「眼睛亮了一下」独立灰字行、语音条独立、～句终自然分条；
+  刷新页面（锁屏→解锁→微信→会话）分段结果持久化完整；dev.log 无错误。
+
+Stage Summary:
+- 分段核心收敛到 src/lib/reply-count.ts 一套（五端 + 群聊共用），生成端条数提示不变（N 为上限引导），
+  切分端「一句一条、动作独立、稳定边界、不设硬上限」；
+- 用户可见效果：多条回复按句独立成气泡、节奏均匀；动作描写单独成行；语音/文字/卡片不混条；
+  关页接力的整段回复也按会话条数正常分条；分段结果随消息持久化，重启保留。

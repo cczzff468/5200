@@ -4670,9 +4670,10 @@ function ChatPage({
 
   /**
    * 把一段回复文本解析成待投递消息（流中分段、finalize 最后一段与接力拉取投递共用同一套管线，不重不漏）：
-   * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式）
-   * 时文字块再按「&&&」标记切分，false（多条模式）时一段就是一条消息 —— 分段器已按边界切好，
-   * 不再二次切分（N 条上限的最后一段可能含溢出合并的句子，切开会破上限）。
+   * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式，
+   * 回复条数=1）时文字块只按「&&&」标记切分；false（多条模式）时每段再按「换行/句末标点/
+   * 动作描写」稳定细切 —— 一句一条、动作描写独立成条，流中分段/finalize 尾段/接力整段
+   * 都不会把多句话挤进同一个气泡。
    * ctx 承载本轮 aiId/msgIdx（回复消息 id 序列）与 wantCallSeen（[语音通话] 标记收集）。
    */
   /** 40-a：把「用户发起的解除拉黑申请卡」置为终态（存储 + 本地 state 同步；无 pending 卡时空操作）。
@@ -4890,7 +4891,7 @@ function ChatPage({
       if (loadBlock('wx', peer.id).byUser) continue;
       // #42：下方 segs/stripEmojiText 仅正常模式（byUser=false）执行——byUser continue 上面已拦，
       // 不再在三元里再判 byUser；保留 stickersOn 三元用于表情开关关闭时剥 emoji
-      const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, false)) : [part.text];
+      const segs = mergeRichSegments(splitReplySegments(part.text, !asSingle));
       for (const seg of segs) {
         for (const p of parseRichParts(seg, stickersOn ? stickers : [])) {
           const id = ctx.msgIdx === 0 ? ctx.aiId : `${ctx.aiId}-${ctx.msgIdx}`;
@@ -4921,6 +4922,9 @@ function ChatPage({
     if (items.length === 0) return;
     const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false };
     let queuedAny = false;
+    // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与页面内
+    // finalize 同语义）——单条(N=1)整条解析，多条(N>1)走稳定细切，不把整段挤成一个气泡
+    const bgAsSingle = getReplyCount(sessionKey) <= 1;
     const deliverOne = (rawText: string, asSingle: boolean) => {
       // 与 finalize 同写法：动作标记可能已改状态（cur 变化先落盘），解析出的消息排队投递
       const { msgs: built, cur, dirty } = buildReplyMsgs(rawText, asSingle, Date.now(), ctx);
@@ -4931,7 +4935,7 @@ function ChatPage({
     };
     for (const item of items) {
       if (item.single) {
-        deliverOne(item.texts.join(''), true);
+        deliverOne(item.texts.join(''), bgAsSingle);
       } else {
         for (const t of item.texts) deliverOne(t, false);
       }

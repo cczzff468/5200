@@ -3186,8 +3186,9 @@ export function WxGroupChatPage({
         };
         /**
          * 把一段回复文本解析成待投递消息（流中分段与 finalize 最后一段共用同一套管线，不重不漏）：
-         * 动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置产出）；asSingle=true（单条模式）
-         * 时文字块再按边界切分，false（多条模式）时一段就是一条消息（分段器已按边界切好，不再二次切分）。
+         * 动作标记就地应用（红包领取/转账状态流转 + 通知行跟随动作位置产出）；asSingle=true（单条模式，
+         * 回复条数=1）时文字块只按 &&& 标记切分，false（多条模式）时每段再按「换行/句末标点/动作描写」
+         * 稳定细切 —— 一句一条、动作描写独立成条，流中分段与 finalize 尾段都不挤成一个气泡。
          * [红包:总金额:个数:祝福语] 群红包卡片 / [转账:对象:金额:备注] 指定成员转账 / [位置…] / [表情包:ID]
          */
         const buildGroupReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): WxGroupMsg[] => {
@@ -3200,7 +3201,7 @@ export function WxGroupChatPage({
               else applyGroupAiAction(char, part.action);
               continue;
             }
-            const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, replyCount > 1)) : [part.text];
+            const segs = mergeRichSegments(splitReplySegments(part.text, !asSingle));
             for (const seg of segs) {
               for (const p of parseRichParts(seg, stickersOn ? stickers : [], { group: true })) {
                 const id = msgIdx === 0 ? aiMsgId : `${aiMsgId}-${msgIdx}`;

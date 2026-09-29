@@ -11,8 +11,8 @@
  *    读流循环跑在本模块的异步函数里，不依赖任何组件存活）；
  * 3. 重新进入聊天页时，useChatStream 读到该会话的流状态继续渲染（流式期间只显示「正在输入」，
  *    已收到的分段消息由各 App 经 onSegment 解析成真实消息逐条投递落盘，与页面是否存活无关）；
- * 4. 回复条数 >1 时按「边接收边逐条显示」分段：分段器每凑齐一条完整消息立刻回调 onSegment
- *    投递上屏（N 为上限不是任务），最后一条经 finalize 的 result.tail 交付；
+ * 4. 回复条数 >1 时按「边接收边逐条显示」分段：分段器每凑齐一条完整句子立刻回调 onSegment
+ *    投递上屏（不设硬上限，一句一条绝不挤压），收尾剩余的一段经 finalize 的 result.tail 交付；
  * 5. 请求完成或失败后，由发起方注册的 finalize 回调把剩余消息写入
  *    对应角色的聊天记录（各 App 自己的 loadMsgs/saveMsgs，消息类型与错误文案按 App 区分），
  *    并广播 chat-stream-finalized 事件供会话列表刷新预览；
@@ -218,12 +218,12 @@ function patchState(rt: StreamRuntime, patch: Partial<ChatStreamState>): void {
 
 async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promise<void> {
   const { apiConfig, messages } = opts;
-  // 流式分段器（回复条数 > 1 时启用）：边接收边切分，每凑齐一条完整消息立刻经 onSegment
-  // 投递上屏；原文只在本模块累计（raw），不写入展示状态 —— 流式期间页面只显示「正在输入」，
+  // 流式分段器（回复条数 > 1 时启用）：边接收边切分，每凑齐一条完整句子立刻经 onSegment
+  // 投递上屏（不设条数上限：回复几条由生成端决定，切分端一句一条、不把溢出句堆进最后一条）；
+  // 原文只在本模块累计（raw），不写入展示状态 —— 流式期间页面只显示「正在输入」，
   // 不再有「先全文后消失」的流式气泡；分段与展示状态完全分离（流式和分条不改同一块状态）
   const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
-  let scanner =
-    multi && opts.onSegment ? createReplySegmentScanner(opts.onSegment, opts.replyCount ?? 1) : null;
+  let scanner = multi && opts.onSegment ? createReplySegmentScanner(opts.onSegment) : null;
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
   const effConfig =
     multi && opts.replyCount
@@ -373,7 +373,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 旧分段器已放出的分段保留上屏、不计入新分段器的条数计数
     raw = '';
     if (multi && opts.onSegment) {
-      scanner = createReplySegmentScanner(opts.onSegment, opts.replyCount ?? 1);
+      scanner = createReplySegmentScanner(opts.onSegment);
     } else {
       scanner = null;
     }

@@ -3497,7 +3497,7 @@ function ChatPage({
         if (loadBlock('qq', peer.id).byUser) continue;
         // #42：下方 segs/stripEmojiText 仅正常模式（byUser=false）执行——byUser continue 上面已拦，
         // 不再在三元里再判 byUser；保留 stickersOnNow 三元用于表情开关关闭时剥 emoji
-        const segs = asSingle ? mergeRichSegments(splitReplySegments(part.text, false)) : [part.text];
+        const segs = mergeRichSegments(splitReplySegments(part.text, !asSingle));
         for (const seg of segs) {
           for (const p of parseRichParts(seg, stickersOnNow ? stickersNow : [])) {
             const id = msgIdx === 0 ? idBase : `${idBase}-${msgIdx}`;
@@ -3956,9 +3956,11 @@ function ChatPage({
    *  动作标记（红包领取/拉黑等）就地应用，卡片状态变更随 dirty 落盘——与 finalize 同款 */
   const deliverBgItems = useCallback(
     (items: BgPendingItem[]) => {
+      // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与 finalize 同语义）
+      const bgAsSingle = getReplyCount(sessionKey) <= 1;
       for (const item of items) {
         if (item.single) {
-          const r = buildReplyMsgs(item.texts.join(''), true, Date.now(), uid(), 0);
+          const r = buildReplyMsgs(item.texts.join(''), bgAsSingle, Date.now(), uid(), 0);
           if (r.dirty) saveMsgs(peer.id, r.cur);
           bgEnqueueBatch(r.msgs);
         } else {
@@ -3974,7 +3976,7 @@ function ChatPage({
       //（bg 回复非仅申请卡模式，requestOnly=false；冷却/通话中/拉黑防御在 maybeTriggerAiCall 内）
       maybeTriggerAiCall(false);
     },
-    [bgEnqueueBatch, buildReplyMsgs, maybeTriggerAiCall, peer.id],
+    [bgEnqueueBatch, buildReplyMsgs, maybeTriggerAiCall, peer.id, sessionKey],
   );
 
   const bgDeliverRef = useRef<(items: BgPendingItem[]) => void>(() => undefined);
