@@ -411,7 +411,10 @@ async function recordMissedPhoneCall(
       duration: 0,
       transcript: [],
       recentChat,
-      memoryBlock: memRecallBlock(contact.id, 'sms', recentChat.map((m) => m.content).join(' ')) || undefined,
+      // fix4 L17：missed 留言属电话域，记忆召回 app 键对齐 proactive-call.ts:424（#78 同款修正）
+      // 与 phone.tsx 挂断续聊——通话记忆由 memSummarizeCallNow 写在 'phone' 名下（MemApp 含
+      // 'phone'），互通关闭时召回按 f.app === app 精确过滤，'sms' 键召不到通话记忆（召回落空）
+      memoryBlock: memRecallBlock(contact.id, 'phone', recentChat.map((m) => m.content).join(' ')) || undefined,
       timeBlock: buildSmsTimeBlock({ lastMsgTime: recent.length > 0 ? recent[recent.length - 1].time : null, regionHint: contact.region || null }),
       multiApp: getMemSettings(contact.id).share,
       // 留言条数 = 该联系人在信息聊天设置页选定的回复条数

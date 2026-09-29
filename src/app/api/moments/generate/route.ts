@@ -122,7 +122,52 @@ function splitBilingual(raw: string): { content: string; contentZh: string } {
   return { content: raw, contentZh: '' };
 }
 
+/* ---------------- 可选鉴权 + 全局滑动窗口限流（四轮审计 M1，照搬 api/chat/bg 的 #16 模式） ---------------- */
+
+/**
+ * 本端点单次 POST 最多 upstream+SDK 两次 LLM 调用（server-llm completeWithFallback：上游失败落 SDK 兜底），
+ * 未传 config 时烧服务端内置 SDK 凭据——公网部署无鉴权无限流可被第三方刷爆。与 api/push / api/chat/bg 同款口径：
+ * - 可选鉴权：配置环境变量 PUSH_SHARED_TOKEN 时要求请求头 x-shared-token 精确匹配，否则 401；
+ *   未配置（本地沙箱默认）两者均不生效，行为完全不变，现有 UI 流程零影响。
+ *   客户端引擎（lib/moments.ts callGenerateApi）为同源 fetch、不带 token——配置 token 的公网部署上
+ *   动态引擎会被 401 拒绝，需部署方同步把 token 暴露给前端（与 bg 链路 bg-turn.ts / push-client.ts
+ *   的既有妥协同一口径）。
+ * - 全局滑动窗口限流：动态生成单次成本高于 bg 接力（上游失败时一次 POST 内部可重落到 SDK，
+ *   引擎禁复读还会对同一项两轮重试），阈值比 bg（30/60s）更紧；正常单客户端一次 tick
+ *   （90s 预算）至多十来次生成，不会误伤。超限 429。
+ */
+const SHARED_TOKEN = process.env.PUSH_SHARED_TOKEN;
+
+/** 共享 token 校验：未配置恒通过；已配置时请求头 x-shared-token 必须精确匹配（同 api/push tokenOk 写法） */
+function sharedTokenOk(req: Request): boolean {
+  if (!SHARED_TOKEN) return true;
+  try {
+    return req.headers.get('x-shared-token') === SHARED_TOKEN;
+  } catch {
+    return false;
+  }
+}
+
+const GENERATE_WINDOW_MS = 60_000;
+const GLOBAL_GENERATE_RATE_LIMIT = 20;
+/** 全局滑动窗口内最近请求时刻（模块级数组，内存态，服务重启清空；单线程事件循环内读写） */
+const generateHitTimes: number[] = [];
+
+/** 全局滑动窗口限流：未超限记一笔并返回 false；超限返回 true（本次不记，不刷新窗口） */
+function generateRateLimited(): boolean {
+  const now = Date.now();
+  while (generateHitTimes.length > 0 && now - generateHitTimes[0] >= GENERATE_WINDOW_MS) {
+    generateHitTimes.shift();
+  }
+  if (generateHitTimes.length >= GLOBAL_GENERATE_RATE_LIMIT) return true;
+  generateHitTimes.push(now);
+  return false;
+}
+
 export async function POST(req: Request) {
+  // 可选鉴权 + 全局限流（说明见上）：未配置 PUSH_SHARED_TOKEN 时两者均不生效，行为不变
+  if (!sharedTokenOk(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (generateRateLimited()) return NextResponse.json({ error: '请求过于频繁，请稍后再试' }, { status: 429 });
   let body: Record<string, unknown> | null = null;
   try {
     const raw: unknown = await req.json();

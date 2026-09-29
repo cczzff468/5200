@@ -523,7 +523,10 @@ async function tickInner(): Promise<void> {
   // #34 闹钟响铃中不主动拨出：闹钟铃声与通话音频重叠体验差，等闹钟被处理后再考虑
   if (useUI.getState().alarmRinging) return;
 
-  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除；#16 任一 App 被 byUser 拉黑即跳过）
+  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除；#16 任一 App 被 byUser 拉黑即跳过；
+  // fix4 L16 byChar 同款排除——角色已拉黑用户还主动打来，只会撞上电话引擎 #40 守卫变成
+  //「来电即被拦+静默挂断」的怪链路，候选阶段直接剔除。requestOnly 仅由 byUser 派生、属聊天
+  // 回合入口的放行语义，来电候选没有该放行需求，byChar 从严过滤无碍）
   const allContacts = await listContacts();
   const contacts = allContacts.filter(
     (c) =>
@@ -531,8 +534,11 @@ async function tickInner(): Promise<void> {
       !!c.name?.trim() &&
       !!c.persona?.trim() &&
       !loadBlock('wx', c.id).byUser &&
+      !loadBlock('wx', c.id).byChar &&
       !loadBlock('qq', c.id).byUser &&
-      !loadBlock('sms', c.id).byUser
+      !loadBlock('qq', c.id).byChar &&
+      !loadBlock('sms', c.id).byUser &&
+      !loadBlock('sms', c.id).byChar
   );
   if (contacts.length === 0) return;
 

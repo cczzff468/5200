@@ -755,6 +755,9 @@ function memoryContentOf(
 
 /** 写入该角色的动态记忆核心（异步解析真实名字后入库；可 await，供编辑正文等需要与清理串行的路径复用） */
 async function writeMomentMemoryAwait(fact: MomentMemoryFact): Promise<void> {
+  // 四轮审计 M2：落库前复核 peer 仍在册——删联系人后的迟到写入（异步真名解析窗口 / 调度器 stale 引用）
+  // 不再向已清空的 mem-frag 键重写记忆碎片（宁缺勿错：联系人读取失败按不在册处理，跳过写入）
+  if (!(await listContacts().catch(() => [] as ContactRecord[])).some((c) => c.id === fact.peerId)) return;
   const [peerReal, userReal, postAuthorReal, replyTargetReal] = await Promise.all([
     contactRealName(fact.peerId),
     ownerRealName(),
@@ -825,6 +828,9 @@ export function addUserMomentPost(
 /**
  * 角色发一条动态（手动「让TA发一条」/ 自动发布共用；发布即写该角色记忆——三.3）。
  * writeMemory=false 用于示例动态补齐（不是真实的「TA 发了」，不入记忆）。
+ * 四轮审计 M2：本函数保持同步签名（wechat/qq 首访播种示例动态是同步调用），存在性复核放在
+ * 调用链上游（runAutoPosts 选定候选后 / aiPostMoment、aiRepostMoment 入口）+ 记忆层兜底
+ * （writeMomentMemoryAwait 落库前复核），确保删联系人后的迟到触发不再产生幽灵动态/记忆。
  */
 export function addCharMomentPost(
   platform: MomentPlatform,
@@ -889,7 +895,13 @@ export function addCharMomentPost(
       shape: 'char-post',
       peerDisplay: displayNameOf(args.peer),
       userName: args.userName,
-      detail: args.content.slice(0, 80),
+      // 四轮审计 L2：转发用户动态时记忆带上被转发原文 + 理由（与用户转发动态的记忆口径一致，
+      // 见 buildMomentsChatBlock #18 的 repostContextText 拼接与截断）——只有转发理由会导致
+      // 该角色「记得自己转发过、却不知道转的是什么」；非转发的普通发帖保持原口径
+      detail:
+        args.repostOf && args.repostOf.author === 'user'
+          ? repostContextText(args.repostOf, args.content, 30).slice(0, 120)
+          : args.content.slice(0, 80),
     });
   }
   return post;
@@ -1026,12 +1038,14 @@ export function toggleUserMomentLike(platform: MomentPlatform, postId: string, u
 }
 
 /** 角色点赞（调度器 AI 互动用；写入该角色记忆——三.4）。
- *  发帖人不能给自己的动态点赞（数据层硬性守卫）；角色动态但发帖人无法定位时不写记忆（宁缺勿错） */
-export function addCharMomentLike(
+ *  发帖人不能给自己的动态点赞（数据层硬性守卫）；角色动态但发帖人无法定位时不写记忆（宁缺勿错）。
+ *  四轮审计 M2：落库前复核 peer 仍在新鲜联系人列表——已删除则静默 abort（不落库/不入收件箱/不写记忆） */
+export async function addCharMomentLike(
   platform: MomentPlatform,
   postId: string,
   args: { peer: Pick<ContactRecord, 'id' | 'name' | 'nickname' | 'avatar'>; userName: string }
-): boolean {
+): Promise<boolean> {
+  if (!(await listContacts()).some((c) => c.id === args.peer.id)) return false;
   rememberMomentUserName(platform, args.userName);
   const list = listMomentPosts(platform, args.userName);
   const post = list.find((p) => p.id === postId);
@@ -1169,8 +1183,9 @@ export function addUserMomentComment(
  * 身份硬性守卫：发帖人不能评论自己的动态（旧版「AI 自己给自己评论」bug 的数据层防线）。
  * 记忆关系（修复）：评论/回复角色动态时，句式归属人用真实发帖人（「陈默评论了乐乐的动态」），
  * 不再硬编码机主；关系无法建立时不写入（宁缺勿错）。
+ * 四轮审计 M2：落库前复核 peer 仍在新鲜联系人列表——已删除则静默 abort（不落库/不入收件箱/不写记忆）。
  */
-export function addCharMomentComment(
+export async function addCharMomentComment(
   platform: MomentPlatform,
   postId: string,
   args: {
@@ -1183,7 +1198,8 @@ export function addCharMomentComment(
     replyTo?: { commentId: string; name: string } | null;
     writeMemory?: boolean;
   }
-): MomentCommentView | null {
+): Promise<MomentCommentView | null> {
+  if (!(await listContacts()).some((c) => c.id === args.peer.id)) return null;
   rememberMomentUserName(platform, args.userName);
   const text = args.content.trim();
   if (!text) return null;
@@ -1671,6 +1687,9 @@ export async function aiPostMoment(args: {
   hint?: string;
 }): Promise<MomentPostView> {
   const { apiConfig, platform, peer, userName, hint } = args;
+  // 四轮审计 M2：生成/落库前复核 peer 仍在册——删联系人后的迟到触发直接中止
+  //（不落库、不入收件箱、不写记忆；手动「让TA发一条」入口恒在册不受影响）
+  if (!(await listContacts()).some((c) => c.id === peer.id)) throw new Error('联系人已删除，取消发帖');
   // feat-64：设置按平台独立（朋友圈/空间各一份）
   const settings = getMomentsSettings(platform);
   const recentChat = memRecentConvo(peer.id, platformApp(platform))
@@ -1813,7 +1832,7 @@ export async function aiCommentOnMoment(args: {
     // 称呼不再由引擎剥离处理：称呼方式由角色人设决定（爱喊人的角色喊名字是TA的说话习惯，
     // 引擎一刀切剥名 = 所有角色同一种称呼，正是要避免的）；「不要每句都叫」由 prompt 硬约束。
     if (!isDupText(content, avoid)) {
-      const added = addCharMomentComment(platform, post.id, {
+      const added = await addCharMomentComment(platform, post.id, {
         peer,
         userName,
         content,
@@ -1841,6 +1860,8 @@ export async function aiRepostMoment(args: {
   userName: string;
 }): Promise<MomentPostView | null> {
   const { apiConfig, platform, peer, post, userName } = args;
+  // 四轮审计 M2：peer 已不在册（删联系人后的迟到触发）→ 静默跳过（不算失败，不影响点赞/评论）
+  if (!(await listContacts()).some((c) => c.id === peer.id)) return null;
   if (post.author !== 'user' || post.repostOf) return null; // 只转发用户的原创动态
   if (isPostByPeer(post, peer)) return null; // 不能转发自己的动态（防御）
   // 同一角色已转过同一条 → 不重复转发
@@ -1948,6 +1969,10 @@ async function drainReplies(
   overBudget: () => boolean
 ): Promise<MomentQueueItem[]> {
   const keep: MomentQueueItem[] = [];
+  // 四轮审计 M2：drain 前读一次新鲜联系人——调度器（MomentsScheduler）每 60s 才刷新 deps.contacts，
+  // 删联系人后 ≤60s 窗口内 stale 数组会把已删联系人当回复对象；peer 不在 fresh 列表直接丢弃
+  //（读取失败退回 deps.contacts，保持旧行为）
+  const freshContacts = await listContacts().catch(() => deps.contacts);
   for (const item of queue) {
     if (item.type !== 'reply') {
       keep.push(item); // 互动项透传给下一步
@@ -1958,22 +1983,25 @@ async function drainReplies(
       continue;
     }
     try {
-      const peer = deps.contacts.find((c) => c.id === item.peerId);
+      const peer = freshContacts.find((c) => c.id === item.peerId);
       // 传 contacts：legacy 数据的角色动态也能解析出 peerId（记忆归属/身份守卫都依赖它）
-      const post = listMomentPosts(item.platform, item.userName, deps.contacts).find((p) => p.id === item.postId);
+      const post = listMomentPosts(item.platform, item.userName, freshContacts).find((p) => p.id === item.postId);
       const parent = post?.comments.find((c) => c.id === item.parentCommentId);
-      if (!peer || !post || !parent) continue; // 动态/评论已被删 → 丢弃
+      if (!peer || !post || !parent) continue; // 动态/评论已被删（或 peer 已删除）→ 丢弃
+      // 防串台（一.1）：AI 只回「用户发的评论」。旧版本遗留的队列项指向 AI 自己/别人的评论
+      // （会生成「乐乐 回复 乐乐」这种错误指向），直接丢弃不生成
+      if (parent.author !== 'user') continue;
+      // 该角色已经回复过这条评论（重试/遗留重复）→ 不再生成
+      if (post.comments.some((c) => c.peerId === item.peerId && c.parentId === parent.id)) continue;
+      // 四轮审计 L1：上面的死项清理判定（动态/评论缺失、非用户评论、已回复）必须先于 #5 拉黑顺延——
+      // 旧顺序拉黑检查在前，拉黑期间的死项从「丢弃」变「每次 +5s 顺延常驻」占队列容量；
+      // 现在死项直接丢弃，只有「活项但被拉黑」才顺延
       // #5：拉黑期间（双向）不结算也不丢弃——顺延一个轮询周期，解除后下个 tick 自然恢复
       //（与 isPeerBlocked 文档「解除后互动自然恢复」对齐；旧版 continue 整丢，拉黑解除后回复永远不来）
       if (isPeerBlocked(item.platform, item.peerId)) {
         keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
         continue;
       }
-      // 防串台（一.1）：AI 只回「用户发的评论」。旧版本遗留的队列项指向 AI 自己/别人的评论
-      // （会生成「乐乐 回复 乐乐」这种错误指向），直接丢弃不生成
-      if (parent.author !== 'user') continue;
-      // 该角色已经回复过这条评论（重试/遗留重复）→ 不再生成
-      if (post.comments.some((c) => c.peerId === item.peerId && c.parentId === parent.id)) continue;
       // #20：超时间预算 → 停止本轮结算：不再开新的 LLM 往返，本项顺延一个轮询周期（不计失败次数）
       if (overBudget()) {
         keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
@@ -2009,6 +2037,9 @@ async function drainInteractions(
 ): Promise<MomentQueueItem[]> {
   const keep: MomentQueueItem[] = [];
   const retryDelayMs = () => 60_000 + Math.floor(Math.random() * 30_000); // 60~90 秒随机
+  // 四轮审计 M2：drain 前读一次新鲜联系人（覆盖 drainReplies 期间的删除）——互动候选一律基于
+  // fresh 列表过滤，已删联系人不再作为点赞/评论/转发候选（落库层 addCharMomentComment/Like 另有复核兜底）
+  const freshContacts = await listContacts().catch(() => deps.contacts);
   for (const item of queue) {
     if (item.type !== 'interact') {
       keep.push(item);
@@ -2026,8 +2057,8 @@ async function drainInteractions(
     };
     try {
       const userName = item.platform === 'wx' ? deps.wxUserName : deps.qqUserName;
-      // 传 contacts：legacy 数据的角色动态也能解析出 peerId（发帖人排除/记忆归属都依赖它）
-      const post = listMomentPosts(item.platform, userName, deps.contacts).find((p) => p.id === item.postId);
+      // 传 contacts：legacy 数据的角色动态也能解析出 peerId（发帖人排除/记忆归属都依赖它；M2：用 fresh 列表）
+      const post = listMomentPosts(item.platform, userName, freshContacts).find((p) => p.id === item.postId);
       if (!post) continue; // 已删除
       const eligible = (p: ContactRecord): boolean =>
         // 发帖人不能给自己的动态点赞/评论（防「AI 自己给自己评论」的核心修复）
@@ -2037,7 +2068,7 @@ async function drainInteractions(
       // #5：候选分两步算——先按资格（不看拉黑）算「本可候选」，再过滤拉黑得「实际候选」：
       // 实际候选为空而本可候选非空 = 拉黑导致的空 → 顺延一个轮询周期（解除后自然恢复，不消耗重试次数）；
       // 本可候选也为空 = 好友都已互动过/无候选 → 正常结束（不算失败，不重试不无限顺延）
-      const platformPeers = contactsForPlatform(deps.contacts, item.platform);
+      const platformPeers = contactsForPlatform(freshContacts, item.platform);
       const candidates = platformPeers.filter((p) => !isPeerBlocked(item.platform, p.id) && eligible(p));
       if (candidates.length === 0) {
         if (platformPeers.some(eligible)) keep.push({ ...item, fireAt: now + TICK_POLL_INTERVAL_MS });
@@ -2057,7 +2088,7 @@ async function drainInteractions(
       for (const peer of picked) {
         try {
           // 点赞：按 likeProbability 决定（旧版硬编码 100%）
-          if (Math.random() < settings.likeProbability && addCharMomentLike(item.platform, post.id, { peer, userName })) {
+          if (Math.random() < settings.likeProbability && (await addCharMomentLike(item.platform, post.id, { peer, userName }))) {
             produced = true;
           }
           // 评论：按 commentProbability 决定（旧版硬编码 70%）
@@ -2139,6 +2170,9 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
   if (plan.length === 0) return;
   // 一次只发一条（其余下个 tick 再发）；失败退避 10 分钟
   const pick = plan[Math.floor(Math.random() * plan.length)];
+  // 四轮审计 M2：发帖前复核 pick.peer 仍在新鲜联系人列表（plan 基于调度器 stale 快照构建）——
+  // 已删除则直接跳过（不写退避标记、无副作用；aiPostMoment 入口另有复核兜底）
+  if (!(await listContacts().catch(() => [] as ContactRecord[])).some((c) => c.id === pick.peer.id)) return;
   const aKey = attemptKey(pick.peer.id, pick.platform);
   try {
     const lastTry = kvGet<number>(aKey) ?? 0;

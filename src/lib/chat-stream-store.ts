@@ -32,7 +32,7 @@ import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { createReplySegmentScanner } from '@/lib/reply-count';
 import { describeImages } from '@/lib/vision-client';
-import { clearDeliverBoundary } from '@/lib/ios/ai-delivery';
+import { clearDeliverBoundary, isAiDelivering, scheduleAiDelivery } from '@/lib/ios/ai-delivery';
 import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
 // ---------------- 公开类型 ----------------
 
@@ -151,6 +151,8 @@ interface StreamRuntime {
   state: ChatStreamState;
   /** finalize 是否已执行（防止重复落盘） */
   finalized: boolean;
+  /** 换号中止标记（abortStreamsByPrefix 预置）：onDelta 停止喂分段器、收尾跳过落盘与 payload 清理 */
+  aborted: boolean;
 }
 
 /** 全部流（含已结束未清理的：留给页面重进时同步，超量后按时间淘汰） */
@@ -226,6 +228,9 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   /** 增量统一入口：原文累计 + 多条模式进分段器（立刻放出已凑齐的完整消息） */
   let raw = '';
   const onDelta = (delta: string): void => {
+    // 换号中止（abortStreamsByPrefix）：不再喂原文/分段器——流中分段就此截断，
+    // 旧账号会话不再产生新的投递（finalize 挡板只拦最后一条，不拦流中分段，这里补齐）
+    if (rt.aborted) return;
     raw += delta;
     scanner?.push(delta);
   };
@@ -320,9 +325,10 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
             const n = opts.vision.images.length;
             const prefix = n > 1 ? `（我发了 ${n} 张图片，图片内容分别是：` : '（我发了一张图片，图片内容是：';
             workMessages = [...messages, { role: 'user' as const, content: `${prefix}${desc}）` }];
-            // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容
+            // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容；
+            // 换号中止后不再回写（旧账号会话的落盘动作全部停止）
             try {
-              opts.onVision?.(desc);
+              if (!rt.aborted) opts.onVision?.(desc);
             } catch {
               // 落盘失败不影响本轮回复（描述已进上下文）
             }
@@ -343,12 +349,16 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
         workMessages = [...messages, { role: 'user' as const, content: note }];
       }
     }
+    // 换号中止（识图等待窗口内发生）：旧账号会话整体作废，不再登记 payload/发起请求
+    if (rt.aborted) return;
     // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）；
     // 记录实际 payload：用户在流结束前关闭网页时，pagehide 上报服务端接力生成（bg-turn）
     activePayloads.set(rt.state.sessionKey, { messages: workMessages, config: effConfig });
     await streamOnce(workMessages);
     patchState(rt, { status: 'done' });
   } catch (err) {
+    // 换号中止后不再补救：旧账号会话的回复已整体作废（SDK 兜底请求与错误状态一并跳过）
+    if (rt.aborted) return;
     // 代理与浏览器直连都失败：最后用服务端内置模型兜底一次（forceSdk），救回本轮回复；
     // 兜底成功按正常完成收尾，失败才落错误文案（保留最先的代理侧错误，便于区分原因）；
     // 流中已凑齐的分段已经过 onSegment 逐条投递上屏，出错不影响它们（不丢已到手的正文）
@@ -371,26 +381,30 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     }
   }
   // ---- 收尾（status 补丁与 finalize 在同一微任务里，订阅方重渲染时落盘已完成）----
-  activePayloads.delete(rt.state.sessionKey);
-  if (!rt.finalized) {
-    rt.finalized = true;
-    try {
-      opts.finalize({
-        aiMsgId: rt.state.aiMsgId,
-        content: raw,
-        // 多条模式：tail = 分段器剩余的最后一条（第 N 条，可能含溢出合并的句子）；
-        // 单条模式：tail = 完整内容（finalize 按旧管线处理，行为与旧版一致）
-        tail: scanner ? scanner.finish() : raw,
-        error: rt.state.error,
-        startedAt: rt.state.startedAt,
-      });
-      patchState(rt, { content: raw });
-    } catch {
-      // 落盘失败不影响状态广播（与各 App 持久化失败静默的既有策略一致）
+  // 换号中止（abortStreamsByPrefix）：整段收尾跳过——finalize 不再落盘（finalized 已预置）；
+  // activePayloads 也不删：此刻同键可能已被换号后的新流重新登记，误删会丢新流的 pagehide 接力 payload
+  if (!rt.aborted) {
+    activePayloads.delete(rt.state.sessionKey);
+    if (!rt.finalized) {
+      rt.finalized = true;
+      try {
+        opts.finalize({
+          aiMsgId: rt.state.aiMsgId,
+          content: raw,
+          // 多条模式：tail = 分段器剩余的最后一条（第 N 条，可能含溢出合并的句子）；
+          // 单条模式：tail = 完整内容（finalize 按旧管线处理，行为与旧版一致）
+          tail: scanner ? scanner.finish() : raw,
+          error: rt.state.error,
+          startedAt: rt.state.startedAt,
+        });
+        patchState(rt, { content: raw });
+      } catch {
+        // 落盘失败不影响状态广播（与各 App 持久化失败静默的既有策略一致）
+      }
     }
+    emitFinalized(rt.state.sessionKey);
+    emit();
   }
-  emitFinalized(rt.state.sessionKey);
-  emit();
 }
 
 // ---------------- 全局 API ----------------
@@ -412,8 +426,18 @@ export function beginChatStream(opts: BeginChatStreamOptions): boolean {
   const existing = streams.get(opts.sessionKey);
   if (existing && existing.state.status === 'streaming') return false;
   // 新回合接管：清除投递插入边界（#35）——之后投递的消息都是对本回合上下文里最新用户消息的回复，
-  // 照旧追加落库（边界只在「上一轮投递未完时用户插话」的窗口内生效）
-  clearDeliverBoundary(opts.sessionKey);
+  // 照旧追加落库（边界只在「上一轮投递未完时用户插话」的窗口内生效）。
+  // M6（四轮审计）根因侧修复：群成员间切换/regen 不等投递尾巴就开始下一轮，旧实现无条件清边界
+  // 会让「还在按边界插入的旧尾巴」改成追加、倒挂在用户新消息之后落库——改为尾巴仍在时先排空批占位，
+  // 排空（旧回合分段全部落库）瞬间在其 onDrained 里同步清边界（先于下一批开始投递），
+  // 此后（含本回合经分段/finalize 新排队的批次）投递照旧追加，落库顺序=对话时序
+  if (isAiDelivering(opts.sessionKey)) {
+    void scheduleAiDelivery(opts.sessionKey, [], () => {}, {
+      onDrained: () => clearDeliverBoundary(opts.sessionKey),
+    });
+  } else {
+    clearDeliverBoundary(opts.sessionKey);
+  }
   const rt: StreamRuntime = {
     state: {
       sessionKey: opts.sessionKey,
@@ -424,6 +448,7 @@ export function beginChatStream(opts: BeginChatStreamOptions): boolean {
       replyCount: opts.replyCount,
     },
     finalized: false,
+    aborted: false,
   };
   streams.set(opts.sessionKey, rt);
   evictFinished();
@@ -490,6 +515,9 @@ export function abortStreamsByPrefix(prefix: string): number {
     keys.push(key);
     if (rt.state.status === 'streaming') {
       rt.finalized = true; // runStream 收尾时跳过 finalize（防旧会话回复落盘）
+      // 同时预置中止标记：onDelta 停止喂分段器（流中分段不再产生）、收尾段整段跳过
+      //（含 activePayloads 清理——此刻起同键可能被换号后的新流重新登记，旧流不得误删）
+      rt.aborted = true;
       cancelBgRelay(key); // 服务端接力生成一并作废
       aborted += 1;
     }

@@ -3019,7 +3019,11 @@ function ChatPage({
       // 聊天页不在场也照常落盘（saveMsgs 直写；回来时 loadMsgs 恢复，消息照常进后续 AI 上下文）
       if (r.afterText && r.direction === 'out' && !r.connected) {
         const after = r.afterText;
+        // L9 换号防串号：调度时刻捕获会话纪元，回调执行时比对失配则跳过写入
+        const epoch = qqSessionEpoch;
         window.setTimeout(() => {
+          // L9：延迟窗口内发生换号 → 旧账号通话尾巴不再写进新账号聊天记录
+          if (epoch !== qqSessionEpoch) return;
           // 40-a 拉黑拦截：落库前再核一次（等待窗口内用户可能已拉黑）
           if (loadBlock('qq', peer.id).byUser) return;
           const msg: QQMsg = { id: uid(), role: 'peer', content: after, time: Date.now() };
@@ -3038,9 +3042,13 @@ function ChatPage({
     (texts: string[]) => {
       // 40-a 拉黑拦截：用户拉黑了该角色（byUser）后，挂断续聊文字不再落库
       if (loadBlock('qq', peer.id).byUser) return;
+      // L9 换号防串号：调度时刻捕获会话纪元，各条延迟回调执行时比对失配则跳过写入
+      const epoch = qqSessionEpoch;
       texts.forEach((t, i) => {
         window.setTimeout(
           () => {
+            // L9：连发间隔内发生换号 → 旧账号通话尾巴不再写进新账号聊天记录
+            if (epoch !== qqSessionEpoch) return;
             // 40-a 拉黑拦截：落库前再核一次（连发间隔内用户可能已拉黑）
             if (loadBlock('qq', peer.id).byUser) return;
             const msg: QQMsg = { id: uid(), role: 'peer', content: t, time: Date.now() };
@@ -3163,7 +3171,11 @@ function ChatPage({
           const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
           if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
             window.localStorage.setItem(`qq-vc-last:${peer.id}`, String(Date.now()));
+            // M5 换号防串号：调度时刻捕获会话纪元，fire 时首先比对——等待窗口内发生换号
+            // （purgeQqSessionData 递增纪元）则本次来电整体作废（守卫链之前）
+            const epoch = qqSessionEpoch;
             window.setTimeout(() => {
+              if (epoch !== qqSessionEpoch) return;
               // 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
               // 双触发会产生叠层僵尸来电）——电话通话中/来电弹窗响铃中/已有全局通话进行中就整跳取消（#29/#8）
               if (useUI.getState().callActive) return;
@@ -3701,6 +3713,10 @@ function ChatPage({
     }
 
     // ---- 边接收边逐条投递（分段流式核心）----
+    // 换号防串号（H1 纵深防御）：本回合全部投递闭包（流中分段/finalize 收尾）共用的会话纪元——
+    // 换号 purge（purgeQqSessionData）递增纪元并中止在途流，此后触发/恢复的闭包按失配整体丢弃
+    //（与 chat-stream-store 的 onDelta/finalize 挡板双保险）
+    const turnEpoch = qqSessionEpoch;
     // 流中每凑齐一条完整消息（分段器回调 onSegment）立刻解析并排队投递上屏；
     // 流结束后 finalize 只处理剩余的最后一条（N 条上限的第 N 条）——
     // 不再有「先全文显示、消失、再逐条重放」的流式气泡，流式与分条也不改同一块展示状态。
@@ -3727,6 +3743,8 @@ function ChatPage({
 
     /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻解析并排队上屏（边接收边逐条显示） */
     const deliverSegment = (seg: string) => {
+      // H1 纵深防御：换号（纪元失配）后本回合流中分段整体丢弃——不再解析/落盘/排队投递
+      if (turnEpoch !== qqSessionEpoch) return;
       const { msgs: built, cur, dirty, nextIdx } = buildReplyMsgs(seg, false, Date.now(), aiId, msgIdx);
       msgIdx = nextIdx;
       if (dirty) saveMsgs(peer.id, cur);
@@ -3802,6 +3820,9 @@ function ChatPage({
             delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
           },
         ).then(() => {
+          // 换号防串号：投递等待窗口内发生换号（纪元失配）→ 旧账号回合的密友值/记忆提取/
+          // 过期清算/来电触发整体作废（换号 purge 会把排队批 resolve，本回调因此被激活）
+          if (turnEpoch !== qqSessionEpoch) return;
           // 密友值 + 记忆库：一轮对话结束（全部消息投递完）后执行；后台异步，失败静默不打断聊天
           // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
           addBondPoints(peer.id, BOND_MSG_POINTS);
@@ -6764,14 +6785,22 @@ function RedPacketDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; p
           </p>
           {myClaim ? (
             <span className="mt-3 rounded-full bg-[#FBE7B2]/20 px-3.5 py-1.5 text-[14px] text-[#FFE9B8] ring-1 ring-inset ring-[#FBE7B2]/35">收到的红包已存入余额</span>
-          ) : mine && claims.length > 0 ? (
-            <p className="mt-3 text-[14px] text-[#FFE3C2]/75">好友领取后自动存入其余额</p>
           ) : p.expired ? (
             <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-expired">红包已过期，剩余金额已退回</p>
           ) : p.status === 'returned' ? (
-            <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-refunded">红包已退回，金额已存入钱包余额</p>
+            /* L12：拼手气（count>1）被 AI 退回时 claims 已按 #32 清空（只退「总额-已领」），
+               不能按全额宣称「已存入钱包」；单份退回才是全额入账；对方发的卡被退回则资金归对方 */
+            <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-refunded">
+              {mine
+                ? count > 1
+                  ? '红包已退回，未领取金额已退回钱包'
+                  : '红包已退回，金额已存入钱包余额'
+                : '红包已退回，金额已退还给对方'}
+            </p>
           ) : p.status === 'rejected' ? (
             <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-rejected">对方拒收了该红包</p>
+          ) : mine && claims.length > 0 ? (
+            <p className="mt-3 text-[14px] text-[#FFE3C2]/75">好友领取后自动存入其余额</p>
           ) : null}
         </div>
       </div>
@@ -13543,6 +13572,14 @@ function pruneQqSessionSettingMaps(): void {
 }
 
 /**
+ * QQ 会话纪元（四轮审计 M5/L9/H1 纵深防御）：purgeQqSessionData（换号清库）每次递增。
+ * 模块层延迟回调（AI 来电 1.2s 定时器 / 通话尾巴延迟写 / 流分段投递闭包 / finalize 收尾）
+ * 在调度时捕获纪元、执行时比对——不一致说明中间发生过换号，本次回调整体作废
+ * （旧账号的来电/消息/通话尾巴不写进刚清空的新账号会话）。
+ */
+let qqSessionEpoch = 0;
+
+/**
  * 清理全部 QQ 会话态数据（#11：数据键无账号命名空间，换号即串号——上一个账号的聊天记录/
  * 空间动态/钱包余额/未读角标会原样出现在新账号里）。
  * 覆盖 IndexedDB kv 与 localStorage 双层 + 内存单例总线（未读表/会话 flags/排队补跑表）：
@@ -13551,6 +13588,9 @@ function pruneQqSessionSettingMaps(): void {
  * 跨平台键（moments-queue / moments-auto-cfg 等 wx+qq 混存）不动，避免误伤微信侧数据。
  */
 function purgeQqSessionData(): void {
+  // 会话纪元递增：此后所有已调度未执行的模块层延迟回调（来电定时器/通话尾巴/分段投递闭包）
+  // 按纪元失配自行作废（见 qqSessionEpoch 注释）
+  qqSessionEpoch += 1;
   // #3 换号时在途流式/投递尾巴一并作废：旧账号会话（qq:<id> 单聊与 qq:group:<id> 群聊同前缀）
   // 的活跃流不再 finalize 落盘、待投递批次清空——否则换号后旧账号回复仍会写进刚清空的
   // qq-chat-msgs:* / qq-group-msgs:*（新账号看到旧账号的对话尾巴）。只影响 qq: 前缀，wx:/sms: 不受影响

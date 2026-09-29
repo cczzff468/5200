@@ -160,7 +160,7 @@ import {
   wxPatchBalance,
 } from './wechat';
 import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack';
-import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, loadFamilyCardsIn } from './wechat-wallet';
+import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, resetFamilyCardsInMonth } from './wechat-wallet';
 import { wxUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -1970,7 +1970,9 @@ function GroupRpCompose({
       {methodOpen ? (
         <WxPayMethodSheet
           cards={loadCards()}
-          familyIn={loadFamilyCardsIn()}
+          // audit4-L5：跨月惰性重置（对照单聊 wechat.tsx 同款）——直读 loadFamilyCardsIn() 跨月后
+          // 「本月可用」显示旧值；扣款侧 wxCanPay/wxExecutePayment 自带重置不超额，仅显示路径需重置
+          familyIn={resetFamilyCardsInMonth()}
           selectedId={methodId}
           onClose={() => setMethodOpen(false)}
           onPick={(id) => {
@@ -2506,13 +2508,18 @@ export function WxGroupChatPage({
    *  #7 投递插入边界（对照单聊 wechat 同款）：机主消息（所有发送路径共用本函数，含回合中排队/分句入列）
    *  落库即标记边界——上一轮还在投递队列里的回复落库时插到边界消息之前，落库顺序=对话时序，
    *  旧气泡不再倒挂在用户新消息之后随存储持久化；系统通知行不是用户发言不作边界。
-   *  其余消息（AI 投递/通知行）走 appendWithBoundary：有边界且边界消息还在列表里时插到其前面，
-   *  否则照旧追加；新回合 beginChatStream 清边界后照旧追加。 */
+   *  AI 投递消息走 appendWithBoundary：有边界且边界消息还在列表里时插到其前面，
+   *  否则照旧追加；新回合 beginChatStream 清边界后照旧追加。
+   *  audit4-M7：notice 通知行（空群/全员禁言提示、红包过期清算、资金通知等）改回普通追加——
+   *  通知行永远是「此刻刚发生的新事件」，从不需要插边界；走 appendWithBoundary 会在「用户消息
+   *  已落库、新回合 beginChatStream 未到」窗口内消费边界插到该用户消息之前，提示行浮在用户
+   *  刚发的消息上方且随存储持久化。 */
   const appendMsg = useCallback(
     (m: WxGroupMsg) => {
       const isMeMsg = m.role === 'me' && m.kind !== 'notice';
+      const isNotice = m.kind === 'notice';
       const cur = loadGroupMsgs(gid);
-      const next = isMeMsg ? [...cur, m] : appendWithBoundary(sKey, cur, m);
+      const next = isMeMsg || isNotice ? [...cur, m] : appendWithBoundary(sKey, cur, m);
       if (isMeMsg) markDeliverBoundary(sKey, m.id);
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -2816,7 +2823,9 @@ export function WxGroupChatPage({
   const runCharTurn = useCallback(
     // 返回值（#21）：'ok'=正常产出消息；'skip'=[SKIP] 自判沉默/群已解散/已不在群或被禁言（中途变动守卫）/流被占用；'error'=流失败
     // （runGroupTurn 据此收口：整轮无人成功且存在错误时落一条系统提示）
-    (char: ContactRecord, allowSkip: boolean, turnImageSrcs: { src: string; id: string }[]) =>
+    // audit4-L14：onSegmentDelivered 可选回调——流中每有分段排队投递（onSegment）时回调该批条数，
+    // 重新生成（regenerate 直调旁路）据此维护「本轮已投递数」，error 收口时据此决定是否回滚原消息
+    (char: ContactRecord, allowSkip: boolean, turnImageSrcs: { src: string; id: string }[], onSegmentDelivered?: (count: number) => void) =>
       new Promise<'ok' | 'skip' | 'error'>((resolve) => {
         const g = getGroup(gid);
         if (!g) {
@@ -3204,6 +3213,7 @@ export function WxGroupChatPage({
           const built = buildGroupReplyMsgs(seg, false, Date.now());
           if (built.length === 0) return;
           deliveredAny = true;
+          onSegmentDelivered?.(built.length); // audit4-L14：通知直调方本轮已有分段排队投递（error 收口判定用）
           enqueueBatch(built);
         };
 
@@ -4141,7 +4151,8 @@ export function WxGroupChatPage({
    *  B-4 旁路守卫：以群当前成员表/禁言表为准——被踢出群的成员不再靠 contactsRef 兜底放回来，
    *  被禁言成员也不能借「重新生成」开口（与 runGroupTurn 的过滤同一口径：memberIds + isGroupMuted）。
    *  #28 竞态修复：删除动作移入 80ms setTimeout 回调内、预检（群存在+成员在群+未禁言）通过之后执行——
-   *  预检失败不删原消息并提示；极端竞态下 runCharTurn 仍 skip（如流被抢占）时按原文回滚落盘，不丢消息。 */
+   *  预检失败不删原消息并提示；极端竞态下 runCharTurn 仍 skip（如流被抢占）时按原文回滚落盘，不丢消息。
+   *  audit4-L14：流失败但流中已有分段投递上屏时不回滚（恢复的原消息会与已上屏分段同义重复），仅提示。 */
   const regenerate = (m: WxGroupMsg) => {
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
@@ -4174,12 +4185,24 @@ export function WxGroupChatPage({
       if (mountedRef.current) setMsgs(loadGroupMsgs(gid));
       groupSpeaker.set(sKey, char.id);
       if (mountedRef.current) setSpeakerId(char.id);
-      void runCharTurn(char, false, [])
+      // audit4-L14：本轮已投递分段计数——流中 onSegment 每排队投递一批 +n；
+      // error 收口时已投递数 > 0 则跳过回滚（见下方 then 说明）
+      let regenDelivered = 0;
+      void runCharTurn(char, false, [], (n) => {
+        regenDelivered += n;
+      })
         .then((r) => {
           // #28 极端竞态兜底：预检通过但 runCharTurn 仍 skip（如流被其他回合抢占）→ 原消息按原文回滚。
           // #6 流失败（'error'）同构回滚：原消息已删、流失败不落任何成员消息也不走占位兜底，
-          // 不回滚会让原消息凭空消失——与 skip 同款按原文回滚落盘，仅提示文案按网络口径区分
+          // 不回滚会让原消息凭空消失——与 skip 同款按原文回滚落盘，仅提示文案按网络口径区分。
+          // audit4-L14：error 但流中已有分段投递上屏（chat-stream-store：流中已凑齐的分段已投递，
+          // 出错不影响）时跳过回滚——恢复的原消息会与已上屏分段同义内容重复，仅提示部分送达；
+          // 无任何分段投递（regenDelivered === 0）时保持原回滚行为，skip 分支不受影响
           if (r === 'skip' || r === 'error') {
+            if (r === 'error' && regenDelivered > 0) {
+              onToast('网络开小差了，部分回复已送达');
+              return;
+            }
             const cur = loadGroupMsgs(gid);
             if (!cur.some((x) => x.id === m.id)) {
               saveGroupMsgs(gid, sortMsgsByTime([...cur, m]));
@@ -4427,12 +4450,14 @@ export function WxGroupChatPage({
         onToast('已撤回');
         // #13 撤回同步清除记忆素材（对照单聊 #17/wechat 同款 memPurgeMessageSources）：
         // 群消息会进每个 AI 成员各自的记忆库（mem-frag:<成员 id>），已提取成记忆的撤回内容
-        // 不再留在召回结果里；memberIds 不含机主，逐成员按来源消息 id 清理（异步静默失败不提示）
+        // 不再留在召回结果里；memberIds 不含机主，逐成员按来源消息 id 清理（异步静默失败不提示）。
+        // audit4-M8：第三参直传消息原文（msgTextOf 同口径，与记忆提取素材同源）——memFindMsgText
+        // 只搜三个私聊存档键，群消息 id 找不回文本，不传则 #26② 的 ≥8 字包含兜底对群撤回恒失效
         const gRc = getGroup(gid);
         if (gRc) {
           for (const cid of gRc.memberIds) {
             if (!cid || cid === 'me') continue;
-            void memPurgeMessageSources(cid, m.id);
+            void memPurgeMessageSources(cid, m.id, msgTextOf(m));
           }
         }
         break;

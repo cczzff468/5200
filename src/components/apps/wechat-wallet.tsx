@@ -86,6 +86,9 @@ export interface WxFamilyCard {
   status: 'pending' | 'active' | 'returned';
   message: string;
   createdAt: number;
+  /** 审计4-L4：来源卡消息 id（赠送时与聊天卡消息同 id 生成，同 WxFamilyCardIn.msgId 口径）——
+   *  聊天侧详情页改额度按它精确匹配单张卡；旧数据缺失时调用方退回 friendId 匹配 */
+  msgId?: string;
 }
 
 export const LS_WALLET = 'wx-wallet';
@@ -224,10 +227,18 @@ const WX_LS_MSGS_PREFIX = 'wx-chat-msgs:';
 /** 向指定联系人的微信聊天消息流末尾追加一条消息（跨模块写入：钱包赠送亲属卡 → 聊天卡片） */
 export function appendWxChatMsg(contactId: string, msg: Record<string, unknown>): void {
   try {
-    const parsed: unknown = kvGet<unknown[]>(WX_LS_MSGS_PREFIX + contactId);
+    const key = WX_LS_MSGS_PREFIX + contactId;
+    const parsed: unknown = kvGet<unknown[]>(key);
+    // 审计4-L6：键不存在（该好友从未打开过聊天）→ 初始化空消息流放入本条消息再写回——
+    // 此前静默 no-op，钱包赠送亲属卡给未开过聊天的好友时卡面 pending 悬空、AI 永不知情；
+    // 键存在但非数组（脏数据）保持原防御静默 no-op，不覆盖
+    if (parsed === null || parsed === undefined) {
+      kvSet(key, [msg]);
+      return;
+    }
     if (!Array.isArray(parsed)) return;
     parsed.push(msg);
-    kvSet(WX_LS_MSGS_PREFIX + contactId, parsed.slice(-100));
+    kvSet(key, parsed.slice(-100));
   } catch {
     // 读写失败忽略
   }
@@ -249,6 +260,7 @@ export function loadFamilyCards(): WxFamilyCard[] {
       status: f.status === 'active' ? 'active' : f.status === 'returned' ? 'returned' : 'pending',
       message: typeof f.message === 'string' ? f.message : '我为你准备了亲属卡，你消费我买单',
       createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now(),
+      msgId: typeof f.msgId === 'string' ? f.msgId : undefined,
     }));
 }
 
@@ -1897,7 +1909,11 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
     setLcq(next);
     saveJSON(LS_LCQ, next);
   };
-  const commitFamily = (next: WxFamilyCard[]) => {
+  const commitFamily = (updater: (list: WxFamilyCard[]) => WxFamilyCard[]) => {
+    // 审计4-L3：以存储现值为基准读改写（与 commitCards/commitWalletDelta 同口径）——后台
+    // wxApplyAiActions 随时直写 LS_FC（AI 领取/退回把卡置 active/returned），以页面快照整表
+    // 覆盖会把后台状态变更回退；各调用点变更语义不变，只换基准数据来源
+    const next = updater(loadFamilyCards());
     setFamilyCards(next);
     saveJSON(LS_FC, next);
   };
@@ -1963,8 +1979,14 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
       showToast('零钱余额不足');
       return;
     }
+    // 审计4-M3：对齐 doWithdraw——先扣零钱（以存储现值为基准，不足即拦）再入账零钱通；
+    // commitWalletDelta 返回 false 说明快照预检与提交之间零钱已被后台变动（聊天发红包/转账扣款等），
+    // 中止：不入账零钱通、不写账单、不关弹层（旧实现忽略失败返回 → 零钱通凭空入账 + 假成功提示）
+    if (!commitWalletDelta(-amount)) {
+      showToast('零钱余额不足');
+      return;
+    }
     commitLcq({ ...lcq, balance: Math.round((lcq.balance + amount) * 100) / 100 });
-    commitWalletDelta(-amount);
     pushBill('转入零钱通', -amount);
     setMoneySheet(null);
     showToast('已转入零钱通');
@@ -2104,6 +2126,9 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
           relation={fcRelation}
           onBack={() => setView('fcPick')}
           onGift={(amount, message) => {
+            // 审计4-L4：卡消息 id 先生成、同时记入钱包卡 msgId（同 WxFamilyCardIn 口径）——
+            // 聊天侧详情页改额度/后续定位单卡可按消息 id 精确匹配，不再依赖 friendId 连改
+            const giftMsgId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
             const card: WxFamilyCard = {
               id: uid(),
               friendId: fcFriend.id,
@@ -2115,11 +2140,12 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
               status: 'pending',
               message,
               createdAt: Date.now(),
+              msgId: giftMsgId,
             };
-            commitFamily([card, ...familyCards]);
+            commitFamily((list) => [card, ...list]);
             // 同步向与该好友的微信聊天发送一张亲属卡卡片消息（待对方领取；cid 供 AI 动作标记引用）
             appendWxChatMsg(fcFriend.id, {
-              id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
+              id: giftMsgId,
               role: 'me',
               content: '',
               time: Date.now(),
@@ -2137,7 +2163,7 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
           cards={familyCards}
           received={familyIn}
           onBack={() => setView('wallet')}
-          onUnbind={(id) => commitFamily(familyCards.filter((c) => c.id !== id))}
+          onUnbind={(id) => commitFamily((list) => list.filter((c) => c.id !== id))}
           onUnbindReceived={(id) => {
             // 解除收到的亲属卡：从列表移除 + 同步把对应聊天卡片标记已退回（卡片变灰、状态行显示已退回）+ 追加通知行
             const card = familyIn.find((c) => c.id === id);

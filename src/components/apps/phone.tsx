@@ -749,8 +749,14 @@ function CallScreen({
           setBubbles((b) => [...b, { id: genId(), role: 'user' as const, text: userText, t: Date.now(), via: userVia }]);
         }
         // fix3-D #42 电话端同款连续静默轮计数：达阈值自动挂断收尾，防止拉黑期免提循环
-        // 死寂空转到用户手动挂断；正常轮在下方清零，正常通话不受影响
-        silentTurnCountRef.current += 1;
+        // 死寂空转到用户手动挂断；正常轮在下方清零，正常通话不受影响。
+        // fix4 L15 对齐 chat-call 妥协点③口径：byUser 文字轮（sendText 进来的静默取消轮，
+        // 等价 chat-call sendText byUser 早退——不计数也不清零）不计入静默/自动挂断计数，
+        // 防拉黑期连发文字被误判死寂轮攒满阈值自动挂断；语音/接通问候/主动开口轮照常计数
+        //（#42 防免提循环死寂空转的核心场景不变），busy 自清与正常清零路径不受影响
+        if (!(blockedByUser && userVia === 'text')) {
+          silentTurnCountRef.current += 1;
+        }
         // 主动开口路径调用前已置 busy（onstop discard 分支），静默轮提前返回需自行清位
         //（对齐 runTurn finally 口径），否则 scheduleAutoListen 的 busy 检查会吞掉续听调度、免提循环断链
         busyRef.current = false;
@@ -1228,18 +1234,25 @@ function CallScreen({
       createdAt: Date.now(),
     });
     if (unanswered) {
-      onVoicemail({
-        id: genId(),
-        number: target.number,
-        contactId: contact?.id ?? null,
-        displayName: contact?.name ?? '陌生号码',
-        peerKind: contact ? (contact.kind as VoicemailRecord['peerKind']) : 'unknown',
-        avatar: contact?.avatar ?? null,
-        text: vmText,
-        duration: Math.max(3, Math.ceil(vmText.length / 3.2)),
-        read: false,
-        createdAt: Date.now(),
-      });
+      // fix4 M9 拉黑守卫（对齐 chat.tsx:380 / proactive-call.ts:376 的 AI 留言 byUser 抑制）：
+      // 用户拉黑了该角色（byUser）→ 拨号中挂断的「转接语音信箱」AI 留言不落库、不写记忆——
+      // 避免「已拉黑还收到对方留言」的体验断裂；未接通话记录照常落（上方 onEnd），
+      // 接通后的对话存档（transcript/callArchiveText 分支）属事实存档不受影响
+      const vmBlockedByUser = contact?.id ? loadBlock('sms', contact.id).byUser === true : false;
+      if (!vmBlockedByUser) {
+        onVoicemail({
+          id: genId(),
+          number: target.number,
+          contactId: contact?.id ?? null,
+          displayName: contact?.name ?? '陌生号码',
+          peerKind: contact ? (contact.kind as VoicemailRecord['peerKind']) : 'unknown',
+          avatar: contact?.avatar ?? null,
+          text: vmText,
+          duration: Math.max(3, Math.ceil(vmText.length / 3.2)),
+          read: false,
+          createdAt: Date.now(),
+        });
+      }
     } else if (transcript) {
       onVoicemail({
         id: genId(),
@@ -1305,19 +1318,25 @@ function CallScreen({
         endReason: reason,
         createdAt: Date.now(),
       });
-      const text = afterText?.trim() || buildVoicemailText(contact);
-      onVoicemail({
-        id: genId(),
-        number: target.number,
-        contactId: contact?.id ?? null,
-        displayName: contact?.name ?? '陌生号码',
-        peerKind: contact ? (contact.kind as VoicemailRecord['peerKind']) : 'unknown',
-        avatar: contact?.avatar ?? null,
-        text,
-        duration: Math.max(3, Math.ceil(text.length / 3.2)),
-        read: false,
-        createdAt: Date.now(),
-      });
+      // fix4 M9 拉黑守卫（对齐 chat.tsx:380 / proactive-call.ts:376 的 AI 留言 byUser 抑制）：
+      // 用户拉黑了该角色（byUser）→ 拒接/未接的 AI 解释留言不落库——通话记录照常落（上方 onEnd），
+      // 避免「已拉黑还收到对方留言」的体验断裂；与 hangup 内 #33 守卫（byUser 跳过挂断续聊留言）
+      // 同口径。留言来源 = 接听决策 afterText（requestCallFollowup 链路），同属 AI 生成的留言内容
+      if (!(contact?.id && loadBlock('sms', contact.id).byUser)) {
+        const text = afterText?.trim() || buildVoicemailText(contact);
+        onVoicemail({
+          id: genId(),
+          number: target.number,
+          contactId: contact?.id ?? null,
+          displayName: contact?.name ?? '陌生号码',
+          peerKind: contact ? (contact.kind as VoicemailRecord['peerKind']) : 'unknown',
+          avatar: contact?.avatar ?? null,
+          text,
+          duration: Math.max(3, Math.ceil(text.length / 3.2)),
+          read: false,
+          createdAt: Date.now(),
+        });
+      }
       window.setTimeout(onClose, 1400);
     },
     [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers],

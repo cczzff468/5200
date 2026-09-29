@@ -17,6 +17,12 @@ export interface AiDeliveryOptions {
    * 分段流式投递（边接收边逐条显示）时，第二批起的停顿让消息像真人连发一样逐条冒出。
    */
   initialDelay?: number;
+  /**
+   * 本批从队列移除（投递完成或被失效丢弃）时的收尾回调：与 resolve 同步触发、
+   * 先于 pump 跑下一批 —— beginChatStream 的 M6 边界清位用它保证「旧尾巴全部投完」
+   * 与「新回合照旧追加」之间没有同步投递的空隙（.then 微任务会晚于下一批的同步首条）。
+   */
+  onDrained?: () => void;
 }
 
 interface Batch {
@@ -84,16 +90,18 @@ function pump(sessionKey: string): void {
   const delayOf = opts?.delay ?? defaultDelay;
   let index = 0;
   const step = (): void => {
-    // 批可能被 flush 清空：每步重新校验
+    // 批可能被 flush/purge 清空：每步重新校验
     const q = queues.get(sessionKey);
     if (!q || q[0] !== batch) {
       resolve();
+      batch.opts?.onDrained?.();
       pump(sessionKey);
       return;
     }
     if (index >= items.length) {
       q.shift();
       resolve();
+      batch.opts?.onDrained?.();
       pump(sessionKey);
       return;
     }
@@ -105,6 +113,16 @@ function pump(sessionKey: string): void {
       const CHUNK = 5;
       void (async () => {
         while (index < items.length) {
+          // 每块迭代开头（尤其 await 让出后）重新校验队列头：purge/失效后旧批停止投递，
+          // 与同步 step 的失效路径同款收尾（resolve + onDrained + 泵下一批 + 退出）——
+          // 否则换号/清队列后旧批的剩余消息仍会在后台继续落盘（L8 重入校验缺口）
+          const head = queues.get(sessionKey);
+          if (!head || head[0] !== batch) {
+            resolve();
+            batch.opts?.onDrained?.();
+            pump(sessionKey);
+            return;
+          }
           for (let k = 0; k < CHUNK && index < items.length; k++) {
             const item = items[index];
             try {
@@ -123,6 +141,7 @@ function pump(sessionKey: string): void {
         const q = queues.get(sessionKey);
         if (q && q[0] === batch) q.shift();
         resolve();
+        batch.opts?.onDrained?.();
         pump(sessionKey);
       })();
       return;
@@ -241,8 +260,10 @@ export function clearDeliverBoundary(sessionKey: string): void {
  * - 运行中批：队列被移除后，step 的下一节拍会发现「队列头 ≠ 当前批」而自行 resolve 退出
  *  （现有重入校验，无需新增取消标记），未投递的尾巴不再落盘——旧账号会话的回复不会
  *   在换号后写进对应聊天记录键；
- * - 排队中的后续批：随队列整体丢弃，各批 resolve 按「投递完成」收尾（不 reject，
- *   挂在其后的回合结算/记忆提取不阻塞）；
+ * - 排队中的后续批：随队列整体丢弃，但逐批补调 resolve（Promise 幂等，与运行中批的
+ *   失效路径双调无害）——原实现直接整队丢弃，排队批的 resolve 永不调用，挂在其后的
+ *   await scheduleAiDelivery(...)（回合结算/记忆提取等）会永远悬挂；resolve 后挂在其上的
+ *   回调按「投递完成」收尾（不 reject，不阻塞）；
  * - 投递插入边界（markDeliverBoundary）一并清除。
  * 只影响前缀匹配的会话（如 'qq:'），其他端（wx: / sms:）的投递队列不受影响。
  * 返回被清理的会话键数量（0 = 该前缀无待投递项）。
@@ -253,6 +274,16 @@ export function purgeDeliveryQueueByPrefix(prefix: string): number {
     if (key.startsWith(prefix)) keys.push(key);
   });
   for (const key of keys) {
+    const queue = queues.get(key);
+    if (queue) {
+      for (const batch of queue) {
+        try {
+          batch.resolve();
+        } catch {
+          // resolve 回调异常不影响其余批清理
+        }
+      }
+    }
     queues.delete(key);
     insertBeforeIds.delete(key);
   }

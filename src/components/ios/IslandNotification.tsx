@@ -13,7 +13,7 @@
  * 层级 z-[93]：高于锁屏/切换器/闹钟/状态栏，仅低于熄屏黑遮罩（熄屏=屏幕关了，不看）。
  *
  * 来电互斥暂缓（C-3）：电话来电响铃全程（全屏来电界面 z-84 / 退出后的顶部横幅 z-94 都占住
- * 通知锚位或整屏）与微信来电响铃阶段（来电弹窗 z-94 / 展开的来电页）展示期间，本层整体
+ * 通知锚位或整屏）与微信/QQ 语音来电响铃阶段（来电弹窗 z-94 / 展开的来电页）展示期间，本层整体
  * 隐身（visibility:hidden，不卸载——卸载会让收起动画的 onAnimationComplete 永不回调、
  * exiting 卡死）且自动收起计时冻结：当前通知原位保留、队列不推进，来电层消失后恢复展示。
  * 只读引用 incoming-call / global-call 的 store 做互斥判断，不改层级数值、不改通知队列语义。
@@ -52,8 +52,9 @@ const SPRING_WITH_BG: Transition = { ...SPRING, backgroundColor: { duration: 0.2
  * 来电展示中（互斥暂缓判断，只读引用两个通话 store）：
  * - 电话来电（source='phone'）：响铃全程视为展示中——全屏来电界面（!screenHidden，z-84）
  *   或退出界面后的顶部横幅（screenHidden，z-94）二者必居其一，都占住通知锚位/整屏；
- * - 微信来电（source='wx'）：页内引擎响铃阶段（enginePhase==='incoming'）——
- *   顶部大窗/胶囊弹窗（z-94，view!=='full'）或点弹窗展开的来电页（view==='full'）都算；
+ * - 微信来电（source='wx'）与 QQ 来电（source 运行时值 'qq'，快照类型联合未列，见 qq.tsx 触发处）：
+ *   页内引擎响铃阶段（enginePhase==='incoming'）——顶部大窗/胶囊弹窗（z-94，view!=='full'）
+ *   或点弹窗展开的来电页（view==='full'，QQ 响铃直接展开）都算；
  *   接通后（enginePhase 变 active）不再暂缓，通知卡按既有设计正常展示在通话页（z-62）之上；
  * - QQ 通话/微信接通后的通话页不在此列（通知 z-93 高于 z-62 是既定设计，正常展示）；
  * - 锁屏/熄屏本身不触发暂缓（通知 z-93 高于锁屏 z-65 是既定设计，本守卫只看来电层可见性）。
@@ -62,7 +63,10 @@ function useIncomingCallPresenting(): boolean {
   const call = useIncomingCall((s) => s.call);
   const enginePhase = useGlobalCall((s) => s.enginePhase);
   if (call?.source === 'phone') return true;
-  if (call?.source === 'wx') return enginePhase === 'incoming';
+  // 微信/QQ 来电同口径：页内引擎响铃阶段暂缓通知展示（L10 补 'qq'——快照类型联合未列该值，
+  // 运行时由 qq.tsx 触发处写入，字符串宽化比对与 IncomingCallLayer 同口径）
+  const source = (call?.source ?? '') as string;
+  if (source === 'wx' || source === 'qq') return enginePhase === 'incoming';
   return false;
 }
 

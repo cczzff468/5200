@@ -5316,6 +5316,13 @@ function ChatPage({
           ...prev.map((x) => (x.id === m.id && x.fam ? { ...x, fam: { ...x.fam, rejected: true } } : x)),
           { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'fam', pre: `你退回了${peer.name}的`, accent: '亲属卡' } },
         ]);
+        // 审计4-M4：已领取过的卡同步从「我收到的亲属卡」摘除（镜像 wallet 侧解除的存储同步，
+        // 对称 wallet onUnbindReceived：写回 LS_FC_IN + 本函数已做的聊天卡标记 + 通知行）——
+        // 此前只改聊天卡，钱包侧仍「使用中」、支付方式行仍计入其全额额度。领取时按来源卡消息 id
+        // 入表（claimFamily msgId），按 id 精确摘除；未领取的卡本就无入表记录（filter 无匹配，幂等）
+        const inList = loadFamilyCardsIn();
+        const nextIn = inList.filter((f) => f.msgId !== m.id);
+        if (nextIn.length !== inList.length) saveFamilyCardsIn(nextIn);
         setDetailId(null);
         onToast('亲属卡已退还');
         kickRefund(`（系统事件：你送给对方的亲属卡被对方退还了（每月额度¥${m.fam.monthlyLimit}）。请用符合人设的一两句话自然回应这件事。）`);
@@ -7299,8 +7306,10 @@ function ChatPage({
         />
       )}
 
-      {/* 開红包弹层 */}
-      {openingMsg?.rp && (
+      {/* 開红包弹层；审计4-L7：#24 同款终态派生关闭——24h 过期清算把红包置 returned 后浮层自动
+          关闭（清算落盘会合并进 msgs），点「開」不再被 openRedPacket 守卫静默拦截成纯显示残留；
+          领取/退还路径本就自带 setOpeningId(null)，不受此条件影响 */}
+      {openingMsg?.rp && !openingMsg.rp.status && (
         <RpOpenLayer
           senderName={openingMsg.role === 'me' ? me.name : peer.name}
           senderAvatar={openingMsg.role === 'me' ? me.avatar : peer.avatar}
@@ -7374,8 +7383,15 @@ function ChatPage({
           onBack={() => setDetailId(null)}
           onEditLimit={(v) => {
             setMsgs((prev) => prev.map((x) => (x.id === detailMsg.id && x.fam ? { ...x, fam: { ...x.fam, monthlyLimit: v } } : x)));
+            // 审计4-L4：钱包侧只改「正在编辑的这一张」——赠送时卡消息 id 已同步记入钱包卡 msgId
+            // （钱包 onGift），按 msgId 精确匹配；旧数据无 msgId 匹配不到时退回 friendId 匹配（原行为）
             const list = loadFamilyCards();
-            saveFamilyCards(list.map((c) => (c.friendId === peer.id ? { ...c, monthlyLimit: v } : c)));
+            const byMsg = list.some((c) => c.msgId === detailMsg.id);
+            saveFamilyCards(
+              byMsg
+                ? list.map((c) => (c.msgId === detailMsg.id ? { ...c, monthlyLimit: v } : c))
+                : list.map((c) => (c.friendId === peer.id ? { ...c, monthlyLimit: v } : c))
+            );
             onToast('已修改每月消费上限');
           }}
           onPickMethod={(mth) => {

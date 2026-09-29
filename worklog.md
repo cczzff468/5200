@@ -11582,3 +11582,146 @@ Stage Summary:
 - 高危 1：QQ 换号在途流的流中分段继续落盘（abortStreamsByPrefix 只预置 finalized 挡 finalize，onDelta 无中止感知——deliverSegment 照旧 saveMsgs/通知/角标，#3 中止保证被穿透，且 runStream:374 误删换号后同键新流 payload）
 - 中危 9：moments/generate 无鉴权无限流（可烧内置 SDK 凭据，#16 修复漏网）/ 删联系人 60s 窗口幽灵互动+记忆重写污染 / 零钱通 doLcqIn 不检查 commitWalletDelta 失败虚增（资金）/ 聊天侧退还亲属卡不同步摘除 LS_FC_IN（已退卡额度残留进聚合可用额）/ 换号 1.2s 幽灵来电定时器 / 群成员间切换与 regen 清投递边界（尾巴倒挂持久化）/ notice 行消费边界浮在用户消息上方 / 群撤回清记忆未传 text 第三参（兜底恒失效）/ voicemail byUser 矩阵漏 2 落点
 - 低危 17：动态 2（垃圾项拉黑期常驻/AI 转发自身记忆缺原文）+ 微信 5（commitFamily 快照覆盖/编辑额度连带/群支付 Sheet 跨月显示/赠卡无会话键悬挂/開浮层 status）+ QQ 6（隐藏页分块循环/通话尾巴延迟写/IslandNotification qq 暂缓/来电快照滞留禁切换器/详情页全额展示/忽略=拒绝语义）+ 群 1（error 回滚与已投递分段重复）+ 短信电话 3（byUser 文字轮误计数/proactive 不滤 byChar/recall app 键）
+---
+Task ID: fix4-e
+Agent: fix4-e 短信电话链修复代理
+Task: 修复四轮审计 M9/L15/L16/L17（短信/电话/语音通话链 4 项）
+
+Work Log:
+- 读 worklog.md 11495-11514（audit4-call 条目取证：N1=M9/N2=L15/N3=L16/N4=L17、B6 拉黑口径矩阵、先例行号）；grep 重定位当前行号（相对审计快照漂移：phone 守卫 743-771、hangup unanswered 1236-1255、endByPeer 1292-1340；chat.tsx recordMissedPhoneCall 380/414 未漂移；proactive-call 候选 526-536）
+- M9（中）phone.tsx 两处 AI 未接留言补 byUser 抑制（对照先例 chat.tsx:380 / proactive-call.ts:376；app 键经核实与 #40 守卫同源同键='sms'——block-state.ts:29 BlockApp 联合类型仅 wx/qq/sms，phone 引擎拉黑态挂在 sms 键下）：① hangup unanswered 分支 phone.tsx:1236-1255，vmBlockedByUser 为真跳过「转接语音信箱」onVoicemail（不落卡），未接通话记录照常落（onEnd）、接通后对话存档 transcript/callArchiveText 分支属事实存档不受影响；② endByPeer phone.tsx:1321-1340，byUser 时跳过拒接/未接 AI 解释留言（afterText/buildVoicemailText），onEnd 记录与 onClose 收尾照常
+- L15（低）phone.tsx:751-759 静默轮计数递增条件排除 byUser 文字轮（if (!(blockedByUser && userVia === 'text'))）：先读 chat-call.ts 口径（sendText:884-897 byUser 早退不计数不清零、runTurn 守卫:783 计数、:898 正常文字轮清零）后完全对齐妥协点③；byChar 文字轮 744-747 早退本就不计数未动；语音/接通问候/主动开口（AUTO）轮照常计数；#42 busy 自清（762-763）与正常清零（772）路径未动
+- L16（低）proactive-call.ts:526-542 候选过滤补 byChar：wx/qq/sms 三端 byChar||byUser 任一为真即排除（同一 filter 内同款 loadBlock 调用）；确认来电候选无 requestOnly 放行需求（charRequestOnlyOf 全仓仅 chat.tsx 聊天回合入口使用，proactive-call.ts 无引用；B6 矩阵「requestOnly 仅由 byUser 派生」），从严过滤无碍
+- L17（低）chat.tsx:414→417 missed 留言记忆召回 'sms'→'phone'：核实 memory.ts 键语义（memRecallBlock:715 互通关闭时按 f.app === app 精确过滤碎片；phone.tsx:790 通话轮召回/:1166 挂断续聊召回均 'phone'；通话记忆碎片由 phone.tsx memSummarizeCallNow 以 'phone' 写入）→ 确认通话记忆在 'phone' 名下，正向对齐 #78（proactive-call.ts:424 同款修正注释）；chat.tsx:1319 短信回合召回仍 'sms'（域正确）不动
+- 只改三个文件（phone.tsx/chat.tsx/proactive-call.ts）；未跑 tsc/eslint/git/dev server（遵守只读铁律）；验证=每处落点复读 + grep 交叉核对（5 处 fix4 标记、memRecallBlock 三端键口径、silentTurnCountRef 引用点），唯一其他写入=本条 worklog
+
+Stage Summary:
+- M9/L15/L16/L17 四项全部落地，共 5 处代码落点；M9 双落点与 chat.tsx:380 / proactive-call.ts:376 先例同形态同键（'sms'），电话引擎 AI 留言 byUser 抑制补齐（B6 矩阵漏的 2 个落点闭合）
+- 决策：L15 取「不计数也不清零」的完全对齐（chat-call byUser 文字轮=中性轮），防拉黑期连发文字攒满阈值被误挂断；L17 经 memory.ts 键语义核实后正向对齐 'phone'（若反向对齐 'sms' 则需把 phone 引擎写入键一并改，波及面大且与 #78 冲突，故正向）
+- 妥协点③双引擎口径差已消除；#42 双引擎独立计数/跨通话重置/busy 自清/正常清零均未破坏；来电候选过滤从严补 byChar，requestOnly 放行语义不涉来电链路
+---
+Task ID: fix4-b
+Agent: fix4-b moments链修复代理
+Task: 修复四轮审计 M1/M2/L1/L2（moments generate 鉴权限流 / 删联系人幽灵互动 / 拉黑顺延顺序 / 转发记忆口径）
+
+Work Log:
+- 先读 worklog.md 11515-11531（audit4-moments 全部证据行号）与 11461-11477（audit4-infra 的 bg/search 鉴权限流先例）；重读 route.ts 全文、moments.ts 关键段（756-794 记忆写入 / 829-908 addCharMomentPost / 1030-1096 addCharMomentLike / 1173-1267 addCharMomentComment / 1504-1520 callGenerateApi / 1665-1901 三 AI 生成函数 / 1944-2255 引擎 drain 与 tick）、MomentsScheduler.tsx 全文、bg/search route 模板、contacts-store.ts listContacts/contactRealName；grep 全仓锁定 addCharMomentPost/Comment/Like 与 aiPostMoment/aiRepostMoment 全部调用点
+- M1（src/app/api/moments/generate/route.ts:125-170）：照搬 api/chat/bg（fix3-F #16 模式）复制可选鉴权+全局滑动窗口限流——PUSH_SHARED_TOKEN 未配置时 tokenOk 恒通过、限流不启用，行为完全不变（现有 UI 零影响）；已配置时要求请求头 x-shared-token 精确匹配否则 401。全局限流 20 次/60s（比 bg 的 30/60s 更紧：单次 POST 最多 upstream+SDK 两次 LLM 调用×引擎禁复读两轮重试，正常单客户端一次 tick 90s 预算至多十来次生成不会误伤），超限 429（中文文案与 search route 同款，callGenerateApi 的 throw 会带到调用方 toast/warn）。客户端侧核查：bg 的前端链路（bg-turn.ts/push-client.ts）本就不发 token（grep x-shared-token 在 src/lib 零命中），moments.ts callGenerateApi 同款同源 fetch 不带 token → 按任务书「客户端零改动」，口径已写入 route.ts 注释（配置 token 的公网部署引擎 401 = 与 bg 既有妥协同款，需部署方暴露 token 给前端）
+- M2（全部在 src/lib/moments.ts 数据面，MomentsScheduler 60s 刷新节奏未动、contacts-store 未改——listContacts 为现成导出）：①drainReplies 开头 await listContacts().catch(()=>deps.contacts) 取新鲜列表（:1975），peer 查找与 listMomentPosts legacy 解析改用 freshContacts（:1986/:1988），peer 已删 → !peer 直接丢弃（:1990）连 LLM 都不发；②drainInteractions 同款 freshContacts（:2042），platformPeers/candidates 一律基于新鲜列表（:2061/:2071），已删联系人不再作为点赞/评论/转发候选；③runAutoPosts 选定 pick 后复核新鲜列表，不在册直接 return（不写退避标记无副作用，:2172-2175）；④aiPostMoment 入口复核 throw「联系人已删除，取消发帖」（:1692，外部调用点 qq.tsx:10403/wechat.tsx:10022 均有 try/catch toast）；⑤aiRepostMoment 入口复核 return null 静默跳过（:1864）；⑥addCharMomentLike 改 async+开头复核（:1043-1048）不在册 return false——不落库/不入收件箱/不写记忆，唯一调用点 drainInteractions:2091 已加 await；⑦addCharMomentComment 改 async+开头复核（:1188-1202）不在册 return null，唯一调用点 aiCommentOnMoment:1835 已加 await（复核失败经「评论未写入」throw 走既有重试→丢弃路径，安全）；⑧writeMomentMemoryAwait 落库前复核 fact.peerId 在册（:758-760），兜住一切迟到记忆写入（含 addCharMomentPost 的 fire-and-forget 记忆），不再向已清空的 mem-frag 键重写碎片
+- M2 偏离说明：addCharMomentPost 保持同步签名未在函数内复核——grep 实证其有清单外同步调用点（wechat.tsx:9974 openFriendMoments 播种 / qq.tsx:10332 首访播种，均 useCallback/useEffect 同步体、本任务禁改文件），async 化会产生 floating promise 且无法同步修复；改为「调用链上游复核（runAutoPosts pick + aiPostMoment/aiRepostMoment 入口）+ 记忆层 writeMomentMemoryAwait 兜底」的等效纵深，函数 JSDoc 已注明该分工（:828-834）；手动播种场景 peer 必在册且 writeMemory=false，不受影响
+- L1（moments.ts drainReplies :1990-2004）：把死项清理判定（parent.author!=='user' 防串台 :1993、已回复去重 :1995）上移到 #5 拉黑顺延检查（:2001）之前——拉黑期间死项恢复「直接丢弃」，仅「活项但被拉黑」才 +5s 顺延（#5 语义不变）；与 #1 合并写回交互不变（丢弃项不入 keep → 经 latestIds 过滤不复活，纯循环内判定顺序调整）
+- L2（moments.ts addCharMomentPost 记忆 detail :898-904）：该 char-post 是对用户动态的转发时（args.repostOf?.author==='user'），detail 改为 repostContextText(args.repostOf, args.content, 30).slice(0,120)（转发上下文原文+理由，拼接与截断口径对齐 buildMomentsChatBlock:2345 的用户转发记忆），非转发普通发帖保持 content.slice(0,80) 原口径；repostContextText 为同模块 function 声明（提升可用）
+- 修复过程中发现并修正一处 MultiEdit 落点错误（drainReplies 拉黑块体被吞），已按原语义补回并复读全函数核对；全程未运行 tsc/eslint/git/dev server，未改清单外文件（MomentsScheduler.tsx 与 contacts-store.ts 经评估零改动），唯一写入=本条 worklog 追加
+
+Stage Summary:
+- M1：/api/moments/generate 具备与 bg/search 同款的可选鉴权（PUSH_SHARED_TOKEN）+全局限流（20/60s 滑动窗口，内存态重启清空、判满先拒不 push 有界）；默认部署（无 token）行为逐字节不变
+- M2：删联系人后 60s 窗口的幽灵链路四层切断——drain 层（回复/互动候选基于新鲜 listContacts）→ 调度层（runAutoPosts pick 复核）→ 生成层（aiPostMoment/aiRepostMoment 入口复核）→ 落库层（addCharMomentComment/Like async 复核 + writeMomentMemoryAwait 记忆兜底），幽灵评论/点赞/转发/新动态、收件箱通知、mem-frag 重写全部阻断；妥协点=addCharMomentPost 签名冻结（外部播种调用点在禁改文件），以调用链复核等效覆盖
+- L1：死项清理先于拉黑顺延，拉黑期死项不再常驻占队列容量；L2：AI 转发用户动态的角色自身记忆带上被转发原文+理由，与用户转发记忆口径对称
+- 全部改动限于 src/lib/moments.ts（2663→2697 行）与 src/app/api/moments/generate/route.ts 两文件；建议协调者统一跑 tsc/eslint（重点核对 addCharMomentComment/Like 两处 async 化的 await 落点：moments.ts:1835/:2091）
+---
+Task ID: fix4-d
+Agent: fix4-d 群聊链修复代理
+Task: 修复四轮审计 M7/M8/L14/L5（群聊双端 4 项；只改 wx-group.tsx / qq-group.tsx，其余文件只读）
+
+Work Log:
+- M7 notice 行改普通追加（双端同构）：appendMsg 内新增 isNotice=m.kind==='notice' 分支，notice 与机主消息同走普通追加（不消费投递边界）——通知行永远是「此刻刚发生的新事件」从不需要插边界，消除空群/全员禁言提示（wx:3374/3404、qq:2988/3018 附近「群里暂时没有人能回复」）、红包过期清算行（wx:2556/qq:2147 附近）、AI 领取/收款资金通知行（appendFundNotice）等在「用户消息已落库、新回合 beginChatStream 未到」窗口内经 appendWithBoundary 插到该用户消息之前（浮在其上方）且随存储持久化的问题；机主消息 markDeliverBoundary、AI 投递消息走 appendWithBoundary、未读 bump 非 notice 条件均不变。落点 wx-group.tsx:2507-2522、qq-group.tsx:2096-2111（appendMsg 为全部 notice 产生方的单点收口，pushGroupEvent 直写存储链不在本项范围）
+- M8 群撤回清记忆传原文第三参（双端同构）：case 'recall' 遍历成员的 memPurgeMessageSources(cid, m.id) 改传第三参 msgTextOf(m)（文件内既有取文本 helper，与记忆提取素材同源口径；图片「[图片]」等短占位 <8 字自动不触发兜底=宁少删，语音转写 ≥8 字可兜底属预期语义，符合 memory.ts:932 契约「调用方持原文时建议直接传」）——群消息 id 在 memFindMsgText 的三个私聊存档键里找不回文本，#26② 的 ≥8 字包含兜底对群撤回由恒失效变为生效。落点 wx-group.tsx:4454-4460、qq-group.tsx:4141-4147；未改 memory.ts
+- L14 regen error 回滚防与已投递分段重复（双端同构）：runCharTurn 增加可选第 4 参 onSegmentDelivered?: (count: number) => void（wx:2823-2828、qq:2445-2447），deliverSegment 在 built.length>0 排队投递前回调该批条数（wx:3216、qq:2836）；regenerate 在 80ms 回调内定义局部计数器 regenDelivered 并传回调累加（wx:4188-4193、qq:3870-3875），then 收口 r==='error' 且 regenDelivered>0 时跳过回滚（不恢复原消息，已投递分段保留）仅 toast「网络开小差了，部分回复已送达」，regenDelivered===0 保持原回滚+「已恢复原消息」，skip 分支（regen allowSkip=false 仅前置守卫可达，计数必为 0）行为不变。runCharTurn 其余直调点（runGroupTurn wx:3429/qq:3047、级联 wx:3499/qq:3117、nudge wx:4029/qq:3705）不传第 4 参零影响。落点 wx-group.tsx:4155+4188-4213、qq-group.tsx:3837+3870-3895
+- L5 群支付方式 Sheet 跨月重置：WxPayMethodSheet 的 familyIn 由直读 loadFamilyCardsIn() 改为 resetFamilyCardsInMonth()（wechat-wallet.tsx:203 导出，仅导入未改其实现），import 行同步把唯一引用已被替换的 loadFamilyCardsIn 换成 resetFamilyCardsInMonth（避免未使用 import）；对照单聊 wechat.tsx:3008/3146 同款（扣款侧 wxCanPay/wxExecutePayment 自带重置，仅显示路径需重置）。落点 wx-group.tsx:163、1973-1975
+
+Stage Summary:
+- 4/4 落地、双端同构：M7 在 appendMsg 单点收口（所有 notice 产生方一次覆盖，正常消息/AI 回复仍走 appendWithBoundary）；M8 复用 msgTextOf 与记忆提取素材同源；L14 用可选参数回调最小侵入（未动回合入口/级联/nudge/投递调度/chat-stream-store）；L5 只改显示路径
+- 妥协点：M8 红包/转账卡片经 msgTextOf 产出长占位串（含 ID/金额/状态）作兜底 needle，对 LLM 转述型碎片包含匹配命中率低——「宁少删不多删」口径下无害；如后续想更准可对卡片类传空串
+- 验证：逐处 Read 回读确认落点/缩进/中文注释风格与 JSX 属性间 // 注释语法；按约束未运行 tsc/eslint/git/dev server，留协调者统一跑
+---
+Task ID: fix4-c
+Agent: fix4-c 微信钱包链修复代理
+Task: 修复四轮审计 M3/M4/L3/L4/L6/L7（微信钱包/亲属卡资金链 6 项）
+
+Work Log:
+- 读 worklog.md 11478-11494（audit4-wx）取证后逐项 grep 重定位（审计行号为快照，两处落点文件与任务书标注不符，见 Stage Summary 偏离点①）；只改 wechat-wallet.tsx（2620→2647 行）与 wechat.tsx（11164→11180 行），未跑 tsc/eslint/git/dev server
+- M3 wechat-wallet.tsx:1961-1977 doLcqIn：对齐 doWithdraw 模式——commitWalletDelta(-amount) 返回 false 时 toast「零钱余额不足」并中止（不 pushBill/不关弹层/不入账零钱通）；并把扣零钱挪到 commitLcq 之前（先扣后入账，镜像 doWithdraw「先扣后回填」，失败路径不再出现零钱通已入账而零钱未扣的中间态）
+- M4 wechat.tsx:5314-5329 refundPeerCard family 分支：聊天卡标记 rejected + 通知行之后，新增 loadFamilyCardsIn() 现值读 → filter(f.msgId !== m.id) → 长度有变才 saveFamilyCardsIn 写回（claimFamily 6238-6246 入表时记了 msgId，按来源卡消息 id 精确摘除；未领取卡无入表记录 filter 天然幂等；旧数据无 msgId 摘不到为已知妥协）。镜像 wallet 侧解除（wallet onUnbindReceived 2167-2203）的「写回 LS_FC_IN + 聊天卡标记 + 通知行」三件套，本函数原本已有后两件；wallet 侧对已 rejected 卡无条件追加通知行（2189-2196）既有行为未动
+- L3 wechat-wallet.tsx:1900-1907 commitFamily 改为 updater 形参（updater(loadFamilyCards()) 现值基准 → setFamilyCards + saveJSON(LS_FC)，与 commitCards 同构，注释同口径）；调用点 onGift 2145 `commitFamily((list) => [card, ...list])`、onUnbind 2166 `commitFamily((list) => list.filter((c) => c.id !== id))`，变更语义不变只换基准数据来源，后台 wxApplyAiActions（wechat.tsx 1391-1403）直写 LS_FC 的 active/returned 不再被页面快照整表回退
+- L4 两文件联动：① wechat-wallet.tsx:89-91 WxFamilyCard 增加可选 msgId 字段（同 WxFamilyCardIn.msgId 口径，向后兼容）、loadFamilyCards 规范化保留 msgId :263；② wallet onGift 2128-2154：卡消息 id 先生成（giftMsgId）→ 钱包卡记 msgId:2143 + 聊天卡消息同 id :2148（原两处独立随机 id 无 linkage）；③ wechat.tsx:7382-7394 onEditLimit：先 some(c.msgId === detailMsg.id) 判定，命中只改该张（map by msgId），未命中（历史无 msgId 旧卡）退回 friendId 匹配（原行为，避免回归）
+- L6 wechat-wallet.tsx:227-245 appendWxChatMsg：kvGet 命中 null/undefined（键不存在，该好友从未打开过聊天，键构造 WX_LS_MSGS_PREFIX+contactId 与 wechat.tsx lsMsgsKey:395 一致）→ kvSet(key, [msg]) 初始化空消息流放入本条卡消息再写回；键存在但非数组（脏数据）保持原防御静默 no-op 不覆盖
+- L7 wechat.tsx:7309-7321 RpOpenLayer 渲染门改 `openingMsg?.rp && !openingMsg.rp.status`（#24 收款浮层 7297 同款「渲染处按状态派生关闭」模式，24h 清算 wxExpireStalePeerCards 置 rp.status='returned' 落盘合并进 msgs 后浮层自动消失，点「開」不再被 openRedPacket:6102 守卫静默拦截）；只加 status 条件——opened（openRedPacket 自关）与退还（refundPeerCard redpacket 分支自 setOpeningId(null)）两条路径本就同步关浮层
+- 全部 6 项改完交叉复核：commitFamily 全部调用点已迁移 updater（grep 无残留快照调用）；wechat.tsx 中 loadFamilyCardsIn/saveFamilyCardsIn/saveFamilyCards 均为既有 import（216-220）；refundPeerCard useCallback 依赖未变（新用均为模块级函数）；L7 条件链 TS 收窄成立（openingMsg?.rp 真值推断 openingMsg 非空）
+
+Stage Summary:
+- 6/6 修复在位：M3 零钱通失败路径不再虚增资金、M4 聊天退还收到的亲属卡同步摘除 LS_FC_IN（与钱包解除对称）、L3 LS_FC 三处快照写改现值读改写、L4 改额度 per-card 精确化（msgId linkage + 旧数据回退）、L6 无聊天记录键好友初始化空消息流（卡面不再悬空）、L7 開红包浮层随 24h 清算终态自动关闭
+- 偏离任务书决策：① L4/L7 任务书标注落点为 wechat-wallet.tsx（约 7303/7375-7379），实际代码在 wechat.tsx（wallet 文件仅 2647 行、无 RpOpenLayer/onEditLimit 符号；audit4-wx worklog 的 B 部分行号与 wechat.tsx 现码逐行吻合）——按「以实际 grep 定位为准」改在实际落点，wechat.tsx 实改三处（M4 refundPeerCard、L4 onEditLimit、L7 渲染门）均为本清单条目本身，未触碰清单外逻辑；② 任务书「给 WxFamilyCard 增加可选唯一 id 字段」——WxFamilyCard.id 已存在且赠送时生成，真正缺失的是与聊天卡消息的 linkage，故按审计原文（「WxFamilyCard 无 msgId 字段」）增补可选 msgId（镜像 #22 的 WxFamilyCardIn.msgId），协调者意图（per-card 精度）达成
+- 妥协点：M4/L4 对「历史无 msgId 旧数据」分别退化为「摘不到（保持旧态）」与「friendId 连改（原行为）」，不回填迁移旧数据；M4 摘除仅 msgId 精确匹配，不做同额度启发式（#22 已裁定同额度多卡不可互换错删）
+- 验证方式：纯静态走读 + grep 交叉复核（import/调用点/类型收窄/依赖数组），未跑 tsc/eslint（遵守协调者统一跑约定）、未动 git/dev server；唯一写入=本条 worklog 追加 + 两个目标文件
+---
+Task ID: fix4-a
+Agent: fix4-a 换号串号投递链修复代理
+Task: 修复四轮审计 H1/M5/L8/L9/L10/L11/L13 + M6根因 + purge resolve 缺口（L12 归属其他代理，未动）
+
+Work Log:
+- 先读 worklog.md 11461-11583 取证（audit4-infra / audit4-call / audit4-moments 可跳过 / audit4-qq 11532-11548）：确认 8 项发现的证据链与审计行号，再按当前代码 grep 重新定位（qq.tsx 审计行号漂移 +32 行内：writeCallCard 3002/maybeTriggerAiCall 3164/purgeQqSessionData 13561/deliverSegment 3745）
+- H1 换号在途流中止感知（src/lib/chat-stream-store.ts）：StreamRuntime 加 aborted 标记（:150-156，beginChatStream rt 字面量 :451 置 false）；abortStreamsByPrefix 对 streaming 流 finalized 之外同时预置 rt.aborted（:516-523）；runStream onDelta 开头 aborted 早退停止喂 raw/分段器（:230-236，流中分段就此截断）；onVision 回写前 aborted 检查（:328-334）；识图等待窗口内中止时不再登记 activePayloads/发起请求（:352-353）；catch 内 SDK 兜底前置 aborted 早退（:359-361，不再为旧账号烧补救请求）；收尾段整段 if(!rt.aborted) 包裹——finalize 不落盘 + activePayloads.delete 跳过（修复「换号后同键新流 payload 被旧流收尾误删」）+ emitFinalized/emit 跳过（:383-407）
+- M6 根因侧（src/lib/chat-stream-store.ts:428-440）：beginChatStream 无条件 clearDeliverBoundary 改为 isAiDelivering 分支——尾巴仍在投递时排空批占位，排空瞬间在其 onDrained 里同步清边界，此后（含本回合新排队批次）照旧追加；新增导入 isAiDelivering/scheduleAiDelivery（:35，无循环依赖）
+- M6 实现偏离说明（相对协调者给定代码的唯一偏差）：协调者方案为 `scheduleAiDelivery(key,[],()=>{}).then(()=>clearDeliverBoundary(key))`，落码时推演发现微任务空隙——空批 shift+resolve 后 pump 会同步跑下一批（新流首批 initialDelay=0 时 step() 同步执行），首条投递先于 .then 微任务清边界执行，该首条会被旧边界误插到用户消息之前；故给 AiDeliveryOptions 增加 onDrained 收尾回调（ai-delivery.ts:20-25），在 step 三条退出路径（失效/正常排空/隐藏页尾部）于 resolve 之后、pump 下一批之前同步触发（ai-delivery.ts:92-107/141-145），清边界严格先于任何后续投递，空隙归零；对外语义与协调者方案完全一致
+- L8（src/lib/ios/ai-delivery.ts:112-148）：pump 隐藏页分块异步循环每次块迭代开头（尤其 await 让出后）复查队列头仍是本批，不是则按同步 step 失效路径同款 resolve+onDrained+pump+return——purge/失效后旧批不再在后台继续投递
+- purge resolve 缺口（src/lib/ios/ai-delivery.ts:258-292）：purgeDeliveryQueueByPrefix 删除队列前对每个被删队列的全部 batch 补调 resolve()（try 包裹单批异常；Promise resolve 幂等，与运行中批 step 失效路径双调无害），挂在其后的 await scheduleAiDelivery（回合结算/记忆提取）不再永久悬挂；注释同步改为与实现一致
+- M5（src/components/apps/qq.tsx）：模块层新增 let qqSessionEpoch = 0（:13545-13551，注释说明用途）；purgeQqSessionData 开头 qqSessionEpoch += 1（:13561-13564）；maybeTriggerAiCall 在 setTimeout 前捕获 epoch、fire 时首先比对失配直接 return（守卫链之前，:3174-3178）——换号 1.2s 幽灵来电作废
+- L9（src/components/apps/qq.tsx）：writeCallCard 的 afterText 延迟写（:3020-3028）与 sendCallFollowup 多条延迟写（:3044-3051）同款纪元守卫——调度时捕获、回调执行时失配跳过写入；writeCallCard 的同步通话卡片落盘不在本项范围（换号中通话的卡片写入属更宽话题，未动，见 Stage Summary）
+- H1 纵深防御（src/components/apps/qq.tsx）：runAiTurn 投递段开头捕获 const turnEpoch = qqSessionEpoch（:3715-3719，位于 await listAlbums 之后取最新值）；deliverSegment 首行失配丢弃（:3744-3747，不再解析/落盘/排队）；finalize 的 scheduleAiDelivery.then（密友值/过期清算/记忆提取/maybeTriggerAiCall）首行失配作废（:3822-3825）——此项为顺手加固：purge resolve 修复会激活原本悬挂的 .then，不挡会把旧账号 bond +2/记忆提取写进新账号
+- L10（src/components/ios/IslandNotification.tsx:62-71）：useIncomingCallPresenting 来电暂缓分支补 'qq'——快照类型联合未列该值，按 (call?.source ?? '') as string 宽化后与 'wx' 同口径（enginePhase==='incoming' 暂缓），头注释与函数 doc 注释同步（:15-18/:51-60）
+- L13（src/components/ios/IncomingCallLayer.tsx）：grep 确认「忽略」按钮实际在 CallBanner（ IncomingCallLayer.tsx，任务描述写的 IslandNotification.tsx 为审计行号漂移，两文件均在允许清单）；忽略按钮（data-testid=incoming-ignore，仅 wx/qq 大窗有）由 onClick=decline（engine.reject=替用户拒接）改为 onIgnore()（:262-268），IncomingCallLayer 层用 useState<string|null> 记 ignoredCallId（:146-150），渲染条件补 call.id !== ignoredCallId（:173-177）——仅收起横幅不碰引擎，通话在应用内继续响铃、超时自然转未接；拒绝按钮（decline）原样保留 engine.reject；共享实现同时影响 wx，按指示统一改为 dismiss-only（wx/qq 一致）；新来电 id 不同自动恢复显示
+- L11（src/components/ios/IncomingCallLayer.tsx:131-144）：新增引擎阶段跳变 effect——wx/qq 快照在「enginePhase 从 incoming 离开」（接听/拒接/超时）时 useIncomingCall.clear()；用 prevPhaseRef 只认「incoming→其他」跳变（触发时引擎未挂载 phase=null 不清，防横幅被提前误清）；未走 PhoneShell.tsx/store.ts 的守卫改动（其守卫读快照，快照清了守卫自然放行，无需改）——共享修复，wx/qq 同 benefit，且覆盖「锁屏横幅接听」与「全屏通话页内接听」两条 accept 路径（后者不在本任务文件清单，靠阶段跳变统一覆盖）；电话来电不受影响（answer() 自带清层，effect 对非 wx/qq 早退）
+- 接线核对（只读）：wx/qq 快照清空后全部跨守卫仍闭合——新来电互斥有 useGlobalCall.session/callActive 同款双查（chat.tsx:1508-1510、proactive-call.ts:519-522、qq.tsx:3173-3175、wechat.tsx:4593 附近、手动拨出 qq.tsx:3068-3076）；通话中 UI 由 GlobalCallLayer/voice-call-screen 承载（grep 证实二者不读 useIncomingCall）；wx 响铃→接听→VoiceCallScreen（pip）流程不依赖滞留快照
+- 验证：按铁律未跑 tsc/eslint/git/dev server；全部修改经 Read 回读复核（含 MultiEdit 部分应用事故的恢复确认：IncomingCallLayer 首次批量编辑因 old_str 错别字中断，仅 import 行已应用，其余编辑在确认现场后重新完整落盘）
+
+Stage Summary:
+- 8 项全部落地：H1（流中分段中止感知+payload 误删修复+qq 侧纪元双保险）、M6 根因（边界清位改尾巴感知）、L8（隐藏页分块重入校验）、purge resolve 缺口、M5（1.2s 幽灵来电）、L9（通话尾巴延迟写）、L10（qq 来电暂缓）、L11（接听后快照清理恢复切换器）、L13（忽略=dismiss-only）
+- 唯一方案偏离：M6 用 onDrained 同步钩子替代 .then 微任务（封死「空批排空→下一批同步首条→边界未清」的竞态空隙），对外行为与协调者方案一致，已在 ai-delivery.ts 与 chat-stream-store.ts 注释中说明
+- 顺手加固：qq.tsx finalize 收尾 .then 加纪元守卫——这是 purge resolve 修复的必要配套（resolve 激活原本悬挂的回调，不挡会换号后误写 bond/记忆）
+- 已知微窗口/妥协点：①L13 dismiss-only 后 wx 来电若用户忽略，wx 引擎 view='hidden' 无应用内响铃 UI，只能等超时转未接（协调者已裁定统一 dismiss-only，接受此体验）；忽略后至超时前灵动岛通知仍按引擎响铃状态暂缓（≤25s）；②writeCallCard 同步卡片落盘未加纪元守卫（换号瞬间通话中挂断的卡片仍会写入，属超出本清单的宽话题，建议后续轮次评估是否对全局通话会话做换号联动收尾）；③M6 空批方案依赖投递队列排空语义，purge 时该占位批随队列丢弃（onDrained 不触发，但 purge 自身清 insertBeforeIds，语义闭合）
+- 文件触碰面：仅 src/lib/chat-stream-store.ts、src/lib/ios/ai-delivery.ts、src/components/apps/qq.tsx、src/components/ios/IslandNotification.tsx、src/components/ios/IncomingCallLayer.tsx 五个允许文件；未动 wx-group/qq-group/wechat/phone/chat/incoming-call.ts/store.ts/PhoneShell.tsx
+---
+Task ID: fix4-a2
+Agent: fix4-a2 红包详情页展示修复代理
+Task: 补做四轮审计 L12（QQ 红包详情页终态展示）
+
+Work Log:
+- 先 Read worklog.md 11532-11548（audit4-qq 条目）核实 L12 证据：#32 修复（qq.tsx applyAiActions 576-587 总额-已领退回+清 claims）后，红包详情页仍按全额展示「已存入钱包」，数据侧口径已正确，纯显示问题
+- Grep 定位「已存入钱包」→ src/components/apps/qq.tsx 6793（RedPacketDetailPage 状态文案分支，fix4-a 改动后行号漂移，以当前代码为准）；复核数据形态：cardIsFinal 505-514、applyAiActions 558-588（#32 拼手气部分领取后退回/拒收→退「总额-已领」并清 claims）、expireStaleSingleCards 638-697（过期保留 claims）、refundPeerCard 2583-2630（我退对方发的卡 status:'returned'）、RedPacketBubble 6177-6192（气泡只显示状态词无金额，金额/「已存入钱包」仅详情页展示）
+- 修改 RedPacketDetailPage 状态文案分支（qq.tsx 6786-6804，唯一改动块）：
+  - 分支重排：p.expired / returned / rejected 终态判定前移到「mine && claims.length > 0」之前——修「拼手气部分领取后被 24h 过期清算仍显示『好友领取后自动存入其余额』」的文案错位（过期文案本就存在于 6791 但被遮挡）
+  - returned 文案按方向+份数细分：mine && count>1（#32 已清 claims、实际只退未领取部分）→「红包已退回，未领取金额已退回钱包」，不再按全额宣称「已存入钱包」；mine && count===1（AI 退回单份卡确为全额入账）→ 保留原文案「红包已退回，金额已存入钱包余额」（文案真实，零回归）；!mine（我退对方发的卡）→「红包已退回，金额已退还给对方」（顺带修正原「已存入钱包余额」方向错误，对齐 TransferDetailPage 6943-6948「对方已退还/你已退还」的方向感知文案风格）
+  - data-testid="qq-rp-detail-refunded" 保持不变；rejected「对方拒收了该红包」与 expired「红包已过期，剩余金额已退回」复用既有文案
+- 金额行（6782-6785）与统计行（6809-6823）未改：claims 存活场景已按 claimedTotal（claims 求和）展示（领取中/过期部分领取均正确，满足方案第 3 点）；returned/rejected 拼手气因 #32 清空 claims 已无可恢复的领取明细（通知行不含金额），保留红包面额展示且新文案不再宣称全额入账；未跑 tsc/eslint/git/dev server（遵守硬性约束）
+
+Stage Summary:
+- L12 修复完成：QQ 红包详情页终态展示与实际领取状态对齐——AI 退回的拼手气红包不再按全额宣称「已存入钱包」，退回/拒收/过期终态各自展示对应文案，部分领取（claims 存活）按求和金额展示；改动仅 RedPacketDetailPage 展示层一处（src/components/apps/qq.tsx 6786-6804），未触碰 #32/过期清算/cardIsFinal 等数据逻辑，未改其他文件
+- 决策记录：①单份（count===1）退回保留「金额已存入钱包余额」——该场景 refund=p.amount 全额入账（applyAiActions 579-581），文案真实且为既有真机风格文案；②returned/rejected 后 claims 已被 #32 清除，详情层无法恢复领取明细，按面额展示+中性退回文案是不碰数据逻辑前提下的最小且不失真方案；③我退对方卡的「已存入钱包余额」方向错误一并修正（同一行同类误导，与转账详情页方向感知文案对齐）
+---
+Task ID: fix4-all
+Agent: 主协调者 (Z.ai Code)
+Task: 用户指令「全部修」——四轮审计 27 项问题全量修复（高 1 / 中 9 / 低 17）+ 验证 + 提交推送
+
+Work Log:
+- 基线确认：三轮 46 项修复已在 526e2cc 落地；本轮目标 = 四轮审计（94bcac6）新增 27 项
+- 设计先行：主协调者通读 chat-stream-store.ts（549 行）与 ai-delivery.ts（298 行）全文，定稿 H1/M6/L8/purge-resolve 方案后按「文件互不相交」原则并行派发 5 路修复代理：
+  · fix4-a（H1+M5+M6根因+L8+L9+L10+L11+L13+purge-resolve）：chat-stream-store.ts / ai-delivery.ts / qq.tsx / IslandNotification.tsx / IncomingCallLayer.tsx
+  · fix4-b（M1+M2+L1+L2）：api/moments/generate/route.ts / moments.ts
+  · fix4-c（M3+M4+L3+L4+L6+L7）：wechat-wallet.tsx / wechat.tsx
+  · fix4-d（M7+M8+L14+L5）：wx-group.tsx / qq-group.tsx
+  · fix4-e（M9+L15+L16+L17）：phone.tsx / chat.tsx / proactive-call.ts
+- 代理返回后核查发现 fix4-a 漏做 L12（误判归属），派 fix4-a2 补做（qq.tsx RedPacketDetailPage 终态文案）完成
+- 全量验证：npx tsc --noEmit = exit 0；bunx eslint src = exit 0（全部修复后复跑仍 0）
+- E2E（agent-browser，全新浏览器 profile + IndexedDB 种子 user/char 双联系人）：
+  · 页面渲染正常、console/page errors/dev.log 三处零错误
+  · 锁屏→解锁→主屏→微信登录（13800138000）→与小晴聊天→发送消息→「正在输入中…」→AI 多条分段回复逐条上屏（chat-stream + ai-delivery 全链路，M6 根因/H1 守卫不破坏正常流）✓
+  · 微信 AI 回复含语音消息（语音频率链路正常）✓
+  · QQ 登录（10001）→与小晴聊天→发送消息→AI 分段回复+语音逐条上屏（qq.tsx 纪元守卫不破坏正常流）✓
+  · POST /api/moments/generate 无 token 默认部署 HTTP 200 正常生成（M1 可选鉴权零影响）✓
+- 提交：git add + commit + push origin main
+
+Stage Summary:
+- 27/27 项全部落地（高 1：H1 换号在途流 onDelta 中止感知+aborted 标记+同键新流 payload 误删修复；中 9：M1 moments/generate 可选鉴权+20/60s 滑窗、M2 删联系人四层新鲜复核、M3 doLcqIn 失败检查、M4 聊天侧退卡摘 LS_FC_IN、M5 换号幽灵来电纪元守卫、M6 beginChatStream 延迟清边界（onDrained 钩子）、M7 群 notice 行不走投递边界、M8 群撤回清记忆传原文、M9 phone 留言 byUser 抑制；低 17 全部完成含 L12 补修）
+- 关键设计决策：①M6 根因修复用「空批占位+排空后清边界」（代理升级为 onDrained 钩子消除微任务空隙），群聊端不加尾巴等待避免冗余；②M2 复核全部下沉 moments.ts 数据面（4 层：drain/调度/生成/落库），addCharMomentPost 保持同步签名（清单外同步调用点），由上游复核等效覆盖；③L13 锁屏横幅「忽略」统一改 dismiss-only（wx/qq 共享实现）；④L11 用阶段跳变 effect 清快照（wx/qq 同 benefit）；⑤L4 以 msgId 关联聊天卡与钱包卡达成 per-card 精度，旧数据退回 friendId 行为
+- E2E 未覆盖（静态验证替代）：换号中段流实际中止、群 notice 实景、红包详情终态实景、拉黑留言实景——均属多步长链路场景，修复点不触及已验证的正常路径
+- 全部 5 路代理 + fix4-a2 工作记录见本文件上方各 Task ID 条目（fix4-a / fix4-a2 / fix4-b / fix4-c / fix4-d / fix4-e）

@@ -28,7 +28,7 @@
  *   拦截）→ pending 原样保留，解锁监听在解锁瞬间自动切电话 App 并派发消费事件。
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion, type Transition } from 'framer-motion';
 import { Bell, BellOff, ChevronLeft, Info, MessageCircle, Phone, PhoneOff } from 'lucide-react';
@@ -128,6 +128,27 @@ export default function IncomingCallLayer() {
     useIncomingCall.getState().clear();
   }, [isWx, isQq, hasWxSession]);
 
+  // 来电快照接听/收尾清理（L11）：wx/qq 的快照只服务「响铃横幅」——引擎离开响铃阶段
+  // （接听/拒接/超时未接）后快照若滞留，store.openSwitcher 与 PhoneShell 边缘手势会因
+  // useIncomingCall.call 非空而在整个通话期间禁掉 App 切换器（通话中 UI 由 GlobalCallLayer
+  // 承载，不依赖该快照；新来电/新通话的互斥守卫另有 useGlobalCall.session，不受影响）。
+  // 只在「响铃 → 其他阶段」的跳变时清：触发时引擎尚未挂载（phase=null）不能清，
+  // 否则横幅会在响铃开始前被误清；电话来电不走此分支（answer() 自带清层）
+  const prevPhaseRef = useRef<'dialing' | 'incoming' | 'active' | 'ended' | null>(null);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = enginePhase;
+    if ((!isWx && !isQq) || !call) return;
+    if (prev !== 'incoming' || enginePhase === 'incoming') return;
+    useIncomingCall.getState().clear();
+  }, [isWx, isQq, enginePhase, call]);
+
+  // 「忽略」按钮的 dismiss-only 语义（L13）：仅收起本次来电的横幅，不调 engine.reject——
+  // 那等于替用户拒接；通话在应用内继续响铃、超时自然转未接。按来电 id 记住被忽略的横幅：
+  // 同一次来电不再弹出（新来电 id 必不同，无需清理）；响铃结束后快照由上方接听/收尾
+  // 清理 effect 或会话消失兜底清掉
+  const [ignoredCallId, setIgnoredCallId] = useState<string | null>(null);
+
   // 锁屏接听兜底：锁屏/熄屏时点接听，switchToApp 被拦截、pending 滞留成幽灵来电
   // （下次打开电话 App 突然冒出来）——监听 useUI：在「锁屏/熄屏 → 解锁」跳变瞬间若 pending
   // 还在（未被电话 App 消费），自动切到电话 App 并派发消费事件打开通话界面
@@ -149,7 +170,11 @@ export default function IncomingCallLayer() {
     <>
       {/* 弹窗锚定容器：顶边与灵动岛同位（top 11），弹窗原地弹出/收回、全程覆盖灵动岛 */}
       <div className="pointer-events-none absolute inset-x-0 top-[11px] z-[94] flex flex-col items-center">
-        <AnimatePresence>{showBanner && call ? <CallBanner key={call.id} call={call} /> : null}</AnimatePresence>
+        <AnimatePresence>
+          {showBanner && call && call.id !== ignoredCallId ? (
+            <CallBanner key={call.id} call={call} onIgnore={() => setIgnoredCallId(call.id)} />
+          ) : null}
+        </AnimatePresence>
       </div>
       {isPhone && call && !screenHidden ? <IncomingCallScreen call={call} /> : null}
     </>
@@ -158,7 +183,7 @@ export default function IncomingCallLayer() {
 
 // ---------------- 顶部来电弹窗（胶囊 / 微信大窗；从灵动岛原位弹出，收回无缝交接） ----------------
 
-function CallBanner({ call }: { call: IncomingCallSnapshot }) {
+function CallBanner({ call, onIgnore }: { call: IncomingCallSnapshot; onIgnore: () => void }) {
   // 来源按字符串宽化读取（快照类型联合未列 'qq'——运行时值由 qq.tsx 触发处写入；微信分支保持原样）
   const source = call.source as string;
   const qq = source === 'qq';
@@ -182,8 +207,10 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
     }
     answerPhoneCall();
   };
-  /** 拒绝/忽略：电话走快照回调（落未接记录+留言）；微信/QQ 代理到页内引擎 reject
-   *  （QQ 拒接经引擎 onEnd 落「已拒绝」通话卡片，与响铃超时未接同口径） */
+  /** 拒绝：电话走快照回调（落未接记录+留言）；微信/QQ 代理到页内引擎 reject
+   *  （QQ 拒接经引擎 onEnd 落「已拒绝」通话卡片，与响铃超时未接同口径）。
+   *  忽略（L13 改为 dismiss-only）：仅收起横幅、不碰引擎——来电在应用内继续响铃、
+   *  超时自然转未接（旧实现忽略=engine.reject，等于替用户拒接） */
   const decline = () => {
     if (call.source === 'wx' || qq) {
       useGlobalCall.getState().engine?.reject();
@@ -236,7 +263,8 @@ function CallBanner({ call }: { call: IncomingCallSnapshot }) {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  decline();
+                  // L13 dismiss-only：只收起横幅（onIgnore → 层级状态），不调 engine.reject
+                  onIgnore();
                 }}
                 aria-label="忽略"
                 data-testid="incoming-ignore"
