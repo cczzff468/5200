@@ -12780,6 +12780,17 @@ function MainScreen({
     }),
     [qqNotices]
   );
+  // 引擎（调度器/AI）在别处写入互动消息后同步本地视图：AI 回复/点赞落盘会广播 moments-changed，
+  // 这里刷新 qqNotices → 未读数实时更新 →「N条新消息」气泡实时出现（与微信朋友圈订阅对称；
+  // 修复：旧版只在本组件挂载/打开消息页时读一次，用户停留在 QQ 里 AI 互动了气泡也不出现）
+  useEffect(
+    () =>
+      subscribeMomentsChanged((platform) => {
+        if (platform && platform !== 'qq') return;
+        refreshQqNotices();
+      }),
+    [refreshQqNotices]
+  );
   /** 打开空间消息页：全部标记已读（气泡随之消失）+ 刷新列表 */
   const openQqNotices = useCallback(() => {
     markAllMomentNoticesRead('qq');

@@ -10640,3 +10640,107 @@ Stage Summary:
 - 修改文件：src/lib/moments.ts（删 stripLeadingAddress/escapeRegExp/allowAddressByName 硬规则）、src/app/api/moments/generate/route.ts（称呼人设驱动 prompt 重构+评论去模板化强化+回复防复读上一句）
 - 核心成果：称呼规则从「引擎按评论区人数一刀切」改为「LLM 根据人设+动态+评论内容决定」——爱喊人的角色（如乐乐打趣时喊"凡凡"）保留个性称呼，不爱喊的直接说内容；同一个角色两次称呼方式可不同（语境驱动）；评论/回复语气因角色而异、禁模板、回复以被回复评论原文为唯一话题中心且不复读动态/上一句/自己刚说过的话
 - 关键调试经验：本项目 openApp 有 activeApp/phase 守卫（App 没关时点其他图标全被静默拦截）；Home 指示条 pointer-events-none 不可点，关 App 要底部边缘上滑→多任务切换器→上滑卡片 killApp；主屏图标被 img.absolute.inset-0 覆盖时 agent-browser click 报 covered，可 eval 找 __reactProps$ 直调 onClick
+
+---
+Task ID: audit-misc
+Agent: 只读审计代理（Explore）
+Task: 审计「记忆 + 世界书 + 时间感知 + 回复条数 + 识图 + 语音 + 通话」规则完整性，找出规则漏洞（零代码修改）
+
+Work Log:
+- 通读 worklog.md 末尾 300 条历史修复（fix-moments-identity / feat-65 / fix-moments-content-dup / fix-persona-driven-addressing 等），掌握既有防线（四层防自评、禁复读、称呼人设驱动、App 隔离记忆）
+- 逐文件研读：src/lib/memory.ts（1830 行全量）+ memory-core.ts、src/lib/moments.ts（writeMomentMemory/memorySnippets/purgeMomentMemories/drainInteractions/runAutoPosts/repairMomentIdentityData）、src/lib/ios/worldbook.ts、src/lib/time-aware.ts、src/lib/reply-count.ts、chat-media-rules.ts、chat-stream-store.ts（识图前置+拉黑兜底）、ai-voice.ts / voice-send.ts / stt-client.ts、chat-call.ts（通话引擎）、global-call.ts / incoming-call.ts / proactive-call.ts / block-state.ts、phone.tsx（通话收尾/记忆/通话记录）、wechat.tsx / qq.tsx 通话入口与 send 拉黑守卫、contacts-store.ts 删除级联、/api/moments/generate/route.ts
+- 核对通过项（无硬伤，记录在案）：回复条数五端真实生效（单聊 prompt+切分、群聊 groupMode cap min(N,5)、挂断续聊/未接留言同源设置、分段器丢连续重复段）；语音转文字失败兜底链完整（autoTranscribeForAi→stt:'failed'→buildVoicePlaceholderRule 防编造）；AI 语音频率五端齐全按会话/群成员隔离；通话记忆同池共享（app=wx/qq/phone 受互通开关约束）+ 每轮 memorizeTurn + 挂断 memSummarizeCallNow + 续聊并入转写 + call-logs/voicemails 三态落库 + B-1 替换收尾兜底；世界书条目禁用/编辑即时生效（每次发送 loadBooks 现读）+ 书级/条目级双开关 + 预算截断；删除联系人级联（memPurgeContact+purgeMomentsForContact+clearContactBinding）；识图 wx/QQ 单聊+双群聊四入口支持、未配置有「看不到图片」防编造注入、失败有系统提示；聊天消息双向拉黑两层守卫完整
+- 发现 13 项规则漏洞（3 中 10 低），按维度归档：记忆 6 项、世界书 3 项、时间感知 4 项、识图 1 项、通话 1 项、拉黑联动 1 项（详见下方问题清单，本条目为只读审计未改任何 .ts/.tsx）
+
+Stage Summary:
+- 修改文件：无（只读审计；本条目为唯一写入，追加至 worklog.md）
+- 核心结论：记忆管线/拉黑拦截/通话收尾等主干规则健壮，但存在三类跨模块口径裂缝——①私聊记忆提取与群聊不同口径（语音/图片/表情内容丢失）②删除评论后代记忆不级联（靠重启修复兜底）③拉黑/时间感知未覆盖动态引擎与通话入口（拉黑后仍可通话+动态互动，节日表 2026 硬编码跨年必错）
+
+---
+Task ID: audit-moments
+Agent: 代码审计子代理（Explore，只读）
+Task: 审计「微信朋友圈 + QQ空间动态」规则完整性（通知覆盖/防自互动/队列调度/双平台对称/设置生效/记忆写入/数据一致性），只输出报告不改代码
+
+Work Log:
+- 通读 src/lib/moments.ts（2289 行全文）、src/app/api/moments/generate/route.ts、src/components/ios/MomentsScheduler.tsx、moments-shared.tsx（MomentInteractionsPage）、wechat.tsx MomentsPage/MomentRow/MainScreen 动态相关段、qq.tsx ZonePage/MainScreen 动态相关段、src/lib/ios/moments-settings.ts、memory.ts 记忆级联相关函数
+- 逐维度核查结果（通过项简记）：
+  - 通知覆盖：AI 赞/评/回复/转发机主相关内容四类 push 条件齐全且 platform 正确（addCharMomentLike L940 仅 user 动态、addCharMomentComment L1088-1105 含 parentIsUserComment 跨动态回复、addCharMomentPost L830 转发通知、收件箱回复→AI 再回复→新 reply 通知多轮闭环 ✓）；QQ 首读种官方消息 ✓
+  - 防自互动：四层防线完整（drainInteractions 候选排除 L1774、aiCommentOnMoment L1575、addCharMomentComment/Like L1070/L930、route.ts L205/L223/L263），reply 放行边界（有 replyTo 且 parent 存在才放行）✓
+  - 队列：enqueuePostInteractions 按 postId 去重、enqueueCharReply 按 parentCommentId 去重 + drainReplies 已回复复查 L1735 双保险；删动态/评论级联清队列 ✓；reply 失败 3 次顺延 90s 重试 ✓
+  - 设置生效（按平台）：autoPostEnabled/min/max（runAutoPosts 平台循环内）、firstCommentDelay/followCommentDelay/npcInteractDelay、likeProbability/commentProbability、双语三项全部两端真实生效 ✓；qq.tsx ZonePage 订阅 moments-changed 刷新（上次修复项确认在位）
+  - 记忆：7 种句式归属正确（发帖人/被回复人 postAuthorPeerId/replyTargetPeerId）、宁缺勿错一致（解析失败跳过）、repairMomentIdentityData 幂等纠错 ✓
+  - 数据一致：删动态清队列+记忆（purgeMomentMemories 按 postId 全量）、QQ 评论随 cmap 重建无孤儿、purgeMomentsForContact 级联收件箱 ✓
+- 发现问题 14 条（详见下方问题清单）：高 0 / 中 5 / 低 9；未修改任何代码
+- 已知修复项复核：QQ subscribeMomentsChanged 刷新通知（qq.tsx L12786）在位 ✓；fix-moments-author-reply 的 reply 放行在位 ✓
+
+审计问题清单（严重度/现象/根因/建议/是否值得修）：
+1. 中 | QQ 用户「转发」发表的动态不排 AI 互动队列：好友永远不会点赞/评论/转发这条转发（与原创说说发后 enqueuePostInteractions 不对称）| qq.tsx:10508-10523 ZonePage 转发确认 onClick（对比 12764 handlePublishZonePost）| 发表转发后补 enqueuePostInteractions('qq', post.id) | 建议修
+2. 中 | 设置项「回复 NPC 评论延迟」（replyNpcCommentDelay）两端设置页可调但引擎从不生效：enqueueCharReply 的 kind='npc' 分支无任何调用点（AI 永不回复 NPC 评论，死设置死功能）| moments.ts:1238-1248 唯一调用点 L1035 不传 kind；moments-settings.tsx:605-619 | 实现 AI 互回复链路（drainReplies 放开 NPC 间回复）或先隐藏该设置项 | 建议修
+3. 中 | 删除一条评论时，其下后代 AI 回复的「记忆碎片」不清除：deleteMomentComment 物理删除 removed 全部后代，但 purgeMomentMemories 只传根 commentId，memPurgeMomentSources 仅精确匹配单 commentId（注释声称「含其触发的回复」未兑现），重启 repairMomentIdentityData 才自愈 | moments.ts:1141-1161 + memory.ts:827-841 | 把 removed 集合逐个（或改接口支持多 commentId）传给 purge | 建议修
+4. 中 | 删除动态/评论后互动消息收件箱不联动：相关 notice（postId/commentId 悬空）保留且计未读角标，回复入口仍可点（回复降级为顶层评论或 toast 失败）；仅 purgeMomentsForContact 清收件箱，单条删除路径无清理 | moments.ts:884-897 deleteMomentPost / 1136-1163 deleteMomentComment（对照 2276-2280）| 删除时按 postId/commentId 过滤收件箱 | 建议修
+5. 中 | 用户点赞 AI 的动态零感知：toggleUserMomentLike 不写任何角色记忆，buildMomentsChatBlock 也无「机主赞过你的动态」标注——与用户评论（写 user-comment 记忆）不对称，AI 永远不知道被赞 | moments.ts:899-916 + 1958-1970 | 点赞时给动态作者写一条 user-like 记忆（宁缺勿错同规）或注入块补一行 | 建议修
+6. 低 | 互动队列 interact 项整体失败不重试：首次结算时所选 1-2 位好友生成全失败（API 抖动）→ 项被丢弃，该动态永远没有 AI 互动，like/commentProbability 形同虚设 | moments.ts:1802-1811 catch 后不入 keep | 失败时 fireAt 顺延重试 1-2 次（对齐 reply 策略）| 可忽略/建议修
+7. 低 | AI 转发产生的动态（aiRepostMoment→addCharMomentPost 带 repostOf）不 enqueuePostInteractions：NPC 好友不互动 AI 的转发（与 aiPostMoment L1552 不对称）| moments.ts:1674-1686 | 转发成功后同样入队 | 可忽略
+8. 低 | 微信好友朋友圈首访补的示例动态模板自带 emoji「☀️」，绕过「AI 动态一律无 emoji」硬规则（AI 生成走 stripEmojiText，种子不走）| wechat.tsx:809-813 FRIEND_POST_TEMPLATES | 去掉模板中的 emoji | 可忽略
+9. 低 | 双平台不对称：微信好友朋友圈首访自动补 3 条示例动态，QQ「TA的空间」（zone-peer）无对位能力，新好友空间空白 | qq.tsx:12965-12978 vs wechat.tsx:9698-9719 openFriendMoments | QQ 补同款首访播种（或有意为之则记录决策）| 可忽略
+10. 低 | 编辑动态正文不处理 contentZh：双语动态编辑后原文与旧译文错位展示（译文也不同步记忆，记忆靠 repair 重启重算）| moments.ts:859-867 updateMomentPostContent | 编辑时清空 contentZh 或触发重译 | 可忽略/建议修
+11. 低 | 防自评守卫纵深缺口：addCharMomentComment 的放行条件是「有 replyTo.commentId」而非「parent 真实存在且为用户评论」，replyTo 悬空（commentId 已被删）时发帖人可绕过守卫顶层评论自己动态（当前调用链无此路径）| moments.ts:1068-1070 | 放行条件收紧为 parent 存在且 parent.author==='user' | 可忽略
+12. 低 | 收件箱回复「已删评论」的 notice：parent 查不到 → 显示名仍挂「回复X」但 parentId 为空，AI 回复人回落为动态作者而非被删评论作者 | moments.ts:991-992 + 1027-1036 | 回复前校验 commentId 有效性，失效置灰回复框 | 可忽略
+13. 低 | saveQueue slice(-40) 截断：极端积压时最早的 reply/interact 项静默丢失（>40 条才触发）| moments.ts:1206-1212 | 提高上限或按 fireAt 排序裁剪 | 可忽略
+14. 低 | 评论/点赞记忆 sourceTime 用 post.createdAt（动态发布时间）而非互动发生时间：晚发的评论在记忆时间线上提前；两端一致故仅精度问题 | moments.ts:961/1015/1119 | 传 Date.now() | 可忽略
+
+补充备忘（信息性，不计问题）：QQ 转发 22% 概率硬编码（moments.ts:1795）未进设置页；route.ts repost 分支重复解析 post（L216-225）冗余无害；unreadMomentNoticeCount 导出无调用方（死导出）；QQ 转发弹层 author 靠「authorName===me.name」推断（重名边缘误判）；微信互动消息页回复框点行展开 vs QQ 常驻+按钮、QQ 空间消息页返回回「动态」tab 而微信回朋友圈流——均为有意平台差异。
+
+Stage Summary:
+- 只读审计完成，未改动任何 .ts/.tsx；输出 14 条问题（高 0/中 5/低 9），每条含严重度/现象/根因（文件+行号）/一句话修法/是否值得修
+- 核心结论：通知推送条件与 platform 归属、四层防自互动、队列去重双保险、平台独立设置生效、记忆归属与宁缺勿错、启动自愈修复等既有规则总体健全；剩余漏洞集中在「删除级联不彻底（记忆后代/收件箱）」「QQ 用户转发无 AI 互动」「replyNpcCommentDelay 死设置」「用户点赞无记忆」四类，均有低成本修法
+
+---
+Task ID: audit-chat
+Agent: Explore 只读审计代理（Z.ai Code）
+Task: 审计「单聊 + 群聊 + 群管理 + 拉黑 + 长按菜单」规则完整性，找规则漏洞（只读不改代码）
+
+Work Log:
+- 审计范围：wechat.tsx / qq.tsx / wx-group.tsx / qq-group.tsx / chat.tsx / bubble-menu.tsx / forward-sheet.tsx / app/api/chat/route.ts / lib/ios/{groups,group-admin,group-social,block-state,ai-delivery,bg-turn}.ts / lib/{reply-count,chat-flags,memory}.ts / lib/chat-stream-store.ts。逐维度核对规则实现与守卫链路，未修改任何 .ts/.tsx。
+- 已确认健全的规则（抽查通过）：群回复条数 groupMode 上限收敛 5 条（reply-count.ts L114-126，wx-group L2934 / qq-group L2557 双端生效）；@ 成员必答 + 其余 [SKIP] 自判不落盘；禁言物理拦截（被 @ 也不豁免，runGroupTurn L3268-3277）；被踢成员 B-4 守卫（regen L3912-3945 按 memberIds+isGroupMuted 校验）；拉黑双向状态机（申请/拒绝/防骚扰上限 3 次/区间图标 blockCoversAt）与 chat-stream-store 第二层兜底（L403-410）；群红包状态机（24h 过期退回 expireStalePackets、专属/拼手气/幂等领取）；AI 建群/邀请冷却与拒绝表（group-social.ts）；引用联动「原消息已删除」双端一致；撤回消息滤出 AI 上下文（!m.recalled）与记忆素材（memConvoFromRaw L1708）；解散群级联清理（dissolveGroup：群记录/消息/未读/标志/隐藏/时间感知/mem 轮次键/群背景 + 记忆钩子）；单聊 runAiTurn base 按 id 去重 + 时序排序（#35）。
+- 发现问题 16 条（按严重度）：中 5 条 / 低 11 条，逐条含根因位置与建议修法，详见下方清单。
+
+问题清单：
+1.【中】拉黑「仅申请卡」模式下 AI 仍可执行资金/社交动作标记（领红包/收转账/收亲属卡、建群、邀请等）——buildReplyMsgs 的动作分支在 byUser 拦截之前执行。现象：用户拉黑 AI（byUser）后，AI 回合照常进入 request-only 模式，但回复里输出 [领取红包:ID]/[收款转账] 仍会真实改卡状态、写零钱账单。根因：src/components/apps/wechat.tsx buildReplyMsgs（动作执行 L4624 wxApplyAiActions 早于 byUser continue L4631；群社交/视觉动作 L4503-4622 同理）+ runAiTurn L4804 无条件注入 buildActionRules(wxCollectPendingCards)；qq.tsx buildReplyMsgs（L3097 起，byUser continue 在 L3235）同构。修法：requestOnly 时动作分支只放行拉黑类标记（blockActionKindOf/userReqActionKindOf），资金/社交/视觉标记一律丢弃，且不再注入待处理卡清单。是否值得修：建议修。
+2.【中】拉黑期间 AI 仍能靠 [语音通话] 标记弹来电邀请（拉黑语义破口）。现象：byUser request-only 模式下正文被丢弃，但 wantCall 检测在函数最前（L4453-4455），AI 输出 [语音通话] → 1.2s 后 triggerIncomingCall 弹真实来电 UI；【语音通话能力】规则在 requestOnly 回合照样注入（L4895），模型完全可能输出。根因：wechat.tsx triggerAiVoiceCall（L4396-4419）无 loadBlock 校验；调用点 L4686/L5024。修法：requestOnly 时置 ctx.wantCallSeen 无效（或在 triggerAiVoiceCall 内 byUser 直接 return）。是否值得修：建议修。
+3.【中】单聊流失败/空回复占位消息缺 error 标记 → 错误文案混进记忆提取素材。现象：「〔AI 服务暂时不可用…〕」「〔对方暂时没有回复，请稍后再试〕」落库无 error:true（聊天历史有 〔 前缀过滤，但记忆素材构建没有）→ memConvoFromRaw 把它当 AI 发言参与记忆抽取，可能沉淀出「TA 说对方暂时没有回复」这类脏碎片。根因：wechat.tsx finalize 错误分支 L4974-4977、兜底占位 L4987-4994；qq.tsx L3562/L3580 同构；memory.ts memConvoFromRaw（L1703-1721）只滤 recalled/error 布尔标记与空文本，不滤 〔 前缀（对照 chat.tsx L1429 正确做法 error:true）。修法：落盘占位时带 error:true（对齐 chat.tsx），并在 memConvoFromRaw 补滤 〔/（…） 前缀双保险。是否值得修：必须修（一行级成本、防记忆污染）。
+4.【中】群聊无服务端接力（bg-turn）：关闭网页时进行中的群回合回复永久丢失、无 Web Push。现象：单聊（wechat L5040-5057 / qq L3690 / chat L1578）注册 registerBgSession + pullBgPending 接力拉取；wx-group/qq-group 全程未注册（grep 证实 0 命中），pagehide beacon 上报后服务端生成的群回复无人拉取投递。根因：src/components/apps/wx-group.tsx / qq-group.tsx 缺少 bg-turn 接线（无 registerBgSession/pullBgPending/deliverBg 管线）。修法：群聊补一套与单聊同构的接力投递（或明确文档化为限制）。是否值得修：建议修。
+5.【中】单聊红包/转账/亲属卡无 24h 过期退回。现象：AI 发的红包/转账用户永不领取 → 卡片永久「待领取/待收款」悬挂；群聊有 expireStalePackets（wx-group L2499-2526 / qq-group L2100-2123，剩余金额退回发起人）而单聊完全没有对应物（wechat.tsx 仅有 wxCardIsFinal L1144 终态判定）。根因：wechat.tsx / qq.tsx 单聊卡片无过期清算逻辑。修法：单聊聊天页挂载/每轮回合前做 24h 清算（退回 + 通知行，对齐群聊口径）。是否值得修：建议修。
+6.【低】群回合进行中被踢/被禁言的成员当轮仍会发言。runGroupTurn 的 ordered 名单在回合开始一次计算（wx-group L3270-3296），runCharTurn 只校验群存在（L2757-2761）不重查成员表/禁言表；前面成员的管理标记当场生效后，排在后面的目标成员本轮照常开口（B-4 守卫只覆盖「重新生成」）。修法：循环内每轮开口前重查 getGroup(gid).memberIds + isGroupMuted。是否值得修：建议修。
+7.【低】群聊长按删除/撤回/批量删除守卫缺 isAiDelivering（与单聊 A-4 口径不一致）。单聊 del/recall/regen 均 isChatStreaming||isAiDelivering 双查（wechat L5655/L5684/L5513），群聊只查 runningRef||isChatStreaming（wx-group del L4135 / recall L4161；qq-group 同构；isAiDelivering 两文件均已 import 但零使用）。群投递是 append 式读最新存储，复活风险低于单聊，但口径应统一。修法：群聊三处守卫补 isAiDelivering(sKey)。是否值得修：建议修。
+8.【低】用户领取 AI 红包/收 AI 转账后 AI 无即时反应，双端不一致。群聊转账收款/退还有 nudgeAiSender 触发发起人回应（wx-group L3758-3777），群红包领取（claimGroupRp L3720-3740）与单聊领取/收款（wechat openRedPacket L5858-5870 / acceptTransfer L5884-5904）都不触发感知事件——AI 只有下一轮才可能从卡片状态标签察觉。修法：领取/收款后复用 refundPeerCard 的 kickRefund 排队模式给对方排一条系统事件。是否值得修：建议修。
+9.【低】@提及子串误匹配：parseMentions 用 text.includes(`@${name}`)，成员名互为前缀（如「红红」/「红红2」）时 @ 一人两人必答。根因：wx-group L2688-2689 / qq-group L2148-2149。修法：@ 后缀加词边界（下一个字符非名字字符才算命中）。是否值得修：可忽略。
+10.【低】AI 成员回复里 @ 其他成员不触发「必答」（被 @ 必答只吃用户 trigger.content），AI-to-AI 提问要等用户下次发言才可能被接住。根因：runGroupTurn 仅解析 trigger（wx-group L3277）。属「按人设自判」设计内行为；严格化需防刷屏节流。是否值得修：可忽略。
+11.【低】群全员被禁言/成员为空时用户消息零反馈：runGroupTurn 静默 return（wx-group L3263-3273），无系统提示行（对比 #21 网络错误有提示）。修法：全员禁言时落一条 notice。是否值得修：可忽略。
+12.【低】解散群后 per-session 键残留：dissolveGroup（groups.ts L706-742）未清 chat-reply-counts（wx:group:<gid>）、stickers-on、sentence-send pending、ai-voice 频率键（<sKey>#<cid>），收藏页保留已解散群的条目。均为不可见垃圾数据。修法：dissolveGroup 顺带清这些 map 键。是否值得修：可忽略。
+13.【低】撤回/删除不撤记忆：被撤回消息若已沉淀 mem-frag（带 sourceMsgId），AI 后续仍会「记得」内容（memory 库独立于消息库，撤回只改消息标记）。属设计权衡，可提供「撤回时级联降权/删除关联碎片」为增强项。是否值得修：可忽略。
+14.【低】清空聊天记录/删除会话后 mem-anchor/mem-msgcount 残留：countSinceAnchor 锚点丢失时全量计入（memory.ts L1258-1267「宁可多计早触发」），清空记录会加速下一次记忆提取且素材只剩少量新消息；删除会话不清 mem-round/msgcount/anchor 键。无功能性破坏（世界书/记忆不被误删，已验证清空只 saveMsgs(id,[])）。修法：清空记录时同步重置该会话 scope 的计数与锚点。是否值得修：可忽略。
+15.【低】单聊拉黑与群聊完全隔离是文档化设计（block-state.ts L14-15、chat-stream-store L137-143）：被用户拉黑的角色在群里照常发言、群聊无任何拉黑能力；产品上是否要提供群内屏蔽需用户确认。是否值得修：用户可忽略（设计如此）。
+16.【低】双平台小差异：AI 语音通话微信弹大窗（openVoiceCall('in',{hiddenView:true})）QQ 直接 openVoiceCall('in')（qq.tsx L3622）；wechat.tsx L4393 注释「QQ 侧同结构但不弹窗」已过时；视频通话双端均「暂未开放」、拍一拍双端均无、群聊均无亲属卡——核心能力（语音条/表情包/红包/转账/亲属卡/位置/群管理/撤回/转发/收藏）双端对称。修法：顺手更新过时注释、统一来电入场参数。是否值得修：可忽略。
+
+Stage Summary:
+- 只读审计完成，未修改任何代码；输出 16 条规则问题（中 5 / 低 11）：拉黑 request-only 的资金动作与来电标记两处语义破口、单聊错误占位污染记忆素材（必须修）、群聊缺服务端接力、单聊卡片无过期退回，以及群回合中途踢人当轮生效、群删/撤守卫口径、领取无回应、@ 误匹配、解散键残留等低危项。
+- 同时确认群回复条数/禁言/踢人/[SKIP]/引用联动/红包群状态机/拉黑状态机/建群邀请冷却等 8 类规则实现健全，回归风险点已标注在清单内。
+
+---
+Task ID: fix-qq-pill-realtime
+Agent: 主协调者 (Z.ai Code)
+Task: 排查 QQ「N条新消息」胶囊不显示的根因并修复；组织三路全功能规则审计（audit-moments/audit-chat/audit-misc）
+
+Work Log:
+- 根因定位：微信端有 subscribeMomentsChanged 订阅（wechat.tsx L9654-9661），AI 写入互动通知时实时 refreshWxNotices → 胶囊实时出现；QQ 端 qqNotices state 只在组件挂载/打开消息页/回复通知时读取，从未订阅 moments-changed → 用户停留在 QQ 里 AI 互动了，未读数不刷新、胶囊不出现（只有杀掉 App 重开才可能出现）
+- 数据流确认：引擎与 ZonePage 共用同一 kv 键（qq-zone-posts/qq-zone-comments，moments.ts L160 与 qq.tsx L590 同键）；pushMomentNotice→saveNotices→emitMomentsChanged 广播在位（moments.ts L593-600），缺的只是 QQ 端订阅
+- 修复：qq.tsx qqNoticeBadge 后补 subscribeMomentsChanged 订阅（platform!=='qq' 过滤 + refreshQqNotices），与微信完全对称
+- E2E 验证（420×900）：动态 tab 角标"3"→进空间动态页胶囊"Q3条新消息"✓→点胶囊进空间消息页全部已读→返回胶囊消失✓→评论动态→停留页面等 58s→AI 回复落盘后胶囊"Q1条新消息"实时出现（组件未重挂载，纯订阅刷新）✓
+- bunx tsc --noEmit exit 0；eslint qq.tsx exit 0
+- 三路只读审计子代理（audit-moments：朋友圈/QQ动态 14 条问题；audit-chat：单聊/群聊/群管理/拉黑/长按菜单 16 条问题；audit-misc：记忆/世界书/时间/条数/识图/语音/通话 13 条问题）已把各自审计记录追加至本文件
+
+Stage Summary:
+- 修改文件：src/components/apps/qq.tsx（补 moments-changed 订阅刷新通知未读数）
+- 核心成果：QQ「N条新消息」胶囊与微信朋友圈胶囊行为对齐——AI 互动实时点亮；未读清零联动不变
+- 审计产出 43 条问题（去重后约 39 条），其中"必须修"1 条（错误占位消息混入记忆素材）、建议修约 10 条，已汇总呈给用户选择修复范围
