@@ -22,6 +22,9 @@ export interface MomentsSettings {
   commentProbability: number;     // 默认 0.5
   /** 点赞概率（0-1） */
   likeProbability: number;        // 默认 0.5
+  /** NPC 转发概率（0-100 百分比，#42）：好友刷到用户动态后转发到 TA 空间的概率
+   *  （引擎只在 QQ 空间读；微信侧同构保留，两平台独立存储互不影响） */
+  repostProbability: number;      // 默认 22
 
   // 三、NPC 互动
   /** NPC 互动延迟（秒，1-3600） */
@@ -46,6 +49,7 @@ export const DEFAULT_MOMENTS_SETTINGS: MomentsSettings = {
   followCommentDelay: 30,
   commentProbability: 0.5,
   likeProbability: 0.5,
+  repostProbability: 22,
   npcInteractDelay: 30,
   replyNpcCommentDelay: 3,
   bilingualEnabled: true,
@@ -140,6 +144,11 @@ function parseSettings(v: unknown): MomentsSettings {
     followCommentDelay: typeof raw.followCommentDelay === 'number' && raw.followCommentDelay >= 1 && raw.followCommentDelay <= 3600 ? raw.followCommentDelay : DEFAULT_MOMENTS_SETTINGS.followCommentDelay,
     commentProbability: typeof raw.commentProbability === 'number' && raw.commentProbability >= 0 && raw.commentProbability <= 1 ? raw.commentProbability : DEFAULT_MOMENTS_SETTINGS.commentProbability,
     likeProbability: typeof raw.likeProbability === 'number' && raw.likeProbability >= 0 && raw.likeProbability <= 1 ? raw.likeProbability : DEFAULT_MOMENTS_SETTINGS.likeProbability,
+    // #42：转发概率 0-100 百分比，双重钳制（非有限数字回默认；越界拉回 0-100 边界）
+    repostProbability:
+      typeof raw.repostProbability === 'number' && Number.isFinite(raw.repostProbability)
+        ? Math.min(100, Math.max(0, Math.round(raw.repostProbability)))
+        : DEFAULT_MOMENTS_SETTINGS.repostProbability,
     npcInteractDelay: typeof raw.npcInteractDelay === 'number' && raw.npcInteractDelay >= 1 && raw.npcInteractDelay <= 3600 ? raw.npcInteractDelay : DEFAULT_MOMENTS_SETTINGS.npcInteractDelay,
     replyNpcCommentDelay: typeof raw.replyNpcCommentDelay === 'number' && raw.replyNpcCommentDelay >= 1 && raw.replyNpcCommentDelay <= 3600 ? raw.replyNpcCommentDelay : DEFAULT_MOMENTS_SETTINGS.replyNpcCommentDelay,
     bilingualEnabled: typeof raw.bilingualEnabled === 'boolean' ? raw.bilingualEnabled : DEFAULT_MOMENTS_SETTINGS.bilingualEnabled,

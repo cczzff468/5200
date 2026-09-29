@@ -19,7 +19,8 @@
  *   长期记忆 → 核心记忆」（长期/核心在 memoryBlock 内部，由 memRecallBlock 保证层级）。
  *
  * 互通门控：getMemSettings(contactId).share === false（用户关掉「跨 App 互通记忆」）时
- * buildCrossAppBlock 只输出【当前环境】行（AI 仍知道自己在哪个 App，但不携带其他 App 消息）。
+ * buildCrossAppBlock 只输出【当前环境】行（AI 仍知道自己在哪个 App，但不携带其他 App 消息），
+ * buildGroupRecentBlock 直接返回空串（群聊原始消息同样不外流；群级另有 memoryInterop 门控）。
  *
  * 调用方清单（注入点交接，详见 worklog Task 40-b）：
  * - src/lib/ios/chat-call.ts（微信/QQ 语音通话引擎）：requestTurn payload + followupAndSummarize
@@ -317,12 +318,29 @@ function groupMsgLines(msgs: WxGroupMsg[]): string[] {
  * 每群带最近 10 条（升序、标注群名与发言人）。无共同群/无消息返回空串（调用方跳过注入）。
  * 群间隔离：每群消息只从自己的 <app>-group-msgs:<gid> 键读取，块内逐群标注，绝不混写。
  * userName 参数与 buildCrossAppBlock 签名对齐（群内机主发言统一「用户」，与私聊行口径一致）。
+ *
+ * 互通门控（#7，与 buildCrossAppBlock 同款双层）：
+ * - 联系人级：getMemSettings(contactId).share === false（用户关掉「跨 App 互通」）→ 返回空串，
+ *   群聊原始消息不再流入私聊上下文（此前只有跨 App 块有此闸门，关掉互通不真隔离）；
+ * - 群级：群记录的 memoryInterop 开关（对照 memory.ts 的群 interop 门控，语义同「默认关闭 =
+ *   群与私聊隔离」）未开启的群不参与注入——群内容流向私聊 AI 上下文比总结记忆更原始，
+ *   用户关掉群记忆互通时原始消息同样不应外流。
  */
 export async function buildGroupRecentBlock(contactId: string, userName: string): Promise<string> {
   try {
     if (!contactId) return '';
+    // 联系人级互通总闸（设置读不到按默认互通，与 buildCrossAppBlock 口径一致）
+    let share = true;
+    try {
+      share = getMemSettings(contactId).share !== false;
+    } catch {
+      share = true;
+    }
+    if (!share) return '';
     // 成员匹配口径与 memory.ts memRecentGroupConvo 一致：memberIds 含该联系人，ownerId 兜底
     const groups = listGroups()
+      // 群级记忆互通门控：该群设置页未开启「记忆与私聊互通」→ 群内原始消息不进本块
+      .filter((g) => g.memoryInterop === true)
       .filter((g) => g.memberIds.includes(contactId) || g.ownerId === contactId)
       .map((g) => {
         let msgs: WxGroupMsg[] = [];

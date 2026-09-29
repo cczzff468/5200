@@ -518,6 +518,8 @@ async function tickInner(): Promise<void> {
   // ③ 交互中守卫：已有来电响铃或通话进行中不发起（页面后台 document.hidden 照常——真实手机行为）
   if (useIncomingCall.getState().call) return;
   if (useGlobalCall.getState().session) return;
+  // #8 电话 App 通话全屏层进行中（CallScreen 拨出/接听中）同样不打：来电叠加会双音频抢麦克风
+  if (useUI.getState().callActive) return;
   // #34 闹钟响铃中不主动拨出：闹钟铃声与通话音频重叠体验差，等闹钟被处理后再考虑
   if (useUI.getState().alarmRinging) return;
 
@@ -629,6 +631,11 @@ async function tickInner(): Promise<void> {
   }
   // 闹钟响铃中也不拨出（与③守卫同款，#34；决策期间可能刚响起来）
   if (useUI.getState().alarmRinging) {
+    setShortCooldown(contact.id, nowMs);
+    return;
+  }
+  // #8 电话 App 通话中也不拨出（与③守卫同款；决策期间可能刚开始通话）
+  if (useUI.getState().callActive) {
     setShortCooldown(contact.id, nowMs);
     return;
   }

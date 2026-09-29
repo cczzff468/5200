@@ -1068,7 +1068,8 @@ export function addCharMomentLike(
     peerId: args.peer.id,
     platform,
     postId,
-    sourceTime: post.createdAt,
+    // #41g：记忆时刻 = 互动发生时刻（对齐 user-like/编辑重写的 Date.now() 口径），不是动态创建时刻
+    sourceTime: Date.now(),
     shape: 'like',
     peerDisplay: displayNameOf(args.peer),
     userName: args.userName,
@@ -1098,8 +1099,13 @@ export function addUserMomentComment(
   const list = listMomentPosts(platform, args.userName);
   const post = list.find((p) => p.id === postId);
   if (!post) return null;
-  const parent = args.replyTo?.commentId ? (post.comments.find((c) => c.id === args.replyTo?.commentId) ?? null) : null;
-  const replyToName = parent ? parent.authorName : (args.replyTo?.name ?? null);
+  const replyToId = args.replyTo?.commentId ?? null;
+  const parent = replyToId ? (post.comments.find((c) => c.id === replyToId) ?? null) : null;
+  // #41e：带回复目标但目标评论已不存在（被删/悬空）→ 不再降级：不挂「回复X」、不回落动态作者
+  // 排队回复、不写回落记忆（宁缺勿错；收件箱入口已在 UI 侧挡掉已删评论的回复框）。
+  // 评论本体仍照常落库为独立顶层评论（用户输入不丢，只是失去回复语义）
+  const replyTargetMissing = replyToId !== null && parent === null;
+  const replyToName = parent ? parent.authorName : null;
   const comment: MomentCommentView = {
     id: uid(),
     author: 'user',
@@ -1114,15 +1120,23 @@ export function addUserMomentComment(
     platform,
     list.map((p) => (p.id === postId ? { ...p, comments: [...p.comments, comment] } : p))
   );
-  // 记忆对象：回复的角色评论 → 那个角色；评论角色本人的动态 → 那个角色
-  const targetPeerId = parent?.peerId ?? (post.author === 'char' ? post.peerId : null);
+  // 记忆对象：回复的角色评论 → 那个角色；评论角色本人的动态 → 那个角色；
+  // 回复目标已失效 → 不回落动态作者（#41e 宁缺勿错，直接跳过该项记忆）
+  const targetPeerId = replyTargetMissing
+    ? null
+    : parent
+      ? parent.peerId
+      : post.author === 'char'
+        ? post.peerId
+        : null;
   if (targetPeerId) {
     writeMomentMemory({
       peerId: targetPeerId,
       platform,
       postId,
       commentId: comment.id,
-      sourceTime: post.createdAt,
+      // #41g：记忆时刻 = 评论/回复发生时刻（对齐 Date.now() 口径）
+      sourceTime: Date.now(),
       shape: parent ? 'user-reply' : 'user-comment',
       peerDisplay: parent?.authorName ?? post.authorName,
       userName: args.userName,
@@ -1134,13 +1148,15 @@ export function addUserMomentComment(
   // 顶层评论的是角色本人的动态 → 动态作者也来回复用户（AI 发的动态，用户评论后 TA 会回）。
   // 队列里带「用户的这条评论」id（不是 AI 的父评论）：AI 的是在回复用户这句话，
   // replyTo 展示名/prompt 指代才会是用户（而非 AI 自己），parentId 也串在用户评论下
-  const replyPeerId = parent
-    ? parent.author === 'char'
-      ? parent.peerId
-      : null
-    : post.author === 'char'
-      ? post.peerId
-      : null;
+  const replyPeerId = replyTargetMissing
+    ? null // 回复目标已失效 → 不回落动态作者排队回复（#41e：宁缺勿错，直接跳过该项）
+    : parent
+      ? parent.author === 'char'
+        ? parent.peerId
+        : null
+      : post.author === 'char'
+        ? post.peerId
+        : null;
   if (replyPeerId) {
     enqueueCharReply(platform, postId, replyPeerId, comment.id, args.userName);
   }
@@ -1175,11 +1191,16 @@ export function addCharMomentComment(
   const post = list.find((p) => p.id === postId);
   if (!post) return null;
   if (post.comments.some((c) => c.content.trim() === text)) return null; // 已有一模一样的内容 → 不重复写入
+  // 回复目标解析（#41d）：必须是「真实存在于 post.comments 的用户评论」才算有效回复——
+  // 悬空 replyTo（目标评论已删/不存在）与非用户评论一律视同无 replyTo，
+  // 否则作者可借悬空 replyTo 绕过下方防自评守卫（parent 查不到=照防自评拦截）
+  const parent = args.replyTo?.commentId
+    ? (post.comments.find((c) => c.id === args.replyTo?.commentId && c.author === 'user') ?? null)
+    : null;
   // 发帖人不能「主动评论」自己的动态（防「AI 自己给自己评论」的历史 bug）；
-  // 带回复目标的放行：作者回复用户在自己动态下的评论是正常互动（引擎层 drainReplies 已保证只回用户的评论）
-  if (!args.replyTo?.commentId && isPostByPeer(post, args.peer)) return null;
-  // 回复目标详情（记忆句式的被回复人身份用）
-  const parent = args.replyTo?.commentId ? (post.comments.find((c) => c.id === args.replyTo?.commentId) ?? null) : null;
+  // 带「有效回复目标（用户评论）」的放行：作者回复用户在自己动态下的评论是正常互动
+  // （引擎层 drainReplies 已保证只回用户的评论；收件箱多轮回复链路的 parent 都是用户评论，不受影响）
+  if (!parent && isPostByPeer(post, args.peer)) return null;
   const comment: MomentCommentView = {
     id: uid(),
     author: 'char',
@@ -1188,8 +1209,9 @@ export function addCharMomentComment(
     content: text,
     contentZh: args.contentZh,
     createdAt: Date.now(),
-    parentId: args.replyTo?.commentId ?? null,
-    replyToName: args.replyTo?.name ?? null,
+    // #41d：parentId/replyToName 只从「解析成功的真实 parent」取（悬空 replyTo 不再写入悬挂指向）
+    parentId: parent?.id ?? null,
+    replyToName: parent?.authorName ?? null,
   };
   persistMomentPosts(
     platform,
@@ -1226,8 +1248,10 @@ export function addCharMomentComment(
         platform,
         postId,
         commentId: comment.id,
-        sourceTime: post.createdAt,
-        shape: args.replyTo ? 'char-reply' : 'char-comment',
+        // #41g：记忆时刻 = 评论/回复发生时刻（对齐 Date.now() 口径）
+        sourceTime: Date.now(),
+        // #41d：shape 只看解析成功的 parent（悬空 replyTo 视同无 replyTo → 归为独立评论句式）
+        shape: parent ? 'char-reply' : 'char-comment',
         peerDisplay: displayNameOf(args.peer),
         userName: args.userName,
         detail: text.slice(0, 40),
@@ -1327,7 +1351,10 @@ function loadQueueSafe(): MomentQueueItem[] {
 
 function saveQueue(list: MomentQueueItem[]): void {
   try {
-    kvSet(QUEUE_KEY, list.slice(-40));
+    // #41f：容量上限 40 → 200，且按 fireAt 升序排序后保留最近（最晚到期）的 200 条——
+    // 旧版 slice(-40) 会把列表尾之外的大量未到期项直接截丢（互动/回复永远不结算）
+    const capped = [...list].sort((a, b) => (a.fireAt || 0) - (b.fireAt || 0)).slice(-200);
+    kvSet(QUEUE_KEY, capped);
   } catch {
     // 忽略
   }
@@ -1691,10 +1718,24 @@ export async function aiCommentOnMoment(args: {
   replyTo?: { commentId: string; name: string; content: string } | null;
 }): Promise<MomentCommentView> {
   const { apiConfig, platform, peer, post, userName, replyTo } = args;
-  // 发帖人不能「主动评论」自己的动态（防「AI 自己给自己评论」的历史 bug）；
-  // 但带 replyTo 的回复放行——作者回复访客在自己动态下的评论是正常多轮互动（用户评论 AI 动态 → AI 回）。
-  // 误伤后果（已修复的 bug）：用户评论 AI 的动态后队列排了回复，这里却把作者本人拦下 → AI 永远不回。
-  if (!replyTo && isPostByPeer(post, peer)) throw new Error('发帖人不能评论自己的动态');
+  // 回复目标解析（#41d）：必须是「真实存在于 post.comments 的用户评论」——悬空 replyTo 与
+  // 非用户评论视同无 replyTo，照防自评拦截（作者不能借悬空 replyTo 给自己的动态写评论）。
+  // 作者回复用户在自己动态下的评论仍是正常多轮互动，放行（用户评论 AI 动态 → AI 回）。
+  const parentComment = replyTo
+    ? (post.comments.find((c) => c.id === replyTo.commentId && c.author === 'user') ?? null)
+    : null;
+  if (!parentComment && isPostByPeer(post, peer)) throw new Error('发帖人不能评论自己的动态');
+  // #14：纯图动态也要能评论——「动态内容」按需组装：有文字用原文（有配图时附张数标记）；
+  // 无文字但有配图传标记文案（route 端识别后注入防编造规则）；文字与配图都空才跳过（无事可评）
+  const postText = post.content.trim();
+  const postContent = postText
+    ? post.images.length > 0
+      ? `${postText}（配图${post.images.length}张）`
+      : postText
+    : post.images.length > 0
+      ? `（该动态仅配图无文字，共${post.images.length}张图）`
+      : '';
+  if (!postContent) throw new Error('动态没有文字也没有配图，跳过评论');
   // feat-64：设置按平台独立（朋友圈/空间各一份）
   const settings = getMomentsSettings(platform);
   // 评论串（回复时带上下文，让 AI 接得住多轮）
@@ -1705,36 +1746,29 @@ export async function aiCommentOnMoment(args: {
   const avoid = recentSelfTextsOf(peer.id);
   // 回复自己动态下的评论时，把自己动态原文也列入禁复读——回复是接话，
   // 不能把动态改写一遍再说（用户实锤：「财啊，项目算搞定了，但下一个任务啥时候来啊」整句复读动态）
-  if (replyTo && isPostByPeer(post, peer)) avoid.push(post.content.slice(0, 80));
+  if (parentComment && isPostByPeer(post, peer)) avoid.push(post.content.slice(0, 80));
   // 称呼规则（用户新要求）：不再由引擎按「评论区人数」一刀切（旧版：≥2人才允许叫名、单人回复强制剥名
   // → 所有角色都被迫用同一种称呼方式）。称呼完全交给 LLM：由角色人设、动态内容、评论内容/语气决定
   // 要不要称呼、怎么称呼；引擎只保留两条硬约束交给 prompt——①不要每句都叫；②要叫就叫真实名字（下方解析）。
-  // 称呼用真实名字（三.5）：回复对象是角色时解析 TA 的真实名字传给 prompt（要称呼就叫真名，不用昵称/网名）
-  let replyRealName = '';
-  if (replyTo) {
-    const parentComment = post.comments.find((c) => c.id === replyTo.commentId);
-    if (parentComment?.author === 'char' && parentComment.peerId) {
-      try {
-        replyRealName = (await contactRealName(parentComment.peerId)) || replyTo.name;
-      } catch {
-        replyRealName = '';
-      }
-    }
-  }
+  // #41d：回复对象必为「用户评论」（parentComment 已按 author==='user' 过滤），称呼用机主展示名由 route 端兜底
   // 生成后校验：与最近发言完全一致/高度雷同 → 带禁令重试一次；仍重复 → 抛错（队列按原策略处理）
   let banned = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     const { content, contentZh } = await callGenerateApi(apiConfig, {
-      kind: replyTo ? 'reply' : 'comment',
+      kind: parentComment ? 'reply' : 'comment',
       platform,
       userName,
       peer: personaOf(peer),
-      post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 200) },
+      // #14：纯图动态传标记文案（route 端识别后注入防编造）；文字动态传原文（有配图附张数标记）
+      post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 200) },
       thread,
-      replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content, realName: replyRealName || undefined } : null,
+      // #41d：只把「真实存在的用户评论」作为回复目标传给服务端（parentAuthor 供服务端同口径校验）
+      replyTo: parentComment
+        ? { authorName: parentComment.authorName, content: parentComment.content, parentAuthor: 'user' as const }
+        : null,
       memories: memorySnippets(peer.id, platformApp(platform)),
       avoid: attempt === 0 ? avoid : [...avoid, banned].filter(Boolean),
-      variation: randomVariation(replyTo ? 'reply' : 'comment'),
+      variation: randomVariation(parentComment ? 'reply' : 'comment'),
       bilingual: settings.bilingualEnabled,
       bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
     });
@@ -1746,7 +1780,7 @@ export async function aiCommentOnMoment(args: {
         userName,
         content,
         contentZh: contentZh || undefined,
-        replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
+        replyTo: parentComment ? { commentId: parentComment.id, name: parentComment.authorName } : null,
       });
       if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');
       return added;
@@ -1777,13 +1811,27 @@ export async function aiRepostMoment(args: {
   const settings = getMomentsSettings(platform);
   // 禁复读：TA 最近说过的话（评论/转发理由，跨平台）——转发理由不与自己其他平台的话雷同
   const avoid = recentSelfTextsOf(peer.id);
+  // #42：反自相矛盾素材——TA 最近发过的原创动态（转发理由不得与之重复/在事实与心情上矛盾，对照 aiPostMoment）
+  const ownPosts = ownRecentPostsOf(peer.id);
+  // #14：纯图动态也可被转发——组「原动态内容」：有文字用原文（有配图附张数标记），
+  // 无文字但有配图传标记文案（route 端识别后注入防编造）；两者都空则无从转发（静默跳过，不算失败）
+  const postText = post.content.trim();
+  const postContent = postText
+    ? post.images.length > 0
+      ? `${postText}（配图${post.images.length}张）`
+      : postText
+    : post.images.length > 0
+      ? `（该动态仅配图无文字，共${post.images.length}张图）`
+      : '';
+  if (!postContent) return null;
   const { content, contentZh } = await callGenerateApi(apiConfig, {
     kind: 'repost',
     platform,
     userName,
     peer: personaOf(peer),
-    post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 120) },
+    post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 120) },
     memories: memorySnippets(peer.id, platformApp(platform), 4),
+    ownRecentPosts: ownPosts.map((p) => p.label),
     avoid,
     variation: randomVariation('comment'),
     bilingual: settings.bilingualEnabled,
@@ -1793,7 +1841,7 @@ export async function aiRepostMoment(args: {
     // 转发是锦上添花：理由与最近发言雷同 → 直接放弃本次转发（不影响点赞/评论）
     return null;
   }
-  return addCharMomentPost(platform, {
+  const created = addCharMomentPost(platform, {
     peer,
     userName,
     content,
@@ -1806,6 +1854,10 @@ export async function aiRepostMoment(args: {
       images: post.images.slice(0, 3),
     },
   });
+  // #41a：转发也是「TA 发了一条新动态」→ 其他 NPC 好友延迟来点赞/评论（对照 aiPostMoment；
+  // 此前转发落盘后直接 return，转发动态永远没有后续互动）
+  enqueuePostInteractions(platform, created.id, settings.npcInteractDelay);
+  return created;
 }
 
 // ---------------- 调度结算（MomentsScheduler 每 5s 调一次） ----------------
@@ -1931,8 +1983,9 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
             produced = true;
           }
           // QQ 空间转发（新）：好友刷到你的动态，可能转发到 TA 的空间（带一句转发理由）；
-          // 只转用户的原创动态，转发会让原动态作者收到「空间消息·转发」通知
-          if (item.platform === 'qq' && post.author === 'user' && !post.repostOf && Math.random() < 0.22) {
+          // 只转用户的原创动态，转发会让原动态作者收到「空间消息·转发」通知。
+          // #42：转发概率读本平台设置（0-100 百分比，缺省 22），不再硬编码 22%
+          if (item.platform === 'qq' && post.author === 'user' && !post.repostOf && Math.random() < settings.repostProbability / 100) {
             try {
               if (await aiRepostMoment({ apiConfig: deps.apiConfig, platform: 'qq', peer, post, userName })) produced = true;
             } catch {
@@ -2027,21 +2080,68 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
   }
 }
 
+/** 跨标签页互斥（#43）：锁名与 kv 租约键（多标签页同时开着手机时，同一 tick 只允许一个标签页执行，
+ *  防队列/动态数据被两边同时结算双跑） */
+const TICK_LOCK_NAME = 'moments-tick';
+const TICK_LEASE_KEY = 'moments-tick-lease';
+const TICK_LEASE_MS = 15_000;
+
+/** Web Locks 最小形状（按结构收窄，不依赖具体 lib.dom 版本的 LockManager 类型） */
+interface LockManagerLike {
+  request?: (
+    name: string,
+    options: { ifAvailable: boolean },
+    callback: (lock: unknown) => Promise<void>
+  ) => Promise<unknown>;
+}
+
+/** 跨标签页互斥执行：优先 Web Locks（拿不到锁 = 另一标签页正在跑，直接跳过本 tick）；
+ *  不支持 Web Locks 的环境回退 kv 租约（执行前检查 15s 内有租约则跳过，开始时占住，finally 释放）。 */
+async function withTickMutex(fn: () => Promise<void>): Promise<void> {
+  const locks: LockManagerLike | undefined =
+    typeof navigator !== 'undefined' ? (navigator as Navigator & { locks?: LockManagerLike }).locks : undefined;
+  if (locks && typeof locks.request === 'function') {
+    await locks.request(TICK_LOCK_NAME, { ifAvailable: true }, async (lock) => {
+      if (!lock) return; // 另一标签页持锁 → 本 tick 跳过
+      await fn();
+    });
+    return;
+  }
+  // 回退：kv 租约（尽力而为；同一进程内 memStore 同步可见，跨进程以 IndexedDB 为准）
+  try {
+    const held = kvGet<number>(TICK_LEASE_KEY);
+    if (typeof held === 'number' && Date.now() - held < TICK_LEASE_MS) return;
+    kvSet(TICK_LEASE_KEY, Date.now());
+    await fn();
+  } finally {
+    try {
+      kvDel(TICK_LEASE_KEY);
+    } catch {
+      // 忽略
+    }
+  }
+}
+
 /**
  * 调度 tick（全局唯一入口，MomentsScheduler 每 5s 调用）：
  * 1) 结算到期的 AI 回复（多轮互动）；2) 结算用户动态的 AI 互动；3) 检查自动发布三种触发。
- * 串行防重入；任何失败不外抛（动态是增强能力）。
+ * 防重入：同标签页 ticking 标志 + 跨标签页互斥（#43）；任何失败不外抛（动态是增强能力）。
  */
 export async function runMomentsTick(deps: MomentTickDeps): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
-    const now = Date.now();
-    const queue = loadQueueSafe();
-    const afterReplies = await drainReplies(queue, now, deps);
-    const remaining = await drainInteractions(afterReplies, now, deps);
-    if (remaining.length !== queue.length) saveQueue(remaining);
-    await runAutoPosts(deps, now);
+    await withTickMutex(async () => {
+      const now = Date.now();
+      const queue = loadQueueSafe();
+      const afterReplies = await drainReplies(queue, now, deps);
+      const remaining = await drainInteractions(afterReplies, now, deps);
+      // #1：内容级判断是否落盘——重试顺延/retry 变异（fireAt/attempts/tries 变化）不改队列长度，
+      // 旧版「长度变了才 saveQueue」把纯顺延的变异丢弃 → 退避失效、attempts 永不累计、无限重试。
+      // 队列项都是普通对象且变异走同序 spread（不改键序），JSON 序列化对比即可精确判定「是否有任何变化」。
+      if (JSON.stringify(remaining) !== JSON.stringify(queue)) saveQueue(remaining);
+      await runAutoPosts(deps, now);
+    });
   } catch {
     // 静默
   } finally {

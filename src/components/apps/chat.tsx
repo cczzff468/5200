@@ -1121,8 +1121,10 @@ function ChatView({
   const buildReplyMsgs = useCallback(
     (rawText: string, asSingle: boolean, baseTime: number, idBase: string, idStart: number): { msgs: ChatMsg[]; nextIdx: number } => {
       // AI 主动打来电话（[语音通话] 标记，全半角括号变体都认）：从气泡文本里剥除，只作为来电信号
+      // 40-a 拉黑拦截（#2，对齐微信/QQ 同类修复）：仅申请卡模式（byUser）时标记不进 wantCallSeen——
+      // 正文在下方被整段丢弃，来电若照常弹出会绕过拉黑语义；bg-turn 接力投递共用本管线同守卫
       const wantCall = hasVoiceCallMark(rawText);
-      if (wantCall) wantCallSeenRef.current = true;
+      if (wantCall && wbContactId && !loadBlock('sms', wbContactId).byUser) wantCallSeenRef.current = true;
       const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
       const out: ChatMsg[] = [];
       let t = baseTime;
@@ -1167,6 +1169,10 @@ function ChatView({
               msgIdx += 1;
             }
           }
+          // 40-a 拉黑拦截（#30，对齐微信 fix-wechat B 的收窄）：仅申请卡模式（byUser）下动作标记
+          // 只放行拉黑类（bk/uk 已在上方处理）——视觉等其余标记一律丢弃不执行，
+          // 否则拉黑期间 AI 仍能真实改头像/写视觉决策
+          if (wbContactId && loadBlock('sms', wbContactId).byUser) continue;
           // 46-g 视觉自主决策动作（信息端无图片消息也无朋友圈）：
           // - change-avatar / change-moments-bg / save-to-album / pick-album-bg / pick-album-send：信息端静默丢弃
           //   （无图无朋友圈，extractRichActionParts 已解析但无分支处理则跳过到下方 continue）
@@ -1223,6 +1229,8 @@ function ChatView({
             role: 'assistant',
             content: seg || '（AI 暂时没有返回内容，稍后再试一次吧）',
             time: t,
+            // #31 兜底占位标 error:true（与 finalize 错误消息同口径）：不进上下文/记忆素材，红字显示
+            ...(seg ? null : { error: true }),
           });
           t += 600 + Math.floor(Math.random() * 600);
           msgIdx += 1;
@@ -1355,7 +1363,9 @@ function ChatView({
       // #111 信息端仅支持 pick-album-avatar：通用 buildVisionRules 列了 3 个 pick-album-* 动作，但 chat.tsx
       // 只接 pick-album-avatar；另两个标记会被 buildReplyMsgs 静默吞掉无反馈。这里在规则末尾追加一条
       // 信息端限制，明确禁止 [选图设背景]/[选图发送]，避免 AI 反复尝试生成不支持的标记
-      ...(wbContactId
+      // #30 仅申请卡模式（requestOnly）不注入视觉规则（对照微信 actionRules 处理）：正文已被拦截，
+      // 提示词层面也不该诱导 AI 输出会被整段丢弃的视觉标记
+      ...(wbContactId && !requestOnly
         ? [
             ...buildVisionRules(albumSummaryRef.current),
             '【信息端限制】当前会话只支持 [选图设头像:相册条目ID]，[选图设背景] 与 [选图发送] 在信息端不可用，请不要使用这两个标记。',
@@ -1441,7 +1451,7 @@ function ChatView({
               ? []
               : requestOnly
                 ? []
-                : [{ id: aiId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt }];
+                : [{ id: aiId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt, error: true }];
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -1470,8 +1480,10 @@ function ChatView({
             );
           }
           // AI 主动打来电话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电——
-          // 全局胶囊弹窗 + iOS 全屏来电界面（PhoneShell › IncomingCallLayer），任何界面都会被覆盖
-          if (wantCallSeenRef.current && memContactId) {
+          // 全局胶囊弹窗 + iOS 全屏来电界面（PhoneShell › IncomingCallLayer），任何界面都会被覆盖。
+          // 拉黑破口修复（#2，对齐 qq.tsx 同款）：仅申请卡模式（requestOnly）不弹真实来电；
+          // 触发时现场重读拉黑状态防回合内变更（收集点守卫只挡回合开始时的状态）
+          if (wantCallSeenRef.current && memContactId && !requestOnly && !loadBlock('sms', memContactId).byUser) {
             void (async () => {
               try {
                 const lastCallAt = Number(window.localStorage.getItem(`sms-vc-last:${memContactId}`) ?? '0');
@@ -1484,10 +1496,12 @@ function ChatView({
                   const name = contact?.name ?? peerLabel;
                   window.setTimeout(() => {
                     // B-2：幂等防御（对齐 qq.tsx/wechat.tsx 既有双查口径）——上一通来电还在响铃
-                    // （useIncomingCall.call）或微信/QQ 全局通话进行中（useGlobalCall.session）时
-                    // 整跳取消本次来电：triggerIncomingCall 只互斥来电弹窗不查全局通话，放行会出现
-                    // 电话 CallScreen 与 wx/qq 通话引擎同时存活的 双麦克风双 TTS 僵尸会话。
+                    // （useIncomingCall.call）、微信/QQ 全局通话进行中（useGlobalCall.session）或
+                    // 电话 App 通话中（useUI.callActive，#8）时整跳取消本次来电：triggerIncomingCall
+                    // 只互斥来电弹窗不查已有通话，放行会出现电话 CallScreen 与 wx/qq 通话引擎同时
+                    // 存活的双麦克风双 TTS 僵尸会话。
                     // 跳过时回复文本里的〔语音通话〕标记已剥除，与 qq/wechat 现行同场景行为一致
+                    if (useUI.getState().callActive) return;
                     if (useIncomingCall.getState().call) return;
                     if (useGlobalCall.getState().session) return;
                     triggerIncomingCall({

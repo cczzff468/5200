@@ -29,6 +29,7 @@
 import { create } from 'zustand';
 import { useUI } from './store';
 import { setupPushSubscription } from './push-client';
+import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
 
 // ---------------- 类型 ----------------
 
@@ -184,7 +185,27 @@ export function truncateBody(s: string, max = BODY_MAX): string {
 }
 
 /**
+ * 会话免打扰闸门（#15）：按 sessionKey 解析 App 前缀与会话 id，读对应 flags store 的 muted。
+ * sessionKey 格式（与 ChatNotifyInput 约定一致）：`wx:<cid>` / `wx:group:<gid>` / `qq:<cid>` /
+ * `qq:group:<gid>` / `sms:<key>`；群聊的标志键为 `group:<gid>`（与 wx-group/qq-group 设置页
+ * 写入键一致）。微信/QQ 之外的端（信息/电话）无会话级设置总线，恒不静音。
+ * 用 store 的同步 get()（非 hook 环境安全）；读不到/异常按不静音（与角标消费端默认一致）。
+ */
+function chatMuted(sessionKey: string): boolean {
+  const m = /^(wx|qq):(group:)?(.+)$/.exec(sessionKey);
+  if (!m) return false;
+  try {
+    const map = m[1] === 'wx' ? wxChatFlags.get() : qqChatFlags.get();
+    return map[`${m[2] ?? ''}${m[3]}`]?.muted === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 推送一条 AI 消息通知（每条消息独立弹窗，不合并计数）：
+ * - 会话开了「消息免打扰」（#15）→ 灵动岛弹层与 Web Notification 全部跳过
+ *   （未读角标/会话列表逻辑由各自消费端处理，不受本闸门影响）；
  * - 有正在展示的通知 → 直接替换为本次内容（旧条立即让位，视觉上每条消息都弹了一次）；
  * - 无正在展示的 → 立即展示；否则入队排队（不同会话轮流展示）。
  * 页面不可见时同时走 Web Notification 通道（支持且已授权时，每条一个独立系统通知）。
@@ -192,6 +213,7 @@ export function truncateBody(s: string, max = BODY_MAX): string {
 export function pushChatNotification(input: ChatNotifyInput): void {
   const body = truncateBody(input.body);
   if (!body) return;
+  if (chatMuted(input.sessionKey)) return; // 消息免打扰：不弹灵动岛、不发系统通知（#15）
   const st = useIslandNotify.getState();
   const n: IslandNotification = {
     id: genNotifyId(),

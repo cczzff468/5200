@@ -11,13 +11,14 @@
  * 深浅色都适配（与微信/QQ 页面同一套 dark: 前缀）。
  */
 
-import { useState, type ReactNode, useRef } from 'react';
+import { useMemo, useState, type ReactNode, useRef } from 'react';
 import { CalendarClock, ChevronLeft, ChevronRight, Clock3, Heart, Languages, Loader2, MessageSquareQuote, Settings2, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { DefaultAvatar } from './default-avatar';
 import {
   MOMENT_INTERVAL_OPTIONS,
   getMomentAutoCfg,
+  listMomentPosts,
   saveMomentAutoCfg,
   type MomentAutoCfg,
   type MomentNotice,
@@ -530,7 +531,46 @@ export function MomentInteractionsPage({
   const replyInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const shown = isWx ? notices : notices.filter((n) => noticeMatchTab(n, tab));
-  const replyable = (n: MomentNotice) => (n.kind === 'comment' || n.kind === 'reply') && !!n.postId;
+  // #41e：回复入口需要「目标仍然存活」——已删评论不再提供回复框（防「回复已删评论」在引擎侧
+  // 降级成普通评论/回落动态作者），已删动态同理。动态/评论数据就地同步读取（组件与引擎同端运行），
+  // 只校验收件箱里实际出现的 postId/commentId，开销与收件箱大小成正比；
+  // notices 变化（宿主在 moments-changed 后刷新收件箱）即重算。
+  const aliveTargets = useMemo(() => {
+    const needComments = new Map<string, Set<string>>();
+    const needPosts = new Set<string>();
+    for (const n of notices) {
+      if (n.kind !== 'comment' && n.kind !== 'reply') continue;
+      if (!n.postId) continue;
+      if (n.commentId) {
+        const set = needComments.get(n.postId) ?? new Set<string>();
+        set.add(n.commentId);
+        needComments.set(n.postId, set);
+      } else {
+        needPosts.add(n.postId); // legacy 无 commentId：至少动态要还在
+      }
+    }
+    const commentIds = new Set<string>();
+    const postIds = new Set<string>();
+    if (needComments.size > 0 || needPosts.size > 0) {
+      try {
+        for (const p of listMomentPosts(platform)) {
+          if (needPosts.has(p.id)) postIds.add(p.id);
+          const wanted = needComments.get(p.id);
+          if (!wanted) continue;
+          for (const c of p.comments) if (wanted.has(c.id)) commentIds.add(c.id);
+        }
+      } catch {
+        // 读取失败 → 全部视为不可回（宁缺勿错）
+      }
+    }
+    return { commentIds, postIds };
+  }, [notices, platform]);
+  const replyable = (n: MomentNotice) => {
+    if ((n.kind !== 'comment' && n.kind !== 'reply') || !n.postId) return false;
+    // 带 commentId（正常情况）：目标评论必须仍存在于对应动态的评论区（#41e）
+    if (n.commentId) return aliveTargets.commentIds.has(n.commentId);
+    return aliveTargets.postIds.has(n.postId);
+  };
 
   const submitReply = (n: MomentNotice) => {
     const text = (drafts[n.id] ?? '').trim();

@@ -420,6 +420,10 @@ export function updateFragment(contactId: string, id: string, content: string, w
   hit.content = content.trim();
   hit.editedAt = Date.now();
   if (weight === 'high' || weight === 'normal' || weight === 'low') hit.weight = weight;
+  // 用户显式编辑保存 = 意图明确的「救回」：清除被更新标记（supersededAt/supersededBy），
+  // 让该碎片重新参与召回/总结（否则编辑过内容也永不召回，#40）
+  delete hit.supersededAt;
+  delete hit.supersededBy;
   writeJSON(fragKey(contactId), list);
   return true;
 }
@@ -496,6 +500,28 @@ export function memPurgeContact(contactId: string): void {
     // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键）
     kvDelByPrefix(`mem-msgcount:${contactId}`);
     kvDelByPrefix(`mem-anchor:${contactId}`);
+  } catch {
+    // 忽略
+  }
+}
+
+/**
+ * 删除会话时重置该联系人的记忆提取计数状态（fix2-b/fix2-c 契约函数；对照 memPurgeContact 的锚点清理段）：
+ * - 清消息计数（合并键 + 各 App 独立键 + 群 scope 键）与增量计数锚点（按前缀批量清）；
+ * - 清四个 App 的废弃旧轮次键（IndexedDB kv + localStorage 双层残留清扫）；
+ * - 严禁动碎片/核心/长期记忆与设置本身（删除会话 ≠ 删除记忆，与 memPurgeContact 全量清不同）。
+ */
+export async function memResetConvoCounters(contactId: string): Promise<void> {
+  try {
+    // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键）
+    kvDelByPrefix(`mem-msgcount:${contactId}`);
+    kvDelByPrefix(`mem-anchor:${contactId}`);
+    // 旧轮次计数键残留清扫（IndexedDB kv 内存+库同步删 + localStorage 防历史残留复活）
+    for (const app of ['wx', 'qq', 'sms', 'phone'] as MemApp[]) {
+      const k = roundKey(contactId, app);
+      kvDel(k);
+      window.localStorage.removeItem(k);
+    }
   } catch {
     // 忽略
   }
@@ -835,6 +861,25 @@ export function memPurgeMomentSources(contactId: string, filter: { postId: strin
     if (next.length === list.length) return 0;
     writeJSON(fragKey(contactId), next);
     return list.length - next.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 按来源消息 ID 清理记忆碎片（消息撤回时级联调用，fix2-b/fix2-c 契约函数）：
+ * 撤回的消息若已被提取成记忆碎片，撤回后一并清掉，保证 AI 不再引用已撤回内容。
+ * 含已消费/已归档/已过期的残留项一并清（与 memPurgeMomentSources 同口径：它们虽不参与
+ * 召回，但保留着已撤回内容的痕迹）；无命中返回 0，全程 try/catch 不抛（撤回主流程不因
+ * 记忆清理失败中断）。
+ */
+export async function memPurgeMessageSources(contactId: string, sourceMsgId: string): Promise<number> {
+  if (!sourceMsgId) return 0;
+  try {
+    const ids = readFragments(contactId)
+      .filter((f) => f.sourceMsgId === sourceMsgId)
+      .map((f) => f.id);
+    return memDeleteFragmentByIds(contactId, ids);
   } catch {
     return 0;
   }

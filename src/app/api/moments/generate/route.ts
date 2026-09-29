@@ -14,9 +14,12 @@ export const runtime = 'nodejs';
  *           persona?, background?, relation?, relationToUser?, kind? },
  *   recentChat?: { role: 'me'|'peer', text: string }[],   // 最近私聊（灵感素材，≤12 条）
  *   memories?: string[],               // 记忆库素材（≤10 条）
- *   post?: { authorName?: string, author?: 'user'|'char', content?: string },  // 要评论的动态
+ *   post?: { authorName?: string, author?: 'user'|'char', content?: string },  // 要评论的动态；
+ *                                      content 为「（该动态仅配图无文字，共N张图）」标记时=纯图动态（#14：放行并注入防编造）
  *   thread?: { authorName?: string, content?: string }[], // 评论区上下文（回复时）
- *   replyTo?: { authorName?: string, content?: string, realName?: string },  // 被回复的评论（realName=对方真实名字，称呼用）
+ *   replyTo?: { authorName?: string, content?: string, realName?: string, parentAuthor?: 'user' },
+ *                                      // 被回复的评论（realName=对方真实名字，称呼用）；
+ *                                      // parentAuthor='user' 由引擎声明「parent 是用户评论」——#41d 防悬空 replyTo 绕过防自评
  *   hint?: string,                     // 触发语境提示（如「结合最近聊天有感而发」）
  *   ownRecentPosts?: string[],         // 该角色最近已发过的动态（发动态时防重复/防自相矛盾）
  *   avoid?: string[],                  // 禁复读名单：该角色最近说过的话（评论/回复/转发不与已说过的重复；
@@ -221,6 +224,9 @@ export async function POST(req: Request) {
   } else {
     const postRaw = (body.post && typeof body.post === 'object' ? body.post : {}) as { authorName?: unknown; author?: unknown; content?: unknown };
     const postContent = s(postRaw.content, 200);
+    // #14：引擎组不出文字的纯图动态会传「（该动态仅配图…」标记文案——放行进下方分支，
+    // 由各分支注入防编造规则；彻底无内容仍然 400
+    const imagesOnly = postContent.startsWith('（该动态仅配图');
     if (!postContent) return NextResponse.json({ error: '缺少要评论的动态内容' }, { status: 400 });
     // 身份修复：动态作者是谁必须用传入的 authorName（角色动态的真实发帖人），
     // 绝不能用 name（那是本次要评论的评论人）——旧版把评论人当发帖人，导致「AI 自己给自己评论」。
@@ -240,16 +246,22 @@ export async function POST(req: Request) {
           .filter(Boolean)
       : [];
     if (kind === 'repost') {
-      // 转发：把别人的动态转到自己空间，生成一句转发理由（正文短、不复述原文）
-      const postRaw = (body.post && typeof body.post === 'object' ? body.post : {}) as { authorName?: unknown; author?: unknown; content?: unknown };
-      const postContent = s(postRaw.content, 200);
-      if (!postContent) return NextResponse.json({ error: '缺少要转发的动态内容' }, { status: 400 });
-      const postAuthorName = s(postRaw.authorName, 20);
-      const postAuthor = postRaw.author === 'char' ? postAuthorName || '对方' : userName;
+      // 转发：把别人的动态转到自己空间，生成一句转发理由（正文短、不复述原文）。
+      // postRaw/postContent/postAuthorName/postAuthor 复用外层解析（#14：纯图标记文案同样放行）
       if (postRaw.author === 'char' && postAuthorName && postAuthorName === name) {
         return NextResponse.json({ error: '不能转发自己的动态' }, { status: 400 });
       }
-      user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
+      if (imagesOnly) {
+        user.push(`${postAuthor}发了一条${label}动态（只有配图，没有文字）：${postContent}。`);
+        user.push('- 防编造：这条动态只有配图没有文字：转发理由不要编造图片里的具体人物、文字或细节，只围绕配图呈现的主题/氛围与你的关系写一句感想；');
+      } else {
+        user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
+      }
+      // #42：防矛盾素材——你最近已发过的动态（转发理由不得与之重复/在事实与心情上矛盾）
+      if (ownRecentPosts.length > 0)
+        user.push(
+          `【你最近已经发过的动态（转发理由不能与它们重复，也不能在事实/心情/境遇上前后矛盾——你始终是同一个连续生活的人）】\n${ownRecentPosts.map((p) => `- ${p}`).join('\n')}`
+        );
       user.push(`请以「${name}」的身份把这条动态转发到你的${label}，写一句你转发时想说的话（转发理由）。`);
       user.push('- 8~30 字，口语化：可以感叹、安利、调侃、吐槽或补一句你的看法；不要复述原文内容；');
       user.push('- 只输出转发理由这句话本身，不要「转发：」之类前缀，不要话题标签，不要@任何人，不要 emoji；');
@@ -258,7 +270,12 @@ export async function POST(req: Request) {
           `【你记得的关于${userName}和你们之间的事（理由不得与这些已知事实矛盾）】\n${memories.map((m) => `- ${m}`).join('\n')}`
         );
     } else if (kind === 'comment') {
-      user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
+      if (imagesOnly) {
+        user.push(`${postAuthor}发了一条${label}动态（只有配图，没有文字）：${postContent}。`);
+        user.push('- 防编造（最重要）：这条动态只有配图没有文字：不要编造图片里的具体人物、文字或细节，只围绕配图呈现的主题/氛围与你的关系自然评论；');
+      } else {
+        user.push(`${postAuthor}发了一条${label}动态：「${postContent}」。`);
+      }
       user.push(`请以「${name}」的身份（你是评论人，不是发帖人）给这条动态写一条评论。`);
       user.push(`- 身份提醒：这条动态是「${postAuthor}」发的，你不是TA——以你「${name}」自己的口吻回应TA的内容，不要模仿作者的口吻、不要替TA说话、不要自问自答；`);
       user.push('- 15~50 字，口语化，像熟人随手打的：接梗、调侃、吐槽、反问、拆台都行，也可以就一短句；');
@@ -280,6 +297,7 @@ export async function POST(req: Request) {
         authorName?: unknown;
         content?: unknown;
         realName?: unknown;
+        parentAuthor?: unknown;
       };
       const replyFrom = s(replyRaw.authorName, 20) || userName;
       const replyRealName = s(replyRaw.realName, 20);
@@ -288,6 +306,13 @@ export async function POST(req: Request) {
       // 服务端硬性守卫：不能回复自己的评论（防「AI 自己回复自己」）
       if (replyFrom === name) {
         return NextResponse.json({ error: '不能回复自己的评论' }, { status: 400 });
+      }
+      // #41d（防自评第四层，与引擎 addCharMomentComment/aiCommentOnMoment 同口径）：
+      // 引擎只在「parent 真实存在且是用户评论」时才传 replyTo 并声明 parentAuthor='user'；
+      // 声明为非用户评论的请求一律拒绝（悬空/伪造 replyTo 不能借 reply 分支绕过防自评防线）
+      const parentAuthor = s(replyRaw.parentAuthor, 10);
+      if (parentAuthor && parentAuthor !== 'user') {
+        return NextResponse.json({ error: '回复目标无效' }, { status: 400 });
       }
       // 称呼规则（用户新要求）：不再按「评论区人数」分两种模式（那是所有角色同一种称呼的旧做法）。
       // 称呼由人设/说话习惯 + 动态/评论语境决定，交给 LLM；引擎只传真实名字，保两条硬约束：

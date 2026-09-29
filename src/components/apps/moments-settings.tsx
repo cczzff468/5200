@@ -588,6 +588,13 @@ export function MomentsSettingsPage({
             存储键 replyNpcCommentDelay 保留不动，仅不再展示） */}
         <GroupLabel>NPC 互动</GroupLabel>
         <GroupCard>
+          {/* #42：NPC 转发概率（0-100 百分比；好友刷到用户动态后转发到 TA 空间的概率，引擎在 QQ 空间读） */}
+          <SliderRow
+            label="NPC 转发概率"
+            value={settings.repostProbability / 100}
+            accent={meta.accent}
+            onChange={(v) => update({ repostProbability: Math.min(100, Math.max(0, Math.round(v * 100))) })}
+          />
           <Row
             label="NPC 互动延迟"
             right={

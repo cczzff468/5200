@@ -164,6 +164,8 @@ export interface WxFamilyCardIn {
   relation: string;
   monthlyLimit: number;
   used: number;
+  /** 本月额度已重置到的月份（'YYYY-MM' 本地时区；审计 #6 跨月惰性重置；旧数据缺失视为需重置） */
+  lastResetMonth?: string;
   createdAt: number;
 }
 
@@ -182,12 +184,30 @@ export function loadFamilyCardsIn(): WxFamilyCardIn[] {
       relation: typeof f.relation === 'string' ? f.relation : '家人',
       monthlyLimit: typeof f.monthlyLimit === 'number' ? f.monthlyLimit : 0,
       used: typeof f.used === 'number' ? f.used : 0,
+      lastResetMonth: typeof f.lastResetMonth === 'string' ? f.lastResetMonth : undefined,
       createdAt: typeof f.createdAt === 'number' ? f.createdAt : Date.now(),
     }));
 }
 
 export function saveFamilyCardsIn(list: WxFamilyCardIn[]): void {
   saveJSON(LS_FC_IN, list);
+}
+
+/** 审计 #6：亲属卡「本月可用」跨月惰性重置——在所有读取可用额度的入口调用：
+ *  lastResetMonth（'YYYY-MM' 本地时区）不等于当前月（旧数据缺失视为需重置）→ used=0、
+ *  lastResetMonth=当前月并持久化写回；同月重复调用幂等（无写入）。返回规范后的列表供调用方直接使用 */
+export function resetFamilyCardsInMonth(): WxFamilyCardIn[] {
+  const list = loadFamilyCardsIn();
+  const d = new Date();
+  const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  let changed = false;
+  const next = list.map((f) => {
+    if (f.lastResetMonth === month) return f;
+    changed = true;
+    return { ...f, used: 0, lastResetMonth: month };
+  });
+  if (changed) saveFamilyCardsIn(next);
+  return next;
 }
 
 // ---------------- 聊天消息联动（亲属卡赠送/接收 → 写入微信聊天消息流） ----------------
@@ -1802,8 +1822,8 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
   const [cards, setCards] = useState(() => loadCards());
   const [bills, setBills] = useState(() => loadBills());
   const [familyCards, setFamilyCards] = useState(() => loadFamilyCards());
-  /** 我收到的亲属卡（可用于发红包/转账支付） */
-  const [familyIn, setFamilyIn] = useState(() => loadFamilyCardsIn());
+  /** 我收到的亲属卡（可用于发红包/转账支付；挂载时先做跨月惰性重置，亲属卡页「本月剩余」即本月真实额度） */
+  const [familyIn, setFamilyIn] = useState(() => resetFamilyCardsInMonth());
   // 零钱通：挂载时惰性结算每日收益（同日幂等）
   const [lcq, setLcq] = useState(() => {
     const settled = settleLcq(loadLcq(), earliestBuyDay(loadBills()));

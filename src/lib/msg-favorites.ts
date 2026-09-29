@@ -88,3 +88,14 @@ export function unfavoriteMsg(app: FavApp, msgId: string): boolean {
   removeFavorite(app, item.id);
   return true;
 }
+
+/** 清空某联系人的全部收藏（会话级联清理用：群聊解散/退出后，来源会话已从本机删除，
+ *  收藏页里以该会话为来源的收藏项成为孤儿，按 contactId（群 id）整批移除；
+ *  内部 try/catch 吞错，清理失败不影响调用方的解散/退群主流程） */
+export function purgeFavoritesForContact(app: FavApp, contactId: string): void {
+  try {
+    saveFavorites(app, loadFavorites(app).filter((x) => x.contactId !== contactId));
+  } catch {
+    // 忽略
+  }
+}

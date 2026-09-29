@@ -8,9 +8,31 @@ import webpush from 'web-push';
  * - DELETE：移除订阅（浏览器退订时调用）。
  * 订阅在服务端为尽力而为的增强能力：不支持 Service Worker / Push 的环境（如预览面板 iframe）
  * 注册失败静默跳过，应用内灵动岛弹窗与页面隐藏时的 Web Notification 不受影响。
+ *
+ * 鉴权（#13，可选共享 token）：配置了环境变量 PUSH_SHARED_TOKEN 时，GET/POST/DELETE 均校验
+ * 请求头 x-shared-token 必须等于该值，否则 401（防公网部署上被第三方任意写入/清洗订阅表、
+ * 探测 VAPID 公钥）；未配置（本地沙箱默认）行为完全不变。前端订阅链路（push-client.ts）
+ * 同源自带凭据场景无需改造：本地/未配置 token 时零影响。
  */
 
 export const runtime = 'nodejs';
+
+/** 可选共享 token（环境变量未配置 = 不启用鉴权，历史行为不变） */
+const TOKEN = process.env.PUSH_SHARED_TOKEN;
+
+/** 共享 token 校验：未配置恒通过；已配置时请求头 x-shared-token 必须精确匹配 */
+function tokenOk(req: Request): boolean {
+  if (!TOKEN) return true;
+  try {
+    return req.headers.get('x-shared-token') === TOKEN;
+  } catch {
+    return false;
+  }
+}
+
+function unauthorized(): NextResponse {
+  return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+}
 
 interface SubRec {
   endpoint: string;
@@ -72,7 +94,8 @@ async function getVapid(): Promise<{ publicKey: string; privateKey: string }> {
   return vapidInflight;
 }
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: Request): Promise<NextResponse> {
+  if (!tokenOk(req)) return unauthorized();
   try {
     const { publicKey } = await getVapid();
     return NextResponse.json({ publicKey });
@@ -82,6 +105,7 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
+  if (!tokenOk(req)) return unauthorized();
   const body = (await req.json().catch(() => null)) as {
     subscription?: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
   } | null;
@@ -111,6 +135,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 }
 
 export async function DELETE(req: Request): Promise<NextResponse> {
+  if (!tokenOk(req)) return unauthorized();
   const body = (await req.json().catch(() => null)) as { endpoint?: unknown } | null;
   if (typeof body?.endpoint !== 'string') return NextResponse.json({ error: 'endpoint 无效' }, { status: 400 });
   // 与 POST 同一 in-flight 链（#55），避免 DELETE 与 POST 互撞。

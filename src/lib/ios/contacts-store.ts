@@ -11,7 +11,7 @@ import { kvDel, kvGet, kvSet } from './idb-kv';
 import { clearContactBinding } from './worldbook';
 import { memPurgeContact } from '@/lib/memory';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
-import { wxUnreads, qqUnreads } from '@/lib/unread-store';
+import { phoneBadge, qqUnreads, wxUnreads } from '@/lib/unread-store';
 import { wsHeaders } from './workspace';
 import {
   displayNameOf,
@@ -114,6 +114,31 @@ export async function contactRealName(id: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/**
+ * 账号唯一性查重（审计 #12）：手机号/微信号/QQ号是否已被其他联系人占用。
+ * 登录（loginWechat/loginQQ 的 hits[0]）与电话按号码解析（phone.tsx）都取「第一个命中」，
+ * 账号重复时登录/拨号会静默串到别人——这里供联系人保存流程在落库前警示（确认后仍可保存）。
+ * 命中返回占用该值的联系人（listContacts 的 createdAt 倒序 = 与登录解析同款取序），无冲突返回 null；
+ * value 空串/纯空白不算冲突（新建留空会自动生成）；excludeId 传编辑中的联系人 id 以排除自身不误报。
+ */
+export async function findContactValueConflict(
+  kind: 'phone' | 'wxid' | 'qq',
+  value: string,
+  excludeId?: string
+): Promise<ContactRecord | null> {
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (!v) return null;
+  const all = await listContacts();
+  const hit = all.find((c) => {
+    if (excludeId && c.id === excludeId) return false;
+    // 与登录解析同口径的精确匹配（存值已经 normalizeText 去首尾空白）
+    if (kind === 'phone') return c.phone === v;
+    if (kind === 'wxid') return c.wechatId === v;
+    return c.qqId === v;
+  });
+  return hit ?? null;
 }
 
 /**
@@ -248,7 +273,17 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
  *   内存单例与 localStorage 及订阅者同步，避免下次持久化写回复活）；
  * - 会话标志（置顶/免打扰/背景标记）：wx-chat-flags / qq-chat-flags 里的条目
  *   （走 chat-flags 总线的 reset，内存快照与 localStorage 同步，避免后续 update 写回复活）；
- * - 聊天背景图本体（IndexedDB settings store）：chat-bg:wx:<id> / chat-bg:qq:<id>。
+ * - 聊天背景图本体（IndexedDB settings store）：chat-bg:wx:<id> / chat-bg:qq:<id>；
+ * - 语音留言本体（IndexedDB voicemails store，VoicemailRecord.contactId 归属）：删除该联系人全部
+ *   留言，并按剩余未读数重算电话角标（unread-store phoneBadge，键 ios-phone-badge，HomeScreen
+ *   镜像消费），避免「未读语音留言继续计角标」；
+ * - 电话 App 个人收藏（IndexedDB settings 键 phoneFavorites，phone.tsx FAV_KEY，值为联系人 id
+ *   数组）：移除该联系人条目（phone.tsx 自己的删除路径会同步清，这里兜底其他 App 的删除入口）；
+ * - 微信亲属卡两张表（IndexedDB kv，wechat-wallet.tsx LS_FC/LS_FC_IN）：wx-family-cards（我赠送的，
+ *   条目 friendId）与 wx-family-cards-in（我收到的，条目 friendId 旧数据可缺省）按 friendId 过滤删除；
+ *   注意钱包页持有 useState 快照，同会话内再次保存可能复活条目（同下方排队补跑条目口径，
+ *   刷新后彻底消失，条目对已删联系人不可再消费）；
+ * - 通话记录 call-logs 按 iOS 惯例保留不删（记录已带名字/号码/头像快照字段，历史可查）。
  * 全部尽力而为（单键失败不阻塞删除）；记忆库由 memPurgeContact 负责不在本函数范围。
  */
 function purgeChatTracesFor(id: string, name?: string): void {
@@ -347,6 +382,16 @@ function purgeChatTracesFor(id: string, name?: string): void {
     } catch {
       // 清理失败不阻塞删除
     }
+    // 微信亲属卡两张表（wechat-wallet.tsx LS_FC/LS_FC_IN，IndexedDB kv 单键数组）：
+    // 我赠送的（条目必有 friendId）与我收到的（条目 friendId 旧数据可缺省）都按 friendId 过滤删除；
+    // 无 friendId 的旧条目保留（无法归属，宁留勿误删）。钱包页 useState 快照可能同会话复活条目，
+    // 同上方排队补跑条目口径：对已删联系人不可再消费，刷新后彻底消失
+    for (const fcKey of ['wx-family-cards', 'wx-family-cards-in'] as const) {
+      const list = kvGet<Record<string, unknown>[]>(fcKey);
+      if (!Array.isArray(list)) continue;
+      const next = list.filter((card) => card && typeof card === 'object' && card.friendId !== id);
+      if (next.length !== list.length) kvSet(fcKey, next);
+    }
   } catch {
     // 清理失败不阻塞删除
   }
@@ -383,6 +428,34 @@ function purgeChatTracesFor(id: string, name?: string): void {
   // 联系人专属背景图（微信朋友圈/资料页 + QQ 空间等按角色隔离的背景）
   void localDB.delete('settings', `${PEER_BG_PREFIX}wx:${id}`).catch(() => undefined);
   void localDB.delete('settings', `${PEER_BG_PREFIX}qq:${id}`).catch(() => undefined);
+  // 电话 App 个人收藏（IndexedDB settings 键 phoneFavorites，值为联系人 id 数组）：异步移除该联系人
+  // 条目，失败忽略（键名以 phone.tsx FAV_KEY 为准，phone.tsx 自身删除路径会同步清，这里兜底其他入口）
+  void (async () => {
+    try {
+      const rec = await localDB.get('settings', 'phoneFavorites');
+      const list = rec?.value;
+      if (Array.isArray(list) && list.includes(id)) {
+        await localDB.put('settings', { key: 'phoneFavorites', value: list.filter((x: unknown) => x !== id) });
+      }
+    } catch {
+      // 清理失败不阻塞删除
+    }
+  })();
+  // 语音留言本体（IndexedDB voicemails，按 contactId 归属）：删除该联系人全部留言；
+  // 未读留言数由 unread-store phoneBadge（键 ios-phone-badge）镜像 HomeScreen 电话角标，
+  // 删库后按剩余未读数重算，避免已删联系人的未读留言继续计角标（phone.tsx 打开时还会再校准）
+  void (async () => {
+    try {
+      const all = await localDB.getAll('voicemails');
+      const victims = all.filter((v) => v.contactId === id);
+      if (victims.length === 0) return;
+      await Promise.all(victims.map((v) => localDB.delete('voicemails', v.id)));
+      const rest = await localDB.getAll('voicemails');
+      phoneBadge.set(rest.filter((v) => !v.read).length);
+    } catch {
+      // 清理失败不阻塞删除
+    }
+  })();
 }
 
 /** 删除联系人（归属对象被删时其名下 NPC 一并级联删除，同旧服务端 DELETE）；删除了返回 true */

@@ -744,6 +744,26 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         busyRef.current = false;
         return;
       }
+      // #33 拉黑守卫（语音通道与 sendText 同款口径，从 optsRef 现场读取防通话中状态变更）：
+      // byChar（角色拉黑了用户）/ byUser（用户拉黑了角色）时 AI 均不应答本轮——用户语音内容
+      // 照常进通话记录（appendLog），但不请求 LLM、不产生回复、不做逐轮记忆（memorizeTurn 挂在
+      // 成功分支不变）；通话回到聆听继续（解除拉黑后下一轮自然恢复应答），挂断总结/B-1 兜底收尾
+      // 不受影响。greeting/主动开口轮同样静默：不产生「被拉黑一方还在絮叨」的假对话
+      const blkPeer = optsRef.current.contact;
+      const blkEntry = blkPeer?.id ? loadBlock(optsRef.current.app, blkPeer.id) : null;
+      if (blkEntry?.byChar || blkEntry?.byUser) {
+        if (userText) {
+          setLiveHeard(''); // 最终文字入列：实时 provisional 字幕让位（与正常轮同口径）
+          historyRef.current = [...historyRef.current, { role: 'user' as const, content: userText }].slice(-16);
+          appendLog({ role: 'user', content: userText, at: Date.now(), via: 'voice' });
+        }
+        setStatus('listening');
+        busyRef.current = false;
+        // 延迟 250ms 续听：accept/connect 路径 setPhase('active') 尚未经 effect 同步进 phaseRef，
+        // 立即调度会被 scheduleAutoListen 的 phase 检查吞掉（同 setTextMode 恢复听延迟口径）
+        autoListenRef.current(250);
+        return;
+      }
       setStatus('thinking');
       const historyBefore = userText
         ? [...historyRef.current, { role: 'user' as const, content: userText }]

@@ -46,6 +46,34 @@ const MAX_CANCELLED = 50; // cancelled Map 上限：超过淘汰最旧条目（�
 const MAX_TEXTS = 20;
 const TEXT_MAX = 4000;
 
+/* ---------------- generate 限流（#13：防随机 sessionKey 绕过 generating 去重烧内置模型） ---------------- */
+
+/** 每 sessionKey 每分钟最多发起的真实接力生成次数 */
+const GENERATE_RATE_LIMIT = 5;
+/** 限流滑动窗口 */
+const GENERATE_WINDOW_MS = 60_000;
+/** sessionKey → 窗口内最近请求时刻（内存态，服务重启清空） */
+const generateHits = new Map<string, number[]>();
+/** 限流 Map 上限（只增不减的会话键淘汰最旧，与 cancelled 同款策略） */
+const MAX_GENERATE_TRACKED = 500;
+
+/** 滑动窗口限流：未超限记一笔并返回 false；超限返回 true（本次不记，不刷新窗口） */
+function generateRateLimited(sessionKey: string): boolean {
+  const now = Date.now();
+  const hits = (generateHits.get(sessionKey) ?? []).filter((t) => now - t < GENERATE_WINDOW_MS);
+  if (hits.length >= GENERATE_RATE_LIMIT) {
+    generateHits.set(sessionKey, hits);
+    return true;
+  }
+  hits.push(now);
+  generateHits.set(sessionKey, hits);
+  if (generateHits.size > MAX_GENERATE_TRACKED) {
+    const first = generateHits.keys().next().value;
+    if (first) generateHits.delete(first);
+  }
+  return false;
+}
+
 function appDefaultName(sessionKey: string): string {
   if (sessionKey.startsWith('wx:group:')) return '微信群聊';
   if (sessionKey.startsWith('wx:')) return '微信';
@@ -223,6 +251,11 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (body.mode === 'generate') {
     // 流式没跑完就关页：服务端接管生成。同一会话进行中不重复接（防双回复）
     if (generating.has(sessionKey)) return NextResponse.json({ ok: true, scheduled: false });
+    // 内存限流（#13）：每 sessionKey 每分钟 ≤5 次真实接力生成，超限 429
+    // （放在 generating 去重之后：去重命中的空 beacon 不占限流额度）
+    if (generateRateLimited(sessionKey)) {
+      return NextResponse.json({ error: 'rate limited' }, { status: 429 });
+    }
     const messages = Array.isArray(body.payload?.messages) ? body.payload?.messages : null;
     if (!messages || messages.length === 0) return NextResponse.json({ error: 'payload 无效' }, { status: 400 });
     // 新接力开始：清掉旧取消标记（上一轮的取消不应影响本轮）

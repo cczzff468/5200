@@ -19,6 +19,7 @@
 
 import { kvDel, kvGet, kvSet } from './idb-kv';
 import { genId, localDB } from './db';
+import { purgeFavoritesForContact } from '../msg-favorites';
 
 // ---------------- 类型 ----------------
 
@@ -697,7 +698,8 @@ export function onMemberJoined(fn: MemberJoinedHook): void {
 
 /**
  * 解散群聊：删除群 + 群消息（红包/转账卡片状态随消息一并清除）+ 会话级附属数据
- * （未读/标志/隐藏/时间感知/每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
+ * （未读/标志/隐藏/时间感知/回复条数/表情包开关/分句发送/AI 语音频率与计数器/收藏页本群条目/
+ * 每成员的群记忆提取轮次计数/群聊天背景）+ 群来源记忆
  * （通过 onGroupDissolved 钩子级联，见 memory 层 memPurgeGroupSource）。
  * opts.purgeMemory = false 时跳过群来源记忆清理（用于「退出群聊」：群对其他成员仍然存在，
  * AI 成员的群记忆应当保留，只有机主本机删除该群）。
@@ -716,6 +718,21 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
     removeLocalMapKey(maps.hidden, `group:${groupId}`);
     // 时间感知开关（localStorage map 里的键）
     removeLocalMapKey('chat-time-aware', `${g.app}:group:${groupId}`);
+    // #26 会话级偏好键清理（键 = 会话键 `<app>:group:<gid>`）：回复条数 / 表情包开关 / 分句发送+
+    // 待派发批次 / AI 语音频率——群解散（或机主退出本机删除）后，这些按会话隔离的设置若不清理
+    // 会永久残留在 localStorage map 里；同名会话重建时也不应继承旧群的偏好
+    const sKey = `${g.app}:group:${groupId}`;
+    removeLocalMapKey('chat-reply-counts', sKey);
+    removeLocalMapKey('chat-sticker-on', sKey);
+    removeLocalMapKey('chat-sentence-send', sKey);
+    removeLocalMapKey('chat-sentence-pending', sKey);
+    removeLocalMapKey('ai-voice-freq', sKey);
+    // AI 语音计数器按「群会话键#成员 id」逐成员清理（ai-voice decideAiVoiceMessage 的 counterKey 口径）
+    for (const cid of g.memberIds) {
+      removeLocalMapKey('ai-voice-counters', `${sKey}#${cid}`);
+    }
+    // 收藏页（IndexedDB kv，wx-favorites/qq-favorites 数组）：来源会话为本群的收藏项整批移除
+    purgeFavoritesForContact(g.app, groupId);
     // 每个成员的群记忆提取计数（旧 mem-round 轮次键 + 新 mem-msgcount 消息计数 / mem-anchor 锚点，均按群 scope）
     for (const cid of g.memberIds) {
       kvDel(`mem-round:${cid}:${g.app}:group:${groupId}`);

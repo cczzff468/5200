@@ -22,6 +22,7 @@ import { DefaultAvatar } from '@/components/apps/default-avatar';
 import {
   createContact,
   deleteContact,
+  findContactValueConflict,
   listContacts,
   updateContact,
 } from '@/lib/ios/contacts-store';
@@ -948,8 +949,22 @@ function ContactFormView({
   const [ownerPickerOpen, setOwnerPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  /** 账号冲突警示（手机号/微信号/QQ号重复，审计 #12）：非空 = 已警示待确认，再点一次「仍要保存」才落库 */
+  const [conflictMsg, setConflictMsg] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
   const personaFileRef = useRef<HTMLInputElement | null>(null);
+
+  // 警示后 6s 未确认自动复位（同详情页删除二次确认的防误触口径；文本更长，给足阅读时间）
+  useEffect(() => {
+    if (!conflictMsg) return;
+    const t = window.setTimeout(() => setConflictMsg(''), 6000);
+    return () => window.clearTimeout(t);
+  }, [conflictMsg]);
+
+  // 表单再改动即撤销确认：下次保存重新查重（避免改了号码仍沿用旧确认直接放行）
+  useEffect(() => {
+    setConflictMsg('');
+  }, [form]);
 
   const set = (k: keyof ContactFormState) => (v: string) => setForm((p) => ({ ...p, [k]: v }));
 
@@ -1002,6 +1017,25 @@ function ContactFormView({
       setError('请填写QQ密码（密码为必填项）');
       return;
     }
+    // 账号唯一性查重（审计 #12）：登录与电话拨号都按值取第一个命中，重复账号会静默串号——
+    // 首次保存先警示，点「仍要保存」二次确认后才落库；空值（新建留空自动生成）不查；
+    // 编辑时传 excludeId 排除自身，不误报
+    if (!conflictMsg) {
+      const dupChecks: Array<{ kind: 'phone' | 'wxid' | 'qq'; label: string; value: string }> = [
+        { kind: 'phone', label: '手机号', value: form.phone },
+        { kind: 'wxid', label: '微信号', value: form.wechatId },
+        { kind: 'qq', label: 'QQ号', value: form.qqId },
+      ];
+      const dupMsgs: string[] = [];
+      for (const f of dupChecks) {
+        const other = await findContactValueConflict(f.kind, f.value, editing ? initial!.id : undefined);
+        if (other) dupMsgs.push(`该${f.label}已用于联系人「${other.name}」`);
+      }
+      if (dupMsgs.length > 0) {
+        setConflictMsg(`${dupMsgs.join('；')}，保存后登录/拨号可能匹配到对方。仍要保存吗？`);
+        return;
+      }
+    }
     setSubmitting(true);
     setError('');
     try {
@@ -1039,7 +1073,7 @@ function ContactFormView({
             aria-label="保存联系人"
             className="flex h-[30px] items-center rounded-full px-3.5 text-[14px] font-semibold"
           >
-            {submitting ? '保存中…' : '保存'}
+            {submitting ? '保存中…' : conflictMsg ? '仍要保存' : '保存'}
           </GlassButton>
         }
       />
@@ -1095,6 +1129,14 @@ function ContactFormView({
         </div>
 
         {error && <p className="pb-1 pt-2 text-center text-[13px] text-[#FF3B30]">{error}</p>}
+        {conflictMsg && (
+          <p
+            role="alert"
+            className="mx-4 rounded-[12px] bg-[#FF9500]/10 pb-2 pt-2 text-center text-[13px] leading-[19px] text-[#FF9500]"
+          >
+            {conflictMsg}
+          </p>
+        )}
 
         {/* NPC：选择归属 */}
         {isNpc && (

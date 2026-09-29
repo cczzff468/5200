@@ -4,12 +4,15 @@ export const runtime = 'nodejs';
 
 /**
  * 记忆库 · 从对话提取记忆碎片
- * POST { conversation: { role: 'me'|'peer', text: string }[], app?: string,
- *        userName?: string, peerName?: string,
+ * POST { conversation: { role: 'me'|'peer', text: string, speakerPrefixed?: boolean }[], app?: string,
+ *        userName?: string, peerName?: string, speakerPrefixed?: boolean,
  *        existing?: { id: string, content: string }[], config?: UpstreamConfig }
  * 返回 { fragments: { text, weight, eventTime?, expiresAt?, supersedes? }[] }（0-6 条；
  *       模型未给权重 / 旧格式字符串时由关键词自动分类兜底，见 memory-core.autoWeight）
  * 视角统一：对话两侧用真实名字渲染，碎片必须用同一对名字指代（禁「对方/用户/我」混用）。
+ * 前缀去重（#9）：群聊轮次客户端已把「发言人：」前缀拼进 peer 侧 text（多成员归因需要），
+ *       载荷 speakerPrefixed（顶层或逐条）为 true 时服务端不再叠 peerName 前缀，
+ *       避免「陈默：陈默：火锅！」；向后兼容：不传走老逻辑（无条件加前缀）。
  * 时间感知：prompt 注入当前时间锚点；模型为含时间信息的碎片给出 eventTime/expiresAt（ISO 字符串，
  *       服务端校验范围 ±5 年、过期不得早于事件时间，非法一律置空——绝不让幻觉时间入库）；
  *       矛盾更新：模型对比 existing（已有记忆）给出 supersedes（被更正的旧记忆 id）。
@@ -21,6 +24,8 @@ import { autoWeight, normalizeWeight, MEM_TIME_RANGE_YEARS } from '@/lib/memory-
 interface ConvoTurn {
   role: 'me' | 'peer';
   text: string;
+  /** 逐条前缀标记（#9）：true = 客户端已把「发言人：」拼进 text，服务端不再叠 peerName 前缀 */
+  speakerPrefixed?: boolean;
 }
 
 function isConvoTurn(v: unknown): v is ConvoTurn {
@@ -208,9 +213,26 @@ export async function POST(req: NextRequest) {
     .slice(0, 30);
   const validIds = new Set(existing.map((e: { id: string }) => e.id));
 
+  // #9 前缀去重：顶层 speakerPrefixed=true → peer 侧全部跳过 peerName 前缀；逐条标记优先于顶层。
+  // 兜底识别（客户端暂未传标记的群聊轮次）：participants 非空（群聊提取）且 peer 文本已以任一已知
+  // 发言者名开头时同样跳过——群聊客户端本来就逐条拼好「发言人：」前缀，再加一层必然叠成双前缀；
+  // 识别不出（发言者改名漂移等）时保持老逻辑补 peerName 前缀，不会比修复前更差
+  const topSpeakerPrefixed = body.speakerPrefixed === true;
+  const knownSpeakers = [peerName, userName, ...participants]
+    .filter((n: string) => n.length > 0)
+    .sort((a: string, b: string) => b.length - a.length); // 长名优先（互为前缀的名字短名不误命中）
+  const startsWithSpeakerLabel = (text: string): boolean =>
+    knownSpeakers.some((n: string) => text.startsWith(`${n}：`) || text.startsWith(`${n}:`));
+
   const convoText = convo
     .slice(-60)
-    .map((t) => `${t.role === 'me' ? userName : peerName}：${t.text.slice(0, 400)}`)
+    .map((t) => {
+      // 超长截断在返回前统一做，两条路径口径一致
+      const clip = t.text.slice(0, 400);
+      if (t.role === 'peer' && (t.speakerPrefixed === true || topSpeakerPrefixed)) return clip;
+      if (t.role === 'peer' && participants.length > 0 && startsWithSpeakerLabel(clip)) return clip;
+      return `${t.role === 'me' ? userName : peerName}：${clip}`;
+    })
     .join('\n');
 
   const existingText =

@@ -68,7 +68,8 @@ import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { callOutcomeOf } from '@/lib/ios/call-outcome';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { useGlobalCall } from '@/lib/ios/global-call';
-import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer } from '@/lib/ios/incoming-call';
+import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer, useIncomingCall } from '@/lib/ios/incoming-call';
+import { loadBlock } from '@/lib/ios/block-state';
 import { getReplyCount } from '@/lib/reply-count';
 import type { ContactRecord } from '@/lib/contacts';
 
@@ -1074,61 +1075,68 @@ function CallScreen({
       const peerContact = contact;
       void (async () => {
         let followupTexts: string[] = [];
+        // #33 拉黑口径（对齐 proactive-call.ts recordMissedPhoneCall 的 byUser 抑制）：用户在「信息」
+        // App 拉黑了该角色 → 挂断续聊不请求、AI 留言一条不写（followupTexts 保持空 = 下方留言循环
+        // 零执行、续聊文字不并入转写），避免「已拉黑还给我留言」的体验断裂；通话记录/对话存档照常落，
+        // 记忆总结照常（下方，沉淀真实发生过的通话内容，与短信端 byUser 回合仍走 memAfterAiTurn 同口径）
+        const smsBlockedByUser = loadBlock('sms', peerContact.id).byUser === true;
         try {
-          const spoken = bubblesRef.current.filter((b) => b.text.trim());
-          const lastUser = [...spoken].reverse().find((b) => b.role === 'user')?.text ?? null;
-          const owner = await ownerProfile().catch(() => null);
-          // #15 跨 App 近况块 + 群聊近况块：通话内已建则复用缓存；从未发过 turn 的短通话现算一次
-          // （crossCtxRef 在 runTurn:793-797 已构建，但挂断续聊是 hangup 路径独立读取，未构建时现算兑底）
-          if (!crossCtxRef.current) {
-            crossCtxRef.current = peerContact.id
-              ? await buildCrossContextBlocks(peerContact.id, 'phone', owner?.realName || profileName)
-              : { crossAppBlock: '', groupBlock: '' };
+          if (!smsBlockedByUser) {
+            const spoken = bubblesRef.current.filter((b) => b.text.trim());
+            const lastUser = [...spoken].reverse().find((b) => b.role === 'user')?.text ?? null;
+            const owner = await ownerProfile().catch(() => null);
+            // #15 跨 App 近况块 + 群聊近况块：通话内已建则复用缓存；从未发过 turn 的短通话现算一次
+            // （crossCtxRef 在 runTurn:793-797 已构建，但挂断续聊是 hangup 路径独立读取，未构建时现算兑底）
+            if (!crossCtxRef.current) {
+              crossCtxRef.current = peerContact.id
+                ? await buildCrossContextBlocks(peerContact.id, 'phone', owner?.realName || profileName)
+                : { crossAppBlock: '', groupBlock: '' };
+            }
+            const wb = collectWbBlocks(peerContact.id, wbScanText([lastUser, ...spoken.slice(-6).map((b) => b.text)]));
+            followupTexts = await requestCallFollowup({
+              contact: {
+                name: peerContact.name,
+                kind: peerContact.kind,
+                gender: peerContact.gender,
+                age: peerContact.age,
+                occupation: peerContact.occupation,
+                region: peerContact.region,
+                relation: peerContact.relation,
+                relationToUser: peerContact.relationToUser ?? null,
+                birthday: peerContact.birthday ?? null,
+                persona: peerContact.persona,
+                background: peerContact.background,
+                nickname: peerContact.nickname ?? null,
+                realName: peerContact.realName ?? null,
+              },
+              direction: isIncoming ? 'in' : 'out',
+              // 真实挂断方：'ai-hangup' = AI 自己主动挂断（告别收尾）/'hangup' = 用户手动挂断（对方先挂）
+              endReason,
+              connected: true,
+              duration: secondsRef.current,
+              transcript: spoken.slice(-24).map((b) => ({ role: b.role, content: b.text })),
+              recentChat: [],
+              memoryBlock: memRecallBlock(peerContact.id, 'phone', lastUser ?? '') || undefined,
+              // #15 跨 App 近况 + 群聊近况（Task 40-b）：与通话轮次同源同位置（当前 App 记忆之后）
+              crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
+              groupBlock: crossCtxRef.current.groupBlock || undefined,
+              worldbookBlock:
+                [wb.beforeSystem, wb.afterSystem, wb.beforeChar, wb.afterChar, wb.beforeUser, wb.afterUser, wbRulesBlock(wb)]
+                  .filter(Boolean)
+                  .join('\n\n') || undefined,
+              timeBlock: getTimeAware(`phone:${peerContact.id}`)
+                ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: peerContact.region || null })
+                : '',
+              // #15 多端互通开关（与 chat-call.ts:512 同位路径同源）：续聊也感知跨 App 身份
+              multiApp: getMemSettings(peerContact.id).share,
+              // 条数上限 = 该联系人「信息」会话聊天设置里的回复条数（sms:c:<id>，与信息 App 同一份数据，
+              // 未设置走全局 DEFAULT_REPLY_COUNT=5）；上限不是任务，没话可以少发
+              replyCount: getReplyCount(`sms:c:${peerContact.id}`),
+              // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+              userRealName: owner?.realName || undefined,
+              userNickname: owner?.nickname || undefined,
+            });
           }
-          const wb = collectWbBlocks(peerContact.id, wbScanText([lastUser, ...spoken.slice(-6).map((b) => b.text)]));
-          followupTexts = await requestCallFollowup({
-            contact: {
-              name: peerContact.name,
-              kind: peerContact.kind,
-              gender: peerContact.gender,
-              age: peerContact.age,
-              occupation: peerContact.occupation,
-              region: peerContact.region,
-              relation: peerContact.relation,
-              relationToUser: peerContact.relationToUser ?? null,
-              birthday: peerContact.birthday ?? null,
-              persona: peerContact.persona,
-              background: peerContact.background,
-              nickname: peerContact.nickname ?? null,
-              realName: peerContact.realName ?? null,
-            },
-            direction: isIncoming ? 'in' : 'out',
-            // 真实挂断方：'ai-hangup' = AI 自己主动挂断（告别收尾）/'hangup' = 用户手动挂断（对方先挂）
-            endReason,
-            connected: true,
-            duration: secondsRef.current,
-            transcript: spoken.slice(-24).map((b) => ({ role: b.role, content: b.text })),
-            recentChat: [],
-            memoryBlock: memRecallBlock(peerContact.id, 'phone', lastUser ?? '') || undefined,
-            // #15 跨 App 近况 + 群聊近况（Task 40-b）：与通话轮次同源同位置（当前 App 记忆之后）
-            crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
-            groupBlock: crossCtxRef.current.groupBlock || undefined,
-            worldbookBlock:
-              [wb.beforeSystem, wb.afterSystem, wb.beforeChar, wb.afterChar, wb.beforeUser, wb.afterUser, wbRulesBlock(wb)]
-                .filter(Boolean)
-                .join('\n\n') || undefined,
-            timeBlock: getTimeAware(`phone:${peerContact.id}`)
-              ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: peerContact.region || null })
-              : '',
-            // #15 多端互通开关（与 chat-call.ts:512 同位路径同源）：续聊也感知跨 App 身份
-            multiApp: getMemSettings(peerContact.id).share,
-            // 条数上限 = 该联系人「信息」会话聊天设置里的回复条数（sms:c:<id>，与信息 App 同一份数据，
-            // 未设置走全局 DEFAULT_REPLY_COUNT=5）；上限不是任务，没话可以少发
-            replyCount: getReplyCount(`sms:c:${peerContact.id}`),
-            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
-            userRealName: owner?.realName || undefined,
-            userNickname: owner?.nickname || undefined,
-          });
         } catch {
           followupTexts = []; // 续聊失败静默：不影响记忆总结
         }
@@ -3647,6 +3655,17 @@ export default function PhoneApp() {
   const [voicemails, setVoicemails] = useState<VoicemailRecord[] | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [callTarget, setCallTarget] = useState<CallTarget | null>(null);
+  // #8 最新通话目标（consumePendingAnswer 判断「通话中收到新来电」用；渲染期同步，同 runTurnRef 模式）
+  const callTargetRef = useRef<CallTarget | null>(null);
+  callTargetRef.current = callTarget;
+  // 全局 toast（consumePendingAnswer 引用 showToast，故上移到其声明之前）
+  const [toast, setToast] = useState('');
+  const toastTimer = useRef<number | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(''), 2200);
+  }, []);
   // 全局来电层接听的 AI 电话：进入电方向的通话界面（接听时全局层已 switchToApp 打开本 App，
   // AI 先开口）。消费幂等（取走即清），两个时机：
   // ① 挂载时消费——跨 App 接听：来电层 switchToApp 打开本 App 后由这里取走 pending；
@@ -3656,7 +3675,26 @@ export default function PhoneApp() {
   const consumePendingAnswer = useCallback(() => {
     const pending = takePendingPhoneAnswer();
     if (!pending) return;
-    // 已有通话进行中：丢弃新 pending，不替换正在进行的通话（与 startCall 的防替换口径一致）。
+    // #8 已有通话进行中：新来电不替换正在进行的通话（与 startCall 的防替换口径一致），也不再静默
+    // 丢弃——toast + 落一条「未接来电」记录（与 AI 来电被拒/超时的 recordMissedPhoneCall 落库同
+    // 口径，进最近通话可回看漏了谁；不触发 AI 留言，选最小实现）
+    if (callTargetRef.current) {
+      const missed: CallLogRecord = {
+        id: genId(),
+        number: pending.number,
+        contactId: pending.contact?.id ?? null,
+        displayName: pending.contact?.name ?? pending.name,
+        peerKind: (pending.contact?.kind as CallLogRecord['peerKind']) ?? 'unknown',
+        avatar: pending.contact?.avatar ?? null,
+        direction: 'missed',
+        duration: 0,
+        createdAt: Date.now(),
+      };
+      setLogs((prev) => [missed, ...(prev ?? [])].sort((a, b) => b.createdAt - a.createdAt));
+      void localDB.put('call-logs', missed);
+      showToast('通话中，已忽略新来电');
+      return;
+    }
     // AI 主动来电目的（pending.proactiveContext，Task 40-d 写入）：随 CallTarget 透传进
     // 该通电话所有 turn payload 的 proactiveContext（普通来电/拨出无此字段，不注入）
     const proactive = pending.proactiveContext;
@@ -3668,7 +3706,7 @@ export default function PhoneApp() {
         ...(proactive ? { proactiveContext: proactive } : {}),
       },
     );
-  }, []);
+  }, [showToast]);
   useEffect(() => {
     consumePendingAnswer();
     window.addEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
@@ -3683,7 +3721,6 @@ export default function PhoneApp() {
   const [newContact, setNewContact] = useState<{ open: boolean; phone: string }>({ open: false, phone: '' });
   const [playingVmId, setPlayingVmId] = useState<string | null>(null);
   const [loadingVmId, setLoadingVmId] = useState<string | null>(null);
-  const [toast, setToast] = useState('');
   // 电话 App 右上角设置图标 Sheet（主动来电开关 + 频率档位，从设置 › 通知页迁移到此）
   const [proactiveSheetOpen, setProactiveSheetOpen] = useState(false);
   const [proactive, setProactive] = useState<boolean>(() => isProactiveCallEnabled());
@@ -3694,16 +3731,9 @@ export default function PhoneApp() {
     { value: 'eager', label: '积极', desc: '10min 间隔·15min 冷却·45s 轮询' },
     { value: 'off', label: '无冷却', desc: '仅 10min 自然间隔·60s 轮询' },
   ];
-  const toastTimer = useRef<number | null>(null);
   const vmAudioRef = useRef<HTMLAudioElement | null>(null);
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingChatContact = useUI((s) => s.setPendingChatContact);
-
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(''), 2200);
-  }, []);
 
   // 初始加载：联系人（本地 IndexedDB）+ 通话记录 / 语音留言 / 收藏（IndexedDB）
   useEffect(() => {
@@ -3790,6 +3820,12 @@ export default function PhoneApp() {
       }
       if (useGlobalCall.getState().session) {
         showToast('通话进行中，请先挂断');
+        return;
+      }
+      // #32 来电响铃中不拨出：来电弹窗/全屏来电界面还在响铃时再拨出会双音频叠加、且会顶掉
+      // 未处理的来电（对照 wechat.tsx openVoiceCall 同款守卫；响铃中接听走 consumePendingAnswer，不经这里）
+      if (useIncomingCall.getState().call) {
+        showToast('有来电正在响铃，请先处理');
         return;
       }
       // 电话 ↔ 联系人联动：未显式指定联系人时，按「联系人里填的电话」匹配出对应人

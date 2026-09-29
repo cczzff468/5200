@@ -154,7 +154,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memResetConvoCounters } from '@/lib/memory';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -215,6 +215,7 @@ import {
   BankDot,
   loadFamilyCards,
   loadFamilyCardsIn,
+  resetFamilyCardsInMonth,
   saveFamilyCards,
   saveFamilyCardsIn,
   wxLoadPayPwd,
@@ -810,7 +811,7 @@ function loadMoments(): WxMoment[] {
 
 /** 好友朋友圈示例动态（首次进入该好友的朋友圈时补齐，走动态引擎写入：writeMemory=false 不入记忆） */
 const FRIEND_POST_TEMPLATES: ReadonlyArray<{ text: string; agoMs: number }> = [
-  { text: '今天天气不错，出去走了走 ☀️', agoMs: 2 * 3_600_000 },
+  { text: '今天天气不错，出去走了走', agoMs: 2 * 3_600_000 },
   { text: '忙完这个项目，终于可以休息一下了', agoMs: 26 * 3_600_000 },
   { text: '新的开始，加油！', agoMs: 3 * 86_400_000 },
 ];
@@ -915,7 +916,8 @@ export function wxCanPay(methodId: string, amount: number): boolean {
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return wxLoadBalance() >= amount;
   if (methodId.startsWith('fcin-')) {
-    const fc = loadFamilyCardsIn().find((f) => f.id === methodId);
+    // 审计 #6：读取可用额度前先做跨月惰性重置（跨月后额度恢复再预检）
+    const fc = resetFamilyCardsInMonth().find((f) => f.id === methodId);
     return Boolean(fc) && Math.max(0, (fc?.monthlyLimit ?? 0) - (fc?.used ?? 0)) >= amount;
   }
   const c = loadCards().find((x) => x.id === methodId);
@@ -927,7 +929,8 @@ export function wxExecutePayment(methodId: string, amount: number, kind: '红包
   if (!(amount > 0)) return false;
   if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount });
   if (methodId.startsWith('fcin-')) {
-    const list = loadFamilyCardsIn();
+    // 审计 #6：扣款前先做跨月惰性重置（重置后额度足够才扣）；写回时保留 lastResetMonth 字段
+    const list = resetFamilyCardsInMonth();
     const fc = list.find((f) => f.id === methodId);
     if (!fc || Math.max(0, fc.monthlyLimit - fc.used) < amount) return false;
     saveFamilyCardsIn(list.map((f) => (f.id === methodId ? { ...f, used: Math.round((f.used + amount) * 100) / 100 } : f)));
@@ -948,7 +951,8 @@ export function wxExecutePayment(methodId: string, amount: number, kind: '红包
 export function wxMethodLabel(methodId: string): string {
   if (methodId === 'balance') return `零钱（可用 ${fmtMoney(wxLoadBalance())} 元）`;
   if (methodId.startsWith('fcin-')) {
-    const f = loadFamilyCardsIn().find((x) => x.id === methodId);
+    // 审计 #6：展示「本月可用」前先做跨月惰性重置（跨月后不再显示上月剩余）
+    const f = resetFamilyCardsInMonth().find((x) => x.id === methodId);
     return f ? `${f.fromName}的亲属卡（本月可用 ${fmtMoney(Math.max(0, f.monthlyLimit - f.used))} 元）` : '亲属卡';
   }
   const c = loadCards().find((x) => x.id === methodId);
@@ -1152,7 +1156,8 @@ function wxCardIsFinal(m: WxMsg): boolean {
 /** 收集「我发给 AI 的、待处理」的红包/转账/亲属卡（生成 system 待处理清单） */
 function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
   return msgs
-    .filter((m) => m.role === 'me' && !wxCardIsFinal(m))
+    // 审计 #19：已撤回的待领取卡不进 AI 待处理清单（撤回即用户收回，AI 不应再领取/收款/拒收）
+    .filter((m) => m.role === 'me' && !m.recalled && !wxCardIsFinal(m))
     .map<PendingCardInfo | null>((m) => {
       if (m.kind === 'redpacket' && m.rp) {
         return { id: m.rp.cid ?? m.id, kind: 'redpacket', amount: m.rp.amount, label: `祝福语"${m.rp.blessing}"` };
@@ -1170,12 +1175,14 @@ function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
 
 /**
  * 单聊红包/转账 24h 过期清算（群聊 expireStalePackets 的单聊版，审计 #5）：
- * 扫描所有单聊会话里「AI 发出、超过 24h 未领取/未收款」的红包与转账，原卡置终态（status='returned'，
- * 气泡变灰显示「已退回」、不可再领取/收款），并在会话末尾追加一条过期退回通知行
- * （「XX的红包已过期，X元已退回」，与群聊过期通知行同款居中灰字样式）。
- * 资金退回发起人（AI）：AI 没有零钱账户（钱包/账单只记机主收支，与群聊口径一致——群聊也只在
- * 发起人是机主时才写零钱账单），故退回只改卡片状态、不写余额与账单。
- * 亲属卡不在清算范围：收卡方可随时退还、按月扣费，没有「未领取悬挂」的资金语义。
+ * 扫描所有单聊会话里「超过 24h 未领取/未收款」的红包与转账，双向清算：
+ * - AI 发出的卡（role='peer'）：原卡置终态（status='returned'，气泡变灰显示「已退回」、不可再领取/收款），
+ *   通知行「XX的红包/转账已过期，X元已退回」。资金退回发起人（AI）：AI 没有零钱账户（钱包/账单只记
+ *   机主收支，与群聊口径一致——群聊也只在发起人是机主时才写零钱账单），故退回只改卡片状态、不写余额与账单。
+ * - 用户发出的卡（role='me'，审计 #5：此前只清 AI 侧，用户发卡扣款后 AI 不处理就永久悬挂）：原卡置
+ *   returned 终态 + 金额退回零钱（发卡时 wxExecutePayment 扣过款，退回写收入账单，对齐群聊「机主发起 →
+ *   退回零钱+写账单」口径）+ 通知行「你发给XX的红包/转账已过期退回，X元已退回零钱」。
+ * 亲属卡不在清算范围（双向均排除）：收卡方可随时退还、按月扣费，没有「未领取悬挂」的资金语义。
  * 返回发生变更的会话 id 列表（调用方据此把落盘变更合并进已打开会话的本地 state）；
  * wxSweepCardsRunning 防重入（挂载清算与回合结算清算可能重叠，重入直接跳过本轮）。
  */
@@ -1192,30 +1199,63 @@ async function wxExpireStalePeerCards(): Promise<string[]> {
       if (msgs.length === 0) continue;
       const notices: WxMsg[] = [];
       const next = msgs.map((m) => {
-        // 只清 AI 发出的卡（role='peer'）：用户发给 AI 的卡由 AI 动作标记处理，不在此过期
-        if (m.role !== 'peer' || now - m.time < 24 * 3600_000 || wxCardIsFinal(m)) return m;
-        if (m.kind === 'redpacket' && m.rp) {
-          notices.push({
-            id: uid(),
-            role: 'peer',
-            content: '',
-            time: now + notices.length,
-            kind: 'notice',
-            notice: { icon: 'rp', pre: `${displayNameOf(c)}的红包已过期，`, accent: `${fmtMoney(m.rp.amount)}元已退回` },
-          });
-          return { ...m, content: '[微信红包]（已退回）', rp: { ...m.rp, status: 'returned' as const } };
+        // 未到期或已是终态：幂等跳过（终态卡不重复清算，退款不双计）
+        if (now - m.time < 24 * 3600_000 || wxCardIsFinal(m)) return m;
+        if (m.role === 'peer') {
+          // AI 发的卡 → 退回 AI（AI 无零钱账户，不写余额与账单）
+          if (m.kind === 'redpacket' && m.rp) {
+            notices.push({
+              id: uid(),
+              role: 'peer',
+              content: '',
+              time: now + notices.length,
+              kind: 'notice',
+              notice: { icon: 'rp', pre: `${displayNameOf(c)}的红包已过期，`, accent: `${fmtMoney(m.rp.amount)}元已退回` },
+            });
+            return { ...m, content: '[微信红包]（已退回）', rp: { ...m.rp, status: 'returned' as const } };
+          }
+          if (m.kind === 'transfer' && m.tr) {
+            notices.push({
+              id: uid(),
+              role: 'peer',
+              content: '',
+              time: now + notices.length,
+              kind: 'notice',
+              notice: { icon: 'tr', pre: `${displayNameOf(c)}的转账已过期，`, accent: `${fmtMoney(m.tr.amount)}元已退回` },
+            });
+            // refundedBy='peer'：资金退回 AI 侧，详情页按既有退还语义显示「对方已退还」+ 退款时间
+            return { ...m, content: '[转账]（已退回）', tr: { ...m.tr, status: 'returned' as const, refundedAt: now, refundedBy: 'peer' as const } };
+          }
+          return m; // 亲属卡不在清算范围
         }
-        if (m.kind === 'transfer' && m.tr) {
-          notices.push({
-            id: uid(),
-            role: 'peer',
-            content: '',
-            time: now + notices.length,
-            kind: 'notice',
-            notice: { icon: 'tr', pre: `${displayNameOf(c)}的转账已过期，`, accent: `${fmtMoney(m.tr.amount)}元已退回` },
-          });
-          // refundedBy='peer'：资金退回 AI 侧，详情页按既有退还语义显示「对方已退还」+ 退款时间
-          return { ...m, content: '[转账]（已退回）', tr: { ...m.tr, status: 'returned' as const, refundedAt: now, refundedBy: 'peer' as const } };
+        if (m.role === 'me') {
+          // 用户发的卡 → 退回用户零钱（发卡时已扣款；退回=收入，写账单；已撤回的卡同样清算，避免金额永久悬挂）
+          if (m.kind === 'redpacket' && m.rp) {
+            wxPatchBalance(m.rp.amount, { kind: '红包', amount: m.rp.amount });
+            notices.push({
+              id: uid(),
+              role: 'peer',
+              content: '',
+              time: now + notices.length,
+              kind: 'notice',
+              notice: { icon: 'rp', pre: `你发给${displayNameOf(c)}的红包已过期退回，`, accent: `${fmtMoney(m.rp.amount)}元已退回零钱` },
+            });
+            return { ...m, content: '[微信红包]（已退回）', rp: { ...m.rp, status: 'returned' as const } };
+          }
+          if (m.kind === 'transfer' && m.tr) {
+            wxPatchBalance(m.tr.amount, { kind: '转账', amount: m.tr.amount });
+            notices.push({
+              id: uid(),
+              role: 'peer',
+              content: '',
+              time: now + notices.length,
+              kind: 'notice',
+              notice: { icon: 'tr', pre: `你发给${displayNameOf(c)}的转账已过期退回，`, accent: `${fmtMoney(m.tr.amount)}元已退回零钱` },
+            });
+            // 对方超 24h 未收款自动退回：详情页沿用「对方已退还」语义 + 退款时间
+            return { ...m, content: '[转账]（已退回）', tr: { ...m.tr, status: 'returned' as const, refundedAt: now, refundedBy: 'peer' as const } };
+          }
+          return m; // 亲属卡不在清算范围
         }
         return m;
       });
@@ -1234,7 +1274,8 @@ async function wxExpireStalePeerCards(): Promise<string[]> {
  * 应用 AI 的处理动作（领取/退回/拒收我发的红包/转账/收下/拒收亲属卡）：只处理「待处理」状态的目标（幂等），
  * 返回更新后的消息数组 + 动作产生的通知行/接收凭据卡（extras），由调用方按
  * 流式输出顺序插在动作发生位置。标记不带感谢语/理由，回应内容由 AI 人设正文承担。纯本地模拟：
- * 领取 → 记入领取人；退回 → 金额退回零钱（写账单）；亲属卡收下 → claimed + 存入「我收到的亲属卡」由调用方处理（这里只标记状态）。
+ * 领取 → 记入领取人；退回/拒收 → 金额退回零钱（写账单；审计 #3：拒收同退回均退款，仅卡面状态不同）；
+ * 亲属卡收下 → claimed + 钱包「我送出的」卡补写 status='active'（审计 #4：不再写「我收到的亲属卡」）。
  */
 function wxApplyAiActions(
   actions: RichAction[],
@@ -1270,8 +1311,11 @@ function wxApplyAiActions(
         wxPatchBalance(rp.amount, { kind: '红包', amount: rp.amount });
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}退回了你的`, accent: '红包' } });
       } else {
+        // 审计 #3：拒收=资金退回发起人（本函数只处理 role='me' 的卡，即用户发的卡）——与退回分支同款
+        // 退款+账单（此前只置终态不退款，金额永久悬挂）；通知行带「已退回」
         next[idx] = { ...m, content: '[微信红包]（已拒收）', rp: { ...rp, status: 'rejected' } };
-        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}拒收了你的`, accent: '红包' } });
+        wxPatchBalance(rp.amount, { kind: '红包', amount: rp.amount });
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}拒收了你的`, accent: '红包（已退回）' } });
       }
     } else if (m.kind === 'transfer' && m.tr) {
       const tr = m.tr;
@@ -1294,30 +1338,23 @@ function wxApplyAiActions(
           tr: { amount: tr.amount, note: tr.note, received: false, status: 'returned' as const, refundedAt, originTime: m.time, refundedBy: 'peer' as const },
         });
       } else {
+        // 审计 #3：拒收=资金退回发起人（同红包拒收分支）
         next[idx] = { ...m, content: '[转账]（已拒收）', tr: { ...tr, status: 'rejected' } };
-        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账' } });
+        wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账（已退回）' } });
       }
     } else if (m.kind === 'family' && m.fam) {
       const fam = m.fam;
       if (verb === 'claim') {
         next[idx] = { ...m, content: `[亲属卡]（${peer.name}已收下）`, fam: { ...fam, claimed: true, claimedAt: Date.now() } };
-        // AI 收下亲属卡 → 同步存入「我收到的亲属卡」（钱包亲属卡页可见；发红包/转账可用它支付）
-        const listIn = loadFamilyCardsIn();
-        if (!listIn.some((f) => f.friendId === peer.id)) {
-          saveFamilyCardsIn([
-            ...listIn,
-            {
-              id: `fcin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-              friendId: peer.id,
-              fromName: peer.name,
-              fromAvatar: peer.avatar,
-              relation: fam.relation,
-              monthlyLimit: fam.monthlyLimit,
-              used: 0,
-              createdAt: Date.now(),
-            },
-          ]);
-        }
+        // 审计 #4：AI 收下亲属卡只置发出卡终态，不再写入「我收到的亲属卡」——用户是赠予方、收卡方是 AI，
+        // 机主侧没有收到任何卡（旧实现方向反转：机主白得一张可支付的亲属卡且无人出资）。
+        // 补写钱包「我送出的」亲属卡 status='active'（存储为权威读改写；此前全库无 'active' 写入点，状态永不翻转）：
+        // 优先精确匹配同额度卡，退而取该联系人第一张待领取卡
+        const fcOut = loadFamilyCards();
+        let fcIdx = fcOut.findIndex((f) => f.friendId === peer.id && f.status === 'pending' && f.monthlyLimit === fam.monthlyLimit);
+        if (fcIdx < 0) fcIdx = fcOut.findIndex((f) => f.friendId === peer.id && f.status === 'pending');
+        if (fcIdx >= 0) saveFamilyCards(fcOut.map((f, i) => (i === fcIdx ? { ...f, status: 'active' as const } : f)));
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'fam', pre: `${peer.name}收下了你的`, accent: '亲属卡' } });
       } else {
         next[idx] = { ...m, content: '[亲属卡]（已退回）', fam: { ...fam, rejected: true } };
@@ -2924,7 +2961,7 @@ function RedPacketCompose({
   const [methodId, setMethodId] = useState('balance');
   const [methodOpen, setMethodOpen] = useState(false);
   const cards = loadCards();
-  const familyIn = loadFamilyCardsIn();
+  const familyIn = resetFamilyCardsInMonth(); // 审计 #6：进入发送页先做跨月惰性重置，支付方式行「本月可用」即本月真实额度
   const num = parseFloat(val || '0');
   const ok = num >= 0.01;
   const denyToast = () => {
@@ -3062,7 +3099,7 @@ export function TransferCompose({
   const [methodId, setMethodId] = useState('balance');
   const [methodOpen, setMethodOpen] = useState(false);
   const cards = loadCards();
-  const familyIn = loadFamilyCardsIn();
+  const familyIn = resetFamilyCardsInMonth(); // 审计 #6：进入发送页先做跨月惰性重置，支付方式行「本月可用」即本月真实额度
   const num = parseFloat(val || '0');
   const ok = num >= 0.01;
   const submit = () => {
@@ -4419,6 +4456,10 @@ function ChatPage({
     const voiceTurn =
       (m.kind === undefined || m.kind === 'text') &&
       m.content.trim().length > 0 &&
+      // 审计 #20：错误/兑底占位（error 标记或〔〕占位文案）不升级成语音条——占位文本会被 TTS 念出来，
+      // 且升级后 voice.localText（=占位原文）会回流进 AI 上下文（与下方历史构建的占位过滤同口径）
+      !m.error &&
+      !m.content.startsWith('〔') &&
       decideAiVoiceMessage(sessionKey);
     const body = voiceTurn
       ? '[语音]'
@@ -4486,6 +4527,8 @@ function ChatPage({
    *  （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
    *  点弹窗非按钮区域才展开全屏来电页；QQ 侧同结构但不弹窗）。finalize 与接力拉取投递共用 */
   const triggerAiVoiceCall = () => {
+    // 审计 #8：电话 App 通话全屏层进行中（useUI.callActive）不叠加 AI 来电——其他端通话中不被打断
+    if (useUI.getState().callActive) return;
     // 40-a 拉黑拦截（审计破口二）：用户拉黑 AI（byUser）后 [语音通话] 不弹真实来电——
     // request-only 模式下正文都被丢弃，来电邀请更不能送达；入口直接 return（wantCallSeen 处另有双保险）
     if (loadBlock('wx', peer.id).byUser) return;
@@ -4865,7 +4908,10 @@ function ChatPage({
               : '[图片]'
             : m.kind === 'voice'
             ? // 语音消息：AI 直接读转写文本（自然对话）；未识别时读本地原文（AI 语音/文字转语音），再退回占位
-              m.voice?.transcript || m.voice?.localText || '[语音]'
+              // 审计 #20：错误占位升级来的语音条（历史遗留数据）localText 是错误文案——改读占位标记不进上下文
+              m.error
+              ? '[语音]'
+              : m.voice?.transcript || m.voice?.localText || '[语音]'
             : m.kind === 'location'
             ? // 位置消息：AI 读到完整位置文本（名称/地址/经纬度/发送时间），问“我在哪”能直接答出地点名
               locationAiText(m.loc, m.time)
@@ -5720,6 +5766,12 @@ function ChatPage({
     if (!m) return;
     switch (key) {
       case 'stt': {
+        // 审计 #37：投递进行中拒绝转文字（与删除/撤回同口径双查守卫）——投递 tick 的 loadMsgs 读旧存储，
+        // 转写结果会被投递落盘的旧内容覆盖回去
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          onToast('对方正在回复，请稍后再试');
+          return;
+        }
         // 语音消息「转文字」：已有结果 → 再点一次=取消转文字（收起结果）；否则现场识别（builtin 免配置），失败可重试
         const v = m.voice;
         if (!v) break;
@@ -5805,6 +5857,8 @@ function ChatPage({
           })
         );
         onToast('已撤回');
+        // 审计 #17：撤回同步清除该消息的记忆素材（原文片段/向量来源），不留在记忆检索结果里
+        void memPurgeMessageSources(peer.id, m.id);
         break;
       }
       case 'forward':
@@ -5965,6 +6019,19 @@ function ChatPage({
     if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
   };
 
+  /** 卡片被领取/收款/接受后的 AI 感知（审计 #16）：投递与 refundPeerCard 的 kickRefund 同款——
+   *  回复中（流式/连发投递）先入补跑队列，空闲直接注入系统事件开回合；自聊（无对方）不触发。
+   *  不用 pushAiEvent：事件仅在会话挂载时 drain，用户就在当前会话里操作，「等重进才有反应」
+   *  正是审计抱怨的「无即时反应」，故直接走回合注入/补跑队列 */
+  const notifyPeerClaimed = (ev: string) => {
+    if (peer.id === me.id) return;
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      wxQueueAdd(peer.id, ev); // 对方正在回复：事件随补跑回合保留，流收尾且投递完毕后自动触发回应
+      return;
+    }
+    runAiTurnRef.current?.(null, [], ev);
+  };
+
   /** 領红包（仅限对方发的）：金额存入零钱 + 记收入账单 + 聊天里发「你领取了XX的红包」提示行 → 进详情；自己发的红包不能自己领 */
   const openRedPacket = (id: string) => {
     const m = msgs.find((x) => x.id === id);
@@ -5978,6 +6045,8 @@ function ChatPage({
     ]);
     setOpeningId(null);
     setDetailId(id);
+    // 审计 #16：AI 即时感知「红包被领取」并人设化回应（文案对齐既有系统事件风格）
+    notifyPeerClaimed(`（系统事件：对方领取了你发的红包（¥${m.rp.amount}）。请用符合人设的一两句话自然回应这件事。）`);
   };
 
   /** 打开红包详情（我发的红包由 AI 用动作标记处理，这里只看详情） */
@@ -6012,6 +6081,10 @@ function ChatPage({
     setReceiveId(null);
     setDetailId(id);
     onToast(`已收款 ¥${fmtMoney(m.tr.amount)}`);
+    // 审计 #16：AI 即时感知「转账被收下」并人设化回应（仅对方发的卡；收款页只对 peer 卡开放，这里再拦一道）
+    if (m.role === 'peer') {
+      notifyPeerClaimed(`（系统事件：对方收下了你的转账（¥${m.tr.amount}）。请用符合人设的一两句话自然回应这件事。）`);
+    }
   };
 
   /** 原生相机/相册选到的图片（需求2）：只读图入输入框下方预览条，不上屏也不触发 AI；
@@ -6030,7 +6103,8 @@ function ChatPage({
     if (staged.length > 0) setPendingImgs((prev) => [...prev, ...staged].slice(0, 9));
   };
 
-  /** 发送位置卡片消息（内置地点 / 自定义位置；经纬度随消息落盘供 AI 感知“用户在哪”） */
+  /** 发送位置卡片消息（内置地点 / 自定义位置；经纬度随消息落盘供 AI 感知“用户在哪”）。
+   *  审计 #36：与表情消息同口径触发 AI 回合（此前只落盘不触发，AI 对位置消息永远无回应） */
   const sendLocation = (name: string, address: string, coords?: { lat?: number; lng?: number }) => {
     // 40-a 拉黑拦截：被角色拉黑（byChar）后位置也发不出
     if (loadBlock('wx', peer.id).byChar) {
@@ -6038,8 +6112,18 @@ function ChatPage({
       return;
     }
     setPlusOpen(false);
-    setMsgs((prev) => [...prev, { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'location', loc: { name, address, lat: coords?.lat, lng: coords?.lng } }]);
+    const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'location', loc: { name, address, lat: coords?.lat, lng: coords?.lng } };
+    setMsgs((prev) => [...prev, msg]);
     setCompose(null);
+    if (peer.id === me.id) return;
+    // #35 排队口径（与 sendSticker 一致）：对方正在回复（流式/连发投递）时入列，这轮结束后自动补跑
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      markDeliverBoundary(sessionKey, msg.id);
+      wxQueueAdd(peer.id);
+      onToast('位置已发出，对方回完这轮就聊');
+      return;
+    }
+    runAiTurnRef.current?.(null, [msg]);
   };
 
   /** 发送表情消息（表情面板点选；AI 通过 stk.meaning 理解表情含义并据此回复）。
@@ -6095,6 +6179,10 @@ function ChatPage({
       ]);
     }
     onToast('已领取，发红包/转账时可用它支付');
+    // 审计 #16：AI 即时感知「亲属卡被接受」并人设化回应（领取页只对 peer 卡开放，这里再拦一道）
+    if (m.role === 'peer') {
+      notifyPeerClaimed(`（系统事件：对方接受了你的亲属卡。请用符合人设的一两句话自然回应这件事。）`);
+    }
   };
 
   const handlePlusAction = (a: PlusAction) => {
@@ -9670,6 +9758,9 @@ function MainScreen({
   };
   const deleteSession = (id: string) => {
     saveMsgs(id, []); // 清空聊天记录；有新消息时该会话自动重新出现
+    // 审计 #18：同步清记忆轮次计数/锚点（mem-msgcount:/mem-anchor:/mem-round: 该联系人全部键，不动碎片），
+    // 避免旧锚点残留让清空后的新会话「凭空续旧记忆」
+    void memResetConvoCounters(id);
     const nextHidden = hidden.includes(id) ? hidden : [...hidden, id];
     saveStrList(LS_CHAT_HIDDEN, nextHidden);
     setHidden(nextHidden);

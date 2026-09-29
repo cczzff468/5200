@@ -1191,16 +1191,20 @@ export function QqGroupInfoPage({
           退出群聊
         </button>
       </div>
-      <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
-        <button
-          type="button"
-          data-testid="qq-groupinfo-dissolve"
-          onClick={() => setConfirmDissolve(true)}
-          className="w-full rounded-[12px] px-4 py-[13px] text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
-        >
-          解散群聊
-        </button>
-      </div>
+      {/* #23 解散群聊仅群主可见：群主转让给 AI 后普通成员机主不再能一键解散全群（数据层不校验，UI 门控）；
+          非群主用「退出群聊」复用既有退群路径（仅本机删除，群与 AI 成员保留） */}
+      {amOwner && (
+        <div className="mx-3 mt-2.5 rounded-[12px] bg-white dark:bg-[#1B1C1F]">
+          <button
+            type="button"
+            data-testid="qq-groupinfo-dissolve"
+            onClick={() => setConfirmDissolve(true)}
+            className="w-full rounded-[12px] px-4 py-[13px] text-left text-[15px] text-[#F5455C] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+          >
+            解散群聊
+          </button>
+        </div>
+      )}
       <div className="py-7 text-center text-[11px] text-black/30 dark:text-white/30">
         群聊为本地模拟，不含任何真实资金操作
       </div>
@@ -1904,6 +1908,13 @@ function GroupTrDetailPage({
 let activeGroupKey: string | null = null;
 const groupSpeaker = new Map<string, string>();
 
+// #27 AI 成员 @ 级联节流（模块态，双端同构）：groupCascadeAt 记录同群同成员上次被级联必答的时间
+// （5 分钟冷却，防用户消息回合与级联回合叠加刷屏）；groupCascadeDepth>0 表示正处于级联触发的回合，
+// 禁止再级联（防 A@B → B@C → … 无限链）。
+const GROUP_CASCADE_COOLDOWN_MS = 5 * 60_000;
+const groupCascadeAt = new Map<string, number>();
+let groupCascadeDepth = 0;
+
 export function QqGroupChatPage({
   group,
   me,
@@ -2122,7 +2133,11 @@ export function QqGroupChatPage({
         content: '',
         time: now,
         kind: 'notice',
-        noticeText: `${m.senderId === 'me' ? '你' : m.senderName || '有人'}的红包已过期${remaining > 0 ? `，${fmtMoney(remaining)}元已退回` : ''}`,
+        // #22 「已退回」只对机主发起的红包真实成立（成员/AI 无钱包，退款无处可退）：
+        // 非机主发起的过期行只说「已过期」，不再虚标「X元已退回」
+        noticeText: `${m.senderId === 'me' ? '你' : m.senderName || '有人'}的红包已过期${
+          m.senderId === 'me' && remaining > 0 ? `，${fmtMoney(remaining)}元已退回` : ''
+        }`,
       });
     }
   }, [appendMsg, gid, patchGroupMsg]);
@@ -2307,7 +2322,10 @@ export function QqGroupChatPage({
           appendFundNotice('tr', `${charName}退回了${fromLabel}`, '转账');
         } else {
           patchGroupMsg(m.id, { tr: { ...tr, status: 'rejected' } });
-          appendFundNotice('tr', `${charName}拒收了${fromLabel}`, '转账');
+          // #3 拒收也退回：机主发的卡不能黑洞——拒收即原路退回钱包+写账单（与退回分支同口径，
+          // gainToWallet 内部同时写钱包明细账单）；成员（AI）发的卡保持纯状态（AI 无钱包，本就不扣款）
+          if (fromMe) gainToWallet(tr.amount, '转账退回');
+          appendFundNotice('tr', `${charName}拒收了${fromLabel}`, fromMe ? '转账（已退回）' : '转账');
         }
       }
     },
@@ -2456,8 +2474,11 @@ export function QqGroupChatPage({
         const stickersOn = getStickersOn(sKey);
 
         // 回复条数（按群独立，发送时现场读取）：条数约束跟随聊天设置——单条模式只发一条，
-        // 多条模式条数交给【连发短消息】指令（下方 system 拼装处），此处不再写死
-        const replyCount = getReplyCount(sKey);
+        // 多条模式条数交给【连发短消息】指令（下方 system 拼装处），此处不再写死。
+        // #10 客户端硬上限：群聊单成员连发条数收敛 min(N,5)——提示词层 buildReplyCountPrompt groupMode
+        // 已同口径收敛，这里对传给 chat-stream-store 的分段器 cap 与 maxTokens 同步收敛（原实现把
+        // 原始 replyCount（最大 30）直接传下去，分段器 cap/maxTokens 不受限，单成员可连发 30 条刷屏）
+        const replyCount = Math.min(getReplyCount(sKey), 5);
         // 群聊规则（每个角色独立声明：当前是群聊、参与者有谁、只代表自己、禁复读、可互相对话）
         const others = g.memberIds
           .map((id) => contactsRef.current.find((c) => c.id === id))
@@ -2867,12 +2888,15 @@ export function QqGroupChatPage({
                     apiConfig,
                     () =>
                       loadGroupMsgs(gid)
-                        .filter((m) => m.kind !== 'notice' && !m.recalled)
+                        // #21 「（…）」空回复占位不进记忆素材（精确匹配占位串；不加 error 标记避免影响气泡 UI）
+                        .filter((m) => m.kind !== 'notice' && !m.recalled && m.content !== '（…）')
                         .slice(-30)
-                        .map((m) =>
+                        .map((m): { role: 'me' | 'peer'; text: string; speakerPrefixed?: boolean } =>
                           m.role === 'me'
-                            ? { role: 'me' as const, text: msgTextOf(m) }
-                            : { role: 'peer' as const, text: `${m.senderName}：${msgTextOf(m)}` }
+                            ? { role: 'me', text: msgTextOf(m) }
+                            // #9 peer 消息客户端已拼「发言人：」前缀：逐条带 speakerPrefixed=true，
+                            // /api/memory/extract 据此跳过 peerName 前缀（不再「陈默：陈默：火锅！」）
+                            : { role: 'peer', text: `${m.senderName}：${msgTextOf(m)}`, speakerPrefixed: true }
                         ),
                     // 消息计数锚点用：未 slice/map 的有效消息数组（群消息流，含其他成员的消息）
                     () => loadGroupMsgs(gid).filter((m) => m.kind !== 'notice' && !m.recalled),
@@ -2925,7 +2949,22 @@ export function QqGroupChatPage({
     async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
       const g = getGroup(gid);
-      if (!g || g.memberIds.length === 0) return;
+      if (!g) return; // 群已解散：无会话可提示，静默返回
+      if (g.memberIds.length === 0) {
+        // #25 空群零反馈修复：群里只剩机主（AI 成员已全部移出/未拉人）时发消息不再石沉大海，
+        // 落一条群系统提示（notice 不进 AI 上下文也不进记忆，样式同下方网络错误提示行）
+        appendMsg({
+          id: uid(),
+          role: 'me',
+          senderId: 'me',
+          senderName: '',
+          content: '',
+          time: Date.now(),
+          kind: 'notice',
+          noticeText: '群里暂时没有人能回复',
+        });
+        return;
+      }
       runningRef.current = true;
       try {
         expireStalePackets(); // 每轮开始前先清算过期红包（终态不可再改）
@@ -2941,6 +2980,21 @@ export function QqGroupChatPage({
         const mentioned = (trigger ? parseMentions(trigger.content) : []).filter((m) => all.includes(m));
         const ordered =
           mentioned.length > 0 ? [...mentioned, ...all.filter((m) => !mentioned.includes(m))] : all;
+        if (ordered.length === 0) {
+          // #25 全员禁言零反馈修复：本轮没有人能开口也落一条系统提示（notice 不进 AI 上下文不进记忆）；
+          // 空路径提前收口，finally 的排队补跑照常走（下一轮再试，禁言到期自然恢复）
+          appendMsg({
+            id: uid(),
+            role: 'me',
+            senderId: 'me',
+            senderName: '',
+            content: '',
+            time: Date.now(),
+            kind: 'notice',
+            noticeText: '群里暂时没有人能回复',
+          });
+          return;
+        }
         // 识图输入：从末尾向前收集连续「我」发的图片（最多 3 张，与单聊同规则；带消息 id，供规则排除与描述回写落盘）
         const turnImageSrcs: { src: string; id: string }[] = [];
         const persisted = loadGroupMsgs(gid);
@@ -2951,6 +3005,8 @@ export function QqGroupChatPage({
         }
         // 收集每个成员的回合结果（#21）：'ok'=有产出 / 'skip'=自判沉默等 / 'error'=流失败
         const results: ('ok' | 'skip' | 'error')[] = [];
+        // #27 级联素材：本轮最后一条 AI 成功发言（发言人 id + 消息文本），供回合结束后解析 @ 提及
+        let lastOkMsg: { senderId: string; text: string } | null = null;
         for (const char of ordered) {
           // 中途变动守卫（audit-chat #6）：每次开口前重读群当前状态（getGroup 现读存储，非回合开始
           // 快照）——群已解散 → 整轮终止；前面成员的 [移出群聊]/[禁言] 管理标记当场生效后，排在
@@ -2960,7 +3016,18 @@ export function QqGroupChatPage({
           if (!gNow.memberIds.includes(char.id) || isGroupMuted(gNow, char.id)) continue;
           groupSpeaker.set(sKey, char.id);
           if (mountedRef.current) setSpeakerId(char.id);
-          results.push(await runCharTurn(char, !mentioned.includes(char), turnImageSrcs));
+          const r = await runCharTurn(char, !mentioned.includes(char), turnImageSrcs);
+          results.push(r);
+          // #27 级联素材：该成员本轮最后一条产出消息（已落盘或在投递队列尾巴），供回合结束后解析 @ 提及
+          if (r === 'ok') {
+            const produced = sortMsgsByTime(
+              [...loadGroupMsgs(gid), ...peekPendingMsgs<WxGroupMsg>(sKey)].filter(
+                (x) => x.role === 'peer' && x.senderId === char.id && !x.recalled && x.kind !== 'notice',
+              ),
+            );
+            const lastM = produced[produced.length - 1];
+            if (lastM) lastOkMsg = { senderId: char.id, text: msgTextOf(lastM) };
+          }
           await sleep(420);
         }
         // #21 整轮没有任何成员成功产出且存在流错误 → 落一条系统提示（notice 消息不进 AI 上下文
@@ -2977,6 +3044,43 @@ export function QqGroupChatPage({
             kind: 'notice',
             noticeText: '（网络开小差了，这条消息没有得到回复）',
           });
+        }
+        // #27 AI 成员回复 @ 其他成员 → 轻量级联必答：解析本轮最后一条 AI 成功发言里的 @ 提及
+        //（parseMentions 只匹配 AI 成员名，天然排除机主与发言者本人），命中且仍在群、未被禁言、
+        // 5 分钟冷却通过 → 80ms 后对被 @ 成员跑一轮自判回合（allowSkip=true，人设自决接不接话）。
+        // 防刷屏三保险：单回合最多触发 1 个级联；同成员 5 分钟冷却（模块级 groupCascadeAt）；
+        // groupCascadeDepth>0（级联回合进行中）不再触发，不会 A@B → B@C → … 无限链。
+        const cascadeSrc = lastOkMsg;
+        if (cascadeSrc && groupCascadeDepth === 0) {
+          const gEnd = getGroup(gid);
+          const cascadeTargets = gEnd
+            ? parseMentions(cascadeSrc.text).filter(
+                (c) => c.id !== cascadeSrc.senderId && gEnd.memberIds.includes(c.id) && !isGroupMuted(gEnd, c.id),
+              )
+            : [];
+          const target = cascadeTargets[0]; // 单回合最多 1 个级联
+          if (target) {
+            const coolKey = `${gid}:${target.id}`;
+            if (Date.now() - (groupCascadeAt.get(coolKey) ?? 0) >= GROUP_CASCADE_COOLDOWN_MS) {
+              groupCascadeAt.set(coolKey, Date.now());
+              window.setTimeout(() => {
+                if (runningRef.current || isChatStreaming(sKey)) return;
+                // 80ms 窗口内群可能解散/成员变动/被禁言（AI 管理标记随时生效），触发前再核一次
+                const gNow = getGroup(gid);
+                if (!gNow || !gNow.memberIds.includes(target.id) || isGroupMuted(gNow, target.id)) return;
+                const cascadeChar = contactsRef.current.find((c) => c.id === target.id) ?? null;
+                if (!cascadeChar) return;
+                groupSpeaker.set(sKey, target.id);
+                if (mountedRef.current) setSpeakerId(target.id);
+                groupCascadeDepth = 1; // 深度标记：级联回合内不再触发下一跳
+                void runCharTurn(cascadeChar, true, []).finally(() => {
+                  groupCascadeDepth = 0;
+                  groupSpeaker.delete(sKey);
+                  if (mountedRef.current) setSpeakerId(null);
+                });
+              }, 80);
+            }
+          }
         }
       } finally {
         runningRef.current = false;
@@ -3463,6 +3567,8 @@ export function QqGroupChatPage({
     patchGroupMsg(msgId, { rp: { ...rp, claims: [...rp.claims, { contactId: 'me', name: me.name, avatar: me.avatar, amount: amt, ts: Date.now() }] } });
     gainToWallet(amt, '红包');
     appendFundNotice('rp', `你领取了${m.senderId === 'me' ? '自己发的' : m.senderName || '群友'}的`, '红包');
+    // #16 领取成员（AI）发的红包后给发起成员一次回应回合（对照 receiveGroupTr/returnGroupTr 的 nudge 口径）
+    if (m.senderId !== 'me') nudgeAiSender(m.senderId);
     setLayer({ view: 'rp-detail', msgId });
   };
 
@@ -3644,7 +3750,9 @@ export function QqGroupChatPage({
 
   /** 重新生成（仅 AI 气泡）：只删除该条成员回复（不影响其他成员的消息），以剩余历史重新请求该角色生成。
    *  B-4 旁路守卫：以群当前成员表/禁言表为准——被踢出群的成员不再靠 contactsRef 兜底放回来，
-   *  被禁言成员也不能借「重新生成」开口（与 runGroupTurn 的过滤同一口径：memberIds + isGroupMuted）。 */
+   *  被禁言成员也不能借「重新生成」开口（与 runGroupTurn 的过滤同一口径：memberIds + isGroupMuted）。
+   *  #28 竞态修复：删除动作移入 80ms setTimeout 回调内、预检（群存在+成员在群+未禁言）通过之后执行——
+   *  预检失败不删原消息并提示；极端竞态下 runCharTurn 仍 skip（如流被抢占）时按原文回滚落盘，不丢消息。 */
   const regenerate = (m: WxGroupMsg) => {
     if (runningRef.current || isChatStreaming(sKey)) {
       onToast('成员们还在回复，稍等一下');
@@ -3664,16 +3772,35 @@ export function QqGroupChatPage({
       onToast('该成员已不在群里');
       return;
     }
-    const next = loadGroupMsgs(gid).filter((x) => x.id !== m.id);
-    saveGroupMsgs(gid, next);
-    if (mountedRef.current) setMsgs(next);
     window.setTimeout(() => {
+      // #28 预检（回调内重查，原消息在预检通过前不动）：80ms 窗口内群可能解散/成员被移出/被禁言
+      const gNow = getGroup(gid);
+      if (!gNow || !gNow.memberIds.includes(char.id) || isGroupMuted(gNow, char.id)) {
+        onToast('群聊状态已变化，无法重新生成');
+        return; // 预检失败：不删原消息
+      }
+      const all = loadGroupMsgs(gid);
+      if (!all.some((x) => x.id === m.id)) return; // 原消息已不在（用户已手动删除）：无事可做
+      saveGroupMsgs(gid, all.filter((x) => x.id !== m.id));
+      if (mountedRef.current) setMsgs(loadGroupMsgs(gid));
       groupSpeaker.set(sKey, char.id);
       if (mountedRef.current) setSpeakerId(char.id);
-      void runCharTurn(char, false, []).finally(() => {
-        groupSpeaker.delete(sKey);
-        if (mountedRef.current) setSpeakerId(null);
-      });
+      void runCharTurn(char, false, [])
+        .then((r) => {
+          // #28 极端竞态兜底：预检通过但 runCharTurn 仍 skip（如流被其他回合抢占）→ 原消息按原文回滚
+          if (r === 'skip') {
+            const cur = loadGroupMsgs(gid);
+            if (!cur.some((x) => x.id === m.id)) {
+              saveGroupMsgs(gid, sortMsgsByTime([...cur, m]));
+              if (mountedRef.current) setMsgs(loadGroupMsgs(gid));
+              onToast('成员们还在回复，稍等一下');
+            }
+          }
+        })
+        .finally(() => {
+          groupSpeaker.delete(sKey);
+          if (mountedRef.current) setSpeakerId(null);
+        });
     }, 80);
   };
 
@@ -3870,7 +3997,9 @@ export function QqGroupChatPage({
         copyText(msgSnapshotOf(m), onToast);
         break;
       case 'del': {
-        if (runningRef.current || isChatStreaming(sKey)) {
+        // #24 补 isAiDelivering 守卫：成员回复还在按打字节奏逐条投递（未落盘完）时也不可删除，
+        // 防投递中的消息被删后队列后续条目继续落库造成半截对话
+        if (runningRef.current || isChatStreaming(sKey) || isAiDelivering(sKey)) {
           onToast('成员们还在回复，稍等一下');
           return;
         }
@@ -3896,7 +4025,8 @@ export function QqGroupChatPage({
         setSelectedIds([m.id]);
         break;
       case 'recall': {
-        if (runningRef.current || isChatStreaming(sKey)) {
+        // #24 补 isAiDelivering 守卫：投递进行中不可撤回（同 del，防半截对话）
+        if (runningRef.current || isChatStreaming(sKey) || isAiDelivering(sKey)) {
           onToast('成员们还在回复，稍等一下');
           return;
         }
@@ -3957,7 +4087,8 @@ export function QqGroupChatPage({
   /** 多选批量删除 */
   const batchDelete = () => {
     if (selectedIds.length === 0) return;
-    if (runningRef.current || isChatStreaming(sKey)) {
+    // #24 补 isAiDelivering 守卫：投递进行中不可批量删除（同单条 del）
+    if (runningRef.current || isChatStreaming(sKey) || isAiDelivering(sKey)) {
       onToast('成员们还在回复，稍等一下');
       return;
     }
