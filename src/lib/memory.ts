@@ -987,6 +987,41 @@ async function callMemoryApi<T extends ExtractApiResult & SummarizeApiResult>(
 /** 归一化文本（去空白）——精确去重键 */
 const normText = (s: string) => s.replace(/\s+/g, '');
 
+/** 碎片容量软上限（按联系人）：appendFragments 写入后超出即择劣淘汰，防止只增不减无限膨胀 */
+const MEM_FRAGMENT_CAP = 500;
+
+/** 权重淘汰序（低权重先淘汰）：high=2 / normal=1 / low=0，与 memory-core 的 higherWeight 同口径 */
+function weightEvictRank(w?: MemWeight): number {
+  return w === 'high' ? 2 : w === 'low' ? 0 : 1;
+}
+
+/**
+ * 碎片软上限淘汰：超出 MEM_FRAGMENT_CAP 时按「已消费（consumedAt 非空，召回已由核心/长期代表）
+ * → 权重低 → createdAt 最旧」优先淘汰，直到回到上限内。
+ * 幂等：排序键全为静态字段且比较器全序（同序保持原相对顺序），淘汰后条数回到上限内、
+ * 下次调用不再触发；去重逻辑不受影响（淘汰条目随 seen 集合消失，同内容再提取会按全新记忆重建）。
+ * batchIds = 本批新增（保护不淘汰：刚提取的记忆是最新信号，且需与返回值 added 保持一致）；
+ * 兜底：非本批候选不足时（极端批量）从本批按同序补足，保证上限始终成立。
+ */
+function capFragments(next: MemFragment[], batchIds: Set<string>): MemFragment[] {
+  if (next.length <= MEM_FRAGMENT_CAP) return next;
+  const overflow = next.length - MEM_FRAGMENT_CAP;
+  const byEvictOrder = (a: MemFragment, b: MemFragment): number =>
+    Number(Boolean(a.consumedAt)) - Number(Boolean(b.consumedAt)) ||
+    weightEvictRank(a.weight) - weightEvictRank(b.weight) ||
+    a.createdAt - b.createdAt;
+  const evict = new Set<string>();
+  const pick = (list: MemFragment[]) => {
+    for (const f of list) {
+      if (evict.size >= overflow) return;
+      evict.add(f.id);
+    }
+  };
+  pick(next.filter((f) => !batchIds.has(f.id)).sort(byEvictOrder));
+  if (evict.size < overflow) pick(next.filter((f) => batchIds.has(f.id)).sort(byEvictOrder));
+  return evict.size > 0 ? next.filter((f) => !evict.has(f.id)) : next;
+}
+
 /**
  * 追加碎片（矛盾更新优先，其次三层去重）：
  * 0) 矛盾更新（模型标注 supersedes 且目标存在）：旧记忆标记 supersededAt/supersededBy（「已更新」，
@@ -1105,7 +1140,11 @@ function appendFragments(
     seen.add(key);
     added.push(newItem(content, item));
   }
-  if (added.length > 0 || merged > 0 || superseded > 0) writeJSON(fragKey(contactId), [...list, ...added]);
+  if (added.length > 0 || merged > 0 || superseded > 0) {
+    // 容量软上限：写入前对合并后的全量做一次择劣淘汰（超出 500 条时优先丢
+    // 已消费 → 低权重 → 更早创建的碎片），防止碎片库只增不减无限膨胀
+    writeJSON(fragKey(contactId), capFragments([...list, ...added], new Set(added.map((f) => f.id))));
+  }
   return { added, merged, superseded };
 }
 
@@ -1678,15 +1717,46 @@ interface RawishMsg {
   recalled?: unknown;
   error?: unknown;
   loc?: unknown;
+  /** kind='voice'：语音消息数据（transcript=STT 转写 / localText=朗读原文，wx/qq/sms 同构） */
+  voice?: unknown;
+  /** kind='image'：图片消息数据（desc=识图描述，旧记录无此字段照常兼容） */
+  img?: unknown;
+  /** kind='sticker'：表情消息数据（meaning=含义） */
+  stk?: unknown;
 }
 
 function cardLabel(kind: unknown): string | null {
   if (kind === 'redpacket') return '[红包]';
   if (kind === 'transfer') return '[转账]';
   if (kind === 'family') return '[亲属卡]';
-  if (kind === 'image') return '[图片]';
-  if (kind === 'sticker') return '[表情]';
   return null;
+}
+
+/** 图片消息的记忆标签：识图 desc 有值时带「图片内容」（与群聊 memGroupMsgText 同口径，旧记录无 desc 照常兼容） */
+function imageLabel(img: unknown): string {
+  const d =
+    img && typeof img === 'object' && typeof (img as { desc?: unknown }).desc === 'string'
+      ? (img as { desc: string }).desc.trim()
+      : '';
+  return d ? `[图片]（图片内容：${d}）` : '[图片]';
+}
+
+/** 语音消息的记忆标签：转写优先（stt 完成后可读），其次朗读原文（AI 语音消息/文字转语音同源冗余）；
+ *  都识别不出用 [语音] 占位（与群聊 memGroupMsgText 同口径，语音不再整条丢弃） */
+function voiceLabel(voice: unknown): string {
+  const v = voice && typeof voice === 'object' ? (voice as { transcript?: unknown; localText?: unknown }) : null;
+  const transcript = typeof v?.transcript === 'string' ? v.transcript.trim() : '';
+  const localText = typeof v?.localText === 'string' ? v.localText.trim() : '';
+  return transcript || localText || '[语音]';
+}
+
+/** 表情消息的记忆标签：meaning 有值时并入（与群聊 memGroupMsgText 同口径） */
+function stickerLabel(stk: unknown): string {
+  const d =
+    stk && typeof stk === 'object' && typeof (stk as { meaning?: unknown }).meaning === 'string'
+      ? (stk as { meaning: string }).meaning.trim()
+      : '';
+  return d ? `[表情] ${d}` : '[表情]';
 }
 
 /** 位置消息的记忆标签：带地点名/地址（提取器能记住“用户去过哪/在哪”，后续聊天可引用）；解析不出地名回退 [位置] */
@@ -1699,20 +1769,42 @@ function locLabelOf(loc: unknown): string {
   return `[发送了位置「${name}」${addr && addr !== name ? `（${addr}）` : ''}]`;
 }
 
-/** 把任意 App 的消息数组整理成 {role, text} 问答对（撤回/失败/空消息剔除） */
+/**
+ * 错误占位文案过滤（双保险）：单聊流失败/空回复会落「〔AI 服务暂时不可用…〕」「〔对方暂时没有回复，
+ * 请稍后再试〕」这类占位消息（并行修复会给新占位补 error:true，旧数据可能漏标）——
+ * 与聊天历史构建的过滤同口径（wechat.tsx 历史映射同样剥这三类前缀）；
+ * 整段「〔…〕」括号占位也被 〔 前缀覆盖。占位消息不进记忆素材，防止沉淀出
+ * 「TA 说对方暂时没有回复」这类脏碎片。
+ */
+function isMemErrPlaceholder(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith('〔') || t.startsWith('（AI') || t.startsWith('（对方暂时');
+}
+
+/** 把任意 App 的消息数组整理成 {role, text} 问答对（撤回/失败/错误占位剔除）。
+ *  富媒体与群聊 memGroupMsgText 同口径：语音带转写、图片带识图描述、表情带含义、位置带地名；
+ *  其余卡片类映射为短标签，保证提取器可读 */
 export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn[] {
   const out: MemConvoTurn[] = [];
   for (const raw of msgs) {
     if (!raw || typeof raw !== 'object') continue;
     const m = raw as RawishMsg;
     if (m.recalled === true || m.error === true) continue;
-    // 位置消息带地名进记忆（后续聊天可引用）；其余卡片类映射为短标签
-    const label = m.kind === 'location' ? locLabelOf(m.loc) : cardLabel(m.kind);
+    const label =
+      m.kind === 'location'
+        ? locLabelOf(m.loc)
+        : m.kind === 'voice'
+          ? voiceLabel(m.voice)
+          : m.kind === 'image'
+            ? imageLabel(m.img)
+            : m.kind === 'sticker'
+              ? stickerLabel(m.stk)
+              : cardLabel(m.kind);
     const text =
       label ??
       ((typeof m.content === 'string' ? m.content.trim() : '') ||
         (typeof m.text === 'string' ? m.text.trim() : ''));
-    if (!text) continue;
+    if (!text || isMemErrPlaceholder(text)) continue;
     const isMe = m.role === 'me' || m.role === 'user';
     out.push({ role: isMe ? 'me' : 'peer', text: text.slice(0, 400) });
   }

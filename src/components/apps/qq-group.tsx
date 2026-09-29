@@ -233,6 +233,11 @@ function memberNameOf(c: ContactRecord): string {
   return displayNameOf(c);
 }
 
+/** 正则元字符转义（@ 提及边界匹配用：成员显示名可能含 . * + 等正则特殊字符） */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** AI 自判跳过标记：整条回复只有这个标记时不落盘（不进消息、不提取记忆、不计未读） */
 const SKIP_RE = /^\[?\s*(?:SKIP|跳过)\s*\]?$/i;
 
@@ -2144,9 +2149,38 @@ export function QqGroupChatPage({
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  /** 解析草稿里的 @（按成员显示名精确匹配） */
-  const parseMentions = (text: string): ContactRecord[] =>
-    members.filter((c) => text.includes(`@${memberNameOf(c)}`));
+  /** 解析文本里的 @ 提及（按成员显示名匹配，@名字 后必须跟边界——audit-chat #9 前缀误匹配修复）：
+   *  成员按名字长度降序逐一匹配、命中后消费该段文本（互为前缀的名字不互相吞并：
+   *  「@红红2」只命中红红2，不被「红红」抢先吞掉；长名命中后该区间对短名不可复用）；
+   *  且要求 @名字 的下一字符非名字字符（标点/空白/结尾/其他@；中文名后不能再跟汉字/字母数字），
+   *  「@红红，」只命中红红。结果仍按成员表顺序返回（@ 多人时必答发言顺序跟随成员表，与旧行为一致）。 */
+  const parseMentions = (text: string): ContactRecord[] => {
+    const sorted = [...members].sort((a, b) => memberNameOf(b).length - memberNameOf(a).length);
+    const taken: Array<[number, number]> = []; // 已命中消费的 [start, end) 文本区间（@ + 名字整体）
+    const hit = new Set<ContactRecord>();
+    for (const c of sorted) {
+      const name = memberNameOf(c);
+      if (!name) continue;
+      const re = new RegExp(`@${escapeRegExp(name)}(?![\\u4e00-\\u9fa5\\w])`, 'g');
+      let m: RegExpExecArray | null = re.exec(text);
+      while (m !== null) {
+        const end = m.index + m[0].length;
+        let overlapped = false;
+        for (const [s, e] of taken) {
+          if (m.index < e && s < end) {
+            overlapped = true; // 该 @ 已被更长的名字消费
+            break;
+          }
+        }
+        if (!overlapped) {
+          taken.push([m.index, end]);
+          hit.add(c);
+        }
+        m = re.exec(text);
+      }
+    }
+    return members.filter((c) => hit.has(c));
+  };
 
   /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
@@ -2372,13 +2406,20 @@ export function QqGroupChatPage({
 
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。
-   *  返回值（#21）：'ok'=正常产出消息；'skip'=[SKIP] 自判沉默/群已解散/流被占用；'error'=流失败
+   *  返回值（#21）：'ok'=正常产出消息；'skip'=[SKIP] 自判沉默/群已解散/已不在群或被禁言（中途变动守卫）/流被占用；'error'=流失败
    *  （runGroupTurn 据此收口：整轮无人成功且存在错误时落一条系统提示）。 */
   const runCharTurn = useCallback(
     (char: ContactRecord, allowSkip: boolean, turnImageSrcs: { src: string; id: string }[]) =>
       new Promise<'ok' | 'skip' | 'error'>((resolve) => {
         const g = getGroup(gid);
         if (!g) {
+          resolve('skip');
+          return;
+        }
+        // 中途变动守卫（audit-chat #6）：开口前以群当前成员表/禁言表为准（getGroup 现读存储，非回合
+        // 开始快照）——回合进行中被 [移出群聊]/[禁言] 的成员不再开口（被 @ 也不豁免，物理禁言口径），
+        // 与 runGroupTurn 循环守卫、B-4 重新生成守卫同一口径
+        if (!g.memberIds.includes(char.id) || isGroupMuted(g, char.id)) {
           resolve('skip');
           return;
         }
@@ -2876,7 +2917,10 @@ export function QqGroupChatPage({
    *  trigger 可省略（分句发送批次触发/红包/转账卡片入群时无文字可 @）：此时全员按人设自判。
    *  兜底约定（异常与边界）：全员都 [SKIP] 时不落盘不提示（真实群聊发消息也可能没人接）；
    *  单条回复为空时 finalize 已有占位兜底；整轮无任何成员成功产出且存在流错误时落一条
-   *  「网络开小差」系统提示（#21）；群已解散/无成员时静默返回。 */
+   *  「网络开小差」系统提示（#21）；群已解散/无成员时静默返回。
+   *  中途变动（audit-chat #6）：成员名单/禁言表只在回合开始算一次，循环内每次开口前由
+   *  runCharTurn 入口与本循环守卫重读群当前成员表/禁言表（getGroup 现读存储）——回合进行中
+   *  被 [移出群聊]/[禁言] 的成员本轮不再开口（被 @ 也不豁免）。 */
   const runGroupTurn = useCallback(
     async (trigger?: WxGroupMsg) => {
       if (runningRef.current || isChatStreaming(sKey)) return;
@@ -2908,7 +2952,12 @@ export function QqGroupChatPage({
         // 收集每个成员的回合结果（#21）：'ok'=有产出 / 'skip'=自判沉默等 / 'error'=流失败
         const results: ('ok' | 'skip' | 'error')[] = [];
         for (const char of ordered) {
-          if (!getGroup(gid)) break; // 群已被解散
+          // 中途变动守卫（audit-chat #6）：每次开口前重读群当前状态（getGroup 现读存储，非回合开始
+          // 快照）——群已解散 → 整轮终止；前面成员的 [移出群聊]/[禁言] 管理标记当场生效后，排在
+          // 后面的被踢/被禁言成员本轮不再开口（被 @ 也不豁免，与回合开始的禁言过滤同一物理拦截口径）
+          const gNow = getGroup(gid);
+          if (!gNow) break; // 群已被解散
+          if (!gNow.memberIds.includes(char.id) || isGroupMuted(gNow, char.id)) continue;
           groupSpeaker.set(sKey, char.id);
           if (mountedRef.current) setSpeakerId(char.id);
           results.push(await runCharTurn(char, !mentioned.includes(char), turnImageSrcs));

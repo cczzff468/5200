@@ -337,6 +337,9 @@ interface WxMsg {
   quote?: { name: string; content: string; id?: string; time?: number };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
+  /** 错误占位消息（流失败「〔AI 服务暂时不可用…〕」/ 兜底「〔对方暂时没有回复，请稍后再试〕」落库时打上）：
+   *  记忆提取（memConvoFromRaw）按 error===true 剔除，避免错误文案被当成 AI 发言参与记忆抽取（对照 chat.tsx 同款做法） */
+  error?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
@@ -1163,6 +1166,68 @@ function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
       return null;
     })
     .filter((x): x is PendingCardInfo => x !== null);
+}
+
+/**
+ * 单聊红包/转账 24h 过期清算（群聊 expireStalePackets 的单聊版，审计 #5）：
+ * 扫描所有单聊会话里「AI 发出、超过 24h 未领取/未收款」的红包与转账，原卡置终态（status='returned'，
+ * 气泡变灰显示「已退回」、不可再领取/收款），并在会话末尾追加一条过期退回通知行
+ * （「XX的红包已过期，X元已退回」，与群聊过期通知行同款居中灰字样式）。
+ * 资金退回发起人（AI）：AI 没有零钱账户（钱包/账单只记机主收支，与群聊口径一致——群聊也只在
+ * 发起人是机主时才写零钱账单），故退回只改卡片状态、不写余额与账单。
+ * 亲属卡不在清算范围：收卡方可随时退还、按月扣费，没有「未领取悬挂」的资金语义。
+ * 返回发生变更的会话 id 列表（调用方据此把落盘变更合并进已打开会话的本地 state）；
+ * wxSweepCardsRunning 防重入（挂载清算与回合结算清算可能重叠，重入直接跳过本轮）。
+ */
+let wxSweepCardsRunning = false;
+async function wxExpireStalePeerCards(): Promise<string[]> {
+  if (wxSweepCardsRunning) return [];
+  wxSweepCardsRunning = true;
+  try {
+    const now = Date.now();
+    const changed: string[] = [];
+    const contacts = await listContacts().catch(() => [] as ContactRecord[]);
+    for (const c of contacts) {
+      const msgs = loadMsgs(c.id);
+      if (msgs.length === 0) continue;
+      const notices: WxMsg[] = [];
+      const next = msgs.map((m) => {
+        // 只清 AI 发出的卡（role='peer'）：用户发给 AI 的卡由 AI 动作标记处理，不在此过期
+        if (m.role !== 'peer' || now - m.time < 24 * 3600_000 || wxCardIsFinal(m)) return m;
+        if (m.kind === 'redpacket' && m.rp) {
+          notices.push({
+            id: uid(),
+            role: 'peer',
+            content: '',
+            time: now + notices.length,
+            kind: 'notice',
+            notice: { icon: 'rp', pre: `${displayNameOf(c)}的红包已过期，`, accent: `${fmtMoney(m.rp.amount)}元已退回` },
+          });
+          return { ...m, content: '[微信红包]（已退回）', rp: { ...m.rp, status: 'returned' as const } };
+        }
+        if (m.kind === 'transfer' && m.tr) {
+          notices.push({
+            id: uid(),
+            role: 'peer',
+            content: '',
+            time: now + notices.length,
+            kind: 'notice',
+            notice: { icon: 'tr', pre: `${displayNameOf(c)}的转账已过期，`, accent: `${fmtMoney(m.tr.amount)}元已退回` },
+          });
+          // refundedBy='peer'：资金退回 AI 侧，详情页按既有退还语义显示「对方已退还」+ 退款时间
+          return { ...m, content: '[转账]（已退回）', tr: { ...m.tr, status: 'returned' as const, refundedAt: now, refundedBy: 'peer' as const } };
+        }
+        return m;
+      });
+      if (notices.length > 0) {
+        saveMsgs(c.id, [...next, ...notices]);
+        changed.push(c.id);
+      }
+    }
+    return changed;
+  } finally {
+    wxSweepCardsRunning = false;
+  }
 }
 
 /**
@@ -4105,6 +4170,33 @@ function ChatPage({
     });
   }, [sessionKey, peer.id]);
 
+  /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的
+   *  过期通知行追加进来；按创建时间排序。与上方投递 tick 同一套合并模式，不丢本地新消息 */
+  const mergeExpiredSweep = useCallback(() => {
+    setMsgs((prev) => {
+      const saved = loadMsgs(peer.id);
+      const savedMap = new Map(saved.map((m) => [m.id, m]));
+      const ids = new Set(prev.map((m) => m.id));
+      return sortMsgsByTime([
+        ...prev.map((m) => savedMap.get(m.id) ?? m),
+        ...saved.filter((m) => !ids.has(m.id)),
+      ]);
+    });
+  }, [peer.id]);
+
+  // 单聊红包/转账 24h 过期清算（红包/转账卡片所在页面挂载时触发一）：扫全部单聊会话，
+  // 命中本会话（有 AI 发出的卡被置为过期终态 + 通知行）就把落盘变更合并进本地 state。
+  // ChatPage 按 peer.id keyed 重挂载，切换会话时随新会话再跑一次
+  useEffect(() => {
+    let alive = true;
+    void wxExpireStalePeerCards().then((changed) => {
+      if (alive && changed.includes(peer.id)) mergeExpiredSweep();
+    });
+    return () => {
+      alive = false;
+    };
+  }, [peer.id, mergeExpiredSweep]);
+
   /** 投递进行中（含排队批次）：标题维持「正在输入中…」，直到最后一条消息发出 */
   const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey));
   useEffect(() => {
@@ -4394,6 +4486,9 @@ function ChatPage({
    *  （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
    *  点弹窗非按钮区域才展开全屏来电页；QQ 侧同结构但不弹窗）。finalize 与接力拉取投递共用 */
   const triggerAiVoiceCall = () => {
+    // 40-a 拉黑拦截（审计破口二）：用户拉黑 AI（byUser）后 [语音通话] 不弹真实来电——
+    // request-only 模式下正文都被丢弃，来电邀请更不能送达；入口直接 return（wantCallSeen 处另有双保险）
+    if (loadBlock('wx', peer.id).byUser) return;
     try {
       const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
       if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
@@ -4451,7 +4546,9 @@ function ChatPage({
     // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
     // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
     const wantCall = hasVoiceCallMark(rawText);
-    if (wantCall) ctx.wantCallSeen = true;
+    // 40-a 拉黑拦截（仅申请卡模式）：byUser 时标记不进 wantCallSeen——finalize/接力拉取不再弹来电
+    //（与 triggerAiVoiceCall 入口守卫双保险；剥除标记照常，request-only 下正文反正整段丢弃）
+    if (wantCall && !loadBlock('wx', peer.id).byUser) ctx.wantCallSeen = true;
     const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
     const latest = loadMsgs(peer.id);
     let cur = latest;
@@ -4459,9 +4556,15 @@ function ChatPage({
     let t = baseTime;
     for (const part of extractRichActionParts(text)) {
       if (part.type === 'action') {
+        // 40-a 拉黑拦截（审计破口一）：仅申请卡模式（byUser）下回复正文会在下方被整段丢弃，动作标记同样
+        // 只放行拉黑类（bk/uk：拉黑/解除拉黑/申请解除拉黑 + 同意/拒绝解除拉黑）——资金（领取红包/收款/
+        // 退回/亲属卡）、建群邀请、退群挽留、视觉等标记一律丢弃不执行，否则拉黑期间 AI 仍能真实改卡
+        // 状态、写零钱账单、建群。先算好标记类型再按模式分流（bk/uk 下方直接复用）
+        const bk = blockActionKindOf(part.action);
+        const uk = userReqActionKindOf(part.action);
+        if (!bk && !uk && loadBlock('wx', peer.id).byUser) continue;
         // 双向拉黑类动作（[拉黑]/[解除拉黑]/[申请解除拉黑:理由]）：改状态 + 生成系统消息/申请卡片，
         // 不走红包/转账处理；幂等——状态没变化（重复拉黑/没被拉黑就申请等）不产出任何消息
-        const bk = blockActionKindOf(part.action);
         if (bk) {
           const res = applyCharBlockAction('wx', peer.id, bk, part.action.targetId);
           setBlk(res.entry);
@@ -4479,8 +4582,7 @@ function ChatPage({
           }
           continue;
         }
-        // 40-a：角色对「用户发来的解除拉黑申请」的决策（[同意解除拉黑]/[拒绝解除拉黑]）
-        const uk = userReqActionKindOf(part.action);
+        // 40-a：角色对「用户发来的解除拉黑申请」的决策（[同意解除拉黑]/[拒绝解除拉黑]；uk 已在分支入口算好）
         if (uk) {
           const res = resolveUserReqByChar('wx', peer.id, uk === 'approve');
           setBlk(res.entry);
@@ -4680,7 +4782,7 @@ function ChatPage({
     // 空段保护（照 finalize 的兜底写法）：整批拉取都没解析出任何消息 → 给兜底文案，不至于毫无回应
     //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
     if (!queuedAny && !loadBlock('wx', peer.id).byUser) {
-      enqueueBatch([{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: Date.now() }], ctx);
+      enqueueBatch([{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: Date.now(), error: true }], ctx);
     }
     // 回复原文名带 [语音通话] 标记（剥除后不在气泡里）：同样按 5 分钟冷却弹出来电邀请
     if (ctx.wantCallSeen) triggerAiVoiceCall();
@@ -4801,7 +4903,10 @@ function ChatPage({
     // 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji）
     const stickersOn = getStickersOn(sessionKey);
     const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
-    const actionRules = buildActionRules(wxCollectPendingCards(base));
+    // 40-a 拉黑拦截（仅申请卡模式）：待处理卡清单不注入（buildActionRules 空清单返回空数组）——
+    // 否则 AI 照提示词输出 [领取红包:ID]/[收款转账:ID] 等标记；动作分支虽已拦截，提示词层面也不该给。
+    // 拉黑类动作说明由 blkBlock（buildBlockPromptBlock）单独注入，与此处无关
+    const actionRules = requestOnly ? [] : buildActionRules(wxCollectPendingCards(base));
     // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
@@ -4973,7 +5078,8 @@ function ChatPage({
           if (deliveredAny) return;
           saveMsgs(peer.id, [
             ...loadMsgs(peer.id),
-            { id: `${ctx.aiId}-err`, role: 'peer', content: `〔${error}〕`, time: startedAt },
+            // error:true：错误文案不是 AI 发言，记忆提取（memConvoFromRaw）按此剔除（审计：防记忆污染）
+            { id: `${ctx.aiId}-err`, role: 'peer', content: `〔${error}〕`, time: startedAt, error: true },
           ]);
           return;
         }
@@ -4991,7 +5097,7 @@ function ChatPage({
               ? []
               : requestOnly
                 ? []
-                : [{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt }];
+                : [{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt, error: true }];
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -5018,6 +5124,11 @@ function ChatPage({
                 { user: owner || me.realName || me.name, peer: peerReal || displayNameOf(peer) || peer.name }
               )
             );
+          // 单聊红包/转账 24h 过期清算（每轮 AI 回合结算后触发二）：全部消息投递完再扫，
+          // 覆盖「聊天页一直开着、卡片跨天悬挂」的场景；命中本会话则把落盘变更合并进本地
+          void wxExpireStalePeerCards().then((changed) => {
+            if (mountedRef.current && changed.includes(peer.id)) mergeExpiredSweep();
+          });
         });
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
         //（与接力拉取投递共用 triggerAiVoiceCall，见组件层）

@@ -15,6 +15,8 @@
  * - 开关关闭时调用方不注入本块，恢复普通聊天。
  */
 
+import { solarToLunar } from './ios/lunar';
+
 const STORE_KEY = 'chat-time-aware';
 
 function loadMap(): Record<string, boolean> {
@@ -100,31 +102,21 @@ function monthDaysOf(year: number): number[] {
 // ---------------- 节日 ----------------
 
 /**
- * 节日对照表（2026 年公历日期 + 每年固定的公历/网络节日；键 = "M-D"）。
- * 母亲节/父亲节/感恩节按星期规则逐年浮动，不在表里写死（getFestivals 动态计算）。
+ * 公历固定节日对照表（每年日期不变；键 = "M-D"）。
+ * 农历节日（春节/元宵/端午/七夕/中元/中秋/重阳/腊八/小年/除夕）不在此表——
+ * 由 lunar.ts 的农历换算逐年动态计算（getFestivals），任意年份都不会错位；
+ * 清明是节气（4月4-6日浮动）用寿星公式推算；母亲节/父亲节/感恩节按星期规则动态计算。
  */
-const FESTIVAL_MAP: Record<string, string> = {
+const SOLAR_FESTIVAL_MAP: Record<string, string> = {
   '1-1': '元旦',
-  '1-27': '腊八节',
-  '2-6': '小年（北方）',
-  '2-7': '小年（南方）',
   '2-14': '情人节',
-  '2-16': '除夕',
-  '2-17': '春节',
-  '3-3': '元宵节',
   '3-8': '妇女节',
-  '4-5': '清明节',
   '5-1': '劳动节',
   '5-4': '青年节',
   '5-20': '520',
   '5-21': '521',
-  '5-31': '端午节',
   '6-1': '儿童节',
-  '8-8': '中元节',
-  '8-19': '七夕节',
   '9-10': '教师节',
-  '9-25': '中秋节',
-  '10-18': '重阳节',
   '10-31': '万圣节',
   '11-11': '双十一',
   '12-12': '双十二',
@@ -132,11 +124,62 @@ const FESTIVAL_MAP: Record<string, string> = {
   '12-31': '跨年夜',
 };
 
-/** 注入用节日对照表全文（按需求原文整理；周节日标注 2026 年落点） */
-const FESTIVAL_TABLE_TEXT = [
-  '1月1日元旦；1月27日腊八节；2月6日小年（北方）；2月7日小年（南方）；2月14日情人节；2月16日除夕；2月17日春节；3月3日元宵节；3月8日妇女节；4月5日清明节；5月1日劳动节；5月4日青年节；5月第二个周日母亲节（2026年为5月10日）；5月20日520；5月21日521；5月31日端午节；6月1日儿童节；6月第三个周日父亲节（2026年为6月21日）；7月-8月暑期；8月8日中元节；8月19日七夕节；9月10日教师节；9月25日中秋节；10月1日-7日国庆节；10月18日重阳节；10月31日万圣节；11月第4个周四感恩节（2026年为11月26日）；11月11日双十一；12月12日双十二；12月25日圣诞节；12月31日跨年夜。',
-  '其中 520、521、双十一、双十二为网络节日，也要能识别。',
-].join('\n');
+/** 农历节日对照表（键 = 农历"月-日"；闰月日不匹配——闰月出现的节日不重复庆祝） */
+const LUNAR_FESTIVAL_MAP: Record<string, string> = {
+  '1-1': '春节',
+  '1-15': '元宵节',
+  '5-5': '端午节',
+  '7-7': '七夕节',
+  '7-15': '中元节',
+  '8-15': '中秋节',
+  '9-9': '重阳节',
+  '12-8': '腊八节',
+  '12-23': '小年（北方）',
+  '12-24': '小年（南方）',
+};
+
+/**
+ * 清明节（节气，4月4-6日之间浮动）：寿星公式推算（21世纪：floor(Y%100×0.2422+4.81)-floor((Y%100)/4)）。
+ * lunar.ts 只做农历月日换算，算不了节气；该公式 2000-2099 年与官方历表一致，比写死任何一年落点都稳。
+ */
+function qingmingDay(year: number): number {
+  const y = year % 100;
+  return Math.floor(y * 0.2422 + 4.81) - Math.floor(y / 4);
+}
+
+/** 公历（北京时间）年月日 → 农历。用本地正午构造 Date：solarToLunar 内部读本地年月日，
+ *  这样无论设备处于哪个时区，读到的年月日都与传入值一致（与北京时间组件对齐） */
+function lunarOf(year: number, month: number, day: number): ReturnType<typeof solarToLunar> {
+  return solarToLunar(new Date(year, month - 1, day, 12));
+}
+
+/**
+ * 农历节日（含除夕）：先判「明天是正月初一 → 今天是除夕」（腊月有 29/30 之差，次日判定最稳，
+ * 闰腊月等极端历法也覆盖）；再按当日农历月日查表（闰月日不匹配）。
+ */
+function lunarFestivalsOf(year: number, month: number, day: number): string[] {
+  const tomorrow = lunarOf(year, month, day + 1);
+  if (!tomorrow.leap && tomorrow.month === 1 && tomorrow.day === 1) return ['除夕'];
+  const today = lunarOf(year, month, day);
+  if (today.leap) return [];
+  const hit = LUNAR_FESTIVAL_MAP[`${today.month}-${today.day}`];
+  return hit ? [hit] : [];
+}
+
+/** 某公历年的农历节日落点（扫当年日历；键 = "M-D" → 节日名），供注入表生成用 */
+function lunarFestivalDatesOfYear(year: number): Map<string, string> {
+  const days = monthDaysOf(year);
+  const out = new Map<string, string>();
+  for (let m = 1; m <= 12; m++) {
+    for (let d = 1; d <= days[m - 1]; d++) {
+      const names = lunarFestivalsOf(year, m, d);
+      if (names.length === 0) continue;
+      const key = `${m}-${d}`;
+      if (!out.has(key)) out.set(key, names.join('、'));
+    }
+  }
+  return out;
+}
 
 /** 某月第 N 个星期 W 的日期（W: 0=周日 … 6=周六） */
 function nthWeekdayOfMonth(year: number, month: number, weekday: number, nth: number): number {
@@ -144,17 +187,66 @@ function nthWeekdayOfMonth(year: number, month: number, weekday: number, nth: nu
   return 1 + ((weekday - first + 7) % 7) + (nth - 1) * 7;
 }
 
-/** 计算某公历日期命中的节日（固定表 + 周规则浮动节日 + 国庆假期 + 暑期），命中多个时全部返回 */
+/** 计算某公历日期命中的节日（公历固定表 + 清明 + 农历动态换算 + 周规则浮动节日 + 国庆假期 + 暑期），命中多个时全部返回 */
 export function getFestivals(year: number, month: number, day: number): string[] {
   const out: string[] = [];
-  const hit = FESTIVAL_MAP[`${month}-${day}`];
+  const hit = SOLAR_FESTIVAL_MAP[`${month}-${day}`];
   if (hit) out.push(hit);
+  if (month === 4 && day === qingmingDay(year)) out.push('清明节');
+  out.push(...lunarFestivalsOf(year, month, day));
   if (month === 5 && day === nthWeekdayOfMonth(year, 5, 0, 2)) out.push('母亲节');
   if (month === 6 && day === nthWeekdayOfMonth(year, 6, 0, 3)) out.push('父亲节');
   if (month === 11 && day === nthWeekdayOfMonth(year, 11, 4, 4)) out.push('感恩节');
   if (month === 10 && day >= 1 && day <= 7) out.push('国庆节');
   if (month === 7 || month === 8) out.push('暑期');
   return out;
+}
+
+/**
+ * 注入用节日对照表全文（按年动态生成）：公历固定项直接列；清明/农历节日/除夕给出当年实际落点
+ * （农历经 lunar.ts 换算，扫全年日历得出）；周节日保留规则描述并标注当年日期。
+ * 结果按年缓存（每次会话期只算一次；换年自动重算）。
+ */
+const festivalTableCache = new Map<number, string>();
+function festivalTableTextOfYear(year: number): string {
+  const cached = festivalTableCache.get(year);
+  if (cached) return cached;
+  const entries: { month: number; day: number; text: string }[] = [];
+  const put = (month: number, day: number, label: string) =>
+    entries.push({ month, day, text: `${month}月${day}日${label}` });
+  put(1, 1, '元旦');
+  put(2, 14, '情人节');
+  put(3, 8, '妇女节');
+  put(4, qingmingDay(year), '清明节');
+  put(5, 1, '劳动节');
+  put(5, 4, '青年节');
+  // 周规则浮动节日：保留规则描述并标注当年落点（与既有注入格式一致）
+  const mother = nthWeekdayOfMonth(year, 5, 0, 2);
+  entries.push({ month: 5, day: mother, text: `5月第二个周日母亲节（${year}年为5月${mother}日）` });
+  put(5, 20, '520');
+  put(5, 21, '521');
+  put(6, 1, '儿童节');
+  const father = nthWeekdayOfMonth(year, 6, 0, 3);
+  entries.push({ month: 6, day: father, text: `6月第三个周日父亲节（${year}年为6月${father}日）` });
+  put(9, 10, '教师节');
+  put(10, 31, '万圣节');
+  const thanks = nthWeekdayOfMonth(year, 11, 4, 4);
+  entries.push({ month: 11, day: thanks, text: `11月第4个周四感恩节（${year}年为11月${thanks}日）` });
+  put(11, 11, '双十一');
+  put(12, 12, '双十二');
+  put(12, 25, '圣诞节');
+  put(12, 31, '跨年夜');
+  for (const [key, name] of lunarFestivalDatesOfYear(year)) {
+    const [m, d] = key.split('-').map(Number);
+    if (m != null && d != null) put(m, d, name);
+  }
+  entries.sort((a, b) => a.month - b.month || a.day - b.day);
+  const lines = [
+    `${entries.map((e) => e.text).join('；')}；10月1日-7日国庆节；7月-8月暑期。`,
+    '其中 520、521、双十一、双十二为网络节日，也要能识别。',
+  ].join('\n');
+  festivalTableCache.set(year, lines);
+  return lines;
 }
 
 // ---------------- 距离上次聊天 ----------------
@@ -220,8 +312,8 @@ export function buildTimeAwareBlock(opts: TimeAwareOptions = {}): string {
     '洗澡15-30分钟，做饭30-60分钟，吃饭20-40分钟，通勤20-60分钟，午睡20-40分钟，健身40-90分钟，打游戏一局15-40分钟，看一集剧40-60分钟。未列举事件按日常常识判断，禁止凭空夸大或缩短。涉及距离或路程时，按实际距离估算，无法确定时取偏短的常见值。',
     '【时空感知内化协议（最高优先级）】',
     `角色的每一次回复，都必须在内部构建完整的时空概念：[YYYY年M月DD日 星期X HH:MM 季节 城市·具体地点]。时间严格同步北京时间（UTC+8），精确到分钟；基于系统注入的当前时间生成，禁止编造；分钟数向下取整，即使秒数超过30也不进位。地点根据角色人设生成，格式为「城市·具体地点」，需符合当前时间逻辑${regionLine}。季节填在「HH:MM」之后、城市之前；若当天命中节日，在城市前插入节日名称。时间戳只在内部用于辅助判断，不对外展示。`,
-    `【节日对照表（2026年，公历）】`,
-    FESTIVAL_TABLE_TEXT,
+    `【节日对照表（${t.year}年，公历）】`,
+    festivalTableTextOfYear(t.year),
     '请结合以上时间信息自然回复，让回复与真实的时间流逝、事件时长相符。',
   ].join('\n');
 }

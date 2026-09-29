@@ -63,6 +63,28 @@ function cleanName(v: unknown, fallback: string): string {
 
 const PLATFORM_LABEL: Record<string, string> = { wx: '微信朋友圈', qq: 'QQ空间' };
 
+/**
+ * 北京时间（UTC+8）当前时刻 + 时段一行（发动态/评论/回复/转发 prompt 通用的时间感知注入）。
+ * 服务端 Node 运行时内联 UTC+8 偏移计算（src/lib/time-aware.ts 标记 'use client' 且内部依赖
+ * localStorage，不可从服务端路由 import，故此处内联同口径计算），不依赖任何浏览器 API。
+ * 时段划分：清晨5-8 / 上午8-11 / 中午11-13 / 下午13-17 / 傍晚17-19 / 晚上19-23 / 深夜23-5。
+ */
+function bjTimeLine(): string {
+  const d = new Date(Date.now() + 8 * 3600 * 1000);
+  const hour = d.getUTCHours();
+  const minute = d.getUTCMinutes();
+  const period =
+    hour >= 5 && hour < 8 ? '清晨'
+    : hour >= 8 && hour < 11 ? '上午'
+    : hour >= 11 && hour < 13 ? '中午'
+    : hour >= 13 && hour < 17 ? '下午'
+    : hour >= 17 && hour < 19 ? '傍晚'
+    : hour >= 19 && hour < 23 ? '晚上'
+    : '深夜';
+  const hm = `${hour}:${String(minute).padStart(2, '0')}`;
+  return `（现在是北京时间 ${d.getUTCMonth() + 1}月${d.getUTCDate()}日 ${hm}，${period}——发言要符合这个时间的语境：凌晨/深夜不说「早安」「早上好」，早上别说「晚安」，也不要在正文里复述时间）`;
+}
+
 /** 从模型回复中清洗正文：去围栏/引号包裹/舞台指示，压成单段 */
 function cleanContent(raw: string): string {
   let t = raw.replace(/```(?:[\w-]+)?/gi, '').trim();
@@ -177,7 +199,11 @@ export async function POST(req: Request) {
 - **照片双语规则**：如果输出 [照片:使用参考图:描述] 或 [照片:不使用参考图:描述]，只允许描述部分使用双语格式，不要改动照片标签外层结构。`;
   const bilingualPrompt = s(body.bilingualPrompt, 1200) || DEFAULT_BILINGUAL_PROMPT;
 
-  const user: string[] = [];
+  const user: string[] = [
+    // 时间感知（G）：post/comment/reply/repost 四个分支通用，放在 user prompt 开头附近，
+    // 让内容贴合真实的北京时间与时段语境（深夜不发早安、清晨不提晚安）
+    bjTimeLine(),
+  ];
   if (kind === 'post') {
     user.push(`请以「${name}」的口吻，现在发一条${label}动态。`);
     user.push('- 第一人称、口语化，20~120 字；禁止使用任何 emoji 或表情符号（如 😀😂🎉✨🔥👍❤☀ 之类一律不用），正文一律纯文字；');

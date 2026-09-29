@@ -331,6 +331,9 @@ interface QQMsg {
   quote?: { name: string; content: string; id?: string; time?: number };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
+  /** 错误占位消息（「〔消息发送失败：…〕」「〔对方暂时没有回复…〕」）：气泡红字提示 + 记忆提取时排除
+   *  （memConvoFromRaw 按 error===true 滤除，防止错误文案混进 AI 发言素材——与 chat.tsx 同口径） */
+  error?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
@@ -394,6 +397,11 @@ export interface MsgPacket {
   receiptOf?: 'me' | 'peer';
   /** 退还/拒收终态（我发给 AI 的卡被退回/拒收，或我退回 AI 发的卡；终态后不能重复处理） */
   status?: 'returned' | 'rejected';
+  /** 24h 过期清算终态（单聊与群聊 expireStalePackets 同口径）：AI 发出的红包/转账超 24h
+   *  未领取/未收款 → 置过期、剩余金额退回发起人（卡片变灰，不可再领取/收款，cardIsFinal = true） */
+  expired?: boolean;
+  /** 过期清算时间（详情页「退款时间」展示用） */
+  expiredAt?: number;
   /** 退款时间（退还后写入；详情页「退款时间」行） */
   refundedAt?: number;
   /** 退还凭据卡专用：原转账发生时间（详情页「转账时间」行显示原转账时间） */
@@ -473,11 +481,13 @@ function richToQqMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
 /** 红包/转账/亲属卡消息的状态标签（卡片文案 + AI 上下文摘要共用） */
 function cardStateLabel(m: QQMsg): string {
   if (m.kind === 'redpacket' && m.packet) {
+    if (m.packet.expired) return '已过期';
     if (m.packet.status === 'returned') return '已退回';
     if (m.packet.status === 'rejected') return '已拒收';
     return (m.packet.claims ?? []).length > 0 ? '已领取' : '待领取';
   }
   if (m.kind === 'transfer' && m.packet) {
+    if (m.packet.expired) return '已过期';
     if (m.packet.status === 'returned') return '已退回';
     if (m.packet.status === 'rejected') return '已拒收';
     return m.packet.received ? '已收款' : '待收款';
@@ -584,6 +594,71 @@ function applyAiActions(
     }
   }
   return { msgs: next, notices, extras };
+}
+
+// ---------------- 单聊红包/转账 24h 过期清算（与群聊 expireStalePackets 同口径） ----------------
+
+/** 防重入：清算进行中标记（QQ App 挂载 / 进聊天页 / AI 回合结算多入口并发时同刻只跑一次） */
+let qqSingleCardSweepRunning = false;
+
+/**
+ * 单聊 24h 过期清算：扫描所有 QQ 单聊会话中「AI 发出、超 24h 未领取/未收款」的红包（剩余金额）与转账，
+ * 置过期终态（packet.expired，卡片变灰、不可再领取/收款、collectPendingCards/cardIsFinal 不再计）
+ * + 追加系统提示行（「XX的红包已过期退回」/「XX的转账已过期退回」，居中灰字不进 AI 上下文）。
+ * 退回发起人：发起人是 AI——角色侧没有钱包/账单存储，发卡时也不扣任何款（资金退回无需入账，
+ * 与群聊口径一致：群聊也只有机主发起的红包才退钱包），因此资金层面仅卡片置终态 + 提示行。
+ * 返回是否有变更，供调用方（聊天页）决定是否把落盘记录同步回本地视图。
+ */
+async function expireStaleSingleCards(): Promise<boolean> {
+  if (qqSingleCardSweepRunning) return false;
+  qqSingleCardSweepRunning = true;
+  try {
+    const now = Date.now();
+    let raw: ContactRecord[];
+    try {
+      raw = await listContacts();
+    } catch {
+      return false;
+    }
+    let changed = false;
+    // 展示名与聊天页一致（昵称优先），提示行里的名字才能对得上气泡头像旁的称呼
+    for (const c of withDisplayNames(raw)) {
+      const msgs = loadMsgs(c.id);
+      if (msgs.length === 0) continue;
+      let next = msgs;
+      let dirty = false;
+      const notices: QQMsg[] = [];
+      for (const m of msgs) {
+        if (m.role !== 'peer' || !m.packet || m.packet.expired) continue;
+        if (cardIsFinal(m)) continue; // 已领取/已收款/已退回/已拒收的终态卡不参与清算
+        if (now - m.time < 24 * 3600_000) continue;
+        const p = m.packet;
+        const idx = next.findIndex((x) => x.id === m.id);
+        if (idx < 0) continue;
+        next = [...next];
+        next[idx] = {
+          ...m,
+          content: p.type === 'redpacket' ? '[QQ红包]（已过期退回）' : '[转账]（已过期退回）',
+          packet: { ...p, expired: true, expiredAt: now },
+        };
+        dirty = true;
+        changed = true;
+        const kindLabel = p.type === 'redpacket' ? '红包' : '转账';
+        notices.push({
+          id: uid(),
+          role: 'peer',
+          content: '',
+          time: now + notices.length,
+          kind: 'notice',
+          notice: { icon: p.type === 'redpacket' ? 'rp' : 'tr', pre: `${c.name}的${kindLabel}已过期`, accent: '退回' },
+        });
+      }
+      if (dirty) saveMsgs(c.id, [...next, ...notices]);
+    }
+    return changed;
+  } finally {
+    qqSingleCardSweepRunning = false;
+  }
 }
 
 /** QQ空间：用户发的帖子 / 种子帖点赞状态（localStorage 持久化） */
@@ -2371,6 +2446,25 @@ function ChatPage({
       if (qqActiveChatId === peer.id) qqActiveChatId = null;
     };
   }, [peer.id]);
+  /** 单聊卡片过期清算（进聊天页即扫 + 同步本会话视图）：AI 发的红包/转账超 24h 未领取/未收款 →
+   *  过期退回（卡片置终态 + 「XX的红包/转账已过期退回」提示行；模块层防重入，QQ App 挂载时也会扫一遍） */
+  useEffect(() => {
+    let alive = true;
+    void expireStaleSingleCards().then((changed) => {
+      if (!alive || !changed) return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        return sortMsgsByTime([
+          ...prev.map((m) => savedMap.get(m.id) ?? m),
+          ...saved.filter((m) => !prev.some((p) => p.id === m.id)),
+        ]);
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [peer.id]);
   /** 搜索定位命中的消息 id（短暂高亮） */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** 气泡长按菜单（横向弹窗）：消息 + 容器内坐标 */
@@ -3135,6 +3229,11 @@ function ChatPage({
             }
             continue;
           }
+          // 40-a 拉黑破口修复（与微信单聊同构）：仅申请卡模式（用户拉黑角色，requestOnly）下，
+          // 除上面放行的拉黑类标记（blockActionKindOf/userReqActionKindOf）外的所有动作标记
+          //（资金/建群/邀请/退群挽留/视觉等）一律丢弃不执行——该模式下正文已被下方 continue 拦截，
+          // 动作若照常执行会绕过拉黑语义（被拉黑还能动钱/建群）。现场读拉黑状态防回合内变更
+          if (loadBlock('qq', peer.id).byUser) continue;
           // 退群挽留动作（[拉回群聊]/[设为管理员]/[转让群主]/[放弃邀请]）优先分流给 quit-flow 执行
           //（权限/配额在 quit-flow 内硬校验；返回 false 说明没有活跃流程，继续走卡片动作）
           if (isQuitWinbackAction(part.action)) {
@@ -3362,7 +3461,10 @@ function ChatPage({
     // 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji）
     const stickersOn = getStickersOn(sessionKey);
     const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, buildNpcPromptExtra(peer, contacts));
-    const actionRules = buildActionRules(collectPendingCards(base));
+    // 40-a 拉黑破口修复：仅申请卡模式（requestOnly）下不再注入待处理卡清单与资金动作规则——
+    // AI 在拉黑期间不能处理任何红包/转账（即使输出了处理标记也会被 buildReplyMsgs 丢弃），
+    // 注入清单反而会诱导模型输出永远落不了地的处理动作
+    const actionRules = requestOnly ? [] : buildActionRules(collectPendingCards(base));
     // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
@@ -3559,7 +3661,9 @@ function ChatPage({
           if (deliveredAny) return;
           saveMsgs(peer.id, [
             ...loadMsgs(peer.id),
-            { id: `${aiId}-err`, role: 'peer', content: `〔消息发送失败：${error}〕`, time: startedAt },
+            // A-修复：错误占位带 error 标记——记忆提取（memConvoFromRaw 按 error===true 滤除）不再把
+            // 错误文案当 AI 发言沉淀成脏碎片；气泡同步红字提示（与 chat.tsx 同口径）
+            { id: `${aiId}-err`, role: 'peer', content: `〔消息发送失败：${error}〕`, time: startedAt, error: true },
           ]);
           return;
         }
@@ -3577,7 +3681,7 @@ function ChatPage({
               ? []
               : requestOnly
                 ? []
-                : [{ id: aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt }];
+                : [{ id: aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt, error: true }];
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，密友值/记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -3593,6 +3697,19 @@ function ChatPage({
           // 密友值 + 记忆库：一轮对话结束（全部消息投递完）后执行；后台异步，失败静默不打断聊天
           // 密友值：对方回复一轮也算互动 +2（失败不算；与页面是否存活无关）
           addBondPoints(peer.id, BOND_MSG_POINTS);
+          // 单聊卡片过期清算（AI 回合结算后触发）：AI 发的红包/转账超 24h 未领取/未收款 → 过期退回；
+          // 本会话有变更时把落盘记录（过期卡片 + 提示行）同步回本地视图（模块层防重入）
+          void expireStaleSingleCards().then((swept) => {
+            if (!swept) return;
+            setMsgs((prev) => {
+              const saved = loadMsgs(peer.id);
+              const savedMap = new Map(saved.map((m) => [m.id, m]));
+              return sortMsgsByTime([
+                ...prev.map((m) => savedMap.get(m.id) ?? m),
+                ...saved.filter((m) => !prev.some((p) => p.id === m.id)),
+              ]);
+            });
+          });
           // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片；
           // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
           // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
@@ -3609,7 +3726,9 @@ function ChatPage({
             );
         });
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
-        if (wantCallSeenRef.current) {
+        // 拉黑破口修复：仅申请卡模式（用户拉黑 AI，requestOnly）下 [语音通话] 标记不弹真实来电——
+        // 正文已被拦截，来电若照常弹出会绕过拉黑语义；现场读拉黑状态防回合内变更
+        if (wantCallSeenRef.current && !requestOnly && !loadBlock('qq', peer.id).byUser) {
           try {
             const lastCallAt = Number(window.localStorage.getItem(`qq-vc-last:${peer.id}`) ?? '0');
             if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
@@ -4682,7 +4801,7 @@ function ChatPage({
         {msgs.map((m, i) => {
           const showTime = i === 0 || m.time - msgs[i - 1].time > 5 * 60_000;
           const mine = m.role === 'me';
-          const rpSettled = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).length > 0 || Boolean(m.packet.status) : false;
+          const rpSettled = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).length > 0 || Boolean(m.packet.status) || Boolean(m.packet.expired) : false;
           const rpClaimedByMe = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).some((c) => c.name === me.name) : false;
           return (
             <div
@@ -4795,8 +4914,8 @@ function ChatPage({
                       mine={mine}
                       received={m.packet.received === true}
                       onClick={() =>
-                        // 对方发来的未收款且未退还的转账 → 收款页（时钟+待你收款+收款按钮）；其余 → 交易详情
-                        setLayer({ view: !mine && m.packet?.received !== true && !m.packet?.status ? 'tr-receive' : 'tr-detail', msgId: m.id })
+                        // 对方发来的未收款且未退还/未过期的转账 → 收款页（时钟+待你收款+收款按钮）；其余 → 交易详情
+                        setLayer({ view: !mine && m.packet?.received !== true && !m.packet?.status && !m.packet?.expired ? 'tr-receive' : 'tr-detail', msgId: m.id })
                       }
                     />
                   </div>
@@ -4885,7 +5004,12 @@ function ChatPage({
                     <div
                       {...bubblePress}
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
-                        mine ? 'text-white' : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
+                        mine
+                          ? 'text-white'
+                          : // 错误占位消息红字提示（与 chat.tsx 同款：〔消息发送失败…〕/〔对方暂时没有回复…〕）
+                            m.error
+                            ? 'bg-white text-[#FF3B30] dark:bg-[#2A2C31] dark:text-[#FF6B6B]'
+                            : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
                       style={mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
@@ -5921,10 +6045,13 @@ function RpCoverPattern() {
 /** 聊天中的红包卡片（对照真机封面：企鹅+QQ字样+祝福语+右侧斜线纹理/圆弧/菱形/企鹅暗纹+底部亮红大弧+開/QQ红包；自己发的点开进详情，对方的先开箱） */
 export function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPacket; showOpen: boolean; onClick: () => void }) {
   const claimed = (packet.claims ?? []).length > 0;
-  const settled = claimed || packet.status === 'returned' || packet.status === 'rejected';
-  // 终态（已领取/已退回/已拒收）→ 显示原状态文案；待领取中 → 有祝福语显示祝福语、没写祝福语显示「待领取」（与转账卡留言规则一致）
+  // 终态：已领取/已退回/已拒收/已过期（24h 未领取清算，剩余金额退回发起人）
+  const settled = claimed || packet.status === 'returned' || packet.status === 'rejected' || packet.expired;
+  // 终态（已领取/已退回/已拒收/已过期）→ 显示原状态文案；待领取中 → 有祝福语显示祝福语、没写祝福语显示「待领取」（与转账卡留言规则一致）
   const rpNote = settled
-    ? packet.status === 'returned'
+    ? packet.expired
+      ? '已过期'
+      : packet.status === 'returned'
       ? '已退回'
       : packet.status === 'rejected'
         ? '已拒收'
@@ -5974,10 +6101,13 @@ export function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPack
  *  收款/退还/拒收后卡片颜色变灰（对照真实 QQ：终态卡褪色），退还卡圆图标换成↩ */
 export function TransferBubble({ packet, mine, received, onClick }: { packet: MsgPacket; mine: boolean; received: boolean; onClick: () => void }) {
   const refunded = packet.status === 'returned';
-  // 终态（已收款/已退还/已拒收）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
-  const settled = received || Boolean(packet.status);
-  const status =
-    refunded
+  // 终态：已收款/已退还/已拒收/已过期（24h 未收款清算，退回发起人）
+  const expired = packet.expired === true;
+  // 终态（已收款/已退还/已拒收/已过期）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
+  const settled = received || Boolean(packet.status) || expired;
+  const status = expired
+    ? '已过期'
+    : refunded
       ? '已退还'
       : packet.status === 'rejected'
         ? '已拒收'
@@ -5996,14 +6126,14 @@ export function TransferBubble({ packet, mine, received, onClick }: { packet: Ms
       className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(135deg, #29ABF2 0%, #0099FF 100%)',
-        // 收款/退还/拒收后卡片颜色变灰（对照真实 QQ：已收款与已退还的转账卡都褪色）
-        filter: received || packet.status ? 'grayscale(0.62) brightness(0.97)' : undefined,
+        // 收款/退还/拒收/过期后卡片颜色变灰（对照真实 QQ：终态卡褪色）
+        filter: received || packet.status || packet.expired ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
       aria-label={`转账 ${fmtMoney(packet.amount)} 元（${status}）`}
     >
       <div className="flex items-center gap-2.5 px-3.5 pb-3 pt-3.5">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-white/85" aria-hidden="true">
-          {refunded ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.4} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.6} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2.2} />}
+          {refunded || expired ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.4} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.6} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2.2} />}
         </span>
         <span className="min-w-0">
           <span className="block text-[20px] font-semibold leading-tight text-white">¥{fmtMoney(packet.amount)}</span>
@@ -6526,6 +6656,8 @@ function RedPacketDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; p
             <span className="mt-3 rounded-full bg-[#FBE7B2]/20 px-3.5 py-1.5 text-[14px] text-[#FFE9B8] ring-1 ring-inset ring-[#FBE7B2]/35">收到的红包已存入余额</span>
           ) : mine && claims.length > 0 ? (
             <p className="mt-3 text-[14px] text-[#FFE3C2]/75">好友领取后自动存入其余额</p>
+          ) : p.expired ? (
+            <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-expired">红包已过期，剩余金额已退回</p>
           ) : p.status === 'returned' ? (
             <p className="mt-3 text-[14px] text-[#FFE3C2]/85" data-testid="qq-rp-detail-refunded">红包已退回，金额已存入钱包余额</p>
           ) : p.status === 'rejected' ? (
@@ -6537,7 +6669,9 @@ function RedPacketDetailPage({ me, peer, msg, onBack, onToast }: { me: QQUser; p
         <div className="rounded-[12px] bg-[#EDEEF0] px-4 py-2.5 dark:bg-white/[0.06]">
           <p className="text-[14px] text-black/45 dark:text-white/45" data-testid="qq-rp-detail-stat">
             {count}个红包，
-            {p.status === 'returned'
+            {p.expired
+              ? '已过期'
+              : p.status === 'returned'
               ? '已退回'
               : p.status === 'rejected'
                 ? '已拒收'
@@ -6660,6 +6794,8 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
   const mine = msg.role === 'me';
   const incoming = !mine;
   const returned = p.status === 'returned';
+  // 24h 过期清算终态：不可再收款，资金已退回发起人
+  const expired = p.expired === true;
   const fmtFull = (ts: number) => {
     const d = new Date(ts);
     return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
@@ -6669,11 +6805,13 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
       <WalletNavHeader title="交易详情" onBack={onBack} />
       <div className="flex-1 overflow-y-auto px-5">
         <div className="mt-14 flex flex-col items-center">
-          <span className={`grid h-[72px] w-[72px] place-items-center rounded-full border-[4px] ${returned ? 'border-[#F6AC3D]' : 'border-[#12B7F5]'}`} aria-hidden="true">
-            {returned ? <Undo2 className="h-9 w-9 text-[#F6AC3D]" strokeWidth={2.6} /> : <Check className="h-9 w-9 text-[#12B7F5]" strokeWidth={3} />}
+          <span className={`grid h-[72px] w-[72px] place-items-center rounded-full border-[4px] ${returned || expired ? 'border-[#F6AC3D]' : 'border-[#12B7F5]'}`} aria-hidden="true">
+            {returned || expired ? <Undo2 className="h-9 w-9 text-[#F6AC3D]" strokeWidth={2.6} /> : <Check className="h-9 w-9 text-[#12B7F5]" strokeWidth={3} />}
           </span>
           <p className="mt-6 text-[17px] text-[#1F2329] dark:text-white" data-testid="qq-tr-detail-line">
-            {returned
+            {expired
+              ? '转账已过期，资金已退回'
+              : returned
               ? (p.refundedBy ?? (mine ? 'peer' : 'me')) === 'peer'
                 ? '对方已退还'
                 : '你已退还'
@@ -6693,7 +6831,7 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
             <span className="mr-1 text-[26px] font-semibold align-[5px]" aria-hidden="true">¥</span>
             {fmtMoney(p.amount)}
           </p>
-          {incoming && !p.received && !p.status ? (
+          {incoming && !p.received && !p.status && !expired ? (
             <button
               type="button"
               data-testid="qq-tr-detail-accept"
@@ -6728,6 +6866,12 @@ function TransferDetailPage({ me, peer, msg, receiverIsMe, onBack, onToast, onAc
             <div className="flex min-h-[54px] items-center justify-between gap-4" data-testid="qq-tr-refund-time-row">
               <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">退款时间</span>
               <span className="text-[16px] text-[#1F2329] dark:text-white">{fmtFull(p.refundedAt)}</span>
+            </div>
+          )}
+          {expired && typeof p.expiredAt === 'number' && (
+            <div className="flex min-h-[54px] items-center justify-between gap-4" data-testid="qq-tr-expired-time-row">
+              <span className="shrink-0 text-[15px] text-black/40 dark:text-white/40">退款时间</span>
+              <span className="text-[16px] text-[#1F2329] dark:text-white">{fmtFull(p.expiredAt)}</span>
             </div>
           )}
           {!mine ? (
@@ -10506,7 +10650,7 @@ function ZonePage({
                 type="button"
                 data-testid="qq-repost-confirm"
                 onClick={() => {
-                  addUserMomentPost('qq', {
+                  const post = addUserMomentPost('qq', {
                     userName: me.name,
                     avatar: me.avatar,
                     content: repostDraft.trim() || '转发动态',
@@ -10518,6 +10662,9 @@ function ZonePage({
                       images: (repostTarget.images ?? []).slice(0, 3),
                     },
                   });
+                  // 转发的动态与原创说说同口径排 AI 互动队列：好友才会赞/评/转发这条转发
+                  //（此前漏入队，好友永远不会互动用户的转发动态）
+                  enqueuePostInteractions('qq', post.id);
                   setRepostTarget(null);
                   onToast('已转发到空间');
                 }}
@@ -12699,6 +12846,12 @@ function MainScreen({
   const closeApp = useUI((s) => s.closeApp);
   // 未读总线订阅：底部「消息」tab 角标 + 聊天页返回键角标实时同步
   const unreads = useUnreadMap(qqUnreads);
+
+  // 单聊卡片过期清算（QQ App 打开挂载即扫一遍）：AI 发的红包/转账超 24h 未领取/未收款 →
+  // 过期退回（卡片置终态 + 「XX的红包/转账已过期退回」提示行；各聊天页挂载时还会再触发，模块层防重入）
+  useEffect(() => {
+    void expireStaleSingleCards();
+  }, []);
 
   const showToast = useCallback((m: string) => {
     setToast(m);

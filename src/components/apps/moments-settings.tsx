@@ -584,7 +584,8 @@ export function MomentsSettingsPage({
           />
         </GroupCard>
 
-        {/* 卡3：NPC 互动 */}
+        {/* 卡3：NPC 互动（「回复 NPC 评论延迟」为死设置已移除：引擎从不让 AI 回复 NPC 评论，
+            存储键 replyNpcCommentDelay 保留不动，仅不再展示） */}
         <GroupLabel>NPC 互动</GroupLabel>
         <GroupCard>
           <Row
@@ -599,21 +600,6 @@ export function MomentsSettingsPage({
                 ariaLabel="NPC 互动延迟（秒）"
                 toStored={(n) => n}
                 onCommit={(v) => update({ npcInteractDelay: v })}
-              />
-            }
-          />
-          <Row
-            label="回复 NPC 评论"
-            right={
-              <NumberField
-                displayValue={settings.replyNpcCommentDelay}
-                min={1}
-                max={3600}
-                step={1}
-                unit="秒"
-                ariaLabel="回复 NPC 评论延迟（秒）"
-                toStored={(n) => n}
-                onCommit={(v) => update({ replyNpcCommentDelay: v })}
               />
             }
           />

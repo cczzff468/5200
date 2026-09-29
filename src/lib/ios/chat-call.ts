@@ -65,6 +65,7 @@ import { requestCallFollowup } from './call-followup';
 import { buildCrossContextBlocks } from './cross-app-context';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds, useGlobalCall } from './global-call';
+import { loadBlock } from './block-state';
 import { getReplyCount } from '../reply-count';
 
 // ---------------- 类型 ----------------
@@ -823,6 +824,17 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       if (phaseRef.current !== 'active') return;
       if (busyRef.current || textBusyRef.current) return;
       if (optsRef.current.contact?.kind === 'user') return; // 自己给自己发：不回
+      // 拉黑守卫（与单聊 send/runAiTurn 同口径，微信/QQ 通话内文字条不再绕过拦截）：
+      // - byChar（角色拉黑了用户）：拦截发送——不落库、不触发 AI，提示文案与单聊 toast 一致；
+      // - byUser（用户拉黑了角色）：文字照常进通话记录（用户侧发送不受影响），但 AI 不回应——
+      //   通话引擎无「解除拉黑申请卡片」通道，等价于单聊 runAiTurn 的 byUser 静默取消分支。
+      const peer = optsRef.current.contact;
+      const blk = peer?.id ? loadBlock(optsRef.current.app, peer.id) : null;
+      if (blk?.byChar) {
+        setError('对方已将你拉黑，无法发送');
+        return;
+      }
+      const byUserBlocked = blk?.byUser === true;
       textBusyRef.current = true;
       busyRef.current = true;
       setTextBusy(true);
@@ -830,6 +842,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       appendLog({ role: 'user', content: text, at: Date.now(), via: 'text' });
       const historyBefore = [...historyRef.current, { role: 'user' as const, content: text }];
       historyRef.current = historyBefore.slice(-16);
+      if (byUserBlocked) {
+        textBusyRef.current = false;
+        busyRef.current = false;
+        setTextBusy(false);
+        return;
+      }
       const { reply: rawReply, error: turnError } = await requestTurn(historyBefore, false);
       if (endedRef.current) return;
       if (!rawReply) {

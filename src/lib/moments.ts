@@ -44,6 +44,7 @@ import {
   type MemApp,
 } from '@/lib/memory';
 import { DEFAULT_BILINGUAL_PROMPT, getMomentsSettings } from '@/lib/ios/moments-settings';
+import { loadBlock } from '@/lib/ios/block-state';
 
 // ---------------- 统一数据模型（视图层） ----------------
 
@@ -649,6 +650,22 @@ function platformApp(platform: MomentPlatform): MemApp {
   return platform === 'wx' ? 'wx' : 'qq';
 }
 
+/**
+ * 该角色是否处于拉黑状态（双向）：byUser = 用户拉黑了角色；byChar = 角色拉黑了用户。
+ * 真实语义都是双向不可见——拉黑期间动态引擎停止该角色的一切主动互动
+ * （给用户动态点赞/评论/回复、转发、自动发帖、回复用户评论）。
+ * 状态每次现场读取（loadBlock），拉黑可解除，解除后互动自然恢复（不写死任何状态）。
+ */
+function isPeerBlocked(platform: MomentPlatform, peerId: string): boolean {
+  if (!peerId) return false;
+  try {
+    const b = loadBlock(platform, peerId);
+    return b.byUser === true || b.byChar === true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------- 动态 → 记忆（异步解析真实名字后入库，fire-and-forget） ----------------
 
 /**
@@ -661,6 +678,7 @@ function platformApp(platform: MomentPlatform): MemApp {
  * - char-reply：{peer}回复了{被回复人}的评论：「detail」（动态：「postDetail」）——被回复人默认机主，回复角色评论用 replyTargetPeerId 解析
  * - user-comment：{user}评论了{peer}的{平台}动态：「detail」
  * - user-reply：{user}回复了{peer}的评论：「detail」（动态：「postDetail」）
+ * - user-like：{user}给{peer}的{平台}动态点了赞（动态：「postDetail」）——机主赞了该角色（记忆主人）发的动态
  */
 interface MomentMemoryFact {
   peerId: string;
@@ -668,7 +686,15 @@ interface MomentMemoryFact {
   postId: string;
   commentId?: string;
   sourceTime?: number;
-  shape: 'char-post' | 'user-post' | 'like' | 'char-comment' | 'char-reply' | 'user-comment' | 'user-reply';
+  shape:
+    | 'char-post'
+    | 'user-post'
+    | 'like'
+    | 'user-like'
+    | 'char-comment'
+    | 'char-reply'
+    | 'user-comment'
+    | 'user-reply';
   peerDisplay: string;
   userName: string;
   detail: string;
@@ -707,6 +733,9 @@ function memoryContentOf(
       if (!target) return '';
       return `${peer}给${target}的${labelPost}点了赞（动态：「${f.postDetail ?? f.detail}」）`;
     }
+    case 'user-like':
+      // 机主赞了该角色（记忆主人）的动态：以角色为中心的视角（「凡凡给你的朋友圈动态点了赞」）
+      return `${user}给你的${labelPost}点了赞（动态：「${f.postDetail ?? f.detail}」）`;
     case 'char-comment': {
       const target = f.postAuthorPeerId ? extraReal?.postAuthor || f.postAuthorDisplay || '' : user;
       if (!target) return '';
@@ -724,34 +753,44 @@ function memoryContentOf(
   }
 }
 
+/** 写入该角色的动态记忆核心（异步解析真实名字后入库；可 await，供编辑正文等需要与清理串行的路径复用） */
+async function writeMomentMemoryAwait(fact: MomentMemoryFact): Promise<void> {
+  const [peerReal, userReal, postAuthorReal, replyTargetReal] = await Promise.all([
+    contactRealName(fact.peerId),
+    ownerRealName(),
+    fact.postAuthorPeerId ? contactRealName(fact.postAuthorPeerId) : Promise.resolve(''),
+    fact.replyTargetPeerId ? contactRealName(fact.replyTargetPeerId) : Promise.resolve(''),
+  ]);
+  const content = memoryContentOf(fact, peerReal, userReal, {
+    postAuthor: postAuthorReal,
+    replyTarget: replyTargetReal,
+  });
+  if (!content.trim()) return; // 关系解析失败 → 不写入
+  memAddMomentFragment(
+    fact.peerId,
+    platformApp(fact.platform),
+    content,
+    {
+      postId: fact.postId,
+      kind:
+        fact.shape === 'like' || fact.shape === 'user-like'
+          ? 'like'
+          : fact.shape === 'char-post' || fact.shape === 'user-post'
+            ? 'post'
+            : 'comment',
+      commentId: fact.commentId,
+    },
+    fact.sourceTime
+  );
+}
+
 /** 写入该角色的动态记忆：真实名字异步解析 → memAddMomentFragment（失败静默，不阻塞 UI）。
  *  关系无法建立（角色动态但发帖人解析不出真名/展示名）时不写入——宁缺勿错，绝不让错误关系进记忆 */
 function writeMomentMemory(fact: MomentMemoryFact): void {
   if (!fact.peerId) return;
-  void (async () => {
-    try {
-      const [peerReal, userReal, postAuthorReal, replyTargetReal] = await Promise.all([
-        contactRealName(fact.peerId),
-        ownerRealName(),
-        fact.postAuthorPeerId ? contactRealName(fact.postAuthorPeerId) : Promise.resolve(''),
-        fact.replyTargetPeerId ? contactRealName(fact.replyTargetPeerId) : Promise.resolve(''),
-      ]);
-      const content = memoryContentOf(fact, peerReal, userReal, {
-        postAuthor: postAuthorReal,
-        replyTarget: replyTargetReal,
-      });
-      if (!content.trim()) return; // 关系解析失败 → 不写入
-      memAddMomentFragment(
-        fact.peerId,
-        platformApp(fact.platform),
-        content,
-        { postId: fact.postId, kind: fact.shape === 'like' ? 'like' : fact.shape === 'char-post' || fact.shape === 'user-post' ? 'post' : 'comment', commentId: fact.commentId },
-        fact.sourceTime
-      );
-    } catch {
-      // 记忆是增强能力，失败静默
-    }
-  })();
+  void writeMomentMemoryAwait(fact).catch(() => {
+    // 记忆是增强能力，失败静默
+  });
 }
 
 // ---------------- 读写操作（UI 与调度器统一入口；每次变更后广播 moments-changed） ----------------
@@ -856,13 +895,45 @@ export function addCharMomentPost(
   return post;
 }
 
-/** 编辑动态内容（用户改动态；自己的和 AI 的都允许改——手机是用户的） */
+/** 编辑动态内容（用户改动态；自己的和 AI 的都允许改——手机是用户的）。
+ *  正文变了 → contentZh 旧译文清空（避免错位展示）；记忆同步：旧碎片里的句式嵌的还是旧正文，
+ *  无法精确改写合并产物 → 宁缺勿错按 sourcePostId 整组清除，再按作者重写一条新句式
+ *  （角色动态重写 char-post；用户广播动态没有唯一记忆主人，不重写——buildMomentsChatBlock
+ *  懒写入会按新正文重建） */
 export function updateMomentPostContent(platform: MomentPlatform, postId: string, userName: string, content: string): boolean {
   const list = listMomentPosts(platform, userName);
   const hit = list.find((p) => p.id === postId);
   const text = content.trim();
   if (!hit || !text) return false;
-  persistMomentPosts(platform, list.map((p) => (p.id === postId ? { ...p, content: text } : p)));
+  const changed = hit.content !== text;
+  persistMomentPosts(
+    platform,
+    list.map((p) => (p.id === postId ? { ...p, content: text, contentZh: changed ? undefined : p.contentZh } : p))
+  );
+  if (changed) {
+    void (async () => {
+      try {
+        // 先清后写（串行避免清/写竞态把新碎片又清掉）：memPurgeMomentSources 按 sourcePostId 匹配，
+        // 清掉该动态的全部旧碎片（含评论/点赞相关碎片——评论实体还在，只是旧句式记忆不再保留，宁缺勿错）
+        const contacts = await listContacts();
+        for (const c of contacts) memPurgeMomentSources(c.id, { postId });
+        if (hit.author === 'char' && hit.peerId) {
+          await writeMomentMemoryAwait({
+            peerId: hit.peerId,
+            platform,
+            postId,
+            sourceTime: Date.now(),
+            shape: 'char-post',
+            peerDisplay: hit.authorName,
+            userName,
+            detail: text.slice(0, 80),
+          });
+        }
+      } catch {
+        // 记忆同步是增强能力，失败静默
+      }
+    })();
+  }
   return true;
 }
 
@@ -881,7 +952,7 @@ function purgeMomentMemories(filter: { postId: string; commentId?: string }): vo
   })();
 }
 
-/** 删除动态（含评论/点赞、队列里的相关待处理项与各角色记忆里的相关碎片） */
+/** 删除动态（含评论/点赞、队列里的相关待处理项、互动消息收件箱里的相关通知与各角色记忆里的相关碎片） */
 export function deleteMomentPost(platform: MomentPlatform, postId: string, userName: string): boolean {
   const list = listMomentPosts(platform, userName);
   if (!list.some((p) => p.id === postId)) return false;
@@ -892,14 +963,25 @@ export function deleteMomentPost(platform: MomentPlatform, postId: string, userN
   } catch {
     // 忽略
   }
+  // 收件箱联动：该动态相关的互动消息（postId 悬空的赞/评/回复/转发通知）一并移除，不再计入未读角标
+  try {
+    const notices = loadNoticesSafe(platform);
+    if (notices && notices.some((n) => n.postId === postId)) {
+      saveNotices(platform, notices.filter((n) => n.postId !== postId));
+    }
+  } catch {
+    // 忽略
+  }
   purgeMomentMemories({ postId });
   return true;
 }
 
-/** 用户点赞/取消点赞（自己的点赞行为，不入角色记忆） */
+/** 用户点赞/取消点赞。点赞 AI 的动态 → 给作者写一条 user-like 记忆（AI 能感知被赞，宁缺勿错同规：
+ *  作者非角色或无法定位不写）；取消赞 → 精确清掉作者库里该动态的点赞来源记忆（不动该动态的其他记忆） */
 export function toggleUserMomentLike(platform: MomentPlatform, postId: string, userName: string): void {
   rememberMomentUserName(platform, userName);
   const list = listMomentPosts(platform, userName);
+  const post = list.find((p) => p.id === postId);
   persistMomentPosts(
     platform,
     list.map((p) => {
@@ -913,6 +995,34 @@ export function toggleUserMomentLike(platform: MomentPlatform, postId: string, u
       };
     })
   );
+  if (!post) return;
+  const willLike = !post.likes.some((l) => l.name === userName);
+  // 记忆主人 = 动态作者（角色且 peerId 可定位才写，宁缺勿错）；用户广播动态没有唯一主人，不入库
+  if (post.author !== 'char' || !post.peerId) return;
+  if (willLike) {
+    writeMomentMemory({
+      peerId: post.peerId,
+      platform,
+      postId,
+      sourceTime: Date.now(),
+      shape: 'user-like',
+      peerDisplay: post.authorName,
+      userName,
+      detail: post.content.slice(0, 40),
+      postDetail: post.content.slice(0, 40),
+    });
+  } else {
+    // 取消赞：只清该动态的「点赞」来源碎片（sourceKind==='like' 且无 commentId），
+    // 不碰同库中该动态的其他记忆（如作者自己「发过这条动态」的 char-post 碎片）
+    try {
+      const likeFrags = listFragments(post.peerId).filter(
+        (f) => f.source === 'moments' && f.sourcePostId === postId && f.sourceKind === 'like' && !f.sourceCommentId
+      );
+      if (likeFrags.length > 0) memDeleteFragmentByIds(post.peerId, likeFrags.map((f) => f.id));
+    } catch {
+      // 记忆清理是增强能力，失败静默
+    }
+  }
 }
 
 /** 角色点赞（调度器 AI 互动用；写入该角色记忆——三.4）。
@@ -1158,7 +1268,17 @@ export function deleteMomentComment(platform: MomentPlatform, postId: string, co
   } catch {
     // 忽略
   }
-  purgeMomentMemories({ postId, commentId });
+  // 后代回复的记忆碎片一并清：memPurgeMomentSources 按 sourceCommentId 精确匹配，逐个传（含根评论）
+  for (const cid of removed) purgeMomentMemories({ postId, commentId: cid });
+  // 收件箱联动：被删评论（含后代回复）相关的互动消息（postId+commentId 匹配）一并移除，不再计未读
+  try {
+    const notices = loadNoticesSafe(platform);
+    if (notices && notices.some((n) => n.postId === postId && n.commentId && removed.has(n.commentId))) {
+      saveNotices(platform, notices.filter((n) => !(n.postId === postId && n.commentId && removed.has(n.commentId))));
+    }
+  } catch {
+    // 忽略
+  }
   return true;
 }
 
@@ -1171,6 +1291,8 @@ interface MomentQueueInteract {
   postId: string;
   fireAt: number;
   tries: number;
+  /** 结算失败重试计数（生成全失败/零互动产生时顺延重试，最多 2 次，第三次失败才丢弃） */
+  attempts?: number;
 }
 interface MomentQueueReply {
   type: 'reply';
@@ -1707,7 +1829,11 @@ function lastCharPostAt(platform: MomentPlatform, userName: string, peer: Contac
 }
 
 function peersForPlatform(contacts: ContactRecord[], platform: MomentPlatform): ContactRecord[] {
-  return contacts.filter((c) => (c.kind === 'char' || c.kind === 'npc') && isFriendIn(c, platform));
+  // 拉黑过滤：被拉黑（双向）的角色不进候选——drainInteractions（互动结算）与 runAutoPosts（自动发帖）
+  // 两处枚举共用本函数，候选集中在此一处过滤即可覆盖两条链路的全部分支
+  return contacts.filter(
+    (c) => (c.kind === 'char' || c.kind === 'npc') && isFriendIn(c, platform) && !isPeerBlocked(platform, c.id)
+  );
 }
 
 /** 结算到期的 AI 回复（用户评论/回复了 AI → AI 再回复）；未到期/未处理的项原样保留 */
@@ -1728,6 +1854,8 @@ async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentT
       const post = listMomentPosts(item.platform, item.userName, deps.contacts).find((p) => p.id === item.postId);
       const parent = post?.comments.find((c) => c.id === item.parentCommentId);
       if (!peer || !post || !parent) continue; // 动态/评论已被删 → 丢弃
+      // 拉黑期间（双向）引擎不产生 AI 回复用户评论的结算（状态现场读取，解除后自然恢复）
+      if (isPeerBlocked(item.platform, item.peerId)) continue;
       // 防串台（一.1）：AI 只回「用户发的评论」。旧版本遗留的队列项指向 AI 自己/别人的评论
       // （会生成「乐乐 回复 乐乐」这种错误指向），直接丢弃不生成
       if (parent.author !== 'user') continue;
@@ -1751,9 +1879,12 @@ async function drainReplies(queue: MomentQueueItem[], now: number, deps: MomentT
   return keep;
 }
 
-/** 结算到期的用户动态互动（1-2 位平台好友点赞 + 可能评论） */
+/** 结算到期的用户动态互动（1-2 位平台好友点赞 + 可能评论）。
+ *  结算失败（生成抛错 / 选了候选却零互动产生）不丢弃该项，而是顺延 60~90 秒重试，
+ *  最多重试 2 次（第三次失败才丢弃）——修复「首战全失败该动态永远没有 AI 互动」。 */
 async function drainInteractions(queue: MomentQueueItem[], now: number, deps: MomentTickDeps): Promise<MomentQueueItem[]> {
   const keep: MomentQueueItem[] = [];
+  const retryDelayMs = () => 60_000 + Math.floor(Math.random() * 30_000); // 60~90 秒随机
   for (const item of queue) {
     if (item.type !== 'interact') {
       keep.push(item);
@@ -1763,6 +1894,12 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
       keep.push(item);
       continue;
     }
+    const retryLater = (): boolean => {
+      // 保持现有去重逻辑不变（enqueuePostInteractions 仍按 postId 去重，重试项复用同一队列项）
+      if ((item.attempts ?? 0) >= 2) return false;
+      keep.push({ ...item, attempts: (item.attempts ?? 0) + 1, fireAt: now + retryDelayMs() });
+      return true;
+    };
     try {
       const userName = item.platform === 'wx' ? deps.wxUserName : deps.qqUserName;
       // 传 contacts：legacy 数据的角色动态也能解析出 peerId（发帖人排除/记忆归属都依赖它）
@@ -1775,39 +1912,46 @@ async function drainInteractions(queue: MomentQueueItem[], now: number, deps: Mo
           !post.likes.some((l) => isInteractionByPeer(l, p)) &&
           !post.comments.some((c) => isInteractionByPeer(c, p))
       );
+      if (candidates.length === 0) continue; // 好友都已互动过/无候选：无事可做，正常结束（不算失败，不重试）
       // 随机挑 1-2 位（动态像真人刷到一样陆续有互动）
       const shuffled = [...candidates].sort(() => Math.random() - 0.5);
       const picked = shuffled.slice(0, Math.random() < 0.5 ? 1 : 2);
       // feat-64：点赞/评论概率按平台独立
       const settings = getMomentsSettings(item.platform);
+      let produced = false; // 本轮是否实际产生了互动
       for (const peer of picked) {
         try {
           // 点赞：按 likeProbability 决定（旧版硬编码 100%）
-          if (Math.random() < settings.likeProbability) {
-            addCharMomentLike(item.platform, post.id, { peer, userName });
+          if (Math.random() < settings.likeProbability && addCharMomentLike(item.platform, post.id, { peer, userName })) {
+            produced = true;
           }
           // 评论：按 commentProbability 决定（旧版硬编码 70%）
           if (Math.random() < settings.commentProbability) {
             await aiCommentOnMoment({ apiConfig: deps.apiConfig, platform: item.platform, peer, post, userName });
+            produced = true;
           }
           // QQ 空间转发（新）：好友刷到你的动态，可能转发到 TA 的空间（带一句转发理由）；
           // 只转用户的原创动态，转发会让原动态作者收到「空间消息·转发」通知
           if (item.platform === 'qq' && post.author === 'user' && !post.repostOf && Math.random() < 0.22) {
             try {
-              await aiRepostMoment({ apiConfig: deps.apiConfig, platform: 'qq', peer, post, userName });
+              if (await aiRepostMoment({ apiConfig: deps.apiConfig, platform: 'qq', peer, post, userName })) produced = true;
             } catch {
               // 转发失败不影响点赞/评论
             }
           }
         } catch (err) {
-          // 单个角色失败不影响其他角色
+          // 单个角色失败不影响其他角色（是否重试由下方「整体零互动产生」判定统一兜住）
           console.warn('[moments] 单个角色互动失败', peer.name, err);
         }
       }
-      if (picked.length > 0) emitMomentsChanged(item.platform);
+      if (produced) emitMomentsChanged(item.platform);
+      // 零互动产生（生成抛错 / 概率未命中 / 单角色失败）→ 顺延重试，最多 2 次；
+      // 候选为空在上面已正常结束，不会进到这里
+      if (!produced) retryLater();
     } catch (err) {
-      // 队列项整体失败：不重试（互动是锦上添花）
+      // 队列项整体失败（列表读取等异常）：同样顺延重试，最多 2 次（第三次失败才丢弃）
       console.warn('[moments] 互动队列项失败', item.postId, err);
+      retryLater();
     }
   }
   return keep;
@@ -2155,6 +2299,27 @@ export async function repairMomentIdentityData(): Promise<void> {
           continue;
         }
         if (f.sourceKind === 'like') {
+          // 用户点赞 AI 动态的记忆（user-like）：碎片主人必须是动态作者本人；点赞记录还在则按当前正文重算，
+          // 已取消赞（点赞记录不在）则落入下方 charLike 分支删除（宁缺勿错）
+          const userLike = post.likes.find((l) => l.author === 'user');
+          if (userLike && isPostByPeer(post, contact)) {
+            const expected = memoryContentOf(
+              {
+                peerId: contact.id,
+                platform: post.platform,
+                postId: post.id,
+                shape: 'user-like',
+                peerDisplay: displayNameOf(contact),
+                userName: userLike.name || ownerReal,
+                detail: post.content.slice(0, 40),
+                postDetail: post.content.slice(0, 40),
+              },
+              realNameOf.get(contact.id) || '',
+              ownerReal
+            );
+            if (expected && expected !== f.content) rewrites.push({ id: f.id, content: expected });
+            continue;
+          }
           const like = post.likes.find((l) => isInteractionByPeer(l, contact));
           if (!like) {
             deletes.push(f.id); // 点赞已不存在（含历史自赞被清理）→ 删
