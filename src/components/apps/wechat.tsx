@@ -185,6 +185,7 @@ import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
+import PeerStatusCard from '@/components/apps/peer-status-card';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
 import { useUnreadMap, wxUnreads as wxUnreadStore } from '@/lib/unread-store';
@@ -4053,6 +4054,8 @@ function ChatPage({
   const runAiTurnRef = useRef<((userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string, baseMsgs?: WxMsg[]) => void) | null>(null);
   /** 聊天设置页（右上角 ··· 进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 角色状态卡（点击消息行对方头像弹出：心情/好感度/心声/动作/穿着/位置/时间，实时生成不影响聊天） */
+  const [peerStatusOpen, setPeerStatusOpen] = useState(false);
   /** 查找聊天记录页 */
   const [searchOpen, setSearchOpen] = useState(false);
   /** 聊天背景页（设置页「聊天背景」进入的独立二级页） */
@@ -6700,7 +6703,20 @@ function ChatPage({
                   {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
                 </span>
               )}
-              <WxAvatar src={m.role === 'me' ? me.avatar : peer.avatar} alt={m.role === 'me' ? me.name : peer.name} size={38} />
+              {m.role === 'me' ? (
+                <WxAvatar src={me.avatar} alt={me.name} size={38} />
+              ) : (
+                /* 点击对方头像：弹出角色状态卡（多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
+                <button
+                  type="button"
+                  data-testid="wx-peer-avatar"
+                  aria-label={`查看${peer.name}的状态`}
+                  className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
+                  onClick={() => setPeerStatusOpen(true)}
+                >
+                  <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
+                </button>
+              )}
               {m.kind === 'redpacket' && m.rp ? (
                 <RpBubble
                   blessing={m.rp.blessing}
@@ -7243,6 +7259,9 @@ function ChatPage({
           onClose={() => setGate(null)}
         />
       )}
+
+      {/* 角色状态卡（点击消息行对方头像弹出；关闭不影响聊天，内容不写记忆除非主动存入） */}
+      <PeerStatusCard open={peerStatusOpen} onClose={() => setPeerStatusOpen(false)} contact={peer} app="wx" />
 
       {/* 聊天设置页（右上角 ··· 进入）：信息卡片/置顶聊天/消息免打扰/回复条数/查找聊天记录/聊天背景 */}
       {settingsOpen && (

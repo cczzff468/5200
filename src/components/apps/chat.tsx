@@ -27,6 +27,7 @@ import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar'
 import { BackToHome } from '@/components/ios/BackToHome';
 import { GlassButton } from '@/components/ios/GlassButton';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
+import PeerStatusCard from '@/components/apps/peer-status-card';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -771,6 +772,8 @@ function ChatView({
   /** 联系人资料变更后通知父级刷新 contacts state + chatSession.peer.avatarSrc（仅联系人会话传入；
    *  AI 自主换头像后调用，保证退出会话再回主列表 / 重新进入会话时数据一致；#108/#119） */
   onContactChanged,
+  /** 打开角色状态卡（点击顶栏对方头像时回调；仅联系人会话传入，小助手会话不弹） */
+  onOpenPeerStatus,
 }: {
   /** 会话存储键：'assistant' | 'c:<contactId>'（key 变化 = 组件重挂载，互不串扰） */
   storageKey: string;
@@ -790,6 +793,8 @@ function ChatView({
   /** 联系人资料变更后通知父级刷新 contacts state + chatSession.peer.avatarSrc（仅联系人会话传入；
    *  AI 自主换头像后调用，保证退出会话再回主列表 / 重新进入会话时数据一致；#108/#119） */
   onContactChanged?: (contactId: string) => void;
+  /** 打开角色状态卡（仅联系人会话传入；小助手会话不传 → 顶栏头像不可点） */
+  onOpenPeerStatus?: () => void;
 }) {
   const [input, setInput] = useState('');
   // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
@@ -2219,7 +2224,15 @@ function ChatView({
       <div className="z-20 shrink-0 border-b border-border/50 bg-background/80 pt-[54px] backdrop-blur-xl">
         <div className="relative flex h-[64px] items-center px-3">
           <IOSBackButton label="" onClick={onBack} />
-          <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+          <div
+            className={`absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center ${
+              onOpenPeerStatus ? 'cursor-pointer rounded-full transition-opacity active:opacity-60' : ''
+            }`}
+            onClick={onOpenPeerStatus}
+            role={onOpenPeerStatus ? 'button' : undefined}
+            aria-label={onOpenPeerStatus ? '查看对方状态' : undefined}
+            data-testid="sms-peer-avatar"
+          >
             {peerAvatarSrc ? (
               <img src={peerAvatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
             ) : (
@@ -3473,6 +3486,8 @@ export default function ChatApp() {
   const [query, setQuery] = useState('');
   /** 当前聊天会话（null = 未在聊天中） */
   const [chatSession, setChatSession] = useState<ChatSession | null>(null);
+  /** 角色状态卡（聊天界面点击对方头像弹出：三端共用 PeerStatusCard；小助手会话不弹） */
+  const [statusCardOpen, setStatusCardOpen] = useState(false);
   /** 好友会话预览（信息列表：有聊天记录的好友 CHAR/NPC） */
   const [contactSessions, setContactSessions] = useState<ContactSessionPreview[]>([]);
 
@@ -3787,6 +3802,7 @@ export default function ChatApp() {
           peer={chatSession.peer}
           systemPrompt={chatSession.systemPrompt}
           onBack={() => setView('main')}
+          onOpenPeerStatus={isAssistant ? undefined : () => setStatusCardOpen(true)}
           contactVoiceId={isAssistant ? null : contacts.find((c) => c.id === chatSession.key.slice(2))?.voiceId ?? null}
           onSaveVoiceId={(vid) => {
             if (!chatSession || chatSession.key === 'assistant') return;
@@ -3844,6 +3860,14 @@ export default function ChatApp() {
               }
             })();
           }}
+        />
+        {/* 角色状态卡（点击顶栏对方头像弹出；关闭不影响聊天，内容不写记忆除非主动存入。
+            contact 按会话键实时解析：切会话/退出聊天时 contact=null 时不渲染） */}
+        <PeerStatusCard
+          open={statusCardOpen}
+          onClose={() => setStatusCardOpen(false)}
+          contact={chatSession.key.startsWith('c:') ? contacts.find((c) => c.id === chatSession.key.slice(2)) ?? null : null}
+          app="sms"
         />
       </IOSScreen>
     );

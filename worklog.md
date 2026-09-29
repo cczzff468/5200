@@ -12028,3 +12028,22 @@ Work Log:
 Stage Summary:
 - 35/35 项全部落地：记忆管线（谁做的+哪个App+什么时候+互动方向四要素贯通）、五端历史序列化主语、群事件操作者、通话场景与方向、朋友圈存量、世界书锚点、QQ App 语境
 - 提交：git commit + push origin main
+---
+Task ID: 4
+Agent: 主协调者 (Z.ai Code)
+Task: 新功能「点击头像显示角色状态卡」：微信/QQ/信息三端共用，点击聊天对方头像弹出实时生成的角色状态卡（心情颜文字/好感度/心声/动作/穿着/位置/时间）
+
+Work Log:
+- 2 路并行只读探索（4-a 三端头像接线点 / 4-b 后端 LLM 与记忆契约），关键结论：三端顶栏均无头像（wx/qq）或空闲（sms），消息行对方头像（wechat.tsx:6703 / qq.tsx:5116）完全未被占用（bubblePress 只挂气泡层、行级 onClickCapture 仅多选模式生效）；后端沿用「前端组装上下文→POST→LLM→JSON」标准模式（/api/phone/proactive 同构），记忆/聊天存前端 IndexedDB（kv），服务端拿不到必须前端传入
+- 新建 src/app/api/character-status/route.ts（POST）：parseInlineContact 校验联系人（kind='user' 拒绝）→ buildPersonaSystemPrompt（channel=微信/QQ/短信，复用七要素人设+真名/昵称/跨App互通注入）+ 10 条状态卡输出规则（mood 必须 kaomoji 禁 emoji、affectionLabel 禁通用套话、innerVoice 必须角色专属口吻、affection 依 relation+记忆+最近聊天现判 0-100、随机种子要求两次生成不同）→ user 消息带机主/你 主语锚点（防归属混淆，fix3 系列口径）+ memRecallBlock 记忆块 + 当前时间 + QQ 密友值提示 → completeWithFallback（用户上游→SDK 兜底）→ parseLooseJSON + normalizeStatus 逐字段清洗兜底（affection 钳制 0-100、剥 markdown、缺字段回退中性值、全空视为失败 502）
+- 反缓存扰动：extractUpstreamConfig 温度覆盖为 0.8+Math.random()*0.25（部分上游对相似 prompt 返回确定性缓存导致两次生成雷同，实测发现后加入；事实约束由 system 规则承担，扰动只放开措辞自由度）
+- 新建 src/components/apps/peer-status-card.tsx（三端共用状态卡）：打开即实时生成（memRecentConvo 取最近 10 轮 + memRecallBlock 记忆召回 + ownerProfile/addressNameOf 机主称呼与聊天人设同口径 + buildNpcPromptExtra NPC 配角圈 + useSettings.apiConfig + 每次点击新随机种子），seqRef+AbortController 防竞态换一换连点；UI：遮罩点关+X+framer-motion spring 弹卡，心情大号颜文字、好感度进度条（motion 宽度动画）、心声引用块、Footprints/Shirt/MapPin/Clock 明细行（location 空则隐藏该行），加载随机文案转圈、失败重试按钮；「换一换」重新生成；「存入记忆」= memAddEventFragment 直写一条事件碎片（「「小雪」（AI角色本人）于X在微信里被机主查看头像时展现出此刻的状态：心情…；对机主的好感约 N/100…；内心独白：「…」；当时正在…；穿着…；人在…」——归属标注规范句式，eventTime 落库），保存后按钮变灰「已存入记忆」；除此之外状态卡内容零持久化、零消息副作用
+- 三端接线（各 4 处：import/state/头像点击/渲染卡片）：wechat.tsx 消息行 peer 头像外包 button（data-testid=wx-peer-avatar，me 分支保持原样；多选模式点击头像仍走行级 onClickCapture 勾选）+ 渲染 <PeerStatusCard contact={peer} app="wx"/>；qq.tsx 同构（qq-peer-avatar，!mine 分支）+ bondHint（peerStatusOpen 时才算：loadBondStat 密友值+好友天数一行提示，避免渲染期建档副作用）；chat.tsx（信息端）顶栏头像块（2222-2245）加 onClick/role/aria + 新增 onOpenPeerStatus 可选 prop（小助手会话不传→不可点），宿主 ChatApp 持 statusCardOpen，contact 按 chatSession.key.slice(2) 从 contacts 实时解析、渲染在 ChatView 同级
+- E2E（agent-browser）：建 CHAR「林小雪」（人设：温柔文艺、暗恋、句尾～）+ USER「凡凡」→ 信息端手机号加好友→聊天→点顶栏头像→卡弹出生成（(｡•́︿•̀｡)有点小落/75·默默关注中的暧昧/心声/穿米白针织衫/宿舍窗边/时间）✓→换一换内容变化且更贴人设（心声带「～」口头禅）✓→存入记忆（按钮已存入+IndexedDB mem-frag 实证：app=sms、（AI角色本人）标注、hasRoleTag:true）✓→关闭零残留 ✓；微信端机主登录→通讯录加小雪→发消息等 AI 回复→点消息行头像→生成（76·希望他发现我的心意/「他终于注意到我了」/刚从图书馆出来拿诗集）✓换一换✓关闭聊天正常 ✓；QQ 端登录（10001）→可能认识的人添加小雪→发送消息→点消息行头像→生成（心声用机主名「凡凡」/75·暗恋中的小雀跃）✓换一换（label/穿着/位置措辞全变、图书馆+浅蓝衣裙人设连贯）✓关闭聊天正常 ✓；浏览器零 page error、dev.log 全 200 无错
+- 环境备注：HMR 后 agent-browser 物理 mouse 事件对该页面失效（点 App 图标/菜单无响应），改用 eval 合成 PointerEvent(pointerdown/up)+MouseEvent(click) 序列驱动 UI 完成验证；锁屏解锁=合成 pointer 从 (219,790) 上滑至 (219,340)（dy<-110 触发），主屏翻页=合成 pointer 从 x340→x70 左滑两次
+
+Stage Summary:
+- 交付文件：新增 src/app/api/character-status/route.ts + src/components/apps/peer-status-card.tsx；接线 src/components/apps/wechat.tsx / qq.tsx / chat.tsx（各 4 处最小改动）
+- 需求逐条达成：三端共用一套组件与 API ✓；每次点击重新生成（open/nonce 触发新请求，无缓存）✓；依据=人设(buildPersonaSystemPrompt 七要素+NPC 配角圈)+最近聊天(memRecentConvo 实时 kv)+记忆(memRecallBlock)+当前时间(fmtDate 北京时间)+App 上下文(channel+QQ bondHint) ✓；内容随种子+温度扰动变化但不脱离人设（E2E 三端×2 次生成全部不同且角色细节连贯）✓；不同角色不同风格（prompt 强制角色专属口吻，禁止通用小作文）✓；心情用颜文字禁 emoji（prompt 硬约束+实测）✓；好感度数值+等级短语 ✓；心声/动作/穿着/位置(可选)/时间全齐 ✓；关闭不影响聊天（纯浮层，无消息/状态副作用）✓；状态卡不写记忆，仅用户主动「存入记忆」落一条归属标注事件碎片 ✓
+- 现有功能零破坏：只新增头像点击与浮层渲染，bubblePress 长按/多选勾选/群成员管理弹层/群聊消息行头像均未触碰；范围限定（单聊、群聊、记忆、世界书、时间感知、回复条数、朋友圈、识图、红包转账、长按菜单、群管理、拉黑、语音、通话）全部不受影响
+- 验证：npx tsc --noEmit 0 错；eslint 5 个改动文件 0 错 0 警；三端 E2E 全通过；git commit + push origin main

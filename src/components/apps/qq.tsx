@@ -166,6 +166,7 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
+import PeerStatusCard from '@/components/apps/peer-status-card';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memResetConvoCounters } from '@/lib/memory';
@@ -1160,6 +1161,16 @@ function loadBondStat(contactId: string): BondStat {
 /** 成为好友天数：建档当天为第 0 天，之后每天 +1（与 QQ 一致） */
 function bondDays(s: BondStat): number {
   return Math.max(0, Math.floor((Date.now() - s.since) / 86_400_000));
+}
+
+/** 角色状态卡的好感锚定：QQ 密友值/好友天数一行提示（读取失败静默返回 null） */
+function bondHintTextOf(contactId: string): string | null {
+  try {
+    const s = loadBondStat(contactId);
+    return `QQ密友值 ${s.points}，成为好友第 ${bondDays(s)} 天`;
+  } catch {
+    return null;
+  }
 }
 
 /** 聊天互动增加密友值（+2/条，每日上限 20，当天隔天自动重置） */
@@ -2473,6 +2484,8 @@ function ChatPage({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   /** 聊天设置页（右上角菜单进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 角色状态卡（点击消息行对方头像弹出：心情/好感度/心声/动作/穿着/位置/时间，实时生成不影响聊天） */
+  const [peerStatusOpen, setPeerStatusOpen] = useState(false);
   /** 查找聊天记录页 */
   const [searchOpen, setSearchOpen] = useState(false);
   /** 聊天背景页（设置页「聊天背景」进入的独立二级页） */
@@ -5113,7 +5126,18 @@ function ChatPage({
                     {selectedIds.includes(m.id) && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
                   </span>
                 )}
-                {!mine && <QqAvatar src={peer.avatar} alt={peer.name} size={40} />}
+                {!mine && (
+                  /* 点击对方头像：弹出角色状态卡（多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
+                  <button
+                    type="button"
+                    data-testid="qq-peer-avatar"
+                    aria-label={`查看${peer.name}的状态`}
+                    className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
+                    onClick={() => setPeerStatusOpen(true)}
+                  >
+                    <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
+                  </button>
+                )}
                 {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧 */}
                 {mine && blockedIconOf(m)}
                 {m.kind === 'call' && m.call ? (
@@ -5817,6 +5841,15 @@ function ChatPage({
           onClose={() => setGate(null)}
         />
       ) : null}
+
+      {/* 角色状态卡（点击消息行对方头像弹出；关闭不影响聊天，内容不写记忆除非主动存入） */}
+      <PeerStatusCard
+        open={peerStatusOpen}
+        onClose={() => setPeerStatusOpen(false)}
+        contact={peer}
+        app="qq"
+        bondHint={peerStatusOpen ? bondHintTextOf(peer.id) : null}
+      />
 
       {/* 聊天设置页（右上角菜单进入）：信息卡片/置顶聊天/消息免打扰/回复条数/查找聊天记录/聊天背景 */}
       {settingsOpen ? (
