@@ -10613,3 +10613,30 @@ Work Log:
 Stage Summary:
 - 修改文件：src/components/apps/wechat.tsx（WxMenuRow badge prop+发现tab角标+朋友圈行角标+胶囊pt-10）、src/components/apps/qq.tsx（DiscoverPage zoneBadge+动态tab角标）、src/lib/moments.ts（allowAddressByName/replyRealName 解析与传递+strip条件化）、src/app/api/moments/generate/route.ts（称呼条件化+真名指令+模板禁令补充）
 - 核心成果：①微信发现tab/朋友圈行、QQ动态tab/空间动态行四处未读数字角标，真机同款样式，已读联动消除 ②胶囊下移至 40px ③称呼规则完整落地：默认不叫名字→多人评论区才允许（且叫真实名字不叫昵称、不每句都叫）→单人回复引擎兜底剥离 ④七组规则全数核查通过
+
+---
+Task ID: fix-persona-driven-addressing
+Agent: 主协调者 (Z.ai Code)
+Task: 朋友圈/QQ动态称呼规则改为「根据人设、动态内容、评论内容来决定」；评论去模板化；回复传入被回复评论原文且不复读
+
+Work Log:
+- 排查确认旧实现是「引擎一刀切」：moments.ts aiCommentOnMoment 用 otherSpeakers.size>=2 算 allowAddressByName（≥2人才允许叫名），单人回复强制 stripLeadingAddress 剥开头喊名；route.ts comment 分支一刀切禁「名字+语气词开头」→ 所有角色被迫同一种称呼方式
+- moments.ts：
+  1. 删除 stripLeadingAddress + escapeRegExp（唯一调用方就是剥名兜底；称呼交还人设后引擎不再剥名——「财啊」这类称呼若符合角色说话习惯应保留）
+  2. 删除 otherSpeakers/allowAddressByName 硬规则与传参；称呼决定权交给 LLM（人设+动态+评论语境），引擎只保留两条硬约束给 prompt：不要每句都叫、要叫就叫真实名字
+  3. replyRealName 解析保留（回复对象是角色时 contactRealName 解析真名传给 prompt）
+- route.ts：
+  1. comment 分支：「不要用名字+语气词开头喊人」→「要不要称呼由你的人设和平时说话习惯决定：爱喊人的可喊一句（喊真实名字），不爱喊的直接说；不要每句都喊、一句话称呼最多一次、不要客套式重复开头」；新增「你怎么评这条动态要一眼认得出是你这个人评的：换别的角色评法和语气必须完全不同」；模板禁令补「这句话说得真好啊」
+  2. reply 分支：删除 allowAddressByName 双分支（多人/单人两种 prompt），统一为「称呼由你的人设、说话习惯和TA这句话的语气决定：平时爱喊人就喊一句（叫真实名字不用昵称/网名），平时不喊就直接说内容；无论哪种都不要每句都喊、整个回复称呼最多出现一次」
+  3. 回复针对性补强：「也不要把TA这句话原样或换个说法再说一遍（复读上一句无效）」「你自己在评论区刚说过的话（包括你的上一条回复）也不要再重复或变着说一遍」；接口注释 replyTo 补 realName 字段说明
+- E2E 浏览器验证（420×900，合成 PointerEvent + React __reactProps$ 直调图标 onClick 绕过图片遮挡）：
+  - 微信：凡凡评乐乐奶茶梗动态 → 乐乐回「行行行，两杯奶茶外加一杯咖啡，这波狗粮我吃出豪华套餐了！」（接住奶茶+狗粮双梗，无称呼开头）；凡凡再回「年终奖都喝进去」→ 乐乐回「凡凡，年终奖我可不碰，只碰你的奶茶钱包！」（打趣语境叫了一次名字，与第一轮无称呼形成对照=称呼随语境变化；不复读上一句）✓
+  - QQ：凡凡评乐乐「黑眼圈都快成你职业标配了」→ 乐乐回「凡凡，你这是在暗示我该申请黑眼圈代言人了？」（接梗升级调侃、不复读动态/上一句、与该动态下旧回复不重复）✓
+  - 微信朋友圈胶囊「2条新消息」parentPaddingTop=40px（pt-10，前几轮下移档位保持不动）✓
+  - IndexedDB 记忆抽查：mem-frag:seed-char-lele 最新片段 app=qq（双端记忆带平台标签）✓
+- bunx tsc --noEmit exit 0；eslint 两文件 exit 0；dev.log 无新增错误（moments/generate 全 200）
+
+Stage Summary:
+- 修改文件：src/lib/moments.ts（删 stripLeadingAddress/escapeRegExp/allowAddressByName 硬规则）、src/app/api/moments/generate/route.ts（称呼人设驱动 prompt 重构+评论去模板化强化+回复防复读上一句）
+- 核心成果：称呼规则从「引擎按评论区人数一刀切」改为「LLM 根据人设+动态+评论内容决定」——爱喊人的角色（如乐乐打趣时喊"凡凡"）保留个性称呼，不爱喊的直接说内容；同一个角色两次称呼方式可不同（语境驱动）；评论/回复语气因角色而异、禁模板、回复以被回复评论原文为唯一话题中心且不复读动态/上一句/自己刚说过的话
+- 关键调试经验：本项目 openApp 有 activeApp/phase 守卫（App 没关时点其他图标全被静默拦截）；Home 指示条 pointer-events-none 不可点，关 App 要底部边缘上滑→多任务切换器→上滑卡片 killApp；主屏图标被 img.absolute.inset-0 覆盖时 agent-browser click 报 covered，可 eval 找 __reactProps$ 直调 onClick

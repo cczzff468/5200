@@ -1385,31 +1385,6 @@ function isDupText(text: string, avoid: string[]): boolean {
   });
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * 剥掉回复正文开头的「喊名字」（用户实锤：每句回复都「财啊，」开头，像客服）。
- * 界面已显示「X 回复 Y：」前缀，正文再喊名字既生硬又多余。
- * 仅保守处理开头一次「名字 + 语气词/标点」（如「财啊，」「财呀！」「财，」）；
- * 剥完剩余太短（<4 字）视为误判不剥。正文中间自然出现的名字不动。
- */
-function stripLeadingAddress(text: string, name: string): string {
-  const n = (name ?? '').trim();
-  if (!n || n.length > 12) return text;
-  let re: RegExp;
-  try {
-    re = new RegExp(`^${escapeRegExp(n)}[啊呀呢哦哇嘛呗嗯~～，,。．！!？?、\\s]+`);
-  } catch {
-    return text;
-  }
-  const m = text.match(re);
-  if (!m) return text;
-  const rest = text.slice(m[0].length).trim();
-  return rest.length >= 4 ? rest : text;
-}
-
 /**
  * 随机切入角度（每次生成都随机指定一个，让同样的 prompt 基础每次产出不同方向的内容——
  * 同一角色在微信/QQ 两平台、甚至两次触发之间，内容不再一字不差）。
@@ -1609,14 +1584,9 @@ export async function aiCommentOnMoment(args: {
   // 回复自己动态下的评论时，把自己动态原文也列入禁复读——回复是接话，
   // 不能把动态改写一遍再说（用户实锤：「财啊，项目算搞定了，但下一个任务啥时候来啊」整句复读动态）
   if (replyTo && isPostByPeer(post, peer)) avoid.push(post.content.slice(0, 80));
-  // 称呼规则（三）：默认不叫名字；只有评论区有多人发言（≥2 个非本角色的说话人）、
-  // 不喊名字会分不清在回谁时，才允许开头叫一次名字区分（此时引擎不做剥名字处理）
-  const otherSpeakers = new Set(
-    post.comments
-      .filter((c) => c.authorName && c.authorName !== displayNameOf(peer) && c.authorName !== peer.name)
-      .map((c) => c.authorName)
-  );
-  const allowAddressByName = otherSpeakers.size >= 2;
+  // 称呼规则（用户新要求）：不再由引擎按「评论区人数」一刀切（旧版：≥2人才允许叫名、单人回复强制剥名
+  // → 所有角色都被迫用同一种称呼方式）。称呼完全交给 LLM：由角色人设、动态内容、评论内容/语气决定
+  // 要不要称呼、怎么称呼；引擎只保留两条硬约束交给 prompt——①不要每句都叫；②要叫就叫真实名字（下方解析）。
   // 称呼用真实名字（三.5）：回复对象是角色时解析 TA 的真实名字传给 prompt（要称呼就叫真名，不用昵称/网名）
   let replyRealName = '';
   if (replyTo) {
@@ -1640,26 +1610,20 @@ export async function aiCommentOnMoment(args: {
       post: { authorName: post.authorName, author: post.author, content: post.content.slice(0, 200) },
       thread,
       replyTo: replyTo ? { authorName: replyTo.name, content: replyTo.content, realName: replyRealName || undefined } : null,
-      allowAddressByName: replyTo ? allowAddressByName : false,
       memories: memorySnippets(peer.id, platformApp(platform)),
       avoid: attempt === 0 ? avoid : [...avoid, banned].filter(Boolean),
       variation: randomVariation(replyTo ? 'reply' : 'comment'),
       bilingual: settings.bilingualEnabled,
       bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
     });
-    // 回复正文剥掉开头的「喊名字」——界面已有「X 回复 Y：」前缀，再喊名字像客服；
-    // prompt 禁令之外的确定性兜底（译文同步剥，保持双语一致）。
-    // 多人评论区（allowAddressByName）允许用名字区分对象，不剥
-    const clean =
-      replyTo && !allowAddressByName
-        ? { content: stripLeadingAddress(content, replyTo.name), contentZh: stripLeadingAddress(contentZh, replyTo.name) }
-        : { content, contentZh };
-    if (!isDupText(clean.content, avoid)) {
+    // 称呼不再由引擎剥离处理：称呼方式由角色人设决定（爱喊人的角色喊名字是TA的说话习惯，
+    // 引擎一刀切剥名 = 所有角色同一种称呼，正是要避免的）；「不要每句都叫」由 prompt 硬约束。
+    if (!isDupText(content, avoid)) {
       const added = addCharMomentComment(platform, post.id, {
         peer,
         userName,
-        content: clean.content,
-        contentZh: clean.contentZh || undefined,
+        content,
+        contentZh: contentZh || undefined,
         replyTo: replyTo ? { commentId: replyTo.commentId, name: replyTo.name } : null,
       });
       if (!added) throw new Error('评论未写入（动态可能已删除或内容重复）');

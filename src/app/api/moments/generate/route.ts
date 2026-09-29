@@ -16,7 +16,7 @@ export const runtime = 'nodejs';
  *   memories?: string[],               // 记忆库素材（≤10 条）
  *   post?: { authorName?: string, author?: 'user'|'char', content?: string },  // 要评论的动态
  *   thread?: { authorName?: string, content?: string }[], // 评论区上下文（回复时）
- *   replyTo?: { authorName?: string, content?: string },  // 被回复的评论
+ *   replyTo?: { authorName?: string, content?: string, realName?: string },  // 被回复的评论（realName=对方真实名字，称呼用）
  *   hint?: string,                     // 触发语境提示（如「结合最近聊天有感而发」）
  *   ownRecentPosts?: string[],         // 该角色最近已发过的动态（发动态时防重复/防自相矛盾）
  *   avoid?: string[],                  // 禁复读名单：该角色最近说过的话（评论/回复/转发不与已说过的重复；
@@ -236,14 +236,17 @@ export async function POST(req: Request) {
       user.push(`请以「${name}」的身份（你是评论人，不是发帖人）给这条动态写一条评论。`);
       user.push(`- 身份提醒：这条动态是「${postAuthor}」发的，你不是TA——以你「${name}」自己的口吻回应TA的内容，不要模仿作者的口吻、不要替TA说话、不要自问自答；`);
       user.push('- 15~50 字，口语化，像熟人随手打的：接梗、调侃、吐槽、反问、拆台都行，也可以就一短句；');
-      user.push('- 不要用「名字+语气词」开头喊人（如「XX啊，」「XX，」这种开头），直接说话；');
+      user.push(
+        `- 要不要称呼对方，由你的人设和平时说话习惯决定：平时爱喊人的角色可以喊一句（喊真实名字「${postAuthor}」），平时不喊人的就直接开口说；但不要每句都喊，一句话里称呼最多出现一次，也不要用「XX啊，」这种客套式重复开头；`
+      );
       user.push('- 必须扣住这条动态里的具体内容（事情/细节/情绪/人物），结合你和动态作者的关系，禁止空泛夸赞；');
       if (thread.length > 0) user.push(`【评论区已有的发言（这些话和类似的话术你都不能再说）】\n${thread.join('\n')}`);
       if (memories.length > 0)
         user.push(
           `【你记得的关于${userName}和其他好友的事（评论不得与这些已知事实矛盾；能自然顺带一句最好，但不能生硬复述）】\n${memories.map((m) => `- ${m}`).join('\n')}`
         );
-      user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」这类套话，也不要纯夸奖；');
+      user.push('- 禁止客服腔和万能模板：不能出现「这话说得真好」「希望你能…」「祝你…」「为你感到开心」「加油」「永远支持你」「这句话说得真好啊」这类套话，也不要纯夸奖；');
+      user.push('- 你怎么评这条动态，要一眼认得出是你这个人评的：换别的角色来评，评法和语气必须完全不同；');
       user.push(`- 再次强调（最重要）：你要评论的动态是${postAuthor}发的「${postContent.slice(0, 80)}」，评论必须让人一眼看出你看懂了这条动态，与这条动态无关的话一句都不要说——跑题的评论是无效输出；`);
       user.push('- 只输出评论文本，不要任何解释。');
     } else {
@@ -260,30 +263,19 @@ export async function POST(req: Request) {
       if (replyFrom === name) {
         return NextResponse.json({ error: '不能回复自己的评论' }, { status: 400 });
       }
-      // 称呼规则（三）：默认不叫名字；只有评论区有多人发言、需要区分对象时才允许喊名字，
-      // 且必须叫对方真实名字（引擎传 allowAddressByName；兜底用原始 thread 的说话人数判断）
-      const rawThread = Array.isArray(body.thread) ? (body.thread as unknown[]) : [];
-      const threadSpeakers = new Set(
-        rawThread
-          .filter((c): c is { authorName?: unknown } => Boolean(c) && typeof c === 'object')
-          .map((c) => s((c as { authorName?: unknown }).authorName, 20))
-          .filter((n) => n && n !== name)
-      );
-      const allowAddressByName = body.allowAddressByName === true || threadSpeakers.size >= 2;
+      // 称呼规则（用户新要求）：不再按「评论区人数」分两种模式（那是所有角色同一种称呼的旧做法）。
+      // 称呼由人设/说话习惯 + 动态/评论语境决定，交给 LLM；引擎只传真实名字，保两条硬约束：
+      // 不要每句都叫、要叫就叫真实名字（不用昵称/网名）。
       // 回复的结构（修复「回复不搭/复读自己动态」）：被回复的评论是唯一话题中心，放最前面；
       // 动态原文降为末尾的背景参考。旧版把动态放开头最显眼处，模型顺势把动态改写一遍
       // 当回复（用户实锤：财评「辛苦你了」，陈回「财啊，项目算搞定了…」——整句复读动态）
       user.push(`你在一条${label}动态的评论区里，${replyFrom}对你说了一句话，你只回TA这一句（不是评论区里的其他人）。`);
       user.push(`【要回复的那句话（你唯一的话题中心，回复必须直接接住它的内容/情绪/问题）】${replyFrom}对你说：「${replyContent}」`);
-      user.push('- 像聊天接话一样自然衔接：让人一眼看出你回的是上面那句话，而不是随便又说了段别的；');
-      user.push('- 动态原文只是背景不是话题：动态里已经写过的内容、意思、句式一律不要再重复（再说一遍是复读机，不是回复）；');
-      if (allowAddressByName) {
-        user.push(
-          `- 评论区有多人发言：默认还是直接说内容不喊名字；只有不喊名字会让人分不清你在回谁时，才在开头叫一次名字区分——要叫就叫TA的真实名字「${replyRealName || replyFrom}」，绝不要用昵称/网名，也不要每句都叫；`
-        );
-      } else {
-        user.push('- 界面已显示「X 回复 Y：」前缀，正文里不要再喊对方的名字/昵称，也不要「XX啊，」「XX，」这类开头，直接说内容；');
-      }
+      user.push('- 像聊天接话一样自然衔接：让人一眼看出你回的是上面那句话，而不是随便又说了段别的；也不要把TA这句话原样或换个说法再说一遍（复读上一句无效）；');
+      user.push('- 动态原文只是背景不是话题：动态里已经写过的内容、意思、句式一律不要再重复（再说一遍是复读机，不是回复）；你自己在评论区刚说过的话（包括你的上一条回复）也不要再重复或变着说一遍；');
+      user.push(
+        `- 要不要称呼对方，由你的人设、说话习惯和TA这句话的语气决定：平时爱喊人的角色可以喊一句（要喊就叫TA的真实名字「${replyRealName || replyFrom}」，绝不要用昵称/网名），平时不喊人的就直接说内容；无论哪种都不要每句都喊，整个回复里称呼最多出现一次；`
+      );
       user.push('- 8~40 字，口语化短句，像真人随手回消息：可以接梗、调侃、反问、敷衍、装傻；禁止客套模板（「谢谢」「说得好」「祝你…」「这句话说得真好啊」这类）；');
       user.push(`（背景，仅供理解语境，禁止复述：这条动态是${postAuthor}发的：「${postContent.slice(0, 60)}」）`);
       if (thread.length > 0) user.push(`【评论区最近的发言（按先后；里面已有的话和类似话术不要再重复）】\n${thread.join('\n')}`);
