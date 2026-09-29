@@ -5,7 +5,7 @@ export const runtime = 'nodejs';
 /**
  * 记忆库 · 从对话提取记忆碎片
  * POST { conversation: { role: 'me'|'peer', text: string, speakerPrefixed?: boolean }[], app?: string,
- *        userName?: string, peerName?: string, speakerPrefixed?: boolean,
+ *        scene?: string, userName?: string, peerName?: string, speakerPrefixed?: boolean,
  *        existing?: { id: string, content: string }[], config?: UpstreamConfig }
  * 返回 { fragments: { text, weight, eventTime?, expiresAt?, supersedes? }[] }（0-6 条；
  *       模型未给权重 / 旧格式字符串时由关键词自动分类兜底，见 memory-core.autoWeight）
@@ -13,6 +13,11 @@ export const runtime = 'nodejs';
  * 前缀去重（#9）：群聊轮次客户端已把「发言人：」前缀拼进 peer 侧 text（多成员归因需要），
  *       载荷 speakerPrefixed（顶层或逐条）为 true 时服务端不再叠 peerName 前缀，
  *       避免「陈默：陈默：火锅！」；向后兼容：不传走老逻辑（无条件加前缀）。
+ *       【fix3-a 2a】isConvoTurn 过滤只校验 role/text，原始对象原样保留——群来源轮次
+ *       （手动总结/跨 App 兜底）携带的逐条 speakerPrefixed 标记不会在此丢失。
+ * 场景说明（【fix3-a 3】extract 不知道场景）：body.app（wx/qq/sms/phone → 微信/QQ/手机短信/电话）
+ *       与可选 body.scene（如「语音通话（电话），由机主（用户本人）拨出」）注入 system，
+ *       让模型知道对话发生在哪、碎片写明场景归属（「在电话里」「在微信群里」）。
  * 时间感知：prompt 注入当前时间锚点；模型为含时间信息的碎片给出 eventTime/expiresAt（ISO 字符串，
  *       服务端校验范围 ±5 年、过期不得早于事件时间，非法一律置空——绝不让幻觉时间入库）；
  *       矛盾更新：模型对比 existing（已有记忆）给出 supersedes（被更正的旧记忆 id）。
@@ -94,13 +99,22 @@ function saneTimeStr(v: unknown, nowMs: number): string | null {
   return s;
 }
 
-function buildSystem(userName: string, peerName: string, nowLabel: string, participants: string[] = []): string {
+function buildSystem(
+  userName: string,
+  peerName: string,
+  nowLabel: string,
+  participants: string[] = [],
+  /** 【fix3-a 3】场景说明一行（app 映射 + 群聊标注 + body.scene）；空串 = 无场景可注入 */
+  sceneNote = ''
+): string {
   // 视角规则：群聊轮次（传了成员名单）允许按实际发言人归因，不再强制「用户/角色」二人视角；
   // 私聊轮次维持两人视角不变
   const perspective = participants.length
     ? [
         '【视角规则（最高优先级，违反即无效）】',
-        `- 这段聊天记录来自群聊，发言者可能不止两个人：除了「${userName}」（用户本人）和「${peerName}」（AI角色），发言者还可能是这些群成员：${participants.slice(0, 12).join('、')}。`,
+        // 【fix3-a 3】名单展示上限 12→30、解析上限 20→30，并补授权说明：
+        // 名单与聊天记录前缀一一对应，前缀里出现的任何成员名都允许使用，绝不能归给机主/AI角色
+        `- 这段聊天记录来自群聊，发言者可能不止两个人：除了「${userName}」（用户本人）和「${peerName}」（AI角色），发言者还可能是这些群成员：${participants.slice(0, 30).join('、')}。名单里的名字与聊天记录前缀里的发言人一一对应；聊天记录前缀里出现的任何其他成员名字也都允许使用，绝不能把他们的言行归给机主或AI角色。`,
         '- 每条碎片必须写明说的是谁：主语用聊天记录里实际说话人/被提及者的名字（上面列出的成员名或「' + userName + '」「' + peerName + '」均可）。',
         '- 严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等任何代称，严禁混用不同称呼。',
         `- 严禁把其他成员说的话强行归因给「${userName}」或「${peerName}」：群里 C 说的事就写 C，绝不能写成${userName}或${peerName}的事。`,
@@ -117,6 +131,14 @@ function buildSystem(userName: string, peerName: string, nowLabel: string, parti
   return [
     '你是聊天记忆整理助手。从一段聊天记录中提取值得长期记住的关键信息，形成「记忆碎片」。',
     ...perspective,
+    // 【fix3-a 3】场景说明：对话发生在哪个 App（wx→微信/qq→QQ/sms→手机短信/phone→电话）、
+    // 是否群聊、以及调用方自带场景（如通话方向）；并要求碎片写明场景归属
+    ...(sceneNote
+      ? [
+          `【场景说明】${sceneNote}。`,
+          '- 涉及场景的碎片应写明在哪发生的（如『在电话里』『在微信群里』）。',
+        ]
+      : []),
     '【时间规则（时间感知：记忆要与当前时间联动）】',
     `- 现在是：${nowLabel}（北京时间）。对话里的相对时间（明天/今晚/下周一/3天后/月底）必须按当前时间换算成绝对时间。`,
     '- eventTime：这条信息所指事件的发生时间。有明确或相对时间信息的都填（含日期即可）。',
@@ -189,13 +211,25 @@ export async function POST(req: NextRequest) {
   // 视角统一：me=用户本人（真实名字优先），peer=AI 角色；缺省回退固定称呼且全批一致
   const userName = cleanName(body.userName, '用户');
   const peerName = cleanName(body.peerName, '对方');
-  // 群聊轮次：发言者名单（成员显示名）——有名单时按实际发言人归因，不再强制二人视角
+  // 群聊轮次：发言者名单（成员显示名）——有名单时按实际发言人归因，不再强制二人视角；
+  // 【fix3-a 3】解析上限 20→30（与 prompt 内展示上限一致，大群名单不再被截断）
   const participants = Array.isArray(body.participants)
     ? body.participants
         .map((v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 20) : ''))
         .filter((v: string) => v.length > 0)
-        .slice(0, 20)
+        .slice(0, 30)
     : [];
+
+  // 【fix3-a 3】场景说明（此前 body.app 从未被使用）：app 映射 + 群聊标注 + 调用方自带 scene，
+  // 拼成一行注入 system，让模型知道对话发生在哪、把「在电话里/在微信群里」写进碎片
+  const MEM_APP_SCENE: Record<string, string> = { wx: '微信', qq: 'QQ', sms: '手机短信', phone: '电话' };
+  const appLabel = typeof body.app === 'string' ? MEM_APP_SCENE[body.app] ?? null : null;
+  const scene = typeof body.scene === 'string' ? body.scene.trim().slice(0, 120) : '';
+  const sceneParts: string[] = [];
+  if (appLabel) sceneParts.push(`这段对话发生在${appLabel}里`);
+  if (participants.length > 0) sceneParts.push('这段对话来自群聊');
+  if (scene) sceneParts.push(`场景：${scene}`);
+  const sceneNote = sceneParts.join('；');
 
   const nowMs = Date.now();
   const now = new Date();
@@ -243,7 +277,7 @@ export async function POST(req: NextRequest) {
       : '';
 
   const messages = [
-    { role: 'system' as const, content: buildSystem(userName, peerName, nowAnchor(now), participants) },
+    { role: 'system' as const, content: buildSystem(userName, peerName, nowAnchor(now), participants, sceneNote) },
     { role: 'user' as const, content: `聊天记录：\n${convoText}${existingText}` },
   ];
 

@@ -46,7 +46,7 @@ import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 import { createContact, deleteContact as deleteContactLocal, listContacts, ownerProfile, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
+import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -819,6 +819,9 @@ function CallScreen({
           : '';
       // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
       // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
+      // fix3-9 「你指谁」锚点：charName=角色名、userName=机主真名（回退 profileName），
+      // 让每本书包裹块头部标明「文中的你/机主各指谁」（拿不到时不传，库内自动省略锚点行）
+      const wbUserName = contact?.id ? (await ownerRealName().catch(() => '')) || profileName : '';
       const callWb = contact?.id
         ? collectWbBlocks(
             contact.id,
@@ -826,6 +829,7 @@ function CallScreen({
               userText,
               ...priorBubbles.slice(-6).map((b) => b.text),
             ]),
+            { charName: contact.name, userName: wbUserName },
           )
         : null;
       const worldbookBlock = callWb
@@ -869,7 +873,9 @@ function CallScreen({
               () => turns,
               // 电话通话无持久消息数组：memAfterAiTurn 内部按「1 条用户字幕 + 1 条 AI 回复」固定计数
               () => null,
-              { user: owner || profileName, peer: contact.name }
+              { user: owner || profileName, peer: contact.name },
+              // fix3-11 记忆碎片补场景标记：电话语音通话的轮次提取 prompt 知道这是通话里说的
+              { scene: '电话语音通话' }
             )
           );
       };
@@ -1139,7 +1145,12 @@ function CallScreen({
                 ? await buildCrossContextBlocks(peerContact.id, 'phone', owner?.realName || profileName)
                 : { crossAppBlock: '', groupBlock: '' };
             }
-            const wb = collectWbBlocks(peerContact.id, wbScanText([lastUser, ...spoken.slice(-6).map((b) => b.text)]));
+            const wb = collectWbBlocks(
+              peerContact.id,
+              wbScanText([lastUser, ...spoken.slice(-6).map((b) => b.text)]),
+              // fix3-9 「你指谁」锚点：charName=角色名、userName=机主真名（ownerProfile 回退 profileName）
+              { charName: peerContact.name, userName: owner?.realName || profileName },
+            );
             followupTexts = await requestCallFollowup({
               contact: {
                 name: peerContact.name,
@@ -1210,10 +1221,19 @@ function CallScreen({
           void ownerRealName()
             .catch(() => '')
             .then((owner) =>
-              memSummarizeCallNow(peerContact.id, 'phone', apiConfig, convo, {
-                user: owner || profileName,
-                peer: peerContact.name,
-              })
+              memSummarizeCallNow(
+                peerContact.id,
+                'phone',
+                apiConfig,
+                convo,
+                {
+                  user: owner || profileName,
+                  peer: peerContact.name,
+                },
+                // fix3-11 通话总结补方向（机主手机视角）：'in'=AI 拨入被接听 / 'out'=机主拨出，
+                // 总结 prompt 才能写清「谁打给谁的一通电话」
+                { direction: isIncoming ? 'in' : 'out' }
+              )
             );
         }
       })();
@@ -1337,9 +1357,37 @@ function CallScreen({
           createdAt: Date.now(),
         });
       }
+      // fix3-3 拒接/未接零记忆修复：通话记录与留言都进不了轮次提取/挂断总结（没接通、无对话），
+      // 事件真实发生（AI 接听决策拒接/未接听机主的来电）→ 直写一条事件碎片进记忆库；
+      // 归属句式写明「谁（AI角色本人）+ 何时 + 对谁（机主）做了什么」，AI 之后能想起这通没接的电话；
+      // 守卫：仅真实联系人（非临时会话）时写；「之后留言解释」后缀只在留言真的落库时才写
+      // （byUser 拉黑时留言被上面的守卫抑制，记忆不能说成已留言）；失败静默
+      if (contact?.id) {
+        const voicemailLanded = !loadBlock('sms', contact.id).byUser;
+        const peerContact = contact;
+        const aiName = peerContact.name?.trim() || '对方';
+        const d = new Date();
+        const when = `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        const afterSuffix = voicemailLanded && afterText?.trim() ? `，之后留言解释：「${afterText.trim()}」` : '';
+        void ownerRealName()
+          .catch(() => '')
+          .then((owner) => {
+            // 机主名：联系人 App「机主」卡片真名 → 设置 profile 名 → 「机主」（与 memorizeTurn 同口径）
+            const ownerLabel = owner || profileName || '机主';
+            const content =
+              reason === 'reject'
+                ? `${aiName}（AI角色本人）于${when}拒接了${ownerLabel}打来的电话${afterSuffix}`
+                : `${aiName}（AI角色本人）于${when}未接听${ownerLabel}打来的电话${afterSuffix}`;
+            try {
+              memAddEventFragment(peerContact.id, 'phone', content, { eventTime: Date.now() });
+            } catch {
+              // 记忆直写失败静默（事件碎片是增强能力，不影响通话收尾）
+            }
+          });
+      }
       window.setTimeout(onClose, 1400);
     },
-    [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers],
+    [contact, target.number, onEnd, onVoicemail, onClose, stopAutoTimers, profileName],
   );
   /** mount effect 闭包内引用最新 endByPeer */
   const endByPeerRef = useRef(endByPeer);

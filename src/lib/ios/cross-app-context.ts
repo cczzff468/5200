@@ -42,6 +42,7 @@
 
 import { kvGet } from './idb-kv';
 import { localDB, type CallLogRecord, type VoicemailRecord } from './db';
+import { getContact } from './contacts-store';
 import { getMemSettings } from '@/lib/memory';
 import { listGroups, loadGroupMsgs, type WxGroupMsg } from './groups';
 
@@ -121,10 +122,34 @@ function msgText(m: unknown): string | null {
     return d ? truncate(`[图片]（图片内容：${d}）`, LINE_CAP_PRIVATE) : '[图片]';
   }
   if (kind === 'call') {
-    const c = o.call as { state?: unknown; duration?: unknown; direction?: unknown } | null | undefined;
+    const c = o.call as { state?: unknown; duration?: unknown; direction?: unknown; endReason?: unknown } | null | undefined;
     const dur = typeof c?.duration === 'number' && Number.isFinite(c.duration) && c.duration > 0 ? c.duration : 0;
-    const dir = c?.direction === 'in' ? '来电' : '去电';
-    return dur > 0 ? `[语音通话 ${dir}·通话${fmtCallDur(dur)}]` : `[语音通话 ${dir}·未接通]`;
+    // fix3-2 通话卡方向反转（原「来电/去电」主语不明，AI 会把用户拨出说成自己打的）：
+    // 按行主语 × direction 换算成 AI 视角双向明确表述。数据里卡片 role 恒由 direction 派生
+    // （out=机主拨出→me 行、in=AI 拨入→peer 行，见 wechat/qq writeCallCard），另两组合仅为防御。
+    // direction 取值域（机主手机视角）：'out'=机主拨出 / 'in'=AI 拨入（chat-call ChatCallResult 同域）
+    const mine = isMine(o); // 机主行（用户卡）= true / AI 行（peer 卡）= false
+    const out = c?.direction !== 'in'; // 缺省按 'out'（与卡片落盘缺省一致）
+    const main = mine
+      ? out
+        ? '用户打给你的电话'
+        : '你打去、用户接听的电话'
+      : out
+        ? '用户打来、你接听的电话'
+        : '你打给用户的电话';
+    if (dur > 0) return `[语音通话：${main}，通话${fmtCallDur(dur)}]`;
+    // 未接通按 endReason 细分（存量卡片只有 state，取值同源：rejected/rejected、cancelled/cancel、
+    // no-answer/missed-in 同为「被叫没接」），细分主语按 direction：out=主叫机主→被叫是你，in=主叫你→被叫是用户
+    const state = typeof c?.state === 'string' ? c.state : '';
+    const reason = typeof c?.endReason === 'string' ? c.endReason : '';
+    const how = reason || state;
+    if (how === 'reject' || how === 'rejected') {
+      return `[语音通话：${main}，${out ? '你拒接了' : '用户拒接了'}]`;
+    }
+    if (how === 'cancel' || how === 'cancelled') {
+      return `[语音通话：${main}，${out ? '用户取消了' : '你取消了'}]`;
+    }
+    return `[语音通话：${main}，没接]`; // no-answer / missed-in / 未知：被叫一直没接
   }
   if (kind === 'sticker') {
     const s = o.stk as { meaning?: unknown } | null | undefined;
@@ -199,22 +224,25 @@ function joinSections(intro: string, sections: BlockSection[], budget: number): 
 
 // ---------------- 跨 App 块 ----------------
 
-/** 读某私聊 App 的最近消息行（机主=用户：/角色=你：；空返回 []） */
-function readPrivateLines(app: Exclude<CrossAppId, 'phone'>, contactId: string): string[] {
+/** 读某私聊 App 的最近消息行（机主=userLabel/角色=你：；userLabel 缺省回退「机主」；空返回 []） */
+function readPrivateLines(app: Exclude<CrossAppId, 'phone'>, contactId: string, userLabel?: string): string[] {
   const raw: unknown = kvGet(chatMsgsKey(app, contactId));
   if (!Array.isArray(raw)) return [];
   const msgs = sortAsc(raw.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === 'object')).slice(-MSGS_PER_APP);
+  // fix3-4 私聊行主语用传入的机主名（原先硬编码「用户」与角色名两套自称并存；缺省回退「机主」）
+  const me = (userLabel ?? '').trim().slice(0, 20) || '机主';
   const lines: string[] = [];
   for (const m of msgs) {
     const text = msgText(m);
     if (!text) continue;
-    lines.push(`${isMine(m) ? '用户' : '你'}：${text}`);
+    lines.push(`${isMine(m) ? me : '你'}：${text}`);
   }
   return lines;
 }
 
-/** 电话来源：call-logs 最近 3 通摘要 + 末通 kind='call' 转写（没有转写只有摘要行） */
-async function readPhoneLines(contactId: string): Promise<string[]> {
+/** 电话来源：call-logs 最近 3 通摘要 + 末通 kind='call' 转写（没有转写只有摘要行）；
+ *  charName = 角色（AI）名，转写行「角色名：」前缀映射为「你：」（fix3-4，可空） */
+async function readPhoneLines(contactId: string, charName?: string): Promise<string[]> {
   if (!contactId) return [];
   let logs: CallLogRecord[] = [];
   let vms: VoicemailRecord[] = [];
@@ -238,14 +266,20 @@ async function readPhoneLines(contactId: string): Promise<string[]> {
     const ts = typeof l.createdAt === 'number' ? l.createdAt : 0;
     const when = ts > 0 ? fmtDateTime(ts) : '';
     const dur = typeof l.duration === 'number' && Number.isFinite(l.duration) && l.duration > 0 ? l.duration : 0;
-    let what: string;
-    if (dur > 0) what = `通话${fmtCallDur(dur)}`;
-    else if (l.direction === 'missed') what = '未接来电';
-    else if (l.endReason === 'cancel') what = '未接通（已取消）';
-    else what = '未接通';
-    lines.push([when, what].filter(Boolean).join(' '));
+    // fix3-2 电话摘要行带方向主语（原先只有「通话X分钟/未接来电」，AI 分不清谁打的）：
+    // call-logs direction 取值域（机主手机视角）：'out'=机主拨出 / 'in'=AI 拨入被接听 /
+    // 'missed'=AI 拨出未被接（proactive-call.ts / chat.tsx AI 来电未接、phone.tsx 通话中忽略来电三处专用）
+    const caller = l.direction === 'out' ? '用户打给你' : '你打给用户';
+    let detail: string;
+    if (dur > 0) detail = `，通话${fmtCallDur(dur)}`;
+    else if (l.direction === 'missed') detail = '，未接通';
+    else if (l.endReason === 'reject') detail = l.direction === 'out' ? '，你拒接了' : '，用户拒接了';
+    else if (l.endReason === 'no-answer') detail = '，没接';
+    else if (l.endReason === 'cancel') detail = l.direction === 'out' ? '，用户取消了' : '，你取消了';
+    else detail = '，未接通';
+    lines.push([when, `${caller}${detail}`].filter(Boolean).join(' '));
   }
-  // 末通转写：只带最近一通的对话内容（我：→用户：／对方：→你：；转写与通话记录同刻落盘，按时间窗匹配）
+  // 末通转写：只带最近一通的对话内容（我：→用户：／对方：／角色名：→你：；转写与通话记录同刻落盘，按时间窗匹配）
   const latestTs = typeof recent[0].createdAt === 'number' ? recent[0].createdAt : 0;
   const vm = vms
     .map((v) => ({ ts: typeof v.createdAt === 'number' ? v.createdAt : 0, text: typeof v.text === 'string' ? v.text : '' }))
@@ -253,10 +287,22 @@ async function readPhoneLines(contactId: string): Promise<string[]> {
     .find(({ ts }) => Math.abs(ts - latestTs) <= VM_MATCH_WINDOW_MS);
   if (vm && vm.text.trim()) {
     lines.push(`${latestTs > 0 ? fmtDateTime(latestTs) : '最近一通'} 通话内容（转写）：`);
+    // fix3-4 自称归一：电话转写行前缀有三种——「我：」（机主）、「对方：」与「角色名：」（都是 AI 本人，
+    // phone.tsx 落转写时用 contact.name 兼容旧数据的「对方」），后两者都映射为「你：」
+    const name = (charName ?? '').trim();
     for (const rawLine of vm.text.split('\n').slice(0, MSGS_PER_APP)) {
       const t = rawLine.trim();
       if (!t) continue;
-      lines.push(truncate(t.startsWith('我：') ? `用户：${t.slice(2)}` : t.startsWith('对方：') ? `你：${t.slice(3)}` : t, LINE_CAP_PRIVATE));
+      lines.push(
+        truncate(
+          t.startsWith('我：')
+            ? `用户：${t.slice(2)}`
+            : (name && t.startsWith(`${name}：`)) || t.startsWith('对方：')
+              ? `你：${t.startsWith('对方：') ? t.slice(3) : t.slice(name.length + 1)}`
+              : t,
+          LINE_CAP_PRIVATE
+        )
+      );
     }
   }
   return lines;
@@ -271,6 +317,8 @@ export async function buildCrossAppBlock(contactId: string, currentApp: CrossApp
   try {
     if (!contactId) return '';
     const me = (userName ?? '').trim().slice(0, 20) || '用户';
+    // fix3-4 私聊行主语/块头锚点用的机主称呼：缺省回退「机主」（与行前缀一致，不与角色自称混淆）
+    const userLabel = (userName ?? '').trim().slice(0, 20) || '机主';
     const envLine = `【当前环境】你现在正在「${APP_LABEL[currentApp] ?? '聊天'}」上和「${me}」聊天。每个 App 是独立的聊天空间，别把其他应用里说的话当成这里发生的。`;
     let share = true;
     try {
@@ -279,16 +327,31 @@ export async function buildCrossAppBlock(contactId: string, currentApp: CrossApp
       share = true; // 设置读不到按默认互通（与 getMemSettings 默认值一致）
     }
     if (!share) return envLine;
+    // fix3-4 角色（AI）名：电话转写行的「角色名：」前缀也要归一到「你：」（拿不到不影响其他映射）
+    let charName = '';
+    try {
+      charName = (await getContact(contactId))?.name?.trim() ?? '';
+    } catch {
+      charName = '';
+    }
     const others = (['wx', 'qq', 'sms', 'phone'] as CrossAppId[]).filter((a) => a !== currentApp);
     const sections: BlockSection[] = [];
     for (const app of others) {
-      const lines = app === 'phone' ? await readPhoneLines(contactId) : readPrivateLines(app, contactId);
+      const lines =
+        app === 'phone'
+          ? await readPhoneLines(contactId, charName)
+          : readPrivateLines(app, contactId, userLabel);
       if (lines.length === 0) continue; // 空会话的 App 整段跳过
       sections.push({ header: `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : '对话'}：`, lines });
     }
     if (sections.length === 0) return envLine; // 全部其他 App 都无记录：只保留当前环境行
+    // fix3-4 块头锚点：「你：」= AI 本人说过的话；「{userLabel}：」= 机主说的（与行前缀实际用字一致）
+    const anchor =
+      userLabel === '机主'
+        ? '（『你：』开头的是你自己说过的话；『机主：』开头的是机主本人说的）'
+        : `（『你：』开头的是你自己说过的话；『${userLabel}：』开头的是机主「${userLabel}」说的）`;
     const rest = joinSections(
-      '【跨应用近况】以下是最近在其他应用里的聊天记录（已标注来源，仅供衔接话题，注意别混淆）：',
+      `【跨应用近况】以下是最近在其他应用里的聊天记录（已标注来源，仅供衔接话题，注意别混淆）：\n${anchor}`,
       sections,
       Math.max(200, CROSS_APP_BUDGET - envLine.length - 2),
     );
@@ -365,8 +428,10 @@ export async function buildGroupRecentBlock(contactId: string, userName: string)
       }))
       .filter((s) => s.lines.length > 0);
     if (sections.length === 0) return '';
+    // fix3-4 块头锚点：群聊行前缀仍是「用户：」（机主）/「成员名：」（角色与群员），开头先说明「你指谁」
+    const anchor = `（『你：』开头的是你自己说过的话；『用户：』开头的是机主「${(userName ?? '').trim().slice(0, 20) || '机主'}」说的）`;
     return joinSections(
-      '【群聊近况】你们有共同的群聊，最近群里发生了这些（已标注群名和发言人，别和私聊混淆）：',
+      `【群聊近况】你们有共同的群聊，最近群里发生了这些（已标注群名和发言人，别和私聊混淆）：\n${anchor}`,
       sections,
       GROUP_BLOCK_BUDGET,
     );

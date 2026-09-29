@@ -11890,3 +11890,141 @@ Work Log:
 Stage Summary:
 - 审计结论：persona 人设、群历史主语、拉黑块、退群挽留、系统事件句式等大框架归属规范；问题集中在 ①修复程序自己误删记忆（回归级）②群聊归属在总结/兜底链路坍塌 ③卡片/位置/通话等卡片类消息的主语缺失 ④群事件无操作者 ⑤通话场景与方向在记忆里全丢
 - 35 项完整清单（含文件:行号、误归属场景、修法）已交付用户，等待用户勾选后进入修复阶段
+
+---
+Task ID: fix3-d
+Agent: qq-fixer
+Task: 修复审计清单中 QQ 单聊端的 6 项「归属不清」问题（凭据卡伪造资金方向 / 表情规则与兜底序列化冲突 / 合并转发卡片进历史只带标题 / 转发弹层按名字推断原作者 / AI 位置被说成「对方的位置」调用点 / 视觉规则用微信文案调用点 / 语音占位规则 role 传参核实），只改 src/components/apps/qq.tsx
+
+Work Log:
+- 【1 凭据卡混进 AI 历史伪造资金方向】排查结论：QQ 端存在同构问题（与 wechat.tsx:1366/4940/4983 同款）——凭据卡三个创建点全部进 AI 历史：①applyAiActions AI 收款凭据（extras，role='peer'，receiptOf='me'）与 AI 退还凭据（role='peer'，refundedBy='peer'）；②refundPeerCard 我退 AI 转账的退还凭据（role='me'，refundedBy='me'）；③收款页 onAccept 我收 AI 转账的收款凭据（role='me'，receiptOf='peer'，两处：tr-receive 层 + tr-detail 详情页兜底）。旧序列化 runAiTurn 历史分支把它们与真实转账卡同样写成「[转账 ID:xxx ¥n，已收款/已退回]」，落在 assistant 槽位=AI 以为自己又发了一笔转账（AI 收我的钱被读成 AI 给我转账）、落在 user 槽位=用户被伪造发转账（我收 AI 的钱被读成我给 AI 转账）。
+- 修复：新增模块级 isTransferReceiptMsg（凭据卡判定：content 恒空串且不带 cid，我发的原卡有 cid、AI 发的原卡 content='[转账]'，原卡收款后补写的 receiptOf/refundedBy 不影响区分；旧数据兜底与 tr-detail 详情页 receiverIsMe 推断同口径——对方卡片已收款无 receiptOf 只会是「我收的旧凭据」）+ transferReceiptAiText（显式主语句式：收款凭据「[转账凭据：{原发送方}转给{接收方} ¥{amount}「{note}」，已收款]」，原发送方按 receiptOf、接收方按卡片 role（QQ 收款凭据 role 即收款人）；退还凭据「[转账凭据：{原发送方}转的 ¥{amount}已由{退回方}退回]」，退回方按 refundedBy、原发送方取其另一侧（QQ 退还凭据卡不写 receiptOf，两创建点可证方向）；关键字段缺失回退「[转账凭据：一笔转账已{状态}]」）。历史序列化在 redpacket 分支前插入凭据卡专属分支。bun 直测 9 用例全过（四向凭据、旧数据兜底、我发原卡带 cid / AI 原卡 content 非空均不误伤）。
+- 【2 表情规则与 AI 表情兜底冲突】buildPersonaPrompt 规则文案改为「出现在对方（用户）消息里的『[发送了表情：XX]』表示对方发来一张含义为『XX』的表情包…」；历史序列化中 AI 自己发的表情（role!=='me' 且无 sid 的兜底）从「[发送了表情：XX]」改为「[你发送了表情：XX]」（assistant 槽位里「你」=AI 本人，主语不再暧昧），与我的消息（user 槽位）的「[发送了表情：XX]」及规则文案互洽。
+- 【3 合并转发卡片进历史只带标题】runAiTurn 历史序列化 merged 分支：`[合并转发的聊天记录「title」]` 后拼接最近 8 条 records 摘要「{r.name}：{r.text 截 40 字}」（' ／ ' 分隔，与转发时 pushAiEvent 的摘要口径一致；records.name 本就是原对话发言人名直接用），超限补「…等N条」（N=总条数）；同时修正旧注释失实描述（原注释声称「完整注入逐条对话」实际只带标题）。fwd.records 数据结构已 rg 实证（qq.tsx fwd 字段 + doForward 构造处）。
+- 【4 转发弹层按名字推断原作者】ZonePage 转发确认 onClick：优先 `listMomentPosts('qq', me.name, contacts).find(p => p.id === repostTarget.id)` 取引擎统一视图显式 author（已补 import；contacts 第三参 ZonePage 作用域内可直接拿到，已传；post.id 与引擎同源于 qq-zone-posts 键，id 精确匹配），`author: enginePost?.author ?? (名字推断兜底)`——用户改名/重名时不再判错。
+- 【5 AI 位置被说成「对方的位置」——调用点】两处 buildLocationBlock 调用（文字聊天 runAiTurn、openVoiceCall 语音通话）均补传 `peerLabel: 「${peer.name}」`（契约：库新增 opts.peerLabel 后 peer 发的位置会被标为 AI 角色本人发的自己的位置）。
+- 【6 视觉规则用微信文案——调用点】runAiTurn 的 buildVisionRules(albumSummary) 按契约追加尾参 'qq'（QQ 端「换朋友圈背景」规则文案将由库侧改为 QQ 资料页封面说明）。
+- 【7 语音占位规则不看发送者——调用点核实】qq.tsx 的两处 chat-media-rules 调用（buildVoicePlaceholderRule(base) / buildImagePlaceholderRule(base,…)）直接传完整 QQMsg[]，而 QQMsg.role 本就是 'me'|'peer'——库新增 MediaRuleMsg.role?: 'me'|'peer' 后由结构化类型自动满足，调用点零改动即符合契约（已加注释标注 fix3-d-7 说明缘由）。
+- 既有链路核验：红包转账（原卡序列化分支、待处理清单、applyAiActions、收款/退还交互）、群聊入口、朋友圈入口、来电、换号纪元、拉黑、动作描写、表情开关、识图、转发/收藏/引用等链路均未被本次改动触及或仅追加只读参数；凭据卡判定不会误伤原卡（cid/content 双特征排除 + 9 用例覆盖）。
+
+Stage Summary:
+- QQ 单聊 6 项归属问题全部处理：①凭据卡进历史改为带显式主语的「转账凭据」句式（谁转给谁/谁退的），资金方向不再被 assistant/user 槽位伪造，缺字段回退中性句；②表情规则文案限定「对方（用户）消息」+ AI 自发表情兜底改「[你发送了表情：XX]」；③合并转发卡片历史注入最近 8 条逐条摘要（40 字/条 + …等N条）并修正失实注释；④转发原作者归属优先引擎显式 author、名字推断降为兜底；⑤两处位置块补传 peerLabel；⑥视觉规则传 app='qq'；⑦media-rules role 由 QQMsg 结构自动满足（零改动，已注释标注）。
+- 验证：bun 直测凭据卡序列化 9/9 PASS + 合并转发摘要用例 PASS；bunx eslint src/components/apps/qq.tsx 0 错（仅 >500KB 既有 BABEL 提示）；npx tsc --noEmit 中 qq.tsx 仅剩 3 个「并行契约未合并」报错——chat-location.ts 尚无 peerLabel（×2）、chat-rich.ts 的 buildVisionRules 尚无 app 尾参（×1），按任务书策略保留传参并在此注明，库侧契约落地后自动清零；另见 memory.ts / summarize route 报错为并行其他代理在改文件中的瞬时态，与本项目无关。
+
+---
+Task ID: fix3-a
+Agent: memory-fixer
+Task: 修复记忆管线本体的 10 项「归属不清」问题（audit2-attrib 清单子集）：summarize core 分支丢 participants、群聊经手动总结/跨App兜底进记忆归属坍塌、extract 不知道场景、通话方向契约缺失、MemTurnOpts.scene、新增 memAddEventFragment 导出契约、eventTime 碎片召回丢来源与核心/长期无来源、总结磨掉角色标注致兜底失效、私聊红包/转账/亲属卡裸标签、memRepairPerspectiveNow 误伤引号内原文、summarize prompt 跨名合并。只改 memory.ts / memory-core.ts / extract route / summarize route / memory-bank.tsx。
+
+Work Log:
+- 【1 summarize core 丢 participants】summarize/route.ts：core 分支 perspectiveRules 补第三参 participants（long 分支早已传，群来源碎片此前被强制按二人视角浓缩）；有 participants 时开头文案改「把一段群聊相关的多条『记忆碎片』浓缩成一条『核心记忆』」；core/long 两个 prompt 各加「原文中的（AI角色本人）/（用户本人）标注与『在微信朋友圈/QQ空间』『在群里』等场景词必须原样保留，浓缩时不得丢失归属信息」与「同一个人可能在不同记忆里以不同叫法出现（昵称/备注/真名），指同一人的记忆要合并为一条，不要当成两个人」（后者即【11 跨名合并】，抽成共用 SUMMARY_ATTRIB_RULES）。
+- 【2a】memory-core.ts MemConvoTurn 加 speakerPrefixed?: boolean；memRecentGroupConvo 的 peer 行 push 时带 true；核实 extract route 的 isConvoTurn 过滤只校验 role/text、原始对象（含该字段）原样保留并在文件头注释注明。
+- 【2b/2c】memory.ts：memRecentGroupConvo 返回值扩为 {convo,ts,group:{id,memberNames}}——memberNames 取本段对话实际发言过的成员显示名（senderName 按首次出现去重，天然不含机主，与聊天记录前缀一一对应；联系人是异步库、同步链路取不到全量成员名单，以此为准并在注释说明）；memMostRecentApp 返回值带可选 group 元信息（群来源记宿主 app 的行为不变）；memRecentConvo 签名保持 MemConvoTurn[] 不变（唯一外部调用方 moments.ts 契约不可动），群兜底分支经 memRecentGroupConvo 透传 speakerPrefixed，需要 group 元信息的调用方走 memMostRecentApp（已注释说明）。
+- 【2d】memAfterAiTurn 跨App兜底：convo 来自 memMostRecentApp 时改用 recent.app 做 extract body.app 与 appendFragments 的 app；recent.group 存在时 extract 传 participants=memberNames、碎片补 extra={source:'group',sourceGroupId,groupMembers:[contactId]}（按任务书口径；真实群成员全量 ID 表同步链路不可得，groupMembers 为审计字段、召回过滤走 sourceGroupId）；轮次 speakerPrefixed 已随 convo 透传。
+- 【2e】memory.ts 新增导出 MemManualOpts（participants/group/scene）+ manualOptsBody/manualOptsExtra 助手；memSummarizeNow 加第 6 尾参 opts（透传 extract body + appendFragments group extra + maybeAutoSummarize/LongSummarize 的 participants）；memExtractNow 加第 4 尾参 opts，opts 缺失时内部从 recent.group 兜底拼出；memory-bank.tsx 三处调用点（碎片页右上角≈449、设置页 frag≈1099、设置页 all≈1128）从 memMostRecentApp 拿到 group 元信息时传入。
+- 【3】extract/route.ts：读取 body.app（此前从未使用）与新增 body.scene；system 注入一行【场景说明】（wx→微信/qq→QQ/sms→手机短信/phone→电话 + 有 participants 加「这段对话来自群聊」+ scene 存在追加「场景：${scene}」）与要求行「涉及场景的碎片应写明在哪发生的（如『在电话里』『在微信群里』）」；participants 说明行末尾补「名单里的名字与聊天记录前缀里的发言人一一对应；聊天记录前缀里出现的任何其他成员名字也都允许使用，绝不能把他们的言行归给机主或AI角色」，名单展示上限 12→30、解析上限 20→30。
+- 【4】memory.ts memSummarizeCallNow 加尾参 opts?: { direction?: 'out'|'in' }，内部组装 scene=`语音通话（${MEM_APP_LABEL[app]}）`+（'，由机主（用户本人）拨出'/'，由AI角色本人拨出'）放进 extract body.scene；phone.tsx/chat-call.ts 侧传参由另一代理负责（本侧尾参向后兼容）。
+- 【5】MemTurnOpts 加 scene?: string，memAfterAiTurn 透传 extract body.scene（供电话/内嵌通话链路传场景）。
+- 【6】memory.ts 新增并导出 memAddEventFragment(contactId, app, content, opts?: { eventTime?, sourceMsgId? }): MemFragment | null——走 appendFragments 单条写入（items 与 normalizeExtract 产物同形：text+autoWeight+eventTime），eventTime 落 f.eventTime、sourceTime 回退 eventTime/now，失败/被去重合并未新增返回 null 不抛错。
+- 【7】memRecallBlockInner：碎片行时间与来源并列（eventTime 非空时 `（时间·来源）`，不再丢 srcLabel）；长期/核心注入行按 m.apps 拼来源标注（单来源「·微信」、多来源「·微信/电话」，apps 缺失回退原格式）。
+- 【8】memory-core.ts MemCore/MemLongTerm（连带 MemFragment）加 hasRoleTag?: boolean；appendFragments 新建/精确重复加强/相似合并与 memDedupeNow 全部 OR 保留标注；summarizePendingIntoCore/summarizeCoresIntoLong 落库时按来源任一带标注（显式字段或内容检测）或总结结果自带标注置 true；memRecallBlockInner showRoleTagNote 判定改为 hasRoleTag===true || memHasRoleTag(content)（字符串检测保留兜底，旧数据行为不变）。
+- 【9】memory.ts cardLabel(m: RawishMsg) 升级（RawishMsg 加 rp/tr/fam 可选字段，字段名对照 wechat.tsx WxRpData/WxTrData/WxFamData 实码）：红包→`[红包 ¥88 "祝福语"，已领取/待领取/已退回/已拒收]`、转账→`[转账 ¥200 "备注"，已收款/待收款/已退回/已拒收]`、亲属卡→`[亲属卡（每月额度¥X，关系，留言「…」，状态）]`；字段缺失/旧数据/解析异常回退裸标签，全程 try/catch 不抛错；群聊侧 memGroupMsgText 富标签口径未动。
+- 【10】memRepairPerspectiveNow：内容按「」引号切段（带捕获组 split，奇数段=引号内原文原样保留），用户/对方→真名替换与同义反复清理只作用于引号外；source==='moments' 碎片整条跳过（原位保留不打乱顺序，身份修复仍由 repairMomentIdentityData 专管）。bun 直测 16 用例全过（引号内代称/同义反复保留、引号外正常替换、未闭合引号回退、剥空删除、cardLabel 全字段/旧数据回退 10 例）。
+- 验证：npx tsc --noEmit 全仓 0 错（收尾时并行代理的 chat-location peerLabel / worldbook 锚点 / buildVisionRules app 契约已全部落地合并，无遗留报错）；bunx eslint 五个改动文件 0 错。
+
+Stage Summary:
+- 记忆管线 10 项归属问题全部落地：群聊对话无论经自动提取、手动总结还是跨App兜底进记忆，participants（成员显示名）/群来源标记/发言人前缀三要素不再坍塌成二人对话；extract/summarize prompt 知道场景（App+群聊+通话方向）并被要求把「在哪发生的」写进碎片；拒接/未接等无对话事件有了 memAddEventFragment 直写通道（eventTime 落库）；召回行时间·来源并列、核心/长期带来源标注；角色标注在总结后经 hasRoleTag 字段兜底不失效；红包/转账/亲属卡碎片带金额/祝福语/备注/状态；视角修复不再误伤引号内原文与朋友圈碎片。
+- 向后兼容达成：全部新字段为可选（speakerPrefixed/hasRoleTag/group/scene/rp/tr/fam/opts 尾参），旧数据无新字段时行为与修复前一致（字符串检测兜底、裸标签回退、无场景不注入）；memRecentConvo/memMostRecentApp 既有调用方契约未破坏。
+- 明确妥协点：①group.memberNames 取「本段对话实际发言过的成员显示名」而非全量群成员（联系人为异步库、同步链路不可得，且与 extract 授权行「名单与前缀一一对应」自洽）；②跨App兜底/手动总结落群碎片时 groupMembers=[该联系人id]（按任务书口径，审计字段，召回过滤走 sourceGroupId）；③memRecentConvo 因 moments.ts 契约保持返回 MemConvoTurn[]，group 元信息透传由 memMostRecentApp 承担；④summarize route 的 participants 解析上限同步 20→30（与 extract 侧一致，任务书未点名但为同一授权链路）。
+- 只动记忆链路：动作描写/空白过滤/朋友圈写入侧逻辑零改动；memGroupMsgText 群聊富标签口径未动。
+---
+Task ID: fix3-c
+Agent: wechat-sms-fixer
+Task: 修复归属不清 35 项清单中微信单聊+信息端 8 项（#1 转账凭据卡资金方向伪造 / #2 卡片终态执行者 / #3 表情规则主语 / #4 信息端引用名 / #5 位置块 peerLabel / #6 占位规则 role / #7 世界书锚点 labels / #8 未接来电 followup direction；只改 wechat.tsx + chat.tsx 两文件）
+
+Work Log:
+- 先读 worklog.md 末段（audit2-attrib 35 项清单与 fix3 各条目）取证；行号按 grep 重新定位（任务书行号 +~25 漂移，以实际落点为准）；全程只改两目标文件，其余并行代理在改的文件一律只读
+- #1【🔴】wechat.tsx AI 历史序列化（runAiTurn history map，现 5048-5064）：新增凭据卡识别分支（kind==='transfer' && m.tr && !m.content && (m.tr.receiptOf || m.tr.refundedBy)）+ credentialTransferText 句式生成器（4989-5009，meAddrName 声明自原 5098 处上移至此共用）——收款凭据 →「[转账凭据：{原发送方}转给{接收方} ¥N "note"，已收款]」（原发送方=receiptOf、接收方=卡片 role）；退还凭据 →「[转账凭据：{原发送方}转的 ¥N "note"已由{退回方}退回]」（退回方=refundedBy、原发送方=退回方反推：只能退自己收到的款）；字段全缺回退「[转账凭据：一笔转账已{收款|退回}]」。四类凭据卡（AI收我款 wxApplyAiActions:1367 / 我收AI款 acceptTransfer:6146 / AI退我款:1379 / 我退AI款 refundPeerCard:5309，行号为修复前）全覆盖，role=assistant/user 均不再伪造资金方向
+- #2【中】wxCardStateLabel（现 1186-1241）加可选尾参 names?: WxCardActorNames{me?,peer?}：红包已领取→「已领取（{openedBy}领取）」（openedBy 落库即真名，不依赖 names）；转账已退回→手动退回按原卡角色反推执行者「已退回（{名}退还）」、过期清算按「原卡带 refundedBy 且无 originTime/receiptOf」识别→「已退回（超24小时自动退回）」；已拒收/已收款/亲属卡领取与退回同构补执行者；names 缺省（wxCardIsFinal 等内部比较）与字段缺失时保持原文案，终态比较逻辑零影响。序列化三处调用（红包/转账/亲属卡）传 { me: meAddrName, peer: peer.name }
+- #3【低】wechat.tsx 表情规则文案（1172-1173）改「出现在对方（用户）消息里的…」保留后续回应指引；AI 侧无 sid 表情序列化（5057-5058）改 [你发送了表情：XX]
+- #4【低】chat.tsx quoteNameOf（2017）：role==='user' 返回 profileName||'我'（profileName=useSettings((s)=>s.profile.name)，组件作用域现成；未设置回退「我」保持旧行为）；历史前缀（引用 XX：「…」）（1310 附近）消费 m.quote.name，值由 setQuote(quoteNameOf(m)) 落入、随本修复自动修正 ✓（确认无需另改）
+- #5【中】wechat.tsx 两处 buildLocationBlock 调用点（通话路径 4533 / 文字路径 5135）补传 peerLabel:「${peer.name}」；chat.tsx 无 buildLocationBlock 调用点（rg 证实信息端无位置消息功能），无落点
+- #6【低】wechat.tsx mediaRules（5147-5152）：WxMsg.role 本就是 me/peer，base 直接携带 role（加注释说明契约即插即用）；chat.tsx buildVoicePlaceholderRule 调用点（1373-1375）msgs 映射 user→me / assistant→peer 后传入
+- #7【中】wechat.tsx 两处 collectWbBlocks 调用点（通话 4497 / 文字 5130）补传尾参 { charName: peer.name, userName: me.name }
+- #8【低】chat.tsx recordMissedPhoneCall followup（409-411）：direction 'out'→'in' + 注释「direction 为机主手机视角：in=AI拨来/out=机主拨出」（endReason 的 reject/missed-in 语义不动；followup 服务端不消费该字段）
+- 契约时点记录：任务执行中并行代理已把三个库契约合并入库（chat-location.ts BuildLocationBlockOpts.peerLabel / chat-media-rules.ts MediaRuleMsg.role?: 'me'|'peer' / worldbook.ts collectWbBlocks 第三参 WbLabels{charName?,userName?}）——曾按任务书预案落的过渡断言（as BuildLocationBlockOpts ×2 + collectWbBlocksLabeled 函数签名断言封装）随即拆除改为直调；库消费端实测（chat-location.ts:132 peer 行 who=peerLabel 优先 + 尾句「（AI角色本人，就是你自己）…不是机主的位置」）与传参格式吻合
+- 验证：bun 直测 21 用例全过（两函数从 wechat.tsx 按行提取逐字执行：#1 四类凭据卡句式+字段全缺回退 5 例；#2 领取/退回/拒收/收款/过期/亲属卡/无names保持原文/待领取待收款不受影响 16 例，wxCardIsFinal 比较口径零变化）；npx tsc --noEmit 全仓 0 错；bunx eslint wechat.tsx chat.tsx 0 错 0 警告；git diff 复核仅两文件为本任务改动
+
+Stage Summary:
+- 8/8 全部落地：修改文件 src/components/apps/wechat.tsx（#1 #2 #3 #5 #6 #7）、src/components/apps/chat.tsx（#4 #6 #8）
+- 字段取值域实情（rg 实测）：receiptOf=原转账发送方（'me'=机主/'peer'=AI，与任务书一致）；refundedBy 同值域=退回方；openedBy=领取人真名（落库即存显示名）；转账 24h 过期清算是唯一给原卡写 refundedBy 的路径（手动退回原卡不写）——即过期清算标记；凭据退回卡以 originTime（原转账时间）与原卡区分
+- 与任务书不符处：①chat.tsx 无 buildLocationBlock 调用点（信息端无位置消息），#5 的 chat 侧传参无落点；②红包凭据卡不存在（AI 领红包只发 notice 行，WxRpData 无 receiptOf/refundedBy 字段），#1 的「红包同款处理」为空集；③#2 用真名替代任务书示例的泛称「对方拒收」（序列化处可拿 peer.name，泛称在序列化文本里会再造主语歧义）；④红包退回无过期标记（手动退回与 24h 清算同形），按「字段缺失保持现有文案」只在转账侧补自动退回；⑤三个库契约任务中途即合并，未保留过渡断言（比预案更干净）；⑥遗留数据妥协：refundedBy 过期标记加入前的过期转账旧卡（若有）会被误标「（{名}退还）」而非自动退回——终态卡不再进清算无法事后区分，影响面仅 AI 上下文文案，资金语义无误
+- 未 git commit/push、未启停 dev server；本条为唯一 worklog 写入
+
+---
+
+Task ID: fix3-f
+Agent: call-crosscut-fixer
+Task: 审计清单 35 项归属问题中的通话链路与横切共享库 11 项（fix3 清单 1~11）——AI 主动来电决策摘要丢「谁说的」、跨App块通话卡方向反转、电话端拒接/未接零记忆、跨App块两套自称+块头锚点、buildLocationBlock 写死「对方」、已接通通话卡片不写主叫方、语音占位规则写死「对方」、群聊识图描述不带发言者、世界书条目无「你指谁」锚点、QQ 端视觉规则用微信文案、wx/qq 语音通话机主名回退链+通话方向/场景传参
+
+Work Log:
+- fix1（🔴高）AI 主动来电决策摘要丢「谁说的」：proactive-call.ts tickInner 三端摘要 map 增加 role: m.role（NormMsg 早已解析出 role，拼装时丢了），requestProactiveDecision args.recentChats 类型同步 `{ app; text; time; role: 'user'|'assistant' }`；api/phone/proactive/route.ts RecentChatItem 增加 role?（parseRecentChats 宽松读取：user/me→user、assistant/peer→assistant、其余缺省），渲染改为 `【App 时间】机主：/你：text`（role==='user'→机主，否则→你），「你们最近的聊天摘要：」标题后加锚点行「（机主=用户本人，「你」=角色本人，别把机主说的话当成自己说的）」——决策 reason 会变成来电开场情境，归属错误不再扩散
+- fix2（中）跨App块通话卡方向反转+电话摘要无方向（cross-app-context.ts）：msgText call 分支由「来电/去电」改为按行主语×direction 四向表述（机主行 out→「用户打给你的电话」/机主行 in→「你打去、用户接听的电话」/AI行 in→「你打给用户的电话」/AI行 out→「用户打来、你接听的电话」；数据里卡片 role 恒由 direction 派生另两组合仅防御），接通带「通话X分钟」，未接通按 endReason/卡片 state（取值同源：reject(ed)/cancel(led)/no-answer·missed-in）细分「你拒接了/用户拒接了/用户取消了/你取消了/没接」；readPhoneLines 摘要行改「用户打给你/你打给用户+细化」——call-logs direction 取值域实查为 'out'|'in'|'missed'（db.ts:147，'missed'=AI 拨出未被接：proactive-call.ts:385 / chat.tsx:372 / phone.tsx 通话中忽略来电三处专用），故 missed 归「你打给用户，未接通」
+- fix3（中）电话端拒接/未接零记忆：phone.tsx endByPeer 落 call-logs 与 voicemail 后，真实联系人时 memAddEventFragment(contact.id,'phone',content,{eventTime}) 直写事件碎片（memory.ts 侧并行契约已合并，签名核对一致）：拒接→「{AI名}（AI角色本人）于M月D日 HH:mm拒接了{机主名}打来的电话」、未接听→「…未接听{机主名}打来的电话」，afterText 存在且留言真落库（byUser 拉黑时留言被既有守卫抑制、后缀不同步写）时追加「，之后留言解释：「…」」；机主名 ownerRealName→profileName→「机主」回退链；try/catch 失败静默
+- fix4（低）跨App块两套自称+块头未锚定（cross-app-context.ts）：readPhoneLines 转写行除 我：/对方： 外把「{角色名}：」前缀也映射为「你：」（角色名由 buildCrossAppBlock 新增 getContact 查询传入，失败静默）；readPrivateLines 机主行硬编码「用户」改用传入 userName（缺省回退「机主」）；buildCrossAppBlock/buildGroupRecentBlock 块头各加一行锚点——私聊块「（『你：』开头的是你自己说过的话；『{userLabel}：』开头的是机主「{userLabel}」说的）」（缺名时『机主：』开头的是机主本人说的），群聊块按任务书模板『用户：』开头的是机主「{userName||机主}」说的
+- fix5（中）buildLocationBlock 写死「对方」（chat-location.ts）：opts 扩为 { userLabel?; peerLabel?; groupMode? }；who：me→`${userLabel}（用户本人）`回退'用户'、peer→peerLabel??（senderName?「名」:'对方'）；尾句按角色分支——me 发保留现文案（「对方」字样换 userLabel），peer 发→「这是{who}（AI角色本人，就是你自己）发给TA的你自己所在的位置，不是机主的位置——机主问…绝不能引用/说成机主的位置」，groupMode→who 恒用发送者名、尾句「这是{发送者名}发的位置，属于{发送者名}本人——只有当问"我在哪"的人就是{发送者名}时才能说出…绝不能把别人的位置安到机主或其他人头上」；未传 opts 行为不变（wechat.tsx 既有 {userLabel} 调用零影响）
+- fix6（低）已接通通话卡片不写主叫方（voice-call-screen.tsx callCardAiText default 分支）：「[语音通话：通话时长 X]」→「[语音通话：我打给对方的电话，通话时长 X]」——先核实该函数其余四态全为「我打给你」主叫口吻、且宿主 writeCallCard 卡片 role 恒=主叫（direction 派生），「我=主叫」约定成立
+- fix7（低）语音占位规则写死「对方没有转成文字」（chat-media-rules.ts）：MediaRuleMsg 增加 role?: 'me'|'peer'（契约，五端调用方按消息实际方向传）；buildVoicePlaceholderRule 分支——me→「『[语音]』是机主发来的语音消息，没有转成文字，你听不到内容，也不要假装听到了…」、peer→「这条『[语音]』是你自己发过的语音条（当时没有转写存档），按你发它时的本意处理，不要当成对方发来的…」、未传 role 保持原文案；图片规则未动
+- fix8（低）群聊识图描述不带发言者（chat-stream-store.ts）：ChatVisionInput 增加 speakerLabel?: string（类型定义在 ChatVisionInput，与 BeginChatStreamOptions.vision 同源）；识图成功上下文行前缀改为 `（${speakerLabel||'我'}发了 ${n} 张图片，图片内容分别是：/（${speakerLabel||'我'}发了一张图片，图片内容是：`——保留单/复数两种既有句式只换主语，未传时逐字不变
+- fix9（中）世界书条目无「你指谁」锚点（worldbook.ts）：新增导出 WbLabels{charName?;userName?}，collectWbBlocks 增加可选尾参 labels；wbAnchorLine/wbWrapBook 辅助——labels 齐全（两字段 trim 后非空）时每本书包裹块【世界设定开始】之后加「（世界书《{书名}》为客观背景设定：文中的「你」指「{charName}」（AI角色本人），「机主/用户」指「{userName}」；设定是背景事实，不是任何人的发言）」；预算截断的局部重建路径同样带锚点（WbGroupInfo 增加 bookName、预算 accounting 计入锚点开销）；未传 labels 输出逐字不变。调用方接线：phone.tsx 两处（runTurn:826 userName=ownerRealName()||profileName；hangup:1148 userName=ownerProfile().realName||profileName，charName=contact.name）已传；wechat/wx-group/qq/qq-group/chat 由其他代理传
+- fix10（低）QQ 端视觉规则用微信文案（chat-rich.ts buildVisionRules）：增加可选尾参 app?: 'wx'|'qq'，'qq' 时「[换朋友圈背景:图片消息ID]」该条文案改为「把这张图设为你的QQ资料页顶部封面（在QQ里这个标记改的是你的资料页封面，不是朋友圈）」，标记名两端都不改（解析兼容）；默认/缺省微信文案逐字不变。注意：qq.tsx:3675 调用点需由 QQ 侧代理补传 'qq'（不在本任务 12 文件清单内）
+- fix11（低）wx/qq 语音通话机主名可能为空+方向/场景传参（chat-call.ts）：memorizeTurn/summarizeCall 机主名补回退链 ownerRealName()||useSettings.profile.name（原 owner 为空时 names.user 空串→提取 prompt 回退「用户/对方」代称，与 phone.tsx owner||profileName 口径对齐）；memSummarizeCallNow 尾传 { direction }（本引擎 direction 'in'=AI 拨入/'out'=机主拨出即机主手机视角，直接透传；useCallback deps 补 direction）；memAfterAiTurn 尾传 { scene: '语音通话' }；phone.tsx 侧 memSummarizeCallNow 尾传 { direction: isIncoming ? 'in' : 'out' }、memAfterAiTurn 尾传 { scene: '电话语音通话' }——memory.ts 并行契约（MemTurnOpts.scene、memSummarizeCallNow 尾参 opts.direction）已合并，签名逐一核对一致
+- 验证：npx tsc --noEmit 全仓 0 错（含并行代理已合并的 memory.ts 契约与其他改动文件）；bunx eslint 11 个改动文件全部 0 错 0 警；bun 直测 chat-location（me/peer/groupMode×userLabel/peerLabel/缺省/无法识别 8 例）与 chat-media-rules（role me/peer/未传/有转写 4 例）12 用例全过；cross-app 通话卡四向映射与 call-logs direction 域经实码核对（wechat/qq writeCallCard role=direction 派生、db.ts CallLogRecord direction 'out'|'in'|'missed'）
+
+Stage Summary:
+- 11 项全部落地且全部向后兼容：新参数（role/peerLabel/groupMode/speakerLabel/labels/app/direction/scene）未传时行为逐字不变；五端共享库（chat-location/chat-media-rules/chat-rich/worldbook/cross-app-context/chat-stream-store）契约签名与任务书一字不差，调用方由各端代理按需传参
+- 通话链路归属闭环：决策摘要（谁说的）→ 通话卡片（谁打给谁）→ 跨App块通话摘要（方向+细分结局）→ 转写行自称归一（我/对方/角色名→用户/你）→ 拒接/未接事件碎片（谁拒了谁的电话+何时+留言）→ 挂断总结（方向+场景）→ 轮次提取（场景），AI 在任何环节都读得出「谁做的」
+- direction 取值域实情：①wx/qq 通话卡片消息 call.direction（ChatCallResult）：'out'=机主拨出 / 'in'=AI 拨入，卡片 role 恒由其派生（out→me、in→peer），卡片另有 state（'cancelled'|'no-answer'|'rejected'|'missed-in'|'ended'）无 endReason 字段；②call-logs（CallLogRecord）：'out'|'in'|'missed'，'missed' 三处写点全部是「AI 拨出未被机主接」；③电话 App 内存 direction：isIncoming?'in':'out' 与 ① 同域
+- 与任务书不符/需协调处：①api/phone/turn/route.ts 全文无 collectWbBlocks 调用点（世界书由前端组装成 worldbookBlock 透传），无可传 labels 之处，文件未改动——labels 已在 phone.tsx 两处真实调用点传入；②任务书 msgText 细分文案「cancel→对方取消」按 direction 语境落地为「用户取消了」（机主行 out+取消的取消方就是机主，「对方」在带主语的句子里会产生歧义），in+cancel→「你取消了」按任务书；③私聊块锚点行内前缀用字与行实际前缀一致（userLabel 缺名时用『机主：』而非模板里的『用户：』，避免锚点指向不存在的行前缀），群聊块按模板原文『用户：』（群行前缀未改）；④fix10 生效还需 qq.tsx 调用点补传 'qq'（他代理文件）；fix8 speakerLabel/fix7 role/fix5 groupMode+peerLabel 同理由各端代理传参
+
+---
+Task ID: fix3-b
+Agent: moments-fixer（代理超时，由主协调者验收并补完收尾）
+Task: 修复朋友圈归属存量问题（35项清单 #1/#29/#30/#32）
+
+Work Log:
+- 写入侧重构为单一事实源 expectedMomentMemoryOf（moments.ts:821）：写入路径 writeMomentMemory/懒写入/转发等 6 处全部改走该函数，杜绝写入/纠错口径漂移
+- #1 回归修复：repairMomentIdentityData 函数体最初未及替换（代理超时中断在半途，仅更新了文档注释），由主协调者补完——角色动态主人不是发帖人才删（既有路径）；用户广播动态（主人=任意看到它的角色）、用户顶层评论（主人=动态作者）、用户回复角色评论（主人=被回复角色）全部改走 expectedMomentMemoryOf 重算，expected 为 null 一律保留不删，绝不新增删除路径
+- #30 repair 重算带转发上下文（repostContextText 口径）；#29 roleTag/cTag 走 isPostByPeer/isInteractionByPeer（legacy 无 peerId 旧数据按展示名兜底，不再标成「别的AI角色」）+ repairLegacyMomentData 回写带 contacts；#32 user-post 记忆互动从句改「你（AI角色本人）评论过/赞过」
+- 验证：bun 直测（mock contacts-store）——①user-post/user-reply/user-comment 三类碎片 repair 幂等执行后全部保留且句式带（用户本人）/（AI角色本人）标注（修复前全被误删）；②归属对不上的角色动态碎片仍被正确删除（既有删除路径不回退）；③假碎片被 appendFragments 去重合并属测试假象，经 debug1/debug2 二分排除
+
+Stage Summary:
+- 回归级数据丢失（每次启动误删用户动态/评论记忆）彻底修复；写入与纠错共用同一句式函数；tsc 0 错、eslint 0 错、repair 启动执行经浏览器 reload 验证零错误
+
+---
+Task ID: fix3-e
+Agent: group-fixer（代理超时，成果由主协调者逐项验证）
+Task: 修复群聊归属问题（35项清单 #21/#22/#23+#8/#24/#13/#16/#18/#19/#33/#34）
+
+Work Log:
+- #21 群事件操作者：GroupEventActor{kind:'me'|'char',id,name} 全量落 actorId/actorName（groups.ts pushGroupEvent+各写入点）；collectGroupEventLines 增加观察者视角（observerCharId→「你将X移出群聊/机主将X…/{角色名}将X…」，旧数据回退现文案）；被禁言成员感知：kv grp-mute-notice:<gid>:<charId> 待办+runGroupTurn 注入「【你被禁言过】…不要当成没发生过」（解禁同步通知），双群聊接线
+- #22 机主邀请带邀请人 eventText；#23+#8 红包占位带领取人名单（rpClaimsNamesText）+ memberNames 去机主称呼名（防幽灵成员）；#24 群规则措辞改「没有前缀的消息都是你自己说的」；#13 buildLocationBlock 传 {userLabel,groupMode}；#16 引用名用 addressNameOf；#18 MediaRuleMsg 补 role；#19 beginChatStream 传 speakerLabel「{meName}（机主）」；#33 collectWbBlocks 传 {charName,userName}
+- 验证：双群聊文件逐项 grep 核对落地；tsc 0 错、eslint 0 错
+
+Stage Summary:
+- 群事件从「无主语」升级为观察者视角带操作者渲染；被禁言成员不再对禁言一无所知；群红包领取人、机主邀请人、识图发言者、位置归属全部可辨；群聊文件不调用 buildVisionRules（无需传 app）
+
+---
+Task ID: fix3-all
+Agent: 主协调者 (Z.ai Code)
+Task: 35 项归属类问题全修（6 路并行 + 协调者收尾）
+
+Work Log:
+- 6 路并行实现：fix3-a 记忆管线 11 项（summarize core participants/群convo兜底透传/extract 场景注入+app 终于被消费/eventTime·来源并列召回/核心长期来源标注/hasRoleTag 落库标志/私聊卡片富标签/修复引号误伤/名单上限 30+授权句/memSummarizeCallNow direction/MemTurnOpts.scene/memAddEventFragment）；fix3-c 微信+信息端 8 项（转账凭据卡显式主语句式/卡片终态执行者/表情规则/AI 表情兜底[你发送了表情]/引用名/位置 peerLabel/世界书 labels/followup direction 对齐）；fix3-d QQ 端 7 项（QQ 凭据卡同构确认并修复/表情/合并转发内容注入/转发 author 统一视图/位置 peerLabel/buildVisionRules 'qq'/media role）；fix3-f 通话横切 11 项（主动来电摘要带机主：你：+锚点行/跨App通话方向四向表述+endReason 细分/拒接未接直写记忆碎片/跨App块自称统一+块头锚定/chat-location 三模式/接通卡主叫口吻/media-rules role 分支/vision speakerLabel/世界书锚点/QQ 封面文案/机主名回退链+通话 direction/scene）
+- fix3-b/fix3-e 超时但成果完整：逐项 grep 验证落地，fix3-b 的 repair 函数体由协调者补完（见 fix3-b 条目）
+- 全仓验证：npx tsc --noEmit 0 错；eslint 25 个改动文件 0 错（仅 qq.tsx>500KB 既有 BABEL 提示）；bun 直测三类 repair 场景 + debug 删除路径全过；Agent Browser E2E：解锁→信息端发消息→AI 回复无空白气泡/语音条正常/零控制台错误→记忆库渲染正常→reload 触发 MomentsScheduler repair 零错误；dev.log 干净
+- 范围限定达成：单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话链路向后兼容（旧数据无新字段回退现文案），QQ 与微信共用逻辑同构
+
+Stage Summary:
+- 35/35 项全部落地：记忆管线（谁做的+哪个App+什么时候+互动方向四要素贯通）、五端历史序列化主语、群事件操作者、通话场景与方向、朋友圈存量、世界书锚点、QQ App 语境
+- 提交：git commit + push origin main

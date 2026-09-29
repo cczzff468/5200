@@ -179,6 +179,8 @@ import {
   deleteMomentPost,
   enqueuePostInteractions,
   listMomentNotices,
+  // 【fix3-d-4】引擎统一动态视图：转发弹层用显式 author 判定原作者（不再按名字猜）
+  listMomentPosts,
   markAllMomentNoticesRead,
   repairLegacyMomentData,
   subscribeMomentsChanged,
@@ -513,6 +515,49 @@ function cardIsFinal(m: QQMsg): boolean {
   }
   const label = cardStateLabel(m);
   return label !== '待领取' && label !== '待收款';
+}
+
+/** 【fix3-d-1】转账「凭据卡」判定（收款凭据 / 退还凭据）：
+ *  凭据卡与真实转账卡的区分依据——凭据卡 content 恒为空串且不带 cid（我发的原卡有 cid、
+ *  AI 发的原卡 content='[转账]'；原卡收款/退还后补写的 receiptOf/refundedBy 不影响原卡
+ *  content/cid 特征），不会误伤原卡序列化；
+ *  旧数据兜底与 tr-detail 详情页的 receiverIsMe 推断同口径：对方卡片且已收款、无 receiptOf 的
+ *  只会是「我收对方转账的旧凭据」（对方原卡 content 非空已被上面排除）。 */
+function isTransferReceiptMsg(m: QQMsg): boolean {
+  if (m.kind !== 'transfer' || !m.packet || m.content || m.packet.cid) return false;
+  const p = m.packet;
+  if (p.receiptOf != null || p.refundedBy != null) return true;
+  return p.received === true && m.role === 'peer';
+}
+
+/** 【fix3-d-1】转账凭据卡 → AI 历史显式主语句子（修复「凭据卡混进 AI 历史伪造资金方向」：
+ *  旧序列化把凭据卡也写成「[转账 ID:xxx ¥n，已收款]」，在 assistant/user 槽位里读起来像
+ *  持卡人又发了一笔转账——AI 收我转账的凭据被当成 AI 发的转账，我收 AI 转账的凭据被当成我发的）。
+ *  QQ 端字段取值域（两处创建点实证，applyAiActions / refundPeerCard / 收款页 onAccept）：
+ *  - 收款凭据：received=true + receiptOf（'me'=对方收我的转账 / 'peer'=我收对方的转账），
+ *    卡片 role 即收款人（AI 收款凭据 role='peer'、我收款凭据 role='me'）；
+ *  - 退还凭据：status='returned' + refundedBy（'me'=我退的 / 'peer'=对方退的），不写 receiptOf——
+ *    原发送方=退回方的另一侧（AI 退我发的卡 refundedBy='peer'→原发送方是我；我退 AI 发的卡反之）；
+ *  - 旧数据兜底：对方卡片已收款但缺 receiptOf → 按详情页同款推断「我收对方的旧凭据」；
+ *  - 其余关键字段缺失（未知形态）→ 回退中性句「一笔转账已{状态}」，不暴露资金方向。 */
+function transferReceiptAiText(m: QQMsg, meName: string, peerName: string): string {
+  const p = m.packet;
+  if (!p) return '[转账凭据：一笔转账]';
+  const nameOf = (r: 'me' | 'peer') => (r === 'me' ? meName : peerName);
+  if (p.receiptOf) {
+    // 收款凭据：原发送方按 receiptOf、接收方按卡片 role
+    return `[转账凭据：${nameOf(p.receiptOf)}转给${nameOf(m.role)} ¥${p.amount}${p.note ? `「${p.note}」` : ''}，已收款]`;
+  }
+  if (p.refundedBy) {
+    // 退还凭据：退回方按 refundedBy，原发送方取其另一侧
+    return `[转账凭据：${nameOf(p.refundedBy === 'me' ? 'peer' : 'me')}转的 ¥${p.amount}已由${nameOf(p.refundedBy)}退回]`;
+  }
+  if (p.received && m.role === 'peer') {
+    // 旧数据兜底：对方卡片已收款、无 receiptOf → 我收对方转账的旧凭据（发送方=对方、接收方=我）
+    return `[转账凭据：${peerName}转给${meName} ¥${p.amount}${p.note ? `「${p.note}」` : ''}，已收款]`;
+  }
+  const label = cardStateLabel(m);
+  return `[转账凭据：一笔转账${label || '已处理'}]`;
 }
 
 /** 收集「我发给 AI 的、待处理」的红包/转账（生成 system 待处理清单，AI 用动作标记处理）。
@@ -1239,7 +1284,9 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
     multiApp: getMemSettings(peer.id).share,
     ...npcExtra,
     extraRules: [
-      '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      // 【fix3-d-2】点明该标记只出现在「对方（用户）」消息里：与历史序列化中 AI 自己表情的
+      // 「[表情包:ID]」/「[你发送了表情：XX]」写法区分开，防止 AI 把兜底标记当成自己的输出格式
+      '出现在对方（用户）消息里的『[发送了表情：XX]』表示对方发来一张含义为『XX』的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
       ...buildRichRules(stickersOn ? stickers : []),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
       ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE]),
@@ -3140,8 +3187,9 @@ function ChatPage({
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
-        // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”
-        locBlock: buildLocationBlock(base, { userLabel: me.name }) || undefined,
+        // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”；
+        // 【fix3-d-5】补传 peerLabel：对方（AI 角色）发的位置会标为「TA 本人发的自己的位置」，不再被说成「对方=用户的位置」
+        locBlock: buildLocationBlock(base, { userLabel: me.name, peerLabel: `「${peer.name}」` }) || undefined,
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
         onFollowup: sendCallFollowup,
@@ -3528,12 +3576,17 @@ function ChatPage({
       )
       .slice(-20)
       .map((m) => {
-        // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话；
-        // 合并转发的「聊天记录」卡片 → 完整注入逐条对话，被分享的 AI 知道转发了什么
+        // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话
         const pre = `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
           m.kind === 'forward' && m.fwd
             ? m.fwd.merged
-              ? `[合并转发的聊天记录「${m.fwd.title ?? '聊天记录'}」] `
+              ? // 【fix3-d-3】合并转发卡片：标题后拼逐条摘要（名字=原发言人，最多 8 条、每条截 40 字，
+                // 超限补「…等N条」）——此前只带标题，AI 看不到转发了什么内容（旧注释声称「完整注入
+                // 逐条对话」与实现不符，一并修正）
+                `[合并转发的聊天记录「${m.fwd.title ?? '聊天记录'}」] ${(m.fwd.records ?? [])
+                  .slice(-8)
+                  .map((r) => `「${r.name}：${(r.text || '').slice(0, 40)}」`)
+                  .join(' ／ ')}${(m.fwd.records?.length ?? 0) > 8 ? `…等${m.fwd.records?.length ?? 0}条` : ''}`
               : `[转发自「${m.fwd.from}」的消息] `
             : ''
         }`;
@@ -3548,7 +3601,9 @@ function ChatPage({
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
               : m.stk.sid
                 ? `[表情包:${m.stk.sid}]`
-                : `[发送了表情：${m.stk.meaning || '无描述'}]`
+                // 【fix3-d-2】AI 自己发的表情（无 ID 的兜底）用「你」点明主语：
+                // 旧文案「[发送了表情：XX]」落在 assistant 槽位像是对用户动作的转述
+                : `[你发送了表情：${m.stk.meaning || '无描述'}]`
             : m.kind === 'image'
             ? // 图片消息：有识图描述时 AI 读到内容（历史可回看）；无描述时占位（防编造规则由 system 注入）
               m.img?.desc
@@ -3560,6 +3615,10 @@ function ChatPage({
             : m.kind === 'location'
             ? // 位置消息：AI 读到完整位置文本（名称/地址/经纬度/发送时间），问“我在哪”能直接答出地点名
               locationAiText(m.loc, m.time)
+            : m.kind === 'transfer' && m.packet && isTransferReceiptMsg(m)
+            ? // 【fix3-d-1】转账凭据卡（收款凭据/退还凭据）带显式主语进历史，
+              // 不再伪装成持卡人又发了一笔转账（资金方向不再被伪造）
+              transferReceiptAiText(m, me.name, peer.name)
             : m.kind === 'redpacket' && m.packet
               ? `[红包 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount} "${m.packet.note}"，${cardStateLabel(m)}]`
               : m.kind === 'transfer' && m.packet
@@ -3640,8 +3699,10 @@ function ChatPage({
     // 图片消息以 [图片] 占位、语音消息以转写文本参与，防 dataURL 进入触发词扫描）
     const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]));
     // 位置感知：用户最近发过的位置消息（名称/地址/经纬度/发送时间）注入 system——
-    // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造
-    const locBlock = buildLocationBlock(base, { userLabel: meAddrName });
+    // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造；
+    // 【fix3-d-5】补传 peerLabel：AI 角色自己发的位置在注入块里标明「AI角色本人，就是你自己」，
+    // 防止 AI 把自己发过的位置说成「对方（用户）的位置」
+    const locBlock = buildLocationBlock(base, { userLabel: meAddrName, peerLabel: `「${peer.name}」` });
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；40-a 重构后拉黑会拦截本 App
     // 内的消息发送——byUser 时本回合早已被入口守卫取消；能走到这里的被拉黑回合=仅申请卡放行模式）
     const blkBlock = buildBlockPromptBlock('qq', peer.id, me.name);
@@ -3653,6 +3714,8 @@ function ChatPage({
       if (m.role !== 'me') break;
       if (m.kind === 'image') turnImageIds.add(m.id);
     }
+    // 【fix3-d-7】语音占位规则按发送者区分：QQ 消息 role 本就是 'me'|'peer' 且整条对象直接传入
+    //（MediaRuleMsg 的 role 契约由 base 结构自动满足，无需额外映射）
     const mediaRules = [
       buildVoicePlaceholderRule(base),
       buildImagePlaceholderRule(base, { excludeIds: turnImageIds }),
@@ -3672,7 +3735,8 @@ function ChatPage({
     } catch {
       // 读相册失败不阻塞聊天主流程，仅放弃本回合的【选图操作】规则
     }
-    const visionRules = buildVisionRules(albumSummary);
+    // 【fix3-d-6】传 app='qq'：视觉规则里的「换朋友圈背景」文案按端区分（QQ 端说明改的是 QQ 资料页封面）
+    const visionRules = buildVisionRules(albumSummary, 'qq');
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -10874,13 +10938,16 @@ function ZonePage({
                 type="button"
                 data-testid="qq-repost-confirm"
                 onClick={() => {
+                  // 【fix3-d-4】原作者归属优先取引擎统一视图的显式 author（post.id 同源于 qq-zone-posts 键，
+                  // id 精确匹配不误判）；引擎查不到（刚落库竞态等）才回退旧的按名字推断
+                  const enginePost = listMomentPosts('qq', me.name, contacts).find((p) => p.id === repostTarget.id);
                   const post = addUserMomentPost('qq', {
                     userName: me.name,
                     avatar: me.avatar,
                     content: repostDraft.trim() || '转发动态',
                     repostOf: {
                       postId: repostTarget.id,
-                      author: repostTarget.authorName === me.name ? 'user' : 'char',
+                      author: enginePost?.author ?? (repostTarget.authorName === me.name ? 'user' : 'char'),
                       authorName: repostTarget.authorName,
                       content: repostTarget.content.slice(0, 80),
                       images: (repostTarget.images ?? []).slice(0, 3),

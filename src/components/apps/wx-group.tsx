@@ -73,7 +73,7 @@ import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
-import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
+import { buildImagePlaceholderRule, buildVoicePlaceholderRule, type MediaRuleMsg } from '@/lib/chat-media-rules';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -110,6 +110,7 @@ import {
   muteGroupMember,
   saveGroupMsgs,
   setGroupAdmin,
+  takeGroupMuteNotice,
   transferGroupOwner,
   unmuteGroupMember,
   updateGroup,
@@ -209,11 +210,20 @@ function nextGroupCid(prefix: 'rp' | 'tr'): string {
   return `grp-${prefix === 'rp' ? 'r' : 't'}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
 }
 
-/** 群红包状态标签（卡片副标题/详情页/AI 上下文共用）：待领取 → 部分领取 → 已抢完 / 已过期 */
+/** 群红包领取人名单文本（fix3-e③：「（红红、绿绿）」；最多列 5 个名字，超出加「等」——谁领了对 AI 可见并随占位进记忆） */
+function rpClaimsNamesText(rp: GroupRpData): string {
+  if (rp.claims.length === 0) return '';
+  const names = rp.claims.map((c) => c.name).filter(Boolean);
+  if (names.length === 0) return '';
+  return `（${names.slice(0, 5).join('、')}${names.length > 5 ? '等' : ''}）`;
+}
+
+/** 群红包状态标签（卡片副标题/详情页/AI 上下文/记忆快照共用）：待领取 → 部分领取 → 已抢完 / 已过期；
+ *  fix3-e③：已有人领取时附领取人名单（最多 5 个，超出加「等」），不再只给「已领取 1/2」让 AI 猜谁领了 */
 function groupRpStateLabel(rp: GroupRpData): string {
   if (rp.expired) return '已过期';
-  if (rp.claims.length >= rp.count) return '已抢完';
-  if (rp.claims.length > 0) return `已领取 ${rp.claims.length}/${rp.count}`;
+  if (rp.claims.length >= rp.count) return `已抢完${rpClaimsNamesText(rp)}`;
+  if (rp.claims.length > 0) return `已领取 ${rp.claims.length}/${rp.count}${rpClaimsNamesText(rp)}`;
   return '待领取';
 }
 
@@ -870,6 +880,8 @@ export function WxGroupInfoPage({
   const amOwner = myRole === 'owner';
   const amAdmin = myRole === 'admin';
   const canManage = amOwner || amAdmin;
+  // fix3-e①：机主操作者标注（群事件 actor/被禁言通知需要机主显示名；与 AI 侧参与成员名单的称呼名同源）
+  const myActorLabel = meRec ? addressNameOf(meRec, addressMode) : '机主';
   /** 目标成员能否被我管理（管理员只能管普通成员；群主除自己外都能管） */
   const canManageTarget = (target: ContactRecord): boolean => {
     if (target.id === group.ownerId) return false; // 群主不可被管理
@@ -936,7 +948,9 @@ export function WxGroupInfoPage({
         if (!ctx) return;
         const scale = Math.max(SIZE / img.width, SIZE / img.height);
         ctx.drawImage(img, (SIZE - img.width * scale) / 2, (SIZE - img.height * scale) / 2, img.width * scale, img.height * scale);
-        onUpdate({ avatar: canvas.toDataURL('image/jpeg', 0.82) });
+        // fix3-e①：群头像由机主改 → 直接走数据层带 actor（「群头像已更新」事件归属机主）；空补丁只刷新宿主
+        updateGroup(gid, { avatar: canvas.toDataURL('image/jpeg', 0.82) }, { actor: { kind: 'me', name: myActorLabel } });
+        onUpdate({});
       };
       img.src = String(reader.result);
     };
@@ -955,51 +969,56 @@ export function WxGroupInfoPage({
       onToast(amOwner ? '群主不可被移出' : '管理员只能移出普通成员');
       return;
     }
-    const next = kickGroupMember(gid, c.id, { name: memberNameOf(c), actorName: meRec?.name || '机主' });
+    // fix3-e①：机主操作 → actor = { kind:'me' }（事件/感知注入知道是机主踢的人）
+    const next = kickGroupMember(gid, c.id, {
+      name: memberNameOf(c),
+      actorName: meRec?.name || '机主',
+      actor: { kind: 'me', name: myActorLabel },
+    });
     if (next) {
       onToast(`已将 ${memberNameOf(c)} 移出群聊`);
       onUpdate({ memberIds: next.memberIds });
     }
   };
 
-  /** 设为/取消管理员（仅群主；群主本人不可被设）：成功自动落系统消息（三.5） */
+  /** 设为/取消管理员（仅群主；群主本人不可被设）：成功自动落系统消息（三.5）；fix3-e① actor = 机主 */
   const toggleAdmin = (c: ContactRecord, admin: boolean) => {
     setMemberSheet(null);
     if (!amOwner) return;
-    const next = setGroupAdmin(gid, c.id, admin, { name: memberNameOf(c) });
+    const next = setGroupAdmin(gid, c.id, admin, { name: memberNameOf(c), actor: { kind: 'me', name: myActorLabel } });
     if (next) {
       onToast(admin ? `已将 ${memberNameOf(c)} 设为管理员` : `已取消 ${memberNameOf(c)} 的管理员`);
       onUpdate({}); // 空补丁：让宿主刷新群对象（adminIds 已在数据层落盘）
     }
   };
 
-  /** 禁言（带时长；六.5 禁言期间不能发言）：成功自动落「XX被禁言 X」系统消息（三.4） */
+  /** 禁言（带时长；六.5 禁言期间不能发言）：成功自动落「XX被禁言 X」系统消息（三.4）；fix3-e① actor = 机主（写被禁言成员感知通知） */
   const applyMute = (c: ContactRecord, ms: number | null, label: string) => {
     setMuteSheet(null);
     setMemberSheet(null);
-    const next = muteGroupMember(gid, c.id, ms, { name: memberNameOf(c) });
+    const next = muteGroupMember(gid, c.id, ms, { name: memberNameOf(c), actor: { kind: 'me', name: myActorLabel } });
     if (next) {
       onToast(`已禁言 ${memberNameOf(c)} ${label}`);
       onUpdate({});
     }
   };
 
-  /** 解除禁言：自动落「XX被解除禁言」系统消息（三.4） */
+  /** 解除禁言：自动落「XX被解除禁言」系统消息（三.4）；fix3-e① actor = 机主（写「禁言已被机主解除」感知通知） */
   const liftMute = (c: ContactRecord) => {
     setMemberSheet(null);
-    const next = unmuteGroupMember(gid, c.id, { name: memberNameOf(c) });
+    const next = unmuteGroupMember(gid, c.id, { name: memberNameOf(c), actor: { kind: 'me', name: myActorLabel } });
     if (next) {
       onToast(`已解除 ${memberNameOf(c)} 的禁言`);
       onUpdate({});
     }
   };
 
-  /** 转让群主（仅群主；六.2 谁都不能取消群主，只能转让）：自动落「群主转让给 XX」系统消息（三.6）；确认后返回设置页 */
+  /** 转让群主（仅群主；六.2 谁都不能取消群主，只能转让）：自动落「群主转让给 XX」系统消息（三.6）；确认后返回设置页；fix3-e① actor = 机主 */
   const doTransfer = (c: ContactRecord) => {
     setTransferConfirm(null);
     setMemberSheet(null);
     setMgmtOpen(null);
-    const next = transferGroupOwner(gid, c.id, { name: memberNameOf(c) });
+    const next = transferGroupOwner(gid, c.id, { name: memberNameOf(c), actor: { kind: 'me', name: myActorLabel } });
     if (next) {
       onToast(`群主已转让给 ${memberNameOf(c)}`);
       onUpdate({});
@@ -1007,9 +1026,11 @@ export function WxGroupInfoPage({
   };
 
   const saveNotice = () => {
-    onUpdate({ announcement: noticeDraft.trim() });
+    // fix3-e①：公告由机主改 → 直接走数据层带 actor（「群公告已更新」事件归属机主）；空补丁只刷新宿主
+    updateGroup(gid, { announcement: noticeDraft.trim() }, { actor: { kind: 'me', name: myActorLabel } });
     setAnnounceOpen(false);
     onToast('群公告已更新');
+    onUpdate({});
   };
 
   return (
@@ -1574,8 +1595,12 @@ export function WxGroupInfoPage({
                     type="button"
                     data-testid={`wx-group-invite-${c.id}`}
                     onClick={() => {
-                      // 三.1：入群自动落「XX加入了群聊」系统消息（事件在数据层 addGroupMember 内生成）
-                      const next = addGroupMember(gid, c.id, { name: memberNameOf(c) });
+                      // 三.1：入群自动落「XX加入了群聊」系统消息（事件在数据层 addGroupMember 内生成）；
+                      // fix3-e②：机主邀请 → 事件文案带邀请人（「{机主名}邀请{成员}加入了群聊」，AI 感知可还原是谁拉进来的）
+                      const next = addGroupMember(gid, c.id, {
+                        name: memberNameOf(c),
+                        eventText: `${myActorLabel}邀请${memberNameOf(c)}加入了群聊`,
+                      });
                       if (!next) {
                         onToast(`群成员已达上限（${GROUP_MEMBER_CAP} 人）`);
                         return;
@@ -1699,7 +1724,9 @@ export function WxGroupInfoPage({
           onCancel={() => setDialog(null)}
           onSave={(v) => {
             const t = v.trim();
-            if (t) onUpdate({ name: t });
+            // fix3-e①：群名由机主改 → 直接走数据层带 actor（「群名被修改为…」事件归属机主）；空补丁只刷新宿主
+            if (t) updateGroup(gid, { name: t }, { actor: { kind: 'me', name: myActorLabel } });
+            if (t) onUpdate({});
             setDialog(null);
           }}
         />
@@ -2655,6 +2682,8 @@ export function WxGroupChatPage({
       const g = getGroup(gid);
       if (!g) return;
       if (groupRoleOf(g, char.id) === 'member') return; // 普通成员没有管理权限：标记直接丢弃
+      // fix3-e①：执行者 = 输出管理标记的 AI 成员（事件 actorId/actorName + 被禁言/解禁感知通知都带上 TA）
+      const actor = { kind: 'char' as const, id: char.id, name: memberNameOf(char) };
       // 成员名字 → 联系人（机主 + 全部 AI 成员；真名/展示名/昵称多变体：精确 → 互相包含逐级匹配）
       // 机主统一用登录联系人 ID（me.id）：与 ownerId/adminIds/mutes 的键口径一致；字面量 'me' 仅作旧数据兼容
       const resolveTarget = (name: string): { id: string; name: string } | null => {
@@ -2676,13 +2705,13 @@ export function WxGroupChatPage({
           // #81：AI 误写多人禁言时，parser 在 warn 字段记录警告 → 调用方 toast 提示（不影响禁言动作本身）
           if (action.warn) onToast(action.warn);
           if (!t || !canModerateTarget(g, char.id, t.id)) return;
-          muteGroupMember(gid, t.id, parseMuteDuration(action.arg ?? ''), { name: t.name });
+          muteGroupMember(gid, t.id, parseMuteDuration(action.arg ?? ''), { name: t.name, actor });
           break;
         }
         case 'unmute-member': {
           const t = resolveTarget(action.targetId);
           if (!t || !canModerateTarget(g, char.id, t.id)) return;
-          unmuteGroupMember(gid, t.id, { name: t.name });
+          unmuteGroupMember(gid, t.id, { name: t.name, actor });
           break;
         }
         case 'kick-member': {
@@ -2693,22 +2722,22 @@ export function WxGroupChatPage({
             // 本机移除（同时触发退群挽留快照，AI 事后可按人设私信道歉/邀请回群）；
             // kickOwnerFromGroup 同步删群，直接 return（后续 onUpdate 无意义，宿主靠 toast 提示）
             onToast(`你已被${memberNameOf(char)}移出群聊`);
-            kickOwnerFromGroup(gid, { name: t.name });
+            kickOwnerFromGroup(gid, { name: t.name, actor });
             // 群已从本机移除：必须仍走 onUpdate 让宿主刷新（微信 setGroupPeer(null) 关页 / QQ 靠 groupVersion 重算回落列表）
             onUpdate({});
             return;
           }
-          kickGroupMember(gid, t.id, { name: t.name, actorName: memberNameOf(char) });
+          kickGroupMember(gid, t.id, { name: t.name, actorName: memberNameOf(char), actor });
           break;
         }
         case 'rename-group': {
           const n = action.targetId.trim().slice(0, 30);
-          if (n && n !== g.name && canEditGroupInfo(g, char.id)) updateGroup(gid, { name: n });
+          if (n && n !== g.name && canEditGroupInfo(g, char.id)) updateGroup(gid, { name: n }, { actor });
           break;
         }
         case 'announce-group': {
           const n = action.targetId.trim().slice(0, 200);
-          if (n && canEditGroupInfo(g, char.id)) updateGroup(gid, { announcement: n });
+          if (n && canEditGroupInfo(g, char.id)) updateGroup(gid, { announcement: n }, { actor });
           break;
         }
         case 'grant-owner': {
@@ -2720,7 +2749,7 @@ export function WxGroupChatPage({
           if (groupRoleOf(g, char.id) !== 'owner') return; // 只有群主能转让（越权吞掉）
           if (t.id === char.id) return; // 不能转给自己
           if (t.id !== me.id && !g.memberIds.includes(t.id)) return; // 只能转给群内真实成员
-          transferGroupOwner(gid, t.id, { name: t.name });
+          transferGroupOwner(gid, t.id, { name: t.name, actor });
           break;
         }
         default:
@@ -2904,7 +2933,8 @@ export function WxGroupChatPage({
           `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户${me.nickname?.trim() && me.nickname.trim() !== meName ? `，昵称「${me.nickname.trim()}」也是 TA` : ''}）${
             others.length ? '、' + others.map(memberNameOf).join('、') : ''
           }。你以「${charName}」的身份参与其中。`,
-          '聊天记录里每条消息都以「发言者：内容」标注来源；以自己名字开头的是你自己说过的话。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，请自然理解并回应。',
+          // fix3-e⑤：规则措辞与实际格式对齐——其他人的消息才带前缀、无前缀=自己说的、转发记录里自己名字开头的行也是原话
+          '聊天记录里，其他人的消息都带「发言者：内容」前缀；没有前缀的消息都是你自己说的；转发来的聊天记录里以你名字开头的行也是你的原话，不要当成别人转述你。「[图片]」「[位置] …」「[发送了表情：…]」「[红包 …]」「[转账 …]」是图片/位置/表情包/红包/转账卡片消息，请自然理解并回应。',
           '只以「' + charName + '」的身份和口吻发言，绝不替其他成员发言、代答或描写他们的言行。',
           '不复制、不复述、不换说法重复其他成员刚说过的内容（群里最忌跟风复读）。',
           '可以自然称呼、回应其他成员的观点，角色之间也能互相对话，不只是跟机主说话，像真实群聊那样互动，但始终保持自己的人设与语气（群聊语气可以比私聊随意，人设不能变）。',
@@ -2955,6 +2985,15 @@ export function WxGroupChatPage({
             `【你回到了群聊】你之前被移出过群聊「${kickNotice.groupName}」，刚刚又被拉回来了。这段小插曲你记得，可以按人设自然提起，不要当成没发生过。`,
           );
         }
+        // fix3-e① 被禁言成员感知：禁言/解禁的轻量待办通知在此注入（take 即删：只提醒一次；
+        // 仍被禁言时取不到——物理禁言本来也不让开口，解禁/到期后首次开口才补知这段经历，
+        // 注入方式参考 buildKickNoticeSection 的私聊【被移出群聊】段）
+        const muteNotice = takeGroupMuteNotice(gid, char.id);
+        if (muteNotice) {
+          groupRules.push(
+            `【你被禁言过】${muteNotice.text}。这是真实发生的事，你记得清清楚楚：可以按人设自然面对这件事（质问、委屈、调侃、无所谓都行），不要当成没发生过。`,
+          );
+        }
         // 群成员速览（关系感知）：其他成员是谁、与机主的关系、性格速写（角色间相处按双方人设自然把握）
         const memberLines = others.map((c) => {
           const rel = (c.relation ?? '').trim();
@@ -2969,8 +3008,9 @@ export function WxGroupChatPage({
         }
         if (g.announcement) groupRules.push(`【群公告】${g.announcement}`);
         // 群内事件感知（四.1/4.3）：系统事件（加入/退出/禁言/管理员/转让/改名/公告/建群）按时间排序注入 system。
-        // 事件不参与正常回复（历史里没有），但成员都在场看到了，不能装作不知道（四.2/4.4）
-        const evtLines = collectGroupEventLines(gid);
+        // 事件不参与正常回复（历史里没有），但成员都在场看到了，不能装作不知道（四.2/4.4）；
+        // fix3-e①：传观察者=当前角色 id，带操作者的事件按「你/机主/{角色名}」还原归属
+        const evtLines = collectGroupEventLines(gid, 12, Date.now(), char.id);
         if (evtLines.length > 0) {
           groupRules.push(
             '【群内事件】最近群里发生的这些事你都在场看到了（按时间先后）：',
@@ -2981,9 +3021,19 @@ export function WxGroupChatPage({
         // 占位防编造（AI 感知审计修复）：群里最近有听不到内容的语音 / 看不到内容的图片时注入——
         // 不得假装听过/看过并编造细节（本轮正在识图的图片排除：描述随后作为独立消息追加）
         const turnImageIdsForRules = new Set<string>(turnImageSrcs.map((x) => x.id));
+        // fix3-e⑧：语音占位规则带发送者归属——群聊按「观察者视角」映射 role：
+        // 机主发的 → 'me'（库文案：机主发来的语音）；观察者自己发过的 → 'peer'（按你发它时的本意处理）；
+        // 其他成员发的 → 不带 role（库回退中性文案），避免把别人的语音说成「你自己发过的」（WxGroupMsg.role 只有机主/AI 两分，不能直接透传）
+        const mediaMsgsForRules: MediaRuleMsg[] = ctxMsgs.map((m) => ({
+          id: m.id,
+          kind: m.kind,
+          role: m.role === 'me' ? ('me' as const) : m.senderId === char.id ? ('peer' as const) : undefined,
+          img: m.img,
+          voice: m.voice,
+        }));
         const mediaRules = [
-          buildVoicePlaceholderRule(ctxMsgs),
-          buildImagePlaceholderRule(ctxMsgs, { excludeIds: turnImageIdsForRules }),
+          buildVoicePlaceholderRule(mediaMsgsForRules),
+          buildImagePlaceholderRule(mediaMsgsForRules, { excludeIds: turnImageIdsForRules }),
         ].filter(Boolean);
         if (mediaRules.length > 0) groupRules.push(...mediaRules);
         // 发言自判（按人设来）：未被 @ 的成员无话可说时只回 [SKIP]（finalize 阶段整条丢弃，不落盘）
@@ -3013,10 +3063,12 @@ export function WxGroupChatPage({
           groupId: gid,
           interopOn: effectiveInterop,
         });
-        const wbBlocks = collectWbBlocks(char.id, wbScanText([lastUserText, memContext]));
+        // fix3-e⑩：世界书调用点补名字（命中条目内可用 {char}/{user} 占位，库按角色名/机主名替换）
+        const wbBlocks = collectWbBlocks(char.id, wbScanText([lastUserText, memContext]), { charName: charName, userName: meName });
         // 位置感知：群里最近发过的位置消息（谁发的/名称/地址/经纬度/发送时间）注入 system，
-        // 成员被问“我在哪”时直接说出地点名；解析失败时诚实说无法识别，不编造
-        const locBlock = buildLocationBlock(ctxMsgs);
+        // 成员被问“我在哪”时直接说出地点名；解析失败时诚实说无法识别，不编造；
+        // fix3-e⑥：群聊传 userLabel（机主名）+ groupMode（位置归属按发送者名字描述，尾句不写死「对方告诉你的」）
+        const locBlock = buildLocationBlock(ctxMsgs, { userLabel: meName, groupMode: true });
         const timeBlock = getTimeAware(sKey)
           ? buildTimeAwareBlock({ lastMsgTime: ctxMsgs[ctxMsgs.length - 1]?.time ?? null, regionHint: char.region })
           : '';
@@ -3246,7 +3298,8 @@ export function WxGroupChatPage({
           // 描述经 onVision 按图拆分回写本回合各张图片消息（img.desc 持久化，之后的聊天历史 AI 都能读到）
           ...(turnImageSrcs.length > 0
             ? {
-                vision: { images: turnImageSrcs.map((x) => x.src), text: lastUserText },
+                // fix3-e⑨：识图描述带发言者前缀（群里是机主发的图；库侧追加消息改为「{speakerLabel}发了 N 张图片…」）
+                vision: { images: turnImageSrcs.map((x) => x.src), text: lastUserText, speakerLabel: `${meName}（机主）` },
                 // 多图识图（#25）：一次识图返回的完整描述按「图N：」分行拆到本回合各张图片
                 // （splitVisionDesc 返回长度恒等于图片数），每张图的 img.desc 各自持久化，
                 // 不再把整段描述只挂到最后一张
@@ -3326,13 +3379,13 @@ export function WxGroupChatPage({
                       group: {
                         id: gid,
                         members: [me.id, ...groupRef.current.memberIds],
-                        // 群记忆成员名（#12）：按 members 顺序映射显示名（机主用称呼名，其他成员用备注/昵称/名字），
-                        // 提取/总结 prompt 据此按实际发言人归因，不再强制「用户/角色」二人视角（防跨成员串味）
+                        // 群记忆成员名（#12 / fix3-e④）：只放 AI 成员显示名（与转写「成员：」前缀同源）——
+                        // 机主名由 names.user（真名）承担，转写里机主行前缀由服务端按真名补；
+                        // 此处再放机主称呼名会成幽灵成员（称呼名≠真名时归因错乱），已移除
                         memberNames: [
                           ...new Set(
-                            [me.id, ...groupRef.current.memberIds]
+                            groupRef.current.memberIds
                               .map((id) => {
-                                if (id === me.id || id === 'me') return meName || me.name || '我';
                                 const rec = contactsRef.current.find((c) => c.id === id);
                                 return rec ? memberNameOf(rec) : '';
                               })
@@ -4447,8 +4500,14 @@ export function WxGroupChatPage({
         setEditDraft(m.kind === 'voice' ? m.voice?.transcript ?? m.voice?.localText ?? '' : m.content);
         break;
       case 'quote':
-        // 群聊引用带发言人：显示引用的是谁的消息（id 带上源消息，删除/撤回后显示「原消息已删除」）
-        setQuote({ name: m.role === 'me' ? '我' : m.senderName || '群友', content: msgSnapshotOf(m), id: m.id, time: m.time });
+        // 群聊引用带发言人：显示引用的是谁的消息（id 带上源消息，删除/撤回后显示「原消息已删除」）；
+        // fix3-e⑦：机主引用自己消息时引用名用机主称呼名（与 AI 侧参与成员名单同源），不再是「我」
+        setQuote({
+          name: m.role === 'me' ? addressNameOf(me, useSettings.getState().addressMode) : m.senderName || '群友',
+          content: msgSnapshotOf(m),
+          id: m.id,
+          time: m.time,
+        });
         requestAnimationFrame(() => inputRef.current?.focus());
         break;
       case 'multi':

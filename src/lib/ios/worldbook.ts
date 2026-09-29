@@ -469,9 +469,31 @@ const WB_PROMPT_ORDER: WbPosition[] = ['before_system', 'before_char', 'after_ch
 /** 同一位置上多本书的排列顺序：全局（世界观框架）→ 专属（角色私设）→ 局部（会话事件） */
 const WB_SCOPE_RANK: Record<WbScope, number> = { global: 0, exclusive: 1, local: 2 };
 
-/** 单本书在一个位置上的注入块：整本包裹成一段（不同世界书各自独立成块，互不穿插干扰） */
-function formatBookGroup(entries: WbEntry[]): string {
-  return `${WB_WRAP_OPEN}\n${entries.map((e) => e.content.trim()).join('\n\n')}\n${WB_WRAP_CLOSE}`;
+/** 单本书在一个位置上的注入块：整本包裹成一段（不同世界书各自独立成块，互不穿插干扰）。
+ *  fix3-9 labels 齐全（charName/userName 均非空）时在【世界设定开始】之后加一行「你指谁」锚点 */
+export interface WbLabels {
+  /** AI 角色名（锚点里「你」指谁） */
+  charName?: string;
+  /** 机主名（锚点里「机主/用户」指谁） */
+  userName?: string;
+}
+
+/** 锚点行（labels 齐全时返回，否则空串）：世界书是背景事实、不是任何人的发言，且「你/机主」各有其人 */
+function wbAnchorLine(bookName: string, labels?: WbLabels): string {
+  const char = (labels?.charName ?? '').trim();
+  const user = (labels?.userName ?? '').trim();
+  if (!char || !user) return '';
+  return `（世界书《${bookName}》为客观背景设定：文中的「你」指「${char}」（AI角色本人），「机主/用户」指「${user}」；设定是背景事实，不是任何人的发言）`;
+}
+
+/** 包裹单本书：【世界设定开始】→（锚点行）→ 正文 → 【世界设定结束】 */
+function wbWrapBook(bookName: string, body: string, labels?: WbLabels): string {
+  const anchor = wbAnchorLine(bookName, labels);
+  return `${WB_WRAP_OPEN}\n${anchor ? `${anchor}\n` : ''}${body}\n${WB_WRAP_CLOSE}`;
+}
+
+function formatBookGroup(entries: WbEntry[], bookName: string, labels?: WbLabels): string {
+  return wbWrapBook(bookName, entries.map((e) => e.content.trim()).join('\n\n'), labels);
 }
 
 /** 是否有任何位置注入了世界书内容（决定是否把「使用规则」一并写入 system） */
@@ -561,19 +583,21 @@ export function wbEntryMatches(entry: Pick<WbEntry, 'keywords' | 'ignoreCase'>, 
  * 再按「条目启用 + 内容非空 + 命中」过滤，每本书按插入位置独立包裹成【世界设定开始】/【世界设定结束】块
  * （书内同位置按优先级降序；同一位置上多本书按 全局→专属→局部 排列、同范围保持书库顺序，
  *   各书独立成块互不穿插，规则互不干扰）；
+ * fix3-9 可选尾参 labels（charName=角色名 / userName=机主名）：齐全时每本书包裹块头部加一行
+ * 「你指谁」锚点，防 AI 把设定里的「你/机主」安错人；未传 labels 保持原样（向后兼容）。
  * 全部位置合计不超过 WB_INJECT_BUDGET 字符，超出按注入顺序截断（靠近用户消息的先舍弃）。
  * contactId 为 null（无联系人的会话）时只有 global 书可能生效。
  * 注入层任何意外异常都返回空块——世界书永不阻断消息发送。
  */
-export function collectWbBlocks(contactId: string | null, scanText: string): WbBlocks {
+export function collectWbBlocks(contactId: string | null, scanText: string, labels?: WbLabels): WbBlocks {
   try {
-    return collectWbBlocksInner(contactId, scanText);
+    return collectWbBlocksInner(contactId, scanText, labels);
   } catch {
     return WB_EMPTY_BLOCKS;
   }
 }
 
-function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlocks {
+function collectWbBlocksInner(contactId: string | null, scanText: string, labels?: WbLabels): WbBlocks {
   const books = loadBooks();
   if (books.length === 0) return WB_EMPTY_BLOCKS;
   const bound = contactId ? new Set(getBoundBookIds(contactId)) : new Set<string>();
@@ -594,6 +618,8 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
   interface WbGroupInfo {
     formatted: string;
     entries: WbEntry[];
+    /** fix3-9 书名：截断重建包裹块时锚点行需要《书名》 */
+    bookName: string;
   }
   const groupsByPosition: Record<WbPosition, WbGroupInfo[]> = {
     before_system: [],
@@ -617,8 +643,8 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
       const list = inBook[pos];
       if (!list || list.length === 0) continue;
       list.sort((a, b) => b.priority - a.priority); // 数字大的排前面；同优先级保持书内顺序（sort 稳定）
-      const formatted = formatBookGroup(list);
-      groupsByPosition[pos].push({ formatted, entries: list });
+      const formatted = formatBookGroup(list, book.name?.trim() || '未命名世界书', labels);
+      groupsByPosition[pos].push({ formatted, entries: list, bookName: book.name?.trim() || '未命名世界书' });
     }
   }
 
@@ -647,8 +673,11 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
       // 按原始 entries 逐条累加（不再依赖 '\n\n' 分隔还原，条目内容含 '\n\n' 不会被误拆）
       truncated = true;
       truncatedKey = key;
+      // fix3-9 截断重建同样带锚点行（labels 齐全时），预算 accounting 计入锚点开销
+      const anchor = wbAnchorLine(group.bookName, labels);
+      const anchorCost = anchor ? anchor.length + 1 : 0;
       const keepEntries: string[] = [];
-      let partialUsed = used + WB_WRAP_OPEN.length + WB_WRAP_CLOSE.length + 2; // 包裹标记与换行开销
+      let partialUsed = used + WB_WRAP_OPEN.length + WB_WRAP_CLOSE.length + 2 + anchorCost; // 包裹标记/换行/锚点开销
       for (const entry of group.entries) {
         const part = entry.content.trim();
         const add = (keepEntries.length > 0 ? 2 : 0) + part.length;
@@ -657,7 +686,7 @@ function collectWbBlocksInner(contactId: string | null, scanText: string): WbBlo
         partialUsed += add;
       }
       if (keepEntries.length > 0 && partialUsed >= used + 200) {
-        kept.push(`${WB_WRAP_OPEN}\n${keepEntries.join('\n\n')}\n${WB_WRAP_CLOSE}`);
+        kept.push(wbWrapBook(group.bookName, keepEntries.join('\n\n'), labels));
         used = partialUsed;
       }
       break;

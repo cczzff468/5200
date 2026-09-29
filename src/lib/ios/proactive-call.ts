@@ -336,7 +336,8 @@ function setShortCooldown(contactId: string, at: number): void {
 /** 决策失败（网络/超时/非 200）返回 null，由调用方按 wait 口径落冷却 */
 async function requestProactiveDecision(args: {
   contact: Record<string, unknown>;
-  recentChats: { app: string; text: string; time: string }[];
+  // fix3-1 摘要条目带 role：决策端渲染「机主：/你：」前缀，防把机主说的话当成 AI 自己说的
+  recentChats: { app: string; text: string; time: string; role: 'user' | 'assistant' }[];
   lastChatAt: number;
   lastInteractionLabel: string;
   now: string;
@@ -601,7 +602,9 @@ async function tickInner(): Promise<void> {
   ).flatMap(({ key, app }) =>
     readNormMsgs(key)
       .slice(-4)
-      .map((m) => ({ app, text: m.text.slice(0, 60), time: fmtChatTime(m.time, nowMs) }))
+      // fix3-1 归属修复：NormMsg 已解析出 role（wx/qq 的 me/peer 与信息的 user/assistant 已归一），
+      // 随摘要一起传给决策 API——「谁说的」不能在拼装摘要时丢掉
+      .map((m) => ({ app, text: m.text.slice(0, 60), time: fmtChatTime(m.time, nowMs), role: m.role }))
   );
 
   const decision = await requestProactiveDecision({

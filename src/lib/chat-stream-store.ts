@@ -69,6 +69,10 @@ export interface ChatPayloadMessage {
 export interface ChatVisionInput {
   images: string[];
   text: string;
+  /** fix3-8 发送者称呼（可选）：群聊传发出图片的成员名（机主行传机主名）——
+   *  识图描述上下文行标注「谁发的图片」，防群聊里把机主发的图说成 AI 自己发的；
+   *  缺省沿用「我」（单聊=机主本人，行为不变） */
+  speakerLabel?: string;
 }
 
 /** finalize 结果：流结束（成功/失败）后的最终数据 */
@@ -323,7 +327,10 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
           const desc = await describeImages(visionConfig, { images: opts.vision.images, text: opts.vision.text });
           if (desc) {
             const n = opts.vision.images.length;
-            const prefix = n > 1 ? `（我发了 ${n} 张图片，图片内容分别是：` : '（我发了一张图片，图片内容是：';
+            // fix3-8 识图描述上下文行带发送者：群聊里是谁发的图片就说谁发了（speakerLabel），
+            // 未传时维持「我」（单聊=机主本人），单数/复数两种既有句式均不变
+            const speaker = opts.vision.speakerLabel || '我';
+            const prefix = n > 1 ? `（${speaker}发了 ${n} 张图片，图片内容分别是：` : `（${speaker}发了一张图片，图片内容是：`;
             workMessages = [...messages, { role: 'user' as const, content: `${prefix}${desc}）` }];
             // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容；
             // 换号中止后不再回写（旧账号会话的落盘动作全部停止）

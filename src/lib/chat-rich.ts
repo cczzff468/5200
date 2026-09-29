@@ -663,13 +663,18 @@ export function buildActionRules(pending: PendingCardInfo[]): string[] {
  * - 用户发图时 AI 可自主决定换头像/换朋友圈背景/存相册
  * - 相册非空时 AI 可从相册选图设头像/背景/发聊天
  * - albumSummary 为相册清单（id:desc），null 或空数组时只注入换头像/换背景/存相册规则
+ * - fix3-10 可选尾参 app：'qq' 时「换朋友圈背景」文案改为 QQ 资料页顶部封面（标记名两端都不改，
+ *   解析兼容）；默认/缺省保持微信文案不变（向后兼容）
  */
-export function buildVisionRules(albumSummary: { id: string; desc: string }[] | null): string[] {
+export function buildVisionRules(albumSummary: { id: string; desc: string }[] | null, app?: 'wx' | 'qq'): string[] {
+  const isQQ = app === 'qq';
   const rules = [
     '【视觉自主决策】用户发来图片时，你可以根据图片内容 + 你的人设 + 当前情绪 + 你与用户的关系，' +
       '自主决定要不要做这些动作（标记单独占一行，不要解释、不要加引号说明）：' +
       '[换头像:图片消息ID]：把这张图设为你自己的头像（图里是你/符合你的人设才换，不要乱换）；' +
-      '[换朋友圈背景:图片消息ID]：把这张图设为你的朋友圈封面；' +
+      (isQQ
+        ? '[换朋友圈背景:图片消息ID]：把这张图设为你的QQ资料页顶部封面（在QQ里这个标记改的是你的资料页封面，不是朋友圈）；'
+        : '[换朋友圈背景:图片消息ID]：把这张图设为你的朋友圈封面；') +
       '[存相册:图片消息ID]：把这张图存进你的相册（你觉得有价值/有意思的图才存）。' +
       '换头像/换背景前先考虑你的人设、当前情绪、与用户的关系是否合适；不合适就只口头回应图片，不要乱换。' +
       '图片消息ID 必须从最近用户发来的图片消息里原样抄写（如 msg-x7k2）；没收到图不要写这些标记。',

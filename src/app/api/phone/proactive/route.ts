@@ -40,6 +40,8 @@ interface RecentChatItem {
   app: string;
   text: string;
   time: string;
+  /** fix3-1 归属锚点：'user' = 机主本人说的 / 'assistant' = 角色（AI）本人说的；缺省按角色处理 */
+  role?: 'user' | 'assistant';
 }
 
 /** 最近聊天摘要宽松解析（非法条目丢弃，单条截断，总量封顶） */
@@ -55,6 +57,13 @@ function parseRecentChats(raw: unknown): RecentChatItem[] {
       app: typeof r.app === 'string' && r.app.trim() ? r.app.trim().slice(0, 8) : '聊天',
       text,
       time: typeof r.time === 'string' ? r.time.trim().slice(0, 24) : '',
+      // fix3-1 宽松读取：user/me 都算机主，assistant/peer 都算角色本人，其余缺省按角色处理
+      role:
+        r.role === 'user' || r.role === 'me'
+          ? ('user' as const)
+          : r.role === 'assistant' || r.role === 'peer'
+            ? ('assistant' as const)
+            : undefined,
     });
   }
   return out;
@@ -150,9 +159,19 @@ export async function POST(req: NextRequest) {
   );
 
   // 上游要求 user 消息收尾：最近聊天摘要 + 当前时间/距上次互动作为决策依据
-  const chatLines = recentChats.map((c) => `【${c.app}${c.time ? ` ${c.time}` : ''}】${c.text}`);
+  // fix3-1 摘要行带说话人前缀：role='user' 标「机主」、其余标「你」（=角色/AI 本人），
+  // 标题后加一行锚点说明，防止决策模型把机主说的话当成自己说的（决策 reason 会变成来电开场情境）
+  const chatLines = recentChats.map(
+    (c) => `【${c.app}${c.time ? ` ${c.time}` : ''}】${c.role === 'user' ? '机主' : '你'}：${c.text}`
+  );
   const contextLines = [
-    ...(chatLines.length > 0 ? ['你们最近的聊天摘要：', ...chatLines] : []),
+    ...(chatLines.length > 0
+      ? [
+          '你们最近的聊天摘要：',
+          '（机主=用户本人，「你」=角色本人，别把机主说的话当成自己说的）',
+          ...chatLines,
+        ]
+      : []),
     ...(lastInteractionLabel ? [`距你们上一次互动已经约 ${lastInteractionLabel}。`] : []),
     ...(now ? [`当前时间：${now}。`] : []),
   ];

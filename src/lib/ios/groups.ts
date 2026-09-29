@@ -52,15 +52,39 @@ const EVENT_TYPES: ReadonlySet<string> = new Set([
   'create', 'join', 'leave', 'kick', 'mute', 'unmute', 'admin-add', 'admin-remove', 'owner-transfer', 'rename', 'avatar', 'announcement',
 ]);
 
+/**
+ * 群事件操作者（fix3-e①：谁发起的这件事——机主或执行操作的 AI 成员）。
+ * kind 'me' = 机主（name 可选传机主称呼名，供被禁言通知等需要具体名字的场景）；
+ * kind 'char' = AI 成员（id = 联系人 ID，name = 成员显示名）。
+ * 旧调用不传 actor 时事件无操作者，AI 感知渲染按现文案回退（向后兼容）。
+ */
+export type GroupEventActor = { kind: 'me'; name?: string } | { kind: 'char'; id?: string; name?: string };
+
 /** 群事件详情（挂在系统消息上：渲染用 noticeText，AI 感知用 type + 文本） */
 export interface GroupEventDetail {
   type: GroupEventType;
   /** 操作发起人联系人 ID（'me' = 机主；纯系统事件可省） */
   actorId?: string;
+  /** 操作发起人显示名（fix3-e①：与 actorId 同时落库；旧事件无此字段按回退文案渲染） */
+  actorName?: string;
   /** 事件对象成员联系人 ID */
   targetId?: string;
   /** 附加信息（新群名/禁言时长文本等） */
   extra?: string;
+}
+
+/**
+ * 禁言待办通知（fix3-e① 被禁言成员感知）：禁言/解禁发生时写 kv（键 grp-mute-notice:<gid>:<charId>），
+ * 该成员不再被禁言后的首次开口时由群聊回合取走（读取即删）注入 system——
+ * 被禁言期间物理禁言无法发言，通知留在 kv 里等解禁后才消费（重启不丢）。
+ */
+export interface GroupMuteNotice {
+  /** 'mute' = 禁言通知（解禁方式未知）；'unmute' = 已被手动解除（带操作者） */
+  kind: 'mute' | 'unmute';
+  /** 注入文本（含时间/操作者/时长等完整信息） */
+  text: string;
+  /** 发生时刻 */
+  at: number;
 }
 
 export interface ChatGroup {
@@ -349,9 +373,10 @@ export function createGroup(input: {
   };
   writePool(app, [...readPool(app), group]);
   // 建群系统消息：居中灰字随群消息持久化（AI/用户建群带创建者名「XX创建了群聊」；旧调用保持「群聊创建」）
+  // fix3-e①：创建者同时落 actorId/actorName（AI 感知注入可还原「谁建的群」）
   pushGroupEvent(group.id, input.creatorName ? `${input.creatorName}创建了群聊` : '群聊创建', {
     type: 'create',
-    ...(input.ownerId ? { actorId: input.ownerId } : {}),
+    ...(input.ownerId ? { actorId: input.ownerId, actorName: input.creatorName } : {}),
   });
   return group;
 }
@@ -363,7 +388,10 @@ export function createGroup(input: {
  */
 export function updateGroup(
   groupId: string,
-  patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>
+  patch: Partial<Pick<ChatGroup, 'name' | 'remark' | 'avatar' | 'announcement' | 'memoryInterop' | 'memberIds'>>,
+  // fix3-e①：群资料事件（改名/换头像/改公告）的操作者——机主设置页传 { kind:'me', name }，
+  // AI 管理动作传 { kind:'char', id, name }；不传时事件无操作者（旧调用兼容，感知文案回退）
+  opts?: { actor?: GroupEventActor }
 ): ChatGroup | null {
   const app = getGroup(groupId)?.app;
   if (!app) return null;
@@ -376,16 +404,16 @@ export function updateGroup(
   if (patch.remark !== undefined) next.remark = patch.remark.trim();
   list[idx] = next;
   writePool(app, list);
-  // 群资料事件（只在值真正变化时发，成员增删走专用函数不经过这里）
+  // 群资料事件（只在值真正变化时发，成员增删走专用函数不经过这里）；fix3-e① 带操作者落库
   if (patch.name !== undefined && next.name !== prev.name) {
-    pushGroupEvent(groupId, `群名被修改为「${next.name}」`, { type: 'rename', extra: next.name });
+    pushGroupEvent(groupId, `群名被修改为「${next.name}」`, { type: 'rename', extra: next.name }, opts?.actor);
   }
   if (patch.avatar !== undefined && (patch.avatar ?? null) !== (prev.avatar ?? null)) {
-    pushGroupEvent(groupId, '群头像已更新', { type: 'avatar' });
+    pushGroupEvent(groupId, '群头像已更新', { type: 'avatar' }, opts?.actor);
   }
   if (patch.announcement !== undefined && (patch.announcement ?? '') !== (prev.announcement ?? '')) {
     next.annAt = Date.now();
-    pushGroupEvent(groupId, '群公告已更新', { type: 'announcement' });
+    pushGroupEvent(groupId, '群公告已更新', { type: 'announcement' }, opts?.actor);
   }
   return next;
 }
@@ -469,14 +497,94 @@ function muteDurationText(ms: number | null): string {
   return `${Math.round(ms / 60_000)} 分钟`;
 }
 
+// ---------------- 禁言待办通知（fix3-e① 被禁言成员感知） ----------------
+
+const muteNoticeKey = (groupId: string, contactId: string) => `grp-mute-notice:${groupId}:${contactId}`;
+
+/** 操作者显示名（通知文本用；角色缺名/未传 actor 时与被踢通知同口径回退「群主」） */
+function muteNoticeActorLabel(actor?: GroupEventActor): string {
+  if (!actor) return '群主';
+  return actor.name?.trim() || (actor.kind === 'me' ? '机主' : '群主');
+}
+
+/** 时刻 → 「M月D日 HH:mm」（通知文本用；与 groupEventAgo 的绝对时间格式同款） */
+function clockTextOf(ts: number): string {
+  try {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  } catch {
+    return '';
+  }
+}
+
+/** 写禁言待办通知（latest wins：重复禁言/先禁后解覆盖旧通知） */
+function writeMuteNotice(groupId: string, contactId: string, n: Omit<GroupMuteNotice, 'at'>): void {
+  if (!contactId || contactId === 'me') return; // 机主不被禁言，通知只面向 AI 成员
+  try {
+    kvSet(muteNoticeKey(groupId, contactId), { ...n, at: Date.now() } satisfies GroupMuteNotice);
+  } catch {
+    // 存储失败不阻塞禁言本身
+  }
+}
+
+/**
+ * 取走该成员的禁言待办通知（fix3-e①：读取即删，只提醒一次）。
+ * 该成员仍被禁言时不取走（物理禁言无法发言，通知留到解禁后首次开口再注入）；
+ * 存量为「禁言通知」（从未手动解除 → 禁言已自然到期）时给文本补到期解除说明。
+ * 群不存在时顺带清键（防孤儿）。
+ */
+export function takeGroupMuteNotice(groupId: string, contactId: string): GroupMuteNotice | null {
+  const key = muteNoticeKey(groupId, contactId);
+  const g = getGroup(groupId);
+  if (!g) {
+    try {
+      kvDel(key);
+    } catch {
+      // 忽略
+    }
+    return null;
+  }
+  let n: GroupMuteNotice | null = null;
+  try {
+    const v = kvGet<GroupMuteNotice>(key);
+    if (v && typeof v === 'object' && typeof v.text === 'string' && v.text && (v.kind === 'mute' || v.kind === 'unmute')) {
+      n = { kind: v.kind, text: v.text, at: typeof v.at === 'number' ? v.at : Date.now() };
+    }
+  } catch {
+    return null;
+  }
+  if (!n) return null;
+  if (isGroupMuted(g, contactId)) return null; // 还在禁言中：保留通知等解禁后消费
+  try {
+    kvDel(key);
+  } catch {
+    // 忽略
+  }
+  // 手动解除的通知原样注入；自然到期（从未手动解除）补一句「已到期解除」避免「期间无法发言」悬空
+  if (n.kind === 'mute') {
+    return { kind: 'unmute', text: `${n.text}（现已到期解除，现在可以正常发言了）`, at: n.at };
+  }
+  return n;
+}
+
 /**
  * 追加一条群事件系统消息（居中灰字；随群消息持久化）。
  * 事件不参与 AI 正常回复（历史/预览都过滤），但会经 collectGroupEventLines 按时间注入 system。
+ * fix3-e①：actor = 操作者（机主/执行操作的 AI 成员），落进 evt.actorId/actorName，
+ * 供感知注入还原「谁干的」；不传时保持旧行为（无操作者，感知文案回退原文）。
  * 追加失败（群不存在/存储异常）返回 null，不阻塞调用方。
  */
-export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDetail): WxGroupMsg | null {
+export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDetail, actor?: GroupEventActor): WxGroupMsg | null {
   const g = getGroup(groupId);
   if (!g) return null;
+  // fix3-e①：操作者落库——actor 覆写 evt.actorId（'me' = 机主字面量，与 ownerId/mutes 键的旧数据兼容口径一致）
+  const evtFull: GroupEventDetail = actor
+    ? {
+        ...evt,
+        actorId: actor.kind === 'me' ? 'me' : actor.id,
+        ...(actor.name?.trim() ? { actorName: actor.name.trim() } : {}),
+      }
+    : evt;
   const msg: WxGroupMsg = {
     id: genId(),
     role: 'peer',
@@ -486,7 +594,7 @@ export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDet
     time: Date.now(),
     kind: 'notice',
     noticeText: text,
-    evt,
+    evt: evtFull,
   };
   try {
     const key = groupMsgsKey(g.app, groupId);
@@ -505,8 +613,8 @@ export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDet
   return msg;
 }
 
-/** 设置/取消管理员（仅群主可操作；群主本人不能被设为管理员）。opts.name 供事件文本。 */
-export function setGroupAdmin(groupId: string, contactId: string, admin: boolean, opts?: { name?: string }): ChatGroup | null {
+/** 设置/取消管理员（仅群主可操作；群主本人不能被设为管理员）。opts.name 供事件文本；fix3-e① opts.actor = 操作者。 */
+export function setGroupAdmin(groupId: string, contactId: string, admin: boolean, opts?: { name?: string; actor?: GroupEventActor }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g || contactId === g.ownerId) return g ?? null;
   const has = g.adminIds.includes(contactId);
@@ -519,15 +627,21 @@ export function setGroupAdmin(groupId: string, contactId: string, admin: boolean
   list[idx] = { ...g, adminIds };
   writePool(app, list);
   const name = opts?.name ?? '群成员';
-  pushGroupEvent(groupId, admin ? `${name}成为管理员` : `${name}被取消管理员`, {
-    type: admin ? 'admin-add' : 'admin-remove',
-    targetId: contactId,
-  });
+  pushGroupEvent(
+    groupId,
+    admin ? `${name}成为管理员` : `${name}被取消管理员`,
+    {
+      type: admin ? 'admin-add' : 'admin-remove',
+      targetId: contactId,
+    },
+    opts?.actor,
+  );
   return list[idx];
 }
 
-/** 禁言（群主可禁言除自己外的任何成员；管理员只应禁言普通成员——权限门控由 UI 层负责，数据层只拦群主）。duration=null 表示永久 */
-export function muteGroupMember(groupId: string, contactId: string, duration: number | null, opts?: { name?: string }): ChatGroup | null {
+/** 禁言（群主可禁言除自己外的任何成员；管理员只应禁言普通成员——权限门控由 UI 层负责，数据层只拦群主）。duration=null 表示永久。
+ *  fix3-e① opts.actor = 操作者（落事件 + 写被禁言成员感知通知）。 */
+export function muteGroupMember(groupId: string, contactId: string, duration: number | null, opts?: { name?: string; actor?: GroupEventActor }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g || contactId === g.ownerId) return g ?? null;
   const mutes = { ...g.mutes, [contactId]: duration === null ? null : Date.now() + duration };
@@ -538,16 +652,22 @@ export function muteGroupMember(groupId: string, contactId: string, duration: nu
   list[idx] = { ...g, mutes };
   writePool(app, list);
   const name = opts?.name ?? '群成员';
-  pushGroupEvent(groupId, `${name}被禁言${muteDurationText(duration)}`, {
+  const durText = muteDurationText(duration);
+  pushGroupEvent(groupId, `${name}被禁言${durText}`, {
     type: 'mute',
     targetId: contactId,
-    extra: muteDurationText(duration),
+    extra: durText,
+  }, opts?.actor);
+  // fix3-e① 被禁言成员感知：写轻量待办通知（仍被禁言时不注入；解禁后该成员首次开口时取走注入并删键）
+  writeMuteNotice(groupId, contactId, {
+    kind: 'mute',
+    text: `你于${clockTextOf(Date.now())}被${muteNoticeActorLabel(opts?.actor)}禁言${durText}，期间无法在群里发言`,
   });
   return list[idx];
 }
 
-/** 解除禁言（未禁言时静默返回，不发事件） */
-export function unmuteGroupMember(groupId: string, contactId: string, opts?: { name?: string }): ChatGroup | null {
+/** 解除禁言（未禁言时静默返回，不发事件）；fix3-e① opts.actor = 操作者（手动解除才有，写「禁言已被谁解除」感知通知）。 */
+export function unmuteGroupMember(groupId: string, contactId: string, opts?: { name?: string; actor?: GroupEventActor }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g || !(contactId in g.mutes)) return g;
   const mutes = { ...g.mutes };
@@ -559,14 +679,20 @@ export function unmuteGroupMember(groupId: string, contactId: string, opts?: { n
   list[idx] = { ...g, mutes };
   writePool(app, list);
   if (opts?.name) {
-    pushGroupEvent(groupId, `${opts.name}被解除禁言`, { type: 'unmute', targetId: contactId });
+    pushGroupEvent(groupId, `${opts.name}被解除禁言`, { type: 'unmute', targetId: contactId }, opts.actor);
   }
+  // fix3-e① 被禁言成员感知：手动解除 → 覆写待办通知（下次开口注入「你的禁言已被谁解除」并删键）
+  writeMuteNotice(groupId, contactId, {
+    kind: 'unmute',
+    text: opts?.actor ? `你的禁言已被${muteNoticeActorLabel(opts.actor)}解除` : '你的禁言已解除',
+  });
   return list[idx];
 }
 
 /** 踢人（移出群聊）：群主不可被移出；成功落「XX被移出群聊」事件（三.3）；被移出者不再参与该群回复。
- *  opts.actorName = 操作者显示名（机主或执行踢人的 AI），透传给被踢钩子（被踢角色私聊时知道是谁踢的）。 */
-export function kickGroupMember(groupId: string, contactId: string, opts?: { name?: string; actorName?: string }): ChatGroup | null {
+ *  opts.actorName = 操作者显示名（机主或执行踢人的 AI），透传给被踢钩子（被踢角色私聊时知道是谁踢的）；
+ *  fix3-e① opts.actor = 操作者（落事件 actorId/actorName，感知注入还原归属）。 */
+export function kickGroupMember(groupId: string, contactId: string, opts?: { name?: string; actorName?: string; actor?: GroupEventActor }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g || contactId === g.ownerId) return g ?? null;
   if (!g.memberIds.includes(contactId)) return g;
@@ -587,7 +713,7 @@ export function kickGroupMember(groupId: string, contactId: string, opts?: { nam
       }
     }
     const name = opts?.name ?? '群成员';
-    pushGroupEvent(groupId, `${name}被移出群聊`, { type: 'kick', targetId: contactId });
+    pushGroupEvent(groupId, `${name}被移出群聊`, { type: 'kick', targetId: contactId }, opts?.actor);
     for (const fn of kickedHooks) {
       try {
         fn(g, contactId, opts?.actorName);
@@ -599,8 +725,8 @@ export function kickGroupMember(groupId: string, contactId: string, opts?: { nam
   return next;
 }
 
-/** 转让群主：新群主从管理员列表移除（群主不兼任管理员），原群主变为普通成员；落「群主转让给 XX」事件（三.6） */
-export function transferGroupOwner(groupId: string, newOwnerId: string, opts?: { name?: string }): ChatGroup | null {
+/** 转让群主：新群主从管理员列表移除（群主不兼任管理员），原群主变为普通成员；落「群主转让给 XX」事件（三.6）；fix3-e① opts.actor = 操作者 */
+export function transferGroupOwner(groupId: string, newOwnerId: string, opts?: { name?: string; actor?: GroupEventActor }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g || !newOwnerId || newOwnerId === g.ownerId) return g;
   const app = g.app;
@@ -610,7 +736,7 @@ export function transferGroupOwner(groupId: string, newOwnerId: string, opts?: {
   list[idx] = { ...g, ownerId: newOwnerId, adminIds: g.adminIds.filter((id) => id !== newOwnerId) };
   writePool(app, list);
   if (opts?.name) {
-    pushGroupEvent(groupId, `群主转让给 ${opts.name}`, { type: 'owner-transfer', targetId: newOwnerId });
+    pushGroupEvent(groupId, `群主转让给 ${opts.name}`, { type: 'owner-transfer', targetId: newOwnerId }, opts.actor);
   }
   return list[idx];
 }
@@ -618,13 +744,98 @@ export function transferGroupOwner(groupId: string, newOwnerId: string, opts?: {
 /**
  * 收集本群最近的群事件行（按时间升序，AI system 注入用；四.1/4.3：事件按时间排序注入，不能错乱）。
  * 返回「- 刚刚：红红加入了群聊」形态的行数组；无事件返回空数组。
+ * fix3-e①：observerCharId = 即将发言的 AI 成员（观察者）。带操作者的事件按观察者视角改写为主动语态——
+ * 操作者是观察者本人 → 「你将红红移出了群聊」；是机主 → 「机主将红红…」；是其他角色 → 「{角色名}将红红…」；
+ * 无操作者的旧事件按现文案原样回退（向后兼容）。
  */
-export function collectGroupEventLines(groupId: string, limit = 12, now: number = Date.now()): string[] {
+export function collectGroupEventLines(groupId: string, limit = 12, now: number = Date.now(), observerCharId?: string): string[] {
+  const g = getGroup(groupId);
   return loadGroupMsgs(groupId)
     .filter((m) => m.evt)
     .sort((a, b) => a.time - b.time)
     .slice(-limit)
-    .map((m) => `- ${groupEventAgo(m.time, now)}：${m.noticeText ?? ''}`);
+    .map((m) => `- ${groupEventAgo(m.time, now)}：${groupEventLineText(m, g, observerCharId)}`);
+}
+
+/** 从事件文案里提取对象成员名（数据层内部生成的固定句式，按类型取名字；提取不到返回 null） */
+function eventTargetNameOf(evt: GroupEventDetail, text: string): string | null {
+  const cap = (re: RegExp): string | null => {
+    const m = re.exec(text);
+    return m ? m[1] : null;
+  };
+  switch (evt.type) {
+    case 'kick':
+      return cap(/^(.+?)被移出群聊$/);
+    case 'mute':
+      return cap(/^(.+?)被禁言/);
+    case 'unmute':
+      return cap(/^(.+?)被解除禁言$/);
+    case 'admin-add':
+      return cap(/^(.+?)成为管理员$/);
+    case 'admin-remove':
+      return cap(/^(.+?)被取消管理员$/);
+    case 'owner-transfer':
+      return cap(/^群主转让给\s*(.+)$/);
+    default:
+      return null;
+  }
+}
+
+/** 带操作者事件 → 观察者视角的主动语态文案（改写不了的对象/类型按原文回退） */
+function activeEventSentence(actorLabel: string, evt: GroupEventDetail, text: string): string {
+  switch (evt.type) {
+    case 'kick': {
+      const t = eventTargetNameOf(evt, text);
+      return t ? `${actorLabel}将${t}移出了群聊` : text;
+    }
+    case 'mute': {
+      const t = eventTargetNameOf(evt, text);
+      return t ? `${actorLabel}将${t}禁言${evt.extra ?? ''}` : text;
+    }
+    case 'unmute': {
+      const t = eventTargetNameOf(evt, text);
+      return t ? `${actorLabel}解除了${t}的禁言` : text;
+    }
+    case 'admin-add': {
+      const t = eventTargetNameOf(evt, text);
+      return t ? `${actorLabel}将${t}设为管理员` : text;
+    }
+    case 'admin-remove': {
+      const t = eventTargetNameOf(evt, text);
+      return t ? `${actorLabel}取消了${t}的管理员` : text;
+    }
+    case 'owner-transfer': {
+      const t = eventTargetNameOf(evt, text);
+      return t ? `${actorLabel}将群主转让给了${t}` : text;
+    }
+    case 'rename': {
+      const n = evt.extra?.trim();
+      return n ? `${actorLabel}把群名改成了「${n}」` : text;
+    }
+    case 'announcement':
+      return `${actorLabel}更新了群公告`;
+    case 'avatar':
+      return `${actorLabel}更新了群头像`;
+    case 'create':
+      // 旧数据无创建者名时文案是「群聊创建」→ 借操作者补出归属；已有创建者名的原文已带归属
+      return text === '群聊创建' ? `${actorLabel}创建了群聊` : text;
+    default:
+      // join/leave：文案本身已带归属（邀请人 eventText / 退出者名字），不做主动语态改写
+      return text;
+  }
+}
+
+/** 单条事件 → 观察者视角文本（fix3-e①）：操作者=观察者本人 → 「你…」；= 机主 → 「机主…」；其他角色 → 「{角色名}…」 */
+function groupEventLineText(m: WxGroupMsg, g: ChatGroup | null, observerCharId?: string): string {
+  const evt = m.evt;
+  const text = m.noticeText ?? '';
+  if (!evt || !evt.actorId) return text; // 旧事件（无操作者）：按现文案回退
+  const isOwnerActor = evt.actorId === 'me' || (!!g && evt.actorId === g.ownerId);
+  if (observerCharId && evt.actorId === observerCharId) return activeEventSentence('你', evt, text);
+  if (isOwnerActor) return activeEventSentence('机主', evt, text);
+  const actorName = evt.actorName?.trim();
+  if (!actorName) return text; // 有操作者 ID 但名字缺失（跨版本数据）：回退原文，宁缺勿错
+  return activeEventSentence(actorName, evt, text);
 }
 
 /** 事件相对时间标签（刚刚 / X 分钟前 / X 小时前 / 昨天 / M月D日 HH:MM） */
@@ -757,6 +968,10 @@ export function dissolveGroup(groupId: string, opts?: { purgeMemory?: boolean })
         kvDel(`mem-anchor:${cid}:${g.app}:group:${groupId}`);
       }
     }
+    // fix3-e① 禁言待办通知随群清理（群没了通知键就是孤儿；机主恒不被禁言，只需遍历 AI 成员）
+    for (const cid of g.memberIds) {
+      kvDel(muteNoticeKey(groupId, cid));
+    }
     // 群聊天背景图片本体（IndexedDB settings store，键同 contacts-store 的 chat-bg 前缀；群背景与单聊相互独立）
     void localDB.delete('settings', `chat-bg:${g.app}:group:${groupId}`).catch(() => undefined);
   } catch {
@@ -807,10 +1022,10 @@ export function quitGroup(groupId: string, opts?: { kicked?: boolean }): ChatGro
  * （群对 AI 成员仍然存在；同时触发退群挽留快照，AI 事后可按人设私信道歉/邀请回群）。
  * opts.name = 机主显示名（事件文本用）。群不存在返回 null。
  */
-export function kickOwnerFromGroup(groupId: string, opts?: { name?: string }): ChatGroup | null {
+export function kickOwnerFromGroup(groupId: string, opts?: { name?: string; actor?: GroupEventActor }): ChatGroup | null {
   const g = getGroup(groupId);
   if (!g) return null;
-  pushGroupEvent(groupId, `${opts?.name ?? '机主'}被移出群聊`, { type: 'kick', targetId: 'me' });
+  pushGroupEvent(groupId, `${opts?.name ?? '机主'}被移出群聊`, { type: 'kick', targetId: 'me' }, opts?.actor);
   return quitGroup(groupId, { kicked: true });
 }
 
@@ -945,6 +1160,8 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
         ? {
             type: r.evt.type as GroupEventDetail['type'],
             actorId: typeof r.evt.actorId === 'string' ? r.evt.actorId : undefined,
+            // fix3-e①：操作者显示名透传（旧事件无此字段照常兼容，感知注入按回退文案渲染）
+            actorName: typeof r.evt.actorName === 'string' && r.evt.actorName ? r.evt.actorName : undefined,
             targetId: typeof r.evt.targetId === 'string' ? r.evt.targetId : undefined,
             extra: typeof r.evt.extra === 'string' ? r.evt.extra : undefined,
           }

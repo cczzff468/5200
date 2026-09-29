@@ -591,6 +591,14 @@ export function memPurgeGroupSource(groupId: string, memberIds: string[]): void 
 
 // ---------------- 召回（AI 带着记忆聊天） ----------------
 
+/**
+ * 【fix3-a 8】内容是否带角色归属标注（「（AI角色本人）/（用户本人）」）：
+ * 召回兜底判定 + 总结落库 hasRoleTag 聚合 + 碎片写入标记共用（字符串检测是旧数据兜底）。
+ */
+function memHasRoleTag(s: string): boolean {
+  return s.includes('（AI角色本人）') || s.includes('（用户本人）');
+}
+
 /** 相关性打分：内容与当前上下文的重叠 + 新近加成（长期/核心/碎片各自组内排序用） */
 function relevanceScore(content: string, createdAt: number, context: string): number {
   const ctx = contextGramsCache.get(context) ?? bigrams(context);
@@ -751,11 +759,12 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
       : '仅本App记忆（跨应用互通已关闭）：你在其他App和TA聊过的内容这里看不到';
   // 归属标注说明（朋友圈/QQ动态来源记忆自带「（AI角色本人）/（用户本人）」标注）：
   // 只要注入内容里出现这类标注，就附一行解释——AI 必须能区分「是我自己发的动态」还是「用户发的」，
-  // 绝不能把自己（记忆库主人）发的动态当成用户的行为（反之亦然）
-  const hasRoleTag = (s: string) => s.includes('（AI角色本人）') || s.includes('（用户本人）');
+  // 绝不能把自己（记忆库主人）发的动态当成用户的行为（反之亦然）。
+  // 【fix3-a 8】判定改为「显式 hasRoleTag 标记 || 字符串检测」：总结可能把标注磨掉，
+  // 总结落库时聚合来源标记（hasRoleTag=true）后，这里仍能靠标记兜底展示说明行
   const showRoleTagNote =
-    [...keepLongs, ...keepCores].some(({ m }) => hasRoleTag(m.content)) ||
-    keepFrags.some(({ f }) => hasRoleTag(f.content));
+    [...keepLongs, ...keepCores].some(({ m }) => m.hasRoleTag === true || memHasRoleTag(m.content)) ||
+    keepFrags.some(({ f }) => f.hasRoleTag === true || memHasRoleTag(f.content));
   const lines: string[] = [
     `【记忆库（${headScope}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
     '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
@@ -765,19 +774,28 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
         ]
       : []),
   ];
+  // 【fix3-a 7】长期/核心注入行带来源标注（碎片早就有，总结层此前没有）：按来源 App 集合拼
+  //（单来源「·微信」，多来源「·微信/电话」；旧数据 apps 缺失时回退不带来源的原格式）
+  const appsSrcLabel = (apps: MemApp[]): string => (apps.length > 0 ? apps.map((a) => MEM_APP_LABEL[a] ?? a).join('/') : '');
   if (keepLongs.length > 0) {
     lines.push('◇ 长期记忆（最稳定的画像；回复时应始终符合这些事实）：');
-    keepLongs.forEach(({ m }, i) => lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}）${m.content}`));
+    keepLongs.forEach(({ m }, i) => {
+      const src = appsSrcLabel(m.apps ?? []);
+      lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`);
+    });
   }
   if (keepCores.length > 0) {
     lines.push('◇ 核心记忆（长期事实；回复时应优先参考这些核心事实，保持前后一致）：');
-    keepCores.forEach(({ m }, i) => lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}）${m.content}`));
+    keepCores.forEach(({ m }, i) => {
+      const src = appsSrcLabel(m.apps ?? []);
+      lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`);
+    });
   }
   if (keepFrags.length > 0) {
     lines.push('◇ 近期记忆碎片：');
     keepFrags.forEach(({ f }, i) => {
-      // 事件时间优先（内容所指的时间），否则用来源对话时间；碎片额外带来源渠道标注
-      // （朋友圈/QQ动态/群聊来源的碎片与私聊区分标注，让 AI 知道这是哪里发生的事）
+      // 事件时间优先（内容所指的时间），否则用来源对话时间；时间与来源并列标注
+      // （【fix3-a 7】eventTime 碎片此前丢了来源——「明天去北京」的碎片无法知道是电话里说的还是微信里说的）
       const srcLabel =
         f.source === 'moments'
           ? f.app === 'wx'
@@ -786,7 +804,7 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
           : f.source === 'group'
             ? `群聊·${(f.sourceGroupId && groupLabelOf(f.sourceGroupId)) || '群聊'}`
             : MEM_APP_LABEL[f.app];
-      const t = f.eventTime != null ? memTimeLabel(f.eventTime, now) : `${memTimeLabel(f.sourceTime, now)}·${srcLabel}`;
+      const t = `${f.eventTime != null ? memTimeLabel(f.eventTime, now) : memTimeLabel(f.sourceTime, now)}·${srcLabel}`;
       lines.push(`${i + 1}. （${t}）${f.content}`);
     });
   }
@@ -857,6 +875,39 @@ export function memAddMomentFragment(
     return res.added.length > 0 || res.merged > 0 || res.superseded > 0;
   } catch {
     return false;
+  }
+}
+
+/**
+ * 【fix3-a 6】直写一条事件记忆碎片（拒接/未接等无对话可提取的事件用）：
+ * 内容已由调用方按归属句式写好（谁拒了谁的电话），不走 LLM 提取，直接经 appendFragments
+ * 的去重/合并/矛盾管线单条入库（items 格式与 normalizeExtract 产物一致）。
+ * - eventTime：事件发生时间（如拒接时刻），落碎片 eventTime（召回行时间标注与过期判断用）；
+ * - sourceMsgId：来源消息 ID（通话卡片消息，撤回级联清理用）；
+ * - 失败（入参非法/写入异常/被去重合并未新增）返回 null，绝不抛错（通话收尾主流程不受影响）。
+ */
+export function memAddEventFragment(
+  contactId: string,
+  app: MemApp,
+  content: string,
+  opts?: { eventTime?: number; sourceMsgId?: string }
+): MemFragment | null {
+  try {
+    const text = content.trim();
+    if (!contactId || !text) return null;
+    const eventTime = typeof opts?.eventTime === 'number' && Number.isFinite(opts.eventTime) ? opts.eventTime : null;
+    const res = appendFragments(
+      contactId,
+      app,
+      // 与 normalizeExtract 产物同形：text + 权重自动分类 + 事件时间（无则 null）
+      [{ text, weight: autoWeight(text), eventTime }],
+      eventTime ?? Date.now(),
+      opts?.sourceMsgId
+    );
+    // 被去重合并/加强（added 为空）同样视为未新增，返回 null（调用方不依赖重复写入）
+    return res.added[0] ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -1187,6 +1238,9 @@ function appendFragments(
     reinforceCount: 0,
     sourceMsgId,
     ...(extra ?? {}),
+    // 【fix3-a 8】内容自带角色归属标注（（AI角色本人）/（用户本人））时显式打标：
+    // 总结聚合与召回兜底判定都依赖它（旧数据无字段时回退字符串检测）
+    ...(memHasRoleTag(content) ? { hasRoleTag: true } : {}),
   });
   for (const item of items) {
     const content = item.text.trim();
@@ -1218,6 +1272,8 @@ function appendFragments(
         hit.reinforcedAt = now;
         hit.reinforceCount = (hit.reinforceCount ?? 0) + 1;
         hit.weight = higherWeight(hit.weight, item.weight);
+        // 【fix3-a 8】加强时角色归属标注 OR 保留（原条已标 或 本次内容带标注都保留）
+        if (hit.hasRoleTag === true || memHasRoleTag(content)) hit.hasRoleTag = true;
         // 时间感知：未手动编辑过的记忆，重复提及且本次提取带新时间时刷新（事件时间保鲜）；
         // 用户手动设置过（timeEditedAt）的一律以用户为准，绝不覆盖
         if (!hit.timeEditedAt) {
@@ -1240,6 +1296,8 @@ function appendFragments(
       simHit.reinforcedAt = now;
       simHit.reinforceCount = (simHit.reinforceCount ?? 0) + 1;
       simHit.weight = higherWeight(simHit.weight, item.weight);
+      // 【fix3-a 8】合并时角色归属标注 OR 保留（原条已标 或 合并后的内容带标注都保留）
+      if (simHit.hasRoleTag === true || memHasRoleTag(simHit.content) || memHasRoleTag(content)) simHit.hasRoleTag = true;
       // 时间感知（与精确重复同规则）：未手动编辑过 → 新时间保鲜；手动设置过 → 用户优先不覆盖
       if (!simHit.timeEditedAt) {
         if (item.eventTime != null) simHit.eventTime = item.eventTime;
@@ -1320,6 +1378,11 @@ async function summarizePendingIntoCore(
     // 群聊来源携带（互通与群间隔离过滤用）：混合来源 privateSource=true，纯群聊为 false
     groupIds: Array.from(new Set(pending.map((f) => f.sourceGroupId).filter((g): g is string => !!g))),
     privateSource: pending.some((f) => f.source !== 'group'),
+    // 【fix3-a 8】总结 API 可能磨掉「（AI角色本人）/（用户本人）」标注：被消费的碎片任一带标注
+    // （显式字段或内容检测），新核心也打标——召回侧 showRoleTagNote 兜底不失效；总结结果自带标注同样算
+    ...(pending.some((f) => f.hasRoleTag === true || memHasRoleTag(f.content)) || memHasRoleTag(summary)
+      ? { hasRoleTag: true }
+      : {}),
   };
   const all = readCores(contactId);
   writeJSON(coreKey(contactId), [...all, core]);
@@ -1367,6 +1430,10 @@ async function summarizeCoresIntoLong(
     // 群聊来源携带（互通与群间隔离过滤用）：混合来源 privateSource=true，纯群聊为 false
     groupIds: Array.from(new Set(pending.flatMap((m) => m.groupIds ?? []))),
     privateSource: pending.some((m) => m.privateSource !== false),
+    // 【fix3-a 8】来源核心任一带角色归属标注（或总结结果自带标注）→ 长期也打标（同 MemCore.hasRoleTag）
+    ...(pending.some((m) => m.hasRoleTag === true || memHasRoleTag(m.content)) || memHasRoleTag(summary)
+      ? { hasRoleTag: true }
+      : {}),
   };
   const all = readLongTerm(contactId);
   writeJSON(longKey(contactId), [...all, long]);
@@ -1413,6 +1480,9 @@ export interface MemTurnOpts {
     /** 群成员显示名（供提取 prompt 按实际发言人归因：允许用任意成员名字，不再强制「用户/角色」二人视角） */
     memberNames?: string[];
   };
+  /** 【fix3-a 5】场景说明（透传 extract body.scene 供场景注入，如电话/内嵌通话传「语音通话（电话），由机主（用户本人）拨出」）：
+   *  提取 prompt 知道对话发生在哪，碎片写明场景归属（「在电话里」），不再丢失通话场景信息 */
+  scene?: string;
 }
 
 /**
@@ -1483,10 +1553,20 @@ export function memAfterAiTurn(
     // 达到间隔：先评估 convo 是否足够；不足（如群聊短会话 convo<4）保留计数等下次不清零，
     // 避免群聊短会话永远到不了 interval 不沉淀记忆（count 已清零但没有足够内容触发提取）
     let convo = buildConvo();
+    // 提取使用的来源 App 与群元信息：默认当前会话；跨 App 兜底时改记来源会话
+    //（【fix3-a 2d】此前兜底拿了别的 App 的对话却仍按当前 app 提取/入库——来源标注与场景全部张冠李戴）
+    let convoApp = app;
+    let convoGroup: { id: string; memberNames?: string[] } | null = null;
     // 互通开且当前会话内容太少（合并计数可能主要来自其他 App）：跨 App 取该联系人最近活跃会话
     if (convo.length < 4 && share && !scope) {
       const recent = memMostRecentApp(contactId);
-      if (recent && recent.convo.length > convo.length) convo = recent.convo;
+      if (recent && recent.convo.length > convo.length) {
+        convo = recent.convo;
+        convoApp = recent.app; // 【fix3-a 2d】改用来源会话的 App（场景映射与碎片来源标注都跟真实来源走）
+        // 【fix3-a 2d】来源是群聊：participants 传群成员显示名（按实际发言人归因），
+        // 碎片补群来源标记（sourceGroupId/groupMembers）；speakerPrefixed 已随轮次透传
+        if (recent.group) convoGroup = { id: recent.group.id, memberNames: recent.group.memberNames };
+      }
     }
     if (convo.length < 4) {
       // 内容不足：保留计数等下次（不清零），下次达到更多累计时再尝试
@@ -1505,26 +1585,36 @@ export function memAfterAiTurn(
         // convo 已在外层评估完毕（长度 ≥ 4 才到这里），直接使用
         if (convo.length >= 4) {
           const sourceMsgId = msgs ? memLastMsgId(msgs) : undefined;
+          // 群聊轮次成员显示名：优先当前会话的群（opts.group），跨 App 兜底取来源群（fix3-a 2d）
+          const participants = opts?.group?.memberNames?.length ? opts.group.memberNames : convoGroup?.memberNames;
           const res = await callMemoryApi<ExtractApiResult>(
             'extract',
             {
               conversation: convo,
-              app,
+              app: convoApp, // 【fix3-a 2d】跨 App 兜底时记来源 App（extract 场景注入与碎片 app 同源）
               existing: existingForConflict(contactId),
               ...namesOf(names),
+              // 【fix3-a 5】场景透传（电话/内嵌通话等传入，extract 注入「场景：…」）
+              ...(opts?.scene ? { scene: opts.scene } : {}),
               // 群聊轮次：把成员显示名交给提取 prompt——碎片按聊天记录里实际的说话人归因，
               // 其他成员说的话不再被强行归成「用户/角色」二人之一（防跨成员串味进长期记忆）
-              ...(opts?.group?.memberNames?.length ? { participants: opts.group.memberNames } : {}),
+              ...(participants?.length ? { participants } : {}),
+              ...(convoGroup ? { group: { id: convoGroup.id, members: [contactId] } } : {}),
             },
             apiConfig
           );
           const items = normalizeExtract(res);
           if (items.length > 0) {
-            // 群聊轮次：碎片带群来源标记（source/sourceGroupId/groupMembers），供互通召回过滤
-            const extra = opts?.group
-              ? { source: 'group' as const, sourceGroupId: opts.group.id, groupMembers: opts.group.members }
+            // 群聊轮次：碎片带群来源标记（source/sourceGroupId/groupMembers），供互通召回过滤。
+            // 【fix3-a 2d】跨 App 兜底拿到群来源 convo 时同样补群标记（此前按私聊入库，归属坍塌）
+            const extra = (opts?.group || convoGroup)
+              ? {
+                  source: 'group' as const,
+                  sourceGroupId: opts?.group?.id ?? convoGroup!.id,
+                  groupMembers: opts?.group?.members ?? [contactId],
+                }
               : undefined;
-            appendFragments(contactId, app, items, Date.now(), sourceMsgId, extra);
+            appendFragments(contactId, convoApp, items, Date.now(), sourceMsgId, extra);
           }
         }
       } catch (err) {
@@ -1565,13 +1655,46 @@ export interface ManualSummarizeResult {
   merged: number;
 }
 
+/**
+ * 【fix3-a 2e】手动总结（memSummarizeNow / memExtractNow）的可选元信息：
+ * 对话来自群聊（memMostRecentApp/memRecentConvo 返回 group 元信息）或特殊场景（通话）时传入，
+ * 提取 prompt 才能按实际发言人归因、写明场景，碎片才带群来源标记（否则归属在手动总结链路坍塌）。
+ */
+export interface MemManualOpts {
+  /** 群成员显示名（透传 extract/summarize body.participants：按实际发言人归因，不强制二人视角） */
+  participants?: string[];
+  /** 群来源标记（id=群 ID；members=群成员角色 ID，落碎片 groupMembers 审计字段） */
+  group?: { id: string; members: string[] };
+  /** 场景说明（透传 extract body.scene，如「语音通话（电话），由机主（用户本人）拨出」） */
+  scene?: string;
+}
+
+/** 由 MemManualOpts 拼 extract body 的群/participants/scene 段（memSummarizeNow/memExtractNow 共用） */
+function manualOptsBody(opts?: MemManualOpts): Record<string, unknown> {
+  if (!opts) return {};
+  return {
+    ...(opts.participants?.length ? { participants: opts.participants } : {}),
+    ...(opts.group ? { group: opts.group } : {}),
+    ...(opts.scene ? { scene: opts.scene } : {}),
+  };
+}
+
+/** 由 MemManualOpts.group 拼碎片群来源 extra（appendFragments extra 参数；无群返回 undefined） */
+function manualOptsExtra(opts?: MemManualOpts): { source: 'group'; sourceGroupId: string; groupMembers: string[] } | undefined {
+  return opts?.group
+    ? { source: 'group' as const, sourceGroupId: opts.group.id, groupMembers: opts.group.members }
+    : undefined;
+}
+
 /** 手动总结（设置页「全部执行」）：不等 N 轮，立刻整理当前对话并入库（碎片 + 达阈值的核心 + 达阈值的长期） */
 export async function memSummarizeNow(
   contactId: string,
   app: MemApp,
   apiConfig: ApiConfig,
   convo: MemConvoTurn[],
-  names?: MemNames | null
+  names?: MemNames | null,
+  /** 【fix3-a 2e】对话来自群聊/特殊场景时的元信息（调用方从 memMostRecentApp 的 group 字段拼出） */
+  opts?: MemManualOpts
 ): Promise<ManualSummarizeResult> {
   const guard = `${contactId}:manual`;
   if (inflight.has(guard)) throw new Error('正在总结中，请稍候');
@@ -1580,18 +1703,19 @@ export async function memSummarizeNow(
     if (convo.length < 2) throw new Error('当前没有足够的对话内容可总结');
     const res = await callMemoryApi<ExtractApiResult>(
       'extract',
-      { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
+      { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names), ...manualOptsBody(opts) },
       apiConfig
     );
     const items = normalizeExtract(res);
     if (items.length === 0) throw new Error('这次对话没有提炼出新的记忆');
-    const { added, merged } = appendFragments(contactId, app, items, Date.now());
+    // 【fix3-a 2e】群来源对话：碎片带群来源标记（source/sourceGroupId/groupMembers），召回按群隔离/互通过滤
+    const { added, merged } = appendFragments(contactId, app, items, Date.now(), undefined, manualOptsExtra(opts));
     if (added.length === 0 && merged === 0) throw new Error('提炼出的记忆都已存在，没有新增');
     let coresCreated = 0;
     let longsCreated = 0;
-    const core = await maybeAutoSummarize(contactId, apiConfig, names).catch(() => null);
+    const core = await maybeAutoSummarize(contactId, apiConfig, names, opts?.participants).catch(() => null);
     coresCreated = core ? 1 : 0;
-    const long = await maybeAutoLongSummarize(contactId, apiConfig, names).catch(() => null);
+    const long = await maybeAutoLongSummarize(contactId, apiConfig, names, opts?.participants).catch(() => null);
     longsCreated = long ? 1 : 0;
     return { fragments: added.length, cores: coresCreated, longs: longsCreated, merged };
   } finally {
@@ -1613,7 +1737,11 @@ export async function memSummarizeCallNow(
   app: MemApp,
   apiConfig: ApiConfig,
   convo: MemConvoTurn[],
-  names?: MemNames | null
+  names?: MemNames | null,
+  /** 【fix3-a 4】通话方向（机主手机视角：'out'=机主拨出，'in'=AI角色拨出）：
+   *  拼进 extract body.scene，提取 prompt 知道这是谁拨出的语音通话——通话场景与方向在记忆里不再全丢。
+   *  签名变更由 phone.tsx / chat-call.ts 侧传参（本函数尾参向后兼容：不传保持原行为）。 */
+  opts?: { direction?: 'out' | 'in' }
 ): Promise<{ added: number; merged: number }> {
   const guard = `${contactId}:call`;
   if (inflight.has(guard)) return { added: 0, merged: 0 };
@@ -1621,9 +1749,17 @@ export async function memSummarizeCallNow(
   inflight.add(guard);
   try {
     memSweepExpiry(contactId);
+    // 【fix3-a 4】场景串：App 名 + 拨出方向（归属视角固定：机主=用户本人，AI角色=AI角色本人）
+    const scene =
+      `语音通话（${MEM_APP_LABEL[app]}）` +
+      (opts?.direction === 'out'
+        ? '，由机主（用户本人）拨出'
+        : opts?.direction === 'in'
+          ? '，由AI角色本人拨出'
+          : '');
     const res = await callMemoryApi<ExtractApiResult>(
       'extract',
-      { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names) },
+      { conversation: convo, app, existing: existingForConflict(contactId), ...namesOf(names), scene },
       apiConfig
     );
     const items = normalizeExtract(res);
@@ -1644,21 +1780,47 @@ export async function memSummarizeCallNow(
 // ---------------- 手动「立即总结」（碎片页 / 核心页 / 长期页右上角各自独立入口） ----------------
 
 /** 手动提取碎片（碎片页右上角「立即总结」）：只把最近对话整理为记忆碎片入库，不触发核心记忆总结 */
-export async function memExtractNow(contactId: string, apiConfig: ApiConfig, names?: MemNames | null): Promise<{ added: number; merged: number }> {
+export async function memExtractNow(
+  contactId: string,
+  apiConfig: ApiConfig,
+  names?: MemNames | null,
+  /** 【fix3-a 2e】群/场景元信息：调用方从 memMostRecentApp().group 拿到时传入；
+   *  未传时若最近对话本身来自群聊，内部同样会用 recent.group 兜底拼出（保证手动提取不丢群归属） */
+  opts?: MemManualOpts
+): Promise<{ added: number; merged: number }> {
   const guard = `${contactId}:manual`;
   if (inflight.has(guard)) throw new Error('正在总结中，请稍候');
   inflight.add(guard);
   try {
     const recent = memMostRecentApp(contactId);
     if (!recent || recent.convo.length < 2) throw new Error('当前没有可总结的对话，先去和TA聊聊吧');
+    // 【fix3-a 2e】opts 缺失时从最近对话自带群元信息兜底（最近对话来自群聊 → 按群归因/入库）
+    const effective: MemManualOpts =
+      opts ??
+      (recent.group
+        ? { participants: recent.group.memberNames, group: { id: recent.group.id, members: [contactId] } }
+        : {});
     const res = await callMemoryApi<ExtractApiResult>(
       'extract',
-      { conversation: recent.convo, app: recent.app, existing: existingForConflict(contactId), ...namesOf(names) },
+      {
+        conversation: recent.convo,
+        app: recent.app,
+        existing: existingForConflict(contactId),
+        ...namesOf(names),
+        ...manualOptsBody(effective),
+      },
       apiConfig
     );
     const items = normalizeExtract(res);
     if (items.length === 0) throw new Error('这次对话没有提炼出新的记忆');
-    const { added, merged } = appendFragments(contactId, recent.app, items, Date.now());
+    const { added, merged } = appendFragments(
+      contactId,
+      recent.app,
+      items,
+      Date.now(),
+      undefined,
+      manualOptsExtra(effective)
+    );
     if (added.length === 0 && merged === 0) throw new Error('提炼出的记忆都已存在，没有新增');
     return { added: added.length, merged };
   } finally {
@@ -1750,6 +1912,9 @@ export function memDedupeNow(contactId: string): number {
       keep.reinforcedAt = Math.max(keep.reinforcedAt ?? 0, drop.reinforcedAt ?? 0);
       keep.sourceMsgId = keep.sourceMsgId ?? drop.sourceMsgId;
       keep.consumedAt = keep.consumedAt ?? drop.consumedAt;
+      // 【fix3-a 8】全库去重合并同样 OR 保留角色归属标注（任一侧带标注都保留）
+      if (keep.hasRoleTag === true || drop.hasRoleTag === true || memHasRoleTag(drop.content) || memHasRoleTag(keep.content))
+        keep.hasRoleTag = true;
       removed.add(drop.id);
     }
   }
@@ -1774,6 +1939,9 @@ function tautologyClause(name: string): RegExp {
  * 「我/你/TA」等代称语义不明不自动替换（可手动编辑）。
  * 同义反复清理：「用户叫小晨」→「小晨叫小晨」这类名字身份短语直接剥掉（已由全库用名隐含），
  * 剥完为空的条目删除。返回各层修复条数（含删除）。
+ * 【fix3-a 10】两处误伤防护：①「」引号内是聊天原文引用（如「对方说：今晚不去了」），
+ * 代称替换/短语清理只在引号外进行，绝不动引号内原文；②source==='moments' 的碎片整条跳过
+ * （朋友圈句式里的「用户」有专门语义，身份修复由 repairMomentIdentityData 专管，不在此误改）。
  */
 export function memRepairPerspectiveNow(
   contactId: string,
@@ -1783,19 +1951,26 @@ export function memRepairPerspectiveNow(
   const hasUser = Boolean((names?.user ?? '').trim());
   const hasPeer = Boolean((names?.peer ?? '').trim());
   if (!hasUser && !hasPeer) return { frags: 0, cores: 0, longs: 0 };
-  const fix = (content: string): string => {
-    let out = content;
+  // 引号外的普通段落：代称替换 + 同义反复清理（原 fix 逻辑，仅作用于引号外）
+  const fixPlain = (seg: string): string => {
+    let out = seg;
     if (hasPeer) out = out.replace(/对方/g, peerName);
     if (hasUser) out = out.replace(/用户/g, userName);
     // 同义反复清理：「用户叫小晨」替换后变成「小晨叫小晨」，名字身份事实已由全库用名隐含，
     // 直接剥掉该短语（拆不出有效内容则整条删除）
-    out = out
+    return out
       .replace(tautologyClause(userName), '')
       .replace(tautologyClause(peerName), '')
       .replace(/^[，,。、；;\s]+/, '')
       .replace(/[，,\s]+$/, '');
-    return out;
   };
+  // 【fix3-a 10】按「」引号切段（带捕获组的 split：奇数下标=引号内原文，原样保留），
+  // 只对引号外段落做替换；未闭合的「 无匹配段，整段按引号外处理（与旧行为一致）
+  const fix = (content: string): string =>
+    content
+      .split(/(「[^」]*」)/g)
+      .map((seg, i) => (i % 2 === 1 ? seg : fixPlain(seg)))
+      .join('');
   /** 三层通用：替换 + 剥掉清空后为空的条目（返回修复条数） */
   const fixLayer = <T extends { content: string }>(list: T[]): { next: T[]; fixed: number } => {
     let fixed = 0;
@@ -1811,16 +1986,32 @@ export function memRepairPerspectiveNow(
     }
     return { next: out, fixed };
   };
-  // 碎片
-  const fragRes = fixLayer(readFragments(contactId));
-  if (fragRes.fixed > 0) writeJSON(fragKey(contactId), fragRes.next);
+  // 碎片（【fix3-a 10】朋友圈/QQ动态来源碎片整条跳过：身份修复由 repairMomentIdentityData 专管；
+  // 跳过项原位保留，不打乱原数组顺序；剥空删除/原位修复与 fixLayer 同语义，此处单独展开以便按条跳过）
+  const fragList = readFragments(contactId);
+  const fragNext: MemFragment[] = [];
+  let fragFixed = 0;
+  for (const f of fragList) {
+    if (f.source === 'moments') {
+      fragNext.push(f);
+      continue;
+    }
+    const repaired = fix(f.content);
+    if (repaired !== f.content) {
+      fragFixed++;
+      if (repaired) fragNext.push({ ...f, content: repaired, editedAt: Date.now() });
+    } else {
+      fragNext.push(f);
+    }
+  }
+  if (fragFixed > 0) writeJSON(fragKey(contactId), fragNext);
   // 核心
   const coreRes = fixLayer(readCores(contactId));
   if (coreRes.fixed > 0) writeJSON(coreKey(contactId), coreRes.next);
   // 长期
   const longRes = fixLayer(readLongTerm(contactId));
   if (longRes.fixed > 0) writeJSON(longKey(contactId), longRes.next);
-  return { frags: fragRes.fixed, cores: coreRes.fixed, longs: longRes.fixed };
+  return { frags: fragFixed, cores: coreRes.fixed, longs: longRes.fixed };
 }
 
 // ---------------- 来源追溯 ----------------
@@ -1854,13 +2045,67 @@ interface RawishMsg {
   img?: unknown;
   /** kind='sticker'：表情消息数据（meaning=含义） */
   stk?: unknown;
+  /** 【fix3-a 9】kind='redpacket'：红包卡片数据（wechat.tsx WxRpData：amount/blessing/opened/status） */
+  rp?: unknown;
+  /** 【fix3-a 9】kind='transfer'：转账卡片数据（WxTrData：amount/note/received/status/refundedBy） */
+  tr?: unknown;
+  /** 【fix3-a 9】kind='family'：亲属卡卡片数据（WxFamData：monthlyLimit/relation/message/claimed/rejected） */
+  fam?: unknown;
 }
 
-function cardLabel(kind: unknown): string | null {
-  if (kind === 'redpacket') return '[红包]';
-  if (kind === 'transfer') return '[转账]';
-  if (kind === 'family') return '[亲属卡]';
-  return null;
+/**
+ * 卡片类消息的记忆标签。
+ * 【fix3-a 9】私聊红包/转账/亲属卡此前是裸标签「[红包]/[转账]/[亲属卡]」——提取器不知道金额、
+ * 祝福语/备注、领取状态，沉淀出的记忆全是「发了个红包」这类无信息碎片，也无法写清谁领了谁退了。
+ * 升级（字段名与取值域已对照 wechat.tsx WxRpData/WxTrData/WxFamData 实码）：
+ * - redpacket → [红包 ¥88 "祝福语"，已领取/待领取/已退回/已拒收]；
+ * - transfer  → [转账 ¥200 "备注"，已收款/待收款/已退回/已拒收]；
+ * - family    → [亲属卡（每月额度¥X，关系，留言「…」，已领取/待领取/已退回）]；
+ * 字段缺失/旧数据/解析异常时回退现有裸标签，绝不抛错。群聊侧富标签口径（memGroupMsgText）已正确，勿动。
+ */
+function cardLabel(m: RawishMsg): string | null {
+  const bare =
+    m.kind === 'redpacket' ? '[红包]' : m.kind === 'transfer' ? '[转账]' : m.kind === 'family' ? '[亲属卡]' : null;
+  if (!bare) return null;
+  try {
+    if (m.kind === 'redpacket') {
+      const rp = m.rp && typeof m.rp === 'object' ? (m.rp as Record<string, unknown>) : null;
+      if (!rp || typeof rp.amount !== 'number' || !Number.isFinite(rp.amount)) return bare;
+      const blessing = typeof rp.blessing === 'string' ? rp.blessing.trim() : '';
+      const state =
+        rp.status === 'returned'
+          ? '已退回'
+          : rp.status === 'rejected'
+            ? '已拒收'
+            : rp.opened === true
+              ? '已领取'
+              : '待领取';
+      return `[红包 ¥${rp.amount}${blessing ? ` "${blessing}"` : ''}，${state}]`;
+    }
+    if (m.kind === 'transfer') {
+      const tr = m.tr && typeof m.tr === 'object' ? (m.tr as Record<string, unknown>) : null;
+      if (!tr || typeof tr.amount !== 'number' || !Number.isFinite(tr.amount)) return bare;
+      const note = typeof tr.note === 'string' ? tr.note.trim() : '';
+      const state =
+        tr.received === true
+          ? '已收款'
+          : tr.status === 'returned' || tr.refundedBy
+            ? '已退回'
+            : tr.status === 'rejected'
+              ? '已拒收'
+              : '待收款';
+      return `[转账 ¥${tr.amount}${note ? ` "${note}"` : ''}，${state}]`;
+    }
+    // family：保留 [亲属卡] 前缀，尽量带上说明字段（每月额度/关系/留言/状态）；无 fam 回退裸标签
+    const fam = m.fam && typeof m.fam === 'object' ? (m.fam as Record<string, unknown>) : null;
+    if (!fam || typeof fam.monthlyLimit !== 'number' || !Number.isFinite(fam.monthlyLimit)) return bare;
+    const relation = typeof fam.relation === 'string' ? fam.relation.trim() : '';
+    const message = typeof fam.message === 'string' ? fam.message.trim() : '';
+    const state = fam.rejected === true ? '已退回' : fam.claimed === true ? '已领取' : '待领取';
+    return `[亲属卡（每月额度¥${fam.monthlyLimit}${relation ? `，${relation}` : ''}${message ? `，留言「${message}」` : ''}，${state}）]`;
+  } catch {
+    return bare;
+  }
 }
 
 /** 图片消息的记忆标签：识图 desc 有值时带「图片内容」（与群聊 memGroupMsgText 同口径，旧记录无 desc 照常兼容） */
@@ -1930,7 +2175,7 @@ export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn
             ? imageLabel(m.img)
             : m.kind === 'sticker'
               ? stickerLabel(m.stk)
-              : cardLabel(m.kind);
+              : cardLabel(m);
     const text =
       label ??
       ((typeof m.content === 'string' ? m.content.trim() : '') ||
@@ -1966,37 +2211,56 @@ function memGroupMsgText(m: WxGroupMsg): string {
  * 遍历该 App 全部群（listGroups），找 memberIds 含该联系人的群（ownerId 兜底防转让后数据缺员），
  * 取「最后一条消息时间最新」的那个群；过滤 notice 系统行与撤回（与群聊页构建 AI 上下文同口径），
  * 映射为 MemConvoTurn[]：机主消息 → role 'me'；成员消息 → role 'peer' 且文本带「发言人：」前缀
- * （群聊按实际发言人归因，与 Task 23 #12 的群记忆口径一致）；空文本条目跳过；
+ * （群聊按实际发言人归因，与 Task 23 #12 的群记忆口径一致），逐条带 speakerPrefixed=true
+ * （【fix3-a 2a】群来源对话经手动总结/跨App兜底进提取时不再叠 peerName 前缀）；空文本条目跳过；
  * 最多 60 条，与私聊 memConvoFromRaw 截尾同口径。
- * 返回 ts = 该群最后一条消息时间（memMostRecentApp 里与私聊同台竞选）；无可用群返回 null。
+ * 返回 ts = 该群最后一条消息时间（memMostRecentApp 里与私聊同台竞选）；
+ * group = 来源群元信息（【fix3-a 2b】id=群 ID；memberNames=本段对话里实际发言过的群成员显示名，
+ * 按首次出现顺序去重——从消息 senderName 取，天然不含机主，且与聊天记录前缀里的发言人一一对应，
+ * 提取 prompt 的 participants 名单据此归因；联系人是异步库，同步链路取不到全量名单，以实际发言人为准）；
+ * 无可用群返回 null。
  */
-function memRecentGroupConvo(contactId: string, app: 'wx' | 'qq'): { convo: MemConvoTurn[]; ts: number } | null {
+function memRecentGroupConvo(
+  contactId: string,
+  app: 'wx' | 'qq'
+): { convo: MemConvoTurn[]; ts: number; group: { id: string; memberNames: string[] } } | null {
   try {
-    let best: { ts: number; msgs: WxGroupMsg[] } | null = null;
+    let best: { ts: number; msgs: WxGroupMsg[]; id: string } | null = null;
     for (const g of listGroups(app)) {
       if (!g.memberIds.includes(contactId) && g.ownerId !== contactId) continue;
       const msgs = loadGroupMsgs(g.id);
       if (msgs.length === 0) continue;
       const ts = msgs[msgs.length - 1]?.time ?? 0;
-      if (!best || ts > best.ts) best = { ts, msgs };
+      if (!best || ts > best.ts) best = { ts, msgs, id: g.id };
     }
     if (!best) return null;
     const convo: MemConvoTurn[] = [];
+    const memberNames: string[] = [];
     for (const m of best.msgs) {
       if (m.kind === 'notice' || m.recalled === true) continue; // 系统行/撤回剔除（群聊页同口径）
       const text = memGroupMsgText(m).slice(0, 400);
       if (!text) continue;
-      if (m.role === 'me') convo.push({ role: 'me', text });
-      else convo.push({ role: 'peer', text: `${m.senderName || '成员'}：${text}` });
+      if (m.role === 'me') {
+        convo.push({ role: 'me', text });
+      } else {
+        // 成员消息：文本带「发言人：」前缀 + speakerPrefixed=true（fix3-a 2a，extract 不再叠前缀）
+        convo.push({ role: 'peer', text: `${m.senderName || '成员'}：${text}`, speakerPrefixed: true });
+        // 【fix3-a 2b】成员显示名（不含机主）：从 senderName 收集（与聊天记录前缀一一对应）
+        const nm = (m.senderName || '').trim();
+        if (nm && nm !== '成员' && !memberNames.includes(nm) && memberNames.length < 30) memberNames.push(nm);
+      }
     }
-    return { convo: convo.slice(-60), ts: best.ts };
+    return { convo: convo.slice(-60), ts: best.ts, group: { id: best.id, memberNames } };
   } catch {
     return null;
   }
 }
 
 /** 读取某个联系人在指定 App 的最近对话（手动「立即总结」用；电话通话不留全文，返回空）。
- *  【#23】私聊没有可用对话时回退该联系人的群聊（仅 wx/qq 有群聊概念；sms/phone 维持原样） */
+ *  【#23】私聊没有可用对话时回退该联系人的群聊（仅 wx/qq 有群聊概念；sms/phone 维持原样）。
+ *  【fix3-a 2c】群兜底分支透传：轮次携带 speakerPrefixed（发言人前缀归属信息不丢）；
+ *  群元信息（id/memberNames）需要 group 字段的调用方请改用 memMostRecentApp（返回值带 group），
+ *  本函数签名保持 MemConvoTurn[] 不变（moments.ts 等既有调用方契约不动，向后兼容）。 */
 export function memRecentConvo(contactId: string, app: MemApp): MemConvoTurn[] {
   if (app === 'phone') return [];
   let convo: MemConvoTurn[] = [];
@@ -2015,14 +2279,19 @@ export function memRecentConvo(contactId: string, app: MemApp): MemConvoTurn[] {
   }
   if (convo.length > 0) return convo;
   // 【#23】私聊为空 → 群聊兜底：只在群里聊过的角色也能取到最近对话
+  //（【fix3-a 2c】memRecentGroupConvo 现返回带 group 元信息的完整结构，此处沿用其 convo，
+  // 轮次里的 speakerPrefixed 标记原样透传）
   if (app === 'wx' || app === 'qq') return memRecentGroupConvo(contactId, app)?.convo ?? [];
   return [];
 }
 
 /** 手动总结用：挑该联系人最近有对话的 App（wx/qq/sms 私聊 + 【#23】wx/qq 群聊中最后一条消息时间最新者）。
- *  返回结构不变：app 仍为 'wx'|'qq'|'sms'（convo 来自群聊时记其宿主 App），convo 可能来自群聊。 */
-export function memMostRecentApp(contactId: string): { app: MemApp; convo: MemConvoTurn[] } | null {
-  let best: { app: MemApp; ts: number; convo: MemConvoTurn[] } | null = null;
+ *  返回 app 仍为 'wx'|'qq'|'sms'（convo 来自群聊时记其宿主 App，即群来源返回群宿主 app，fix3-a 2c），
+ *  convo 可能来自群聊；【fix3-a 2c】新增可选 group 元信息：convo 来自群聊时携带
+ *  { id, memberNames }（供手动总结把 participants/群来源标记传给提取链路，防归属坍塌），
+ *  私聊来源无 group 字段（旧调用方不读该字段行为不变，向后兼容）。 */
+export function memMostRecentApp(contactId: string): { app: MemApp; convo: MemConvoTurn[]; group?: { id: string; memberNames: string[] } } | null {
+  let best: { app: MemApp; ts: number; convo: MemConvoTurn[]; group?: { id: string; memberNames: string[] } } | null = null;
   for (const app of ['wx', 'qq', 'sms'] as MemApp[]) {
     const key =
       app === 'wx'
@@ -2042,11 +2311,12 @@ export function memMostRecentApp(contactId: string): { app: MemApp; convo: MemCo
   }
   // 【#23】群聊候选与私聊同台竞选：该联系人在 wx/qq 的群最近对话（群消息 kv 键形如
   // wx-group-msgs:<gid> / qq-group-msgs:<gid>，经 listGroups + loadGroupMsgs 读取）；
-  // 群来源 convo 的 app 记宿主 'wx'|'qq'，调用方（memExtractNow / memSummarizeNow / memory-bank）
-  // 按既有结构原样入库，无需感知来源是群聊
+  // 群来源 convo 的 app 记宿主 'wx'|'qq'，【fix3-a 2c】同时透传群元信息（id/memberNames），
+  // 调用方（memExtractNow / memSummarizeNow / memory-bank / memAfterAiTurn 跨App兜底）
+  // 据此把 participants 与群来源标记传给提取链路（不再「需要感知但拿不到」）
   for (const app of ['wx', 'qq'] as const) {
     const g = memRecentGroupConvo(contactId, app);
-    if (g && g.convo.length > 0 && (!best || g.ts > best.ts)) best = { app, ts: g.ts, convo: g.convo };
+    if (g && g.convo.length > 0 && (!best || g.ts > best.ts)) best = { app, ts: g.ts, convo: g.convo, group: g.group };
   }
-  return best ? { app: best.app, convo: best.convo } : null;
+  return best ? { app: best.app, convo: best.convo, ...(best.group ? { group: best.group } : {}) } : null;
 }

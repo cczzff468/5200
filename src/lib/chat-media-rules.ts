@@ -17,6 +17,9 @@
 export interface MediaRuleMsg {
   id?: string;
   kind?: string;
+  /** fix3-7 消息方向（可选契约）：'me' = 机主发的 / 'peer' = AI 角色发的；
+   *  语音占位规则按此分支归属文案，未传保持原文案（行为不变） */
+  role?: 'me' | 'peer';
   /** 图片消息（kind='image'）：desc = 识图描述（无 = AI 看不到内容） */
   img?: { desc?: string } | null;
   /** 语音消息（kind='voice'） */
@@ -30,12 +33,28 @@ function voiceUnreadable(v: NonNullable<MediaRuleMsg['voice']>): boolean {
   return !v.transcript && !v.localText; // 无 stt 标记的旧数据：没转写过
 }
 
-/** 「[语音]」占位防编造规则：最近消息里存在听不到内容的语音时注入；无缺失返回空串不占 token */
+/** 「[语音]」占位防编造规则：最近消息里存在听不到内容的语音时注入；无缺失返回空串不占 token。
+ *  fix3-7 按发送方分支：机主发的（你听不到对方的内容）与 AI 自己发过的（按当时的本意处理）
+ *  是两件完全不同的事，同一句「对方没有转成文字」会让 AI 把自己发的语音当成对方发来的；
+ *  未传 role 的调用保持原文案（向后兼容） */
 export function buildVoicePlaceholderRule(msgs: MediaRuleMsg[], lookback = 12): string {
   for (let i = msgs.length - 1, seen = 0; i >= 0 && seen < lookback; i--, seen++) {
     const m = msgs[i];
     if (m?.kind !== 'voice' || !m.voice) continue;
     if (!voiceUnreadable(m.voice)) continue;
+    if (m.role === 'me') {
+      return (
+        '【语音占位】聊天记录里的「[语音]」是机主发来的语音消息，没有转成文字，你听不到内容，也不要假装听到了。' +
+        '不要编造里面说了什么，也不要说"你声音真好听"这类只有听过才能说的话；' +
+        '可以自然请对方用文字说一遍，或只回应你确定的部分。'
+      );
+    }
+    if (m.role === 'peer') {
+      return (
+        '【语音占位】这条「[语音]」是你自己发过的语音条（当时没有转写存档），按你发它时的本意处理，不要当成对方发来的；' +
+        '不要假装记得它"说了什么"，更不要编造细节，只回应你确定的部分。'
+      );
+    }
     return (
       '【语音占位】聊天记录里的「[语音]」是你听不到内容的语音消息：对方没有把它转成文字，你也无法收听。' +
       '不要假装听过，更不要编造里面说了什么，也不要说"你声音真好听"这类只有听过才能说的话；' +

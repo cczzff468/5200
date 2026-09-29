@@ -445,7 +445,16 @@ function MemoryDetail({
     if (sumBusy) return;
     setSumBusy('frag');
     try {
-      const res = await memExtractNow(contact.id, apiConfig, memNames);
+      // 【fix3-a 2e】最近对话来自群聊时把群元信息传入：提取按实际发言人归因、碎片带群来源标记
+      const meta = memMostRecentApp(contact.id);
+      const res = await memExtractNow(
+        contact.id,
+        apiConfig,
+        memNames,
+        meta?.group
+          ? { participants: meta.group.memberNames, group: { id: meta.group.id, members: [contact.id] } }
+          : undefined
+      );
       const parts = [`新增 ${res.added} 条碎片`];
       if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
       showToast(`总结完成：${parts.join('，')}`);
@@ -1086,7 +1095,16 @@ function SetTab({
     try {
       if (scope === 'frag') {
         // 只总结碎片：把最近对话提取为碎片入库，不碰核心/长期
-        const res = await memExtractNow(contactId, apiConfig, memNames);
+        // 【fix3-a 2e】最近对话来自群聊时把群元信息传入（同碎片页右上角入口）
+        const meta = memMostRecentApp(contactId);
+        const res = await memExtractNow(
+          contactId,
+          apiConfig,
+          memNames,
+          meta?.group
+            ? { participants: meta.group.memberNames, group: { id: meta.group.id, members: [contactId] } }
+            : undefined
+        );
         const parts = [`新增 ${res.added} 条碎片`];
         if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
         showToast(`总结完成：${parts.join('，')}`);
@@ -1105,7 +1123,18 @@ function SetTab({
           showToast('当前没有可总结的对话，先去和TA聊聊吧');
           return;
         }
-        const res = await memSummarizeNow(contactId, recent.app, apiConfig, recent.convo, memNames);
+        // 【fix3-a 2e】recent 来自群聊（convo 带发言人前缀）时把 participants/群来源标记一并传入：
+        // 手动总结不再把群聊归属坍塌成二人对话（同 memAfterAiTurn 群聊轮次口径）
+        const res = await memSummarizeNow(
+          contactId,
+          recent.app,
+          apiConfig,
+          recent.convo,
+          memNames,
+          recent.group
+            ? { participants: recent.group.memberNames, group: { id: recent.group.id, members: [contactId] } }
+            : undefined
+        );
         const parts = [`新增 ${res.fragments} 条碎片`];
         if (res.merged > 0) parts.push(`合并/加强 ${res.merged} 条相似记忆`);
         if (res.cores > 0) parts.push(`生成 ${res.cores} 条核心记忆`);

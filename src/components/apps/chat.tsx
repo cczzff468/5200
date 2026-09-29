@@ -406,8 +406,9 @@ async function recordMissedPhoneCall(
         // 真实姓名用 realName 字段（name 在展示层可能已被昵称/备注替换，注入人设必须是真名）
         realName: contact.realName ?? null,
       },
-      // AI 是主叫（direction='out'）；被拒接 = reject、响铃超时 = missed-in（与现有场景文案语义一致）
-      direction: 'out',
+      // fix3-c #8：AI 是主叫，但 direction 为机主手机视角：in=AI拨来/out=机主拨出 → AI 主叫未接场景传 'in'（对齐 chat-call 引擎口径；followup 服务端当前不消费该字段）；
+      // 被拒接 = reject、响铃超时 = missed-in（与现有场景文案语义一致）
+      direction: 'in',
       endReason: reason === 'declined' ? 'reject' : 'missed-in',
       connected: false,
       duration: 0,
@@ -1366,8 +1367,12 @@ function ChatView({
       momentsBlock,
       // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；40-a 重构后拉黑会拦截本 App 内的消息发送）
       wbContactId ? buildBlockPromptBlock('sms', wbContactId, profileName) : '',
-      // 语音占位防编造：最近消息里有听不到内容的语音时注入，AI 不假装听过、不编造内容
-      buildVoicePlaceholderRule(msgs),
+      // 语音占位防编造：最近消息里有听不到内容的语音时注入，AI 不假装听过、不编造内容；
+      // fix3-c #6：占位规则按发送者区分文案（MediaRuleMsg 新增 role?: 'me'|'peer' 契约）——
+      // 信息端消息角色是 user/assistant，映射为 me/peer 后传入（契约合并前多出的 role 属性不参与匹配，合并后即生效）
+      buildVoicePlaceholderRule(
+        msgs.map((m) => ({ ...m, role: m.role === 'user' ? ('me' as const) : ('peer' as const) })),
+      ),
       // 语音通话能力（仅联系人会话）：AI 想马上说话时可在回复开头加 [语音通话] 给机主打一次电话
       wbContactId
         ? '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 打一次电话给对方，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。'
@@ -2007,8 +2012,9 @@ function ChatView({
   /** 聊天页根元素（长按菜单定位参照） */
   const pageRef = useRef<HTMLDivElement>(null);
 
-  /** 引用人名：我的消息 → 「我」；对方 → 联系人名/手机号 */
-  const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? '我' : peer.name || peer.title);
+  /** 引用人名：我的消息 → 机主称呼/名字（fix3-c #4：不再用「我」，与微信端一致；历史前缀「（引用 XX：…）」随之自动修正）；
+   *  对方 → 联系人名/手机号。profileName 未设置时回退「我」保持旧行为 */
+  const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? profileName || '我' : peer.name || peer.title);
 
   /** 消息的可复制/引用文本快照（语音消息 = [语音] + 转写，与微信同语义） */
   const quoteContentOf = (m: ChatMsg): string =>

@@ -1156,7 +1156,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string |
     multiApp: getMemSettings(peer.id).share,
     ...npcExtra,
     extraRules: [
-      '聊天记录中「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      // fix3-c #3：规则限定主语——只解释「对方（用户）消息里」出现的标记；AI 自己发的表情另有 [表情包:ID]/[你发送了表情：XX] 序列化，不与规则冲突
+      '出现在对方（用户）消息里的「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
       ...buildRichRules(stickersOn ? stickers : []),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
       ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE]),
@@ -1169,21 +1170,59 @@ function nextWxCid(prefix: 'rp' | 'tr' | 'fam'): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 6)}${Date.now().toString(36).slice(-3)}`;
 }
 
-/** 红包/转账/亲属卡消息的状态标签（卡片文案 + AI 上下文摘要共用） */
-function wxCardStateLabel(m: WxMsg): string {
+/** fix3-c #2：终态执行者名字来源（可选）——仅 AI 上下文序列化处传入；内部状态比较（wxCardIsFinal 等）不传，
+ *  标签保持原文案，比较逻辑零影响。me=机主名字（me.name/称呼均可）、peer=AI 角色名字 */
+interface WxCardActorNames {
+  me?: string;
+  peer?: string;
+}
+
+/** 红包/转账/亲属卡消息的状态标签（卡片文案 + AI 上下文摘要共用）：
+ *  fix3-c #2 终态补执行者后缀（归属清晰：谁领取/谁退还/谁拒收/超24h自动退回）——
+ *  名字来源：红包 openedBy 落库时已存真名，直接用；其余执行者按「原卡角色反推（我发的→对方执行，
+ *  对方发的→机主执行）」从 names 取；转账过期清算以「原卡带 refundedBy 且无凭据卡专有字段」识别。
+ *  names 缺省或对应字段缺失时保持原文案 */
+function wxCardStateLabel(m: WxMsg, names?: WxCardActorNames): string {
+  const actorOf = (side: 'me' | 'peer'): string => (side === 'me' ? names?.me : names?.peer) ?? '';
+  // 原卡（非凭据卡）的执行者与消息角色相反：执行者只能操作发给 TA 的卡
+  const inverseActor = (): string => actorOf(m.role === 'me' ? 'peer' : 'me');
   if (m.kind === 'redpacket' && m.rp) {
-    if (m.rp.status === 'returned') return '已退回';
-    if (m.rp.status === 'rejected') return '已拒收';
-    return m.rp.opened ? '已领取' : '待领取';
+    if (m.rp.status === 'returned') return '已退回'; // 红包退回无执行者/过期标记（手动退回与24h清算同形），保持原文案
+    if (m.rp.status === 'rejected') {
+      const actor = inverseActor();
+      return actor ? `已拒收（${actor}拒收）` : '已拒收';
+    }
+    if (m.rp.opened) return m.rp.openedBy ? `已领取（${m.rp.openedBy}领取）` : '已领取';
+    return '待领取';
   }
   if (m.kind === 'transfer' && m.tr) {
-    if (m.tr.status === 'returned') return '已退回';
-    if (m.tr.status === 'rejected') return '已拒收';
-    return m.tr.received ? '已收款' : '待收款';
+    if (m.tr.status === 'returned') {
+      // fix3-c #2：过期清算标记——24h 清算是唯一给原卡写 refundedBy 的路径（手动退回不写；
+      // 凭据退回卡带 originTime 走下方按 refundedBy 正推的分支，不会误入此分支）
+      if (m.tr.refundedBy && !m.tr.originTime && !m.tr.receiptOf) return '已退回（超24小时自动退回）';
+      const actor = m.tr.refundedBy ? actorOf(m.tr.refundedBy) : inverseActor();
+      return actor ? `已退回（${actor}退还）` : '已退回';
+    }
+    if (m.tr.status === 'rejected') {
+      const actor = inverseActor();
+      return actor ? `已拒收（${actor}拒收）` : '已拒收';
+    }
+    if (m.tr.received) {
+      const actor = inverseActor();
+      return actor ? `已收款（${actor}已收款）` : '已收款';
+    }
+    return '待收款';
   }
   if (m.kind === 'family' && m.fam) {
-    if (m.fam.rejected) return '已退回';
-    return m.fam.claimed ? '已领取' : '待领取';
+    if (m.fam.rejected) {
+      const actor = inverseActor();
+      return actor ? `已退回（${actor}退还）` : '已退回';
+    }
+    if (m.fam.claimed) {
+      const actor = inverseActor();
+      return actor ? `已领取（${actor}领取）` : '已领取';
+    }
+    return '待领取';
   }
   return '';
 }
@@ -4454,7 +4493,8 @@ function ChatPage({
       const memContext = history.map((h) => h.content).join(' ');
       // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
       // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
-      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]));
+      // fix3-c #7：世界书锚点——labels 契约已合并（collectWbBlocks 尾参 WbLabels）：锚点块头注标注「文中的『你』指{角色名}」
+      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]), { charName: peer.name, userName: me.name });
       const worldbookBlock =
         [
           callWb.beforeSystem,
@@ -4487,8 +4527,10 @@ function ChatPage({
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
-        // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”
-        locBlock: buildLocationBlock(base, { userLabel: me.name }) || undefined,
+        // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”；
+        // fix3-c #5：补传 peerLabel（契约已合并）——AI 自己发的位置被库标注为
+        // 「{角色名}（AI角色本人，就是你自己）发的你自己所在的位置，不是机主的位置」，防主语伪造
+        locBlock: buildLocationBlock(base, { userLabel: me.name, peerLabel: `「${peer.name}」` }) || undefined,
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
         onFollowup: sendCallFollowup,
@@ -4933,6 +4975,28 @@ function ChatPage({
       // #35 时序兜底：历史数据/合并竞态可能把上一轮未投递完的回复排在用户新消息之后（旧气泡倒挂），
       // 按创建时间稳定排序还原对话时序（正常数据 time 单调，排序为空操作），保证上下文顺序正确
       .sort((a, b) => a.time - b.time);
+    // fix3-c #1/#2：AI 历史序列化用的机主称呼与角色名（meAddrName 声明自下方上移至此，供凭据卡句式与卡片终态执行者后缀使用）
+    const meAddrName = addressNameOf(me, useSettings.getState().addressMode);
+    const actorNames: WxCardActorNames = { me: meAddrName, peer: peer.name };
+    // fix3-c #1：收款/退还凭据卡（content='' 的转账凭据消息，tr 带 receiptOf/refundedBy）→ 显式主语句式。
+    // 字段取值域（rg 实测）：receiptOf=原转账发送方（'me'=机主/'peer'=AI）；refundedBy=退回方（同值域）；
+    // 接收方按卡片 role（'me'=机主/'peer'=AI）。退还凭据不带 receiptOf，原发送方=退回方的对方（只能退自己收到的款）；
+    // 字段全缺失时回退保守文案，不编造资金方向
+    const credentialTransferText = (m: WxMsg): string => {
+      const tr = m.tr;
+      if (!tr) return '[转账凭据：一笔转账]';
+      const nameOf = (side: 'me' | 'peer'): string => (side === 'me' ? meAddrName : peer.name);
+      const note = tr.note ? ` "${tr.note}"` : '';
+      if (tr.receiptOf) {
+        // 收款凭据：{原发送方}转给{接收方} ¥金额「note」，已收款
+        return `[转账凭据：${nameOf(tr.receiptOf)}转给${nameOf(m.role)} ¥${tr.amount}${note}，已收款]`;
+      }
+      if (tr.refundedBy) {
+        // 退还凭据：{原发送方}转的 ¥金额「note」已由{退回方}退回
+        return `[转账凭据：${nameOf(tr.refundedBy === 'me' ? 'peer' : 'me')}转的 ¥${tr.amount}${note}已由${nameOf(tr.refundedBy)}退回]`;
+      }
+      return `[转账凭据：一笔转账已${tr.status === 'returned' ? '退回' : '收款'}]`;
+    };
     const history = base
       .filter(
         (m) =>
@@ -4977,13 +5041,18 @@ function ChatPage({
               ? `[发送了表情：${m.stk.meaning || '无描述'}]`
               : m.stk.sid
                 ? `[表情包:${m.stk.sid}]`
-                : `[发送了表情：${m.stk.meaning || '无描述'}]`
+                : // fix3-c #3：AI 自己发的无 sid 表情带显式主语（assistant 消息里「你」=AI 本身），不再与「对方（用户）消息」的规则文案冲突
+                  `[你发送了表情：${m.stk.meaning || '无描述'}]`
             : m.kind === 'redpacket' && m.rp
-              ? `[红包 ID:${m.rp.cid ?? m.id} ¥${m.rp.amount} "${m.rp.blessing}"，${wxCardStateLabel(m)}]`
+              ? `[红包 ID:${m.rp.cid ?? m.id} ¥${m.rp.amount} "${m.rp.blessing}"，${wxCardStateLabel(m, actorNames)}]`
+              : m.kind === 'transfer' && m.tr && !m.content && (m.tr.receiptOf || m.tr.refundedBy)
+              ? // fix3-c #1：凭据卡不能按普通转账卡序列化——role=assistant 会让 AI 把「对方收了我的款」
+                // 读成「我转账已到账」、把「我退了对方的款」读成「我发的款被退回」（资金方向伪造），改显式主语句式
+                credentialTransferText(m)
               : m.kind === 'transfer' && m.tr
-                ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}，${wxCardStateLabel(m)}]`
+                ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}，${wxCardStateLabel(m, actorNames)}]`
                 : m.kind === 'family' && m.fam
-                  ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m)}]`
+                  ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m, actorNames)}]`
                   : m.kind === 'groupcard' && m.gcard
                     ? `[群聊邀请卡片：${m.gcard.name}（${m.gcard.inviterName || '群友'}邀请${m.gcard.memberNames?.length ? `，成员：${m.gcard.memberNames.join('、')}` : ''}），${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
                     : m.content),
@@ -5016,7 +5085,7 @@ function ChatPage({
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
     // 名字/昵称区分：AI 侧统一用称呼名（默认真名「凡凡」）指代用户；展示层（朋友圈等）仍用显示名
-    const meAddrName = addressNameOf(me, useSettings.getState().addressMode);
+    //（meAddrName 声明已上移至历史构建前，供凭据卡句式/终态执行者后缀共用，fix3-c #1/#2）
     // 被踢感知（需求一）：TA 被移出过群聊（未回群/刚回群）→ 私聊里记得并按人设自然提起
     const kickSection = buildKickNoticeSection(peer.id, meAddrName);
     // 建群能力（需求二/四）：关系到位、话题合适时可主动建群（冷却/拒绝表硬校验，提示词同步约束）
@@ -5057,10 +5126,13 @@ function ChatPage({
     // 世界书：扫描「最新用户消息 + 最近 8 条上下文」，命中触发词的条目按插入位置分组注入
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则）
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]));
+    // fix3-c #7：世界书锚点——labels 契约已合并（collectWbBlocks 尾参 WbLabels）：锚点块头注标注角色/机主名
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]), { charName: peer.name, userName: me.name });
     // 位置感知：用户最近发过的位置消息（名称/地址/经纬度/发送时间）注入 system——
-    // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造
-    const locBlock = buildLocationBlock(base, { userLabel: meAddrName });
+    // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造；
+    // fix3-c #5：补传 peerLabel（契约已合并）——AI 自己发的位置被库标注为
+    // 「{角色名}（AI角色本人，就是你自己）发的你自己所在的位置，不是机主的位置」，防主语伪造
+    const locBlock = buildLocationBlock(base, { userLabel: meAddrName, peerLabel: `「${peer.name}」` });
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；40-a 重构后拉黑会拦截本 App
     // 内的消息发送——byUser 时本回合早已被入口守卫取消；能走到这里的被拉黑回合=仅申请卡放行模式）
     const blkBlock = buildBlockPromptBlock('wx', peer.id, me.name);
@@ -5073,6 +5145,8 @@ function ChatPage({
       if (m.kind === 'image') turnImageIds.add(m.id);
     }
     const mediaRules = [
+      // fix3-c #6：占位规则按发送者区分文案（MediaRuleMsg 新增 role?: 'me'|'peer' 契约）——
+      // 微信消息 role 本就是 me/peer，传入 base 即已携带该字段，契约合并后库即按发送者区分文案
       buildVoicePlaceholderRule(base),
       buildImagePlaceholderRule(base, { excludeIds: turnImageIds }),
     ].filter(Boolean);

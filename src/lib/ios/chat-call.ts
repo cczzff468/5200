@@ -436,7 +436,11 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           useSettings.getState().apiConfig,
           () => chatLogToConvo(),
           () => null, // 无持久消息数组：每轮固定计 2 条（1 用户 + 1 AI）
-          { user: owner, peer: cur.contact?.name || '' },
+          // fix3-11 机主名回退链：机主卡片真名 → 设置 profile 名（owner 为空时不再让 names.user 空、
+          // 提取 prompt 回退成「用户/对方」代称；与 phone.tsx 挂断总结 owner || profileName 同口径）
+          { user: owner || useSettings.getState().profile.name || '', peer: cur.contact?.name || '' },
+          // fix3-11 场景标记：通话里说的话在提取 prompt 中标注「语音通话」场景（App 归属由 app 字段自带）
+          { scene: '语音通话' },
         ),
       );
   }, [chatLogToConvo]);
@@ -451,12 +455,19 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     void ownerRealName()
       .catch(() => '')
       .then((owner) =>
-        memSummarizeCallNow(cid, cur.app, useSettings.getState().apiConfig, turns, {
-          user: owner,
-          peer: cur.contact?.name || '',
-        }),
+        memSummarizeCallNow(
+          cid,
+          cur.app,
+          useSettings.getState().apiConfig,
+          turns,
+          // fix3-11 机主名回退链（同 memorizeTurn）：owner 为空时回退设置 profile 名
+          { user: owner || useSettings.getState().profile.name || '', peer: cur.contact?.name || '' },
+          // fix3-11 通话方向（机主手机视角，契约尾参）：本引擎 direction 'in'=AI 拨入/'out'=机主拨出，
+          // 直接透传——总结 prompt 才能写清「谁打给谁的一通电话」
+          { direction },
+        ),
       );
-  }, [chatLogToConvo]);
+  }, [chatLogToConvo, direction]);
 
   /** 挂断后 AI 续聊（三端共用逻辑，挂断即触发）+ 记忆总结（一次提取「通话内容+续聊文字」）：
    *  ① 接通后挂断（AI 主动挂断 / 用户挂断）→ 基于人设+通话内容+记忆+最近聊天生成文字，立刻发

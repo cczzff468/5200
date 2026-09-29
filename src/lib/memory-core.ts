@@ -72,6 +72,10 @@ export interface MemFragment {
   sourceGroupId?: string;
   /** source==='group'：事件发生时群内参与角色 ID（含机主；审计/展示用，召回按 contactId 隔离不依赖此字段） */
   groupMembers?: string[];
+  /** 【fix3-a 8】内容（或其来源）带「（AI角色本人）/（用户本人）」角色归属标注：
+   *  合并/加强时 OR 保留，总结进核心/长期时随来源聚合——总结把标注磨掉后，召回侧
+   *  （showRoleTagNote 判定）仍能靠此标记兜底展示归属说明行（旧数据无此字段时回退字符串检测） */
+  hasRoleTag?: boolean;
 }
 
 /** 核心记忆：M 条碎片自动总结出的一条核心事实（被长期记忆收编后标记 archivedAt） */
@@ -99,6 +103,9 @@ export interface MemCore {
   groupIds?: string[];
   /** 是否含非群聊（私聊/朋友圈）来源：缺省 true（旧数据兼容）；纯群聊来源的总结为 false */
   privateSource?: boolean;
+  /** 【fix3-a 8】来源碎片任一带角色归属标注（或总结结果自带标注）时为 true：
+   *  总结可能把「（AI角色本人）/（用户本人）」标注磨掉，靠此标记在召回侧兜底展示归属说明行 */
+  hasRoleTag?: boolean;
 }
 
 /** 长期记忆：K 条核心记忆自动总结出的最稳定画像（记忆层级的顶层） */
@@ -124,6 +131,8 @@ export interface MemLongTerm {
   groupIds?: string[];
   /** 是否含非群聊（私聊/朋友圈）来源：缺省 true（旧数据兼容）；纯群聊来源的总结为 false */
   privateSource?: boolean;
+  /** 【fix3-a 8】来源核心任一带角色归属标注（或总结结果自带标注）时为 true（同 MemCore.hasRoleTag） */
+  hasRoleTag?: boolean;
 }
 
 /** 每联系人记忆设置 */
@@ -228,6 +237,10 @@ export const MEM_STALE_PAT = /(对方|用户)/g;
 export interface MemConvoTurn {
   role: 'me' | 'peer';
   text: string;
+  /** 【fix3-a 2a】peer 侧文本已带「发言人：」前缀（群聊轮次逐条拼好）时为 true：
+   *  /api/memory/extract 据此跳过 peerName 前缀叠加；群来源对话经手动总结/跨 App 兜底
+   *  进提取管线时也随轮次透传，保证群聊归属（发言人前缀）不丢（isConvoTurn 过滤保留该字段） */
+  speakerPrefixed?: boolean;
 }
 
 // ---------------- 权重 ----------------

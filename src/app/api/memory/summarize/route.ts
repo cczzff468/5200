@@ -23,7 +23,7 @@ function perspectiveRules(userName: string, peerName: string, participants: stri
   if (participants.length) {
     return [
       '【视角规则（最高优先级，违反即无效）】',
-      `- 这些记忆来自群聊场景，涉及的人物可能不止两位：除了「${userName}」（用户本人）与「${peerName}」（AI角色），还可能提到这些群成员：${participants.slice(0, 12).join('、')}（或记忆原文里已出现的其他具体成员名字）。`,
+      `- 这些记忆来自群聊场景，涉及的人物可能不止两位：除了「${userName}」（用户本人）与「${peerName}」（AI角色），还可能提到这些群成员：${participants.slice(0, 30).join('、')}（或记忆原文里已出现的其他具体成员名字）。`,
       '- 指代人物只允许用具体名字（上面列出的成员名或原文里已有的名字），严禁出现「用户」「对方」「我」「你」「他」「她」「TA」「彼此」等代称。',
       '- 每条信息必须保留原文的归属：谁的事就写谁的名字，严禁把其他成员的事改写成「' + userName + '」或「' + peerName + '」的事。',
     ];
@@ -38,6 +38,17 @@ function perspectiveRules(userName: string, peerName: string, participants: stri
   ];
 }
 
+/**
+ * 【fix3-a 1 / fix3-a 11】core/long 两个 prompt 共同新增的两条要求：
+ * - 归属保留：原文里的角色标注（（AI角色本人）/（用户本人））与场景词（在微信朋友圈/QQ空间、在群里等）
+ *   必须原样保留，浓缩时不得丢失归属信息（否则召回侧归属说明行兜底失效）；
+ * - 跨名合并：同一人以不同叫法（昵称/备注/真名）出现的记忆要合并为一条，不要当成两个人。
+ */
+const SUMMARY_ATTRIB_RULES = [
+  '- 原文中的（AI角色本人）/（用户本人）标注与『在微信朋友圈/QQ空间』『在群里』等场景词必须原样保留，浓缩时不得丢失归属信息。',
+  '- 同一个人可能在不同记忆里以不同叫法出现（昵称/备注/真名），指同一人的记忆要合并为一条，不要当成两个人。',
+];
+
 function buildSystem(level: 'core' | 'long', userName: string, peerName: string, participants: string[] = []): string {
   if (level === 'long') {
     return [
@@ -47,16 +58,22 @@ function buildSystem(level: 'core' | 'long', userName: string, peerName: string,
       '- 一段话，120 字以内，只保留长期稳定的事实、偏好、承诺与关系本质，省略已经过时的临时细节',
       '- 信息冲突时以更晚的核心记忆为准；禁止推测和编造',
       '- 语言自然、第三人称叙述，不要罗列条目',
+      ...SUMMARY_ATTRIB_RULES,
       '只输出 JSON：{"summary": "..."}',
     ].join('\n');
   }
   return [
-    '你是记忆总结助手。把关于同两个人的多条「记忆碎片」浓缩成一条「核心记忆」。',
-    ...perspectiveRules(userName, peerName),
+    // 【fix3-a 1】core 分支此前丢了 participants（long 分支已传）：群来源碎片被强制按二人视角
+    // 浓缩，其他成员的事被改成用户/角色的事（归属坍塌）；有 participants 时开头文案同步改为群聊口径
+    participants.length
+      ? '你是记忆总结助手。把一段群聊相关的多条『记忆碎片』浓缩成一条『核心记忆』。'
+      : '你是记忆总结助手。把关于同两个人的多条「记忆碎片」浓缩成一条「核心记忆」。',
+    ...perspectiveRules(userName, peerName, participants),
     '要求：',
     '- 一段话，80 字以内，覆盖最重要的长期事实、偏好、承诺与关系进展',
     '- 信息冲突时以更晚的碎片为准；禁止推测和编造',
     '- 语言自然、第三人称叙述，不要罗列条目',
+    ...SUMMARY_ATTRIB_RULES,
     '只输出 JSON：{"summary": "..."}',
   ].join('\n');
 }
@@ -67,12 +84,12 @@ export async function POST(req: NextRequest) {
   const level: 'core' | 'long' = body.level === 'long' ? 'long' : 'core';
   const userName = cleanName(body.userName, '用户');
   const peerName = cleanName(body.peerName, '对方');
-  // 群聊来源：成员显示名（有名单时按实际人物归因，不强制二人视角）
+  // 群聊来源：成员显示名（有名单时按实际人物归因，不强制二人视角）；【fix3-a 3】解析上限 20→30 与 extract 侧一致
   const participants = Array.isArray(body.participants)
     ? body.participants
         .map((v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 20) : ''))
         .filter((v: string) => v.length > 0)
-        .slice(0, 20)
+        .slice(0, 30)
     : [];
   const items = Array.isArray(body.fragments)
     ? body.fragments.filter((x: unknown): x is string => typeof x === 'string' && x.trim().length > 0)

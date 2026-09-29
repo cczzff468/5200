@@ -720,7 +720,9 @@ export function callCardAiText(state: CallCardState, duration: number): string {
     case 'missed-in':
       return '[语音通话：我打给你，响了很久没人接，没有接通，一句话都没说上]';
     default:
-      return `[语音通话：通话时长 ${formatCallDuration(duration)}]`;
+      // fix3-6 已接通卡片补主叫方：卡片主人恒为主叫（role 派生自 direction），「我」=主叫者口吻
+      // 与其他态的「我打给你」同构——否则接通卡是唯一读不出「谁打给谁」的态
+      return `[语音通话：我打给对方的电话，通话时长 ${formatCallDuration(duration)}]`;
   }
 }
 

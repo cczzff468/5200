@@ -506,7 +506,11 @@ export function applyGroupChatSocialAction(g: ChatGroup, char: ContactRecord, ap
     if (!target) return true;
     if (target.id === char.id || target.id === g.ownerId) return true;
     if (groupRoleOf(g, target.id) !== 'member') return true;
-    setGroupAdmin(g.id, target.id, true, { name: displayNameOf(target) || target.name });
+    // fix3-e①：任命操作者 = 执行 [设管理员] 的 AI（落事件 actorId/actorName，感知注入还原「谁任命的」）
+    setGroupAdmin(g.id, target.id, true, {
+      name: displayNameOf(target) || target.name,
+      actor: { kind: 'char', id: char.id, name: displayNameOf(char) || char.name },
+    });
     return true;
   }
   return false;
