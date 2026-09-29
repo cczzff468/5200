@@ -10873,3 +10873,111 @@ Work Log:
 Stage Summary:
 - 修改文件（10 个）：src/lib/moments.ts、src/app/api/moments/generate/route.ts、src/components/apps/moments-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/memory.ts、src/lib/time-aware.ts、src/lib/ios/chat-call.ts、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx
 - 核心成果：审计清单 19 项全修——①记忆防污染（占位 error 标记+前缀滤）②拉黑全面闭合（动作/来电/通话/动态引擎四条链路，双向语义）③单聊红包/转账 24h 退回对齐群聊 ④私聊记忆媒体口径对齐群聊 ⑤节日表跨年正确（lunar 动态换算）⑥动态生成带时间感知 ⑦删除级联（记忆+收件箱）⑧点赞感知 ⑨队列重试 ⑩转发入队 ⑪死设置隐藏 ⑫群踢/禁言即时生效 ⑬@ 精确匹配 ⑭编辑同步 ⑮记忆容量上限
+---
+Task ID: audit2-infra
+Agent: 二轮支撑层审计代理（Explore，只读）
+Task: 设置/联系人/钱包/记忆库UI/世界书/API路由/基础库二轮复查
+
+Work Log:
+- 先读 worklog.md 末尾 400 行，核对 audit-misc 13 条 / audit-moments 14 条 / fix-memory-time / fix-all-audit-issues 修复清单，划定「已修复不再报」边界
+- 全量通读：settings.tsx（3371 行）/ chat-settings.tsx（1951 行）/ contacts-store.ts（676 行）/ wechat-wallet.tsx（2573 行）/ memory-bank.tsx（1716 行）/ worldbook.ts（701 行）/ block-state.ts（444 行）/ idb-kv.ts / db.ts / store.ts useUI 段 / direct-api.ts
+- 重点一死设置扫描：逐项 grep 消费点——「消息免打扰」仅被角标渲染消费（wechat.tsx:10447/qq.tsx:8759 等），island-notify.ts pushChatNotification 与 push-client.ts 全文无 muted 引用 → 系统级通知不过免打扰闸门；回复条数/分句/时间感知/表情包/翻译/他的声音/AI语音频率/主动来电频率均有库级消费（reply-count/sentence-send/time-aware/sticker-toggle/chat-translate/ai-voice/proactive-call）；飞行模式/WiFi/蓝牙为已标注演示项
+- 重点二联系人级联：通读 deleteContact/purgeChatTracesFor（contacts-store.ts:254-425），确认群成员（purgeContactFromGroups）/记忆/动态/世界书绑定/未读/flags 级联完整；缺口=通话记录/语音信箱/电话收藏/亲属卡两张表不清；createContact/updateContact 无手机号/微信号/QQ号唯一性校验，而 loginWechat hits[0]、phone.tsx:243 按号解析默认唯一
+- 重点三钱包：wxExecutePayment（wechat.tsx:926-945）三支付通道口径核对；群聊 expireStalePackets（wx-group.tsx:2504-2527，我发的退零钱+账单）vs 单聊 wxExpireStalePeerCards（wechat.tsx:1183-1231，仅 role='peer'）不对称；grep 全库证实收到的亲属卡 used 无跨月重置（「本月可用」文案 monthlyLimit-used）
+- 重点四记忆库UI/世界书：memory-bank 四 Tab 操作与 memory.ts 函数一一对应；worldbook.ts collectWbBlocks 预算截断（注入顺序+条目优先级+截断提示落位）逐行核对；专属书绑定已删联系人永不激活为注释声明决策
+- 重点五 memory.ts 回归抽查：capFragments 在 appendFragments 合并后、写库前执行（1146），weightEvictRank（994）与 memory-core higherWeight（242）秩一致；memConvoFromRaw（1787）RawishMsg 含 voice/img/stk/loc，sms 端 ChatMsg 仅有 voice（chat.tsx:117）天然兼容；sys/notice 消息 content 为空被跳过；memPurgeContact 全键清三层+计数锚点，user-like 碎片存动态作者名下随删；capFragments 淘汰序含 consumedAt 优先与 UI「已入核心」淡显语义一致
+- 重点六 API 路由：chat/translate/vision/stt/tts/push/search/weather + chat/bg 全读；校验/长度上限/超时/错误格式逐项核对；发现 push 与 chat/bg 无鉴权（generate 可用随机 sessionKey 绕过 generating 去重烧内置模型、GET ?sessionKey 读他人接力）
+- 重点七基础库：store.ts openApp/killApp 守卫与 380ms closing 定时器竞态互斥完备；block-state 3 次上限双向独立、blockCoversAt 含 Hist 归档无边界漏洞；idb-kv 同页同步读改写安全、多标签页无同步机制（memStore 各自为政）
+- 未改任何代码文件，仅本 worklog 追加；未跑 dev server、未 git 操作
+
+Stage Summary:
+- 发现 9 条：中 5 / 低 4（高 0）；核心结论——上轮 19 项修复无回归（capFragments/节日/占位滤/群禁言/单聊退回均验证在位），主干管线健壮；本轮新发现集中在四类缝隙：①「消息免打扰」只管角标不管通知（设置与通知系统脱节）②单聊我→AI 资金卡无过期退回且拉黑期永悬挂（与群聊口径不对称）③收到的亲属卡额度永不跨月重置（「本月」语义失真）④push/bg 端点无鉴权（公网部署滥用/隐私向量）；另有手机号无唯一约束、删联系人残留通话/语音信箱/亲属卡、superseded 碎片编辑不可救回、多标签页 kv 覆盖等低级缺口
+---
+Task ID: audit2-moments
+Agent: 二轮动态引擎审计代理（Explore，只读）
+Task: 动态引擎二轮复查（71702dd 回归 + 上轮遗留确认 + 新维度）
+
+Work Log:
+- 读 worklog 末尾约 500 行：audit-moments（14 条）/audit-misc/fix-engine（8 项）/fix-all-audit-issues/fix-qq/fix-wechat 等条目，建立「已修复不再报」基线
+- 全文精读 src/lib/moments.ts（2454 行）、src/app/api/moments/generate/route.ts（360 行）、MomentsScheduler.tsx（80 行）、lib/ios/moments-settings.ts（227 行）、moments-settings.tsx（666 行）、moments-shared.tsx（720 行）；局部读 wechat.tsx（FRIEND_POST_TEMPLATES/朋友圈页 handlers/AskPostSheet/收件箱）与 qq.tsx（ZonePage/转发弹层/zone-peer/空间消息）相关段
+- git 只读对比 50220af↔71702dd 的 drainReplies/drainInteractions/runMomentsTick，定位重试机制的回归面
+- grep 验证：enqueueCharReply 全仓唯一调用点 moments.ts:1145（无 kind:'npc' 调用方）；foldChineseTranslation 消费点 wechat.tsx:7510 / qq.tsx:10396；unreadMomentNoticeCount 仍无调用方；22% 概率仍硬编码
+- 逐项回归：isPeerBlocked 过滤面（peersForPlatform/drainReplies/手动发帖不拦/官方无涉）、user-like 写入与取消赞 sourceKind 收窄（不误删评论/char-post 碎片）、repairMomentIdentityData user-like 分支幂等、deleteMomentComment removed 递归+reply 通知覆盖+队列联动、deleteMomentPost 收件箱过滤（转发通知 postId=原动态 id 被正确清）、updateMomentPostContent contentZh 清空后 UI 容忍（BilingualTranslation 空串不渲染）、route.ts bjTimeLine 7 时段边界与 user[] 首位注入、MomentsScheduler 生命周期（ticking+busy 双防重入/interval 清理/隐藏恢复靠 fireAt 补结算）、概率滑杆 0-100 与输入框 clamp 1-3600 双重钳制、双语三项设置全有真实消费点（非死设置）
+
+Stage Summary:
+- 发现 12 条：高 1 / 中 1 / 低 10（其中上轮遗留确认未修 7 条：#7/#8/#9/#11/#12/#13/#14；其余为新问题）
+- 核心结论：①唯一高危——队列重试顺延不落盘：runMomentsTick 仅在 remaining.length!==queue.length 时 saveQueue（moments.ts:2043），纯顺延 tick 长度不变 → fix-engine E 的 60~90s 退避与 attempts<2 上限失效（interact 项每 5s 重试、attempts 永不累计；reply 项 90s 顺延/tries<2 同构失效，API 故障时每 5s 一次真实 LLM 重试）②中等——纯图动态 AI 永不评论：两端 composer 允许仅图片发表（wechat.tsx:8156/qq.tsx:10727），引擎只传 post.content，route.ts:223-224 空内容 400 拦截；配图内容零注入 prompt 且无防编造兜底 ③拉黑期间到期的 interact 项被当「候选耗尽」直接丢弃（moments.ts:1915），解除拉黑后该动态永远无互动，与「解除即恢复」口径有缝 ④上轮 7 条遗留全部原样在位（AI 转发不入队/☀️模板/zone-peer 无播种/悬空 replyTo 绕过守卫/收件箱回复已删评论降级/slice(-40)/sourceTime=createdAt）；其余通过项：拉黑过滤面、user-like 级联、删除级联、收件箱过滤、bjTimeLine、双语三项、参数钳制、调度生命周期、未读口径均健康
+---
+Task ID: audit2-qq
+Agent: 二轮 QQ 单聊审计代理（Explore，只读）
+Task: QQ 单聊二轮复查（71702dd 回归 + 上轮遗留确认 + 新维度）
+
+Work Log:
+- 通读 worklog 末尾 400 行锁定基线：audit-chat 16 条 / fix-qq 5 项 / fix-all-audit-issues 汇总，严禁重报已修复项
+- 逐段精读 src/components/apps/qq.tsx（13445 行）：模块层卡片/清算（L400-662）、消息存储与 AI 事件（L845-1007）、ChatPage 卡片领取/退回/发送（L2415-2764）、投递合并/补跑（L2836-2930）、openVoiceCall（L3007-3083）、deliverAiMsg（L3093-3149）、buildReplyMsgs（L3176-3360）、runAiTurn 全回合（L3362-3758）、bg 接力（L3760-3835）、长按菜单（L4168-4475）、红包/转账浮层（L5395-5530）、RedPacketCompose（L6282-6471）、MessagesPage 清空（L8598-8626）、ZonePage 转发（L10640-10694）、登录/登出（L13366-13445）
+- 核对 src/lib/ios/ai-delivery.ts 全文、bg-turn.ts 全文、memory.ts（memConvoFromRaw L1787-1813 / countSinceAnchor L1297-1306 / cardLabel L1728-1733）、chat-stream-store 请求载荷、moments.ts enqueuePostInteractions（L1337-1357）、contacts-store.ts loginQQ（L514-551）、island-notify.ts pushChatNotification（L192-220）
+- 回归检查通过项：expireStaleSingleCards 三触发点齐全（qq.tsx:12852 挂载 / 2453 聊天页挂载 / 3702 回合结算）、expired 幂等跳过不重复落提示行、qqSingleCardSweepRunning 同步置位无窗口竞态、notice 行（content=''）既不进 AI 上下文（L3398-3402 过滤）也不进记忆（memConvoFromRaw 空文本跳过）、AI 侧纯状态退回与详情页文案一致；requestOnly 守卫 L3236 覆盖退群挽留/建群/视觉×6/资金全部分支、正文 L3334 整体丢弃无 [图片] 残留、L3369 入口取消+L3467 不注入卡清单、bg 接力 deliverBgItems 同管线同守卫；finalize 来电守卫 L3731 双条件在位、bg 路径无来电旁路；错误占位两处 error:true（L3666/L3684）+ 红字渲染（L5009-5012）+ memConvoFromRaw 双保险（memory.ts:1792/1807）；ZonePage 转发 L10667 入队正确（moments.ts:1347 按 postId 去重；React discrete flush 下双击不会双建；转发仅到空间无群路径）；/api/chat 载荷（messages+config）对齐无 QQ 特有参数缺口；长按 del/recall/edit/regen 四处 A-4 双守卫在位；send/排队补跑（qqQueuedTurns）与投递竞态处理健全；空间消息角标订阅（L12939-12946）在位
+
+Stage Summary:
+- 发现 10 条：高 0 / 中 1 / 低 9（新问题 5、上轮遗留确认 5），每条含文件:行号证据
+- 核心结论：上轮 fix-qq 五项修复全部回归通过（幂等/守卫覆盖/双保险/入队去重均落实）；本轮新增发现集中在①多账号登录取证（数据全局键无账号命名空间，换号即串号，中）②领取/收款后 AI 无即时反应等 5 条上轮遗留确认未修③单聊拼手气红包首领即终态导致剩余份额死悬、撤回的卡片仍进 AI 待处理清单、免打扰不静音灵动岛通知三条新边缘规则洞
+---
+Task ID: audit2-wx
+Agent: 二轮微信单聊审计代理（Explore，只读）
+Task: 微信单聊二轮复查（71702dd 回归 + 上轮遗留确认 + 新维度）
+
+Work Log:
+- 先读 worklog.md 末尾（audit-chat 16 条 / fix-wechat / fix-qq / fix-memory-time / fix-groups / fix-all-audit-issues），确认已修项与遗留项清单
+- 回归精读 wechat.tsx：buildReplyMsgs（L4537-4757）/runAiTurn（L4798-5144）/deliverBgItems（L4763-4789）/wxExpireStalePeerCards（L1183-1231）/wxApplyAiActions（L1239-1331）/triggerAiVoiceCall（L4488-4514）/deliverAiMsg（L4415-4467）/三处占位落库点/memory.ts memConvoFromRaw（L1787-1813）
+- 核对 chat-stream-store.ts（40-a 第二层兜底/分段器/finalize 链）、ai-delivery.ts（队列/边界/peek）、bg-turn.ts（读拉写清分离/防重入）、api/chat/route.ts（参数对齐/上下文裁剪）
+- 新维度排查：亲属卡全生命周期（chat+wechat-wallet 交叉）、转账退回/拒收三链路、收藏/转发链路、撤回/删除/清空级联、翻译过滤、语音条频率与占位、朋友圈首访播种、免打扰/置顶/拍一拍存在性、长按菜单投递守卫逐项比对
+
+Stage Summary:
+- 回归检查 4 项全过：①requestOnly continue 仅跳当前 part，退群挽留/建群/视觉/资金分支全部位于 bk/uk 分流之后，文本在 byUser 下整段丢弃无标记残留 ②wxExpireStalePeerCards 幂等（终态跳过+防重入同步窗口）、循环内 load→save 无 await 不丢更新、通知行不进 AI 上下文也不进记忆、mergeExpiredSweep 存储权威不覆盖本地新消息 ③error:true 三处占位齐全且 memConvoFromRaw 双保险滤除，无 nudge/接力死循环 ④triggerAiVoiceCall 双保险无旁路；chat route 参数对齐通过
+- 发现 11 条（中 2/低 9）：新问题 8 条（高 0/中 2/低 6）——AI 拒收红包/转账不退款（资金黑洞，群聊同构）、AI 收下亲属卡后卡片方向反转进「我收到的亲属卡」钱包（免费额度）、发位置不触发 AI 回合、错误占位可被升级成 AI 语音条回流上下文、长按「转文字」缺投递守卫、免打扰不抑制通知、亲属卡「1 天作废」文案与清算范围矛盾、已撤回的待领取卡仍进 AI 待处理清单；上轮遗留确认 3 条（#8 领取无感知反应仍在 L5969/L5995/L6076、#13 撤回不撤记忆仍在、#14 删除会话 mem 锚点残留仍在）
+---
+Task ID: audit2-groups
+Agent: 二轮群聊审计代理（Explore，只读）
+Task: 群聊双端二轮复查（71702dd 回归 + 上轮遗留确认 + 新维度）
+
+Work Log:
+- 先读 worklog 末尾 400 行，锁定 audit-chat 16 条 / fix-groups（#6+#9）/ fix-all-audit-issues 修复范围，划定「已修不再报」边界
+- 全文精读 wx-group.tsx（5250 行）+ qq-group.tsx（4950 行，关键段同构对照）+ groups.ts（1019 行全文）+ group-admin.ts / group-social.ts / quit-flow.ts 全文 + reply-count.ts 全文 + memory.ts 群记忆段（memGroupMsgText/memRecentGroupConvo/memAfterAiTurn/isMemErrPlaceholder）+ chat-stream-store 条数段 + bg-turn.ts 接力段 + /api/memory/extract 路由
+- 回归检查：parseMentions（escapeRegExp 应用/最长名优先/区间消费/边界断言/重复 @ 去重/@全员不存在）、runGroupTurn 循环重查 + runCharTurn 入口守卫（wx 3338-3340/2799-2801，qq 2958-2960/2421-2422）、results 语义、getGroup 内存态读性能、解散/移除竞态（B-5 群空兜底 groups.ts 979-998）——全部通过
+- 遗留确认 6 条逐一取证：#4（bg-turn.ts 147-149 isGroupSession 显式排除群会话 + 双端组件 0 接线）、#7（isAiDelivering import 零使用，del/recall/batchDelete 双端 6 处只查 runningRef||isChatStreaming）、#8（claimGroupRp 双端均无 nudgeAiSender，对照 receive/returnGroupTr 有）、#10（parseMentions 仅吃 trigger）、#11（成员空/全员禁言静默 return 且 results 空不触发提示）、#12（dissolveGroup 未清 chat-reply-counts/chat-sticker-on/chat-sentence-*/ai-voice-freq+counters/收藏页）
+- 新维度核查：group-admin 权限矩阵 UI+AI+数据层三层一致；AI 管理员踢机主属设计内（kickOwnerFromGroup→退群挽留 kicked 口径）；入群冷却/拒绝表（24h+拒绝永不再拉+拒绝卡片重置建群冷却）；quit-flow 全状态机（8~20s fireAt 与注释 20~50s 有漂移）；群红包专属/拼手气/过期与解散交叉（B-5 空转）；@全体成员特性不存在；群公告/群名/群头像事件化感知；memGroupMsgText 媒体口径+400/60 截断+extract 路由二次钳制；群成员上限 50 三层；群聊条数 groupMode cap 仅提示词层
+- 发现新问题并逐条定位行号证据：群记忆提取 peer 文本双前缀（客户端 senderName 前缀 + extract 路由无条件 peerName 前缀）、群聊条数客户端硬上限缺失（beginChatStream 收原始 replyCount）、（…）占位进记忆素材、解散按钮无身份门控、AI 红包过期退回文案虚标、regenerate 80ms 窗口删后不复活
+- 全程只读，未修改任何代码文件、未执行 git 写操作、未启动/停止服务
+
+Stage Summary:
+- 发现 12 条：高 0 / 中 2 / 低 10（遗留确认 6 条：#4 中、#7/#8/#10/#11/#12 低；新问题 6 条：双前缀 中，其余低）
+- 核心结论：fix-groups 两项修复（#6 中途踢人禁言、#9 parseMentions）回归通过且双端同构扎实，未引入新边界破绽；上轮 6 条群聊遗留全部确认未修（其中 #4 已被 bg-turn.ts 文档化为「群聊关页即丢」的显式限制）；本轮最有价值的新发现是群记忆提取的「发言人前缀被路由层再叠一层」双前缀问题（恰好削弱上上轮 #12 归因修复的效果），建议与 #4 一起列入下轮修复优先级
+---
+Task ID: audit2-call
+Agent: 二轮短信电话审计代理（Explore，只读）
+Task: 短信+电话全链路二轮复查（上轮浅查区深挖 + 71702dd 通话回归）
+
+Work Log:
+- 读 worklog 末尾 400 行，核对 audit-misc（13 条）/fix-memory-time/fix-wechat/fix-qq/fix-all-audit-issues 已修项边界：确认上轮拉黑破口修复只覆盖 wechat.tsx/qq.tsx，短信端（chat.tsx）与电话 App（phone.tsx CallScreen 自有引擎）不在修复范围
+- 逐文件精读：chat.tsx（3862 行全文，重点 startAiTurn/buildReplyMsgs/finalize/send/bg-turn 接线/拉黑 UI/主列表）、phone.tsx（CallScreen 全链路：runTurn/hangup/免提 VAD/文字条/语音信箱/Recents/Keypad/PhoneApp 装配）、chat-call.ts（sendText 拉黑守卫回归 + memorizeTurn/summarizeCall/followupAndSummarize/B-1）、global-call.ts、incoming-call.ts、IncomingCallLayer.tsx、proactive-call.ts、call-followup.ts、call-upstream 相关（/api/phone/turn）、cross-app-context.ts、bg-turn.ts、island-notify.ts、tts-client.ts、ai-voice.ts、stt-client.ts、block-state.ts、memory.ts（memConvoFromRaw/memRecallBlock share 门控）、contacts-store.ts（删除级联）
+- 交叉比对 wx/qq 已修写法定位短信端同类破口（[语音通话] 收集点+触发点、requestOnly 动作分支）；追 git 历史确认「信息语音频率跟随微信」（voiceFreqKey=wx:<id>）为有意设计（a2a622c）非 bug
+- 发现 8 条（高 1 / 中 3 / 低 4），只读未改任何代码
+
+Stage Summary:
+- 发现 8 条：高 1（短信 byUser 拉黑后 [语音通话] 仍弹真实来电，wx/qq 已修短信漏修双缺口）/ 中 3（byUser 非放行态短信直接发送用户消息静默丢失；群聊近况块绕过互通开关关掉不真隔离；电话 App 通话对三端来电触发不可见且接听被静默丢弃）/ 低 4（requestOnly 回合 pick-album-avatar 照常执行；「（AI 暂时没有返回内容）」兜底占位缺 error 标记；来电响铃中拨号盘可拨出；电话侧拉黑口径不对称含语音通道无 byUser 守卫）
+- 核心结论：上轮通话拉黑修复（fix-memory-time E：chat-call sendText 守卫）回归在位，通话引擎主干（逐轮记忆/挂断总结/续聊并转写/B-1/三态落库/TTS 三级回退/STT 限次/proactive 守卫矩阵）健壮；剩余漏洞集中在「拉黑语义在短信端与电话自有引擎的两处未闭合」与「互通开关对群聊原始消息不生效」两类，均为跨模块口径裂缝而非单点笔误
+---
+Task ID: audit2-all
+Agent: 主协调者 (Z.ai Code)
+Task: 用户要求二轮全功能规则审查（上轮 43 项发现已修 19 项后）；6 路并行只读审计 + 汇总问题清单供用户选择修复
+
+Work Log:
+- 划定范围：上轮已深审区做「回归检查+遗留确认」，从未审区（短信/电话/钱包/设置/联系人/记忆库UI/世界书UI/API路由/支撑库）深挖
+- 派 6 路并行 Explore 只读审计代理：audit2-moments（动态引擎12条）/audit2-wx（微信11条）/audit2-qq（QQ单聊10条）/audit2-groups（群聊12条）/audit2-call（短信电话8条）/audit2-infra（支撑层9条），各自 worklog 已追加
+- 上轮 19 项修复（71702dd）回归检查：六路均确认无回退（requestOnly 守卫/24h 清算/error:true/记忆修复/群守卫/parseMentions 全部在位）
+- 汇总去重：62 条原始发现合并同根项（免打扰通知×3、领取无感知×3、撤回记忆×2、锚点残留×2、撤回卡处理×2、占位语音化×2、多标签页×2）→ 最终 33 项清单（高2/中12/低19）呈现给用户选择，未修复任何代码
+
+Stage Summary:
+- 本轮纯审计零代码改动；输出 33 项问题清单（高 2/中 12/低 19）等用户选择
+- 最重要的两条高危：①动态互动/回复队列重试顺延不落盘=上轮修复引入回归（退避失效、无限重试、0%概率死循环）②短信端拉黑 [语音通话] 破口（上轮同类修复漏掉短信端）
+- 中危集中在资金链（拒收不退款/亲属卡方向反转/我发给AI的卡无过期/额度不跨月）与隔离链（跨App群消息裸奔/QQ换号串号/号码不查重）
