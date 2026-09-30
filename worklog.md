@@ -12250,3 +12250,44 @@ Stage Summary:
 - P3 口径：群聊不参与拉黑保持既有设计；申请 3 次拒绝硬上限保留（无时间冷却，设置页有重置入口）
 - 控制台 avatar-sync.ts 报错为 HMR 陈旧缓存误报（该文件及引用在当前代码库不存在，tsc 零错误，reload 后 errors 清空），非真实问题
 - 产出文件：src/lib/ios/cross-app-reach.ts（新）、src/lib/ios/block-state.ts、src/lib/ios/proactive-call.ts、src/app/api/phone/proactive/route.ts、src/components/apps/phone.tsx
+
+---
+Task ID: I
+Agent: 主协调者 (Z.ai Code)
+Task: 删除联系人（微信/QQ 删好友）+ 数据保留不可见 + AI 主动申请加回 + 添加好友流程重构（申请添加朋友页/好友申请详情页/新的朋友页）
+
+Work Log:
+- 新建 src/lib/ios/friend-state.ts（删好友状态机，微信/QQ 共用）：
+  - 删除状态 kv `friend-del:<app>:<contactId>` = { at, lastReqAt?, rejected? }（kvGet 同步读 + 异步写穿，与 block-state 同模式）；索引键 friend-del-index 供扫描补跑；
+  - removeFriendByUser：写删除状态 + friendWx/friendQq=false + 调度 AI 申请；不清理任何数据（聊天记录/记忆/朋友圈/通话记录全保留）；restoreFriendship：清删除状态 + 恢复好友（数据自动恢复可见）；
+  - isPersonGoneEverywhere：删过好友且 wx/qq 两端都非好友 → 通话记录/记忆库等全局面隐藏（只删一端另一端还是好友时不隐藏）；
+  - 好友申请列表：沿用微信既有键 wx-friend-reqs（idb-kv 存储，旧数据无 status 归一化为 accepted）+ 新增 qq-friend-reqs；条目 { id, contactId, name, avatar, message, time, status(pending/accepted/rejected), source, fromChar, extras(image/remark/tags/memo/permChat/permMoments/permExercise/hideMine/hideTheirs) }；FRIEND_REQS_EVENT 广播订阅刷新；
+  - AI 主动申请加回：删除后约 20s 首次申请（FIRST_REQ_DELAY_MS），冷却 10 分钟（REQ_COOLDOWN_MS，只锚定 lastReqAt），用户拒绝（rejected）彻底停止，重新加回清除状态后重新开始；留言按人设+记忆+时间生成（buildPersonaSystemPrompt + memRecallBlock + buildTimeAwareBlock，/api/chat 502 → forceSdk 两级兜底，剥标记/动作/多行 ≤60 字）；runFriendReqCatchUp 在微信/QQ 挂载时按冷却补跑（定时器不跨刷新）；
+- chat-settings.tsx：ChatSettingsPage 新增 onDeleteContact prop（底部红色「删除联系人」按钮，wx/qq 主题自适应）；导出共用 FriendDeleteConfirmDialog（明确告知：删除好友关系+聊天界面关闭；保留不可见：聊天记录/记忆/朋友圈动态与互动/通话记录；加回恢复；对方可能申请加回）；
+- wechat.tsx：
+  - ChatPage/FriendDetailPage 增加 onDeleteContact 透传；MainScreen delTarget 状态 + 分支内渲染确认弹窗（分支提前 return 场景弹窗随分支渲染）；确认后 removeFriendByUser + reloadContacts + toast；
+  - WxFriendReq 改为共用 FriendReqEntry；loadReqs/saveReqs 委托 friend-state（同键同存储）；
+  - NewFriendsPage 重构（参考截图）：今天/昨天/n天前/M月D日 分组，行=头像+昵称+验证消息，pending→查看（绿框）、accepted→已添加、rejected→已拒绝；点行进详情；
+  - 新增 FriendReqDetailPage（参考截图）：头像/昵称/性别/地区、备注名+朋友权限蓝字链接、验证消息卡（+回复链接+附图）、来源行、前往验证+拒绝 双按钮、已添加/已拒绝终态、底部加入黑名单|投诉（加入黑名单走 setUserBlock 既有拉黑链路）；
+  - 新增 ApplyFriendPage 申请添加朋友页（参考截图）：打招呼内容（默认我是{昵称}，设为常用打招呼内容持久化 wx-common-greeting）、添加图片（compressImageFile 压缩 dataURL）、备注（发送时写 contact.remark）、标签（弹窗多标签）、备忘（弹窗）、朋友权限（聊天/朋友圈/微信运动弹窗开关）、不让他看我的朋友圈和状态、不看他(她)的朋友圈和状态、发送；AddFriendPage 搜索结果非好友点「添加到通讯录」→ 进申请页（不再直接加好友）；发送=加好友+写新的朋友(status accepted, source 搜索账号添加)+被删好友同路径恢复；
+  - 朋友圈/互动消息可见性门控：momentsLive/wxNoticesLive 按 contactByRef 解析作者，isFriendDeleted('wx') 命中即隐藏（数据保留，加回恢复）；
+- qq.tsx（同构对齐）：
+  - ChatPage/FriendProfilePage 增加 onDeleteContact；MainScreen delTarget + 确认弹窗（route 渲染单 return，弹窗根部）；
+  - NewFriendsPage 重构（参考截图）：同步通讯录横幅 + 好友通知区（行=头像+名字+留言+来源，pending→同意按钮、已同意/已拒绝）+ 可能想认识的人；点行进详情；
+  - 新增 FriendReqDetailPage（参考截图）：申请人卡（头像+名字+QQ号）、对方留言+回复、来源、同意+拒绝 双按钮、设为黑名单|举报用户；
+  - 新增 ApplyFriendPage（参考截图）：取消+添加好友、验证信息（默认我是{昵称}）、设置对方备注、分组设置（我的好友）、权限设置（不让他看我的动态）、发送；AddFriendPage 添加按钮/推荐位 → 申请页；
+  - 空间动态/空间消息门控：ZonePage posts 与 qqNoticesLive 按 isFriendDeleted('qq') 过滤；
+- phone.tsx：通话记录加载处按 isPersonGoneEverywhere 过滤（IndexedDB 数据保留，加回恢复显示）；
+- memory-bank.tsx：记忆库联系人列表按 isPersonGoneEverywhere 过滤（记忆本体保留，AI 侧不受影响）；
+- E2E 期间发现并修复 2 个 bug：①冷却检查误锚定删除时间 at → 首次申请被 10 分钟冷却拦截（改为只锚定 lastReqAt，首次由 20s 定时器控制）；②申请列表误用 localStorage → wx-friend-reqs 在 idb-kv 迁移清单里，写 localStorage 启动时被迁移器搬进 kv 并清键（改为直接 kvGet/kvSet）；
+- 验证：npx tsc --noEmit 0 错误；bun run lint 0 错误；agent-browser E2E 全链路（隔离浏览器 profile，注入 user 凡凡 + char 小雪 人设数据）——
+  微信：申请添加朋友页完整流程（备注/标签/权限）→ 新的朋友「已添加」→ 聊天发消息 AI 语音+文字回复 → 聊天设置删除联系人 → 确认弹窗（删除/保留清单）→ 会话消失/通讯录移除/聊天记录保留(kv 4 条)/删除状态写入 → 约 20s AI 申请「为什么删我啊？我奶茶都还没请你喝呢。」→ 查看进详情 → 前往验证 → 已添加 → 会话恢复+历史记录完整；
+  QQ：新朋友页好友通知 → 添加 → QQ 风格申请页 → 发送 → 好友通知「已同意·来源QQ号查找」→ 好友资料页删除联系人 → 已删除 toast + 列表移除 → AI 申请「饼干被偷吃了，小雪也要被删了吗？」→ 列表同意 → 二次删除 → 二次申请 → 详情页拒绝 → rejected 标记 + reload 补跑不再申请 → 手动重新加回 rejected 清除；
+  dev.log 无错误。
+
+Stage Summary:
+- 「删除联系人」= 删除好友关系（wx/qq 各自独立），联系人本体与全部历史数据保留；可见性门控覆盖：会话列表/通讯录（isFriendIn 天然生效）、朋友圈/空间动态、互动消息（isFriendDeleted 过滤）、通话记录与记忆库（isPersonGoneEverywhere = 删过好友且两端都非好友）；重新加回（手动申请或同意 AI 申请）走 restoreFriendship 单一入口，数据全部自动恢复；
+- AI 加回申请：好友申请形式（新的朋友/好友通知+详情页），人设化留言（如「怎么把我删了」），20s 首次延迟 + 10 分钟冷却 + 拒绝彻底停止 + 重新加回重置；同意/拒绝双向闭环，拒绝后 reload 补跑也不再申请（E2E 实测）；
+- 添加好友流程重构完成：申请添加朋友页（微信 8 项字段+权限开关 / QQ 4 项紧凑版）、好友申请详情页（前往验证/同意+拒绝、加入黑名单、投诉/举报入口）、新的朋友页（时间分组+查看、好友通知+来源+同意）；
+- 范围限定遵守：单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话既有逻辑未动（拉黑只在申请详情「加入黑名单」复用 setUserBlock）；QQ 与微信共用 friend-state 一套逻辑（UI 按各 App 风格）；
+- 产出文件：src/lib/ios/friend-state.ts（新）、src/components/apps/chat-settings.tsx、wechat.tsx、qq.tsx、phone.tsx、memory-bank.tsx。

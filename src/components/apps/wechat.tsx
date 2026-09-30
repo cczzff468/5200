@@ -183,8 +183,25 @@ import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeCh
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
-import { addressNameOf, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
+import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
+import {
+  addFriendReq,
+  deletedFriendIds,
+  friendDelStateOf,
+  isFriendDeleted,
+  loadFriendReqs,
+  rejectFriendReq,
+  removeFriendByUser,
+  restoreFriendship,
+  runFriendReqCatchUp,
+  saveFriendReqs,
+  setFriendReqStatus,
+  SOURCE_SEARCH_WX,
+  subscribeFriendReqs,
+  type FriendReqEntry,
+  type FriendReqExtras,
+} from '@/lib/ios/friend-state';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
@@ -199,7 +216,9 @@ import {
   ChatTranslatePage,
   ChatVoiceFreqPage,
   ChatVoicePage,
+  FriendDeleteConfirmDialog,
   WorldBookPickerPage,
+  ChatToggle,
   chatBgLayerStyle,
   type ChatSearchItem,
   type ChatSettingsBg,
@@ -388,18 +407,11 @@ interface WxMoment {
   peerId?: string;
 }
 
-/** 新的朋友通知（添加好友成功后写入） */
-interface WxFriendReq {
-  id: string;
-  name: string;
-  avatar: string | null;
-  message: string;
-  time: number;
-}
+/** 新的朋友通知（添加好友成功 / AI 申请加回后写入；结构与 QQ 共用，见 friend-state.ts） */
+type WxFriendReq = FriendReqEntry;
 
 const LS_SESSION = 'wx-session-user-id';
 const LS_MOMENTS = 'wx-moments';
-const LS_WX_REQS = 'wx-friend-reqs';
 const lsMsgsKey = (contactId: string) => `wx-chat-msgs:${contactId}`;
 
 function uid(): string {
@@ -825,24 +837,52 @@ const FRIEND_POST_TEMPLATES: ReadonlyArray<{ text: string; agoMs: number }> = [
 ];
 
 function loadReqs(): WxFriendReq[] {
-  try {
-    const parsed: unknown = kvGet<WxFriendReq[]>(LS_WX_REQS);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (r): r is WxFriendReq =>
-        Boolean(r) && typeof (r as WxFriendReq).id === 'string' && typeof (r as WxFriendReq).time === 'number'
-    );
-  } catch {
-    return [];
-  }
+  // 存储在 friend-state（同键 wx-friend-reqs）：旧数据无 status 归一化为 accepted；QQ/微信共用一套读写逻辑
+  return loadFriendReqs('wx');
 }
 
 function saveReqs(list: WxFriendReq[]): void {
-  try {
-    kvSet(LS_WX_REQS, list.slice(0, 100));
-  } catch {
-    // 持久化失败忽略
-  }
+  saveFriendReqs('wx', list);
+}
+
+/** 图片压缩（申请添加朋友页「添加图片」用；与 qq.tsx 同款实现，两端共用同一逻辑） */
+function compressImageFile(file: File, max = 1280): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const raw = typeof reader.result === 'string' ? reader.result : '';
+      if (!raw) {
+        resolve('');
+        return;
+      }
+      if (file.type === 'image/gif' || /^data:image\/gif/i.test(raw)) {
+        resolve(raw);
+        return;
+      }
+      const img = new window.Image();
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, max / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(raw);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.82));
+        } catch {
+          resolve(raw);
+        }
+      };
+      img.onerror = () => resolve(raw);
+      img.src = raw;
+    };
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
 }
 
 /** 由 WxUser 构造兜底 ContactRecord（联系人列表里找不到自己时用于进入自己聊天） */
@@ -3958,6 +3998,7 @@ function ChatPage({
   onSaveVoiceId,
   onOpenGroup,
   onContactsChanged,
+  onDeleteContact,
 }: {
   me: WxUser;
   peer: ContactRecord;
@@ -3980,6 +4021,8 @@ function ChatPage({
   /** 47-b 联系人刷新回调（宿主 reloadContacts）：buildReplyMsgs 的 change-avatar/pick-album-avatar
    *  IIFE 调 updateContact 落库后，调用此回调刷新 MainScreen 的 contacts state，让顶栏/会话列表头像即时更新 */
   onContactsChanged?: () => Promise<void>;
+  /** 聊天设置「删除联系人」→ 宿主弹二次确认（确认后关聊天 + 删除好友关系）；不传/自己会话不显示 */
+  onDeleteContact?: () => void;
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
@@ -7303,6 +7346,7 @@ function ChatPage({
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
           blockedByUser={blk.byUser === true}
           onToggleBlock={selfChat ? undefined : toggleBlockFromSettings}
+          onDeleteContact={selfChat ? undefined : onDeleteContact}
           onOpenReplyCount={() => setReplyOpen(true)}
           onOpenTranslate={() => setTranslateOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -8650,16 +8694,19 @@ function ComposeMomentsPage({
   );
 }
 
-// ---------------- 新的朋友页 ----------------
+// ---------------- 新的朋友页（按时间分组；待处理申请点「查看」进详情；AI 加回申请同列表展示） ----------------
 
 function NewFriendsPage({
   reqs,
   onBack,
   onGoAdd,
+  onOpenReq,
 }: {
   reqs: WxFriendReq[];
   onBack: () => void;
   onGoAdd: () => void;
+  /** 点申请行/查看 → 好友申请详情页 */
+  onOpenReq: (r: WxFriendReq) => void;
 }) {
   const groups = useMemo(() => {
     const map = new Map<string, WxFriendReq[]>();
@@ -8728,27 +8775,468 @@ function NewFriendsPage({
             <div key={label}>
               <p className="px-4 pb-1 pt-3 text-[13px] text-black/45 dark:text-white/45">{label}</p>
               <div className="bg-white dark:bg-[#1A1A1A]">
-                {list.map((r) => (
-                  <div
-                    key={`${r.id}-${r.time}`}
-                    data-testid={`wx-req-${r.name}`}
-                    className="flex items-center gap-3 border-b border-black/[0.05] px-4 py-2.5 last:border-b-0 dark:border-white/[0.08]"
-                  >
-                    <WxAvatar src={r.avatar} alt={r.name} size={42} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[16px]">{r.name}</p>
-                      <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">{r.message}</p>
-                    </div>
-                    <span className="shrink-0 text-[14px] text-black/35 dark:text-white/35" data-testid={`wx-req-status-${r.name}`}>
-                      已添加
-                    </span>
-                  </div>
-                ))}
+                {list.map((r) => {
+                  const status = r.status ?? 'accepted';
+                  return (
+                    <button
+                      type="button"
+                      key={`${r.id}-${r.time}`}
+                      data-testid={`wx-req-${r.name}`}
+                      onClick={() => onOpenReq(r)}
+                      className="flex w-full items-center gap-3 border-b border-black/[0.05] px-4 py-2.5 text-left last:border-b-0 active:bg-black/[0.03] dark:border-white/[0.08] dark:active:bg-white/[0.05]"
+                    >
+                      <WxAvatar src={r.avatar} alt={r.name} size={42} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[16px]">{r.name}</p>
+                        <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">{r.message}</p>
+                      </div>
+                      {status === 'pending' ? (
+                        <span
+                          className="shrink-0 rounded-[4px] border border-[#07C160] px-3.5 py-1.5 text-[14px] font-medium text-[#07C160] active:bg-[#07C160]/10"
+                          data-testid={`wx-req-status-${r.name}`}
+                        >
+                          查看
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[14px] text-black/35 dark:text-white/35" data-testid={`wx-req-status-${r.name}`}>
+                          {status === 'rejected' ? '已拒绝' : '已添加'}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------- 好友申请详情页（新的朋友点申请进入；同意 = 前往验证；QQ/微信共用一套数据） ----------------
+
+function FriendReqDetailPage({
+  req,
+  contact,
+  onBack,
+  onAccept,
+  onReject,
+  onBlock,
+  onToast,
+}: {
+  req: WxFriendReq;
+  /** 申请对应的联系人（被彻底删除时为 null：展示快照，验证按钮置灰） */
+  contact: ContactRecord | null;
+  onBack: () => void;
+  /** 同意申请（前往验证）：宿主恢复好友关系 + 状态流转 + 刷新 */
+  onAccept: (r: WxFriendReq) => void;
+  /** 拒绝申请：AI 停止再申请 */
+  onReject: (r: WxFriendReq) => void;
+  /** 加入黑名单 */
+  onBlock: (r: WxFriendReq) => void;
+  onToast: (m: string) => void;
+}) {
+  const status = req.status ?? 'accepted';
+  const pending = status === 'pending';
+  return (
+    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+      <div className="shrink-0 pt-[54px]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-reqdetail-back" onClick={onBack} className="active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <div className="flex-1" />
+          <button
+            type="button"
+            aria-label="更多"
+            onClick={() => onToast('资料设置暂未开放')}
+            className="px-3 active:opacity-50"
+          >
+            <EllipsisGlyph />
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-6">
+        {/* 头部：头像 + 昵称 + 地区（对照微信好友申请详情） */}
+        <div className="bg-white px-4 py-5 dark:bg-[#1A1A1A]">
+          <div className="flex items-center gap-4">
+            <WxAvatar src={req.avatar} alt={req.name} size={64} />
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-1.5 text-[21px] font-semibold leading-tight">
+                <span className="truncate">{req.name}</span>
+                {contact?.gender === '男' && <User className="h-[18px] w-[18px] shrink-0 text-[#4D9CF8]" aria-hidden="true" strokeWidth={2} />}
+                {contact?.gender === '女' && <User className="h-[18px] w-[18px] shrink-0 text-[#FF6B81]" aria-hidden="true" strokeWidth={2} />}
+              </p>
+              {/* 备注名 / 朋友权限（微信样式蓝字链接；入口暂未开放） */}
+              <p className="mt-2 flex gap-5 text-[15px] text-[#576B95] dark:text-[#8FA5C9]">
+                <button type="button" onClick={() => onToast('设置备注名暂未开放')}>备注名</button>
+                <button type="button" onClick={() => onToast('朋友权限暂未开放')}>朋友权限</button>
+              </p>
+              {contact?.region && <p className="mt-1 truncate text-[13px] text-black/40 dark:text-white/40">地区：{contact.region}</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* 验证消息记录（对方留言 + 附图） */}
+        <div className="mt-2 px-4 py-4">
+          <div className="rounded-[8px] bg-[#F7F7F7] p-4 dark:bg-[#242424]">
+            <div className="flex items-start justify-between gap-3">
+              <p className="min-w-0 break-words text-[15px] leading-[1.6]">{req.message || '请求加为好友'}</p>
+              <button type="button" onClick={() => onToast('回复验证消息暂未开放')} className="shrink-0 text-[14px] text-[#576B95] dark:text-[#8FA5C9]">
+                回复
+              </button>
+            </div>
+            {req.extras?.image && (
+              <img src={req.extras.image} alt="申请附图" className="mt-3 max-h-[180px] w-auto max-w-full rounded-[6px] object-cover" />
+            )}
+          </div>
+        </div>
+
+        {/* 来源 */}
+        <div className="bg-white dark:bg-[#1A1A1A]">
+          <div className="flex items-center gap-6 px-4 py-4">
+            <span className="w-[42px] shrink-0 text-[16px]">来源</span>
+            <span className="min-w-0 flex-1 text-[15px] text-black/70 dark:text-white/70">{req.source || '朋友验证消息'}</span>
+          </div>
+        </div>
+
+        {/* 前往验证（同意）/ 拒绝 / 状态 */}
+        {pending ? (
+          <div className="mt-5 flex gap-px">
+            <button
+              type="button"
+              data-testid="wx-reqdetail-accept"
+              onClick={() => onAccept(req)}
+              disabled={!contact}
+              className="flex-1 bg-white py-[15px] text-center text-[16px] text-[#576B95] active:bg-black/[0.04] disabled:opacity-40 dark:bg-[#1A1A1A] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
+            >
+              前往验证
+            </button>
+            <button
+              type="button"
+              data-testid="wx-reqdetail-reject"
+              onClick={() => onReject(req)}
+              className="flex-1 bg-white py-[15px] text-center text-[16px] text-red-500 active:bg-black/[0.04] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
+            >
+              拒绝
+            </button>
+          </div>
+        ) : (
+          <p className="mt-5 py-[15px] text-center text-[15px] text-black/35 dark:text-white/35" data-testid="wx-reqdetail-done">
+            {status === 'rejected' ? '已拒绝该申请' : '已添加'}
+          </p>
+        )}
+      </div>
+
+      {/* 底部：加入黑名单 | 投诉 */}
+      <div className="flex shrink-0 items-center justify-center gap-4 pb-[30px] pt-3">
+        <button type="button" data-testid="wx-reqdetail-block" onClick={() => onBlock(req)} className="text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]">
+          加入黑名单
+        </button>
+        <span className="h-4 w-px bg-black/15 dark:bg-white/20" aria-hidden="true" />
+        <button type="button" onClick={() => onToast('投诉暂未开放')} className="text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]">
+          投诉
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 申请添加朋友页（添加朋友搜索结果点人进入；发送 = 记录申请 + 加为好友） ----------------
+
+const WX_COMMON_GREETING_KEY = 'wx-common-greeting';
+
+function ApplyFriendPage({
+  me,
+  target,
+  onBack,
+  onSend,
+  onToast,
+}: {
+  me: WxUser;
+  /** 要添加的联系人（搜索结果） */
+  target: ContactRecord;
+  onBack: () => void;
+  /** 发送申请：宿主加好友 + 写「新的朋友」+ 恢复被删状态 */
+  onSend: (payload: { greeting: string; extras: FriendReqExtras }) => void;
+  onToast: (m: string) => void;
+}) {
+  const [greeting, setGreeting] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem(WX_COMMON_GREETING_KEY);
+      return saved?.trim() || `我是${me.name}`;
+    } catch {
+      return `我是${me.name}`;
+    }
+  });
+  const [image, setImage] = useState<string | null>(null);
+  const [remark, setRemark] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [memo, setMemo] = useState('');
+  const [permOpen, setPermOpen] = useState(false);
+  const [permChat, setPermChat] = useState(true);
+  const [permMoments, setPermMoments] = useState(true);
+  const [permExercise, setPermExercise] = useState(true);
+  const [hideMine, setHideMine] = useState(false);
+  const [hideTheirs, setHideTheirs] = useState(false);
+  const [tagDraft, setTagDraft] = useState('');
+  const [tagOpen, setTagOpen] = useState(false);
+  const [memoOpen, setMemoOpen] = useState(false);
+  const [memoDraft, setMemoDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = async (files: FileList | null) => {
+    const f = files?.[0];
+    if (!f) return;
+    const src = await compressImageFile(f, 720);
+    if (!src) {
+      onToast('图片读取失败');
+      return;
+    }
+    setImage(src);
+  };
+
+  const rowCls =
+    'flex w-full items-center justify-between px-4 py-[13px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+
+  return (
+    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+      <div className="pt-[54px]">
+        <div className="flex h-11 items-center px-3">
+          <button type="button" aria-label="关闭" data-testid="wx-apply-close" onClick={onBack} className="active:opacity-50">
+            <X className="h-6 w-6" strokeWidth={2} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[17px] font-medium">申请添加朋友</div>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-6">
+        <p className="px-4 pb-2 pt-3 text-[14px] text-black/45 dark:text-white/45">打招呼内容</p>
+        <div className="bg-white px-4 py-3 dark:bg-[#1A1A1A]">
+          <textarea
+            value={greeting}
+            onChange={(e) => setGreeting(e.target.value.slice(0, 100))}
+            placeholder="打招呼内容"
+            rows={3}
+            data-testid="wx-apply-greeting"
+            className="w-full resize-none bg-transparent text-[15px] leading-[1.6] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+          />
+          <div className="h-px bg-black/[0.06] dark:bg-white/[0.08]" aria-hidden="true" />
+          <button type="button" data-testid="wx-apply-image" onClick={() => fileRef.current?.click()} className="mt-2.5 flex items-center gap-2 text-[14px] text-black/45 active:opacity-60 dark:text-white/45">
+            <ImageIcon className="h-[18px] w-[18px]" strokeWidth={1.8} />
+            {image ? '重新添加图片' : '添加图片'}
+          </button>
+          {image && (
+            <div className="mt-2 flex items-center gap-2">
+              <img src={image} alt="打招呼附图" className="h-14 w-14 rounded-[6px] object-cover" />
+              <button type="button" onClick={() => setImage(null)} aria-label="移除图片" className="text-[13px] text-black/40 dark:text-white/40">
+                移除
+              </button>
+            </div>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            tabIndex={-1}
+            aria-hidden="true"
+            className="hidden"
+            onChange={(e) => {
+              void handleFile(e.target.files);
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            data-testid="wx-apply-common-greeting"
+            onClick={() => {
+              try {
+                window.localStorage.setItem(WX_COMMON_GREETING_KEY, greeting.trim());
+              } catch {
+                // 忽略
+              }
+              onToast('已设为常用打招呼内容');
+            }}
+            className="mt-2 block text-[14px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
+          >
+            设为常用打招呼内容
+          </button>
+        </div>
+
+        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">备注</p>
+        <div className="bg-white dark:bg-[#1A1A1A]">
+          <input
+            value={remark}
+            onChange={(e) => setRemark(e.target.value.slice(0, 30))}
+            placeholder="添加备注"
+            data-testid="wx-apply-remark"
+            className="h-[46px] w-full bg-transparent px-4 text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+          />
+        </div>
+
+        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">标签</p>
+        <div className="bg-white dark:bg-[#1A1A1A]">
+          <button type="button" data-testid="wx-apply-tags" onClick={() => setTagOpen(true)} className={rowCls}>
+            <span className="min-w-0 flex-1 truncate text-left text-[#576B95] dark:text-[#8FA5C9]">
+              {tags.length > 0 ? tags.join('、') : '添加标签'}
+            </span>
+            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+        </div>
+
+        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">备忘</p>
+        <div className="bg-white dark:bg-[#1A1A1A]">
+          <button type="button" data-testid="wx-apply-memo" onClick={() => setMemoOpen(true)} className={rowCls}>
+            <span className="min-w-0 flex-1 truncate text-left text-[#576B95] dark:text-[#8FA5C9]">{memo || '添加备忘'}</span>
+            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+        </div>
+
+        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">朋友权限</p>
+        <div className="bg-white dark:bg-[#1A1A1A]">
+          <button type="button" data-testid="wx-apply-perm" onClick={() => setPermOpen(true)} className={rowCls}>
+            <span className="min-w-0 flex-1 truncate text-left text-[#576B95] dark:text-[#8FA5C9]">
+              聊天、朋友圈{permExercise ? '、微信运动' : ''}
+            </span>
+            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+        </div>
+
+        <div className="mt-3 bg-white dark:bg-[#1A1A1A]">
+          <div className={rowCls}>
+            <span>不让他看我的朋友圈和状态</span>
+            <ChatToggle on={hideMine} onChange={setHideMine} accent="#07C160" testId="wx-apply-hide-mine" label="不让他看我的朋友圈和状态" />
+          </div>
+          <div className="h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />
+          <div className={rowCls}>
+            <span>不看他(她)的朋友圈和状态</span>
+            <ChatToggle on={hideTheirs} onChange={setHideTheirs} accent="#07C160" testId="wx-apply-hide-theirs" label="不看他(她)的朋友圈和状态" />
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid="wx-apply-send"
+          disabled={busy}
+          onClick={() => {
+            if (busy) return;
+            setBusy(true);
+            onSend({
+              greeting: greeting.trim() || `我是${me.name}`,
+              extras: { image, remark: remark.trim() || null, tags, memo: memo.trim() || null, permChat, permMoments, permExercise, hideMine, hideTheirs },
+            });
+          }}
+          className="mx-auto mt-8 block h-11 w-[200px] rounded-[22px] bg-[#07C160] text-[16px] font-medium text-white active:bg-[#06AD56] disabled:opacity-60"
+        >
+          发送
+        </button>
+      </div>
+
+      {/* 标签编辑弹窗 */}
+      {tagOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setTagOpen(false)}>
+          <div className="w-full max-w-[300px] rounded-[10px] bg-white p-5 dark:bg-[#1A1A1A]" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[16px] font-medium">添加标签</p>
+            <input
+              value={tagDraft}
+              onChange={(e) => setTagDraft(e.target.value)}
+              placeholder="多个标签用逗号分隔"
+              autoFocus
+              className="mt-3 h-10 w-full rounded-[8px] bg-black/[0.05] px-3 text-[14px] outline-none placeholder:text-black/30 dark:bg-white/10 dark:placeholder:text-white/30"
+            />
+            {tags.length > 0 && (
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <span key={t} className="flex items-center gap-1 rounded-[4px] bg-black/[0.05] px-2 py-1 text-[12.5px] dark:bg-white/10">
+                    {t}
+                    <button type="button" aria-label={`删除标签${t}`} onClick={() => setTags((prev) => prev.filter((x) => x !== t))}>
+                      <X className="h-3 w-3" strokeWidth={2.4} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 flex gap-2.5">
+              <button type="button" onClick={() => setTagOpen(false)} className="h-10 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-80 dark:bg-white/10">
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = tagDraft
+                    .split(/[,,、\s]+/)
+                    .map((t) => t.trim())
+                    .filter(Boolean)
+                    .slice(0, 6);
+                  if (next.length) setTags((prev) => [...new Set([...prev, ...next])].slice(0, 6));
+                  setTagDraft('');
+                  setTagOpen(false);
+                }}
+                className="h-10 flex-1 rounded-[8px] bg-[#07C160] text-[14px] font-medium text-white active:opacity-80"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 备忘编辑弹窗 */}
+      {memoOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setMemoOpen(false)}>
+          <div className="w-full max-w-[300px] rounded-[10px] bg-white p-5 dark:bg-[#1A1A1A]" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[16px] font-medium">添加备忘</p>
+            <textarea
+              value={memoDraft}
+              onChange={(e) => setMemoDraft(e.target.value.slice(0, 100))}
+              placeholder="写点备忘（仅自己可见）"
+              rows={3}
+              autoFocus
+              className="mt-3 w-full resize-none rounded-[8px] bg-black/[0.05] p-3 text-[14px] outline-none placeholder:text-black/30 dark:bg-white/10 dark:placeholder:text-white/30"
+            />
+            <div className="mt-3 flex gap-2.5">
+              <button type="button" onClick={() => setMemoOpen(false)} className="h-10 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-80 dark:bg-white/10">
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMemo(memoDraft.trim());
+                  setMemoOpen(false);
+                }}
+                className="h-10 flex-1 rounded-[8px] bg-[#07C160] text-[14px] font-medium text-white active:opacity-80"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 朋友权限弹窗（聊天/朋友圈/微信运动） */}
+      {permOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setPermOpen(false)}>
+          <div className="w-full max-w-[300px] rounded-[10px] bg-white p-5 dark:bg-[#1A1A1A]" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[16px] font-medium">朋友权限</p>
+            <div className="mt-2">
+              {([['聊天', permChat, setPermChat], ['朋友圈', permMoments, setPermMoments], ['微信运动', permExercise, setPermExercise]] as const).map(
+                ([label, on, set]) => (
+                  <div key={label} className="flex h-12 items-center justify-between">
+                    <span className="text-[15px]">{label}</span>
+                    <ChatToggle on={on} onChange={set} accent="#07C160" label={label} />
+                  </div>
+                ),
+              )}
+            </div>
+            <button type="button" onClick={() => setPermOpen(false)} className="mt-3 h-10 w-full rounded-[8px] bg-[#07C160] text-[14px] font-medium text-white active:opacity-80">
+              完成
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -8759,22 +9247,20 @@ function AddFriendPage({
   contacts,
   me,
   onBack,
-  onAdded,
+  onOpenApply,
   onOpenChat,
   onToast,
 }: {
   contacts: ContactRecord[];
   me: WxUser;
   onBack: () => void;
-  /** 添加好友成功：父组件写入「新的朋友」并刷新联系人 */
-  onAdded: (c: ContactRecord) => void;
+  /** 点「添加到通讯录」→ 申请添加朋友页（打招呼/备注/标签/朋友权限…） */
+  onOpenApply: (c: ContactRecord) => void;
   /** 点「发消息」：直接打开与该好友的聊天 */
   onOpenChat: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
   const [q, setQ] = useState('');
-  const [addingId, setAddingId] = useState<string | null>(null);
-  const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
   const [err, setErr] = useState('');
 
   const query = q.trim().toLowerCase();
@@ -8789,23 +9275,6 @@ function AddFriendPage({
           (c.qqId ?? '').toLowerCase().includes(query))
     );
   }, [contacts, query]);
-
-  const add = async (c: ContactRecord) => {
-    if (addingId) return;
-    setAddingId(c.id);
-    setErr('');
-    try {
-      const updated = await updateContact(c.id, { friendWx: true });
-      if (!updated) throw new Error('联系人不存在');
-      setAddedIds((prev) => new Set(prev).add(c.id));
-      onAdded(updated);
-      onToast(`已添加「${displayNameOf(updated)}」`);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '添加失败，请重试');
-    } finally {
-      setAddingId(null);
-    }
-  };
 
   const options: Array<[string, string, string, React.ReactNode]> = [
     ['扫一扫', '扫描二维码名片', '#5A9CF8', <ScanLine key="1" className="h-[21px] w-[21px]" strokeWidth={2} />],
@@ -8870,7 +9339,7 @@ function AddFriendPage({
           ) : (
             <div>
               {results.map((c) => {
-                const added = isFriendIn(c, 'wx') || addedIds.has(c.id);
+                const added = isFriendIn(c, 'wx');
                 return (
                   <div
                     key={c.id}
@@ -8897,19 +9366,17 @@ function AddFriendPage({
                       <button
                         type="button"
                         data-testid={`wx-add-btn-${c.name}`}
-                        onClick={() => void add(c)}
-                        disabled={addingId === c.id}
-                        className="flex shrink-0 items-center gap-1 rounded-[5px] bg-[#07C160] px-3 py-1.5 text-[13.5px] font-medium text-white active:bg-[#06AD56] disabled:opacity-60"
+                        onClick={() => onOpenApply(c)}
+                        className="flex shrink-0 items-center gap-1 rounded-[5px] bg-[#07C160] px-3 py-1.5 text-[13.5px] font-medium text-white active:bg-[#06AD56]"
                       >
-                        {addingId === c.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                        {addingId === c.id ? '添加中…' : '添加到通讯录'}
+                        添加到通讯录
                       </button>
                     )}
                   </div>
                 );
               })}
               <p className="px-4 pt-2.5 text-[12.5px] leading-relaxed text-black/35 dark:text-white/35">
-                该账号来自「联系人」App；已是好友的可以直接发消息，未添加的加为好友后即可聊天
+                该账号来自「联系人」App；已是好友的可以直接发消息，未添加的填写申请发送后即可聊天
               </p>
             </div>
           )
@@ -8957,12 +9424,15 @@ function FriendDetailPage({
   onOpenChat,
   onOpenMoments,
   onToast,
+  onDeleteContact,
 }: {
   friend: ContactRecord;
   onBack: () => void;
   onOpenChat: (c: ContactRecord) => void;
   onOpenMoments: (c: ContactRecord) => void;
   onToast: (m: string) => void;
+  /** 删除联系人（删除好友关系）：宿主弹二次确认；不传 = 隐藏（自己资料页） */
+  onDeleteContact?: () => void;
 }) {
   // 跨 App 跳转：点「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
@@ -9075,6 +9545,20 @@ function FriendDetailPage({
             </button>
           </div>
         </div>
+
+        {/* 删除联系人（删除好友关系；二次确认弹窗在宿主层，确认后从列表移除并关闭详情） */}
+        {onDeleteContact && (
+          <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
+            <button
+              type="button"
+              data-testid="wx-fdetail-delete"
+              onClick={onDeleteContact}
+              className="flex w-full items-center justify-center py-[15px] text-[16px] text-red-500 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+            >
+              删除联系人
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -9287,6 +9771,8 @@ type Page =
   | 'momentNotices'
   | 'newFriends'
   | 'addFriend'
+  | 'applyFriend'
+  | 'friendReqDetail'
   | 'friendDetail'
   | 'friendMoments'
   | 'profile'
@@ -9810,9 +10296,24 @@ function MainScreen({
       liveAvatarOf(snapshot, ref, contacts, 'wx'),
     [contacts]
   );
+  /**
+   * 删好友可见性门控（朋友圈/互动消息）：被删好友（wx 端存在 friend-del 状态）的动态与互动
+   * 不再展示——数据本体保留，重新加回好友（删除状态清除）后自动恢复可见。
+   * contacts 变化（删除/加回都会 reloadContacts）即重算，无需额外事件。
+   */
+  const isAuthorHidden = useCallback(
+    (ref: { peerId?: string | null; name?: string | null }): boolean => {
+      const hit = contactByRef(ref, contacts);
+      return !!hit && hit.kind !== 'user' && isFriendDeleted('wx', hit.id);
+    },
+    [contacts]
+  );
   const momentsLive = useMemo(
-    () => moments.map((p) => ({ ...p, avatar: liveWxAvatar(p.avatar, { peerId: p.peerId, name: p.authorName }) })),
-    [moments, liveWxAvatar]
+    () =>
+      moments
+        .filter((p) => !isAuthorHidden({ peerId: p.peerId, name: p.authorName }))
+        .map((p) => ({ ...p, avatar: liveWxAvatar(p.avatar, { peerId: p.peerId, name: p.authorName }) })),
+    [moments, liveWxAvatar, isAuthorHidden]
   );
   /** 用户 API 配置（让 AI 发动态时按人设生成内容用） */
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -9824,10 +10325,16 @@ function MainScreen({
   /** 正在编辑的动态（id + 当前正文） */
   const [editingPost, setEditingPost] = useState<{ id: string; text: string } | null>(null);
   const [reqs, setReqs] = useState<WxFriendReq[]>(() => loadReqs());
+  // AI 加回申请 / 手动添加由 friend-state 落盘后广播：订阅刷新列表（含 QQ 端写入的本端无关事件过滤）
+  useEffect(() => subscribeFriendReqs(() => setReqs(loadReqs())), []);
   /** 新的朋友通知头像也实时读取（通知里存的快照 → 联系人在就显示当前头像） */
   const reqsLive = useMemo(
-    () => reqs.map((r) => ({ ...r, avatar: liveWxAvatar(r.avatar, { name: r.name }) })),
-    [reqs, liveWxAvatar]
+    () =>
+      reqs.map((r) => {
+        const hit = r.contactId ? contacts.find((c) => c.id === r.contactId) : undefined;
+        return { ...r, avatar: liveWxAvatar(r.avatar, { peerId: r.contactId ?? null, name: hit?.name ?? r.name }) };
+      }),
+    [reqs, liveWxAvatar, contacts]
   );
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -10066,14 +10573,16 @@ function MainScreen({
   // ---------------- 互动消息（与我的互动消息：谁赞了我/评论了我/回复了我） ----------------
   const [wxNotices, setWxNotices] = useState<MomentNotice[]>(() => listMomentNotices('wx'));
   const refreshWxNotices = useCallback(() => setWxNotices(listMomentNotices('wx')), []);
-  /** 互动消息头像实时读取（actorAvatar 快照 → 联系人在就显示当前头像） */
+  /** 互动消息头像实时读取（actorAvatar 快照 → 联系人在就显示当前头像）；被删好友的互动同口径隐藏 */
   const wxNoticesLive = useMemo(
     () =>
-      wxNotices.map((n) => ({
-        ...n,
-        actorAvatar: liveWxAvatar(n.actorAvatar, { peerId: n.actorPeerId, name: n.actorName }),
-      })),
-    [wxNotices, liveWxAvatar]
+      wxNotices
+        .filter((n) => !isAuthorHidden({ peerId: n.actorPeerId, name: n.actorName }))
+        .map((n) => ({
+          ...n,
+          actorAvatar: liveWxAvatar(n.actorAvatar, { peerId: n.actorPeerId, name: n.actorName }),
+        })),
+    [wxNotices, liveWxAvatar, isAuthorHidden]
   );
   /** 气泡角标：未读条数 + 最新一条消息人的头像（「1条新消息」气泡展示用） */
   const wxNoticeBadge = useMemo(
@@ -10225,22 +10734,94 @@ function MainScreen({
     [apiConfig, me.name, reloadMoments, showToast]
   );
 
-  /** 添加好友成功：写入「新的朋友」通知并刷新联系人列表 */
-  const handleFriendAdded = useCallback(
-    (c: ContactRecord) => {
-      const entry: WxFriendReq = {
-        id: c.id,
-        name: displayNameOf(c),
-        avatar: c.avatar,
-        message: `我是${me.name}，加个好友吧`,
+  // ---------------- 删除联系人 / 好友申请 / 申请添加朋友（微信 × QQ 共用 friend-state 状态机） ----------------
+  /** 待确认删除的联系人（弹 FriendDeleteConfirmDialog；after = 确认后关闭的页面栈） */
+  const [delTarget, setDelTarget] = useState<{ contact: ContactRecord; after: () => void } | null>(null);
+  /** 好友申请详情页当前申请（page='friendReqDetail'） */
+  const [reqDetail, setReqDetail] = useState<WxFriendReq | null>(null);
+  /** 申请添加朋友页目标（page='applyFriend'） */
+  const [applyTarget, setApplyTarget] = useState<ContactRecord | null>(null);
+
+  const openDeleteConfirm = useCallback((c: ContactRecord, after: () => void) => {
+    setDelTarget({ contact: c, after });
+  }, []);
+
+  /** 确认删除联系人：删除好友关系（记录/记忆/朋友圈/通话保留不可见，AI 稍后可能申请加回） */
+  const confirmRemoveFriend = useCallback(async () => {
+    if (!delTarget) return;
+    const { contact, after } = delTarget;
+    setDelTarget(null);
+    after();
+    await removeFriendByUser('wx', contact.id);
+    await reloadContacts();
+    setReqs(loadReqs());
+    showToast(`已删除「${displayNameOf(contact)}」`);
+  }, [delTarget, reloadContacts, showToast]);
+
+  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「新的朋友」+ 刷新 */
+  const handleApplySent = useCallback(
+    async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }) => {
+      try {
+        if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
+        await restoreFriendship('wx', target.id); // 未删过 = friendWx=true；删过 = 清删除状态并恢复好友
+      } catch {
+        showToast('添加失败，请重试');
+        return;
+      }
+      addFriendReq('wx', {
+        id: uid(),
+        contactId: target.id,
+        name: displayNameOf(target),
+        avatar: target.avatar,
+        message: payload.greeting,
         time: Date.now(),
-      };
-      const next = [entry, ...reqs];
-      setReqs(next);
-      saveReqs(next);
-      void reloadContacts();
+        status: 'accepted',
+        source: SOURCE_SEARCH_WX,
+        fromChar: false,
+        extras: payload.extras,
+      });
+      setReqs(loadReqs());
+      await reloadContacts();
+      showToast('已发送添加申请');
     },
-    [me.name, reloadContacts, reqs]
+    [reloadContacts, showToast]
+  );
+
+  /** 同意好友申请（前往验证 / AI 加回申请）：恢复好友关系 + 状态流转 + 刷新 */
+  const acceptFriendReqAction = useCallback(
+    async (r: WxFriendReq) => {
+      const cid = r.contactId ?? r.id;
+      await restoreFriendship('wx', cid);
+      setFriendReqStatus('wx', r.id, 'accepted');
+      const fresh = loadReqs().find((x) => x.id === r.id) ?? null;
+      setReqs(loadReqs());
+      if (reqDetail) setReqDetail(fresh);
+      await reloadContacts();
+      showToast(`已添加「${r.name}」`);
+    },
+    [reloadContacts, showToast, reqDetail]
+  );
+
+  /** 拒绝好友申请：AI 彻底停止申请（重新加回好友后重置） */
+  const rejectFriendReqAction = useCallback(
+    (r: WxFriendReq) => {
+      rejectFriendReq('wx', r.id);
+      const fresh = loadReqs().find((x) => x.id === r.id) ?? null;
+      setReqs(loadReqs());
+      if (reqDetail) setReqDetail(fresh);
+      showToast(`已拒绝「${r.name}」的申请`);
+    },
+    [showToast, reqDetail]
+  );
+
+  /** 申请详情「加入黑名单」：写双向拉黑 byUser（拦截对方消息，走既有拉黑链路） */
+  const blockFriendReqAction = useCallback(
+    (r: WxFriendReq) => {
+      const cid = r.contactId ?? r.id;
+      setUserBlock('wx', cid, true);
+      showToast(`已将「${r.name}」加入黑名单`);
+    },
+    [showToast]
   );
 
   /** 打开好友详情页（fromChat 参数仅保留调用点兼容；页面退回逻辑已统一） */
@@ -10251,13 +10832,26 @@ function MainScreen({
 
   if (page === 'friendDetail' && detail) {
     return (
-      <FriendDetailPage
-        friend={detail}
-        onBack={() => {
-          // 从聊天设置进入：chatPeer 仍保留，回到聊天页；否则回主列表
-          setDetail(null);
-          setPage('main');
-        }}
+      <>
+        <FriendDetailPage
+          friend={detail}
+          onBack={() => {
+            // 从聊天设置进入：chatPeer 仍保留，回到聊天页；否则回主列表
+            setDetail(null);
+            setPage('main');
+          }}
+          onDeleteContact={
+            detail.kind === 'user'
+              ? undefined
+              : () =>
+                  openDeleteConfirm(detail, () => {
+                    // 删除后聊天页/详情都关闭，回主列表
+                    setDetail(null);
+                    setChatPeer(null);
+                    setHidden(loadStrList(LS_CHAT_HIDDEN));
+                    setPage('main');
+                  })
+          }
         onOpenChat={(c) => {
           // 详情页发消息：退回 page 并打开聊天（chatPeer 渲染聊天页）。
           // 从聊天进入的详情页：chatPeer 已是此人，退回 page 即回聊天；从通讯录进入的：直接进聊天。
@@ -10272,7 +10866,17 @@ function MainScreen({
           } else openFriendMoments(c);
         }}
         onToast={showToast}
-      />
+        />
+        {/* 删除确认弹窗在详情页之上（分支提前 return，根部的弹窗不渲染） */}
+        {delTarget && (
+          <FriendDeleteConfirmDialog
+            variant="wx"
+            peerName={displayNameOf(delTarget.contact)}
+            onCancel={() => setDelTarget(null)}
+            onConfirm={() => void confirmRemoveFriend()}
+          />
+        )}
+      </>
     );
   }
   // 朋友圈三页（自己的朋友圈 / 发布页 / 好友朋友圈）必须渲染在 chat 之前：
@@ -10480,50 +11084,98 @@ function MainScreen({
   }
   if (chatPeer) {
     return (
-      <ChatPage
-        key={chatPeer.id}
-        me={me}
-        peer={contacts.find((c) => c.id === chatPeer.id) ?? chatPeer}
-        contacts={contacts}
-        ownerName={ownerName(chatPeer)}
-        otherUnread={chatOtherUnread}
-        onBack={backToList}
-        onOpenFriendDetail={(c) => openFriendDetail(c)}
-        onOpenGroup={(gid) => {
-          const g = getGroup(gid);
-          if (!g) return;
-          refreshGroups();
-          setHidden(loadStrList(LS_CHAT_HIDDEN));
-          setChatPeer(null);
-          setGroupPeer(g);
-        }}
-        onSaveRemark={async (v) => {
-          try {
-            await updateContact(chatPeer.id, { remark: v || null });
-            await reloadContacts();
-            showToast(v ? '备注已保存' : '备注已清除');
-          } catch {
-            showToast('备注保存失败');
+      <>
+        <ChatPage
+          key={chatPeer.id}
+          me={me}
+          peer={contacts.find((c) => c.id === chatPeer.id) ?? chatPeer}
+          contacts={contacts}
+          ownerName={ownerName(chatPeer)}
+          otherUnread={chatOtherUnread}
+          onBack={backToList}
+          onOpenFriendDetail={(c) => openFriendDetail(c)}
+          onOpenGroup={(gid) => {
+            const g = getGroup(gid);
+            if (!g) return;
+            refreshGroups();
+            setHidden(loadStrList(LS_CHAT_HIDDEN));
+            setChatPeer(null);
+            setGroupPeer(g);
+          }}
+          onSaveRemark={async (v) => {
+            try {
+              await updateContact(chatPeer.id, { remark: v || null });
+              await reloadContacts();
+              showToast(v ? '备注已保存' : '备注已清除');
+            } catch {
+              showToast('备注保存失败');
+            }
+          }}
+          onSaveVoiceId={async (vid) => {
+            try {
+              // 与备注同一条持久化路径：写入联系人库 voiceId → 重拉联系人（ChatPage 的 peer 由 contacts 反查，随之一并刷新）
+              await updateContact(chatPeer.id, { voiceId: vid || null });
+              await reloadContacts();
+              showToast(vid ? '已更新 TA 的声音' : '已恢复默认声音');
+            } catch {
+              showToast('声音保存失败');
+            }
+          }}
+          // 47-b 联系人刷新回调：ChatPage 内 AI 换头像/选图设头像后调此回调让顶栏/会话列表头像即时刷新
+          onContactsChanged={reloadContacts}
+          onDeleteContact={
+            chatPeer.kind === 'user'
+              ? undefined
+              : () =>
+                  openDeleteConfirm(chatPeer, () => {
+                    // 删除后聊天页关闭回列表（会话随好友关系消失）；历史记录保留不可见
+                    setChatPeer(null);
+                    setHidden(loadStrList(LS_CHAT_HIDDEN));
+                  })
           }
-        }}
-        onSaveVoiceId={async (vid) => {
-          try {
-            // 与备注同一条持久化路径：写入联系人库 voiceId → 重拉联系人（ChatPage 的 peer 由 contacts 反查，随之一并刷新）
-            await updateContact(chatPeer.id, { voiceId: vid || null });
-            await reloadContacts();
-            showToast(vid ? '已更新 TA 的声音' : '已恢复默认声音');
-          } catch {
-            showToast('声音保存失败');
-          }
-        }}
-        // 47-b 联系人刷新回调：ChatPage 内 AI 换头像/选图设头像后调此回调让顶栏/会话列表头像即时刷新
-        onContactsChanged={reloadContacts}
-        onToast={showToast}
-      />
+          onToast={showToast}
+        />
+        {/* 删除确认弹窗在聊天页之上（分支提前 return，根部的弹窗不渲染） */}
+        {delTarget && (
+          <FriendDeleteConfirmDialog
+            variant="wx"
+            peerName={displayNameOf(delTarget.contact)}
+            onCancel={() => setDelTarget(null)}
+            onConfirm={() => void confirmRemoveFriend()}
+          />
+        )}
+      </>
     );
   }
   if (page === 'newFriends') {
-    return <NewFriendsPage reqs={reqsLive} onBack={() => setPage('main')} onGoAdd={() => setPage('addFriend')} />;
+    return (
+      <NewFriendsPage
+        reqs={reqsLive}
+        onBack={() => setPage('main')}
+        onGoAdd={() => setPage('addFriend')}
+        onOpenReq={(r) => {
+          setReqDetail(r);
+          setPage('friendReqDetail');
+        }}
+      />
+    );
+  }
+  if (page === 'friendReqDetail' && reqDetail) {
+    const reqContact = contacts.find((c) => c.id === (reqDetail.contactId ?? reqDetail.id)) ?? null;
+    return (
+      <FriendReqDetailPage
+        req={reqDetail}
+        contact={reqContact}
+        onBack={() => {
+          setReqDetail(null);
+          setPage('newFriends');
+        }}
+        onAccept={(r) => void acceptFriendReqAction(r)}
+        onReject={rejectFriendReqAction}
+        onBlock={blockFriendReqAction}
+        onToast={showToast}
+      />
+    );
   }
   if (page === 'addFriend') {
     return (
@@ -10531,8 +11183,30 @@ function MainScreen({
         contacts={contacts}
         me={me}
         onBack={() => setPage('main')}
-        onAdded={handleFriendAdded}
+        onOpenApply={(c) => {
+          setApplyTarget(c);
+          setPage('applyFriend');
+        }}
         onOpenChat={(c) => setChatPeer(c)}
+        onToast={showToast}
+      />
+    );
+  }
+  if (page === 'applyFriend' && applyTarget) {
+    return (
+      <ApplyFriendPage
+        me={me}
+        target={applyTarget}
+        onBack={() => {
+          setApplyTarget(null);
+          setPage('addFriend');
+        }}
+        onSend={(payload) => {
+          const t = applyTarget;
+          setApplyTarget(null);
+          setPage('addFriend');
+          void handleApplySent(t, payload);
+        }}
         onToast={showToast}
       />
     );
@@ -11228,6 +11902,16 @@ function MainScreen({
           {toast}
         </div>
       )}
+
+      {/* 删除联系人二次确认（聊天设置 / 好友详情页共用；明确告知删什么/留什么） */}
+      {delTarget && (
+        <FriendDeleteConfirmDialog
+          variant="wx"
+          peerName={displayNameOf(delTarget.contact)}
+          onCancel={() => setDelTarget(null)}
+          onConfirm={() => void confirmRemoveFriend()}
+        />
+      )}
     </div>
   );
 }
@@ -11288,6 +11972,11 @@ export default function WeChatApp() {
     window.addEventListener('contact-avatar-changed', fn);
     return () => window.removeEventListener('contact-avatar-changed', fn);
   }, [reloadContacts]);
+
+  // 删好友后 AI 主动申请加回：定时器不跨刷新，微信挂载时扫描删除状态按冷却补跑
+  useEffect(() => {
+    runFriendReqCatchUp();
+  }, []);
 
   // 启动：拉联系人 + 恢复登录态（联系人被删则自动登出）
   useEffect(() => {

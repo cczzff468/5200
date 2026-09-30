@@ -204,8 +204,25 @@ import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
-import { addressNameOf, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
+import { genId } from '@/lib/ios/db';
+import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
+import {
+  addFriendReq,
+  deletedFriendIds,
+  friendDelStateOf,
+  isFriendDeleted,
+  loadFriendReqs,
+  rejectFriendReq,
+  removeFriendByUser,
+  restoreFriendship,
+  runFriendReqCatchUp,
+  setFriendReqStatus,
+  SOURCE_SEARCH_QQ,
+  subscribeFriendReqs,
+  type FriendReqEntry,
+  type FriendReqExtras,
+} from '@/lib/ios/friend-state';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
 import {
@@ -261,7 +278,9 @@ import {
   ChatTranslatePage,
   ChatVoiceFreqPage,
   ChatVoicePage,
+  FriendDeleteConfirmDialog,
   WorldBookPickerPage,
+  ChatToggle,
   chatBgLayerStyle,
   type ChatSearchItem,
   type ChatSettingsBg,
@@ -2396,6 +2415,7 @@ function ChatPage({
   onSaveVoiceId,
   onOpenGroup,
   refreshContacts,
+  onDeleteContact,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -2418,6 +2438,8 @@ function ChatPage({
   refreshContacts: () => Promise<void>;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
+  /** 聊天设置「删除联系人」→ 宿主弹二次确认（确认后关聊天 + 删除好友关系）；不传/自己会话不显示 */
+  onDeleteContact?: () => void;
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
@@ -5858,6 +5880,7 @@ function ChatPage({
           onToggleMuted={(v) => qqChatFlagsStore.update(peer.id, { muted: v })}
           blockedByUser={blk.byUser === true}
           onToggleBlock={peer.id === me.id ? undefined : toggleBlockFromSettings}
+          onDeleteContact={peer.id === me.id ? undefined : onDeleteContact}
           onOpenReplyCount={() => setReplyOpen(true)}
           onOpenTranslate={() => setTranslateOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -8115,6 +8138,7 @@ function FriendProfilePage({
   onOpenBond,
   onOpenZone,
   onToast,
+  onDeleteContact,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -8124,6 +8148,8 @@ function FriendProfilePage({
   /** 他的QQ空间：进该好友的空间动态页（只显示 TA 发的动态） */
   onOpenZone: () => void;
   onToast: (m: string) => void;
+  /** 删除联系人（删除好友关系）：宿主弹二次确认；不传 = 隐藏 */
+  onDeleteContact?: () => void;
 }) {
   // 跨 App 跳转：点「编辑资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
@@ -8310,34 +8336,47 @@ function FriendProfilePage({
 
       {/* 底部三按钮：音视频通话 / 编辑资料（跳联系人 App 编辑页）/ 发消息
           底色与主卡一致（深色 #1B1C1F），消除主卡与按钮区衔接处的色差边缘 */}
-      <div className="flex shrink-0 gap-3 bg-white px-4 pb-[40px] pt-3 dark:bg-[#1B1C1F]">
-        <button
-          type="button"
-          onClick={() => onToast('音视频通话暂未开放')}
-          className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
-        >
-          音视频通话
-        </button>
-        <button
-          type="button"
-          data-testid="qq-fprofile-edit"
-          onClick={() => {
-            setPendingContactEdit(peer.id);
-            switchToApp('contacts');
-          }}
-          className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
-        >
-          编辑资料
-        </button>
-        <button
-          type="button"
-          data-testid="qq-fprofile-message"
-          onClick={onOpenChat}
-          className="h-11 flex-1 rounded-[12px] text-[15px] font-medium text-white active:brightness-95"
-          style={{ backgroundColor: QQ_BLUE }}
-        >
-          发消息
-        </button>
+      <div className="flex shrink-0 flex-col gap-2.5 bg-white px-4 pb-[40px] pt-3 dark:bg-[#1B1C1F]">
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => onToast('音视频通话暂未开放')}
+            className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
+          >
+            音视频通话
+          </button>
+          <button
+            type="button"
+            data-testid="qq-fprofile-edit"
+            onClick={() => {
+              setPendingContactEdit(peer.id);
+              switchToApp('contacts');
+            }}
+            className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
+          >
+            编辑资料
+          </button>
+          <button
+            type="button"
+            data-testid="qq-fprofile-message"
+            onClick={onOpenChat}
+            className="h-11 flex-1 rounded-[12px] text-[15px] font-medium text-white active:brightness-95"
+            style={{ backgroundColor: QQ_BLUE }}
+          >
+            发消息
+          </button>
+        </div>
+        {/* 删除联系人（删除好友关系；二次确认弹窗在宿主层，确认后回联系人 tab） */}
+        {onDeleteContact && (
+          <button
+            type="button"
+            data-testid="qq-fprofile-delete"
+            onClick={onDeleteContact}
+            className="h-11 w-full rounded-[12px] bg-black/[0.05] text-[15px] text-red-500 active:opacity-70 dark:bg-white/[0.08]"
+          >
+            删除联系人
+          </button>
+        )}
       </div>
       <span className="sr-only">{me.name}查看{peer.name}的个人资料</span>
     </div>
@@ -10055,20 +10094,20 @@ function AddFriendPage({
   me,
   contacts,
   onBack,
-  onContactsChanged,
+  onOpenApply,
   onOpenChat,
   onToast,
 }: {
   me: QQUser;
   contacts: ContactRecord[];
   onBack: () => void;
-  onContactsChanged: () => void;
+  /** 点「添加」→ 申请添加朋友页（验证信息/备注/分组/权限） */
+  onOpenApply: (c: ContactRecord) => void;
   onOpenChat: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
   const [kw, setKw] = useState('');
   const [tab, setTab] = useState<'找人' | '找群'>('找人');
-  const [adding, setAdding] = useState<string | null>(null);
 
   // 推荐：未加 QQ 好友的人（char/npc，排除自己；QQ 好友独立，微信/信息里加过的不算）
   const suggestions = useMemo(() => contacts.filter((c) => !isFriendIn(c, 'qq') && c.id !== me.id).slice(0, 8), [contacts, me.id]);
@@ -10078,20 +10117,6 @@ function AddFriendPage({
     if (!k) return null;
     return contacts.filter((c) => c.id !== me.id && (c.qqId ?? '').includes(k));
   }, [contacts, kw, me.id]);
-
-  const addFriend = async (c: ContactRecord) => {
-    if (adding) return;
-    setAdding(c.id);
-    try {
-      await updateContact(c.id, { friendQq: true });
-      onContactsChanged();
-      onToast(`已添加 ${c.name} 为好友`);
-    } catch {
-      onToast('添加失败，请稍后再试');
-    } finally {
-      setAdding(null);
-    }
-  };
 
   // 七宫格（对照 QQ 真机添加好友页：第一行 4 个 + 第二行 3 个）
   const gridTop: { label: string; icon: React.ReactNode }[] = [
@@ -10136,7 +10161,7 @@ function AddFriendPage({
           </button>
         </div>
       ) : (
-        <AddPersonRow key={c.id} c={c} busy={adding === c.id} onAdd={() => void addFriend(c)} onOpen={() => onOpenChat(c)} />
+        <AddPersonRow key={c.id} c={c} busy={false} onAdd={() => onOpenApply(c)} onOpen={() => onOpenChat(c)} />
       )
     );
 
@@ -10242,10 +10267,108 @@ function AddFriendPage({
               <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂时没有推荐，去「联系人」App 添加人物吧</p>
             )}
             {suggestions.map((c) => (
-              <AddPersonRow key={c.id} c={c} busy={adding === c.id} onAdd={() => void addFriend(c)} onOpen={() => onOpenChat(c)} />
+              <AddPersonRow key={c.id} c={c} busy={false} onAdd={() => onOpenApply(c)} onOpen={() => onOpenChat(c)} />
             ))}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 申请添加朋友页（QQ 风格：验证信息/对方备注/分组/权限 → 发送） ----------------
+
+function ApplyFriendPage({
+  me,
+  target,
+  onBack,
+  onSend,
+  onToast,
+}: {
+  me: QQUser;
+  /** 要添加的联系人（搜索/推荐结果） */
+  target: ContactRecord;
+  onBack: () => void;
+  /** 发送申请：宿主加好友 + 写「好友通知」+ 恢复被删状态 */
+  onSend: (payload: { greeting: string; extras: FriendReqExtras }) => void;
+  onToast: (m: string) => void;
+}) {
+  const [greeting, setGreeting] = useState(`我是${me.name}`);
+  const [remark, setRemark] = useState('');
+  const [hideMine, setHideMine] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
+      {/* 顶栏：取消 + 添加好友 */}
+      <div className="relative flex h-12 shrink-0 items-center px-3">
+        <button type="button" aria-label="取消" data-testid="qq-apply-close" onClick={onBack} className="-ml-1 rounded-full p-1.5 text-[16px] active:bg-black/5 dark:text-white/85">
+          取消
+        </button>
+        <span className="absolute left-1/2 -translate-x-1/2 text-[17px] font-medium">添加好友</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4" data-testid="qq-apply-body">
+        {/* 对方信息 */}
+        <div className="flex items-center gap-3 py-4">
+          <QqAvatar src={target.avatar} alt={target.name} size={64} />
+          <span className="min-w-0 truncate text-[19px] font-semibold">{target.name}</span>
+        </div>
+
+        <p className="pb-2 text-[13px] text-black/40 dark:text-white/40">填写验证信息</p>
+        <div className="rounded-[12px] bg-[#F2F3F5] px-3.5 dark:bg-white/[0.08]">
+          <input
+            value={greeting}
+            onChange={(e) => setGreeting(e.target.value.slice(0, 100))}
+            data-testid="qq-apply-greeting"
+            className="h-[46px] w-full bg-transparent text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+          />
+        </div>
+
+        <p className="pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">设置对方备注</p>
+        <div className="rounded-[12px] bg-[#F2F3F5] px-3.5 dark:bg-white/[0.08]">
+          <input
+            value={remark}
+            onChange={(e) => setRemark(e.target.value.slice(0, 30))}
+            placeholder="输入备注"
+            data-testid="qq-apply-remark"
+            className="h-[46px] w-full bg-transparent text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+          />
+        </div>
+
+        <p className="pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">分组设置</p>
+        <button
+          type="button"
+          onClick={() => onToast('分组暂未开放')}
+          className="flex h-[46px] w-full items-center justify-between rounded-[12px] bg-[#F2F3F5] px-3.5 active:opacity-70 dark:bg-white/[0.08]"
+        >
+          <span className="text-[15px]">我的好友</span>
+          <ChevronRight className="h-5 w-5 text-black/25 dark:text-white/25" aria-hidden="true" />
+        </button>
+
+        <p className="pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">权限设置</p>
+        <div className="flex h-[46px] items-center justify-between rounded-[12px] bg-[#F2F3F5] px-3.5 dark:bg-white/[0.08]">
+          <span className="text-[15px]">不让他看我的动态</span>
+          <ChatToggle on={hideMine} onChange={setHideMine} accent="#0099FF" testId="qq-apply-hide-mine" label="不让他看我的动态" />
+        </div>
+
+        <button
+          type="button"
+          data-testid="qq-apply-send"
+          disabled={busy}
+          onClick={() => {
+            if (busy) return;
+            setBusy(true);
+            onSend({
+              greeting: greeting.trim() || `我是${me.name}`,
+              extras: { remark: remark.trim() || null, hideMine },
+            });
+          }}
+          className="mb-8 mt-10 h-12 w-full rounded-full text-[16px] font-medium text-white active:brightness-95 disabled:opacity-60"
+          style={{ backgroundColor: QQ_BLUE }}
+        >
+          发送
+        </button>
       </div>
     </div>
   );
@@ -10256,39 +10379,34 @@ function AddFriendPage({
 function NewFriendsPage({
   me,
   contacts,
+  reqs,
   onBack,
   onOpenAdd,
-  onContactsChanged,
   onOpenChat,
+  onOpenApply,
+  onOpenReq,
+  onAccept,
   onToast,
 }: {
   me: QQUser;
   contacts: ContactRecord[];
+  /** 好友通知列表（friend-state 落盘；AI 加回申请/手动添加共用） */
+  reqs: FriendReqEntry[];
   onBack: () => void;
   onOpenAdd: () => void;
-  onContactsChanged: () => void;
   onOpenChat: (c: ContactRecord) => void;
+  /** 推荐位点「添加」→ 申请添加朋友页 */
+  onOpenApply: (c: ContactRecord) => void;
+  /** 点通知行 → 好友申请详情页 */
+  onOpenReq: (r: FriendReqEntry) => void;
+  /** 直接同意（列表内「同意」按钮） */
+  onAccept: (r: FriendReqEntry) => void;
   onToast: (m: string) => void;
 }) {
-  const [adding, setAdding] = useState<string | null>(null);
   const [showSync, setShowSync] = useState(true);
 
   // 推荐：未加 QQ 好友的人（char/npc，排除自己；QQ 好友独立，微信/信息里加过的不算）
   const suggestions = useMemo(() => contacts.filter((c) => !isFriendIn(c, 'qq') && c.id !== me.id).slice(0, 8), [contacts, me.id]);
-
-  const addFriend = async (c: ContactRecord) => {
-    if (adding) return;
-    setAdding(c.id);
-    try {
-      await updateContact(c.id, { friendQq: true });
-      onContactsChanged();
-      onToast(`已添加 ${c.name} 为好友`);
-    } catch {
-      onToast('添加失败，请稍后再试');
-    } finally {
-      setAdding(null);
-    }
-  };
 
   return (
     <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
@@ -10312,7 +10430,7 @@ function NewFriendsPage({
         {/* 同步通讯录横幅 */}
         {showSync && (
           <div className="flex h-[58px] items-center gap-3 border-b border-black/[0.05] px-4 dark:border-white/[0.06]">
-            <span className="flex-1 text-[16px]">同步通讯录</span>
+            <span className="flex-1 text-[16px]">开启通讯录，快速找到好友</span>
             <button
               type="button"
               data-testid="qq-newfriends-sync"
@@ -10336,6 +10454,68 @@ function NewFriendsPage({
 
         <div className="h-2.5 bg-black/[0.035] dark:bg-white/[0.05]" aria-hidden="true" />
 
+        {/* 好友通知（AI 加回申请 / 手动添加记录）：待处理可同意，点行进详情 */}
+        <div className="flex items-center justify-between px-4 pb-1 pt-3">
+          <span className="text-[17px] font-semibold">好友通知</span>
+          <button type="button" onClick={() => onToast('过滤通知暂未开放')} className="flex items-center text-[13px] text-black/40 active:opacity-60 dark:text-white/40">
+            过滤通知
+            <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        {reqs.length === 0 ? (
+          <p className="py-8 text-center text-[13px] text-black/30 dark:text-white/30" data-testid="qq-newfriends-empty">
+            暂无好友通知，去「添加」认识新朋友吧
+          </p>
+        ) : (
+          <div className="pb-2">
+            {reqs.map((r) => {
+              const status = r.status ?? 'accepted';
+              return (
+                <button
+                  type="button"
+                  key={`${r.id}-${r.time}`}
+                  data-testid={`qq-req-${r.name}`}
+                  onClick={() => onOpenReq(r)}
+                  className="flex w-full items-center gap-3 border-b border-black/[0.05] px-4 py-3 text-left active:bg-black/[0.03] dark:border-white/[0.06] dark:active:bg-white/[0.05]"
+                >
+                  <QqAvatar src={r.avatar} alt={r.name} size={48} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[16px] font-medium">{r.name}</p>
+                    <p className="mt-0.5 truncate text-[13.5px] text-black/60 dark:text-white/60">{r.message}</p>
+                    <p className="mt-0.5 truncate text-[12.5px] text-black/35 dark:text-white/35">来源：{r.source || '好友验证消息'}</p>
+                  </div>
+                  {status === 'pending' ? (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      data-testid={`qq-req-accept-${r.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAccept(r);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation();
+                          onAccept(r);
+                        }
+                      }}
+                      className="shrink-0 rounded-[6px] border border-black/15 px-4 py-1.5 text-[14px] active:bg-black/5 dark:border-white/25"
+                    >
+                      同意
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-[13.5px] text-black/35 dark:text-white/35" data-testid={`qq-req-status-${r.name}`}>
+                      {status === 'rejected' ? '已拒绝' : '已同意'}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="h-2.5 bg-black/[0.035] dark:bg-white/[0.05]" aria-hidden="true" />
+
         {/* 可能想认识的人 */}
         <div className="flex items-center justify-between border-b border-black/[0.05] px-4 pb-2 pt-3 dark:border-white/[0.06]">
           <span className="text-[17px] font-semibold">可能想认识的人</span>
@@ -10352,8 +10532,112 @@ function NewFriendsPage({
           <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂时没有推荐，去「联系人」App 添加人物吧</p>
         )}
         {suggestions.map((c) => (
-          <AddPersonRow key={c.id} c={c} busy={adding === c.id} onAdd={() => void addFriend(c)} onOpen={() => onOpenChat(c)} />
+          <AddPersonRow key={c.id} c={c} busy={false} onAdd={() => onOpenApply(c)} onOpen={() => onOpenChat(c)} />
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 好友申请详情页（QQ 风格：对方留言/来源/同意/设为黑名单） ----------------
+
+function FriendReqDetailPage({
+  req,
+  contact,
+  onBack,
+  onAccept,
+  onReject,
+  onBlock,
+  onToast,
+}: {
+  req: FriendReqEntry;
+  /** 申请对应的联系人（被彻底删除时为 null：展示快照，同意按钮置灰） */
+  contact: ContactRecord | null;
+  onBack: () => void;
+  /** 同意申请：宿主恢复好友关系 + 状态流转 + 刷新 */
+  onAccept: (r: FriendReqEntry) => void;
+  /** 拒绝申请：AI 停止再申请 */
+  onReject: (r: FriendReqEntry) => void;
+  /** 设为黑名单 */
+  onBlock: (r: FriendReqEntry) => void;
+  onToast: (m: string) => void;
+}) {
+  const status = req.status ?? 'accepted';
+  const pending = status === 'pending';
+  return (
+    <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
+      {/* 顶栏：返回 + 好友申请 */}
+      <div className="relative flex h-12 shrink-0 items-center px-3">
+        <button type="button" aria-label="返回" data-testid="qq-reqdetail-back" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
+          <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+        </button>
+        <span className="absolute left-1/2 -translate-x-1/2 text-[17px] font-medium">好友申请</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4" data-testid="qq-reqdetail-body">
+        {/* 申请人卡片（头像 + 名字/QQ号） */}
+        <button
+          type="button"
+          onClick={() => onToast('查看资料暂未开放')}
+          className="flex w-full items-center gap-3 py-4 text-left active:opacity-70"
+        >
+          <QqAvatar src={req.avatar} alt={req.name} size={64} />
+          <span className="min-w-0 flex-1 truncate text-[19px] font-semibold">
+            {req.name}
+            {contact?.qqId ? `（${contact.qqId}）` : ''}
+          </span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+        </button>
+
+        <p className="pb-2 text-[13px] text-black/40 dark:text-white/40">对方留言</p>
+        <div className="flex items-start justify-between gap-3 rounded-[12px] bg-[#F2F3F5] px-3.5 py-3.5 dark:bg-white/[0.08]">
+          <p className="min-w-0 break-words text-[15px] leading-[1.6]">{req.message || '请求加为好友'}</p>
+          <button type="button" onClick={() => onToast('回复暂未开放')} className="shrink-0 text-[14px] active:opacity-60" style={{ color: QQ_BLUE }}>
+            回复
+          </button>
+        </div>
+
+        <p className="pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">来源</p>
+        <div className="rounded-[12px] bg-[#F2F3F5] px-3.5 py-3.5 text-[15px] dark:bg-white/[0.08]">{req.source || '好友验证消息'}</div>
+
+        {/* 同意 / 拒绝 / 状态 */}
+        {pending ? (
+          <div className="mb-6 mt-8 flex flex-col gap-2.5">
+            <button
+              type="button"
+              data-testid="qq-reqdetail-accept"
+              onClick={() => onAccept(req)}
+              disabled={!contact}
+              className="h-12 w-full rounded-full text-[16px] font-medium text-white active:brightness-95 disabled:opacity-50"
+              style={{ backgroundColor: QQ_BLUE }}
+            >
+              同意
+            </button>
+            <button
+              type="button"
+              data-testid="qq-reqdetail-reject"
+              onClick={() => onReject(req)}
+              className="h-12 w-full rounded-full bg-black/[0.05] text-[16px] text-red-500 active:opacity-70 dark:bg-white/[0.08]"
+            >
+              拒绝
+            </button>
+          </div>
+        ) : (
+          <p className="mt-8 text-center text-[15px] text-black/35 dark:text-white/35" data-testid="qq-reqdetail-done">
+            {status === 'rejected' ? '已拒绝该申请' : '已同意'}
+          </p>
+        )}
+      </div>
+
+      {/* 底部：设为黑名单 | 举报用户 */}
+      <div className="flex shrink-0 items-center justify-center gap-4 pb-[30px] pt-3">
+        <button type="button" data-testid="qq-reqdetail-block" onClick={() => onBlock(req)} className="text-[15px] active:opacity-60" style={{ color: QQ_BLUE }}>
+          设为黑名单
+        </button>
+        <span className="h-4 w-px bg-black/15 dark:bg-white/20" aria-hidden="true" />
+        <button type="button" onClick={() => onToast('举报暂未开放')} className="text-[15px] active:opacity-60" style={{ color: QQ_BLUE }}>
+          举报用户
+        </button>
       </div>
     </div>
   );
@@ -10491,14 +10775,18 @@ function ZonePage({
 
   /** 动态过滤：TA 的空间（owner）→ 只看 TA 发的；我的空间（mineOnly）→ 只看我发的；默认全量。
    *  头像实时读取：动态只存身份引用（peerId），渲染时经 liveAvatarOf 实时取联系人当前头像
-   *  （换头像立即同步；QQ/微信共用 liveAvatarOf；legacy 无 peerId 数据按名字兜底） */
+   *  （换头像立即同步；QQ/微信共用 liveAvatarOf；legacy 无 peerId 数据按名字兜底）。
+   *  删好友门控：被删好友（qq 端 friend-del 状态）的动态隐藏（数据保留，加回后恢复） */
   const posts: ZonePost[] = useMemo(() => {
     const all = [...userPosts, ...ZONE_SEEDS];
     const scoped = owner
       ? all.filter((p) => p.authorName === displayNameOf(owner) || p.authorName === owner.name)
       : mineOnly
         ? all.filter((p) => p.authorName === me.name)
-        : all;
+        : all.filter((p) => {
+            const hit = contactByRef({ peerId: p.peerId, name: p.authorName }, contacts);
+            return !(hit && hit.kind !== 'user' && isFriendDeleted('qq', hit.id));
+          });
     return scoped.map((p) => ({ ...p, avatar: liveAvatarOf(p.avatar, { peerId: p.peerId, name: p.authorName }, contacts, 'qq') }));
   }, [userPosts, owner, mineOnly, me.name, contacts]);
 
@@ -13104,6 +13392,8 @@ type MainRoute =
   | { page: 'friend-profile'; contactId: string }
   | { page: 'addfriend' }
   | { page: 'newfriends' }
+  | { page: 'apply-friend'; contactId: string }
+  | { page: 'friend-req'; reqId: string }
   | { page: 'zone'; /** mine = 只看自己发的动态（个人资料页 QQ空间进入） */ scope?: 'mine'; /** 从哪进入（决定返回键去向） */ from?: 'profile' }
   | { page: 'zone-peer'; contactId: string }
   | { page: 'zone-compose'; /** 与 zone 同源（写说说返回时保留「我的空间」语境） */ scope?: 'mine'; from?: 'profile' }
@@ -13157,6 +13447,94 @@ function MainScreen({
   useEffect(() => () => {
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
   }, []);
+
+  // ---------------- 好友通知 / 删除联系人 / 申请添加朋友（与微信共用 friend-state 状态机） ----------------
+  /** 好友通知列表（AI 加回申请 + 手动添加记录；friend-state 落盘广播订阅刷新） */
+  const [qqReqs, setQqReqs] = useState<FriendReqEntry[]>(() => loadFriendReqs('qq'));
+  useEffect(() => subscribeFriendReqs(() => setQqReqs(loadFriendReqs('qq'))), []);
+  /** 待确认删除的联系人（弹 FriendDeleteConfirmDialog；after = 确认后关闭的页面栈） */
+  const [delTarget, setDelTarget] = useState<{ contact: ContactRecord; after: () => void } | null>(null);
+
+  const openDeleteConfirm = useCallback(
+    (c: ContactRecord, after: () => void) => {
+      setDelTarget({ contact: c, after });
+    },
+    []
+  );
+
+  /** 确认删除联系人：删除好友关系（记录/记忆/空间/通话保留不可见，AI 稍后可能申请加回） */
+  const confirmRemoveFriend = useCallback(async () => {
+    if (!delTarget) return;
+    const { contact, after } = delTarget;
+    setDelTarget(null);
+    after();
+    await removeFriendByUser('qq', contact.id);
+    await refreshContacts();
+    setQqReqs(loadFriendReqs('qq'));
+    showToast(`已删除「${displayNameOf(contact)}」`);
+  }, [delTarget, refreshContacts, showToast]);
+
+  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「好友通知」+ 刷新 */
+  const handleApplySent = useCallback(
+    async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }) => {
+      try {
+        if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
+        await restoreFriendship('qq', target.id); // 未删过 = friendQq=true；删过 = 清删除状态并恢复好友
+      } catch {
+        showToast('添加失败，请重试');
+        return;
+      }
+      addFriendReq('qq', {
+        id: genId(),
+        contactId: target.id,
+        name: displayNameOf(target),
+        avatar: target.avatar,
+        message: payload.greeting,
+        time: Date.now(),
+        status: 'accepted',
+        source: SOURCE_SEARCH_QQ,
+        fromChar: false,
+        extras: payload.extras,
+      });
+      setQqReqs(loadFriendReqs('qq'));
+      await refreshContacts();
+      showToast('已发送添加申请');
+    },
+    [refreshContacts, showToast]
+  );
+
+  /** 同意好友申请（AI 加回申请）：恢复好友关系 + 状态流转 + 刷新 */
+  const acceptFriendReqAction = useCallback(
+    async (r: FriendReqEntry) => {
+      const cid = r.contactId ?? r.id;
+      await restoreFriendship('qq', cid);
+      setFriendReqStatus('qq', r.id, 'accepted');
+      setQqReqs(loadFriendReqs('qq'));
+      await refreshContacts();
+      showToast(`已添加「${r.name}」`);
+    },
+    [refreshContacts, showToast]
+  );
+
+  /** 拒绝好友申请：AI 彻底停止申请（重新加回好友后重置） */
+  const rejectFriendReqAction = useCallback(
+    (r: FriendReqEntry) => {
+      rejectFriendReq('qq', r.id);
+      setQqReqs(loadFriendReqs('qq'));
+      showToast(`已拒绝「${r.name}」的申请`);
+    },
+    [showToast]
+  );
+
+  /** 好友申请详情「设为黑名单」：写双向拉黑 byUser（拦截对方消息，走既有拉黑链路） */
+  const blockFriendReqAction = useCallback(
+    (r: FriendReqEntry) => {
+      const cid = r.contactId ?? r.id;
+      setUserBlock('qq', cid, true);
+      showToast(`已将「${r.name}」设为黑名单`);
+    },
+    [showToast]
+  );
 
   const ownerNameOf = useCallback(
     (c: ContactRecord): string | null => {
@@ -13221,13 +13599,19 @@ function MainScreen({
   // ---------------- 互动消息（空间消息：赞和推/评论和@/转发/官方） ----------------
   const [qqNotices, setQqNotices] = useState<MomentNotice[]>(() => listMomentNotices('qq'));
   const refreshQqNotices = useCallback(() => setQqNotices(listMomentNotices('qq')), []);
-  /** 互动消息头像实时读取（actorAvatar 快照 → 联系人在就显示当前头像；换头像立即同步） */
+  /** 互动消息头像实时读取（actorAvatar 快照 → 联系人在就显示当前头像；换头像立即同步）；
+   *  被删好友（qq 端 friend-del 状态）的互动同口径隐藏（数据保留，加回后恢复） */
   const qqNoticesLive = useMemo(
     () =>
-      qqNotices.map((n) => ({
-        ...n,
-        actorAvatar: liveAvatarOf(n.actorAvatar, { peerId: n.actorPeerId, name: n.actorName }, contacts, 'qq'),
-      })),
+      qqNotices
+        .filter((n) => {
+          const hit = contactByRef({ peerId: n.actorPeerId, name: n.actorName }, contacts);
+          return !(hit && hit.kind !== 'user' && isFriendDeleted('qq', hit.id));
+        })
+        .map((n) => ({
+          ...n,
+          actorAvatar: liveAvatarOf(n.actorAvatar, { peerId: n.actorPeerId, name: n.actorName }, contacts, 'qq'),
+        })),
     [qqNotices, contacts]
   );
   /** 气泡角标：未读条数 + 最新一条消息人的头像（「1条新消息」气泡展示用） */
@@ -13347,6 +13731,15 @@ function MainScreen({
           }}
           refreshContacts={refreshContacts}
           onToast={showToast}
+          onDeleteContact={
+            chatPeer.kind === 'user'
+              ? undefined
+              : () =>
+                  openDeleteConfirm(chatPeer, () => {
+                    // 删除后聊天页关闭回列表（会话随好友关系消失）；历史记录保留不可见
+                    openTabs('消息');
+                  })
+          }
         />
       ) : route.page === 'bond' && chatPeer ? (
         <FriendBondPage
@@ -13365,6 +13758,14 @@ function MainScreen({
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
           onOpenZone={() => setRoute({ page: 'zone-peer', contactId: chatPeer.id })}
           onToast={showToast}
+          onDeleteContact={
+            chatPeer.kind === 'user'
+              ? undefined
+              : () =>
+                  openDeleteConfirm(chatPeer, () => {
+                    openTabs('联系人');
+                  })
+          }
         />
       ) : route.page === 'search' ? (
         <QqSearchPage
@@ -13393,18 +13794,77 @@ function MainScreen({
           me={me}
           contacts={contacts}
           onBack={() => openTabs('联系人')}
-          onContactsChanged={() => void refreshContacts()}
+          onOpenApply={(c) => setRoute({ page: 'apply-friend', contactId: c.id })}
           onOpenChat={openChatOf}
           onToast={showToast}
         />
+      ) : route.page === 'apply-friend' ? (
+        (() => {
+          const target = contacts.find((c) => c.id === route.contactId) ?? null;
+          if (!target) {
+            return (
+              <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
+                <div className="relative flex h-12 shrink-0 items-center px-3">
+                  <button type="button" aria-label="返回" onClick={() => openTabs('联系人')} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
+                    <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+                  </button>
+                </div>
+                <p className="mt-16 text-center text-[13px] text-black/30 dark:text-white/30">该联系人不存在</p>
+              </div>
+            );
+          }
+          return (
+            <ApplyFriendPage
+              me={me}
+              target={target}
+              onBack={() => setRoute({ page: 'addfriend' })}
+              onSend={(payload) => {
+                void handleApplySent(target, payload);
+                setRoute({ page: 'addfriend' });
+              }}
+              onToast={showToast}
+            />
+          );
+        })()
+      ) : route.page === 'friend-req' ? (
+        (() => {
+          const req = qqReqs.find((r) => r.id === route.reqId) ?? null;
+          if (!req) {
+            return (
+              <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
+                <div className="relative flex h-12 shrink-0 items-center px-3">
+                  <button type="button" aria-label="返回" onClick={() => openTabs('联系人')} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
+                    <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+                  </button>
+                </div>
+                <p className="mt-16 text-center text-[13px] text-black/30 dark:text-white/30">该申请不存在或已被处理</p>
+              </div>
+            );
+          }
+          const reqContact = contacts.find((c) => c.id === (req.contactId ?? req.id)) ?? null;
+          return (
+            <FriendReqDetailPage
+              req={req}
+              contact={reqContact}
+              onBack={() => setRoute({ page: 'newfriends' })}
+              onAccept={(r) => void acceptFriendReqAction(r)}
+              onReject={rejectFriendReqAction}
+              onBlock={blockFriendReqAction}
+              onToast={showToast}
+            />
+          );
+        })()
       ) : route.page === 'newfriends' ? (
         <NewFriendsPage
           me={me}
           contacts={contacts}
+          reqs={qqReqs}
           onBack={() => openTabs('联系人')}
           onOpenAdd={() => setRoute({ page: 'addfriend' })}
-          onContactsChanged={() => void refreshContacts()}
           onOpenChat={openChatOf}
+          onOpenApply={(c) => setRoute({ page: 'apply-friend', contactId: c.id })}
+          onOpenReq={(r) => setRoute({ page: 'friend-req', reqId: r.id })}
+          onAccept={(r) => void acceptFriendReqAction(r)}
           onToast={showToast}
         />
       ) : route.page === 'zone' ? (
@@ -13652,6 +14112,16 @@ function MainScreen({
       )}
 
       {toast && <QqToast text={toast} />}
+
+      {/* 删除联系人二次确认（聊天设置 / 好友资料页共用；明确告知删什么/留什么） */}
+      {delTarget && (
+        <FriendDeleteConfirmDialog
+          variant="qq"
+          peerName={displayNameOf(delTarget.contact)}
+          onCancel={() => setDelTarget(null)}
+          onConfirm={() => void confirmRemoveFriend()}
+        />
+      )}
     </div>
   );
 }
@@ -13820,6 +14290,11 @@ export default function QQApp() {
   useEffect(() => {
     setGroupSocialContacts(contacts);
   }, [contacts]);
+
+  // 删好友后 AI 主动申请加回：定时器不跨刷新，QQ 挂载时扫描删除状态按冷却补跑
+  useEffect(() => {
+    runFriendReqCatchUp();
+  }, []);
 
   // 启动：拉联系人 + 恢复登录态（联系人被删则自动登出；QQ 内显示昵称，昵称优先于真实名字）
   useEffect(() => {

@@ -162,6 +162,7 @@ export function ChatSettingsPage({
   voiceSummary,
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice,
+  onDeleteContact,
 }: {
   variant: ChatSettingsVariant;
   /** 标题：微信「聊天信息」/ QQ「聊天设置」 */
@@ -223,6 +224,8 @@ export function ChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice?: () => void;
+  /** 删除联系人（删除好友关系：列表移除/聊天关闭；记录/记忆/朋友圈/通话保留但不可见，加回恢复）。不传 = 隐藏入口 */
+  onDeleteContact?: () => void;
 }) {
   const wx = variant === 'wx';
 
@@ -552,6 +555,20 @@ export function ChatSettingsPage({
           </>
         )}
 
+        {/* 删除联系人（微信/QQ 单聊；删除好友关系而非删联系人本体）：二次确认弹窗由宿主层渲染 */}
+        {onDeleteContact && (
+          <div className={`${cardCls} mt-3 overflow-hidden`}>
+            <button
+              type="button"
+              data-testid={`${testPrefix}-settings-delete-contact`}
+              onClick={onDeleteContact}
+              className="flex w-full items-center justify-center px-4 py-3 text-[16px] text-red-500 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+            >
+              删除联系人
+            </button>
+          </div>
+        )}
+
         {/* 备注编辑弹窗 */}
         {remarkOpen && (
           <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setRemarkOpen(false)}>
@@ -590,6 +607,61 @@ export function ChatSettingsPage({
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** 删除联系人二次确认弹窗（微信/QQ 共用，variant 区分主题）：
+ *  明确告知「会删除什么（好友关系）」与「会保留什么（聊天记录/记忆/朋友圈动态与互动/通话记录，
+ *  不可见但保留；重新加回好友后恢复可见）」；确认后回调 onConfirm（宿主执行 removeFriendByUser） */
+export function FriendDeleteConfirmDialog({
+  variant,
+  peerName,
+  onCancel,
+  onConfirm,
+}: {
+  variant: ChatSettingsVariant;
+  peerName: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const wx = variant === 'wx';
+  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const appLabel = wx ? '微信' : 'QQ';
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-8" data-testid={`${variant}-delete-contact-dialog`} onClick={onCancel}>
+      <div className={`w-full max-w-[320px] ${cardCls} p-5`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`删除联系人${peerName}`}>
+        <p className="text-[16px] font-medium">删除联系人</p>
+        <p className="mt-2.5 text-[13.5px] leading-[1.7] text-black/70 dark:text-white/70">
+          将删除与「{peerName}」的好友关系：TA 将从你的{appLabel}好友列表中移除，聊天界面关闭。
+        </p>
+        <p className="mt-2 text-[13.5px] leading-[1.7] text-black/70 dark:text-white/70">
+          以下数据会保留（删除后不可见）：
+          <br />· 聊天记录
+          <br />· 记忆
+          <br />· 朋友圈动态与互动
+          <br />· 通话记录
+        </p>
+        <p className="mt-2 text-[13.5px] leading-[1.7] text-black/70 dark:text-white/70">重新加回好友后，这些数据将恢复可见。对方可能会申请重新加你为好友。</p>
+        <div className="mt-4 flex gap-2.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid={`${variant}-delete-contact-cancel`}
+            className="h-10 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-80 dark:bg-white/10"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            data-testid={`${variant}-delete-contact-confirm`}
+            className="h-10 flex-1 rounded-[8px] bg-red-500 text-[14px] font-medium text-white active:opacity-80"
+          >
+            删除
+          </button>
+        </div>
       </div>
     </div>
   );

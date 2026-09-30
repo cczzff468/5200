@@ -54,6 +54,7 @@ import { BackToHome } from '@/components/ios/BackToHome';
 import { DefaultAvatar } from './default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
 import { listContacts } from '@/lib/ios/contacts-store';
+import { isPersonGoneEverywhere } from '@/lib/ios/friend-state';
 import { getGroup } from '@/lib/ios/groups';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from '@/lib/ios/store';
@@ -172,7 +173,9 @@ const INK =
 /** 每联系人记忆详情（四 Tab） */
 type MemTab = 'frag' | 'ltm' | 'long' | 'set';
 
-/** 记忆库只管理「别人」的记忆：user 是机主本人，不需要给自己记记忆（列表/统计一并排除） */
+/** 记忆库只管理「别人」的记忆：user 是机主本人，不需要给自己记记忆（列表/统计一并排除）。
+ *  删好友可见性门控：被删好友（微信/QQ 两端都不再是好友且有过删除）的记忆条目隐藏——
+ *  记忆数据本体保留，重新加回好友后自动恢复（isPersonGoneEverywhere 见 friend-state.ts） */
 function visibleMemContacts(list: ContactRecord[]): ContactRecord[] {
   return list.filter((c) => c.kind !== 'user');
 }
@@ -186,11 +189,17 @@ export default function MemoryBankApp() {
   /** 机主真实名字（联系人 App 中 kind='user' 卡片的 name）：记忆视角统一用它指代用户 */
   const [ownerName, setOwnerName] = useState('');
 
-  // 加载联系人（排除 user=机主本人，不给自己记记忆；另取机主卡片真实名字供视角统一用）
+  // 加载联系人（排除 user=机主本人，不给自己记记忆；另取机主卡片真实名字供视角统一用；
+  // 被删好友——微信/QQ 两端都不是好友且有过删除——的记忆条目隐藏，数据保留，加回好友恢复）
   const reload = useCallback(() => {
     return listContacts()
-      .then((list) => {
-        setContacts(visibleMemContacts(list));
+      .then(async (list) => {
+        const kept: ContactRecord[] = [];
+        for (const c of visibleMemContacts(list)) {
+          if (await isPersonGoneEverywhere(c.id)) continue;
+          kept.push(c);
+        }
+        setContacts(kept);
         setOwnerName(list.find((c) => c.kind === 'user')?.name?.trim() ?? '');
       })
       .catch(() => undefined);

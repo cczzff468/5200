@@ -64,6 +64,7 @@ import {
   type VadHandle,
 } from '@/lib/ios/vad';
 import { chatCallExtraRules, HANGUP_MARK_RE } from '@/lib/ios/chat-call';
+import { isPersonGoneEverywhere } from '@/lib/ios/friend-state';
 import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { callOutcomeOf } from '@/lib/ios/call-outcome';
@@ -3874,7 +3875,14 @@ export default function PhoneApp() {
       }
       try {
         const all = await localDB.getAll('call-logs');
-        if (alive) setLogs(all.sort((a, b) => b.createdAt - a.createdAt));
+        // 删好友可见性门控：被删好友（微信/QQ 两端都不再是好友且有过删除）的通话记录隐藏，
+        // 数据本体保留在 IndexedDB，重新加回好友后自动恢复显示
+        const visible: CallLogRecord[] = [];
+        for (const l of all) {
+          if (l.contactId && (await isPersonGoneEverywhere(l.contactId))) continue;
+          visible.push(l);
+        }
+        if (alive) setLogs(visible.sort((a, b) => b.createdAt - a.createdAt));
       } catch {
         if (alive) setLogs([]);
       }
