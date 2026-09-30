@@ -6,9 +6,9 @@
  * - 每个会话独立保存开关（sessionKey = wx:<contactId> / qq:<contactId> / sms:<storageKey> /
  *   wx:group:<groupId> / qq:group:<groupId>），localStorage 单键 JSON map 持久化
  *   （与 @/lib/sticker-toggle 同款），开关变化派发 window 事件供订阅方即时刷新；
- * - 默认开启：AI 可按【动作描写格式】规则用一对星号 *...* 包裹动作/表情/情景描写，
+ * - 默认关闭：AI 回复里的动作描写自动过滤（提示词禁令 + 渲染层硬剥离双保险），不残留半截描写与星号符号；
+ * - 开启（设置页手动打开）：AI 可按【动作描写格式】规则用一对星号 *...* 包裹动作/表情/情景描写，
  *   前端解析后把描写从气泡文字里剥离出来，以灰色小字独立成行居中显示（正文仍在气泡里）；
- * - 关闭：AI 回复里的动作描写自动过滤（提示词禁令 + 渲染层硬剥离双保险），不残留半截描写与星号符号；
  * - 解析失败（星号不成对、**加粗** 等 markdown 片段）时按普通文字原样显示，不丢失内容；
  * - 开关只作用于「对方（AI）发来的纯文本消息」的显示层：用户自己的消息、语音转写、引用、
  *   转发、收藏、翻译、记忆与上下文均保持原文（带星号），不影响任何既有链路。
@@ -45,16 +45,16 @@ function saveBoolMap(map: Record<string, boolean>): void {
   }
 }
 
-/** 读取某会话的动作描写开关（未设置时默认开启：动作描写以居中灰字展示） */
+/** 读取某会话的动作描写开关（未设置时默认关闭：动作描写自动过滤） */
 export function getActionDescOn(sessionKey: string): boolean {
-  return loadBoolMap()[sessionKey] !== false;
+  return loadBoolMap()[sessionKey] === true;
 }
 
 /** 保存某会话的动作描写开关（持久化到 localStorage + 派发变更事件，订阅方即时刷新渲染） */
 export function saveActionDescOn(sessionKey: string, on: boolean): void {
   const map = loadBoolMap();
-  if (on) delete map[sessionKey];
-  else map[sessionKey] = false;
+  if (on) map[sessionKey] = true;
+  else delete map[sessionKey];
   saveBoolMap(map);
   try {
     window.dispatchEvent(new CustomEvent(EVT, { detail: { sessionKey, on } }));
@@ -81,8 +81,8 @@ export function useActionDescOn(sessionKey: string): boolean {
   return useSyncExternalStore(
     subscribeActionDesc,
     () => getActionDescOn(sessionKey),
-    // SSR 阶段无 localStorage：与默认态（开启）保持一致
-    () => true,
+    // SSR 阶段无 localStorage：与默认态（关闭）保持一致
+    () => false,
   );
 }
 

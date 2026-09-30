@@ -370,7 +370,7 @@ interface QQMsg {
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
   gcard?: GroupCardData;
-  /** 好友添加过程标记（同 WxMsg.fr）：apply = 用户验证消息（标注「以上为验证消息」）/ greet = AI 验证消息（标注「以上是打招呼的内容」）/ added = 加好友成功提示（kind='sys' 携带文案，居中灰字） */
+  /** 好友添加过程标记（同 WxMsg.fr）：apply = 用户验证消息（胶囊标注「以上为验证消息」）/ greet = AI 验证消息（胶囊标注「以上是打招呼的内容」）/ added = 加好友成功提示（kind='sys' 携带文案，落入普通 sys 胶囊分支与其他系统提示同款包裹） */
   fr?: 'apply' | 'greet' | 'added';
 }
 
@@ -5091,9 +5091,6 @@ function ChatPage({
                 </div>
               ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
-              ) : m.kind === 'sys' && m.sys && m.fr === 'added' ? (
-                /* 加好友成功提示（截图样式：居中纯灰字，无胶囊边框） */
-                <p data-testid="qq-fr-added" className="mb-3 text-center text-[13px] leading-relaxed text-black/40 dark:text-white/40">{m.sys.text}</p>
               ) : m.kind === 'sys' && m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
                 <div data-testid="qq-sys-row" className="mb-3 text-center">
@@ -5350,11 +5347,13 @@ function ChatPage({
               )}
             {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
             {blockedLineOf(m)}
-            {/* 好友验证消息标注（截图样式：气泡下方居中灰字；验证消息独立保留在聊天记录里） */}
+            {/* 好友验证消息标注（与系统提示同款胶囊：气泡下方居中；验证消息独立保留在聊天记录里） */}
             {m.fr === 'apply' || m.fr === 'greet' ? (
-              <p data-testid="qq-fr-note" className="mb-2 text-center text-[12.5px] text-black/35 dark:text-white/35">
-                {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
-              </p>
+              <div data-testid="qq-fr-note" className="mb-2 text-center">
+                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
+                </span>
+              </div>
             ) : null}
             </div>
           );

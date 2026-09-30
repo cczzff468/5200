@@ -379,9 +379,9 @@ interface WxMsg {
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
   call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
-  /** 好友添加过程标记：apply = 用户发出的验证消息（气泡下标注「以上为验证消息」）；
-   *  greet = AI 发起的验证消息（气泡下标注「以上是打招呼的内容」）；
-   *  added = 加好友成功提示（kind='sys' 携带文案，渲染为居中灰字；不进 AI 上下文走 sys 既有口径） */
+  /** 好友添加过程标记：apply = 用户发出的验证消息（气泡下胶囊标注「以上为验证消息」）；
+   *  greet = AI 发起的验证消息（气泡下胶囊标注「以上是打招呼的内容」）；
+   *  added = 加好友成功提示（kind='sys' 携带文案，落入普通 sys 胶囊分支与其他系统提示同款包裹；不进 AI 上下文走 sys 既有口径） */
   fr?: 'apply' | 'greet' | 'added';
 }
 
@@ -6730,9 +6730,6 @@ function ChatPage({
               </div>
             ) : m.kind === 'notice' && m.notice ? (
               <WxNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
-            ) : m.kind === 'sys' && m.sys && m.fr === 'added' ? (
-              /* 加好友成功提示（截图样式：居中纯灰字，无胶囊边框） */
-              <p data-testid="wx-fr-added" className="py-1.5 text-center text-[13px] leading-relaxed text-black/40 dark:text-white/40">{m.sys.text}</p>
             ) : m.kind === 'sys' && m.sys ? (
               /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
               <div data-testid="wx-sys-row" className="py-1.5 text-center">
@@ -6998,11 +6995,13 @@ function ChatPage({
             )}
             {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
             {blockedLineOf(m)}
-            {/* 好友验证消息标注（截图样式：气泡下方居中灰字；验证消息独立保留在聊天记录里） */}
+            {/* 好友验证消息标注（与系统提示同款胶囊：气泡下方居中；验证消息独立保留在聊天记录里） */}
             {m.fr === 'apply' || m.fr === 'greet' ? (
-              <p data-testid="wx-fr-note" className="py-1 text-center text-[12.5px] text-black/35 dark:text-white/35">
-                {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
-              </p>
+              <div data-testid="wx-fr-note" className="py-1 text-center">
+                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
+                </span>
+              </div>
             ) : null}
           </div>
           );
