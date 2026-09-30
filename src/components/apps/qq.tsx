@@ -767,6 +767,8 @@ interface ZonePost {
   id: string;
   authorName: string;
   avatar: string | null;
+  /** 角色发的动态 = 该角色联系人 id（引擎写入；用户帖/legacy 缺省）——头像实时解析的身份引用 */
+  peerId?: string | null;
   content: string;
   time: string;
   likedBy: string[];
@@ -10488,7 +10490,8 @@ function ZonePage({
   }, [owner, me.name]);
 
   /** 动态过滤：TA 的空间（owner）→ 只看 TA 发的；我的空间（mineOnly）→ 只看我发的；默认全量。
-   *  头像实时读取：历史动态存的头像快照 → 联系人在就显示当前头像（换头像立即同步；QQ/微信共用 liveAvatarOf） */
+   *  头像实时读取：动态只存身份引用（peerId），渲染时经 liveAvatarOf 实时取联系人当前头像
+   *  （换头像立即同步；QQ/微信共用 liveAvatarOf；legacy 无 peerId 数据按名字兜底） */
   const posts: ZonePost[] = useMemo(() => {
     const all = [...userPosts, ...ZONE_SEEDS];
     const scoped = owner
@@ -10496,7 +10499,7 @@ function ZonePage({
       : mineOnly
         ? all.filter((p) => p.authorName === me.name)
         : all;
-    return scoped.map((p) => ({ ...p, avatar: liveAvatarOf(p.avatar, { name: p.authorName }, contacts, 'qq') }));
+    return scoped.map((p) => ({ ...p, avatar: liveAvatarOf(p.avatar, { peerId: p.peerId, name: p.authorName }, contacts, 'qq') }));
   }, [userPosts, owner, mineOnly, me.name, contacts]);
 
   /** 空间页头展示的用户（TA 的空间换头像/名字） */
@@ -13884,6 +13887,14 @@ export default function QQApp() {
     const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
     setContacts(withDisplayNames(raw));
   }, []);
+
+  // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，渲染端 liveAvatarOf 实时解析；
+  // 其他 App（联系人/微信/信息/电话）改了头像时刷新本端联系人缓存，打开中的空间/聊天页立刻显示新头像
+  useEffect(() => {
+    const fn = () => void refreshContacts();
+    window.addEventListener('contact-avatar-changed', fn);
+    return () => window.removeEventListener('contact-avatar-changed', fn);
+  }, [refreshContacts]);
 
   // 个签等本地资料更新（同步到 QQUser，落库在调用方完成）
   const handlePatchUser = useCallback((patch: Partial<QQUser>) => {

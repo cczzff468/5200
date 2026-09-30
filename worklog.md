@@ -12181,3 +12181,24 @@ Stage Summary:
   切分端「一句一条、动作独立、稳定边界、不设硬上限」；
 - 用户可见效果：多条回复按句独立成气泡、节奏均匀；动作描写单独成行；语音/文字/卡片不混条；
   关页接力的整段回复也按会话条数正常分条；分段结果随消息持久化，重启保留。
+
+---
+Task ID: avatar-ref-1
+Agent: 主协调者 (Z.ai Code)
+Task: 换头像后朋友圈历史动态头像不更新——采用「引用式架构」（更简单/省空间/不易错）重构头像链路
+
+Work Log:
+- 用户问「有没有更好，更简单，更省空间，更不容易出错的方法」→ 采纳引用式架构：身份引用（peerId）已存于每条动态/评论/互动消息，头像快照是纯冗余；渲染端 liveAvatarOf（上一轮已建）实时解析即可，无需任何数据面同步。
+- contacts.ts：抽出 contactByRef 共享身份查找（peerId 精确命中优先、legacy 名字兜底），liveAvatarOf 重构复用（渲染与瘦身同一归属口径，杜绝口径漂移）。
+- moments.ts 写入端（4 处）：addCharMomentPost 的 post.avatar、转发/点赞/评论互动消息的 actorAvatar 一律落 null（机主本人动态与新的朋友通知保留快照——机主/陌生人不是联系人，快照即渲染源）。
+- moments.ts：删除整套「头像快照批量同步」机制（avatarOwnerMatches + syncAvatarSnapshotsInPosts/InNotices + syncMomentAvatarSnapshots + syncAllMomentAvatarSnapshots ≈ 100 行），替换为 stripMomentAvatarSnapshots() 存量瘦身（启动幂等执行一次：能解析到在册联系人的快照清成 null；联系人已删除的保留快照宁旧勿丢；官方/系统消息跳过）。
+- 删除 src/lib/avatar-sync.ts（事件监听增量同步器，90 行）；MomentsScheduler 改调 stripMomentAvatarSnapshots；contacts-store 的 contact-avatar-changed 事件保留改义——不再驱动快照改写，改为「各 App 刷新联系人缓存」的即时刷新口。
+- 四端接事件监听：WeChatApp(reloadContacts) / QQApp(refreshContacts) / 信息 chat.tsx(loadContacts) / 电话 phone.tsx(listContactsFor('phone'))——其他 App 换头像时打开中的页面立刻显示新头像。
+- qq.tsx：ZonePost 类型补 peerId 字段；空间动态实时解析 ref 由 {name} 补全为 {peerId, name}（peerId 精确命中，避免同名误配）。
+- 验证：npx tsc --noEmit 0 错；bun run lint 0 错；Agent Browser E2E——联系人 App 里把小雪头像 橙→紫：微信会话列表/聊天气泡（AI 语音回复）/朋友圈 3 条历史动态/互动消息收件箱 2 条/通知浮层 全部即时变紫（跨 App 换头像，微信未重挂）；刷新页面后依然紫（持久化）；QQ 联系人列表与空间 2 条历史动态同步紫（App 隔离回退全局）；IndexedDB 检查 wxPosts×3 + wxNotices×2 + qqPosts×2 的 avatar 快照全部已瘦身为 0 字节、peerId 完整保留；发消息冒烟 AI 回复正常；dev.log 无错误。
+
+Stage Summary:
+- 头像链路最终形态（引用式单一事实源）：头像只在联系人资料存一份（Contact.avatar 全局默认 + avatars 按 App 槽位），所有展示位（聊天/群聊/朋友圈动态/评论/互动消息/通话/联系人列表/新的朋友）只存 peerId 身份引用，渲染时经 avatarFor/liveAvatarOf 实时解析；
+- 换头像 = 只写联系人一处 → 全部位置结构性自动同步（无事件依赖、无批量改写、无启动校准），跨 App 即时刷新靠四端 contact-avatar-changed 监听；
+- 省空间：新动态/互动消息 0 头像字节；存量快照启动自动瘦身（单张最大 400KB），联系人已删除者保留快照兜底；
+- 删码 190+ 行（avatar-sync.ts 全文件 + moments.ts 同步四函数），换头像数据面从此零维护。

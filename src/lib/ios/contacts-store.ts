@@ -300,9 +300,9 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
 
   await localDB.put('contacts', next);
 
-  // 头像变化 → 广播事件：avatar-sync 模块监听后把各 App 存储里的历史头像快照
-  //（朋友圈动态/互动消息/新的朋友通知等）批量改写为新头像并广播 moments-changed，
-  // 让朋友圈/空间页面即时刷新（渲染端另有 liveAvatarOf 实时读取兜底）。
+  // 头像变化 → 广播事件（引用式架构的即时刷新口）：各 App（微信/QQ/信息/电话）监听后
+  // 刷新自己的联系人缓存，渲染端 liveAvatarOf/avatarFor 实时解析 → 打开中的页面立刻显示新头像。
+  // 头像只在联系人资料存一份，历史动态/互动消息只存 peerId 身份引用，无需任何快照同步。
   const globalAvatarChanged = 'avatar' in patch && (next.avatar ?? null) !== (existing.avatar ?? null);
   const slotAvatarChanged =
     'avatars' in patch && JSON.stringify(next.avatars ?? null) !== JSON.stringify(existing.avatars ?? null);

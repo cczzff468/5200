@@ -3764,6 +3764,17 @@ export default function PhoneApp() {
   const [logs, setLogs] = useState<CallLogRecord[] | null>(null);
   const [voicemails, setVoicemails] = useState<VoicemailRecord[] | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
+  // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，通话记录/通讯录/详情
+  // 渲染端 avatarFor 实时解析；其他 App（联系人/微信/QQ/信息）改了头像时刷新本端联系人缓存
+  useEffect(() => {
+    const fn = () => {
+      void listContactsFor('phone')
+        .then((all) => setContacts(all.filter((c) => c.kind === 'user' || c.isFriend)))
+        .catch(() => {});
+    };
+    window.addEventListener('contact-avatar-changed', fn);
+    return () => window.removeEventListener('contact-avatar-changed', fn);
+  }, []);
   const [callTarget, setCallTarget] = useState<CallTarget | null>(null);
   // #8 最新通话目标（consumePendingAnswer 判断「通话中收到新来电」用；渲染期同步，同 runTurnRef 模式）
   const callTargetRef = useRef<CallTarget | null>(null);

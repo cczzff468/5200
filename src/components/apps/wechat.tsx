@@ -11281,6 +11281,14 @@ export default function WeChatApp() {
     setContacts(list);
   }, [loadContacts]);
 
+  // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，渲染端 liveAvatarOf 实时解析；
+  // 其他 App（联系人/信息/电话/QQ）改了头像时刷新本端联系人缓存，打开中的朋友圈/聊天页立刻显示新头像
+  useEffect(() => {
+    const fn = () => void reloadContacts();
+    window.addEventListener('contact-avatar-changed', fn);
+    return () => window.removeEventListener('contact-avatar-changed', fn);
+  }, [reloadContacts]);
+
   // 启动：拉联系人 + 恢复登录态（联系人被删则自动登出）
   useEffect(() => {
     let alive = true;

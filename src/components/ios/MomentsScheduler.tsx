@@ -12,10 +12,9 @@
 
 import { useEffect } from 'react';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
-import { installAvatarSync, syncAllAvatarSnapshots } from '@/lib/avatar-sync';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { useSettings } from '@/lib/ios/store';
-import { repairLegacyMomentData, repairMomentIdentityData, runMomentsTick, type MomentTickDeps } from '@/lib/moments';
+import { repairLegacyMomentData, repairMomentIdentityData, runMomentsTick, stripMomentAvatarSnapshots, type MomentTickDeps } from '@/lib/moments';
 
 const TICK_MS = 5000;
 const CONTACTS_REFRESH_MS = 60_000;
@@ -70,9 +69,9 @@ export default function MomentsScheduler() {
     repairLegacyMomentData();
     // 身份关系修复（「AI 自己给自己评论」历史数据清理 + 记忆里错误关系纠错）：一次性执行，幂等
     void repairMomentIdentityData();
-    // 头像快照同步：监听换头像事件（历史动态/互动消息快照批量改写）+ 启动全量校准（幂等）
-    installAvatarSync();
-    syncAllAvatarSnapshots();
+    // 存量头像快照瘦身（引用式架构：头像只在联系人资料存一份，渲染实时解析；
+    // 历史快照对在册联系人是纯冗余，一次性清掉省空间；幂等）
+    void stripMomentAvatarSnapshots();
     void tick();
     return () => {
       alive = false;

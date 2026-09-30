@@ -29,7 +29,7 @@
  */
 
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
+import { contactByRef, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import type { ApiConfig } from '@/lib/ios/store';
 import { contactRealName, listContacts, ownerRealName } from '@/lib/ios/contacts-store';
 import {
@@ -1121,7 +1121,9 @@ export function addCharMomentPost(
     platform,
     author: 'char',
     authorName: displayNameOf(args.peer),
-    avatar: args.peer.avatar,
+    // 引用式架构：头像不落快照，只存身份引用（peerId），渲染端 liveAvatarOf 实时取当前头像
+    //（换头像后历史动态立刻换新；省去每条动态几百 KB 的 data URL 冗余）
+    avatar: null,
     peerId: args.peer.id,
     content: args.content,
     contentZh: args.contentZh,
@@ -1141,7 +1143,8 @@ export function addCharMomentPost(
       actorName: displayNameOf(args.peer),
       actorKind: 'char',
       actorPeerId: args.peer.id,
-      actorAvatar: args.peer.avatar ?? null,
+      // 引用式架构：互动消息不存头像快照，渲染端实时解析（同动态）
+      actorAvatar: null,
       postId: args.repostOf.postId,
       postAuthorName: args.repostOf.authorName,
       postSummary: args.repostOf.content,
@@ -1314,7 +1317,8 @@ export async function addCharMomentLike(
       actorName: displayNameOf(args.peer),
       actorKind: 'char',
       actorPeerId: args.peer.id,
-      actorAvatar: args.peer.avatar ?? null,
+      // 引用式架构：互动消息不存头像快照，渲染端实时解析（同动态）
+      actorAvatar: null,
       postId: post.id,
       postAuthorName: post.authorName,
       postSummary: post.content.slice(0, 60),
@@ -1472,7 +1476,8 @@ export async function addCharMomentComment(
       actorName: displayNameOf(args.peer),
       actorKind: 'char',
       actorPeerId: args.peer.id,
-      actorAvatar: args.peer.avatar ?? null,
+      // 引用式架构：互动消息不存头像快照，渲染端实时解析（同动态）
+      actorAvatar: null,
       postId: post.id,
       postAuthorName: post.authorName,
       postSummary: post.content.slice(0, 60),
@@ -2657,107 +2662,56 @@ export function repairLegacyMomentData(): void {
   })();
 }
 
-// ---------------- 头像快照批量同步（换头像后历史动态/互动消息立即换新头像） ----------------
+// ---------------- 存量头像快照瘦身（引用式架构的收尾：身份存 peerId，头像渲染时实时解析） ----------------
 
 /**
- * 头像归属判定：peerId 精确命中优先；legacy 无 peerId 的数据（机主本人的动态/早期角色动态）
- * 按「展示名 / 真名 / 昵称」兜底匹配同一联系人。
+ * 存量头像快照瘦身（启动时执行一次，幂等）：
+ * 历史动态/互动消息里存的头像快照（写入当时的 data URL，单张可达 400KB）只在
+ * 「联系人已删除、实时解析不到」时才有展示价值——联系人还在的，渲染端 liveAvatarOf
+ * 永远显示当前头像，快照是纯冗余。本遍历把「能解析到在册联系人」的快照清成 null：
+ * - 归属判定与渲染端同一口径（contactByRef：peerId 精确命中优先，legacy 名字兜底）；
+ * - 机主本人的动态（author==='user'）不清理——机主不是联系人，快照就是渲染源；
+ * - 官方/系统互动消息不清理；
+ * - 新写入的角色动态/互动消息一律不再存头像（写入点已改为 null），存量随本遍历逐步收敛。
+ * 替代旧的「换头像事件驱动批量改写快照」同步器：不再需要任何数据面同步，换头像只写联系人一处。
  */
-function avatarOwnerMatches(ref: { peerId?: string | null; name?: string | null }, contact: ContactRecord): boolean {
-  if (ref.peerId) return ref.peerId === contact.id;
-  const nm = ref.name ?? '';
-  if (!nm) return false;
-  return nm === displayNameOf(contact) || nm === contact.name || nm === (contact.realName ?? '');
-}
-
-/**
- * 头像快照批量同步（核心实现，同步签名不落盘不广播）：
- * 把该联系人当前头像（按平台 App 槽位解析，App 未单独设置时回退全局默认）写进
- * 指定平台的历史动态头像快照。值相同跳过（幂等）；联系人已删除（不在名单里）不会进来。
- * @returns 是否有改动（由调用方决定是否落盘）
- */
-function syncAvatarSnapshotsInPosts(
-  platform: MomentPlatform,
-  contacts: ContactRecord[],
-  contact: ContactRecord
-): { list: MomentPostView[]; changed: boolean } {
-  const cur = avatarFor(contact, platform);
-  const list = listMomentPosts(platform, undefined, contacts);
-  let changed = false;
-  const next = list.map((p) => {
-    if (!avatarOwnerMatches({ peerId: p.peerId, name: p.authorName }, contact)) return p;
-    if ((p.avatar ?? null) === (cur ?? null)) return p;
-    changed = true;
-    return { ...p, avatar: cur };
-  });
-  return { list: next, changed };
-}
-
-/** 头像快照批量同步（互动消息收件箱）：actorAvatar 快照改写为当前头像（官方/系统消息跳过） */
-function syncAvatarSnapshotsInNotices(platform: MomentPlatform, contact: ContactRecord): boolean {
-  const notices = loadNoticesSafe(platform);
-  if (!Array.isArray(notices) || notices.length === 0) return false;
-  const cur = avatarFor(contact, platform);
-  let changed = false;
-  const next = notices.map((n) => {
-    if (n.kind === 'official' || n.kind === 'system') return n;
-    if (!avatarOwnerMatches({ peerId: n.actorPeerId, name: n.actorName }, contact)) return n;
-    if ((n.actorAvatar ?? null) === (cur ?? null)) return n;
-    changed = true;
-    return { ...n, actorAvatar: cur };
-  });
-  if (changed) saveNotices(platform, next);
-  return changed;
-}
-
-/**
- * 单联系人头像快照批量同步（换头像事件触发）：
- * 微信朋友圈 + QQ空间 的历史动态头像、两平台互动消息头像全部对齐当前头像；
- * 有改动才落盘（persistMomentPosts/saveNotices 后广播 moments-changed，打开中的页面即时刷新）。
- * 内部全量取联系人名单——listMomentPosts 的 legacy 归属推断需要完整名单，避免回写时误清他人 peerId。
- */
-export async function syncMomentAvatarSnapshots(contactId: string): Promise<void> {
-  try {
-    const contacts = await listContacts();
-    const contact = contacts.find((c) => c.id === contactId);
-    if (!contact) return;
-    let changed = false;
-    for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
-      const { list, changed: postsChanged } = syncAvatarSnapshotsInPosts(platform, contacts, contact);
-      if (postsChanged) {
-        persistMomentPosts(platform, list);
-        changed = true;
-      }
-      if (syncAvatarSnapshotsInNotices(platform, contact)) changed = true;
-    }
-    if (changed) emitMomentsChanged();
-  } catch {
-    // 同步失败静默（渲染端 liveAvatarOf 实时读取兜底，显示仍正确）
-  }
-}
-
-/**
- * 全量头像快照校准（启动时执行一次，幂等）：所有联系人的历史动态/互动消息头像
- * 统一对齐当前头像——兜住「换头像时事件丢失/漏同步」的存量数据。
- */
-export async function syncAllMomentAvatarSnapshots(): Promise<void> {
+export async function stripMomentAvatarSnapshots(): Promise<void> {
   try {
     const contacts = await listContacts();
     if (contacts.length === 0) return;
     let changed = false;
-    for (const contact of contacts) {
-      for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
-        const { list, changed: postsChanged } = syncAvatarSnapshotsInPosts(platform, contacts, contact);
-        if (postsChanged) {
-          persistMomentPosts(platform, list);
+    for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+      const list = listMomentPosts(platform, undefined, contacts);
+      let postsChanged = false;
+      const nextPosts = list.map((p) => {
+        if (p.author !== 'char' || !p.avatar) return p;
+        if (!contactByRef({ peerId: p.peerId, name: p.authorName }, contacts)) return p;
+        postsChanged = true;
+        return { ...p, avatar: null };
+      });
+      if (postsChanged) {
+        persistMomentPosts(platform, nextPosts);
+        changed = true;
+      }
+      const notices = loadNoticesSafe(platform);
+      if (Array.isArray(notices) && notices.length > 0) {
+        let noticesChanged = false;
+        const nextNotices = notices.map((n) => {
+          if (n.kind === 'official' || n.kind === 'system') return n;
+          if (n.actorKind !== 'char' || !n.actorAvatar) return n;
+          if (!contactByRef({ peerId: n.actorPeerId, name: n.actorName }, contacts)) return n;
+          noticesChanged = true;
+          return { ...n, actorAvatar: null };
+        });
+        if (noticesChanged) {
+          saveNotices(platform, nextNotices);
           changed = true;
         }
-        if (syncAvatarSnapshotsInNotices(platform, contact)) changed = true;
       }
     }
     if (changed) emitMomentsChanged();
   } catch {
-    // 忽略
+    // 瘦身是增强能力，失败静默（渲染端实时解析不受影响）
   }
 }
 

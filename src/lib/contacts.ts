@@ -325,12 +325,26 @@ export function withAvatarForApp<T extends ContactRecord>(c: T, app: ContactAvat
 }
 
 /**
- * 实时头像解析（换头像后所有历史展示位立即同步的统一读取口）：
- * 朋友圈动态/互动消息/新的朋友通知等历史数据里存的是「写入当时的头像快照」，
- * 这里优先回到联系人资料实时取当前头像，不再各存各的：
- * - peerId 精确命中 → avatarFor(contact, app)（App 槽位优先，回退全局默认）；
- * - 无 peerId（legacy 数据 / 机主本人的动态与评论）→ 按「展示名 / 真名 / 昵称」兜底匹配；
- * - 联系人已删除（匹配不到）→ 保留快照原值，宁旧勿丢。
+ * 身份引用 → 联系人（liveAvatarOf 与存量快照瘦身共用的唯一归属口径）：
+ * peerId 精确命中优先；无 peerId（legacy 数据 / 机主本人的动态与评论）按「展示名 / 真名 / 昵称」兜底。
+ */
+export function contactByRef(
+  ref: { peerId?: string | null; name?: string | null },
+  contacts: ContactRecord[]
+): ContactRecord | undefined {
+  const byId = ref.peerId ? contacts.find((c) => c.id === ref.peerId) : undefined;
+  if (byId) return byId;
+  const nm = ref.name ?? '';
+  if (!nm) return undefined;
+  return contacts.find((c) => displayNameOf(c) === nm || c.name === nm || (c.realName ?? '') === nm);
+}
+
+/**
+ * 实时头像解析（全 App 唯一读取口，引用式架构的核心）：
+ * 历史数据（朋友圈动态/互动消息/新的朋友通知等）只存身份引用（peerId + 展示名），不存头像——
+ * 头像只在联系人资料里存一份，这里渲染时实时取当前值，换头像后所有历史展示位自动生效：
+ * - peerId 精确命中（legacy 名字兜底）→ avatarFor(contact, app)（App 槽位优先，回退全局默认）；
+ * - 联系人已删除（匹配不到）→ 保留快照原值，宁旧勿丢（快照仍在的数据才走这条）。
  * QQ/微信/信息/电话共用这一套读取逻辑（app 传各自标识）。
  */
 export function liveAvatarOf(
@@ -339,13 +353,7 @@ export function liveAvatarOf(
   contacts: ContactRecord[],
   app: ContactAvatarApp
 ): string | null {
-  const byId = ref.peerId ? contacts.find((c) => c.id === ref.peerId) : undefined;
-  const nm = ref.name ?? '';
-  const hit =
-    byId ??
-    (nm
-      ? contacts.find((c) => displayNameOf(c) === nm || c.name === nm || (c.realName ?? '') === nm)
-      : undefined);
+  const hit = contactByRef(ref, contacts);
   if (hit) return avatarFor(hit, app);
   return typeof snapshot === 'string' && snapshot ? snapshot : null;
 }
