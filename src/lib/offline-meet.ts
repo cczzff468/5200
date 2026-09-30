@@ -1,0 +1,553 @@
+/**
+ * 线下模式（约会）—— 共享逻辑层（QQ / 微信 / 信息三端共用）。
+ *
+ * 功能结构（「线下模式」需求）：
+ * 1. 入口：QQ 输入栏五角星按钮 / 微信加号面板「线下」（原收藏位）/ 信息端输入栏加号；
+ * 2. 点击进入线下场景，承接最近 N 条线上聊天（10/20/30/40/50/自定义）；
+ * 3. 场景生成：地点 / 时间 / 环境 / 角色状态 / 对白，基于角色人设 + 世界书 + 最近聊天 + 记忆；
+ * 4. 现场设置：回复字数（±20%）/ 承接条数 / 用户·角色叙述人称 / 回复预设 / 现场文风 /
+ *    基础设置（字数区间·人称·导演模式·自主推进·修辞密度·描写占比·节奏）；
+ * 5. 变量系统：{{char_name}} 等 11 个变量在发送前由 renderTemplate 替换；
+ * 6. 操作：让角色继续 / 重 Roll / 保存这次见面 / 自由输入（说话或描述动作）；
+ * 7. 保存后写入记忆库（memAddEventFragment，sourceTag 'offline-meet'），
+ *    线上聊天召回记忆时自然带上线下发生的事；进行中的见面按角色 ID 隔离。
+ *
+ * 存储：全部走 idb-kv（内存写穿 IndexedDB），键按联系人隔离：
+ * - offline-meet:<contactId>            进行中的见面（单条）
+ * - offline-meet-history:<contactId>    已保存的见面（列表，最新在前）
+ * - offline-meet-settings:<contactId>   该角色下一次见面的默认设置
+ * - offline-meet-tpl:<contactId>        该角色的当前模板覆盖（设置页编辑后未存为预设时生效）
+ * - offline-wb-bg:<contactId>           世界书分析出的世界背景缓存
+ * - offline-meet-presets / offline-meet-styles  回复预设 / 文风库（全局）
+ */
+
+import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { memTimeLabel } from '@/lib/memory-core';
+
+// ---------------- 类型 ----------------
+
+export type OfflineApp = 'wx' | 'qq' | 'sms';
+
+/** 用户叙述人称（识别用户动作时使用） */
+export type OfflineUserPerson = '你' | '我';
+/** 角色叙述人称（角色描述自己时使用） */
+export type OfflineCharPerson = '他' | '她' | '我';
+
+/** 三档强度 */
+export type OfflineTriLevel = 'low' | 'medium' | 'high';
+/** 基础设置人称 */
+export type OfflinePersonMode = 'auto' | 'first' | 'second' | 'third';
+/** 节奏 */
+export type OfflinePaceMode = 'slow' | 'medium' | 'fast';
+
+export interface OfflineMeetSettings {
+  /** 角色回复目标字数（每次回复 ±20% 浮动） */
+  replyLength: number;
+  /** 从聊天继续承接最近 N 条 */
+  carryCount: number;
+  userPerson: OfflineUserPerson;
+  charPerson: OfflineCharPerson;
+  /** 当前回复预设 id */
+  presetId: string;
+  /** 当前文风 id */
+  styleId: string;
+  /** 字数区间（基础设置） */
+  lenMin: number;
+  lenMax: number;
+  /** 人称（自动 / 一人称 / 二人称 / 三人称） */
+  person: OfflinePersonMode;
+  /** 导演模式 */
+  director: boolean;
+  /** 自主推进强度 */
+  autonomy: OfflineTriLevel;
+  /** 修辞密度 */
+  rhetoric: OfflineTriLevel;
+  /** 描写占比 */
+  description: OfflineTriLevel;
+  /** 节奏快慢 */
+  pace: OfflinePaceMode;
+}
+
+export interface OfflinePreset {
+  id: string;
+  name: string;
+  template: string;
+  builtin?: boolean;
+  createdAt: number;
+}
+
+export interface OfflineStyle {
+  id: string;
+  name: string;
+  /** 文风内容（注入 {{writing_style}} 变量） */
+  content: string;
+  builtin?: boolean;
+  createdAt: number;
+}
+
+/** 场景元信息（开场生成后解析记录） */
+export interface OfflineScene {
+  location: string;
+  time: string;
+  reason: string;
+  charState: string;
+}
+
+/** 线下叙事流条目 */
+export interface OfflineEntry {
+  id: string;
+  role: 'char' | 'user';
+  text: string;
+  at: number;
+  /** 生成这条角色回复时的用户输入（重 Roll 复现用；'' = 「继续」；'__open__' = 开场） */
+  fromInput?: string;
+}
+
+export interface OfflineMeet {
+  id: string;
+  contactId: string;
+  appId: OfflineApp;
+  startedAt: number;
+  carryN: number;
+  /** 承接的线上聊天文本（见面开始时定格） */
+  onlineExcerpt: string;
+  /** 承接的最后一条线上消息时间（时间感知用） */
+  lastOnlineTime: number | null;
+  scene: OfflineScene;
+  entries: OfflineEntry[];
+  settings: OfflineMeetSettings;
+  /** 世界背景（世界书分析结果或角色资料推断，开场前定格） */
+  worldBg: string;
+  /** 本次见面使用的模板（现场设置保存时定格；缺省回落角色模板覆盖/预设） */
+  template?: string;
+}
+
+export interface OfflineSavedMeet extends OfflineMeet {
+  savedAt: number;
+}
+
+export interface OfflineOnlineMsg {
+  role: 'me' | 'peer';
+  text: string;
+  time: number;
+}
+
+// ---------------- 存储键 ----------------
+
+export const offlineMeetKey = (contactId: string): string => `offline-meet:${contactId}`;
+export const offlineMeetHistoryKey = (contactId: string): string => `offline-meet-history:${contactId}`;
+export const offlineSettingsKey = (contactId: string): string => `offline-meet-settings:${contactId}`;
+export const offlineTplKey = (contactId: string): string => `offline-meet-tpl:${contactId}`;
+export const offlineWbBgKey = (contactId: string): string => `offline-wb-bg:${contactId}`;
+export const OFFLINE_PRESETS_KEY = 'offline-meet-presets';
+export const OFFLINE_STYLES_KEY = 'offline-meet-styles';
+
+export const OFFLINE_CARRY_OPTIONS = [10, 20, 30, 40, 50] as const;
+export const OFFLINE_BUILTIN_PRESET_ID = 'preset-default';
+export const OFFLINE_BUILTIN_STYLE_ID = 'style-natural';
+
+/** 变量清单（设置页「变量说明」渲染用） */
+export const OFFLINE_VARIABLES: Array<{ name: string; desc: string }> = [
+  { name: '{{char_name}}', desc: '当前角色名' },
+  { name: '{{user_name}}', desc: '用户称呼' },
+  { name: '{{reply_length}}', desc: '本次目标字数' },
+  { name: '{{user_person}}', desc: '用户叙述人称' },
+  { name: '{{char_person}}', desc: '角色叙述人称' },
+  { name: '{{world_background}}', desc: '世界书分析背景' },
+  { name: '{{writing_style}}', desc: '当前文风' },
+  { name: '{{scene}}', desc: '地点、原因和角色状态' },
+  { name: '{{user_message}}', desc: '用户本轮输入' },
+  { name: '{{online_chat}}', desc: '线下开始前的线上聊天' },
+  { name: '{{offline_history}}', desc: '已发生的线下内容' },
+];
+
+// ---------------- 默认模板与内置文风 ----------------
+
+export const OFFLINE_DEFAULT_TEMPLATE = `【线下角色回复总规则】
+你正在与{{user_name}}进行线下见面——从线上聊天延续到面对面的真实相处。你写下的内容不是聊天消息，而是此时此刻真实发生的故事：环境、动作、神态、对白交织的现场叙事。
+
+【本次见面信息】
+现场：{{scene}}
+世界背景：{{world_background}}
+文风：{{writing_style}}
+目标字数：正文约 {{reply_length}} 字（可在上下 20% 内浮动），内容写足再自然收束，不要草草结束。
+人称要求：叙述{{user_name}}的言行时用「{{user_person}}」；{{char_name}}相关叙述用「{{char_person}}」作主语；全文人称保持统一。
+
+【线上聊天承接】（见面之前的线上聊天，情绪与话题要自然延续，不要当没发生过）
+{{online_chat}}
+
+【线下已经发生的内容】（按时间顺序；刚开始见面时此段为空）
+{{offline_history}}
+
+【写作要求】
+1. 环境描写：地点、天气、光线、气味、声音等细节营造画面感；
+2. 角色呈现：{{char_name}}的情绪、动作、神态、穿着贴合人设与当前状态；
+3. 对白：贴合角色的说话风格与口头禅，自然穿插在叙述中；
+4. 承接：接住{{user_name}}最近的言行与情绪，不重启话题、不忽略对方；
+5. 本轮输入里{{user_name}}说的话和做的动作要被自然接住并回应。
+
+【本轮输入】
+{{user_message}}
+
+【输出要求】
+直接输出叙事正文；不要任何标题、序号、markdown、括号舞台提示或角色名前缀；不跳出角色，不提及设定、模板、变量或任何幕后概念；不替{{user_name}}说话、做决定或代答，把回应的主动权留给{{user_name}}。`;
+
+export const BUILTIN_STYLES: OfflineStyle[] = [
+  {
+    id: OFFLINE_BUILTIN_STYLE_ID,
+    name: '自然细腻',
+    builtin: true,
+    createdAt: 0,
+    content:
+      '[CRAFT REFERENCES] 自然细腻文风：\n用贴近生活的白描与细节捕捉情绪——视线、指尖、呼吸、温度的变化比形容词更重要。\n- 动作拆小：一个情绪用两三个连贯的小动作呈现（把糖捏皱、把杯沿转半圈），不直接下结论；\n- 感官落地：每个场景至少落在两种感官上（声音/气味/触感/光线）；\n- 对白留口语毛边：允许停顿、抢话、没说完的话，语气词自然出现；\n- 修辞克制：比喻最多一两处，且要具体可感，不用华丽空洞的排比；\n- 情绪藏在细节里：写「发生了什么」，让读者自己感到「是什么情绪」。',
+  },
+  {
+    id: 'style-minimal',
+    name: '简约留白',
+    builtin: true,
+    createdAt: 0,
+    content:
+      '[CRAFT REFERENCES] 简约留白文风：\n句子短，节奏干净，多用句号。能一句话说清的不写两句。\n- 少形容词，多动词；环境只写改变氛围的那一两笔；\n- 大量留白：对话之间的沉默、没有说出口的话也是内容；\n- 情绪不点破，用动作与空档呈现；\n- 适合冷静、克制、疏离感强的角色与场景。',
+  },
+  {
+    id: 'style-vivid',
+    name: '画面浓烈',
+    builtin: true,
+    createdAt: 0,
+    content:
+      '[CRAFT REFERENCES] 画面浓烈文风：\n高密度的感官描写与通感，色彩、光线、气味互相渗透，句子有镜头感。\n- 开场先给一个定格镜头（特写或全景），再进入动作；\n- 修辞大胆：比喻、通感、拟人都可以用，但要新鲜不套话；\n- 情绪外化成环境：心跳、耳鸣、路灯的晕、空气的黏度；\n- 对白短促有力，与浓密叙述形成反差；\n- 适合强情绪、戏剧性张力强的场景。',
+  },
+];
+
+// ---------------- 默认设置 ----------------
+
+export const DEFAULT_OFFLINE_SETTINGS: OfflineMeetSettings = {
+  replyLength: 1500,
+  carryCount: 20,
+  userPerson: '你',
+  charPerson: '他',
+  presetId: OFFLINE_BUILTIN_PRESET_ID,
+  styleId: OFFLINE_BUILTIN_STYLE_ID,
+  lenMin: 450,
+  lenMax: 800,
+  person: 'auto',
+  director: false,
+  autonomy: 'medium',
+  rhetoric: 'medium',
+  description: 'medium',
+  pace: 'medium',
+};
+
+export const OFFLINE_TRI_LABEL: Record<OfflineTriLevel, string> = { low: '低', medium: '中', high: '高' };
+export const OFFLINE_PACE_LABEL: Record<OfflinePaceMode, string> = { slow: '慢', medium: '中', fast: '快' };
+export const OFFLINE_PERSON_LABEL: Record<OfflinePersonMode, string> = {
+  auto: '自动',
+  first: '一人称',
+  second: '二人称',
+  third: '三人称',
+};
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : NaN;
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function pick<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(v as T) ? (v as T) : fallback;
+}
+
+/** 归一化设置（历史/脏数据兜底） */
+export function normalizeOfflineSettings(raw: unknown): OfflineMeetSettings {
+  const d = DEFAULT_OFFLINE_SETTINGS;
+  if (!raw || typeof raw !== 'object') return { ...d };
+  const r = raw as Record<string, unknown>;
+  const settings: OfflineMeetSettings = {
+    replyLength: clampInt(r.replyLength, 100, 8000, d.replyLength),
+    carryCount: clampInt(r.carryCount, 5, 200, d.carryCount),
+    userPerson: pick(r.userPerson, ['你', '我'] as const, d.userPerson),
+    charPerson: pick(r.charPerson, ['他', '她', '我'] as const, d.charPerson),
+    presetId: typeof r.presetId === 'string' && r.presetId ? r.presetId : d.presetId,
+    styleId: typeof r.styleId === 'string' && r.styleId ? r.styleId : d.styleId,
+    lenMin: clampInt(r.lenMin, 50, 8000, d.lenMin),
+    lenMax: clampInt(r.lenMax, 50, 8000, d.lenMax),
+    person: pick(r.person, ['auto', 'first', 'second', 'third'] as const, d.person),
+    director: typeof r.director === 'boolean' ? r.director : d.director,
+    autonomy: pick(r.autonomy, ['low', 'medium', 'high'] as const, d.autonomy),
+    rhetoric: pick(r.rhetoric, ['low', 'medium', 'high'] as const, d.rhetoric),
+    description: pick(r.description, ['low', 'medium', 'high'] as const, d.description),
+    pace: pick(r.pace, ['slow', 'medium', 'fast'] as const, d.pace),
+  };
+  if (settings.lenMin > settings.lenMax) [settings.lenMin, settings.lenMax] = [settings.lenMax, settings.lenMin];
+  return settings;
+}
+
+// ---------------- 预设 / 文风 ----------------
+
+export function loadPresets(): OfflinePreset[] {
+  const builtin: OfflinePreset = {
+    id: OFFLINE_BUILTIN_PRESET_ID,
+    name: '内置默认预设',
+    template: OFFLINE_DEFAULT_TEMPLATE,
+    builtin: true,
+    createdAt: 0,
+  };
+  try {
+    const saved = kvGet<OfflinePreset[]>(OFFLINE_PRESETS_KEY);
+    const list = Array.isArray(saved) ? saved.filter((p) => p && typeof p.id === 'string') : [];
+    return [builtin, ...list];
+  } catch {
+    return [builtin];
+  }
+}
+
+export function saveCustomPresets(list: OfflinePreset[]): void {
+  kvSet(OFFLINE_PRESETS_KEY, list.filter((p) => !p.builtin));
+}
+
+export function loadStyles(): OfflineStyle[] {
+  try {
+    const saved = kvGet<OfflineStyle[]>(OFFLINE_STYLES_KEY);
+    const custom = Array.isArray(saved) ? saved.filter((s) => s && typeof s.id === 'string') : [];
+    return [...BUILTIN_STYLES, ...custom];
+  } catch {
+    return [...BUILTIN_STYLES];
+  }
+}
+
+export function saveCustomStyles(list: OfflineStyle[]): void {
+  kvSet(OFFLINE_STYLES_KEY, list.filter((s) => !s.builtin));
+}
+
+// ---------------- 见面存取 ----------------
+
+export function loadMeet(contactId: string): OfflineMeet | null {
+  try {
+    const m = kvGet<OfflineMeet>(offlineMeetKey(contactId));
+    if (!m || typeof m.id !== 'string' || !Array.isArray(m.entries)) return null;
+    m.settings = normalizeOfflineSettings(m.settings);
+    return m;
+  } catch {
+    return null;
+  }
+}
+
+export function saveMeet(meet: OfflineMeet): void {
+  kvSet(offlineMeetKey(meet.contactId), meet);
+}
+
+export function clearMeet(contactId: string): void {
+  kvDel(offlineMeetKey(contactId));
+}
+
+export function loadMeetHistory(contactId: string): OfflineSavedMeet[] {
+  try {
+    const list = kvGet<OfflineSavedMeet[]>(offlineMeetHistoryKey(contactId));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addMeetToHistory(contactId: string, meet: OfflineMeet): void {
+  const entry: OfflineSavedMeet = { ...meet, savedAt: Date.now() };
+  const list = [entry, ...loadMeetHistory(contactId)].slice(0, 30);
+  kvSet(offlineMeetHistoryKey(contactId), list);
+}
+
+export function loadMeetSettings(contactId: string): OfflineMeetSettings {
+  return normalizeOfflineSettings(kvGet<unknown>(offlineSettingsKey(contactId)));
+}
+
+export function saveMeetSettings(contactId: string, settings: OfflineMeetSettings): void {
+  kvSet(offlineSettingsKey(contactId), settings);
+}
+
+export function loadTplOverride(contactId: string): string | null {
+  const t = kvGet<string>(offlineTplKey(contactId));
+  return typeof t === 'string' && t.trim() ? t : null;
+}
+
+export function saveTplOverride(contactId: string, template: string): void {
+  kvSet(offlineTplKey(contactId), template);
+}
+
+export function loadWbBgCache(contactId: string): string | null {
+  const t = kvGet<string>(offlineWbBgKey(contactId));
+  return typeof t === 'string' && t.trim() ? t : null;
+}
+
+export function saveWbBgCache(contactId: string, bg: string): void {
+  kvSet(offlineWbBgKey(contactId), bg);
+}
+
+/** 删除联系人时级联清理（contacts-store.deleteContact 调用） */
+export function purgeOfflineMeetForContact(contactId: string): void {
+  if (!contactId) return;
+  kvDel(offlineMeetKey(contactId));
+  kvDel(offlineMeetHistoryKey(contactId));
+  kvDel(offlineSettingsKey(contactId));
+  kvDel(offlineTplKey(contactId));
+  kvDel(offlineWbBgKey(contactId));
+}
+
+// ---------------- 变量替换 ----------------
+
+/** 发送前自动替换 {{var}}；未提供的变量替换为空串（不残留花括号） */
+export function renderTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (raw, key: string) => {
+    const v = vars[key];
+    return typeof v === 'string' ? v : '';
+  });
+}
+
+/** 本次回复目标字数：设定字数 ±20% 浮动，再夹进字数区间 */
+export function effectiveReplyTarget(settings: OfflineMeetSettings): number {
+  const jitter = 0.8 + Math.random() * 0.4;
+  const target = Math.round(settings.replyLength * jitter);
+  const { lenMin, lenMax } = settings;
+  if (lenMin <= lenMax) return Math.min(Math.max(target, lenMin), lenMax);
+  return target;
+}
+
+/** 基础设置人称 → 实际角色叙述人称（auto 沿用现场设置的 charPerson；二人称 = 叙述以「你」称呼角色） */
+export function effectiveCharPerson(settings: OfflineMeetSettings, gender?: string | null): string {
+  switch (settings.person) {
+    case 'first':
+      return '我';
+    case 'second':
+      return '你';
+    case 'third':
+      return (gender ?? '').includes('女') ? '她' : '他';
+    default:
+      return settings.charPerson;
+  }
+}
+
+/** 开场后从回复中解析【场景】头（地点/时间/缘由/状态），返回场景与正文 */
+export function extractSceneHeader(text: string): { scene: OfflineScene | null; body: string } {
+  const idx = text.indexOf('【场景】');
+  if (idx < 0) return { scene: null, body: text };
+  const lineEnd = text.indexOf('\n', idx);
+  const line = (lineEnd < 0 ? text.slice(idx) : text.slice(idx, lineEnd)).replace('【场景】', '').trim();
+  const rest = (lineEnd < 0 ? '' : text.slice(lineEnd + 1)).trim();
+  const scene: OfflineScene = { location: '', time: '', reason: '', charState: '' };
+  for (const part of line.split(/[｜|]/)) {
+    const m = part.match(/^\s*(地点|时间|缘由|原因|状态|角色状态)\s*[:：]\s*(.*)$/);
+    if (!m) continue;
+    const val = m[2].trim();
+    if (m[1] === '地点') scene.location = val;
+    else if (m[1] === '时间') scene.time = val;
+    else if (m[1] === '缘由' || m[1] === '原因') scene.reason = val;
+    else scene.charState = val;
+  }
+  const filled = scene.location || scene.reason || scene.charState;
+  return { scene: filled ? scene : null, body: rest || text };
+}
+
+/** 线下叙事流的上下文文本（注入 {{offline_history}}；超出 9000 字从最旧开始截） */
+export function buildOfflineHistoryText(meet: OfflineMeet, userName: string, charName: string, excludeLastChar = false): string {
+  const entries = excludeLastChar && meet.entries.length > 0 && meet.entries[meet.entries.length - 1].role === 'char' ? meet.entries.slice(0, -1) : meet.entries;
+  const parts = entries.map((e) => `${e.role === 'char' ? charName : userName}：${e.text.trim()}`);
+  let out = parts.join('\n\n');
+  while (out.length > 9000 && parts.length > 1) {
+    parts.shift();
+    out = parts.join('\n\n');
+  }
+  return out;
+}
+
+/** 开场生成指令（拼在渲染后的模板尾部） */
+export function buildOpenInstruction(charName: string, userName: string): string {
+  return [
+    '【开场生成】',
+    '这是这次见面的开场。请先用一行按下面的格式输出场景信息（这一行是系统记录用，之后的正文里不要再出现这一行的内容）：',
+    '【场景】地点：xxx｜时间：xxx｜缘由：xxx｜状态：xxx',
+    `（地点：具体见面的位置；时间：现在几月、大概几点、季节氛围；缘由：结合最近的线上聊天说明两人为什么会在这里见面；状态：${charName}此刻的情绪与状态，延续线上聊天结束时的情绪）`,
+    '然后空一行输出开场正文：从环境与氛围切入（天气、光线、声音、气味），写出' +
+      charName +
+      '的出场（动作、穿着、情绪），自然承接线上聊天的话题与情绪，结尾落在' +
+      charName +
+      '一个具体的言行上，把回应权交给' +
+      userName +
+      '。',
+  ].join('\n');
+}
+
+/** 系统侧「线下叙事总纲 + 现场参数」块（追加在 system prompt 末尾，优先级高于线上聊天规则） */
+export function buildOfflineDirective(opts: {
+  settings: OfflineMeetSettings;
+  /** 实际角色叙述人称（基础设置人称解析后的结果，二人称时为「你」） */
+  charPersonEff: string;
+  charName: string;
+  userName: string;
+  channel: string;
+  target: number;
+}): string {
+  const { settings: s, charPersonEff, charName, userName, channel, target } = opts;
+  const tri = <T extends string>(v: T, lines: Record<T, string>) => lines[v];
+  const autonomyLine = tri(
+    s.autonomy,
+    {
+      low: `每次只推进一小步，大量留白等待${userName}回应，不抢节奏`,
+      medium: '按当前场景的自然速度推进，张弛有度',
+      high: `积极推动剧情发展与场景转换，可以引入小事件，但重大转折留给${userName}决定`,
+    },
+  );
+  const rhetoricLine = tri(s.rhetoric, {
+    low: '白描直叙，少用比喻修辞，语言干净直白',
+    medium: '适度使用修辞，自然不刻意',
+    high: '修辞丰富，比喻通感大胆，语言有文学性',
+  });
+  const descLine = tri(s.description, {
+    low: '以对白和动作为主，环境与心理描写从简',
+    medium: '描写与叙事均衡',
+    high: '环境、感官与心理描写占比高，画面感浓',
+  });
+  const paceLine = tri(s.pace, {
+    slow: '节奏舒缓，细致铺陈，允许大量静止与沉默的瞬间',
+    medium: '节奏中等，张弛有度',
+    fast: '节奏明快，事件推进迅速，场景切换利落',
+  });
+  const personLine =
+    s.person === 'auto'
+      ? `按现场设置：叙述${userName}用「${s.userPerson}」，${charName}相关叙述用「${charPersonEff}」`
+      : `强制${'「' + charPersonEff + '」'}（基础设置指定）；叙述${userName}用「${s.userPerson}」`;
+  return [
+    '【线下叙事模式总纲（最高优先级，覆盖线上聊天规则）】',
+    `现在从${channel}线上聊天切换到「线下见面」叙事模式：你和${userName}已经在现实中见面。你写的内容不是聊天消息，而是线下场景的实时叙事（环境 + ${charName}的动作神态 + 对白）。线上聊天的「简短回复」「像随手打字」等规则在本模式下全部不适用，以本节为准。`,
+    `- 叙事直接面向${userName}展开；对白贴合人设语气，穿插在叙述中；动作与心理直接写进叙述；`,
+    '- 不输出 markdown、序号、括号舞台提示或角色名前缀；不跳出角色，不提及任何设定或幕后概念；',
+    `- 不替${userName}说话、做决定或代答；${userName}输入里描述的言行要被自然接住并回应；`,
+    '',
+    '【现场参数】',
+    `- 导演模式：${s.director ? `开启——你可以推进小事件、转换场景、让时间自然流动，制造推动关系的契机` : '关闭——只在当前场景内反应，不主动跳跃时间、不引入新事件'}`,
+    `- 自主推进强度：${autonomyLine}`,
+    `- 修辞密度：${rhetoricLine}`,
+    `- 描写占比：${descLine}`,
+    `- 节奏：${paceLine}`,
+    `- 人称：${personLine}`,
+    `- 长度：每次回复正文约 ${target} 字，写足再自然收束`,
+  ].join('\n');
+}
+
+/** 保存见面时生成记忆摘要（写入 memAddEventFragment） */
+export function buildMeetDigest(meet: OfflineMeet, userName: string, charName: string): string {
+  const head = `【线下见面】${memTimeLabel(meet.startedAt)}，${userName}和${charName}在${meet.scene.location || '（未记录地点）'}见面（${meet.scene.reason || '延续线上聊天'}）。`;
+  const parts: string[] = [head];
+  let total = head.length;
+  for (const e of meet.entries) {
+    const budget = e.role === 'char' ? 150 : 60;
+    const text = e.text.replace(/\s+/g, ' ').trim().slice(0, budget) + (e.text.length > budget ? '…' : '');
+    const line = `${e.role === 'char' ? charName : userName}：${text}`;
+    if (total + line.length > 620) break;
+    parts.push(line);
+    total += line.length;
+  }
+  return parts.join('\n');
+}
+
+/** 通用短 id */
+export function offlineUid(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}

@@ -167,6 +167,8 @@ import {
 } from '@/lib/chat-stream-store';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
+import OfflineMeetingPage from '@/components/apps/offline-meeting';
+import type { OfflineOnlineMsg } from '@/lib/offline-meet';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
@@ -476,12 +478,13 @@ function msgPreview(m: QQMsg | undefined): string {
   return m.content;
 }
 
-/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、收款页、亲属卡详情、发送位置 */
+/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、收款页、亲属卡详情、发送位置、线下见面 */
 type ChatLayer =
   | null
   | { view: 'redpacket' }
   | { view: 'transfer' }
   | { view: 'location' }
+  | { view: 'offline' }
   | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'tr-receive' | 'fam-detail'; msgId: string };
 
 const LS_SESSION = 'qq-session-user-id';
@@ -5711,7 +5714,17 @@ function ChatPage({
           <button type="button" aria-label="拍摄" data-testid="qq-tool-camera" onClick={() => cameraInputRef.current?.click()} className="p-2 -m-2 active:opacity-60">
             <Camera className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
-          <button type="button" aria-label="点缀" onClick={() => onToast('点缀暂未开放')} className="p-2 -m-2 active:opacity-60">
+          <button
+            type="button"
+            aria-label="线下模式"
+            data-testid="qq-tool-offline"
+            onClick={() => {
+              setPlusOpen(false);
+              setStickerOpen(false);
+              setLayer({ view: 'offline' });
+            }}
+            className="p-2 -m-2 active:opacity-60"
+          >
             <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.8} aria-hidden="true" />
           </button>
           <button
@@ -5948,6 +5961,41 @@ function ChatPage({
             setLayer(null);
             onToast('位置已发送');
           }}
+        />
+      ) : null}
+      {/* 线下模式（约会）：从聊天继续，承接最近 N 条线上聊天（五角星入口，与微信/信息共用同一页面组件） */}
+      {layer?.view === 'offline' ? (
+        <OfflineMeetingPage
+          app="qq"
+          channel="QQ"
+          contactId={peer.id}
+          userName={addressNameOf(me, useSettings.getState().addressMode)}
+          userRealName={me.realName ?? me.name}
+          userNickname={me.nickname ?? null}
+          loadRecentMsgs={(n: number): OfflineOnlineMsg[] =>
+            msgs
+              .slice(-n)
+              .map((m): OfflineOnlineMsg | null => {
+                if (m.role !== 'me' && m.role !== 'peer') return null;
+                const kind = m.kind ?? 'text';
+                let text = '';
+                if (kind === 'text') text = m.content;
+                else if (kind === 'sticker') text = '[表情包]';
+                else if (kind === 'image') text = '[图片]';
+                else if (kind === 'voice') text = m.voice?.transcript?.trim() || '[语音]';
+                else if (kind === 'redpacket') text = '[红包]';
+                else if (kind === 'transfer') text = '[转账]';
+                else if (kind === 'family') text = '[亲属卡]';
+                else if (kind === 'location') text = `[位置] ${m.loc?.name ?? ''}`;
+                else if (kind === 'call') text = '[语音通话]';
+                else return null; // notice/sys/blockreq/forward/groupcard 不进线下上下文
+                if (!text.trim()) return null;
+                return { role: m.role, text, time: m.time };
+              })
+              .filter((m): m is OfflineOnlineMsg => m !== null)
+          }
+          onBack={() => setLayer(null)}
+          onToast={onToast}
         />
       ) : null}
       {/* 支付密码验证浮层（开启支付密码后红包/转账发送前弹出自绘键盘） */}

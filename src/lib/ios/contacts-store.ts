@@ -619,6 +619,10 @@ export async function deleteContact(id: string): Promise<boolean> {
   const survivingContactIds = (await localDB.getAll('contacts')).map((c) => c.id);
   for (const npcId of cascadedNpcIds) purgeChatTracesFor(npcId, survivingContactIds);
   purgeChatTracesFor(id, survivingContactIds, existing.name);
+  // 线下模式（约会）：进行中的见面/见面历史/现场设置/模板覆盖/世界背景缓存 一并清理
+  const { purgeOfflineMeetForContact } = await import('@/lib/offline-meet');
+  purgeOfflineMeetForContact(id);
+  for (const npcId of cascadedNpcIds) purgeOfflineMeetForContact(npcId);
   // 世界书：清理被删联系人（含级联 NPC）的挂载关系键；书籍本体与条目是用户创作，保留不删
   //（专属条目目标指向已删联系人时永远不激活，属无害死配置，用户可在条目编辑里改）
   clearContactBinding(id);

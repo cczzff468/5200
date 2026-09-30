@@ -183,6 +183,8 @@ import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeCh
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
+import OfflineMeetingPage from '@/components/apps/offline-meeting';
+import type { OfflineOnlineMsg } from '@/lib/offline-meet';
 import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
@@ -3105,7 +3107,7 @@ function WxFcManagePage({
 
 // ---------------- 聊天加号面板 + 红包/转账（对照用户微信截图 1:1） ----------------
 
-type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'favorite';
+type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline';
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方） */
 function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
@@ -3117,7 +3119,7 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
     { key: 'redpacket', label: '红包', icon: <Gift className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'transfer', label: '转账', icon: <ArrowLeftRight className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
-    { key: 'favorite', label: '收藏', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'offline', label: '线下', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
   return (
     <div
@@ -4221,6 +4223,8 @@ function ChatPage({
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
   const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | null>(null);
+  /** 线下模式（约会）：加号面板「线下」入口打开的见面页（与 QQ/信息共用） */
+  const [offlineOpen, setOfflineOpen] = useState(false);
   /** 原生相机 / 相册隐藏 input：加号面板「相机」「图片」直接调用手机能力（无自建页面） */
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -6567,7 +6571,14 @@ function ChatPage({
       openVoiceCall('out');
       return;
     }
-    const label: Record<string, string> = { videocall: '视频通话', favorite: '收藏' };
+    if (a === 'offline') {
+      // 线下模式（约会）：原「收藏」占位改为线下入口，与 QQ/信息共用同一见面页
+      setPlusOpen(false);
+      setStickerOpen(false);
+      setOfflineOpen(true);
+      return;
+    }
+    const label: Record<string, string> = { videocall: '视频通话' };
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
 
@@ -7417,6 +7428,40 @@ function ChatPage({
       {compose === 'redpacket' && <RedPacketCompose onBack={() => setCompose(null)} onSubmit={submitRedPacket} onToast={onToast} />}
       {compose === 'transfer' && <TransferCompose peer={peer} onBack={() => setCompose(null)} onSubmit={submitTransfer} onToast={onToast} />}
       {compose === 'location' && <LocationPickerPage onClose={() => setCompose(null)} onSend={sendLocation} onToast={onToast} />}
+      {/* 线下模式（约会）：从聊天继续，承接最近 N 条线上聊天（加号面板「线下」入口，与 QQ/信息共用同一页面组件） */}
+      {offlineOpen ? (
+        <OfflineMeetingPage
+          app="wx"
+          channel="微信"
+          contactId={peer.id}
+          userName={addressNameOf(me, useSettings.getState().addressMode)}
+          userRealName={me.realName ?? me.name}
+          userNickname={me.nickname ?? null}
+          loadRecentMsgs={(n: number): OfflineOnlineMsg[] =>
+            msgs
+              .slice(-n)
+              .map((m): OfflineOnlineMsg | null => {
+                const kind = m.kind ?? 'text';
+                let text = '';
+                if (kind === 'text') text = m.content;
+                else if (kind === 'sticker') text = '[表情包]';
+                else if (kind === 'image') text = '[图片]';
+                else if (kind === 'voice') text = m.voice?.transcript?.trim() || '[语音]';
+                else if (kind === 'redpacket') text = '[红包]';
+                else if (kind === 'transfer') text = '[转账]';
+                else if (kind === 'family') text = '[亲属卡]';
+                else if (kind === 'location') text = `[位置] ${m.loc?.name ?? ''}`;
+                else if (kind === 'call') text = '[语音通话]';
+                else return null; // sys/blockreq/notice/forward/groupcard 不进线下上下文
+                if (!text.trim()) return null;
+                return { role: m.role === 'me' ? 'me' : 'peer', text, time: m.time };
+              })
+              .filter((m): m is OfflineOnlineMsg => m !== null)
+          }
+          onBack={() => setOfflineOpen(false)}
+          onToast={onToast}
+        />
+      ) : null}
       {/* 原生相机/相册隐藏 input：相机单张（capture 调起后置摄像头）、图片可多选 */}
       <input
         ref={cameraInputRef}
