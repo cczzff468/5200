@@ -6,9 +6,9 @@
  * 结构（对照需求与参考截图，整体毛玻璃/胶囊玻璃风格）：
  * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
  * - 头部：返回 + 「IN PERSON · 与 X 见面」+ 收藏（保存）+ 现场设置（玻璃圆钮）；
- * - 见面卡：毛玻璃胶囊——头像 / 名字 / 见面中 / 时间·状态·关系背景（MetaChip）；
+ * - 见面卡：紧凑毛玻璃胶囊——头像（叠在线绿点）/ 名字 /「此刻就在你身边」/ 时间·状态·关系背景；
  * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡）；
- * - 底部：让 X 继续 / 重 Roll / 保存这次见面 + 输入框（说什么，或描述你的动作…）；
+ * - 底部：继续 / 重Roll / 保存三个玻璃圆钮分列输入框左右两侧，输入框内嵌深色圆形发送钮；
  * - 无见面时：承接条数选择（10/20/30/40/50/自定义）+ 开始见面；
  * - 现场设置面板：回复字数 / 用户·角色叙述人称 / 回复预设 / 基础设置 / 变量说明 /
  *   角色回复预设模板编辑 / 现场文风（内置+新建）。
@@ -1043,7 +1043,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       <LocalToast msg={onToast ? '' : toast} />
 
       {/* 头部 */}
-      <div className="flex items-center justify-between px-4 pb-2 pt-[56px]">
+      <div className="flex items-center justify-between px-4 pb-1.5 pt-[54px]">
         <button
           type="button"
           aria-label="返回聊天"
@@ -1053,10 +1053,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
         </button>
         <div className="min-w-0 text-center">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-black/35 dark:text-white/35">In Person</p>
-          <h1 className="truncate text-[19px] font-bold text-black dark:text-white">
+          <h1 className="truncate text-[18px] font-bold leading-tight text-black dark:text-white">
             与 {shownName} 见面
           </h1>
+          <p className="mt-[3px] text-[9px] font-semibold uppercase tracking-[0.34em] text-black/35 dark:text-white/35">In Person</p>
         </div>
         <div className="flex items-center gap-2">
           {meet ? (
@@ -1174,38 +1174,33 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       ) : (
         /* —— 见面进行中 —— */
         <>
-          {/* 见面信息：毛玻璃胶囊（头像 / 名字 / 时间 / 状态 / 关系背景） */}
+          {/* 见面信息：紧凑毛玻璃胶囊（头像+在线点 / 名字 / 此刻就在你身边 / 时间·状态·关系背景） */}
           <div className="px-4">
-            <div className={`rounded-[22px] p-3.5 ${GLASS_CARD}`}>
-              <div className="flex items-center gap-3">
-                <MeetAvatar contact={contact} size={44} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-[16px] font-bold text-black dark:text-white">{shownName}</p>
-                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#34C759]/15 px-2 py-[3px] text-[10px] font-semibold text-[#1E9E46] dark:text-[#4ADE80]">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#34C759]" aria-hidden="true" />
-                      见面中
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-[11px] text-black/40 dark:text-white/45">从聊天继续 · Meeting In Progress</p>
+            <div className={`relative overflow-hidden rounded-[20px] px-3.5 py-3 ${GLASS_CARD}`}>
+              <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/90 to-transparent" aria-hidden="true" />
+              <div className="flex items-center gap-2.5">
+                <div className="relative shrink-0">
+                  <MeetAvatar contact={contact} size={38} />
+                  <span className="absolute bottom-0 right-0 h-[11px] w-[11px] rounded-full border-2 border-white bg-[#34C759] dark:border-[#2a2a2c]" aria-hidden="true" />
+                </div>
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <p className="truncate text-[15px] font-bold text-black dark:text-white">{shownName}</p>
+                  <span className="flex min-w-0 shrink items-center gap-1 rounded-full bg-[#34C759]/15 px-2 py-[3px] text-[10px] font-semibold text-[#1E9E46] dark:text-[#4ADE80]">
+                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#34C759]" aria-hidden="true" />
+                    此刻就在你身边
+                  </span>
                 </div>
               </div>
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
+              <div className="mt-2 flex flex-wrap gap-1.5">
                 <MetaChip label="时间" value={startedLabel} />
                 <MetaChip label="状态" value={meet.scene.charState || '延续刚才的情绪'} />
                 <MetaChip label="关系背景" value={`已承接最近 ${meet.carryN} 条聊天`} />
               </div>
             </div>
-            <div className="mt-2.5 flex justify-center">
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] text-black/55 dark:text-white/55 ${GLASS_CAPSULE}`}>
-                <span className="h-1.5 w-1.5 rounded-full bg-[#34C759]" aria-hidden="true" />
-                <span className="font-medium text-black/70 dark:text-white/75">{shownName}</span> 此刻就在你身边
-              </span>
-            </div>
           </div>
 
           {/* 叙事流 */}
-          <div ref={scrollRef} className="mt-3 flex-1 space-y-4 overflow-y-auto px-4 pb-4 thin-scrollbar">
+          <div ref={scrollRef} className="mt-2.5 flex-1 space-y-4 overflow-y-auto px-4 pb-3 thin-scrollbar">
             {meet.entries.map((e) =>
               e.role === 'char' ? (
                 <div key={e.id} className={`rounded-[20px] rounded-tl-[8px] p-4 ${GLASS_CARD}`}>
@@ -1235,64 +1230,66 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             ) : null}
           </div>
 
-          {/* 操作条 */}
-          <div className="flex items-center gap-1.5 px-3 pb-2">
-            <button
-              type="button"
-              data-testid="offline-continue"
-              onClick={() => void runGen('next', '')}
-              disabled={!!gen}
-              className={`flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-3 text-[13px] font-medium text-black/75 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
-            >
-              <RotateCcw className="h-4 w-4 shrink-0" strokeWidth={2} />
-              让 {shownName} 继续
-            </button>
-            <button
-              type="button"
-              data-testid="offline-reroll"
-              onClick={reroll}
-              disabled={!canReroll}
-              className={`flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-3 text-[13px] font-medium text-black/75 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
-            >
-              <RefreshCw className="h-4 w-4 shrink-0" strokeWidth={2} />
-              重 Roll
-            </button>
-            <button
-              type="button"
-              data-testid="offline-save"
-              onClick={saveMeeting}
-              disabled={!!gen}
-              className="ml-auto flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[#1C1C1E]/90 px-3 text-[13px] font-semibold text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
-            >
-              <BookOpen className="h-4 w-4 shrink-0" strokeWidth={2} />
-              保存这次见面
-            </button>
-          </div>
-
-          {/* 输入框 */}
+          {/* 底部：操作圆钮分列输入框左右两侧 + 内嵌发送 */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               sendInput();
             }}
-            className="flex items-center gap-2 px-3 pb-[30px]"
+            className="flex items-center gap-1.5 px-3 pb-[30px] pt-1"
           >
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={`说点什么，或描述你的动作…`}
-              aria-label="线下输入"
-              data-testid="offline-input"
-              className="h-11 min-w-0 flex-1 rounded-full border border-white/70 bg-white/60 px-4 text-[15px] text-black shadow-sm outline-none backdrop-blur-xl placeholder:text-black/30 dark:border-white/10 dark:bg-white/[0.08] dark:text-white dark:placeholder:text-white/30"
-            />
             <button
-              type="submit"
-              data-testid="offline-send"
-              disabled={!input.trim() || !!gen}
-              className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-[#1C1C1E]/90 px-4 text-[14px] font-semibold text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+              type="button"
+              data-testid="offline-continue"
+              aria-label={`让 ${shownName} 继续`}
+              title={`让 ${shownName} 继续`}
+              onClick={() => void runGen('next', '')}
+              disabled={!!gen}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-black/75 active:scale-95 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
             >
-              发送
-              <Send className="h-4 w-4" strokeWidth={2} />
+              <RotateCcw className="h-[18px] w-[18px]" strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              data-testid="offline-reroll"
+              aria-label="重 Roll"
+              title="重 Roll"
+              onClick={reroll}
+              disabled={!canReroll}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-black/75 active:scale-95 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
+            >
+              <RefreshCw className="h-[18px] w-[18px]" strokeWidth={2} />
+            </button>
+            <div className="relative min-w-0 flex-1">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={`说点什么，或描述你的动作…`}
+                aria-label="线下输入"
+                data-testid="offline-input"
+                className="h-10 w-full rounded-full border border-white/70 bg-white/60 pl-4 pr-11 text-[14px] text-black shadow-sm outline-none backdrop-blur-xl placeholder:text-black/30 dark:border-white/10 dark:bg-white/[0.08] dark:text-white dark:placeholder:text-white/30"
+              />
+              <button
+                type="submit"
+                data-testid="offline-send"
+                aria-label="发送"
+                title="发送"
+                disabled={!input.trim() || !!gen}
+                className="absolute inset-y-0 right-[3px] my-auto flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[#1C1C1E]/90 text-white shadow-md backdrop-blur-xl active:scale-95 active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+              >
+                <Send className="h-4 w-4 -translate-x-px" strokeWidth={2} />
+              </button>
+            </div>
+            <button
+              type="button"
+              data-testid="offline-save"
+              aria-label="保存这次见面"
+              title="保存这次见面"
+              onClick={saveMeeting}
+              disabled={!!gen}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-black/75 active:scale-95 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
+            >
+              <BookOpen className="h-[18px] w-[18px]" strokeWidth={2} />
             </button>
           </form>
         </>

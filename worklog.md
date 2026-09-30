@@ -12449,3 +12449,19 @@ Stage Summary:
 - 仓库已完整落位 /home/z/my-project，dev server 运行中，端到端验证通过，可开始功能修改
 - git remote origin 已配置（token 内嵌于 URL），branch=main，与 origin/main 同步
 - 项目数据架构：IndexedDB 客户端存储为主（localDB 封装），Prisma/SQLite 仅存 WxBackground/Contact 等少量数据
+
+---
+Task ID: 线下玻璃化-2
+Agent: 主协调者 (Z.ai Code)
+Task: 线下界面两轮美化——毛玻璃化 + 精调（顶部收窄差异化 / 底部操作钮分列输入框两侧）
+
+Work Log:
+- 第一轮（毛玻璃化）：offline-meeting.tsx 全面玻璃风格重做——GlassAmbience 环境光斑（暖橘/樱粉/浅绿三色 blur 光斑）打底，GLASS_CARD / GLASS_CAPSULE 两个共用玻璃类贯穿全部卡片/气泡/按钮；Seg 分段控件改毛玻璃药丸；输入框/下拉/文本域玻璃化；头像改圆形+白色 ring；叙事卡加迷你头像+名字+时间头（对齐参考图3）；用户气泡改深色玻璃；现场设置面板整面玻璃化（与参考图1对齐）
+- 第二轮（精调）：①头部收窄——pt-56→54、pb-2→1.5，标题改到 eyebrow 上方（差异化）；②见面卡紧凑化——去掉「从聊天继续·Meeting In Progress」副标题与独立 presence 胶囊行，「●此刻就在你身边」绿胶囊（脉冲点）移到名字右侧，头像 44→38 叠 11px 在线绿点，卡加顶部渐变高光线，MetaChip（时间/状态/关系背景）移出名字列放全宽（3行并2行，整卡显著变矮）；③底部重排——删除独立操作条，继续/重Roll/保存改为三个 40px 玻璃圆钮分列输入框左右两侧，输入框内嵌 34px 深色圆形发送钮（inset-y-0 + my-auto 垂直居中，弃用 top-1/2+translate 组合），一行搞定、纵向更省
+- 排障：首轮内嵌发送钮 absolute 偏移未生效（right-[3px]/top-1/2/-translate-y-1/2 新工具类未命中，元素停在静态位置叠住占位文字）→ 换 inset-y-0 right-[3px] my-auto 稳定方案；见面卡 chips 在名字列内被挤成 3 行反而变高 → 移到全宽行
+- 验证：eslint 单文件 0 错误；tsc --noEmit 0 错误；agent-browser E2E——解锁→信息→觉斐会话→+入线下→开始见面生成→见面卡（头像绿点/名字/此刻就在你身边/时间·状态·关系背景 chips 两行）→输入动作→内嵌发送钮→AI 回复→保存圆钮→回到 Ready To Meet；console/errors 0 错误；dev.log 无异常
+- 全部 data-testid 锚点（offline-start/continue/reroll/save/input/send/save-star/settings-entry）保留，逻辑零改动；QQ/微信/信息三端共用组件自动同步
+
+Stage Summary:
+- 线下界面完成两轮玻璃化精调：顶部紧凑差异化（防抄袭布局）、底部单行化（操作钮分列输入框两侧+内嵌发送），功能与测试锚点全部不变
+- 产出文件：src/components/apps/offline-meeting.tsx（唯一改动文件）
