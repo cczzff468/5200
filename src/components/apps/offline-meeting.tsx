@@ -3,10 +3,11 @@
 /**
  * 线下模式（约会）—— 全屏见面页（QQ / 微信 / 信息三端共用）。
  *
- * 结构（对照需求与参考截图）：
- * - 头部：返回 + 「IN PERSON · 与 X 见面」+ 收藏（保存）+ 现场设置；
- * - 见面卡：MEETING IN PROGRESS / 从聊天继续 / 时间·角色状态·关系背景；
- * - 叙事流：角色叙述（白色大卡）+ 用户输入（右侧深色气泡）；
+ * 结构（对照需求与参考截图，整体毛玻璃/胶囊玻璃风格）：
+ * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
+ * - 头部：返回 + 「IN PERSON · 与 X 见面」+ 收藏（保存）+ 现场设置（玻璃圆钮）；
+ * - 见面卡：毛玻璃胶囊——头像 / 名字 / 见面中 / 时间·状态·关系背景（MetaChip）；
+ * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡）；
  * - 底部：让 X 继续 / 重 Roll / 保存这次见面 + 输入框（说什么，或描述你的动作…）；
  * - 无见面时：承接条数选择（10/20/30/40/50/自定义）+ 开始见面；
  * - 现场设置面板：回复字数 / 用户·角色叙述人称 / 回复预设 / 基础设置 / 变量说明 /
@@ -106,19 +107,56 @@ export interface OfflineMeetingPageProps {
   onToast?: (m: string) => void;
 }
 
-// ---------------- 小组件 ----------------
+// ---------------- 玻璃风格共用件 ----------------
 
-/** 三档分段选择 */
+/** 毛玻璃卡（叙事 / 信息卡） */
+const GLASS_CARD =
+  'border border-white/60 bg-white/55 shadow-[0_8px_28px_rgba(60,50,40,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.06] dark:shadow-[0_8px_28px_rgba(0,0,0,0.4)]';
+
+/** 毛玻璃胶囊（圆钮 / 小按钮 / 状态条） */
+const GLASS_CAPSULE =
+  'border border-white/70 bg-white/55 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08]';
+
+/** 环境光斑：给毛玻璃提供可折射的底色 */
+function GlassAmbience() {
+  return (
+    <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+      <div className="absolute -right-16 -top-20 h-72 w-72 rounded-full bg-[#FFD9A0]/60 blur-[80px] dark:bg-[#8a5a2b]/25" />
+      <div className="absolute -left-20 top-1/3 h-64 w-64 rounded-full bg-[#F5C3CE]/50 blur-[80px] dark:bg-[#7c3d4b]/20" />
+      <div className="absolute -bottom-24 right-1/4 h-64 w-64 rounded-full bg-[#CBE6D2]/45 blur-[80px] dark:bg-[#2f5c44]/20" />
+    </div>
+  );
+}
+
+/** 信息小胶囊（时间 / 状态 / 关系背景） */
+function MetaChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-white/70 bg-white/55 px-2.5 py-1 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.09]">
+      <span className="shrink-0 text-[10px] tracking-wide text-black/35 dark:text-white/35">{label}</span>
+      <span className="truncate text-[11px] font-medium text-black/70 dark:text-white/85">{value}</span>
+    </span>
+  );
+}
+
+/** HH:MM */
+function hhmm(ts: number) {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 多档分段选择（毛玻璃药丸） */
 function Seg<T extends string>({ value, options, onChange }: { value: T; options: Array<{ v: T; label: string }>; onChange: (v: T) => void }) {
   return (
-    <div className="flex rounded-[10px] bg-black/[0.05] p-0.5 dark:bg-white/[0.08]">
+    <div className="flex rounded-full bg-black/[0.06] p-1 dark:bg-white/[0.08]">
       {options.map((o) => (
         <button
           key={o.v}
           type="button"
           onClick={() => onChange(o.v)}
-          className={`h-8 flex-1 rounded-[8px] text-[13px] transition ${
-            value === o.v ? 'bg-white font-medium text-black shadow-sm dark:bg-[#48484A] dark:text-white' : 'text-black/45 dark:text-white/45'
+          className={`h-8 flex-1 rounded-full text-[13px] transition ${
+            value === o.v
+              ? 'bg-white/90 font-medium text-black shadow-sm backdrop-blur-md dark:bg-white/[0.18] dark:text-white'
+              : 'text-black/45 dark:text-white/45'
           }`}
         >
           {o.label}
@@ -138,21 +176,21 @@ function FieldLabel({ title, hint }: { title: string; hint?: string }) {
 }
 
 const inputCls =
-  'h-11 w-full rounded-[12px] border border-black/[0.08] bg-white px-3 text-[15px] text-black outline-none placeholder:text-black/25 focus:border-black/20 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white dark:placeholder:text-white/25 dark:focus:border-white/25';
+  'h-11 w-full rounded-[14px] border border-white/70 bg-white/70 px-3 text-[15px] text-black outline-none backdrop-blur-md placeholder:text-black/25 focus:border-black/25 dark:border-white/10 dark:bg-white/[0.08] dark:text-white dark:placeholder:text-white/25 dark:focus:border-white/30';
 
 function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={`rounded-[18px] bg-white p-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)] dark:bg-[#1C1C1E] ${className}`}>{children}</div>;
+  return <div className={`rounded-[20px] p-4 ${GLASS_CARD} ${className}`}>{children}</div>;
 }
 
 /** 头像（联系人头像 dataURL 或首字母圆） */
 function MeetAvatar({ contact, size = 44 }: { contact: ContactRecord | null; size?: number }) {
   const name = contact?.nickname?.trim() || contact?.name || '?';
   if (contact?.avatar) {
-    return <img src={contact.avatar} alt={name} className="rounded-[12px] object-cover" style={{ width: size, height: size }} />;
+    return <img src={contact.avatar} alt={name} className="rounded-full object-cover ring-2 ring-white/80 dark:ring-white/15" style={{ width: size, height: size }} />;
   }
   return (
     <div
-      className="flex items-center justify-center rounded-[12px] bg-gradient-to-br from-[#FFD54F] to-[#FFB300] font-semibold text-white"
+      className="flex items-center justify-center rounded-full bg-gradient-to-br from-[#FFD54F] to-[#FFB300] font-semibold text-white ring-2 ring-white/80 dark:ring-white/15"
       style={{ width: size, height: size, fontSize: size * 0.42 }}
       aria-hidden="true"
     >
@@ -189,7 +227,8 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
   const up = (patch: Partial<OfflineMeetSettings>) => setD((prev) => ({ ...prev, ...patch }));
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#ECEBE9] dark:bg-[#101012]">
+    <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white">
+      <GlassAmbience />
       <div className="flex items-start justify-between px-5 pb-3 pt-[58px]">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Meeting Preferences</p>
@@ -200,7 +239,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
           type="button"
           aria-label="关闭现场设置"
           onClick={onClose}
-          className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-black/60 shadow-sm active:opacity-60 dark:bg-white/10 dark:text-white/70"
+          className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/60 active:opacity-60 dark:text-white/70 ${GLASS_CAPSULE}`}
         >
           <X className="h-[18px] w-[18px]" strokeWidth={2} />
         </button>
@@ -272,7 +311,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
               <button
                 type="button"
                 onClick={() => setPresetPanel({ mode: 'new', name: '' })}
-                className="flex h-10 items-center justify-center gap-1 rounded-[12px] border border-black/[0.08] bg-white text-[13px] text-black/70 active:opacity-60 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white/70"
+                className="flex h-10 items-center justify-center gap-1 rounded-full border border-white/70 bg-white/55 text-[13px] text-black/70 backdrop-blur-md active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/70"
               >
                 <Plus className="h-4 w-4" /> 新建预设
               </button>
@@ -285,7 +324,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
                     setPresetPanel({ mode: 'save-as', name: '' });
                   }
                 }}
-                className="flex h-10 items-center justify-center rounded-[12px] border border-black/[0.08] bg-white text-[13px] text-black/70 active:opacity-60 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white/70"
+                className="flex h-10 items-center justify-center rounded-full border border-white/70 bg-white/55 text-[13px] text-black/70 backdrop-blur-md active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/70"
               >
                 保存当前预设
               </button>
@@ -301,7 +340,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
                     setTplDraft(fallback.template);
                   }
                 }}
-                className="mt-2 flex h-9 w-full items-center justify-center gap-1 rounded-[12px] text-[13px] text-red-500/80 active:opacity-60"
+                className="mt-2 flex h-9 w-full items-center justify-center gap-1 rounded-full text-[13px] text-red-500/80 active:opacity-60"
               >
                 <Trash2 className="h-4 w-4" /> 删除「{activePreset.name}」
               </button>
@@ -311,7 +350,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
 
         {/* 新建/另存预设 命名面板 */}
         {presetPanel ? (
-          <Card className="border border-dashed border-black/15 dark:border-white/15">
+          <Card className="border-dashed">
             <FieldLabel title={presetPanel.mode === 'new' ? '新建预设' : '保存为新预设'} hint="把当前编辑区里的模板内容保存成一个预设" />
             <input
               value={presetPanel.name}
@@ -325,7 +364,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
               <button
                 type="button"
                 onClick={() => setPresetPanel(null)}
-                className="h-10 rounded-[12px] border border-black/[0.08] bg-white text-[13px] text-black/60 active:opacity-60 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white/60"
+                className="h-10 rounded-full border border-white/70 bg-white/55 text-[13px] text-black/60 backdrop-blur-md active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60"
               >
                 取消
               </button>
@@ -337,7 +376,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
                   up({ presetId: id });
                   setPresetPanel(null);
                 }}
-                className="h-10 rounded-[12px] bg-[#1C1C1E] text-[13px] font-medium text-white active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+                className="h-10 rounded-full bg-[#1C1C1E]/90 text-[13px] font-medium text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
               >
                 保存
               </button>
@@ -455,7 +494,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
           <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
             {OFFLINE_VARIABLES.map((v) => (
               <p key={v.name} className="text-[12px] leading-[1.5] text-black/55 dark:text-white/55">
-                <code className="rounded bg-black/[0.05] px-1 py-0.5 font-mono text-[11px] text-black/75 dark:bg-white/10 dark:text-white/75">{v.name}</code> {v.desc}
+                <code className="rounded-md bg-white/60 px-1.5 py-0.5 font-mono text-[11px] text-black/75 ring-1 ring-white/70 dark:bg-white/[0.08] dark:text-white/75 dark:ring-white/10">{v.name}</code> {v.desc}
               </p>
             ))}
           </div>
@@ -468,7 +507,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
             value={tplDraft}
             onChange={(e) => setTplDraft(e.target.value)}
             rows={14}
-            className="w-full rounded-[12px] border border-black/[0.08] bg-white p-3 text-[13px] leading-[1.7] text-black outline-none focus:border-black/20 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white dark:focus:border-white/25"
+            className="w-full rounded-[14px] border border-white/70 bg-white/70 p-3 text-[13px] leading-[1.7] text-black outline-none backdrop-blur-md focus:border-black/25 dark:border-white/10 dark:bg-white/[0.08] dark:text-white dark:focus:border-white/30"
             aria-label="角色回复预设模板"
           />
           <p className="mt-1.5 text-[12px] leading-[1.5] text-black/40 dark:text-white/40">
@@ -492,14 +531,14 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
             ))}
           </select>
           {activeStyle ? (
-            <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-[12px] bg-black/[0.03] p-3 text-[12px] leading-[1.7] text-black/60 thin-scrollbar dark:bg-white/[0.05] dark:text-white/60">
+            <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-[14px] border border-white/60 bg-white/50 p-3 text-[12px] leading-[1.7] text-black/60 backdrop-blur-md thin-scrollbar dark:border-white/10 dark:bg-white/[0.06] dark:text-white/60">
               {activeStyle.content}
             </div>
           ) : null}
           <button
             type="button"
             onClick={() => setStylePanel({ name: '', content: '' })}
-            className="mt-2 flex h-10 w-full items-center justify-center gap-1 rounded-[12px] border border-dashed border-black/15 text-[13px] text-black/60 active:opacity-60 dark:border-white/15 dark:text-white/60"
+            className="mt-2 flex h-10 w-full items-center justify-center gap-1 rounded-full border border-dashed border-black/20 bg-white/40 text-[13px] text-black/60 backdrop-blur-md active:opacity-60 dark:border-white/20 dark:bg-white/[0.05] dark:text-white/60"
           >
             <Plus className="h-4 w-4" /> 新建文风
           </button>
@@ -511,7 +550,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
                 onDeleteStyle(activeStyle.id);
                 if (fallback) up({ styleId: fallback.id });
               }}
-              className="mt-1 flex h-9 w-full items-center justify-center gap-1 rounded-[12px] text-[13px] text-red-500/80 active:opacity-60"
+              className="mt-1 flex h-9 w-full items-center justify-center gap-1 rounded-full text-[13px] text-red-500/80 active:opacity-60"
             >
               <Trash2 className="h-4 w-4" /> 删除「{activeStyle.name}」
             </button>
@@ -520,7 +559,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
 
         {/* 新建文风面板 */}
         {stylePanel ? (
-          <Card className="border border-dashed border-black/15 dark:border-white/15">
+          <Card className="border-dashed">
             <FieldLabel title="新建文风" hint="文风内容会替换进 {{writing_style}} 变量，写给 AI 的写作指令" />
             <input
               value={stylePanel.name}
@@ -535,14 +574,14 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
               onChange={(e) => setStylePanel({ ...stylePanel, content: e.target.value })}
               rows={6}
               placeholder="描述这种文风的句子节奏、用词、修辞与情绪处理方式…"
-              className="mt-2 w-full rounded-[12px] border border-black/[0.08] bg-white p-3 text-[13px] leading-[1.7] text-black outline-none focus:border-black/20 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white"
+              className="mt-2 w-full rounded-[14px] border border-white/70 bg-white/70 p-3 text-[13px] leading-[1.7] text-black outline-none backdrop-blur-md focus:border-black/25 dark:border-white/10 dark:bg-white/[0.08] dark:text-white dark:focus:border-white/30"
               aria-label="文风内容"
             />
             <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setStylePanel(null)}
-                className="h-10 rounded-[12px] border border-black/[0.08] bg-white text-[13px] text-black/60 active:opacity-60 dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white/60"
+                className="h-10 rounded-full border border-white/70 bg-white/55 text-[13px] text-black/60 backdrop-blur-md active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60"
               >
                 取消
               </button>
@@ -554,7 +593,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
                   up({ styleId: id });
                   setStylePanel(null);
                 }}
-                className="h-10 rounded-[12px] bg-[#1C1C1E] text-[13px] font-medium text-white active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+                className="h-10 rounded-full bg-[#1C1C1E]/90 text-[13px] font-medium text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
               >
                 保存
               </button>
@@ -563,7 +602,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
         ) : null}
 
         {/* 背景读取说明 */}
-        <div className="flex items-start gap-2 rounded-[14px] bg-black/[0.04] px-3.5 py-3 dark:bg-white/[0.06]">
+        <div className="flex items-start gap-2 rounded-[18px] border border-white/50 bg-white/40 px-3.5 py-3 backdrop-blur-lg dark:border-white/[0.08] dark:bg-white/[0.05]">
           <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-black/50 dark:bg-white/50" aria-hidden="true" />
           <p className="text-[12px] leading-[1.6] text-black/50 dark:text-white/50">
             生成前会先读取世界书分析出的世界背景；没有分析结果时，再根据角色设定推断背景。之后才读取人设、字数、人称、文风和现场记录。
@@ -572,18 +611,18 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
       </div>
 
       {/* 底部操作 */}
-      <div className="flex items-center gap-3 border-t border-black/[0.06] bg-[#ECEBE9] px-4 pb-[30px] pt-3 dark:border-white/[0.06] dark:bg-[#101012]">
+      <div className="flex items-center gap-3 border-t border-white/50 bg-white/40 px-4 pb-[30px] pt-3 backdrop-blur-xl dark:border-white/[0.06] dark:bg-white/[0.04]">
         <button
           type="button"
           onClick={onClose}
-          className="h-12 flex-1 rounded-[14px] bg-white text-[15px] font-medium text-black/70 shadow-sm active:opacity-70 dark:bg-[#2C2C2E] dark:text-white/80"
+          className={`h-12 flex-1 rounded-full text-[15px] font-medium text-black/70 active:opacity-70 dark:text-white/80 ${GLASS_CAPSULE}`}
         >
           取消
         </button>
         <button
           type="button"
           onClick={() => onCommit(d, tplDraft)}
-          className="h-12 flex-1 rounded-[14px] bg-[#1C1C1E] text-[15px] font-semibold text-white active:opacity-80 dark:bg-white dark:text-black"
+          className="h-12 flex-1 rounded-full bg-[#1C1C1E]/90 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(28,28,30,0.25)] backdrop-blur-xl active:opacity-80 dark:bg-white dark:text-black"
         >
           保存设置
         </button>
@@ -969,9 +1008,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
   if (loadErr) {
     return (
-      <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#ECEBE9] px-8 text-center dark:bg-[#101012]">
+      <div className="absolute inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-[#F3F1EE] px-8 text-center dark:bg-[#0C0C0E]">
+        <GlassAmbience />
         <p className="text-[15px] text-black/50 dark:text-white/50">{loadErr}</p>
-        <button type="button" onClick={onBack} className="mt-4 rounded-full bg-[#1C1C1E] px-5 py-2 text-[14px] font-medium text-white dark:bg-white dark:text-black">
+        <button type="button" onClick={onBack} className="mt-4 rounded-full bg-[#1C1C1E]/90 px-5 py-2 text-[14px] font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black">
           返回
         </button>
       </div>
@@ -979,7 +1019,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   }
   if (!loaded || !contact) {
     return (
-      <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#ECEBE9] dark:bg-[#101012]">
+      <div className="absolute inset-0 z-50 flex items-center justify-center overflow-hidden bg-[#F3F1EE] dark:bg-[#0C0C0E]">
+        <GlassAmbience />
         <Loader2 className="h-6 w-6 animate-spin text-black/30 dark:text-white/30" />
       </div>
     );
@@ -997,7 +1038,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     : '';
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col bg-[#ECEBE9] text-black dark:bg-[#101012] dark:text-white" data-testid={`offline-meet-${app}`}>
+    <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white" data-testid={`offline-meet-${app}`}>
+      <GlassAmbience />
       <LocalToast msg={onToast ? '' : toast} />
 
       {/* 头部 */}
@@ -1006,7 +1048,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           type="button"
           aria-label="返回聊天"
           onClick={onBack}
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black/70 shadow-sm active:opacity-60 dark:bg-white/10 dark:text-white/80"
+          className={`flex h-9 w-9 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
         >
           <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
         </button>
@@ -1024,7 +1066,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               data-testid="offline-save-star"
               onClick={saveMeeting}
               disabled={!!gen}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black/70 shadow-sm active:opacity-60 disabled:opacity-40 dark:bg-white/10 dark:text-white/80"
+              className={`flex h-9 w-9 items-center justify-center rounded-full text-black/70 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
             >
               <Star className="h-[18px] w-[18px]" strokeWidth={1.8} />
             </button>
@@ -1034,7 +1076,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             aria-label="现场设置"
             data-testid="offline-settings-entry"
             onClick={() => setSettingsOpen(true)}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black/70 shadow-sm active:opacity-60 dark:bg-white/10 dark:text-white/80"
+            className={`flex h-9 w-9 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
           >
             <SlidersHorizontal className="h-[18px] w-[18px]" strokeWidth={1.8} />
           </button>
@@ -1045,25 +1087,25 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       {!meet ? (
         /* —— 开始见面（承接设置） —— */
         <div className="flex-1 overflow-y-auto px-4 pb-6 thin-scrollbar">
-          <div className="mt-2 rounded-[20px] bg-white p-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)] dark:bg-[#1C1C1E]">
-            <div className="flex items-start justify-between">
-              <div>
+          <Card className="mt-2">
+            <div className="flex items-center gap-3">
+              <MeetAvatar contact={contact} size={46} />
+              <div className="min-w-0">
                 <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/35 dark:text-white/35">
                   <span className="h-2 w-2 rounded-full bg-[#34C759]" aria-hidden="true" /> Ready To Meet
                 </p>
-                <h2 className="mt-1 text-[22px] font-bold text-black dark:text-white">从聊天继续</h2>
-                <p className="mt-0.5 text-[13px] text-black/45 dark:text-white/45">把刚才的聊天延续到线下</p>
+                <h2 className="mt-0.5 text-[20px] font-bold text-black dark:text-white">从聊天继续</h2>
+                <p className="text-[12px] text-black/45 dark:text-white/45">把刚才的聊天延续到线下</p>
               </div>
-              <MeetAvatar contact={contact} />
             </div>
             <div className="my-3 border-t border-black/[0.06] dark:border-white/[0.08]" />
             <p className="text-[12px] leading-[1.7] text-black/50 dark:text-white/50">
               开始后会基于 {shownName}
               的人设、世界书背景、相关记忆和最近的线上聊天，生成包含地点、时间、环境、角色状态与对白的线下场景。
             </p>
-          </div>
+          </Card>
 
-          <div className="mt-4 rounded-[20px] bg-white p-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)] dark:bg-[#1C1C1E]">
+          <Card className="mt-3">
             <p className="text-[15px] font-medium text-black/85 dark:text-white/90">从聊天继续承接最近 N 条聊天</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {OFFLINE_CARRY_OPTIONS.map((n) => (
@@ -1073,8 +1115,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                   onClick={() => setCarryChoice(n)}
                   className={`h-9 min-w-[52px] rounded-full px-3 text-[14px] transition ${
                     carryChoice === n
-                      ? 'bg-[#1C1C1E] font-medium text-white dark:bg-white dark:text-black'
-                      : 'bg-black/[0.05] text-black/60 dark:bg-white/[0.08] dark:text-white/60'
+                      ? 'bg-[#1C1C1E]/90 font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black'
+                      : 'border border-white/70 bg-white/50 text-black/60 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60'
                   }`}
                 >
                   {n}
@@ -1085,8 +1127,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                 onClick={() => setCarryChoice('custom')}
                 className={`h-9 rounded-full px-3 text-[14px] transition ${
                   carryChoice === 'custom'
-                    ? 'bg-[#1C1C1E] font-medium text-white dark:bg-white dark:text-black'
-                    : 'bg-black/[0.05] text-black/60 dark:bg-white/[0.08] dark:text-white/60'
+                    ? 'bg-[#1C1C1E]/90 font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black'
+                    : 'border border-white/70 bg-white/50 text-black/60 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60'
                 }`}
               >
                 自定义
@@ -1101,7 +1143,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                 value={customN}
                 onChange={(e) => setCustomN(e.target.value)}
                 onBlur={() => setCustomN(String(Math.min(200, Math.max(5, Math.floor(Number(customN) || 20)))))}
-                className="mt-3 h-10 w-32 rounded-[12px] border border-black/[0.08] bg-white px-3 text-[15px] text-black outline-none dark:border-white/10 dark:bg-[#2C2C2E] dark:text-white"
+                className="mt-3 h-10 w-32 rounded-[14px] border border-white/70 bg-white/70 px-3 text-[15px] text-black outline-none backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white"
                 aria-label="自定义承接条数"
                 placeholder="5 ~ 200"
               />
@@ -1109,14 +1151,14 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             <p className="mt-3 text-[12px] text-black/40 dark:text-white/40">
               {availableCount > 0 ? `最近 ${Math.min(availableCount, carryChoice === 'custom' ? Math.floor(Number(customN) || 20) : carryChoice)} 条可用（共找到 ${availableCount} 条聊天记录）` : '最近没有线上聊天记录，也可以直接见面'}
             </p>
-          </div>
+          </Card>
 
           <button
             type="button"
             data-testid="offline-start"
             onClick={() => void startMeeting()}
             disabled={starting}
-            className="mt-5 flex h-[52px] w-full items-center justify-center gap-2 rounded-[16px] bg-[#1C1C1E] text-[16px] font-semibold text-white active:opacity-80 disabled:opacity-50 dark:bg-white dark:text-black"
+            className="mt-5 flex h-[52px] w-full items-center justify-center gap-2 rounded-full bg-[#1C1C1E]/90 text-[16px] font-semibold text-white shadow-[0_10px_30px_rgba(28,28,30,0.28)] backdrop-blur-xl active:opacity-80 disabled:opacity-50 dark:bg-white dark:text-black"
           >
             {starting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Star className="h-5 w-5" strokeWidth={2} />}
             {starting ? '正在准备见面…' : '开始见面'}
@@ -1124,7 +1166,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
-            className="mt-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-[16px] border border-black/[0.08] bg-white text-[14px] text-black/60 active:opacity-60 dark:border-white/10 dark:bg-transparent dark:text-white/60"
+            className="mt-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-full border border-white/70 bg-white/55 text-[14px] text-black/60 backdrop-blur-xl active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60"
           >
             <SlidersHorizontal className="h-4 w-4" /> 现场设置
           </button>
@@ -1132,66 +1174,63 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       ) : (
         /* —— 见面进行中 —— */
         <>
-          {/* 见面信息卡 */}
+          {/* 见面信息：毛玻璃胶囊（头像 / 名字 / 时间 / 状态 / 关系背景） */}
           <div className="px-4">
-            <div className="rounded-[20px] bg-white p-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)] dark:bg-[#1C1C1E]">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/35 dark:text-white/35">
-                    <span className="h-2 w-2 rounded-full bg-[#34C759]" aria-hidden="true" /> Meeting In Progress
-                  </p>
-                  <h2 className="mt-1 text-[22px] font-bold text-black dark:text-white">从聊天继续</h2>
-                  <p className="mt-0.5 text-[13px] text-black/45 dark:text-white/45">把刚才的聊天延续到线下</p>
+            <div className={`rounded-[22px] p-3.5 ${GLASS_CARD}`}>
+              <div className="flex items-center gap-3">
+                <MeetAvatar contact={contact} size={44} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-[16px] font-bold text-black dark:text-white">{shownName}</p>
+                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#34C759]/15 px-2 py-[3px] text-[10px] font-semibold text-[#1E9E46] dark:text-[#4ADE80]">
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#34C759]" aria-hidden="true" />
+                      见面中
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-[11px] text-black/40 dark:text-white/45">从聊天继续 · Meeting In Progress</p>
                 </div>
-                <MeetAvatar contact={contact} />
               </div>
-              <div className="my-3 border-t border-black/[0.06] dark:border-white/[0.08]" />
-              <div className="grid grid-cols-3 gap-2">
-                <div className="min-w-0">
-                  <p className="text-[11px] text-black/35 dark:text-white/35">时间</p>
-                  <p className="mt-0.5 truncate text-[13px] font-semibold text-black/80 dark:text-white/85">{startedLabel}</p>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-black/35 dark:text-white/35">角色状态</p>
-                  <p className="mt-0.5 truncate text-[13px] font-semibold text-black/80 dark:text-white/85">{meet.scene.charState || '延续刚才的情绪'}</p>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-black/35 dark:text-white/35">关系背景</p>
-                  <p className="mt-0.5 truncate text-[13px] font-semibold text-black/80 dark:text-white/85">承接 {meet.carryN} 条聊天</p>
-                </div>
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                <MetaChip label="时间" value={startedLabel} />
+                <MetaChip label="状态" value={meet.scene.charState || '延续刚才的情绪'} />
+                <MetaChip label="关系背景" value={`已承接最近 ${meet.carryN} 条聊天`} />
               </div>
             </div>
-            <p className="mt-3 flex items-center gap-1.5 px-1 text-[12px] text-black/45 dark:text-white/45">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#34C759]" aria-hidden="true" />
-              <span className="font-medium text-black/65 dark:text-white/70">{shownName}</span> 此刻就在你身边
-            </p>
+            <div className="mt-2.5 flex justify-center">
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] text-black/55 dark:text-white/55 ${GLASS_CAPSULE}`}>
+                <span className="h-1.5 w-1.5 rounded-full bg-[#34C759]" aria-hidden="true" />
+                <span className="font-medium text-black/70 dark:text-white/75">{shownName}</span> 此刻就在你身边
+              </span>
+            </div>
           </div>
 
           {/* 叙事流 */}
           <div ref={scrollRef} className="mt-3 flex-1 space-y-4 overflow-y-auto px-4 pb-4 thin-scrollbar">
             {meet.entries.map((e) =>
               e.role === 'char' ? (
-                <div key={e.id}>
-                  <p className="mb-1 px-1 text-[11px] text-black/35 dark:text-white/35">{shownName}</p>
-                  <div className="whitespace-pre-wrap rounded-[18px] bg-white p-4 text-[15px] leading-[1.95] text-black/85 shadow-[0_1px_4px_rgba(0,0,0,0.04)] dark:bg-[#1C1C1E] dark:text-white/85">
-                    {e.text}
+                <div key={e.id} className={`rounded-[20px] rounded-tl-[8px] p-4 ${GLASS_CARD}`}>
+                  <div className="mb-2 flex items-center gap-2">
+                    <MeetAvatar contact={contact} size={20} />
+                    <span className="text-[12px] font-semibold text-black/55 dark:text-white/60">{shownName}</span>
+                    <span className="ml-auto text-[11px] tabular-nums text-black/30 dark:text-white/30">{hhmm(e.at)}</span>
                   </div>
+                  <div className="whitespace-pre-wrap text-[15px] leading-[1.95] text-black/85 dark:text-white/85">{e.text}</div>
                 </div>
               ) : (
                 <div key={e.id} className="flex justify-end">
-                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[18px] rounded-br-[6px] bg-[#1C1C1E] px-4 py-2.5 text-[15px] leading-[1.7] text-white dark:bg-white dark:text-black">
-                    {e.text}
+                  <div className="max-w-[85%]">
+                    <div className="whitespace-pre-wrap rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 px-4 py-2.5 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
+                      {e.text}
+                    </div>
+                    <p className="mt-1 pr-1 text-right text-[10px] tabular-nums text-black/30 dark:text-white/30">{hhmm(e.at)}</p>
                   </div>
                 </div>
               ),
             )}
             {gen ? (
-              <div>
-                <p className="mb-1 px-1 text-[11px] text-black/35 dark:text-white/35">{shownName}</p>
-                <div className="flex items-center gap-2 rounded-[18px] bg-white p-4 text-[14px] text-black/45 shadow-[0_1px_4px_rgba(0,0,0,0.04)] dark:bg-[#1C1C1E] dark:text-white/45">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  {gen === 'reroll' ? '重新书写中…' : '正在书写…'}
-                </div>
+              <div className={`flex items-center gap-2 rounded-[20px] rounded-tl-[8px] p-4 text-[14px] text-black/45 dark:text-white/45 ${GLASS_CARD}`}>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {gen === 'reroll' ? '重新书写中…' : '正在书写…'}
               </div>
             ) : null}
           </div>
@@ -1203,7 +1242,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               data-testid="offline-continue"
               onClick={() => void runGen('next', '')}
               disabled={!!gen}
-              className="flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white px-3 text-[13px] font-medium text-black/75 shadow-sm active:opacity-60 disabled:opacity-40 dark:bg-white/10 dark:text-white/80"
+              className={`flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-3 text-[13px] font-medium text-black/75 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
             >
               <RotateCcw className="h-4 w-4 shrink-0" strokeWidth={2} />
               让 {shownName} 继续
@@ -1213,7 +1252,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               data-testid="offline-reroll"
               onClick={reroll}
               disabled={!canReroll}
-              className="flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white px-3 text-[13px] font-medium text-black/75 shadow-sm active:opacity-60 disabled:opacity-40 dark:bg-white/10 dark:text-white/80"
+              className={`flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-3 text-[13px] font-medium text-black/75 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
             >
               <RefreshCw className="h-4 w-4 shrink-0" strokeWidth={2} />
               重 Roll
@@ -1223,7 +1262,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               data-testid="offline-save"
               onClick={saveMeeting}
               disabled={!!gen}
-              className="ml-auto flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[#1C1C1E] px-3 text-[13px] font-semibold text-white active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+              className="ml-auto flex h-10 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[#1C1C1E]/90 px-3 text-[13px] font-semibold text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
             >
               <BookOpen className="h-4 w-4 shrink-0" strokeWidth={2} />
               保存这次见面
@@ -1244,13 +1283,13 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               placeholder={`说点什么，或描述你的动作…`}
               aria-label="线下输入"
               data-testid="offline-input"
-              className="h-11 min-w-0 flex-1 rounded-full border border-black/[0.08] bg-white px-4 text-[15px] text-black outline-none placeholder:text-black/30 dark:border-white/10 dark:bg-[#1C1C1E] dark:text-white dark:placeholder:text-white/30"
+              className="h-11 min-w-0 flex-1 rounded-full border border-white/70 bg-white/60 px-4 text-[15px] text-black shadow-sm outline-none backdrop-blur-xl placeholder:text-black/30 dark:border-white/10 dark:bg-white/[0.08] dark:text-white dark:placeholder:text-white/30"
             />
             <button
               type="submit"
               data-testid="offline-send"
               disabled={!input.trim() || !!gen}
-              className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-[#1C1C1E] px-4 text-[14px] font-semibold text-white active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+              className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-[#1C1C1E]/90 px-4 text-[14px] font-semibold text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
             >
               发送
               <Send className="h-4 w-4" strokeWidth={2} />
