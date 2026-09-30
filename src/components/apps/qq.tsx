@@ -13321,14 +13321,31 @@ function BillsPage({ bills, onBack, onToast }: { bills: WalletBill[]; onBack: ()
     return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   })();
 
-  /** 过滤栏年月文案：全部=最新有账单月份（对齐真机截图），否则显示所选 */
+  /** 过滤栏年月文案（对齐真机截图：「2026年9月」带年份；全部=最新有账单月份） */
   const monthCaret =
-    month === 'all' ? (monthKeys.length > 0 ? `${Number(monthKeys[0].split('-')[1]) + 1}月` : '--月') : `${Number(month.split('-')[1]) + 1}月`;
+    month === 'all'
+      ? monthKeys.length > 0
+        ? `${monthKeys[0].split('-')[0]}年${Number(monthKeys[0].split('-')[1]) + 1}月`
+        : '全部'
+      : `${month.split('-')[0]}年${Number(month.split('-')[1]) + 1}月`;
   const monthOptions = ['全部', ...monthKeys.map((k) => `${k.split('-')[0]}年${Number(k.split('-')[1]) + 1}月`)];
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[#F5F6F8] pt-[54px] dark:bg-[#16171A]">
-      <WalletNavHeader title="账单明细" onBack={onBack} />
+      <WalletNavHeader
+        title="账单明细"
+        onBack={onBack}
+        right={
+          <button
+            type="button"
+            data-testid="qq-bills-qb-detail"
+            onClick={() => onToast('Q币明细暂未开放')}
+            className="absolute right-3 text-[15.5px] text-[#1F2329] active:opacity-50 dark:text-white"
+          >
+            Q币明细
+          </button>
+        }
+      />
       {/* 过滤栏：年月 ▾ + 类型 ▾ + 下载 */}
       <div className="flex h-[54px] shrink-0 items-center gap-6 bg-[#EFEFF4] px-4 dark:bg-[#1D1E22]">
         <button type="button" data-testid="qq-bills-month" onClick={() => setMonthSheet(true)} className="flex items-center gap-1.5 text-[16px] text-black/55 dark:text-white/60">
@@ -13423,7 +13440,7 @@ function BillsPage({ bills, onBack, onToast }: { bills: WalletBill[]; onBack: ()
                     setBillType(t);
                     setTypeSheet(false);
                   }}
-                  className={`grid h-[52px] place-items-center rounded-[10px] border text-[16px] ${
+                  className={`grid h-[54px] place-items-center rounded-[14px] border text-[16px] ${
                     billType === t ? 'border-[#1B9FF0] bg-[#1B9FF0] text-white' : 'border-black/[0.08] bg-white text-[#1F2329] dark:border-white/[0.1] dark:bg-[#2A2C31] dark:text-white'
                   }`}
                 >
