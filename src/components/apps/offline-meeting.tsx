@@ -6,11 +6,13 @@
  * 结构（对照需求与参考截图，整体毛玻璃/胶囊玻璃风格）：
  * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
  * - 头部：一整颗大毛玻璃胶囊包住 返回 + 头像名字日期 + 收藏（保存）+ 现场设置；
- * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡，内部同样是头像+名字+时间头）；
+ * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（灰色玻璃气泡，内部同样是头像+名字+时间头）；
  *   两边消息均可编辑/删除；动作·叙述文字渲染为灰色小字，说话保持原样式
  *   （角色按「」『』“”"" 引号识别说话，用户按（）、*星号* 识别动作描写）；
  * - 底部：继续 / 重Roll 圆钮 + 输入框（内嵌深色圆形↑发送钮）；保存走顶部收藏钮；
  *   重Roll 后可一键恢复上一版回复；
+ * - 存档（头部右侧 Archive 按钮）：新建（保存当前进度）/ 覆盖 / 读档（恢复到存档时刻）/ 删除 /
+ *   重命名 / 导出为 JSON 文件 / 从文件导入；按角色隔离，含整场见面完整快照；
  * - 无见面时：极简开始页（头像 + 名字 + 开始见面 + 过去的见面历史入口，历史只读回看）；
  * - 现场设置面板：「从聊天继续」承接最近 N 条（置于最上方）/ 回复字数 / 用户·角色叙述人称 /
  *   回复预设 / 基础设置 / 变量说明 / 角色回复预设模板编辑 / 现场文风（内置+新建）。
@@ -21,6 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Archive,
   ArrowUp,
   ChevronLeft,
   History,
@@ -33,6 +36,7 @@ import {
   Star,
   Trash2,
   Undo2,
+  Upload,
   X,
 } from 'lucide-react';
 
@@ -75,16 +79,21 @@ import {
   loadStyles,
   loadTplOverride,
   loadWbBgCache,
+  loadArchives,
   looksLikeRepeat,
+  normalizeOfflineSettings,
   offlineUid,
   renderTemplate,
+  saveArchives,
   saveCustomPresets,
   saveCustomStyles,
   saveMeet,
   saveMeetSettings,
   saveTplOverride,
   saveWbBgCache,
+  sanitizeArchive,
   type OfflineApp,
+  type OfflineArchive,
   type OfflineEntry,
   type OfflineMeet,
   type OfflineMeetSettings,
@@ -244,8 +253,8 @@ function splitNarrative(text: string, re: RegExp, matchesSpeech: boolean): NarrS
   return segs.length ? segs : [{ text, speech: true }];
 }
 
-/** 叙事正文渲染：灰色小字 = 动作/叙述，正常样式 = 说话（onDark 用于用户深色气泡内） */
-function NarrBody({ text, role, onDark = false }: { text: string; role: 'char' | 'user'; onDark?: boolean }) {
+/** 叙事正文渲染：灰色小字 = 动作/叙述，正常样式 = 说话 */
+function NarrBody({ text, role }: { text: string; role: 'char' | 'user' }) {
   const segs = splitNarrative(text, role === 'char' ? CHAR_SPEECH_RE : USER_ACTION_RE, role === 'char');
   return (
     <div className="whitespace-pre-wrap">
@@ -253,19 +262,17 @@ function NarrBody({ text, role, onDark = false }: { text: string; role: 'char' |
         s.speech ? (
           <span key={i}>{s.text}</span>
         ) : (
-          <span key={i} className={onDark ? 'text-[13px] text-white/45' : 'text-[13px] text-black/40 dark:text-white/40'}>
-            {s.text}
-          </span>
+          <span key={i} className="text-[13px] text-black/40 dark:text-white/40">{s.text}</span>
         ),
       )}
     </div>
   );
 }
 
-/** 条目小工具：编辑 / 删除（我和角色的消息都有；onDark 用于用户深色气泡内） */
-function EntryTools({ onEdit, onDelete, disabled, onDark = false }: { onEdit: () => void; onDelete: () => void; disabled?: boolean; onDark?: boolean }) {
-  const base = onDark ? 'text-white/40 hover:bg-white/10 hover:text-white/80 dark:text-white/40' : 'text-black/30 hover:bg-black/5 hover:text-black/60 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/60';
-  const danger = onDark ? 'text-white/40 hover:bg-red-500/20 hover:text-red-300 dark:text-white/40' : 'text-black/30 hover:bg-red-500/10 hover:text-red-500 dark:text-white/30 dark:hover:text-red-400';
+/** 条目小工具：编辑 / 删除（我和角色的消息都有） */
+function EntryTools({ onEdit, onDelete, disabled }: { onEdit: () => void; onDelete: () => void; disabled?: boolean }) {
+  const base = 'text-black/30 hover:bg-black/5 hover:text-black/60 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/60';
+  const danger = 'text-black/30 hover:bg-red-500/10 hover:text-red-500 dark:text-white/30 dark:hover:text-red-400';
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <button
@@ -320,6 +327,249 @@ function EntryEdit({ value, onChange, onCancel, onSave }: { value: string; onCha
         >
           保存
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 存档面板（新建 / 覆盖 / 读档 / 删除 / 重命名 / 导出 / 导入） ----------------
+
+/** 存档行内小按钮 */
+function MiniBtn({ children, onClick, danger = false }: { children: React.ReactNode; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex h-8 items-center rounded-full px-3 text-[12px] backdrop-blur-md transition active:scale-95 ${
+        danger
+          ? 'border border-red-500/25 bg-red-500/10 text-red-500 dark:border-red-400/20 dark:text-red-400'
+          : `text-black/60 dark:text-white/60 ${GLASS_CAPSULE}`
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+type ArchiveConfirmKind = 'load' | 'overwrite' | 'delete';
+
+interface ArchivePanelProps {
+  archives: OfflineArchive[];
+  /** 是否有进行中的见面（新建 / 覆盖入口的可用性） */
+  meetActive: boolean;
+  /** 当前进度是否已有内容（读档确认用：无内容时读档免确认） */
+  hasProgress: boolean;
+  onClose: () => void;
+  onCreate: (name: string) => void;
+  onLoad: (id: string) => void;
+  onOverwrite: (id: string) => void;
+  onDelete: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onExport: (id: string) => void;
+  onImport: (file: File) => void;
+}
+
+function ArchivePanel({ archives, meetActive, hasProgress, onClose, onCreate, onLoad, onOverwrite, onDelete, onRename, onExport, onImport }: ArchivePanelProps) {
+  const [newName, setNewName] = useState('');
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState('');
+  const [confirmAct, setConfirmAct] = useState<null | { id: string; kind: ArchiveConfirmKind }>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /** 危险操作二次确认：第一次点击进入确认态，再点确认才执行；读档在无进度时直接执行 */
+  const ask = (id: string, kind: ArchiveConfirmKind) => {
+    if (kind === 'load' && !hasProgress) {
+      onLoad(id);
+      return;
+    }
+    if (confirmAct && confirmAct.id === id && confirmAct.kind === kind) {
+      if (kind === 'load') onLoad(id);
+      else if (kind === 'overwrite') onOverwrite(id);
+      else onDelete(id);
+      setConfirmAct(null);
+      return;
+    }
+    setConfirmAct({ id, kind });
+  };
+
+  const confirmText: Record<ArchiveConfirmKind, string> = {
+    load: '读档会把当前进度替换成这份存档',
+    overwrite: '覆盖会用当前进度替换这份存档的旧内容',
+    delete: '删除后无法恢复',
+  };
+
+  return (
+    <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white">
+      <GlassAmbience />
+      <div className="flex items-start justify-between px-5 pb-3 pt-[58px]">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Save Files</p>
+          <h2 className="mt-1 text-[26px] font-bold text-black dark:text-white">存档</h2>
+          <p className="mt-1 text-[13px] text-black/45 dark:text-white/45">见面进度快照，按角色保存；读档随时回到存档那一刻。</p>
+        </div>
+        <button
+          type="button"
+          aria-label="关闭存档"
+          data-testid="offline-archive-close"
+          onClick={onClose}
+          className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/60 active:opacity-60 dark:text-white/70 ${GLASS_CAPSULE}`}
+        >
+          <X className="h-[18px] w-[18px]" strokeWidth={2} />
+        </button>
+      </div>
+
+      <div className="flex-1 space-y-3 overflow-y-auto px-4 pb-6 thin-scrollbar">
+        {/* 新建存档 */}
+        <Card>
+          <FieldLabel title="新建存档" hint={meetActive ? '把当前见面进度完整保存为一个新存档' : '当前没有进行中的见面，开始见面后才能新建存档'} />
+          <div className="flex gap-2">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder={`存档名称，默认「见面存档 ${mdhm(Date.now())}」`}
+              maxLength={30}
+              disabled={!meetActive}
+              className={inputCls}
+              aria-label="存档名称"
+            />
+            <button
+              type="button"
+              data-testid="offline-archive-create"
+              onClick={() => {
+                onCreate(newName.trim());
+                setNewName('');
+              }}
+              disabled={!meetActive}
+              className="h-11 shrink-0 rounded-[14px] bg-[#1C1C1E]/90 px-4 text-[14px] font-medium text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+            >
+              新建
+            </button>
+          </div>
+        </Card>
+
+        {/* 存档列表 */}
+        {archives.length === 0 ? (
+          <p className="pt-10 text-center text-[14px] text-black/40 dark:text-white/40">还没有存档</p>
+        ) : (
+          archives.map((a) => {
+            const act = confirmAct && confirmAct.id === a.id ? confirmAct : null;
+            return (
+              <div key={a.id} data-testid="offline-archive-item" className={`rounded-[20px] p-4 ${GLASS_CARD}`}>
+                {renameId === a.id ? (
+                  <div>
+                    <FieldLabel title="重命名存档" />
+                    <div className="flex gap-2">
+                      <input
+                        autoFocus
+                        value={renameText}
+                        onChange={(e) => setRenameText(e.target.value)}
+                        maxLength={30}
+                        className={inputCls}
+                        aria-label="新存档名称"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && renameText.trim()) {
+                            onRename(a.id, renameText.trim());
+                            setRenameId(null);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setRenameId(null)}
+                        className={`h-11 shrink-0 rounded-[14px] px-4 text-[14px] text-black/60 active:opacity-60 dark:text-white/60 ${GLASS_CAPSULE}`}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!renameText.trim()}
+                        onClick={() => {
+                          onRename(a.id, renameText.trim());
+                          setRenameId(null);
+                        }}
+                        className="h-11 shrink-0 rounded-[14px] bg-[#1C1C1E]/90 px-4 text-[14px] font-medium text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+                      >
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="min-w-0">
+                      <p className="truncate text-[15px] font-semibold text-black/85 dark:text-white/90">{a.name}</p>
+                      <p className="mt-0.5 text-[11px] tabular-nums text-black/40 dark:text-white/40">
+                        存于 {mdhm(a.savedAt)} · 见面 {mdhm(a.meet.startedAt)} · {a.meet.entries.length} 条
+                      </p>
+                    </div>
+                    {act ? (
+                      <div className="mt-3 flex items-center gap-2">
+                        <p className="min-w-0 flex-1 text-[12px] leading-[1.4] text-red-500/90 dark:text-red-400/90">
+                          {confirmText[act.kind]}，确认{act.kind === 'load' ? '读档' : act.kind === 'overwrite' ? '覆盖' : '删除'}？
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => ask(a.id, act.kind)}
+                          className="h-8 shrink-0 rounded-full bg-red-500/90 px-3.5 text-[12px] font-medium text-white shadow-sm active:opacity-80"
+                        >
+                          确认
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmAct(null)}
+                          className={`h-8 shrink-0 rounded-full px-3.5 text-[12px] text-black/60 active:opacity-60 dark:text-white/60 ${GLASS_CAPSULE}`}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        <MiniBtn onClick={() => ask(a.id, 'load')}>读档</MiniBtn>
+                        {meetActive ? <MiniBtn onClick={() => ask(a.id, 'overwrite')}>覆盖</MiniBtn> : null}
+                        <MiniBtn
+                          onClick={() => {
+                            setRenameId(a.id);
+                            setRenameText(a.name);
+                            setConfirmAct(null);
+                          }}
+                        >
+                          重命名
+                        </MiniBtn>
+                        <MiniBtn onClick={() => onExport(a.id)}>导出</MiniBtn>
+                        <MiniBtn danger onClick={() => ask(a.id, 'delete')}>
+                          删除
+                        </MiniBtn>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })
+        )}
+
+        {/* 导入存档 */}
+        <button
+          type="button"
+          data-testid="offline-archive-import"
+          onClick={() => fileRef.current?.click()}
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-full border border-dashed border-black/20 bg-white/40 text-[13px] text-black/60 backdrop-blur-md active:opacity-60 dark:border-white/20 dark:bg-white/[0.05] dark:text-white/60"
+        >
+          <Upload className="h-4 w-4" />
+          导入存档（选择导出的 .json 文件）
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onImport(f);
+            e.target.value = '';
+          }}
+        />
       </div>
     </div>
   );
@@ -853,6 +1103,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   const [rerollBackup, setRerollBackup] = useState<OfflineEntry | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySel, setHistorySel] = useState<number | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archives, setArchives] = useState<OfflineArchive[]>([]);
   const [bgRefreshing, setBgRefreshing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadRef = useRef(loadRecentMsgs);
@@ -883,6 +1135,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
         const s = m?.settings ?? loadMeetSettings(contactId);
         setSetupSettings(s);
         setTplOv(loadTplOverride(contactId));
+        setArchives(loadArchives(contactId));
         const isBuiltin = (OFFLINE_CARRY_OPTIONS as readonly number[]).includes(s.carryCount);
         setCarryChoice(isBuiltin ? s.carryCount : 'custom');
         setCustomN(String(s.carryCount));
@@ -1260,6 +1513,142 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     }
   }, [bgRefreshing, contactId, ensureWorldBg, toastFn]);
 
+  // —— 存档（新建 / 覆盖 / 读档 / 删除 / 重命名 / 导出 / 导入）——
+  const createArchive = useCallback(
+    (name: string) => {
+      const m = meetRef.current;
+      if (!m) {
+        toastFn('还没有进行中的见面');
+        return;
+      }
+      if (genRef.current) {
+        toastFn('正在生成，请稍候再存档');
+        return;
+      }
+      const finalName = (name || `见面存档 ${mdhm(m.startedAt)}`).slice(0, 30);
+      const next: OfflineArchive[] = [{ id: offlineUid(), name: finalName, savedAt: Date.now(), meet: { ...m } }, ...loadArchives(contactId)];
+      saveArchives(contactId, next);
+      setArchives(next);
+      toastFn(`已新建存档「${finalName}」`);
+    },
+    [contactId, toastFn],
+  );
+
+  const overwriteArchive = useCallback(
+    (id: string) => {
+      const m = meetRef.current;
+      if (!m) {
+        toastFn('当前没有进行中的见面');
+        return;
+      }
+      if (genRef.current) {
+        toastFn('正在生成，请稍候再存档');
+        return;
+      }
+      const list = loadArchives(contactId);
+      if (!list.some((a) => a.id === id)) {
+        toastFn('存档不存在');
+        return;
+      }
+      const next = list.map((a) => (a.id === id ? { ...a, savedAt: Date.now(), meet: { ...m } } : a));
+      saveArchives(contactId, next);
+      setArchives(next);
+      toastFn(`已覆盖存档「${next.find((a) => a.id === id)?.name ?? ''}」`);
+    },
+    [contactId, toastFn],
+  );
+
+  const loadArchive = useCallback(
+    (id: string) => {
+      if (genRef.current) {
+        toastFn('正在生成，请稍候再读档');
+        return;
+      }
+      const a = loadArchives(contactId).find((x) => x.id === id);
+      if (!a) {
+        toastFn('存档不存在');
+        return;
+      }
+      const m: OfflineMeet = { ...a.meet, contactId, settings: normalizeOfflineSettings(a.meet.settings) };
+      saveMeet(m);
+      meetRef.current = m;
+      setMeet(m);
+      setEditing(null);
+      setRerollBackup(null);
+      setHistoryOpen(false);
+      setHistorySel(null);
+      setArchiveOpen(false);
+      toastFn(`已读档「${a.name}」，回到存档时刻`);
+    },
+    [contactId, toastFn],
+  );
+
+  const deleteArchive = useCallback(
+    (id: string) => {
+      const next = loadArchives(contactId).filter((a) => a.id !== id);
+      saveArchives(contactId, next);
+      setArchives(next);
+      toastFn('已删除存档');
+    },
+    [contactId, toastFn],
+  );
+
+  const renameArchive = useCallback(
+    (id: string, name: string) => {
+      const next = loadArchives(contactId).map((a) => (a.id === id ? { ...a, name: name.slice(0, 30) || a.name } : a));
+      saveArchives(contactId, next);
+      setArchives(next);
+      toastFn('已重命名存档');
+    },
+    [contactId, toastFn],
+  );
+
+  const exportArchive = useCallback(
+    (id: string) => {
+      const a = loadArchives(contactId).find((x) => x.id === id);
+      if (!a) {
+        toastFn('存档不存在');
+        return;
+      }
+      try {
+        const payload = JSON.stringify({ kind: 'offline-meet-archive', name: a.name, savedAt: a.savedAt, meet: a.meet }, null, 2);
+        const blob = new Blob([payload], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const el = document.createElement('a');
+        el.href = url;
+        el.download = `线下存档-${a.name.replace(/[\\/:*?"<>|]/g, '_')}-${mdhm(a.savedAt).replace(/\s+/g, '_').replace(/:/g, '')}.json`;
+        document.body.appendChild(el);
+        el.click();
+        el.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toastFn('已导出存档文件');
+      } catch {
+        toastFn('导出失败，请重试');
+      }
+    },
+    [contactId, toastFn],
+  );
+
+  const importArchive = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        const arc = sanitizeArchive(JSON.parse(text) as unknown, contactId);
+        if (!arc) {
+          toastFn('导入失败：不是有效的存档文件');
+          return;
+        }
+        const next = [arc, ...loadArchives(contactId)];
+        saveArchives(contactId, next);
+        setArchives(next);
+        toastFn(`已导入存档「${arc.name}」`);
+      } catch {
+        toastFn('导入失败：文件解析出错');
+      }
+    },
+    [contactId, toastFn],
+  );
+
   // —— 设置面板回调 ——
   const commitSettings = (s: OfflineMeetSettings, tpl: string) => {
     if (meetRef.current) {
@@ -1391,9 +1780,25 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           ) : null}
           <button
             type="button"
+            aria-label="存档管理"
+            title="存档"
+            data-testid="offline-archive-entry"
+            onClick={() => {
+              setSettingsOpen(false);
+              setArchiveOpen(true);
+            }}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 transition hover:bg-black/5 active:opacity-60 dark:text-white/80 dark:hover:bg-white/10"
+          >
+            <Archive className="h-[18px] w-[18px]" strokeWidth={1.8} />
+          </button>
+          <button
+            type="button"
             aria-label="现场设置"
             data-testid="offline-settings-entry"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => {
+              setArchiveOpen(false);
+              setSettingsOpen(true);
+            }}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 transition hover:bg-black/5 active:opacity-60 dark:text-white/80 dark:hover:bg-white/10"
           >
             <SlidersHorizontal className="h-[18px] w-[18px]" strokeWidth={1.8} />
@@ -1486,19 +1891,20 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                     </div>
                   ) : (
                     <div className="max-w-[85%]">
-                      <div className="rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 p-4 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
+                      {/* 灰色玻璃气泡（浅色模式浅灰 / 深色模式深灰） */}
+                      <div className="rounded-[20px] rounded-br-[8px] border border-black/[0.06] bg-[#ECEAE7]/85 p-4 text-[15px] leading-[1.95] text-black/85 shadow-[0_8px_24px_rgba(60,50,40,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-[#2C2C2E]/85 dark:text-white/85">
                         {/* 气泡内同款头像 + 名字 + 时间头（和 AI 卡一致） */}
                         <div className="mb-2 flex items-center gap-2">
                           <UserAvatar avatar={userAvatar} name={userNameEff} size={20} />
                           <div className="min-w-0 leading-tight">
-                            <p className="text-[12px] font-semibold text-white/60">{userNameEff}</p>
-                            <p className="mt-[1px] text-[10px] tabular-nums text-white/40">{mdhm(e.at)}</p>
+                            <p className="text-[12px] font-semibold text-black/55 dark:text-white/60">{userNameEff}</p>
+                            <p className="mt-[1px] text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
                           </div>
                           <div className="ml-auto">
-                            <EntryTools disabled={!!gen} onDark onEdit={() => setEditing({ id: e.id, text: e.text })} onDelete={() => deleteEntry(e.id)} />
+                            <EntryTools disabled={!!gen} onEdit={() => setEditing({ id: e.id, text: e.text })} onDelete={() => deleteEntry(e.id)} />
                           </div>
                         </div>
-                        <NarrBody text={e.text} role="user" onDark />
+                        <NarrBody text={e.text} role="user" />
                       </div>
                     </div>
                   )}
@@ -1640,6 +2046,23 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {/* 存档面板（新建 / 覆盖 / 读档 / 删除 / 重命名 / 导出 / 导入） */}
+      {archiveOpen ? (
+        <ArchivePanel
+          archives={archives}
+          meetActive={!!meet}
+          hasProgress={!!meet && meet.entries.length > 0}
+          onClose={() => setArchiveOpen(false)}
+          onCreate={createArchive}
+          onLoad={loadArchive}
+          onOverwrite={overwriteArchive}
+          onDelete={deleteArchive}
+          onRename={renameArchive}
+          onExport={exportArchive}
+          onImport={(f) => void importArchive(f)}
+        />
       ) : null}
 
       {/* 现场设置面板 */}

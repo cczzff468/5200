@@ -12,6 +12,8 @@
  *    并带防复读检测：新回复与上一条高度相似/整段包含时，自动带强指令重试一次；
  * 6. 操作：让角色继续 / 重 Roll（可恢复上一版）/ 编辑·删除任意条目 / 保存这次见面 / 自由输入（说话或描述动作）；
  *    线下历史注入每条时间戳（[M月D日 HH:mm]），让 AI 感知现场时间流；已保存的见面可在开始页回看；
+ *    存档系统（右上角入口）：新建（保存当前进度）/ 覆盖 / 读档（恢复到存档时刻）/ 删除 / 重命名 /
+ *    导出为 JSON 文件 / 从文件导入，快照含整场见面（entries·场景·设置·世界背景）；
  * 7. 保存后写入记忆库（memAddEventFragment，sourceTag 'offline-meet'），
  *    线上聊天召回记忆时自然带上线下发生的事；进行中的见面按角色 ID 隔离。
  *
@@ -19,6 +21,7 @@
  * - offline-meet:<contactId>            进行中的见面（单条）
  * - offline-meet-history:<contactId>    已保存的见面（列表，最新在前）
  * - offline-meet-settings:<contactId>   该角色下一次见面的默认设置
+ * - offline-meet-archives:<contactId>   存档列表（完整进度快照，最新在前，上限 50）
  * - offline-meet-tpl:<contactId>        该角色的当前模板覆盖（设置页编辑后未存为预设时生效）
  * - offline-wb-bg:<contactId>           世界书分析出的世界背景缓存
  * - offline-meet-presets / offline-meet-styles  回复预设 / 文风库（全局）
@@ -133,6 +136,15 @@ export interface OfflineOnlineMsg {
   role: 'me' | 'peer';
   text: string;
   time: number;
+}
+
+/** 存档：一次见面进度的完整快照（读档可回到存档那一刻） */
+export interface OfflineArchive {
+  id: string;
+  name: string;
+  /** 新建 / 最近一次覆盖的时间 */
+  savedAt: number;
+  meet: OfflineMeet;
 }
 
 // ---------------- 存储键 ----------------
@@ -359,6 +371,67 @@ export function addMeetToHistory(contactId: string, meet: OfflineMeet): void {
   kvSet(offlineMeetHistoryKey(contactId), list);
 }
 
+// ---------------- 存档（新建 / 覆盖 / 读档 / 删除 / 重命名 / 导出 / 导入） ----------------
+
+export const offlineArchivesKey = (contactId: string): string => `offline-meet-archives:${contactId}`;
+
+export function loadArchives(contactId: string): OfflineArchive[] {
+  try {
+    const list = kvGet<OfflineArchive[]>(offlineArchivesKey(contactId));
+    if (!Array.isArray(list)) return [];
+    return list.filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string' && a.meet && Array.isArray(a.meet.entries));
+  } catch {
+    return [];
+  }
+}
+
+/** 存档写回（最新在前，上限 50 份） */
+export function saveArchives(contactId: string, list: OfflineArchive[]): void {
+  kvSet(offlineArchivesKey(contactId), list.slice(0, 50));
+}
+
+/** 导入存档的结构校验与归一化：非法数据返回 null；meet.contactId 强制改写为当前角色 */
+export function sanitizeArchive(raw: unknown, fallbackContactId: string): OfflineArchive | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const meetRaw = r.meet;
+  if (!meetRaw || typeof meetRaw !== 'object') return null;
+  const mr = meetRaw as Record<string, unknown>;
+  if (!Array.isArray(mr.entries)) return null;
+  const entries: OfflineEntry[] = [];
+  for (const item of mr.entries) {
+    if (!item || typeof item !== 'object') continue;
+    const e = item as Record<string, unknown>;
+    const text = typeof e.text === 'string' ? e.text : '';
+    if (!text.trim()) continue;
+    entries.push({
+      id: typeof e.id === 'string' && e.id ? e.id : offlineUid(),
+      role: e.role === 'user' ? 'user' : 'char',
+      text,
+      at: typeof e.at === 'number' && e.at > 0 ? e.at : Date.now(),
+      ...(typeof e.fromInput === 'string' ? { fromInput: e.fromInput } : {}),
+    });
+  }
+  const sceneRaw = (mr.scene && typeof mr.scene === 'object' ? mr.scene : {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const meet: OfflineMeet = {
+    id: typeof mr.id === 'string' && mr.id ? mr.id : offlineUid(),
+    contactId: fallbackContactId,
+    appId: mr.appId === 'qq' || mr.appId === 'sms' ? mr.appId : 'wx',
+    startedAt: typeof mr.startedAt === 'number' && mr.startedAt > 0 ? mr.startedAt : Date.now(),
+    carryN: typeof mr.carryN === 'number' && Number.isFinite(mr.carryN) ? Math.max(0, Math.floor(mr.carryN)) : 0,
+    onlineExcerpt: str(mr.onlineExcerpt),
+    lastOnlineTime: typeof mr.lastOnlineTime === 'number' && mr.lastOnlineTime > 0 ? mr.lastOnlineTime : null,
+    scene: { location: str(sceneRaw.location), time: str(sceneRaw.time), reason: str(sceneRaw.reason), charState: str(sceneRaw.charState) },
+    entries,
+    settings: normalizeOfflineSettings(mr.settings),
+    worldBg: str(mr.worldBg),
+    ...(str(mr.template).trim() ? { template: str(mr.template) } : {}),
+  };
+  const name = str(r.name).trim().slice(0, 30) || `导入存档 ${offlineMdhm(meet.startedAt)}`;
+  return { id: offlineUid(), name, savedAt: Date.now(), meet };
+}
+
 export function loadMeetSettings(contactId: string): OfflineMeetSettings {
   return normalizeOfflineSettings(kvGet<unknown>(offlineSettingsKey(contactId)));
 }
@@ -393,6 +466,7 @@ export function purgeOfflineMeetForContact(contactId: string): void {
   kvDel(offlineSettingsKey(contactId));
   kvDel(offlineTplKey(contactId));
   kvDel(offlineWbBgKey(contactId));
+  kvDel(offlineArchivesKey(contactId));
 }
 
 // ---------------- 变量替换 ----------------

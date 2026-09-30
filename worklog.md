@@ -12484,3 +12484,21 @@ Stage Summary:
 - UI 已改：顶部=头像+名字+日期毛玻璃胶囊；开始页极简化；承接条数在设置面板顶部；消息时间=名字下/气泡下 M月D日 HH:MM；底部=继续+重Roll+输入框+↑
 - 功能逻辑零改动（startMeeting/runGen/saveMeeting/reroll/变量系统/存储全部原样）
 - 待用户选择的功能完善清单：①默认字数区间450~800与回复字数1500矛盾（1500被夹到800，真bug）②承接聊天超8000字时slice(0,8000)截掉的是最新消息（真bug）③空见面可保存成空记忆 ④无「放弃见面」出口 ⑤见面中时间感知陈旧 ⑥世界背景缓存永不失效 ⑦见面历史无查看入口 ⑧导演模式与自主推进强度提示词可能打架
+
+---
+Task ID: 4
+Agent: Z.ai Code (main)
+Task: 线下模式新增：用户气泡灰色化 + 存档系统（新建/覆盖/读档/删除/重命名/导出/导入）
+
+Work Log:
+- 用户气泡灰色化：深色气泡（bg-[#1C1C1E]/85 白字）→ 灰色玻璃气泡（浅色 bg-[#ECEAE7]/85 深字 / 深色 dark:bg-[#2C2C2E]/85 浅字），头部名字/时间、编辑删除工具、NarrBody 动作灰字同步改回常规配色；NarrBody/EntryTools 移除不再使用的 onDark prop
+- 存档存储层（offline-meet.ts）：新增 OfflineArchive 类型 {id,name,savedAt,meet 完整快照}；offline-meet-archives:<contactId> 键（上限 50 份，最新在前）；loadArchives/saveArchives；sanitizeArchive 导入校验归一化（非法返回 null、meet.contactId 强制改写为当前角色、entries 逐条清洗、settings 归一化）；purgeOfflineMeetForContact 级联清理存档键
+- 存档 UI（offline-meeting.tsx）：头部右侧新增 Archive 图标按钮（★保存 与 ⚙设置 之间，data-testid=offline-archive-entry）；ArchivePanel 全屏玻璃面板（SAVE FILES 存档）：新建存档卡（名称输入+默认名见面存档 M月D日 HH:mm、无见面时禁用）、存档列表卡（名称/存于/见面时间/条数 + 读档·覆盖·重命名·导出·删除 五操作）、底部导入按钮（隐藏 file input）
+- 危险操作防护：覆盖/删除/有进度时读档 → 行内红色确认条（确认才执行，取消可撤）；无进度读档直接执行；生成中操作拦截 toast
+- 主组件接线：archives/archiveOpen state + 挂载加载；createArchive/overwriteArchive/loadArchive（恢复后清编辑态/重Roll备份/关闭面板）/deleteArchive/renameArchive/exportArchive（Blob+a.download JSON 下载，文件名含存档名）/importArchive（file.text→sanitizeArchive→入库置顶）；与设置面板互斥打开
+- E2E 全链路（agent-browser）：解锁→微信→觉斐→更多功能→线下 → 发送消息验证灰色气泡（头像+名字+时间+动作灰字+对白正常）→ AI 生成 → 存档面板 7 项操作逐一验证：新建「公园晚餐」12条快照✓ 重命名「公园晚餐·完美版」✓ 覆盖（红色确认+toast）✓ 导出（已导出存档文件 toast）✓ 导入（非法文件拒绝「不是有效的存档文件」/合法文件「导入的回忆」置顶）✓ 读档（确认后恢复 2 条快照、头部日期变 9月29日、面板自动关闭）✓ 删除（确认后移除）✓；console 无错误，/api/offline 200
+
+Stage Summary:
+- 线下模式新增存档系统：右上角 Archive 入口，7 项操作（新建/覆盖/读档/删除/重命名/导出/导入）全部落地并 E2E 验证；按角色隔离（offline-meet-archives:<contactId>），快照含整场见面（entries·场景·设置·世界背景·模板），导入跨设备/跨角色可用
+- 用户气泡灰色化完成，与 AI 玻璃卡形成浅/灰对比，动作灰字+对白样式不变
+- 产出文件：src/lib/offline-meet.ts、src/components/apps/offline-meeting.tsx
