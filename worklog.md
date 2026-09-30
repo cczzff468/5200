@@ -12383,3 +12383,23 @@ Stage Summary:
 - 加好友过程展示范围收窄为微信/QQ 两端；信息端恢复为「添加即好友、聊天界面零过程提示」（添加好友页内绿色 toast 保留，属页面内反馈非聊天记录）
 - ChatMsg fr 字段移除后旧数据兼容：运行时多余属性无害；微信/QQ 端（wechat.tsx/qq.tsx）fr 逻辑零改动
 - 产出文件：src/components/apps/chat.tsx（仅信息端）
+
+---
+Task ID: IV
+Agent: 主协调者 (Z.ai Code)
+Task: 用户两点——①微信/QQ 加好友相关提示改成与其他系统提示同款胶囊包裹 ②动作描写默认改为关闭
+
+Work Log:
+- wechat.tsx/qq.tsx fr-added 分支整体删除（原「居中纯灰字无胶囊边框」），fr='added' 的 sys 消息落入普通 sys 胶囊分支，与拉黑/撤回提示完全同款（wx-sys-row/qq-sys-row 样式：rounded-[4px]+边框+半透明底）；wx-fr-added/qq-fr-added testid 移除
+- wechat.tsx/qq.tsx fr-note 标注（以上为验证消息/以上是打招呼的内容）由裸灰字 <p> 改为同款胶囊包裹（div.text-center > span.inline-block.rounded-[4px].border...，与 sys 行同 class），位置保持在气泡下方（wx 用 py-1、qq 用 mb-2 维持原间距）；testid wx-fr-note/qq-fr-note 保留
+- WxMsg.fr/QQMsg.fr 类型注释同步更新（added=落入普通 sys 胶囊分支；note=胶囊标注）
+- action-desc.ts 默认值翻转：getActionDescOn 由 !==false 改为 ===true（未设置=关闭）；saveActionDescOn 开/关存储语义对调（开写 true、关删键回默认）；useActionDescOn SSR 快照 true→false；模块文档「默认开启/关闭」两段对调；五端（wx/qq/sms/群聊×2）共用此库，一处翻转全端生效
+- 验证：bun run lint 0 错误；npx tsc --noEmit 0 错误；agent-browser E2E（隔离 profile + 注入 CHAR 小雪）——
+  ①动作描写默认关闭：信息端小雪聊天发消息，AI 回复「还没呢，正准备去吃呢~」无动作描写行（此前同环境默认开启时出现「开心地挥了挥手」灰字行）；聊天设置页（顶栏摄像机图标进入）「动作描写」开关 aria-checked=false✓；关闭态渲染层硬剥离兜底保证旧带星号历史不残留
+  ②胶囊包裹：微信全流程（+→添加朋友→搜 15204532796→资料页→前往验证→申请页发送→已添加→会话进聊天）截图确认「我是凡凡」绿气泡下胶囊「以上为验证消息」+胶囊「我们已成功添加为好友，现在可以开始聊天啦～」，AI greet 消息下胶囊「以上是打招呼的内容」+胶囊「你已添加了小雪，现在可以开始聊天了。」四提示全部胶囊化；QQ 聊天页历史消息同样四处胶囊渲染自动生效（历史数据零迁移）
+- dev.log 无异常（/api/chat/bg 轮询正常）
+
+Stage Summary:
+- 加好友过程四类提示（用户验证标注/AI 打招呼标注/两种成功提示）在微信、QQ 两端与撤回/拉黑系统提示视觉统一（灰字胶囊），历史聊天记录打开即生效（渲染层改动，无需数据迁移）
+- 动作描写五端默认值由开→关；用户手动开启过的会话（map 里显式 true）不受影响；此前「保存=删除键回默认」的语义随之对调
+- 产出文件：src/lib/action-desc.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
