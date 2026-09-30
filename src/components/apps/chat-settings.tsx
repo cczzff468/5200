@@ -26,8 +26,6 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
-import { stickerToggleCaption } from '@/lib/sticker-toggle';
-import { actionDescCaption } from '@/lib/action-desc';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
 import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
@@ -422,9 +420,6 @@ export function ChatSettingsPage({
             />
           </div>
         </div>
-        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-          开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
-        </p>
 
         {/* 时间感知：AI 感知当前时间/季节/节日、事件耗时与上次聊天间隔（按会话独立开关，发送时现场读取） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -439,9 +434,6 @@ export function ChatSettingsPage({
             />
           </div>
         </div>
-        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-          开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
-        </p>
 
         {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -456,7 +448,6 @@ export function ChatSettingsPage({
             />
           </div>
         </div>
-        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{stickerToggleCaption(stickersOn)}</p>
 
         {/* 动作描写：AI 回复中动作/情景描写的显示开关（开启时 *...* 包裹的描写以灰色小字居中独立成行，关闭时自动过滤；按会话独立） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -471,7 +462,6 @@ export function ChatSettingsPage({
             />
           </div>
         </div>
-        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">{actionDescCaption(actionDescOn)}</p>
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -488,9 +478,6 @@ export function ChatSettingsPage({
             </span>
           </button>
         </div>
-        <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-          挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
-        </p>
 
         {/* 他的声音：角色说话音色（内置音色/我的音色/API 音色）+ AI 语音发送频率（独立二级页） */}
         {onOpenVoice && (
@@ -506,9 +493,6 @@ export function ChatSettingsPage({
                 </span>
               </button>
             </div>
-            <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-              选择 TA 说话用的音色，并可设置 AI 发语音的频率（按本会话独立保存）。
-            </p>
           </>
         )}
 
@@ -549,9 +533,6 @@ export function ChatSettingsPage({
                 </>
               ) : null}
             </div>
-            <p className="px-1 pt-2 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
-              开启后你将拉黑「{peerName}」：拉黑后 AI 不能给你发消息，仅可通过申请卡回应；对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
-            </p>
           </>
         )}
 
@@ -1492,9 +1473,6 @@ export function SmsChatSettingsPage({
             />
           </div>
         </div>
-        <p className={t.captionCls}>
-          开启后，你可以连续发送多条消息，对方都不会回复；输入框为空时再点一次「发送」，对方才会一并回复。
-        </p>
 
         {/* 时间感知 */}
         <div className={`${t.cardCls} mt-3`}>
@@ -1509,9 +1487,6 @@ export function SmsChatSettingsPage({
             />
           </div>
         </div>
-        <p className={t.captionCls}>
-          开启后，对方能感知当前的北京时间、季节与节日，并结合事件耗时和上次聊天的间隔更自然地回应；关闭后恢复普通聊天。
-        </p>
 
         {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
         <div className={`${t.cardCls} mt-3`}>
@@ -1526,7 +1501,6 @@ export function SmsChatSettingsPage({
             />
           </div>
         </div>
-        <p className={t.captionCls}>{stickerToggleCaption(stickersOn)}</p>
 
         {/* 动作描写：AI 回复中动作/情景描写的显示开关（与微信/QQ 同套逻辑，按会话独立） */}
         <div className={`${t.cardCls} mt-3`}>
@@ -1541,7 +1515,6 @@ export function SmsChatSettingsPage({
             />
           </div>
         </div>
-        <p className={t.captionCls}>{actionDescCaption(actionDescOn)}</p>
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择）；AI 助手会话无此入口 */}
         {onOpenWorldBooks && (
@@ -1560,9 +1533,6 @@ export function SmsChatSettingsPage({
                 </span>
               </button>
             </div>
-            <p className={t.captionCls}>
-              挂载「局部」世界书后，命中触发词才注入设定（未命中不发送）；全局书无需挂载，专属书在「世界书」App 里绑定角色。
-            </p>
           </>
         )}
 
@@ -1580,7 +1550,6 @@ export function SmsChatSettingsPage({
                 </span>
               </button>
             </div>
-            <p className={t.captionCls}>选择 TA 说话用的音色，并可设置 AI 发语音的频率（按本会话独立保存）。</p>
           </>
         )}
 
@@ -1621,9 +1590,6 @@ export function SmsChatSettingsPage({
                 </>
               ) : null}
             </div>
-            <p className={t.captionCls}>
-              开启后你将拉黑「{peerName}」：拉黑后 AI 不能给你发消息，仅可通过申请卡回应；对方会知道已被你拉黑，气泡后会出现拉黑图标；随时可关闭解除。
-            </p>
           </>
         )}
 

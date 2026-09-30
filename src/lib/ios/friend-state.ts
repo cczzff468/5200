@@ -11,7 +11,7 @@
  *
  * 【存储】
  * - 删除状态：IndexedDB kv `friend-del:<app>:<contactId>` = FriendDelState
- *   （at=删除时间，lastReqAt=AI 最近一次申请时间，rejected=用户拒绝过 AI 申请——拒绝后停止申请，
+ *   （at=删除时间，rejected=用户拒绝过 AI 申请——拒绝后停止申请，
  *   重新加回好友清空整个状态，再次删除才重新开始）。
  *   kvGet 同步读（内存缓存）+ 异步写穿，重启保留；与 block-state 同款模式。
  * - 好友申请列表：localStorage `wx-friend-reqs`（沿用微信既有键，旧数据天然兼容——
@@ -25,11 +25,12 @@
  * - 记忆数据本体从不删除：AI（主动来电/加回申请生成）仍可引用（TA 还记得你们的事，只是被你删了）。
  *
  * 【AI 主动申请加回】
- * - 删除后约 20 秒，AI 以「好友申请」形式出现在 新的朋友/好友通知 列表（status='pending'）；
+ * - 确认删除后立刻，AI 以「好友申请」形式出现在 新的朋友/好友通知 列表（status='pending'；
+ *   无冷却——同一联系人同时只保留一条待处理申请，同意/拒绝后不再重复发）。
  * - 留言按人设 + 记忆生成（如「怎么把我删了」），两级生成兜底与跨 App 找同款（/api/chat → forceSdk）；
- * - 冷却：10 分钟内不重复申请（lastReqAt）；用户拒绝（rejected=true）后彻底停止；
- * - 用户同意：恢复好友关系 + 清除删除状态（历史数据恢复可见）；拒绝：标记 rejected。
- * - 刷新页面丢失的定时器由 runFriendReqCatchUp（微信/QQ 挂载时调用）按冷却时间补跑。
+ * - 用户拒绝（rejected=true）后彻底停止；重新加回好友清空状态，再次删除才重新开始；
+ * - 用户同意：恢复好友关系 + 清除删除状态（历史数据恢复可见）。
+ * - 刷新页面丢失的定时器由 runFriendReqCatchUp（微信/QQ 挂载时调用）立刻补跑。
  */
 
 import { kvGet, kvSet, kvDel } from './idb-kv';
@@ -50,7 +51,7 @@ export type FriendDelApp = 'wx' | 'qq';
 export interface FriendDelState {
   /** 删除时间 */
   at: number;
-  /** AI 最近一次申请加回的时间（冷却用） */
+  /** @deprecated AI 最近一次申请加回的时间（冷却已按用户要求移除，仅兼容旧存量数据，不再读写） */
   lastReqAt?: number;
   /** 用户拒绝过 AI 的申请（拒绝后停止申请；重新加回好友清空） */
   rejected?: boolean;
@@ -99,9 +100,9 @@ export function deletedFriendIds(app: FriendDelApp): string[] {
 
 /**
  * 删除好友（由 UI 二次确认后调用）：
- * - 写入删除状态（含 at 时间戳，作为 AI 申请冷却的起点）；
+ * - 写入删除状态（at=删除时间）；
  * - 关闭好友关系（friendWx/friendQq=false；会话列表/通讯录即时消失）；
- * - 调度 AI 主动申请加回（首次约 20 秒后，见 FIRST_REQ_DELAY_MS）。
+ * - 立刻调度 AI 主动申请加回（无冷却；留言生成完成即出现在 新的朋友/好友通知）。
  * 不清理任何数据（聊天记录/记忆/朋友圈/通话记录全部保留）。
  */
 export async function removeFriendByUser(app: FriendDelApp, contactId: string): Promise<boolean> {
@@ -354,10 +355,8 @@ export function subscribeFriendReqs(fn: () => void): () => void {
 
 // ---------------- AI 主动申请加回 ----------------
 
-/** 删除后第一次申请的延迟（给用户一点「刚删完就来了」的真实感，又不至于手速快时撞上确认弹窗） */
-export const FIRST_REQ_DELAY_MS = 20_000;
-/** 申请冷却：距离上次申请不足此时长不再申请 */
-export const REQ_COOLDOWN_MS = 10 * 60_000;
+/** 删除后第一次申请的延迟：0 = 确认删除后立刻发起（无冷却；留言生成完成即出现在列表） */
+export const FIRST_REQ_DELAY_MS = 0;
 
 const reqTimers = new Map<string, number>();
 
@@ -370,36 +369,28 @@ export function scheduleCharReAddReq(app: FriendDelApp, contactId: string, delay
   const timer = window.setTimeout(() => {
     reqTimers.delete(key);
     void maybeCharReAddReq(app, contactId);
-  }, Math.max(1_000, delayMs));
+  }, Math.max(0, delayMs));
   reqTimers.set(key, timer);
 }
 
-/** 启动补跑：微信/QQ 挂载时调用——扫描全部删除状态，到点未申请的按延迟补跑（定时器不跨刷新） */
+/** 启动补跑：微信/QQ 挂载时调用——扫描全部删除状态，无待处理申请的立刻补跑（定时器不跨刷新） */
 export function runFriendReqCatchUp(): void {
   for (const app of ['wx', 'qq'] as FriendDelApp[]) {
     for (const id of deletedFriendIds(app)) {
       const st = friendDelStateOf(app, id);
-      if (!st || st.rejected) continue;
-      const now = Date.now();
-      if (st.lastReqAt && now - st.lastReqAt < REQ_COOLDOWN_MS) {
-        // 上次申请后仍在冷却：冷却结束后再补跑一轮
-        scheduleCharReAddReq(app, id, REQ_COOLDOWN_MS - (now - st.lastReqAt));
-      } else {
-        // 尚未申请过（或已出冷却）：按首次延迟扣除已等待时长尽快补跑
-        scheduleCharReAddReq(app, id, Math.max(2_000, FIRST_REQ_DELAY_MS - (now - st.at)));
-      }
+      if (!st || st.rejected) continue; // 用户拒绝过：彻底不再申请
+      // 无冷却：已删除好友且无待处理申请就立刻补发（maybeCharReAddReq 内有 pending 去重守卫）
+      scheduleCharReAddReq(app, id, 0);
     }
   }
 }
 
-/** 按冷却/状态检查并生成一条 AI 加回申请（全部守卫通过才生成） */
+/** 按状态检查并生成一条 AI 加回申请（全部守卫通过才生成；无冷却，pending 去重防重复） */
 export async function maybeCharReAddReq(app: FriendDelApp, contactId: string): Promise<void> {
   const st = friendDelStateOf(app, contactId);
   if (!st) return; // 已重新加回（状态清空）
   if (st.rejected) return; // 用户拒绝过：停止申请
-  // 冷却只锚定上次申请时间（lastReqAt）；首次申请由删除时刻的 20s 定时器控制，不受冷却拦截
-  if (st.lastReqAt && Date.now() - st.lastReqAt < REQ_COOLDOWN_MS) return; // 冷却中
-  if (hasPendingReqFor(app, contactId)) return; // 已有待处理申请
+  if (hasPendingReqFor(app, contactId)) return; // 已有待处理申请（同一联系人同时只一条）
   const contact = await getContact(contactId).catch(() => null);
   if (!contact || contact.kind === 'user') return;
   if (!(contact.persona ?? '').trim()) return; // 没人设的角色不生成（与主动来电候选同口径）
@@ -409,7 +400,6 @@ export async function maybeCharReAddReq(app: FriendDelApp, contactId: string): P
 
   // 生成期间用户可能已重新加回（状态被清）→ 复核
   if (!friendDelStateOf(app, contactId)) return;
-  kvSet(delKey(app, contactId), { ...st, lastReqAt: Date.now() } satisfies FriendDelState);
   addFriendReq(app, {
     id: genId(),
     contactId,

@@ -12291,3 +12291,23 @@ Stage Summary:
 - 添加好友流程重构完成：申请添加朋友页（微信 8 项字段+权限开关 / QQ 4 项紧凑版）、好友申请详情页（前往验证/同意+拒绝、加入黑名单、投诉/举报入口）、新的朋友页（时间分组+查看、好友通知+来源+同意）；
 - 范围限定遵守：单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话既有逻辑未动（拉黑只在申请详情「加入黑名单」复用 setUserBlock）；QQ 与微信共用 friend-state 一套逻辑（UI 按各 App 风格）；
 - 产出文件：src/lib/ios/friend-state.ts（新）、src/components/apps/chat-settings.tsx、wechat.tsx、qq.tsx、phone.tsx、memory-bank.tsx。
+
+---
+Task ID: I-2
+Agent: 主协调者 (Z.ai Code)
+Task: 用户四项调整——①删除后立刻AI申请加回（去掉20s延迟）②彻底移除10分钟冷却③QQ好友资料页移除删除联系人按钮（仅保留聊天设置入口）④聊天设置页开关/选择行下方灰色提示文案全删
+
+Work Log:
+- friend-state.ts：FIRST_REQ_DELAY_MS 20_000→0（确认删除后立刻发起，scheduleCharReAddReq 钳制 min 1000→0）；删除 REQ_COOLDOWN_MS 与 maybeCharReAddReq/runFriendReqCatchUp 内全部冷却分支（无冷却后 catch-up 逻辑简化为"已删除+未拒绝+无 pending 就立刻补发"，pending 去重守卫防刷屏）；lastReqAt 字段标 @deprecated 不再读写；删除状态注释与模块文档同步更新
+- qq.tsx：FriendProfilePage 删除 onDeleteContact prop/接口/调用点传递（8373-8383 按钮块移除），确认弹窗注释改为"聊天设置入口"；QQ 联系人详情页从此无删除入口，仅聊天设置保留
+- chat-settings.tsx：ChatSettingsPage（微信/QQ）与 SmsChatSettingsPage（信息）共 14 处开关/选择行下方 caption <p> 全删（分句发送/时间感知/表情包/动作描写/世界书/他的声音/拉黑 × 2 组），移除 stickerToggleCaption/actionDescCaption 失效 import；独立二级页（翻译/语音频率/世界书挂载）提示保留
+- 验证：bun run lint 0 错误；npx tsc --noEmit 0 错误；agent-browser E2E（隔离 profile，user 凡凡 + char 小雪）——
+  微信：搜索 wxid → 好友申请详情页 → 前往验证 → 申请页发送 → 已添加（AI 欢迎语生成正常）→ 聊天设置（提示全无✓）→ 删除联系人 → 确认弹窗 → 会话消失 → 04:31:12 删除后 AI 申请 04:31 前即出现在新的朋友（留言"凡凡你居然删我！我奶茶都还没和你一起喝新品呢！"）→ 前往验证 → 已添加 → 通讯录恢复；
+  QQ：可能想认识的人添加 → 申请页发送 → 详情页已同意 → 好友资料页确认无删除联系人按钮✓ → 聊天设置（提示全无✓+删除按钮在）→ 04:39:37 删除 → 好友通知 04:40 前出现申请（"凡凡你居然删我，我给你带的小饼干呢！"）→ 详情页同意 → 恢复；
+  dev.log 无错误（/api/chat 502→200 兜底正常）。
+
+Stage Summary:
+- 删除→AI 加回申请全链路从"20s 延迟+10 分钟冷却"改为"立刻发起、无冷却"，去重靠"同一联系人同时只一条 pending"+拒绝彻底停止+重新加回重置，行为与用户四点要求一致
+- QQ 联系人详情页删除入口移除（微信联系人详情页保留删除按钮，未在本次要求范围）
+- 三端聊天设置页视觉降噪完成：所有开关/选择行下方灰色提示删除
+- 产出文件：src/lib/ios/friend-state.ts、src/components/apps/qq.tsx、src/components/apps/chat-settings.tsx

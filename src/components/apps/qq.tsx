@@ -8142,7 +8142,6 @@ function FriendProfilePage({
   onOpenBond,
   onOpenZone,
   onToast,
-  onDeleteContact,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -8152,8 +8151,6 @@ function FriendProfilePage({
   /** 他的QQ空间：进该好友的空间动态页（只显示 TA 发的动态） */
   onOpenZone: () => void;
   onToast: (m: string) => void;
-  /** 删除联系人（删除好友关系）：宿主弹二次确认；不传 = 隐藏 */
-  onDeleteContact?: () => void;
 }) {
   // 跨 App 跳转：点「编辑资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
@@ -8370,17 +8367,6 @@ function FriendProfilePage({
             发消息
           </button>
         </div>
-        {/* 删除联系人（删除好友关系；二次确认弹窗在宿主层，确认后回联系人 tab） */}
-        {onDeleteContact && (
-          <button
-            type="button"
-            data-testid="qq-fprofile-delete"
-            onClick={onDeleteContact}
-            className="h-11 w-full rounded-[12px] bg-black/[0.05] text-[15px] text-red-500 active:opacity-70 dark:bg-white/[0.08]"
-          >
-            删除联系人
-          </button>
-        )}
       </div>
       <span className="sr-only">{me.name}查看{peer.name}的个人资料</span>
     </div>
@@ -13897,14 +13883,6 @@ function MainScreen({
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
           onOpenZone={() => setRoute({ page: 'zone-peer', contactId: chatPeer.id })}
           onToast={showToast}
-          onDeleteContact={
-            chatPeer.kind === 'user'
-              ? undefined
-              : () =>
-                  openDeleteConfirm(chatPeer, () => {
-                    openTabs('联系人');
-                  })
-          }
         />
       ) : route.page === 'search' ? (
         <QqSearchPage
@@ -14289,7 +14267,7 @@ function MainScreen({
 
       {toast && <QqToast text={toast} />}
 
-      {/* 删除联系人二次确认（聊天设置 / 好友资料页共用；明确告知删什么/留什么） */}
+      {/* 删除联系人二次确认（聊天设置入口；明确告知删什么/留什么） */}
       {delTarget && (
         <FriendDeleteConfirmDialog
           variant="qq"
