@@ -168,8 +168,17 @@ export interface FriendReqEntry {
   source?: string;
   /** true = AI（对方）主动发起的加回申请 */
   fromChar?: boolean;
-  /** 申请附加信息（申请添加朋友页收集：图片/标签/备忘/朋友权限/朋友圈可见性） */
+  /** 申请附加信息（申请添加朋友页收集：图片/标签/备忘/照片/朋友权限/朋友圈可见性） */
   extras?: FriendReqExtras;
+  /** 验证消息多轮对话（我/对方 交替；详情页展示与「回复」续写；旧数据无此字段 = 单条 message） */
+  thread?: FriendReqThreadMsg[];
+}
+
+/** 验证消息线程里的一条发言（who=me 用户发 / who=peer 对方发） */
+export interface FriendReqThreadMsg {
+  who: 'me' | 'peer';
+  text: string;
+  time: number;
 }
 
 export interface FriendReqExtras {
@@ -181,6 +190,8 @@ export interface FriendReqExtras {
   tags?: string[];
   /** 备忘 */
   memo?: string | null;
+  /** 照片（对方资料照片，data URL，≤4 张） */
+  photos?: string[];
   /** 朋友权限：聊天 */
   permChat?: boolean;
   /** 朋友权限：朋友圈 */
@@ -221,6 +232,7 @@ function normalizeReq(r: Partial<FriendReqEntry>): FriendReqEntry | null {
             remark: typeof r.extras.remark === 'string' ? r.extras.remark : null,
             tags: Array.isArray(r.extras.tags) ? r.extras.tags.filter((t) => typeof t === 'string').slice(0, 6) : [],
             memo: typeof r.extras.memo === 'string' ? r.extras.memo : null,
+            photos: Array.isArray(r.extras.photos) ? r.extras.photos.filter((t) => typeof t === 'string').slice(0, 4) : [],
             permChat: r.extras.permChat !== false,
             permMoments: r.extras.permMoments !== false,
             permExercise: r.extras.permExercise !== false,
@@ -228,7 +240,24 @@ function normalizeReq(r: Partial<FriendReqEntry>): FriendReqEntry | null {
             hideTheirs: r.extras.hideTheirs === true,
           }
         : undefined,
+    thread: normalizeThread(r.thread),
   };
+}
+
+function normalizeThread(raw: unknown): FriendReqThreadMsg[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const list: FriendReqThreadMsg[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== 'object') continue;
+    const m = x as Partial<FriendReqThreadMsg>;
+    if (typeof m.text !== 'string' || !m.text.trim()) continue;
+    list.push({
+      who: m.who === 'me' ? 'me' : 'peer',
+      text: m.text,
+      time: typeof m.time === 'number' && isFinite(m.time) ? m.time : Date.now(),
+    });
+  }
+  return list.length > 0 ? list.slice(-30) : undefined;
 }
 
 export function loadFriendReqs(app: FriendDelApp): FriendReqEntry[] {
@@ -260,6 +289,30 @@ export function addFriendReq(app: FriendDelApp, entry: FriendReqEntry): void {
     if (dup) return;
   }
   saveFriendReqs(app, [entry, ...list.filter((r) => !(entry.fromChar && r.id === entry.id))]);
+}
+
+/** 按条目 id 局部更新申请（thread 回复/欢迎回复等；变更广播给订阅方） */
+export function updateFriendReq(app: FriendDelApp, reqId: string, patch: Partial<FriendReqEntry>): void {
+  const list = loadFriendReqs(app);
+  if (!list.some((r) => r.id === reqId)) return;
+  saveFriendReqs(
+    app,
+    list.map((r) => (r.id === reqId ? { ...r, ...patch } : r)),
+  );
+}
+
+/** 往验证消息线程追加一条发言（thread 不存在时自动以 message 起始建线程） */
+export function appendReqThread(app: FriendDelApp, reqId: string, msg: FriendReqThreadMsg): void {
+  const list = loadFriendReqs(app);
+  const hit = list.find((r) => r.id === reqId);
+  if (!hit) return;
+  const base: FriendReqThreadMsg[] =
+    hit.thread && hit.thread.length > 0
+      ? hit.thread
+      : hit.message.trim()
+        ? [{ who: hit.fromChar ? 'peer' : 'me', text: hit.message, time: hit.time }]
+        : [];
+  updateFriendReq(app, reqId, { thread: [...base, msg].slice(-30) });
 }
 
 /** 更新申请状态 */
@@ -370,21 +423,27 @@ export async function maybeCharReAddReq(app: FriendDelApp, contactId: string): P
   });
 }
 
-/** 组 system prompt：人设 + 记忆 + 时间感知（与聊天/跨 App 找同源模块） */
+/** 组 system prompt：人设 + 记忆 + 时间感知（与聊天/跨 App 找同源模块）；scene = 场景附加规则 */
 async function buildReqSystem(
   app: FriendDelApp,
   contact: ContactRecord,
   userName: string,
   userRealName: string | null,
   userNickname: string | null,
+  scene: 'apply' | 'reply' | 'welcome' = 'apply',
 ): Promise<string> {
+  const sceneRules: Record<'apply' | 'reply' | 'welcome', string[]> = {
+    apply: ['你要输出一条好友申请的验证留言，不是聊天消息。'],
+    reply: ['你们正在「好友申请的验证消息」里对话（还不是好友/刚恢复好友），你要回复对方刚发的验证消息，不是聊天消息。'],
+    welcome: ['对方刚通过了你的好友申请并打了一句招呼，你在「好友申请的验证消息」里回一句，不是聊天消息。'],
+  };
   const persona = buildPersonaSystemPrompt(contact, {
     channel: BLOCK_CHANNEL[app],
     userName: userName || null,
     userRealName,
     userNickname,
     multiApp: getMemSettings(contact.id).share,
-    extraRules: ['你要输出一条好友申请的验证留言，不是聊天消息。'],
+    extraRules: sceneRules[scene],
   });
   const memoryBlock = memRecallBlock(contact.id, app, '');
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
@@ -399,14 +458,42 @@ function cleanReqMessage(raw: string): string {
   return t.slice(0, 60);
 }
 
+/** 两级兜底 LLM 调用（用户配置链路 → 内置模型；与跨 App 找同款） */
+async function callLlmTwoTier(system: string, userContent: string): Promise<string> {
+  const call = async (extra: Record<string, unknown>): Promise<string> => {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userContent },
+        ],
+        ...extra,
+      }),
+      signal: AbortSignal.timeout(75_000),
+    });
+    return res.ok ? await res.text() : '';
+  };
+  let raw = '';
+  try {
+    raw = await call({ config: useSettings.getState().apiConfig });
+    if (!raw.trim()) {
+      try {
+        raw = await call({ forceSdk: true });
+      } catch {
+        raw = '';
+      }
+    }
+  } catch {
+    return '';
+  }
+  return raw;
+}
+
 /** 按人设 + 记忆生成一条「被删好友想加回来」的验证留言 */
 async function genCharReqMessage(app: FriendDelApp, contact: ContactRecord): Promise<string | null> {
-  let owner: { realName?: string | null; nickname?: string | null } | null = null;
-  try {
-    owner = await ownerProfile();
-  } catch {
-    owner = null;
-  }
+  const owner = await ownerProfile().catch(() => null);
   const userRealName = owner?.realName?.trim() || null;
   const userNickname = owner?.nickname?.trim() || null;
   const userName = userNickname || userRealName || '用户';
@@ -421,35 +508,82 @@ async function genCharReqMessage(app: FriendDelApp, contact: ContactRecord): Pro
     `只输出这条留言本身：不要任何 [标记]、不要动作描写、不要括号说明、不要分多条。`,
   ].join('\n');
 
-  let raw = '';
-  try {
-    // 两级兜底（与跨 App 找同款）：用户配置链路失败再用内置模型
-    const call = async (extra: Record<string, unknown>): Promise<string> => {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: userContent },
-          ],
-          ...extra,
-        }),
-        signal: AbortSignal.timeout(75_000),
-      });
-      return res.ok ? await res.text() : '';
-    };
-    raw = await call({ config: useSettings.getState().apiConfig });
-    if (!raw.trim()) {
-      try {
-        raw = await call({ forceSdk: true });
-      } catch {
-        raw = '';
-      }
-    }
-  } catch {
-    return null;
-  }
-  const text = cleanReqMessage(raw);
+  const text = cleanReqMessage(await callLlmTwoTier(system, userContent));
   return text || null;
+}
+
+/** 取机主称呼三元组（线程回复生成共用） */
+async function ownerTriplet(): Promise<{ userName: string; userRealName: string | null; userNickname: string | null }> {
+  const owner = await ownerProfile().catch(() => null);
+  const userRealName = owner?.realName?.trim() || null;
+  const userNickname = owner?.nickname?.trim() || null;
+  const userName = userNickname || userRealName || '用户';
+  return { userName, userRealName, userNickname };
+}
+
+/**
+ * 验证消息线程里生成对方的回复（人设 + 记忆 + 时间感知）：
+ * - 场景 reply：用户在待处理申请的验证消息里回复了 AI（如「你谁？」）；
+ * - 场景 welcome：用户申请加好友被通过后（本应用即通），AI 在验证消息里回一句欢迎/回应。
+ * 返回清洗后的回复文本（失败返回 null，调用方静默跳过——用户消息已在线程里，不丢）。
+ */
+export async function genCharThreadReply(
+  app: FriendDelApp,
+  contact: ContactRecord,
+  thread: FriendReqThreadMsg[],
+  scene: 'reply' | 'welcome',
+): Promise<string | null> {
+  if (!(contact.persona ?? '').trim()) return null;
+  const { userName, userRealName, userNickname } = await ownerTriplet();
+  const system = await buildReqSystem(app, contact, userName, userRealName, userNickname, scene);
+  const lines = thread.slice(-8).map((m) => `${m.who === 'me' ? userName : contactRealNameSafe(contact)}：${m.text}`);
+  const ask =
+    scene === 'reply'
+      ? [
+        `【重要情境】你向「${userName}」发了一条好友申请，你们现在还不是好友，正在申请的验证消息里对话。`,
+        `以下是目前的对话记录：`,
+        ...lines,
+        ``,
+        `请以你的身份回复最后一条「${userName}」的话：一句话，30 字以内，符合你的人设和说话风格。`,
+        `只输出这句回复本身：不要任何 [标记]、不要动作描写、不要括号说明、不要分多条。`,
+      ].join('\n')
+      : [
+        `【重要情境】「${userName}」刚刚加你为好友（${BLOCK_CHANNEL[app]}），验证消息是：`,
+        ...lines,
+        ``,
+        `请以你的身份回一句（像通过好友后第一句打招呼）：一句话，30 字以内，符合你的人设和说话风格。`,
+        `只输出这句回复本身：不要任何 [标记]、不要动作描写、不要括号说明、不要分多条。`,
+      ].join('\n');
+  const text = cleanReqMessage(await callLlmTwoTier(system, ask));
+  return text || null;
+}
+
+/** 线程展示用对方名字（备注/昵称优先，联系人在册才用真实名字；此函数不落记忆，无污染面） */
+function contactRealNameSafe(contact: ContactRecord): string {
+  return displayNameOf(contact) || contact.name || '对方';
+}
+
+/**
+ * 用户申请加为好友（发送即通过）后，AI 在验证消息线程里回一句欢迎（一次性）：
+ * 线程里已有对方发言则跳过；无人设/生成失败静默；由 UI fire-and-forget 调用。
+ */
+export async function charWelcomeReplyToApply(app: FriendDelApp, reqId: string, contactId: string, greeting: string): Promise<void> {
+  const list = loadFriendReqs(app);
+  const hit = list.find((r) => r.id === reqId);
+  if (!hit) return;
+  const base: FriendReqThreadMsg[] =
+    hit.thread && hit.thread.length > 0
+      ? hit.thread
+      : [{ who: 'me', text: greeting, time: hit.time }];
+  if (base.some((m) => m.who === 'peer')) return; // 已回过（一次性）
+  const contact = await getContact(contactId).catch(() => null);
+  if (!contact || contact.kind === 'user') return;
+  const reply = await genCharThreadReply(app, contact, base, 'welcome');
+  if (!reply) return;
+  // 生成期间条目可能已被替换/删除 → 复核仍在且仍无对方发言
+  const fresh = loadFriendReqs(app).find((r) => r.id === reqId);
+  if (!fresh) return;
+  const cur: FriendReqThreadMsg[] = fresh.thread && fresh.thread.length > 0 ? fresh.thread : base;
+  if (cur.some((m) => m.who === 'peer')) return;
+  updateFriendReq(app, reqId, { thread: [...cur, { who: 'peer' as const, text: reply, time: Date.now() }].slice(-30) });
 }

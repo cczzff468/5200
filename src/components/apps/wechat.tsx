@@ -199,8 +199,13 @@ import {
   setFriendReqStatus,
   SOURCE_SEARCH_WX,
   subscribeFriendReqs,
+  updateFriendReq,
+  appendReqThread,
+  genCharThreadReply,
+  charWelcomeReplyToApply,
   type FriendReqEntry,
   type FriendReqExtras,
+  type FriendReqThreadMsg,
 } from '@/lib/ios/friend-state';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -8814,34 +8819,78 @@ function NewFriendsPage({
   );
 }
 
-// ---------------- 好友申请详情页（新的朋友点申请进入；同意 = 前往验证；QQ/微信共用一套数据） ----------------
+// ---------------- 好友申请详情页（新的朋友点申请 / 搜索结果点人进入；req=null = 搜索资料预览模式） ----------------
 
 function FriendReqDetailPage({
   req,
   contact,
+  liveAvatar,
   onBack,
   onAccept,
   onReject,
   onBlock,
+  onVerify,
   onToast,
 }: {
-  req: WxFriendReq;
+  /** 好友申请（null = 搜索结果资料预览：还没有申请，走「前往验证」发申请） */
+  req: WxFriendReq | null;
   /** 申请对应的联系人（被彻底删除时为 null：展示快照，验证按钮置灰） */
   contact: ContactRecord | null;
+  /** 头像实时解析（换头像后历史申请/快照立即显示当前头像） */
+  liveAvatar: (snapshot: string | null | undefined, ref: { peerId?: string | null; name?: string | null }) => string | null;
   onBack: () => void;
-  /** 同意申请（前往验证）：宿主恢复好友关系 + 状态流转 + 刷新 */
+  /** 同意申请（前往验证，pending AI 申请）：宿主恢复好友关系 + 状态流转 + 刷新 */
   onAccept: (r: WxFriendReq) => void;
   /** 拒绝申请：AI 停止再申请 */
   onReject: (r: WxFriendReq) => void;
   /** 加入黑名单 */
-  onBlock: (r: WxFriendReq) => void;
+  onBlock: (r: WxFriendReq | ContactRecord) => void;
+  /** 资料预览模式「前往验证」：进申请添加朋友页 */
+  onVerify: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
-  const status = req.status ?? 'accepted';
-  const pending = status === 'pending';
+  const status = req?.status ?? 'accepted';
+  const pending = req != null && status === 'pending';
+  const peerName = req?.name ?? (contact ? displayNameOf(contact) : '对方');
+  const peerId = req?.contactId ?? contact?.id ?? null;
+  const avatar = liveAvatar(req?.avatar ?? contact?.avatar ?? null, { peerId, name: peerName });
+
+  // 验证消息线程：旧数据（无 thread）由单条 message 起始展开；资料预览模式无卡片区
+  const thread: FriendReqThreadMsg[] =
+    req?.thread && req.thread.length > 0
+      ? req.thread
+      : req && req.message.trim()
+        ? [{ who: req.fromChar ? 'peer' : 'me', text: req.message, time: req.time }]
+        : [];
+
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+
+  const canReply = req != null && contact != null;
+  const sendReply = async () => {
+    const text = replyText.trim();
+    if (!text || !req || replyBusy) return;
+    const msg: FriendReqThreadMsg = { who: 'me', text, time: Date.now() };
+    appendReqThread('wx', req.id, msg);
+    setReplyText('');
+    setReplyOpen(false);
+    if (contact && (contact.persona ?? '').trim()) {
+      setReplyBusy(true);
+      try {
+        const reply = await genCharThreadReply('wx', contact, [...thread, msg], 'reply');
+        if (reply) appendReqThread('wx', req.id, { who: 'peer', text: reply, time: Date.now() });
+      } catch {
+        // 生成失败静默：用户消息已在线程里
+      } finally {
+        setReplyBusy(false);
+      }
+    }
+  };
+
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
-      <div className="shrink-0 pt-[54px]">
+      <div className="shrink-0 bg-white pt-[54px] dark:bg-[#1A1A1A]">
         <div className="flex h-11 items-center px-2">
           <button type="button" aria-label="返回" data-testid="wx-reqdetail-back" onClick={onBack} className="active:opacity-50">
             <ChevronLeft className="h-7 w-7" strokeWidth={2} />
@@ -8858,59 +8907,128 @@ function FriendReqDetailPage({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-6">
-        {/* 头部：头像 + 昵称 + 地区（对照微信好友申请详情） */}
-        <div className="bg-white px-4 py-5 dark:bg-[#1A1A1A]">
-          <div className="flex items-center gap-4">
-            <WxAvatar src={req.avatar} alt={req.name} size={64} />
-            <div className="min-w-0 flex-1">
-              <p className="flex items-center gap-1.5 text-[21px] font-semibold leading-tight">
-                <span className="truncate">{req.name}</span>
-                {contact?.gender === '男' && <User className="h-[18px] w-[18px] shrink-0 text-[#4D9CF8]" aria-hidden="true" strokeWidth={2} />}
-                {contact?.gender === '女' && <User className="h-[18px] w-[18px] shrink-0 text-[#FF6B81]" aria-hidden="true" strokeWidth={2} />}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+        {/* 头部：头像 + 昵称 + 性别 + 备注名/朋友权限（对照微信好友申请详情） */}
+        <div className="bg-white px-4 pb-5 pt-2 dark:bg-[#1A1A1A]">
+          <div className="flex items-start gap-4">
+            <WxAvatar src={avatar} alt={peerName} size={76} />
+            <div className="min-w-0 flex-1 pt-1.5">
+              <p className="flex items-center gap-1.5 text-[22px] font-semibold leading-tight">
+                <span className="truncate">{peerName}</span>
+                {contact?.gender === '男' && <User className="h-[19px] w-[19px] shrink-0 text-[#4D9CF8]" aria-hidden="true" strokeWidth={2} />}
+                {contact?.gender === '女' && <User className="h-[19px] w-[19px] shrink-0 text-[#FF6B81]" aria-hidden="true" strokeWidth={2} />}
               </p>
               {/* 备注名 / 朋友权限（微信样式蓝字链接；入口暂未开放） */}
-              <p className="mt-2 flex gap-5 text-[15px] text-[#576B95] dark:text-[#8FA5C9]">
+              <p className="mt-3 flex gap-6 text-[16px] text-[#576B95] dark:text-[#8FA5C9]">
                 <button type="button" onClick={() => onToast('设置备注名暂未开放')}>备注名</button>
                 <button type="button" onClick={() => onToast('朋友权限暂未开放')}>朋友权限</button>
               </p>
-              {contact?.region && <p className="mt-1 truncate text-[13px] text-black/40 dark:text-white/40">地区：{contact.region}</p>}
+              {contact?.region && <p className="mt-1.5 truncate text-[13px] text-black/40 dark:text-white/40">地区：{contact.region}</p>}
             </div>
           </div>
         </div>
 
-        {/* 验证消息记录（对方留言 + 附图） */}
-        <div className="mt-2 px-4 py-4">
-          <div className="rounded-[8px] bg-[#F7F7F7] p-4 dark:bg-[#242424]">
-            <div className="flex items-start justify-between gap-3">
-              <p className="min-w-0 break-words text-[15px] leading-[1.6]">{req.message || '请求加为好友'}</p>
-              <button type="button" onClick={() => onToast('回复验证消息暂未开放')} className="shrink-0 text-[14px] text-[#576B95] dark:text-[#8FA5C9]">
-                回复
-              </button>
+        {/* 验证消息记录（我/对方 多轮对话 + 附图 + 回复） */}
+        {thread.length > 0 && (
+          <div className="bg-white px-4 pb-5 dark:bg-[#1A1A1A]">
+            <div className="rounded-[8px] border border-black/10 p-4 dark:border-white/15" data-testid="wx-reqdetail-thread">
+              {thread.map((m, i) => (
+                <p key={`${m.time}-${i}`} className="break-words text-[15.5px] leading-[1.9]">
+                  {m.who === 'me' ? '我: ' : `${peerName}: `}
+                  {m.text}
+                </p>
+              ))}
+              {req?.extras?.photos && req.extras.photos.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {req.extras.photos.map((p, i) => (
+                    <img key={i} src={p} alt={`照片${i + 1}`} className="h-16 w-16 rounded-[6px] object-cover" />
+                  ))}
+                </div>
+              )}
+              {req?.extras?.image && (
+                <img src={req.extras.image} alt="申请附图" className="mt-3 max-h-[180px] w-auto max-w-full rounded-[6px] object-cover" />
+              )}
+              {replyBusy ? (
+                <p className="mt-1 text-[15px] text-black/35 dark:text-white/35" data-testid="wx-reqdetail-reply-busy">
+                  对方正在回复…
+                </p>
+              ) : canReply ? (
+                replyOpen ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value.slice(0, 60))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void sendReply();
+                        }
+                      }}
+                      placeholder={`回复 ${peerName}`}
+                      autoFocus
+                      data-testid="wx-reqdetail-reply-input"
+                      className="h-9 min-w-0 flex-1 rounded-[6px] bg-black/[0.04] px-3 text-[14.5px] outline-none placeholder:text-black/30 dark:bg-white/10 dark:placeholder:text-white/30"
+                    />
+                    <button
+                      type="button"
+                      data-testid="wx-reqdetail-reply-send"
+                      onClick={() => void sendReply()}
+                      className="shrink-0 rounded-[6px] bg-[#07C160] px-4 py-1.5 text-[14px] font-medium text-white active:bg-[#06AD56]"
+                    >
+                      发送
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="wx-reqdetail-reply"
+                    onClick={() => setReplyOpen(true)}
+                    className="mt-1 block text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
+                  >
+                    回复
+                  </button>
+                )
+              ) : null}
             </div>
-            {req.extras?.image && (
-              <img src={req.extras.image} alt="申请附图" className="mt-3 max-h-[180px] w-auto max-w-full rounded-[6px] object-cover" />
-            )}
           </div>
-        </div>
+        )}
 
-        {/* 来源 */}
-        <div className="bg-white dark:bg-[#1A1A1A]">
-          <div className="flex items-center gap-6 px-4 py-4">
-            <span className="w-[42px] shrink-0 text-[16px]">来源</span>
-            <span className="min-w-0 flex-1 text-[15px] text-black/70 dark:text-white/70">{req.source || '朋友验证消息'}</span>
+        {/* 来源（资料预览模式附微信号，便于确认搜索到的人） */}
+        <div className="mt-3 bg-white dark:bg-[#1A1A1A]">
+          <div className="flex items-center gap-8 px-4 py-4">
+            <span className="w-[64px] shrink-0 text-[17px]">来源</span>
+            <span className="min-w-0 flex-1 text-[16px] text-black/40 dark:text-white/40" data-testid="wx-reqdetail-source">
+              {req?.source || (req ? '朋友验证消息' : SOURCE_SEARCH_WX)}
+            </span>
           </div>
+          {!req && contact && (
+            <div className="flex items-center gap-8 border-t border-black/[0.05] px-4 py-4 dark:border-white/[0.08]">
+              <span className="w-[64px] shrink-0 text-[17px]">微信号</span>
+              <span className="min-w-0 flex-1 truncate text-[16px] text-black/40 dark:text-white/40">
+                {contact.wechatId || contact.qqId || contact.phone || '未设置'}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 前往验证（同意）/ 拒绝 / 状态 */}
-        {pending ? (
-          <div className="mt-5 flex gap-px">
+        {req == null ? (
+          <button
+            type="button"
+            data-testid="wx-reqdetail-accept"
+            onClick={() => contact && onVerify(contact)}
+            disabled={!contact}
+            className="mt-3 w-full bg-white py-[17px] text-center text-[17px] text-[#576B95] active:bg-black/[0.04] disabled:opacity-40 dark:bg-[#1A1A1A] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
+          >
+            前往验证
+          </button>
+        ) : pending ? (
+          <div className="mt-3 flex gap-px">
             <button
               type="button"
-              data-testid="wx-reqdetail-accept"
               onClick={() => onAccept(req)}
               disabled={!contact}
-              className="flex-1 bg-white py-[15px] text-center text-[16px] text-[#576B95] active:bg-black/[0.04] disabled:opacity-40 dark:bg-[#1A1A1A] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
+              className="flex-1 bg-white py-[17px] text-center text-[17px] text-[#576B95] active:bg-black/[0.04] disabled:opacity-40 dark:bg-[#1A1A1A] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
             >
               前往验证
             </button>
@@ -8918,13 +9036,13 @@ function FriendReqDetailPage({
               type="button"
               data-testid="wx-reqdetail-reject"
               onClick={() => onReject(req)}
-              className="flex-1 bg-white py-[15px] text-center text-[16px] text-red-500 active:bg-black/[0.04] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
+              className="flex-1 bg-white py-[17px] text-center text-[17px] text-red-500 active:bg-black/[0.04] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
             >
               拒绝
             </button>
           </div>
         ) : (
-          <p className="mt-5 py-[15px] text-center text-[15px] text-black/35 dark:text-white/35" data-testid="wx-reqdetail-done">
+          <p className="mt-3 bg-white py-[17px] text-center text-[16px] text-black/35 dark:bg-[#1A1A1A] dark:text-white/35" data-testid="wx-reqdetail-done">
             {status === 'rejected' ? '已拒绝该申请' : '已添加'}
           </p>
         )}
@@ -8932,7 +9050,7 @@ function FriendReqDetailPage({
 
       {/* 底部：加入黑名单 | 投诉 */}
       <div className="flex shrink-0 items-center justify-center gap-4 pb-[30px] pt-3">
-        <button type="button" data-testid="wx-reqdetail-block" onClick={() => onBlock(req)} className="text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]">
+        <button type="button" data-testid="wx-reqdetail-block" onClick={() => req ? onBlock(req) : contact && onBlock(contact)} className="text-[15px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]">
           加入黑名单
         </button>
         <span className="h-4 w-px bg-black/15 dark:bg-white/20" aria-hidden="true" />
@@ -8975,6 +9093,7 @@ function ApplyFriendPage({
   const [remark, setRemark] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [memo, setMemo] = useState('');
+  const [photos, setPhotos] = useState<string[]>([]);
   const [permOpen, setPermOpen] = useState(false);
   const [permChat, setPermChat] = useState(true);
   const [permMoments, setPermMoments] = useState(true);
@@ -8987,6 +9106,7 @@ function ApplyFriendPage({
   const [memoDraft, setMemoDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const photosRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (files: FileList | null) => {
     const f = files?.[0];
@@ -8999,44 +9119,68 @@ function ApplyFriendPage({
     setImage(src);
   };
 
-  const rowCls =
-    'flex w-full items-center justify-between px-4 py-[13px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+  const handlePhotos = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const room = 4 - photos.length;
+    if (room <= 0) {
+      onToast('最多添加 4 张照片');
+      return;
+    }
+    const picked = [...files].slice(0, room);
+    const out: string[] = [];
+    for (const f of picked) {
+      const src = await compressImageFile(f, 720);
+      if (src) out.push(src);
+    }
+    if (out.length === 0) {
+      onToast('图片读取失败');
+      return;
+    }
+    setPhotos((prev) => [...prev, ...out].slice(0, 4));
+  };
+
+  /** 灰色圆角卡（对照申请添加朋友页：打招呼内容/备注等输入区） */
+  const cardCls = 'mx-4 rounded-[10px] bg-[#F6F6F6] dark:bg-[#242424]';
+  /** 蓝字选择行（标签/备忘/照片/朋友权限） */
+  const cellRow = 'flex h-[56px] w-full items-center justify-between px-4 text-left active:opacity-70';
 
   return (
-    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-white text-black dark:bg-[#111111] dark:text-white">
       <div className="pt-[54px]">
         <div className="flex h-11 items-center px-3">
-          <button type="button" aria-label="关闭" data-testid="wx-apply-close" onClick={onBack} className="active:opacity-50">
-            <X className="h-6 w-6" strokeWidth={2} />
+          <button type="button" aria-label="返回" data-testid="wx-apply-close" onClick={onBack} className="active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
           </button>
-          <div className="flex-1 pr-8 text-center text-[17px] font-medium">申请添加朋友</div>
+          <div className="flex-1 pr-8 text-center text-[17px] font-semibold">申请添加朋友</div>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-6">
-        <p className="px-4 pb-2 pt-3 text-[14px] text-black/45 dark:text-white/45">打招呼内容</p>
-        <div className="bg-white px-4 py-3 dark:bg-[#1A1A1A]">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+        {/* 打招呼内容（灰卡：多行输入 + 分隔线 + 添加图片） */}
+        <p className="px-6 pb-2 pt-4 text-[15px] text-black/45 dark:text-white/45">打招呼内容</p>
+        <div className={`${cardCls} px-4 py-3`}>
           <textarea
             value={greeting}
             onChange={(e) => setGreeting(e.target.value.slice(0, 100))}
-            placeholder="打招呼内容"
-            rows={3}
+            rows={4}
             data-testid="wx-apply-greeting"
-            className="w-full resize-none bg-transparent text-[15px] leading-[1.6] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+            className="w-full resize-none bg-transparent text-[16px] leading-[1.7] caret-[#07C160] outline-none"
           />
-          <div className="h-px bg-black/[0.06] dark:bg-white/[0.08]" aria-hidden="true" />
-          <button type="button" data-testid="wx-apply-image" onClick={() => fileRef.current?.click()} className="mt-2.5 flex items-center gap-2 text-[14px] text-black/45 active:opacity-60 dark:text-white/45">
-            <ImageIcon className="h-[18px] w-[18px]" strokeWidth={1.8} />
-            {image ? '重新添加图片' : '添加图片'}
-          </button>
-          {image && (
-            <div className="mt-2 flex items-center gap-2">
-              <img src={image} alt="打招呼附图" className="h-14 w-14 rounded-[6px] object-cover" />
-              <button type="button" onClick={() => setImage(null)} aria-label="移除图片" className="text-[13px] text-black/40 dark:text-white/40">
-                移除
-              </button>
-            </div>
-          )}
+          <div className="h-px bg-black/[0.07] dark:bg-white/[0.09]" aria-hidden="true" />
+          <div className="mt-2.5 flex items-center gap-3">
+            <button type="button" data-testid="wx-apply-image" onClick={() => fileRef.current?.click()} className="flex items-center gap-2 text-[15px] text-black/40 active:opacity-60 dark:text-white/40">
+              <ImageIcon className="h-[19px] w-[19px]" strokeWidth={1.8} />
+              {image ? '重新添加图片' : '添加图片'}
+            </button>
+            {image && (
+              <span className="ml-auto flex items-center gap-2">
+                <img src={image} alt="打招呼附图" className="h-11 w-11 rounded-[6px] object-cover" />
+                <button type="button" onClick={() => setImage(null)} aria-label="移除图片" className="text-[13px] text-black/40 active:opacity-60 dark:text-white/40">
+                  移除
+                </button>
+              </span>
+            )}
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -9049,70 +9193,125 @@ function ApplyFriendPage({
               e.target.value = '';
             }}
           />
-          <button
-            type="button"
-            data-testid="wx-apply-common-greeting"
-            onClick={() => {
-              try {
-                window.localStorage.setItem(WX_COMMON_GREETING_KEY, greeting.trim());
-              } catch {
-                // 忽略
-              }
-              onToast('已设为常用打招呼内容');
-            }}
-            className="mt-2 block text-[14px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
-          >
-            设为常用打招呼内容
-          </button>
         </div>
 
-        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">备注</p>
-        <div className="bg-white dark:bg-[#1A1A1A]">
+        <button
+          type="button"
+          data-testid="wx-apply-common-greeting"
+          onClick={() => {
+            try {
+              window.localStorage.setItem(WX_COMMON_GREETING_KEY, greeting.trim());
+            } catch {
+              // 忽略
+            }
+            onToast('已设为常用打招呼内容');
+          }}
+          className="mt-3 block px-6 text-[15.5px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
+        >
+          设为常用打招呼内容
+        </button>
+
+        {/* 备注（灰卡输入 + 自己昵称一键填入建议） */}
+        <p className="px-6 pb-2 pt-5 text-[15px] text-black/45 dark:text-white/45">备注</p>
+        <div className={`${cardCls} flex h-[56px] items-center px-4`}>
           <input
             value={remark}
             onChange={(e) => setRemark(e.target.value.slice(0, 30))}
             placeholder="添加备注"
             data-testid="wx-apply-remark"
-            className="h-[46px] w-full bg-transparent px-4 text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+            className="h-full w-full bg-transparent text-[16px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+          />
+        </div>
+        <button
+          type="button"
+          data-testid="wx-apply-remark-suggest"
+          onClick={() => setRemark(me.name.slice(0, 30))}
+          className="mt-3 block px-6 text-[15.5px] text-[#576B95] active:opacity-60 dark:text-[#8FA5C9]"
+        >
+          {me.name} <span aria-hidden="true">↖</span>
+        </button>
+
+        {/* 标签 */}
+        <p className="px-6 pb-2 pt-5 text-[15px] text-black/45 dark:text-white/45">标签</p>
+        <div className={cardCls}>
+          <button type="button" data-testid="wx-apply-tags" onClick={() => setTagOpen(true)} className={cellRow}>
+            <span className="min-w-0 flex-1 truncate text-left text-[16px] text-[#576B95] dark:text-[#8FA5C9]">
+              {tags.length > 0 ? tags.join('、') : '添加标签'}
+            </span>
+            <ChevronRight className="h-[19px] w-[19px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+        </div>
+
+        {/* 备忘 */}
+        <p className="px-6 pb-2 pt-5 text-[15px] text-black/45 dark:text-white/45">备忘</p>
+        <div className={cardCls}>
+          <button type="button" data-testid="wx-apply-memo" onClick={() => setMemoOpen(true)} className={cellRow}>
+            <span className="min-w-0 flex-1 truncate text-left text-[16px] text-[#576B95] dark:text-[#8FA5C9]">{memo || '添加备忘'}</span>
+            <ChevronRight className="h-[19px] w-[19px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+        </div>
+
+        {/* 照片（≤4 张，随申请存档，详情页展示） */}
+        <p className="px-6 pb-2 pt-5 text-[15px] text-black/45 dark:text-white/45">照片</p>
+        <div className={cardCls}>
+          <button type="button" data-testid="wx-apply-photos" onClick={() => photosRef.current?.click()} className={cellRow}>
+            <span className="min-w-0 flex-1 truncate text-left text-[16px] text-[#576B95] dark:text-[#8FA5C9]">
+              {photos.length > 0 ? `已添加 ${photos.length} 张` : '添加照片'}
+            </span>
+            <ChevronRight className="h-[19px] w-[19px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+          </button>
+          {photos.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-4 pb-3">
+              {photos.map((p, i) => (
+                <span key={i} className="relative">
+                  <img src={p} alt={`照片${i + 1}`} className="h-16 w-16 rounded-[6px] object-cover" />
+                  <button
+                    type="button"
+                    aria-label={`移除照片${i + 1}`}
+                    onClick={() => setPhotos((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-black/55 text-white"
+                  >
+                    <X className="h-3 w-3" strokeWidth={2.6} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <input
+            ref={photosRef}
+            type="file"
+            accept="image/*"
+            multiple
+            tabIndex={-1}
+            aria-hidden="true"
+            className="hidden"
+            onChange={(e) => {
+              void handlePhotos(e.target.files);
+              e.target.value = '';
+            }}
           />
         </div>
 
-        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">标签</p>
-        <div className="bg-white dark:bg-[#1A1A1A]">
-          <button type="button" data-testid="wx-apply-tags" onClick={() => setTagOpen(true)} className={rowCls}>
-            <span className="min-w-0 flex-1 truncate text-left text-[#576B95] dark:text-[#8FA5C9]">
-              {tags.length > 0 ? tags.join('、') : '添加标签'}
-            </span>
-            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
-          </button>
-        </div>
-
-        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">备忘</p>
-        <div className="bg-white dark:bg-[#1A1A1A]">
-          <button type="button" data-testid="wx-apply-memo" onClick={() => setMemoOpen(true)} className={rowCls}>
-            <span className="min-w-0 flex-1 truncate text-left text-[#576B95] dark:text-[#8FA5C9]">{memo || '添加备忘'}</span>
-            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
-          </button>
-        </div>
-
-        <p className="px-4 pb-2 pt-4 text-[14px] text-black/45 dark:text-white/45">朋友权限</p>
-        <div className="bg-white dark:bg-[#1A1A1A]">
-          <button type="button" data-testid="wx-apply-perm" onClick={() => setPermOpen(true)} className={rowCls}>
-            <span className="min-w-0 flex-1 truncate text-left text-[#576B95] dark:text-[#8FA5C9]">
+        {/* 朋友权限（聊天/朋友圈/微信运动） */}
+        <p className="px-6 pb-2 pt-5 text-[15px] text-black/45 dark:text-white/45">朋友权限</p>
+        <div className={cardCls}>
+          <button type="button" data-testid="wx-apply-perm" onClick={() => setPermOpen(true)} className={cellRow}>
+            <span className="min-w-0 flex-1 truncate text-left text-[16px] text-[#576B95] dark:text-[#8FA5C9]">
               聊天、朋友圈{permExercise ? '、微信运动' : ''}
             </span>
-            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+            <ChevronRight className="h-[19px] w-[19px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
           </button>
         </div>
 
-        <div className="mt-3 bg-white dark:bg-[#1A1A1A]">
-          <div className={rowCls}>
-            <span>不让他看我的朋友圈和状态</span>
+        {/* 朋友圈可见性（双向开关） */}
+        <div className={`${cardCls} mt-4`}>
+          <div className={cellRow}>
+            <span className="text-[15.5px]">不让他看我的朋友圈和状态</span>
             <ChatToggle on={hideMine} onChange={setHideMine} accent="#07C160" testId="wx-apply-hide-mine" label="不让他看我的朋友圈和状态" />
           </div>
           <div className="h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />
-          <div className={rowCls}>
-            <span>不看他(她)的朋友圈和状态</span>
+          <div className={cellRow}>
+            <span className="text-[15.5px]">不看他(她)的朋友圈和状态</span>
             <ChatToggle on={hideTheirs} onChange={setHideTheirs} accent="#07C160" testId="wx-apply-hide-theirs" label="不看他(她)的朋友圈和状态" />
           </div>
         </div>
@@ -9126,10 +9325,10 @@ function ApplyFriendPage({
             setBusy(true);
             onSend({
               greeting: greeting.trim() || `我是${me.name}`,
-              extras: { image, remark: remark.trim() || null, tags, memo: memo.trim() || null, permChat, permMoments, permExercise, hideMine, hideTheirs },
+              extras: { image, remark: remark.trim() || null, tags, memo: memo.trim() || null, photos, permChat, permMoments, permExercise, hideMine, hideTheirs },
             });
           }}
-          className="mx-auto mt-8 block h-11 w-[200px] rounded-[22px] bg-[#07C160] text-[16px] font-medium text-white active:bg-[#06AD56] disabled:opacity-60"
+          className="mx-auto mt-10 block h-12 w-[240px] max-w-[72%] rounded-[14px] bg-[#07C160] text-[17px] font-medium text-white active:bg-[#06AD56] disabled:opacity-60"
         >
           发送
         </button>
@@ -9247,15 +9446,15 @@ function AddFriendPage({
   contacts,
   me,
   onBack,
-  onOpenApply,
+  onOpenReqDetail,
   onOpenChat,
   onToast,
 }: {
   contacts: ContactRecord[];
   me: WxUser;
   onBack: () => void;
-  /** 点「添加到通讯录」→ 申请添加朋友页（打招呼/备注/标签/朋友权限…） */
-  onOpenApply: (c: ContactRecord) => void;
+  /** 点搜索结果（非好友）→ 好友申请详情页（资料预览）→ 前往验证 → 申请添加朋友页 */
+  onOpenReqDetail: (c: ContactRecord) => void;
   /** 点「发消息」：直接打开与该好友的聊天 */
   onOpenChat: (c: ContactRecord) => void;
   onToast: (m: string) => void;
@@ -9340,11 +9539,13 @@ function AddFriendPage({
             <div>
               {results.map((c) => {
                 const added = isFriendIn(c, 'wx');
-                return (
-                  <div
+                return added ? (
+                  <button
+                    type="button"
                     key={c.id}
                     data-testid={`wx-add-result-${c.name}`}
-                    className="flex items-center gap-3 border-b border-black/[0.06] px-4 py-2.5 dark:border-white/[0.08]"
+                    onClick={() => onOpenChat(c)}
+                    className="flex w-full items-center gap-3 border-b border-black/[0.06] px-4 py-2.5 text-left active:bg-black/[0.03] dark:border-white/[0.08] dark:active:bg-white/[0.05]"
                   >
                     <WxAvatar src={c.avatar} alt={c.name} size={44} />
                     <div className="min-w-0 flex-1">
@@ -9353,30 +9554,34 @@ function AddFriendPage({
                         微信号：{c.wechatId || c.qqId || c.phone || '未设置'}
                       </p>
                     </div>
-                    {added ? (
-                      <button
-                        type="button"
-                        data-testid={`wx-add-chat-${c.name}`}
-                        onClick={() => onOpenChat(c)}
-                        className="shrink-0 rounded-[5px] border border-[#07C160] px-3 py-1.5 text-[13.5px] font-medium text-[#07C160] active:bg-[#07C160]/10"
-                      >
-                        发消息
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        data-testid={`wx-add-btn-${c.name}`}
-                        onClick={() => onOpenApply(c)}
-                        className="flex shrink-0 items-center gap-1 rounded-[5px] bg-[#07C160] px-3 py-1.5 text-[13.5px] font-medium text-white active:bg-[#06AD56]"
-                      >
-                        添加到通讯录
-                      </button>
-                    )}
-                  </div>
+                    <span
+                      data-testid={`wx-add-chat-${c.name}`}
+                      className="shrink-0 rounded-[5px] border border-[#07C160] px-3 py-1.5 text-[13.5px] font-medium text-[#07C160]"
+                    >
+                      发消息
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    key={c.id}
+                    data-testid={`wx-add-result-${c.name}`}
+                    onClick={() => onOpenReqDetail(c)}
+                    className="flex w-full items-center gap-3 border-b border-black/[0.06] px-4 py-2.5 text-left active:bg-black/[0.03] dark:border-white/[0.08] dark:active:bg-white/[0.05]"
+                  >
+                    <WxAvatar src={c.avatar} alt={c.name} size={44} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[16px]">{c.name}</p>
+                      <p className="mt-0.5 truncate text-[12.5px] text-black/40 dark:text-white/40">
+                        微信号：{c.wechatId || c.qqId || c.phone || '未设置'}
+                      </p>
+                    </div>
+                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
+                  </button>
                 );
               })}
               <p className="px-4 pt-2.5 text-[12.5px] leading-relaxed text-black/35 dark:text-white/35">
-                该账号来自「联系人」App；已是好友的可以直接发消息，未添加的填写申请发送后即可聊天
+                该账号来自「联系人」App；点击搜索结果可查看资料并发送好友申请，已是好友的可直接发消息
               </p>
             </div>
           )
@@ -10325,8 +10530,15 @@ function MainScreen({
   /** 正在编辑的动态（id + 当前正文） */
   const [editingPost, setEditingPost] = useState<{ id: string; text: string } | null>(null);
   const [reqs, setReqs] = useState<WxFriendReq[]>(() => loadReqs());
-  // AI 加回申请 / 手动添加由 friend-state 落盘后广播：订阅刷新列表（含 QQ 端写入的本端无关事件过滤）
-  useEffect(() => subscribeFriendReqs(() => setReqs(loadReqs())), []);
+  // AI 加回申请 / 手动添加 / 验证消息线程回复由 friend-state 落盘后广播：订阅刷新列表 + 打开中的详情页
+  useEffect(
+    () =>
+      subscribeFriendReqs(() => {
+        setReqs(loadReqs());
+        setReqDetail((cur) => (cur ? loadReqs().find((x) => x.id === cur.id) ?? cur : cur));
+      }),
+    [],
+  );
   /** 新的朋友通知头像也实时读取（通知里存的快照 → 联系人在就显示当前头像） */
   const reqsLive = useMemo(
     () =>
@@ -10737,8 +10949,12 @@ function MainScreen({
   // ---------------- 删除联系人 / 好友申请 / 申请添加朋友（微信 × QQ 共用 friend-state 状态机） ----------------
   /** 待确认删除的联系人（弹 FriendDeleteConfirmDialog；after = 确认后关闭的页面栈） */
   const [delTarget, setDelTarget] = useState<{ contact: ContactRecord; after: () => void } | null>(null);
-  /** 好友申请详情页当前申请（page='friendReqDetail'） */
+  /** 好友申请详情页当前申请（page='friendReqDetail'；null = 资料预览模式） */
   const [reqDetail, setReqDetail] = useState<WxFriendReq | null>(null);
+  /** 详情页返回目标：newfriends（新的朋友进入）/ addfriend（搜索或发送后进入） */
+  const [reqDetailFrom, setReqDetailFrom] = useState<'newfriends' | 'addfriend'>('newfriends');
+  /** 资料预览模式目标（搜索结果点人进入；无申请数据） */
+  const [searchProfile, setSearchProfile] = useState<ContactRecord | null>(null);
   /** 申请添加朋友页目标（page='applyFriend'） */
   const [applyTarget, setApplyTarget] = useState<ContactRecord | null>(null);
 
@@ -10758,17 +10974,18 @@ function MainScreen({
     showToast(`已删除「${displayNameOf(contact)}」`);
   }, [delTarget, reloadContacts, showToast]);
 
-  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「新的朋友」+ 刷新 */
+  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「新的朋友」
+   *  （验证消息线程 = 我: 打招呼内容）+ AI 在线程里回一句欢迎（一次性）；返回新建条目供导航 */
   const handleApplySent = useCallback(
-    async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }) => {
+    async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }): Promise<WxFriendReq | null> => {
       try {
         if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
         await restoreFriendship('wx', target.id); // 未删过 = friendWx=true；删过 = 清删除状态并恢复好友
       } catch {
         showToast('添加失败，请重试');
-        return;
+        return null;
       }
-      addFriendReq('wx', {
+      const entry: WxFriendReq = {
         id: uid(),
         contactId: target.id,
         name: displayNameOf(target),
@@ -10779,10 +10996,15 @@ function MainScreen({
         source: SOURCE_SEARCH_WX,
         fromChar: false,
         extras: payload.extras,
-      });
+        thread: [{ who: 'me', text: payload.greeting, time: Date.now() }],
+      };
+      addFriendReq('wx', entry);
       setReqs(loadReqs());
       await reloadContacts();
       showToast('已发送添加申请');
+      // AI 欢迎回复（一次性；fire-and-forget，生成完成经 FRIEND_REQS_EVENT 刷新）
+      void charWelcomeReplyToApply('wx', entry.id, target.id, payload.greeting).catch(() => {});
+      return loadReqs().find((x) => x.id === entry.id) ?? entry;
     },
     [reloadContacts, showToast]
   );
@@ -10814,12 +11036,14 @@ function MainScreen({
     [showToast, reqDetail]
   );
 
-  /** 申请详情「加入黑名单」：写双向拉黑 byUser（拦截对方消息，走既有拉黑链路） */
+  /** 申请详情「加入黑名单」：写双向拉黑 byUser（拦截对方消息，走既有拉黑链路；资料预览模式传联系人） */
   const blockFriendReqAction = useCallback(
-    (r: WxFriendReq) => {
-      const cid = r.contactId ?? r.id;
+    (r: WxFriendReq | ContactRecord) => {
+      const isReq = (x: WxFriendReq | ContactRecord): x is WxFriendReq => 'status' in x || 'time' in x;
+      const cid = isReq(r) ? r.contactId ?? r.id : r.id;
+      const name = isReq(r) ? r.name : displayNameOf(r);
       setUserBlock('wx', cid, true);
-      showToast(`已将「${r.name}」加入黑名单`);
+      showToast(`已将「${name}」加入黑名单`);
     },
     [showToast]
   );
@@ -11154,25 +11378,37 @@ function MainScreen({
         onBack={() => setPage('main')}
         onGoAdd={() => setPage('addFriend')}
         onOpenReq={(r) => {
+          setReqDetailFrom('newfriends');
           setReqDetail(r);
+          setSearchProfile(null);
           setPage('friendReqDetail');
         }}
       />
     );
   }
-  if (page === 'friendReqDetail' && reqDetail) {
-    const reqContact = contacts.find((c) => c.id === (reqDetail.contactId ?? reqDetail.id)) ?? null;
+  if (page === 'friendReqDetail' && (reqDetail || searchProfile)) {
+    const req = reqDetail;
+    const reqContact = req
+      ? contacts.find((c) => c.id === (req.contactId ?? req.id)) ?? null
+      : searchProfile;
     return (
       <FriendReqDetailPage
-        req={reqDetail}
+        req={req}
         contact={reqContact}
+        liveAvatar={liveWxAvatar}
         onBack={() => {
           setReqDetail(null);
-          setPage('newFriends');
+          setSearchProfile(null);
+          setPage(req ? (reqDetailFrom === 'addfriend' ? 'addFriend' : 'newFriends') : 'addFriend');
         }}
         onAccept={(r) => void acceptFriendReqAction(r)}
         onReject={rejectFriendReqAction}
         onBlock={blockFriendReqAction}
+        onVerify={(c) => {
+          setSearchProfile(null);
+          setApplyTarget(c);
+          setPage('applyFriend');
+        }}
         onToast={showToast}
       />
     );
@@ -11183,9 +11419,10 @@ function MainScreen({
         contacts={contacts}
         me={me}
         onBack={() => setPage('main')}
-        onOpenApply={(c) => {
-          setApplyTarget(c);
-          setPage('applyFriend');
+        onOpenReqDetail={(c) => {
+          setSearchProfile(c);
+          setReqDetail(null);
+          setPage('friendReqDetail');
         }}
         onOpenChat={(c) => setChatPeer(c)}
         onToast={showToast}
@@ -11204,8 +11441,18 @@ function MainScreen({
         onSend={(payload) => {
           const t = applyTarget;
           setApplyTarget(null);
-          setPage('addFriend');
-          void handleApplySent(t, payload);
+          void (async () => {
+            const fresh = await handleApplySent(t, payload);
+            if (fresh) {
+              // 发送后进申请详情（已添加 + 验证消息线程，AI 欢迎回复稍后到达）
+              setReqDetailFrom('addfriend');
+              setReqDetail(fresh);
+              setSearchProfile(null);
+              setPage('friendReqDetail');
+            } else {
+              setPage('addFriend');
+            }
+          })();
         }}
         onToast={showToast}
       />

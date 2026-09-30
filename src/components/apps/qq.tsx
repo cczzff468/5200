@@ -220,8 +220,12 @@ import {
   setFriendReqStatus,
   SOURCE_SEARCH_QQ,
   subscribeFriendReqs,
+  appendReqThread,
+  genCharThreadReply,
+  charWelcomeReplyToApply,
   type FriendReqEntry,
   type FriendReqExtras,
+  type FriendReqThreadMsg,
 } from '@/lib/ios/friend-state';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
@@ -10095,14 +10099,17 @@ function AddFriendPage({
   contacts,
   onBack,
   onOpenApply,
+  onOpenReqDetail,
   onOpenChat,
   onToast,
 }: {
   me: QQUser;
   contacts: ContactRecord[];
   onBack: () => void;
-  /** 点「添加」→ 申请添加朋友页（验证信息/备注/分组/权限） */
+  /** 推荐位点「添加」→ 申请添加朋友页（验证信息/备注/分组/权限） */
   onOpenApply: (c: ContactRecord) => void;
+  /** 搜索结果点人（非好友）→ 好友申请详情页（资料预览）→ 前往验证 → 申请添加朋友页 */
+  onOpenReqDetail: (c: ContactRecord) => void;
   onOpenChat: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
@@ -10145,24 +10152,40 @@ function AddFriendPage({
   const resultRows = (list: ContactRecord[]) =>
     list.map((c) =>
       isFriendIn(c, 'qq') ? (
-        <div key={c.id} className="flex items-center gap-3 px-4 py-3">
+        <button
+          key={c.id}
+          type="button"
+          onClick={() => onOpenChat(c)}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+        >
           <QqAvatar src={c.avatar} alt={c.name} size={56} />
           <div className="min-w-0 flex-1">
             <div className="truncate text-[16px] font-medium">{c.name}</div>
             <div className="mt-0.5 text-[12px] text-black/35 dark:text-white/35">{c.qqId ? `QQ:${c.qqId}` : '已是好友'}</div>
           </div>
-          <button
-            type="button"
-            onClick={() => onOpenChat(c)}
-            className="h-9 shrink-0 rounded-full px-5 text-[14px] font-medium text-white active:brightness-95"
+          <span
+            className="h-9 shrink-0 rounded-full px-5 text-[14px] font-medium leading-9 text-white"
             style={{ backgroundColor: QQ_BLUE }}
           >
             发消息
-          </button>
-        </div>
+          </span>
+        </button>
       ) : (
-        <AddPersonRow key={c.id} c={c} busy={false} onAdd={() => onOpenApply(c)} onOpen={() => onOpenChat(c)} />
-      )
+        <button
+          key={c.id}
+          type="button"
+          data-testid={`qq-add-result-${c.name}`}
+          onClick={() => onOpenReqDetail(c)}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+        >
+          <QqAvatar src={c.avatar} alt={c.name} size={56} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[16px] font-medium">{c.name}</div>
+            <div className="mt-0.5 text-[12px] text-black/35 dark:text-white/35">{c.qqId ? `QQ:${c.qqId}` : '点击查看资料并发送好友申请'}</div>
+          </div>
+          <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+        </button>
+      ),
     );
 
   return (
@@ -10548,9 +10571,11 @@ function FriendReqDetailPage({
   onAccept,
   onReject,
   onBlock,
+  onVerify,
   onToast,
 }: {
-  req: FriendReqEntry;
+  /** 好友申请（null = 搜索结果资料预览：还没有申请，走「前往验证」发申请） */
+  req: FriendReqEntry | null;
   /** 申请对应的联系人（被彻底删除时为 null：展示快照，同意按钮置灰） */
   contact: ContactRecord | null;
   onBack: () => void;
@@ -10559,11 +10584,48 @@ function FriendReqDetailPage({
   /** 拒绝申请：AI 停止再申请 */
   onReject: (r: FriendReqEntry) => void;
   /** 设为黑名单 */
-  onBlock: (r: FriendReqEntry) => void;
+  onBlock: (r: FriendReqEntry | ContactRecord) => void;
+  /** 资料预览模式「前往验证」：进申请添加朋友页 */
+  onVerify: (c: ContactRecord) => void;
   onToast: (m: string) => void;
 }) {
-  const status = req.status ?? 'accepted';
-  const pending = status === 'pending';
+  const status = req?.status ?? 'accepted';
+  const pending = req != null && status === 'pending';
+  const peerName = req?.name ?? (contact ? displayNameOf(contact) : '对方');
+
+  // 验证消息线程：旧数据（无 thread）由单条 message 起始展开；资料预览模式无卡片区
+  const thread: FriendReqThreadMsg[] =
+    req?.thread && req.thread.length > 0
+      ? req.thread
+      : req && req.message.trim()
+        ? [{ who: req.fromChar ? 'peer' : 'me', text: req.message, time: req.time }]
+        : [];
+
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+
+  const canReply = req != null && contact != null;
+  const sendReply = async () => {
+    const text = replyText.trim();
+    if (!text || !req || replyBusy) return;
+    const msg: FriendReqThreadMsg = { who: 'me', text, time: Date.now() };
+    appendReqThread('qq', req.id, msg);
+    setReplyText('');
+    setReplyOpen(false);
+    if (contact && (contact.persona ?? '').trim()) {
+      setReplyBusy(true);
+      try {
+        const reply = await genCharThreadReply('qq', contact, [...thread, msg], 'reply');
+        if (reply) appendReqThread('qq', req.id, { who: 'peer', text: reply, time: Date.now() });
+      } catch {
+        // 生成失败静默：用户消息已在线程里
+      } finally {
+        setReplyBusy(false);
+      }
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
       {/* 顶栏：返回 + 好友申请 */}
@@ -10576,36 +10638,98 @@ function FriendReqDetailPage({
 
       <div className="flex-1 overflow-y-auto px-4" data-testid="qq-reqdetail-body">
         {/* 申请人卡片（头像 + 名字/QQ号） */}
-        <button
-          type="button"
-          onClick={() => onToast('查看资料暂未开放')}
-          className="flex w-full items-center gap-3 py-4 text-left active:opacity-70"
-        >
-          <QqAvatar src={req.avatar} alt={req.name} size={64} />
+        <div className="flex w-full items-center gap-3 py-4">
+          <QqAvatar src={req?.avatar ?? contact?.avatar ?? null} alt={peerName} size={64} />
           <span className="min-w-0 flex-1 truncate text-[19px] font-semibold">
-            {req.name}
+            {peerName}
             {contact?.qqId ? `（${contact.qqId}）` : ''}
           </span>
-          <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
-        </button>
-
-        <p className="pb-2 text-[13px] text-black/40 dark:text-white/40">对方留言</p>
-        <div className="flex items-start justify-between gap-3 rounded-[12px] bg-[#F2F3F5] px-3.5 py-3.5 dark:bg-white/[0.08]">
-          <p className="min-w-0 break-words text-[15px] leading-[1.6]">{req.message || '请求加为好友'}</p>
-          <button type="button" onClick={() => onToast('回复暂未开放')} className="shrink-0 text-[14px] active:opacity-60" style={{ color: QQ_BLUE }}>
-            回复
-          </button>
         </div>
 
-        <p className="pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">来源</p>
-        <div className="rounded-[12px] bg-[#F2F3F5] px-3.5 py-3.5 text-[15px] dark:bg-white/[0.08]">{req.source || '好友验证消息'}</div>
+        {/* 验证消息线程（我/对方 多轮对话 + 回复） */}
+        {thread.length > 0 && (
+          <>
+            <p className="pb-2 text-[13px] text-black/40 dark:text-white/40">验证消息</p>
+            <div className="rounded-[12px] bg-[#F2F3F5] px-3.5 py-3.5 dark:bg-white/[0.08]" data-testid="qq-reqdetail-thread">
+              {thread.map((m, i) => (
+                <p key={`${m.time}-${i}`} className="break-words text-[15px] leading-[1.8]">
+                  {m.who === 'me' ? '我: ' : `${peerName}: `}
+                  {m.text}
+                </p>
+              ))}
+              {replyBusy ? (
+                <p className="mt-1 text-[14.5px] text-black/35 dark:text-white/35" data-testid="qq-reqdetail-reply-busy">
+                  对方正在回复…
+                </p>
+              ) : canReply ? (
+                replyOpen ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value.slice(0, 60))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void sendReply();
+                        }
+                      }}
+                      placeholder={`回复 ${peerName}`}
+                      autoFocus
+                      data-testid="qq-reqdetail-reply-input"
+                      className="h-9 min-w-0 flex-1 rounded-[8px] bg-white px-3 text-[14.5px] outline-none placeholder:text-black/30 dark:bg-white/10 dark:placeholder:text-white/30"
+                    />
+                    <button
+                      type="button"
+                      data-testid="qq-reqdetail-reply-send"
+                      onClick={() => void sendReply()}
+                      className="h-9 shrink-0 rounded-full px-4 text-[14px] font-medium text-white active:brightness-95"
+                      style={{ backgroundColor: QQ_BLUE }}
+                    >
+                      发送
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="qq-reqdetail-reply"
+                    onClick={() => setReplyOpen(true)}
+                    className="mt-1 block text-[14.5px] active:opacity-60"
+                    style={{ color: QQ_BLUE }}
+                  >
+                    回复
+                  </button>
+                )
+              ) : null}
+            </div>
+          </>
+        )}
 
-        {/* 同意 / 拒绝 / 状态 */}
-        {pending ? (
+        <p className="pb-2 pt-4 text-[13px] text-black/40 dark:text-white/40">来源</p>
+        <div className="rounded-[12px] bg-[#F2F3F5] px-3.5 py-3.5 text-[15px] dark:bg-white/[0.08]">
+          <span data-testid="qq-reqdetail-source">{req?.source || (req ? '好友验证消息' : SOURCE_SEARCH_QQ)}</span>
+          {!req && contact && (
+            <span className="ml-3 text-black/40 dark:text-white/40">
+              {contact.qqId ? `QQ:${contact.qqId}` : contact.phone ? `手机:${contact.phone}` : ''}
+            </span>
+          )}
+        </div>
+
+        {/* 同意 / 拒绝 / 前往验证 / 状态 */}
+        {req == null ? (
+          <button
+            type="button"
+            data-testid="qq-reqdetail-accept"
+            onClick={() => contact && onVerify(contact)}
+            disabled={!contact}
+            className="mb-6 mt-8 h-12 w-full rounded-full text-[16px] font-medium text-white active:brightness-95 disabled:opacity-50"
+            style={{ backgroundColor: QQ_BLUE }}
+          >
+            前往验证
+          </button>
+        ) : pending ? (
           <div className="mb-6 mt-8 flex flex-col gap-2.5">
             <button
               type="button"
-              data-testid="qq-reqdetail-accept"
               onClick={() => onAccept(req)}
               disabled={!contact}
               className="h-12 w-full rounded-full text-[16px] font-medium text-white active:brightness-95 disabled:opacity-50"
@@ -10631,7 +10755,13 @@ function FriendReqDetailPage({
 
       {/* 底部：设为黑名单 | 举报用户 */}
       <div className="flex shrink-0 items-center justify-center gap-4 pb-[30px] pt-3">
-        <button type="button" data-testid="qq-reqdetail-block" onClick={() => onBlock(req)} className="text-[15px] active:opacity-60" style={{ color: QQ_BLUE }}>
+        <button
+          type="button"
+          data-testid="qq-reqdetail-block"
+          onClick={() => (req ? onBlock(req) : contact ? onBlock(contact) : undefined)}
+          className="text-[15px] active:opacity-60"
+          style={{ color: QQ_BLUE }}
+        >
           设为黑名单
         </button>
         <span className="h-4 w-px bg-black/15 dark:bg-white/20" aria-hidden="true" />
@@ -13394,6 +13524,7 @@ type MainRoute =
   | { page: 'newfriends' }
   | { page: 'apply-friend'; contactId: string }
   | { page: 'friend-req'; reqId: string }
+  | { page: 'friend-req-profile'; contactId: string }
   | { page: 'zone'; /** mine = 只看自己发的动态（个人资料页 QQ空间进入） */ scope?: 'mine'; /** 从哪进入（决定返回键去向） */ from?: 'profile' }
   | { page: 'zone-peer'; contactId: string }
   | { page: 'zone-compose'; /** 与 zone 同源（写说说返回时保留「我的空间」语境） */ scope?: 'mine'; from?: 'profile' }
@@ -13474,17 +13605,18 @@ function MainScreen({
     showToast(`已删除「${displayNameOf(contact)}」`);
   }, [delTarget, refreshContacts, showToast]);
 
-  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「好友通知」+ 刷新 */
+  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「好友通知」
+   *  （验证消息线程 = 我: 验证信息）+ AI 在线程里回一句欢迎（一次性）；返回新建条目供导航 */
   const handleApplySent = useCallback(
-    async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }) => {
+    async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }): Promise<FriendReqEntry | null> => {
       try {
         if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
         await restoreFriendship('qq', target.id); // 未删过 = friendQq=true；删过 = 清删除状态并恢复好友
       } catch {
         showToast('添加失败，请重试');
-        return;
+        return null;
       }
-      addFriendReq('qq', {
+      const entry: FriendReqEntry = {
         id: genId(),
         contactId: target.id,
         name: displayNameOf(target),
@@ -13495,10 +13627,15 @@ function MainScreen({
         source: SOURCE_SEARCH_QQ,
         fromChar: false,
         extras: payload.extras,
-      });
+        thread: [{ who: 'me', text: payload.greeting, time: Date.now() }],
+      };
+      addFriendReq('qq', entry);
       setQqReqs(loadFriendReqs('qq'));
       await refreshContacts();
       showToast('已发送添加申请');
+      // AI 欢迎回复（一次性；fire-and-forget，生成完成经 FRIEND_REQS_EVENT 刷新）
+      void charWelcomeReplyToApply('qq', entry.id, target.id, payload.greeting).catch(() => {});
+      return loadFriendReqs('qq').find((x) => x.id === entry.id) ?? entry;
     },
     [refreshContacts, showToast]
   );
@@ -13526,12 +13663,14 @@ function MainScreen({
     [showToast]
   );
 
-  /** 好友申请详情「设为黑名单」：写双向拉黑 byUser（拦截对方消息，走既有拉黑链路） */
+  /** 好友申请详情「设为黑名单」：写双向拉黑 byUser（拦截对方消息，走既有拉黑链路；资料预览模式传联系人） */
   const blockFriendReqAction = useCallback(
-    (r: FriendReqEntry) => {
-      const cid = r.contactId ?? r.id;
+    (r: FriendReqEntry | ContactRecord) => {
+      const isReq = (x: FriendReqEntry | ContactRecord): x is FriendReqEntry => 'status' in x || 'time' in x;
+      const cid = isReq(r) ? r.contactId ?? r.id : r.id;
+      const name = isReq(r) ? r.name : displayNameOf(r);
       setUserBlock('qq', cid, true);
-      showToast(`已将「${r.name}」设为黑名单`);
+      showToast(`已将「${name}」设为黑名单`);
     },
     [showToast]
   );
@@ -13795,9 +13934,38 @@ function MainScreen({
           contacts={contacts}
           onBack={() => openTabs('联系人')}
           onOpenApply={(c) => setRoute({ page: 'apply-friend', contactId: c.id })}
+          onOpenReqDetail={(c) => setRoute({ page: 'friend-req-profile', contactId: c.id })}
           onOpenChat={openChatOf}
           onToast={showToast}
         />
+      ) : route.page === 'friend-req-profile' ? (
+        (() => {
+          const target = contacts.find((c) => c.id === route.contactId) ?? null;
+          if (!target) {
+            return (
+              <div className="flex h-full flex-col bg-white pt-[54px] dark:bg-[#111214]">
+                <div className="relative flex h-12 shrink-0 items-center px-3">
+                  <button type="button" aria-label="返回" onClick={() => openTabs('联系人')} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
+                    <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
+                  </button>
+                </div>
+                <p className="mt-16 text-center text-[13px] text-black/30 dark:text-white/30">该联系人不存在</p>
+              </div>
+            );
+          }
+          return (
+            <FriendReqDetailPage
+              req={null}
+              contact={target}
+              onBack={() => setRoute({ page: 'addfriend' })}
+              onAccept={(r) => void acceptFriendReqAction(r)}
+              onReject={rejectFriendReqAction}
+              onBlock={blockFriendReqAction}
+              onVerify={(c) => setRoute({ page: 'apply-friend', contactId: c.id })}
+              onToast={showToast}
+            />
+          );
+        })()
       ) : route.page === 'apply-friend' ? (
         (() => {
           const target = contacts.find((c) => c.id === route.contactId) ?? null;
@@ -13819,8 +13987,15 @@ function MainScreen({
               target={target}
               onBack={() => setRoute({ page: 'addfriend' })}
               onSend={(payload) => {
-                void handleApplySent(target, payload);
-                setRoute({ page: 'addfriend' });
+                void (async () => {
+                  const fresh = await handleApplySent(target, payload);
+                  if (fresh) {
+                    // 发送后进申请详情（已同意 + 验证消息线程，AI 欢迎回复稍后到达）
+                    setRoute({ page: 'friend-req', reqId: fresh.id });
+                  } else {
+                    setRoute({ page: 'addfriend' });
+                  }
+                })();
               }}
               onToast={showToast}
             />
@@ -13850,6 +14025,7 @@ function MainScreen({
               onAccept={(r) => void acceptFriendReqAction(r)}
               onReject={rejectFriendReqAction}
               onBlock={blockFriendReqAction}
+              onVerify={(c) => setRoute({ page: 'apply-friend', contactId: c.id })}
               onToast={showToast}
             />
           );
