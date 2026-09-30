@@ -5,13 +5,12 @@
  *
  * 结构（对照需求与参考截图，整体毛玻璃/胶囊玻璃风格）：
  * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
- * - 头部：返回 + 「IN PERSON · 与 X 见面」+ 收藏（保存）+ 现场设置（玻璃圆钮）；
- * - 见面卡：紧凑毛玻璃胶囊——头像（叠在线绿点）/ 名字 /「此刻就在你身边」/ 时间·状态·关系背景；
+ * - 头部：返回 + 毛玻璃胶囊（只显示头像 + 名字，见面中叠在线绿点）+ 收藏（保存）+ 现场设置（玻璃圆钮）；
  * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡）；
  * - 底部：继续 / 重Roll / 保存三个玻璃圆钮分列输入框左右两侧，输入框内嵌深色圆形发送钮；
- * - 无见面时：承接条数选择（10/20/30/40/50/自定义）+ 开始见面；
- * - 现场设置面板：回复字数 / 用户·角色叙述人称 / 回复预设 / 基础设置 / 变量说明 /
- *   角色回复预设模板编辑 / 现场文风（内置+新建）。
+ * - 无见面时：极简开始页（头像 + 名字 + 开始见面）；
+ * - 现场设置面板：「从聊天继续」承接最近 N 条（置于最上方）/ 回复字数 / 用户·角色叙述人称 /
+ *   回复预设 / 基础设置 / 变量说明 / 角色回复预设模板编辑 / 现场文风（内置+新建）。
  *
  * 数据：进行中的见面按角色 ID 隔离（offline-meet:<contactId>）；生成走 /api/offline；
  * 保存时经 memAddEventFragment 写入记忆库（sourceTag 'offline-meet'），线上聊天可召回。
@@ -128,16 +127,6 @@ function GlassAmbience() {
   );
 }
 
-/** 信息小胶囊（时间 / 状态 / 关系背景） */
-function MetaChip({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-white/70 bg-white/55 px-2.5 py-1 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.09]">
-      <span className="shrink-0 text-[10px] tracking-wide text-black/35 dark:text-white/35">{label}</span>
-      <span className="truncate text-[11px] font-medium text-black/70 dark:text-white/85">{value}</span>
-    </span>
-  );
-}
-
 /** HH:MM */
 function hhmm(ts: number) {
   const d = new Date(ts);
@@ -207,6 +196,8 @@ interface SettingsPanelProps {
   styles: OfflineStyle[];
   tpl: string;
   meetActive: boolean;
+  /** 可承接的线上聊天条数（提示用） */
+  availableCount: number;
   onClose: () => void;
   onCommit: (settings: OfflineMeetSettings, tpl: string) => void;
   onCreatePreset: (name: string, template: string) => string;
@@ -216,9 +207,13 @@ interface SettingsPanelProps {
   onDeleteStyle: (id: string) => void;
 }
 
-function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClose, onCommit, onCreatePreset, onSavePreset, onDeletePreset, onCreateStyle, onDeleteStyle }: SettingsPanelProps) {
+function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, availableCount, onClose, onCommit, onCreatePreset, onSavePreset, onDeletePreset, onCreateStyle, onDeleteStyle }: SettingsPanelProps) {
   const [d, setD] = useState<OfflineMeetSettings>({ ...initial });
   const [tplDraft, setTplDraft] = useState(tpl);
+  const [carrySel, setCarrySel] = useState<number | 'custom'>(() =>
+    (OFFLINE_CARRY_OPTIONS as readonly number[]).includes(initial.carryCount) ? initial.carryCount : 'custom',
+  );
+  const [carryCustom, setCarryCustom] = useState(String(initial.carryCount));
   const [presetPanel, setPresetPanel] = useState<null | { mode: 'new' | 'save-as'; name: string }>(null);
   const [stylePanel, setStylePanel] = useState<null | { name: string; content: string }>(null);
   const activePreset = presets.find((p) => p.id === d.presetId) ?? presets[0];
@@ -233,7 +228,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Meeting Preferences</p>
           <h2 className="mt-1 text-[26px] font-bold text-black dark:text-white">现场设置</h2>
-          <p className="mt-1 text-[13px] text-black/45 dark:text-white/45">这里的文风、字数、人称和回复预设只影响{meetActive ? '本次线下见面' : '下次线下见面'}。</p>
+          <p className="mt-1 text-[13px] text-black/45 dark:text-white/45">承接条数在下次开始见面时生效；其余只影响{meetActive ? '本次线下见面' : '下次线下见面'}。</p>
         </div>
         <button
           type="button"
@@ -246,6 +241,55 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-4 thin-scrollbar">
+        {/* 从聊天继续（承接最近 N 条线上聊天）—— 置于最上方 */}
+        <Card>
+          <FieldLabel title="从聊天继续" hint="开始见面时承接最近的线上聊天；已开始的见面不受影响" />
+          <div className="flex flex-wrap gap-2">
+            {OFFLINE_CARRY_OPTIONS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setCarrySel(n)}
+                className={`h-9 min-w-[52px] rounded-full px-3 text-[14px] transition ${
+                  carrySel === n
+                    ? 'bg-[#1C1C1E]/90 font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black'
+                    : 'border border-white/70 bg-white/50 text-black/60 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setCarrySel('custom')}
+              className={`h-9 rounded-full px-3 text-[14px] transition ${
+                carrySel === 'custom'
+                  ? 'bg-[#1C1C1E]/90 font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black'
+                  : 'border border-white/70 bg-white/50 text-black/60 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60'
+              }`}
+            >
+              自定义
+            </button>
+          </div>
+          {carrySel === 'custom' ? (
+            <input
+              type="number"
+              inputMode="numeric"
+              min={5}
+              max={200}
+              value={carryCustom}
+              onChange={(e) => setCarryCustom(e.target.value)}
+              onBlur={() => setCarryCustom(String(Math.min(200, Math.max(5, Math.floor(Number(carryCustom) || 20)))))}
+              className="mt-3 h-10 w-32 rounded-[14px] border border-white/70 bg-white/70 px-3 text-[15px] text-black outline-none backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white"
+              aria-label="自定义承接条数"
+              placeholder="5 ~ 200"
+            />
+          ) : null}
+          <p className="mt-3 text-[12px] text-black/40 dark:text-white/40">
+            {availableCount > 0 ? `共找到 ${availableCount} 条线上聊天记录可承接` : '最近没有线上聊天记录，也可以直接见面'}
+          </p>
+        </Card>
+
         {/* 回复字数 + 叙述人称 + 预设 */}
         <Card>
           <FieldLabel title="角色回复字数" hint="每次回复按设定字数上下浮动 20%" />
@@ -621,7 +665,10 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, onClo
         </button>
         <button
           type="button"
-          onClick={() => onCommit(d, tplDraft)}
+          onClick={() => {
+            const n = carrySel === 'custom' ? Math.min(200, Math.max(5, Math.floor(Number(carryCustom) || 20))) : carrySel;
+            onCommit({ ...d, carryCount: n }, tplDraft);
+          }}
           className="h-12 flex-1 rounded-full bg-[#1C1C1E]/90 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(28,28,30,0.25)] backdrop-blur-xl active:opacity-80 dark:bg-white dark:text-black"
         >
           保存设置
@@ -1028,37 +1075,32 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
   const lastEntry = meet?.entries[meet.entries.length - 1] ?? null;
   const canReroll = !!lastEntry && lastEntry.role === 'char' && !gen;
-  const startedLabel = meet
-    ? (() => {
-        const dt = new Date(meet.startedAt);
-        const hh = String(dt.getHours()).padStart(2, '0');
-        const mm = String(dt.getMinutes()).padStart(2, '0');
-        return `${dt.getMonth() + 1}月${dt.getDate()}日 ${hh}:${mm}`;
-      })()
-    : '';
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white" data-testid={`offline-meet-${app}`}>
       <GlassAmbience />
       <LocalToast msg={onToast ? '' : toast} />
 
-      {/* 头部 */}
-      <div className="flex items-center justify-between px-4 pb-1.5 pt-[54px]">
+      {/* 头部：返回 + 头像名字毛玻璃胶囊 + 收藏/设置 */}
+      <div className="flex items-center gap-2 px-4 pb-1.5 pt-[54px]">
         <button
           type="button"
           aria-label="返回聊天"
           onClick={onBack}
-          className={`flex h-9 w-9 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
         >
           <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
         </button>
-        <div className="min-w-0 text-center">
-          <h1 className="truncate text-[18px] font-bold leading-tight text-black dark:text-white">
-            与 {shownName} 见面
-          </h1>
-          <p className="mt-[3px] text-[9px] font-semibold uppercase tracking-[0.34em] text-black/35 dark:text-white/35">In Person</p>
+        <div className={`flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-3 ${GLASS_CAPSULE}`}>
+          <div className="relative shrink-0">
+            <MeetAvatar contact={contact} size={30} />
+            {meet ? (
+              <span className="absolute bottom-0 right-0 h-[9px] w-[9px] rounded-full border-2 border-white bg-[#34C759] dark:border-[#2a2a2c]" aria-hidden="true" />
+            ) : null}
+          </div>
+          <h1 className="truncate text-[15px] font-semibold text-black dark:text-white">{shownName}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {meet ? (
             <button
               type="button"
@@ -1085,122 +1127,28 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
       {/* 主体 */}
       {!meet ? (
-        /* —— 开始见面（承接设置） —— */
-        <div className="flex-1 overflow-y-auto px-4 pb-6 thin-scrollbar">
-          <Card className="mt-2">
-            <div className="flex items-center gap-3">
-              <MeetAvatar contact={contact} size={46} />
-              <div className="min-w-0">
-                <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.24em] text-black/35 dark:text-white/35">
-                  <span className="h-2 w-2 rounded-full bg-[#34C759]" aria-hidden="true" /> Ready To Meet
-                </p>
-                <h2 className="mt-0.5 text-[20px] font-bold text-black dark:text-white">从聊天继续</h2>
-                <p className="text-[12px] text-black/45 dark:text-white/45">把刚才的聊天延续到线下</p>
-              </div>
-            </div>
-            <div className="my-3 border-t border-black/[0.06] dark:border-white/[0.08]" />
-            <p className="text-[12px] leading-[1.7] text-black/50 dark:text-white/50">
-              开始后会基于 {shownName}
-              的人设、世界书背景、相关记忆和最近的线上聊天，生成包含地点、时间、环境、角色状态与对白的线下场景。
-            </p>
-          </Card>
-
-          <Card className="mt-3">
-            <p className="text-[15px] font-medium text-black/85 dark:text-white/90">从聊天继续承接最近 N 条聊天</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {OFFLINE_CARRY_OPTIONS.map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setCarryChoice(n)}
-                  className={`h-9 min-w-[52px] rounded-full px-3 text-[14px] transition ${
-                    carryChoice === n
-                      ? 'bg-[#1C1C1E]/90 font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black'
-                      : 'border border-white/70 bg-white/50 text-black/60 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60'
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setCarryChoice('custom')}
-                className={`h-9 rounded-full px-3 text-[14px] transition ${
-                  carryChoice === 'custom'
-                    ? 'bg-[#1C1C1E]/90 font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black'
-                    : 'border border-white/70 bg-white/50 text-black/60 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60'
-                }`}
-              >
-                自定义
-              </button>
-            </div>
-            {carryChoice === 'custom' ? (
-              <input
-                type="number"
-                inputMode="numeric"
-                min={5}
-                max={200}
-                value={customN}
-                onChange={(e) => setCustomN(e.target.value)}
-                onBlur={() => setCustomN(String(Math.min(200, Math.max(5, Math.floor(Number(customN) || 20)))))}
-                className="mt-3 h-10 w-32 rounded-[14px] border border-white/70 bg-white/70 px-3 text-[15px] text-black outline-none backdrop-blur-md dark:border-white/10 dark:bg-white/[0.08] dark:text-white"
-                aria-label="自定义承接条数"
-                placeholder="5 ~ 200"
-              />
-            ) : null}
-            <p className="mt-3 text-[12px] text-black/40 dark:text-white/40">
-              {availableCount > 0 ? `最近 ${Math.min(availableCount, carryChoice === 'custom' ? Math.floor(Number(customN) || 20) : carryChoice)} 条可用（共找到 ${availableCount} 条聊天记录）` : '最近没有线上聊天记录，也可以直接见面'}
-            </p>
-          </Card>
-
+        /* —— 极简开始页：头像 + 名字 + 开始见面（承接条数在「现场设置」最上方配置） —— */
+        <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-16">
+          <div className="flex flex-col items-center gap-2.5">
+            <MeetAvatar contact={contact} size={76} />
+            <p className="text-[17px] font-semibold text-black/85 dark:text-white/90">{shownName}</p>
+          </div>
           <button
             type="button"
             data-testid="offline-start"
             onClick={() => void startMeeting()}
             disabled={starting}
-            className="mt-5 flex h-[52px] w-full items-center justify-center gap-2 rounded-full bg-[#1C1C1E]/90 text-[16px] font-semibold text-white shadow-[0_10px_30px_rgba(28,28,30,0.28)] backdrop-blur-xl active:opacity-80 disabled:opacity-50 dark:bg-white dark:text-black"
+            className="flex h-[52px] items-center justify-center gap-2 rounded-full bg-[#1C1C1E]/90 px-12 text-[16px] font-semibold text-white shadow-[0_10px_30px_rgba(28,28,30,0.28)] backdrop-blur-xl active:opacity-80 disabled:opacity-50 dark:bg-white dark:text-black"
           >
             {starting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Star className="h-5 w-5" strokeWidth={2} />}
             {starting ? '正在准备见面…' : '开始见面'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="mt-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-full border border-white/70 bg-white/55 text-[14px] text-black/60 backdrop-blur-xl active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60"
-          >
-            <SlidersHorizontal className="h-4 w-4" /> 现场设置
           </button>
         </div>
       ) : (
         /* —— 见面进行中 —— */
         <>
-          {/* 见面信息：紧凑毛玻璃胶囊（头像+在线点 / 名字 / 此刻就在你身边 / 时间·状态·关系背景） */}
-          <div className="px-4">
-            <div className={`relative overflow-hidden rounded-[20px] px-3.5 py-3 ${GLASS_CARD}`}>
-              <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/90 to-transparent" aria-hidden="true" />
-              <div className="flex items-center gap-2.5">
-                <div className="relative shrink-0">
-                  <MeetAvatar contact={contact} size={38} />
-                  <span className="absolute bottom-0 right-0 h-[11px] w-[11px] rounded-full border-2 border-white bg-[#34C759] dark:border-[#2a2a2c]" aria-hidden="true" />
-                </div>
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <p className="truncate text-[15px] font-bold text-black dark:text-white">{shownName}</p>
-                  <span className="flex min-w-0 shrink items-center gap-1 rounded-full bg-[#34C759]/15 px-2 py-[3px] text-[10px] font-semibold text-[#1E9E46] dark:text-[#4ADE80]">
-                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#34C759]" aria-hidden="true" />
-                    此刻就在你身边
-                  </span>
-                </div>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <MetaChip label="时间" value={startedLabel} />
-                <MetaChip label="状态" value={meet.scene.charState || '延续刚才的情绪'} />
-                <MetaChip label="关系背景" value={`已承接最近 ${meet.carryN} 条聊天`} />
-              </div>
-            </div>
-          </div>
-
           {/* 叙事流 */}
-          <div ref={scrollRef} className="mt-2.5 flex-1 space-y-4 overflow-y-auto px-4 pb-3 thin-scrollbar">
+          <div ref={scrollRef} className="mt-3 flex-1 space-y-4 overflow-y-auto px-4 pb-3 thin-scrollbar">
             {meet.entries.map((e) =>
               e.role === 'char' ? (
                 <div key={e.id} className={`rounded-[20px] rounded-tl-[8px] p-4 ${GLASS_CARD}`}>
@@ -1303,6 +1251,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           styles={styles}
           tpl={activeTpl}
           meetActive={!!meet}
+          availableCount={availableCount}
           onClose={() => setSettingsOpen(false)}
           onCommit={commitSettings}
           onCreatePreset={createPreset}
