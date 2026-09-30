@@ -411,6 +411,18 @@ export async function maybeCharReAddReq(app: FriendDelApp, contactId: string): P
     source: SOURCE_CHAR_REQ,
     fromChar: true,
   });
+
+  // AI 验证消息同步落聊天记录（kind=text + fr='greet'）：聊天界面渲染「以上是打招呼的内容」标注，
+  // 用户同意后进入聊天可见（验证消息持久保留，重启不丢）；写入失败不影响申请本身
+  try {
+    const chatKey = `${app === 'wx' ? 'wx-chat-msgs:' : 'qq-chat-msgs:'}${contactId}`;
+    const existing = kvGet<unknown[]>(chatKey);
+    const list = Array.isArray(existing) ? [...existing] : [];
+    list.push({ id: genId(), role: 'peer', content: message, time: Date.now(), kind: 'text', fr: 'greet' });
+    kvSet(chatKey, list.slice(app === 'wx' ? -100 : -200));
+  } catch {
+    // 忽略：聊天记录不可写时申请仍有效
+  }
 }
 
 /** 组 system prompt：人设 + 记忆 + 时间感知（与聊天/跨 App 找同源模块）；scene = 场景附加规则 */

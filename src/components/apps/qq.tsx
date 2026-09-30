@@ -370,6 +370,8 @@ interface QQMsg {
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
   gcard?: GroupCardData;
+  /** 好友添加过程标记（同 WxMsg.fr）：apply = 用户验证消息（标注「以上为验证消息」）/ greet = AI 验证消息（标注「以上是打招呼的内容」）/ added = 加好友成功提示（kind='sys' 携带文案，居中灰字） */
+  fr?: 'apply' | 'greet' | 'added';
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -4414,18 +4416,19 @@ function ChatPage({
     const B = BUBBLE_MENU_ICONS;
     const isText = !m.kind || m.kind === 'text';
     const isVoice = m.kind === 'voice';
+    const isFrLocked = m.fr === 'apply' || m.fr === 'greet'; // 好友验证消息永久保留：禁删除/撤回/编辑/引用/重新生成
     const items: BubbleMenuItem[] = [];
     // 语音消息首项「转文字」/「取消转文字」（toggle：已转写→取消收起；未转写→识别；失败可重试）
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
-    items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
-    if (isText || isVoice) items.push({ key: 'edit', label: '编辑', icon: B.edit });
-    if (isText) items.push({ key: 'quote', label: '引用', icon: B.quote });
+    if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
+    if ((isText || isVoice) && !isFrLocked) items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (isText && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
     items.push({ key: 'multi', label: '多选', icon: B.multi });
-    items.push({ key: 'recall', label: '撤回', icon: B.recall });
+    if (!isFrLocked) items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
     items.push({ key: 'fav', label: isMsgFavorited('qq', m.id) ? '已收藏' : '收藏', icon: B.fav, filled: isMsgFavorited('qq', m.id) });
-    if (m.role === 'peer') items.push({ key: 'regen', label: '重新生成', icon: B.regen });
+    if (m.role === 'peer' && !isFrLocked) items.push({ key: 'regen', label: '重新生成', icon: B.regen });
     return items;
   };
 
@@ -5088,6 +5091,9 @@ function ChatPage({
                 </div>
               ) : m.kind === 'notice' && m.notice ? (
                 <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
+              ) : m.kind === 'sys' && m.sys && m.fr === 'added' ? (
+                /* 加好友成功提示（截图样式：居中纯灰字，无胶囊边框） */
+                <p data-testid="qq-fr-added" className="mb-3 text-center text-[13px] leading-relaxed text-black/40 dark:text-white/40">{m.sys.text}</p>
               ) : m.kind === 'sys' && m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
                 <div data-testid="qq-sys-row" className="mb-3 text-center">
@@ -5344,6 +5350,12 @@ function ChatPage({
               )}
             {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
             {blockedLineOf(m)}
+            {/* 好友验证消息标注（截图样式：气泡下方居中灰字；验证消息独立保留在聊天记录里） */}
+            {m.fr === 'apply' || m.fr === 'greet' ? (
+              <p data-testid="qq-fr-note" className="mb-2 text-center text-[12.5px] text-black/35 dark:text-white/35">
+                {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
+              </p>
+            ) : null}
             </div>
           );
         })}
@@ -13870,6 +13882,25 @@ function MainScreen({
         thread: [{ who: 'me', text: payload.greeting, time: Date.now() }],
       };
       addFriendReq('qq', entry);
+      // 加好友过程落聊天记录：我的验证消息（fr=apply）+ 成功提示（fr=added 居中灰字）；验证消息永久保留，重启不丢
+      try {
+        const now = Date.now();
+        saveMsgs(target.id, [
+          ...loadMsgs(target.id),
+          { id: genId(), role: 'me' as const, content: payload.greeting, time: now, kind: 'text' as const, fr: 'apply' as const },
+          {
+            id: genId(),
+            role: 'peer' as const,
+            content: '',
+            time: now + 1,
+            kind: 'sys' as const,
+            sys: { text: '我们已成功添加为好友，现在可以开始聊天啦～' },
+            fr: 'added' as const,
+          },
+        ]);
+      } catch {
+        // 聊天记录写入失败不影响添加流程
+      }
       setQqReqs(loadFriendReqs('qq'));
       await refreshContacts();
       showToast('已发送添加申请');
@@ -13886,6 +13917,23 @@ function MainScreen({
       const cid = r.contactId ?? r.id;
       await restoreFriendship('qq', cid);
       setFriendReqStatus('qq', r.id, 'accepted');
+      // 加好友成功提示落聊天记录（AI 加回申请场景：居中灰字「你已添加了…」，此前 AI 的验证消息保留）
+      try {
+        saveMsgs(cid, [
+          ...loadMsgs(cid),
+          {
+            id: genId(),
+            role: 'peer' as const,
+            content: '',
+            time: Date.now(),
+            kind: 'sys' as const,
+            sys: { text: `你已添加了${r.name}，现在可以开始聊天了。` },
+            fr: 'added' as const,
+          },
+        ]);
+      } catch {
+        // 忽略
+      }
       setQqReqs(loadFriendReqs('qq'));
       await refreshContacts();
       showToast(`已添加「${r.name}」`);

@@ -12342,3 +12342,26 @@ Work Log:
 Stage Summary:
 - 收支统计页视觉规格与账单列表页（15-16px 主体文字）拉齐，不再突兀
 - 产出文件：src/components/apps/wechat-wallet.tsx（仅 WxBillStatsPage 样式，无逻辑改动）
+
+---
+Task ID: III
+Agent: 主协调者 (Z.ai Code)
+Task: 加好友/被加好友过程在聊天界面完整显示（用户加 AI：验证消息+「以上为验证消息」+「我们已成功添加为好友…」；AI 加用户：验证消息+「以上是打招呼的内容」+「你已添加了XX，现在可以开始聊天了。」；验证消息持久保留；三端共用逻辑；不破坏既有功能）
+
+Work Log:
+- 设计消息标记字段 fr?: 'apply'|'greet'|'added' 三端消息类型各加（WxMsg wechat.tsx / QQMsg qq.tsx / ChatMsg chat.tsx）：apply=用户验证消息（气泡下标注「以上为验证消息」）、greet=AI 验证消息（标注「以上是打招呼的内容」）、added=成功提示（kind='sys' 携带文案→不进 AI 上下文走 sys 既有口径，渲染为居中纯灰字无胶囊边框，区别于拉黑 sys 行）
+- 场景一写入（用户加 AI，发送即通过）：wechat.tsx handleApplySent / qq.tsx handleApplySent 在 addFriendReq 后 saveMsgs 追加两条——me 验证消息（kind:text+fr:apply）+ added 成功提示「我们已成功添加为好友，现在可以开始聊天啦～」（sys 载体）
+- 场景二写入（AI 加用户）：friend-state.ts maybeCharReAddReq 在 addFriendReq 后直接 kvSet 聊天记录（wx-chat-msgs:/qq-chat-msgs:，slice 按 wx100/qq200）追加 AI 验证消息（peer+kind:text+fr:greet）；wechat/qq acceptFriendReqAction 在 restoreFriendship 后追加 added「你已添加了XX，现在可以开始聊天了。」
+- 信息端（sms 无申请流程）：chat.tsx AddFriendView add() 成功后写 added「你已添加了XX，现在可以开始聊天了。」；渲染分支与 wx/qq 共用
+- 渲染：三端 ChatPage/ChatView 消息 map 行容器内新增——①kind==='sys'&&fr==='added' 分支居中纯灰字（wx-fr-added/qq-fr-added/sms-fr-added，插在原 sys 胶囊分支前）②fr==='apply'|'greet' 气泡行下方居中灰字标注（wx-fr-note/qq-fr-note/sms-fr-note，插在行容器闭合前 blockedLineOf 之后）；验证消息本身走普通气泡分支（发送方头像昵称天然正确）
+- 验证消息保护：三端 buildMsgMenuItems 对 fr=apply/greet 禁用 删除/撤回/编辑/引用/重新生成（永久保留在聊天记录）；added 为 sys kind 天然不弹菜单不进上下文
+- 验证：bun run lint 0 错误；npx tsc --noEmit 0 错误；agent-browser E2E（eval PointerEvent）——
+  微信：联系人库小雪（15204532796）→ 微信搜索手机号 → 前往验证 → 申请页发送（预填「我是凡凡」）→ 详情页已添加+AI 线程欢迎语 → 进聊天✓绿气泡「我是凡凡」+「以上为验证消息」+灰字「我们已成功添加为好友，现在可以开始聊天啦～」→ 发消息 AI 正常人设回复（饼干话题+语音消息）→ 聊天设置删除联系人 → AI 立刻申请「凡凡你怎么把小雪删了？饼干还在等你喂奶茶呢！」→ 新的朋友查看→前往验证同意 → 进聊天✓AI 白气泡验证消息+「以上是打招呼的内容」+灰字「你已添加了小雪，现在可以开始聊天了。」且首轮验证消息保留 → 刷新页面重进聊天全部保留✓；
+  QQ：删除小雪（QQ号8955049）→ 好友通知申请「凡凡你把我删了？饼干和奶茶都不想要了吗？」→ 详情页同意 → 聊天✓验证消息+标注+「你已添加了小雪，现在可以开始聊天了。」、历史转账/语音完好 → 再删除 → 手动 QQ号查找加回（发送「我是凡凡」自动同意）→ 聊天✓完整循环可见：第一次 greet+added → 第二次 greet（「仓鼠饼干会想你的~」在手动加回前已落记录）→ 蓝气泡「我是凡凡」+「以上为验证消息」+「我们已成功添加为好友，现在可以开始聊天啦～」；
+  dev.log 无异常（/api/chat 502→200 兜底正常）
+
+Stage Summary:
+- 加好友过程全链路落聊天界面：用户加 AI 与 AI 加用户两场景、微信/QQ 双端实测，验证消息独立消息体+居中灰字标注+成功提示（居中灰字），持久化在 IndexedDB 聊天记录重启保留
+- added 走 kind='sys' 载体：不进 AI 上下文、会话预览自动跳过（预览显示验证消息文本）；apply/greet 为 text 气泡进上下文（AI 知道验证消息内容，回复连贯）
+- sms 端渲染分支与 fr 字段三端同构（无申请流程只写 added）；群聊/红包/转账/长按菜单/多选/拉黑/语音/通话零改动
+- 产出文件：src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx
