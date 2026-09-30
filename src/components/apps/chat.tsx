@@ -132,9 +132,8 @@ interface ChatMsg {
   /** 申请解除拉黑卡片：40-a 起双向——from 缺省视为 'char'（角色发起，用户点同意/拒绝）；
    *  from='user'（用户发起，角色用 [同意/拒绝解除拉黑] 标记决策） */
   blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected'; from?: 'char' | 'user' };
-  /** 好友添加过程标记（与微信/QQ 同源）：added = 加好友成功提示（sys 携带文案，渲染居中灰字）；
-   *  apply/greet = 验证消息标注（信息端无申请流程，渲染分支与 wx/qq 共用） */
-  fr?: 'apply' | 'greet' | 'added';
+  /** 历史数据兼容：wx/qq 端好友添加标记（fr）。信息端不显示加好友过程，
+   *  本端不再写入也不渲染 fr 消息；旧数据若残留该字段按普通消息处理 */
 }
 
 /** 申请解除拉黑卡片：from='char' 角色发起（用户点同意/拒绝）；from='user' 用户发起（角色 AI 决策，仅展示状态） */
@@ -2042,17 +2041,16 @@ function ChatView({
   const buildMsgMenuItems = (m: ChatMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isVoice = m.kind === 'voice';
-    const isFrLocked = m.fr === 'apply' || m.fr === 'greet'; // 好友验证消息永久保留：禁删除/撤回/编辑/引用
     const items: BubbleMenuItem[] = [];
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
-    if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
-    if (!isFrLocked) items.push({ key: 'edit', label: '编辑', icon: B.edit });
-    if (!isVoice && !isFrLocked) {
+    items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
+    items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (!isVoice) {
       items.push({ key: 'quote', label: '引用', icon: B.quote });
     }
     items.push({ key: 'multi', label: '多选', icon: B.multi });
-    if (!isFrLocked) items.push({ key: 'recall', label: '撤回', icon: B.recall });
+    items.push({ key: 'recall', label: '撤回', icon: B.recall });
     return items;
   };
 
@@ -2355,11 +2353,6 @@ function ChatView({
                     {mine ? '你撤回一条消息' : '对方撤回一条消息'}
                   </span>
                 </div>
-              ) : m.sys && m.fr === 'added' ? (
-                /* 加好友成功提示（居中纯灰字，无胶囊边框） */
-                <div className="mt-2.5 flex justify-center" data-testid="sms-fr-added">
-                  <p className="text-[13px] leading-relaxed text-black/40 dark:text-white/40">{m.sys.text}</p>
-                </div>
               ) : m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中灰字胶囊 */
                 <div className="mt-2.5 flex justify-center" data-testid="sms-sys-row">
@@ -2521,12 +2514,6 @@ function ChatView({
               )}
               {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
               {blockedLineOf(m)}
-              {/* 好友验证消息标注（与微信/QQ 同款：气泡下方居中灰字；信息端无申请流程，渲染分支共用） */}
-              {m.fr === 'apply' || m.fr === 'greet' ? (
-                <p className="mt-1 text-center text-[12.5px] text-black/35 dark:text-white/35" data-testid="sms-fr-note">
-                  {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
-                </p>
-              ) : null}
             </div>
           );
         })}
@@ -3020,23 +3007,7 @@ function AddFriendView({
     try {
       const updated = await updateContact(c.id, { friendSms: true });
       if (!updated) throw new Error('联系人不存在');
-      // 加好友成功提示落聊天记录（居中灰字；信息端无申请流程，直接提示可开始聊天）
-      try {
-        const sk = `c:${updated.id}`;
-        saveMsgs(sk, [
-          ...(loadMsgs(sk) ?? []),
-          {
-            id: uid(),
-            role: 'assistant' as const,
-            content: '',
-            time: Date.now(),
-            sys: { text: `你已添加了${displayNameOf(updated)}，现在可以开始聊天了。` },
-            fr: 'added' as const,
-          },
-        ]);
-      } catch {
-        // 聊天记录写入失败不影响添加
-      }
+      // 信息端不显示加好友过程（不写成功提示等系统消息，直接完成添加）
       onAddFriend(updated);
       setJustAdded(displayNameOf(updated));
     } catch (err) {

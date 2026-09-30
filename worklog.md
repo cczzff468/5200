@@ -12365,3 +12365,21 @@ Stage Summary:
 - added 走 kind='sys' 载体：不进 AI 上下文、会话预览自动跳过（预览显示验证消息文本）；apply/greet 为 text 气泡进上下文（AI 知道验证消息内容，回复连贯）
 - sms 端渲染分支与 fr 字段三端同构（无申请流程只写 added）；群聊/红包/转账/长按菜单/多选/拉黑/语音/通话零改动
 - 产出文件：src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx
+
+---
+Task ID: III-2
+Agent: 主协调者 (Z.ai Code)
+Task: 用户要求「信息APP不用显示」——信息端（sms/chat.tsx）移除 Task III 加入的加好友过程展示（成功提示+渲染分支+验证消息菜单锁）
+
+Work Log:
+- chat.tsx AddFriendView add()：删除「加好友成功提示落聊天记录」整块（不再写 sys+fr:'added' 消息，直接 updateContact({friendSms:true})→onAddFriend 完成，仅留注释说明信息端不显示加好友过程）
+- chat.tsx ChatMsg 类型：fr 字段定义删除，改为历史数据兼容注释（wx/qq 端标记；本端不写入不渲染，旧数据残留字段按普通消息处理）
+- chat.tsx 渲染：①sms-fr-added 分支（居中纯灰字成功提示）删除，恢复 sys→拉黑/解除拉黑胶囊原判定链 ②sms-fr-note 分支（气泡下「以上为验证消息/以上是打招呼的内容」标注）删除
+- chat.tsx buildMsgMenuItems：isFrLocked 判定及 4 处条件守卫删除，恢复 删除/编辑/引用/撤回 无条件菜单（信息端本就不产生验证消息，锁无意义）
+- 验证：bun run lint 0 错误；npx tsc --noEmit 0 错误；agent-browser E2E（隔离 profile，IDB 注入 CHAR 林小雪/15204532796）——信息→+→添加好友→搜手机号→添加成功→联系人 tab 进聊天：空聊天仅「发条短信打个招呼吧」占位，无任何加好友系统提示✓；发消息后 AI 人设回复（张凡你好呀～/动作描写/正在输入）正常，DOM 全文检查 hasAdded/hasNote 均 false✓；拉黑 sys 胶囊等既有系统行渲染分支未动
+- dev.log 无异常（/api/chat 502→200 兜底为已知行为）
+
+Stage Summary:
+- 加好友过程展示范围收窄为微信/QQ 两端；信息端恢复为「添加即好友、聊天界面零过程提示」（添加好友页内绿色 toast 保留，属页面内反馈非聊天记录）
+- ChatMsg fr 字段移除后旧数据兼容：运行时多余属性无害；微信/QQ 端（wechat.tsx/qq.tsx）fr 逻辑零改动
+- 产出文件：src/components/apps/chat.tsx（仅信息端）
