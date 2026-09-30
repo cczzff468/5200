@@ -7,8 +7,11 @@
  * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
  * - 头部：返回 + 毛玻璃胶囊（只显示头像 + 名字，见面中叠在线绿点）+ 收藏（保存）+ 现场设置（玻璃圆钮）；
  * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡）；
- * - 底部：继续 / 重Roll / 保存三个玻璃圆钮分列输入框左右两侧，输入框内嵌深色圆形发送钮；
- * - 无见面时：极简开始页（头像 + 名字 + 开始见面）；
+ *   两边都有同款头像+名字+时间头，均可编辑/删除；动作·叙述文字渲染为灰色小字，说话保持原样式
+ *   （角色按「」『』“”"" 引号识别说话，用户按（）、*星号* 识别动作描写）；
+ * - 底部：继续 / 重Roll 圆钮 + 输入框（内嵌深色圆形↑发送钮）；保存走顶部收藏钮；
+ *   重Roll 后可一键恢复上一版回复；
+ * - 无见面时：极简开始页（头像 + 名字 + 开始见面 + 过去的见面历史入口，历史只读回看）；
  * - 现场设置面板：「从聊天继续」承接最近 N 条（置于最上方）/ 回复字数 / 用户·角色叙述人称 /
  *   回复预设 / 基础设置 / 变量说明 / 角色回复预设模板编辑 / 现场文风（内置+新建）。
  *
@@ -20,13 +23,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   ChevronLeft,
+  History,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
   Star,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
 
@@ -62,6 +68,7 @@ import {
   effectiveReplyTarget,
   extractSceneHeader,
   loadMeet,
+  loadMeetHistory,
   loadMeetSettings,
   loadPresets,
   loadStyles,
@@ -76,6 +83,7 @@ import {
   saveTplOverride,
   saveWbBgCache,
   type OfflineApp,
+  type OfflineEntry,
   type OfflineMeet,
   type OfflineMeetSettings,
   type OfflineOnlineMsg,
@@ -98,6 +106,8 @@ export interface OfflineMeetingPageProps {
   /** 机主真实姓名 / 昵称（人设【用户的称呼】段用） */
   userRealName?: string | null;
   userNickname?: string | null;
+  /** 机主头像（用户消息头显示用；微信/QQ 传 me.avatar，信息端传资料头像） */
+  userAvatar?: string | null;
   /** 读取最近 n 条线上聊天（宿主按各 App 消息结构映射） */
   loadRecentMsgs: (n: number) => OfflineOnlineMsg[];
   onBack: () => void;
@@ -187,6 +197,130 @@ function MeetAvatar({ contact, size = 44 }: { contact: ContactRecord | null; siz
   );
 }
 
+/** 用户头像（机主资料头像 dataURL 或首字母圆；绿色系与角色区分） */
+function UserAvatar({ avatar, name, size = 44 }: { avatar?: string | null; name: string; size?: number }) {
+  if (avatar) {
+    return <img src={avatar} alt={name} className="rounded-full object-cover ring-2 ring-white/80 dark:ring-white/15" style={{ width: size, height: size }} />;
+  }
+  return (
+    <div
+      className="flex items-center justify-center rounded-full bg-gradient-to-br from-[#6EE7B7] to-[#10B981] font-semibold text-white ring-2 ring-white/80 dark:ring-white/15"
+      style={{ width: size, height: size, fontSize: size * 0.42 }}
+      aria-hidden="true"
+    >
+      {name.slice(0, 1)}
+    </div>
+  );
+}
+
+// ---------------- 叙事富文本：动作·叙述灰字，说话原样 ----------------
+
+interface NarrSeg {
+  text: string;
+  /** true = 说话（保持原样式）；false = 动作/叙述（灰色小字） */
+  speech: boolean;
+}
+
+/** 角色叙述：引号内（「」『』“”""）= 说话，其余 = 动作/叙述描写 */
+const CHAR_SPEECH_RE = /「[^」\n]*」|『[^』\n]*』|“[^”\n]*”|"[^"\n]*"/g;
+
+/** 用户输入：（…）、(…)、*…* 内 = 动作描写，其余 = 说话 */
+const USER_ACTION_RE = /（[^）\n]*）|\([^)\n]*\)|\*[^*\n]+\*/g;
+
+/** 把文本切成 说话/动作 片段：matchesSpeech 决定正则命中段算说话（角色）还是动作（用户） */
+function splitNarrative(text: string, re: RegExp, matchesSpeech: boolean): NarrSeg[] {
+  const segs: NarrSeg[] = [];
+  const rx = new RegExp(re.source, 'g');
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(text))) {
+    if (m.index > last) segs.push({ text: text.slice(last, m.index), speech: !matchesSpeech });
+    segs.push({ text: m[0], speech: matchesSpeech });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) segs.push({ text: text.slice(last), speech: !matchesSpeech });
+  return segs.length ? segs : [{ text, speech: true }];
+}
+
+/** 叙事正文渲染：灰色小字 = 动作/叙述，正常样式 = 说话（onDark 用于用户深色气泡内） */
+function NarrBody({ text, role, onDark = false }: { text: string; role: 'char' | 'user'; onDark?: boolean }) {
+  const segs = splitNarrative(text, role === 'char' ? CHAR_SPEECH_RE : USER_ACTION_RE, role === 'char');
+  return (
+    <div className="whitespace-pre-wrap">
+      {segs.map((s, i) =>
+        s.speech ? (
+          <span key={i}>{s.text}</span>
+        ) : (
+          <span key={i} className={onDark ? 'text-[13px] text-white/45' : 'text-[13px] text-black/40 dark:text-white/40'}>
+            {s.text}
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** 条目小工具：编辑 / 删除（我和角色的消息都有） */
+function EntryTools({ onEdit, onDelete, disabled }: { onEdit: () => void; onDelete: () => void; disabled?: boolean }) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      <button
+        type="button"
+        aria-label="编辑这条内容"
+        title="编辑"
+        onClick={onEdit}
+        disabled={disabled}
+        className="flex h-7 w-7 items-center justify-center rounded-full text-black/30 transition hover:bg-black/5 hover:text-black/60 active:scale-90 disabled:opacity-30 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/60"
+      >
+        <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
+      </button>
+      <button
+        type="button"
+        aria-label="删除这条内容"
+        title="删除"
+        onClick={onDelete}
+        disabled={disabled}
+        className="flex h-7 w-7 items-center justify-center rounded-full text-black/30 transition hover:bg-red-500/10 hover:text-red-500 active:scale-90 disabled:opacity-30 dark:text-white/30 dark:hover:text-red-400"
+      >
+        <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
+      </button>
+    </div>
+  );
+}
+
+/** 条目编辑块：textarea + 取消/保存 */
+function EntryEdit({ value, onChange, onCancel, onSave }: { value: string; onChange: (v: string) => void; onCancel: () => void; onSave: () => void }) {
+  return (
+    <div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={Math.min(12, Math.max(3, Math.ceil(value.length / 24)))}
+        autoFocus
+        className="w-full resize-y rounded-[14px] border border-white/70 bg-white/70 p-3 text-[14px] leading-[1.7] text-black outline-none backdrop-blur-md focus:border-black/25 dark:border-white/10 dark:bg-black/25 dark:text-white dark:focus:border-white/30"
+        aria-label="编辑内容"
+      />
+      <div className="mt-2 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="h-8 rounded-full border border-white/70 bg-white/55 px-4 text-[13px] text-black/60 backdrop-blur-md active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={!value.trim()}
+          className="h-8 rounded-full bg-[#1C1C1E]/90 px-4 text-[13px] font-medium text-white shadow-md backdrop-blur-xl active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+        >
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 现场设置面板 ----------------
 
 interface SettingsPanelProps {
@@ -199,6 +333,9 @@ interface SettingsPanelProps {
   availableCount: number;
   onClose: () => void;
   onCommit: (settings: OfflineMeetSettings, tpl: string) => void;
+  /** 重新分析世界背景（清缓存 → 再分析 → 见面中同步更新本次见面） */
+  onRefreshWorldBg: () => void;
+  bgRefreshing: boolean;
   onCreatePreset: (name: string, template: string) => string;
   onSavePreset: (id: string, template: string) => void;
   onDeletePreset: (id: string) => void;
@@ -206,7 +343,7 @@ interface SettingsPanelProps {
   onDeleteStyle: (id: string) => void;
 }
 
-function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, availableCount, onClose, onCommit, onCreatePreset, onSavePreset, onDeletePreset, onCreateStyle, onDeleteStyle }: SettingsPanelProps) {
+function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, availableCount, onClose, onCommit, onRefreshWorldBg, bgRefreshing, onCreatePreset, onSavePreset, onDeletePreset, onCreateStyle, onDeleteStyle }: SettingsPanelProps) {
   const [d, setD] = useState<OfflineMeetSettings>({ ...initial });
   const [tplDraft, setTplDraft] = useState(tpl);
   const [carrySel, setCarrySel] = useState<number | 'custom'>(() =>
@@ -644,12 +781,21 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
           </Card>
         ) : null}
 
-        {/* 背景读取说明 */}
+        {/* 背景读取说明 + 重新分析 */}
         <div className="flex items-start gap-2 rounded-[18px] border border-white/50 bg-white/40 px-3.5 py-3 backdrop-blur-lg dark:border-white/[0.08] dark:bg-white/[0.05]">
           <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-black/50 dark:bg-white/50" aria-hidden="true" />
-          <p className="text-[12px] leading-[1.6] text-black/50 dark:text-white/50">
-            生成前会先读取世界书分析出的世界背景；没有分析结果时，再根据角色设定推断背景。之后才读取人设、字数、人称、文风和现场记录。
+          <p className="flex-1 text-[12px] leading-[1.6] text-black/50 dark:text-white/50">
+            生成前会先读取世界书分析出的世界背景；没有分析结果时，再根据角色设定推断背景。之后才读取人设、字数、人称、文风和现场记录。修改世界书后可在这里重新分析。
           </p>
+          <button
+            type="button"
+            onClick={onRefreshWorldBg}
+            disabled={bgRefreshing}
+            className="flex h-7 shrink-0 items-center gap-1 rounded-full border border-white/70 bg-white/55 px-2.5 text-[12px] text-black/60 backdrop-blur-md active:opacity-60 disabled:opacity-40 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            {bgRefreshing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            重新分析
+          </button>
         </div>
       </div>
 
@@ -679,7 +825,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
 
 // ---------------- 主页面 ----------------
 
-export default function OfflineMeetingPage({ app, channel, contactId, userName, userRealName, userNickname, loadRecentMsgs, onBack, onToast }: OfflineMeetingPageProps) {
+export default function OfflineMeetingPage({ app, channel, contactId, userName, userRealName, userNickname, userAvatar, loadRecentMsgs, onBack, onToast }: OfflineMeetingPageProps) {
   const [contact, setContact] = useState<ContactRecord | null>(null);
   const [contactsAll, setContactsAll] = useState<ContactRecord[]>([]);
   const [loadErr, setLoadErr] = useState('');
@@ -699,6 +845,11 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   const meetRef = useRef<OfflineMeet | null>(null);
   const [input, setInput] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [editing, setEditing] = useState<null | { id: string; text: string }>(null);
+  const [rerollBackup, setRerollBackup] = useState<OfflineEntry | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySel, setHistorySel] = useState<number | null>(null);
+  const [bgRefreshing, setBgRefreshing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadRef = useRef(loadRecentMsgs);
   loadRef.current = loadRecentMsgs;
@@ -859,6 +1010,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       if (!m || !contact || genRef.current) return;
       genRef.current = true;
       setGen(kind);
+      setEditing(null);
+      if (kind !== 'reroll') setRerollBackup(null);
       try {
         const s = m.settings;
         const style = styles.find((x) => x.id === s.styleId);
@@ -974,6 +1127,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     clearMeet(contactId);
     meetRef.current = null;
     setMeet(null);
+    setEditing(null);
+    setRerollBackup(null);
+    setHistorySel(null);
+    setHistoryOpen(false);
     toastFn('已保存这次见面，已写入记忆');
   }, [contactId, app, userNameEff, shownName, toastFn]);
 
@@ -981,6 +1138,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     const t = input.trim();
     if (!t || genRef.current || !meetRef.current) return;
     const m = meetRef.current;
+    setRerollBackup(null);
     const next: OfflineMeet = { ...m, entries: [...m.entries, { id: offlineUid(), role: 'user', text: t, at: Date.now() }] };
     saveMeet(next);
     meetRef.current = next;
@@ -997,9 +1155,82 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       toastFn('没有可重Roll的回复');
       return;
     }
+    setRerollBackup({ ...last });
     const from = last.fromInput === '__open__' ? '__open__' : last.fromInput ?? '';
     void runGen('reroll', from);
   }, [runGen, toastFn]);
+
+  /** 恢复重Roll前的回复（把备份条目放回最后一条角色回复的位置） */
+  const restoreReroll = useCallback(() => {
+    const m = meetRef.current;
+    if (!m || !rerollBackup || genRef.current) return;
+    const entries = [...m.entries];
+    let li = -1;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].role === 'char') {
+        li = i;
+        break;
+      }
+    }
+    if (li >= 0 && entries[li].id === rerollBackup.id) {
+      setRerollBackup(null);
+      return;
+    }
+    if (li >= 0) entries[li] = { ...rerollBackup };
+    else entries.push({ ...rerollBackup });
+    const next: OfflineMeet = { ...m, entries };
+    saveMeet(next);
+    meetRef.current = next;
+    setMeet(next);
+    setRerollBackup(null);
+    toastFn('已恢复重Roll前的回复');
+  }, [rerollBackup, toastFn]);
+
+  /** 编辑条目文本（我和角色的消息都可以；只影响之后的生成上下文） */
+  const updateEntryText = useCallback((id: string, text: string) => {
+    const m = meetRef.current;
+    if (!m) return;
+    const next: OfflineMeet = { ...m, entries: m.entries.map((e) => (e.id === id ? { ...e, text } : e)) };
+    saveMeet(next);
+    meetRef.current = next;
+    setMeet(next);
+  }, []);
+
+  /** 删除条目（我和角色的消息都可以；重Roll 按删除后的最后一条角色回复定位） */
+  const deleteEntry = useCallback(
+    (id: string) => {
+      const m = meetRef.current;
+      if (!m || genRef.current) return;
+      const next: OfflineMeet = { ...m, entries: m.entries.filter((e) => e.id !== id) };
+      saveMeet(next);
+      meetRef.current = next;
+      setMeet(next);
+      setEditing((cur) => (cur?.id === id ? null : cur));
+      toastFn('已删除这条内容');
+    },
+    [toastFn],
+  );
+
+  /** 重新分析世界背景：清缓存 → 再分析 → 见面中同步更新本次见面 */
+  const refreshWorldBg = useCallback(async () => {
+    if (bgRefreshing) return;
+    setBgRefreshing(true);
+    try {
+      saveWbBgCache(contactId, '');
+      const bg = await ensureWorldBg();
+      if (meetRef.current) {
+        const next: OfflineMeet = { ...meetRef.current, worldBg: bg };
+        saveMeet(next);
+        meetRef.current = next;
+        setMeet(next);
+      }
+      toastFn('世界背景已重新分析');
+    } catch {
+      toastFn('刷新失败，请稍后再试');
+    } finally {
+      setBgRefreshing(false);
+    }
+  }, [bgRefreshing, contactId, ensureWorldBg, toastFn]);
 
   // —— 设置面板回调 ——
   const commitSettings = (s: OfflineMeetSettings, tpl: string) => {
@@ -1079,6 +1310,16 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     const d = new Date(meet ? meet.startedAt : Date.now());
     return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
   })();
+  /** 过去的见面（同步内存读，开销可忽略）；只读回看 */
+  const meetHistory = loaded ? loadMeetHistory(contactId) : [];
+  const historyDetail = historyOpen && historySel !== null ? meetHistory[historySel] ?? null : null;
+  const lastCharEntry = meet ? [...meet.entries].reverse().find((x) => x.role === 'char') ?? null : null;
+  const showRestore = !!rerollBackup && (!lastCharEntry || lastCharEntry.id !== rerollBackup.id);
+  /** 完整时间戳：YYYY年M月D日 HH:mm（历史见面列表用） */
+  const fullTs = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white" data-testid={`offline-meet-${app}`}>
@@ -1150,6 +1391,20 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             {starting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Star className="h-5 w-5" strokeWidth={2} />}
             {starting ? '正在准备见面…' : '开始见面'}
           </button>
+          {meetHistory.length > 0 ? (
+            <button
+              type="button"
+              data-testid="offline-history-open"
+              onClick={() => {
+                setHistorySel(null);
+                setHistoryOpen(true);
+              }}
+              className={`flex h-10 items-center gap-2 rounded-full px-5 text-[13px] text-black/60 active:opacity-60 dark:text-white/60 ${GLASS_CAPSULE}`}
+            >
+              <History className="h-4 w-4" />
+              过去的见面 · {meetHistory.length}
+            </button>
+          ) : null}
         </div>
       ) : (
         /* —— 见面进行中 —— */
@@ -1165,17 +1420,60 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                       <p className="text-[12px] font-semibold text-black/55 dark:text-white/60">{shownName}</p>
                       <p className="mt-[1px] text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
                     </div>
+                    <div className="ml-auto">
+                      <EntryTools disabled={!!gen} onEdit={() => setEditing({ id: e.id, text: e.text })} onDelete={() => deleteEntry(e.id)} />
+                    </div>
                   </div>
-                  <div className="whitespace-pre-wrap text-[15px] leading-[1.95] text-black/85 dark:text-white/85">{e.text}</div>
+                  {editing?.id === e.id ? (
+                    <EntryEdit
+                      value={editing.text}
+                      onChange={(v) => setEditing({ id: e.id, text: v })}
+                      onCancel={() => setEditing(null)}
+                      onSave={() => {
+                        const v = editing.text.trim();
+                        if (v) updateEntryText(e.id, v);
+                        setEditing(null);
+                      }}
+                    />
+                  ) : (
+                    <div className="whitespace-pre-wrap text-[15px] leading-[1.95] text-black/85 dark:text-white/85">
+                      <NarrBody text={e.text} role="char" />
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div key={e.id} className="flex justify-end">
-                  <div className="max-w-[85%]">
-                    <div className="whitespace-pre-wrap rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 px-4 py-2.5 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
-                      {e.text}
+                <div key={e.id} className="flex flex-col items-end">
+                  {/* 用户消息同款头像 + 名字 + 时间头（右侧镜像） */}
+                  <div className="mb-2 flex w-full items-center gap-2">
+                    <EntryTools disabled={!!gen} onEdit={() => setEditing({ id: e.id, text: e.text })} onDelete={() => deleteEntry(e.id)} />
+                    <div className="ml-auto flex min-w-0 items-center gap-2">
+                      <div className="min-w-0 text-right leading-tight">
+                        <p className="text-[12px] font-semibold text-black/55 dark:text-white/60">{userNameEff}</p>
+                        <p className="mt-[1px] text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
+                      </div>
+                      <UserAvatar avatar={userAvatar} name={userNameEff} size={20} />
                     </div>
-                    <p className="mt-1 pr-1 text-right text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
                   </div>
+                  {editing?.id === e.id ? (
+                    <div className="w-full max-w-[85%]">
+                      <EntryEdit
+                        value={editing.text}
+                        onChange={(v) => setEditing({ id: e.id, text: v })}
+                        onCancel={() => setEditing(null)}
+                        onSave={() => {
+                          const v = editing.text.trim();
+                          if (v) updateEntryText(e.id, v);
+                          setEditing(null);
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="max-w-[85%]">
+                      <div className="whitespace-pre-wrap rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 px-4 py-2.5 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
+                        <NarrBody text={e.text} role="user" onDark />
+                      </div>
+                    </div>
+                  )}
                 </div>
               ),
             )}
@@ -1186,6 +1484,21 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               </div>
             ) : null}
           </div>
+
+          {/* 恢复重Roll前的回复 */}
+          {showRestore ? (
+            <div className="px-4 pb-1.5">
+              <button
+                type="button"
+                data-testid="offline-restore"
+                onClick={restoreReroll}
+                className={`flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] text-black/60 active:opacity-60 dark:text-white/60 ${GLASS_CAPSULE}`}
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+                恢复重Roll前的回复
+              </button>
+            </div>
+          ) : null}
 
           {/* 底部：继续 / 重Roll 圆钮 + 输入框（保存走顶部收藏钮） */}
           <form
@@ -1241,6 +1554,66 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
         </>
       )}
 
+      {/* 过去的见面（历史记录，只读回看） */}
+      {historyOpen ? (
+        <div className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white">
+          <GlassAmbience />
+          <div className="flex items-center gap-2 px-4 pb-3 pt-[58px]">
+            <button
+              type="button"
+              aria-label="返回"
+              onClick={() => (historySel === null ? setHistoryOpen(false) : setHistorySel(null))}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
+            >
+              <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
+            </button>
+            <h2 className="truncate text-[17px] font-semibold">{historySel === null ? '过去的见面' : '见面记录'}</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 pb-6 thin-scrollbar">
+            {historySel === null ? (
+              meetHistory.length === 0 ? (
+                <p className="pt-16 text-center text-[14px] text-black/40 dark:text-white/40">还没有保存过见面</p>
+              ) : (
+                <div className="space-y-3">
+                  {meetHistory.map((h, i) => (
+                    <button key={`${h.id}-${i}`} type="button" onClick={() => setHistorySel(i)} className={`block w-full rounded-[20px] p-4 text-left ${GLASS_CARD}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[14px] font-semibold">{fullTs(h.startedAt)}</p>
+                        <p className="shrink-0 text-[11px] tabular-nums text-black/40 dark:text-white/40">{h.entries.length} 条</p>
+                      </div>
+                      <p className="mt-1 truncate text-[12px] text-black/50 dark:text-white/50">
+                        {h.scene.location || '（未记录地点）'}·{h.scene.reason || '延续线上聊天'}
+                      </p>
+                      <p className="mt-1.5 line-clamp-2 text-[12px] leading-[1.6] text-black/40 dark:text-white/40">{h.entries[0]?.text?.slice(0, 80) ?? '（无内容）'}</p>
+                    </button>
+                  ))}
+                </div>
+              )
+            ) : historyDetail ? (
+              <div className="space-y-4">
+                <div className={`rounded-[20px] p-4 ${GLASS_CARD}`}>
+                  <p className="text-[14px] font-semibold">{fullTs(historyDetail.startedAt)}</p>
+                  <p className="mt-1 text-[12px] leading-[1.6] text-black/50 dark:text-white/50">
+                    {historyDetail.scene.location || '（未记录地点）'} · {historyDetail.scene.reason || '延续线上聊天'}
+                  </p>
+                </div>
+                {historyDetail.entries.map((e) => (
+                  <div key={e.id} className={`rounded-[20px] p-4 ${GLASS_CARD} ${e.role === 'user' ? 'ml-8' : 'mr-8'}`}>
+                    <div className="mb-1.5 flex items-center gap-2 text-[11px] text-black/45 dark:text-white/45">
+                      <span className="font-semibold">{e.role === 'char' ? shownName : userNameEff}</span>
+                      <span className="tabular-nums">{mdhm(e.at)}</span>
+                    </div>
+                    <div className="whitespace-pre-wrap text-[14px] leading-[1.85] text-black/85 dark:text-white/85">
+                      <NarrBody text={e.text} role={e.role} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {/* 现场设置面板 */}
       {settingsOpen ? (
         <OfflineSettingsPanel
@@ -1252,6 +1625,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           availableCount={availableCount}
           onClose={() => setSettingsOpen(false)}
           onCommit={commitSettings}
+          onRefreshWorldBg={() => void refreshWorldBg()}
+          bgRefreshing={bgRefreshing}
           onCreatePreset={createPreset}
           onSavePreset={savePreset}
           onDeletePreset={deletePreset}

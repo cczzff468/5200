@@ -8,7 +8,8 @@
  * 4. 现场设置：回复字数（±20%）/ 承接条数 / 用户·角色叙述人称 / 回复预设 / 现场文风 /
  *    基础设置（字数区间·人称·导演模式·自主推进·修辞密度·描写占比·节奏）；
  * 5. 变量系统：{{char_name}} 等 11 个变量在发送前由 renderTemplate 替换；
- * 6. 操作：让角色继续 / 重 Roll / 保存这次见面 / 自由输入（说话或描述动作）；
+ * 6. 操作：让角色继续 / 重 Roll（可恢复上一版）/ 编辑·删除任意条目 / 保存这次见面 / 自由输入（说话或描述动作）；
+ *    线下历史注入每条时间戳（[M月D日 HH:mm]），让 AI 感知现场时间流；已保存的见面可在开始页回看；
  * 7. 保存后写入记忆库（memAddEventFragment，sourceTag 'offline-meet'），
  *    线上聊天召回记忆时自然带上线下发生的事；进行中的见面按角色 ID 隔离。
  *
@@ -445,10 +446,16 @@ export function extractSceneHeader(text: string): { scene: OfflineScene | null; 
   return { scene: filled ? scene : null, body: rest || text };
 }
 
-/** 线下叙事流的上下文文本（注入 {{offline_history}}；超出 9000 字从最旧开始截） */
+/** M月D日 HH:mm（线下叙事时间戳：正文消息头 + 线下历史上下文共用） */
+export function offlineMdhm(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 线下叙事流的上下文文本（注入 {{offline_history}}；每条带时间戳让 AI 感知现场时间流；超出 9000 字从最旧开始截） */
 export function buildOfflineHistoryText(meet: OfflineMeet, userName: string, charName: string, excludeLastChar = false): string {
   const entries = excludeLastChar && meet.entries.length > 0 && meet.entries[meet.entries.length - 1].role === 'char' ? meet.entries.slice(0, -1) : meet.entries;
-  const parts = entries.map((e) => `${e.role === 'char' ? charName : userName}：${e.text.trim()}`);
+  const parts = entries.map((e) => `[${offlineMdhm(e.at)}] ${e.role === 'char' ? charName : userName}：${e.text.trim()}`);
   let out = parts.join('\n\n');
   while (out.length > 9000 && parts.length > 1) {
     parts.shift();

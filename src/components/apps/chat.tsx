@@ -2829,6 +2829,7 @@ function ChatView({
           userName={profileName}
           userRealName={profileName || null}
           userNickname={null}
+          userAvatar={profileAvatar}
           loadRecentMsgs={(n: number): OfflineOnlineMsg[] =>
             msgs
               .slice(-n)

@@ -7437,6 +7437,7 @@ function ChatPage({
           userName={addressNameOf(me, useSettings.getState().addressMode)}
           userRealName={me.realName ?? me.name}
           userNickname={me.nickname ?? null}
+          userAvatar={me.avatar}
           loadRecentMsgs={(n: number): OfflineOnlineMsg[] =>
             msgs
               .slice(-n)
