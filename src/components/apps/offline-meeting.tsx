@@ -5,9 +5,9 @@
  *
  * 结构（对照需求与参考截图，整体毛玻璃/胶囊玻璃风格）：
  * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
- * - 头部：返回 + 毛玻璃胶囊（只显示头像 + 名字，见面中叠在线绿点）+ 收藏（保存）+ 现场设置（玻璃圆钮）；
- * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡）；
- *   两边都有同款头像+名字+时间头，均可编辑/删除；动作·叙述文字渲染为灰色小字，说话保持原样式
+ * - 头部：一整颗大毛玻璃胶囊包住 返回 + 头像名字日期 + 收藏（保存）+ 现场设置；
+ * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（深色玻璃气泡，内部同样是头像+名字+时间头）；
+ *   两边消息均可编辑/删除；动作·叙述文字渲染为灰色小字，说话保持原样式
  *   （角色按「」『』“”"" 引号识别说话，用户按（）、*星号* 识别动作描写）；
  * - 底部：继续 / 重Roll 圆钮 + 输入框（内嵌深色圆形↑发送钮）；保存走顶部收藏钮；
  *   重Roll 后可一键恢复上一版回复；
@@ -59,6 +59,7 @@ import {
   OFFLINE_TRI_LABEL,
   OFFLINE_VARIABLES,
   addMeetToHistory,
+  buildContinueInstruction,
   buildMeetDigest,
   buildOfflineDirective,
   buildOfflineHistoryText,
@@ -74,6 +75,7 @@ import {
   loadStyles,
   loadTplOverride,
   loadWbBgCache,
+  looksLikeRepeat,
   offlineUid,
   renderTemplate,
   saveCustomPresets,
@@ -260,8 +262,10 @@ function NarrBody({ text, role, onDark = false }: { text: string; role: 'char' |
   );
 }
 
-/** 条目小工具：编辑 / 删除（我和角色的消息都有） */
-function EntryTools({ onEdit, onDelete, disabled }: { onEdit: () => void; onDelete: () => void; disabled?: boolean }) {
+/** 条目小工具：编辑 / 删除（我和角色的消息都有；onDark 用于用户深色气泡内） */
+function EntryTools({ onEdit, onDelete, disabled, onDark = false }: { onEdit: () => void; onDelete: () => void; disabled?: boolean; onDark?: boolean }) {
+  const base = onDark ? 'text-white/40 hover:bg-white/10 hover:text-white/80 dark:text-white/40' : 'text-black/30 hover:bg-black/5 hover:text-black/60 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/60';
+  const danger = onDark ? 'text-white/40 hover:bg-red-500/20 hover:text-red-300 dark:text-white/40' : 'text-black/30 hover:bg-red-500/10 hover:text-red-500 dark:text-white/30 dark:hover:text-red-400';
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <button
@@ -270,7 +274,7 @@ function EntryTools({ onEdit, onDelete, disabled }: { onEdit: () => void; onDele
         title="编辑"
         onClick={onEdit}
         disabled={disabled}
-        className="flex h-7 w-7 items-center justify-center rounded-full text-black/30 transition hover:bg-black/5 hover:text-black/60 active:scale-90 disabled:opacity-30 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/60"
+        className={`flex h-7 w-7 items-center justify-center rounded-full transition active:scale-90 disabled:opacity-30 ${base}`}
       >
         <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
       </button>
@@ -280,7 +284,7 @@ function EntryTools({ onEdit, onDelete, disabled }: { onEdit: () => void; onDele
         title="删除"
         onClick={onDelete}
         disabled={disabled}
-        className="flex h-7 w-7 items-center justify-center rounded-full text-black/30 transition hover:bg-red-500/10 hover:text-red-500 active:scale-90 disabled:opacity-30 dark:text-white/30 dark:hover:text-red-400"
+        className={`flex h-7 w-7 items-center justify-center rounded-full transition active:scale-90 disabled:opacity-30 ${danger}`}
       >
         <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
       </button>
@@ -1018,6 +1022,12 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
         const target = effectiveReplyTarget(s);
         const cpe = effectiveCharPerson(s, contact.gender);
         const openMode = kind === 'open' || fromInput === '__open__';
+        /** 之前所有角色回复（防复读范围：不只上一条，更早的回复也要查）；prevCharEntry 仅作续写锚点与 {{last_reply}} */
+        const prevCharEntry =
+          kind === 'reroll'
+            ? (m.entries[m.entries.length - 1] ?? null)
+            : ([...m.entries].reverse().find((e) => e.role === 'char') ?? null);
+        const prevCharTexts = m.entries.filter((e) => e.role === 'char').map((e) => e.text);
         const vars: Record<string, string> = {
           char_name: shownName,
           user_name: userNameEff,
@@ -1030,29 +1040,47 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             m.scene.charState || '延续刚才的情绪'
           }`,
           user_message: openMode ? '（刚见面：请生成这次见面的开场）' : fromInput.trim() || `（让${shownName}自然继续当前场景，推进一点点）`,
+          last_reply: prevCharEntry?.text?.trim().slice(-800) ?? '',
           online_chat: m.onlineExcerpt || '（无最近线上聊天记录）',
           offline_history: buildOfflineHistoryText(m, userNameEff, shownName, kind === 'reroll'),
         };
         let rendered = renderTemplate(activeTpl, vars);
         if (openMode) rendered += `\n\n${buildOpenInstruction(shownName, userNameEff)}`;
+        else
+          rendered += `\n\n${buildContinueInstruction({
+            lastReply: vars.last_reply,
+            fromInput,
+            charName: shownName,
+            userName: userNameEff,
+          })}`;
         const system = buildSystemPrompt(m, target);
         const cfg = useSettings.getState().apiConfig;
-        const res = await fetch('/api/offline', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            config: cfg,
-            messages: [
-              { role: 'system', content: system },
-              { role: 'user', content: rendered },
-            ],
-            maxTokens: Math.min(8000, Math.max(1200, target * 2 + 400)),
-          }),
-        });
-        const data = (await res.json().catch(() => null)) as { text?: unknown; error?: string } | null;
-        if (!res.ok) throw new Error(data?.error || `生成失败（HTTP ${res.status}）`);
-        let text = typeof data?.text === 'string' ? data.text.trim() : '';
-        if (!text) throw new Error('生成内容为空，请重试');
+        // 防复读：新回复与之前任一角色回复高度相似/整段包含/长段照搬时，带强指令自动重试一次
+        let text = '';
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const payload =
+            attempt === 0
+              ? rendered
+              : `${rendered}\n\n【防复读重试】你上一次的输出和之前的回复大量重复，这是被禁止的。这次必须输出完全不同的新内容：禁止复用之前任何一条回复（包括更早的回复）里的句子和表述，直接接着剧情往下写。`;
+          const res = await fetch('/api/offline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              config: cfg,
+              messages: [
+                { role: 'system', content: system },
+                { role: 'user', content: payload },
+              ],
+              maxTokens: Math.min(8000, Math.max(1200, target * 2 + 400)),
+            }),
+          });
+          const data = (await res.json().catch(() => null)) as { text?: unknown; error?: string } | null;
+          if (!res.ok) throw new Error(data?.error || `生成失败（HTTP ${res.status}）`);
+          text = typeof data?.text === 'string' ? data.text.trim() : '';
+          if (!text) throw new Error('生成内容为空，请重试');
+          if (attempt === 0 && !openMode && prevCharTexts.some((t) => looksLikeRepeat(text, t))) continue;
+          break;
+        }
         const next: OfflineMeet = { ...m, entries: kind === 'reroll' ? m.entries.slice(0, -1) : [...m.entries] };
         if (openMode) {
           const { scene, body } = extractSceneHeader(text);
@@ -1326,29 +1354,29 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       <GlassAmbience />
       <LocalToast msg={onToast ? '' : toast} />
 
-      {/* 头部：返回 + 头像名字毛玻璃胶囊 + 收藏/设置 */}
-      <div className="flex items-center gap-2 px-4 pb-1.5 pt-[54px]">
-        <button
-          type="button"
-          aria-label="返回聊天"
-          onClick={onBack}
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
-        >
-          <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
-        </button>
-        <div className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2.5 rounded-full px-3 py-1.5 ${GLASS_CAPSULE}`}>
-          <div className="relative shrink-0">
-            <MeetAvatar contact={contact} size={32} />
-            {meet ? (
-              <span className="absolute bottom-0 right-0 h-[9px] w-[9px] rounded-full border-2 border-white bg-[#34C759] dark:border-[#2a2a2c]" aria-hidden="true" />
-            ) : null}
+      {/* 头部：一整颗大毛玻璃胶囊包住 返回 + 头像名字日期 + 收藏 + 设置 */}
+      <div className="px-3 pb-1.5 pt-[54px]">
+        <div className={`flex min-h-12 items-center gap-1 rounded-full py-1.5 pl-1.5 pr-2 ${GLASS_CAPSULE}`}>
+          <button
+            type="button"
+            aria-label="返回聊天"
+            onClick={onBack}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 transition hover:bg-black/5 active:opacity-60 dark:text-white/80 dark:hover:bg-white/10"
+          >
+            <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
+          </button>
+          <div className="flex min-w-0 flex-1 items-center justify-center gap-2.5">
+            <div className="relative shrink-0">
+              <MeetAvatar contact={contact} size={32} />
+              {meet ? (
+                <span className="absolute bottom-0 right-0 h-[9px] w-[9px] rounded-full border-2 border-white bg-[#34C759] dark:border-[#2a2a2c]" aria-hidden="true" />
+              ) : null}
+            </div>
+            <div className="min-w-0 text-left leading-tight">
+              <h1 className="truncate text-[15px] font-semibold text-black dark:text-white">{shownName}</h1>
+              <p className="mt-[1px] truncate text-[10px] tabular-nums text-black/40 dark:text-white/40">{headerDate}</p>
+            </div>
           </div>
-          <div className="min-w-0 text-left leading-tight">
-            <h1 className="truncate text-[15px] font-semibold text-black dark:text-white">{shownName}</h1>
-            <p className="mt-[1px] truncate text-[10px] tabular-nums text-black/40 dark:text-white/40">{headerDate}</p>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
           {meet ? (
             <button
               type="button"
@@ -1356,7 +1384,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
               data-testid="offline-save-star"
               onClick={saveMeeting}
               disabled={!!gen}
-              className={`flex h-9 w-9 items-center justify-center rounded-full text-black/70 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 transition hover:bg-black/5 active:opacity-60 disabled:opacity-40 dark:text-white/80 dark:hover:bg-white/10"
             >
               <Star className="h-[18px] w-[18px]" strokeWidth={1.8} />
             </button>
@@ -1366,7 +1394,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             aria-label="现场设置"
             data-testid="offline-settings-entry"
             onClick={() => setSettingsOpen(true)}
-            className={`flex h-9 w-9 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/80 ${GLASS_CAPSULE}`}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-black/70 transition hover:bg-black/5 active:opacity-60 dark:text-white/80 dark:hover:bg-white/10"
           >
             <SlidersHorizontal className="h-[18px] w-[18px]" strokeWidth={1.8} />
           </button>
@@ -1442,18 +1470,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                   )}
                 </div>
               ) : (
-                <div key={e.id} className="flex flex-col items-end">
-                  {/* 用户消息同款头像 + 名字 + 时间头（右侧镜像） */}
-                  <div className="mb-2 flex w-full items-center gap-2">
-                    <EntryTools disabled={!!gen} onEdit={() => setEditing({ id: e.id, text: e.text })} onDelete={() => deleteEntry(e.id)} />
-                    <div className="ml-auto flex min-w-0 items-center gap-2">
-                      <div className="min-w-0 text-right leading-tight">
-                        <p className="text-[12px] font-semibold text-black/55 dark:text-white/60">{userNameEff}</p>
-                        <p className="mt-[1px] text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
-                      </div>
-                      <UserAvatar avatar={userAvatar} name={userNameEff} size={20} />
-                    </div>
-                  </div>
+                <div key={e.id} className="flex justify-end">
                   {editing?.id === e.id ? (
                     <div className="w-full max-w-[85%]">
                       <EntryEdit
@@ -1469,7 +1486,18 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                     </div>
                   ) : (
                     <div className="max-w-[85%]">
-                      <div className="whitespace-pre-wrap rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 px-4 py-2.5 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
+                      <div className="rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 p-4 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
+                        {/* 气泡内同款头像 + 名字 + 时间头（和 AI 卡一致） */}
+                        <div className="mb-2 flex items-center gap-2">
+                          <UserAvatar avatar={userAvatar} name={userNameEff} size={20} />
+                          <div className="min-w-0 leading-tight">
+                            <p className="text-[12px] font-semibold text-white/60">{userNameEff}</p>
+                            <p className="mt-[1px] text-[10px] tabular-nums text-white/40">{mdhm(e.at)}</p>
+                          </div>
+                          <div className="ml-auto">
+                            <EntryTools disabled={!!gen} onDark onEdit={() => setEditing({ id: e.id, text: e.text })} onDelete={() => deleteEntry(e.id)} />
+                          </div>
+                        </div>
                         <NarrBody text={e.text} role="user" onDark />
                       </div>
                     </div>

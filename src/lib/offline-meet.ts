@@ -7,7 +7,9 @@
  * 3. 场景生成：地点 / 时间 / 环境 / 角色状态 / 对白，基于角色人设 + 世界书 + 最近聊天 + 记忆；
  * 4. 现场设置：回复字数（±20%）/ 承接条数 / 用户·角色叙述人称 / 回复预设 / 现场文风 /
  *    基础设置（字数区间·人称·导演模式·自主推进·修辞密度·描写占比·节奏）；
- * 5. 变量系统：{{char_name}} 等 11 个变量在发送前由 renderTemplate 替换；
+ * 5. 变量系统：{{char_name}} 等 12 个变量在发送前由 renderTemplate 替换（含 {{last_reply}} 上一条角色回复）；
+ *    生成时代码侧注入「续写要求」（显式传上一条回复 + 接续规则 + 追问定向回答），
+ *    并带防复读检测：新回复与上一条高度相似/整段包含时，自动带强指令重试一次；
  * 6. 操作：让角色继续 / 重 Roll（可恢复上一版）/ 编辑·删除任意条目 / 保存这次见面 / 自由输入（说话或描述动作）；
  *    线下历史注入每条时间戳（[M月D日 HH:mm]），让 AI 感知现场时间流；已保存的见面可在开始页回看；
  * 7. 保存后写入记忆库（memAddEventFragment，sourceTag 'offline-meet'），
@@ -158,6 +160,7 @@ export const OFFLINE_VARIABLES: Array<{ name: string; desc: string }> = [
   { name: '{{writing_style}}', desc: '当前文风' },
   { name: '{{scene}}', desc: '地点、原因和角色状态' },
   { name: '{{user_message}}', desc: '用户本轮输入' },
+  { name: '{{last_reply}}', desc: '上一条角色回复（续写用，代码侧也会注入）' },
   { name: '{{online_chat}}', desc: '线下开始前的线上聊天' },
   { name: '{{offline_history}}', desc: '已发生的线下内容' },
 ];
@@ -481,6 +484,95 @@ export function buildOpenInstruction(charName: string, userName: string): string
   ].join('\n');
 }
 
+/**
+ * 续写指令（代码侧拼接，不依赖模板）：显式传上一条回复，要求接着写、不复读、追问定向回答。
+ * 每次生成（非开场）都会追加在渲染后的模板尾部，保证即使用户改了模板也生效。
+ */
+export function buildContinueInstruction(opts: { lastReply: string; fromInput: string; charName: string; userName: string }): string {
+  const { lastReply, fromInput, charName, userName } = opts;
+  const lines: string[] = ['【续写要求（最高优先级，必须遵守）】'];
+  if (lastReply.trim()) {
+    lines.push(
+      '你的上一条回复是：',
+      `"""${lastReply.trim().slice(-800)}"""`,
+      '现在从这段话的最后一刻紧接着往下写：只输出新的内容；严禁重复、复述或改写上一条回复里的任何句子（对方已经读过这些内容）；不允许出现任何连续与上一条相同的句子或段落，哪怕一小段原句照搬也不行。',
+    );
+  } else {
+    lines.push('接着当前场景自然往下写：只输出新内容，不要把已经发生过的事情再写一遍。');
+  }
+  if (fromInput.trim()) {
+    lines.push(
+      `${userName}这轮说的是：「${fromInput.trim().slice(0, 200)}」——这是最新的追问/输入，你的回复必须直接针对这句话回应；如果之前已经说过类似内容，换一个新的角度回答或推进，不要重发之前的整段。`,
+    );
+  } else {
+    lines.push(`让${charName}自然推进当前场景一点点，把回应权交给${userName}。`);
+  }
+  return lines.join('\n');
+}
+
+// ---------------- 防复读检测 ----------------
+
+/** 归一化：去空白与标点，转小写（中文 bigram 判重用） */
+function normalizeForRepeat(t: string): string {
+  return t
+    .replace(/[\s，。！？；：、’‘“”「」『』（）()《》〈〉【】〔〕\.!\?;:'"“,~～—…·•\-]/g, '')
+    .toLowerCase();
+}
+
+/** 字符 bigram Jaccard 相似度（0~1） */
+export function textSimilarity(a: string, b: string): number {
+  const A = normalizeForRepeat(a);
+  const B = normalizeForRepeat(b);
+  if (A.length < 8 || B.length < 8) return 0;
+  const grams = (s: string) => {
+    const set = new Set<string>();
+    for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+    return set;
+  };
+  const ga = grams(A);
+  const gb = grams(B);
+  let inter = 0;
+  ga.forEach((g) => {
+    if (gb.has(g)) inter++;
+  });
+  const union = ga.size + gb.size - inter;
+  return union ? inter / union : 0;
+}
+
+/** 最长公共连续子串长度（防复读：整段照搬检测；O(n·m)，中文正文长度下毫秒级） */
+function longestCommonRun(a: string, b: string): number {
+  if (!a || !b) return 0;
+  let best = 0;
+  let prev = new Uint32Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Uint32Array(b.length + 1);
+    const ca = a.charCodeAt(i - 1);
+    for (let j = 1; j <= b.length; j++) {
+      if (ca === b.charCodeAt(j - 1)) {
+        cur[j] = prev[j - 1] + 1;
+        if (cur[j] > best) best = cur[j];
+      }
+    }
+    prev = cur;
+  }
+  return best;
+}
+
+/**
+ * 复读判定（任一命中即视为复读，触发自动重试）：
+ * 1. 新回复与上一条整段互相包含（原样重发/只接一小截）；
+ * 2. bigram 相似度 ≥ 0.45（大面积改写重发）；
+ * 3. 存在 ≥ 80 字的连续相同段落（整段照搬；实测部分复读场景 Jaccard 只有约 0.35，必须靠这条抓出）。
+ */
+export function looksLikeRepeat(next: string, prev: string): boolean {
+  const A = normalizeForRepeat(prev);
+  const B = normalizeForRepeat(next);
+  if (A.length < 12 || B.length < 12) return false;
+  if (B.includes(A) || A.includes(B)) return true;
+  if (longestCommonRun(A, B) >= 80) return true;
+  return textSimilarity(A, B) >= 0.45;
+}
+
 /** 系统侧「线下叙事总纲 + 现场参数」块（追加在 system prompt 末尾，优先级高于线上聊天规则） */
 export function buildOfflineDirective(opts: {
   settings: OfflineMeetSettings;
@@ -526,6 +618,8 @@ export function buildOfflineDirective(opts: {
     `- 叙事直接面向${userName}展开；对白贴合人设语气，穿插在叙述中；动作与心理直接写进叙述；`,
     '- 不输出 markdown、序号、括号舞台提示或角色名前缀；不跳出角色，不提及任何设定或幕后概念；',
     `- 不替${userName}说话、做决定或代答；${userName}输入里描述的言行要被自然接住并回应；`,
+    '- 接续规则：每次回复都紧接着上一条回复的最后一刻往下写新的内容；严禁重复、复述或改写自己之前任何一条回复（包括更早的回复）里已有的句子或段落；',
+    `- ${userName}重复追问时，把它当作催促或新的追问，直接给出新的回应或推进剧情，不要把之前发过的整段回复再发一遍；`,
     '',
     '【现场参数】',
     `- 导演模式：${s.director ? `开启——你可以推进小事件、转换场景、让时间自然流动，制造推动关系的契机` : '关闭——只在当前场景内反应，不主动跳跃时间、不引入新事件'}`,
