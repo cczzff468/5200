@@ -12329,3 +12329,16 @@ Stage Summary:
 - 微信钱包账单全链路（入口/列表/收支统计/筛选/月份弹窗）与真机截图（114250/114258/114319/114333）一致，空数据状态正常；真实红包/转账交易后即有流水
 - 任务一（删好友4项调整）E2E 验证全部通过并已推送
 - 产出文件：src/components/apps/qq.tsx（BillsPage 三处）；wechat-wallet.tsx 本轮无改动（bdac52e 已完成）
+
+---
+Task ID: II-2
+Agent: 主协调者 (Z.ai Code)
+Task: 用户反馈「收支统计页里面的字什么的都太大了」——微信钱包收支统计页（WxBillStatsPage）字号/图标/间距整体缩小一档
+
+Work Log:
+- wechat-wallet.tsx WxBillStatsPage 8 处编辑：月账单/年账单 tab 19px→16px（下划线 inset-x-2→1.5、gap-10→9）；月份/年份选择 21px→17px（与账单列表页月份行同规格）；支出/收入/其他口径胶囊 14px→12px（px-3.5→3、py-3px→2px）；「共X笔，合计」13.5px→12px；合计金额 50px→40px（pt-5→4、mt-1→0.5）；记账本条文案 15px→13.5px（行高 py-4→3、图标圆 9→8、Check 18→16、chevron 4→3.5）；「每月支出对比」「当月/当年支出构成」标题 17px→15px（mt-7/8→6）；柱状图区高 186→168px、柱宽 22→18px、柱高上限 128→114、金额标签 10.5→10px、月份标签 12→10.5px；构成行：名称 15.5→14px、金额 16→14.5px、图标圆 9→8、lucide 图标 17→15px、RedPacketGlyph 36→30、进度条 6→5px、行距 py-4→3；空状态 14→13px；关闭 × 6→5
+- 验证：bun run lint 0 错误；npx tsc --noEmit 0 错误；agent-browser E2E（eval PointerEvent 解锁/翻页/JS click 导航）——微信我→服务→钱包→账单→收支统计全链路，截图确认新字号渲染正常、无溢出错位（本机零钱 0 元无交易，构成行为空状态，字号链路已全部可见）
+
+Stage Summary:
+- 收支统计页视觉规格与账单列表页（15-16px 主体文字）拉齐，不再突兀
+- 产出文件：src/components/apps/wechat-wallet.tsx（仅 WxBillStatsPage 样式，无逻辑改动）

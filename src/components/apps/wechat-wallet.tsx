@@ -1561,12 +1561,12 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
       Math.abs(counted.filter((b) => kinds.includes(b.kind) && (sign === 1 ? b.amount > 0 : b.amount < 0)).reduce((s, b) => s + b.amount, 0));
     if (metric === '支出') {
       const defs: Array<{ name: string; kinds: WxBill['kind'][]; color: string; icon: React.ReactNode }> = [
-        { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
-        { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={36} bg="transparent" fg="#F26D3D" /> },
-        { name: '亲属卡', kinds: ['亲属卡付款'], color: '#F7A500', icon: <Heart className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
-        { name: '零钱通', kinds: ['转入零钱通', '零钱通转出'], color: '#F7A500', icon: <Gem className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
-        { name: '充值', kinds: ['充值'], color: '#07C160', icon: <Plus className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
-        { name: '提现', kinds: ['提现'], color: '#4D9CF8', icon: <WalletIcon className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+        { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
+        { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={30} bg="transparent" fg="#F26D3D" /> },
+        { name: '亲属卡', kinds: ['亲属卡付款'], color: '#F7A500', icon: <Heart className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
+        { name: '零钱通', kinds: ['转入零钱通', '零钱通转出'], color: '#F7A500', icon: <Gem className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
+        { name: '充值', kinds: ['充值'], color: '#07C160', icon: <Plus className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
+        { name: '提现', kinds: ['提现'], color: '#4D9CF8', icon: <WalletIcon className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
       ];
       for (const d of defs) {
         const total_ = sumKind(d.kinds, -1);
@@ -1574,9 +1574,9 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
       }
     } else {
       const defs: Array<{ name: string; kinds: WxBill['kind'][]; color: string; icon: React.ReactNode }> = [
-        { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={36} bg="transparent" fg="#F26D3D" /> },
-        { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
-        { name: '退款', kinds: ['红包退款', '转账退款'], color: '#F5A623', icon: <RedPacketGlyph size={36} bg="transparent" fg="#F5A623" /> },
+        { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={30} bg="transparent" fg="#F26D3D" /> },
+        { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
+        { name: '退款', kinds: ['红包退款', '转账退款'], color: '#F5A623', icon: <RedPacketGlyph size={30} bg="transparent" fg="#F5A623" /> },
       ];
       for (const d of defs) {
         const total_ = sumKind(d.kinds, 1);
@@ -1599,31 +1599,31 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
         <div className="relative pt-[54px]">
           <div className="relative flex h-11 items-center px-5">
             <button type="button" aria-label="关闭收支统计" data-testid="wx-bill-stats-close" onClick={onClose} className="active:opacity-50">
-              <X className="h-6 w-6" strokeWidth={2} />
+              <X className="h-5 w-5" strokeWidth={2} />
             </button>
           </div>
           {/* 月账单 / 年账单 tab */}
-          <div className="mt-1 flex items-center justify-center gap-10">
+          <div className="mt-1 flex items-center justify-center gap-9">
             {(['month', 'year'] as BillTab[]).map((t) => (
               <button
                 key={t}
                 type="button"
                 data-testid={`wx-bill-stats-tab-${t}`}
                 onClick={() => setTab(t)}
-                className={`relative pb-2 text-[19px] font-medium ${tab === t ? 'text-white' : 'text-white/60'}`}
+                className={`relative pb-1.5 text-[16px] font-medium ${tab === t ? 'text-white' : 'text-white/60'}`}
               >
                 {t === 'month' ? '月账单' : '年账单'}
-                {tab === t && <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-full bg-white" aria-hidden="true" />}
+                {tab === t && <span className="absolute inset-x-1.5 bottom-0 h-[3px] rounded-full bg-white" aria-hidden="true" />}
               </button>
             ))}
           </div>
           {/* 月份/年份 + 口径胶囊 */}
-          <div className="mt-6 flex items-center justify-between px-5">
+          <div className="mt-5 flex items-center justify-between px-5">
             <button
               type="button"
               data-testid="wx-bill-stats-month"
               onClick={() => setPicker({ kind: tab })}
-              className="flex items-center gap-1.5 text-[21px] font-medium"
+              className="flex items-center gap-1 text-[17px] font-medium"
             >
               {tab === 'month' ? billMonthLabel(monthKey) : `${yearKey}年`}
               <svg viewBox="0 0 12 8" className="h-2 w-3" aria-hidden="true">
@@ -1636,7 +1636,7 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
                   key={m}
                   type="button"
                   onClick={() => setMetric(m)}
-                  className={`rounded-full px-3.5 py-[3px] text-[14px] ${
+                  className={`rounded-full px-3 py-[2px] text-[12px] ${
                     metric === m ? 'border border-white/85 text-white' : 'text-white/70'
                   }`}
                 >
@@ -1646,12 +1646,12 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
             </div>
           </div>
           {/* 合计 */}
-          <div className="px-5 pt-5">
-            <p className="text-[13.5px] text-white/85">
+          <div className="px-5 pt-4">
+            <p className="text-[12px] text-white/85">
               共{metricWord}
               {counted.length}笔，合计
             </p>
-            <p className="mt-1 text-[50px] font-medium leading-tight" data-testid="wx-bill-stats-total">
+            <p className="mt-0.5 text-[40px] font-medium leading-tight" data-testid="wx-bill-stats-total">
               ¥ {fmtMoney(total)}
             </p>
           </div>
@@ -1663,57 +1663,57 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
         <button
           type="button"
           onClick={() => onToast('记账本暂未开放')}
-          className="mx-4 mt-4 flex w-[calc(100%-32px)] items-center gap-3 rounded-[10px] bg-[#F6F6F6] px-4 py-4 text-left active:bg-black/[0.04] dark:bg-[#242424] dark:active:bg-white/[0.06]"
+          className="mx-4 mt-3.5 flex w-[calc(100%-32px)] items-center gap-2.5 rounded-[10px] bg-[#F6F6F6] px-3.5 py-3 text-left active:bg-black/[0.04] dark:bg-[#242424] dark:active:bg-white/[0.06]"
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#07C160] text-white" aria-hidden="true">
-            <Check className="h-[18px] w-[18px]" strokeWidth={2.4} />
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#07C160] text-white" aria-hidden="true">
+            <Check className="h-4 w-4" strokeWidth={2.4} />
           </span>
-          <span className="min-w-0 flex-1 truncate text-[15px]">使用记账本，查看分类统计(餐饮、交通等)</span>
-          <ChevronRight className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} />
+          <span className="min-w-0 flex-1 truncate text-[13.5px]">使用记账本，查看分类统计(餐饮、交通等)</span>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} />
         </button>
 
-        <p className="mt-7 px-4 text-[17px] font-medium">{tab === 'month' ? '每月支出对比' : '每月支出对比'}</p>
-        <div className="mt-3 flex h-[186px] items-end justify-between border-b border-black/[0.06] px-3 dark:border-white/[0.08]">
+        <p className="mt-6 px-4 text-[15px] font-medium">{tab === 'month' ? '每月支出对比' : '每月支出对比'}</p>
+        <div className="mt-2.5 flex h-[168px] items-end justify-between border-b border-black/[0.06] px-3 dark:border-white/[0.08]">
           {barData.map((d) => {
-            const h = d.value <= 0 ? 3 : Math.max(6, Math.round((d.value / barMax) * 128));
+            const h = d.value <= 0 ? 3 : Math.max(5, Math.round((d.value / barMax) * 114));
             const cur = tab === 'month' ? d.key === monthKey : d.key === monthKey;
             return (
               <div key={d.key} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
-                <span className={`text-[10.5px] leading-none ${cur ? 'font-medium text-[#07C160]' : 'text-[#9CCFAD]'}`}>{fmtMoney(d.value)}</span>
-                <span className="w-[22px] rounded-[3px]" style={{ height: h, backgroundColor: cur ? '#07C160' : '#C9E9D4' }} aria-hidden="true" />
-                <span className="truncate text-[12px] text-black/40 dark:text-white/40">{d.label}</span>
+                <span className={`text-[10px] leading-none ${cur ? 'font-medium text-[#07C160]' : 'text-[#9CCFAD]'}`}>{fmtMoney(d.value)}</span>
+                <span className="w-[18px] rounded-[3px]" style={{ height: h, backgroundColor: cur ? '#07C160' : '#C9E9D4' }} aria-hidden="true" />
+                <span className="truncate text-[10.5px] text-black/40 dark:text-white/40">{d.label}</span>
               </div>
             );
           })}
         </div>
 
-        <p className="mt-8 px-4 text-[17px] font-medium">
+        <p className="mt-6 px-4 text-[15px] font-medium">
           {tab === 'month' ? '当月' : '当年'}
           {metric === '其他' ? '其他' : metric}构成
         </p>
         {breakdown.length === 0 ? (
-          <p className="px-4 py-8 text-center text-[14px] text-black/35 dark:text-white/35">暂无{metric === '其他' ? '其他' : metric}数据</p>
+          <p className="px-4 py-7 text-center text-[13px] text-black/35 dark:text-white/35">暂无{metric === '其他' ? '其他' : metric}数据</p>
         ) : (
-          <div className="mt-1">
+          <div className="mt-0.5">
             {breakdown.map((r) => (
               <button
                 key={r.name}
                 type="button"
                 onClick={() => onToast('分类明细暂未开放')}
-                className="flex w-full items-center gap-3 border-t border-black/[0.05] px-4 py-4 text-left first:border-t-0 dark:border-white/[0.07]"
+                className="flex w-full items-center gap-2.5 border-t border-black/[0.05] px-4 py-3 text-left first:border-t-0 dark:border-white/[0.07]"
               >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ color: r.color }} aria-hidden="true">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ color: r.color }} aria-hidden="true">
                   {r.icon}
                 </span>
-                <span className="w-[68px] shrink-0 truncate text-[15.5px]">{r.name}</span>
-                <span className="h-[6px] min-w-0 flex-1 rounded-full bg-black/[0.06] dark:bg-white/[0.1]" aria-hidden="true">
+                <span className="w-[64px] shrink-0 truncate text-[14px]">{r.name}</span>
+                <span className="h-[5px] min-w-0 flex-1 rounded-full bg-black/[0.06] dark:bg-white/[0.1]" aria-hidden="true">
                   <span
                     className="block h-full rounded-full"
                     style={{ width: `${Math.max(4, Math.round((r.total / breakdownMax) * 100))}%`, backgroundColor: r.color }}
                   />
                 </span>
-                <span className="shrink-0 text-[16px] font-medium">¥{fmtMoney(r.total)}</span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} />
+                <span className="shrink-0 text-[14.5px] font-medium">¥{fmtMoney(r.total)}</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} />
               </button>
             ))}
           </div>
