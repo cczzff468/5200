@@ -2592,7 +2592,7 @@ export function WxGroupChatPage({
       const remaining = round2(groupRpTotal(rp.mode, rp.amount, rp.count) - rp.claims.reduce((s, c) => s + c.amount, 0));
       patchGroupMsg(m.id, { rp: { ...rp, expired: true, expiredAt: now } });
       if (m.senderId === 'me' && remaining > 0) {
-        wxPatchBalance(remaining, { kind: '红包', amount: remaining });
+        wxPatchBalance(remaining, { kind: '红包退款', amount: remaining });
       }
       appendMsg({
         id: uid(),
@@ -2662,13 +2662,13 @@ export function WxGroupChatPage({
           appendFundNotice('tr', `${charName}收下了${fromLabel}`, '转账');
         } else if (verb === 'return') {
           patchGroupMsg(m.id, { tr: { ...tr, status: 'returned' } });
-          if (fromMe) wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+          if (fromMe) wxPatchBalance(tr.amount, { kind: '转账退款', amount: tr.amount });
           appendFundNotice('tr', `${charName}退回了${fromLabel}`, '转账');
         } else {
           patchGroupMsg(m.id, { tr: { ...tr, status: 'rejected' } });
           // #3 拒收也退回：机主发的卡不能黑洞——拒收即原路退回零钱+写账单（与退回分支同口径，
           // wxPatchBalance 内部同时写零钱明细账单）；成员（AI）发的卡保持纯状态（AI 无钱包，本就不扣款）
-          if (fromMe) wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+          if (fromMe) wxPatchBalance(tr.amount, { kind: '转账退款', amount: tr.amount });
           appendFundNotice('tr', `${charName}拒收了${fromLabel}`, fromMe ? '转账（已退回）' : '转账');
         }
       }

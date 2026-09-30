@@ -947,21 +947,42 @@ function wxLoadBalance(): number {
 
 const LS_CARDS = 'wx-wallet-cards';
 
+/** 账单条目附加信息（对方名/头像；转账条目账单页显示对方头像） */
+interface WxBillMeta {
+  peer?: string;
+  avatar?: string | null;
+}
+
 /** 零钱增减 + 可选写一条零钱明细账单；余额不足返回 false（单聊/群聊共用） */
-export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账' | '亲属卡付款'; amount: number }): boolean {
+export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款'; amount: number } & WxBillMeta): boolean {
   const next = Math.round((wxLoadBalance() + delta) * 100) / 100;
   if (next < 0) return false;
   saveJSON(LS_WALLET, { balance: next });
-  if (bill) wxPushBill(bill.kind, bill.amount);
+  if (bill) wxPushBill(bill.kind, bill.amount, { peer: bill.peer, avatar: bill.avatar });
   return true;
 }
 
-/** 追加一条零钱明细账单（新的在前，最多 100 条） */
-function wxPushBill(kind: '红包' | '转账' | '亲属卡付款', amount: number): void {
-  const bills = loadJSON<{ id?: string; kind?: string; amount?: number; time?: number }[]>(LS_BILLS, []).filter(
+/** 退款入账时给最近一条同场景未退款的支出条目标 refunded（账单页原条目下红字「已退回」；不新增收入条目，对齐真机） */
+function wxMarkLatestBillRefund(kind: '红包' | '转账', amount: number): void {
+  const bills = loadJSON<{ id?: string; kind?: string; amount?: number; time?: number; refunded?: boolean }[]>(LS_BILLS, []).filter(
     (b) => Boolean(b) && typeof b.kind === 'string' && typeof b.amount === 'number' && typeof b.time === 'number'
   );
-  saveJSON(LS_BILLS, [{ id: uid(), kind, amount, time: Date.now() }, ...bills].slice(0, 100));
+  const idx = bills.findIndex((b) => b.kind === kind && b.amount === -amount && b.refunded !== true);
+  if (idx < 0) return;
+  saveJSON(
+    LS_BILLS,
+    bills.map((b, i) => (i === idx ? { ...b, refunded: true } : b))
+  );
+}
+
+/** 追加一条零钱明细账单（新的在前，最多 100 条；退款类同时标注原支出条目） */
+function wxPushBill(kind: '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款', amount: number, meta?: WxBillMeta): void {
+  const bills = loadJSON<{ id?: string; kind?: string; amount?: number; time?: number; peer?: string; avatar?: string | null; refunded?: boolean }[]>(LS_BILLS, []).filter(
+    (b) => Boolean(b) && typeof b.kind === 'string' && typeof b.amount === 'number' && typeof b.time === 'number'
+  );
+  if (kind === '红包退款') wxMarkLatestBillRefund('红包', Math.abs(amount));
+  if (kind === '转账退款') wxMarkLatestBillRefund('转账', Math.abs(amount));
+  saveJSON(LS_BILLS, [{ id: uid(), kind, amount, time: Date.now(), peer: meta?.peer, avatar: meta?.avatar }, ...bills].slice(0, 100));
 }
 
 // ---- #22 亲属卡多卡聚合：同一赠卡人（friendId）名下可有多张收到的亲属卡（每张卡消息独立入表）----
@@ -1005,10 +1026,10 @@ export function wxCanPay(methodId: string, amount: number): boolean {
 
 /** 按所选支付方式扣款（零钱 / 银行卡 / 亲属卡额度；亲属卡不动零钱不写账单，其余写零钱明细）；单聊/群聊共用。
  *  成功返回 { ok:true, fc? }：fc 存在 = 本次用亲属卡扣款（含分摊明细，调用方据此插通知行 + 落消费流水/赠卡人记忆）；
- *  金额非法 / 额度不足 / 卡不存在等失败一律返回 null */
-export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账' | '亲属卡付款'): WxFcPayResult | null {
+ *  金额非法 / 额度不足 / 卡不存在等失败一律返回 null。meta 传对方名/头像（账单条目展示用） */
+export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账' | '亲属卡付款', meta?: WxBillMeta): WxFcPayResult | null {
   if (!(amount > 0)) return null;
-  if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount }) ? { ok: true } : null;
+  if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount, ...meta }) ? { ok: true } : null;
   if (methodId.startsWith('fcin-')) {
     // 审计 #6：扣款前先做跨月惰性重置（重置后额度足够才扣）；写回时保留 lastResetMonth 字段。
     // #22：额度按赠卡人聚合，扣款依序分摊到名下各卡（先扣第一张剩余，扣完顺延下一张；金额均两位小数，无残差）；
@@ -1038,7 +1059,7 @@ export function wxExecutePayment(methodId: string, amount: number, kind: '红包
     list.map((x) => (x.id === methodId ? { ...x, balance: Math.round((x.balance - amount) * 100) / 100 } : x))
   );
   // 零钱/银行卡不产生亲属卡明细，只写账单
-  wxPushBill(kind, -amount);
+  wxPushBill(kind, -amount, meta);
   return { ok: true };
 }
 
@@ -1369,7 +1390,7 @@ async function wxExpireStalePeerCards(): Promise<string[]> {
         if (m.role === 'me') {
           // 用户发的卡 → 退回用户零钱（发卡时已扣款；退回=收入，写账单；已撤回的卡同样清算，避免金额永久悬挂）
           if (m.kind === 'redpacket' && m.rp) {
-            wxPatchBalance(m.rp.amount, { kind: '红包', amount: m.rp.amount });
+            wxPatchBalance(m.rp.amount, { kind: '红包退款', amount: m.rp.amount, peer: displayNameOf(c) });
             notices.push({
               id: uid(),
               role: 'peer',
@@ -1381,7 +1402,7 @@ async function wxExpireStalePeerCards(): Promise<string[]> {
             return { ...m, content: '[微信红包]（已退回）', rp: { ...m.rp, status: 'returned' as const } };
           }
           if (m.kind === 'transfer' && m.tr) {
-            wxPatchBalance(m.tr.amount, { kind: '转账', amount: m.tr.amount });
+            wxPatchBalance(m.tr.amount, { kind: '转账退款', amount: m.tr.amount, peer: displayNameOf(c) });
             notices.push({
               id: uid(),
               role: 'peer',
@@ -1446,13 +1467,13 @@ function wxApplyAiActions(
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}领取了你的`, accent: '红包' } });
       } else if (verb === 'return') {
         next[idx] = { ...m, content: '[微信红包]（已退回）', rp: { ...rp, status: 'returned' } };
-        wxPatchBalance(rp.amount, { kind: '红包', amount: rp.amount });
+        wxPatchBalance(rp.amount, { kind: '红包退款', amount: rp.amount, peer: peer.name });
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}退回了你的`, accent: '红包' } });
       } else {
         // 审计 #3：拒收=资金退回发起人（本函数只处理 role='me' 的卡，即用户发的卡）——与退回分支同款
         // 退款+账单（此前只置终态不退款，金额永久悬挂）；通知行带「已退回」
         next[idx] = { ...m, content: '[微信红包]（已拒收）', rp: { ...rp, status: 'rejected' } };
-        wxPatchBalance(rp.amount, { kind: '红包', amount: rp.amount });
+        wxPatchBalance(rp.amount, { kind: '红包退款', amount: rp.amount, peer: peer.name });
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}拒收了你的`, accent: '红包（已退回）' } });
       }
     } else if (m.kind === 'transfer' && m.tr) {
@@ -1466,7 +1487,7 @@ function wxApplyAiActions(
         // AI 退回我发的转账：原卡标记终态（变灰）+ 「对方」发出的退还凭据卡放 extras（灰卡↩+已退还，详情页「对方已退还」）
         const refundedAt = Date.now();
         next[idx] = { ...m, content: '[转账]（已退回）', tr: { ...tr, status: 'returned', refundedAt } };
-        wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+        wxPatchBalance(tr.amount, { kind: '转账退款', amount: tr.amount, peer: peer.name });
         extras.push({
           id: uid(),
           role: 'peer',
@@ -1478,7 +1499,7 @@ function wxApplyAiActions(
       } else {
         // 审计 #3：拒收=资金退回发起人（同红包拒收分支）
         next[idx] = { ...m, content: '[转账]（已拒收）', tr: { ...tr, status: 'rejected' } };
-        wxPatchBalance(tr.amount, { kind: '转账', amount: tr.amount });
+        wxPatchBalance(tr.amount, { kind: '转账退款', amount: tr.amount, peer: peer.name });
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的`, accent: '转账（已退回）' } });
       }
     } else if (m.kind === 'family' && m.fam) {
@@ -6177,7 +6198,7 @@ function ChatPage({
       onToast('对方已将你拉黑，无法发送');
       return;
     }
-    const pay = wxExecutePayment(methodId, amount, '红包');
+    const pay = wxExecutePayment(methodId, amount, '红包', { peer: peer.name, avatar: peer.avatar });
     if (!pay) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
       return;
@@ -6220,7 +6241,7 @@ function ChatPage({
       onToast('对方已将你拉黑，无法发送');
       return;
     }
-    const pay = wxExecutePayment(methodId, amount, '转账');
+    const pay = wxExecutePayment(methodId, amount, '转账', { peer: peer.name, avatar: peer.avatar });
     if (!pay) {
       onToast(methodId === 'balance' ? '零钱不足，请先充值' : methodId.startsWith('fcin-') ? '亲属卡本月额度不足' : '卡内余额不足，请更换支付方式');
       return;
@@ -6247,7 +6268,7 @@ function ChatPage({
   const openRedPacket = (id: string) => {
     const m = msgs.find((x) => x.id === id);
     if (!m?.rp || m.rp.opened || m.rp.status || m.role !== 'peer') return;
-    wxPatchBalance(m.rp.amount, { kind: '红包', amount: m.rp.amount });
+    wxPatchBalance(m.rp.amount, { kind: '红包', amount: m.rp.amount, peer: peer.name });
     // 领取提示行（居中灰字 + 金色尾词）：与对方领取我的红包同款样式
     const notice: WxMsg = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `你领取了${peer.name}的`, accent: '红包' } };
     setMsgs((prev) => [
@@ -6279,7 +6300,7 @@ function ChatPage({
       if (m?.tr && !m.tr.received && m.tr.status === 'returned') onToast('该转账已退回');
       return;
     }
-    wxPatchBalance(m.tr.amount, { kind: '转账', amount: m.tr.amount });
+    wxPatchBalance(m.tr.amount, { kind: '转账', amount: m.tr.amount, peer: peer.name, avatar: peer.avatar });
     const receipt: WxMsg = {
       id: uid(),
       role: 'me',

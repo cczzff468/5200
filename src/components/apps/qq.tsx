@@ -99,6 +99,7 @@ import {
   MonitorSmartphone,
   Moon,
   MoreHorizontal,
+  Download,
   Phone,
   PiggyBank,
   Pin,
@@ -650,7 +651,7 @@ function applyAiActions(
         // 单份红包不存在部分领取，保持全额退（行为不变）
         const refund = count > 1 ? round2(p.amount - claims.reduce((s, c) => s + c.amount, 0)) : p.amount;
         next[idx] = { ...m, content: `[QQ红包]（${verb === 'return' ? '已退回' : '已拒收'}）`, packet: { ...p, status: verb === 'return' ? 'returned' : 'rejected', ...(count > 1 ? { claims: [] } : {}) } };
-        if (refund > 0) gainToWallet(refund, '红包退回');
+        if (refund > 0) refundToWallet(refund, 'redpacket');
         if (verb === 'return') {
           notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'rp', pre: `${peer.name}退回了你的`, accent: '红包' } });
         } else {
@@ -669,7 +670,7 @@ function applyAiActions(
         // AI 退回我发的转账：原卡标记终态（变灰）+ 「对方」发出的退还凭据卡放 extras（灰卡↩+已退还，详情页「对方已退还」）
         const refundedAt = Date.now();
         next[idx] = { ...m, content: '[转账]（已退回）', packet: { ...p, status: 'returned', refundedAt } };
-        gainToWallet(p.amount, '转账退回');
+        refundToWallet(p.amount, 'transfer');
         extras.push({
           id: uid(),
           role: 'peer',
@@ -681,7 +682,7 @@ function applyAiActions(
       } else {
         next[idx] = { ...m, content: '[转账]（已拒收）', packet: { ...p, status: 'rejected' } };
         // #3 AI 拒收我发的转账：拒收即原路退回（发卡时已扣款，不退则钱凭空消失）
-        gainToWallet(p.amount, '转账退回');
+        refundToWallet(p.amount, 'transfer');
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'tr', pre: `${peer.name}拒收了你的转账，已`, accent: '退回' } });
       }
     } else {
@@ -747,7 +748,7 @@ async function expireStaleSingleCards(): Promise<boolean> {
         };
         dirty = true;
         changed = true;
-        if (mine && remaining > 0) gainToWallet(remaining, `${kindLabel}过期退回`);
+        if (mine && remaining > 0) refundToWallet(remaining, p.type === 'redpacket' ? 'redpacket' : 'transfer');
         notices.push({
           id: uid(),
           role: 'peer',
@@ -2789,7 +2790,12 @@ function ChatPage({
         onToast('对方已将你拉黑，无法发送');
         return;
       }
-      const paid = executePayment(methodId, p.amount, kind === 'redpacket' ? '红包' : '转账');
+      const paid = executePayment(
+        methodId,
+        p.amount,
+        kind === 'redpacket' ? 'QQ红包-发红包' : `转账-转给${peer.name}`,
+        { kind: kind === 'redpacket' ? 'redpacket' : 'transfer', avatar: peer.avatar }
+      );
       if (!paid) {
         onToast(methodId === 'balance' ? '余额不足，请更换支付方式或先充值' : '卡内余额不足，请更换支付方式');
         return;
@@ -5696,7 +5702,7 @@ function ChatPage({
                   const claims = m.packet?.claims ?? [];
                   const remaining = round2((m.packet?.amount ?? 0) - claims.reduce((s, c) => s + c.amount, 0));
                   const amt = Math.max(0.01, remaining);
-                  gainToWallet(amt, '红包收入');
+                  gainToWallet(amt, `QQ红包-来自${peer.name}`, { kind: 'redpacket' });
                   // 领取提示行（聊天界面居中灰字）：「你领取了XX的红包」，与对方领取我的红包同款样式
                   const notice: QQMsg = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'rp', pre: `你领取了${peer.name}的`, accent: '红包' } };
                   setMsgs((prev) => [
@@ -5732,7 +5738,7 @@ function ChatPage({
                   const p = m.packet;
                   // 收款：标记原卡已收款（receiptOf=peer，我收的） + 入钱包余额 + 追加我的「已收款」接收卡片（与 AI 收我转账时的接收卡片同款、方向相反）
                   patchPacket(id, { received: true, receivedAt: Date.now(), receiptOf: 'peer' });
-                  if (p) gainToWallet(p.amount, '转账收入');
+                  if (p) gainToWallet(p.amount, `转账-来自${peer.name}`, { kind: 'transfer', avatar: peer.avatar });
                   setMsgs((prev) => [
                     ...prev,
                     {
@@ -5778,7 +5784,7 @@ function ChatPage({
                 onAccept={(id) => {
                   // 详情页收款（兑底路径）：标记 + 入余额 + 追加我的「已收款」接收卡片
                   patchPacket(id, { received: true, receivedAt: Date.now(), receiptOf: 'peer' });
-                  if (p) gainToWallet(p.amount, '转账收入');
+                  if (p) gainToWallet(p.amount, `转账-来自${peer.name}`, { kind: 'transfer', avatar: peer.avatar });
                   setMsgs((prev) => [
                     ...prev,
                     {
@@ -11992,6 +11998,12 @@ interface WalletBill {
   /** 正=收入 负=支出 */
   amount: number;
   ts: number;
+  /** 账单类型（美化版账单页筛选/图标用；旧数据缺省按标题推断） */
+  kind?: 'redpacket' | 'transfer' | 'topup' | 'withdraw' | 'vault' | 'refund';
+  /** 对方头像（转账条目显示对方头像；旧数据/群场景缺省用图标兕底） */
+  avatar?: string | null;
+  /** 已退款金额（原支出条目下方红色「已退款X元」标注） */
+  refund?: number;
 }
 
 /** 默认钱包（对照真机演示数据：余额 1.03 / Q币 0.10 / 小金库 0.00） */
@@ -12059,19 +12071,42 @@ function saveWalletBills(list: WalletBill[]): void {
 }
 
 /** 从钱包余额扣款（发红包/转账用）：成功返回 true；余额不足返回 false；同步写账单 */
-function payFromWallet(amount: number, billTitle: string): boolean {
+function payFromWallet(amount: number, billTitle: string, meta?: { kind?: WalletBill['kind']; avatar?: string | null }): boolean {
   const w = loadWallet();
   if (!(amount > 0) || w.balance < amount) return false;
   saveWallet({ ...w, balance: round2(w.balance - amount) });
-  saveWalletBills([{ id: uid(), title: billTitle, amount: -amount, ts: Date.now() }, ...loadWalletBills()].slice(0, 100));
+  saveWalletBills([
+    { id: uid(), title: billTitle, amount: -amount, ts: Date.now(), kind: meta?.kind, avatar: meta?.avatar },
+    ...loadWalletBills(),
+  ].slice(0, 100));
   return true;
 }
 
 /** 收款入钱包余额（领取红包用），同步写账单 */
-export function gainToWallet(amount: number, billTitle: string): void {
+export function gainToWallet(amount: number, billTitle: string, meta?: { kind?: WalletBill['kind']; avatar?: string | null }): void {
   const w = loadWallet();
   saveWallet({ ...w, balance: round2(w.balance + amount) });
-  saveWalletBills([{ id: uid(), title: billTitle, amount, ts: Date.now() }, ...loadWalletBills()].slice(0, 100));
+  saveWalletBills([
+    { id: uid(), title: billTitle, amount, ts: Date.now(), kind: meta?.kind, avatar: meta?.avatar },
+    ...loadWalletBills(),
+  ].slice(0, 100));
+}
+
+/** 退款入钱包余额（红包/转账被退回/拒收/过期）：余额照常增加；账单侧不给收入条目，
+ *  而是给最近一条同场景未退款的支出条目标注 refund（美化账单页原条目下红字「已退款X元」，对齐真机） */
+function refundToWallet(amount: number, kind: 'redpacket' | 'transfer'): void {
+  if (!(amount > 0)) return;
+  const w = loadWallet();
+  saveWallet({ ...w, balance: round2(w.balance + amount) });
+  const bills = loadWalletBills();
+  const idx = bills.findIndex((b) => b.kind === kind && b.amount === -amount && b.refund === undefined);
+  if (idx >= 0) {
+    saveWalletBills(bills.map((b, i) => (i === idx ? { ...b, refund: amount } : b)));
+  } else {
+    // 找不到原条目（可能是旧数据/群聊）：兑底写一条退款收入条目，保证资金可追溯
+    const fallback: WalletBill = { id: uid(), title: kind === 'redpacket' ? 'QQ红包-退回' : '转账-退回', amount, ts: Date.now(), kind: 'refund' };
+    saveWalletBills([fallback, ...bills].slice(0, 100));
+  }
 }
 
 // ---------------- 支付密码 / 支付方式（红包/转账可选余额或银行卡支付） ----------------
@@ -12154,7 +12189,7 @@ export function qqRecordPayPwdFail(): QqPayPwdLockData {
 }
 
 /** 从指定银行卡扣款（红包/转账选卡支付用），同步写账单；卡不存在或余额不足返回 false */
-function payFromCard(cardId: string, amount: number, billTitle: string): boolean {
+function payFromCard(cardId: string, amount: number, billTitle: string, meta?: { kind?: WalletBill['kind']; avatar?: string | null }): boolean {
   if (!(amount > 0)) return false;
   const list = loadBankCards();
   const idx = list.findIndex((c) => c.id === cardId);
@@ -12163,7 +12198,10 @@ function payFromCard(cardId: string, amount: number, billTitle: string): boolean
   if ((card.balance ?? 0) < amount) return false;
   list[idx] = { ...card, balance: round2((card.balance ?? 0) - amount) };
   saveBankCards(list);
-  saveWalletBills([{ id: uid(), title: `${billTitle}（${card.bank}尾号${card.last4}）`, amount: -amount, ts: Date.now() }, ...loadWalletBills()].slice(0, 100));
+  saveWalletBills([
+    { id: uid(), title: `${billTitle}（${card.bank}尾号${card.last4}）`, amount: -amount, ts: Date.now(), kind: meta?.kind, avatar: meta?.avatar },
+    ...loadWalletBills(),
+  ].slice(0, 100));
   return true;
 }
 
@@ -12175,11 +12213,11 @@ export function canPay(methodId: string, amount: number): boolean {
   return Boolean(c) && (c?.balance ?? 0) >= amount;
 }
 
-/** 按所选支付方式扣款（余额 / 银行卡），同步写账单 */
-export function executePayment(methodId: string, amount: number, billTitle: string): boolean {
+/** 按所选支付方式扣款（余额 / 银行卡），同步写账单；meta 传对方名/头像（账单条目展示用） */
+export function executePayment(methodId: string, amount: number, billTitle: string, meta?: { kind?: WalletBill['kind']; avatar?: string | null }): boolean {
   if (!(amount > 0)) return false;
-  if (methodId === 'balance') return payFromWallet(amount, billTitle);
-  return payFromCard(methodId, amount, billTitle);
+  if (methodId === 'balance') return payFromWallet(amount, billTitle, meta);
+  return payFromCard(methodId, amount, billTitle, meta);
 }
 
 /** 支付方式展示名（支付密码验证浮层副标题用） */
@@ -13191,39 +13229,238 @@ function TopUpPage({ cards, onBack, onToast, onCharge }: { cards: BankCard[]; on
   );
 }
 
-/** 账单页（余额页「账单」入口：充值/提现/小金库转入转出流水） */
-function BillsPage({ bills, onBack }: { bills: WalletBill[]; onBack: () => void }) {
-  const fmtTime = (ts: number): string =>
-    new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+/** 账单类型筛选（「选择账单类型」弹层 chips；消费/群收款/理财/代付/自动代付本机无数据源，选中即空） */
+const QQ_BILL_TYPES = ['全部', '红包', '转账', '消费', '充值', '提现', '群收款', '退款', '理财', '代付', '自动代付'] as const;
+type QQBillType = (typeof QQ_BILL_TYPES)[number];
+
+/** 账单条目左侧圆形图标：红包=红色红包封；转账=对方头像（缺省蓝色箭头）；退款=绿色；充值/提现/小金库=各色 */
+function QQBillEntryIcon({ b }: { b: WalletBill }) {
+  const kind = b.kind ?? (b.title.includes('红包') ? 'redpacket' : b.title.includes('转账') ? 'transfer' : b.title.includes('提现') ? 'withdraw' : b.title.includes('充值') || b.title.includes('Q币') ? 'topup' : b.title.includes('小金库') ? 'vault' : undefined);
+  if (kind === 'redpacket') {
+    return (
+      <span className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full bg-[#F25543]" aria-hidden="true">
+        <svg viewBox="0 0 24 24" className="h-[24px] w-[24px]">
+          <rect x="4.5" y="3" width="15" height="18" rx="2.4" fill="#fff" />
+          <path d="M4.5 7.2c4.4 3.6 10.6 3.6 15 0" stroke="#F25543" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+          <circle cx="12" cy="11.6" r="1.8" fill="#F25543" />
+        </svg>
+      </span>
+    );
+  }
+  if (kind === 'transfer' && b.avatar) {
+    return b.avatar ? (
+      <img src={b.avatar} alt="对方头像" className="h-[46px] w-[46px] shrink-0 rounded-full bg-black/[0.06] object-cover dark:bg-white/[0.08]" />
+    ) : null;
+  }
+  const tone: Record<string, string> = { transfer: '#4D9CF8', topup: '#F7B500', withdraw: '#4D9CF8', vault: '#F7B500', refund: '#2FBF71' };
+  const color = kind ? tone[kind] ?? '#8E8E93' : '#8E8E93';
+  return (
+    <span className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: `${color}22`, color }} aria-hidden="true">
+      {kind === 'topup' || kind === 'vault' ? <QbGlyph /> : kind === 'refund' ? <Undo2 className="h-[20px] w-[20px]" strokeWidth={2} /> : <ArrowLeftRight className="h-[20px] w-[20px]" strokeWidth={2} />}
+    </span>
+  );
+}
+
+/** Q币小图标（黄色圆底白色 Q 币袋） */
+function QbGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-[22px] w-[22px]" aria-hidden="true">
+      <path d="M7 4h10l2.2 4.4a7.6 7.6 0 1 1-14.4 0L7 4z" fill="#fff" />
+      <text x="12" y="16.2" textAnchor="middle" fontSize="9" fontWeight="700" fill="#F7B500">
+        Q
+      </text>
+    </svg>
+  );
+}
+
+/** 账单明细页（余额页「账单」入口；对齐真机：月份/类型过滤栏 + 下载 + 按月分组列表 + 选择账单类型弹层） */
+function BillsPage({ bills, onBack, onToast }: { bills: WalletBill[]; onBack: () => void; onToast: (m: string) => void }) {
+  const fmtTime = (ts: number): string => {
+    const d = new Date(ts);
+    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  /** 类型过滤（点过滤栏「全部 ▾」弹出选择账单类型） */
+  const [billType, setBillType] = useState<QQBillType>('全部');
+  const [typeSheet, setTypeSheet] = useState(false);
+  /** 月份过滤（'all'=全部；默认全部，下拉可切换，文案对齐真机显示最新月份） */
+  const monthKeys = Array.from(new Set(bills.map((b) => `${new Date(b.ts).getFullYear()}-${new Date(b.ts).getMonth()}`))).sort((a, b) => b.localeCompare(a));
+  const [month, setMonth] = useState<string>('all');
+  const [monthSheet, setMonthSheet] = useState(false);
+
+  const typeFilter = (b: WalletBill): boolean => {
+    switch (billType) {
+      case '全部':
+        return true;
+      case '红包':
+        return b.kind === 'redpacket' || (!b.kind && b.title.includes('红包'));
+      case '转账':
+        return b.kind === 'transfer' || (!b.kind && b.title.includes('转账'));
+      case '退款':
+        return b.refund !== undefined || b.kind === 'refund' || (!b.kind && b.title.includes('退回'));
+      case '充值':
+        return b.kind === 'topup' || (!b.kind && (b.title.includes('充值') || b.title.includes('Q币')));
+      case '提现':
+        return b.kind === 'withdraw' || (!b.kind && b.title.includes('提现'));
+      default:
+        return false; // 消费/群收款/理财/代付/自动代付：本机无此数据源
+    }
+  };
+  const monthFilter = (b: WalletBill): boolean => month === 'all' || `${new Date(b.ts).getFullYear()}-${new Date(b.ts).getMonth()}` === month;
+
+  const shown = bills.filter((b) => typeFilter(b) && monthFilter(b));
+  /** 按月分组（倒序：组头「9月 2026年」） */
+  const groups = (() => {
+    const map = new Map<string, WalletBill[]>();
+    for (const b of shown) {
+      const d = new Date(b.ts);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      const arr = map.get(key) ?? [];
+      arr.push(b);
+      map.set(key, arr);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  })();
+
+  /** 过滤栏年月文案：全部=最新有账单月份（对齐真机截图），否则显示所选 */
+  const monthCaret =
+    month === 'all' ? (monthKeys.length > 0 ? `${Number(monthKeys[0].split('-')[1]) + 1}月` : '--月') : `${Number(month.split('-')[1]) + 1}月`;
+  const monthOptions = ['全部', ...monthKeys.map((k) => `${k.split('-')[0]}年${Number(k.split('-')[1]) + 1}月`)];
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[#F5F6F8] pt-[54px] dark:bg-[#16171A]">
-      <WalletNavHeader title="账单" onBack={onBack} />
-      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6">
-        {bills.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 pb-16 text-black/35 dark:text-white/35">
+      <WalletNavHeader title="账单明细" onBack={onBack} />
+      {/* 过滤栏：年月 ▾ + 类型 ▾ + 下载 */}
+      <div className="flex h-[54px] shrink-0 items-center gap-6 bg-[#EFEFF4] px-4 dark:bg-[#1D1E22]">
+        <button type="button" data-testid="qq-bills-month" onClick={() => setMonthSheet(true)} className="flex items-center gap-1.5 text-[16px] text-black/55 dark:text-white/60">
+          {monthCaret}
+          <svg viewBox="0 0 12 8" className="h-2 w-3" aria-hidden="true">
+            <path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button type="button" data-testid="qq-bills-type" onClick={() => setTypeSheet(true)} className="flex items-center gap-1.5 text-[16px] text-black/55 dark:text-white/60">
+          {billType}
+          <svg viewBox="0 0 12 8" className="h-2 w-3" aria-hidden="true">
+            <path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <span className="flex-1" />
+        <button type="button" data-testid="qq-bills-download" onClick={() => onToast('账单已保存')} className="flex items-center gap-1 text-[16px] text-black/55 dark:text-white/60">
+          下载
+          <Download className="h-[18px] w-[18px]" strokeWidth={2} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-6">
+        {shown.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 text-black/35 dark:text-white/35">
             <ClipboardList className="h-12 w-12" strokeWidth={1.5} aria-hidden="true" />
             <p className="text-[15px]">暂无账单</p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-[14px] bg-white dark:bg-[#232529]">
-            {bills.map((b, i) => (
-              <div key={b.id} className={`flex h-14 items-center gap-3 px-4 ${i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.05]' : ''}`}>
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-black/[0.05] text-black/55 dark:bg-white/[0.08] dark:text-white/55" aria-hidden="true">
-                  {b.amount >= 0 ? <Banknote className="h-4 w-4" strokeWidth={1.8} /> : <PiggyBank className="h-4 w-4" strokeWidth={1.8} />}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[15px] text-[#1F2329] dark:text-white">{b.title}</p>
-                  <p className="text-[12px] text-black/35 dark:text-white/35">{fmtTime(b.ts)}</p>
+          groups.map(([key, list]) => {
+            const [y, m] = key.split('-');
+            return (
+              <div key={key}>
+                {/* 月分隔带 + 组头 */}
+                <div className="h-[10px] bg-[#EFEFF4] dark:bg-[#1D1E22]" aria-hidden="true" />
+                <div className="flex items-baseline gap-2 bg-white px-4 pb-1 pt-4 dark:bg-[#232529]">
+                  <span className="text-[26px] font-semibold leading-none text-[#1F2329] dark:text-white">{Number(m) + 1}月</span>
+                  <span className="text-[14px] text-black/40 dark:text-white/45">{y}年</span>
                 </div>
-                <span className={`shrink-0 text-[15px] font-medium ${b.amount >= 0 ? 'text-[#2FBF71]' : 'text-[#1F2329] dark:text-white'}`}>
-                  {b.amount >= 0 ? '+' : '-'}
-                  {fmtMoney(Math.abs(b.amount))}
-                </span>
+                <div className="bg-white dark:bg-[#232529]">
+                  {list.map((b, i) => (
+                    <div
+                      key={b.id}
+                      data-testid="qq-bill-item"
+                      className={`relative ml-[74px] flex items-center gap-3 py-[13px] pr-4 ${i > 0 ? 'border-t border-black/[0.05] dark:border-white/[0.06]' : ''}`}
+                    >
+                      {/* 左侧圆形图标（头像/红包/Q币），绝对定位在缩进区（与真机一致：分隔线不穿过图标） */}
+                      <span className="absolute -left-[74px] top-1/2 flex h-[46px] w-[74px] -translate-y-1/2 items-center justify-center pl-4" aria-hidden="true">
+                        <QQBillEntryIcon b={b} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[16.5px] text-[#1F2329] dark:text-white">{b.title}</p>
+                        <p className="mt-1 text-[13.5px] text-black/35 dark:text-white/40">{fmtTime(b.ts)}</p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className={`text-[16.5px] font-semibold ${b.amount >= 0 ? 'text-[#2FBF71]' : 'text-[#1F2329] dark:text-white'}`}>
+                          {b.amount >= 0 ? '+' : '-'}
+                          {fmtMoney(Math.abs(b.amount))}元
+                        </p>
+                        {b.refund !== undefined && <p className="mt-0.5 text-[12.5px] leading-none text-[#F5544D]">已退款{fmtMoney(b.refund)}元</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
+            );
+          })
         )}
       </div>
+
+      {/* 选择账单类型底部弹层 */}
+      {typeSheet && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" role="dialog" aria-label="选择账单类型" onClick={() => setTypeSheet(false)}>
+          <div className="rounded-t-[16px] bg-white px-4 pb-8 pt-4 dark:bg-[#232529]" onClick={(e) => e.stopPropagation()} data-testid="qq-bills-type-sheet">
+            <div className="relative flex items-center justify-center">
+              <button
+                type="button"
+                aria-label="关闭"
+                onClick={() => setTypeSheet(false)}
+                className="absolute left-1 grid h-8 w-8 place-items-center rounded-full bg-black/[0.05] dark:bg-white/[0.08]"
+              >
+                <X className="h-4 w-4" strokeWidth={2.2} />
+              </button>
+              <p className="text-[18px] font-medium">选择账单类型</p>
+            </div>
+            <div className="mt-5 grid grid-cols-3 gap-3">
+              {QQ_BILL_TYPES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  data-testid={`qq-bills-type-${t}`}
+                  onClick={() => {
+                    setBillType(t);
+                    setTypeSheet(false);
+                  }}
+                  className={`grid h-[52px] place-items-center rounded-[10px] border text-[16px] ${
+                    billType === t ? 'border-[#1B9FF0] bg-[#1B9FF0] text-white' : 'border-black/[0.08] bg-white text-[#1F2329] dark:border-white/[0.1] dark:bg-[#2A2C31] dark:text-white'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 月份选择底部弹层 */}
+      {monthSheet && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" role="dialog" aria-label="选择月份" onClick={() => setMonthSheet(false)}>
+          <div className="max-h-[55%] overflow-y-auto rounded-t-[16px] bg-white px-3 pb-8 pt-4 dark:bg-[#232529]" onClick={(e) => e.stopPropagation()}>
+            <p className="pb-2 text-center text-[17px] font-medium">选择月份</p>
+            {monthOptions.map((label) => {
+              const key = label === '全部' ? 'all' : (monthKeys.find((k) => `${k.split('-')[0]}年${Number(k.split('-')[1]) + 1}月` === label) ?? 'all');
+              const selected = (month === 'all' && label === '全部') || month === key;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    setMonth(key);
+                    setMonthSheet(false);
+                  }}
+                  className={`flex h-12 w-full items-center justify-between rounded-[8px] px-4 text-[16px] active:bg-black/[0.05] ${selected ? 'text-[#1B9FF0]' : 'text-[#1F2329] dark:text-white'}`}
+                >
+                  {label}
+                  {selected && <Check className="h-5 w-5" strokeWidth={2.2} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -13395,7 +13632,7 @@ function WalletPage({ me, onBack, onToast }: { me: QQUser; onBack: () => void; o
       );
       break;
     case 'bills':
-      page = <BillsPage bills={bills} onBack={() => setRoute('balance')} />;
+      page = <BillsPage bills={bills} onBack={() => setRoute('balance')} onToast={onToast} />;
       break;
     case 'paysettings':
       page = <PaySettingsPage onBack={() => setRoute(payFrom)} onToast={onToast} />;

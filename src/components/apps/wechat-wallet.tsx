@@ -29,6 +29,7 @@ import {
   Navigation,
   Plus,
   ScanLine,
+  Search,
   ShieldCheck,
   ShoppingBag,
   ShoppingBasket,
@@ -62,10 +63,18 @@ export interface WxCard {
 
 interface WxBill {
   id: string;
-  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款';
+  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款';
   amount: number; // 正 = 零钱增加
   time: number;
+  /** 对方名（红包/转账/亲属卡条目标题与头像解析用；旧数据/群场景缺省） */
+  peer?: string;
+  /** 对方头像（dataURL；转账条目显示对方头像，缺省用图标兕底） */
+  avatar?: string | null;
+  /** 原支出条目已被退款（账单页金额下方红色「对方已退还/已全额退款」标注） */
+  refunded?: boolean;
 }
+
+export type WxBillKind = WxBill['kind'];
 
 interface WxLcq {
   balance: number;
@@ -147,7 +156,15 @@ function loadBills(): WxBill[] {
   if (!Array.isArray(list)) return [];
   return list
     .filter((b) => b && typeof b.kind === 'string' && typeof b.amount === 'number' && typeof b.time === 'number')
-    .map((b) => ({ id: typeof b.id === 'string' ? b.id : uid(), kind: b.kind as WxBill['kind'], amount: b.amount as number, time: b.time as number }));
+    .map((b) => ({
+      id: typeof b.id === 'string' ? b.id : uid(),
+      kind: b.kind as WxBill['kind'],
+      amount: b.amount as number,
+      time: b.time as number,
+      peer: typeof b.peer === 'string' ? b.peer : undefined,
+      avatar: typeof b.avatar === 'string' ? b.avatar : null,
+      refunded: b.refunded === true,
+    }));
 }
 
 function loadLcq(): WxLcq {
@@ -884,7 +901,7 @@ function WalletPage({
   /** 我收到的亲属卡张数（收到的卡也直接进管理页，无需先赠送） */
   familyInCount: number;
   onBack: () => void;
-  onOpen: (v: 'change' | 'lcq' | 'cards' | 'fcIntro' | 'fcManage' | 'paySettings') => void;
+  onOpen: (v: 'change' | 'lcq' | 'cards' | 'fcIntro' | 'fcManage' | 'paySettings' | 'bill') => void;
   onToast: (m: string) => void;
 }) {
   const row = (
@@ -911,7 +928,16 @@ function WalletPage({
   );
   return (
     <div className="relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-wallet-page">
-      <WxNav title="钱包" onBack={onBack} testId="wx-wallet-back" right={<button type="button" aria-label="更多" onClick={() => onToast('更多功能暂未开放')}><MoreDots /></button>} />
+      <WxNav
+        title="钱包"
+        onBack={onBack}
+        testId="wx-wallet-back"
+        right={
+          <button type="button" data-testid="wx-wallet-bill-link" onClick={() => onOpen('bill')} className="text-[15px] active:opacity-50">
+            账单
+          </button>
+        }
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-3">
         <div className="overflow-hidden rounded-[12px] bg-white dark:bg-[#1A1A1A]">
           {row(
@@ -1038,7 +1064,9 @@ function BillIcon({ kind }: { kind: WxBill['kind'] }) {
     转入零钱通: ['#F7A500', <Gem key="i" className="h-4 w-4" strokeWidth={2.2} />],
     零钱通转出: ['#8E8E93', <Gem key="i" className="h-4 w-4" strokeWidth={2.2} />],
     红包: ['#F04A3A', <Heart key="i" className="h-4 w-4" strokeWidth={2.2} />],
+    红包退款: ['#F04A3A', <Heart key="i" className="h-4 w-4" strokeWidth={2.2} />],
     转账: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
+    转账退款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
     亲属卡付款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
   };
   const [color, icon] = map[kind];
@@ -1078,6 +1106,639 @@ function ChangeDetailPage({ bills, onBack }: { bills: WxBill[]; onBack: () => vo
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------- 账单页（钱包页右上角「账单」：筛选行 + 月份汇总 + 平铺列表 + 选择筛选项弹层） ----------------
+
+/** 红包封套小图标（圆底白色红包封，微信/QQ 账单红包条目统一用） */
+export function RedPacketGlyph({ size = 20, bg = '#FA5151', fg = '#F26D3D' }: { size?: number; bg?: string; fg?: string }) {
+  return (
+    <span
+      className="flex shrink-0 items-center justify-center rounded-full"
+      style={{ width: size, height: size, backgroundColor: bg }}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 24 24" style={{ width: size * 0.62, height: size * 0.62 }}>
+        <rect x="4.5" y="3" width="15" height="18" rx="2.4" fill="#fff" />
+        <path d="M4.5 7.2c4.4 3.6 10.6 3.6 15 0" stroke={fg} strokeWidth="1.6" fill="none" strokeLinecap="round" />
+        <circle cx="12" cy="11.6" r="1.8" fill={fg} />
+      </svg>
+    </span>
+  );
+}
+
+/** 账单条目展示标题（对齐真机：「微信红包-发给X」「转账-转给X」「转账-退款」…） */
+function wxBillDisplayTitle(b: WxBill): string {
+  const peer = b.peer || '对方';
+  switch (b.kind) {
+    case '红包':
+      return b.amount >= 0 ? `微信红包-来自${peer}` : `微信红包-发给${peer}`;
+    case '红包退款':
+      return '微信红包-退款';
+    case '转账':
+      return b.amount >= 0 ? `转账-来自${peer}` : `转账-转给${peer}`;
+    case '转账退款':
+      return '转账-退款';
+    case '亲属卡付款':
+      return `亲属卡-付款给${peer}`;
+    default:
+      return b.kind;
+  }
+}
+
+/** 账单时间（对齐真机「9月27日 07:34」补零格式） */
+function wxBillWhen(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 月份键（'2026-8'）与文案（'2026年9月'）互转 */
+const billMonthKey = (ts: number): string => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}`;
+};
+const billMonthLabel = (key: string): string => {
+  const [y, m] = key.split('-');
+  return `${y}年${Number(m) + 1}月`;
+};
+
+/** 账单条目左侧圆形图标：红包=橙红红包封；转账=对方头像；其余沿用零钱明细色板 */
+function WxBillEntryIcon({ b }: { b: WxBill }) {
+  if (b.kind === '红包' || b.kind === '红包退款') return <RedPacketGlyph size={40} bg="#F26D3D" fg="#F26D3D" />;
+  if ((b.kind === '转账' || b.kind === '转账退款') && b.avatar) return <MiniAvatar src={b.avatar} alt={b.peer || '对方'} size={40} />;
+  const map: Record<WxBill['kind'], [string, React.ReactNode]> = {
+    充值: ['#07C160', <Plus key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    提现: ['#4D9CF8', <WalletIcon key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    转入零钱通: ['#F7A500', <Gem key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    零钱通转出: ['#8E8E93', <Gem key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    红包: ['#F26D3D', <RedPacketGlyph key="i" size={36} bg="transparent" fg="#F26D3D" />],
+    红包退款: ['#F26D3D', <RedPacketGlyph key="i" size={36} bg="transparent" fg="#F26D3D" />],
+    转账: ['#4D9CF8', <ArrowLeftRight key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    转账退款: ['#4D9CF8', <ArrowLeftRight key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    亲属卡付款: ['#F7A500', <Heart key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+  };
+  const [color, icon] = map[b.kind];
+  return (
+    <span
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+      style={{ backgroundColor: `${color}1A`, color }}
+      aria-hidden="true"
+    >
+      {icon}
+    </span>
+  );
+}
+
+/** 选择筛选项底部弹层（收支类型 + 交易类型 + 取消/确定） */
+type BillIOFilter = '全部' | '支出' | '收入';
+type BillSceneFilter = '全部' | '红包' | '转账' | '群收款' | '二维码收付款' | '商户消费' | '充值提现' | '信用卡还款' | '有退款';
+const BILL_SCENES: BillSceneFilter[] = ['全部', '红包', '转账', '群收款', '二维码收付款', '商户消费', '充值提现', '信用卡还款', '有退款'];
+
+function FilterChip({ label, on }: { label: string; on: boolean }) {
+  return (
+    <span
+      className={`grid h-[50px] place-items-center rounded-[6px] text-[16px] ${
+        on ? 'bg-[#E8F8EE] text-[#07C160] dark:bg-[#0E3A20]' : 'bg-[#F7F7F7] text-black dark:bg-[#2A2A2A] dark:text-white'
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function WxBillFilterSheet({
+  io,
+  scene,
+  onClose,
+  onApply,
+}: {
+  io: BillIOFilter;
+  scene: BillSceneFilter;
+  onClose: () => void;
+  onApply: (io: BillIOFilter, scene: BillSceneFilter) => void;
+}) {
+  const [dIo, setDIo] = useState<BillIOFilter>(io);
+  const [dScene, setDScene] = useState<BillSceneFilter>(scene);
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" role="dialog" aria-label="选择筛选项" onClick={onClose}>
+      <div className="rounded-t-[14px] bg-[#EDEDED] px-5 pb-6 pt-6 dark:bg-[#1C1C1C]" onClick={(e) => e.stopPropagation()} data-testid="wx-bill-filter-sheet">
+        <p className="text-[20px] font-medium">选择筛选项</p>
+        <p className="mt-6 text-[13px] text-black/45 dark:text-white/45">收支类型</p>
+        <div className="mt-2 grid grid-cols-3 gap-3">
+          {(['全部', '支出', '收入'] as BillIOFilter[]).map((x) => (
+            <button key={x} type="button" onClick={() => setDIo(x)}>
+              <FilterChip label={x} on={dIo === x} />
+            </button>
+          ))}
+        </div>
+        <p className="mt-5 text-[13px] text-black/45 dark:text-white/45">交易类型</p>
+        <div className="mt-2 grid grid-cols-3 gap-3">
+          {BILL_SCENES.map((x) => (
+            <button key={x} type="button" onClick={() => setDScene(x)}>
+              <FilterChip label={x} on={dScene === x} />
+            </button>
+          ))}
+        </div>
+        <div className="mt-8 flex gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-[50px] flex-1 rounded-[6px] bg-white text-[16px] dark:bg-[#2A2A2A]"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="wx-bill-filter-ok"
+            onClick={() => onApply(dIo, dScene)}
+            className="h-[50px] flex-1 rounded-[6px] bg-[#07C160] text-[16px] font-medium text-white active:brightness-95"
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 月份/年份选择底部弹层（账单页月份切换、收支统计口径切换共用样式） */
+function WxBillMonthSheet({
+  title,
+  options,
+  selected,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  options: string[];
+  selected: string;
+  onPick: (v: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" role="dialog" aria-label={title} onClick={onClose}>
+      <div className="max-h-[60%] overflow-y-auto rounded-t-[14px] bg-[#EDEDED] px-3 pb-8 pt-4 dark:bg-[#1C1C1C]" onClick={(e) => e.stopPropagation()}>
+        <p className="px-2 pb-2 text-center text-[16px] font-medium">{title}</p>
+        {options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => {
+              onPick(opt);
+              onClose();
+            }}
+            className={`flex h-12 w-full items-center justify-between rounded-[8px] px-4 text-[16px] active:bg-black/[0.05] ${
+              opt === selected ? 'text-[#07C160]' : 'text-black dark:text-white'
+            }`}
+          >
+            {opt}
+            {opt === selected && <Check className="h-5 w-5" strokeWidth={2.2} />}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 账单页主体（×关闭 + 全部账单/查找交易/收支统计 + 月份汇总 + 平铺列表） */
+function WxBillPage({
+  bills,
+  onToast,
+  onClose,
+  onOpenStats,
+}: {
+  bills: WxBill[];
+  onToast: (m: string) => void;
+  onClose: () => void;
+  onOpenStats: () => void;
+}) {
+  /** 当前查看月份（'all'=全部月份；默认最新有账单的月份，对齐真机） */
+  const [month, setMonth] = useState<string>(() =>
+    bills.length > 0 ? bills.reduce((acc, b) => (billMonthKey(b.time) > acc ? billMonthKey(b.time) : acc), billMonthKey(bills[0].time)) : 'all'
+  );
+  const [monthSheet, setMonthSheet] = useState(false);
+  /** 已应用筛选（收支类型/交易类型） */
+  const [appliedIo, setAppliedIo] = useState<BillIOFilter>('全部');
+  const [appliedScene, setAppliedScene] = useState<BillSceneFilter>('全部');
+  const [filterSheet, setFilterSheet] = useState(false);
+  /** 查找交易 */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const monthKeys = Array.from(new Set(bills.map((b) => billMonthKey(b.time)))).sort((a, b) => b.localeCompare(a));
+  const monthOptions = ['全部月份', ...monthKeys.map(billMonthLabel)];
+  const monthFilter = (b: WxBill): boolean => month === 'all' || billMonthKey(b.time) === month;
+  const ioFilter = (b: WxBill): boolean => (appliedIo === '全部' ? true : appliedIo === '支出' ? b.amount < 0 : b.amount > 0);
+  const sceneFilter = (b: WxBill): boolean => {
+    switch (appliedScene) {
+      case '全部':
+        return true;
+      case '红包':
+        return b.kind === '红包' || b.kind === '红包退款';
+      case '转账':
+        return b.kind === '转账' || b.kind === '转账退款';
+      case '有退款':
+        return b.refunded === true || b.kind === '红包退款' || b.kind === '转账退款';
+      case '充值提现':
+        return b.kind === '充值' || b.kind === '提现' || b.kind === '转入零钱通' || b.kind === '零钱通转出';
+      default:
+        return false; // 群收款/二维码收付款/商户消费/信用卡还款：本机无此数据源
+    }
+  };
+  const searchFilter = (b: WxBill): boolean => !searchOpen || !search.trim() || wxBillDisplayTitle(b).includes(search.trim());
+
+  const shown = bills.filter((b) => monthFilter(b) && ioFilter(b) && sceneFilter(b) && searchFilter(b));
+  const outSum = shown.filter((b) => b.amount < 0).reduce((s, b) => s + b.amount, 0);
+  const inSum = shown.filter((b) => b.amount > 0).reduce((s, b) => s + b.amount, 0);
+  const monthCaret = month === 'all' ? '全部月份' : billMonthLabel(month);
+
+  return (
+    <div className="relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-bill-page">
+      {/* 顶栏：× 关闭 + 账单 + ··· */}
+      <div className="shrink-0 pt-[54px]">
+        <div className="relative flex h-11 items-center px-4">
+          <button type="button" aria-label="关闭账单" data-testid="wx-bill-close" onClick={onClose} className="active:opacity-50">
+            <X className="h-6 w-6" strokeWidth={2} />
+          </button>
+          <div className="flex-1 pr-8 text-center text-[17px] font-medium">账单</div>
+          <button type="button" aria-label="更多" onClick={() => onToast('更多功能暂未开放')} className="absolute right-4">
+            <MoreDots />
+          </button>
+        </div>
+      </div>
+
+      {/* 过滤行：全部账单 ▾ | 查找交易 | 收支统计 › */}
+      <div className="flex shrink-0 items-center gap-2 px-4 pb-1 pt-3">
+        <button
+          type="button"
+          data-testid="wx-bill-filter-open"
+          onClick={() => setFilterSheet(true)}
+          className="flex h-[36px] items-center gap-1 rounded-full bg-white px-4 text-[15px] dark:bg-[#1E1E1E]"
+        >
+          {appliedIo === '全部' && appliedScene === '全部' ? '全部账单' : `${appliedIo === '全部' ? '' : appliedIo + ' '}${appliedScene}`}
+          <svg viewBox="0 0 12 8" className="h-2 w-3" aria-hidden="true">
+            <path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          data-testid="wx-bill-search-open"
+          onClick={() => setSearchOpen((v) => !v)}
+          className="flex h-[36px] items-center gap-1.5 rounded-full bg-white px-4 text-[15px] dark:bg-[#1E1E1E]"
+        >
+          <Search className="h-[15px] w-[15px] text-black/45 dark:text-white/45" strokeWidth={2.2} />
+          查找交易
+        </button>
+        <span className="flex-1" />
+        <button type="button" data-testid="wx-bill-stats-link" onClick={onOpenStats} className="flex items-center text-[15px] active:opacity-60">
+          收支统计
+          <ChevronRight className="h-4 w-4" strokeWidth={2.2} />
+        </button>
+      </div>
+
+      {/* 查找交易输入行（内联展开） */}
+      {searchOpen && (
+        <div className="flex shrink-0 items-center gap-2 px-4 pb-1 pt-1.5">
+          <div className="flex h-[36px] flex-1 items-center gap-2 rounded-full bg-white px-4 dark:bg-[#1E1E1E]">
+            <Search className="h-[15px] w-[15px] shrink-0 text-black/40 dark:text-white/40" strokeWidth={2.2} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="输入关键词，如「红包」或对方昵称"
+              className="h-full w-full bg-transparent text-[15px] outline-none placeholder:text-black/30 dark:placeholder:text-white/30"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setSearchOpen(false);
+            }}
+            className="text-[15px] active:opacity-60"
+          >
+            取消
+          </button>
+        </div>
+      )}
+
+      {/* 月份行：月份 ▾ + 当月收支汇总 */}
+      <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-2">
+        <button type="button" data-testid="wx-bill-month" onClick={() => setMonthSheet(true)} className="flex items-center gap-1 text-[17px] font-medium">
+          {monthCaret}
+          <svg viewBox="0 0 12 8" className="h-2 w-3" aria-hidden="true">
+            <path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <p className="text-[14.5px]">
+          支出 <span className="font-medium">{fmtMoney(Math.abs(outSum))}</span>
+          <span className="ml-3">
+            收入 <span className="font-medium">{fmtMoney(inSum)}</span>
+          </span>
+        </p>
+      </div>
+
+      {/* 平铺列表 */}
+      <div className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-[#1A1A1A]">
+        {shown.length === 0 ? (
+          <p className="pt-24 text-center text-[14px] text-black/35 dark:text-white/35">该条件下暂无账单</p>
+        ) : (
+          shown.map((b, i) => {
+            const refundLabel = b.refunded ? (b.kind === '红包' ? '已全额退款' : '对方已退还') : null;
+            return (
+              <div
+                key={b.id}
+                data-testid="wx-bill-item"
+                className={`relative flex items-center gap-3 px-4 py-[11px] ${i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.06]' : ''}`}
+              >
+                <WxBillEntryIcon b={b} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[15.5px]">{wxBillDisplayTitle(b)}</p>
+                  <p className="mt-0.5 text-[12.5px] text-black/40 dark:text-white/40">{wxBillWhen(b.time)}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className={`text-[16px] font-medium ${b.amount >= 0 ? 'text-[#F5A623]' : ''}`}>
+                    {b.amount >= 0 ? '+' : '-'}
+                    {fmtMoney(Math.abs(b.amount))}
+                  </p>
+                  {refundLabel && <p className="mt-0.5 text-[11.5px] leading-none text-[#FA5151]">{refundLabel}</p>}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {filterSheet && (
+        <WxBillFilterSheet
+          io={appliedIo}
+          scene={appliedScene}
+          onClose={() => setFilterSheet(false)}
+          onApply={(io, scene) => {
+            setAppliedIo(io);
+            setAppliedScene(scene);
+            setFilterSheet(false);
+          }}
+        />
+      )}
+      {monthSheet && (
+        <WxBillMonthSheet
+          title="选择月份"
+          options={monthOptions}
+          selected={monthCaret}
+          onPick={(label) =>
+            setMonth(label === '全部月份' ? 'all' : (monthKeys.find((k) => billMonthLabel(k) === label) ?? 'all'))
+          }
+          onClose={() => setMonthSheet(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------- 收支统计页（账单页「收支统计」入口：绿色头部 + 月/年账单 + 每月支出对比柱状图 + 当月支出构成） ----------------
+
+type BillTab = 'month' | 'year';
+type BillMetric = '支出' | '收入' | '其他';
+
+/** 支出构成行定义：名称 + 图标 + 进度条颜色 */
+interface BillBreakdownRow {
+  name: string;
+  total: number;
+  color: string;
+  icon: React.ReactNode;
+}
+
+function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast: (m: string) => void; onClose: () => void }) {
+  const [tab, setTab] = useState<BillTab>('month');
+  const [metric, setMetric] = useState<BillMetric>('支出');
+  /** 月账单选中的月份键 / 年账单选中的年份 */
+  const [monthKey, setMonthKey] = useState<string>(() =>
+    bills.length > 0 ? bills.reduce((acc, b) => (billMonthKey(b.time) > acc ? billMonthKey(b.time) : acc), billMonthKey(bills[0].time)) : billMonthKey(Date.now())
+  );
+  const [yearKey, setYearKey] = useState<string>(() => monthKey.split('-')[0]);
+  const [picker, setPicker] = useState<null | { kind: BillTab }>(null);
+
+  const metricFilter = (b: WxBill): boolean => {
+    if (metric === '支出') return b.amount < 0;
+    if (metric === '收入') return b.amount > 0 && b.kind !== '红包退款' && b.kind !== '转账退款';
+    return b.amount > 0 && (b.kind === '红包退款' || b.kind === '转账退款'); // 其他 = 退款
+  };
+
+  /** 头部合计：月账单=选中月；年账单=选中年 */
+  const scoped = bills.filter((b) => (tab === 'month' ? billMonthKey(b.time) === monthKey : billMonthKey(b.time).split('-')[0] === yearKey));
+  const counted = scoped.filter(metricFilter);
+  const total = Math.abs(counted.reduce((s, b) => s + b.amount, 0));
+  const metricWord = metric === '其他' ? '其他' : metric;
+
+  /** 柱状图数据：月账单=最近 6 个月（含选中月）；年账单=选中年 12 个月；固定展示支出对比 */
+  const barMonths = (() => {
+    if (tab === 'year') {
+      const list: Array<{ key: string; label: string }> = [];
+      for (let m = 0; m < 12; m++) list.push({ key: `${yearKey}-${m}`, label: `${m + 1}月` });
+      return list;
+    }
+    const [y, m] = monthKey.split('-').map(Number);
+    const list: Array<{ key: string; label: string }> = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(y, m - i, 1);
+      list.push({ key: `${d.getFullYear()}-${d.getMonth()}`, label: `${d.getMonth() + 1}月` });
+    }
+    return list;
+  })();
+  const barData = barMonths.map(({ key, label }) => ({
+    key,
+    label,
+    value: Math.abs(bills.filter((b) => billMonthKey(b.time) === key && b.amount < 0).reduce((s, b) => s + b.amount, 0)),
+  }));
+  const barMax = Math.max(...barData.map((d) => d.value), 0.01);
+
+  /** 构成：按类别聚合（支出=支出类别；收入=收款类别；其他=退款） */
+  const breakdown = (() => {
+    const rows: BillBreakdownRow[] = [];
+    const sumKind = (kinds: WxBill['kind'][], sign: 1 | -1) =>
+      Math.abs(counted.filter((b) => kinds.includes(b.kind) && (sign === 1 ? b.amount > 0 : b.amount < 0)).reduce((s, b) => s + b.amount, 0));
+    if (metric === '支出') {
+      const defs: Array<{ name: string; kinds: WxBill['kind'][]; color: string; icon: React.ReactNode }> = [
+        { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+        { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={36} bg="transparent" fg="#F26D3D" /> },
+        { name: '亲属卡', kinds: ['亲属卡付款'], color: '#F7A500', icon: <Heart className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+        { name: '零钱通', kinds: ['转入零钱通', '零钱通转出'], color: '#F7A500', icon: <Gem className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+        { name: '充值', kinds: ['充值'], color: '#07C160', icon: <Plus className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+        { name: '提现', kinds: ['提现'], color: '#4D9CF8', icon: <WalletIcon className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+      ];
+      for (const d of defs) {
+        const total_ = sumKind(d.kinds, -1);
+        if (total_ > 0) rows.push({ name: d.name, total: total_, color: d.color, icon: d.icon });
+      }
+    } else {
+      const defs: Array<{ name: string; kinds: WxBill['kind'][]; color: string; icon: React.ReactNode }> = [
+        { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={36} bg="transparent" fg="#F26D3D" /> },
+        { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[17px] w-[17px]" strokeWidth={2.2} /> },
+        { name: '退款', kinds: ['红包退款', '转账退款'], color: '#F5A623', icon: <RedPacketGlyph size={36} bg="transparent" fg="#F5A623" /> },
+      ];
+      for (const d of defs) {
+        const total_ = sumKind(d.kinds, 1);
+        if (total_ > 0) rows.push({ name: d.name, total: total_, color: d.color, icon: d.icon });
+      }
+    }
+    return rows.sort((a, b) => b.total - a.total);
+  })();
+  const breakdownMax = Math.max(...breakdown.map((r) => r.total), 0.01);
+
+  /** 年份选项（出现过年份 + 当前年） */
+  const yearOptions = Array.from(new Set([...bills.map((b) => billMonthKey(b.time).split('-')[0]), String(new Date().getFullYear())])).sort((a, b) => b.localeCompare(a));
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-white text-black dark:bg-[#111111] dark:text-white" data-testid="wx-bill-stats-page">
+      {/* 绿色头部 */}
+      <div className="relative shrink-0 bg-[#07C160] pb-16 text-white">
+        <span aria-hidden="true" className="pointer-events-none absolute -right-6 top-24 h-40 w-56 rotate-[-14deg] rounded-[22px] bg-white/10" />
+        <span aria-hidden="true" className="pointer-events-none absolute -right-10 top-40 h-24 w-40 rotate-[8deg] rounded-[18px] bg-white/10" />
+        <div className="relative pt-[54px]">
+          <div className="relative flex h-11 items-center px-5">
+            <button type="button" aria-label="关闭收支统计" data-testid="wx-bill-stats-close" onClick={onClose} className="active:opacity-50">
+              <X className="h-6 w-6" strokeWidth={2} />
+            </button>
+          </div>
+          {/* 月账单 / 年账单 tab */}
+          <div className="mt-1 flex items-center justify-center gap-10">
+            {(['month', 'year'] as BillTab[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                data-testid={`wx-bill-stats-tab-${t}`}
+                onClick={() => setTab(t)}
+                className={`relative pb-2 text-[19px] font-medium ${tab === t ? 'text-white' : 'text-white/60'}`}
+              >
+                {t === 'month' ? '月账单' : '年账单'}
+                {tab === t && <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-full bg-white" aria-hidden="true" />}
+              </button>
+            ))}
+          </div>
+          {/* 月份/年份 + 口径胶囊 */}
+          <div className="mt-6 flex items-center justify-between px-5">
+            <button
+              type="button"
+              data-testid="wx-bill-stats-month"
+              onClick={() => setPicker({ kind: tab })}
+              className="flex items-center gap-1.5 text-[21px] font-medium"
+            >
+              {tab === 'month' ? billMonthLabel(monthKey) : `${yearKey}年`}
+              <svg viewBox="0 0 12 8" className="h-2 w-3" aria-hidden="true">
+                <path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+            <div className="flex items-center gap-2">
+              {(['支出', '收入', '其他'] as BillMetric[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMetric(m)}
+                  className={`rounded-full px-3.5 py-[3px] text-[14px] ${
+                    metric === m ? 'border border-white/85 text-white' : 'text-white/70'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* 合计 */}
+          <div className="px-5 pt-5">
+            <p className="text-[13.5px] text-white/85">
+              共{metricWord}
+              {counted.length}笔，合计
+            </p>
+            <p className="mt-1 text-[50px] font-medium leading-tight" data-testid="wx-bill-stats-total">
+              ¥ {fmtMoney(total)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* 白色面板：记账本 + 每月支出对比 + 当期支出构成 */}
+      <div className="relative -mt-12 min-h-0 flex-1 overflow-y-auto rounded-t-[16px] bg-white pb-10 dark:bg-[#1A1A1A]">
+        <button
+          type="button"
+          onClick={() => onToast('记账本暂未开放')}
+          className="mx-4 mt-4 flex w-[calc(100%-32px)] items-center gap-3 rounded-[10px] bg-[#F6F6F6] px-4 py-4 text-left active:bg-black/[0.04] dark:bg-[#242424] dark:active:bg-white/[0.06]"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#07C160] text-white" aria-hidden="true">
+            <Check className="h-[18px] w-[18px]" strokeWidth={2.4} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[15px]">使用记账本，查看分类统计(餐饮、交通等)</span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} />
+        </button>
+
+        <p className="mt-7 px-4 text-[17px] font-medium">{tab === 'month' ? '每月支出对比' : '每月支出对比'}</p>
+        <div className="mt-3 flex h-[186px] items-end justify-between border-b border-black/[0.06] px-3 dark:border-white/[0.08]">
+          {barData.map((d) => {
+            const h = d.value <= 0 ? 3 : Math.max(6, Math.round((d.value / barMax) * 128));
+            const cur = tab === 'month' ? d.key === monthKey : d.key === monthKey;
+            return (
+              <div key={d.key} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
+                <span className={`text-[10.5px] leading-none ${cur ? 'font-medium text-[#07C160]' : 'text-[#9CCFAD]'}`}>{fmtMoney(d.value)}</span>
+                <span className="w-[22px] rounded-[3px]" style={{ height: h, backgroundColor: cur ? '#07C160' : '#C9E9D4' }} aria-hidden="true" />
+                <span className="truncate text-[12px] text-black/40 dark:text-white/40">{d.label}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="mt-8 px-4 text-[17px] font-medium">
+          {tab === 'month' ? '当月' : '当年'}
+          {metric === '其他' ? '其他' : metric}构成
+        </p>
+        {breakdown.length === 0 ? (
+          <p className="px-4 py-8 text-center text-[14px] text-black/35 dark:text-white/35">暂无{metric === '其他' ? '其他' : metric}数据</p>
+        ) : (
+          <div className="mt-1">
+            {breakdown.map((r) => (
+              <button
+                key={r.name}
+                type="button"
+                onClick={() => onToast('分类明细暂未开放')}
+                className="flex w-full items-center gap-3 border-t border-black/[0.05] px-4 py-4 text-left first:border-t-0 dark:border-white/[0.07]"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ color: r.color }} aria-hidden="true">
+                  {r.icon}
+                </span>
+                <span className="w-[68px] shrink-0 truncate text-[15.5px]">{r.name}</span>
+                <span className="h-[6px] min-w-0 flex-1 rounded-full bg-black/[0.06] dark:bg-white/[0.1]" aria-hidden="true">
+                  <span
+                    className="block h-full rounded-full"
+                    style={{ width: `${Math.max(4, Math.round((r.total / breakdownMax) * 100))}%`, backgroundColor: r.color }}
+                  />
+                </span>
+                <span className="shrink-0 text-[16px] font-medium">¥{fmtMoney(r.total)}</span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2.2} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {picker && (
+        <WxBillMonthSheet
+          title={picker.kind === 'month' ? '选择月份' : '选择年份'}
+          options={picker.kind === 'month' ? Array.from(new Set([...bills.map((b) => billMonthLabel(billMonthKey(b.time))), billMonthLabel(monthKey)])) : yearOptions.map((y) => `${y}年`)}
+          selected={picker.kind === 'month' ? billMonthLabel(monthKey) : `${yearKey}年`}
+          onPick={(label) => {
+            if (picker.kind === 'month') {
+              const hit = Array.from(new Set(bills.map((b) => billMonthKey(b.time)))).find((k) => billMonthLabel(k) === label);
+              if (hit) {
+                setMonthKey(hit);
+                setYearKey(hit.split('-')[0]);
+              }
+            } else {
+              setYearKey(label.replace(/年$/, ''));
+            }
+          }}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2155,7 +2816,7 @@ function FcLedgerSheet({ card, onClose }: { card: WxFamilyCardIn; onClose: () =>
 
 // ---------------- 页面栈 ----------------
 
-type View = 'home' | 'wallet' | 'change' | 'changeDetail' | 'lcq' | 'cards' | 'cardDetail' | 'fcIntro' | 'fcPick' | 'fcSetup' | 'fcManage' | 'paySettings';
+type View = 'home' | 'wallet' | 'change' | 'changeDetail' | 'lcq' | 'cards' | 'cardDetail' | 'fcIntro' | 'fcPick' | 'fcSetup' | 'fcManage' | 'paySettings' | 'bill' | 'billStats';
 
 export function WxServices({ friends, myRealName, onExit }: { friends: ContactRecord[]; myRealName: string; onExit: () => void }) {
   const [view, setView] = useState<View>('home');
@@ -2372,6 +3033,8 @@ export function WxServices({ friends, myRealName, onExit }: { friends: ContactRe
         />
       )}
       {view === 'changeDetail' && <ChangeDetailPage bills={bills} onBack={() => setView(detailFrom)} />}
+      {view === 'bill' && <WxBillPage bills={bills} onToast={showToast} onClose={() => setView('wallet')} onOpenStats={() => setView('billStats')} />}
+      {view === 'billStats' && <WxBillStatsPage bills={bills} onToast={showToast} onClose={() => setView('bill')} />}
       {view === 'lcq' && (
         <ChangePlusPage
           lcq={lcq}
