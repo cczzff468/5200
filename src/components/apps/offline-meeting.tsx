@@ -590,6 +590,8 @@ interface SettingsPanelProps {
   /** 重新分析世界背景（清缓存 → 再分析 → 见面中同步更新本次见面） */
   onRefreshWorldBg: () => void;
   bgRefreshing: boolean;
+  /** 放弃这次见面（仅见面中提供；无见面时不传） */
+  onAbandon?: () => void;
   onCreatePreset: (name: string, template: string) => string;
   onSavePreset: (id: string, template: string) => void;
   onDeletePreset: (id: string) => void;
@@ -597,9 +599,10 @@ interface SettingsPanelProps {
   onDeleteStyle: (id: string) => void;
 }
 
-function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, availableCount, onClose, onCommit, onRefreshWorldBg, bgRefreshing, onCreatePreset, onSavePreset, onDeletePreset, onCreateStyle, onDeleteStyle }: SettingsPanelProps) {
+function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, availableCount, onClose, onCommit, onRefreshWorldBg, bgRefreshing, onAbandon, onCreatePreset, onSavePreset, onDeletePreset, onCreateStyle, onDeleteStyle }: SettingsPanelProps) {
   const [d, setD] = useState<OfflineMeetSettings>({ ...initial });
   const [tplDraft, setTplDraft] = useState(tpl);
+  const [abandonConfirm, setAbandonConfirm] = useState(false);
   const [carrySel, setCarrySel] = useState<number | 'custom'>(() =>
     (OFFLINE_CARRY_OPTIONS as readonly number[]).includes(initial.carryCount) ? initial.carryCount : 'custom',
   );
@@ -1051,6 +1054,42 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
             重新分析
           </button>
         </div>
+
+        {/* 放弃这次见面（危险区，仅见面中显示） */}
+        {meetActive && onAbandon ? (
+          <Card className="border-red-500/20 dark:border-red-400/15">
+            <FieldLabel title="放弃这次见面" hint="不写记忆、不进历史，直接清空当前进度；想保留请先用顶部 ★ 保存或新建存档" />
+            {abandonConfirm ? (
+              <div className="flex items-center gap-2">
+                <p className="min-w-0 flex-1 text-[12px] leading-[1.4] text-red-500/90 dark:text-red-400/90">当前进度会被清空且无法恢复，确认放弃？</p>
+                <button
+                  type="button"
+                  data-testid="offline-abandon-confirm"
+                  onClick={onAbandon}
+                  className="h-8 shrink-0 rounded-full bg-red-500/90 px-3.5 text-[12px] font-medium text-white shadow-sm active:opacity-80"
+                >
+                  确认放弃
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAbandonConfirm(false)}
+                  className={`h-8 shrink-0 rounded-full px-3.5 text-[12px] text-black/60 active:opacity-60 dark:text-white/60 ${GLASS_CAPSULE}`}
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                data-testid="offline-abandon"
+                onClick={() => setAbandonConfirm(true)}
+                className="flex h-10 w-full items-center justify-center rounded-full border border-red-500/25 bg-red-500/10 text-[13px] text-red-500 backdrop-blur-md active:opacity-60 dark:border-red-400/20 dark:text-red-400"
+              >
+                放弃这次见面
+              </button>
+            )}
+          </Card>
+        ) : null}
       </div>
 
       {/* 底部操作 */}
@@ -1096,6 +1135,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   const [starting, setStarting] = useState(false);
   const [gen, setGen] = useState<null | 'open' | 'next' | 'reroll'>(null);
   const genRef = useRef(false);
+  const startingRef = useRef(false);
   const meetRef = useRef<OfflineMeet | null>(null);
   const [input, setInput] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1195,7 +1235,9 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
         .filter((s) => s && s.trim())
         .join('\n\n');
       const mem = memRecallBlock(contactId, app, scanText);
-      const time = buildTimeAwareBlock({ lastMsgTime: m.lastOnlineTime ?? null, regionHint: contact.region || null });
+      // 时间感知锚点：见面已开场时用现场最后一条消息的时间（时间流随对话推进），未开场回落到承接的线上最后一条
+      const lastAt = m.entries.length ? m.entries[m.entries.length - 1].at : (m.lastOnlineTime ?? null);
+      const time = buildTimeAwareBlock({ lastMsgTime: lastAt, regionHint: contact.region || null });
       const directive = buildOfflineDirective({
         settings: m.settings,
         charPersonEff,
@@ -1359,15 +1401,23 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
   /** 开始见面：承接最近 N 条 → 世界背景 → 建会话 → 开场生成 */
   const startMeeting = useCallback(async () => {
-    if (starting || genRef.current || !contact) return;
+    if (starting || genRef.current || startingRef.current || !contact) return;
     const n = carryChoice === 'custom' ? Math.min(200, Math.max(5, Math.floor(Number(customN) || 20))) : carryChoice;
     setStarting(true);
+    startingRef.current = true;
     try {
       const msgs = loadRef.current(n);
-      const excerpt = msgs
+      const full = msgs
         .map((m) => `${m.role === 'me' ? userNameEff : shownName}：${m.text.trim()}`)
-        .join('\n')
-        .slice(0, 8000);
+        .join('\n');
+      // 承接超长时保留最新的 8000 字：消息是时间正序（最新在末尾），slice(-8000) 才不会把最新的截掉；
+      // 再切掉开头被截断的半行，保证承接文本从完整一行开始
+      let excerpt = full;
+      if (excerpt.length > 8000) {
+        excerpt = excerpt.slice(-8000);
+        const nl = excerpt.indexOf('\n');
+        if (nl >= 0) excerpt = excerpt.slice(nl + 1);
+      }
       const lastTime = msgs.length ? msgs[msgs.length - 1].time : null;
       const worldBg = await ensureWorldBg();
       const m: OfflineMeet = {
@@ -1390,6 +1440,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     } catch (e) {
       toastFn(e instanceof Error ? e.message : '开始失败，请重试');
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
   }, [starting, contact, carryChoice, customN, userNameEff, shownName, ensureWorldBg, contactId, app, setupSettings, runGen, toastFn]);
@@ -1400,6 +1451,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     if (!m) return;
     if (genRef.current) {
       toastFn('正在生成，请稍候再保存');
+      return;
+    }
+    if (!m.entries.length) {
+      toastFn('这次见面还没有内容，先聊几句再保存');
       return;
     }
     const digest = buildMeetDigest(m, userNameEff, shownName);
@@ -1414,6 +1469,22 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     setHistoryOpen(false);
     toastFn('已保存这次见面，已写入记忆');
   }, [contactId, app, userNameEff, shownName, toastFn]);
+
+  /** 放弃这次见面：不写记忆、不进历史，直接清空当前进度 */
+  const abandonMeeting = useCallback(() => {
+    if (genRef.current) {
+      toastFn('正在生成，请稍候再操作');
+      return;
+    }
+    clearMeet(contactId);
+    meetRef.current = null;
+    setMeet(null);
+    setEditing(null);
+    setRerollBackup(null);
+    setSettingsOpen(false);
+    setInput('');
+    toastFn('已放弃这次见面');
+  }, [contactId, toastFn]);
 
   const sendInput = useCallback(() => {
     const t = input.trim();
@@ -1495,6 +1566,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   /** 重新分析世界背景：清缓存 → 再分析 → 见面中同步更新本次见面 */
   const refreshWorldBg = useCallback(async () => {
     if (bgRefreshing) return;
+    if (genRef.current) {
+      toastFn('正在生成，请稍候再重新分析');
+      return;
+    }
     setBgRefreshing(true);
     try {
       saveWbBgCache(contactId, '');
@@ -1562,6 +1637,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
     (id: string) => {
       if (genRef.current) {
         toastFn('正在生成，请稍候再读档');
+        return;
+      }
+      if (startingRef.current) {
+        toastFn('正在准备见面，请稍候再读档');
         return;
       }
       const a = loadArchives(contactId).find((x) => x.id === id);
@@ -1651,6 +1730,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
   // —— 设置面板回调 ——
   const commitSettings = (s: OfflineMeetSettings, tpl: string) => {
+    if (genRef.current || startingRef.current) {
+      toastFn('正在生成或准备见面，请稍候再保存设置');
+      return;
+    }
     if (meetRef.current) {
       const next: OfflineMeet = { ...meetRef.current, settings: s, template: tpl };
       saveMeet(next);
@@ -2078,6 +2161,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
           onCommit={commitSettings}
           onRefreshWorldBg={() => void refreshWorldBg()}
           bgRefreshing={bgRefreshing}
+          onAbandon={abandonMeeting}
           onCreatePreset={createPreset}
           onSavePreset={savePreset}
           onDeletePreset={deletePreset}

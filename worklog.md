@@ -12502,3 +12502,24 @@ Stage Summary:
 - 线下模式新增存档系统：右上角 Archive 入口，7 项操作（新建/覆盖/读档/删除/重命名/导出/导入）全部落地并 E2E 验证；按角色隔离（offline-meet-archives:<contactId>），快照含整场见面（entries·场景·设置·世界背景·模板），导入跨设备/跨角色可用
 - 用户气泡灰色化完成，与 AI 玻璃卡形成浅/灰对比，动作灰字+对白样式不变
 - 产出文件：src/lib/offline-meet.ts、src/components/apps/offline-meeting.tsx
+
+---
+Task ID: 5
+Agent: Z.ai Code (main)
+Task: 线下模式规则二审（用户要求复查）——修复上次遗留 2 真 bug + 完善 4 项 + 竞态守卫
+
+Work Log:
+- 复查方法：git show 比对两次「全修」提交（e59b869/bd4215c 实际落地的是新功能与防复读系统）→ 通读 api/offline/route.ts、time-aware.ts、wechat.tsx loadRecentMsgs（确认消息为时间正序）→ 全链路再审
+- 修复①（真 bug·遗留）：承接聊天超 8000 字时 slice(0,8000) 保留最旧、截掉最新 → 改为 slice(-8000) 保留最新 + 切掉开头被截断的半行（消息时间正序，最新在末尾）
+- 修复②（真 bug·遗留）：默认字数区间 450~800 与回复字数 1500 矛盾（1500 被静默夹到 800）→ 默认区间改 300~3000（容纳 1500±20%），normalizeOfflineSettings 对旧默认组合（1500+450+800 未自定义）自动迁移新区间，已自定义的用户不受影响
+- 新增③：空见面不可再保存成空记忆 —— saveMeeting 在 entries 为空时拦截并提示
+- 新增④：「放弃这次见面」出口 —— 现场设置面板底部危险区卡片（红色描边 + 行内二次确认），不写记忆、不进历史、直接清空；开始页极简流形成闭环
+- 新增⑤：时间感知锚点改活 —— buildSystemPrompt 的 lastMsgTime 从固定 lastOnlineTime 改为「见面已开场取现场最后一条消息 at，未开场回落线上最后一条」，AI 感知的间隔随对话推进
+- 新增⑥：导演模式 × 自主推进强度提示词打架治理 —— buildOfflineDirective 按导演开/关分别生成 6 套自主推进口径（关+高=同场景大步推进不换景；开+低=可轻推但克制），两行指令不再互相矛盾
+- 竞态守卫：commitSettings 在生成/准备见面中拦截（防止 runGen 完成后用旧 settings 回写覆盖）；refreshWorldBg 生成中拦截（防 last-write-wins 回滚）；loadArchive 在 startingRef 期间拦截（防开场生成完成后覆盖读档结果）；startMeeting 增 startingRef 防重入
+- E2E 验证：设置面板「放弃这次见面」卡片渲染 → 放弃（toast + 回开始页）→ 开始页存档面板正确禁用新建/隐藏覆盖 → 无进度读档免确认直接恢复 12 条见面 → console 无错误；eslint 0 错误、tsc --noEmit 0 错误
+- 保持现状：世界背景缓存无 TTL（已有「重新分析」手动出口，自动过期会造成意外 API 消耗）
+
+Stage Summary:
+- 线下模式二审完成：上次清单遗留的 2 个真 bug（承接截断方向/字数默认矛盾）已修，另补空保存拦截、放弃见面出口、时间锚点活化、导演×自主推进口径治理、4 处竞态守卫
+- 产出文件：src/lib/offline-meet.ts、src/components/apps/offline-meeting.tsx

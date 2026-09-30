@@ -3,10 +3,11 @@
  *
  * 功能结构（「线下模式」需求）：
  * 1. 入口：QQ 输入栏五角星按钮 / 微信加号面板「线下」（原收藏位）/ 信息端输入栏加号；
- * 2. 点击进入线下场景，承接最近 N 条线上聊天（10/20/30/40/50/自定义）；
+ * 2. 点击进入线下场景，承接最近 N 条线上聊天（10/20/30/40/50/自定义；超长时保留最新内容）；
  * 3. 场景生成：地点 / 时间 / 环境 / 角色状态 / 对白，基于角色人设 + 世界书 + 最近聊天 + 记忆；
- * 4. 现场设置：回复字数（±20%）/ 承接条数 / 用户·角色叙述人称 / 回复预设 / 现场文风 /
- *    基础设置（字数区间·人称·导演模式·自主推进·修辞密度·描写占比·节奏）；
+ * 4. 现场设置：回复字数（±20%，硬夹进字数区间）/ 承接条数 / 用户·角色叙述人称 / 回复预设 / 现场文风 /
+ *    基础设置（字数区间·人称·导演模式·自主推进强度·修辞密度·描写占比·节奏）；
+ *    自主推进口径随导演模式开关自动换算，两行指令不打架；
  * 5. 变量系统：{{char_name}} 等 12 个变量在发送前由 renderTemplate 替换（含 {{last_reply}} 上一条角色回复）；
  *    生成时代码侧注入「续写要求」（显式传上一条回复 + 接续规则 + 追问定向回答），
  *    并带防复读检测：新回复与上一条高度相似/整段包含时，自动带强指令重试一次；
@@ -244,8 +245,9 @@ export const DEFAULT_OFFLINE_SETTINGS: OfflineMeetSettings = {
   charPerson: '他',
   presetId: OFFLINE_BUILTIN_PRESET_ID,
   styleId: OFFLINE_BUILTIN_STYLE_ID,
-  lenMin: 450,
-  lenMax: 800,
+  // 字数区间默认要能容纳回复字数 1500 ± 20%（1200~1800）：旧默认 450~800 会把 1500 静默夹到 800
+  lenMin: 300,
+  lenMax: 3000,
   person: 'auto',
   director: false,
   autonomy: 'medium',
@@ -295,6 +297,12 @@ export function normalizeOfflineSettings(raw: unknown): OfflineMeetSettings {
     pace: pick(r.pace, ['slow', 'medium', 'fast'] as const, d.pace),
   };
   if (settings.lenMin > settings.lenMax) [settings.lenMin, settings.lenMax] = [settings.lenMax, settings.lenMin];
+  // 旧默认迁移：存档/设置里未自定义的旧默认组合（回复字数 1500 + 区间 450~800）会把 1500 静默夹到 800，
+  // 检测到该组合时升级到新默认区间；用户改过任一项则不动
+  if (r.replyLength === 1500 && r.lenMin === 450 && r.lenMax === 800) {
+    settings.lenMin = d.lenMin;
+    settings.lenMax = d.lenMax;
+  }
   return settings;
 }
 
@@ -659,14 +667,22 @@ export function buildOfflineDirective(opts: {
 }): string {
   const { settings: s, charPersonEff, charName, userName, channel, target } = opts;
   const tri = <T extends string>(v: T, lines: Record<T, string>) => lines[v];
-  const autonomyLine = tri(
-    s.autonomy,
-    {
+  // 自主推进强度按「导演模式开/关」分别给口径，避免两行指令互相打架：
+  // 导演关 + 高强度 ≠ 「推动剧情转换场景」，而是「同场景内大步推进」；导演开 + 低强度 ≠ 「只推进一小步不引入事件」，而是「可轻推但克制」
+  const autonomyLine = (() => {
+    if (s.director) {
+      return tri(s.autonomy, {
+        low: `整体克制：可以引入小事件轻轻推动，但每次只推进一小步，大量留白等待${userName}回应`,
+        medium: '按当前场景的自然速度推进，张弛有度；可以引入小事件、转换场景、让时间自然流动，但重大转折留给对方决定',
+        high: `积极推动剧情发展与场景转换：小事件、场景切换、时间流动都放开用，但重大转折和关系决定仍留给${userName}`,
+      });
+    }
+    return tri(s.autonomy, {
       low: `每次只推进一小步，大量留白等待${userName}回应，不抢节奏`,
-      medium: '按当前场景的自然速度推进，张弛有度',
-      high: `积极推动剧情发展与场景转换，可以引入小事件，但重大转折留给${userName}决定`,
-    },
-  );
+      medium: '在当前场景内按自然速度推进，不引入新事件、不跳跃时间',
+      high: `在当前场景内做出实质性的大步推进（大段动作/对话/情绪进展），但保持在同一场景内：不引入新事件、不转换场景、不跳跃时间`,
+    });
+  })();
   const rhetoricLine = tri(s.rhetoric, {
     low: '白描直叙，少用比喻修辞，语言干净直白',
     medium: '适度使用修辞，自然不刻意',
