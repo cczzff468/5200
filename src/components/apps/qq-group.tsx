@@ -1770,12 +1770,15 @@ function GroupRpDetailPage({
   rp,
   onBack,
   onToast,
+  resolveClaimAvatar,
 }: {
   senderName: string;
   senderAvatar: string | null;
   rp: GroupRpData;
   onBack: () => void;
   onToast: (m: string) => void;
+  /** 领取记录头像实时读取（可选）：快照 → 成员/机主当前头像（换头像立即同步） */
+  resolveClaimAvatar?: (c: { contactId: string; name: string; avatar: string | null }) => string | null;
 }) {
   const claimedSum = round2(rp.claims.reduce((s, c) => s + c.amount, 0));
   const best = rp.claims.length > 1 ? rp.claims.reduce((a, b) => (b.amount > a.amount ? b : a)) : null;
@@ -1821,7 +1824,7 @@ function GroupRpDetailPage({
             <div className="pb-2">
               {rp.claims.map((c, i) => (
                 <div key={`${c.contactId}-${i}`} className="flex items-center gap-3 border-t border-black/[0.05] px-4 py-3 dark:border-white/[0.06]">
-                  <QqAvatar src={c.avatar} alt={c.name} size={36} />
+                  <QqAvatar src={resolveClaimAvatar ? resolveClaimAvatar(c) : c.avatar} alt={c.name} size={36} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px]">
                       {c.name}
@@ -5018,6 +5021,9 @@ export function QqGroupChatPage({
           rp={layerMsg.rp}
           onBack={() => setLayer(null)}
           onToast={onToast}
+          resolveClaimAvatar={(c) =>
+            c.contactId === 'me' ? me.avatar : memberById.get(c.contactId)?.avatar ?? c.avatar
+          }
         />
       )}
       {layer?.view === 'tr-detail' && layerMsg?.tr && (

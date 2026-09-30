@@ -29,7 +29,7 @@
  */
 
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
+import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import type { ApiConfig } from '@/lib/ios/store';
 import { contactRealName, listContacts, ownerRealName } from '@/lib/ios/contacts-store';
 import {
@@ -2655,6 +2655,110 @@ export function repairLegacyMomentData(): void {
       // 忽略（修复失败不影响功能，视图层读取时仍会兜底修复）
     }
   })();
+}
+
+// ---------------- 头像快照批量同步（换头像后历史动态/互动消息立即换新头像） ----------------
+
+/**
+ * 头像归属判定：peerId 精确命中优先；legacy 无 peerId 的数据（机主本人的动态/早期角色动态）
+ * 按「展示名 / 真名 / 昵称」兜底匹配同一联系人。
+ */
+function avatarOwnerMatches(ref: { peerId?: string | null; name?: string | null }, contact: ContactRecord): boolean {
+  if (ref.peerId) return ref.peerId === contact.id;
+  const nm = ref.name ?? '';
+  if (!nm) return false;
+  return nm === displayNameOf(contact) || nm === contact.name || nm === (contact.realName ?? '');
+}
+
+/**
+ * 头像快照批量同步（核心实现，同步签名不落盘不广播）：
+ * 把该联系人当前头像（按平台 App 槽位解析，App 未单独设置时回退全局默认）写进
+ * 指定平台的历史动态头像快照。值相同跳过（幂等）；联系人已删除（不在名单里）不会进来。
+ * @returns 是否有改动（由调用方决定是否落盘）
+ */
+function syncAvatarSnapshotsInPosts(
+  platform: MomentPlatform,
+  contacts: ContactRecord[],
+  contact: ContactRecord
+): { list: MomentPostView[]; changed: boolean } {
+  const cur = avatarFor(contact, platform);
+  const list = listMomentPosts(platform, undefined, contacts);
+  let changed = false;
+  const next = list.map((p) => {
+    if (!avatarOwnerMatches({ peerId: p.peerId, name: p.authorName }, contact)) return p;
+    if ((p.avatar ?? null) === (cur ?? null)) return p;
+    changed = true;
+    return { ...p, avatar: cur };
+  });
+  return { list: next, changed };
+}
+
+/** 头像快照批量同步（互动消息收件箱）：actorAvatar 快照改写为当前头像（官方/系统消息跳过） */
+function syncAvatarSnapshotsInNotices(platform: MomentPlatform, contact: ContactRecord): boolean {
+  const notices = loadNoticesSafe(platform);
+  if (!Array.isArray(notices) || notices.length === 0) return false;
+  const cur = avatarFor(contact, platform);
+  let changed = false;
+  const next = notices.map((n) => {
+    if (n.kind === 'official' || n.kind === 'system') return n;
+    if (!avatarOwnerMatches({ peerId: n.actorPeerId, name: n.actorName }, contact)) return n;
+    if ((n.actorAvatar ?? null) === (cur ?? null)) return n;
+    changed = true;
+    return { ...n, actorAvatar: cur };
+  });
+  if (changed) saveNotices(platform, next);
+  return changed;
+}
+
+/**
+ * 单联系人头像快照批量同步（换头像事件触发）：
+ * 微信朋友圈 + QQ空间 的历史动态头像、两平台互动消息头像全部对齐当前头像；
+ * 有改动才落盘（persistMomentPosts/saveNotices 后广播 moments-changed，打开中的页面即时刷新）。
+ * 内部全量取联系人名单——listMomentPosts 的 legacy 归属推断需要完整名单，避免回写时误清他人 peerId。
+ */
+export async function syncMomentAvatarSnapshots(contactId: string): Promise<void> {
+  try {
+    const contacts = await listContacts();
+    const contact = contacts.find((c) => c.id === contactId);
+    if (!contact) return;
+    let changed = false;
+    for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+      const { list, changed: postsChanged } = syncAvatarSnapshotsInPosts(platform, contacts, contact);
+      if (postsChanged) {
+        persistMomentPosts(platform, list);
+        changed = true;
+      }
+      if (syncAvatarSnapshotsInNotices(platform, contact)) changed = true;
+    }
+    if (changed) emitMomentsChanged();
+  } catch {
+    // 同步失败静默（渲染端 liveAvatarOf 实时读取兜底，显示仍正确）
+  }
+}
+
+/**
+ * 全量头像快照校准（启动时执行一次，幂等）：所有联系人的历史动态/互动消息头像
+ * 统一对齐当前头像——兜住「换头像时事件丢失/漏同步」的存量数据。
+ */
+export async function syncAllMomentAvatarSnapshots(): Promise<void> {
+  try {
+    const contacts = await listContacts();
+    if (contacts.length === 0) return;
+    let changed = false;
+    for (const contact of contacts) {
+      for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
+        const { list, changed: postsChanged } = syncAvatarSnapshotsInPosts(platform, contacts, contact);
+        if (postsChanged) {
+          persistMomentPosts(platform, list);
+          changed = true;
+        }
+        if (syncAvatarSnapshotsInNotices(platform, contact)) changed = true;
+      }
+    }
+    if (changed) emitMomentsChanged();
+  } catch {
+    // 忽略
+  }
 }
 
 // ---------------- 身份关系修复（「AI 自己给自己评论」历史 bug 的数据清理 + 记忆纠错） ----------------

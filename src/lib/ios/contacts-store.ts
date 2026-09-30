@@ -299,6 +299,21 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if (typeof patch.friendSms === 'boolean') next.friendSms = existing.kind === 'user' ? true : patch.friendSms;
 
   await localDB.put('contacts', next);
+
+  // 头像变化 → 广播事件：avatar-sync 模块监听后把各 App 存储里的历史头像快照
+  //（朋友圈动态/互动消息/新的朋友通知等）批量改写为新头像并广播 moments-changed，
+  // 让朋友圈/空间页面即时刷新（渲染端另有 liveAvatarOf 实时读取兜底）。
+  const globalAvatarChanged = 'avatar' in patch && (next.avatar ?? null) !== (existing.avatar ?? null);
+  const slotAvatarChanged =
+    'avatars' in patch && JSON.stringify(next.avatars ?? null) !== JSON.stringify(existing.avatars ?? null);
+  if ((globalAvatarChanged || slotAvatarChanged) && typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('contact-avatar-changed', { detail: { contactId: id } }));
+    } catch {
+      // 忽略
+    }
+  }
+
   return next;
 }
 

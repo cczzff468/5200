@@ -324,6 +324,32 @@ export function withAvatarForApp<T extends ContactRecord>(c: T, app: ContactAvat
   return (av ?? null) === (c.avatar ?? null) ? c : ({ ...c, avatar: av } as T);
 }
 
+/**
+ * 实时头像解析（换头像后所有历史展示位立即同步的统一读取口）：
+ * 朋友圈动态/互动消息/新的朋友通知等历史数据里存的是「写入当时的头像快照」，
+ * 这里优先回到联系人资料实时取当前头像，不再各存各的：
+ * - peerId 精确命中 → avatarFor(contact, app)（App 槽位优先，回退全局默认）；
+ * - 无 peerId（legacy 数据 / 机主本人的动态与评论）→ 按「展示名 / 真名 / 昵称」兜底匹配；
+ * - 联系人已删除（匹配不到）→ 保留快照原值，宁旧勿丢。
+ * QQ/微信/信息/电话共用这一套读取逻辑（app 传各自标识）。
+ */
+export function liveAvatarOf(
+  snapshot: string | null | undefined,
+  ref: { peerId?: string | null; name?: string | null },
+  contacts: ContactRecord[],
+  app: ContactAvatarApp
+): string | null {
+  const byId = ref.peerId ? contacts.find((c) => c.id === ref.peerId) : undefined;
+  const nm = ref.name ?? '';
+  const hit =
+    byId ??
+    (nm
+      ? contacts.find((c) => displayNameOf(c) === nm || c.name === nm || (c.realName ?? '') === nm)
+      : undefined);
+  if (hit) return avatarFor(hit, app);
+  return typeof snapshot === 'string' && snapshot ? snapshot : null;
+}
+
 /** 一组联系人按 App 投影（与 withDisplayNames 同款展示层手法；配合使用：withDisplayNames(withAvatarsForApp(list, app))） */
 export function withAvatarsForApp(list: ContactRecord[], app: ContactAvatarApp): ContactRecord[] {
   return list.map((c) => withAvatarForApp(c, app));

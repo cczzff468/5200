@@ -204,7 +204,7 @@ import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
-import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
+import { addressNameOf, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
 import type { Sticker } from '@/lib/ios/stickers';
@@ -6136,14 +6136,13 @@ function ChatPage({
         const d = fwdDetailId ? msgs.find((x) => x.id === fwdDetailId) ?? null : null;
         if (!d || d.kind !== 'forward' || !d.fwd?.merged) return null;
         const records = d.fwd.records ?? [];
-        /** 记录头像解析：快照优先 → 旧数据按说话人名字查联系人（含自己）→ 角色回退。
-         *  修复「转发给我自己时 AI 记录错拿我的头像」：旧卡片无 avatar 快照时回退 peer.avatar，
-         *  转发目标是我自己则 peer 就是我 → 按名字查联系人才能找回原说话人头像 */
+        /** 头像实时读取：转发记录里的头像快照 → 联系人/机主还在就显示当前头像
+         *  （换头像立即同步）；联系人已删除才回退快照原值，最后按说话人角色兜底 */
         const resolveAvatar = (r: FwdRecord): string | null => {
-          if (r.avatar !== undefined) return r.avatar;
           if (r.name === me.name) return me.avatar;
-          const hit = contacts.find((c) => c.name === r.name);
+          const hit = r.name ? contacts.find((c) => displayNameOf(c) === r.name || c.name === r.name) : undefined;
           if (hit) return hit.avatar;
+          if (r.avatar !== undefined) return r.avatar;
           return r.role === 'me' ? me.avatar : peer.avatar;
         };
         return (
@@ -10488,16 +10487,17 @@ function ZonePage({
     setUserPosts(loadZonePosts());
   }, [owner, me.name]);
 
-  /** 动态过滤：TA 的空间（owner）→ 只看 TA 发的；我的空间（mineOnly）→ 只看我发的；默认全量 */
+  /** 动态过滤：TA 的空间（owner）→ 只看 TA 发的；我的空间（mineOnly）→ 只看我发的；默认全量。
+   *  头像实时读取：历史动态存的头像快照 → 联系人在就显示当前头像（换头像立即同步；QQ/微信共用 liveAvatarOf） */
   const posts: ZonePost[] = useMemo(() => {
     const all = [...userPosts, ...ZONE_SEEDS];
-    if (owner) {
-      const dn = displayNameOf(owner);
-      return all.filter((p) => p.authorName === dn || p.authorName === owner.name);
-    }
-    if (mineOnly) return all.filter((p) => p.authorName === me.name);
-    return all;
-  }, [userPosts, owner, mineOnly, me.name]);
+    const scoped = owner
+      ? all.filter((p) => p.authorName === displayNameOf(owner) || p.authorName === owner.name)
+      : mineOnly
+        ? all.filter((p) => p.authorName === me.name)
+        : all;
+    return scoped.map((p) => ({ ...p, avatar: liveAvatarOf(p.avatar, { name: p.authorName }, contacts, 'qq') }));
+  }, [userPosts, owner, mineOnly, me.name, contacts]);
 
   /** 空间页头展示的用户（TA 的空间换头像/名字） */
   const shownUser = owner
@@ -13218,13 +13218,22 @@ function MainScreen({
   // ---------------- 互动消息（空间消息：赞和推/评论和@/转发/官方） ----------------
   const [qqNotices, setQqNotices] = useState<MomentNotice[]>(() => listMomentNotices('qq'));
   const refreshQqNotices = useCallback(() => setQqNotices(listMomentNotices('qq')), []);
+  /** 互动消息头像实时读取（actorAvatar 快照 → 联系人在就显示当前头像；换头像立即同步） */
+  const qqNoticesLive = useMemo(
+    () =>
+      qqNotices.map((n) => ({
+        ...n,
+        actorAvatar: liveAvatarOf(n.actorAvatar, { peerId: n.actorPeerId, name: n.actorName }, contacts, 'qq'),
+      })),
+    [qqNotices, contacts]
+  );
   /** 气泡角标：未读条数 + 最新一条消息人的头像（「1条新消息」气泡展示用） */
   const qqNoticeBadge = useMemo(
     () => ({
-      count: qqNotices.filter((n) => !n.read).length,
-      avatar: qqNotices.find((n) => !n.read)?.actorAvatar ?? null,
+      count: qqNoticesLive.filter((n) => !n.read).length,
+      avatar: qqNoticesLive.find((n) => !n.read)?.actorAvatar ?? null,
     }),
-    [qqNotices]
+    [qqNoticesLive]
   );
   // 引擎（调度器/AI）在别处写入互动消息后同步本地视图：AI 回复/点赞落盘会广播 moments-changed，
   // 这里刷新 qqNotices → 未读数实时更新 →「N条新消息」气泡实时出现（与微信朋友圈订阅对称；
@@ -13433,7 +13442,7 @@ function MainScreen({
         <MomentInteractionsPage
           platform="qq"
           title="空间消息"
-          notices={qqNotices}
+          notices={qqNoticesLive}
           onBack={() => openTabs('动态')}
           onReply={replyToQqNotice}
           renderAvatar={(src, name, size) => <QqAvatar src={src} alt={name} size={size} />}

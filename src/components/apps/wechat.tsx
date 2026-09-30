@@ -183,7 +183,7 @@ import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeCh
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
-import { addressNameOf, displayNameOf, isFriendIn, withDisplayNames } from '@/lib/contacts';
+import { addressNameOf, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
@@ -384,6 +384,8 @@ interface WxMoment {
   time: number;
   likes: string[];
   comments: WxMomentComment[];
+  /** 引擎写入：char 动态 = 联系人 id（头像实时读取按 id 精确命中；legacy/用户动态可能缺失） */
+  peerId?: string;
 }
 
 /** 新的朋友通知（添加好友成功后写入） */
@@ -7698,14 +7700,13 @@ function ChatPage({
         const d = fwdDetailId ? msgs.find((x) => x.id === fwdDetailId) ?? null : null;
         if (!d || d.kind !== 'forward' || !d.fwd?.merged) return null;
         const records = d.fwd.records ?? [];
-        /** 记录头像解析：快照优先 → 旧数据按说话人名字查联系人（含自己）→ 角色回退。
-         *  修复「转发给我自己时 AI 记录错拿我的头像」：旧卡片无 avatar 快照时回退 peer.avatar，
-         *  转发目标是我自己则 peer 就是我 → 按名字查联系人才能找回原说话人头像 */
+        /** 头像实时读取：转发记录里的头像快照 → 联系人/机主还在就显示当前头像
+         *  （换头像立即同步）；联系人已删除才回退快照原值，最后按说话人角色兜底 */
         const resolveAvatar = (r: FwdRecord): string | null => {
-          if (r.avatar !== undefined) return r.avatar;
           if (r.name === me.name) return me.avatar;
-          const hit = contacts.find((c) => c.name === r.name);
+          const hit = r.name ? contacts.find((c) => displayNameOf(c) === r.name || c.name === r.name) : undefined;
           if (hit) return hit.avatar;
+          if (r.avatar !== undefined) return r.avatar;
           return r.role === 'me' ? me.avatar : peer.avatar;
         };
         return (
@@ -9799,6 +9800,20 @@ function MainScreen({
   const [momentsScope, setMomentsScope] = useState<'all' | 'mine'>('all');
   const [menuOpen, setMenuOpen] = useState(false);
   const [moments, setMoments] = useState<WxMoment[]>(() => loadMoments());
+  /**
+   * 头像实时读取（换头像后所有历史展示位立即同步）：朋友圈等历史数据里存的是写入当时的头像快照，
+   * 渲染前统一过 liveAvatarOf —— 联系人还在就显示当前头像（App 槽位优先、回退全局），
+   * 联系人已删除才回退快照原值（宁旧勿丢）。QQ/微信/信息共用同一套解析（contacts.ts）。
+   */
+  const liveWxAvatar = useCallback(
+    (snapshot: string | null | undefined, ref: { peerId?: string | null; name?: string | null }) =>
+      liveAvatarOf(snapshot, ref, contacts, 'wx'),
+    [contacts]
+  );
+  const momentsLive = useMemo(
+    () => moments.map((p) => ({ ...p, avatar: liveWxAvatar(p.avatar, { peerId: p.peerId, name: p.authorName }) })),
+    [moments, liveWxAvatar]
+  );
   /** 用户 API 配置（让 AI 发动态时按人设生成内容用） */
   const apiConfig = useSettings((s) => s.apiConfig);
   /** 「让好友发一条」弹层与生成中的联系人 id */
@@ -9809,6 +9824,11 @@ function MainScreen({
   /** 正在编辑的动态（id + 当前正文） */
   const [editingPost, setEditingPost] = useState<{ id: string; text: string } | null>(null);
   const [reqs, setReqs] = useState<WxFriendReq[]>(() => loadReqs());
+  /** 新的朋友通知头像也实时读取（通知里存的快照 → 联系人在就显示当前头像） */
+  const reqsLive = useMemo(
+    () => reqs.map((r) => ({ ...r, avatar: liveWxAvatar(r.avatar, { name: r.name }) })),
+    [reqs, liveWxAvatar]
+  );
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -10046,13 +10066,22 @@ function MainScreen({
   // ---------------- 互动消息（与我的互动消息：谁赞了我/评论了我/回复了我） ----------------
   const [wxNotices, setWxNotices] = useState<MomentNotice[]>(() => listMomentNotices('wx'));
   const refreshWxNotices = useCallback(() => setWxNotices(listMomentNotices('wx')), []);
+  /** 互动消息头像实时读取（actorAvatar 快照 → 联系人在就显示当前头像） */
+  const wxNoticesLive = useMemo(
+    () =>
+      wxNotices.map((n) => ({
+        ...n,
+        actorAvatar: liveWxAvatar(n.actorAvatar, { peerId: n.actorPeerId, name: n.actorName }),
+      })),
+    [wxNotices, liveWxAvatar]
+  );
   /** 气泡角标：未读条数 + 最新一条消息人的头像（「1条新消息」气泡展示用） */
   const wxNoticeBadge = useMemo(
     () => ({
-      count: wxNotices.filter((n) => !n.read).length,
-      avatar: wxNotices.find((n) => !n.read)?.actorAvatar ?? null,
+      count: wxNoticesLive.filter((n) => !n.read).length,
+      avatar: wxNoticesLive.find((n) => !n.read)?.actorAvatar ?? null,
     }),
-    [wxNotices]
+    [wxNoticesLive]
   );
   /** 打开互动消息页：全部标记已读（气泡随之消失）+ 刷新列表 */
   const openWxNotices = useCallback(() => {
@@ -10254,7 +10283,7 @@ function MainScreen({
       <>
         <MomentsPage
           me={me}
-          posts={momentsScope === 'mine' ? moments.filter((p) => p.authorName === me.name) : moments}
+          posts={momentsScope === 'mine' ? momentsLive.filter((p) => p.authorName === me.name) : momentsLive}
           onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
           onCompose={() => setPage('compose')}
           onToggleLike={toggleLike}
@@ -10316,7 +10345,7 @@ function MainScreen({
       <MomentInteractionsPage
         platform="wx"
         title="与我的互动消息"
-        notices={wxNotices}
+        notices={wxNoticesLive}
         onBack={() => setPage('moments')}
         onReply={replyToWxNotice}
         renderAvatar={(src, name, size) => <WxAvatar src={src} alt={name} size={size} />}
@@ -10330,7 +10359,7 @@ function MainScreen({
           me={me}
           owner={{ name: friendMoments.name, avatar: friendMoments.avatar }}
           peerId={friendMoments.id}
-          posts={moments.filter((p) => p.authorName === friendMoments.name)}
+          posts={momentsLive.filter((p) => p.authorName === friendMoments.name)}
           onBack={() => (detail ? setPage('friendDetail') : setPage('main'))}
           onCompose={() => setPage('compose')}
           onToggleLike={toggleLike}
@@ -10494,7 +10523,7 @@ function MainScreen({
     );
   }
   if (page === 'newFriends') {
-    return <NewFriendsPage reqs={reqs} onBack={() => setPage('main')} onGoAdd={() => setPage('addFriend')} />;
+    return <NewFriendsPage reqs={reqsLive} onBack={() => setPage('main')} onGoAdd={() => setPage('addFriend')} />;
   }
   if (page === 'addFriend') {
     return (

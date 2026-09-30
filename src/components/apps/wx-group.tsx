@@ -2108,6 +2108,7 @@ function GroupRpDetailPage({
   rp,
   onBack,
   onToast,
+  resolveClaimAvatar,
 }: {
   senderName: string;
   senderAvatar: string | null;
@@ -2115,6 +2116,8 @@ function GroupRpDetailPage({
   rp: GroupRpData;
   onBack: () => void;
   onToast: (m: string) => void;
+  /** 领取记录头像实时读取（可选）：快照 → 成员/机主当前头像（换头像立即同步） */
+  resolveClaimAvatar?: (c: { contactId: string; name: string; avatar: string | null }) => string | null;
 }) {
   const claimedSum = round2(rp.claims.reduce((s, c) => s + c.amount, 0));
   return (
@@ -2165,7 +2168,7 @@ function GroupRpDetailPage({
             <div className="mt-1.5">
               {rp.claims.map((c, i) => (
                 <div key={`${c.contactId}-${i}`} className="flex items-center gap-3 border-t border-black/[0.06] py-3.5 first:border-t-0 dark:border-white/[0.08]">
-                  <WxAvatar src={c.avatar} alt={c.name} size={36} />
+                  <WxAvatar src={resolveClaimAvatar ? resolveClaimAvatar(c) : c.avatar} alt={c.name} size={36} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px]">{c.name}</span>
                     <span className="mt-0.5 block text-[11px] text-black/35 dark:text-white/35">{fmtGrpFullTime(c.ts || Date.now())}</span>
@@ -5331,6 +5334,9 @@ export function WxGroupChatPage({
           rp={layerMsg.rp}
           onBack={() => setLayer(null)}
           onToast={onToast}
+          resolveClaimAvatar={(c) =>
+            c.contactId === 'me' ? me.avatar : memberById.get(c.contactId)?.avatar ?? c.avatar
+          }
         />
       )}
       {layer?.view === 'tr-detail' && layerMsg?.tr && (
@@ -5517,11 +5523,12 @@ export function WxGroupChatPage({
         const d = fwdDetailId ? msgs.find((x) => x.id === fwdDetailId) ?? null : null;
         if (!d || d.kind !== 'forward' || !d.fwd?.merged) return null;
         const records = d.fwd.records ?? [];
+        /** 头像实时读取：转发记录里的快照 → 成员/机主当前头像优先（换头像立即同步）；找不到人回退快照 */
         const resolveAvatar = (r: FwdRecord): string | null => {
-          if (r.avatar !== undefined) return r.avatar;
           if (r.name === me.name) return me.avatar;
           const hit = members.find((c) => memberNameOf(c) === r.name);
           if (hit) return hit.avatar;
+          if (r.avatar !== undefined) return r.avatar;
           return r.role === 'me' ? me.avatar : null;
         };
         return (
