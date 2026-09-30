@@ -12429,3 +12429,23 @@ Stage Summary:
 - 微信/QQ 表情包全面分组化：面板顶部毛玻璃胶囊分组名字（点选切换、＋建组），下方表情网格按组展示；管理页支持建组/重命名/删组（表情回落默认组）/单张跨组移动；AI 表情清单与开关逻辑零改动（AI 仍看全量清单，分组纯用户侧组织）
 - 信息端设置页「表情包」开关移除：信息端本无表情包面板，开关只约束 emoji，移除后 AI emoji 恢复默认常开；wx/qq 开关不受影响
 - 产出文件：src/lib/ios/stickers.ts、src/components/apps/sticker-batch.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat-settings.tsx、src/components/apps/chat.tsx
+
+---
+Task ID: 0
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取仓库 cczzff468/5200 到当前工作区并跑通验证
+
+Work Log:
+- 使用用户提供的 token 克隆 https://github.com/cczzff468/5200.git 到 /tmp/repo-5200（192 次提交，最新 ff7908e 表情包分组）
+- 备份沙箱 .env/Caddyfile，清空工作区（保留 node_modules/.env/.zscripts/upload/download/skills）
+- 将仓库全部文件（含 .git 完整历史与 origin 远程）复制到 /home/z/my-project，工作树干净且与 origin/main 一致
+- bun install 同步依赖（+30 包：jsmediatags/remark-gfm/web-push 等）
+- bunx prisma db push + generate，SQLite(db/custom.db) 与 schema 同步（Contact 0 条，全新状态）
+- bun run dev 启动，首页 200（编译 11.6s）
+- agent-browser 端到端自检：锁屏渲染→上滑解锁→主屏幕3页+Dock→打开微信→登录表单交互→后端校验返回"该手机号尚未注册微信"（流程正常，数据存 IndexedDB，属全新环境预期）
+- 浏览器 console/errors 无错误
+
+Stage Summary:
+- 仓库已完整落位 /home/z/my-project，dev server 运行中，端到端验证通过，可开始功能修改
+- git remote origin 已配置（token 内嵌于 URL），branch=main，与 origin/main 同步
+- 项目数据架构：IndexedDB 客户端存储为主（localDB 封装），Prisma/SQLite 仅存 WxBackground/Contact 等少量数据
