@@ -12465,3 +12465,22 @@ Work Log:
 Stage Summary:
 - 线下界面完成两轮玻璃化精调：顶部紧凑差异化（防抄袭布局）、底部单行化（操作钮分列输入框两侧+内嵌发送），功能与测试锚点全部不变
 - 产出文件：src/components/apps/offline-meeting.tsx（唯一改动文件）
+
+---
+Task ID: 3
+Agent: Z.ai Code (main)
+Task: 线下模式 UI 精简改造（顶部只留头像+名字+日期、删除开始页、承接条数移入现场设置、消息时间改名下、删底部保存钮、发送钮改↑）+ 功能规则检查
+
+Work Log:
+- offline-meeting.tsx 头部重构：删除「与X见面 / IN PERSON / 此刻就在你身边 / 时间·状态·关系背景」胶囊卡，头部改为单毛玻璃胶囊（头像+绿点+名字+「XXXX年X月X日」日期，见面中显示见面日期、未开始显示今天）
+- 删除刚点开线下模式的旧开始界面（Ready To Meet 卡 + 承接条数卡 + 现场设置按钮），改为极简开始页：大头像 + 名字 + 「开始见面」胶囊按钮
+- 「从聊天继续承接最近 N 条聊天」（10/20/30/40/50/自定义 + 可承接提示）整体移入现场设置面板最上方第一个卡片；OfflineSettingsPanel 新增 availableCount prop、carrySel/carryCustom 状态，保存设置时解析 carryCount 写回（commitSettings 已有同步逻辑，startMeeting 无改动）
+- 叙事流时间戳：hhmm(HH:MM) 换成 mdhm（M月D日 HH:MM）；角色消息时间移到名字下方两行布局；用户消息气泡下时间同样改格式
+- 底部表单删除「保存这次见面」圆钮（BookOpen，顶部 ★ 已有保存）；发送按钮 Send 纸飞机 → ArrowUp ↑（strokeWidth 2.6、更强投影、active:scale-90）
+- 功能规则检查：通读 offline-meet.ts / api/offline/route.ts / wechat.tsx loadRecentMsgs，发现 2 个真 bug + 6 个可完善项，列清单交用户选择（未擅自修）
+- 验证：bunx eslint 单文件 0 错误；agent-browser E2E（解锁→微信→通讯录→凡凡→发消息→+→线下）：开始页/设置面板/开始见面/开场生成/↑发送/角色回复 全链路通过，dev.log 无错误
+
+Stage Summary:
+- UI 已改：顶部=头像+名字+日期毛玻璃胶囊；开始页极简化；承接条数在设置面板顶部；消息时间=名字下/气泡下 M月D日 HH:MM；底部=继续+重Roll+输入框+↑
+- 功能逻辑零改动（startMeeting/runGen/saveMeeting/reroll/变量系统/存储全部原样）
+- 待用户选择的功能完善清单：①默认字数区间450~800与回复字数1500矛盾（1500被夹到800，真bug）②承接聊天超8000字时slice(0,8000)截掉的是最新消息（真bug）③空见面可保存成空记忆 ④无「放弃见面」出口 ⑤见面中时间感知陈旧 ⑥世界背景缓存永不失效 ⑦见面历史无查看入口 ⑧导演模式与自主推进强度提示词可能打架

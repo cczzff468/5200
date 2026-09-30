@@ -18,13 +18,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BookOpen,
+  ArrowUp,
   ChevronLeft,
   Loader2,
   Plus,
   RefreshCw,
   RotateCcw,
-  Send,
   SlidersHorizontal,
   Star,
   Trash2,
@@ -127,10 +126,10 @@ function GlassAmbience() {
   );
 }
 
-/** HH:MM */
-function hhmm(ts: number) {
+/** M月D日 HH:MM（正文时间戳：角色 / 用户消息都用） */
+function mdhm(ts: number) {
   const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /** 多档分段选择（毛玻璃药丸） */
@@ -1075,6 +1074,11 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
   const lastEntry = meet?.entries[meet.entries.length - 1] ?? null;
   const canReroll = !!lastEntry && lastEntry.role === 'char' && !gen;
+  /** 顶部日期：见面中显示见面开始日期，未开始显示今天 */
+  const headerDate = (() => {
+    const d = new Date(meet ? meet.startedAt : Date.now());
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  })();
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white" data-testid={`offline-meet-${app}`}>
@@ -1091,14 +1095,17 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
         >
           <ChevronLeft className="h-5 w-5" strokeWidth={2.2} />
         </button>
-        <div className={`flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-3 ${GLASS_CAPSULE}`}>
+        <div className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2.5 rounded-full px-3 py-1.5 ${GLASS_CAPSULE}`}>
           <div className="relative shrink-0">
-            <MeetAvatar contact={contact} size={30} />
+            <MeetAvatar contact={contact} size={32} />
             {meet ? (
               <span className="absolute bottom-0 right-0 h-[9px] w-[9px] rounded-full border-2 border-white bg-[#34C759] dark:border-[#2a2a2c]" aria-hidden="true" />
             ) : null}
           </div>
-          <h1 className="truncate text-[15px] font-semibold text-black dark:text-white">{shownName}</h1>
+          <div className="min-w-0 text-left leading-tight">
+            <h1 className="truncate text-[15px] font-semibold text-black dark:text-white">{shownName}</h1>
+            <p className="mt-[1px] truncate text-[10px] tabular-nums text-black/40 dark:text-white/40">{headerDate}</p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {meet ? (
@@ -1154,8 +1161,10 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                 <div key={e.id} className={`rounded-[20px] rounded-tl-[8px] p-4 ${GLASS_CARD}`}>
                   <div className="mb-2 flex items-center gap-2">
                     <MeetAvatar contact={contact} size={20} />
-                    <span className="text-[12px] font-semibold text-black/55 dark:text-white/60">{shownName}</span>
-                    <span className="ml-auto text-[11px] tabular-nums text-black/30 dark:text-white/30">{hhmm(e.at)}</span>
+                    <div className="min-w-0 leading-tight">
+                      <p className="text-[12px] font-semibold text-black/55 dark:text-white/60">{shownName}</p>
+                      <p className="mt-[1px] text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
+                    </div>
                   </div>
                   <div className="whitespace-pre-wrap text-[15px] leading-[1.95] text-black/85 dark:text-white/85">{e.text}</div>
                 </div>
@@ -1165,7 +1174,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                     <div className="whitespace-pre-wrap rounded-[20px] rounded-br-[8px] border border-black/10 bg-[#1C1C1E]/85 px-4 py-2.5 text-[15px] leading-[1.7] text-white shadow-[0_8px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.14]">
                       {e.text}
                     </div>
-                    <p className="mt-1 pr-1 text-right text-[10px] tabular-nums text-black/30 dark:text-white/30">{hhmm(e.at)}</p>
+                    <p className="mt-1 pr-1 text-right text-[10px] tabular-nums text-black/30 dark:text-white/30">{mdhm(e.at)}</p>
                   </div>
                 </div>
               ),
@@ -1178,7 +1187,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             ) : null}
           </div>
 
-          {/* 底部：操作圆钮分列输入框左右两侧 + 内嵌发送 */}
+          {/* 底部：继续 / 重Roll 圆钮 + 输入框（保存走顶部收藏钮） */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -1223,22 +1232,11 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
                 aria-label="发送"
                 title="发送"
                 disabled={!input.trim() || !!gen}
-                className="absolute inset-y-0 right-[3px] my-auto flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[#1C1C1E]/90 text-white shadow-md backdrop-blur-xl active:scale-95 active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
+                className="absolute inset-y-0 right-[3px] my-auto flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[#1C1C1E]/90 text-white shadow-[0_4px_14px_rgba(28,28,30,0.35)] transition-transform backdrop-blur-xl active:scale-90 active:opacity-80 disabled:opacity-40 dark:bg-white dark:text-black"
               >
-                <Send className="h-4 w-4 -translate-x-px" strokeWidth={2} />
+                <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.6} />
               </button>
             </div>
-            <button
-              type="button"
-              data-testid="offline-save"
-              aria-label="保存这次见面"
-              title="保存这次见面"
-              onClick={saveMeeting}
-              disabled={!!gen}
-              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-black/75 active:scale-95 active:opacity-60 disabled:opacity-40 dark:text-white/80 ${GLASS_CAPSULE}`}
-            >
-              <BookOpen className="h-[18px] w-[18px]" strokeWidth={2} />
-            </button>
           </form>
         </>
       )}
