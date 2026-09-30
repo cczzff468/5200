@@ -12202,3 +12202,29 @@ Stage Summary:
 - 换头像 = 只写联系人一处 → 全部位置结构性自动同步（无事件依赖、无批量改写、无启动校准），跨 App 即时刷新靠四端 contact-avatar-changed 监听；
 - 省空间：新动态/互动消息 0 头像字节；存量快照启动自动瘦身（单张最大 400KB），联系人已删除者保留快照兜底；
 - 删码 190+ 行（avatar-sync.ts 全文件 + moments.ts 同步四函数），换头像数据面从此零维护。
+
+---
+Task ID: G
+Agent: 主协调者
+Task: 逐项审计「拉黑 + 跨 App 主动找」逻辑（20 项检查点，用户要求不要只报告已完成）
+
+Work Log:
+- 通读 src/lib/ios/block-state.ts（445 行全文）：双向拉黑状态机、BlockApp='wx'|'qq'|'sms'、键 `${app}-block:${contactId}`、IndexedDB kv 持久化、charRequestOnlyOf/applyUserBlockReq/resolveUserReqByChar/acceptBlockReq/rejectBlockReq、BLOCK_REQ_MAX_REJECTED=3（冷却期已按用户此前要求移除）、buildBlockPromptBlock 双向提示词
+- 通读 src/lib/ios/cross-app-context.ts（456 行）：确认其是「跨 App 感知」（其他 App 最近 10 条消息携带）而非「跨 App 主动找」；share 门控、群聊块、电话转写读取
+- 通读 src/lib/ios/proactive-call.ts（674 行）：发现候选筛选 #16/fix4 L16——任一 App byUser/byChar 拉黑即从主动来电候选中整体排除（proactive-call.ts:533-544）；recordMissedPhoneCall 只查 sms 键抑制 AI 留言
+- 核查 chat-stream-store.ts:424-432 第二层兜底（blockSessionOf 解析 wx/qq/sms:c 键，群聊/助手会话天然放行；byUser 且非 requestOnly 不发流）
+- 核查三端 UI 守卫：wechat.tsx（入口 4967、正文丢弃 4893、bg 投递 deliverBgItems 4923→buildReplyMsgs 复用、memAfterAiTurn 5318 挂投递完成、buildBlockPromptBlock 5159）；qq.tsx 同构（3399/3499/3534/3910/4001/3699）；chat.tsx（1282/1189,1235/1749/1171/1376/1502）
+- 核查通话链路拉黑守卫：chat-call.ts（#33/#41/#42：501/783/890 按 loadBlock(optsRef.current.app) 静默轮+挂断续聊拦截+通话内文字条拦截；无申请卡通道）；phone.tsx（734-756 自有引擎守卫用 loadBlock('sms')、1137/1263/1347 留言抑制、静默轮计数自动挂断）
+- 核查 /api/chat/bg 服务端接力（route.ts 全文）：生成端无拉黑检查；落库走前端 pullBgPending → 各端 deliverBgItems → buildReplyMsgs（byUser 正文丢弃+申请动作受理受 3 次上限守卫）→ 不会产生「拉黑后收到消息」，仅浪费一次生成
+- 核查朋友圈：moments.ts isPeerBlocked(675) 双向、按 platform 键隔离（wx 拉黑停微信朋友圈、qq 停 QQ 空间）、#5 拉黑期间顺延不丢弃、解除后自然恢复
+- 核查 chat-settings.tsx：三端共用拉黑开关/重置被拒计数入口（testPrefix 参数化）
+- 全局搜索确认「拉黑后跨 App 主动找/换 App 找/转投」功能完全不存在（多组关键词零命中）
+- 输出逐项审计报告（20 项检查点 + 问题清单）给用户
+
+Stage Summary:
+- 结论：拉黑状态本体（隔离/持久化/三层拦截/申请卡闭环/记忆口径/历史可见性）实现扎实，全部符合设计；但「拉黑后跨 App 主动找」整块功能不存在（问题二 5/6 项答案为否），且 AI 主动来电候选把任一 App 被拉黑的联系人整体排除（与「跨 App 不受限」预期相反）
+- P1 缺口：①跨 App 主动找功能缺失；②主动来电拉黑口径与预期相反（微信拉黑→连电话都不打）
+- P2 缺口：③电话 App 无「发送解除申请」入口（信息 App 有且与电话共用 sms 键，可解但无引导）；④wx/qq/phone 通话引擎无拉黑 prompt 注入（引擎层静默已工作，无实际影响）
+- P3 口径确认：⑤群聊完全不参与拉黑（四 App 全拉黑后角色仍能在共同群聊发言）；⑥申请防骚扰=无时间冷却+同周期被拒 3 次硬上限（需用户确认是否保留上限）；⑦bg 接力生成端无拉黑检查（落库侧有守卫，无用户可见影响）
+- 关键文件：src/lib/ios/block-state.ts、src/lib/chat-stream-store.ts、src/lib/ios/proactive-call.ts、src/lib/ios/cross-app-context.ts、src/app/api/chat/bg/route.ts、wechat.tsx/qq.tsx/chat.tsx/phone.tsx/chat-call.ts/moments.ts
+- 待用户决策：是否实现「拉黑后立即跨 App 主动找」功能、是否修正主动来电候选的拉黑口径、是否保留 3 次拒绝上限、是否给电话 App 补申请入口
