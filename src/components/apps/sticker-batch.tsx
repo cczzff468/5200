@@ -10,7 +10,15 @@
 
 import { useState } from 'react';
 import { Trash2, X } from 'lucide-react';
-import { extractMeaningFromUrl, isImageUrl, newStickerId } from '@/lib/ios/stickers';
+import {
+  DEFAULT_STICKER_GROUP_ID,
+  extractMeaningFromUrl,
+  isImageUrl,
+  newStickerGroupId,
+  newStickerId,
+  type Sticker,
+  type StickerGroup,
+} from '@/lib/ios/stickers';
 
 export interface BatchDraftItem {
   key: string;
@@ -344,4 +352,305 @@ export function BatchStickerSheet({
       </div>
     </div>
   );
+}
+
+/**
+ * 表情分组栏（微信 / QQ 共用，聊天面板与表情管理页都用）：
+ * 顶部一排「毛玻璃胶囊」——每个胶囊里是一个分组名字，点选切换下方表情网格；
+ * 末尾「＋」胶囊 → 原地展开新建分组输入（名字 + 新建/取消），建好自动选中并展示该组（空）表情。
+ * 毛玻璃胶囊样式：半透明白底 + backdrop-blur + 细描边，选中态更实（更亮底 + 投影 + 加粗）。
+ */
+export function StickerGroupBar({
+  testPrefix,
+  groups,
+  activeId,
+  onSelect,
+  onCreate,
+  onManage,
+}: {
+  testPrefix: string;
+  groups: StickerGroup[];
+  /** 当前选中分组（默认分组在最前） */
+  activeId: string;
+  onSelect: (id: string) => void;
+  /** 新建分组（父级负责持久化 + toast + 选中） */
+  onCreate: (name: string) => void;
+  /** 可选「管理分组」入口（表情管理页传入；聊天面板不传保持轻量） */
+  onManage?: () => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const t = (k: string) => `${testPrefix}-sticker-group-${k}`;
+  const accent = testPrefix === 'wx' ? '#07C160' : '#0099FF';
+
+  const confirmCreate = () => {
+    const v = name.trim();
+    if (!v) return;
+    onCreate(v);
+    setName('');
+    setCreating(false);
+  };
+
+  return (
+    <div className="px-3 pb-1.5 pt-0.5" data-testid={t('bar')}>
+      {creating ? (
+        <div className="flex items-center gap-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') confirmCreate();
+              if (e.key === 'Escape') {
+                setCreating(false);
+                setName('');
+              }
+            }}
+            maxLength={16}
+            placeholder="新分组名字（如：沙雕、猫咪）"
+            data-testid={t('new-input')}
+            className="h-8 min-w-0 flex-1 rounded-full border border-black/[0.08] bg-white/70 px-3.5 text-[13px] outline-none backdrop-blur-md placeholder:text-black/30 dark:border-white/15 dark:bg-white/10 dark:placeholder:text-white/30"
+          />
+          <button
+            type="button"
+            data-testid={t('new-ok')}
+            onClick={confirmCreate}
+            className="h-8 shrink-0 rounded-full px-4 text-[12.5px] font-medium text-white active:opacity-85"
+            style={{ backgroundColor: accent }}
+          >
+            新建
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCreating(false);
+              setName('');
+            }}
+            className="h-8 shrink-0 rounded-full bg-black/[0.05] px-3 text-[12.5px] text-black/55 active:bg-black/[0.09] dark:bg-white/10 dark:text-white/55"
+          >
+            取消
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {groups.map((g) => {
+            const on = g.id === activeId;
+            return (
+              <button
+                key={g.id}
+                type="button"
+                data-testid={`${t('pill')}-${g.id === DEFAULT_STICKER_GROUP_ID ? 'my' : g.id}`}
+                onClick={() => onSelect(g.id)}
+                className={`h-7 shrink-0 whitespace-nowrap rounded-full border px-3 text-[12.5px] backdrop-blur-md transition-colors active:opacity-80 ${
+                  on
+                    ? 'border-black/10 bg-white/85 font-medium text-black shadow-[0_1px_5px_rgba(0,0,0,0.08)] dark:border-white/25 dark:bg-white/30 dark:text-white'
+                    : 'border-black/[0.07] bg-white/45 text-black/50 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/50'
+                }`}
+              >
+                {g.name}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            data-testid={t('add')}
+            aria-label="新建分组"
+            onClick={() => setCreating(true)}
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-dashed border-black/20 text-[15px] leading-none text-black/40 backdrop-blur-md active:bg-white/60 dark:border-white/20 dark:text-white/40 dark:active:bg-white/10"
+          >
+            ＋
+          </button>
+          {onManage && (
+            <button
+              type="button"
+              data-testid={t('manage')}
+              onClick={onManage}
+              className="h-7 shrink-0 whitespace-nowrap rounded-full border border-black/[0.07] bg-white/45 px-3 text-[12.5px] text-black/50 backdrop-blur-md active:bg-white/70 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/50"
+            >
+              管理分组
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 分组管理弹层（微信 / QQ 表情管理页共用）：
+ * 列出全部分组（默认分组带「默认」徽标、不可改名/删除）——
+ * 自定义分组支持 原地重命名 / 删除（删除时该组表情由父级移回默认分组，不丢数据），
+ * 底部「＋ 新建分组」输入行。
+ */
+export function StickerGroupManageSheet({
+  testPrefix,
+  groups,
+  stickers,
+  onRename,
+  onDelete,
+  onCreate,
+  onClose,
+}: {
+  testPrefix: string;
+  groups: StickerGroup[];
+  stickers: Sticker[];
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+  onCreate: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [newName, setNewName] = useState('');
+  const t = (k: string) => `${testPrefix}-sticker-group-mg-${k}`;
+  const accent = testPrefix === 'wx' ? '#07C160' : '#0099FF';
+
+  const countOf = (id: string) => stickers.filter((s) => (s.groupId ?? DEFAULT_STICKER_GROUP_ID) === id).length;
+
+  const confirmRename = () => {
+    if (!renamingId) return;
+    const v = renameDraft.trim();
+    if (v) onRename(renamingId, v);
+    setRenamingId(null);
+    setRenameDraft('');
+  };
+
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 px-6" data-testid={t('sheet')} onClick={onClose}>
+      <div
+        className="max-h-[80%] w-full overflow-y-auto rounded-[18px] bg-[#F2F3F5] p-4 shadow-2xl dark:bg-[#232427]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <p className="text-[15px] font-semibold">管理分组</p>
+          <button
+            type="button"
+            aria-label="关闭"
+            data-testid={t('close')}
+            onClick={onClose}
+            className="grid h-7 w-7 place-items-center rounded-full bg-black/[0.06] text-black/45 active:bg-black/[0.1] dark:bg-white/10 dark:text-white/45"
+          >
+            <X className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+        <p className="mt-1 text-[12px] text-black/40 dark:text-white/40">删除分组不会删除表情，组内表情会移回「我的表情」。</p>
+
+        <div className="mt-3 space-y-2">
+          {groups.map((g) => {
+            const isDef = g.id === DEFAULT_STICKER_GROUP_ID;
+            return (
+              <div
+                key={g.id}
+                className="flex items-center gap-2 rounded-[14px] bg-white p-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.05)] dark:bg-white/[0.07]"
+                data-testid={`${t('row')}-${isDef ? 'my' : g.id}`}
+              >
+                {renamingId === g.id ? (
+                  <>
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') confirmRename();
+                        if (e.key === 'Escape') setRenamingId(null);
+                      }}
+                      maxLength={16}
+                      data-testid={t('rename-input')}
+                      className="h-9 min-w-0 flex-1 rounded-[8px] bg-black/[0.04] px-2.5 text-[14px] outline-none dark:bg-white/[0.08]"
+                    />
+                    <button
+                      type="button"
+                      data-testid={t('rename-ok')}
+                      onClick={confirmRename}
+                      className="h-9 shrink-0 rounded-full px-4 text-[13px] font-medium text-white active:opacity-85"
+                      style={{ backgroundColor: accent }}
+                    >
+                      保存
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="min-w-0 flex-1 truncate text-[14px]">
+                      {g.name}
+                      {isDef && (
+                        <span className="ml-1.5 inline-block translate-y-[-1px] rounded-full bg-black/[0.05] px-1.5 py-0.5 align-middle text-[10px] leading-none text-black/40 dark:bg-white/10 dark:text-white/40">
+                          默认
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-[12px] text-black/35 dark:text-white/35">{countOf(g.id)} 张</span>
+                    {!isDef && (
+                      <>
+                        <button
+                          type="button"
+                          data-testid={`${t('rename')}-${g.id}`}
+                          onClick={() => {
+                            setRenamingId(g.id);
+                            setRenameDraft(g.name);
+                          }}
+                          className="h-8 shrink-0 rounded-full bg-black/[0.05] px-3 text-[12.5px] text-black/55 active:bg-black/[0.09] dark:bg-white/10 dark:text-white/55"
+                        >
+                          重命名
+                        </button>
+                        <button
+                          type="button"
+                          data-testid={`${t('del')}-${g.id}`}
+                          onClick={() => onDelete(g.id)}
+                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#FA5151] active:bg-[#FA5151]/10"
+                          aria-label={`删除分组 ${g.name}`}
+                        >
+                          <Trash2 className="h-[17px] w-[17px]" strokeWidth={2} />
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 新建分组 */}
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const v = newName.trim();
+                if (v) {
+                  onCreate(v);
+                  setNewName('');
+                }
+              }
+            }}
+            maxLength={16}
+            placeholder="新分组名字"
+            data-testid={t('new-input')}
+            className="h-10 min-w-0 flex-1 rounded-[10px] bg-white px-3 text-[14px] outline-none placeholder:text-black/30 dark:bg-white/[0.08] dark:placeholder:text-white/30"
+          />
+          <button
+            type="button"
+            data-testid={t('new-ok')}
+            onClick={() => {
+              const v = newName.trim();
+              if (v) {
+                onCreate(v);
+                setNewName('');
+              }
+            }}
+            className="h-10 shrink-0 rounded-full px-5 text-[13.5px] font-medium text-white active:opacity-85"
+            style={{ backgroundColor: accent }}
+          >
+            新建分组
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 由分组栏「＋」/ 管理弹层「新建分组」共用：生成新分组对象（父级 append 后持久化） */
+export function makeStickerGroup(name: string): StickerGroup {
+  return { id: newStickerGroupId(), name: name.trim().slice(0, 16), createdAt: Date.now() };
 }

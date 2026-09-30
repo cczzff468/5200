@@ -228,8 +228,19 @@ import {
   type FriendReqExtras,
   type FriendReqThreadMsg,
 } from '@/lib/ios/friend-state';
-import { loadStickers, saveStickers, newStickerId, extractMeaningFromUrl, fileNameMeaning, isImageUrl } from '@/lib/ios/stickers';
-import type { Sticker } from '@/lib/ios/stickers';
+import {
+  DEFAULT_STICKER_GROUP_ID,
+  extractMeaningFromUrl,
+  fileNameMeaning,
+  isImageUrl,
+  loadStickerGroups,
+  loadStickers,
+  newStickerId,
+  saveStickerGroups,
+  saveStickers,
+  stickerGroupOf,
+} from '@/lib/ios/stickers';
+import type { Sticker, StickerGroup } from '@/lib/ios/stickers';
 import {
   buildRichRules,
   buildActionRules,
@@ -271,7 +282,7 @@ import {
   setGroupSocialContacts,
   type GroupCardData,
 } from '@/lib/ios/group-social';
-import { BatchStickerSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
+import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, qqChatFlags as qqChatFlagsStore } from '@/lib/chat-flags';
@@ -1893,6 +1904,8 @@ export function QqStickerPanel({
   onToast: (m: string) => void;
 }) {
   const [list, setList] = useState<Sticker[]>(() => loadStickers('qq'));
+  const [groups, setGroups] = useState<StickerGroup[]>(() => loadStickerGroups('qq'));
+  const [activeGroupId, setActiveGroupId] = useState<string>(DEFAULT_STICKER_GROUP_ID);
   const [mode, setMode] = useState<'grid' | 'add'>('grid');
   const [tab, setTab] = useState<'file' | 'url'>('file');
   const [editMode, setEditMode] = useState(false);
@@ -1903,6 +1916,18 @@ export function QqStickerPanel({
   const commit = (next: Sticker[]) => {
     setList(next);
     saveStickers('qq', next);
+  };
+  /** 当前分组下的表情（groupId 缺失/指向已删分组 → 归默认分组，防孤儿不可见） */
+  const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
+  const visible = useMemo(() => list.filter((s) => stickerGroupOf(s, groupIds) === activeGroupId), [list, groupIds, activeGroupId]);
+  /** 新建分组（分组栏「＋」胶囊）：持久化 + 自动选中新分组 */
+  const createGroup = (name: string) => {
+    const g = makeStickerGroup(name);
+    const next = [...groups, g];
+    setGroups(next);
+    saveStickerGroups('qq', next);
+    setActiveGroupId(g.id);
+    onToast(`已新建分组「${g.name}」`);
   };
   const pickFile = async (files: FileList | null) => {
     const f = files?.[0];
@@ -1921,7 +1946,7 @@ export function QqStickerPanel({
       return;
     }
     const meaning = draftMeaning.trim();
-    commit([{ id: newStickerId(), url, meaning, createdAt: Date.now() }, ...list]);
+    commit([{ id: newStickerId(), url, meaning, groupId: activeGroupId, createdAt: Date.now() }, ...list]);
     onToast(meaning ? `已添加表情（${meaning}）` : '已添加表情');
     setPreview(null);
     setDraftUrl('');
@@ -1988,10 +2013,12 @@ export function QqStickerPanel({
           </button>
         </div>
       </div>
+      {/* 分组栏：毛玻璃胶囊分组名字（点选切换下方网格）+「＋」新建分组 */}
+      <StickerGroupBar testPrefix="qq" groups={groups} activeId={activeGroupId} onSelect={setActiveGroupId} onCreate={createGroup} />
       {mode === 'grid' ? (
         <div className="h-[280px] overflow-y-auto px-3 pb-4 pt-1">
           <div className="grid grid-cols-4 gap-2">
-            {list.map((st, i) => (
+            {visible.map((st, i) => (
               <div key={st.id} className="relative">
                 <button
                   type="button"
@@ -2045,7 +2072,11 @@ export function QqStickerPanel({
             </button>
             <span aria-hidden="true" className="mt-0.5 h-4" />
           </div>
-          {list.length === 0 && <p className="pb-2 pt-3 text-center text-[13px] text-black/35 dark:text-white/35">还没有表情，点「＋」添加一张</p>}
+          {visible.length === 0 && (
+            <p className="pb-2 pt-3 text-center text-[13px] text-black/35 dark:text-white/35">
+              {list.length === 0 ? '还没有表情，点「＋」添加一张' : '该分组还没有表情，点「＋」添加一张'}
+            </p>
+          )}
         </div>
       ) : (
         <div className="px-4 pb-4 pt-1">
@@ -2117,11 +2148,16 @@ export function QqStickerPanel({
   );
 }
 
-/** QQ 表情管理页（个人中心抽屉「表情」入口：网格 + 单张编辑[改意思/删除] + 批量导入手机图片 + URL 添加自动识别意思） */
+/** QQ 表情管理页（个人中心抽屉「表情」入口：网格 + 单张编辑[改意思/所属分组/删除] + 批量导入手机图片 + URL 添加自动识别意思 + 分组管理） */
 function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
   const [list, setList] = useState<Sticker[]>(() => loadStickers('qq'));
+  const [groups, setGroups] = useState<StickerGroup[]>(() => loadStickerGroups('qq'));
+  const [activeGroupId, setActiveGroupId] = useState<string>(DEFAULT_STICKER_GROUP_ID);
   const [editing, setEditing] = useState<Sticker | null>(null);
   const [editMeaning, setEditMeaning] = useState('');
+  /** 编辑弹层里的所属分组（保存时随意思一起写入） */
+  const [editGroupId, setEditGroupId] = useState<string>(DEFAULT_STICKER_GROUP_ID);
+  const [groupManageOpen, setGroupManageOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchItems, setBatchItems] = useState<BatchDraftItem[]>([]);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -2129,6 +2165,18 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
   const commit = (next: Sticker[]) => {
     setList(next);
     saveStickers('qq', next);
+  };
+  /** 当前分组下的表情（groupId 缺失/指向已删分组 → 归默认分组，防孤儿不可见） */
+  const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
+  const visible = useMemo(() => list.filter((s) => stickerGroupOf(s, groupIds) === activeGroupId), [list, groupIds, activeGroupId]);
+  const applyGroups = (next: StickerGroup[]) => {
+    setGroups(next);
+    saveStickerGroups('qq', next);
+  };
+  const createGroup = (name: string) => {
+    const g = makeStickerGroup(name);
+    applyGroups([...groups, g]);
+    onToast(`已新建分组「${g.name}」`);
   };
 
   /** 右上角「管理」：进入删除模式，点表情上的红色 × 直接删除（再点完成退出） */
@@ -2168,9 +2216,9 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
     setBatchOpen(true);
   };
 
-  /** 确认批量添加：草稿项转正式表情入库（插到最前） */
+  /** 确认批量添加：草稿项转正式表情入库（插到最前，归入当前选中分组） */
   const confirmBatch = (items: BatchDraftItem[]) => {
-    const added: Sticker[] = items.map((it) => ({ id: newStickerId(), url: it.preview, meaning: it.name.trim(), createdAt: Date.now() }));
+    const added: Sticker[] = items.map((it) => ({ id: newStickerId(), url: it.preview, meaning: it.name.trim(), groupId: activeGroupId, createdAt: Date.now() }));
     commit([...added, ...list]);
     setBatchOpen(false);
     setBatchItems([]);
@@ -2199,16 +2247,31 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
           )}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-3">
+      {/* 分组栏：毛玻璃胶囊分组名字（点选切换下方网格）+「＋」新建 +「管理分组」弹层入口 */}
+      <StickerGroupBar
+        testPrefix="qq"
+        groups={groups}
+        activeId={activeGroupId}
+        onSelect={setActiveGroupId}
+        onCreate={createGroup}
+        onManage={() => setGroupManageOpen(true)}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-2">
         {list.length === 0 ? (
           <p className="mt-10 text-center text-[13px] text-black/35 dark:text-white/35">
             还没有表情包
             <br />
             从下方添加，或批量导入手机图片
           </p>
+        ) : visible.length === 0 ? (
+          <p className="mt-10 text-center text-[13px] text-black/35 dark:text-white/35">
+            该分组还没有表情
+            <br />
+            从下方添加，或切换到其他分组
+          </p>
         ) : (
           <div className="grid grid-cols-3 gap-3">
-            {list.map((st, i) => (
+            {visible.map((st, i) => (
               <button
                 key={st.id}
                 type="button"
@@ -2220,6 +2283,7 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
                   }
                   setEditing(st);
                   setEditMeaning(st.meaning);
+                  setEditGroupId(st.groupId ?? DEFAULT_STICKER_GROUP_ID);
                 }}
                 className="relative rounded-[12px] p-1 text-left active:bg-black/[0.03] dark:active:bg-white/[0.06]"
               >
@@ -2289,6 +2353,28 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
               data-testid="qq-stickers-edit-meaning"
               className="h-[46px] w-full rounded-[10px] border border-black/[0.08] bg-white px-3 text-[15px] outline-none placeholder:text-black/30 dark:border-white/10 dark:bg-[#1F2125] dark:placeholder:text-white/30"
             />
+            {/* 所属分组：胶囊点选，保存时生效 */}
+            <p className="pb-1.5 pt-2.5 text-[12px] text-black/40 dark:text-white/40">所属分组</p>
+            <div className="flex flex-wrap gap-1.5">
+              {groups.map((g) => {
+                const on = (editGroupId || DEFAULT_STICKER_GROUP_ID) === g.id;
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    data-testid={`qq-stickers-edit-group-${g.id === DEFAULT_STICKER_GROUP_ID ? 'my' : g.id}`}
+                    onClick={() => setEditGroupId(g.id)}
+                    className={`h-7 rounded-full border px-3 text-[12.5px] ${
+                      on
+                        ? 'border-[#0099FF]/40 bg-[#0099FF]/10 font-medium text-[#0099FF]'
+                        : 'border-black/[0.07] bg-white/60 text-black/50 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/50'
+                    }`}
+                  >
+                    {g.name}
+                  </button>
+                );
+              })}
+            </div>
             <div className="mt-3 flex gap-2">
               <button
                 type="button"
@@ -2307,7 +2393,7 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
                 data-testid="qq-stickers-edit-save"
                 onClick={() => {
                   if (!editing) return;
-                  commit(list.map((x) => (x.id === editing.id ? { ...x, meaning: editMeaning.trim() } : x)));
+                  commit(list.map((x) => (x.id === editing.id ? { ...x, meaning: editMeaning.trim(), groupId: editGroupId || DEFAULT_STICKER_GROUP_ID } : x)));
                   setEditing(null);
                   onToast('已保存');
                 }}
@@ -2334,6 +2420,27 @@ function QqStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
         onToast={onToast}
         testPrefix="qq"
       />
+
+      {/* 分组管理弹层：重命名/删除自定义分组（组内表情移回默认组），底部新建分组 */}
+      {groupManageOpen && (
+        <StickerGroupManageSheet
+          testPrefix="qq"
+          groups={groups}
+          stickers={list}
+          onRename={(id, name) => {
+            applyGroups(groups.map((g) => (g.id === id ? { ...g, name } : g)));
+            onToast('分组已重命名');
+          }}
+          onDelete={(id) => {
+            applyGroups(groups.filter((g) => g.id !== id));
+            commit(list.map((s) => (stickerGroupOf(s, groupIds) === id ? { ...s, groupId: DEFAULT_STICKER_GROUP_ID } : s)));
+            if (activeGroupId === id) setActiveGroupId(DEFAULT_STICKER_GROUP_ID);
+            onToast('分组已删除，表情移回「我的表情」');
+          }}
+          onCreate={createGroup}
+          onClose={() => setGroupManageOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -12403,3 +12403,29 @@ Stage Summary:
 - 加好友过程四类提示（用户验证标注/AI 打招呼标注/两种成功提示）在微信、QQ 两端与撤回/拉黑系统提示视觉统一（灰字胶囊），历史聊天记录打开即生效（渲染层改动，无需数据迁移）
 - 动作描写五端默认值由开→关；用户手动开启过的会话（map 里显式 true）不受影响；此前「保存=删除键回默认」的语义随之对调
 - 产出文件：src/lib/action-desc.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: V
+Agent: 主协调者 (Z.ai Code)
+Task: 用户三点——①信息APP设置界面删除「表情包」开关 ②微信/QQ表情包界面支持分组（分组+名字+表情包） ③表情面板顶部显示分组名字（毛玻璃胶囊包裹），下方是表情包
+
+Work Log:
+- src/lib/ios/stickers.ts：数据层加分组——StickerGroup 接口 + Sticker.groupId 可选字段 + 默认分组「我的表情」（DEFAULT_STICKER_GROUP_ID='my'，永远第一、不可删/不可改名）；loadStickerGroups/saveStickerGroups（kv 键 wx-sticker-groups / qq-sticker-groups，损坏数据兜底）/newStickerGroupId/stickerGroupOf（groupId 缺失或指向已删分组 → 归默认组防孤儿不可见）；loadStickers 归一化 groupId；旧数据零迁移（无 groupId 全部落默认组）
+- src/components/apps/sticker-batch.tsx 新增三件共用件：①StickerGroupBar 毛玻璃胶囊分组栏（半透明白底+backdrop-blur+细描边胶囊，每个胶囊一个分组名字，选中态更实+投影+加粗；末尾虚线「＋」胶囊→原地展开新建分组输入；可选「管理分组」入口）②StickerGroupManageSheet 分组管理弹层（默认组带「默认」徽标不可操作；自定义组重命名[原地输入]/删除[组内表情移回默认组不丢数据]+张数；底部新建分组输入行）③makeStickerGroup 工厂
+- wechat.tsx：WxStickerPanel（单聊/群聊共用）+ WxStickersPage 接入——groups/activeGroupId 状态，分组栏插在标题行下方；网格按当前组过滤 visible；新增表情（面板内嵌添加/管理页批量导入+URL）归入当前选中组；空组文案「该分组还没有表情」；编辑弹层加「所属分组」胶囊行（保存时随意思一起写入，实现跨组移动）；管理页分组栏带「管理分组」入口
+- qq.tsx：QqStickerPanel + QqStickersPage 同构接入（QQ 独立分组存储 qq-sticker-groups，品牌色蓝）
+- chat-settings.tsx SmsChatSettingsPage：删除「表情包」开关行及 stickersOn/onToggleStickers props（wx/qq 共用 ChatSettingsPage 的开关保留）
+- chat.tsx：表情包开关接线全部拆除（getStickersOn/saveStickersOn/STICKER_OFF_RULE 导入、会话状态、设置页 props、回复段 stripEmoji 分支、system 禁令注入、useCallback deps），AI emoji 回到默认行为（始终允许按人设使用）；历史 localStorage chat-sticker-on 对 sms 会话的残留值不再读取
+- 验证：bun run lint 0 错误；npx tsc --noEmit 0 错误；agent-browser E2E——
+  ①信息端设置页（摄像机图标进入）：仅 备注/翻译/回复条数/分句发送/时间感知/动作描写，全文无「表情包」行✓
+  ②微信面板：分组栏「我的表情」胶囊+「＋」→ 新建「沙雕」自动选中（font-medium 选中态）→ URL 添加表情（自动识别意思「笑死我了」）落该组 → 切「我的表情」显示「该分组还没有表情」→ 切回沙雕显示 1 张✓
+  ③微信管理页（我→表情）：分组胶囊+管理分组弹层——重命名 沙雕→沙雕日常、新建/删除「猫咪」、张数实时✓；编辑弹层「所属分组」胶囊把表情从沙雕日常移回我的表情（移动后两组张数 0/1 正确）✓
+  ④IndexedDB kv wx-sticker-groups 持久化正确（默认组第一+自定义组）✓
+  ⑤QQ：面板独立分组（初始仅我的表情）→ 新建「快乐屋」→ URL 添加「开心到飞起」入组 → 点选发送表情气泡正常上屏✓
+  ⑥dev.log 无异常；群聊端 wx-group/qq-group 复用同一面板组件自动获得分组能力
+- 收尾中：重启 dev server（原进程已退出，bun run dev 后台拉起 200 正常）
+
+Stage Summary:
+- 微信/QQ 表情包全面分组化：面板顶部毛玻璃胶囊分组名字（点选切换、＋建组），下方表情网格按组展示；管理页支持建组/重命名/删组（表情回落默认组）/单张跨组移动；AI 表情清单与开关逻辑零改动（AI 仍看全量清单，分组纯用户侧组织）
+- 信息端设置页「表情包」开关移除：信息端本无表情包面板，开关只约束 emoji，移除后 AI emoji 恢复默认常开；wx/qq 开关不受影响
+- 产出文件：src/lib/ios/stickers.ts、src/components/apps/sticker-batch.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat-settings.tsx、src/components/apps/chat.tsx

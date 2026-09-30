@@ -54,10 +54,10 @@ import { ownerProfile } from '@/lib/ios/contacts-store';
 import { buildTimeAwareBlock as buildSmsTimeBlock } from '@/lib/time-aware';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
-import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+// 注：表情包开关已按需求从信息端设置页移除（信息端无表情包面板）——AI emoji 回到默认行为（始终允许，按人设自然使用）；
+// 历史 localStorage 键 chat-sticker-on 对 sms 会话的残留值不再被读取
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
-import { stripEmojiText } from '@/lib/emoji';
 import { buildVisionRules, cleanBubbleText, extractRichActionParts } from '@/lib/chat-rich';
 import {
   acceptBlockReq,
@@ -854,11 +854,6 @@ function ChatView({
   useEffect(() => {
     setTimeAwareState(getTimeAware(sessionKey));
   }, [sessionKey]);
-  /** 表情包开关（本会话独立，发送时现场读取；关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle；信息端无表情包，只约束 emoji） */
-  const [stickersOn, setStickersOnState] = useState(() => getStickersOn(sessionKey));
-  useEffect(() => {
-    setStickersOnState(getStickersOn(sessionKey));
-  }, [sessionKey]);
   // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效
   const actionDescOn = useActionDescOn(sessionKey);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（右侧 Mic 钮切换，原装饰图标位置） */
@@ -1235,14 +1230,11 @@ function ChatView({
         // 40-a：仅申请卡模式（用户拉黑了角色）——AI 的正文/表情一律丢弃，只有上面动作分支产出的
         // 申请卡片与系统行能落盘（入口守卫已保证：能走到这里的 byUser 回合必然处于可申请状态）
         if (wbContactId && loadBlock('sms', wbContactId).byUser) continue;
-        // #42：下方 segs/stripEmojiText 仅正常模式（byUser=false）执行——byUser continue 上面已拦，
-        // 不再在三元里再判 byUser；保留 stickersOn 三元用于表情开关关闭时剥 emoji
+        // #42：下方 segs 清洗仅正常模式（byUser=false）执行——byUser continue 上面已拦；
+        // 信息端表情包开关已移除 → 回复文字保留原文（不再剥 emoji）
         // 首尾清洗（与微信/QQ 同款）：剥掉首尾空白与零宽/盲文空格等「看不见的占位字符」——
         // 只含空白/不可见字符的段直接跳过，不生成空白气泡（动作描写被剥离后只剩空段时尤其必要）
         const segs = splitReplySegments(part.text, !asSingle)
-          .map((seg) =>
-            stickersOn ? seg : stripEmojiText(seg.replace(/[[【]\s*(?:发送了表情包?|表情包?)(?:[:：][^\]】]*)?[\]】]/g, ' '))
-          )
           .map(cleanBubbleText)
           .filter((seg) => seg.length > 0);
         for (const seg of segs) {
@@ -1258,7 +1250,7 @@ function ChatView({
       }
       return { msgs: out, nextIdx: msgIdx };
     },
-    [peerLabel, settleUserBlockReq, stickersOn, wbContactId, setAvatarOverride, onContactChanged],
+    [peerLabel, settleUserBlockReq, wbContactId, setAvatarOverride, onContactChanged],
   );
 
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
@@ -1387,7 +1379,6 @@ function ChatView({
         ? '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 打一次电话给对方，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。'
         : '',
       timeBlock,
-      stickersOn ? '' : STICKER_OFF_RULE,
       // 动作描写：开启下发 *...* 格式约定（灰色小字居中显示），关闭下发显式禁令（渲染层另有硬剥离兜底）
       actionDescOn ? ACTION_DESC_RULE : ACTION_DESC_OFF_RULE,
       // 46-g 视觉自主决策规则（仅联系人会话；信息端无图无朋友圈，albumSummary 通常为空 → 只注入换头像规则；
@@ -2749,7 +2740,6 @@ function ChatView({
           }
           sentenceSend={sentenceSend}
           timeAware={timeAware}
-          stickersOn={stickersOn}
           actionDescOn={actionDescOn}
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           worldBooksSummary={
@@ -2777,11 +2767,6 @@ function ChatView({
             // 立即持久化并生效（下一次请求现场读取，无需重启）
             setTimeAware(sessionKey, v);
             setTimeAwareState(v);
-          }}
-          onToggleStickers={(v) => {
-            // 立即持久化并生效（下一次请求现场读取，无需重启）：关闭后 AI 不发表情包也不发 emoji
-            saveStickersOn(sessionKey, v);
-            setStickersOnState(v);
           }}
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
           voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)}

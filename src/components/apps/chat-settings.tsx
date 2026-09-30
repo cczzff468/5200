@@ -1313,7 +1313,6 @@ export function SmsChatSettingsPage({
   replyCount,
   sentenceSend,
   timeAware,
-  stickersOn,
   worldBooksSummary,
   onBack,
   onSaveRemark,
@@ -1321,7 +1320,6 @@ export function SmsChatSettingsPage({
   onOpenReplyCount,
   onToggleSentenceSend,
   onToggleTimeAware,
-  onToggleStickers,
   actionDescOn,
   onToggleActionDesc,
   onOpenWorldBooks,
@@ -1345,8 +1343,6 @@ export function SmsChatSettingsPage({
   sentenceSend: boolean;
   /** 时间感知开关状态（开启后 AI 感知当前时间/节日/事件时长/上次聊天间隔） */
   timeAware: boolean;
-  /** 表情包开关状态（关闭后 AI 不发表情包也不发 emoji，见 @/lib/sticker-toggle） */
-  stickersOn: boolean;
   /** 动作描写开关状态（开启后 AI 回复里的动作描写以灰色小字居中显示，关闭后自动过滤，见 @/lib/action-desc） */
   actionDescOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
@@ -1359,7 +1355,6 @@ export function SmsChatSettingsPage({
   onOpenReplyCount: () => void;
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
-  onToggleStickers: (v: boolean) => void;
   /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
   onToggleActionDesc: (v: boolean) => void;
   /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
@@ -1484,20 +1479,6 @@ export function SmsChatSettingsPage({
               accent="#34C759"
               testId="sms-settings-time"
               label="时间感知"
-            />
-          </div>
-        </div>
-
-        {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
-        <div className={`${t.cardCls} mt-3`}>
-          <div className={`flex items-center justify-between ${t.rowCls}`}>
-            <span>表情包</span>
-            <ChatToggle
-              on={stickersOn}
-              onChange={onToggleStickers}
-              accent="#34C759"
-              testId="sms-settings-stickers"
-              label="表情包"
             />
           </div>
         </div>
