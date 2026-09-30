@@ -12523,3 +12523,19 @@ Work Log:
 Stage Summary:
 - 线下模式二审完成：上次清单遗留的 2 个真 bug（承接截断方向/字数默认矛盾）已修，另补空保存拦截、放弃见面出口、时间锚点活化、导演×自主推进口径治理、4 处竞态守卫
 - 产出文件：src/lib/offline-meet.ts、src/components/apps/offline-meeting.tsx
+---
+Task ID: 6
+Agent: Z.ai Code (main)
+Task: 信息 APP 移除线下模式入口（QQ/微信保留）
+
+Work Log:
+- 定位：线下组件由 chat.tsx（信息）/ wechat.tsx / qq.tsx 三处引用，信息端为输入栏"+"按钮（唯一功能=打开线下页）
+- chat.tsx 删除 4 处：OfflineMeetingPage/OfflineOnlineMsg 导入、offlineOpen state、输入栏"+"按钮（data-testid=sms-offline-entry）、OfflineMeetingPage 渲染块（app="sms"）
+- profileName/profileAvatar/wbContactId/Plus 均有其他用途，保留
+- 文档注释同步：offline-meet.ts「三端共用」→「QQ/微信两端共用」，入口说明删去信息端；offline-meeting.tsx 头注释注明信息端入口已移除、历史 sms 数据仍兼容回看（lib 层 OfflineApp 保留 'sms' 类型做旧数据兼容）
+- 验证：eslint 0 错误、tsc --noEmit 0 错误、dev server 200；浏览器实测信息 App 正常（会话列表/联系人 tab/小助手会话打开、输入栏无"+"），无 console 错误
+- 测试环境说明：agent-browser 守护进程重启后浏览器 profile 为全新实例（IndexedDB 空、微信要求登录）——属测试环境重置，用户预览面板的真实数据不受影响；微信/QQ 代码本次零改动，线下入口不受影响
+
+Stage Summary:
+- 信息 APP 线下功能入口已完整移除（按钮+状态+渲染块+导入），线下功能现在仅 QQ（五角星）与微信（加号面板）可用
+- 产出文件：src/components/apps/chat.tsx、src/lib/offline-meet.ts、src/components/apps/offline-meeting.tsx（后两个仅注释）

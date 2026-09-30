@@ -40,8 +40,6 @@ import {
   useChatStreamFinalized,
   type ChatPayloadMessage,
 } from '@/lib/chat-stream-store';
-import OfflineMeetingPage from '@/components/apps/offline-meeting';
-import type { OfflineOnlineMsg } from '@/lib/offline-meet';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import { addressNameOf } from '@/lib/contacts';
 import { buildNpcPromptExtra, type NpcPromptExtra } from '@/lib/ios/npc-bond';
@@ -840,8 +838,6 @@ function ChatView({
   }, [sessionKey]);
   /** 当前会话的翻译配置（开启后文字消息气泡下方显示所选语言的译文） */
   const [transCfg, setTransCfgState] = useState<ChatTranslateCfg>(() => getTranslateCfg(sessionKey));
-  /** 线下模式（约会）：输入栏加号入口打开的见面页（仅联系人会话；与微信/QQ共用） */
-  const [offlineOpen, setOfflineOpen] = useState(false);
   useEffect(() => {
     setTransCfgState(getTranslateCfg(sessionKey));
   }, [sessionKey]);
@@ -2650,18 +2646,6 @@ function ChatView({
         }}
         className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-2.5 pb-[30px] pt-2 backdrop-blur-xl"
       >
-        <button
-          type="button"
-          aria-label={wbContactId ? '线下模式' : '小助手会话不支持线下见面'}
-          data-testid="sms-offline-entry"
-          disabled={!wbContactId}
-          onClick={() => {
-            if (wbContactId) setOfflineOpen(true);
-          }}
-          className={`flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-border/50 bg-card/60 text-muted-foreground backdrop-blur-xl ${wbContactId ? 'active:opacity-60' : 'opacity-40'}`}
-        >
-          <Plus className="h-5 w-5" strokeWidth={2} />
-        </button>
         <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full border border-border/70 bg-background pl-3.5 pr-1.5">
           {voiceMode ? (
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
@@ -2819,33 +2803,6 @@ function ChatView({
           }}
         />
       )}
-
-      {/* 线下模式（约会）：从聊天继续，承接最近 N 条线上聊天（输入栏加号入口，仅联系人会话；与微信/QQ共用同一页面组件） */}
-      {offlineOpen && wbContactId ? (
-        <OfflineMeetingPage
-          app="sms"
-          channel="短信"
-          contactId={wbContactId}
-          userName={profileName}
-          userRealName={profileName || null}
-          userNickname={null}
-          userAvatar={profileAvatar}
-          loadRecentMsgs={(n: number): OfflineOnlineMsg[] =>
-            msgs
-              .slice(-n)
-              .map((m): OfflineOnlineMsg | null => {
-                if (m.recalled || m.sys || m.blkreq || m.error) return null;
-                const kind = m.kind ?? 'text';
-                const text = kind === 'voice' ? m.voice?.transcript?.trim() || m.voice?.localText?.trim() || '[语音]' : m.content;
-                if (!text.trim()) return null;
-                return { role: m.role === 'user' ? 'me' : 'peer', text, time: m.time };
-              })
-              .filter((m): m is OfflineOnlineMsg => m !== null)
-          }
-          onBack={() => setOfflineOpen(false)}
-          onToast={showToast}
-        />
-      ) : null}
 
       {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}
       {translateOpen && (
