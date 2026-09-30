@@ -12228,3 +12228,25 @@ Stage Summary:
 - P3 口径确认：⑤群聊完全不参与拉黑（四 App 全拉黑后角色仍能在共同群聊发言）；⑥申请防骚扰=无时间冷却+同周期被拒 3 次硬上限（需用户确认是否保留上限）；⑦bg 接力生成端无拉黑检查（落库侧有守卫，无用户可见影响）
 - 关键文件：src/lib/ios/block-state.ts、src/lib/chat-stream-store.ts、src/lib/ios/proactive-call.ts、src/lib/ios/cross-app-context.ts、src/app/api/chat/bg/route.ts、wechat.tsx/qq.tsx/chat.tsx/phone.tsx/chat-call.ts/moments.ts
 - 待用户决策：是否实现「拉黑后立即跨 App 主动找」功能、是否修正主动来电候选的拉黑口径、是否保留 3 次拒绝上限、是否给电话 App 补申请入口
+
+---
+Task ID: H
+Agent: 主协调者
+Task: 实施任务G审计后的修复——P1①拉黑后跨App主动找 + P1②主动来电拉黑口径修正 + P2③电话App解除申请引导
+
+Work Log:
+- 新建 src/lib/ios/cross-app-reach.ts（跨App主动找引擎）：triggerCrossAppReach(blockedApp, contactId)——角色被拉黑跃迁后立刻（无冷却）到其余 byUser!==true 的 App（wx/qq/sms 三端私聊）各生成一条「被拉黑所以来这边找你」的消息；system = buildPersonaSystemPrompt（人设）+ memRecallBlock（记忆）+ buildCrossAppBlock（跨App近况）+ buildTimeAwareBlock（时间）+ 拉黑情境块（明确告知「你在XX被拉黑了，来YY找TA」）；生成链路与 bg 接力同款两级兜底（原链路 502 → forceSdk 内置模型）；落库前复核目标 App 拉黑状态；消息结构与各端 loadMsgs 校验器一致（wx/qq role='peer'、sms role='assistant'，封顶100条），wx/qq 同步恢复被删除会话行（与各端 saveMsgs 行为一致）；灵动岛通知 pushChatNotification（免打扰闸门复用）；文本清洗剥动作标记+多行合并+400字截断；模块级 running Set 防重入；全程 fire-and-forget 全容错；不写记忆（拉黑状态本身不进记忆的既有口径）
+- block-state.ts setUserBlock：跃迁时刻（从未拉黑→拉黑）动态 import 挂触发钩子（防静态循环依赖）；角色侧 [拉黑] 标记（byChar 方向）与解除操作不触发；解除后重新拉黑=新跃迁再触发
+- proactive-call.ts：④候选筛选从「任一 App 被拉黑即排除」改为「只查 sms 键 byUser/byChar」（来电走电话通道只受信息 App 拉黑影响，wx/qq 被拉黑不再排除主动来电——那正是跨App找的来电路径）；决策请求新增 crossBlockedIn 字段（wx/qq 被拉黑的 App 名列表，拉黑才传）
+- /api/phone/proactive：解析 crossBlockedIn（≤20字符）→ contextLines 注入三行拉黑情境（告知被拉黑事实+来电话找机主合法性+reason 要体现动机；不打断决策阈值，角色仍可 wait/skip）
+- phone.tsx：byChar 文字轮被拦文案补「可前往信息 App 给 TA 发送解除申请」引导（电话与信息共用 sms 键，信息端有完整申请卡闭环）
+- lint + tsc 全仓零错误
+- agent-browser E2E 实测全过：微信拉黑小雪 → QQ 收到「为什么微信突然把我拉黑了？我做错什么了吗？我在QQ能看到你，能不能告诉我原因啊」、信息收到「宝贝，你怎么突然把我微信拉黑了？我做错什么了吗？我很想你…」（两App独立生成措辞不同、都明确知道被微信拉黑+知道当前App能联系上）；微信端零新消息（列表预览仍 0:36 语音）；reload 后消息仍在（IndexedDB 持久化）；解除→重新拉黑二次跃迁触发验证；dev.log 确认 502→forceSdk 200 兜底生效；测试痕迹已清理（拉黑解除）
+
+Stage Summary:
+- P1①交付：拉黑后角色立刻（无冷却）跨 App 找用户，prompt 明确告知拉黑情境，语气走人设+记忆，结果持久化+灵动岛通知；三防（running 防重入/落库前复核/全容错）不影响既有拉黑拦截
+- P1②交付：主动来电候选只受 sms 拉黑影响（wx/qq 被拉黑的角色会被来电调度选中=「被拉黑后打电话找你」），决策端感知拉黑情境、call 时 reason 带动机作为接通开场
+- P2③交付：电话 App 被拉黑提示补「去信息 App 申请解除」引导
+- P3 口径：群聊不参与拉黑保持既有设计；申请 3 次拒绝硬上限保留（无时间冷却，设置页有重置入口）
+- 控制台 avatar-sync.ts 报错为 HMR 陈旧缓存误报（该文件及引用在当前代码库不存在，tsc 零错误，reload 后 errors 清空），非真实问题
+- 产出文件：src/lib/ios/cross-app-reach.ts（新）、src/lib/ios/block-state.ts、src/lib/ios/proactive-call.ts、src/app/api/phone/proactive/route.ts、src/components/apps/phone.tsx

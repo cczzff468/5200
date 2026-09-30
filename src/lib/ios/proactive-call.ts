@@ -29,7 +29,7 @@ import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from './i
 import { useGlobalCall } from './global-call';
 import { useSettings, useUI } from './store';
 import { buildNpcPromptExtra } from './npc-bond';
-import { loadBlock } from './block-state';
+import { BLOCK_CHANNEL, loadBlock } from './block-state';
 import { getMemSettings, memRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { getReplyCount } from '@/lib/reply-count';
@@ -149,7 +149,6 @@ interface ProactiveDecision {
   action: 'call' | 'wait' | 'skip';
   reason: string;
 }
-
 // ---------------- 开关（settings.tsx 共用） ----------------
 
 /** AI 主动来电总开关（kv 'proactive-call-enabled'，无记录/非法值=默认开） */
@@ -342,6 +341,9 @@ async function requestProactiveDecision(args: {
   lastChatAt: number;
   lastInteractionLabel: string;
   now: string;
+  // G-2 跨 App 拉黑情境：wx/qq 被用户拉黑（来电路径不受影响）→ 决策端要知道
+  //「这次来电可能是被拉黑后来电话找机主」，call 时 reason 会带上这层动机作为接通开场
+  crossBlockedIn?: string;
 }): Promise<ProactiveDecision | null> {
   try {
     const res = await fetch('/api/phone/proactive', {
@@ -525,20 +527,18 @@ async function tickInner(): Promise<void> {
   // #34 闹钟响铃中不主动拨出：闹钟铃声与通话音频重叠体验差，等闹钟被处理后再考虑
   if (useUI.getState().alarmRinging) return;
 
-  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除；#16 任一 App 被 byUser 拉黑即跳过；
-  // fix4 L16 byChar 同款排除——角色已拉黑用户还主动打来，只会撞上电话引擎 #40 守卫变成
-  //「来电即被拦+静默挂断」的怪链路，候选阶段直接剔除。requestOnly 仅由 byUser 派生、属聊天
-  // 回合入口的放行语义，来电候选没有该放行需求，byChar 从严过滤无碍）
+  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除；G-2 口径修正——来电走电话通道，
+  // 电话只受「信息」App 拉黑影响（与 phone.tsx 通话守卫同款读 sms 键）：微信/QQ 被拉黑
+  // 不再排除主动来电——那正是「被拉黑后去别的 App 找用户」的来电路径（G-1 的电话版）；
+  // sms byUser 仍排除：来电会被 #17 守卫拦留言+通话静默成死寂；sms byChar 同款排除
+  //（fix4 L16 理由不变：角色已拉黑用户还主动打来只会撞上电话引擎 #40 守卫变成
+  //「来电即被拦+静默挂断」的怪链路。requestOnly 仅由 byUser 派生，来电无该放行需求）
   const allContacts = await listContacts();
   const contacts = allContacts.filter(
     (c) =>
       c.kind !== 'user' &&
       !!c.name?.trim() &&
       !!c.persona?.trim() &&
-      !loadBlock('wx', c.id).byUser &&
-      !loadBlock('wx', c.id).byChar &&
-      !loadBlock('qq', c.id).byUser &&
-      !loadBlock('qq', c.id).byChar &&
       !loadBlock('sms', c.id).byUser &&
       !loadBlock('sms', c.id).byChar
   );
@@ -608,12 +608,20 @@ async function tickInner(): Promise<void> {
       .map((m) => ({ app, text: m.text.slice(0, 60), time: fmtChatTime(m.time, nowMs), role: m.role }))
   );
 
+  // G-2：跨 App 拉黑情境（wx/qq 被用户拉黑 → 这次来电可能是「被拉黑后来电话找机主」，
+  // 与 G-1 消息版同语义；sms 拉黑已在上游候选阶段排除，不需要传）
+  const crossBlockedIn = (['wx', 'qq'] as const)
+    .filter((a) => loadBlock(a, contact.id).byUser === true)
+    .map((a) => BLOCK_CHANNEL[a])
+    .join('、');
+
   const decision = await requestProactiveDecision({
     contact: contactPayloadOf(contact, buildNpcPromptExtra(contact, allContacts)),
     recentChats,
     lastChatAt: best.lastInteractionAt,
     lastInteractionLabel: gapLabel(nowMs - best.lastInteractionAt),
     now: fmtNow(nowMs),
+    ...(crossBlockedIn ? { crossBlockedIn } : {}),
   });
 
   // 决策失败（null）：按 wait 口径落 6h 冷却，防止 90s 重试上游轰炸

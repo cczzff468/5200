@@ -157,7 +157,7 @@ export function setUserBlock(app: BlockApp, contactId: string, blocked: boolean)
     if (cur.byUser) return cur; // 已是拉黑态：保留申请冷却/计数（防用开关重置骚扰防护）
     const hist = [...(cur.byUserHist ?? [])];
     if (cur.byUserAt !== undefined && cur.byUserUntil !== undefined) hist.push({ at: cur.byUserAt, until: cur.byUserUntil });
-    return saveBlock(app, contactId, {
+    const saved = saveBlock(app, contactId, {
       ...cur,
       byUser: true,
       byUserAt: Date.now(),
@@ -168,6 +168,13 @@ export function setUserBlock(app: BlockApp, contactId: string, blocked: boolean)
       rejectedAt: undefined,
       reqCount: undefined,
     });
+    // G-1 拉黑后跨 App 主动找：跃迁时刻（从未拉黑 → 拉黑）触发角色立刻（无冷却）去其余
+    // 未拉黑的 App 各发一条「被拉黑所以来这边找你」的消息（fire-and-forget 全容错）。
+    // 动态 import 防静态循环依赖（cross-app-reach 反向依赖本模块的 loadBlock/BLOCK_CHANNEL）。
+    void import('./cross-app-reach')
+      .then(({ triggerCrossAppReach }) => triggerCrossAppReach(app, contactId))
+      .catch(() => undefined);
+    return saved;
   }
   if (!cur.byUser) return cur; // 本来就没拉黑：幂等不动（不产生伪区间）
   return saveBlock(app, contactId, {

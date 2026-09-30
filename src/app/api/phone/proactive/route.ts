@@ -148,6 +148,9 @@ export async function POST(req: NextRequest) {
   const lastInteractionLabel =
     typeof root.lastInteractionLabel === 'string' ? root.lastInteractionLabel.trim().slice(0, 40) : '';
   const now = typeof root.now === 'string' ? root.now.trim().slice(0, 60) : '';
+  // G-2 跨 App 拉黑情境：用户在微信/QQ拉黑了该角色（来电路径不受影响）——决策端要感知
+  //「这次来电可能是被拉黑后来电话找机主」，call 时 reason 带上这层动机作为接通开场
+  const crossBlockedIn = typeof root.crossBlockedIn === 'string' ? root.crossBlockedIn.trim().slice(0, 20) : '';
 
   // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
   const userReal = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
@@ -174,6 +177,15 @@ export async function POST(req: NextRequest) {
       : []),
     ...(lastInteractionLabel ? [`距你们上一次互动已经约 ${lastInteractionLabel}。`] : []),
     ...(now ? [`当前时间：${now}。`] : []),
+    // G-2 拉黑情境（有值才注入）：明确告知被拉黑事实与「来电话找机主」的合法性，
+    // 但不打断决策阈值——角色仍按人设判断此刻打电话合不合适（可以返回 wait/skip）
+    ...(crossBlockedIn
+      ? [
+          `重要情境：机主已经在「${crossBlockedIn}」上把你拉黑了——你在那边发的消息 TA 都收不到。`,
+          `这次电话是你在被拉黑后直接打来找 TA（另一个独立渠道，TA 能接到）。如果你决定拨打，reason 里要体现这层动机（问清楚/和好/道歉/赌气等，按你的人设）。`,
+          `被拉黑不影响你的判断：如果此刻打电话不合适，照样返回 wait 或 skip。`,
+        ]
+      : []),
   ];
   const messages: CallApiMessage[] = [
     { role: 'system', content: system },

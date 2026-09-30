@@ -743,7 +743,9 @@ function CallScreen({
       const blockedByUser = blkEntry?.byUser === true;
       if (blockedByChar || blockedByUser) {
         if (blockedByChar && userVia === 'text') {
-          setError('对方已将你拉黑，无法发送');
+          // G-3：电话与信息共用 sms 拉黑键，被角色拉黑后引导去信息 App 走「发送解除申请」
+          //（信息端有完整申请卡闭环：submitUserBlockReq → AI [同意/拒绝解除拉黑] 决策）
+          setError('对方已将你拉黑，无法发送（可前往信息 App 给 TA 发送解除申请）');
           return;
         }
         if (userText) {
