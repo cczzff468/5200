@@ -12679,3 +12679,32 @@ Stage Summary:
 - 形象锁定（锁脸）配置入口正式收敛到「设置 › 图像生成」页尾 FaceLockSection：角色头像胶囊选择器 + 参考图上传/替换/删除 + 外貌描述兜底，按 contactId 隔离的 kv 数据层零改动，与微信/QQ/信息三端聊天内自动（照片标签）与手动（生成照片）生图完全共用；三端聊天设置不再有形象锁定入口
 - 图像生成/API 设置/识图模型/语音 API 四页统一浅灰 iOS 设置子页风（灰底白卡、透明导航延伸状态栏、暗色主题自动回退原背景）；图像生成页分组标题带色块图标、请求方式分段控件、灰底输入字段、主色测试按钮+生成中骨架+结果装裱框
 - 产出文件：src/components/apps/settings.tsx（gray 外壳+美化+FaceLockSection）、src/components/apps/chat-settings.tsx（删 FaceLockPage 与入口）、src/components/apps/{wechat,qq,chat}.tsx（删宿主接线）
+
+---
+Task ID: 7
+Agent: main (Z.ai Code)
+Task: 四张配置页（图像生成/API设置/识图模型/语音API）按钮等控件全部浅灰化 + 形象锁定区再美化
+
+Work Log:
+- 需求：上一轮只做了四页灰底，用户要求页内按钮/输入框/选项胶囊等控件也全部浅灰；形象锁定区进一步美化
+- settings.tsx 控件浅灰化（仅四张 gray 页，其余设置页不动）：
+  · 选项胶囊/服务商/预设/尺寸/质量/模型/内置声线速选/STT 模型 chips：黑底选中态 → bg-black/[0.12] font-medium（dark:bg-white/[0.22]），未选中 bg-black/[0.05]（dark:bg-white/[0.08]），去 border 改无边框灰填充
+  · 全部主/次按钮（测试连接/测试识图/测试生图/拉取模型/拉取音色列表/试听×3/测试服务商/保存预设×3/保存音色/我的音色测试）：bg-foreground 黑底或 border 描边 → bg-[#E9E9EB] 浅灰填充 + active:#DEDEE3 + dark:bg-white/[0.12]；页面直置 CTA 加 shadow-sm+ring
+  · 全部输入框/文本域（含模型/音色面板内搜索框）：bg-background 白底 → bg-[#F2F2F7] 灰底字段（border-black/[0.05] dark:bg-white/[0.06]）；存为预设输入保持白卡描边（灰页上不可见灰）
+  · 请求方式分段控件：bg-muted 槽 → bg-black/[0.05]（dark:bg-white/[0.08]），选中白药丸保持
+  · 内置声线卡：active 黑雾底 → bg-[#E9E9EB] ring，未选中白卡 ring；圆形试听钮 bg-muted/bg-foreground → 黑/白 alpha 灰阶
+  · 卡片统一：四页 7 处 raw 白卡 rounded-[12px] → rounded-[14px]+shadow-sm+ring-black/[0.04]（与 GrayCard 一致）
+  · 分组标题 SectionLabel 化：API 预设(Layers 青)/识图预设(ScanEye 青)/连接配置×3(Wrench 蓝+右侧提示)/服务商(Volume2 青)/全局默认音色(Mic 粉)/我的音色(AudioLines 橙)/STT(MessageSquareText 绿)，新增 Mic/MessageSquareText import
+- 形象锁定区再美化（FaceLockSection）：
+  · 角色胶囊：选中 ring-2 ring-[#8E8E93]/50+shadow-md+active:scale-95，头像未选中 opacity-75，名字选中 font-medium
+  · 卡片头：头像 8→10、名字 font-semibold；状态徽标三态化——已锁脸(绿底+ScanFace 小图标)/仅外貌描述(琥珀)/未设置(灰)（按 refImg 与 appearDraft 动态）
+  · 参考图预览：相片装裱风——rounded-[18px]+shadow-md+ring，左上角黑雾毛玻璃「生图参考图」标签；空态改渐变底（from-black/[0.03] to-black/[0.07]）+ScanFace+两行引导文案
+  · 上传/替换/删除按钮：黑底 → 浅灰填充+ring+active:scale-[0.98]，删除改灰底红字
+  · 外貌描述：FieldLabel 换行内 flex（标题+右侧 {length}/300 字数计数），字段换灰底
+- 排障：MultiEdit 该实现为顺序应用、失败即中止（非原子）——两轮 chips 编辑因单个 old_str 不匹配（whisper 芯片模板收尾换行格式、保存按钮缩进 16 vs 18 空格、一次「兜」字符传输出错）导致部分应用，用 grep 盘点剩余 17 处 bg-foreground 逐个补齐至清零
+- 验证：bun run lint ✓；bunx tsc --noEmit ✓；rg 确认四页内 bg-foreground/text-background 残留为 0；agent-browser E2E（1280×940 合成事件）：API 设置/识图模型/图像生成/语音 API 四页全览截图 ✓，图像生成页滚动检查尺寸/质量灰 chips+测试生图灰钮 ✓，形象锁定区胶囊选中环+已锁脸徽标+装裱参考图+灰按钮+31/300 计数回显 ✓，语音页服务商胶囊/声线卡/试听钮/我的音色/STT 分段全灰 ✓；console/page errors 干净；dev.log 无异常
+
+Stage Summary:
+- 四张配置页完成「灰底白卡灰控件」全套浅灰化：按钮、输入框、选项胶囊、分段控件、声线卡、试听圆钮统一 #E9E9EB/#F2F2F7 黑白 alpha 灰阶体系，暗色主题对应 dark: 变体；其余设置页（主题/壁纸/通知/锁屏等）保持原样不受影响
+- 形象锁定区升级为相片装裱式预览 + 三态状态徽标（已锁脸/仅外貌描述/未设置）+ 字数计数 + 缩放反馈按钮；数据层（imggen-ref:*/imggen-appearance:* kv）零改动
+- 产出文件：src/components/apps/settings.tsx（唯一改动文件，+0 新组件、纯样式/结构微调）
