@@ -13300,3 +13300,62 @@ Stage Summary:
 - 请求 I 全部完成：关闭摄像头三处（拨号主画面/接通 PIP/互换主画面）均显示机主头像（不再「摄像头已关」占位），「你」水印删除；wx/qq/phone+AI 来电四路径 myAvatar 全通
 - 微信+QQ 双端 E2E 全链路（拨号→接通→互换→文字聊天→挂断→卡片→续聊）零错误通过；视频卡片回拨顺带验证
 - 引擎/记忆/卡片链路零改动；tsc/eslint 零错误
+
+---
+Task ID: 28-b
+Agent: Z.ai (sub-agent 28-b)
+Task: 联系人详情页「音视频通话」改造（Task 28-b）——wx 好友详情页 / QQ 好友资料页底部按钮弹 ActionSheet（语音通话/视频通话/取消），选项拨号接通全局通话层
+
+Work Log:
+- 【微信 FriendDetailPage】「音视频通话」按钮 onClick 由 onToast 占位改为打开局部 ActionSheet：新增 onCall(media) prop + callSheetOpen state；Sheet 容器复用本文件 WxPayMethodSheet 同款风格（absolute inset-0 z-50 bg-black/45 遮罩 + rounded-t-[14px] #EDEDED 底部卡片 + 内嵌白色选项组 + 独立「取消」行），滑入动画按文件既有 <style>@keyframes + inline animation 模式新增 wxFdCallIn（translateY(65%)→0，0.24s）；选项行 h-14 text-[17px] 左图标+文字：语音通话（lucide Phone #07C160 绿）/视频通话（lucide Video #07C160 绿）；点遮罩/取消均关闭；选项点击先 setCallSheetOpen(false) 再 onCall(media)。data-testid：wx-fdetail-call（按钮，新增）/ wx-fdetail-call-sheet / wx-fdetail-call-voice / wx-fdetail-call-video
+- 【QQ FriendProfilePage】同构改造：新增 onCall(media) prop + callSheetOpen state；Sheet 容器复用本文件 PayMethodSheet 同款风格（bg-black/45 遮罩 + rounded-t-[18px] 白底卡片 + 顶部抓取条 + 独立圆角「取消」行），qqFdCallIn 滑入动画；选项行白底(QQ 灰底行) h-14 text-[17px]，图标用 QQ 蓝 QQ_BLUE(#12B7F5)：语音通话 Phone / 视频通话 Video。data-testid：qq-fdetail-call（按钮）/ qq-fdetail-call-sheet / qq-fdetail-call-voice / qq-fdetail-call-video
+- 【拨号接线链路（两端同构）】详情页组件本身拿不到拨号函数（openVoiceCall 定义在各自 ChatPage 内、绑定当前会话的上下文快照/落卡片/续聊），采用「详情页通话桥」：详情页 ActionSheet 选项 → 宿主 MainScreen 关详情页并打开该联系人聊天页 + 暂存 pendingCall={contactId, media} → ChatPage 新增 pendingCall/onConsumePendingCall 可选 props，挂载后（或 pendingCall 指向当前会话时）消费：openVoiceCall('out') / openVoiceCall('out', { media: 'video' })——与会话页加号面板「语音通话/视频通话」完全同一拨号函数，B-1 通话中/响铃守卫、最近上下文快照、世界书/记忆召回、挂断落通话卡片、AI 续聊全链路原样复用；consumedPendingCallRef 按对象身份防重复消费（openVoiceCall 随 msgs 变化会让 effect 重跑，不重拨）。视觉为「详情页关闭 → 全局通话层弹出」；挂断后落在本会话聊天页
+- 【接线点】wx MainScreen：新增 pendingCall state；FriendDetailPage onCall={(media)=>{setPendingCall; setPage('main'); setChatPeer(detail)}}；ChatPage 传 pendingCall/onConsumePendingCall={() => setPendingCall(null)}。qq MainScreen 同构：FriendProfilePage onCall={(media)=>{setPendingCall({contactId: chatPeer.id, media}); openChatOf(chatPeer)}}；ChatPage 传 pendingCall/onConsumePendingCall
+- 守卫与对象传递：详情页的 friend/peer 对象即 ContactRecord，经 contactId 下发后 ChatPage 的 peer 由宿主 contacts 反查（wx 为 contacts.find(...) ?? chatPeer），联系人对象始终最新；openVoiceCall 内部拉黑/通话中/响铃守卫全部复用未改
+- 回归：bunx tsc --noEmit 0 错；bunx eslint 两文件 0 error 0 warning（仅 BABEL deoptimise 提示，属正常）；改动仅这两个文件共 +190/-2 行，详情页/聊天页既有功能零改动
+
+Stage Summary:
+- 微信好友详情页与 QQ 好友资料页的「音视频通话」按钮从 toast 占位升级为 iOS/两端风格的底部 ActionSheet（语音通话/视频通话/取消，点遮罩取消，先关卡片再拨号）
+- 拨号经「详情页通话桥」（详情页 → 宿主 MainScreen pendingCall → ChatPage 消费 effect → openVoiceCall('out'[, {media:'video'}])）复用会话页同一条全局通话链路（守卫/上下文/世界书/记忆/落卡片/续聊），不自创引擎调用
+- 产出：src/components/apps/wechat.tsx、src/components/apps/qq.tsx（各 +96 行）；未触碰 voice-call-screen/video-call-screen/camera-capture/chat-call/global-call 等并行代理文件；tsc/eslint 零错误
+- E2E 建议（主代理执行）：①wx 通讯录→好友详情→音视频通话→Sheet 弹出（遮罩点击取消/取消按钮）；②语音通话选项→详情页关→通话页拨号「正在呼叫/等待」→挂断→会话落通话卡片+续聊；③视频通话选项同链路（视频页）；④QQ 联系人→好友资料→同链路 qq-fdetail-call-*；⑤从聊天设置页进详情页再拨号（chatPeer 已存在路径）；⑥通话中再从详情页拨号应 toast「已在通话中，请先挂断再拨」
+
+---
+Task ID: 28-a
+Agent: Z.ai (sub-agent 28-a)
+Task: 视频通话引擎域 5 项改造（Task 28-a）——InlineCallChat 文字聊天面板重构 / 互换后 mini 窗缩小 / A3 视频通话拍照 / B1 识图即时抓帧 / C2 AI 请求看画面
+
+Work Log:
+- 【文字聊天面板重构（语音+视频共用）】voice-call-screen.tsx InlineCallChat 新增可选 props peerName/peerAvatar/onCollapse：面板顶部新增 header 行（22px 圆形小头像[无头像 DefaultAvatar 兜底] + 12px text-white/70 名字 truncate + 右侧 ChevronDown 收起按钮，整行 h-7=28px，data-testid {v}-call-textbar-collapse）；消息区限高 104px→max-h-[30vh]（no-scrollbar 内部滚动；wx 绿泡/QQ 蓝泡/textBusy 三点/最近 8 条保留），「头像名字下面都是文字输入」；四个调用点全传新 props（wx/qq 语音 + wx/qq 视频；phone 皮肤本无文字条不涉及）
+- 【底部按钮不消失（排查结论）】语音页为 h-full flex-col 流式布局、中部 flex-1 min-h-0 自动吸收面板增高，按钮恒在文档流底部；视频页底部控制为 absolute bottom-0 锚定 flex-col，面板向上生长、按钮永远贴底——两种布局天然满足「按钮不离开视口」，无需 38vh 限高包裹（38vh 会在 vh<925 时裁掉输入栏底部，故不采用，理由已注释）；防御性加固：wx/qq 视频底部控制的错误行/字幕槽/文字面板包裹/按钮行/挂断钮/免提提示全部补 shrink-0
+- 【互换后 mini 窗缩小（Task 2）】wx：h-[140px]→h-[112px]（宽 104 不变）、RemoteView size 104→92；qq：h-[132px]→h-[112px]（宽 100）、size 100→88；phone：同 qq。拨号中对方头像窗（wx h-140/size84、qq h-132/size80）按约定保持不动。互换态 mini 与正常态 PIP（pipAdaptiveHeight 自适应后 4:3 约 78 高）同屏观感接近
+- 【A3 视频通话拍照（Task 3）】video-call-screen.tsx 新增 drawMediaCover（<video>/<img> 按 object-cover 数学绘入 canvas 矩形，前置 scaleX(-1) 自看镜像同步）+ captureCallScreenshot（屏宽×屏高黑底 + 屏上所有 video/img 按各自 getBoundingClientRect 矩形依 DOM 序绘制 =「当前全屏所见」；无可绘媒体返回 null）+ useCallShutter（canvas.toBlob→photos store PhotoRecord{id:genId(), blob:Blob, name:'IMG_YYYYMMDD_HHMMSS', createdAt}（照片 App 胶卷直接可见）+ addAlbum(contactId, dataURL, {name:'视频通话截图', origin:'user'})（联系人视觉相册 AlbumRecord.src=dataURL）→ ShotTip 页内胶囊「已保存到相册」1.5s 自动消失（{v}-video-shot-tip），失败提示「保存失败…」）；三皮肤右上角加 Camera 快门（wx/qq 在翻转+发消息旁，phone 无顶栏组单独右上提供），仅 phase==='active' && !rt.swapped 显示（互换/拨号态不提供），data-testid {v}-video-shutter
+- 【B1 识图即时抓帧（Task 4）】useVideoCallRuntime 新增 visionKick state：flipCam（翻转）与 toggleCam(true 重开) 各 +1；识图 effect 依赖加 visionKick，kick 触发时首抓延迟 1200ms→700ms（新流出画快），帧未就绪 2.6s 补抓一次（gotFrame 标记防重复），仍失败交回 10s 轮询兜底；基础 VISION_TICK_MS=10s 轮询不变
+- 【C2 引擎侧（Task 5）】chat-call.ts：①UseChatCallOptions 新增可选 onCameraRequest（入 optsRef，每渲染同步最新闭包）；②新增 [想看看你] 标记识别/剥除正则（全半角括号变体，与语音/视频通话标记同套）；③chatCallExtraRules video 分叉：原「也不要反复要求对方开摄像头」条款收窄为「绝对不要装作看得见对方」+ 新增「摄像头关闭时可自然表达想看（撒娇/好奇、符合人设），句末单独加 [想看看你]，每通最多一次、只在该句末尾单独出现，对方同意前不假装看见」；④标记剥除位置=runTurn 与 sendText 的回复文本在挂断标记剥除后、分发前（字幕流 aiReveal[speakReply 入参]、文字条 chatLog[appendLog 入参]、LLM history、记忆转写同源此文本，一处剥除四面干净）；仅 media==='video' 识别；camReqFiredRef 每通最多一次调用 optsRef.onCameraRequest；voice 路径不注入规则不识别不回调，行为零变化；边界：剥除后为空串不上屏不播报回聆听（挂断标记-only 仍按原语义 finish）
+- 【C2 UI 侧（Task 5）】video-call-screen.tsx 新增 useCamRequest（idle/asked/done + stable 回调）与 CamRequestBar（半透明黑底圆角条「{name} 想看看你」+ 拒绝[灰] + 打开摄像头[wx #07C160 / qq #0099FF / phone #30D158]，z-20，放底部控制区第一子元素=按钮上方）；透传链路 rt=useVideoCallRuntime(props, camReq.onCameraRequest)→useChatCall(onCameraRequest)；确认条可见=asked && phase==='active' && !rt.camOn（用户手动开摄像头自然消失）；拒绝/同意→done（本通不再弹）；同意→rt.toggleCam() 开摄像头+kick 识图；phase 离开 active reset()。global-call.ts 未改（name/contact 经既有 props 已够，VideoCallScreen 内闭环）
+- 回归：bunx tsc --noEmit 0 错；bunx eslint（video-call-screen/voice-call-screen/chat-call）0 error；camera-capture.ts 无需改动（同步兜底 effect 已覆盖重挂载，B1 在 runtime 层实现）
+
+Stage Summary:
+- 5 项全部完成：①InlineCallChat 重构（28px header+30vh 消息区+收起钮，4 调用点接入；语音流式/视频 bottom 锚定布局均保证按钮不消失+shrink-0 加固）；②互换 mini 窗统一 112 高（wx 104 宽·头像 92 / qq·phone 100 宽·头像 88），拨号头像窗不动；③A3 拍照：三皮肤快门→canvas 全屏所见合成→photos 胶卷（Blob）+albums 联系人相册（dataURL，备注「视频通话截图」）双落盘+1.5s 轻提示；④B1 翻转/重开摄像头即时抓帧（700ms+2.6s 补抓，10s 轮询不变）；⑤C2 [想看看你] 引擎剥除（runTurn/sendText 分发前，字幕/文字条/历史/记忆同源干净）+每通一次回调+三皮肤确认条（拒绝不再弹/同意开摄像头/离开 active 自动清除）
+- 产出：src/components/apps/voice-call-screen.tsx、src/components/apps/video-call-screen.tsx、src/lib/ios/chat-call.ts；camera-capture.ts / global-call.ts 零改动；未触碰 wechat.tsx/qq.tsx/phone.tsx（并行代理域）与 db/prisma/.env
+- 回归：bunx tsc --noEmit 0 错、eslint 0 错
+- E2E 建议（主代理执行）：①wx/qq 语音通话→发消息→面板顶部出现「头像+名字+收起」，消息多条时 30vh 内滚动、底部三按钮始终可见；视频 wx/qq 同验；②视频接通→点 PIP 互换→右上/右上方 mini 窗明显变小（112 高）→再换回；③视频接通（正常态）右上 Camera 快门→「已保存到相册」1.5s 消失→照片 App 胶卷出现截图、相册 App（联系人视觉相册）出现「视频通话截图」条目；互换态/拨号态无快门；④关摄像头（或语音接听视频来电）→AI 回复句尾带 [想看看你] 时：字幕/文字条无标记残留、底部弹「xx 想看看你」确认条→拒绝=消失不再弹；再触发一次通话验证同意=摄像头打开+确认条消失；摄像头开着时 AI 不弹条；⑤翻转摄像头后 AI 对新镜头画面的反应明显快于 10s（B1）；⑥挂断→卡片/续聊/记忆照常（[想看看你] 不进转写）
+
+---
+Task ID: 28-main
+Agent: Z.ai (main)
+Task: Task 28 主代理——并行调度 28-a/28-b、C2 兜底强化（三轮实测驱动）、camReqVisible 修正、双端 E2E 全验证
+
+Work Log:
+- 并行调度：28-a（voice-call-screen/video-call-screen/chat-call：InlineCallChat 重构+mini 窗缩小+A3 拍照+B1 即时抓帧+C2 引擎/UI）、28-b（wechat/qq：详情页音视频 ActionSheet）——文件域不相交，均 tsc/eslint 0 错
+- 【C2 实测驱动三轮强化】E2E 发现 AI 对标记规则遵循不稳定（三通实测：①「是不是想我啦？想看看你」句尾裸四字无括号；②「让我看看你嘛」口语变体；③「好想瞅瞅你」口语变体）：①句尾裸「想看看你」加 CAMERA_REQUEST_BARE_RE 剥除+触发；②③加 CAMERA_REQUEST_INTENT_RE 意图兜底（想看看你|瞅瞅你|看看你嘛|让我看[看瞅]|让我瞅瞅|(你|让|把)…摄像头——口语表达不剥除只触发弹条，元标记才剥除）；规则文案同步强化（明示「不带标记=白说」+两个示例）
+- 【camReqVisible 修正】原条件 !rt.camOn 在「摄像头开但权限拒绝/无设备」时（headless 与真机权限拒绝场景）确认条被拦——改为 !(rt.camOn && camera.ready)（实际无画面即可见），三皮肤统一+注释更新
+- E2E（agent-browser，seed-me/seed-ai 注入+微信 me520/QQ 88888888 登录，期间修正种子注入顺序 bug——base 展开覆盖了 wechatId 字段）：①wx 视频文字聊天：header 22px 头像+12px 名字+收起钮、消息区 30vh、底部按钮全程可见 ✓；②A3 拍照：接通正常态快门→「已保存到相册」+photos/albums 落盘（IMG_20261001_150935/contactId=seed-ai/origin=user）；无头像无流时「保存失败，画面不可用」正确提示；互换态快门隐藏 ✓；③mini 窗互换后 112 高（size 92）明显小于原 140，与 PIP 观感协调 ✓；④C2：wx 确认条（小雨 想看看你+拒绝+绿色打开摄像头）弹出→允许→消失无错；qq 确认条 QQ 蓝首轮自动弹出→拒绝→消失不再弹 ✓；⑤A1：wx 详情页 Sheet（微信绿图标+取消行）→语音通话链路✓→视频通话链路✓（详情页关闭→直接通话）；qq 资料页 Sheet（QQ 蓝+抓取条）→视频通话接通 ✓；⑥语音通话文字聊天 header+按钮常显 ✓；⑦挂断卡片/续聊全链路正常；console 零错误
+- 测试数据全清（contacts/photos/albums/chat-messages/chat-sessions/call-logs clear + localStorage.clear）
+- 回归：bunx tsc --noEmit 0 错；eslint（chat-call/video-call-screen/wechat/qq/voice-call-screen）0 error
+- 已知边界：B1 即时抓帧真实效果需真机摄像头（headless 无流，逻辑层 visionKick 触发链审查通过）；C2 意图兜底为正则族（覆盖实测全部变体，极端新变体可能漏触发——每通一次弹窗限制内风险可控）
+
+Stage Summary:
+- Task 28 全部落地：A1 详情页音视频 ActionSheet（wx/qq 双端）、A3 视频通话拍照（三皮肤+相册落盘）、B1 识图即时抓帧（翻转/重开摄像头立即补帧）、C2 AI 想看看你（引擎剥除+意图兜底+确认条三皮肤+允许/拒绝）、文字聊天面板重构（header 化+30vh+按钮常显）、互换 mini 窗缩小
+- 产出：src/lib/ios/chat-call.ts（stripCamRequest 三级检测+规则强化）、src/components/apps/video-call-screen.tsx（CamRequestBar/useCallShutter/visionKick/mini 窗/camReqVisible）、src/components/apps/voice-call-screen.tsx（InlineCallChat header+30vh）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（详情页 Sheet+通话桥）
+- E2E 双端全通过、console 零错误、测试数据已清

@@ -4243,6 +4243,8 @@ function ChatPage({
   onOpenGroup,
   onContactsChanged,
   onDeleteContact,
+  pendingCall,
+  onConsumePendingCall,
 }: {
   me: WxUser;
   peer: ContactRecord;
@@ -4267,6 +4269,11 @@ function ChatPage({
   onContactsChanged?: () => Promise<void>;
   /** 聊天设置「删除联系人」→ 宿主弹二次确认（确认后关聊天 + 删除好友关系）；不传/自己会话不显示 */
   onDeleteContact?: () => void;
+  /** Task 28-b 详情页通话桥：联系人详情页「音视频通话」ActionSheet 选语音/视频后，宿主关详情页并打开
+   *  本聊天页时下发 { contactId, media }；这里只消费 contactId 对准当前会话的下发（拨号逻辑见下方 effect） */
+  pendingCall?: { contactId: string; media: 'voice' | 'video' } | null;
+  /** 消费完 pendingCall 通知宿主清空（防同一次下发被重复消费） */
+  onConsumePendingCall?: () => void;
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
@@ -4969,6 +4976,20 @@ function ChatPage({
     },
     [msgs, peer, me.name, me.avatar, sessionKey, writeCallCard, sendCallFollowup, onToast],
   );
+
+  // Task 28-b 详情页通话桥：消费宿主下发的 pendingCall（详情页 ActionSheet 选了语音/视频，
+  // 宿主已关详情页并打开本聊天页）——复用 openVoiceCall 全链路（B-1 守卫 / 上下文快照 /
+  // 世界书 / 记忆 / 落卡片 / 续聊），与会话页加号面板「语音通话/视频通话」同一拨号函数。
+  // ref 按对象身份防重复消费：openVoiceCall 随 msgs 变化会让本 effect 重跑，但不能重拨。
+  const consumedPendingCallRef = useRef<{ contactId: string; media: 'voice' | 'video' } | null>(null);
+  useEffect(() => {
+    if (!pendingCall || pendingCall.contactId !== peer.id) return;
+    if (consumedPendingCallRef.current === pendingCall) return;
+    consumedPendingCallRef.current = pendingCall;
+    // 先清宿主侧下发再拨号（openVoiceCall 内部守卫/toast 照常工作）
+    onConsumePendingCall?.();
+    openVoiceCall('out', pendingCall.media === 'video' ? { media: 'video' } : undefined);
+  }, [pendingCall, peer.id, onConsumePendingCall, openVoiceCall]);
 
   // ---------------- AI 回复投递管线（runAiTurn 与「退出网页后继续回复」的拉取投递共用同一套，见 deliverBgItems） ----------------
 
@@ -10523,6 +10544,7 @@ function FriendDetailPage({
   onBack,
   onOpenChat,
   onOpenMoments,
+  onCall,
   onToast,
   onDeleteContact,
 }: {
@@ -10530,6 +10552,8 @@ function FriendDetailPage({
   onBack: () => void;
   onOpenChat: (c: ContactRecord) => void;
   onOpenMoments: (c: ContactRecord) => void;
+  /** Task 28-b 「音视频通话」ActionSheet 选项回调（voice/video）：宿主关详情页并经聊天页拨号（openVoiceCall 全链路） */
+  onCall: (media: 'voice' | 'video') => void;
   onToast: (m: string) => void;
   /** 删除联系人（删除好友关系）：宿主弹二次确认；不传 = 隐藏（自己资料页） */
   onDeleteContact?: () => void;
@@ -10537,6 +10561,8 @@ function FriendDetailPage({
   // 跨 App 跳转：点「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
+  // Task 28-b 「音视频通话」底部 ActionSheet（语音通话/视频通话 + 取消；点遮罩也可取消）
+  const [callSheetOpen, setCallSheetOpen] = useState(false);
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
       {/* 顶栏：返回 + ··· */}
@@ -10637,7 +10663,8 @@ function FriendDetailPage({
             <span className="absolute inset-x-0 top-0 h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />
             <button
               type="button"
-              onClick={() => onToast('音视频通话暂未开放')}
+              data-testid="wx-fdetail-call"
+              onClick={() => setCallSheetOpen(true)}
               className="flex w-full items-center justify-center gap-2.5 py-[15px] text-[16px] text-[#576B95] active:bg-black/[0.04] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
             >
               <Phone className="h-[21px] w-[21px]" strokeWidth={1.8} />
@@ -10660,6 +10687,60 @@ function FriendDetailPage({
           </div>
         )}
       </div>
+
+      {/* Task 28-b 音视频通话 ActionSheet：底部滑出卡片（容器样式与 WxPayMethodSheet 同款：黑色半透明遮罩
+          + 底部圆角卡片滑入，选项行白底黑字、绿色图标；点遮罩/取消关闭。先关卡片再回调拨号，避免弹层叠在全局通话层上） */}
+      {callSheetOpen && (
+        <div
+          className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45"
+          role="dialog"
+          aria-label="音视频通话"
+          data-testid="wx-fdetail-call-sheet"
+          onClick={() => setCallSheetOpen(false)}
+        >
+          <style>{'@keyframes wxFdCallIn{from{transform:translateY(65%);opacity:.35}to{transform:translateY(0);opacity:1}}'}</style>
+          <div
+            className="rounded-t-[14px] bg-[#EDEDED] px-3 pb-8 pt-3 dark:bg-[#1C1C1C]"
+            style={{ animation: 'wxFdCallIn 0.24s ease-out' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="overflow-hidden rounded-[10px] bg-white dark:bg-[#1A1A1A]">
+              <button
+                type="button"
+                data-testid="wx-fdetail-call-voice"
+                onClick={() => {
+                  setCallSheetOpen(false);
+                  onCall('voice');
+                }}
+                className="flex h-14 w-full items-center gap-3 px-4 text-left text-[17px] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <Phone className="h-[19px] w-[19px] shrink-0 text-[#07C160]" strokeWidth={1.9} aria-hidden="true" />
+                语音通话
+              </button>
+              <div className="h-px bg-black/[0.05] dark:bg-white/[0.07]" aria-hidden="true" />
+              <button
+                type="button"
+                data-testid="wx-fdetail-call-video"
+                onClick={() => {
+                  setCallSheetOpen(false);
+                  onCall('video');
+                }}
+                className="flex h-14 w-full items-center gap-3 px-4 text-left text-[17px] active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+              >
+                <Video className="h-[19px] w-[19px] shrink-0 text-[#07C160]" strokeWidth={1.9} aria-hidden="true" />
+                视频通话
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCallSheetOpen(false)}
+              className="mt-3 h-14 w-full rounded-[10px] bg-white text-[17px] active:bg-black/[0.04] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -11379,6 +11460,9 @@ function MainScreen({
   }, [refreshGroups]);
   /** 详情页（联系人详细界面）：从聊天设置信息卡片 / 通讯录进入；返回与朋友圈回退链见渲染分支 */
   const [detail, setDetail] = useState<ContactRecord | null>(null);
+  /** Task 28-b 详情页通话桥：详情页「音视频通话」ActionSheet 选语音/视频后暂存待拨通话——
+   *  宿主关详情页并打开对应聊天页时下发，ChatPage 挂载后消费拨号（openVoiceCall 全链路） */
+  const [pendingCall, setPendingCall] = useState<{ contactId: string; media: 'voice' | 'video' } | null>(null);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */
   const [friendMoments, setFriendMoments] = useState<ContactRecord | null>(null);
   const [page, setPage] = useState<Page>('main');
@@ -12013,6 +12097,13 @@ function MainScreen({
           setPage('main');
           setChatPeer(c);
         }}
+        onCall={(media) => {
+          // Task 28-b 详情页「音视频通话」：关详情页 → 打开该联系人聊天页 → pendingCall 下发，
+          // ChatPage 挂载后消费拨号（全局通话层盖在聊天页上，视觉为「详情页关闭 → 弹出通话」）
+          setPendingCall({ contactId: detail.id, media });
+          setPage('main');
+          setChatPeer(detail);
+        }}
         onOpenMoments={(c) => {
           // 自己的详情页：「朋友圈」进自己的朋友圈（只看我发的动态）；好友才自动补示例动态
           if (c.id === me.id) {
@@ -12289,6 +12380,9 @@ function MainScreen({
                   })
           }
           onToast={showToast}
+          // Task 28-b 详情页通话桥：详情页发起的语音/视频通话经此下发到聊天页拨号
+          pendingCall={pendingCall}
+          onConsumePendingCall={() => setPendingCall(null)}
         />
         {/* 删除确认弹窗在聊天页之上（分支提前 return，根部的弹窗不渲染） */}
         {delTarget && (

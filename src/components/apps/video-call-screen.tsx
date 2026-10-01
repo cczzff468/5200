@@ -20,14 +20,22 @@
  * - 拨号中（我方拨出）：主画面 = 用户摄像头全屏（对照微信真实行为：等待接通时看到自己），
  *   对方头像小窗常显（Task 24：刚拨出界面头像也要一直显示）+名字+状态叠在前；来电响铃：全屏来电页
  *   （头像+邀请你视频通话+拒绝/视频接听）；
+ * - 通话拍照（A3，Task 28）：右上角快门按钮（仅接通正常态显示）抓「当前全屏所见」→
+ *   canvas 按屏上 <video>/<img> 各自 DOM 矩形合成位图 → 双落盘：photos（照片 App 胶卷）+
+ *   albums（联系人视觉相册，备注「视频通话截图」）；页内轻提示 1.5s 自动消失；
+ * - 识图即时抓帧（B1，Task 28）：翻转/重开摄像头后立即补抓一帧（不等 10s tick），基础轮询不变；
+ * - AI 请求看画面（C2，Task 28）：摄像头关闭时 AI 可自然表达想看（规则限每通一次、句尾标记
+ *   [想看看你] 由引擎剥除并回调 onCameraRequest）→ 底部按钮上方弹「{name} 想看看你」确认条
+ *   （拒绝=本通不再弹；同意=开摄像头）；语音通话不传回调零影响；
  * - 通话卡片/记忆/续聊由引擎与宿主承担（media='video' 分叉：视频通话时长文案、视频通话记忆场景）。
  *
  * 权限边界：摄像头只在「拨出即开 / 接听时开」首次使用时申请；拒绝后文字/语音聊天与其他功能不受影响。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
+  Camera,
   MessageSquare,
   Mic,
   MicOff,
@@ -42,6 +50,8 @@ import {
 } from 'lucide-react';
 import { DefaultAvatar } from './default-avatar';
 import { CaptionStream, InlineCallChat, statusLine } from './voice-call-screen';
+import { addAlbum } from '@/lib/ios/album-store';
+import { genId, localDB } from '@/lib/ios/db';
 import {
   formatCallDuration,
   useChatCall,
@@ -91,8 +101,9 @@ export interface VideoCallScreenProps {
 /** 识图轮询间隔（ms）：接通即抓一帧，之后每 10s 刷新一次「用户画面」描述 */
 const VISION_TICK_MS = 10_000;
 
-/** 共享运行时：引擎（media='video'）+ 相机 + 识图循环 + 大小窗互换 */
-function useVideoCallRuntime(props: VideoCallScreenProps) {
+/** 共享运行时：引擎（media='video'）+ 相机 + 识图循环 + 大小窗互换。
+ *  Task 28：新增可选 onCameraRequest（透传 useChatCall，C2「想看看你」请求回调；语音通话不传不触发） */
+function useVideoCallRuntime(props: VideoCallScreenProps, onCameraRequest?: () => void) {
   const { variant, direction } = props;
   const visionCfg = useSettings((s) => s.visionConfig);
   const visionCfgReady = useMemo(() => videoVisionReady(visionCfg), [visionCfg]);
@@ -109,6 +120,9 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
   const [camSize, setCamSize] = useState<{ w: number; h: number } | null>(null);
   const onVideoMeta = (w: number, h: number) =>
     setCamSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+  /** B1（Task 28）识图即时抓帧触发器：翻转/重开摄像头后 +1，识图 effect 依赖它不等
+   *  下一个 10s tick 立即补抓一帧（新镜头/新画面即时进 AI 视野）；基础 10s 轮询不变 */
+  const [visionKick, setVisionKick] = useState(0);
 
   const call = useChatCall({
     app: variant,
@@ -124,6 +138,8 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
     locBlock: props.locBlock,
     multiApp: props.multiApp,
     visionBlockFn: () => (camOnRef.current ? latestVisionRef.current || undefined : undefined),
+    // C2（Task 28）：AI 输出「想看看你」标记时回调（引擎每通最多触发一次）→ 界面弹确认条
+    onCameraRequest,
     onEnd: props.onEnd,
     onFollowup: props.onFollowup,
   });
@@ -148,24 +164,33 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
     camOnRef.current = next;
     setCamOn(next);
     if (next) {
-      // 开摄像头（含来电响铃阶段预开，对照 QQ 截图「摄像头已开」）：允许拉流（首次触发权限申请）
+      // 开摄像头（含来电响铃阶段预开，对照 QQ 截图「摄像头已开」）：允许拉流（首次触发权限申请）；
+      // B1（Task 28）：重新打开后立即补抓一帧，AI 马上看见画面
       setCamArmed(true);
+      setVisionKick((k) => k + 1);
     } else {
       latestVisionRef.current = ''; // 关摄像头即刻清描述：AI 下一轮起不再注入【用户画面】
     }
   };
-  const flipCam = () => setFacing((f) => (f === 'user' ? 'environment' : 'user'));
+  const flipCam = () => {
+    setFacing((f) => (f === 'user' ? 'environment' : 'user'));
+    setVisionKick((k) => k + 1); // B1（Task 28）：翻转后立即补抓一帧（AI 即时看到新镜头画面）
+  };
   const swapViews = () => setSwapped((s) => !s);
 
-  // 识图循环：接通 + 摄像头就绪 + 识图配置就绪才跑；单飞防重入；失败静默（保上一条描述）
+  // 识图循环：接通 + 摄像头就绪 + 识图配置就绪才跑；单飞防重入；失败静默（保上一条描述）。
+  // B1（Task 28）：翻转/重开摄像头（visionKick 变化）后 700ms 即抓一帧（不等 10s tick；帧未就绪
+  // 2.6s 再补一次，仍失败交回 10s 轮询兜底）；基础 10s 轮询不变
   useEffect(() => {
     if (call.phase !== 'active' || !camOn || !camera.ready || !visionCfgReady) return;
     let stopped = false;
     let busy = false;
+    let gotFrame = false;
     const tick = async () => {
       if (stopped || busy) return;
       const frame = captureFrameDataUrl(camera.videoRef.current);
       if (!frame) return;
+      gotFrame = true;
       busy = true;
       try {
         const desc = await describeUserFrame(visionCfg, frame);
@@ -175,15 +200,22 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
       }
       busy = false;
     };
-    // 接通后稍等 1.2s 首抓（等 <video> 出画面），再固定间隔刷新
-    const first = window.setTimeout(() => void tick(), 1200);
+    // 接通后稍等 1.2s 首抓（等 <video> 出画面）；翻转/重开触发后 700ms 即抓（新流出画快）
+    const kick = visionKick > 0;
+    const first = window.setTimeout(() => void tick(), kick ? 700 : 1200);
+    const second = kick
+      ? window.setTimeout(() => {
+          if (!gotFrame && !stopped) void tick();
+        }, 2600)
+      : null;
     const timer = window.setInterval(() => void tick(), VISION_TICK_MS);
     return () => {
       stopped = true;
       window.clearTimeout(first);
+      if (second !== null) window.clearTimeout(second);
       window.clearInterval(timer);
     };
-  }, [call.phase, camOn, camera.ready, visionCfgReady, facing, visionCfg, camera.videoRef]);
+  }, [call.phase, camOn, camera.ready, visionCfgReady, facing, visionKick, visionCfg, camera.videoRef]);
 
   return {
     call,
@@ -469,13 +501,224 @@ function VideoCaption({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallA
   );
 }
 
+// ---------------- 通话拍照（A3，Task 28） ----------------
+
+/** 把 <video>/<img> 按 object-cover 数学绘入 canvas 指定矩形（前置自看画面有 scaleX(-1) 镜像，
+ *  截图同步镜像才与所见一致）；媒体未就绪（尺寸 0）返回 false */
+function drawMediaCover(
+  ctx: CanvasRenderingContext2D,
+  el: HTMLVideoElement | HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  const mw = el instanceof HTMLVideoElement ? el.videoWidth : el.naturalWidth;
+  const mh = el instanceof HTMLVideoElement ? el.videoHeight : el.naturalHeight;
+  if (!mw || !mh) return false;
+  try {
+    const scale = Math.max(w / mw, h / mh);
+    const dw = mw * scale;
+    const dh = mh * scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.translate(x + w / 2, y + h / 2);
+    if (el.style.transform.includes('scaleX(-1)')) ctx.scale(-1, 1);
+    ctx.drawImage(el, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 抓「当前全屏所见」→ 合成位图：黑底 + 屏上所有 <video>/<img> 按各自 DOM 矩形 object-cover
+ *  绘制（接通正常态=主画面对方 Ken Burns 头像 + 角标我方摄像头帧/头像占位，布局随所见还原）。
+ *  屏上一个可绘媒体都没有（如双方都只有 SVG 兜底头像）返回 null，由调用方提示无法保存 */
+async function captureCallScreenshot(root: HTMLElement | null): Promise<{ blob: Blob; dataUrl: string } | null> {
+  if (!root) return null;
+  try {
+    const W = root.clientWidth || 390;
+    const H = root.clientHeight || 844;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const rootRect = root.getBoundingClientRect();
+    let drew = false;
+    root.querySelectorAll('video, img').forEach((el) => {
+      // querySelectorAll('video, img') 的联合元素类型收窄：非 video 即 img
+      if (!(el instanceof HTMLVideoElement) && !(el instanceof HTMLImageElement)) return;
+      const r = el.getBoundingClientRect();
+      const x = Math.round(r.left - rootRect.left);
+      const y = Math.round(r.top - rootRect.top);
+      const w = Math.round(r.width);
+      const h = Math.round(r.height);
+      if (w <= 0 || h <= 0) return;
+      if (drawMediaCover(ctx, el, x, y, w, h)) drew = true;
+    });
+    if (!drew) return null;
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    if (!blob) return null;
+    return { blob, dataUrl: canvas.toDataURL('image/jpeg', 0.85) };
+  } catch {
+    return null;
+  }
+}
+
+/** 通话拍照（A3，Task 28，三皮肤共用）：快门 → captureCallScreenshot → 双落盘：
+ *  ① photos store（系统相册胶卷，PhotoRecord{blob,name:IMG_时间戳}，照片 App 直接可见）；
+ *  ② albums store（联系人视觉相册，AlbumRecord{src:dataURL, name:'视频通话截图', origin:'user'}，
+ *     contactId=当前通话联系人）。
+ *  轻提示 1.5s 自动消失（通话页无 toast 组件，页内胶囊提示）；busy 防连点 */
+function useCallShutter(opts: { rootRef: React.RefObject<HTMLDivElement | null>; contactId?: string | null }) {
+  const [tip, setTip] = useState('');
+  const [busy, setBusy] = useState(false);
+  const tipTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (tipTimer.current !== null) window.clearTimeout(tipTimer.current);
+    },
+    [],
+  );
+  const showTip = (t: string) => {
+    setTip(t);
+    if (tipTimer.current !== null) window.clearTimeout(tipTimer.current);
+    tipTimer.current = window.setTimeout(() => setTip(''), 1500);
+  };
+  const shoot = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const shot = await captureCallScreenshot(opts.rootRef.current);
+      if (!shot) {
+        showTip('保存失败，画面不可用');
+        return;
+      }
+      const d = new Date();
+      const pad = (n: number): string => n.toString().padStart(2, '0');
+      const name = `IMG_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(
+        d.getMinutes(),
+      )}${pad(d.getSeconds())}`;
+      try {
+        // ① 系统相册（照片 App 胶卷）；② 联系人视觉相册（无联系人 id 跳过）
+        await localDB.put('photos', { id: genId(), blob: shot.blob, name, createdAt: Date.now() });
+        if (opts.contactId) {
+          await addAlbum(opts.contactId, shot.dataUrl, { name: '视频通话截图', origin: 'user' });
+        }
+        showTip('已保存到相册');
+      } catch {
+        showTip('保存失败，请重试');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { shoot, busy, tip };
+}
+
+/** 拍照结果轻提示（顶部小胶囊，1.5s 自动消失） */
+function ShotTip({ tip, testId }: { tip: string; testId: string }) {
+  if (!tip) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-[110px] z-30 flex justify-center">
+      <span className="rounded-full bg-black/60 px-3.5 py-1.5 text-[12px] text-white/90 backdrop-blur-sm" data-testid={testId}>
+        {tip}
+      </span>
+    </div>
+  );
+}
+
+// ---------------- AI「想看看你」确认条（C2，Task 28） ----------------
+
+/** 底部按钮上方确认面板：AI 请求看画面且摄像头关闭时出现；拒绝=本通不再弹；同意=开摄像头并消失。
+ *  按钮色按皮肤：wx #07C160 / qq #0099FF / phone iOS 绿 #30D158 */
+function CamRequestBar({
+  name,
+  allowColor,
+  onAllow,
+  onDeny,
+  testIdPrefix,
+}: {
+  name: string;
+  allowColor: string;
+  onAllow: () => void;
+  onDeny: () => void;
+  testIdPrefix: string;
+}) {
+  return (
+    <div
+      className="z-20 flex w-full shrink-0 items-center justify-between gap-3 rounded-[14px] bg-black/70 px-4 py-2.5 backdrop-blur-sm"
+      data-testid={`${testIdPrefix}-video-cam-req`}
+    >
+      <span className="min-w-0 truncate text-[13px] text-white/90">{name} 想看看你</span>
+      <span className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onDeny}
+          aria-label="拒绝打开摄像头"
+          data-testid={`${testIdPrefix}-video-cam-req-deny`}
+          className="flex h-8 items-center rounded-full bg-white/10 px-3.5 text-[12px] text-white/70 transition-colors active:opacity-70"
+        >
+          拒绝
+        </button>
+        <button
+          type="button"
+          onClick={onAllow}
+          aria-label="打开摄像头"
+          data-testid={`${testIdPrefix}-video-cam-req-allow`}
+          className="flex h-8 items-center rounded-full px-3.5 text-[12px] font-medium text-white transition-colors active:opacity-80"
+          style={{ backgroundColor: allowColor }}
+        >
+          打开摄像头
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/** C2 确认条状态（三皮肤共用逻辑）：idle=无请求 / asked=AI 已请求 / done=已处理（本通不再弹）。
+ *  onCameraRequest 传给 useVideoCallRuntime（再透传引擎，引擎每通最多回调一次）；
+ *  宿主在 phase 离开 active 时调 reset()（确认条仅接通态渲染，卸载即消失；reset 防同实例内残留）；
+ *  面板仅在摄像头关闭时可见（用户手动开了摄像头自然消失） */
+function useCamRequest() {
+  const [camReq, setCamReq] = useState<'idle' | 'asked' | 'done'>('idle');
+  const onCameraRequest = useCallback(() => setCamReq('asked'), []);
+  const reset = useCallback(() => setCamReq('idle'), []);
+  const allowCamera = useCallback(() => setCamReq('done'), []);
+  const denyCamera = useCallback(() => setCamReq('done'), []);
+  return { camReq, onCameraRequest, reset, allowCamera, denyCamera };
+}
+
 // ---------------- 微信皮肤 ----------------
 
 function WxVideoCall(props: VideoCallScreenProps) {
-  const rt = useVideoCallRuntime(props);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
+  const camReq = useCamRequest();
+  const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
+  // A3（Task 28）：通话拍照（快门 → photos 系统相册 + albums 联系人视觉相册）
+  const shutter = useCallShutter({ rootRef, contactId: props.contact?.id ?? null });
   const { call, camera } = rt;
   const { phase, status, seconds, muted, speakerOn } = call;
   const [textChatOpen, setTextChatOpen] = useState(false);
+
+  // C2（Task 28）：phase 离开 active（挂断/结束）自动清除请求态（本通不再弹）
+  useEffect(() => {
+    if (phase !== 'active') camReq.reset();
+  }, [phase, camReq.reset]);
+  /** 确认条可见：AI 已请求 + 未处理 + 接通中 + 当前无实际画面（开关关 or 权限拒绝/无设备；
+ *  用户真正看到自己画面后自然消失） */
+  const camReqVisible = camReq.camReq === 'asked' && phase === 'active' && !(rt.camOn && camera.ready);
+  const allowCamReq = () => {
+    if (!rt.camOn) rt.toggleCam();
+    camReq.allowCamera();
+  };
 
   // Task 24：接通后与语音通话同款状态文案（正在听/在听你说…/识别中…/正在思考…/正在说话）
   const statusText = phase === 'active' ? statusLine('active', status, 'wx') : null;
@@ -537,14 +780,14 @@ function WxVideoCall(props: VideoCallScreenProps) {
       onClick={call.hangup}
       aria-label="挂断"
       data-testid="wx-video-hangup"
-      className="flex h-[68px] w-[68px] items-center justify-center rounded-full bg-[#FA5151] text-white transition-colors active:opacity-80"
+      className="flex h-[68px] w-[68px] shrink-0 items-center justify-center rounded-full bg-[#FA5151] text-white transition-colors active:opacity-80"
     >
       <PhoneOff className="h-8 w-8" strokeWidth={2} />
     </button>
   );
 
   return (
-    <div className="relative h-full w-full overflow-hidden" data-testid="wx-video-screen">
+    <div ref={rootRef} className="relative h-full w-full overflow-hidden" data-testid="wx-video-screen">
       {/* 画面层：拨号中主画面=我方摄像头（对照微信真实行为）+对方头像小窗常显；来电/接通主画面=对方动态画面，小窗=我方 */}
       {dialing ? (
         <>
@@ -579,9 +822,11 @@ function WxVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="wx-video-remote-mini"
-              className="absolute right-4 top-[108px] z-10 h-[140px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+              className="absolute right-4 top-[108px] z-10 h-[112px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
             >
-              <RemoteView avatar={props.avatar} name={props.name} size={104} shape="square" />
+              {/* Task 28：互换后 mini 窗与用户 PIP 观感一致——窗高 140→112、头像 104→92（留白更协调），
+                  拨号中对方头像窗（wx-video-dial-avatar）保持不动 */}
+              <RemoteView avatar={props.avatar} name={props.name} size={92} shape="square" />
             </button>
           )}
         </>
@@ -615,10 +860,12 @@ function WxVideoCall(props: VideoCallScreenProps) {
         showName={rt.swapped && phase === 'active'}
         testId="wx-video-duration"
       />
+      {/* 拍照结果轻提示（Task 28 A3，1.5s 自动消失） */}
+      <ShotTip tip={shutter.tip} testId="wx-video-shot-tip" />
       {(phase === 'active' || dialing) && (
         <>
           <VideoPipIcon onClick={props.onMinimize} />
-          {/* 右上角（时长文字旁）：翻转摄像头（Task 23 从底部移上来）+ 发消息 */}
+          {/* 右上角（时长文字旁）：翻转摄像头（Task 23 从底部移上来）+ 发消息 + 拍照（A3，Task 28） */}
           <div className="absolute right-5 top-[58px] z-20 flex items-center gap-2">
             <button
               type="button"
@@ -639,6 +886,19 @@ function WxVideoCall(props: VideoCallScreenProps) {
                 className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
               >
                 <MessageSquare className="h-5 w-5" strokeWidth={1.8} />
+              </button>
+            )}
+            {/* 拍照（A3，Task 28）：仅接通正常态（互换态主画面是我方摄像头，不提供）；抓当前全屏所见存相册 */}
+            {phase === 'active' && !rt.swapped && (
+              <button
+                type="button"
+                onClick={() => void shutter.shoot()}
+                disabled={shutter.busy}
+                aria-label="拍照保存到相册"
+                data-testid="wx-video-shutter"
+                className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
+              >
+                <Camera className="h-5 w-5" strokeWidth={1.8} />
               </button>
             )}
           </div>
@@ -724,28 +984,47 @@ function WxVideoCall(props: VideoCallScreenProps) {
       {/* 接通后底部控制（Task 24 重排：字幕/文字条与按钮同列排布——位置固定不叠压、不再随绝对定位漂移） */}
       {(phase === 'active' || dialing) && (
         <div className="absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-3 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-8 pb-[max(30px,env(safe-area-inset-bottom))] pt-6">
+          {/* C2（Task 28）：AI「想看看你」确认条（按钮上方；拒绝/同意后消失） */}
+          {camReqVisible && (
+            <CamRequestBar
+              name={props.name}
+              allowColor="#07C160"
+              onAllow={allowCamReq}
+              onDeny={camReq.denyCamera}
+              testIdPrefix="wx"
+            />
+          )}
           {call.error && !textChatOpen && (
-            <p className="text-center text-[12px] text-red-300">{call.error}</p>
+            <p className="shrink-0 text-center text-[12px] text-red-300">{call.error}</p>
           )}
           {phase === 'active' ? (
             textChatOpen ? (
-              /* 文字输入条开着时字幕隐藏（与语音通话同口径），关掉恢复 */
-              <div className="w-full">
-                <InlineCallChat variant="wx" call={call} className="w-full" />
+              /* 文字输入条开着时字幕隐藏（与语音通话同口径），关掉恢复；
+                 Task 28：面板顶部 header（对方小头像+名字）+ 消息区 max-h-[30vh] 内部滚动，
+                 底部容器 bottom 锚定 + 按钮行 shrink-0，任何消息量下按钮都完整可见 */
+              <div className="w-full shrink-0">
+                <InlineCallChat
+                  variant="wx"
+                  call={call}
+                  peerName={props.name}
+                  peerAvatar={props.avatar}
+                  onCollapse={closeTextChat}
+                  className="w-full"
+                />
               </div>
             ) : (
               /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
-              <div className="flex max-h-[112px] min-h-[64px] w-full flex-col items-center justify-end overflow-hidden pb-1">
+              <div className="flex max-h-[112px] min-h-[64px] w-full shrink-0 flex-col items-center justify-end overflow-hidden pb-1">
                 <VideoCaption variant="wx" call={call} />
               </div>
             )
           ) : (
-            <p className="text-center text-[15px] text-white/70" data-testid="wx-video-status-dialing">
+            <p className="shrink-0 text-center text-[15px] text-white/70" data-testid="wx-video-status-dialing">
               正在等待 {props.name} 接受邀请…
             </p>
           )}
           {phase === 'active' && (
-            <div className="flex items-start justify-center gap-10">
+            <div className="flex shrink-0 items-start justify-center gap-10">
               <Ctl label={muted ? '麦克风已关' : '麦克风已开'}>{micBtn}</Ctl>
               <Ctl label={speakerOn ? '扬声器已开' : '扬声器已关'}>{speakerBtn}</Ctl>
               <Ctl label={rt.camOn ? '摄像头已开' : '摄像头已关'}>{camBtn}</Ctl>
@@ -753,7 +1032,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
           )}
           {hangupBtn}
           {phase === 'active' && !muted && (
-            <p className="text-[11px] text-white/40">免提自动对话 · 直接说话即可</p>
+            <p className="shrink-0 text-[11px] text-white/40">免提自动对话 · 直接说话即可</p>
           )}
         </div>
       )}
@@ -774,10 +1053,27 @@ function Ctl({ label, children }: { label: string; children: React.ReactNode }) 
 // ---------------- QQ 皮肤 ----------------
 
 function QqVideoCall(props: VideoCallScreenProps) {
-  const rt = useVideoCallRuntime(props);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
+  const camReq = useCamRequest();
+  const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
+  // A3（Task 28）：通话拍照（快门 → photos 系统相册 + albums 联系人视觉相册）
+  const shutter = useCallShutter({ rootRef, contactId: props.contact?.id ?? null });
   const { call, camera } = rt;
   const { phase, status, seconds, muted, speakerOn } = call;
   const [textChatOpen, setTextChatOpen] = useState(false);
+
+  // C2（Task 28）：phase 离开 active（挂断/结束）自动清除请求态（本通不再弹）
+  useEffect(() => {
+    if (phase !== 'active') camReq.reset();
+  }, [phase, camReq.reset]);
+  /** 确认条可见：AI 已请求 + 未处理 + 接通中 + 当前无实际画面（开关关 or 权限拒绝/无设备；
+ *  用户真正看到自己画面后自然消失） */
+  const camReqVisible = camReq.camReq === 'asked' && phase === 'active' && !(rt.camOn && camera.ready);
+  const allowCamReq = () => {
+    if (!rt.camOn) rt.toggleCam();
+    camReq.allowCamera();
+  };
 
   // Task 24：接通后与语音通话同款状态文案（正在听/在听你说…/识别中…/正在思考…/正在说话）
   const statusText = phase === 'active' ? statusLine('active', status, 'qq') : null;
@@ -801,7 +1097,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
   const qqCtl4 = 'flex h-[66px] w-[66px] items-center justify-center rounded-[22px] transition-colors active:opacity-70';
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#050506]" data-testid="qq-video-screen">
+    <div ref={rootRef} className="relative h-full w-full overflow-hidden bg-[#050506]" data-testid="qq-video-screen">
       {/* 画面层：拨号中主画面=我方摄像头+左上对方头像小窗常显（Task 24）；接通主画面=对方；小窗（QQ 在左上，对照截图 5）=我方 */}
       {dialing ? (
         <>
@@ -834,9 +1130,10 @@ function QqVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="qq-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/25"
+              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/25"
             >
-              <RemoteView avatar={props.avatar} name={props.name} size={100} />
+              {/* Task 28：互换后 mini 窗与用户 PIP 观感一致——窗高 132→112、头像 100→88（留白更协调） */}
+              <RemoteView avatar={props.avatar} name={props.name} size={88} />
             </button>
           )}
         </>
@@ -868,6 +1165,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
         showName={rt.swapped && phase === 'active'}
         testId="qq-video-duration"
       />
+      {/* 拍照结果轻提示（Task 28 A3，1.5s 自动消失） */}
+      <ShotTip tip={shutter.tip} testId="qq-video-shot-tip" />
       {/* 右上角（时长文字旁）：翻转摄像头（Task 24 从底部小按钮行移上来，与微信同款）+ 发消息；拨号中也可翻转 */}
       {(phase === 'active' || dialing) && (
         <>
@@ -892,6 +1191,19 @@ function QqVideoCall(props: VideoCallScreenProps) {
                 className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
               >
                 <MessageSquare className="h-5 w-5" strokeWidth={1.8} />
+              </button>
+            )}
+            {/* 拍照（A3，Task 28）：仅接通正常态（互换态主画面是我方摄像头，不提供）；抓当前全屏所见存相册 */}
+            {phase === 'active' && !rt.swapped && (
+              <button
+                type="button"
+                onClick={() => void shutter.shoot()}
+                disabled={shutter.busy}
+                aria-label="拍照保存到相册"
+                data-testid="qq-video-shutter"
+                className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
+              >
+                <Camera className="h-5 w-5" strokeWidth={1.8} />
               </button>
             )}
           </div>
@@ -972,28 +1284,47 @@ function QqVideoCall(props: VideoCallScreenProps) {
           与微信同款重排——字幕与按钮同列排布，不再绝对定位互相叠压 */}
       {(phase === 'active' || dialing) && (
         <div className="absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-4 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-6 pb-[max(28px,env(safe-area-inset-bottom))] pt-6">
+          {/* C2（Task 28）：AI「想看看你」确认条（按钮上方；拒绝/同意后消失） */}
+          {camReqVisible && (
+            <CamRequestBar
+              name={props.name}
+              allowColor="#0099FF"
+              onAllow={allowCamReq}
+              onDeny={camReq.denyCamera}
+              testIdPrefix="qq"
+            />
+          )}
           {call.error && !textChatOpen && (
-            <p className="text-center text-[12px] text-red-300">{call.error}</p>
+            <p className="shrink-0 text-center text-[12px] text-red-300">{call.error}</p>
           )}
           {phase === 'active' ? (
             textChatOpen ? (
-              /* 文字输入条开着时字幕隐藏（与语音通话同口径），关掉恢复 */
-              <div className="w-full">
-                <InlineCallChat variant="qq" call={call} className="w-full" />
+              /* 文字输入条开着时字幕隐藏（与语音通话同口径），关掉恢复；
+                 Task 28：面板顶部 header（对方小头像+名字）+ 消息区 max-h-[30vh] 内部滚动，
+                 底部容器 bottom 锚定 + 按钮行 shrink-0，任何消息量下按钮都完整可见 */
+              <div className="w-full shrink-0">
+                <InlineCallChat
+                  variant="qq"
+                  call={call}
+                  peerName={props.name}
+                  peerAvatar={props.avatar}
+                  onCollapse={closeTextChat}
+                  className="w-full"
+                />
               </div>
             ) : (
               /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
-              <div className="flex max-h-[112px] min-h-[64px] w-full flex-col items-center justify-end overflow-hidden pb-1">
+              <div className="flex max-h-[112px] min-h-[64px] w-full shrink-0 flex-col items-center justify-end overflow-hidden pb-1">
                 <VideoCaption variant="qq" call={call} />
               </div>
             )
           ) : (
-            <p className="text-center text-[15px] text-white/70" data-testid="qq-video-status-dialing">
+            <p className="shrink-0 text-center text-[15px] text-white/70" data-testid="qq-video-status-dialing">
               正在呼叫 {props.name}…
             </p>
           )}
           {/* 四按钮平行（麦克风/摄像头/挂断/扬声器）；互换画面按钮已删（点小窗互换），翻转移右上角 */}
-          <div className="flex w-full items-center justify-between">
+          <div className="flex w-full shrink-0 items-center justify-between">
             <button
               type="button"
               onClick={call.toggleMute}
@@ -1037,14 +1368,35 @@ function QqVideoCall(props: VideoCallScreenProps) {
 // ---------------- 电话 App 皮肤（iOS 黑白灰） ----------------
 
 function PhoneVideoCall(props: VideoCallScreenProps) {
-  const rt = useVideoCallRuntime(props);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
+  const camReq = useCamRequest();
+  const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
+  // A3（Task 28）：通话拍照（快门 → photos 系统相册 + albums 联系人视觉相册）
+  const shutter = useCallShutter({ rootRef, contactId: props.contact?.id ?? null });
   const { call, camera } = rt;
   const { phase, seconds, muted, speakerOn } = call;
   const dialing = phase === 'dialing';
   const incoming = phase === 'incoming';
 
+  // C2（Task 28）：phase 离开 active（挂断/结束）自动清除请求态（本通不再弹）
+  useEffect(() => {
+    if (phase !== 'active') camReq.reset();
+  }, [phase, camReq.reset]);
+  /** 确认条可见：AI 已请求 + 未处理 + 接通中 + 当前无实际画面（开关关 or 权限拒绝/无设备；
+ *  用户真正看到自己画面后自然消失） */
+  const camReqVisible = camReq.camReq === 'asked' && phase === 'active' && !(rt.camOn && camera.ready);
+  const allowCamReq = () => {
+    if (!rt.camOn) rt.toggleCam();
+    camReq.allowCamera();
+  };
+
   return (
-    <div className="relative h-full w-full overflow-hidden bg-gradient-to-b from-[#3c3c40] via-[#26262a] to-[#0c0c0e]" data-testid="phone-video-screen">
+    <div
+      ref={rootRef}
+      className="relative h-full w-full overflow-hidden bg-gradient-to-b from-[#3c3c40] via-[#26262a] to-[#0c0c0e]"
+      data-testid="phone-video-screen"
+    >
       {dialing ? (
         <LocalFullView
           videoRef={camera.videoRef}
@@ -1066,9 +1418,10 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="phone-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/25"
+              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/25"
             >
-              <RemoteView avatar={props.avatar} name={props.name} size={100} />
+              {/* Task 28：互换后 mini 窗与用户 PIP 观感一致——窗高 132→112、头像 100→88（留白更协调） */}
+              <RemoteView avatar={props.avatar} name={props.name} size={88} />
             </button>
           )}
         </>
@@ -1100,6 +1453,24 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
         testId="phone-video-duration"
       />
       {phase === 'active' && <VideoPipIcon onClick={props.onMinimize} />}
+
+      {/* 右上角快门（A3，Task 28）：电话皮肤无翻转/发消息顶栏组，仅接通正常态单独提供；抓当前全屏所见存相册 */}
+      {phase === 'active' && !rt.swapped && (
+        <div className="absolute right-5 top-[58px] z-20 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void shutter.shoot()}
+            disabled={shutter.busy}
+            aria-label="拍照保存到相册"
+            data-testid="phone-video-shutter"
+            className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
+          >
+            <Camera className="h-5 w-5" strokeWidth={1.8} />
+          </button>
+        </div>
+      )}
+      {/* 拍照结果轻提示（Task 28 A3，1.5s 自动消失） */}
+      <ShotTip tip={shutter.tip} testId="phone-video-shot-tip" />
 
       {incoming && (
         <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#1c1c1e]">
@@ -1137,8 +1508,18 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
       )}
       {(phase === 'active' || dialing) && (
         <div className="absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-5 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-8 pb-[max(32px,env(safe-area-inset-bottom))] pt-8">
+          {/* C2（Task 28）：AI「想看看你」确认条（按钮上方；拒绝/同意后消失；iOS 绿按钮） */}
+          {camReqVisible && (
+            <CamRequestBar
+              name={props.name}
+              allowColor="#30D158"
+              onAllow={allowCamReq}
+              onDeny={camReq.denyCamera}
+              testIdPrefix="phone"
+            />
+          )}
           {call.error && (
-            <p className="text-center text-[12px] text-red-300">{call.error}</p>
+            <p className="shrink-0 text-center text-[12px] text-red-300">{call.error}</p>
           )}
           {phase === 'active' && (
             <div className="flex items-center gap-8">

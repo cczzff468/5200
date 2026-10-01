@@ -2638,6 +2638,8 @@ function ChatPage({
   onOpenGroup,
   refreshContacts,
   onDeleteContact,
+  pendingCall,
+  onConsumePendingCall,
 }: {
   me: QQUser;
   peer: ContactRecord;
@@ -2662,6 +2664,11 @@ function ChatPage({
   onToast?: (m: string) => void;
   /** 聊天设置「删除联系人」→ 宿主弹二次确认（确认后关聊天 + 删除好友关系）；不传/自己会话不显示 */
   onDeleteContact?: () => void;
+  /** Task 28-b 资料页通话桥：好友资料页「音视频通话」ActionSheet 选语音/视频后，宿主关资料页并
+   *  路由到本聊天页时下发 { contactId, media }；这里只消费 contactId 对准当前会话的下发（拨号逻辑见下方 effect） */
+  pendingCall?: { contactId: string; media: 'voice' | 'video' } | null;
+  /** 消费完 pendingCall 通知宿主清空（防同一次下发被重复消费） */
+  onConsumePendingCall?: () => void;
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
@@ -3461,6 +3468,20 @@ function ChatPage({
     },
     [msgs, peer, me.name, me.avatar, sessionKey, writeCallCard, sendCallFollowup, onToast],
   );
+
+  // Task 28-b 资料页通话桥：消费宿主下发的 pendingCall（资料页 ActionSheet 选了语音/视频，
+  // 宿主已关资料页并路由到本聊天页）——复用 openVoiceCall 全链路（B-1 守卫 / 上下文快照 /
+  // 世界书 / 记忆 / 落卡片 / 续聊），与会话页加号面板「语音通话/视频通话」同一拨号函数。
+  // ref 按对象身份防重复消费：openVoiceCall 随 msgs 变化会让本 effect 重跑，但不能重拨。
+  const consumedPendingCallRef = useRef<{ contactId: string; media: 'voice' | 'video' } | null>(null);
+  useEffect(() => {
+    if (!pendingCall || pendingCall.contactId !== peer.id) return;
+    if (consumedPendingCallRef.current === pendingCall) return;
+    consumedPendingCallRef.current = pendingCall;
+    // 先清宿主侧下发再拨号（openVoiceCall 内部守卫/toast 照常工作）
+    onConsumePendingCall?.();
+    openVoiceCall('out', pendingCall.media === 'video' ? { media: 'video' } : undefined);
+  }, [pendingCall, peer.id, onConsumePendingCall, openVoiceCall]);
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
@@ -8887,6 +8908,7 @@ function FriendProfilePage({
   onOpenChat,
   onOpenBond,
   onOpenZone,
+  onCall,
   onToast,
 }: {
   me: QQUser;
@@ -8896,11 +8918,15 @@ function FriendProfilePage({
   onOpenBond: () => void;
   /** 他的QQ空间：进该好友的空间动态页（只显示 TA 发的动态） */
   onOpenZone: () => void;
+  /** Task 28-b 「音视频通话」ActionSheet 选项回调（voice/video）：宿主关资料页并经聊天页拨号（openVoiceCall 全链路） */
+  onCall: (media: 'voice' | 'video') => void;
   onToast: (m: string) => void;
 }) {
   // 跨 App 跳转：点「编辑资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
+  // Task 28-b 「音视频通话」底部 ActionSheet（语音通话/视频通话 + 取消；点遮罩也可取消）
+  const [callSheetOpen, setCallSheetOpen] = useState(false);
   // 46-f：好友资料页顶部封面 banner——getPeerBg 读出该联系人专属背景（按 peer.id 隔离）；
   // 无则渐变兜底（QQ 蓝紫色调）；右上角"恢复默认"按钮调 removePeerBg 后刷新本组件 + toast
   const [peerBg, setPeerBgState] = useState<string | null>(null);
@@ -9087,7 +9113,8 @@ function FriendProfilePage({
         <div className="flex gap-3">
           <button
             type="button"
-            onClick={() => onToast('音视频通话暂未开放')}
+            data-testid="qq-fdetail-call"
+            onClick={() => setCallSheetOpen(true)}
             className="h-11 flex-1 rounded-[12px] bg-black/[0.05] text-[15px] active:opacity-70 dark:bg-white/[0.08]"
           >
             音视频通话
@@ -9114,6 +9141,61 @@ function FriendProfilePage({
           </button>
         </div>
       </div>
+
+      {/* Task 28-b 音视频通话 ActionSheet：底部滑出卡片（容器样式与 PayMethodSheet 同款：黑色半透明遮罩
+          + 底部圆角卡片滑入，选项行白底黑字、QQ 蓝图标；点遮罩/取消关闭。先关卡片再回调拨号，避免弹层叠在全局通话层上） */}
+      {callSheetOpen && (
+        <div
+          className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45"
+          role="dialog"
+          aria-label="音视频通话"
+          data-testid="qq-fdetail-call-sheet"
+          onClick={() => setCallSheetOpen(false)}
+        >
+          <style>{'@keyframes qqFdCallIn{from{transform:translateY(65%);opacity:.35}to{transform:translateY(0);opacity:1}}'}</style>
+          <div
+            className="rounded-t-[18px] bg-white px-4 pb-8 pt-3 dark:bg-[#232529]"
+            style={{ animation: 'qqFdCallIn 0.24s ease-out' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-black/15 dark:bg-white/20" aria-hidden="true" />
+            <div className="mt-1 overflow-hidden rounded-[12px]">
+              <button
+                type="button"
+                data-testid="qq-fdetail-call-voice"
+                onClick={() => {
+                  setCallSheetOpen(false);
+                  onCall('voice');
+                }}
+                className="flex h-14 w-full items-center gap-3 bg-black/[0.03] px-4 text-left text-[17px] active:bg-black/[0.06] dark:bg-white/[0.06] dark:active:bg-white/[0.1]"
+              >
+                <Phone className="h-[19px] w-[19px] shrink-0" style={{ color: QQ_BLUE }} strokeWidth={1.9} aria-hidden="true" />
+                语音通话
+              </button>
+              <div className="h-2" aria-hidden="true" />
+              <button
+                type="button"
+                data-testid="qq-fdetail-call-video"
+                onClick={() => {
+                  setCallSheetOpen(false);
+                  onCall('video');
+                }}
+                className="flex h-14 w-full items-center gap-3 bg-black/[0.03] px-4 text-left text-[17px] active:bg-black/[0.06] dark:bg-white/[0.06] dark:active:bg-white/[0.1]"
+              >
+                <Video className="h-[19px] w-[19px] shrink-0" style={{ color: QQ_BLUE }} strokeWidth={1.9} aria-hidden="true" />
+                视频通话
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCallSheetOpen(false)}
+              className="mt-3 h-14 w-full rounded-full bg-black/[0.05] text-[17px] text-[#1F2329] active:opacity-70 dark:bg-white/10 dark:text-white"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
       <span className="sr-only">{me.name}查看{peer.name}的个人资料</span>
     </div>
   );
@@ -14709,6 +14791,9 @@ function MainScreen({
   refreshContacts: () => Promise<void>;
 }) {
   const [route, setRoute] = useState<MainRoute>({ page: 'tabs', tab: '消息' });
+  /** Task 28-b 资料页通话桥：好友资料页「音视频通话」ActionSheet 选语音/视频后暂存待拨通话——
+   *  宿主关资料页并路由到对应聊天页时下发，ChatPage 挂载后消费拨号（openVoiceCall 全链路） */
+  const [pendingCall, setPendingCall] = useState<{ contactId: string; media: 'voice' | 'video' } | null>(null);
   /** 「让好友发一条」开关：lift 到 MainScreen，供「空间动态设置 → 立即发帖」复用 ZonePage 的 AskPostSheet */
   const [askOpen, setAskOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -15070,6 +15155,9 @@ function MainScreen({
                     openTabs('消息');
                   })
           }
+          // Task 28-b 资料页通话桥：资料页发起的语音/视频通话经此下发到聊天页拨号
+          pendingCall={pendingCall}
+          onConsumePendingCall={() => setPendingCall(null)}
         />
       ) : route.page === 'bond' && chatPeer ? (
         <FriendBondPage
@@ -15087,6 +15175,12 @@ function MainScreen({
           onOpenChat={() => openChatOf(chatPeer)}
           onOpenBond={() => setRoute({ page: 'bond', contactId: chatPeer.id })}
           onOpenZone={() => setRoute({ page: 'zone-peer', contactId: chatPeer.id })}
+          onCall={(media) => {
+            // Task 28-b 资料页「音视频通话」：关资料页 → 路由到该好友聊天页 → pendingCall 下发，
+            // ChatPage 挂载后消费拨号（全局通话层盖在聊天页上，视觉为「资料页关闭 → 弹出通话」）
+            setPendingCall({ contactId: chatPeer.id, media });
+            openChatOf(chatPeer);
+          }}
           onToast={showToast}
         />
       ) : route.page === 'search' ? (

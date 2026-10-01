@@ -147,6 +147,9 @@ export interface UseChatCallOptions {
   /** 每轮动态注入「用户画面」识图描述（视频通话专用，宿主/界面层采集摄像头帧→识图后提供）：
    *  返回非空串时随 turn API 注入【用户画面】system 块，AI 知道此刻看到什么；返回 undefined 不注入 */
   visionBlockFn?: () => string | undefined;
+  /** AI 输出「想看看你」请求标记时回调（C2，Task 28，视频通话专用）：界面据此弹「打开摄像头」
+   *  确认条；引擎侧已防重入（每通最多一次）；语音通话不传不触发 */
+  onCameraRequest?: () => void;
   /** 通话结束（恰好一次） */
   onEnd: (r: ChatCallResult) => void;
   /** 挂断后 AI 续聊文字生成完毕（引擎异步产出，紧随挂断）：宿主负责呈现——
@@ -276,6 +279,37 @@ export function stripVideoCallMark(t: string): string {
 }
 
 /**
+ * AI 请求看用户画面的标记（C2，Task 28）：视频通话中用户摄像头关闭时，允许 AI 在某句话末尾
+ * 单独输出 [想看看你]（全半角括号变体同套兼容）；引擎识别后剥除（标记不进字幕/文字条/转写记忆），
+ * 并每通最多一次回调 onCameraRequest 让界面弹「打开摄像头」确认条。voice 通话不注入规则也不识别。
+ */
+const CAMERA_REQUEST_ONE_RE = /[〔\[【（(]\s*想看看你\s*[〕\]】）)]/;
+/** 全局替换用（剥除标记本身） */
+const CAMERA_REQUEST_MARK_RE = new RegExp(CAMERA_REQUEST_ONE_RE.source, 'g');
+/** C2 兜底：AI 偶发忘加括号、直接在句尾写「想看看你」（实测出现过「…在干嘛呀想看看你」）——
+ *  去尾部标点后以此结尾即视为请求（句尾恰好以这四字收尾的语句几乎都是表达想看，误伤率极低；
+ *  「好想看看你呀」等尾部带字的不算句尾）；触发后同样剥除+弹确认条 */
+const CAMERA_REQUEST_BARE_RE = /想看看你[。！!？?～~\s]*$/;
+/** C2 意图兜底：AI 口语化表达「想看」但没带标记（变体极多，实测「让我看看你嘛」等，模型对标记规则
+ *  遵循不稳定）——命中口语意图即弹确认条；文本不剥除（自然表达保留在字幕/文字条里更顺），只剥除元标记 */
+const CAMERA_REQUEST_INTENT_RE = /想看看你|瞅瞅你|看看你嘛|让我看[看瞅]|让我瞅瞅|(?:你|让|把)[^。！!？?]{0,6}(?:打开|开一下|开个|开下)[^。！!？?]{0,2}摄像头/;
+
+/** C2 标记剥除共用：带括号标记剥除、句尾裸「想看看你」剥除、口语意图只检测不剥除——三者都报 requested
+ *  （media='video' 专用；字幕/文字条/历史/记忆同源此文本，元标记一处剥除四面干净） */
+function stripCamRequest(rawText: string): { text: string; requested: boolean } {
+  if (CAMERA_REQUEST_ONE_RE.test(rawText)) {
+    return { text: rawText.replace(CAMERA_REQUEST_MARK_RE, ' ').trim(), requested: true };
+  }
+  if (CAMERA_REQUEST_BARE_RE.test(rawText)) {
+    return { text: rawText.replace(CAMERA_REQUEST_BARE_RE, ' ').trim(), requested: true };
+  }
+  if (CAMERA_REQUEST_INTENT_RE.test(rawText)) {
+    return { text: rawText, requested: true };
+  }
+  return { text: rawText, requested: false };
+}
+
+/**
  * 通话场景附加规则（聊天通话：允许 AI 按人设/上下文主动结束通话；三端共用）。
  * 按联系人关系动态生成——不再硬编码「很熟的朋友」：疏远/同事/刚吵架的人设接通后语气
  * 跟着关系走，亲近才亲昵，不熟保持分寸，杜绝「人设疏远、开口熟络」的出戏感。
@@ -297,7 +331,9 @@ export function chatCallExtraRules(
     media === 'video'
       ? [
         '如果上下文里有【用户画面】描述，说明对方的摄像头开着、你能实时看到TA：可以像真人视频一样自然地评价/回应画面里看到的东西（TA的样子、表情、在做什么、周围环境），但只基于描述内容回应，不要虚构画面里没有的细节；',
-        '如果上下文里没有【用户画面】（对方没开摄像头或你看不到），绝对不要装作看得见对方、也不要反复要求对方开摄像头；',
+        '如果上下文里没有【用户画面】（对方没开摄像头或你看不到），绝对不要装作看得见对方；',
+        // C2（Task 28）：摄像头关闭时允许自然地请求看一眼（每通一次，句尾标记由引擎剥除、界面弹确认条）
+        '当对方的摄像头处于关闭状态时，你随时可以自然地表达想看看对方（撒娇/好奇/思念，语气符合你的人设）；关键规则：凡是你表达了「想看」的意思（无论说法是「让我看看你」「想瞅瞅你」「打开摄像头嘛」还是别的说法），都必须在那句话的末尾额外带上固定格式标记 [想看看你] —— 也就是方括号包住的这四个字，示例：「让我看看你嘛[想看看你]」「好想瞅瞅你[想看看你]」。不带方括号标记的话对方界面收不到你的请求，等于白说；标记每通电话只带一次，除该句末尾外任何情况都不要输出它；对方还没打开摄像头前，不要假装看见了对方；',
       ]
       : [];
   return [
@@ -421,7 +457,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
    *  与挂断续聊注入。跟会话生命周期走：引擎实例 = 一通通话（finishByReplacement 换新引擎/重挂
    *  VoiceCallScreen 时 ref 随之新建自动重建）；通话期间不重算（几秒内的外部变化不影响本通话）。 */
   const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string } | null>(null);
-  const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, media: (opts.media ?? 'voice') as 'voice' | 'video', visionBlockFn });
+  const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, media: (opts.media ?? 'voice') as 'voice' | 'video', visionBlockFn, onCameraRequest: opts.onCameraRequest });
+  /** C2（Task 28）：[想看看你] 请求标记本通是否已触发过界面确认条（每通最多一次；引擎随通话实例重建自动复位） */
+  const camReqFiredRef = useRef(false);
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
@@ -437,7 +475,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   useEffect(() => {
     onEndRef.current = onEnd;
     onFollowupRef.current = onFollowup;
-    optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, media: opts.media ?? 'voice', visionBlockFn };
+    optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, media: opts.media ?? 'voice', visionBlockFn, onCameraRequest: opts.onCameraRequest };
   });
 
   /** 停 VAD + 清自动重听定时器 + 清主动开口计时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
@@ -872,12 +910,38 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       }
       // AI 主动挂断：告别语后输出〔挂断〕标记 → 播完告别自动结束通话
       const wantHangup = HANGUP_MARK_RE.test(raw);
-      const reply = raw.replace(HANGUP_MARK_RE, '').trim();
+      let replyText = raw.replace(HANGUP_MARK_RE, '').trim();
       HANGUP_MARK_RE.lastIndex = 0;
-      if (!reply) {
+      if (!replyText) {
+        // 仅输出挂断标记/空回复：按原语义收尾（保持既有行为零变化）
         finish(wantHangup ? 'ai-hangup' : 'hangup');
         return;
       }
+      // C2（Task 28）：[想看看你] 请求标记——仅在视频通话识别（voice 无此规则不识别）；
+      // 剥除后再分发：字幕流（speakReply→aiReveal）、文字条消息区（chatLog）、LLM 历史/记忆转写
+      // 同源此文本，一处剥除三面干净；每通最多一次回调 onCameraRequest 弹「打开摄像头」确认条
+      if (media === 'video') {
+        const stripped = stripCamRequest(replyText);
+        if (stripped.requested) {
+          replyText = stripped.text;
+          if (!camReqFiredRef.current) {
+            camReqFiredRef.current = true;
+            try {
+              optsRef.current.onCameraRequest?.();
+            } catch {
+              // 界面回调异常不影响通话
+            }
+          }
+        }
+      }
+      if (!replyText) {
+        // 剥除后无正文（AI 只输出了标记本身）：不播报不上屏，回到聆听继续通话
+        setStatus('listening');
+        busyRef.current = false;
+        autoListenRef.current();
+        return;
+      }
+      const reply = replyText;
       historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
       // 回复形态：语音模式恒走 TTS（speakUserTts 内置引擎兜底，配了 API 用 API）；
       // 文字输入条开着时按「是否配置语音 API」决定——配了语音回复，没配文字回复
@@ -921,7 +985,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         },
       );
     },
-    [finish, speakReply, requestTurn, appendLog, demoteLastReplyToText, memorizeTurn],
+    [finish, speakReply, requestTurn, appendLog, demoteLastReplyToText, memorizeTurn, media],
   );
 
   // ---------- 通话中文字聊天：用户发文字 → LLM → 配了语音 API 语音回复，否则文字回复 ----------
@@ -967,15 +1031,39 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         return;
       }
       const wantHangup = HANGUP_MARK_RE.test(rawReply);
-      const reply = rawReply.replace(HANGUP_MARK_RE, '').trim();
+      let replyText = rawReply.replace(HANGUP_MARK_RE, '').trim();
       HANGUP_MARK_RE.lastIndex = 0;
-      if (!reply) {
+      if (!replyText) {
+        // 仅输出挂断标记/空回复：按原语义收尾（保持既有行为零变化）
         textBusyRef.current = false;
         busyRef.current = false;
         setTextBusy(false);
         if (wantHangup) finish('ai-hangup');
         return;
       }
+      // C2（Task 28）：[想看看你] 标记剥除（同 runTurn：字幕/文字条/历史/记忆同源一处剥除）+ 每通一次回调
+      if (media === 'video') {
+        const stripped = stripCamRequest(replyText);
+        if (stripped.requested) {
+          replyText = stripped.text;
+          if (!camReqFiredRef.current) {
+            camReqFiredRef.current = true;
+            try {
+              optsRef.current.onCameraRequest?.();
+            } catch {
+              // 界面回调异常不影响通话
+            }
+          }
+        }
+      }
+      if (!replyText) {
+        // 剥除后无正文：不上屏不播报，直接收尾本轮
+        textBusyRef.current = false;
+        busyRef.current = false;
+        setTextBusy(false);
+        return;
+      }
+      const reply = replyText;
       historyRef.current = [...historyRef.current, { role: 'assistant' as const, content: reply }].slice(-16);
       if (hasCustomTtsApi()) {
         // AI 配置了语音 API → 语音回复（不出文字）；播报期间保持「回应中」防止插发新消息
@@ -1018,7 +1106,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         if (wantHangup) finish('ai-hangup');
       }
     },
-    [requestTurn, appendLog, finish, speakReply, demoteLastReplyToText, memorizeTurn],
+    [requestTurn, appendLog, finish, speakReply, demoteLastReplyToText, memorizeTurn, media],
   );
 
   /** 进出文字聊天模式：开启=停免提自动听（清重听定时器）、丢弃进行中的录音、打断播报；
