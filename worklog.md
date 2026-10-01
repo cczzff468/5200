@@ -12708,3 +12708,27 @@ Stage Summary:
 - 四张配置页完成「灰底白卡灰控件」全套浅灰化：按钮、输入框、选项胶囊、分段控件、声线卡、试听圆钮统一 #E9E9EB/#F2F2F7 黑白 alpha 灰阶体系，暗色主题对应 dark: 变体；其余设置页（主题/壁纸/通知/锁屏等）保持原样不受影响
 - 形象锁定区升级为相片装裱式预览 + 三态状态徽标（已锁脸/仅外貌描述/未设置）+ 字数计数 + 缩放反馈按钮；数据层（imggen-ref:*/imggen-appearance:* kv）零改动
 - 产出文件：src/components/apps/settings.tsx（唯一改动文件，+0 新组件、纯样式/结构微调）
+
+---
+Task ID: 9
+Agent: Z.ai Code (main)
+Task: 图像生成界面「形象锁定」区域再美化（紫色主题视觉升级）
+
+Work Log:
+- 定位：前两轮（Task 7/8）已完成四页浅灰化+形象锁定区基础装裱；本轮按用户要求对该区再做一轮精修美化（settings.tsx FaceLockSection，纯样式层，数据/交互逻辑零改动）
+- SectionLabel 右侧新增锁定统计：lockedCount = contacts.filter(hasRefOf).length，>0 时显示绿色「ScanFace 图标 + 已锁定 N 位角色」徽标（随上传/删除即时刷新，refVersion 驱动）
+- 角色胶囊升级：选中态灰环 → 主题紫环（ring-[#AF52FF]/55 + shadow-[#AF52FF]/[0.12] 彩色投影，dark 对应）；未选中 bg-card/80 + hover 提升；绿点徽标 → 绿色圆形对勾徽标（h-4 w-4 bg-[#34C759] + 白 Check strokeWidth 4）
+- 主卡片：GrayCard 加 relative overflow-hidden + 顶部 h-24 淡紫渐变洗染（from-[#AF52FF]/[0.07] to-transparent），五个直接子元素补 relative 防被洗染层盖住
+- 状态徽标三态补图标：仅外貌描述加 PenLine 琥珀图标；未设置加圆点灰徽标（与已锁脸 ScanFace 绿徽标统一 icon+pill 结构）
+- 参考图预览重做（相框装裱 2.0）：有图态 = 外层 -inset-3 紫雾 blur-xl 柔光 + 1.5px 紫渐变描边框（from-[#AF52FF]/55 via/15 to-black/[0.06]，dark:to-white/[0.06]）+ 紫调彩色投影 shadow-[0_12px_32px_-10px_rgba(175,82,255,0.4)]，内层圆角图 + 左上「生图参考图」黑雾标签保留 + 新增右下角绿色对勾圆徽（ring-white/85 白环）；空态 = 紫系虚线框（border-[#AF52FF]/30 + from-[#AF52FF]/[0.06] 渐变底）+ 白圆底紫 ScanFace 大图标（h-14 白卡圆片）+ 两行引导文案
+- 原图下说明文案上移为独立「锁脸效果提示条」：紫底 bg-[#AF52FF]/[0.06]（dark /[0.1]）圆角条 + 紫色 Info 图标（置于上传/删除按钮与外貌描述分隔线之间）
+- 按钮：上传/替换按钮图标改主题紫（ImageIcon text-[#AF52FF]），按钮本体保持浅灰体系不变
+- 外貌描述区：标题加紫色 PenLine 图标；Textarea focus 态改主题紫（focus-visible:border-[#AF52FF]/40! ring-[#AF52FF]/25!，Tailwind v4 尾缀 important 保证覆盖 shadcn ring-ring/50）；底部说明文案包进灰底圆角条（bg-black/[0.03] px-3 py-2）
+- 空角色态：灰文本卡 → 居中构图（紫 tint 圆底 ScanFace 图标 + 引导文案）
+- 小修：角色副标题「参考图与外貌描述按角色独立保存」→「按角色独立保存」（消除徽标挤压下的尴尬换行）；新增 PenLine import
+- 排障：本轮 MultiEdit 亦为顺序应用（一处「兜」字符误写仅该条失败、其余 11 条照常落地），确认与 Task 7 结论一致——失败条需单独补 edit
+- 验证：bun run lint ✓；bunx tsc --noEmit ✓；agent-browser E2E（1280×940，合成 pointer 滑动解锁 + reactProps/坐标点击链，设置›图像生成›滚动到形象锁定区）：已锁脸态截图（紫环胶囊+对勾徽标+已锁定 1 位角色+紫渐变柔光相框+右下对勾+紫提示条+PenLine 计数 31/300）✓；测试 profile 内删除参考图 → 空态截图（紫虚线占位+白圆 ScanFace+仅外貌描述琥珀徽标+上传按钮紫图标+统计徽标消失）✓；console/page errors 干净（仅 HMR 动态导入提示，非错误）；dev.log 无异常
+
+Stage Summary:
+- 形象锁定区完成紫色主题视觉升级：紫环胶囊+对勾徽标选择器、淡紫洗染卡片、紫渐变柔光相框（右下对勾徽标）、紫底效果提示条、紫色 PenLine/Info 点缀、紫 focus 态输入域——与该区 TONE_PURPLE SectionLabel 形成完整主题闭环；按钮仍守浅灰体系（与四页灰化基调一致），全部为样式层改动、kv 数据层与三端聊天共用逻辑零改动
+- 产出文件：src/components/apps/settings.tsx（唯一改动文件）

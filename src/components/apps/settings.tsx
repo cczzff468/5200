@@ -26,6 +26,7 @@ import {
   Moon,
   Phone as PhoneIcon,
   Plane,
+  PenLine,
   Plus,
   RefreshCw,
   Layers,
@@ -2686,17 +2687,36 @@ function FaceLockSection() {
 
   const sel = contacts.find((c) => c.id === selId) ?? null;
   const selLabel = sel ? displayNameOf(sel) : '';
+  const lockedCount = contacts.filter((c) => hasRefOf(c.id)).length;
 
   return (
     <section data-testid="imggen-face-section">
-      <SectionLabel icon={ScanFace} tone={TONE_PURPLE}>形象锁定（锁脸）</SectionLabel>
+      <SectionLabel
+        icon={ScanFace}
+        tone={TONE_PURPLE}
+        right={
+          lockedCount > 0 ? (
+            <span className="flex items-center gap-1 text-[11px] font-medium text-[#1E9E4A] dark:text-[#34C759]">
+              <ScanFace className="h-3 w-3" strokeWidth={2.4} aria-hidden="true" />
+              已锁定 {lockedCount} 位角色
+            </span>
+          ) : undefined
+        }
+      >
+        形象锁定（锁脸）
+      </SectionLabel>
 
-      {/* 角色选择（横向滚动头像胶囊；绿点 = 已设参考图） */}
+      {/* 角色选择（横向滚动头像胶囊；绿色对勾徽标 = 已设参考图） */}
       {contacts.length === 0 ? (
         <GrayCard>
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
-            还没有角色：先到联系人 App 添加角色，再回来为 TA 设置参考图。
-          </p>
+          <div className="flex flex-col items-center gap-2.5 py-5 text-center">
+            <span className="grid h-12 w-12 place-items-center rounded-full bg-[#AF52FF]/[0.1]">
+              <ScanFace className="h-6 w-6 text-[#AF52FF]" strokeWidth={1.8} aria-hidden="true" />
+            </span>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              还没有角色：先到联系人 App 添加角色，再回来为 TA 设置参考图。
+            </p>
+          </div>
         </GrayCard>
       ) : (
         <>
@@ -2713,10 +2733,10 @@ function FaceLockSection() {
                   aria-selected={active}
                   data-testid={`imggen-face-chip-${c.id}`}
                   onClick={() => setSelId(c.id)}
-                  className={`flex w-[64px] shrink-0 flex-col items-center gap-1.5 rounded-[16px] bg-card py-2.5 transition-all active:scale-95 ${
+                  className={`flex w-[64px] shrink-0 flex-col items-center gap-1.5 rounded-[16px] py-2.5 transition-all active:scale-95 ${
                     active
-                      ? 'shadow-md ring-2 ring-[#8E8E93]/50 dark:ring-white/[0.35]'
-                      : 'shadow-sm ring-1 ring-black/[0.05] hover:shadow-md dark:ring-white/[0.08]'
+                      ? 'bg-card shadow-md shadow-[#AF52FF]/[0.12] ring-2 ring-[#AF52FF]/55 dark:bg-white/[0.1] dark:ring-[#AF52FF]/60'
+                      : 'bg-card/80 shadow-sm ring-1 ring-black/[0.05] hover:bg-card hover:shadow-md dark:ring-white/[0.08]'
                   }`}
                 >
                   <span className="relative">
@@ -2739,8 +2759,10 @@ function FaceLockSection() {
                     {hasRef && (
                       <span
                         aria-label="已设置参考图"
-                        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card bg-[#34C759]"
-                      />
+                        className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full border-2 border-card bg-[#34C759] shadow-sm"
+                      >
+                        <Check className="h-2 w-2 text-white" strokeWidth={4} aria-hidden="true" />
+                      </span>
                     )}
                   </span>
                   <span
@@ -2755,11 +2777,15 @@ function FaceLockSection() {
             })}
           </div>
 
-          {/* 选中角色：参考图 + 外貌描述 */}
+          {/* 选中角色：参考图 + 外貌描述（顶部淡紫渐变洗染，呼应锁脸主题色） */}
           {sel && (
-            <GrayCard className="mt-3">
+            <GrayCard className="relative mt-3 overflow-hidden">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[#AF52FF]/[0.07] to-transparent"
+              />
               {/* 角色头部：名字 + 三态锁脸状态徽标（已锁脸 / 仅外貌描述 / 未设置） */}
-              <div className="flex items-center justify-between gap-3">
+              <div className="relative flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   {sel.avatar ? (
                     <img
@@ -2775,7 +2801,7 @@ function FaceLockSection() {
                   )}
                   <div className="min-w-0">
                     <div className="truncate text-[15.5px] font-semibold text-foreground">{selLabel}</div>
-                    <div className="mt-0.5 text-[11.5px] text-muted-foreground">参考图与外貌描述按角色独立保存</div>
+                    <div className="mt-0.5 text-[11.5px] text-muted-foreground">按角色独立保存</div>
                   </div>
                 </div>
                 {refImg ? (
@@ -2784,39 +2810,57 @@ function FaceLockSection() {
                     已锁脸
                   </span>
                 ) : appearDraft.trim() ? (
-                  <span className="shrink-0 rounded-full bg-[#FF9500]/[0.14] px-2.5 py-1 text-[11px] font-medium text-[#B26A00] dark:text-[#FFB340]">
+                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#FF9500]/[0.14] px-2.5 py-1 text-[11px] font-medium text-[#B26A00] dark:text-[#FFB340]">
+                    <PenLine className="h-3 w-3" strokeWidth={2.4} aria-hidden="true" />
                     仅外貌描述
                   </span>
                 ) : (
-                  <span className="shrink-0 rounded-full bg-black/[0.05] px-2.5 py-1 text-[11px] font-medium text-muted-foreground dark:bg-white/[0.08]">
+                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-black/[0.05] px-2.5 py-1 text-[11px] font-medium text-muted-foreground dark:bg-white/[0.08]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-current opacity-50" aria-hidden="true" />
                     未设置
                   </span>
                 )}
               </div>
 
-              {/* 参考图预览（相片装裱风：圆角 + 投影 + 左上角标签；空态渐变占位） */}
-              <div className="mx-auto mt-4 w-full max-w-[210px]">
+              {/* 参考图预览（相片装裱风：紫色渐变描边 + 柔光 + 对勾徽标；空态主题色渐变占位） */}
+              <div className="relative mx-auto mt-4 w-full max-w-[210px]">
                 {refImg ? (
-                  <div className="relative overflow-hidden rounded-[18px] shadow-md ring-1 ring-black/[0.08] dark:ring-white/[0.12]">
-                    <img
-                      data-testid="imggen-face-ref-img"
-                      src={refImg.src}
-                      alt={`${selLabel}的生图参考图`}
-                      draggable={false}
-                      className="aspect-square w-full object-cover"
+                  <>
+                    <div
+                      aria-hidden="true"
+                      className="absolute -inset-3 rounded-[28px] bg-[#AF52FF]/[0.14] blur-xl"
                     />
-                    <span className="absolute left-2 top-2 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
-                      生图参考图
-                    </span>
-                  </div>
+                    <div className="relative rounded-[19px] bg-gradient-to-br from-[#AF52FF]/55 via-[#AF52FF]/15 to-black/[0.06] p-[1.5px] shadow-[0_12px_32px_-10px_rgba(175,82,255,0.4)] dark:to-white/[0.06]">
+                      <div className="relative overflow-hidden rounded-[17.5px]">
+                        <img
+                          data-testid="imggen-face-ref-img"
+                          src={refImg.src}
+                          alt={`${selLabel}的生图参考图`}
+                          draggable={false}
+                          className="aspect-square w-full object-cover"
+                        />
+                        <span className="absolute left-2 top-2 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                          生图参考图
+                        </span>
+                        <span
+                          aria-label="已锁脸"
+                          className="absolute bottom-2 right-2 grid h-6 w-6 place-items-center rounded-full bg-[#34C759] shadow-md ring-2 ring-white/85 dark:ring-white/30"
+                        >
+                          <Check className="h-3 w-3 text-white" strokeWidth={3.2} aria-hidden="true" />
+                        </span>
+                      </div>
+                    </div>
+                  </>
                 ) : (
                   <div
                     aria-hidden="true"
-                    className="grid aspect-square w-full place-items-center rounded-[18px] border border-dashed border-black/10 bg-gradient-to-b from-black/[0.03] to-black/[0.07] dark:border-white/15 dark:from-white/[0.04] dark:to-white/[0.08]"
+                    className="grid aspect-square w-full place-items-center rounded-[19px] border border-dashed border-[#AF52FF]/30 bg-gradient-to-b from-[#AF52FF]/[0.06] via-transparent to-black/[0.03] dark:border-[#AF52FF]/35 dark:from-[#AF52FF]/[0.08] dark:to-white/[0.04]"
                   >
-                    <div className="flex flex-col items-center gap-2 text-center">
-                      <ScanFace className="h-10 w-10 text-black/20 dark:text-white/25" strokeWidth={1.4} />
-                      <span className="text-[11.5px] leading-relaxed text-muted-foreground/80">
+                    <div className="flex flex-col items-center gap-2.5 text-center">
+                      <span className="grid h-14 w-14 place-items-center rounded-full bg-white/75 shadow-sm ring-1 ring-black/[0.04] dark:bg-white/[0.1] dark:ring-white/[0.08]">
+                        <ScanFace className="h-7 w-7 text-[#AF52FF]" strokeWidth={1.6} />
+                      </span>
+                      <span className="text-[11.5px] leading-relaxed text-muted-foreground/90">
                         上传一张正脸照
                         <br />
                         生图时锁定 TA 的长相
@@ -2824,13 +2868,10 @@ function FaceLockSection() {
                     </div>
                   </div>
                 )}
-                <p className="pt-2.5 text-center text-[11.5px] leading-[1.6] text-muted-foreground">
-                  参考图会作为生图输入，保证 TA 每次照片里的脸一致
-                </p>
               </div>
 
-              {/* 上传 / 替换 / 删除（浅灰按钮，删除红字示警） */}
-              <div className="mt-3 flex gap-2.5">
+              {/* 上传 / 替换 / 删除（浅灰按钮，上传图标主题紫点缀，删除红字示警） */}
+              <div className="relative mt-3 flex gap-2.5">
                 <button
                   type="button"
                   data-testid="imggen-face-upload"
@@ -2841,7 +2882,7 @@ function FaceLockSection() {
                   {uploading ? (
                     <Loader2 className="h-[16px] w-[16px] animate-spin" aria-hidden="true" />
                   ) : (
-                    <ImageIcon className="h-[16px] w-[16px]" strokeWidth={2} aria-hidden="true" />
+                    <ImageIcon className="h-[16px] w-[16px] text-[#AF52FF]" strokeWidth={2} aria-hidden="true" />
                   )}
                   {uploading ? '正在处理…' : refImg ? '替换参考图' : '上传参考图'}
                 </button>
@@ -2869,10 +2910,21 @@ function FaceLockSection() {
                 }}
               />
 
+              {/* 锁脸效果提示条（主题紫底色） */}
+              <div className="relative flex items-start gap-1.5 rounded-[10px] bg-[#AF52FF]/[0.06] px-3 py-2 dark:bg-[#AF52FF]/[0.1]">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#AF52FF]" aria-hidden="true" />
+                <p className="text-[11.5px] leading-[1.6] text-muted-foreground">
+                  参考图会作为生图输入，保证 TA 每次照片里的脸一致
+                </p>
+              </div>
+
               {/* 外貌描述（onBlur 即时保存；带字数计数） */}
-              <div className="mt-4 border-t border-black/[0.05] pt-4 dark:border-white/[0.07]">
+              <div className="relative mt-4 border-t border-black/[0.05] pt-4 dark:border-white/[0.07]">
                 <div className="mb-1.5 flex items-center justify-between">
-                  <div className="text-[13px] font-medium text-muted-foreground">外貌描述（锁脸兜底）</div>
+                  <div className="flex items-center gap-1 text-[13px] font-medium text-muted-foreground">
+                    <PenLine className="h-3.5 w-3.5 text-[#AF52FF]" strokeWidth={2.2} aria-hidden="true" />
+                    外貌描述（锁脸兜底）
+                  </div>
                   <span className="text-[11px] tabular-nums text-muted-foreground/60">{appearDraft.length}/300</span>
                 </div>
                 <Textarea
@@ -2886,9 +2938,9 @@ function FaceLockSection() {
                   rows={3}
                   maxLength={300}
                   aria-label="外貌描述"
-                  className="min-h-[64px] rounded-[10px] border-black/[0.05] bg-[#F2F2F7] py-2 text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                  className="min-h-[64px] rounded-[10px] border-black/[0.05] bg-[#F2F2F7] py-2 text-[14px] focus-visible:border-[#AF52FF]/40! focus-visible:ring-[#AF52FF]/25! dark:border-white/[0.08] dark:bg-white/[0.06]"
                 />
-                <p className="pt-2 text-[12px] leading-[1.6] text-muted-foreground/80">
+                <p className="mt-2 rounded-[10px] bg-black/[0.03] px-3 py-2 text-[11.5px] leading-[1.6] text-muted-foreground/80 dark:bg-white/[0.04]">
                   未上传参考图或生图模型不支持参考图时，会把这段外貌描述拼进提示词兜底；每个角色独立设置，互不影响。
                 </p>
               </div>
