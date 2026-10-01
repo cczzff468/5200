@@ -12861,3 +12861,17 @@ Stage Summary:
 - AI 发图能力常开三端：回复中 [图片:画面描述]（兼容 [照片:...]）由前端剥出——生图配置完整时经锁脸管线（参考图/外貌描述/相册/决策日志/记忆）发真图；未配置或生成失败自动降级为「文字图片」卡片（desc 即卡片文字），聊天永不中断
 - 图片消息长按菜单补齐「保存到设备」与「重新生成图片」（自填描述原位替换，锁脸重绘）；QQ 端补齐点击大图查看器；文字+图片同回复、点击大图、持久化（IndexedDB）全链路浏览器验证通过
 - 产出：src/lib/imggen.ts（标签兼容/规则重写/下载助手）、src/components/apps/image-regen-sheet.tsx（新增）、src/components/apps/bubble-menu.tsx（+图标）、src/components/apps/{chat,wechat,qq}.tsx（门控放宽/降级/菜单/弹层/QQ viewer）
+
+---
+Task ID: ops-1
+Agent: Z.ai (main)
+Task: 修复"预览不显示"
+
+Work Log:
+- 排查发现 Next.js dev 服务器进程已死亡（curl 连接被拒，dev.log 无崩溃记录），为沙箱回收后台进程所致，非代码问题
+- 用 `setsid nohup bun run dev > dev.log 2>&1 < /dev/null &` 以脱离会话方式重启（普通 `&` 会被工具会话结束回收）
+- agent-browser 验证：锁屏/解锁/主屏渲染正常，console 无错误
+
+Stage Summary:
+- 根因：dev 进程被回收，非代码 bug；代码无改动，无需提交
+- 教训：重启 dev 必须用 setsid 完全脱离会话，否则进程随工具调用结束被杀
