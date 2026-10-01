@@ -13280,3 +13280,23 @@ Stage Summary:
 - 视频通话四轮精修完成：①useLocalCamera 流↔元素同步兜底（修复「开着摄像头还要再点一下才出画面」——接通/互换重挂 <video> 后即时恢复画面，根因级修复）；②主画面 object-cover 全屏铺满；③主画面头像 140+名字 13px+lift 96（更小更靠上）；④字幕槽弹性高度 64~112px 底部对齐（长弹幕内部滚动、最新句完整贴按钮上方不遮挡，wx/qq/phone+语音通话 CaptionStream 同源受益）；⑤文字聊天消息区限高 104px+头像上移，不再遮挡头像
 - 产出：src/lib/ios/camera-capture.ts（同步兜底 effect）、src/components/apps/video-call-screen.tsx（LocalFullView/RemoteView/VideoCaption/三皮肤字幕槽）、src/components/apps/voice-call-screen.tsx（CaptionStream 底部锚定/InlineCallChat 消息区限高）；引擎/记忆/卡片链路零改动
 - 回归：bunx tsc --noEmit 0 错、eslint 0 错；wx 视频/qq 视频/wx 语音三链路 E2E 全通过；console 零错误
+
+---
+Task ID: 27
+Agent: Z.ai (main)
+Task: 视频通话请求 I（消息10）——关摄像头显示用户头像/删「你」水印 + 全链路回归 + 功能规则审查清单
+
+Work Log:
+- 【关摄像头显示用户头像】LocalFullView/LocalPipView 无流态（摄像头关/权限拒绝/拉流中）改为显示机主头像（myAvatar prop，无头像 DefaultAvatar 兜底），不再显示「摄像头已关」文字占位（对照微信真实行为）；wx=方形圆角/qq·phone=圆形
+- 【删「你」水印】LocalFullView 的「你」自看水印整体删除（用户要求）
+- 【数据链路】CallSession 加 myAvatar 字段（global-call.ts）；三入口全传：wechat.tsx/qq.tsx openVoiceCall 传 me.avatar（AI 主动来电路径同函数覆盖）、phone.tsx startVideoCall 传 useSettings profile.avatar；GlobalCallLayer 透传 VideoCallScreen
+- 【代码层确认】按钮状态标签「摄像头已关/已开」（底部控制 Ctl label）为合理状态文案保留（仅删除占位画面文字）
+- E2E（agent-browser，微信小雨+QQ小雪种子联系人）：①wx 拨号页主画面=我方头像占位（无文字水印）→接通（PIP 头像占位/主画面小雪+名字/00:25 正在听）→PIP 互换（主画面=我方头像占位、名字回落顶部）→换回→摄像头开关按钮循环（PIP 仍头像占位）→文字聊天（发「最近在画什么呀」AI 人设回复、无遮挡）→挂断→「视频通话时长 01:53 📹」卡片+AI 续聊 ✓；②误触卡片回拨→第二通「视频通话时长 00:15 📹」卡片（回拨功能顺带验证）✓；③QQ 登录（种子 user 账号 88888888）→小雪视频→接通（左上 PIP 头像占位/四按钮平行/主画面小雪+名字）→互换（主画面=我方头像占位/名字回落顶部/AI 字幕人设回复）→挂断→蓝卡「视频通话时长 00:19 📹」+续聊 ✓；console/页面零错误
+- 测试数据清理：IndexedDB 种子联系人（seed-me/seed-ai）已删除
+- 回归：bunx tsc --noEmit 0 错、eslint 0 错
+- 【功能规则审查】产出完善建议清单（10 项，见回复）：联系人详情视频入口/电话 App AI 视频来电/群聊视频/识图即时抓帧/视频留言/通话拍照/断线重连提示/截屏互知/视频来电专属铃声/弱网横幅
+
+Stage Summary:
+- 请求 I 全部完成：关闭摄像头三处（拨号主画面/接通 PIP/互换主画面）均显示机主头像（不再「摄像头已关」占位），「你」水印删除；wx/qq/phone+AI 来电四路径 myAvatar 全通
+- 微信+QQ 双端 E2E 全链路（拨号→接通→互换→文字聊天→挂断→卡片→续聊）零错误通过；视频卡片回拨顺带验证
+- 引擎/记忆/卡片链路零改动；tsc/eslint 零错误
