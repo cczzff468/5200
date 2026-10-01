@@ -28,7 +28,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   BellOff,
-  ChevronDown,
   MessageSquare,
   Mic,
   MicOff,
@@ -225,34 +224,43 @@ export function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: C
 // ---------------- 通话中文字聊天内联条（右上角信息图标开关；AI 配了语音 API 语音回复，否则文字） ----------------
 
 /**
- * 通话中文字聊天内联条（宿主放在底部三按钮上方；原全屏文字面板已废弃）：
+ * 聊天模式顶部 header（Task 28 定稿）：小头像（24px 圆形，无头像用 DefaultAvatar 兜底）+名字
+ * （15px，超长 truncate），宿主放在通话时长上方——「头像名字变小放在顶部时长上面」；
+ * 聊天模式下通话页中央的大头像+名字隐藏（Task 28 定稿），此行即当前通话对象标识。
+ * 导出供语音/视频通话四屏共用。
+ */
+export function CallChatHeader({ name, avatar }: { name: string; avatar: string | null }) {
+  return (
+    <div className="flex max-w-[260px] items-center gap-2" data-testid="call-chat-header">
+      {avatar ? (
+        <img src={avatar} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-white/20" />
+      ) : (
+        <DefaultAvatar size={24} shape="circle" className="shrink-0" />
+      )}
+      <span className="min-w-0 truncate text-[15px] font-medium text-white/95">{name}</span>
+    </div>
+  );
+}
+
+/**
+ * 通话中文字聊天内联条（消息区+输入栏；原全屏文字面板已废弃）：
  * - 右上角信息图标开关：开启期间字幕隐藏（用户需求），关闭字幕恢复；通话不断；
- * - 面板顶部 header（Task 28 重构）：对方小头像（22px 圆形，无头像用 DefaultAvatar 兜底）+ 名字
- *   （12px，超长 truncate）+ 右侧收起按钮；header 下方全是文字区——消息气泡 + 输入栏；
+ * - Task 28 定稿（用户反馈）：面板不再自带 header——小头像+名字由宿主 CallChatHeader 放到屏幕
+ *   顶部时长上方；聊天模式下中央大头像+名字隐藏，「头像名字下面都是文字输入」，底部按钮不消失；
  * - 消息区只显示文字轮次（via='text'）：我发的消息 + AI 的文字回复；语音轮次不在此显示；
- *   Task 28：高度 104px → max-h-[30vh]（内部滚动 no-scrollbar），「头像名字下面都是文字输入」；
- *   通话页底部按钮均为流式/底部锚定布局（语音页中部 flex-1 自动压缩、视频页底部容器 bottom 锚定），
- *   消息区再高按钮也不会被顶出屏幕，无需额外限高容器；
+ *   高度 max-h-[35vh]（内部滚动 no-scrollbar）；通话页底部按钮均为流式/底部锚定布局
+ *   （语音页中部 flex-1 自动压缩、视频页底部容器 bottom 锚定），消息区再高按钮也不会被顶出屏幕；
  * - AI 回复形态由引擎决定（sendText/runTurn）：配置了第三方语音 API → TTS 语音回复（不出文字），
  *   没配 → 文字回复（消息区气泡）；AI 回应中显示三点动画。
  */
-/** 导出供视频通话页复用（Task 22；Task 28 加 peerName/peerAvatar/onCollapse） */
+/** 导出供视频通话页复用（Task 22） */
 export function InlineCallChat({
   variant,
   call,
-  peerName,
-  peerAvatar,
-  onCollapse,
   className = '',
 }: {
   variant: 'wx' | 'qq';
   call: ChatCallApi;
-  /** 对方名字（传入即显示面板顶部 header；语音/视频通话页都传） */
-  peerName?: string;
-  /** 对方头像（null 用 DefaultAvatar 兜底） */
-  peerAvatar?: string | null;
-  /** header 右侧收起按钮（传入才显示；关闭文字条恢复字幕） */
-  onCollapse?: () => void;
   className?: string;
 }) {
   const [draft, setDraft] = useState('');
@@ -276,32 +284,10 @@ export function InlineCallChat({
 
   return (
     <div className={`shrink-0 ${className}`} data-testid={`${variant}-call-textbar`}>
-      {/* 面板顶部 header（Task 28）：小头像+名字+收起，紧凑一行 28px（「头像名字放顶部」） */}
-      {peerName !== undefined && (
-        <div className="flex h-7 shrink-0 items-center gap-1.5 px-1">
-          {peerAvatar ? (
-            <img src={peerAvatar} alt="" className="h-[22px] w-[22px] shrink-0 rounded-full object-cover ring-1 ring-white/15" />
-          ) : (
-            <DefaultAvatar size={22} shape="circle" className="shrink-0" />
-          )}
-          <span className="min-w-0 flex-1 truncate text-[12px] text-white/70">{peerName}</span>
-          {onCollapse && (
-            <button
-              type="button"
-              onClick={onCollapse}
-              aria-label="收起文字聊天"
-              data-testid={`${variant}-call-textbar-collapse`}
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white/55 transition-colors active:opacity-60"
-            >
-              <ChevronDown className="h-4 w-4" strokeWidth={2} />
-            </button>
-          )}
-        </div>
-      )}
-      {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条；Task 28：限高 104px → max-h-[30vh]，
+      {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条；Task 28 定稿：max-h-[35vh]，
           「头像名字下面都是文字输入」，内部滚动、底部按钮不被顶出屏幕） */}
       {(textMsgs.length > 0 || textBusy) && (
-        <div ref={listRef} className="no-scrollbar mx-1 mb-2 flex max-h-[30vh] flex-col gap-1.5 overflow-y-auto">
+        <div ref={listRef} className="no-scrollbar mx-1 mb-2 flex max-h-[35vh] flex-col gap-1.5 overflow-y-auto">
           {textMsgs.slice(-8).map((m, i) => (
             <p
               key={`${m.at}-${i}`}
@@ -412,8 +398,20 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
   return (
     <div className="relative z-10 flex h-full flex-col">
       <PipIcon onClick={onMinimize} />
-      {/* 接通后顶部居中计时（对照截图 12:00:00） */}
-      {phase === 'active' && (
+      {/* 接通后顶部：普通模式=居中计时（对照截图 12:00:00）；聊天模式=小头像+名字在时长上方
+          （Task 28 定稿「头像名字变小放在顶部时长上面」），时长下再带一行 AI 状态 */}
+      {phase === 'active' && textChatOpen && (
+        <div className="flex flex-col items-center gap-1.5 pt-[56px]">
+          <CallChatHeader name={name} avatar={avatar} />
+          <div className="text-[15px] tabular-nums text-white/85" data-testid="wx-call-duration">
+            {formatCallDuration(seconds)}
+          </div>
+          <div className="text-[11px] leading-none text-white/55" aria-live="polite">
+            {statusLine('active', status, 'wx')}
+          </div>
+        </div>
+      )}
+      {phase === 'active' && !textChatOpen && (
         <div className="pt-[70px] text-center text-[20px] font-light tabular-nums text-white/95" data-testid="wx-call-duration">
           {formatCallDuration(seconds)}
         </div>
@@ -434,34 +432,39 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（用户反馈） */}
-      <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-9">
-        <div className="min-h-4 flex-1" aria-hidden="true" />
-        <div className="relative mt-1">
-          {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-[16px] bg-white/10" aria-hidden="true" />}
-          <CallAvatar variant="wx" avatar={avatar} size={104} />
-        </div>
-        <h2 className="mt-5 max-w-[280px] truncate text-[22px] font-medium leading-tight">{name}</h2>
-        <p className="mt-1.5 text-[14px] text-white/60" aria-live="polite" data-testid="wx-call-status">
-          {statusLine(phase, status, 'wx')}
-        </p>
-        {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
-        {phase === 'active' ? (
-          <div
-            className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
-            aria-label="通话字幕"
-          >
-            {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
-            {!textChatOpen && <CaptionStream variant="wx" call={call} />}
+      {/* 中部：普通模式=头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（用户反馈）；
+          聊天模式（Task 28 定稿）：中央大头像+名字消失，改为消息区+输入栏（底部对齐），
+          底部按钮不受影响仍在 */}
+      {textChatOpen && phase === 'active' ? (
+        <div className="flex min-h-0 flex-1 flex-col px-4 pb-1">
+          <div className="flex min-h-0 w-full flex-1 flex-col justify-end overflow-hidden">
+            <InlineCallChat variant="wx" call={call} className="w-full" />
           </div>
-        ) : (
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-9">
           <div className="min-h-4 flex-1" aria-hidden="true" />
-        )}
-      </div>
-
-      {/* 通话中文字聊天输入条（信息图标开关；三按钮上方出现，字幕隐藏中） */}
-      {textChatOpen && phase === 'active' && (
-        <InlineCallChat variant="wx" call={call} peerName={name} peerAvatar={avatar} onCollapse={closeTextChat} className="px-4" />
+          <div className="relative mt-1">
+            {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-[16px] bg-white/10" aria-hidden="true" />}
+            <CallAvatar variant="wx" avatar={avatar} size={104} />
+          </div>
+          <h2 className="mt-5 max-w-[280px] truncate text-[22px] font-medium leading-tight">{name}</h2>
+          <p className="mt-1.5 text-[14px] text-white/60" aria-live="polite" data-testid="wx-call-status">
+            {statusLine(phase, status, 'wx')}
+          </p>
+          {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
+          {phase === 'active' ? (
+            <div
+              className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
+              aria-label="通话字幕"
+            >
+              {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
+              {!textChatOpen && <CaptionStream variant="wx" call={call} />}
+            </div>
+          ) : (
+            <div className="min-h-4 flex-1" aria-hidden="true" />
+          )}
+        </div>
       )}
 
       {/* 底部按钮区 */}
@@ -611,34 +614,53 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（与微信皮肤一致） */}
-      <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">
-        <div className="min-h-4 flex-1" aria-hidden="true" />
-        <div className="relative">
-          {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />}
-          <CallAvatar variant="qq" avatar={avatar} size={direction === 'in' ? 132 : 168} />
-        </div>
-        <h2 className="mt-6 max-w-[280px] truncate text-[24px] font-normal leading-tight">{name}</h2>
-        <p className="mt-2 text-[15px] text-white/65" aria-live="polite" data-testid="qq-call-status">
-          {statusLine(phase, status, 'qq')}
-        </p>
-        {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
-        {phase === 'active' ? (
-          <div
-            className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
-            aria-label="通话字幕"
-          >
-            {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
-            {!textChatOpen && <CaptionStream variant="qq" call={call} />}
-          </div>
-        ) : (
-          <div className="min-h-4 flex-1" aria-hidden="true" />
-        )}
-      </div>
-
-      {/* 通话中文字聊天输入条（信息图标开关；三按钮上方出现，字幕隐藏中） */}
+      {/* 聊天模式顶部（Task 28 定稿）：小头像+名字在时长上方——QQ 平时时长在底部按钮上方，
+          聊天模式下时长随头像名字一起到顶部（避免同屏两处时长），关聊天恢复 */}
       {textChatOpen && phase === 'active' && (
-        <InlineCallChat variant="qq" call={call} peerName={name} peerAvatar={avatar} onCollapse={closeTextChat} className="px-4" />
+        <div className="flex flex-col items-center gap-1.5 pt-[52px]">
+          <CallChatHeader name={name} avatar={avatar} />
+          <div className="text-[15px] tabular-nums text-white/85" data-testid="qq-call-duration">
+            {formatCallDuration(seconds)}
+          </div>
+          <div className="text-[11px] leading-none text-white/55" aria-live="polite">
+            {statusLine('active', status, 'qq')}
+          </div>
+        </div>
+      )}
+
+      {/* 中部：普通模式=头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（与微信皮肤一致）；
+          聊天模式（Task 28 定稿）：中央大头像+名字消失，改为消息区+输入栏（底部对齐），
+          底部按钮不受影响仍在 */}
+      {textChatOpen && phase === 'active' ? (
+        <div className="flex min-h-0 flex-1 flex-col px-4 pb-1">
+          <div className="flex min-h-0 w-full flex-1 flex-col justify-end overflow-hidden">
+            <InlineCallChat variant="qq" call={call} className="w-full" />
+          </div>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">
+          <div className="min-h-4 flex-1" aria-hidden="true" />
+          <div className="relative">
+            {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />}
+            <CallAvatar variant="qq" avatar={avatar} size={direction === 'in' ? 132 : 168} />
+          </div>
+          <h2 className="mt-6 max-w-[280px] truncate text-[24px] font-normal leading-tight">{name}</h2>
+          <p className="mt-2 text-[15px] text-white/65" aria-live="polite" data-testid="qq-call-status">
+            {statusLine(phase, status, 'qq')}
+          </p>
+          {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
+          {phase === 'active' ? (
+            <div
+              className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
+              aria-label="通话字幕"
+            >
+              {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
+              {!textChatOpen && <CaptionStream variant="qq" call={call} />}
+            </div>
+          ) : (
+            <div className="min-h-4 flex-1" aria-hidden="true" />
+          )}
+        </div>
       )}
 
       {/* 底部按钮区 */}
@@ -670,8 +692,8 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </div>
       ) : (
         <div className="flex flex-col items-center px-6 pb-[max(28px,env(safe-area-inset-bottom))]">
-          {/* 接通后：时长显示在按钮上方（对照截图 00:03） */}
-          {phase === 'active' && (
+          {/* 接通后：时长显示在按钮上方（对照截图 00:03）；聊天模式时长已随头像名字移到顶部，不重复显示 */}
+          {phase === 'active' && !textChatOpen && (
             <div className="mb-7 text-center text-[17px] tabular-nums text-white/85" data-testid="qq-call-duration">
               {formatCallDuration(seconds)}
             </div>

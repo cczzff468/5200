@@ -49,7 +49,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { DefaultAvatar } from './default-avatar';
-import { CaptionStream, InlineCallChat, statusLine } from './voice-call-screen';
+import { CallChatHeader, CaptionStream, InlineCallChat, statusLine } from './voice-call-screen';
 import { addAlbum } from '@/lib/ios/album-store';
 import { genId, localDB } from '@/lib/ios/db';
 import {
@@ -437,28 +437,70 @@ function TypingDots() {
   );
 }
 
+/** 对方（AI）小窗卡片（Task 28 UI 定稿，对照用户截图）：右上角 AI 头像窗不再近乎铺满窗宽——
+ *  整窗一块深灰卡（#1b1b1f），居中一块大圆角小头像（方角半径 22%、约窗宽 56%），
+ *  Ken Burns 缓慢缩放保留（动态画面感）。用于拨号对方头像窗与互换后的对方 mini 窗
+ *  （wx/qq/phone 三皮肤共用；小窗不显示名字） */
+function RemoteMiniCard({
+  avatar,
+  name,
+  size,
+  shape = 'circle',
+}: {
+  avatar: string | null;
+  name: string;
+  /** 头像直径 px（wx 窗 104 宽传 58，qq/phone 窗 100 宽传 56） */
+  size: number;
+  shape?: 'circle' | 'square';
+}) {
+  return (
+    <span className="flex h-full w-full items-center justify-center bg-[#1b1b1f]">
+      <motion.span
+        animate={{ scale: [1, 1.07, 1] }}
+        transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
+        className="block overflow-hidden shadow-lg ring-1 ring-white/10"
+        style={{ width: size, height: size, borderRadius: shape === 'square' ? Math.round(size * 0.22) : size / 2 }}
+      >
+        {avatar ? (
+          <img src={avatar} alt={`${name}的画面`} className="h-full w-full object-cover" />
+        ) : (
+          <DefaultAvatar size={size} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
+        )}
+      </motion.span>
+    </span>
+  );
+}
+
 /** 视频通话页顶部信息（Task 25：删除顶部小头像+名字——与语音通话顶部一致只留时长；
  *  名字移至主画面头像下方（RemoteView showName）；互换后主画面=我方画面，名字回落到顶部显示；
- *  接通后时长下方显示 AI 状态（正在听/正在思考…/正在说话，与语音通话同款 statusLine）） */
+ *  接通后时长下方显示 AI 状态（正在听/正在思考…/正在说话，与语音通话同款 statusLine）；
+ *  Task 28 定稿：聊天模式（chatMode）在时长上方显示小头像+名字（CallChatHeader），
+ *  此时中央大头像+名字已隐藏） */
 function VideoTopBar({
   name,
+  avatar,
   phase,
   seconds,
   statusText,
   showName,
+  chatMode,
   testId,
 }: {
   name: string;
+  avatar: string | null;
   phase: string;
   seconds: number;
   statusText: string | null;
   /** 互换后主画面=我方画面（对方头像在小窗），名字回落到顶部显示 */
   showName: boolean;
+  /** 聊天模式：时长上方显示小头像+名字（中央大头像名字已隐藏） */
+  chatMode?: boolean;
   testId: string;
 }) {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-[54px] z-10 flex flex-col items-center gap-1.5">
-      {showName && (
+      {chatMode && <CallChatHeader name={name} avatar={avatar} />}
+      {!chatMode && showName && (
         <span className="max-w-[220px] truncate text-[15px] font-medium text-white/95 drop-shadow">{name}</span>
       )}
       {phase === 'active' && (
@@ -734,7 +776,11 @@ function WxVideoCall(props: VideoCallScreenProps) {
   };
   const toggleTextChat = () => (textChatOpen ? closeTextChat() : openTextChat());
 
+  /** 聊天模式（Task 28 定稿）：中央大头像+名字隐藏、顶部时长上方小头像+名字、消息区+输入栏、按钮常显 */
+  const chatMode = textChatOpen && phase === 'active';
+
   const dialing = phase === 'dialing';
+
   const incoming = phase === 'incoming';
   const wxRound = 'flex h-[60px] w-[60px] items-center justify-center rounded-full transition-colors active:opacity-70';
 
@@ -798,13 +844,14 @@ function WxVideoCall(props: VideoCallScreenProps) {
             myAvatar={props.myAvatar}
             shape="square"
           />
-          {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接） */}
+          {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接）；
+              Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（不再铺满窗宽） */}
           <div
             aria-hidden="true"
             data-testid="wx-video-dial-avatar"
-            className="absolute right-4 top-[108px] z-10 h-[140px] w-[104px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/25"
+            className="absolute right-4 top-[108px] z-10 h-[140px] w-[104px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/15"
           >
-            <RemoteView avatar={props.avatar} name={props.name} size={84} shape="square" />
+            <RemoteMiniCard avatar={props.avatar} name={props.name} size={58} shape="square" />
           </div>
         </>
       ) : rt.swapped ? (
@@ -822,18 +869,19 @@ function WxVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="wx-video-remote-mini"
-              className="absolute right-4 top-[108px] z-10 h-[112px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+              className="absolute right-4 top-[108px] z-10 h-[112px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/15 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
             >
-              {/* Task 28：互换后 mini 窗与用户 PIP 观感一致——窗高 140→112、头像 104→92（留白更协调），
-                  拨号中对方头像窗（wx-video-dial-avatar）保持不动 */}
-              <RemoteView avatar={props.avatar} name={props.name} size={92} shape="square" />
+              {/* Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（窗高 112 不变，
+                  头像 58px≈窗宽 56%、方角半径 22% 更圆润，Ken Burns 保留） */}
+              <RemoteMiniCard avatar={props.avatar} name={props.name} size={58} shape="square" />
             </button>
           )}
         </>
       ) : (
         <>
-          {/* 微信皮肤：角色头像为正方形圆角（Task 23）；Task 26：头像 140+名字 13px、lift 96 上移，纯黑背景无模糊 */}
-          <RemoteView avatar={props.avatar} name={props.name} size={140} shape="square" showName lift={96} />
+          {/* 微信皮肤：角色头像为正方形圆角（Task 23）；Task 26：头像 140+名字 13px、lift 96 上移，纯黑背景无模糊；
+              聊天模式中央头像名字隐藏（Task 28 定稿，小头像名字移到顶部时长上方） */}
+          {!chatMode && <RemoteView avatar={props.avatar} name={props.name} size={140} shape="square" showName lift={96} />}
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -851,13 +899,15 @@ function WxVideoCall(props: VideoCallScreenProps) {
         </>
       )}
 
-      {/* 顶部信息（Task 25：时长+状态居中，名字只在互换后回落显示） + 小窗/翻转/文字聊天入口 */}
+      {/* 顶部信息（Task 25：时长+状态居中，名字只在互换后回落显示；Task 28 定稿聊天模式顶部加小头像名字） + 小窗/翻转/文字聊天入口 */}
       <VideoTopBar
         name={props.name}
+        avatar={props.avatar}
         phase={phase}
         seconds={seconds}
         statusText={statusText}
         showName={rt.swapped && phase === 'active'}
+        chatMode={chatMode}
         testId="wx-video-duration"
       />
       {/* 拍照结果轻提示（Task 28 A3，1.5s 自动消失） */}
@@ -1000,17 +1050,11 @@ function WxVideoCall(props: VideoCallScreenProps) {
           {phase === 'active' ? (
             textChatOpen ? (
               /* 文字输入条开着时字幕隐藏（与语音通话同口径），关掉恢复；
-                 Task 28：面板顶部 header（对方小头像+名字）+ 消息区 max-h-[30vh] 内部滚动，
-                 底部容器 bottom 锚定 + 按钮行 shrink-0，任何消息量下按钮都完整可见 */
+                 Task 28 定稿：聊天模式（中央头像名字已隐藏、顶部时长上方小头像名字）——
+                 消息区+输入栏在按钮上方，底部容器 bottom 锚定 + 按钮行 shrink-0，
+                 任何消息量下按钮都完整可见 */
               <div className="w-full shrink-0">
-                <InlineCallChat
-                  variant="wx"
-                  call={call}
-                  peerName={props.name}
-                  peerAvatar={props.avatar}
-                  onCollapse={closeTextChat}
-                  className="w-full"
-                />
+                <InlineCallChat variant="wx" call={call} className="w-full" />
               </div>
             ) : (
               /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
@@ -1089,6 +1133,9 @@ function QqVideoCall(props: VideoCallScreenProps) {
   };
   const toggleTextChat = () => (textChatOpen ? closeTextChat() : openTextChat());
 
+  /** 聊天模式（Task 28 定稿）：中央大头像+名字隐藏、顶部时长上方小头像+名字、消息区+输入栏、按钮常显 */
+  const chatMode = textChatOpen && phase === 'active';
+
   const dialing = phase === 'dialing';
   const incoming = phase === 'incoming';
   const qqSquare = 'flex h-[72px] w-[72px] items-center justify-center rounded-[26px] transition-colors active:opacity-70';
@@ -1107,13 +1154,14 @@ function QqVideoCall(props: VideoCallScreenProps) {
             mirrored={rt.facing === 'user'}
             myAvatar={props.myAvatar}
           />
-          {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接） */}
+          {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接）；
+              Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（不再铺满窗宽） */}
           <div
             aria-hidden="true"
             data-testid="qq-video-dial-avatar"
-            className="absolute left-4 top-[100px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/25"
+            className="absolute left-4 top-[100px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/15"
           >
-            <RemoteView avatar={props.avatar} name={props.name} size={80} />
+            <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
           </div>
         </>
       ) : rt.swapped ? (
@@ -1130,17 +1178,19 @@ function QqVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="qq-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/25"
+              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
             >
-              {/* Task 28：互换后 mini 窗与用户 PIP 观感一致——窗高 132→112、头像 100→88（留白更协调） */}
-              <RemoteView avatar={props.avatar} name={props.name} size={88} />
+              {/* Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（窗 100×112，
+                  头像 56px≈窗宽 56%，Ken Burns 保留） */}
+              <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
             </button>
           )}
         </>
       ) : (
         <>
-          {/* Task 26：主画面头像 140 + 头像下方名字（小字）、lift 96 上移，纯黑背景无模糊 */}
-          <RemoteView avatar={props.avatar} name={props.name} size={140} showName lift={96} />
+          {/* Task 26：主画面头像 140 + 头像下方名字（小字）、lift 96 上移，纯黑背景无模糊；
+              聊天模式中央头像名字隐藏（Task 28 定稿） */}
+          {!chatMode && <RemoteView avatar={props.avatar} name={props.name} size={140} showName lift={96} />}
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -1159,10 +1209,12 @@ function QqVideoCall(props: VideoCallScreenProps) {
 
       <VideoTopBar
         name={props.name}
+        avatar={props.avatar}
         phase={phase}
         seconds={seconds}
         statusText={statusText}
         showName={rt.swapped && phase === 'active'}
+        chatMode={chatMode}
         testId="qq-video-duration"
       />
       {/* 拍照结果轻提示（Task 28 A3，1.5s 自动消失） */}
@@ -1300,17 +1352,11 @@ function QqVideoCall(props: VideoCallScreenProps) {
           {phase === 'active' ? (
             textChatOpen ? (
               /* 文字输入条开着时字幕隐藏（与语音通话同口径），关掉恢复；
-                 Task 28：面板顶部 header（对方小头像+名字）+ 消息区 max-h-[30vh] 内部滚动，
-                 底部容器 bottom 锚定 + 按钮行 shrink-0，任何消息量下按钮都完整可见 */
+                 Task 28 定稿：聊天模式（中央头像名字已隐藏、顶部时长上方小头像名字）——
+                 消息区+输入栏在按钮上方，底部容器 bottom 锚定 + 按钮行 shrink-0，
+                 任何消息量下按钮都完整可见 */
               <div className="w-full shrink-0">
-                <InlineCallChat
-                  variant="qq"
-                  call={call}
-                  peerName={props.name}
-                  peerAvatar={props.avatar}
-                  onCollapse={closeTextChat}
-                  className="w-full"
-                />
+                <InlineCallChat variant="qq" call={call} className="w-full" />
               </div>
             ) : (
               /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
@@ -1418,10 +1464,11 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="phone-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/25"
+              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
             >
-              {/* Task 28：互换后 mini 窗与用户 PIP 观感一致——窗高 132→112、头像 100→88（留白更协调） */}
-              <RemoteView avatar={props.avatar} name={props.name} size={88} />
+              {/* Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（窗 100×112，
+                  头像 56px≈窗宽 56%，Ken Burns 保留） */}
+              <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
             </button>
           )}
         </>
@@ -1446,6 +1493,7 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
 
       <VideoTopBar
         name={props.name}
+        avatar={props.avatar}
         phase={phase}
         seconds={seconds}
         statusText={phase === 'active' ? statusLine('active', call.status, 'wx') : null}

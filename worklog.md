@@ -13359,3 +13359,22 @@ Stage Summary:
 - Task 28 全部落地：A1 详情页音视频 ActionSheet（wx/qq 双端）、A3 视频通话拍照（三皮肤+相册落盘）、B1 识图即时抓帧（翻转/重开摄像头立即补帧）、C2 AI 想看看你（引擎剥除+意图兜底+确认条三皮肤+允许/拒绝）、文字聊天面板重构（header 化+30vh+按钮常显）、互换 mini 窗缩小
 - 产出：src/lib/ios/chat-call.ts（stripCamRequest 三级检测+规则强化）、src/components/apps/video-call-screen.tsx（CamRequestBar/useCallShutter/visionKick/mini 窗/camReqVisible）、src/components/apps/voice-call-screen.tsx（InlineCallChat header+30vh）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（详情页 Sheet+通话桥）
 - E2E 双端全通过、console 零错误、测试数据已清
+
+---
+Task ID: 28-b（UI 定稿轮）
+Agent: Z.ai Code（主会话）
+Task: 用户截图细化反馈——①视频通话右上角 AI 头像窗改为截图样式（深灰卡+居中大圆角小头像）；②通话文字聊天界面（语音+视频）头像名字变小放顶部时长上面、头像名字下面全是文字输入、中间大头像名字消失、底部按钮不消失
+
+Work Log:
+- 侦察发现 Task 28 主体已在 commit 77e58a3 落地（A1/A3/B1/C2+聊天 header 化），本轮为用户截图后的 UI 定稿增量
+- video-call-screen.tsx：新增 RemoteMiniCard 组件（#1b1b1f 深灰卡+居中头像≈窗宽 56%、方角半径 22%、Ken Burns 保留），替换 wx 拨号窗/互换 mini 窗（size 58 square）、qq 拨号窗/互换 mini 窗（size 56 circle）、phone 互换 mini 窗（56），AI 小窗 ring 软化 white/25→white/15
+- video-call-screen.tsx：VideoTopBar 增加 avatar+chatMode props（chatMode 时 CallChatHeader 显示在时长上方，showName 让位）；wx/qq 视频新增 chatMode=textChatOpen&&active——非互换主画面 RemoteView 隐藏（中央头像名字消失）；InlineCallChat 调用去 peerName/peerAvatar/onCollapse
+- voice-call-screen.tsx：新增导出 CallChatHeader（24px 圆头像+15px 名字）；InlineCallChat 移除自带 header（组件瘦身为消息区+输入栏），消息区限高 30vh→35vh；删除 ChevronDown 死 import
+- voice-call-screen.tsx：wx/qq 语音两屏聊天模式重构——中央大头像+名字+字幕区整体让位给消息区+输入栏（flex-1 底部对齐）；顶部聊天模式渲染 CallChatHeader+时长+AI 状态一行（qq 语音聊天模式时长从底部移到顶部避免同屏两处）；底部按钮四屏恒常显
+- E2E（agent-browser，种子 seed-me/seed-xiaoxue 注入 IndexedDB）：A1 wx+qq 双端 ActionSheet 弹出并成功拨通；视频通话拨号态/互换态 mini 卡=截图样式；wx/qq 视频+wx 语音聊天模式四屏断言全过（header=true/centerAvatar=false/按钮四枚齐全/消息收发正常）；C2 确认条两通视频均 AI 自发弹出；A3 快门 photos+albums 双落盘断言通过（IMG_20261001_232704/视频通话截图/origin=user/contactId 对）；tsc+eslint 零错误；console 零错误
+
+Stage Summary:
+- 用户三项截图细化反馈全部落地并 E2E 验证：AI mini 窗样式（深灰卡+居中大圆角小头像）、聊天模式顶部 header 化（头像名字在时长上方）、中央大头像名字消失+按钮常显
+- 四屏（wx/qq×语音/视频）聊天模式布局统一：顶部=[CallChatHeader+时长+状态]、中部=消息区+输入栏（底部对齐）、底部=通话按钮恒在
+- phone 皮肤互换 mini 窗同步换 RemoteMiniCard（无文字聊天不受聊天模式影响）
+- 注意：QQ 详情页/ActionSheet 按钮对 CDP mouse down/up 无效，需 Playwright click 或 DOM .click()（qq-fdetail-call / qq-fdetail-call-voice / qq-fdetail-call-video testid 可用）
