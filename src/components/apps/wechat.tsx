@@ -184,7 +184,7 @@ import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeCh
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
-import { TextCardBubble } from '@/components/apps/text-card-bubble';
+import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
@@ -3143,7 +3143,7 @@ function WxTextCardSheet({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="wx-textcard-sheet">
       <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-[17px] font-semibold">{charName}写一张文字图片发给你</p>
+          <p className="text-[17px] font-semibold">写一张文字图片发给{charName}</p>
           <button
             type="button"
             aria-label="关闭文字图片"
@@ -3162,7 +3162,7 @@ function WxTextCardSheet({
           rows={3}
           maxLength={160}
           data-testid="wx-textcard-input"
-          placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录自动写）"
+          placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录帮你写）"
           className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#07C160]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
         />
         {error ? (
@@ -3187,7 +3187,7 @@ function WxTextCardSheet({
           )}
         </button>
         <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
-          文字图片以 {charName} 的身份发出；无需配置图像生成，失败不影响聊天
+          文字图片以我的身份发出，{charName}会看到卡片上的字
         </p>
       </div>
     </div>
@@ -4309,16 +4309,27 @@ function ChatPage({
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置/文字图片功能页（相机/图片直接调起手机原生能力） */
   const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'textcard' | null>(null);
-  /** 手动「文字图片」状态（Task 13 卡片版）：loading / 错误信息（弹层内展示，失败不影响聊天） */
+  /** 手动「文字图片」状态（Task 14 卡片版，以「我」的身份发出）：loading / 错误信息（弹层内展示，失败不影响聊天） */
   const [cardBusy, setCardBusy] = useState(false);
   const [cardError, setCardError] = useState('');
+  /** 点击「文字图片」卡片弹出的操作面板（用图像生成生成图片/复制文字）：目标消息 id + 生成中标记 */
+  const [cardActionId, setCardActionId] = useState<string | null>(null);
+  const [cardGenBusy, setCardGenBusy] = useState(false);
 
   /**
-   * 手动触发「文字图片」（Task 13 卡片版，无生图依赖）：输入留空时让 AI 按人设+最近聊天记录
-   * 写一段卡片文字（/api/textcard，用户上游优先、服务端内置模型兑底）；输入非空 = 用户代笔直接上卡。
-   * 成功 → 弹层关闭 + 「文字图片」卡片消息直接投递（不入 AI 回合队列）；失败 → 错误留在弹层内。
+   * 手动触发「文字图片」（Task 14 起方向反转）：文字图片是「我」发给 TA 的卡片——
+   * 输入留空时让 AI 按人设+最近聊天记录代笔（/api/textcard，用户上游优先、服务端内置模型兑底）；
+   * 输入非空 = 用户自己写。成功 → 弹层关闭 + role='me' 的卡片消息上屏（msgs 持久化 effect 落盘）
+   * 并触发 AI 回合（卡片文字以「[文字图片]（卡片上写着：…）」进上下文，TA 能读到并回应）；
+   * 失败 → 错误留在弹层内（不关弹窗，可重试或取消）。
    */
   const submitTextCard = async (text: string) => {
+    // 40-a 拉黑拦截：被角色拉黑（byChar）后不能发送任何消息
+    if (loadBlock('wx', peer.id).byChar) {
+      onToast('对方已将你拉黑，无法发送');
+      setCompose(null);
+      return;
+    }
     setCardBusy(true);
     setCardError('');
     try {
@@ -4333,18 +4344,74 @@ function ChatPage({
           history: buildPhotoDescHistory(msgs, '我', peer.name),
         });
       }
-      // 走 enqueueBatch（而非直投 deliverAiMsg）：订阅 tick 会把落盘消息合并进本地 state，
-      // 直投只写 kv 不触发 tick（聊天页不刷新）；空 ctx 首批 initialDelay=0 立即上屏
-      enqueueBatch(
-        [{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'textcard' as const, card: { text: finalText } }],
-        { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false },
-      );
+      const cardMsg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'textcard' as const, card: { text: finalText } };
       setCompose(null);
+      // 给自己发消息（「我」详情页「发消息」入口）：只记录，不触发 AI 回复
+      if (peer.id === me.id) {
+        setMsgs((prev) => [...prev, cardMsg]);
+      } else if (sentenceSend) {
+        // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发
+        setMsgs((prev) => [...prev, cardMsg]);
+        setPendingDispatch(true);
+        markPendingBatch(sessionKey, true);
+      } else if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        // 对方正在回复（流式/连发投递中）：卡片照常上屏并排队补跑（与 send 文字路同口径）
+        setMsgs((prev) => [...prev, cardMsg]);
+        markDeliverBoundary(sessionKey, cardMsg.id);
+        wxQueueAdd(peer.id);
+      } else {
+        // 与图片路同口径：消息已入列，稍等重渲染后触发回复（卡片作 extra 消息进本轮上下文）
+        window.setTimeout(() => runAiTurnRef.current?.(null, [cardMsg]), 80);
+      }
       onToast('文字图片已发送');
     } catch (e) {
       setCardError(e instanceof Error ? e.message : '生成失败，请重试');
     } finally {
       setCardBusy(false);
+    }
+  };
+
+  /**
+   * 点击「文字图片」卡片 → 用图像生成把卡片文字生成图片（设置 › 图像生成 配置）：
+   * 卡片是「我」发的，生图不带角色锁脸（contactId 空，卡片文字即画面描述）；
+   * 成功 → 以「我」的图片消息上屏（持久化 effect 落盘）并触发 AI 回合（与用户发图同口径），关闭操作面板；
+   * 失败 → 只 toast，面板留在原地可重试。
+   */
+  const generateCardImage = async (m: WxMsg) => {
+    const desc = m.card?.text?.trim();
+    if (!desc || cardGenBusy) return;
+    if (loadBlock('wx', peer.id).byChar) {
+      onToast('对方已将你拉黑，无法发送');
+      setCardActionId(null);
+      return;
+    }
+    const cfg = useSettings.getState().imgGenConfig;
+    if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+      onToast('请先在 设置 › 图像生成 完成配置');
+      return;
+    }
+    setCardGenBusy(true);
+    try {
+      const r = await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
+      const imgMsg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image' as const, img: { src: r.src } };
+      setMsgs((prev) => [...prev, imgMsg]);
+      if (peer.id !== me.id) {
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+          markDeliverBoundary(sessionKey, imgMsg.id);
+          wxQueueAdd(peer.id);
+        } else if (sentenceSend) {
+          setPendingDispatch(true);
+          markPendingBatch(sessionKey, true);
+        } else {
+          window.setTimeout(() => runAiTurnRef.current?.(null, [imgMsg]), 80);
+        }
+      }
+      setCardActionId(null);
+      onToast('图片已生成并发送');
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : '图片生成失败');
+    } finally {
+      setCardGenBusy(false);
     }
   };
   /** 线下模式（约会）：加号面板「线下」入口打开的见面页（与 QQ/信息共用） */
@@ -7168,10 +7235,17 @@ function ChatPage({
                   }} />
                 </div>
               ) : m.kind === 'textcard' && m.card ? (
-                /* 文字图片卡片（Task 13：无生图依赖——AI 代笔/用户代写的文字直接印在卡片上）；
-                   长按菜单与图片一致（复制/删除/多选/撤回/转发/收藏，无编辑无引用） */
+                /* 文字图片卡片（Task 14：以「我」的身份发出/历史角色卡兼容）；
+                   长按菜单与图片一致（复制/删除/多选/撤回/转发/收藏，无编辑无引用）；点击弹操作面板（生成图片/复制文字） */
                 <div {...bubblePress}>
-                  <TextCardBubble text={m.card.text} signedBy={m.role === 'me' ? me.name : peer.name} variant="wx" />
+                  <TextCardBubble
+                    text={m.card.text}
+                    signedBy={m.role === 'me' ? me.name : peer.name}
+                    variant="wx"
+                    onClick={() => {
+                      if (!selectMode) setCardActionId(m.id);
+                    }}
+                  />
                 </div>
               ) : m.kind === 'voice' && m.voice ? (
                 /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方 */
@@ -7633,6 +7707,20 @@ function ChatPage({
           onSubmit={(t) => void submitTextCard(t)}
         />
       )}
+      {/* 点击「文字图片」卡片弹出的操作面板：用图像生成生成图片 / 复制文字（三端共用组件） */}
+      {(() => {
+        const am = cardActionId ? msgs.find((x) => x.id === cardActionId && x.card) : null;
+        return am?.card ? (
+          <TextCardActionSheet
+            text={am.card.text}
+            busy={cardGenBusy}
+            accent="#07C160"
+            onGenerate={() => void generateCardImage(am)}
+            onToast={onToast}
+            onClose={() => (cardGenBusy ? undefined : setCardActionId(null))}
+          />
+        ) : null;
+      })()}
       {/* 线下模式（约会）：从聊天继续，承接最近 N 条线上聊天（加号面板「线下」入口，与 QQ/信息共用同一页面组件） */}
       {offlineOpen ? (
         <OfflineMeetingPage

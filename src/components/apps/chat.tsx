@@ -101,7 +101,7 @@ import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/alb
 // 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图）
 import { buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
-import { TextCardBubble } from '@/components/apps/text-card-bubble';
+import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -856,7 +856,7 @@ function SmsTextCardSheet({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="sms-textcard-sheet">
       <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-[17px] font-semibold">{charName}写一张文字图片发给你</p>
+          <p className="text-[17px] font-semibold">写一张文字图片发给{charName}</p>
           <button
             type="button"
             aria-label="关闭文字图片"
@@ -875,7 +875,7 @@ function SmsTextCardSheet({
           rows={3}
           maxLength={160}
           data-testid="sms-textcard-input"
-          placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录自动写）"
+          placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录帮你写）"
           className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#007AFF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
         />
         {error ? (
@@ -900,7 +900,7 @@ function SmsTextCardSheet({
           )}
         </button>
         <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
-          文字图片以 {charName} 的身份发出；无需配置图像生成，失败不影响聊天
+          文字图片以我的身份发出，{charName}会看到卡片上的字
         </p>
       </div>
     </div>
@@ -1001,6 +1001,9 @@ function ChatView({
   const [cardOpen, setCardOpen] = useState(false);
   const [cardBusy, setCardBusy] = useState(false);
   const [cardError, setCardError] = useState('');
+  // ---- 点击「文字图片」卡片弹出的操作面板（用图像生成生成图片/复制文字）：目标消息 id + 生成中标记 ----
+  const [cardActionId, setCardActionId] = useState<string | null>(null);
+  const [cardGenBusy, setCardGenBusy] = useState(false);
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
   const [translateOpen, setTranslateOpen] = useState(false);
   /** 回复条数选择页（设置页「回复条数」进入的独立二级页，按会话隔离） */
@@ -2236,12 +2239,19 @@ function ChatView({
   };
 
   /**
-   * 手动触发「文字图片」（Task 13 卡片版，无生图依赖）：输入留空时让 AI 按人设+最近聊天记录
-   * 写一段卡片文字（/api/textcard，用户上游优先、服务端内置模型兑底）；输入非空 = 用户代笔直接上卡。
-   * 成功 → 弹层关闭 + 「文字图片」卡片消息直接投递（不入 AI 回合队列）；
+   * 手动触发「文字图片」（Task 14 起方向反转）：文字图片是「我」发给 TA 的卡片——
+   * 输入留空时让 AI 按人设+最近聊天记录代笔（/api/textcard，用户上游优先、服务端内置模型兑底）；
+   * 输入非空 = 用户自己写。成功 → 弹层关闭 + role='user' 的卡片消息上屏（msgs 持久化 effect 落盘）
+   * 并触发 AI 回合（卡片文字以「[文字图片]（卡片上写着：…）」进上下文，TA 能读到并回应）；
    * 失败 → 错误留在弹层内（不关弹窗，可重试或取消）。
    */
   const submitTextCard = async (text: string) => {
+    // 40-a 拉黑拦截：被角色拉黑（byChar）后不能发送任何消息
+    if (wbContactId && loadBlock('sms', wbContactId).byChar) {
+      showToast('对方已将你拉黑，无法发送');
+      setCardOpen(false);
+      return;
+    }
     setCardBusy(true);
     setCardError('');
     try {
@@ -2257,19 +2267,66 @@ function ChatView({
           history: buildPhotoDescHistory(msgs, profileName || '我', peerLabel),
         });
       }
-      // 直接投递（scheduleAiDelivery 模块层投递，订阅 tick 会把落盘消息合并进本地 state），不入 AI 回合队列
-      void scheduleAiDelivery<ChatMsg>(
-        sessionKey,
-        [{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'textcard', card: { text: finalText } }],
-        deliverAiMsg,
-        { initialDelay: 0, delay: () => 0 },
-      );
+      const cardMsg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'textcard', card: { text: finalText } };
       setCardOpen(false);
+      // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发
+      if (sentenceSend) {
+        setMsgs((prev) => [...prev, cardMsg]);
+        setPendingDispatch(true);
+        markPendingBatch(sessionKey, true);
+      } else if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        // 对方正在回复（流式/投递中）：卡片照常上屏并排队补跑（与 send 文字路同口径）
+        setMsgs((prev) => [...prev, cardMsg]);
+        markDeliverBoundary(sessionKey, cardMsg.id);
+        enqueueQueuedTurn({ kind: 'kick' });
+      } else {
+        // 文字路同口径：startAiTurn 入列（持久化 effect 自动落盘）+ 触发回复
+        startAiTurnRef.current?.(cardMsg);
+      }
       showToast('文字图片已发送');
     } catch (e) {
       setCardError(e instanceof Error ? e.message : '生成失败，请重试');
     } finally {
       setCardBusy(false);
+    }
+  };
+
+  /**
+   * 点击「文字图片」卡片 → 用图像生成把卡片文字生成图片（设置 › 图像生成 配置）：
+   * 卡片是「我」发的，生图不带角色锁脸（contactId 空，卡片文字即画面描述）；
+   * 成功 → 以「我」的图片消息上屏并触发 AI 回合（识图/上下文同用户发图口径），关闭操作面板；
+   * 失败 → 只 toast，面板留在原地可重试。
+   */
+  const generateCardImage = async (m: ChatMsg) => {
+    const desc = m.card?.text?.trim();
+    if (!desc || cardGenBusy) return;
+    if (wbContactId && loadBlock('sms', wbContactId).byChar) {
+      showToast('对方已将你拉黑，无法发送');
+      setCardActionId(null);
+      return;
+    }
+    const cfg = useSettings.getState().imgGenConfig;
+    if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+      showToast('请先在 设置 › 图像生成 完成配置');
+      return;
+    }
+    setCardGenBusy(true);
+    try {
+      const r = await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
+      const imgMsg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc } };
+      setMsgs((prev) => [...prev, imgMsg]);
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+        markDeliverBoundary(sessionKey, imgMsg.id);
+        enqueueQueuedTurn({ kind: 'kick' });
+      } else {
+        window.setTimeout(() => startAiTurnRef.current?.(null), 80); // 等重渲染 + ref 回填新闭包（含图片消息）
+      }
+      setCardActionId(null);
+      showToast('图片已生成并发送');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '图片生成失败');
+    } finally {
+      setCardGenBusy(false);
     }
   };
 
@@ -2904,7 +2961,14 @@ function ChatView({
                   {mine && blockedIconOf(m)}
                   <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
-                      <TextCardBubble text={m.card.text} signedBy={mine ? profileName || '我' : peer.name ?? peer.title} variant="sms" />
+                      <TextCardBubble
+                        text={m.card.text}
+                        signedBy={mine ? profileName || '我' : peer.name ?? peer.title}
+                        variant="sms"
+                        onClick={() => {
+                          if (!selectMode) setCardActionId(m.id);
+                        }}
+                      />
                     </div>
                     {/* iMessage：已送达挂在最后一条己方消息下沿（与文本/语音/图片气泡同规则） */}
                     {mine && i === lastUserIdx && (
@@ -3152,16 +3216,16 @@ function ChatView({
         }}
         className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-2.5 pb-[30px] pt-2 backdrop-blur-xl"
       >
-        {/* 加号（更多功能）：相机/图片/文字图片面板；展开时旋转 45°（对齐微信加号交互） */}
+        {/* 加号（更多功能）：相机/图片/文字图片面板；iOS 同款灰色圆圈内加号，展开时旋转 45°（对齐微信加号交互） */}
         <button
           type="button"
           aria-label={plusOpen ? '收起更多功能' : '更多功能'}
           aria-expanded={plusOpen}
           data-testid="sms-plus-button"
           onClick={() => setPlusOpen((v) => !v)}
-          className="flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all active:opacity-60"
+          className="flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-black/[0.07] text-muted-foreground transition-all active:opacity-60 dark:bg-white/[0.12]"
         >
-          <Plus className={`h-[23px] w-[23px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} aria-hidden="true" />
+          <Plus className={`h-[19px] w-[19px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={2} aria-hidden="true" />
         </button>
         <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full border border-border/70 bg-background pl-3.5 pr-1.5">
           {voiceMode ? (
@@ -3287,7 +3351,7 @@ function ChatView({
       </>
       )}
 
-      {/* 文字图片弹层（加号面板 → 文字图片；Task 13 卡片版，无生图依赖） */}
+      {/* 文字图片弹层（加号面板 → 文字图片；Task 14 卡片版，以「我」的身份发出） */}
       {cardOpen && (
         <SmsTextCardSheet
           charName={peerLabel}
@@ -3297,6 +3361,20 @@ function ChatView({
           onSubmit={(t) => void submitTextCard(t)}
         />
       )}
+      {/* 点击「文字图片」卡片弹出的操作面板：用图像生成生成图片 / 复制文字（三端共用组件） */}
+      {(() => {
+        const am = cardActionId ? msgs.find((x) => x.id === cardActionId && x.card) : null;
+        return am?.card ? (
+          <TextCardActionSheet
+            text={am.card.text}
+            busy={cardGenBusy}
+            accent="#007AFF"
+            onGenerate={() => void generateCardImage(am)}
+            onToast={showToast}
+            onClose={() => (cardGenBusy ? undefined : setCardActionId(null))}
+          />
+        ) : null;
+      })()}
       {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
       {settingsOpen && (
         <SmsChatSettingsPage

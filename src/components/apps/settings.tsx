@@ -416,9 +416,6 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
           <MainRow icon={Wifi} tone={TONE_BLUE} label="无线局域网" value="未连接" chevron />
           <MainRow icon={Bluetooth} tone={TONE_BLUE} label="蓝牙" value="打开" chevron />
         </div>
-        <p className="mt-2 px-8 text-[12px] leading-relaxed text-muted-foreground">
-          飞行模式、无线局域网与蓝牙均为演示项，不改变系统状态。
-        </p>
 
         {/* 锁屏与密码（按用户要求不显示开启状态提示） */}
         <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
