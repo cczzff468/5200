@@ -113,16 +113,16 @@ export interface PhotoTag {
 }
 
 const PHOTO_TAG_RE =
-  /[【\[]\s*照片\s*[:：]\s*(使用参考图|不使用参考图|不用参考图)?\s*[:：]?\s*([^\]】]{1,160})[\]】]/g;
+  /[【\[]\s*(?:照片|图片)\s*[:：]\s*(使用参考图|不使用参考图|不用参考图)?\s*[:：]?\s*([^\]】]{1,160})[\]】]/g;
 
 /**
  * 从回复文本里提取全部照片标签并从原文剥除：
- * 支持 [照片:描述] / 【照片：描述】 / [照片:使用参考图:描述] / [照片:不使用参考图:描述]
- * （desc 为空 / 全空白的标签直接丢弃）；
+ * 支持 [图片:描述] / [照片:描述] / 【图片：描述】全角变体 / [照片:使用参考图:描述] / [照片:不使用参考图:描述]
+ * （desc 为空 / 全空白的标签直接丢弃；图片/照片两种写法都认——prompt 教的是 [图片:描述]，兼容模型输出的旧写法）；
  * useRef 语义：默认 true（有参考图就锁脸），仅明确写「不使用参考图/不用参考图」才为 false。
  */
 export function extractPhotoTags(text: string): { text: string; tags: PhotoTag[] } {
-  if (!text || text.indexOf('照片') === -1) return { text, tags: [] };
+  if (!text || (text.indexOf('照片') === -1 && text.indexOf('图片') === -1)) return { text, tags: [] };
   const tags: PhotoTag[] = [];
   const stripped = text.replace(PHOTO_TAG_RE, (_m, mode: string | undefined, desc: string) => {
     const d = (desc ?? '').trim();
@@ -134,22 +134,22 @@ export function extractPhotoTags(text: string): { text: string; tags: PhotoTag[]
 
 /** 文本里是否含未剥除的照片标签（渲染层防御性提示用；一般提取后即无） */
 export function hasPhotoTag(text: string): boolean {
-  return /[【\[]\s*照片\s*[:：]/.test(text ?? '');
+  return /[【\[]\s*(?:照片|图片)\s*[:：]/.test(text ?? '');
 }
 
 // ---------------- 提示词规则（聊天 system 注入） ----------------
 
 /**
- * 生图照片标签规则：开启生图后注入聊天 system，让 AI 知道自己可以「发照片」。
+ * 生图照片标签规则：注入聊天 system，让 AI 知道自己可以「发图片」（能力常开——
+ * 对方配置了生图就收到真实照片，没配置/生成失败会收到一张写着画面描述的文字图片卡片，AI 无需关心）。
  * 描述用第三人称画面描述（锁脸会自动带上角色本人形象），不要在描述里写文字/水印要求。
  */
 export function buildPhotoTagRule(charName: string): string {
   return (
-    `【发照片能力】你（${charName}）可以在回复里输出照片标签来给对方发一张你拍的照片：\n` +
-    `- 格式：[照片:画面描述]，描述用具体的画面语言（场景/构图/光线/动作/表情，20~60字），如「[照片:黄昏的咖啡厅窗边，长发女生托腮看镜头，暖光落在侧脸上]」。\n` +
-    `- 一次最多一张；照片描述不要包含文字、水印、分镜要求；标签单独或放在消息末尾，不要套在引号里。\n` +
-    `- 何时发：对方想看你的样子/让你发自拍/分享当下瞬间（做饭、散步、风景+你）等自然场景；不要每条消息都发，不要连发。\n` +
-    `- 标签会被系统替换成真实照片，你不需要描述照片「已发出」以外的话，也不要假装用户点评过照片内容。`
+    `【发图片能力】你（${charName}）可以在回复里发一张你拍的照片/图片：在回复文本里输出标签 [图片:画面描述]，系统会把标签替换成真实图片发给对方。\n` +
+    `- 格式：[图片:画面描述]，描述用具体的画面语言（场景/构图/光线/动作/表情/氛围，20~60字），如「[图片:黄昏的咖啡厅窗边，长发女生托腮看镜头，暖光落在侧脸上]」；一次最多一张；不要包含文字/水印/分镜要求；标签单独或放在消息末尾，不要套在引号里。\n` +
+    `- 何时发：结合你的人设、当前聊天内容、你们的共同回忆和此刻的情绪，自然想分享的瞬间（想让TA看你的样子、眼前的风景、正在做的事、有纪念意义的时刻）才发；要有节制——大多数回复不带图，不要每条都发，不要连发。\n` +
+    `- 系统会按你的形象生成照片（面部与你本人一致），描述里不用写五官长相；你不需要描述照片「已发出」以外的话，不要假装对方点评过照片内容，也不用解释技术细节。`
   );
 }
 
@@ -185,6 +185,24 @@ export function notePhotoMemory(contactId: string, app: 'wx' | 'qq' | 'sms', des
     void memAddEventFragment(contactId, app, `（拍了一张照片发给你：${d}）`, { sourceTag: 'imggen' });
   } catch {
     /* 记忆失败不影响聊天 */
+  }
+}
+
+/**
+ * 把图片（dataURL 或 URL）触发浏览器下载（长按菜单「保存」共用三端）；失败返回 false。
+ */
+export function downloadImageSrc(src: string, name?: string): boolean {
+  try {
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = name || `photo-${Date.now()}.png`;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return true;
+  } catch {
+    return false;
   }
 }
 

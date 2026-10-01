@@ -182,9 +182,10 @@ import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
-import { buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
+import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
@@ -4315,6 +4316,11 @@ function ChatPage({
   /** 点击「文字图片」卡片弹出的操作面板（用图像生成生成图片/复制文字）：目标消息 id + 生成中标记 */
   const [cardActionId, setCardActionId] = useState<string | null>(null);
   const [cardGenBusy, setCardGenBusy] = useState(false);
+  // ---- 长按 AI 图片「重新生成图片」弹层：目标消息 id + 可编辑描述 + busy/错误（三端同款交互） ----
+  const [regenImgId, setRegenImgId] = useState<string | null>(null);
+  const [regenImgDesc, setRegenImgDesc] = useState('');
+  const [regenImgBusy, setRegenImgBusy] = useState(false);
+  const [regenImgError, setRegenImgError] = useState('');
 
   /**
    * 手动触发「文字图片」（Task 14 起方向反转）：文字图片是「我」发给 TA 的卡片——
@@ -5019,16 +5025,22 @@ function ChatPage({
   const photoJobsRef = useRef<PhotoTag[]>([]);
 
   /**
-   * 消费照片任务：每条先生「正在拍照…」系统行，异步生成成功后落照片消息 + 存相册（origin 'ai'）+
-   * 决策日志 + 记忆（30 分钟节流不刷屏）；失败落系统提示行（不影响聊天）。
-   * 单轮最多 2 张防刷屏；自动生图关闭/配置不完整时静默丢弃（标签已剥除，不产生任何输出）。
+   * 消费照片任务：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落照片消息 + 存相册（origin 'ai'）+
+   * 决策日志 + 记忆（30 分钟节流不刷屏）；未配置/生成失败自动降级为「文字图片」卡片（不影响聊天）。
+   * 单轮最多 2 张防刷屏。
    */
   const flushPhotoJobs = (ctx: WxTurnCtx) => {
     const jobs = photoJobsRef.current;
     photoJobsRef.current = [];
     if (jobs.length === 0) return;
     const cfg = useSettings.getState().imgGenConfig;
-    if (!cfg.enabled || !imgGenConfigReady(cfg)) return;
+    if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+      // 未配置生图：降级为「文字图片」卡片（无「正在拍照…」行，卡片即最终形态）
+      for (const job of jobs.slice(0, 2)) {
+        enqueueBatch([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'textcard', card: { text: job.desc } }], ctx);
+      }
+      return;
+    }
     for (const job of jobs.slice(0, 2)) {
       enqueueBatch([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `「${peer.name}」正在拍照…` } }], ctx);
       void (async () => {
@@ -5042,8 +5054,15 @@ function ChatPage({
           void listAlbums(peer.id).then((list) => {
             albumCacheRef.current = list;
           });
-        } catch (e) {
-          enqueueBatch([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `照片生成失败：${e instanceof Error ? e.message : '未知错误'}` } }], ctx);
+        } catch {
+          // 生成失败：降级为文字图片卡片（先落一行系统提示说明状态，不阻塞聊天）
+          enqueueBatch(
+            [
+              { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: '照片生成失败，已改为文字图片' } },
+              { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'textcard', card: { text: job.desc } },
+            ],
+            ctx,
+          );
         }
       })();
     }
@@ -5602,11 +5621,8 @@ function ChatPage({
       ? albumCacheRef.current.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
       : null;
     const visionRules = buildVisionRules(albumSummary);
-    // 生图（锁脸）：自动生图开启且配置完整时注入照片标签规则，AI 可自然地「发照片」；
-    // 关闭时不注入（模型不输出标签，零影响），配置不完整时也不注入（剥出的标签不会生成，没意义）
-    const imgGenCfg = useSettings.getState().imgGenConfig;
-    const imgGenOn = imgGenCfg.enabled && imgGenConfigReady(imgGenCfg);
-    const photoRule = imgGenOn ? buildPhotoTagRule(peer.name) : '';
+    // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
+    const photoRule = buildPhotoTagRule(peer.name);
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -6196,17 +6212,20 @@ function ChatPage({
   /** 消息是否可长按弹菜单 / 多选勾选（通知行与已撤回行除外） */
   const isSelectable = (m: WxMsg): boolean => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && !m.recalled;
 
-  /** 按发送方与消息类型组装长按菜单项（我的/AI 气泡都可：复制 删除 编辑 引用 多选 撤回 转发 收藏；AI 气泡多一个重新生成；已收藏的消息显示「已收藏」；
+  /** 按发送方与消息类型组装长按菜单项（我的/AI 气泡都可：复制 删除 编辑 引用 多选 撤回 转发 收藏；图片多保存，AI 图片多重新生成图片（自填描述）；已收藏的消息显示「已收藏」；
    *  好友验证消息（fr=apply/greet）永久保留在聊天记录：禁删除/撤回/编辑/引用/重新生成） */
   const buildMsgMenuItems = (m: WxMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isText = !m.kind || m.kind === 'text';
     const isVoice = m.kind === 'voice';
+    const isImage = m.kind === 'image';
     const isFrLocked = m.fr === 'apply' || m.fr === 'greet';
     const items: BubbleMenuItem[] = [];
     // 语音消息首项「转文字」/「取消转文字」（toggle：已转写→取消收起；未转写→识别；失败可重试）
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
+    // 图片消息：保存到设备（dataURL 直接下载）
+    if (isImage && m.img?.src) items.push({ key: 'saveimg', label: '保存', icon: B.save });
     if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if ((isText || isVoice) && !isFrLocked) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (isText && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
@@ -6214,7 +6233,11 @@ function ChatPage({
     if (!isFrLocked) items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
     items.push({ key: 'fav', label: isMsgFavorited('wx', m.id) ? '已收藏' : '收藏', icon: B.fav, filled: isMsgFavorited('wx', m.id) });
-    if (m.role === 'peer' && !isFrLocked) items.push({ key: 'regen', label: '重新生成', icon: B.regen });
+    if (m.role === 'peer' && !isFrLocked) {
+      // AI 图片：重新生成图片（自填描述，原地替换）替代整轮重答；文字气泡保留原「重新生成」
+      if (isImage) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
+      else items.push({ key: 'regen', label: '重新生成', icon: B.regen });
+    }
     return items;
   };
 
@@ -6468,6 +6491,45 @@ function ChatPage({
       case 'regen':
         regenerate(m);
         break;
+      case 'saveimg': {
+        // 图片保存到设备：dataURL 直接以 <a download> 触发下载
+        const src = m.kind === 'image' ? m.img?.src ?? '' : '';
+        if (src && downloadImageSrc(src)) onToast('已保存到设备');
+        else onToast('保存失败');
+        break;
+      }
+      case 'regenimg': {
+        // 重新生成图片：未配置生图时提示；否则打开描述编辑弹层（预填原图描述）
+        const cfg = useSettings.getState().imgGenConfig;
+        if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+          onToast('请先在 设置 › 图像生成 完成配置');
+          break;
+        }
+        setRegenImgDesc(m.img?.desc ?? '');
+        setRegenImgError('');
+        setRegenImgId(m.id);
+        break;
+      }
+    }
+  };
+
+  /** 重新生成图片提交：按（可编辑的）描述 + 角色形象锁脸重生成，成功后原地替换该条消息的图片（自动落盘） */
+  const submitImgRegen = async () => {
+    const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && x.role === 'peer') : null;
+    const desc = regenImgDesc.trim();
+    if (!target || !desc || regenImgBusy) return;
+    setRegenImgBusy(true);
+    setRegenImgError('');
+    try {
+      const cfg = useSettings.getState().imgGenConfig;
+      const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name, useRef: true });
+      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { src: r.src, desc } } : x)));
+      setRegenImgId(null);
+      onToast('已重新生成图片');
+    } catch (e) {
+      setRegenImgError(e instanceof Error ? e.message : '图片生成失败');
+    } finally {
+      setRegenImgBusy(false);
     }
   };
 
@@ -7720,6 +7782,21 @@ function ChatPage({
             onGenerate={() => void generateCardImage(am)}
             onToast={onToast}
             onClose={() => (cardGenBusy ? undefined : setCardActionId(null))}
+          />
+        ) : null;
+      })()}
+      {/* 长按 AI 图片「重新生成」弹层：可编辑描述 + 锁脸重生成，原地替换（三端共用组件） */}
+      {(() => {
+        const am = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image') : null;
+        return am ? (
+          <ImageRegenSheet
+            desc={regenImgDesc}
+            busy={regenImgBusy}
+            error={regenImgError}
+            accent="#07C160"
+            onDescChange={setRegenImgDesc}
+            onSubmit={() => void submitImgRegen()}
+            onClose={() => (regenImgBusy ? undefined : setRegenImgId(null))}
           />
         ) : null;
       })()}

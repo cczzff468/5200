@@ -97,11 +97,12 @@ import {
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
 import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
-// 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；
-// 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图）
-import { buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+// 生图（锁脸）：回复文本 [图片:描述]/[照片:描述] 标签 → 自动生图投递（未配置/失败降级文字图片卡片）；
+// 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图
+import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
+import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -1004,6 +1005,11 @@ function ChatView({
   // ---- 点击「文字图片」卡片弹出的操作面板（用图像生成生成图片/复制文字）：目标消息 id + 生成中标记 ----
   const [cardActionId, setCardActionId] = useState<string | null>(null);
   const [cardGenBusy, setCardGenBusy] = useState(false);
+  // ---- 长按 AI 图片「重新生成图片」弹层：目标消息 id + 可编辑描述 + busy/错误（三端同款交互） ----
+  const [regenImgId, setRegenImgId] = useState<string | null>(null);
+  const [regenImgDesc, setRegenImgDesc] = useState('');
+  const [regenImgBusy, setRegenImgBusy] = useState(false);
+  const [regenImgError, setRegenImgError] = useState('');
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
   const [translateOpen, setTranslateOpen] = useState(false);
   /** 回复条数选择页（设置页「回复条数」进入的独立二级页，按会话隔离） */
@@ -1287,10 +1293,11 @@ function ChatView({
   const photoJobsRef = useRef<PhotoTag[]>([]);
 
   /**
-   * 消费照片任务：每条先生「正在拍照…」系统行，异步生成成功后落图片消息 + 存相册（origin 'ai'）+
-   * 决策日志 + 记忆（30 分钟节流不刷屏）+ 刷新相册清单缓存（供下一轮视觉规则/选头像用）；失败落系统提示行（不影响聊天）。
-   * 单次 flush 最多 2 张防刷屏；自动生图关闭/配置不完整/小助手会话（无角色身份，锁脸/相册/记忆无挂点）时
-   * 静默丢弃（标签已在 buildReplyMsgs 剥除，不产生任何输出）。
+   * 消费照片任务：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落图片消息 + 存相册（origin 'ai'）+
+   * 决策日志 + 记忆（30 分钟节流不刷屏）+ 刷新相册清单缓存（供下一轮视觉规则/选头像用）；
+   * 未配置/生成失败自动降级为「文字图片」卡片（desc 即卡片文字，不影响聊天）。
+   * 单次 flush 最多 2 张防刷屏；小助手会话（无角色身份，锁脸/相册/记忆无挂点）配置完整时静默丢弃
+   * （标签已在 buildReplyMsgs 剥除），未配置时同样降级为卡片。
    * deliver：投递函数（回合内 = startAiTurn 的 enqueueBatch；退出网页接力 = deliverBgItems 的 bgEnqueueBatch）
    */
   const flushPhotoJobs = useCallback(
@@ -1299,9 +1306,15 @@ function ChatView({
       photoJobsRef.current = [];
       if (jobs.length === 0) return;
       const cid = wbContactId;
-      if (!cid) return; // 小助手会话无角色 id：不生图
       const cfg = useSettings.getState().imgGenConfig;
-      if (!cfg.enabled || !imgGenConfigReady(cfg)) return;
+      if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+        // 未配置生图：降级为「文字图片」卡片（无「正在拍照…」行，卡片即最终形态）
+        for (const job of jobs.slice(0, 2)) {
+          deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'textcard', card: { text: job.desc } }]);
+        }
+        return;
+      }
+      if (!cid) return; // 小助手会话无角色 id：不生图（保持旧行为）
       const charName = peerLabel;
       for (const job of jobs.slice(0, 2)) {
         deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: `「${charName}」正在拍照…` } }]);
@@ -1321,8 +1334,12 @@ function ChatView({
               })
               .catch(() => {});
             deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc: job.desc } }]);
-          } catch (e) {
-            deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: `照片生成失败：${e instanceof Error ? e.message : '未知错误'}` } }]);
+          } catch {
+            // 生成失败：降级为文字图片卡片（先落一行系统提示说明状态，不阻塞聊天）
+            deliver([
+              { id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: '照片生成失败，已改为文字图片' } },
+              { id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'textcard', card: { text: job.desc } },
+            ]);
           }
         })();
       }
@@ -1618,12 +1635,9 @@ function ChatView({
         : systemPrompt ?? '';
     // 动作描写开关：发送时现场读取（与上方 getTimeAware 现场读取同款），开启下发格式约定、关闭下发禁令
     const actionDescOn = getActionDescOn(sessionKey);
-    // 生图（锁脸）：自动生图开启且配置完整时注入照片标签规则，AI 可自然地「发照片」；
-    // 关闭/配置不完整时不注入（模型不输出标签，零影响）；仅联系人会话（小助手无角色身份，锁脸/相册/记忆无挂点）
-    // 且非申请卡模式（正文会被整段丢弃，不诱导输出标签）——与 flushPhotoJobs 的守卫同口径
-    const imgGenCfg = useSettings.getState().imgGenConfig;
-    const imgGenOn = Boolean(wbContactId) && !requestOnly && imgGenCfg.enabled && imgGenConfigReady(imgGenCfg);
-    const photoRule = imgGenOn ? buildPhotoTagRule(peer.name ?? peer.title) : '';
+    // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，
+    // AI 无需关心）；仅联系人会话注入（小助手无角色身份）且非申请卡模式（正文会被整段丢弃，不诱导输出标签）
+    const photoRule = Boolean(wbContactId) && !requestOnly ? buildPhotoTagRule(peer.name ?? peer.title) : '';
     const baseSys = [
       ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
       charBlock,
@@ -2488,7 +2502,7 @@ function ChatView({
             : '[文字图片]'
           : m.content;
 
-  /** 按发送方组装长按菜单项（语音首项转文字；图片无编辑（内容不可改）；复制 删除 编辑 引用 多选 撤回；语音可编辑转写文本、无引用） */
+  /** 按发送方组装长按菜单项（语音首项转文字；图片无编辑（内容不可改）有保存/重新生成；复制 删除 编辑 引用 多选 撤回；语音可编辑转写文本、无引用） */
   const buildMsgMenuItems = (m: ChatMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isVoice = m.kind === 'voice';
@@ -2497,6 +2511,8 @@ function ChatView({
     const items: BubbleMenuItem[] = [];
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
+    // 图片消息：保存到设备（dataURL 直接下载）
+    if (isImage && m.img?.src) items.push({ key: 'saveimg', label: '保存', icon: B.save });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if (!isImage && !isCard) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (!isVoice) {
@@ -2504,6 +2520,8 @@ function ChatView({
     }
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     items.push({ key: 'recall', label: '撤回', icon: B.recall });
+    // AI 图片：重新生成图片（自填描述，原地替换）；我的图片不提供（用户实拍图不应被覆盖）
+    if (m.role === 'assistant' && isImage) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
     return items;
   };
 
@@ -2631,6 +2649,45 @@ function ChatView({
         if (memContactId) void memPurgeMessageSources(memContactId, m.id);
         break;
       }
+      case 'saveimg': {
+        // 图片保存到设备：dataURL 直接以 <a download> 触发下载
+        const src = m.kind === 'image' ? m.img?.src ?? '' : '';
+        if (src && downloadImageSrc(src)) showToast('已保存到设备');
+        else showToast('保存失败');
+        break;
+      }
+      case 'regenimg': {
+        // 重新生成图片：未配置生图时提示；否则打开描述编辑弹层（预填原图描述）
+        const cfg = useSettings.getState().imgGenConfig;
+        if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+          showToast('请先在 设置 › 图像生成 完成配置');
+          break;
+        }
+        setRegenImgDesc(m.img?.desc ?? '');
+        setRegenImgError('');
+        setRegenImgId(m.id);
+        break;
+      }
+    }
+  };
+
+  /** 重新生成图片提交：按（可编辑的）描述 + 角色形象锁脸重生成，成功后原地替换该条消息的图片（自动落盘） */
+  const submitImgRegen = async () => {
+    const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && x.role === 'assistant') : null;
+    const desc = regenImgDesc.trim();
+    if (!target || !desc || regenImgBusy) return;
+    setRegenImgBusy(true);
+    setRegenImgError('');
+    try {
+      const cfg = useSettings.getState().imgGenConfig;
+      const r = await generateCharacterPhoto({ cfg, contactId: wbContactId ?? '', desc, charName: peer.name || peer.title, useRef: true });
+      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { src: r.src, desc } } : x)));
+      setRegenImgId(null);
+      showToast('已重新生成图片');
+    } catch (e) {
+      setRegenImgError(e instanceof Error ? e.message : '图片生成失败');
+    } finally {
+      setRegenImgBusy(false);
     }
   };
 
@@ -3372,6 +3429,21 @@ function ChatView({
             onGenerate={() => void generateCardImage(am)}
             onToast={showToast}
             onClose={() => (cardGenBusy ? undefined : setCardActionId(null))}
+          />
+        ) : null;
+      })()}
+      {/* 长按 AI 图片「重新生成」弹层：可编辑描述 + 锁脸重生成，原地替换（三端共用组件） */}
+      {(() => {
+        const am = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image') : null;
+        return am ? (
+          <ImageRegenSheet
+            desc={regenImgDesc}
+            busy={regenImgBusy}
+            error={regenImgError}
+            accent="#007AFF"
+            onDescChange={setRegenImgDesc}
+            onSubmit={() => void submitImgRegen()}
+            onClose={() => (regenImgBusy ? undefined : setRegenImgId(null))}
           />
         ) : null;
       })()}

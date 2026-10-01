@@ -12838,3 +12838,26 @@ Work Log:
 Stage Summary:
 - 微信/QQ 用户手动发送的文字图片卡片恢复上屏+落盘；三端（信息/微信/QQ）发送、上屏、点击生图面板、持久化全链路浏览器验证通过
 - 关键经验：extra 传参路径必须保证消息先 setMsgs 入列（runAiTurn base 按 id 去重兜底）；排障时「AI 读到了但界面没有」优先查发送路是否漏 setMsgs
+
+---
+Task ID: 16
+Agent: Z.ai Code (main)
+Task: AI 根据人设/上下文/聊天内容自主发送「文字+图片」——[图片:描述] 标签管线（配置好→锁脸真图；未配置/失败→降级文字图片卡片）+ 图片长按保存/重新生成（自填描述）+ QQ 端大图查看器
+
+Work Log:
+- 需求探察：imggen.ts 已有 [照片:描述] 标签管线（extractPhotoTags/buildPhotoTagRule/generateCharacterPhoto 锁脸），但 (a) 仅在生图配置完整时注入 prompt 规则（未配置时 AI 根本不发图）；(b) 生成失败只落系统提示行；(c) 标签正则不认用户要的 [图片:...] 写法；(d) QQ 图片点击无大图；(e) 图片长按无「保存」与图片级「重新生成」
+- imggen.ts：PHOTO_TAG_RE/hasPhotoTag 兼容 [图片:...]/[照片:...]/【图片：...】全角变体（prompt 教 [图片:...]，兼容模型旧写法）；buildPhotoTagRule 重写——发图依据（人设+当前聊天内容+共同回忆+此刻情绪）+节制（大多数回复不带图/不连发/最多一张）+描述要求（场景/构图/光线/动作/表情/氛围 20~60 字、不写文字水印、锁脸自动带角色形象无需写长相）+降级说明（AI 无需关心对方收到真图还是文字卡片）；新增 downloadImageSrc 共享下载助手
+- 三端 photoRule 注入门控放宽：信息端 Boolean(wbContactId)&&!requestOnly（小助手无角色身份仍不注入）；微信/QQ 无条件注入（buildPhotoTagRule(peer.name)）——能力常开，降级由 flushPhotoJobs 兜底
+- 三端 flushPhotoJobs 降级改造：未启用/配置不完整 → 每个标签直接投「文字图片」卡片（kind='textcard', card.text=desc，无「正在拍照…」行，卡片即最终形态）；生成失败 → 先落「照片生成失败，已改为文字图片」系统行再投卡片（信息端 role=assistant，微信/QQ role=peer；接力回复 bg 路径同管线自动生效）
+- 新增 src/components/apps/image-regen-sheet.tsx：ImageRegenSheet 三端共用「重新生成图片」弹层（可编辑描述 textarea 预填原图 desc + busy 转圈 + 错误行 + 取消；testid imgregen-sheet/input/submit/cancel；底部弹层样式对齐 TextCardActionSheet）；bubble-menu.tsx 图标库新增 save(Download)/regenimg(Wand2)
+- 三端长按菜单：图片消息加「保存」（dataURL 经 downloadImageSrc 触发 <a download>，双端图片均适用）；AI 图片（role=peer/assistant）加「重新生成」（regenimg，替代原「整轮重答」regen；文字气泡保留原重新生成）——信息端菜单原本无转发/收藏（本就无此设计）仅加保存+重新生成；微信/QQ 保存插在复制后
+- 三端 submitImgRegen：读设置 imgGenConfig → generateCharacterPhoto（contactId=角色 id 锁脸、useRef=true）→ setMsgs 原位替换 img.src+desc（QQ 端 content 与 img.src 同步更新）→ 自动落盘；未配置生图时点菜单 toast「请先在 设置 › 图像生成 完成配置」；连发/流式中无守卫（原地替换不产生新消息，安全）
+- qq.tsx 新增图片大图查看器：imgViewer state + 图片气泡 onClick（selectMode 时不打开）+ 黑底居中 overlay（qq-img-viewer，对齐信息端 sms-img-viewer 同款）
+- E2E 排障（重要环境教训）：本沙箱所有 Bash 派生进程（含 setsid nohup 的 next dev）在调用结束即被杀——dev server 只能在单次调用内存活，且每次重启后 HMR 会整页刷新回锁屏；agent-browser E2E 固定模式 = 每批调用开头「确保 server → agent-browser reload → wait 3s → 合成 pointer 滑动解锁 → 校验非锁屏 → 再操作」，任何一步省略 reload 都会撞上 HMR 竞态；表单填写后必须同调用内保存（React state 不耐刷新）
+- E2E（agent-browser 1280×940 + 合成事件）：联系人 APP 建 AI 角色「小鱼」（21 岁美术生，人设爱拍照）→ 信息 APP 凭手机号加好友 → 发「发张你的自拍看看」→ AI 自主输出 [图片:...] 标签 → 「正在拍照…」系统行 → /api/imggen 代理到 mini-services/imggen-mock（3031，彩图按 prompt hash 着色）→ 真图气泡上屏（与文字同回合）✓；长按图片 → 菜单含保存/重新生成（+复制/删除/引用/多选/撤回）✓；重新生成弹层预填 desc → 改描述提交 → 图片原位替换（mock 新色 RGB(50,159,88) 与新描述 hash 精确吻合）→ reload 后 IndexedDB kv 落库 desc=新描述（原位替换持久化）✓；写 enabled=false 配置再让 AI「再发一次画」→ 自动降级为「文字图片」卡片（暖纸卡+引号+署名小鱼，内容=画面描述）上屏且持久化 ✓；点击图片 → sms-img-viewer 黑底居中大图 ✓；agent-browser errors/console 干净；dev.log 无异常
+- 附注：imgGenConfig 存 IndexedDB settings（密文信封），测试用明文对象直写（store 水合兼容明文）；微信/QQ 端改动与信息端同构（同共享函数+镜像编辑），lint/tsc 全绿，未走 QQ 全流程 E2E（QQ 端建会话+AI 发图成本高，UI 均为信息端同款已验证模式）
+
+Stage Summary:
+- AI 发图能力常开三端：回复中 [图片:画面描述]（兼容 [照片:...]）由前端剥出——生图配置完整时经锁脸管线（参考图/外貌描述/相册/决策日志/记忆）发真图；未配置或生成失败自动降级为「文字图片」卡片（desc 即卡片文字），聊天永不中断
+- 图片消息长按菜单补齐「保存到设备」与「重新生成图片」（自填描述原位替换，锁脸重绘）；QQ 端补齐点击大图查看器；文字+图片同回复、点击大图、持久化（IndexedDB）全链路浏览器验证通过
+- 产出：src/lib/imggen.ts（标签兼容/规则重写/下载助手）、src/components/apps/image-regen-sheet.tsx（新增）、src/components/apps/bubble-menu.tsx（+图标）、src/components/apps/{chat,wechat,qq}.tsx（门控放宽/降级/菜单/弹层/QQ viewer）

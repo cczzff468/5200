@@ -14,6 +14,7 @@ import { motion } from 'framer-motion';
 import {
   CheckSquare,
   Copy,
+  Download,
   FileText,
   Forward,
   Pencil,
@@ -22,6 +23,7 @@ import {
   Star,
   Trash2,
   Undo2,
+  Wand2,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -46,6 +48,8 @@ export const BUBBLE_MENU_ICONS = {
   forward: Forward,
   fav: Star,
   regen: RefreshCw,
+  save: Download,
+  regenimg: Wand2,
   stt: FileText,
 } as const;
 
