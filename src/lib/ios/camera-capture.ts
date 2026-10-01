@@ -95,6 +95,20 @@ export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
 
   // ready 派生值：enabled=false 时同步为 false（无 setState，避免 effect 级联渲染）；
   // stream 仅在成功/失败路径同步（关闭路径不同步 setState，界面由 ready=false 隐藏 video，旧值无害）
+  // 流↔元素同步兜底（Task 26）：接通瞬间/大小窗互换/布局切换都会「重挂 <video> 元素」——
+  // 上面的 effect 只在 enabled/facing 变化时执行，重挂载不会重跑，新元素拿不到 srcObject，
+  // 表现为「摄像头开着，还要再点一下（翻转/开关摄像头）才出画面」。这里每次渲染后检查：
+  // ref 指向的新元素尚未挂流就立即补挂并播放，任何重挂载场景（接通换布局/互换/翻转后）画面即时恢复。
+  useEffect(() => {
+    const el = videoRef.current;
+    const s = streamRef.current;
+    if (el && s && el.srcObject !== s) {
+      el.srcObject = s;
+      void el.play().catch(() => {
+        // autoplay 策略：通话场景必有用户交互，失败静默
+      });
+    }
+  });
   return { videoRef, stream, ready: readyRaw && enabled, denied, error };
 }
 

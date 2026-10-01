@@ -212,7 +212,7 @@ export function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: C
   return (
     <div
       ref={scrollRef}
-      className="no-scrollbar flex max-h-full w-full items-center justify-center overflow-y-auto"
+      className="no-scrollbar flex max-h-full w-full flex-col items-center justify-end overflow-y-auto"
       aria-live="polite"
       data-testid={`${variant}-call-captions`}
     >
@@ -253,9 +253,10 @@ export function InlineCallChat({ variant, call, className = '' }: { variant: 'wx
 
   return (
     <div className={`shrink-0 ${className}`} data-testid={`${variant}-call-textbar`}>
-      {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条） */}
+      {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条；Task 26：限高 136→104——
+          视频通话页底部面板向上生长不再叠到主画面头像，语音通话同源无感） */}
       {(textMsgs.length > 0 || textBusy) && (
-        <div ref={listRef} className="no-scrollbar mx-1 mb-2 flex max-h-[136px] flex-col gap-1.5 overflow-y-auto">
+        <div ref={listRef} className="no-scrollbar mx-1 mb-2 flex max-h-[104px] flex-col gap-1.5 overflow-y-auto">
           {textMsgs.slice(-8).map((m, i) => (
             <p
               key={`${m.at}-${i}`}

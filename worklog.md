@@ -13261,3 +13261,22 @@ Stage Summary:
 - 视频通话界面三轮精修完成：顶部删小头像+名字（只留时长+状态，对齐语音通话）、名字移至主画面头像下（168px 头像+15px 小字、lift=72 避让底部控制）、互换后名字回落顶部、三处模糊全清除（RemoteView 模糊头像背景/LocalFullView 模糊垫底/来电页半透明 blur→纯黑清晰画面）、wx/qq 来电页补名字行（修复既有无名字缺陷）、拨号文案带名字、AI 视频来电规则防模仿强化
 - 产出：src/components/apps/video-call-screen.tsx（VideoTopBar/RemoteView/LocalFullView 重构+三皮肤调用更新）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（【视频通话能力】规则各+1 句）；引擎/记忆/卡片链路零改动
 - 回归：bunx tsc --noEmit 0 错；eslint（video-call-screen/wechat/qq）0 错；wx/qq 拨出→接通→互换→文字条→挂断→卡片全链路 E2E 通过；console 无错误
+---
+Task ID: 26
+Agent: Z.ai (main)
+Task: 视频通话四轮精修（Task 26）——画面全屏/中间头像名字更小更高/摄像头免二次点击/弹幕长文不遮/文字聊天不遮头像/语音通话遮挡排查
+
+Work Log:
+- 【摄像头免二次点击（根因修复）】camera-capture.ts useLocalCamera 新增「流↔元素同步兜底 effect」（无依赖数组，每次渲染后检查）：接通瞬间布局切换（拨号 LocalFullView→接通 LocalPipView）、大小窗互换、来电接听等场景都会「重挂 <video> 元素」，而原主 effect 只在 enabled/facing 变化时执行、重挂载不重跑，新元素拿不到 srcObject——表现为「摄像头开着还要再点一下（翻转/开关摄像头）才出画面」；现 ref 指向的新元素若未挂流立即补挂 srcObject 并 play()，任意重挂载场景画面即时恢复
+- 【画面全屏】LocalFullView object-contain → object-cover（用户反馈「让画面全屏」去掉上下黑边，对照微信真实自看行为：铺满、按比例裁剪不变形）；拨号中主画面与互换后主画面同样生效；「你」自看水印 bottom-324→240 适配铺满画面
+- 【中间头像名字更小更高】三皮肤主画面 RemoteView：头像 168→140、名字 15px→13px（max-w 240→200、mt-4→mt-3）、lift 72→96（paddingBottom=2×lift，整体再上移 24px）；腾出更多底部空间给字幕/文字聊天
+- 【弹幕长文不遮按钮】wx/qq 字幕槽 h-[68px] 固定居中裁切 → min-h-[64px] max-h-[112px] 弹性高度+flex-col justify-end 底部对齐（长句槽体向上生长、内部滚动，最新一句完整贴在按钮上方 gap-3 处，不再被按钮区视觉遮挡）；VideoCaption 改 flex-col items-center justify-end；phone 皮肤字幕槽（绝对定位 bottom-204）同步改弹性高度+底部对齐；共享 CaptionStream（voice-call-screen.tsx）内部 items-center justify-center → flex-col items-center justify-end：长句超出时底部锚定、最新字词（TTS 揭示进度端）始终可见，语音通话同源受益
+- 【文字聊天不遮头像】InlineCallChat 文字轮次消息区 max-h 136→104（最近 8 条内部滚动不变）+主画面头像更小更高（lift 96），实测接通页文字聊天面板顶缘（气泡 y≈565）与头像名字底缘（y≈447）间距 118px，不再叠压
+- 【语音通话遮挡排查】语音通话两皮肤为纯流式布局（中部 flex-1 弹性区 + InlineCallChat/按钮均为文档流，无绝对定位叠压），结构上不存在视频页那类遮挡；本次 CaptionStream 底部锚定与消息区限高对语音页为纯增益，实测微信语音通话：字幕在名字下方完整显示、文字条开合无叠压、挂断卡片正常
+- E2E（agent-browser，小雨）：①wx 视频：拨号页（全屏画面层+右上对方头像窗+「正在等待 小雨 接受邀请…」）→接通（顶部 00:05+正在听/140 方形圆角头像+13px 名字、位置更高/字幕两行完整贴按钮上方/三按钮+挂断常显）→点 PIP 互换（mini=对方头像、名字回落顶部）→换回→文字聊天（发「在干嘛呀」AI 人设回复、气泡+输入条均在按钮上方、头像无遮挡）→关字幕恢复→挂断→「视频通话时长 04:07 📹」卡片+续聊 ✓；②qq 视频：拨号页（左上头像窗/四按钮平行/正在呼叫）→接通（00:23+正在听/圆头像+名字/长字幕两行完整）→互换→挂断→蓝卡 00:50+续聊 ✓；③wx 语音：字幕名字下方完整/文字条无叠压/挂断「通话时长 00:44 ☁」卡 ✓；console 零错误、页面零错误、answer/turn/followup/memory/extract 全 200
+- 备注：headless 无摄像头/麦克风，画面以「摄像头不可用」占位验证布局与互换链路；流同步兜底 effect 的真实出画效果需真机摄像头场景（逻辑上覆盖重挂载全场景：接通换布局/互换/翻转/开关）
+
+Stage Summary:
+- 视频通话四轮精修完成：①useLocalCamera 流↔元素同步兜底（修复「开着摄像头还要再点一下才出画面」——接通/互换重挂 <video> 后即时恢复画面，根因级修复）；②主画面 object-cover 全屏铺满；③主画面头像 140+名字 13px+lift 96（更小更靠上）；④字幕槽弹性高度 64~112px 底部对齐（长弹幕内部滚动、最新句完整贴按钮上方不遮挡，wx/qq/phone+语音通话 CaptionStream 同源受益）；⑤文字聊天消息区限高 104px+头像上移，不再遮挡头像
+- 产出：src/lib/ios/camera-capture.ts（同步兜底 effect）、src/components/apps/video-call-screen.tsx（LocalFullView/RemoteView/VideoCaption/三皮肤字幕槽）、src/components/apps/voice-call-screen.tsx（CaptionStream 底部锚定/InlineCallChat 消息区限高）；引擎/记忆/卡片链路零改动
+- 回归：bunx tsc --noEmit 0 错、eslint 0 错；wx 视频/qq 视频/wx 语音三链路 E2E 全通过；console 零错误

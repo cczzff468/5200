@@ -204,7 +204,9 @@ type Runtime = ReturnType<typeof useVideoCallRuntime>;
  *  Task 23：微信皮肤头像为正方形圆角（对照微信真实行为），QQ/电话保持圆形；
  *  Task 25：删除模糊放大的头像背景与渐晕（用户反馈顶部/刚接通/切换画面后「是模糊的」），改纯黑清晰画面；
  *  主画面在头像下方显示名字（showName，小字），小窗/拨号头像窗不显示；lift=头像整体上移 px
- *  （主画面避开底部控制区视觉更居中，小窗传 0） */
+ *  （主画面避开底部控制区视觉更居中，小窗传 0）
+ *  Task 26：主画面头像 168→140、名字 15px→13px、lift 72→96（用户反馈「头像名字小一点，往上移一点」，
+ *  同时给底部字幕/文字聊天留出更多空间不叠压） */
 function RemoteView({
   avatar,
   name,
@@ -242,7 +244,7 @@ function RemoteView({
           )}
         </motion.div>
         {showName && (
-          <p className="mt-4 max-w-[240px] truncate px-6 text-center text-[15px] font-medium text-white/90 drop-shadow">{name}</p>
+          <p className="mt-3 max-w-[200px] truncate px-6 text-center text-[13px] font-medium text-white/90 drop-shadow">{name}</p>
         )}
       </div>
     </div>
@@ -252,7 +254,9 @@ function RemoteView({
 /** 我方画面（用户摄像头全屏，拨号中/互换后主画面用；无流时黑底+提示；基础量拆开传防 ref 容器对象渲染期访问）。
  *  Task 23：前置摄像头镜像预览（照镜子习惯，「画面是反的」修复；后置不镜像）。
  *  Task 24：object-contain 完整显示（不再 object-cover 硬裁剪显得「太放大」）。
- *  Task 25：删除模糊垫底层（用户反馈「刚接通/切换画面以后是模糊的」），改纯黑背景，画面清晰完整 */
+ *  Task 25：删除模糊垫底层（用户反馈「刚接通/切换画面以后是模糊的」），改纯黑背景，画面清晰完整
+ *  Task 26：object-contain → object-cover 画面铺满全屏（用户反馈「让画面全屏」，上下黑边去掉；
+ *  对照微信真实行为：自看画面永远充满全屏，两侧/上下按比例裁剪不变形） */
 function LocalFullView({
   videoRef,
   ready,
@@ -275,7 +279,7 @@ function LocalFullView({
           playsInline
           muted
           autoPlay
-          className="absolute inset-0 h-full w-full object-contain"
+          className="absolute inset-0 h-full w-full object-cover"
           style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
           aria-label="我的摄像头画面"
         />
@@ -285,8 +289,8 @@ function LocalFullView({
           <p className="text-[13px] text-white/45">{denied ? '摄像头不可用，已为你隐藏画面' : hint}</p>
         </div>
       )}
-      {/* 自看水印（这是我的摄像头画面，与对方画面区分；置于 contain 视频下缘之下，不遮画面不遮控制） */}
-      <p className="absolute bottom-[324px] left-1/2 -translate-x-1/2 text-[12px] text-white/40">你</p>
+      {/* 自看水印（这是我的摄像头画面，与对方画面区分；铺满画面下不遮控制区） */}
+      <p className="absolute bottom-[240px] left-1/2 -translate-x-1/2 text-[12px] text-white/40">你</p>
     </div>
   );
 }
@@ -428,10 +432,11 @@ function VideoPipIcon({ onClick }: { onClick?: () => void }) {
   );
 }
 
-/** 通话字幕（单句；容器由宿主给位：接通后底部控制区第一格，超高内部滚动；复用语音同款 CaptionStream） */
+/** 通话字幕（单句；容器由宿主给位：接通后底部控制区第一格，超高内部滚动并底部对齐——最新一句完整贴在
+ *  按钮上方，旧句向上裁剪，不再被按钮区「遮住」；复用语音同款 CaptionStream） */
 function VideoCaption({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
   return (
-    <div className="pointer-events-none flex max-h-full w-full items-start justify-center overflow-hidden">
+    <div className="pointer-events-none flex max-h-full w-full flex-col items-center justify-end overflow-hidden">
       <CaptionStream variant={variant} call={call} />
     </div>
   );
@@ -555,8 +560,8 @@ function WxVideoCall(props: VideoCallScreenProps) {
         </>
       ) : (
         <>
-          {/* 微信皮肤：角色头像为正方形圆角（Task 23）；Task 25：头像 168+头像下方名字，纯黑背景无模糊 */}
-          <RemoteView avatar={props.avatar} name={props.name} size={168} shape="square" showName lift={72} />
+          {/* 微信皮肤：角色头像为正方形圆角（Task 23）；Task 26：头像 140+名字 13px、lift 96 上移，纯黑背景无模糊 */}
+          <RemoteView avatar={props.avatar} name={props.name} size={140} shape="square" showName lift={96} />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -701,7 +706,8 @@ function WxVideoCall(props: VideoCallScreenProps) {
                 <InlineCallChat variant="wx" call={call} className="w-full" />
               </div>
             ) : (
-              <div className="flex h-[68px] w-full items-center justify-center overflow-hidden">
+              /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
+              <div className="flex max-h-[112px] min-h-[64px] w-full flex-col items-center justify-end overflow-hidden pb-1">
                 <VideoCaption variant="wx" call={call} />
               </div>
             )
@@ -810,8 +816,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
         </>
       ) : (
         <>
-          {/* Task 25：主画面头像 168 + 头像下方名字（小字），纯黑背景无模糊 */}
-          <RemoteView avatar={props.avatar} name={props.name} size={168} showName lift={72} />
+          {/* Task 26：主画面头像 140 + 头像下方名字（小字）、lift 96 上移，纯黑背景无模糊 */}
+          <RemoteView avatar={props.avatar} name={props.name} size={140} showName lift={96} />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -950,7 +956,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
                 <InlineCallChat variant="qq" call={call} className="w-full" />
               </div>
             ) : (
-              <div className="flex h-[68px] w-full items-center justify-center overflow-hidden">
+              /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
+              <div className="flex max-h-[112px] min-h-[64px] w-full flex-col items-center justify-end overflow-hidden pb-1">
                 <VideoCaption variant="qq" call={call} />
               </div>
             )
@@ -1043,7 +1050,7 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
         </>
       ) : (
         <>
-          <RemoteView avatar={props.avatar} name={props.name} size={168} showName lift={72} />
+          <RemoteView avatar={props.avatar} name={props.name} size={140} showName lift={96} />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -1099,7 +1106,8 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
       )}
 
       {phase === 'active' && (
-        <div className="pointer-events-none absolute inset-x-6 bottom-[204px] z-10 flex h-[64px] items-start justify-center overflow-hidden">
+        /* Task 26：字幕槽改底部对齐+弹性高度（绝对定位 bottom 锚点，长句向上长高、最新一句完整贴控制区上方） */
+        <div className="pointer-events-none absolute inset-x-6 bottom-[204px] z-10 flex max-h-[112px] flex-col items-center justify-end overflow-hidden">
           <VideoCaption variant="wx" call={call} />
         </div>
       )}
