@@ -25,10 +25,11 @@ export type CameraFacing = 'user' | 'environment';
 const VIDEO_FRAME_PROMPT =
   '这是视频通话中对方摄像头的实时画面，请用中文客观、简洁地描述此刻画面内容（人物外观/穿着/表情/动作/周围环境/可见物品与文字），150字以内，不要寒暄、不要评论、只输出描述本身。';
 
-/** 摄像头流 hook：返回 videoRef（挂 <video>）+ 就绪/拒绝状态。
+/** 摄像头流 hook：返回 videoRef（挂 <video>）+ stream（供全屏自看页模糊垫底）+ 就绪/拒绝状态。
  *  enabled=false 时不拉流；facing 变化时重建流（翻转前后置）。 */
 export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  stream: MediaStream | null;
   ready: boolean;
   denied: boolean;
   error: string;
@@ -38,6 +39,8 @@ export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
   const [denied, setDenied] = useState(false);
   const [error, setError] = useState('');
   const streamRef = useRef<MediaStream | null>(null);
+  /** 流对象状态（Task 24）：全屏自看页需要第二个 <video> 做模糊垫底，经此拿到同一 MediaStream */
+  const [stream, setStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,8 +55,10 @@ export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
     }
     void (async () => {
       try {
+        // Task 24：「聚焦太放大」成因之一——竖屏 ideal 请求会让部分浏览器数字裁切/放大画面凑比例；
+        // 改请求横向标准分辨率（手机前后置会自动按传感器能力返回，不受影响）
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: facing, width: { ideal: 720 }, height: { ideal: 1280 } },
+          video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false, // 音频轨由通话引擎单独 getUserMedia（录音链路），这里只拉画面
         });
         if (cancelled) {
@@ -61,6 +66,7 @@ export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
           return;
         }
         streamRef.current = stream;
+        setStream(stream);
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           try {
@@ -78,6 +84,7 @@ export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
         setDenied(true);
         setError(e instanceof Error && e.message ? e.message : '摄像头不可用');
         setReadyRaw(false);
+        setStream(null);
       }
     })();
     return () => {
@@ -86,8 +93,9 @@ export function useLocalCamera(enabled: boolean, facing: CameraFacing): {
     };
   }, [enabled, facing]);
 
-  // ready 派生值：enabled=false 时同步为 false（无 setState，避免 effect 级联渲染）
-  return { videoRef, ready: readyRaw && enabled, denied, error };
+  // ready 派生值：enabled=false 时同步为 false（无 setState，避免 effect 级联渲染）；
+  // stream 仅在成功/失败路径同步（关闭路径不同步 setState，界面由 ready=false 隐藏 video，旧值无害）
+  return { videoRef, stream, ready: readyRaw && enabled, denied, error };
 }
 
 /** 抓当前帧 → 缩放至长边 ≤maxSize 的 JPEG dataURL（视频未就绪/已暂停返回 null） */

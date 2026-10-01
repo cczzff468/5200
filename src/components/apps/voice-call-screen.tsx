@@ -139,8 +139,8 @@ function PipIcon({ onClick }: { onClick?: () => void }) {
   );
 }
 
-/** 状态区文案（正在说话 / 正在听 / 正在思考… / 识别中…） */
-function statusLine(
+/** 状态区文案（正在说话 / 正在听 / 正在思考… / 识别中…）；导出供视频通话页复用（Task 24：视频通话同款状态显示） */
+export function statusLine(
   phase: 'dialing' | 'incoming' | 'active' | 'ended',
   status: 'connecting' | 'listening' | 'recording' | 'recognizing' | 'thinking' | 'speaking',
   variant: 'wx' | 'qq',

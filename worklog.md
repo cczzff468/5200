@@ -13215,3 +13215,27 @@ Stage Summary:
 - 视频通话四类问题全部修复：①AI 来电接通后 15-25s 被强挂（missTimer 接听不清除）→ 已修，实测通话 1:56 稳定；②摄像头镜像（前置预览 scaleX(-1)）与 PIP 过度放大（高度随视频宽高比自适应）；③微信视频通话界面按用户要求改版（正方圆角头像/删互换按钮/点小窗互换/翻转移右上/底部常显）；④微信+QQ 视频来电页照截图重设计（呼吸点/消息回复/语音接听/QQ 预开摄像头/大窗常驻）
 - 产出：src/lib/ios/chat-call.ts、src/components/apps/video-call-screen.tsx、src/components/ios/{IncomingCallLayer,GlobalCallLayer}.tsx；语音通话引擎/卡片/记忆全链路零行为变化（missTimer 修复对语音 AI 来电同样生效）
 - 回归：tsc 0 错、eslint 0 错、微信/QQ 视频通话 E2E 全通过、console 无错误
+---
+Task ID: 24
+Agent: Z.ai (main)
+Task: 视频通话 UI 二轮精修（Task 24）——互换按钮删除/翻转移右上/拨号头像常显/聚焦放大修复/AI 状态显示/头像名字缩小/输入框弹幕重排/QQ 四按钮平行
+
+Work Log:
+- 【互换画面按钮删除】QQ 视频通话底部小按钮行整行移除（cam/flip/swap 三小钮不再存在），RefreshCcw 图标导入删除；互换改为点击小窗（PIP）与对方画面互换（wx/qq/phone 三皮肤均保留 PIP 点击互换语义，E2E 实测互换+换回 ✓）
+- 【反转摄像头移右上角文字旁】QQ 与微信同款：右上角（时长文字旁）按钮组=翻转摄像头+发消息（active）/仅翻转（dialing），拨号中也可翻转；QQ 呼出页翻转/摄像头预开行保留（对照 QQ 截图的响铃阶段设计）
+- 【拨号界面头像一直显示】wx/qq 拨出等待页新增对方头像小窗（RemoteView 复用，wx 右上 104×140 方形圆角/qq 左上 100×132 圆形，与接通后 PIP 位置一致，接通自然衔接），「刚打视频电话界面头像也要一直显示」达成；配合接通态（对方全屏或互换后 mini 窗）对方头像在任何阶段都可见
+- 【聚焦太放大修复】①useLocalCamera 改请求横向标准分辨率（width ideal 1280/height ideal 720，替换原竖屏 ideal 720×1280——部分浏览器为凑竖屏比例数字裁切/放大画面）；②LocalFullView 从 object-cover（390×844 竖屏装 4:3 横向画面裁掉约 65% 宽度）改为 object-contain 完整显示+同路 MediaStream 第二个 <video> 模糊放大垫底（hook 新增 stream 状态导出，关闭路径不同步 setState 防止 effect 级联）；③PIP 高度自适应下限 100→64（4:3 画面 96 宽本只需 72 高，之前被抬到 100 反而又裁 28%），wx PIP 96→104 宽/qq·phone 92→100 宽
+- 【AI 状态显示】voice-call-screen.tsx 的 statusLine 导出（加 export 关键字），VideoTopBar 重构：接通后名字下方依次显示时长+状态（正在听/在听你说…/识别中…/正在思考…/正在说话，与语音通话同款文案），wx/qq/phone 三皮肤统一
+- 【头像名字变小】VideoTopBar 顶部一行=32px 小头像（wx 方形圆角 9px/qq·phone 圆形）+15px 名字（原 17px 纯名字），时长 14px→12px；主画面 RemoteView 236→184
+- 【输入框/弹幕位置重排】wx/qq 接通态底部改为单列流式布局：字幕（或文字输入条）与按钮同容器排布——error → 字幕槽(68px)/InlineCallChat → 三标签按钮(wx) → 挂断 → 免提提示；删除原 bottom-[196px]/[210px]/[218px]/[190px] 多层绝对定位叠压与漂移；文字条开着时字幕隐藏（与语音同口径）；error 移入容器首格且 textChatOpen 时隐藏（InlineCallChat 内部已有同款显示，防重复）；qq 底部时长行删除（顶部已有，去重复）
+- 【QQ 四按钮平行】底部一行 4 钮 justify-between（麦克风/摄像头/挂断/扬声器，66px rounded-[22px]，红挂断第 3 位），拨号中也显示（可中途挂断/开摄像头）；来电页 qqSquare(72) 拒绝/接听与 smallSquare(52) 预开行不变
+- 【bug 修复】wechat.tsx loadMsgs 通话卡片规范化重建 call 对象时漏掉 media 字段——视频通话卡片重新进会话/整页刷新后降级成语音卡片（☎+「通话时长」）；补 media 白名单（仅认 voice|video，与 QQ 端 :1046 同口径）；E2E 实证：修复前 00:25 视频卡刷新后变语音卡，修复后 02:49/00:25 历史视频卡均正确显示 📹
+- 【附带】phone 皮肤拨号中补挂断按钮（此前拨号中无法取消通话）；phone LocalFullView 同步 stream/contain 改造；电话视频字幕包一层绝对定位容器（VideoCaption 改流式后的适配）
+- E2E（agent-browser）：wx 拨出（顶栏小头像+名字/右上翻转/右侧对方头像小窗/等待状态/挂断）→AI 接听（顶栏头像+00:28+正在听/PIP 占位/184 方形圆角主头像/字幕在按钮上方/三标签按钮+挂断）→PIP 点击互换（mini=对方头像）→文字条开合（输入框在按钮上方，发「在干嘛呀」AI 人设回复）→字幕恢复→挂断→「视频通话时长 00:25 📹」卡片+AI 续聊 ✓；QQ 拨出（左上头像窗/右上翻转/底部四钮/正在呼叫）→接通（正在听/圆头像/字幕「喂，宝贝～」）→PIP 互换换回→挂断→蓝卡「视频通话时长 00:54 📹」+续聊 ✓；刷新后卡片 media 持久 ✓；console 无错误、无页面错误；dev.log 全链路 200（turn/answer/followup/memory/extract）
+- 备注：headless 无摄像头/麦克风全程降级占位（摄像头不可用/麦克风不可用提示）不影响 UI 验证；E2E 期间发现历史 00:32 卡片为误点「语音通话」的正常语音卡（非 bug）
+
+Stage Summary:
+- 视频通话 UI 二轮精修完成：wx/qq 拨号页对方头像常显、翻转按钮右上角化（QQ）、QQ 互换按钮删除+四按钮平行（麦克风/摄像头/挂断/扬声器）、AI 状态（正在听/思考/说话）三皮肤接入、头像名字整体缩小、底部字幕/输入条流式重排（不再叠压）、聚焦放大三重修复（分辨率请求/object-contain+模糊垫底/PIP 比例下限）
+- 附带修复微信通话卡片 media 规范化丢失（视频卡刷新降级语音卡的历史 bug）与 phone 拨号中无挂断
+- 产出：src/components/apps/video-call-screen.tsx（主体重构）、src/lib/ios/camera-capture.ts（stream 导出+分辨率）、src/components/apps/voice-call-screen.tsx（statusLine 导出）、src/components/apps/wechat.tsx（loadMsgs media 白名单）；语音通话引擎/记忆/卡片链路零行为变化
+- 回归：bunx tsc --noEmit 0 错；eslint 四文件 0 错；微信/QQ 视频 E2E 全通过；console 无错误

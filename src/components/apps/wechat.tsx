@@ -643,6 +643,8 @@ function loadMsgs(contactId: string): WxMsg[] {
         }
         if (m.kind === 'call' && m.call && typeof m.call.duration === 'number') {
           // 通话卡片规范化（旧记录兼容；state/direction 非法值回退）
+          // media 同 QQ 端口径（仅认 'voice'|'video'，其余丢弃走缺省语音）——
+          // fix(Task 24)：此前规范化重建 call 对象时漏掉 media，视频通话卡片重新进会话后被降级成语音卡片
           const st = m.call.state;
           return {
             ...m,
@@ -650,6 +652,7 @@ function loadMsgs(contactId: string): WxMsg[] {
               state: st === 'cancelled' || st === 'no-answer' || st === 'rejected' || st === 'missed-in' || st === 'ended' ? st : 'ended',
               duration: m.call.duration,
               direction: m.call.direction === 'in' ? ('in' as const) : ('out' as const),
+              media: m.call.media === 'video' ? ('video' as const) : m.call.media === 'voice' ? ('voice' as const) : undefined,
             },
           };
         }
