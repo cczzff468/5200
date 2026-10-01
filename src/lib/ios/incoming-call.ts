@@ -27,6 +27,8 @@ export interface IncomingCallSnapshot {
   source: 'phone' | 'wx';
   name: string;
   avatar: string | null;
+  /** 通话媒体（Task 22 视频通话）：video=视频通话邀请——弹窗文案/接听图标按视频显示；缺省语音 */
+  media?: 'voice' | 'video';
   /** 电话来电的对端号码（来电界面显示） */
   number?: string;
   contact: ContactRecord | null;

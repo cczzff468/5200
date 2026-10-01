@@ -35,6 +35,7 @@ import {
   PhoneOff,
   PictureInPicture2,
   SendHorizontal,
+  Video,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -179,7 +180,8 @@ function CaptionLine({ children }: { children: ReactNode }) {
  * - 同一时刻只渲染 AI 最新一句：揭示中（aiReveal 与 TTS 播放进度同步逐字）渲染部分文本，
  *   否则渲染 chatLog 里最后一条 assistant 消息；AI 开新口，上一句自动被替换。
  */
-function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
+/** 导出供视频通话页复用（Task 22）：单句弹幕字幕（只显示 AI 说的话） */
+export function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
   const { chatLog, aiReveal } = call;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // 新句替换/逐字揭示时保持滚到底（超长句内部滚动可见最新）
@@ -228,7 +230,8 @@ function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCall
  * - AI 回复形态由引擎决定（sendText/runTurn）：配置了第三方语音 API → TTS 语音回复（不出文字），
  *   没配 → 文字回复（消息区气泡）；AI 回应中显示三点动画。
  */
-function InlineCallChat({ variant, call, className = '' }: { variant: 'wx' | 'qq'; call: ChatCallApi; className?: string }) {
+/** 导出供视频通话页复用（Task 22）：通话中文字聊天内联条 */
+export function InlineCallChat({ variant, call, className = '' }: { variant: 'wx' | 'qq'; call: ChatCallApi; className?: string }) {
   const [draft, setDraft] = useState('');
   const { chatLog, textBusy, error } = call;
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -667,7 +670,10 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
 
 export type CallCardState = 'cancelled' | 'no-answer' | 'rejected' | 'missed-in' | 'ended';
 
-/** 通话结果 → 卡片状态（宿主落盘用） */
+/** 通话媒体（Task 22 视频通话）：卡片图标/文案按此分叉；缺省 voice 与旧行为完全一致 */
+export type CallCardMedia = 'voice' | 'video';
+
+/** 通话结果 → 卡片状态（宿主落盘用；与媒体无关，语音/视频同一套状态机） */
 export function callResultToCardState(r: ChatCallResult): CallCardState {
   if (r.connected && r.endReason !== 'cancel' && r.endReason !== 'reject') return 'ended';
   switch (r.endReason) {
@@ -685,11 +691,12 @@ export function callResultToCardState(r: ChatCallResult): CallCardState {
 }
 
 /**
- * 通话卡片文案（对照用户截图）：
+ * 通话卡片文案（对照用户截图；media='video' 时按视频通话分叉——Task 22）：
  * - QQ：我方取消 = 「已取消，点击重拨」（整卡可点重拨）；对方拒接 = 「对方已拒绝」；
- * - 微信：我方取消 = 「已取消」；对方拒接 = 「对方已拒绝」、我方拒接来电 = 「已拒绝」。
+ * - 微信：我方取消 = 「已取消」；对方拒接 = 「对方已拒绝」、我方拒接来电 = 「已拒绝」；
+ * - 视频：接通时长文案为「视频通话时长 MM:SS」，其余状态文案与语音一致（不重复「视频」二字）。
  */
-export function callCardText(state: CallCardState, duration: number, direction: 'out' | 'in', variant: 'wx' | 'qq'): string {
+export function callCardText(state: CallCardState, duration: number, direction: 'out' | 'in', variant: 'wx' | 'qq', media: CallCardMedia = 'voice'): string {
   switch (state) {
     case 'cancelled':
       return variant === 'qq' ? '已取消，点击重拨' : '已取消';
@@ -700,7 +707,7 @@ export function callCardText(state: CallCardState, duration: number, direction: 
     case 'missed-in':
       return '未接听';
     default:
-      return `通话时长 ${formatCallDuration(duration)}`;
+      return media === 'video' ? `视频通话时长 ${formatCallDuration(duration)}` : `通话时长 ${formatCallDuration(duration)}`;
   }
 }
 
@@ -708,21 +715,23 @@ export function callCardText(state: CallCardState, duration: number, direction: 
  * AI 可读的通话摘要（进聊天上下文）：主叫者口吻（卡片 role 恒与主叫一致——我方打出=me、AI 打出=peer，
  * 历史映射后正好是主叫者的声音），结局措辞与 call-outcome.ts 三态严格对齐：
  * 拒接/未接/取消都写明「没接通、一句话没说上」，防止 AI 把「被拒接」误读成「接通后被挂断」。
+ * media='video'（Task 22 视频通话）：摘要写「视频通话」，AI 知道这通是视频不是语音。
  */
-export function callCardAiText(state: CallCardState, duration: number): string {
+export function callCardAiText(state: CallCardState, duration: number, media: CallCardMedia = 'voice'): string {
+  const label = media === 'video' ? '视频通话' : '语音通话';
   switch (state) {
     case 'cancelled':
-      return '[语音通话：我打给你，还没接通就取消了，没有说上话]';
+      return `[${label}：我打给你，还没接通就取消了，没有说上话]`;
     case 'no-answer':
-      return '[语音通话：我打给你，你没接听，没有接通]';
+      return `[${label}：我打给你，你没接听，没有接通]`;
     case 'rejected':
-      return '[语音通话：我打给你，你按了拒接，电话没有接通，一句话都没说上]';
+      return `[${label}：我打给你，你按了拒接，${media === 'video' ? '视频' : '电话'}没有接通，一句话都没说上]`;
     case 'missed-in':
-      return '[语音通话：我打给你，响了很久没人接，没有接通，一句话都没说上]';
+      return `[${label}：我打给你，响了很久没人接，没有接通，一句话都没说上]`;
     default:
       // fix3-6 已接通卡片补主叫方：卡片主人恒为主叫（role 派生自 direction），「我」=主叫者口吻
       // 与其他态的「我打给你」同构——否则接通卡是唯一读不出「谁打给谁」的态
-      return `[语音通话：我打给对方的电话，通话时长 ${formatCallDuration(duration)}]`;
+      return `[${label}：我打给对方的${media === 'video' ? '视频' : '电'}话，${media === 'video' ? '视频通话时长' : '通话时长'} ${formatCallDuration(duration)}]`;
   }
 }
 
@@ -737,21 +746,27 @@ export function CallCardBubble({
   state,
   duration,
   direction = 'out',
+  media = 'voice',
   onRedial,
 }: {
   variant: 'wx' | 'qq';
   state: CallCardState;
   duration: number;
   direction?: 'out' | 'in';
+  /** 通话媒体（Task 22 视频通话）：video 显示摄像机图标+「视频通话时长」文案；缺省语音电话图标 */
+  media?: CallCardMedia;
   onRedial?: () => void;
 }) {
   const mine = direction === 'out';
   const clickable = Boolean(onRedial);
-  const text = callCardText(state, duration, direction, variant);
+  const text = callCardText(state, duration, direction, variant, media);
   const isWx = variant === 'wx';
   const iconFirst = variant === 'qq' || !mine;
-  // 微信电话图标凹口朝下（lucide Phone 默认凹口朝右上，rotate-45 朝右，rotate-[135deg] 才朝下——用户反馈「凹的地方朝下，不是朝右」）；QQ 不转
-  const phoneIcon = (
+  const isVideo = media === 'video';
+  // 微信电话图标凹口朝下（lucide Phone 默认凹口朝右上，rotate-45 朝右，rotate-[135deg] 才朝下——用户反馈「凹的地方朝下，不是朝右」）；QQ 不转；视频通话用摄像机图标（不旋转）
+  const phoneIcon = isVideo ? (
+    <Video className="h-[18px] w-[18px] shrink-0" strokeWidth={variant === 'qq' && mine ? 0 : 2} {...(variant === 'qq' && mine ? { fill: 'currentColor' } : {})} aria-hidden="true" />
+  ) : (
     <Phone
       className={`${isWx ? 'h-[17px] w-[17px] rotate-[135deg]' : 'h-[18px] w-[18px]'} shrink-0`}
       strokeWidth={variant === 'qq' && mine ? 0 : 2}
@@ -763,7 +778,7 @@ export function CallCardBubble({
     <button
       type="button"
       onClick={clickable ? onRedial : undefined}
-      aria-label={`语音通话：${text}${clickable ? '，点击回拨' : ''}`}
+      aria-label={`${isVideo ? '视频通话' : '语音通话'}：${text}${clickable ? '，点击回拨' : ''}`}
       data-testid={`${variant}-call-card`}
       className={`relative flex w-fit min-w-0 max-w-full select-none items-center gap-1.5 text-left transition-colors ${
         isWx

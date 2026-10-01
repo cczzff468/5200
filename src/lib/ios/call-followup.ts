@@ -65,6 +65,8 @@ export interface CallFollowupPayload {
   multiApp?: boolean;
   /** 续聊条数上限（该会话聊天设置「回复条数」；未传/非法时服务端与本地解析回退 2） */
   replyCount?: number;
+  /** 通话媒体（Task 22 视频通话）：video=视频通话——服务端补媒体说明，AI 续聊文字按视频口径；缺省语音 */
+  media?: 'voice' | 'video';
   /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
   userRealName?: string;
   userNickname?: string;

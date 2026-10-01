@@ -275,7 +275,7 @@ import {
   type WxFcPayResult,
 } from './wechat-wallet';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
-import { hasVoiceCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { hasVideoCallMark, hasVoiceCallMark, stripVideoCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall, useGlobalCall } from '@/lib/ios/global-call';
 import { triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich, type ChatLocData } from '@/lib/ios/chat-location';
@@ -401,8 +401,9 @@ interface WxMsg {
   gcard?: GroupCardData;
   /** 语音消息（kind='voice'）：音频 dataURL 持久化在聊天记录里，重启后仍可播放 */
   voice?: VoiceMsgData;
-  /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
-  call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
+  /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打）；
+   *  media（Task 22 视频通话）：视频通话卡片显示摄像机图标与「视频通话时长」文案；缺省语音（向后兼容） */
+  call?: { state: CallCardState; duration: number; direction: 'out' | 'in'; media?: 'voice' | 'video' };
   /** 好友添加过程标记：apply = 用户发出的验证消息（气泡下胶囊标注「以上为验证消息」）；
    *  greet = AI 发起的验证消息（气泡下胶囊标注「以上是打招呼的内容」）；
    *  added = 加好友成功提示（kind='sys' 携带文案，落入普通 sys 胶囊分支与其他系统提示同款包裹；不进 AI 上下文走 sys 既有口径） */
@@ -966,7 +967,8 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
   if (last.kind === 'textcard') return { text: '[文字图片]', time: last.time };
   if (last.kind === 'voice') return { text: '[语音]', time: last.time };
-  if (last.kind === 'call') return { text: '[语音通话]', time: last.time };
+  // Task 22 视频通话：通话卡片按媒体显示预览（last 是 WxMsg，call 字段直接可取；缺省语音向后兼容）
+  if (last.kind === 'call') return { text: last.call?.media === 'video' ? '[视频通话]' : '[语音通话]', time: last.time };
   if (last.kind === 'location') return { text: '[位置]', time: last.time };
   if (last.kind === 'sticker') return { text: '[表情]', time: last.time };
   if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };
@@ -4214,12 +4216,15 @@ function WxBlockReqCard({
 /**
  * 一轮 AI 回复的投递上下文（runAiTurn 与「退出网页后继续回复」的拉取投递共用）：
  * aiId/msgIdx 生成回复消息 id 序列；batchStarted 控制首批立即上屏（后续批按打字节奏停顿）；
- * wantCallSeen 记录 [语音通话] 标记是否出现过（finalize/拉取投递收尾时触起来电） */
+ * wantCallSeen 记录 [语音通话] 标记是否出现过（finalize/拉取投递收尾时触起来电）；
+ * wantVideoCallSeen 记录 [视频通话] 标记是否出现过，与 wantCallSeen 同口径（收尾时触发视频来电） */
 interface WxTurnCtx {
   aiId: string;
   msgIdx: number;
   batchStarted: boolean;
   wantCallSeen: boolean;
+  /** [视频通话] 标记是否出现过，与 wantCallSeen 同口径（Task 22 视频通话） */
+  wantVideoCallSeen: boolean;
 }
 
 function ChatPage({
@@ -4810,6 +4815,10 @@ function ChatPage({
     [peer],
   );
 
+  /** Task 22 视频通话：记录本次通话媒体（voice/video）——引擎 onEnd 的 ChatCallResult 不携带 media，
+   *  宿主在 openVoiceCall 发起时写入，writeCallCard 落卡片时读回（视频卡片显示摄像机图标与视频文案） */
+  const lastCallMediaRef = useRef<'voice' | 'video'>('voice');
+
   /** 通话结束（恰好一次，可能发生在聊天页已退出时）：通话卡片直写持久化 + 在场时同步本地 state。
    *  全局通话层负责渲染通话页与悬浮小窗，宿主只关心把结果落成消息。 */
   const writeCallCard = useCallback(
@@ -4820,10 +4829,10 @@ function ChatPage({
       const card: WxMsg = {
         id: uid(),
         role: r.direction === 'out' ? 'me' : 'peer',
-        content: callCardAiText(st, r.duration),
+        content: callCardAiText(st, r.duration, lastCallMediaRef.current),
         time: Date.now(),
         kind: 'call' as const,
-        call: { state: st, duration: r.duration, direction: r.direction },
+        call: { state: st, duration: r.duration, direction: r.direction, media: lastCallMediaRef.current },
       };
       saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
       setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
@@ -4868,12 +4877,13 @@ function ChatPage({
     [peer.id, notifyDirectSave],
   );
 
-  /** 发起全局语音通话（加号面板「语音通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
+  /** 发起全局语音/视频通话（加号面板「语音通话/视频通话」/ 通话卡片回拨 / AI 来电共用）：打开瞬间快照最近上下文；
    *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断。
    *  opts.hiddenView：AI 来电用——响铃期间不显示全屏通话页（view='hidden'），只留全局来电弹窗，
-   *  点弹窗非按钮区域才展开全屏来电页；弹窗接听则收成悬浮小窗 */
+   *  点弹窗非按钮区域才展开全屏来电页；弹窗接听则收成悬浮小窗。
+   *  opts.media（Task 22）：通话媒体——video 时 GlobalCallLayer 渲染视频通话页、来电弹窗显示视频接听图标；缺省语音 */
   const openVoiceCall = useCallback(
-    (direction: 'out' | 'in', opts?: { hiddenView?: boolean }) => {
+    (direction: 'out' | 'in', opts?: { hiddenView?: boolean; media?: 'voice' | 'video' }) => {
       // B-1 通话中防御：已有全局通话（通话中/拨号中/AI 来电响铃中）时不发起新通话——
       // startGlobalCall 会直接替换旧 session，旧通话的卡片/记录/续聊/记忆总结全部静默丢失。
       // AI 来电（direction='in'，hiddenView）由触发处先行双查后放行，这里只拦手动拨出
@@ -4925,12 +4935,16 @@ function ChatPage({
         memRecallBlock(peer.id, 'wx', wbScanText([userText, ...history.slice(-4).map((h) => h.content)]), {
           interopOn: effectiveInterop,
         }) || undefined;
+      // Task 22 视频通话：记录本次媒体（引擎 onEnd 不回传，挂断落卡片时读回）；缺省语音
+      lastCallMediaRef.current = opts?.media ?? 'voice';
       startGlobalCall({
         variant: 'wx',
         name: peer.name,
         avatar: peer.avatar ?? null,
         contact: peer,
         direction,
+        // video：全局层渲染视频通话页（主画面角色动态画面 + 用户摄像头小窗 + 识图循环）
+        media: opts?.media ?? 'voice',
         initialHistory: history,
         memoryBlock: memRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
         memoryBlockFn,
@@ -5105,7 +5119,7 @@ function ChatPage({
     const jobs = saved.filter((j): j is PhotoTag => Boolean(j) && typeof (j as PhotoTag).desc === 'string');
     if (jobs.length === 0) return;
     photoJobsRef.current = [...photoJobsRef.current, ...jobs];
-    flushPhotoJobs({ aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false });
+    flushPhotoJobs({ aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false });
   }, [peer.id, sessionKey]);
 
   /** AI 主动发起语音通话（[语音通话] 标记出现在回复任一分段/整条，标记原文已剥除）：按 5 分钟冷却弹出来电浮层
@@ -5141,13 +5155,48 @@ function ChatPage({
     }
   };
 
+  /** Task 22 AI 主动发起视频通话（[视频通话] 标记出现在回复任一分段/整条，标记原文已剥除）：
+   *  与 triggerAiVoiceCall 同构——入口守卫（callActive/拉黑）、5 分钟冷却（独立 localStorage 键
+   *  wx-videocall-last，不与语音互挤冷却）、setTimeout 内 B-1 幂等防御双查；
+   *  来电快照与全局通话会话都带 media:'video'（弹窗「邀请你视频通话」+视频接听图标，全局层渲染视频通话页）。finalize 与接力拉取投递共用 */
+  const triggerAiVideoCall = () => {
+    // 审计 #8：电话 App 通话全屏层进行中（useUI.callActive）不叠加 AI 来电——其他端通话中不被打断
+    if (useUI.getState().callActive) return;
+    // 40-a 拉黑拦截：用户拉黑 AI（byUser）后 [视频通话] 不弹真实来电——request-only 模式下正文都被
+    // 丢弃，视频邀请更不能送达；入口直接 return（wantVideoCallSeen 处另有双保险）
+    if (loadBlock('wx', peer.id).byUser) return;
+    try {
+      const lastCallAt = Number(window.localStorage.getItem(`wx-videocall-last:${peer.id}`) ?? '0');
+      if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
+        window.localStorage.setItem(`wx-videocall-last:${peer.id}`, String(Date.now()));
+        window.setTimeout(() => {
+          // B-1 幂等防御：来电弹窗还在响或已有全局通话进行中就整跳取消（openVoiceCall 会替换已有会话，
+          // 旧通话的卡片/记录/续聊/记忆总结全部静默丢失）
+          if (useIncomingCall.getState().call) return;
+          if (useGlobalCall.getState().session) return;
+          triggerIncomingCall({
+            source: 'wx',
+            name: displayNameOf(peer) || peer.name,
+            avatar: peer.avatar ?? null,
+            contact: peer,
+            media: 'video',
+            bannerStage: 'big',
+          });
+          openVoiceCall('in', { hiddenView: true, media: 'video' });
+        }, 1200);
+      }
+    } catch {
+      // localStorage 异常忽略
+    }
+  };
+
   /**
    * 把一段回复文本解析成待投递消息（流中分段、finalize 最后一段与接力拉取投递共用同一套管线，不重不漏）：
    * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式，
    * 回复条数=1）时文字块只按「&&&」标记切分；false（多条模式）时每段再按「换行/句末标点/
    * 动作描写」稳定细切 —— 一句一条、动作描写独立成条，流中分段/finalize 尾段/接力整段
    * 都不会把多句话挤进同一个气泡。
-   * ctx 承载本轮 aiId/msgIdx（回复消息 id 序列）与 wantCallSeen（[语音通话] 标记收集）。
+   * ctx 承载本轮 aiId/msgIdx（回复消息 id 序列）与 wantCallSeen/wantVideoCallSeen（[语音通话]/[视频通话] 标记收集）。
    */
   /** 40-a：把「用户发起的解除拉黑申请卡」置为终态（存储 + 本地 state 同步；无 pending 卡时空操作）。
    *  buildReplyMsgs 内部使用（角色决策/角色主动解除拉黑时调用）——声明须在其之前 */
@@ -5178,7 +5227,11 @@ function ChatPage({
     // 40-a 拉黑拦截（仅申请卡模式）：byUser 时标记不进 wantCallSeen——finalize/接力拉取不再弹来电
     //（与 triggerAiVoiceCall 入口守卫双保险；剥除标记照常，request-only 下正文反正整段丢弃）
     if (wantCall && !loadBlock('wx', peer.id).byUser) ctx.wantCallSeen = true;
-    const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
+    // Task 22 视频通话：[视频通话] 标记检测（全/半角括号变体都认），与语音通话标记同口径
+    const wantVideoCall = hasVideoCallMark(rawText);
+    if (wantVideoCall && !loadBlock('wx', peer.id).byUser) ctx.wantVideoCallSeen = true;
+    // 两种触发标记都剥干净再进解析管线（先剥视频再剥语音，顺序无所谓；模型输出两种标记时气泡不漏原文）
+    const text = wantCall || wantVideoCall ? stripVoiceCallMark(stripVideoCallMark(rawText)) : rawText;
     const latest = loadMsgs(peer.id);
     let cur = latest;
     const out: WxMsg[] = [];
@@ -5404,7 +5457,7 @@ function ChatPage({
    *  single=false：每项就是一条独立消息文本（deliver 模式，一段一条不再二次切分） */
   const deliverBgItems = (items: BgPendingItem[]) => {
     if (items.length === 0) return;
-    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false };
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false };
     let queuedAny = false;
     // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与页面内
     // finalize 同语义）——单条(N=1)整条解析，多条(N>1)走稳定细切，不把整段挤成一个气泡
@@ -5432,6 +5485,8 @@ function ChatPage({
     }
     // 回复原文名带 [语音通话] 标记（剥除后不在气泡里）：同样按 5 分钟冷却弹出来电邀请
     if (ctx.wantCallSeen) triggerAiVoiceCall();
+    // Task 22 AI 主动视频通话（[视频通话] 标记）：同冷却与守卫口径，弹视频来电邀请
+    if (ctx.wantVideoCallSeen) triggerAiVideoCall();
   };
   /** 稳定引用（同 runAiTurnRef 模式）：挂载拉取 effect 经此调用最新闭包的投递函数 */
   const deliverBgRef = useRef<((items: BgPendingItem[]) => void) | null>(null);
@@ -5567,7 +5622,7 @@ function ChatPage({
       });
 
     // 本轮投递上下文（投递管线与接力拉取共用，见组件层 deliverAiMsg/enqueueBatch/buildReplyMsgs）
-    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false };
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false };
     carryTextRef.current = ''; // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）。
@@ -5691,6 +5746,7 @@ function ChatPage({
       // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述] 系统自动生图并以图片消息投递）
       ...(photoRule ? [photoRule] : []),
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
+      '【视频通话能力】如果你此刻很想看看对方（想TA了、有值得分享的时刻、对方说想见你/想看看你等自然原因），可以在回复的最开头单独加上标记 [视频通话] 发起一次视频通话邀请，对方手机会弹出你的视频来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
@@ -5837,6 +5893,9 @@ function ChatPage({
         // AI 主动发起语音通话（标记可能出现在流中任一分段）：剥除后按 5 分钟冷却弹出来电浮层
         //（与接力拉取投递共用 triggerAiVoiceCall，见组件层）
         if (ctx.wantCallSeen) triggerAiVoiceCall();
+        // Task 22 AI 主动视频通话（标记可能出现在流中任一分段）：同冷却与守卫口径弹视频来电浮层
+        //（与接力拉取投递共用 triggerAiVideoCall，见组件层）
+        if (ctx.wantVideoCallSeen) triggerAiVideoCall();
       },
     });
     // 极端竞态防御（同会话已有流在接收）：回滚这条用户消息，避免有去无回
@@ -6965,6 +7024,13 @@ function ChatPage({
       openVoiceCall('out');
       return;
     }
+    if (a === 'videocall') {
+      // Task 22 视频通话：加号面板视频入口接通（openVoiceCall 带 media:'video'，全局层渲染视频通话页）
+      setPlusOpen(false);
+      setStickerOpen(false);
+      openVoiceCall('out', { media: 'video' });
+      return;
+    }
     if (a === 'offline') {
       // 线下模式（约会）：原「收藏」占位改为线下入口，与 QQ/信息共用同一见面页
       setPlusOpen(false);
@@ -6980,7 +7046,7 @@ function ChatPage({
       setCompose('textcard');
       return;
     }
-    const label: Record<string, string> = { videocall: '视频通话' };
+    const label: Record<string, string> = {};
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
 
@@ -7406,7 +7472,8 @@ function ChatPage({
                     state={m.call.state}
                     duration={m.call.duration}
                     direction={m.call.direction ?? (m.role === 'me' ? 'out' : 'in')}
-                    onRedial={() => openVoiceCall('out')}
+                    media={m.call.media ?? 'voice'}
+                    onRedial={() => openVoiceCall('out', { media: m.call?.media ?? 'voice' })}
                   />
                 </div>
               ) : m.kind === 'location' && m.loc ? (

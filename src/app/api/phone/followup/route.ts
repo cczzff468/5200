@@ -273,6 +273,9 @@ export async function POST(req: NextRequest) {
       return { name: real || nick, realName: real || null, nickname: nick || null };
     })()
   );
+  // 通话媒体（Task 22 视频通话）：视频通话时补一行媒体说明，AI 的后续文字知道刚才/刚才那通是视频
+  const media = root.media === 'video' ? 'video' : 'voice';
+  const mediaBlock = media === 'video' ? '【补充】刚才的通话是视频通话（双方能看到对方画面），相关表述按视频通话来，不要说成打电话。' : '';
   // 记忆 / 世界书 / 时间感知：前端组装注入（与通话轮次同一套来源，人设 > 世界书 > 记忆 > 时间）
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
   // 跨 App 近况块 + 群聊近况块（Task 40-b）：与通话轮次同位置（当前 App 记忆之后）注入，空串跳过
@@ -280,7 +283,7 @@ export async function POST(req: NextRequest) {
   const groupBlock = typeof root.groupBlock === 'string' ? root.groupBlock.trim() : '';
   const worldbookBlock = typeof root.worldbookBlock === 'string' ? root.worldbookBlock.trim() : '';
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
-  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, timeBlock].filter(Boolean).join('\n\n');
+  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, timeBlock, mediaBlock].filter(Boolean).join('\n\n');
 
   // 触发消息：把「最近聊天 + 通话转写」打包成一段上下文（user/assistant 双方已标注），避免与消息角色混淆
   const recap: string[] = [];

@@ -144,7 +144,7 @@ import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, re
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { CallCardBubble, callResultToCardState, callCardAiText, type CallCardState } from './voice-call-screen';
-import { hasVoiceCallMark, stripVoiceCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
+import { hasVoiceCallMark, stripVoiceCallMark, hasVideoCallMark, stripVideoCallMark, type ChatCallResult, type ChatCallTurnMsg } from '@/lib/ios/chat-call';
 import { startGlobalCall, useGlobalCall } from '@/lib/ios/global-call';
 import { triggerIncomingCall, useIncomingCall, type IncomingCallSnapshot } from '@/lib/ios/incoming-call';
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
@@ -363,8 +363,9 @@ interface QQMsg {
   kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard';
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
   voice?: VoiceMsgData;
-  /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
-  call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
+  /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打）；
+   *  media = 通话媒体（Task 22 视频通话）：'video' 显示摄像机图标与「视频通话时长」文案，缺省语音 */
+  call?: { state: CallCardState; duration: number; direction: 'out' | 'in'; media?: 'voice' | 'video' };
   /** 图片消息附加数据：desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」；旧记录图片只存 content=dataURL，无此字段照常兼容）；
    *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带）；
    *  prevSrc = 重新生成替换前保留的旧图（G2「恢复上一张」长按换回，再操作一次又换回新图，可来回切换） */
@@ -486,7 +487,8 @@ function msgPreview(m: QQMsg | undefined): string {
   if (m.kind === 'image') return '[图片]';
   if (m.kind === 'textcard') return '[文字图片]';
   if (m.kind === 'voice') return '[语音]';
-  if (m.kind === 'call') return '[语音通话]';
+  // Task 22 视频通话：媒体感知——视频通话卡片在会话列表/通知预览显示 [视频通话]
+  if (m.kind === 'call') return m.call?.media === 'video' ? '[视频通话]' : '[语音通话]';
   if (m.kind === 'location') return '[位置]';
   if (m.kind === 'sticker') return '[表情]';
   if (m.kind === 'forward') return m.fwd?.merged ? '[聊天记录]' : m.content;
@@ -1026,7 +1028,8 @@ function loadMsgs(contactId: string): QQMsg[] {
                 stt: m.voice.stt === 'pending' || m.voice.stt === 'done' || m.voice.stt === 'failed' ? m.voice.stt : undefined,
               }
             : undefined,
-        // 语音通话卡片规范化（kind='call'）：state 白名单外一律回退 ended，direction 仅认 in/out
+        // 语音通话卡片规范化（kind='call'）：state 白名单外一律回退 ended，direction 仅认 in/out；
+        // media 仅认 'voice'|'video'（Task 22 视频通话），其余丢弃走缺省语音
         call:
           m.kind === 'call' && m.call && typeof m.call.duration === 'number'
             ? {
@@ -1040,6 +1043,7 @@ function loadMsgs(contactId: string): QQMsg[] {
                     : ('ended' as const),
                 duration: m.call.duration,
                 direction: m.call.direction === 'in' ? ('in' as const) : ('out' as const),
+                media: m.call.media === 'video' ? ('video' as const) : m.call.media === 'voice' ? ('voice' as const) : undefined,
               }
             : undefined,
         recalled: m.recalled === true || undefined,
@@ -3297,6 +3301,10 @@ function ChatPage({
     [peer],
   );
 
+  // Task 22 记录最近一次发起的通话媒体（openVoiceCall 里写入，onEnd 写卡片用）：引擎 onEnd 的
+  // ChatCallResult 不携带 media，落通话卡片时用本 ref 透传——卡片图标/文案与 AI 可读摘要随之分叉视频口径
+  const lastCallMediaRef = useRef<'voice' | 'video'>('voice');
+
   /** 通话结束（恰好一次，可能发生在聊天页已退出时）：通话卡片直写持久化 + 在场时同步本地 state。
    *  全局通话层负责渲染通话页与悬浮小窗，宿主只关心把结果落成消息。 */
   const writeCallCard = useCallback(
@@ -3307,10 +3315,11 @@ function ChatPage({
       const card: QQMsg = {
         id: uid(),
         role: r.direction === 'out' ? 'me' : 'peer',
-        content: callCardAiText(st, r.duration),
+        // Task 22 视频通话：content（AI 可读摘要）与 call.media 都按本次通话媒体透传
+        content: callCardAiText(st, r.duration, lastCallMediaRef.current),
         time: Date.now(),
         kind: 'call' as const,
-        call: { state: st, duration: r.duration, direction: r.direction },
+        call: { state: st, duration: r.duration, direction: r.direction, media: lastCallMediaRef.current },
       };
       saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
       setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
@@ -3367,9 +3376,11 @@ function ChatPage({
    *  通话页与小窗由 PhoneShell 的全局通话层渲染，退出聊天页/切 App 电话不断。
    *  opts.hiddenView（#35 引入，与微信 openVoiceCall 同款能力）：响铃期间不显示全屏通话页（view='hidden'），
    *  只留全局来电弹窗——#2 起 AI 来电不再传该参数（QQ 曾因此零 UI 幽灵响铃），改走可见来电；
-   *  参数保留兼容（能力与微信对齐，供后续路径按需启用） */
+   *  参数保留兼容（能力与微信对齐，供后续路径按需启用）。
+   *  opts.media（Task 22 视频通话）：'video' 发起视频通话——session 带 media 供全局层渲染视频通话页、
+   *  来电横幅显示「邀请你视频通话」，并记入 lastCallMediaRef 供 onEnd 落卡片透传媒体（缺省语音，行为不变） */
   const openVoiceCall = useCallback(
-    (direction: 'out' | 'in', opts?: { hiddenView?: boolean }) => {
+    (direction: 'out' | 'in', opts?: { hiddenView?: boolean; media?: 'voice' | 'video' }) => {
       // B-1 通话中防御：已有全局通话（通话中/拨号中）时不发起新通话——
       // startGlobalCall 会直接替换旧 session，旧通话的卡片/记录/续聊/记忆总结全部静默丢失。
       // AI 来电（direction='in'）由触发处先行双查后放行，这里只拦手动拨出
@@ -3420,12 +3431,16 @@ function ChatPage({
         memRecallBlock(peer.id, 'qq', wbScanText([userText, ...history.slice(-4).map((h) => h.content)]), {
           interopOn: effectiveInterop,
         }) || undefined;
+      // Task 22 视频通话：记录本次通话媒体（onEnd 落卡片用）——放在守卫之后，只有真正发起才写 ref
+      lastCallMediaRef.current = opts?.media ?? 'voice';
       startGlobalCall({
         variant: 'qq',
         name: peer.name,
         avatar: peer.avatar ?? null,
         contact: peer,
         direction,
+        // Task 22 视频通话：'video' 时 GlobalCallLayer 渲染视频通话页（带识图小窗），缺省语音通话页
+        media: opts?.media ?? 'voice',
         initialHistory: history,
         memoryBlock: memRecallBlock(peer.id, 'qq', memContext, { interopOn: effectiveInterop }) || undefined,
         memoryBlockFn,
@@ -3452,6 +3467,9 @@ function ChatPage({
   /** [语音通话] 标记本轮是否出现过（流中分段/最后一段/接力回复共用同一 ref）：runAiTurn 开回合时重置，
    *  buildReplyMsgs 解析到标记时置位——原来是回合内局部变量，buildReplyMsgs 提升到组件层后改用 ref 传递 */
   const wantCallSeenRef = useRef(false);
+  // Task 22 视频通话：[视频通话] 标记本轮是否出现过（与 wantCallSeenRef 同款生命周期：runAiTurn 开回合
+  // 重置、buildReplyMsgs 解析到标记置位、maybeTriggerAiCall 消费完即清）
+  const wantVideoCallSeenRef = useRef(false);
 
   /**
    * AI 来电触发（#34 从 finalize 抽出共用：runAiTurn 收尾与 bg 接力投递同款）：
@@ -3461,6 +3479,7 @@ function ChatPage({
    * #2 来电改走可见路径：不传 hiddenView（响铃零 UI 已废弃），直接展开 QQ 全屏来电页，
    * 并列注册全局来电横幅（锁屏等全屏页不在前台时兜底），与微信来电同构。
    * #11 函数末尾（finally）必清 wantCallSeenRef：标记只对本次投递批次有效，消费完即复位。
+   * Task 22 视频通话：[视频通话] 标记同款触发（独立冷却键 qq-videocall-last:*），wantVideoCallSeenRef 在 finally 一并清空。
    */
   const maybeTriggerAiCall = useCallback(
     (requestOnly: boolean) => {
@@ -3499,10 +3518,40 @@ function ChatPage({
             }, 1200);
           }
         }
+        // Task 22 视频通话：[视频通话] 标记同款触发（与语音块同构）——独立 5 分钟冷却键
+        //（qq-videocall-last:*，与语音 qq-vc-last:* 互不挤占），幂等防御/换号纪元挡板照抄语音块；
+        // 来电快照与全局会话都带 media='video'：IncomingCallLayer 横幅显示「邀请你视频通话」+视频接听图标，
+        // GlobalCallLayer 渲染视频通话页。QQ 不用 hiddenView（与语音来电同款可见路径）
+        if (wantVideoCallSeenRef.current && !requestOnly && !loadBlock('qq', peer.id).byUser) {
+          const lastVideoCallAt = Number(window.localStorage.getItem(`qq-videocall-last:${peer.id}`) ?? '0');
+          if (Number.isFinite(lastVideoCallAt) && Date.now() - lastVideoCallAt > 5 * 60 * 1000) {
+            window.localStorage.setItem(`qq-videocall-last:${peer.id}`, String(Date.now()));
+            // M5 换号防串号：调度时刻捕获会话纪元，fire 时首先比对（与语音块同款）
+            const epoch = qqSessionEpoch;
+            window.setTimeout(() => {
+              if (epoch !== qqSessionEpoch) return;
+              // 幂等防御（与语音块同款）：电话通话中/来电响铃中/已有全局通话进行中就整跳取消
+              if (useUI.getState().callActive) return;
+              if (useIncomingCall.getState().call) return;
+              if (useGlobalCall.getState().session) return;
+              triggerIncomingCall({
+                // 同语音块：'qq' 不在 incoming-call.ts 快照类型联合内，运行时写入由 IncomingCallLayer 宽化识别
+                source: 'qq' as unknown as IncomingCallSnapshot['source'],
+                name: peer.name,
+                avatar: peer.avatar ?? null,
+                contact: peer,
+                bannerStage: 'big',
+                media: 'video',
+              });
+              openVoiceCall('in', { media: 'video' });
+            }, 1200);
+          }
+        }
       } catch {
         // localStorage 异常忽略
       } finally {
         wantCallSeenRef.current = false;
+        wantVideoCallSeenRef.current = false;
       }
     },
     [peer, openVoiceCall],
@@ -3770,7 +3819,11 @@ function ChatPage({
       // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
       const wantCall = hasVoiceCallMark(rawText);
       if (wantCall) wantCallSeenRef.current = true;
-      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
+      // Task 22 视频通话：[视频通话] 标记检测（全/半角括号变体都认），与语音通话标记同口径
+      const wantVideoCall = hasVideoCallMark(rawText);
+      if (wantVideoCall) wantVideoCallSeenRef.current = true;
+      // 两种标记都可能出现在同一段回复：剥除行两种标记都剥（先视频后语音，顺序无关）
+      const text = wantCall || wantVideoCall ? stripVoiceCallMark(stripVideoCallMark(rawText)) : rawText;
       const latest = loadMsgs(peer.id);
       let cur = latest;
       const out: QQMsg[] = [];
@@ -4190,6 +4243,7 @@ function ChatPage({
       socialRules,
       ...(mediaRules.length > 0 ? [mediaRules.join('\n\n')] : []),
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
+      '【视频通话能力】如果你此刻很想看看对方（想TA了、有值得分享的时刻、对方说想见你/想看看你等自然原因），可以在回复的最开头单独加上标记 [视频通话] 发起一次视频通话邀请，对方手机会弹出你的视频来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
       // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述] 系统自动生图并以图片消息投递）
@@ -4236,6 +4290,8 @@ function ChatPage({
     let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
     // [语音通话] 标记本轮是否出现过（组件级 ref，开回合时重置；buildReplyMsgs 解析到标记时置位）
     wantCallSeenRef.current = false;
+    // Task 22 视频通话：[视频通话] 标记同款开回合重置（buildReplyMsgs 解析到标记时置位）
+    wantVideoCallSeenRef.current = false;
     // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用（流中断/换号中止的半截标签不串入新回合）
     photoCarryRef.current = '';
 
@@ -5324,7 +5380,17 @@ function ChatPage({
         openVoiceCall('out');
       },
     },
-    { key: 'video', label: '视频通话', color: '#1B9FF0', icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('视频通话暂未开放') },
+    {
+      // Task 22 视频通话：入口接通（原来 toast「暂未开放」）——发起全局视频通话
+      key: 'video',
+      label: '视频通话',
+      color: '#1B9FF0',
+      icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        setPlusOpen(false);
+        openVoiceCall('out', { media: 'video' });
+      },
+    },
     {
       key: 'rp',
       label: '红包',
@@ -5699,7 +5765,7 @@ function ChatPage({
                 {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧 */}
                 {mine && blockedIconOf(m)}
                 {m.kind === 'call' && m.call ? (
-                  /* 语音通话卡片（通话结束后插入聊天记录）：整卡可点回拨（已取消（点击重拨）/ 对方未接听 / 已拒绝 / 未接听 / 通话时长）。
+                  /* 通话卡片（语音/视频，Task 22 按 media 分叉图标与文案；通话结束后插入聊天记录）：整卡可点回拨（已取消（点击重拨）/ 对方未接听 / 已拒绝 / 未接听 / 通话时长）。
                      宽度约束挂在本包装层（卡片内 max-w-full）：挂卡片自身会相对本层（随内容收缩）解析成循环约束，气泡被压窄文字溢出 */
                   <div {...bubblePress} className="max-w-[calc(100%-92px)]">
                     <CallCardBubble
@@ -5707,7 +5773,8 @@ function ChatPage({
                       state={m.call.state}
                       duration={m.call.duration}
                       direction={m.call.direction ?? (m.role === 'me' ? 'out' : 'in')}
-                      onRedial={() => openVoiceCall('out')}
+                      media={m.call.media ?? 'voice'}
+                      onRedial={() => openVoiceCall('out', { media: m.call?.media ?? 'voice' })}
                     />
                   </div>
                 ) : m.kind === 'redpacket' && m.packet ? (

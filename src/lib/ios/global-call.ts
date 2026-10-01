@@ -28,7 +28,11 @@ import type { ChatCallResult, ChatCallTurnMsg } from './chat-call';
 
 /** 一次全局通话的完整入参（宿主发起时一次性快照） */
 export interface GlobalCallSession {
-  variant: 'wx' | 'qq';
+  /** wx=微信皮肤 / qq=QQ皮肤 / phone=电话 App（iOS 黑白灰，仅视频通话走全局层） */
+  variant: 'wx' | 'qq' | 'phone';
+  /** 通话媒体（Task 22 视频通话）：voice=语音（默认，全链路旧行为）/ video=视频——全局层渲染
+   *  VideoCallScreen、小窗/弹窗显示视频图标、规则/记忆/卡片按视频分叉 */
+  media?: 'voice' | 'video';
   name: string;
   avatar: string | null;
   contact: ContactRecord | null;

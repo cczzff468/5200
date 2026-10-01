@@ -43,8 +43,9 @@ import {
 
 /**
  * 组装通话场景 system prompt：七要素人设（名字/身份/性格/说话风格/背景/与用户的关系/禁止事项）
- * 由全 App 共用模块从联系人数据组装；这里只追加语音通话场景规则。
+ * 由全 App 共用模块从联系人数据组装；这里只追加语音/视频通话场景规则。
  * multiApp：跨 App 身份感知（前端按每联系人互通开关传入；undefined=不注入）。
+ * media（Task 22 视频通话）：video=视频通话——channel、场景规则、接通问候按视频分叉；默认 voice 与旧行为一致。
  */
 function buildCallSystemPrompt(
   peer: PersonaSource,
@@ -58,19 +59,23 @@ function buildCallSystemPrompt(
   /** 调用方附加规则（微信/QQ 语音通话注入主动挂断标记规则等；电话 App 复用同一套） */
   extraRules?: string[],
   /** 机主身份（前端直传）：名字/真名/昵称——人设注入【用户的称呼】段（软件上显示的名字只是昵称） */
-  user?: { name: string | null; realName: string | null; nickname: string | null }
+  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 通话媒体（Task 22）：'voice'=语音通话（默认）/ 'video'=视频通话 */
+  media: 'voice' | 'video' = 'voice'
 ): string {
   const base = buildPersonaSystemPrompt(peer, {
-    channel: '语音通话',
+    channel: media === 'video' ? '视频通话' : '语音通话',
     userName: user?.name ?? null,
     userRealName: user?.realName ?? null,
     userNickname: user?.nickname ?? null,
     ...npcExtra,
     multiApp,
     extraRules: [
-      '这是实时语音通话：用第一人称口语化说话，像真人打电话；每次只说 1~5 句——具体句数由你的人设性格和当下情绪决定：健谈外向的人自然多聊几句，高冷话少的人往往只说一两个短句；同一次通话里长短也可以随话题起伏变化，不要每句都一样长；一次只说一两件事；',
+      `这是实时${media === 'video' ? '视频' : '语音'}通话：用第一人称口语化说话，像真人${media === 'video' ? '视频' : '打'}电话；每次只说 1~5 句——具体句数由你的人设性格和当下情绪决定：健谈外向的人自然多聊几句，高冷话少的人往往只说一两个短句；同一次通话里长短也可以随话题起伏变化，不要每句都一样长；一次只说一两件事；`,
       '禁止任何表情符号、emoji、引号、括号、列表；只输出要说出口的话；',
-      '打电话会互相打招呼、寒暄、自然结束（如"那我先挂了啊"）；对方说的内容要自然回应。',
+      media === 'video'
+        ? '视频通话会互相打招呼、寒暄、自然结束（如"那我先挂了啊"）；对方说的内容要自然回应；'
+        : '打电话会互相打招呼、寒暄、自然结束（如"那我先挂了啊"）；对方说的内容要自然回应。',
       ...(Array.isArray(extraRules) ? extraRules.filter((r) => typeof r === 'string' && r.trim()).slice(0, 8) : []),
       ...(proactiveAttempt >= 1
         ? [
@@ -110,6 +115,8 @@ export async function POST(req: NextRequest) {
   const greeting = root.greeting === true;
   // 通话方向：AI 打出去（direction='in'，来电侧）还是用户打来（缺省）——影响接通问候语的主被动视角
   const direction: 'in' | 'out' = root.direction === 'in' ? 'in' : 'out';
+  // 通话媒体（Task 22 视频通话）：video=视频通话——channel/场景规则/接通问候按视频分叉；默认语音
+  const media: 'voice' | 'video' = root.media === 'video' ? 'video' : 'voice';
   const proactiveAttempt = typeof root.proactiveAttempt === 'number' && Number.isFinite(root.proactiveAttempt)
     ? Math.max(0, Math.min(9, Math.floor(root.proactiveAttempt)))
     : 0;
@@ -158,7 +165,9 @@ export async function POST(req: NextRequest) {
       const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
       if (!real && !nick) return undefined;
       return { name: real || nick, realName: real || null, nickname: nick || null };
-    })()
+    })(),
+    // 通话媒体（Task 22 视频通话）：channel 与场景规则按此分叉
+    media
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
@@ -180,9 +189,15 @@ export async function POST(req: NextRequest) {
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
   // 位置感知块：前端与文字聊天同一套 buildLocationBlock（用户最近发过的位置：名称/地址/经纬度/时间）
   const locBlock = typeof root.locBlock === 'string' ? root.locBlock.trim() : '';
+  // 用户画面识图块（Task 22 视频通话）：前端视频通话中采集的摄像头帧识图描述（非空才注入）——
+  // AI 知道此刻对方的摄像头里是什么（人/表情/动作/环境），可像真人视频一样自然回应画面内容
+  const visionBlock = typeof root.visionBlock === 'string' ? root.visionBlock.trim() : '';
+  const visionBlockFull = visionBlock
+    ? `【用户画面（视频通话实时识图）】这是对方摄像头此刻拍到的画面（每隔几秒刷新，可能略有延迟）：${visionBlock}`
+    : '';
   // 拼装顺序（Task 40-b 注入约定）：人设 → 世界书 → 当前 App 记忆 → 跨 App 近况 → 群聊近况 →
-  // 来电目的（主动电话）→ 动态 → 时间 → 位置；空串/缺字段自动跳过
-  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, proactiveBlock, momentsBlock, timeBlock, locBlock]
+  // 来电目的（主动电话）→ 动态 → 时间 → 位置 → 用户画面（视频识图，离对话最近放最后）；空串/缺字段自动跳过
+  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, proactiveBlock, momentsBlock, timeBlock, locBlock, visionBlockFull]
     .filter(Boolean)
     .join('\n\n');
 

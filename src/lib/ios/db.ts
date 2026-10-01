@@ -154,6 +154,8 @@ export interface CallLogRecord {
    * IndexedDB 新增可选字段直接存、无需迁移
    */
   endReason?: string;
+  /** 通话媒体（Task 22 视频通话）：video=视频通话（记录行显示视频图标与「视频通话」文案）；缺省语音 */
+  media?: 'voice' | 'video';
   createdAt: number;
 }
 

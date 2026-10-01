@@ -1746,8 +1746,9 @@ export async function memSummarizeCallNow(
   names?: MemNames | null,
   /** 【fix3-a 4】通话方向（机主手机视角：'out'=机主拨出，'in'=AI角色拨出）：
    *  拼进 extract body.scene，提取 prompt 知道这是谁拨出的语音通话——通话场景与方向在记忆里不再全丢。
-   *  签名变更由 phone.tsx / chat-call.ts 侧传参（本函数尾参向后兼容：不传保持原行为）。 */
-  opts?: { direction?: 'out' | 'in' }
+   *  签名变更由 phone.tsx / chat-call.ts 侧传参（本函数尾参向后兼容：不传保持原行为）。
+   *  【Task 22 视频通话】media='video' 时场景串写「视频通话（…）」，与语音通话在记忆里可区分。 */
+  opts?: { direction?: 'out' | 'in'; media?: 'voice' | 'video' }
 ): Promise<{ added: number; merged: number }> {
   const guard = `${contactId}:call`;
   if (inflight.has(guard)) return { added: 0, merged: 0 };
@@ -1755,9 +1756,9 @@ export async function memSummarizeCallNow(
   inflight.add(guard);
   try {
     memSweepExpiry(contactId);
-    // 【fix3-a 4】场景串：App 名 + 拨出方向（归属视角固定：机主=用户本人，AI角色=AI角色本人）
+    // 【fix3-a 4】场景串：通话媒体（语音/视频）+ App 名 + 拨出方向（归属视角固定：机主=用户本人，AI角色=AI角色本人）
     const scene =
-      `语音通话（${MEM_APP_LABEL[app]}）` +
+      `${opts?.media === 'video' ? '视频通话' : '语音通话'}（${MEM_APP_LABEL[app]}）` +
       (opts?.direction === 'out'
         ? '，由机主（用户本人）拨出'
         : opts?.direction === 'in'

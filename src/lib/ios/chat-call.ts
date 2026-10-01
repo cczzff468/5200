@@ -65,7 +65,7 @@ import { requestCallFollowup } from './call-followup';
 import { buildCrossContextBlocks } from './cross-app-context';
 import { speakUserTts, stopSpeaking, hasCustomTtsApi } from './tts-client';
 import { reportCallSeconds, useGlobalCall } from './global-call';
-import { loadBlock } from './block-state';
+import { loadBlock, type BlockEntry } from './block-state';
 import { getReplyCount } from '../reply-count';
 
 /** fix3-D #42：拉黑静默轮连续上限——拉黑期（byChar/byUser）免提开录循环 + 主动开口计时器
@@ -122,7 +122,7 @@ export interface ChatCallReveal {
 }
 
 export interface UseChatCallOptions {
-  app: 'wx' | 'qq';
+  app: 'wx' | 'qq' | 'phone';
   /** 通话对端联系人（人设/音色来源；kind='user' 时对端不说话，仅保留聆听状态） */
   contact: ContactRecord | null;
   direction: 'out' | 'in';
@@ -142,6 +142,11 @@ export interface UseChatCallOptions {
   locBlock?: string;
   /** 跨 App 身份感知互通开关（宿主按联系人读 getMemSettings；undefined = 不注入） */
   multiApp?: boolean;
+  /** 通话媒体：voice=语音通话（默认，旧行为不变）/ video=视频通话（界面/规则/记忆场景/卡片按视频分叉） */
+  media?: 'voice' | 'video';
+  /** 每轮动态注入「用户画面」识图描述（视频通话专用，宿主/界面层采集摄像头帧→识图后提供）：
+   *  返回非空串时随 turn API 注入【用户画面】system 块，AI 知道此刻看到什么；返回 undefined 不注入 */
+  visionBlockFn?: () => string | undefined;
   /** 通话结束（恰好一次） */
   onEnd: (r: ChatCallResult) => void;
   /** 挂断后 AI 续聊文字生成完毕（引擎异步产出，紧随挂断）：宿主负责呈现——
@@ -227,6 +232,13 @@ function phaseWasConnected(endReason: ChatCallEndReason): boolean {
 
 // ---------------- 引擎 ----------------
 
+/** 拉黑状态读取（引擎内统一入口）：仅 wx/qq 有拉黑体系；phone（全局视频通话）与其余端返回 null=不拦 */
+function blockEntryOf(app: 'wx' | 'qq' | 'phone', contactId?: string | null): BlockEntry | null {
+  if (app !== 'wx' && app !== 'qq') return null;
+  if (!contactId) return null;
+  return loadBlock(app, contactId);
+}
+
 /** AI 告别语后的挂断标记（识别后从播报文本中剥除；三端共用，电话 App 也复用） */
 export const HANGUP_MARK_RE = /〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g;
 
@@ -248,12 +260,31 @@ export function stripVoiceCallMark(t: string): string {
 }
 
 /**
+ * AI 主动发起视频通话的触发标记（[视频通话] 等，与 [语音通话] 同一套全半角括号变体兼容）。
+ * 宿主（微信/QQ）检测到标记后剥除并按冷却触发视频通话来电；标记原文不进气泡。
+ */
+const VIDEO_CALL_MARK_ONE_RE = /[〔\[【（(]\s*视频通话\s*[〕\]】）)]/;
+/** 全局替换用（剥除标记本身，标记不进气泡） */
+export const VIDEO_CALL_MARK_RE = new RegExp(VIDEO_CALL_MARK_ONE_RE.source, 'g');
+/** 是否包含视频通话触发标记（全角/半角括号变体都算） */
+export function hasVideoCallMark(t: string): boolean {
+  return VIDEO_CALL_MARK_ONE_RE.test(t);
+}
+/** 剥除视频通话触发标记（返回 trim 后文本） */
+export function stripVideoCallMark(t: string): string {
+  return t.replace(VIDEO_CALL_MARK_RE, ' ').trim();
+}
+
+/**
  * 通话场景附加规则（聊天通话：允许 AI 按人设/上下文主动结束通话；三端共用）。
  * 按联系人关系动态生成——不再硬编码「很熟的朋友」：疏远/同事/刚吵架的人设接通后语气
  * 跟着关系走，亲近才亲昵，不熟保持分寸，杜绝「人设疏远、开口熟络」的出戏感。
+ * media='video'（视频通话）：措辞与规则按视频通话分叉——AI 知道对方开了摄像头时自己能看到
+ * 对方画面（识图描述经 visionBlock 注入），镜头关了/没画面时绝不装作看得见。
  */
 export function chatCallExtraRules(
   peer?: { relation?: string | null; relationToUser?: string | null } | null,
+  media: 'voice' | 'video' = 'voice',
 ): string[] {
   const rel = [peer?.relationToUser, peer?.relation]
     .map((v) => (typeof v === 'string' ? v.trim() : ''))
@@ -262,8 +293,16 @@ export function chatCallExtraRules(
   const closeness = rel
     ? `你们的关系是「${rel}」——语气疏密按这个关系来：亲近关系才自然亲昵随意，普通/疏远/紧张的关系保持应有的分寸感，不要装熟；`
     : '语气疏密按你们人设与资料里的关系亲疏来：亲近才自然随意，不熟就保持分寸，不要装熟；';
+  const videoRules =
+    media === 'video'
+      ? [
+        '如果上下文里有【用户画面】描述，说明对方的摄像头开着、你能实时看到TA：可以像真人视频一样自然地评价/回应画面里看到的东西（TA的样子、表情、在做什么、周围环境），但只基于描述内容回应，不要虚构画面里没有的细节；',
+        '如果上下文里没有【用户画面】（对方没开摄像头或你看不到），绝对不要装作看得见对方、也不要反复要求对方开摄像头；',
+      ]
+      : [];
   return [
-    `你正在和对方进行实时语音通话，保持人设，像真人打电话；${closeness}`,
+    `你正在和对方进行实时${media === 'video' ? '视频' : '语音'}通话，保持人设，像真人${media === 'video' ? '视频' : '打'}电话；${closeness}`,
+    ...videoRules,
     '如果你想结束通话（话题聊完、要去忙、困了等自然原因），先用一句话自然告别（如「那我先去洗澡啦，回头聊」），然后在告别语的最后单独输出〔挂断〕标记；除此之外的任何情况都不要输出〔挂断〕；',
     '正常聊天时绝对不要输出〔挂断〕标记；每轮只说出口语内容本身。',
   ];
@@ -313,7 +352,9 @@ export interface ChatCallApi {
 }
 
 export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
-  const { app, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, onEnd, onFollowup } = opts;
+  const { app, contact, direction, initialHistory, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, visionBlockFn, onEnd, onFollowup } = opts;
+  /** 通话媒体（video=视频通话）：规则/记忆场景/服务端 channel 按此分叉；默认 voice 与既有行为完全一致 */
+  const media: 'voice' | 'video' = opts.media ?? 'voice';
 
   const [phase, setPhase] = useState<ChatCallPhase>(direction === 'in' ? 'incoming' : 'dialing');
   const [status, setStatus] = useState<ChatCallStatus>('connecting');
@@ -377,7 +418,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
    *  与挂断续聊注入。跟会话生命周期走：引擎实例 = 一通通话（finishByReplacement 换新引擎/重挂
    *  VoiceCallScreen 时 ref 随之新建自动重建）；通话期间不重算（几秒内的外部变化不影响本通话）。 */
   const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string } | null>(null);
-  const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp });
+  const optsRef = useRef({ app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, media: (opts.media ?? 'voice') as 'voice' | 'video', visionBlockFn });
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
@@ -393,7 +434,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   useEffect(() => {
     onEndRef.current = onEnd;
     onFollowupRef.current = onFollowup;
-    optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp };
+    optsRef.current = { app, contact, memoryBlock, memoryBlockFn, worldbookBlock, momentsBlock, timeBlock, locBlock, multiApp, media: opts.media ?? 'voice', visionBlockFn };
   });
 
   /** 停 VAD + 清自动重听定时器 + 清主动开口计时器（挂断/静音/开文字条时用；不动 MediaRecorder——丢弃或发送由调用方决定） */
@@ -439,11 +480,11 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           // fix3-11 机主名回退链：机主卡片真名 → 设置 profile 名（owner 为空时不再让 names.user 空、
           // 提取 prompt 回退成「用户/对方」代称；与 phone.tsx 挂断总结 owner || profileName 同口径）
           { user: owner || useSettings.getState().profile.name || '', peer: cur.contact?.name || '' },
-          // fix3-11 场景标记：通话里说的话在提取 prompt 中标注「语音通话」场景（App 归属由 app 字段自带）
-          { scene: '语音通话' },
+          // fix3-11 场景标记：通话里说的话在提取 prompt 中标注「语音/视频通话」场景（App 归属由 app 字段自带）
+          { scene: media === 'video' ? '视频通话' : '语音通话' },
         ),
       );
-  }, [chatLogToConvo]);
+  }, [chatLogToConvo, media]);
 
   /** 挂断时自动总结整通电话：提取关键信息沉淀为记忆（通话结束自动触发一次；失败静默不阻塞收尾） */
   const summarizeCall = useCallback(() => {
@@ -464,10 +505,10 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
           { user: owner || useSettings.getState().profile.name || '', peer: cur.contact?.name || '' },
           // fix3-11 通话方向（机主手机视角，契约尾参）：本引擎 direction 'in'=AI 拨入/'out'=机主拨出，
           // 直接透传——总结 prompt 才能写清「谁打给谁的一通电话」
-          { direction },
+          { direction, media },
         ),
       );
-  }, [chatLogToConvo, direction]);
+  }, [chatLogToConvo, direction, media]);
 
   /** 挂断后 AI 续聊（三端共用逻辑，挂断即触发）+ 记忆总结（一次提取「通话内容+续聊文字」）：
    *  ① 接通后挂断（AI 主动挂断 / 用户挂断）→ 基于人设+通话内容+记忆+最近聊天生成文字，立刻发
@@ -498,7 +539,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       // （沉淀真实发生过的通话内容，与 #33① 记忆总结口径一致）。byChar||byUser 双向同拦，与
       // #33② runTurn 静默轮的双向语义对齐；从 optsRef 现场读取防挂断瞬间状态变更。
       // 电话端同场景由 phone.tsx hangup 内 byUser 前置拦截（#33，仅 byUser 的既有口径不动）
-      const blkAtEnd = peer && peer.id ? loadBlock(optsRef.current.app, peer.id) : null;
+      const blkAtEnd = peer && peer.id ? blockEntryOf(optsRef.current.app, peer.id) : null;
       if (blkAtEnd?.byChar || blkAtEnd?.byUser) {
         summarizeCall();
         return;
@@ -546,6 +587,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             multiApp: optsRef.current.multiApp,
             // 条数上限 = 该会话聊天设置「回复条数」（wx:<id> / qq:<id>，与文字聊天同一份设置）
             replyCount: getReplyCount(`${optsRef.current.app}:${peer.id}`),
+            // 通话媒体（Task 22 视频通话）：视频挂断续聊让 AI 知道刚才那通是视频
+            media,
             // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
             userRealName: owner?.realName || undefined,
             userNickname: owner?.nickname || undefined,
@@ -569,7 +612,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         summarizeCall();
       })();
     },
-    [direction, summarizeCall],
+    [direction, media, summarizeCall],
   );
 
   /** 统一收尾：只执行一次；停录音/停播报/停铃声，回调宿主结果（afterText = AI 拒接/未接后的解释文字） */
@@ -722,7 +765,11 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             multiApp: optsRef.current.multiApp,
             // 通话方向（AI 视角）：out=用户打来的 / in=你打出去的——接通问候语按方向区分主被动
             direction,
-            extraRules: chatCallExtraRules(c),
+            // 通话媒体（voice=语音 / video=视频）：服务端 channel 与场景规则按此分叉
+            media,
+            // 视频通话：界面层采集的用户画面识图描述（无摄像头/识图未配/还没出结果时为 undefined 不注入）
+            visionBlock: optsRef.current.visionBlockFn?.() || undefined,
+            extraRules: chatCallExtraRules(c, media),
             config: useSettings.getState().apiConfig,
           }),
           // #20 通话链路超时看门狗：LLM 轮次 45s 到点必失败（AbortSignal.timeout → DOMException
@@ -757,7 +804,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         return { reply: '', error: '通话网络异常，请再试一次' };
       }
     },
-    [direction],
+    [direction, media],
   );
 
   // ---------- 一轮对话：文字 → LLM → TTS ----------
@@ -780,7 +827,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       // 成功分支不变）；通话回到聆听继续（解除拉黑后下一轮自然恢复应答），挂断总结/B-1 兜底收尾
       // 不受影响。greeting/主动开口轮同样静默：不产生「被拉黑一方还在絮叨」的假对话
       const blkPeer = optsRef.current.contact;
-      const blkEntry = blkPeer?.id ? loadBlock(optsRef.current.app, blkPeer.id) : null;
+      const blkEntry = blkPeer?.id ? blockEntryOf(optsRef.current.app, blkPeer.id) : null;
       if (blkEntry?.byChar || blkEntry?.byUser) {
         if (userText) {
           setLiveHeard(''); // 最终文字入列：实时 provisional 字幕让位（与正常轮同口径）
@@ -887,7 +934,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       // - byUser（用户拉黑了角色）：文字照常进通话记录（用户侧发送不受影响），但 AI 不回应——
       //   通话引擎无「解除拉黑申请卡片」通道，等价于单聊 runAiTurn 的 byUser 静默取消分支。
       const peer = optsRef.current.contact;
-      const blk = peer?.id ? loadBlock(optsRef.current.app, peer.id) : null;
+      const blk = peer?.id ? blockEntryOf(optsRef.current.app, peer.id) : null;
       if (blk?.byChar) {
         setError('对方已将你拉黑，无法发送');
         return;

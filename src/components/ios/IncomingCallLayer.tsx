@@ -31,7 +31,7 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion, type Transition } from 'framer-motion';
-import { Bell, BellOff, ChevronLeft, Info, MessageCircle, Phone, PhoneOff } from 'lucide-react';
+import { Bell, BellOff, ChevronLeft, Info, MessageCircle, Phone, PhoneOff, Video } from 'lucide-react';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import {
   hasPendingPhoneAnswer,
@@ -255,7 +255,8 @@ function CallBanner({ call, onIgnore }: { call: IncomingCallSnapshot; onIgnore: 
               <BannerAvatar name={call.name} avatar={call.avatar} wx />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[17px] font-semibold leading-[22px] text-white">{call.name}</div>
-                <div className="mt-0.5 text-[13px] leading-[18px] text-white/50">邀请你语音通话...</div>
+                {/* Task 22 视频通话：文案/接听图标随 media 分叉（微信视频邀请弹窗对照截图 6/7） */}
+                <div className="mt-0.5 text-[13px] leading-[18px] text-white/50">{call.media === 'video' ? '邀请你视频通话...' : '邀请你语音通话...'}</div>
               </div>
             </div>
             <div className="mt-3.5 flex items-center justify-between pl-5 pr-4">
@@ -275,7 +276,7 @@ function CallBanner({ call, onIgnore }: { call: IncomingCallSnapshot; onIgnore: 
               </button>
               <div className="flex items-center gap-3">
                 <CircleBtn tone="red" onClick={decline} label="拒绝" />
-                <CircleBtn tone="green" onClick={answer} label="接听" />
+                <CircleBtn tone="green" onClick={answer} label={call.media === 'video' ? '接听视频' : '接听'} video={call.media === 'video'} />
               </div>
             </div>
           </div>
@@ -288,7 +289,7 @@ function CallBanner({ call, onIgnore }: { call: IncomingCallSnapshot; onIgnore: 
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <CircleBtn tone="red" onClick={decline} label="拒绝" testId="incoming-pill-reject" />
-              <CircleBtn tone="green" onClick={answer} label="接听" testId="incoming-pill-accept" />
+              <CircleBtn tone="green" onClick={answer} label={call.media === 'video' ? '接听视频' : '接听'} video={call.media === 'video'} testId="incoming-pill-accept" />
             </div>
           </div>
         )}
@@ -326,11 +327,14 @@ function CircleBtn({
   onClick,
   label,
   testId,
+  video = false,
 }: {
   tone: 'red' | 'green';
   onClick: () => void;
   label: string;
   testId?: string;
+  /** Task 22 视频通话：接听按钮显示摄像机图标（视频邀请弹窗对照截图 6/7） */
+  video?: boolean;
 }) {
   return (
     <button
@@ -347,6 +351,8 @@ function CircleBtn({
     >
       {tone === 'red' ? (
         <PhoneOff className="h-[19px] w-[19px]" strokeWidth={2.2} aria-hidden="true" />
+      ) : video ? (
+        <Video className="h-[19px] w-[19px]" strokeWidth={2.2} aria-hidden="true" />
       ) : (
         <Phone className="h-[19px] w-[19px]" strokeWidth={2.2} aria-hidden="true" />
       )}

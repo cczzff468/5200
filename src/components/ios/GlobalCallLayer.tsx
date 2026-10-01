@@ -16,7 +16,7 @@
 
 import { useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { MicOff, Phone, PhoneCall, VideoOff } from 'lucide-react';
+import { MicOff, Phone, PhoneCall, Video, VideoOff } from 'lucide-react';
 import { formatCallDuration } from '@/lib/ios/chat-call';
 import { useCallSeconds, useGlobalCall } from '@/lib/ios/global-call';
 import { navigateToChatSession } from '@/lib/ios/island-notify';
@@ -27,11 +27,16 @@ const VoiceCallScreen = dynamic(
   () => import('../apps/voice-call-screen').then((m) => m.VoiceCallScreen),
   { ssr: false },
 );
+// 视频通话页（Task 22）：camera/识图链路较重，按需加载；语音通话零影响
+const VideoCallScreen = dynamic(
+  () => import('../apps/video-call-screen').then((m) => m.default),
+  { ssr: false },
+);
 
 /** 小窗宽度（两皮肤一致）；高度：微信 82 / QQ 106（多一条底部图标栏） */
 const PIP_W = 72;
 const PIP_RADIUS = 12;
-const pipHeightOf = (variant: 'wx' | 'qq'): number => (variant === 'qq' ? 106 : 82);
+const pipHeightOf = (variant: 'wx' | 'qq' | 'phone'): number => (variant === 'qq' ? 106 : 82);
 /** 往边缘里面划：拖动中越过边缘再往里推 ≥该像素 → 吸附隐藏（只露一条边缘）。
  *  注意：只是拖到边缘松手不会隐藏，必须是「顶着边缘往里划」这个主动手势；
  *  阈值给足余量，避免贴边拖动时的轻微越界被误判成往里划 */
@@ -74,6 +79,9 @@ export default function GlobalCallLayer() {
 
   if (!session) return null;
   const variant = session.variant;
+  const isVideo = session.media === 'video';
+  // 语音通话页只有 wx/qq 两皮肤；variant='phone' 仅用于视频（电话 App 视频走全局层），窄化给 VoiceCallScreen
+  const voiceVariant: 'wx' | 'qq' = variant === 'phone' ? 'wx' : variant;
 
   return (
     <div ref={rootRef} className="pointer-events-none absolute inset-0" data-testid="global-call-layer">
@@ -83,9 +91,39 @@ export default function GlobalCallLayer() {
         className={`pointer-events-auto absolute inset-0 z-[62] ${view === 'full' ? '' : 'pointer-events-none invisible'}`}
         aria-hidden={view !== 'full'}
       >
+        {isVideo ? (
+          /* 视频通话页（Task 22）：同一全局层承载，微信/QQ/电话三皮肤共用引擎；
+             电话视频无「消息回复」语义（电话无聊天面板），不传 onMessageReply */
+          <VideoCallScreen
+            key={seq}
+            variant={variant}
+            name={session.name}
+            avatar={session.avatar}
+            contact={session.contact}
+            direction={session.direction}
+            initialHistory={session.initialHistory}
+            memoryBlock={session.memoryBlock}
+            memoryBlockFn={session.memoryBlockFn}
+            worldbookBlock={session.worldbookBlock}
+            momentsBlock={session.momentsBlock}
+            timeBlock={session.timeBlock}
+            locBlock={session.locBlock}
+            multiApp={session.multiApp}
+            onFollowup={session.onFollowup}
+            onMinimize={() => useGlobalCall.getState().minimize()}
+            onEnd={(r) => {
+              const s = useGlobalCall.getState().session;
+              try {
+                s?.onEnd(r);
+              } finally {
+                useGlobalCall.getState().close();
+              }
+            }}
+          />
+        ) : (
         <VoiceCallScreen
           key={seq}
-          variant={variant}
+          variant={voiceVariant}
           name={session.name}
           avatar={session.avatar}
           contact={session.contact}
@@ -105,7 +143,7 @@ export default function GlobalCallLayer() {
           // switchToApp + pending 导航——QQ 未打开时挂载后自动进会话，已打开时事件驱动立即打开；
           // 旧实现传空函数，拒接后停在原界面什么都不发生）
           onMessageReply={
-            variant === 'qq'
+            voiceVariant === 'qq'
               ? () => {
                   const contactId = session.contact?.id;
                   if (contactId) navigateToChatSession('qq', contactId);
@@ -123,9 +161,10 @@ export default function GlobalCallLayer() {
             }
           }}
         />
+        )}
       </div>
       {/* 悬浮小窗 / 边缘条（仅小窗化时渲染；全屏页保持挂载在上方） */}
-      {view === 'pip' && (pipDocked ? <CallPipEdge /> : <CallPipWindow variant={variant} rootRef={rootRef} />)}
+      {view === 'pip' && (pipDocked ? <CallPipEdge /> : <CallPipWindow variant={variant} media={session.media} rootRef={rootRef} />)}
     </div>
   );
 }
@@ -134,9 +173,12 @@ export default function GlobalCallLayer() {
 
 function CallPipWindow({
   variant,
+  media = 'voice',
   rootRef,
 }: {
-  variant: 'wx' | 'qq';
+  variant: 'wx' | 'qq' | 'phone';
+  /** 通话媒体（Task 22）：video 小窗显示摄像机图标（绿/蓝同款配色） */
+  media?: 'voice' | 'video';
   rootRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const seconds = useCallSeconds();
@@ -146,6 +188,7 @@ function CallPipWindow({
   const dock = useGlobalCall((s) => s.dock);
   const pipH = pipHeightOf(variant);
   const isQQ = variant === 'qq';
+  const isVideo = media === 'video';
 
   /** 拖拽状态：起点 + 小窗原始位置 + 是否移动过（区分点击与拖动） */
   const drag = useRef<{ pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
@@ -218,7 +261,11 @@ function CallPipWindow({
       {isQQ ? (
         <div className="flex h-full flex-col">
           <div className="flex flex-1 flex-col items-center justify-center gap-1">
-            <PhoneCall className="h-[25px] w-[25px] text-[#0099FF]" strokeWidth={2.1} aria-hidden="true" />
+            {isVideo ? (
+              <Video className="h-[25px] w-[25px] text-[#0099FF]" strokeWidth={2.1} aria-hidden="true" />
+            ) : (
+              <PhoneCall className="h-[25px] w-[25px] text-[#0099FF]" strokeWidth={2.1} aria-hidden="true" />
+            )}
             <span className="text-[15px] font-medium leading-none tabular-nums text-[#0099FF]" data-testid="qq-pip-duration">
               {formatCallDuration(seconds)}
             </span>
@@ -226,12 +273,16 @@ function CallPipWindow({
           {/* 底部图标条（对照截图：灰色麦克风静音 / 摄像头关闭） */}
           <div className="flex h-[26px] items-center justify-around border-t border-black/[0.06] bg-black/[0.035]">
             <MicOff className="h-[12px] w-[12px] text-black/25" strokeWidth={2} aria-hidden="true" />
-            <VideoOff className="h-[12px] w-[12px] text-black/25" strokeWidth={2} aria-hidden="true" />
+            <VideoOff className={`h-[12px] w-[12px] ${isVideo ? 'text-[#0099FF]' : 'text-black/25'}`} strokeWidth={2} aria-hidden="true" />
           </div>
         </div>
       ) : (
         <div className="flex h-full flex-col items-center justify-center gap-1">
-          <Phone className="h-[25px] w-[25px] text-[#07C160]" strokeWidth={0} fill="currentColor" aria-hidden="true" />
+          {isVideo ? (
+            <Video className="h-[25px] w-[25px] text-[#07C160]" strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <Phone className="h-[25px] w-[25px] text-[#07C160]" strokeWidth={0} fill="currentColor" aria-hidden="true" />
+          )}
           <span className="text-[15px] font-medium leading-none tabular-nums text-[#07C160]" data-testid="wx-pip-duration">
             {formatCallDuration(seconds)}
           </span>

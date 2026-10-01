@@ -69,7 +69,7 @@ import { requestAnswerDecision } from '@/lib/ios/call-decision';
 import { requestCallFollowup } from '@/lib/ios/call-followup';
 import { callOutcomeOf } from '@/lib/ios/call-outcome';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
-import { useGlobalCall } from '@/lib/ios/global-call';
+import { startGlobalCall, useGlobalCall } from '@/lib/ios/global-call';
 import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer, useIncomingCall } from '@/lib/ios/incoming-call';
 import { loadBlock } from '@/lib/ios/block-state';
 import { getReplyCount } from '@/lib/reply-count';
@@ -2365,7 +2365,9 @@ function RecentsTab({
                         <span className="mt-0.5 flex items-center gap-1 text-[12.5px] text-muted-foreground">
                           {/* 方向图标：out=呼出↗、in=呼入↙；未接听红色↗/↙（iOS 语义），
                               已拒绝/已取消用中性灰（非红非绿），接通绿 */}
-                          {log.direction === 'out' ? (
+                          {log.media === 'video' ? (
+                            <Video className="h-[13px] w-[13px] shrink-0 text-muted-foreground" aria-hidden="true" />
+                          ) : log.direction === 'out' ? (
                             <ArrowUpRight
                               className={`h-[13px] w-[13px] shrink-0 ${
                                 missRed
@@ -2391,7 +2393,7 @@ function RecentsTab({
                           <span className="truncate tabular-nums">
                             {/* 文案三态：接通=呼入/呼出·时长；未接听/已拒绝/已取消各显示专属文案（#27） */}
                             {outcome === 'ended'
-                              ? `${log.direction === 'in' ? '呼入' : '呼出'} · ${callDurationText(log.duration)}`
+                              ? `${log.media === 'video' ? '视频通话' : log.direction === 'in' ? '呼入' : '呼出'} · ${callDurationText(log.duration)}`
                               : outcome === 'rejected'
                                 ? '已拒绝'
                                 : outcome === 'cancelled'
@@ -3091,6 +3093,7 @@ function ContactDetail({
   loadingId,
   onBack,
   onCall,
+  onVideoCall,
   onMessage,
   onEdit,
   showToast,
@@ -3106,6 +3109,8 @@ function ContactDetail({
   loadingId: string | null;
   onBack: () => void;
   onCall: (number: string, contact: ContactRecord | null) => void;
+  /** 点「视频通话」（Task 22）：发起全局视频通话（iOS 黑白灰皮肤，全局层承载） */
+  onVideoCall: (c: ContactRecord) => void;
   /** 点「信息」：跨 App 跳到信息 App 与该联系人的会话（相当于添加好友直达聊天） */
   onMessage: (c: ContactRecord) => void;
   onEdit: () => void;
@@ -3200,7 +3205,7 @@ function ContactDetail({
         <div className="mt-4 flex items-center justify-center gap-[18px]">
           {actionBtn(<MessageSquare className="h-[22px] w-[22px]" />, '发送信息', () => onMessage(contact), 'detail-message')}
           {actionBtn(<PhoneIcon className="h-[22px] w-[22px]" fill="currentColor" strokeWidth={0} />, '拨打电话', () => onCall(contact.phone || '', contact), 'detail-call-avatar')}
-          {actionBtn(<Video className="h-[22px] w-[22px]" />, '视频通话', () => showToast('对方不支持视频通话'))}
+          {actionBtn(<Video className="h-[22px] w-[22px]" />, '视频通话', () => onVideoCall(contact), 'detail-video')}
           {actionBtn(<Mail className="h-[22px] w-[22px]" />, '发送邮件', () => showToast('请在「邮件」App 中发送邮件'))}
         </div>
 
@@ -3978,6 +3983,55 @@ export default function PhoneApp() {
     void localDB.put('call-logs', log);
   }, []);
 
+  /** Task 22 视频通话：联系人详情「视频通话」→ 全局通话层视频页（variant='phone' iOS 黑白灰皮肤）。
+   *  与语音 CallScreen 完全独立（语音引擎不动）；引擎为三端共用 useChatCall（media='video'），
+   *  接通/字幕/记忆/挂断续聊全部复用；通话记录落 CallLogRecord（media:'video'，记录行显示视频图标） */
+  const startVideoCall = useCallback(
+    (contact: ContactRecord | null) => {
+      if (useGlobalCall.getState().session) {
+        showToast('通话进行中，请先挂断');
+        return;
+      }
+      if (useIncomingCall.getState().call) {
+        showToast('有来电正在响铃，请先处理');
+        return;
+      }
+      if (callTarget) {
+        showToast('通话进行中，请先挂断');
+        return;
+      }
+      const resolved = contact;
+      const number = resolved?.phone || resolved?.id || 'unknown';
+      startGlobalCall({
+        variant: 'phone',
+        media: 'video',
+        name: resolved?.name ?? number,
+        avatar: resolved?.avatar ?? null,
+        contact: resolved,
+        direction: 'out',
+        initialHistory: [],
+        // 电话 App 记忆召回（与语音通话同库同池：文字/语音/视频互通）
+        memoryBlock: resolved?.id ? memRecallBlock(resolved.id, 'phone', '') || undefined : undefined,
+        onEnd: (r) => {
+          handleCallEnd({
+            id: genId(),
+            number,
+            contactId: resolved?.id ?? null,
+            displayName: resolved?.name ?? number,
+            peerKind: resolved ? (resolved.kind as CallLogRecord['peerKind']) : 'unknown',
+            avatar: resolved?.avatar ?? null,
+            direction: 'out',
+            duration: r.duration,
+            endReason: r.endReason,
+            media: 'video',
+            createdAt: Date.now(),
+          });
+        },
+      });
+    },
+    [callTarget, showToast, handleCallEnd]
+  );
+
   /** 通话结束落一条语音留言：kind='call'（对话内容存档）不弹「发来留言」提示；未接通留言才提示 */
   const handleVoicemail = useCallback(
     (vm: VoicemailRecord) => {
@@ -4309,6 +4363,7 @@ export default function PhoneApp() {
             loadingId={loadingVmId}
             onBack={() => setDetailId(null)}
             onCall={startCall}
+            onVideoCall={startVideoCall}
             onMessage={messageContact}
             onEdit={() => setEditSheetOpen(true)}
             showToast={showToast}

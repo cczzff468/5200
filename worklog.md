@@ -13105,3 +13105,91 @@ Work Log:
 Stage Summary:
 - 沙箱环境已与 origin/main（c446253）完全同步，dev server 运行中，浏览器验证四端可用，git 推送通道就绪（remote origin 已配置 token，main→origin/main 已跟踪）
 - 后续功能修改/新增可直接在工作树进行并推送；.env 不入库（.gitignore .env*），注意沙箱重建时需重写
+---
+Task ID: 22
+Agent: Z.ai (main, 总控)
+Task: 视频通话功能——复用语音通话引擎，微信/QQ 双端视频通话 + AI 看见用户（识图注入）+ AI 主动视频 + 通话卡片/记忆
+
+Work Log:
+- 设计（读 voice-call-screen/chat-call/global-call/incoming-call/IncomingCallLayer/GlobalCallLayer/proactive-call/turn+followup+vision API/wechat/qq 挂点后定稿）：
+  【引擎】chat-call.ts 加 media:'voice'|'video' + visionBlockFn（每轮注入用户画面识图结果）；chatCallExtraRules 按媒体分叉；记忆 scene 视频通话；新增 [视频通话] 标记正则（hasVideoCallMark/stripVideoCallMark，全半角括号变体同 [语音通话]）
+  【服务端】/api/phone/turn 加 visionBlock（【用户画面】注入 systemFull）+ media（channel 视频通话/场景规则）；/api/phone/followup 加 media
+  【相机】新 lib/ios/camera-capture.ts：useLocalCamera（getUserMedia video/facingMode 翻转/开关/拒绝降级）+ captureFrameDataUrl（canvas 缩帧）+ describeUserFrame（describeImages 包装）
+  【界面】新 video-call-screen.tsx：wx/qq 双皮肤（来电页+通话页），主画面=角色动态画面（头像 Ken Burns+模糊背景），小窗=用户摄像头（点击互换），底部 挂断/静音/摄像头开关/前后翻转，iOS 黑白灰；识图循环 10s（active+摄像头开+识图配置就绪才跑，单飞防重入）
+  【全局层】global-call.ts session.media；GlobalCallLayer 按 media 渲染 VideoCallScreen（dynamic）；IncomingCallLayer 弹窗文案/接听图标随 media；PiP 视频图标
+  【卡片】CallCardBubble/callCardText/callCardAiText 加 media（视频图标+「视频通话时长」文案，默认 voice 向后兼容）
+  【宿主】wechat/qq：openVoiceCall 加 media；加号面板视频入口接通；[视频通话] 标记检测/剥除/冷却触起来电（wantVideoCallSeen）；AI 规则加【视频通话能力】；通话卡片 media 透传；preview 文案
+  【电话App】联系人详情视频按钮接全局视频通话（variant='phone' iOS 皮肤）
+- 分工：总控做引擎+UI+全局层+电话端+E2E；wechat-agent（22-b）/ qq-agent（22-c）并行做宿主接入
+
+---
+Task ID: 22-b
+Agent: wechat-agent
+Task: 微信端接入视频通话
+
+Work Log:
+- 读 worklog 最后三条（Task 22 总控设计 / 21 / 20）确认引擎层已就绪：chat-call.ts hasVideoCallMark/stripVideoCallMark、global-call.ts session.media、voice-call-screen.tsx CallCardBubble/callCardAiText 的 media 第参、IncomingCallSnapshot.media；仅改 src/components/apps/wechat.tsx（git status 确认其余改动文件均为总控/并行代理所有）
+- (1) WxMsg.call 类型加可选 media?: 'voice' | 'video'（wechat.tsx:404-406，中文注释：视频通话卡片显示摄像机图标与「视频通话时长」文案；缺省语音向后兼容）
+- (2) 会话列表预览 readPreview（:970-971）：last.kind==='call' 改媒体感知——last.call?.media==='video' 返回 '[视频通话]'，否则 '[语音通话]'（last 是 WxMsg，call 字段直接可取，无需宽化）
+- (3) openVoiceCall（:4880-4947）：opts 加 media?: 'voice' | 'video'；组件作用域新增 lastCallMediaRef（:4818-4820，声明在 writeCallCard/openVoiceCall 之前，中文注释：引擎 onEnd 的 ChatCallResult 不携带 media，宿主发起时写入、落卡片时读回）；startGlobalCall 调用前 lastCallMediaRef.current = opts?.media ?? 'voice'（:4939），session 对象加 media: opts?.media ?? 'voice'（:4947）；函数头注释补 opts.media 说明
+- (4) writeCallCard（:4832/:4835）：卡片 call 字段加 media: lastCallMediaRef.current；顺带 callCardAiText(st, r.duration, lastCallMediaRef.current) 第 3 参透传（AI 上下文摘要写「视频通话」，引擎已备好该参——超出任务书字面但在同一行代码处，低风险已报告）
+- (5) 通话卡片渲染（:7470-7477）：CallCardBubble 加 media={m.call.media ?? 'voice'}；onRedial 改 openVoiceCall('out', { media: m.call?.media ?? 'voice' })（视频卡片点回拨发起视频；闭包内 m.call 收窄失效，用 ?. 与既有 m.stk?.url 同款）
+- (6) 加号面板（:7027-7033）：'videocall' 分支接通（关面板/表情面板 + openVoiceCall('out', { media: 'video' })）；:7049 label Record 删 videocall 键（不再走「暂未开放」fallback toast；面板按钮 :3214 既有）
+- (7) AI 聊天 system 规则数组（:5749，紧跟【语音通话能力】行）：加【视频通话能力】规则（[视频通话] 标记发起视频邀请 + 节制口径，与语音行同款书写风格）
+- (8) WxTurnCtx（:4220/:4226-4227）：加 wantVideoCallSeen: boolean（中文注释：与 wantCallSeen 同口径），接口头注释同步
+- (9) triggerAiVideoCall（:5158-5191，triggerAiVoiceCall 之后）：同构入口守卫（useUI.callActive 拦截 + loadBlock('wx',peer.id).byUser 拦截）、5 分钟冷却独立键 wx-videocall-last:${peer.id}、setTimeout 内 B-1 幂等双查（useIncomingCall.call / useGlobalCall.session）原样保留、triggerIncomingCall 快照加 media:'video'、openVoiceCall('in', { hiddenView: true, media: 'video' })
+- (10) buildReplyMsgs（:5227-5234）：wantCall 检测后加 wantVideoCall = hasVideoCallMark(rawText)（全/半角括号变体，与语音同口径）+ byUser 拉黑拦截后才写 ctx.wantVideoCallSeen（与 wantCallSeen 双保险口径一致）；剥除行改 wantCall || wantVideoCall ? stripVoiceCallMark(stripVideoCallMark(rawText)) : rawText（两种标记都剥干净）；函数 JSDoc 的 ctx 说明同步补 wantVideoCallSeen
+- (11) wantCallSeen 两处消费点各加 if (ctx.wantVideoCallSeen) triggerAiVideoCall()：deliverBgItems 接力拉取投递收尾（:5487-5489）、runAiTurn finalize 收尾（:5892-5898），均带中文注释（同冷却与守卫口径）
+- (12) WxTurnCtx 初始化三处全补 wantVideoCallSeen: false：照片任务恢复 effect 的 flushPhotoJobs 直传字面量（:5122，参数类型就是 WxTurnCtx 故同步加）、deliverBgItems（:5460）、runAiTurn（:5625）；grep 确认 wantCallSeen: false 全部出现点已逐一处理
+- 自验：bunx tsc --noEmit ✓ 零报错；bun run lint 4 errors 全部位于总控引擎文件（video-call-screen.tsx ×2 refs / camera-capture.ts ×1 setState-in-effect / chat-call.ts ×1 preserve-manual-memoization），bunx eslint src/components/apps/wechat.tsx 单文件零错误（仅 >500KB BABEL note，正常）；grep 逐项核对 12 项全部落地；未启动 dev server、未 git commit
+
+Stage Summary:
+- 微信端视频通话全链路接入完成：加号面板「视频通话」入口 + 视频通话卡片（摄像机图标/视频文案/[视频通话] 预览/点卡片视频回拨）+ AI 主动视频（【视频通话能力】规则 + [视频通话] 标记检测剥除 + 独立 5 分钟冷却 + 来电快照 media:'video'）+ 会话 media 一路透传 startGlobalCall/落盘卡片（loadMsgs 展开式透传，legacy 无 media 字段宽容回落语音）
+- 视频与语音冷却键分离（wx-videocall-last 不与 wx-vc-last 互挤）、拉黑拦截/callActive/B-1 幂等防御与语音通话完全同口径；产出仅 src/components/apps/wechat.tsx（+约 100 行）
+- 发现并报告：①引擎层 lint 4 errors 系总控 video-call-screen/camera-capture/chat-call 所引入，非本任务范围未动；②微信联系人详情页「音视频通话」按钮（:10553 附近）仍是「暂未开放」toast，任务书 12 项未含，留待决策
+
+---
+Task ID: 22-c
+Agent: qq-agent
+Task: QQ端接入视频通话
+
+Work Log:
+- 读 worklog 最后条目（Task 22 总控设计）并核验引擎层导出就绪：chat-call.ts hasVideoCallMark/stripVideoCallMark（:270/:274）、global-call.ts GlobalCallSession.media（:35）、voice-call-screen.tsx CallCardMedia/CallCardBubble media prop/callCardAiText 第3参（:674/:757/:720）、incoming-call.ts IncomingCallSnapshot.media（:31）；仅改 src/components/apps/qq.tsx（git diff 确认，wechat.tsx 等其余改动均为并行代理所有）
+- (11) import 行补 hasVideoCallMark, stripVideoCallMark（qq.tsx:147）
+- (1) QqMsg.call 类型加可选 media?: 'voice' | 'video'（:366-368，中文注释：视频通话卡片显示摄像机图标与视频文案）
+- (2) loadMsgs 通话卡片规范化白名单加 media：仅认 'voice'|'video'，其余丢弃 undefined（:1031-1048，与 voice.synth 同款兜底写法）
+- (3) 会话列表/通知预览媒体感知：call?.media==='video' → '[视频通话]'，否则 '[语音通话]'（:490-491）
+- (4) openVoiceCall opts 加 media?: 'voice'|'video'（:3383，doc 注释同步）；组件作用域 lastCallMediaRef = useRef<'voice'|'video'>('voice')（:3304-3306，置于 writeCallCard 之前）；startGlobalCall 之前写 ref（守卫之后，:3434-3435）；session 加 media: opts?.media ?? 'voice'（:3442-3443）
+- (5) writeCallCard：card.call 加 media: lastCallMediaRef.current（:3322）；callCardAiText 第3参同透传（:3319）
+- (6) 通话卡片渲染加 media={m.call.media ?? 'voice'}（:5776）；onRedial 改 openVoiceCall('out', { media: m.call?.media ?? 'voice' })（:5777；onRedial 闭包内参数窄化失效故用可选链，语义等价）
+- (7) 加号面板「视频通话」入口接通（:5383-5393）：原 toast「视频通话暂未开放」改为 setPlusOpen(false) + openVoiceCall('out', { media: 'video' })，对象展开为与语音项同款多行风格
+- (8) AI 回复规则加【视频通话能力】（:4246，紧挨【语音通话能力】:4245，同款书写风格）
+- (9) wantVideoCallSeenRef 声明（:3470-3472，挨着 wantCallSeenRef）；buildReplyMsgs 加 hasVideoCallMark 检测+置位（:3822-3824）；剥除行改双剥 stripVoiceCallMark(stripVideoCallMark(rawText))（:3825-3826）
+- (10) maybeTriggerAiCall 语音触发块后加视频触发块（:3521-3549，同构照抄）：requestOnly/拉黑守卫、换号纪元挡板（qqSessionEpoch）、幂等防御三查（useUI.callActive / useIncomingCall.call / useGlobalCall.session）、独立 5 分钟冷却键 qq-videocall-last:${peer.id}（:3526/:3528）、triggerIncomingCall 快照加 media:'video'（:3544）、openVoiceCall('in', { media: 'video' })（:3546，QQ 不用 hiddenView 与语音同款可见路径）；finally 里 wantVideoCallSeenRef 与 wantCallSeenRef 一并清空（:3553-3554）；runAiTurn 开回合重置处补 wantVideoCallSeenRef.current = false（:4293-4294）
+- 自验：bunx tsc --noEmit ✓ 零报错；bun run lint 无 qq.tsx 新增错误（qq.tsx 仅既有 >500KB BABEL note；lint 现存 4 error 全部位于总控引擎层文件 video-call-screen.tsx×2 / camera-capture.ts / chat-call.ts，本次改动前已存在，与 qq.tsx 无关）；grep 逐项核对 11 项全部落地；未启动 dev server、未 git commit
+
+Stage Summary:
+- QQ 端视频通话接入完成：手动（加号面板）+ AI 主动（[视频通话] 标记→5 分钟冷却→来电横幅「邀请你视频通话」+视频接听图标 + QQ 全屏来电页）双入口；媒体全程透传（session.media→GlobalCallLayer 渲染视频通话页；lastCallMediaRef→onEnd 落卡片 call.media + 摄像机图标 + 「视频通话时长」文案 + AI 可读摘要分叉；会话列表/通知预览 [视频通话]）；标记全/半角括号变体检测与双剥除；语音/视频冷却键互不挤占
+- 向后兼容：所有新参数缺省 media='voice'，既有语音通话链路（卡片/来电/回拨/规范化）行为零变化；产出仅 src/components/apps/qq.tsx（+80/-13）+ worklog 本条
+---
+Task ID: 22-final
+Agent: Z.ai (main, 总控收尾)
+Task: 视频通话全链路收尾——引擎/全局层/三皮肤/电话端接入/lint 修复/E2E
+
+Work Log:
+- 引擎 chat-call.ts：media('voice'|'video')+visionBlockFn 进 optsRef；requestTurn 携 media/visionBlock/extraRules(c,media)；memorizeTurn/summarizeCall 场景按媒体分叉（memory.ts memSummarizeCallNow opts 加 media，场景串「视频通话（微信）」等）；followupAndSummarize payload 加 media；useChatCall app 类型放宽 'wx'|'qq'|'phone'（loadBlock 收敛为 blockEntryOf：phone 无拉黑体系返回 null）；新增 hasVideoCallMark/stripVideoCallMark/VIDEO_CALL_MARK_RE（全半角括号变体）
+- 服务端 /api/phone/turn：media 参数（channel 视频通话、场景规则分叉）+ visionBlock（【用户画面（视频通话实时识图）】注入 systemFull 尾部）；/api/phone/followup：media 补充块；call-followup.ts payload 加 media
+- 新 lib/ios/camera-capture.ts：useLocalCamera（video-only 流、facing 翻转重建、denied 降级、ready 派生值防 effect 级联 setState）+ captureFrameDataUrl（canvas 缩帧 640px JPEG）+ describeUserFrame（describeImages 包装，视频专用提问语）
+- 新 components/apps/video-call-screen.tsx（871 行）：wx/qq/phone 三皮肤 × 来电/拨号/接通三态；主画面=角色 Ken Burns 动态头像+模糊背景（AI 无真人视频的模拟）；小窗=用户摄像头（wx 右上/qq 左上/phone 右上，点按互换大小窗，拨号中主画面=我方摄像头对照微信真实行为）；底部控制=麦克风/扬声器/摄像头开关/前后翻转/互换画面/挂断（wx 圆形、QQ 圆角方、phone iOS 黑白灰）；字幕复用 CaptionStream、文字条复用 InlineCallChat（两组件从 voice-call-screen 导出）；识图循环=接通+摄像头就绪+识图配置就绪每 10s 抓帧→识图→latestVisionRef→visionBlockFn；权限拒绝全链路降级不中断
+- 全局层：GlobalCallLayer 按 session.media 渲染 VideoCallScreen（dynamic）；PiP 视频图标（wx 绿/QQ 蓝，QQ 底栏摄像头图标点亮）；IncomingCallLayer 大窗/胶囊「邀请你视频通话...」+绿色接听钮摄像机图标（video=true）；incoming-call.ts snapshot.media；global-call.ts session.media+variant 加 'phone'
+- 卡片：CallCardBubble/callCardText/callCardAiText 加 media（视频摄像机图标+「视频通话时长 MM:SS」+AI 摘要「[视频通话：…]」）；wx/qq 宿主 call.media 持久化+preview（[视频通话]）+回拨按媒体
+- 宿主（22-b wechat-agent / 22-c qq-agent 并行完成，见上两条记录）：openVoiceCall media、加号面板视频入口接通、[视频通话] 标记检测/剥除/triggerAiVideoCall·maybeTriggerAiCall 视频块（独立冷却键 wx-videocall-last/qq-videocall-last，5 分钟）、AI 规则【视频通话能力】、WxTurnCtx.wantVideoCallSeen/wantVideoCallSeenRef
+- 电话 App（phone.tsx/db.ts）：CallLogRecord.media；PhoneApp.startVideoCall（三重守卫同 startCall+startGlobalCall variant='phone' media='video'+memoryBlock memRecallBlock('phone')；onEnd 落 media:'video' 记录）；联系人详情「视频通话」按钮接通（detail-video）；通话记录行视频图标+「视频通话 · 时长」文案
+- lint 修复：camera-capture setState-in-effect（ready 改派生值）、video-call-screen react-hooks/refs（LocalFullView/LocalPipView 拆基础量传参）、chat-call preserve-manual-memoization（followupAndSummarize deps 补 media）；bun run lint 0 error、bunx tsc --noEmit 0 报错
+- E2E（agent-browser，种子联系人注入 IndexedDB + 微信号登录）：微信①加号面板「视频通话」→拨号（主画面=我方摄像头占位）→AI 接听→接通（顶部名字+时长 00:30、PIP「摄像头不可用」降级占位、角色 Ken Burns 主画面）→AI 问候字幕按人设（插画师/猫咖）→「互换画面」生效→「摄像头开关」生效（标签切换）→挂断→绿色卡片「视频通话时长 02:24+摄像机图标」落盘→AI 挂断续聊文字（人设接话）✓；②视频卡片点击回拨→再发起视频→接通后挂断→卡片 00:18 ✓；③语音通话回归：wx 语音页 UI 原样（方头像/等待对方接受邀请/三按钮）✓；QQ：登录→加号面板「视频通话」→接通（PIP 左上 QQ 风格、字幕问候、camera/flip/swap 小按钮行+时长+mic/挂断/speaker 大按钮行）→挂断→卡片「视频通话时长 00:55」✓；console 无持久错误（仅子代理编辑期 HMR 瞬时 parse 报错，文件已复原有效）；dev.log 见 /api/phone/turn、/api/phone/followup、/api/memory/extract 全 200（记忆沉淀链路通）
+- 已知边界（刻意不做）：①微信联系人详情/QQ 好友资料页「音视频通话」入口仍 toast 暂未开放（需跨组件来电意图总线重构，留待后续）；②群聊不支持视频通话（与语音通话同口径，群聊无来电能力）；③电话 App 主动来电（proactive tick）仍仅语音（iOS 来电界面无视频态）；④识图注入依赖用户自配识图模型，未配置时 AI 看不见（规则明确「不装作看得见」），摄像头权限拒绝时通话/文字/语音完全不受影响
+
+Stage Summary:
+- 视频通话全功能落地：微信/QQ 双端双向视频通话（用户拨打+AI [视频通话] 主动来电+卡片回拨）、电话 App 用户发起视频（iOS 黑白灰皮肤）、复用语音通话同一引擎（状态机/接听决策/VAD 免提/字幕/文字条/挂断续聊/记忆提取+总结全同源，media 分叉措辞与场景）、AI 看见用户（摄像头帧→用户配置识图模型→【用户画面】注入每轮 turn）、AI 拒接/用户拒接后的解释文字走既有 followup 管线、通话卡片视频图标与「视频通话时长」文案、通话记录（电话 App）视频标识、摄像头/麦克风权限拒绝全降级不破坏功能
+- 产出：src/lib/ios/{chat-call,camera-capture,global-call,incoming-call,call-followup,db,memory}.ts(.tsx)、src/app/api/phone/{turn,followup}/route.ts、src/components/apps/{video-call-screen(新),voice-call-screen,wechat,qq,phone}.tsx、src/components/ios/{GlobalCallLayer,IncomingCallLayer}.tsx
+- 回归：语音通话引擎默认 media='voice' 全链路零行为变化（E2E 已验）；tsc 0 错、eslint 0 错
