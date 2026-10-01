@@ -2706,7 +2706,7 @@ function FaceLockSection() {
         </GrayCard>
       ) : (
         <>
-          <div className="no-scrollbar -mx-1 flex gap-2.5 overflow-x-auto px-1 pb-1" role="listbox" aria-label="选择角色">
+          <div className="no-scrollbar -mx-1 flex gap-3.5 overflow-x-auto px-1 py-0.5" role="listbox" aria-label="选择角色">
             {contacts.map((c) => {
               const active = c.id === selId;
               const hasRef = hasRefOf(c.id);
@@ -2719,11 +2719,7 @@ function FaceLockSection() {
                   aria-selected={active}
                   data-testid={`imggen-face-chip-${c.id}`}
                   onClick={() => setSelId(c.id)}
-                  className={`flex w-[64px] shrink-0 flex-col items-center gap-1.5 rounded-[16px] bg-card py-2.5 transition-all active:scale-95 ${
-                    active
-                      ? 'shadow-md ring-2 ring-[#8E8E93]/50 dark:ring-white/[0.35]'
-                      : 'shadow-sm ring-1 ring-black/[0.05] hover:shadow-md dark:ring-white/[0.08]'
-                  }`}
+                  className="flex w-[60px] shrink-0 flex-col items-center gap-1.5 rounded-[14px] py-1 transition-all active:scale-95"
                 >
                   <span className="relative">
                     {c.avatar ? (
@@ -2731,21 +2727,23 @@ function FaceLockSection() {
                         src={c.avatar}
                         alt={label}
                         draggable={false}
-                        className={`h-11 w-11 rounded-full object-cover ring-1 transition-opacity ${
-                          active
-                            ? 'opacity-100 ring-black/[0.08] dark:ring-white/15'
-                            : 'opacity-75 ring-black/[0.06] dark:ring-white/10'
+                        className={`h-12 w-12 rounded-full object-cover transition-all ${
+                          active ? 'ring-2 ring-foreground/60 dark:ring-white/60' : 'opacity-75'
                         }`}
                       />
                     ) : (
-                      <span className="grid h-11 w-11 place-items-center rounded-full bg-muted text-[15px] font-medium text-muted-foreground">
+                      <span
+                        className={`grid h-12 w-12 place-items-center rounded-full bg-muted text-[15px] font-medium text-muted-foreground transition-all ${
+                          active ? 'ring-2 ring-foreground/60 dark:ring-white/60' : 'opacity-75'
+                        }`}
+                      >
                         {label.slice(0, 1)}
                       </span>
                     )}
                     {hasRef && (
                       <span
                         aria-label="已设置参考图"
-                        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card bg-[#34C759]"
+                        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#F2F2F7] bg-[#34C759] dark:border-background"
                       />
                     )}
                   </span>

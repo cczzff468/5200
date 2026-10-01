@@ -12756,3 +12756,22 @@ Work Log:
 Stage Summary:
 - 形象锁定区完成「简约化」再美化：紫系装饰全部收敛为中性灰白系——干净细描边相框、裸虚线空态、纯文本标签与说明、中性胶囊选中环与绿点徽标；视觉信息密度显著降低，仅保留功能性彩色（三态徽标/绿点/TONE_PURPLE 区块小图标）；数据层与三端聊天共用逻辑零改动
 - 产出文件：src/components/apps/settings.tsx（唯一改动文件）
+
+---
+Task ID: 11
+Agent: Z.ai Code (main)
+Task: 图像生成界面「形象锁定」角色选择器再美化——简约（裸头像 iOS 原生风）
+
+Work Log:
+- 方向：Task 10 已整区简约化；本轮用户进一步指定「选择那里」（角色胶囊选择器）继续做减法——原胶囊是 64px 白卡小盒（bg-card+ring+shadow 包裹头像+名字），观感偏「卡片堆叠」，本轮收敛为裸头像选择器
+- settings.tsx FaceLockSection 选择器逐项简化（仅样式层，数据/交互零改动）：
+  · 移除胶囊白卡盒：按钮改透明背景（w-[64px]→w-[60px]、去 bg-card/shadow/ring/py-2.5、保留 rounded-[14px] py-1 承接点击热区与 active:scale-95 缩放反馈）
+  · 选中态改头像贴合细环：h-11→h-12 裸头像 + ring-2 ring-foreground/60 dark:ring-white/60（无 offset、无投影）；img 与首字 fallback 两个分支同步处理
+  · 未选中态仅 opacity-75（去掉 hover:shadow-md 提升效果），名字 text-foreground/60 与选中 font-medium 加深对比保留
+  · 行容器 gap-2.5→gap-3.5、pb-1→py-0.5（裸头像行距更松弛）
+  · 绿点徽标描边随底色修正：border-card（原白卡底）→ border-[#F2F2F7] dark:border-background（精确匹配灰页/暗色屏底）
+  · 保留不动：role=listbox/option 与 aria-selected 无障碍语义、data-testid=imggen-face-chip-*、绿点=已设参考图语义、横向滚动 no-scrollbar
+- 验证：bun run lint ✓；bunx tsc --noEmit ✓；agent-browser E2E（1280×940 合成 pointer 滑动解锁→设置→图像生成→滚动至形象锁定区）：计算样式确认 chipW=60/chipBg=rgba(0,0,0,0)/无 box-shadow/选中环 oklab 深色 60% 生效/绿点新描边生效，截图确认裸头像+贴合环+名字的极简构图，整区其余（三态徽标/细描边相框/灰按钮/外貌描述 31/300）不受影响；chip onClick 链路正常；console/page errors 干净；dev.log 无异常
+
+Stage Summary:
+- 形象锁定区角色选择器完成第二轮简约化：白卡胶囊 → 裸头像 iOS 原生选择器（贴合细环选中 + 透明度区分未选中 + 名字深浅对比），视觉元素从「盒+环+影+字」4 层减至「环+字」2 层；绿点徽标与无障碍语义完整保留；产出文件 src/components/apps/settings.tsx（唯一改动文件，+10/-12 行）
