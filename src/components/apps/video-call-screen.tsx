@@ -11,7 +11,8 @@
  *   以动态头像模拟，纯黑背景清晰不模糊；无头像用 DefaultAvatar 兜底）；
  * - 小窗 = 用户摄像头画面（getUserMedia video-only，音频轨由通话引擎自理）：默认右上角（QQ 左上），
  *   点击主画面/小窗互换大小窗；前后置翻转（facingMode user/environment，切翻转重建流）；
- *   摄像头开关随时可切；权限拒绝/无设备 → 降级为「摄像头已关」占位，通话完全不受影响；
+ *   摄像头开关随时可切；关闭/权限拒绝/无设备 → 降级为「用户头像」占位（Task 27，不再显示
+ *   「摄像头已关」文字，与微信真实行为一致），通话完全不受影响；
  * - AI 看见用户：接通且摄像头开启时每 10s 抓一帧（canvas 缩帧 → JPEG dataURL）→ 用户自己配置的
  *   识图模型（/api/vision 同链路，内网直连/内置兜底同 describeImages）→ 描述文本缓存；引擎每轮
  *   经 visionBlockFn 取最新描述注入【用户画面】system 块——AI 知道画面内容并按人设回应；
@@ -80,6 +81,9 @@ export interface VideoCallScreenProps {
   onFollowup?: (texts: string[]) => void;
   /** 左上角小窗图标点击：收起为全局悬浮小窗（全局层传入；无则仅展示不可点） */
   onMinimize?: () => void;
+  /** 用户（机主）自己的头像：关闭摄像头/权限拒绝时小窗与全屏自看页显示它（Task 27，
+   *  替代原「摄像头已关」占位；微信/QQ 传各自 App 机主头像，电话传系统设置头像） */
+  myAvatar?: string | null;
   /** QQ 来电页「消息回复」：挂断来电并回到聊天 */
   onMessageReply?: () => void;
 }
@@ -251,25 +255,29 @@ function RemoteView({
   );
 }
 
-/** 我方画面（用户摄像头全屏，拨号中/互换后主画面用；无流时黑底+提示；基础量拆开传防 ref 容器对象渲染期访问）。
+/** 我方画面（用户摄像头全屏，拨号中/互换后主画面用；基础量拆开传防 ref 容器对象渲染期访问）。
  *  Task 23：前置摄像头镜像预览（照镜子习惯，「画面是反的」修复；后置不镜像）。
  *  Task 24：object-contain 完整显示（不再 object-cover 硬裁剪显得「太放大」）。
  *  Task 25：删除模糊垫底层（用户反馈「刚接通/切换画面以后是模糊的」），改纯黑背景，画面清晰完整
  *  Task 26：object-contain → object-cover 画面铺满全屏（用户反馈「让画面全屏」，上下黑边去掉；
- *  对照微信真实行为：自看画面永远充满全屏，两侧/上下按比例裁剪不变形） */
+ *  对照微信真实行为：自看画面永远充满全屏，两侧/上下按比例裁剪不变形）
+ *  Task 27：删除「你」自看水印（用户要求）；无流（关摄像头/权限拒绝/拉流中）时不再显示
+ *  「摄像头已关」占位，改显示用户自己的头像（对照微信真实行为），拨号等待文案由底部控制区承载 */
 function LocalFullView({
   videoRef,
   ready,
-  denied,
-  hint,
   mirrored,
+  myAvatar,
+  shape = 'circle',
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   ready: boolean;
-  denied: boolean;
-  hint: string;
   /** 前置摄像头镜像预览 */
   mirrored: boolean;
+  /** 用户头像（无流时显示） */
+  myAvatar?: string | null;
+  /** 头像形状：wx=方形圆角 / qq·phone=圆形 */
+  shape?: 'circle' | 'square';
 }) {
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
@@ -284,35 +292,42 @@ function LocalFullView({
           aria-label="我的摄像头画面"
         />
       ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#111114]">
-          <VideoOff className="h-9 w-9 text-white/30" strokeWidth={1.6} aria-hidden="true" />
-          <p className="text-[13px] text-white/45">{denied ? '摄像头不可用，已为你隐藏画面' : hint}</p>
+        <div className="absolute inset-0 flex items-center justify-center bg-[#111114]">
+          <div
+            className="overflow-hidden shadow-2xl ring-1 ring-white/10"
+            style={{ width: 140, height: 140, borderRadius: shape === 'square' ? 17 : 70 }}
+          >
+            {myAvatar ? (
+              <img src={myAvatar} alt="我的头像" className="h-full w-full object-cover" />
+            ) : (
+              <DefaultAvatar size={140} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
+            )}
+          </div>
         </div>
       )}
-      {/* 自看水印（这是我的摄像头画面，与对方画面区分；铺满画面下不遮控制区） */}
-      <p className="absolute bottom-[240px] left-1/2 -translate-x-1/2 text-[12px] text-white/40">你</p>
     </div>
   );
 }
 
-/** 我方小窗（用户摄像头 PIP；关/拒绝时占位；基础量拆开传防 ref 容器对象渲染期访问）。
+/** 我方小窗（用户摄像头 PIP；关/拒绝时显示用户头像占位——Task 27 不再显示「摄像头已关」文字；
+ *  基础量拆开传防 ref 容器对象渲染期访问）。
  *  Task 23：前置摄像头镜像预览（后置不镜像）+ 高度随视频实际宽高比自适应——
  *  固定高在宽高比不匹配时 object-cover 会重度裁剪，画面显得「太放大」；
  *  点击小窗与对方画面互换（Task 23：互换画面按钮已删，点右上角小窗互换） */
 function LocalPipView({
   videoRef,
   live,
-  denied,
   className,
   testId,
   onClick,
   mirrored,
   height,
   onMeta,
+  myAvatar,
+  shape = 'circle',
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   live: boolean;
-  denied: boolean;
   className: string;
   testId: string;
   onClick?: () => void;
@@ -322,11 +337,15 @@ function LocalPipView({
   height?: number;
   /** 视频实际分辨率上报（供高度自适应计算） */
   onMeta?: (w: number, h: number) => void;
+  /** 用户头像（关闭/拒绝时显示） */
+  myAvatar?: string | null;
+  /** 头像形状：wx=方形圆角 / qq·phone=圆形 */
+  shape?: 'circle' | 'square';
 }) {
   return (
     <button
       type="button"
-      aria-label={live ? '我的画面，点击与对方画面互换' : '我的画面（摄像头已关）'}
+      aria-label={live ? '我的画面，点击与对方画面互换' : '我的摄像头已关闭，点击与对方画面互换'}
       data-testid={testId}
       onClick={onClick}
       style={height ? { height } : undefined}
@@ -346,9 +365,17 @@ function LocalPipView({
           }}
         />
       ) : (
-        <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[#1b1b1f]">
-          <VideoOff className="h-4 w-4 text-white/35" strokeWidth={1.8} aria-hidden="true" />
-          <span className="text-[10px] leading-none text-white/40">{denied ? '摄像头不可用' : '摄像头已关'}</span>
+        <span className="flex h-full w-full items-center justify-center bg-[#1b1b1f]">
+          <span
+            className="overflow-hidden"
+            style={{ width: 64, height: 64, borderRadius: shape === 'square' ? 8 : 32 }}
+          >
+            {myAvatar ? (
+              <img src={myAvatar} alt="我的头像" className="h-full w-full object-cover" />
+            ) : (
+              <DefaultAvatar size={64} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
+            )}
+          </span>
         </span>
       )}
     </button>
@@ -524,9 +551,9 @@ function WxVideoCall(props: VideoCallScreenProps) {
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
-            denied={camera.denied}
-            hint="正在等待对方接受视频邀请…"
             mirrored={rt.facing === 'user'}
+            myAvatar={props.myAvatar}
+            shape="square"
           />
           {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接） */}
           <div
@@ -542,9 +569,9 @@ function WxVideoCall(props: VideoCallScreenProps) {
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
-            denied={camera.denied}
-            hint="摄像头已关"
             mirrored={rt.facing === 'user'}
+            myAvatar={props.myAvatar}
+            shape="square"
           />
           {phase === 'active' && (
             <button
@@ -566,13 +593,14 @@ function WxVideoCall(props: VideoCallScreenProps) {
             <LocalPipView
               videoRef={camera.videoRef}
               live={rt.camOn && camera.ready}
-              denied={camera.denied}
               className="right-4 top-[108px] h-[140px] w-[104px] rounded-[14px]"
               testId="wx-video-pip"
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
               height={pipAdaptiveHeight(rt.camSize, 104, 140)}
               onMeta={rt.onVideoMeta}
+              myAvatar={props.myAvatar}
+              shape="square"
             />
           )}
         </>
@@ -780,9 +808,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
-            denied={camera.denied}
-            hint="正在呼叫…"
             mirrored={rt.facing === 'user'}
+            myAvatar={props.myAvatar}
           />
           {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接） */}
           <div
@@ -798,9 +825,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
-            denied={camera.denied}
-            hint="摄像头已关"
             mirrored={rt.facing === 'user'}
+            myAvatar={props.myAvatar}
           />
           {phase === 'active' && (
             <button
@@ -822,13 +848,13 @@ function QqVideoCall(props: VideoCallScreenProps) {
             <LocalPipView
               videoRef={camera.videoRef}
               live={rt.camOn && camera.ready}
-              denied={camera.denied}
               className="left-4 top-[100px] h-[132px] w-[100px] rounded-[14px]"
               testId="qq-video-pip"
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
               height={pipAdaptiveHeight(rt.camSize, 100, 132)}
               onMeta={rt.onVideoMeta}
+              myAvatar={props.myAvatar}
             />
           )}
         </>
@@ -1023,18 +1049,16 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
         <LocalFullView
           videoRef={camera.videoRef}
           ready={camera.ready}
-          denied={camera.denied}
-          hint="正在呼叫…"
           mirrored={rt.facing === 'user'}
+          myAvatar={props.myAvatar}
         />
       ) : rt.swapped ? (
         <>
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
-            denied={camera.denied}
-            hint="摄像头已关"
             mirrored={rt.facing === 'user'}
+            myAvatar={props.myAvatar}
           />
           {phase === 'active' && (
             <button
@@ -1055,13 +1079,13 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
             <LocalPipView
               videoRef={camera.videoRef}
               live={rt.camOn && camera.ready}
-              denied={camera.denied}
               className="right-4 top-[100px] h-[132px] w-[100px] rounded-[14px]"
               testId="phone-video-pip"
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
               height={pipAdaptiveHeight(rt.camSize, 100, 132)}
               onMeta={rt.onVideoMeta}
+              myAvatar={props.myAvatar}
             />
           )}
         </>

@@ -3437,6 +3437,8 @@ function ChatPage({
         variant: 'qq',
         name: peer.name,
         avatar: peer.avatar ?? null,
+        // Task 27：用户自己的头像——视频通话关摄像头时显示它（不再显示「摄像头已关」占位）
+        myAvatar: me.avatar ?? null,
         contact: peer,
         direction,
         // Task 22 视频通话：'video' 时 GlobalCallLayer 渲染视频通话页（带识图小窗），缺省语音通话页
@@ -3457,7 +3459,7 @@ function ChatPage({
         onFollowup: sendCallFollowup,
       }, opts?.hiddenView ? 'hidden' : 'full');
     },
-    [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup, onToast],
+    [msgs, peer, me.name, me.avatar, sessionKey, writeCallCard, sendCallFollowup, onToast],
   );
 
   /** AI 回合：插入用户消息并把整轮流式请求交给全局 store（文本/表情共用；表情以 [发送了表情：意思] 进入对话历史，AI 据此理解表情）。

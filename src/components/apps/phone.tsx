@@ -4007,6 +4007,8 @@ export default function PhoneApp() {
         media: 'video',
         name: resolved?.name ?? number,
         avatar: resolved?.avatar ?? null,
+        // Task 27：用户（机主）头像——视频通话关摄像头时显示它；电话 App 用系统设置里的机主头像
+        myAvatar: useSettings.getState().profile.avatar,
         contact: resolved,
         direction: 'out',
         initialHistory: [],

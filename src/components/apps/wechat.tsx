@@ -4944,6 +4944,8 @@ function ChatPage({
         variant: 'wx',
         name: peer.name,
         avatar: peer.avatar ?? null,
+        // Task 27：用户自己的头像——视频通话关摄像头时显示它（不再显示「摄像头已关」占位）
+        myAvatar: me.avatar ?? null,
         contact: peer,
         direction,
         // video：全局层渲染视频通话页（主画面角色动态画面 + 用户摄像头小窗 + 识图循环）
@@ -4965,7 +4967,7 @@ function ChatPage({
         onFollowup: sendCallFollowup,
       }, opts?.hiddenView ? 'hidden' : 'full');
     },
-    [msgs, peer, me.name, sessionKey, writeCallCard, sendCallFollowup, onToast],
+    [msgs, peer, me.name, me.avatar, sessionKey, writeCallCard, sendCallFollowup, onToast],
   );
 
   // ---------------- AI 回复投递管线（runAiTurn 与「退出网页后继续回复」的拉取投递共用同一套，见 deliverBgItems） ----------------

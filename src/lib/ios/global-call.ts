@@ -35,6 +35,9 @@ export interface GlobalCallSession {
   media?: 'voice' | 'video';
   name: string;
   avatar: string | null;
+  /** 用户（机主）自己的头像（Task 27 视频通话）：关闭摄像头/权限拒绝时视频通话页显示它
+   *  （替代「摄像头已关」占位）；微信/QQ 传各自 App 机主头像，电话传系统设置头像；缺省 undefined */
+  myAvatar?: string | null;
   contact: ContactRecord | null;
   direction: 'out' | 'in';
   /** 进入通话时携带的最近聊天上下文（宿主按会话消息归并） */

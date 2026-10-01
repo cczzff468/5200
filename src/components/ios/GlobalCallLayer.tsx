@@ -99,6 +99,7 @@ export default function GlobalCallLayer() {
             variant={variant}
             name={session.name}
             avatar={session.avatar}
+            myAvatar={session.myAvatar}
             contact={session.contact}
             direction={session.direction}
             initialHistory={session.initialHistory}
