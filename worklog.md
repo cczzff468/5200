@@ -12775,3 +12775,26 @@ Work Log:
 
 Stage Summary:
 - 形象锁定区角色选择器完成第二轮简约化：白卡胶囊 → 裸头像 iOS 原生选择器（贴合细环选中 + 透明度区分未选中 + 名字深浅对比），视觉元素从「盒+环+影+字」4 层减至「环+字」2 层；绿点徽标与无障碍语义完整保留；产出文件 src/components/apps/settings.tsx（唯一改动文件，+10/-12 行）
+
+---
+Task ID: 12
+Agent: Z.ai Code (main)
+Task: 三端聊天加号「文字图片」功能 + 信息 APP 新增加号面板（相机/图片/文字图片）
+
+Work Log:
+- 探察（Explore 子代理）：信息端输入栏无加号；微信/QQ 已有加号面板与「生成照片」（手填描述→generateCharacterPhoto→以角色身份发图）；三端共用 imggen.ts 管线（imggen-ref:*/imggen-appearance:* 锁脸键、/api/imggen 转发、imgGenConfigReady 校验）；识图管线 = beginChatStream opts.vision + onVision 回写 img.desc；server-llm.ts 提供 completeWithFallback（用户上游优先→z-ai SDK 兜底）
+- 新增 /api/photodesc 路由：{ config?, charName, channel, persona?, hint?, history? } → LLM 以「角色摄影导演」身份输出一句 ≤40 字画面描述（上游不可用自动落 SDK 兜底；首行清洗去引号/前缀）；curl 冒烟测试 ✓（小鱼人设+聊天记录 →「刚敷完面膜的脸颊，水珠还挂在睫毛上闪着光」）
+- imggen.ts 新增共享客户端助手：buildPhotoDescHistory（三端消息公共子集 →「我：…/TA：…」短行；图片→[图片]（图片内容：desc）占位、QQ dataURL 绝不外泄、语音→转写、逐行截断 80 字取最近 14 条）+ autoPhotoDesc（POST /api/photodesc）
+- 信息端（chat.tsx）：
+  · 新增 SmsPlusPanel（相机/图片/文字图片三宫格瓷贴，iMessage 配色）+ 输入框左侧加号按钮（展开旋转 45°）+ 相机(capture)/相册(multiple)隐藏 input
+  · 补齐用户发图链路：readSmsImageFile（720px 压缩、GIF 直通）→ pendingImgs 预览条（62px 缩略图+移除+「点发送键发出」提示）→ send() 文字随图（先图后文）/ sendPendingImages() 纯图（拉黑拦截、流式中 markDeliverBoundary+排队补跑、80ms 后 startAiTurnRef(null)）
+  · startAiTurn 接入识图：末尾连续 user 图片（≤3）→ beginChatStream vision + onVision 按图N拆分回写 img.desc（对齐微信同款管线）
+  · 新增 SmsPhotoGenSheet（#007AFF 主题、描述可空、busyText 两阶段文案）+ submitPhotoGen（留空→getContact 取 persona→autoPhotoDesc→generateCharacterPhoto(contactId='' 时跳过锁脸/相册/记忆)→scheduleAiDelivery 直投）
+- 微信（wechat.tsx）/QQ（qq.tsx）：加号面板「生成照片」更名「文字图片」；PhotoGenCompose/QqPhotoGenSheet 升级（描述可空、busy/busyText、提交不需非空）；submitPhotoGen 加自动构思阶段（persona: peer.persona ?? ''）；渲染 props 补 busyText；QQ useCallback deps 更新
+- 排障：tsc 报 ContactRecord.persona 为 string|null → 两端 ?? '' 修正；QQ 状态区残留重复注释行清理；agent-browser 微信/QQ 会话行点击需完整 pointer 序列（pointerdown/up/click）
+- 验证：bun run lint ✓；bunx tsc --noEmit ✓；agent-browser E2E（1280×940 合成事件）：信息端——加号面板三宫格截图、文字图片弹层截图、留空提交→弹层关闭→图片消息上屏（真实生图接口返回）、DataTransfer 注入相册图→预览条→发送→用户图片气泡（右侧已送达）+AI 回合触发（灵动岛显示回复中）；微信端——面板「文字图片」项、弹层、留空生成→图片消息上屏；QQ 端——面板「文字图片」项、弹层、留空生成→图片消息上屏；console/page errors 干净；dev.log 无异常
+
+Stage Summary:
+- 三端加号面板均有「文字图片」：描述留空 = AI 根据人设+最近聊天记录自动构思画面（/api/photodesc，用户上游优先、服务端内置模型兜底），再走既有锁脸生图管线（参考图/外貌描述/相册存档/决策日志/记忆全兼容）以角色身份发出；也可手填描述精确控制
+- 信息 APP 补齐加号面板（相机/图片/文字图片）与用户发图全链路（预览条→发送→识图接入 AI 回合），对齐微信既有交互
+- 产出：src/app/api/photodesc/route.ts（新增）、src/lib/imggen.ts、src/components/apps/{chat,wechat,qq}.tsx（+638/-49）
