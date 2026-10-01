@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CircleCheck,
   EyeOff,
+  History,
   Image as ImageIcon,
   Loader2,
   Mail,
@@ -80,7 +81,7 @@ import {
   type BlockEntry,
 } from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
-import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
@@ -99,7 +100,7 @@ import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealN
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：回复文本 [图片:描述]/[照片:描述] 标签 → 自动生图投递（未配置/失败降级文字图片卡片）；
 // 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图
-import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
@@ -133,8 +134,9 @@ interface ChatMsg {
   voice?: VoiceMsgData;
   /** 图片消息数据（kind==='image' 时有效；自动生图投递，src 为压缩 dataURL；
    *  desc 为照片描述——AI 历史可读「[图片]（图片内容：…）」、相册存档与决策日志共用；
-   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带） */
-  img?: { src: string; desc: string; fromCard?: boolean };
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带）；
+   *  prevSrc = 重新生成前的上一版图（支持恢复：长按菜单「恢复上一张」，src↔prevSrc 互换） */
+  img?: { src: string; desc: string; fromCard?: boolean; prevSrc?: string };
   /** 文字图片卡片数据（kind==='textcard' 时有效）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
   /** 请求失败的消息（不参与上下文、红字显示） */
@@ -1292,6 +1294,9 @@ function ChatView({
   // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flushPhotoJobs 统一异步生成 ----
   /** 本轮待生成的照片任务（buildReplyMsgs 同步解析时入队；flushPhotoJobs 消费并清空） */
   const photoJobsRef = useRef<PhotoTag[]>([]);
+  /** F1 流式分段 carry-over：流中分段把 [图片:描述] 标签切成两半时，尾部半截暂存于此，与下一段拼接后
+   *  再走 buildReplyMsgs 解析（startAiTurn 开回合清空；finalize 收尾合并后丢弃仍未闭合的残留） */
+  const photoCarryRef = useRef('');
 
   /**
    * 消费照片任务：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落图片消息 + 存相册（origin 'ai'）+
@@ -1306,7 +1311,14 @@ function ChatView({
     (deliver: (built: ChatMsg[]) => void) => {
       const jobs = photoJobsRef.current;
       photoJobsRef.current = [];
+      // F3 照片任务持久化：快照消费即清（入队时已在 buildReplyMsgs 同步落快照，进程被杀后挂载补发）
+      kvDel(`sms-photo-jobs:${storageKey}`);
       if (jobs.length === 0) return;
+      // D 多标签溢出提示：单次 flush 最多生成 2 张（防刷屏），slice 丢弃的多余任务不再静默——补一条系统行告知
+      const overflowNote: ChatMsg | null =
+        jobs.length > 2
+          ? { id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: `还有 ${jobs.length - 2} 张图片没有生成出来` } }
+          : null;
       const cid = wbContactId;
       const cfg = useSettings.getState().imgGenConfig;
       if (!cfg.enabled || !imgGenConfigReady(cfg)) {
@@ -1314,6 +1326,7 @@ function ChatView({
         for (const job of jobs.slice(0, 2)) {
           deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'textcard', card: { text: job.desc } }]);
         }
+        if (overflowNote) deliver([overflowNote]); // 降级卡片之后追加溢出提示
         return;
       }
       if (!cid) {
@@ -1328,6 +1341,7 @@ function ChatView({
             }
           })();
         }
+        if (overflowNote) deliver([overflowNote]); // 溢出提示同理（直生成/降级之后追加）
         return;
       }
       const charName = peerLabel;
@@ -1358,8 +1372,9 @@ function ChatView({
           }
         })();
       }
+      if (overflowNote) deliver([overflowNote]); // 「正在拍照…」行之外单独投一条溢出提示
     },
-    [peerLabel, wbContactId],
+    [peerLabel, wbContactId, storageKey],
   );
 
   /** 40-a：把「用户发起的解除拉黑申请卡」置为终态（存储 + 本地 state 同步；无 pending 卡时空操作）。
@@ -1497,7 +1512,11 @@ function ChatView({
         const segs = splitReplySegments(part.text, !asSingle)
           .map((seg) => {
             const { text: photoFreeText, tags: photoTags } = extractPhotoTags(seg);
-            if (photoTags.length > 0) photoJobsRef.current.push(...photoTags);
+            if (photoTags.length > 0) {
+              photoJobsRef.current.push(...photoTags);
+              // F3 照片任务快照持久化：入队即落盘，进程被杀后挂载时补发（flushPhotoJobs 消费时清快照）
+              kvSet(`sms-photo-jobs:${storageKey}`, JSON.stringify(photoJobsRef.current));
+            }
             return cleanBubbleText(photoFreeText);
           })
           .filter((seg) => seg.length > 0);
@@ -1514,7 +1533,7 @@ function ChatView({
       }
       return { msgs: out, nextIdx: msgIdx };
     },
-    [peerLabel, settleUserBlockReq, wbContactId, setAvatarOverride, onContactChanged],
+    [peerLabel, settleUserBlockReq, wbContactId, setAvatarOverride, onContactChanged, storageKey],
   );
 
   /** 语音链路（定义在 startAiTurn 之后）经 ref 调用最新一轮 startAiTurn：msgs 变化不重建 useCallback，
@@ -1527,6 +1546,8 @@ function ChatView({
    *  流式接收、超时、错误处理、落盘全部在 chat-stream-store 内完成：退出聊天页不中断，重进从 store 读实时内容。
    *  baseMsgs：显式传入最新消息数组（语音转写完成后调用时避免闭包旧状态漏掉刚落库的语音消息） */
   const startAiTurn = (userMsg: ChatMsg | null, sysEvent?: string, baseMsgs?: ChatMsg[]) => {
+    // F1：回合开始清空照片标签 carry（上一回合流中断/换号中止的残留不串入本回合）
+    photoCarryRef.current = '';
     // fix3-D #8：用户消息先入列再判拉黑守卫（对齐微信 wechat.tsx send「先 setMsgs 再 runAiTurn」同口径）——
     // 拉黑期（byUser）用户消息照常进记录上屏、AI 不回（回合静默取消）。此前守卫在前会把文字消息一并吞掉
     // （send 与 sttPreview 两条文字路都把落库委托给本函数；语音路 commitVoiceMsg 已先入列不受累，
@@ -1732,7 +1753,14 @@ function ChatView({
 
     /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻排队上屏（边接收边逐条显示） */
     const deliverSegment = (seg: string) => {
-      const { msgs: built, nextIdx } = buildReplyMsgs(seg, false, Date.now(), aiId, msgIdx);
+      // F1 流式分段 carry-over：上一段尾部未闭合的照片标签起始先拼回本段再解析（跨段标签在此闭合还原）；
+      // 本段尾部仍未闭合的部分继续 carry 给下一段（分段器只防半角 [ 被切碎，全角【图片：…】仍可能被
+      // 句末标点/流结束切开）。send 为空 = 本段整体是未闭合标签起始，跳过本轮投递等下一段拼接
+      const merged = photoCarryRef.current + seg;
+      const { send, carry } = splitUnfinishedPhotoTag(merged);
+      photoCarryRef.current = carry;
+      if (!send) return;
+      const { msgs: built, nextIdx } = buildReplyMsgs(send, false, Date.now(), aiId, msgIdx);
       msgIdx = nextIdx;
       if (built.length === 0) return;
       deliveredAny = true;
@@ -1765,6 +1793,12 @@ function ChatView({
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻排队投递（多条模式）
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
+        // F1 流收尾：残留 carry 与收尾文本（多条 = 分段器剩余 tail；单条 = 完整 content）合并后再解析，
+        // 跨段/收尾边界切开的照片标签在此闭合还原；流已结束，合并后尾部仍未闭合的标签起始直接丢弃
+        //（不投递残留文本，防半截标签上屏），carry 清空不影响下一回合（流错误中断同样在此清空）
+        const endMerged = photoCarryRef.current + (replyCount > 1 ? tail : content);
+        photoCarryRef.current = '';
+        const endText = splitUnfinishedPhotoTag(endMerged).send;
         if (error) {
           // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
           // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
@@ -1779,7 +1813,7 @@ function ChatView({
         }
         // 多条模式：流中分段已通过 onSegment 逐条排队投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复在此按旧管线落盘
-        const { msgs: built } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now(), aiId, msgIdx);
+        const { msgs: built } = buildReplyMsgs(endText, replyCount <= 1, Date.now(), aiId, msgIdx);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         const finalBatch: ChatMsg[] =
           built.length > 0
@@ -1911,11 +1945,12 @@ function ChatView({
       const bgAsSingle = sessionKey === 'sms:assistant' || getReplyCount(sessionKey) <= 1;
       for (const item of items) {
         if (item.single) {
-          bgEnqueueBatch(buildReplyMsgs(item.texts.join(''), bgAsSingle, Date.now(), uid(), 0).msgs);
+          // F1 兜底：接力文本非流式分段，但服务端截断可能留下尾部未闭合的照片标签起始——剥除防上屏
+          bgEnqueueBatch(buildReplyMsgs(stripUnfinishedPhotoTag(item.texts.join('')), bgAsSingle, Date.now(), uid(), 0).msgs);
           flushPhotoJobs(bgEnqueueBatch); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
         } else {
           for (const t of item.texts) {
-            bgEnqueueBatch(buildReplyMsgs(t, false, Date.now(), uid(), 0).msgs);
+            bgEnqueueBatch(buildReplyMsgs(stripUnfinishedPhotoTag(t), false, Date.now(), uid(), 0).msgs);
             flushPhotoJobs(bgEnqueueBatch); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
           }
         }
@@ -1960,6 +1995,35 @@ function ChatView({
       offVisible();
     };
   }, [sessionKey]);
+
+  // F3 照片任务持久化恢复：上次回合入队但未消费的照片任务快照（进程被杀等）挂载时补发——
+  // 读取快照 JSON 校验（数组且每项有 string desc）→ 清 kv（一次性消费，恢复期间新回合入队不重入）→
+  // 塞回 photoJobsRef 交 flushPhotoJobs 走正常投递（「正在拍照…」/ 降级卡片 / 相册决策记忆挂点全部复用）；
+  // 投递用 bgEnqueueBatch（落库 + 通知与消息持久化 effect 完全同口径）。kv 已清，effect 重跑幂等无副作用
+  useEffect(() => {
+    const rawText = kvGet<string>(`sms-photo-jobs:${storageKey}`);
+    if (!rawText) return;
+    try {
+      const parsed: unknown = JSON.parse(rawText);
+      if (!Array.isArray(parsed)) return;
+      const jobs: PhotoTag[] = [];
+      for (const item of parsed) {
+        const j = item as PhotoTag | null;
+        if (j && typeof j === 'object' && typeof j.desc === 'string' && j.desc.trim()) {
+          jobs.push({ desc: j.desc, useRef: j.useRef !== false });
+        }
+      }
+      if (jobs.length === 0) {
+        kvDel(`sms-photo-jobs:${storageKey}`); // 快照为空/损坏：顺手清理
+        return;
+      }
+      kvDel(`sms-photo-jobs:${storageKey}`);
+      photoJobsRef.current = jobs;
+      flushPhotoJobs(bgEnqueueBatch);
+    } catch {
+      // 快照损坏忽略：不影响聊天
+    }
+  }, [bgEnqueueBatch, flushPhotoJobs, storageKey]);
 
   // ---------------- #8 流式接收期间的发送排队（对齐微信 wxQueuedTurns：消息照常上屏，回复自动补跑） ----------------
 
@@ -2328,7 +2392,7 @@ function ChatView({
    * 失败 → 只 toast，面板留在原地可重试。
    */
   const generateCardImage = async (m: ChatMsg, descInput: string) => {
-    const desc = descInput.trim();
+    const desc = descInput.trim().slice(0, 400); // G1 描述长度上限与照片标签正则同口径（400 字）
     if (!desc || cardGenBusy) return;
     const cfg = useSettings.getState().imgGenConfig;
     if (!cfg.enabled || !imgGenConfigReady(cfg)) {
@@ -2347,6 +2411,21 @@ function ChatView({
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),
       );
+      if (aiCard && wbContactId) {
+        // B1 卡片转图补齐与 flushPhotoJobs 自动生图完全同口径的挂点（仅 AI 卡：有角色身份；我的卡无角色身份不挂）：
+        // 相册归档（origin 'ai'）+ 视觉决策日志 + 照片记忆（节流）+ 相册清单缓存刷新（下一轮视觉规则/选头像可见）
+        void addAlbum(wbContactId, r.src, { desc, origin: 'ai' });
+        void addVisionDecision({ contactId: wbContactId, app: 'sms', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
+        notePhotoMemory(wbContactId, 'sms', desc);
+        void listAlbums(wbContactId)
+          .then((list) => {
+            albumSummaryRef.current =
+              list.length > 0
+                ? list.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+                : null;
+          })
+          .catch(() => {});
+      }
       setCardActionId(null);
       showToast('图片已生成');
     } catch (e) {
@@ -2534,6 +2613,8 @@ function ChatView({
     items.push({ key: 'recall', label: '撤回', icon: B.recall });
     // AI 图片与「文字图片卡片转出的图片」：重新生成图片（自填描述，原地替换）；我的实拍图不提供
     if (isImage && (m.role === 'assistant' || m.img?.fromCard)) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
+    // G2 恢复上一张：重新生成前的上一版图还在时可恢复（src↔prevSrc 互换；目标约束与重新生成一致）
+    if (isImage && m.img?.prevSrc) items.push({ key: 'restoreimg', label: '恢复上一张', icon: History });
     return items;
   };
 
@@ -2680,6 +2761,22 @@ function ChatView({
         setRegenImgId(m.id);
         break;
       }
+      case 'restoreimg': {
+        // G2 恢复上一张：与重新生成同目标约束（AI 图片或卡片转出的图）；
+        // src↔prevSrc 互换（当前图存回 prevSrc，可再次点「恢复上一张」换回来）；原地替换自动落盘
+        const img = m.kind === 'image' ? m.img : undefined;
+        if (!img || !img.prevSrc) break;
+        if (!(m.role === 'assistant' || img.fromCard)) break;
+        const curSrc = img.src;
+        const restoredSrc = img.prevSrc;
+        setMsgs((list) =>
+          list.map((x) =>
+            x.id === m.id && x.kind === 'image' && x.img ? { ...x, img: { ...x.img, src: restoredSrc, prevSrc: curSrc } } : x,
+          ),
+        );
+        showToast('已恢复上一张');
+        break;
+      }
     }
   };
 
@@ -2687,7 +2784,7 @@ function ChatView({
    *  AI 图片按角色形象锁脸；「文字图片卡片转出的图片」不带锁脸（与首图同口径） */
   const submitImgRegen = async () => {
     const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && (x.role === 'assistant' || x.img?.fromCard)) : null;
-    const desc = regenImgDesc.trim();
+    const desc = regenImgDesc.trim().slice(0, 400); // G1 描述长度上限与照片标签正则同口径（400 字）
     if (!target || !desc || regenImgBusy) return;
     setRegenImgBusy(true);
     setRegenImgError('');
@@ -2697,7 +2794,11 @@ function ChatView({
         target.role === 'assistant'
           ? await generateCharacterPhoto({ cfg, contactId: wbContactId ?? '', desc, charName: peer.name || peer.title, useRef: true })
           : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
-      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { ...x.img, src: r.src, desc } } : x)));
+      // G2：旧图存入 prevSrc（长按「恢复上一张」可换回）；B2：AI 图片补相册（追加式，相册保留历史版本）
+      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { ...x.img, src: r.src, desc, prevSrc: x.img?.src } } : x)));
+      if (target.role === 'assistant' && wbContactId) {
+        void addAlbum(wbContactId, r.src, { desc, origin: 'ai' });
+      }
       setRegenImgId(null);
       showToast('已重新生成图片');
     } catch (e) {

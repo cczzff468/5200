@@ -171,6 +171,7 @@ import {
   listMomentNotices,
   listMomentPosts,
   markAllMomentNoticesRead,
+  regenerateMomentImage,
   subscribeMomentsChanged,
   toggleUserMomentLike,
   upgradeMomentTextCard,
@@ -183,7 +184,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
-import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
@@ -373,8 +374,9 @@ interface WxMsg {
   notice?: WxNoticeData;
   fam?: WxFamData;
   /** 图片消息（kind='image'）：src = 压缩 dataURL；desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」，旧记录无此字段照常兼容）；
-   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带） */
-  img?: { src: string; desc?: string; fromCard?: boolean };
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带）；
+   *  prevSrc = 「重新生成」替换前保留的旧图（长按菜单「恢复上一张」换回，可来回切换） */
+  img?: { src: string; desc?: string; fromCard?: boolean; prevSrc?: string };
   /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
   loc?: { name: string; address: string; lat?: number; lng?: number };
@@ -431,6 +433,10 @@ interface WxMoment {
   location?: string;
   /** 「文字图片」卡片文字（AI 配图降级产物；点击卡片可升级为真图） */
   textCard?: string;
+  /** 引擎写入：卡片已升级为真图（长按该图出现「重新生成」入口；用户手动发的图无此标记无此入口） */
+  textCardUpgraded?: boolean;
+  /** 引擎写入：升级/重新生成实际使用的画面描述（重新生成弹层预填用） */
+  textCardDesc?: string;
   /** 转发引用（QQ 空间转发用；微信引擎层支持，UI 不发） */
   repostOf?: MomentRepostRef;
   time: number;
@@ -4391,7 +4397,7 @@ function ChatPage({
    * 失败 → 只 toast，面板留在原地可重试。
    */
   const generateCardImage = async (m: WxMsg, descInput: string) => {
-    const desc = descInput.trim();
+    const desc = descInput.trim().slice(0, 400); // G1：描述截 400（与 imggen 照片标签描述上限同宽）
     if (!desc || cardGenBusy) return;
     const cfg = useSettings.getState().imgGenConfig;
     if (!cfg.enabled || !imgGenConfigReady(cfg)) {
@@ -4410,6 +4416,18 @@ function ChatPage({
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),
       );
+      if (m.role === 'peer') {
+        // B1 与 flushPhotoJobs 自动生成同口径的挂点：真图入 AI 相册 + 决策日志 + 照片记忆 + 相册缓存
+        // 刷新（下一轮 AI 可用 [选图发送] 再把这张图发出来）；我的卡转图是纯视觉转换，不进这些挂点
+        void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
+        void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
+        notePhotoMemory(peer.id, 'wx', desc);
+        void listAlbums(peer.id)
+          .then((list) => {
+            albumCacheRef.current = list;
+          })
+          .catch(() => {});
+      }
       setCardActionId(null);
       onToast('图片已生成');
     } catch (e) {
@@ -5019,6 +5037,8 @@ function ChatPage({
   // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flush 统一异步生成 ----
   /** 本轮待生成的照片任务（buildReplyMsgs 同步解析时入队；flushPhotoJobs 消费并清空） */
   const photoJobsRef = useRef<PhotoTag[]>([]);
+  /** F1 流式分段 carry-over：上一段尾部未闭合的半截照片标签（如「[图片:黄昏的咖」），拼回下一段开头再走管线；回合开始清空、收尾丢弃 */
+  const carryTextRef = useRef('');
 
   /**
    * 消费照片任务：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落照片消息 + 存相册（origin 'ai'）+
@@ -5029,6 +5049,16 @@ function ChatPage({
     const jobs = photoJobsRef.current;
     photoJobsRef.current = [];
     if (jobs.length === 0) return;
+    // F3 持久化：任务已被本轮消费，快照删除（恢复 effect 只在快照仍存在时补做，不重复生成）
+    kvDel(`wx-photo-jobs:${sessionKey}`);
+    // D：模型异常连发 >2 个标签时第 3 个起丢弃（单轮最多 2 张防刷屏）——补一行系统提示，
+    // 不让多余任务静默消失（对齐信息端口径；未配置/配置完整两个分支都走这里，只提示一次）
+    if (jobs.length > 2) {
+      enqueueBatch(
+        [{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `还有 ${jobs.length - 2} 张图片没有生成出来` } }],
+        ctx,
+      );
+    }
     const cfg = useSettings.getState().imgGenConfig;
     if (!cfg.enabled || !imgGenConfigReady(cfg)) {
       // 未配置生图：降级为「文字图片」卡片（无「正在拍照…」行，卡片即最终形态）
@@ -5063,6 +5093,20 @@ function ChatPage({
       })();
     }
   };
+
+  // F3 遗留任务恢复：会话中途退出/进程被杀时，还没 flush 的照片任务快照留在 kv；挂载（ChatPage 按
+  // peer.id 重挂载，切会话即重新挂载）时读回 → JSON 校验 → 清快照 → 用同一套后台管线补做生成
+  //（flushPhotoJobs 内部走 enqueueBatch/scheduleAiDelivery 全局队列，页面随后被关也不中断）
+  useEffect(() => {
+    const kvKey = `wx-photo-jobs:${sessionKey}`;
+    const saved: unknown = kvGet<PhotoTag[]>(kvKey);
+    kvDel(kvKey);
+    if (!Array.isArray(saved)) return;
+    const jobs = saved.filter((j): j is PhotoTag => Boolean(j) && typeof (j as PhotoTag).desc === 'string');
+    if (jobs.length === 0) return;
+    photoJobsRef.current = [...photoJobsRef.current, ...jobs];
+    flushPhotoJobs({ aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false });
+  }, [peer.id, sessionKey]);
 
   /** AI 主动发起语音通话（[语音通话] 标记出现在回复任一分段/整条，标记原文已剥除）：按 5 分钟冷却弹出来电浮层
    *  （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
@@ -5332,10 +5376,17 @@ function ChatPage({
             // 生图（锁脸）：先从文本剥出 [照片:描述] 标签（入队 photoJobsRef，flushPhotoJobs 异步生成），
             // 剥不干净的旧标签（生图关闭时）留在原文里可读性更差，统一剥除
             const { text: photoFreeText, tags: photoTags } = extractPhotoTags(p.text);
-            if (photoTags.length > 0) photoJobsRef.current.push(...photoTags);
+            if (photoTags.length > 0) {
+              photoJobsRef.current.push(...photoTags);
+              // F3 持久化：任务快照落 kv——会话中途退出/进程被杀时，挂载 effect 据此补做生成
+              kvSet(`wx-photo-jobs:${sessionKey}`, photoJobsRef.current);
+            }
+            // F1 兜底：尾部未闭合的半截照片标签剥掉不投递（后台接力整段直入本管线时防「[图片:黄昏的咖」
+            // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
+            const safePhotoText = stripUnfinishedPhotoTag(photoFreeText);
             // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
             // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-            const clean = cleanBubbleText(stickersOn ? photoFreeText : stripEmojiText(photoFreeText.replace(/\[表情包\]|\[表情\]/g, ' ')));
+            const clean = cleanBubbleText(stickersOn ? safePhotoText : stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')));
             if (!clean) continue;
             out.push({ id, role: 'peer', content: clean, time: t });
           }
@@ -5517,6 +5568,7 @@ function ChatPage({
 
     // 本轮投递上下文（投递管线与接力拉取共用，见组件层 deliverAiMsg/enqueueBatch/buildReplyMsgs）
     const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false };
+    carryTextRef.current = ''; // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）。
     // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）；
@@ -5678,7 +5730,12 @@ function ChatPage({
 
     /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻解析并排队上屏（边接收边逐条显示） */
     const deliverSegment = (seg: string) => {
-      const { msgs: built, cur, dirty } = buildReplyMsgs(seg, false, Date.now(), ctx);
+      // F1 carry-over：上一段尾部未闭合的半截照片标签拼回本段开头，再切出本段尾部仍处未闭合的部分存回
+      //（「[图片:黄昏的咖」跨段被切开后，两段各自都不再含半截标签；下一段到达后拼成完整标签正常剥出生图）
+      const merged = carryTextRef.current + seg;
+      const { send, carry } = splitUnfinishedPhotoTag(merged);
+      carryTextRef.current = carry;
+      const { msgs: built, cur, dirty } = buildReplyMsgs(send, false, Date.now(), ctx);
       if (dirty) saveMsgs(peer.id, cur);
       if (built.length === 0) return;
       deliveredAny = true;
@@ -5713,6 +5770,10 @@ function ChatPage({
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
+        // F1 收尾：先把跨段 carry 取走并清空——流已结束，残留的半截照片标签不再投递
+        //（拼回最后一段一起走管线，闭合则正常生图/降级，仍闭合不上则由 buildReplyMsgs 内兜底剥除）
+        const carry = carryTextRef.current;
+        carryTextRef.current = '';
         if (error) {
           // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
           // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
@@ -5726,9 +5787,9 @@ function ChatPage({
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
-        // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子）；
+        // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子；F1：carry 拼回开头）；
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
-        const { msgs: built, cur, dirty } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now(), ctx);
+        const { msgs: built, cur, dirty } = buildReplyMsgs(carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), ctx);
         if (dirty) saveMsgs(peer.id, cur);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
@@ -6222,6 +6283,8 @@ function ChatPage({
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     // 图片消息：保存到设备（dataURL 直接下载）
     if (isImage && m.img?.src) items.push({ key: 'saveimg', label: '保存', icon: B.save });
+    // G2 恢复上一张：重新生成前的旧图还留着（prevSrc），长按可换回（再操作一次又换回新图，来回切换）
+    if (isImage && m.img?.prevSrc) items.push({ key: 'restoreimg', label: '恢复上一张', icon: B.recall });
     if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if ((isText || isVoice) && !isFrLocked) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (isText && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
@@ -6497,6 +6560,18 @@ function ChatPage({
         else onToast('保存失败');
         break;
       }
+      case 'restoreimg': {
+        // G2 恢复上一张：交换当前图与重新生成前的旧图（原地替换自动落盘；再长按一次即换回新图）
+        setMsgs((prev) =>
+          prev.map((x) =>
+            x.id === m.id && x.kind === 'image' && x.img?.src && x.img.prevSrc
+              ? { ...x, img: { ...x.img, src: x.img.prevSrc, prevSrc: x.img.src } }
+              : x,
+          ),
+        );
+        onToast('已恢复上一张');
+        break;
+      }
       case 'regenimg': {
         // 重新生成图片：未配置生图时提示；否则打开描述编辑弹层（预填原图描述）
         const cfg = useSettings.getState().imgGenConfig;
@@ -6516,7 +6591,7 @@ function ChatPage({
    *  AI 图片按角色形象锁脸；「文字图片卡片转出的图片」不带锁脸（与首图同口径） */
   const submitImgRegen = async () => {
     const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && (x.role === 'peer' || x.img?.fromCard)) : null;
-    const desc = regenImgDesc.trim();
+    const desc = regenImgDesc.trim().slice(0, 400); // G1：描述截 400（与 imggen 照片标签描述上限同宽）
     if (!target || !desc || regenImgBusy) return;
     setRegenImgBusy(true);
     setRegenImgError('');
@@ -6526,7 +6601,10 @@ function ChatPage({
         target.role === 'peer'
           ? await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name, useRef: true })
           : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
-      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { ...x.img, src: r.src, desc } } : x)));
+      // 替换时把旧图存进 prevSrc（G2「恢复上一张」：长按菜单换回，可来回切换）；desc 同步更新
+      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { ...x.img, src: r.src, desc, prevSrc: x.img?.src } } : x)));
+      // B2 与自动生成同口径：AI 图片重新生成成功入角色相册（我的图/卡片转图不入）
+      if (target.role === 'peer') void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
       setRegenImgId(null);
       onToast('已重新生成图片');
     } catch (e) {
@@ -8412,6 +8490,77 @@ function ChatPage({
 
 // ---------------- 朋友圈页 ----------------
 
+/** A1/A2 朋友圈「生成图片」弹层（iOS 风格底部小弹层，样式对齐 WxTextCardSheet/ImageRegenSheet）：
+ *  文字图片卡片升级真图（A1）与升级图重新生成（A2）共用——描述预填可改（无硬限，提交时 trim + 截 400）、
+ *  主按钮 busy 时「生成中…」禁用、错误信息显示在弹层内（失败留在弹层可重试）、取消关闭（busy 时不可关） */
+function MomentImageGenSheet({
+  title,
+  initialDesc,
+  busy,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  initialDesc: string;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onSubmit: (desc: string) => void;
+}) {
+  const [desc, setDesc] = useState(initialDesc);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="wx-moment-imggen-sheet">
+      <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-[17px] font-semibold">{title}</p>
+          <button
+            type="button"
+            aria-label="关闭"
+            data-testid="wx-moment-imggen-close"
+            onClick={onClose}
+            disabled={busy}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            <X className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          disabled={busy}
+          rows={3}
+          data-testid="wx-moment-imggen-input"
+          placeholder="画面描述（可修改后再生成）"
+          className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#07C160]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
+        />
+        {error ? (
+          <p data-testid="wx-moment-imggen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          data-testid="wx-moment-imggen-submit"
+          onClick={() => onSubmit(desc)}
+          disabled={busy}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#07C160] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+              生成中…
+            </>
+          ) : (
+            '生成图片'
+          )}
+        </button>
+        <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">生成成功后照片会替换原位置（需在 设置 › 图像生成 完成配置）</p>
+      </div>
+    </div>
+  );
+}
+
 /** 单条动态 */
 function MomentRow({
   post,
@@ -8424,6 +8573,7 @@ function MomentRow({
   onDeleteComment,
   onEditRequest,
   onUpgradeCard,
+  onRegenImage,
   cardBusy,
 }: {
   post: WxMoment;
@@ -8438,8 +8588,10 @@ function MomentRow({
   onDeleteComment?: (commentId: string) => void;
   /** 编辑动态正文（自己的和 AI 的都可以编辑；好友朋友圈页不传） */
   onEditRequest?: () => void;
-  /** 点击「文字图片」卡片（AI 配图降级产物）→ 用图像生成升级为真图；不传 = 不可点击 */
+  /** 点击「文字图片」卡片（AI 配图降级产物）→ 打开「生成图片」弹层（描述可改）升级为真图；不传 = 不可点击 */
   onUpgradeCard?: () => void;
+  /** A2 长按升级图 → 打开「重新生成图片」弹层（仅引擎升级过的图有入口，用户手动发的图不传） */
+  onRegenImage?: () => void;
   /** 卡片正在生成真图（点击防重） */
   cardBusy?: boolean;
 }) {
@@ -8478,6 +8630,25 @@ function MomentRow({
     }, 480);
   };
   const onCommentPointerMove = (e: React.PointerEvent) => {
+    const t = pressRef.current;
+    if (!t.timer) return;
+    if (Math.abs(e.clientX - t.x) > 10 || Math.abs(e.clientY - t.y) > 10) clearPress();
+  };
+
+  /** A2 升级图长按 → 打开「重新生成图片」弹层（复用评论长按同款计时器/移动取消/抑制 click 模式） */
+  const startImagePress = (e: React.PointerEvent) => {
+    if (!onRegenImage) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    clearPress();
+    pressRef.current = { x: e.clientX, y: e.clientY, timer: null };
+    pressRef.current.timer = window.setTimeout(() => {
+      pressRef.current.timer = null;
+      suppressClickRef.current = true;
+      onRegenImage();
+    }, 480);
+  };
+  const onImagePointerMove = (e: React.PointerEvent) => {
+    if (!onRegenImage) return;
     const t = pressRef.current;
     if (!t.timer) return;
     if (Math.abs(e.clientX - t.x) > 10 || Math.abs(e.clientY - t.y) > 10) clearPress();
@@ -8535,6 +8706,20 @@ function MomentRow({
             src={post.images[0]}
             alt="配图"
             className="mt-2 max-h-[280px] w-auto max-w-[200px] rounded-[4px] border border-black/5 object-cover dark:border-white/10"
+            {...(onRegenImage
+              ? {
+                  // A2 长按升级图 →「重新生成图片」弹层（桌面端右键同入口；仅 textCardUpgraded 图有此 handler）
+                  onPointerDown: startImagePress,
+                  onPointerMove: onImagePointerMove,
+                  onPointerUp: clearPress,
+                  onPointerLeave: clearPress,
+                  onPointerCancel: clearPress,
+                  onContextMenu: (e: React.MouseEvent) => {
+                    e.preventDefault();
+                    onRegenImage();
+                  },
+                }
+              : {})}
           />
         )}
         {post.images.length > 1 && (
@@ -8787,15 +8972,42 @@ function MomentsPage({
   const isMine = !owner;
   const shownName = owner?.name ?? me.name;
   const shownAvatar = owner ? owner.avatar : me.avatar;
-  /** 「文字图片」卡片点击升级为真图：busy 的动态 id + 结果 toast（引擎 upgradeMomentTextCard 内部处理配置/生成） */
+  /** 「文字图片」卡片点击升级为真图：busy 的动态 id（卡片行「正在生成图片…」提示 + 防重入，与旧口径一致） */
   const [upgradingCardId, setUpgradingCardId] = useState<string | null>(null);
-  const handleUpgradeCard = async (post: WxMoment) => {
-    if (!post.textCard || upgradingCardId) return;
-    setUpgradingCardId(post.id);
-    onToast('正在生成图片…');
-    const r = await upgradeMomentTextCard('wx', post.id, me.name);
-    onToast(r.ok ? '已生成照片，卡片已换成真图' : r.error || '生成失败，请稍后再试');
-    setUpgradingCardId(null);
+  /** A1/A2「生成图片」弹层（微信朋友圈同款小弹层）：upgrade = 文字图片卡片升级 / regen = 升级图重新生成 */
+  const [genSheet, setGenSheet] = useState<null | { mode: 'upgrade' | 'regen'; postId: string; desc: string }>(null);
+  const [genSheetBusy, setGenSheetBusy] = useState(false);
+  const [genSheetError, setGenSheetError] = useState('');
+  /** A1 描述可改升级：点击文字图片卡片打开「生成图片」弹层（预填卡片文字，可改），确认后才真正生图 */
+  const handleUpgradeCard = (post: WxMoment) => {
+    if (upgradingCardId) return; // 保留原 busy 防重入
+    setGenSheet({ mode: 'upgrade', postId: post.id, desc: post.textCard ?? '' });
+  };
+  /** A1/A2 弹层确认：按 mode 调引擎升级/重新生成；成功关弹层 + toast（列表由引擎广播
+   *  moments-changed → 宿主 reloadMoments 自动刷新）；失败留在弹层显示 error（可改后重试） */
+  const submitMomentGen = async (descInput: string) => {
+    if (!genSheet || genSheetBusy) return;
+    const desc = descInput.trim().slice(0, 400); // 提交时 trim + 截 400（与聊天端同口径）
+    setGenSheetBusy(true);
+    setGenSheetError('');
+    if (genSheet.mode === 'upgrade') setUpgradingCardId(genSheet.postId);
+    try {
+      const r =
+        genSheet.mode === 'upgrade'
+          ? await upgradeMomentTextCard('wx', genSheet.postId, me.name, desc || undefined) // 描述留空 → 引擎回落卡片文字
+          : await regenerateMomentImage('wx', genSheet.postId, me.name, desc); // 描述留空 → 引擎回落上次描述
+      if (r.ok) {
+        setGenSheet(null);
+        onToast(genSheet.mode === 'upgrade' ? '已生成照片，卡片已换成真图' : '已重新生成');
+      } else {
+        setGenSheetError(r.error || '生成失败，请稍后再试');
+      }
+    } catch (e) {
+      setGenSheetError(e instanceof Error ? e.message : '生成失败，请稍后再试');
+    } finally {
+      setUpgradingCardId(null);
+      setGenSheetBusy(false);
+    }
   };
   const [menuId, setMenuId] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -8992,6 +9204,12 @@ function MomentsPage({
                 onDeleteComment={onDeleteComment ? (commentId) => onDeleteComment(p.id, commentId) : undefined}
                 onEditRequest={onEditRequest ? () => onEditRequest(p) : undefined}
                 onUpgradeCard={p.textCard ? () => void handleUpgradeCard(p) : undefined}
+                onRegenImage={
+                  // A2 重新生成入口：仅引擎升级过的图（textCardUpgraded === true）有；用户手动发的图无此入口
+                  p.textCardUpgraded === true && p.images.length > 0
+                    ? () => setGenSheet({ mode: 'regen', postId: p.id, desc: p.textCardDesc ?? '' })
+                    : undefined
+                }
                 cardBusy={upgradingCardId === p.id}
               />
             ))}
@@ -9089,6 +9307,18 @@ function MomentsPage({
           )}
         </div>
       </div>
+
+      {/* A1/A2「生成图片」弹层：文字图片卡片升级真图 / 升级图重新生成（同款弹层，描述预填可改） */}
+      {genSheet && (
+        <MomentImageGenSheet
+          title={genSheet.mode === 'upgrade' ? '生成图片' : '重新生成图片'}
+          initialDesc={genSheet.desc}
+          busy={genSheetBusy}
+          error={genSheetError}
+          onClose={() => (genSheetBusy ? undefined : setGenSheet(null))}
+          onSubmit={(d) => void submitMomentGen(d)}
+        />
+      )}
     </div>
   );
 }

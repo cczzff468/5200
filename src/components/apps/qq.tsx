@@ -186,6 +186,8 @@ import {
   // 【fix3-d-4】引擎统一动态视图：转发弹层用显式 author 判定原作者（不再按名字猜）
   listMomentPosts,
   markAllMomentNoticesRead,
+  // 【20-d】升级图重新生成（A2）：长按/右键升级过的真图打开弹层重绘（预填上次描述）
+  regenerateMomentImage,
   repairLegacyMomentData,
   subscribeMomentsChanged,
   toggleUserMomentLike,
@@ -209,7 +211,9 @@ import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealNam
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
-import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+// 【20-d】补充流式分段 carry-over 工具（splitUnfinishedPhotoTag/stripUnfinishedPhotoTag）：
+// 流式把 [图片:xxx] 标签切成两段时跨段拼接还原 + 尾部半截标签兜底剥除（与微信/信息端同口径）
+import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
@@ -362,8 +366,9 @@ interface QQMsg {
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
   call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
   /** 图片消息附加数据：desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」；旧记录图片只存 content=dataURL，无此字段照常兼容）；
-   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带） */
-  img?: { src?: string; desc?: string; fromCard?: boolean };
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带）；
+   *  prevSrc = 重新生成替换前保留的旧图（G2「恢复上一张」长按换回，再操作一次又换回新图，可来回切换） */
+  img?: { src?: string; desc?: string; fromCard?: boolean; prevSrc?: string };
   /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
@@ -828,6 +833,10 @@ interface ZonePost {
   images?: string[];
   /** 「文字图片」卡片文字（AI 配图降级产物；点击卡片可升级为真图） */
   textCard?: string;
+  /** 卡片已升级为真实照片（引擎 upgradeMomentTextCard 写入；升级图长按/右键可「重新生成」，A2 资格判定） */
+  textCardUpgraded?: boolean;
+  /** 最近一次生成/升级这张照片实际使用的画面描述（重新生成弹层预填；legacy 帖子缺省） */
+  textCardDesc?: string;
   /** 发说说时附的位置名（可选） */
   location?: string;
   /** 转发引用（转发是「理由 + 原动态摘要卡」） */
@@ -3629,7 +3638,8 @@ function ChatPage({
    * 失败 → 只 toast，面板留在原地可重试。
    */
   const generateCardImage = async (m: QQMsg, descInput: string) => {
-    const desc = descInput.trim();
+    // G1：描述 trim 后截 400（与 imggen 照片标签正则上限同口径，超长部分静默丢弃）
+    const desc = descInput.trim().slice(0, 400);
     if (!desc || cardGenBusy) return;
     const cfg = useSettings.getState().imgGenConfig;
     if (!cfg.enabled || !imgGenConfigReady(cfg)) {
@@ -3648,6 +3658,17 @@ function ChatPage({
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, content: r.src, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),
       );
+      // B1 挂点补齐：AI 的卡片（role=peer）转图成功 → 与 flushPhotoJobs 自动生图完全同口径
+      //（相册 origin 'ai' / 决策日志 imggen / 照片记忆 / 相册缓存刷新——下一轮 AI 可 [选图发送] 把这张照片再发出来）；
+      // 我的卡片（role=me）转图无角色身份，不加挂点
+      if (m.role === 'peer') {
+        void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
+        void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
+        notePhotoMemory(peer.id, 'qq', desc);
+        void listAlbums(peer.id).then((list) => {
+          albumCacheRef.current = list;
+        });
+      }
       setCardActionId(null);
       onToast('图片已生成');
     } catch (e) {
@@ -3660,6 +3681,9 @@ function ChatPage({
   // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flush 统一异步生成 ----
   /** 本轮待生成的照片任务（buildReplyMsgs 同步解析时入队；flushPhotoJobs 消费并清空） */
   const photoJobsRef = useRef<PhotoTag[]>([]);
+  /** F1 流式分段 carry-over：上一段尾部未闭合的半截照片标签（如「[图片:黄昏的咖」），拼回下一段开头再走管线；
+   *  回合开始清空、收尾取走（能闭合则正常识别生图，仍闭合不上则兜底剥除不投递） */
+  const photoCarryRef = useRef('');
 
   /**
    * 消费照片任务（微信端同款管线移植）：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落照片消息 +
@@ -3673,6 +3697,13 @@ function ChatPage({
       const jobs = photoJobsRef.current;
       photoJobsRef.current = [];
       if (jobs.length === 0) return;
+      // F3 持久化：任务已被本轮消费，快照删除（挂载/切会话恢复 effect 只在快照仍存在时补做，不重复生成）
+      kvDel(`qq-photo-jobs:${sessionKey}`);
+      // D：模型异常连发 >2 个标签时第 3 个起丢弃（单轮最多 2 张防刷屏）——补一行系统提示不让多余任务
+      // 静默消失（对齐微信/信息端口径；未配置/配置完整两路共用，只提示一次）
+      if (jobs.length > 2) {
+        enqueue([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `还有 ${jobs.length - 2} 张图片没有生成出来` } }]);
+      }
       const cfg = useSettings.getState().imgGenConfig;
       if (!cfg.enabled || !imgGenConfigReady(cfg)) {
         // 未配置生图：降级为「文字图片」卡片（无「正在拍照…」行，卡片即最终形态）
@@ -3705,7 +3736,7 @@ function ChatPage({
         })();
       }
     },
-    [peer.id, peer.name],
+    [peer.id, peer.name, sessionKey],
   );
 
   /**
@@ -3908,10 +3939,17 @@ function ChatPage({
               // 生图（锁脸）：先从文本剥出 [照片:描述] 标签（入队 photoJobsRef，flushPhotoJobs 异步生成投递），
               // 剥不干净的旧标签（生图关闭时）留在原文里可读性更差，统一剥除
               const { text: photoFreeText, tags: photoTags } = extractPhotoTags(p.text);
-              if (photoTags.length > 0) photoJobsRef.current.push(...photoTags);
+              if (photoTags.length > 0) {
+                photoJobsRef.current.push(...photoTags);
+                // F3 持久化：任务快照落 kv——会话中途退出/进程被杀时，挂载 effect 据此补做生成（flush 消费时即删）
+                kvSet(`qq-photo-jobs:${sessionKey}`, JSON.stringify(photoJobsRef.current));
+              }
+              // F1 兕底：尾部未闭合的半截照片标签剥掉不投递（后台接力整段直入本管线时防「[图片:黄昏的咖」
+              // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
+              const safePhotoText = stripUnfinishedPhotoTag(photoFreeText);
               // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
               // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-              const clean = cleanBubbleText(stickersOnNow ? photoFreeText : stripEmojiText(photoFreeText.replace(/\[表情包\]|\[表情\]/g, ' ')));
+              const clean = cleanBubbleText(stickersOnNow ? safePhotoText : stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')));
               if (!clean) continue;
               out.push({ id, role: 'peer', content: clean, time: t });
             }
@@ -4198,6 +4236,8 @@ function ChatPage({
     let msgIdx = 0; // 本轮已构建消息数（延续 aiMsgId 与 -N 后缀的 id 序列）
     // [语音通话] 标记本轮是否出现过（组件级 ref，开回合时重置；buildReplyMsgs 解析到标记时置位）
     wantCallSeenRef.current = false;
+    // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用（流中断/换号中止的半截标签不串入新回合）
+    photoCarryRef.current = '';
 
     /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
     const enqueueBatch = (built: QQMsg[]) => {
@@ -4218,7 +4258,12 @@ function ChatPage({
     const deliverSegment = (seg: string) => {
       // H1 纵深防御：换号（纪元失配）后本回合流中分段整体丢弃——不再解析/落盘/排队投递
       if (turnEpoch !== qqSessionEpoch) return;
-      const { msgs: built, cur, dirty, nextIdx } = buildReplyMsgs(seg, false, Date.now(), aiId, msgIdx);
+      // F1 carry-over：上一段尾部未闭合的半截照片标签拼回本段开头，再切出本段尾部仍处未闭合的部分存回
+      //（「[图片:黄昏的咖」跨段被切开后，两段各自都不再含半截标签；下一段到达后拼成完整标签正常剥出生图）
+      const merged = photoCarryRef.current + seg;
+      const { send, carry } = splitUnfinishedPhotoTag(merged);
+      photoCarryRef.current = carry;
+      const { msgs: built, cur, dirty, nextIdx } = buildReplyMsgs(send, false, Date.now(), aiId, msgIdx);
       msgIdx = nextIdx;
       if (dirty) saveMsgs(peer.id, cur);
       if (built.length === 0) return;
@@ -4254,6 +4299,10 @@ function ChatPage({
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
+        // F1 收尾：先把跨段 carry 取走并清空——流已结束，残留的半截照片标签不再单独投递
+        //（拼回最后一段一起走管线，闭合则正常生图/降级，仍闭合不上则由 buildReplyMsgs 兜底剥除不投递）
+        const carry = photoCarryRef.current;
+        photoCarryRef.current = '';
         if (error) {
           // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
           // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
@@ -4268,9 +4317,9 @@ function ChatPage({
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
-        // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子）；
+        // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子；F1：跨段 carry 拼回开头）；
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
-        const { msgs: built, cur, dirty } = buildReplyMsgs(replyCount > 1 ? tail : content, replyCount <= 1, Date.now(), aiId, msgIdx);
+        const { msgs: built, cur, dirty } = buildReplyMsgs(carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), aiId, msgIdx);
         if (dirty) saveMsgs(peer.id, cur);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
@@ -4363,6 +4412,28 @@ function ChatPage({
     },
     [deliverAiMsg, sessionKey],
   );
+
+  // F3 遗留照片任务恢复：会话中途退出/进程被杀时，还没 flush 的照片任务快照留在 kv；挂载/切会话
+  //（ChatPage 按 peer.id 重挂载）时读回 → JSON 校验（数组且每项 desc 为 string）→ 清快照 →
+  // 补回 photoJobsRef → 用后台接力投递 flush 补做生成（生成/降级卡片/相册/决策日志/记忆挂点全复用，
+  // 走 scheduleAiDelivery 全局队列，页面随后被关也不中断；快照已清，effect 重跑幂等）
+  useEffect(() => {
+    const kvKey = `qq-photo-jobs:${sessionKey}`;
+    const saved: unknown = kvGet<unknown>(kvKey);
+    kvDel(kvKey);
+    if (typeof saved !== 'string' || !saved) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(saved);
+    } catch {
+      return; // 快照损坏按无遗留任务处理
+    }
+    if (!Array.isArray(parsed)) return;
+    const jobs = parsed.filter((j): j is PhotoTag => Boolean(j) && typeof (j as PhotoTag).desc === 'string');
+    if (jobs.length === 0) return;
+    photoJobsRef.current = [...photoJobsRef.current, ...jobs];
+    flushPhotoJobs(bgEnqueueBatch);
+  }, [peer.id, sessionKey, flushPhotoJobs, bgEnqueueBatch]);
 
   /** 接力回复投递：与 finalize 完全同管线（buildReplyMsgs 解析 → 排队投递）。
    *  single=true：texts[0] 是一次完整回复原文（可能含 &&& 分段与动作标记）→ 单条模式；
@@ -4823,6 +4894,8 @@ function ChatPage({
       // 「文字图片卡片转出的图片」（我的）：重新生成（自填描述，原地替换，不带锁脸）
       items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
     }
+    // G2 恢复上一张：重新生成替换前的旧图还留着（prevSrc），长按可换回（再操作一次又换回新图，可来回切换）
+    if (isImage && m.img?.prevSrc) items.push({ key: 'restoreimg', label: '恢复上一张', icon: B.recall });
     return items;
   };
 
@@ -5090,6 +5163,19 @@ function ChatPage({
         setRegenImgId(m.id);
         break;
       }
+      case 'restoreimg': {
+        // G2 恢复上一张：当前图与重新生成前的旧图互换（当前 src 存回 prevSrc，可反复换回）；
+        // QQ 图片 dataURL 存 content，交换时同步更新（QqImageBubble 读 m.content）
+        setMsgs((prev) =>
+          prev.map((x) =>
+            x.id === m.id && x.kind === 'image' && x.img?.src && x.img.prevSrc
+              ? { ...x, content: x.img.prevSrc, img: { ...x.img, src: x.img.prevSrc, prevSrc: x.img.src } }
+              : x,
+          ),
+        );
+        onToast('已恢复上一张');
+        break;
+      }
     }
   };
 
@@ -5097,7 +5183,8 @@ function ChatPage({
    *  AI 图片按角色形象锁脸；「文字图片卡片转出的图片」不带锁脸（与首图同口径） */
   const submitImgRegen = async () => {
     const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && (x.role === 'peer' || x.img?.fromCard)) : null;
-    const desc = regenImgDesc.trim();
+    // G1：描述 trim 后截 400（与 generateCardImage/imggen 照片标签正则同口径）
+    const desc = regenImgDesc.trim().slice(0, 400);
     if (!target || !desc || regenImgBusy) return;
     setRegenImgBusy(true);
     setRegenImgError('');
@@ -5107,8 +5194,12 @@ function ChatPage({
         target.role === 'peer'
           ? await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name, useRef: true })
           : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
+      // B2 挂点：AI 图重新生成成功 → 入角色相册（追加式，相册保留历史版本）；我的卡片转图不加
+      if (target.role === 'peer') void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
+      // 替换时把旧图存进 prevSrc（G2「恢复上一张」：长按菜单换回，可来回切换）；
+      // QQ 图片 dataURL 存 content，img.src 同步更新（desc 同步，fromCard/prevSrc 标记展开保留）
       setMsgs((prev) =>
-        prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, content: r.src, img: { ...x.img, src: r.src, desc } } : x)),
+        prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, content: r.src, img: { ...x.img, src: r.src, desc, prevSrc: x.img?.src } } : x)),
       );
       setRegenImgId(null);
       onToast('已重新生成图片');
@@ -11355,6 +11446,77 @@ const ZONE_OWNER_POST_TEMPLATES: ReadonlyArray<{ text: string; agoMs: number }> 
   { text: '晚上早点睡，明天开始按计划做事', agoMs: 3 * 86_400_000 },
 ];
 
+/** A1/A2 QQ空间「生成图片」弹层（iOS 风格底部小弹层，样式对齐转发弹层/聊天 qq-textcard-sheet：
+ *  absolute 底部圆角 16 底板 + QQ 蓝 #0099FF 主按钮）：textarea 预填画面描述可改，
+ *  主按钮「生成图片」（busy 转圈禁用），错误显示在弹层内（可改后重试）；busy 中不可关闭 */
+function ZoneImageGenSheet({
+  title,
+  initialDesc,
+  busy,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  initialDesc: string;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onSubmit: (desc: string) => void;
+}) {
+  const [desc, setDesc] = useState(initialDesc);
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" role="dialog" aria-modal="true" aria-label={title} data-testid="qq-moment-imggen-sheet">
+      <div className="rounded-t-[16px] bg-white p-4 pb-[max(18px,env(safe-area-inset-bottom))] dark:bg-[#1C1C1E]" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-[17px] font-semibold text-[#1F2329] dark:text-white">{title}</p>
+          <button
+            type="button"
+            aria-label="关闭"
+            data-testid="qq-moment-imggen-close"
+            onClick={onClose}
+            disabled={busy}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            <X className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          disabled={busy}
+          rows={3}
+          data-testid="qq-moment-imggen-input"
+          placeholder="画面描述（可修改后再生成）"
+          className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] text-[#1F2329] outline-none placeholder:text-black/30 focus:border-[#0099FF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-white dark:placeholder:text-white/30"
+        />
+        {error ? (
+          <p data-testid="qq-moment-imggen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          data-testid="qq-moment-imggen-submit"
+          onClick={() => onSubmit(desc)}
+          disabled={busy}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#0099FF] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+              生成中…
+            </>
+          ) : (
+            '生成图片'
+          )}
+        </button>
+        <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">生成成功后照片会替换原位置（需在 设置 › 图像生成 完成配置）</p>
+      </div>
+    </div>
+  );
+}
+
 function ZonePage({
   me,
   contacts,
@@ -11405,15 +11567,46 @@ function ZonePage({
   const [menuPostId, setMenuPostId] = useState<string | null>(null);
   const [editingPost, setEditingPost] = useState<{ id: string; content: string } | null>(null);
   const [askBusyId, setAskBusyId] = useState<string | null>(null);
-  /** 「文字图片」卡片点击升级为真图：busy 的动态 id（结果经 onToast 反馈） */
+  /** 「文字图片」卡片升级/升级图重新生成：busy 的动态 id（卡片行「正在生成图片…」提示 + 防重入，与旧口径一致） */
   const [upgradingCardId, setUpgradingCardId] = useState<string | null>(null);
-  const upgradeCard = async (p: ZonePost) => {
-    if (!p.textCard || upgradingCardId) return;
-    setUpgradingCardId(p.id);
-    onToast('正在生成图片…');
-    const r = await upgradeMomentTextCard('qq', p.id, me.name);
-    onToast(r.ok ? '已生成照片，卡片已换成真图' : r.error || '生成失败，请稍后再试');
-    setUpgradingCardId(null);
+  /** A1/A2「生成图片」弹层：upgrade = 文字图片卡片升级 / regen = 升级图重新生成（同款弹层，描述预填可改） */
+  const [genSheet, setGenSheet] = useState<null | { mode: 'upgrade' | 'regen'; postId: string; desc: string }>(null);
+  const [genSheetBusy, setGenSheetBusy] = useState(false);
+  const [genSheetError, setGenSheetError] = useState('');
+  /** A1 描述可改升级：点击文字图片卡片打开「生成图片」弹层（预填卡片文字，可改），确认后才真正生图 */
+  const handleUpgradeCard = (post: ZonePost) => {
+    if (upgradingCardId) return; // 保留原 busy 防重入
+    setGenSheet({ mode: 'upgrade', postId: post.id, desc: post.textCard ?? '' });
+  };
+  /** A2 升级图重新生成（长按/右键）：弹层预填上次实际使用的画面描述（legacy 缺省回落空串） */
+  const openRegenSheet = (post: ZonePost) => {
+    setGenSheet({ mode: 'regen', postId: post.id, desc: post.textCardDesc ?? '' });
+  };
+  /** A1/A2 弹层确认：按 mode 调引擎升级/重新生成；成功关弹层 + toast（列表由引擎广播
+   *  moments-changed → ZonePage 订阅自动刷新）；失败留在弹层显示 error（可改后重试） */
+  const submitZoneGen = async (descInput: string) => {
+    if (!genSheet || genSheetBusy) return;
+    const desc = descInput.trim().slice(0, 400); // 提交时 trim + 截 400（与聊天端同口径）
+    setGenSheetBusy(true);
+    setGenSheetError('');
+    if (genSheet.mode === 'upgrade') setUpgradingCardId(genSheet.postId);
+    try {
+      const r =
+        genSheet.mode === 'upgrade'
+          ? await upgradeMomentTextCard('qq', genSheet.postId, me.name, desc || undefined) // 描述留空 → 引擎回落卡片文字
+          : await regenerateMomentImage('qq', genSheet.postId, me.name, desc); // 描述留空 → 引擎回落上次描述
+      if (r.ok) {
+        setGenSheet(null);
+        onToast(genSheet.mode === 'upgrade' ? '已生成照片，卡片已换成真图' : '已重新生成');
+      } else {
+        setGenSheetError(r.error || '生成失败，请稍后再试');
+      }
+    } catch (e) {
+      setGenSheetError(e instanceof Error ? e.message : '生成失败，请稍后再试');
+    } finally {
+      setUpgradingCardId(null);
+      setGenSheetBusy(false);
+    }
   };
   const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
   /** 长按删除的评论（确认弹层） */
@@ -11451,6 +11644,24 @@ function ZonePage({
     }, 480);
   };
   const onCommentPointerMove = (e: React.PointerEvent) => {
+    const t = pressRef.current;
+    if (!t.timer) return;
+    if (Math.abs(e.clientX - t.x) > 10 || Math.abs(e.clientY - t.y) > 10) clearPress();
+  };
+
+  /** A2 升级图长按 → 打开「重新生成图片」弹层（复用评论长按同款计时器/移动取消/抑制 click 模式） */
+  const startZoneImagePress = (post: ZonePost) => (e: React.PointerEvent) => {
+    if (post.textCardUpgraded !== true) return; // 仅引擎升级过的图有入口；用户手动发的图无入口
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    clearPress();
+    pressRef.current = { x: e.clientX, y: e.clientY, timer: null };
+    pressRef.current.timer = window.setTimeout(() => {
+      pressRef.current.timer = null;
+      suppressClickRef.current = true;
+      openRegenSheet(post);
+    }, 480);
+  };
+  const onZoneImagePointerMove = (e: React.PointerEvent) => {
     const t = pressRef.current;
     if (!t.timer) return;
     if (Math.abs(e.clientX - t.x) > 10 || Math.abs(e.clientY - t.y) > 10) clearPress();
@@ -11705,14 +11916,14 @@ function ZonePage({
                     </div>
                   )}
 
-                  {/* 「文字图片」卡片（AI 配图降级产物）：韩系简约卡片直接当配图，点击可升级为真图 */}
+                  {/* 「文字图片」卡片（AI 配图降级产物）：韩系简约卡片直接当配图，点击打开「生成图片」弹层（描述可改）升级为真图 */}
                   {p.textCard && !(p.images && p.images.length > 0) && (
                     <div className="mt-2" data-testid={`qq-zone-textcard-${p.id}`}>
                       <TextCardBubble
                         text={p.textCard}
                         signedBy={p.authorName}
                         variant="qq"
-                        onClick={() => void upgradeCard(p)}
+                        onClick={() => handleUpgradeCard(p)}
                       />
                       {upgradingCardId === p.id && (
                         <p className="mt-1 text-[12px] text-black/35 dark:text-white/35">正在生成图片…</p>
@@ -11723,7 +11934,26 @@ function ZonePage({
                   {p.images && p.images.length > 0 && (
                     <div className={`mt-2 grid gap-1.5 ${p.images.length === 1 ? 'max-w-[240px]' : 'grid-cols-3'}`}>
                       {p.images.map((src, i) => (
-                        <img key={i} src={src} alt="动态配图" className="aspect-square w-full rounded-[8px] object-cover" />
+                        <img
+                          key={i}
+                          src={src}
+                          alt="动态配图"
+                          className="aspect-square w-full rounded-[8px] object-cover"
+                          {...(p.textCardUpgraded === true
+                            ? {
+                                // A2 长按升级图 →「重新生成图片」弹层（桌面端右键同入口；仅引擎升级过的图有入口）
+                                onPointerDown: startZoneImagePress(p),
+                                onPointerMove: onZoneImagePointerMove,
+                                onPointerUp: clearPress,
+                                onPointerLeave: clearPress,
+                                onPointerCancel: clearPress,
+                                onContextMenu: (e: React.MouseEvent) => {
+                                  e.preventDefault();
+                                  openRegenSheet(p);
+                                },
+                              }
+                            : {})}
+                        />
                       ))}
                     </div>
                   )}
@@ -12008,6 +12238,17 @@ function ZonePage({
             </div>
           </div>
         </div>
+      )}
+      {/* A1/A2「生成图片」弹层：文字图片卡片升级真图 / 升级图重新生成（同款弹层，描述预填可改） */}
+      {genSheet && (
+        <ZoneImageGenSheet
+          title={genSheet.mode === 'upgrade' ? '生成图片' : '重新生成图片'}
+          initialDesc={genSheet.desc}
+          busy={genSheetBusy}
+          error={genSheetError}
+          onClose={() => (genSheetBusy ? undefined : setGenSheet(null))}
+          onSubmit={(d) => void submitZoneGen(d)}
+        />
       )}
     </div>
   );

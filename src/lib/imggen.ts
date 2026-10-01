@@ -17,7 +17,11 @@
  *    每个标签经 generateCharacterPhoto 生图后以 kind='image' 消息追加进聊天；
  * 4. 生成结果：聊天显示 + 自动存入该角色相册（origin 'ai'，AI 后续可用 [选图发送] 重发）+
  *    写记忆（30 分钟节流，不刷屏）；失败只落系统提示行，不影响聊天；
- * 5. 手动触发：微信加号面板 / QQ 星星面板「生成照片」（填描述 → 角色以第一人称拍一张发出来）。
+ * 5. 手动触发：微信加号面板 / QQ 星星面板「生成照片」（填描述 → 角色以第一人称拍一张发出来）；
+ * 6. 稳健性（Task 20-a1）：客户端生图请求统一 150s 超时（AbortSignal.timeout，超时转友好文案）；
+ *    照片标签描述上限放宽到 400 字（朋友圈双语描述过长会令整个标签识别失败原样上屏）；
+ *    新增流式分段防截断工具（UNFINISHED_PHOTO_TAG_RE / splitUnfinishedPhotoTag /
+ *    stripUnfinishedPhotoTag，标签跨段 carry-over / 兜底剥除用）。
  */
 
 import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
@@ -113,13 +117,15 @@ export interface PhotoTag {
 }
 
 const PHOTO_TAG_RE =
-  /[【\[]\s*(?:照片|图片)\s*[:：]\s*(使用参考图|不使用参考图|不用参考图)?\s*[:：]?\s*([^\]】]{1,160})[\]】]/g;
+  /[【\[]\s*(?:照片|图片)\s*[:：]\s*(使用参考图|不使用参考图|不用参考图)?\s*[:：]?\s*([^\]】]{1,400})[\]】]/g;
 
 /**
  * 从回复文本里提取全部照片标签并从原文剥除：
  * 支持 [图片:描述] / [照片:描述] / 【图片：描述】全角变体 / [照片:使用参考图:描述] / [照片:不使用参考图:描述]
  * （desc 为空 / 全空白的标签直接丢弃；图片/照片两种写法都认——prompt 教的是 [图片:描述]，兼容模型输出的旧写法）；
- * useRef 语义：默认 true（有参考图就锁脸），仅明确写「不使用参考图/不用参考图」才为 false。
+ * useRef 语义：默认 true（有参考图就锁脸），仅明确写「不使用参考图/不用参考图」才为 false；
+ * 描述长度上限 400 字（原 160：朋友圈双语模式下照片描述会中英双语化，上限过短会导致整个标签
+ * 匹配失败、标签原样上屏不剥除）。
  */
 export function extractPhotoTags(text: string): { text: string; tags: PhotoTag[] } {
   if (!text || (text.indexOf('照片') === -1 && text.indexOf('图片') === -1)) return { text, tags: [] };
@@ -135,6 +141,35 @@ export function extractPhotoTags(text: string): { text: string; tags: PhotoTag[]
 /** 文本里是否含未剥除的照片标签（渲染层防御性提示用；一般提取后即无） */
 export function hasPhotoTag(text: string): boolean {
   return /[【\[]\s*(?:照片|图片)\s*[:：]/.test(text ?? '');
+}
+
+// ---------------- 流式分段防截断：照片标签跨段 carry-over ----------------
+
+/**
+ * 尾部未闭合的照片标签起始（尾部 $ 锚定）：流式输出把一段完整回复切成多个分段时，
+ * [图片:xxx] / [照片:使用参考图:xxx] 可能正好被切成两半，前一段会以此正则的匹配结尾。
+ */
+export const UNFINISHED_PHOTO_TAG_RE = /[【\[]\s*(?:照片|图片)\s*[:：][^\]】]*$/;
+
+/**
+ * 流式分段 carry-over：若 text 尾部是未闭合的照片标签起始（如「[图片:黄昏的咖」），
+ * 把该部分截出作为 carry（与下一段拼接后再走 extractPhotoTags 解析），send 为本段
+ * 可立即解析/投递的部分；未命中则原样返回（send=text、carry 空串）。
+ * 不做处理的话，半截标签会被当普通文本上屏，且下一段的剩余部分也无法闭合还原。
+ */
+export function splitUnfinishedPhotoTag(text: string): { send: string; carry: string } {
+  const t = text ?? '';
+  const m = UNFINISHED_PHOTO_TAG_RE.exec(t);
+  if (!m) return { send: t, carry: '' };
+  return { send: t.slice(0, m.index), carry: t.slice(m.index) };
+}
+
+/**
+ * 直接剥掉尾部未闭合的照片标签起始（渲染/投递兜底用，防半截标签上屏）。
+ * 只影响尾部这一处未闭合起始；已闭合的完整标签不归它管（由 extractPhotoTags 剥除）。
+ */
+export function stripUnfinishedPhotoTag(text: string): string {
+  return (text ?? '').replace(UNFINISHED_PHOTO_TAG_RE, '');
 }
 
 // ---------------- 提示词规则（聊天 system 注入） ----------------
@@ -360,7 +395,33 @@ export async function generateCharacterPhoto(args: GenerateCharacterPhotoArgs): 
   return { src, prompt, usedRef };
 }
 
-/** 单次生图请求：proxy 走 /api/imggen；direct 浏览器直连。返回原始 dataURL；失败抛错 */
+/** 客户端生图请求超时（150s）：服务端 /api/imggen 自身已有 280s 上限，客户端提前降级避免干等 */
+const REQUEST_TIMEOUT_MS = 150_000;
+/** 超时/中断的统一友好文案 */
+const REQUEST_TIMEOUT_MSG = '生图请求超时，请稍后重试';
+
+/**
+ * 是否为超时/中断类错误：AbortSignal.timeout 触发的是 DOMException（name='TimeoutError'，
+ * 手动 abort / 部分运行时为 'AbortError'），但各端 message 措辞不一，兜底按关键字识别。
+ */
+function isTimeoutError(e: unknown): boolean {
+  if (typeof DOMException !== 'undefined' && e instanceof DOMException) {
+    return e.name === 'TimeoutError' || e.name === 'AbortError';
+  }
+  return e instanceof Error && /timeout|abort/i.test(`${e.name}${e.message}`);
+}
+
+/** fetch + 150s 超时（AbortSignal.timeout）；超时/中断错误统一转友好文案，其余错误原样抛出 */
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (e) {
+    if (isTimeoutError(e)) throw new Error(REQUEST_TIMEOUT_MSG);
+    throw e;
+  }
+}
+
+/** 单次生图请求：proxy 走 /api/imggen；direct 浏览器直连。返回原始 dataURL；失败抛错（含 150s 超时） */
 async function requestImage(body: {
   mode: 'proxy' | 'direct';
   baseUrl: string;
@@ -387,7 +448,7 @@ async function requestImage(body: {
       : postDirectMultipart(body.baseUrl, body.apiKey, body.model, body.prompt, body.size, body.quality, blob);
   }
   if (body.mode === 'proxy') {
-    const res = await fetch('/api/imggen', {
+    const res = await fetchWithTimeout('/api/imggen', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -401,7 +462,7 @@ async function requestImage(body: {
   let lastErr = '生图失败';
   for (const ep of eps.generations) {
     try {
-      const res = await fetch(ep, {
+      const res = await fetchWithTimeout(ep, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${body.apiKey}` },
         body: JSON.stringify({
@@ -421,15 +482,19 @@ async function requestImage(body: {
       if (src) return src;
       lastErr = '接口没有返回图片';
     } catch (e) {
-      lastErr = e instanceof Error ? e.message : '网络错误（检查接口是否允许跨域 CORS）';
+      lastErr = isTimeoutError(e)
+        ? REQUEST_TIMEOUT_MSG
+        : e instanceof Error
+          ? e.message
+          : '网络错误（检查接口是否允许跨域 CORS）';
     }
   }
   throw new Error(lastErr);
 }
 
-/** proxy + multipart：/api/imggen 原样转发 FormData */
+/** proxy + multipart：/api/imggen 原样转发 FormData（带 150s 超时） */
 async function postProxy(fd: FormData): Promise<string | null> {
-  const res = await fetch('/api/imggen', { method: 'POST', body: fd });
+  const res = await fetchWithTimeout('/api/imggen', { method: 'POST', body: fd });
   const data = (await res.json().catch(() => null)) as { src?: string; error?: string } | null;
   if (!res.ok || !data?.src) throw new Error(data?.error || `生图接口错误（${res.status}）`);
   return data.src;
@@ -456,7 +521,7 @@ async function postDirectMultipart(
       fd.append('n', '1');
       if (size && size !== 'auto') fd.append('size', size);
       if (quality && quality !== 'auto') fd.append('quality', quality);
-      const res = await fetch(ep, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: fd });
+      const res = await fetchWithTimeout(ep, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: fd });
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
         lastErr = extractImgGenError(payload, `生图接口错误（${res.status}）`);
@@ -466,7 +531,11 @@ async function postDirectMultipart(
       if (src) return src;
       lastErr = '接口没有返回图片';
     } catch (e) {
-      lastErr = e instanceof Error ? e.message : '网络错误（检查接口是否允许跨域 CORS）';
+      lastErr = isTimeoutError(e)
+        ? REQUEST_TIMEOUT_MSG
+        : e instanceof Error
+          ? e.message
+          : '网络错误（检查接口是否允许跨域 CORS）';
     }
   }
   throw new Error(lastErr);

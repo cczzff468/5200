@@ -25,6 +25,8 @@
  * - finalize：回复落盘（senderId 区分发言人）+ 未读 + memAfterAiTurn（roundScope 按群隔离，
  *   碎片带 source='group'/sourceGroupId/groupMembers 群来源标记）；AI 语音频率（按群设置、按角色独立计数）
  *   命中时把该成员本轮第一条文字消息异步升级为语音气泡（合成失败自动保持文字）。
+ * - E1 轻防御（照片标签降级）：群聊不接生图管线（多成员锁脸归属未实现），AI 回复漏出的 [图片:…]
+ *   标签剥除后降级为「文字图片」卡片（kind='textcard'，详见下方类型区注释与 buildGroupReplyMsgs）。
  * - 范围限定：群内不提供红包/转账等资金功能（加号面板保留入口，点击提示不支持）。
  */
 
@@ -74,6 +76,8 @@ import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubbl
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { buildImagePlaceholderRule, buildVoicePlaceholderRule, type MediaRuleMsg } from '@/lib/chat-media-rules';
+// E1 轻防御：群聊照片标签剥除/流式分段防截断工具（与单聊 wechat.tsx 同源引擎层）
+import { extractPhotoTags, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag } from '@/lib/imggen';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -106,9 +110,9 @@ import {
   kickGroupMember,
   kickOwnerFromGroup,
   listGroups,
-  loadGroupMsgs,
+  loadGroupMsgs as loadGroupMsgsRaw,
   muteGroupMember,
-  saveGroupMsgs,
+  saveGroupMsgs as saveGroupMsgsRaw,
   setGroupAdmin,
   takeGroupMuteNotice,
   transferGroupOwner,
@@ -119,12 +123,13 @@ import {
   type GroupMemberRole,
   type GroupRpData,
   type GroupTrData,
-  type WxGroupMsg,
+  type WxGroupMsg as WxGroupMsgBase,
 } from '@/lib/ios/groups';
 import { loadStickers, type Sticker } from '@/lib/ios/stickers';
 import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
+import { TextCardBubble } from './text-card-bubble';
 import { wxChatFlags, type ChatFlags } from '@/lib/chat-flags';
 import { addFavorite, isMsgFavorited, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { buildGroupAdminRules, canEditGroupInfo, canModerateTarget, parseMuteDuration } from '@/lib/ios/group-admin';
@@ -196,6 +201,62 @@ import {
   type PendingCardInfo,
   type RichAction,
 } from '@/lib/chat-rich';
+
+// ---------------- 「文字图片」卡片（E1 轻防御）：群聊照片标签降级管线 ----------------
+
+/**
+ * 群聊暂不接生图管线（多成员锁脸归属未实现，与 imggen.ts 头注释「群聊暂不触发」同口径）：
+ * 群聊 AI 回复里漏出的 [图片:…] / [照片:…] 标签（提示词未教该标签，但角色人设/世界书/上下文泄漏
+ * 可能带出）一律剥除并降级为「文字图片」卡片消息（kind='textcard'），不做真图生成——不管生图配置与否都只出卡片。
+ * 挂点：buildGroupReplyMsgs（剥标签+生成卡片）/ deliverSegment+finalize（流式分段 carry-over）/
+ * msgTextOf（AI 上下文读卡片文字）/ 渲染分支（复用单聊 TextCardBubble，点击不弹生成面板）。
+ */
+
+/** 组件级扩展消息类型：lib WxGroupMsg 的 kind 联合加 'textcard' + card 字段（对齐单聊 wechat.tsx WxMsg 命名）。
+ *  本文件内所有 WxGroupMsg 引用均指此扩展类型；lib 层函数经下方读写包装编解码适配。 */
+type WxGroupMsg = Omit<WxGroupMsgBase, 'kind'> & {
+  kind?: WxGroupMsgBase['kind'] | 'textcard';
+  /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 降级输出的画面描述），无生图依赖 */
+  card?: { text: string };
+};
+
+/**
+ * textcard 落盘编码前缀：lib 层（groups.ts normalizeMsg）不认识 kind='textcard'——直接落盘会在
+ * 下次 load 时被剥成 kind='text' 且 card 字段丢失。约定编码：kind='text' + content=本标记+卡片文字
+ * （与会话列表 groupPreview 的「[文字图片] …」摘要口径天然一致）；组件读时由 decodeGroupMsgs 反向还原。
+ * 理论碰撞：真实文本消息恰好以「[文字图片]」开头会被误还原成卡片——概率可忽略，后果仅是展示形态变化。
+ */
+const GROUP_TEXTCARD_MARK = '[文字图片]';
+
+/** 落盘编码：textcard → kind='text' + 标记前缀文本（见 GROUP_TEXTCARD_MARK 注释）；其余消息原样透传 */
+function encodeGroupMsgs(msgs: WxGroupMsg[]): WxGroupMsgBase[] {
+  return msgs.map(
+    (m): WxGroupMsgBase =>
+      // 断言安全：此分支运行时已排除 kind='textcard'（TS 属性收窄不覆盖对象整体，需显式收窄）
+      m.kind === 'textcard'
+        ? { ...m, kind: 'text', content: `${GROUP_TEXTCARD_MARK}${m.card?.text ?? ''}` }
+        : (m as WxGroupMsgBase),
+  );
+}
+
+/** 读取解码：标记前缀文本 → textcard 消息（正文清空、文字进 card.text；空文字也还原，渲染层兜底不显示） */
+function decodeGroupMsgs(msgs: WxGroupMsgBase[]): WxGroupMsg[] {
+  return msgs.map(
+    (m): WxGroupMsg =>
+      m.kind === 'text' && m.content.startsWith(GROUP_TEXTCARD_MARK)
+        ? { ...m, kind: 'textcard', content: '', card: { text: m.content.slice(GROUP_TEXTCARD_MARK.length) } }
+        : m,
+  );
+}
+
+/** 群消息存取组件级包装：所有读写统一经此编解码（就地替身 lib 导出，既有调用点零改动），
+ *  保证 textcard 消息 save/load 往返不丢字段（Task 20-e 第 7 项） */
+function loadGroupMsgs(groupId: string): WxGroupMsg[] {
+  return decodeGroupMsgs(loadGroupMsgsRaw(groupId));
+}
+function saveGroupMsgs(groupId: string, msgs: WxGroupMsg[]): void {
+  saveGroupMsgsRaw(groupId, encodeGroupMsgs(msgs));
+}
 
 // ---------------- 群红包/转账（纯本地模拟；按群 ID 隔离，与单聊互不相通） ----------------
 
@@ -2819,6 +2880,8 @@ export function WxGroupChatPage({
   /** 消息进入 AI 上下文的文本快照（图片/位置/表情包/红包/转账/语音有占位描述，与单聊一致） */
   const msgTextOf = (m: WxGroupMsg): string => {
     if (m.kind === 'image') return m.img?.desc ? `[图片]（图片内容：${m.img.desc}）` : '[图片]';
+    // 「文字图片」卡片：AI 直接读卡片文字（对齐单聊 scanTextOf 口径，防读到空内容/乱码；空文字脏数据给占位）
+    if (m.kind === 'textcard') return m.card?.text || '[文字图片]';
     // 语音消息：AI 直接读转写文本（自然对话；AI 语音消息的朗读原文同源冗余在 transcript/localText）；
     // 识别失败/未识别时用占位
     if (m.kind === 'voice') return voiceTextOf(m) || '[语音]';
@@ -2868,7 +2931,11 @@ export function WxGroupChatPage({
                 ? m.fwd?.merged
                   ? `[聊天记录] ${m.fwd.title ?? m.content}`
                   : `[转发] ${m.content}`
-                : m.content;
+                : m.kind === 'textcard'
+                  ? m.card?.text
+                    ? `[文字图片] ${m.card.text}`
+                    : '[文字图片]'
+                  : m.content;
 
   /** 单个角色的一个回复回合：组装独立 system → 流式 → finalize 落盘/记忆。
    *  allowSkip=false 的角色（被 @ 成员）必答；其余成员按人设自判（[SKIP] 整条丢弃不落盘）。
@@ -3133,7 +3200,11 @@ export function WxGroupChatPage({
             decideAiVoiceMessage(sKey, `${sKey}#${char.id}`);
           const body = voiceTurn
             ? '[语音]'
-            : notifyPreviewText({
+            : m.kind === 'textcard'
+              ? // 文字图片卡片通知摘要：lib notifyPreviewText 不认识 textcard（按空 content 不弹），
+                // 这里按会话列表同口径给「[文字图片] …」摘要（Task 20-e 外围第 6 项）
+                `[文字图片]${m.card?.text ? ` ${m.card.text}` : ''}`
+              : notifyPreviewText({
                 kind: m.kind,
                 content: m.content,
                 voiceText: m.voice?.transcript || (m.voice as VoiceMsgData | undefined)?.localText || null,
@@ -3197,7 +3268,14 @@ export function WxGroupChatPage({
         const buildGroupReplyMsgs = (rawText: string, asSingle: boolean, baseTime: number): WxGroupMsg[] => {
           const all: WxGroupMsg[] = [];
           let t = baseTime;
-          for (const part of extractRichActionParts(rawText)) {
+          // E1 轻防御（群聊暂不接生图管线——多成员锁脸归属未实现，一律降级卡片不生真图）：
+          // 先剥除回复里漏出的照片标签（[图片:…]/[照片:…] 全半角变体，imggen.extractPhotoTags），
+          // 剥出的正文照常走下方既有分段/富标记管线；标签只取第 1 个生成「文字图片」卡片消息
+          // （kind='textcard'，发送者=该成员，时间沿用本管线递推时钟），多余标签静默剥除
+          // （群聊暂不支持多图，异常输出丢弃即可）；剥除后正文为空时只发卡片、不发空文本消息
+          // （对齐朋友圈口径；下方清洗管线对空段本就跳过）
+          const { text: tagStripped, tags: photoTags } = extractPhotoTags(rawText);
+          for (const part of extractRichActionParts(tagStripped)) {
             if (part.type === 'action') {
               // 管理标记（禁言/解禁/移出/改群名/改公告）与卡片处理标记（领红包/收转账）分流入各自的执行器
               if (isGroupAdminAction(part.action) || isGroupChatSocialAction(part.action)) applyGroupAdminAction(char, part.action);
@@ -3287,11 +3365,35 @@ export function WxGroupChatPage({
               }
             }
           }
+          // 照片标签 → 「文字图片」卡片（追加在本轮文字之后；不生真图不接入库，不管生图配置，见文件头 E1 注释）
+          if (photoTags.length > 0) {
+            all.push({
+              id: msgIdx === 0 ? aiMsgId : `${aiMsgId}-${msgIdx}`,
+              role: 'peer',
+              senderId: char.id,
+              senderName: charName,
+              content: '',
+              time: t,
+              kind: 'textcard',
+              card: { text: photoTags[0].desc },
+            });
+            msgIdx += 1;
+            t += 600 + Math.floor(Math.random() * 600);
+          }
           return all;
         };
+        /** 流中分段照片标签 carry-over（E1 防截断）：[图片:xxx] 被分段器切成两半时，未闭合的尾部
+         *  留在本变量，与下一段拼接后再解析；回合收尾（finalize）拼回最后一段或剥除残留。
+         *  用回合级闭包变量而非组件 ref：每个成员回合是独立流，随回合生命周期自动消亡，
+         *  流错误中断时残留自动丢弃，无跨回合污染。 */
+        let photoCarry = '';
         /** 流中分段投递：分段器每凑齐一条完整消息回调一次，立刻解析并排队上屏（边接收边逐条显示） */
         const deliverSegment = (seg: string) => {
-          const built = buildGroupReplyMsgs(seg, false, Date.now());
+          // E1：每段进入解析前先拼接上一段遗留的未闭合标签起始，再把新的未闭合尾部截出留存
+          const merged = photoCarry + seg;
+          const { send, carry } = splitUnfinishedPhotoTag(merged);
+          photoCarry = carry;
+          const built = buildGroupReplyMsgs(send, false, Date.now());
           if (built.length === 0) return;
           deliveredAny = true;
           onSegmentDelivered?.(built.length); // audit4-L14：通知直调方本轮已有分段排队投递（error 收口判定用）
@@ -3340,8 +3442,12 @@ export function WxGroupChatPage({
               return;
             }
             // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
-            // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复按旧管线落盘
-            const built = buildGroupReplyMsgs(replyCount > 1 ? (result.tail ?? '') : result.content, replyCount <= 1, Date.now());
+            // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复按旧管线落盘。
+            // E1：收尾先把流中遗留的未闭合标签起始（photoCarry）拼回最后一段再解析；
+            // 至此仍无法闭合的残留（服务端截断）由 stripUnfinishedPhotoTag 兜底剥除，不上屏
+            const mergedTail = photoCarry + (replyCount > 1 ? (result.tail ?? '') : result.content);
+            photoCarry = '';
+            const built = buildGroupReplyMsgs(stripUnfinishedPhotoTag(mergedTail), replyCount <= 1, Date.now());
             // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给「（…）」占位兜底
             const finalBatch: WxGroupMsg[] =
               built.length > 0
@@ -4298,26 +4404,27 @@ export function WxGroupChatPage({
   }, [contacts, me.id, gid]);
 
   /** 群内克隆（转发到另一个群）：文本 → 转发卡片；表情/图片/位置 → 同类型消息；合并卡片原样保留；
-   *  红包/转账 → 占位文本卡片（不克隆活卡，不动资金）；语音 → 占位文本卡片（转写文本或 [语音]） */
+   *  红包/转账 → 占位文本卡片（不克隆活卡，不动资金）；语音 → 占位文本卡片（转写文本或 [语音]）；
+   *  文字图片 → 占位文本卡片（「[文字图片] …」摘要；转发整卡无生成入口，群聊卡片不做，接入成本高于收益） */
   const groupForwardClone = (m: WxGroupMsg): WxGroupMsg => {
     const base = { id: uid(), role: 'me' as const, senderId: 'me', senderName: me.name, time: Date.now() };
     if (m.fwd?.merged) return { ...base, content: m.content, kind: 'forward', fwd: { from: m.fwd.from, merged: true, title: m.fwd.title, records: m.fwd.records } };
     if (m.kind === 'sticker' && m.stk) return { ...base, content: '', kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { ...base, content: '', kind: 'image', img: { ...m.img } };
     if (m.kind === 'location' && m.loc) return { ...base, content: '', kind: 'location', loc: { ...m.loc } };
-    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'voice';
+    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'voice' || m.kind === 'textcard';
     return { ...base, content: isCard ? msgSnapshotOf(m) : m.content, kind: 'forward', fwd: { from: group.name }, quote: m.quote };
   };
 
   /** 单聊克隆（转发到微信好友/自己）：产出 wechat.tsx WxMsg 兼容对象（新 id、role=me、保留引用）；
-   *  语音 → 占位文本卡片（转写文本或 [语音]；WxSingleMsgShape 不含 voice 字段，不跨会话克隆音频） */
+   *  语音/文字图片 → 占位文本卡片（转写文本或 [语音]；WxSingleMsgShape 不含 voice/card 字段，不跨会话克隆） */
   const singleForwardClone = (m: WxGroupMsg): WxSingleMsgShape => {
     const base = { id: uid(), role: 'me' as const, time: Date.now() };
     if (m.fwd?.merged) return { ...base, content: m.content, kind: 'forward', fwd: { from: m.fwd.from, merged: true, title: m.fwd.title, records: m.fwd.records } };
     if (m.kind === 'sticker' && m.stk) return { ...base, content: '', kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { ...base, content: '', kind: 'image', img: { ...m.img } };
     if (m.kind === 'location' && m.loc) return { ...base, content: '', kind: 'location', loc: { ...m.loc } };
-    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'voice';
+    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'voice' || m.kind === 'textcard';
     return { ...base, content: isCard ? msgSnapshotOf(m) : m.content, kind: 'forward', fwd: { from: group.name }, quote: m.quote };
   };
 
@@ -4970,6 +5077,23 @@ export function WxGroupChatPage({
                    长按菜单由外层行容器的 bubblePress 提供（转文字/复制/…），转写结果显示在气泡下方；
                    voice 经 voiceViewOf 兜底重建（存储规范化不透传 synth/contactId/localText，AI 语音重载后仍可播放） */
                 renderMsgRow(m, <VoiceMsgBubble msgId={m.id} voice={voiceViewOf(m)} side={mine ? 'me' : 'peer'} theme="wx" />)
+              ) : m.kind === 'textcard' ? (
+                /* 「文字图片」卡片（E1 降级产物）：视觉与单聊同款（text-card-bubble，variant wx）。
+                   点击不弹生成面板——群聊暂不支持生图（多成员锁脸归属未实现），toast 说明不误导；
+                   card.text 为空的脏数据整行不渲染（兜底）；长按菜单/多选/撤回走通用路径 */
+                m.card?.text ? (
+                  renderMsgRow(
+                    m,
+                    <TextCardBubble
+                      variant="wx"
+                      text={m.card.text}
+                      signedBy={mine ? me.name : m.senderName || '群友'}
+                      onClick={() => {
+                        if (!selectMode) onToast('群聊暂不支持生成图片');
+                      }}
+                    />,
+                  )
+                ) : null
               ) : (
                 renderMsgRow(
                   m,

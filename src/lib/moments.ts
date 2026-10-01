@@ -46,6 +46,8 @@ import {
 } from '@/lib/memory';
 import { DEFAULT_BILINGUAL_PROMPT, getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loadBlock } from '@/lib/ios/block-state';
+// 相册挂点：动态配图生成成功后同步写入该角色的 AI 相册（与聊天端 flushPhotoJobs 同口径）
+import { addAlbum } from '@/lib/ios/album-store';
 
 // ---------------- 统一数据模型（视图层） ----------------
 
@@ -91,6 +93,10 @@ export interface MomentPostView {
   /** 「文字图片」卡片文字（AI 动态配图降级：未配置生图/生成失败时，画面描述印在卡片上充当配图；
    *  点击卡片可在配置了生图后升级为真实照片，见 upgradeMomentTextCard） */
   textCard?: string;
+  /** 该卡片是否已升级为真实照片（textCard 已清空、images 非空；用于「重新生成」入口的资格判定） */
+  textCardUpgraded?: boolean;
+  /** 最近一次生成/升级这张照片实际使用的画面描述（供重新生成时预填与兜底；legacy 帖子可能没有） */
+  textCardDesc?: string;
   /** 发动态时附的位置名（如「广州塔」；可选） */
   location?: string;
   /** 转发引用（QQ 空间转发：本条是转发理由，原动态摘要嵌在里面；可选） */
@@ -221,6 +227,8 @@ interface WxRawPost {
   contentZh?: unknown;
   images?: unknown;
   textCard?: unknown;
+  textCardUpgraded?: unknown;
+  textCardDesc?: unknown;
   time?: unknown;
   likes?: unknown;
   comments?: unknown;
@@ -251,6 +259,8 @@ interface QqRawPost {
   likedBy?: unknown;
   images?: unknown;
   textCard?: unknown;
+  textCardUpgraded?: unknown;
+  textCardDesc?: unknown;
   author?: unknown;
   peerId?: unknown;
   createdAt?: unknown;
@@ -372,6 +382,8 @@ export function listMomentPosts(
           contentZh: str(p.contentZh) || undefined,
           images: strArr(p.images),
           textCard: str(p.textCard) || undefined,
+          textCardUpgraded: p.textCardUpgraded === true || undefined,
+          textCardDesc: str(p.textCardDesc) || undefined,
           location: str(p.location) || undefined,
           repostOf: parseRepostRef(p.repostOf),
           createdAt,
@@ -448,6 +460,8 @@ export function listMomentPosts(
         contentZh: str(p.contentZh) || undefined,
         images: strArr(p.images),
         textCard: str(p.textCard) || undefined,
+        textCardUpgraded: p.textCardUpgraded === true || undefined,
+        textCardDesc: str(p.textCardDesc) || undefined,
         location: str(p.location) || undefined,
         repostOf: parseRepostRef(p.repostOf),
         createdAt,
@@ -478,6 +492,8 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
         contentZh: p.contentZh || undefined,
         images: p.images,
         textCard: p.textCard || undefined,
+        textCardUpgraded: p.textCardUpgraded || undefined,
+        textCardDesc: p.textCardDesc || undefined,
         time: p.createdAt,
         author: p.author,
         peerId: p.peerId ?? undefined,
@@ -523,6 +539,8 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
           likedBy: p.likes.map((l) => l.name),
           images: p.images,
           textCard: p.textCard || undefined,
+          textCardUpgraded: p.textCardUpgraded || undefined,
+          textCardDesc: p.textCardDesc || undefined,
           author: p.author,
           peerId: p.peerId ?? undefined,
           createdAt: p.createdAt,
@@ -1953,7 +1971,10 @@ export async function aiPostMoment(args: {
       let images: string[] | undefined;
       let textCard: string | undefined;
       if (tags.length > 0) {
-        const tag = tags[0]; // 节制：一条动态最多配一张
+        // 一条动态最多一张配图是提示词明确教过的产品规则（见 generate 路由「配图要有节制」）。
+        // 模型异常输出多标签时：剥除即可（帖子无「失信语境」，静默剥除可接受），
+        // 多余标签丢弃不影响正文——extractPhotoTags 已把全部标签从正文剥离干净，这里只取第一张用。
+        const tag = tags[0];
         const cfg = useSettings.getState().imgGenConfig;
         if (cfg.enabled && imgGenConfigReady(cfg)) {
           try {
@@ -1965,6 +1986,8 @@ export async function aiPostMoment(args: {
               useRef: tag.useRef,
             });
             images = [r.src];
+            // 相册挂点：真图生成成功 → 同步写入该角色的 AI 相册（contactId 恒非空，防御性守卫）
+            if (peer.id) void addAlbum(peer.id, r.src, { desc: tag.desc, origin: 'ai' });
           } catch {
             textCard = tag.desc;
           }
@@ -1993,11 +2016,14 @@ export async function aiPostMoment(args: {
  * 点击动态里的「文字图片」卡片 → 用图像生成把它升级为真实照片（原位替换，持久化，广播刷新）。
  * 聊天端 TextCardActionSheet「生成图片」同口径：读设置 imgGenConfig（未配置/生成失败 → 返回错误信息）。
  * 照片按角色锁脸（post.peerId 读参考图/外貌描述；legacy 无 peerId 时无锁脸生成纯描述图）。
+ * desc 可选：传非空时用它作为生图描述（生成前可改描述，与聊天端同口径），否则回落卡片文字 hit.textCard；
+ * 升级成功时把实际使用的描述存进 textCardDesc 并打上 textCardUpgraded 标记（供重新生成预填/资格判定，见 regenerateMomentImage）。
  */
 export async function upgradeMomentTextCard(
   platform: MomentPlatform,
   postId: string,
-  userName: string
+  userName: string,
+  desc?: string
 ): Promise<{ ok: boolean; error?: string }> {
   const cfg = useSettings.getState().imgGenConfig;
   if (!cfg.enabled || !imgGenConfigReady(cfg)) {
@@ -2006,18 +2032,70 @@ export async function upgradeMomentTextCard(
   const list = listMomentPosts(platform, userName);
   const hit = list.find((p) => p.id === postId);
   if (!hit || !hit.textCard) return { ok: false, error: '找不到这张卡片' };
+  // 生图描述：自定义描述（trim 非空）优先，否则用卡片文字
+  const finalDesc = (desc ?? '').trim() || hit.textCard;
   try {
     const r = await generateCharacterPhoto({
       cfg,
       contactId: hit.peerId ?? '',
-      desc: hit.textCard,
+      desc: finalDesc,
       charName: hit.authorName,
       useRef: true,
     });
     persistMomentPosts(
       platform,
-      list.map((p) => (p.id === postId ? { ...p, textCard: undefined, images: [r.src] } : p))
+      list.map((p) =>
+        p.id === postId
+          ? { ...p, textCard: undefined, images: [r.src], textCardUpgraded: true, textCardDesc: finalDesc }
+          : p
+      )
     );
+    // 相册挂点：升级成功的真图同步写入该角色的 AI 相册（contactId 为空则跳过）
+    if (hit.peerId) void addAlbum(hit.peerId, r.src, { desc: finalDesc, origin: 'ai' });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error && e.message ? e.message : '生成失败，请稍后再试' };
+  }
+}
+
+/**
+ * 重新生成已升级为真图的「文字图片」卡片照片（原位替换 images[0]，持久化，广播刷新）。
+ * 资格：帖子存在 + textCardUpgraded===true + images 非空（卡片未升级/已是纯图动态均不可走此入口）。
+ * desc 为本次输入的画面描述；trim 后为空则回落上次使用的 textCardDesc（两者都空返回错误）。
+ * 锁脸口径与 upgradeMomentTextCard 完全一致（post.peerId 读参考图/外貌描述，legacy 无 peerId 无锁脸）；
+ * 成功后原位替换 images[0]、更新 textCardDesc，并把新图写入角色 AI 相册。
+ */
+export async function regenerateMomentImage(
+  platform: MomentPlatform,
+  postId: string,
+  userName: string,
+  desc: string
+): Promise<{ ok: boolean; error?: string }> {
+  const cfg = useSettings.getState().imgGenConfig;
+  if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+    return { ok: false, error: '请先在 设置 › 图像生成 完成配置' };
+  }
+  const list = listMomentPosts(platform, userName);
+  const hit = list.find((p) => p.id === postId);
+  if (!hit || hit.textCardUpgraded !== true || hit.images.length === 0) {
+    return { ok: false, error: '找不到可重新生成的照片' };
+  }
+  const finalDesc = desc.trim() || (hit.textCardDesc ?? '').trim();
+  if (!finalDesc) return { ok: false, error: '缺少画面描述' };
+  try {
+    const r = await generateCharacterPhoto({
+      cfg,
+      contactId: hit.peerId ?? '',
+      desc: finalDesc,
+      charName: hit.authorName,
+      useRef: true,
+    });
+    persistMomentPosts(
+      platform,
+      list.map((p) => (p.id === postId ? { ...p, images: [r.src], textCardDesc: finalDesc } : p))
+    );
+    // 相册挂点：重新生成的成图同样入相册（contactId 为空则跳过）
+    if (hit.peerId) void addAlbum(hit.peerId, r.src, { desc: finalDesc, origin: 'ai' });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error && e.message ? e.message : '生成失败，请稍后再试' };

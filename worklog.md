@@ -12933,3 +12933,158 @@ Stage Summary:
 - 「AI 发图/文字图片/朋友圈配图」规则审查完成：主体协议健全，三处口径问题修复——AI 卡转图锁脸与重新生成对齐（首次=重生成=锁脸）、小助手标签不再静默吞掉（无锁脸直生/失败降卡片，与未配置时一致）、朋友圈清洗不再吞开头的照片标签
 - 色值断言级 E2E 证明锁脸分叉精确生效：同一描述下 AI 卡→含外貌提示词色、我的卡→纯描述色，重载持久化
 - 产出：src/components/apps/{chat,wechat,qq}.tsx（generateCardImage role 分叉+flushPhotoJobs 小助手降级+注释）、src/app/api/moments/generate/route.ts（cleanContent 照片标签守卫）
+
+---
+Task ID: 20-a1
+Agent: imggen-engine-agent
+Task: imggen.ts 引擎层规则审查修复——正则上限放宽 160→400 / 客户端请求 150s 超时+超时友好文案 / 新增流式分段防截断工具（carry-over）
+
+Work Log:
+- 通读 worklog 最后两条（Task 19 规则审查、Task 18 卡片转图行为）确认口径：本轮全部为向后兼容的引擎层微调，仅改 src/lib/imggen.ts，不动既有导出签名
+- （F2）PHOTO_TAG_RE 描述上限 {1,160} → {1,400}（朋友圈双语模式下照片描述会中英双语化，160 上限令整个标签匹配失败原样上屏）；extractPhotoTags 注释同步补充上限说明与原因
+- （C1）新增 REQUEST_TIMEOUT_MS=150_000 / REQUEST_TIMEOUT_MSG='生图请求超时，请稍后重试' / isTimeoutError()（DOMException name=TimeoutError|AbortError，兜底 Error+正则 /timeout|abort/i）/ fetchWithTimeout()（AbortSignal.timeout 包装，超时转友好文案、其余错误原样抛出）；四处 fetch 全部接入：proxy /api/imggen JSON、postProxy multipart、direct generations 循环、direct edits multipart 循环；两处 direct 循环 catch 增加超时识别分支（兜住 res.json() 阶段抛出的中断错误）；服务端 /api/imggen 路由未动（其 280s 上限不变，客户端 150s 提前降级）
+- （F1）新增导出：UNFINISHED_PHOTO_TAG_RE（尾部 $ 锚定的未闭合标签起始）、splitUnfinishedPhotoTag(text)（命中则 send=前段/carry=尾段，供流式分段与下一段拼接后再走 extractPhotoTags）、stripUnfinishedPhotoTag(text)（兜底剥除尾部半截标签防上屏）；均带中文注释说明流式把 [图片:xxx] 切成两段的场景
+- 顶部文件头注释补第 6 条：本轮改动说明（150s 超时 / 400 上限 / 分段 carry-over 工具）
+- 自验：bun run lint ✓（仅 qq/wechat 体积 BABEL note，非错误）；bunx tsc --noEmit ✓；bun 临时脚本 17 项断言全 PASS 后已删除——splitUnfinishedPhotoTag('你好[图片:黄昏的咖') → send='你好'/carry='[图片:黄昏的咖'（另验全角三段式/整段半截/混合场景/carry 拼接下一段后 extractPhotoTags 完整还原 desc）；extractPhotoTags 200/300/400 字描述可识别、401 字不识别、旧 160 正则对照对 200 字确失败；既有短标签剥除/[照片:不使用参考图:]useRef=false 语义回归通过；未启动 dev server
+
+Stage Summary:
+- imggen.ts 引擎层三项向后兼容修复完成：照片标签描述上限 400 字（双语长描述不再整标签漏剥）、生图请求统一 150s 客户端超时且超时报「生图请求超时，请稍后重试」（不再裸抛英文 TimeoutError message）、新增流式分段防截断三件套（UNFINISHED_PHOTO_TAG_RE / splitUnfinishedPhotoTag / stripUnfinishedPhotoTag）供三端聊天与群聊接入（本任务不改调用方）
+- lint/tsc 全绿，17 项行为断言全 PASS（含 400 边界、旧正则对照、carry-over 闭环回归）；产出仅 src/lib/imggen.ts + worklog 本条
+
+---
+Task ID: 20-a2
+Agent: moments-engine-agent
+Task: moments 引擎层修复——升级卡支持自定义描述+新增 regenerateMomentImage+三处配图成功挂相册+照片双语规则改纯中文+多标签产品规则注释
+
+Work Log:
+- 读 worklog 最后两条（Task 19 规则审查 / Task 18 卡片转图本地化）对齐口径后动工；仅改 src/lib/moments.ts 与 src/app/api/moments/generate/route.ts（未碰 imggen.ts/wechat/qq 等并行代理文件）
+- （A1）upgradeMomentTextCard 签名加可选 desc?: string（第 4 参，向后兼容）：trim 非空优先用作生图描述、否则回落 hit.textCard；成功时新字段落帖 textCardUpgraded=true、textCardDesc=finalDesc（原 textCard 置空、images=[src] 不变）
+- （A2）新增导出 regenerateMomentImage(platform, postId, userName, desc)：未配置生图返回「请先在 设置 › 图像生成 完成配置」；资格=帖子存在+textCardUpgraded===true+images 非空；desc.trim() 空则回落 textCardDesc（双空报「缺少画面描述」）；generateCharacterPhoto 锁脸（contactId=hit.peerId ?? ''，useRef:true）成功后原位替换 images[0]+更新 textCardDesc；错误返回风格与 upgrade 完全一致
+- （A2 类型）MomentPostView 加可选 textCardUpgraded?: boolean / textCardDesc?: string（带中文注释）；WxRawPost/QqRawPost 同步加 unknown 字段，listMomentPosts 两分支宽容读取（legacy 缺省 undefined）、persistMomentPosts 两分支显式透传（无损往返；addCharMomentPost 走 MomentPostView 展开式天然支持）
+- （B 相册挂点）moments.ts 新增 import { addAlbum } from '@/lib/ios/album-store'（相册 API 形态与聊天端一致：addAlbum(cid, src, { desc, origin: 'ai' })）；三处生成成功后 fire-and-forget：aiPostMoment 真图成功（desc=tag.desc）、upgradeMomentTextCard 升级成功（desc=finalDesc）、regenerateMomentImage 重生成成功（desc=finalDesc），contactId 为空一律跳过
+- （F2 提示词）route.ts DEFAULT_BILINGUAL_PROMPT「照片双语规则」改写：标签结构 [照片:使用参考图:描述] 等保持原样不动，描述只用中文、不做双语、不要中英混写（附原因：混外文降出图质量+标签顶超长识别失败）；post 分支配图协议行补「描述只写中文，不要中英混写」
+- （D 注释）aiPostMoment const tag = tags[0] 处补产品规则注释：一条动态最多一张配图是提示词明确教过的规则；模型异常多标签时静默剥除可接受（帖子无「失信语境」），多余标签丢弃不影响正文
+- 自验：bun run lint ✓（仅 qq/wechat >500KB BABEL 提示，非错误）；bunx tsc --noEmit ✓（零报错，升级的可选参数对既有调用方完全兼容）；未启动 dev server
+
+Stage Summary:
+- 朋友圈/QQ 动态配图管线引擎层补齐：升级卡可改描述、升级后可按新/旧描述重新生成（新增 regenerateMomentImage，锁脸与升级同口径）、三处成图全部入角色 AI 相册；textCardUpgraded/textCardDesc 全链路持久化（legacy 帖子宽容缺省）
+- 照片标签描述改纯中文单语（提示词双语规则+配图协议双处约束），消除双语描述顶爆标签 160 字上限与混语言提示词劣化出图的根因；imggen 层 400 字上限放宽由并行代理处理
+- 产出：src/lib/moments.ts、src/app/api/moments/generate/route.ts；新导出签名 regenerateMomentImage(platform: MomentPlatform, postId: string, userName: string, desc: string): Promise<{ ok: boolean; error?: string }>；upgradeMomentTextCard 第 4 参新增可选 desc?: string
+---
+Task ID: 20-c
+Agent: wechat-agent
+Task: 微信端（wechat.tsx）修复——聊天 B1/B2/G1/G2/D/F1/F3 七项挂点与防截断补齐 + 朋友圈 A1 描述可改升级弹层 / A2 升级图重新生成入口
+
+Work Log:
+- 读 worklog 最后三条（Task 19 / 20-a1 / 20-a2）确认引擎层已就绪：imggen 新导出 splitUnfinishedPhotoTag/stripUnfinishedPhotoTag/UNFINISHED_PHOTO_TAG_RE、moments 新导出 regenerateMomentImage + upgradeMomentTextCard 第 4 参 desc + textCardUpgraded/textCardDesc 持久化；仅改 src/components/apps/wechat.tsx（git diff 确认，其他改动文件均为并行代理所改）
+- （B1）generateCardImage AI 卡分支（m.role==='peer'）成功替换后补齐挂点：addAlbum(origin 'ai') + addVisionDecision(action 'imggen') + notePhotoMemory + listAlbums→albumCacheRef 缓存刷新；我的卡分支不加
+- （B2）submitImgRegen 成功后 target.role==='peer' → void addAlbum(peer.id, r.src, { desc, origin: 'ai' })
+- （G2）WxMsg.img 加 prevSrc?: string（中文注释）；submitImgRegen 替换时 prevSrc 存旧图；长按菜单 isImage && img.prevSrc 加「恢复上一张」（icon B.recall）→ case 'restoreimg' 交换 src↔prevSrc + toast「已恢复上一张」（可来回切）
+- （D）flushPhotoJobs 消费时 jobs.length>2 补投系统行「还有 N 张图片没有生成出来」（kind:'sys'，置于分支前未配置/配置完整两路共用只提示一次）
+- （F1）carryTextRef 组件级 ref：runAiTurn 回合开始清空；deliverSegment 先 merged=carry+seg → splitUnfinishedPhotoTag → send 投递/carry 存回；finalize 先取走 carry 清空再拼回最后一段；buildReplyMsgs 文本分支加 stripUnfinishedPhotoTag 兜底（后台接力整段直入管线防半截标签上屏，单条模式 onSegment 不触发天然安全）；语音通话/动作/表情解析未触碰
+- （F3）buildReplyMsgs 标签入队后 kvSet('wx-photo-jobs:'+sessionKey, photoJobsRef.current)；flushPhotoJobs 消费时 kvDel；flushPhotoJobs 后新增挂载/切会话恢复 effect（kvGet→Array.isArray+逐项 desc 校验→kvDel→photoJobsRef 补回→flushPhotoJobs({aiId:uid(),...}) 后台接力补做生成）；idb-kv 三件套原有 import
+- （G1）generateCardImage / submitImgRegen 描述 trim 后 .slice(0, 400)
+- （A1）MomentsPage：handleUpgradeCard 改为打开「生成图片」弹层（不再直接生图），新增 genSheet/genSheetBusy/genSheetError state + submitMomentGen——upgrade 模式调 upgradeMomentTextCard('wx',postId,me.name,desc||undefined)（留空回落卡片文字），成功关弹层 + toast「已生成照片，卡片已换成真图」，失败留在弹层显示 error；upgradingCardId busy 防重入保留（生成中仍点亮卡片行「正在生成图片…」）
+- （A2）MomentRow 加 onRegenImage 可选 prop：单图 <img> 复用评论长按同款 pressRef 计时器模式（480ms/移动取消/抑制 click）+ onContextMenu 桌面右键同入口；仅 post.textCardUpgraded===true && images 非空由父级传入（用户手动发的图无入口）；regen 模式弹层预填 textCardDesc ?? ''、标题「重新生成图片」，确认调 regenerateMomentImage → toast「已重新生成」，列表刷新由引擎 emitMomentsChanged 广播 → 宿主 subscribeMomentsChanged/reloadMoments 自动完成
+- 新增 MomentImageGenSheet 组件（wechat.tsx 内部、朋友圈代码区顶部）：iOS 底部小弹层样式对齐 WxTextCardSheet（fixed inset-0 z-50 items-end 圆角 16 底板 #1C1C1E 暗色适配），textarea 预填无 maxLength、主按钮「生成图片」/busy「生成中…」disabled、错误行在弹层内、取消关闭（busy 不可关）；testid wx-moment-imggen-sheet/close/input/error/submit
+- WxMoment 接口补 textCardUpgraded?/textCardDesc? 可选字段（引擎 persistMomentPosts 已显式透传，legacy 缺省宽容）
+- 自验：bun run lint ✓（仅 qq/wechat >500KB BABEL note，与既往相同非错误）；bunx tsc --noEmit ✓ 零报错；未启动 dev server；逐项核对 1-10 全部落地
+
+Stage Summary:
+- 微信端聊天与朋友圈两条生图管线规则补齐：AI 卡转图/重新生成同口径入相册+决策日志+记忆，重新生成可「恢复上一张」，描述统一截 400，多标签丢弃有系统行提示，流式分段照片标签防截断（carry-over + 兜底剥除），照片任务快照持久化可在重启后补做生成
+- 朋友圈「文字图片」卡片升级从直接生图改为「生成图片」弹层（描述预填可改，失败留在弹层可重试），升级后的真图长按/右键可「重新生成」（预填上次描述），用户手动发的图无此入口
+- 产出仅 src/components/apps/wechat.tsx（+250/-20）；F1 挂点=deliverSegment/finalize/回合开始清 ref/buildReplyMsgs 兜底；F3 挂点=buildReplyMsgs 入队快照、flushPhotoJobs 消费删除、flushPhotoJobs 后恢复 effect；朋友圈弹层=MomentImageGenSheet（升级/重新生成同款），重新生成入口=MomentRow 单图长按(480ms)+右键
+
+---
+Task ID: 20-b
+Agent: sms-chat-agent
+Task: 信息端（chat.tsx）信息端修复——卡片转图/重新生成补相册挂点、恢复上一张、生成中反馈确认、多标签溢出提示、流式分段 carry-over、照片任务持久化、描述长度上限
+
+Work Log:
+- 读 worklog 最后三条（Task 19 规则审查 / 20-a1 imggen 引擎层 / 20-a2 moments 引擎层）确认既有口径：本轮只改 src/components/apps/chat.tsx（未碰 wechat/qq/群聊/text-card-bubble 等并行代理文件），消费 20-a1 新导出的 UNFINISHED_PHOTO_TAG_RE/splitUnfinishedPhotoTag/stripUnfinishedPhotoTag
+- （B1）generateCardImage 的 aiCard 分支（m.role==='assistant' && wbContactId）成功原位替换后补齐与 flushPhotoJobs 完全同口径挂点：addAlbum(origin 'ai') + addVisionDecision(action 'imggen') + notePhotoMemory + listAlbums→albumSummaryRef 缓存刷新（照抄 flushPhotoJobs 那段）；我的卡分支（aiCard=false）不加（无角色身份）
+- （B2）submitImgRegen 成功后 target.role==='assistant' && wbContactId 时 void addAlbum(wbContactId, r.src, { desc, origin: 'ai' })（追加式，相册保留历史版本）
+- （G2）ChatMsg.img 加可选 prevSrc（中文注释：重新生成前的上一版图，支持恢复）；submitImgRegen 替换时带 prevSrc: x.img?.src；buildMsgMenuItems 加条件项「恢复上一张」（仅 isImage && img?.prevSrc，图标 History）；handleMenuAction 加 case 'restoreimg'：目标约束与重新生成一致（role==='assistant' || img.fromCard），src↔prevSrc 互换（当前 src 存回 prevSrc 可反复换回），toast「已恢复上一张」；既有保存/删除/引用/多选/撤回/重新生成等菜单项未动
+- （C2）确认 text-card-bubble.tsx 的 TextCardActionSheet 已有 busy 参数（生成行转圈+禁用+防关闭，text-card-bubble.tsx:81-99/150-169）且 chat.tsx 已传 busy={cardGenBusy}、generateCardImage 已有 cardGenBusy 守卫——该项已就绪无需改动（也未碰该共享文件）
+- （D）flushPhotoJobs 三个分支（未配置/小助手无 cid/正常 cid）jobs.slice(0,2) 丢弃多余任务时投一条系统行「还有 N 张图片没有生成出来」（N=jobs.length-2）：未配置在降级卡片之后、小助手同理、正常分支在「正在拍照…」行之外单独投一条
+- （F1）组件级 photoCarryRef = useRef('')，startAiTurn 入口清空（防上回合流中断/换号中止残留串入）；deliverSegment 每段 merged = carry + seg → splitUnfinishedPhotoTag → carry 留存/send 走原 buildReplyMsgs 管线（send 空则跳过本轮投递；分段器只防半角 [ 切碎，全角【图片：…】被句末标点切开的场景由 carry 闭合还原）；finalize 收尾把残留 carry 与收尾文本（多条=tail/单条=content）合并后再 splitUnfinishedPhotoTag：闭合标签正常还原生图，仍未闭合的残留直接丢弃不上屏，photoCarryRef 清空（流错误中断同路径清空）；bg 接力路径（deliverBgItems）每段 stripUnfinishedPhotoTag 兜底防服务端截断的半截标签上屏；语音通话标记/动作标记/表情解析不受影响（carry 正则只匹配尾部未闭合的照片/图片标签起始）
+- （F3）buildReplyMsgs 照片标签入队后同步快照 kvSet('sms-photo-jobs:'+storageKey, JSON.stringify(...))；flushPhotoJobs 开头消费即 kvDel；挂载恢复 effect（bg pull effect 之后）：kvGet→JSON.parse 校验数组且每项有 string desc→清 kv 一次性消费（防重入）→photoJobsRef 塞回交 flushPhotoJobs(bgEnqueueBatch) 走正常投递（「正在拍照…」/降级卡片/相册决策记忆挂点全部复用，落库+通知与消息持久化同口径），kv 已清故 effect 重跑幂等
+- （G1）generateCardImage 与 submitImgRegen 的 desc trim 后 .slice(0, 400)（与 20-a1 照片标签正则上限同口径）
+- 自验：bunx tsc --noEmit ✓（零报错）；bun run lint ✓（仅 qq/wechat >500KB BABEL note，非错误，且为并行代理文件未触碰）；未启动 dev server；逐项自查改动清单 1-8 全部落地
+
+Stage Summary:
+- 信息端发图管线八项修复完成：AI 卡转图/重新生成补齐相册-决策日志-记忆-缓存挂点（与自动生图完全同口径，我的卡不挂）、图片可一键恢复上一版（src↔prevSrc 可反复换回）、多标签溢出不再静默（系统行告知）、流式分段把【图片：…]标签切碎时跨段拼接还原（收尾残留不上屏）、照片任务快照持久化（进程被杀后进会话自动补发）、生成描述 400 字上限
+- C2 生成中反馈经核查已由既有 busy 参数+cardGenBusy 守卫覆盖（text-card-bubble.tsx 未改动）
+- 产出：仅 src/components/apps/chat.tsx（imports 补 kvDel/History/splitUnfinishedPhotoTag/stripUnfinishedPhotoTag）；F1 挂点：photoCarryRef 声明 chat.tsx:1297-1299、startAiTurn 入口清空 :1549-1550、deliverSegment carry-over :1755-1763、finalize 合并+丢弃+清空 :1796-1801、bg 兜底 :1947-1955；F3 恢复路径：入队快照 :1515-1519、消费即清 :1314-1315、挂载恢复 effect :1999-2026
+
+---
+Task ID: 20-d
+Agent: qq-agent
+Task: QQ 端（qq.tsx）修复——聊天 B1/B2/G1/G2/D/F1/F3 七项挂点与防截断补齐 + QQ 空间 A1 描述可改升级弹层 / A2 升级图重新生成入口
+
+Work Log:
+- 读 worklog 最后四条（Task 19 / 20-a1 imggen 引擎层 / 20-a2 moments 引擎层 / 20-c 微信端参考实现）确认引擎层已就绪与微信端同款口径；仅改 src/components/apps/qq.tsx（git diff 确认未碰其他并行代理文件）
+- （B1）generateCardImage AI 卡分支（m.role==='peer'）成功原位替换后补齐与 flushPhotoJobs 完全同口径挂点：addAlbum(origin 'ai') + addVisionDecision(action 'imggen') + notePhotoMemory + listAlbums→albumCacheRef 缓存刷新；我的卡分支（role=me）不加
+- （B2）submitImgRegen 成功后 target.role==='peer' → void addAlbum(peer.id, r.src, { desc, origin: 'ai' })（追加式保留历史版本）
+- （G2）QQMsg.img 加可选 prevSrc（中文注释）；submitImgRegen 替换时 prevSrc 存旧图（content 与 img.src 同步更新，QqImageBubble 读 content）；buildMsgMenuItems 加条件项「恢复上一张」（isImage && img.prevSrc，icon B.recall）→ case 'restoreimg' 交换 src↔prevSrc + 同步 content + toast「已恢复上一张」（可来回切）
+- （D）flushPhotoJobs 消费时 jobs.length>2 补投系统行「还有 N 张图片没有生成出来」（kind:'sys'，置于未配置/配置完整两分支之前共用只提示一次，对齐微信/信息端口径）
+- （F1）组件级 photoCarryRef：runAiTurn 回合开始清空（wantCallSeenRef 重置旁）；deliverSegment 先 merged=carry+seg → splitUnfinishedPhotoTag → carry 存回 / send 走原 buildReplyMsgs 管线；finalize 先取走 carry 清空再拼回最后一段（carry + (replyCount>1 ? tail : content)），仍无法闭合的残留由 buildReplyMsgs 内 stripUnfinishedPhotoTag 兜底剥除不投递；buildReplyMsgs 文本分支加 stripUnfinishedPhotoTag 兜底（后台接力整段直入管线防半截标签上屏）；H1 换号纪元挡板仍在 carry 处理之前；语音通话/动作/表情解析未触碰
+- （F3）buildReplyMsgs 照片标签入队后快照 kvSet('qq-photo-jobs:'+sessionKey, JSON.stringify(...))；flushPhotoJobs 消费开头 kvDel；bgEnqueueBatch 之后新增挂载/切会话恢复 effect（kvGet→typeof string→JSON.parse→Array.isArray+逐项 desc:string 校验→kvDel→photoJobsRef 补回→flushPhotoJobs(bgEnqueueBatch) 后台接力补做生成；快照已清故 effect 重跑幂等）；idb-kv 三件套原有 import
+- （G1）generateCardImage / submitImgRegen 描述 trim 后 .slice(0, 400)
+- （A1）ZonePage：原 upgradeCard（直接生图）改造为 handleUpgradeCard 打开「生成图片」弹层；新增 genSheet/genSheetBusy/genSheetError state + submitZoneGen——upgrade 模式调 upgradeMomentTextCard('qq',postId,me.name,desc||undefined)（留空回落卡片文字），成功关弹层 + toast「已生成照片，卡片已换成真图」，失败留在弹层显示 error；upgradingCardId busy 防重入保留（生成中卡片行仍显示「正在生成图片…」）
+- （A2）帖子配图 img 加长按（480ms 计时器 + 移动取消 + 抑制 click，复用评论长按同款 pressRef 模式）+ onContextMenu 右键入口：仅 post.textCardUpgraded===true && images 非空挂 handler（用户手动发的图无入口）；regen 模式弹层预填 textCardDesc ?? ''，确认调 regenerateMomentImage('qq',postId,me.name,desc) → toast「已重新生成」；列表刷新由引擎 emitMomentsChanged 广播 → ZonePage subscribeMomentsChanged 自动完成
+- 新增 ZoneImageGenSheet 组件（qq.tsx 内部、ZonePage 之前）：iOS 底部小弹层按 QQ 端样式习惯（absolute inset-0 z-50 底部圆角 16 底板 dark:#1C1C1E、textarea 聚焦描边 QQ 蓝 #0099FF、主按钮「生成图片」/busy 转圈「生成中…」disabled、错误行在弹层内、busy 中不可关）；testid qq-moment-imggen-sheet/close/input/error/submit
+- ZonePost 接口补 textCardUpgraded?/textCardDesc? 可选字段（引擎 persistMomentPosts 已显式透传到 qq-zone-posts 键，loadZonePosts 不过滤字段原样透传，legacy 缺省宽容）
+- 自验：bun run lint ✓（仅 qq/wechat >500KB BABEL note，与既往相同非错误）；bunx tsc --noEmit ✓ 零报错；未启动 dev server；逐项自查改动清单 1-10 全部落地
+
+Stage Summary:
+- QQ 端聊天与 QQ 空间两条生图管线规则补齐（与微信端 20-c 同口径）：AI 卡转图/重新生成同口径入相册+决策日志+记忆+相册缓存，重新生成可「恢复上一张」（content/img.src 双同步可来回切），描述统一截 400，多标签丢弃有系统行提示，流式分段照片标签防截断（carry-over + 兜底剥除），照片任务快照持久化（进程被杀后进会话自动补做生成）
+- QQ 空间「文字图片」卡片升级从直接生图改为「生成图片」弹层（描述预填可改，失败留在弹层可重试），升级后的真图长按/右键可「重新生成」（预填上次描述），用户手动发的图无此入口
+- 产出仅 src/components/apps/qq.tsx（+264/-23）；F1 挂点=photoCarryRef 声明 :3686、runAiTurn 回合开始清空 :4240、deliverSegment carry-over :4263-4265、finalize 取走+清空+拼回 :4304-4305/:4322、buildReplyMsgs 兜底 :3947-3949；F3 挂点=buildReplyMsgs 入队快照 :3945、flushPhotoJobs 消费即清 :3701、bgEnqueueBatch 后恢复 effect :4420-4436；QQ 空间弹层=ZoneImageGenSheet（升级/重新生成同款，:11452），重新生成入口=帖子配图长按(480ms)+右键（:11653/:11945）
+---
+Task ID: 20-e
+Agent: group-chat-agent
+Task: 群聊 E1 轻防御——微信群/QQ 群照片标签剥除降级「文字图片」卡片（不做生图）+ 流式分段防截断 + 持久化编解码 + 渲染/上下文/外围接入
+
+Work Log:
+- 读 worklog 最后四条（Task 19 / 20-a1 / 20-a2 / 20-c、20-b）对齐口径：imggen 引擎层 extractPhotoTags/splitUnfinishedPhotoTag/stripUnfinishedPhotoTag 已就绪；单聊端 TextCardBubble（text-card-bubble.tsx）为纯展示组件可直接复用；本轮仅改 wx-group.tsx 与 qq-group.tsx 两文件（未碰 groups.ts/wechat/qq 等并行代理文件）
+- 【约束发现】群消息 union（WxGroupMsg.kind）与落盘 normalizeMsg 都在 lib/ios/groups.ts（不在可改清单）：normalizeMsg 会把未知 kind 剥成 'text' 并丢弃未知字段 card——直接落盘 kind='textcard' 会在下次 load 时降级为空文本气泡。解法：两文件各自做组件级类型扩展 + 存取编解码（见下），groups.ts 零改动
+- （1·消息类型）两文件各自：import 改 `type WxGroupMsg as WxGroupMsgBase`，模块级 `type WxGroupMsg = Omit<WxGroupMsgBase,'kind'> & { kind?: WxGroupMsgBase['kind'] | 'textcard'; card?: { text: string } }`（对齐单聊 WxMsg 字段命名），文件内全部既有 WxGroupMsg 引用自动切到扩展类型；img 类型未动（wx-group.tsx:215 / qq-group.tsx:193）
+- （7·持久化）`loadGroupMsgs as loadGroupMsgsRaw` / `saveGroupMsgs as saveGroupMsgsRaw` 后定义同名组件级包装（wx-group.tsx:251/254 / qq-group.tsx:229/232，既有调用点零改动全量走包装）：落盘编码 textcard → kind='text' + content=「[文字图片]」标记前缀+卡片文字（GROUP_TEXTCARD_MARK），读取解码反向还原（正文清空、文字进 card.text）；标记格式使 lib 层 groupPreview（会话列表摘要）天然显示「小明：[文字图片]黄昏的海边…」；save→load→save 幂等，往返不丢字段；理论碰撞（真实文本恰好以标记开头）概率可忽略已注释
+- （2·剥标签降级）buildGroupReplyMsgs（流中分段与 finalize 尾段共用的解析管线）入口 `extractPhotoTags(rawText)`：剥出的正文照常走 extractRichActionParts/分句/富标记管线；photoTags 只取第 1 个在正文之后追加一条卡片消息（kind='textcard'、card.text=tag.desc、发送者=该成员 senderId/charName、时间沿用管线递推时钟 t、id 沿用 aiMsgId-N 序列），多余标签静默剥除（群聊暂不支持多图）；正文为空且只有标签时只发卡片不发空文本（既有清洗管线跳过空段）；不做生图——不管生图配置一律卡片，文件头+函数处注释「群聊暂不接生图管线（多成员锁脸归属未实现）」（wx-group.tsx:3263/3364 / qq-group.tsx:2882/2982）
+- （3·流式防截断）群聊确认存在流式分段（onSegment→deliverSegment）：runCharTurn 内回合级闭包变量 photoCarry（替代任务书中的组件 ref——每成员回合独立流，随回合生命周期自动消亡，流错误中断残留自动丢弃，无跨回合污染，语义与「回合开始清 ref」等价且更严格）；deliverSegment 每段 merged=carry+seg → splitUnfinishedPhotoTag → send 解析投递/carry 留存；finalize 把 carry 拼回最后一段（result.tail 或单条 result.content）后 stripUnfinishedPhotoTag 兜底剥除仍未闭合的残留（服务端截断不上屏）（wx-group.tsx:3380-3374/3421 / qq-group.tsx:2999-3008/3061）
+- （4·渲染分支）消息渲染三元链 voice 之后、文本气泡兜底之前插 `m.kind === 'textcard'` 分支：复用单聊 TextCardBubble（variant wx/qq，signedBy=发送者名），外层 renderMsgRow 保留头像/名字/群主徽标/引用块；点击不弹生成面板 → toast「群聊暂不支持生成图片」（多选模式下点击走勾选拦截）；card.text 为空的脏数据整行不渲染兜底（wx-group.tsx:5079 / qq-group.tsx:4708）
+- （5·历史上下文）msgTextOf（AI 历史/lastUserText/memContext/wbScanText/记忆提取素材/撤回记忆清洗共用）加 textcard 分支 → 返回 card.text（空文字脏数据给「[文字图片]」占位防读到空内容），对齐单聊 scanTextOf 口径（wx-group.tsx:2883 / qq-group.tsx:2327）
+- （6·外围）msgSnapshotOf（复制/引用/收藏 favOf/合并转发记录）textcard → 「[文字图片] 文字…」摘要；长按菜单对 textcard 无编辑/无引用（isText=false），复制/删除/多选/撤回/转发/收藏/重新生成照常；灵动岛通知 deliverGroupMsg 对 textcard 给「[文字图片] …」摘要（lib notifyPreviewText 不认识该 kind 会按空 content 不弹）；转发：群内/单聊克隆 textcard → 占位文本转发卡（isCard 集合加 textcard，content=msgSnapshotOf），转发整卡（带生成入口）接入成本高不做已注释；语音升级（decideAiVoiceMessage 仅认 undefined/text）不会把卡片误转语音（wx-group.tsx:2933/3202/4414/4426 / qq-group.tsx:2376/2818/4074/4088）
+- 自验：bunx tsc --noEmit ✓ 零报错；bun run lint ✓（仅 qq/wechat >500KB BABEL note，与既往相同非错误）；bun 临时脚本行为断言 5 组全 PASS 后已删除——混合正文双标签剥净取首个/纯标签回复正文为空只发卡片/标签跨 3 段被切碎 carry-over 完整还原（「[图」+「片：雨后的巷子]」）/收尾未闭合残留剥除/编码标记 save-load-save 幂等往返；未启动 dev server；未改 wx-group/qq-group 之外任何文件（git status 其余改动均为并行代理所有）
+- 备注：.normalizeMsg 不认识 textcard 的持久化约束由组件级编解码解决，若后续 groups.ts 升级原生支持 kind='textcard'+card 字段，可去掉 GROUP_TEXTCARD_MARK 编解码层（包装函数即插拔点）
+
+Stage Summary:
+- 微信群/QQ 群照片标签 E1 轻防御落地：AI 回复漏出的 [图片:…]/[照片:…] 标签一律剥除并降级为韩系「文字图片」卡片（单聊同款 TextCardBubble 视觉，不做生图——多成员锁脸归属未实现），多余标签静默剥除，纯标签回复不发空文本
+- 流式分段防截断（carry-over+收尾兜底剥除）、AI 上下文/记忆/撤回清洗读卡片文字、复制/收藏/转发/通知/会话列表摘要（「[文字图片] …」）全外围接入，未知 kind 不崩溃不空白
+- 组件级 save/load 编解码层绕开 lib normalizeMsg 对未知 kind 的剥除，textcard 消息持久化往返无损；groups.ts 未动，升级插拔点已注释
+- 产出：src/components/apps/wx-group.tsx（+137/-13）、src/components/apps/qq-group.tsx（+140/-15）；挂点：buildGroupReplyMsgs/deliverSegment/finalize/msgTextOf/msgSnapshotOf/deliverGroupMsg/renderMsgRow 渲染链/loadGroupMsgs+saveGroupMsgs 包装
+---
+Task ID: 20
+Agent: Z.ai (main, 总控)
+Task: 规则审查修复用户选定组合 A/B/C/D/E1/F/G 全量落地——朋友圈卡片升级体验对齐聊天端、相册/记忆挂点统一、生成超时与反馈、多标签溢出提示、群聊标签轻防御、流式/持久化边界加固、描述上限与恢复上一张
+
+Work Log:
+- 方案：批次1引擎层（20-a1 imggen.ts / 20-a2 moments.ts+route）→ 批次2四端并行（20-b chat / 20-c wechat / 20-d qq / 20-e 群聊）→ 批次3总控统一 lint+tsc+E2E 收尾
+- 【A 朋友圈对齐】upgradeMomentTextCard 第4参可选 desc（UI 弹层可编辑预填卡片文字，空则回落原文字）；新增 regenerateMomentImage（textCardUpgraded 资格校验+锁脸+原位替换 images[0]）；MomentPostView/WxRawPost/QqRawPost/ZonePost 全链路透传 textCardUpgraded/textCardDesc；微信 MomentImageGenSheet / QQ 空间 ZoneImageGenSheet iOS 风格弹层（busy「生成中…」/弹层内报错/防重入保留），升级图长按 480ms+右键「重新生成」，手动图无入口
+- 【B 相册挂点统一】五处生成成功均 addAlbum(origin:'ai')：聊天三端 AI 卡转图（含决策日志+notePhotoMemory+相册缓存刷新，与自动生图完全同口径）、submitImgRegen（AI 图追加式）、朋友圈 aiPostMoment 真图/upgrade/regenerate
+- 【C 超时反馈】imggen.ts REQUEST_TIMEOUT_MS=150s，fetchWithTimeout 包装四处 fetch（proxy JSON/multipart、direct generations/edits），TimeoutError 转友好文案「生图请求超时，请稍后重试」（服务端 280s 不动，客户端提前降级）；弹层/面板 busy 态已有（TextCardActionSheet 原生 busy 复用，零改动）
+- 【D 多标签溢出】聊天三端 flushPhotoJobs 三分支 jobs.length>2 补投系统行「还有 N 张图片没有生成出来」；朋友圈保持单图（提示词明确教过，异常剥除无失信语境，注释说明）
+- 【E1 群聊轻防御】wx-group/qq-group 组件级类型扩展 kind:'textcard'+card{ text }（groups.ts 零改动、存取编解码幂等往返）；buildGroupReplyMsgs 入口 extractPhotoTags 剥标签，第 1 tag 降级韩系文字图片卡片（复用 TextCardBubble variant wx/qq，发送者=该成员），多余静默剥除，纯标签只发卡片；不接生图管线（多成员锁脸归属未实现，注释说明）；卡片点击 toast「群聊暂不支持生成图片」；msgTextOf/snapshot/灵动岛摘要/会话预览/转发克隆全部接 textcard 口径；流式 photoCarry 回合级 carry-over+收尾剥残留
+- 【F1 流式防截断】imggen.ts 新导出 UNFINISHED_PHOTO_TAG_RE/splitUnfinishedPhotoTag/stripUnfinishedPhotoTag；四端（信息/微信/QQ/群）流式分段统一 carry-over：段尾未闭合标签起始挂起拼下一段，finalize 拼回最后一段（能闭合正常生图）、仍不闭合剥除不上屏，bg 接力路径 stripUnfinishedPhotoTag 兜底
+- 【F2 标签上限】PHOTO_TAG_RE {1,160}→{1,400}（双语长描述不再整标签识别失败）；route 双语规则改「照片描述只用中文不做双语」（防混语言伤生图+超长），配图协议行同步
+- 【F3 任务持久化】三端 photoJobs 入队即 kvSet('xx-photo-jobs:'+会话键) 快照、flush 消费即 kvDel；挂载/切会话 effect 恢复遗留任务（JSON 校验）→清 kv→后台接力 flush 补做生成（幂等防重入），刷新页面不再丢照片
+- 【G1 描述上限】generateCardImage/submitImgRegen/朋友圈弹层描述统一 trim+slice(0,400)
+- 【G2 恢复上一张】三端 img 加 prevSrc；重新生成时旧图入 prevSrc；长按菜单条件项「恢复上一张」（prevSrc 存在才显示），点击 src↔prevSrc 互换可来回切（QQ 端 content 双同步）
+- 总控 E2E（agent-browser 1280×940 + imggen-mock:3031 prompt-hash 着色）：信息端小助手会话 +面板(相机/图片/文字图片)→手写卡片韩系上屏→点卡片面板描述预填可改→生成→卡片原位变图（无新消息、AI 语音回复不动=零 AI 交互）→长按菜单含重新生成且无恢复项（prevSrc 空=条件正确）→重新生成弹层预填上次描述→改词原位替换（像素 51,215,100≈黄昏prompt色51,216,100）→长按出现「恢复上一张」→点击变回第一版（65,215,45≈白猫prompt色66,215,44）→reload 后持久化颜色不变 ✓；console/errors 干净；dev.log 无异常
+- bun run lint ✓；bunx tsc --noEmit ✓（总控复跑，全仓零错误）
+
+Stage Summary:
+- 用户选定 A/B/C/D/E1/F/G 十二项规则修复全量落地：朋友圈升级/重新生成体验与聊天端对齐（可改描述+弹层 busy）、五处生图挂点统一进相册与记忆、客户端 150s 超时+弹层反馈、多标签溢出系统行、群聊标签降级卡片轻防御（不做真图，多成员锁脸归属留待后续）、流式跨段标签 carry-over 四端加固、标签上限 400+双语描述改纯中文、photo jobs 持久化防刷新丢失、描述 400 上限、重新生成可恢复上一张
+- 产出：src/lib/imggen.ts、src/lib/moments.ts、src/app/api/moments/generate/route.ts、src/components/apps/{chat,wechat,qq,wx-group,qq-group}.tsx
+- 回归：单聊/群聊/朋友圈/记忆/识图/红包转账/长按菜单/语音等既有链路未触碰核心逻辑，四端解析均走既有管线仅前置 carry-over 与标签剥除
