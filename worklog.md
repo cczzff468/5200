@@ -12822,3 +12822,19 @@ Work Log:
 Stage Summary:
 - 「文字图片」完成形态切换：三端加号面板同名入口不再依赖图像生成配置——留空由 AI 按人设+最近聊天记录代笔（/api/textcard，上游优先/内置兜底），也可手写文字直接上卡；消息以「文字图片」卡片（暖纸底+引号+署名）在信息/微信/QQ 各自气泡体系内渲染，进 AI 历史/记忆/会话预览/长按菜单/转发克隆全链路
 - 产出：src/app/api/textcard/route.ts、src/lib/textcard.ts、src/components/apps/text-card-bubble.tsx（新增）；src/components/apps/{chat,wechat,qq}.tsx、src/lib/imggen.ts（改造）；src/app/api/photodesc/（删除）
+
+---
+Task ID: 15
+Agent: 主协调者 (Z.ai Code)
+Task: 修复用户反馈「我发送的文字图片没有卡片」——微信/QQ 端用户手动发送的文字图片卡片不上屏（消息丢失）
+
+Work Log:
+- 浏览器复现：信息端发送文字卡片正常上屏；微信端经 + 面板 → 文字图片 → 输入文字 → 生成并发送后，卡片气泡完全消失（AI 能读到卡片文字并回复「哇，你亲手写的卡片好有温度呀～」，但聊天里找不到卡片本身）
+- 根因定位：wechat.tsx submitTextCard 与 qq.tsx submitTextCard 的 else 分支（正常发送路）只把 cardMsg 作为 extra 传给 runAiTurnRef.current?.(null, [cardMsg])，漏掉 setMsgs 入列——注释「消息已入列」是错的。对照红包含转账/位置/图片路（全部先 setMsgs 再 runAiTurn 且 runAiTurn 的 base 按 id 去重）确认 extra 机制以「消息已先入列」为前提
+- 修复：wechat.tsx（else 分支补 setMsgs((prev) => [...prev, cardMsg]) 后再延迟触发回复）、qq.tsx 同款修复；信息端无需改（startAiTurn 内部自带 setMsgs）
+- E2E 验证（agent-browser）：微信发卡 → 卡片以「我」身份右侧上屏（暖纸卡片+署名小橙）+ AI 正常回应；点击卡片弹操作面板（用图像生成生成图片/复制文字/取消）正常；整页 reload 后卡片仍在（IndexedDB 持久化 OK）；QQ 发卡同样上屏并触发 AI 回合；bun run lint + bunx tsc --noEmit 全绿
+- 附注：测试中观察到 /api/chat 偶发 502（用户上游接口抖动，与本修复无关，AI 轮自动重试成功）；此前在微信/QQ 已丢失的卡片因从未入列落盘而无法找回，重新发送即可
+
+Stage Summary:
+- 微信/QQ 用户手动发送的文字图片卡片恢复上屏+落盘；三端（信息/微信/QQ）发送、上屏、点击生图面板、持久化全链路浏览器验证通过
+- 关键经验：extra 传参路径必须保证消息先 setMsgs 入列（runAiTurn base 按 id 去重兜底）；排障时「AI 读到了但界面没有」优先查发送路是否漏 setMsgs

@@ -4360,7 +4360,9 @@ function ChatPage({
         markDeliverBoundary(sessionKey, cardMsg.id);
         wxQueueAdd(peer.id);
       } else {
-        // 与图片路同口径：消息已入列，稍等重渲染后触发回复（卡片作 extra 消息进本轮上下文）
+        // 与图片路同口径：先 setMsgs 入列上屏（持久化 effect 自动落盘），稍等重渲染后触发回复
+        //（卡片作 extra 消息进本轮上下文；runAiTurn 的 base 按 id 去重，入列后再传不会重复）
+        setMsgs((prev) => [...prev, cardMsg]);
         window.setTimeout(() => runAiTurnRef.current?.(null, [cardMsg]), 80);
       }
       onToast('文字图片已发送');
