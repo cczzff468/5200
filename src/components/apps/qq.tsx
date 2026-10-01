@@ -207,7 +207,7 @@ import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：自动照片标签（[照片:描述]）提取/生成/规则构建 + 手动「生成照片」管线（与微信端共用同一逻辑层）
-import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { autoPhotoDesc, buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
 import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
@@ -1900,36 +1900,38 @@ export function QqPlusGrid({
 }
 
 /**
- * 生成照片弹层（加号面板「生成照片」入口；锁脸生图手动触发，微信端 PhotoGenCompose 的 QQ 主题版）。
- * 描述输入（角色以第一人称拍一张发到聊天）+ 生成中状态 + 失败错误（留在弹层可重试）。
+ * 「文字图片」弹层（加号面板「文字图片」入口；锁脸生图手动触发，微信端 PhotoGenCompose 的 QQ 主题版）。
+ * 描述输入可留空——留空时 AI 按人设+最近聊天记录自动构思画面（/api/photodesc），再锁脸生图；
+ * 生成中状态（构思/生图两阶段文案）+ 失败错误（留在弹层可重试）。
  */
 function QqPhotoGenSheet({
   charName,
   busy,
+  busyText,
   error,
   onClose,
   onSubmit,
 }: {
   charName: string;
   busy: boolean;
+  busyText: string;
   error: string;
   onClose: () => void;
   onSubmit: (desc: string) => void;
 }) {
   const [desc, setDesc] = useState('');
   const submit = () => {
-    const d = desc.trim();
-    if (!d || busy) return;
-    onSubmit(d);
+    if (busy) return;
+    onSubmit(desc.trim());
   };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="qq-photogen-sheet">
       <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#232529]">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-[17px] font-semibold text-[#1F2329] dark:text-white">{charName}拍一张发给你</p>
+          <p className="text-[17px] font-semibold text-[#1F2329] dark:text-white">{charName}拍张照片发给你</p>
           <button
             type="button"
-            aria-label="关闭生成照片"
+            aria-label="关闭文字图片"
             data-testid="qq-photogen-close"
             onClick={onClose}
             disabled={busy}
@@ -1945,7 +1947,7 @@ function QqPhotoGenSheet({
           rows={3}
           maxLength={160}
           data-testid="qq-photogen-input"
-          placeholder={`描述画面，如：黄昏的咖啡厅窗边，托腮看镜头，暖光落在侧脸上（${charName}的样子会自动保持一致）`}
+          placeholder="描述想要的画面（可留空，AI 会结合 TA 的人设和你们的聊天记录自动构思）"
           className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] text-[#1F2329] outline-none placeholder:text-black/30 focus:border-[#0099FF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-white dark:placeholder:text-white/30"
         />
         {error ? (
@@ -1957,20 +1959,20 @@ function QqPhotoGenSheet({
           type="button"
           data-testid="qq-photogen-submit"
           onClick={submit}
-          disabled={busy || !desc.trim()}
+          disabled={busy}
           className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#0099FF] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
         >
           {busy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
-              正在生成照片…
+              {busyText || '正在生成照片…'}
             </>
           ) : (
             '生成并发送'
           )}
         </button>
         <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
-          生成结果会同时存进 {charName} 的相册；失败不影响聊天
+          照片以 {charName} 的身份发出，并会存进 TA 的相册；失败不影响聊天
         </p>
       </div>
     </div>
@@ -2703,8 +2705,9 @@ function ChatPage({
   // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置/生成照片）
   const [layer, setLayer] = useState<ChatLayer>(null);
   const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; packet: MsgPacket; methodId: string }>(null);
-  /** 手动「生成照片」状态：loading / 错误信息（弹层内展示，失败不影响聊天；成功直接投递不入 AI 回合队列） */
+  /** 手动「文字图片」状态：loading / 阶段（desc=AI 构思画面 / img=生图）/ 错误（弹层内展示，失败不影响聊天） */
   const [photoGenBusy, setPhotoGenBusy] = useState(false);
+  const [photoGenStage, setPhotoGenStage] = useState<'' | 'desc' | 'img'>('');
   const [photoGenError, setPhotoGenError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   // 原生相机隐藏 input（capture 调起后置摄像头，对齐微信：不再使用自建取景浮层）
@@ -3540,7 +3543,9 @@ function ChatPage({
   );
 
   /**
-   * 手动触发「生成照片」（加号面板「生成照片」入口；锁脸同自动生图）：角色以第一人称拍一张发到聊天。
+   * 手动触发「文字图片」（加号面板「文字图片」入口）：描述可空——留空时先让 AI 按人设+最近聊天
+   * 记录构思一句画面描述（/api/photodesc），再走 generateCharacterPhoto（锁脸同自动生图）以角色
+   * 第一人称拍一张发到聊天。
    * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册（origin 'ai'）/决策日志/记忆
    *（30 分钟节流）+ 刷新相册缓存；失败 → 错误留在弹层内（不关弹窗，用户可重试或取消），不影响聊天。
    */
@@ -3553,20 +3558,33 @@ function ChatPage({
       }
       setPhotoGenBusy(true);
       setPhotoGenError('');
+      let finalDesc = desc.trim();
       try {
-        const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name });
+        if (!finalDesc) {
+          // 描述留空 → AI 自动构思画面（人设取联系人 persona；历史取最近聊天记录）
+          setPhotoGenStage('desc');
+          finalDesc = await autoPhotoDesc({
+            config: apiConfig,
+            charName: peer.name,
+            channel: 'QQ',
+            persona: peer.persona ?? '',
+            history: buildPhotoDescHistory(msgs, '我', peer.name),
+          });
+        }
+        setPhotoGenStage('img');
+        const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc: finalDesc, charName: peer.name });
         // QQ 端图片 dataURL 存 content（QqImageBubble 读 m.content），img.src 同步填上与微信端一致；
         // 经 scheduleAiDelivery 投递（而非直投 deliverAiMsg）：订阅 tick 会把落盘消息合并进本地 state，
         // 直投只写 kv 不触发 tick（聊天页不刷新）；空批次 initialDelay=0 立即上屏
         void scheduleAiDelivery<QQMsg>(
           sessionKey,
-          [{ id: uid(), role: 'peer', content: r.src, time: Date.now(), kind: 'image' as const, img: { src: r.src, desc } }],
+          [{ id: uid(), role: 'peer', content: r.src, time: Date.now(), kind: 'image' as const, img: { src: r.src, desc: finalDesc } }],
           deliverAiMsg,
           { initialDelay: 0, delay: () => 0 },
         );
-        void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
-        void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
-        notePhotoMemory(peer.id, 'qq', desc);
+        void addAlbum(peer.id, r.src, { desc: finalDesc, origin: 'ai' });
+        void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: finalDesc });
+        notePhotoMemory(peer.id, 'qq', finalDesc);
         void listAlbums(peer.id).then((list) => {
           albumCacheRef.current = list;
         });
@@ -3576,9 +3594,10 @@ function ChatPage({
         setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
       } finally {
         setPhotoGenBusy(false);
+        setPhotoGenStage('');
       }
     },
-    [deliverAiMsg, onToast, peer.id, peer.name],
+    [apiConfig, deliverAiMsg, msgs, onToast, peer.id, peer.name, peer.persona, sessionKey],
   );
 
   // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flush 统一异步生成 ----
@@ -5074,7 +5093,7 @@ function ChatPage({
     [me.id, peer.id, runAiTurn, sessionKey, onToast]
   );
 
-  // 加号面板宫格（语音通话/视频通话/红包/转账/位置/生成照片；图片入口已移除）
+  // 加号面板宫格（语音通话/视频通话/红包/转账/位置/文字图片；图片入口已移除）
   const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
     {
       key: 'call',
@@ -5119,11 +5138,11 @@ function ChatPage({
     },
     {
       key: 'photogen',
-      label: '生成照片',
+      label: '文字图片',
       color: '#0099FF',
       icon: <Sparkles className="h-[26px] w-[26px]" strokeWidth={1.9} />,
       onClick: () => {
-        // 生成照片（锁脸）：角色以第一人称拍一张发到聊天（描述在弹层内填，锁脸走设置里的生图配置）
+        // 文字图片（锁脸）：AI 按人设+聊天记录构思画面或手填描述，角色以第一人称拍一张发到聊天
         setPlusOpen(false);
         setStickerOpen(false);
         setPhotoGenError('');
@@ -6194,11 +6213,12 @@ function ChatPage({
           onToast={onToast}
         />
       ) : null}
-      {/* 生成照片弹层（加号面板「生成照片」入口；锁脸生图手动触发，微信端 PhotoGenCompose 的 QQ 主题版） */}
+      {/* 文字图片弹层（加号面板「文字图片」入口；描述可空 = AI 自动构思，锁脸生图以角色身份发送） */}
       {layer?.view === 'photogen' ? (
         <QqPhotoGenSheet
           charName={peer.name}
           busy={photoGenBusy}
+          busyText={photoGenStage === 'desc' ? 'AI 正在构思画面…' : '正在生成照片…'}
           error={photoGenError}
           onClose={() => (photoGenBusy ? undefined : setLayer(null))}
           onSubmit={(desc) => void submitPhotoGen(desc)}

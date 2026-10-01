@@ -5,9 +5,11 @@ import { motion } from 'framer-motion';
 import {
   ArrowUp,
   AudioLines,
+  Camera,
   ChevronRight,
   CircleCheck,
   EyeOff,
+  Image as ImageIcon,
   Loader2,
   Mail,
   MailOpen,
@@ -17,6 +19,7 @@ import {
   PinOff,
   Plus,
   Search,
+  Sparkles,
   Trash2,
   UserPlus,
   Video,
@@ -59,6 +62,7 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
 import { buildVisionRules, cleanBubbleText, extractRichActionParts } from '@/lib/chat-rich';
+import { splitVisionDesc } from '@/lib/vision-client';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -91,10 +95,10 @@ import {
   wbScanText,
 } from '@/lib/ios/worldbook';
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
-import { deleteContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
+import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
-// 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；信息端无手动入口）
-import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+// 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；手动入口 = 加号面板「文字图片」）
+import { autoPhotoDesc, buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -748,6 +752,157 @@ function IOSConfirmDialog({
 
 // ---------------- 聊天视图（iMessage 风格） ----------------
 
+// ---------------- 加号面板：相机 / 图片 / 文字图片（对齐微信 PlusPanel，iMessage 配色） ----------------
+
+type SmsPlusAction = 'camera' | 'image' | 'photogen';
+
+/** File → 压缩 dataURL（与微信端 readImageFile 同款：默认 720px 上限、GIF 动图直通） */
+function readSmsImageFile(file: File, max = 720): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.onload = () => {
+      const result = String(reader.result);
+      // GIF 动图直通：不经 canvas（重绘会只保留第一帧）
+      if (file.type === 'image/gif' || /^data:image\/gif/i.test(result)) {
+        resolve(result);
+        return;
+      }
+      const img = new Image();
+      img.onerror = () => reject(new Error('图片解析失败'));
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, max / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('图片处理失败'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.72));
+        } catch {
+          reject(new Error('图片处理失败'));
+        }
+      };
+      img.src = result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 加号面板（输入栏下方弹出；相机/图片/文字图片三宫格，瓷贴样式对齐微信端） */
+function SmsPlusPanel({ onAction }: { onAction: (a: SmsPlusAction) => void }) {
+  const items: Array<{ key: SmsPlusAction; label: string; icon: React.ReactNode }> = [
+    { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
+    { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
+    { key: 'photogen', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+  ];
+  return (
+    <div
+      className="z-20 shrink-0 border-t border-border/50 bg-[#F2F2F7] px-2 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 backdrop-blur-xl dark:bg-[#161616]"
+      data-testid="sms-plus-panel"
+    >
+      <div className="grid grid-cols-3">
+        {items.map((it) => (
+          <button
+            key={it.key}
+            type="button"
+            data-testid={`sms-plus-${it.key}`}
+            onClick={() => onAction(it.key)}
+            className="flex flex-col items-center gap-[7px] py-2 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+          >
+            <span className="flex h-[57px] w-[57px] items-center justify-center rounded-[14px] bg-white text-black/70 shadow-[0_1px_5px_rgba(0,0,0,0.05)] dark:bg-[#242428] dark:text-white/75">
+              {it.icon}
+            </span>
+            <span className="text-[12px] text-black/60 dark:text-white/60">{it.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 「文字图片」弹层（加号面板 → 文字图片；描述可空 = AI 根据人设+聊天记录自动构思，再锁脸生图以角色身份发送） */
+function SmsPhotoGenSheet({
+  charName,
+  busy,
+  busyText,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  charName: string;
+  busy: boolean;
+  busyText: string;
+  error: string;
+  onClose: () => void;
+  onSubmit: (desc: string) => void;
+}) {
+  const [desc, setDesc] = useState('');
+  const submit = () => {
+    if (busy) return;
+    onSubmit(desc.trim());
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="sms-photogen-sheet">
+      <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-[17px] font-semibold">{charName}拍张照片发给你</p>
+          <button
+            type="button"
+            aria-label="关闭文字图片"
+            data-testid="sms-photogen-close"
+            onClick={onClose}
+            disabled={busy}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            <X className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          disabled={busy}
+          rows={3}
+          maxLength={160}
+          data-testid="sms-photogen-input"
+          placeholder="描述想要的画面（可留空，AI 会结合 TA 的人设和你们的聊天记录自动构思）"
+          className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#007AFF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
+        />
+        {error ? (
+          <p data-testid="sms-photogen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          data-testid="sms-photogen-submit"
+          onClick={submit}
+          disabled={busy}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#007AFF] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+              {busyText || '正在生成照片…'}
+            </>
+          ) : (
+            '生成并发送'
+          )}
+        </button>
+        <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
+          照片以 {charName} 的身份发出，并会存进 TA 的相册；失败不影响聊天
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /** 聊天对端信息：顶栏标题（手机号）与头像 */
 interface ChatPeer {
   title: string;
@@ -833,6 +988,16 @@ function ChatView({
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 图片全屏预览（点图片气泡打开；自动生图/历史图片共用；点任意处关闭） */
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  // ---- 加号面板（相机/图片/文字图片）：待发送图片预览条 + 原生相机/相册隐藏入口 ----
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [pendingImgs, setPendingImgs] = useState<Array<{ id: string; src: string }>>([]);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  // ---- 文字图片（AI 按人设+聊天记录构思画面 → 锁脸生图 → 以角色身份发送）：弹层状态 ----
+  const [photoGenOpen, setPhotoGenOpen] = useState(false);
+  const [photoGenBusy, setPhotoGenBusy] = useState(false);
+  const [photoGenStage, setPhotoGenStage] = useState<'' | 'desc' | 'img'>('');
+  const [photoGenError, setPhotoGenError] = useState('');
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
   const [translateOpen, setTranslateOpen] = useState(false);
   /** 回复条数选择页（设置页「回复条数」进入的独立二级页，按会话隔离） */
@@ -1360,6 +1525,19 @@ function ChatView({
     // 要么还在队列里（deliveredIndex 逐条同步推进），不会重复。
     const pendingTail = peekPendingMsgs<ChatMsg>(sessionKey);
     const base = [...(baseMsgs ?? msgs), ...pendingTail, ...(userMsg ? [userMsg] : [])];
+    // 识图输入（加号发图/文字随图）：从末尾向前收集连续「我」（user）消息里的图片（最多 3 张），
+    // 遇到对方/AI 消息即停。识图模型配置存在时，chat-stream-store 先把图片转描述再交给聊天模型，
+    // 并经 onVision 把描述写回对应图片消息（img.desc 持久化，之后的聊天历史 AI 都能读到图片内容）
+    const turnImages: string[] = [];
+    const turnImageMsgIds: string[] = [];
+    for (let i = base.length - 1; i >= 0 && turnImages.length < 3; i--) {
+      const m = base[i];
+      if (m.role !== 'user') break;
+      if (m.kind === 'image' && m.img?.src) {
+        turnImages.unshift(m.img.src);
+        turnImageMsgIds.unshift(m.id);
+      }
+    }
     // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知；
     // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位；
     // 图片消息 content 为空 → 同样放行，AI 读「[图片]（图片内容：…）」占位，知道自己/对方发过什么照片）。
@@ -1525,6 +1703,22 @@ function ChatView({
       messages: payload,
       apiConfig,
       replyCount,
+      ...(turnImages.length > 0
+        ? {
+            vision: { images: turnImages, text: '' },
+            // 识图描述按「图N：」行拆分后逐张回写（img.desc 持久化）：与微信端同款管线
+            onVision: (desc: string) => {
+              const parts = splitVisionDesc(desc, turnImageMsgIds.length);
+              turnImageMsgIds.forEach((targetId, i) => {
+                const part = parts[i]?.trim();
+                if (!part) return;
+                setMsgs((prev) =>
+                  prev.map((x) => (x.id === targetId && x.img ? { ...x, img: { ...x.img, desc: part } } : x)),
+                );
+              });
+            },
+          }
+        : {}),
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻排队投递（多条模式）
       onSegment: deliverSegment,
       finalize: ({ content, error, startedAt, tail }) => {
@@ -1894,6 +2088,20 @@ function ChatView({
       return;
     }
 
+    // 加号选图随文字一起发出（先图后文）：图片消息先入列，随后文字照常走下方流程触发 AI 回合
+    if (pendingImgs.length > 0) {
+      const imgMsgs: ChatMsg[] = pendingImgs.map((p) => ({
+        id: uid(),
+        role: 'user',
+        content: '',
+        time: Date.now(),
+        kind: 'image',
+        img: { src: p.src, desc: '' },
+      }));
+      setPendingImgs([]);
+      setMsgs((prev) => [...prev, ...imgMsgs]);
+    }
+
     // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字
     if (ttsSend) {
       sendTextAsVoiceRef.current(text);
@@ -1957,6 +2165,125 @@ function ChatView({
     },
     []
   );
+
+  // ---------------- 加号面板：相机 / 图片 / 文字图片 ----------------
+
+  /** 选图（相机拍照 / 相册多选共用）：File → 压缩 dataURL → 待发送预览条（最多 9 张） */
+  const onPickImageFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const list = Array.from(files).slice(0, 9);
+    try {
+      const srcs = await Promise.all(list.map((f) => readSmsImageFile(f)));
+      setPendingImgs((prev) => [...prev, ...srcs.map((src) => ({ id: uid(), src }))].slice(0, 9));
+    } catch {
+      showToast('图片读取失败，请重试');
+    }
+  };
+
+  /** 加号面板动作分发：相机（原生后置拍照）/ 图片（系统相册多选）/ 文字图片（弹层） */
+  const handlePlusAction = (a: SmsPlusAction) => {
+    if (a === 'camera') {
+      setPlusOpen(false);
+      cameraInputRef.current?.click();
+      return;
+    }
+    if (a === 'image') {
+      setPlusOpen(false);
+      photoInputRef.current?.click();
+      return;
+    }
+    // 文字图片：AI 按人设+聊天记录构思画面 → 锁脸生图 → 以角色身份发到聊天
+    setPlusOpen(false);
+    setPhotoGenError('');
+    setPhotoGenOpen(true);
+  };
+
+  /** 只发图片（选图后直接点发送键；触发 AI 回合，识图管线让 TA 看到图片内容） */
+  const sendPendingImages = () => {
+    if (pendingImgs.length === 0) return;
+    if (wbContactId && loadBlock('sms', wbContactId).byChar) {
+      showToast('对方已将你拉黑，无法发送');
+      return;
+    }
+    const built: ChatMsg[] = pendingImgs.map((p) => ({
+      id: uid(),
+      role: 'user',
+      content: '',
+      time: Date.now(),
+      kind: 'image',
+      img: { src: p.src, desc: '' },
+    }));
+    setPendingImgs([]);
+    setMsgs((prev) => [...prev, ...built]);
+    // 对方正在回复（流式/投递中）：图片照常上屏并排队补跑（与 send 文字路同口径）
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      markDeliverBoundary(sessionKey, built[built.length - 1].id);
+      enqueueQueuedTurn({ kind: 'kick' });
+      return;
+    }
+    window.setTimeout(() => startAiTurnRef.current?.(null), 80); // 等重渲染 + ref 回填新闭包（含图片消息）
+  };
+
+  /**
+   * 手动触发「文字图片」：描述可空——留空时先让 AI 按人设+最近聊天记录构思一句画面描述，
+   * 再走 generateCharacterPhoto（锁脸参考图/外貌描述与自动生图同管线）以角色身份发到聊天。
+   * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册/决策日志/记忆；
+   * 失败 → 错误留在弹层内（不关弹窗，可重试或取消）。
+   */
+  const submitPhotoGen = async (desc: string) => {
+    const cfg = useSettings.getState().imgGenConfig;
+    if (!imgGenConfigReady(cfg)) {
+      setPhotoGenError('还没配置生图接口：去「设置 → 图像生成」填写 Base URL / API Key / 模型名');
+      return;
+    }
+    setPhotoGenBusy(true);
+    setPhotoGenError('');
+    let finalDesc = desc.trim();
+    try {
+      if (!finalDesc) {
+        // 描述留空 → AI 自动构思（人设取联系人资料；小助手会话无人设也可用）
+        setPhotoGenStage('desc');
+        const contact = wbContactId ? await getContact(wbContactId).catch(() => null) : null;
+        finalDesc = await autoPhotoDesc({
+          config: apiConfig,
+          charName: peerLabel,
+          channel: '短信',
+          persona: contact?.persona ?? '',
+          history: buildPhotoDescHistory(msgs, profileName || '我', peerLabel),
+        });
+      }
+      setPhotoGenStage('img');
+      const cid = wbContactId;
+      const r = await generateCharacterPhoto({ cfg, contactId: cid ?? '', desc: finalDesc, charName: peerLabel, useRef: cid ? undefined : false });
+      // 直接投递（scheduleAiDelivery 模块层投递，订阅 tick 会把落盘消息合并进本地 state），不入 AI 回合队列
+      void scheduleAiDelivery<ChatMsg>(
+        sessionKey,
+        [{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc: finalDesc } }],
+        deliverAiMsg,
+        { initialDelay: 0, delay: () => 0 },
+      );
+      if (cid) {
+        void addAlbum(cid, r.src, { desc: finalDesc, origin: 'ai' });
+        void addVisionDecision({ contactId: cid, app: 'sms', action: 'imggen', targetId: '', imgSrc: r.src, reason: finalDesc });
+        notePhotoMemory(cid, 'sms', finalDesc);
+        void listAlbums(cid)
+          .then((list) => {
+            albumSummaryRef.current =
+              list.length > 0
+                ? list.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+                : null;
+          })
+          .catch(() => {});
+      }
+      setPhotoGenOpen(false);
+      showToast('照片已生成');
+    } catch (e) {
+      setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setPhotoGenBusy(false);
+      setPhotoGenStage('');
+    }
+  };
 
   /** 「他的声音」选择保存（仅联系人会话）：toast 反馈 + 交宿主持久化（与备注同路径：updateContact 写 voiceId + 刷新联系人） */
   const saveVoiceId = (vid: string) => {
@@ -2784,10 +3111,22 @@ function ChatView({
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
           if (input.trim()) void send();
+          else if (pendingImgs.length > 0) sendPendingImages();
           else dispatchBatch();
         }}
         className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-2.5 pb-[30px] pt-2 backdrop-blur-xl"
       >
+        {/* 加号（更多功能）：相机/图片/文字图片面板；展开时旋转 45°（对齐微信加号交互） */}
+        <button
+          type="button"
+          aria-label={plusOpen ? '收起更多功能' : '更多功能'}
+          aria-expanded={plusOpen}
+          data-testid="sms-plus-button"
+          onClick={() => setPlusOpen((v) => !v)}
+          className="flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all active:opacity-60"
+        >
+          <Plus className={`h-[23px] w-[23px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} aria-hidden="true" />
+        </button>
         <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full border border-border/70 bg-background pl-3.5 pr-1.5">
           {voiceMode ? (
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
@@ -2821,7 +3160,7 @@ function ChatView({
               </button>
             </div>
           )}
-          {!voiceMode && (input.trim() || canDispatch) ? (
+          {!voiceMode && (input.trim() || canDispatch || pendingImgs.length > 0) ? (
             <>
               <button
                 type="submit"
@@ -2856,9 +3195,73 @@ function ChatView({
           )}
         </div>
       </form>
+      {/* 待发送图片预览条（加号选图后先预览，点发送键发出；面板展开时隐藏避免遮挡） */}
+      {pendingImgs.length > 0 && !plusOpen && (
+        <div
+          className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-3 py-2 backdrop-blur-xl"
+          data-testid="sms-img-preview-bar"
+        >
+          {pendingImgs.map((p, k) => (
+            <div key={p.id} className="relative h-[62px] w-[62px] shrink-0 overflow-hidden rounded-[10px] ring-1 ring-black/[0.06] dark:ring-white/10">
+              <img src={p.src} alt={`待发送图片 ${k + 1}`} className="h-full w-full object-cover" />
+              <button
+                type="button"
+                aria-label="移除图片"
+                data-testid={`sms-img-preview-remove-${k}`}
+                onClick={() => setPendingImgs((prev) => prev.filter((x) => x.id !== p.id))}
+                className="absolute right-0.5 top-0.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-black/55 text-white active:opacity-70"
+              >
+                <X className="h-[11px] w-[11px]" strokeWidth={2.5} />
+              </button>
+            </div>
+          ))}
+          <p className="ml-1 shrink-0 text-[11px] leading-[1.5] text-muted-foreground">
+            点发送键发出
+            <br />
+            （AI 会看到图片）
+          </p>
+        </div>
+      )}
+      {/* 加号面板（相机/图片/文字图片）+ 原生相机/相册隐藏入口 */}
+      {plusOpen && <SmsPlusPanel onAction={handlePlusAction} />}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        data-testid="sms-camera-input"
+        onChange={(e) => {
+          void onPickImageFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        data-testid="sms-photo-input"
+        onChange={(e) => {
+          void onPickImageFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
       </>
       )}
 
+      {/* 文字图片弹层（加号面板 → 文字图片；描述可空 = AI 自动构思，锁脸生图以角色身份发送） */}
+      {photoGenOpen && (
+        <SmsPhotoGenSheet
+          charName={peerLabel}
+          busy={photoGenBusy}
+          busyText={photoGenStage === 'desc' ? 'AI 正在构思画面…' : '正在生成照片…'}
+          error={photoGenError}
+          onClose={() => (photoGenBusy ? undefined : setPhotoGenOpen(false))}
+          onSubmit={(d) => void submitPhotoGen(d)}
+        />
+      )}
       {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
       {settingsOpen && (
         <SmsChatSettingsPage

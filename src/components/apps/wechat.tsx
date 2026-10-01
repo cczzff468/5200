@@ -182,7 +182,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
-import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { autoPhotoDesc, buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
@@ -3112,36 +3112,38 @@ function WxFcManagePage({
 type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'photogen';
 
 /**
- * 生成照片弹层（加号面板「生成照片」入口；锁脸生图手动触发）：
- * 描述输入（角色以第一人称拍一张发到聊天）+ 生成中状态 + 失败错误（留在弹层可重试）。
+ * 「文字图片」弹层（加号面板「文字图片」入口；锁脸生图手动触发）。
+ * 描述输入可留空——留空时 AI 按人设+最近聊天记录自动构思画面（/api/photodesc），再锁脸生图；
+ * 生成中状态（构思/生图两阶段文案）+ 失败错误（留在弹层可重试）。
  */
 function PhotoGenCompose({
   charName,
   busy,
+  busyText,
   error,
   onClose,
   onSubmit,
 }: {
   charName: string;
   busy: boolean;
+  busyText: string;
   error: string;
   onClose: () => void;
   onSubmit: (desc: string) => void;
 }) {
   const [desc, setDesc] = useState('');
   const submit = () => {
-    const d = desc.trim();
-    if (!d || busy) return;
-    onSubmit(d);
+    if (busy) return;
+    onSubmit(desc.trim());
   };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="wx-photogen-sheet">
       <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-[17px] font-semibold">{charName}拍一张发给你</p>
+          <p className="text-[17px] font-semibold">{charName}拍张照片发给你</p>
           <button
             type="button"
-            aria-label="关闭生成照片"
+            aria-label="关闭文字图片"
             data-testid="wx-photogen-close"
             onClick={onClose}
             disabled={busy}
@@ -3157,7 +3159,7 @@ function PhotoGenCompose({
           rows={3}
           maxLength={160}
           data-testid="wx-photogen-input"
-          placeholder={`描述画面，如：黄昏的咖啡厅窗边，托腮看镜头，暖光落在侧脸上（${charName}的样子会自动保持一致）`}
+          placeholder="描述想要的画面（可留空，AI 会结合 TA 的人设和你们的聊天记录自动构思）"
           className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#07C160]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
         />
         {error ? (
@@ -3169,20 +3171,20 @@ function PhotoGenCompose({
           type="button"
           data-testid="wx-photogen-submit"
           onClick={submit}
-          disabled={busy || !desc.trim()}
+          disabled={busy}
           className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#07C160] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
         >
           {busy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
-              正在生成照片…
+              {busyText || '正在生成照片…'}
             </>
           ) : (
             '生成并发送'
           )}
         </button>
         <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
-          生成结果会同时存进 {charName} 的相册；失败不影响聊天
+          照片以 {charName} 的身份发出，并会存进 TA 的相册；失败不影响聊天
         </p>
       </div>
     </div>
@@ -3200,7 +3202,7 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
     { key: 'transfer', label: '转账', icon: <ArrowLeftRight className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'offline', label: '线下', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
-    { key: 'photogen', label: '生成照片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'photogen', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
   return (
     <div
@@ -4304,12 +4306,15 @@ function ChatPage({
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
   const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'photogen' | null>(null);
-  /** 手动「生成照片」状态：loading / 错误信息（弹层内展示，失败不影响聊天） */
+  /** 手动「文字图片」状态：loading / 阶段（desc=AI 构思画面 / img=生图）/ 错误信息（弹层内展示，失败不影响聊天） */
   const [photoGenBusy, setPhotoGenBusy] = useState(false);
+  const [photoGenStage, setPhotoGenStage] = useState<'' | 'desc' | 'img'>('');
   const [photoGenError, setPhotoGenError] = useState('');
 
   /**
-   * 手动触发「生成照片」：角色以第一人称拍一张发到聊天（锁脸同自动生图）。
+   * 手动触发「文字图片」：描述可空——留空时先让 AI 按人设+最近聊天记录构思一句画面描述
+   * （/api/photodesc，用户上游优先、服务端内置模型兑底），再走 generateCharacterPhoto（锁脸同自动生图）
+   * 以角色第一人称拍一张发到聊天。
    * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册/决策日志/记忆；
    * 失败 → 错误留在弹层内（不关弹窗，用户可重试或取消）。
    */
@@ -4321,17 +4326,30 @@ function ChatPage({
     }
     setPhotoGenBusy(true);
     setPhotoGenError('');
+    let finalDesc = desc.trim();
     try {
-      const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name });
+      if (!finalDesc) {
+        // 描述留空 → AI 自动构思画面（人设取联系人 persona；历史取最近聊天记录）
+        setPhotoGenStage('desc');
+        finalDesc = await autoPhotoDesc({
+          config: apiConfig,
+          charName: peer.name,
+          channel: '微信',
+          persona: peer.persona ?? '',
+          history: buildPhotoDescHistory(msgs, '我', peer.name),
+        });
+      }
+      setPhotoGenStage('img');
+      const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc: finalDesc, charName: peer.name });
       // 走 enqueueBatch（而非直投 deliverAiMsg）：订阅 tick 会把落盘消息合并进本地 state，
       // 直投只写 kv 不触发 tick（聊天页不刷新）；空 ctx 首批 initialDelay=0 立即上屏
       enqueueBatch(
-        [{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'image' as const, img: { src: r.src, desc } }],
+        [{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'image' as const, img: { src: r.src, desc: finalDesc } }],
         { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false },
       );
-      void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
-      void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
-      notePhotoMemory(peer.id, 'wx', desc);
+      void addAlbum(peer.id, r.src, { desc: finalDesc, origin: 'ai' });
+      void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'imggen', targetId: '', imgSrc: r.src, reason: finalDesc });
+      notePhotoMemory(peer.id, 'wx', finalDesc);
       void listAlbums(peer.id).then((list) => {
         albumCacheRef.current = list;
       });
@@ -4341,6 +4359,7 @@ function ChatPage({
       setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
     } finally {
       setPhotoGenBusy(false);
+      setPhotoGenStage('');
     }
   };
   /** 线下模式（约会）：加号面板「线下」入口打开的见面页（与 QQ/信息共用） */
@@ -6748,7 +6767,7 @@ function ChatPage({
       return;
     }
     if (a === 'photogen') {
-      // 生成照片（锁脸）：角色以第一人称拍一张发到聊天（描述在弹层内填，锁脸走设置里的生图配置）
+      // 文字图片（锁脸）：AI 按人设+聊天记录构思画面或手填描述，角色以第一人称拍一张发到聊天
       setPlusOpen(false);
       setStickerOpen(false);
       setPhotoGenError('');
@@ -7609,6 +7628,7 @@ function ChatPage({
         <PhotoGenCompose
           charName={peer.name}
           busy={photoGenBusy}
+          busyText={photoGenStage === 'desc' ? 'AI 正在构思画面…' : '正在生成照片…'}
           error={photoGenError}
           onClose={() => (photoGenBusy ? undefined : setCompose(null))}
           onSubmit={(desc) => void submitPhotoGen(desc)}

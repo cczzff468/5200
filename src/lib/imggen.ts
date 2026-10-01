@@ -453,3 +453,70 @@ async function postDirectMultipart(
   }
   throw new Error(lastErr);
 }
+
+// ---------------- 「文字图片」：AI 自动构思画面描述（三端加号面板共用） ----------------
+
+/** 聊天记录条目的最小形态（ChatMsg/WxMsg/QQMsg 的公共子集；图片 dataURL 不外泄，只取描述占位） */
+export type PhotoDescHistoryItem = {
+  role: string;
+  content: string;
+  kind?: string;
+  img?: { desc?: string } | null;
+  voice?: { transcript?: string; localText?: string } | null;
+};
+
+/**
+ * 聊天记录 → 文字图片构思上下文：逐条压成「我：… / TA：…」短行；
+ * 图片 →「[图片]（图片内容：…）」占位（QQ 端图片 dataURL 存 content，绝不进上下文）；
+ * 语音 → 转写文本；每行截断 80 字，最多取最近 max 条。
+ */
+export function buildPhotoDescHistory(
+  items: PhotoDescHistoryItem[],
+  myLabel = '我',
+  peerLabel = 'TA',
+  max = 14,
+): string[] {
+  const line = (who: string, text: string) => `${who}：${text}`;
+  return items
+    .filter((m) => m.kind !== 'sys' && m.kind !== 'notice')
+    .slice(-max)
+    .map((m) => {
+      const who = m.role === 'me' || m.role === 'user' ? myLabel : peerLabel;
+      if (m.kind === 'image') return line(who, m.img?.desc ? `[图片]（图片内容：${m.img.desc}）` : '[图片]');
+      if (m.kind === 'voice') return line(who, m.voice?.transcript || m.voice?.localText || '[语音]');
+      const t = (m.content ?? '').trim();
+      if (!t || t.startsWith('data:image/')) return '';
+      return line(who, t.length > 80 ? `${t.slice(0, 80)}…` : t);
+    })
+    .filter(Boolean);
+}
+
+/**
+ * 「文字图片」自动构思：AI 根据人设 + 最近聊天记录写一句画面描述（描述留空时调用）。
+ * 走 /api/photodesc（用户上游优先、服务端内置模型兜底）；失败抛错由调用方展示。
+ */
+export async function autoPhotoDesc(args: {
+  /** 聊天模型配置（设置 › API 设置；可为 null → 服务端直接用内置模型） */
+  config: { baseUrl: string; apiKey: string; model: string; temperature?: number; maxTokens?: number } | null;
+  charName: string;
+  channel: '短信' | '微信' | 'QQ';
+  /** 角色人设（联系人 persona；小助手会话可空） */
+  persona?: string;
+  /** 用户在弹层里顺手写的画面提示（可空） */
+  hint?: string;
+  /** 最近聊天记录（buildPhotoDescHistory 产物） */
+  history?: string[];
+}): Promise<string> {
+  const res = await fetch('/api/photodesc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  const data: unknown = await res.json().catch(() => null);
+  if (res.ok && data && typeof data === 'object') {
+    const d = (data as { desc?: unknown }).desc;
+    if (typeof d === 'string' && d.trim()) return d.trim();
+  }
+  const msg = data && typeof data === 'object' ? (data as { error?: unknown }).error : null;
+  throw new Error(typeof msg === 'string' && msg ? msg : '画面构思失败，请重试');
+}
