@@ -26,7 +26,9 @@ import {
   Plane,
   Plus,
   RefreshCw,
+  Layers,
   ScanEye,
+  ScanFace,
   Sun,
   Trash2,
   Upload,
@@ -70,7 +72,20 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
-import { extractImgGenError, imgGenConfigReady, imggenEndpoints, pickImageFromResponse } from '@/lib/imggen';
+import {
+  compressImageSrc,
+  extractImgGenError,
+  getAppearanceNote,
+  getFaceRef,
+  imgGenConfigReady,
+  imggenEndpoints,
+  pickImageFromResponse,
+  setAppearanceNote,
+  setFaceRef,
+  type ImgGenFaceRef,
+} from '@/lib/imggen';
+import { listContacts } from '@/lib/ios/contacts-store';
+import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
 import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
@@ -216,19 +231,27 @@ function MainRow({
   );
 }
 
-/** 详情页外壳：居中标题导航 + 返回按钮 + 右滑进入动画 */
+/** 详情页外壳：居中标题导航 + 返回按钮 + 右滑进入动画；
+ *  gray=true 时整页浅灰背景（#F2F2F7，iOS 设置子页风，灰底白卡），暗色主题保持原背景 */
 function DetailShell({
   title,
   onBack,
   children,
+  gray = false,
 }: {
   title: string;
   onBack: () => void;
   children: ReactNode;
+  gray?: boolean;
 }) {
   return (
-    <>
-      <IOSNavBar title={title} large={false} left={<IOSBackButton onClick={onBack} label="" />} />
+    <div className={`flex h-full w-full flex-col ${gray ? 'bg-[#F2F2F7] dark:bg-transparent' : ''}`}>
+      <IOSNavBar
+        title={title}
+        large={false}
+        left={<IOSBackButton onClick={onBack} label="" />}
+        className={gray ? 'bg-transparent! backdrop-blur-none!' : ''}
+      />
       <div className="no-scrollbar flex-1 overflow-y-auto">
         <div
           key={title}
@@ -237,12 +260,51 @@ function DetailShell({
           {children}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
 function FieldLabel({ children }: { children: ReactNode }) {
   return <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">{children}</div>;
+}
+
+/** 配置页分组标题：小色块图标 + 灰字标签（iOS 设置风），右侧可选自定义内容 */
+function SectionLabel({
+  icon: Icon,
+  tone,
+  children,
+  right,
+}: {
+  icon: LucideIcon;
+  tone: string;
+  children: ReactNode;
+  right?: ReactNode;
+}) {
+  return (
+    <div className="mb-2 flex items-center justify-between">
+      <div className="flex items-center gap-1.5 text-[13px] font-medium text-muted-foreground">
+        <span
+          className="flex h-[18px] w-[18px] items-center justify-center rounded-[5px]"
+          style={{ backgroundColor: `${tone}1F` }}
+        >
+          <Icon className="h-[11px] w-[11px]" style={{ color: tone }} strokeWidth={2.6} />
+        </span>
+        {children}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+/** 浅灰页上的分组卡片：白底 + 细描边 + 轻阴影（iOS 内嵌列表风） */
+function GrayCard({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return (
+    <div
+      className={`rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] ${className}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 // ---------------- 主列表 ----------------
@@ -1109,7 +1171,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
   const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
 
   return (
-    <DetailShell title="API 设置" onBack={onBack}>
+    <DetailShell title="API 设置" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 预设区 */}
         <section>
@@ -1609,7 +1671,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="识图模型" onBack={onBack}>
+    <DetailShell title="识图模型" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 预设区 */}
         <section>
@@ -1882,12 +1944,14 @@ function VisionPage({ onBack }: { onBack: () => void }) {
 // ---------------- 图像生成（生图） ----------------
 
 /**
- * 图像生成配置页：与识图模型页（VisionPage）同构。
- * - 「启用自动生图」总开关：关闭时 AI 不会自动生图（手动触发不受影响），下方配置一并隐藏；
+ * 图像生成配置页（浅灰底 iOS 设置子页风）：与识图模型页（VisionPage）同构。
+ * - 「启用自动生图」总开关：关闭时 AI 不会自动生图（手动触发不受影响），配置始终可见可先填；
  * - 请求方式：服务端转发（/api/imggen，免跨域，推荐）或浏览器直连（需接口允许 CORS）；
  * - 连接配置：OpenAI 兼容基地址 + Key（密文持久化）+ 模型名（可拉取列表选择）+ 尺寸/质量/补充提示词；
  * - 预设管理：内置「OpenAI 官方」（列表第一项、不可删除）+ 用户预设（应用 / 更新 / 删除）；
- * - 测试生图：按当前配置真实生成一张，验证连通性（成功展示图片，失败展示上游错误）。
+ * - 测试生图：按当前配置真实生成一张，验证连通性（成功展示图片，失败展示上游错误）；
+ * - 形象锁定（锁脸）区（FaceLockSection，页尾）：按角色上传生图参考图 + 外貌描述兜底
+ *   （原三端聊天设置里的形象锁定页迁移至此，按 contactId 隔离，数据与三端聊天共用）。
  * 所有变更经 updateImgGenConfig 即时保存，下一次生图现场读取 → 自动生效，无需重启。
  */
 function ImageGenPage({ onBack }: { onBack: () => void }) {
@@ -2092,12 +2156,12 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="图像生成" onBack={onBack}>
+    <DetailShell title="图像生成" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 启用自动生图（总开关） */}
         <section>
-          <div className="mb-2 text-[13px] font-medium text-muted-foreground">自动生图</div>
-          <div className="flex flex-col gap-3 rounded-[12px] bg-card p-4">
+          <SectionLabel icon={ImagePlus} tone={TONE_GREEN}>自动生图</SectionLabel>
+          <GrayCard className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-medium text-foreground">启用自动生图</div>
@@ -2118,13 +2182,12 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                 关闭后 AI 不会自动生成照片，仍可在聊天里手动触发「生成照片」；下方配置请先填好（手动触发生图也依赖这些配置）。
               </p>
             )}
-          </div>
+          </GrayCard>
         </section>
 
-        <>
-            {/* 预设区 */}
+        {/* 预设区 */}
             <section>
-              <div className="mb-2 text-[13px] font-medium text-muted-foreground">预设</div>
+              <SectionLabel icon={Layers} tone={TONE_CYAN}>预设</SectionLabel>
               <div className="flex flex-wrap gap-2">
                 {allPresets.map((p) => {
                   const isBuiltin = p.id === BUILTIN_IMGGEN_PRESET.id;
@@ -2133,10 +2196,10 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                   return (
                     <span
                       key={p.id}
-                      className={`flex items-center gap-1.5 rounded-full border py-1.5 pl-3 pr-2 text-[13px] ${
+                      className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-shadow ${
                         active
-                          ? 'border-foreground bg-foreground text-background'
-                          : 'border-border text-foreground/85'
+                          ? 'border border-foreground bg-foreground text-background shadow-sm'
+                          : 'border border-border bg-card text-foreground/85'
                       }`}
                     >
                       <button
@@ -2176,7 +2239,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                   type="button"
                   data-testid="imggen-preset-save"
                   onClick={() => setSaveOpen((v) => !v)}
-                  className="flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-muted-foreground/50"
+                  className="flex items-center gap-1 rounded-full border border-dashed border-border bg-card/60 px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-muted-foreground/50"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   存为预设
@@ -2189,7 +2252,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     onChange={(e) => setPresetName(e.target.value)}
                     placeholder="预设名称，如 本地生图模型"
                     autoFocus
-                    className="h-9 flex-1 rounded-[10px] bg-background text-[14px]"
+                    className="h-9 flex-1 rounded-[10px] bg-card text-[14px] shadow-sm ring-1 ring-black/[0.05] dark:ring-white/[0.08]"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') savePreset();
                     }}
@@ -2208,23 +2271,26 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
 
             {/* 配置表单 */}
             <section>
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
-                <span className="text-[11px] text-muted-foreground/70">更改自动保存 · 即时生效</span>
-              </div>
-              <div className="flex flex-col gap-4 rounded-[12px] bg-card p-4">
-                {/* 请求方式 */}
+              <SectionLabel
+                icon={Wrench}
+                tone={TONE_BLUE}
+                right={<span className="text-[11px] text-muted-foreground/70">更改自动保存 · 即时生效</span>}
+              >
+                连接配置
+              </SectionLabel>
+              <GrayCard className="flex flex-col gap-4">
+                {/* 请求方式（iOS 分段控件风） */}
                 <div>
                   <FieldLabel>请求方式</FieldLabel>
-                  <div className="flex gap-2">
+                  <div className="flex rounded-[10px] bg-muted p-1" role="group" aria-label="请求方式">
                     <button
                       type="button"
                       data-testid="imggen-mode-proxy"
                       onClick={() => patchImgGenConfig({ mode: 'proxy' })}
-                      className={`h-10 flex-1 rounded-[10px] border text-[13px] font-medium transition-colors ${
+                      className={`h-8 flex-1 rounded-[8px] text-[13px] font-medium transition-all ${
                         imgGenConfig.mode === 'proxy'
-                          ? 'border-foreground bg-foreground text-background'
-                          : 'border-border text-foreground/80 hover:border-muted-foreground/40'
+                          ? 'bg-card text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
                       }`}
                     >
                       服务端转发（推荐）
@@ -2233,16 +2299,16 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       type="button"
                       data-testid="imggen-mode-direct"
                       onClick={() => patchImgGenConfig({ mode: 'direct' })}
-                      className={`h-10 flex-1 rounded-[10px] border text-[13px] font-medium transition-colors ${
+                      className={`h-8 flex-1 rounded-[8px] text-[13px] font-medium transition-all ${
                         imgGenConfig.mode === 'direct'
-                          ? 'border-foreground bg-foreground text-background'
-                          : 'border-border text-foreground/80 hover:border-muted-foreground/40'
+                          ? 'bg-card text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
                       }`}
                     >
                       浏览器直连
                     </button>
                   </div>
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
+                  <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground/70">
                     {imgGenConfig.mode === 'direct'
                       ? '浏览器直接请求生图接口，需接口允许跨域（CORS）。'
                       : '由本站服务器转发生图请求，免跨域、Key 不暴露给页面。'}
@@ -2256,7 +2322,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     value={imgGenConfig.baseUrl}
                     onChange={(e) => patchImgGenConfig({ baseUrl: e.target.value })}
                     placeholder="https://api.openai.com/v1"
-                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                    className="h-10 rounded-[10px] border-border/70 bg-muted/60 text-[14px]"
                     data-testid="imggen-baseurl"
                   />
                 </div>
@@ -2271,7 +2337,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       onChange={(e) => patchImgGenConfig({ apiKey: e.target.value })}
                       placeholder="sk-..."
                       autoComplete="off"
-                      className={`h-10 rounded-[10px] bg-background text-[14px] ${
+                      className={`h-10 rounded-[10px] border-border/70 bg-muted/60 text-[14px] ${
                         imgGenConfig.apiKey ? 'pr-16' : 'pr-10'
                       }`}
                       data-testid="imggen-apikey"
@@ -2305,7 +2371,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       value={imgGenConfig.model}
                       onChange={(e) => patchImgGenConfig({ model: e.target.value })}
                       placeholder="如 gpt-image-2 / flux-pro"
-                      className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+                      className="h-10 flex-1 rounded-[10px] border-border/70 bg-muted/60 text-[14px]"
                       data-testid="imggen-model"
                     />
                     <button
@@ -2344,7 +2410,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                             onChange={(e) => setModelQuery(e.target.value)}
                             placeholder="搜索模型，如 image / flux"
                             autoFocus
-                            className="h-9 rounded-[10px] bg-background text-[13px]"
+                            className="h-9 rounded-[10px] bg-muted/60 text-[13px]"
                           />
                         </div>
                         <div className="thin-scrollbar max-h-64 overflow-y-auto">
@@ -2383,7 +2449,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     value={imgGenConfig.size}
                     onChange={(e) => patchImgGenConfig({ size: e.target.value })}
                     placeholder="1024x1024 / auto"
-                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                    className="h-10 rounded-[10px] border-border/70 bg-muted/60 text-[14px]"
                     data-testid="imggen-size"
                   />
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2411,7 +2477,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     value={imgGenConfig.quality}
                     onChange={(e) => patchImgGenConfig({ quality: e.target.value })}
                     placeholder="auto / low / medium / high"
-                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                    className="h-10 rounded-[10px] border-border/70 bg-muted/60 text-[14px]"
                     data-testid="imggen-quality"
                   />
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2440,7 +2506,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     onChange={(e) => patchImgGenConfig({ extraPrompt: e.target.value })}
                     placeholder="如：写实风格，自然光线，手机自拍质感"
                     rows={3}
-                    className="min-h-[72px] rounded-[10px] bg-background py-2 text-[14px]"
+                    className="min-h-[72px] rounded-[10px] border-border/70 bg-muted/60 py-2 text-[14px]"
                     data-testid="imggen-extra"
                   />
                 </div>
@@ -2459,7 +2525,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     data-testid="imggen-test"
                     onClick={() => void runImgGenTest()}
                     disabled={testing}
-                    className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] border border-border bg-background text-[13px] font-medium text-foreground transition-colors hover:bg-muted/40 active:bg-muted/70 disabled:opacity-50"
+                    className="flex h-11 w-full items-center justify-center gap-1.5 rounded-[12px] bg-foreground text-[13.5px] font-medium text-background shadow-sm transition-opacity hover:opacity-90 active:opacity-80 disabled:opacity-50"
                   >
                     {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
                     {testing ? '正在生图…（约 10-60 秒）' : '测试生图'}
@@ -2470,42 +2536,328 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                   {testError && (
                     <div
                       data-testid="imggen-test-error"
-                      className="mt-2 flex items-start gap-1.5 px-1 text-[12px] leading-relaxed"
+                      className="mt-2 flex items-start gap-1.5 rounded-[10px] bg-[#FF453A]/[0.06] px-3 py-2 text-[12px] leading-relaxed"
                       style={{ color: IOS_RED }}
                     >
                       <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                       <span>{testError}</span>
                     </div>
                   )}
+                  {testing && (
+                    <div className="mx-auto mt-3 grid aspect-square w-full max-w-[220px] place-items-center rounded-[14px] border border-dashed border-border bg-muted/40">
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        <span className="text-[12px]">正在生成照片…</span>
+                      </div>
+                    </div>
+                  )}
                   {testSrc && (
-                    <div className="mt-2">
-                      <img
-                        src={testSrc}
-                        alt="测试生成的图片"
-                        data-testid="imggen-test-result"
-                        className="w-full max-w-full rounded-[12px] border border-border/60"
-                      />
-                      <div className="mt-1.5 flex items-start gap-1.5 px-1 text-[12px] leading-relaxed text-emerald-600 dark:text-emerald-400/90">
-                        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
+                    <div className="mt-3">
+                      <div className="mx-auto w-full max-w-[220px] overflow-hidden rounded-[14px] shadow-sm ring-1 ring-black/[0.06] dark:ring-white/10">
+                        <img
+                          src={testSrc}
+                          alt="测试生成的图片"
+                          data-testid="imggen-test-result"
+                          className="block aspect-square w-full object-cover"
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-center gap-1.5 text-[12px] leading-relaxed text-emerald-600 dark:text-emerald-400/90">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
                         <span>测试成功</span>
                       </div>
                     </div>
                   )}
                 </div>
-              </div>
+              </GrayCard>
             </section>
+
+            {/* 形象锁定（锁脸）：按角色设置生图参考图 + 外貌描述（原聊天设置入口迁移至此） */}
+            <FaceLockSection />
 
             {/* 使用说明（页尾） */}
             <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
-              图像生成与聊天/识图配置相互独立、互不覆盖。开启后 AI 回复里出现照片标签会自动生成照片并发进聊天、存入角色相册；在聊天设置里给角色上传「参考图」即可锁脸，让照片里的人物长相保持一致。
+              图像生成与聊天/识图配置相互独立、互不覆盖。开启后 AI 回复里出现照片标签会自动生成照片并发进聊天、存入角色相册；在上方「形象锁定」为角色上传参考图即可锁脸，让照片里的人物长相保持一致。
             </p>
 
             <p className="text-[11px] leading-relaxed text-muted-foreground/80">
               服务端转发模式由本站代理请求你配置的生图接口，免跨域；配置与预设保存在本机 IndexedDB（API Key 加密存储），保存即生效、无需重启。
             </p>
-        </>
       </div>
     </DetailShell>
+  );
+}
+
+// ---------------- 形象锁定（锁脸）区（图像生成页下方） ----------------
+
+/**
+ * 形象锁定（锁脸）区（原微信 / QQ / 信息三端聊天设置里的形象锁定页迁移至此，数据完全兼容）：
+ * - 角色选择：横向滚动头像胶囊（绿点徽标 = 已设参考图），数据来自 listContacts()（排除机主）；
+ * - 选中角色：参考图上传/替换/删除（compressImageSrc 压到 512px）+ 外貌描述兜底文案（onBlur 即时保存）；
+ * - 存储沿用 @/lib/imggen 按 contactId 隔离的 kv（imggen-ref:* / imggen-appearance:*），
+ *   与三端聊天里的自动 / 手动生图共用同一份数据，互不覆盖。
+ */
+function FaceLockSection() {
+  const [contacts, setContacts] = useState<ContactRecord[]>([]);
+  const [selId, setSelId] = useState('');
+  const [refImg, setRefImg] = useState<ImgGenFaceRef | null>(null);
+  const [appearDraft, setAppearDraft] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [refVersion, setRefVersion] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [toast, showToast] = useLocalToast();
+
+  // 联系人列表（IndexedDB 异步；排除机主 kind='user'），默认选中第一个
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listContacts();
+        if (cancelled) return;
+        const chars = list.filter((c) => c.kind !== 'user');
+        setContacts(chars);
+        setSelId((prev) => (prev && chars.some((c) => c.id === prev) ? prev : chars[0]?.id ?? ''));
+      } catch {
+        // IndexedDB 不可用时保持空列表
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 切换角色：渲染期同步重读该角色的参考图与外貌描述（React 官方 "adjust state on prop change" 模式，kv 同步读）
+  const [loadedFor, setLoadedFor] = useState('');
+  if (loadedFor !== selId) {
+    setLoadedFor(selId);
+    setRefImg(selId ? getFaceRef(selId) : null);
+    setAppearDraft(selId ? getAppearanceNote(selId) : '');
+  }
+
+  /** chip 徽标读取：依赖 refVersion，上传/删除参考图后回调换新 → 徽标即时刷新 */
+  const hasRefOf = useCallback((id: string) => Boolean(getFaceRef(id)), [refVersion]);
+
+  /** 选图 → FileReader 读 dataURL → 压缩 512px → 存参考图 → 刷新预览/徽标 + toast */
+  const onPickFile = (file: File | undefined) => {
+    if (!file || uploading || !selId) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('请选择图片文件');
+      return;
+    }
+    setUploading(true);
+    const fr = new FileReader();
+    fr.onload = () => {
+      const raw = typeof fr.result === 'string' ? fr.result : '';
+      if (!raw.startsWith('data:image/')) {
+        setUploading(false);
+        showToast('图片读取失败，请换一张试试');
+        return;
+      }
+      void compressImageSrc(raw, 512).then((src) => {
+        setFaceRef(selId, src);
+        setRefImg(getFaceRef(selId));
+        setRefVersion((v) => v + 1);
+        setUploading(false);
+        showToast('已更新参考图');
+      });
+    };
+    fr.onerror = () => {
+      setUploading(false);
+      showToast('图片读取失败，请换一张试试');
+    };
+    fr.readAsDataURL(file);
+  };
+
+  /** 删除参考图（外貌描述保留继续兜底） */
+  const onDeleteRef = () => {
+    if (!selId) return;
+    setFaceRef(selId, null);
+    setRefImg(null);
+    setRefVersion((v) => v + 1);
+    showToast('已删除参考图');
+  };
+
+  const sel = contacts.find((c) => c.id === selId) ?? null;
+  const selLabel = sel ? displayNameOf(sel) : '';
+
+  return (
+    <section data-testid="imggen-face-section">
+      <SectionLabel icon={ScanFace} tone={TONE_PURPLE}>形象锁定（锁脸）</SectionLabel>
+
+      {/* 角色选择（横向滚动头像胶囊；绿点 = 已设参考图） */}
+      {contacts.length === 0 ? (
+        <GrayCard>
+          <p className="text-[13px] leading-relaxed text-muted-foreground">
+            还没有角色：先到联系人 App 添加角色，再回来为 TA 设置参考图。
+          </p>
+        </GrayCard>
+      ) : (
+        <>
+          <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-1" role="listbox" aria-label="选择角色">
+            {contacts.map((c) => {
+              const active = c.id === selId;
+              const hasRef = hasRefOf(c.id);
+              const label = displayNameOf(c);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  data-testid={`imggen-face-chip-${c.id}`}
+                  onClick={() => setSelId(c.id)}
+                  className={`flex w-[64px] shrink-0 flex-col items-center gap-1.5 rounded-[14px] bg-card py-2.5 transition-shadow ${
+                    active
+                      ? 'shadow-sm ring-2 ring-foreground/60'
+                      : 'ring-1 ring-black/[0.05] hover:shadow-sm dark:ring-white/[0.08]'
+                  }`}
+                >
+                  <span className="relative">
+                    {c.avatar ? (
+                      <img
+                        src={c.avatar}
+                        alt={label}
+                        draggable={false}
+                        className="h-11 w-11 rounded-full object-cover ring-1 ring-black/[0.06] dark:ring-white/10"
+                      />
+                    ) : (
+                      <span className="grid h-11 w-11 place-items-center rounded-full bg-muted text-[15px] font-medium text-muted-foreground">
+                        {label.slice(0, 1)}
+                      </span>
+                    )}
+                    {hasRef && (
+                      <span
+                        aria-label="已设置参考图"
+                        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card bg-[#34C759]"
+                      />
+                    )}
+                  </span>
+                  <span className="w-full truncate px-1 text-center text-[11px] leading-none text-foreground/80">
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 选中角色：参考图 + 外貌描述 */}
+          {sel && (
+            <GrayCard className="mt-3">
+              {/* 角色头部：名字 + 锁脸状态徽标 */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  {sel.avatar ? (
+                    <img
+                      src={sel.avatar}
+                      alt={selLabel}
+                      draggable={false}
+                      className="h-8 w-8 rounded-full object-cover ring-1 ring-black/[0.06] dark:ring-white/10"
+                    />
+                  ) : (
+                    <span className="grid h-8 w-8 place-items-center rounded-full bg-muted text-[13px] font-medium text-muted-foreground">
+                      {selLabel.slice(0, 1)}
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate text-[15px] font-medium text-foreground">{selLabel}</div>
+                    <div className="text-[11.5px] text-muted-foreground">参考图与外貌描述按角色独立保存</div>
+                  </div>
+                </div>
+                {refImg && (
+                  <span className="shrink-0 rounded-full bg-[#34C759]/10 px-2.5 py-1 text-[11px] font-medium text-[#1E9E4A] dark:text-[#34C759]">
+                    已锁脸
+                  </span>
+                )}
+              </div>
+
+              {/* 参考图预览 */}
+              <div className="mx-auto mt-4 w-full max-w-[200px]">
+                {refImg ? (
+                  <img
+                    data-testid="imggen-face-ref-img"
+                    src={refImg.src}
+                    alt={`${selLabel}的生图参考图`}
+                    draggable={false}
+                    className="aspect-square w-full rounded-[14px] object-cover ring-1 ring-black/[0.06] dark:ring-white/10"
+                  />
+                ) : (
+                  <div
+                    aria-hidden="true"
+                    className="grid aspect-square w-full place-items-center rounded-[14px] border-2 border-dashed border-black/10 bg-black/[0.02] dark:border-white/15 dark:bg-white/[0.03]"
+                  >
+                    <ScanFace className="h-11 w-11 text-black/15 dark:text-white/20" strokeWidth={1.5} />
+                  </div>
+                )}
+                <p className="pt-2.5 text-center text-[12px] leading-[1.6] text-muted-foreground">
+                  参考图会作为生图输入，保证 TA 每次照片里的脸一致
+                </p>
+              </div>
+
+              {/* 上传 / 替换 / 删除 */}
+              <div className="mt-4 flex gap-2.5">
+                <button
+                  type="button"
+                  data-testid="imggen-face-upload"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-[10px] bg-foreground py-2.5 text-[14px] font-medium text-background shadow-sm transition-opacity hover:opacity-90 active:opacity-80 disabled:opacity-60"
+                >
+                  {uploading ? (
+                    <Loader2 className="h-[16px] w-[16px] animate-spin" aria-hidden="true" />
+                  ) : (
+                    <ImageIcon className="h-[16px] w-[16px]" strokeWidth={2} aria-hidden="true" />
+                  )}
+                  {uploading ? '正在处理…' : refImg ? '替换参考图' : '上传参考图'}
+                </button>
+                {refImg && (
+                  <button
+                    type="button"
+                    data-testid="imggen-face-delete"
+                    onClick={onDeleteRef}
+                    className="flex-1 rounded-[10px] border border-[#FF453A]/35 py-2.5 text-[14px] font-medium text-[#FF453A] transition-colors active:bg-[#FF453A]/10"
+                  >
+                    删除参考图
+                  </button>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                hidden
+                data-testid="imggen-face-input"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  onPickFile(f);
+                }}
+              />
+
+              {/* 外貌描述（onBlur 即时保存） */}
+              <div className="mt-4 border-t border-black/[0.05] pt-4 dark:border-white/[0.07]">
+                <FieldLabel>外貌描述（锁脸兜底）</FieldLabel>
+                <Textarea
+                  data-testid="imggen-face-appear"
+                  value={appearDraft}
+                  onChange={(e) => setAppearDraft(e.target.value)}
+                  onBlur={() => {
+                    if (selId) setAppearanceNote(selId, appearDraft);
+                  }}
+                  placeholder="20岁女生，黑色长直发，杏眼，皮肤白皙，身材苗条"
+                  rows={3}
+                  maxLength={300}
+                  aria-label="外貌描述"
+                  className="min-h-[64px] rounded-[10px] bg-muted/60 py-2 text-[14px]"
+                />
+                <p className="pt-2 text-[12px] leading-[1.6] text-muted-foreground/80">
+                  未上传参考图或生图模型不支持参考图时，会把这段外貌描述拼进提示词兜底；每个角色独立设置，互不影响。
+                </p>
+              </div>
+            </GrayCard>
+          )}
+        </>
+      )}
+      <LocalToast msg={toast} />
+    </section>
   );
 }
 
@@ -3329,7 +3681,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="语音 API" onBack={onBack}>
+    <DetailShell title="语音 API" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 服务商 */}
         <section>

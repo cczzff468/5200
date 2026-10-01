@@ -79,7 +79,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
-import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, FaceLockPage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -94,7 +94,7 @@ import {
 import { deleteContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；信息端无手动入口）
-import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, getFaceRef, type PhotoTag } from '@/lib/imggen';
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -933,8 +933,6 @@ function ChatView({
   }, [wbContactId]);
   /** 「他的声音」页（聊天设置二级页，仅联系人会话）与 AI 语音频率页（其下的频率选择页，按会话独立） */
   const [voiceOpen, setVoiceOpen] = useState(false);
-  /** 形象锁定（锁脸）二级页：给角色上传参考图/填外貌描述（生图保持角色脸一致；仅联系人会话） */
-  const [faceLockOpen, setFaceLockOpen] = useState(false);
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   /** 我的音色库（「他的声音」入口行摘要解析：音色 id → 展示名，见 @/lib/ios/my-voices） */
   const myVoicesForSummary = useMyVoices((s) => s.voices);
@@ -2909,9 +2907,6 @@ function ChatView({
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
           voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)}
           onOpenVoice={wbContactId ? () => setVoiceOpen(true) : undefined}
-          // 生图锁脸：入口行（仅联系人会话）；二级页 FaceLockPage 在下方渲染
-          onOpenFaceLock={wbContactId ? () => setFaceLockOpen(true) : undefined}
-          hasFaceRef={wbContactId ? Boolean(getFaceRef(wbContactId)) : false}
           blockedByUser={blk.byUser === true}
           onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
         />
@@ -2948,16 +2943,6 @@ function ChatView({
             setBoundBookIds(wbContactId, ids);
             setWbBound(ids);
           }}
-        />
-      )}
-
-      {/* 形象锁定（锁脸）二级页：参考图上传/替换/删除 + 外貌描述（仅联系人会话） */}
-      {faceLockOpen && wbContactId && (
-        <FaceLockPage
-          variant="sms"
-          contactId={wbContactId}
-          peerName={peer.name ?? peer.title}
-          onBack={() => setFaceLockOpen(false)}
         />
       )}
 

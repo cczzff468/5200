@@ -182,7 +182,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
-import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, getFaceRef, type PhotoTag } from '@/lib/imggen';
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
@@ -236,7 +236,6 @@ import {
   ChatTranslatePage,
   ChatVoiceFreqPage,
   ChatVoicePage,
-  FaceLockPage,
   FriendDeleteConfirmDialog,
   WorldBookPickerPage,
   ChatToggle,
@@ -4381,8 +4380,6 @@ function ChatPage({
   const [replyOpen, setReplyOpen] = useState(false);
   /** 他的声音页（设置页「他的声音」进入）：角色音色选择 + AI 语音频率入口 */
   const [voiceOpen, setVoiceOpen] = useState(false);
-  /** 形象锁定（锁脸）二级页：给角色上传参考图/填外貌描述（生图保持角色脸一致） */
-  const [faceLockOpen, setFaceLockOpen] = useState(false);
   /** AI 语音频率页（他的声音页入口进入，按会话隔离保存） */
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   /** 我的音色库（「他的声音」入口行摘要展示名用；zustand 响应式） */
@@ -7723,9 +7720,6 @@ function ChatPage({
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
-          // 生图锁脸：入口行（有参考图副标题不同）；二级页 FaceLockPage 在下方渲染
-          onOpenFaceLock={selfChat ? undefined : () => setFaceLockOpen(true)}
-          hasFaceRef={Boolean(getFaceRef(peer.id))}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => wxChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
@@ -7786,11 +7780,6 @@ function ChatPage({
             setWbBound(ids);
           }}
         />
-      )}
-
-      {/* 形象锁定（锁脸）二级页：参考图上传/替换/删除 + 外貌描述（生图保持角色脸一致） */}
-      {faceLockOpen && (
-        <FaceLockPage variant="wx" contactId={peer.id} peerName={peer.name} onBack={() => setFaceLockOpen(false)} />
       )}
 
       {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}

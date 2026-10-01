@@ -207,7 +207,7 @@ import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：自动照片标签（[照片:描述]）提取/生成/规则构建 + 手动「生成照片」管线（与微信端共用同一逻辑层）
-import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, getFaceRef, type PhotoTag } from '@/lib/imggen';
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
 import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
@@ -298,7 +298,6 @@ import {
   ChatTranslatePage,
   ChatVoiceFreqPage,
   ChatVoicePage,
-  FaceLockPage,
   FriendDeleteConfirmDialog,
   WorldBookPickerPage,
   ChatToggle,
@@ -2722,8 +2721,6 @@ function ChatPage({
   const [replyOpen, setReplyOpen] = useState(false);
   // 他的声音（角色音色选择）与 AI 语音频率二级页（设置页进入）
   const [voiceOpen, setVoiceOpen] = useState(false);
-  /** 形象锁定（锁脸）二级页：给角色上传参考图/填外貌描述（生图保持角色脸一致） */
-  const [faceLockOpen, setFaceLockOpen] = useState(false);
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   const myVoicesForSummary = useMyVoices((s) => s.voices);
   /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
@@ -6245,9 +6242,6 @@ function ChatPage({
           }}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
-          // 生图锁脸：入口行；二级页 FaceLockPage 在下方渲染
-          onOpenFaceLock={() => setFaceLockOpen(true)}
-          hasFaceRef={Boolean(getFaceRef(peer.id))}
           pinned={flags.pinned === true}
           muted={flags.muted === true}
           bg={bg}
@@ -6321,11 +6315,6 @@ function ChatPage({
           }}
         />
       ) : null}
-
-      {/* 形象锁定（锁脸）二级页：参考图上传/替换/删除 + 外貌描述（生图保持角色脸一致） */}
-      {faceLockOpen && (
-        <FaceLockPage variant="qq" contactId={peer.id} peerName={peer.name} onBack={() => setFaceLockOpen(false)} />
-      )}
 
       {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}
       {translateOpen ? (

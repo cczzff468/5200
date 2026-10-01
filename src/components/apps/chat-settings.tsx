@@ -5,34 +5,29 @@
  * （微信 / QQ / 信息三端，variant 区分主题）：
  * - ChatSettingsPage（微信/QQ）：信息卡片（头像/名字/微信号或QQ号/地区职业）、备注、置顶聊天、消息免打扰、
  *   查找聊天记录、聊天背景（均紧跟免打扰）、回复条数入口（进入独立二级页 ChatReplyCountPage）、
- *   翻译入口（进入 ChatTranslatePage）、分句发送开关、时间感知开关（AI 感知当前时间/节日/事件时长/上次聊天间隔，按会话独立）、
- *   形象锁定（锁脸）入口（进入 FaceLockPage，按角色存生图参考图/外貌描述）
+ *   翻译入口（进入 ChatTranslatePage）、分句发送开关、时间感知开关（AI 感知当前时间/节日/事件时长/上次聊天间隔，按会话独立）
  * - ChatReplyCountPage：回复条数选择页 —— 1/3/5/7/15/20/25/30 条（上限，可少发），AI 像
  *   真人一样一句一句连发多条消息（一句一条，由 @/lib/reply-count 切分与节奏控制）
  * - ChatTranslatePage：翻译语言页（三端共用，参考 iOS 翻译语言页）—— 总开关 + 语言对选择：
  *   上方左右两个语言槽可点选（点一侧再在下方列表选语言），中间 ⇄ 一键互换；
  *   聊天中按消息语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧
- * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 回复条数入口 + 形象锁定入口 + 分句发送开关 + 时间感知开关）
+ * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 回复条数入口 + 分句发送开关 + 时间感知开关）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - ChatVoicePage：「他的声音」页（三端共用二级页）——选角色说话音色（默认/内置音色/
  *   我的音色/API 音色，宿主持久化到联系人 voiceId）+「AI 语音频率」入口行
  * - ChatVoiceFreqPage：AI 语音发送频率选择页（三端共用）—— 关闭/每条都发语音/经常(1/3)/
  *   偶尔(1/7)/不经常(1/12)，按会话独立（群聊按群），发送时现场读取
- * - FaceLockPage：形象锁定（锁脸）页（三端共用二级页）——为角色上传/替换/删除生图参考图
- *   （compressImageSrc 压到 512px 存 kv，按 contactId 隔离）+ 外貌描述兜底文案；
- *   生图时（@/lib/imggen）有参考图优先走图生图接口锁脸，接口不支持自动回退提示词描述
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
  *   @/lib/reply-count / @/lib/chat-translate / @/lib/sentence-send（localStorage，按会话键隔离），
- *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage），
- *   形象锁定的参考图/外貌描述在 @/lib/imggen（kv，按 contactId 隔离）
+ *   背景图片本体在 IndexedDB（@/lib/ios/contacts-store 的 getChatBgImage/setChatBgImage）
+ *   （形象锁定/锁脸页已迁移到「设置 › 图像生成」页尾的 FaceLockSection，数据层 @/lib/imggen 不变）
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, ScanFace, Search } from 'lucide-react';
+import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
-import { compressImageSrc, getAppearanceNote, getFaceRef, setAppearanceNote, setFaceRef, type ImgGenFaceRef } from '@/lib/imggen';
 import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
 import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 import { useMyVoices } from '@/lib/ios/my-voices';
@@ -167,10 +162,6 @@ export function ChatSettingsPage({
   voiceSummary,
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice,
-  /** 形象锁定（锁脸）：是否已设置生图参考图（宿主从 getFaceRef(contactId) 计算；控制入口行副标题） */
-  hasFaceRef,
-  /** 打开形象锁定（锁脸）页（FaceLockPage）；不传 = 隐藏该入口行 */
-  onOpenFaceLock,
   onDeleteContact,
 }: {
   variant: ChatSettingsVariant;
@@ -233,10 +224,6 @@ export function ChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice?: () => void;
-  /** 形象锁定（锁脸）：是否已设置生图参考图（宿主从 getFaceRef(contactId) 计算；控制入口行副标题） */
-  hasFaceRef?: boolean;
-  /** 打开形象锁定（锁脸）页（FaceLockPage，按角色存生图参考图/外貌描述）；不传 = 隐藏该入口行 */
-  onOpenFaceLock?: () => void;
   /** 删除联系人（删除好友关系：列表移除/聊天关闭；记录/记忆/朋友圈/通话保留但不可见，加回恢复）。不传 = 隐藏入口 */
   onDeleteContact?: () => void;
 }) {
@@ -509,25 +496,6 @@ export function ChatSettingsPage({
               </button>
             </div>
           </>
-        )}
-
-        {/* 形象锁定（锁脸）：生图参考图 + 外貌描述（独立二级页 FaceLockPage，按角色隔离存 kv；
-            生图时有参考图优先图生图锁脸，接口不支持回退提示词描述，见 @/lib/imggen） */}
-        {onOpenFaceLock && (
-          <div className={`${cardCls} mt-3 overflow-hidden`}>
-            <button type="button" data-testid="facesync-entry" onClick={onOpenFaceLock} className={rowCls}>
-              <span className="flex items-center gap-2.5">
-                <ScanFace className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-                形象锁定（锁脸）
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                <span data-testid={`${testPrefix}-facesync-summary`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
-                  {hasFaceRef ? '已设置参考图' : '生图保持角色形象一致'}
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
-              </span>
-            </button>
-          </div>
         )}
 
         {/* 拉黑：双向拉黑开关（40-a 重构后真实拦截：byUser=true → AI 静默不发普通消息、仅可发申请卡回应；
@@ -1336,8 +1304,7 @@ export function ChatTranslatePage({
 /**
  * 信息 App 的聊天设置页（聊天页顶栏摄像机图标进入）：
  * 对方信息卡片 + 翻译入口（ChatTranslatePage，variant=sms）+ 回复条数入口
- * （ChatReplyCountPage，variant=sms，信息端每会话独立）+ 形象锁定入口（FaceLockPage，按角色存
- * 生图参考图/外貌描述）+ 分句发送开关。
+ * （ChatReplyCountPage，variant=sms，信息端每会话独立）+ 分句发送开关。
  */
 export function SmsChatSettingsPage({
   peerName,
@@ -1365,10 +1332,6 @@ export function SmsChatSettingsPage({
   /** 他的声音摘要（角色音色展示名；空 = 默认）；不传 onOpenVoice = 隐藏该入口 */
   voiceSummary,
   onOpenVoice,
-  /** 形象锁定（锁脸）：是否已设置生图参考图（宿主从 getFaceRef(contactId) 计算；控制入口行副标题） */
-  hasFaceRef,
-  /** 打开形象锁定（锁脸）页（FaceLockPage）；不传 = 隐藏该入口行 */
-  onOpenFaceLock,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1410,10 +1373,6 @@ export function SmsChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行（AI 助手会话无角色音色） */
   onOpenVoice?: () => void;
-  /** 形象锁定（锁脸）：是否已设置生图参考图（宿主从 getFaceRef(contactId) 计算；控制入口行副标题） */
-  hasFaceRef?: boolean;
-  /** 打开形象锁定（锁脸）页（FaceLockPage，按角色存生图参考图/外貌描述）；不传 = 隐藏该入口行 */
-  onOpenFaceLock?: () => void;
 }) {
   const t = translateTokens('sms');
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
@@ -1575,24 +1534,6 @@ export function SmsChatSettingsPage({
               </button>
             </div>
           </>
-        )}
-
-        {/* 形象锁定（锁脸）：生图参考图 + 外貌描述（独立二级页 FaceLockPage，按角色隔离存 kv） */}
-        {onOpenFaceLock && (
-          <div className={`${t.cardCls} mt-3`}>
-            <button type="button" data-testid="facesync-entry" onClick={onOpenFaceLock} className={t.rowCls}>
-              <span className="flex items-center gap-2.5">
-                <ScanFace className="h-[18px] w-[18px] text-muted-foreground" strokeWidth={1.9} aria-hidden="true" />
-                形象锁定（锁脸）
-              </span>
-              <span className="flex shrink-0 items-center gap-1.5">
-                <span data-testid="sms-facesync-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
-                  {hasFaceRef ? '已设置参考图' : '生图保持角色形象一致'}
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
-              </span>
-            </button>
-          </div>
         )}
 
         {/* 拉黑：双向拉黑开关（40-a 重构后真实拦截：byUser=true → AI 静默不发普通消息、仅可发申请卡回应；
@@ -2087,201 +2028,3 @@ export function ChatVoicePage({
   );
 }
 
-// ---------------- 形象锁定（锁脸）页（三端共用二级页） ----------------
-
-/**
- * 形象锁定（锁脸）页（聊天设置二级页，微信 / QQ / 信息三端共用）：
- * 为当前角色设置生图参考图（选图后 FileReader → dataURL → compressImageSrc 压到 512px 存 kv，
- * 按 contactId 隔离，见 @/lib/imggen 的 getFaceRef/setFaceRef）与外貌描述兜底文案（onBlur 即时保存）。
- * 生成照片时：有参考图 → 优先走 /images/edits 图生图锁脸，接口不支持自动回退文生图并把外貌描述
- * 拼进提示词；无参考图 → 直接用外貌描述兜底。参考图与描述都配合「设置 › 图像生成」的生图配置使用。
- */
-export function FaceLockPage({
-  variant,
-  contactId,
-  peerName,
-  onBack,
-}: {
-  variant: ChatSettingsVariant;
-  /** 角色（联系人）ID：参考图与外貌描述按此隔离存储（imggen-ref:* / imggen-appearance:*） */
-  contactId: string;
-  /** 角色名（预览 alt 与说明文案用） */
-  peerName: string;
-  onBack: () => void;
-}) {
-  const t = translateTokens(variant);
-  const testPrefix = variant;
-  const [toast, showToast] = useLocalToast();
-
-  // kv 已在开机门控前注水（ensureKvReady），同步读安全；直接惰性初始化避免水合闪烁
-  const [refImg, setRefImg] = useState<ImgGenFaceRef | null>(() => getFaceRef(contactId));
-  const [appearDraft, setAppearDraft] = useState<string>(() => getAppearanceNote(contactId));
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // 同一挂载实例切换角色时重读（宿主通常按角色重新挂载，这里防御性同步）
-  useEffect(() => {
-    setRefImg(getFaceRef(contactId));
-    setAppearDraft(getAppearanceNote(contactId));
-  }, [contactId]);
-
-  /** 选图 → FileReader 读 dataURL → 压缩 512px → 存参考图 → 刷新预览 + toast */
-  const onPickFile = (file: File | undefined) => {
-    if (!file || uploading) return;
-    if (!file.type.startsWith('image/')) {
-      showToast('请选择图片文件');
-      return;
-    }
-    setUploading(true);
-    const fr = new FileReader();
-    fr.onload = () => {
-      const raw = typeof fr.result === 'string' ? fr.result : '';
-      if (!raw.startsWith('data:image/')) {
-        setUploading(false);
-        showToast('图片读取失败，请换一张试试');
-        return;
-      }
-      void compressImageSrc(raw, 512).then((src) => {
-        setFaceRef(contactId, src);
-        setRefImg(getFaceRef(contactId));
-        setUploading(false);
-        showToast('已更新参考图');
-      });
-    };
-    fr.onerror = () => {
-      setUploading(false);
-      showToast('图片读取失败，请换一张试试');
-    };
-    fr.readAsDataURL(file);
-  };
-
-  /** 删除参考图（无需二次确认；外貌描述保留继续兜底） */
-  const onDeleteRef = () => {
-    setFaceRef(contactId, null);
-    setRefImg(null);
-    showToast('已删除参考图');
-  };
-
-  const mutedText = t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40';
-  const textareaCls = t.sms
-    ? 'mt-3 w-full resize-none rounded-[10px] bg-white/80 px-3 py-2.5 text-[14px] leading-relaxed outline-none placeholder:text-black/30 focus:ring-1 focus:ring-black/10 dark:bg-white/10 dark:placeholder:text-white/30 dark:focus:ring-white/15'
-    : 'mt-3 w-full resize-none rounded-[8px] bg-black/[0.05] px-3 py-2.5 text-[14px] leading-relaxed outline-none placeholder:text-black/30 focus:ring-1 focus:ring-black/10 dark:bg-white/10 dark:placeholder:text-white/30 dark:focus:ring-white/15';
-
-  return (
-    <div data-testid="facesync-page" className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
-      {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
-        <div className={`flex ${t.headerH} items-center px-2`}>
-          <button
-            type="button"
-            aria-label="返回"
-            data-testid={`${testPrefix}-facesync-back`}
-            onClick={onBack}
-            className={`flex items-center rounded-full px-1 active:opacity-50 ${t.wx ? '' : 'p-1'}`}
-          >
-            <ChevronLeft className={t.wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
-          </button>
-          <div className={`flex-1 pr-8 text-center ${t.titleCls}`}>形象锁定</div>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
-        {/* 参考图预览 + 上传/替换/删除 */}
-        <div className={`${t.cardCls} p-4`}>
-          <div className="mx-auto w-full max-w-[220px]">
-            {refImg ? (
-              <img
-                data-testid="facesync-ref-img"
-                src={refImg.src}
-                alt={`${peerName}的生图参考图`}
-                draggable={false}
-                className="aspect-square w-full rounded-[12px] border border-black/10 object-cover dark:border-white/10"
-              />
-            ) : (
-              <div
-                aria-hidden="true"
-                className="grid aspect-square w-full place-items-center rounded-[12px] border-2 border-dashed border-black/15 dark:border-white/15"
-              >
-                <ScanFace className="h-12 w-12 text-black/20 dark:text-white/20" strokeWidth={1.5} />
-              </div>
-            )}
-            <p className={`pt-3 text-center text-[12.5px] leading-[1.6] ${mutedText}`}>
-              参考图会作为生图输入，保证 TA 每次照片里的脸一致
-            </p>
-          </div>
-
-          <div className="mt-4 flex gap-2.5">
-            <button
-              type="button"
-              data-testid="facesync-ref-upload"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex flex-1 items-center justify-center gap-2 rounded-[10px] border border-black/10 py-2.5 text-[14.5px] active:bg-black/[0.04] disabled:opacity-60 dark:border-white/15 dark:active:bg-white/[0.06]"
-            >
-              {uploading ? (
-                <Loader2 className="h-[18px] w-[18px] animate-spin" aria-hidden="true" />
-              ) : (
-                <ImageIcon className="h-[18px] w-[18px] text-black/55 dark:text-white/55" strokeWidth={1.9} aria-hidden="true" />
-              )}
-              {uploading ? '正在处理…' : refImg ? '替换参考图' : '上传参考图'}
-            </button>
-            {refImg && (
-              <button
-                type="button"
-                data-testid="facesync-ref-delete"
-                onClick={onDeleteRef}
-                className="flex-1 rounded-[10px] border border-black/10 py-2.5 text-[14.5px] text-red-500 active:bg-black/[0.04] dark:border-white/15 dark:active:bg-white/[0.06]"
-              >
-                删除参考图
-              </button>
-            )}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            hidden
-            data-testid={`${testPrefix}-facesync-input`}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = '';
-              onPickFile(f);
-            }}
-          />
-        </div>
-
-        {/* 外貌描述：锁脸兜底文案（onBlur 即时保存） */}
-        <div className={`${t.cardCls} mt-3 p-4`}>
-          <p className="text-[15px] font-medium">外貌描述</p>
-          <textarea
-            data-testid="facesync-appear"
-            value={appearDraft}
-            onChange={(e) => setAppearDraft(e.target.value)}
-            onBlur={() => setAppearanceNote(contactId, appearDraft)}
-            placeholder="20岁女生，黑色长直发，杏眼，皮肤白皙，身材苗条"
-            rows={4}
-            maxLength={300}
-            aria-label="外貌描述"
-            className={textareaCls}
-          />
-          <p className={`pt-2.5 text-[12.5px] leading-[1.6] ${mutedText}`}>
-            未上传参考图或生图模型不支持参考图时，会把这段外貌描述拼进提示词，尽量保持形象一致。
-          </p>
-        </div>
-
-        {/* 锁脸工作原理（页尾说明块） */}
-        <div className={`${t.cardCls} mt-3 p-4`}>
-          <p className="text-[15px] font-medium">锁脸工作原理</p>
-          <p className={`pt-2 text-[12.5px] leading-[1.7] ${mutedText}`}>
-            1. 已设参考图：生成照片时优先走图生图接口，以参考图为输入，脸随参考图保持一致。
-            <br />
-            2. 接口不支持参考图时自动回退文生图，并把外貌描述拼进提示词兜底。
-            <br />
-            3. 参考图与外貌描述都配合「设置 › 图像生成」使用；每个角色独立设置，互不影响。
-          </p>
-        </div>
-      </div>
-      <LocalToast msg={toast} />
-    </div>
-  );
-}

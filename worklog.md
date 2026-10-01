@@ -12655,3 +12655,27 @@ Stage Summary:
 - 图像生成+锁脸全量落地：设置 App「图像生成」配置页（10 项配置+预设管理+测试生图，保存即生效）；三端聊天设置「形象锁定」参考图页；自动（照片标签）+手动（面板生成照片）双触发；服务端转发/浏览器直连双请求方式；失败只提示不影响聊天；结果进聊天+相册+记忆（节流）
 - 群聊（wx-group/qq-group）未接自动生图（范围限定：不破坏现有功能；群聊行为零变化）
 - 产出文件：src/lib/imggen.ts(新)、src/app/api/imggen/route.ts(新)、mini-services/imggen-mock/(新，测试用)、src/lib/ios/store.ts、src/lib/ios/db.ts、src/components/apps/{settings,chat-settings,wechat,qq,chat,vision-log}.tsx
+---
+Task ID: 8
+Agent: Z.ai Code (main)
+Task: 形象锁定入口迁入「设置 › 图像生成」页尾 + 四个配置页浅灰背景 + 图像生成页美化
+
+Work Log:
+- 需求拆解：①把形象锁定（锁脸）从三端聊天设置迁到设置 App 图像生成页下方 ②API 设置/识图模型/图像生成/语音 API 四页浅灰底 ③图像生成页视觉再美化
+- settings.tsx：
+  · DetailShell 加 gray 可选 prop——外层包 flex h-full w-full div，gray 时 bg-[#F2F2F7] dark:bg-transparent（暗色主题保持原背景），IOSNavBar 传 bg-transparent! backdrop-blur-none!（Tailwind v4 尾缀 important）使灰底延伸到状态栏；API 设置/识图模型/语音 API/图像生成四页开启 gray
+  · 新增 SectionLabel（小色块图标 tint 底 + 灰字分组标题）与 GrayCard（白底圆角 14px + 细描边 ring + 轻阴影）两个通用小组件
+  · ImageGenPage 美化：四区全部换 SectionLabel（自动生图绿 ImagePlus/预设青 Layers/连接配置蓝 Wrench/形象锁定紫 ScanFace）+ GrayCard；请求方式改 iOS 分段控件（bg-muted 槽 + bg-card 选中白药丸）；六个输入框 bg-background → bg-muted/60 灰底字段；测试生图按钮改主色黑底白字 h-11，新增生成中占位骨架框（aspect-square 虚线框 + spinner），测试结果图装裱进圆角 ring 影框居中 220px，错误块加浅红底；预设 chips 白底/选中黑底加影；页尾说明文案同步迁移后入口（「在上方『形象锁定』上传参考图」）；删掉残留的 <> 包裹片段
+  · 新增 FaceLockSection（图像生成页连接配置之后、页尾说明之前）：角色选择横向滚动头像胶囊（listContacts() 异步加载、排除机主 kind='user'、displayNameOf 显示名、已设参考图头像右下绿点徽标、选中 ring-2、refVersion 计数驱动徽标刷新），选中角色卡片（头像+名字+「已锁脸」绿色徽标、参考图 200px 方形预览/虚线 ScanFace 占位、上传/替换（黑底主按钮）+删除（红描边）、FileReader→compressImageSrc 512px→setFaceRef、外貌描述 Textarea onBlur 即时保存 setAppearanceNote、说明文案），存储沿用 imggen-ref:*/imggen-appearance:* 按 contactId 隔离 kv——与三端聊天自动/手动生图共用同一份数据完全兼容；contacts 为空显示引导文案；toast 反馈
+  · 修 lint：selId 切换重读参考图由 useEffect 改为渲染期 adjust-state-on-prop-change 模式（react-hooks/set-state-in-effect 报错）
+- 形象锁定旧入口移除（三端宿主 + chat-settings.tsx）：
+  · chat-settings.tsx：ChatSettingsPage/SmsChatSettingsPage 删 hasFaceRef/onOpenFaceLock props（解构+接口共 4 处）与两处 facesync-entry 入口行；FaceLockPage 整页（2090-2287）删除；ScanFace/imggen 锁脸函数 import 清理；头注释更新（标注已迁移至设置›图像生成）
+  · wechat.tsx/qq.tsx/chat.tsx：删 FaceLockPage import、faceLockOpen state（含注释）、onOpenFaceLock/hasFaceRef 传参、FaceLockPage 渲染块、imggen import 里 getFaceRef
+- 排障记录：MultiEdit 连续 old_str 不精确（头注释行尾「、」差异/兜底字误写）导致两轮部分应用失败，改为逐条小编辑+fresh read 后全部落地；settings.tsx 误删 ChangeEvent/ReactNode 与 web-speech import 两处，随即发现恢复
+- 验证：bunx eslint 五文件 0 错误；bun run lint 通过；bunx tsc --noEmit 0 错误；dev server 重启后 HTTP 200
+- E2E（agent-browser 1280×940，合成 pointer 滑动解锁 + reactProps 点击链）：设置›图像生成整页截图（灰底+三区美化+分段控件+持久化配置回显）✓；形象锁定区：角色胶囊（小鱼+绿点徽标+选中环）+卡片（已锁脸徽标+旧参考图回显+外貌描述旧数据回显=kv 数据兼容）✓；上传参考图（localStorage 桥接 base64→DataTransfer→File→hidden input change）→预览更新+绿徽标+kv imggen-ref:seed-xiaoyu 写入（canvas 压成 jpeg dataURL）✓；外貌描述修改+onBlur→kv imggen-appearance 持久化 ✓；API 设置/识图模型/语音 API 三页浅灰底截图 ✓；信息 App›小鱼›聊天设置：形象锁定入口行已消失（备注/翻译/回复条数/分句发送/时间感知/动作描写/世界书/他的声音/拉黑正常）✓；reload 后 console/page errors 干净（编辑期间的 FaceLockPage export 报错为中间态残留，最终态无）✓
+
+Stage Summary:
+- 形象锁定（锁脸）配置入口正式收敛到「设置 › 图像生成」页尾 FaceLockSection：角色头像胶囊选择器 + 参考图上传/替换/删除 + 外貌描述兜底，按 contactId 隔离的 kv 数据层零改动，与微信/QQ/信息三端聊天内自动（照片标签）与手动（生成照片）生图完全共用；三端聊天设置不再有形象锁定入口
+- 图像生成/API 设置/识图模型/语音 API 四页统一浅灰 iOS 设置子页风（灰底白卡、透明导航延伸状态栏、暗色主题自动回退原背景）；图像生成页分组标题带色块图标、请求方式分段控件、灰底输入字段、主色测试按钮+生成中骨架+结果装裱框
+- 产出文件：src/components/apps/settings.tsx（gray 外壳+美化+FaceLockSection）、src/components/apps/chat-settings.tsx（删 FaceLockPage 与入口）、src/components/apps/{wechat,qq,chat}.tsx（删宿主接线）
