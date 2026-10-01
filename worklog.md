@@ -13088,3 +13088,20 @@ Stage Summary:
 - 用户选定 A/B/C/D/E1/F/G 十二项规则修复全量落地：朋友圈升级/重新生成体验与聊天端对齐（可改描述+弹层 busy）、五处生图挂点统一进相册与记忆、客户端 150s 超时+弹层反馈、多标签溢出系统行、群聊标签降级卡片轻防御（不做真图，多成员锁脸归属留待后续）、流式跨段标签 carry-over 四端加固、标签上限 400+双语描述改纯中文、photo jobs 持久化防刷新丢失、描述 400 上限、重新生成可恢复上一张
 - 产出：src/lib/imggen.ts、src/lib/moments.ts、src/app/api/moments/generate/route.ts、src/components/apps/{chat,wechat,qq,wx-group,qq-group}.tsx
 - 回归：单聊/群聊/朋友圈/记忆/识图/红包转账/长按菜单/语音等既有链路未触碰核心逻辑，四端解析均走既有管线仅前置 carry-over 与标签剥除
+---
+Task ID: 21
+Agent: Z.ai (main, 环境同步)
+Task: 从 GitHub 拉取仓库到沙箱开发环境，恢复可运行状态并配置推送通道
+
+Work Log:
+- clone https://github.com/cczzff468/5200.git（token 鉴权）至 /tmp/repo-5200 检查：1427 个跟踪文件，HEAD=c446253（规则完善组合落地），含真实数据 db/custom.db
+- 停止沙箱脚手架 dev server；/home/z/my-project 添加 remote origin（token 内嵌 URL）→ git fetch origin main → git reset --hard origin/main，工作树与 origin/main 完全一致（git status 零差异）
+- 旧脚手架跟踪的 .env 被 reset 删除，重建 .env：DATABASE_URL=file:/home/z/my-project/db/custom.db（与仓库 db/custom.db 路径一致，用户真实数据保留）
+- bun install 增量安装 web-push/@types/web-push/idb/jsmediatags/remark-gfm 等；bunx prisma generate 生成 Client（未 db push，保护用户数据）
+- setsid 后台启动 bun run dev（3000 端口），dev.log Ready 643ms
+- agent-browser 端到端验证：锁屏渲染（日期/农历/天气小组件）→ 上滑解锁 → 主屏 App 网格 → 打开浏览器 App 正常；console 无错误；dev.log 见 Contact 查询返回真实数据、/api/contacts/migrate 200、/api/weather 200
+- git push -u origin main 建立跟踪（up-to-date），清理 /tmp/repo-5200
+
+Stage Summary:
+- 沙箱环境已与 origin/main（c446253）完全同步，dev server 运行中，浏览器验证四端可用，git 推送通道就绪（remote origin 已配置 token，main→origin/main 已跟踪）
+- 后续功能修改/新增可直接在工作树进行并推送；.env 不入库（.gitignore .env*），注意沙箱重建时需重写
