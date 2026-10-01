@@ -1,13 +1,15 @@
 'use client';
 
-import { Copy, ImageIcon, Loader2, Sparkle } from 'lucide-react';
+import { Copy, ImageIcon, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 
 /**
- * 「文字图片」卡片气泡（信息/微信/QQ 三端共用）：一张印着文字的纸面卡片。
- * 文字图片是「我」发给 TA 的卡片（AI 按人设+聊天记录代笔，或用户代写），点击可转成真图。
- * 视觉：暖纸渐变底 + 顶部和纸胶带 + 「文字图片」小标签 + 内虚线相框 + 宋体正文 + 右下署名，
- * 深浅色模式各自成套；variant 仅影响圆角与测试 ID（sms 大圆角 / qq 中圆角 / wx 小圆角）。
+ * 「文字图片」卡片气泡（信息/微信/QQ 三端 + 朋友圈/QQ空间动态共用）：一张印着文字的纸面卡片。
+ * 文字图片是「我」发给 TA 的卡片（AI 按人设+聊天记录代笔，或用户代写），点击可转成真图；
+ * AI 动态配图降级时也用同款卡片（作者署名为角色）。
+ * 视觉（韩系简约文具风）：象牙白平底 + 居中小字页眉 + 细短线 + 宋体正文（宽松行距）+ 细线署名，
+ * 去掉旧版胶带/虚线相框的繁复装饰；深浅色模式各自成套；
+ * variant 仅影响圆角与测试 ID（sms 大圆角 / qq 中圆角 / wx 小圆角）。
  */
 export function TextCardBubble({
   text,
@@ -20,12 +22,12 @@ export function TextCardBubble({
   /** 右下署名（卡片以谁的身份发出） */
   signedBy: string;
   variant: 'sms' | 'wx' | 'qq';
-  /** 点击卡片（弹出「生成图片/复制文字」操作面板；信息/微信/QQ 三端接线） */
+  /** 点击卡片（弹出「生成图片/复制文字」操作面板；信息/微信/QQ 三端接线；朋友圈端为「生成真图」） */
   onClick?: () => void;
 }) {
   const radius = variant === 'sms' ? 'rounded-[16px]' : variant === 'qq' ? 'rounded-[12px]' : 'rounded-[8px]';
   const inner =
-    'relative w-[212px] select-none overflow-hidden border border-black/[0.08] bg-gradient-to-br from-[#FDFBF4] via-[#F8F2E5] to-[#EFE7D2] shadow-[0_2px_10px_rgba(88,74,44,0.13),0_1px_2px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.985] dark:border-white/[0.10] dark:from-[#2C2C31] dark:via-[#29292E] dark:to-[#242429] dark:shadow-[0_2px_10px_rgba(0,0,0,0.35)]';
+    'relative w-[212px] select-none overflow-hidden border border-black/[0.05] bg-[#FBF9F3] shadow-[0_6px_20px_rgba(158,142,113,0.16),0_1px_3px_rgba(0,0,0,0.04)] transition-transform active:scale-[0.985] dark:border-white/[0.08] dark:bg-[#2A282B] dark:shadow-[0_6px_20px_rgba(0,0,0,0.38)]';
   return onClick ? (
     <button
       type="button"
@@ -46,35 +48,26 @@ export function TextCardBubble({
 /** 卡片面（正文 + 装饰）：带/不带点击的两种外壳共用 */
 function CardFace({ text, signedBy }: { text: string; signedBy: string }) {
   return (
-    <div className="px-[14px] pb-[10px] pt-[14px]">
-      {/* 顶部和纸胶带：贴在卡片上沿的小胶条，手账质感 */}
-      <span
-        aria-hidden="true"
-        className="absolute left-1/2 top-0 h-[15px] w-[58px] -translate-x-1/2 -translate-y-[5px] rotate-[-2deg] rounded-[2px] bg-[#CBB98F]/40 shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-white/[0.10]"
-      />
-      {/* 标签行：左「✦ 文字图片」，右小相片图标（点击卡片可把它生成真图） */}
-      <div className="mb-[6px] flex items-center justify-between">
-        <span className="flex items-center gap-[4px] text-[9.5px] font-medium tracking-[0.22em] text-[#8A7B58] dark:text-[#B7A87F]">
-          <Sparkle className="h-[9px] w-[9px]" strokeWidth={2.2} aria-hidden="true" />
+    <div className="px-[16px] pb-[12px] pt-[13px]">
+      {/* 页眉：居中小字 + 短细线——韩系文具的极简抬头 */}
+      <div className="flex flex-col items-center">
+        <span className="text-[9px] font-medium tracking-[0.3em] text-[#B3A78F] dark:text-[#8F8778]">
           文字图片
         </span>
-        <ImageIcon className="h-[11px] w-[11px] text-black/[0.20] dark:text-white/[0.24]" aria-hidden="true" />
-      </div>
-      {/* 内虚线相框：像贴纸相册里压出的一格 */}
-      <div className="rounded-[9px] border border-dashed border-[#B7A87F]/45 px-[11px] pb-[8px] pt-[2px] dark:border-white/[0.14]">
         <span
           aria-hidden="true"
-          className="block font-serif text-[26px] leading-[1] text-[#B7A87F]/55 dark:text-white/[0.16]"
-        >
-          「
-        </span>
-        <p className="whitespace-pre-wrap break-words font-serif text-[14.5px] leading-[1.85] tracking-[0.03em] text-[#4A4335] dark:text-[#DCD5C5]">
-          {text}
-        </p>
-        <p className="mt-[7px] border-t border-dashed border-[#B7A87F]/35 pt-[6px] text-right font-serif text-[11px] tracking-[0.06em] text-black/[0.40] dark:border-white/[0.10] dark:text-white/[0.42]">
-          —— {signedBy}
-        </p>
+          className="mt-[7px] h-px w-[26px] rounded-full bg-[#DDD4C4] dark:bg-white/[0.12]"
+        />
       </div>
+      {/* 正文：宋体、宽松行距，留白呼吸感 */}
+      <p className="mt-[10px] whitespace-pre-wrap break-words font-serif text-[14px] leading-[1.9] tracking-[0.02em] text-[#6B6355] dark:text-[#D3CCBE]">
+        {text}
+      </p>
+      {/* 署名：右对齐，名字前一段小细线（同页眉线条呼应） */}
+      <p className="mt-[8px] flex items-center justify-end gap-[6px] font-serif text-[11px] tracking-[0.05em] text-[#B3A78F] dark:text-[#8F8778]">
+        <span aria-hidden="true" className="inline-block h-px w-[14px] bg-[#DDD4C4] dark:bg-white/[0.14]" />
+        {signedBy}
+      </p>
     </div>
   );
 }

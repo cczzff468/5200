@@ -12875,3 +12875,22 @@ Work Log:
 Stage Summary:
 - 根因：dev 进程被回收，非代码 bug；代码无改动，无需提交
 - 教训：重启 dev 必须用 setsid 完全脱离会话，否则进程随工具调用结束被杀
+
+---
+Task ID: 17
+Agent: Z.ai (main)
+Task: 朋友圈/QQ空间 AI 按人设+内容发图与文字图片（降级+点击升级）+ 文字图片卡片韩系简约美化
+
+Work Log:
+- /api/moments/generate post 分支注入配图协议：正文末尾可输出 [图片:画面描述]（20~60字具体画面、最多一张、节制规则「大多数动态不配图/内容有画面感才配」、正文必须保留不能只发标签）；同步修正「正文一律纯文字」→「纯文字（配图协议标签除外）」防自相矛盾
+- src/lib/moments.ts：MomentPostView/WxRawPost/QqRawPost/读写归一化/addCharMomentPost 全链路新增 textCard 字段（无损往返持久化）；aiPostMoment 生成后 extractPhotoTags 剥标签（复用聊天端同款正则，兼容 [图片/照片]/全角变体）→ imgGenConfig 完整时 generateCharacterPhoto 锁脸生成真图（按角色 id 读参考图/外貌描述，contactId=peer.id 隔离）挂 post.images；未配置/失败 → textCard=desc 降级卡片；剥空正文用描述兜底；aiCommentOnMoment imagesOnly 布尔兼容 textCard（纯卡片动态可被评论防编造）；新增 upgradeMomentTextCard(platform, postId, userName)：读 imgGenConfig → 未配置返回提示 → generateCharacterPhoto(desc=textCard, useRef=true) → 原位替换 textCard→images=[src] 并广播刷新
+- text-card-bubble.tsx 韩系简约重设计：去掉和纸胶带/虚线相框/大引号装饰 → 象牙白平底(#FBF9F3/#2A282B) + 居中「文字图片」小字页眉(tracking 0.3em) + 26px 细短线 + 宋体正文(leading 1.9) + 细线署名；柔和弥散阴影；三端聊天/朋友圈共用组件，TextCardActionSheet 不变
+- wechat.tsx：WxMoment +textCard；MomentsPage 增 upgradingCardId 状态 + handleUpgradeCard（onToast 反馈「正在生成图片…/已生成照片，卡片已换成真图/错误信息」）；MomentRow 增 onUpgradeCard/cardBusy props + 卡片渲染分支（textCard && 无 images 时 TextCardBubble variant=wx，busy 行提示）
+- qq.tsx：ZonePost +textCard；ZonePage 增 upgradeCard 处理（onToast 反馈）+ 动态流卡片渲染分支（data-testid=qq-zone-textcard-{id}，variant=qq）
+- E2E（agent-browser 1280×940，imggen-mock:3031 按 prompt hash 着色断言）：种子机主账号(user 联系人+wechatPassword)与 friendWx → 微信登录 → 调度器聊天灵感自动触发 aiPostMoment → LLM 输出 [图片:...] → 剥离干净正文「今天画室里阳光特别舒服…」+ mock 真图上屏（Flow A ✓，kv 落库 textCard=null/imgCount=1）；关 imggen.enabled → 朋友圈设置·立即发帖 → 降级韩系文字图片卡片上屏（正文咖啡店段子 + 卡片「咖啡店角落，一杯放在桌上的美式咖啡…」署名小鱼，Flow B ✓）；重开 mock → 点击卡片 → 原位替换为真图（新色与 desc hash 吻合，Flow C ✓）；reload 后两图均持久化 ✓；信息 APP 聊天端韩系卡片渲染验证 ✓（页眉+细线+宋体+细线署名）
+- lint/tsc 全绿；browser errors 干净（唯一 warning 为 HMR 瞬态）；dev.log 无异常
+
+Stage Summary:
+- 朋友圈/QQ空间 AI 发动态现在具备与聊天一致的配图能力：人设+聊天+记忆驱动、节制规则防刷屏、锁脸保脸一致、按角色 ID 隔离；未配置生图或生成失败自动降级为韩系文字图片卡片（点击可升级真图），聊天永不中断口径延伸到动态流
+- 文字图片卡片全面韩系化（三端聊天+两平台动态同款）：简约文具风——象牙白、居中小字页眉、细线、宋体、留白
+- 产出：src/app/api/moments/generate/route.ts、src/lib/moments.ts、src/components/apps/text-card-bubble.tsx、src/components/apps/{wechat,qq}.tsx

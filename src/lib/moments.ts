@@ -30,8 +30,9 @@
 
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { contactByRef, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
-import type { ApiConfig } from '@/lib/ios/store';
+import { useSettings, type ApiConfig } from '@/lib/ios/store';
 import { contactRealName, listContacts, ownerRealName } from '@/lib/ios/contacts-store';
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady } from '@/lib/imggen';
 import {
   getMemSettings,
   listFragments,
@@ -87,6 +88,9 @@ export interface MomentPostView {
   /** 双语翻译（简体中文译文；空串/缺失表示无译文，旧数据兼容） */
   contentZh?: string;
   images: string[];
+  /** 「文字图片」卡片文字（AI 动态配图降级：未配置生图/生成失败时，画面描述印在卡片上充当配图；
+   *  点击卡片可在配置了生图后升级为真实照片，见 upgradeMomentTextCard） */
+  textCard?: string;
   /** 发动态时附的位置名（如「广州塔」；可选） */
   location?: string;
   /** 转发引用（QQ 空间转发：本条是转发理由，原动态摘要嵌在里面；可选） */
@@ -216,6 +220,7 @@ interface WxRawPost {
   text?: unknown;
   contentZh?: unknown;
   images?: unknown;
+  textCard?: unknown;
   time?: unknown;
   likes?: unknown;
   comments?: unknown;
@@ -245,6 +250,7 @@ interface QqRawPost {
   time?: unknown;
   likedBy?: unknown;
   images?: unknown;
+  textCard?: unknown;
   author?: unknown;
   peerId?: unknown;
   createdAt?: unknown;
@@ -365,6 +371,7 @@ export function listMomentPosts(
           content: str(p.text),
           contentZh: str(p.contentZh) || undefined,
           images: strArr(p.images),
+          textCard: str(p.textCard) || undefined,
           location: str(p.location) || undefined,
           repostOf: parseRepostRef(p.repostOf),
           createdAt,
@@ -440,6 +447,7 @@ export function listMomentPosts(
         content: p.content,
         contentZh: str(p.contentZh) || undefined,
         images: strArr(p.images),
+        textCard: str(p.textCard) || undefined,
         location: str(p.location) || undefined,
         repostOf: parseRepostRef(p.repostOf),
         createdAt,
@@ -469,6 +477,7 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
         text: p.content,
         contentZh: p.contentZh || undefined,
         images: p.images,
+        textCard: p.textCard || undefined,
         time: p.createdAt,
         author: p.author,
         peerId: p.peerId ?? undefined,
@@ -513,6 +522,7 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
           time: qqTsToTime(p.createdAt),
           likedBy: p.likes.map((l) => l.name),
           images: p.images,
+          textCard: p.textCard || undefined,
           author: p.author,
           peerId: p.peerId ?? undefined,
           createdAt: p.createdAt,
@@ -1104,6 +1114,8 @@ export function addCharMomentPost(
     /** 双语译文（可选；写入 post.contentZh，旧调用方不传则无译文） */
     contentZh?: string;
     images?: string[];
+    /** 「文字图片」卡片文字（AI 配图降级时传；点击可升级为真图，见 upgradeMomentTextCard） */
+    textCard?: string;
     /** 位置名（可选） */
     location?: string;
     /** 转发引用（AI 转发用户动态时传；QQ 空间） */
@@ -1128,6 +1140,7 @@ export function addCharMomentPost(
     content: args.content,
     contentZh: args.contentZh,
     images: args.images ?? [],
+    textCard: args.textCard || undefined,
     location: args.location || undefined,
     repostOf: args.repostOf,
     createdAt,
@@ -1931,11 +1944,41 @@ export async function aiPostMoment(args: {
       bilingualPrompt: settings.bilingualPrompt || DEFAULT_BILINGUAL_PROMPT,
     });
     if (!isDupText(content, ownRaw)) {
+      // 配图管线（与聊天 [图片:…] 同款协议）：从正文剥出照片标签——
+      // 生图配置完整 → 锁脸生成真实照片（按角色 id 读参考图/外貌描述）；
+      // 未配置/配置不完整/生成失败 → 降级为「文字图片」卡片（画面描述印在卡片上充当配图，点击可升级为真图）。
+      // AI 无需关心最终收到的是真图还是卡片；剥离后正文为空（模型只发了标签）时用描述兜底当正文。
+      const { text: stripped, tags } = extractPhotoTags(content);
+      const finalText = stripped.trim();
+      let images: string[] | undefined;
+      let textCard: string | undefined;
+      if (tags.length > 0) {
+        const tag = tags[0]; // 节制：一条动态最多配一张
+        const cfg = useSettings.getState().imgGenConfig;
+        if (cfg.enabled && imgGenConfigReady(cfg)) {
+          try {
+            const r = await generateCharacterPhoto({
+              cfg,
+              contactId: peer.id,
+              desc: tag.desc,
+              charName: displayNameOf(peer),
+              useRef: tag.useRef,
+            });
+            images = [r.src];
+          } catch {
+            textCard = tag.desc;
+          }
+        } else {
+          textCard = tag.desc;
+        }
+      }
       const post = addCharMomentPost(platform, {
         peer,
         userName,
-        content,
+        content: finalText || tags[0]?.desc?.trim() || content,
         contentZh: contentZh || undefined,
+        images,
+        textCard,
       });
       // NPC 互动：角色发完动态后，其他 NPC 好友延迟（npcInteractDelay 秒）来点赞/评论
       enqueuePostInteractions(platform, post.id, settings.npcInteractDelay);
@@ -1944,6 +1987,41 @@ export async function aiPostMoment(args: {
     banned = content;
   }
   throw new Error('动态与最近发过的内容重复');
+}
+
+/**
+ * 点击动态里的「文字图片」卡片 → 用图像生成把它升级为真实照片（原位替换，持久化，广播刷新）。
+ * 聊天端 TextCardActionSheet「生成图片」同口径：读设置 imgGenConfig（未配置/生成失败 → 返回错误信息）。
+ * 照片按角色锁脸（post.peerId 读参考图/外貌描述；legacy 无 peerId 时无锁脸生成纯描述图）。
+ */
+export async function upgradeMomentTextCard(
+  platform: MomentPlatform,
+  postId: string,
+  userName: string
+): Promise<{ ok: boolean; error?: string }> {
+  const cfg = useSettings.getState().imgGenConfig;
+  if (!cfg.enabled || !imgGenConfigReady(cfg)) {
+    return { ok: false, error: '请先在 设置 › 图像生成 完成配置' };
+  }
+  const list = listMomentPosts(platform, userName);
+  const hit = list.find((p) => p.id === postId);
+  if (!hit || !hit.textCard) return { ok: false, error: '找不到这张卡片' };
+  try {
+    const r = await generateCharacterPhoto({
+      cfg,
+      contactId: hit.peerId ?? '',
+      desc: hit.textCard,
+      charName: hit.authorName,
+      useRef: true,
+    });
+    persistMomentPosts(
+      platform,
+      list.map((p) => (p.id === postId ? { ...p, textCard: undefined, images: [r.src] } : p))
+    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error && e.message ? e.message : '生成失败，请稍后再试' };
+  }
 }
 
 /**
@@ -1991,7 +2069,8 @@ export async function aiCommentOnMoment(args: {
   // 协议标记（前缀可被用户正文伪造、标记原文也会漏进 prompt）——payload 改带显式布尔
   // imagesOnly，route 按布尔注入防编造规则
   const postText = post.content.trim();
-  const imagesOnly = !postText && post.images.length > 0 && !post.repostOf;
+  // 「文字图片」卡片也是配图（AI 配图降级产物）：纯卡片动态同样要能被评论（防编造规则同纯图）
+  const imagesOnly = !postText && (post.images.length > 0 || Boolean(post.textCard)) && !post.repostOf;
   // #18：转发动态的正文只是转发理由——评论素材用统一口径带上被转发的原文摘要（见 repostContextText）
   const postContent = post.repostOf
     ? repostContextText(

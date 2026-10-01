@@ -173,6 +173,7 @@ import {
   markAllMomentNoticesRead,
   subscribeMomentsChanged,
   toggleUserMomentLike,
+  upgradeMomentTextCard,
   updateMomentPostContent,
   type MomentNotice,
   type MomentRepostRef,
@@ -427,6 +428,8 @@ interface WxMoment {
   images: string[];
   /** 发动态时附的位置名（可选） */
   location?: string;
+  /** 「文字图片」卡片文字（AI 配图降级产物；点击卡片可升级为真图） */
+  textCard?: string;
   /** 转发引用（QQ 空间转发用；微信引擎层支持，UI 不发） */
   repostOf?: MomentRepostRef;
   time: number;
@@ -8420,6 +8423,8 @@ function MomentRow({
   onDelete,
   onDeleteComment,
   onEditRequest,
+  onUpgradeCard,
+  cardBusy,
 }: {
   post: WxMoment;
   /** 机主展示名（点赞高亮用） */
@@ -8433,6 +8438,10 @@ function MomentRow({
   onDeleteComment?: (commentId: string) => void;
   /** 编辑动态正文（自己的和 AI 的都可以编辑；好友朋友圈页不传） */
   onEditRequest?: () => void;
+  /** 点击「文字图片」卡片（AI 配图降级产物）→ 用图像生成升级为真图；不传 = 不可点击 */
+  onUpgradeCard?: () => void;
+  /** 卡片正在生成真图（点击防重） */
+  cardBusy?: boolean;
 }) {
   /** 48-6：朋友圈设置·折叠中文译文（组件挂载时读一次，避免每次 render 读 kv；用户改设置后跳回本页重新挂载可生效）。
    *  feat-64：设置按平台独立（只读微信朋友圈这一份） */
@@ -8509,6 +8518,18 @@ function MomentRow({
           <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-[1.5]">{post.text}</p>
         )}
         <BilingualTranslation zh={post.contentZh ?? ''} foldByDefault={foldByDefault} />
+        {/* 「文字图片」卡片（AI 配图降级产物）：韩系简约卡片直接当配图，点击可升级为真图 */}
+        {post.textCard && post.images.length === 0 && (
+          <div className="mt-2">
+            <TextCardBubble
+              text={post.textCard}
+              signedBy={post.authorName}
+              variant="wx"
+              onClick={onUpgradeCard}
+            />
+            {cardBusy && <p className="mt-1 text-[12px] text-black/35 dark:text-white/35">正在生成图片…</p>}
+          </div>
+        )}
         {post.images.length === 1 && (
           <img
             src={post.images[0]}
@@ -8766,6 +8787,16 @@ function MomentsPage({
   const isMine = !owner;
   const shownName = owner?.name ?? me.name;
   const shownAvatar = owner ? owner.avatar : me.avatar;
+  /** 「文字图片」卡片点击升级为真图：busy 的动态 id + 结果 toast（引擎 upgradeMomentTextCard 内部处理配置/生成） */
+  const [upgradingCardId, setUpgradingCardId] = useState<string | null>(null);
+  const handleUpgradeCard = async (post: WxMoment) => {
+    if (!post.textCard || upgradingCardId) return;
+    setUpgradingCardId(post.id);
+    onToast('正在生成图片…');
+    const r = await upgradeMomentTextCard('wx', post.id, me.name);
+    onToast(r.ok ? '已生成照片，卡片已换成真图' : r.error || '生成失败，请稍后再试');
+    setUpgradingCardId(null);
+  };
   const [menuId, setMenuId] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
   /** 封面（本地 IndexedDB settings 存 data URL；迁移时从服务端一次性搬入） */
@@ -8960,6 +8991,8 @@ function MomentsPage({
                 }}
                 onDeleteComment={onDeleteComment ? (commentId) => onDeleteComment(p.id, commentId) : undefined}
                 onEditRequest={onEditRequest ? () => onEditRequest(p) : undefined}
+                onUpgradeCard={p.textCard ? () => void handleUpgradeCard(p) : undefined}
+                cardBusy={upgradingCardId === p.id}
               />
             ))}
             <p className="py-6 text-center text-[12px] text-black/25 dark:text-white/25">没有更多了</p>

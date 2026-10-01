@@ -190,6 +190,7 @@ import {
   subscribeMomentsChanged,
   toggleUserMomentLike,
   updateMomentPostContent,
+  upgradeMomentTextCard,
   type MomentNotice,
   type MomentRepostRef,
 } from '@/lib/moments';
@@ -824,6 +825,8 @@ interface ZonePost {
   likedBy: string[];
   /** 说说配图（压缩后的 dataURL，最多 9 张） */
   images?: string[];
+  /** 「文字图片」卡片文字（AI 配图降级产物；点击卡片可升级为真图） */
+  textCard?: string;
   /** 发说说时附的位置名（可选） */
   location?: string;
   /** 转发引用（转发是「理由 + 原动态摘要卡」） */
@@ -11402,6 +11405,16 @@ function ZonePage({
   const [menuPostId, setMenuPostId] = useState<string | null>(null);
   const [editingPost, setEditingPost] = useState<{ id: string; content: string } | null>(null);
   const [askBusyId, setAskBusyId] = useState<string | null>(null);
+  /** 「文字图片」卡片点击升级为真图：busy 的动态 id（结果经 onToast 反馈） */
+  const [upgradingCardId, setUpgradingCardId] = useState<string | null>(null);
+  const upgradeCard = async (p: ZonePost) => {
+    if (!p.textCard || upgradingCardId) return;
+    setUpgradingCardId(p.id);
+    onToast('正在生成图片…');
+    const r = await upgradeMomentTextCard('qq', p.id, me.name);
+    onToast(r.ok ? '已生成照片，卡片已换成真图' : r.error || '生成失败，请稍后再试');
+    setUpgradingCardId(null);
+  };
   const [cfgPeer, setCfgPeer] = useState<ContactRecord | null>(null);
   /** 长按删除的评论（确认弹层） */
   const [delComment, setDelComment] = useState<{ postId: string; commentId: string; author: string } | null>(null);
@@ -11688,6 +11701,21 @@ function ZonePage({
                             <img key={i} src={src} alt="转发配图" className="h-16 w-16 rounded-[6px] object-cover" />
                           ))}
                         </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 「文字图片」卡片（AI 配图降级产物）：韩系简约卡片直接当配图，点击可升级为真图 */}
+                  {p.textCard && !(p.images && p.images.length > 0) && (
+                    <div className="mt-2" data-testid={`qq-zone-textcard-${p.id}`}>
+                      <TextCardBubble
+                        text={p.textCard}
+                        signedBy={p.authorName}
+                        variant="qq"
+                        onClick={() => void upgradeCard(p)}
+                      />
+                      {upgradingCardId === p.id && (
+                        <p className="mt-1 text-[12px] text-black/35 dark:text-white/35">正在生成图片…</p>
                       )}
                     </div>
                   )}
