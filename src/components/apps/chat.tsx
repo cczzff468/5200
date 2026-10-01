@@ -132,8 +132,9 @@ interface ChatMsg {
   /** 语音消息数据（kind==='voice' 时有效；音频 dataURL 持久化在聊天记录里） */
   voice?: VoiceMsgData;
   /** 图片消息数据（kind==='image' 时有效；自动生图投递，src 为压缩 dataURL；
-   *  desc 为照片描述——AI 历史可读「[图片]（图片内容：…）」、相册存档与决策日志共用） */
-  img?: { src: string; desc: string };
+   *  desc 为照片描述——AI 历史可读「[图片]（图片内容：…）」、相册存档与决策日志共用；
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成，不带角色锁脸） */
+  img?: { src: string; desc: string; fromCard?: boolean };
   /** 文字图片卡片数据（kind==='textcard' 时有效）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
   /** 请求失败的消息（不参与上下文、红字显示） */
@@ -2307,18 +2308,14 @@ function ChatView({
 
   /**
    * 点击「文字图片」卡片 → 用图像生成把卡片文字生成图片（设置 › 图像生成 配置）：
-   * 卡片是「我」发的，生图不带角色锁脸（contactId 空，卡片文字即画面描述）；
-   * 成功 → 以「我」的图片消息上屏并触发 AI 回合（识图/上下文同用户发图口径），关闭操作面板；
+   * 卡片是「我」发的，生图不带角色锁脸（contactId 空，画面描述可在操作面板里改）；
+   * 成功 → 卡片消息**原位**变成图片消息（文字图片消失，生成的图显示在原来卡片的位置），
+   * 不新增消息、不触发 AI 回合（不是发图给 AI），持久化 effect 自动落盘；
    * 失败 → 只 toast，面板留在原地可重试。
    */
-  const generateCardImage = async (m: ChatMsg) => {
-    const desc = m.card?.text?.trim();
+  const generateCardImage = async (m: ChatMsg, descInput: string) => {
+    const desc = descInput.trim();
     if (!desc || cardGenBusy) return;
-    if (wbContactId && loadBlock('sms', wbContactId).byChar) {
-      showToast('对方已将你拉黑，无法发送');
-      setCardActionId(null);
-      return;
-    }
     const cfg = useSettings.getState().imgGenConfig;
     if (!cfg.enabled || !imgGenConfigReady(cfg)) {
       showToast('请先在 设置 › 图像生成 完成配置');
@@ -2327,16 +2324,12 @@ function ChatView({
     setCardGenBusy(true);
     try {
       const r = await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
-      const imgMsg: ChatMsg = { id: uid(), role: 'user', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc } };
-      setMsgs((prev) => [...prev, imgMsg]);
-      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-        markDeliverBoundary(sessionKey, imgMsg.id);
-        enqueueQueuedTurn({ kind: 'kick' });
-      } else {
-        window.setTimeout(() => startAiTurnRef.current?.(null), 80); // 等重渲染 + ref 回填新闭包（含图片消息）
-      }
+      // 原位替换：卡片 → 图片（同一条消息位置不变；fromCard 标记让长按菜单出现「重新生成」）
+      setMsgs((prev) =>
+        prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),
+      );
       setCardActionId(null);
-      showToast('图片已生成并发送');
+      showToast('图片已生成');
     } catch (e) {
       showToast(e instanceof Error ? e.message : '图片生成失败');
     } finally {
@@ -2520,8 +2513,8 @@ function ChatView({
     }
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     items.push({ key: 'recall', label: '撤回', icon: B.recall });
-    // AI 图片：重新生成图片（自填描述，原地替换）；我的图片不提供（用户实拍图不应被覆盖）
-    if (m.role === 'assistant' && isImage) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
+    // AI 图片与「文字图片卡片转出的图片」：重新生成图片（自填描述，原地替换）；我的实拍图不提供
+    if (isImage && (m.role === 'assistant' || m.img?.fromCard)) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
     return items;
   };
 
@@ -2671,17 +2664,21 @@ function ChatView({
     }
   };
 
-  /** 重新生成图片提交：按（可编辑的）描述 + 角色形象锁脸重生成，成功后原地替换该条消息的图片（自动落盘） */
+  /** 重新生成图片提交：按（可编辑的）描述重生成，成功后原地替换该条消息的图片（自动落盘）；
+   *  AI 图片按角色形象锁脸；「文字图片卡片转出的图片」不带锁脸（与首图同口径） */
   const submitImgRegen = async () => {
-    const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && x.role === 'assistant') : null;
+    const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && (x.role === 'assistant' || x.img?.fromCard)) : null;
     const desc = regenImgDesc.trim();
     if (!target || !desc || regenImgBusy) return;
     setRegenImgBusy(true);
     setRegenImgError('');
     try {
       const cfg = useSettings.getState().imgGenConfig;
-      const r = await generateCharacterPhoto({ cfg, contactId: wbContactId ?? '', desc, charName: peer.name || peer.title, useRef: true });
-      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { src: r.src, desc } } : x)));
+      const r =
+        target.role === 'assistant'
+          ? await generateCharacterPhoto({ cfg, contactId: wbContactId ?? '', desc, charName: peer.name || peer.title, useRef: true })
+          : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
+      setMsgs((prev) => prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, img: { ...x.img, src: r.src, desc } } : x)));
       setRegenImgId(null);
       showToast('已重新生成图片');
     } catch (e) {
@@ -3426,7 +3423,7 @@ function ChatView({
             text={am.card.text}
             busy={cardGenBusy}
             accent="#007AFF"
-            onGenerate={() => void generateCardImage(am)}
+            onGenerate={(d) => void generateCardImage(am, d)}
             onToast={showToast}
             onClose={() => (cardGenBusy ? undefined : setCardActionId(null))}
           />

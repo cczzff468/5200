@@ -74,8 +74,9 @@ function CardFace({ text, signedBy }: { text: string; signedBy: string }) {
 
 /**
  * 「文字图片」卡片操作面板（信息/微信/QQ 点击卡片弹出，共用）：
- * 顶部卡片文字预览 + 「用图像生成生成图片」（走 设置 › 图像生成 的配置；busy 转圈）
- * + 「复制文字」（内部处理剪贴板与降级，结果经 onToast 反馈）。
+ * 顶部「文字图片」标签 + 可编辑画面描述（预填卡片文字，生成前可改）
+ * + 「用图像生成生成图片」（走 设置 › 图像生成 的配置；busy 转圈；成功后卡片原位变图片，不发给 AI）
+ * + 「复制文字」（复制卡片原文，内部处理剪贴板与降级，结果经 onToast 反馈）。
  */
 export function TextCardActionSheet({
   text,
@@ -85,17 +86,20 @@ export function TextCardActionSheet({
   onToast,
   onClose,
 }: {
-  /** 卡片文字（预览 + 生成图片提示词 + 复制内容） */
+  /** 卡片文字（描述输入框预填 + 复制内容） */
   text: string;
   /** 正在生成图片（生成行转圈，面板不可关闭） */
   busy: boolean;
   /** 各端主题色（信息 #007AFF / 微信 #07C160 / QQ #0099FF） */
   accent: string;
-  onGenerate: () => void;
+  /** 生成图片（desc = 可编辑后的画面描述；成功后图片原位替换卡片） */
+  onGenerate: (desc: string) => void;
   onToast: (m: string) => void;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  /** 画面描述（预填卡片文字，生成前可修改） */
+  const [desc, setDesc] = useState(text);
   /** 复制卡片文字：clipboard API 失败（非安全上下文等）降级 execCommand */
   const doCopy = async () => {
     if (copied) return;
@@ -126,16 +130,28 @@ export function TextCardActionSheet({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 px-3 pb-[max(14px,env(safe-area-inset-bottom))]" data-testid="textcard-actions-sheet">
       <div className="w-full max-w-[340px]">
         <div className="overflow-hidden rounded-[14px] bg-white/95 pb-1 backdrop-blur-xl dark:bg-[#252528]/95">
-          {/* 预览头：要处理的卡片文字 */}
+          {/* 描述编辑头：卡片文字预填进输入框，生成前可改（宋体呼应卡片面） */}
           <div className="border-b border-black/[0.06] px-4 pb-2.5 pt-3 dark:border-white/[0.08]">
-            <p className="text-[11px] tracking-[0.08em] text-black/40 dark:text-white/40">文字图片</p>
-            <p className="mt-0.5 line-clamp-2 break-all text-[13px] leading-[1.5] text-black/65 dark:text-white/70">{text}</p>
+            <div className="flex items-baseline justify-between">
+              <p className="text-[11px] tracking-[0.08em] text-black/40 dark:text-white/40">文字图片</p>
+              <p className="text-[10.5px] text-black/35 dark:text-white/35">生成的图片将替换这张卡片</p>
+            </div>
+            <textarea
+              data-testid="textcard-desc-input"
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              rows={3}
+              maxLength={200}
+              disabled={busy}
+              placeholder="描述想要的画面（场景/动作/表情/氛围）"
+              className="mt-2 w-full resize-none rounded-[10px] border border-black/[0.10] bg-black/[0.03] px-3 py-2 font-serif text-[13.5px] leading-[1.7] text-black/80 outline-none placeholder:text-black/30 focus:border-black/25 disabled:opacity-60 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/85 dark:placeholder:text-white/30 dark:focus:border-white/30"
+            />
           </div>
           <button
             type="button"
             data-testid="textcard-gen"
-            onClick={onGenerate}
-            disabled={busy}
+            onClick={() => onGenerate(desc)}
+            disabled={busy || !desc.trim()}
             className="flex min-h-[50px] w-full items-center justify-center gap-2 text-[16px] font-medium active:bg-black/[0.05] disabled:opacity-60 dark:active:bg-white/[0.06]"
             style={{ color: accent }}
           >

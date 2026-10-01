@@ -361,8 +361,9 @@ interface QQMsg {
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
   call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
-  /** 图片消息附加数据：desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」；旧记录图片只存 content=dataURL，无此字段照常兼容） */
-  img?: { src?: string; desc?: string };
+  /** 图片消息附加数据：desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」；旧记录图片只存 content=dataURL，无此字段照常兼容）；
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成，不带角色锁脸） */
+  img?: { src?: string; desc?: string; fromCard?: boolean };
   /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
@@ -3622,18 +3623,14 @@ function ChatPage({
 
   /**
    * 点击「文字图片」卡片 → 用图像生成把卡片文字生成图片（设置 › 图像生成 配置）：
-   * 卡片是「我」发的，生图不带角色锁脸（contactId 空，卡片文字即画面描述）；
-   * 成功 → 以「我」的图片消息上屏（QQ 图片存 content，持久化 effect 落盘）并触发 AI 回合，
-   * 关闭操作面板；失败 → 只 toast，面板留在原地可重试。
+   * 卡片是「我」发的，生图不带角色锁脸（contactId 空，画面描述可在操作面板里改）；
+   * 成功 → 卡片消息**原位**变成图片消息（文字图片消失，生成的图显示在原来卡片的位置），
+   * 不新增消息、不触发 AI 回合（不是发图给 AI），持久化 effect 自动落盘；
+   * 失败 → 只 toast，面板留在原地可重试。
    */
-  const generateCardImage = async (m: QQMsg) => {
-    const desc = m.card?.text?.trim();
+  const generateCardImage = async (m: QQMsg, descInput: string) => {
+    const desc = descInput.trim();
     if (!desc || cardGenBusy) return;
-    if (loadBlock('qq', peer.id).byChar) {
-      onToast('对方已将你拉黑，无法发送');
-      setCardActionId(null);
-      return;
-    }
     const cfg = useSettings.getState().imgGenConfig;
     if (!cfg.enabled || !imgGenConfigReady(cfg)) {
       onToast('请先在 设置 › 图像生成 完成配置');
@@ -3642,21 +3639,12 @@ function ChatPage({
     setCardGenBusy(true);
     try {
       const r = await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
-      const imgMsg: QQMsg = { id: uid(), role: 'me', content: r.src, time: Date.now(), kind: 'image' };
-      setMsgs((prev) => [...prev, imgMsg]);
-      if (peer.id !== me.id) {
-        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-          markDeliverBoundary(sessionKey, imgMsg.id);
-          qqQueueAdd(peer.id);
-        } else if (sentenceSend) {
-          setPendingDispatch(true);
-          markPendingBatch(sessionKey, true);
-        } else {
-          window.setTimeout(() => runAiTurnRef.current?.(null, [imgMsg]), 80);
-        }
-      }
+      // 原位替换：卡片 → 图片（QQ 图片 dataURL 存 content，img.src 同步填上与微信端一致；fromCard 标记让长按菜单出现「重新生成」）
+      setMsgs((prev) =>
+        prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, content: r.src, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),
+      );
       setCardActionId(null);
-      onToast('图片已生成并发送');
+      onToast('图片已生成');
     } catch (e) {
       onToast(e instanceof Error ? e.message : '图片生成失败');
     } finally {
@@ -4826,6 +4814,9 @@ function ChatPage({
       // AI 图片：重新生成图片（自填描述，原地替换）替代整轮重答；文字气泡保留原「重新生成」
       if (isImage) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
       else items.push({ key: 'regen', label: '重新生成', icon: B.regen });
+    } else if (isImage && m.img?.fromCard) {
+      // 「文字图片卡片转出的图片」（我的）：重新生成（自填描述，原地替换，不带锁脸）
+      items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
     }
     return items;
   };
@@ -5097,16 +5088,20 @@ function ChatPage({
     }
   };
 
-  /** 重新生成图片提交：按（可编辑的）描述 + 角色形象锁脸重生成，成功后原地替换该条消息的图片（content 与 img.src 同步更新，自动落盘） */
+  /** 重新生成图片提交：按（可编辑的）描述重生成，成功后原地替换该条消息的图片（content 与 img.src 同步更新，自动落盘）；
+   *  AI 图片按角色形象锁脸；「文字图片卡片转出的图片」不带锁脸（与首图同口径） */
   const submitImgRegen = async () => {
-    const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && x.role === 'peer') : null;
+    const target = regenImgId ? msgs.find((x) => x.id === regenImgId && x.kind === 'image' && (x.role === 'peer' || x.img?.fromCard)) : null;
     const desc = regenImgDesc.trim();
     if (!target || !desc || regenImgBusy) return;
     setRegenImgBusy(true);
     setRegenImgError('');
     try {
       const cfg = useSettings.getState().imgGenConfig;
-      const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name, useRef: true });
+      const r =
+        target.role === 'peer'
+          ? await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name, useRef: true })
+          : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
       setMsgs((prev) =>
         prev.map((x) => (x.id === target.id && x.kind === 'image' ? { ...x, content: r.src, img: { ...x.img, src: r.src, desc } } : x)),
       );
@@ -6379,7 +6374,7 @@ function ChatPage({
             text={am.card.text}
             busy={cardGenBusy}
             accent="#0099FF"
-            onGenerate={() => void generateCardImage(am)}
+            onGenerate={(d) => void generateCardImage(am, d)}
             onToast={onToast}
             onClose={() => (cardGenBusy ? undefined : setCardActionId(null))}
           />

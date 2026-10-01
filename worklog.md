@@ -12894,3 +12894,22 @@ Stage Summary:
 - 朋友圈/QQ空间 AI 发动态现在具备与聊天一致的配图能力：人设+聊天+记忆驱动、节制规则防刷屏、锁脸保脸一致、按角色 ID 隔离；未配置生图或生成失败自动降级为韩系文字图片卡片（点击可升级真图），聊天永不中断口径延伸到动态流
 - 文字图片卡片全面韩系化（三端聊天+两平台动态同款）：简约文具风——象牙白、居中小字页眉、细线、宋体、留白
 - 产出：src/app/api/moments/generate/route.ts、src/lib/moments.ts、src/components/apps/text-card-bubble.tsx、src/components/apps/{wechat,qq}.tsx
+
+---
+Task ID: 18
+Agent: Z.ai (main)
+Task: 文字图片卡片生图行为修正——原位替换（卡片消失、图片显示在原位置）、不发给 AI、生成前可改描述、生成后可重新生成
+
+Work Log:
+- text-card-bubble.tsx TextCardActionSheet 重构：静态预览头 → 可编辑画面描述 textarea（预填卡片文字、宋体呼应卡片面、maxLength 200、busy 禁用）+ 右上提示「生成的图片将替换这张卡片」；onGenerate 签名 () => void → (desc: string) => void；生成按钮 desc 为空禁用
+- 信息/微信/QQ 三端 generateCardImage(m, desc) 行为重写（原：生成后新增一条「我」的图片消息 + 触发 AI 回合/排队）：成功 → setMsgs 原位 map 替换该消息（同 id 位置不变）：kind textcard→image、card 清空、img={src, desc, fromCard:true}（QQ 同步 content=r.src）；不再入队/不再 startAiTurn/wxQueueAdd/qqQueueAdd；拉黑拦截一并移除（本地视觉转换，无发送行为）；toast「图片已生成并发送」→「图片已生成」
+- 三端 ChatMsg/WxMsg/QQMsg img 类型新增 fromCard?: boolean（文字图片卡片转出的图，长按可重新生成，不带角色锁脸）
+- 三端长按菜单 buildMsgMenuItems：信息端 regenimg 条件 m.role==='assistant' → (assistant || img.fromCard)；微信/QQ 在 role==='peer' 分支外加 else if (isImage && img.fromCard) 补「重新生成」；实拍图不受影响
+- 三端 submitImgRegen：target 条件放宽（role 匹配 || img.fromCard）；生图参数按来源分叉——AI 图仍走角色锁脸（contactId=peer.id, useRef:true），卡片转的图不带锁脸（contactId:'', useRef:false，与首图同口径）；替换 img 用 {...x.img, src, desc} 展开 fromCard 标记不丢（QQ 端 content 同步）
+- E2E（agent-browser 1280×940 + mini-services/mock-imggen:3099 OpenAI 兼容 mock 上游，改设置›图像生成 baseUrl 指向 mock）：信息端·AI 降级卡片点击 → 面板描述预填可改 → 生成 → 卡片原位变图片（无新消息、等 5s 无 AI 回复）✓；长按原位图 → 菜单含「重新生成」→ 弹层预填上次描述 → 改词重新生成 → 原位替换 ✓；reload 后图片持久化 ✓；「我」发卡片（+面板→文字图片→发送）→ 点击 → 改描述生成 → 气泡内原位变图 ✓；长按用户角色卡片图菜单含「重新生成」✓
+- lint/tsc 全绿；dev.log 无异常
+
+Stage Summary:
+- 文字图片卡片「生成图片」从「发图给 AI」改为纯本地视觉转换：卡片消息原位变成图片消息（同 id 持久化，刷新不丢），AI 上下文仅在未来回合按 [图片]（图片内容：desc）口径读到，生成时刻零 AI 交互
+- 生成前后描述全程可编辑（操作面板预填卡片文字；重新生成弹层预填上次描述），重新生成入口=长按卡片转出的图片；AI 卡片转图保留锁脸、我的卡片转图不锁脸，均按角色隔离口径不变
+- 产出：src/components/apps/text-card-bubble.tsx、src/components/apps/{chat,wechat,qq}.tsx、mini-services/mock-imggen/（E2E mock 上游，端口 3099，仅测试用）
