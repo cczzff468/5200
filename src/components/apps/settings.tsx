@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   Image as ImageIcon,
+  ImagePlus,
   Info,
   Loader2,
   Lock,
@@ -24,6 +25,7 @@ import {
   Phone as PhoneIcon,
   Plane,
   Plus,
+  RefreshCw,
   ScanEye,
   Sun,
   Trash2,
@@ -45,12 +47,15 @@ import {
   WALLPAPER_PRESETS,
   useSettings,
   type ApiPreset,
+  type ImgGenConfig,
+  type ImgGenPreset,
   type ThemeMode,
   type TtsVoiceOption,
   type VisionConfig,
   type VisionPreset,
 } from '@/lib/ios/store';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
@@ -65,6 +70,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
+import { extractImgGenError, imgGenConfigReady, imggenEndpoints, pickImageFromResponse } from '@/lib/imggen';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
 import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
@@ -75,7 +81,7 @@ import { useMyVoices } from '@/lib/ios/my-voices';
 
 // ---------------- 常量与类型 ----------------
 
-type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'vision' | 'voice' | 'about' | 'lock';
+type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'api' | 'vision' | 'imggen' | 'voice' | 'about' | 'lock';
 
 const IOS_RED = '#FF453A';
 
@@ -100,6 +106,22 @@ const BUILTIN_VISION_PRESETS: { name: string; baseUrl: string; model: string }[]
   { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-vl-plus' },
   { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1/chat/completions', model: 'Qwen/Qwen2.5-VL-7B-Instruct' },
 ];
+
+/** 内置生图预设：OpenAI 官方（预设列表第一项、不可删除；Key 需自行填写） */
+const BUILTIN_IMGGEN_PRESET: ImgGenPreset = {
+  id: 'builtin-openai',
+  name: 'OpenAI 官方',
+  config: {
+    enabled: false,
+    mode: 'proxy',
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: '',
+    model: 'gpt-image-2',
+    size: '1024x1024',
+    quality: 'auto',
+    extraPrompt: '',
+  },
+};
 
 // ---------------- 模块级工具 ----------------
 
@@ -238,6 +260,8 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
     s.ttsConfig.provider === 'builtin' ? true : Boolean(s.ttsConfig.apiKey.trim() && s.ttsConfig.baseUrl.trim())
   );
   const ttsModel = useSettings((s) => s.ttsConfig.model);
+  const imgGenConfig = useSettings((s) => s.imgGenConfig);
+  const imgGenReady = imgGenConfigReady(imgGenConfig);
   const profile = useSettings((s) => s.profile);
 
   const [airplane, setAirplane] = useState(false);
@@ -372,6 +396,28 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             value={visionConfigured ? `已配置 · ${visionModel.trim() || '未填模型名'}` : '未配置'}
             onClick={() => onOpen('vision')}
           />
+          <button
+            type="button"
+            data-testid="settings-imggen-row"
+            onClick={() => onOpen('imggen')}
+            className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/50"
+          >
+            <RowIcon icon={ImagePlus} tone={TONE_PINK} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[16px]">图像生成</span>
+              <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+                自动生图 · 锁脸 · OpenAI 兼容
+              </span>
+            </span>
+            <span className="max-w-[50%] shrink-0 truncate text-[15px] text-muted-foreground">
+              {imgGenConfig.enabled && imgGenReady
+                ? `已开启 · ${imgGenConfig.model.trim() || '未填模型名'}`
+                : imgGenReady
+                  ? '已配置'
+                  : '未配置'}
+            </span>
+            <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+          </button>
           <MainRow
             icon={AudioLines}
             tone={TONE_CYAN}
@@ -1828,6 +1874,636 @@ function VisionPage({ onBack }: { onBack: () => void }) {
         <p className="text-[11px] leading-relaxed text-muted-foreground/80">
           图片仅内联传给你自己配置的识图接口，不经过任何第三方图床；预设保存在本机 IndexedDB（API Key 加密存储）。
         </p>
+      </div>
+    </DetailShell>
+  );
+}
+
+// ---------------- 图像生成（生图） ----------------
+
+/**
+ * 图像生成配置页：与识图模型页（VisionPage）同构。
+ * - 「启用自动生图」总开关：关闭时 AI 不会自动生图（手动触发不受影响），下方配置一并隐藏；
+ * - 请求方式：服务端转发（/api/imggen，免跨域，推荐）或浏览器直连（需接口允许 CORS）；
+ * - 连接配置：OpenAI 兼容基地址 + Key（密文持久化）+ 模型名（可拉取列表选择）+ 尺寸/质量/补充提示词；
+ * - 预设管理：内置「OpenAI 官方」（列表第一项、不可删除）+ 用户预设（应用 / 更新 / 删除）；
+ * - 测试生图：按当前配置真实生成一张，验证连通性（成功展示图片，失败展示上游错误）。
+ * 所有变更经 updateImgGenConfig 即时保存，下一次生图现场读取 → 自动生效，无需重启。
+ */
+function ImageGenPage({ onBack }: { onBack: () => void }) {
+  const imgGenConfig = useSettings((s) => s.imgGenConfig);
+  const imgGenPresets = useSettings((s) => s.imgGenPresets);
+  const updateImgGenConfig = useSettings((s) => s.updateImgGenConfig);
+  const setImgGenPresets = useSettings((s) => s.setImgGenPresets);
+
+  const [showKey, setShowKey] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
+
+  const [models, setModels] = useState<string[]>([]);
+  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState('');
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+  const [modelsHint, setModelsHint] = useState('');
+
+  // 测试生图（真实生成一张：成功展示图片、失败展示错误）
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState('');
+  const [testSrc, setTestSrc] = useState('');
+
+  /** 配置变更统一入口：自动保存 + 清掉过期的测试结果 */
+  const patchImgGenConfig = (patch: Partial<ImgGenConfig>) => {
+    updateImgGenConfig(patch);
+    setTestError('');
+    setTestSrc('');
+  };
+
+  // —— 预设管理 ——
+  const allPresets: ImgGenPreset[] = [BUILTIN_IMGGEN_PRESET, ...imgGenPresets];
+
+  /** 应用预设：覆盖连接相关字段；不改动「启用自动生图」开关（开关是全局行为，不属于某家服务商） */
+  const applyPreset = (p: ImgGenPreset) => {
+    patchImgGenConfig({
+      mode: p.config.mode,
+      baseUrl: p.config.baseUrl,
+      apiKey: p.config.apiKey,
+      model: p.config.model,
+      size: p.config.size,
+      quality: p.config.quality,
+      extraPrompt: p.config.extraPrompt,
+    });
+    setModelsError('');
+    setModelsHint('');
+  };
+
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+    setImgGenPresets([...imgGenPresets, { id: genId(), name, config: { ...imgGenConfig } }]);
+    setPresetName('');
+    setSaveOpen(false);
+  };
+
+  /** 把当前配置写回指定预设 */
+  const updatePreset = (id: string) => {
+    setImgGenPresets(imgGenPresets.map((p) => (p.id === id ? { ...p, config: { ...imgGenConfig } } : p)));
+  };
+
+  const deletePreset = (id: string) => {
+    setImgGenPresets(imgGenPresets.filter((p) => p.id !== id));
+  };
+
+  // —— 拉取模型列表（与识图/语音页同款：服务端拉取，内网地址/不可达时浏览器直连兜底） ——
+  const fetchModels = async () => {
+    if (!imgGenConfig.baseUrl.trim()) {
+      setModelsError('请先填写 API 地址');
+      return;
+    }
+    setFetchingModels(true);
+    setModelsError('');
+    setModelsHint('');
+    try {
+      const res = await fetch('/api/settings/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: imgGenConfig.baseUrl, apiKey: imgGenConfig.apiKey }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { models?: string[]; hint?: string; error?: string; directOnly?: boolean }
+        | null;
+      // 内网地址或服务器不可达/地区限制（directOnly）：改用浏览器直连拉取
+      if (!data || data.directOnly || (data.error && isPrivateApiUrl(imgGenConfig.baseUrl))) {
+        const direct = await directFetchModels(imgGenConfig.baseUrl, imgGenConfig.apiKey);
+        if (direct.error) {
+          setModelsError(direct.error);
+          return;
+        }
+        if (direct.hint && direct.models.length === 0) {
+          setModelsHint(direct.hint);
+          return;
+        }
+        setModels(direct.models);
+        setModelQuery('');
+        setModelPanelOpen(true);
+        return;
+      }
+      if (!res.ok || !data || data.error) {
+        setModelsError(data?.error ?? '拉取模型失败，请稍后重试');
+      } else if (data.hint && (data.models ?? []).length === 0) {
+        // 反代等无模型列表接口：优雅降级，提示手动输入
+        setModelsHint(data.hint);
+      } else {
+        setModels(data.models ?? []);
+        setModelQuery('');
+        setModelPanelOpen(true);
+      }
+    } catch {
+      setModelsError('无法连接到服务器');
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const q = modelQuery.trim().toLowerCase();
+  const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
+
+  /** 测试生图：按当前配置真实生成一张（proxy 走 /api/imggen 转发；direct 浏览器直连 /images/generations） */
+  const runImgGenTest = async () => {
+    if (!imgGenConfig.baseUrl.trim()) {
+      setTestError('请先填写 API 地址');
+      return;
+    }
+    if (!imgGenConfig.apiKey.trim()) {
+      setTestError('请先填写 API Key');
+      return;
+    }
+    if (!imgGenConfig.model.trim()) {
+      setTestError('请先填写模型名');
+      return;
+    }
+    const basePrompt =
+      'test prompt: a young woman taking a selfie in a warm cafe, natural light, realistic photo';
+    const extra = imgGenConfig.extraPrompt.trim();
+    const prompt = extra ? `${basePrompt}，${extra}` : basePrompt;
+    const size = imgGenConfig.size.trim() || '1024x1024';
+    const quality = imgGenConfig.quality.trim();
+    setTesting(true);
+    setTestError('');
+    setTestSrc('');
+    try {
+      if (imgGenConfig.mode === 'direct') {
+        // 浏览器直连：需接口允许跨域（CORS）
+        const eps = imggenEndpoints(imgGenConfig.baseUrl);
+        let lastErr = '生图失败';
+        for (const ep of eps.generations) {
+          try {
+            const res = await fetch(ep, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${imgGenConfig.apiKey}` },
+              body: JSON.stringify({
+                model: imgGenConfig.model,
+                prompt,
+                n: 1,
+                ...(size && size !== 'auto' ? { size } : {}),
+                ...(quality && quality !== 'auto' ? { quality } : {}),
+              }),
+            });
+            const payload = (await res.json().catch(() => null)) as unknown;
+            if (!res.ok) {
+              lastErr = extractImgGenError(payload, `生图接口错误（${res.status}）`);
+              continue;
+            }
+            const src = await pickImageFromResponse(payload);
+            if (src) {
+              setTestSrc(src);
+              return;
+            }
+            lastErr = '接口没有返回图片';
+          } catch (e) {
+            lastErr = e instanceof Error ? e.message : '网络错误（检查接口是否允许跨域 CORS）';
+          }
+        }
+        throw new Error(lastErr);
+      }
+      // 服务端转发：/api/imggen
+      const res = await fetch('/api/imggen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: imgGenConfig.baseUrl,
+          apiKey: imgGenConfig.apiKey,
+          model: imgGenConfig.model,
+          prompt,
+          size,
+          quality,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as { src?: string; error?: string } | null;
+      if (!res.ok || !data?.src) {
+        throw new Error(extractImgGenError(data, data?.error || `生图接口错误（${res.status}）`));
+      }
+      setTestSrc(data.src);
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : '测试失败，请稍后重试');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <DetailShell title="图像生成" onBack={onBack}>
+      <div className="flex flex-col gap-5">
+        {/* 启用自动生图（总开关） */}
+        <section>
+          <div className="mb-2 text-[13px] font-medium text-muted-foreground">自动生图</div>
+          <div className="flex flex-col gap-3 rounded-[12px] bg-card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[14px] font-medium text-foreground">启用自动生图</div>
+                <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
+                  开启后 AI 回复里的照片标签会自动生成真实照片（支持锁脸保持人物一致）
+                </p>
+              </div>
+              <Switch
+                checked={imgGenConfig.enabled}
+                onCheckedChange={(v) => patchImgGenConfig({ enabled: v })}
+                aria-label="启用自动生图"
+                data-testid="imggen-enabled"
+                className="data-[state=checked]:bg-[#34C759]"
+              />
+            </div>
+            {imgGenConfig.enabled ? null : (
+              <p className="text-[12px] leading-relaxed text-muted-foreground">
+                关闭后 AI 不会自动生成照片，仍可在聊天里手动触发「生成照片」；下方配置请先填好（手动触发生图也依赖这些配置）。
+              </p>
+            )}
+          </div>
+        </section>
+
+        <>
+            {/* 预设区 */}
+            <section>
+              <div className="mb-2 text-[13px] font-medium text-muted-foreground">预设</div>
+              <div className="flex flex-wrap gap-2">
+                {allPresets.map((p) => {
+                  const isBuiltin = p.id === BUILTIN_IMGGEN_PRESET.id;
+                  const active =
+                    imgGenConfig.baseUrl === p.config.baseUrl && imgGenConfig.model === p.config.model;
+                  return (
+                    <span
+                      key={p.id}
+                      className={`flex items-center gap-1.5 rounded-full border py-1.5 pl-3 pr-2 text-[13px] ${
+                        active
+                          ? 'border-foreground bg-foreground text-background'
+                          : 'border-border text-foreground/85'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        data-testid={`imggen-preset-apply-${p.id}`}
+                        onClick={() => applyPreset(p)}
+                        className="max-w-[120px] truncate"
+                      >
+                        {p.name}
+                      </button>
+                      {!isBuiltin && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid={`imggen-preset-update-${p.id}`}
+                            onClick={() => updatePreset(p.id)}
+                            aria-label={`用当前配置更新预设 ${p.name}`}
+                            className="opacity-60 transition-opacity hover:opacity-100"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            data-testid={`imggen-preset-del-${p.id}`}
+                            onClick={() => deletePreset(p.id)}
+                            aria-label={`删除生图预设 ${p.name}`}
+                            className="opacity-60 transition-opacity hover:opacity-100"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </>
+                      )}
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  data-testid="imggen-preset-save"
+                  onClick={() => setSaveOpen((v) => !v)}
+                  className="flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-muted-foreground/50"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  存为预设
+                </button>
+              </div>
+              {saveOpen && (
+                <div className="mt-3 flex gap-2">
+                  <Input
+                    value={presetName}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    placeholder="预设名称，如 本地生图模型"
+                    autoFocus
+                    className="h-9 flex-1 rounded-[10px] bg-background text-[14px]"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') savePreset();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={savePreset}
+                    disabled={!presetName.trim()}
+                    className="h-9 shrink-0 rounded-[10px] bg-foreground px-4 text-[13px] font-medium text-background transition-opacity active:opacity-80 disabled:opacity-40"
+                  >
+                    保存
+                  </button>
+                </div>
+              )}
+            </section>
+
+            {/* 配置表单 */}
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-[13px] font-medium text-muted-foreground">连接配置</span>
+                <span className="text-[11px] text-muted-foreground/70">更改自动保存 · 即时生效</span>
+              </div>
+              <div className="flex flex-col gap-4 rounded-[12px] bg-card p-4">
+                {/* 请求方式 */}
+                <div>
+                  <FieldLabel>请求方式</FieldLabel>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      data-testid="imggen-mode-proxy"
+                      onClick={() => patchImgGenConfig({ mode: 'proxy' })}
+                      className={`h-10 flex-1 rounded-[10px] border text-[13px] font-medium transition-colors ${
+                        imgGenConfig.mode === 'proxy'
+                          ? 'border-foreground bg-foreground text-background'
+                          : 'border-border text-foreground/80 hover:border-muted-foreground/40'
+                      }`}
+                    >
+                      服务端转发（推荐）
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="imggen-mode-direct"
+                      onClick={() => patchImgGenConfig({ mode: 'direct' })}
+                      className={`h-10 flex-1 rounded-[10px] border text-[13px] font-medium transition-colors ${
+                        imgGenConfig.mode === 'direct'
+                          ? 'border-foreground bg-foreground text-background'
+                          : 'border-border text-foreground/80 hover:border-muted-foreground/40'
+                      }`}
+                    >
+                      浏览器直连
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
+                    {imgGenConfig.mode === 'direct'
+                      ? '浏览器直接请求生图接口，需接口允许跨域（CORS）。'
+                      : '由本站服务器转发生图请求，免跨域、Key 不暴露给页面。'}
+                  </p>
+                </div>
+
+                {/* API 地址 */}
+                <div>
+                  <FieldLabel>API 地址</FieldLabel>
+                  <Input
+                    value={imgGenConfig.baseUrl}
+                    onChange={(e) => patchImgGenConfig({ baseUrl: e.target.value })}
+                    placeholder="https://api.openai.com/v1"
+                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                    data-testid="imggen-baseurl"
+                  />
+                </div>
+
+                {/* API Key */}
+                <div>
+                  <FieldLabel>API Key</FieldLabel>
+                  <div className="relative">
+                    <Input
+                      type={showKey ? 'text' : 'password'}
+                      value={imgGenConfig.apiKey}
+                      onChange={(e) => patchImgGenConfig({ apiKey: e.target.value })}
+                      placeholder="sk-..."
+                      autoComplete="off"
+                      className={`h-10 rounded-[10px] bg-background text-[14px] ${
+                        imgGenConfig.apiKey ? 'pr-16' : 'pr-10'
+                      }`}
+                      data-testid="imggen-apikey"
+                    />
+                    {imgGenConfig.apiKey && (
+                      <button
+                        type="button"
+                        onClick={() => updateImgGenConfig({ apiKey: '' })}
+                        aria-label="清空生图 API Key"
+                        className="absolute right-8 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowKey((v) => !v)}
+                      aria-label={showKey ? '隐藏生图 Key' : '显示生图 Key'}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-opacity hover:opacity-80"
+                    >
+                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 模型名 + 拉取 */}
+                <div className="relative">
+                  <FieldLabel>模型名</FieldLabel>
+                  <div className="flex gap-2">
+                    <Input
+                      value={imgGenConfig.model}
+                      onChange={(e) => patchImgGenConfig({ model: e.target.value })}
+                      placeholder="如 gpt-image-2 / flux-pro"
+                      className="h-10 flex-1 rounded-[10px] bg-background text-[14px]"
+                      data-testid="imggen-model"
+                    />
+                    <button
+                      type="button"
+                      data-testid="imggen-fetch-models"
+                      onClick={() => void fetchModels()}
+                      disabled={fetchingModels}
+                      className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium transition-colors active:bg-muted/60 disabled:opacity-50"
+                    >
+                      {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      拉取模型
+                    </button>
+                  </div>
+                  {modelsError && (
+                    <p className="mt-1.5 text-[12px]" style={{ color: IOS_RED }}>
+                      {modelsError}
+                    </p>
+                  )}
+                  {modelsHint && (
+                    <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                      {modelsHint}
+                    </div>
+                  )}
+
+                  {modelPanelOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={() => setModelPanelOpen(false)}
+                        aria-hidden="true"
+                      />
+                      <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
+                        <div className="border-b border-border/60 p-2">
+                          <Input
+                            value={modelQuery}
+                            onChange={(e) => setModelQuery(e.target.value)}
+                            placeholder="搜索模型，如 image / flux"
+                            autoFocus
+                            className="h-9 rounded-[10px] bg-background text-[13px]"
+                          />
+                        </div>
+                        <div className="thin-scrollbar max-h-64 overflow-y-auto">
+                          {filteredModels.length === 0 ? (
+                            <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">
+                              没有匹配的模型
+                            </div>
+                          ) : (
+                            filteredModels.map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => {
+                                  patchImgGenConfig({ model: m });
+                                  setModelPanelOpen(false);
+                                }}
+                                className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+                              >
+                                <span className="truncate text-[14px]">{m}</span>
+                                {imgGenConfig.model === m && (
+                                  <Check className="h-4 w-4 shrink-0 text-foreground" strokeWidth={2.5} />
+                                )}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* 尺寸 */}
+                <div>
+                  <FieldLabel>尺寸</FieldLabel>
+                  <Input
+                    value={imgGenConfig.size}
+                    onChange={(e) => patchImgGenConfig({ size: e.target.value })}
+                    placeholder="1024x1024 / auto"
+                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                    data-testid="imggen-size"
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {['1024x1024', '1024x1536', '1536x1024', 'auto'].map((sv) => (
+                      <button
+                        key={sv}
+                        type="button"
+                        onClick={() => patchImgGenConfig({ size: sv })}
+                        className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                          imgGenConfig.size.trim() === sv
+                            ? 'border-foreground bg-foreground text-background'
+                            : 'border-border text-foreground/70 hover:border-muted-foreground/40'
+                        }`}
+                      >
+                        {sv}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 质量 */}
+                <div>
+                  <FieldLabel>质量</FieldLabel>
+                  <Input
+                    value={imgGenConfig.quality}
+                    onChange={(e) => patchImgGenConfig({ quality: e.target.value })}
+                    placeholder="auto / low / medium / high"
+                    className="h-10 rounded-[10px] bg-background text-[14px]"
+                    data-testid="imggen-quality"
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {['auto', 'low', 'medium', 'high'].map((qv) => (
+                      <button
+                        key={qv}
+                        type="button"
+                        onClick={() => patchImgGenConfig({ quality: qv })}
+                        className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                          imgGenConfig.quality.trim() === qv
+                            ? 'border-foreground bg-foreground text-background'
+                            : 'border-border text-foreground/70 hover:border-muted-foreground/40'
+                        }`}
+                      >
+                        {qv}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 补充提示词 */}
+                <div>
+                  <FieldLabel>补充提示词（拼在每个生图提示词末尾的风格要求）</FieldLabel>
+                  <Textarea
+                    value={imgGenConfig.extraPrompt}
+                    onChange={(e) => patchImgGenConfig({ extraPrompt: e.target.value })}
+                    placeholder="如：写实风格，自然光线，手机自拍质感"
+                    rows={3}
+                    className="min-h-[72px] rounded-[10px] bg-background py-2 text-[14px]"
+                    data-testid="imggen-extra"
+                  />
+                </div>
+
+                {/* 未配置提示 */}
+                {!imgGenConfig.baseUrl.trim() && (
+                  <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                    还没有配置生图接口：填写 OpenAI 兼容的生图地址与模型名后，AI 回复里的照片标签才能生成真实照片。
+                  </div>
+                )}
+
+                {/* 测试生图 */}
+                <div>
+                  <button
+                    type="button"
+                    data-testid="imggen-test"
+                    onClick={() => void runImgGenTest()}
+                    disabled={testing}
+                    className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] border border-border bg-background text-[13px] font-medium text-foreground transition-colors hover:bg-muted/40 active:bg-muted/70 disabled:opacity-50"
+                  >
+                    {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                    {testing ? '正在生图…（约 10-60 秒）' : '测试生图'}
+                  </button>
+                  <p className="mt-1.5 text-center text-[11px] leading-snug text-muted-foreground/70">
+                    按当前配置真实生成一张，验证接口连通与生图效果
+                  </p>
+                  {testError && (
+                    <div
+                      data-testid="imggen-test-error"
+                      className="mt-2 flex items-start gap-1.5 px-1 text-[12px] leading-relaxed"
+                      style={{ color: IOS_RED }}
+                    >
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{testError}</span>
+                    </div>
+                  )}
+                  {testSrc && (
+                    <div className="mt-2">
+                      <img
+                        src={testSrc}
+                        alt="测试生成的图片"
+                        data-testid="imggen-test-result"
+                        className="w-full max-w-full rounded-[12px] border border-border/60"
+                      />
+                      <div className="mt-1.5 flex items-start gap-1.5 px-1 text-[12px] leading-relaxed text-emerald-600 dark:text-emerald-400/90">
+                        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
+                        <span>测试成功</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {/* 使用说明（页尾） */}
+            <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
+              图像生成与聊天/识图配置相互独立、互不覆盖。开启后 AI 回复里出现照片标签会自动生成照片并发进聊天、存入角色相册；在聊天设置里给角色上传「参考图」即可锁脸，让照片里的人物长相保持一致。
+            </p>
+
+            <p className="text-[11px] leading-relaxed text-muted-foreground/80">
+              服务端转发模式由本站代理请求你配置的生图接口，免跨域；配置与预设保存在本机 IndexedDB（API Key 加密存储），保存即生效、无需重启。
+            </p>
+        </>
       </div>
     </DetailShell>
   );
@@ -3363,6 +4039,7 @@ export default function SettingsApp() {
       {page === 'wallpaper' && <WallpaperPage onBack={() => setPage('root')} />}
       {page === 'api' && <ApiPage onBack={() => setPage('root')} />}
       {page === 'vision' && <VisionPage onBack={() => setPage('root')} />}
+      {page === 'imggen' && <ImageGenPage onBack={() => setPage('root')} />}
       {page === 'voice' && <VoicePage onBack={() => setPage('root')} />}
       {page === 'lock' && <LockPage onBack={() => setPage('root')} />}
       {page === 'about' && <AboutPage onBack={() => setPage('root')} />}

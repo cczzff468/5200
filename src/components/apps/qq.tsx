@@ -206,6 +206,8 @@ import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+// 生图（锁脸）：自动照片标签（[照片:描述]）提取/生成/规则构建 + 手动「生成照片」管线（与微信端共用同一逻辑层）
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, getFaceRef, type PhotoTag } from '@/lib/imggen';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
 import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
@@ -296,6 +298,7 @@ import {
   ChatTranslatePage,
   ChatVoiceFreqPage,
   ChatVoicePage,
+  FaceLockPage,
   FriendDeleteConfirmDialog,
   WorldBookPickerPage,
   ChatToggle,
@@ -478,13 +481,14 @@ function msgPreview(m: QQMsg | undefined): string {
   return m.content;
 }
 
-/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、收款页、亲属卡详情、发送位置、线下见面 */
+/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、收款页、亲属卡详情、发送位置、线下见面、生成照片 */
 type ChatLayer =
   | null
   | { view: 'redpacket' }
   | { view: 'transfer' }
   | { view: 'location' }
   | { view: 'offline' }
+  | { view: 'photogen' }
   | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'tr-receive' | 'fam-detail'; msgId: string };
 
 const LS_SESSION = 'qq-session-user-id';
@@ -1896,6 +1900,84 @@ export function QqPlusGrid({
   );
 }
 
+/**
+ * 生成照片弹层（加号面板「生成照片」入口；锁脸生图手动触发，微信端 PhotoGenCompose 的 QQ 主题版）。
+ * 描述输入（角色以第一人称拍一张发到聊天）+ 生成中状态 + 失败错误（留在弹层可重试）。
+ */
+function QqPhotoGenSheet({
+  charName,
+  busy,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  charName: string;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onSubmit: (desc: string) => void;
+}) {
+  const [desc, setDesc] = useState('');
+  const submit = () => {
+    const d = desc.trim();
+    if (!d || busy) return;
+    onSubmit(d);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="qq-photogen-sheet">
+      <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#232529]">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-[17px] font-semibold text-[#1F2329] dark:text-white">{charName}拍一张发给你</p>
+          <button
+            type="button"
+            aria-label="关闭生成照片"
+            data-testid="qq-photogen-close"
+            onClick={onClose}
+            disabled={busy}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            <X className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          disabled={busy}
+          rows={3}
+          maxLength={160}
+          data-testid="qq-photogen-input"
+          placeholder={`描述画面，如：黄昏的咖啡厅窗边，托腮看镜头，暖光落在侧脸上（${charName}的样子会自动保持一致）`}
+          className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] text-[#1F2329] outline-none placeholder:text-black/30 focus:border-[#0099FF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-white dark:placeholder:text-white/30"
+        />
+        {error ? (
+          <p data-testid="qq-photogen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          data-testid="qq-photogen-submit"
+          onClick={submit}
+          disabled={busy || !desc.trim()}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#0099FF] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+              正在生成照片…
+            </>
+          ) : (
+            '生成并发送'
+          )}
+        </button>
+        <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
+          生成结果会同时存进 {charName} 的相册；失败不影响聊天
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /** QQ 聊天表情面板（点选发送 + 内嵌添加 + 管理删除；数据 qq-stickers；单聊/群聊共用同一套） */
 export function QqStickerPanel({
   onPick,
@@ -2619,9 +2701,12 @@ function ChatPage({
   const [atOpen, setAtOpen] = useState(false);
   // 表情面板（与加号面板互斥）
   const [stickerOpen, setStickerOpen] = useState(false);
-  // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置）
+  // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置/生成照片）
   const [layer, setLayer] = useState<ChatLayer>(null);
   const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; packet: MsgPacket; methodId: string }>(null);
+  /** 手动「生成照片」状态：loading / 错误信息（弹层内展示，失败不影响聊天；成功直接投递不入 AI 回合队列） */
+  const [photoGenBusy, setPhotoGenBusy] = useState(false);
+  const [photoGenError, setPhotoGenError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   // 原生相机隐藏 input（capture 调起后置摄像头，对齐微信：不再使用自建取景浮层）
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -2637,6 +2722,8 @@ function ChatPage({
   const [replyOpen, setReplyOpen] = useState(false);
   // 他的声音（角色音色选择）与 AI 语音频率二级页（设置页进入）
   const [voiceOpen, setVoiceOpen] = useState(false);
+  /** 形象锁定（锁脸）二级页：给角色上传参考图/填外貌描述（生图保持角色脸一致） */
+  const [faceLockOpen, setFaceLockOpen] = useState(false);
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   const myVoicesForSummary = useMyVoices((s) => s.voices);
   /** 当前会话的回复条数（AI 连发多条消息；切换角色时随 sessionKey 重读） */
@@ -3456,6 +3543,89 @@ function ChatPage({
   );
 
   /**
+   * 手动触发「生成照片」（加号面板「生成照片」入口；锁脸同自动生图）：角色以第一人称拍一张发到聊天。
+   * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册（origin 'ai'）/决策日志/记忆
+   *（30 分钟节流）+ 刷新相册缓存；失败 → 错误留在弹层内（不关弹窗，用户可重试或取消），不影响聊天。
+   */
+  const submitPhotoGen = useCallback(
+    async (desc: string) => {
+      const cfg = useSettings.getState().imgGenConfig;
+      if (!imgGenConfigReady(cfg)) {
+        setPhotoGenError('还没配置生图接口：去「设置 → 图像生成」填写 Base URL / API Key / 模型名');
+        return;
+      }
+      setPhotoGenBusy(true);
+      setPhotoGenError('');
+      try {
+        const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name });
+        // QQ 端图片 dataURL 存 content（QqImageBubble 读 m.content），img.src 同步填上与微信端一致；
+        // 经 scheduleAiDelivery 投递（而非直投 deliverAiMsg）：订阅 tick 会把落盘消息合并进本地 state，
+        // 直投只写 kv 不触发 tick（聊天页不刷新）；空批次 initialDelay=0 立即上屏
+        void scheduleAiDelivery<QQMsg>(
+          sessionKey,
+          [{ id: uid(), role: 'peer', content: r.src, time: Date.now(), kind: 'image' as const, img: { src: r.src, desc } }],
+          deliverAiMsg,
+          { initialDelay: 0, delay: () => 0 },
+        );
+        void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
+        void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
+        notePhotoMemory(peer.id, 'qq', desc);
+        void listAlbums(peer.id).then((list) => {
+          albumCacheRef.current = list;
+        });
+        setLayer(null);
+        onToast('照片已生成');
+      } catch (e) {
+        setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
+      } finally {
+        setPhotoGenBusy(false);
+      }
+    },
+    [deliverAiMsg, onToast, peer.id, peer.name],
+  );
+
+  // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flush 统一异步生成 ----
+  /** 本轮待生成的照片任务（buildReplyMsgs 同步解析时入队；flushPhotoJobs 消费并清空） */
+  const photoJobsRef = useRef<PhotoTag[]>([]);
+
+  /**
+   * 消费照片任务（微信端同款管线移植）：每条先生「正在拍照…」系统行，异步生成成功后落照片消息 +
+   * 存相册（origin 'ai'）+ 决策日志 + 记忆（30 分钟节流不刷屏）+ 刷新相册缓存；失败落系统提示行（不影响聊天）。
+   * 单轮最多 2 张防刷屏；自动生图关闭/配置不完整时静默丢弃（标签已剥除，不产生任何输出）。
+   * enqueue = 本轮的投递入口（回合内传 runAiTurn 的 enqueueBatch——首批立即上屏/后续按打字节奏；
+   * 接力回复传 bgEnqueueBatch——首条立即上屏），照片消息用全新 uid 不占 aiId 序列。
+   */
+  const flushPhotoJobs = useCallback(
+    (enqueue: (built: QQMsg[]) => void) => {
+      const jobs = photoJobsRef.current;
+      photoJobsRef.current = [];
+      if (jobs.length === 0) return;
+      const cfg = useSettings.getState().imgGenConfig;
+      if (!cfg.enabled || !imgGenConfigReady(cfg)) return;
+      for (const job of jobs.slice(0, 2)) {
+        enqueue([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `「${peer.name}」正在拍照…` } }]);
+        void (async () => {
+          try {
+            const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc: job.desc, charName: peer.name, useRef: job.useRef });
+            void addAlbum(peer.id, r.src, { desc: job.desc, origin: 'ai' });
+            void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: job.desc });
+            notePhotoMemory(peer.id, 'qq', job.desc);
+            // QQ 端图片 dataURL 存 content（QqImageBubble 读 m.content），img.src 同步填上与微信端一致
+            enqueue([{ id: uid(), role: 'peer', content: r.src, time: Date.now(), kind: 'image', img: { src: r.src, desc: job.desc } }]);
+            // 相册缓存刷新：下一轮 AI 可用 [选图发送] 把这张照片再发出来
+            void listAlbums(peer.id).then((list) => {
+              albumCacheRef.current = list;
+            });
+          } catch (e) {
+            enqueue([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `照片生成失败：${e instanceof Error ? e.message : '未知错误'}` } }]);
+          }
+        })();
+      }
+    },
+    [peer.id, peer.name],
+  );
+
+  /**
    * 把一段回复文本解析成待投递消息（runAiTurn 流中分段/finalize 与退出网页接力的后台回复共用同一套管线，不重不漏）：
    * 动作标记就地应用（状态流转 + 通知行/凭据卡随正文顺序产出）；asSingle=true（单条模式）
    * 时文字块再按「&&&」标记切分，false（多条模式）时一段就是一条消息 —— 分段器已按边界切好，
@@ -3652,9 +3822,13 @@ function ChatPage({
               if (!stickersOnNow && p.rich.kind === 'sticker') continue;
               out.push(richToQqMsg(p.rich, id, t, peer));
             } else {
+              // 生图（锁脸）：先从文本剥出 [照片:描述] 标签（入队 photoJobsRef，flushPhotoJobs 异步生成投递），
+              // 剥不干净的旧标签（生图关闭时）留在原文里可读性更差，统一剥除
+              const { text: photoFreeText, tags: photoTags } = extractPhotoTags(p.text);
+              if (photoTags.length > 0) photoJobsRef.current.push(...photoTags);
               // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
               // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-              const clean = cleanBubbleText(stickersOnNow ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
+              const clean = cleanBubbleText(stickersOnNow ? photoFreeText : stripEmojiText(photoFreeText.replace(/\[表情包\]|\[表情\]/g, ' ')));
               if (!clean) continue;
               out.push({ id, role: 'peer', content: clean, time: t });
             }
@@ -3872,6 +4046,11 @@ function ChatPage({
     }
     // 【fix3-d-6】传 app='qq'：视觉规则里的「换朋友圈背景」文案按端区分（QQ 端说明改的是 QQ 资料页封面）
     const visionRules = buildVisionRules(albumSummary, 'qq');
+    // 生图（锁脸）：自动生图开启且配置完整时注入照片标签规则，AI 可自然地「发照片」；
+    // 关闭时不注入（模型不输出标签，零影响），配置不完整时也不注入（剥出的标签不会生成，没意义）
+    const imgGenCfg = useSettings.getState().imgGenConfig;
+    const imgGenOn = imgGenCfg.enabled && imgGenConfigReady(imgGenCfg);
+    const photoRule = imgGenOn ? buildPhotoTagRule(peer.name) : '';
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -3890,6 +4069,8 @@ function ChatPage({
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
+      // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述] 系统自动生图并以图片消息投递）
+      ...(photoRule ? [photoRule] : []),
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
     ]
@@ -3958,6 +4139,7 @@ function ChatPage({
       if (built.length === 0) return;
       deliveredAny = true;
       enqueueBatch(built);
+      flushPhotoJobs(enqueueBatch); // 生图（锁脸）：流中分段剥出的照片标签统一异步生成投递
     };
 
     const started = beginChatStream({
@@ -4018,6 +4200,7 @@ function ChatPage({
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，密友值/记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
+        flushPhotoJobs(enqueueBatch); // 生图（锁脸）：finalize 剩余段剥出的照片标签统一异步生成投递
         void scheduleAiDelivery<QQMsg>(
           sessionKey,
           finalBatch,
@@ -4071,7 +4254,7 @@ function ChatPage({
       if (userMsg) setMsgs((prev) => prev.filter((m) => m.id !== userMsg.id));
     }
     },
-    [msgs, peer, me, apiConfig, ownerName, contacts, sessionKey, maybeTriggerAiCall, openVoiceCall, deliverAiMsg, buildReplyMsgs]
+    [msgs, peer, me, apiConfig, ownerName, contacts, sessionKey, maybeTriggerAiCall, openVoiceCall, deliverAiMsg, buildReplyMsgs, flushPhotoJobs]
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 sendRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
@@ -4109,11 +4292,13 @@ function ChatPage({
           const r = buildReplyMsgs(item.texts.join(''), bgAsSingle, Date.now(), uid(), 0);
           if (r.dirty) saveMsgs(peer.id, r.cur);
           bgEnqueueBatch(r.msgs);
+          flushPhotoJobs(bgEnqueueBatch); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
         } else {
           for (const t of item.texts) {
             const r = buildReplyMsgs(t, false, Date.now(), uid(), 0);
             if (r.dirty) saveMsgs(peer.id, r.cur);
             bgEnqueueBatch(r.msgs);
+            flushPhotoJobs(bgEnqueueBatch); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
           }
         }
       }
@@ -4122,7 +4307,7 @@ function ChatPage({
       //（bg 回复非仅申请卡模式，requestOnly=false；冷却/通话中/拉黑防御在 maybeTriggerAiCall 内）
       maybeTriggerAiCall(false);
     },
-    [bgEnqueueBatch, buildReplyMsgs, maybeTriggerAiCall, peer.id, sessionKey],
+    [bgEnqueueBatch, buildReplyMsgs, maybeTriggerAiCall, peer.id, sessionKey, flushPhotoJobs],
   );
 
   const bgDeliverRef = useRef<(items: BgPendingItem[]) => void>(() => undefined);
@@ -4892,7 +5077,7 @@ function ChatPage({
     [me.id, peer.id, runAiTurn, sessionKey, onToast]
   );
 
-  // 加号面板五宫格（对照需求：语音通话/视频通话/红包/转账/位置；图片入口已移除）
+  // 加号面板宫格（语音通话/视频通话/红包/转账/位置/生成照片；图片入口已移除）
   const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
     {
       key: 'call',
@@ -4933,6 +5118,19 @@ function ChatPage({
       onClick: () => {
         setPlusOpen(false);
         setLayer({ view: 'location' });
+      },
+    },
+    {
+      key: 'photogen',
+      label: '生成照片',
+      color: '#0099FF',
+      icon: <Sparkles className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        // 生成照片（锁脸）：角色以第一人称拍一张发到聊天（描述在弹层内填，锁脸走设置里的生图配置）
+        setPlusOpen(false);
+        setStickerOpen(false);
+        setPhotoGenError('');
+        setLayer({ view: 'photogen' });
       },
     },
   ];
@@ -5999,6 +6197,16 @@ function ChatPage({
           onToast={onToast}
         />
       ) : null}
+      {/* 生成照片弹层（加号面板「生成照片」入口；锁脸生图手动触发，微信端 PhotoGenCompose 的 QQ 主题版） */}
+      {layer?.view === 'photogen' ? (
+        <QqPhotoGenSheet
+          charName={peer.name}
+          busy={photoGenBusy}
+          error={photoGenError}
+          onClose={() => (photoGenBusy ? undefined : setLayer(null))}
+          onSubmit={(desc) => void submitPhotoGen(desc)}
+        />
+      ) : null}
       {/* 支付密码验证浮层（开启支付密码后红包/转账发送前弹出自绘键盘） */}
       {gate ? (
         <PayPwdGate
@@ -6037,6 +6245,9 @@ function ChatPage({
           }}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
+          // 生图锁脸：入口行；二级页 FaceLockPage 在下方渲染
+          onOpenFaceLock={() => setFaceLockOpen(true)}
+          hasFaceRef={Boolean(getFaceRef(peer.id))}
           pinned={flags.pinned === true}
           muted={flags.muted === true}
           bg={bg}
@@ -6110,6 +6321,11 @@ function ChatPage({
           }}
         />
       ) : null}
+
+      {/* 形象锁定（锁脸）二级页：参考图上传/替换/删除 + 外貌描述（生图保持角色脸一致） */}
+      {faceLockOpen && (
+        <FaceLockPage variant="qq" contactId={peer.id} peerName={peer.name} onBack={() => setFaceLockOpen(false)} />
+      )}
 
       {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}
       {translateOpen ? (

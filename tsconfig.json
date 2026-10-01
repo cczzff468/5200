@@ -41,6 +41,7 @@
     "node_modules",
     "examples",
     "skills",
-    "tests"
+    "tests",
+    "mini-services"
   ]
 }

@@ -47,6 +47,44 @@ export interface VisionPreset {
 /** 默认未配置：发图不触发识图，聊天行为与旧版完全一致 */
 export const DEFAULT_VISION_CONFIG: VisionConfig = { baseUrl: '', apiKey: '', model: '' };
 
+/** 图像生成（生图）配置：与聊天（apiConfig）/识图（visionConfig）完全独立、互不覆盖（含 Key，密文持久化）。
+ *  负责把 AI 回复里的照片标签 / 用户手动触发生成图片，支持「锁脸」（角色参考图）保持人物一致。
+ *  保存后下一次生成时现场读取 → 自动生效，无需重启 */
+export interface ImgGenConfig {
+  /** 自动生图总开关：开启后 AI 回复里出现 [照片:描述] 标签时自动生图；关闭后仅手动触发可用 */
+  enabled: boolean;
+  /** 请求方式：'proxy' = 服务端转发（推荐，避免跨域）；'direct' = 浏览器直连（需接口允许 CORS） */
+  mode: 'proxy' | 'direct';
+  /** OpenAI 兼容基地址（如 https://api.openai.com/v1）或完整 /images/generations 端点 */
+  baseUrl: string;
+  apiKey: string;
+  /** 模型名（如 gpt-image-2 / flux-pro） */
+  model: string;
+  /** 尺寸（如 1024x1024 / auto） */
+  size: string;
+  /** 质量（auto / low / medium / high） */
+  quality: string;
+  /** 补充提示词（拼在每个生图提示词末尾，如风格要求） */
+  extraPrompt: string;
+}
+
+export interface ImgGenPreset {
+  id: string;
+  name: string;
+  config: ImgGenConfig;
+}
+
+export const DEFAULT_IMGGEN_CONFIG: ImgGenConfig = {
+  enabled: false,
+  mode: 'proxy',
+  baseUrl: 'https://api.openai.com/v1',
+  apiKey: '',
+  model: 'gpt-image-2',
+  size: '1024x1024',
+  quality: 'auto',
+  extraPrompt: '',
+};
+
 /** 语音 API（TTS）配置：与聊天 API（apiConfig）/识图 API（visionConfig）相互独立、互不覆盖。
  *  服务商支持 内置语音（免费、零配置）与 MiniMax / OpenAI 兼容接口；保存后下一次播放即生效（每次播放现场读取，无缓存无重启） */
 export interface TtsConfig {
@@ -234,6 +272,10 @@ interface SettingsState {
   visionConfig: VisionConfig;
   /** 用户自己保存的识图模型预设 */
   visionPresets: VisionPreset[];
+  /** 生图配置（与 apiConfig/visionConfig 互相独立；密文持久化） */
+  imgGenConfig: ImgGenConfig;
+  /** 用户自己保存的生图预设 */
+  imgGenPresets: ImgGenPreset[];
   /** 锁屏密码配置（持久化） */
   lockConfig: LockConfig;
   /** 个人信息（头像/名字/标签，持久化） */
@@ -267,6 +309,9 @@ interface SettingsState {
   /** 更新识图模型配置（立即持久化；聊天发送时现场读取 → 保存后自动生效，无需重启） */
   updateVisionConfig: (patch: Partial<VisionConfig>) => void;
   setVisionPresets: (list: VisionPreset[]) => void;
+  /** 更新生图配置（立即持久化；生成时现场读取 → 保存后自动生效，无需重启） */
+  updateImgGenConfig: (patch: Partial<ImgGenConfig>) => void;
+  setImgGenPresets: (list: ImgGenPreset[]) => void;
   applyLockConfig: (cfg: LockConfig) => void;
   /** 更新个人信息（立即持久化） */
   setProfile: (patch: Partial<Profile>) => void;
@@ -295,6 +340,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
   apiPresets: [],
   visionConfig: { ...DEFAULT_VISION_CONFIG },
   visionPresets: [],
+  imgGenConfig: { ...DEFAULT_IMGGEN_CONFIG },
+  imgGenPresets: [],
   lockConfig: { lockScreen: true, enabled: false, code: '', len: 4 },
   profile: { ...DEFAULT_PROFILE },
   addressMode: 'name',
@@ -307,7 +354,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, ttsVoicesRec, sttRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, ttsVoicesRec, sttRec, imgGenRec, imgGenPresetsRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -321,6 +368,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'ttsConfig'),
         localDB.get('settings', 'ttsVoices'),
         localDB.get('settings', 'sttConfig'),
+        localDB.get('settings', 'imgGenConfig'),
+        localDB.get('settings', 'imgGenPresets'),
       ]);
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
@@ -527,6 +576,49 @@ export const useSettings = create<SettingsState>((set, get) => ({
         );
       }
 
+      // 生图配置（含 apiKey，密文信封，与 visionConfig 同策略）
+      let imgGenConfig: ImgGenConfig = { ...DEFAULT_IMGGEN_CONFIG };
+      if (imgGenRec && typeof imgGenRec.value === 'object' && imgGenRec.value !== null) {
+        const v = ((await decryptValue<Partial<ImgGenConfig>>(imgGenRec.value)) ?? imgGenRec.value) as Partial<ImgGenConfig>;
+        imgGenConfig = {
+          enabled: v.enabled === true,
+          mode: v.mode === 'direct' ? 'direct' : 'proxy',
+          baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_IMGGEN_CONFIG.baseUrl,
+          apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+          model: typeof v.model === 'string' && v.model ? v.model : DEFAULT_IMGGEN_CONFIG.model,
+          size: typeof v.size === 'string' && v.size ? v.size : DEFAULT_IMGGEN_CONFIG.size,
+          quality: typeof v.quality === 'string' && v.quality ? v.quality : DEFAULT_IMGGEN_CONFIG.quality,
+          extraPrompt: typeof v.extraPrompt === 'string' ? v.extraPrompt : '',
+        };
+        const imgGenWasPlain = !('__enc' in (imgGenRec.value as object));
+        if (imgGenWasPlain && imgGenConfig.apiKey.length > 0) {
+          void encryptValue(imgGenConfig)
+            .then((enc) => localDB.put('settings', { key: 'imgGenConfig', value: enc }))
+            .catch(() => undefined);
+        }
+      }
+
+      let imgGenPresets: ImgGenPreset[] = [];
+      if (imgGenPresetsRec && imgGenPresetsRec.value) {
+        const gv = (await decryptValue<ImgGenPreset[]>(imgGenPresetsRec.value)) ?? imgGenPresetsRec.value;
+        if (Array.isArray(gv)) {
+          imgGenPresets = gv.filter(
+            (p): p is ImgGenPreset =>
+              typeof p === 'object' &&
+              p !== null &&
+              typeof (p as ImgGenPreset).id === 'string' &&
+              typeof (p as ImgGenPreset).name === 'string' &&
+              typeof (p as ImgGenPreset).config === 'object'
+          );
+          const imgGenHasKey = imgGenPresets.some((p) => typeof p.config?.apiKey === 'string' && p.config.apiKey.length > 0);
+          if (!('__enc' in (imgGenPresetsRec.value as object)) && imgGenHasKey) {
+            void encryptValue(imgGenPresets)
+              .then((enc) => localDB.put('settings', { key: 'imgGenPresets', value: enc }))
+              .catch(() => undefined);
+          }
+        }
+      }
+
       // 开机门控收尾前预载主屏/锁屏壁纸（最多等 1.5s 兜底）：
       // 锁屏/主屏挂载首帧即完整壁纸 + 正确前景色，修复刚打开网页时锁屏壁纸「闪一下」
       const bootUrls: (string | null | undefined)[] = [customWallpaperUrl, lockCustomWallpaperUrl];
@@ -546,6 +638,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         apiPresets,
         visionConfig,
         visionPresets,
+        imgGenConfig,
+        imgGenPresets,
         lockConfig,
         profile,
         // 称呼方式已按用户要求固定为「用真实名字」：昵称只是 App 显示昵称，不再是可选项
@@ -654,6 +748,22 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set({ visionPresets: list });
     void encryptValue(list)
       .then((v) => localDB.put('settings', { key: 'visionPresets', value: v }))
+      .catch(() => undefined);
+  },
+
+  updateImgGenConfig: (patch) => {
+    const imgGenConfig = { ...get().imgGenConfig, ...patch };
+    set({ imgGenConfig });
+    // 安全：含 apiKey，密文落盘（与 visionConfig 同策略）
+    void encryptValue(imgGenConfig)
+      .then((v) => localDB.put('settings', { key: 'imgGenConfig', value: v }))
+      .catch(() => undefined);
+  },
+
+  setImgGenPresets: (list) => {
+    set({ imgGenPresets: list });
+    void encryptValue(list)
+      .then((v) => localDB.put('settings', { key: 'imgGenPresets', value: v }))
       .catch(() => undefined);
   },
 

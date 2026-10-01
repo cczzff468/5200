@@ -211,7 +211,7 @@ export interface VisionDecisionRecord {
   id: string;
   contactId: string;
   app: 'wx' | 'qq' | 'sms';
-  action: 'change-avatar' | 'change-moments-bg' | 'save-to-album' | 'pick-album-avatar' | 'pick-album-bg' | 'pick-album-send';
+  action: 'change-avatar' | 'change-moments-bg' | 'save-to-album' | 'pick-album-avatar' | 'pick-album-bg' | 'pick-album-send' | 'imggen';
   targetId: string;     // album 条目 id 或图片消息 id
   imgSrc?: string;      // 涉及图片 src（小图存档）
   reason?: string;      // AI 理由（可选）

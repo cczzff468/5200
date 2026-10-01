@@ -12539,3 +12539,119 @@ Work Log:
 Stage Summary:
 - 信息 APP 线下功能入口已完整移除（按钮+状态+渲染块+导入），线下功能现在仅 QQ（五角星）与微信（加号面板）可用
 - 产出文件：src/components/apps/chat.tsx、src/lib/offline-meet.ts、src/components/apps/offline-meeting.tsx（后两个仅注释）
+
+---
+Task ID: 3-c
+Agent: Z.ai Code (agent-3c)
+Task: 聊天设置新增「形象锁定（锁脸）」参考图/外貌描述页
+
+Work Log:
+- 通读 chat-settings.tsx（2027 行）：确认入口行→二级页既有模式（回复条数→ChatReplyCountPage、翻译→ChatTranslatePage、背景页、他的声音页）、三端主题 token（translateTokens）、页面组件本身不持有 contactId（由宿主传 peer/sessionKey，如 wechat.tsx 的 peer.id / chat.tsx 的 wbContactId）
+- 新增 FaceLockPage（三端共用二级页，文件末尾追加）：props = variant/contactId/peerName/onBack；内部自管状态 —— getFaceRef 惰性初始化预览（kv 已由 ensureKvReady 在开机门控前注水，同步读安全）+ contactId 变化防御性重读；上传/替换走隐藏 file input（accept=image/*）→ FileReader→dataURL→compressImageSrc(src,512)→setFaceRef(contactId,压缩后)→刷新预览+toast「已更新参考图」；删除参考图（仅存在时显示、红字、无二次确认）setFaceRef(contactId,null)+toast；外貌描述 textarea（getAppearanceNote 填充、onBlur 即时 setAppearanceNote 保存、maxLength 300、placeholder 按规格）；页尾「锁脸工作原理」说明块 3 行；toast 用本目录 page-toast 的 useLocalToast+LocalToast（微信/QQ/信息页内 toast 既有方案）；data-testid：facesync-page/facesync-ref-img/facesync-ref-upload/facesync-ref-delete/facesync-appear/{variant}-facesync-back
+- 「形象锁定（锁脸）」入口行同时加到 ChatSettingsPage（微信/QQ，rowCls/cardCls 风格）与 SmsChatSettingsPage（信息端 t.rowCls/muted-foreground 风格），两处都放「他的声音」块之后、拉黑块之前；图标 lucide ScanFace（已加 import）；副标题 hasFaceRef ? '已设置参考图' : '生图保持角色形象一致'；data-testid=facesync-entry（两端同 ID，同一时刻只挂载一端）
+- 新增可选 props（两页同套，JSDoc 注明宿主接线方式）：onOpenFaceLock?:()=>void（不传=隐藏入口行，AI 助手会话无角色沿用 onOpenVoice 同款门控）、hasFaceRef?:boolean（宿主从 getFaceRef(contactId) 计算；开关二级页时宿主重渲染会同步刷新副标题）
+- 文件头注释与两页组件 doc 注释同步更新（FaceLockPage 条目 + 持久化说明 imggen kv 按 contactId 隔离）
+- 验证：bunx eslint src/components/apps/chat-settings.tsx 0 错误；bunx tsc --noEmit 无本文件错误（剩余 4 个报错全部来自未改文件：src/lib/imggen.ts 3 个 mode 类型收窄 + vision-log.tsx 1 个缺 imggen 项，属 3-a/47 系列既有问题）；dev.log 编译通过、GET / 200；三端宿主（wechat/qq/chat.tsx）零改动即可编译通过（新 props 全可选）
+
+Stage Summary:
+- chat-settings.tsx 新增 FaceLockPage（上传/替换/删除参考图 + 外貌描述 + 工作原理说明，全部按 contactId 隔离存 imggen kv）与两端入口行（微信/QQ + 信息，含 ScanFace 图标、副标题状态、全套 facesync-* testid）；宿主接线只需传 onOpenFaceLock/hasFaceRef + 渲染 <FaceLockPage contactId peerName onBack/>
+- 产出文件：src/components/apps/chat-settings.tsx（仅此一个文件）
+---
+Task ID: 3-b
+Agent: Z.ai Code（设置页子代理）
+Task: 设置 App 新增「图像生成」配置页
+
+Work Log:
+- 通读 worklog.md / src/lib/ios/store.ts（ImgGenConfig、DEFAULT_IMGGEN_CONFIG、imgGenConfig/imgGenPresets state 与 updateImgGenConfig/setImgGenPresets actions）/ src/lib/imggen.ts（imggenEndpoints、pickImageFromResponse、extractImgGenError、imgGenConfigReady 均直接 import 复用）/ /api/imggen 与 /api/settings/models 路由，确认接口契约
+- settings.tsx 主列表「开发者」卡片：在「识图模型」行后新增「图像生成」行（data-testid=settings-imggen-row，ImagePlus 图标 + TONE_PINK 色块，副标题「自动生图 · 锁脸 · OpenAI 兼容」，右侧状态 已开启·模型名/已配置/未配置，用 imgGenConfigReady 判定）；Page 联合类型加 'imggen'，SettingsApp 增加 page==='imggen' 路由
+- 新增 ImageGenPage（仿 VisionPage 完全同构，复用 DetailShell/FieldLabel/GroupCard 风格）：
+  · 「启用自动生图」开关行（Switch，checked 深绿 #34C759，data-testid=imggen-enabled），关闭时显示「关闭后 AI 不会自动生成照片，仍可手动触发」说明并隐藏下方全部配置
+  · 「请求方式」两段选择：服务端转发（推荐）/ 浏览器直连，仿 STT 的 h-10 flex-1 胶囊分段样式 + 模式说明文案
+  · API 地址 / API Key（眼睛 show/hide + 一键清空，同 VisionPage）/ 模型名 +「拉取模型」按钮（照抄 VisionPage fetchModels，含 directOnly/内网地址时 directFetchModels 浏览器直连兜底）+ 可搜索模型选择面板（fixed 遮罩 + absolute 面板 + Check 选中态）
+  · 尺寸输入 + 快捷 chips（1024x1024/1024x1536/1536x1024/auto）；质量输入 + 快捷 chips（auto/low/medium/high）
+  · 补充提示词 Textarea（shadcn Textarea，样式对齐 Input）
+  · 预设管理：模块级内置 BUILTIN_IMGGEN_PRESET「OpenAI 官方」（id=builtin-openai，proxy + gpt-image-2 + 1024x1024 + auto，列表第一项不可删除）；用户预设胶囊 = 名字（应用）+ RefreshCw 更新（当前配置写回）+ X 删除；「存为预设」虚线胶囊 + 命名输入行（仿 saveOpen）；应用预设只覆盖连接字段、不动 enabled 开关
+  · 「测试生图」按钮：校验三项配置 → 提示词 test prompt: a young woman taking a selfie in a warm cafe, natural light, realistic photo（extraPrompt 非空以「，」拼接）；mode=proxy POST /api/imggen JSON；mode=direct 浏览器直连 imggenEndpoints(baseUrl).generations[0]（Bearer 头，size/quality 非 auto 才携带）+ pickImageFromResponse 解析；测试中 Loader2 转圈禁用；成功显示全宽圆角图片 + 「测试成功」，失败用 extractImgGenError 提取红色错误
+  · 页尾两段使用说明：锁脸参考图入口、照片标签自动生图+存相册、服务端转发免跨域、IndexedDB 加密保存即生效
+- 全部变更走 updateImgGenConfig（即改即存），预设走 setImgGenPresets；useSettings selector 写法与文件内其余部分一致；未改动 settings.tsx 以外的任何文件
+- 验证：bunx eslint src/components/apps/settings.tsx → 0 error 0 warning；bunx tsc --noEmit → settings.tsx 0 错误（剩余 4 个错误均在未改动的 src/lib/imggen.ts ×3 与 src/components/apps/vision-log.tsx ×1，属上游既有问题，非本任务引入）；dev.log 编译通过
+
+Stage Summary:
+- 设置 App 新增完整「图像生成」配置页（root 行 + imggen 子页），与 VisionPage 风格完全一致，全部 18 个要求的 data-testid 就位（settings-imggen-row / imggen-enabled / imggen-mode-proxy|direct / imggen-baseurl / imggen-apikey / imggen-model / imggen-fetch-models / imggen-size / imggen-quality / imggen-extra / imggen-preset-save / imggen-test / imggen-test-result / imggen-test-error / imggen-preset-apply-{id} / imggen-preset-del-{id} / imggen-preset-update-{id}）
+- 决策：预设应用不改动「启用自动生图」开关（开关为全局行为，不属于服务商配置）；关闭开关时隐藏预设+连接配置，保持页面与 VisionPage 同等简洁度；direct 模式测试生图 size/quality 为 auto 时不携带该参数（与 /api/imggen 路由口径一致）
+- 产出：仅 src/components/apps/settings.tsx 一个文件变更；上游遗留 tsc 错误（imggen.ts mode 类型收窄、vision-log.tsx 缺 imggen 条目）已在此注明，建议由 3-a/相关任务跟进
+---
+Task ID: 3-d
+Agent: Z.ai Code (QQ 端生图集成)
+Task: QQ 端集成生图+锁脸（自动照片标签+手动生成照片）
+
+Work Log:
+- 通读金标准：wechat.tsx 的 photoJobsRef/flushPhotoJobs（4940-4972）、buildReplyMsgs 剥标签点（5239-5245）、systemFull photoRule 注入（5522-5545）、deliverSegment/finalize/deliverBgItems 三处 flush 调用、PhotoGenCompose 弹层与加号面板项（3118-3203/6745-6751/7603-7611）
+- 定位 QQ 管线：buildReplyMsgs（useCallback，5 参数版 idBase/idStart 返回 nextIdx）、runAiTurn 内局部 enqueueBatch（闭包 batchStarted）、组件级 bgEnqueueBatch、deliverSegment/finalize（均在 runAiTurn 内）、deliverBgItems、systemFull 拼装、plusItems 五宫格、ChatLayer 浮层类型、albumCacheRef 相册缓存、QqMsg 的 sys:{text}/image(content=dataURL+img:{src,desc}) 形状
+- 唯一改动文件 src/components/apps/qq.tsx，六点移植：
+  ① import @/lib/imggen（extractPhotoTags/generateCharacterPhoto/imgGenConfigReady/buildPhotoTagRule/notePhotoMemory/PhotoTag）
+  ② 新增 QqPhotoGenSheet 弹层组件（微信 PhotoGenCompose 的 QQ 主题版：白/暗 #232529 圆角底部弹层、QQ 蓝 #0099FF 提交钮与输入聚焦色、testid qq-photogen-sheet/close/input/error/submit，生成中 Loader2+禁关）
+  ③ ChatLayer 联合类型加 { view: 'photogen' }；ChatPage 加 photoGenBusy/photoGenError state + submitPhotoGen（useCallback：imgGenConfigReady 门槛 → generateCharacterPhoto 锁脸生成 → deliverAiMsg 直投 image 消息（QQ 图片 dataURL 存 content、img.src 同填与 pick-album-send 同构）→ addAlbum(origin 'ai')/addVisionDecision(app 'qq', action 'imggen')/notePhotoMemory('qq')/listAlbums 刷新 albumCacheRef → 关弹层+toast；失败错误留弹层可重试）
+  ④ 组件级 photoJobsRef + flushPhotoJobs(enqueue)（微信同款管线：每 job 先投「「xx」正在拍照…」sys 行 → 异步 generateCharacterPhoto → 成功投 image 消息+存相册/决策/记忆/刷新相册缓存，失败投「照片生成失败：…」sys 行；单轮最多 2 张；cfg.enabled && imgGenConfigReady 才跑；照片消息用全新 uid 不占 aiId 序列；enqueue 参数化适配 QQ 回合内 enqueueBatch 与接力 bgEnqueueBatch 两种投递入口）
+  ⑤ buildReplyMsgs 文字分支：cleanBubbleText/stripEmojiText 之前 extractPhotoTags 剥 [照片:描述]（含全角/三段式变体）入队 photoJobsRef，photoFreeText 替代 p.text 走原清洗逻辑（纯标签段文字为空 continue，标签仍入队）
+  ⑥ 三处投递点全接 flushPhotoJobs：runAiTurn 的 deliverSegment（enqueueBatch 后）、finalize（scheduleAiDelivery 前，无条件 flush 兜住流中纯标签段）、deliverBgItems（single 与 multi 两分支 bgEnqueueBatch 后各一次）；runAiTurn 与 deliverBgItems 的 useCallback deps 补 flushPhotoJobs
+  ⑦ system prompt：imgGenCfg.enabled && imgGenConfigReady 时 buildPhotoTagRule(peer.name) 生成 photoRule，插入 systemFull 数组视觉规则（visionRules）之后
+  ⑧ plusItems 加「生成照片」项（key photogen、Sparkles 图标、#0099FF、testid 自动得 qq-plus-photogen，点击关面板清错误开弹层）；offline 层后新增 QqPhotoGenSheet 渲染块（busy 时禁止关闭）
+- 排障：MultiEdit 后工具回显疑似 pb-[max(…)] 类名损坏，经 od -c 逐字节核实为终端渲染假象（ANSI 转义剥除），实际文件无损；python 全量校验 31 处新增代码串全部命中
+- 验证：bunx eslint src/components/apps/qq.tsx exit 0（0 错误 0 警告）；bunx tsc --noEmit 剩余 4 个错误全部来自未改动文件（src/lib/imggen.ts ×3：bodyBase.mode 字面量类型收窄问题；src/components/apps/vision-log.tsx ×1：action Record 缺 imggen 项——均为 3-a 已产出代码的既有问题，不在本任务允许修改范围，已注明）；dev.log 编译通过无异常；群聊 qq-group.tsx 零改动
+
+Stage Summary:
+- QQ 单聊现已具备与微信端一致的生图+锁脸能力：①自动——system 注入发照片规则后 AI 回复输出 [照片:描述]，解析管线剥标签异步生图（先「正在拍照…」sys 行、成功落 image 消息+自动入相册/视觉决策日志/30 分钟节流记忆+刷新相册缓存，失败落 sys 提示行），流式分段/finalize/退出网页接力三条投递路径全覆盖，单轮限 2 张；②手动——加号面板「生成照片」（qq-plus-photogen）打开 QQ 主题弹层（qq-photogen-*），填描述直接生成并以角色图片消息上屏，成功 toast、失败错误留弹层可重试；锁脸（参考图 edits 优先/外貌描述兜底）由共享 imggen.ts 承担，两端口径一致
+- 产出文件：src/components/apps/qq.tsx（唯一改动，+204/-6 行）
+- 遗留（非本任务范围）：imggen.ts 的 3 个 TS 字面量类型错误与 vision-log.tsx 缺 imggen 决策项渲染，建议后续任务修复
+
+---
+Task ID: 3-e
+Agent: sms-imggen-integrator (Z.ai Code)
+Task: 信息端集成自动生图（照片标签→锁脸生图投递）
+
+Work Log:
+- 开工前通读 worklog.md（确认 Task 6 已移除信息端"+"入口，本任务不做任何手动触发入口）；以 src/components/apps/wechat.tsx 金标准为参照（photoJobsRef/flushPhotoJobs/extractPhotoTags/buildPhotoTagRule 全部上下文精读），通读 imggen.ts 共享层 API 与 chat.tsx（4132 行）全部投递/渲染/持久化链路
+- 唯一改动文件 src/components/apps/chat.tsx，共 11 处：
+  · import：album-store 增加 addAlbum；新增 '@/lib/imggen' 六具（extractPhotoTags/generateCharacterPhoto/imgGenConfigReady/buildPhotoTagRule/notePhotoMemory/type PhotoTag）
+  · ChatMsg 类型：kind 扩展 'image' + 新增 img?: { src: string; desc: string }（旧数据无字段天然兼容；loadMsgs 校验只查 content/role，语音规范化循环 kind!=='voice' 跳过，图片消息零迁移）
+  · 组件层新增 photoJobsRef（useRef<PhotoTag[]>）+ flushPhotoJobs(useCallback,[peerLabel,wbContactId])：deliver 参数化注入投递函数（回合内=startAiTurn 的 enqueueBatch；接力=deliverBgItems 的 bgEnqueueBatch，对齐微信 ctx 形状的信息端等价实现）；守卫链=无联系人（小助手会话不生图）→cfg.enabled&&imgGenConfigReady；每 job 先投 sys「「XX」正在拍照…」行 → 异步 generateCharacterPhoto（锁脸）→ 成功投 kind='image' 图片消息 + addAlbum(origin 'ai') + addVisionDecision(app:'sms',action:'imggen',targetId:'') + notePhotoMemory('sms')（30 分钟节流）+ 刷新 albumSummaryRef 相册清单缓存（供下一轮视觉规则/选头像预检）；失败投 sys「照片生成失败：…」行；单次 flush 最多 2 张
+  · buildReplyMsgs 文本分支：splitReplySegments 每段先 extractPhotoTags 剥 [照片:描述] 标签入队 photoJobsRef 再 cleanBubbleText（生图关闭时同样剥除，气泡不残留裸标签；byUser 申请卡模式在上方 continue 不入队）
+  · 投递点×3：startAiTurn.deliverSegment（enqueueBatch 后）、finalize（scheduleAiDelivery 前，与微信 finalize 同序）、deliverBgItems（两处 bgEnqueueBatch 后；deps 增加 flushPhotoJobs）
+  · system prompt（baseSys）：actionDescOn 后现场读 useSettings.getState().imgGenConfig，imgGenOn=wbContactId&&!requestOnly&&enabled&&ready 时 buildPhotoTagRule(peer.name) 注入数组（位置在视觉规则之后、世界书 afterSystem 之前，与微信同位）；关闭/配置不完整/小助手/申请卡模式不注入（零影响）
+  · AI 上下文 history：filter 放行 kind==='image'&&img 的空 content 消息，映射为「[图片]（图片内容：desc）」/[图片] 占位（与微信同口径，AI 知道自己发过什么照片）
+  · 渲染：msgs.map 在语音分支后新增 image 分支——iMessage 大圆角(16px)图片气泡（无文字气泡底，max-h 220/max-w 168 同微信 ImageMsgBubble 口径），点开全屏预览；多选勾选圈/长按菜单/拉红图标/「已送达」全部与文本消息同规则
+  · 新增 viewerSrc state + 全屏预览浮层（absolute inset-0 z-[90] bg-black/90，点任意处关闭，role=dialog）
+  · 长按菜单 buildMsgMenuItems：图片消息不出现「编辑」（防止把图片消息 content 改成文字）；引用/复制走 quoteContentOf（图片 → 「[图片] desc」）
+  · 会话列表预览×2（scanContactSessions 联系人行 + 小助手行）：kind==='image' → 「[图片]」
+- 验证：bunx eslint src/components/apps/chat.tsx 0 错误；bunx tsc --noEmit chat.tsx 0 错误（现存 4 个错误全部来自未改动文件：src/lib/imggen.ts×3 requestImage body mode 类型收窄 + src/components/apps/vision-log.tsx×1 imggen action 缺项，均为 3-a 落库代码的既有问题，按任务书注明并忽略）；dev.log 编译期无错误（编辑期间多次 ✓ Compiled；收尾时 dev server 进程退出，未手动重启——按规约由系统自动拉起）
+- 决策备忘：①信息端无手动生图入口（"+"按钮已按用户要求移除，未加回）；②小助手会话（wbContactId=null）自动生图整体静默跳过——锁脸参考图/相册/记忆/决策日志均以 contactId 为键，无身份不可挂载，photoRule 也不注入；③相册缓存刷新对齐信息端既有 albumSummaryRef（非微信 albumCacheRef，该端无 albumCache）；④记忆层 imageLabel/memory.ts 已由 3-a 预置 kind==='image' 快照支持，图片消息自动进记忆对话快照
+
+Stage Summary:
+- 信息 App 自动生图全链路接通：AI 回复文本中的 [照片:描述]（含全角【】/中英冒号/使用参考图三段式变体）→ 剥标签入队 → 「正在拍照…」sys 行 → 锁脸生图（参考图 edits 优先/外貌描述兜底）→ 图片消息投递上屏（iMessage 风格大圆角气泡+全屏预览）→ 自动存相册(origin 'ai')+视觉决策日志+节流记忆；失败仅落 sys 提示行不影响聊天；三个投递管线（流式分段/finalize/退出网页接力）不重不漏共用同一 flush
+- 生图开启/配置完整时才注入发照片规则与执行生成；关闭时零注入零输出（标签仍剥除防残留）；小助手会话与申请卡（拉黑）模式天然免疫；单次 flush ≤2 张防刷屏
+- 产出文件：src/components/apps/chat.tsx（唯一改动，11 处编辑，无 any，新增 testid：sms-img-bubble/sms-img-viewer）
+---
+Task ID: 3-a（主代理，含 3-b/3-c/3-d/3-e 并行子任务）
+Agent: Z.ai Code (main)
+Task: 图像生成功能 + 锁脸（设置项/参考图/自动+手动触发/双请求方式）
+
+Work Log:
+- 基础层：store.ts 新增 ImgGenConfig/ImgGenPreset/DEFAULT_IMGGEN_CONFIG + imgGenConfig/imgGenPresets state + updateImgGenConfig/setImgGenPresets（密文持久化，与 visionConfig 同策略，load() 恢复）
+- 核心库 src/lib/imggen.ts：锁脸存储（imggen-ref:<contactId>/imggen-appearance:<contactId>，kv 同步读写）、compressImageSrc（canvas 压缩）、extractPhotoTags（[照片:desc]/【照片：desc】/朋友圈三段式标签剥取）、buildPhotoTagRule（聊天 system 注入规则）、generateCharacterPhoto（有参考图先走 /images/edits multipart 锁脸，不支持自动回退 generations+外貌描述拼词；proxy/direct 双模式）、notePhotoMemory（30 分钟节流写记忆不刷屏）
+- API：src/app/api/imggen/route.ts 服务端转发（JSON generations / FormData edits，baseUrl 归一化修 /v1/v1，b64_json/url 双解析，280s 超时，上游错误透传）
+- db.ts：VisionDecisionRecord.action 联合类型加 'imggen'（决策日志记录 AI 生图）
+- 微信端（金标准）：photoJobsRef 队列 + flushPhotoJobs（正在拍照 sys 行→异步生成→图片消息投递+存相册 origin 'ai'+决策日志+记忆；失败落 sys 提示行；单轮≤2张）；buildReplyMsgs 文字分支剥标签；流式/finalize/接力三处投递点全部 flush；system 注入 photoRule（enabled && ready 时）；加号面板「生成照片」+ PhotoGenCompose 弹层（描述/生成中/错误重试）
+- 3-b（子代理）：settings.tsx 图像生成配置页（开关/请求方式分段/BaseURL/Key/模型名+拉取模型/尺寸质量快捷项/补充提示词/预设管理含内置 OpenAI 官方+用户预设应用更新删除/测试生图 proxy+direct 双通道）
+- 3-c（子代理）：chat-settings.tsx 形象锁定（锁脸）二级页 FaceLockPage（参考图上传/替换/删除 + 外貌描述 onBlur 保存 + 原理说明），入口行加到微信/QQ/信息三端聊天设置；宿主接线（wechat/qq/chat.tsx 传 onOpenFaceLock+hasFaceRef+渲染 FaceLockPage）
+- 3-d（子代理）：qq.tsx 全套移植（照片 dataURL 存 content 兼容 QqImageBubble；回合内/接力双 enqueue 入口适配；五角星面板「生成照片」+ QqPhotoGenSheet）
+- 3-e（子代理）：chat.tsx 信息端自动生图（无手动入口；小助手会话无 contactId 整体静默跳过；iMessage 图片气泡渲染+全屏预览）
+- 修复（主代理）：①设置页开关关闭时隐藏配置导致无法先配置——改为配置始终可见；②手动生图直投 deliverAiMsg 只写 kv 不触发订阅 tick（聊天页不刷新）——微信改走 enqueueBatch 空 ctx、QQ 改走 scheduleAiDelivery 空批次（initialDelay 0）；③extractPhotoTags 纯 [照片:desc] 被误判 useRef=false（自动生图没锁脸）——改为仅明确「不使用参考图/不用参考图」才 false
+- vision-log.tsx：ACTION_LABELS 补 imggen 决策项文案
+- E2E（mock 生图服务 mini-services/imggen-mock:3031，OpenAI 兼容 generations/edits/models + CORS，纯色 PNG 按 prompt hash 着色）：设置页填 mock 地址→拉取模型列表出 4 个→测试生图出图 ✓；微信登录（种子账号）→聊天设置→形象锁定→上传参考图（预览+替换/删除钮）+外貌描述 ✓；+面板生成照片→实时上屏+通知 ✓；自动：让 AI 发照片→回复剥标签→「正在拍照…」→图片消息上屏 ✓；mock 日志确认手动+自动生图均走 edits 通道（参考图 782B 入参=锁脸生效）；kv 验证相册 3 张 origin 'ai'、记忆节流键、参考图均已写入 ✓；QQ 登录→五角星面板生成照片→上屏 ✓
+- lint 0 错误、tsc --noEmit 0 错误（tsconfig 排除 mini-services）、console 无错误、dev.log 无异常
+
+Stage Summary:
+- 图像生成+锁脸全量落地：设置 App「图像生成」配置页（10 项配置+预设管理+测试生图，保存即生效）；三端聊天设置「形象锁定」参考图页；自动（照片标签）+手动（面板生成照片）双触发；服务端转发/浏览器直连双请求方式；失败只提示不影响聊天；结果进聊天+相册+记忆（节流）
+- 群聊（wx-group/qq-group）未接自动生图（范围限定：不破坏现有功能；群聊行为零变化）
+- 产出文件：src/lib/imggen.ts(新)、src/app/api/imggen/route.ts(新)、mini-services/imggen-mock/(新，测试用)、src/lib/ios/store.ts、src/lib/ios/db.ts、src/components/apps/{settings,chat-settings,wechat,qq,chat,vision-log}.tsx

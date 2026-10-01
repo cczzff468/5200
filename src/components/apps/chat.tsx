@@ -79,7 +79,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
-import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, FaceLockPage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -92,7 +92,9 @@ import {
 } from '@/lib/ios/worldbook';
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
 import { deleteContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
-import { listAlbums, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
+// 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；信息端无手动入口）
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, getFaceRef, type PhotoTag } from '@/lib/imggen';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -118,9 +120,12 @@ interface ChatMsg {
   content: string;
   time: number;
   /** 消息类型（缺省 = text；旧数据无此字段天然兼容） */
-  kind?: 'text' | 'voice';
+  kind?: 'text' | 'voice' | 'image';
   /** 语音消息数据（kind==='voice' 时有效；音频 dataURL 持久化在聊天记录里） */
   voice?: VoiceMsgData;
+  /** 图片消息数据（kind==='image' 时有效；自动生图投递，src 为压缩 dataURL；
+   *  desc 为照片描述——AI 历史可读「[图片]（图片内容：…）」、相册存档与决策日志共用） */
+  img?: { src: string; desc: string };
   /** 请求失败的消息（不参与上下文、红字显示） */
   error?: boolean;
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
@@ -826,6 +831,8 @@ function ChatView({
   const profileAvatar = useSettings((s) => s.profile.avatar);
   /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 回复条数入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 图片全屏预览（点图片气泡打开；自动生图/历史图片共用；点任意处关闭） */
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
   const [translateOpen, setTranslateOpen] = useState(false);
   /** 回复条数选择页（设置页「回复条数」进入的独立二级页，按会话隔离） */
@@ -926,6 +933,8 @@ function ChatView({
   }, [wbContactId]);
   /** 「他的声音」页（聊天设置二级页，仅联系人会话）与 AI 语音频率页（其下的频率选择页，按会话独立） */
   const [voiceOpen, setVoiceOpen] = useState(false);
+  /** 形象锁定（锁脸）二级页：给角色上传参考图/填外貌描述（生图保持角色脸一致；仅联系人会话） */
+  const [faceLockOpen, setFaceLockOpen] = useState(false);
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   /** 我的音色库（「他的声音」入口行摘要解析：音色 id → 展示名，见 @/lib/ios/my-voices） */
   const myVoicesForSummary = useMyVoices((s) => s.voices);
@@ -1104,6 +1113,54 @@ function ChatView({
     [memContactId, peer, peerLabel, peerAvatarSrc, storageKey, voiceFreqKey],
   );
 
+  // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flushPhotoJobs 统一异步生成 ----
+  /** 本轮待生成的照片任务（buildReplyMsgs 同步解析时入队；flushPhotoJobs 消费并清空） */
+  const photoJobsRef = useRef<PhotoTag[]>([]);
+
+  /**
+   * 消费照片任务：每条先生「正在拍照…」系统行，异步生成成功后落图片消息 + 存相册（origin 'ai'）+
+   * 决策日志 + 记忆（30 分钟节流不刷屏）+ 刷新相册清单缓存（供下一轮视觉规则/选头像用）；失败落系统提示行（不影响聊天）。
+   * 单次 flush 最多 2 张防刷屏；自动生图关闭/配置不完整/小助手会话（无角色身份，锁脸/相册/记忆无挂点）时
+   * 静默丢弃（标签已在 buildReplyMsgs 剥除，不产生任何输出）。
+   * deliver：投递函数（回合内 = startAiTurn 的 enqueueBatch；退出网页接力 = deliverBgItems 的 bgEnqueueBatch）
+   */
+  const flushPhotoJobs = useCallback(
+    (deliver: (built: ChatMsg[]) => void) => {
+      const jobs = photoJobsRef.current;
+      photoJobsRef.current = [];
+      if (jobs.length === 0) return;
+      const cid = wbContactId;
+      if (!cid) return; // 小助手会话无角色 id：不生图
+      const cfg = useSettings.getState().imgGenConfig;
+      if (!cfg.enabled || !imgGenConfigReady(cfg)) return;
+      const charName = peerLabel;
+      for (const job of jobs.slice(0, 2)) {
+        deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: `「${charName}」正在拍照…` } }]);
+        void (async () => {
+          try {
+            const r = await generateCharacterPhoto({ cfg, contactId: cid, desc: job.desc, charName, useRef: job.useRef });
+            void addAlbum(cid, r.src, { desc: job.desc, origin: 'ai' });
+            void addVisionDecision({ contactId: cid, app: 'sms', action: 'imggen', targetId: '', imgSrc: r.src, reason: job.desc });
+            notePhotoMemory(cid, 'sms', job.desc);
+            // 相册清单缓存刷新（组件级 albumSummaryRef）：下一轮 AI 视觉规则可见新图（选头像预检同步读该缓存）
+            void listAlbums(cid)
+              .then((list) => {
+                albumSummaryRef.current =
+                  list.length > 0
+                    ? list.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
+                    : null;
+              })
+              .catch(() => {});
+            deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc: job.desc } }]);
+          } catch (e) {
+            deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: `照片生成失败：${e instanceof Error ? e.message : '未知错误'}` } }]);
+          }
+        })();
+      }
+    },
+    [peerLabel, wbContactId],
+  );
+
   /** 40-a：把「用户发起的解除拉黑申请卡」置为终态（存储 + 本地 state 同步；无 pending 卡时空操作）。
    *  buildReplyMsgs 内部使用（角色决策/角色主动解除拉黑时调用）——声明须在其之前（TDZ） */
   const settleUserBlockReq = useCallback(
@@ -1232,10 +1289,16 @@ function ChatView({
         if (wbContactId && loadBlock('sms', wbContactId).byUser) continue;
         // #42：下方 segs 清洗仅正常模式（byUser=false）执行——byUser continue 上面已拦；
         // 信息端表情包开关已移除 → 回复文字保留原文（不再剥 emoji）
+        // 生图（锁脸）：先从文本剥出 [照片:描述] 标签（入队 photoJobsRef，flushPhotoJobs 异步生成投递）；
+        // 生图关闭/配置不完整时标签同样剥除（残留在气泡里可读性更差，由 flushPhotoJobs 静默丢弃兜底）
         // 首尾清洗（与微信/QQ 同款）：剥掉首尾空白与零宽/盲文空格等「看不见的占位字符」——
         // 只含空白/不可见字符的段直接跳过，不生成空白气泡（动作描写被剥离后只剩空段时尤其必要）
         const segs = splitReplySegments(part.text, !asSingle)
-          .map(cleanBubbleText)
+          .map((seg) => {
+            const { text: photoFreeText, tags: photoTags } = extractPhotoTags(seg);
+            if (photoTags.length > 0) photoJobsRef.current.push(...photoTags);
+            return cleanBubbleText(photoFreeText);
+          })
           .filter((seg) => seg.length > 0);
         for (const seg of segs) {
           out.push({
@@ -1300,16 +1363,23 @@ function ChatView({
     const pendingTail = peekPendingMsgs<ChatMsg>(sessionKey);
     const base = [...(baseMsgs ?? msgs), ...pendingTail, ...(userMsg ? [userMsg] : [])];
     // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知；
-    // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位）。
+    // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位；
+    // 图片消息 content 为空 → 同样放行，AI 读「[图片]（图片内容：…）」占位，知道自己/对方发过什么照片）。
     // #35：按创建时间稳定排序还原对话时序（旧气泡倒挂的历史数据），保证上下文顺序正确
     const history = base
-      .filter((m) => !m.error && !m.recalled && (m.content || m.kind === 'voice'))
+      .filter((m) => !m.error && !m.recalled && (m.content || m.kind === 'voice' || (m.kind === 'image' && m.img)))
       .sort((a, b) => a.time - b.time)
       .slice(-20)
       .map((m) => ({
         role: m.role,
         content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
-          m.kind === 'voice' ? m.voice?.transcript || m.voice?.localText || '[语音]' : m.content
+          m.kind === 'voice'
+            ? m.voice?.transcript || m.voice?.localText || '[语音]'
+            : m.kind === 'image'
+              ? m.img?.desc
+                ? `[图片]（图片内容：${m.img.desc}）`
+                : '[图片]'
+              : m.content
         }`,
       }));
 
@@ -1358,6 +1428,12 @@ function ChatView({
         : systemPrompt ?? '';
     // 动作描写开关：发送时现场读取（与上方 getTimeAware 现场读取同款），开启下发格式约定、关闭下发禁令
     const actionDescOn = getActionDescOn(sessionKey);
+    // 生图（锁脸）：自动生图开启且配置完整时注入照片标签规则，AI 可自然地「发照片」；
+    // 关闭/配置不完整时不注入（模型不输出标签，零影响）；仅联系人会话（小助手无角色身份，锁脸/相册/记忆无挂点）
+    // 且非申请卡模式（正文会被整段丢弃，不诱导输出标签）——与 flushPhotoJobs 的守卫同口径
+    const imgGenCfg = useSettings.getState().imgGenConfig;
+    const imgGenOn = Boolean(wbContactId) && !requestOnly && imgGenCfg.enabled && imgGenConfigReady(imgGenCfg);
+    const photoRule = imgGenOn ? buildPhotoTagRule(peer.name ?? peer.title) : '';
     const baseSys = [
       ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
       charBlock,
@@ -1394,6 +1470,8 @@ function ChatView({
             '【信息端限制】当前会话只支持 [选图设头像:相册条目ID]，[选图设背景] 与 [选图发送] 在信息端不可用，请不要使用这两个标记。',
           ]
         : []),
+      // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述]，系统剥标签自动生图并以图片消息投递）
+      ...(photoRule ? [photoRule] : []),
       ...(wbBlocks ? [wbBlocks.afterSystem, wbRulesBlock(wbBlocks)] : []),
     ]
       .filter(Boolean)
@@ -1440,6 +1518,7 @@ function ChatView({
       if (built.length === 0) return;
       deliveredAny = true;
       enqueueBatch(built);
+      flushPhotoJobs(enqueueBatch); // 生图（锁脸）：流中分段剥出的照片标签统一异步生成投递
     };
 
     const started = beginChatStream({
@@ -1478,6 +1557,7 @@ function ChatView({
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
+        flushPhotoJobs(enqueueBatch); // 生图（锁脸）：finalize 剩余段剥出的照片标签统一异步生成投递
         void scheduleAiDelivery<ChatMsg>(
           sessionKey,
           finalBatch,
@@ -1597,14 +1677,16 @@ function ChatView({
       for (const item of items) {
         if (item.single) {
           bgEnqueueBatch(buildReplyMsgs(item.texts.join(''), bgAsSingle, Date.now(), uid(), 0).msgs);
+          flushPhotoJobs(bgEnqueueBatch); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
         } else {
           for (const t of item.texts) {
             bgEnqueueBatch(buildReplyMsgs(t, false, Date.now(), uid(), 0).msgs);
+            flushPhotoJobs(bgEnqueueBatch); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
           }
         }
       }
     },
-    [bgEnqueueBatch, buildReplyMsgs, sessionKey],
+    [bgEnqueueBatch, buildReplyMsgs, flushPhotoJobs, sessionKey],
   );
 
   const bgDeliverRef = useRef<(items: BgPendingItem[]) => void>(() => undefined);
@@ -2020,23 +2102,28 @@ function ChatView({
    *  对方 → 联系人名/手机号。profileName 未设置时回退「我」保持旧行为 */
   const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? profileName || '我' : peer.name || peer.title);
 
-  /** 消息的可复制/引用文本快照（语音消息 = [语音] + 转写，与微信同语义） */
+  /** 消息的可复制/引用文本快照（语音 = [语音] + 转写、图片 = [图片] + 描述，与微信同语义） */
   const quoteContentOf = (m: ChatMsg): string =>
     m.kind === 'voice'
       ? m.voice?.transcript
         ? `[语音] ${m.voice.transcript}`
         : '[语音]'
-      : m.content;
+      : m.kind === 'image'
+        ? m.img?.desc
+          ? `[图片] ${m.img.desc}`
+          : '[图片]'
+        : m.content;
 
-  /** 按发送方组装长按菜单项（语音首项转文字；复制 删除 编辑 引用 多选 撤回；语音可编辑转写文本、无引用） */
+  /** 按发送方组装长按菜单项（语音首项转文字；图片无编辑（内容不可改）；复制 删除 编辑 引用 多选 撤回；语音可编辑转写文本、无引用） */
   const buildMsgMenuItems = (m: ChatMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isVoice = m.kind === 'voice';
+    const isImage = m.kind === 'image';
     const items: BubbleMenuItem[] = [];
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
-    items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (!isImage) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (!isVoice) {
       items.push({ key: 'quote', label: '引用', icon: B.quote });
     }
@@ -2419,6 +2506,63 @@ function ChatView({
                     </span>
                   )}
                 </motion.div>
+              ) : m.kind === 'image' && m.img ? (
+                /* 图片消息（生图自动投递/历史图片）：iMessage 同款大圆角图片气泡（无文字气泡底），点开全屏预览；
+                   长按菜单/多选/拉黑图标/已送达与文本消息一致 */
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+                  className={`flex ${mine ? 'justify-end' : 'justify-start'} ${grouped ? 'mt-[3px]' : 'mt-2.5'}`}
+                >
+                  {selectMode && !mine && (
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`mr-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                  )}
+                  {mine && blockedIconOf(m)}
+                  <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div {...bubblePress}>
+                      <button
+                        type="button"
+                        data-testid="sms-img-bubble"
+                        aria-label="图片消息"
+                        onClick={() => setViewerSrc(m.img?.src ?? null)}
+                        className="block overflow-hidden rounded-[16px] active:opacity-80"
+                      >
+                        {/* 固定像素上限（max-w/max-h 绝对值按比例缩放互不冲突；与微信端 ImageMsgBubble 同口径） */}
+                        <img
+                          src={m.img.src}
+                          alt={m.img.desc || '图片消息'}
+                          className="block max-h-[220px] w-auto min-w-[110px] max-w-[168px] object-cover"
+                          loading="lazy"
+                        />
+                      </button>
+                    </div>
+                    {/* iMessage：已送达挂在最后一条己方消息下沿（与文本/语音气泡同规则） */}
+                    {mine && i === lastUserIdx && (
+                      <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
+                    )}
+                  </div>
+                  {!mine && blockedIconOf(m)}
+                  {selectMode && mine && (
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`ml-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                  )}
+                </motion.div>
               ) : (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
@@ -2765,6 +2909,9 @@ function ChatView({
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
           voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)}
           onOpenVoice={wbContactId ? () => setVoiceOpen(true) : undefined}
+          // 生图锁脸：入口行（仅联系人会话）；二级页 FaceLockPage 在下方渲染
+          onOpenFaceLock={wbContactId ? () => setFaceLockOpen(true) : undefined}
+          hasFaceRef={wbContactId ? Boolean(getFaceRef(wbContactId)) : false}
           blockedByUser={blk.byUser === true}
           onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
         />
@@ -2801,6 +2948,16 @@ function ChatView({
             setBoundBookIds(wbContactId, ids);
             setWbBound(ids);
           }}
+        />
+      )}
+
+      {/* 形象锁定（锁脸）二级页：参考图上传/替换/删除 + 外貌描述（仅联系人会话） */}
+      {faceLockOpen && wbContactId && (
+        <FaceLockPage
+          variant="sms"
+          contactId={wbContactId}
+          peerName={peer.name ?? peer.title}
+          onBack={() => setFaceLockOpen(false)}
         />
       )}
 
@@ -2885,6 +3042,19 @@ function ChatView({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 图片全屏预览（点图片气泡打开；点任意处关闭）：黑底居中大图，iMessage 图片查看器同款观感 */}
+      {viewerSrc && (
+        <div
+          className="absolute inset-0 z-[90] flex items-center justify-center bg-black/90"
+          data-testid="sms-img-viewer"
+          role="dialog"
+          aria-label="图片预览"
+          onClick={() => setViewerSrc(null)}
+        >
+          <img src={viewerSrc} alt="图片预览" className="max-h-[80%] max-w-[92%] rounded-[6px] object-contain" />
         </div>
       )}
 
@@ -3351,8 +3521,8 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
     const last = msgs[msgs.length - 1];
-    // 语音消息预览统一显示 [语音]（与微信会话列表同口径；语音 content 为空串，不透出转写原文）
-    const lastText = last?.kind === 'voice' ? '[语音]' : (last?.content ?? '');
+    // 语音消息预览统一显示 [语音]、图片消息显示 [图片]（与微信会话列表同口径；语音 content 为空串，不透出转写原文）
+    const lastText = last?.kind === 'voice' ? '[语音]' : last?.kind === 'image' ? '[图片]' : (last?.content ?? '');
     out.push({
       contact: c,
       preview: last?.recalled
@@ -3754,14 +3924,16 @@ export default function ChatApp() {
   ];
 
   const last = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : undefined;
-  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览统一显示 [语音]（与微信同口径）
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览统一显示 [语音]、图片 [图片]（与微信同口径）
   const preview = last?.recalled
     ? last.role === 'user'
       ? '你撤回一条消息'
       : '对方撤回一条消息'
     : last?.kind === 'voice'
       ? '[语音]'
-      : last?.content || SEED_MSGS[0].content;
+      : last?.kind === 'image'
+        ? '[图片]'
+        : last?.content || SEED_MSGS[0].content;
   // 跨天显示 M月D日（与上方联系人行 fmtListTime 同口径，A-8；无时间落盘时保留「现在」兑底）
   const listTime = mounted ? (last && last.time > 0 ? fmtListTime(last.time) : '现在') : '';
 

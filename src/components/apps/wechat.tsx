@@ -43,6 +43,7 @@ import {
   Search,
   Smartphone,
   Smile,
+  Sparkles,
   Star,
   Tag,
   Trash2,
@@ -181,6 +182,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, buildPhotoTagRule, notePhotoMemory, getFaceRef, type PhotoTag } from '@/lib/imggen';
 import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
@@ -234,6 +236,7 @@ import {
   ChatTranslatePage,
   ChatVoiceFreqPage,
   ChatVoicePage,
+  FaceLockPage,
   FriendDeleteConfirmDialog,
   WorldBookPickerPage,
   ChatToggle,
@@ -3107,7 +3110,85 @@ function WxFcManagePage({
 
 // ---------------- 聊天加号面板 + 红包/转账（对照用户微信截图 1:1） ----------------
 
-type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline';
+type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'photogen';
+
+/**
+ * 生成照片弹层（加号面板「生成照片」入口；锁脸生图手动触发）：
+ * 描述输入（角色以第一人称拍一张发到聊天）+ 生成中状态 + 失败错误（留在弹层可重试）。
+ */
+function PhotoGenCompose({
+  charName,
+  busy,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  charName: string;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onSubmit: (desc: string) => void;
+}) {
+  const [desc, setDesc] = useState('');
+  const submit = () => {
+    const d = desc.trim();
+    if (!d || busy) return;
+    onSubmit(d);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="wx-photogen-sheet">
+      <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-[17px] font-semibold">{charName}拍一张发给你</p>
+          <button
+            type="button"
+            aria-label="关闭生成照片"
+            data-testid="wx-photogen-close"
+            onClick={onClose}
+            disabled={busy}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
+          >
+            <X className="h-4 w-4" strokeWidth={2.2} />
+          </button>
+        </div>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          disabled={busy}
+          rows={3}
+          maxLength={160}
+          data-testid="wx-photogen-input"
+          placeholder={`描述画面，如：黄昏的咖啡厅窗边，托腮看镜头，暖光落在侧脸上（${charName}的样子会自动保持一致）`}
+          className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#07C160]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
+        />
+        {error ? (
+          <p data-testid="wx-photogen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          data-testid="wx-photogen-submit"
+          onClick={submit}
+          disabled={busy || !desc.trim()}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#07C160] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+              正在生成照片…
+            </>
+          ) : (
+            '生成并发送'
+          )}
+        </button>
+        <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
+          生成结果会同时存进 {charName} 的相册；失败不影响聊天
+        </p>
+      </div>
+    </div>
+  );
+}
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方） */
 function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
@@ -3120,6 +3201,7 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
     { key: 'transfer', label: '转账', icon: <ArrowLeftRight className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'offline', label: '线下', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'photogen', label: '生成照片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
   return (
     <div
@@ -4222,7 +4304,46 @@ function ChatPage({
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置功能页（相机/图片直接调起手机原生能力） */
-  const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | null>(null);
+  const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'photogen' | null>(null);
+  /** 手动「生成照片」状态：loading / 错误信息（弹层内展示，失败不影响聊天） */
+  const [photoGenBusy, setPhotoGenBusy] = useState(false);
+  const [photoGenError, setPhotoGenError] = useState('');
+
+  /**
+   * 手动触发「生成照片」：角色以第一人称拍一张发到聊天（锁脸同自动生图）。
+   * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册/决策日志/记忆；
+   * 失败 → 错误留在弹层内（不关弹窗，用户可重试或取消）。
+   */
+  const submitPhotoGen = async (desc: string) => {
+    const cfg = useSettings.getState().imgGenConfig;
+    if (!imgGenConfigReady(cfg)) {
+      setPhotoGenError('还没配置生图接口：去「设置 → 图像生成」填写 Base URL / API Key / 模型名');
+      return;
+    }
+    setPhotoGenBusy(true);
+    setPhotoGenError('');
+    try {
+      const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name });
+      // 走 enqueueBatch（而非直投 deliverAiMsg）：订阅 tick 会把落盘消息合并进本地 state，
+      // 直投只写 kv 不触发 tick（聊天页不刷新）；空 ctx 首批 initialDelay=0 立即上屏
+      enqueueBatch(
+        [{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'image' as const, img: { src: r.src, desc } }],
+        { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false },
+      );
+      void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
+      void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
+      notePhotoMemory(peer.id, 'wx', desc);
+      void listAlbums(peer.id).then((list) => {
+        albumCacheRef.current = list;
+      });
+      setCompose(null);
+      onToast('照片已生成');
+    } catch (e) {
+      setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setPhotoGenBusy(false);
+    }
+  };
   /** 线下模式（约会）：加号面板「线下」入口打开的见面页（与 QQ/信息共用） */
   const [offlineOpen, setOfflineOpen] = useState(false);
   /** 原生相机 / 相册隐藏 input：加号面板「相机」「图片」直接调用手机能力（无自建页面） */
@@ -4260,6 +4381,8 @@ function ChatPage({
   const [replyOpen, setReplyOpen] = useState(false);
   /** 他的声音页（设置页「他的声音」进入）：角色音色选择 + AI 语音频率入口 */
   const [voiceOpen, setVoiceOpen] = useState(false);
+  /** 形象锁定（锁脸）二级页：给角色上传参考图/填外貌描述（生图保持角色脸一致） */
+  const [faceLockOpen, setFaceLockOpen] = useState(false);
   /** AI 语音频率页（他的声音页入口进入，按会话隔离保存） */
   const [voiceFreqOpen, setVoiceFreqOpen] = useState(false);
   /** 我的音色库（「他的声音」入口行摘要展示名用；zustand 响应式） */
@@ -4821,6 +4944,41 @@ function ChatPage({
     ctx.batchStarted = true;
   };
 
+  // ---- 生图（锁脸）：buildReplyMsgs 从回复文本剥出的 [照片:描述] 标签攒进队列，flush 统一异步生成 ----
+  /** 本轮待生成的照片任务（buildReplyMsgs 同步解析时入队；flushPhotoJobs 消费并清空） */
+  const photoJobsRef = useRef<PhotoTag[]>([]);
+
+  /**
+   * 消费照片任务：每条先生「正在拍照…」系统行，异步生成成功后落照片消息 + 存相册（origin 'ai'）+
+   * 决策日志 + 记忆（30 分钟节流不刷屏）；失败落系统提示行（不影响聊天）。
+   * 单轮最多 2 张防刷屏；自动生图关闭/配置不完整时静默丢弃（标签已剥除，不产生任何输出）。
+   */
+  const flushPhotoJobs = (ctx: WxTurnCtx) => {
+    const jobs = photoJobsRef.current;
+    photoJobsRef.current = [];
+    if (jobs.length === 0) return;
+    const cfg = useSettings.getState().imgGenConfig;
+    if (!cfg.enabled || !imgGenConfigReady(cfg)) return;
+    for (const job of jobs.slice(0, 2)) {
+      enqueueBatch([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `「${peer.name}」正在拍照…` } }], ctx);
+      void (async () => {
+        try {
+          const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc: job.desc, charName: peer.name, useRef: job.useRef });
+          void addAlbum(peer.id, r.src, { desc: job.desc, origin: 'ai' });
+          void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'imggen', targetId: '', imgSrc: r.src, reason: job.desc });
+          notePhotoMemory(peer.id, 'wx', job.desc);
+          enqueueBatch([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc: job.desc } }], ctx);
+          // 相册缓存刷新：下一轮 AI 可用 [选图发送] 把这张照片再发出来
+          void listAlbums(peer.id).then((list) => {
+            albumCacheRef.current = list;
+          });
+        } catch (e) {
+          enqueueBatch([{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `照片生成失败：${e instanceof Error ? e.message : '未知错误'}` } }], ctx);
+        }
+      })();
+    }
+  };
+
   /** AI 主动发起语音通话（[语音通话] 标记出现在回复任一分段/整条，标记原文已剥除）：按 5 分钟冷却弹出来电浮层
    *  （全局来电弹窗 = 微信大窗 5 秒→胶囊；响铃期间不显示全屏通话页/来电界面（view='hidden'），
    *  点弹窗非按钮区域才展开全屏来电页；QQ 侧同结构但不弹窗）。finalize 与接力拉取投递共用 */
@@ -5086,9 +5244,13 @@ function ChatPage({
             if (!stickersOn && p.rich.kind === 'sticker') continue;
             out.push(richToWxMsg(p.rich, id, t, peer));
           } else {
+            // 生图（锁脸）：先从文本剥出 [照片:描述] 标签（入队 photoJobsRef，flushPhotoJobs 异步生成），
+            // 剥不干净的旧标签（生图关闭时）留在原文里可读性更差，统一剥除
+            const { text: photoFreeText, tags: photoTags } = extractPhotoTags(p.text);
+            if (photoTags.length > 0) photoJobsRef.current.push(...photoTags);
             // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
             // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-            const clean = cleanBubbleText(stickersOn ? p.text : stripEmojiText(p.text.replace(/\[表情包\]|\[表情\]/g, ' ')));
+            const clean = cleanBubbleText(stickersOn ? photoFreeText : stripEmojiText(photoFreeText.replace(/\[表情包\]|\[表情\]/g, ' ')));
             if (!clean) continue;
             out.push({ id, role: 'peer', content: clean, time: t });
           }
@@ -5118,6 +5280,7 @@ function ChatPage({
       if (built.length === 0) return; // 纯动作标记等解析不出消息：只落盘状态变化，不造占位消息
       queuedAny = true;
       enqueueBatch(built, ctx);
+      flushPhotoJobs(ctx); // 生图（锁脸）：接力回复里的照片标签同样异步生成投递
     };
     for (const item of items) {
       if (item.single) {
@@ -5364,6 +5527,11 @@ function ChatPage({
       ? albumCacheRef.current.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
       : null;
     const visionRules = buildVisionRules(albumSummary);
+    // 生图（锁脸）：自动生图开启且配置完整时注入照片标签规则，AI 可自然地「发照片」；
+    // 关闭时不注入（模型不输出标签，零影响），配置不完整时也不注入（剥出的标签不会生成，没意义）
+    const imgGenCfg = useSettings.getState().imgGenConfig;
+    const imgGenOn = imgGenCfg.enabled && imgGenConfigReady(imgGenCfg);
+    const photoRule = imgGenOn ? buildPhotoTagRule(peer.name) : '';
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -5381,6 +5549,8 @@ function ChatPage({
       ...(mediaRules.length > 0 ? [mediaRules.join('\n\n')] : []),
       // 46-e 视觉自主决策规则（在语音通话能力之前；让 AI 看图后可自主换头像/换背景/存相册/挑相册发聊天）
       ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
+      // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述] 系统自动生图并以图片消息投递）
+      ...(photoRule ? [photoRule] : []),
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       timeBlock,
       wbBlocks.afterSystem,
@@ -5426,6 +5596,7 @@ function ChatPage({
       if (built.length === 0) return;
       deliveredAny = true;
       enqueueBatch(built, ctx);
+      flushPhotoJobs(ctx); // 生图（锁脸）：流中分段剥出的照片标签统一异步生成投递
     };
 
     const started = beginChatStream({
@@ -5485,6 +5656,7 @@ function ChatPage({
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
+        flushPhotoJobs(ctx); // 生图（锁脸）：finalize 剩余段剥出的照片标签统一异步生成投递
         void scheduleAiDelivery<WxMsg>(
           sessionKey,
           finalBatch,
@@ -6578,6 +6750,14 @@ function ChatPage({
       setOfflineOpen(true);
       return;
     }
+    if (a === 'photogen') {
+      // 生成照片（锁脸）：角色以第一人称拍一张发到聊天（描述在弹层内填，锁脸走设置里的生图配置）
+      setPlusOpen(false);
+      setStickerOpen(false);
+      setPhotoGenError('');
+      setCompose('photogen');
+      return;
+    }
     const label: Record<string, string> = { videocall: '视频通话' };
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
@@ -7428,6 +7608,15 @@ function ChatPage({
       {compose === 'redpacket' && <RedPacketCompose onBack={() => setCompose(null)} onSubmit={submitRedPacket} onToast={onToast} />}
       {compose === 'transfer' && <TransferCompose peer={peer} onBack={() => setCompose(null)} onSubmit={submitTransfer} onToast={onToast} />}
       {compose === 'location' && <LocationPickerPage onClose={() => setCompose(null)} onSend={sendLocation} onToast={onToast} />}
+      {compose === 'photogen' && (
+        <PhotoGenCompose
+          charName={peer.name}
+          busy={photoGenBusy}
+          error={photoGenError}
+          onClose={() => (photoGenBusy ? undefined : setCompose(null))}
+          onSubmit={(desc) => void submitPhotoGen(desc)}
+        />
+      )}
       {/* 线下模式（约会）：从聊天继续，承接最近 N 条线上聊天（加号面板「线下」入口，与 QQ/信息共用同一页面组件） */}
       {offlineOpen ? (
         <OfflineMeetingPage
@@ -7534,6 +7723,9 @@ function ChatPage({
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
+          // 生图锁脸：入口行（有参考图副标题不同）；二级页 FaceLockPage 在下方渲染
+          onOpenFaceLock={selfChat ? undefined : () => setFaceLockOpen(true)}
+          hasFaceRef={Boolean(getFaceRef(peer.id))}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => wxChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
@@ -7594,6 +7786,11 @@ function ChatPage({
             setWbBound(ids);
           }}
         />
+      )}
+
+      {/* 形象锁定（锁脸）二级页：参考图上传/替换/删除 + 外貌描述（生图保持角色脸一致） */}
+      {faceLockOpen && (
+        <FaceLockPage variant="wx" contactId={peer.id} peerName={peer.name} onBack={() => setFaceLockOpen(false)} />
       )}
 
       {/* 翻译语言页（聊天设置二级页）：总开关 + 语言对双侧选择（按会话隔离保存） */}
