@@ -133,7 +133,7 @@ interface ChatMsg {
   voice?: VoiceMsgData;
   /** 图片消息数据（kind==='image' 时有效；自动生图投递，src 为压缩 dataURL；
    *  desc 为照片描述——AI 历史可读「[图片]（图片内容：…）」、相册存档与决策日志共用；
-   *  fromCard = 文字图片卡片转出的图（长按可重新生成，不带角色锁脸） */
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带） */
   img?: { src: string; desc: string; fromCard?: boolean };
   /** 文字图片卡片数据（kind==='textcard' 时有效）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
@@ -1297,8 +1297,9 @@ function ChatView({
    * 消费照片任务：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落图片消息 + 存相册（origin 'ai'）+
    * 决策日志 + 记忆（30 分钟节流不刷屏）+ 刷新相册清单缓存（供下一轮视觉规则/选头像用）；
    * 未配置/生成失败自动降级为「文字图片」卡片（desc 即卡片文字，不影响聊天）。
-   * 单次 flush 最多 2 张防刷屏；小助手会话（无角色身份，锁脸/相册/记忆无挂点）配置完整时静默丢弃
-   * （标签已在 buildReplyMsgs 剥除），未配置时同样降级为卡片。
+   * 单次 flush 最多 2 张防刷屏；小助手会话（无角色身份）无锁脸直生成（与「我的卡片」转图同口径，
+   * 相册/决策日志/记忆无挂点全部跳过），生成失败同样降级为卡片——不再静默丢弃
+   * （旧规则已配置时标签被静默吞掉，用户什么都收不到，与未配置时的降级卡片不一致）。
    * deliver：投递函数（回合内 = startAiTurn 的 enqueueBatch；退出网页接力 = deliverBgItems 的 bgEnqueueBatch）
    */
   const flushPhotoJobs = useCallback(
@@ -1315,7 +1316,20 @@ function ChatView({
         }
         return;
       }
-      if (!cid) return; // 小助手会话无角色 id：不生图（保持旧行为）
+      if (!cid) {
+        // 小助手会话（无角色 id）：无锁脸直生成（contactId 空 = 纯描述图），失败同样降级卡片
+        for (const job of jobs.slice(0, 2)) {
+          void (async () => {
+            try {
+              const r = await generateCharacterPhoto({ cfg, contactId: '', desc: job.desc, charName: peerLabel, useRef: false });
+              deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc: job.desc } }]);
+            } catch {
+              deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'textcard', card: { text: job.desc } }]);
+            }
+          })();
+        }
+        return;
+      }
       const charName = peerLabel;
       for (const job of jobs.slice(0, 2)) {
         deliver([{ id: uid(), role: 'assistant', content: '', time: Date.now(), sys: { text: `「${charName}」正在拍照…` } }]);
@@ -2323,7 +2337,12 @@ function ChatView({
     }
     setCardGenBusy(true);
     try {
-      const r = await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
+      // 按卡片作者分叉（与长按「重新生成」submitImgRegen 同口径）：AI 的卡片（发图降级卡片）转图带角色
+      // 锁脸（首次生成与重新生成都锁，前后一致）；我自己写的卡片转图不带锁脸（contactId 空 = 纯描述图）
+      const aiCard = m.role === 'assistant' && Boolean(wbContactId);
+      const r = aiCard
+        ? await generateCharacterPhoto({ cfg, contactId: wbContactId ?? '', desc, charName: peer.name || peer.title, useRef: true })
+        : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
       // 原位替换：卡片 → 图片（同一条消息位置不变；fromCard 标记让长按菜单出现「重新生成」）
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),

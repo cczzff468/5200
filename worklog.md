@@ -12913,3 +12913,23 @@ Stage Summary:
 - 文字图片卡片「生成图片」从「发图给 AI」改为纯本地视觉转换：卡片消息原位变成图片消息（同 id 持久化，刷新不丢），AI 上下文仅在未来回合按 [图片]（图片内容：desc）口径读到，生成时刻零 AI 交互
 - 生成前后描述全程可编辑（操作面板预填卡片文字；重新生成弹层预填上次描述），重新生成入口=长按卡片转出的图片；AI 卡片转图保留锁脸、我的卡片转图不锁脸，均按角色隔离口径不变
 - 产出：src/components/apps/text-card-bubble.tsx、src/components/apps/{chat,wechat,qq}.tsx、mini-services/mock-imggen/（E2E mock 上游，端口 3099，仅测试用）
+
+---
+Task ID: 19
+Agent: Z.ai (main)
+Task: 功能规则全面审查——「AI 发图/文字图片/朋友圈配图」管线三处规则问题修复（锁脸口径不一致/小助手标签静默丢弃/朋友圈清洗吞标签）
+
+Work Log:
+- 应用户要求全面检查功能规则：通读 imggen.ts（标签协议/节制规则/降级链/锁脸管线）、chat-media-rules.ts（占位防编造）、三端 flushPhotoJobs/submitImgRegen/generateCardImage、textcard 路由、text-card-bubble、moments.ts（aiPostMoment/upgradeMomentTextCard）、moments/generate 路由配图协议；核对群聊端、收藏/转发/引用/AI 历史/记忆/相册/决策日志全链路
+- 审查结论：协议主体健全（[图片:...] 兼容全角/照片变体、节制规则、降级链「未配置→卡片/失败→系统行+卡片/剥空正文→描述兜底」、卡片替换式交互、朋友圈升级真图、占位防编造与 desc 回写衔接）；发现 3 处规则问题：
+- 【修复1·三端】AI 降级卡片点击转图不锁脸——generateCardImage 一律 contactId:''（与提交声明「AI卡保留锁脸」矛盾；且同一张图首次生成不锁脸、长按重新生成却走 role 分支锁脸，前后口径冲突）。改为按消息 role 分叉：AI 卡（sms role=assistant/wx·qq role=peer）→ contactId=角色 id+useRef:true（与 submitImgRegen 完全同口径）；我的卡 → contactId:''+useRef:false；三端消息类型 fromCard 注释同步更正
+- 【修复2·信息端】小助手会话（无角色 id）生图已配置时 [图片:...] 标签被静默丢弃（用户什么都收不到），未配置时反而降级卡片——规则不对称。改为：无 cid 时无锁脸直生成（与「我的卡片」转图同口径，相册/决策日志/记忆无挂点跳过），生成失败同样降级卡片
+- 【修复3·朋友圈】cleanContent 的舞台指示剥离 ^[（(【\[]…{0,24} 会把开头短 [图片:描述]（desc≤24字）标签当舞台指示吞掉→连降级卡片都没了。加照片标签前缀守卫排除；node 正则行为验证：短标签保留/舞台指示仍剥/长标签不受影响
+- E2E（agent-browser 1280×940 + imggen-mock:3031 按 prompt hash 着色 + kv 外貌描述注入）：全新档案建角色「小鱼」→ 信息端加好友 → 关生图让 AI「发自拍」→ [图片:...] 降级韩系卡片上屏（页眉+细线+宋体+署名）✓；开生图指向 mock → 点卡片 → 面板描述预填可改 → 生成 → 卡片消失原位变图，像素色 [146,34,116] ≈ 期望锁脸色 [146,35,116]（desc+外貌提示词分支精确命中）✓；长按图 → 重新生成弹层预填上次描述 → 改词提交 → 原位替换，色 [49,135,168] ≈ 期望 [49,135,167]（无新消息）✓；「我」的卡片（+面板→文字图片→手写发送）→ 点击改同一描述生成 → 色 [217,79,94] ≈ 期望 [217,79,93]（纯 desc 不锁脸，与 AI 卡紫明显分叉）✓；reload 后两图持久化颜色不变 ✓；未配置时点生成 toast「请先在 设置›图像生成 完成配置」✓
+- bun run lint ✓；bunx tsc --noEmit ✓；browser errors/console 干净；dev.log 无异常（/api/imggen 200；/api/chat 偶发 502 为用户上游抖动，AI 轮自动重试成功）
+- 遗留建议（未实施，需用户决策）：①群聊（微信群/QQ群）暂无文字图片卡片渲染与 AI 发图管线（imggen.ts 头注释「群聊暂不触发」——涉及多成员锁脸归属，工程量大）；②模型一次输出 >2 个标签时第 3 个起静默截断（提示词已限最多一张，防御路径 slice(0,2)）；③流式分段下标签跨段截断风险（与 [语音通话] 同类既有模式，概率极低）
+
+Stage Summary:
+- 「AI 发图/文字图片/朋友圈配图」规则审查完成：主体协议健全，三处口径问题修复——AI 卡转图锁脸与重新生成对齐（首次=重生成=锁脸）、小助手标签不再静默吞掉（无锁脸直生/失败降卡片，与未配置时一致）、朋友圈清洗不再吞开头的照片标签
+- 色值断言级 E2E 证明锁脸分叉精确生效：同一描述下 AI 卡→含外貌提示词色、我的卡→纯描述色，重载持久化
+- 产出：src/components/apps/{chat,wechat,qq}.tsx（generateCardImage role 分叉+flushPhotoJobs 小助手降级+注释）、src/app/api/moments/generate/route.ts（cleanContent 照片标签守卫）

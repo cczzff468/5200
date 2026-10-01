@@ -373,7 +373,7 @@ interface WxMsg {
   notice?: WxNoticeData;
   fam?: WxFamData;
   /** 图片消息（kind='image'）：src = 压缩 dataURL；desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」，旧记录无此字段照常兼容）；
-   *  fromCard = 文字图片卡片转出的图（长按可重新生成，不带角色锁脸） */
+   *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带） */
   img?: { src: string; desc?: string; fromCard?: boolean };
   /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
@@ -4400,7 +4400,12 @@ function ChatPage({
     }
     setCardGenBusy(true);
     try {
-      const r = await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
+      // 按卡片作者分叉（与长按「重新生成」submitImgRegen 同口径）：AI 的卡片（发图降级卡片）转图带角色
+      // 锁脸（首次生成与重新生成都锁，前后一致）；我自己写的卡片转图不带锁脸（contactId 空 = 纯描述图）
+      const r =
+        m.role === 'peer'
+          ? await generateCharacterPhoto({ cfg, contactId: peer.id, desc, charName: peer.name, useRef: true })
+          : await generateCharacterPhoto({ cfg, contactId: '', desc, charName: '文字图片', useRef: false });
       // 原位替换：卡片 → 图片（同一条消息位置不变；fromCard 标记让长按菜单出现「重新生成」）
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id ? { ...x, kind: 'image' as const, card: undefined, img: { src: r.src, desc, fromCard: true } } : x)),
