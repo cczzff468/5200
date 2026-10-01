@@ -12798,3 +12798,27 @@ Stage Summary:
 - 三端加号面板均有「文字图片」：描述留空 = AI 根据人设+最近聊天记录自动构思画面（/api/photodesc，用户上游优先、服务端内置模型兜底），再走既有锁脸生图管线（参考图/外貌描述/相册存档/决策日志/记忆全兼容）以角色身份发出；也可手填描述精确控制
 - 信息 APP 补齐加号面板（相机/图片/文字图片）与用户发图全链路（预览条→发送→识图接入 AI 回合），对齐微信既有交互
 - 产出：src/app/api/photodesc/route.ts（新增）、src/lib/imggen.ts、src/components/apps/{chat,wechat,qq}.tsx（+638/-49）
+
+---
+Task ID: 13
+Agent: Z.ai Code (main)
+Task: 「文字图片」去生图依赖——改为 AI 按人设+聊天记录生成文字、以卡片消息直接发送（信息/微信/QQ 三端）
+
+Work Log:
+- 需求修正（用户原话）：文字图片不需要配置图像生成，就发一张卡片，上面是字——推翻 Task 12 的「AI 构思画面描述→锁脸生图→发图」管线，改为纯文字卡片消息
+- 新增 /api/textcard 路由：{ config?, charName, channel?, persona?, history? } → LLM 以角色第一人称写 30~80 字卡片文字（手写便签/心情签风，贴人设+聊天氛围，禁落款/引号/前缀），completeWithFallback 用户上游优先→内置 SDK 兜底，清洗（去围栏/引号包裹/截断 160）；curl 冒烟 ✓
+- 新增 src/lib/textcard.ts：autoCardText 客户端助手（POST /api/textcard；CardTextConfig 类型）
+- 删除 /api/photodesc 路由 + imggen.ts autoPhotoDesc（死代码清理）；buildPhotoDescHistory 保留（生图构思与文字卡片共用），imggen.ts 区块注释改为「聊天记录压缩（共用）」
+- 新增 src/components/apps/text-card-bubble.tsx：TextCardBubble 三端共用卡片气泡（w-212px 暖纸渐变底 + 「引号装饰 + 正文 14.5px/1.9 行距 + 分隔线右下署名「—— 名字」；variant 仅控圆角与 testid：sms 16px/qq 12px/wx 8px，深浅色成套）
+- 三端消息模型加 kind='textcard' + card:{text}（ChatMsg/WxMsg/QQMsg，含注释）；渲染链在 image 分支后插 textcard 分支（wx/qq 包 bubblePress，sms 包 motion.div+多选圈+已送达行+blockedIcon）；行容器小间距条件加 textcard
+- 三端 AI 上下文：历史 filter 加 textcard、映射「[文字图片]（卡片上写着：…）」；记忆/世界书扫描文本（chat 内联三元×2、wx/qq scanTextOf）加 card.text
+- 三端会话列表预览加 [文字图片]（chat scanContactSessions+列表 preview、wx readPreview、qq msgPreview）；quoteContentOf 加「[文字图片] 文字」；长按菜单卡片禁编辑（sms isCard 条件；wx/qq isText 天然排除）、quoteContentOf 驱动转发克隆（wx/qq forwardClone isCard 加 textcard）
+- 三端弹层重写：SmsTextCardSheet/WxTextCardSheet/QqTextCardSheet（原 SmsPhotoGenSheet/PhotoGenCompose/QqPhotoGenSheet）——标题「XX写一张文字图片发给你」、占位「写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录自动写）」、脚注「无需配置图像生成，失败不影响聊天」、单阶段 busy「正在写文字图片…」、testid photogen→textcard 全套（*-textcard-sheet/close/input/error/submit）
+- 三端提交逻辑 submitPhotoGen→submitTextCard：删 imgGenConfigReady 生图校验与相册/决策日志/记忆写入；输入留空 → autoCardText（人设 persona+buildPhotoDescHistory 最近 14 条）AI 代笔；输入非空 → 用户代笔直接上卡（无 AI 调用）；成功以 textcard 消息直投（sms scheduleAiDelivery / wx enqueueBatch / qq scheduleAiDelivery，initialDelay=0 立即上屏）；photoGenStage 两阶段状态删除，状态统一 cardBusy/cardError（chat 弹层开关 cardOpen）
+- 面板动作 key 'photogen'→'textcard'（wx PlusAction 类型+面板项+handler+compose 联合类型；qq plusItems+ChatLayer view；sms SmsPlusAction；testid 随 key 变为 sms-plus-textcard/wx-plus-textcard/qq-plus-textcard）
+- 排障：agent-browser 主屏分页图标在第 2/3 页（x>1280 离屏）→ 先点「第 2 页」圆点再点图标；QQ 会话行合成 pointer 事件不生效 → 换原生 mouse move/down/up 点击成功；QQ/微信名 span 结构不同 → 向上找 55~100px 高祖先行点击
+- 验证：bun run lint ✓；bunx tsc --noEmit ✓；agent-browser E2E（1280×940 合成事件+原生鼠标）：信息端——加号面板三宫格截图、文字图片弹层截图、留空提交→AI 卡片上屏（文本呼应聊天上下文）、重载后卡片持久化 ✓、再走代笔路径（输入「今晚也要做个好梦呀」→卡片瞬时上屏）✓；微信端——面板项/弹层/留空生成→卡片上屏（「窗边的光刚好…」呼应上一条窗边照片对话）✓；QQ 端——面板项/弹层/留空生成→多行卡片上屏（「颜料沾满手心…」贴美术生人设）✓、卡片长按菜单（复制/删除/多选/撤回/转发/收藏/重新生成，无编辑无引用）✓；console/page errors 干净（早期报错为编辑期 HMR 残留，重载后消失）；dev.log 无新异常
+
+Stage Summary:
+- 「文字图片」完成形态切换：三端加号面板同名入口不再依赖图像生成配置——留空由 AI 按人设+最近聊天记录代笔（/api/textcard，上游优先/内置兜底），也可手写文字直接上卡；消息以「文字图片」卡片（暖纸底+引号+署名）在信息/微信/QQ 各自气泡体系内渲染，进 AI 历史/记忆/会话预览/长按菜单/转发克隆全链路
+- 产出：src/app/api/textcard/route.ts、src/lib/textcard.ts、src/components/apps/text-card-bubble.tsx（新增）；src/components/apps/{chat,wechat,qq}.tsx、src/lib/imggen.ts（改造）；src/app/api/photodesc/（删除）

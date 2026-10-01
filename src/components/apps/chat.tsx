@@ -97,8 +97,11 @@ import {
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
 import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
-// 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；手动入口 = 加号面板「文字图片」）
-import { autoPhotoDesc, buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+// 生图（锁脸）：回复文本 [照片:描述] 标签 → 自动生图投递（与微信/QQ 同一套共享逻辑层；
+// 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图）
+import { buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { autoCardText } from '@/lib/textcard';
+import { TextCardBubble } from '@/components/apps/text-card-bubble';
 import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
@@ -123,13 +126,15 @@ interface ChatMsg {
   role: 'user' | 'assistant';
   content: string;
   time: number;
-  /** 消息类型（缺省 = text；旧数据无此字段天然兼容） */
-  kind?: 'text' | 'voice' | 'image';
+  /** 消息类型（缺省 = text；旧数据无此字段天然兼容；textcard = 文字图片卡片） */
+  kind?: 'text' | 'voice' | 'image' | 'textcard';
   /** 语音消息数据（kind==='voice' 时有效；音频 dataURL 持久化在聊天记录里） */
   voice?: VoiceMsgData;
   /** 图片消息数据（kind==='image' 时有效；自动生图投递，src 为压缩 dataURL；
    *  desc 为照片描述——AI 历史可读「[图片]（图片内容：…）」、相册存档与决策日志共用） */
   img?: { src: string; desc: string };
+  /** 文字图片卡片数据（kind==='textcard' 时有效）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
+  card?: { text: string };
   /** 请求失败的消息（不参与上下文、红字显示） */
   error?: boolean;
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
@@ -754,7 +759,7 @@ function IOSConfirmDialog({
 
 // ---------------- 加号面板：相机 / 图片 / 文字图片（对齐微信 PlusPanel，iMessage 配色） ----------------
 
-type SmsPlusAction = 'camera' | 'image' | 'photogen';
+type SmsPlusAction = 'camera' | 'image' | 'textcard';
 
 /** File → 压缩 dataURL（与微信端 readImageFile 同款：默认 720px 上限、GIF 动图直通） */
 function readSmsImageFile(file: File, max = 720): Promise<string> {
@@ -800,7 +805,7 @@ function SmsPlusPanel({ onAction }: { onAction: (a: SmsPlusAction) => void }) {
   const items: Array<{ key: SmsPlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
-    { key: 'photogen', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'textcard', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
   return (
     <div
@@ -827,36 +832,35 @@ function SmsPlusPanel({ onAction }: { onAction: (a: SmsPlusAction) => void }) {
   );
 }
 
-/** 「文字图片」弹层（加号面板 → 文字图片；描述可空 = AI 根据人设+聊天记录自动构思，再锁脸生图以角色身份发送） */
-function SmsPhotoGenSheet({
+/** 「文字图片」弹层（加号面板 → 文字图片；Task 13 卡片版，无生图依赖——
+ *  输入可空：留空 = AI 按人设+聊天记录代笔；输入非空 = 用户代笔直接上卡） */
+function SmsTextCardSheet({
   charName,
   busy,
-  busyText,
   error,
   onClose,
   onSubmit,
 }: {
   charName: string;
   busy: boolean;
-  busyText: string;
   error: string;
   onClose: () => void;
-  onSubmit: (desc: string) => void;
+  onSubmit: (text: string) => void;
 }) {
-  const [desc, setDesc] = useState('');
+  const [text, setText] = useState('');
   const submit = () => {
     if (busy) return;
-    onSubmit(desc.trim());
+    onSubmit(text.trim());
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="sms-photogen-sheet">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="sms-textcard-sheet">
       <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-[17px] font-semibold">{charName}拍张照片发给你</p>
+          <p className="text-[17px] font-semibold">{charName}写一张文字图片发给你</p>
           <button
             type="button"
             aria-label="关闭文字图片"
-            data-testid="sms-photogen-close"
+            data-testid="sms-textcard-close"
             onClick={onClose}
             disabled={busy}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
@@ -865,23 +869,23 @@ function SmsPhotoGenSheet({
           </button>
         </div>
         <textarea
-          value={desc}
-          onChange={(e) => setDesc(e.target.value)}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
           disabled={busy}
           rows={3}
           maxLength={160}
-          data-testid="sms-photogen-input"
-          placeholder="描述想要的画面（可留空，AI 会结合 TA 的人设和你们的聊天记录自动构思）"
+          data-testid="sms-textcard-input"
+          placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录自动写）"
           className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#007AFF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
         />
         {error ? (
-          <p data-testid="sms-photogen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+          <p data-testid="sms-textcard-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
             {error}
           </p>
         ) : null}
         <button
           type="button"
-          data-testid="sms-photogen-submit"
+          data-testid="sms-textcard-submit"
           onClick={submit}
           disabled={busy}
           className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#007AFF] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
@@ -889,14 +893,14 @@ function SmsPhotoGenSheet({
           {busy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
-              {busyText || '正在生成照片…'}
+              正在写文字图片…
             </>
           ) : (
             '生成并发送'
           )}
         </button>
         <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
-          照片以 {charName} 的身份发出，并会存进 TA 的相册；失败不影响聊天
+          文字图片以 {charName} 的身份发出；无需配置图像生成，失败不影响聊天
         </p>
       </div>
     </div>
@@ -993,11 +997,10 @@ function ChatView({
   const [pendingImgs, setPendingImgs] = useState<Array<{ id: string; src: string }>>([]);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
-  // ---- 文字图片（AI 按人设+聊天记录构思画面 → 锁脸生图 → 以角色身份发送）：弹层状态 ----
-  const [photoGenOpen, setPhotoGenOpen] = useState(false);
-  const [photoGenBusy, setPhotoGenBusy] = useState(false);
-  const [photoGenStage, setPhotoGenStage] = useState<'' | 'desc' | 'img'>('');
-  const [photoGenError, setPhotoGenError] = useState('');
+  // ---- 文字图片（Task 13 卡片版，无生图依赖：留空 = AI 按人设+聊天记录代笔）：弹层状态 ----
+  const [cardOpen, setCardOpen] = useState(false);
+  const [cardBusy, setCardBusy] = useState(false);
+  const [cardError, setCardError] = useState('');
   /** 翻译页（设置页「翻译」进入的独立二级页，按会话隔离） */
   const [translateOpen, setTranslateOpen] = useState(false);
   /** 回复条数选择页（设置页「回复条数」进入的独立二级页，按会话隔离） */
@@ -1540,10 +1543,16 @@ function ChatView({
     }
     // 上下文：只带有效消息最近 20 条（已撤回的消息不再进入上下文；引用消息带引用前缀让 AI 感知；
     // 语音消息 content 为空 → 按 kind 白名单放行，AI 直接读转写文本，未识别时用占位；
-    // 图片消息 content 为空 → 同样放行，AI 读「[图片]（图片内容：…）」占位，知道自己/对方发过什么照片）。
+    // 图片消息 content 为空 → 同样放行，AI 读「[图片]（图片内容：…）」占位，知道自己/对方发过什么照片；
+    // 文字图片卡片 → 以「[文字图片]（卡片上写着：…）」进入历史，AI 知道发过什么卡片）。
     // #35：按创建时间稳定排序还原对话时序（旧气泡倒挂的历史数据），保证上下文顺序正确
     const history = base
-      .filter((m) => !m.error && !m.recalled && (m.content || m.kind === 'voice' || (m.kind === 'image' && m.img)))
+      .filter(
+        (m) =>
+          !m.error &&
+          !m.recalled &&
+          (m.content || m.kind === 'voice' || (m.kind === 'image' && m.img) || (m.kind === 'textcard' && m.card))
+      )
       .sort((a, b) => a.time - b.time)
       .slice(-20)
       .map((m) => ({
@@ -1555,7 +1564,9 @@ function ChatView({
               ? m.img?.desc
                 ? `[图片]（图片内容：${m.img.desc}）`
                 : '[图片]'
-              : m.content
+              : m.kind === 'textcard' && m.card
+                ? `[文字图片]（卡片上写着：${m.card.text}）`
+                : m.content
         }`,
       }));
 
@@ -1572,7 +1583,7 @@ function ChatView({
       ? memRecallBlock(
           memContactId,
           'sms',
-          [userMsg?.content ?? '', ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]
+          [userMsg?.content ?? '', ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'textcard' ? m.card?.text || '' : m.content))]
             .filter(Boolean)
             .join(' ')
         )
@@ -1596,7 +1607,7 @@ function ChatView({
     // 世界书：仅联系人会话参与（AI 助手会话无联系人角色）；命中触发词条目按插入位置注入
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；有内容时 system 末尾附带使用规则）
     const wbBlocks = wbContactId
-      ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.content))]))
+      ? collectWbBlocks(wbContactId, wbScanText([userMsg?.content, ...base.slice(-8).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'textcard' ? m.card?.text || '' : m.content))]))
       : null;
     const charBlock =
       wbBlocks && systemPrompt
@@ -2192,10 +2203,10 @@ function ChatView({
       photoInputRef.current?.click();
       return;
     }
-    // 文字图片：AI 按人设+聊天记录构思画面 → 锁脸生图 → 以角色身份发到聊天
+    // 文字图片（Task 13 卡片版）：AI 按人设+聊天记录代笔或用户代写，以卡片消息发到聊天
     setPlusOpen(false);
-    setPhotoGenError('');
-    setPhotoGenOpen(true);
+    setCardError('');
+    setCardOpen(true);
   };
 
   /** 只发图片（选图后直接点发送键；触发 AI 回合，识图管线让 TA 看到图片内容） */
@@ -2225,26 +2236,20 @@ function ChatView({
   };
 
   /**
-   * 手动触发「文字图片」：描述可空——留空时先让 AI 按人设+最近聊天记录构思一句画面描述，
-   * 再走 generateCharacterPhoto（锁脸参考图/外貌描述与自动生图同管线）以角色身份发到聊天。
-   * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册/决策日志/记忆；
+   * 手动触发「文字图片」（Task 13 卡片版，无生图依赖）：输入留空时让 AI 按人设+最近聊天记录
+   * 写一段卡片文字（/api/textcard，用户上游优先、服务端内置模型兑底）；输入非空 = 用户代笔直接上卡。
+   * 成功 → 弹层关闭 + 「文字图片」卡片消息直接投递（不入 AI 回合队列）；
    * 失败 → 错误留在弹层内（不关弹窗，可重试或取消）。
    */
-  const submitPhotoGen = async (desc: string) => {
-    const cfg = useSettings.getState().imgGenConfig;
-    if (!imgGenConfigReady(cfg)) {
-      setPhotoGenError('还没配置生图接口：去「设置 → 图像生成」填写 Base URL / API Key / 模型名');
-      return;
-    }
-    setPhotoGenBusy(true);
-    setPhotoGenError('');
-    let finalDesc = desc.trim();
+  const submitTextCard = async (text: string) => {
+    setCardBusy(true);
+    setCardError('');
     try {
-      if (!finalDesc) {
-        // 描述留空 → AI 自动构思（人设取联系人资料；小助手会话无人设也可用）
-        setPhotoGenStage('desc');
+      let finalText = text;
+      if (!finalText) {
+        // 留空 → AI 代笔（人设取联系人资料；小助手会话无人设也可用）
         const contact = wbContactId ? await getContact(wbContactId).catch(() => null) : null;
-        finalDesc = await autoPhotoDesc({
+        finalText = await autoCardText({
           config: apiConfig,
           charName: peerLabel,
           channel: '短信',
@@ -2252,36 +2257,19 @@ function ChatView({
           history: buildPhotoDescHistory(msgs, profileName || '我', peerLabel),
         });
       }
-      setPhotoGenStage('img');
-      const cid = wbContactId;
-      const r = await generateCharacterPhoto({ cfg, contactId: cid ?? '', desc: finalDesc, charName: peerLabel, useRef: cid ? undefined : false });
       // 直接投递（scheduleAiDelivery 模块层投递，订阅 tick 会把落盘消息合并进本地 state），不入 AI 回合队列
       void scheduleAiDelivery<ChatMsg>(
         sessionKey,
-        [{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'image', img: { src: r.src, desc: finalDesc } }],
+        [{ id: uid(), role: 'assistant', content: '', time: Date.now(), kind: 'textcard', card: { text: finalText } }],
         deliverAiMsg,
         { initialDelay: 0, delay: () => 0 },
       );
-      if (cid) {
-        void addAlbum(cid, r.src, { desc: finalDesc, origin: 'ai' });
-        void addVisionDecision({ contactId: cid, app: 'sms', action: 'imggen', targetId: '', imgSrc: r.src, reason: finalDesc });
-        notePhotoMemory(cid, 'sms', finalDesc);
-        void listAlbums(cid)
-          .then((list) => {
-            albumSummaryRef.current =
-              list.length > 0
-                ? list.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
-                : null;
-          })
-          .catch(() => {});
-      }
-      setPhotoGenOpen(false);
-      showToast('照片已生成');
+      setCardOpen(false);
+      showToast('文字图片已发送');
     } catch (e) {
-      setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
+      setCardError(e instanceof Error ? e.message : '生成失败，请重试');
     } finally {
-      setPhotoGenBusy(false);
-      setPhotoGenStage('');
+      setCardBusy(false);
     }
   };
 
@@ -2427,7 +2415,7 @@ function ChatView({
    *  对方 → 联系人名/手机号。profileName 未设置时回退「我」保持旧行为 */
   const quoteNameOf = (m: ChatMsg): string => (m.role === 'user' ? profileName || '我' : peer.name || peer.title);
 
-  /** 消息的可复制/引用文本快照（语音 = [语音] + 转写、图片 = [图片] + 描述，与微信同语义） */
+  /** 消息的可复制/引用文本快照（语音 = [语音] + 转写、图片 = [图片] + 描述、文字图片卡片 = 卡片文字，与微信同语义） */
   const quoteContentOf = (m: ChatMsg): string =>
     m.kind === 'voice'
       ? m.voice?.transcript
@@ -2437,18 +2425,23 @@ function ChatView({
         ? m.img?.desc
           ? `[图片] ${m.img.desc}`
           : '[图片]'
-        : m.content;
+        : m.kind === 'textcard'
+          ? m.card?.text
+            ? `[文字图片] ${m.card.text}`
+            : '[文字图片]'
+          : m.content;
 
   /** 按发送方组装长按菜单项（语音首项转文字；图片无编辑（内容不可改）；复制 删除 编辑 引用 多选 撤回；语音可编辑转写文本、无引用） */
   const buildMsgMenuItems = (m: ChatMsg): BubbleMenuItem[] => {
     const B = BUBBLE_MENU_ICONS;
     const isVoice = m.kind === 'voice';
     const isImage = m.kind === 'image';
+    const isCard = m.kind === 'textcard';
     const items: BubbleMenuItem[] = [];
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
     items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
-    if (!isImage) items.push({ key: 'edit', label: '编辑', icon: B.edit });
+    if (!isImage && !isCard) items.push({ key: 'edit', label: '编辑', icon: B.edit });
     if (!isVoice) {
       items.push({ key: 'quote', label: '引用', icon: B.quote });
     }
@@ -2888,6 +2881,49 @@ function ChatView({
                     </span>
                   )}
                 </motion.div>
+              ) : m.kind === 'textcard' && m.card ? (
+                /* 文字图片卡片（Task 13：无生图依赖——AI 代笔/用户代写的文字直接印在卡片上）；
+                   长按菜单/多选/拉黑图标与文本消息一致；无点击行为（纯展示） */
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 36 }}
+                  className={`flex ${mine ? 'justify-end' : 'justify-start'} ${grouped ? 'mt-[3px]' : 'mt-2.5'}`}
+                >
+                  {selectMode && !mine && (
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`mr-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                  )}
+                  {mine && blockedIconOf(m)}
+                  <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div {...bubblePress}>
+                      <TextCardBubble text={m.card.text} signedBy={mine ? profileName || '我' : peer.name ?? peer.title} variant="sms" />
+                    </div>
+                    {/* iMessage：已送达挂在最后一条己方消息下沿（与文本/语音/图片气泡同规则） */}
+                    {mine && i === lastUserIdx && (
+                      <p className="mt-1 self-stretch pl-1 text-left text-[11px] leading-none text-muted-foreground">已送达</p>
+                    )}
+                  </div>
+                  {!mine && blockedIconOf(m)}
+                  {selectMode && mine && (
+                    <span
+                      aria-hidden="true"
+                      data-testid={`sms-select-${m.id}`}
+                      className={`ml-2 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full border ${
+                        selectedIds.includes(m.id) ? 'border-[#007AFF] bg-[#007AFF] text-white' : 'border-black/25 dark:border-white/35'
+                      }`}
+                    >
+                      {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
+                    </span>
+                  )}
+                </motion.div>
               ) : (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
@@ -3251,15 +3287,14 @@ function ChatView({
       </>
       )}
 
-      {/* 文字图片弹层（加号面板 → 文字图片；描述可空 = AI 自动构思，锁脸生图以角色身份发送） */}
-      {photoGenOpen && (
-        <SmsPhotoGenSheet
+      {/* 文字图片弹层（加号面板 → 文字图片；Task 13 卡片版，无生图依赖） */}
+      {cardOpen && (
+        <SmsTextCardSheet
           charName={peerLabel}
-          busy={photoGenBusy}
-          busyText={photoGenStage === 'desc' ? 'AI 正在构思画面…' : '正在生成照片…'}
-          error={photoGenError}
-          onClose={() => (photoGenBusy ? undefined : setPhotoGenOpen(false))}
-          onSubmit={(d) => void submitPhotoGen(d)}
+          busy={cardBusy}
+          error={cardError}
+          onClose={() => (cardBusy ? undefined : setCardOpen(false))}
+          onSubmit={(t) => void submitTextCard(t)}
         />
       )}
       {/* 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 分句发送开关 */}
@@ -3909,8 +3944,15 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
     const last = msgs[msgs.length - 1];
-    // 语音消息预览统一显示 [语音]、图片消息显示 [图片]（与微信会话列表同口径；语音 content 为空串，不透出转写原文）
-    const lastText = last?.kind === 'voice' ? '[语音]' : last?.kind === 'image' ? '[图片]' : (last?.content ?? '');
+    // 语音消息预览统一显示 [语音]、图片消息显示 [图片]、文字图片卡片显示 [文字图片]（与微信会话列表同口径；语音 content 为空串，不透出转写原文）
+    const lastText =
+      last?.kind === 'voice'
+        ? '[语音]'
+        : last?.kind === 'image'
+          ? '[图片]'
+          : last?.kind === 'textcard'
+            ? '[文字图片]'
+            : (last?.content ?? '');
     out.push({
       contact: c,
       preview: last?.recalled
@@ -4312,7 +4354,7 @@ export default function ChatApp() {
   ];
 
   const last = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : undefined;
-  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览统一显示 [语音]、图片 [图片]（与微信同口径）
+  // 撤回的消息在会话列表预览显示「你/对方撤回一条消息」；语音消息预览统一显示 [语音]、图片 [图片]、文字图片卡片 [文字图片]（与微信同口径）
   const preview = last?.recalled
     ? last.role === 'user'
       ? '你撤回一条消息'
@@ -4321,7 +4363,9 @@ export default function ChatApp() {
       ? '[语音]'
       : last?.kind === 'image'
         ? '[图片]'
-        : last?.content || SEED_MSGS[0].content;
+        : last?.kind === 'textcard'
+          ? '[文字图片]'
+          : last?.content || SEED_MSGS[0].content;
   // 跨天显示 M月D日（与上方联系人行 fmtListTime 同口径，A-8；无时间落盘时保留「现在」兑底）
   const listTime = mounted ? (last && last.time > 0 ? fmtListTime(last.time) : '现在') : '';
 

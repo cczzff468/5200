@@ -206,8 +206,11 @@ import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
-// 生图（锁脸）：自动照片标签（[照片:描述]）提取/生成/规则构建 + 手动「生成照片」管线（与微信端共用同一逻辑层）
-import { autoPhotoDesc, buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+// 生图（锁脸）：自动照片标签（[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层）；
+// 手动「文字图片」为卡片版（autoCardText），不走生图
+import { buildPhotoDescHistory, buildPhotoTagRule, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, type PhotoTag } from '@/lib/imggen';
+import { autoCardText } from '@/lib/textcard';
+import { TextCardBubble } from '@/components/apps/text-card-bubble';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
 import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
@@ -350,14 +353,16 @@ interface QQMsg {
   content: string;
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片 */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call';
+   *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖） */
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard';
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打） */
   call?: { state: CallCardState; duration: number; direction: 'out' | 'in' };
   /** 图片消息附加数据：desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」；旧记录图片只存 content=dataURL，无此字段照常兼容） */
   img?: { src?: string; desc?: string };
+  /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
+  card?: { text: string };
   /** 红包/转账消息附加数据（随消息一并 localStorage 持久化） */
   packet?: MsgPacket;
   /** 位置消息附加数据 */
@@ -471,6 +476,7 @@ function msgPreview(m: QQMsg | undefined): string {
   if (m.kind === 'family') return '[亲属卡]';
   if (m.kind === 'notice') return m.notice ? `${m.notice.pre}${m.notice.accent}` : '';
   if (m.kind === 'image') return '[图片]';
+  if (m.kind === 'textcard') return '[文字图片]';
   if (m.kind === 'voice') return '[语音]';
   if (m.kind === 'call') return '[语音通话]';
   if (m.kind === 'location') return '[位置]';
@@ -487,7 +493,7 @@ type ChatLayer =
   | { view: 'transfer' }
   | { view: 'location' }
   | { view: 'offline' }
-  | { view: 'photogen' }
+  | { view: 'textcard' }
   | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'tr-receive' | 'fam-detail'; msgId: string };
 
 const LS_SESSION = 'qq-session-user-id';
@@ -1900,39 +1906,37 @@ export function QqPlusGrid({
 }
 
 /**
- * 「文字图片」弹层（加号面板「文字图片」入口；锁脸生图手动触发，微信端 PhotoGenCompose 的 QQ 主题版）。
- * 描述输入可留空——留空时 AI 按人设+最近聊天记录自动构思画面（/api/photodesc），再锁脸生图；
- * 生成中状态（构思/生图两阶段文案）+ 失败错误（留在弹层可重试）。
+ * 「文字图片」弹层（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖，微信端 WxTextCardSheet 的 QQ 主题版）。
+ * 输入可空——留空时 AI 按人设+最近聊天记录代笔（/api/textcard）；输入非空 = 用户代笔直接上卡；
+ * 生成中状态 + 失败错误（留在弹层可重试）。
  */
-function QqPhotoGenSheet({
+function QqTextCardSheet({
   charName,
   busy,
-  busyText,
   error,
   onClose,
   onSubmit,
 }: {
   charName: string;
   busy: boolean;
-  busyText: string;
   error: string;
   onClose: () => void;
-  onSubmit: (desc: string) => void;
+  onSubmit: (text: string) => void;
 }) {
-  const [desc, setDesc] = useState('');
+  const [text, setText] = useState('');
   const submit = () => {
     if (busy) return;
-    onSubmit(desc.trim());
+    onSubmit(text.trim());
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="qq-photogen-sheet">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="qq-textcard-sheet">
       <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#232529]">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-[17px] font-semibold text-[#1F2329] dark:text-white">{charName}拍张照片发给你</p>
+          <p className="text-[17px] font-semibold text-[#1F2329] dark:text-white">{charName}写一张文字图片发给你</p>
           <button
             type="button"
             aria-label="关闭文字图片"
-            data-testid="qq-photogen-close"
+            data-testid="qq-textcard-close"
             onClick={onClose}
             disabled={busy}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
@@ -1941,23 +1945,23 @@ function QqPhotoGenSheet({
           </button>
         </div>
         <textarea
-          value={desc}
-          onChange={(e) => setDesc(e.target.value)}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
           disabled={busy}
           rows={3}
           maxLength={160}
-          data-testid="qq-photogen-input"
-          placeholder="描述想要的画面（可留空，AI 会结合 TA 的人设和你们的聊天记录自动构思）"
+          data-testid="qq-textcard-input"
+          placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录自动写）"
           className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] text-[#1F2329] outline-none placeholder:text-black/30 focus:border-[#0099FF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-white dark:placeholder:text-white/30"
         />
         {error ? (
-          <p data-testid="qq-photogen-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
+          <p data-testid="qq-textcard-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
             {error}
           </p>
         ) : null}
         <button
           type="button"
-          data-testid="qq-photogen-submit"
+          data-testid="qq-textcard-submit"
           onClick={submit}
           disabled={busy}
           className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#0099FF] text-[16px] font-medium text-white active:opacity-80 disabled:opacity-40"
@@ -1965,14 +1969,14 @@ function QqPhotoGenSheet({
           {busy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
-              {busyText || '正在生成照片…'}
+              正在写文字图片…
             </>
           ) : (
             '生成并发送'
           )}
         </button>
         <p className="mt-2 text-center text-[11px] text-black/35 dark:text-white/35">
-          照片以 {charName} 的身份发出，并会存进 TA 的相册；失败不影响聊天
+          文字图片以 {charName} 的身份发出；无需配置图像生成，失败不影响聊天
         </p>
       </div>
     </div>
@@ -2702,13 +2706,12 @@ function ChatPage({
   const [atOpen, setAtOpen] = useState(false);
   // 表情面板（与加号面板互斥）
   const [stickerOpen, setStickerOpen] = useState(false);
-  // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置/生成照片）
+  // 聊天内部浮层（发红包/转账/红包开箱/详情/发送位置/文字图片）
   const [layer, setLayer] = useState<ChatLayer>(null);
   const [gate, setGate] = useState<null | { kind: 'redpacket' | 'transfer'; packet: MsgPacket; methodId: string }>(null);
-  /** 手动「文字图片」状态：loading / 阶段（desc=AI 构思画面 / img=生图）/ 错误（弹层内展示，失败不影响聊天） */
-  const [photoGenBusy, setPhotoGenBusy] = useState(false);
-  const [photoGenStage, setPhotoGenStage] = useState<'' | 'desc' | 'img'>('');
-  const [photoGenError, setPhotoGenError] = useState('');
+  /** 手动「文字图片」状态（Task 13 卡片版）：loading / 错误（弹层内展示，失败不影响聊天） */
+  const [cardBusy, setCardBusy] = useState(false);
+  const [cardError, setCardError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   // 原生相机隐藏 input（capture 调起后置摄像头，对齐微信：不再使用自建取景浮层）
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -3543,27 +3546,21 @@ function ChatPage({
   );
 
   /**
-   * 手动触发「文字图片」（加号面板「文字图片」入口）：描述可空——留空时先让 AI 按人设+最近聊天
-   * 记录构思一句画面描述（/api/photodesc），再走 generateCharacterPhoto（锁脸同自动生图）以角色
-   * 第一人称拍一张发到聊天。
-   * 成功 → 弹层关闭 + 图片消息直接投递（不入 AI 回合队列）+ 存相册（origin 'ai'）/决策日志/记忆
-   *（30 分钟节流）+ 刷新相册缓存；失败 → 错误留在弹层内（不关弹窗，用户可重试或取消），不影响聊天。
+   * 手动触发「文字图片」（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖）：输入留空时让 AI
+   * 按人设+最近聊天记录写一段卡片文字（/api/textcard，用户上游优先、服务端内置模型兑底）；
+   * 输入非空 = 用户代笔直接上卡。
+   * 成功 → 弹层关闭 + 「文字图片」卡片消息直接投递（不入 AI 回合队列）；
+   * 失败 → 错误留在弹层内（不关弹窗，用户可重试或取消），不影响聊天。
    */
-  const submitPhotoGen = useCallback(
-    async (desc: string) => {
-      const cfg = useSettings.getState().imgGenConfig;
-      if (!imgGenConfigReady(cfg)) {
-        setPhotoGenError('还没配置生图接口：去「设置 → 图像生成」填写 Base URL / API Key / 模型名');
-        return;
-      }
-      setPhotoGenBusy(true);
-      setPhotoGenError('');
-      let finalDesc = desc.trim();
+  const submitTextCard = useCallback(
+    async (text: string) => {
+      setCardBusy(true);
+      setCardError('');
       try {
-        if (!finalDesc) {
-          // 描述留空 → AI 自动构思画面（人设取联系人 persona；历史取最近聊天记录）
-          setPhotoGenStage('desc');
-          finalDesc = await autoPhotoDesc({
+        let finalText = text;
+        if (!finalText) {
+          // 留空 → AI 代笔（人设取联系人 persona；历史取最近聊天记录）
+          finalText = await autoCardText({
             config: apiConfig,
             charName: peer.name,
             channel: 'QQ',
@@ -3571,30 +3568,20 @@ function ChatPage({
             history: buildPhotoDescHistory(msgs, '我', peer.name),
           });
         }
-        setPhotoGenStage('img');
-        const r = await generateCharacterPhoto({ cfg, contactId: peer.id, desc: finalDesc, charName: peer.name });
-        // QQ 端图片 dataURL 存 content（QqImageBubble 读 m.content），img.src 同步填上与微信端一致；
         // 经 scheduleAiDelivery 投递（而非直投 deliverAiMsg）：订阅 tick 会把落盘消息合并进本地 state，
         // 直投只写 kv 不触发 tick（聊天页不刷新）；空批次 initialDelay=0 立即上屏
         void scheduleAiDelivery<QQMsg>(
           sessionKey,
-          [{ id: uid(), role: 'peer', content: r.src, time: Date.now(), kind: 'image' as const, img: { src: r.src, desc: finalDesc } }],
+          [{ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'textcard' as const, card: { text: finalText } }],
           deliverAiMsg,
           { initialDelay: 0, delay: () => 0 },
         );
-        void addAlbum(peer.id, r.src, { desc: finalDesc, origin: 'ai' });
-        void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: finalDesc });
-        notePhotoMemory(peer.id, 'qq', finalDesc);
-        void listAlbums(peer.id).then((list) => {
-          albumCacheRef.current = list;
-        });
         setLayer(null);
-        onToast('照片已生成');
+        onToast('文字图片已发送');
       } catch (e) {
-        setPhotoGenError(e instanceof Error ? e.message : '生成失败，请重试');
+        setCardError(e instanceof Error ? e.message : '生成失败，请重试');
       } finally {
-        setPhotoGenBusy(false);
-        setPhotoGenStage('');
+        setCardBusy(false);
       }
     },
     [apiConfig, deliverAiMsg, msgs, onToast, peer.id, peer.name, peer.persona, sessionKey],
@@ -3897,7 +3884,7 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -3934,6 +3921,9 @@ function ChatPage({
               m.img?.desc
               ? `[图片]（图片内容：${m.img.desc}）`
               : '[图片]'
+            : m.kind === 'textcard' && m.card
+            ? // 文字图片卡片：AI 知道发过什么卡片（历史可回看，避免接不上话题）
+              `[文字图片]（卡片上写着：${m.card.text}）`
             : m.kind === 'voice'
             ? // 语音消息：AI 直接读转写文本（自然对话；AI 语音消息的朗读原文同源兑底）；识别失败/未识别时用占位
               m.voice?.transcript || m.voice?.localText || '[语音]'
@@ -3994,9 +3984,11 @@ function ChatPage({
         ? m.voice?.transcript || ''
         : m.kind === 'image'
           ? m.img?.desc || ''
-          : m.kind === 'location'
-            ? locationAiText(m.loc, m.time)
-            : m.content;
+          : m.kind === 'textcard'
+            ? m.card?.text || ''
+            : m.kind === 'location'
+              ? locationAiText(m.loc, m.time)
+              : m.content;
     const memContext = [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]
       .filter((x): x is string => typeof x === 'string' && x.length > 0)
       .join(' ');
@@ -4693,7 +4685,7 @@ function ChatPage({
 
   // ---------------- 气泡长按菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成 ----------------
 
-  /** 消息的可复制/引用文本快照（表情/图片/语音/位置/卡片/转发都有占位描述） */
+  /** 消息的可复制/引用文本快照（表情/图片/文字图片卡片/语音/位置/卡片/转发都有占位描述） */
   const quoteContentOf = (m: QQMsg): string =>
     m.kind === 'sticker'
       ? m.stk?.meaning
@@ -4701,7 +4693,11 @@ function ChatPage({
         : '[表情]'
       : m.kind === 'image'
         ? '[图片]'
-        : m.kind === 'voice'
+        : m.kind === 'textcard'
+          ? m.card?.text
+            ? `[文字图片] ${m.card.text}`
+            : '[文字图片]'
+          : m.kind === 'voice'
           ? m.voice?.transcript
             ? `[语音] ${m.voice.transcript}`
             : '[语音]'
@@ -4810,7 +4806,7 @@ function ChatPage({
     if (m.kind === 'location' && m.loc) return { id, role: 'me', content: '', time: Date.now(), kind: 'location', loc: { ...m.loc } };
     // 语音消息整条克隆（含音频 dataURL），目标会话里照常可播放
     if (m.kind === 'voice' && m.voice) return { id, role: 'me', content: '', time: Date.now(), kind: 'voice', voice: { ...m.voice } };
-    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family';
+    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'textcard';
     return { id, role: 'me', content: isCard ? quoteContentOf(m) : m.content, time: Date.now(), kind: 'forward', fwd: { from: peer.name }, quote: m.quote };
   };
 
@@ -5137,16 +5133,16 @@ function ChatPage({
       },
     },
     {
-      key: 'photogen',
+      key: 'textcard',
       label: '文字图片',
       color: '#0099FF',
       icon: <Sparkles className="h-[26px] w-[26px]" strokeWidth={1.9} />,
       onClick: () => {
-        // 文字图片（锁脸）：AI 按人设+聊天记录构思画面或手填描述，角色以第一人称拍一张发到聊天
+        // 文字图片（Task 13 卡片版，无生图依赖）：AI 按人设+聊天记录代笔或用户代写，以卡片消息发到聊天
         setPlusOpen(false);
         setStickerOpen(false);
-        setPhotoGenError('');
-        setLayer({ view: 'photogen' });
+        setCardError('');
+        setLayer({ view: 'textcard' });
       },
     },
   ];
@@ -5452,7 +5448,7 @@ function ChatPage({
                   </div>
                 )
               ) : (
-              <div className={`mb-3 flex ${m.kind === 'voice' ? 'items-start' : 'items-end'} ${m.kind === 'image' || m.kind === 'sticker' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
+              <div className={`mb-3 flex ${m.kind === 'voice' ? 'items-start' : 'items-end'} ${m.kind === 'image' || m.kind === 'sticker' || m.kind === 'textcard' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
                 {selectMode && isSelectable(m) && !mine && (
                   /* 多选模式勾选圈（对方消息在行左侧） */
                   <span
@@ -5527,6 +5523,12 @@ function ChatPage({
                 ) : m.kind === 'image' ? (
                   <div {...bubblePress} className="min-w-0">
                     <QqImageBubble src={m.content} />
+                  </div>
+                ) : m.kind === 'textcard' && m.card ? (
+                  /* 文字图片卡片（Task 13：无生图依赖——AI 代笔/用户代写的文字直接印在卡片上）；
+                     长按菜单与图片一致（复制/删除/多选/撤回/转发/收藏，无编辑无引用） */
+                  <div {...bubblePress}>
+                    <TextCardBubble text={m.card.text} signedBy={mine ? me.name : peer.name} variant="qq" />
                   </div>
                 ) : m.kind === 'sticker' && m.stk ? (
                   <div {...bubblePress}>
@@ -6213,15 +6215,14 @@ function ChatPage({
           onToast={onToast}
         />
       ) : null}
-      {/* 文字图片弹层（加号面板「文字图片」入口；描述可空 = AI 自动构思，锁脸生图以角色身份发送） */}
-      {layer?.view === 'photogen' ? (
-        <QqPhotoGenSheet
+      {/* 文字图片弹层（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖） */}
+      {layer?.view === 'textcard' ? (
+        <QqTextCardSheet
           charName={peer.name}
-          busy={photoGenBusy}
-          busyText={photoGenStage === 'desc' ? 'AI 正在构思画面…' : '正在生成照片…'}
-          error={photoGenError}
-          onClose={() => (photoGenBusy ? undefined : setLayer(null))}
-          onSubmit={(desc) => void submitPhotoGen(desc)}
+          busy={cardBusy}
+          error={cardError}
+          onClose={() => (cardBusy ? undefined : setLayer(null))}
+          onSubmit={(t) => void submitTextCard(t)}
         />
       ) : null}
       {/* 支付密码验证浮层（开启支付密码后红包/转账发送前弹出自绘键盘） */}
