@@ -13239,3 +13239,25 @@ Stage Summary:
 - 附带修复微信通话卡片 media 规范化丢失（视频卡刷新降级语音卡的历史 bug）与 phone 拨号中无挂断
 - 产出：src/components/apps/video-call-screen.tsx（主体重构）、src/lib/ios/camera-capture.ts（stream 导出+分辨率）、src/components/apps/voice-call-screen.tsx（statusLine 导出）、src/components/apps/wechat.tsx（loadMsgs media 白名单）；语音通话引擎/记忆/卡片链路零行为变化
 - 回归：bunx tsc --noEmit 0 错；eslint 四文件 0 错；微信/QQ 视频 E2E 全通过；console 无错误
+---
+Task ID: 25
+Agent: Z.ai (main)
+Task: 视频通话 UI 三轮精修（Task 25）——顶部小头像名字删除/中间头像下加小字名字/三处模糊全清除/位置大小整理
+
+Work Log:
+- 【顶部小头像+名字删除】VideoTopBar 重构：删除 32px 小头像+15px 名字行，接通后顶部居中只留时长(14px)+AI 状态(正在听/正在思考…/正在说话)，与语音通话顶部（只留时长）对齐；参数 avatar/shape 删除、新增 showName
+- 【中间头像名字小一点】RemoteView 新增 showName/lift 参数：主画面（非互换态）头像下方显示名字（15px font-medium 白/90，max-w 240 truncate），主画面头像 184→168；lift=72（paddingBottom=2×lift）使头像+名字整体上移避开底部控制区、视觉更居中；小窗（swapped mini 104/100、拨号头像窗 84/80）不显示名字（showName 默认 false）
+- 【名字回落逻辑】互换后主画面=我方摄像头、对方头像缩在 mini 窗（无法承载名字），此时 VideoTopBar showName=true 在顶部显示名字；接通正常态名字随 RemoteView 显示在头像下，顶部无名字
+- 【顶部模糊根因修复】RemoteView 删除「模糊放大头像背景层（scale-125 blur-2xl opacity-40）」与「radial-gradient 渐晕层」，主画面改纯黑背景+清晰 Ken Burns 头像（用户反馈「顶部为什么是模糊的」即此模糊头像背景在顶部透出）
+- 【刚接通/切换画面后模糊根因修复】LocalFullView 删除「模糊垫底第二个 <video>（同流 scale-125 blur-2xl opacity-60）」与 stream prop/backdropRef，保留 object-contain 完整显示（不裁剪不放大）+纯黑背景；互换后/拨号中主画面同样生效；「你」自看水印位置 bottom-120→324px（置于 contain 视频下缘黑边区，不遮画面不遮底部控制）
+- 【来电页去模糊+补名字】wx 来电页 bg-[#0e0e11]/92 backdrop-blur-sm → bg-[#0e0e11]（不透明）；phone 来电页 bg-black/55 backdrop-blur-md → bg-[#1c1c1e]；qq 来电页 /94 → 不透明；wx/qq 来电页头像下新增名字行（16px font-medium，修复来电页全屏覆盖 VideoTopBar 后界面无名字的既有缺陷——Task 23 注释「顶部栏已有名字」实际被 z-10 来电页盖住）；phone 来电页已有 32px iOS 大名字保留
+- 【拨号文案带名字】顶部名字删除后拨号中名字改由底部文案承载：wx「正在等待 小雨 接受邀请…」/ qq·phone「正在呼叫 小雨…」
+- 【AI 视频来电规则防模仿强化】wechat.tsx:5752 / qq.tsx:4246 的【视频通话能力】规则追加「标记必须是单独四个字 [视频通话]，严禁模仿聊天记录里『[视频通话：时长/内容摘要]』卡片描述格式」——E2E 中发现 AI 反复输出「[视频通话：我打给你…]」模仿卡片 AI 摘要格式（VIDEO_CALL_MARK_RE 只认纯 [视频通话]，带冒号长文本不触发），导致 AI 主动视频来电概率下降；本次为规则层缓解（历史卡片摘要文本仍会进上下文，属已知边界）
+- E2E（agent-browser，小雨/微信+QQ）：①wx 拨出页：顶部干净（无小头像名字）/右侧对方头像小窗/「正在等待 小雨 接受邀请…」/无模糊 ✓；②wx 接通页：顶部仅 00:19+正在听/主画面 168 方形圆角头像+下方小字「小雨」/纯黑背景/PIP 占位/字幕+三按钮+挂断 ✓；③点 PIP 互换：名字回落顶部（小雨+00:41+正在听）/mini=对方头像 ✓ 再换回 ✓；④文字条开合：输入条在按钮上方无叠压，发「在干嘛呀」AI 人设回复 ✓；⑤挂断→「视频通话时长 02:13 📹」卡片+AI 续聊 ✓；⑥qq 拨出页：左上头像窗/四按钮平行/「正在呼叫 小雨…」✓；qq 接通页：顶部 00:18+正在听/168 圆头像+下方名字/字幕+四按钮 ✓ 挂断→蓝卡 00:44 📹 ✓；console 无错误
+- 未能在本次 E2E 复现 AI 主动视频来电页（模型连续多轮选择语音/文字回复或输出模仿格式，属概率行为；来电页布局族在 Task 23 已按截图验证，本次仅加名字行+去 blur 两处局部改动，tsc/lint 通过）
+- 备注：headless 无摄像头/麦克风全程降级占位；LocalFullView 删 stream 后 camera-capture.ts 的 stream 导出保留（接口向后兼容，暂无其他消费方）
+
+Stage Summary:
+- 视频通话界面三轮精修完成：顶部删小头像+名字（只留时长+状态，对齐语音通话）、名字移至主画面头像下（168px 头像+15px 小字、lift=72 避让底部控制）、互换后名字回落顶部、三处模糊全清除（RemoteView 模糊头像背景/LocalFullView 模糊垫底/来电页半透明 blur→纯黑清晰画面）、wx/qq 来电页补名字行（修复既有无名字缺陷）、拨号文案带名字、AI 视频来电规则防模仿强化
+- 产出：src/components/apps/video-call-screen.tsx（VideoTopBar/RemoteView/LocalFullView 重构+三皮肤调用更新）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（【视频通话能力】规则各+1 句）；引擎/记忆/卡片链路零改动
+- 回归：bunx tsc --noEmit 0 错；eslint（video-call-screen/wechat/qq）0 错；wx/qq 拨出→接通→互换→文字条→挂断→卡片全链路 E2E 通过；console 无错误

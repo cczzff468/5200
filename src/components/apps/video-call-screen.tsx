@@ -8,7 +8,7 @@
  * 「视频画面层 + 相机采集 + 识图注入」：
  *
  * - 主画面 = 对方（AI 角色）画面：角色头像 Ken Burns 缓慢缩放的「动态画面」（AI 无法产出真人视频，
- *   以动态头像+模糊背景模拟；无头像用 DefaultAvatar 兜底）；
+ *   以动态头像模拟，纯黑背景清晰不模糊；无头像用 DefaultAvatar 兜底）；
  * - 小窗 = 用户摄像头画面（getUserMedia video-only，音频轨由通话引擎自理）：默认右上角（QQ 左上），
  *   点击主画面/小窗互换大小窗；前后置翻转（facingMode user/environment，切翻转重建流）；
  *   摄像头开关随时可切；权限拒绝/无设备 → 降级为「摄像头已关」占位，通话完全不受影响；
@@ -200,32 +200,35 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
 
 type Runtime = ReturnType<typeof useVideoCallRuntime>;
 
-/** 对方（AI 角色）动态画面：头像 Ken Burns 缓慢缩放 + 深色渐晕背景（AI 无真人视频，动态头像模拟）。
- *  Task 23：微信皮肤头像为正方形圆角（对照微信真实行为），QQ/电话保持圆形 */
+/** 对方（AI 角色）动态画面：纯黑背景 + 头像 Ken Burns 缓慢缩放（AI 无真人视频，动态头像模拟）。
+ *  Task 23：微信皮肤头像为正方形圆角（对照微信真实行为），QQ/电话保持圆形；
+ *  Task 25：删除模糊放大的头像背景与渐晕（用户反馈顶部/刚接通/切换画面后「是模糊的」），改纯黑清晰画面；
+ *  主画面在头像下方显示名字（showName，小字），小窗/拨号头像窗不显示；lift=头像整体上移 px
+ *  （主画面避开底部控制区视觉更居中，小窗传 0） */
 function RemoteView({
   avatar,
   name,
   size,
   shape = 'circle',
+  showName = false,
+  lift = 0,
 }: {
   avatar: string | null;
   name: string;
   size: number;
   shape?: 'circle' | 'square';
+  /** 头像下方显示名字（主画面用；小窗太小不显示） */
+  showName?: boolean;
+  /** 头像整体上移 px（主画面避开底部控制区；小窗 0） */
+  lift?: number;
 }) {
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
-      {/* 模糊放大的头像背景（角色画面氛围底） */}
-      {avatar ? (
-        <div
-          className="absolute inset-0 scale-125 bg-cover bg-center opacity-40 blur-2xl"
-          style={{ backgroundImage: `url(${avatar})` }}
-          aria-hidden="true"
-        />
-      ) : null}
-      <div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_50%_20%,transparent_30%,rgba(0,0,0,0.55)_100%)]" aria-hidden="true" />
-      {/* 头像缓慢缩放（Ken Burns）模拟动态画面 */}
-      <div className="absolute inset-0 flex items-center justify-center">
+      <div
+        className="absolute inset-0 flex flex-col items-center justify-center"
+        style={lift > 0 ? { paddingBottom: lift * 2 } : undefined}
+      >
+        {/* 头像缓慢缩放（Ken Burns）模拟动态画面 */}
         <motion.div
           animate={{ scale: [1, 1.07, 1] }}
           transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
@@ -238,6 +241,9 @@ function RemoteView({
             <DefaultAvatar size={size} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
           )}
         </motion.div>
+        {showName && (
+          <p className="mt-4 max-w-[240px] truncate px-6 text-center text-[15px] font-medium text-white/90 drop-shadow">{name}</p>
+        )}
       </div>
     </div>
   );
@@ -245,61 +251,42 @@ function RemoteView({
 
 /** 我方画面（用户摄像头全屏，拨号中/互换后主画面用；无流时黑底+提示；基础量拆开传防 ref 容器对象渲染期访问）。
  *  Task 23：前置摄像头镜像预览（照镜子习惯，「画面是反的」修复；后置不镜像）。
- *  Task 24：「聚焦太放大」修复——全屏不再 object-cover 硬裁剪（390×844 竖屏装 4:3 横向画面会裁掉约
- *  65% 宽度，显得极度放大），改为 object-contain 完整显示 + 同路视频流模糊放大垫底（视频通话惯例观感） */
+ *  Task 24：object-contain 完整显示（不再 object-cover 硬裁剪显得「太放大」）。
+ *  Task 25：删除模糊垫底层（用户反馈「刚接通/切换画面以后是模糊的」），改纯黑背景，画面清晰完整 */
 function LocalFullView({
   videoRef,
-  stream,
   ready,
   denied,
   hint,
   mirrored,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  /** 摄像头 MediaStream（垫底模糊画面第二个 <video> 用，与主画面同一流） */
-  stream: MediaStream | null;
   ready: boolean;
   denied: boolean;
   hint: string;
   /** 前置摄像头镜像预览 */
   mirrored: boolean;
 }) {
-  const backdropRef = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    if (backdropRef.current) backdropRef.current.srcObject = stream;
-  }, [stream]);
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
       {ready ? (
-        <>
-          {/* 模糊垫底（同一流，放大+虚化；contain 主画面四周不再是大黑边） */}
-          <video
-            ref={backdropRef}
-            playsInline
-            muted
-            autoPlay
-            className="absolute inset-0 h-full w-full scale-125 object-cover opacity-60 blur-2xl"
-            style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
-            aria-hidden="true"
-          />
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            autoPlay
-            className="absolute inset-0 h-full w-full object-contain"
-            style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
-            aria-label="我的摄像头画面"
-          />
-        </>
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className="absolute inset-0 h-full w-full object-contain"
+          style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
+          aria-label="我的摄像头画面"
+        />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#111114]">
           <VideoOff className="h-9 w-9 text-white/30" strokeWidth={1.6} aria-hidden="true" />
           <p className="text-[13px] text-white/45">{denied ? '摄像头不可用，已为你隐藏画面' : hint}</p>
         </div>
       )}
-      {/* 自看水印（这是我的摄像头画面，与对方画面区分） */}
-      <p className="absolute bottom-[calc(env(safe-area-inset-bottom)+120px)] left-1/2 -translate-x-1/2 text-[12px] text-white/40">你</p>
+      {/* 自看水印（这是我的摄像头画面，与对方画面区分；置于 contain 视频下缘之下，不遮画面不遮控制） */}
+      <p className="absolute bottom-[324px] left-1/2 -translate-x-1/2 text-[12px] text-white/40">你</p>
     </div>
   );
 }
@@ -387,41 +374,32 @@ function TypingDots() {
   );
 }
 
-/** 视频通话页顶部信息（Task 24：小头像+名字一行（比语音通话小一号）+ 接通后时长 + AI 状态
- *  （正在听/正在思考…/正在说话，与语音通话同款 statusLine）） */
+/** 视频通话页顶部信息（Task 25：删除顶部小头像+名字——与语音通话顶部一致只留时长；
+ *  名字移至主画面头像下方（RemoteView showName）；互换后主画面=我方画面，名字回落到顶部显示；
+ *  接通后时长下方显示 AI 状态（正在听/正在思考…/正在说话，与语音通话同款 statusLine）） */
 function VideoTopBar({
-  avatar,
   name,
   phase,
   seconds,
   statusText,
-  shape,
+  showName,
   testId,
 }: {
-  avatar: string | null;
   name: string;
   phase: string;
   seconds: number;
   statusText: string | null;
-  shape: 'circle' | 'square';
+  /** 互换后主画面=我方画面（对方头像在小窗），名字回落到顶部显示 */
+  showName: boolean;
   testId: string;
 }) {
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[54px] z-10 flex flex-col items-center gap-1">
-      <div className="flex items-center gap-2">
-        {avatar ? (
-          <img
-            src={avatar}
-            alt=""
-            className={`h-8 w-8 shrink-0 object-cover shadow-md ring-1 ring-white/20 ${shape === 'square' ? 'rounded-[9px]' : 'rounded-full'}`}
-          />
-        ) : (
-          <DefaultAvatar size={32} shape={shape} className="h-8 w-8 shrink-0 shadow-md ring-1 ring-white/20" />
-        )}
-        <span className="max-w-[190px] truncate text-[15px] font-medium text-white/95 drop-shadow">{name}</span>
-      </div>
+    <div className="pointer-events-none absolute inset-x-0 top-[54px] z-10 flex flex-col items-center gap-1.5">
+      {showName && (
+        <span className="max-w-[220px] truncate text-[15px] font-medium text-white/95 drop-shadow">{name}</span>
+      )}
       {phase === 'active' && (
-        <span className="text-[12px] tabular-nums text-white/70 drop-shadow" data-testid={testId}>
+        <span className="text-[14px] tabular-nums text-white/85 drop-shadow" data-testid={testId}>
           {formatCallDuration(seconds)}
         </span>
       )}
@@ -540,7 +518,6 @@ function WxVideoCall(props: VideoCallScreenProps) {
         <>
           <LocalFullView
             videoRef={camera.videoRef}
-            stream={camera.stream}
             ready={camera.ready}
             denied={camera.denied}
             hint="正在等待对方接受视频邀请…"
@@ -559,7 +536,6 @@ function WxVideoCall(props: VideoCallScreenProps) {
         <>
           <LocalFullView
             videoRef={camera.videoRef}
-            stream={camera.stream}
             ready={camera.ready}
             denied={camera.denied}
             hint="摄像头已关"
@@ -579,8 +555,8 @@ function WxVideoCall(props: VideoCallScreenProps) {
         </>
       ) : (
         <>
-          {/* 微信皮肤：角色头像为正方形圆角（Task 23 用户指定）；Task 24 头像变小一档 */}
-          <RemoteView avatar={props.avatar} name={props.name} size={184} shape="square" />
+          {/* 微信皮肤：角色头像为正方形圆角（Task 23）；Task 25：头像 168+头像下方名字，纯黑背景无模糊 */}
+          <RemoteView avatar={props.avatar} name={props.name} size={168} shape="square" showName lift={72} />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -597,14 +573,13 @@ function WxVideoCall(props: VideoCallScreenProps) {
         </>
       )}
 
-      {/* 顶部信息（小头像+名字+时长+状态） + 小窗/翻转/文字聊天入口 */}
+      {/* 顶部信息（Task 25：时长+状态居中，名字只在互换后回落显示） + 小窗/翻转/文字聊天入口 */}
       <VideoTopBar
-        avatar={props.avatar}
         name={props.name}
         phase={phase}
         seconds={seconds}
         statusText={statusText}
-        shape="square"
+        showName={rt.swapped && phase === 'active'}
         testId="wx-video-duration"
       />
       {(phase === 'active' || dialing) && (
@@ -640,8 +615,8 @@ function WxVideoCall(props: VideoCallScreenProps) {
       {/* 来电页（Task 23 对照微信截图：暗底 + 圆形头像 + 呼吸点 + 邀请你视频通话 +
           消息回复/语音接听 + 红拒绝/绿视频接听；底部按钮一直显示） */}
       {incoming && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#0e0e11]/92 backdrop-blur-sm">
-          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 pb-6">
+        <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#0e0e11]">
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 pb-6">
             <div className="relative mt-10">
               <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />
               {props.avatar ? (
@@ -650,6 +625,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
                 <DefaultAvatar size={112} shape="circle" className="shadow-2xl ring-1 ring-white/15" />
               )}
             </div>
+            <p className="max-w-[240px] truncate text-[16px] font-medium text-white/95">{props.name}</p>
             <TypingDots />
             <p className="text-[15px] text-white/60" data-testid="wx-video-status">邀请你视频通话</p>
           </div>
@@ -731,7 +707,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
             )
           ) : (
             <p className="text-center text-[15px] text-white/70" data-testid="wx-video-status-dialing">
-              等待对方接受邀请
+              正在等待 {props.name} 接受邀请…
             </p>
           )}
           {phase === 'active' && (
@@ -797,7 +773,6 @@ function QqVideoCall(props: VideoCallScreenProps) {
         <>
           <LocalFullView
             videoRef={camera.videoRef}
-            stream={camera.stream}
             ready={camera.ready}
             denied={camera.denied}
             hint="正在呼叫…"
@@ -816,7 +791,6 @@ function QqVideoCall(props: VideoCallScreenProps) {
         <>
           <LocalFullView
             videoRef={camera.videoRef}
-            stream={camera.stream}
             ready={camera.ready}
             denied={camera.denied}
             hint="摄像头已关"
@@ -836,8 +810,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
         </>
       ) : (
         <>
-          {/* Task 24：主画面头像变小一档 */}
-          <RemoteView avatar={props.avatar} name={props.name} size={184} />
+          {/* Task 25：主画面头像 168 + 头像下方名字（小字），纯黑背景无模糊 */}
+          <RemoteView avatar={props.avatar} name={props.name} size={168} showName lift={72} />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -855,12 +829,11 @@ function QqVideoCall(props: VideoCallScreenProps) {
       )}
 
       <VideoTopBar
-        avatar={props.avatar}
         name={props.name}
         phase={phase}
         seconds={seconds}
         statusText={statusText}
-        shape="circle"
+        showName={rt.swapped && phase === 'active'}
         testId="qq-video-duration"
       />
       {/* 右上角（时长文字旁）：翻转摄像头（Task 24 从底部小按钮行移上来，与微信同款）+ 发消息；拨号中也可翻转 */}
@@ -896,7 +869,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
       {/* 来电页（Task 23 对照 QQ 截图：黑底圆形大头像 + 呼吸点 + 邀请你视频通话..
           + 翻转/摄像头预开 + 消息回复 + 红拒绝/绿视频接听；底部按钮一直显示） */}
       {incoming && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#050506]/94">
+        <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#050506]">
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8">
             <div className="relative mt-8">
               <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />
@@ -906,6 +879,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
                 <DefaultAvatar size={132} shape="circle" className="shadow-2xl ring-1 ring-white/15" />
               )}
             </div>
+            <p className="max-w-[240px] truncate text-[16px] font-medium text-white/95">{props.name}</p>
             <TypingDots />
             <p className="text-[15px] text-white/60" data-testid="qq-video-status">邀请你视频通话..</p>
           </div>
@@ -982,7 +956,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
             )
           ) : (
             <p className="text-center text-[15px] text-white/70" data-testid="qq-video-status-dialing">
-              正在呼叫…
+              正在呼叫 {props.name}…
             </p>
           )}
           {/* 四按钮平行（麦克风/摄像头/挂断/扬声器）；互换画面按钮已删（点小窗互换），翻转移右上角 */}
@@ -1041,7 +1015,6 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
       {dialing ? (
         <LocalFullView
           videoRef={camera.videoRef}
-          stream={camera.stream}
           ready={camera.ready}
           denied={camera.denied}
           hint="正在呼叫…"
@@ -1051,7 +1024,6 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
         <>
           <LocalFullView
             videoRef={camera.videoRef}
-            stream={camera.stream}
             ready={camera.ready}
             denied={camera.denied}
             hint="摄像头已关"
@@ -1071,7 +1043,7 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
         </>
       ) : (
         <>
-          <RemoteView avatar={props.avatar} name={props.name} size={184} />
+          <RemoteView avatar={props.avatar} name={props.name} size={168} showName lift={72} />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -1089,18 +1061,17 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
       )}
 
       <VideoTopBar
-        avatar={props.avatar}
         name={props.name}
         phase={phase}
         seconds={seconds}
         statusText={phase === 'active' ? statusLine('active', call.status, 'wx') : null}
-        shape="circle"
+        showName={rt.swapped && phase === 'active'}
         testId="phone-video-duration"
       />
       {phase === 'active' && <VideoPipIcon onClick={props.onMinimize} />}
 
       {incoming && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center bg-black/55 backdrop-blur-md">
+        <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#1c1c1e]">
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8">
             {props.avatar ? (
               <img src={props.avatar} alt="" className="h-[124px] w-[124px] rounded-full object-cover shadow-2xl ring-1 ring-white/20" />
@@ -1169,7 +1140,7 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
       )}
       {dialing && (
         <p className="absolute inset-x-0 bottom-[190px] z-10 text-center text-[15px] text-white/70" data-testid="phone-video-status-dialing">
-          正在呼叫…
+          正在呼叫 {props.name}…
         </p>
       )}
     </div>
