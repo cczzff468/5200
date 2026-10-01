@@ -12732,3 +12732,27 @@ Work Log:
 Stage Summary:
 - 形象锁定区完成紫色主题视觉升级：紫环胶囊+对勾徽标选择器、淡紫洗染卡片、紫渐变柔光相框（右下对勾徽标）、紫底效果提示条、紫色 PenLine/Info 点缀、紫 focus 态输入域——与该区 TONE_PURPLE SectionLabel 形成完整主题闭环；按钮仍守浅灰体系（与四页灰化基调一致），全部为样式层改动、kv 数据层与三端聊天共用逻辑零改动
 - 产出文件：src/components/apps/settings.tsx（唯一改动文件）
+
+---
+Task ID: 10
+Agent: Z.ai Code (main)
+Task: 图像生成界面「形象锁定」区域再美化——简约风（收敛上轮紫色装饰）
+
+Work Log:
+- 方向：Task 9 的紫色主题（渐变洗染/柔光晕/彩色投影/紫提示条/统计徽标）用户观感偏重，本轮按「简约」收敛视觉噪音，回归干净克制的 iOS 极简风；全部为样式层改动，数据与交互逻辑零改动
+- settings.tsx FaceLockSection 逐项简化：
+  · 区块标题：移除右侧绿色「已锁定 N 位角色」统计徽标 + lockedCount 计算（信息与角色胶囊绿点/卡片状态徽标重复）
+  · 角色胶囊：选中态紫环+紫色投影 → 中性灰环 ring-[#8E8E93]/50 + 普通 shadow-md（Task 7 基线）；绿底对勾圆徽 → 简单绿点徽标（h-3.5 border-card）
+  · 主卡片：移除顶部 h-24 淡紫渐变洗染层与 relative/overflow-hidden 包裹，回归朴素 GrayCard
+  · 参考图预览：移除外圈紫雾 blur-xl 柔光、1.5px 紫渐变描边框、彩色投影、左上「生图参考图」黑雾标签、右下绿色对勾徽——收敛为一个干净细描边装裱（rounded-[18px] + shadow-sm + ring-black/[0.06]）
+  · 空态占位：紫系虚线+白圆底紫图标 → 中性灰虚线（border-black/10）+ 极浅灰底（bg-black/[0.02]）+ 裸 ScanFace 灰图标（去掉白圆片）
+  · 图下说明回归一行居中灰字（移除紫底提示条 + Info 图标，文案不变）
+  · 按钮：上传图标去除紫色点缀回归中性色，浅灰体系不变
+  · 外貌描述：标题移除紫色 PenLine 图标改纯文本；Textarea 移除紫色 focus 覆盖（focus-visible:border/ring-[#AF52FF]! 两条）回归默认灰 focus；底部说明移除灰底圆角条回归纯文本
+  · 保留不动：三态状态徽标（已锁脸 ScanFace 绿/仅外貌描述 PenLine 琥珀/未设置灰点——功能性图标保留）、字数计数、副标题「按角色独立保存」、空角色引导卡（紫 tint 圆底改中性灰）
+- 遗留坑位确认（第 3 次）：MultiEdit 顺序应用非原子——「兜」（U+515C）两次被误写为「兑」（U+5151）导致 old_str 不匹配，其余编辑照常落地；后续改用避开该字符的锚点串（只替换 className 行、保留文本节点）完成剩余 4 处
+- 验证：bun run lint ✓（Info/PenLine import 仍有引用无残留告警）；bunx tsc --noEmit ✓；rg 确认 FaceLockSection 内 #AF52FF 字面量清零（仅剩 TONE_PURPLE 常量供 SectionLabel 小图标用）；agent-browser E2E（1280×940 合成事件全链路：解锁→设置→图像生成→滚动到形象锁定区）：空态截图（中性虚线占位+灰图标+一行说明+灰上传钮+纯文本标签）✓；canvas 生成测试图→DataTransfer→hidden input change 注入上传 → 已锁脸态截图（干净细描边相框+绿点徽标+已锁脸绿徽标+替换/删除灰钮+toast「已更新参考图」）✓；console/page errors 干净；dev.log 无异常
+
+Stage Summary:
+- 形象锁定区完成「简约化」再美化：紫系装饰全部收敛为中性灰白系——干净细描边相框、裸虚线空态、纯文本标签与说明、中性胶囊选中环与绿点徽标；视觉信息密度显著降低，仅保留功能性彩色（三态徽标/绿点/TONE_PURPLE 区块小图标）；数据层与三端聊天共用逻辑零改动
+- 产出文件：src/components/apps/settings.tsx（唯一改动文件）
