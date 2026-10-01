@@ -29,6 +29,7 @@ import {
   MessageSquare,
   Mic,
   MicOff,
+  Phone,
   PhoneOff,
   PictureInPicture2,
   RefreshCcw,
@@ -100,6 +101,10 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
   const [camArmed, setCamArmed] = useState(direction === 'out');
   const [facing, setFacing] = useState<CameraFacing>('user');
   const [swapped, setSwapped] = useState(false);
+  /** 用户摄像头实际分辨率（Task 23）：PIP 小窗高度随视频宽高比自适应，避免 object-cover 过度裁剪显得「太放大」 */
+  const [camSize, setCamSize] = useState<{ w: number; h: number } | null>(null);
+  const onVideoMeta = (w: number, h: number) =>
+    setCamSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
 
   const call = useChatCall({
     app: variant,
@@ -126,12 +131,24 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
     setCamArmed(true);
     call.accept();
   };
+  /** 来电页「语音接听」（对照微信截图）：关摄像头只通声音，走正常接听（识图同步停） */
+  const acceptAsVoice = () => {
+    camOnRef.current = false;
+    setCamOn(false);
+    latestVisionRef.current = '';
+    setCamArmed(true);
+    call.accept();
+  };
   const toggleCam = () => {
-    setCamOn((on) => {
-      camOnRef.current = !on;
-      if (on) latestVisionRef.current = ''; // 关摄像头即刻清描述：AI 下一轮起不再注入【用户画面】
-      return !on;
-    });
+    const next = !camOnRef.current;
+    camOnRef.current = next;
+    setCamOn(next);
+    if (next) {
+      // 开摄像头（含来电响铃阶段预开，对照 QQ 截图「摄像头已开」）：允许拉流（首次触发权限申请）
+      setCamArmed(true);
+    } else {
+      latestVisionRef.current = ''; // 关摄像头即刻清描述：AI 下一轮起不再注入【用户画面】
+    }
   };
   const flipCam = () => setFacing((f) => (f === 'user' ? 'environment' : 'user'));
   const swapViews = () => setSwapped((s) => !s);
@@ -167,6 +184,7 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
   return {
     call,
     accept,
+    acceptAsVoice,
     toggleCam,
     flipCam,
     swapViews,
@@ -175,13 +193,26 @@ function useVideoCallRuntime(props: VideoCallScreenProps) {
     camera,
     facing,
     visionCfgReady,
+    camSize,
+    onVideoMeta,
   };
 }
 
 type Runtime = ReturnType<typeof useVideoCallRuntime>;
 
-/** 对方（AI 角色）动态画面：头像 Ken Burns 缓慢缩放 + 深色渐晕背景（AI 无真人视频，动态头像模拟） */
-function RemoteView({ avatar, name, size }: { avatar: string | null; name: string; size: number }) {
+/** 对方（AI 角色）动态画面：头像 Ken Burns 缓慢缩放 + 深色渐晕背景（AI 无真人视频，动态头像模拟）。
+ *  Task 23：微信皮肤头像为正方形圆角（对照微信真实行为），QQ/电话保持圆形 */
+function RemoteView({
+  avatar,
+  name,
+  size,
+  shape = 'circle',
+}: {
+  avatar: string | null;
+  name: string;
+  size: number;
+  shape?: 'circle' | 'square';
+}) {
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
       {/* 模糊放大的头像背景（角色画面氛围底） */}
@@ -199,12 +230,12 @@ function RemoteView({ avatar, name, size }: { avatar: string | null; name: strin
           animate={{ scale: [1, 1.07, 1] }}
           transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
           className="overflow-hidden shadow-2xl ring-1 ring-white/10"
-          style={{ width: size, height: size, borderRadius: size / 2 }}
+          style={{ width: size, height: size, borderRadius: shape === 'square' ? Math.round(size * 0.12) : size / 2 }}
         >
           {avatar ? (
             <img src={avatar} alt={`${name}的画面`} className="h-full w-full object-cover" />
           ) : (
-            <DefaultAvatar size={size} shape="circle" className="h-full w-full" />
+            <DefaultAvatar size={size} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
           )}
         </motion.div>
       </div>
@@ -212,24 +243,36 @@ function RemoteView({ avatar, name, size }: { avatar: string | null; name: strin
   );
 }
 
-/** 我方画面（用户摄像头全屏，拨号中主画面用；无流时黑底+提示；基础量拆开传防 ref 容器对象渲染期访问） */
+/** 我方画面（用户摄像头全屏，拨号中主画面用；无流时黑底+提示；基础量拆开传防 ref 容器对象渲染期访问）。
+ *  Task 23：前置摄像头镜像预览（照镜子习惯，「画面是反的」修复；后置不镜像） */
 function LocalFullView({
   videoRef,
   ready,
   denied,
   name,
   hint,
+  mirrored,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   ready: boolean;
   denied: boolean;
   name: string;
   hint: string;
+  /** 前置摄像头镜像预览 */
+  mirrored: boolean;
 }) {
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
       {ready ? (
-        <video ref={videoRef} playsInline muted autoPlay className="h-full w-full object-cover" aria-label="我的摄像头画面" />
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className="h-full w-full object-cover"
+          style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
+          aria-label="我的摄像头画面"
+        />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#111114]">
           <VideoOff className="h-9 w-9 text-white/30" strokeWidth={1.6} aria-hidden="true" />
@@ -242,7 +285,10 @@ function LocalFullView({
   );
 }
 
-/** 我方小窗（用户摄像头 PIP；关/拒绝时占位；基础量拆开传防 ref 容器对象渲染期访问） */
+/** 我方小窗（用户摄像头 PIP；关/拒绝时占位；基础量拆开传防 ref 容器对象渲染期访问）。
+ *  Task 23：前置摄像头镜像预览（后置不镜像）+ 高度随视频实际宽高比自适应——
+ *  固定高在宽高比不匹配时 object-cover 会重度裁剪，画面显得「太放大」；
+ *  点击小窗与对方画面互换（Task 23：互换画面按钮已删，点右上角小窗互换） */
 function LocalPipView({
   videoRef,
   live,
@@ -250,6 +296,9 @@ function LocalPipView({
   className,
   testId,
   onClick,
+  mirrored,
+  height,
+  onMeta,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   live: boolean;
@@ -257,6 +306,12 @@ function LocalPipView({
   className: string;
   testId: string;
   onClick?: () => void;
+  /** 前置摄像头镜像预览 */
+  mirrored: boolean;
+  /** 自适应高度（px）；不传则用 className 里的默认高度 */
+  height?: number;
+  /** 视频实际分辨率上报（供高度自适应计算） */
+  onMeta?: (w: number, h: number) => void;
 }) {
   return (
     <button
@@ -264,10 +319,22 @@ function LocalPipView({
       aria-label={live ? '我的画面，点击与对方画面互换' : '我的画面（摄像头已关）'}
       data-testid={testId}
       onClick={onClick}
+      style={height ? { height } : undefined}
       className={`absolute z-10 overflow-hidden ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)] transition-transform active:scale-95 ${className}`}
     >
       {live ? (
-        <video ref={videoRef} playsInline muted autoPlay className="h-full w-full object-cover" />
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className="h-full w-full object-cover"
+          style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
+          onLoadedMetadata={(e) => {
+            const el = e.currentTarget;
+            if (el.videoWidth > 0 && el.videoHeight > 0) onMeta?.(el.videoWidth, el.videoHeight);
+          }}
+        />
       ) : (
         <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[#1b1b1f]">
           <VideoOff className="h-4 w-4 text-white/35" strokeWidth={1.8} aria-hidden="true" />
@@ -275,6 +342,28 @@ function LocalPipView({
         </span>
       )}
     </button>
+  );
+}
+
+/** PIP 高度自适应（Task 23）：按摄像头实际宽高比把小窗高度收敛到视频比例，过度裁剪会显得太放大 */
+function pipAdaptiveHeight(size: { w: number; h: number } | null, width: number, fallback: number): number {
+  if (!size || size.w <= 0 || size.h <= 0) return fallback;
+  return Math.max(100, Math.min(152, Math.round((width * size.h) / size.w)));
+}
+
+/** 来电打字点动画（对照微信/QQ 来电截图：头像下的呼吸点） */
+function TypingDots() {
+  return (
+    <div className="flex items-center gap-1.5" aria-hidden="true" data-testid="video-typing-dots">
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          className="h-1.5 w-1.5 rounded-full bg-white/80"
+          animate={{ opacity: [0.25, 1, 0.25], y: [0, -2, 0] }}
+          transition={{ duration: 1.15, repeat: Infinity, delay: i * 0.18, ease: 'easeInOut' }}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -352,17 +441,6 @@ function WxVideoCall(props: VideoCallScreenProps) {
       {rt.camOn ? <Video className="h-6 w-6" strokeWidth={1.9} /> : <VideoOff className="h-6 w-6" strokeWidth={1.9} />}
     </button>
   );
-  const flipBtn = (
-    <button
-      type="button"
-      onClick={rt.flipCam}
-      aria-label="翻转摄像头（前后置切换）"
-      data-testid="wx-video-flip"
-      className={`${wxRound} bg-white/10 text-white`}
-    >
-      <SwitchCamera className="h-6 w-6" strokeWidth={1.8} />
-    </button>
-  );
   const micBtn = (
     <button
       type="button"
@@ -403,10 +481,24 @@ function WxVideoCall(props: VideoCallScreenProps) {
     <div className="relative h-full w-full overflow-hidden" data-testid="wx-video-screen">
       {/* 画面层：拨号中主画面=我方摄像头（对照微信真实行为）；来电/接通主画面=对方动态画面，小窗=我方 */}
       {dialing ? (
-        <LocalFullView videoRef={camera.videoRef} ready={camera.ready} denied={camera.denied} name={props.name} hint="正在等待对方接受视频邀请…" />
+        <LocalFullView
+          videoRef={camera.videoRef}
+          ready={camera.ready}
+          denied={camera.denied}
+          name={props.name}
+          hint="正在等待对方接受视频邀请…"
+          mirrored={rt.facing === 'user'}
+        />
       ) : rt.swapped ? (
         <>
-          <LocalFullView videoRef={camera.videoRef} ready={camera.ready} denied={camera.denied} name={props.name} hint="摄像头已关" />
+          <LocalFullView
+            videoRef={camera.videoRef}
+            ready={camera.ready}
+            denied={camera.denied}
+            name={props.name}
+            hint="摄像头已关"
+            mirrored={rt.facing === 'user'}
+          />
           {phase === 'active' && (
             <button
               type="button"
@@ -415,13 +507,14 @@ function WxVideoCall(props: VideoCallScreenProps) {
               data-testid="wx-video-remote-mini"
               className="absolute right-4 top-[112px] z-10 h-[128px] w-[92px] overflow-hidden rounded-[14px] ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
             >
-              <RemoteView avatar={props.avatar} name={props.name} size={128} />
+              <RemoteView avatar={props.avatar} name={props.name} size={128} shape="square" />
             </button>
           )}
         </>
       ) : (
         <>
-          <RemoteView avatar={props.avatar} name={props.name} size={Math.min(260, 236)} />
+          {/* 微信皮肤：角色头像为正方形圆角（Task 23 用户指定） */}
+          <RemoteView avatar={props.avatar} name={props.name} size={Math.min(260, 236)} shape="square" />
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -430,62 +523,122 @@ function WxVideoCall(props: VideoCallScreenProps) {
               className="right-4 top-[108px] h-[136px] w-[96px] rounded-[14px]"
               testId="wx-video-pip"
               onClick={rt.swapViews}
+              mirrored={rt.facing === 'user'}
+              height={pipAdaptiveHeight(rt.camSize, 96, 136)}
+              onMeta={rt.onVideoMeta}
             />
           )}
         </>
       )}
 
-      {/* 顶部信息 + 小窗/文字聊天入口 */}
+      {/* 顶部信息 + 小窗/翻转/文字聊天入口 */}
       <VideoTopBar name={props.name} phase={phase} seconds={seconds} testId="wx-video-duration" />
-      {phase === 'active' && (
+      {(phase === 'active' || dialing) && (
         <>
           <VideoPipIcon onClick={props.onMinimize} />
-          <button
-            type="button"
-            aria-label="发消息"
-            aria-pressed={textChatOpen}
-            data-testid="wx-video-textchat-btn"
-            onClick={toggleTextChat}
-            className="absolute right-5 top-[58px] z-20 flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
-          >
-            <MessageSquare className="h-5 w-5" strokeWidth={1.8} />
-          </button>
+          {/* 右上角（时长文字旁）：翻转摄像头（Task 23 从底部移上来）+ 发消息 */}
+          <div className="absolute right-5 top-[58px] z-20 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={rt.flipCam}
+              aria-label="翻转摄像头（前后置切换）"
+              data-testid="wx-video-flip"
+              className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
+            >
+              <SwitchCamera className="h-5 w-5" strokeWidth={1.8} />
+            </button>
+            {phase === 'active' && (
+              <button
+                type="button"
+                aria-label="发消息"
+                aria-pressed={textChatOpen}
+                data-testid="wx-video-textchat-btn"
+                onClick={toggleTextChat}
+                className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black/35 text-white/85 backdrop-blur-sm transition-colors active:opacity-60"
+              >
+                <MessageSquare className="h-5 w-5" strokeWidth={1.8} />
+              </button>
+            )}
+          </div>
         </>
       )}
 
-      {/* 来电页（对照截图 3：暗底 + 头像 + 邀请你视频通话 + 拒绝/视频接听） */}
+      {/* 来电页（Task 23 对照微信截图：暗底 + 圆形头像 + 呼吸点 + 邀请你视频通话 +
+          消息回复/语音接听 + 红拒绝/绿视频接听；底部按钮一直显示） */}
       {incoming && (
         <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#0e0e11]/92 backdrop-blur-sm">
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 pb-6">
+          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 pb-6">
             <div className="relative mt-10">
-              <span className="absolute inset-0 animate-ping rounded-[18px] bg-white/10" aria-hidden="true" />
+              <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />
               {props.avatar ? (
-                <img src={props.avatar} alt="" className="h-[104px] w-[104px] rounded-[18px] object-cover shadow-2xl ring-1 ring-white/15" />
+                <img src={props.avatar} alt="" className="h-[112px] w-[112px] rounded-full object-cover shadow-2xl ring-1 ring-white/15" />
               ) : (
-                <DefaultAvatar size={104} shape="square" className="rounded-[18px] shadow-2xl ring-1 ring-white/15" />
+                <DefaultAvatar size={112} shape="circle" className="shadow-2xl ring-1 ring-white/15" />
               )}
             </div>
-            <h2 className="mt-2 max-w-[280px] truncate text-[22px] font-medium text-white">{props.name}</h2>
-            <p className="text-[14px] text-white/60" data-testid="wx-video-status">邀请你视频通话</p>
+            <TypingDots />
+            <p className="text-[15px] text-white/60" data-testid="wx-video-status">邀请你视频通话</p>
           </div>
-          <div className="flex w-full items-start justify-between px-14 pb-[max(36px,env(safe-area-inset-bottom))]">
-            <div className="flex flex-col items-center gap-2">
-              <button type="button" onClick={call.reject} aria-label="拒绝" data-testid="wx-video-reject" className="flex h-[74px] w-[74px] items-center justify-center rounded-full bg-[#FA5151] text-white">
-                <PhoneOff className="h-8 w-8" strokeWidth={2} />
+          <div className="w-full px-12 pb-[max(34px,env(safe-area-inset-bottom))]">
+            {/* 消息回复 / 语音接听（对照微信截图；语音接听=关摄像头只通声音） */}
+            <div className="mb-9 flex items-start justify-around">
+              {props.onMessageReply && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    call.reject();
+                    props.onMessageReply?.();
+                  }}
+                  aria-label="消息回复"
+                  data-testid="wx-video-msg-reply"
+                  className="flex flex-col items-center gap-2 text-white/90 active:opacity-60"
+                >
+                  <MessageSquare className="h-8 w-8" strokeWidth={1.6} />
+                  <span className="text-[13px]">消息回复</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={rt.acceptAsVoice}
+                aria-label="语音接听（关闭摄像头）"
+                data-testid="wx-video-voice-accept"
+                className="flex flex-col items-center gap-2 text-white/90 active:opacity-60"
+              >
+                <Phone className="h-8 w-8" strokeWidth={1.6} />
+                <span className="text-[13px]">语音接听</span>
               </button>
-              <span className="text-[13px] text-white/85">拒绝</span>
             </div>
-            <div className="flex flex-col items-center gap-2">
-              <button type="button" onClick={rt.accept} aria-label="接听视频" data-testid="wx-video-accept" className="flex h-[74px] w-[74px] items-center justify-center rounded-full bg-[#07C160] text-white">
-                <Video className="h-8 w-8" strokeWidth={2} />
-              </button>
-              <span className="text-[13px] text-white/85">接听</span>
+            <div className="flex w-full items-start justify-between">
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={call.reject}
+                  aria-label="拒绝"
+                  data-testid="wx-video-reject"
+                  className="flex h-[74px] w-[74px] items-center justify-center rounded-full bg-[#FA5151] text-white active:opacity-80"
+                >
+                  <PhoneOff className="h-8 w-8" strokeWidth={2} />
+                </button>
+                <span className="text-[13px] text-white/85">拒绝</span>
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={rt.accept}
+                  aria-label="接听视频"
+                  data-testid="wx-video-accept"
+                  className="flex h-[74px] w-[74px] items-center justify-center rounded-full bg-[#07C160] text-white active:opacity-80"
+                >
+                  <Video className="h-8 w-8" strokeWidth={2} />
+                </button>
+                <span className="text-[13px] text-white/85">接听</span>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 接通后字幕 + 文字聊天条 + 底部控制 */}
+      {/* 接通后字幕 + 文字聊天条 + 底部控制（底部按钮一直显示：麦克风/扬声器/摄像头 + 挂断） */}
       {phase === 'active' && !textChatOpen && <VideoCaption variant="wx" call={call} />}
       {textChatOpen && phase === 'active' && (
         <div className="absolute inset-x-4 bottom-[196px] z-20">
@@ -501,11 +654,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
               <Ctl label={rt.camOn ? '摄像头已开' : '摄像头已关'}>{camBtn}</Ctl>
             </div>
           )}
-          <div className="flex items-center gap-14">
-            {phase === 'active' && <Ctl label="翻转">{flipBtn}</Ctl>}
-            {hangupBtn}
-            {phase === 'active' && <Ctl label="互换画面">{swapBtn(rt.swapViews, 'wx-video-swap')}</Ctl>}
-          </div>
+          {hangupBtn}
           {phase === 'active' && !muted && (
             <p className="text-[11px] text-white/40">免提自动对话 · 直接说话即可</p>
           )}
@@ -531,20 +680,6 @@ function Ctl({ label, children }: { label: string; children: React.ReactNode }) 
       {children}
       <span className="text-[12px] leading-none text-white/70">{label}</span>
     </div>
-  );
-}
-
-function swapBtn(onClick: () => void, testId: string) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label="互换大小窗画面"
-      data-testid={testId}
-      className="flex h-[60px] w-[60px] items-center justify-center rounded-full bg-white/10 text-white transition-colors active:opacity-70"
-    >
-      <RefreshCcw className="h-6 w-6" strokeWidth={1.8} />
-    </button>
   );
 }
 
@@ -576,10 +711,24 @@ function QqVideoCall(props: VideoCallScreenProps) {
     <div className="relative h-full w-full overflow-hidden bg-[#050506]" data-testid="qq-video-screen">
       {/* 画面层：主画面=对方；小窗（QQ 在左上，对照截图 5）=我方 */}
       {dialing ? (
-        <LocalFullView videoRef={camera.videoRef} ready={camera.ready} denied={camera.denied} name={props.name} hint="正在呼叫…" />
+        <LocalFullView
+          videoRef={camera.videoRef}
+          ready={camera.ready}
+          denied={camera.denied}
+          name={props.name}
+          hint="正在呼叫…"
+          mirrored={rt.facing === 'user'}
+        />
       ) : rt.swapped ? (
         <>
-          <LocalFullView videoRef={camera.videoRef} ready={camera.ready} denied={camera.denied} name={props.name} hint="摄像头已关" />
+          <LocalFullView
+            videoRef={camera.videoRef}
+            ready={camera.ready}
+            denied={camera.denied}
+            name={props.name}
+            hint="摄像头已关"
+            mirrored={rt.facing === 'user'}
+          />
           {phase === 'active' && (
             <button
               type="button"
@@ -603,6 +752,9 @@ function QqVideoCall(props: VideoCallScreenProps) {
               className="left-4 top-[100px] h-[132px] w-[92px] rounded-[14px]"
               testId="qq-video-pip"
               onClick={rt.swapViews}
+              mirrored={rt.facing === 'user'}
+              height={pipAdaptiveHeight(rt.camSize, 92, 132)}
+              onMeta={rt.onVideoMeta}
             />
           )}
         </>
@@ -625,10 +777,11 @@ function QqVideoCall(props: VideoCallScreenProps) {
         </>
       )}
 
-      {/* 来电页（对照截图 4：黑底圆形大头像 + 邀请你视频通话 + 消息回复 + 红拒绝/绿视频接听方钮） */}
+      {/* 来电页（Task 23 对照 QQ 截图：黑底圆形大头像 + 呼吸点 + 邀请你视频通话..
+          + 翻转/摄像头预开 + 消息回复 + 红拒绝/绿视频接听；底部按钮一直显示） */}
       {incoming && (
         <div className="absolute inset-0 z-10 flex flex-col items-center bg-[#050506]/94">
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8">
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8">
             <div className="relative mt-8">
               <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />
               {props.avatar ? (
@@ -637,10 +790,36 @@ function QqVideoCall(props: VideoCallScreenProps) {
                 <DefaultAvatar size={132} shape="circle" className="shadow-2xl ring-1 ring-white/15" />
               )}
             </div>
-            <h2 className="mt-3 max-w-[280px] truncate text-[24px] font-normal text-white">{props.name}</h2>
-            <p className="text-[15px] text-white/60" data-testid="qq-video-status">邀请你视频通话</p>
+            <TypingDots />
+            <p className="text-[15px] text-white/60" data-testid="qq-video-status">邀请你视频通话..</p>
           </div>
-          <div className="flex w-full flex-col px-10 pb-[max(40px,env(safe-area-inset-bottom))]">
+          <div className="flex w-full flex-col items-center px-10 pb-[max(40px,env(safe-area-inset-bottom))]">
+            {/* 响铃阶段预置摄像头（对照截图：翻转 / 摄像头已开——开=首次申请权限，接通即带上画面） */}
+            <div className="mb-8 flex items-start justify-center gap-12">
+              <Ctl label="翻转">
+                <button
+                  type="button"
+                  onClick={rt.flipCam}
+                  aria-label="翻转摄像头"
+                  data-testid="qq-video-flip"
+                  className={`${smallSquare} bg-white/10 text-white`}
+                >
+                  <SwitchCamera className="h-5 w-5" strokeWidth={1.8} />
+                </button>
+              </Ctl>
+              <Ctl label={rt.camOn ? '摄像头已开' : '摄像头已关'}>
+                <button
+                  type="button"
+                  onClick={rt.toggleCam}
+                  aria-label={rt.camOn ? '关闭摄像头' : '打开摄像头'}
+                  aria-pressed={rt.camOn}
+                  data-testid="qq-video-cam"
+                  className={`${smallSquare} ${rt.camOn ? 'bg-white/15 text-white' : 'bg-white/10 text-white/50'}`}
+                >
+                  {rt.camOn ? <Video className="h-5 w-5" strokeWidth={1.9} /> : <VideoOff className="h-5 w-5" strokeWidth={1.9} />}
+                </button>
+              </Ctl>
+            </div>
             {props.onMessageReply && (
               <button
                 type="button"
@@ -655,7 +834,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
                 <span className="text-[13px]">消息回复</span>
               </button>
             )}
-            <div className="flex items-center justify-between">
+            <div className="flex w-full items-center justify-between">
               <button type="button" onClick={call.reject} aria-label="拒绝" data-testid="qq-video-reject" className={`${qqSquare} bg-[#F5455C] text-white`}>
                 <PhoneOff className="h-8 w-8" strokeWidth={2} />
               </button>
@@ -667,14 +846,14 @@ function QqVideoCall(props: VideoCallScreenProps) {
         </div>
       )}
 
-      {/* 接通后：字幕 + 文字聊天条 + 控制区（QQ 时长在按钮上方，对照截图 5） */}
+      {/* 接通后：字幕 + 文字聊天条 + 控制区（QQ 时长在按钮上方，对照截图 5；底部按钮一直显示） */}
       {phase === 'active' && !textChatOpen && <VideoCaption variant="qq" call={call} />}
       {textChatOpen && phase === 'active' && (
         <div className="absolute inset-x-4 bottom-[210px] z-20">
           <InlineCallChat variant="qq" call={call} />
         </div>
       )}
-      {phase === 'active' && (
+      {(phase === 'active' || dialing) && (
         <div className="absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-5 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-6 pb-[max(28px,env(safe-area-inset-bottom))] pt-8">
           <div className="flex items-center gap-8">
             <button
@@ -690,19 +869,23 @@ function QqVideoCall(props: VideoCallScreenProps) {
             <button type="button" onClick={rt.flipCam} aria-label="翻转摄像头" data-testid="qq-video-flip" className={`${smallSquare} bg-white/10 text-white`}>
               <SwitchCamera className="h-5 w-5" strokeWidth={1.8} />
             </button>
-            <button
-              type="button"
-              onClick={rt.swapViews}
-              aria-label="互换大小窗画面"
-              data-testid="qq-video-swap"
-              className={`${smallSquare} bg-white/10 text-white`}
-            >
-              <RefreshCcw className="h-5 w-5" strokeWidth={1.8} />
-            </button>
+            {phase === 'active' && (
+              <button
+                type="button"
+                onClick={rt.swapViews}
+                aria-label="互换大小窗画面"
+                data-testid="qq-video-swap"
+                className={`${smallSquare} bg-white/10 text-white`}
+              >
+                <RefreshCcw className="h-5 w-5" strokeWidth={1.8} />
+              </button>
+            )}
           </div>
-          <div className="text-center text-[17px] tabular-nums text-white/85" data-testid="qq-video-duration-lower">
-            {formatCallDuration(seconds)}
-          </div>
+          {phase === 'active' && (
+            <div className="text-center text-[17px] tabular-nums text-white/85" data-testid="qq-video-duration-lower">
+              {formatCallDuration(seconds)}
+            </div>
+          )}
           <div className="flex w-full items-center justify-center gap-12">
             <button
               type="button"
@@ -754,10 +937,24 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
   return (
     <div className="relative h-full w-full overflow-hidden bg-gradient-to-b from-[#3c3c40] via-[#26262a] to-[#0c0c0e]" data-testid="phone-video-screen">
       {dialing ? (
-        <LocalFullView videoRef={camera.videoRef} ready={camera.ready} denied={camera.denied} name={props.name} hint="正在呼叫…" />
+        <LocalFullView
+          videoRef={camera.videoRef}
+          ready={camera.ready}
+          denied={camera.denied}
+          name={props.name}
+          hint="正在呼叫…"
+          mirrored={rt.facing === 'user'}
+        />
       ) : rt.swapped ? (
         <>
-          <LocalFullView videoRef={camera.videoRef} ready={camera.ready} denied={camera.denied} name={props.name} hint="摄像头已关" />
+          <LocalFullView
+            videoRef={camera.videoRef}
+            ready={camera.ready}
+            denied={camera.denied}
+            name={props.name}
+            hint="摄像头已关"
+            mirrored={rt.facing === 'user'}
+          />
           {phase === 'active' && (
             <button
               type="button"
@@ -781,6 +978,9 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
               className="right-4 top-[100px] h-[132px] w-[92px] rounded-[14px]"
               testId="phone-video-pip"
               onClick={rt.swapViews}
+              mirrored={rt.facing === 'user'}
+              height={pipAdaptiveHeight(rt.camSize, 92, 132)}
+              onMeta={rt.onVideoMeta}
             />
           )}
         </>

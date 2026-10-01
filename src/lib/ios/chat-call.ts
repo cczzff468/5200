@@ -401,6 +401,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const ringRef = useRef<RingTone | null>(null);
+  /** 来电响铃超时定时器（Task 23 修复）：accept 时必须清障——否则 AI 打来的电话即使用户接了，
+   *  引擎挂载 25s 后仍会强制造 finish('missed-in') 掊断进行中的通话（用户约 10s 接听 ≈ 通话 15s 就挂） */
+  const ringMissTimerRef = useRef<number | undefined>(undefined);
   /** #18 finishRef：生命周期 cleanup 调最新 finish 走完整收尾（页面关闭/PhoneShell 卸载时
    *  进行中通话也落卡片+续聊+记忆总结，不让通话静默消失） */
   const finishRef = useRef<(endReason: ChatCallEndReason, afterText?: string) => void>(() => {});
@@ -1312,6 +1315,11 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
   // ---------- 接听 / 拒绝 / 挂断 ----------
   const accept = useCallback(() => {
     if (endedRef.current || phaseRef.current !== 'incoming') return;
+    // Task 23：接听即撤销「25s 无人处理转未接」定时器——已接通的通话绝不能再被它掊断
+    if (ringMissTimerRef.current !== undefined) {
+      window.clearTimeout(ringMissTimerRef.current);
+      ringMissTimerRef.current = undefined;
+    }
     ringRef.current?.stop();
     playConnectBlip();
     setPhase('active');
@@ -1435,10 +1443,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       }, 1800 + Math.floor(Math.random() * 1400));
     } else {
       ring.start('in');
-      // 来电 25s 未处理：对方取消（生成「未接听」卡片）
+      // 来电 25s 未处理：对方取消（生成「未接听」卡片）；双保险：仅仍在响铃才收尾（已接/已拒/已挂不动），
+      // 且定时器句柄同步进 ref，accept() 时主动清障（Task 23 修复 AI 来电接通后 15~25s 被强挂）
       missTimer = window.setTimeout(() => {
-        if (!endedRef.current) finish('missed-in'); // 仍在响铃（未接未拒）→ 超时按「未接听」收尾；已接/已拒/已挂则不动
+        if (!endedRef.current && phaseRef.current === 'incoming') finish('missed-in');
       }, 25000);
+      ringMissTimerRef.current = missTimer;
     }
 
     return () => {

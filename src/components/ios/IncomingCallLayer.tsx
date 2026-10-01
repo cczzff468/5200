@@ -112,14 +112,16 @@ export default function IncomingCallLayer() {
     };
   }, [isPhone, call?.id]);
 
-  // 微信/QQ 来电：大窗 5 秒后自动缩成胶囊小窗（响铃继续，直至接听/忽略/超时）
+  // 微信/QQ 来电：大窗 5 秒后自动缩成胶囊小窗（响铃继续，直至接听/忽略/超时）；
+  // 视频邀请（Task 23）大窗常驻——「底部按钮一直显示」，直至接听/拒绝/超时（对照用户截图要求）
   useEffect(() => {
     if ((!isWx && !isQq) || call?.bannerStage !== 'big') return;
+    if (call.media === 'video') return;
     const timer = window.setTimeout(() => {
       useIncomingCall.getState().setStage('pill');
     }, 5000);
     return () => window.clearTimeout(timer);
-  }, [isWx, isQq, call?.id, call?.bannerStage]);
+  }, [isWx, isQq, call?.id, call?.bannerStage, call?.media]);
 
   // 微信/QQ 来电收尾兜底：页内引擎超时未接（missed-in）会关闭全局会话——
   // 会话消失（session=null）时若弹窗还挂着就同步清掉

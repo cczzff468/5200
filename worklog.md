@@ -13193,3 +13193,25 @@ Stage Summary:
 - 视频通话全功能落地：微信/QQ 双端双向视频通话（用户拨打+AI [视频通话] 主动来电+卡片回拨）、电话 App 用户发起视频（iOS 黑白灰皮肤）、复用语音通话同一引擎（状态机/接听决策/VAD 免提/字幕/文字条/挂断续聊/记忆提取+总结全同源，media 分叉措辞与场景）、AI 看见用户（摄像头帧→用户配置识图模型→【用户画面】注入每轮 turn）、AI 拒接/用户拒接后的解释文字走既有 followup 管线、通话卡片视频图标与「视频通话时长」文案、通话记录（电话 App）视频标识、摄像头/麦克风权限拒绝全降级不破坏功能
 - 产出：src/lib/ios/{chat-call,camera-capture,global-call,incoming-call,call-followup,db,memory}.ts(.tsx)、src/app/api/phone/{turn,followup}/route.ts、src/components/apps/{video-call-screen(新),voice-call-screen,wechat,qq,phone}.tsx、src/components/ios/{GlobalCallLayer,IncomingCallLayer}.tsx
 - 回归：语音通话引擎默认 media='voice' 全链路零行为变化（E2E 已验）；tsc 0 错、eslint 0 错
+
+---
+Task ID: 23
+Agent: Z.ai (main)
+Task: 视频通话优化修复——微信界面美化、来电页照截图重设计、摄像头镜像/放大修复、AI 来电 15 秒强挂修复
+
+Work Log:
+- 修复 AI 来电接通后被强制挂断（用户报告「AI 给我打视频通话，一到 15 秒就挂断」）：根因是 chat-call.ts 来电生命周期 effect 里 direction='in' 的 25s missTimer 在 accept() 时从不清除（闭包局部变量无法触达），AI 打来的电话（微信/QQ 弹窗接听或全屏接听）即使接通，引擎挂载 25s 后仍 finish('missed-in') 掐断进行中的通话（用户约 10s 接听 ≈ 通话 15s 就挂）；修复=新增 ringMissTimerRef 同步定时器句柄 + accept() 首行 clearTimeout + 定时器回调加 phaseRef==='incoming' 双保险守卫；语音 AI 来电同样受益
+- 摄像头「画面是相反的」修复：LocalFullView/LocalPipView 加 mirrored 参数，前置摄像头（facing==='user'）预览加 scaleX(-1) 镜像（照镜子习惯），后置不镜像；AI 识图抓帧仍为原始方向（对方视角正确）
+- 摄像头「聚焦太放大」修复：runtime 新增 camSize/onVideoMeta（video onLoadedMetadata 上报实际分辨率），LocalPipView 高度随视频宽高比自适应（pipAdaptiveHeight：宽固定、高 = width×h/w 夹在 [100,152]），消除 object-cover 在宽高比不匹配时的重度裁剪；三皮肤 PIP 均接入
+- 微信视频通话界面改版（用户指定）：①主画面/小窗角色头像改正方形圆角（RemoteView 加 shape 参数，wx=square 圆角 12%，qq/phone 保持圆形）；②底部「互换画面」按钮删除（swapBtn 助手移除），点击右上角 PIP 小窗互换（原有 onClick 已支持，remote-mini 点回同语义）；③「翻转摄像头」从底部移到右上角时长文字旁（与发消息按钮组成右上角按钮组，拨号中也可见）；④底部控制=麦克风/扬声器/摄像头三按钮（带标签）+ 红色挂断居中，常显
+- 微信视频来电页照截图重设计：暗底模糊背景 + 圆形头像 + 呼吸点动画（新 TypingDots，framer-motion 三点呼吸）+「邀请你视频通话」+ 消息回复/语音接听行（语音接听=新 runtime.acceptAsVoice，关摄像头只通声音）+ 红拒绝/绿视频接听；移除原姓名大标题（顶部栏已有名字）
+- QQ 视频来电页照截图重设计：圆形头像 + 呼吸点 +「邀请你视频通话..」+ 响铃阶段预置摄像头行（翻转/摄像头已开——toggleCam 重构为开=同时 setCamArmed(true)，响铃中开摄像头即申请权限，接通即带画面）+ 消息回复 + 红拒绝/绿视频接听；QQ 底部控制拨号中也显示（底部按钮一直显示）
+- 来电弹窗大窗常驻：IncomingCallLayer 大窗 5s→胶囊定时器对 media==='video' 跳过（视频邀请的接听/拒绝按钮一直显示，直至处理）；语音来电行为不变
+- GlobalCallLayer 给 wx/qq 视频通话传 onMessageReply（拒接来电并经 navigateToChatSession 跳回微信/QQ 聊天会话；电话皮肤不传）
+- E2E（agent-browser）：①微信拨出视频→AI 接听→接通界面（右上翻转+发消息、PIP 右上、正方圆角头像、底部三按钮+挂断）→点 PIP 互换（主画面/小窗互换 ✓ 再点换回）→挂断→「视频通话时长 01:46 📹」卡片+AI 续聊 ✓；②AI 主动视频来电：弹窗大窗常驻（7s 后未缩胶囊）→点本体展开全屏来电页（呼吸点+消息回复/语音接听+拒绝/接听，与截图一致）→不接 25s 转「未接听」卡片+AI 解释文字 ✓；③核心修复验证：MutationObserver 自动接听 AI 视频来电→通话持续 1:56（远超原 25s 强挂窗口）→挂断→「视频通话时长 01:56」卡片 ✓；④QQ 回归：拨出→接通（左上 PIP/小按钮行/大按钮行）→00:45 挂断→蓝色视频卡片+续聊 ✓；console 无错误、/api/phone/turn|followup|memory/extract 全 200
+- 备注：E2E 中多次「[视频通话：…]」白色气泡为 AI 模仿卡片文案的普通文字（非真实来电），真实来电触发以弹窗出现为准；headless 无摄像头全程降级占位不影响 UI 验证
+
+Stage Summary:
+- 视频通话四类问题全部修复：①AI 来电接通后 15-25s 被强挂（missTimer 接听不清除）→ 已修，实测通话 1:56 稳定；②摄像头镜像（前置预览 scaleX(-1)）与 PIP 过度放大（高度随视频宽高比自适应）；③微信视频通话界面按用户要求改版（正方圆角头像/删互换按钮/点小窗互换/翻转移右上/底部常显）；④微信+QQ 视频来电页照截图重设计（呼吸点/消息回复/语音接听/QQ 预开摄像头/大窗常驻）
+- 产出：src/lib/ios/chat-call.ts、src/components/apps/video-call-screen.tsx、src/components/ios/{IncomingCallLayer,GlobalCallLayer}.tsx；语音通话引擎/卡片/记忆全链路零行为变化（missTimer 修复对语音 AI 来电同样生效）
+- 回归：tsc 0 错、eslint 0 错、微信/QQ 视频通话 E2E 全通过、console 无错误

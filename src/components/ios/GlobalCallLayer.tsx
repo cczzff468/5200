@@ -111,6 +111,17 @@ export default function GlobalCallLayer() {
             multiApp={session.multiApp}
             onFollowup={session.onFollowup}
             onMinimize={() => useGlobalCall.getState().minimize()}
+            // 消息回复（Task 23 视频来电页新增，对照微信截图）：拒接来电并跳回微信/QQ 聊天会话
+            // （灵动岛通知同款导航总线：未打开时挂载后自动进会话，已打开时事件驱动立即打开）
+            onMessageReply={
+              variant === 'phone'
+                ? undefined
+                : () => {
+                    const contactId = session.contact?.id;
+                    if (contactId) navigateToChatSession(variant === 'qq' ? 'qq' : 'wechat', contactId);
+                    else useUI.getState().switchToApp(variant === 'qq' ? 'qq' : 'wechat');
+                  }
+            }
             onEnd={(r) => {
               const s = useGlobalCall.getState().session;
               try {
