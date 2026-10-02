@@ -14243,3 +14243,31 @@ Stage Summary:
 - 多账号流程定型：小号唯一创建入口=联系人 App「小号」tab；微信/QQ/信息/电话的切换账号界面只负责「登录+切换」（登录过的小号再切换免登录）；匿名号码（无人设档案）创建入口保留在设置/AnonSwitchSheet
 - 删除语义：从「使用中拒删」改为「删除即生效」——联系人 App 删除小号 → 注册表/账号数据清理 + 正在使用该账号的 App 自动切回大号（事件驱动重读，不刷新网页；大号登录态保留则直接进入大号，无登录态则回登录墙）
 - 改动文件：src/lib/ios/accounts.ts、src/lib/ios/contacts-store.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/settings.tsx、src/components/apps/contacts.tsx、src/components/apps/phone.tsx、src/components/ios/AnonSwitchSheet.tsx
+
+---
+Task ID: 40-s
+Agent: Z.ai Code（主会话）
+Task: Task 40 用户反馈四项——①匿名号只属于电话/信息（不可登录微信QQ，微信/QQ切换列表过滤）②微信设置页「切换账号」改独立卡片（对照用户截图：设置列表外、退出登录上方、居中黑字）③QQ切换账号名字问题修复④切换账号页显示昵称（与登录后名字同口径）
+
+Work Log:
+- 根因定位（③④同源）：切换账号页显示注册表名（联系人名字），而 QQ/微信登录后显示 displayNameOf（备注>昵称>名字）。小号设了昵称后两边名字对不上（实测：切换页「飞飞」vs QQ内「小一」）——用户认不出账号对应关系，切完以为「还是最开始登录的那个小号」。切换链路本身经双小号 E2E 实测无 bug（点云云→登录墙 slot=云云→登录→QQ显示小二、会话落 --id2 键、往返免登录全对）
+- ①匿名号收敛（wechat.tsx/qq.tsx）：WxAccountSwitchPage 与 SecurityPage 的账号列表 state 初始+事件订阅刷新均 filter(kind!=='anon')；微信/QQ 根组件恢复 effect 开头加自愈——getActiveAccountFor(app).kind==='anon' → switchAccountFor(app, MAIN_ACCOUNT_ID) 后 return（事件驱动 accReloadKey 重跑，历史遗留匿名号槽位开机自动切回大号）；AnonSwitchSheet（电话/信息）与设置页「新建匿名号码」入口保留
+- ②微信设置页（wechat.tsx WxSettingsPage）：「切换账号」从 rows 列表移出，改为独立白卡（mt-4 + py-3 + 居中 text-[16px] 黑字，data-testid=wx-account-entry 保留），位置在「退出登录」卡上方（间隔 mt-2.5），完全对照用户截图
+- ③④显示名同口径：
+  - wechat.tsx WxAccountSwitchPage：新增 profiles state（listContacts）+ profileOf(acc)（altOf/ownerContactId 匹配）；账号卡名 = 档案 displayNameOf || 注册表名；大号行 = 机主联系人 displayNameOf || mainOwner.name || '机主'
+  - qq.tsx SecurityPage：同样 profiles（listContactsFor('qq')）+ accNameOf 重写为档案展示名优先
+  - 登录墙槽位提示（wx-login-slot/qq-login-slot）：新增 slotNameShown state，异步读档案 displayNameOf，显示「当前账号：小一（5276387）」与登录后一致
+  - contacts-store.ts loginAltSlot：slotName（错误文案用）改为 profile 查出后的 displayNameOf(profile) || slot.name（调整查询顺序，profile 无资料时回退注册表名报错）
+- 验证：bunx tsc --noEmit 全仓 0 错误；bun run lint 全绿（仅 qq/wechat>500KB BABEL 性能提示）；agent-browser E2E 全过——
+  ①双小号（飞飞=昵称小一/云云=昵称小二）+1 匿名号场景：QQ 切换列表显示 陈大大/小一/小二（昵称口径）、匿名号不出现 ✓；微信切换列表同样只有 陈大大/小一/小二、无匿名号 ✓
+  ②QQ 双小号切换：点小一 → 免登录直进、QQ 顶部名字=小一（与切换页一致）；再进切回小二 → 直进、名字=小二；act 槽位 id 全程正确 ✓
+  ③微信设置页：「切换账号」独立卡片 y=468 < 退出登录 y=526、文字居中、不在设置列表内 ✓
+  ④微信切换页：绿点/卡片/创建提示正常 ✓
+  ⑤全程 __e2eMarker 存活（无网页刷新）✓
+- 测试数据清理（ios-phone-db/fonts + localStorage）、浏览器关闭、dev.log 无错误
+
+Stage Summary:
+- 名字口径统一：联系人 App 档案（注册表名/昵称）→ 切换账号页 → 登录墙槽位提示 → App 内显示 全链路同一 displayNameOf（备注>昵称>名字）口径，用户在任何一处看到的账号名完全一致
+- 匿名号边界收紧：匿名号只存在于电话/信息（AnonSwitchSheet），微信/QQ 列表彻底排除 + 历史遗留槽位开机自愈切回大号
+- 微信设置页「切换账号」独立卡片化（对照用户截图）
+- 改动文件：src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/ios/contacts-store.ts

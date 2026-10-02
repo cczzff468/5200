@@ -1552,6 +1552,8 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
   // 小号/匿名号槽位（Task 40 修正）：登录墙绑定当前槽位——预填该账号档案的登录账号（用户只需输密码），
   // 避免在 A 小号的登录墙里误登 B 的账号密码导致登录态串槽（切号页显示错账号/再切回要求重登）
   const [slotIdShown, setSlotIdShown] = useState('');
+  // 槽位显示名（Task 40-S）：与登录后 QQ 内的名字同口径（档案展示名，昵称优先）
+  const [slotNameShown, setSlotNameShown] = useState('');
   useEffect(() => {
     if (!slot) return;
     let alive = true;
@@ -1561,6 +1563,7 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
       const profile = all.find(
         (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
       );
+      if (profile && displayNameOf(profile).trim()) setSlotNameShown(displayNameOf(profile).trim());
       const id = profile?.qqId?.trim() || profile?.phone?.trim() || profile?.wechatId?.trim() || '';
       if (alive && id) {
         setSlotIdShown(id);
@@ -1676,7 +1679,7 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
         {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正） */}
         {slot && (
           <p data-testid="qq-login-slot" className="mt-2.5 text-center text-[13.5px] leading-relaxed text-black/45 dark:text-white/45">
-            当前账号：{slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
+            当前账号：{slotNameShown || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
             {slotIdShown ? `（${slotIdShown}）` : ''}
           </p>
         )}
@@ -12869,15 +12872,15 @@ function SecurityPage({
   onBack: () => void;
   onToast: (m: string) => void;
 }) {
-  // 多账号 v2（Task 40-2b）：账号管理区改读注册表（大号 + 小号/匿名号）。
+  // 多账号 v2（Task 40-2b）：账号管理区改读注册表（大号 + 小号；匿名号只属于电话/信息，不进 QQ）。
   // 切换账号不再整页刷新（switchAccountFor 事件驱动）→ 账号快照入组件 state 并订阅事件刷新（当前行蓝勾实时移动）
-  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts().filter((a) => a.kind !== 'anon'));
   const [activeId, setActiveId] = useState<string>(() => getActiveAccountIdFor('qq'));
   useEffect(() => {
     const refresh = (e: Event) => {
       const detail = (e as CustomEvent<{ app?: string }>).detail;
       if (detail && detail.app !== 'qq') return; // 其他 App 的账号切换与 QQ 账号列表无关
-      setAccounts(getAccounts());
+      setAccounts(getAccounts().filter((a) => a.kind !== 'anon'));
       setActiveId(getActiveAccountIdFor('qq'));
     };
     window.addEventListener(ACCOUNT_CHANGED_EVENT, refresh);
@@ -12895,8 +12898,30 @@ function SecurityPage({
       alive = false;
     };
   }, []);
-  const accNameOf = (acc: PhoneAccount): string =>
-    acc.id === MAIN_ACCOUNT_ID ? mainOwner?.name || '机主' : acc.name;
+  // 账号显示名（Task 40-S）：与登录后 App 内展示口径一致——档案联系人展示名（备注>昵称>名字）优先，
+  // 注册表名兼底。否则小号设了昵称后「切换账号页的名字和登录后的名字对不上」。
+  const [profiles, setProfiles] = useState<ContactRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void listContactsFor('qq')
+      .then((all) => {
+        if (alive) setProfiles(all);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const profileOf = (acc: PhoneAccount): ContactRecord | null =>
+    profiles.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId)) ?? null;
+  const accNameOf = (acc: PhoneAccount): string => {
+    if (acc.id === MAIN_ACCOUNT_ID) {
+      const mainProfile = profiles.find((c) => c.kind === 'user' && !c.altOf) ?? null;
+      return (mainProfile ? displayNameOf(mainProfile) : '') || mainOwner?.name || '机主';
+    }
+    const profile = profileOf(acc);
+    return (profile ? displayNameOf(profile) : '') || acc.name;
+  };
   const accNoOf = (acc: PhoneAccount): string =>
     acc.id === MAIN_ACCOUNT_ID
       ? mainOwner?.qqId || acc.qqId || ''
@@ -15931,6 +15956,12 @@ export default function QQApp() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // 匿名号只属于电话/信息（Task 40-S）：历史遗留的 QQ 匿名号槽位开机自愈切回大号
+      //（switchAccountFor 派发事件 → 上方监听器 bump accReloadKey 重跑本 effect）
+      if (getActiveAccountFor('qq').kind === 'anon') {
+        switchAccountFor('qq', MAIN_ACCOUNT_ID);
+        return;
+      }
       // 头像按 App 隔离：加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
       const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
       if (!alive) return;

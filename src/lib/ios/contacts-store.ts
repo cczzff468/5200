@@ -873,12 +873,13 @@ export async function loginAltSlot(
   const account = typeof rawAccount === 'string' ? rawAccount.trim().slice(0, 120) : '';
   if (!account) return { ok: false, error: '请填写账号' };
   if (!password.trim()) return { ok: false, error: '请填写密码' };
-  const slotName = slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号');
   const all = await listContacts();
   const profile = all.find(
     (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
   );
-  if (!profile) return { ok: false, error: `「${slotName}」还没有身份资料，请重启应用后再试` };
+  if (!profile) return { ok: false, error: `「${slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}」还没有身份资料，请重启应用后再试` };
+  // 槽位名与登录后 App 内显示同口径（Task 40-S）：档案展示名（备注>昵称>名字）优先，注册表名兼底
+  const slotName = displayNameOf(profile).trim() || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号');
 
   // 账号标识匹配：手机号归一化比较；微信号/QQ号精确比较
   const accNorm = normalizePhoneKey(account);

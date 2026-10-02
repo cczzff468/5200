@@ -1803,6 +1803,8 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
   // 小号/匿名号槽位（Task 40 修正）：登录墙绑定当前槽位——预填该账号档案的登录账号（用户只需输密码），
   // 避免在 A 小号的登录墙里误登 B 的账号密码导致登录态串槽（切号页显示错账号/再切回要求重登）
   const [slotIdShown, setSlotIdShown] = useState('');
+  // 槽位显示名（Task 40-S）：与登录后微信内的名字同口径（档案展示名，昵称优先）
+  const [slotNameShown, setSlotNameShown] = useState('');
   useEffect(() => {
     if (!slot) return;
     let alive = true;
@@ -1812,6 +1814,7 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
       const profile = all.find(
         (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
       );
+      if (profile && displayNameOf(profile).trim()) setSlotNameShown(displayNameOf(profile).trim());
       const id = profile?.phone?.trim() || profile?.wechatId?.trim() || profile?.qqId?.trim() || '';
       if (alive && id) {
         setSlotIdShown(id);
@@ -1895,7 +1898,7 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
         {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正） */}
         {slot && (
           <p data-testid="wx-login-slot" className="mt-2.5 text-center text-[13px] leading-relaxed text-black/45 dark:text-white/45">
-            当前账号：{slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
+            当前账号：{slotNameShown || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
             {slotIdShown ? `（${slotIdShown}）` : ''}
           </p>
         )}
@@ -10903,7 +10906,6 @@ function WxSettingsPage({
 }) {
   const rows: { label: string; onClick?: () => void; testid?: string }[] = [
     { label: '账号与安全' },
-    { label: '切换账号', onClick: onOpenAccountSwitch, testid: 'wx-account-entry' },
     { label: '青少年模式' },
     { label: '关怀模式' },
     { label: '消息通知' },
@@ -10938,11 +10940,20 @@ function WxSettingsPage({
             </button>
           ))}
         </div>
+        {/* 切换账号：独立卡片行（设置列表外，退出登录上方；用户要求对照截图样式） */}
+        <button
+          type="button"
+          data-testid="wx-account-entry"
+          onClick={onOpenAccountSwitch}
+          className="mt-4 w-full rounded-[10px] bg-white py-3 text-center text-[16px] active:bg-black/5 dark:bg-[#1A1A1A]"
+        >
+          切换账号
+        </button>
         <button
           type="button"
           data-testid="wx-logout"
           onClick={onLogout}
-          className="mt-4 w-full rounded-[10px] bg-white py-3 text-center text-[16px] text-red-500 active:bg-black/5 dark:bg-[#1A1A1A]"
+          className="mt-2.5 w-full rounded-[10px] bg-white py-3 text-center text-[16px] text-red-500 active:bg-black/5 dark:bg-[#1A1A1A]"
         >
           退出登录
         </button>
@@ -10977,14 +10988,15 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
   const [toast, showToast] = useLocalToast();
   // 注册表账号列表：切换不刷新网页（v2 事件驱动）；删除成功后本地同步移除
   //（当前账号/大号不可删；正在被其他 App 使用的账号删除时自动切回大号 = 自动退出）
-  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
+  // 匿名号不进微信（只属于电话/信息）：列表与切换一律排除
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts().filter((a) => a.kind !== 'anon'));
   // 当前微信账号 id（per-app）：切换事件到达时刷新快照 → 绿点「当前使用」移到新卡（本页保持打开）
   const [activeId, setActiveId] = useState(() => getActiveAccountIdFor('wx'));
   useEffect(() => {
     const fn = (e: Event) => {
       const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
       if (!d || d.app !== 'wx') return;
-      setAccounts(getAccounts());
+      setAccounts(getAccounts().filter((a) => a.kind !== 'anon'));
       setActiveId(getActiveAccountIdFor('wx'));
     };
     window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
@@ -11001,6 +11013,22 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
       alive = false;
     };
   }, []);
+  // 账号卡显示名（Task 40-S）：与登录后 App 内的展示口径一致——档案联系人展示名（备注>昵称>名字）优先，
+  // 注册表名兼底。否则小号设了昵称后「切换账号以后名字跟切换账号那里不一样」。
+  const [profiles, setProfiles] = useState<ContactRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void listContacts()
+      .then((all) => {
+        if (alive) setProfiles(all);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const profileOf = (acc: PhoneAccount): ContactRecord | null =>
+    profiles.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId)) ?? null;
   /** 管理模式：非当前、非大号的卡片左上出现 ⊖ 删除钮 */
   const [managing, setManaging] = useState(false);
   /** 删除二次确认目标（受控弹窗，禁 window.confirm） */
@@ -11060,7 +11088,11 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
           {accounts.map((acc) => {
             const isCurrent = acc.id === activeId;
             const isMain = acc.id === MAIN_ACCOUNT_ID;
-            const name = isMain ? mainOwner?.name || '机主' : acc.name;
+            // 显示名与登录后一致（Task 40-S）：大号=机主联系人展示名（昵称优先），小号=档案展示名，回退注册表
+            const mainProfile = profiles.find((c) => c.kind === 'user' && !c.altOf) ?? null;
+            const name = isMain
+              ? (mainProfile ? displayNameOf(mainProfile) : '') || mainOwner?.name || '机主'
+              : (profileOf(acc) ? displayNameOf(profileOf(acc)!) : '') || acc.name;
             const wxid = isMain ? mainOwner?.wechatId || acc.wechatId : acc.kind === 'anon' ? acc.phone : acc.wechatId;
             const showDelete = managing && !isCurrent && !isMain;
             return (
@@ -13613,6 +13645,12 @@ export default function WeChatApp() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // 匿名号只属于电话/信息（Task 40-S）：历史遗留的微信匿名号槽位开机自愈切回大号
+      //（switchAccountFor 派发事件 → 下方监听器 bump accReloadKey 重跑本 effect）
+      if (getActiveAccountFor('wx').kind === 'anon') {
+        switchAccountFor('wx', MAIN_ACCOUNT_ID);
+        return;
+      }
       const list = await loadContacts().catch(() => [] as ContactRecord[]);
       if (!alive) return;
       setContacts(list);
