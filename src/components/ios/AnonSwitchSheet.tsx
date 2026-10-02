@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { EyeOff, Plus, UserRound, X } from 'lucide-react';
 import {
   accountDisplayName,
   createAccount,
+  deleteAccount,
   getAccounts,
   getActiveAccountIdFor,
   MAIN_ACCOUNT_ID,
@@ -33,8 +34,9 @@ import {
 /** iOS 弹层曲线（与 IOSActionSheet 一致） */
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
-/** 匿名号号码脱敏：前 2 后 4（32****5644）——拨号键盘徽标与弹层行共用 */
+/** 匿名号号码脱敏：11 位号 3+****+4（132****5644，同普通手机号习惯）；旧 10 位号前 2 后 4 —— 拨号键盘徽标与弹层行共用 */
 export function maskAnonPhone(phone: string): string {
+  if (phone.length >= 11) return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
   if (phone.length <= 6) return phone;
   return `${phone.slice(0, 2)}****${phone.slice(-4)}`;
 }
@@ -67,6 +69,54 @@ export function AnonSwitchSheet({
   const [shown, setShown] = useState(false);
   /** 注册表现读快照：打开时读一次；切号不刷新网页（事件驱动重读），打开期间重读兜底 */
   const [snap, setSnap] = useState<AnonSheetSnapshot>(() => readSnapshot(app));
+  // 长按号码行 → 删除确认（Task 40 修正）：当前使用行删前自动切回主号；被其他 App 使用时报错
+  const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
+  const [delErr, setDelErr] = useState('');
+  const pressTimer = useRef<number | null>(null);
+  const firedRow = useRef<string | null>(null);
+  const clearRowPress = useCallback(() => {
+    if (pressTimer.current) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  }, []);
+  const startRowPress = useCallback(
+    (a: PhoneAccount) => {
+      clearRowPress();
+      pressTimer.current = window.setTimeout(() => {
+        pressTimer.current = null;
+        firedRow.current = a.id;
+        setDelErr('');
+        setDelTarget(a);
+      }, 500);
+    },
+    [clearRowPress],
+  );
+  useEffect(
+    () => () => {
+      if (pressTimer.current) window.clearTimeout(pressTimer.current);
+    },
+    [],
+  );
+
+  const confirmDelete = async () => {
+    const t = delTarget;
+    if (!t) return;
+    try {
+      // 本 App 正用这个匿名号 → 先切回主号再删（否则 deleteAccount 拒绝「使用中」）
+      if (getActiveAccountIdFor(app) === t.id) switchAccountFor(app, MAIN_ACCOUNT_ID);
+      const res = await deleteAccount(t.id);
+      if (res.ok) {
+        setDelTarget(null);
+        setDelErr('');
+        setSnap(readSnapshot(app));
+      } else {
+        setDelErr(res.error || '删除失败');
+      }
+    } catch {
+      setDelErr('删除失败，请稍后重试');
+    }
+  };
 
   // open 切换时驱动进/退场动画 + 刷新账号快照（setState 全部在 rAF/timeout 回调内，遵守 React Compiler lint）
   useEffect(() => {
@@ -127,7 +177,7 @@ export function AnonSwitchSheet({
           <p className="text-[16px] font-semibold">匿名号码</p>
         </div>
         <p className="shrink-0 px-5 pb-1 pt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-          切换后{app === 'phone' ? '拨号' : '短信'}都以匿名身份进行，聊天与记忆完全独立
+          切换后{app === 'phone' ? '拨号' : '短信'}都以匿名身份进行，聊天与记忆完全独立；长按号码可删除
         </p>
 
         {/* 账号列表（超出可滚动；顶部在非主号身份时多一行「返回主号」） */}
@@ -165,12 +215,21 @@ export function AnonSwitchSheet({
                   type="button"
                   data-testid={`anon-row-${a.id}`}
                   onClick={() => {
+                    // 长按已触发删除确认 → 吞掉本次 click
+                    if (firedRow.current === a.id) {
+                      firedRow.current = null;
+                      return;
+                    }
                     if (current) {
                       onClose();
                       return;
                     }
                     if (switchAccountFor(app, a.id)) onClose();
                   }}
+                  onPointerDown={() => startRowPress(a)}
+                  onPointerUp={clearRowPress}
+                  onPointerLeave={clearRowPress}
+                  onPointerCancel={clearRowPress}
                   aria-current={current ? 'true' : undefined}
                   className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-black/[0.05] dark:active:bg-white/[0.08] ${
                     separated ? 'border-t border-black/[0.06] dark:border-white/[0.08]' : ''
@@ -222,6 +281,49 @@ export function AnonSwitchSheet({
           </div>
         </div>
       </div>
+
+      {/* 长按号码行 → 删除确认（iOS 弹窗风；Task 40 修正） */}
+      {delTarget && (
+        <div className="absolute inset-0 z-20 grid place-items-center bg-black/40 p-8" onClick={() => setDelTarget(null)}>
+          <div
+            role="dialog"
+            aria-label="删除匿名号码"
+            className="w-full max-w-[280px] overflow-hidden rounded-[14px] bg-white/95 text-center backdrop-blur-xl dark:bg-[#2C2C2E]/95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-5">
+              <p className="text-[16px] font-semibold">删除匿名号码</p>
+              <p className="mt-1.5 text-[13px] leading-[1.6] text-muted-foreground">
+                将删除「{accountDisplayName(delTarget)} {maskAnonPhone(delTarget.phone)}」：该号码的
+                {app === 'phone' ? '通话记录' : '短信与聊天记录'}等本地数据会一并清除，此操作不可恢复。
+              </p>
+              {delErr && (
+                <p data-testid="anon-delete-error" className="mt-2 text-[12.5px] leading-relaxed text-[#FF3B30]">
+                  {delErr}
+                </p>
+              )}
+            </div>
+            <div className="mt-4 flex border-t border-black/10 dark:border-white/10">
+              <button
+                type="button"
+                data-testid="anon-sheet-delete-cancel"
+                onClick={() => setDelTarget(null)}
+                className="h-11 flex-1 border-r border-black/10 text-[15px] active:bg-black/5 dark:border-white/10 dark:active:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="anon-sheet-delete-confirm"
+                onClick={() => void confirmDelete()}
+                className="h-11 flex-1 text-[15px] font-semibold text-[#FF3B30] active:bg-black/5 dark:active:bg-white/10"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

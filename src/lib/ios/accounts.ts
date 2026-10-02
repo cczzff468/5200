@@ -31,7 +31,7 @@ export interface PhoneAccount {
   kind: AccountKind;
   /** 显示名：小号默认「小号N」，匿名号默认「匿名账号」；大号留空（各页面优先用本机资料/登录态实时显示） */
   name: string;
-  /** 手机号（大号留空用本机资料；小号生成 11 位虚拟号；匿名号生成 10 位虚拟号） */
+  /** 手机号（大号留空用本机资料；小号/匿名号均为 1 开头 11 位虚拟号，与普通手机号同格式） */
   phone: string;
   /** QQ 号（小号生成；匿名号同号复用） */
   qqId: string;
@@ -302,7 +302,8 @@ export function createAccount(
           id,
           kind: 'anon',
           name: (name ?? '').trim() || '匿名账号',
-          phone: genDigits('32', 10),
+          // 与普通手机号同格式：1 开头 11 位（Task 40 修正：原 32 开头 10 位不像真实号码）
+          phone: genDigits('1', 11),
           qqId: '',
           wechatId: '',
           createdAt: Date.now(),

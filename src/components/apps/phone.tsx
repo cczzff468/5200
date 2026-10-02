@@ -41,6 +41,7 @@ import { BackToHome } from '@/components/ios/BackToHome';
 import { AnonSwitchSheet, maskAnonPhone } from '@/components/ios/AnonSwitchSheet';
 import {
   ACCOUNT_CHANGED_EVENT,
+  deleteAccount,
   getActiveAccountFor,
   getActiveAccountIdFor,
   MAIN_ACCOUNT_ID,
@@ -2704,6 +2705,7 @@ function KeypadTab({
   onNewContact,
   anonPhone,
   onOpenAnon,
+  onAnonLongPress,
 }: {
   contacts: ContactRecord[];
   onCall: (number: string, contact: ContactRecord | null) => void;
@@ -2713,8 +2715,30 @@ function KeypadTab({
   anonPhone: string | null;
   /** 点「匿名号码」chip → 打开切换弹层（Task 40-E） */
   onOpenAnon: () => void;
+  /** 长按「匿名号码」chip → 删除当前匿名号码（Task 40 修正）；无匿名号时回落打开弹层 */
+  onAnonLongPress: () => void;
 }) {
   const [digits, setDigits] = useState('');
+
+  // 长按删除（Task 40 修正）：匿名号码 chip 按住 500ms 触发；触发后吞掉随后的 click（避免再弹切换弹层）
+  const longPressTimer = useRef<number | null>(null);
+  const longPressFired = useRef(false);
+  const clearLongPress = useCallback(() => {
+    if (longPressTimer.current) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+  const startLongPress = useCallback(() => {
+    clearLongPress();
+    longPressFired.current = false;
+    longPressTimer.current = window.setTimeout(() => {
+      longPressTimer.current = null;
+      longPressFired.current = true;
+      onAnonLongPress();
+    }, 500);
+  }, [clearLongPress, onAnonLongPress]);
+  useEffect(() => clearLongPress, [clearLongPress]);
 
   const press = useCallback((key: string) => {
     playDtmf(key);
@@ -2742,67 +2766,69 @@ function KeypadTab({
 
   return (
     <div className="flex flex-1 select-none flex-col items-center overflow-y-auto px-6 pb-2" data-testid="keypad-tab">
-      {/* 顶部行：主号徽章（缩小并与返回键左对齐） + 新建联系人（对照 iOS 键盘右上角 ⊕） */}
-      <div className="-mx-2 flex w-full items-center justify-between pt-1">
-        <span
-          className="rounded-[6px] bg-[#0A84FF] px-2 py-[3px] text-[11px] font-medium leading-none text-white shadow-[0_1px_3px_rgba(10,132,255,0.35)]"
-          data-testid="sim-badge"
-        >
-          {activeLabel}
-        </span>
+      {/* 顶部行（最上面，Task 40 修正：身份选择白色小胶囊移到最顶 + 右上角新建联系人 ⊕，原蓝色主号徽章由 chip 高亮替代） */}
+      <div className="relative -mx-2 flex w-full shrink-0 items-center justify-center pt-1.5">
+        <div className="flex items-center gap-2" role="group" aria-label="主叫身份">
+          <button
+            type="button"
+            data-testid="phone-identity-main"
+            onClick={() => {
+              // 已是主号则无操作；小号/匿名号身份 → 一键切回主号（switchAccountFor 派发事件，不刷新网页）
+              if (!isMain) switchAccountFor('phone', MAIN_ACCOUNT_ID);
+            }}
+            aria-pressed={isMain}
+            aria-label="用主号拨打"
+            className={`flex h-9 items-center justify-center gap-1 rounded-full px-3.5 text-[12.5px] font-medium leading-none transition-all active:scale-95 ${
+              isMain
+                ? 'bg-white text-black shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.04] dark:bg-[#ECECEE] dark:text-black dark:ring-white/10'
+                : 'bg-white/60 text-black/45 dark:bg-white/[0.10] dark:text-white/50'
+            }`}
+          >
+            <PhoneIcon className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+            主号
+          </button>
+          <button
+            type="button"
+            data-testid="phone-identity-anon"
+            onClick={() => {
+              // 长按已触发删除确认 → 吞掉本次 click
+              if (longPressFired.current) {
+                longPressFired.current = false;
+                return;
+              }
+              onOpenAnon();
+            }}
+            onPointerDown={startLongPress}
+            onPointerUp={clearLongPress}
+            onPointerLeave={clearLongPress}
+            onPointerCancel={clearLongPress}
+            aria-pressed={isAnon}
+            aria-haspopup="dialog"
+            aria-label={isAnon && anonPhone ? `当前匿名号码 ${maskAnonPhone(anonPhone)}，点按切换，长按删除` : '切换匿名号码'}
+            className={`flex h-9 items-center justify-center gap-1 rounded-full px-3.5 text-[12.5px] font-medium leading-none transition-all active:scale-95 ${
+              isAnon
+                ? 'bg-white text-black shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.04] dark:bg-[#ECECEE] dark:text-black dark:ring-white/10'
+                : 'bg-white/60 text-black/45 dark:bg-white/[0.10] dark:text-white/50'
+            }`}
+          >
+            <EyeOff className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+            匿名号码{isAnon && anonPhone ? ` ${anonPhone.slice(-4)}` : ''}
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => onNewContact(stripDigits(digits))}
           aria-label="把当前号码新建为联系人"
           data-testid="keypad-new-contact"
-          className="flex h-9 w-9 items-center justify-center rounded-full text-[#0A84FF] transition-colors active:bg-[#0A84FF]/10"
+          className="absolute right-0 flex h-9 w-9 items-center justify-center rounded-full text-[#0A84FF] transition-colors active:bg-[#0A84FF]/10"
         >
-          <UserPlus className="h-[22px] w-[22px]" strokeWidth={1.9} />
+          <UserPlus className="h-[21px] w-[21px]" strokeWidth={1.9} />
         </button>
       </div>
 
-      {/* 身份选择 chips（iPhone 双卡样式，Task 40-2d v2）：主号 / 匿名号码并排，号码显示区上方；
-          当前身份实心高亮（bg-foreground 反白），另一个弱化（bg-muted）；触控高度 44px */}
-      <div className="mt-1 flex w-full shrink-0 items-center justify-center gap-2.5" role="group" aria-label="主叫身份">
-        <button
-          type="button"
-          data-testid="phone-identity-main"
-          onClick={() => {
-            // 已是主号则无操作；小号/匿名号身份 → 一键切回主号（switchAccountFor 派发事件，不刷新网页）
-            if (!isMain) switchAccountFor('phone', MAIN_ACCOUNT_ID);
-          }}
-          aria-pressed={isMain}
-          aria-label="用主号拨打"
-          className={`flex h-11 min-w-[112px] items-center justify-center gap-1.5 rounded-full px-4 text-[14px] font-medium leading-none transition-all active:scale-95 ${
-            isMain
-              ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.18)]'
-              : 'bg-muted text-muted-foreground'
-          }`}
-        >
-          <PhoneIcon className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-          主号
-        </button>
-        <button
-          type="button"
-          data-testid="phone-identity-anon"
-          onClick={onOpenAnon}
-          aria-pressed={isAnon}
-          aria-haspopup="dialog"
-          aria-label={isAnon && anonPhone ? `当前匿名号码 ${maskAnonPhone(anonPhone)}，点按切换` : '切换匿名号码'}
-          className={`flex h-11 min-w-[112px] items-center justify-center gap-1.5 rounded-full px-4 text-[14px] font-medium leading-none transition-all active:scale-95 ${
-            isAnon
-              ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.18)]'
-              : 'bg-muted text-muted-foreground'
-          }`}
-        >
-          <EyeOff className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-          匿名号码{isAnon && anonPhone ? ` ${anonPhone.slice(-4)}` : ''}
-        </button>
-      </div>
-
-      {/* 号码显示区（匿名号身份时顶部加一行小字徽标提醒当前主叫身份，Task 40-E） */}
+      {/* 号码显示区（非主号身份时顶部加一行小字徽标提醒当前主叫身份：匿名号=脱敏号码，小号=账号名） */}
       <div className="flex min-h-[86px] w-full flex-col items-center justify-center px-1">
-        {anonPhone && (
+        {anonPhone ? (
           <p
             className="mb-1 flex items-center gap-1 text-[12.5px] leading-none text-muted-foreground"
             data-testid="phone-dialer-anon-badge"
@@ -2810,7 +2836,15 @@ function KeypadTab({
             <EyeOff className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
             匿名号码 {maskAnonPhone(anonPhone)}
           </p>
-        )}
+        ) : activeAccount.kind === 'alt' ? (
+          <p
+            className="mb-1 flex items-center gap-1 text-[12.5px] leading-none text-muted-foreground"
+            data-testid="phone-dialer-alt-badge"
+          >
+            <UserRound className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+            {activeLabel}
+          </p>
+        ) : null}
         <p
           className="truncate text-[40px] font-light leading-none tracking-wide text-foreground tabular-nums transition-[font-size] duration-150"
           data-testid="dial-number"
@@ -3954,6 +3988,27 @@ export default function PhoneApp() {
   accVerRef.current = accVer;
   /** 匿名号码切换弹层（拨号键盘「匿名号码」身份 chip 入口，与信息 App 共用 AnonSwitchSheet） */
   const [anonSheetOpen, setAnonSheetOpen] = useState(false);
+  // 长按「匿名号码」chip → 删除确认（Task 40 修正）：删前自动切回主号（本 App 在用则不可删）
+  const [delAnon, setDelAnon] = useState<{ id: string; phone: string } | null>(null);
+  const [delAnonErr, setDelAnonErr] = useState('');
+  const confirmDelAnon = useCallback(async () => {
+    const t = delAnon;
+    if (!t) return;
+    try {
+      // 电话当前正用这个匿名号 → 先切回主号再删（否则 deleteAccount 拒绝「使用中」）
+      if (getActiveAccountIdFor('phone') === t.id) switchAccountFor('phone', MAIN_ACCOUNT_ID);
+      const res = await deleteAccount(t.id);
+      if (res.ok) {
+        setDelAnon(null);
+        setDelAnonErr('');
+        showToast('已删除匿名号码');
+      } else {
+        setDelAnonErr(res.error || '删除失败');
+      }
+    } catch {
+      setDelAnonErr('删除失败，请稍后重试');
+    }
+  }, [delAnon, showToast]);
   const vmAudioRef = useRef<HTMLAudioElement | null>(null);
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingChatContact = useUI((s) => s.setPendingChatContact);
@@ -4444,6 +4499,14 @@ export default function PhoneApp() {
             onNewContact={(phone) => setNewContact({ open: true, phone })}
             anonPhone={anonAcc ? anonAcc.phone : null}
             onOpenAnon={() => setAnonSheetOpen(true)}
+            onAnonLongPress={() => {
+              if (anonAcc) {
+                setDelAnonErr('');
+                setDelAnon({ id: anonAcc.id, phone: anonAcc.phone });
+              } else {
+                setAnonSheetOpen(true);
+              }
+            }}
           />
         )}
         {tab === 'voicemail' && (
@@ -4657,6 +4720,48 @@ export default function PhoneApp() {
         {/* 匿名号码切换弹层（Task 40-E / v2 per-app 账号，与信息 App 共享；切号不刷新网页，
             电话账号变化由 ACCOUNT_CHANGED_EVENT 监听重读数据） */}
         <AnonSwitchSheet app="phone" open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
+
+        {/* 长按匿名号码 chip → 删除确认（iOS 弹窗风；Task 40 修正） */}
+        {delAnon && (
+          <div className="fixed inset-0 z-[90] grid place-items-center bg-black/40 p-8" onClick={() => setDelAnon(null)}>
+            <div
+              role="dialog"
+              aria-label="删除匿名号码"
+              className="w-full max-w-[280px] overflow-hidden rounded-[14px] bg-white/95 text-center backdrop-blur-xl dark:bg-[#2C2C2E]/95"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-5 pt-5">
+                <p className="text-[16px] font-semibold">删除匿名号码</p>
+                <p className="mt-1.5 text-[13px] leading-[1.6] text-muted-foreground">
+                  将删除「匿名号码 {maskAnonPhone(delAnon.phone)}」：该号码的通话记录等本地数据会一并清除，此操作不可恢复。
+                </p>
+                {delAnonErr && (
+                  <p data-testid="anon-delete-error" className="mt-2 text-[12.5px] leading-relaxed text-[#FF3B30]">
+                    {delAnonErr}
+                  </p>
+                )}
+              </div>
+              <div className="mt-4 flex border-t border-black/10 dark:border-white/10">
+                <button
+                  type="button"
+                  data-testid="anon-delete-cancel"
+                  onClick={() => setDelAnon(null)}
+                  className="h-11 flex-1 border-r border-black/10 text-[15px] active:bg-black/5 dark:border-white/10 dark:active:bg-white/10"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  data-testid="anon-delete-confirm"
+                  onClick={() => void confirmDelAnon()}
+                  className="h-11 flex-1 text-[15px] font-semibold text-[#FF3B30] active:bg-black/5 dark:active:bg-white/10"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 通话全屏层 */}
         {callTarget && (

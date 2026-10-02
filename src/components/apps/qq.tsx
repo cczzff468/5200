@@ -208,9 +208,9 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, getAccounts, getActiveAccountIdFor, parseScopedKey, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, parseScopedKey, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
-import { getQqProfileBg, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
@@ -1537,7 +1537,7 @@ function QqSearch({ value, onChange, placeholder = '搜索' }: { value: string; 
 
 // ---------------- 登录页 ----------------
 
-function LoginScreen({ onLogin }: { onLogin: (u: QQUser) => void }) {
+function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: PhoneAccount | null }) {
   const closeApp = useUI((s) => s.closeApp);
   // mode account：账号密码登录（QQ号/QID/邮箱 + QQ密码）；phone：手机号登录（+86 + QQ密码）
   const [mode, setMode] = useState<'account' | 'phone'>('account');
@@ -1548,6 +1548,29 @@ function LoginScreen({ onLogin }: { onLogin: (u: QQUser) => void }) {
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const toastTimer = useRef<number | null>(null);
+
+  // 小号/匿名号槽位（Task 40 修正）：登录墙绑定当前槽位——预填该账号档案的登录账号（用户只需输密码），
+  // 避免在 A 小号的登录墙里误登 B 的账号密码导致登录态串槽（切号页显示错账号/再切回要求重登）
+  const [slotIdShown, setSlotIdShown] = useState('');
+  useEffect(() => {
+    if (!slot) return;
+    let alive = true;
+    void (async () => {
+      const all = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
+      if (!alive) return;
+      const profile = all.find(
+        (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
+      );
+      const id = profile?.qqId?.trim() || profile?.phone?.trim() || profile?.wechatId?.trim() || '';
+      if (alive && id) {
+        setSlotIdShown(id);
+        setAccount((a) => (a.trim() ? a : id));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [slot]);
 
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -1569,6 +1592,25 @@ function LoginScreen({ onLogin }: { onLogin: (u: QQUser) => void }) {
     setBusy(true);
     setError('');
     try {
+      // 小号/匿名号槽位：绑定登录——只认本槽位档案的账号密码（Task 40 修正）
+      if (slot) {
+        const alt = await loginAltSlot('qq', slot, account.trim(), password);
+        if (alt.ok) {
+          onLogin({
+            id: alt.user.id,
+            name: alt.user.name,
+            realName: alt.user.realName,
+            nickname: alt.user.nickname,
+            avatar: alt.user.avatar,
+            qqId: alt.user.qqId,
+            phone: alt.user.phone,
+            persona: alt.user.persona,
+          });
+          return;
+        }
+        setError(alt.error);
+        return;
+      }
       const rec = await loginQQ(mode === 'phone' ? 'phone' : 'account', account.trim(), password);
       if (rec.ok) {
         onLogin({
@@ -1630,6 +1672,14 @@ function LoginScreen({ onLogin }: { onLogin: (u: QQUser) => void }) {
         <h1 className="mt-12 text-center text-[30px] font-bold tracking-wide">
           {mode === 'account' ? '账号密码登录' : '手机号登录'}
         </h1>
+
+        {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正） */}
+        {slot && (
+          <p data-testid="qq-login-slot" className="mt-2.5 text-center text-[13.5px] leading-relaxed text-black/45 dark:text-white/45">
+            当前账号：{slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
+            {slotIdShown ? `（${slotIdShown}）` : ''}
+          </p>
+        )}
         {mode === 'phone' && (
           <p className="mt-4 text-center text-[15px] text-black/40 dark:text-white/40">未注册手机号通过验证后将自动注册</p>
         )}
@@ -15890,12 +15940,24 @@ export default function QQApp() {
       setContacts(list);
       try {
         const savedId = window.localStorage.getItem(accLs(LS_SESSION, 'qq'));
-        const u = savedId ? raw.find((c) => c.id === savedId && c.kind === 'user') : undefined;
-        if (u) {
-          setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona });
-        } else {
-          if (savedId) window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
+        // Task 40 修正：小号/匿名号槽位的会话必须指向本槽位档案联系人——
+        // 历史串槽登录态（在 A 小号槽位登了 B 的账密）在此自愈清除，避免切号页显示错账号
+        const acc = getActiveAccountFor('qq');
+        const slotProfile =
+          acc.kind !== 'main' && savedId
+            ? raw.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId))
+            : null;
+        if (savedId && acc.kind !== 'main' && (!slotProfile || slotProfile.id !== savedId)) {
+          window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
           setUser(null);
+        } else {
+          const u = savedId ? raw.find((c) => c.id === savedId && c.kind === 'user') : undefined;
+          if (u) {
+            setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona });
+          } else {
+            if (savedId) window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
+            setUser(null);
+          }
         }
       } catch {
         setUser(null);
@@ -15977,7 +16039,11 @@ export default function QQApp() {
     );
   }
 
-  if (!user) return <LoginScreen onLogin={handleLogin} />;
+  if (!user) {
+    // 小号/匿名号槽位：登录墙绑定当前槽位（显示账号名/预填账号/只认本槽位账密）；大号保持原自由登录
+    const acc = getActiveAccountFor('qq');
+    return <LoginScreen onLogin={handleLogin} slot={acc.kind === 'main' ? null : acc} />;
+  }
 
   // key={accReloadKey}：切换 QQ 账号后 remount 主界面——route 归位消息 tab、子页全关、各页挂载重读当前账号数据
   return <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} />;

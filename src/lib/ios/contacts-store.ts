@@ -844,11 +844,94 @@ export async function loginWechat(mode: 'phone' | 'wechat' | 'qq', rawAccount: s
 }
 
 /**
+ * 小号/匿名号槽位的绑定登录（Task 40 修正）：登录墙只认「当前槽位档案联系人」的账号密码——
+ * 防止在 A 小号的登录墙里登了 B 的账号密码，导致登录态串槽
+ * （表现为：切换账号页绿点显示错账号、再切回已登录过的小号还要重新登录）。
+ * - 账号标识必须匹配档案的 手机号/微信号/QQ号 之一（手机号走归一化比较，+86/空格均可）；
+ * - 密码匹配档案的 wechatPassword/qqPassword（任一非空匹配即通过）；
+ * - 档案从未设过密码 → 首次登录即写入（首次激活），与真实设备「首次登录设置密码」体验一致；
+ * - 槽位没有档案联系人（异常场景，开机 ensureAccountOwnerContacts 会自动补建）→ 明确报错。
+ * 大号槽位不适用本函数（保持原 loginWechat/loginQQ 自由登录）。
+ */
+export interface AltSlotLoginSuccess {
+  ok: true;
+  user: {
+    id: string;
+    /** 显示名（备注/昵称优先） */
+    name: string;
+    realName: string;
+    nickname: string | null;
+    avatar: string | null;
+    wechatId: string | null;
+    phone: string | null;
+    qqId: string | null;
+    persona: string | null;
+  };
+}
+export type AltSlotLoginResult = AltSlotLoginSuccess | { ok: false; error: string };
+
+export async function loginAltSlot(
+  app: 'wx' | 'qq',
+  slot: PhoneAccount,
+  rawAccount: string,
+  password: string,
+): Promise<AltSlotLoginResult> {
+  const account = typeof rawAccount === 'string' ? rawAccount.trim().slice(0, 120) : '';
+  if (!account) return { ok: false, error: '请填写账号' };
+  if (!password.trim()) return { ok: false, error: '请填写密码' };
+  const slotName = slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号');
+  const all = await listContacts();
+  const profile = all.find(
+    (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
+  );
+  if (!profile) return { ok: false, error: `「${slotName}」还没有身份资料，请重启应用后再试` };
+
+  // 账号标识匹配：手机号归一化比较；微信号/QQ号精确比较
+  const accNorm = normalizePhoneKey(account);
+  const ids = [profile.phone, profile.wechatId, profile.qqId];
+  const idMatched = ids.some((v) => {
+    const t = (v ?? '').trim();
+    if (!t) return false;
+    return t === account || (normalizePhoneKey(t) && normalizePhoneKey(t) === accNorm);
+  });
+  if (!idMatched) {
+    return { ok: false, error: `请使用「${slotName}」的账号密码登录` };
+  }
+
+  const pwdWx = profile.wechatPassword?.trim() || '';
+  const pwdQq = profile.qqPassword?.trim() || '';
+  if (!pwdWx && !pwdQq) {
+    // 首次激活：把本次输入的密码写入该 App 对应的密码字段
+    const patched = await updateContact(
+      profile.id,
+      app === 'wx' ? { wechatPassword: password.trim() } : { qqPassword: password.trim() },
+    );
+    if (!patched) return { ok: false, error: '登录失败，请稍后重试' };
+  } else if (password !== pwdWx && password !== pwdQq) {
+    return { ok: false, error: '账号或密码不正确，请重新输入' };
+  }
+
+  const user = {
+    id: profile.id,
+    name: displayNameOf(profile),
+    realName: profile.name,
+    nickname: profile.nickname ?? null,
+    avatar: avatarFor(profile, app),
+    wechatId: profile.wechatId,
+    phone: profile.phone,
+    qqId: profile.qqId,
+    persona: profile.persona,
+  };
+  return app === 'wx' ? { ok: true, user } : { ok: true, user };
+}
+
+/**
  * QQ 登录校验（本地版，与微信登录同源同规则）：
  * mode 'account' QQ号/QID/邮箱 + QQ密码；'phone' 手机号 + QQ密码。
  * 仅允许 kind='user' 的联系人登录；char / npc 一律拦截（「该账号类型暂不支持登录」）。
  * 登录密码统一用联系人的 qqPassword 字段。
  */
+
 export interface QQLoginSuccess {
   ok: true;
   user: {

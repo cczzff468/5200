@@ -14185,3 +14185,31 @@ Stage Summary:
 - 架构：v1 每账号独立 IndexedDB+reload → v2 单库 ios-phone-db + 键前缀自动作用域（wx-*/qq-*/ios-chat-*/sms-→各 App 当前账号 --{id} 后缀）+ 记忆 mem-* 按聊天所在 App 账号作用域（同账号跨 App 共享/异账号隔离）+ switchAccountFor 事件驱动；v1 旧账号库数据开机自动迁移（键加后缀搬入主库+机主档案 altOf 关联+通话记录补 account），大号零迁移
 - AI 认知保持：小号=陌生人（记忆/聊天记录空库）、大号可问小号事（digest 改读主库后缀键，门控=当前会话 App 的账号为 main）、AI 不说破大小号同一人
 - 全部子任务记录见 40-g（数据层）/40-2a（微信）/40-2b（QQ）/40-2c（信息）/40-2d（电话+跨App）/40-2e（lib 域）/40-2f（联系人+设置）
+
+---
+Task ID: 40-fix
+Agent: Z.ai Code（主会话）
+Task: Task 40 交付后用户反馈五项修正——①小号登录过再切换免登录 ②微信切换账号页显示错账号（登录小号3显示小号2）③电话拨号键盘主号/匿名选择器改白色+更小+移到最上面 ④长按匿名号码可删除 ⑤匿名号码格式改普通手机号（1开头11位）
+
+Work Log:
+- 根因定位：#1/#2 同源——微信/QQ 登录墙是「自由凭据登录」（loginWechat/loginQQ 对任意 user 联系人校验），与会话写入的「当前槽位作用域」脱钩：在小号2槽位的登录墙里登了小号3的账密 → 会话（小号3档案联系人id）落进小号2作用域键 → 切号页绿点在小号2、微信名字是小号3，而小号3槽位无会话再切回要重登
+- ①②修复（contacts-store.ts + wechat.tsx + qq.tsx）：
+  - 新增 loginAltSlot(app:'wx'|'qq', slot, account, password)：小号/匿名号槽位绑定登录——只认槽位档案联系人（altOf===slot.id 或 id===slot.ownerContactId）的账号标识（手机号归一化比较/微信号/QQ号精确比较）与密码（wechatPassword/qqPassword 任一非空匹配即过）；档案从未设密码→首次登录写入该 App 密码字段（首次激活）；无档案明确报错；返回独立 AltSlotLoginResult 类型
+  - 微信/QQ LoginScreen 加 slot prop：标题下显示「当前账号：小号N（账号）」提示（wx-login-slot/qq-login-slot testid）+ 预填档案登录账号（用户只需输密码）；submit 分流 slot?loginAltSlot:原 loginWechat/loginQQ（大号保持原自由登录零破坏）
+  - 根组件恢复会话自愈：acc.kind!=='main' 且 savedId 存在时校验 savedId===槽位档案id，不等→清键回登录墙（自动治愈历史串槽态）；根渲染 !user 时传 slot=getActiveAccountFor(app)（main 传 null）
+- ③修复（phone.tsx KeypadTab）：拨号键盘顶部行重构——原蓝色 sim-badge 删除，身份选择 chips（主号/匿名号码）上移到最顶行（keypad 顶 y104 vs 顶行 y98）居中、⊕新建联系人绝对定位右侧；chips 改白色小胶囊：h-9（原44）+ text-12.5px（原14）+ 去掉 min-w-112，active=纯白底黑字+细边+轻影（dark:#ECECEE）、inactive=白/60；小号身份时号码显示区加 phone-dialer-alt-badge（UserRound+账号名，与匿名脱敏徽标同位）
+- ④修复（phone.tsx + AnonSwitchSheet.tsx）：匿名号码 chip 长按 500ms（pointerdown 计时/pointerup-leave-cancel 清除，触发后吞 click）→ iOS 弹窗风确认层「删除匿名号码」（脱敏号+不可恢复警告，anon-delete-confirm/cancel testid，错误内联显示）→ 确认后电话当前在用先 switchAccountFor('phone','main') 再 deleteAccount（其他 App 占用时错误内联显示）+ showToast('已删除匿名号码')；AnonSwitchSheet 号码行同款长按删除（anon-sheet-delete-confirm/cancel，删后 readSnapshot 刷新列表，提示文案补「长按号码可删除」），电话/信息两 App 共享生效
+- ⑤修复（accounts.ts + AnonSwitchSheet.tsx）：createAccount('anon') 号码 genDigits('32',10)→genDigits('1',11)（与普通手机号同格式 1 开头 11 位）；maskAnonPhone 适配：≥11位前3后4（126****1795），旧10位号保持前2后4
+- 验证：bunx tsc --noEmit 全仓 0 错误；eslint 全绿（仅 qq/wechat>500KB BABEL 性能提示）；agent-browser E2E 全过——
+  ①电话 chips：白色（rgb(255,255,255)）+36px 高+12.5px 字号+最顶（y104/98）+sim-badge 已删 ✓
+  ②新建匿名号=12685751795（11位1开头纯数字）、徽标 126****1795、chip 显示后四位、phone 活跃账号即时切换 ✓
+  ③长按 chip 弹确认→确认→注册表 anon 清零+电话回主号+主号chip高亮+toast，无刷新（__e2eMarker alive）✓；sheet 行长按删除同链路 ✓
+  ④微信绑定登录：切小号2→登录墙「当前账号：小号2（13900000002）」+预填；填小号3账密→拒「请使用「小号2」的账号密码登录」且不写会话；填正确账密→登录成功+会话落 acc-test-2 作用域；我页名字=小号2；切号页绿点=小号2（用户报告的显示错账号不复现）✓
+  ⑤免登录往返：小号2↔小号3↔大号 切换全部直进无登录墙 ✓
+  ⑥自愈：手工把小号2档案id写进小号3会话键→切到小号3→串槽会话被清+登录墙+槽位提示 ✓
+  ⑦QQ 同链路冒烟：大号88888888登录→联系人tab头像→抽屉→账号与安全→点小号2→登录墙槽位提示（30000000002 预填）→222222 登录成功→切回大号直进陈大大 ✓（注：消息tab头像=closeApp 为既有接线，抽屉从联系人tab头像进）
+- 测试数据清理（ios-phone-db/fonts + localStorage）、浏览器关闭、dev.log 无错误
+
+Stage Summary:
+- 五项反馈全量交付：登录墙按槽位绑定（串槽根因修复+历史态自愈，登录过的小号再切换免登录）、切换账号页显示与实际登录身份永远一致、电话身份选择器白色小胶囊置顶、长按匿名号码即删（chip+弹层行双入口、使用中保护）、匿名号码 1 开头 11 位与普通号码同格式
+- 改动文件：src/lib/ios/contacts-store.ts、src/lib/ios/accounts.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/phone.tsx、src/components/ios/AnonSwitchSheet.tsx

@@ -184,8 +184,8 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, deleteAccount, getAccounts, getActiveAccountIdFor, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
-import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
@@ -1791,7 +1791,7 @@ function PseudoQR({ seed, size = 176 }: { seed: string; size?: number }) {
 
 // ---------------- 登录页 ----------------
 
-function LoginScreen({ onLogin }: { onLogin: (u: WxUser) => void }) {
+function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: PhoneAccount | null }) {
   const closeApp = useUI((s) => s.closeApp);
   // mode phone：手机号 + 微信密码；account：微信号 / QQ号 / 邮箱 + 密码（后端自动识别）
   const [mode, setMode] = useState<'phone' | 'account'>('phone');
@@ -1800,6 +1800,29 @@ function LoginScreen({ onLogin }: { onLogin: (u: WxUser) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // 小号/匿名号槽位（Task 40 修正）：登录墙绑定当前槽位——预填该账号档案的登录账号（用户只需输密码），
+  // 避免在 A 小号的登录墙里误登 B 的账号密码导致登录态串槽（切号页显示错账号/再切回要求重登）
+  const [slotIdShown, setSlotIdShown] = useState('');
+  useEffect(() => {
+    if (!slot) return;
+    let alive = true;
+    void (async () => {
+      const all = await listContacts().catch(() => [] as ContactRecord[]);
+      if (!alive) return;
+      const profile = all.find(
+        (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
+      );
+      const id = profile?.phone?.trim() || profile?.wechatId?.trim() || profile?.qqId?.trim() || '';
+      if (alive && id) {
+        setSlotIdShown(id);
+        setAccount((a) => (a.trim() ? a : id));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [slot]);
+
   const canSubmit = account.trim().length > 0 && password.length > 0 && !busy;
 
   const submit = async () => {
@@ -1807,6 +1830,25 @@ function LoginScreen({ onLogin }: { onLogin: (u: WxUser) => void }) {
     setBusy(true);
     setError('');
     try {
+      // 小号/匿名号槽位：绑定登录——只认本槽位档案的账号密码（Task 40 修正）
+      if (slot) {
+        const alt = await loginAltSlot('wx', slot, account.trim(), password);
+        if (alt.ok) {
+          onLogin({
+            id: alt.user.id,
+            name: alt.user.name,
+            realName: alt.user.realName,
+            nickname: alt.user.nickname,
+            avatar: alt.user.avatar,
+            wechatId: alt.user.wechatId,
+            phone: alt.user.phone,
+            qqId: alt.user.qqId,
+          });
+          return;
+        }
+        setError(alt.error);
+        return;
+      }
       // 本地校验：联系人存本地 IndexedDB，不再调服务端
       const rec = await loginWechat(mode === 'phone' ? 'phone' : 'wechat', account.trim(), password);
       if (rec.ok) {
@@ -1849,6 +1891,14 @@ function LoginScreen({ onLogin }: { onLogin: (u: WxUser) => void }) {
         <h1 className="mt-8 text-center text-[26px] font-semibold tracking-wide">
           {mode === 'phone' ? '手机号登录' : '微信账号登录'}
         </h1>
+
+        {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正） */}
+        {slot && (
+          <p data-testid="wx-login-slot" className="mt-2.5 text-center text-[13px] leading-relaxed text-black/45 dark:text-white/45">
+            当前账号：{slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
+            {slotIdShown ? `（${slotIdShown}）` : ''}
+          </p>
+        )}
 
         <div className="mt-10 space-y-0">
           {mode === 'phone' && (
@@ -13577,7 +13627,17 @@ export default function WeChatApp() {
       try {
         const sKey = accLs(LS_SESSION, 'wx');
         const savedId = window.localStorage.getItem(sKey);
-        if (savedId) {
+        // Task 40 修正：小号/匿名号槽位的会话必须指向本槽位档案联系人——
+        // 历史串槽登录态（在 A 小号槽位登了 B 的账密）在此自愈清除，避免切号页显示错账号
+        const acc = getActiveAccountFor('wx');
+        const slotProfile =
+          acc.kind !== 'main' && savedId
+            ? list.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId))
+            : null;
+        if (savedId && acc.kind !== 'main' && (!slotProfile || slotProfile.id !== savedId)) {
+          window.localStorage.removeItem(sKey);
+          setUser(null);
+        } else if (savedId) {
           const u = list.find((c) => c.id === savedId && c.kind === 'user');
           if (u) setUser(toWxUser(u));
           else {
@@ -13633,7 +13693,11 @@ export default function WeChatApp() {
     );
   }
 
-  if (!user) return <LoginScreen onLogin={handleLogin} />;
+  if (!user) {
+    // 小号/匿名号槽位：登录墙绑定当前槽位（显示账号名/预填账号/只认本槽位账密）；大号保持原自由登录
+    const acc = getActiveAccountFor('wx');
+    return <LoginScreen onLogin={handleLogin} slot={acc.kind === 'main' ? null : acc} />;
+  }
 
   return (
     <MainScreen
