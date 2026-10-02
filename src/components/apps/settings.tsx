@@ -29,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   Layers,
+  PanelTop,
   ScanEye,
   ScanFace,
   Sun,
@@ -352,6 +353,9 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const imgGenReady = imgGenConfigReady(imgGenConfig);
   const profile = useSettings((s) => s.profile);
   const appFontId = useSettings((s) => s.appFontId);
+  // 状态栏显示开关（Task 36）：控制顶部时间/信号/电量状态栏是否显示
+  const statusBarVisible = useSettings((s) => s.statusBarVisible);
+  const setStatusBarVisible = useSettings((s) => s.setStatusBarVisible);
 
   const [airplane, setAirplane] = useState(false);
 
@@ -491,6 +495,17 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             value={fontRowValue}
             onClick={() => onOpen('font')}
           />
+          {/* 状态栏开关（Task 36）：关闭后顶部时间/信号/电量状态栏隐藏（灵动岛为硬件开孔保留） */}
+          <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+            <RowIcon icon={PanelTop} tone={TONE_GRAY} />
+            <span className="min-w-0 flex-1 truncate text-[16px]">状态栏</span>
+            <Switch
+              checked={statusBarVisible}
+              onCheckedChange={setStatusBarVisible}
+              aria-label="状态栏"
+              data-testid="settings-statusbar-switch"
+            />
+          </div>
         </div>
 
         {/* 开发者 */}
@@ -4528,7 +4543,7 @@ function FontPage({ onBack }: { onBack: () => void }) {
           </div>
         </GrayCard>
 
-        {/* 字体大小（全局缩放：zoom + 容器反向补偿，全 App 实时生效） */}
+        {/* 字体大小（Task 36：calc 只缩放文字、界面框架尺寸不变，全 App 实时生效） */}
         <section>
           <div className="mb-2 px-1 text-[13px] font-medium text-muted-foreground">字体大小</div>
           <GrayCard>

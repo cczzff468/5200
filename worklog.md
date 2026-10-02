@@ -13793,3 +13793,37 @@ Work Log:
 Stage Summary:
 - Task 34 九项全部完成：字体大小（5 档）/字重（4 档）全局实时生效持久化；除微信/QQ/电话/相册外全部 App 界面毛玻璃化（含设置剩余页）；QQ 抽屉删会员中心/免流量；聊天设置世界书页新增专属区块直接绑定/解绑
 - 深浅色 dark: 变体全覆盖；逻辑/testid 零破坏；tsc + bun run lint 全绿
+
+---
+Task ID: 35（批次总登记）
+Agent: Z.ai Code（主会话）
+Task: ①计算机APP变回原来的 ②QQ个人抽屉底部设置/夜间/天气城市栏固定贴底 ③设置飞行模式改绿色大开关 ④App Store删演示版说明 ⑤联系人聊天设置世界书页毛玻璃胶囊化
+
+Work Log:
+- 侦察确认：前批任务包（未配Key跳过/切换器点空白33-b已证伪/他的声音玻璃化/锁屏torch/字体功能）已在 Task 33/34 全部完成；计算器毛玻璃化为 Task 34-b1 所改（commit 4729116 唯一改动点）
+- 35-1 计算器恢复：git checkout 40e6f50 -- calculator.tsx 精确回退 Task 34 的 DIGIT/FUNC/SCI_TONE 玻璃类与 Display 玻璃面板（保留更早的 iOS 语义修复）；实测恢复 #E9E9EB 实心灰键+橙运算符，7×8=56 功能正常
+- 35-2 QQ 抽屉贴底：qq.tsx MeDrawer 把底部栏（设置/夜间/濮阳）从滚动容器内移出为 flex-col 兄弟节点 shrink-0 px-5 pb-[44px]，视觉（border-t 内容宽、pt-3）保持；实测 barBottom=852=视口底、inScroll=false、滚动区底=739=栏顶，夜间按钮 toast 正常
+- 35-3 飞行模式绿色大开关：settings.tsx 换自定义 role=switch 按钮（51×31 轨道 + 27px 滑块 + 开启 #34C759 + translate-x 20px，dark 变体），toggleAirplane 持久化通道不变；实测 aria-checked/rgb(52,199,89)/截图绿态 ✓（testid settings-airplane-switch）
+- 35-4 App Store 演示版删除：appstore.tsx 删浏览页顶部琥珀横幅（这是演示版：…可放回主屏）与详情页底部琥珀演示版提示两处，功能性说明（恢复/移除提示）保留；实测浏览页+微信详情页 演示版/amber 类零残留
+- 35-5 世界书挂载页玻璃化：chat-settings.tsx WorldBookPickerPage 加毛玻璃氛围光斑层（顶部4光斑同他的声音页配方）、顶栏/滚动区加 relative、局部+专属两张列表卡换 rounded-[18px] bg-white/55 ring-white/70 backdrop-blur-2xl 统一玻璃配方、专属空态换玻璃胶囊；t.rowCls/testid/探针逻辑零变化；种子两本书实测玻璃卡渲染+挂载/卸载交互（summary 未选择⇄雪国设定集）✓
+- 验证：tsc/eslint 全绿；E2E 全部走查（计算器/AppStore/设置开关/QQ抽屉/世界书页）；console 零错误；测试数据全清
+- 工具边界补充：QQ 消息页左上头像=退出 QQ（非抽屉入口），抽屉从联系人/动态页左上头像进；主屏图标被小组件层覆盖时 trusted click 会报 covered，走搜索面板（先点搜索应用再点图标）可靠；querySelector 匹配 aria-label 时注意设置行开关与真状态栏同名
+
+Stage Summary:
+- 五项全部完成：计算器恢复原版 iOS 实心配色；QQ 抽屉底部栏结构性固定贴底（内容长不推走、短不悬空）；飞行模式大号绿色开关；App Store 两处演示版说明删除；世界书挂载页与设置/他的声音页毛玻璃风格统一
+- 随 c114b47 自动入库
+
+---
+Task ID: 36
+Agent: Z.ai Code（主会话）
+Task: ①字体小时界面也跟着变小——改为只缩放文字 ②设置新增「状态栏」开关，关闭后顶部状态栏不显示
+
+Work Log:
+- 36-1 字体大小机制重写：旧方案（34-a）PhoneShell 容器 transform scale+尺寸 calc 反向补偿会把按钮/图标/布局一起缩放，「小 90%」连界面都变小。新方案=纯文字缩放：PhoneShell 移除 style transform/width/height（恢复 h-[100svh] w-full sm:h-[844px] sm:w-[390px] 原始类），删 appFontScale/smBreak 订阅；globals.css 置于 @layer utilities 之外写 47 个 text-[Npx] + 14 个 leading-[Npx]（含小数转义 \\.）逐档规则 font-size/line-height: calc(原值 × var(--app-font-scale, 1))——未分层声明级联恒胜 Tailwind 分层工具类，calc 乘法+var 构建期安全；placeholder:text-[16px] 变体单独覆盖；store/fonts.ts 仅更新注释（--app-font-scale 写入与持久化通道不变）
+- 36-2 状态栏开关：store.ts SettingsState 增 statusBarVisible（默认 true）+setStatusBarVisible（立即持久化 settings/statusBarVisible，load 解析布尔）；PhoneShell 读订阅，{statusBarVisible && <StatusBar/>}——灵动岛为硬件开孔模拟保留不随开关；settings.tsx 在 显示与亮度/壁纸/通知/字体 组内字体行后加「状态栏」行（PanelTop 图标/TONE_GRAY/标准 Switch，testid settings-statusbar-switch）
+- 验证（E2E 浏览器实测）：90% 档状态栏时间 15→13.5px、字体页预览 24→21.6px，而状态栏容器恒 54px、外壳恒 393×852、transform=none（界面不再缩小）；145% 档时间 21.75px 外壳不变；reload+解锁后倍率持久化保留；状态栏开关关闭→时间/信号/电量消失仅剩灵动岛岛丸，reload 后仍隐藏（持久化），重新打开立即恢复；console/dev.log 零错误；测试数据 ios-phone-db+ios-phone-fonts+localStorage 全清
+- 备注：设置行内 Switch 与真状态栏同名 aria-label="状态栏"，DOM 序 AppWindow 在 StatusBar 前，querySelector 首个命中是开关本身——后续断言需按 className z-[70] 或位置区分
+
+Stage Summary:
+- 字体大小语义修正完成：档位只改变文字（font-size+line-height 按 calc×倍率），界面框架/按钮/图标尺寸恒定，90%~145% 全档实时生效+持久化；设置新增状态栏开关：关闭隐藏时间/信号/电量（灵动岛保留），即时生效+持久化
+- 产物：src/app/globals.css + src/components/ios/PhoneShell.tsx + src/lib/ios/store.ts + src/lib/ios/fonts.ts + src/components/apps/settings.tsx；tsc/eslint 全绿

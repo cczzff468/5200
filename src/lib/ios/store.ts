@@ -326,8 +326,10 @@ interface SettingsState {
   customIcons: Record<string, string>;
   /** 全局字体（''=默认 iOS 系统字体；builtin:/custom: 前缀，应用逻辑见 lib/ios/fonts.ts） */
   appFontId: string;
-  /** 全局字体大小倍率（1=标准；范围 0.9~1.45，zoom+calc 反向补偿实现，见 lib/ios/fonts.ts） */
+  /** 全局字体大小倍率（1=标准；范围 0.9~1.45，globals.css 的 text-[Npx]/leading-[Npx] calc 规则只缩放文字，见 lib/ios/fonts.ts） */
   appFontScale: number;
+  /** 顶部状态栏显示开关（Task 36）：false = 隐藏时间/信号/电量状态栏（灵动岛为硬件开孔保留） */
+  statusBarVisible: boolean;
   /** 全局字重（400=标准；300/400/500/600，未显式设 font-weight 的文本生效） */
   appFontWeight: number;
   loaded: boolean;
@@ -342,6 +344,8 @@ interface SettingsState {
   setAppFontScale: (scale: number) => void;
   /** 设置全局字重；立即持久化，UI 层随后调 applyAppFontWeight() 实时生效 */
   setAppFontWeight: (weight: number) => void;
+  /** 顶部状态栏显示开关；立即持久化，PhoneShell/StatusBar 实时响应 */
+  setStatusBarVisible: (v: boolean) => void;
   setWallpaperPreset: (id: string) => void;
   setCustomWallpaper: (blob: Blob | null) => void;
   /** 设置锁屏壁纸预设（独立于主屏幕壁纸） */
@@ -397,12 +401,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   appFontId: '',
   appFontScale: 1,
   appFontWeight: 400,
+  statusBarVisible: true,
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -420,6 +425,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'appFontId'),
         localDB.get('settings', 'appFontScale'),
         localDB.get('settings', 'appFontWeight'),
+        localDB.get('settings', 'statusBarVisible'),
       ]);
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
@@ -700,6 +706,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
           typeof fontWeightRec?.value === 'number' && [300, 400, 500, 600].includes(fontWeightRec.value)
             ? fontWeightRec.value
             : 400,
+        // 状态栏开关：无记录 = 显示（默认开）；仅接受布尔值
+        statusBarVisible: typeof statusBarRec?.value === 'boolean' ? statusBarRec.value : true,
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -742,6 +750,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setAppFontWeight: (weight) => {
     set({ appFontWeight: weight });
     void localDB.put('settings', { key: 'appFontWeight', value: weight });
+  },
+
+  setStatusBarVisible: (v) => {
+    set({ statusBarVisible: v });
+    void localDB.put('settings', { key: 'statusBarVisible', value: v });
   },
 
   setWallpaperPreset: (id) => {

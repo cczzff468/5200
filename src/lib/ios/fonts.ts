@@ -283,10 +283,11 @@ export async function ensureAppFontApplied(): Promise<void> {
 // ---------------- 字体大小 / 字重（Task 34-a） ----------------
 
 /**
- * 字体大小档位（iOS 风格五档）：倍率乘在手机屏 zoom 上。
- * 实现：PhoneShell 手机屏容器 .phone-zoom-host 应用 `zoom: var(--app-font-scale)`，
- * 并把容器尺寸写成 calc(原尺寸 / scale) 反向补偿——最终占位不变、内部所有 px 文本/布局 ×scale。
- * getBoundingClientRect 与事件 clientX 同为 zoom 后视觉坐标，拖拽/手势数学不受影响。
+ * 字体大小档位（iOS 风格五档）：倍率只作用于文字，不缩放界面框架（Task 36 修订）。
+ * 实现：倍率写入 :root 的 --app-font-scale，globals.css 里按项目实际用到的
+ * text-[Npx] / leading-[Npx] 任意值类逐档重写为 font-size/line-height: calc(原值 × 倍率)
+ * ——按钮/行高/图标等 px 尺寸布局不变，只有文字随档位变大变小。
+ * 旧方案（34-a）把 transform scale 打在手机屏容器上，「小」档连整个界面都缩小，已废弃。
  */
 export const FONT_SCALE_OPTIONS: { scale: number; label: string }[] = [
   { scale: 0.9, label: '小' },
@@ -304,7 +305,7 @@ export const FONT_WEIGHT_OPTIONS: { weight: number; label: string }[] = [
   { weight: 600, label: '粗' },
 ];
 
-/** 应用字体大小倍率到 --app-font-scale（1 或非法值 = 移除变量回标准） */
+/** 应用字体大小倍率到 --app-font-scale（1 或非法值 = 移除变量回标准；消费方见 globals.css 文字缩放规则） */
 export function applyAppFontScale(scale: number): void {
   if (typeof scale !== 'number' || !Number.isFinite(scale) || scale === 1) {
     document.documentElement.style.removeProperty('--app-font-scale');

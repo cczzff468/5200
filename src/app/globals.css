@@ -132,9 +132,77 @@
   }
 }
 
-/* 手机屏缩放宿主（Task 34-a 字体大小）：zoom + calc 反向补偿在 LightningCSS 构建期会被
-   丢弃（calc 除法带 var 无法静态验证，整条规则被剔除），因此改由 PhoneShell 内联样式实现
-   （zoom: scale + width/height: calc(原尺寸 / scale)），效果一致且不受构建链影响。 */
+/* 全局字体大小（Task 36 修订）：只缩放文字、不缩放界面框架。
+   旧方案（34-a）把 transform scale 打在手机屏容器上，「小」档连按钮/图标/布局一起缩小，
+   与「字体大小」语义不符，已废弃；新方案由设置页把倍率写入 :root 的 --app-font-scale
+   （lib/ios/fonts.ts applyAppFontScale），下方按项目内实际用到的 text-[Npx] / leading-[Npx]
+   任意值类逐档重写为 calc(原值 × 倍率)——行高跟随缩放避免大档位文字重叠，容器尺寸全部不变。
+   这些规则置于 @layer utilities 之外：未分层声明在 CSS 级联中恒胜过 Tailwind 的分层工具类，
+   无需 !important；LightningCSS 对 calc 乘法 + var 静态可验证，构建期不会丢弃。
+   新增字号/行高写法时在此同步补一条。 */
+.text-\[6\.5px\] { font-size: calc(6.5px * var(--app-font-scale, 1)); }
+.text-\[7px\] { font-size: calc(7px * var(--app-font-scale, 1)); }
+.text-\[9px\] { font-size: calc(9px * var(--app-font-scale, 1)); }
+.text-\[9\.5px\] { font-size: calc(9.5px * var(--app-font-scale, 1)); }
+.text-\[10px\] { font-size: calc(10px * var(--app-font-scale, 1)); }
+.text-\[10\.5px\] { font-size: calc(10.5px * var(--app-font-scale, 1)); }
+.text-\[11px\] { font-size: calc(11px * var(--app-font-scale, 1)); }
+.text-\[11\.5px\] { font-size: calc(11.5px * var(--app-font-scale, 1)); }
+.text-\[12px\] { font-size: calc(12px * var(--app-font-scale, 1)); }
+.text-\[12\.5px\] { font-size: calc(12.5px * var(--app-font-scale, 1)); }
+.text-\[13px\] { font-size: calc(13px * var(--app-font-scale, 1)); }
+.text-\[13\.5px\] { font-size: calc(13.5px * var(--app-font-scale, 1)); }
+.text-\[14px\] { font-size: calc(14px * var(--app-font-scale, 1)); }
+.text-\[14\.5px\] { font-size: calc(14.5px * var(--app-font-scale, 1)); }
+.text-\[15px\] { font-size: calc(15px * var(--app-font-scale, 1)); }
+.text-\[15\.5px\] { font-size: calc(15.5px * var(--app-font-scale, 1)); }
+.text-\[16px\] { font-size: calc(16px * var(--app-font-scale, 1)); }
+.text-\[16\.5px\] { font-size: calc(16.5px * var(--app-font-scale, 1)); }
+.text-\[17px\] { font-size: calc(17px * var(--app-font-scale, 1)); }
+.text-\[18px\] { font-size: calc(18px * var(--app-font-scale, 1)); }
+.text-\[19px\] { font-size: calc(19px * var(--app-font-scale, 1)); }
+.text-\[20px\] { font-size: calc(20px * var(--app-font-scale, 1)); }
+.text-\[21px\] { font-size: calc(21px * var(--app-font-scale, 1)); }
+.text-\[22px\] { font-size: calc(22px * var(--app-font-scale, 1)); }
+.text-\[23px\] { font-size: calc(23px * var(--app-font-scale, 1)); }
+.text-\[24px\] { font-size: calc(24px * var(--app-font-scale, 1)); }
+.text-\[25px\] { font-size: calc(25px * var(--app-font-scale, 1)); }
+.text-\[26px\] { font-size: calc(26px * var(--app-font-scale, 1)); }
+.text-\[28px\] { font-size: calc(28px * var(--app-font-scale, 1)); }
+.text-\[29px\] { font-size: calc(29px * var(--app-font-scale, 1)); }
+.text-\[30px\] { font-size: calc(30px * var(--app-font-scale, 1)); }
+.text-\[32px\] { font-size: calc(32px * var(--app-font-scale, 1)); }
+.text-\[34px\] { font-size: calc(34px * var(--app-font-scale, 1)); }
+.text-\[36px\] { font-size: calc(36px * var(--app-font-scale, 1)); }
+.text-\[38px\] { font-size: calc(38px * var(--app-font-scale, 1)); }
+.text-\[40px\] { font-size: calc(40px * var(--app-font-scale, 1)); }
+.text-\[42px\] { font-size: calc(42px * var(--app-font-scale, 1)); }
+.text-\[44px\] { font-size: calc(44px * var(--app-font-scale, 1)); }
+.text-\[46px\] { font-size: calc(46px * var(--app-font-scale, 1)); }
+.text-\[48px\] { font-size: calc(48px * var(--app-font-scale, 1)); }
+.text-\[52px\] { font-size: calc(52px * var(--app-font-scale, 1)); }
+.text-\[54px\] { font-size: calc(54px * var(--app-font-scale, 1)); }
+.text-\[64px\] { font-size: calc(64px * var(--app-font-scale, 1)); }
+.text-\[72px\] { font-size: calc(72px * var(--app-font-scale, 1)); }
+.text-\[88px\] { font-size: calc(88px * var(--app-font-scale, 1)); }
+.text-\[96px\] { font-size: calc(96px * var(--app-font-scale, 1)); }
+.text-\[112px\] { font-size: calc(112px * var(--app-font-scale, 1)); }
+.leading-\[9px\] { line-height: calc(9px * var(--app-font-scale, 1)); }
+.leading-\[10px\] { line-height: calc(10px * var(--app-font-scale, 1)); }
+.leading-\[12px\] { line-height: calc(12px * var(--app-font-scale, 1)); }
+.leading-\[13px\] { line-height: calc(13px * var(--app-font-scale, 1)); }
+.leading-\[14px\] { line-height: calc(14px * var(--app-font-scale, 1)); }
+.leading-\[16px\] { line-height: calc(16px * var(--app-font-scale, 1)); }
+.leading-\[17px\] { line-height: calc(17px * var(--app-font-scale, 1)); }
+.leading-\[18px\] { line-height: calc(18px * var(--app-font-scale, 1)); }
+.leading-\[19px\] { line-height: calc(19px * var(--app-font-scale, 1)); }
+.leading-\[20px\] { line-height: calc(20px * var(--app-font-scale, 1)); }
+.leading-\[22px\] { line-height: calc(22px * var(--app-font-scale, 1)); }
+.leading-\[36px\] { line-height: calc(36px * var(--app-font-scale, 1)); }
+.leading-\[40px\] { line-height: calc(40px * var(--app-font-scale, 1)); }
+.leading-\[46px\] { line-height: calc(46px * var(--app-font-scale, 1)); }
+/* placeholder 字号变体（世界书搜索框；placeholder: 前缀类选择器不同，需单独覆盖） */
+.placeholder\:text-\[16px\]::placeholder { font-size: calc(16px * var(--app-font-scale, 1)); }
 
 /* 隐藏滚动条（iOS 风格） */
 .no-scrollbar::-webkit-scrollbar {
