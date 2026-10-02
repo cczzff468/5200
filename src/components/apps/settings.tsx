@@ -48,14 +48,12 @@ import { useUI } from '@/lib/ios/store';
 import { genId, localDB } from '@/lib/ios/db';
 import {
   DEFAULT_API_CONFIG,
-  OPENAI_STANDARD_VOICES,
   WALLPAPER_PRESETS,
   useSettings,
   type ApiPreset,
   type ImgGenConfig,
   type ImgGenPreset,
   type ThemeMode,
-  type TtsVoiceOption,
   type VisionConfig,
   type VisionPreset,
 } from '@/lib/ios/store';
@@ -3307,7 +3305,7 @@ function AboutPage({ onBack }: { onBack: () => void }) {
 const TTS_PROVIDER_PRESETS = {
   minimax: { baseUrl: 'https://api.minimax.chat', model: 'speech-01-turbo', modelChips: ['speech-01-turbo', 'speech-01-hd', 'speech-02-turbo', 'speech-02-hd'] },
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1', modelChips: ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts', 'qwen-tts-latest', 'FunAudioLLM/CosyVoice2-0.5B'] },
-  fishaudio: { baseUrl: 'https://api.fish.audio', model: '', modelChips: [] as readonly string[] },
+  fishaudio: { baseUrl: 'https://fishaudio.org/v1', model: '', modelChips: [] as readonly string[] },
 } as const;
 
 /** 拉取不到模型列表时的降级提示（语音合成语境，区别于聊天 API 的提示文案） */
@@ -3318,16 +3316,13 @@ const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口；不需�
  * - 服务商：内置语音（免费）/ MiniMax / OpenAI 兼容 / Fish Audio；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
  * - 多服务商分槽（Task 29）：切换服务商时快照当前家、恢复目标家（MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖）
  * - 内置语音：浏览器本地引擎（Web Speech），内置 3 女 3 男共 6 个声线，零配置免 API、离线可用，逐个可试听
- * - 音色列表：MiniMax get_voice 拉取；Fish Audio /model 拉取（自己克隆的+市场精选）；OpenAI 兼容尽力尝试、拉不到手动填
- * - 全局默认音色：角色未设独立 voiceId 时使用（聊天设置「他的声音」可给角色单独设音色，Fish Audio 音色存 fishaudio: 前缀）
+ * - 全局默认音色：角色未设独立 voiceId 时使用（聊天设置「他的声音」可给角色单独设音色；音色 ID 手动填写）
  * - 试听：用当前配置合成一句样例直接播放
  */
 function VoicePage({ onBack }: { onBack: () => void }) {
   const ttsConfig = useSettings((s) => s.ttsConfig);
-  const ttsVoices = useSettings((s) => s.ttsVoices);
   const updateTtsConfig = useSettings((s) => s.updateTtsConfig);
   const switchTtsProvider = useSettings((s) => s.switchTtsProvider);
-  const setTtsVoices = useSettings((s) => s.setTtsVoices);
   // 语音识别（STT）独立配置：与 TTS 互不覆盖
   const sttConfig = useSettings((s) => s.sttConfig);
   const updateSttConfig = useSettings((s) => s.updateSttConfig);
@@ -3339,11 +3334,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
 
   const [showKey, setShowKey] = useState(false);
   const [showSttKey, setShowSttKey] = useState(false);
-  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
-  const [voiceQuery, setVoiceQuery] = useState('');
-  const [fetchingVoices, setFetchingVoices] = useState(false);
-  const [voicesError, setVoicesError] = useState('');
-  const [voicesHint, setVoicesHint] = useState('');
 
   // 模型列表拉取（与聊天/识图 API 的「拉取模型」同款体验）
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -3405,70 +3395,15 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const switchProvider = (p: 'builtin' | 'minimax' | 'openai' | 'fishaudio') => {
     if (p === ttsConfig.provider) return;
     // 多服务商分槽（Task 29）：store 内快照当前家连接配置进本家槽位 → 恢复目标家槽位
-    // （MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖；首次切换填该家默认值）；音色列表缓存同步清空
+    // （MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖；首次切换填该家默认值）
     switchTtsProvider(p);
     stopBuiltinSpeech();
     setPreviewingBuiltinId(null);
-    setVoicesError('');
-    setVoicesHint('');
-    setVoicePanelOpen(false);
     setModelsError('');
     setModelsHint('');
     setModelPanelOpen(false);
     setProviderTestError('');
     setProviderTestOk(false);
-  };
-
-  const fetchVoices = async () => {
-    if (!ttsConfig.baseUrl.trim()) {
-      setVoicesError('请先填写 API 地址');
-      return;
-    }
-    if (!ttsConfig.apiKey.trim()) {
-      setVoicesError('请先填写 API Key');
-      return;
-    }
-    setFetchingVoices(true);
-    setVoicesError('');
-    setVoicesHint('');
-    try {
-      const res = await fetch('/api/tts/voices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: ttsConfig }),
-      });
-      const data = (await res.json().catch(() => null)) as { voices?: TtsVoiceOption[]; error?: string } | null;
-      if (!res.ok || !data || data.error) {
-        setVoicesError(data?.error ?? '拉取音色列表失败，可手动填写音色');
-        return;
-      }
-      const list = data.voices ?? [];
-      if (list.length === 0) {
-        if (isFish) {
-          // Fish Audio 罕见拉到空列表（两路都空）：优雅降级，手动填音色 ID
-          setVoicesHint('Fish Audio 未返回音色，可直接手动填写音色 ID（在 Fish Audio 模型页复制）');
-          setVoicePanelOpen(false);
-        } else if (!isMinimax) {
-          // 第三方 OpenAI 兼容服务商无音色接口：展示 OpenAI 标准六音色作点选建议（也可手动填）
-          setTtsVoices(OPENAI_STANDARD_VOICES);
-          setVoicesHint('该服务商没有提供音色列表接口，已展示 OpenAI 标准音色供点选；也可以在输入框直接手动填写任意音色名。');
-          setVoiceQuery('');
-          setVoicePanelOpen(true);
-        } else {
-          // MiniMax 拉不到（一般缺 GroupId）：优雅降级，手动填写
-          setVoicesHint('该服务商没有提供音色列表接口，请直接手动填写音色（如 female-shaonv 等）');
-          setVoicePanelOpen(false);
-        }
-      } else {
-        setTtsVoices(list);
-        setVoiceQuery('');
-        setVoicePanelOpen(true);
-      }
-    } catch {
-      setVoicesError('无法连接到服务器');
-    } finally {
-      setFetchingVoices(false);
-    }
   };
 
   /** TTS 相关模型排前（tts/speech/audio/voice 命中），其余模型排后仍可选 */
@@ -3649,8 +3584,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const q = voiceQuery.trim().toLowerCase();
-  const filteredVoices = q ? ttsVoices.filter((v) => v.id.toLowerCase().includes(q) || v.name.toLowerCase().includes(q)) : ttsVoices;
   const mq = modelQuery.trim().toLowerCase();
   const filteredTtsModels = mq ? ttsModels.filter((m) => m.toLowerCase().includes(mq)) : ttsModels;
 
@@ -3914,7 +3847,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   type={showKey ? 'text' : 'password'}
                   value={ttsConfig.apiKey}
                   onChange={(e) => updateTtsConfig({ apiKey: e.target.value })}
-                  placeholder={isMinimax ? 'eyJhbGciOi...' : isFish ? 'Fish Audio 的 API Key（fish.audio 控制台获取）' : 'sk-...'}
+                  placeholder={isMinimax ? 'eyJhbGciOi...' : isFish ? 'Fish Audio 的 API Key（fishaudio.org 控制台获取）' : 'sk-...'}
                   autoComplete="off"
                   className={`h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06] ${ttsConfig.apiKey ? 'pr-16' : 'pr-10'}`}
                 />
@@ -4088,65 +4021,12 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         <section>
           <SectionLabel icon={Mic} tone={TONE_PINK}>全局默认音色</SectionLabel>
           <div className="flex flex-col gap-3 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
-            <div className="flex gap-2">
-              <Input
-                value={ttsConfig.defaultVoiceId}
-                onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
-                placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : isFish ? '如 Fish Audio 音色 ID（留空用平台默认音色）' : '如 alloy（留空用系统默认）'}
-                className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
-              />
-              <button
-                type="button"
-                onClick={fetchVoices}
-                disabled={fetchingVoices}
-                className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3.5 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
-              >
-                {fetchingVoices ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-                拉取音色列表
-              </button>
-            </div>
-
-            {voicesError && (
-              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                {voicesError}
-              </p>
-            )}
-            {voicesHint && <p className="text-[12px] leading-relaxed text-muted-foreground">{voicesHint}</p>}
-
-            {/* 音色列表面板（拉取成功后展开；搜索过滤 + 点击选中） */}
-            {voicePanelOpen && ttsVoices.length > 0 && (
-              <div className="overflow-hidden rounded-[10px] border border-border/70 bg-background">
-                <div className="border-b border-border/60 p-2">
-                  <Input
-                    value={voiceQuery}
-                    onChange={(e) => setVoiceQuery(e.target.value)}
-                    placeholder="搜索音色"
-                    className="h-9 rounded-[8px] border-black/[0.05] bg-[#F2F2F7] text-[13px] dark:border-white/[0.08] dark:bg-white/[0.06]"
-                  />
-                </div>
-                <div className="thin-scrollbar max-h-64 overflow-y-auto">
-                  {filteredVoices.map((v) => {
-                    const active = ttsConfig.defaultVoiceId.trim() === v.id;
-                    return (
-                      <button
-                        key={v.id}
-                        type="button"
-                        onClick={() => updateTtsConfig({ defaultVoiceId: v.id })}
-                        className="flex w-full items-center gap-2 border-b border-border/40 px-3 py-2.5 text-left last:border-b-0 transition-colors active:bg-muted/60"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[14px]">{v.name}</span>
-                          {v.name !== v.id && <span className="block truncate text-[11px] text-muted-foreground">{v.id}</span>}
-                        </span>
-                        {active && <Check className="h-4 w-4 shrink-0" strokeWidth={2.4} aria-hidden="true" />}
-                      </button>
-                    );
-                  })}
-                  {filteredVoices.length === 0 && <p className="px-3 py-3 text-[13px] text-muted-foreground">没有匹配的音色</p>}
-                </div>
-              </div>
-            )}
+            <Input
+              value={ttsConfig.defaultVoiceId}
+              onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
+              placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : isFish ? '如 Fish Audio 音色 ID（留空用平台默认音色）' : '如 alloy（留空用系统默认）'}
+              className="h-10 w-full rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+            />
 
             {/* 试听 */}
             <div>
@@ -4167,6 +4047,32 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               )}
             </div>
 
+            {/* 测试服务商连接：按当前连接配置合成一句样例，验证填写的服务商能不能用（紧跟试听按钮下方） */}
+            <div>
+              <button
+                type="button"
+                data-testid="tts-provider-test"
+                onClick={() => void testProvider()}
+                disabled={testingProvider}
+                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+              >
+                {testingProvider ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
+                {testingProvider ? '测试中…' : '测试服务商连接'}
+              </button>
+              {providerTestOk && !providerTestError && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-green-600 dark:text-green-400">
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  服务商可用，测试音频已播放。
+                </p>
+              )}
+              {providerTestError && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {providerTestError}
+                </p>
+              )}
+            </div>
+
             <p className="text-[12px] leading-relaxed text-muted-foreground">
               音色优先级：联系人的独立音色（联系人 App 编辑）→ 这里的全局默认 → 系统安全默认。
               配置会在电话、微信、QQ 的语音播放中生效；合成失败不影响文字聊天。
@@ -4176,8 +4082,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         </>
         )}
 
-        {/* 我的音色：自建音色库（名字 + 音色 ID，永久保存；联系人/聊天设置「他的声音」可选用）；紧跟全局默认音色下方，
-            并提供「测试服务商连接」按钮（按当前连接配置合成一句样例，验证填写的服务商能不能用） */}
+        {/* 我的音色：自建音色库（名字 + 音色 ID，永久保存；联系人/聊天设置「他的声音」可选用）；紧跟全局默认音色下方 */}
         <section>
           <SectionLabel icon={AudioLines} tone={TONE_ORANGE}>我的音色</SectionLabel>
           <div className="flex flex-col gap-3 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
@@ -4185,33 +4090,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               把常用的音色存成自己的 preset：填一个名字 + 音色 ID（MiniMax / OpenAI 兼容音色名或内置声线都可），永久保存在本机；
               在联系人编辑和聊天设置「他的声音」里都能点选使用。填好后可先「测试」试听效果，满意再保存。
             </p>
-            {/* 测试服务商：验证填写的服务商配置（地址 / Key / 模型）是否可用；内置语音无连接配置，不展示 */}
-            {!isBuiltin && (
-              <div>
-                <button
-                  type="button"
-                  data-testid="tts-provider-test"
-                  onClick={() => void testProvider()}
-                  disabled={testingProvider}
-                  className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
-                >
-                  {testingProvider ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
-                  {testingProvider ? '测试中…' : '测试服务商连接'}
-                </button>
-                {providerTestOk && !providerTestError && (
-                  <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-green-600 dark:text-green-400">
-                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    服务商可用，测试音频已播放。
-                  </p>
-                )}
-                {providerTestError && (
-                  <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    {providerTestError}
-                  </p>
-                )}
-              </div>
-            )}
             {myVoices.length > 0 && (
               <div className="flex flex-col gap-2">
                 {myVoices.map((v) => (

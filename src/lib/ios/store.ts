@@ -119,12 +119,6 @@ export interface TtsConfig {
   accounts?: Partial<Record<TtsProviderKind, TtsAccount>>;
 }
 
-/** 拉取到的音色列表缓存（设置页与联系人音色选择器共用；也支持手动填写不受限） */
-export interface TtsVoiceOption {
-  id: string;
-  name: string;
-}
-
 export const DEFAULT_TTS_CONFIG: TtsConfig = {
   provider: 'builtin',
   baseUrl: 'https://api.minimax.chat',
@@ -136,7 +130,7 @@ export const DEFAULT_TTS_CONFIG: TtsConfig = {
 };
 
 /** Fish Audio 官方 API 地址（首次切到 Fish Audio 时自动填入，可改） */
-export const FISHAUDIO_DEFAULT_BASE_URL = 'https://api.fish.audio';
+export const FISHAUDIO_DEFAULT_BASE_URL = 'https://fishaudio.org/v1';
 
 /** Fish Audio 音色存储前缀：联系人/我的音色绑定 Fish Audio 音色时用
  *  `fishaudio:<音色ID>` 命名空间隔离（其他服务商读到带前缀的音色会忽略，避免拿 MiniMax 的音色 ID 去请求 Fish Audio） */
@@ -194,16 +188,6 @@ export const DEFAULT_STT_CONFIG: SttConfig = {
   model: 'whisper-1',
   webSpeech: true,
 };
-
-/**
- * OpenAI 标准六音色（可作为点选建议）：
- * 服务商没有音色列表接口时（第三方 OpenAI 兼容大多如此），用这组兜底展示，
- * 用户可点选也可手动填；大多数 OpenAI 兼容网关都兼容这六个标准音色名。
- */
-export const OPENAI_STANDARD_VOICES: TtsVoiceOption[] = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((id) => ({
-  id,
-  name: id,
-}));
 
 export type PasscodeLength = 4 | 6;
 
@@ -336,8 +320,6 @@ interface SettingsState {
   addressMode: AddressMode;
   /** 语音 API（TTS）配置：与聊天/识图 API 相互独立（含 Key，密文持久化） */
   ttsConfig: TtsConfig;
-  /** 拉取到的音色列表缓存（供联系人音色选择器共用） */
-  ttsVoices: TtsVoiceOption[];
   /** 语音识别（STT）配置：与 TTS 相互独立（含 Key，密文持久化） */
   sttConfig: SttConfig;
   /** 自定义 App 图标（AppId → ObjectURL，Blob 存 IndexedDB settings.customIcons） */
@@ -370,12 +352,10 @@ interface SettingsState {
   /** 更新语音 API 配置（立即持久化；播放时现场读取 → 保存后自动生效，无需重启） */
   updateTtsConfig: (patch: Partial<TtsConfig>) => void;
   /** 切换语音服务商（Task 29）：快照当前连接配置进本家槽位 → 恢复目标槽位（首次切换填该家默认值）；
-   *  MiniMax 等已有配置互不覆盖；音色列表缓存同步清空（切换后重新拉取当前服务商的音色） */
+   *  MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖 */
   switchTtsProvider: (next: TtsConfig['provider']) => void;
   /** 更新语音识别（STT）配置（立即持久化；转文字时现场读取 → 保存后自动生效，无需重启） */
   updateSttConfig: (patch: Partial<SttConfig>) => void;
-  /** 更新音色列表缓存（持久化到 IndexedDB settings.ttsVoices） */
-  setTtsVoices: (list: TtsVoiceOption[]) => void;
   /** 设置/移除某 App 的自定义图标（blob=null 恢复默认），同步持久化到 IndexedDB */
   setCustomIcon: (appId: AppId, blob: Blob | null) => void;
   /** 清空全部自定义图标（全部恢复默认） */
@@ -399,7 +379,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
   profile: { ...DEFAULT_PROFILE },
   addressMode: 'name',
   ttsConfig: { ...DEFAULT_TTS_CONFIG },
-  ttsVoices: [],
   sttConfig: { ...DEFAULT_STT_CONFIG },
   customIcons: {},
   loaded: false,
@@ -407,7 +386,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, ttsVoicesRec, sttRec, imgGenRec, imgGenPresetsRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -419,7 +398,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'profile'),
         localDB.get('settings', 'customIcons'),
         localDB.get('settings', 'ttsConfig'),
-        localDB.get('settings', 'ttsVoices'),
         localDB.get('settings', 'sttConfig'),
         localDB.get('settings', 'imgGenConfig'),
         localDB.get('settings', 'imgGenPresets'),
@@ -622,15 +600,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
         }
       }
 
-      // 音色列表缓存（无敏感信息，明文）
-      let ttsVoices: TtsVoiceOption[] = [];
-      if (ttsVoicesRec && Array.isArray(ttsVoicesRec.value)) {
-        ttsVoices = (ttsVoicesRec.value as unknown[]).filter(
-          (v): v is TtsVoiceOption =>
-            typeof v === 'object' && v !== null && typeof (v as TtsVoiceOption).id === 'string'
-        );
-      }
-
       // 生图配置（含 apiKey，密文信封，与 visionConfig 同策略）
       let imgGenConfig: ImgGenConfig = { ...DEFAULT_IMGGEN_CONFIG };
       if (imgGenRec && typeof imgGenRec.value === 'object' && imgGenRec.value !== null) {
@@ -700,7 +669,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
         // 称呼方式已按用户要求固定为「用真实名字」：昵称只是 App 显示昵称，不再是可选项
         addressMode: 'name',
         ttsConfig,
-        ttsVoices,
         sttConfig,
         customIcons,
         loaded: true,
@@ -845,7 +813,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
 
   /** 切换语音服务商（Task 29）：快照当前连接配置进本家槽位 → 恢复目标槽位（首次切换填该家默认值）。
-   *  MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖；音色列表缓存同步清空（切换后需重新拉取当前家的音色） */
+   *  MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖 */
   switchTtsProvider: (next) => {
     const cur = get().ttsConfig;
     if (cur.provider === next) return;
@@ -876,15 +844,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
       defaultVoiceId: saved?.defaultVoiceId ?? '',
       accounts,
     };
-    set({ ttsConfig, ttsVoices: [] });
+    set({ ttsConfig });
     void encryptValue(ttsConfig)
       .then((v) => localDB.put('settings', { key: 'ttsConfig', value: v }))
       .catch(() => undefined);
-  },
-
-  setTtsVoices: (list) => {
-    set({ ttsVoices: list });
-    void localDB.put('settings', { key: 'ttsVoices', value: list });
   },
 
   updateSttConfig: (patch) => {

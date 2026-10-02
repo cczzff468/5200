@@ -1,6 +1,6 @@
 /**
- * 语音 API 服务端共享层（/api/tts 与 /api/tts/voices 两个路由共用）：
- * - MiniMax（t2a_v2 合成 / get_voice 音色列表）、OpenAI 兼容（audio/speech）、Fish Audio（/v1/tts，reference_id 即音色）三类服务商
+ * 语音 API 服务端共享层（/api/tts 路由）：
+ * - MiniMax（t2a_v2 合成）、OpenAI 兼容（audio/speech）、Fish Audio（/v1/tts，reference_id 即音色）三类服务商
  * - node:https 强制 IPv4：沙箱 undici 对含 AAAA 记录的主机有 IPv6 回退缺陷（同天气路由）
  * - 安全：API Key 只在内存里转发，绝不写日志；上游错误透出业务文案不透出 Key
  */
@@ -14,7 +14,7 @@ export interface TtsUpstreamConfig {
   provider: TtsProvider;
   baseUrl: string;
   apiKey: string;
-  /** MiniMax 专属：账户 GroupId（get_voice / t2a_v2 都要求） */
+  /** MiniMax 专属：账户 GroupId（t2a_v2 合成必填） */
   groupId?: string;
   model?: string;
 }
@@ -38,22 +38,14 @@ export function openaiSpeechUrl(base: string): string {
   return `${base}/v1/audio/speech`;
 }
 
-/** OpenAI 兼容：音色列表端点（非标准，仅部分服务商提供；拉不到就手动填） */
-export function openaiVoicesUrl(base: string): string {
-  const stripped = /audio\/speech/i.test(base) ? base.replace(/\/audio\/speech.*$/i, '') : base;
-  if (/\/audio\/voices$/i.test(stripped)) return stripped;
-  if (/\/v1$/i.test(stripped)) return `${stripped}/audio/voices`;
-  return `${stripped}/v1/audio/voices`;
-}
-
 /** MiniMax：拼 /v1 端点（用户填的 base 可能带 /v1 也可能不带） */
 export function minimaxUrl(base: string, path: string): string {
   const stripped = /\/v1$/i.test(base) ? base.replace(/\/v1$/, '') : base;
   return `${stripped}/v1/${path}`;
 }
 
-/** Fish Audio：拼 /v1 端点（官方 base=https://api.fish.audio，TTS=/v1/tts，音色列表=/model）；
- *  用户可能填 https://api.fish.audio、https://api.fish.audio/v1 或完整端点——三种都兼容 */
+/** Fish Audio：拼 /v1 端点（官方 base=https://fishaudio.org/v1，TTS=/v1/tts）；
+ *  用户可能填 https://fishaudio.org、https://fishaudio.org/v1 或完整端点——三种都兼容 */
 export function fishAudioUrl(base: string, path: string): string {
   const stripped = /\/v1$/i.test(base) ? base.replace(/\/v1$/, '') : base;
   return `${stripped}/v1/${path}`;
@@ -165,51 +157,6 @@ export async function minimaxSynthesize(cfg: TtsUpstreamConfig, text: string, vo
   throw new Error('MiniMax 未返回音频数据');
 }
 
-/** MiniMax get_voice 音色列表：system_voice + voice_cloning 合并 */
-export async function minimaxVoices(cfg: TtsUpstreamConfig): Promise<{ id: string; name: string }[]> {
-  const base = normalizeTtsBaseUrl(cfg.baseUrl);
-  if (!base) throw new Error('API 地址无效');
-  if (!cfg.apiKey.trim()) throw new Error('请先填写 API Key');
-  if (!cfg.groupId?.trim()) throw new Error('MiniMax 需要填写 GroupId（在 MiniMax 控制台「账户管理」里查看）');
-  const url = `${minimaxUrl(base, 'get_voice')}?GroupId=${encodeURIComponent(cfg.groupId.trim())}`;
-  const res = await httpsRequest({
-    method: 'GET',
-    url,
-    headers: { Authorization: `Bearer ${cfg.apiKey.trim()}` },
-    timeoutMs: 15_000,
-  });
-  const root = res.json as Record<string, unknown> | null;
-  const status = (root?.base_resp as { status_code?: number } | undefined)?.status_code;
-  if (status !== undefined && status !== 0) {
-    const msg = (root?.base_resp as { status_msg?: string } | undefined)?.status_msg;
-    throw new Error(`MiniMax 音色列表拉取失败（${status}）：${msg || '未知错误'}`);
-  }
-  if (!root || res.status >= 400) throw new Error(upstreamStatusMessage(res.status));
-  const out: { id: string; name: string }[] = [];
-  const seen = new Set<string>();
-  for (const key of ['system_voice', 'voice_cloning', 'voices', 'data']) {
-    const arr = root[key];
-    if (!Array.isArray(arr)) continue;
-    for (const item of arr) {
-      if (typeof item === 'string') {
-        if (item && !seen.has(item)) {
-          seen.add(item);
-          out.push({ id: item, name: item });
-        }
-      } else if (item && typeof item === 'object') {
-        const o = item as Record<string, unknown>;
-        const id = typeof o.voice_id === 'string' ? o.voice_id : typeof o.id === 'string' ? o.id : '';
-        const name = typeof o.voice_name === 'string' ? o.voice_name : typeof o.name === 'string' ? o.name : id;
-        if (id && !seen.has(id)) {
-          seen.add(id);
-          out.push({ id, name: name || id });
-        }
-      }
-    }
-  }
-  return out;
-}
-
 /** OpenAI 兼容 audio/speech 合成：返回音频 Buffer（mp3）；模型名留空 = 不发送 model 字段（部分服务商不需要模型） */
 export async function openaiSynthesize(cfg: TtsUpstreamConfig, text: string, voiceId: string, speed: number): Promise<Buffer> {
   const base = normalizeTtsBaseUrl(cfg.baseUrl);
@@ -235,35 +182,6 @@ export async function openaiSynthesize(cfg: TtsUpstreamConfig, text: string, voi
   }
   if (res.binary.length === 0) throw new Error('服务商未返回音频数据');
   return res.binary;
-}
-
-/**
- * OpenAI 兼容音色列表（尽力而为）：标准 OpenAI 没有音色接口，返回空数组由用户手动填；
- * 官方域名回退内置六个标准音色；第三方兼容服务商若实现了 /audio/voices 则解析。
- */
-export async function openaiVoices(cfg: TtsUpstreamConfig): Promise<{ id: string; name: string }[]> {
-  const base = normalizeTtsBaseUrl(cfg.baseUrl);
-  if (!base) throw new Error('API 地址无效');
-  if (!cfg.apiKey.trim()) throw new Error('请先填写 API Key');
-  const isOpenai = /(^|\.)openai\.com$/i.test(new URL(base).hostname);
-  try {
-    const res = await httpsRequest({
-      method: 'GET',
-      url: openaiVoicesUrl(base),
-      headers: { Authorization: `Bearer ${cfg.apiKey.trim()}` },
-      timeoutMs: 12_000,
-    });
-    const root = res.json as unknown;
-    const voices = parseLooseVoiceList(root);
-    if (voices.length > 0) return voices;
-    if (res.status >= 400) throw new Error(upstreamStatusMessage(res.status));
-  } catch {
-    // 拉取失败不致命：官方域名回退标准音色，否则交手动
-  }
-  if (isOpenai) {
-    return ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((id) => ({ id, name: id }));
-  }
-  return [];
 }
 
 // ---------------- 工具 ----------------
@@ -303,59 +221,6 @@ export async function fishaudioSynthesize(cfg: TtsUpstreamConfig, text: string, 
   return res.binary;
 }
 
-/** Fish Audio /model 音色列表：合并「我克隆的音色」（self=true）与「市场精选」（默认第一页）并去重；
- *  单路失败不致命（另一路还有数据）；两路都空/都失败 → 抛错由上层提示手动填音色 ID */
-export async function fishaudioVoices(cfg: TtsUpstreamConfig): Promise<{ id: string; name: string }[]> {
-  const base = normalizeTtsBaseUrl(cfg.baseUrl);
-  if (!base) throw new Error('API 地址无效');
-  if (!cfg.apiKey.trim()) throw new Error('请先填写 API Key');
-  const headers = { Authorization: `Bearer ${cfg.apiKey.trim()}` };
-  const pull = async (self: boolean): Promise<{ id: string; name: string }[]> => {
-    const url = `${fishAudioUrl(base, 'model')}?page_size=100&page_number=1${self ? '&self=true' : ''}`;
-    try {
-      const res = await httpsRequest({ method: 'GET', url, headers, timeoutMs: 15_000 });
-      if (res.status >= 400) return [];
-      const root = res.json as unknown;
-      const arr = Array.isArray(root)
-        ? root
-        : (() => {
-            const o = root as Record<string, unknown> | null;
-            for (const key of ['items', 'models', 'data']) {
-              if (o && Array.isArray(o[key])) return o[key] as unknown[];
-            }
-            return [];
-          })();
-      const out: { id: string; name: string }[] = [];
-      const seen = new Set<string>();
-      for (const item of arr) {
-        if (!item || typeof item !== 'object') continue;
-        const o = item as Record<string, unknown>;
-        const id = [o._id, o.id, o.reference_id, o.voiceId].find((v): v is string => typeof v === 'string' && v.trim() !== '');
-        if (!id || seen.has(id)) continue;
-        const name = [o.title, o.name, o.voice_name].find((v): v is string => typeof v === 'string' && v.trim() !== '');
-        seen.add(id);
-        out.push({ id, name: name || id });
-      }
-      return out;
-    } catch {
-      return [];
-    }
-  };
-  const mine = await pull(true);
-  const market = await pull(false);
-  const merged: { id: string; name: string }[] = [];
-  const seen = new Set<string>();
-  for (const v of [...mine, ...market]) {
-    if (seen.has(v.id)) continue;
-    seen.add(v.id);
-    merged.push(v);
-  }
-  if (merged.length === 0) {
-    throw new Error('Fish Audio 音色列表拉取失败：请检查 API 地址与 Key，或直接手动填写音色 ID（Fish Audio 模型页可复制）');
-  }
-  return merged;
-}
-
 // ---------------- 工具（解码/通用解析） ----------------
 
 /** 十六进制 / base64 自适应解码（MiniMax t2a_v2 历史上返回 hex，兼容个别 base64 返回） */
@@ -371,40 +236,6 @@ function hexOrBase64ToBuffer(s: string): Buffer | null {
   } catch {
     return null;
   }
-}
-
-/** 宽松解析音色列表：裸字符串数组 / {voice_id,voice_name} / {id,name} / {voices:[...]} / data URL 声纹等 */
-function parseLooseVoiceList(root: unknown): { id: string; name: string }[] {
-  const collect = (arr: unknown[]): { id: string; name: string }[] => {
-    const out: { id: string; name: string }[] = [];
-    const seen = new Set<string>();
-    for (const item of arr) {
-      if (typeof item === 'string') {
-        const t = item.trim();
-        if (t && !seen.has(t)) {
-          seen.add(t);
-          out.push({ id: t, name: t });
-        }
-      } else if (item && typeof item === 'object') {
-        const o = item as Record<string, unknown>;
-        const id = [o.voice_id, o.id, o.voiceId, o.name, o.value].find((v): v is string => typeof v === 'string' && v.trim() !== '');
-        if (id && !seen.has(id)) {
-          seen.add(id);
-          const name = [o.voice_name, o.name, o.displayName, o.display_name].find((v): v is string => typeof v === 'string' && v.trim() !== '');
-          out.push({ id, name: name || id });
-        }
-      }
-    }
-    return out;
-  };
-  if (Array.isArray(root)) return collect(root);
-  if (root && typeof root === 'object') {
-    const o = root as Record<string, unknown>;
-    for (const key of ['voices', 'data', 'list', 'items']) {
-      if (Array.isArray(o[key])) return collect(o[key] as unknown[]);
-    }
-  }
-  return [];
 }
 
 /** 上游 HTTP 状态 → 中文文案（不含任何 Key 信息） */

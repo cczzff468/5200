@@ -45,7 +45,7 @@ export const BUILTIN_TTS_VOICES: BuiltinVoicePreset[] = [
 export const BUILTIN_DEFAULT_FEMALE = 'builtin:xiaoyue';
 export const BUILTIN_DEFAULT_MALE = 'builtin:zichuan';
 
-/** 设置页/联系人音色选择器用的展示列表（{id,name} 与 TtsVoiceOption 结构一致） */
+/** 设置页/联系人音色选择器用的展示列表（{id,name} 结构） */
 export const BUILTIN_VOICE_OPTIONS: { id: string; name: string }[] = BUILTIN_TTS_VOICES.map((v) => ({
   id: v.id,
   name: `${v.name}（${v.label}）`,
@@ -59,7 +59,7 @@ export function isBuiltinVoiceId(voiceId: string | null | undefined): boolean {
 /**
  * 解析应使用的内置声线：
  * 1) 精确匹配预设 id；
- * 2) 旧 API 音色名启发式映射（含 female/女 → 女声，含 male/男 → 男声），让历史角色配置也有合理声线；
+ * 2) 旧存档音色名启发式映射（含 female/女 → 女声，含 male/男 → 男声），让历史角色配置也有合理声线；
  * 3) 显式 gender（联系人性别）兜底；
  * 4) 最终默认 晓月（女声）。
  */

@@ -8169,7 +8169,7 @@ function ChatPage({
         />
       )}
 
-      {/* 他的声音页（聊天设置二级页）：角色音色选择（内置/我的/API 音色）+ AI 语音频率入口 */}
+      {/* 他的声音页（聊天设置二级页）：角色音色选择（内置/我的音色）+ AI 语音频率入口 */}
       {voiceOpen && (
         <ChatVoicePage
           variant="wx"

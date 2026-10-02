@@ -13467,3 +13467,23 @@ Stage Summary:
 - Fish Audio 语音服务商全量落地：设置项（地址/Key/模型名选填/音色列表拉取+手动填）、保存即生效、角色绑定（fishaudio: 前缀命名空间）、优先级（角色>全局>平台默认）、MiniMax 配置分槽互不覆盖、双服务商自由切换、失败降级文字、无 Key 硬编码/无日志泄露
 - 产出：server-tts.ts、api/tts/route.ts、api/tts/voices/route.ts、ios/store.ts、ios/tts-client.ts、settings.tsx、chat-settings.tsx
 - 上游 api.fish.audio 真实可达（连接测试收到真实 401 业务响应，证明 /v1/tts 请求格式正确）；真实音色合成需用户填有效 Key（沙箱无法代验，错误链路已全覆盖）
+
+---
+Task ID: 29-b（Fish Audio 地址更新 + 拉取音色列表功能删除 + 测试按钮移位）
+Agent: Z.ai Code（主会话）
+Task: ①Fish Audio API 地址默认值改为 https://fishaudio.org/v1；②删除「拉取音色列表」功能全链路；③「测试服务商连接」按钮移到「试听当前音色」正下方
+
+Work Log:
+- 地址（store.ts）：FISHAUDIO_DEFAULT_BASE_URL 'https://api.fish.audio' → 'https://fishaudio.org/v1'（首次切 Fish Audio 自动填入/分槽默认值同源）；settings.tsx TTS_PROVIDER_PRESETS.fishaudio.baseUrl 同步更新；Key placeholder 文案 fish.audio→fishaudio.org；server-tts.ts fishAudioUrl 本就剥尾 /v1 再拼 /v1/<path>，新地址拼出 https://fishaudio.org/v1/tts 正确，注释同步
+- 删除拉取音色列表全链路：settings.tsx 删 fetchVoices/音色 ID 输入旁按钮/voicesError/voicesHint/voicePanelOpen/voiceQuery/fetchingVoices/filteredVoices 及音色列表面板 JSX（音色 ID 改纯手动填写）；删除 /api/tts/voices 路由目录；server-tts.ts 删 minimaxVoices/openaiVoices/fishaudioVoices/openaiVoicesUrl/parseLooseVoiceList（仅该路由使用，/api/tts 仅用 synthesize 三函数不受影响）；store.ts 删 TtsVoiceOption/OPENAI_STANDARD_VOICES/ttsVoices 状态/setTtsVoices/IndexedDB settings.ttsVoices 读写（load 解构+净化块+set 落库）/switchTtsProvider 清缓存逻辑；tts-client.ts 重导出去 TtsVoiceOption；chat-settings.tsx 删「他的声音」页 API 音色区块（apiVoices/ttsProvider 订阅+chips JSX，该区块依赖已删缓存，永久为空）；fishaudio: 前缀读取侧（voiceIdForProvider）保留兼容历史存档联系人
+- 测试按钮移位：「测试服务商连接」整块（按钮+成功/失败提示）从「我的音色」section 移入「全局默认音色」卡片内、紧跟「试听当前音色」按钮下方（同卡 gap-3 间距）；因该卡本就在 !isBuiltin 分支内，原 {!isBuiltin} 包裹去除；testid tts-provider-test 不变；providerTestOk/providerTestError/testProvider 状态与 switchProvider 重置逻辑不动
+- 注释清理：VoicePage docblock 音色列表 bullet、switchTtsProvider/switchProvider 注释去「音色列表缓存清空」、builtin-voices.ts 两处注释、wechat.tsx 宿主注释
+- 【工具教训】MultiEdit 在本环境按序应用、遇错即停但已应用的编辑不回滚——连续两次踩坑（剥→剱 笔误、openaiVoicesUrl/minimaxUrl 文件顺序记反）；重要多编辑应拆单发 Edit 并 grep 验证
+- 【dev server】本会话 dev server 进程中途消失（日志无 crash 痕迹）→ 双重 fork `(nohup bun run dev > dev.log 2>&1 &)` 重启恢复
+- 验证：tsc/eslint 零错误；/api/tts/voices 404、/api/tts 空请求 400 业务拦截（重构后编译运行正常）；E2E（agent-browser，解锁 swipe+DOM click 配方）：Fish Audio 首切地址自动填 https://fishaudio.org/v1 ✓、Key placeholder 已更新 ✓、拉取音色列表按钮消失 ✓、测试服务商连接唯一且位于试听当前音色正下方同卡内 ✓、MiniMax↔Fish Audio 往返后 fishaudio 分槽地址保留 ✓、内置语音页（试听当前声线/6 声线卡/无测试按钮）不受影响 ✓；console/errors 零错误；服务商已还原 builtin
+
+Stage Summary:
+- Fish Audio 默认地址全面切换 https://fishaudio.org/v1（预设/分槽默认/placeholder/注释）
+- 拉取音色列表功能前后端全删（设置 UI/路由/server 函数/store 缓存/聊天设置 API 音色区），音色 ID 回归纯手动填写，历史 fishaudio: 前缀数据读取兼容保留
+- 测试服务商连接按钮就位「试听当前音色」正下方（全局默认音色卡内）
+- 产出：store.ts、settings.tsx、chat-settings.tsx、wechat.tsx(注释)、server-tts.ts、tts-client.ts、builtin-voices.ts(注释)、删 api/tts/voices

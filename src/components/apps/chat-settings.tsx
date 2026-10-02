@@ -15,7 +15,7 @@
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - ChatVoicePage：「他的声音」页（三端共用二级页）——选角色说话音色（默认/内置音色/
- *   我的音色/API 音色，宿主持久化到联系人 voiceId）+「AI 语音频率」入口行
+ *   我的音色，宿主持久化到联系人 voiceId）+「AI 语音频率」入口行
  * - ChatVoiceFreqPage：AI 语音发送频率选择页（三端共用）—— 关闭/每条都发语音/经常(1/3)/
  *   偶尔(1/7)/不经常(1/12)，按会话独立（群聊按群），发送时现场读取
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
@@ -481,7 +481,7 @@ export function ChatSettingsPage({
           </button>
         </div>
 
-        {/* 他的声音：角色说话音色（内置音色/我的音色/API 音色）+ AI 语音发送频率（独立二级页） */}
+        {/* 他的声音：角色说话音色（内置音色/我的音色）+ AI 语音发送频率（独立二级页） */}
         {onOpenVoice && (
           <>
             <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1519,7 +1519,7 @@ export function SmsChatSettingsPage({
           </>
         )}
 
-        {/* 他的声音：角色说话音色（内置音色/我的音色/API 音色）+ AI 语音发送频率（独立二级页） */}
+        {/* 他的声音：角色说话音色（内置音色/我的音色）+ AI 语音发送频率（独立二级页） */}
         {onOpenVoice && (
           <>
             <div className={`${t.cardCls} mt-3`}>
@@ -1801,7 +1801,7 @@ export function ChatVoiceFreqPage({
 /**
  * 他的声音页（聊天设置二级页，微信 / QQ / 信息三端共用）：
  * 选择该角色说话用的音色 —— 默认（跟随全局）/ 内置音色（6 个免费声线，可试听）/
- * 我的音色（设置 › 语音 API 里保存的音色）/ API 音色（服务商拉取的列表）；
+ * 我的音色（设置 › 语音 API 里保存的音色）；
  * 选择结果由宿主持久化到联系人 voiceId（点已选中的=取消，恢复「默认」）。
  * 页内还有「AI 语音频率」入口行 → ChatVoiceFreqPage（按会话独立）。
  */
@@ -1830,8 +1830,6 @@ export function ChatVoicePage({
   const t = translateTokens(variant);
   const testPrefix = variant;
   const myVoices = useMyVoices((s) => s.voices);
-  const ttsProvider = useSettings((s) => s.ttsConfig.provider);
-  const apiVoices = useSettings((s) => s.ttsVoices);
   /** 内置声线试听状态（播放中的声线 id） */
   const [previewId, setPreviewId] = useState<string | null>(null);
   // 本页只在客户端渲染：直接惰性初始化（避免 effect 内 setState 的水合/告警问题）
@@ -1864,7 +1862,7 @@ export function ChatVoicePage({
   const mutedText = t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40';
   const current = voiceId.trim();
 
-  /** 音色 chip（我的音色 / API 音色共用）：点选即用，再点取消回「默认」 */
+  /** 音色 chip（我的音色）：点选即用，再点取消回「默认」 */
   const voiceChip = (id: string, name: string, testId: string, key: string) => {
     const active = current === id;
     return (
@@ -2006,22 +2004,6 @@ export function ChatVoicePage({
           </p>
         ) : (
           <div className="flex flex-wrap gap-1.5">{myVoices.map((v, i) => voiceChip(v.voiceId, v.name, `${testPrefix}-voice-my-${i}`, v.id))}</div>
-        )}
-
-        {/* API 音色（服务商拉取的列表；内置语音服务商没有）。
-            Task 29：Fish Audio 音色存 `fishaudio:<id>` 前缀命名空间——其它服务商读到会忽略，
-            保证切换服务商后角色音色读取逻辑跟着切换（fishaudio: 前缀只在 Fish Audio 下生效） */}
-        {ttsProvider !== 'builtin' && apiVoices.length > 0 && (
-          <>
-            <p className={`px-1 pb-1.5 pt-4 text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>
-              API 音色
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {apiVoices.map((v, i) =>
-                voiceChip(ttsProvider === 'fishaudio' ? `fishaudio:${v.id}` : v.id, v.name, `${testPrefix}-voice-api-${i}`, v.id)
-              )}
-            </div>
-          </>
         )}
 
         <p className={t.captionCls}>

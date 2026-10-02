@@ -22,7 +22,7 @@ import {
 } from './builtin-voices';
 
 // 类型与默认值定义在 store（避免循环依赖），这里重导出供 UI 层使用
-export type { TtsConfig, TtsVoiceOption } from './store';
+export type { TtsConfig } from './store';
 
 /** 语音 API 是否已配置：内置语音免配置恒可用；其余服务商有 Key 且有地址才走用户服务 */
 export function isTtsConfigured(cfg?: TtsConfig): boolean {
@@ -89,7 +89,7 @@ export function cleanTextForTts(raw: string): string {
 
 /**
  * 把联系人/我的音色里存的 voiceId 换算成「当前服务商」可用的音色 ID（Task 29 Fish Audio 多服务商）：
- * - `fishaudio:` 前缀（Fish Audio API 音色列表点选时写入）：当前服务商是 Fish Audio → 剥前缀取音色 ID；
+ * - `fishaudio:` 前缀（历史存档联系人绑定过 Fish Audio 音色时可能带有）：当前服务商是 Fish Audio → 剥前缀取音色 ID；
  *   其它服务商（MiniMax/OpenAI）→ 返回空串不采用（Fish Audio 的哈希 ID 对它们无意义，避免拿错 ID 请求失败）
  * - 其它值（裸 ID：MiniMax/OpenAI 音色名、内置声线、手动填写的 Fish Audio 音色 ID）→ 原样返回（完全兼容旧数据）
  */
