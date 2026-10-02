@@ -13539,3 +13539,20 @@ Work Log:
 Stage Summary:
 - 四个设置页 + 「他的声音」我的音色区完成 glassmorphism 风格统一：毛玻璃卡片/输入框（正方形圆角 14px + 内侧高光）/玻璃胶囊 chips（激活深色实心）/分段控件玻璃化/氛围光斑透底；按钮与输入框方形圆角、标签 chip 保持胶囊
 - 产物：src/components/apps/settings.tsx + src/components/apps/chat-settings.tsx 两文件，无逻辑/schema 变更（仅 className 与 ChatVoicePage 我的音色区结构）
+
+---
+Task ID: 32（全面功能检查）
+Agent: Z.ai Code（主会话）
+Task: 用户要求全面检查所有功能与规则，列出需要完善的候选项
+
+Work Log:
+- 静态检查：bunx tsc --noEmit + bun run lint 全绿；git 工作区干净（HEAD 280803e）；dev.log 无异常错误
+- E2E 冒烟（agent-browser 393×852，IndexedDB 种 seed-me kind=user/seed-xiaoxue + 搜索面板直达配方）：锁屏上滑解锁→微信手机号登录（me520/123456）→进小雪会话→发消息→AI 回复到达（语音条 7″+分句文字两条）✓；聊天信息页全部条目渲染正常；「他的声音」页（AI 语音频率/6 内置音色/我的音色空态提示）✓；设置 App 四页（API 配置/识图模型/图像生成/语音 API）毛玻璃渲染全部正常 ✓；Fish Audio 切换默认地址 https://fishaudio.org/v1 ✓ 且拉取音色列表按钮已消失 ✓；QQ 登录（协议勾选 (95,522)）→小雪聊天→AI 回复（语音条 4″+文字，QQ 蓝主题）✓
+- 降级链路实测：/api/chat 首次 502（默认 api.openai.com 未配 Key 上游失败）→ 浏览器直连 OPTIONS 403（CORS，direct-api.ts 设计行为）→ forceSdk 内置模型兜底 200（23.5s）→ 前端正常展示。三层兜底按设计工作
+- 规则审查：TTS 音色优先级（联系人>全局>服务商安全默认，性别兜底）实现正确；fishaudio: 前缀命名空间全链路（store/tts-client/chat-settings/settings）一致；已删功能（ttsVoices/拉取音色/api/tts/voices）零残留引用
+- 收尾：17 stores + localStorage 全清；errors/console 零错误（过滤预期 401/403/502）；浏览器已关
+- 工具边界补充：全屏 App 用 home indicator 短上滑进切换器→卡片上滑关闭可靠；切换器「点空白回主屏」本会话仍不稳定（复现 worklog 已知问题）；搜索面板打开后再点 App 图标才可靠（ARIA .click() 在面板未开时无效）
+
+Stage Summary:
+- 全项目功能检查通过：核心链路（登录/聊天/AI 回复/TTS/设置四页/他的声音/Fish Audio/QQ 端）全部正常，零 console/页面错误，规则一致性无问题
+- 汇总候选项给用户选择：①未配 Key 时跳过用户 API 直接走内置模型（每条消息省 1-3s+消除 403 噪音）；②应用切换器点空白回主屏不稳定修复；③「他的声音」整页玻璃化统一风格（可选）；④历史备选项 A2/A4/A5/B2/B3/B4/C1 仍在备选池
