@@ -45,7 +45,8 @@
  */
 
 import type { ApiConfig } from '@/lib/ios/store';
-import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
+import { kvGet, kvSet, kvDel, kvDelByPrefix, kvDelRaw } from '@/lib/ios/idb-kv';
+import { getAccounts, getActiveAccountIdFor, MAIN_ACCOUNT_ID, type AccountApp } from '@/lib/ios/accounts';
 import { getGroup, listGroups, loadGroupMsgs, onGroupDissolved, type WxGroupMsg } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
@@ -116,22 +117,56 @@ export {
 
 // ---------------- 持久化基础（IndexedDB kv store，启动时由 idb-kv 从 localStorage 迁移） ----------------
 
-const fragKey = (contactId: string) => `mem-frag:${contactId}`;
+// ---------------- 记忆账号作用域（Task 40 v2：多账号记忆隔离） ----------------
+
+/**
+ * 多账号：记忆键按「聊天所在 App 的当前账号」追加 `--{id}` 后缀——
+ * 同一账号在微信/QQ/信息/电话共享记忆（后缀相同），不同账号天然隔离（小号对 AI
+ * 是陌生人的记忆基础；大号/小号记忆互不泄漏）。作用域由含 app 参数的公开 API
+ * 入口（memRecallBlock / memAfterAiTurn / memSummarizeCallNow / memSummarizeNow /
+ * memAddMomentFragment / memAddEventFragment）设置；管理视图/手动整理等无 app
+ * 上下文的操作沿用最近一次作用域（单 App 会话内正确）。
+ * 设置键 mem-settings 与计数/锚点前缀清扫（kvDelByPrefix）不作用域化：
+ * 前者跨账号共享配置，后者天然覆盖全部账号后缀键。
+ */
+let memScopeSuffix = '';
+
+export function setMemScopeForApp(app: AccountApp): void {
+  try {
+    const id = getActiveAccountIdFor(app);
+    memScopeSuffix = id === MAIN_ACCOUNT_ID ? '' : `--${id}`;
+  } catch {
+    memScopeSuffix = '';
+  }
+}
+
+/** 记忆库管理视图（无聊天 App 上下文）统一用信息 App 当前账号视角 */
+export function setMemScopeDefaultView(): void {
+  setMemScopeForApp('sms');
+}
+
+function scoped(base: string): string {
+  return memScopeSuffix ? `${base}${memScopeSuffix}` : base;
+}
+
+const fragKey = (contactId: string) => scoped(`mem-frag:${contactId}`);
 /** 核心记忆存储键（沿用历史 ltm 键名，语义为核心层，避免旧数据迁移） */
-const coreKey = (contactId: string) => `mem-ltm:${contactId}`;
-const longKey = (contactId: string) => `mem-long:${contactId}`;
-const settingsKey = (contactId: string) => `mem-settings:${contactId}`;
+const coreKey = (contactId: string) => scoped(`mem-ltm:${contactId}`);
+const longKey = (contactId: string) => scoped(`mem-long:${contactId}`);
+const settingsKey = (contactId: string) => `mem-settings:${contactId}`; // 设置跨账号共享（不作用域化）
 /** 旧轮次计数键（口径=AI 回复轮数，已废弃）：仅 memPurgeContact 残留清扫用 */
-const roundKey = (contactId: string, app: MemApp) => `mem-round:${contactId}:${app}`;
+const roundKey = (contactId: string, app: MemApp) => scoped(`mem-round:${contactId}:${app}`);
 /** 消息条数计数键：scope 非空（群聊）按群独立；私聊互通开 = 按角色合并（无 app 段）、互通关 = 各 App 独立 */
 const countKey = (contactId: string, app: MemApp, scope: string, share: boolean) =>
-  scope
-    ? `mem-msgcount:${contactId}:${app}${scope}`
-    : share
-      ? `mem-msgcount:${contactId}`
-      : `mem-msgcount:${contactId}:${app}`;
+  scoped(
+    scope
+      ? `mem-msgcount:${contactId}:${app}${scope}`
+      : share
+        ? `mem-msgcount:${contactId}`
+        : `mem-msgcount:${contactId}:${app}`,
+  );
 /** 增量计数锚点键（已计数的最后一条消息 ID）：始终按会话（app+scope），各 App 消息流独立数增量 */
-const anchorKey = (contactId: string, app: MemApp, scope: string) => `mem-anchor:${contactId}:${app}${scope}`;
+const anchorKey = (contactId: string, app: MemApp, scope: string) => scoped(`mem-anchor:${contactId}:${app}${scope}`);
 
 function readJSON<T>(key: string): T | null {
   try {
@@ -498,21 +533,27 @@ export function deleteLongTerm(contactId: string, id: string): boolean {
   return true;
 }
 
-/** 删除联系人时级联清理其全部记忆（碎片/核心/长期/设置/消息计数/锚点/旧轮次键） */
+/** 删除联系人时级联清理其全部记忆（碎片/核心/长期/设置/消息计数/锚点/旧轮次键）；跨全部账号（多账号 v2） */
 export function memPurgeContact(contactId: string): void {
   try {
-    // IndexedDB kv（内存+库同步删）+ localStorage 旧键兼容清扫（防历史残留复活）
-    for (const k of [
-      fragKey(contactId),
-      coreKey(contactId),
-      longKey(contactId),
-      settingsKey(contactId),
-      ...(['wx', 'qq', 'sms', 'phone'] as MemApp[]).map((app) => roundKey(contactId, app)),
-    ]) {
-      kvDel(k);
-      window.localStorage.removeItem(k);
+    // 记忆本体键按账号作用域 → 遍历全部账号精确删；设置键共享（无作用域）单删
+    const accountIds = [MAIN_ACCOUNT_ID, ...getAccounts().filter((a) => a && a.kind !== 'main').map((a) => a.id)];
+    for (const accId of accountIds) {
+      const sfx = accId === MAIN_ACCOUNT_ID ? '' : `--${accId}`;
+      for (const base of [`mem-frag:${contactId}`, `mem-ltm:${contactId}`, `mem-long:${contactId}`]) {
+        const k = `${base}${sfx}`;
+        kvDelRaw(k);
+        window.localStorage.removeItem(base); // 旧裸键兼容清扫
+      }
+      for (const app of ['wx', 'qq', 'sms', 'phone'] as MemApp[]) {
+        const k = `mem-round:${contactId}:${app}${sfx}`;
+        kvDelRaw(k);
+        window.localStorage.removeItem(k);
+      }
     }
-    // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键）
+    kvDel(settingsKey(contactId));
+    window.localStorage.removeItem(settingsKey(contactId));
+    // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键 + 各账号后缀键）
     kvDelByPrefix(`mem-msgcount:${contactId}`);
     kvDelByPrefix(`mem-anchor:${contactId}`);
   } catch {
@@ -528,14 +569,18 @@ export function memPurgeContact(contactId: string): void {
  */
 export async function memResetConvoCounters(contactId: string): Promise<void> {
   try {
-    // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键）
+    // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键 + 各账号后缀键）
     kvDelByPrefix(`mem-msgcount:${contactId}`);
     kvDelByPrefix(`mem-anchor:${contactId}`);
-    // 旧轮次计数键残留清扫（IndexedDB kv 内存+库同步删 + localStorage 防历史残留复活）
-    for (const app of ['wx', 'qq', 'sms', 'phone'] as MemApp[]) {
-      const k = roundKey(contactId, app);
-      kvDel(k);
-      window.localStorage.removeItem(k);
+    // 旧轮次计数键残留清扫（跨全部账号；IndexedDB kv 内存+库同步删 + localStorage 防历史残留复活）
+    const accountIds = [MAIN_ACCOUNT_ID, ...getAccounts().filter((a) => a && a.kind !== 'main').map((a) => a.id)];
+    for (const accId of accountIds) {
+      const sfx = accId === MAIN_ACCOUNT_ID ? '' : `--${accId}`;
+      for (const app of ['wx', 'qq', 'sms', 'phone'] as MemApp[]) {
+        const k = `mem-round:${contactId}:${app}${sfx}`;
+        kvDelRaw(k);
+        window.localStorage.removeItem(k);
+      }
     }
   } catch {
     // 忽略
@@ -658,6 +703,7 @@ export interface MemRecallOpts {
 }
 
 export function memRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
+  setMemScopeForApp(app); // 多账号：按当前聊天 App 的账号取记忆（小号视角=空记忆=陌生人）
   // 顶层容错（与 collectWbBlocks 同款约定）：记忆注入任何意外异常都不阻断消息发送，
   // 返回空块 = 无记忆正常聊天（群聊/私聊同此规则）
   try {
@@ -864,6 +910,7 @@ export function memAddMomentFragment(
   try {
     const text = content.trim();
     if (!contactId || !text) return false;
+    setMemScopeForApp(app); // 多账号：朋友圈记忆按调用方（朋友圈引擎所在 App）账号
     const res = appendFragments(
       contactId,
       app,
@@ -895,6 +942,7 @@ export function memAddEventFragment(
   try {
     const text = content.trim();
     if (!contactId || !text) return null;
+    setMemScopeForApp(app); // 多账号：事件记忆按通话/事件所在 App 的当前账号
     const eventTime = typeof opts?.eventTime === 'number' && Number.isFinite(opts.eventTime) ? opts.eventTime : null;
     const res = appendFragments(
       contactId,
@@ -1530,6 +1578,7 @@ export function memAfterAiTurn(
   opts?: MemTurnOpts
 ): void {
   if (!contactId) return;
+  setMemScopeForApp(app); // 多账号：按当前聊天 App 的账号写记忆
   const scope = opts?.roundScope ? `:${opts.roundScope}` : '';
   try {
     // 时间感知：先把已到期的碎片标记归档（惰性清扫，召回/总结另有实时过滤兜底）
@@ -1704,6 +1753,7 @@ export async function memSummarizeNow(
 ): Promise<ManualSummarizeResult> {
   const guard = `${contactId}:manual`;
   if (inflight.has(guard)) throw new Error('正在总结中，请稍候');
+  setMemScopeForApp(app); // 多账号：手动总结按调用方 App 的当前账号
   inflight.add(guard);
   try {
     if (convo.length < 2) throw new Error('当前没有足够的对话内容可总结');
@@ -1753,6 +1803,7 @@ export async function memSummarizeCallNow(
   const guard = `${contactId}:call`;
   if (inflight.has(guard)) return { added: 0, merged: 0 };
   if (convo.length < 2) return { added: 0, merged: 0 }; // 通话太短（<2 轮文本）没有可沉淀的内容
+  setMemScopeForApp(app); // 多账号：通话记忆按电话 App 当前账号（匿名号通话记忆独立）
   inflight.add(guard);
   try {
     memSweepExpiry(contactId);

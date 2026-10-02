@@ -22,7 +22,9 @@
 
 import { localDB, genId, type CallLogRecord } from './db';
 import { kvGet, kvSet } from './idb-kv';
-import { listContacts, ownerProfile } from './contacts-store';
+// 多账号（Task 40-2d v2）：电话记录归属/读取按电话 App 当前账号；机主身份也按电话账号取
+import { getActiveAccountIdFor } from './accounts';
+import { listContacts, ownerProfileFor } from './contacts-store';
 import { avatarFor } from '@/lib/contacts';
 import { requestCallFollowup } from './call-followup';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from './incoming-call';
@@ -388,6 +390,8 @@ async function recordMissedPhoneCall(
       avatar: avatarFor(contact, 'phone'),
       direction: 'missed',
       duration: 0,
+      // 多账号（Task 40-2d）：记录归属电话 App 当前账号（旧记录无此字段视为大号）
+      account: getActiveAccountIdFor('phone'),
       createdAt: Date.now(),
     });
   } catch {
@@ -396,7 +400,9 @@ async function recordMissedPhoneCall(
   if (blockedByUser) return; // 用户拉黑了角色：不写语音留言（call-logs 已留历史记录）
   try {
     const [owner, recent] = await Promise.all([
-      ownerProfile().catch(() => null),
+      // 多账号（Task 40-2d）：机主身份按电话 App 当前账号取（留言落在该账号名下，
+      // AI 称呼也要用该账号的「我」：大号=机主，小号/匿名号=档案/注册表名）
+      ownerProfileFor('phone').catch(() => null),
       Promise.resolve(readNormMsgs(SMS_MSGS_KEY(contact.id))),
     ]);
     const recentChat = recent.slice(-6).map((m) => ({ role: m.role, content: m.text }));
@@ -448,6 +454,8 @@ async function recordMissedPhoneCall(
         kind: 'voicemail',
         read: false,
         duration: Math.max(1, Math.ceil(text.length / 4)),
+        // 多账号（Task 40-2d）：留言归属电话 App 当前账号（与上方 call-logs 同一账号）
+        account: getActiveAccountIdFor('phone'),
         createdAt: Date.now(),
       });
     }
@@ -544,11 +552,14 @@ async function tickInner(): Promise<void> {
   );
   if (contacts.length === 0) return;
 
-  // 各联系人最近一通电话时间（IndexedDB 一次 getAll，按联系人取 max createdAt）
+  // 各联系人最近一通电话时间（IndexedDB 一次 getAll，按联系人取 max createdAt；只统计电话 App 当前账号的记录）
   const lastCallAtByContact = new Map<string, number>();
   try {
+    const phoneAccId = getActiveAccountIdFor('phone');
     for (const log of await localDB.getAll('call-logs')) {
       if (!log || typeof log.contactId !== 'string' || typeof log.createdAt !== 'number') continue;
+      // 多账号（Task 40-2d）：其他电话账号的通话记录不算互动（旧记录无 account 字段视为大号）
+      if ((log.account ?? 'main') !== phoneAccId) continue;
       const prev = lastCallAtByContact.get(log.contactId) ?? 0;
       if (log.createdAt > prev) lastCallAtByContact.set(log.contactId, log.createdAt);
     }

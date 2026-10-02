@@ -29,7 +29,7 @@ import { qqUnreads, wxUnreads } from '../unread-store';
 import { useSettings } from './store';
 import { pushChatNotification } from './island-notify';
 import { genId } from './db';
-import { ownerRealName } from './contacts-store';
+import { ownerRealNameFor } from './contacts-store';
 import { kvGet, kvSet } from './idb-kv';
 import {
   addGroupMember,
@@ -647,8 +647,9 @@ export function applyGroupCardDecision(
     if (g) {
       unhideGroupSession(app, card.gid);
       // 落「机主加入了群聊」事件：其他 AI 成员由此感知用户进群（事件按时间注入 system）；
-      // 事件落盘后 bump 未读（先事件后 bump，与退群挽留 restoreFlowGroup 同序）
-      void ownerRealName()
+      // 事件落盘后 bump 未读（先事件后 bump，与退群挽留 restoreFlowGroup 同序）；
+      // 多账号 v2：名字按该群所属 App 的当前账号取「我」
+      void ownerRealNameFor(app)
         .then((owner) => {
           pushGroupEvent(card.gid, `${owner || '机主'}加入了群聊`, { type: 'join', targetId: meId });
           (app === 'wx' ? wxUnreads : qqUnreads).bump(`group:${card.gid}`, 1);

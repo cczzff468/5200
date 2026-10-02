@@ -7,8 +7,17 @@
  *   搬完（全部落库成功后）才通知服务端清空对应数据——先搬后删，中途失败下次重来（put 幂等）
  */
 import { localDB, genId } from './db';
-import { getActiveAccount, isMainAccount } from './accounts';
-import { kvDel, kvGet, kvSet } from './idb-kv';
+import {
+  getAccountById,
+  getAccounts,
+  getActiveAccountFor,
+  MAIN_ACCOUNT_ID,
+  updateAccount,
+  deleteAccount as deleteAccountFromRegistry,
+  type AccountApp,
+  type PhoneAccount,
+} from './accounts';
+import { kvDel, kvDelRaw, kvGet, kvSet } from './idb-kv';
 import { clearContactBinding } from './worldbook';
 import { memPurgeContact } from '@/lib/memory';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
@@ -94,14 +103,40 @@ export async function getContact(id: string): Promise<ContactRecord | null> {
 }
 
 /**
- * 机主（kind='user' 联系人）的真实名字：记忆视角统一用它指代用户（取 name 字段，非昵称）。
+ * 机主（kind='user' 且非小号档案的联系人）的真实名字：记忆视角统一用它指代用户（取 name 字段，非昵称）。
  * 记忆文本一律用「机主真实名字 + 联系人名字」指代双方；无 user 联系人或名字为空返回空串
  * （调用方自行回退，如微信/QQ 账号名、Apple 账户名）。
+ * 多账号 v2：排除小号/匿名号的档案联系人（altOf 非空）——它们是账号的「人」，不是机主。
  */
 export async function ownerRealName(): Promise<string> {
   try {
-    const me = (await listContacts()).find((c) => c.kind === 'user');
+    const me = (await listContacts()).find((c) => c.kind === 'user' && !c.altOf);
     return me?.name?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** 当前 App 账号对应的「人」的联系人：main = 机主；alt/anon = altOf/ownerContactId 关联的档案 */
+function pickOwnerContact(acc: PhoneAccount, all: ContactRecord[]): ContactRecord | undefined {
+  if (acc.kind === 'main') return all.find((c) => c.kind === 'user' && !c.altOf);
+  const byAlt = all.find((c) => c.altOf === acc.id);
+  if (byAlt) return byAlt;
+  if (acc.ownerContactId) return all.find((c) => c.id === acc.ownerContactId);
+  return undefined;
+}
+
+/**
+ * 指定 App 当前账号的「我」的真实名字（多账号 v2）：大号 = 机主联系人；
+ * 小号/匿名号 = 其档案联系人名（无档案回退注册表名）。记忆/AI 视角用它指代用户。
+ */
+export async function ownerRealNameFor(app: AccountApp): Promise<string> {
+  try {
+    const acc = getActiveAccountFor(app);
+    const me = pickOwnerContact(acc, await listContacts());
+    const name = me?.name?.trim() || '';
+    if (acc.kind !== 'main') return name || acc.name?.trim() || '';
+    return name;
   } catch {
     return '';
   }
@@ -113,9 +148,27 @@ export async function ownerRealName(): Promise<string> {
  */
 export async function ownerProfile(): Promise<{ realName: string; nickname: string | null } | null> {
   try {
-    const me = (await listContacts()).find((c) => c.kind === 'user');
+    const me = (await listContacts()).find((c) => c.kind === 'user' && !c.altOf);
     if (!me?.name?.trim()) return null;
     return { realName: me.name.trim(), nickname: me.nickname?.trim() || null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 指定 App 当前账号的「我」的资料（多账号 v2）：大号 = 机主；小号/匿名号 = 档案联系人
+ * （无档案回退注册表名，昵称恒 null）。通话/记忆等链路按各自 App 的账号取身份。
+ */
+export async function ownerProfileFor(
+  app: AccountApp,
+): Promise<{ realName: string; nickname: string | null } | null> {
+  try {
+    const acc = getActiveAccountFor(app);
+    const me = pickOwnerContact(acc, await listContacts());
+    const realName = me?.name?.trim() || (acc.kind !== 'main' ? acc.name?.trim() || '' : '');
+    if (!realName) return null;
+    return { realName, nickname: me?.nickname?.trim() || null };
   } catch {
     return null;
   }
@@ -180,10 +233,8 @@ export async function findContactValueConflict(
 }
 
 /**
- * 大号（main）机主资料跨账号读取（Task 40）：
- * 当前就是大号 → 本库 listContacts 即可；在其他账号视角 → 直开大号库 ios-phone-db 只读。
- * 账号切换页/QQ 账号管理/微信切换账号的大号行统一用它，避免把「当前账号的机主」误当大号资料。
- * 读取失败（库不存在/IndexedDB 不可用）返回 null，调用方回退注册表字段。
+ * 大号（main）机主资料（Task 40 账号页展示用；v2 单库后直接本库查询）：
+ * 取 kind='user' 且非小号档案（altOf 空）的联系人。读取失败返回 null，调用方回退注册表字段。
  */
 export async function mainOwnerContact(): Promise<{
   name: string;
@@ -203,41 +254,42 @@ export async function mainOwnerContact(): Promise<{
         }
       : null;
   try {
-    if (isMainAccount()) {
-      return pick((await listContacts()).find((c) => c.kind === 'user'));
-    }
-    const { openDB } = await import('idb');
-    const db = await openDB('ios-phone-db');
-    try {
-      const all = (await db.getAll('contacts')) as ContactRecord[];
-      return pick(all.find((c) => c.kind === 'user'));
-    } finally {
-      db.close();
-    }
+    return pick((await listContacts()).find((c) => c.kind === 'user' && !c.altOf));
   } catch {
     return null;
   }
 }
 
 /**
- * 多账号（Task 40）：小号/匿名号首次进入时自动建机主 user 联系人——
- * 注册表里的名字/号码落到本账号 DB，QQ 登录列表、微信身份、电话主叫号码即刻可用；
- * AI 对该身份零认知（新库无任何历史），符合「小号对 AI 是陌生人」。
- * 大号绝不自动建（机主联系人由用户在联系人 App 自管理，保持历史行为）。
+ * 多账号（Task 40）：为所有缺少档案联系人的小号/匿名号账号自动建 user 档案（altOf 关联）——
+ * 注册表里的名字/号码落到联系人，QQ/微信登录列表、电话拨号解析、账号页资料即刻可用；
+ * 联系人 App 小号 tab 以 USER 同款表单创建的小号已自带档案（altOf），此处跳过。
+ * AI 对该身份零认知（无任何历史），符合「小号对 AI 是陌生人」。大号绝不自动建。
  */
-export async function ensureAccountOwnerContact(): Promise<void> {
+export async function ensureAccountOwnerContacts(): Promise<void> {
   try {
-    const acc = getActiveAccount();
-    if (!acc || acc.kind === 'main') return;
-    const existing = (await listContacts()).find((c) => c.kind === 'user');
-    if (existing) return;
-    await createContact({
-      kind: 'user',
-      name: acc.name?.trim() || (acc.kind === 'anon' ? '匿名账号' : '小号'),
-      phone: acc.phone || undefined,
-      qqId: acc.qqId || undefined,
-      wechatId: acc.wechatId || undefined,
-    });
+    const all = await listContacts();
+    for (const acc of getAccounts()) {
+      if (!acc || acc.kind === 'main') continue;
+      const linked = all.find((c) => c.altOf === acc.id);
+      if (linked) {
+        if (acc.ownerContactId !== linked.id) updateAccount(acc.id, { ownerContactId: linked.id });
+        continue;
+      }
+      if (acc.ownerContactId) {
+        const oc = all.find((c) => c.id === acc.ownerContactId);
+        if (oc && oc.altOf === acc.id) continue; // 引用有效
+      }
+      const rec = await createContact({
+        kind: 'user',
+        name: acc.name?.trim() || (acc.kind === 'anon' ? '匿名账号' : '小号'),
+        phone: acc.phone || undefined,
+        qqId: acc.qqId || undefined,
+        wechatId: acc.wechatId || undefined,
+        altOf: acc.id,
+      });
+      updateAccount(acc.id, { ownerContactId: rec.id });
+    }
   } catch {
     // 失败静默：账号仍可用（登录列表为空时用户可手动在联系人 App 建号）
   }
@@ -287,6 +339,7 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     avatars: normalizeAvatarMap(payload.avatars),
     remark: normalizeText(payload.remark, 60),
     voiceId: normalizeText(payload.voiceId, 120),
+    altOf: normalizeText(payload.altOf, 40) ?? null,
     isFriend: payload.kind === 'user',
     createdAt: new Date().toISOString(),
   };
@@ -403,6 +456,19 @@ function abortInFlightForContact(id: string, survivingContactIds: readonly strin
 }
 
 /**
+ * 跨全部账号精确删一个语义键（大号裸键 + 每个非 main 账号的后缀键）：
+ * 删联系人是「数据本体没了」，任何账号视角都不该残留；键本身含完整联系人 id，
+ * 不能用 kvDelByPrefix（前缀碰撞 c1/c12）。
+ */
+function kvDelAllAccounts(key: string): void {
+  kvDelRaw(key);
+  for (const acc of getAccounts()) {
+    if (acc.kind === 'main') continue;
+    kvDelRaw(`${key}--${acc.id}`);
+  }
+}
+
+/**
  * 删除联系人后清理其全部「聊天痕迹」与「按联系人 id 派生的互动状态」
  * （NPC 级联删除时对每个被删 id 各调一次）：
  * - 聊天记录（已迁 IndexedDB kv store）：微信 wx-chat-msgs:<id> / QQ qq-chat-msgs:<id> /
@@ -454,20 +520,20 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
     // #46 记忆计数/锚点兜底：memPurgeContact（deleteContact 里先于本函数执行）已清一次，
     // 但在途回调仍可能在其后写回（deleteContact 的 await import('@/lib/moments') 窗口
     // 足以让排队的 memAfterAiTurn 插进同步块之间）——按 memory.ts countKey/anchorKey 键构成
-    // 再精确清一次；精确 kvDel 避免 'mem-msgcount:c1' 误伤 'mem-msgcount:c12'
-    kvDel(`mem-msgcount:${id}`);
+    // 再精确清一次；跨全部账号精确删（mem 键按账号带后缀，见 memory.ts 键构成）
+    kvDelAllAccounts(`mem-msgcount:${id}`);
     for (const app of ['wx', 'qq', 'sms', 'phone'] as const) {
-      kvDel(`mem-msgcount:${id}:${app}`);
-      kvDel(`mem-anchor:${id}:${app}`);
+      kvDelAllAccounts(`mem-msgcount:${id}:${app}`);
+      kvDelAllAccounts(`mem-anchor:${id}:${app}`);
     }
-    // 聊天记录（IndexedDB kv store；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫）
+    // 聊天记录（IndexedDB kv store；sms-chat-msgs:<id> 为更早版本的遗留键，一并清扫；跨全部账号）
     for (const k of [
       `wx-chat-msgs:${id}`,
       `qq-chat-msgs:${id}`,
       `ios-chat-msgs:c:${id}`,
       `sms-chat-msgs:${id}`,
     ]) {
-      kvDel(k);
+      kvDelAllAccounts(k);
       // 兼容清扫：迁移器已删旧键，这里再删一次防历史残留复活
       window.localStorage.removeItem(k);
     }
@@ -522,7 +588,7 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       `qq-block:${id}`,
       `sms-block:${id}`,
     ]) {
-      kvDel(k);
+      kvDelAllAccounts(k);
       // 兼容清扫：这些键均由迁移层/运行期直写 kv，localStorage 不会有意写入，这里兜底无害
       window.localStorage.removeItem(k);
     }
@@ -642,7 +708,9 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       if (victims.length === 0) return;
       await Promise.all(victims.map((v) => localDB.delete('voicemails', v.id)));
       const rest = await localDB.getAll('voicemails');
-      phoneBadge.set(rest.filter((v) => !v.read).length);
+      // 多账号 v2：电话角标只统计电话 App 当前账号的未读留言
+      const phoneAcc = getActiveAccountFor('phone').id;
+      phoneBadge.set(rest.filter((v) => !v.read && (v.account ?? 'main') === phoneAcc).length);
     } catch {
       // 清理失败不阻塞删除
     }
@@ -692,6 +760,23 @@ export async function deleteContact(id: string): Promise<boolean> {
   //（专属条目目标指向已删联系人时永远不激活，属无害死配置，用户可在条目编辑里改）
   clearContactBinding(id);
   for (const npcId of cascadedNpcIds) clearContactBinding(npcId);
+  // 多账号 v2：被删的是小号/匿名号的档案联系人（altOf）→ 同步删除其注册表账号
+  //（账号数据 [kv 后缀键/通话记录/留言] 由 deleteAccount 清理；联系人本体已在上方删除，
+  // deleteAccount 里的联系人清理找不到该 id 无副作用）。该账号正在某 App 使用中 → 拒删。
+  if (existing.altOf) {
+    try {
+      const { accountUsedBy } = await import('./accounts');
+      const usedBy = accountUsedBy(existing.altOf);
+      if (usedBy.length > 0) {
+        const nameOf: Record<string, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
+        throw new Error(`该小号正在${usedBy.map((a) => nameOf[a]).join('、')}中使用，请先切换账号后再删除`);
+      }
+      await deleteAccountFromRegistry(existing.altOf);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('使用中')) throw err;
+      // 注册表清理失败不阻塞联系人删除
+    }
+  }
   return true;
 }
 

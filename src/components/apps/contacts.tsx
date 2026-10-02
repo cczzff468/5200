@@ -26,6 +26,7 @@ import {
   listContacts,
   updateContact,
 } from '@/lib/ios/contacts-store';
+import { createAccount, getAccounts, updateAccount, type PhoneAccount } from '@/lib/ios/accounts';
 import {
   formatBirthday,
   genPhone,
@@ -38,7 +39,9 @@ import { useUI } from '@/lib/ios/store';
 
 /**
  * 联系人 App：
- * - 三个 tab（CHAR/USER/NPC，固定屏幕底部）：CHAR 与 USER 表单一致，NPC 多「为谁添加」
+ * - 四个 tab（CHAR/USER/NPC/小号，固定屏幕底部）：CHAR 与 USER 表单一致，NPC 多「为谁添加」；
+ *   小号 tab = 多账号注册表的 alt 账号列表（USER 同款表单创建，档案联系人以 altOf 关联账号，
+ *   anon 匿名身份不进联系人 App）
  * - 好友机制：CHAR/NPC 创建后默认未添加好友，不出现在主列表；
  *   只能在「信息」App 右上角「+」凭手机号搜索并添加好友后，
  *   才会出现在联系人主列表与信息 App（USER 恒为好友）
@@ -52,14 +55,18 @@ import { useUI } from '@/lib/ios/store';
 
 type View =
   | { mode: 'list' }
-  | { mode: 'add'; kind: ContactKind }
+  | { mode: 'add'; kind: ContactKind; asAlt?: boolean }
   | { mode: 'edit'; id: string }
   | { mode: 'detail'; id: string };
 
-const TABS: { key: ContactKind; label: string; hint: string }[] = [
+/** tab 键：三种联系人类型 + 「小号」（注册表账号投影，不是联系人 kind） */
+type TabKey = ContactKind | 'alt';
+
+const TABS: { key: TabKey; label: string; hint: string }[] = [
   { key: 'char', label: 'CHAR', hint: 'AI 角色' },
   { key: 'user', label: 'USER', hint: '我自己' },
   { key: 'npc', label: 'NPC', hint: '配角' },
+  { key: 'alt', label: '小号', hint: '我的其他身份' },
 ];
 
 function isFriendOf(c: ContactRecord): boolean {
@@ -398,8 +405,12 @@ export default function ContactsApp() {
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [tab, setTab] = useState<ContactKind>('char');
+  const [tab, setTab] = useState<TabKey>('char');
   const [view, setView] = useState<View>({ mode: 'list' });
+  /** 小号账号列表（注册表 alt 账号投影）：小号 tab 数据源；创建/编辑/删除小号后 refreshAccounts 同步 */
+  const [altAccounts, setAltAccounts] = useState<PhoneAccount[]>([]);
+  /** 列表页顶部提示（绿色成功/红色失败，几秒自动消失，同导入提示模式） */
+  const [listNotice, setListNotice] = useState<{ text: string; bad: boolean } | null>(null);
   /** 跨 App 跳转：QQ「编辑资料」/ 微信「朋友资料」带来的联系人 id（挂载时消费，等载入后直接进编辑页） */
   const [pendingEdit, setPendingEdit] = useState<string | null>(() => useUI.getState().pendingContactEdit);
   /** 跨 App 跳转：世界书「去创建 AI 角色」带来的预设类型（挂载时消费，直接进对应 tab 的新建表单） */
@@ -410,6 +421,7 @@ export default function ContactsApp() {
     setLoadError('');
     try {
       setContacts(await listContacts());
+      setAltAccounts(getAccounts().filter((a) => a.kind === 'alt'));
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : '读取联系人失败');
     } finally {
@@ -420,6 +432,18 @@ export default function ContactsApp() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 小号注册表快照刷新（创建/编辑/删除小号后调用；anon 匿名号不进联系人 App，只列 alt） */
+  const refreshAccounts = useCallback(() => {
+    setAltAccounts(getAccounts().filter((a) => a.kind === 'alt'));
+  }, []);
+
+  // 列表页提示几秒后自动消失
+  useEffect(() => {
+    if (!listNotice) return;
+    const t = window.setTimeout(() => setListNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [listNotice]);
 
   // 挂载即消费跨 App 请求（避免失败时残留导致以后误跳）
   useEffect(() => {
@@ -460,7 +484,11 @@ export default function ContactsApp() {
   }, []);
 
   const byId = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts]);
-  const owners = useMemo(() => contacts.filter((c) => c.kind === 'char' || c.kind === 'user'), [contacts]);
+  // NPC 归属候选：CHAR/USER 且非小号档案（altOf 非空者是账号的「人」，不作为归属主人）
+  const owners = useMemo(
+    () => contacts.filter((c) => (c.kind === 'char' || c.kind === 'user') && !c.altOf),
+    [contacts],
+  );
 
   const subtitleOf = (c: ContactRecord): string => {
     if (c.kind === 'npc') {
@@ -486,18 +514,38 @@ export default function ContactsApp() {
             tab={tab}
             onTab={setTab}
             subtitleOf={subtitleOf}
+            altAccounts={altAccounts}
+            notice={listNotice}
             onOpenDetail={(id) => setView({ mode: 'detail', id })}
-            onAdd={(kind) => setView({ mode: 'add', kind })}
+            onAdd={(kind) => {
+              if (kind === 'alt') {
+                // 小号 tab 的「+」：与 USER 完全同款的表单，保存时创建注册表账号 + 档案联系人
+                setView({ mode: 'add', kind: 'user', asAlt: true });
+                return;
+              }
+              setView({ mode: 'add', kind });
+            }}
             onRetry={() => void load()}
           />
         )}
         {view.mode === 'add' && (
           <ContactFormView
             kind={view.kind}
+            asAlt={view.asAlt}
             owners={owners}
             onSaved={(created) => {
               upsert(created);
-              setTab(created.kind);
+              if (view.asAlt) {
+                // 创建小号成功：注册表已在表单内同步，回小号 tab + 绿色成功提示
+                refreshAccounts();
+                setTab('alt');
+                setListNotice({
+                  text: `已创建小号「${created.name}」，可在微信 / QQ / 信息 / 电话中切换使用`,
+                  bad: false,
+                });
+              } else {
+                setTab(created.kind);
+              }
               setView({ mode: 'list' });
             }}
             onCancel={() => setView({ mode: 'list' })}
@@ -510,6 +558,8 @@ export default function ContactsApp() {
             owners={owners}
             onSaved={(updated) => {
               upsert(updated);
+              // 编辑小号档案时注册表账号（名字/号码）已在表单内同步，刷新快照
+              refreshAccounts();
               setView({ mode: 'detail', id: updated.id });
             }}
             onCancel={() => setView({ mode: 'detail', id: view.id })}
@@ -525,8 +575,9 @@ export default function ContactsApp() {
             onEdit={(id) => setView({ mode: 'edit', id })}
             onBack={() => setView({ mode: 'list' })}
             onDeleted={(id) => {
-              // 服务端级联删 NPC，本地同步移除
+              // 级联删 NPC，本地同步移除；删的是小号档案时注册表账号已级联删除，刷新快照
               setContacts((prev) => prev.filter((c) => c.id !== id && c.ownerId !== id));
+              refreshAccounts();
               setView({ mode: 'list' });
             }}
           />
@@ -588,6 +639,45 @@ function PendingRow({ contact, onOpen }: { contact: ContactRecord; onOpen: () =>
   );
 }
 
+/** 小号行：档案联系人（altOf=账号 id 的 user 联系人）展示；无档案回退注册表名字 + 首字母圆 */
+function AltRow({
+  acc,
+  profile,
+  onOpen,
+}: {
+  acc: PhoneAccount;
+  profile: ContactRecord | undefined;
+  onOpen: () => void;
+}) {
+  const name = profile?.name?.trim() || acc.name || '小号';
+  const phone = profile?.phone?.trim() || acc.phone || '';
+  const wechatId = profile?.wechatId?.trim() || acc.wechatId || '';
+  const subtitle = [phone, wechatId].filter(Boolean).join(' · ');
+  return (
+    <button
+      type="button"
+      data-testid={`alt-row-${acc.id}`}
+      onClick={onOpen}
+      aria-label={`查看小号${name}`}
+      disabled={!profile}
+      className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors active:bg-muted/60 disabled:opacity-70"
+    >
+      {profile ? (
+        <Avatar contact={profile} />
+      ) : (
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#D5F0EC] to-[#A9D9D1] text-[16px] font-medium text-[#0E7C6B] dark:from-[#0E7C6B]/40 dark:to-[#0E7C6B]/20 dark:text-[#8FDCCE]">
+          {[...name.trim()][0]?.toUpperCase() || '?'}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[16px] font-medium leading-tight">{name}</span>
+        <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">{subtitle || '小号'}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />
+    </button>
+  );
+}
+
 function ListView({
   contacts,
   loading,
@@ -595,6 +685,8 @@ function ListView({
   tab,
   onTab,
   subtitleOf,
+  altAccounts,
+  notice,
   onOpenDetail,
   onAdd,
   onRetry,
@@ -602,14 +694,20 @@ function ListView({
   contacts: ContactRecord[];
   loading: boolean;
   loadError: string;
-  tab: ContactKind;
-  onTab: (k: ContactKind) => void;
+  tab: TabKey;
+  onTab: (k: TabKey) => void;
   subtitleOf: (c: ContactRecord) => string;
+  /** 小号账号（注册表 alt 账号投影；小号 tab 专用） */
+  altAccounts: PhoneAccount[];
+  /** 列表页顶部提示（小号创建成功等，几秒后自动消失） */
+  notice: { text: string; bad: boolean } | null;
   onOpenDetail: (id: string) => void;
-  onAdd: (kind: ContactKind) => void;
+  onAdd: (kind: TabKey) => void;
   onRetry: () => void;
 }) {
-  const all = contacts.filter((c) => c.kind === tab);
+  const isAltTab = tab === 'alt';
+  // 小号档案（altOf 非空）只在小号 tab 出现，不重复出现在 USER
+  const all = isAltTab ? [] : contacts.filter((c) => c.kind === tab && !(tab === 'user' && c.altOf));
   // USER 恒为好友；CHAR/NPC 需添加好友后才进主列表
   const friendList = all.filter(isFriendOf);
   const pendingList = all.filter((c) => !isFriendOf(c));
@@ -730,6 +828,7 @@ function ListView({
               type="button"
               onClick={() => onAdd(tab)}
               aria-label={`添加${activeTab.label}`}
+              data-testid={tab === 'alt' ? 'alt-add' : undefined}
               className="flex h-9 w-9 items-center justify-center rounded-full"
             >
               <Plus className="h-[19px] w-[19px]" strokeWidth={2.2} />
@@ -737,6 +836,18 @@ function ListView({
           </div>
         }
       />
+
+      {/* 小号创建成功等列表提示（几秒后自动消失，与导入提示同款位置） */}
+      {notice && !importMsg && (
+        <p
+          role="status"
+          className={`px-4 pb-0.5 text-center text-[12.5px] leading-[18px] ${
+            notice.bad ? 'text-[#FF3B30]' : 'text-[#34C759]'
+          }`}
+        >
+          {notice.text}
+        </p>
+      )}
 
       {/* 导入结果提示（几秒后自动消失）+ 隐藏文件选择框 */}
       {importMsg && (
@@ -793,8 +904,33 @@ function ListView({
               </div>
             )}
 
-            {/* 好友主列表 */}
-            {friendList.length === 0 ? (
+            {/* 小号 tab：注册表 alt 账号列表；其他 tab：好友主列表 */}
+            {isAltTab ? (
+              altAccounts.length === 0 ? (
+                <div className="px-6 py-14 text-center">
+                  <p className="text-[15px] font-medium text-muted-foreground">还没有小号</p>
+                  <p className="mt-1 text-[13px] text-muted-foreground/70">点右上角「+」创建一个小号</p>
+                </div>
+              ) : (
+                <ul
+                  className="mx-4 mb-3 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
+                  aria-label="小号列表"
+                >
+                  {altAccounts.map((acc) => (
+                    <li key={acc.id} className="border-b border-border/50 last:border-b-0">
+                      <AltRow
+                        acc={acc}
+                        profile={contacts.find((c) => c.altOf === acc.id)}
+                        onOpen={() => {
+                          const profile = contacts.find((c) => c.altOf === acc.id);
+                          if (profile) onOpenDetail(profile.id);
+                        }}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : friendList.length === 0 ? (
               <div className="px-6 py-14 text-center">
                 <p className="text-[15px] font-medium text-muted-foreground">
                   {pendingList.length > 0 ? `还没有已添加的${activeTab.label}` : `还没有${activeTab.label}`}
@@ -825,7 +961,7 @@ function ListView({
         )}
       </div>
 
-      {/* 三段式 tab：CHAR / USER / NPC（屏幕底部） */}
+      {/* 四段式 tab：CHAR / USER / NPC / 小号（屏幕底部） */}
       <nav
         role="tablist"
         aria-label="联系人分类"
@@ -839,6 +975,7 @@ function ListView({
               role="tab"
               aria-selected={tab === t.key}
               onClick={() => onTab(t.key)}
+              data-testid={t.key === 'alt' ? 'contacts-tab-alt' : undefined}
               className={`h-[32px] flex-1 rounded-full text-[13px] font-semibold tracking-wide transition-all ${
                 tab === t.key
                   ? 'bg-foreground text-background shadow-sm'
@@ -927,11 +1064,13 @@ function formFromRecord(c: ContactRecord): ContactFormState {
   };
 }
 
-/** 添加 / 编辑共用表单：编辑模式传 initial，保存走 PATCH；新建走 POST */
+/** 添加 / 编辑共用表单：编辑模式传 initial，保存走 PATCH；新建走本地 createContact；
+ *  asAlt = 创建小号（先建注册表 alt 账号，联系人作为其档案） */
 function ContactFormView({
   kind,
   initial,
   owners,
+  asAlt = false,
   onSaved,
   onCancel,
 }: {
@@ -939,12 +1078,16 @@ function ContactFormView({
   /** 编辑模式：传入原记录；新建模式不传 */
   initial?: ContactRecord | null;
   owners: ContactRecord[];
+  /** 小号模式：新建时先建注册表 alt 账号，再以其「人」身份建 USER 档案联系人（altOf 关联） */
+  asAlt?: boolean;
   onSaved: (c: ContactRecord) => void;
   onCancel: () => void;
 }) {
   const editing = Boolean(initial);
   const isNpc = kind === 'npc';
   const tabMeta = TABS.find((t) => t.key === kind)!;
+  /** 小号语境（创建小号 / 编辑小号档案）：标题与保存后的注册表同步行为不同 */
+  const altMode = asAlt || Boolean(initial?.altOf);
 
   const [form, setForm] = useState<ContactFormState>(initial ? formFromRecord(initial) : EMPTY_FORM);
   const [avatar, setAvatar] = useState<string | null>(initial?.avatar ?? null);
@@ -1051,6 +1194,29 @@ function ContactFormView({
       setSubmitting(true);
       setError('');
       try {
+        if (asAlt) {
+          // 创建小号：先建注册表 alt 账号（自动生成虚拟手机号/QQ号/微信号），再以该账号的
+          // 「人」身份建 USER 档案联系人（altOf 关联）；ID 留空时 createContact 自动生成 →
+          // 全量回写注册表，两边保持一致
+          const acc = createAccount('alt', form.name.trim());
+          const rec = await createContact({
+            kind: 'user',
+            ownerId: null,
+            avatar,
+            altOf: acc.id,
+            ...form,
+            wechatPassword,
+            qqPassword,
+          });
+          updateAccount(acc.id, {
+            ownerContactId: rec.id,
+            phone: rec.phone ?? '',
+            qqId: rec.qqId ?? '',
+            wechatId: rec.wechatId ?? '',
+          });
+          onSaved(rec);
+          return;
+        }
         const saved = editing
           ? await updateContact(initial!.id, {
               ...form,
@@ -1061,6 +1227,15 @@ function ContactFormView({
             })
           : await createContact({ kind, ownerId: isNpc ? ownerId : null, avatar, ...form, wechatPassword, qqPassword });
         if (!saved) throw new Error('联系人不存在');
+        // 编辑小号档案 → 名字/号码同步注册表账号（微信/QQ 登录列表、账号页等展示取注册表兜底）
+        if (editing && initial?.altOf) {
+          updateAccount(initial.altOf, {
+            name: saved.name,
+            phone: saved.phone ?? '',
+            qqId: saved.qqId ?? '',
+            wechatId: saved.wechatId ?? '',
+          });
+        }
         onSaved(saved);
       } catch (err) {
         setError(err instanceof Error ? err.message : '保存失败，请重试');
@@ -1077,7 +1252,15 @@ function ContactFormView({
     <>
       {/* 顶部导航：标题居中，左侧返回键，右侧保存 */}
       <IOSNavBar
-        title={editing ? `编辑${tabMeta.label}` : `添加${tabMeta.label}`}
+        title={
+          editing
+            ? altMode
+              ? '编辑小号'
+              : `编辑${tabMeta.label}`
+            : altMode
+              ? '添加小号'
+              : `添加${tabMeta.label}`
+        }
         large={false}
         left={<IOSBackButton onClick={onCancel} label="返回" />}
         right={
@@ -1370,15 +1553,20 @@ function DetailView({
   onEdit,
   onBack,
   onDeleted,
+  onDeleteError,
 }: {
   contact: ContactRecord | null;
   ownerName: string | null;
   onEdit: (id: string) => void;
   onBack: () => void;
   onDeleted: (id: string) => void;
+  /** 删除失败回调（小号档案正在某 App 使用中会被拒删）：message = 存储层错误文案 */
+  onDeleteError?: (msg: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** 删除失败原因（页内红字提示，与表单错误提示同款模式） */
+  const [deleteError, setDeleteError] = useState('');
 
   /** 导出全部资料：全部字段导出为 txt（与列表页「导入」同一格式，可直接回环导入） */
   const exportAll = () => {
@@ -1458,9 +1646,13 @@ function DetailView({
         setDeleting(false);
         setConfirming(false);
       }
-    } catch {
+    } catch (err) {
+      // 删除失败（如小号正在微信/QQ 等使用中被拒删）：保留联系人，页内展示原因
       setDeleting(false);
       setConfirming(false);
+      const msg = err instanceof Error && err.message ? err.message : '删除失败，请重试';
+      setDeleteError(msg);
+      onDeleteError?.(msg);
     }
   };
 
@@ -1505,7 +1697,9 @@ function DetailView({
               ? ownerName
                 ? `NPC · ${ownerName}${contact.relation ? ` · ${contact.relation}` : ''}`
                 : 'NPC'
-              : kindLabel}
+              : contact.altOf
+                ? '小号'
+                : kindLabel}
           </span>
         </div>
 
@@ -1607,22 +1801,40 @@ function DetailView({
             <GlassButton
               variant="danger"
               type="button"
+              data-testid={contact.altOf ? `alt-delete-${contact.altOf}` : undefined}
               onClick={() => {
                 if (!confirming) setConfirming(true);
                 else void doDelete();
               }}
-              aria-label={confirming ? '确认删除联系人' : '删除联系人'}
+              aria-label={
+                confirming
+                  ? contact.altOf
+                    ? '确认删除小号'
+                    : '确认删除联系人'
+                  : contact.altOf
+                    ? '删除小号'
+                    : '删除联系人'
+              }
               className={`flex h-[50px] w-full items-center justify-center gap-2 rounded-[16px] text-[16px] font-semibold ${
                 confirming ? 'bg-[#FF453A]/[0.20] shadow-[0_6px_18px_rgba(255,69,58,0.18)]' : ''
               }`}
             >
               <Trash2 className="h-[18px] w-[18px]" strokeWidth={2.1} aria-hidden="true" />
-              {deleting ? '删除中…' : confirming ? '再点一次确认删除' : '删除联系人'}
+              {deleting ? '删除中…' : confirming ? '再点一次确认删除' : contact.altOf ? '删除小号' : '删除联系人'}
             </GlassButton>
             {confirming && !deleting && (
               <p className="pt-2 text-center text-[12px] text-muted-foreground">
                 删除后无法恢复
-                {contact.kind !== 'npc' ? '，其名下 NPC 会一并删除' : ''}
+                {contact.altOf
+                  ? '，该小号的聊天、记忆等账号数据会一并删除'
+                  : contact.kind !== 'npc'
+                    ? '，其名下 NPC 会一并删除'
+                    : ''}
+              </p>
+            )}
+            {deleteError && (
+              <p role="alert" className="pt-2 text-center text-[13px] leading-[19px] text-[#FF3B30]">
+                {deleteError}
               </p>
             )}
           </div>

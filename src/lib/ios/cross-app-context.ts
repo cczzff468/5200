@@ -40,7 +40,10 @@
  *   （memberIds 含该联系人，ownerId 兜底防转让后数据缺员）。
  */
 
-import { kvGet } from './idb-kv';
+import { kvGetScoped } from './idb-kv';
+// 多账号（Task 40-2d v2）：跨 App 读其他 App 的消息用 kvGetScoped（显式按对应 App 当前账号，
+// 不依赖键前缀隐式映射）；电话 call-logs/voicemails 按电话 App 当前账号过滤
+import { getActiveAccountIdFor } from './accounts';
 import { localDB, type CallLogRecord, type VoicemailRecord } from './db';
 import { getContact } from './contacts-store';
 import { getMemSettings } from '@/lib/memory';
@@ -224,9 +227,12 @@ function joinSections(intro: string, sections: BlockSection[], budget: number): 
 
 // ---------------- 跨 App 块 ----------------
 
-/** 读某私聊 App 的最近消息行（机主=userLabel/角色=你：；userLabel 缺省回退「机主」；空返回 []） */
+/** 读某私聊 App 的最近消息行（机主=userLabel/角色=你：；userLabel 缺省回退「机主」；空返回 []）。
+ *  多账号（Task 40-2d v2）：本函数只读「其他 App」（buildCrossAppBlock 的 others 循环），
+ *  消息键用 kvGetScoped 显式按对应 App 的当前账号读（wx→wx 账号 / qq→qq 账号 / sms→sms 账号），
+ *  与调用方所在 App 的当前账号无关 */
 function readPrivateLines(app: Exclude<CrossAppId, 'phone'>, contactId: string, userLabel?: string): string[] {
-  const raw: unknown = kvGet(chatMsgsKey(app, contactId));
+  const raw: unknown = kvGetScoped(chatMsgsKey(app, contactId), app);
   if (!Array.isArray(raw)) return [];
   const msgs = sortAsc(raw.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === 'object')).slice(-MSGS_PER_APP);
   // fix3-4 私聊行主语用传入的机主名（原先硬编码「用户」与角色名两套自称并存；缺省回退「机主」）
@@ -241,21 +247,27 @@ function readPrivateLines(app: Exclude<CrossAppId, 'phone'>, contactId: string, 
 }
 
 /** 电话来源：call-logs 最近 3 通摘要 + 末通 kind='call' 转写（没有转写只有摘要行）；
- *  charName = 角色（AI）名，转写行「角色名：」前缀映射为「你：」（fix3-4，可空） */
+ *  charName = 角色（AI）名，转写行「角色名：」前缀映射为「你：」（fix3-4，可空）。
+ *  多账号（Task 40-2d v2）：只读电话 App 当前账号的通话记录/留言（旧记录无 account 字段视为大号） */
 async function readPhoneLines(contactId: string, charName?: string): Promise<string[]> {
   if (!contactId) return [];
   let logs: CallLogRecord[] = [];
   let vms: VoicemailRecord[] = [];
+  const phoneAccId = getActiveAccountIdFor('phone');
   try {
     const allLogs = await localDB.getAll('call-logs');
-    logs = allLogs.filter((l) => l && l.contactId === contactId).sort((a, b) => b.createdAt - a.createdAt);
+    logs = allLogs
+      .filter((l) => l && l.contactId === contactId && (l.account ?? 'main') === phoneAccId)
+      .sort((a, b) => b.createdAt - a.createdAt);
   } catch {
     return []; // IndexedDB 不可用：电话来源跳过
   }
   if (logs.length === 0) return [];
   try {
     const allVms = await localDB.getAll('voicemails');
-    vms = allVms.filter((v) => v && v.contactId === contactId && v.kind === 'call');
+    vms = allVms.filter(
+      (v) => v && v.contactId === contactId && v.kind === 'call' && (v.account ?? 'main') === phoneAccId,
+    );
   } catch {
     vms = []; // 转写读不到不影响摘要行
   }

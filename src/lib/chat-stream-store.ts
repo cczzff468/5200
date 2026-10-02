@@ -32,7 +32,6 @@
  */
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
-import { openDB, deleteDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { ApiConfig } from '@/lib/ios/store';
 import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
@@ -40,9 +39,24 @@ import { createReplySegmentScanner } from '@/lib/reply-count';
 import { describeImages } from '@/lib/vision-client';
 import { clearDeliverBoundary, isAiDelivering, scheduleAiDelivery } from '@/lib/ios/ai-delivery';
 import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
-// 40-B 多账号 AI 认知隔离：主账号下计算「用户的小号」聊天摘录并合并进人设 system 消息
-import { getAccounts, getActiveAccountId, isMainAccount, accountDbName } from '@/lib/ios/accounts';
+// 40-B 多账号 AI 认知隔离：主账号（该 App 当前账号为大号）下计算「用户的小号」聊天摘录并合并进人设 system 消息
+import {
+  getAccounts,
+  getActiveAccountIdFor,
+  MAIN_ACCOUNT_ID,
+  parseScopedKey,
+  type AccountApp,
+} from '@/lib/ios/accounts';
+import { localDB } from '@/lib/ios/db';
 import { buildAltAccountsSection } from '@/lib/ios/persona';
+
+/** 会话键 → 账号所属 App（v2 per-app 账号）：wx:* → 微信、qq:* → QQ、其余（sms 开头与 assistant 等历史键）→ 信息 */
+function streamAppOf(sessionKey: string): AccountApp {
+  if (sessionKey.startsWith('wx:')) return 'wx';
+  if (sessionKey.startsWith('qq:')) return 'qq';
+  return 'sms';
+}
+
 // ---------------- 公开类型 ----------------
 
 export type ChatStreamStatus = 'streaming' | 'done' | 'error';
@@ -161,17 +175,19 @@ function blockSessionOf(sessionKey: string): { app: BlockApp; contactId: string 
 // ---------------- 40-B 小号认知摘录（多账号 AI 认知隔离） ----------------
 
 /**
- * 需求「二/三/四」（AI 认知隔离）的注入实现：
- * - 大号（main）聊天时，把用户各小号/匿名号与 AI 的聊天记录摘录算成 digest，
+ * 需求「二/三/四」（AI 认知隔离）的注入实现（v2：单库 + 键作用域 + per-app 账号）：
+ * - 某 App 当前账号为大号（main）时发起聊天，把用户各小号/匿名号与 AI 的聊天记录摘录算成 digest，
  *   追加进本轮人设 system 消息（persona.buildAltAccountsSection 的固定规则文案 + 摘录），
  *   AI 因此能回答大号用户问起小号的事（信息来源=小号与 AI 的聊天记录）；
- * - 小号/匿名号侧聊天不注入（isMainAccount() 为 false → null）：AI 对小号是陌生人
- *   （小号空库天然成立），也绝不反向泄露大号记忆——digest 只从小号库单向读出；
+ * - 小号/匿名号侧聊天不注入（getActiveAccountIdFor(app) 非 main → null）：AI 对小号是陌生人，
+ *   也绝不反向泄露大号记忆——digest 只从小号作用域键单向读出；
+ * - 数据源（v2）：主库 localDB 的 kv store 一次 getAll 拿全部原始行（各账号键带 `--{id}` 后缀），
+ *   按 accounts.parseScopedKey 解析 {base, accId} 归属账号；联系人名字映射用共享库 contacts store；
  * - 每轮最多计算一次（runStream 内、构建请求前），IndexedDB 读很快；失败→null 零注入，
  *   不影响本轮聊天。电话通话走服务端 persona 直调（不传 ctx.altAccountsDigest）→ 不注入，行为零变化。
  */
 
-/** 小号/匿名号库内聊天记录的 kv 键前缀（与 idb-kv 迁移清单同源；sms- 为更早版本遗留键） */
+/** 小号/匿名号作用域键内聊天记录的 kv 裸键前缀（与 idb-kv 迁移清单同源；sms- 为更早版本遗留键） */
 const ALT_CHAT_KEY_PREFIXES = ['wx-chat-msgs:', 'qq-chat-msgs:', 'ios-chat-msgs:', 'sms-chat-msgs:'] as const;
 /** 信息 App 内置 AI 小助手会话（精确键） */
 const ALT_ASSISTANT_KEY = 'ios-chat-assistant-msgs';
@@ -181,34 +197,6 @@ const ALT_DIGEST_MAX_MSGS = 24;
 const ALT_DIGEST_MSG_MAX_CHARS = 80;
 /** digest 总字符上限（多小号兜底，超出截断） */
 const ALT_DIGEST_MAX_CHARS = 2400;
-
-/** 小号库 schema 子集（与 db.ts 的 kv/contacts store 结构一致；只读访问，不改 db.ts） */
-interface AltAccountDB extends DBSchema {
-  kv: { key: string; value: { key: string; value: unknown } };
-  contacts: { key: string; value: { id: string; name: string } };
-}
-
-/**
- * 打开小号/匿名号的库（db.ts 同款 'idb' openDB）：库不存在（或无 kv/contacts store）→ 返回 null。
- * 注意 indexedDB.open 对不存在的库会顺手创建一个无 store 的空库——检测到刚创建的空库时
- * deleteDB 清理掉，不给「尚未初始化的小号」留垃圾库。
- */
-async function openAltAccountDb(name: string): Promise<IDBPDatabase<AltAccountDB> | null> {
-  const db = await openDB<AltAccountDB>(name);
-  if (!db.objectStoreNames.contains('kv') || !db.objectStoreNames.contains('contacts')) {
-    const empty = db.objectStoreNames.length === 0; // 刚被顺手创建的空库
-    db.close();
-    if (empty) {
-      try {
-        await deleteDB(name);
-      } catch {
-        // 清理失败无碍（空库无数据）
-      }
-    }
-    return null;
-  }
-  return db;
-}
 
 /** 摘录条目（mine=true=小号侧发出；peer=该会话对方角色名；time=消息时间戳） */
 interface AltDigestEntry {
@@ -266,7 +254,7 @@ function altDigestEntryOf(raw: unknown, peer: string): AltDigestEntry | null {
   return { time, mine, peer, text };
 }
 
-/** kv 键 → 会话对方角色名；非聊天键返回 null（联系人会话按 contactId 查小号库联系人名映射） */
+/** kv 裸键（base）→ 会话对方角色名；非聊天键返回 null（联系人会话按 contactId 查共享联系人名映射） */
 function altSessionPeerName(key: string, nameById: Map<string, string>): string | null {
   if (key === ALT_ASSISTANT_KEY) return '小助手';
   for (const p of ALT_CHAT_KEY_PREFIXES) {
@@ -291,60 +279,67 @@ function altRelTime(ts: number): string {
 }
 
 /**
- * 计算「用户的小号」聊天摘录 digest（仅在主账号下返回内容；否则/失败/无数据 → null）。
- * 对注册表里每个非 main 账号：打开其独立库（accountDbName）→ 读 kv 全部记录筛聊天键 +
- * contacts 全部记录建 id→名字映射 → 跨会话合并消息按时间倒序取最新 24 条。
- * 每账号一个块（小标题行注明 小号名/匿名账号 + 号码），块间空行；库打不开/无聊天记录的账号跳过。
+ * 计算「用户的小号」聊天摘录 digest（仅在该 App 当前账号为大号时返回内容；否则/失败/无数据 → null）。
+ * v2 单库：一次读主库 kv 全部原始行（各账号键带 `--{id}` 后缀），按 parseScopedKey 解析出的
+ * 账号 id 归属；base 匹配聊天键前缀（或小助手精确键）的行即该账号的聊天消息；
+ * 联系人名字映射用共享库 contacts（三端共享联系人，id→名字一次建全）。
+ * 跨会话合并消息按时间倒序取最新 24 条；每账号一个块（标题行用注册表条目：小号名/匿名账号 + 号码），
+ * 块间空行；无聊天记录的账号跳过；主库读取失败返回 null（零注入）。
  */
-async function computeAltAccountsDigest(): Promise<string | null> {
+async function computeAltAccountsDigest(app: AccountApp): Promise<string | null> {
   if (typeof window === 'undefined' || !('indexedDB' in window)) return null;
-  if (!isMainAccount()) return null; // 仅大号注入；小号/匿名号侧 AI 与用户互为陌生人
-  const activeId = getActiveAccountId();
-  const alts = getAccounts().filter((a) => a && a.id !== activeId && a.kind !== 'main');
+  // 门控：仅该 App 当前账号为大号时注入（小号/匿名号侧 AI 与用户互为陌生人）
+  const currentId = getActiveAccountIdFor(app);
+  if (currentId !== MAIN_ACCOUNT_ID) return null;
+  const alts = getAccounts().filter((a) => a && a.kind !== 'main' && a.id !== currentId);
   if (alts.length === 0) return null;
+  // 主库一次 getAll 拿 kv 全部原始行（含各账号后缀键）+ contacts 全部记录
+  let kvRows: { key: string; value: unknown }[];
+  let contactRows: { id: string; name: string }[];
+  try {
+    const [kv, contacts] = await Promise.all([localDB.getAll('kv'), localDB.getAll('contacts')]);
+    kvRows = kv as { key: string; value: unknown }[];
+    contactRows = contacts as { id: string; name: string }[];
+  } catch {
+    return null; // 主库读取失败：本轮零注入，不影响聊天
+  }
+  const nameById = new Map<string, string>();
+  for (const c of contactRows) {
+    if (c && typeof c.id === 'string' && typeof c.name === 'string' && c.name.trim()) {
+      nameById.set(c.id, c.name.trim());
+    }
+  }
+  // 按账号收集摘录条目：键后缀归属小号账号 + base（裸键）匹配聊天键
+  const altIds = new Set(alts.map((a) => a.id));
+  const entriesByAcc = new Map<string, AltDigestEntry[]>();
+  for (const row of kvRows) {
+    if (!row || typeof row.key !== 'string' || !Array.isArray(row.value)) continue;
+    const scoped = parseScopedKey(row.key);
+    if (!scoped || !altIds.has(scoped.accId)) continue; // 大号原键/其他账号数据跳过
+    const peer = altSessionPeerName(scoped.base, nameById);
+    if (!peer) continue;
+    const list = entriesByAcc.get(scoped.accId) ?? [];
+    for (const raw of row.value) {
+      const e = altDigestEntryOf(raw, peer);
+      if (e) list.push(e);
+    }
+    entriesByAcc.set(scoped.accId, list);
+  }
   const blocks: string[] = [];
   for (const acc of alts) {
-    try {
-      const db = await openAltAccountDb(accountDbName(acc.id));
-      if (!db) continue; // 库不存在（小号从未初始化）→ 跳过
-      let block = '';
-      try {
-        const [kvRows, contacts] = await Promise.all([db.getAll('kv'), db.getAll('contacts')]);
-        const nameById = new Map<string, string>();
-        for (const c of contacts) {
-          if (c && typeof c.id === 'string' && typeof c.name === 'string' && c.name.trim()) {
-            nameById.set(c.id, c.name.trim());
-          }
-        }
-        const entries: AltDigestEntry[] = [];
-        for (const row of kvRows) {
-          if (!row || typeof row.key !== 'string' || !Array.isArray(row.value)) continue;
-          const peer = altSessionPeerName(row.key, nameById);
-          if (!peer) continue;
-          for (const raw of row.value) {
-            const e = altDigestEntryOf(raw, peer);
-            if (e) entries.push(e);
-          }
-        }
-        if (entries.length > 0) {
-          // 跨会话按时间倒序取最新 N 条，再按时间正序输出（对话自然阅读顺序）
-          entries.sort((a, b) => b.time - a.time);
-          const picked = entries.slice(0, ALT_DIGEST_MAX_MSGS);
-          picked.sort((a, b) => a.time - b.time);
-          const label = acc.kind === 'anon' ? '匿名账号' : acc.name.trim() || '小号';
-          const phone = acc.phone ? `（${acc.phone}）` : '';
-          const recent = altRelTime(picked[picked.length - 1].time);
-          const lines = [`〔${label}〕${phone}与你的最近聊天${recent ? `（最近消息：${recent}）` : ''}：`];
-          for (const e of picked) lines.push(`${e.mine ? '用户' : e.peer}：${e.text}`);
-          block = lines.join('\n');
-        }
-      } finally {
-        db.close(); // 用完即关：不长期持有其他账号的库连接
-      }
-      if (block) blocks.push(block);
-    } catch {
-      // 单个小号读取失败：跳过该账号，不影响本轮聊天
-    }
+    const entries = entriesByAcc.get(acc.id) ?? [];
+    if (entries.length === 0) continue; // 无聊天记录的账号跳过
+    // 跨会话按时间倒序取最新 N 条，再按时间正序输出（对话自然阅读顺序）
+    entries.sort((a, b) => b.time - a.time);
+    const picked = entries.slice(0, ALT_DIGEST_MAX_MSGS);
+    picked.sort((a, b) => a.time - b.time);
+    // 标题行用注册表条目（小号名/匿名账号 + 手机号），摘录格式与 v1 完全一致
+    const label = acc.kind === 'anon' ? '匿名账号' : acc.name.trim() || '小号';
+    const phone = acc.phone ? `（${acc.phone}）` : '';
+    const recent = altRelTime(picked[picked.length - 1].time);
+    const lines = [`〔${label}〕${phone}与你的最近聊天${recent ? `（最近消息：${recent}）` : ''}：`];
+    for (const e of picked) lines.push(`${e.mine ? '用户' : e.peer}：${e.text}`);
+    blocks.push(lines.join('\n'));
   }
   if (blocks.length === 0) return null;
   let digest = blocks.join('\n\n');
@@ -547,10 +542,26 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
 
   // ---- 40-B AI 认知隔离：主账号下注入「用户的小号」聊天摘录 ----
   // 每轮最多计算一次（IndexedDB 读很快）；非主账号/无小号数据/读取失败 → null，零注入零破坏。
-  // 小号/匿名号侧不注入：AI 对小号是陌生人（空库天然成立），摘录也绝不反向泄露大号内容。
+  // 小号/匿名号侧不注入：AI 对小号是陌生人，摘录也绝不反向泄露大号内容。
   let baseMessages = messages;
   try {
-    const altDigest = await computeAltAccountsDigest();
+    // v2 per-app 账号：由 sessionKey 推导所属 App（wx:/qq:/其余=sms），摘录按该 App 当前账号门控
+    const accApp = streamAppOf(opts.sessionKey);
+    const accBefore = getActiveAccountIdFor(accApp);
+    const altDigest = await computeAltAccountsDigest(accApp);
+    // 摘录读取窗口内该 App 发生换号（v2 切号不刷新页面）：本轮作废，绝不把旧账号上下文
+    // 的回复落进新账号的会话。与 abortStreamsByPrefix 同口径清理（finalized 预置跳过落盘、
+    // 移除流状态与 payload，防流状态卡在 streaming 阻塞该会话后续新回合；切号事件监听方
+    // 通常已先行中止，此处为兜底幂等清理）：
+    if (getActiveAccountIdFor(accApp) !== accBefore) {
+      rt.finalized = true;
+      rt.aborted = true;
+      cancelBgRelay(rt.state.sessionKey);
+      streams.delete(rt.state.sessionKey);
+      activePayloads.delete(rt.state.sessionKey);
+      emit();
+      return;
+    }
     if (altDigest) baseMessages = mergeAltDigestIntoMessages(messages, altDigest);
   } catch {
     // 摘录失败不影响本轮聊天

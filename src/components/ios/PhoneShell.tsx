@@ -8,9 +8,10 @@ import { useIslandNotify } from '@/lib/ios/island-notify';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { isVoiceHoldActive } from '@/components/apps/voice-input';
 import { useLightForeground } from '@/lib/ios/foreground';
-import { ensureAccountOwnerContact, migrateFromServer } from '@/lib/ios/contacts-store';
+import { ensureAccountOwnerContacts, migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureAppFontApplied } from '@/lib/ios/fonts';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
+import { migrateLegacyAccounts } from '@/lib/ios/accounts';
 import StatusBar from './StatusBar';
 import HomeScreen from './HomeScreen';
 import { CustomWallpaperLayers } from './WallpaperLayers';
@@ -169,9 +170,12 @@ export default function PhoneShell() {
   // 都依赖内存缓存就位），再读设置 —— 两者都完成后才结束开机门控。
   useEffect(() => {
     void (async () => {
+      // 多账号（Task 40 v2）：v1 每账号独立库 → 单库+键作用域迁移（幂等，无旧库时零开销）；
+      // 必须在 ensureKvReady 注水之前——迁移产生的后缀键要进同一份内存
+      await migrateLegacyAccounts();
       await ensureKvReady();
-      // 多账号（Task 40）：小号/匿名号首次进入自动建机主联系人（大号不动作）
-      await ensureAccountOwnerContact();
+      // 多账号（Task 40）：为缺档案联系人的小号/匿名号自动建 user 档案（altOf 关联）
+      await ensureAccountOwnerContacts();
       await load();
       // 全局字体恢复（Task 33-d）：读持久化的 appFontId 写入 CSS 变量；内部全兜底，失败不阻塞开机
       await ensureAppFontApplied();

@@ -60,6 +60,10 @@ export interface ContactRecord {
   /** 语音音色（该角色在电话/微信/QQ 里说活用的 voiceId；空 = 用全局默认音色）。
    *  每次播放时实时重读，切角色/改音色后下一句即生效 */
   voiceId?: string | null;
+  /** 多账号（Task 40 v2）：非空 = 该 user 联系人是某个小号/匿名号账号的「人」的档案
+   *  （值为注册表账号 id，PhoneAccount.ownerContactId 反向引用）。
+   *  档案随联系人 App 小号 tab 管理；USER 列表/机主解析（ownerRealName 等）会排除它们。 */
+  altOf?: string | null;
   createdAt: string;
 }
 
@@ -99,6 +103,8 @@ export interface ContactPayload {
   remark?: string | null;
   /** 语音音色（角色在电话/微信/QQ 里的说话音色；空 = 用全局默认） */
   voiceId?: string | null;
+  /** 多账号：小号/匿名号账号档案标记（创建时一次性绑定，见 ContactRecord.altOf） */
+  altOf?: string | null;
 }
 
 function randInt(min: number, max: number): number {

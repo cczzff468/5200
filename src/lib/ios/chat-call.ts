@@ -44,7 +44,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ContactRecord } from '@/lib/contacts';
 import { memAfterAiTurn, memConvoFromRaw, memSummarizeCallNow } from '@/lib/memory';
-import { ownerRealName, ownerProfile } from './contacts-store';
+import { ownerRealNameFor, ownerProfileFor } from './contacts-store';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
@@ -509,7 +509,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     const cur = optsRef.current;
     const cid = cur.contact?.id;
     if (!cid || cur.contact?.kind === 'user') return;
-    void ownerRealName()
+    // 多账号 v2：机主名按通话所属 App 的当前账号取「我」（cur.app 'wx'|'qq'|'phone' ⊂ AccountApp）
+    void ownerRealNameFor(cur.app)
       .catch(() => '')
       .then((owner) =>
         memAfterAiTurn(
@@ -534,7 +535,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     if (!cid || cur.contact?.kind === 'user') return;
     const turns = chatLogToConvo();
     if (turns.length < 2) return; // 通话太短没有可沉淀的内容
-    void ownerRealName()
+    void ownerRealNameFor(cur.app)
       .catch(() => '')
       .then((owner) =>
         memSummarizeCallNow(
@@ -590,7 +591,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         try {
           const transcript = chatLogRef.current.map((m) => ({ role: m.role, content: m.content }));
           const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? null;
-          const owner = await ownerProfile().catch(() => null);
+          // 多账号 v2：机主资料按通话所属 App 的当前账号取
+          const owner = await ownerProfileFor(optsRef.current.app).catch(() => null);
           // 跨 App 近况块 + 群聊近况块（Task 40-b）：通话内已建则复用缓存；从未发过请求的短通话现算一次
           if (!crossCtxRef.current) {
             crossCtxRef.current = peer?.id
@@ -756,8 +758,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       const lastUserText = greeting || proactiveAttempt > 0 ? null : (historyBefore[historyBefore.length - 1]?.content ?? null);
       const recalledBlock =
         optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined;
-      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
-      const owner = await ownerProfile().catch(() => null);
+      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（v2：按通话所属 App 当前账号）
+      const owner = await ownerProfileFor(optsRef.current.app).catch(() => null);
       // 跨 App 近况块 + 群聊近况块（Task 40-b）：首次请求时构建并缓存（联系人/机主名现场取）
       if (!crossCtxRef.current) {
         crossCtxRef.current = c?.id
@@ -1479,7 +1481,7 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       const peer = optsRef.current.contact;
       const decision =
         peer && peer.kind !== 'user'
-          ? ownerProfile()
+          ? ownerProfileFor(optsRef.current.app)
               .then((owner) =>
                 requestAnswerDecision({
                   number: peer.phone || '10086',

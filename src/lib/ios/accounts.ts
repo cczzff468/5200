@@ -1,25 +1,29 @@
 'use client';
 
 /**
- * 多账号系统（Task 40）：大号（main）/ 小号（alt）/ 匿名号码（anon）。
+ * 多账号系统（Task 40 架构 v2）：大号（main）/ 小号（alt）/ 匿名号码（anon）。
  *
- * 设计（数据隔离核心）：
- * - 每个账号一个独立的 IndexedDB 数据库：
- *   大号固定沿用 `ios-phone-db`（零迁移，现有数据全部保留）；
- *   小号/匿名号用 `ios-phone-db--{accountId}`（首次切换/创建时按需建库，schema 与大号一致）。
- *   聊天记录、联系人、记忆（mem-*）、朋友圈、钱包、QQ 空间、小助手会话等全部走 kv/contacts store
- *   → 换库即全量隔离，AI 与小号互为陌生人（大号的人设/记忆/聊天记录一条都不带过去）。
- * - 账号注册表 + 当前账号存 localStorage（设备级、跨账号共享）：
- *   `ios-phone-accounts` / `ios-phone-active-account`。
- * - 切换账号 = 写入当前账号 id → location.reload()：整页重启后 DB 层按新账号开库，
- *   天然「无残留」；刷新很快（纯本地应用），开机屏一闪而过。
- * - 少量必须按账号隔离的小型 localStorage 键（QQ 登录态、排队补跑回合）用
- *   accountScopedKey() 加后缀；大号保持原键名（向后兼容，登录态不丢）。
- * - 设备级配置（主题/字体/状态栏/API Key/TTS 等）不入账号库，切号共享——符合
- *   「不破坏字体等设置」的范围限定。
+ * 数据隔离模型（v2：单库 + 键作用域 + per-app 当前账号）：
+ * - 所有数据都在同一个 IndexedDB 库 `ios-phone-db`——设备还是同一台手机，切换账号
+ *   「不是换了一部手机」：照片/音乐/备忘录/日历/联系人/主题/字体等全部设备级共享不变；
+ * - 只有微信 / QQ / 信息 / 电话四个 App 的数据随账号切换：
+ *   ① kv 层（idb-kv.ts）对 `wx-*` / `qq-*` / `ios-chat-*` / `sms-*` 前缀的键按「对应 App 的
+ *      当前账号」自动追加 `--{accountId}` 后缀（大号保持原键，旧数据零迁移）；
+ *   ② 电话 call-logs / voicemails store 的记录带 account 字段（缺省视为大号）；
+ *   ③ 记忆 mem-* 键由 memory.ts 按「聊天所在 App 的当前账号」加后缀（同账号跨 App 共享记忆）。
+ * - 当前账号按 App 独立：`ios-phone-active-accounts` = {wx,qq,sms,phone}——QQ 切小号
+ *   不影响微信还登着大号（App 之间切换账号分开，不是全局）。
+ * - 切换账号 = 写入对应 App 的标记 + 派发 `ios-phone-account-changed` 事件；各 App 监听后
+ *   中断在途流并重读自己的数据——**全程不刷新网页**。
+ * - 账号注册表存 localStorage `ios-phone-accounts`（设备级）。小号的「人」的档案
+ *   （头像/性别/人设/密码等）存为联系人 App 里一条 altOf 指向该账号的 user 联系人，
+ *   注册表只记 ownerContactId 引用（登录校验/资料展示复用既有联系人链路）。
  */
 
 export type AccountKind = 'main' | 'alt' | 'anon';
+
+/** 账号跟随的四个 App（账号按 App 独立切换） */
+export type AccountApp = 'wx' | 'qq' | 'sms' | 'phone';
 
 export interface PhoneAccount {
   /** 稳定 id：大号恒为 'main'，其余为创建时生成的 a{ts}{rand} */
@@ -34,11 +38,25 @@ export interface PhoneAccount {
   /** 微信号（小号生成；匿名号同号复用） */
   wechatId: string;
   createdAt: number;
+  /**
+   * 该账号关联的「人」的档案联系人（联系人 App 中 kind='user' 且 altOf=本账号 id 的记录）。
+   * 小号在联系人 App 以 USER 同款表单创建时回填；旧账号（v1 自动建档）在开机时补齐。
+   * 大号恒为空（机主联系人自管理）。
+   */
+  ownerContactId?: string;
 }
 
 const REG_KEY = 'ios-phone-accounts';
+/** v1 全局当前账号键（只作迁移源读取，不再写入） */
 export const ACTIVE_KEY = 'ios-phone-active-account';
+/** v2 per-app 当前账号键：JSON {wx,qq,sms,phone} */
+const ACTIVE_APPS_KEY = 'ios-phone-active-accounts';
+/** 账号切换事件（detail: { app, id }）——各 App 监听并重读数据，全程不刷新网页 */
+export const ACCOUNT_CHANGED_EVENT = 'ios-phone-account-changed';
 export const MAIN_ACCOUNT_ID = 'main';
+
+/** 键作用域后缀（kv 键与 localStorage 键统一）：小号/匿名号 `--{id}`，大号无后缀 */
+const SCOPE_SEP = '--';
 
 // ---------------- 工具 ----------------
 
@@ -106,51 +124,175 @@ export function getAccountById(id: string): PhoneAccount | null {
   return getAccounts().find((a) => a.id === id) ?? null;
 }
 
-// ---------------- 当前账号 ----------------
-
-/** 当前活跃账号 id（'main' = 大号，默认值；reload 后开机即按此开库） */
-export function getActiveAccountId(): string {
-  const v = readLs(ACTIVE_KEY);
-  return v || MAIN_ACCOUNT_ID;
+/** 编辑账号（联系人 App 创建/编辑小号时同步注册表）；目标不存在返回 null */
+export function updateAccount(
+  id: string,
+  patch: Partial<Pick<PhoneAccount, 'name' | 'ownerContactId' | 'phone' | 'qqId' | 'wechatId'>>,
+): PhoneAccount | null {
+  const list = getAccounts();
+  const idx = list.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const next: PhoneAccount = { ...list[idx], ...patch };
+  if (id === MAIN_ACCOUNT_ID) {
+    // 大号条目字段由各页面实时资料兜底，仅允许改 name 备用值
+    next.kind = 'main';
+    next.ownerContactId = undefined;
+  }
+  list[idx] = next;
+  saveAccounts(list);
+  return next;
 }
 
-export function getActiveAccount(): PhoneAccount {
-  const id = getActiveAccountId();
+// ---------------- per-app 当前账号 ----------------
+
+type ActiveApps = Record<AccountApp, string>;
+const DEFAULT_APPS: ActiveApps = { wx: MAIN_ACCOUNT_ID, qq: MAIN_ACCOUNT_ID, sms: MAIN_ACCOUNT_ID, phone: MAIN_ACCOUNT_ID };
+
+let activeAppsCache: ActiveApps | null = null;
+
+function readActiveApps(): ActiveApps {
+  if (activeAppsCache) return activeAppsCache;
+  let parsed: Partial<ActiveApps> = {};
+  try {
+    const raw = readLs(ACTIVE_APPS_KEY);
+    if (raw) parsed = JSON.parse(raw) as Partial<ActiveApps>;
+  } catch {
+    parsed = {};
+  }
+  const out: ActiveApps = { ...DEFAULT_APPS };
+  (Object.keys(DEFAULT_APPS) as AccountApp[]).forEach((app) => {
+    const v = parsed[app];
+    if (typeof v === 'string' && v && getAccountById(v)) out[app] = v;
+  });
+  activeAppsCache = out;
+  return out;
+}
+
+function writeActiveApps(apps: ActiveApps): void {
+  activeAppsCache = apps;
+  writeLs(ACTIVE_APPS_KEY, JSON.stringify(apps));
+}
+
+/** 指定 App 当前账号 id（'main' = 大号） */
+export function getActiveAccountIdFor(app: AccountApp): string {
+  return readActiveApps()[app] ?? MAIN_ACCOUNT_ID;
+}
+
+export function getActiveAccountFor(app: AccountApp): PhoneAccount {
+  const id = getActiveAccountIdFor(app);
   return getAccountById(id) ?? getAccounts()[0];
 }
 
-/** 仅写标记（不 reload）；界面层切换请用 switchAccount() */
-export function setActiveAccountId(id: string): void {
-  writeLs(ACTIVE_KEY, id);
-}
-
-export function isMainAccount(): boolean {
-  return getActiveAccountId() === MAIN_ACCOUNT_ID;
-}
-
-// ---------------- DB 名 / 键名派生 ----------------
-
-/** 账号对应的 IndexedDB 库名：大号 = 'ios-phone-db'（与历史一致），其余加后缀 */
-export function accountDbName(id: string): string {
-  return id === MAIN_ACCOUNT_ID ? 'ios-phone-db' : `ios-phone-db--${id}`;
+export function isMainFor(app: AccountApp): boolean {
+  return getActiveAccountIdFor(app) === MAIN_ACCOUNT_ID;
 }
 
 /**
- * 按账号隔离的 localStorage 键：大号返回原键（旧数据/登录态无缝兼容），
- * 其他账号返回 `${key}--${accountId}`。仅用于「按账号各存一份」的小型状态键。
+ * 切换指定 App 的账号（持久化 + 事件通知，**不刷新网页**）。
+ * 同账号重复切换 no-op 返回 false；成功返回 true。
  */
-export function accountScopedKey(key: string): string {
-  const id = getActiveAccountId();
-  return id === MAIN_ACCOUNT_ID ? key : `${key}--${id}`;
+export function switchAccountFor(app: AccountApp, id: string): boolean {
+  if (!getAccountById(id)) return false;
+  const apps = readActiveApps();
+  if (apps[app] === id) return false;
+  apps[app] = id;
+  writeActiveApps(apps);
+  try {
+    window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { app, id } }));
+  } catch {
+    // 极端环境忽略
+  }
+  return true;
 }
 
-// ---------------- 创建 / 删除 / 切换 ----------------
+/** 指定账号正被哪些 App 使用（删除账号前的占用检查用） */
+export function accountUsedBy(id: string): AccountApp[] {
+  const apps = readActiveApps();
+  return (Object.keys(apps) as AccountApp[]).filter((app) => apps[app] === id);
+}
+
+// ---------------- 键作用域（kv 与 localStorage 共用后缀约定） ----------------
+
+/**
+ * kv 键所属的账号 App（idb-kv 层自动作用域映射依据）：
+ * `wx-*` → 微信；`qq-*` → QQ；`ios-chat-*` / `sms-*` → 信息。
+ * 其余键（mem-* 由 memory.ts 自行处理；设备级键）返回 null 不映射。
+ * 注意：群本体 group:* / 朋友圈引擎 moments-* / 拉黑 friend-del:* 等跨 App 键不映射（设备级共享）。
+ */
+export function accountAppOfKey(key: string): AccountApp | null {
+  if (key.startsWith('wx-')) return 'wx';
+  if (key.startsWith('qq-')) return 'qq';
+  if (key.startsWith('ios-chat-') || key.startsWith('sms-')) return 'sms';
+  return null;
+}
+
+/** 显式构造「指定账号作用域」的键（跨 App 读取其他账号数据用：digest/跨App近况等） */
+export function scopedKvKey(key: string, app: AccountApp): string {
+  const id = getActiveAccountIdFor(app);
+  return id === MAIN_ACCOUNT_ID ? key : `${key}${SCOPE_SEP}${id}`;
+}
+
+/**
+ * 解析带作用域后缀的键 → { base, accId }；无后缀（大号原键）返回 null。
+ * 后缀取最后一个 `--` 之后的部分（键 base 与账号 id 均不含 `--`）。
+ */
+export function parseScopedKey(key: string): { base: string; accId: string } | null {
+  const i = key.lastIndexOf(SCOPE_SEP);
+  if (i === -1) return null;
+  const accId = key.slice(i + SCOPE_SEP.length);
+  if (!accId || accId === MAIN_ACCOUNT_ID) return null;
+  return { base: key.slice(0, i), accId };
+}
+
+/** 按账号作用域的 localStorage 键：大号返回原键（旧数据/登录态无缝兼容） */
+export function accLs(key: string, app: AccountApp): string {
+  return scopedKvKey(key, app);
+}
+
+// ---------------- 兼容层（v1 全局账号 API → sms 语义；存量调用点迁移后删除） ----------------
+
+/** @deprecated 用 getActiveAccountIdFor(app) */
+export function getActiveAccountId(): string {
+  return getActiveAccountIdFor('sms');
+}
+
+/** @deprecated 用 getActiveAccountFor(app) */
+export function getActiveAccount(): PhoneAccount {
+  return getActiveAccountFor('sms');
+}
+
+/** @deprecated 用 isMainFor(app) */
+export function isMainAccount(): boolean {
+  return isMainFor('sms');
+}
+
+/** @deprecated 用 accLs(key, app) */
+export function accountScopedKey(key: string): string {
+  return accLs(key, 'sms');
+}
+
+/** @deprecated 库名恒定（v2 单库）；仅供过渡期引用，迁移后删除 */
+export function accountDbName(_id: string): string {
+  return 'ios-phone-db';
+}
+
+/** @deprecated 用 switchAccountFor(app, id)（不刷新网页） */
+export function switchAccount(id: string): void {
+  switchAccountFor('sms', id);
+}
+
+// ---------------- 创建 / 删除 ----------------
 
 /**
  * 新建账号（alt=小号 / anon=匿名号码）并持久化注册表。
- * 不自动切换：调用方拿到 id 后可自行 switchAccount()。
+ * 不自动切换：调用方拿到 id 后可自行 switchAccountFor()。
+ * ownerContactId：小号在联系人 App 以 USER 表单创建时传入其档案联系人 id。
  */
-export function createAccount(kind: 'alt' | 'anon', name?: string): PhoneAccount {
+export function createAccount(
+  kind: 'alt' | 'anon',
+  name?: string,
+  opts?: { ownerContactId?: string },
+): PhoneAccount {
   const id = `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const list = getAccounts();
   const seq = list.filter((a) => a.kind === 'alt').length + 1;
@@ -164,6 +306,7 @@ export function createAccount(kind: 'alt' | 'anon', name?: string): PhoneAccount
           qqId: '',
           wechatId: '',
           createdAt: Date.now(),
+          ownerContactId: opts?.ownerContactId,
         }
       : {
           id,
@@ -173,25 +316,31 @@ export function createAccount(kind: 'alt' | 'anon', name?: string): PhoneAccount
           qqId: genDigits('3', 10),
           wechatId: genWechatId(),
           createdAt: Date.now(),
+          ownerContactId: opts?.ownerContactId,
         };
   saveAccounts([...list, acc]);
   return acc;
 }
 
 /**
- * 删除账号：移出注册表 + 清理该账号的 localStorage 后缀键 + 删除其 IndexedDB。
- * 大号不可删；删除当前账号由调用方先 switchAccount(MAIN_ACCOUNT_ID)。
+ * 删除账号：移出注册表 + 清理该账号的 localStorage 后缀键 + 清理主库中该账号作用域的
+ * kv 键 / 通话记录 / 语音留言 + 删除其档案联系人（altOf）。大号不可删；正在被任何 App
+ * 使用的账号不可删（先在各 App 内切走）。
  */
-export function deleteAccount(id: string): { ok: boolean; error?: string } {
+export async function deleteAccount(id: string): Promise<{ ok: boolean; error?: string }> {
   if (id === MAIN_ACCOUNT_ID) return { ok: false, error: '大号不能删除' };
   const list = getAccounts();
   const target = list.find((a) => a.id === id);
   if (!target) return { ok: false, error: '账号不存在' };
-  if (id === getActiveAccountId()) return { ok: false, error: '不能删除当前登录的账号' };
+  const usedBy = accountUsedBy(id);
+  if (usedBy.length > 0) {
+    const nameOf: Record<AccountApp, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
+    return { ok: false, error: `该账号正在${usedBy.map((a) => nameOf[a]).join('、')}中使用，请先切换后再删除` };
+  }
   saveAccounts(list.filter((a) => a.id !== id));
   // 清理该账号的隔离 localStorage 键（统一后缀 --{id}）
   try {
-    const suffix = `--${id}`;
+    const suffix = `${SCOPE_SEP}${id}`;
     const doomed: string[] = [];
     for (let i = 0; i < window.localStorage.length; i++) {
       const k = window.localStorage.key(i);
@@ -201,25 +350,134 @@ export function deleteAccount(id: string): { ok: boolean; error?: string } {
   } catch {
     // 忽略
   }
+  // 清理主库中该账号作用域的数据（kv 后缀键 + 电话记录 + 档案联系人）
   try {
-    // 删除其数据库（该库必然不是当前打开的库：非 active）
-    indexedDB.deleteDatabase(accountDbName(id));
+    const { localDB } = await import('./db');
+    const rows = await localDB.getAll('kv');
+    await Promise.all(
+      rows
+        .filter((r) => r && typeof r.key === 'string' && r.key.endsWith(`${SCOPE_SEP}${id}`))
+        .map((r) => localDB.delete('kv', r.key)),
+    );
+    const suffix = `${SCOPE_SEP}${id}`;
+    const logs = await localDB.getAll('call-logs');
+    await Promise.all(
+      logs.filter((l) => l.account === id).map((l) => localDB.delete('call-logs', l.id)),
+    );
+    const vms = await localDB.getAll('voicemails');
+    await Promise.all(
+      vms.filter((v) => v.account === id).map((v) => localDB.delete('voicemails', v.id)),
+    );
+    const contacts = await localDB.getAll('contacts');
+    await Promise.all(
+      contacts
+        .filter((c) => (c as { altOf?: string }).altOf === id)
+        .map((c) => localDB.delete('contacts', c.id)),
+    );
   } catch {
-    // 忽略
+    // 存储异常忽略（注册表已删，残留数据不可见）
   }
   return { ok: true };
 }
 
+// ---------------- v1 → v2 迁移 ----------------
+
 /**
- * 切换账号（持久化 + 整页重启）：reload 后 DB 层按新账号开库，所有页面数据自然切换、零残留。
- * 用户看感 = 开机屏一闪 → 锁屏 → 解锁进入新账号（iOS 切换用户语义）。
+ * v1（每账号独立库 + 全局当前账号）→ v2（单库 + 键作用域 + per-app 账号）开机迁移：
+ * ① 全局标记 ios-phone-active-account 有值 → 四个 App 的当前账号都指向它；
+ * ② 旧账号库 ios-phone-db--{id} 存在 → 把 kv 键加后缀搬进主库、机主联系人搬进主库
+ *    （联系人 altOf=账号 id，注册表补 ownerContactId）、通话记录/留言带 account 字段搬入；
+ *    其余 store（照片等）不搬（v2 里设备级数据以主库为准）→ 搬完删除旧库。
+ * 幂等：迁移成功即删库，失败下次开机重试（put 幂等）。
+ * 必须在 ensureKvReady() 注水之前调用（迁移产生的后缀键要进同一份内存）。
  */
-export function switchAccount(id: string): void {
-  if (!getAccountById(id)) return;
-  if (id === getActiveAccountId()) return;
-  setActiveAccountId(id);
-  // 兜底：800ms 内 reload 未触发（极端环境）不做额外处理——标记已写，下次启动生效
-  window.location.reload();
+export async function migrateLegacyAccounts(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  // ① 全局标记迁移
+  const legacyActive = readLs(ACTIVE_KEY);
+  if (legacyActive && legacyActive !== MAIN_ACCOUNT_ID && getAccountById(legacyActive)) {
+    const apps = readActiveApps();
+    const untouched = (Object.keys(apps) as AccountApp[]).every((a) => apps[a] === MAIN_ACCOUNT_ID);
+    if (untouched) {
+      writeActiveApps({ wx: legacyActive, qq: legacyActive, sms: legacyActive, phone: legacyActive });
+    }
+  }
+  // ② 旧账号库数据迁移
+  const legacyIds = getAccounts()
+    .filter((a) => a.kind !== 'main')
+    .map((a) => a.id);
+  if (legacyIds.length === 0) return;
+  let local: typeof import('./db').localDB | null = null;
+  try {
+    const mod = await import('./db');
+    local = mod.localDB;
+  } catch {
+    return;
+  }
+  const { openDB } = await import('idb');
+  for (const id of legacyIds) {
+    const legacyName = `ios-phone-db${SCOPE_SEP}${id}`;
+    let hadData = false;
+    try {
+      const db = await openDB(legacyName);
+      try {
+        if (!db.objectStoreNames.contains('kv')) continue;
+        const suffix = `${SCOPE_SEP}${id}`;
+        // kv：键加后缀搬入主库
+        const rows = (await db.getAll('kv')) as { key: string; value: unknown }[];
+        for (const row of rows) {
+          if (!row || typeof row.key !== 'string') continue;
+          hadData = true;
+          if (row.key.endsWith(suffix)) continue; // 已是后缀键（极端重复迁移）原样搬
+          await local.put('kv', { key: `${row.key}${suffix}`, value: row.value });
+        }
+        // 联系人：只搬该账号的机主 user 档案（CHAR 等共享数据以主库为准）
+        if (db.objectStoreNames.contains('contacts')) {
+          const contacts = (await db.getAll('contacts')) as { id: string; kind?: string; name?: string }[];
+          const owner = contacts.find((c) => c && c.kind === 'user');
+          if (owner && owner.id) {
+            const exists = await local.get('contacts', owner.id);
+            if (!exists) {
+              hadData = true;
+              await local.put('contacts', { ...owner, altOf: id } as never);
+              updateAccount(id, { ownerContactId: owner.id });
+            } else if ((exists as { altOf?: string }).altOf === id) {
+              updateAccount(id, { ownerContactId: owner.id });
+            }
+          }
+        }
+        // 电话：通话记录/留言带 account 字段搬入
+        if (db.objectStoreNames.contains('call-logs')) {
+          const logs = (await db.getAll('call-logs')) as { id: string }[];
+          for (const l of logs) {
+            if (!l?.id) continue;
+            hadData = true;
+            await local.put('call-logs', { ...l, account: id } as never);
+          }
+        }
+        if (db.objectStoreNames.contains('voicemails')) {
+          const vms = (await db.getAll('voicemails')) as { id: string }[];
+          for (const v of vms) {
+            if (!v?.id) continue;
+            hadData = true;
+            await local.put('voicemails', { ...v, account: id } as never);
+          }
+        }
+      } finally {
+        db.close();
+      }
+    } catch {
+      // 库不存在/打不开：无旧数据，跳过
+      continue;
+    }
+    // 有数据（或库确实存在）才删；空库/打开失败静默跳过（openDB 对不存在库会顺手建空库，这里删除之）
+    try {
+      indexedDB.deleteDatabase(legacyName);
+    } catch {
+      // 忽略
+    }
+    void hadData;
+  }
 }
 
 /** 供账号页展示：返回该账号的显示名（大号回退「机主」，由页面用实时资料优先） */

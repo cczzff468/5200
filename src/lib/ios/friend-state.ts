@@ -35,7 +35,7 @@
 
 import { kvGet, kvSet, kvDel } from './idb-kv';
 import { genId } from './db';
-import { getContact, ownerProfile, updateContact } from './contacts-store';
+import { getContact, ownerProfileFor, updateContact } from './contacts-store';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL } from './block-state';
@@ -495,7 +495,8 @@ async function callLlmTwoTier(system: string, userContent: string): Promise<stri
 
 /** 按人设 + 记忆生成一条「被删好友想加回来」的验证留言 */
 async function genCharReqMessage(app: FriendDelApp, contact: ContactRecord): Promise<string | null> {
-  const owner = await ownerProfile().catch(() => null);
+  // 多账号 v2：机主资料按删除事件所属 App（wx/qq）的当前账号取
+  const owner = await ownerProfileFor(app).catch(() => null);
   const userRealName = owner?.realName?.trim() || null;
   const userNickname = owner?.nickname?.trim() || null;
   const userName = userNickname || userRealName || '用户';
@@ -514,9 +515,11 @@ async function genCharReqMessage(app: FriendDelApp, contact: ContactRecord): Pro
   return text || null;
 }
 
-/** 取机主称呼三元组（线程回复生成共用） */
-async function ownerTriplet(): Promise<{ userName: string; userRealName: string | null; userNickname: string | null }> {
-  const owner = await ownerProfile().catch(() => null);
+/** 取机主称呼三元组（线程回复生成共用；v2 多账号：按所属 App 当前账号取「我」的资料） */
+async function ownerTriplet(
+  app: FriendDelApp,
+): Promise<{ userName: string; userRealName: string | null; userNickname: string | null }> {
+  const owner = await ownerProfileFor(app).catch(() => null);
   const userRealName = owner?.realName?.trim() || null;
   const userNickname = owner?.nickname?.trim() || null;
   const userName = userNickname || userRealName || '用户';
@@ -536,7 +539,7 @@ export async function genCharThreadReply(
   scene: 'reply' | 'welcome',
 ): Promise<string | null> {
   if (!(contact.persona ?? '').trim()) return null;
-  const { userName, userRealName, userNickname } = await ownerTriplet();
+  const { userName, userRealName, userNickname } = await ownerTriplet(app);
   const system = await buildReqSystem(app, contact, userName, userRealName, userNickname, scene);
   const lines = thread.slice(-8).map((m) => `${m.who === 'me' ? userName : contactRealNameSafe(contact)}：${m.text}`);
   const ask =

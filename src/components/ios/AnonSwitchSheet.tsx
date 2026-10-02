@@ -6,26 +6,28 @@ import {
   accountDisplayName,
   createAccount,
   getAccounts,
-  getActiveAccountId,
+  getActiveAccountIdFor,
   MAIN_ACCOUNT_ID,
-  switchAccount,
+  switchAccountFor,
+  type AccountApp,
   type PhoneAccount,
 } from '@/lib/ios/accounts';
 
 /**
- * 匿名号码切换弹层（Task 40-E，电话/信息 App 共享）：
+ * 匿名号码切换弹层（Task 40-E / v2，电话/信息 App 共享）：
  * - 半屏底部弹层（iOS action-sheet 风）：圆角 18px 顶部 + 毛玻璃卡 + 遮罩点击关闭 + slide-up 动画
  *   （进出场用 rAF 驱动的 transition，与 IOSActionSheet 同一套 260ms iOS 曲线，不用 tailwindcss-animate）。
+ * - props.app 决定操作哪个 App 的账号（v2 per-app 账号：电话与信息的当前账号互相独立）。
  * - 列表 = 全部 kind==='anon' 账号（getAccounts() 过滤）：深灰圆头像（EyeOff 面具感）+ 名字 + 号码小字；
- *   当前使用行右侧绿点 + 「当前使用」；点其他行 → switchAccount(id)（写标记 + location.reload()，
- *   整页重启后 DB 层按新账号开库——reload 前不调用 onClose，也无机会调用）。
- * - 「新建匿名号码」行（+ 圆钮）→ createAccount('anon') → switchAccount(newId)。
- * - 当前活跃账号非大号时列表顶部加「返回大号（机主）」行 → switchAccount(MAIN_ACCOUNT_ID)。
+ *   当前使用行右侧绿点 + 「当前使用」；点其他行 → switchAccountFor(app, id)
+ *   （写标记 + 派发 ios-phone-account-changed 事件，**不刷新网页**，各 App 监听后自行重读数据）。
+ * - 「新建匿名号码」行（+ 圆钮）→ createAccount('anon') → switchAccountFor(app, newId)。
+ * - 当前账号非大号时列表顶部加「返回主号（机主）」行 → switchAccountFor(app, MAIN_ACCOUNT_ID)。
  * - 深浅色适配：面板用半透明浅灰/深灰 + backdrop-blur（对照 IOSActionSheet 配色），
  *   行/分隔线用 foreground 语义色，跟随 App 内深浅色变量。
  *
  * 用法（渲染在 App 自己的 relative 容器内，绝对定位铺满该 App）：
- *   <AnonSwitchSheet open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
+ *   <AnonSwitchSheet app="phone" open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
  */
 
 /** iOS 弹层曲线（与 IOSActionSheet 一致） */
@@ -42,20 +44,29 @@ interface AnonSheetSnapshot {
   anons: PhoneAccount[];
 }
 
-function readSnapshot(): AnonSheetSnapshot {
+function readSnapshot(app: AccountApp): AnonSheetSnapshot {
   return {
-    activeId: getActiveAccountId(),
+    activeId: getActiveAccountIdFor(app),
     anons: getAccounts().filter((a) => a.kind === 'anon'),
   };
 }
 
-export function AnonSwitchSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AnonSwitchSheet({
+  app,
+  open,
+  onClose,
+}: {
+  /** 目标 App（电话 'phone' / 信息 'sms'）：per-app 账号独立切换 */
+  app: AccountApp;
+  open: boolean;
+  onClose: () => void;
+}) {
   /** 挂载开关（退场动画期间仍挂载） */
   const [mounted, setMounted] = useState(open);
   /** 进场/退场动画状态 */
   const [shown, setShown] = useState(false);
-  /** 注册表现读快照：切号 = 整页 reload，打开期间数据不可能变化，打开时读一次即可 */
-  const [snap, setSnap] = useState<AnonSheetSnapshot>(() => readSnapshot());
+  /** 注册表现读快照：打开时读一次；切号不刷新网页（事件驱动重读），打开期间重读兜底 */
+  const [snap, setSnap] = useState<AnonSheetSnapshot>(() => readSnapshot(app));
 
   // open 切换时驱动进/退场动画 + 刷新账号快照（setState 全部在 rAF/timeout 回调内，遵守 React Compiler lint）
   useEffect(() => {
@@ -65,7 +76,7 @@ export function AnonSwitchSheet({ open, onClose }: { open: boolean; onClose: () 
     if (open) {
       raf = requestAnimationFrame(() => {
         // 快照刷新与挂载同帧完成（open 首次置真时兜底重读注册表；setState 在 rAF 回调内，遵守 lint）
-        setSnap(readSnapshot());
+        setSnap(readSnapshot(app));
         setMounted(true);
         inner = requestAnimationFrame(() => setShown(true));
       });
@@ -81,7 +92,7 @@ export function AnonSwitchSheet({ open, onClose }: { open: boolean; onClose: () 
       cancelAnimationFrame(inner);
       window.clearTimeout(timer);
     };
-  }, [open]);
+  }, [open, app]);
 
   if (!mounted) return null;
 
@@ -116,33 +127,35 @@ export function AnonSwitchSheet({ open, onClose }: { open: boolean; onClose: () 
           <p className="text-[16px] font-semibold">匿名号码</p>
         </div>
         <p className="shrink-0 px-5 pb-1 pt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-          切换后拨号/短信都以匿名身份进行，聊天与记忆完全独立
+          切换后{app === 'phone' ? '拨号' : '短信'}都以匿名身份进行，聊天与记忆完全独立
         </p>
 
-        {/* 账号列表（超出可滚动；顶部在非大号身份时多一行「返回大号」） */}
+        {/* 账号列表（超出可滚动；顶部在非主号身份时多一行「返回主号」） */}
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(16px+env(safe-area-inset-bottom))] pt-2">
           <div className="overflow-hidden rounded-[14px] bg-white/80 ring-1 ring-black/[0.05] dark:bg-white/[0.07] dark:ring-white/[0.08]">
-            {/* 返回大号（当前非大号身份时显示在最上） */}
+            {/* 返回主号（当前非主号身份时显示在最上） */}
             {activeId !== MAIN_ACCOUNT_ID && (
               <button
                 type="button"
                 data-testid="anon-back-main"
-                onClick={() => switchAccount(MAIN_ACCOUNT_ID)}
+                onClick={() => {
+                  if (switchAccountFor(app, MAIN_ACCOUNT_ID)) onClose();
+                }}
                 className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-black/[0.05] dark:active:bg-white/[0.08]"
               >
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0A84FF] text-white">
                   <UserRound className="h-[19px] w-[19px]" strokeWidth={1.9} />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[16px] leading-tight">返回大号（机主）</span>
+                  <span className="block truncate text-[16px] leading-tight">返回主号（机主）</span>
                   <span className="mt-0.5 block truncate text-[12.5px] leading-tight text-muted-foreground">
-                    回到机主身份，聊天与记忆恢复本号数据
+                    回到机主身份，{app === 'phone' ? '通话' : '短信'}数据恢复本号
                   </span>
                 </span>
               </button>
             )}
 
-            {/* 匿名号列表（当前行 = 绿点 + 「当前使用」；点其他行切号 → reload） */}
+            {/* 匿名号列表（当前行 = 绿点 + 「当前使用」；点其他行切号 → 事件通知重读，不刷新网页） */}
             {anons.map((a, i) => {
               const current = a.id === activeId;
               const separated = activeId !== MAIN_ACCOUNT_ID || i > 0;
@@ -151,7 +164,13 @@ export function AnonSwitchSheet({ open, onClose }: { open: boolean; onClose: () 
                   key={a.id}
                   type="button"
                   data-testid={`anon-row-${a.id}`}
-                  onClick={() => (current ? onClose() : switchAccount(a.id))}
+                  onClick={() => {
+                    if (current) {
+                      onClose();
+                      return;
+                    }
+                    if (switchAccountFor(app, a.id)) onClose();
+                  }}
                   aria-current={current ? 'true' : undefined}
                   className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-black/[0.05] dark:active:bg-white/[0.08] ${
                     separated ? 'border-t border-black/[0.06] dark:border-white/[0.08]' : ''
@@ -185,13 +204,13 @@ export function AnonSwitchSheet({ open, onClose }: { open: boolean; onClose: () 
               </div>
             )}
 
-            {/* 新建匿名号码（创建后立即切过去 → reload） */}
+            {/* 新建匿名号码（创建后立即切过去 → 事件通知重读，不刷新网页） */}
             <button
               type="button"
               data-testid="anon-create"
               onClick={() => {
                 const acc = createAccount('anon');
-                switchAccount(acc.id);
+                if (switchAccountFor(app, acc.id)) onClose();
               }}
               className="flex w-full items-center gap-3 border-t border-black/[0.06] px-3 py-2.5 text-left transition-colors active:bg-black/[0.05] dark:border-white/[0.08] dark:active:bg-white/[0.08]"
             >

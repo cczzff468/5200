@@ -1,6 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase, type IndexNames } from 'idb';
 import type { ContactRecord } from '@/lib/contacts';
-import { ACTIVE_KEY, MAIN_ACCOUNT_ID, accountDbName } from './accounts';
 
 /**
  * 本地优先架构：所有用户数据(照片/录音/音乐/备忘/日程/聊天/联系人/设置)均存于浏览器 IndexedDB。
@@ -157,6 +156,11 @@ export interface CallLogRecord {
   endReason?: string;
   /** 通话媒体（Task 22 视频通话）：video=视频通话（记录行显示视频图标与「视频通话」文案）；缺省语音 */
   media?: 'voice' | 'video';
+  /**
+   * 多账号（Task 40 v2）：该通电话发生时电话 App 的当前账号 id（'main' = 大号）。
+   * 旧记录无此字段视为大号；读取时按电话 App 当前账号过滤，实现通话记录随账号切换。
+   */
+  account?: string;
   createdAt: number;
 }
 
@@ -181,6 +185,8 @@ export interface VoicemailRecord {
   duration: number;
   /** 是否已读（播放过即已读） */
   read: boolean;
+  /** 多账号（Task 40 v2）：该留言所属的电话 App 当前账号 id（缺省视为大号） */
+  account?: string;
   createdAt: number;
 }
 
@@ -265,22 +271,10 @@ export type IOSStoreName =
 const DB_VERSION = 7;
 
 /**
- * 按当前账号解析库名（Task 40 多账号）：开机首个访问者触发一次并缓存——
- * 大号沿用 'ios-phone-db'（零迁移），小号/匿名号用 'ios-phone-db--{id}'。
- * 切号 = 写标记 + reload，页面生命周期内库名恒定，单例安全。
+ * 库名恒定（Task 40 v2）：单库 + 键作用域的多账号模型——所有账号共用 ios-phone-db，
+ * 微信/QQ/信息/电话的数据在 kv 层与记录字段按账号隔离（accounts.ts / idb-kv.ts）。
  */
-let resolvedDbName: string | null = null;
-function resolveDbName(): string {
-  if (resolvedDbName) return resolvedDbName;
-  let active = '';
-  try {
-    if (typeof window !== 'undefined') active = window.localStorage.getItem(ACTIVE_KEY) ?? '';
-  } catch {
-    active = '';
-  }
-  resolvedDbName = active && active !== MAIN_ACCOUNT_ID ? accountDbName(active) : 'ios-phone-db';
-  return resolvedDbName;
-}
+const DB_NAME = 'ios-phone-db';
 
 let dbPromise: Promise<IDBPDatabase<IOSDB>> | null = null;
 
@@ -289,7 +283,7 @@ function getDB(): Promise<IDBPDatabase<IOSDB>> {
     return Promise.reject(new Error('IndexedDB 仅在浏览器环境可用'));
   }
   if (!dbPromise) {
-    dbPromise = openDB<IOSDB>(resolveDbName(), DB_VERSION, {
+    dbPromise = openDB<IOSDB>(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion) {
         if (oldVersion < 1) {
         const photos = db.createObjectStore('photos', { keyPath: 'id' });

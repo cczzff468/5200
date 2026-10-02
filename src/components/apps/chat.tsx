@@ -35,9 +35,10 @@ import { DefaultAvatar } from '@/components/apps/default-avatar';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
-import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import {
+  abortStreamsByPrefix,
   beginChatStream,
   clearChatStream,
   isChatStreaming,
@@ -99,7 +100,9 @@ import {
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
 import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
-import { getActiveAccount } from '@/lib/ios/accounts';
+// 多账号 v2（Task 40-2c）：信息端账号一律走 For('sms')，AI 来电/留言归属电话 App 当前账号（For('phone')）；
+// accLs 每次「现算」账号作用域 localStorage 键（大号原键零迁移），严禁缓存成模块级常量
+import { ACCOUNT_CHANGED_EVENT, accLs, getActiveAccountFor, getActiveAccountIdFor, type AccountApp } from '@/lib/ios/accounts';
 // 生图（锁脸）：回复文本 [图片:描述]/[照片:描述] 标签 → 自动生图投递（未配置/失败降级文字图片卡片）；
 // 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
@@ -332,12 +335,13 @@ type QueuedTurn = { kind: 'kick' | 'dispatch'; event?: string };
 
 /** 排队补跑持久化（key: sms-queued-turns）：Record<storageKey, QueuedTurn[]> JSON 落 localStorage。
  *  刷新后队列不丢：重新进入该会话时恢复进 ref、既有 flush effect 自动补跑；会话没打开就等下次进入
- *  （补跑依赖聊天页组件挂载，这是与 wx/qq 一致的既有边界） */
+ *  （补跑依赖聊天页组件挂载，这是与 wx/qq 一致的既有边界）。
+ *  多账号 v2：键按信息 App 当前账号作用域（accLs 每次现算，大号原键；切号后 ChatView 重挂载重读新号队列） */
 const SMS_QUEUED_TURNS_KEY = 'sms-queued-turns';
 
 function readSmsQueuedTurns(storageKey: string): QueuedTurn[] {
   try {
-    const raw: unknown = JSON.parse(window.localStorage.getItem(SMS_QUEUED_TURNS_KEY) ?? '{}');
+    const raw: unknown = JSON.parse(window.localStorage.getItem(accLs(SMS_QUEUED_TURNS_KEY, 'sms')) ?? '{}');
     const slot = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[storageKey] : null;
     if (!Array.isArray(slot)) return [];
     return slot.filter((x): x is QueuedTurn => {
@@ -353,14 +357,14 @@ function writeSmsQueuedTurns(storageKey: string, turns: QueuedTurn[]): void {
   try {
     const map: Record<string, QueuedTurn[]> = {};
     try {
-      const raw: unknown = JSON.parse(window.localStorage.getItem(SMS_QUEUED_TURNS_KEY) ?? '{}');
+      const raw: unknown = JSON.parse(window.localStorage.getItem(accLs(SMS_QUEUED_TURNS_KEY, 'sms')) ?? '{}');
       if (raw && typeof raw === 'object') Object.assign(map, raw);
     } catch {
       // 旧数据损坏则从空重建
     }
     if (turns.length > 0) map[storageKey] = [...turns];
     else delete map[storageKey];
-    window.localStorage.setItem(SMS_QUEUED_TURNS_KEY, JSON.stringify(map));
+    window.localStorage.setItem(accLs(SMS_QUEUED_TURNS_KEY, 'sms'), JSON.stringify(map));
   } catch {
     // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
   }
@@ -396,6 +400,8 @@ async function recordMissedPhoneCall(
       direction: 'missed',
       duration: 0,
       createdAt: Date.now(),
+      // 多账号 v2：AI 来电记录归属「电话 App」当前账号（信息端 AI 来电时电话可能正用小号/匿名号）
+      account: getActiveAccountIdFor('phone'),
     });
   } catch {
     // 记录落盘失败静默
@@ -463,6 +469,8 @@ async function recordMissedPhoneCall(
         read: false,
         duration: Math.max(1, Math.ceil(text.length / 4)),
         createdAt: Date.now(),
+        // 多账号 v2：留言同来电记录，归属电话 App 当前账号（缺省 main）
+        account: getActiveAccountIdFor('phone'),
       });
     }
   } catch {
@@ -4347,31 +4355,62 @@ export default function ChatApp() {
   const [statusCardOpen, setStatusCardOpen] = useState(false);
   /** 好友会话预览（信息列表：有聊天记录的好友 CHAR/NPC） */
   const [contactSessions, setContactSessions] = useState<ContactSessionPreview[]>([]);
-  // 多账号（Task 40-E）：当前账号是否匿名号（顶栏 EyeOff 角标提示身份非本号）。
-  // 切号 = switchAccount 整页 reload，本组件挂载期间账号不会变，挂载时读一次注册表即可
-  const [anonActive] = useState(() => getActiveAccount().kind === 'anon');
+  // 多账号 v2（Task 40-E/40-2c）：当前 sms 账号是否匿名号（顶栏 EyeOff 蓝点角标提示身份非本号）。
+  // 切号不刷新网页（switchAccountFor 派发事件）：监听 ACCOUNT_CHANGED_EVENT 实时更新角标 + 重读数据
+  const [anonActive, setAnonActive] = useState(() => getActiveAccountFor('sms').kind === 'anon');
   /** 匿名号码切换弹层（会话列表顶栏 EyeOff 入口，与电话 App 共用 AnonSwitchSheet） */
   const [anonSheetOpen, setAnonSheetOpen] = useState(false);
+  /** 账号切换版本号：sms 账号变更时 +1，挂在小助手状态载入 / 会话列表扫描 effect 上强制重读新账号数据 */
+  const [reloadKey, setReloadKey] = useState(0);
 
-  // 挂载后载入小助手本地状态（已读/置顶/删除标记 + 预览消息；异步微任务：保持水合安全）
+  // 账号切换订阅（Task 40-2c，单库不刷新架构的关键）：sms 域切号（AnonSwitchSheet 或其他入口）→
+  // ① 中断旧账号在途流式回复（abortStreamsByPrefix 预置 finalized，旧回复不落盘不串号）+ 清空消息投递队列；
+  // ② UI 重置：聊天/添加视图退回会话列表页、关闭打开中的面板（ChatView 随之卸载，重进时按新账号重挂载——
+  //    消息本体/回复条数/翻译/排队补跑 sms-queued-turns 等会话级状态全部现场重读）；
+  // ③ reloadKey+1 触发重读：小助手会话状态（LS 现算作用域键）、会话列表预览（loadMsgs 现算作用域）、
+  //    未读角标 chatBadge 经既有 [unreadN, hidden, mounted] 同步 effect 联动重算。
+  //    注册表写入发生在派发事件之前：本处理器及后续 effect 里的 accLs/kv 作用域均已指向新账号
+  useEffect(() => {
+    const onAccountChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ app?: AccountApp; id?: string }>).detail;
+      if (!detail || detail.app !== 'sms') return;
+      abortStreamsByPrefix('sms:');
+      purgeDeliveryQueueByPrefix('sms:');
+      setView('main');
+      setTab('chats');
+      setMenuOpen(false);
+      setConfirmDelete(false);
+      setStatusCardOpen(false);
+      setAnonSheetOpen(false);
+      setAnonActive(getActiveAccountFor('sms').kind === 'anon');
+      setReloadKey((k) => k + 1);
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, onAccountChanged);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, onAccountChanged);
+  }, []);
+
+  // 载入小助手本地状态（已读/置顶/删除标记 + 预览消息；异步微任务：保持水合安全）。
+  // reloadKey：sms 账号切换后重跑——LS 键 accLs 现算新账号作用域，消息本体 loadMsgs 走 kv 自动作用域；
+  // 新账号无记录时回落种子欢迎语并重置旧号残留（水位/未读一并重置，切换后界面立即全量新账号数据）
   useEffect(() => {
     let cancelled = false;
     void Promise.resolve().then(() => {
       if (cancelled) return;
-      setHidden(window.localStorage.getItem(LS_HIDDEN_KEY) === '1');
-      setPinned(window.localStorage.getItem(LS_PIN_KEY) === '1');
+      setHidden(window.localStorage.getItem(accLs(LS_HIDDEN_KEY, 'sms')) === '1');
+      setPinned(window.localStorage.getItem(accLs(LS_PIN_KEY, 'sms')) === '1');
       // 未读条数：优先读计数（AI 发了几条就是几）；旧数据只有已读布尔 → 未读时至少 1
       let n = 0;
       try {
-        const raw = Number(window.localStorage.getItem(LS_UNREAD_N_KEY));
+        const raw = Number(window.localStorage.getItem(accLs(LS_UNREAD_N_KEY, 'sms')));
         if (Number.isFinite(raw) && raw > 0) n = Math.min(Math.floor(raw), 99);
-        if (window.localStorage.getItem(LS_READ_KEY) !== '1') n = Math.max(n, 1);
+        if (window.localStorage.getItem(accLs(LS_READ_KEY, 'sms')) !== '1') n = Math.max(n, 1);
       } catch {
         // 读取失败按 0
       }
       setUnreadN(n);
       const saved = loadMsgs('assistant');
       if (saved && saved.length) setAssistantMsgs(saved);
+      else setAssistantMsgs(SEED_MSGS);
       // 水位初始化：盘上最后一条 assistant 消息（持久化未读计数已含它，这里只记录键不重复计数）
       seenRef.current = saved ? lastAssistantMarkOf(saved) : null;
       setMounted(true);
@@ -4379,15 +4418,15 @@ export default function ChatApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
-  // 未读条数变化 → 落盘（同时同步旧版已读布尔键，兼容旧逻辑）
+  // 未读条数变化 → 落盘（同时同步旧版已读布尔键，兼容旧逻辑；键按 sms 当前账号现算作用域）
   useEffect(() => {
     if (!mounted) return;
     try {
-      window.localStorage.setItem(LS_UNREAD_N_KEY, String(unreadN));
-      if (unreadN > 0) window.localStorage.removeItem(LS_READ_KEY);
-      else window.localStorage.setItem(LS_READ_KEY, '1');
+      window.localStorage.setItem(accLs(LS_UNREAD_N_KEY, 'sms'), String(unreadN));
+      if (unreadN > 0) window.localStorage.removeItem(accLs(LS_READ_KEY, 'sms'));
+      else window.localStorage.setItem(accLs(LS_READ_KEY, 'sms'), '1');
     } catch {
       // 持久化失败忽略
     }
@@ -4436,12 +4475,12 @@ export default function ChatApp() {
     return subscribeAiDelivery('sms:assistant', syncAssistantFromStore);
   }, [syncAssistantFromStore]);
 
-  // 置顶 / 删除标记持久化
+  // 置顶 / 删除标记持久化（键按 sms 当前账号现算作用域）
   useEffect(() => {
     if (!mounted) return;
     try {
-      window.localStorage.setItem(LS_PIN_KEY, pinned ? '1' : '0');
-      window.localStorage.setItem(LS_HIDDEN_KEY, hidden ? '1' : '0');
+      window.localStorage.setItem(accLs(LS_PIN_KEY, 'sms'), pinned ? '1' : '0');
+      window.localStorage.setItem(accLs(LS_HIDDEN_KEY, 'sms'), hidden ? '1' : '0');
     } catch {
       // 持久化失败忽略
     }
@@ -4547,11 +4586,12 @@ export default function ChatApp() {
     });
   }, []);
 
-  // 会话列表预览：回到主视图时重扫本地聊天记录（从聊天返回也能刷新预览）
+  // 会话列表预览：回到主视图时重扫本地聊天记录（从聊天返回也能刷新预览）；
+  // reloadKey：sms 账号切换后强制重扫（scanContactSessions 读 loadMsgs，kv 按新账号作用域返回新数据）
   useEffect(() => {
     if (view !== 'main') return;
     setContactSessions(scanContactSessions(contacts));
-  }, [contacts, view]);
+  }, [contacts, view, reloadKey]);
 
   // 进入添加好友页时刷新联系人：同步「联系人」App 里新建的 CHAR/NPC（新的朋友列表保持最新）
   useEffect(() => {
@@ -4865,8 +4905,9 @@ export default function ChatApp() {
         }}
       />
 
-      {/* 匿名号码切换弹层（Task 40-E，与电话 App 共享；切号 = 整页 reload，无需 onClose 回调） */}
-      <AnonSwitchSheet open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
+      {/* 匿名号码切换弹层（Task 40-E，与电话 App 共享；app="sms" 切的是信息端账号）。
+          切号不刷新网页：switchAccountFor 派发事件，本组件监听后重置 UI 并重读新账号数据 */}
+      <AnonSwitchSheet app="sms" open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
 
       {/* 坐标参照层：铺满 App 容器用于菜单定位（不拦截事件） */}
       <div ref={screenRef} aria-hidden="true" className="pointer-events-none absolute inset-0" />

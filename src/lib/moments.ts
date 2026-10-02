@@ -31,7 +31,7 @@
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { contactByRef, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { useSettings, type ApiConfig } from '@/lib/ios/store';
-import { contactRealName, listContacts, ownerRealName } from '@/lib/ios/contacts-store';
+import { contactRealName, listContacts, ownerRealName, ownerRealNameFor } from '@/lib/ios/contacts-store';
 import { extractPhotoTags, generateCharacterPhoto, imgGenConfigReady } from '@/lib/imggen';
 import {
   getMemSettings,
@@ -1043,7 +1043,8 @@ async function writeMomentMemoryFromData(args: {
   // 四轮审计 M2：落库前复核 peer 仍在册——删联系人后的迟到写入（异步真名解析窗口 / 调度器 stale 引用）
   // 不再向已清空的 mem-frag 键重写记忆碎片（宁缺勿错：联系人读取失败按不在册处理，跳过写入）
   if (!(await listContacts().catch(() => [] as ContactRecord[])).some((c) => c.id === contact.id)) return;
-  const [ownerReal, contactReal] = await Promise.all([ownerRealName(), contactRealName(contact.id)]);
+  // 多账号 v2：动态记忆按动态所属平台（wx/qq）的当前账号取「我」的真名（AccountApp 兼容）
+  const [ownerReal, contactReal] = await Promise.all([ownerRealNameFor(post.platform), contactRealName(contact.id)]);
   // 关系人真名按需解析（动态归属人 / 被回复评论的作者）；主人本人的真名已随上一步解析
   const relationIds = new Set<string>();
   if (post.author === 'char' && post.peerId) relationIds.add(post.peerId);
@@ -2939,6 +2940,8 @@ export async function repairMomentIdentityData(): Promise<void> {
     stripSelfInteractionsFromPosts('wx', contacts);
     stripSelfInteractionsFromPosts('qq', contacts);
     // 2) 记忆碎片逐条纠错
+    // 多账号 v2：修复器横跨 wx/qq 两平台逐联系人重算，无单一 App 上下文，且只重写既有碎片文本
+    // （不新建账号视角的记忆）→ 维持恒机主真名口径 ownerRealName()，不按账号切换
     const ownerReal = await ownerRealName();
     const realNameOf = new Map(contacts.map((c) => [c.id, c.name?.trim() || '']));
     const postsByPlatform: Record<MomentPlatform, MomentPostView[]> = {

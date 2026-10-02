@@ -23,9 +23,10 @@
  * - 全程 fire-and-forget + 全量容错：任何失败静默，绝不影响拉黑主流程与既有聊天功能。
  */
 
-import { kvGet, kvSet } from './idb-kv';
+import { kvGetScoped, kvSetScoped } from './idb-kv';
 import { genId } from './db';
-import { getContact, ownerProfile } from './contacts-store';
+// 多账号（Task 40-2d v2）：跨 App 触达的机主身份按「目标 App 当前账号」取（ownerProfileFor）
+import { getContact, ownerProfileFor } from './contacts-store';
 import { avatarFor } from '@/lib/contacts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL, loadBlock, type BlockApp } from './block-state';
@@ -77,17 +78,19 @@ function cleanReachText(raw: string): string {
   return t.slice(0, 400);
 }
 
-/** 落库一条角色消息（结构与各端 loadMsgs 校验器一致；wx/qq role='peer'、sms role='assistant'，封顶 100 条同口径） */
+/** 落库一条角色消息（结构与各端 loadMsgs 校验器一致；wx/qq role='peer'、sms role='assistant'，封顶 100 条同口径）。
+ *  多账号（Task 40-2d v2）：跨 App 触达落的是「目标 App 当前账号」的会话——读写都用 kvGetScoped/
+ *  kvSetScoped 显式按目标 App 作用域（该 App 当前登着哪个账号，消息就落在哪个账号名下） */
 function appendPeerMsg(app: BlockApp, contactId: string, content: string): void {
   const key = msgsKey(app, contactId);
-  const raw = kvGet<unknown[]>(key);
+  const raw = kvGetScoped<unknown[]>(key, app);
   const list = Array.isArray(raw) ? raw.filter((m) => m && typeof m === 'object') : [];
   list.push(
     app === 'sms'
       ? { id: genId(), role: 'assistant', content, time: Date.now() }
       : { id: genId(), role: 'peer', content, time: Date.now() },
   );
-  kvSet(key, list.slice(-100));
+  kvSetScoped(key, list.slice(-100), app);
   // wx/qq：新消息自动恢复被「删除/不显示」的会话行（与各端 saveMsgs 的真微信行为一致）
   if (app !== 'sms') removeStrListItem(CHAT_HIDDEN_KEY[app], contactId);
 }
@@ -135,17 +138,26 @@ async function buildReachSystem(
   return [persona, memoryBlock, crossAppBlock, timeBlock].filter(Boolean).join('\n\n');
 }
 
-/** 生成并在单个目标 App 落库（任一步失败静默放弃该 App，不影响其他目标） */
+/** 生成并在单个目标 App 落库（任一步失败静默放弃该 App，不影响其他目标）。
+ *  多账号（Task 40-2d v2）：机主身份按目标 App 当前账号取——角色去哪个 App 找人，
+ *  就用那个人在该 App 登录账号的称呼（大号=机主资料，小号/匿名号=档案/注册表名） */
 async function reachOne(
   targetApp: BlockApp,
   blockedApp: BlockApp,
   contact: ContactRecord,
-  userName: string,
-  userRealName: string | null,
-  userNickname: string | null,
 ): Promise<void> {
   // 前置复核：目标 App 也被拉黑（或生成准备期间刚被拉黑）→ 放弃（去了也发不出）
   if (loadBlock(targetApp, contact.id).byUser === true) return;
+
+  let owner: { realName: string; nickname: string | null } | null = null;
+  try {
+    owner = await ownerProfileFor(targetApp);
+  } catch {
+    owner = null;
+  }
+  const userRealName = owner?.realName?.trim() || null;
+  const userNickname = owner?.nickname?.trim() || null;
+  const userName = userNickname || userRealName || '用户';
 
   const system = await buildReachSystem(targetApp, contact, userName, userRealName, userNickname);
   const userContent = [
@@ -223,14 +235,7 @@ async function runReach(blockedApp: BlockApp, contactId: string): Promise<void> 
     (a) => a !== blockedApp && loadBlock(a, contactId).byUser !== true,
   );
   if (targets.length === 0) return; // 三个 App 全被拉黑：无处可去（群聊按设计不参与拉黑）
-  let owner: { realName?: string | null; nickname?: string | null } | null = null;
-  try {
-    owner = await ownerProfile();
-  } catch {
-    owner = null;
-  }
-  const userRealName = owner?.realName?.trim() || null;
-  const userNickname = owner?.nickname?.trim() || null;
-  const userName = userNickname || userRealName || '用户';
-  await Promise.allSettled(targets.map((t) => reachOne(t, blockedApp, contact, userName, userRealName, userNickname)));
+  // 多账号（Task 40-2d v2）：机主身份改由 reachOne 按各自目标 App 的当前账号现取
+  // （不同目标 App 可能登着不同账号，不能共用一份全局机主资料）
+  await Promise.allSettled(targets.map((t) => reachOne(t, blockedApp, contact)));
 }

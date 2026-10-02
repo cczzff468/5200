@@ -88,7 +88,7 @@ import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import {
   contactRealName,
   getChatBgImage,
-  ownerRealName,
+  ownerRealNameFor,
   removeChatBgImage,
   setChatBgImage,
 } from '@/lib/ios/contacts-store';
@@ -3470,7 +3470,8 @@ export function WxGroupChatPage({
               // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记；全部消息投递完后执行，后台异步失败静默）
               void (async () => {
                 try {
-                  const [u, p] = await Promise.all([ownerRealName(), contactRealName(char.id)]);
+                  // 多账号 v2：微信群记忆按微信 App 当前账号取「我」的真名
+                  const [u, p] = await Promise.all([ownerRealNameFor('wx'), contactRealName(char.id)]);
                   memAfterAiTurn(
                     char.id,
                     'wx',
@@ -4076,7 +4077,8 @@ export function WxGroupChatPage({
       // 亲属卡扣款感知：资金通知行（与单聊同款句式）+ 消费流水/赠卡人记忆碎片（fire-and-forget，绝不触发 AI 回合）
       const fc = pay.fc;
       appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`);
-      void ownerRealName().then((o) => {
+      // 多账号 v2：亲属卡消费记忆按微信 App 当前账号取「我」的真名
+      void ownerRealNameFor('wx').then((o) => {
         recordFcSpend({ total: fc.total, scene: '红包', where: `发进「${groupDisplayName(group)}」的群红包`, note: p.blessing || undefined, parts: fc.parts, ownerName: o });
       });
     }
@@ -4128,7 +4130,8 @@ export function WxGroupChatPage({
       // 亲属卡扣款感知：资金通知行（与单聊同款句式）+ 消费流水/赠卡人记忆碎片（fire-and-forget，绝不触发 AI 回合）
       const fc = pay.fc;
       appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`);
-      void ownerRealName().then((o) => {
+      // 多账号 v2：亲属卡消费记忆按微信 App 当前账号取「我」的真名
+      void ownerRealNameFor('wx').then((o) => {
         recordFcSpend({ total: fc.total, scene: '转账', where: `转给「${memberNameOf(member)}」的转账`, note: note || undefined, parts: fc.parts, ownerName: o });
       });
     }

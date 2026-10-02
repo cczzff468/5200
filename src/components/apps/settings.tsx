@@ -91,13 +91,12 @@ import {
 import { listContacts, mainOwnerContact, ownerRealName } from '@/lib/ios/contacts-store';
 import {
   accountDisplayName,
+  accountUsedBy,
   createAccount,
   deleteAccount,
-  getActiveAccount,
-  getActiveAccountId,
   getAccounts,
   MAIN_ACCOUNT_ID,
-  switchAccount,
+  type AccountApp,
   type PhoneAccount,
 } from '@/lib/ios/accounts';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
@@ -390,23 +389,17 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
     void localDB.put('settings', { key: 'radios', value: { airplane: v } });
   };
 
-  // 「切换账号」行右侧值：当前账号显示名（多账号系统 Task 40）。
-  // 大号 = 机主联系人名（当前账号库的 user 联系人）回退「机主」；小号/匿名号 = 注册名。
+  // 「切换账号」行右侧值：恒机主名（多账号 v2 无全局当前账号——微信/QQ/信息/电话
+  // 分别在各自 App 内切换，这里固定显示机主身份）。
   const [accountName, setAccountName] = useState('机主');
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const acc = getActiveAccount();
-        if (acc.id !== MAIN_ACCOUNT_ID) {
-          if (!cancelled) setAccountName(accountDisplayName(acc));
-          return;
-        }
         const name = await ownerRealName();
-        if (!cancelled) setAccountName(name || accountDisplayName(acc));
+        if (!cancelled && name.trim()) setAccountName(name.trim());
       } catch {
-        // 资料不可用时回退「机主」
-        if (!cancelled) setAccountName('机主');
+        // 资料不可用时保持回退「机主」
       }
     })();
     return () => {
@@ -467,11 +460,11 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             </span>
             <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
           </button>
-          {/* 切换账号入口（Task 40-C）：右侧值 = 当前账号显示名 */}
+          {/* 账号管理入口（Task 40-C / v2 适配）：右侧值 = 恒机主名（无全局当前账号） */}
           <MainRow
             icon={UsersRound}
             tone={TONE_CYAN}
-            label="切换账号"
+            label="账号管理"
             value={accountName}
             onClick={() => onOpen('account')}
             testId="settings-account-entry"
@@ -3395,7 +3388,7 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
   );
 }
 
-// ---------------- 切换账号 ----------------
+// ---------------- 账号管理 ----------------
 
 /** 账号首字母圆配色：小号=蓝绿系、匿名号=深灰系（深浅色各配一版） */
 const ACCOUNT_AVATAR_TONE: Record<'alt' | 'anon', string> = {
@@ -3403,17 +3396,20 @@ const ACCOUNT_AVATAR_TONE: Record<'alt' | 'anon', string> = {
   anon: 'bg-[#E4E4E9] text-[#55555C] dark:bg-white/[0.14] dark:text-[#C7C7CC]',
 };
 
+/** accountUsedBy 的 App 中文名映射（「使用中：微信·QQ」副行用） */
+const ACCOUNT_APP_NAMES: Record<AccountApp, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
+
 /**
- * 切换账号页（多账号系统 Task 40）：
- * - 账号列表：大号 = 机主资料（当前账号联系人库的 user 联系人实时资料），小号/匿名号 = 注册名 + 虚拟号；
- * - 点非当前行 switchAccount()（写标记 + 整页 reload，无确认弹窗）；
- * - 添加小号/匿名号 → 受控命名小弹窗（可留空用默认名）→ createAccount() → 立即 switchAccount()；
- * - 非当前、非大号行右侧常驻 ⊖ 圆钮（iOS 订阅管理风）→ 确认弹窗（写明清除全部数据）→ deleteAccount()，
- *   返回 error（大号/当前号等兜底）用页内 toast 提示。
+ * 账号管理页（多账号系统 Task 40-C，v2 per-app 账号适配）：
+ * - 账号列表：大号 = 机主资料（mainOwnerContact 实时资料），小号/匿名号 = 注册名 + 虚拟号；
+ *   副行标注「使用中：微信·QQ」（该账号正被哪些 App 使用，accountUsedBy，空 = 不显示）；
+ * - v2 无全局切换：行点击不再切换账号（微信/QQ/信息/电话在各自 App 内切换，互相独立）；
+ * - 添加小号/匿名号 → 受控命名小弹窗（可留空用默认名）→ createAccount()（不自动切换）；
+ * - 非大号行右侧常驻 ⊖ 圆钮（iOS 订阅管理风）→ 确认弹窗（写明清除全部数据）→ deleteAccount()（async），
+ *   正在被某 App 使用中会被拒删，返回 error 原文用页内 toast 提示。
  */
 function AccountSwitchPage({ onBack }: { onBack: () => void }) {
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
-  const [activeId, setActiveId] = useState<string>(() => getActiveAccountId());
   // 机主实时资料（大号显示名/号码/头像）：跨账号直读大号库（mainOwnerContact），
   // 避免在小号视角下误用当前库的机主联系人
   const [owner, setOwner] = useState<{ name: string; phone: string; avatar: string | null }>({
@@ -3455,11 +3451,15 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
     return acc.name;
   };
 
-  /** 副行小字：kind 徽标文案 + 号码（大号用实时机主号码，回退注册表号码） */
+  /** 副行小字：kind 徽标文案 + 号码（大号用实时机主号码，回退注册表号码）+ 使用中的 App（空 = 不显示） */
   const subline = (acc: PhoneAccount): string => {
     const badge = acc.kind === 'main' ? '大号' : acc.kind === 'alt' ? '小号' : '匿名号码';
     const phone = (acc.id === MAIN_ACCOUNT_ID ? owner.phone || acc.phone : acc.phone).trim();
-    return phone ? `${badge} · ${phone}` : badge;
+    const base = phone ? `${badge} · ${phone}` : badge;
+    const usedBy = accountUsedBy(acc.id)
+      .map((a) => ACCOUNT_APP_NAMES[a])
+      .join('·');
+    return usedBy ? `${base} · 使用中：${usedBy}` : base;
   };
 
   /** 头像圆：大号 = 机主头像回退首字母中性圆；小号/匿名号 = 首字母彩色圆（蓝绿系/深灰系） */
@@ -3488,49 +3488,30 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
   const deletingAccount = accounts.find((a) => a.id === deletingId) ?? null;
 
   return (
-    <DetailShell title="切换账号" onBack={onBack} gray>
-      {/* 账号列表：当前账号右侧绿色对勾；非当前行点击即切换（写标记 + 整页重启，无确认） */}
+    <DetailShell title="账号管理" onBack={onBack} gray>
+      {/* 账号列表：v2 无全局切换——行不再可点击切换；副行标注该账号正被哪些 App 使用 */}
       <GroupCard>
         {accounts.map((acc) => {
-          const isCurrent = acc.id === activeId;
           const name = displayName(acc);
-          const deletable = acc.id !== MAIN_ACCOUNT_ID && !isCurrent;
+          const deletable = acc.id !== MAIN_ACCOUNT_ID;
           return (
-            <div key={acc.id} className="flex min-h-[64px] items-center gap-2 py-1 pl-4 pr-3" data-testid={`settings-account-row-${acc.id}`}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (isCurrent) return;
-                  // switchAccount 内部写标记后 location.reload()，调用后页面立即重启，勿再操作 DOM
-                  switchAccount(acc.id);
-                }}
-                aria-label={isCurrent ? `当前账号：${name}` : `切换到 ${name}`}
-                className="flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left transition-opacity active:opacity-60"
-              >
-                {renderAvatar(acc)}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[16px] leading-snug">{name}</span>
-                  <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">{subline(acc)}</span>
-                </span>
-              </button>
-              {isCurrent ? (
-                <Check
-                  className="mr-1 h-[22px] w-[22px] shrink-0"
-                  style={{ color: '#34C759' }}
-                  strokeWidth={2.6}
-                  aria-label="当前账号"
-                />
-              ) : deletable ? (
+            <div key={acc.id} className="flex min-h-[64px] items-center gap-3 py-1 pl-4 pr-3" data-testid={`settings-account-row-${acc.id}`}>
+              {renderAvatar(acc)}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[16px] leading-snug">{name}</span>
+                <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">{subline(acc)}</span>
+              </span>
+              {deletable && (
                 <button
                   type="button"
                   data-testid={`settings-account-delete-${acc.id}`}
                   aria-label={`删除 ${name}`}
                   onClick={() => setDeletingId(acc.id)}
-                  className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[#FF453A]/45 text-[#FF453A] transition-colors active:bg-[#FF453A]/10"
+                  className="mr-1 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[#FF453A]/45 text-[#FF453A] transition-colors active:bg-[#FF453A]/10"
                 >
                   <Minus className="h-[14px] w-[14px]" strokeWidth={2.8} />
                 </button>
-              ) : null}
+              )}
             </div>
           );
         })}
@@ -3569,11 +3550,12 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
           </button>
         </GroupCard>
         <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
-          切换后所有 App 数据（聊天/记忆/联系人/朋友圈）随之切换并独立保存。
+          微信 / QQ / 信息 / 电话 四个 App 可在各自 App 内切换账号，互相独立，切换不刷新页面。
+          其他 App 数据（照片、备忘录等）为整机共享，不随账号变化。
         </p>
       </div>
 
-      {/* 命名小弹窗：输入可留空（默认名「小号N」/「匿名账号」），创建后立即切换过去 */}
+      {/* 命名小弹窗：输入可留空（默认名「小号N」/「匿名账号」），创建后不自动切换 */}
       <AlertDialog
         open={namingKind !== null}
         onOpenChange={(open) => {
@@ -3587,8 +3569,8 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
             </AlertDialogTitle>
             <AlertDialogDescription className="text-center text-[13px] leading-snug">
               {namingKind === 'anon'
-                ? '给这个身份起个名字，留空则默认「匿名账号」；创建后立即切换过去。'
-                : '给小号起个名字，留空则默认「小号N」；创建后立即切换过去。'}
+                ? '给这个身份起个名字，留空则默认「匿名账号」；创建后可在微信 / QQ / 信息 / 电话中切换使用。'
+                : '给小号起个名字，留空则默认「小号N」；创建后可在微信 / QQ / 信息 / 电话中切换使用。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="px-5 pb-4">
@@ -3614,8 +3596,9 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
                 setNamingKind(null);
                 if (!kind) return;
                 const acc = createAccount(kind, namingInput);
-                // 写标记 + location.reload()：页面立即重启进入新账号，勿再操作 DOM
-                switchAccount(acc.id);
+                // v2 不自动切换：在各 App（微信/QQ/信息/电话）内自行切换使用
+                setAccounts(getAccounts());
+                showToast(`已创建「${accountDisplayName(acc)}」，可在微信 / QQ / 信息 / 电话中切换使用`);
               }}
             >
               创建
@@ -3624,7 +3607,7 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 删除确认：写明将清除该账号全部数据；API 兜底失败（大号/当前号）toast 提示 */}
+      {/* 删除确认：写明将清除该账号全部数据；正在使用中/大号等拒删时 toast 提示原因原文 */}
       <AlertDialog
         open={deletingId !== null}
         onOpenChange={(open) => {
@@ -3653,13 +3636,14 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
                 const id = deletingId;
                 setDeletingId(null);
                 if (!id) return;
-                const result = deleteAccount(id);
-                if (result.ok) {
-                  setAccounts(getAccounts());
-                  showToast('已删除该账号');
-                } else {
-                  showToast(result.error ?? '删除失败');
-                }
+                void deleteAccount(id).then((result) => {
+                  if (result.ok) {
+                    setAccounts(getAccounts());
+                    showToast('已删除该账号');
+                  } else {
+                    showToast(result.error ?? '删除失败');
+                  }
+                });
               }}
             >
               删除

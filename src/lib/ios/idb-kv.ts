@@ -19,6 +19,12 @@
  */
 
 import { localDB } from './db';
+import {
+  accountAppOfKey,
+  getActiveAccountIdFor,
+  MAIN_ACCOUNT_ID,
+  type AccountApp,
+} from './accounts';
 
 // ---------------- 迁移清单（A 级模块的键） ----------------
 
@@ -78,6 +84,29 @@ function isMigratableKey(key: string): boolean {
   return MIGRATE_PREFIXES.some((p) => key.startsWith(p));
 }
 
+// ---------------- 账号作用域映射（Task 40 v2） ----------------
+
+/**
+ * 多账号（Task 40 v2）：`wx-*` / `qq-*` / `ios-chat-*` / `sms-*` 前缀的键按对应 App 的
+ * 当前账号加 `--{accountId}` 后缀（大号保持原键零迁移）；其余键原样。
+ * 这样微信/QQ/信息三个 App 的聊天、钱包、朋友圈、拉黑、收藏、表情等数据天然随
+ * 各自 App 的账号切换；照片/音乐/备忘录等设备级数据不受影响（不映射）。
+ * 记忆 mem-* 键由 memory.ts 自行按聊天所在 App 的账号加后缀（同账号跨 App 共享记忆）。
+ * 带后缀的键直接读写（kvGetRaw 等显式 API）不会被二次映射。
+ */
+function scopeSuffixOf(key: string): string {
+  const app = accountAppOfKey(key);
+  if (!app) return '';
+  const id = getActiveAccountIdFor(app);
+  return id === MAIN_ACCOUNT_ID ? '' : `--${id}`;
+}
+
+/** 裸键（调用方语义键）→ 实际存储键（大号 = 原键） */
+function effKey(key: string): string {
+  const suffix = scopeSuffixOf(key);
+  return suffix ? `${key}${suffix}` : key;
+}
+
 // ---------------- 内存写穿层 ----------------
 
 const memStore = new Map<string, unknown>();
@@ -88,38 +117,40 @@ let idbAvailable = true;
 let readyDone = false;
 
 /**
- * 同步读（内存缓存）。开机门控保证 ready 后内存里已有全量数据；
- * ready 之前的读取（理论上只发生在极早期渲染）返回 null，与旧代码 localStorage 无键时行为一致。
- *
- * #62：极早期同步读（!readyDone）不再回退读 localStorage——
- * 注水前读到的是迁移尚未发生的「陈旧值」（迁移成功后内存里应是 IndexedDB 的最新值），
- * 用陈旧值会与稍后注水的 IndexedDB 值不一致，后续 kvSet 写入还会覆盖新值导致数据丢失。
- * 一律返回 null，让消费方等 ready（loaded）后再读（与原无键时行为一致）。
+ * 跨 App / 跨账号显式读取：按指定 App 的当前账号读 `key`（不带后缀的语义键）。
+ * 供 cross-app-context / 记忆回捞 / 摘录等「明确知道要读哪个 App」的场景使用。
  */
-export function kvGet<T = unknown>(key: string): T | null {
+export function kvGetScoped<T = unknown>(key: string, app: AccountApp): T | null {
+  return kvGetRaw<T>(require_scope(key, app));
+}
+
+/** 跨账号显式写入（同 kvGetScoped 的写侧） */
+export function kvSetScoped(key: string, value: unknown, app: AccountApp): void {
+  kvSetRaw(require_scope(key, app), value);
+}
+
+/** 原样键读（调用方自己处理账号后缀，如 digest 扫描出的带后缀键） */
+export function kvGetRaw<T = unknown>(key: string): T | null {
   if (memStore.has(key)) return (memStore.get(key) ?? null) as T | null;
   return null;
 }
 
-/** 同步写内存 + 异步写穿 IndexedDB（运行期唯一持久化写入口） */
-export function kvSet(key: string, value: unknown): void {
+/** 原样键写（写穿 IndexedDB 同键） */
+export function kvSetRaw(key: string, value: unknown): void {
   memStore.set(key, value);
   if (!idbAvailable) {
-    // 降级：IndexedDB 不可用时写回 localStorage（保持旧行为）
     try {
       window.localStorage.setItem(key, JSON.stringify(value));
     } catch {
-      // 配额满等失败忽略（与旧代码一致）
+      // 忽略
     }
     return;
   }
-  void localDB.put('kv', { key, value }).catch(() => {
-    // 单次写失败不中断 UI（下次写入重试；内存值始终最新）
-  });
+  void localDB.put('kv', { key, value }).catch(() => {});
 }
 
-/** 同步删内存 + 异步删 IndexedDB */
-export function kvDel(key: string): void {
+/** 原样键删 */
+export function kvDelRaw(key: string): void {
   memStore.delete(key);
   if (!idbAvailable) {
     try {
@@ -132,10 +163,47 @@ export function kvDel(key: string): void {
   void localDB.delete('kv', key).catch(() => {});
 }
 
-/** 按前缀批量删（联系人删除时清记忆/聊天键） */
+/** 列出内存中某前缀的全部原始存储键（含各账号后缀键；purge/摘录/清扫用） */
+export function kvKeysByPrefix(prefix: string): string[] {
+  return [...memStore.keys()].filter((k) => k.startsWith(prefix));
+}
+
+function require_scope(key: string, app: AccountApp): string {
+  const id = getActiveAccountIdFor(app);
+  return id === MAIN_ACCOUNT_ID ? key : `${key}--${id}`;
+}
+
+/**
+ * 同步读（内存缓存）。开机门控保证 ready 后内存里已有全量数据；
+ * ready 之前的读取（理论上只发生在极早期渲染）返回 null，与旧代码 localStorage 无键时行为一致。
+ *
+ * #62：极早期同步读（!readyDone）不再回退读 localStorage——
+ * 注水前读到的是迁移尚未发生的「陈旧值」（迁移成功后内存里应是 IndexedDB 的最新值），
+ * 用陈旧值会与稍后注水的 IndexedDB 值不一致，后续 kvSet 写入还会覆盖新值导致数据丢失。
+ * 一律返回 null，让消费方等 ready（loaded）后再读（与原无键时行为一致）。
+ */
+export function kvGet<T = unknown>(key: string): T | null {
+  return kvGetRaw<T>(effKey(key));
+}
+
+/** 同步写内存 + 异步写穿 IndexedDB（运行期唯一持久化写入口；按当前账号作用域） */
+export function kvSet(key: string, value: unknown): void {
+  kvSetRaw(effKey(key), value);
+}
+
+/** 同步删内存 + 异步删 IndexedDB（按当前账号作用域删；跨账号清扫用 kvDelByPrefix） */
+export function kvDel(key: string): void {
+  kvDelRaw(effKey(key));
+}
+
+/**
+ * 按前缀批量删——**跨全部账号**（前缀匹配含各账号后缀键）：
+ * 联系人删除时清聊天/记忆等（数据本体没了，任何账号视角都不该残留）。
+ * 「只清当前账号」的换号清库场景用 kvKeysByPrefix + 后缀过滤 + kvDelRaw。
+ */
 export function kvDelByPrefix(prefix: string): void {
   const keys = [...memStore.keys()].filter((k) => k.startsWith(prefix));
-  for (const k of keys) kvDel(k);
+  for (const k of keys) kvDelRaw(k);
 }
 
 // ---------------- 迁移与注水 ----------------

@@ -39,7 +39,14 @@ import {
 import { IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { AnonSwitchSheet, maskAnonPhone } from '@/components/ios/AnonSwitchSheet';
-import { getActiveAccount } from '@/lib/ios/accounts';
+import {
+  ACCOUNT_CHANGED_EVENT,
+  getActiveAccountFor,
+  getActiveAccountIdFor,
+  MAIN_ACCOUNT_ID,
+  switchAccountFor,
+  type PhoneAccount,
+} from '@/lib/ios/accounts';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { IOSActionSheet } from '@/components/ios/ActionSheet';
 import { isProactiveCallEnabled, setProactiveCallEnabled, getProactiveLevel, setProactiveLevel, type ProactiveLevel } from '@/lib/ios/proactive-call';
@@ -48,7 +55,8 @@ import { phoneBadge } from '@/lib/unread-store';
 import { directChatStream } from '@/lib/ios/direct-api';
 import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
 // listContactsFor：按 App 投影联系人（phone 槽位优先，回退全局 avatar）——电话 App 内一律用它加载
-import { createContact, deleteContact as deleteContactLocal, listContactsFor, ownerProfile, ownerRealName, updateContact } from '@/lib/ios/contacts-store';
+// ownerRealNameFor/ownerProfileFor：按电话 App 当前账号取「我」的身份（多账号 v2：大号=机主，小号/匿名号=档案）
+import { createContact, deleteContact as deleteContactLocal, listContactsFor, ownerProfileFor, ownerRealNameFor, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
@@ -828,7 +836,7 @@ function CallScreen({
       // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
       // fix3-9 「你指谁」锚点：charName=角色名、userName=机主真名（回退 profileName），
       // 让每本书包裹块头部标明「文中的你/机主各指谁」（拿不到时不传，库内自动省略锚点行）
-      const wbUserName = contact?.id ? (await ownerRealName().catch(() => '')) || profileName : '';
+      const wbUserName = contact?.id ? (await ownerRealNameFor('phone').catch(() => '')) || profileName : '';
       const callWb = contact?.id
         ? collectWbBlocks(
             contact.id,
@@ -869,8 +877,8 @@ function CallScreen({
           ''
         );
         turns.push({ role: 'peer', text: reply });
-        // names：双方真实名字（机主名取联系人 App「机主」卡片，回退 Apple 账户名），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-        void ownerRealName()
+        // names：双方真实名字（机主名取电话当前账号的「我」（多账号 v2），回退 Apple 账户名），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
+        void ownerRealNameFor('phone')
           .catch(() => '')
           .then((owner) =>
             memAfterAiTurn(
@@ -1145,7 +1153,7 @@ function CallScreen({
           if (!smsBlockedByUser) {
             const spoken = bubblesRef.current.filter((b) => b.text.trim());
             const lastUser = [...spoken].reverse().find((b) => b.role === 'user')?.text ?? null;
-            const owner = await ownerProfile().catch(() => null);
+            const owner = await ownerProfileFor('phone').catch(() => null);
             // #15 跨 App 近况块 + 群聊近况块：通话内已建则复用缓存；从未发过 turn 的短通话现算一次
             // （crossCtxRef 在 runTurn:793-797 已构建，但挂断续聊是 hangup 路径独立读取，未构建时现算兑底）
             if (!crossCtxRef.current) {
@@ -1226,7 +1234,7 @@ function CallScreen({
           .map((b): { role: 'me' | 'peer'; text: string } => ({ role: b.role === 'user' ? 'me' : 'peer', text: b.text }));
         for (const t of followupTexts) convo.push({ role: 'peer', text: t }); // 续聊文字随转写一同沉淀（互通）
         if (convo.length >= 2) {
-          void ownerRealName()
+          void ownerRealNameFor('phone')
             .catch(() => '')
             .then((owner) =>
               memSummarizeCallNow(
@@ -1377,7 +1385,7 @@ function CallScreen({
         const d = new Date();
         const when = `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
         const afterSuffix = voicemailLanded && afterText?.trim() ? `，之后留言解释：「${afterText.trim()}」` : '';
-        void ownerRealName()
+        void ownerRealNameFor('phone')
           .catch(() => '')
           .then((owner) => {
             // 机主名：联系人 App「机主」卡片真名 → 设置 profile 名 → 「机主」（与 memorizeTurn 同口径）
@@ -1478,7 +1486,7 @@ function CallScreen({
     // 失败或超时兜底 answer；机主打给自己（kind='user'）/陌生号码不决策
     const decision =
       contact && contact.kind !== 'user'
-        ? ownerProfile()
+        ? ownerProfileFor('phone')
             .then((owner) =>
               requestAnswerDecision({
                 number: target.number,
@@ -2701,9 +2709,9 @@ function KeypadTab({
   onCall: (number: string, contact: ContactRecord | null) => void;
   /** 右上角 ⊕：用当前输入的号码（可空）新建联系人（添加好友） */
   onNewContact: (prefilledPhone: string) => void;
-  /** 当前活跃账号为匿名号时传其号码（用于脱敏徽标与胶囊高亮），大号/小号传 null（Task 40-E） */
+  /** 当前活跃账号为匿名号时传其号码（用于脱敏徽标与匿名 chip 高亮/后四位），其余传 null（Task 40-E） */
   anonPhone: string | null;
-  /** 点「匿名号码」胶囊 → 打开切换弹层 */
+  /** 点「匿名号码」chip → 打开切换弹层（Task 40-E） */
   onOpenAnon: () => void;
 }) {
   const [digits, setDigits] = useState('');
@@ -2718,14 +2726,19 @@ function KeypadTab({
     return findContactByNumber(contacts, digits);
   }, [digits, contacts]);
 
-  // 多账号（Task 40）：键盘左上身份徽标跟随当前账号（大号=主号，小号=账号名，匿名号=匿名）
-  const activeAccount = getActiveAccount();
+  // 多账号（Task 40-2d v2）：键盘左上身份徽标跟随电话 App 当前账号（大号=主号，小号=账号名，匿名号=匿名）；
+  // 渲染期读——切号不刷新网页，PhoneApp 监听事件重渲染时这里读到的是新账号
+  const activeAccount = getActiveAccountFor('phone');
   const activeLabel =
     activeAccount.kind === 'main'
       ? '主号'
       : activeAccount.kind === 'anon'
         ? '匿名'
         : activeAccount.name || '小号';
+  // 身份选择 chips 的高亮态（iPhone 双卡样式）：当前为主号 →「主号」实心；当前为匿名号 →「匿名号码」实心；
+  // 小号身份时两者都不高亮（主号 chip 点击可一键切回主号）
+  const isMain = activeAccount.id === MAIN_ACCOUNT_ID;
+  const isAnon = activeAccount.kind === 'anon';
 
   return (
     <div className="flex flex-1 select-none flex-col items-center overflow-y-auto px-6 pb-2" data-testid="keypad-tab">
@@ -2745,6 +2758,45 @@ function KeypadTab({
           className="flex h-9 w-9 items-center justify-center rounded-full text-[#0A84FF] transition-colors active:bg-[#0A84FF]/10"
         >
           <UserPlus className="h-[22px] w-[22px]" strokeWidth={1.9} />
+        </button>
+      </div>
+
+      {/* 身份选择 chips（iPhone 双卡样式，Task 40-2d v2）：主号 / 匿名号码并排，号码显示区上方；
+          当前身份实心高亮（bg-foreground 反白），另一个弱化（bg-muted）；触控高度 44px */}
+      <div className="mt-1 flex w-full shrink-0 items-center justify-center gap-2.5" role="group" aria-label="主叫身份">
+        <button
+          type="button"
+          data-testid="phone-identity-main"
+          onClick={() => {
+            // 已是主号则无操作；小号/匿名号身份 → 一键切回主号（switchAccountFor 派发事件，不刷新网页）
+            if (!isMain) switchAccountFor('phone', MAIN_ACCOUNT_ID);
+          }}
+          aria-pressed={isMain}
+          aria-label="用主号拨打"
+          className={`flex h-11 min-w-[112px] items-center justify-center gap-1.5 rounded-full px-4 text-[14px] font-medium leading-none transition-all active:scale-95 ${
+            isMain
+              ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.18)]'
+              : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          <PhoneIcon className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+          主号
+        </button>
+        <button
+          type="button"
+          data-testid="phone-identity-anon"
+          onClick={onOpenAnon}
+          aria-pressed={isAnon}
+          aria-haspopup="dialog"
+          aria-label={isAnon && anonPhone ? `当前匿名号码 ${maskAnonPhone(anonPhone)}，点按切换` : '切换匿名号码'}
+          className={`flex h-11 min-w-[112px] items-center justify-center gap-1.5 rounded-full px-4 text-[14px] font-medium leading-none transition-all active:scale-95 ${
+            isAnon
+              ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.18)]'
+              : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          <EyeOff className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+          匿名号码{isAnon && anonPhone ? ` ${anonPhone.slice(-4)}` : ''}
         </button>
       </div>
 
@@ -2778,23 +2830,6 @@ function KeypadTab({
           ''
         )}
       </p>
-
-      {/* 匿名号码入口胶囊（号码行与拨号盘之间，不遮挡呼叫/新建联系人；触控高度 44px，Task 40-E）。
-          当前就是匿名号时变实心（foreground 底反白）并显示当前匿名号后 4 位 */}
-      <button
-        type="button"
-        onClick={onOpenAnon}
-        aria-label={anonPhone ? `当前为匿名号码 ${maskAnonPhone(anonPhone)}，点按切换` : '切换匿名号码'}
-        data-testid="phone-dialer-anon"
-        className={`mt-2.5 mb-0.5 flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium leading-none transition-all active:scale-95 ${
-          anonPhone
-            ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.18)]'
-            : 'border border-border/60 bg-background/60 text-foreground backdrop-blur-xl dark:border-white/[0.16] dark:bg-white/[0.08]'
-        }`}
-      >
-        <EyeOff className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-        匿名号码{anonPhone ? ` ${anonPhone.slice(-4)}` : ''}
-      </button>
 
       {/* 12 键拨号盘（小一号圆键 + 加粗数字/字母双层，深按压反馈） */}
       <div className="mt-1 grid w-[272px] grid-cols-3 gap-x-[28px] gap-y-[12px]">
@@ -3861,6 +3896,8 @@ export default function PhoneApp() {
         avatar: pending.contact?.avatar ?? null,
         direction: 'missed',
         duration: 0,
+        // 多账号（Task 40-2d）：记录归属电话 App 当前账号
+        account: getActiveAccountIdFor('phone'),
         createdAt: Date.now(),
       };
       setLogs((prev) => [missed, ...(prev ?? [])].sort((a, b) => b.createdAt - a.createdAt));
@@ -3904,20 +3941,27 @@ export default function PhoneApp() {
     { value: 'eager', label: '积极', desc: '10min 间隔·15min 冷却·45s 轮询' },
     { value: 'off', label: '无冷却', desc: '仅 10min 自然间隔·60s 轮询' },
   ];
-  // 多账号（Task 40-E）：当前活跃账号为匿名号时记住其资料（脱敏徽标/胶囊高亮用）。
-  // 切号 = switchAccount 整页 reload，本组件挂载期间账号不会变，挂载时读一次注册表即可
-  const [anonAcc] = useState(() => {
-    const acc = getActiveAccount();
+  // 多账号（Task 40-2d v2）：电话 App 当前账号身份（匿名号时记住其资料，供拨号键盘脱敏徽标/身份 chip 高亮）。
+  // 切号不刷新网页：switchAccountFor 派发 ACCOUNT_CHANGED_EVENT → 下方监听更新本 state + 重读数据
+  const [anonAcc, setAnonAcc] = useState<PhoneAccount | null>(() => {
+    const acc = getActiveAccountFor('phone');
     return acc.kind === 'anon' ? acc : null;
   });
-  /** 匿名号码切换弹层（拨号键盘胶囊入口，与信息 App 共用 AnonSwitchSheet） */
+  // 电话账号切换版本号：每次变化 +1 → 驱动初始加载 effect 按新账号重读通话记录/留言；
+  // ref 供异步加载回调校验「读到的还是不是最新账号」，防旧请求晚到覆盖新账号数据
+  const [accVer, setAccVer] = useState(0);
+  const accVerRef = useRef(0);
+  accVerRef.current = accVer;
+  /** 匿名号码切换弹层（拨号键盘「匿名号码」身份 chip 入口，与信息 App 共用 AnonSwitchSheet） */
   const [anonSheetOpen, setAnonSheetOpen] = useState(false);
   const vmAudioRef = useRef<HTMLAudioElement | null>(null);
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingChatContact = useUI((s) => s.setPendingChatContact);
 
-  // 初始加载：联系人（本地 IndexedDB）+ 通话记录 / 语音留言 / 收藏（IndexedDB）
+  // 初始加载：联系人（本地 IndexedDB）+ 通话记录 / 语音留言 / 收藏（IndexedDB）；
+  // 依赖 accVer：电话账号切换（不刷新网页）后 +1 重跑，按新账号重读
   useEffect(() => {
+    const ver = accVerRef.current;
     let alive = true;
     void (async () => {
       try {
@@ -3932,22 +3976,29 @@ export default function PhoneApp() {
       }
       try {
         const all = await localDB.getAll('call-logs');
+        // 多账号（Task 40-2d）：只展示电话 App 当前账号的记录（旧记录无 account 字段视为大号）
+        const phoneAccId = getActiveAccountIdFor('phone');
+        const scoped = all.filter((l) => (l.account ?? 'main') === phoneAccId);
         // 删好友可见性门控：被删好友（微信/QQ 两端都不再是好友且有过删除）的通话记录隐藏，
         // 数据本体保留在 IndexedDB，重新加回好友后自动恢复显示
         const visible: CallLogRecord[] = [];
-        for (const l of all) {
+        for (const l of scoped) {
           if (l.contactId && (await isPersonGoneEverywhere(l.contactId))) continue;
           visible.push(l);
         }
-        if (alive) setLogs(visible.sort((a, b) => b.createdAt - a.createdAt));
+        if (alive && accVerRef.current === ver) setLogs(visible.sort((a, b) => b.createdAt - a.createdAt));
       } catch {
-        if (alive) setLogs([]);
+        if (alive && accVerRef.current === ver) setLogs([]);
       }
       try {
         const vms = await localDB.getAll('voicemails');
-        if (alive) setVoicemails(vms.sort((a, b) => b.createdAt - a.createdAt));
+        // 多账号（Task 40-2d）：留言同样只取电话 App 当前账号的（角标/列表随账号切换）
+        const phoneAccId = getActiveAccountIdFor('phone');
+        if (alive && accVerRef.current === ver) {
+          setVoicemails(vms.filter((v) => (v.account ?? 'main') === phoneAccId).sort((a, b) => b.createdAt - a.createdAt));
+        }
       } catch {
-        if (alive) setVoicemails([]);
+        if (alive && accVerRef.current === ver) setVoicemails([]);
       }
       try {
         const rec = await localDB.get('settings', FAV_KEY);
@@ -3959,7 +4010,7 @@ export default function PhoneApp() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [accVer]);
 
   // 卸载时停掉留言播放
   useEffect(
@@ -4026,13 +4077,15 @@ export default function PhoneApp() {
     [callTarget, contacts, showToast]
   );
 
-  /** 通话结束：写日志 + 刷新列表 */
+  /** 通话结束：写日志 + 刷新列表（多账号 Task 40-2d：记录归属电话 App 当前账号——
+   *  CallScreen onEnd / 视频通话 onEnd 的记录对象统一在这里盖账号戳后再入库） */
   const handleCallEnd = useCallback((log: CallLogRecord) => {
+    const stamped: CallLogRecord = { ...log, account: getActiveAccountIdFor('phone') };
     setLogs((prev) => {
       const base = prev ?? [];
-      return [log, ...base].sort((a, b) => b.createdAt - a.createdAt);
+      return [stamped, ...base].sort((a, b) => b.createdAt - a.createdAt);
     });
-    void localDB.put('call-logs', log);
+    void localDB.put('call-logs', stamped);
   }, []);
 
   /** Task 22 视频通话：联系人详情「视频通话」→ 全局通话层视频页（variant='phone' iOS 黑白灰皮肤）。
@@ -4086,14 +4139,16 @@ export default function PhoneApp() {
     [callTarget, showToast, handleCallEnd]
   );
 
-  /** 通话结束落一条语音留言：kind='call'（对话内容存档）不弹「发来留言」提示；未接通留言才提示 */
+  /** 通话结束落一条语音留言：kind='call'（对话内容存档）不弹「发来留言」提示；未接通留言才提示。
+   *  多账号（Task 40-2d）：留言归属电话 App 当前账号（CallScreen 各路径的留言对象统一在这里盖账号戳） */
   const handleVoicemail = useCallback(
     (vm: VoicemailRecord) => {
+      const stamped: VoicemailRecord = { ...vm, account: getActiveAccountIdFor('phone') };
       setVoicemails((prev) => {
         const base = prev ?? [];
-        return [vm, ...base].sort((a, b) => b.createdAt - a.createdAt);
+        return [stamped, ...base].sort((a, b) => b.createdAt - a.createdAt);
       });
-      void localDB.put('voicemails', vm);
+      void localDB.put('voicemails', stamped);
       showToast(
         vm.kind === 'call'
           ? `与「${vm.displayName}」的通话内容已永久保存到语音留言`
@@ -4110,6 +4165,25 @@ export default function PhoneApp() {
     }
     setPlayingVmId(null);
   }, []);
+
+  // 多账号（Task 40-2d v2）：电话账号切换事件（switchAccountFor 派发，不刷新网页）——
+  // 更新身份 state + 停掉在播留言 + 把列表重置为加载态（防上一账号数据闪现），
+  // 再由上方加载 effect（accVer 驱动）按新账号重读；角标随 voicemails 重载后的既有同步 effect 重算。
+  // 其他 App（wx/qq/sms）的切号事件对本 App 无影响，忽略。
+  useEffect(() => {
+    const fn = (e: Event) => {
+      const detail = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!detail || detail.app !== 'phone') return;
+      const acc = getActiveAccountFor('phone');
+      setAnonAcc(acc.kind === 'anon' ? acc : null);
+      stopVmAudio();
+      setLogs(null);
+      setVoicemails(null);
+      setAccVer((v) => v + 1);
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
+  }, [stopVmAudio]);
 
   /** 播放/暂停一条语音留言（优先用户语音 API 的联系人音色，失败回退内置 TTS；播放即标为已读） */
   const toggleVmPlay = useCallback(
@@ -4215,7 +4289,20 @@ export default function PhoneApp() {
   );
 
   const clearLogs = useCallback(() => {
-    void localDB.clear('call-logs');
+    // 多账号（Task 40-2d）：只清除电话 App 当前账号的通话记录（其他账号数据保留）
+    void (async () => {
+      try {
+        const acc = getActiveAccountIdFor('phone');
+        const all = await localDB.getAll('call-logs');
+        await Promise.all(
+          all
+            .filter((l) => (l.account ?? 'main') === acc)
+            .map((l) => localDB.delete('call-logs', l.id)),
+        );
+      } catch {
+        // 存储异常静默（列表已清空，残留记录下次载入时仍按账号过滤不可见）
+      }
+    })();
     setLogs([]);
     showToast('已清除全部通话记录');
   }, [showToast]);
@@ -4267,7 +4354,10 @@ export default function PhoneApp() {
     [vmDetail, contacts]
   );
   const loading = contacts === null;
-  const unreadVmCount = (voicemails ?? []).filter((v) => !v.read).length;
+  // 多账号（Task 40-2d）：未读留言数按电话 App 当前账号过滤（state 本身已按账号载入，
+  // 这里再过滤一道是渲染期冗余保障，切号重载间隙旧数据不会误算进角标）
+  const phoneAccId = getActiveAccountIdFor('phone');
+  const unreadVmCount = (voicemails ?? []).filter((v) => !v.read && (v.account ?? 'main') === phoneAccId).length;
 
   // 主屏电话图标红点同步：未读语音留言数 → unread-store 总线（与微信/QQ 同款；留言载入/已读/删除都会重算）
   useEffect(() => {
@@ -4564,8 +4654,9 @@ export default function PhoneApp() {
           </div>
         )}
 
-        {/* 匿名号码切换弹层（Task 40-E，与信息 App 共享；切号 = 整页 reload，无需 onClose 回调） */}
-        <AnonSwitchSheet open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
+        {/* 匿名号码切换弹层（Task 40-E / v2 per-app 账号，与信息 App 共享；切号不刷新网页，
+            电话账号变化由 ACCOUNT_CHANGED_EVENT 监听重读数据） */}
+        <AnonSwitchSheet app="phone" open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
 
         {/* 通话全屏层 */}
         {callTarget && (

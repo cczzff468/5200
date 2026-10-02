@@ -204,11 +204,13 @@ import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, A
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
-import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
-// 多账号（Task 40）：注册表/切换/创建走 accounts API；QQ 登录态与排队补跑键按账号隔离（大号保持原键）
-import { MAIN_ACCOUNT_ID, accountScopedKey, createAccount, getAccounts, getActiveAccountId, switchAccount, type PhoneAccount } from '@/lib/ios/accounts';
+// 多账号 v2（Task 40-2b）：kv 裸键自动按 qq 当前账号作用域；purge 限账号用 kvKeysByPrefix+kvDelRaw
+import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
+// 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
+// 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, getAccounts, getActiveAccountIdFor, parseScopedKey, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
-import { getQqProfileBg, loginQQ, listContactsFor, mainOwnerContact, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
@@ -507,7 +509,7 @@ type ChatLayer =
   | { view: 'textcard' }
   | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'tr-receive' | 'fam-detail'; msgId: string };
 
-/** QQ 登录态存的是本机联系人 id；读写一律经 accountScopedKey() 按账号隔离（大号=原键，旧登录不丢） */
+/** QQ 登录态存的是本机联系人 id；读写一律经 accLs(key, 'qq') 现算按账号隔离（大号=原键，旧登录不丢） */
 const LS_SESSION = 'qq-session-user-id';
 const lsMsgsKey = (contactId: string) => `qq-chat-msgs:${contactId}`;
 
@@ -940,14 +942,17 @@ let qqActiveChatId: string | null = null;
  *  37-a：队列项扩展 event 字段——回复中触发的系统事件（拉黑申请同意/拒绝、退卡）随补跑回合保留
  *  （原实现直接 runAiTurn：同会话已有流时 beginChatStream 返回 false，事件被静默丢弃、AI 绝口不提） */
 type QqQueuedTurn = { kind: 'kick'; event?: string };
-// 多账号（Task 40-D）：按账号隔离（大号=原键向后兼容；小号 qq-queued-turns--{id}）。
-// 页面生命周期内当前账号恒定（切换=整页 reload），模块加载时求值一次即安全。
-const QQ_QUEUED_TURNS_KEY = accountScopedKey('qq-queued-turns');
+// 多账号 v2（Task 40-2b）：按账号隔离（大号=原键向后兼容；小号 qq-queued-turns--{id}）。
+// 切换账号不再整页刷新 → 严禁模块常量固化：每次读写经 queuedTurnsKey() 现算，
+// 换号后由 QQApp 根组件的账号切换监听调 qqQueueReload() 重读新账号队列。
+function queuedTurnsKey(): string {
+  return accLs('qq-queued-turns', 'qq');
+}
 
 /** 读取并规范化排队表（兼容旧格式：contactId 字符串数组 = 纯消息补跑，无事件） */
 function readQqQueuedTurns(): Record<string, QqQueuedTurn[]> {
   try {
-    const raw: unknown = JSON.parse(window.localStorage.getItem(QQ_QUEUED_TURNS_KEY) ?? '{}');
+    const raw: unknown = JSON.parse(window.localStorage.getItem(queuedTurnsKey()) ?? '{}');
     const out: Record<string, QqQueuedTurn[]> = {};
     if (Array.isArray(raw)) {
       // 旧版 Set 序列化（contactId 数组）：逐条迁移为无事件的补跑回合
@@ -977,7 +982,7 @@ const qqQueuedTurns = readQqQueuedTurns();
 
 function qqQueueWrite(): void {
   try {
-    window.localStorage.setItem(QQ_QUEUED_TURNS_KEY, JSON.stringify(qqQueuedTurns));
+    window.localStorage.setItem(queuedTurnsKey(), JSON.stringify(qqQueuedTurns));
   } catch {
     // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
   }
@@ -996,6 +1001,12 @@ function qqQueueDelete(id: string): void {
   if (!qqQueuedTurns[id]) return;
   delete qqQueuedTurns[id];
   qqQueueWrite();
+}
+
+/** 多账号 v2（Task 40-2b）：切换 QQ 账号后重读当前账号的排队表（模块缓存随账号显式刷新，不刷新网页） */
+function qqQueueReload(): void {
+  for (const k of Object.keys(qqQueuedTurns)) delete qqQueuedTurns[k];
+  Object.assign(qqQueuedTurns, readQqQueuedTurns());
 }
 
 function loadMsgs(contactId: string): QQMsg[] {
@@ -4449,7 +4460,8 @@ function ChatPage({
           // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片；
           // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
           // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-          void Promise.all([ownerRealName(), contactRealName(peer.id)])
+          // 多账号 v2：记忆视角的「用户」= QQ 当前账号对应的「人」（大号=机主；小号/匿名号=档案联系人名）
+          void Promise.all([ownerRealNameFor('qq'), contactRealName(peer.id)])
             .then(([owner, peerReal]) =>
               memAfterAiTurn(
                 peer.id,
@@ -9514,7 +9526,8 @@ function QqSearchPage({
 
 // ---------------- 消息页 ----------------
 
-/** 会话长按操作持久化（置顶迁移至 @/lib/chat-flags 的 qqChatFlags 表；已删除会话后有新消息自动重新出现） */
+/** 会话长按操作持久化（置顶迁移至 @/lib/chat-flags 的 qqChatFlags 表；已删除会话后有新消息自动重新出现）。
+ *  多账号 v2（Task 40-2b）：读写现算 accLs(key,'qq') 按账号隔离（大号=原键，各账号隐藏会话互不串） */
 const LS_CHAT_HIDDEN = 'qq-chat-hidden';
 
 /** 未读计数总线（单例在 @/lib/unread-store）：会话列表角标 / 聊天页返回键角标 / 底部 tab 角标 / 主屏图标角标共享 */
@@ -9572,7 +9585,7 @@ function MessagesPage({
   // 会话管理：置顶 / 免打扰（chat-flags 总线）/ 未读 / 已删除（长按菜单操作，localStorage 持久化）
   const flagsMap = useChatFlags(qqChatFlagsStore);
   const unreads = useUnreadMap(qqUnreads);
-  const [hidden, setHidden] = useState<string[]>(() => loadStrList(LS_CHAT_HIDDEN));
+  const [hidden, setHidden] = useState<string[]>(() => loadStrList(accLs(LS_CHAT_HIDDEN, 'qq')));
   // 好友来信 / 未读变化 tick：会话预览派生自 localStorage，需要 tick 触发 useMemo 重算
   const [msgTick, setMsgTick] = useState(0);
   useEffect(() => qqUnreads.subscribe(() => setMsgTick((t) => t + 1)), []);
@@ -9732,7 +9745,7 @@ function MessagesPage({
     saveMsgs(id, []); // 清空聊天记录；有新消息时该会话自动重新出现
     qqQueueDelete(id); // #30 排队补跑一并清除：旧实现留着，流空闲后会对已删除会话凭空补跑一轮 AI 回复
     const nextHidden = hidden.includes(id) ? hidden : [...hidden, id];
-    saveStrList(LS_CHAT_HIDDEN, nextHidden);
+    saveStrList(accLs(LS_CHAT_HIDDEN, 'qq'), nextHidden);
     setHidden(nextHidden);
     qqChatFlagsStore.reset(id); // 置顶/免打扰/聊天背景一并清除
     qqUnreads.clear(id);
@@ -9743,7 +9756,7 @@ function MessagesPage({
   /** 群会话删除：只从消息列表移除该行（群本体与聊天记录保留，可从联系人 › 群聊 再进） */
   const removeGroupSession = (key: string) => {
     const nextHidden = hidden.includes(key) ? hidden : [...hidden, key];
-    saveStrList(LS_CHAT_HIDDEN, nextHidden);
+    saveStrList(accLs(LS_CHAT_HIDDEN, 'qq'), nextHidden);
     setHidden(nextHidden);
     qqChatFlagsStore.reset(key);
     qqUnreads.clear(key);
@@ -12806,11 +12819,21 @@ function SecurityPage({
   onBack: () => void;
   onToast: (m: string) => void;
 }) {
-  // 多账号（Task 40-D）：账号管理区改读注册表（大号 + 小号/匿名号）。
-  // 切换账号 = switchAccount 写标记后整页重启，页面生命周期内注册表不变 → 挂载时读一次即可
-  const accounts = useMemo(() => getAccounts(), []);
-  const activeId = getActiveAccountId();
-  // 大号行显示资料（跨账号直读大号库 mainOwnerContact；Task 40-F 修正）:
+  // 多账号 v2（Task 40-2b）：账号管理区改读注册表（大号 + 小号/匿名号）。
+  // 切换账号不再整页刷新（switchAccountFor 事件驱动）→ 账号快照入组件 state 并订阅事件刷新（当前行蓝勾实时移动）
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
+  const [activeId, setActiveId] = useState<string>(() => getActiveAccountIdFor('qq'));
+  useEffect(() => {
+    const refresh = (e: Event) => {
+      const detail = (e as CustomEvent<{ app?: string }>).detail;
+      if (detail && detail.app !== 'qq') return; // 其他 App 的账号切换与 QQ 账号列表无关
+      setAccounts(getAccounts());
+      setActiveId(getActiveAccountIdFor('qq'));
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, refresh);
+  }, []);
+  // 大号行显示资料（单库直读大号机主联系人 mainOwnerContact；Task 40-F 修正）:
   // 不能用 me（登录用户）——在小号视角下 me 是小号的登录身份，会把大号行显示成小号资料
   const [mainOwner, setMainOwner] = useState<{ name: string; qqId: string; avatar: string | null } | null>(null);
   useEffect(() => {
@@ -12870,7 +12893,7 @@ function SecurityPage({
 
         <p className="px-1 pb-1.5 pt-5 text-[13px] text-black/35 dark:text-white/35">账号管理</p>
         <div className="overflow-hidden rounded-[14px] bg-white dark:bg-[#1B1C1F]" data-testid="qq-security-accounts">
-          {/* 注册表账号列表：当前账号蓝勾；点其他账号 → switchAccount（写标记+整页重启，不再 setState） */}
+          {/* 注册表账号列表：当前账号蓝勾；点其他账号 → switchAccountFor('qq', id)（事件驱动不刷新，快照经事件订阅刷新） */}
           {accounts.map((acc, idx) => {
             const isCurrent = acc.id === activeId;
             const name = accNameOf(acc);
@@ -12879,7 +12902,7 @@ function SecurityPage({
                 key={acc.id}
                 type="button"
                 data-testid={`qq-account-row-${acc.id}`}
-                onClick={isCurrent ? undefined : () => switchAccount(acc.id)}
+                onClick={isCurrent ? undefined : () => switchAccountFor('qq', acc.id)}
                 className={`flex h-[64px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.03] ${
                   idx > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.05]' : ''
                 }`}
@@ -12902,13 +12925,13 @@ function SecurityPage({
             );
           })}
 
-          {/* 添加或注册账号：新建小号并立即切换（switchAccount 内部写标记后整页重启，调用处不再 setState） */}
+          {/* 添加或注册账号：新建小号并立即切换为 QQ 当前账号（switchAccountFor 事件驱动不刷新） */}
           <button
             type="button"
             data-testid="qq-account-add"
             onClick={() => {
               const acc = createAccount('alt');
-              switchAccount(acc.id);
+              switchAccountFor('qq', acc.id);
             }}
             className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 text-left active:bg-black/[0.03] dark:border-white/[0.05]"
           >
@@ -12918,6 +12941,7 @@ function SecurityPage({
             <span className="flex-1 text-[16px]">添加或注册账号</span>
           </button>
         </div>
+        <p className="px-1 pt-2 text-[12px] leading-snug text-black/30 dark:text-white/30">切换仅作用于 QQ，不影响微信 / 信息 / 电话的账号。</p>
 
         <p className="px-1 pb-1.5 pt-5 text-[13px] text-black/35 dark:text-white/35">账号关联</p>
         <div className="overflow-hidden rounded-[14px] bg-white dark:bg-[#1B1C1F]">
@@ -15687,10 +15711,14 @@ function pruneQqSessionSettingMaps(): void {
 let qqSessionEpoch = 0;
 
 /**
- * 清理全部 QQ 会话态数据（#11：数据键无账号命名空间，换号即串号——上一个账号的聊天记录/
- * 空间动态/钱包余额/未读角标会原样出现在新账号里）。
+ * 清理全部 QQ 会话态数据（#11 换号登录防串号：同一账号内上次登录的是另一个人时，
+ * 进入新身份前清掉上一人的聊天记录/空间动态/钱包余额/未读角标等）。
+ * 多账号 v2（Task 40-2b）关键修正：**只清当前 qq 账号作用域的数据**——kvDelByPrefix 现在
+ * 跨全部账号（前缀匹配含各账号后缀键），直接用会误删其他账号的 QQ 数据（切回时记录必须原样恢复）。
+ * 逐前缀改 kvKeysByPrefix 列原始键（含各账号后缀键）→ 过滤「属于当前账号的键」→ 逐键 kvDelRaw：
+ * 大号只删无后缀键（parseScopedKey 为 null），小号只删以 --{id} 结尾的键。
  * 覆盖 IndexedDB kv 与 localStorage 双层 + 内存单例总线（未读表/会话 flags/排队补跑表）：
- * 只清存储不清内存会导致 UI 残留旧账号角标，刷新后才恢复。
+ * 只清存储不清内存会导致 UI 残留旧身份角标，刷新后才恢复。
  * 保留设备级数据：表情包库、支付密码、登录会话键（qq-session-user-id 由登录流程自管）；
  * 跨平台键（moments-queue / moments-auto-cfg 等 wx+qq 混存）不动，避免误伤微信侧数据。
  */
@@ -15711,18 +15739,28 @@ function purgeQqSessionData(): void {
   } catch {
     // 忽略
   }
+  // 当前账号 id 与「原始键是否属于当前账号」判定（多账号 v2：只清当前账号，其他账号键不动）
+  const accId = getActiveAccountIdFor('qq');
+  const keyBelongsToAccount = (rawKey: string): boolean => {
+    const scoped = parseScopedKey(rawKey);
+    return accId === MAIN_ACCOUNT_ID ? scoped === null : scoped?.accId === accId;
+  };
   // IndexedDB kv：按前缀清（聊天消息 / 群聊消息 / 转发 AI 事件 / 密友值 / 好友点赞数——均含会话 id 后缀；
   // #9 补 qq-group-msgs:：群聊消息与单聊同批清（防串号），群本体（qq-groups 表）按保守处理不清——
-  // 只清消息不清群定义，新账号打开群聊历史为空但群仍可从联系人 › 群聊 进入
+  // 只清消息不清群定义，新身份打开群聊历史为空但群仍可从联系人 › 群聊 进入。
+  // 多账号 v2：kvKeysByPrefix 列原始键 → 只删当前账号的键（kvDelByPrefix 会跨全部账号误删，弃用）
   for (const prefix of ['qq-chat-msgs:', 'qq-group-msgs:', 'qq-ai-events:', 'qq-bond:', 'qq-friend-likes:']) {
     try {
-      kvDelByPrefix(prefix);
+      for (const rawKey of kvKeysByPrefix(prefix)) {
+        if (keyBelongsToAccount(rawKey)) kvDelRaw(rawKey);
+      }
     } catch {
       // 忽略
     }
   }
   // IndexedDB kv：整键清（空间动态/评论/点赞、打卡、钱包余额/银行卡/账单、小金库收益、空间互动收件箱、
-  // #10 消息收藏 qq-favorites——旧账号收藏残留会出现在新账号收藏页）
+  // #10 消息收藏 qq-favorites——旧身份收藏残留会出现在新身份收藏页）。
+  // 多账号 v2：kvDel 裸键自动按当前 qq 账号作用域（大号原键/小号 --{id}），其他账号数据不动 ✓
   for (const key of [LS_ZONE_POSTS, LS_ZONE_COMMENTS, LS_ZONE_LIKES, LS_QQ_CHECKIN, LS_WALLET, LS_WALLET_CARDS, LS_WALLET_BILLS, LS_VAULT_EARN, 'moments-inbox:qq', 'qq-favorites']) {
     try {
       kvDel(key);
@@ -15731,13 +15769,14 @@ function purgeQqSessionData(): void {
     }
   }
   // localStorage：整键清（未读角标/会话 flags（含旧版置顶迁移键）/隐藏会话/排队补跑/支付密码锁定）
+  // 多账号 v2：裸键现算 accLs(key,'qq')（大号=原键；小号=--{id} 后缀键），只清当前账号的键
   try {
-    window.localStorage.removeItem('qq-chat-unreads');
-    window.localStorage.removeItem('qq-chat-flags');
-    window.localStorage.removeItem('qq-chat-pins');
-    window.localStorage.removeItem(LS_CHAT_HIDDEN);
-    window.localStorage.removeItem(QQ_QUEUED_TURNS_KEY);
-    window.localStorage.removeItem(QQ_LS_PAY_PWD_LOCK);
+    window.localStorage.removeItem(accLs('qq-chat-unreads', 'qq'));
+    window.localStorage.removeItem(accLs('qq-chat-flags', 'qq'));
+    window.localStorage.removeItem(accLs('qq-chat-pins', 'qq'));
+    window.localStorage.removeItem(accLs(LS_CHAT_HIDDEN, 'qq'));
+    window.localStorage.removeItem(queuedTurnsKey());
+    window.localStorage.removeItem(accLs(QQ_LS_PAY_PWD_LOCK, 'qq'));
   } catch {
     // 忽略
   }
@@ -15799,34 +15838,74 @@ export default function QQApp() {
     runFriendReqCatchUp();
   }, []);
 
-  // 启动：拉联系人 + 恢复登录态（联系人被删则自动登出；QQ 内显示昵称，昵称优先于真实名字）
+  // 多账号 v2（Task 40-2b，不刷新的关键）：切换 QQ 账号不刷新网页——监听切换事件：
+  // ① 会话纪元递增，旧账号已调度的延迟回调（来电定时器/通话尾巴/分段投递闭包）整体作废；
+  // ② 中断 qq 在途流 + 清投递队列（旧账号回复不再落盘）；
+  // ③ 清设备级会话态总线（未读/flags 单例背靠非作用域 LS 键，新账号不得残留旧账号角标/置顶）；
+  // ④ 已消费转发事件登记清空（旧账号登记会吞新账号同文事件的回应）；
+  // ⑤ 排队补跑内存队列重读新账号快照；
+  // ⑥ bump accReloadKey → 启动加载 effect 重跑（联系人重读 + 按新账号作用域恢复登录态，无登录态 → 登录页）
+  //   + remount 主界面回到消息列表主 tab（子页全关、各页挂载重读当前账号数据）。
+  // wx/sms/phone 的账号切换与本 App 无关，忽略
+  const [accReloadKey, setAccReloadKey] = useState(0);
+  useEffect(() => {
+    const fn = (e: Event) => {
+      const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!d || d.app !== 'qq') return;
+      qqSessionEpoch += 1;
+      abortStreamsByPrefix('qq:');
+      purgeDeliveryQueueByPrefix('qq:');
+      try {
+        qqUnreadStore.prune([]);
+      } catch {
+        // 忽略
+      }
+      try {
+        for (const fid of Object.keys(qqChatFlagsStore.get())) qqChatFlagsStore.reset(fid);
+      } catch {
+        // 忽略
+      }
+      try {
+        consumedQqAiEvents.clear();
+      } catch {
+        // 忽略
+      }
+      qqQueueReload();
+      setAccReloadKey((k) => k + 1);
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
+  }, []);
+
+  // 启动 / 账号切换重跑：拉联系人 + 恢复登录态（联系人被删则自动登出；QQ 内显示昵称，昵称优先于真实名字）。
+  // 登录态键按 QQ 当前账号作用域（Task 40-2b：accLs 调用时现算，大号=原键旧登录态不丢）；
+  // 切换账号（accReloadKey 变化）重跑时：无登录态/联系人缺失 → 显式回登录页，杜绝上一账号的界面残留。
   useEffect(() => {
     let alive = true;
     (async () => {
-      // 头像按 App 隔离：启动加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
+      // 头像按 App 隔离：加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
       const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
-      const list = withDisplayNames(raw);
       if (!alive) return;
+      const list = withDisplayNames(raw);
       setContacts(list);
       try {
-        const savedId = window.localStorage.getItem(accountScopedKey(LS_SESSION));
-        if (savedId) {
-          const u = raw.find((c) => c.id === savedId && c.kind === 'user');
-          if (u) {
-            setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona });
-          } else {
-            window.localStorage.removeItem(accountScopedKey(LS_SESSION));
-          }
+        const savedId = window.localStorage.getItem(accLs(LS_SESSION, 'qq'));
+        const u = savedId ? raw.find((c) => c.id === savedId && c.kind === 'user') : undefined;
+        if (u) {
+          setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona });
+        } else {
+          if (savedId) window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
+          setUser(null);
         }
       } catch {
-        // 忽略
+        setUser(null);
       }
       setBooting(false);
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [accReloadKey]);
 
   const handleLogin = useCallback((u: QQUser) => {
     // #11 换账号登录防串号：上次登录的是另一个账号时，先清掉上一账号的全部 QQ 会话态数据
@@ -15845,7 +15924,7 @@ export default function QQApp() {
     }
     setUser(u);
     try {
-      window.localStorage.setItem(accountScopedKey(LS_SESSION), u.id);
+      window.localStorage.setItem(accLs(LS_SESSION, 'qq'), u.id);
     } catch {
       // 忽略
     }
@@ -15854,7 +15933,7 @@ export default function QQApp() {
   const handleLogout = useCallback(() => {
     setUser(null);
     try {
-      window.localStorage.removeItem(accountScopedKey(LS_SESSION));
+      window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
     } catch {
       // 忽略
     }
@@ -15900,5 +15979,6 @@ export default function QQApp() {
 
   if (!user) return <LoginScreen onLogin={handleLogin} />;
 
-  return <MainScreen me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} />;
+  // key={accReloadKey}：切换 QQ 账号后 remount 主界面——route 归位消息 tab、子页全关、各页挂载重读当前账号数据
+  return <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} />;
 }

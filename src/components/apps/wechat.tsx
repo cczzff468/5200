@@ -61,7 +61,7 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
-import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
+import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
@@ -81,6 +81,7 @@ import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem }
 import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
+  abortStreamsByPrefix,
   beginChatStream,
   clearChatStream,
   isChatStreaming,
@@ -182,9 +183,9 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
-// 多账号（Task 40）：注册表/切换/创建/删除走 accounts API；排队补跑键按账号隔离（大号保持原键）
-import { MAIN_ACCOUNT_ID, accountScopedKey, createAccount, deleteAccount, getAccounts, getActiveAccountId, switchAccount, type PhoneAccount } from '@/lib/ios/accounts';
-import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+// 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, deleteAccount, getAccounts, getActiveAccountIdFor, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
@@ -469,14 +470,14 @@ let wxActiveChatId: string | null = null;
  *  37-a：队列项扩展 event 字段——回复中触发的系统事件（拉黑申请同意/拒绝、退卡）随补跑回合保留
  *  （原实现直接 runAiTurn：同会话已有流时 beginChatStream 返回 false，事件被静默丢弃、AI 绝口不提） */
 type WxQueuedTurn = { kind: 'kick'; event?: string };
-// 多账号（Task 40-D）：按账号隔离（大号=原键向后兼容；小号 wx-queued-turns--{id}）。
-// 页面生命周期内当前账号恒定（切换=整页 reload），模块加载时求值一次即安全。
-const WX_QUEUED_TURNS_KEY = accountScopedKey('wx-queued-turns');
+// 多账号 v2（Task 40-2a）：键在每次读写时按微信当前账号现算 accLs（大号=原键向后兼容；小号 wx-queued-turns--{id}）。
+// 切换账号不再刷新网页，严禁模块常量固化作用域；切换瞬间由根组件调 wxQueueReload() 把内存队列换仓到新账号快照。
+const queuedTurnsKey = () => accLs('wx-queued-turns', 'wx');
 
 /** 读取并规范化排队表（兼容旧格式：contactId 字符串数组 = 纯消息补跑，无事件） */
 function readWxQueuedTurns(): Record<string, WxQueuedTurn[]> {
   try {
-    const raw: unknown = JSON.parse(window.localStorage.getItem(WX_QUEUED_TURNS_KEY) ?? '{}');
+    const raw: unknown = JSON.parse(window.localStorage.getItem(queuedTurnsKey()) ?? '{}');
     const out: Record<string, WxQueuedTurn[]> = {};
     if (Array.isArray(raw)) {
       // 旧版 Set 序列化（contactId 数组）：逐条迁移为无事件的补跑回合
@@ -506,7 +507,7 @@ const wxQueuedTurns = readWxQueuedTurns();
 
 function wxQueueWrite(): void {
   try {
-    window.localStorage.setItem(WX_QUEUED_TURNS_KEY, JSON.stringify(wxQueuedTurns));
+    window.localStorage.setItem(queuedTurnsKey(), JSON.stringify(wxQueuedTurns));
   } catch {
     // localStorage 异常忽略：内存队列照常工作（仅刷新后丢该条补跑）
   }
@@ -525,6 +526,15 @@ function wxQueueDelete(id: string): void {
   if (!wxQueuedTurns[id]) return;
   delete wxQueuedTurns[id];
   wxQueueWrite();
+}
+
+/** 多账号 v2（Task 40-2a）：切换微信账号时由根组件调用——内存队列整体换仓为新账号作用域键的
+ *  持久化快照（旧账号的排队原样留在旧键下，切回时自动恢复）。调用时机在 switchAccountFor 写完
+ *  per-app 标记之后，readWxQueuedTurns 内部 accLs 现算即得新账号键。不刷新网页后内存队列不能
+ *  跨账号沿用，否则旧账号的排队补跑会写进新账号的键。 */
+function wxQueueReload(): void {
+  for (const k of Object.keys(wxQueuedTurns)) delete wxQueuedTurns[k];
+  Object.assign(wxQueuedTurns, readWxQueuedTurns());
 }
 
 function loadMsgs(contactId: string): WxMsg[] {
@@ -815,7 +825,8 @@ const wxUnreads = wxUnreadStore;
 
 function loadStrList(key: string): string[] {
   try {
-    const raw = window.localStorage.getItem(key);
+    // 多账号 v2（Task 40-2a）：键按微信当前账号作用域、调用时现算（wx-chat-hidden / wx-search-history 等）
+    const raw = window.localStorage.getItem(accLs(key, 'wx'));
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((x): x is string => typeof x === 'string');
@@ -826,7 +837,8 @@ function loadStrList(key: string): string[] {
 
 function saveStrList(key: string, list: string[]): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(list));
+    // 多账号 v2（Task 40-2a）：同 loadStrList，写入也按微信当前账号现算作用域
+    window.localStorage.setItem(accLs(key, 'wx'), JSON.stringify(list));
   } catch {
     // 忽略
   }
@@ -5902,8 +5914,9 @@ function ChatPage({
         ).then(() => {
           // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（全部消息投递完后执行；后台异步，失败静默不打断聊天）；
           // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
-          // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）
-          void Promise.all([ownerRealName(), contactRealName(peer.id)])
+          // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）；
+          // 多账号 v2：机主名按微信当前账号取 ownerRealNameFor('wx')（大号=机主；小号/匿名号=其档案联系人名）
+          void Promise.all([ownerRealNameFor('wx'), contactRealName(peer.id)])
             .then(([owner, peerReal]) =>
               memAfterAiTurn(
                 peer.id,
@@ -10003,7 +10016,8 @@ function ApplyFriendPage({
 }) {
   const [greeting, setGreeting] = useState(() => {
     try {
-      const saved = window.localStorage.getItem(WX_COMMON_GREETING_KEY);
+      // 多账号 v2（Task 40-2a）：常用招呼语按微信当前账号作用域（调用时现算）
+      const saved = window.localStorage.getItem(accLs(WX_COMMON_GREETING_KEY, 'wx'));
       return saved?.trim() || `我是${me.name}`;
     } catch {
       return `我是${me.name}`;
@@ -10120,7 +10134,7 @@ function ApplyFriendPage({
           data-testid="wx-apply-common-greeting"
           onClick={() => {
             try {
-              window.localStorage.setItem(WX_COMMON_GREETING_KEY, greeting.trim());
+              window.localStorage.setItem(accLs(WX_COMMON_GREETING_KEY, 'wx'), greeting.trim());
             } catch {
               // 忽略
             }
@@ -10911,10 +10925,21 @@ function WxAccountBubble({ name, kind, size = 52 }: { name: string; kind: 'alt' 
 function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void }) {
   // 页内 toast（App 根 toast 在提前 return 分支不渲染，同收藏页口径）
   const [toast, showToast] = useLocalToast();
-  // 注册表账号列表：切换 = 整页重启（页面生命周期内不变）；删除成功后本地同步移除
-  //（当前账号/大号不可删，删除后无需 reload）
+  // 注册表账号列表：切换不刷新网页（v2 事件驱动）；删除成功后本地同步移除
+  //（当前账号/大号不可删；正在被其他 App 使用的账号由 deleteAccount 拒绝并 toast 原因）
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
-  const activeId = getActiveAccountId();
+  // 当前微信账号 id（per-app）：切换事件到达时刷新快照 → 绿点「当前使用」移到新卡（本页保持打开）
+  const [activeId, setActiveId] = useState(() => getActiveAccountIdFor('wx'));
+  useEffect(() => {
+    const fn = (e: Event) => {
+      const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!d || d.app !== 'wx') return;
+      setAccounts(getAccounts());
+      setActiveId(getActiveAccountIdFor('wx'));
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
+  }, []);
   /** 大号机主资料（跨账号直读大号库；不能用 me——小号视角下 me 是小号身份，Task 40-F 修正） */
   const [mainOwner, setMainOwner] = useState<{ name: string; wechatId: string; avatar: string | null } | null>(null);
   useEffect(() => {
@@ -10932,22 +10957,22 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
   const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
 
   const handleAdd = () => {
-    // 新建小号并立即切换（switchAccount 写标记后整页重启，调用处不再 setState/跳转）
+    // 新建小号并立即切换（v2 不刷新：写 per-app 标记 + 派发事件；新账号无登录态 → 根组件切到登录墙）
     const acc = createAccount('alt');
-    switchAccount(acc.id);
+    switchAccountFor('wx', acc.id);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     const target = delTarget;
     if (!target) return;
     setDelTarget(null);
-    const res = deleteAccount(target.id);
+    // v2 deleteAccount 为 async：拒绝场景（大号/正在使用中）原样 toast 错误文案
+    const res = await deleteAccount(target.id);
     if (res.ok) {
       setAccounts(getAccounts());
       setManaging(false);
       showToast('已删除该账号');
     } else {
-      // 大号/当前号等拒绝场景（防御：管理模式已过滤，正常不可达）
       showToast(res.error || '删除失败');
     }
   };
@@ -10982,10 +11007,11 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
         <div className="flex flex-col items-center" data-testid="wx-account-header">
           <MessageCircle className="h-[52px] w-[52px] text-black/20 dark:text-white/20" strokeWidth={1.4} aria-hidden="true" />
           <p className="mt-4 text-[19px] font-medium text-black/80 dark:text-white/80">轻触头像以切换账号</p>
+          <p className="mt-1.5 text-[12.5px] text-black/35 dark:text-white/35">仅切换微信，不影响 QQ / 信息 / 电话</p>
         </div>
         <div className="mb-6 mt-5 h-px bg-black/10 dark:bg-white/10" />
 
-        {/* 账号卡列表：白卡（深色深灰卡）；当前账号绿点 +「当前使用」；点其他卡 → switchAccount */}
+        {/* 账号卡列表：白卡（深色深灰卡）；当前账号绿点 +「当前使用」；点其他卡 → switchAccountFor('wx') */}
         <div className="space-y-3">
           {accounts.map((acc) => {
             const isCurrent = acc.id === activeId;
@@ -11013,7 +11039,8 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
                   data-testid={`wx-account-card-${acc.id}`}
                   onClick={() => {
                     if (managing || isCurrent) return;
-                    switchAccount(acc.id); // 写标记后整页重启，不再 setState
+                    // v2 不刷新：写 per-app 标记 + 派发事件；本页监听刷新绿点，根组件重读数据/登录态
+                    switchAccountFor('wx', acc.id);
                   }}
                   className="flex w-full items-center gap-3 rounded-[14px] bg-white px-4 py-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
                 >
@@ -12164,6 +12191,46 @@ function MainScreen({
   const [searchProfile, setSearchProfile] = useState<ContactRecord | null>(null);
   /** 申请添加朋友页目标（page='applyFriend'） */
   const [applyTarget, setApplyTarget] = useState<ContactRecord | null>(null);
+
+  // ---------------- 多账号 v2（Task 40-2a）：微信账号切换不刷新——本组件负责 UI 复位与数据重读 ----------------
+  // 中断在途流/清理投递队列/排队补跑换仓由根组件 WeChatApp 处理；这里把界面复位回主列表并按新账号
+  // 作用域重读全部列表数据（会话预览经 msgTick 重算；隐藏会话/群/朋友圈/互动消息/新的朋友重读）。
+  // 当前在切换账号页时保持打开（页内监听刷新账号快照绿点）；聊天页等子页卸载即清输入草稿等易残留态。
+  useEffect(() => {
+    const fn = (e: Event) => {
+      const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!d || d.app !== 'wx') return;
+      setPage((p) => (p === 'accountSwitch' ? p : 'main'));
+      setTab('chats');
+      setChatPeer(null);
+      setGroupPeer(null);
+      setGroupPage(null);
+      setGroupInfoOpen(false);
+      setDetail(null);
+      setFriendMoments(null);
+      setPendingCall(null);
+      setMenuOpen(false);
+      setCtx(null);
+      setAskOpen(false);
+      setAskBusyId(null);
+      setCfgPeer(null);
+      setEditingPost(null);
+      setDelTarget(null);
+      setReqDetail(null);
+      setReqDetailFrom('newfriends');
+      setSearchProfile(null);
+      setApplyTarget(null);
+      setMomentsScope('all');
+      reloadMoments();
+      refreshWxNotices();
+      setReqs(loadReqs());
+      setHidden(loadStrList(LS_CHAT_HIDDEN));
+      refreshGroups();
+      setMsgTick((t) => t + 1);
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
+  }, [reloadMoments, refreshWxNotices, refreshGroups]);
 
   const openDeleteConfirm = useCallback((c: ContactRecord, after: () => void) => {
     setDelTarget({ contact: c, after });
@@ -13481,7 +13548,26 @@ export default function WeChatApp() {
     runFriendReqCatchUp();
   }, []);
 
-  // 启动：拉联系人 + 恢复登录态（联系人被删则自动登出）
+  // 多账号 v2（Task 40-2a）：微信账号切换不刷新网页——监听切换事件：①中断 wx 在途流（已收尾不再落盘）
+  // ②清理 wx 投递队列 ③排队补跑内存队列换仓到新账号快照；④bump reloadKey → 启动加载 effect 重跑
+  //（联系人重读 + 按新账号作用域恢复登录态，无登录态 → 登录墙）。列表数据的复位与重读在 MainScreen 内监听同一事件。
+  const [accReloadKey, setAccReloadKey] = useState(0);
+  useEffect(() => {
+    const fn = (e: Event) => {
+      const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!d || d.app !== 'wx') return;
+      abortStreamsByPrefix('wx:');
+      purgeDeliveryQueueByPrefix('wx:');
+      wxQueueReload();
+      setAccReloadKey((k) => k + 1);
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
+  }, []);
+
+  // 启动 / 账号切换重跑：拉联系人 + 恢复登录态（联系人被删则自动登出）。
+  // 登录态键按微信当前账号作用域（Task 40-2a：accLs 调用时现算，大号=原键旧登录态不丢）；
+  // 切换账号（accReloadKey 变化）重跑时：无登录态/联系人缺失 → 显式回登录墙，杜绝上一账号的界面残留。
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -13489,26 +13575,32 @@ export default function WeChatApp() {
       if (!alive) return;
       setContacts(list);
       try {
-        const savedId = window.localStorage.getItem(LS_SESSION);
+        const sKey = accLs(LS_SESSION, 'wx');
+        const savedId = window.localStorage.getItem(sKey);
         if (savedId) {
           const u = list.find((c) => c.id === savedId && c.kind === 'user');
           if (u) setUser(toWxUser(u));
-          else window.localStorage.removeItem(LS_SESSION);
+          else {
+            window.localStorage.removeItem(sKey);
+            setUser(null);
+          }
+        } else {
+          setUser(null);
         }
       } catch {
-        // 忽略
+        setUser(null);
       }
       setBooting(false);
     })();
     return () => {
       alive = false;
     };
-  }, [loadContacts, toWxUser]);
+  }, [loadContacts, toWxUser, accReloadKey]);
 
   const handleLogin = useCallback((u: WxUser) => {
     setUser(u);
     try {
-      window.localStorage.setItem(LS_SESSION, u.id);
+      window.localStorage.setItem(accLs(LS_SESSION, 'wx'), u.id);
     } catch {
       // 忽略
     }
@@ -13517,7 +13609,7 @@ export default function WeChatApp() {
   const handleLogout = useCallback(() => {
     setUser(null);
     try {
-      window.localStorage.removeItem(LS_SESSION);
+      window.localStorage.removeItem(accLs(LS_SESSION, 'wx'));
     } catch {
       // 忽略
     }

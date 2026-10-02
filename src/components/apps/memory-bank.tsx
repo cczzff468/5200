@@ -53,7 +53,7 @@ import { IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { DefaultAvatar } from './default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
-import { listContacts } from '@/lib/ios/contacts-store';
+import { listContacts, ownerRealNameFor } from '@/lib/ios/contacts-store';
 import { isPersonGoneEverywhere } from '@/lib/ios/friend-state';
 import { getGroup } from '@/lib/ios/groups';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
@@ -87,6 +87,7 @@ import {
   memSummarizeCoreNow,
   memSummarizeLongNow,
   memSummarizeNow,
+  setMemScopeDefaultView,
   pendingCoreCount,
   pendingFragmentCount,
   reinforceFragment,
@@ -200,12 +201,21 @@ export default function MemoryBankApp() {
           kept.push(c);
         }
         setContacts(kept);
-        setOwnerName(list.find((c) => c.kind === 'user')?.name?.trim() ?? '');
+        // 机主名与记忆视角同源（v2 多账号：信息 App 当前账号的「我」，与 setMemScopeDefaultView 一致；
+        // 小号视角下 = 其档案联系人名，非恒机主）
+        void ownerRealNameFor('sms')
+          .then((n) => {
+            setOwnerName(n);
+          })
+          .catch(() => undefined);
       })
       .catch(() => undefined);
   }, []);
 
   useEffect(() => {
+    // 多账号 v2：记忆键按账号隔离——管理视图统一「信息 App 当前账号」视角（显式定视角，
+    // 不沿用聊天页最近一次设置的记忆作用域）；机主名与记忆同视角解析
+    setMemScopeDefaultView();
     reload().finally(() => setLoaded(true));
   }, [reload]);
 

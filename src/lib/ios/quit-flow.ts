@@ -30,7 +30,7 @@ import { beginChatStream, isChatStreaming, type ChatPayloadMessage } from '../ch
 import { qqUnreads, wxUnreads } from '../unread-store';
 import { useSettings } from './store';
 import { genId } from './db';
-import { listContacts, ownerRealName } from './contacts-store';
+import { listContacts, ownerRealNameFor } from './contacts-store';
 import {
   getGroup,
   groupRoleOf,
@@ -175,11 +175,14 @@ export function ensureQuitHook(): void {
 
 // ---------------- 私聊侧：退群背景注入 ----------------
 
-/** 机主展示名缓存（每 App 独立，tick 时刷新；退群背景段同步读取用，未就绪时回退「机主」） */
-let cachedMeNames: { wx: string; qq: string; owner: string } = { wx: '', qq: '', owner: '' };
+/** 机主展示名缓存（每 App 独立，tick 时刷新；退群背景段同步读取用，未就绪时回退「机主」）。
+ *  v2 per-app 账号：wx/qq 账号独立——会话联系人查不到时按各自 App 当前账号的「我」回退
+ *  （cachedOwnerNames，ownerRealNameFor 解析：大号=机主、小号/匿名号=其档案名） */
+let cachedMeNames: { wx: string; qq: string } = { wx: '', qq: '' };
+let cachedOwnerNames: { wx: string; qq: string } = { wx: '', qq: '' };
 
 function meNameOf(app: GroupApp): string {
-  return cachedMeNames[app] || cachedMeNames.owner || '机主';
+  return cachedMeNames[app] || cachedOwnerNames[app] || '机主';
 }
 
 /** 机主在该 App 的联系人 ID（会话登录账号；缺省回退字面量 'me' 兼容旧口径）。
@@ -205,14 +208,19 @@ export function refreshMeNameCache(contacts: ContactRecord[]): void {
     cachedMeNames = {
       wx: wxHit ? addressNameOf(wxHit, mode) : '',
       qq: qqHit ? addressNameOf(qqHit, mode) : '',
-      owner: cachedMeNames.owner,
     };
   } catch {
     // 忽略
   }
-  void ownerRealName()
+  // v2 per-app 账号：机主回退名按各 App 当前账号解析（wx/qq 账号独立，互不影响）
+  void ownerRealNameFor('wx')
     .then((n) => {
-      if (n) cachedMeNames.owner = n;
+      if (n) cachedOwnerNames.wx = n;
+    })
+    .catch(() => undefined);
+  void ownerRealNameFor('qq')
+    .then((n) => {
+      if (n) cachedOwnerNames.qq = n;
     })
     .catch(() => undefined);
 }
@@ -331,7 +339,8 @@ function restoreFlowGroup(st: QuitFlowState): Promise<void> {
     try {
       // 先挂群未读再恢复：宿主列表监听恢复事件刷新后，幽灵未读清理才不会把它当成列表外残留删掉
       (st.app === 'wx' ? wxUnreads : qqUnreads).bump(`group:${st.gid}`, 1);
-      const owner = await ownerRealName();
+      // 多账号 v2：拉回群落「机主加入了群聊」事件，名字按该群所属 App 的当前账号取「我」
+      const owner = await ownerRealNameFor(st.app);
       restoreQuitGroup(st.snapshot, st.recentMsgs, { joinName: owner || '机主' });
       // 通知宿主（微信/QQ App 根组件）刷新群列表，恢复的群立即可见
       try {
@@ -386,7 +395,7 @@ export function applyQuitWinbackAction(contactId: string, action: RichAction): b
         const g = getGroup(st.gid);
         if (!g || groupRoleOf(g, contactId) !== 'owner') return; // 只有群主能给管理员
         const meId = meContactId(st.app);
-        void ownerRealName()
+        void ownerRealNameFor(st.app)
           .then((owner) => setGroupAdmin(st.gid, meId, true, { name: owner || '机主' }))
           .catch(() => undefined);
       });
@@ -398,7 +407,7 @@ export function applyQuitWinbackAction(contactId: string, action: RichAction): b
         const g = getGroup(st.gid);
         if (!g || groupRoleOf(g, contactId) !== 'owner') return; // 只有群主能转让
         const meId = meContactId(st.app);
-        void ownerRealName()
+        void ownerRealNameFor(st.app)
           .then((owner) => transferGroupOwner(st.gid, meId, { name: owner || '机主' }))
           .catch(() => undefined);
       });

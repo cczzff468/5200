@@ -69,7 +69,7 @@ import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, 
 import { aiVoiceFreqLabel, decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
-import { contactRealName, getChatBgImage, ownerRealName, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
+import { contactRealName, getChatBgImage, ownerRealNameFor, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
 import { genId } from '@/lib/ios/db';
 import {
   addGroupMember,
@@ -3083,7 +3083,8 @@ export function QqGroupChatPage({
               // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记；全部消息投递完后执行，后台异步失败静默）
               void (async () => {
                 try {
-                  const [u, p] = await Promise.all([ownerRealName(), contactRealName(char.id)]);
+                  // 多账号 v2：QQ 群记忆按 QQ App 当前账号取「我」的真名
+                  const [u, p] = await Promise.all([ownerRealNameFor('qq'), contactRealName(char.id)]);
                   memAfterAiTurn(
                     char.id,
                     'qq',

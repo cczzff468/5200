@@ -27,7 +27,7 @@ import {
 
 import { addressNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from '@/lib/ios/store';
-import { listContacts, ownerProfile } from '@/lib/ios/contacts-store';
+import { listContacts, ownerProfileFor } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAddEventFragment, memRecentConvo, memRecallBlock } from '@/lib/memory';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
@@ -122,9 +122,9 @@ export default function PeerStatusCard({
     setOpenedAt(new Date());
     try {
       const st = useSettings.getState();
-      // 机主身份 + 配角圈（NPC 场景）：与聊天人设同口径
+      // 机主身份 + 配角圈（NPC 场景）：与聊天人设同口径（v2 多账号：按所在 App 当前账号取「我」）
       const [op, allContacts] = await Promise.all([
-        ownerProfile().catch(() => null),
+        ownerProfileFor(app).catch(() => null),
         listContacts().catch(() => [] as ContactRecord[]),
       ]);
       if (seq !== seqRef.current) return;
