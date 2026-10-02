@@ -21,7 +21,6 @@ import {
   Loader2,
   Lock,
   MessageSquareText,
-  Mic,
   Monitor,
   Moon,
   Phone as PhoneIcon,
@@ -3316,7 +3315,7 @@ const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口；不需�
  * - 服务商：内置语音（免费）/ MiniMax / OpenAI 兼容 / Fish Audio；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
  * - 多服务商分槽（Task 29）：切换服务商时快照当前家、恢复目标家（MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖）
  * - 内置语音：浏览器本地引擎（Web Speech），内置 3 女 3 男共 6 个声线，零配置免 API、离线可用，逐个可试听
- * - 全局默认音色：角色未设独立 voiceId 时使用（聊天设置「他的声音」可给角色单独设音色；音色 ID 手动填写）
+ * - 全局默认音色（并入连接配置卡片，无独立区块）：角色未设独立 voiceId 时使用（聊天设置「他的声音」可给角色单独设音色；音色 ID 手动填写）
  * - 试听：用当前配置合成一句样例直接播放
  */
 function VoicePage({ onBack }: { onBack: () => void }) {
@@ -4014,19 +4013,17 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     : '不需要模型的服务商可留空：留空时请求不携带 model 参数，需要时再填。'}
               </p>
             </div>
-          </div>
-        </section>
 
-        {/* 全局默认音色 */}
-        <section>
-          <SectionLabel icon={Mic} tone={TONE_PINK}>全局默认音色</SectionLabel>
-          <div className="flex flex-col gap-3 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
-            <Input
-              value={ttsConfig.defaultVoiceId}
-              onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
-              placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : isFish ? '如 Fish Audio 音色 ID（留空用平台默认音色）' : '如 alloy（留空用系统默认）'}
-              className="h-10 w-full rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
-            />
+            {/* 全局默认音色（并入连接配置卡片：角色未设独立音色时使用，音色 ID 手动填写） */}
+            <div>
+              <FieldLabel>全局默认音色</FieldLabel>
+              <Input
+                value={ttsConfig.defaultVoiceId}
+                onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
+                placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : isFish ? '如 Fish Audio 音色 ID（留空用平台默认音色）' : '如 alloy（留空用系统默认）'}
+                className="h-10 w-full rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+              />
+            </div>
 
             {/* 试听 */}
             <div>
@@ -4082,7 +4079,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         </>
         )}
 
-        {/* 我的音色：自建音色库（名字 + 音色 ID，永久保存；联系人/聊天设置「他的声音」可选用）；紧跟全局默认音色下方 */}
+        {/* 我的音色：自建音色库（名字 + 音色 ID，永久保存；联系人/聊天设置「他的声音」可选用）；紧跟连接配置下方 */}
         <section>
           <SectionLabel icon={AudioLines} tone={TONE_ORANGE}>我的音色</SectionLabel>
           <div className="flex flex-col gap-3 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">

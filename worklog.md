@@ -13487,3 +13487,18 @@ Stage Summary:
 - 拉取音色列表功能前后端全删（设置 UI/路由/server 函数/store 缓存/聊天设置 API 音色区），音色 ID 回归纯手动填写，历史 fishaudio: 前缀数据读取兼容保留
 - 测试服务商连接按钮就位「试听当前音色」正下方（全局默认音色卡内）
 - 产出：store.ts、settings.tsx、chat-settings.tsx、wechat.tsx(注释)、server-tts.ts、tts-client.ts、builtin-voices.ts(注释)、删 api/tts/voices
+
+---
+Task ID: 29-c（语音 API：全局默认音色并入连接配置卡片）
+Agent: Z.ai Code（主会话）
+Task: 删除「全局默认音色」独立区块（粉色 Mic SectionLabel），其区域内容与「连接配置」合并为一张卡
+
+Work Log:
+- settings.tsx：全局默认音色的音色 ID 输入/试听当前音色/测试服务商连接/音色优先级说明整体移入「连接配置」卡片（模型名块之后）；原 FieldLabel 层级补「全局默认音色」小标签（与 API 地址/API Key/模型名 同款 mb-1.5 text-[13px] 字段标签）；卡片间距统一 gap-4；删除独立 section+SectionLabel
+- 清理：Mic 图标 import 移除（仅该处使用）；VoicePage docblock 与「我的音色」section 注释同步（紧跟连接配置下方）；「连接配置 + 全局默认音色」外层注释保留仍准确
+- 行为零变化：defaultVoiceId 读写/试听/测试按钮/多服务商分槽逻辑均不动；内置语音分支本就无连接配置，不受影响
+- 验证：tsc/eslint 零错误；E2E（agent-browser，1280×577 视口注意 swipe 文本 scrollIntoView 后再派发 PointerEvent）：Fish Audio 下仅剩「连接配置」一个 section 头（原粉色全局默认音色头已消失），「全局默认音色」为卡内 FieldLabel（mb-1.5 text-[13px] 样式）且与 API 地址同卡，卡内字段顺序 API 地址→API Key→模型名→全局默认音色→试听当前音色→测试服务商连接→音色优先级 ✓；地址 https://fishaudio.org/v1 保留 ✓；内置语音页（试听当前声线）不受影响 ✓；console/errors 零错误；服务商已还原 builtin；截图 tool-results/29c-merged-card.png
+
+Stage Summary:
+- 语音 API 非 builtin 页面结构简化：服务商 chips → 连接配置（含全局默认音色/试听/测试）→ 我的音色，三段更聚焦
+- 产出：src/components/apps/settings.tsx 单文件改动
