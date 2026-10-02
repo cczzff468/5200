@@ -248,31 +248,20 @@ function MainRow({
 }
 
 /** 详情页外壳：居中标题导航 + 返回按钮 + 右滑进入动画；
- *  gray=true 时整页浅灰背景（#F2F2F7，iOS 设置子页风），暗色主题保持原背景；
- *  ambience=true 时顶部铺柔和彩色光斑（毛玻璃卡片 backdrop-blur 的透底，简约 glassmorphism 风） */
+ *  gray=true 时整页浅灰背景（#F2F2F7，iOS 设置子页风），暗色主题保持原背景（无氛围光斑） */
 function DetailShell({
   title,
   onBack,
   children,
   gray = false,
-  ambience = false,
 }: {
   title: string;
   onBack: () => void;
   children: ReactNode;
   gray?: boolean;
-  ambience?: boolean;
 }) {
   return (
     <div className={`relative flex h-full w-full flex-col ${gray ? 'bg-[#F2F2F7] dark:bg-transparent' : ''}`}>
-      {ambience && (
-        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[440px] overflow-hidden">
-          <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-[#FFB340]/[0.26] blur-[100px]" />
-          <div className="absolute left-1/4 -top-20 h-60 w-60 rounded-full bg-[#5AC8FA]/[0.24] blur-[100px]" />
-          <div className="absolute -right-20 top-4 h-64 w-64 rounded-full bg-[#C58BFF]/[0.2] blur-[100px]" />
-          <div className="absolute left-1/2 top-44 h-52 w-72 rounded-full bg-[#FF8FB0]/[0.12] blur-[110px]" />
-        </div>
-      )}
       <IOSNavBar
         title={title}
         large={false}
@@ -601,7 +590,7 @@ function ThemePage({ onBack }: { onBack: () => void }) {
   ];
 
   return (
-    <DetailShell title="显示与亮度" onBack={onBack} gray ambience>
+    <DetailShell title="显示与亮度" onBack={onBack} gray>
       <GroupCard>
         {options.map((o) => {
           const Icon = o.icon;
@@ -757,7 +746,7 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="通知" onBack={onBack} gray ambience>
+    <DetailShell title="通知" onBack={onBack} gray>
       <GroupCard>
         <div className="flex h-[46px] items-center justify-between px-4">
           <span className="text-[16px]">允许通知</span>
@@ -912,7 +901,7 @@ function StoragePage({ onBack }: { onBack: () => void }) {
     : [];
 
   return (
-    <DetailShell title="存储空间" onBack={onBack} gray ambience>
+    <DetailShell title="存储空间" onBack={onBack} gray>
       <GroupCard>
         <div className="p-4">
           <div className="flex items-baseline justify-between gap-3">
@@ -993,7 +982,7 @@ function WallpaperPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="壁纸" onBack={onBack} gray ambience>
+    <DetailShell title="壁纸" onBack={onBack} gray>
       <div className="flex flex-col gap-6">
         {customWallpaperUrl && (
           <div>
@@ -1250,7 +1239,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
   const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
 
   return (
-    <DetailShell title="API 设置" onBack={onBack} gray ambience>
+    <DetailShell title="API 设置" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 预设区 */}
         <section>
@@ -1753,7 +1742,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="识图模型" onBack={onBack} gray ambience>
+    <DetailShell title="识图模型" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 预设区 */}
         <section>
@@ -2241,7 +2230,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="图像生成" onBack={onBack} gray ambience>
+    <DetailShell title="图像生成" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 启用自动生图（总开关） */}
         <section>
@@ -3023,7 +3012,7 @@ function LockPage({ onBack }: { onBack: () => void }) {
   // ---------------- 菜单 ----------------
   if (stage === 'menu') {
     return (
-      <DetailShell title="锁屏与密码" onBack={onBack} gray ambience>
+      <DetailShell title="锁屏与密码" onBack={onBack} gray>
         <GroupCard>
           <div className="divide-y divide-black/[0.05] dark:divide-white/[0.06]">
             {/* 锁屏总开关：关掉后不再出现锁屏界面 */}
@@ -3206,7 +3195,7 @@ function LockPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="锁屏与密码" onBack={cancelSub} gray ambience>
+    <DetailShell title="锁屏与密码" onBack={cancelSub} gray>
       <div className="flex flex-col items-center pt-6">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           <Lock className="h-6 w-6 text-muted-foreground" strokeWidth={2} />
@@ -3297,7 +3286,7 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="个人信息" onBack={onBack} gray ambience>
+    <DetailShell title="个人信息" onBack={onBack} gray>
       {/* 头像：点击从手机相册/文件选择 */}
       <div className="flex flex-col items-center pt-3">
         <button
@@ -3360,7 +3349,7 @@ function AboutPage({ onBack }: { onBack: () => void }) {
   const uaShort = ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
 
   return (
-    <DetailShell title="关于本机" onBack={onBack} gray ambience>
+    <DetailShell title="关于本机" onBack={onBack} gray>
       <GroupCard>
         <AboutRow label="名称" value="iPhone" />
         <AboutRow label="系统版本" value="iOS Web 1.0.0" />
@@ -3735,7 +3724,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="语音 API" onBack={onBack} gray ambience>
+    <DetailShell title="语音 API" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 服务商 */}
         <section>
@@ -4530,7 +4519,7 @@ function FontPage({ onBack }: { onBack: () => void }) {
   const previewStack = currentBuiltin?.stack ?? currentCustom?.stack ?? BUILTIN_APP_FONTS[0].stack;
 
   return (
-    <DetailShell title="字体" onBack={onBack} gray ambience>
+    <DetailShell title="字体" onBack={onBack} gray>
       <div className="flex flex-col gap-5">
         {/* 预览卡片（当前字体实时预览） */}
         <GrayCard>

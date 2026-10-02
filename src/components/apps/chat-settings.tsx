@@ -1757,14 +1757,7 @@ export function WorldBookPickerPage({
 
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
-      {/* 毛玻璃氛围光斑（玻璃卡 backdrop-blur 透底，与设置页 DetailShell ambience 同一套） */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[380px] overflow-hidden">
-        <div className="absolute -left-20 -top-24 h-64 w-64 rounded-full bg-[#8FB8FF]/[0.2] blur-[100px]" />
-        <div className="absolute left-1/4 -top-16 h-52 w-52 rounded-full bg-[#9FD8FF]/[0.18] blur-[100px]" />
-        <div className="absolute -right-16 top-2 h-56 w-56 rounded-full bg-[#C5A8FF]/[0.16] blur-[100px]" />
-        <div className="absolute left-1/2 top-36 h-44 w-64 rounded-full bg-[#FFD9A8]/[0.12] blur-[110px]" />
-      </div>
-      {/* 顶栏 */}
+      {/* 顶栏（顶部氛围光斑已按需求全局移除） */}
       <div className="relative shrink-0 pt-[54px]">
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
@@ -2162,14 +2155,7 @@ export function ChatVoicePage({
 
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
-      {/* 毛玻璃氛围光斑（玻璃卡 backdrop-blur 透底，与设置页 DetailShell ambience 同一套） */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[380px] overflow-hidden">
-        <div className="absolute -left-20 -top-24 h-64 w-64 rounded-full bg-[#FFB340]/[0.22] blur-[100px]" />
-        <div className="absolute left-1/4 -top-16 h-52 w-52 rounded-full bg-[#5AC8FA]/[0.2] blur-[100px]" />
-        <div className="absolute -right-16 top-2 h-56 w-56 rounded-full bg-[#C58BFF]/[0.18] blur-[100px]" />
-        <div className="absolute left-1/2 top-36 h-44 w-64 rounded-full bg-[#FF8FB0]/[0.1] blur-[110px]" />
-      </div>
-      {/* 顶栏 */}
+      {/* 顶栏（顶部氛围光斑已按需求全局移除） */}
       <div className="relative shrink-0 pt-[54px]">
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button

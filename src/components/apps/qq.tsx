@@ -8561,11 +8561,6 @@ function FriendBondPage({
           className="relative mt-1 overflow-hidden rounded-[20px] bg-gradient-to-br from-[#EAE6FB] via-[#F3E1F6] to-[#DCE3FB] px-4 pb-5 pt-5 dark:from-[#38304A] dark:via-[#3B2E43] dark:to-[#26314B]"
           data-testid="qq-bond-card"
         >
-          {/* 柔光斑（粉/蓝营造真机渐变氛围） */}
-          <div aria-hidden="true" className="absolute -right-9 -top-10 h-32 w-32 rounded-full bg-[#F8CDE9]/70 blur-3xl dark:bg-[#8E4E86]/25" />
-          <div aria-hidden="true" className="absolute -left-10 top-1/3 h-28 w-28 rounded-full bg-[#F5D5EE]/60 blur-3xl dark:bg-[#7A4E8C]/20" />
-          <div aria-hidden="true" className="absolute -bottom-12 right-1/4 h-32 w-32 rounded-full bg-[#CBD8FB]/70 blur-3xl dark:bg-[#3D5392]/25" />
-
           {/* 左上：成为好友 N天 + 密友值 pill（真实数据） */}
           <div className="relative">
             <p className="text-[16px] font-medium leading-none text-black/85 dark:text-white/90">成为好友</p>

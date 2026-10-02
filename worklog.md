@@ -13846,3 +13846,24 @@ Work Log:
 Stage Summary:
 - 五项全部完成：状态栏开关关闭=时间/信号/电量+灵动岛全部隐藏且全局弹窗不受影响（持久化）；状态栏开关绿色大开关与飞行模式统一；字体大小新增 70%/80% 两档、字重新增 200 特细档（实时生效+持久化）；信息底部 tab 激活态蓝底白字；联系人 App 全视图获得设置同款毛玻璃氛围
 - tsc + bun run lint 全绿；改动文件：PhoneShell.tsx / settings.tsx / fonts.ts / store.ts / chat.tsx / contacts.tsx
+
+---
+Task ID: 38
+Agent: Z.ai Code（主会话）
+Task: 所有界面的氛围光斑删除（保留毛玻璃本体，仅移除装饰光斑层）
+
+Work Log:
+- 全局定位：grep「光斑/ambience/blur-[80|100|110px]/blur-3xl/彩色hex」锁定 6 个文件的装饰光斑层；music 黑胶、voice-call/phone 通话界面 radial-gradient 为本体设计非光斑，保留
+- settings.tsx：DetailShell 删除 ambience prop + 顶部 440px 四光斑块 + 注释，13 处 DetailShell 调用 `gray ambience` → `gray`（replace_all）
+- contacts.tsx：Task 37 根容器 440px 四光斑层删除，根 bg-[#F2F2F7] dark:bg-transparent 玻璃透底保留，注释同步
+- chat-settings.tsx：世界书挂载页（worldbooks）与他的声音页（voice）两处 380px 四光斑层删除
+- offline-meeting.tsx：GlassAmbience 组件（3 光斑）整体删除 + 6 处调用移除 + 头注释同步；6 空格子串匹配波及 8/10 空格缩进站点，已逐一复位
+- qq.tsx：密友卡 3 枚 blur-3xl 柔光斑删除（渐变卡底保留）
+- wechat.tsx：红包封面卡内 2 枚白色光斑 span 删除（浮动金点+金色饰线保留）
+- 验证：grep 源码光斑代码零残留（仅说明性注释）；tsc/eslint 全绿；E2E（agent-browser，viewport 392×856）：主屏/设置根/显示与亮度/联系人 浅色 DOM 光斑断言=0 且截图纯净；信息 tab 蓝滑块（Task 37）未回归；深色模式显示与亮度+联系人正常（contacts dark:bg-transparent 透壁纸OK）；console 零错误
+- 工具边界备忘：agent-browser 点击 dock 图标需 pointerdown+pointerup+click 三连（单纯 click 偶发无效，重试即成）；MultiEdit 的 6 空格子串会匹配 8/10 空格行前缀导致缩进偏移，replace 后必须 grep 复核缩进
+- 数据清理：ios-phone-db + ios-phone-fonts + localStorage 全清，浏览器已关
+
+Stage Summary:
+- 全 App 界面装饰性氛围光斑全部移除（设置 13 个详情页/联系人/世界书挂载页/他的声音页/线下模式全部面板/QQ密友卡/微信红包封面），毛玻璃卡片、胶囊、透底质感完整保留
+- tsc + bun run lint 全绿；改动文件：settings.tsx / contacts.tsx / chat-settings.tsx / offline-meeting.tsx / qq.tsx / wechat.tsx

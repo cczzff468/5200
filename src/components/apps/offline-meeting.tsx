@@ -4,7 +4,7 @@
  * 线下模式（约会）—— 全屏见面页（QQ / 微信两端共用；信息端入口已移除，历史 sms 数据仍兼容回看）。
  *
  * 结构（对照需求与参考截图，整体毛玻璃/胶囊玻璃风格）：
- * - 环境：暖色环境光斑打底（GlassAmbience），所有卡片/按钮均为毛玻璃（backdrop-blur）；
+ * - 环境：纯色底（氛围光斑已按需求全局移除），所有卡片/按钮均为毛玻璃（backdrop-blur）；
  * - 头部：一整颗大毛玻璃胶囊包住 返回 + 头像名字日期 + 收藏（保存）+ 现场设置；
  * - 叙事流：角色叙述（玻璃大卡 + 迷你头像名字时间头）+ 用户输入（灰色玻璃气泡，内部同样是头像+名字+时间头）；
  *   两边消息均可编辑/删除；动作·叙述文字渲染为灰色小字，说话保持原样式
@@ -135,17 +135,6 @@ const GLASS_CARD =
 /** 毛玻璃胶囊（圆钮 / 小按钮 / 状态条） */
 const GLASS_CAPSULE =
   'border border-white/70 bg-white/55 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08]';
-
-/** 环境光斑：给毛玻璃提供可折射的底色 */
-function GlassAmbience() {
-  return (
-    <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
-      <div className="absolute -right-16 -top-20 h-72 w-72 rounded-full bg-[#FFD9A0]/60 blur-[80px] dark:bg-[#8a5a2b]/25" />
-      <div className="absolute -left-20 top-1/3 h-64 w-64 rounded-full bg-[#F5C3CE]/50 blur-[80px] dark:bg-[#7c3d4b]/20" />
-      <div className="absolute -bottom-24 right-1/4 h-64 w-64 rounded-full bg-[#CBE6D2]/45 blur-[80px] dark:bg-[#2f5c44]/20" />
-    </div>
-  );
-}
 
 /** M月D日 HH:MM（正文时间戳：角色 / 用户消息都用） */
 function mdhm(ts: number) {
@@ -400,7 +389,6 @@ function ArchivePanel({ archives, meetActive, hasProgress, onClose, onCreate, on
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white">
-      <GlassAmbience />
       <div className="flex items-start justify-between px-5 pb-3 pt-[58px]">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Save Files</p>
@@ -616,7 +604,6 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white">
-      <GlassAmbience />
       <div className="flex items-start justify-between px-5 pb-3 pt-[58px]">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Meeting Preferences</p>
@@ -1786,7 +1773,6 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   if (loadErr) {
     return (
       <div className="absolute inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-[#F3F1EE] px-8 text-center dark:bg-[#0C0C0E]">
-        <GlassAmbience />
         <p className="text-[15px] text-black/50 dark:text-white/50">{loadErr}</p>
         <button type="button" onClick={onBack} className="mt-4 rounded-full bg-[#1C1C1E]/90 px-5 py-2 text-[14px] font-medium text-white shadow-md backdrop-blur-xl dark:bg-white dark:text-black">
           返回
@@ -1797,7 +1783,6 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
   if (!loaded || !contact) {
     return (
       <div className="absolute inset-0 z-50 flex items-center justify-center overflow-hidden bg-[#F3F1EE] dark:bg-[#0C0C0E]">
-        <GlassAmbience />
         <Loader2 className="h-6 w-6 animate-spin text-black/30 dark:text-white/30" />
       </div>
     );
@@ -1823,7 +1808,6 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white" data-testid={`offline-meet-${app}`}>
-      <GlassAmbience />
       <LocalToast msg={onToast ? '' : toast} />
 
       {/* 头部：一整颗大毛玻璃胶囊包住 返回 + 头像名字日期 + 收藏 + 设置 */}
@@ -2074,7 +2058,6 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       {/* 过去的见面（历史记录，只读回看） */}
       {historyOpen ? (
         <div className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-[#F3F1EE] text-black dark:bg-[#0C0C0E] dark:text-white">
-          <GlassAmbience />
           <div className="flex items-center gap-2 px-4 pb-3 pt-[58px]">
             <button
               type="button"

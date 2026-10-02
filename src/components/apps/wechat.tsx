@@ -3791,9 +3791,7 @@ export function RpOpenLayer({
           className="relative h-[420px] overflow-hidden rounded-[20px] shadow-[0_24px_60px_rgba(0,0,0,0.4)]"
           style={{ background: 'linear-gradient(170deg, #F8755C 0%, #EF5340 55%, #E84434 100%)' }}
         >
-          {/* 封面装饰：卡内光斑 + 浮动金点 + 卡顶金色饰线 */}
-          <span aria-hidden="true" className="pointer-events-none absolute -left-14 -top-16 h-44 w-44 rounded-full bg-white/[0.07]" />
-          <span aria-hidden="true" className="pointer-events-none absolute -right-16 top-1/3 h-52 w-52 rounded-full bg-white/[0.05]" />
+          {/* 封面装饰：浮动金点 + 卡顶金色饰线（卡内光斑已按需求全局移除） */}
           {[
             { left: '16%', top: '20%', s: 6, d: '0s' },
             { left: '80%', top: '28%', s: 5, d: '.6s' },
