@@ -24,6 +24,7 @@
  * 响应格式：/api/chat 返回 text/plain 纯文本增量流（服务端已把上游 SSE 解析为纯文本），
  * 客户端按「字节累积 = 已收内容」处理；上游不可达 / directOnly 时回退浏览器直连
  * （directChatStream，SSE 解析），失败文案与各 App 原有错误处理保持一致。
+ * 未配置 API（无 Key 且默认官方地址）时客户端直接走内置模型，不发无效请求。
  */
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
@@ -216,6 +217,23 @@ function patchState(rt: StreamRuntime, patch: Partial<ChatStreamState>): void {
 
 // ---------------- 流式请求执行（与页面生命周期无关） ----------------
 
+/**
+ * 用户聊天 API 是否处于「未配置」状态：API Key 为空，且地址为空或仍是内置默认官方地址。
+ * 此状态下 /api/chat 代理必然失败（服务端要求填写 API Key）、浏览器直连必然被 CORS 拦截，
+ * 白白多等 1~3 秒并制造控制台 403 噪音——调用方应直接走服务端内置模型（forceSdk）兜底。
+ * 注意：Key 为空但地址是自定义网关时不算未配置（存在免 Key 的本地网关），仍走正常链路。
+ */
+function isApiUnconfigured(cfg: ApiConfig): boolean {
+  if (cfg.apiKey.trim()) return false;
+  const raw = cfg.baseUrl.trim();
+  if (!raw) return true;
+  try {
+    return new URL(raw).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
 async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promise<void> {
   const { apiConfig, messages } = opts;
   // 流式分段器（回复条数 > 1 时启用）：边接收边切分，每凑齐一条完整句子立刻经 onSegment
@@ -361,8 +379,22 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 按各 App 组装的消息发起请求（条数指令已注入人设 system 消息，一轮发完、不做补发）；
     // 记录实际 payload：用户在流结束前关闭网页时，pagehide 上报服务端接力生成（bg-turn）
     activePayloads.set(rt.state.sessionKey, { messages: workMessages, config: effConfig });
-    await streamOnce(workMessages);
-    patchState(rt, { status: 'done' });
+    if (isApiUnconfigured(apiConfig)) {
+      // 未配置用户 API（无 Key + 官方默认地址）：代理与直连必然失败，跳过等待直接走
+      // 服务端内置模型（与下游失败兜底同一函数）；兜底失败才落错误文案引导用户去配置
+      const viaSdk = await sdkFallbackOnce(workMessages);
+      if (viaSdk) {
+        patchState(rt, { status: 'done' });
+      } else {
+        patchState(rt, {
+          status: 'error',
+          error: '还没有配置 API Key，内置模型也不可用；请到「设置 › API 配置」填写后重试',
+        });
+      }
+    } else {
+      await streamOnce(workMessages);
+      patchState(rt, { status: 'done' });
+    }
   } catch (err) {
     // 换号中止后不再补救：旧账号会话的回复已整体作废（SDK 兜底请求与错误状态一并跳过）
     if (rt.aborted) return;

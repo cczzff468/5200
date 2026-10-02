@@ -9,6 +9,7 @@ import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { isVoiceHoldActive } from '@/components/apps/voice-input';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { migrateFromServer } from '@/lib/ios/contacts-store';
+import { ensureAppFontApplied } from '@/lib/ios/fonts';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
 import StatusBar from './StatusBar';
 import HomeScreen from './HomeScreen';
@@ -166,6 +167,8 @@ export default function PhoneShell() {
     void (async () => {
       await ensureKvReady();
       await load();
+      // 全局字体恢复（Task 33-d）：读持久化的 appFontId 写入 CSS 变量；内部全兜底，失败不阻塞开机
+      await ensureAppFontApplied();
     })();
   }, [load]);
 

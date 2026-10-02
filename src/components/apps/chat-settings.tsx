@@ -1990,8 +1990,15 @@ export function ChatVoicePage({
 
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 毛玻璃氛围光斑（玻璃卡 backdrop-blur 透底，与设置页 DetailShell ambience 同一套） */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[380px] overflow-hidden">
+        <div className="absolute -left-20 -top-24 h-64 w-64 rounded-full bg-[#FFB340]/[0.22] blur-[100px]" />
+        <div className="absolute left-1/4 -top-16 h-52 w-52 rounded-full bg-[#5AC8FA]/[0.2] blur-[100px]" />
+        <div className="absolute -right-16 top-2 h-56 w-56 rounded-full bg-[#C58BFF]/[0.18] blur-[100px]" />
+        <div className="absolute left-1/2 top-36 h-44 w-64 rounded-full bg-[#FF8FB0]/[0.1] blur-[110px]" />
+      </div>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className="relative shrink-0 pt-[54px]">
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
             type="button"
@@ -2006,9 +2013,9 @@ export function ChatVoicePage({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
-        {/* AI 语音频率入口（按会话独立；关闭时 AI 只发文字） */}
-        <div className={`${t.cardCls} overflow-hidden`}>
+      <div className="relative flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        {/* AI 语音频率入口（按会话独立；关闭时 AI 只发文字）——毛玻璃卡（三端统一 glassmorphism） */}
+        <div className="overflow-hidden rounded-[18px] bg-white/55 shadow-[0_8px_24px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.07] dark:ring-white/[0.09]">
           <button type="button" data-testid={`${testPrefix}-voice-freq-row`} onClick={onOpenFreq} className={t.rowCls}>
             <span>AI 语音频率</span>
             <span className="flex shrink-0 items-center gap-2">
@@ -2049,10 +2056,10 @@ export function ChatVoicePage({
                     onSelect(active ? '' : v.id);
                   }
                 }}
-                className={`flex flex-col gap-1 rounded-[12px] border p-2.5 transition-colors ${
+                className={`flex flex-col gap-1 rounded-[16px] p-2.5 shadow-[0_4px_16px_rgba(17,24,39,0.05)] ring-1 backdrop-blur-xl transition-all active:scale-[0.98] ${
                   active
-                    ? 'border-transparent text-white'
-                    : 'border-black/10 bg-white/70 text-black/80 active:bg-black/[0.04] dark:border-white/15 dark:bg-white/10 dark:text-white/85 dark:active:bg-white/[0.06]'
+                    ? 'text-white ring-transparent'
+                    : 'bg-white/55 text-black/80 ring-white/70 hover:bg-white/75 dark:bg-white/[0.07] dark:text-white/85 dark:ring-white/[0.09] dark:hover:bg-white/[0.11]'
                 }`}
                 style={active ? { backgroundColor: t.accent } : undefined}
               >

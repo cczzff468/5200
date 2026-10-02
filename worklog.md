@@ -13556,3 +13556,87 @@ Work Log:
 Stage Summary:
 - 全项目功能检查通过：核心链路（登录/聊天/AI 回复/TTS/设置四页/他的声音/Fish Audio/QQ 端）全部正常，零 console/页面错误，规则一致性无问题
 - 汇总候选项给用户选择：①未配 Key 时跳过用户 API 直接走内置模型（每条消息省 1-3s+消除 403 噪音）；②应用切换器点空白回主屏不稳定修复；③「他的声音」整页玻璃化统一风格（可选）；④历史备选项 A2/A4/A5/B2/B3/B4/C1 仍在备选池
+
+---
+Task ID: 33（批次总登记）
+Agent: Z.ai Code（主会话）
+Task: 用户指令「123全做」+ 锁屏手电筒调真实系统闪光灯 + 设置新增字体功能（内置/预览/上传/全局应用）
+
+Work Log:
+- 拆分 5 项并行任务（文件零重叠）：33-a 未配 Key 跳过无效请求直走内置模型（chat-stream-store.ts）；33-b 应用切换器点空白回主屏验证/修复（AppSwitcher.tsx）；33-c 锁屏手电筒硬件 Torch API（LockScreen.tsx + 新 lib hardware-torch.ts）；33-d 设置新增字体功能（新 lib fonts.ts + store appFontId + settings.tsx FontPage + globals.css + PhoneShell 启动应用）；33-e「他的声音」整页玻璃化（chat-settings.tsx，主会话自做）
+- 侦察结论已下发给各子代理：AppSwitcher onBackdropClick 用 onClick（此前 E2E 失败疑似只派发 pointer 未派发 click 的测试方法问题，33-b 先真实验证再决定是否改码）；PhoneShell line 165 await load() 后为字体启动应用点；globals.css body font-family 为全局字体唯一入口（body 无 font-sans 类）；store load 为 Promise.all + set 模式
+
+Stage Summary:
+- 5 任务并行开工，主会话最后统一 E2E + lint + 提交
+---
+Task ID: 33-a
+Agent: Task 33-a 子代理 (general-purpose)
+Task: 未配置 API Key 时跳过无效请求直接走内置模型
+
+Work Log:
+- 读 worklog.md Task 32/33 段落确认背景：Task 32 实测降级链路（/api/chat 502「请先填写 API Key」→ 浏览器直连 OPTIONS 403 CORS → forceSdk 内置模型兜底 200），候选项①即本任务；Task 33 批次拆分本子任务，改动面仅 src/lib/chat-stream-store.ts
+- Read 全文核对 runStream 实际代码（确认 workMessages/effConfig/apiConfig 变量名、缩进、sdkFallbackOnce 位于 try 块之前的 runStream 闭包内）
+- src/lib/chat-stream-store.ts 三处改动：①模块级新增 isApiUnconfigured(cfg) 辅助函数（置于 runStream 前、「流式请求执行」分节注释之后，带中文注释）：Key 非空→已配置；Key 空 + 地址空或 hostname 为 api.openai.com→未配置；Key 空但地址为自定义网关→不算未配置（存在免 Key 本地网关，仍走正常链路）；②runStream try 块内 activePayloads.set 之后分支：isApiUnconfigured(apiConfig) 为真时跳过 streamOnce（省去必失败的代理 POST 与 CORS 直连），直接 await sdkFallbackOnce(workMessages) 走服务端内置模型（与 catch 里失败兜底同一函数，成功 patchState done、失败落错误文案「还没有配置 API Key，内置模型也不可用；请到『设置 › API 配置』填写后重试」），否则原样 await streamOnce + done；③文件头 docblock 响应格式段补一句「未配置 API（无 Key 且默认官方地址）时客户端直接走内置模型，不发无效请求」
+- 未动部分核对：识图前置 describeImages 逻辑在分支之前保持原样；catch 块（含 raw 清空/分段器重建/sdkFallbackOnce 兜底/错误文案）逐行未动——已配置 Key 用户的链路零变化；未配置分支此前无任何增量接收（streamOnce 未跑），无需重建 raw/分段器
+- 验证：bunx tsc --noEmit 零错误；bunx eslint src/lib/chat-stream-store.ts 零错误；git diff --stat 确认仅本文件 + worklog 追加；未重启 dev server、未 commit、未写测试
+
+---
+Task ID: 33-b
+Agent: 子代理 33-b (general-purpose)
+Task: 应用切换器点空白回主屏验证/修复
+
+Work Log:
+- Read worklog Task 32/33 段与「E2E 工具边界」记录（此前两次会话均报「切换器点空白回主屏不稳定」，侦察结论：疑似合成 pointer 不派发 click 的测试方法问题，先真实验证再决定是否改码）
+- Read src/components/ios/AppSwitcher.tsx 全文核对实际代码：根 div（role=dialog aria-label=多任务切换器）挂 onClick={onBackdropClick}，onBackdropClick 判 e.target 不在 [data-card-zone] 内即 requestClose（exitForegroundApp + 240ms 淡出 closeSwitcher）——逻辑链路本身正确
+- agent-browser E2E（393×852，清库起）：
+  1. 合成 PointerEvent(touch) 上滑 (196,700)→(196,40) 12 步解锁 ✓
+  2. elementFromPoint + el.click() 打开计算器 ✓
+  3. 底部边缘 (196,835) 合成 pointer 序列 12 步×25px 上移呼出切换器 ✓（[aria-label=多任务切换器] 393×852 全屏、提示文案「点击空白处返回主屏幕 · 上滑卡片可关闭应用」可见）
+  4. 【真实点击验证①】agent-browser find text "点击空白处返回主屏幕" click（trusted click）→ 500ms 后切换器关闭、回主屏、计算器图标可见 ✓
+  5. 【真实点击验证②】重开计算器→重呼切换器→eval document.elementFromPoint(196,110).click()（顶部空白，命中滚动容器 DIV 非 data-card-zone）→ 切换器关闭、回主屏 ✓
+  6. 【对照实验（复现历史缺陷）】重开流程后仅派发合成 pointerdown/pointerup（不含 click）→ 600ms 后切换器仍开着 ✗ 不关闭——证实合成 PointerEvent 不会触发浏览器 click 合成，挂 onClick 的关闭逻辑对合成 pointer 永远测不出
+- agent-browser errors：0 错误；截图留证 /tmp/33b-1-close-hint.png、/tmp/33b-2-close-topblank.png
+- 收尾：ios-phone-db 全 store clear + localStorage.clear() + sessionStorage.clear()，浏览器已关闭
+- 结论：不改任何代码（决策规则分支一）；未跑 tsc/eslint（无代码改动）
+
+Stage Summary:
+- 结论：非真 bug，是历史 E2E 测试方法缺陷——此前测试只 eval 派发合成 pointerdown/pointerup，而浏览器只为 trusted input（真实鼠标/触摸）自动合成 click；AppSwitcher 关闭逻辑挂 onClick，合成 pointer 测不出属预期。对照实验实证：同位置 trusted click / DOM .click() 均正常关闭，合成 pointer（无 click）不关闭
+- 真实用户交互（点提示文案、点顶部/侧边空白）一直可用；AppSwitcher.tsx 零改动
+- E2E 边界沉淀：测「点空白」类 onClick 行为必须用 trusted click（agent-browser find … click）或 DOM el.click()，合成 pointer 序列只适用于手势（滑动/长按/拖拽）
+
+---
+Task ID: 33-c
+Agent: 子代理 33-c (general-purpose)
+Task: 锁屏手电筒硬件 Torch API + 白屏补光回退
+
+Work Log:
+- 读 worklog Task 33 批次登记，通读 LockScreen.tsx 全文，并核对 foreground.ts 对 torchOpen 的既有前景色约定（「其它文件一律不动」约束下仅作侦察）
+- 新建 src/lib/ios/hardware-torch.ts：enableHardwareTorch() 按规格实现——无 mediaDevices/getUserMedia→unsupported；getUserMedia 后置摄像头，NotAllowedError→denied、NotFoundError/NotReadableError/OverconstrainedError→no-camera、其余→error；无 video track→停流返 no-camera；getCapabilities 存在且 torch!==true→停流返 unsupported；applyConstraints({advanced:[{torch:true}]}) 抛错→停流返 unsupported；成功保存模块级 stream/track 引用（防 GC 断流）且不停流；重复调用先 disable 再重走流程。disableHardwareTorch() 停全部轨道+清引用，try/catch 包裹幂等。torch 不在标准 TS DOM 类型内，局部扩展 MediaTrackCapabilitiesWithTorch / MediaTrackConstraintSetWithTorch 接口解决类型问题
+- LockScreen.tsx：新增 import enableHardwareTorch/disableHardwareTorch；新增状态 torchMode('idle'|'hw'|'fallback') 与 hwPillVisible；torch effect（开→先复位 idle 再 void enableHardwareTorch().then(ok?hw:fallback)+catch 兜底 fallback；关→disableHardwareTorch()+复位 idle）；卸载清理 effect（LockScreen 卸载=解锁时 disableHardwareTorch()+setTorch(false)，注释说明取舍：闪光灯由常驻相机流维持，解锁后前台无开关可关、LED 会常亮，故强制熄灯）；hw 时在锁屏时钟下方渲染「已开启系统闪光灯」白玻璃胶囊（bg-white/20 backdrop-blur-md、文字随 fg、text-[12px] px-3 py-1.5 rounded-full、pointer-events-none 不挡手势），本地 state+setTimeout 1.8s 自动淡出，卸载/离开 hw 清定时器
+- 白屏补光层渲染条件由 {torch && ( 改为 {torch && torchMode !== 'hw' && (——硬件闪光灯成功不铺白屏，idle（请求中）/fallback 照旧铺白兜底；白屏层「手电筒已开启」下新增仅 fallback 显示的说明行「当前设备不支持系统闪光灯，已使用屏幕补光」（text-[12px] opacity-70）；文件头 docblock 手电筒描述同步更新
+- 其它文件一律未动；未 git commit、未写测试代码
+
+Stage Summary:
+- 锁屏手电筒升级完成：Chrome/Android 等支持 Torch API 的环境点亮的真实系统闪光灯（白玻璃胶囊提示 1.8s 自动淡出），iOS Safari/桌面等不支持环境自动回退白屏补光并显示说明行；相机流仅用于点亮闪光灯、不采集不存储画面；hw 态关闭走左下角手电筒按钮，解锁随 LockScreen 卸载自动熄灯
+- 验证：bunx tsc --noEmit 零错误；bunx eslint hardware-torch.ts + LockScreen.tsx 零错误；E2E 由主会话统一执行
+- 备注（供主会话 E2E 参考）：hw 模式下无白屏层但 store.torchOpen 仍为 true，foreground.ts「torchOpen→黑前景」判定会使深色锁屏壁纸下状态栏用黑字；受「其它文件一律不动」约束未改，如观感异常可后续让前景判定感知 hw 形态
+
+---
+
+Task ID: 33-d
+Agent: 子代理 Task 33-d（设置字体功能）
+Task: 设置 App 新增「字体」功能（内置字体选择 + 预览卡片 + 上传字体文件 + 全局实时生效 + 持久化，毛玻璃风格与 Task 31 设置页统一）
+
+Work Log:
+- 先读 worklog（Task 31 毛玻璃规范/Task 33 批次侦察）与相关源文件（store.ts 接口/默认值/load/setTheme 区段、PhoneShell 启动 effect、globals.css body、settings.tsx 分段 1-540/895-985/3332+/4230-4349、page-toast.tsx），未凭记忆抄写
+- 新建 src/lib/ios/fonts.ts（'use client'，全中文注释）：BUILTIN_APP_FONTS 10 款纯 CSS 栈字体（system/pingfang/heiti/songti/kaiti/yuanti/mono/serif/rounded/yahei）；自定义字体独立 IndexedDB `ios-phone-fonts`（store 'fonts'，keyPath 'id'，自写 openFontDB 小工具，完全不动 db.ts 零升版风险）；API：listCustomFonts（createdAt 升序、剥 blob）/saveCustomFont（id=custom:时间36进制-随机6位，name=去扩展名，>30MB 抛「字体文件过大（超过 30MB）」）/deleteCustomFont/loadCustomFontFace（FontFace family=AppCustomFont_+id 去非字母数字纯 ASCII，await load()→document.fonts.add，模块级 Map 缓存防重复注册，解析失败抛「解析失败，文件可能已损坏」）/applyAppFont（builtin 直写栈、custom 注册后写 `'family', -apple-system, sans-serif`、''/未知/已删→removeProperty 回默认）/ensureAppFontApplied（try/catch 全包不阻塞开机）；额外导出 customFontFamilyOf 供预览行内联字体栈；import store 的 useSettings（store 不 import fonts，无循环）
+- store.ts：SettingsState 加 appFontId 字段与 setAppFont setter（模仿 setTheme，立即持久化 localDB settings/appFontId）；默认值 appFontId:''；load() Promise.all 加 localDB.get('settings','appFontId')（解构名 fontRec），尾部 set() 加 appFontId: typeof fontRec?.value === 'string' ? fontRec.value : ''
+- globals.css：body font-family 改为 var(--app-font-family, 默认系统字体栈)，仅此一处
+- PhoneShell.tsx：启动 effect 在 await load() 后追加 await ensureAppFontApplied()（import fonts 库）
+- settings.tsx：Page 类型加 'font'；lucide 加 Type 图标；import fonts 库函数与 AppFontMeta；RootPage 订阅 appFontId，fontRowValue=内置选中名??(custom:前缀?'自定义':'默认')，「通知」行后加字体行（Type/TONE_CYAN）；新增 FontPage（DetailShell gray+ambience 同款外壳）——预览卡 GrayCard（当前字体名+「当前使用」深色胶囊徽标+三行 24px 预览 key={previewLoadedTick} 重渲）；内置字体 FontListCard（GrayCard 同款玻璃配方 p-0+divide-y，行=名称+「Aa 永东 123」行内字体示例+选中 Check，点击 setAppFont+applyAppFont 不 toast）；我的字体 GrayCard（上传玻璃胶囊按钮 uploading 时 Loader2 转圈、隐藏 input accept=.ttf,.otf,.woff,.woff2；自定义行=名称+文件名 caption+示例字样+Trash2 两步删除确认 3s 复位，删选中字体回默认）；LocalToast 反馈；testid：font-page-preview/font-builtin-{后段}/font-custom-{后段}/font-delete-{后段}/font-upload/font-upload-input；SettingsApp 根组件挂 {page==='font'&&<FontPage/>}
+- 验证：bunx tsc --noEmit 零错误；bunx eslint settings.tsx/fonts.ts/store.ts/PhoneShell.tsx 零错误；dev server 热编译 ✓ GET / 200（未重启）；未 git commit、未写测试、未动 db.ts/schema
+- 备注（供主会话 E2E）：字体文件仅存本机独立库 ios-phone-fonts 绝不上传；应用后可断言 document.documentElement.style.getPropertyValue('--app-font-family')；删除选中字体后应回空串
+
+Stage Summary:
+- 设置「字体」功能全链路完成：10 款内置纯 CSS 栈字体点选即全局实时生效（CSS 变量 --app-font-family → body font-family），预览卡中英文/数字/标点实时预览，.ttf/.otf/.woff/.woff2 字体文件导入存独立 IndexedDB（ios-phone-fonts）+ FontFace 动态注册，两步确认删除、删选中字体回默认；appFontId 经 store 持久化、PhoneShell 启动时 ensureAppFontApplied 恢复，失败不阻塞开机；毛玻璃风格与 Task 31 设置页统一
+- 产物：src/lib/ios/fonts.ts（新）+ src/lib/ios/store.ts + src/app/globals.css + src/components/ios/PhoneShell.tsx + src/components/apps/settings.tsx；tsc/eslint 全绿

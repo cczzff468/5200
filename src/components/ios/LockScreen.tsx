@@ -8,6 +8,7 @@ import { useSettings, useUI, useLockWallpaper, useMeasuredWallpaperLight } from 
 import { formatLunarDate, formatSolarShort } from '@/lib/ios/lunar';
 import { formatIOSTime, useNow } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
+import { enableHardwareTorch, disableHardwareTorch } from '@/lib/ios/hardware-torch';
 import { weatherCodeInfo, useWeatherSnapshot } from '@/components/apps/weather-core';
 import PasscodePad from './PasscodePad';
 import { CustomWallpaperLayers } from './WallpaperLayers';
@@ -22,7 +23,7 @@ const WEEK_FMT = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' });
  * 锁屏（仿 iOS）：
  * - 日期（含农历）+ 超大时钟 + 「×××的iPhone」电量 / 天气 / 日期小组件；
  * - 上滑解锁：未设密码直接解锁，已设密码进入密码键盘；
- * - 手电筒（白屏补光模拟）与相机快捷入口（锁屏直达相机，不解锁，关闭相机回锁屏）；
+ * - 手电筒（优先系统硬件闪光灯 Web Torch API，设备不支持时回退白屏补光模拟）与相机快捷入口（锁屏直达相机，不解锁，关闭相机回锁屏）；
  * - 密码验证失败抖动 + 提示，验证通过播放解锁退场动画（由 PhoneShell 的 AnimatePresence 播放）。
  */
 export default function LockScreen() {
@@ -35,6 +36,10 @@ export default function LockScreen() {
   // 手电筒补光放全局 store：全屏白时前景（状态栏/横杠）需转黑
   const torch = useUI((s) => s.torchOpen);
   const setTorch = useUI((s) => s.setTorchOpen);
+  // 手电筒当前形态：idle=硬件请求中；hw=系统闪光灯点亮成功；fallback=不支持硬件→白屏补光回退
+  const [torchMode, setTorchMode] = useState<'idle' | 'hw' | 'fallback'>('idle');
+  // hw 胶囊提示可见性（显示 1.8s 后自动淡出）
+  const [hwPillVisible, setHwPillVisible] = useState(false);
 
   const now = useNow();
   const battery = useBattery();
@@ -96,6 +101,40 @@ export default function LockScreen() {
       setErrText('');
     }
   }, [lockUntil, now]);
+
+  // 手电筒开关 → 硬件闪光灯优先：开启时先复位形态再请求 Torch API（成功→hw，失败→白屏补光回退）；
+  // 关闭时停掉相机流（闪光灯随流熄灭）并复位。enableHardwareTorch 内部已吞所有错误，catch 仅双保险
+  useEffect(() => {
+    if (torch) {
+      setTorchMode('idle');
+      void enableHardwareTorch()
+        .then((r) => setTorchMode(r.ok ? 'hw' : 'fallback'))
+        .catch(() => setTorchMode('fallback'));
+    } else {
+      disableHardwareTorch();
+      setTorchMode('idle');
+    }
+  }, [torch]);
+
+  // 卸载（解锁）即熄灯：硬件闪光灯由常驻相机流维持，解锁后锁屏 UI 消失、前台再无开关可关，
+  // LED 会一直亮着；故 LockScreen 卸载时强制停流 + 复位 store，宁可重开一次也不留常亮灯
+  useEffect(() => {
+    return () => {
+      disableHardwareTorch();
+      setTorch(false);
+    };
+  }, [setTorch]);
+
+  // hw 胶囊提示：torchMode 进入 hw 时显示，1.8s 后自动淡出（离开 hw / 卸载时清定时器并隐藏）
+  useEffect(() => {
+    if (torchMode !== 'hw') {
+      setHwPillVisible(false);
+      return;
+    }
+    setHwPillVisible(true);
+    const timer = window.setTimeout(() => setHwPillVisible(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [torchMode]);
 
   // ---------------- 上滑解锁手势 ----------------
 
@@ -353,6 +392,25 @@ export default function LockScreen() {
                 </button>
               </div>
             </div>
+
+            {/* 硬件闪光灯点亮成功的轻提示：白玻璃小胶囊悬于时钟下方，1.8s 自动淡出。
+                不放进可拖拽层——瞬时 toast 不必跟随上滑位移；pointer-events-none 不挡手势 */}
+            <AnimatePresence>
+              {torch && torchMode === 'hw' && hwPillVisible && (
+                <motion.div
+                  key="hw-torch-pill"
+                  className="pointer-events-none absolute inset-x-0 top-[214px] z-10 flex justify-center"
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.25 }}
+                >
+                  <span role="status" className={`rounded-full bg-white/20 px-3 py-1.5 text-[12px] backdrop-blur-md ${fg}`}>
+                    已开启系统闪光灯
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         ) : (
           <motion.div
@@ -405,10 +463,12 @@ export default function LockScreen() {
         )}
       </AnimatePresence>
 
-      {/* 手电筒补光（白屏模拟）：整屏即关闭热区，避免“一片空白不知如何退出”。
+      {/* 手电筒补光（白屏模拟，仅回退用）：系统闪光灯点亮成功（hw）时不铺白屏——真实 LED 已照明，
+          铺白屏反而干扰；请求中（idle）与不支持回退（fallback）照旧铺白兜底。
+          整屏即关闭热区，避免“一片空白不知如何退出”；
           onPointerDown 阻断冒泡，防止白屏下的拖拽手势把补光层一起拖着走 */}
       <AnimatePresence>
-        {torch && (
+        {torch && torchMode !== 'hw' && (
           <motion.div
             key="torch"
             role="button"
@@ -429,6 +489,10 @@ export default function LockScreen() {
             <div className="flex flex-col items-center pt-[104px] text-black/45">
               <Flashlight className="h-8 w-8" strokeWidth={1.6} />
               <p className="mt-3 text-[15px] font-medium">手电筒已开启</p>
+              {/* 仅硬件回退（fallback）时说明：白屏是屏幕补光模拟，非真实闪光灯 */}
+              {torchMode === 'fallback' && (
+                <p className="mt-1 text-[12px] opacity-70">当前设备不支持系统闪光灯，已使用屏幕补光</p>
+              )}
             </div>
             {/* 底部明显关闭按钮（点整屏任意位置同样关闭） */}
             <div className="absolute inset-x-0 bottom-[96px] flex flex-col items-center gap-3">

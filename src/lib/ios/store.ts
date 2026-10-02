@@ -324,12 +324,16 @@ interface SettingsState {
   sttConfig: SttConfig;
   /** 自定义 App 图标（AppId → ObjectURL，Blob 存 IndexedDB settings.customIcons） */
   customIcons: Record<string, string>;
+  /** 全局字体（''=默认 iOS 系统字体；builtin:/custom: 前缀，应用逻辑见 lib/ios/fonts.ts） */
+  appFontId: string;
   loaded: boolean;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
   setLockScreen: (on: boolean) => void;
   setTheme: (t: ThemeMode) => void;
+  /** 设置全局字体（''=恢复默认）；立即持久化，UI 层随后调 applyAppFont() 实时生效 */
+  setAppFont: (id: string) => void;
   setWallpaperPreset: (id: string) => void;
   setCustomWallpaper: (blob: Blob | null) => void;
   /** 设置锁屏壁纸预设（独立于主屏幕壁纸） */
@@ -381,12 +385,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   ttsConfig: { ...DEFAULT_TTS_CONFIG },
   sttConfig: { ...DEFAULT_STT_CONFIG },
   customIcons: {},
+  // 全局字体默认空 = 默认 iOS 系统字体（globals.css 的 body font-family 回退栈）
+  appFontId: '',
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -401,6 +407,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'sttConfig'),
         localDB.get('settings', 'imgGenConfig'),
         localDB.get('settings', 'imgGenPresets'),
+        localDB.get('settings', 'appFontId'),
       ]);
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
@@ -671,6 +678,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         ttsConfig,
         sttConfig,
         customIcons,
+        // 全局字体：无记录/记录非法 → ''（默认 iOS 系统字体；应用由 PhoneShell 的 ensureAppFontApplied 完成）
+        appFontId: typeof fontRec?.value === 'string' ? fontRec.value : '',
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -698,6 +707,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setTheme: (t) => {
     set({ theme: t });
     void localDB.put('settings', { key: 'theme', value: t });
+  },
+
+  setAppFont: (id) => {
+    set({ appFontId: id });
+    void localDB.put('settings', { key: 'appFontId', value: id });
   },
 
   setWallpaperPreset: (id) => {

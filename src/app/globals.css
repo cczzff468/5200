@@ -123,8 +123,9 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB',
-      'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+    /* 全局字体（Task 33-d）：--app-font-family 由设置「字体」页写入 documentElement，未设置时回退默认系统字体栈 */
+    font-family: var(--app-font-family, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB',
+      'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif);
     -webkit-font-smoothing: antialiased;
   }
 }
