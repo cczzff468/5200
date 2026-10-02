@@ -123,8 +123,10 @@ const THEME_SHORT: Record<ThemeMode, string> = {
   auto: '自动',
 };
 
-/** 内置预设：仅保留国内可直连的三家（服务器出口网络对海外厂商有地区限制） */
+/** 内置预设：OpenAI + 国内可直连三家。海外厂商服务器出口有地区限制，但拉模型/测连接/聊天流式
+ *  均已内置「服务端失败 → 浏览器直连」自动回退（directOnly），OpenAI 兼容中转/反代地址同样适用 */
 const BUILTIN_API_PRESETS: { name: string; baseUrl: string; model: string }[] = [
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
   { name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1/chat/completions', model: 'moonshot-v1-8k' },
   { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4-flash' },

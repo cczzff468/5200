@@ -13867,3 +13867,19 @@ Work Log:
 Stage Summary:
 - 全 App 界面装饰性氛围光斑全部移除（设置 13 个详情页/联系人/世界书挂载页/他的声音页/线下模式全部面板/QQ密友卡/微信红包封面），毛玻璃卡片、胶囊、透底质感完整保留
 - tsc + bun run lint 全绿；改动文件：settings.tsx / contacts.tsx / chat-settings.tsx / offline-meeting.tsx / qq.tsx / wechat.tsx
+
+---
+Task ID: 39
+Agent: Z.ai Code（主会话）
+Task: ①API 设置为什么没有 OpenAI ②氛围光斑只删毛玻璃界面的，其他（QQ密友卡/微信红包封面）加回来
+
+Work Log:
+- 39-1 API 设置补 OpenAI：根因是 BUILTIN_API_PRESETS 此前注释「仅保留国内可直连的三家」把 OpenAI 移除（识图/生图/TTS 列表本就都有 OpenAI）。加回 OpenAI 预设（https://api.openai.com/v1/chat/completions + gpt-4o-mini，放首位与识图/生图一致），注释改述：拉模型/测连接/聊天流式均已内置「服务端失败→浏览器直连 directOnly」自动回退，海外厂商与中转地址同样可用；chat-stream-store.ts / settings models fetch / direct-api.ts 三处回退通道核实存在
+- 39-2 光斑范围修正（Task 38 全删过广）：qq.tsx 密友卡 3 枚 blur-3xl 柔光斑、wechat.tsx 红包封面 2 枚白色光斑 span 逐字节还原（原为对照真机/红包设计的卡内元素，非毛玻璃氛围层）；毛玻璃界面（设置13详情页/联系人/世界书/他的声音/线下模式）光斑保持删除
+- 验证：tsc/eslint 全绿；E2E（392×856）：设置→API配置页预设区 4 chips（OpenAI/DeepSeek/Kimi/智谱GLM），点击 OpenAI 后 API 地址=https://api.openai.com/v1/chat/completions、模型=gpt-4o-mini 自动填充；API 页 DOM 氛围光斑断言=0（毛玻璃页保持无光斑）；QQ密友卡/红包封面需种子+登录+手势路径，为原样还原已验证过的标记（代码级验证+git diff 佐证）；console 零错误
+- 数据清理：ios-phone-db + ios-phone-fonts + localStorage 全清，浏览器已关
+
+Stage Summary:
+- API 设置预设新增 OpenAI（首位），地址/模型联动填充，直连回退链路完整
+- 光斑策略修正：毛玻璃氛围光斑维持全局删除；QQ 密友卡/微信红包封面的卡内设计光斑还原
+- tsc + bun run lint 全绿；改动文件：settings.tsx / qq.tsx / wechat.tsx
