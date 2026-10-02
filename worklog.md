@@ -13396,3 +13396,21 @@ Stage Summary:
 - 用户追加两条反馈全部落地：①聊天模式+互换后「我的头像」上移缩小（112px@lift200）恒在消息区上方净空区可见（视频侧消息区同步压到 20vh，语音侧不动）；②互换后 AI mini 卡加高到与拨号卡一致（wx 104×140 / qq·phone 100×132），上下留白更多
 - 产出：src/components/apps/video-call-screen.tsx、src/components/apps/voice-call-screen.tsx（LocalFullView 参数化+avatarTestId、InlineCallChat messagesMaxH 内联 maxHeight、互换 AI mini 窗加高）
 - wx/qq 双端 E2E 全过、console 零错误、测试数据已清、tsc/eslint 零错误
+
+---
+Task ID: 28-d（追加反馈轮 2）
+Agent: Z.ai Code（主会话）
+Task: 用户三条新反馈——①视频文字聊天界面 AI 头像添加在时长下面、和我的头像一样；②右上角 AI 头像外面的卡片上下再变长一点；③右上角头像卡片可以按住拖拽移位置
+
+Work Log:
+- ①聊天模式 AI 头像重新入场：wx/qq 非互换分支由 `{!chatMode && <RemoteView 140/>}` 改为三元——chatMode 时渲染 RemoteView size=112 lift=200（无名字），与互换态「我的头像」（LocalFullView avatarSize=112 avatarLift=200）同尺寸同位置（E2E 实测 avatarTop=165/166、位于时长 bottom105 下方、Ken Burns 缩放中），名字已在顶部 CallChatHeader 不重复；语音通话/phone 皮肤无文字聊天不受影响
+- ②AI 头像卡再加高：wx 拨号卡+互换卡 104×140→104×160、qq 拨号卡+互换卡与 phone 互换卡 100×132→100×152（RemoteMiniCard 头像 58/56 不变，加高全部体现在上下留白；拨号卡+互换卡同步避免接通/互换跳变）
+- ③新增 useMiniCardDrag(rootRef) hook：pointer events 统一鼠标/触摸+setPointerCapture；pos=null 用默认定位类，首次拖动把卡片换算为根容器内绝对坐标并整通共享（同一皮肤拨号卡/互换卡读写同一 pos，跨互换重挂载位置保持——E2E 实证）；移动 <6px 视为点按（互换卡点按互换保留），拖拽过在捕获阶段拦击 click 防误触（E2E 实证松手不换回）；位置钳制根容器内 8px 边距（拖拽数学精确：wx 270-250=20/qq 274-302+72-324=22 等）；touch-none+select-none+onDragStart preventDefault 防手势劫持
+- 【E2E 发现并修复】卡片 z-10 与底部控制区 z-10（DOM 靠后）同层被压：拖到底部控制区后点按被容器吞掉（z-10 时代 (72,620) tap 无效）——五张可拖卡提升 z-20（对照微信真实 PIP 恒在最上层；顶部 z-20 按钮组 DOM 靠后仍在上不受影响），修复后底部停靠 (20,540) 点按成功互换回
+- E2E（agent-browser，seed-me/seed-xiaoxue 注入；wx me520 走详情页 ActionSheet 拨号（A1 链路复验）、qq 88888888 协议圈实测在 (94,523) 非旧配方 (99,524)，登录/详情页按钮需 DOM .click()）：wx 拨号卡 104×160@(270,108)→拖拽互换卡 (20,220)→点按互换→重互换位置保持→底部停靠点按互换 ✓；wx 聊天模式 AI 头像 112px@top165+发消息（「我今天在家穿睡衣」→AI 回复）头像不消失+按钮常显 ✓；qq 拨号卡 100×152 左上、互换卡 100×152@右(274,104)→拖 (22,344)→点按互换回 ✓；qq 聊天模式 avatar112@top166 ✓；C2 确认条两端每通一次正常弹出且不遮头像（回归）✓；挂断卡片/时长入流 ✓；errors+console 零错误；测试数据 8 store+localStorage 全清
+- 已知边界：QQ/WX AI 秒接导致拨号态拖拽窗口极短（E2E 两次拖拨号卡均被接通打断——拨号卡拖拽与互换卡共用同一 hook 无独立风险）；QQ 登录页对 CDP mouse down/up 迟钝需 DOM click（延续 28-b 记录）
+
+Stage Summary:
+- 用户三条反馈全部落地并双端 E2E 验证：聊天模式 AI 头像重新入场（112px 与「我的头像」完全对称：AI 画面时显示 AI 头像、我的画面时显示我的头像，均在时长下方净空区）、AI 卡再加高（wx 104×160/qq·phone 100×152）、AI 卡按住拖拽移位（点按互换保留、位置整通共享、恒在最上层可点）
+- 产出：src/components/apps/video-call-screen.tsx（useMiniCardDrag hook+z-20+RemoteView chatMode 112 分支+五卡加高接拖拽）；voice-call-screen/wechat/qq/chat-call 零改动
+- tsc/eslint/bun run lint 全零错误、console 零错误、测试数据已清

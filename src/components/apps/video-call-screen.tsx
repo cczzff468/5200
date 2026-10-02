@@ -31,6 +31,11 @@
  *   [想看看你] 由引擎剥除并回调 onCameraRequest）→ 底部按钮上方弹「{name} 想看看你」确认条
  *   （拒绝=本通不再弹；同意=开摄像头）；语音通话不传回调零影响；
  * - 通话卡片/记忆/续聊由引擎与宿主承担（media='video' 分叉：视频通话时长文案、视频通话记忆场景）。
+ * - Task 28-d（用户三轮追加）：①聊天模式 AI 头像重新入场——时长下方净空区 112px 动态头像
+ *   （与互换态「我的头像」同尺寸同位置，中央不再空白，名字已在顶部小头像行不重复）；
+ *   ②右上角 AI 头像卡再次加高（wx 104×160 / qq·phone 100×152，拨号卡+互换卡同步无跳变）；
+ *   ③AI 头像卡支持按住拖拽移位（useMiniCardDrag：拨号卡/互换卡整通共享位置，移动 <6px
+ *   仍算点按=互换不受影响，位置钳制在屏幕内）。
  *
  * 权限边界：摄像头只在「拨出即开 / 接听时开」首次使用时申请；拒绝后文字/语音聊天与其他功能不受影响。
  */
@@ -460,6 +465,93 @@ function TypingDots() {
   );
 }
 
+/** 右上角 AI 头像卡「按住拖拽移位」（Task 28-d）：
+ *  - pos=null 时卡片用各自默认定位类（wx 右上/qq 拨号左上…），首次按下拖动时把卡片当前位置
+ *    换算成根容器内绝对坐标，此后整通共享该位置（同一皮肤的拨号卡/互换 mini 卡读写同一状态，
+ *    拖过一次换到哪张卡都跟随）；
+ *  - 指针事件统一鼠标/触摸（setPointerCapture 保证移出卡片仍持续跟踪）；移动 <6px 视为点按
+ *    （互换卡的「点按互换」不受影响），拖拽过则在捕获阶段拦截紧随的 click 防误触互换；
+ *  - 位置钳制在根容器内（8px 边距），touch-none+select-none 防触摸手势/长按选中劫持拖拽。 */
+function useMiniCardDrag(rootRef: React.RefObject<HTMLDivElement | null>) {
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const dragRef = useRef<{ id: number; startX: number; startY: number; baseLeft: number; baseTop: number } | null>(null);
+  const draggedRef = useRef(false);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      const root = rootRef.current;
+      if (!root) return;
+      const rootRect = root.getBoundingClientRect();
+      const rect = e.currentTarget.getBoundingClientRect();
+      dragRef.current = {
+        id: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseLeft: rect.left - rootRect.left,
+        baseTop: rect.top - rootRect.top,
+      };
+      draggedRef.current = false;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* 环境不支持指针捕获时忽略（拖拽仍可用，仅移出卡片的跟踪变弱） */
+      }
+    },
+    [rootRef],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      const d = dragRef.current;
+      const root = rootRef.current;
+      if (!d || !root || e.pointerId !== d.id) return;
+      const dx = e.clientX - d.startX;
+      const dy = e.clientY - d.startY;
+      if (!draggedRef.current && Math.hypot(dx, dy) < 6) return;
+      draggedRef.current = true;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const maxLeft = Math.max(root.clientWidth - rect.width - 8, 8);
+      const maxTop = Math.max(root.clientHeight - rect.height - 8, 8);
+      setPos({
+        left: Math.min(Math.max(d.baseLeft + dx, 8), maxLeft),
+        top: Math.min(Math.max(d.baseTop + dy, 8), maxTop),
+      });
+    },
+    [rootRef],
+  );
+
+  const onPointerEnd = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    if (dragRef.current && e.pointerId === dragRef.current.id) dragRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  /** 拖拽后拦截紧随的 click（互换卡点按互换不受影响：未拖拽时不拦截） */
+  const onClickCapture = useCallback((e: React.MouseEvent) => {
+    if (draggedRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      draggedRef.current = false;
+    }
+  }, []);
+
+  /** 展开到卡片上的公共 props（定位样式由调用方按 pos 拼接：pos 非空用 left/top，空用默认类） */
+  const dragProps = {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp: onPointerEnd,
+    onPointerCancel: onPointerEnd,
+    onClickCapture,
+    onDragStart: (e: React.DragEvent) => e.preventDefault(),
+  } as const;
+
+  return { pos, dragProps };
+}
+
 /** 对方（AI）小窗卡片（Task 28 UI 定稿，对照用户截图）：右上角 AI 头像窗不再近乎铺满窗宽——
  *  整窗一块深灰卡（#1b1b1f），居中一块大圆角小头像（方角半径 22%、约窗宽 56%），
  *  Ken Burns 缓慢缩放保留（动态画面感）。用于拨号对方头像窗与互换后的对方 mini 窗
@@ -498,7 +590,7 @@ function RemoteMiniCard({
  *  名字移至主画面头像下方（RemoteView showName）；互换后主画面=我方画面，名字回落到顶部显示；
  *  接通后时长下方显示 AI 状态（正在听/正在思考…/正在说话，与语音通话同款 statusLine）；
  *  Task 28 定稿：聊天模式（chatMode）在时长上方显示小头像+名字（CallChatHeader），
- *  此时中央大头像+名字已隐藏） */
+ *  此时中央大头像+名字隐藏（Task 28-d：时长下方净空区以 112px 重新显示 AI 动态头像，无名字） */
 function VideoTopBar({
   name,
   avatar,
@@ -764,6 +856,8 @@ function useCamRequest() {
 
 function WxVideoCall(props: VideoCallScreenProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Task 28-d：右上角 AI 头像卡拖拽移位（拨号卡/互换卡共享位置，点按互换不受影响）
+  const miniDrag = useMiniCardDrag(rootRef);
   // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
   const camReq = useCamRequest();
   const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
@@ -873,8 +967,13 @@ function WxVideoCall(props: VideoCallScreenProps) {
           <div
             aria-hidden="true"
             data-testid="wx-video-dial-avatar"
-            className="absolute right-4 top-[108px] z-10 h-[140px] w-[104px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/15"
+            {...miniDrag.dragProps}
+            className={`absolute z-20 h-[160px] w-[104px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/15 select-none touch-none ${
+              miniDrag.pos ? '' : 'right-4 top-[108px]'
+            }`}
+            style={miniDrag.pos ? { left: miniDrag.pos.left, top: miniDrag.pos.top } : undefined}
           >
+            {/* Task 28-d（用户：卡片上下再变长一点+可拖拽）：AI 头像卡 104×140→104×160 */}
             <RemoteMiniCard avatar={props.avatar} name={props.name} size={58} shape="square" />
           </div>
         </>
@@ -897,10 +996,15 @@ function WxVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="wx-video-remote-mini"
-              className="absolute right-4 top-[108px] z-10 h-[140px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/15 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+              {...miniDrag.dragProps}
+              className={`absolute z-20 h-[160px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/15 shadow-[0_8px_24px_rgba(0,0,0,0.45)] select-none touch-none ${
+                miniDrag.pos ? '' : 'right-4 top-[108px]'
+              }`}
+              style={miniDrag.pos ? { left: miniDrag.pos.left, top: miniDrag.pos.top } : undefined}
             >
-              {/* Task 28 追加反馈（用户：卡片上下再变长一点）：AI 头像窗 104×112→104×140
-                  （与拨号卡同尺寸同位置，拨号→接通→互换全程无跳变；头像 58px≈窗宽 56% 不变） */}
+              {/* Task 28-d（用户：卡片上下再变长一点+可拖拽）：AI 头像窗 104×140→104×160
+                  （仍与拨号卡同尺寸同位置，全程无跳变；头像 58px≈窗宽 56% 不变；
+                  按住拖拽移位，移动 <6px 仍算点按互换，位置整通共享） */}
               <RemoteMiniCard avatar={props.avatar} name={props.name} size={58} shape="square" />
             </button>
           )}
@@ -908,8 +1012,13 @@ function WxVideoCall(props: VideoCallScreenProps) {
       ) : (
         <>
           {/* 微信皮肤：角色头像为正方形圆角（Task 23）；Task 26：头像 140+名字 13px、lift 96 上移，纯黑背景无模糊；
-              聊天模式中央头像名字隐藏（Task 28 定稿，小头像名字移到顶部时长上方） */}
-          {!chatMode && <RemoteView avatar={props.avatar} name={props.name} size={140} shape="square" showName lift={96} />}
+              Task 28-d：聊天模式 AI 头像重新入场——112px/lift 200（与互换态「我的头像」同尺寸同位置，
+              时长下方净空区；名字已在顶部小头像行不重复），普通态仍 140+名字 */}
+          {!chatMode ? (
+            <RemoteView avatar={props.avatar} name={props.name} size={140} shape="square" showName lift={96} />
+          ) : (
+            <RemoteView avatar={props.avatar} name={props.name} size={112} shape="square" lift={200} />
+          )}
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -1126,6 +1235,8 @@ function Ctl({ label, children }: { label: string; children: React.ReactNode }) 
 
 function QqVideoCall(props: VideoCallScreenProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Task 28-d：右上角 AI 头像卡拖拽移位（拨号卡/互换卡共享位置，点按互换不受影响）
+  const miniDrag = useMiniCardDrag(rootRef);
   // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
   const camReq = useCamRequest();
   const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
@@ -1187,8 +1298,13 @@ function QqVideoCall(props: VideoCallScreenProps) {
           <div
             aria-hidden="true"
             data-testid="qq-video-dial-avatar"
-            className="absolute left-4 top-[100px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/15"
+            {...miniDrag.dragProps}
+            className={`absolute z-20 h-[152px] w-[100px] overflow-hidden rounded-[14px] shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/15 select-none touch-none ${
+              miniDrag.pos ? '' : 'left-4 top-[100px]'
+            }`}
+            style={miniDrag.pos ? { left: miniDrag.pos.left, top: miniDrag.pos.top } : undefined}
           >
+            {/* Task 28-d（用户：卡片上下再变长一点+可拖拽）：AI 头像卡 100×132→100×152 */}
             <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
           </div>
         </>
@@ -1210,10 +1326,14 @@ function QqVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="qq-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
+              {...miniDrag.dragProps}
+              className={`absolute z-20 h-[152px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15 select-none touch-none ${
+                miniDrag.pos ? '' : 'right-4 top-[104px]'
+              }`}
+              style={miniDrag.pos ? { left: miniDrag.pos.left, top: miniDrag.pos.top } : undefined}
             >
-              {/* Task 28 追加反馈（用户：卡片上下再变长一点）：AI 头像窗 100×112→100×132
-                  （与拨号卡同高；头像 56px≈窗宽 56% 不变） */}
+              {/* Task 28-d（用户：卡片上下再变长一点+可拖拽）：AI 头像窗 100×132→100×152
+                  （头像 56px≈窗宽 56% 不变；按住拖拽移位，移动 <6px 仍算点按互换，位置整通共享） */}
               <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
             </button>
           )}
@@ -1221,8 +1341,13 @@ function QqVideoCall(props: VideoCallScreenProps) {
       ) : (
         <>
           {/* Task 26：主画面头像 140 + 头像下方名字（小字）、lift 96 上移，纯黑背景无模糊；
-              聊天模式中央头像名字隐藏（Task 28 定稿） */}
-          {!chatMode && <RemoteView avatar={props.avatar} name={props.name} size={140} showName lift={96} />}
+              Task 28-d：聊天模式 AI 头像重新入场——112px/lift 200（与互换态「我的头像」同尺寸
+              同位置，时长下方净空区；名字已在顶部小头像行不重复） */}
+          {!chatMode ? (
+            <RemoteView avatar={props.avatar} name={props.name} size={140} showName lift={96} />
+          ) : (
+            <RemoteView avatar={props.avatar} name={props.name} size={112} lift={200} />
+          )}
           {phase === 'active' && (
             <LocalPipView
               videoRef={camera.videoRef}
@@ -1447,6 +1572,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
 
 function PhoneVideoCall(props: VideoCallScreenProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Task 28-d：右上角 AI 头像卡拖拽移位（互换 mini 卡；点按互换不受影响）
+  const miniDrag = useMiniCardDrag(rootRef);
   // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
   const camReq = useCamRequest();
   const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
@@ -1496,10 +1623,14 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="phone-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
+              {...miniDrag.dragProps}
+              className={`absolute z-20 h-[152px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15 select-none touch-none ${
+                miniDrag.pos ? '' : 'right-4 top-[104px]'
+              }`}
+              style={miniDrag.pos ? { left: miniDrag.pos.left, top: miniDrag.pos.top } : undefined}
             >
-              {/* Task 28 追加反馈（用户：卡片上下再变长一点）：AI 头像窗 100×112→100×132
-                  （与 wx/qq 同步加高；头像 56px≈窗宽 56% 不变） */}
+              {/* Task 28-d（用户：卡片上下再变长一点+可拖拽）：AI 头像窗 100×132→100×152
+                  （与 wx/qq 同步；头像 56px≈窗宽 56% 不变；按住拖拽移位，位置整通共享） */}
               <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
             </button>
           )}
