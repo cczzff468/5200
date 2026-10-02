@@ -283,13 +283,15 @@ export async function ensureAppFontApplied(): Promise<void> {
 // ---------------- 字体大小 / 字重（Task 34-a） ----------------
 
 /**
- * 字体大小档位（iOS 风格五档）：倍率只作用于文字，不缩放界面框架（Task 36 修订）。
+ * 字体大小档位（iOS 风格七档，Task 37 应用户要求补更小档）：倍率只作用于文字，不缩放界面框架（Task 36 修订）。
  * 实现：倍率写入 :root 的 --app-font-scale，globals.css 里按项目实际用到的
  * text-[Npx] / leading-[Npx] 任意值类逐档重写为 font-size/line-height: calc(原值 × 倍率)
  * ——按钮/行高/图标等 px 尺寸布局不变，只有文字随档位变大变小。
  * 旧方案（34-a）把 transform scale 打在手机屏容器上，「小」档连整个界面都缩小，已废弃。
  */
 export const FONT_SCALE_OPTIONS: { scale: number; label: string }[] = [
+  { scale: 0.7, label: '超小' },
+  { scale: 0.8, label: '特小' },
   { scale: 0.9, label: '小' },
   { scale: 1, label: '标准' },
   { scale: 1.15, label: '大' },
@@ -297,8 +299,9 @@ export const FONT_SCALE_OPTIONS: { scale: number; label: string }[] = [
   { scale: 1.45, label: '最大' },
 ];
 
-/** 字重档位：body font-weight 引用变量（未显式设 font-medium/semibold 的文本生效） */
+/** 字重档位（Task 37 补 200 特细）：body font-weight 引用变量（未显式设 font-medium/semibold 的文本生效） */
 export const FONT_WEIGHT_OPTIONS: { weight: number; label: string }[] = [
+  { weight: 200, label: '特细' },
   { weight: 300, label: '细' },
   { weight: 400, label: '标准' },
   { weight: 500, label: '中' },

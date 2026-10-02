@@ -266,10 +266,11 @@ export default function PhoneShell() {
         )}
 
         {/* 状态栏 + 灵动岛 + 全局灵动岛通知（通知展开期间灵动岛隐藏，收起后恢复）。
-            状态栏开关（Task 36，设置 › 显示与亮度组）：关闭后隐藏时间/信号/电量状态栏；
-            灵动岛是硬件开孔模拟、不是状态栏内容，始终保留 */}
+            状态栏开关（Task 36，设置 › 显示与亮度组；Task 37 扩展）：关闭后隐藏时间/信号/电量状态栏，
+            灵动岛一并隐藏（用户要求「灵动岛也消失」）；全局弹窗不受影响——
+            灵动岛通知卡/来电胶囊/闹钟横幅等仍照常从原位弹出（IslandNotificationLayer 等独立于本开关） */}
         {statusBarVisible && <StatusBar />}
-        {!islandCovered && (
+        {statusBarVisible && !islandCovered && (
           <div
             className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
             aria-hidden="true"

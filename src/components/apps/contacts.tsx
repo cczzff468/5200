@@ -15,7 +15,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
-import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
+import { IOSBackButton, IOSNavBar } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { GlassButton } from '@/components/ios/GlassButton';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
@@ -474,61 +474,73 @@ export default function ContactsApp() {
   };
 
   return (
-    <IOSScreen>
-      {view.mode === 'list' && (
-        <ListView
-          contacts={contacts}
-          loading={loading}
-          loadError={loadError}
-          tab={tab}
-          onTab={setTab}
-          subtitleOf={subtitleOf}
-          onOpenDetail={(id) => setView({ mode: 'detail', id })}
-          onAdd={(kind) => setView({ mode: 'add', kind })}
-          onRetry={() => void load()}
-        />
-      )}
-      {view.mode === 'add' && (
-        <ContactFormView
-          kind={view.kind}
-          owners={owners}
-          onSaved={(created) => {
-            upsert(created);
-            setTab(created.kind);
-            setView({ mode: 'list' });
-          }}
-          onCancel={() => setView({ mode: 'list' })}
-        />
-      )}
-      {view.mode === 'edit' && (
-        <ContactFormView
-          kind={byId.get(view.id)?.kind ?? 'char'}
-          initial={byId.get(view.id) ?? null}
-          owners={owners}
-          onSaved={(updated) => {
-            upsert(updated);
-            setView({ mode: 'detail', id: updated.id });
-          }}
-          onCancel={() => setView({ mode: 'detail', id: view.id })}
-        />
-      )}
-      {view.mode === 'detail' && (
-        <DetailView
-          contact={byId.get(view.id) ?? null}
-          ownerName={(() => {
-            const c = byId.get(view.id);
-            return c?.ownerId ? byId.get(c.ownerId)?.name ?? null : null;
-          })()}
-          onEdit={(id) => setView({ mode: 'edit', id })}
-          onBack={() => setView({ mode: 'list' })}
-          onDeleted={(id) => {
-            // 服务端级联删 NPC，本地同步移除
-            setContacts((prev) => prev.filter((c) => c.id !== id && c.ownerId !== id));
-            setView({ mode: 'list' });
-          }}
-        />
-      )}
-    </IOSScreen>
+    /* 毛玻璃氛围根容器（Task 37，与设置/他的声音页同配方）：浅灰底 + 顶部柔光光斑，
+       深色模式透出壁纸——列表/新建/编辑/详情全部视图的玻璃卡片都能透出柔光，
+       毛玻璃从「近似白卡」变成真正可感知的透底质感 */
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F2F2F7] text-foreground dark:bg-transparent">
+      {/* 氛围光斑层（纯装饰）：四枚大直径柔色光斑，位于一切内容之下 */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[440px] overflow-hidden">
+        <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-[#FFB340]/[0.26] blur-[100px]" />
+        <div className="absolute left-1/4 -top-20 h-60 w-60 rounded-full bg-[#5AC8FA]/[0.24] blur-[100px]" />
+        <div className="absolute -right-20 top-4 h-64 w-64 rounded-full bg-[#C58BFF]/[0.2] blur-[100px]" />
+        <div className="absolute left-1/2 top-44 h-52 w-72 rounded-full bg-[#FF8FB0]/[0.12] blur-[110px]" />
+      </div>
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+        {view.mode === 'list' && (
+          <ListView
+            contacts={contacts}
+            loading={loading}
+            loadError={loadError}
+            tab={tab}
+            onTab={setTab}
+            subtitleOf={subtitleOf}
+            onOpenDetail={(id) => setView({ mode: 'detail', id })}
+            onAdd={(kind) => setView({ mode: 'add', kind })}
+            onRetry={() => void load()}
+          />
+        )}
+        {view.mode === 'add' && (
+          <ContactFormView
+            kind={view.kind}
+            owners={owners}
+            onSaved={(created) => {
+              upsert(created);
+              setTab(created.kind);
+              setView({ mode: 'list' });
+            }}
+            onCancel={() => setView({ mode: 'list' })}
+          />
+        )}
+        {view.mode === 'edit' && (
+          <ContactFormView
+            kind={byId.get(view.id)?.kind ?? 'char'}
+            initial={byId.get(view.id) ?? null}
+            owners={owners}
+            onSaved={(updated) => {
+              upsert(updated);
+              setView({ mode: 'detail', id: updated.id });
+            }}
+            onCancel={() => setView({ mode: 'detail', id: view.id })}
+          />
+        )}
+        {view.mode === 'detail' && (
+          <DetailView
+            contact={byId.get(view.id) ?? null}
+            ownerName={(() => {
+              const c = byId.get(view.id);
+              return c?.ownerId ? byId.get(c.ownerId)?.name ?? null : null;
+            })()}
+            onEdit={(id) => setView({ mode: 'edit', id })}
+            onBack={() => setView({ mode: 'list' })}
+            onDeleted={(id) => {
+              // 服务端级联删 NPC，本地同步移除
+              setContacts((prev) => prev.filter((c) => c.id !== id && c.ownerId !== id));
+              setView({ mode: 'list' });
+            }}
+          />
+        )}
+      </div>
+    </div>
   );
 }
 

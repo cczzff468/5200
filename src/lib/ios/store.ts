@@ -699,11 +699,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
         // 全局字体：无记录/记录非法 → ''（默认 iOS 系统字体；应用由 PhoneShell 的 ensureAppFontApplied 完成）
         appFontId: typeof fontRec?.value === 'string' ? fontRec.value : '',
         appFontScale:
-          typeof fontScaleRec?.value === 'number' && fontScaleRec.value >= 0.8 && fontScaleRec.value <= 1.6
+          typeof fontScaleRec?.value === 'number' && fontScaleRec.value >= 0.7 && fontScaleRec.value <= 1.6
             ? fontScaleRec.value
             : 1,
         appFontWeight:
-          typeof fontWeightRec?.value === 'number' && [300, 400, 500, 600].includes(fontWeightRec.value)
+          typeof fontWeightRec?.value === 'number' && [200, 300, 400, 500, 600].includes(fontWeightRec.value)
             ? fontWeightRec.value
             : 400,
         // 状态栏开关：无记录 = 显示（默认开）；仅接受布尔值

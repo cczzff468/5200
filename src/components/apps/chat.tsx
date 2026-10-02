@@ -4294,11 +4294,11 @@ function BottomTabBar({ tab, onChange }: { tab: TabKey; onChange: (t: TabKey) =>
             {tab === key && (
               <motion.span
                 layoutId="msg-tab-thumb"
-                className="absolute inset-0 rounded-full bg-foreground shadow-sm"
+                className="absolute inset-0 rounded-full bg-[#007AFF] shadow-sm"
                 transition={{ type: 'spring', stiffness: 500, damping: 40 }}
               />
             )}
-            <span className={`relative z-10 transition-colors ${tab === key ? 'text-background' : 'text-muted-foreground'}`}>
+            <span className={`relative z-10 transition-colors ${tab === key ? 'text-white' : 'text-muted-foreground'}`}>
               {label}
             </span>
           </button>

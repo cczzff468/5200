@@ -495,16 +495,28 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             value={fontRowValue}
             onClick={() => onOpen('font')}
           />
-          {/* 状态栏开关（Task 36）：关闭后顶部时间/信号/电量状态栏隐藏（灵动岛为硬件开孔保留） */}
+          {/* 状态栏开关（Task 36；Task 37 换绿色大开关）：关闭后顶部时间/信号/电量状态栏与灵动岛都隐藏。
+              与飞行模式同款 iOS 原生 51×31 大开关，开启态 #34C759 绿 */}
           <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
             <RowIcon icon={PanelTop} tone={TONE_GRAY} />
             <span className="min-w-0 flex-1 truncate text-[16px]">状态栏</span>
-            <Switch
-              checked={statusBarVisible}
-              onCheckedChange={setStatusBarVisible}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={statusBarVisible}
               aria-label="状态栏"
               data-testid="settings-statusbar-switch"
-            />
+              onClick={() => setStatusBarVisible(!statusBarVisible)}
+              className={`relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-200 ${
+                statusBarVisible ? 'bg-[#34C759]' : 'bg-black/15 dark:bg-white/25'
+              }`}
+            >
+              <span
+                className={`pointer-events-none absolute left-[2px] top-[2px] block h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.25)] transition-transform duration-200 ${
+                  statusBarVisible ? 'translate-x-[20px]' : 'translate-x-0'
+                }`}
+              />
+            </button>
           </div>
         </div>
 

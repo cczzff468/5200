@@ -13827,3 +13827,22 @@ Work Log:
 Stage Summary:
 - 字体大小语义修正完成：档位只改变文字（font-size+line-height 按 calc×倍率），界面框架/按钮/图标尺寸恒定，90%~145% 全档实时生效+持久化；设置新增状态栏开关：关闭隐藏时间/信号/电量（灵动岛保留），即时生效+持久化
 - 产物：src/app/globals.css + src/components/ios/PhoneShell.tsx + src/lib/ios/store.ts + src/lib/ios/fonts.ts + src/components/apps/settings.tsx；tsc/eslint 全绿
+
+---
+Task ID: 37
+Agent: Z.ai Code（主会话）
+Task: ①灵动岛随「状态栏」开关一并隐藏（弹窗照样） ②状态栏开关换绿色大开关 ③字体大小/粗细补更小档位 ④信息App底部tab激活黑色→蓝色 ⑤联系人App毛玻璃胶囊氛围补齐
+
+Work Log:
+- 37-1 PhoneShell.tsx：灵动岛 div 渲染条件 `!islandCovered` → `statusBarVisible && !islandCovered`（用户要求「灵动岛也消失」）；注释同步说明弹窗层（灵动岛通知卡/来电胶囊/闹钟横幅）不受开关影响照常弹出；开机门控屏的开孔占位保留（load 前无从得知开关状态）
+- 37-2 settings.tsx RootPage：状态栏行由 shadcn Switch（其余 5 处 Switch 保留不动）换成与飞行模式同款自定义 role=switch 按钮（51×31 轨道 + 27px 白滑块 translate-x-20px + 开启 #34C759 绿 + dark 变体），testid/aria-label=状态栏 保留，toggle 通道 setStatusBarVisible 持久化不变
+- 37-3 fonts.ts：FONT_SCALE_OPTIONS 5→7 档（新增 0.7 超小 / 0.8 特小），FONT_WEIGHT_OPTIONS 4→5 档（新增 200 特细），注释同步；store.ts load() 钳制放宽 scale>=0.7、weight 白名单加 200；globals.css 47 档 calc 规则对任意倍率天然生效，无需改动
+- 37-4 chat.tsx BottomTabBar：激活滑块 bg-foreground → bg-[#007AFF]，激活文字 text-background → text-white（蓝色底上两种主题都用白字）
+- 37-5 contacts.tsx：根容器 IOSScreen(bg-background) → 毛玻璃氛围根（bg-[#F2F2F7] dark:bg-transparent + 顶部 440px 四枚柔光光斑层，与设置 DetailShell gray+ambience 同配方），四个视图（列表/新建/编辑/详情）共用；IOSScreen import 移除；34-b4 已做过的卡片/输入/胶囊玻璃保持
+- 验证（E2E 浏览器实测，viewport 392×856）：开关 ON=51×31 rgb(52,199,89) 绿大开关；关闭→真状态栏与灵动岛同时消失（island 0 个），reload 解锁后仍隐藏（持久化）；字体页 12 个档位 chips 全渲染，0.7 档预览 24px→16.8px、--app-font-scale=0.7、字重 200 body computed=200，reload 后双双保留；信息 tab 滑块 rgb(0,122,255)+白字、切联系人 tab 仍蓝；联系人 App 浅灰底+4 光斑+玻璃卡（列表/详情截图确认）+种子联系人行渲染；console/dev.log 零错误
+- 数据清理：17 store + ios-phone-fonts 库 + localStorage 全清，浏览器已关
+- 工具边界备忘：data-testid 含小数点（font-scale-0.7）时 querySelector 属性值必须加引号；锁屏电池小组件恰好 w-[118px]，断言灵动岛需叠加 top-[11px] 过滤
+
+Stage Summary:
+- 五项全部完成：状态栏开关关闭=时间/信号/电量+灵动岛全部隐藏且全局弹窗不受影响（持久化）；状态栏开关绿色大开关与飞行模式统一；字体大小新增 70%/80% 两档、字重新增 200 特细档（实时生效+持久化）；信息底部 tab 激活态蓝底白字；联系人 App 全视图获得设置同款毛玻璃氛围
+- tsc + bun run lint 全绿；改动文件：PhoneShell.tsx / settings.tsx / fonts.ts / store.ts / chat.tsx / contacts.tsx
