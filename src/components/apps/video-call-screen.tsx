@@ -40,6 +40,8 @@
  *   qq·phone 100×152，原自适应高度改为与 AI 卡同高固定）；②「我的画面卡」同样支持
  *   按住拖拽移位（独立 pipDrag 实例与 AI 卡互不干扰，移动 <6px 仍算点按互换；
  *   两卡恒在最上层 z-20）。
+ * - Task 28-f（用户追加）：卡内头像也一致——我的画面卡占位头像尺寸/圆角/描边与 AI 卡头像
+ *   完全同款（wx 58px 方形圆角 / qq·phone 56px 圆形，原 64px 改为 avatarSize 参数化）。
  *
  * 权限边界：摄像头只在「拨出即开 / 接听时开」首次使用时申请；拒绝后文字/语音聊天与其他功能不受影响。
  */
@@ -377,7 +379,8 @@ function LocalFullView({
  *  Task 23：前置摄像头镜像预览（后置不镜像）；点击小窗与对方画面互换（Task 23：互换画面按钮已删）。
  *  Task 28-e：尺寸恒与 AI 头像卡一致（wx 104×160 / qq·phone 100×152，不再随视频宽高比自适应）；
  *  支持按住拖拽移位（dragPos/dragHandlers=useMiniCardDrag 产物，独立实例与 AI 卡互不干扰；
- *  移动 <6px 仍算点按互换）；z-20 恒在最上层（与 AI 卡同层，拖到底部不被控制区吞点按） */
+ *  移动 <6px 仍算点按互换）；z-20 恒在最上层（与 AI 卡同层，拖到底部不被控制区吞点按）。
+ *  Task 28-f：关闭态占位头像与 AI 卡头像同款（avatarSize 传 58/56，圆角同公式、ring/shadow 同样式） */
 function LocalPipView({
   videoRef,
   live,
@@ -387,6 +390,7 @@ function LocalPipView({
   mirrored,
   myAvatar,
   shape = 'circle',
+  avatarSize = 64,
   dragPos = null,
   dragHandlers,
 }: {
@@ -401,6 +405,8 @@ function LocalPipView({
   myAvatar?: string | null;
   /** 头像形状：wx=方形圆角 / qq·phone=圆形 */
   shape?: 'circle' | 'square';
+  /** 关闭态占位头像直径（Task 28-f：与 AI 卡头像同尺寸，wx 58 / qq·phone 56） */
+  avatarSize?: number;
   /** 拖拽后的绝对定位（null=用 className 里的默认定位类）；尺寸由 className 恒与 AI 卡一致 */
   dragPos?: { left: number; top: number } | null;
   /** 按住拖拽移位（useMiniCardDrag.dragProps 展开；拖拽后自动拦截紧随的 click 防误触互换） */
@@ -427,14 +433,19 @@ function LocalPipView({
         />
       ) : (
         <span className="flex h-full w-full items-center justify-center bg-[#1b1b1f]">
+          {/* Task 28-f：占位头像与 RemoteMiniCard 头像同款（尺寸/圆角公式/ring/shadow 一致，仅无 Ken Burns） */}
           <span
-            className="overflow-hidden"
-            style={{ width: 64, height: 64, borderRadius: shape === 'square' ? 8 : 32 }}
+            className="block overflow-hidden shadow-lg ring-1 ring-white/10"
+            style={{
+              width: avatarSize,
+              height: avatarSize,
+              borderRadius: shape === 'square' ? Math.round(avatarSize * 0.22) : avatarSize / 2,
+            }}
           >
             {myAvatar ? (
               <img src={myAvatar} alt="我的头像" className="h-full w-full object-cover" />
             ) : (
-              <DefaultAvatar size={64} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
+              <DefaultAvatar size={avatarSize} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
             )}
           </span>
         </span>
@@ -1025,6 +1036,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
               mirrored={rt.facing === 'user'}
               myAvatar={props.myAvatar}
               shape="square"
+              avatarSize={58}
               dragPos={pipDrag.pos}
               dragHandlers={pipDrag.dragProps}
             />
@@ -1355,6 +1367,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
               myAvatar={props.myAvatar}
+              avatarSize={56}
               dragPos={pipDrag.pos}
               dragHandlers={pipDrag.dragProps}
             />
@@ -1647,6 +1660,7 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
               myAvatar={props.myAvatar}
+              avatarSize={56}
               dragPos={pipDrag.pos}
               dragHandlers={pipDrag.dragProps}
             />

@@ -13431,3 +13431,19 @@ Stage Summary:
 - 用户两条反馈落地：①右上角「我的画面卡」与 AI 头像卡完全同尺寸（wx 104×160 / qq·phone 100×152）；②「我的画面卡」支持按住拖拽移位（点按互换保留、防误触拦截、位置钳制屏幕内、与 AI 卡位置独立）
 - 产出：src/components/apps/video-call-screen.tsx（LocalPipView 参数化+三皮肤 pipDrag+pipAdaptiveHeight 删除）；voice-call-screen/wechat/qq/chat-call 零改动
 - wx/qq 双端 E2E 全过、tsc/eslint 零错误、console 零错误、测试数据已清
+
+---
+Task ID: 28-f（追加反馈轮 4）
+Agent: Z.ai Code（主会话）
+Task: 用户反馈——「视频通话界面让右上角头像卡片我和ai的一样大，头像也一样的」
+
+Work Log:
+- 28-e 已统一卡片尺寸（wx 104×160 / qq·phone 100×152），本轮统一**卡内头像**：我的画面卡占位头像原 64px/圆角 8(wx)·32(circle)，与 AI 卡头像（wx 58 方形圆角 13 / qq·phone 56 圆形）不一致
+- LocalPipView 新增 avatarSize prop（默认 64 兼容），占位头像尺寸/圆角公式（square=Math.round(size*0.22)、circle=size/2）/ring-1 ring-white/10/shadow-lg 全部与 RemoteMiniCard 头像同款（仅无 Ken Burns 动态缩放）；三皮肤传 wx 58 / qq·phone 56
+- E2E（dispatch PointerEvent 解锁手势——发现关键点：pointermove/up 必须 dispatch 到 React root 内元素，dispatch 到 document 会绕过委托导致手势无效；微信/QQ 登录→视频通话全链路 DOM click 配方复用）：wx PIP 卡 104×160+占位头像 58×58 圆角 13 ✓；互换后 AI 卡 104×160+头像实测 58×58（Ken Burns 相位 1）✓——两卡头像完全一致；qq PIP 卡 100×152+占位头像 56×56 圆角 28 ✓；互换后 AI 卡 100×152+头像 56×56 ✓；console/errors 零错误；测试数据 17 store+localStorage 全清
+- 期间 MultiEdit 出现非原子应用（报错但部分编辑落盘、头部 28-f 注释重复插入两次）——已去重；后续重要编辑改用单独 Edit+grep 验证
+
+Stage Summary:
+- 用户反馈落地：右上角两张卡（我的画面卡/AI 卡）**卡片与卡内头像双双完全一致**（wx 104×160 卡+58px 方形圆角头像；qq·phone 100×152 卡+56px 圆形头像）
+- 产出：src/components/apps/video-call-screen.tsx（LocalPipView avatarSize 参数化+占位头像样式对齐 RemoteMiniCard）；其余文件零改动
+- wx/qq 双端 E2E 全过、tsc/eslint 零错误、console 零错误、测试数据已清
