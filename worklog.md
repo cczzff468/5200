@@ -13378,3 +13378,21 @@ Stage Summary:
 - 四屏（wx/qq×语音/视频）聊天模式布局统一：顶部=[CallChatHeader+时长+状态]、中部=消息区+输入栏（底部对齐）、底部=通话按钮恒在
 - phone 皮肤互换 mini 窗同步换 RemoteMiniCard（无文字聊天不受聊天模式影响）
 - 注意：QQ 详情页/ActionSheet 按钮对 CDP mouse down/up 无效，需 Playwright click 或 DOM .click()（qq-fdetail-call / qq-fdetail-call-voice / qq-fdetail-call-video testid 可用）
+
+---
+Task ID: 28-c（追加反馈轮）
+Agent: Z.ai Code（主会话）
+Task: 用户追加两条反馈——①视频通话文字聊天界面（聊天模式）切换成我的画面后「我的头像也消失」；②右上角 AI 头像外面的卡片上下再变长一点
+
+Work Log:
+- 根因定位（反馈①）：聊天模式+互换后，全屏「我的头像」渲染在屏幕正中（844 高屏 y≈352-492），底部聊天容器（消息区 35vh+输入栏+按钮行+挂断钮，最坏叠加 AI 请求确认条 ≈ 550-650px）向上生长越过屏幕中线，一两条消息即把头像盖进聊天气泡区=「消失」
+- 修复（反馈①）双管齐下：LocalFullView 新增 avatarSize/avatarLift/avatarTestId props（无流态头像直径与整体上移可调，paddingBottom=lift*2 实现，img/DefaultAvatar 同步缩放），wx/qq 互换分支聊天模式传 112/200（普通态仍 140/0 居中）；InlineCallChat 新增 messagesMaxH（内联 style maxHeight），视频侧传 20vh、语音侧保持默认 35vh——E2E 实测发现 max-h-[20vh] Tailwind 任意值类不生成 CSS（computed=none、列表实际 302px），改内联样式后确定性生效（实测 maxHeight 168.8px）
+- 修复（反馈②）：互换后 AI mini 窗加高 wx 104×112→104×140、qq/phone 100×112→100×132（与各自拨号卡同尺寸：wx 与拨号卡同位同尺寸拨号→接通→互换全程无跳变），RemoteMiniCard 头像 58/56 不变
+- E2E（agent-browser，重注入 seed-me/seed-xiaoxue，wx me520 / qq 88888888 登录；wx 走详情页 ActionSheet（A1 链路顺带复验）、qq 走聊天页加号面板双入口拨号）：wx+qq 两端 视频接通→关摄像头→开文字聊天→各发 2-3 条消息（AI 回复正常）→点 PIP 互换：头像 top166-278/112px 完整可见、消息区 top 393(wx)/511(qq)、maxHeight 168.8px、overlap=false；「小雪想看看你」确认条（C2）同屏弹出仍不遮头像；关聊天恢复居中 140px（centered=true）；AI 卡 wx 104×140 / qq 100×132；console 零错误；测试数据已清（8 store + localStorage）
+- 期间 dev server 进程死亡一次（tail dev.log 发现 HTTP 000）→ nohup bun run dev 重启后流程续跑
+- 回归：bunx tsc --noEmit 0 错；eslint 0 错；语音通话（messagesMaxH 默认 35vh）与 phone 皮肤（无文字聊天，仅 mini 卡加高 132）行为不受影响
+
+Stage Summary:
+- 用户追加两条反馈全部落地：①聊天模式+互换后「我的头像」上移缩小（112px@lift200）恒在消息区上方净空区可见（视频侧消息区同步压到 20vh，语音侧不动）；②互换后 AI mini 卡加高到与拨号卡一致（wx 104×140 / qq·phone 100×132），上下留白更多
+- 产出：src/components/apps/video-call-screen.tsx、src/components/apps/voice-call-screen.tsx（LocalFullView 参数化+avatarTestId、InlineCallChat messagesMaxH 内联 maxHeight、互换 AI mini 窗加高）
+- wx/qq 双端 E2E 全过、console 零错误、测试数据已清、tsc/eslint 零错误

@@ -23,6 +23,9 @@
  * - 通话拍照（A3，Task 28）：右上角快门按钮（仅接通正常态显示）抓「当前全屏所见」→
  *   canvas 按屏上 <video>/<img> 各自 DOM 矩形合成位图 → 双落盘：photos（照片 App 胶卷）+
  *   albums（联系人视觉相册，备注「视频通话截图」）；页内轻提示 1.5s 自动消失；
+ * - Task 28 追加反馈：聊天模式+互换后全屏「我的头像」不再被底部聊天面板盖住——
+ *   头像上移（lift 200）+缩小（112px）到消息区上方净空区，视频侧消息区压到 20vh（语音仍 35vh）；
+ *   互换后 AI mini 窗同步加高（wx 104×140 / qq·phone 100×132，与拨号卡一致，上下留白更多）；
  * - 识图即时抓帧（B1，Task 28）：翻转/重开摄像头后立即补抓一帧（不等 10s tick），基础轮询不变；
  * - AI 请求看画面（C2，Task 28）：摄像头关闭时 AI 可自然表达想看（规则限每通一次、句尾标记
  *   [想看看你] 由引擎剥除并回调 onCameraRequest）→ 底部按钮上方弹「{name} 想看看你」确认条
@@ -294,13 +297,19 @@ function RemoteView({
  *  Task 26：object-contain → object-cover 画面铺满全屏（用户反馈「让画面全屏」，上下黑边去掉；
  *  对照微信真实行为：自看画面永远充满全屏，两侧/上下按比例裁剪不变形）
  *  Task 27：删除「你」自看水印（用户要求）；无流（关摄像头/权限拒绝/拉流中）时不再显示
- *  「摄像头已关」占位，改显示用户自己的头像（对照微信真实行为），拨号等待文案由底部控制区承载 */
+ *  「摄像头已关」占位，改显示用户自己的头像（对照微信真实行为），拨号等待文案由底部控制区承载
+ *  Task 28 追加反馈：聊天模式+互换后底部聊天面板（消息区+输入栏+按钮）向上越过屏幕中线，
+ *  居中头像被气泡盖住=「我的头像消失」——新增 avatarSize/avatarLift：聊天模式传 112/200
+ *  （头像上移到消息区上方净空区始终可见），其余场景默认 140/0 居中不变 */
 function LocalFullView({
   videoRef,
   ready,
   mirrored,
   myAvatar,
   shape = 'circle',
+  avatarSize = 140,
+  avatarLift = 0,
+  avatarTestId,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   ready: boolean;
@@ -310,6 +319,12 @@ function LocalFullView({
   myAvatar?: string | null;
   /** 头像形状：wx=方形圆角 / qq·phone=圆形 */
   shape?: 'circle' | 'square';
+  /** 头像直径 px（默认 140；聊天模式互换态 112） */
+  avatarSize?: number;
+  /** 头像整体上移 px（默认 0 居中；聊天模式互换态 200，避开底部聊天面板+AI 请求确认条） */
+  avatarLift?: number;
+  /** 头像盒 testid（E2E 断言用） */
+  avatarTestId?: string;
 }) {
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
@@ -324,15 +339,23 @@ function LocalFullView({
           aria-label="我的摄像头画面"
         />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#111114]">
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-[#111114]"
+          style={avatarLift > 0 ? { paddingBottom: avatarLift * 2 } : undefined}
+        >
           <div
+            data-testid={avatarTestId}
             className="overflow-hidden shadow-2xl ring-1 ring-white/10"
-            style={{ width: 140, height: 140, borderRadius: shape === 'square' ? 17 : 70 }}
+            style={{
+              width: avatarSize,
+              height: avatarSize,
+              borderRadius: shape === 'square' ? Math.round(avatarSize * 0.12) : avatarSize / 2,
+            }}
           >
             {myAvatar ? (
               <img src={myAvatar} alt="我的头像" className="h-full w-full object-cover" />
             ) : (
-              <DefaultAvatar size={140} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
+              <DefaultAvatar size={avatarSize} shape={shape === 'square' ? 'square' : 'circle'} className="h-full w-full" />
             )}
           </div>
         </div>
@@ -843,6 +866,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
             mirrored={rt.facing === 'user'}
             myAvatar={props.myAvatar}
             shape="square"
+            avatarTestId="wx-video-my-avatar"
           />
           {/* Task 24：刚拨出界面对方头像也要一直显示（位置与接通后我方小窗一致，接通自然衔接）；
               Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（不再铺满窗宽） */}
@@ -856,12 +880,16 @@ function WxVideoCall(props: VideoCallScreenProps) {
         </>
       ) : rt.swapped ? (
         <>
+          {/* Task 28 追加反馈：聊天模式头像上移+缩小（不被底部聊天面板盖住），普通态居中 140 不变 */}
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
             mirrored={rt.facing === 'user'}
             myAvatar={props.myAvatar}
             shape="square"
+            avatarSize={chatMode ? 112 : 140}
+            avatarLift={chatMode ? 200 : 0}
+            avatarTestId="wx-video-my-avatar"
           />
           {phase === 'active' && (
             <button
@@ -869,10 +897,10 @@ function WxVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="wx-video-remote-mini"
-              className="absolute right-4 top-[108px] z-10 h-[112px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/15 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+              className="absolute right-4 top-[108px] z-10 h-[140px] w-[104px] overflow-hidden rounded-[14px] ring-1 ring-white/15 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
             >
-              {/* Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（窗高 112 不变，
-                  头像 58px≈窗宽 56%、方角半径 22% 更圆润，Ken Burns 保留） */}
+              {/* Task 28 追加反馈（用户：卡片上下再变长一点）：AI 头像窗 104×112→104×140
+                  （与拨号卡同尺寸同位置，拨号→接通→互换全程无跳变；头像 58px≈窗宽 56% 不变） */}
               <RemoteMiniCard avatar={props.avatar} name={props.name} size={58} shape="square" />
             </button>
           )}
@@ -1054,7 +1082,7 @@ function WxVideoCall(props: VideoCallScreenProps) {
                  消息区+输入栏在按钮上方，底部容器 bottom 锚定 + 按钮行 shrink-0，
                  任何消息量下按钮都完整可见 */
               <div className="w-full shrink-0">
-                <InlineCallChat variant="wx" call={call} className="w-full" />
+                <InlineCallChat variant="wx" call={call} className="w-full" messagesMaxH="20vh" />
               </div>
             ) : (
               /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
@@ -1166,11 +1194,15 @@ function QqVideoCall(props: VideoCallScreenProps) {
         </>
       ) : rt.swapped ? (
         <>
+          {/* Task 28 追加反馈：聊天模式头像上移+缩小（不被底部聊天面板盖住），普通态居中 140 不变 */}
           <LocalFullView
             videoRef={camera.videoRef}
             ready={camera.ready}
             mirrored={rt.facing === 'user'}
             myAvatar={props.myAvatar}
+            avatarSize={chatMode ? 112 : 140}
+            avatarLift={chatMode ? 200 : 0}
+            avatarTestId="qq-video-my-avatar"
           />
           {phase === 'active' && (
             <button
@@ -1178,10 +1210,10 @@ function QqVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="qq-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
+              className="absolute right-4 top-[104px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
             >
-              {/* Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（窗 100×112，
-                  头像 56px≈窗宽 56%，Ken Burns 保留） */}
+              {/* Task 28 追加反馈（用户：卡片上下再变长一点）：AI 头像窗 100×112→100×132
+                  （与拨号卡同高；头像 56px≈窗宽 56% 不变） */}
               <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
             </button>
           )}
@@ -1356,7 +1388,7 @@ function QqVideoCall(props: VideoCallScreenProps) {
                  消息区+输入栏在按钮上方，底部容器 bottom 锚定 + 按钮行 shrink-0，
                  任何消息量下按钮都完整可见 */
               <div className="w-full shrink-0">
-                <InlineCallChat variant="qq" call={call} className="w-full" />
+                <InlineCallChat variant="qq" call={call} className="w-full" messagesMaxH="20vh" />
               </div>
             ) : (
               /* Task 26：字幕槽弹性高度（64~112px）+底部对齐：长句内部滚动、最新一行完整贴按钮上方，不再被按钮区遮挡 */
@@ -1464,10 +1496,10 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
               onClick={rt.swapViews}
               aria-label="与我的画面互换"
               data-testid="phone-video-remote-mini"
-              className="absolute right-4 top-[104px] z-10 h-[112px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
+              className="absolute right-4 top-[104px] z-10 h-[132px] w-[100px] overflow-hidden rounded-[14px] ring-1 ring-white/15"
             >
-              {/* Task 28 UI 定稿（用户截图）：AI 头像窗=深灰卡+居中大圆角小头像（窗 100×112，
-                  头像 56px≈窗宽 56%，Ken Burns 保留） */}
+              {/* Task 28 追加反馈（用户：卡片上下再变长一点）：AI 头像窗 100×112→100×132
+                  （与 wx/qq 同步加高；头像 56px≈窗宽 56% 不变） */}
               <RemoteMiniCard avatar={props.avatar} name={props.name} size={56} />
             </button>
           )}

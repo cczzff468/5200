@@ -248,7 +248,10 @@ export function CallChatHeader({ name, avatar }: { name: string; avatar: string 
  * - Task 28 定稿（用户反馈）：面板不再自带 header——小头像+名字由宿主 CallChatHeader 放到屏幕
  *   顶部时长上方；聊天模式下中央大头像+名字隐藏，「头像名字下面都是文字输入」，底部按钮不消失；
  * - 消息区只显示文字轮次（via='text'）：我发的消息 + AI 的文字回复；语音轮次不在此显示；
- *   高度 max-h-[35vh]（内部滚动 no-scrollbar）；通话页底部按钮均为流式/底部锚定布局
+ *   高度 messagesMaxH 内联 style maxHeight（默认 35vh；视频通话传 20vh——消息区过高会向上顶到
+ *   互换态全屏「我的头像」，Task 28 追加反馈后视频侧压低消息区+头像上移双管齐下；
+ *   用内联样式而非 Tailwind 任意值类——max-h-[20vh] 类在部分构建管线下不生成 CSS）；
+ * - 消息区限高 messagesMaxH（内部滚动 no-scrollbar）；通话页底部按钮均为流式/底部锚定布局
  *   （语音页中部 flex-1 自动压缩、视频页底部容器 bottom 锚定），消息区再高按钮也不会被顶出屏幕；
  * - AI 回复形态由引擎决定（sendText/runTurn）：配置了第三方语音 API → TTS 语音回复（不出文字），
  *   没配 → 文字回复（消息区气泡）；AI 回应中显示三点动画。
@@ -258,10 +261,14 @@ export function InlineCallChat({
   variant,
   call,
   className = '',
+  messagesMaxH = '35vh',
 }: {
   variant: 'wx' | 'qq';
   call: ChatCallApi;
   className?: string;
+  /** 消息区最大高（CSS 值，内联 style maxHeight）：语音默认 35vh（flex 弹性区自适配）；
+   *  视频通话传 20vh（聊天模式+互换后给全屏「我的头像」留出净空区，不再被气泡盖住） */
+  messagesMaxH?: string;
 }) {
   const [draft, setDraft] = useState('');
   const { chatLog, textBusy, error } = call;
@@ -287,7 +294,11 @@ export function InlineCallChat({
       {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条；Task 28 定稿：max-h-[35vh]，
           「头像名字下面都是文字输入」，内部滚动、底部按钮不被顶出屏幕） */}
       {(textMsgs.length > 0 || textBusy) && (
-        <div ref={listRef} className="no-scrollbar mx-1 mb-2 flex max-h-[35vh] flex-col gap-1.5 overflow-y-auto">
+        <div
+          ref={listRef}
+          style={{ maxHeight: messagesMaxH }}
+          className="no-scrollbar mx-1 mb-2 flex flex-col gap-1.5 overflow-y-auto"
+        >
           {textMsgs.slice(-8).map((m, i) => (
             <p
               key={`${m.at}-${i}`}
