@@ -1,6 +1,6 @@
 /**
  * 语音 API 服务端共享层（/api/tts 与 /api/tts/voices 两个路由共用）：
- * - MiniMax（t2a_v2 合成 / get_voice 音色列表）与 OpenAI 兼容（audio/speech）两类服务商
+ * - MiniMax（t2a_v2 合成 / get_voice 音色列表）、OpenAI 兼容（audio/speech）、Fish Audio（/v1/tts，reference_id 即音色）三类服务商
  * - node:https 强制 IPv4：沙箱 undici 对含 AAAA 记录的主机有 IPv6 回退缺陷（同天气路由）
  * - 安全：API Key 只在内存里转发，绝不写日志；上游错误透出业务文案不透出 Key
  */
@@ -8,7 +8,7 @@
 import http from 'node:http';
 import https from 'node:https';
 
-export type TtsProvider = 'minimax' | 'openai';
+export type TtsProvider = 'minimax' | 'openai' | 'fishaudio';
 
 export interface TtsUpstreamConfig {
   provider: TtsProvider;
@@ -48,6 +48,13 @@ export function openaiVoicesUrl(base: string): string {
 
 /** MiniMax：拼 /v1 端点（用户填的 base 可能带 /v1 也可能不带） */
 export function minimaxUrl(base: string, path: string): string {
+  const stripped = /\/v1$/i.test(base) ? base.replace(/\/v1$/, '') : base;
+  return `${stripped}/v1/${path}`;
+}
+
+/** Fish Audio：拼 /v1 端点（官方 base=https://api.fish.audio，TTS=/v1/tts，音色列表=/model）；
+ *  用户可能填 https://api.fish.audio、https://api.fish.audio/v1 或完整端点——三种都兼容 */
+export function fishAudioUrl(base: string, path: string): string {
   const stripped = /\/v1$/i.test(base) ? base.replace(/\/v1$/, '') : base;
   return `${stripped}/v1/${path}`;
 }
@@ -260,6 +267,96 @@ export async function openaiVoices(cfg: TtsUpstreamConfig): Promise<{ id: string
 }
 
 // ---------------- 工具 ----------------
+
+/** Fish Audio /v1/tts 合成：reference_id 即音色模型 ID（留空 = Fish Audio 平台默认音色）；
+ *  返回 mp3 Buffer（响应体就是音频二进制）；当前接口不支持语速参数（speed 保留签名兼容统一调用） */
+export async function fishaudioSynthesize(cfg: TtsUpstreamConfig, text: string, voiceId: string, speed: number): Promise<Buffer> {
+  void speed; // Fish Audio /v1/tts 无语速字段；参数保留以统一三服务商调用签名
+  const base = normalizeTtsBaseUrl(cfg.baseUrl);
+  if (!base) throw new Error('API 地址无效');
+  if (!cfg.apiKey.trim()) throw new Error('请先填写 API Key');
+  const payload: Record<string, unknown> = {
+    text,
+    format: 'mp3',
+    mp3_bitrate: 128,
+    chunk_length: 200,
+    normalize: true,
+    latency: 'normal',
+  };
+  const ref = voiceId.trim();
+  if (ref) payload.reference_id = ref; // 留空 = 平台默认音色（客户端/服务端兜底链都不配音色时依然能出声）
+  const res = await httpsRequest({
+    method: 'POST',
+    url: fishAudioUrl(base, 'tts'),
+    headers: {
+      Authorization: `Bearer ${cfg.apiKey.trim()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    timeoutMs: 60_000,
+  });
+  if (res.status >= 400) {
+    const err = res.json as { message?: string } | null;
+    throw new Error(err?.message ? `Fish Audio 合成失败：${err.message}` : upstreamStatusMessage(res.status));
+  }
+  if (res.binary.length === 0) throw new Error('Fish Audio 未返回音频数据');
+  return res.binary;
+}
+
+/** Fish Audio /model 音色列表：合并「我克隆的音色」（self=true）与「市场精选」（默认第一页）并去重；
+ *  单路失败不致命（另一路还有数据）；两路都空/都失败 → 抛错由上层提示手动填音色 ID */
+export async function fishaudioVoices(cfg: TtsUpstreamConfig): Promise<{ id: string; name: string }[]> {
+  const base = normalizeTtsBaseUrl(cfg.baseUrl);
+  if (!base) throw new Error('API 地址无效');
+  if (!cfg.apiKey.trim()) throw new Error('请先填写 API Key');
+  const headers = { Authorization: `Bearer ${cfg.apiKey.trim()}` };
+  const pull = async (self: boolean): Promise<{ id: string; name: string }[]> => {
+    const url = `${fishAudioUrl(base, 'model')}?page_size=100&page_number=1${self ? '&self=true' : ''}`;
+    try {
+      const res = await httpsRequest({ method: 'GET', url, headers, timeoutMs: 15_000 });
+      if (res.status >= 400) return [];
+      const root = res.json as unknown;
+      const arr = Array.isArray(root)
+        ? root
+        : (() => {
+            const o = root as Record<string, unknown> | null;
+            for (const key of ['items', 'models', 'data']) {
+              if (o && Array.isArray(o[key])) return o[key] as unknown[];
+            }
+            return [];
+          })();
+      const out: { id: string; name: string }[] = [];
+      const seen = new Set<string>();
+      for (const item of arr) {
+        if (!item || typeof item !== 'object') continue;
+        const o = item as Record<string, unknown>;
+        const id = [o._id, o.id, o.reference_id, o.voiceId].find((v): v is string => typeof v === 'string' && v.trim() !== '');
+        if (!id || seen.has(id)) continue;
+        const name = [o.title, o.name, o.voice_name].find((v): v is string => typeof v === 'string' && v.trim() !== '');
+        seen.add(id);
+        out.push({ id, name: name || id });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
+  const mine = await pull(true);
+  const market = await pull(false);
+  const merged: { id: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const v of [...mine, ...market]) {
+    if (seen.has(v.id)) continue;
+    seen.add(v.id);
+    merged.push(v);
+  }
+  if (merged.length === 0) {
+    throw new Error('Fish Audio 音色列表拉取失败：请检查 API 地址与 Key，或直接手动填写音色 ID（Fish Audio 模型页可复制）');
+  }
+  return merged;
+}
+
+// ---------------- 工具（解码/通用解析） ----------------
 
 /** 十六进制 / base64 自适应解码（MiniMax t2a_v2 历史上返回 hex，兼容个别 base64 返回） */
 function hexOrBase64ToBuffer(s: string): Buffer | null {

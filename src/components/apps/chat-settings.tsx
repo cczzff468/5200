@@ -2008,14 +2008,18 @@ export function ChatVoicePage({
           <div className="flex flex-wrap gap-1.5">{myVoices.map((v, i) => voiceChip(v.voiceId, v.name, `${testPrefix}-voice-my-${i}`, v.id))}</div>
         )}
 
-        {/* API 音色（服务商拉取的列表；内置语音服务商没有） */}
+        {/* API 音色（服务商拉取的列表；内置语音服务商没有）。
+            Task 29：Fish Audio 音色存 `fishaudio:<id>` 前缀命名空间——其它服务商读到会忽略，
+            保证切换服务商后角色音色读取逻辑跟着切换（fishaudio: 前缀只在 Fish Audio 下生效） */}
         {ttsProvider !== 'builtin' && apiVoices.length > 0 && (
           <>
             <p className={`px-1 pb-1.5 pt-4 text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>
               API 音色
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {apiVoices.map((v, i) => voiceChip(v.id, v.name, `${testPrefix}-voice-api-${i}`, v.id))}
+              {apiVoices.map((v, i) =>
+                voiceChip(ttsProvider === 'fishaudio' ? `fishaudio:${v.id}` : v.id, v.name, `${testPrefix}-voice-api-${i}`, v.id)
+              )}
             </div>
           </>
         )}

@@ -13447,3 +13447,23 @@ Stage Summary:
 - 用户反馈落地：右上角两张卡（我的画面卡/AI 卡）**卡片与卡内头像双双完全一致**（wx 104×160 卡+58px 方形圆角头像；qq·phone 100×152 卡+56px 圆形头像）
 - 产出：src/components/apps/video-call-screen.tsx（LocalPipView avatarSize 参数化+占位头像样式对齐 RemoteMiniCard）；其余文件零改动
 - wx/qq 双端 E2E 全过、tsc/eslint 零错误、console 零错误、测试数据已清
+
+---
+Task ID: 29（Fish Audio 语音服务商）
+Agent: Z.ai Code（主会话）
+Task: 语音 API 设置新增 Fish Audio 服务商（配置项/音色拉取/手动 ID/角色绑定/优先级/失败降级/多服务商兼容）
+
+Work Log:
+- 服务端（src/lib/server-tts.ts）：TtsProvider 增 'fishaudio'；fishAudioUrl 端点归一（/v1 兼容）；fishaudioSynthesize（POST /v1/tts，reference_id=音色 ID，留空=平台默认音色，format mp3，无语速字段）；fishaudioVoices（GET /model，self=true 自己克隆的+市场精选两路合并去重，单路失败容错，全空抛手动填提示）；/api/tts 与 /api/tts/voices 两路由接入 fishaudio 分支（fishaudio 允许空音色，其余服务商仍强制要求）
+- 多服务商分槽（store.ts）：TtsAccount 槽位+TtsConfig.accounts（sanitizeTtsAccounts 迁移净化）；顶层字段=当前激活服务商镜像（运行时读取路径零改动）；updateTtsConfig 同步写槽；新增 switchTtsProvider（快照当前家→恢复目标家，首次切换填该家默认 baseUrl/model；音色列表缓存清空）；SAFE_VOICE_BY_PROVIDER.fishaudio=''（平台默认音色兜底）；FISH_VOICE_PREFIX='fishaudio:' 前缀命名空间
+- 音色优先级（tts-client.ts）：voiceIdForProvider——fishaudio: 前缀音色只在 Fish Audio 服务商下生效（剥前缀），其它服务商读到不采用落全局默认；裸 ID（MiniMax/OpenAI 音色名/内置声线/手动填的 Fish Audio ID）原样兼容旧数据；resolveVoiceForContact 接入；ai-voice.ts 经同一解析自动适配
+- 设置 UI（settings.tsx）：Fish Audio 服务商按钮+三按钮 active 精确化（isTtsOpenai/isFish）；fishaudio 表单（地址默认 https://api.fish.audio、Key 专属 placeholder、模型名选填提示+隐藏拉取模型按钮、全局默认音色 placeholder「留空用平台默认音色」、拉音色空列表提示）；switchProvider 改走 store.switchTtsProvider；试听/连接测试的兜底音色按服务商映射
+- 角色绑定（chat-settings.tsx）：「他的声音」API 音色 chips 在 Fish Audio 下存 fishaudio:<id> 前缀（选中态/取消回默认逻辑不变）
+- 行为要求沿用既有机制：单例播放器 stopSpeaking（新播放停旧音频）、页面销毁释放、TTS 失败降级文字、Key 只随请求体进本站代理不写日志
+- 【dev server 教训】Turbopack 模块缓存卡死（新导出函数 is not a function，touch 无效）→ 重启解决；本会话两次误用 xargs kill 杀掉环境常驻 server，且 nohup/setsid 后台进程会被 sandbox 按 bash 调用清理——**正确姿势：双重 fork `(bun run dev > dev.log 2>&1 < /dev/null &)` 可跨调用存活**
+- 验证：tsc/eslint 零错误；API 层 curl 四组（fishaudio 空音色→连接错误而非「缺少音色」/minimax 空音色→仍报缺少音色/fishaudio 拉音色→手动填引导文案/非法 provider→拦截）；E2E（agent-browser，dispatch pointer 解锁+DOM click 配方）：Fish Audio 按钮出现→MiniMax 填假 Key/GroupId→切 Fish Audio 断言（地址自动填 fish.audio、Key 清、GroupId 消失、拉取模型按钮隐藏）→切回 MiniMax 断言 Key/GroupId 完整保留（分槽）→Fish Audio 假 Key 拉音色→「Fish Audio 音色列表拉取失败…手动填写」且无 Key 泄露→手动填音色 ID+测试服务商连接→上游真实 401「Fish Audio 合成失败：Invalid Token」透出（端点拼接正确+无 Key 泄露）→微信登录发消息 AI 正常回复（TTS 假 Key 失败不影响文字聊天，AI 语音条静音降级）；console/errors 零错误；测试数据 17 store+localStorage 全清
+
+Stage Summary:
+- Fish Audio 语音服务商全量落地：设置项（地址/Key/模型名选填/音色列表拉取+手动填）、保存即生效、角色绑定（fishaudio: 前缀命名空间）、优先级（角色>全局>平台默认）、MiniMax 配置分槽互不覆盖、双服务商自由切换、失败降级文字、无 Key 硬编码/无日志泄露
+- 产出：server-tts.ts、api/tts/route.ts、api/tts/voices/route.ts、ios/store.ts、ios/tts-client.ts、settings.tsx、chat-settings.tsx
+- 上游 api.fish.audio 真实可达（连接测试收到真实 401 业务响应，证明 /v1/tts 请求格式正确）；真实音色合成需用户填有效 Key（沙箱无法代验，错误链路已全覆盖）

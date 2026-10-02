@@ -1,8 +1,9 @@
 /**
  * 语音 API 共享客户端（电话 / 微信 / QQ 三端共用的 TTS 播放链路）：
  * - 配置来源：设置 App「语音 API」（useSettings.ttsConfig），每次播放现场读取 → 保存即生效，无需重启
- * - 音色优先级：当前角色 voiceId（每次播放实时从联系人库重读，切角色不沿用缓存）
- *   → 全局默认音色 → 服务商安全默认音色
+ * - 服务商：内置语音 / MiniMax / OpenAI 兼容 / Fish Audio（Task 29）
+ * - 音色优先级：当前角色 voiceId（每次播放实时从联系人库重读，切角色不沿用缓存；fishaudio: 前缀音色
+ *   只在 Fish Audio 服务商下生效）→ 全局默认音色 → 服务商安全默认音色（Fish Audio = 平台默认音色）
  * - 文本清理：剥离舞台动作（*…*、（…）、【…】）与 Markdown/表情等不可朗读标记
  * - 播放器：模块级单例，新播放开始前自动停止旧音频；stopSpeaking() 供页面销毁时释放
  * - 安全：API Key 只随请求体发给本站代理 /api/tts，不在任何日志中出现
@@ -10,7 +11,7 @@
 
 import { stopOtherAudio, registerAudioSource } from './audio-focus';
 import { getContact } from './contacts-store';
-import { SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings } from './store';
+import { FISH_VOICE_PREFIX, SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings } from './store';
 import {
   isBuiltinVoiceSupported,
   isBuiltinVoiceId,
@@ -86,6 +87,21 @@ export function cleanTextForTts(raw: string): string {
 
 // ---------------- 音色解析（角色优先，现场重读不缓存） ----------------
 
+/**
+ * 把联系人/我的音色里存的 voiceId 换算成「当前服务商」可用的音色 ID（Task 29 Fish Audio 多服务商）：
+ * - `fishaudio:` 前缀（Fish Audio API 音色列表点选时写入）：当前服务商是 Fish Audio → 剥前缀取音色 ID；
+ *   其它服务商（MiniMax/OpenAI）→ 返回空串不采用（Fish Audio 的哈希 ID 对它们无意义，避免拿错 ID 请求失败）
+ * - 其它值（裸 ID：MiniMax/OpenAI 音色名、内置声线、手动填写的 Fish Audio 音色 ID）→ 原样返回（完全兼容旧数据）
+ */
+export function voiceIdForProvider(raw: string | null | undefined, provider: TtsConfig['provider']): string {
+  const v = (raw ?? '').trim();
+  if (!v) return '';
+  if (v.startsWith(FISH_VOICE_PREFIX)) {
+    return provider === 'fishaudio' ? v.slice(FISH_VOICE_PREFIX.length).trim() : '';
+  }
+  return v;
+}
+
 export interface ResolvedVoice {
   voiceId: string;
   /** 'contact' = 角色独立音色；'global' = 全局默认；'builtin' = 程序安全默认 */
@@ -107,7 +123,8 @@ export async function resolveVoiceForContact(contactId: string | null | undefine
   if (contactId) {
     try {
       const c = await getContact(contactId);
-      const v = c?.voiceId?.trim();
+      // 多服务商（Task 29）：fishaudio: 前缀音色只在 Fish Audio 服务商下生效，其它服务商忽略落到全局默认
+      const v = voiceIdForProvider(c?.voiceId, cfg.provider);
       const g = c?.gender?.trim() ?? '';
       gender = g.includes('男') ? 'male' : g.includes('女') ? 'female' : null;
       if (v) return { voiceId: v, source: 'contact', gender };

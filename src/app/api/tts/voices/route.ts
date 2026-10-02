@@ -6,13 +6,14 @@ import { NextRequest, NextResponse } from 'next/server';
  * 返回 { voices: [{ id, name }] }；失败返回 { error }。
  * - MiniMax：get_voice 接口（system_voice + voice_cloning 合并）
  * - OpenAI 兼容：无标准音色接口 → 尽力尝试 /audio/voices，拉不到返回空列表由用户手动填写
+ * - Fish Audio：/model 接口（self=true 自己克隆的 + 市场精选合并去重）；拉不到由上层提示手动填音色 ID
  */
 
-import { minimaxVoices, openaiVoices, type TtsProvider, type TtsUpstreamConfig } from '@/lib/server-tts';
+import { fishaudioVoices, minimaxVoices, openaiVoices, type TtsProvider, type TtsUpstreamConfig } from '@/lib/server-tts';
 
 export const runtime = 'nodejs';
 
-const PROVIDERS: TtsProvider[] = ['minimax', 'openai'];
+const PROVIDERS: TtsProvider[] = ['minimax', 'openai', 'fishaudio'];
 
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
   };
 
   try {
-    const voices = provider === 'minimax' ? await minimaxVoices(cfg) : await openaiVoices(cfg);
+    const voices = provider === 'minimax' ? await minimaxVoices(cfg) : provider === 'fishaudio' ? await fishaudioVoices(cfg) : await openaiVoices(cfg);
     return NextResponse.json({ voices });
   } catch (err) {
     // 安全：只透出错误文案，绝不打印 config/apiKey

@@ -3302,10 +3302,12 @@ function AboutPage({ onBack }: { onBack: () => void }) {
 
 // ---------------- 语音 API（TTS） ----------------
 
-/** 服务商预设值（切换服务商时地址/模型名联动，用户仍可改）；模型 chips 含常见第三方 OpenAI 兼容 TTS 模型，拉不到列表时也可直接点选 */
+/** 服务商预设值（切换服务商时地址/模型名联动，用户仍可改）；模型 chips 含常见第三方 OpenAI 兼容 TTS 模型，拉不到列表时也可直接点选；
+ *  Fish Audio 无需模型名（reference_id 即音色），modelChips 留空 */
 const TTS_PROVIDER_PRESETS = {
   minimax: { baseUrl: 'https://api.minimax.chat', model: 'speech-01-turbo', modelChips: ['speech-01-turbo', 'speech-01-hd', 'speech-02-turbo', 'speech-02-hd'] },
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1', modelChips: ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts', 'qwen-tts-latest', 'FunAudioLLM/CosyVoice2-0.5B'] },
+  fishaudio: { baseUrl: 'https://api.fish.audio', model: '', modelChips: [] as readonly string[] },
 } as const;
 
 /** 拉取不到模型列表时的降级提示（语音合成语境，区别于聊天 API 的提示文案） */
@@ -3313,16 +3315,18 @@ const TTS_MODEL_MANUAL_HINT = '该服务商未提供模型列表接口；不需�
 
 /**
  * 语音 API 设置页（与聊天 API / 识图 API 相互独立、互不覆盖）：
- * - 服务商：内置语音（免费）/ MiniMax / OpenAI 兼容；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
+ * - 服务商：内置语音（免费）/ MiniMax / OpenAI 兼容 / Fish Audio；连接配置即改即存（更改自动保存，下一次播放即生效，无需重启）
+ * - 多服务商分槽（Task 29）：切换服务商时快照当前家、恢复目标家（MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖）
  * - 内置语音：浏览器本地引擎（Web Speech），内置 3 女 3 男共 6 个声线，零配置免 API、离线可用，逐个可试听
- * - 音色列表：MiniMax get_voice 拉取；OpenAI 兼容尽力尝试、拉不到手动填
- * - 全局默认音色：角色未设独立 voiceId 时使用（联系人 App 可给角色单独设音色）
+ * - 音色列表：MiniMax get_voice 拉取；Fish Audio /model 拉取（自己克隆的+市场精选）；OpenAI 兼容尽力尝试、拉不到手动填
+ * - 全局默认音色：角色未设独立 voiceId 时使用（聊天设置「他的声音」可给角色单独设音色，Fish Audio 音色存 fishaudio: 前缀）
  * - 试听：用当前配置合成一句样例直接播放
  */
 function VoicePage({ onBack }: { onBack: () => void }) {
   const ttsConfig = useSettings((s) => s.ttsConfig);
   const ttsVoices = useSettings((s) => s.ttsVoices);
   const updateTtsConfig = useSettings((s) => s.updateTtsConfig);
+  const switchTtsProvider = useSettings((s) => s.switchTtsProvider);
   const setTtsVoices = useSettings((s) => s.setTtsVoices);
   // 语音识别（STT）独立配置：与 TTS 互不覆盖
   const sttConfig = useSettings((s) => s.sttConfig);
@@ -3354,8 +3358,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const isMinimax = ttsConfig.provider === 'minimax';
+  const isFish = ttsConfig.provider === 'fishaudio';
+  const isTtsOpenai = ttsConfig.provider === 'openai';
   const isBuiltin = ttsConfig.provider === 'builtin';
-  const preset = TTS_PROVIDER_PRESETS[ttsConfig.provider as 'minimax' | 'openai'];
+  const preset = TTS_PROVIDER_PRESETS[ttsConfig.provider as 'minimax' | 'openai' | 'fishaudio'];
 
   // 内置声线逐个试听状态（在播的声线 id）
   const [previewingBuiltinId, setPreviewingBuiltinId] = useState<string | null>(null);
@@ -3396,23 +3402,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     []
   );
 
-  const switchProvider = (p: 'builtin' | 'minimax' | 'openai') => {
+  const switchProvider = (p: 'builtin' | 'minimax' | 'openai' | 'fishaudio') => {
     if (p === ttsConfig.provider) return;
-    if (p === 'builtin') {
-      // 内置语音无需连接配置：清空 Key 之外的都不动（切回 API 服务商时原值还在）
-      updateTtsConfig({ provider: p });
-    } else {
-      // 地址是另一家的默认值时自动换成当前家的默认值；用户自定义过的地址原样保留
-      // 当前是内置语音时没有「本家默认值」概念（连接配置未展示），直接填目标服务商默认值
-      const prevDefault = ttsConfig.provider === 'builtin' ? '' : TTS_PROVIDER_PRESETS[ttsConfig.provider].baseUrl;
-      const prevModel = ttsConfig.provider === 'builtin' ? '' : TTS_PROVIDER_PRESETS[ttsConfig.provider].model;
-      const nextDefault = TTS_PROVIDER_PRESETS[p].baseUrl;
-      updateTtsConfig({
-        provider: p,
-        baseUrl: !ttsConfig.baseUrl.trim() || ttsConfig.baseUrl.trim() === prevDefault ? nextDefault : ttsConfig.baseUrl,
-        model: ttsConfig.model.trim() === '' || ttsConfig.model.trim() === prevModel ? TTS_PROVIDER_PRESETS[p].model : ttsConfig.model,
-      });
-    }
+    // 多服务商分槽（Task 29）：store 内快照当前家连接配置进本家槽位 → 恢复目标家槽位
+    // （MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖；首次切换填该家默认值）；音色列表缓存同步清空
+    switchTtsProvider(p);
     stopBuiltinSpeech();
     setPreviewingBuiltinId(null);
     setVoicesError('');
@@ -3450,7 +3444,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
       }
       const list = data.voices ?? [];
       if (list.length === 0) {
-        if (!isMinimax) {
+        if (isFish) {
+          // Fish Audio 罕见拉到空列表（两路都空）：优雅降级，手动填音色 ID
+          setVoicesHint('Fish Audio 未返回音色，可直接手动填写音色 ID（在 Fish Audio 模型页复制）');
+          setVoicePanelOpen(false);
+        } else if (!isMinimax) {
           // 第三方 OpenAI 兼容服务商无音色接口：展示 OpenAI 标准六音色作点选建议（也可手动填）
           setTtsVoices(OPENAI_STANDARD_VOICES);
           setVoicesHint('该服务商没有提供音色列表接口，已展示 OpenAI 标准音色供点选；也可以在输入框直接手动填写任意音色名。');
@@ -3578,7 +3576,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
       previewAudioRef.current = null;
     }
     try {
-      const voiceId = ttsConfig.defaultVoiceId.trim() || (isMinimax ? 'female-shaonv' : 'alloy');
+      const voiceId = ttsConfig.defaultVoiceId.trim() || (isMinimax ? 'female-shaonv' : isFish ? '' : 'alloy');
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3617,7 +3615,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     setProviderTestError('');
     setProviderTestOk(false);
     try {
-      const voiceId = ttsConfig.defaultVoiceId.trim() || (isMinimax ? 'female-shaonv' : 'alloy');
+      const voiceId = ttsConfig.defaultVoiceId.trim() || (isMinimax ? 'female-shaonv' : isFish ? '' : 'alloy');
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3741,6 +3739,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
             </button>
             <button
               type="button"
+              data-testid="tts-provider-minimax"
               onClick={() => switchProvider('minimax')}
               className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
                 isMinimax ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
@@ -3750,12 +3749,23 @@ function VoicePage({ onBack }: { onBack: () => void }) {
             </button>
             <button
               type="button"
+              data-testid="tts-provider-openai"
               onClick={() => switchProvider('openai')}
               className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
-                !isMinimax && !isBuiltin ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+                isTtsOpenai ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
               }`}
             >
               OpenAI 兼容
+            </button>
+            <button
+              type="button"
+              data-testid="tts-provider-fishaudio"
+              onClick={() => switchProvider('fishaudio')}
+              className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
+                isFish ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+              }`}
+            >
+              Fish Audio
             </button>
           </div>
         </section>
@@ -3904,7 +3914,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   type={showKey ? 'text' : 'password'}
                   value={ttsConfig.apiKey}
                   onChange={(e) => updateTtsConfig({ apiKey: e.target.value })}
-                  placeholder={isMinimax ? 'eyJhbGciOi...' : 'sk-...'}
+                  placeholder={isMinimax ? 'eyJhbGciOi...' : isFish ? 'Fish Audio 的 API Key（fish.audio 控制台获取）' : 'sk-...'}
                   autoComplete="off"
                   className={`h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06] ${ttsConfig.apiKey ? 'pr-16' : 'pr-10'}`}
                 />
@@ -3948,23 +3958,27 @@ function VoicePage({ onBack }: { onBack: () => void }) {
             )}
 
             <div className="relative">
-              <FieldLabel>模型名{!isMinimax && <span className="ml-1 font-normal text-muted-foreground/70">（选填）</span>}</FieldLabel>
+              <FieldLabel>
+                模型名{!isMinimax && <span className="ml-1 font-normal text-muted-foreground/70">（选填{isFish ? '，Fish Audio 以音色 ID 定位声线' : ''}）</span>}
+              </FieldLabel>
               <div className="flex gap-2">
                 <Input
                   value={ttsConfig.model}
                   onChange={(e) => updateTtsConfig({ model: e.target.value })}
-                  placeholder={isMinimax ? preset.model : `如 ${preset.model}，不需要模型可留空`}
+                  placeholder={isMinimax ? preset.model : isFish ? 'Fish Audio 无需模型名，留空即可' : `如 ${preset.model}，不需要模型可留空`}
                   className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
                 />
-                <button
-                  type="button"
-                  onClick={() => void fetchTtsModels()}
-                  disabled={fetchingModels}
-                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
-                >
-                  {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  拉取模型
-                </button>
+                {!isFish && (
+                  <button
+                    type="button"
+                    onClick={() => void fetchTtsModels()}
+                    disabled={fetchingModels}
+                    className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                  >
+                    {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    拉取模型
+                  </button>
+                )}
               </div>
               {modelsError && (
                 <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
@@ -4031,7 +4045,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               )}
 
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {!isMinimax && (
+                {!isMinimax && !isFish && (
                   <button
                     type="button"
                     onClick={() => updateTtsConfig({ model: '' })}
@@ -4062,7 +4076,9 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground/80">
                 {isMinimax
                   ? 'MiniMax 合成接口必须携带模型名。'
-                  : '不需要模型的服务商可留空：留空时请求不携带 model 参数，需要时再填。'}
+                  : isFish
+                    ? 'Fish Audio 通过音色 ID（reference_id）定位声线，模型名留空即可。'
+                    : '不需要模型的服务商可留空：留空时请求不携带 model 参数，需要时再填。'}
               </p>
             </div>
           </div>
@@ -4076,7 +4092,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               <Input
                 value={ttsConfig.defaultVoiceId}
                 onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
-                placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : '如 alloy（留空用系统默认）'}
+                placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : isFish ? '如 Fish Audio 音色 ID（留空用平台默认音色）' : '如 alloy（留空用系统默认）'}
                 className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
               />
               <button

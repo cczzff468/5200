@@ -86,18 +86,37 @@ export const DEFAULT_IMGGEN_CONFIG: ImgGenConfig = {
 };
 
 /** 语音 API（TTS）配置：与聊天 API（apiConfig）/识图 API（visionConfig）相互独立、互不覆盖。
- *  服务商支持 内置语音（免费、零配置）与 MiniMax / OpenAI 兼容接口；保存后下一次播放即生效（每次播放现场读取，无缓存无重启） */
+ *  服务商支持 内置语音（免费、零配置）与 MiniMax / OpenAI 兼容 / Fish Audio；保存后下一次播放即生效（每次播放现场读取，无缓存无重启）
+ *
+ *  多服务商分槽（Task 29）：顶层字段始终是「当前激活服务商」的连接配置（运行时读取路径零改动），
+ *  accounts 按服务商各存一份快照——切换服务商时快照当前、恢复目标，MiniMax 等已有配置互不覆盖。 */
+export type TtsProviderKind = 'minimax' | 'openai' | 'fishaudio';
+
+/** 单个服务商的连接配置快照（accounts 槽位；顶层字段=当前激活服务商的镜像） */
+export interface TtsAccount {
+  baseUrl: string;
+  apiKey: string;
+  /** MiniMax 专属 GroupId */
+  groupId: string;
+  model: string;
+  /** 该服务商的全局默认音色（角色未设独立 voiceId 时用） */
+  defaultVoiceId: string;
+}
+
 export interface TtsConfig {
-  /** 'builtin' = 内置语音（浏览器本地引擎，男女声线免配置）；'minimax' = MiniMax（t2a_v2）；'openai' = OpenAI 兼容（/audio/speech） */
-  provider: 'builtin' | 'minimax' | 'openai';
+  /** 'builtin' = 内置语音（浏览器本地引擎，男女声线免配置）；'minimax' = MiniMax（t2a_v2）；
+   *  'openai' = OpenAI 兼容（/audio/speech）；'fishaudio' = Fish Audio（/v1/tts，reference_id 即音色） */
+  provider: 'builtin' | TtsProviderKind;
   baseUrl: string;
   apiKey: string;
   /** MiniMax 专属：账户 GroupId（get_voice / t2a_v2 必填） */
   groupId: string;
-  /** 模型名（如 speech-01-turbo / tts-1） */
+  /** 模型名（如 speech-01-turbo / tts-1；Fish Audio 当前接口无需模型名，可留空） */
   model: string;
-  /** 全局默认音色（角色未设独立 voiceId 时用；空 = 用服务商安全默认音色） */
+  /** 全局默认音色（角色未设独立 voiceId 时用；空 = 用服务商安全默认音色；Fish Audio 空 = 平台默认音色） */
   defaultVoiceId: string;
+  /** 各服务商独立配置槽（切换服务商时快照/恢复；旧存档无此字段，首次切换时自动生成） */
+  accounts?: Partial<Record<TtsProviderKind, TtsAccount>>;
 }
 
 /** 拉取到的音色列表缓存（设置页与联系人音色选择器共用；也支持手动填写不受限） */
@@ -113,13 +132,44 @@ export const DEFAULT_TTS_CONFIG: TtsConfig = {
   groupId: '',
   model: 'speech-01-turbo',
   defaultVoiceId: '',
+  accounts: {},
 };
 
-/** 各服务商的程序安全默认音色（角色/全局都没配时兑底；与服务端 /api/tts 保持一致） */
+/** Fish Audio 官方 API 地址（首次切到 Fish Audio 时自动填入，可改） */
+export const FISHAUDIO_DEFAULT_BASE_URL = 'https://api.fish.audio';
+
+/** Fish Audio 音色存储前缀：联系人/我的音色绑定 Fish Audio 音色时用
+ *  `fishaudio:<音色ID>` 命名空间隔离（其他服务商读到带前缀的音色会忽略，避免拿 MiniMax 的音色 ID 去请求 Fish Audio） */
+export const FISH_VOICE_PREFIX = 'fishaudio:';
+
+/** 旧存档的 accounts 槽位净化：非对象返回空对象；每个槽位逐字段校验为字符串（脏数据丢弃回默认） */
+function sanitizeTtsAccounts(raw: unknown): TtsConfig['accounts'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: NonNullable<TtsConfig['accounts']> = {};
+  const src = raw as Record<string, unknown>;
+  for (const kind of ['minimax', 'openai', 'fishaudio'] as const) {
+    const slot = src[kind];
+    if (!slot || typeof slot !== 'object' || Array.isArray(slot)) continue;
+    const s = slot as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' ? v : '');
+    out[kind] = {
+      baseUrl: str(s.baseUrl),
+      apiKey: str(s.apiKey),
+      groupId: str(s.groupId),
+      model: str(s.model),
+      defaultVoiceId: str(s.defaultVoiceId),
+    };
+  }
+  return out;
+}
+
+/** 各服务商的程序安全默认音色（角色/全局都没配时兑底；与服务端 /api/tts 保持一致）。
+ *  fishaudio 留空：/v1/tts 不带 reference_id 时 Fish Audio 自动用平台默认音色，不报错 */
 export const SAFE_VOICE_BY_PROVIDER: Record<TtsConfig['provider'], string> = {
   builtin: 'builtin:xiaoyue',
   minimax: 'female-shaonv',
   openai: 'alloy',
+  fishaudio: '',
 };
 
 /** 语音识别（STT）配置：与 TTS 配置相互独立、互不覆盖，用于语音消息「转文字」。
@@ -319,6 +369,9 @@ interface SettingsState {
   setAddressMode: (m: AddressMode) => void;
   /** 更新语音 API 配置（立即持久化；播放时现场读取 → 保存后自动生效，无需重启） */
   updateTtsConfig: (patch: Partial<TtsConfig>) => void;
+  /** 切换语音服务商（Task 29）：快照当前连接配置进本家槽位 → 恢复目标槽位（首次切换填该家默认值）；
+   *  MiniMax 等已有配置互不覆盖；音色列表缓存同步清空（切换后重新拉取当前服务商的音色） */
+  switchTtsProvider: (next: TtsConfig['provider']) => void;
   /** 更新语音识别（STT）配置（立即持久化；转文字时现场读取 → 保存后自动生效，无需重启） */
   updateSttConfig: (patch: Partial<SttConfig>) => void;
   /** 更新音色列表缓存（持久化到 IndexedDB settings.ttsVoices） */
@@ -531,13 +584,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
       if (ttsRec && typeof ttsRec.value === 'object' && ttsRec.value !== null) {
         const v = ((await decryptValue<Partial<TtsConfig>>(ttsRec.value)) ?? ttsRec.value) as Partial<TtsConfig>;
         ttsConfig = {
-          provider: v.provider === 'builtin' || v.provider === 'openai' ? v.provider : 'minimax',
+          provider: v.provider === 'builtin' || v.provider === 'openai' || v.provider === 'fishaudio' ? v.provider : 'minimax',
           baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : DEFAULT_TTS_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
           groupId: typeof v.groupId === 'string' ? v.groupId : '',
-          // 模型允许为空（OpenAI 兼容服务商可以不需要模型）：只有字段缺失/非字符串才回退默认值
+          // 模型允许为空（OpenAI 兼容 / Fish Audio 可以不需要模型）：只有字段缺失/非字符串才回退默认值
           model: typeof v.model === 'string' ? v.model : DEFAULT_TTS_CONFIG.model,
           defaultVoiceId: typeof v.defaultVoiceId === 'string' ? v.defaultVoiceId : '',
+          // 多服务商分槽（Task 29）：旧存档无此字段 → 空对象（首次切换服务商时自动把当前配置快照进槽）
+          accounts: sanitizeTtsAccounts(v.accounts),
         };
         const ttsWasPlain = !('__enc' in (ttsRec.value as object));
         if (ttsWasPlain && ttsConfig.apiKey.length > 0) {
@@ -769,8 +824,59 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
   updateTtsConfig: (patch) => {
     const ttsConfig = { ...get().ttsConfig, ...patch };
+    // 多服务商分槽（Task 29）：当前是 API 服务商时把连接配置同步写进本家槽位（保证切换回来时是最新值）
+    if (ttsConfig.provider !== 'builtin') {
+      ttsConfig.accounts = {
+        ...(ttsConfig.accounts ?? {}),
+        [ttsConfig.provider]: {
+          baseUrl: ttsConfig.baseUrl,
+          apiKey: ttsConfig.apiKey,
+          groupId: ttsConfig.groupId,
+          model: ttsConfig.model,
+          defaultVoiceId: ttsConfig.defaultVoiceId,
+        },
+      };
+    }
     set({ ttsConfig });
     // 安全：含 apiKey，密文落盘（与 apiConfig 同策略）
+    void encryptValue(ttsConfig)
+      .then((v) => localDB.put('settings', { key: 'ttsConfig', value: v }))
+      .catch(() => undefined);
+  },
+
+  /** 切换语音服务商（Task 29）：快照当前连接配置进本家槽位 → 恢复目标槽位（首次切换填该家默认值）。
+   *  MiniMax 等已有 Key/GroupId/模型/默认音色互不覆盖；音色列表缓存同步清空（切换后需重新拉取当前家的音色） */
+  switchTtsProvider: (next) => {
+    const cur = get().ttsConfig;
+    if (cur.provider === next) return;
+    const accounts: NonNullable<TtsConfig['accounts']> = { ...(cur.accounts ?? {}) };
+    if (cur.provider !== 'builtin') {
+      accounts[cur.provider] = {
+        baseUrl: cur.baseUrl,
+        apiKey: cur.apiKey,
+        groupId: cur.groupId,
+        model: cur.model,
+        defaultVoiceId: cur.defaultVoiceId,
+      };
+    }
+    const saved = next === 'builtin' ? undefined : accounts[next];
+    const firstDefaults: Record<TtsProviderKind, { baseUrl: string; model: string }> = {
+      minimax: { baseUrl: 'https://api.minimax.chat', model: 'speech-01-turbo' },
+      openai: { baseUrl: 'https://api.openai.com/v1', model: 'tts-1' },
+      fishaudio: { baseUrl: FISHAUDIO_DEFAULT_BASE_URL, model: '' },
+    };
+    const d = next === 'builtin' ? undefined : firstDefaults[next];
+    const ttsConfig: TtsConfig = {
+      ...cur,
+      provider: next,
+      baseUrl: saved ? saved.baseUrl : d?.baseUrl ?? '',
+      apiKey: saved?.apiKey ?? '',
+      groupId: saved?.groupId ?? '',
+      model: saved ? saved.model : d?.model ?? '',
+      defaultVoiceId: saved?.defaultVoiceId ?? '',
+      accounts,
+    };
+    set({ ttsConfig, ttsVoices: [] });
     void encryptValue(ttsConfig)
       .then((v) => localDB.put('settings', { key: 'ttsConfig', value: v }))
       .catch(() => undefined);
