@@ -247,7 +247,7 @@ function ReminderSheet({
             type="button"
             onClick={onClose}
             aria-label="关闭详情"
-            className="absolute right-4 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-muted transition-opacity active:opacity-60"
+            className="absolute right-4 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
           >
             <X className="h-4 w-4" strokeWidth={2.4} />
           </button>
@@ -259,14 +259,14 @@ function ReminderSheet({
             onChange={(e) => setTitle(e.target.value)}
             placeholder="标题"
             aria-label="提醒标题"
-            className="h-11 rounded-[12px] border-none bg-muted text-[17px] placeholder:text-muted-foreground/60"
+            className="h-11 rounded-[14px] border-none bg-white/60 text-[17px] ring-1 ring-white/70 backdrop-blur-xl placeholder:text-muted-foreground/60 dark:bg-white/[0.08] dark:ring-white/[0.1]"
           />
           <Textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="备注"
             aria-label="备注"
-            className="min-h-[76px] rounded-[12px] border-none bg-muted text-[15px] placeholder:text-muted-foreground/60"
+            className="min-h-[76px] rounded-[14px] border-none bg-white/60 text-[15px] ring-1 ring-white/70 backdrop-blur-xl placeholder:text-muted-foreground/60 dark:bg-white/[0.08] dark:ring-white/[0.1]"
           />
           <div className="flex gap-3">
             <input
@@ -274,22 +274,22 @@ function ReminderSheet({
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}
               aria-label="到期日期"
-              className="h-11 min-w-0 flex-1 rounded-[12px] bg-muted px-3 text-[15px] text-foreground outline-none [color-scheme:light] dark:[color-scheme:dark]"
+              className="h-11 min-w-0 flex-1 rounded-[14px] bg-white/60 px-3 text-[15px] text-foreground outline-none ring-1 ring-white/70 backdrop-blur-xl [color-scheme:light] dark:bg-white/[0.08] dark:ring-white/[0.1] dark:[color-scheme:dark]"
             />
             <input
               type="time"
               value={dueTime}
               onChange={(e) => setDueTime(e.target.value)}
               aria-label="到期时间"
-              className="h-11 min-w-0 flex-1 rounded-[12px] bg-muted px-3 text-[15px] text-foreground outline-none [color-scheme:light] dark:[color-scheme:dark]"
+              className="h-11 min-w-0 flex-1 rounded-[14px] bg-white/60 px-3 text-[15px] text-foreground outline-none ring-1 ring-white/70 backdrop-blur-xl [color-scheme:light] dark:bg-white/[0.08] dark:ring-white/[0.1] dark:[color-scheme:dark]"
             />
           </div>
-          <div className="flex h-11 items-center justify-between rounded-[12px] bg-muted px-4">
+          <div className="flex h-11 items-center justify-between rounded-[14px] bg-white/60 px-4 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             <span className="text-[15px]">标记</span>
             <Switch checked={flagged} onCheckedChange={setFlagged} aria-label="标记提醒" />
           </div>
           {/* #24：重复选择——预设 4 项 + 自定义 weekday 多选 */}
-          <div className="rounded-[12px] bg-muted px-4 py-3">
+          <div className="rounded-[14px] bg-white/60 px-4 py-3 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             <div className="text-[15px]">重复</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {REPEAT_PRESETS.map((p) => {
@@ -305,10 +305,10 @@ function ReminderSheet({
                     type="button"
                     onClick={() => applyPreset(p.weekdays)}
                     aria-pressed={active}
-                    className={`rounded-full px-3.5 py-[7px] text-[13px] leading-none transition-colors ${
+                    className={`rounded-full px-3.5 py-[7px] text-[13px] leading-none shadow-sm transition active:scale-[0.96] ${
                       active
                         ? 'bg-foreground font-medium text-background'
-                        : 'bg-background/70 text-foreground/80 active:opacity-60'
+                        : 'bg-white/60 text-foreground/80 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
                     }`}
                   >
                     {p.label}
@@ -320,10 +320,10 @@ function ReminderSheet({
                 onClick={() => setCustomOpen((v) => !v)}
                 aria-pressed={customOpen}
                 aria-label="自定义重复星期"
-                className={`rounded-full px-3.5 py-[7px] text-[13px] leading-none transition-colors ${
+                className={`rounded-full px-3.5 py-[7px] text-[13px] leading-none shadow-sm transition active:scale-[0.96] ${
                   customOpen || (repeat.length > 0 && !matchedPreset)
                     ? 'bg-foreground font-medium text-background'
-                    : 'bg-background/70 text-foreground/80 active:opacity-60'
+                    : 'bg-white/60 text-foreground/80 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
                 }`}
               >
                 自定义
@@ -340,10 +340,10 @@ function ReminderSheet({
                       onClick={() => toggleWeekday(idx)}
                       aria-pressed={on}
                       aria-label={`周${lbl}`}
-                      className={`flex h-8 w-8 items-center justify-center rounded-full text-[13px] transition-colors ${
+                      className={`flex h-8 w-8 items-center justify-center rounded-full text-[13px] shadow-sm transition active:scale-[0.96] ${
                         on
                           ? 'bg-foreground font-medium text-background'
-                          : 'bg-background/70 text-foreground/70 active:opacity-60'
+                          : 'bg-white/60 text-foreground/70 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
                       }`}
                     >
                       {lbl}
@@ -362,7 +362,7 @@ function ReminderSheet({
           <button
             type="button"
             onClick={() => onDelete(reminder.id)}
-            className="h-11 rounded-[12px] bg-muted text-[17px] text-[#FF453A] transition-opacity active:opacity-60"
+            className="h-11 rounded-[14px] bg-white/60 text-[17px] text-[#FF453A] ring-1 ring-white/70 backdrop-blur-xl transition-opacity active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]"
           >
             删除提醒
           </button>
@@ -563,7 +563,7 @@ export default function RemindersApp() {
             </div>
           ) : (
             reminders.length > 0 && (
-              <div className="divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+              <div className="divide-y divide-border/60 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
                 {pending.map((r) => (
                   <ReminderRow key={r.id} r={r} onToggle={toggleDone} onInfo={setEditing} />
                 ))}
@@ -597,7 +597,7 @@ export default function RemindersApp() {
 
       {/* 底部快速新建栏（避开 28px Home 热区） */}
       <div className="absolute inset-x-4 bottom-[34px] z-30">
-        <div className="flex items-center gap-3 rounded-full border border-border/60 bg-card px-4 py-3 shadow-lg">
+        <div className="flex items-center gap-3 rounded-full bg-white/60 px-4 py-3 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <Plus className="h-6 w-6 shrink-0 text-muted-foreground/70" strokeWidth={2} />
           <input
             ref={inputRef}

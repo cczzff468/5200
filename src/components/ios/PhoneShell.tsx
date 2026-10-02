@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
@@ -63,6 +63,8 @@ export default function PhoneShell() {
   const loaded = useSettings((s) => s.loaded);
   const customWallpaperUrl = useSettings((s) => s.customWallpaperUrl);
   const wallpaperStyle = useWallpaperStyle();
+  // 全局字体大小倍率（Task 34-a）：zoom 放大全部 px 文本/布局，容器尺寸 calc 反向补偿占位不变
+  const appFontScale = useSettings((s) => s.appFontScale);
   // 横杠颜色与状态栏同一套判定（但按壁纸底部区域实测，上亮下暗壁纸横杠可独立选色）：身后背景深→白杠、浅→黑杠
   const barLight = useLightForeground('bottom');
   // 灵动岛通知展示中（含收起动画）：灵动岛隐藏，通知卡在同一几何位无缝形变，收起后灵动岛恢复
@@ -70,6 +72,15 @@ export default function PhoneShell() {
   const shellRef = useRef<HTMLDivElement | null>(null);
   /** 底部边缘上滑手势进行中状态（fired 防止同一次滑动重复触发） */
   const edgeGesture = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  // 字体大小反向补偿的断点（与 sm: 同步）：桌面端固定 390x844 机身，移动端铺满视口
+  const [smBreak, setSmBreak] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 640px)');
+    const sync = () => setSmBreak(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
 
   // 启动时一次性迁移：旧版存服务端的联系人/微信背景图 → 本地 IndexedDB（先搬后删，详见 contacts-store.ts）
   useEffect(() => {
@@ -199,9 +210,19 @@ export default function PhoneShell() {
     <div className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8">
       <div
         ref={shellRef}
-        className={`relative h-[100svh] w-full overflow-hidden bg-black text-foreground sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
+        className={`relative overflow-hidden bg-black text-foreground sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
           dark ? 'dark' : ''
         }`}
+        style={{
+          // Task 34-a 字体大小：transform scale 放大内部全部 px 文本/布局，尺寸 calc 反向补偿（占位不变，
+          // origin center 保持 flex 居中）。不用 zoom：zoom 的 getBoundingClientRect 返回布局坐标而非
+          // 视觉坐标，与事件 clientX（视觉系）错位会破坏全项目拖拽/滑动手势数学；transform 的 rect
+          // 返回视觉尺寸是浏览器标准行为，坐标恒一致。scale=1 时不输出任何属性，零行为变化。
+          transform: appFontScale === 1 ? undefined : `scale(${appFontScale})`,
+          transformOrigin: 'center center',
+          width: smBreak ? `calc(390px / ${appFontScale})` : `calc(100% / ${appFontScale})`,
+          height: smBreak ? `calc(844px / ${appFontScale})` : `calc(100svh / ${appFontScale})`,
+        }}
       >
         {/* 壁纸层：自定义壁纸绘制见 CustomWallpaperLayers（D6：四周「边缘色延伸带」——
             取原图最外一行/列像素拉伸铺出，无 blur、接缝逐像素同色，肉眼几乎看不出垫了东西；

@@ -28,7 +28,7 @@ function ConfirmDialog({
   return (
     <div className="absolute inset-0 z-[70] grid place-items-center px-8" role="dialog" aria-label="确认删除">
       <button type="button" aria-label="取消" onClick={onCancel} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-[14px] bg-background p-4 shadow-2xl">
+      <div className="relative w-full rounded-[20px] bg-white/85 p-4 shadow-2xl ring-1 ring-white/70 backdrop-blur-2xl dark:bg-[#1C1C1E]/90 dark:ring-white/[0.09]">
         <p className="text-center text-[15px] leading-relaxed text-foreground">{message}</p>
         <div className="mt-4 flex gap-2">
           <button
@@ -282,7 +282,7 @@ function RecordingRow({
               if (e.key === 'Escape') onRenameCommit('');
             }}
             onBlur={(e) => onRenameCommit(e.currentTarget.value)}
-            className="w-full rounded-[10px] bg-muted px-2.5 py-1 text-[17px] text-foreground outline-none focus:ring-2 focus:ring-foreground/30"
+            className="w-full rounded-[14px] bg-white/60 px-2.5 py-1 text-[17px] text-foreground outline-none ring-1 ring-white/70 backdrop-blur-xl focus:ring-2 focus:ring-foreground/30 dark:bg-white/[0.08] dark:ring-white/[0.1]"
           />
         ) : (
           <>
@@ -313,7 +313,7 @@ function RecordingRow({
               type="button"
               onClick={onTogglePlay}
               aria-label={isPlaying ? `暂停播放「${record.name}」` : `播放「${record.name}」`}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted transition duration-150 active:scale-90"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition duration-150 active:scale-90 dark:bg-white/[0.08] dark:ring-white/[0.1]"
             >
               {isPlaying ? (
                 <Pause className="h-[18px] w-[18px]" fill="currentColor" />
@@ -321,7 +321,7 @@ function RecordingRow({
                 <Play className="ml-0.5 h-[18px] w-[18px]" fill="currentColor" />
               )}
             </button>
-            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-white/60 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
               <div
                 className="h-full rounded-full bg-foreground/85 transition-[width] duration-150"
                 style={{ width: `${pct}%` }}
@@ -338,7 +338,7 @@ function RecordingRow({
             <button
               type="button"
               onClick={onRenameStart}
-              className="flex items-center gap-1.5 rounded-full bg-muted px-3.5 py-1.5 text-[13px] transition-colors active:bg-muted/60"
+              className="flex items-center gap-1.5 rounded-full bg-white/60 px-3.5 py-1.5 text-[13px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
             >
               <Pencil className="h-3.5 w-3.5" />
               重命名
@@ -346,7 +346,7 @@ function RecordingRow({
             <button
               type="button"
               onClick={onShare}
-              className="flex items-center gap-1.5 rounded-full bg-muted px-3.5 py-1.5 text-[13px] transition-colors active:bg-muted/60"
+              className="flex items-center gap-1.5 rounded-full bg-white/60 px-3.5 py-1.5 text-[13px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
             >
               <Share2 className="h-3.5 w-3.5" />
               分享
@@ -354,7 +354,7 @@ function RecordingRow({
             <button
               type="button"
               onClick={onDelete}
-              className="flex items-center gap-1.5 rounded-full bg-[#FF453A]/10 px-3.5 py-1.5 text-[13px] text-[#FF453A] transition-colors active:bg-[#FF453A]/20"
+              className="flex items-center gap-1.5 rounded-full bg-[#FF453A]/10 px-3.5 py-1.5 text-[13px] text-[#FF453A] shadow-sm ring-1 ring-[#FF453A]/25 backdrop-blur-xl transition active:scale-[0.96] dark:bg-[#FF453A]/15 dark:ring-[#FF453A]/30"
             >
               <Trash2 className="h-3.5 w-3.5" />
               删除
@@ -752,10 +752,10 @@ export default function RecorderApp() {
         ) : (
           groups.map((group) => (
             <div key={group.label} className="mb-4">
-              <div className="sticky top-0 z-10 bg-background/85 px-6 py-1.5 text-[13px] font-semibold text-muted-foreground backdrop-blur">
+              <div className="sticky top-0 z-10 bg-background/60 px-6 py-1.5 text-[13px] font-semibold text-muted-foreground backdrop-blur-xl">
                 {group.label}
               </div>
-              <div className="mx-4 divide-y divide-border/40 overflow-hidden rounded-[16px] bg-card">
+              <div className="mx-4 divide-y divide-border/40 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
                 {group.items.map((rec) => (
                   <RecordingRow
                     key={rec.id}
@@ -780,7 +780,7 @@ export default function RecorderApp() {
       </div>
 
       {/* 底部录音区：波形舞台 + 大计时 + 录音钮 */}
-      <div className="shrink-0 border-t border-border/60 bg-background px-6 pb-[34px] pt-3">
+      <div className="shrink-0 border-t border-white/70 bg-white/60 px-6 pb-[34px] pt-3 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
         <canvas
           ref={canvasRef}
           className="h-[72px] w-full [mask-image:linear-gradient(to_right,transparent,black_9%,black_91%,transparent)]"
@@ -817,7 +817,7 @@ export default function RecorderApp() {
                 type="button"
                 onClick={togglePause}
                 aria-label={status === 'paused' ? '继续录音' : '暂停录音'}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-foreground transition duration-150 active:scale-90"
+                className="flex h-12 w-12 items-center justify-center rounded-full bg-white/60 text-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition duration-150 active:scale-90 dark:bg-white/[0.08] dark:ring-white/[0.1]"
               >
                 {status === 'paused' ? (
                   <Play className="h-5 w-5 translate-x-[1px]" fill="currentColor" />

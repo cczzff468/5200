@@ -71,7 +71,7 @@ import {
 // ---------------- 主题 token（黑白灰，深色自动适配） ----------------
 
 const PAGE_CLS = 'bg-[#F2F2F7] text-black dark:bg-black dark:text-white';
-const CARD_CLS = 'overflow-hidden rounded-[14px] bg-white dark:bg-[#1C1C1E]';
+const CARD_CLS = 'overflow-hidden rounded-[16px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]';
 const DIVIDER_CLS = 'border-black/[0.06] dark:border-white/[0.08]';
 const SUB_CLS = 'text-black/45 dark:text-white/45';
 const CAPTION_CLS = `px-1 pt-2 text-[12.5px] leading-[1.6] ${SUB_CLS}`;
@@ -256,7 +256,7 @@ function CreateBookDialog({
   return (
     <div className="absolute inset-0 z-[70] grid place-items-center px-6" role="dialog" aria-label="新建世界书">
       <button type="button" aria-label="取消" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative flex max-h-[88%] w-full flex-col overflow-y-auto rounded-[24px] bg-white p-5 pb-6 dark:bg-[#1C1C1E]" data-testid="wb-create-dialog">
+      <div className="relative flex max-h-[88%] w-full flex-col overflow-y-auto rounded-[24px] bg-white/75 p-5 pb-6 shadow-[0_8px_28px_rgba(17,24,39,0.1)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-[#1C1C1E]/85 dark:ring-white/[0.09]" data-testid="wb-create-dialog">
         <button
           type="button"
           aria-label="关闭"
@@ -918,7 +918,7 @@ export default function WorldBookApp() {
       {/* 底部范围筛选栏（书库首页）：椭圆胶囊底座整体包裹，激活黑底白字圆片；整体上移（加大底部留白） */}
       {nav.name === 'list' && (
         <div className="shrink-0 px-4 pb-[calc(1.35rem+env(safe-area-inset-bottom))] pt-1" data-testid="wb-scope-bar">
-          <div className="flex items-center gap-1 rounded-full bg-black/[0.05] p-1 dark:bg-white/[0.09]">
+          <div className="flex items-center gap-1 rounded-full bg-white/60 p-1 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             {([
               ['all', '全部'],
               ['global', WB_SCOPE_LABELS.global],
@@ -1159,7 +1159,7 @@ function BookListPage({
             type="button"
             data-testid="wb-char-filter"
             onClick={onOpenCharSheet}
-            className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-black/[0.05] px-2.5 text-[12px] active:bg-black/[0.1] dark:bg-white/[0.1] dark:active:bg-white/[0.16]"
+            className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-white/60 px-2.5 text-[12px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
           >
             {charFilterName || '全部角色'}
             <ChevronDown className="h-3.5 w-3.5 opacity-50" strokeWidth={2.2} aria-hidden="true" />
@@ -1428,7 +1428,7 @@ function BookDetailPage({
         type="button"
         data-testid="wb-detail-add"
         onClick={onAddEntry}
-        className="mt-3 flex w-full items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/25 py-4 text-[16px] font-semibold active:bg-black/[0.03] dark:border-white/30 dark:active:bg-white/[0.05]"
+        className="mt-3 flex w-full items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/25 bg-white/50 py-4 text-[16px] font-semibold backdrop-blur-xl active:bg-black/[0.03] dark:border-white/30 dark:bg-white/[0.04] dark:active:bg-white/[0.05]"
       >
         <Plus className="h-[18px] w-[18px]" strokeWidth={2.4} aria-hidden="true" />
         新建条目
@@ -1698,7 +1698,7 @@ function EntryEditorPage({
             type="button"
             data-testid="wb-edit-delete"
             onClick={onDelete}
-            className={`flex h-11 w-full items-center justify-center gap-1.5 rounded-[12px] bg-white text-[15.5px] active:bg-black/[0.04] dark:bg-[#1C1C1E] dark:active:bg-white/[0.08] ${DESTRUCTIVE_CLS}`}
+            className={`flex h-11 w-full items-center justify-center gap-1.5 rounded-[12px] bg-white/60 text-[15.5px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.98] active:bg-black/[0.04] dark:bg-white/[0.08] dark:ring-white/[0.1] dark:active:bg-white/[0.12] ${DESTRUCTIVE_CLS}`}
           >
             <Trash2 className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
             删除条目

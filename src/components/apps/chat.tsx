@@ -813,7 +813,7 @@ function SmsPlusPanel({ onAction }: { onAction: (a: SmsPlusAction) => void }) {
   ];
   return (
     <div
-      className="z-20 shrink-0 border-t border-border/50 bg-[#F2F2F7] px-2 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 backdrop-blur-xl dark:bg-[#161616]"
+      className="z-20 shrink-0 border-t border-white/60 bg-white/60 px-2 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
       data-testid="sms-plus-panel"
     >
       <div className="grid grid-cols-3">
@@ -825,7 +825,7 @@ function SmsPlusPanel({ onAction }: { onAction: (a: SmsPlusAction) => void }) {
             onClick={() => onAction(it.key)}
             className="flex flex-col items-center gap-[7px] py-2 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
           >
-            <span className="flex h-[57px] w-[57px] items-center justify-center rounded-[14px] bg-white text-black/70 shadow-[0_1px_5px_rgba(0,0,0,0.05)] dark:bg-[#242428] dark:text-white/75">
+            <span className="flex h-[57px] w-[57px] items-center justify-center rounded-[14px] bg-white/70 text-black/70 shadow-[0_1px_5px_rgba(0,0,0,0.05)] ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.1] dark:text-white/75 dark:ring-white/[0.1]">
               {it.icon}
             </span>
             <span className="text-[12px] text-black/60 dark:text-white/60">{it.label}</span>
@@ -858,7 +858,7 @@ function SmsTextCardSheet({
   };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45" data-testid="sms-textcard-sheet">
-      <div className="w-full max-w-[420px] rounded-t-[16px] bg-white px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 dark:bg-[#1C1C1E]">
+      <div className="w-full max-w-[420px] rounded-t-[20px] bg-white/85 px-4 pb-[max(18px,env(safe-area-inset-bottom))] pt-4 shadow-[0_8px_28px_rgba(17,24,39,0.14)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-[#1C1C1E]/85 dark:ring-white/[0.09]">
         <div className="mb-3 flex items-center justify-between">
           <p className="text-[17px] font-semibold">写一张文字图片发给{charName}</p>
           <button
@@ -867,7 +867,7 @@ function SmsTextCardSheet({
             data-testid="sms-textcard-close"
             onClick={onClose}
             disabled={busy}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.05] text-black/50 disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/60 text-black/50 ring-1 ring-white/70 backdrop-blur-xl disabled:opacity-40 dark:bg-white/[0.08] dark:text-white/60 dark:ring-white/[0.1]"
           >
             <X className="h-4 w-4" strokeWidth={2.2} />
           </button>
@@ -880,7 +880,7 @@ function SmsTextCardSheet({
           maxLength={160}
           data-testid="sms-textcard-input"
           placeholder="写点想印在卡片上的字（留空 = AI 结合 TA 的人设和你们的聊天记录帮你写）"
-          className="w-full resize-none rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 text-[15px] leading-[1.6] outline-none placeholder:text-black/30 focus:border-[#007AFF]/60 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-white/30"
+          className="w-full resize-none rounded-[12px] bg-white/60 p-3 text-[15px] leading-[1.6] outline-none ring-1 ring-white/70 backdrop-blur-xl placeholder:text-black/30 focus:ring-2 focus:ring-[#007AFF]/60 disabled:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1] dark:placeholder:text-white/30"
         />
         {error ? (
           <p data-testid="sms-textcard-error" className="mt-2 text-[13px] leading-[1.5] text-red-500">
@@ -2856,7 +2856,7 @@ function ChatView({
   return (
     <div ref={pageRef} className="relative flex h-full min-h-0 flex-col">
       {/* 顶栏：返回箭头 + 居中头像/手机号（不显示名字）+ 摄像机图标（聊天设置入口） */}
-      <div className="z-20 shrink-0 border-b border-border/50 bg-background/80 pt-[54px] backdrop-blur-xl">
+      <div className="z-20 shrink-0 border-b border-white/60 bg-white/60 pt-[54px] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
         <div className="relative flex h-[64px] items-center px-3">
           <IOSBackButton label="" onClick={onBack} />
           <div
@@ -3286,7 +3286,7 @@ function ChatView({
       {/* 输入栏（多选模式下变为批量删除操作栏）：引用条 + 圆钮 / iMessage输入框（麦克风↔发送） */}
       {selectMode ? (
         <div
-          className="z-20 flex shrink-0 items-center justify-between border-t border-border/50 bg-background/85 px-6 pb-[30px] pt-2 backdrop-blur-xl"
+          className="z-20 flex shrink-0 items-center justify-between border-t border-white/60 bg-white/60 px-6 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
           data-testid="sms-select-bar"
         >
           <button type="button" data-testid="sms-select-cancel" onClick={exitSelect} className="text-[15px] text-muted-foreground">
@@ -3310,7 +3310,7 @@ function ChatView({
       {wbContactId && blk.byChar === true && blk.userReqStatus !== 'pending' && (blk.userReqRejectedCount ?? 0) < BLOCK_REQ_MAX_REJECTED && (
         userReqOpen ? (
           <div
-            className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-3 py-2 backdrop-blur-xl"
+            className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-3 py-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
             data-testid="sms-user-blockreq-panel"
           >
             <input
@@ -3321,7 +3321,7 @@ function ChatView({
               placeholder={`向「${peerLabel}」写一句申请理由…`}
               aria-label="解除拉黑申请理由"
               data-testid="sms-user-blockreq-input"
-              className="h-[34px] min-w-0 flex-1 rounded-full border border-border/70 bg-background px-3.5 text-[14px] outline-none placeholder:text-muted-foreground/50"
+              className="h-[34px] min-w-0 flex-1 rounded-full bg-white/60 px-3.5 text-[14px] outline-none ring-1 ring-white/70 backdrop-blur-xl placeholder:text-muted-foreground/50 dark:bg-white/[0.08] dark:ring-white/[0.1]"
             />
             <button
               type="button"
@@ -3346,7 +3346,7 @@ function ChatView({
           </div>
         ) : (
           <div
-            className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-3 py-1.5 backdrop-blur-xl"
+            className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-3 py-1.5 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
             data-testid="sms-user-blockreq-bar"
           >
             <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">你已被「{peerLabel}」拉黑，无法发送消息</p>
@@ -3364,7 +3364,7 @@ function ChatView({
       {/* 引用条（长按菜单「引用」后显示在输入栏上方；发送时挂到新消息上） */}
       {quote && (
         <div
-          className="z-20 flex shrink-0 items-start gap-2 border-t border-border/50 bg-background/85 px-3 py-1.5 backdrop-blur-xl"
+          className="z-20 flex shrink-0 items-start gap-2 border-t border-white/60 bg-white/60 px-3 py-1.5 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
           data-testid="sms-quote-bar"
         >
           <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">
@@ -3388,7 +3388,7 @@ function ChatView({
           else if (pendingImgs.length > 0) sendPendingImages();
           else dispatchBatch();
         }}
-        className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-2.5 pb-[30px] pt-2 backdrop-blur-xl"
+        className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
       >
         {/* 加号（更多功能）：相机/图片/文字图片面板；iOS 同款灰色圆圈内加号，展开时旋转 45°（对齐微信加号交互） */}
         <button
@@ -3397,11 +3397,11 @@ function ChatView({
           aria-expanded={plusOpen}
           data-testid="sms-plus-button"
           onClick={() => setPlusOpen((v) => !v)}
-          className="flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-black/[0.07] text-muted-foreground transition-all active:opacity-60 dark:bg-white/[0.12]"
+          className="flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]"
         >
           <Plus className={`h-[19px] w-[19px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={2} aria-hidden="true" />
         </button>
-        <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full border border-border/70 bg-background pl-3.5 pr-1.5">
+        <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           {voiceMode ? (
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
             <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
@@ -3472,7 +3472,7 @@ function ChatView({
       {/* 待发送图片预览条（加号选图后先预览，点发送键发出；面板展开时隐藏避免遮挡） */}
       {pendingImgs.length > 0 && !plusOpen && (
         <div
-          className="z-20 flex shrink-0 items-center gap-2 border-t border-border/50 bg-background/85 px-3 py-2 backdrop-blur-xl"
+          className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-3 py-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
           data-testid="sms-img-preview-bar"
         >
           {pendingImgs.map((p, k) => (
@@ -3711,7 +3711,7 @@ function ChatView({
                 maxLength={2000}
                 autoFocus
                 data-testid="sms-edit-input"
-                className="w-full resize-none rounded-[10px] bg-white px-2.5 py-2 text-[15px] leading-[1.45] outline-none dark:bg-black/30"
+                className="w-full resize-none rounded-[10px] bg-white/70 px-2.5 py-2 text-[15px] leading-[1.45] outline-none ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.1] dark:ring-white/[0.1]"
               />
             </div>
             <div className="flex border-t border-black/10 dark:border-white/10">
@@ -3885,8 +3885,8 @@ function AddFriendView({
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-8">
         {/* 搜索：长方形边框输入框，必须输入手机号才能找到待添加的好友 */}
         <div
-          className={`mt-1 flex h-[46px] items-center gap-2 rounded-[12px] border bg-background px-3.5 transition-colors focus-within:border-foreground/45 focus-within:ring-4 focus-within:ring-foreground/[0.07] ${
-            error ? 'border-[#FF3B30]/60' : 'border-border/80'
+          className={`mt-1 flex h-[46px] items-center gap-2 rounded-[14px] bg-white/60 px-3.5 shadow-sm ring-1 backdrop-blur-xl transition-shadow focus-within:ring-2 focus-within:ring-foreground/30 dark:bg-white/[0.08] dark:ring-white/[0.1] ${
+            error ? 'ring-[#FF3B30]/60!' : 'ring-white/70'
           }`}
         >
           <Search className="h-[17px] w-[17px] shrink-0 text-muted-foreground/60" strokeWidth={2} aria-hidden="true" />
@@ -3943,21 +3943,21 @@ function AddFriendView({
 
         {/* 搜索结果：必须输入手机号才会出现待添加的好友 */}
         {!q ? (
-          <div className="mt-3 rounded-[14px] border-[1.5px] border-dashed border-border/70 bg-muted/25 px-4 py-8 text-center">
+          <div className="mt-3 rounded-[14px] border-[1.5px] border-dashed border-border/70 bg-white/50 px-4 py-8 text-center backdrop-blur-xl dark:bg-white/[0.05]">
             <p className="text-[14px] font-medium text-muted-foreground">输入手机号查找好友</p>
             <p className="mt-1 text-[12px] leading-snug text-muted-foreground/70">
               到「联系人」App 创建联系人后，凭手机号来这里添加
             </p>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="mt-3 rounded-[14px] bg-muted/40 px-4 py-8 text-center">
+          <div className="mt-3 rounded-[14px] bg-white/60 px-4 py-8 text-center shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
             <p className="text-[14px] font-medium text-muted-foreground">没有找到该手机号</p>
             <p className="mt-1 text-[12px] leading-snug text-muted-foreground/70">
               检查号码是否正确，或到「联系人」App 查看手机号
             </p>
           </div>
         ) : (
-          <ul className="mt-3 overflow-hidden rounded-[14px] bg-muted/45" aria-label="待添加好友列表">
+          <ul className="mt-3 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]" aria-label="待添加好友列表">
             {filtered.map((c) => (
               <li key={c.id} className="border-b border-border/50 last:border-b-0">
                 <div className="flex w-full items-center gap-3 px-3.5 py-2.5">
@@ -4126,7 +4126,7 @@ function ContactsPanel({
     <>
       {/* 搜索框 */}
       <div className="px-4 pb-1 pt-2">
-        <div className="flex h-[36px] items-center gap-1.5 rounded-[11px] bg-muted px-3">
+        <div className="flex h-[36px] items-center gap-1.5 rounded-[11px] bg-white/60 px-3 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground/60" strokeWidth={2} aria-hidden="true" />
           <input
             value={query}
@@ -4280,8 +4280,8 @@ function BottomTabBar({ tab, onChange }: { tab: TabKey; onChange: (t: TabKey) =>
     { key: 'contacts', label: '联系人' },
   ] as const;
   return (
-    <nav className="z-20 shrink-0 bg-background/85 pb-[30px] pt-2.5 backdrop-blur-xl">
-      <div role="tablist" aria-label="信息分组" className="mx-auto flex w-[220px] rounded-full bg-muted p-[2px]">
+    <nav className="z-20 shrink-0 bg-white/60 pb-[30px] pt-2.5 backdrop-blur-2xl dark:bg-white/[0.06]">
+      <div role="tablist" aria-label="信息分组" className="mx-auto flex w-[220px] rounded-full bg-white/60 p-[2px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
         {items.map(({ key, label }) => (
           <button
             key={key}
@@ -4294,11 +4294,11 @@ function BottomTabBar({ tab, onChange }: { tab: TabKey; onChange: (t: TabKey) =>
             {tab === key && (
               <motion.span
                 layoutId="msg-tab-thumb"
-                className="absolute inset-0 rounded-full bg-background shadow-sm"
+                className="absolute inset-0 rounded-full bg-foreground shadow-sm"
                 transition={{ type: 'spring', stiffness: 500, damping: 40 }}
               />
             )}
-            <span className={`relative z-10 transition-colors ${tab === key ? 'text-foreground' : 'text-muted-foreground'}`}>
+            <span className={`relative z-10 transition-colors ${tab === key ? 'text-background' : 'text-muted-foreground'}`}>
               {label}
             </span>
           </button>

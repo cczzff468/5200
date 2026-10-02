@@ -102,6 +102,10 @@ import {
   listCustomFonts,
   loadCustomFontFace,
   saveCustomFont,
+  applyAppFontScale,
+  applyAppFontWeight,
+  FONT_SCALE_OPTIONS,
+  FONT_WEIGHT_OPTIONS,
   type AppFontMeta,
 } from '@/lib/ios/fonts';
 
@@ -171,10 +175,10 @@ function formatMB(bytes: number): string {
 
 // ---------------- 通用小组件 ----------------
 
-/** iOS 分组卡片（子页用） */
+/** iOS 分组卡片（子页用）：GrayCard 同款毛玻璃配方但无内边距（divide-y 行列表用，分隔线贴边） */
 function GroupCard({ children }: { children: ReactNode }) {
   return (
-    <div className="divide-y divide-border/60 overflow-hidden rounded-[12px] bg-card">{children}</div>
+    <div className="divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">{children}</div>
   );
 }
 
@@ -401,7 +405,7 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
       </div>
       <div className="no-scrollbar flex-1 overflow-y-auto pb-5">
         {/* 个人资料卡（点击进入个人信息：头像/名字/标签） */}
-        <div className="mx-4 mt-2 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 mt-2 overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <button
             type="button"
             onClick={() => onOpen('profile')}
@@ -431,7 +435,7 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         </div>
 
         {/* 无线控制（演示项） */}
-        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 mt-4 divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
             <RowIcon icon={Plane} tone={TONE_ORANGE} />
             <span className="min-w-0 flex-1 truncate text-[16px]">飞行模式</span>
@@ -442,12 +446,12 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         </div>
 
         {/* 锁屏与密码（按用户要求不显示开启状态提示） */}
-        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 mt-4 divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <MainRow icon={Lock} tone={TONE_RED} label="锁屏与密码" onClick={() => onOpen('lock')} />
         </div>
 
         {/* 显示与亮度 / 壁纸 / 通知 */}
-        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 mt-4 divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <MainRow
             icon={Sun}
             tone={TONE_BLUE}
@@ -474,7 +478,7 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
 
         {/* 开发者 */}
         <div className="mb-2 mt-6 px-8 text-[13px] text-muted-foreground">开发者</div>
-        <div className="mx-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <MainRow
             icon={Wrench}
             tone={TONE_GRAY}
@@ -528,7 +532,7 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         </div>
 
         {/* 关于本机 */}
-        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 mt-4 divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <MainRow icon={Info} tone={TONE_GRAY} label="关于本机" onClick={() => onOpen('about')} />
         </div>
 
@@ -553,7 +557,7 @@ function ThemePage({ onBack }: { onBack: () => void }) {
   ];
 
   return (
-    <DetailShell title="显示与亮度" onBack={onBack}>
+    <DetailShell title="显示与亮度" onBack={onBack} gray ambience>
       <GroupCard>
         {options.map((o) => {
           const Icon = o.icon;
@@ -709,7 +713,7 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="通知" onBack={onBack}>
+    <DetailShell title="通知" onBack={onBack} gray ambience>
       <GroupCard>
         <div className="flex h-[46px] items-center justify-between px-4">
           <span className="text-[16px]">允许通知</span>
@@ -732,7 +736,7 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
         </p>
       )}
       {inIframe && (
-        <p className="mt-3 rounded-[10px] border border-border bg-muted/50 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground">
+        <p className="mt-3 rounded-[14px] bg-white/55 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           当前页面嵌在预览面板（iframe）里，部分浏览器会在这里拦截系统通知与后台推送。
           点预览面板右上角「在新标签页打开」后重新开启通知，切走/关闭页面也能收到。
         </p>
@@ -864,7 +868,7 @@ function StoragePage({ onBack }: { onBack: () => void }) {
     : [];
 
   return (
-    <DetailShell title="存储空间" onBack={onBack}>
+    <DetailShell title="存储空间" onBack={onBack} gray ambience>
       <GroupCard>
         <div className="p-4">
           <div className="flex items-baseline justify-between gap-3">
@@ -945,11 +949,11 @@ function WallpaperPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="壁纸" onBack={onBack}>
+    <DetailShell title="壁纸" onBack={onBack} gray ambience>
       <div className="flex flex-col gap-6">
         {customWallpaperUrl && (
           <div>
-            <div className="relative h-[140px] w-full overflow-hidden rounded-[14px] border border-border">
+            <div className="relative h-[140px] w-full overflow-hidden rounded-[14px] shadow-[0_8px_28px_rgba(17,24,39,0.08)] ring-1 ring-white/70 dark:ring-white/[0.09]">
               <div
                 className="absolute inset-0 bg-cover bg-center"
                 style={{ backgroundImage: `url(${customWallpaperUrl})` }}
@@ -978,7 +982,7 @@ function WallpaperPage({ onBack }: { onBack: () => void }) {
             return (
               <button key={p.id} type="button" onClick={() => setWallpaperPreset(p.id)} className="text-left">
                 <div
-                  className="relative h-[120px] overflow-hidden rounded-[14px] border border-border/60 transition-transform active:scale-[0.98]"
+                  className="relative h-[120px] overflow-hidden rounded-[14px] shadow-[0_8px_28px_rgba(17,24,39,0.08)] ring-1 ring-white/70 transition-transform active:scale-[0.98] dark:ring-white/[0.09]"
                   style={{ background: p.css }}
                 >
                   {selected && (
@@ -993,7 +997,7 @@ function WallpaperPage({ onBack }: { onBack: () => void }) {
           })}
         </div>
 
-        <label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-[12px] border border-border bg-card text-[15px] font-medium transition-colors active:bg-muted/60">
+        <label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-full bg-white/60 text-[15px] font-medium shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]">
           <Upload className="h-4 w-4" />
           上传自定义壁纸
           <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
@@ -2975,9 +2979,9 @@ function LockPage({ onBack }: { onBack: () => void }) {
   // ---------------- 菜单 ----------------
   if (stage === 'menu') {
     return (
-      <DetailShell title="锁屏与密码" onBack={onBack}>
+      <DetailShell title="锁屏与密码" onBack={onBack} gray ambience>
         <GroupCard>
-          <div className="divide-y divide-border/60">
+          <div className="divide-y divide-black/[0.05] dark:divide-white/[0.06]">
             {/* 锁屏总开关：关掉后不再出现锁屏界面 */}
             <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
               <span className="min-w-0 flex-1 text-[16px]">锁屏</span>
@@ -3052,7 +3056,7 @@ function LockPage({ onBack }: { onBack: () => void }) {
                     {lockConfig.len === 6 ? '6 位数字' : '4 位数字'}
                   </span>
                 ) : (
-                  <div className="flex rounded-full bg-muted p-0.5" role="radiogroup" aria-label="密码位数">
+                  <div className="flex rounded-full bg-white/50 p-0.5 ring-1 ring-black/[0.05] backdrop-blur-xl dark:bg-white/[0.06] dark:ring-white/[0.08]" role="radiogroup" aria-label="密码位数">
                     {([4, 6] as const).map((n) => (
                       <button
                         key={n}
@@ -3062,7 +3066,7 @@ function LockPage({ onBack }: { onBack: () => void }) {
                         onClick={() => applyLockConfig({ lockScreen: true, enabled: false, code: '', len: n })}
                         className={`h-8 w-[68px] rounded-full text-[14px] transition ${
                           lockConfig.len === n
-                            ? 'bg-background font-medium shadow-sm'
+                            ? 'bg-white/95 font-medium text-foreground shadow-sm dark:bg-white/[0.2]'
                             : 'text-muted-foreground'
                         }`}
                       >
@@ -3158,9 +3162,9 @@ function LockPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="锁屏与密码" onBack={cancelSub}>
+    <DetailShell title="锁屏与密码" onBack={cancelSub} gray ambience>
       <div className="flex flex-col items-center pt-6">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           <Lock className="h-6 w-6 text-muted-foreground" strokeWidth={2} />
         </div>
         <p className="mt-3 text-[17px] font-semibold">{LOCK_STAGE_TITLE[stage]}</p>
@@ -3179,7 +3183,7 @@ function LockPage({ onBack }: { onBack: () => void }) {
         <button
           type="button"
           onClick={cancelSub}
-          className="mt-2 rounded-full px-6 py-2 text-[15px] text-muted-foreground transition active:opacity-60"
+          className="mt-2 rounded-full bg-white/60 px-6 py-2 text-[15px] text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
         >
           取消
         </button>
@@ -3249,7 +3253,7 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="个人信息" onBack={onBack}>
+    <DetailShell title="个人信息" onBack={onBack} gray ambience>
       {/* 头像：点击从手机相册/文件选择 */}
       <div className="flex flex-col items-center pt-3">
         <button
@@ -3265,7 +3269,7 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
               <User className="h-11 w-11 text-[#7C7C84]" strokeWidth={1.8} />
             </span>
           )}
-          <span className="absolute -bottom-0.5 -right-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full border-[3px] border-background bg-muted">
+          <span className="absolute -bottom-0.5 -right-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full border-[3px] border-background bg-white/70 shadow-sm backdrop-blur-xl dark:bg-white/[0.14]">
             <Camera className="h-[15px] w-[15px] text-foreground" strokeWidth={2.2} />
           </span>
         </button>
@@ -3312,7 +3316,7 @@ function AboutPage({ onBack }: { onBack: () => void }) {
   const uaShort = ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
 
   return (
-    <DetailShell title="关于本机" onBack={onBack}>
+    <DetailShell title="关于本机" onBack={onBack} gray ambience>
       <GroupCard>
         <AboutRow label="名称" value="iPhone" />
         <AboutRow label="系统版本" value="iOS Web 1.0.0" />
@@ -4371,6 +4375,10 @@ function FontListCard({ children }: { children: ReactNode }) {
 function FontPage({ onBack }: { onBack: () => void }) {
   const appFontId = useSettings((s) => s.appFontId);
   const setAppFont = useSettings((s) => s.setAppFont);
+  const appFontScale = useSettings((s) => s.appFontScale);
+  const setAppFontScale = useSettings((s) => s.setAppFontScale);
+  const appFontWeight = useSettings((s) => s.appFontWeight);
+  const setAppFontWeight = useSettings((s) => s.setAppFontWeight);
   const [toast, showToast] = useLocalToast();
   const [customFonts, setCustomFonts] = useState<AppFontMeta[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -4502,6 +4510,73 @@ function FontPage({ onBack }: { onBack: () => void }) {
             <p className="text-[24px] leading-relaxed">0123456789 ，。？！：；「」《》～</p>
           </div>
         </GrayCard>
+
+        {/* 字体大小（全局缩放：zoom + 容器反向补偿，全 App 实时生效） */}
+        <section>
+          <div className="mb-2 px-1 text-[13px] font-medium text-muted-foreground">字体大小</div>
+          <GrayCard>
+            <div className="flex flex-wrap items-center gap-2" data-testid="font-scale-group">
+              {FONT_SCALE_OPTIONS.map((o) => {
+                const active = Math.abs(appFontScale - o.scale) < 0.001;
+                return (
+                  <button
+                    key={o.scale}
+                    type="button"
+                    data-testid={`font-scale-${o.scale}`}
+                    aria-pressed={active}
+                    onClick={() => {
+                      setAppFontScale(o.scale);
+                      applyAppFontScale(o.scale);
+                    }}
+                    className={`rounded-full px-4 py-2 text-[13.5px] shadow-[0_2px_10px_rgba(17,24,39,0.05)] backdrop-blur-xl transition-all active:scale-[0.95] ${
+                      active
+                        ? 'bg-foreground text-background shadow-[0_4px_14px_rgba(0,0,0,0.16)]'
+                        : 'bg-white/55 text-black/75 ring-1 ring-white/70 hover:bg-white/80 dark:bg-white/[0.08] dark:text-white/80 dark:ring-white/[0.1] dark:hover:bg-white/[0.13]'
+                    }`}
+                  >
+                    {o.label}
+                    <span className="ml-1 text-[11px] opacity-60">{Math.round(o.scale * 100)}%</span>
+                  </button>
+                );
+              })}
+            </div>
+          </GrayCard>
+        </section>
+
+        {/* 字体粗细（body font-weight 变量；标题等显式字重不受影响） */}
+        <section>
+          <div className="mb-2 px-1 text-[13px] font-medium text-muted-foreground">字体粗细</div>
+          <GrayCard>
+            <div className="flex flex-wrap items-center gap-2" data-testid="font-weight-group">
+              {FONT_WEIGHT_OPTIONS.map((o) => {
+                const active = appFontWeight === o.weight;
+                return (
+                  <button
+                    key={o.weight}
+                    type="button"
+                    data-testid={`font-weight-${o.weight}`}
+                    aria-pressed={active}
+                    onClick={() => {
+                      setAppFontWeight(o.weight);
+                      applyAppFontWeight(o.weight);
+                    }}
+                    style={{ fontWeight: o.weight }}
+                    className={`rounded-full px-4 py-2 text-[13.5px] shadow-[0_2px_10px_rgba(17,24,39,0.05)] backdrop-blur-xl transition-all active:scale-[0.95] ${
+                      active
+                        ? 'bg-foreground text-background shadow-[0_4px_14px_rgba(0,0,0,0.16)]'
+                        : 'bg-white/55 text-black/75 ring-1 ring-white/70 hover:bg-white/80 dark:bg-white/[0.08] dark:text-white/80 dark:ring-white/[0.1] dark:hover:bg-white/[0.13]'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2.5 px-1 text-[11.5px] leading-relaxed text-muted-foreground">
+              大小全局生效（含以后新增的界面）；粗细对正文生效，标题/按钮等已加粗的文字保持原样。
+            </p>
+          </GrayCard>
+        </section>
 
         {/* 内置字体（纯 CSS 栈，点击即应用） */}
         <section>

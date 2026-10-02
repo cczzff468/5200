@@ -261,11 +261,63 @@ export async function applyAppFont(id: string): Promise<void> {
   rootStyle.removeProperty('--app-font-family'); // 未知 id → 回默认
 }
 
-/** 开机恢复持久化字体：读 store 的 appFontId 并应用；全程兜底，失败不阻塞开机（回默认字体） */
+/** 开机恢复持久化字体（族/大小/粗细）：读 store 应用；全程兜底，失败不阻塞开机（回默认） */
 export async function ensureAppFontApplied(): Promise<void> {
   try {
     await applyAppFont(useSettings.getState().appFontId);
   } catch {
     // 字体恢复失败（如 IndexedDB 不可用/文件损坏）→ 保持默认字体，不阻塞启动
   }
+  try {
+    applyAppFontScale(useSettings.getState().appFontScale);
+  } catch {
+    // zoom 应用失败不影响启动
+  }
+  try {
+    applyAppFontWeight(useSettings.getState().appFontWeight);
+  } catch {
+    // 字重应用失败不影响启动
+  }
+}
+
+// ---------------- 字体大小 / 字重（Task 34-a） ----------------
+
+/**
+ * 字体大小档位（iOS 风格五档）：倍率乘在手机屏 zoom 上。
+ * 实现：PhoneShell 手机屏容器 .phone-zoom-host 应用 `zoom: var(--app-font-scale)`，
+ * 并把容器尺寸写成 calc(原尺寸 / scale) 反向补偿——最终占位不变、内部所有 px 文本/布局 ×scale。
+ * getBoundingClientRect 与事件 clientX 同为 zoom 后视觉坐标，拖拽/手势数学不受影响。
+ */
+export const FONT_SCALE_OPTIONS: { scale: number; label: string }[] = [
+  { scale: 0.9, label: '小' },
+  { scale: 1, label: '标准' },
+  { scale: 1.15, label: '大' },
+  { scale: 1.3, label: '特大' },
+  { scale: 1.45, label: '最大' },
+];
+
+/** 字重档位：body font-weight 引用变量（未显式设 font-medium/semibold 的文本生效） */
+export const FONT_WEIGHT_OPTIONS: { weight: number; label: string }[] = [
+  { weight: 300, label: '细' },
+  { weight: 400, label: '标准' },
+  { weight: 500, label: '中' },
+  { weight: 600, label: '粗' },
+];
+
+/** 应用字体大小倍率到 --app-font-scale（1 或非法值 = 移除变量回标准） */
+export function applyAppFontScale(scale: number): void {
+  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale === 1) {
+    document.documentElement.style.removeProperty('--app-font-scale');
+    return;
+  }
+  document.documentElement.style.setProperty('--app-font-scale', String(scale));
+}
+
+/** 应用字重到 --app-font-weight（400 = 移除变量回默认） */
+export function applyAppFontWeight(weight: number): void {
+  if (weight === 400) {
+    document.documentElement.style.removeProperty('--app-font-weight');
+    return;
+  }
+  document.documentElement.style.setProperty('--app-font-weight', String(weight));
 }

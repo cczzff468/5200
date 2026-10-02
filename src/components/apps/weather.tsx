@@ -210,7 +210,7 @@ export function WeatherWidget() {
 
 function DetailCard({ icon: Icon, label, value, sub }: { icon: LucideIcon; label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-[20px] border border-white/10 bg-white/10 p-3.5 backdrop-blur-md">
+    <div className="rounded-[20px] bg-white/[0.10] p-3.5 ring-1 ring-white/[0.14] backdrop-blur-2xl">
       <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-white/60">
         <Icon className="h-3 w-3" strokeWidth={2.4} aria-hidden="true" />
         <span>{label}</span>
@@ -263,7 +263,7 @@ function CitySearchPanel({ onClose, onPick }: { onClose: () => void; onPick: (pi
     <div role="dialog" aria-label="搜索城市" className="absolute inset-0 z-30 flex flex-col bg-black/40 backdrop-blur-2xl">
       {/* 搜索框 + 关闭 */}
       <div className="flex shrink-0 items-center gap-2 px-5 pb-3 pt-[64px]">
-        <div className="flex flex-1 items-center gap-2 rounded-[12px] border border-white/10 bg-white/10 px-3 py-2">
+        <div className="flex flex-1 items-center gap-2 rounded-[14px] bg-white/[0.10] px-3 py-2 ring-1 ring-white/[0.14] backdrop-blur-xl">
           <Search className="h-4 w-4 shrink-0 text-white/60" aria-hidden="true" />
           <input
             value={query}
@@ -406,7 +406,9 @@ function ManagerCityCard({
       }}
       aria-label={`选择城市 ${pick.name}`}
       className={`relative flex min-h-[104px] select-none items-center justify-between overflow-hidden rounded-[24px] px-6 py-6 text-left shadow-md transition-colors [-webkit-touch-callout:none] ${
-        data ? 'text-white' : 'bg-muted text-foreground'
+        data
+          ? 'text-white ring-1 ring-white/25'
+          : 'bg-white/60 text-foreground ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]'
       }`}
       style={data ? { backgroundImage: gradient } : undefined}
     >
@@ -605,9 +607,9 @@ function CityManagerPage({
         </div>
       </div>
 
-      {/* 灰色圆角胶囊搜索框 */}
+      {/* 毛玻璃胶囊搜索框 */}
       <div className="shrink-0 px-4 pb-2">
-        <div className="flex h-10 items-center gap-2 rounded-full bg-muted px-3.5">
+        <div className="flex h-10 items-center gap-2 rounded-full bg-white/60 px-3.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <input
             ref={searchInputRef}
@@ -831,12 +833,12 @@ export default function WeatherApp() {
 
           {status === 'error' ? (
             /* 错误卡片 + 重试 */
-            <div className="mt-16 flex flex-col items-center gap-4 rounded-[20px] border border-white/10 bg-white/10 p-8 text-center backdrop-blur-md">
+            <div className="mt-16 flex flex-col items-center gap-4 rounded-[20px] bg-white/[0.10] p-8 text-center ring-1 ring-white/[0.14] backdrop-blur-2xl">
               <CloudOff className="h-10 w-10 text-white/70" aria-hidden="true" />
               <p className="text-[15px] text-white/85">{errorMsg || '天气加载失败'}</p>
               <button
                 onClick={refresh}
-                className="rounded-full bg-white/20 px-5 py-2 text-[14px] transition-colors active:bg-white/30"
+                className="rounded-full bg-white/[0.10] px-5 py-2 text-[14px] shadow-sm ring-1 ring-white/[0.14] backdrop-blur-xl transition-colors active:bg-white/20"
               >
                 重试
               </button>
@@ -862,7 +864,7 @@ export default function WeatherApp() {
               </section>
 
               {/* 24 小时预报（横向滚动） */}
-              <section aria-label="24小时预报" className="rounded-[20px] border border-white/10 bg-white/10 p-4 backdrop-blur-md">
+              <section aria-label="24小时预报" className="rounded-[20px] bg-white/[0.10] p-4 ring-1 ring-white/[0.14] backdrop-blur-2xl">
                 <div className="no-scrollbar flex gap-[18px] overflow-x-auto">
                   {data.hourly.map((h, i) => {
                     const HourIcon = weatherCodeInfo(h.code).Icon;
@@ -881,7 +883,7 @@ export default function WeatherApp() {
               </section>
 
               {/* 7 天预报（今天加粗 + 暖色温度区间条） */}
-              <section aria-label="7天预报" className="mt-3 rounded-[20px] border border-white/10 bg-white/10 px-4 backdrop-blur-md">
+              <section aria-label="7天预报" className="mt-3 rounded-[20px] bg-white/[0.10] px-4 ring-1 ring-white/[0.14] backdrop-blur-2xl">
                 <ul className="divide-y divide-white/10">
                   {data.daily.map((d, i) => {
                     const DayIcon = weatherCodeInfo(d.code).Icon;

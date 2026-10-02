@@ -147,7 +147,7 @@ function HomeView({ onNavigate }: { onNavigate: (url: string) => void }) {
         transition={{ duration: 0.45, ease: [0.32, 0.72, 0, 1] }}
         className="flex flex-col items-center gap-3.5"
       >
-        <div className="flex h-[64px] w-[64px] items-center justify-center rounded-[22%] border border-foreground/12 bg-gradient-to-b from-muted to-background shadow-[0_10px_24px_-14px_rgba(0,0,0,0.35)]">
+        <div className="flex h-[64px] w-[64px] items-center justify-center rounded-[22%] bg-white/60 shadow-[0_10px_24px_-14px_rgba(17,24,39,0.25)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <Compass className="h-8 w-8 text-foreground/75" strokeWidth={1.4} aria-hidden="true" />
         </div>
         <div className="text-[28px] font-bold tracking-tight">浏览器</div>
@@ -172,7 +172,7 @@ function HomeView({ onNavigate }: { onNavigate: (url: string) => void }) {
             >
               <span
                 aria-hidden="true"
-                className="flex h-[54px] w-[54px] items-center justify-center rounded-[16px] border border-foreground/10 bg-gradient-to-b from-background to-muted shadow-[0_6px_14px_-8px_rgba(0,0,0,0.25)]"
+                className="flex h-[54px] w-[54px] items-center justify-center rounded-[16px] bg-white/60 shadow-[0_6px_14px_-8px_rgba(17,24,39,0.18)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
               >
                 <link.icon className="h-[22px] w-[22px] text-foreground/70" strokeWidth={1.6} />
               </span>
@@ -186,7 +186,7 @@ function HomeView({ onNavigate }: { onNavigate: (url: string) => void }) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.16, duration: 0.45 }}
-        className="mt-8 flex w-full max-w-[340px] items-start gap-2.5 rounded-[14px] border border-border/50 bg-muted/60 p-3.5 text-[12px] leading-relaxed text-muted-foreground"
+        className="mt-8 flex w-full max-w-[340px] items-start gap-2.5 rounded-[14px] bg-white/60 p-3.5 text-[12px] leading-relaxed text-muted-foreground shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
       >
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
         <span>提示：部分网站（如百度/搜狗）为防钓鱼禁止内嵌显示，页面空白时请点击底部『新窗口』按钮打开。</span>
@@ -401,10 +401,10 @@ export default function BrowserApp() {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
       {/* 顶部地址栏区（54px 为状态栏预留） */}
-      <header className="shrink-0 border-b border-border/60 bg-background/90 pt-[54px] backdrop-blur-xl">
+      <header className="shrink-0 border-b border-white/60 bg-white/60 pt-[54px] shadow-[0_8px_28px_rgba(17,24,39,0.07)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
         <div className="flex items-center gap-2 px-4 pt-2">
           <BackToHome className="static! shrink-0" />
-          <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-muted px-3.5 shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-foreground/25">
+          <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-white/60 px-3.5 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-shadow focus-within:ring-2 focus-within:ring-foreground/25 dark:bg-white/[0.08] dark:ring-white/[0.1]">
             {loading ? (
               <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" strokeWidth={2.5} aria-hidden="true" />
             ) : (
@@ -455,16 +455,16 @@ export default function BrowserApp() {
 
         {/* 搜索引擎 iOS 分段控件（居中） */}
         <div role="group" aria-label="搜索引擎" className="flex justify-center pb-3 pt-2">
-          <div className="flex rounded-[10px] bg-muted p-[3px]">
+          <div className="flex rounded-full bg-white/60 p-[3px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             {ENGINES.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => chooseEngine(item.id)}
                 aria-pressed={engine === item.id}
-                className={`rounded-[8px] px-4 py-[5px] text-[12px] font-medium leading-none transition-all active:opacity-70 ${
+                className={`rounded-full px-4 py-[5px] text-[12px] font-medium leading-none transition-all active:opacity-70 ${
                   engine === item.id
-                    ? 'bg-background text-foreground shadow-[0_1px_4px_rgba(0,0,0,0.14)]'
+                    ? 'bg-foreground text-background shadow-sm'
                     : 'text-muted-foreground'
                 }`}
               >
@@ -484,12 +484,12 @@ export default function BrowserApp() {
           />
         )}
         {blocked && currentUrl && (
-          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/95 px-4 py-2.5 backdrop-blur-xl">
+          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 border-b border-white/60 bg-white/70 px-4 py-2.5 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.08]">
             <span className="truncate text-[12px] text-muted-foreground">该网站可能禁止内嵌显示</span>
             <button
               type="button"
               onClick={() => window.open(currentUrl, '_blank', 'noopener')}
-              className="shrink-0 rounded-full bg-muted px-3 py-1 text-[12px] leading-none text-foreground transition-opacity active:opacity-60"
+              className="shrink-0 rounded-full bg-white/60 px-3 py-1 text-[12px] leading-none text-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
             >
               在新窗口打开
             </button>
@@ -510,7 +510,7 @@ export default function BrowserApp() {
       </main>
 
       {/* 底部工具栏（pb-[12px] 贴近屏幕底部，Home 指示条悬浮其上；均匀五键布局） */}
-      <footer className="shrink-0 border-t border-border/60 bg-background/90 pb-[12px] shadow-[0_-12px_32px_-22px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+      <footer className="shrink-0 border-t border-white/60 bg-white/60 pb-[12px] shadow-[0_-12px_32px_-22px_rgba(17,24,39,0.22)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
         <div className="flex h-[62px] items-center justify-between px-9">
           <ToolButton label="后退" onClick={goBack} disabled={history.index <= 0}>
             <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
@@ -571,14 +571,14 @@ export default function BrowserApp() {
                 {bookmarks.map((b) => (
                   <li
                     key={b.url}
-                    className="flex items-center gap-3 rounded-[12px] bg-card px-3 py-2.5"
+                    className="flex items-center gap-3 rounded-[14px] bg-white/60 px-3 py-2.5 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
                   >
                     <button
                       type="button"
                       onClick={() => openBookmark(b.url)}
                       className="flex min-w-0 flex-1 items-center gap-3 text-left active:opacity-60"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-muted">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-white/70 ring-1 ring-white/70 dark:bg-white/[0.1] dark:ring-white/[0.1]">
                         <Globe className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
                       </span>
                       <span className="min-w-0 flex-1">

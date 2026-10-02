@@ -119,13 +119,13 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 长方形输入框（带边框圆角矩形，聚焦高亮） */
+/** 长方形玻璃输入框（半透明底 + 背景模糊 + 发丝环，聚焦高亮） */
 const boxInputCls =
-  'h-[46px] w-full rounded-[12px] border border-border/80 bg-background px-3.5 text-[15px] leading-[22px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-foreground/45 focus:ring-4 focus:ring-foreground/[0.07]';
+  'h-[46px] w-full rounded-[14px] bg-white/60 px-3.5 text-[15px] leading-[22px] text-foreground shadow-sm outline-none ring-1 ring-white/70 backdrop-blur-xl transition-shadow placeholder:text-muted-foreground/40 focus:ring-2 focus:ring-foreground/30 dark:bg-white/[0.08] dark:ring-white/[0.1]';
 
-/** 长方形多行输入框 */
+/** 长方形多行玻璃输入框 */
 const boxAreaCls =
-  'w-full resize-none rounded-[12px] border border-border/80 bg-background px-3.5 py-3 text-[15px] leading-[22px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-foreground/45 focus:ring-4 focus:ring-foreground/[0.07]';
+  'w-full resize-none rounded-[14px] bg-white/60 px-3.5 py-3 text-[15px] leading-[22px] text-foreground shadow-sm outline-none ring-1 ring-white/70 backdrop-blur-xl transition-shadow placeholder:text-muted-foreground/40 focus:ring-2 focus:ring-foreground/30 dark:bg-white/[0.08] dark:ring-white/[0.1]';
 
 /** 字段格子：上方小标签、下方长方形输入框 */
 function BoxField({
@@ -168,10 +168,10 @@ function GenderPills({ value, onChange }: { value: string; onChange: (v: string)
           aria-checked={value === g}
           aria-label={`性别${g}`}
           onClick={() => onChange(value === g ? '' : g)}
-          className={`h-[46px] flex-1 rounded-[12px] text-[14px] font-medium transition-all active:scale-[0.97] ${
+          className={`h-[46px] flex-1 rounded-full text-[14px] font-medium transition-all active:scale-[0.96] ${
             value === g
-              ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.14)]'
-              : 'border border-border/80 bg-background text-muted-foreground'
+              ? 'bg-foreground text-background shadow-sm'
+              : 'bg-white/60 text-muted-foreground ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
           }`}
         >
           {g}
@@ -217,7 +217,7 @@ function GenBoxField({
           onClick={onGen}
           aria-label={`生成${label}`}
           title={`生成${label}`}
-          className="absolute right-[5px] top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-[9px] border border-border/50 bg-card/60 text-muted-foreground backdrop-blur-xl transition-colors active:text-foreground"
+          className="absolute right-[5px] top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] active:text-foreground dark:bg-white/[0.08] dark:ring-white/[0.1]"
         >
           <Dices className="h-[17px] w-[17px]" strokeWidth={1.9} />
         </button>
@@ -777,7 +777,7 @@ function ListView({
           <>
             {/* 未添加好友（CHAR/NPC 创建后先在这里；添加/删除都只能去「信息」App） */}
             {pendingList.length > 0 && (
-              <div className="mx-4 mb-3 overflow-hidden rounded-[14px] bg-muted/35 ring-1 ring-border/40">
+              <div className="mx-4 mb-3 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
                 <p className="px-3.5 pb-1 pt-2.5 text-[12px] font-medium text-muted-foreground">
                   未添加好友 · 只能在「信息」App 添加或删除
                 </p>
@@ -803,7 +803,7 @@ function ListView({
               </div>
             ) : (
               <ul
-                className="mx-4 mb-3 overflow-hidden rounded-[14px] bg-muted/45"
+                className="mx-4 mb-3 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
                 aria-label={`${activeTab.label}列表`}
               >
                 {friendList.map((c) => (
@@ -825,9 +825,9 @@ function ListView({
       <nav
         role="tablist"
         aria-label="联系人分类"
-        className="z-20 shrink-0 border-t border-border/40 bg-background/85 pb-[26px] pt-2 backdrop-blur-xl"
+        className="z-20 shrink-0 border-t border-white/60 bg-white/60 pb-[26px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
       >
-        <div className="mx-4 flex rounded-[10px] bg-muted/70 p-[2px]">
+        <div className="mx-4 flex rounded-full bg-white/60 p-[2px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           {TABS.map((t) => (
             <button
               key={t.key}
@@ -835,9 +835,9 @@ function ListView({
               role="tab"
               aria-selected={tab === t.key}
               onClick={() => onTab(t.key)}
-              className={`h-[32px] flex-1 rounded-[8px] text-[13px] font-semibold tracking-wide transition-all ${
+              className={`h-[32px] flex-1 rounded-full text-[13px] font-semibold tracking-wide transition-all ${
                 tab === t.key
-                  ? 'bg-background text-foreground shadow-[0_1px_4px_rgba(0,0,0,0.12)]'
+                  ? 'bg-foreground text-background shadow-sm'
                   : 'text-muted-foreground'
               }`}
             >
@@ -1099,7 +1099,7 @@ function ContactFormView({
             className={`relative h-[104px] w-[104px] rounded-full transition-transform active:scale-95 ${
               avatar
                 ? 'shadow-[0_6px_20px_rgba(0,0,0,0.14)] ring-1 ring-border/50'
-                : 'bg-gradient-to-b from-muted/90 to-muted/40 ring-1 ring-border/60'
+                : 'bg-white/60 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
             }`}
           >
             {avatar ? (
@@ -1157,7 +1157,7 @@ function ContactFormView({
               type="button"
               onClick={() => setOwnerPickerOpen((v) => !v)}
               aria-label="选择为谁添加NPC"
-              className="flex w-full items-center gap-3 rounded-[12px] border border-border/80 bg-background px-3.5 py-3 text-left transition-colors"
+              className="flex w-full items-center gap-3 rounded-[14px] bg-white/60 px-3.5 py-3 text-left shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-colors dark:bg-white/[0.08] dark:ring-white/[0.1]"
             >
               <span className="shrink-0 text-[14px] text-muted-foreground">为谁添加</span>
               <span className={`min-w-0 flex-1 truncate text-right text-[15px] ${owner ? '' : 'text-muted-foreground/50'}`}>
@@ -1168,7 +1168,7 @@ function ContactFormView({
               />
             </button>
             {ownerPickerOpen && (
-              <div className="mt-2 overflow-hidden rounded-[12px] border border-border/80 bg-background">
+              <div className="mt-2 overflow-hidden rounded-[16px] bg-white/70 shadow-[0_8px_28px_rgba(17,24,39,0.1)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.08] dark:ring-white/[0.09]">
                 {owners.length === 0 && (
                   <p className="px-4 py-3 text-[13px] text-muted-foreground">
                     还没有 CHAR/USER，请先创建一个
@@ -1496,7 +1496,7 @@ function DetailView({
             )}
           </span>
           <p className="mt-3 text-[24px] font-bold leading-tight">{contact.name}</p>
-          <span className="mt-1.5 rounded-full bg-foreground/[0.06] px-3 py-1 text-[11.5px] font-medium text-muted-foreground ring-1 ring-border/50">
+          <span className="mt-1.5 rounded-full bg-white/60 px-3 py-1 text-[11.5px] font-medium text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             {contact.kind === 'npc'
               ? ownerName
                 ? `NPC · ${ownerName}${contact.relation ? ` · ${contact.relation}` : ''}`
@@ -1509,7 +1509,7 @@ function DetailView({
         {!friend && (
           <div className="px-4 pb-1">
             <div
-              className="rounded-[14px] border-[1.5px] border-dashed border-foreground/30 bg-muted/25 px-4 py-3 text-center"
+              className="rounded-[14px] border-[1.5px] border-dashed border-foreground/30 bg-white/50 px-4 py-3 text-center backdrop-blur-xl dark:bg-white/[0.05]"
               role="note"
               aria-label="还未添加好友"
             >
@@ -1647,7 +1647,7 @@ function CardGroup({
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {action}
       </div>
-      <div className="overflow-hidden rounded-[18px] bg-muted/40 ring-1 ring-border/45">{children}</div>
+      <div className="overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">{children}</div>
     </div>
   );
 }

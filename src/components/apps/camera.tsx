@@ -422,8 +422,8 @@ export default function CameraApp({
             aria-label={flashOn ? '关闭闪光灯' : '开启闪光灯'}
             aria-pressed={flashOn}
             onClick={toggleFlash}
-            className={`flex h-10 w-10 items-center justify-center rounded-full transition active:opacity-60 ${
-              flashOn ? 'bg-white/25' : 'bg-black/30 backdrop-blur-sm'
+            className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 backdrop-blur-2xl transition active:opacity-60 ${
+              flashOn ? 'bg-white/25 ring-white/[0.28]' : 'bg-white/[0.10] ring-white/[0.14]'
             }`}
           >
             <Zap className="h-[22px] w-[22px]" fill={flashOn ? 'currentColor' : 'none'} />
@@ -434,8 +434,8 @@ export default function CameraApp({
             aria-label={gridOn ? '关闭网格线' : '开启网格线'}
             aria-pressed={gridOn}
             onClick={() => setGridOn((v) => !v)}
-            className={`flex h-10 w-10 items-center justify-center rounded-full transition active:opacity-60 ${
-              gridOn ? 'bg-white/25' : 'bg-black/30 backdrop-blur-sm'
+            className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 backdrop-blur-2xl transition active:opacity-60 ${
+              gridOn ? 'bg-white/25 ring-white/[0.28]' : 'bg-white/[0.10] ring-white/[0.14]'
             }`}
           >
             <Grid3X3 className="h-[21px] w-[21px]" />
@@ -446,8 +446,8 @@ export default function CameraApp({
             aria-label={timerSec > 0 ? `定时拍摄${timerSec}秒，点击关闭` : '开启定时拍摄'}
             aria-pressed={timerSec > 0}
             onClick={() => setTimerSec((s) => (s === 0 ? 3 : s === 3 ? 10 : 0))}
-            className={`flex h-10 w-10 items-center justify-center rounded-full transition active:opacity-60 ${
-              timerSec > 0 ? 'bg-white/25' : 'bg-black/30 backdrop-blur-sm'
+            className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 backdrop-blur-2xl transition active:opacity-60 ${
+              timerSec > 0 ? 'bg-white/25 ring-white/[0.28]' : 'bg-white/[0.10] ring-white/[0.14]'
             }`}
           >
             {timerSec > 0 ? (
@@ -461,7 +461,7 @@ export default function CameraApp({
             type="button"
             aria-label={`拍摄画幅${aspect}，点击切换`}
             onClick={() => setAspect((a) => (a === '4:3' ? '1:1' : a === '1:1' ? '16:9' : '4:3'))}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 backdrop-blur-sm transition active:opacity-60"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.10] ring-1 ring-white/[0.14] backdrop-blur-2xl transition active:opacity-60"
           >
             <span className="text-[12px] font-semibold leading-none">{aspect}</span>
           </button>
@@ -471,8 +471,8 @@ export default function CameraApp({
             aria-label={filtersOpen ? '收起滤镜' : '展开滤镜'}
             aria-pressed={filtersOpen}
             onClick={() => setFiltersOpen((v) => !v)}
-            className={`flex h-10 w-10 items-center justify-center rounded-full transition active:opacity-60 ${
-              filtersOpen ? 'bg-white/25' : 'bg-black/30 backdrop-blur-sm'
+            className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 backdrop-blur-2xl transition active:opacity-60 ${
+              filtersOpen ? 'bg-white/25 ring-white/[0.28]' : 'bg-white/[0.10] ring-white/[0.14]'
             }`}
           >
             <SlidersHorizontal className="h-[22px] w-[22px]" />
@@ -532,8 +532,10 @@ export default function CameraApp({
                   aria-pressed={active}
                   aria-label={`变焦${z}倍`}
                   onClick={() => applyZoom(z)}
-                  className={`flex h-8 min-w-[34px] items-center justify-center rounded-full px-1.5 text-[13px] font-semibold tabular-nums backdrop-blur-sm transition ${
-                    active ? 'bg-white/30 text-white' : 'bg-black/40 text-white/65 active:bg-black/55'
+                  className={`flex h-8 min-w-[34px] items-center justify-center rounded-full px-1.5 text-[13px] font-semibold tabular-nums ring-1 backdrop-blur-2xl transition ${
+                    active
+                      ? 'bg-white/30 text-white ring-white/[0.28]'
+                      : 'bg-white/[0.10] text-white/65 ring-white/[0.14] active:bg-white/[0.18]'
                   }`}
                 >
                   {Number.isInteger(z) ? `${z}×` : `${z.toFixed(1)}×`}
@@ -549,7 +551,7 @@ export default function CameraApp({
               type="button"
               aria-label={`当前滤镜${filter.name}，点击恢复原图`}
               onClick={() => setFilterIndex(0)}
-              className="flex h-7 items-center gap-1 rounded-full bg-black/45 px-3 text-[12px] text-white backdrop-blur-sm transition active:opacity-60"
+              className="flex h-7 items-center gap-1 rounded-full bg-white/[0.10] px-3 text-[12px] text-white ring-1 ring-white/[0.14] backdrop-blur-2xl transition active:opacity-60"
             >
               {filter.name}
               <X className="h-3 w-3" aria-hidden="true" />
@@ -561,7 +563,7 @@ export default function CameraApp({
           {hideGallery ? (
             <span
               aria-hidden="true"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-neutral-800/60 ring-1 ring-white/10"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-white/[0.10] ring-1 ring-white/[0.14] backdrop-blur-2xl"
             >
               <ImageIcon className="h-5 w-5 text-white/25" />
             </span>
@@ -570,7 +572,7 @@ export default function CameraApp({
               type="button"
               aria-label="打开相册"
               onClick={() => useUI.getState().openApp('photos')}
-              className="h-11 w-11 shrink-0 overflow-hidden rounded-[10px] bg-neutral-800 ring-1 ring-white/20 transition active:opacity-70"
+              className="h-11 w-11 shrink-0 overflow-hidden rounded-[10px] bg-white/[0.10] ring-1 ring-white/[0.14] backdrop-blur-2xl transition active:opacity-70"
             >
               {thumbUrl ? (
                 <img
@@ -608,7 +610,7 @@ export default function CameraApp({
             aria-label="切换前后摄像头"
             onClick={toggleFacing}
             disabled={status === 'loading'}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 backdrop-blur-sm transition active:opacity-60 disabled:opacity-40"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/[0.14] backdrop-blur-2xl transition active:opacity-60 disabled:opacity-40"
           >
             <SwitchCamera className="h-6 w-6" />
           </button>
@@ -638,7 +640,7 @@ export default function CameraApp({
               setStatus('loading');
               setRetryCount((c) => c + 1);
             }}
-            className="mt-3 rounded-full bg-white/15 px-6 py-2 text-[15px] transition active:opacity-60"
+            className="mt-3 rounded-full bg-white/[0.10] px-6 py-2 text-[15px] ring-1 ring-white/[0.14] backdrop-blur-2xl transition active:opacity-60"
           >
             重试
           </button>
@@ -648,7 +650,7 @@ export default function CameraApp({
       {/* 已存储提示 */}
       {toastVisible && (
         <div
-          className="pointer-events-none absolute left-1/2 top-[116px] z-30 -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-[13px] text-white backdrop-blur-sm"
+          className="pointer-events-none absolute left-1/2 top-[116px] z-30 -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-[13px] text-white ring-1 ring-white/[0.14] backdrop-blur-xl"
           role="status"
         >
           {toastMsg}

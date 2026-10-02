@@ -475,7 +475,7 @@ function TrackRow({
           onRowClick();
         }
       }}
-      className="flex w-full cursor-pointer items-center gap-3 px-4 py-1.5 text-left transition-colors active:bg-muted/60"
+      className="mx-2.5 my-1 flex cursor-pointer items-center gap-3 rounded-[20px] bg-white/60 px-4 py-2 text-left shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-colors active:bg-muted/60 dark:bg-white/[0.06] dark:ring-white/[0.09] dark:active:bg-white/[0.1]"
     >
       <CoverThumb record={record} className="h-14 w-14" iconClass="h-6 w-6" />
       <div className="min-w-0 flex-1">
@@ -495,7 +495,7 @@ function TrackRow({
             aria-label={`「${record.title}」更多操作`}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted active:bg-muted"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
           >
             <MoreHorizontal className="h-5 w-5" />
           </button>
@@ -543,7 +543,7 @@ function MiniPlayerBar({ record, playing, onOpen }: { record: MusicRecord; playi
           onOpen();
         }
       }}
-      className="mx-3 flex shrink-0 cursor-pointer items-center gap-3 rounded-xl border border-border/70 bg-background/95 p-2 text-left shadow-sm backdrop-blur"
+      className="mx-3 flex shrink-0 cursor-pointer items-center gap-3 rounded-[20px] bg-white/60 p-2 text-left shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
     >
       <CoverThumb record={record} className="h-10 w-10" iconClass="h-4 w-4" />
       <div className="min-w-0 flex-1">
@@ -557,7 +557,7 @@ function MiniPlayerBar({ record, playing, onOpen }: { record: MusicRecord; playi
           e.stopPropagation();
           toggle();
         }}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-muted active:bg-muted"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
       >
         {playing ? (
           <Pause className="h-5 w-5" fill="currentColor" />
@@ -781,7 +781,7 @@ function PlayerView({ onBack }: { onBack: () => void }) {
             type="button"
             onClick={onBack}
             aria-label="返回资料库"
-            className="flex h-9 w-9 items-center justify-center rounded-full text-black/85 transition-colors hover:bg-black/10 active:bg-black/10 dark:text-white/85 dark:hover:bg-white/10 dark:active:bg-white/10"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/60 text-black/85 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.10] dark:text-white/85 dark:ring-white/[0.14]"
           >
             <ChevronDown className="h-6 w-6" />
           </button>
@@ -794,12 +794,12 @@ function PlayerView({ onBack }: { onBack: () => void }) {
             aria-label="歌词"
             aria-pressed={showLyrics}
             disabled={!hasLyrics}
-            className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+            className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-full shadow-sm ring-1 backdrop-blur-xl transition active:scale-[0.96] ${
               hasLyrics
                 ? showLyrics
-                  ? 'text-black dark:text-white'
-                  : 'text-black/55 dark:text-white/55 hover:bg-black/10 dark:hover:bg-white/10'
-                : 'cursor-not-allowed opacity-30'
+                  ? 'bg-foreground text-background ring-transparent'
+                  : 'bg-white/60 text-black/55 ring-white/70 dark:bg-white/[0.10] dark:text-white/55 dark:ring-white/[0.14]'
+                : 'cursor-not-allowed bg-white/60 text-black/55 opacity-30 ring-white/70 dark:bg-white/[0.10] dark:text-white/55 dark:ring-white/[0.14]'
             }`}
           >
             <Mic2 className="h-5 w-5" />
@@ -849,7 +849,7 @@ function PlayerView({ onBack }: { onBack: () => void }) {
           step={1}
           onValueChange={(v) => seek(v[0] ?? 0)}
           aria-label="播放进度"
-          className="[&_[data-slot=slider-range]]:bg-black dark:[&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:border-none [&_[data-slot=slider-thumb]]:bg-black dark:[&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:bg-black/15 dark:[&_[data-slot=slider-track]]:bg-white/20"
+          className="[&_[data-slot=slider-range]]:bg-black dark:[&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:border-none [&_[data-slot=slider-thumb]]:bg-black dark:[&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:bg-white/60 [&_[data-slot=slider-track]]:ring-1 [&_[data-slot=slider-track]]:ring-white/70 dark:[&_[data-slot=slider-track]]:bg-white/[0.10] dark:[&_[data-slot=slider-track]]:ring-white/[0.14]"
         />
         <div className="mt-1.5 flex justify-between text-[11px] tabular-nums text-black/50 dark:text-white/50">
           <span>{formatDuration(pos)}</span>
@@ -870,7 +870,11 @@ function PlayerView({ onBack }: { onBack: () => void }) {
           onClick={() => setShuffle(!shuffle)}
           aria-label="随机播放"
           aria-pressed={shuffle}
-          className={`transition-colors active:opacity-60 ${shuffle ? 'text-black dark:text-white' : 'text-black/40 dark:text-white/40'}`}
+          className={`flex h-11 w-11 items-center justify-center rounded-full shadow-sm ring-1 backdrop-blur-xl transition active:scale-[0.96] ${
+            shuffle
+              ? 'bg-foreground text-background ring-transparent'
+              : 'bg-white/60 text-black/40 ring-white/70 dark:bg-white/[0.10] dark:text-white/40 dark:ring-white/[0.14]'
+          }`}
         >
           <Shuffle className="h-6 w-6" />
         </button>
@@ -886,7 +890,7 @@ function PlayerView({ onBack }: { onBack: () => void }) {
           type="button"
           onClick={toggle}
           aria-label={playing ? '暂停' : '播放'}
-          className="flex h-[72px] w-[72px] items-center justify-center rounded-full bg-black text-white shadow-lg transition-transform active:scale-95 dark:bg-white dark:text-black"
+          className="flex h-[72px] w-[72px] items-center justify-center rounded-full bg-white/60 text-black shadow-lg ring-1 ring-white/70 backdrop-blur-2xl transition-transform active:scale-95 dark:bg-white/[0.10] dark:text-white dark:ring-white/[0.14]"
         >
           {playing ? (
             <Pause className="h-9 w-9" fill="currentColor" />
@@ -906,7 +910,11 @@ function PlayerView({ onBack }: { onBack: () => void }) {
           type="button"
           onClick={cycleRepeat}
           aria-label="循环模式"
-          className={`transition-colors active:opacity-60 ${repeat === 'off' ? 'text-black/40 dark:text-white/40' : 'text-black dark:text-white'}`}
+          className={`flex h-11 w-11 items-center justify-center rounded-full shadow-sm ring-1 backdrop-blur-xl transition active:scale-[0.96] ${
+            repeat === 'off'
+              ? 'bg-white/60 text-black/40 ring-white/70 dark:bg-white/[0.10] dark:text-white/40 dark:ring-white/[0.14]'
+              : 'bg-foreground text-background ring-transparent'
+          }`}
         >
           {repeat === 'one' ? <Repeat1 className="h-6 w-6" /> : <Repeat className="h-6 w-6" />}
         </button>

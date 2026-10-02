@@ -12,6 +12,8 @@
  *   上方左右两个语言槽可点选（点一侧再在下方列表选语言），中间 ⇄ 一键互换；
  *   聊天中按消息语言双向翻译：左侧语言的消息译成右侧，右侧语言的消息译成左侧
  * - SmsChatSettingsPage：信息 App 的聊天设置页（iOS 风格：翻译入口 + 回复条数入口 + 分句发送开关 + 时间感知开关）
+ * - WorldBookPickerPage：世界书挂载页（三端共用二级页）——「局部」书勾选挂载（既有交互不变）；
+ *   34-d 新增「专属」区块：列出全部专属书，可一键绑定/解绑到当前联系人（写书本体 targetContactId）
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - ChatVoicePage：「他的声音」页（三端共用二级页）——选角色说话音色（默认/内置音色/
@@ -26,13 +28,16 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
+import type { ContactRecord } from '@/lib/contacts';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
 import { BUILTIN_TTS_VOICES, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { listContacts } from '@/lib/ios/contacts-store';
 import { useMyVoices } from '@/lib/ios/my-voices';
 import { voiceIdForProvider } from '@/lib/ios/tts-client';
 import { useSettings } from '@/lib/ios/store';
+import { getBoundBookIds, loadBooks, saveBooks, type WorldBook } from '@/lib/ios/worldbook';
 import { LocalToast, useLocalToast } from './page-toast';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
@@ -1622,9 +1627,46 @@ export function SmsChatSettingsPage({
 // ---------------- 世界书挂载页（三端共用二级页） ----------------
 
 /**
+ * 34-d：同步「探针」反查当前联系人 id。
+ * 背景：本页由微信/QQ/信息三个调用方以纯 props 渲染（books/boundIds/onChange），组件内拿不到
+ * 当前联系人 id；而「专属」书的绑定/解绑要写书本体 targetContactId，必须知道当前联系人。
+ * 做法：把一个一次性探针 id 经 onChange 回传给调用方（调用方 setBoundBookIds → kvSet 同步落内存），
+ * 随即同步扫描联系人名单，找出挂载列表刚被写入探针的那个联系人；finally 里无条件恢复原挂载列表。
+ * 全程同步完成（idb-kv 内存写穿层保证同步可见），React 批处理下不产生中间渲染，探针绝不残留
+ * （万一极端时序残留，也只是挂载列表里多一个不对应任何真实书的 id，注入与展示均无感，下次勾选自愈）。
+ * 探针未命中（如未来调用方改为异步持久化）时，回退「挂载列表与 boundIds 完全一致且唯一」的反查；
+ * 仍无法确定则返回 null（专属区块降级为只读展示，不影响上方局部书挂载）。
+ */
+function probeCurrentContactId(
+  contacts: ReadonlyArray<Pick<ContactRecord, 'id'>>,
+  boundIds: string[],
+  onChange: (ids: string[]) => void,
+): string | null {
+  if (contacts.length === 0) return null;
+  const probe = `__wb-probe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    onChange([probe]);
+    const hit = contacts.find((c) => getBoundBookIds(c.id).includes(probe));
+    if (hit) return hit.id;
+  } catch {
+    // 探针异常：落入下方反查兜底
+  } finally {
+    onChange([...new Set(boundIds)]); // 无条件恢复原挂载列表
+  }
+  const want = [...new Set(boundIds)];
+  const sameSet = (ids: string[]) => ids.length === want.length && want.every((x) => ids.includes(x));
+  const candidates = contacts.filter((c) => sameSet(getBoundBookIds(c.id)));
+  return candidates.length === 1 ? candidates[0].id : null;
+}
+
+/**
  * 世界书挂载页（微信/QQ/信息聊天设置二级页）：为当前联系人勾选要挂载的世界书（可多选）。
- * 范围在书级：只有「局部」范围的书需要挂载（挂载后命中关键词才注入）；
- * 「全局」书无需挂载对所有对话常驻生效；「专属」书仅对绑定的角色生效。书籍本体在「世界书」App 里维护。
+ * 范围在书级：「局部」书挂载后命中关键词才注入（勾选即挂载/卸载，既有交互与 testid 不变）；
+ * 「全局」书无需挂载、对所有对话常驻生效（不在此页展示）；「专属」书仅对绑定的角色生效——
+ * 34-d 起本页新增「专属」区块：列出全部专属书（无论绑定的是谁），点行即绑定/解绑到当前联系人
+ * （未绑定/绑定他人 → 绑定当前并覆盖；已绑定当前 → 解绑。写书本体 targetContactId，与世界书 App
+ * 同一 loadBooks/saveBooks 通道，不新造存储；注入层发送时现场读取，改动立即生效）。
+ * 书籍本体与条目仍在「世界书」App 里维护。
  */
 export function WorldBookPickerPage({
   variant,
@@ -1646,6 +1688,73 @@ export function WorldBookPickerPage({
   const testPrefix = variant;
   const bound = useMemo(() => new Set(boundIds), [boundIds]);
 
+  // ---------- 34-d「专属」区块：全部专属书也列出来，可直接绑定/解绑到当前联系人 ----------
+  // 专属书绑定关系存在书本体 targetContactId 上（wb-bind 挂载列表只管局部书）；
+  // 读写走世界书 App 同款 loadBooks/saveBooks 既有通道，不新造存储。
+  const [exBooks, setExBooks] = useState<WorldBook[]>(() => loadBooks().filter((b) => b.scope === 'exclusive'));
+  /** 联系人名单（null = 加载中）：解析专属书已绑定的角色名 + 反查当前联系人 */
+  const [exContacts, setExContacts] = useState<ContactRecord[] | null>(null);
+  /** 当前联系人 id（探针反查；null = 未能确定 → 专属区降级为只读展示） */
+  const [currentContactId, setCurrentContactId] = useState<string | null>(null);
+  const [toast, showToast] = useLocalToast();
+
+  // 探针恢复现场要用「当次渲染」的 boundIds/onChange；effect 只在挂载时跑一次，经 ref 取最新值。
+  // ref 更新放 effect（React Compiler 规则禁止 render 期间写 ref）；本 effect 声明在主探针 effect
+  // 之前，挂载时先执行，主 effect 读到的即挂载时的 props。
+  const latestProps = useRef({ boundIds, onChange });
+  useEffect(() => {
+    latestProps.current = { boundIds, onChange };
+  });
+
+  useEffect(() => {
+    let alive = true;
+    listContacts()
+      .then((list) => {
+        if (!alive) return;
+        setExContacts(list);
+        // 反查当前联系人（组件由调用方以纯 props 渲染、拿不到联系人 id，见 probeCurrentContactId）
+        const found = probeCurrentContactId(list, latestProps.current.boundIds, latestProps.current.onChange);
+        // 与世界书 App 同款约束：kind=user 是机主本人，不参与专属绑定（反查命中本人则视为未确定）
+        const foundContact = found ? list.find((c) => c.id === found) : undefined;
+        setCurrentContactId(foundContact && foundContact.kind !== 'user' ? found : null);
+      })
+      .catch(() => {
+        // 联系人不可用：名单保持 null，专属区降级为只读展示（不影响上方局部书挂载）
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** 专属书行副标题：绑定状态（已绑角色名可解析时展示）+ 条目计数 */
+  const exBookSubtitle = (book: WorldBook): string => {
+    const count = `${book.entries.length} 条目 · ${book.entries.filter((e) => e.enabled).length} 启用`;
+    if (!exContacts) return count;
+    if (!book.targetContactId) return `未绑定角色 · ${count}`;
+    if (book.targetContactId === currentContactId) return `已绑定当前角色 · ${count}`;
+    const other = exContacts.find((c) => c.id === book.targetContactId);
+    return `已绑定「${other?.name ?? '其他角色'}」 · ${count}`;
+  };
+
+  /** 绑定/解绑当前联系人（语义对齐世界书 App 的绑定行：未绑定/绑定他人 → 绑定当前并覆盖；已绑定当前 → 解绑） */
+  const toggleExclusiveBook = (bookId: string) => {
+    if (!currentContactId) return; // 名单加载中 / 反查失败：只读降级
+    const all = loadBooks();
+    const target = all.find((b) => b.id === bookId && b.scope === 'exclusive');
+    if (!target) return;
+    const bind = target.targetContactId !== currentContactId;
+    const next = all.map((b) =>
+      b.id === bookId ? { ...b, targetContactId: bind ? currentContactId : null, updatedAt: Date.now() } : b,
+    );
+    saveBooks(next);
+    setExBooks(next.filter((b) => b.scope === 'exclusive'));
+    showToast(bind ? `已把「${target.name}」绑定到当前角色` : `已解绑「${target.name}」`);
+  };
+
+  const wbSectionTitleCls = `px-1 pb-1.5 text-[12.5px] font-medium ${
+    t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40'
+  }`;
+
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏 */}
@@ -1665,8 +1774,10 @@ export function WorldBookPickerPage({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        {/* 局部区块：挂载列表（既有行结构与 testid 保持不变） */}
+        <p className={wbSectionTitleCls}>局部 · 挂载后生效</p>
         {books.length === 0 ? (
-          <div className="mt-16 text-center">
+          <div className="mt-10 text-center">
             <BookMarked className="mx-auto h-10 w-10 text-black/15 dark:text-white/15" strokeWidth={1.5} aria-hidden="true" />
             <p className={`mt-3 text-[14px] ${t.sms ? 'text-muted-foreground' : 'text-black/35 dark:text-white/35'}`}>
               没有可挂载的「局部」世界书；到「世界书」App 创建（范围选局部）后再来挂载
@@ -1712,10 +1823,64 @@ export function WorldBookPickerPage({
             })}
           </div>
         )}
+
+        {/* 34-d 新增「专属」区块：全部专属书也列出来，点行即绑定/解绑到当前联系人（无需去世界书 App） */}
+        <div className="mt-5" data-testid={`${testPrefix}-wb-local-section`}>
+          <p className={wbSectionTitleCls}>专属 · 绑定当前角色后生效</p>
+          {exBooks.length === 0 ? (
+            <p
+              className="rounded-[10px] px-3 py-3.5 text-center text-[13px] leading-relaxed text-black/35 dark:text-white/35"
+              data-testid={`${testPrefix}-wb-local-empty`}
+            >
+              暂无「专属」世界书；到「世界书」App 创建（范围选专属）后，可在这里直接绑定/解绑当前角色
+            </p>
+          ) : (
+            <div className={`${t.cardCls} overflow-hidden`}>
+              {exBooks.map((book, i) => {
+                const boundToCurrent = currentContactId !== null && book.targetContactId === currentContactId;
+                return (
+                  <div key={book.id}>
+                    {i > 0 && <div className={`border-t ${t.dividerCls}`} />}
+                    <button
+                      type="button"
+                      data-testid={`${testPrefix}-wb-local-book-${i}`}
+                      aria-label={`${boundToCurrent ? '解绑' : '绑定'}专属世界书：${book.name}`}
+                      onClick={() => toggleExclusiveBook(book.id)}
+                      className={t.rowCls}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate">{book.name}</span>
+                        <span
+                          className={`mt-0.5 block truncate text-[12.5px] ${
+                            t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40'
+                          }`}
+                        >
+                          {exBookSubtitle(book)}
+                        </span>
+                      </span>
+                      {boundToCurrent && (
+                        <span
+                          className="grid shrink-0 place-items-center pl-2"
+                          style={{ color: t.accent }}
+                          aria-label="已绑定当前角色"
+                          data-testid={`${testPrefix}-wb-local-book-check-${i}`}
+                        >
+                          <Check className="h-5 w-5" strokeWidth={2.4} />
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <p className={t.captionCls}>
-          只有「局部」范围的世界书需要挂载：挂载后，聊天内容命中条目触发词时才注入对应设定（未命中不发送）。「全局」书无需挂载、对所有对话常驻生效；「专属」书仅对绑定的角色生效——都在「世界书」App 里设置。
+          只有「局部」范围的世界书需要挂载：挂载后，聊天内容命中条目触发词时才注入对应设定（未命中不发送）。「全局」书无需挂载、对所有对话常驻生效；「专属」书仅对绑定的角色生效——可在上方「专属」区块直接绑定/解绑当前角色，书籍本体与条目仍在「世界书」App 里维护。
         </p>
       </div>
+      <LocalToast msg={toast} />
     </div>
   );
 }

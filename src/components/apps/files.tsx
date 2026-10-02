@@ -490,7 +490,7 @@ function FormSheet({
         right={<IOSTextButton onClick={() => void save()}>存储</IOSTextButton>}
       />
       <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-[40px] pt-2">
-        <div className="divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="divide-y divide-border/60 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <FormRow label="标题">
             <input
               className={formInputCls}
@@ -863,7 +863,7 @@ function LibraryView({
               <div className="text-[17px] font-medium text-foreground/70">{meta.empty}</div>
             </div>
           ) : (
-            <div className="divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+            <div className="divide-y divide-border/60 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
               {lib === 'photos' &&
                 photos.map((p) => (
                   <ItemRow
@@ -996,7 +996,7 @@ function LibraryView({
                 const p = photos.find((x) => x.id === previewId);
                 if (p) downloadBlob(p.blob, p.name || `photo-${p.id}.jpg`);
               }}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/90 transition-opacity active:opacity-60"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.10] text-white/90 ring-1 ring-white/[0.14] backdrop-blur-2xl transition-opacity active:opacity-60"
             >
               <Download className="h-5 w-5" strokeWidth={2.2} />
             </button>
@@ -1013,7 +1013,7 @@ function LibraryView({
       {/* 导入进度提示（照片/录音/音乐多文件导入） */}
       {importing && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-[44px]">
-          <div className="rounded-full bg-foreground/90 px-4 py-1.5 text-[13px] font-medium text-background shadow-lg">
+          <div className="rounded-full bg-black/60 px-4 py-1.5 text-[13px] font-medium text-white shadow-lg ring-1 ring-white/[0.14] backdrop-blur-xl">
             正在导入 {importing.done}/{importing.total}…
           </div>
         </div>
@@ -1106,14 +1106,14 @@ export default function FilesApp() {
         </div>
 
         {/* 存储空间卡 */}
-        <div className="mx-4 mt-1 rounded-[16px] bg-card p-4">
+        <div className="mx-4 mt-1 rounded-[20px] bg-white/60 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-[16px] font-semibold">存储空间</span>
             <span className="text-[13px] text-muted-foreground">
               {storage ? `${formatBytes(storage.usage)} / ${formatGB(storage.quota)}` : '计算中…'}
             </span>
           </div>
-          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/60 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             <div
               className="h-full rounded-full bg-foreground transition-[width] duration-500"
               style={{ width: `${barWidth}%` }}
@@ -1125,7 +1125,7 @@ export default function FilesApp() {
         </div>
 
         {/* 资料库列表卡 */}
-        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 mt-4 divide-y divide-border/60 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           {LIBS.map((l) => (
             <button
               key={l.key}

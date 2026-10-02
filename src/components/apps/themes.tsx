@@ -46,7 +46,7 @@ function AppearanceThumb({ variant }: { variant: ThemeMode }) {
     variant === 'light' ? '#C7C7CC' : variant === 'dark' ? 'rgba(255,255,255,0.55)' : '#8E8E93';
 
   return (
-    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border border-border p-1">
+    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-white/60 p-1 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
       <span
         className="flex h-full w-full flex-col justify-between rounded-[6px] p-[3px]"
         style={variant === 'auto' ? { backgroundImage: autoBg } : { backgroundColor: surface }}
@@ -99,7 +99,7 @@ function WallpaperCard({
   const activePreset = WALLPAPER_PRESETS.find((p) => p.id === presetId);
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-[16px] bg-card p-3">
+    <div className="flex flex-col overflow-hidden rounded-[20px] bg-white/60 p-3 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
       {/* 标题 */}
       <div className="flex min-h-[20px] items-center gap-1.5">
         {isLock ? (
@@ -141,7 +141,7 @@ function WallpaperCard({
       </p>
 
       {/* 独立的上传 / 移除（每张卡各自一份） */}
-      <div className="mt-2 divide-y divide-border/60 overflow-hidden rounded-[10px] border border-border/60">
+      <div className="mt-2 divide-y divide-border/60 overflow-hidden rounded-[10px] bg-white/50 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.05] dark:ring-white/[0.09]">
         <label className="flex cursor-pointer items-center justify-center gap-1.5 px-2 py-2 transition-colors active:bg-muted/50">
           <Upload className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={2} aria-hidden="true" />
           <span className="text-[12px] leading-none">从手机上传</span>
@@ -291,7 +291,7 @@ export default function ThemesApp() {
       <div className="no-scrollbar flex-1 overflow-y-auto pb-[40px] pt-1">
         {/* 外观 */}
         <div className="mb-2 px-8 text-[13px] text-muted-foreground">外观</div>
-        <div className="mx-4 divide-y divide-border/60 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 divide-y divide-border/60 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           {APPEARANCE_OPTIONS.map((o) => (
             <button
               key={o.value}
@@ -370,7 +370,7 @@ export default function ThemesApp() {
           }`}
         >
           <div className="overflow-hidden">
-            <div className="overflow-hidden rounded-[16px] bg-card px-4 pb-4 pt-4">
+            <div className="overflow-hidden rounded-[20px] bg-white/60 px-4 pb-4 pt-4 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
               <div className="grid grid-cols-4 gap-x-2 gap-y-4">
                 {APPS.map((a) => {
                   const customUrl = customIcons[a.id];
@@ -486,7 +486,7 @@ export default function ThemesApp() {
 
         {/* 小组件：独立界面（用户要求单独的界面）——入口行打开全屏子页（全部小组件 1:1 预览与添加） */}
         <div className="mb-2 mt-6 px-8 text-[13px] text-muted-foreground">小组件</div>
-        <div className="mx-4 overflow-hidden rounded-[16px] bg-card">
+        <div className="mx-4 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <button
             type="button"
             data-testid="themes-widgets-entry"

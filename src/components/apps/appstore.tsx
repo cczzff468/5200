@@ -171,7 +171,7 @@ function OpenPill({ onClick, testid, label = '打开' }: { onClick: () => void; 
         e.stopPropagation();
         onClick();
       }}
-      className={`shrink-0 rounded-full bg-[#007aff]/[0.09] px-[18px] py-[6px] text-[14px] font-semibold leading-none ${BLUE} transition-transform active:scale-95 dark:bg-[#409cff]/[0.22]`}
+      className={`shrink-0 rounded-full bg-[#007aff]/[0.09] px-[18px] py-[6px] text-[14px] font-semibold leading-none ${BLUE} shadow-sm ring-1 ring-[#007aff]/20 backdrop-blur-xl transition-transform active:scale-95 dark:bg-[#409cff]/[0.22] dark:ring-[#409cff]/30`}
     >
       {label}
     </button>
@@ -368,7 +368,7 @@ export default function AppStoreApp() {
                   data-testid="appstore-detail-back"
                   aria-label="返回"
                   onClick={() => setDetailId(null)}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-muted/70 ring-1 ring-border/40 backdrop-blur transition-transform active:scale-90"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-transform active:scale-90 dark:bg-white/[0.08] dark:ring-white/[0.1]"
                 >
                   <ChevronLeft className="h-5 w-5" strokeWidth={2.4} />
                 </button>
@@ -382,7 +382,7 @@ export default function AppStoreApp() {
                       /* 忽略 */
                     }
                   }}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-muted/70 ring-1 ring-border/40 backdrop-blur transition-transform active:scale-90"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-transform active:scale-90 dark:bg-white/[0.08] dark:ring-white/[0.1]"
                 >
                   <Share className="h-[18px] w-[18px]" strokeWidth={2.1} />
                 </button>
@@ -422,7 +422,7 @@ export default function AppStoreApp() {
             </div>
 
             {/* 四栏数据：评分 / 年龄分级 / 排行榜 / 开发者 */}
-            <div className="mt-6 grid grid-cols-4 divide-x divide-border/40 border-y border-border/40">
+            <div className="mt-6 grid grid-cols-4 divide-x divide-border/40 overflow-hidden rounded-[16px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
               <div className="flex flex-col items-center gap-1 px-1 py-3.5">
                 <span className="text-[11px] text-muted-foreground">{meta.count} 万个评分</span>
                 <span className="text-[19px] font-semibold leading-none">{meta.rating}</span>
@@ -591,7 +591,7 @@ export default function AppStoreApp() {
               </div>
             ) : removed.length === 0 ? (
               <div className="mt-20 flex flex-col items-center" data-testid="appstore-empty">
-                <span className="grid h-16 w-16 place-items-center rounded-full bg-muted/70">
+                <span className="grid h-16 w-16 place-items-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
                   <CloudDownload className="h-8 w-8 text-muted-foreground" strokeWidth={1.8} />
                 </span>
                 <p className="mt-4 text-[16px] font-semibold">没有已移除的 App</p>
@@ -636,7 +636,7 @@ export default function AppStoreApp() {
                 placeholder="名称、功能或分类"
                 aria-label="搜索 App"
                 data-testid="appstore-search-input"
-                className="w-full rounded-[11px] bg-muted/60 py-[8px] pl-9 pr-3 text-[15px] outline-none ring-1 ring-border/30 placeholder:text-muted-foreground/70 focus:ring-[#007aff]/40 dark:focus:ring-[#409cff]/40"
+                className="w-full rounded-[14px] bg-white/60 py-[8px] pl-9 pr-3 text-[15px] shadow-sm outline-none ring-1 ring-white/70 backdrop-blur-xl placeholder:text-muted-foreground/70 focus:ring-[#007aff]/40 dark:bg-white/[0.08] dark:ring-white/[0.1] dark:focus:ring-[#409cff]/40"
               />
             </div>
             <p className="mt-4 px-4 text-[13px] text-muted-foreground">
@@ -662,7 +662,7 @@ export default function AppStoreApp() {
             </ul>
             {searchResults.length === 0 && (
               <div className="mt-20 flex flex-col items-center">
-                <span className="grid h-16 w-16 place-items-center rounded-full bg-muted/70">
+                <span className="grid h-16 w-16 place-items-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
                   <Search className="h-8 w-8 text-muted-foreground" strokeWidth={1.8} />
                 </span>
                 <p className="mt-4 text-[16px] font-semibold">没有找到相关 App</p>

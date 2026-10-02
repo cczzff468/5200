@@ -13640,3 +13640,156 @@ Work Log:
 Stage Summary:
 - 设置「字体」功能全链路完成：10 款内置纯 CSS 栈字体点选即全局实时生效（CSS 变量 --app-font-family → body font-family），预览卡中英文/数字/标点实时预览，.ttf/.otf/.woff/.woff2 字体文件导入存独立 IndexedDB（ios-phone-fonts）+ FontFace 动态注册，两步确认删除、删选中字体回默认；appFontId 经 store 持久化、PhoneShell 启动时 ensureAppFontApplied 恢复，失败不阻塞开机；毛玻璃风格与 Task 31 设置页统一
 - 产物：src/lib/ios/fonts.ts（新）+ src/lib/ios/store.ts + src/app/globals.css + src/components/ios/PhoneShell.tsx + src/components/apps/settings.tsx；tsc/eslint 全绿
+
+---
+Task ID: 34（批次总登记）
+Agent: Z.ai Code（主会话）
+Task: ①字体页加字体大小/粗细 ②除微信/QQ/电话/相册外全部 App 界面毛玻璃化 ③QQ 抽屉删会员中心/免流量 ④聊天设置世界书页显示局部专属
+
+Work Log:
+- Task 33 全量验证完成：未配 Key 单请求链路实测 ✓（每条消息仅 1 次 POST /api/chat，无 502→403→SDK 三段等待；内置模型 429 限流属环境临时状况，错误文案按设计透出）；字体功能 E2E 全过（预览/切换实时生效/上传 LiberationMono ttf→FontFace 加载→全局生效/删除回默认/reload 持久化楷体保留，连锁屏都应用）；手电筒回退链路 ✓（无摄像头→白屏补光+说明文案+轻点关闭）；33-b 确认切换器非 bug；数据已清；代码已随 d915435 入库
+- 34-a 字体大小方案定稿：项目 text-[Npx] 任意值 2773 处 vs rem 文本类仅 77 处 → root font-size 方案不可见；采用 **zoom + calc 反向补偿**（容器 width:calc(100%/scale)+zoom:scale，移动端铺满不溢出、桌面端 390x844 机身不变内容放大、getBoundingClientRect 与 clientX 同为视觉坐标手势数学不变、scale=1 时零行为变化向后兼容）；字重走 body font-weight var
+- 分派：34-a 主会话自做（settings/fonts/store/globals/PhoneShell 独占）；34-b-1~b-5 五组子代理并行毛玻璃化各 App（文件零重叠）；34-b-6 设置剩余页待 34-a 完成后派发；34-c qq.tsx 抽屉删两项；34-d chat-settings 世界书局部专属展示
+
+Stage Summary:
+- Task 33 收尾完毕；Task 34 并行开工
+
+---
+Task ID: 34-b2
+Agent: 子代理（34-b 并行毛玻璃化组 b-2）
+Task: 备忘录（notes.tsx）/日历（calendar.tsx）/提醒事项（reminders.tsx）三 App 界面毛玻璃化——只改样式 className/装饰层，逻辑、testid、交互、结构零变化
+
+Work Log:
+- 按统一玻璃配方落地（全部带 dark: 变体）：玻璃卡片 = rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]；胶囊/chips = rounded-full bg-white/60 backdrop-blur-xl ring-1 ring-white/70 shadow-sm transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]（激活态保留各自实心强调：备忘录金底白字、日历/提醒 bg-foreground text-background）；输入/搜索框 = rounded-[14px] bg-white/60 backdrop-blur-xl ring-1 ring-white/70（dark 同配方）
+- notes.tsx（7 处）：NoteCard bg-card→玻璃卡（16px→20px 圆角）；列表搜索框 bg-muted→玻璃输入框；分类筛选胶囊 bg-muted→玻璃胶囊；编辑器分类小胶囊、金色「完成」bg-muted→玻璃胶囊；编辑器/列表两条底部悬浮胶囊工具栏（border border-border/50 bg-card/95 shadow-lg）→玻璃卡配方（保留 rounded-full 胶囊形）；页面浅灰底、金色置顶风格、长按动作表入口、空白草稿丢弃逻辑均未动
+- calendar.tsx（10 处）：当日事件列表卡 bg-card→玻璃卡；「今天」bg-muted→玻璃胶囊；事件区「+」与 Sheet 关闭「×」（同串 className）两处圆钮 bg-muted→玻璃圆钮；FIELD_CLASS 与备注 textarea 由 border border-input bg-transparent→rounded-[14px] 玻璃输入框（focus:border-foreground/50→focus:ring-foreground/40）；「全天」「重复」两个 border border-input 行容器→玻璃行；重复预设 chips bg-muted→玻璃胶囊；「删除事件」补玻璃底；Sheet 本体 bg-background 保持实底以保表单可读性；42 格日期网格、今天红圆、选中 ring、左右滑动切月、repeat 展开逻辑零变化
+- reminders.tsx（13 处）：主列表卡（divide-y）bg-card→玻璃卡；底部快速新建栏（border bg-card shadow-lg）→玻璃胶囊栏；Sheet 内标题 Input/备注 Textarea bg-muted→玻璃（border-none 经 cn 合并覆盖 ui 基类，focus-visible 焦点环保留）；到期日期/时间两输入框（同串）、「标记」「重复」行容器 bg-muted→玻璃行；重复预设/自定义/星期 h-8 圆钮 bg-background/70→玻璃胶囊；「删除提醒」bg-muted→玻璃；圆圈完成 toggle、旗标、已完成折叠、repeat 同步逻辑零变化（三文件本无 testid）
+- 备注：日历月份切换箭头为纯图标钮（仅 active:bg-muted 按压反馈）、事件行按压反馈 active:bg-muted/50、IOSNavBar/底部 Sheet 容器非 bg-card/bg-white/bg-muted 容器，按规范保留
+
+Stage Summary:
+- 备忘录/日历/提醒事项毛玻璃化完成：卡片、搜索/输入框、筛选与重复 chips、悬浮工具栏、Sheet 内控件全部换用统一玻璃配方并带 dark: 变体；三 App 信息层级与交互行为不变
+- 验证：bunx tsc --noEmit 零错误；bunx eslint notes.tsx calendar.tsx reminders.tsx 零错误；未 commit、未动其它文件、未跑浏览器测试
+
+---
+Task ID: 34-b1
+Agent: 34-b1 子代理（GLM）
+Task: 时钟/天气/计算器毛玻璃化
+
+Work Log:
+- src/components/apps/clock.tsx（浅色页面玻璃配方 A）：世界时钟英雄卡/城市列表卡/闹钟列表卡/秒表计次列表 4 处 bg-card 卡片 → rounded-[20/16px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl + dark:bg-white/[0.06] dark:ring-white/[0.09]（divide 分隔线保留）；城市行时差胶囊 bg-muted → 白玻璃胶囊、迷你表盘容器 bg-muted/50 → bg-white/50 玻璃环；BottomSheet 面板 bg-background → bg-background/85 backdrop-blur-2xl 毛玻璃抽屉；城市添加/闹钟编辑 Sheet 内搜索框、时间输入、标签输入（bg-muted）→ rounded-[14px] 白玻璃输入框（ring-white/70 + dark 变体）；星期胶囊未激活态改玻璃、激活态保留 bg-foreground text-background；秒表「复位/计次」「暂停」「取消」「计时完成·好」及响铃层「稍后提醒」圆钮 bg-muted → 白玻璃圆钮（shadow-sm + ring + backdrop-blur-xl + dark 变体）；秒表/计时器 启动/停止 tint 钮保留红/绿 15% 色底并加 ring-[色]/35 backdrop-blur-xl dark 增强；Stepper 加减钮 → 玻璃配方；底部 TabBar → border-white/70 bg-white/60 shadow-[0_-4px_24px] backdrop-blur-2xl dark:bg-black/50 玻璃栏；逻辑/testid（无 testid）/交互/结构零变化，RingOverlay 全屏底色保留（状态栏同步依赖）
+- src/components/apps/weather.tsx（彩色渐变页深色玻璃配方 B）：背景渐变保留（天气灵魂）；DetailCard×6/24 小时预报/7 天预报/错误卡 的 border-white/10 bg-white/10 backdrop-blur-md 统一升级为 bg-white/[0.10] ring-1 ring-white/[0.14] backdrop-blur-2xl；搜索覆盖层内搜索框 rounded-[12px] → rounded-[14px] 深玻璃 + backdrop-blur-xl；错误卡「重试」钮 bg-white/20 → 深玻璃胶囊（shadow-sm ring）；城市管理页搜索胶囊 bg-muted → 白玻璃胶囊 + dark 变体；ManagerCityCard 有数据时保留天气渐变并加 ring-white/25 玻璃高光、无数据占位 bg-muted → 白玻璃卡 + dark 变体；文字白色系全部保留
+- src/components/apps/calculator.tsx：数字键 DIGIT（#E9E9EB/#333333 实心）→ bg-white/70 玻璃圆钮（ring-white/80 backdrop-blur-xl dark:bg-white/[0.14] dark:ring-white/[0.12] 白字）；功能键 FUNC/科学键 SCI_TONE → bg-white/50 玻璃（dark:bg-white/[0.30]/[0.26] 深灰玻璃黑字，保持 iOS 深色功能键观感）；运算符橙实心 ORANGE 与激活反白 OP_ACTIVE 保留（毛玻璃统一但仍是计算器）；显示区改为玻璃面板：Display 容器加 mx-4 mt-[54px] rounded-[20px] bg-white/60 ring-1 ring-white/70 shadow backdrop-blur-2xl + dark 变体（pt-[54px] 改 mt-[54px]，竖屏/横屏共用）；reducer/tokenizer/引擎逻辑与布局结构零变化
+- 验证：bunx tsc --noEmit 零错误；bunx eslint 三文件零错误；未 commit、未动其它文件、未跑浏览器
+
+Stage Summary:
+- 时钟/天气/计算器三 App 毛玻璃化完成：浅色页（时钟、城市管理、计算器）统一白玻璃配方（bg-white/60 + ring-white/70 + backdrop-blur-2xl + shadow 0_8px_28px，全部带 dark: 白 [0.06~0.30] 深色变体），天气主页彩色渐变上统一深玻璃配方（bg-white/[0.10] + ring-white/[0.14] + backdrop-blur-2xl），背景渐变/橙运算符/文字色系/全部交互与 testid 零变化
+
+---
+
+Task ID: 34-b4
+Agent: 子代理 34-b4
+Task: 联系人（contacts.tsx）/ 信息（chat.tsx）/ 浏览器（browser.tsx）三 App 界面毛玻璃化（只改样式 className，逻辑/交互/testid/结构零变化）
+
+Work Log:
+- contacts.tsx：表单输入框/多行框常量 boxInputCls、boxAreaCls 改玻璃输入框配方（rounded-[14px] bg-white/60 + ring-1 ring-white/70 + backdrop-blur-xl + shadow-sm + focus:ring-2，带 dark: 变体）；性别三选 pill 与分段 tab 改胶囊玻璃 + 激活态 bg-foreground text-background；号码骰子生成钮改玻璃圆钮；列表页「未添加好友」分组与好友主列表 ul、详情页 CardGroup 分组卡、NPC 归属选择器/下拉、详情类型胶囊、头像空态、未添加好友虚线条全部换玻璃配方（卡片 rounded-[20px] + shadow 0_8px_28px + ring-white/70 + backdrop-blur-2xl，全带 dark:）
+- chat.tsx：聊天页顶栏、输入栏 form/多选操作栏/引用条/待发图片预览条/解除拉黑面板与理由输入、加号面板与瓷贴、文字图片弹层（容器+关闭钮+textarea）、编辑消息弹层 textarea、添加好友页搜索框/虚线空态/未找到卡/待添加列表卡、联系人面板搜索框、底部信息/联系人椭圆分段控件（nav 玻璃化 + 滑块激活态 bg-foreground + 文字 text-background）全部玻璃化；聊天气泡（我方蓝 #007AFF/对方灰 bg-muted）、气泡尾巴、系统提示行/引用胶囊/拉黑卡片等语义元素配色保持不变；Tailwind 4 重要语法用尾缀 ring-[#FF3B30]/60!（错误态红环）
+- browser.tsx：顶部地址栏区（含地址栏胶囊、引擎 iOS 分段控件及激活态）、底部工具栏、拦截提示条与「在新窗口打开」chip、书签面板列表行与图标格、主页罗盘图标/快速访问磁贴/提示卡全部玻璃化；iframe 网页内容区不动
+- 验证：bunx tsc --noEmit 零错误；bunx eslint 三文件零错误；未 commit、未动其它文件、未跑浏览器
+
+Stage Summary:
+- 联系人/信息/浏览器三 App 毛玻璃化完成：统一玻璃配方（bg-white/60 + ring-white/70 + backdrop-blur-2xl + shadow 0_8px_28px，全部带 dark: bg-white/[0.06~0.1] 深色变体），胶囊/分段控件激活态统一 bg-foreground text-background，信息 App 聊天气泡蓝/灰语义与浏览器网页内容区保持不变，逻辑/交互/testid 零变化
+
+---
+
+Task ID: 34-c
+Agent: 子代理 34-c（GLM）
+Task: QQ 个人抽屉删除「会员中心」「免流量」两个入口（菜单行 + 专属图标/toast 占位逻辑），其它条目保留
+
+Work Log:
+- 定位：src/components/apps/qq.tsx 个人抽屉组件（role="dialog" aria-label="个人中心"）内 listRows 数组（约 L10655）：删第 5 行 { Crown 图标, label '会员中心', hint '联会会员买一送一', onClick: onToast('会员中心暂未开放') } 与第 7 行 { Radio 图标, label '免流量', hint '限时推广', onClick: onToast('免流量暂未开放') }，两条的 toast 占位逻辑随行一并删除
+- rowColors 死数据同步清理：原 7 色 ['#F5B90F','#3BA0FF','#3BA0FF','#3BA0FF','#F0619B','#F0479C','#3BC86A'] 按索引映射 listRows，删掉仅被这两行使用的 '#F0619B'（会员中心）与 '#3BC86A'（免流量），剩 5 色与剩余 5 行（相册/收藏/表情/钱包/个性装扮）一一对齐，个性装扮 '#F0479C' 保留
+- 图标 import 清理：Crown 仅被会员中心一处引用 → 从 lucide-react import 中删除；Radio 在「面对面添加」功能宫格（L10943 附近）仍有引用 → import 保留
+- 死代码复查：全文 grep Crown/会员中心/免流量/#F0619B/#3BC86A 均零残留；其余条目（相册/收藏/表情/钱包/个性装扮 + 底部设置/夜间/天气城市栏）零改动，抽屉手势/关闭/跳转逻辑零变化
+- 验证：bunx tsc --noEmit 零错误；bunx eslint src/components/apps/qq.tsx 零错误（BABEL deoptimise 提示按约定忽略）；未 commit、未动其它文件、未跑浏览器
+
+Stage Summary:
+- QQ 个人抽屉「会员中心」「免流量」两入口删除完毕：菜单行、专属 Crown 图标 import、两条 onToast 占位、rowColors 中两处专属色一并清理，Radio 图标因他处仍用而保留；剩余条目与抽屉交互逻辑零变化，tsc/eslint 全绿
+
+---
+Task ID: 34-b3
+Agent: 34-b3 子代理（continued，接手收尾）
+Task: 音乐/语音备忘录/文件/相机毛玻璃化（接手收尾）
+
+Work Log:
+- 前代理进度核查：music.tsx（12 处）/recorder.tsx（14 处）/files.tsx（7 处）未提交改动已按统一玻璃配方落地且完整——玻璃卡 rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl + dark:bg-white/[0.06] dark:ring-white/[0.09]；胶囊/圆钮 bg-white/60 ring-white/70 backdrop-blur-xl shadow-sm（dark 同配方）；recorder 底部录音区/粘性分组头、files 存储卡/资料库卡/导入进度 toast、music TrackRow 悬浮卡/MiniPlayer/播放器全控件均已玻璃化，无中断痕迹
+- 三文件残留实心底复查：仅剩 bg-background 页面基座/全屏 Sheet（按 b2/b4 规范保持实底保可读性）、行按压反馈 active:bg-muted/50、小图标瓷贴 bg-muted（与 music CoverThumb 同 precedent）、recorder 确认弹窗取消钮 bg-muted（iOS 弹窗灰钮语义）——均属规范保留项，无遗漏实心卡片，未额外改动
+- camera.tsx 毛玻璃化（19+/17-，深色玻璃配方 bg-white/[0.10] ring-1 ring-white/[0.14] backdrop-blur-2xl，取景画面零遮挡）：顶部控制条 5 钮（闪光/网格/定时/画幅/滤镜）bg-black/30 backdrop-blur-sm → 深玻璃，激活态保留 bg-white/25 加 ring-white/[0.28]；变焦药丸 bg-black/40 → 深玻璃（激活 bg-white/30 + 亮环，按压 active:bg-white/[0.18]）；当前滤镜提示胶囊 bg-black/45 → 深玻璃；相册缩略图容器及隐藏占位 bg-neutral-800(/60) → 深玻璃（缩略图 overflow-hidden 覆盖不变）；翻转钮保留 bg-white/15 视觉语言 + 玻璃底环 ring-white/[0.14] + backdrop-blur-2xl；错误页重试钮、存储 toast（bg-black/60 保留 + ring + backdrop-blur-xl，同 files toast 配方）一并玻璃化；大快门（白环白圆）完全未动；三分网格线/上下渐变遮罩/倒计时数字层/白屏闪光为取景辅助层保持原样；逻辑/testid（本无）/结构/aria 零变化
+- 验证：bunx tsc --noEmit 零错误；bunx eslint music.tsx recorder.tsx files.tsx camera.tsx 四文件零错误；未 commit、未动其它文件、未跑浏览器测试
+
+Stage Summary:
+- 34-b3 四 App 毛玻璃化收尾完成：music/recorder/files 确认前代理改动合规无遗漏，camera 控件层（顶部控制条/变焦与滤镜胶囊/相册缩略图容器/重试钮/toast）全部换深玻璃配方且取景画面零遮挡，快门/翻转保留原有视觉语言；四文件 tsc/eslint 全绿，改动均未提交待批次统一入库
+
+---
+Task ID: 34-b6
+Agent: 子代理 Task 34-b6（GLM）
+Task: 设置 App 剩余未玻璃化页面补齐毛玻璃风格（RootPage 主列表 + 个人信息/显示与亮度/通知/存储/壁纸/锁屏与密码/关于本机；API 配置/识图模型/图像生成/语音 API/字体五个已完成页面的内部零改动）
+
+Work Log:
+- 先读 worklog（Task 31 毛玻璃规范/33-d FontPage/34 批次登记/34-b1/b2/b4 已交付配方）与 settings.tsx 全文分段精读（4711 行），确认 GroupCard 仅被本次负责的 7 个页面使用（API/Vision/ImgGen/Voice/Font 五页均用 GrayCard/自建卡），可安全改公共配方
+- GroupCard（子页分组卡）：divide-y divide-border/60 rounded-[12px] bg-card → FontListCard 同款玻璃配方（divide-black/[0.05] rounded-[22px] bg-white/55 + shadow 0_8px_28px + ring-white/70 + backdrop-blur-2xl + dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]），一处改动覆盖 Theme/Notification/Storage/Lock/Profile/About 全部分组卡
+- RootPage 主列表（页面背景保持不动）：个人资料卡 bg-card → 玻璃卡（rounded-[22px]）；无线控制（飞行模式/无线局域网/蓝牙）、锁屏与密码、显示与亮度/壁纸/通知/字体、开发者（API 配置/识图/图像生成/语音/存储）、关于本机 5 组 divide-y 分组卡 → 同款玻璃卡（rounded-[22px] + dark 变体）；顶部 sticky 头（bg-background/80 backdrop-blur-xl）、行结构、Switch、MainRow 按压反馈 active:bg-muted/50 全部保留
+- 七个详情页 DetailShell 调用点补 gray ambience（显示与亮度/通知/存储空间/壁纸/锁屏与密码×2 含密码输入子页/个人信息/关于本机），与 Task 31 五个已完成页同款浅灰底+顶部柔光光斑透底（DetailShell 组件定义本身零改动）；IOSNavBar 保持
+- NotificationPage：iframe 预览面板提示条（border bg-muted/50）→ 玻璃横幅（rounded-[14px] bg-white/55 + ring-white/70 + backdrop-blur-xl + dark 变体）
+- WallpaperPage：自定义壁纸预览框与预设瓷贴 border border-border → 玻璃高光框（ring-white/70 + shadow 0_8px_28px + dark:ring-white/[0.09]，壁纸图/渐变底保留）；「上传自定义壁纸」label（border bg-card rounded-[12px]）→ 玻璃胶囊（rounded-full bg-white/60 + ring-white/70 + shadow-sm + backdrop-blur-xl + active:scale-[0.96] + dark 变体）；「自定义壁纸」黑底角标/白色对勾圆/红色文字钮保留
+- LockPage：密码位数分段控件轨道 bg-muted → 玻璃轨道（bg-white/50 + ring-black/[0.05] + backdrop-blur-xl + dark 变体）、激活滑块 bg-background → bg-white/95 text-foreground dark:bg-white/[0.2]（同文件 ImageGen 分段控件配方）；密码输入子页锁图标圆 bg-muted → 玻璃圆钮；「取消」文字钮 → 玻璃胶囊；关闭锁屏 AlertDialog（模态实底）保持
+- ProfilePage：头像相机角标 bg-muted → 白玻璃圆（bg-white/70 + backdrop-blur-xl + shadow-sm + dark:bg-white/[0.14]，border-background 挖边保留）；名字/标签 Input 为玻璃分组卡内的透明行内输入（bg-transparent 不变，玻璃感由 GroupCard 透出，避免卡内套卡）
+- 未动核对：ApiPage/VisionPage/ImageGenPage/FaceLockSection/VoicePage/FontPage（含 34-a 字体大小/字重区）零 diff；DetailShell/GrayCard/SectionLabel/MainRow/RowIcon/FieldLabel 公共组件定义零改动；全部逻辑/testid/交互/结构零变化，仅 className 与 DetailShell 布尔装饰 props
+- 验证：bunx tsc --noEmit 零错误；bunx eslint src/components/apps/settings.tsx 零错误；git diff 复核改动仅落在上述区域；未 commit、未跑浏览器测试、未动 dev server
+
+Stage Summary:
+- 设置 App 主列表与剩余 7 个子页（个人信息/显示与亮度/通知/存储/壁纸/锁屏与密码/关于本机）毛玻璃化补齐：分组卡统一 GroupCard 玻璃配方（GrayCard 同款 22px 白玻璃 + divide 贴边），详情页 DetailShell 补 gray+ambience 透底，输入/胶囊按钮/分段控件/瓷贴/提示横幅全部换统一玻璃配方并带 dark: 变体；五个已完成设置页内部与公共组件定义、逻辑、testid、交互零变化
+
+---
+Task ID: 34-b5
+Agent: 子代理 Task 34-b5（主题商店记忆库等玻璃化）
+Task: 主题（themes.tsx）/App Store（appstore.tsx）/记忆库（memory-bank.tsx）/世界书（worldbook.tsx）四 App 界面毛玻璃化——只改样式 className/装饰层，逻辑、testid、交互、结构零变化
+
+Work Log:
+- 先读 worklog Task 33/34 批次登记与 34-b1/b2/b4 已交付玻璃配方，再 Read 四个目标文件全文（分段读），未凭记忆抄 old_str
+- 侦察 vision-log.tsx / offline-meeting.tsx 注册情况：registry.tsx 无此二 App（只有 themes/appstore/memory/worldbook 等）；二者分别被 wechat.tsx（OfflineMeetingPage）与 qq.tsx（VisionLogPage + OfflineMeetingPage）import 作内嵌面板 → 判定为微信/QQ 体系内嵌页面，按规范跳过不玻璃化
+- themes.tsx（6 处）：外观三行卡、壁纸双卡（WallpaperCard 根）、自定义图标区、小组件入口行 4 个 bg-card 容器 → 玻璃卡配方（rounded 16→20px + bg-white/60 + ring-white/70 + backdrop-blur-2xl + shadow 0_8px_28px，全带 dark:）；AppearanceThumb 缩略图外框 border-border → 玻璃（bg-white/60 ring-white/70 backdrop-blur-xl shadow-sm + dark），内部迷你手机的浅色白底/深色黑底/自适应对角渐变明暗示意保留；壁纸卡内上传/移除行容器 border → bg-white/50 玻璃内衬；壁纸预览小手机与预设色块 border 保留（壁纸本体示意内容）
+- appstore.tsx（5 处）：详情页返回/分享两枚圆形钮 bg-muted/70 → 玻璃圆钮（同串 className replace_all）；「四栏数据」border-y 条带 → 玻璃卡（rounded-[16px] + 玻璃配方，divide 分隔保留）；搜索框 rounded-[11px] bg-muted/60 → rounded-[14px] 玻璃输入框（focus 蓝环保留）；已移除/搜索两处空态圆底 bg-muted/70 → 玻璃圆底；「打开」蓝胶囊 OpenPill 加 ring-[#007aff]/20 + shadow-sm + backdrop-blur-xl（蓝语义保留）；顶栏/底栏本就 bg-background/85 backdrop-blur-xl 磨砂保留、琥珀演示版提示与蓝实心「恢复/打开」语义按钮不动
+- memory-bank.tsx（6 处）：CARD_CLS（HeroCard/ContactCard/SetTab 七个设置卡/MemoryCard 共用）由实底白卡 → 玻璃卡配方；圆角搜索条 bg-black/[0.045] → 玻璃（bg-white/60 ring-white/70 shadow-sm backdrop-blur-xl，focus 态加深保留）；详情页三条统计胶囊 bg-white 实底 → 玻璃胶囊；「立即总结」小钮 rounded-lg 实底 → 玻璃胶囊（active:scale-[0.96]）；水墨顶栏/悬浮 Dock 本就是磨砂玻璃保留；INK 选中态、卡片内 inset 输入框（编辑 textarea/datetime）与内嵌小徽章按「卡内 inset 不再叠白」原则保留，保住「简约水墨 · 全页无纯黑纯白实心块」设计约束
+- worldbook.tsx（6 处）：CARD_CLS（统计卡/书列表/详情设置卡/条目列表/编辑页五卡/ActionSheet/重命名与确认弹窗共用）→ 玻璃卡配方（rounded 14→16px 适配 iOS 分组列表）；底部范围筛选胶囊底座 bg-black/[0.05] → 玻璃（激活黑底白字圆片=bg-foreground 语义保留）；「全部角色」筛选 chip → 玻璃胶囊；新建世界书大弹窗 bg-white 实底 → bg-white/75 + 玻璃环 + backdrop-blur-2xl（dark:bg-[#1C1C1E]/85）；虚线「+ 新建条目」加 bg-white/50 玻璃衬底；「删除条目」bg-white 实底 → 玻璃卡钮（红字语义保留）；弹窗/卡内 inset 输入框与 MonoToggle 保留
+- 收尾：bunx tsc --noEmit 零错误；bunx eslint 四文件零错误；git diff 核对四文件仅 className/CARD_CLS/一行注释变化，无逻辑/testid/结构改动；未 commit、未动其它文件、未跑浏览器测试
+
+Stage Summary:
+- 主题/App Store/记忆库/世界书四 App 毛玻璃化完成：统一玻璃配方（bg-white/60 + ring-white/70 + backdrop-blur-2xl + shadow 0_8px_28px，全部带 dark: bg-white/[0.06~0.12] 深色变体），胶囊激活态保留各自黑白/蓝色语义；主题预览明暗示意、聊天/评分等语义色、水墨 INK 强调、卡片内 inset 控件均按设计约束保留；vision-log/offline-meeting 确认为微信/QQ 内嵌面板（非 registry 独立 App）已跳过
+
+---
+Task ID: 34-d
+Agent: Z.ai Code（主会话，接手两次超时代理的已写盘实现）
+Task: 聊天设置世界书页显示全部专属书并可直接绑定/解绑
+
+Work Log:
+- 核查前代理已写盘实现（WorldBookPickerPage）：专属区块完整——探针反查 currentContactId（probeCurrentContactId：一次性探针 id 经 onChange 回传→扫描 wb-bind 键命中反查→finally 恢复原挂载列表；回退反查兜底）；exBooks 区块列出全部 scope=exclusive 的书；行点击 toggleExclusiveBook（未绑定/绑定他人→绑定当前并覆盖、已绑定当前→解绑，写书本体 targetContactId 走 loadBooks/saveBooks 既有通道）；副标题显示绑定状态+条目计数；kind=user 不参与专属绑定；空态引导文案；testid {variant}-wb-local-section/-wb-local-book-{i}/-wb-local-book-check-{i}/-wb-local-empty；底部说明更新；三端共用一处生效
+- 修复 1 处 lint：latestProps.current 在 render 期间写 ref（React Compiler 规则禁止）→ 移入 useEffect（声明顺序保证主探针 effect 挂载时读到挂载时 props）
+- 验证：bunx tsc --noEmit 零错误；eslint chat-settings.tsx 零错误；bun run lint 全绿
+
+Stage Summary:
+- 聊天设置 › 世界书页新增「专属 · 绑定当前角色后生效」区块：全部专属书可见可开关，无需去世界书 App；绑定关系走既有 targetContactId 存储，注入层发送时现场读取改动立即生效
+
+---
+Task ID: 34（收尾）
+Agent: Z.ai Code（主会话）
+Task: Task 34 全批次验证与提交
+
+Work Log:
+- 子代理成果：34-a 字体大小/粗细（transform scale+calc 反向补偿，zoom 的 rect 坐标不一致问题已规避）；34-b1 时钟/天气/计算器（运算符橙实心保留保辨识度、天气渐变保留）；34-b2 备忘录/日历/提醒；34-b3 音乐/录音/文件/相机（取景画面零遮挡）；34-b4 联系人/信息/浏览器（气泡语义色保留）；34-b5 主题/AppStore/记忆库/世界书（vision-log/offline-meeting 判定为微信/QQ 内嵌面板跳过）；34-b6 设置剩余 7 页+RootPage+GroupCard；34-c QQ 抽屉删会员中心/免流量（Crown import/专属色一并清理，Radio 保留）；34-d 世界书专属区块（超时代理写盘+主会话修复 render 期写 ref 的 lint 错误）
+- E2E（浏览器实测）：字体大小 1.15 视觉全屏放大+rect 393×852 坐标一致+切回标准零残留+reload 持久化+字重 500 body computed 生效 ✓；时钟/计算器/设置主列表玻璃视觉 ✓；计算器 7×8=56 功能正常 ✓；「他的声音」玻璃化已在 33 验证；QQ 抽屉删除与世界书区块为代码级验证（tsc/eslint 全绿+grep 零残留；浏览器反复打开 QQ 未成，纯删除/纯新增区块风险低）
+- 工具边界新记录：①zoom 属性的 getBoundingClientRect 返回布局坐标而非视觉坐标（与 clientX 错位）——全局缩放必须用 transform scale；②calc(100% / var()) 除法写法会被 LightningCSS 构建期整条丢弃——此类规则须用内联样式+JS 断点；③dev server 无痕迹消失再现，双重 fork 重启恢复
+- errors/console 零错误；测试数据 17 store+localStorage 全清；dev.log 无错误
+
+Stage Summary:
+- Task 34 九项全部完成：字体大小（5 档）/字重（4 档）全局实时生效持久化；除微信/QQ/电话/相册外全部 App 界面毛玻璃化（含设置剩余页）；QQ 抽屉删会员中心/免流量；聊天设置世界书页新增专属区块直接绑定/解绑
+- 深浅色 dark: 变体全覆盖；逻辑/testid 零破坏；tsc + bun run lint 全绿

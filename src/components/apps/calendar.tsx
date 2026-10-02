@@ -87,7 +87,7 @@ const CAL_REPEAT_PRESETS: { key: string; label: string; weekdays: number[] }[] =
 ];
 
 const FIELD_CLASS =
-  'mt-1 h-10 w-full rounded-[10px] border border-input bg-transparent px-3 text-[15px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/50 [color-scheme:light] dark:[color-scheme:dark]';
+  'mt-1 h-10 w-full rounded-[14px] bg-white/60 px-3 text-[15px] text-foreground outline-none ring-1 ring-white/70 backdrop-blur-xl transition-colors placeholder:text-muted-foreground/60 focus:ring-foreground/40 [color-scheme:light] dark:bg-white/[0.08] dark:ring-white/[0.1] dark:[color-scheme:dark]';
 
 export default function CalendarApp() {
   const [loaded, setLoaded] = useState(false);
@@ -338,7 +338,7 @@ export default function CalendarApp() {
           <button
             type="button"
             onClick={goToday}
-            className="rounded-full bg-muted px-4 py-1.5 text-[13px] font-medium text-foreground transition active:scale-95"
+            className="rounded-full bg-white/60 px-4 py-1.5 text-[13px] font-medium text-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
           >
             今天
           </button>
@@ -422,7 +422,7 @@ export default function CalendarApp() {
             type="button"
             onClick={() => openForm(null)}
             aria-label="新建事件"
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-muted transition-opacity active:opacity-60"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
           >
             <Plus className="h-4 w-4" strokeWidth={2.4} />
           </button>
@@ -434,7 +434,7 @@ export default function CalendarApp() {
               <div className="text-[15px]">无事件</div>
             </div>
           ) : (
-            <div className="mx-4 divide-y divide-border/40 overflow-hidden rounded-[16px] bg-card">
+            <div className="mx-4 divide-y divide-border/40 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
               {selectedDayEvents.map((ev) => (
                 <button
                   key={ev.id}
@@ -496,7 +496,7 @@ export default function CalendarApp() {
                 type="button"
                 onClick={closeForm}
                 aria-label="关闭"
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-muted transition-opacity active:opacity-60"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-white/60 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
               >
                 <X className="h-4 w-4" strokeWidth={2.4} />
               </button>
@@ -530,13 +530,13 @@ export default function CalendarApp() {
               className={FIELD_CLASS}
             />
 
-            <div className="mt-3 flex items-center justify-between rounded-[10px] border border-input px-3 py-2">
+            <div className="mt-3 flex items-center justify-between rounded-[14px] bg-white/60 px-3 py-2 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
               <span className="text-[15px]">全天</span>
               <Switch checked={form.allDay} onCheckedChange={(v) => patchForm({ allDay: v })} aria-label="全天" />
             </div>
 
             {/* #30：重复选择——不重复/每天/每周/工作日；每周按 form.date 的 weekday 单选 */}
-            <div className="mt-3 rounded-[10px] border border-input px-3 py-2">
+            <div className="mt-3 rounded-[14px] bg-white/60 px-3 py-2 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
               <div className="text-[15px]">重复</div>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {CAL_REPEAT_PRESETS.map((p) => {
@@ -564,10 +564,10 @@ export default function CalendarApp() {
                         }
                       }}
                       aria-pressed={active}
-                      className={`rounded-full px-3 py-[5px] text-[12px] leading-none transition-colors ${
+                      className={`rounded-full px-3 py-[5px] text-[12px] leading-none shadow-sm transition active:scale-[0.96] ${
                         active
                           ? 'bg-foreground font-medium text-background'
-                          : 'bg-muted text-foreground/80 active:opacity-60'
+                          : 'bg-white/60 text-foreground/80 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
                       }`}
                     >
                       {p.label}
@@ -615,7 +615,7 @@ export default function CalendarApp() {
               onChange={(e) => patchForm({ note: e.target.value })}
               rows={3}
               placeholder="备注（可选）"
-              className="mt-1 w-full resize-none rounded-[10px] border border-input bg-transparent px-3 py-2 text-[15px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/50"
+              className="mt-1 w-full resize-none rounded-[14px] bg-white/60 px-3 py-2 text-[15px] text-foreground outline-none ring-1 ring-white/70 backdrop-blur-xl transition-colors placeholder:text-muted-foreground/60 focus:ring-foreground/40 dark:bg-white/[0.08] dark:ring-white/[0.1]"
             />
 
             <div className="mt-4 flex flex-col gap-2">
@@ -630,7 +630,7 @@ export default function CalendarApp() {
                 <button
                   type="button"
                   onClick={deleteForm}
-                  className="h-11 w-full rounded-[12px] text-[16px] font-semibold text-[#FF453A] transition-opacity active:opacity-60"
+                  className="h-11 w-full rounded-[14px] bg-white/60 text-[16px] font-semibold text-[#FF453A] ring-1 ring-white/70 backdrop-blur-xl transition-opacity active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]"
                 >
                   删除事件
                 </button>

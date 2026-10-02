@@ -64,7 +64,6 @@ import {
   CloudSun,
   CornerRightDown,
   CreditCard,
-  Crown,
   Delete,
   Eye,
   EyeOff,
@@ -10658,11 +10657,9 @@ function MeDrawer({
     { icon: <Star className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '收藏', onClick: () => { close(); window.setTimeout(onOpenFavorites, 240); } },
     { icon: <Smile className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '表情', onClick: () => { close(); window.setTimeout(onOpenStickers, 240); } },
     { icon: <Wallet className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '钱包', onClick: () => { close(); window.setTimeout(onOpenWallet, 240); } },
-    { icon: <Crown className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '会员中心', hint: '联会会员买一送一', onClick: () => onToast('会员中心暂未开放') },
     { icon: <Shirt className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '个性装扮', onClick: () => onToast('个性装扮暂未开放') },
-    { icon: <Radio className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '免流量', hint: '限时推广', onClick: () => onToast('免流量暂未开放') },
   ];
-  const rowColors = ['#F5B90F', '#3BA0FF', '#3BA0FF', '#3BA0FF', '#F0619B', '#F0479C', '#3BC86A'];
+  const rowColors = ['#F5B90F', '#3BA0FF', '#3BA0FF', '#3BA0FF', '#F0479C'];
 
   return (
     <div className="absolute inset-0 z-40 overflow-hidden" role="dialog" aria-label="个人中心">

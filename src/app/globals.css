@@ -126,9 +126,15 @@
     /* 全局字体（Task 33-d）：--app-font-family 由设置「字体」页写入 documentElement，未设置时回退默认系统字体栈 */
     font-family: var(--app-font-family, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB',
       'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif);
+    /* 全局字重（Task 34-a）：未显式设 font-medium/semibold 的文本生效；显式类的字重保持不变 */
+    font-weight: var(--app-font-weight, 400);
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* 手机屏缩放宿主（Task 34-a 字体大小）：zoom + calc 反向补偿在 LightningCSS 构建期会被
+   丢弃（calc 除法带 var 无法静态验证，整条规则被剔除），因此改由 PhoneShell 内联样式实现
+   （zoom: scale + width/height: calc(原尺寸 / scale)），效果一致且不受构建链影响。 */
 
 /* 隐藏滚动条（iOS 风格） */
 .no-scrollbar::-webkit-scrollbar {

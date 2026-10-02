@@ -342,7 +342,7 @@ function NoteEditor({
             <button
               type="button"
               onClick={handleDone}
-              className="rounded-full bg-muted px-4 py-1.5 text-[15px] font-medium transition-opacity active:opacity-60"
+              className="rounded-full bg-white/60 px-4 py-1.5 text-[15px] font-medium shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
               style={{ color: gold }}
             >
               完成
@@ -375,8 +375,10 @@ function NoteEditor({
                   type="button"
                   onClick={() => pickCategory(c.key)}
                   aria-pressed={isActive}
-                  className={`rounded-full px-2.5 py-1 text-[11px] leading-none transition-colors ${
-                    isActive ? 'font-medium text-white' : 'bg-muted text-muted-foreground'
+                  className={`rounded-full px-2.5 py-1 text-[11px] leading-none shadow-sm transition active:scale-[0.96] ${
+                    isActive
+                      ? 'font-medium text-white'
+                      : 'bg-white/60 text-muted-foreground ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
                   }`}
                   style={isActive ? { backgroundColor: gold } : undefined}
                 >
@@ -412,7 +414,7 @@ function NoteEditor({
 
       {/* 底部悬浮格式工具栏（金色） */}
       <div className="absolute inset-x-4 bottom-[calc(28px+env(safe-area-inset-bottom))] z-30">
-        <div className="flex h-14 items-center justify-between rounded-full border border-border/50 bg-card/95 px-5 shadow-lg backdrop-blur">
+        <div className="flex h-14 items-center justify-between rounded-full bg-white/60 px-5 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <FmtButton gold={gold} label="插入待办项" onClick={() => exec('insertHTML', '☐ ')}>
             <CircleCheck className="h-[22px] w-[22px]" strokeWidth={1.9} />
           </FmtButton>
@@ -485,7 +487,7 @@ function NoteCard({
   const { title } = displayTitle(note);
   const preview = displayPreview(note);
   return (
-    <div className="flex select-none items-center rounded-[16px] bg-card p-4">
+    <div className="flex select-none items-center rounded-[20px] bg-white/60 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
       <button
         type="button"
         {...lp}
@@ -709,7 +711,7 @@ export default function NotesApp() {
 
         <div className="px-4 pb-[116px]">
           {/* 圆角搜索框 */}
-          <div className="mt-1 flex h-9 items-center gap-1.5 rounded-full bg-muted px-3.5">
+          <div className="mt-1 flex h-9 items-center gap-1.5 rounded-[14px] bg-white/60 px-3.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2.2} />
             <input
               value={query}
@@ -730,8 +732,10 @@ export default function NotesApp() {
                   type="button"
                   onClick={() => setFilter(f.key)}
                   aria-pressed={isActive}
-                  className={`shrink-0 rounded-full px-3.5 py-[7px] text-[13px] leading-none transition-colors ${
-                    isActive ? 'font-medium text-white' : 'bg-muted text-foreground'
+                  className={`shrink-0 rounded-full px-3.5 py-[7px] text-[13px] leading-none shadow-sm transition active:scale-[0.96] ${
+                    isActive
+                      ? 'font-medium text-white'
+                      : 'bg-white/60 text-foreground ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
                   }`}
                   style={isActive ? { backgroundColor: gold } : undefined}
                 >
@@ -768,7 +772,7 @@ export default function NotesApp() {
 
       {/* 底部悬浮胶囊工具栏：金色清单/新建 */}
       <div className="absolute inset-x-4 bottom-[calc(28px+env(safe-area-inset-bottom))] z-30">
-        <div className="flex h-14 items-center justify-between rounded-full border border-border/50 bg-card/95 px-7 shadow-lg backdrop-blur">
+        <div className="flex h-14 items-center justify-between rounded-full bg-white/60 px-7 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <button
             type="button"
             onClick={() => createNote(true)}

@@ -162,9 +162,9 @@ const TOP_GLASS = 'bg-white/80 backdrop-blur-xl dark:bg-[#141312]/75';
 /** 底部悬浮 Dock 玻璃（与页面底色同源，衬托选中白胶囊） */
 const DOCK_GLASS = 'bg-[#f4f3f1]/80 backdrop-blur-xl dark:bg-[#141312]/75';
 
-/** 白卡片：极淡阴影，浮起但不抢眼 */
+/** 白玻璃卡片：毛玻璃 + 柔和投影（水墨单色系上浮起） */
 const CARD_CLS =
-  'bg-white shadow-[0_1px_4px_rgba(20,18,14,0.05)] dark:bg-[#201f1d] dark:shadow-none dark:ring-1 dark:ring-white/[0.06]';
+  'bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]';
 
 /** 选中/强调态：浅灰（暗色中灰反转）——全页无纯黑纯白实心块 */
 const INK =
@@ -261,7 +261,7 @@ export default function MemoryBankApp() {
                 data-testid="mem-search"
                 aria-label="搜索联系人"
                 placeholder="搜索联系人"
-                className="h-10 w-full rounded-full bg-black/[0.045] pl-10 pr-4 text-[15px] outline-none ring-1 ring-transparent transition placeholder:text-black/30 focus:bg-white focus:ring-black/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/30 dark:focus:bg-white/[0.1] dark:focus:ring-white/[0.14]"
+                className="h-10 w-full rounded-full bg-white/60 pl-10 pr-4 text-[15px] shadow-sm outline-none ring-1 ring-white/70 backdrop-blur-xl transition placeholder:text-black/30 focus:bg-white/80 focus:ring-black/[0.08] dark:bg-white/[0.08] dark:ring-white/[0.1] dark:placeholder:text-white/30 dark:focus:bg-white/[0.12] dark:focus:ring-white/[0.14]"
               />
             </div>
 
@@ -543,13 +543,13 @@ function MemoryDetail({
         </div>
 
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5" aria-label="记忆统计">
-          <span className="rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
+          <span className="rounded-full bg-white/60 px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.1]">
             {frags.length} 条碎片
           </span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
+          <span className="inline-flex items-center gap-1 rounded-full bg-white/60 px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.1]">
             <Gem className="h-3 w-3" /> {cores.length} 条核心
           </span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-[0_1px_4px_rgba(20,18,14,0.07)] dark:bg-[#201f1d] dark:text-white/55 dark:shadow-none dark:ring-1 dark:ring-white/[0.1]">
+          <span className="inline-flex items-center gap-1 rounded-full bg-white/60 px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.1]">
             <Landmark className="h-3 w-3" /> {longs.length} 条长期
           </span>
           <span
@@ -574,7 +574,7 @@ function MemoryDetail({
                 void (tab === 'frag' ? summarizeFragNow() : tab === 'ltm' ? summarizeCoreNow() : summarizeLongNow())
               }
               disabled={sumBusy !== null}
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-white px-3 text-[12.5px] font-medium text-neutral-700 shadow-[0_1px_4px_rgba(20,18,14,0.07)] ring-1 ring-black/[0.06] transition-opacity active:opacity-70 disabled:opacity-50 dark:bg-[#201f1d] dark:text-neutral-200 dark:ring-white/[0.1]"
+              className="flex h-8 items-center gap-1.5 rounded-full bg-white/60 px-3 text-[12.5px] font-medium text-neutral-700 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] disabled:opacity-50 dark:bg-white/[0.08] dark:text-neutral-200 dark:ring-white/[0.1]"
             >
               {sumBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />}
               {sumBusy === tab ? '正在总结…' : '立即总结'}
