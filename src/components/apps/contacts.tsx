@@ -1560,7 +1560,7 @@ function DetailView({
   onEdit: (id: string) => void;
   onBack: () => void;
   onDeleted: (id: string) => void;
-  /** 删除失败回调（小号档案正在某 App 使用中会被拒删）：message = 存储层错误文案 */
+  /** 删除失败回调（注册表清理失败等兜底场景）：message = 错误文案 */
   onDeleteError?: (msg: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -1647,7 +1647,7 @@ function DetailView({
         setConfirming(false);
       }
     } catch (err) {
-      // 删除失败（如小号正在微信/QQ 等使用中被拒删）：保留联系人，页内展示原因
+      // 删除失败（存储异常等兜底）：保留联系人，页内展示原因
       setDeleting(false);
       setConfirming(false);
       const msg = err instanceof Error && err.message ? err.message : '删除失败，请重试';
@@ -1823,10 +1823,10 @@ function DetailView({
               {deleting ? '删除中…' : confirming ? '再点一次确认删除' : contact.altOf ? '删除小号' : '删除联系人'}
             </GlassButton>
             {confirming && !deleting && (
-              <p className="pt-2 text-center text-[12px] text-muted-foreground">
+              <p className="pt-2 text-center text-[12px] leading-[18px] text-muted-foreground">
                 删除后无法恢复
                 {contact.altOf
-                  ? '，该小号的聊天、记忆等账号数据会一并删除'
+                  ? '，该小号的聊天、记忆等账号数据会一并删除；正在使用它的微信 / QQ 等会自动退出该账号'
                   : contact.kind !== 'npc'
                     ? '，其名下 NPC 会一并删除'
                     : ''}

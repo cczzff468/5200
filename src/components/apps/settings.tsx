@@ -3400,13 +3400,14 @@ const ACCOUNT_AVATAR_TONE: Record<'alt' | 'anon', string> = {
 const ACCOUNT_APP_NAMES: Record<AccountApp, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
 
 /**
- * 账号管理页（多账号系统 Task 40-C，v2 per-app 账号适配）：
+ * 账号管理页（多账号系统 Task 40-C，v2 per-app 账号适配；Task 40-R 流程修正）：
  * - 账号列表：大号 = 机主资料（mainOwnerContact 实时资料），小号/匿名号 = 注册名 + 虚拟号；
  *   副行标注「使用中：微信·QQ」（该账号正被哪些 App 使用，accountUsedBy，空 = 不显示）；
  * - v2 无全局切换：行点击不再切换账号（微信/QQ/信息/电话在各自 App 内切换，互相独立）；
- * - 添加小号/匿名号 → 受控命名小弹窗（可留空用默认名）→ createAccount()（不自动切换）；
+ * - 小号创建入口在联系人 App 「小号」tab（本页不再创建小号）；匿名号无人设档案，
+ *   保留受控命名小弹窗（可留空用默认名）→ createAccount('anon')（不自动切换）；
  * - 非大号行右侧常驻 ⊖ 圆钮（iOS 订阅管理风）→ 确认弹窗（写明清除全部数据）→ deleteAccount()（async），
- *   正在被某 App 使用中会被拒删，返回 error 原文用页内 toast 提示。
+ *   正在使用中的账号删除时自动切回大号（退出该账号），不再拦截。
  */
 function AccountSwitchPage({ onBack }: { onBack: () => void }) {
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
@@ -3417,8 +3418,8 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
     phone: '',
     avatar: null,
   });
-  // 命名小弹窗：null=关闭；'alt'/'anon'=正在创建的账号类型
-  const [namingKind, setNamingKind] = useState<'alt' | 'anon' | null>(null);
+  // 命名小弹窗：null=关闭；'anon'=正在创建匿名号码（小号创建入口在联系人 App，不再提供）
+  const [namingKind, setNamingKind] = useState<'anon' | null>(null);
   const [namingInput, setNamingInput] = useState('');
   // 待删除账号 id（确认弹窗）
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -3517,23 +3518,9 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
         })}
       </GroupCard>
 
-      {/* 添加账号 */}
+      {/* 添加匿名号码（小号创建入口在联系人 App 「小号」tab，此处不再提供） */}
       <div className="mt-5">
         <GroupCard>
-          <button
-            type="button"
-            data-testid="settings-account-add-alt"
-            onClick={() => {
-              setNamingInput('');
-              setNamingKind('alt');
-            }}
-            className="flex h-[50px] w-full items-center gap-3 px-4 text-left transition-colors active:bg-muted/50"
-          >
-            <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[#34C759]">
-              <Plus className="h-[14px] w-[14px] text-white" strokeWidth={3} />
-            </span>
-            <span className="flex-1 text-[16px]">添加小号</span>
-          </button>
           <button
             type="button"
             data-testid="settings-account-add-anon"
@@ -3550,12 +3537,13 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
           </button>
         </GroupCard>
         <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
-          微信 / QQ / 信息 / 电话 四个 App 可在各自 App 内切换账号，互相独立，切换不刷新页面。
+          新建小号：打开联系人 App → 「小号」，创建后可在微信 / QQ / 信息 / 电话的切换账号处登录使用。
+          四个 App 切换账号互相独立，切换不刷新页面；在联系人 App 删除小号后，正在使用它的 App 会自动退出该账号。
           其他 App 数据（照片、备忘录等）为整机共享，不随账号变化。
         </p>
       </div>
 
-      {/* 命名小弹窗：输入可留空（默认名「小号N」/「匿名账号」），创建后不自动切换 */}
+      {/* 命名小弹窗（匿名号码）：输入可留空（默认名「匿名账号」），创建后不自动切换 */}
       <AlertDialog
         open={namingKind !== null}
         onOpenChange={(open) => {
@@ -3564,13 +3552,9 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
       >
         <AlertDialogContent className="w-[270px] gap-0 rounded-[14px] p-0 sm:w-[270px] sm:max-w-[270px]">
           <AlertDialogHeader className="gap-1.5 px-5 pb-3 pt-5 sm:text-center">
-            <AlertDialogTitle className="text-center text-[17px] font-semibold leading-snug">
-              {namingKind === 'anon' ? '新建匿名号码' : '添加小号'}
-            </AlertDialogTitle>
+            <AlertDialogTitle className="text-center text-[17px] font-semibold leading-snug">新建匿名号码</AlertDialogTitle>
             <AlertDialogDescription className="text-center text-[13px] leading-snug">
-              {namingKind === 'anon'
-                ? '给这个身份起个名字，留空则默认「匿名账号」；创建后可在微信 / QQ / 信息 / 电话中切换使用。'
-                : '给小号起个名字，留空则默认「小号N」；创建后可在微信 / QQ / 信息 / 电话中切换使用。'}
+              给这个身份起个名字，留空则默认「匿名账号」；创建后可在微信 / QQ / 信息 / 电话中切换使用。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="px-5 pb-4">
@@ -3578,7 +3562,7 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
               data-testid="settings-account-name-input"
               value={namingInput}
               onChange={(e) => setNamingInput(e.target.value)}
-              placeholder={namingKind === 'anon' ? '匿名账号' : '小号N'}
+              placeholder="匿名账号"
               maxLength={20}
               aria-label="账号名称"
             />
@@ -3607,7 +3591,7 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 删除确认：写明将清除该账号全部数据；正在使用中/大号等拒删时 toast 提示原因原文 */}
+      {/* 删除确认：写明将清除该账号全部数据；正在使用中的账号删除时自动切回大号（退出该账号） */}
       <AlertDialog
         open={deletingId !== null}
         onOpenChange={(open) => {
@@ -3620,7 +3604,7 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
               删除「{deletingAccount ? displayName(deletingAccount) : ''}」？
             </AlertDialogTitle>
             <AlertDialogDescription className="text-center text-[13px] leading-snug">
-              将删除该账号并清除其全部数据（聊天、联系人、记忆、朋友圈等），此操作不可恢复。
+              将删除该账号并清除其全部数据（聊天、记忆、朋友圈等）；正在使用它的微信 / QQ 等会自动退出并回到大号。此操作不可恢复。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-row gap-0 border-t border-border sm:flex-row">

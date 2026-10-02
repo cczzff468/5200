@@ -184,7 +184,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
@@ -10976,7 +10976,7 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
   // 页内 toast（App 根 toast 在提前 return 分支不渲染，同收藏页口径）
   const [toast, showToast] = useLocalToast();
   // 注册表账号列表：切换不刷新网页（v2 事件驱动）；删除成功后本地同步移除
-  //（当前账号/大号不可删；正在被其他 App 使用的账号由 deleteAccount 拒绝并 toast 原因）
+  //（当前账号/大号不可删；正在被其他 App 使用的账号删除时自动切回大号 = 自动退出）
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
   // 当前微信账号 id（per-app）：切换事件到达时刷新快照 → 绿点「当前使用」移到新卡（本页保持打开）
   const [activeId, setActiveId] = useState(() => getActiveAccountIdFor('wx'));
@@ -11006,17 +11006,11 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
   /** 删除二次确认目标（受控弹窗，禁 window.confirm） */
   const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
 
-  const handleAdd = () => {
-    // 新建小号并立即切换（v2 不刷新：写 per-app 标记 + 派发事件；新账号无登录态 → 根组件切到登录墙）
-    const acc = createAccount('alt');
-    switchAccountFor('wx', acc.id);
-  };
-
   const confirmDelete = async () => {
     const target = delTarget;
     if (!target) return;
     setDelTarget(null);
-    // v2 deleteAccount 为 async：拒绝场景（大号/正在使用中）原样 toast 错误文案
+    // v2 deleteAccount 为 async：正在使用中的账号删除时自动切回大号（退出该账号），不拦截
     const res = await deleteAccount(target.id);
     if (res.ok) {
       setAccounts(getAccounts());
@@ -11114,16 +11108,14 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
             );
           })}
 
-          {/* 添加账号：虚线框卡（对照截图）→ 新建小号并立即切换 */}
-          <button
-            type="button"
-            data-testid="wx-account-add"
-            onClick={handleAdd}
-            className="flex h-[84px] w-full items-center justify-center gap-1.5 rounded-[14px] border-[1.5px] border-dashed border-black/20 text-black/40 active:bg-black/[0.03] dark:border-white/25 dark:text-white/40"
+          {/* 小号创建入口提示：小号统一在联系人 App 「小号」tab 创建，本页只负责登录与切换 */}
+          <div
+            data-testid="wx-account-add-hint"
+            className="flex h-[84px] w-full flex-col items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/15 px-4 text-center text-black/40 dark:border-white/20 dark:text-white/40"
           >
-            <Plus className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
-            <span className="text-[15.5px]">添加账号</span>
-          </button>
+            <span className="text-[14.5px]">新建小号：打开联系人 App → 「小号」</span>
+            <span className="text-[12px] text-black/25 dark:text-white/25">创建后在这里登录即可使用，登录过的小号切换不再需要登录</span>
+          </div>
         </div>
       </div>
 
@@ -11138,7 +11130,7 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
           >
             <p className="text-[16px] font-medium">删除账号</p>
             <p className="mt-2.5 text-[13.5px] leading-[1.7] text-black/70 dark:text-white/70">
-              将删除「{delTarget.name}」：该账号的聊天记录、联系人、登录态等本地数据会一并清除，此操作不可恢复。
+              将删除「{delTarget.name}」：该账号的聊天记录、登录态等本地数据会一并清除；若微信、QQ 等正在使用该账号，会自动退出并回到大号。此操作不可恢复。
             </p>
             <div className="mt-4 flex gap-2.5">
               <button

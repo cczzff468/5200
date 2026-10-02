@@ -325,8 +325,9 @@ export function createAccount(
 
 /**
  * 删除账号：移出注册表 + 清理该账号的 localStorage 后缀键 + 清理主库中该账号作用域的
- * kv 键 / 通话记录 / 语音留言 + 删除其档案联系人（altOf）。大号不可删；正在被任何 App
- * 使用的账号不可删（先在各 App 内切走）。
+ * kv 键 / 通话记录 / 语音留言 + 删除其档案联系人（altOf）。大号不可删。
+ * 正在被某 App 使用的账号可直接删除：使用中的 App 自动切回大号（= 自动退出该账号，
+ * switchAccountFor 事件驱动重读数据/登录态，全程不刷新网页；大号登录态保留）。
  */
 export async function deleteAccount(id: string): Promise<{ ok: boolean; error?: string }> {
   if (id === MAIN_ACCOUNT_ID) return { ok: false, error: '大号不能删除' };
@@ -334,10 +335,6 @@ export async function deleteAccount(id: string): Promise<{ ok: boolean; error?: 
   const target = list.find((a) => a.id === id);
   if (!target) return { ok: false, error: '账号不存在' };
   const usedBy = accountUsedBy(id);
-  if (usedBy.length > 0) {
-    const nameOf: Record<AccountApp, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
-    return { ok: false, error: `该账号正在${usedBy.map((a) => nameOf[a]).join('、')}中使用，请先切换后再删除` };
-  }
   saveAccounts(list.filter((a) => a.id !== id));
   // 清理该账号的隔离 localStorage 键（统一后缀 --{id}）
   try {
@@ -377,6 +374,12 @@ export async function deleteAccount(id: string): Promise<{ ok: boolean; error?: 
     );
   } catch {
     // 存储异常忽略（注册表已删，残留数据不可见）
+  }
+  // 正在使用该账号的 App 自动切回大号（= 自动退出该账号）：事件驱动各 App 重读数据/登录态，
+  // 全程不刷新网页。必须放在数据清理之后——App 收到事件时旧账号数据已清干净，
+  // 大号作用域数据/登录态（原键）不受影响，直接可用。
+  for (const app of usedBy) {
+    switchAccountFor(app, MAIN_ACCOUNT_ID);
   }
   return { ok: true };
 }

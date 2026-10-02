@@ -69,7 +69,7 @@ export function AnonSwitchSheet({
   const [shown, setShown] = useState(false);
   /** 注册表现读快照：打开时读一次；切号不刷新网页（事件驱动重读），打开期间重读兜底 */
   const [snap, setSnap] = useState<AnonSheetSnapshot>(() => readSnapshot(app));
-  // 长按号码行 → 删除确认（Task 40 修正）：当前使用行删前自动切回主号；被其他 App 使用时报错
+  // 长按号码行 → 删除确认（Task 40 修正）：当前使用行删前自动切回主号；其他 App 正在使用的账号删除时也会自动退出该账号
   const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
   const [delErr, setDelErr] = useState('');
   const pressTimer = useRef<number | null>(null);
@@ -103,7 +103,7 @@ export function AnonSwitchSheet({
     const t = delTarget;
     if (!t) return;
     try {
-      // 本 App 正用这个匿名号 → 先切回主号再删（否则 deleteAccount 拒绝「使用中」）
+      // 本 App 正用这个匿名号 → 先切回主号再删（其他 App 若也在用，deleteAccount 自动切回大号退出该账号）
       if (getActiveAccountIdFor(app) === t.id) switchAccountFor(app, MAIN_ACCOUNT_ID);
       const res = await deleteAccount(t.id);
       if (res.ok) {
@@ -295,7 +295,7 @@ export function AnonSwitchSheet({
               <p className="text-[16px] font-semibold">删除匿名号码</p>
               <p className="mt-1.5 text-[13px] leading-[1.6] text-muted-foreground">
                 将删除「{accountDisplayName(delTarget)} {maskAnonPhone(delTarget.phone)}」：该号码的
-                {app === 'phone' ? '通话记录' : '短信与聊天记录'}等本地数据会一并清除，此操作不可恢复。
+                {app === 'phone' ? '通话记录' : '短信与聊天记录'}等本地数据会一并清除；正在使用它的微信 / QQ 等会自动退出该账号。此操作不可恢复。
               </p>
               {delErr && (
                 <p data-testid="anon-delete-error" className="mt-2 text-[12.5px] leading-relaxed text-[#FF3B30]">

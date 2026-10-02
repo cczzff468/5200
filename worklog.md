@@ -14213,3 +14213,33 @@ Work Log:
 Stage Summary:
 - 五项反馈全量交付：登录墙按槽位绑定（串槽根因修复+历史态自愈，登录过的小号再切换免登录）、切换账号页显示与实际登录身份永远一致、电话身份选择器白色小胶囊置顶、长按匿名号码即删（chip+弹层行双入口、使用中保护）、匿名号码 1 开头 11 位与普通号码同格式
 - 改动文件：src/lib/ios/contacts-store.ts、src/lib/ios/accounts.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/phone.tsx、src/components/ios/AnonSwitchSheet.tsx
+
+---
+Task ID: 40-r
+Agent: Z.ai Code（主会话）
+Task: Task 40 交付后用户流程修正——①小号只能在联系人 App 创建（移除微信/QQ/设置切换账号页的「自动创建小号」入口）②切换账号页 = 登录小号的地方（登录过免登录语义保持）③联系人删除小号后，微信/QQ 等正在使用它的 App 自动退出该账号（替换原「使用中拒删」）
+
+Work Log:
+- accounts.ts deleteAccount 重构：删除「该账号正在…中使用，请先切换后再删除」的拒删分支，改为「正在使用的 App 自动切回大号」——数据清理（localStorage 后缀键/kv 后缀键/通话记录/留言/档案联系人）完成后，对 usedBy 中每个 App 调 switchAccountFor(app, MAIN_ACCOUNT_ID)，事件驱动各 App 重读数据/登录态（= 自动退出该账号，大号登录态保留可直接进入，全程不刷新网页）
+- contacts-store.ts deleteContact：删除小号档案（altOf 非空）时移除 accountUsedBy 拦截抛错，直接 await deleteAccountFromRegistry（注册表清理失败不阻塞联系人删除）
+- wechat.tsx WxAccountSwitchPage：删除 handleAdd（createAccount('alt')+switchAccountFor）与虚线「添加账号」卡，替换为提示卡 wx-account-add-hint「新建小号：打开联系人 App → 「小号」/ 创建后在这里登录即可使用，登录过的小号切换不再需要登录」；删除确认弹窗文案补「若微信、QQ 等正在使用该账号，会自动退出并回到大号」；createAccount import 清零；过时注释同步
+- qq.tsx SecurityPage：「添加或注册账号」行替换为提示行 qq-account-add-hint（同款文案）；底部说明补「在联系人 App 删除小号后，正在使用它的 App 会自动退出该账号」；createAccount import 清零
+- settings.tsx AccountSwitchPage：移除「添加小号」按钮与命名弹窗 alt 分支（namingKind 收窄为 'anon' | null），保留「新建匿名号码」（匿名号无人设档案不适用联系人体系）；说明文案改为「新建小号：打开联系人 App → 「小号」…在联系人 App 删除小号后，正在使用它的 App 会自动退出该账号」；删除确认弹窗文案同步
+- contacts.tsx DetailView：删除小号确认提示补「正在使用它的微信 / QQ 等会自动退出该账号」；onDeleteError/doDelete 注释更新（拒删场景已不存在，保留兜底）
+- AnonSwitchSheet.tsx / phone.tsx：删除确认弹窗文案补自动退出说明；「先切回主号再删」逻辑保留（本 App 在用则先切，其他 App 在用由 deleteAccount 自动切回）；过时注释修正
+- 验证：bunx tsc --noEmit 全仓 0 错误；bun run lint 全绿（仅 qq/wechat>500KB BABEL 性能提示）；agent-browser E2E 全过——
+  ①联系人小号 tab 创建小陈（USER 同款表单+自动生成 16620616271/wxid_34mtuc4j/548886+微信/QQ 密码）✓
+  ②微信切换账号页：小陈卡显示、原「添加账号」卡变「新建小号：打开联系人 App → 「小号」」提示 ✓
+  ③点小陈 → 登录墙「当前账号：小陈（16620616271）」槽位绑定+预填 → 密码登录成功 → 我页=小陈 ✓
+  ④联系人删除小陈（确认提示含自动退出说明）→ 注册表只剩 main、ios-phone-active-accounts.wx 自动 amur0sl9t59cr→main ✓
+  ⑤重开微信直接进陈大大主界面（无登录墙，大号登录态保留），我页=陈大大/me520 ✓
+  ⑥QQ 登录→账号与安全：新提示行+旧「添加或注册账号」移除+自动退出说明 ✓
+  ⑦设置账号管理页：「添加小号」移除、「新建匿名号码」保留、新提示+自动退出说明 ✓
+  ⑧信息 App 匿名 sheet：「新建匿名号码」+「长按号码可删除」保留 ✓
+  ⑨全程 window.__e2eMarker 存活（建号/登录/删除/自动退出全链路无网页刷新）✓
+- 测试数据清理（ios-phone-db/fonts + localStorage）、浏览器关闭、dev.log 无错误
+
+Stage Summary:
+- 多账号流程定型：小号唯一创建入口=联系人 App「小号」tab；微信/QQ/信息/电话的切换账号界面只负责「登录+切换」（登录过的小号再切换免登录）；匿名号码（无人设档案）创建入口保留在设置/AnonSwitchSheet
+- 删除语义：从「使用中拒删」改为「删除即生效」——联系人 App 删除小号 → 注册表/账号数据清理 + 正在使用该账号的 App 自动切回大号（事件驱动重读，不刷新网页；大号登录态保留则直接进入大号，无登录态则回登录墙）
+- 改动文件：src/lib/ios/accounts.ts、src/lib/ios/contacts-store.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/settings.tsx、src/components/apps/contacts.tsx、src/components/apps/phone.tsx、src/components/ios/AnonSwitchSheet.tsx

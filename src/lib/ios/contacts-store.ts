@@ -762,18 +762,12 @@ export async function deleteContact(id: string): Promise<boolean> {
   for (const npcId of cascadedNpcIds) clearContactBinding(npcId);
   // 多账号 v2：被删的是小号/匿名号的档案联系人（altOf）→ 同步删除其注册表账号
   //（账号数据 [kv 后缀键/通话记录/留言] 由 deleteAccount 清理；联系人本体已在上方删除，
-  // deleteAccount 里的联系人清理找不到该 id 无副作用）。该账号正在某 App 使用中 → 拒删。
+  // deleteAccount 里的联系人清理找不到该 id 无副作用）。该账号正在某 App（微信/QQ 等）
+  // 使用中 → 该 App 自动切回大号 = 自动退出该账号（事件驱动，不刷新网页），不拦截删除。
   if (existing.altOf) {
     try {
-      const { accountUsedBy } = await import('./accounts');
-      const usedBy = accountUsedBy(existing.altOf);
-      if (usedBy.length > 0) {
-        const nameOf: Record<string, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
-        throw new Error(`该小号正在${usedBy.map((a) => nameOf[a]).join('、')}中使用，请先切换账号后再删除`);
-      }
       await deleteAccountFromRegistry(existing.altOf);
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('使用中')) throw err;
+    } catch {
       // 注册表清理失败不阻塞联系人删除
     }
   }

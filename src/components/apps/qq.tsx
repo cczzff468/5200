@@ -208,7 +208,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, createAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, parseScopedKey, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, getAccounts, getActiveAccountFor, getActiveAccountIdFor, parseScopedKey, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
@@ -12975,23 +12975,21 @@ function SecurityPage({
             );
           })}
 
-          {/* 添加或注册账号：新建小号并立即切换为 QQ 当前账号（switchAccountFor 事件驱动不刷新） */}
-          <button
-            type="button"
-            data-testid="qq-account-add"
-            onClick={() => {
-              const acc = createAccount('alt');
-              switchAccountFor('qq', acc.id);
-            }}
-            className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 text-left active:bg-black/[0.03] dark:border-white/[0.05]"
+          {/* 小号创建入口提示：小号统一在联系人 App 「小号」tab 创建，这里只负责登录与切换 */}
+          <div
+            data-testid="qq-account-add-hint"
+            className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 dark:border-white/[0.05]"
           >
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-black/[0.05] text-black/45 dark:bg-white/[0.08] dark:text-white/45">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-black/[0.05] text-black/30 dark:bg-white/[0.08] dark:text-white/30">
               <Plus className="h-5 w-5" aria-hidden="true" />
             </span>
-            <span className="flex-1 text-[16px]">添加或注册账号</span>
-          </button>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[15px] text-black/45 dark:text-white/45">新建小号：打开联系人 App → 「小号」</span>
+              <span className="mt-0.5 block truncate text-[12px] text-black/25 dark:text-white/25">创建后在这里登录即可使用，登录过的小号切换不再需要登录</span>
+            </span>
+          </div>
         </div>
-        <p className="px-1 pt-2 text-[12px] leading-snug text-black/30 dark:text-white/30">切换仅作用于 QQ，不影响微信 / 信息 / 电话的账号。</p>
+        <p className="px-1 pt-2 text-[12px] leading-snug text-black/30 dark:text-white/30">切换仅作用于 QQ，不影响微信 / 信息 / 电话的账号；在联系人 App 删除小号后，正在使用它的 App 会自动退出该账号。</p>
 
         <p className="px-1 pb-1.5 pt-5 text-[13px] text-black/35 dark:text-white/35">账号关联</p>
         <div className="overflow-hidden rounded-[14px] bg-white dark:bg-[#1B1C1F]">

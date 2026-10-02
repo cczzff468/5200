@@ -3988,14 +3988,14 @@ export default function PhoneApp() {
   accVerRef.current = accVer;
   /** 匿名号码切换弹层（拨号键盘「匿名号码」身份 chip 入口，与信息 App 共用 AnonSwitchSheet） */
   const [anonSheetOpen, setAnonSheetOpen] = useState(false);
-  // 长按「匿名号码」chip → 删除确认（Task 40 修正）：删前自动切回主号（本 App 在用则不可删）
+  // 长按「匿名号码」chip → 删除确认（Task 40 修正）：删前自动切回主号；其他 App 正在使用的账号删除时也会自动退出该账号
   const [delAnon, setDelAnon] = useState<{ id: string; phone: string } | null>(null);
   const [delAnonErr, setDelAnonErr] = useState('');
   const confirmDelAnon = useCallback(async () => {
     const t = delAnon;
     if (!t) return;
     try {
-      // 电话当前正用这个匿名号 → 先切回主号再删（否则 deleteAccount 拒绝「使用中」）
+      // 电话当前正用这个匿名号 → 先切回主号再删（其他 App 若也在用，deleteAccount 自动切回大号退出该账号）
       if (getActiveAccountIdFor('phone') === t.id) switchAccountFor('phone', MAIN_ACCOUNT_ID);
       const res = await deleteAccount(t.id);
       if (res.ok) {
