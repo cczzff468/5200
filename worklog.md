@@ -13502,3 +13502,21 @@ Work Log:
 Stage Summary:
 - 语音 API 非 builtin 页面结构简化：服务商 chips → 连接配置（含全局默认音色/试听/测试）→ 我的音色，三段更聚焦
 - 产出：src/components/apps/settings.tsx 单文件改动
+
+---
+Task ID: 30
+Agent: Z.ai Code (main)
+Task: 聊天设置「他的声音」页 —— 我的音色支持试听（用户原话：聊天设置界面他的声音界面我的音色那里可以试听声音）
+
+Work Log:
+- 读 chat-settings.tsx ChatVoicePage / my-voices.ts / tts-client.ts / builtin-voices.ts 摸清链路；确认设置页 settings.tsx 已有 previewMyVoice（内置声线/内置服务商→speakBuiltin 本地引擎，其余→POST /api/tts），聊天设置「他的声音」页我的音色 chip 无试听
+- chat-settings.tsx ChatVoicePage：新增 previewingMyId 状态 + myPreviewAudioRef；previewMyVoice(recordId, voiceId)——先停两路在播（stopBuiltinSpeech + 暂停 API 音频），点同一个=停止；voiceIdForProvider 解析（fishaudio: 前缀只在 Fish Audio 服务商生效，不匹配静默复位）；内置声线 id/内置服务商→speakBuiltin（文本「你好，这是保存的音色，很高兴认识你。」），其余→/api/tts（fetch+blob+Audio，onended/onerror 复位）；函数式 setState 防竞态
+- voiceChip 从 <button> 重构为 div[role=button]（button 不能嵌 button）：名字区点选/取消（键盘 Enter/Space 支持），右侧 24px 圆形喇叭按钮（AudioLines 图标，试听中 animate-pulse，stopPropagation 不影响选中），testid=`{variant}-voice-my-{i}-preview`
+- 互斥双向：previewBuiltin 开头停我的音色 API 音频；previewMyVoice 停内置引擎+setPreviewId(null)；页面卸载 effect 双路清理
+- E2E（agent-browser 隔离会话，393×852，IndexedDB 种 seed-me/seed-xiaoxue + localStorage 种 2 条我的音色）：主屏搜索→微信 me520/123456 登录→小雪聊天→···→他的声音；speechSynthesis 桩（defineProperty，onstart 50ms/onend 1600ms）驱动：①chip 试听按钮渲染 ✓；②点试听→400ms 脉冲亮、chip aria-pressed 保持 false（stopPropagation 防误选）✓、2500ms 自动复位 ✓；③chip 名字点选→aria-pressed=true 且页面按宿主设计自动关闭返回设置页（onSelect→setVoiceOpen(false) 既有交互），摘要行显示音色名；再进→再点→取消回「默认」持久化 ✓；④互斥：内置晓月试听播到一半→点我的音色试听→内置脉冲熄灭、我的脉冲亮 ✓；⑤第二条（非 builtin 前缀 id+内置服务商→本地引擎默认声线）脉冲亮→复位 ✓；⑥试听中点返回→页面卸载无残留无报错 ✓
+- E2E 边界记录：主屏翻页合成左滑不生效改走「搜索应用」路径（worklog 既有配方）；微信登录按钮文案是「同意并继续」非「登录」；应用切换器（上滑手势）点卡片外空白回主屏在本会话不稳定，QQ 端冒烟放弃——本次为三端共享组件，wx 已覆盖全部分支，QQ/信息仅主题 token 差异无独立逻辑
+- bunx tsc --noEmit + bun run lint 全绿；dev.log 无错误；测试数据全清（my-tts-voices/wx-session/IndexedDB）+浏览器已关
+
+Stage Summary:
+- 「他的声音」页我的音色 chip 现自带试听喇叭：内置声线/内置服务商走本地引擎免费试听，其余走当前语音 API（与设置 › 语音 API › 我的音色试听同规则，含 fishaudio: 前缀服务商匹配）；试听不影响选中状态、与内置声线试听互斥、离开页面自动停止
+- 产物：src/components/apps/chat-settings.tsx（ChatVoicePage 试听状态/逻辑/voiceChip 重构）；无 schema/接口变更

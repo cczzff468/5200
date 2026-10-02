@@ -15,7 +15,7 @@
  * - ChatBgPage：聊天背景独立页 —— 顶部预览卡片、从手机相册上传、内置纯色壁纸
  * - ChatSearchPage：关键词查找当前聊天记录，点击结果定位回聊天页并高亮
  * - ChatVoicePage：「他的声音」页（三端共用二级页）——选角色说话音色（默认/内置音色/
- *   我的音色，宿主持久化到联系人 voiceId）+「AI 语音频率」入口行
+ *   我的音色（chip 内喇叭可试听），宿主持久化到联系人 voiceId）+「AI 语音频率」入口行
  * - ChatVoiceFreqPage：AI 语音发送频率选择页（三端共用）—— 关闭/每条都发语音/经常(1/3)/
  *   偶尔(1/7)/不经常(1/12)，按会话独立（群聊按群），发送时现场读取
  * - 置顶/免打扰/背景持久化在 @/lib/chat-flags（localStorage），回复条数/翻译/分句发送持久化在
@@ -29,8 +29,9 @@ import type { ChatBgMode } from '@/lib/chat-flags';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
-import { BUILTIN_TTS_VOICES, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { BUILTIN_TTS_VOICES, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 import { useMyVoices } from '@/lib/ios/my-voices';
+import { voiceIdForProvider } from '@/lib/ios/tts-client';
 import { useSettings } from '@/lib/ios/store';
 import { LocalToast, useLocalToast } from './page-toast';
 
@@ -1801,7 +1802,8 @@ export function ChatVoiceFreqPage({
 /**
  * 他的声音页（聊天设置二级页，微信 / QQ / 信息三端共用）：
  * 选择该角色说话用的音色 —— 默认（跟随全局）/ 内置音色（6 个免费声线，可试听）/
- * 我的音色（设置 › 语音 API 里保存的音色）；
+ * 我的音色（设置 › 语音 API 里保存的音色；chip 内喇叭可试听——内置声线/内置服务商走
+ * 本地引擎，其余走当前语音 API，与设置页试听同规则）；
  * 选择结果由宿主持久化到联系人 voiceId（点已选中的=取消，恢复「默认」）。
  * 页内还有「AI 语音频率」入口行 → ChatVoiceFreqPage（按会话独立）。
  */
@@ -1832,14 +1834,29 @@ export function ChatVoicePage({
   const myVoices = useMyVoices((s) => s.voices);
   /** 内置声线试听状态（播放中的声线 id） */
   const [previewId, setPreviewId] = useState<string | null>(null);
+  /** 我的音色试听状态（在播的记录 id；内置引擎与 API 音频两路共用） */
+  const [previewingMyId, setPreviewingMyId] = useState<string | null>(null);
+  const myPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   // 本页只在客户端渲染：直接惰性初始化（避免 effect 内 setState 的水合/告警问题）
   const [builtinSupport] = useState<boolean | null>(() => (typeof window === 'undefined' ? null : isBuiltinVoiceSupported()));
 
   useEffect(() => {
-    return () => stopBuiltinSpeech();
+    return () => {
+      stopBuiltinSpeech();
+      if (myPreviewAudioRef.current) {
+        myPreviewAudioRef.current.pause();
+        myPreviewAudioRef.current = null;
+      }
+    };
   }, []);
 
   const previewBuiltin = (id: string) => {
+    // 与「我的音色」试听互斥：开始内置试听前停掉在播的 API 音频
+    if (myPreviewAudioRef.current) {
+      myPreviewAudioRef.current.pause();
+      myPreviewAudioRef.current = null;
+    }
+    setPreviewingMyId(null);
     // #44：切换声线时连续点同一 id 会先 stop 再 speak，原实现 setPreviewId(null) 与 setPreviewId(id)
     // 在同一同步块内被 React 合并为最终 id，onEnd/onError 回调里 setPreviewId(null) 可能清掉刚换的 id——
     // 改用函数式 setState：当前 id === id 视为「点同一个」→ 停止并置 null；否则停止并切到新 id。
@@ -1862,24 +1879,108 @@ export function ChatVoicePage({
   const mutedText = t.sms ? 'text-muted-foreground' : 'text-black/40 dark:text-white/40';
   const current = voiceId.trim();
 
-  /** 音色 chip（我的音色）：点选即用，再点取消回「默认」 */
-  const voiceChip = (id: string, name: string, testId: string, key: string) => {
+  /**
+   * 我的音色试听（与设置 › 语音 API › 我的音色的试听同规则）：
+   * 内置声线 id / 当前服务商为内置 → 浏览器引擎本地朗读；其余走当前语音 API（/api/tts）。
+   * fishaudio: 前缀音色只在 Fish Audio 服务商下生效（voiceIdForProvider 同规则）。
+   * 与内置声线试听互斥：任一方开始都停掉对方；再点同一个 = 停止。
+   */
+  const previewMyVoice = (recordId: string, voiceId: string) => {
+    // 停掉在播的试听（内置引擎 + API 音频）
+    stopBuiltinSpeech();
+    setPreviewId(null);
+    if (myPreviewAudioRef.current) {
+      myPreviewAudioRef.current.pause();
+      myPreviewAudioRef.current = null;
+    }
+    if (previewingMyId === recordId) {
+      setPreviewingMyId(null);
+      return;
+    }
+    const cfg = useSettings.getState().ttsConfig;
+    const reset = () => setPreviewingMyId((p) => (p === recordId ? null : p));
+    const resolved = voiceIdForProvider(voiceId, cfg.provider);
+    if (!resolved) {
+      reset(); // 前缀音色与当前服务商不匹配：不请求
+      return;
+    }
+    if (isBuiltinVoiceId(resolved) || cfg.provider === 'builtin') {
+      setPreviewingMyId(recordId);
+      void speakBuiltin({
+        text: '你好，这是保存的音色，很高兴认识你。',
+        voiceId: isBuiltinVoiceId(resolved) ? resolved : undefined,
+        onEnd: reset,
+        onError: reset,
+      }).catch(reset);
+      return;
+    }
+    setPreviewingMyId(recordId);
+    void (async () => {
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config: cfg, voiceId: resolved, text: '你好，这是保存的音色，很高兴认识你。' }),
+        });
+        if (!res.ok) {
+          reset();
+          return;
+        }
+        const blob = await res.blob();
+        const audio = new Audio(URL.createObjectURL(blob));
+        myPreviewAudioRef.current = audio;
+        audio.onended = () => {
+          if (myPreviewAudioRef.current === audio) myPreviewAudioRef.current = null;
+          reset();
+        };
+        audio.onerror = reset;
+        await audio.play().catch(reset);
+      } catch {
+        reset();
+      }
+    })();
+  };
+
+  /** 音色 chip（我的音色）：点名字选即用（再点取消回「默认」），右侧喇叭按钮试听（stopPropagation 不影响选择） */
+  const voiceChip = (id: string, name: string, testId: string, recordId: string) => {
     const active = current === id;
+    const previewing = previewingMyId === recordId;
     return (
-      <button
-        key={key}
-        type="button"
+      <div
+        key={recordId}
+        role="button"
+        tabIndex={0}
         data-testid={testId}
         aria-pressed={active}
         title={name === id ? id : `${name}（${id}）`}
         onClick={() => onSelect(active ? '' : id)}
-        className={`max-w-full truncate rounded-full border px-2.5 py-1.5 text-[13px] transition-colors ${
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect(active ? '' : id);
+          }
+        }}
+        className={`flex max-w-full items-center gap-1 rounded-full border py-1.5 pl-2.5 pr-1.5 text-[13px] transition-colors ${
           active ? 'border-transparent text-white' : 'border-black/10 bg-white/60 text-black/75 active:bg-black/[0.04] dark:border-white/15 dark:bg-white/10 dark:text-white/80 dark:active:bg-white/[0.06]'
         }`}
         style={active ? { backgroundColor: t.accent } : undefined}
       >
-        {name}
-      </button>
+        <span className="min-w-0 max-w-[140px] truncate">{name}</span>
+        <button
+          type="button"
+          aria-label={`试听音色${name}`}
+          data-testid={`${testId}-preview`}
+          onClick={(e) => {
+            e.stopPropagation();
+            previewMyVoice(recordId, id);
+          }}
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${
+            active ? 'bg-white/25 text-white' : 'bg-black/[0.06] text-black/60 active:bg-black/[0.1] dark:bg-white/15 dark:text-white/75'
+          }`}
+        >
+          <AudioLines className={`h-3 w-3 ${previewing ? 'animate-pulse' : ''}`} aria-hidden="true" />
+        </button>
+      </div>
     );
   };
 
