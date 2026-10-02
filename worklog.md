@@ -13520,3 +13520,22 @@ Work Log:
 Stage Summary:
 - 「他的声音」页我的音色 chip 现自带试听喇叭：内置声线/内置服务商走本地引擎免费试听，其余走当前语音 API（与设置 › 语音 API › 我的音色试听同规则，含 fishaudio: 前缀服务商匹配）；试听不影响选中状态、与内置声线试听互斥、离开页面自动停止
 - 产物：src/components/apps/chat-settings.tsx（ChatVoicePage 试听状态/逻辑/voiceChip 重构）；无 schema/接口变更
+
+---
+Task ID: 31
+Agent: Z.ai Code (main)
+Task: 设置页毛玻璃美化（用户原话：聊天设置界面他的声音界面我的音色那里再美化一下，还有把API设置，识图模型，图像生成，语音API界面再美化一下，简约，毛玻璃胶囊，毛玻璃风格 + 追加：输入框再美化一下，变成毛玻璃风格，把按钮和输入框变成正方形圆角）
+
+Work Log:
+- settings.tsx：DetailShell 新增 ambience 属性——顶部 4 枚柔和彩色光斑（橙/青/紫/粉，blur-[100px]，pointer-events-none）作玻璃卡片 backdrop-blur 透底，滚动容器加 relative 保证层级；GrayCard 重定义为毛玻璃（rounded-[22px] bg-white/55 + backdrop-blur-2xl + ring-white/70 高光描边 + 柔和投影）
+- 全量玻璃化四页（API 设置/识图模型/图像生成/语音 API）：表单卡/信息卡/预设区/我的音色/STT/锁脸区统一玻璃卡；输入框毛玻璃胶囊（bg-white/55 + backdrop-blur-2xl + 内侧顶部高光 inset shadow + 细描边）；激活 chip=深色实心胶囊（bg-foreground text-background + 投影），未激活=半透玻璃胶囊（ring 细描边 + hover 增亮）；分段控件（请求方式/STT）玻璃轨道+白滑块；模型下拉面板玻璃化（bg-white/85 backdrop-blur-2xl 圆角 20）；amber/emerald 提示横幅玻璃化；测试连接/测试识图/测试生图/试听/拉取模型/保存类按钮统一玻璃胶囊
+- 第一轮全胶囊后按用户追加要求二轮调整：输入框（Input/Textarea/搜索框）与全部按钮（拉取模型/整行操作钮/保存/上传删除/分段控件轨道+滑块/我的音色行）从 rounded-full 改 rounded-[14px]（分段滑块 9-10px、搜索框 12px），输入框玻璃感再加强（bg-white/55 + blur-2xl + 双层 inset/外投影，暗色独立 shadow）；小标签 chips（预设/服务商/模型/尺寸/质量/内置声线缩写）保持胶囊（用户首轮点名「毛玻璃胶囊」）+ 全部加 active:scale 按压反馈
+- chat-settings.tsx ChatVoicePage「我的音色」区美化：chip 重设计为毛玻璃胶囊（py-2 pl-3.5 pr-2 + backdrop-blur-xl + 柔影，激活=宿主主题色 accent 填充+深投影），试听喇叭按钮升 28px 玻璃圆（ring 高光）；区头加「N 个」玻璃计数徽标（testid={variant}-voice-my-count）；空态改玻璃卡（AudioLines 图标 + 玻璃底）
+- E2E（agent-browser）：API 设置页（氛围光斑+玻璃卡+胶囊输入+温度玻璃徽章+琥珀提示）✓；识图模型页 ✓；图像生成页（激活预设深色胶囊、请求方式分段控件、尺寸/质量 chips、FaceLock 玻璃卡）✓；语音 API 页（服务商 chips 内置语音激活深色、内置声线玻璃卡、MiniMax 连接配置、模型 chips、试听当前音色在上/测试服务商连接在下、点击测试弹出「请先填写 API Key」错误横幅=交互正常、我的音色玻璃行+STT 分段控件）✓；四页 DetailShell 全部带 ambience
+- ChatVoicePage E2E（IndexedDB 种 seed-me/seed-xiaoxue + localStorage 种 2 条 my-tts-voices → 搜索应用直达微信 → 微信号 me520/123456 登录（首次失败因未播种，播种后 .click() 成功；fiber onClick 对该页不生效需真实 DOM click——React 19 事件边界记录）→ 小雪聊天 → ⋯ → 聊天信息 → 他的声音）：我的音色区「2 个」徽标+两枚玻璃 chip 渲染 ✓；点「清亮少年」选中→返回设置页摘要更新 ✓；重进 chip 激活态 aria-pressed=true + backgroundColor rgb(7,193,96) + borderRadius 胶囊 + backdropFilter blur(24px) ✓；再点取消恢复默认 ✓
+- 测试数据全清（seed-me/seed-xiaoxue 联系人 + my-tts-voices）；agent-browser errors/console 零错误；dev server 中途崩溃一次（eslint 大文件 babel 后）已重启恢复；bun run lint 全绿
+- E2E 边界补充：微信登录 submit 按钮需真实 btn.click()（fiber 直调 props.onClick 不触发 submit 链路）；主屏第 2/3 页翻页 swipe 必须全程落在手机屏内（pointerup 落在屏外会冻结轮播过渡）；「搜索应用」面板直达 App 是最稳路径
+
+Stage Summary:
+- 四个设置页 + 「他的声音」我的音色区完成 glassmorphism 风格统一：毛玻璃卡片/输入框（正方形圆角 14px + 内侧高光）/玻璃胶囊 chips（激活深色实心）/分段控件玻璃化/氛围光斑透底；按钮与输入框方形圆角、标签 chip 保持胶囊
+- 产物：src/components/apps/settings.tsx + src/components/apps/chat-settings.tsx 两文件，无逻辑/schema 变更（仅 className 与 ChatVoicePage 我的音色区结构）
