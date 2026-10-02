@@ -14271,3 +14271,22 @@ Stage Summary:
 - 匿名号边界收紧：匿名号只存在于电话/信息（AnonSwitchSheet），微信/QQ 列表彻底排除 + 历史遗留槽位开机自愈切回大号
 - 微信设置页「切换账号」独立卡片化（对照用户截图）
 - 改动文件：src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/ios/contacts-store.ts
+
+---
+Task ID: 1
+Agent: Z.ai Code (主控)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库到本地工作目录，配置远程，验证项目可运行
+
+Work Log:
+- 克隆 https://github.com/cczzff468/5200.git（main 分支，最新提交 ccc79d5 Task 40-s）到 /tmp/repo-5200
+- 用仓库内容替换本地脚手架（rsync 排除 node_modules/.next/dev.log；upload/ 特殊挂载目录 chgrp 报错可忽略）
+- 本地 git 历史已对齐 origin/main，工作区干净；origin 已配置（含凭据，可直接 push）
+- bun install 同步依赖（新增 @dnd-kit、@mdxeditor、idb、jsmediatags、web-push 等 29 包）
+- prisma db push 同步 SQLite（db/custom.db）
+- 通过 .zscripts/dev.sh 正确启动 dev server（直接 nohup bun run dev 会被沙箱回收进程）
+- agent-browser E2E 验证：锁屏渲染 ✓ → 上滑解锁 ✓ → 主屏幕 ✓ → 信息 App 打开 ✓ → 发送「你好」→ AI 语音回复（7秒 TTS 语音条）✓；控制台无错误
+
+Stage Summary:
+- 项目已就绪：本地工作目录 = origin/main（Task 40-s），dev server 运行于 3000 端口，核心 AI 聊天链路（LLM+TTS）验证通过
+- git remote origin 已带 token，后续改完可直接 git push -u origin main
+- 等待用户提出具体修改/新增功能需求
