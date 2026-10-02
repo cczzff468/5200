@@ -500,10 +500,6 @@ export default function AppStoreApp() {
                 ? '该 App 已从主屏幕移除，点上方「恢复」即可放回主屏幕有空位的页面。'
                 : '该 App 已在主屏幕。长按图标进入编辑模式，点 × 可将其移除并收进 App Store。'}
             </p>
-            {/* #27：详情页底部明确「演示版」提示，避免假装能装新 App */}
-            <p className="mt-2 px-5 pb-2 text-[12px] leading-relaxed text-amber-700/80 dark:text-amber-300/80">
-              演示版：上方“打开”/“恢复”为真实能力，“安装”/“更新”为模拟效果，评分与版本号均为装饰性生成。
-            </p>
           </div>
         </IOSScreen>
       );
@@ -540,12 +536,6 @@ export default function AppStoreApp() {
       </header>
 
       <div key={`${tab}-${detailId ?? 'browse'}`} className="no-scrollbar flex-1 overflow-y-auto pb-4" data-testid={`appstore-tab-page-${tab}`}>
-        {/* #27：顶部演示版提示（明确标注安装/更新为模拟效果，不假装能装新 App） */}
-        {tab !== 'search' && (
-          <div className="mx-4 mt-3 rounded-[14px] border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:text-amber-300">
-            <span className="font-medium">这是演示版</span>：安装、更新、评分、版本号、排行榜均为装饰性模拟，不会真的下载或升级 App；「打开」可启动已存在的系统 App，「恢复」可放回主屏。
-          </div>
-        )}
         {/* ------------------------------- App ------------------------------- */}
         {tab === 'app' && (
           <div className="pt-1">

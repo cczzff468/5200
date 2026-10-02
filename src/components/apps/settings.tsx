@@ -439,7 +439,24 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
           <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
             <RowIcon icon={Plane} tone={TONE_ORANGE} />
             <span className="min-w-0 flex-1 truncate text-[16px]">飞行模式</span>
-            <Switch checked={airplane} onCheckedChange={toggleAirplane} aria-label="飞行模式" />
+            {/* 用户要求：绿色大开关（iOS 原生 51×31 规格，开启态 #34C759 绿） */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={airplane}
+              aria-label="飞行模式"
+              data-testid="settings-airplane-switch"
+              onClick={() => toggleAirplane(!airplane)}
+              className={`relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-200 ${
+                airplane ? 'bg-[#34C759]' : 'bg-black/15 dark:bg-white/25'
+              }`}
+            >
+              <span
+                className={`pointer-events-none absolute left-[2px] top-[2px] block h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.25)] transition-transform duration-200 ${
+                  airplane ? 'translate-x-[20px]' : 'translate-x-0'
+                }`}
+              />
+            </button>
           </div>
           <MainRow icon={Wifi} tone={TONE_BLUE} label="无线局域网" value="未连接" chevron />
           <MainRow icon={Bluetooth} tone={TONE_BLUE} label="蓝牙" value="打开" chevron />

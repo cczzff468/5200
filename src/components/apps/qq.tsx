@@ -10820,8 +10820,12 @@ function MeDrawer({
             ))}
           </div>
 
-          {/* 底部：设置 / 夜间 / 天气城市 */}
-          <div className="mt-2 flex items-center justify-around border-t border-black/[0.05] pb-[44px] pt-3 dark:border-white/[0.06]">
+        </div>
+        </div>
+
+        {/* 底部：设置 / 夜间 / 天气城市（固定在抽屉底部，不随内容滚动） */}
+        <div className="shrink-0 px-5 pb-[44px] pt-3">
+          <div className="flex items-center justify-around border-t border-black/[0.05] pt-3 dark:border-white/[0.06]">
             {[
               { icon: <Settings className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '设置', fn: onOpenSettings, testid: 'qq-drawer-settings' },
               { icon: <Moon className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '夜间', fn: () => onToast('夜间模式跟随系统设置'), testid: 'qq-drawer-night' },
@@ -10846,7 +10850,6 @@ function MeDrawer({
               </button>
             ))}
           </div>
-        </div>
         </div>
       </div>
     </div>

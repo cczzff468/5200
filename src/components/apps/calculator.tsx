@@ -497,15 +497,14 @@ const SCI_KEYS: Array<{ label: string; aria: string; run: (s: SciState) => SciSt
 
 /* ==================== UI ==================== */
 
-/* iOS 18 配色 × 毛玻璃化（随主题自适应，父容器有 .dark 类）：
-   数字/功能/科学键改为半透明白玻璃圆钮（blur + ring），运算符保留橙实心（保持计算器辨识度）：
-   浅色：数字 bg-white/70 黑字 / 功能键 bg-white/50 黑字 / 运算符橙底白字 / 激活反白白底橙字 / 科学键 bg-white/50
-   深色：数字/功能/科学键白色半透明玻璃，字色不变 / 运算符、激活态不变 */
-const DIGIT = 'bg-white/70 text-black ring-1 ring-white/80 backdrop-blur-xl dark:bg-white/[0.14] dark:text-white dark:ring-white/[0.12]';
-const FUNC = 'bg-white/50 text-black ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.30] dark:text-black dark:ring-white/[0.20]';
+/* iOS 18 配色（随主题自适应，父容器有 .dark 类）：
+   浅色：数字 #E9E9EB 黑字 / 功能键 #D4D4D2 黑字 / 运算符橙底白字 / 激活反白白底橙字 / 科学键 #D1D1D6
+   深色：数字 #333333 白字 / 功能键 #A5A5A5 黑字 / 运算符、激活态不变 / 科学键 #A5A5A5 */
+const DIGIT = 'bg-[#E9E9EB] text-black dark:bg-[#333333] dark:text-white';
+const FUNC = 'bg-[#D4D4D2] text-black dark:bg-[#A5A5A5] dark:text-black';
 const ORANGE = 'bg-[#FF9F0A] text-white';
 const OP_ACTIVE = 'bg-white text-[#FF9F0A]';
-const SCI_TONE = 'bg-white/50 text-black ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.26] dark:text-black dark:ring-white/[0.18]';
+const SCI_TONE = 'bg-[#D1D1D6] text-black dark:bg-[#A5A5A5] dark:text-black';
 
 function Key(props: {
   label: string;
@@ -555,9 +554,7 @@ function Display(props: { hist: string; main: string; landscape: boolean }) {
         : 'text-[34px]';
   return (
     <div
-      className={`mx-4 mt-[54px] flex min-h-0 flex-1 flex-col items-end justify-end overflow-hidden rounded-[20px] bg-white/60 px-5 pt-4 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09] ${
-        props.landscape ? 'pb-1' : 'pb-3'
-      }`}
+      className={`flex min-h-0 flex-1 flex-col items-end justify-end overflow-hidden px-5 pt-[54px] ${props.landscape ? 'pb-1' : 'pb-3'}`}
     >
       <div
         className={`max-w-full truncate font-light tabular-nums tracking-wide text-muted-foreground/80 ${props.landscape ? 'h-5 text-[13px] leading-5' : 'h-6 text-[17px] leading-6'}`}

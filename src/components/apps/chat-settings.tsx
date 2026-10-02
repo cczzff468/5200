@@ -1757,8 +1757,15 @@ export function WorldBookPickerPage({
 
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+      {/* 毛玻璃氛围光斑（玻璃卡 backdrop-blur 透底，与设置页 DetailShell ambience 同一套） */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[380px] overflow-hidden">
+        <div className="absolute -left-20 -top-24 h-64 w-64 rounded-full bg-[#8FB8FF]/[0.2] blur-[100px]" />
+        <div className="absolute left-1/4 -top-16 h-52 w-52 rounded-full bg-[#9FD8FF]/[0.18] blur-[100px]" />
+        <div className="absolute -right-16 top-2 h-56 w-56 rounded-full bg-[#C5A8FF]/[0.16] blur-[100px]" />
+        <div className="absolute left-1/2 top-36 h-44 w-64 rounded-full bg-[#FFD9A8]/[0.12] blur-[110px]" />
+      </div>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className="relative shrink-0 pt-[54px]">
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
             type="button"
@@ -1773,7 +1780,7 @@ export function WorldBookPickerPage({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2">
+      <div className="relative flex-1 overflow-y-auto px-4 pb-8 pt-2">
         {/* 局部区块：挂载列表（既有行结构与 testid 保持不变） */}
         <p className={wbSectionTitleCls}>局部 · 挂载后生效</p>
         {books.length === 0 ? (
@@ -1784,7 +1791,7 @@ export function WorldBookPickerPage({
             </p>
           </div>
         ) : (
-          <div className={`${t.cardCls} overflow-hidden`}>
+          <div className="overflow-hidden rounded-[18px] bg-white/55 shadow-[0_8px_24px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.07] dark:ring-white/[0.09]">
             {books.map((book, i) => {
               const selected = bound.has(book.id);
               return (
@@ -1829,13 +1836,13 @@ export function WorldBookPickerPage({
           <p className={wbSectionTitleCls}>专属 · 绑定当前角色后生效</p>
           {exBooks.length === 0 ? (
             <p
-              className="rounded-[10px] px-3 py-3.5 text-center text-[13px] leading-relaxed text-black/35 dark:text-white/35"
+              className="rounded-[16px] border border-white/60 bg-white/45 px-4 py-3.5 text-center text-[13px] leading-relaxed text-black/35 shadow-[0_3px_14px_rgba(17,24,39,0.05)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-white/35"
               data-testid={`${testPrefix}-wb-local-empty`}
             >
               暂无「专属」世界书；到「世界书」App 创建（范围选专属）后，可在这里直接绑定/解绑当前角色
             </p>
           ) : (
-            <div className={`${t.cardCls} overflow-hidden`}>
+            <div className="overflow-hidden rounded-[18px] bg-white/55 shadow-[0_8px_24px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.07] dark:ring-white/[0.09]">
               {exBooks.map((book, i) => {
                 const boundToCurrent = currentContactId !== null && book.targetContactId === currentContactId;
                 return (
