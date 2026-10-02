@@ -232,27 +232,38 @@ function MainRow({
 }
 
 /** 详情页外壳：居中标题导航 + 返回按钮 + 右滑进入动画；
- *  gray=true 时整页浅灰背景（#F2F2F7，iOS 设置子页风，灰底白卡），暗色主题保持原背景 */
+ *  gray=true 时整页浅灰背景（#F2F2F7，iOS 设置子页风），暗色主题保持原背景；
+ *  ambience=true 时顶部铺柔和彩色光斑（毛玻璃卡片 backdrop-blur 的透底，简约 glassmorphism 风） */
 function DetailShell({
   title,
   onBack,
   children,
   gray = false,
+  ambience = false,
 }: {
   title: string;
   onBack: () => void;
   children: ReactNode;
   gray?: boolean;
+  ambience?: boolean;
 }) {
   return (
-    <div className={`flex h-full w-full flex-col ${gray ? 'bg-[#F2F2F7] dark:bg-transparent' : ''}`}>
+    <div className={`relative flex h-full w-full flex-col ${gray ? 'bg-[#F2F2F7] dark:bg-transparent' : ''}`}>
+      {ambience && (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[440px] overflow-hidden">
+          <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-[#FFB340]/[0.26] blur-[100px]" />
+          <div className="absolute left-1/4 -top-20 h-60 w-60 rounded-full bg-[#5AC8FA]/[0.24] blur-[100px]" />
+          <div className="absolute -right-20 top-4 h-64 w-64 rounded-full bg-[#C58BFF]/[0.2] blur-[100px]" />
+          <div className="absolute left-1/2 top-44 h-52 w-72 rounded-full bg-[#FF8FB0]/[0.12] blur-[110px]" />
+        </div>
+      )}
       <IOSNavBar
         title={title}
         large={false}
         left={<IOSBackButton onClick={onBack} label="" />}
         className={gray ? 'bg-transparent! backdrop-blur-none!' : ''}
       />
-      <div className="no-scrollbar flex-1 overflow-y-auto">
+      <div className="no-scrollbar relative flex-1 overflow-y-auto">
         <div
           key={title}
           className="animate-in slide-in-from-right-6 fade-in duration-300 px-4 pb-[40px] pt-2"
@@ -296,11 +307,11 @@ function SectionLabel({
   );
 }
 
-/** 浅灰页上的分组卡片：白底 + 细描边 + 轻阴影（iOS 内嵌列表风） */
+/** 毛玻璃分组卡片（glassmorphism）：半透明白 + backdrop-blur + 高光描边 + 柔和投影 */
 function GrayCard({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={`rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] ${className}`}
+      className={`rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09] ${className}`}
     >
       {children}
     </div>
@@ -1168,7 +1179,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
   const filteredModels = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
 
   return (
-    <DetailShell title="API 设置" onBack={onBack} gray>
+    <DetailShell title="API 设置" onBack={onBack} gray ambience>
       <div className="flex flex-col gap-5">
         {/* 预设区 */}
         <section>
@@ -1181,10 +1192,10 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                   key={p.name}
                   type="button"
                   onClick={() => applyBuiltin(p)}
-                  className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
+                  className={`rounded-full px-3.5 py-1.5 text-[13px] transition-all active:scale-[0.97] ${
                     active
-                      ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                      : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+                      ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                      : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                   }`}
                 >
                   {p.name}
@@ -1197,10 +1208,10 @@ function ApiPage({ onBack }: { onBack: () => void }) {
               return (
                 <span
                   key={p.id}
-                  className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-all active:scale-[0.97] ${
                     active
-                      ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                      : 'bg-black/[0.05] text-foreground/75 dark:bg-white/[0.08] dark:text-foreground/75'
+                      ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                      : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1]'
                   }`}
                 >
                   <button type="button" onClick={() => applyUserPreset(p)} className="max-w-[120px] truncate">
@@ -1220,7 +1231,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
             <button
               type="button"
               onClick={() => setSaveOpen((v) => !v)}
-              className="flex items-center gap-1 rounded-full bg-black/[0.05] px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+              className="flex items-center gap-1 rounded-full bg-white/55 px-3.5 py-1.5 text-[13px] text-muted-foreground ring-1 ring-black/[0.06] backdrop-blur-xl transition-all hover:bg-white/80 active:scale-[0.97] dark:bg-white/[0.07] dark:ring-white/[0.1] dark:hover:bg-white/[0.14]"
             >
               <Plus className="h-3.5 w-3.5" />
               存为预设
@@ -1233,7 +1244,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                 onChange={(e) => setPresetName(e.target.value)}
                 placeholder="预设名称，如 我的GPT"
                 autoFocus
-                className="h-9 flex-1 rounded-[10px] bg-card text-[14px] shadow-sm ring-1 ring-black/[0.05] dark:ring-white/[0.08]"
+                className="h-10 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') savePreset();
                 }}
@@ -1242,7 +1253,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                 type="button"
                 onClick={savePreset}
                 disabled={!presetName.trim()}
-                className="h-9 shrink-0 rounded-[10px] bg-[#E9E9EB] px-4 text-[13px] font-medium text-foreground shadow-sm ring-1 ring-black/[0.06] transition-colors active:bg-[#DEDEE3] disabled:opacity-40 dark:bg-white/[0.14] dark:ring-white/[0.1] dark:active:bg-white/[0.2]"
+                className="h-10 shrink-0 rounded-full bg-white/60 px-5 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-40 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
               >
                 保存
               </button>
@@ -1259,7 +1270,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
           >
             连接配置
           </SectionLabel>
-          <div className="flex flex-col gap-4 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
+          <div className="flex flex-col gap-4 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
             {/* API 地址 */}
             <div>
               <FieldLabel>API 地址</FieldLabel>
@@ -1267,7 +1278,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                 value={apiConfig.baseUrl}
                 onChange={(e) => updateApiConfig({ baseUrl: e.target.value })}
                 placeholder={DEFAULT_API_CONFIG.baseUrl}
-                className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
             </div>
 
@@ -1281,7 +1292,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                   onChange={(e) => updateApiConfig({ apiKey: e.target.value })}
                   placeholder="sk-..."
                   autoComplete="off"
-                  className={`h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06] ${
+                  className={`h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07] ${
                     apiConfig.apiKey ? 'pr-16' : 'pr-10'
                   }`}
                 />
@@ -1318,13 +1329,13 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                   value={apiConfig.model}
                   onChange={(e) => updateApiConfig({ model: e.target.value })}
                   placeholder={DEFAULT_API_CONFIG.model}
-                  className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                  className="h-11 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 />
                 <button
                   type="button"
                   onClick={() => void fetchModels()}
                   disabled={fetchingModels}
-                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                  className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-white/60 px-4 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                 >
                   {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   拉取模型
@@ -1336,7 +1347,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                 </p>
               )}
               {modelsHint && (
-                <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                <div className="mt-1.5 rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
                   {modelsHint}
                 </div>
               )}
@@ -1348,14 +1359,14 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                     onClick={() => setModelPanelOpen(false)}
                     aria-hidden="true"
                   />
-                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
-                    <div className="border-b border-border/60 p-2">
+                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[20px] border border-white/60 bg-white/85 shadow-2xl ring-1 ring-black/[0.05] backdrop-blur-2xl dark:border-white/[0.1] dark:bg-[#1C1C1E]/85">
+                    <div className="border-b border-black/[0.05] p-2 dark:border-white/[0.06]">
                       <Input
                         value={modelQuery}
                         onChange={(e) => setModelQuery(e.target.value)}
                         placeholder="搜索模型，如 32k / turbo"
                         autoFocus
-                        className="h-9 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[13px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                        className="h-10 rounded-full border-black/[0.06] bg-white/70 text-[13px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.09]"
                       />
                     </div>
                     <div className="thin-scrollbar max-h-64 overflow-y-auto">
@@ -1403,7 +1414,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                   className="flex-1"
                   aria-label="温度"
                 />
-                <span className="min-w-[48px] rounded-full bg-muted px-2.5 py-1 text-center text-[13px] tabular-nums">
+                <span className="min-w-[48px] rounded-full bg-white/65 px-2.5 py-1 text-center text-[13px] tabular-nums shadow-sm ring-1 ring-black/[0.05] backdrop-blur-xl dark:bg-white/[0.1] dark:ring-white/[0.1]">
                   {apiConfig.temperature.toFixed(1)}
                 </span>
               </div>
@@ -1419,13 +1430,13 @@ function ApiPage({ onBack }: { onBack: () => void }) {
                 value={maxText}
                 onChange={(e) => handleMaxChange(e.target.value)}
                 onBlur={handleMaxBlur}
-                className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
             </div>
 
             {/* 未配置 Key 提示 */}
             {!apiConfig.apiKey.trim() && (
-              <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+              <div className="rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2.5 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
                 未配置 API Key 时，AI 助手无法回复；请填写 OpenAI 兼容接口地址与 API Key 后再聊天。
               </div>
             )}
@@ -1438,13 +1449,13 @@ function ApiPage({ onBack }: { onBack: () => void }) {
             type="button"
             onClick={() => void runTest()}
             disabled={testLoading}
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-[12px] bg-[#E9E9EB] text-[15px] font-medium text-foreground shadow-sm ring-1 ring-black/[0.06] transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.14] dark:ring-white/[0.1] dark:active:bg-white/[0.2]"
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-white/60 text-[15px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
           >
             {testLoading && <Loader2 className="h-4 w-4 animate-spin" />}
             测试连接
           </button>
           {testOk && (
-            <div className="rounded-[12px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-[13px] leading-relaxed text-emerald-700 dark:text-emerald-300">
+            <div className="rounded-[16px] border border-emerald-500/30 bg-emerald-400/15 px-4 py-3 text-[13px] leading-relaxed text-emerald-700 backdrop-blur-xl dark:bg-emerald-300/[0.08] dark:text-emerald-300">
               ✅ 连接成功{testOk.viaDirect ? '（浏览器直连）' : ''} · 延迟 {testOk.latencyMs}ms · 模型 {testOk.model}
             </div>
           )}
@@ -1671,7 +1682,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="识图模型" onBack={onBack} gray>
+    <DetailShell title="识图模型" onBack={onBack} gray ambience>
       <div className="flex flex-col gap-5">
         {/* 预设区 */}
         <section>
@@ -1684,10 +1695,10 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                   key={p.name}
                   type="button"
                   onClick={() => applyBuiltin(p)}
-                  className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
+                  className={`rounded-full px-3.5 py-1.5 text-[13px] transition-all active:scale-[0.97] ${
                     active
-                      ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                      : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+                      ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                      : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                   }`}
                 >
                   {p.name}
@@ -1700,10 +1711,10 @@ function VisionPage({ onBack }: { onBack: () => void }) {
               return (
                 <span
                   key={p.id}
-                  className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-all active:scale-[0.97] ${
                     active
-                      ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                      : 'bg-black/[0.05] text-foreground/75 dark:bg-white/[0.08] dark:text-foreground/75'
+                      ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                      : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1]'
                   }`}
                 >
                   <button type="button" onClick={() => applyUserPreset(p)} className="max-w-[120px] truncate">
@@ -1723,7 +1734,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
             <button
               type="button"
               onClick={() => setSaveOpen((v) => !v)}
-              className="flex items-center gap-1 rounded-full bg-black/[0.05] px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+              className="flex items-center gap-1 rounded-full bg-white/55 px-3.5 py-1.5 text-[13px] text-muted-foreground ring-1 ring-black/[0.06] backdrop-blur-xl transition-all hover:bg-white/80 active:scale-[0.97] dark:bg-white/[0.07] dark:ring-white/[0.1] dark:hover:bg-white/[0.14]"
             >
               <Plus className="h-3.5 w-3.5" />
               存为预设
@@ -1736,7 +1747,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 onChange={(e) => setPresetName(e.target.value)}
                 placeholder="预设名称，如 本地视觉模型"
                 autoFocus
-                className="h-9 flex-1 rounded-[10px] bg-card text-[14px] shadow-sm ring-1 ring-black/[0.05] dark:ring-white/[0.08]"
+                className="h-10 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') savePreset();
                 }}
@@ -1745,7 +1756,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 type="button"
                 onClick={savePreset}
                 disabled={!presetName.trim()}
-                className="h-9 shrink-0 rounded-[10px] bg-[#E9E9EB] px-4 text-[13px] font-medium text-foreground shadow-sm ring-1 ring-black/[0.06] transition-colors active:bg-[#DEDEE3] disabled:opacity-40 dark:bg-white/[0.14] dark:ring-white/[0.1] dark:active:bg-white/[0.2]"
+                className="h-10 shrink-0 rounded-full bg-white/60 px-5 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-40 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
               >
                 保存
               </button>
@@ -1762,7 +1773,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
           >
             连接配置
           </SectionLabel>
-          <div className="flex flex-col gap-4 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
+          <div className="flex flex-col gap-4 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
             {/* API 地址 */}
             <div>
               <FieldLabel>API 地址</FieldLabel>
@@ -1770,7 +1781,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 value={visionConfig.baseUrl}
                 onChange={(e) => patchVisionConfig({ baseUrl: e.target.value })}
                 placeholder="https://api.openai.com/v1/chat/completions"
-                className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
             </div>
 
@@ -1784,7 +1795,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                   onChange={(e) => patchVisionConfig({ apiKey: e.target.value })}
                   placeholder="sk-...（免 Key 接口可留空）"
                   autoComplete="off"
-                  className={`h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06] ${
+                  className={`h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07] ${
                     visionConfig.apiKey ? 'pr-16' : 'pr-10'
                   }`}
                 />
@@ -1817,13 +1828,13 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                   value={visionConfig.model}
                   onChange={(e) => patchVisionConfig({ model: e.target.value })}
                   placeholder="如 gpt-4o-mini / qwen-vl-plus / glm-4v-flash"
-                  className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                  className="h-11 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 />
                 <button
                   type="button"
                   onClick={() => void fetchModels()}
                   disabled={fetchingModels}
-                  className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                  className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-white/60 px-4 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                 >
                   {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   拉取模型
@@ -1835,7 +1846,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 </p>
               )}
               {modelsHint && (
-                <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                <div className="mt-1.5 rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
                   {modelsHint}
                 </div>
               )}
@@ -1847,14 +1858,14 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                     onClick={() => setModelPanelOpen(false)}
                     aria-hidden="true"
                   />
-                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
-                    <div className="border-b border-border/60 p-2">
+                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[20px] border border-white/60 bg-white/85 shadow-2xl ring-1 ring-black/[0.05] backdrop-blur-2xl dark:border-white/[0.1] dark:bg-[#1C1C1E]/85">
+                    <div className="border-b border-black/[0.05] p-2 dark:border-white/[0.06]">
                       <Input
                         value={modelQuery}
                         onChange={(e) => setModelQuery(e.target.value)}
                         placeholder="搜索模型，如 vl / vision"
                         autoFocus
-                        className="h-9 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[13px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                        className="h-10 rounded-full border-black/[0.06] bg-white/70 text-[13px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.09]"
                       />
                     </div>
                     <div className="thin-scrollbar max-h-64 overflow-y-auto">
@@ -1888,7 +1899,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
 
             {/* 未配置提示 */}
             {!visionConfig.baseUrl.trim() && (
-              <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+              <div className="rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2.5 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
                 还没有配置识图模型：聊天中发送图片不会触发识图（不影响文字聊天）。填写 OpenAI 兼容的多模态接口地址与模型名后，发图即可让 AI 看懂图片。
               </div>
             )}
@@ -1900,7 +1911,7 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 onClick={() => void runVisionTest()}
                 disabled={testing}
                 data-testid="vision-test-btn"
-                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                className="flex h-11 w-full items-center justify-center gap-1.5 rounded-full bg-white/60 text-[13px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
               >
                 {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanEye className="h-3.5 w-3.5" />}
                 {testing ? '正在识图…' : '测试识图'}
@@ -2159,7 +2170,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="图像生成" onBack={onBack} gray>
+    <DetailShell title="图像生成" onBack={onBack} gray ambience>
       <div className="flex flex-col gap-5">
         {/* 启用自动生图（总开关） */}
         <section>
@@ -2199,10 +2210,10 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                   return (
                     <span
                       key={p.id}
-                      className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-colors ${
+                      className={`flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-2 text-[13px] transition-all active:scale-[0.97] ${
                         active
-                          ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                          : 'bg-black/[0.05] text-foreground/75 dark:bg-white/[0.08] dark:text-foreground/75'
+                          ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                          : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1]'
                       }`}
                     >
                       <button
@@ -2242,7 +2253,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                   type="button"
                   data-testid="imggen-preset-save"
                   onClick={() => setSaveOpen((v) => !v)}
-                  className="flex items-center gap-1 rounded-full bg-black/[0.05] px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+                  className="flex items-center gap-1 rounded-full bg-white/55 px-3.5 py-1.5 text-[13px] text-muted-foreground ring-1 ring-black/[0.06] backdrop-blur-xl transition-all hover:bg-white/80 active:scale-[0.97] dark:bg-white/[0.07] dark:ring-white/[0.1] dark:hover:bg-white/[0.14]"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   存为预设
@@ -2255,7 +2266,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     onChange={(e) => setPresetName(e.target.value)}
                     placeholder="预设名称，如 本地生图模型"
                     autoFocus
-                    className="h-9 flex-1 rounded-[10px] bg-card text-[14px] shadow-sm ring-1 ring-black/[0.05] dark:ring-white/[0.08]"
+                    className="h-10 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') savePreset();
                     }}
@@ -2264,7 +2275,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     type="button"
                     onClick={savePreset}
                     disabled={!presetName.trim()}
-                    className="h-9 shrink-0 rounded-[10px] bg-[#E9E9EB] px-4 text-[13px] font-medium text-foreground shadow-sm ring-1 ring-black/[0.06] transition-colors active:bg-[#DEDEE3] disabled:opacity-40 dark:bg-white/[0.14] dark:ring-white/[0.1] dark:active:bg-white/[0.2]"
+                    className="h-10 shrink-0 rounded-full bg-white/60 px-5 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-40 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                   >
                     保存
                   </button>
@@ -2285,14 +2296,14 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                 {/* 请求方式（iOS 分段控件风） */}
                 <div>
                   <FieldLabel>请求方式</FieldLabel>
-                  <div className="flex rounded-[10px] bg-black/[0.05] p-1 dark:bg-white/[0.08]" role="group" aria-label="请求方式">
+                  <div className="flex rounded-full bg-white/40 p-1 ring-1 ring-black/[0.05] backdrop-blur-xl dark:bg-white/[0.05] dark:ring-white/[0.08]" role="group" aria-label="请求方式">
                     <button
                       type="button"
                       data-testid="imggen-mode-proxy"
                       onClick={() => patchImgGenConfig({ mode: 'proxy' })}
-                      className={`h-8 flex-1 rounded-[8px] text-[13px] font-medium transition-all ${
+                      className={`h-8 flex-1 rounded-full text-[13px] font-medium transition-all ${
                         imgGenConfig.mode === 'proxy'
-                          ? 'bg-card text-foreground shadow-sm'
+                          ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.16]'
                           : 'text-muted-foreground hover:text-foreground'
                       }`}
                     >
@@ -2302,9 +2313,9 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       type="button"
                       data-testid="imggen-mode-direct"
                       onClick={() => patchImgGenConfig({ mode: 'direct' })}
-                      className={`h-8 flex-1 rounded-[8px] text-[13px] font-medium transition-all ${
+                      className={`h-8 flex-1 rounded-full text-[13px] font-medium transition-all ${
                         imgGenConfig.mode === 'direct'
-                          ? 'bg-card text-foreground shadow-sm'
+                          ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.16]'
                           : 'text-muted-foreground hover:text-foreground'
                       }`}
                     >
@@ -2325,7 +2336,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     value={imgGenConfig.baseUrl}
                     onChange={(e) => patchImgGenConfig({ baseUrl: e.target.value })}
                     placeholder="https://api.openai.com/v1"
-                    className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] dark:border-white/[0.08] dark:bg-white/[0.06] text-[14px]"
+                    className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                     data-testid="imggen-baseurl"
                   />
                 </div>
@@ -2340,7 +2351,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       onChange={(e) => patchImgGenConfig({ apiKey: e.target.value })}
                       placeholder="sk-..."
                       autoComplete="off"
-                      className={`h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] dark:border-white/[0.08] dark:bg-white/[0.06] text-[14px] ${
+                      className={`h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07] ${
                         imgGenConfig.apiKey ? 'pr-16' : 'pr-10'
                       }`}
                       data-testid="imggen-apikey"
@@ -2374,7 +2385,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       value={imgGenConfig.model}
                       onChange={(e) => patchImgGenConfig({ model: e.target.value })}
                       placeholder="如 gpt-image-2 / flux-pro"
-                      className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] dark:border-white/[0.08] dark:bg-white/[0.06] text-[14px]"
+                      className="h-11 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                       data-testid="imggen-model"
                     />
                     <button
@@ -2382,7 +2393,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                       data-testid="imggen-fetch-models"
                       onClick={() => void fetchModels()}
                       disabled={fetchingModels}
-                      className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                      className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-white/60 px-4 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                     >
                       {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                       拉取模型
@@ -2394,7 +2405,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     </p>
                   )}
                   {modelsHint && (
-                    <div className="mt-1.5 rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                    <div className="mt-1.5 rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
                       {modelsHint}
                     </div>
                   )}
@@ -2406,14 +2417,14 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                         onClick={() => setModelPanelOpen(false)}
                         aria-hidden="true"
                       />
-                      <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
-                        <div className="border-b border-border/60 p-2">
+                      <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[20px] border border-white/60 bg-white/85 shadow-2xl ring-1 ring-black/[0.05] backdrop-blur-2xl dark:border-white/[0.1] dark:bg-[#1C1C1E]/85">
+                        <div className="border-b border-black/[0.05] p-2 dark:border-white/[0.06]">
                           <Input
                             value={modelQuery}
                             onChange={(e) => setModelQuery(e.target.value)}
                             placeholder="搜索模型，如 image / flux"
                             autoFocus
-                            className="h-9 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[13px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                            className="h-10 rounded-full border-black/[0.06] bg-white/70 text-[13px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.09]"
                           />
                         </div>
                         <div className="thin-scrollbar max-h-64 overflow-y-auto">
@@ -2452,7 +2463,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     value={imgGenConfig.size}
                     onChange={(e) => patchImgGenConfig({ size: e.target.value })}
                     placeholder="1024x1024 / auto"
-                    className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] dark:border-white/[0.08] dark:bg-white/[0.06] text-[14px]"
+                    className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                     data-testid="imggen-size"
                   />
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2461,10 +2472,10 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                         key={sv}
                         type="button"
                         onClick={() => patchImgGenConfig({ size: sv })}
-                        className={`rounded-full px-2.5 py-1 text-[12px] transition-colors ${
+                        className={`rounded-full px-2.5 py-1 text-[12px] transition-all active:scale-[0.97] ${
                           imgGenConfig.size.trim() === sv
-                            ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                            : 'bg-black/[0.05] text-foreground/70 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/70 dark:hover:bg-white/[0.12]'
+                            ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                            : 'bg-white/55 text-foreground/70 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/70 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                         }`}
                       >
                         {sv}
@@ -2480,7 +2491,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     value={imgGenConfig.quality}
                     onChange={(e) => patchImgGenConfig({ quality: e.target.value })}
                     placeholder="auto / low / medium / high"
-                    className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] dark:border-white/[0.08] dark:bg-white/[0.06] text-[14px]"
+                    className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                     data-testid="imggen-quality"
                   />
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2489,10 +2500,10 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                         key={qv}
                         type="button"
                         onClick={() => patchImgGenConfig({ quality: qv })}
-                        className={`rounded-full px-2.5 py-1 text-[12px] transition-colors ${
+                        className={`rounded-full px-2.5 py-1 text-[12px] transition-all active:scale-[0.97] ${
                           imgGenConfig.quality.trim() === qv
-                            ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                            : 'bg-black/[0.05] text-foreground/70 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/70 dark:hover:bg-white/[0.12]'
+                            ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                            : 'bg-white/55 text-foreground/70 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/70 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                         }`}
                       >
                         {qv}
@@ -2509,14 +2520,14 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     onChange={(e) => patchImgGenConfig({ extraPrompt: e.target.value })}
                     placeholder="如：写实风格，自然光线，手机自拍质感"
                     rows={3}
-                    className="min-h-[72px] rounded-[10px] border-black/[0.05] bg-[#F2F2F7] dark:border-white/[0.08] dark:bg-white/[0.06] py-2 text-[14px]"
+                    className="min-h-[72px] rounded-[18px] border-black/[0.06] bg-white/60 py-2.5 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                     data-testid="imggen-extra"
                   />
                 </div>
 
                 {/* 未配置提示 */}
                 {!imgGenConfig.baseUrl.trim() && (
-                  <div className="rounded-[10px] border border-amber-500/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-700 dark:border-amber-400/25 dark:text-amber-200/90">
+                  <div className="rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2.5 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
                     还没有配置生图接口：填写 OpenAI 兼容的生图地址与模型名后，AI 回复里的照片标签才能生成真实照片。
                   </div>
                 )}
@@ -2528,7 +2539,7 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                     data-testid="imggen-test"
                     onClick={() => void runImgGenTest()}
                     disabled={testing}
-                    className="flex h-11 w-full items-center justify-center gap-1.5 rounded-[12px] bg-[#E9E9EB] text-[13.5px] font-medium text-foreground shadow-sm ring-1 ring-black/[0.05] transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.14] dark:ring-white/[0.08] dark:active:bg-white/[0.2]"
+                    className="flex h-11 w-full items-center justify-center gap-1.5 rounded-full bg-white/60 text-[13.5px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                   >
                     {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
                     {testing ? '正在生图…（约 10-60 秒）' : '测试生图'}
@@ -2833,7 +2844,7 @@ function FaceLockSection() {
                   data-testid="imggen-face-upload"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-[12px] bg-[#E9E9EB] py-2.5 text-[14px] font-medium text-foreground shadow-sm ring-1 ring-black/[0.05] transition-all active:scale-[0.98] active:bg-[#DEDEE3] disabled:opacity-60 dark:bg-white/[0.12] dark:ring-white/[0.08] dark:active:bg-white/[0.18]"
+                  className="flex flex-1 items-center justify-center gap-2 rounded-full bg-white/60 py-2.5 text-[14px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-60 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                 >
                   {uploading ? (
                     <Loader2 className="h-[16px] w-[16px] animate-spin" aria-hidden="true" />
@@ -2847,7 +2858,7 @@ function FaceLockSection() {
                     type="button"
                     data-testid="imggen-face-delete"
                     onClick={onDeleteRef}
-                    className="flex-1 rounded-[12px] bg-[#E9E9EB] py-2.5 text-[14px] font-medium text-[#FF3B30] shadow-sm ring-1 ring-black/[0.05] transition-all active:scale-[0.98] active:bg-[#FF453A]/10 dark:bg-white/[0.12] dark:ring-white/[0.08]"
+                    className="flex-1 rounded-full bg-white/60 py-2.5 text-[14px] font-medium text-[#FF3B30] shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-[#FF453A]/10 dark:bg-white/[0.1] dark:ring-white/[0.12]"
                   >
                     删除参考图
                   </button>
@@ -2885,7 +2896,7 @@ function FaceLockSection() {
                   rows={3}
                   maxLength={300}
                   aria-label="外貌描述"
-                  className="min-h-[64px] rounded-[10px] border-black/[0.05] bg-[#F2F2F7] py-2 text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                  className="min-h-[64px] rounded-[18px] border-black/[0.06] bg-white/60 py-2.5 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 />
                 <p className="pt-2 text-[12px] leading-[1.6] text-muted-foreground/80">
                   未上传参考图或生图模型不支持参考图时，会把这段外貌描述拼进提示词兜底；每个角色独立设置，互不影响。
@@ -3653,7 +3664,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <DetailShell title="语音 API" onBack={onBack} gray>
+    <DetailShell title="语音 API" onBack={onBack} gray ambience>
       <div className="flex flex-col gap-5">
         {/* 服务商 */}
         <section>
@@ -3663,8 +3674,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               type="button"
               data-testid="tts-provider-builtin"
               onClick={() => switchProvider('builtin')}
-              className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
-                isBuiltin ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+              className={`rounded-full px-3.5 py-1.5 text-[13px] transition-all active:scale-[0.97] ${
+                isBuiltin ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]' : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
               }`}
             >
               内置语音（免费）
@@ -3673,8 +3684,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               type="button"
               data-testid="tts-provider-minimax"
               onClick={() => switchProvider('minimax')}
-              className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
-                isMinimax ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+              className={`rounded-full px-3.5 py-1.5 text-[13px] transition-all active:scale-[0.97] ${
+                isMinimax ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]' : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
               }`}
             >
               MiniMax
@@ -3683,8 +3694,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               type="button"
               data-testid="tts-provider-openai"
               onClick={() => switchProvider('openai')}
-              className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
-                isTtsOpenai ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+              className={`rounded-full px-3.5 py-1.5 text-[13px] transition-all active:scale-[0.97] ${
+                isTtsOpenai ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]' : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
               }`}
             >
               OpenAI 兼容
@@ -3693,8 +3704,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               type="button"
               data-testid="tts-provider-fishaudio"
               onClick={() => switchProvider('fishaudio')}
-              className={`rounded-full px-3 py-1.5 text-[13px] transition-colors ${
-                isFish ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+              className={`rounded-full px-3.5 py-1.5 text-[13px] transition-all active:scale-[0.97] ${
+                isFish ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]' : 'bg-white/55 text-foreground/75 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/75 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
               }`}
             >
               Fish Audio
@@ -3706,7 +3717,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         {isBuiltin && (
           <>
             <section>
-              <div className="rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
+              <div className="rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[14px] font-medium text-foreground">内置声线（3 女 · 3 男 · 免费）</div>
@@ -3746,10 +3757,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                           updateTtsConfig({ defaultVoiceId: v.id });
                         }
                       }}
-                      className={`flex flex-col gap-1.5 rounded-[12px] p-3 shadow-sm ring-1 transition-colors ${
+                      className={`flex flex-col gap-1.5 rounded-[18px] p-3 backdrop-blur-2xl transition-all ${
                         active
-                          ? 'bg-[#E9E9EB] ring-black/[0.08] dark:bg-white/[0.14] dark:ring-white/[0.12]'
-                          : 'bg-card ring-black/[0.04] dark:bg-white/[0.06] dark:ring-white/[0.08]'
+                          ? 'bg-white/85 shadow-[0_8px_22px_rgba(17,24,39,0.1)] ring-1 ring-white/80 dark:bg-white/[0.14] dark:ring-white/[0.16]'
+                          : 'bg-white/45 shadow-[0_2px_10px_rgba(17,24,39,0.04)] ring-1 ring-white/60 dark:bg-white/[0.05] dark:ring-white/[0.08]'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1.5">
@@ -3774,8 +3785,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                             e.stopPropagation();
                             previewBuiltinVoice(v.id);
                           }}
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
-                            playing ? 'bg-black/[0.14] text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-muted-foreground active:bg-black/[0.08] dark:bg-white/[0.08] dark:active:bg-white/[0.12]'
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-all ${
+                            playing ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.22]' : 'bg-white/60 text-muted-foreground ring-1 ring-black/[0.05] active:bg-white/85 dark:bg-white/[0.08] dark:ring-white/[0.1]'
                           }`}
                         >
                           <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
@@ -3798,7 +3809,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 type="button"
                 onClick={() => void runPreview()}
                 disabled={previewLoading}
-                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                className="flex h-11 w-full items-center justify-center gap-1.5 rounded-full bg-white/60 text-[14px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
               >
                 {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
                 试听当前声线
@@ -3828,14 +3839,14 @@ function VoicePage({ onBack }: { onBack: () => void }) {
           >
             连接配置
           </SectionLabel>
-          <div className="flex flex-col gap-4 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
+          <div className="flex flex-col gap-4 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
             <div>
               <FieldLabel>API 地址</FieldLabel>
               <Input
                 value={ttsConfig.baseUrl}
                 onChange={(e) => updateTtsConfig({ baseUrl: e.target.value })}
                 placeholder={preset.baseUrl}
-                className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
             </div>
 
@@ -3848,7 +3859,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   onChange={(e) => updateTtsConfig({ apiKey: e.target.value })}
                   placeholder={isMinimax ? 'eyJhbGciOi...' : isFish ? 'Fish Audio 的 API Key（fishaudio.org 控制台获取）' : 'sk-...'}
                   autoComplete="off"
-                  className={`h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06] ${ttsConfig.apiKey ? 'pr-16' : 'pr-10'}`}
+                  className={`h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07] ${ttsConfig.apiKey ? 'pr-16' : 'pr-10'}`}
                 />
                 {ttsConfig.apiKey && (
                   <button
@@ -3879,7 +3890,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   onChange={(e) => updateTtsConfig({ groupId: e.target.value })}
                   placeholder="MiniMax 控制台「账户管理」里的 GroupId"
                   autoComplete="off"
-                  className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                  className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 />
                 {!ttsConfig.groupId.trim() && (
                   <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
@@ -3898,14 +3909,14 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   value={ttsConfig.model}
                   onChange={(e) => updateTtsConfig({ model: e.target.value })}
                   placeholder={isMinimax ? preset.model : isFish ? 'Fish Audio 无需模型名，留空即可' : `如 ${preset.model}，不需要模型可留空`}
-                  className="h-10 flex-1 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                  className="h-11 flex-1 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                 />
                 {!isFish && (
                   <button
                     type="button"
                     onClick={() => void fetchTtsModels()}
                     disabled={fetchingModels}
-                    className="flex h-10 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#E9E9EB] px-3 text-[13px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                    className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-white/60 px-4 text-[13px] font-medium text-foreground shadow-[0_4px_14px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.97] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                   >
                     {fetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                     拉取模型
@@ -3930,14 +3941,14 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     onClick={() => setModelPanelOpen(false)}
                     aria-hidden="true"
                   />
-                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[12px] border border-border bg-card shadow-2xl">
-                    <div className="border-b border-border/60 p-2">
+                  <div className="absolute -left-4 -right-4 top-full z-30 mt-1 overflow-hidden rounded-[20px] border border-white/60 bg-white/85 shadow-2xl ring-1 ring-black/[0.05] backdrop-blur-2xl dark:border-white/[0.1] dark:bg-[#1C1C1E]/85">
+                    <div className="border-b border-black/[0.05] p-2 dark:border-white/[0.06]">
                       <Input
                         value={modelQuery}
                         onChange={(e) => setModelQuery(e.target.value)}
                         placeholder="搜索模型，如 tts / speech"
                         autoFocus
-                        className="h-9 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[13px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                        className="h-10 rounded-full border-black/[0.06] bg-white/70 text-[13px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.09]"
                       />
                     </div>
                     <div className="thin-scrollbar max-h-64 overflow-y-auto">
@@ -3981,10 +3992,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   <button
                     type="button"
                     onClick={() => updateTtsConfig({ model: '' })}
-                    className={`rounded-full px-2.5 py-1 text-[12px] transition-colors ${
+                    className={`rounded-full px-2.5 py-1 text-[12px] transition-all active:scale-[0.97] ${
                       !ttsConfig.model.trim()
-                        ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                        : 'bg-black/[0.05] text-foreground/70 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/70 dark:hover:bg-white/[0.12]'
+                        ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                        : 'bg-white/55 text-foreground/70 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/70 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                     }`}
                   >
                     不需要模型（留空）
@@ -3995,10 +4006,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     key={m}
                     type="button"
                     onClick={() => updateTtsConfig({ model: m })}
-                    className={`rounded-full px-2.5 py-1 text-[12px] transition-colors ${
+                    className={`rounded-full px-2.5 py-1 text-[12px] transition-all active:scale-[0.97] ${
                       ttsConfig.model.trim() === m
-                        ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                        : 'bg-black/[0.05] text-foreground/70 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/70 dark:hover:bg-white/[0.12]'
+                        ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                        : 'bg-white/55 text-foreground/70 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/70 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                     }`}
                   >
                     {m}
@@ -4021,7 +4032,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 value={ttsConfig.defaultVoiceId}
                 onChange={(e) => updateTtsConfig({ defaultVoiceId: e.target.value })}
                 placeholder={isMinimax ? '如 female-shaonv（留空用系统默认）' : isFish ? '如 Fish Audio 音色 ID（留空用平台默认音色）' : '如 alloy（留空用系统默认）'}
-                className="h-10 w-full rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 w-full rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
             </div>
 
@@ -4031,7 +4042,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 type="button"
                 onClick={runPreview}
                 disabled={previewLoading}
-                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                className="flex h-11 w-full items-center justify-center gap-1.5 rounded-full bg-white/60 text-[14px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
               >
                 {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
                 试听当前音色
@@ -4051,7 +4062,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 data-testid="tts-provider-test"
                 onClick={() => void testProvider()}
                 disabled={testingProvider}
-                className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                className="flex h-11 w-full items-center justify-center gap-1.5 rounded-full bg-white/60 text-[14px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
               >
                 {testingProvider ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
                 {testingProvider ? '测试中…' : '测试服务商连接'}
@@ -4082,7 +4093,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         {/* 我的音色：自建音色库（名字 + 音色 ID，永久保存；联系人/聊天设置「他的声音」可选用）；紧跟连接配置下方 */}
         <section>
           <SectionLabel icon={AudioLines} tone={TONE_ORANGE}>我的音色</SectionLabel>
-          <div className="flex flex-col gap-3 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
+          <div className="flex flex-col gap-3 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
             <p className="text-[12px] leading-relaxed text-muted-foreground/80">
               把常用的音色存成自己的 preset：填一个名字 + 音色 ID（MiniMax / OpenAI 兼容音色名或内置声线都可），永久保存在本机；
               在联系人编辑和聊天设置「他的声音」里都能点选使用。填好后可先「测试」试听效果，满意再保存。
@@ -4093,7 +4104,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   <div
                     key={v.id}
                     data-testid={`my-voice-item-${v.id}`}
-                    className="flex items-center gap-2 rounded-[10px] border border-border/60 bg-background/60 px-3 py-2"
+                    className="flex items-center gap-2 rounded-full border border-white/60 bg-white/50 px-4 py-2.5 shadow-[0_3px_12px_rgba(17,24,39,0.05)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-white/[0.06]"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14px] font-medium">{v.name}</div>
@@ -4104,8 +4115,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                       aria-label={`试听音色${v.name}`}
                       data-testid={`my-voice-preview-${v.id}`}
                       onClick={() => void previewMyVoice(v)}
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
-                        previewingMyId === v.id ? 'bg-black/[0.14] text-foreground dark:bg-white/[0.22]' : 'bg-black/[0.05] text-muted-foreground active:bg-black/[0.08] dark:bg-white/[0.08] dark:active:bg-white/[0.12]'
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all ${
+                        previewingMyId === v.id ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.22]' : 'bg-white/60 text-muted-foreground ring-1 ring-black/[0.05] active:bg-white/85 dark:bg-white/[0.08] dark:ring-white/[0.1]'
                       }`}
                     >
                       <AudioLines className={`h-4 w-4 ${previewingMyId === v.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
@@ -4131,7 +4142,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 maxLength={20}
                 data-testid="my-voice-name"
                 aria-label="我的音色名字"
-                className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
               <Input
                 value={myVoiceId}
@@ -4139,7 +4150,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 placeholder="音色 ID，如 female-shaonv / alloy / builtin:xiaoyue"
                 data-testid="my-voice-id"
                 aria-label="我的音色 ID"
-                className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
               />
               <div className="flex flex-wrap gap-1.5">
                 {BUILTIN_TTS_VOICES.map((b) => (
@@ -4147,10 +4158,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     key={b.id}
                     type="button"
                     onClick={() => setMyVoiceId(b.id)}
-                    className={`rounded-full px-2 py-0.5 text-[11px] transition-colors ${
+                    className={`rounded-full px-2 py-0.5 text-[11px] transition-all active:scale-[0.97] ${
                       myVoiceId.trim() === b.id
-                        ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                        : 'bg-black/[0.05] text-foreground/70 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/70 dark:hover:bg-white/[0.12]'
+                        ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                        : 'bg-white/55 text-foreground/70 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/70 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                     }`}
                   >
                     {b.name}·{b.gender === 'female' ? '女' : '男'}
@@ -4171,7 +4182,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   aria-label="测试当前填写的音色"
                   onClick={() => void previewMyVoice({ id: '__draft__', voiceId: myVoiceId.trim() })}
                   disabled={!myVoiceId.trim()}
-                  className={`flex h-10 flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] disabled:opacity-50 dark:bg-white/[0.12] dark:active:bg-white/[0.18] ${
+                  className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-white/60 text-[14px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16] ${
                     previewingMyId === '__draft__' ? 'ring-2 ring-black/[0.15] dark:ring-white/[0.25]' : ''
                   }`}
                 >
@@ -4182,7 +4193,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   type="button"
                   data-testid="my-voice-add"
                   onClick={submitMyVoice}
-                  className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-[#E9E9EB] text-[14px] font-medium text-foreground transition-colors active:bg-[#DEDEE3] dark:bg-white/[0.12] dark:active:bg-white/[0.18]"
+                  className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-white/60 text-[14px] font-medium text-foreground shadow-[0_6px_20px_rgba(17,24,39,0.08)] ring-1 ring-white/70 backdrop-blur-2xl transition-all active:scale-[0.98] active:bg-white/85 dark:bg-white/[0.1] dark:ring-white/[0.12] dark:active:bg-white/[0.16]"
                 >
                   <Plus className="h-4 w-4" aria-hidden="true" />
                   保存音色
@@ -4195,8 +4206,8 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         {/* 语音识别 STT（转文字）：与 TTS 配置相互独立、互不覆盖；内置识别免配置 */}
         <section>
           <SectionLabel icon={MessageSquareText} tone={TONE_GREEN}>语音识别 STT（转文字）</SectionLabel>
-          <div className="flex flex-col gap-3 rounded-[14px] bg-card p-4 shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
-            <div className="flex gap-2">
+          <div className="flex flex-col gap-3 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
+            <div className="flex gap-1 rounded-full bg-black/[0.04] p-1 ring-1 ring-black/[0.05] backdrop-blur-xl dark:bg-white/[0.06] dark:ring-white/[0.08]">
               {([
                 { id: 'builtin', label: '内置识别（免配置）' },
                 { id: 'openai', label: 'OpenAI 兼容' },
@@ -4206,10 +4217,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   type="button"
                   data-testid={`stt-provider-${p.id}`}
                   onClick={() => updateSttConfig({ provider: p.id })}
-                  className={`h-10 flex-1 rounded-[10px] text-[13px] font-medium transition-colors ${
+                  className={`h-9 flex-1 rounded-full text-[13px] font-medium transition-all ${
                     sttConfig.provider === p.id
-                      ? 'bg-black/[0.12] text-foreground dark:bg-white/[0.22]'
-                      : 'bg-black/[0.05] text-foreground/75 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/75 dark:hover:bg-white/[0.12]'
+                      ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.16]'
+                      : 'text-foreground/60 hover:text-foreground dark:text-foreground/60'
                   }`}
                 >
                   {p.label}
@@ -4247,7 +4258,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     value={sttConfig.baseUrl}
                     onChange={(e) => updateSttConfig({ baseUrl: e.target.value })}
                     placeholder="如 https://api.openai.com/v1"
-                    className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                    className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                   />
                   <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
                     兼容 OpenAI /audio/transcriptions 接口的服务商（Whisper 等）；填到 /v1 即可。
@@ -4261,7 +4272,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                       value={sttConfig.apiKey}
                       onChange={(e) => updateSttConfig({ apiKey: e.target.value })}
                       placeholder="sk-…"
-                      className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] pr-16 text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                      className="h-11 rounded-full border-black/[0.06] bg-white/60 pr-16 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                     />
                     <button
                       type="button"
@@ -4281,7 +4292,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     value={sttConfig.model}
                     onChange={(e) => updateSttConfig({ model: e.target.value })}
                     placeholder="如 whisper-1（留空用默认 whisper-1）"
-                    className="h-10 rounded-[10px] border-black/[0.05] bg-[#F2F2F7] text-[14px] dark:border-white/[0.08] dark:bg-white/[0.06]"
+                    className="h-11 rounded-full border-black/[0.06] bg-white/60 text-[14px] shadow-sm backdrop-blur-xl dark:border-white/[0.1] dark:bg-white/[0.07]"
                   />
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {['whisper-1', 'whisper-large-v3', 'SenseVoiceSmall'].map((m) => (
@@ -4289,10 +4300,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                         key={m}
                         type="button"
                         onClick={() => updateSttConfig({ model: m })}
-                        className={`rounded-full px-2.5 py-1 text-[12px] transition-colors ${
+                        className={`rounded-full px-2.5 py-1 text-[12px] transition-all active:scale-[0.97] ${
                           sttConfig.model.trim() === m
-                            ? 'bg-black/[0.12] font-medium text-foreground dark:bg-white/[0.22]'
-                            : 'bg-black/[0.05] text-foreground/70 hover:bg-black/[0.08] dark:bg-white/[0.08] dark:text-foreground/70 dark:hover:bg-white/[0.12]'
+                            ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
+                            : 'bg-white/55 text-foreground/70 ring-1 ring-black/[0.06] backdrop-blur-xl hover:bg-white/80 dark:bg-white/[0.07] dark:text-foreground/70 dark:ring-white/[0.1] dark:hover:bg-white/[0.14]'
                         }`
                       }
                       >

@@ -1960,8 +1960,10 @@ export function ChatVoicePage({
             onSelect(active ? '' : id);
           }
         }}
-        className={`flex max-w-full items-center gap-1 rounded-full border py-1.5 pl-2.5 pr-1.5 text-[13px] transition-colors ${
-          active ? 'border-transparent text-white' : 'border-black/10 bg-white/60 text-black/75 active:bg-black/[0.04] dark:border-white/15 dark:bg-white/10 dark:text-white/80 dark:active:bg-white/[0.06]'
+        className={`flex max-w-full items-center gap-1.5 rounded-full py-2 pl-3.5 pr-2 text-[13px] shadow-[0_3px_12px_rgba(17,24,39,0.06)] backdrop-blur-xl transition-all active:scale-[0.97] ${
+          active
+            ? 'border border-transparent text-white shadow-[0_5px_16px_rgba(0,0,0,0.18)]'
+            : 'border border-white/70 bg-white/50 text-black/75 hover:bg-white/75 dark:border-white/[0.08] dark:bg-white/[0.08] dark:text-white/80 dark:hover:bg-white/[0.13]'
         }`}
         style={active ? { backgroundColor: t.accent } : undefined}
       >
@@ -1974,8 +1976,10 @@ export function ChatVoicePage({
             e.stopPropagation();
             previewMyVoice(recordId, id);
           }}
-          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${
-            active ? 'bg-white/25 text-white' : 'bg-black/[0.06] text-black/60 active:bg-black/[0.1] dark:bg-white/15 dark:text-white/75'
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-all ${
+            active
+              ? 'bg-white/25 text-white'
+              : 'bg-white/70 text-black/60 ring-1 ring-black/[0.05] active:bg-white dark:bg-white/[0.12] dark:text-white/75 dark:ring-white/[0.1]'
           }`}
         >
           <AudioLines className={`h-3 w-3 ${previewing ? 'animate-pulse' : ''}`} aria-hidden="true" />
@@ -2096,15 +2100,26 @@ export function ChatVoicePage({
         )}
 
         {/* 我的音色（设置 › 语音 API 保存的音色） */}
-        <p className={`px-1 pb-1.5 pt-4 text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>
-          我的音色
-        </p>
+        <div className="flex items-center justify-between px-1 pb-2 pt-4">
+          <p className={`text-[12.5px] font-medium ${t.sms ? 'text-foreground/80' : 'text-black/55 dark:text-white/55'}`}>我的音色</p>
+          {myVoices.length > 0 && (
+            <span
+              data-testid={`${testPrefix}-voice-my-count`}
+              className="rounded-full bg-white/55 px-2 py-0.5 text-[10.5px] font-medium text-black/45 shadow-sm ring-1 ring-white/70 backdrop-blur-md dark:bg-white/[0.08] dark:text-white/45 dark:ring-white/[0.08]"
+            >
+              {myVoices.length} 个
+            </span>
+          )}
+        </div>
         {myVoices.length === 0 ? (
-          <p className={`rounded-[12px] bg-black/[0.03] px-3 py-3 text-[12.5px] leading-relaxed ${mutedText} dark:bg-white/[0.06]`}>
-            还没有保存的音色。到「设置 › 语音 API › 我的音色」添加（填名字 + 音色 ID，永久保存），这里就能点选。
-          </p>
+          <div className="flex items-start gap-2.5 rounded-[18px] border border-white/60 bg-white/45 px-4 py-3.5 shadow-[0_3px_14px_rgba(17,24,39,0.05)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-white/[0.05]">
+            <AudioLines className="mt-0.5 h-4 w-4 shrink-0 opacity-45" aria-hidden="true" />
+            <p className={`text-[12.5px] leading-relaxed ${mutedText}`}>
+              还没有保存的音色。到「设置 › 语音 API › 我的音色」添加（填名字 + 音色 ID，永久保存），这里就能点选。
+            </p>
+          </div>
         ) : (
-          <div className="flex flex-wrap gap-1.5">{myVoices.map((v, i) => voiceChip(v.voiceId, v.name, `${testPrefix}-voice-my-${i}`, v.id))}</div>
+          <div className="flex flex-wrap gap-2">{myVoices.map((v, i) => voiceChip(v.voiceId, v.name, `${testPrefix}-voice-my-${i}`, v.id))}</div>
         )}
 
         <p className={t.captionCls}>
