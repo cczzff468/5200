@@ -205,8 +205,10 @@ import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel, kvDelByPrefix } from '@/lib/ios/idb-kv';
+// 多账号（Task 40）：注册表/切换/创建走 accounts API；QQ 登录态与排队补跑键按账号隔离（大号保持原键）
+import { MAIN_ACCOUNT_ID, accountScopedKey, createAccount, getAccounts, getActiveAccountId, switchAccount, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
-import { getQqProfileBg, loginQQ, listContactsFor, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginQQ, listContactsFor, mainOwnerContact, ownerRealName, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
@@ -505,6 +507,7 @@ type ChatLayer =
   | { view: 'textcard' }
   | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'tr-receive' | 'fam-detail'; msgId: string };
 
+/** QQ 登录态存的是本机联系人 id；读写一律经 accountScopedKey() 按账号隔离（大号=原键，旧登录不丢） */
 const LS_SESSION = 'qq-session-user-id';
 const lsMsgsKey = (contactId: string) => `qq-chat-msgs:${contactId}`;
 
@@ -937,7 +940,9 @@ let qqActiveChatId: string | null = null;
  *  37-a：队列项扩展 event 字段——回复中触发的系统事件（拉黑申请同意/拒绝、退卡）随补跑回合保留
  *  （原实现直接 runAiTurn：同会话已有流时 beginChatStream 返回 false，事件被静默丢弃、AI 绝口不提） */
 type QqQueuedTurn = { kind: 'kick'; event?: string };
-const QQ_QUEUED_TURNS_KEY = 'qq-queued-turns';
+// 多账号（Task 40-D）：按账号隔离（大号=原键向后兼容；小号 qq-queued-turns--{id}）。
+// 页面生命周期内当前账号恒定（切换=整页 reload），模块加载时求值一次即安全。
+const QQ_QUEUED_TURNS_KEY = accountScopedKey('qq-queued-turns');
 
 /** 读取并规范化排队表（兼容旧格式：contactId 字符串数组 = 纯消息补跑，无事件） */
 function readQqQueuedTurns(): Record<string, QqQueuedTurn[]> {
@@ -12773,20 +12778,58 @@ function PenguinMark({ size = 24, className = '' }: { size?: number; className?:
   );
 }
 
+/** 多账号小号/匿名号首字母圆（Task 40-D）：小号暖色系 / 匿名号灰黑系，深色模式降饱和变体 */
+function QqAccountBubble({ name, kind, size = 44 }: { name: string; kind: 'alt' | 'anon'; size?: number }) {
+  const first = name.trim().charAt(0) || (kind === 'anon' ? '匿' : '小');
+  const letter = /[a-z]/i.test(first) ? first.toUpperCase() : first;
+  return (
+    <div
+      aria-hidden="true"
+      className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${
+        kind === 'anon'
+          ? 'bg-gradient-to-br from-[#A9AEB6] to-[#5C6167] dark:from-[#767B82] dark:to-[#41454B]'
+          : 'bg-gradient-to-br from-[#FFB56E] to-[#EE7A4B] dark:from-[#A96B3F] dark:to-[#84502C]'
+      }`}
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.4) }}
+    >
+      {letter}
+    </div>
+  );
+}
+
 function SecurityPage({
   me,
-  contacts,
   onBack,
-  onSwitchAccount,
   onToast,
 }: {
   me: QQUser;
-  contacts: ContactRecord[];
   onBack: () => void;
-  onSwitchAccount: () => void;
   onToast: (m: string) => void;
 }) {
-  const otherUsers = useMemo(() => contacts.filter((c) => c.kind === 'user' && c.id !== me.id), [contacts, me.id]);
+  // 多账号（Task 40-D）：账号管理区改读注册表（大号 + 小号/匿名号）。
+  // 切换账号 = switchAccount 写标记后整页重启，页面生命周期内注册表不变 → 挂载时读一次即可
+  const accounts = useMemo(() => getAccounts(), []);
+  const activeId = getActiveAccountId();
+  // 大号行显示资料（跨账号直读大号库 mainOwnerContact；Task 40-F 修正）:
+  // 不能用 me（登录用户）——在小号视角下 me 是小号的登录身份，会把大号行显示成小号资料
+  const [mainOwner, setMainOwner] = useState<{ name: string; qqId: string; avatar: string | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void mainOwnerContact().then((o) => {
+      if (alive) setMainOwner(o ? { name: o.name?.trim() ?? '', qqId: o.qqId?.trim() ?? '', avatar: o.avatar } : null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const accNameOf = (acc: PhoneAccount): string =>
+    acc.id === MAIN_ACCOUNT_ID ? mainOwner?.name || '机主' : acc.name;
+  const accNoOf = (acc: PhoneAccount): string =>
+    acc.id === MAIN_ACCOUNT_ID
+      ? mainOwner?.qqId || acc.qqId || ''
+      : acc.kind === 'anon'
+        ? acc.phone
+        : acc.qqId;
 
   const linkRows: { icon: React.ReactNode; label: string; hint?: string; tail?: React.ReactNode }[] = [
     { icon: <PenguinMark size={22} className="text-[#3BA0FF]" />, label: '关联QQ号', tail: <QqAvatar src={me.avatar} alt={me.name} size={30} /> },
@@ -12827,39 +12870,46 @@ function SecurityPage({
 
         <p className="px-1 pb-1.5 pt-5 text-[13px] text-black/35 dark:text-white/35">账号管理</p>
         <div className="overflow-hidden rounded-[14px] bg-white dark:bg-[#1B1C1F]" data-testid="qq-security-accounts">
-          {/* 当前账号 */}
-          <div className="flex h-[64px] items-center gap-3 px-4">
-            <QqAvatar src={me.avatar} alt={me.name} size={44} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[16px] font-medium">{me.name}</div>
-              <div className="truncate text-[13px] text-black/35 dark:text-white/35">{me.qqId ?? ''}</div>
-            </div>
-            <Check className="h-5 w-5 shrink-0 text-[#1E6FFF] dark:text-[#4AA3FF]" aria-hidden="true" />
-          </div>
+          {/* 注册表账号列表：当前账号蓝勾；点其他账号 → switchAccount（写标记+整页重启，不再 setState） */}
+          {accounts.map((acc, idx) => {
+            const isCurrent = acc.id === activeId;
+            const name = accNameOf(acc);
+            return (
+              <button
+                key={acc.id}
+                type="button"
+                data-testid={`qq-account-row-${acc.id}`}
+                onClick={isCurrent ? undefined : () => switchAccount(acc.id)}
+                className={`flex h-[64px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.03] ${
+                  idx > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.05]' : ''
+                }`}
+              >
+                {acc.id === MAIN_ACCOUNT_ID ? (
+                  <QqAvatar src={mainOwner?.avatar ?? null} alt={name} size={44} />
+                ) : (
+                  <QqAccountBubble name={name} kind={acc.kind === 'anon' ? 'anon' : 'alt'} size={44} />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[16px] font-medium">{name}</div>
+                  <div className="truncate text-[13px] text-black/35 dark:text-white/35">{accNoOf(acc)}</div>
+                </div>
+                {isCurrent ? (
+                  <Check className="h-5 w-5 shrink-0 text-[#1E6FFF] dark:text-[#4AA3FF]" aria-hidden="true" />
+                ) : (
+                  <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+                )}
+              </button>
+            );
+          })}
 
-          {/* 其他 user 账号：点击退出当前账号 → 登录页切换 */}
-          {otherUsers.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              data-testid={`qq-switch-${c.qqId ?? c.id}`}
-              onClick={onSwitchAccount}
-              className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 text-left active:bg-black/[0.03] dark:border-white/[0.05]"
-            >
-              <QqAvatar src={c.avatar} alt={c.name} size={44} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[16px] font-medium">{c.name}</div>
-                <div className="truncate text-[13px] text-black/35 dark:text-white/35">{c.qqId ?? ''}</div>
-              </div>
-              <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
-            </button>
-          ))}
-
-          {/* 添加或注册账号 */}
+          {/* 添加或注册账号：新建小号并立即切换（switchAccount 内部写标记后整页重启，调用处不再 setState） */}
           <button
             type="button"
-            data-testid="qq-security-add"
-            onClick={onSwitchAccount}
+            data-testid="qq-account-add"
+            onClick={() => {
+              const acc = createAccount('alt');
+              switchAccount(acc.id);
+            }}
             className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 text-left active:bg-black/[0.03] dark:border-white/[0.05]"
           >
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-black/[0.05] text-black/45 dark:bg-white/[0.08] dark:text-white/45">
@@ -15388,7 +15438,7 @@ function MainScreen({
           onToast={showToast}
         />
       ) : route.page === 'security' ? (
-        <SecurityPage me={me} contacts={contacts} onBack={() => setRoute({ page: 'settings' })} onSwitchAccount={onLogout} onToast={showToast} />
+        <SecurityPage me={me} onBack={() => setRoute({ page: 'settings' })} onToast={showToast} />
       ) : route.page === 'group-create' ? (
         <QqGroupCreatePage
           contacts={contacts}
@@ -15759,13 +15809,13 @@ export default function QQApp() {
       if (!alive) return;
       setContacts(list);
       try {
-        const savedId = window.localStorage.getItem(LS_SESSION);
+        const savedId = window.localStorage.getItem(accountScopedKey(LS_SESSION));
         if (savedId) {
           const u = raw.find((c) => c.id === savedId && c.kind === 'user');
           if (u) {
             setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona });
           } else {
-            window.localStorage.removeItem(LS_SESSION);
+            window.localStorage.removeItem(accountScopedKey(LS_SESSION));
           }
         }
       } catch {
@@ -15795,7 +15845,7 @@ export default function QQApp() {
     }
     setUser(u);
     try {
-      window.localStorage.setItem(LS_SESSION, u.id);
+      window.localStorage.setItem(accountScopedKey(LS_SESSION), u.id);
     } catch {
       // 忽略
     }
@@ -15804,7 +15854,7 @@ export default function QQApp() {
   const handleLogout = useCallback(() => {
     setUser(null);
     try {
-      window.localStorage.removeItem(LS_SESSION);
+      window.localStorage.removeItem(accountScopedKey(LS_SESSION));
     } catch {
       // 忽略
     }

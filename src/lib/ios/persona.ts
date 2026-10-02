@@ -81,6 +81,11 @@ export interface PersonaPromptCtx {
   /** 群聊成员回合（wx-group/qq-group 成员发言时传 true）：最后一条消息可能是其他群成员发的，
    *  不能再按私聊语义「最后一条就是用户刚发给你的话」注入（群聊里会张冠李戴）。 */
   groupTurn?: boolean;
+  /** 40-B 小号认知摘录（多账号 AI 认知隔离）：主账号聊天时传入「用户的小号与 AI 的聊天记录摘录」，
+   *  AI 据此能回答大号用户问起小号的事（信息来源=小号与 AI 的聊天记录，不是用户本人的记忆）；
+   *  同时约束 AI 不主动说破「小号和大号是同一个人」。由 chat-stream-store 在主账号下计算传入；
+   *  小号/匿名号侧、电话通话等不传（null/undefined）→ 整节约省略（零破坏）。 */
+  altAccountsDigest?: string | null;
 }
 
 function kindLabelOf(kind?: string | null): string {
@@ -91,6 +96,27 @@ function kindLabelOf(kind?: string | null): string {
 
 function clean(v?: string | null): string {
   return typeof v === 'string' ? v.trim() : '';
+}
+
+/**
+ * 40-B 小号认知摘录段（多账号 AI 认知隔离）：把 digest（小号与 AI 的聊天记录摘录，
+ * 由 chat-stream-store 在主账号下计算）包上固定标题与规则文案，作为 system prompt 的一节。
+ * persona 内部（ctx.altAccountsDigest）与 chat-stream-store 的 system 消息合并共用本函数，
+ * 保证两条注入路径的小号段落格式完全一致。
+ * digest 为空 → 返回空串（调用方整节约省略，零破坏）。
+ */
+export function buildAltAccountsSection(digest: string | null | undefined): string {
+  const d = typeof digest === 'string' ? digest.trim() : '';
+  if (!d) return '';
+  return [
+    '【用户的小号（另一个聊天身份）】',
+    '- 小号是用户使用的另一个聊天身份，对你来说是独立的聊天对象；',
+    '- 用户问起小号的事时，可以参考下方摘录（小号与你的聊天记录）来回答；',
+    '- 除非用户自己明说，否则不要说破、也不要暗示小号和大号（当前和你聊天的这个身份）是同一个人；',
+    '- 摘录之外的信息（比如小号的私人记忆）你并不知道，不要编造。',
+    '（摘录里「用户」指小号那边发消息的人，其他人名是小号当时聊天的对方角色。）',
+    d,
+  ].join('\n');
 }
 
 /**
@@ -220,6 +246,11 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   if (ctx.backgroundNotes && ctx.backgroundNotes.length > 0) {
     lines.push('【最近发生的事（你亲身经历/听说的背景记忆）】', ...ctx.backgroundNotes.map((l) => `- ${l}`));
   }
+  // 40-B 小号认知摘录（多账号 AI 认知隔离）：主账号会话由 chat-stream-store 计算 digest 传入时，
+  // 在人设末尾附近注入【用户的小号】一节（AI 能答大号用户问起小号的事，但不点破两者是同一人）；
+  // 不传（小号侧/电话通话等）→ 整节约省略，行为与旧版完全一致
+  const altSection = buildAltAccountsSection(ctx.altAccountsDigest);
+  if (altSection) lines.push(altSection);
   lines.push(
     '【禁止事项】',
     `- 永远不要说自己是 AI、语言模型、助手或程序，也不要提及「人设」「角色扮演」「prompt」等幕后概念；`,

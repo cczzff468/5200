@@ -8,7 +8,7 @@ import { useIslandNotify } from '@/lib/ios/island-notify';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { isVoiceHoldActive } from '@/components/apps/voice-input';
 import { useLightForeground } from '@/lib/ios/foreground';
-import { migrateFromServer } from '@/lib/ios/contacts-store';
+import { ensureAccountOwnerContact, migrateFromServer } from '@/lib/ios/contacts-store';
 import { ensureAppFontApplied } from '@/lib/ios/fonts';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
 import StatusBar from './StatusBar';
@@ -170,6 +170,8 @@ export default function PhoneShell() {
   useEffect(() => {
     void (async () => {
       await ensureKvReady();
+      // 多账号（Task 40）：小号/匿名号首次进入自动建机主联系人（大号不动作）
+      await ensureAccountOwnerContact();
       await load();
       // 全局字体恢复（Task 33-d）：读持久化的 appFontId 写入 CSS 变量；内部全兜底，失败不阻塞开机
       await ensureAppFontApplied();

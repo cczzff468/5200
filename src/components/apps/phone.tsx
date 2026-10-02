@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Clock as ClockIcon,
   Delete,
+  EyeOff,
   Info,
   Loader2,
   Mail,
@@ -37,6 +38,8 @@ import {
 } from 'lucide-react';
 import { IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
+import { AnonSwitchSheet, maskAnonPhone } from '@/components/ios/AnonSwitchSheet';
+import { getActiveAccount } from '@/lib/ios/accounts';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import { IOSActionSheet } from '@/components/ios/ActionSheet';
 import { isProactiveCallEnabled, setProactiveCallEnabled, getProactiveLevel, setProactiveLevel, type ProactiveLevel } from '@/lib/ios/proactive-call';
@@ -2691,11 +2694,17 @@ function KeypadTab({
   contacts,
   onCall,
   onNewContact,
+  anonPhone,
+  onOpenAnon,
 }: {
   contacts: ContactRecord[];
   onCall: (number: string, contact: ContactRecord | null) => void;
   /** 右上角 ⊕：用当前输入的号码（可空）新建联系人（添加好友） */
   onNewContact: (prefilledPhone: string) => void;
+  /** 当前活跃账号为匿名号时传其号码（用于脱敏徽标与胶囊高亮），大号/小号传 null（Task 40-E） */
+  anonPhone: string | null;
+  /** 点「匿名号码」胶囊 → 打开切换弹层 */
+  onOpenAnon: () => void;
 }) {
   const [digits, setDigits] = useState('');
 
@@ -2709,6 +2718,15 @@ function KeypadTab({
     return findContactByNumber(contacts, digits);
   }, [digits, contacts]);
 
+  // 多账号（Task 40）：键盘左上身份徽标跟随当前账号（大号=主号，小号=账号名，匿名号=匿名）
+  const activeAccount = getActiveAccount();
+  const activeLabel =
+    activeAccount.kind === 'main'
+      ? '主号'
+      : activeAccount.kind === 'anon'
+        ? '匿名'
+        : activeAccount.name || '小号';
+
   return (
     <div className="flex flex-1 select-none flex-col items-center overflow-y-auto px-6 pb-2" data-testid="keypad-tab">
       {/* 顶部行：主号徽章（缩小并与返回键左对齐） + 新建联系人（对照 iOS 键盘右上角 ⊕） */}
@@ -2717,7 +2735,7 @@ function KeypadTab({
           className="rounded-[6px] bg-[#0A84FF] px-2 py-[3px] text-[11px] font-medium leading-none text-white shadow-[0_1px_3px_rgba(10,132,255,0.35)]"
           data-testid="sim-badge"
         >
-          主号
+          {activeLabel}
         </span>
         <button
           type="button"
@@ -2730,8 +2748,17 @@ function KeypadTab({
         </button>
       </div>
 
-      {/* 号码显示区 */}
-      <div className="flex min-h-[86px] w-full items-center justify-center px-1">
+      {/* 号码显示区（匿名号身份时顶部加一行小字徽标提醒当前主叫身份，Task 40-E） */}
+      <div className="flex min-h-[86px] w-full flex-col items-center justify-center px-1">
+        {anonPhone && (
+          <p
+            className="mb-1 flex items-center gap-1 text-[12.5px] leading-none text-muted-foreground"
+            data-testid="phone-dialer-anon-badge"
+          >
+            <EyeOff className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+            匿名号码 {maskAnonPhone(anonPhone)}
+          </p>
+        )}
         <p
           className="truncate text-[40px] font-light leading-none tracking-wide text-foreground tabular-nums transition-[font-size] duration-150"
           data-testid="dial-number"
@@ -2751,6 +2778,23 @@ function KeypadTab({
           ''
         )}
       </p>
+
+      {/* 匿名号码入口胶囊（号码行与拨号盘之间，不遮挡呼叫/新建联系人；触控高度 44px，Task 40-E）。
+          当前就是匿名号时变实心（foreground 底反白）并显示当前匿名号后 4 位 */}
+      <button
+        type="button"
+        onClick={onOpenAnon}
+        aria-label={anonPhone ? `当前为匿名号码 ${maskAnonPhone(anonPhone)}，点按切换` : '切换匿名号码'}
+        data-testid="phone-dialer-anon"
+        className={`mt-2.5 mb-0.5 flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium leading-none transition-all active:scale-95 ${
+          anonPhone
+            ? 'bg-foreground text-background shadow-[0_2px_10px_rgba(0,0,0,0.18)]'
+            : 'border border-border/60 bg-background/60 text-foreground backdrop-blur-xl dark:border-white/[0.16] dark:bg-white/[0.08]'
+        }`}
+      >
+        <EyeOff className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+        匿名号码{anonPhone ? ` ${anonPhone.slice(-4)}` : ''}
+      </button>
 
       {/* 12 键拨号盘（小一号圆键 + 加粗数字/字母双层，深按压反馈） */}
       <div className="mt-1 grid w-[272px] grid-cols-3 gap-x-[28px] gap-y-[12px]">
@@ -3860,6 +3904,14 @@ export default function PhoneApp() {
     { value: 'eager', label: '积极', desc: '10min 间隔·15min 冷却·45s 轮询' },
     { value: 'off', label: '无冷却', desc: '仅 10min 自然间隔·60s 轮询' },
   ];
+  // 多账号（Task 40-E）：当前活跃账号为匿名号时记住其资料（脱敏徽标/胶囊高亮用）。
+  // 切号 = switchAccount 整页 reload，本组件挂载期间账号不会变，挂载时读一次注册表即可
+  const [anonAcc] = useState(() => {
+    const acc = getActiveAccount();
+    return acc.kind === 'anon' ? acc : null;
+  });
+  /** 匿名号码切换弹层（拨号键盘胶囊入口，与信息 App 共用 AnonSwitchSheet） */
+  const [anonSheetOpen, setAnonSheetOpen] = useState(false);
   const vmAudioRef = useRef<HTMLAudioElement | null>(null);
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingChatContact = useUI((s) => s.setPendingChatContact);
@@ -4300,6 +4352,8 @@ export default function PhoneApp() {
             contacts={contacts ?? []}
             onCall={startCall}
             onNewContact={(phone) => setNewContact({ open: true, phone })}
+            anonPhone={anonAcc ? anonAcc.phone : null}
+            onOpenAnon={() => setAnonSheetOpen(true)}
           />
         )}
         {tab === 'voicemail' && (
@@ -4509,6 +4563,9 @@ export default function PhoneApp() {
             </div>
           </div>
         )}
+
+        {/* 匿名号码切换弹层（Task 40-E，与信息 App 共享；切号 = 整页 reload，无需 onClose 回调） */}
+        <AnonSwitchSheet open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
 
         {/* 通话全屏层 */}
         {callTarget && (

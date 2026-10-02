@@ -7,6 +7,7 @@
  *   搬完（全部落库成功后）才通知服务端清空对应数据——先搬后删，中途失败下次重来（put 幂等）
  */
 import { localDB, genId } from './db';
+import { getActiveAccount, isMainAccount } from './accounts';
 import { kvDel, kvGet, kvSet } from './idb-kv';
 import { clearContactBinding } from './worldbook';
 import { memPurgeContact } from '@/lib/memory';
@@ -176,6 +177,70 @@ export async function findContactValueConflict(
     return c.qqId === v;
   });
   return hit ?? null;
+}
+
+/**
+ * 大号（main）机主资料跨账号读取（Task 40）：
+ * 当前就是大号 → 本库 listContacts 即可；在其他账号视角 → 直开大号库 ios-phone-db 只读。
+ * 账号切换页/QQ 账号管理/微信切换账号的大号行统一用它，避免把「当前账号的机主」误当大号资料。
+ * 读取失败（库不存在/IndexedDB 不可用）返回 null，调用方回退注册表字段。
+ */
+export async function mainOwnerContact(): Promise<{
+  name: string;
+  phone: string;
+  qqId: string;
+  wechatId: string;
+  avatar: string | null;
+} | null> {
+  const pick = (c: ContactRecord | undefined) =>
+    c
+      ? {
+          name: c.name ?? '',
+          phone: c.phone ?? '',
+          qqId: c.qqId ?? '',
+          wechatId: c.wechatId ?? '',
+          avatar: c.avatar ?? null,
+        }
+      : null;
+  try {
+    if (isMainAccount()) {
+      return pick((await listContacts()).find((c) => c.kind === 'user'));
+    }
+    const { openDB } = await import('idb');
+    const db = await openDB('ios-phone-db');
+    try {
+      const all = (await db.getAll('contacts')) as ContactRecord[];
+      return pick(all.find((c) => c.kind === 'user'));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 多账号（Task 40）：小号/匿名号首次进入时自动建机主 user 联系人——
+ * 注册表里的名字/号码落到本账号 DB，QQ 登录列表、微信身份、电话主叫号码即刻可用；
+ * AI 对该身份零认知（新库无任何历史），符合「小号对 AI 是陌生人」。
+ * 大号绝不自动建（机主联系人由用户在联系人 App 自管理，保持历史行为）。
+ */
+export async function ensureAccountOwnerContact(): Promise<void> {
+  try {
+    const acc = getActiveAccount();
+    if (!acc || acc.kind === 'main') return;
+    const existing = (await listContacts()).find((c) => c.kind === 'user');
+    if (existing) return;
+    await createContact({
+      kind: 'user',
+      name: acc.name?.trim() || (acc.kind === 'anon' ? '匿名账号' : '小号'),
+      phone: acc.phone || undefined,
+      qqId: acc.qqId || undefined,
+      wechatId: acc.wechatId || undefined,
+    });
+  } catch {
+    // 失败静默：账号仍可用（登录列表为空时用户可手动在联系人 App 建号）
+  }
 }
 
 /**

@@ -19,6 +19,10 @@
  * 6. 角色隔离：以 sessionKey（如 wx:<contactId> / qq:<contactId> / sms:<storageKey>）为键，
  *    每个会话同一时刻最多一条流（isChatStreaming 防重入），不同角色 / 不同 App 的流互不影响；
  *    人设 system 消息仍由各 App 在发送时组装后随 messages 传入（本模块原样透传，不感知人设）。
+ *    唯一例外（40-B 多账号 AI 认知隔离）：主账号下发起请求前，把「用户的小号」聊天摘录 digest
+ *    以附加段落追加进首条 system 消息末尾（computeAltAccountsDigest → mergeAltDigestIntoMessages），
+ *    覆盖经本总线发起的全部会话（wx/qq 私聊与群聊、信息联系人会话、信息小助手会话、社交/退圈后台流）；
+ *    小号/匿名号侧与电话通话（服务端 persona 直调）不注入。
  * 7. 回复条数：条数指令（N 条上限）由各 App 注入人设 system 消息，一轮发完、不做补发；
  *
  * 响应格式：/api/chat 返回 text/plain 纯文本增量流（服务端已把上游 SSE 解析为纯文本），
@@ -28,6 +32,7 @@
  */
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { openDB, deleteDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { ApiConfig } from '@/lib/ios/store';
 import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
@@ -35,6 +40,9 @@ import { createReplySegmentScanner } from '@/lib/reply-count';
 import { describeImages } from '@/lib/vision-client';
 import { clearDeliverBoundary, isAiDelivering, scheduleAiDelivery } from '@/lib/ios/ai-delivery';
 import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
+// 40-B 多账号 AI 认知隔离：主账号下计算「用户的小号」聊天摘录并合并进人设 system 消息
+import { getAccounts, getActiveAccountId, isMainAccount, accountDbName } from '@/lib/ios/accounts';
+import { buildAltAccountsSection } from '@/lib/ios/persona';
 // ---------------- 公开类型 ----------------
 
 export type ChatStreamStatus = 'streaming' | 'done' | 'error';
@@ -148,6 +156,212 @@ function blockSessionOf(sessionKey: string): { app: BlockApp; contactId: string 
   if (sessionKey.startsWith('sms:')) return null; // 其余 sms 键（历史助手兼容等）不参与拉黑
   const m = /^(wx|qq):(.+)$/.exec(sessionKey);
   return m ? { app: m[1] as BlockApp, contactId: m[2] } : null;
+}
+
+// ---------------- 40-B 小号认知摘录（多账号 AI 认知隔离） ----------------
+
+/**
+ * 需求「二/三/四」（AI 认知隔离）的注入实现：
+ * - 大号（main）聊天时，把用户各小号/匿名号与 AI 的聊天记录摘录算成 digest，
+ *   追加进本轮人设 system 消息（persona.buildAltAccountsSection 的固定规则文案 + 摘录），
+ *   AI 因此能回答大号用户问起小号的事（信息来源=小号与 AI 的聊天记录）；
+ * - 小号/匿名号侧聊天不注入（isMainAccount() 为 false → null）：AI 对小号是陌生人
+ *   （小号空库天然成立），也绝不反向泄露大号记忆——digest 只从小号库单向读出；
+ * - 每轮最多计算一次（runStream 内、构建请求前），IndexedDB 读很快；失败→null 零注入，
+ *   不影响本轮聊天。电话通话走服务端 persona 直调（不传 ctx.altAccountsDigest）→ 不注入，行为零变化。
+ */
+
+/** 小号/匿名号库内聊天记录的 kv 键前缀（与 idb-kv 迁移清单同源；sms- 为更早版本遗留键） */
+const ALT_CHAT_KEY_PREFIXES = ['wx-chat-msgs:', 'qq-chat-msgs:', 'ios-chat-msgs:', 'sms-chat-msgs:'] as const;
+/** 信息 App 内置 AI 小助手会话（精确键） */
+const ALT_ASSISTANT_KEY = 'ios-chat-assistant-msgs';
+/** 每账号摘录的最大消息条数（跨会话合并取最新） */
+const ALT_DIGEST_MAX_MSGS = 24;
+/** 单条摘录文本最大长度（超出截断，防长图描述/长句撑爆 prompt） */
+const ALT_DIGEST_MSG_MAX_CHARS = 80;
+/** digest 总字符上限（多小号兜底，超出截断） */
+const ALT_DIGEST_MAX_CHARS = 2400;
+
+/** 小号库 schema 子集（与 db.ts 的 kv/contacts store 结构一致；只读访问，不改 db.ts） */
+interface AltAccountDB extends DBSchema {
+  kv: { key: string; value: { key: string; value: unknown } };
+  contacts: { key: string; value: { id: string; name: string } };
+}
+
+/**
+ * 打开小号/匿名号的库（db.ts 同款 'idb' openDB）：库不存在（或无 kv/contacts store）→ 返回 null。
+ * 注意 indexedDB.open 对不存在的库会顺手创建一个无 store 的空库——检测到刚创建的空库时
+ * deleteDB 清理掉，不给「尚未初始化的小号」留垃圾库。
+ */
+async function openAltAccountDb(name: string): Promise<IDBPDatabase<AltAccountDB> | null> {
+  const db = await openDB<AltAccountDB>(name);
+  if (!db.objectStoreNames.contains('kv') || !db.objectStoreNames.contains('contacts')) {
+    const empty = db.objectStoreNames.length === 0; // 刚被顺手创建的空库
+    db.close();
+    if (empty) {
+      try {
+        await deleteDB(name);
+      } catch {
+        // 清理失败无碍（空库无数据）
+      }
+    }
+    return null;
+  }
+  return db;
+}
+
+/** 摘录条目（mine=true=小号侧发出；peer=该会话对方角色名；time=消息时间戳） */
+interface AltDigestEntry {
+  time: number;
+  mine: boolean;
+  peer: string;
+  text: string;
+}
+
+/** 单条消息 → 摘录条目；不参与 AI 上下文的消息（撤回/错误/系统行/通知/拉黑卡等）与空消息返回 null。
+ *  消息形状三端兼容：role me|user|self=小号侧，其余（peer/assistant/…）=对方；文本取 text|content。 */
+function altDigestEntryOf(raw: unknown, peer: string): AltDigestEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  if (m.recalled === true || m.error === true) return null;
+  const kind = typeof m.kind === 'string' ? m.kind : '';
+  // 与各 App 历史上下文同口径：系统提示/通知行/拉黑卡/群邀请卡/通话卡不进上下文，摘录同样排除
+  if (kind === 'sys' || kind === 'notice' || kind === 'blockreq' || kind === 'groupcard' || kind === 'call') return null;
+  const mine = m.role === 'me' || m.role === 'user' || m.role === 'self';
+  const time = typeof m.time === 'number' && m.time > 0 ? m.time : 0;
+  let text = typeof m.text === 'string' ? m.text : typeof m.content === 'string' ? m.content : '';
+  text = text.trim();
+  if (text.startsWith('data:')) text = ''; // QQ 图片消息 content=dataURL：不出原始图，按 kind 出占位
+  if (kind === 'image') {
+    // 图片消息：有识图描述时带出内容（wx 端 content 恒为「[图片]」占位，desc 才是有效信息）
+    const desc = (m.img as { desc?: unknown } | undefined)?.desc;
+    if (typeof desc === 'string' && desc.trim()) text = `[图片]（图片内容：${desc.trim()}）`;
+  }
+  if (!text) {
+    // 非文本消息按 kind 出占位/描述（与各 App 历史序列化占位口径一致；图片描述已在上方带出）
+    if (kind === 'image') {
+      text = '[图片]';
+    } else if (kind === 'voice') {
+      const v = m.voice as { transcript?: unknown; localText?: unknown } | undefined;
+      const t = typeof v?.transcript === 'string' ? v.transcript.trim() : '';
+      const l = typeof v?.localText === 'string' ? v.localText.trim() : '';
+      text = t || l || '[语音]';
+    } else if (kind === 'sticker') {
+      const meaning = (m.stk as { meaning?: unknown } | undefined)?.meaning;
+      text = typeof meaning === 'string' && meaning.trim() ? `[表情包：${meaning.trim()}]` : '[表情包]';
+    } else if (kind === 'textcard') {
+      const cardText = (m.card as { text?: unknown } | undefined)?.text;
+      text = typeof cardText === 'string' && cardText.trim() ? `[文字图片]（卡片上写着：${cardText.trim()}）` : '[文字图片]';
+    } else if (kind === 'redpacket') text = '[红包]';
+    else if (kind === 'transfer') text = '[转账]';
+    else if (kind === 'location') text = '[位置]';
+    else if (kind === 'forward') text = '[转发消息]';
+    else if (kind === 'family') text = '[亲属卡]';
+    else return null; // 无文本且非已知类型：跳过
+  }
+  // 压成单行 + 截断（摘录是给 AI 看的上下文，不保留换行排版）
+  text = text.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (text.length > ALT_DIGEST_MSG_MAX_CHARS) text = `${text.slice(0, ALT_DIGEST_MSG_MAX_CHARS)}…`;
+  return { time, mine, peer, text };
+}
+
+/** kv 键 → 会话对方角色名；非聊天键返回 null（联系人会话按 contactId 查小号库联系人名映射） */
+function altSessionPeerName(key: string, nameById: Map<string, string>): string | null {
+  if (key === ALT_ASSISTANT_KEY) return '小助手';
+  for (const p of ALT_CHAT_KEY_PREFIXES) {
+    if (!key.startsWith(p)) continue;
+    let id = key.slice(p.length);
+    if (id.startsWith('c:')) id = id.slice(2); // 信息端会话键形如 c:<contactId>
+    if (nameById.has(id)) return nameById.get(id) as string;
+    return p === 'wx-chat-msgs:' ? '微信联系人' : p === 'qq-chat-msgs:' ? 'QQ好友' : '联系人';
+  }
+  return null;
+}
+
+/** 相对时间（小号摘录标题行用：最近一条消息距今多久） */
+function altRelTime(ts: number): string {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)}天前`;
+  return `${Math.floor(diff / (30 * 86_400_000))}个月前`;
+}
+
+/**
+ * 计算「用户的小号」聊天摘录 digest（仅在主账号下返回内容；否则/失败/无数据 → null）。
+ * 对注册表里每个非 main 账号：打开其独立库（accountDbName）→ 读 kv 全部记录筛聊天键 +
+ * contacts 全部记录建 id→名字映射 → 跨会话合并消息按时间倒序取最新 24 条。
+ * 每账号一个块（小标题行注明 小号名/匿名账号 + 号码），块间空行；库打不开/无聊天记录的账号跳过。
+ */
+async function computeAltAccountsDigest(): Promise<string | null> {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) return null;
+  if (!isMainAccount()) return null; // 仅大号注入；小号/匿名号侧 AI 与用户互为陌生人
+  const activeId = getActiveAccountId();
+  const alts = getAccounts().filter((a) => a && a.id !== activeId && a.kind !== 'main');
+  if (alts.length === 0) return null;
+  const blocks: string[] = [];
+  for (const acc of alts) {
+    try {
+      const db = await openAltAccountDb(accountDbName(acc.id));
+      if (!db) continue; // 库不存在（小号从未初始化）→ 跳过
+      let block = '';
+      try {
+        const [kvRows, contacts] = await Promise.all([db.getAll('kv'), db.getAll('contacts')]);
+        const nameById = new Map<string, string>();
+        for (const c of contacts) {
+          if (c && typeof c.id === 'string' && typeof c.name === 'string' && c.name.trim()) {
+            nameById.set(c.id, c.name.trim());
+          }
+        }
+        const entries: AltDigestEntry[] = [];
+        for (const row of kvRows) {
+          if (!row || typeof row.key !== 'string' || !Array.isArray(row.value)) continue;
+          const peer = altSessionPeerName(row.key, nameById);
+          if (!peer) continue;
+          for (const raw of row.value) {
+            const e = altDigestEntryOf(raw, peer);
+            if (e) entries.push(e);
+          }
+        }
+        if (entries.length > 0) {
+          // 跨会话按时间倒序取最新 N 条，再按时间正序输出（对话自然阅读顺序）
+          entries.sort((a, b) => b.time - a.time);
+          const picked = entries.slice(0, ALT_DIGEST_MAX_MSGS);
+          picked.sort((a, b) => a.time - b.time);
+          const label = acc.kind === 'anon' ? '匿名账号' : acc.name.trim() || '小号';
+          const phone = acc.phone ? `（${acc.phone}）` : '';
+          const recent = altRelTime(picked[picked.length - 1].time);
+          const lines = [`〔${label}〕${phone}与你的最近聊天${recent ? `（最近消息：${recent}）` : ''}：`];
+          for (const e of picked) lines.push(`${e.mine ? '用户' : e.peer}：${e.text}`);
+          block = lines.join('\n');
+        }
+      } finally {
+        db.close(); // 用完即关：不长期持有其他账号的库连接
+      }
+      if (block) blocks.push(block);
+    } catch {
+      // 单个小号读取失败：跳过该账号，不影响本轮聊天
+    }
+  }
+  if (blocks.length === 0) return null;
+  let digest = blocks.join('\n\n');
+  if (digest.length > ALT_DIGEST_MAX_CHARS) digest = `${digest.slice(0, ALT_DIGEST_MAX_CHARS)}…`;
+  return digest;
+}
+
+/** 把 digest 段合并进请求消息：追加到首条 system 消息（人设 prompt）末尾；
+ *  极端情况下请求里没有 system 消息（理论上不发生——人设/时间块恒在首位）时前置一条附加 system。 */
+function mergeAltDigestIntoMessages(messages: ChatPayloadMessage[], digest: string): ChatPayloadMessage[] {
+  const section = buildAltAccountsSection(digest);
+  if (!section) return messages;
+  const idx = messages.findIndex((m) => m.role === 'system');
+  if (idx === -1) return [{ role: 'system', content: section }, ...messages];
+  const out = messages.slice();
+  out[idx] = { ...out[idx], content: `${out[idx].content}\n\n${section}` };
+  return out;
 }
 
 // ---------------- 内部状态 ----------------
@@ -331,8 +545,21 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     }
   };
 
+  // ---- 40-B AI 认知隔离：主账号下注入「用户的小号」聊天摘录 ----
+  // 每轮最多计算一次（IndexedDB 读很快）；非主账号/无小号数据/读取失败 → null，零注入零破坏。
+  // 小号/匿名号侧不注入：AI 对小号是陌生人（空库天然成立），摘录也绝不反向泄露大号内容。
+  let baseMessages = messages;
+  try {
+    const altDigest = await computeAltAccountsDigest();
+    if (altDigest) baseMessages = mergeAltDigestIntoMessages(messages, altDigest);
+  } catch {
+    // 摘录失败不影响本轮聊天
+  }
+  // 摘录读取窗口内发生换号中止：本轮作废（与识图等待后的中止检查同口径）
+  if (rt.aborted) return;
+
   /** 本轮实际发送的消息（识图成功后会被替换为「原图消息 + 图片描述」的组合） */
-  let workMessages: ChatPayloadMessage[] = messages;
+  let workMessages: ChatPayloadMessage[] = baseMessages;
 
   try {
     // 识图前置步骤（设置 › 识图模型；未配置 / 本轮无图片时跳过，文字聊天零影响）：
@@ -349,7 +576,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
             // 未传时维持「我」（单聊=机主本人），单数/复数两种既有句式均不变
             const speaker = opts.vision.speakerLabel || '我';
             const prefix = n > 1 ? `（${speaker}发了 ${n} 张图片，图片内容分别是：` : `（${speaker}发了一张图片，图片内容是：`;
-            workMessages = [...messages, { role: 'user' as const, content: `${prefix}${desc}）` }];
+            workMessages = [...baseMessages, { role: 'user' as const, content: `${prefix}${desc}）` }];
             // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容；
             // 换号中止后不再回写（旧账号会话的落盘动作全部停止）
             try {
@@ -371,7 +598,7 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
           n > 1
             ? `（我刚刚发了 ${n} 张图片给你，你还没有配置识图模型，看不到图片内容；请自然回应收到图片这件事，可以问我图片拍了什么，不要编造图片细节）`
             : '（我刚刚发了一张图片给你，你还没有配置识图模型，看不到图片内容；请自然回应收到图片这件事，可以问我图片拍了什么，不要编造图片细节）';
-        workMessages = [...messages, { role: 'user' as const, content: note }];
+        workMessages = [...baseMessages, { role: 'user' as const, content: note }];
       }
     }
     // 换号中止（识图等待窗口内发生）：旧账号会话整体作废，不再登记 payload/发起请求

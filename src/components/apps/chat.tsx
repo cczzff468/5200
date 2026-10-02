@@ -30,6 +30,7 @@ import {
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { GlassButton } from '@/components/ios/GlassButton';
+import { AnonSwitchSheet } from '@/components/ios/AnonSwitchSheet';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { useSettings, useUI } from '@/lib/ios/store';
@@ -98,6 +99,7 @@ import {
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
 import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import { getActiveAccount } from '@/lib/ios/accounts';
 // 生图（锁脸）：回复文本 [图片:描述]/[照片:描述] 标签 → 自动生图投递（未配置/失败降级文字图片卡片）；
 // 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
@@ -4345,6 +4347,11 @@ export default function ChatApp() {
   const [statusCardOpen, setStatusCardOpen] = useState(false);
   /** 好友会话预览（信息列表：有聊天记录的好友 CHAR/NPC） */
   const [contactSessions, setContactSessions] = useState<ContactSessionPreview[]>([]);
+  // 多账号（Task 40-E）：当前账号是否匿名号（顶栏 EyeOff 角标提示身份非本号）。
+  // 切号 = switchAccount 整页 reload，本组件挂载期间账号不会变，挂载时读一次注册表即可
+  const [anonActive] = useState(() => getActiveAccount().kind === 'anon');
+  /** 匿名号码切换弹层（会话列表顶栏 EyeOff 入口，与电话 App 共用 AnonSwitchSheet） */
+  const [anonSheetOpen, setAnonSheetOpen] = useState(false);
 
   // 挂载后载入小助手本地状态（已读/置顶/删除标记 + 预览消息；异步微任务：保持水合安全）
   useEffect(() => {
@@ -4751,14 +4758,34 @@ export default function ChatApp() {
         className="shrink-0"
         left={<BackToHome className="static!" />}
         right={
-          <GlassButton
-            type="button"
-            onClick={() => setView('add')}
-            aria-label="添加好友"
-            className="flex h-9 w-9 items-center justify-center rounded-full"
-          >
-            <Plus className="h-[20px] w-[20px]" strokeWidth={2} aria-hidden="true" />
-          </GlassButton>
+          <>
+            {/* 匿名号码切换（Task 40-E）：点击弹共享半屏弹层；当前就是匿名号时右上角蓝点角标提示身份非本号。
+                视觉同旁边「+」按钮（h-9 w-9 玻璃圆钮），after:-inset-1 把触控区扩到 44px */}
+            <GlassButton
+              type="button"
+              onClick={() => setAnonSheetOpen(true)}
+              aria-label="切换匿名号码"
+              data-testid="chat-list-anon"
+              className="relative flex h-9 w-9 items-center justify-center rounded-full after:absolute after:-inset-1 after:content-['']"
+            >
+              <EyeOff className="h-[20px] w-[20px]" strokeWidth={2} aria-hidden="true" />
+              {anonActive && (
+                <span
+                  data-testid="chat-list-anon-dot"
+                  className="absolute right-[4px] top-[4px] h-2 w-2 rounded-full bg-[#0A84FF] ring-2 ring-card"
+                  aria-hidden="true"
+                />
+              )}
+            </GlassButton>
+            <GlassButton
+              type="button"
+              onClick={() => setView('add')}
+              aria-label="添加好友"
+              className="flex h-9 w-9 items-center justify-center rounded-full"
+            >
+              <Plus className="h-[20px] w-[20px]" strokeWidth={2} aria-hidden="true" />
+            </GlassButton>
+          </>
         }
       />
 
@@ -4837,6 +4864,9 @@ export default function ChatApp() {
           deleteChat();
         }}
       />
+
+      {/* 匿名号码切换弹层（Task 40-E，与电话 App 共享；切号 = 整页 reload，无需 onClose 回调） */}
+      <AnonSwitchSheet open={anonSheetOpen} onClose={() => setAnonSheetOpen(false)} />
 
       {/* 坐标参照层：铺满 App 容器用于菜单定位（不拦截事件） */}
       <div ref={screenRef} aria-hidden="true" className="pointer-events-none absolute inset-0" />

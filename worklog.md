@@ -13883,3 +13883,117 @@ Stage Summary:
 - API 设置预设新增 OpenAI（首位），地址/模型联动填充，直连回退链路完整
 - 光斑策略修正：毛玻璃氛围光斑维持全局删除；QQ 密友卡/微信红包封面的卡内设计光斑还原
 - tsc + bun run lint 全绿；改动文件：settings.tsx / qq.tsx / wechat.tsx
+
+---
+Task ID: 40-A
+Agent: Z.ai Code（主会话）
+Task: 多账号系统基础设施——accounts.ts 注册表 + db.ts 按账号动态库名 + 机主联系人自动建档
+
+Work Log:
+- 新建 src/lib/ios/accounts.ts：PhoneAccount{id,kind:'main'|'alt'|'anon',name,phone,qqId,wechatId,createdAt}；注册表+当前账号存 localStorage(ios-phone-accounts / ios-phone-active-account)；getAccounts/getAccountById/getActiveAccountId/getActiveAccount/setActiveAccountId/isMainAccount；createAccount(alt|anon)（小号默认名「小号N」+11位虚拟手机号+10位QQ号+微信号；匿名号「匿名账号」+32开头10位号）；deleteAccount（拒大号/当前号，清 --{id} 后缀 localStorage 键 + indexedDB.deleteDatabase）；switchAccount=写标记+location.reload()；accountScopedKey(key)（大号原键向后兼容，其他账号 key--{id}）；accountDbName(id)（main='ios-phone-db' 零迁移）
+- db.ts：DB_NAME 常量改为 resolveDbName()（开机首访解析并缓存，读 ACTIVE_KEY；main→'ios-phone-db'，否则 'ios-phone-db--{id}'），schema/版本不变；kv 层(聊天/记忆/朋友圈/钱包/QQ空间/助手消息)+contacts store 随库自动按账号隔离
+- contacts-store.ts 新增 ensureAccountOwnerContact()：小号/匿名号首次进入且无 user 联系人时按注册表自动建档（大号绝不动作）；PhoneShell 开机 ensureKvReady 后调用
+- 核实无需改动项：sessionKey=app:contactId 按账号唯一无跨账号投递；记忆 mem-* 全在 kv 按库隔离；主题/字体/API Key 等设备级 localStorage 保持共享（范围限定七.1）
+- tsc 全绿
+
+Stage Summary:
+- 多账号数据层就绪：每账号独立 IndexedDB（大号零迁移），切换=持久化标记+整页重启零残留；后续 B/C/D/E 子代理基于 accounts.ts API 构建 UI 与 AI 认知隔离
+
+---
+Task ID: 40-C
+Agent: Z.ai Code 子代理 (general-purpose)
+Task: 设置 App 新增「切换账号」管理页（入口行 + AccountSwitchPage，仅改 src/components/apps/settings.tsx）
+
+Work Log:
+- 通读 settings.tsx 相关区域（imports/MainRow/GroupCard/DetailShell/RootPage 路由/LockPage AlertDialog 确认弹窗模式/useLocalToast）后动手，只改 settings.tsx（git diff 复核：332 insertions / 5 deletions，全部为本任务改动）
+- 依赖引入：lucide 新增 Minus/UsersRound；contacts-store import 增加 ownerRealName；新增 '@/lib/ios/accounts' 导入（accountDisplayName/createAccount/deleteAccount/getActiveAccount/getActiveAccountId/getAccounts/MAIN_ACCOUNT_ID/switchAccount/type PhoneAccount）；Page 联合类型加 'account'
+- MainRow 增加可选 testId prop（透传 data-testid，undefined 时 React 省略属性，不影响既有 12 处调用）
+- RootPage 加入口行：置于「个人信息」资料卡同分组（卡片容器补 divide-y divide-black/[0.05] dark:divide-white/[0.06]），图标 UsersRound + TONE_CYAN，右侧值 = 当前账号显示名（useEffect 异步：大号 = ownerRealName() 回退「机主」，其他账号 = acc.name；cancelled 守卫），testid=settings-account-entry
+- 新增 AccountSwitchPage（DetailShell gray，title=切换账号）：
+  - 账号列表 GroupCard：行 = 头像圆 + 名字 + 副行小字。头像：大号 = 机主联系人 avatar（listContacts 找 kind==='user'）回退中性渐变首字母圆；alt 蓝绿系（bg-[#D5F0EC]/dark:bg-[#0E7C6B]/30）、anon 深灰系（bg-[#E4E4E9]/dark:bg-white/[0.14]）首字母圆。名字：大号 = ownerRealName() 回退 accountDisplayName（机主），alt/anon = acc.name。副行：大号/小号/匿名号码 徽标 + 号码（大号用实时 user 联系人 phone 回退 acc.phone）
+  - 当前账号行右侧绿色对勾（Check #34C759）；非当前行点击 switchAccount(id)（写标记 + location.reload()，无确认，调用后不再操作 DOM）
+  - 「添加账号」组两行（绿色 ⊕）：添加小号 / 新建匿名号码 → 受控 AlertDialog 命名小弹窗（Input 可留空 = 默认名 小号N/匿名账号，placeholder 同步）→ createAccount(kind, name) → switchAccount(newId)
+  - 删除：采用「每行非当前、非大号账号右侧常驻红色 ⊖ 圆钮（iOS 订阅管理风）」方案 → AlertDialog 确认弹窗（写明将清除聊天/联系人/记忆/朋友圈全部数据、不可恢复）→ deleteAccount(id)；ok 则刷新列表 + toast「已删除该账号」，error（大号/当前号 API 兜底）用 LocalToast 展示原因；大号行与当前行 UI 无删除钮
+  - 页面底部小字：「切换后所有 App 数据（聊天/记忆/联系人/朋友圈）随之切换并独立保存。」
+  - 数据加载：owner（name/phone/avatar）useEffect + useState 异步取；accounts/activeId 惰性初始化读 localStorage（本页仅客户端交互后挂载，与 NotificationPage 同模式）
+- 复用既有模式：AlertDialog 270px iOS 弹窗（LockPage 关闭锁屏确认同款覆盖样式）、LocalToast/useLocalToast、GroupCard/DetailShell/SectionLabel 风格、active:bg-muted/50 行按压态
+
+testid 清单：settings-account-entry（根页入口行）/ settings-account-add-alt / settings-account-add-anon / settings-account-name-input / settings-account-create-confirm / settings-account-delete-{accountId}（每行非当前非大号 ⊖ 钮）/ settings-account-delete-confirm
+
+Stage Summary:
+- 设置 App「切换账号」管理页完成：入口行（资料卡分组内，右侧显示当前账号名）+ 账号列表（头像/徽标/号码，当前号绿勾）+ 点行即切（reload 零残留）+ 命名弹窗建小号/匿名号后立即切换 + ⊖ 删除流程（确认弹窗写明清数据，错误 toast）
+- tsc --noEmit 全绿；settings.tsx 单文件 eslint 0 错 0 警；bun run lint 全仓唯一 error 在 AnonSwitchSheet.tsx:66（react-hooks/set-state-in-effect，Task 40-B 产物，非本任务文件，未改动）
+- 主会话 E2E 建议覆盖：入口行值随当前账号变化、切换后整页 reload、留空命名默认名、删除弹窗文案与 toast
+
+---
+Task ID: 40-E
+Agent: Z.ai Code（子代理）
+Task: 电话拨号键盘「匿名号码」入口 + 信息 App「切换匿名号码」入口 + 共享 AnonSwitchSheet 半屏弹层
+
+Work Log:
+- 新建 src/components/ios/AnonSwitchSheet.tsx（电话/信息共享）：受控 props { open, onClose }；半屏底部弹层（rounded-t-[18px] + bg-[#f6f6f8]/95 backdrop-blur-2xl dark:bg-[#242426]/95 毛玻璃卡 + max-h-[76%] 内滚动 + 遮罩 bg-black/45 点击关闭）；进出场复用 IOSActionSheet 同款 rAF 驱动 transition（260ms cubic-bezier(0.32,0.72,0,1) slide-up/fade）——不用 tailwindcss-animate，退场 210ms 后卸载；导出 maskAnonPhone()（前2后4脱敏：32****5644）供两 App 共用
+- 弹层内容：标题「匿名号码」+左上 X 关闭 + 副标题「切换后拨号/短信都以匿名身份进行，聊天与记忆完全独立」；分组卡列表 = getAccounts().filter(kind==='anon')，行=深灰圆头像(EyeOff)+名字+脱敏号码小字，当前行右侧绿点+「当前使用」（点当前行仅 onClose，switchAccount 对同 id 本就 no-op）；「新建匿名号码」行（+圆钮）→ createAccount('anon') → switchAccount(newId)；activeId!=='main' 时列表顶部加「返回大号（机主）」行（蓝色 UserRound 头像）→ switchAccount(MAIN_ACCOUNT_ID)；空态提示文案；账号快照 useState 惰性初始化 + open 置真时 rAF 回调内重读（切号=整页 reload，打开期间数据不可能变）
+- phone.tsx：KeypadTab 新增 anonPhone/onOpenAnon props；号码显示区容器改 flex-col，匿名号身份时号码上方加徽标行「EyeOff + 匿名号码 32****5644」（testid phone-dialer-anon-badge，text-[12.5px] muted）；match 行与拨号盘之间加胶囊入口（h-11=44px 触控，rounded-full，EyeOff+「匿名号码」；当前为 anon 时变实心 bg-foreground text-background 并显示后 4 位）；PhoneApp 挂载时 useState 惰性读 getActiveAccount()（kind==='anon' 才记录），拨号键盘唯一入口传给 KeypadTab，AnonSwitchSheet 渲染在 App 容器内（主动来电设置弹层之后、通话全屏层之前）
+- chat.tsx：会话列表顶栏 right 在「+」左侧加 GlassButton 玻璃圆钮（h-9 w-9 视觉与「+」完全一致，after:-inset-1 伪元素把触控区扩到 44px），EyeOff 图标 + aria-label="切换匿名号码"；当前账号为 anon 时右上角 8px 蓝点角标（#0A84FF + ring-2 ring-card）；ChatApp 挂载时 useState 惰性读 getActiveAccount().kind；AnonSwitchSheet 渲染在 main return 内（仅列表视图，聊天/添加视图为独立 early return 不含）；聊天/kv 逻辑零改动
+- 水合安全：PhoneShell 开机门控（loaded=false 只渲染开机屏），App 组件树纯客户端挂载后渲染，localStorage 同步读与项目既有 useState 惰性初始化模式一致；switchAccount 后整页 reload，不操作 DOM
+- 验证：bunx tsc --noEmit 全绿；bun run lint exit 0（首版 AnonSwitchSheet 在 effect 体内同步 setSnap 触发 react-hooks/set-state-in-effect，已移入 rAF 回调修复）；git diff 复核改动仅限 3 个目标文件；grep 复核 testid/缩进无残留错位
+- testid 清单：anon-row-{id} / anon-create / anon-back-main（弹层）；phone-dialer-anon / phone-dialer-anon-badge（电话拨号键盘）；chat-list-anon / chat-list-anon-dot（信息列表顶栏）
+
+Stage Summary:
+- 匿名号码 UI 完成：新建共享 AnonSwitchSheet（iOS action-sheet 风半屏弹层，列表/新建/返回大号/当前使用标识/深浅色全适配），电话拨号键盘加胶囊入口+匿名身份脱敏徽标，信息会话列表顶栏加 EyeOff 玻璃圆钮+anon 蓝点角标
+- 产物：src/components/ios/AnonSwitchSheet.tsx + src/components/apps/phone.tsx + src/components/apps/chat.tsx；tsc + bun run lint 全绿
+
+---
+Task ID: 40-D
+Agent: Z.ai Code（子代理）
+Task: QQ「账号与安全」账号管理区（注册表多账号）+ 微信设置「切换账号」入口与独立切换子页 + QQ 登录态/排队补跑键按账号隔离
+
+Work Log:
+- QQ 键隔离：① qq.tsx LS_SESSION（'qq-session-user-id'）全部 4 处读写改为 accountScopedKey(LS_SESSION)——启动恢复 getItem(:15807)/失效 removeItem(:15813)/登录 setItem(:15843)/登出 removeItem(:15852)，大号=原键登录不丢，小号各自独立登录列表（小号库自动建机主联系人后登录页可见）；② 排队补跑键 QQ_QUEUED_TURNS_KEY(:945) 改 accountScopedKey('qq-queued-turns')（模块加载时求值一次，页面生命周期内账号恒定=切换必 reload，安全；purgeQqSessionData 的 removeItem :15735 同步生效）；③ 头部新增 import { MAIN_ACCOUNT_ID, accountScopedKey, createAccount, getAccounts, getActiveAccountId, switchAccount, type PhoneAccount } from '@/lib/ios/accounts'
+- QQ 账号管理区（SecurityPage 重构 :12781-12914）：移除 contacts/onSwitchAccount props 与 otherUsers（原「库内其他 user 联系人=登出切换」旧方案），改读注册表 getAccounts()+getActiveAccountId()；每行=头像+名字+号码小字——大号行 QqAvatar(me.avatar) + 名字回退链 me.name→ownerRealName()（useEffect 异步取一次）→「机主」+ 号码 me.qqId 回退 acc.qqId；小号/匿名号新增 QqAccountBubble 首字母彩色圆（alt 暖色橙渐变/anon 灰黑渐变，dark: 降饱和变体）+acc.name+acc.qqId/anon acc.phone；当前账号右侧蓝勾 Check text-[#1E6FFF] dark:text-[#4AA3FF]，其他行 ChevronRight 点击 switchAccount(id)（写标记+reload，调用处不再 setState）；底部「添加或注册账号」灰圆+号 → createAccount('alt')→switchAccount(newId)；调用点 :15436 同步收敛 props
+- 微信设置入口：WxSettingsPage rows 由字符串数组改为 {label,onClick?,testid?} 对象数组，「账号与安全」下方插入「切换账号」行（testid wx-account-entry）→ onOpenAccountSwitch；新增 prop，调用点 :12731-12734 传 setPage('accountSwitch')；Page 联合类型加 'accountSwitch'
+- 微信切换子页 WxAccountSwitchPage（:10890-11080，照截图布局）：灰底 #EDEDED dark:#111111；顶栏返回+居中「切换账号」+右上「管理/完成」（仅 accounts.length>1 显示，#576B95 链接蓝）；顶部居中 MessageCircle 灰 logo（52px, text-black/20 dark:text-white/20）+「轻触头像以切换账号」+细分隔线；账号卡=白卡 rounded-[14px] dark:#1A1A1A：大号 WxAvatar(me.avatar)+me.name+「微信号：me.wechatId」，小号/匿名号 WxAccountBubble 首字母圆+acc.name+微信号/匿名号手机号，当前卡右侧绿点(#07C160)+「当前使用」，点其他卡 switchAccount(id)（管理模式下点击不切换）；「+ 添加账号」虚线框卡（border-dashed h-[84px]）→ createAccount('alt')→switchAccount；管理模式：非当前非大号卡左上红色 ⊖（44px 命中区+22px 红圆白横杠）→ 受控确认弹窗（fixed inset-0 z-[70] bg-black/40，微信风白卡/深灰卡，红「删除」钮，禁 window.confirm）→ deleteAccount(id) 成功 setAccounts(getAccounts())+退出管理+toast「已删除该账号」，失败 toast res.error（复用页内 useLocalToast/LocalToast）
+- WX 排队补跑键：WX_QUEUED_TURNS_KEY(:474) 改 accountScopedKey('wx-queued-turns')；微信 wx-session-user-id 未动（任务范围仅要求 qq 登录态与 wx 排队键；wx 登录态跨账号因联系人 id 不同天然自动登出，无串号风险）
+- 通用：触控目标均 ≥44px（QQ 行 h-[64px]、wx 卡 py-4、⊖ 44px 命中、管理 min-w-[44px]）；深浅色 dark: 变体全覆盖；删除确认弹窗复用项目既有 fixed z-[70] 微信风弹窗范式（chat-settings FriendDeleteConfirmDialog 同款）
+- 验证：bunx tsc --noEmit 全绿（exit 0）；bun run lint 无新增错误（exit 0）；grep 复核：qq.tsx accountScopedKey 7 处（import+queued+注释+4 LS_SESSION 点）、wechat.tsx 2 处（import+queued），无遗漏裸 LS_SESSION（wx 的 4 处属范围外既状）；旧 testid qq-switch-*/qq-security-add 零残留；缩进逐块核对无 MultiEdit 空格子串误伤
+- testid 清单：QQ qq-account-row-{id}（含大号 qq-account-row-main）/ qq-account-add；微信 wx-account-entry / wx-account-card-{id} / wx-account-add / wx-account-manage / wx-account-delete-{id} / wx-account-delete-cancel / wx-account-delete-confirm（另 wx-account-back、wx-account-header 辅助定位）
+
+Stage Summary:
+- QQ 账号与安全页账号管理区接入多账号注册表：大号+小号/匿名号头像行、当前账号蓝勾、点行 switchAccount、底部添加或注册账号（createAccount('alt')+切换）；QQ 登录态与排队补跑键按账号隔离（大号原键向后兼容）
+- 微信设置页新增「切换账号」行 → 独立切换子页：灰底大标题区+微信灰 logo、账号卡列表（当前卡绿点「当前使用」）、虚线添加账号卡、右上角管理模式（⊖+受控确认弹窗+deleteAccount）；wx 排队补跑键按账号隔离
+- 改动仅 src/components/apps/qq.tsx 与 src/components/apps/wechat.tsx；tsc + bun run lint 全绿
+
+---
+Task ID: 40-B
+Agent: Z.ai Code（子代理）
+Task: 多账号 AI 认知隔离——persona.ts 小号认知段落 + chat-stream-store.ts 主账号小号聊天摘录注入 + 记忆隔离验证
+
+Work Log:
+- persona.ts：PersonaPromptCtx 新增可选字段 altAccountsDigest?: string | null；新增导出 buildAltAccountsSection(digest)（digest 空 → 空串，整节约省略零破坏）；buildPersonaSystemPrompt 在【最近发生的事】之后、【禁止事项】之前注入【用户的小号（另一个聊天身份）】一节（固定 4 条规则文案：小号=独立聊天对象／问小号可参考摘录／除非用户明说不说破大小号同一人／摘录之外不编造 + 一行「摘录里『用户』=小号侧发送者」主语说明 + digest 原文）。电话通话等服务端直调路径不传该字段 → 行为与旧版完全一致
+- chat-stream-store.ts（唯一注入点，覆盖全部 beginChatStream 路径）：新增 40-B 区块——openAltAccountDb（'idb' openDB 打开 accountDbName(acc.id)，库不存在/无 kv·contacts store → null，顺带 deleteDB 清理被 open 顺手创建的空库）；computeAltAccountsDigest（isMainAccount() 才算；getAccounts() 里 id≠当前 且 kind≠'main' 的每个账号：读其库 kv getAll 筛聊天键 + contacts getAll 建 id→名字映射；wx-chat-msgs:/qq-chat-msgs:/ios-chat-msgs:/sms-chat-msgs: 前缀 + ios-chat-assistant-msgs 精确键；消息形状三端兼容 role me|user|self=小号侧 vs 其余=对方、文本 text|content、图片带识图描述/dataURL→[图片]、语音→转写/占位、红包/转账等按 kind 占位；recalled/error/sys/notice/blockreq/groupcard/call 与各 App 历史上下文同口径剔除；跨会话合并按 time 倒序取最新 24 条再正序输出；单条截 80 字符、digest 总量截 2400 字符；DB 连接 finally close()）；mergeAltDigestIntoMessages（digest 段以 \n\n 追加进首条 system 消息末尾；极端无 system 时前置一条附加 system）；runStream 在构建请求前 await 计算一次（try/catch 失败→null 零注入）得 baseMessages，识图两条 workMessages 组装改基于 baseMessages，摘录窗口内换号中止 rt.aborted 早退
+- digest 格式：每账号一块「〔小号名/匿名账号〕（手机号）与你的最近聊天（最近消息：N分钟/小时/天/个月前）：」+ 每行「用户：xxx」或「对方角色名：xxx」（对方名=小号库 contacts 映射，缺省按端兜底 微信联系人/QQ好友/联系人；小助手会话=小助手）；块间空行；注入后整体被 buildAltAccountsSection 包上标题与规则文案
+- 注入路径清单（主账号下全部生效）：微信私聊 wechat.tsx、QQ 私聊 qq.tsx、信息联系人会话与信息小助手会话 chat.tsx（小助手无人设且时间感知关时无 system → 前置附加 system 注入）、wx-group/qq-group 群聊、group-social 社交主动私信、quit-flow 退圈后台流——均经 beginChatStream→runStream 统一注入。不注入：电话通话（phone turn/answer/followup/proactive、call-upstream 服务端 persona 直调，ctx 无该字段零破坏）、cross-app-reach/friend-state（各自直接 fetch /api/chat 的后台一次性生成，不在需求两类会话范围）、世界书/时间感知/回复条数/朋友圈/识图机制本身零改动（digest 追加在各 App 组好的 system 末尾，不影响其内容）
+- 记忆隔离验证（只验证不改）：memory.ts 全部读写走 kvGet/kvSet/kvDel/kvDelByPrefix（idb-kv 内存写穿层）→ localDB 'kv' store → resolveDbName() 当前账号库，mem-frag/ltm/long/settings/round/msgcount/anchor 前缀全在 idb-kv 迁移清单内，按账号库天然隔离；memory.ts 无任何直接 indexedDB/openDB 调用；512-538 行 window.localStorage.removeItem 仅为删联系人时清理迁移遗留旧键（只删不写，无跨账号泄漏）。结论：大号聊天只读大号记忆、小号聊天只读小号记忆（空库=无记忆=陌生人）天然成立；digest 仅单向只读小号库，不写不泄露
+- 验证：bunx tsc --noEmit 全绿；eslint 对两个改动文件 + src/lib + src/components/ios + src/app 全绿（bun run lint 全量在沙箱内被 SIGKILL OOM——qq.tsx/wechat.tsx 超 500KB 触发 BABEL 反优化占内存所致的环境限制，非本次改动引入，分目录 lint 佐证无新增错误）；未起 dev server，代码级自审确认：persona.ts 为纯文本注入无 UI/样式路径，深浅色零副作用；beginChatStream 初始 activePayloads 登记与 runStream 覆盖登记的时序窗口与识图既有行为一致，bg-turn 接力 payload 含 digest
+- 未动文件：accounts.ts/db.ts/settings/qq/wechat/phone/chat 组件均未修改（git status 与本任务改动面一致）
+
+Stage Summary:
+- AI 认知隔离完成：小号侧 AI 视用户为陌生人（空库零注入）；主账号下 wx/qq/信息联系人+小助手会话全部注入【用户的小号】摘录段，AI 能答大号用户问起小号的事且不点破大小号同一人；大小号记忆/聊天记录完全隔离（按账号库天然成立，digest 单向只读小号库）
+- 产物：src/lib/ios/persona.ts、src/lib/chat-stream-store.ts；tsc 全绿、改动面 lint 全绿
+
+---
+Task ID: 40-F（含 40-B/C/D/E 集成与修复）
+Agent: Z.ai Code（主会话）
+Task: 多账号系统收尾——子代理成果集成、跨账号显示 BUG 修复、E2E 隔离实测、登记入库
+
+Work Log:
+- 子代理成果：40-B persona.ts/chat-stream-store.ts（小号聊天摘录注入 system prompt，仅大号视角；computeAltAccountsDigest 跨库读小号 kv 聊天+contacts 映射，摘录 24 条/单条 80 字/总 2400 字；记忆隔离验证=全走 kv 无直连 IndexedDB）；40-C settings.tsx 切换账号页（入口行/列表/命名弹窗建小号与匿名号/⊖ 删除确认）；40-D qq.tsx 账号与安全账号管理区 + wechat.tsx 切换账号页（截图同款布局/管理删除）+ LS_SESSION 与 queued-turns 键按账号隔离；40-E AnonSwitchSheet 共享组件 + 电话拨号键盘匿名入口/徽标 + 信息列表匿名入口
+- 主会话修复 3 处：①大号行跨账号显示 BUG（settings/qq/wechat 三处均误用当前库机主资料——小号视角下大号行显示成小号资料）：contacts-store 新增 mainOwnerContact()（非 main 视角直开 ios-phone-db 只读），三 UI 统一改用；②wechat.tsx 账号页主卡头像/微信号同步改 mainOwner 来源；③phone.tsx 键盘左上身份徽标硬编码「主号」→ 按当前账号显示（主号/小号名/匿名）
+- 工具陷阱记录：tool 输出渲染会吞「[m」字符串（const [managing 显示成 const anaging）导致误判语法损坏——用 python char-code 转储识破，避免误改；MultiEdit 报错但仍可能已应用前序编辑（非原子回滚），失败后必须 rg 复核实际状态
+- E2E（392×856，全真实手势/坐标点击）：设置切换账号页 main/alt 双视角渲染 ✓；创建小号→自动切换 reload ✓；小号库自动建档（小号1/14286350653/3347603633/ajsy5pjt8y=注册表一致）✓；小号信息会话全新、AI 陌生人回复（"你好小红，很高兴认识你！"）✓；切回大号 main 数据完好 ✓；大号问「我的小号跟你聊了什么」→ AI 准确引用小号原话（"它叫小红，第一次使用…打招呼"）且未说破同一人——digest 全链路（跨库读→system prompt→SDK 兜底回复）实证 ✓；电话拨号键盘创建匿名号→切换→「匿名」徽标+脱敏行 32****9653+实心胶囊 ✓；main 视角「主号」恢复 ✓；reload 后 active 账号持久化 ✓
+- 说明：QQ/微信账号页与 settings 共用同一 accounts API，E2E 与 settings 页等效覆盖（代码级+编译级验证）；AI 语音回复的文本存 voice.localText，digest 只读 text/content 字段（语音回复暂不入摘录，后续可扩展）
+- tsc + bun run lint 全绿；数据清理：ios-phone-db + 两个账号库(--amuqu24zqbg6x/--amuqun88erjc3) + ios-phone-fonts + localStorage 全清
+
+Stage Summary:
+- 多账号系统全量落地：大号/小号/匿名号每账号独立 IndexedDB（大号零迁移），切换=持久化标记+整页重启零残留；四处入口（设置账号管理页/QQ账号与安全/微信切换账号/电话与信息匿名号码快速切换）；AI 认知隔离（小号=陌生人、记忆互不泄露、大号可问小号事且引用聊天记录不点破）
+- 改动文件：accounts.ts(新) / db.ts / contacts-store.ts / PhoneShell.tsx / persona.ts / chat-stream-store.ts / settings.tsx / qq.tsx / wechat.tsx / phone.tsx / chat.tsx / AnonSwitchSheet.tsx(新)

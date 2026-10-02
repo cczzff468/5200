@@ -21,6 +21,7 @@ import {
   Loader2,
   Lock,
   MessageSquareText,
+  Minus,
   Monitor,
   Moon,
   Phone as PhoneIcon,
@@ -37,6 +38,7 @@ import {
   Type,
   Upload,
   User,
+  UsersRound,
   Volume2,
   Wifi,
   Wrench,
@@ -86,7 +88,18 @@ import {
   setFaceRef,
   type ImgGenFaceRef,
 } from '@/lib/imggen';
-import { listContacts } from '@/lib/ios/contacts-store';
+import { listContacts, mainOwnerContact, ownerRealName } from '@/lib/ios/contacts-store';
+import {
+  accountDisplayName,
+  createAccount,
+  deleteAccount,
+  getActiveAccount,
+  getActiveAccountId,
+  getAccounts,
+  MAIN_ACCOUNT_ID,
+  switchAccount,
+  type PhoneAccount,
+} from '@/lib/ios/accounts';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
@@ -112,7 +125,7 @@ import {
 
 // ---------------- 常量与类型 ----------------
 
-type Page = 'root' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'font' | 'api' | 'vision' | 'imggen' | 'voice' | 'about' | 'lock';
+type Page = 'root' | 'account' | 'profile' | 'theme' | 'notification' | 'storage' | 'wallpaper' | 'font' | 'api' | 'vision' | 'imggen' | 'voice' | 'about' | 'lock';
 
 const IOS_RED = '#FF453A';
 
@@ -207,7 +220,7 @@ function RowIcon({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
   );
 }
 
-/** 主列表行：左彩色方块图标 + 标签，右侧可选值 / ChevronRight */
+/** 主列表行：左彩色方块图标 + 标签，右侧可选值 / ChevronRight（testId：需要 E2E 定位的行传入） */
 function MainRow({
   icon,
   tone,
@@ -215,6 +228,7 @@ function MainRow({
   value,
   onClick,
   chevron,
+  testId,
 }: {
   icon: LucideIcon;
   tone: string;
@@ -222,6 +236,7 @@ function MainRow({
   value?: string;
   onClick?: () => void;
   chevron?: boolean;
+  testId?: string;
 }) {
   const showChevron = chevron ?? onClick !== undefined;
   const inner = (
@@ -241,6 +256,7 @@ function MainRow({
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={onClick}
       className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/50"
     >
@@ -374,6 +390,30 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
     void localDB.put('settings', { key: 'radios', value: { airplane: v } });
   };
 
+  // 「切换账号」行右侧值：当前账号显示名（多账号系统 Task 40）。
+  // 大号 = 机主联系人名（当前账号库的 user 联系人）回退「机主」；小号/匿名号 = 注册名。
+  const [accountName, setAccountName] = useState('机主');
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const acc = getActiveAccount();
+        if (acc.id !== MAIN_ACCOUNT_ID) {
+          if (!cancelled) setAccountName(accountDisplayName(acc));
+          return;
+        }
+        const name = await ownerRealName();
+        if (!cancelled) setAccountName(name || accountDisplayName(acc));
+      } catch {
+        // 资料不可用时回退「机主」
+        if (!cancelled) setAccountName('机主');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const wallpaperName = customWallpaperUrl
     ? '自定义'
     : (WALLPAPER_PRESETS.find((p) => p.id === wallpaperPreset)?.name ?? '自定义');
@@ -399,8 +439,8 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
         </div>
       </div>
       <div className="no-scrollbar flex-1 overflow-y-auto pb-5">
-        {/* 个人资料卡（点击进入个人信息：头像/名字/标签） */}
-        <div className="mx-4 mt-2 overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
+        {/* 个人资料卡（点击进入个人信息：头像/名字/标签）+ 切换账号入口行（同一分组） */}
+        <div className="mx-4 mt-2 divide-y divide-black/[0.05] overflow-hidden rounded-[22px] bg-white/55 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:divide-white/[0.06] dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <button
             type="button"
             onClick={() => onOpen('profile')}
@@ -427,6 +467,15 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             </span>
             <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
           </button>
+          {/* 切换账号入口（Task 40-C）：右侧值 = 当前账号显示名 */}
+          <MainRow
+            icon={UsersRound}
+            tone={TONE_CYAN}
+            label="切换账号"
+            value={accountName}
+            onClick={() => onOpen('account')}
+            testId="settings-account-entry"
+          />
         </div>
 
         {/* 无线控制（演示项） */}
@@ -3346,6 +3395,284 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
   );
 }
 
+// ---------------- 切换账号 ----------------
+
+/** 账号首字母圆配色：小号=蓝绿系、匿名号=深灰系（深浅色各配一版） */
+const ACCOUNT_AVATAR_TONE: Record<'alt' | 'anon', string> = {
+  alt: 'bg-[#D5F0EC] text-[#0E7C6B] dark:bg-[#0E7C6B]/30 dark:text-[#8FDCCE]',
+  anon: 'bg-[#E4E4E9] text-[#55555C] dark:bg-white/[0.14] dark:text-[#C7C7CC]',
+};
+
+/**
+ * 切换账号页（多账号系统 Task 40）：
+ * - 账号列表：大号 = 机主资料（当前账号联系人库的 user 联系人实时资料），小号/匿名号 = 注册名 + 虚拟号；
+ * - 点非当前行 switchAccount()（写标记 + 整页 reload，无确认弹窗）；
+ * - 添加小号/匿名号 → 受控命名小弹窗（可留空用默认名）→ createAccount() → 立即 switchAccount()；
+ * - 非当前、非大号行右侧常驻 ⊖ 圆钮（iOS 订阅管理风）→ 确认弹窗（写明清除全部数据）→ deleteAccount()，
+ *   返回 error（大号/当前号等兜底）用页内 toast 提示。
+ */
+function AccountSwitchPage({ onBack }: { onBack: () => void }) {
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
+  const [activeId, setActiveId] = useState<string>(() => getActiveAccountId());
+  // 机主实时资料（大号显示名/号码/头像）：跨账号直读大号库（mainOwnerContact），
+  // 避免在小号视角下误用当前库的机主联系人
+  const [owner, setOwner] = useState<{ name: string; phone: string; avatar: string | null }>({
+    name: '',
+    phone: '',
+    avatar: null,
+  });
+  // 命名小弹窗：null=关闭；'alt'/'anon'=正在创建的账号类型
+  const [namingKind, setNamingKind] = useState<'alt' | 'anon' | null>(null);
+  const [namingInput, setNamingInput] = useState('');
+  // 待删除账号 id（确认弹窗）
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [toast, showToast] = useLocalToast();
+
+  // 机主资料异步加载（跨账号读大号库；失败回退「机主」+ 注册表字段）
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const me = await mainOwnerContact();
+        if (cancelled) return;
+        setOwner({
+          name: me?.name?.trim() ?? '',
+          phone: me?.phone?.trim() ?? '',
+          avatar: me?.avatar ?? null,
+        });
+      } catch {
+        // IndexedDB 不可用时保持空资料：显示名回退「机主」，号码回退注册表
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** 账号显示名：大号 = 机主联系人名回退「机主」；小号/匿名号 = 注册名 */
+  const displayName = (acc: PhoneAccount): string => {
+    if (acc.id === MAIN_ACCOUNT_ID) return owner.name || accountDisplayName(acc);
+    return acc.name;
+  };
+
+  /** 副行小字：kind 徽标文案 + 号码（大号用实时机主号码，回退注册表号码） */
+  const subline = (acc: PhoneAccount): string => {
+    const badge = acc.kind === 'main' ? '大号' : acc.kind === 'alt' ? '小号' : '匿名号码';
+    const phone = (acc.id === MAIN_ACCOUNT_ID ? owner.phone || acc.phone : acc.phone).trim();
+    return phone ? `${badge} · ${phone}` : badge;
+  };
+
+  /** 头像圆：大号 = 机主头像回退首字母中性圆；小号/匿名号 = 首字母彩色圆（蓝绿系/深灰系） */
+  const renderAvatar = (acc: PhoneAccount) => {
+    const name = displayName(acc);
+    const initial = [...name.trim()][0]?.toUpperCase() || '?';
+    if (acc.id === MAIN_ACCOUNT_ID) {
+      if (owner.avatar) {
+        return <img src={owner.avatar} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />;
+      }
+      return (
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#D8D8DD] to-[#AEB0B8] text-[16px] font-medium text-[#7C7C84]">
+          {initial}
+        </span>
+      );
+    }
+    return (
+      <span
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[16px] font-medium ${ACCOUNT_AVATAR_TONE[acc.kind]}`}
+      >
+        {initial}
+      </span>
+    );
+  };
+
+  const deletingAccount = accounts.find((a) => a.id === deletingId) ?? null;
+
+  return (
+    <DetailShell title="切换账号" onBack={onBack} gray>
+      {/* 账号列表：当前账号右侧绿色对勾；非当前行点击即切换（写标记 + 整页重启，无确认） */}
+      <GroupCard>
+        {accounts.map((acc) => {
+          const isCurrent = acc.id === activeId;
+          const name = displayName(acc);
+          const deletable = acc.id !== MAIN_ACCOUNT_ID && !isCurrent;
+          return (
+            <div key={acc.id} className="flex min-h-[64px] items-center gap-2 py-1 pl-4 pr-3" data-testid={`settings-account-row-${acc.id}`}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isCurrent) return;
+                  // switchAccount 内部写标记后 location.reload()，调用后页面立即重启，勿再操作 DOM
+                  switchAccount(acc.id);
+                }}
+                aria-label={isCurrent ? `当前账号：${name}` : `切换到 ${name}`}
+                className="flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left transition-opacity active:opacity-60"
+              >
+                {renderAvatar(acc)}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[16px] leading-snug">{name}</span>
+                  <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">{subline(acc)}</span>
+                </span>
+              </button>
+              {isCurrent ? (
+                <Check
+                  className="mr-1 h-[22px] w-[22px] shrink-0"
+                  style={{ color: '#34C759' }}
+                  strokeWidth={2.6}
+                  aria-label="当前账号"
+                />
+              ) : deletable ? (
+                <button
+                  type="button"
+                  data-testid={`settings-account-delete-${acc.id}`}
+                  aria-label={`删除 ${name}`}
+                  onClick={() => setDeletingId(acc.id)}
+                  className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[#FF453A]/45 text-[#FF453A] transition-colors active:bg-[#FF453A]/10"
+                >
+                  <Minus className="h-[14px] w-[14px]" strokeWidth={2.8} />
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+      </GroupCard>
+
+      {/* 添加账号 */}
+      <div className="mt-5">
+        <GroupCard>
+          <button
+            type="button"
+            data-testid="settings-account-add-alt"
+            onClick={() => {
+              setNamingInput('');
+              setNamingKind('alt');
+            }}
+            className="flex h-[50px] w-full items-center gap-3 px-4 text-left transition-colors active:bg-muted/50"
+          >
+            <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[#34C759]">
+              <Plus className="h-[14px] w-[14px] text-white" strokeWidth={3} />
+            </span>
+            <span className="flex-1 text-[16px]">添加小号</span>
+          </button>
+          <button
+            type="button"
+            data-testid="settings-account-add-anon"
+            onClick={() => {
+              setNamingInput('');
+              setNamingKind('anon');
+            }}
+            className="flex h-[50px] w-full items-center gap-3 px-4 text-left transition-colors active:bg-muted/50"
+          >
+            <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[#34C759]">
+              <Plus className="h-[14px] w-[14px] text-white" strokeWidth={3} />
+            </span>
+            <span className="flex-1 text-[16px]">新建匿名号码</span>
+          </button>
+        </GroupCard>
+        <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
+          切换后所有 App 数据（聊天/记忆/联系人/朋友圈）随之切换并独立保存。
+        </p>
+      </div>
+
+      {/* 命名小弹窗：输入可留空（默认名「小号N」/「匿名账号」），创建后立即切换过去 */}
+      <AlertDialog
+        open={namingKind !== null}
+        onOpenChange={(open) => {
+          if (!open) setNamingKind(null);
+        }}
+      >
+        <AlertDialogContent className="w-[270px] gap-0 rounded-[14px] p-0 sm:w-[270px] sm:max-w-[270px]">
+          <AlertDialogHeader className="gap-1.5 px-5 pb-3 pt-5 sm:text-center">
+            <AlertDialogTitle className="text-center text-[17px] font-semibold leading-snug">
+              {namingKind === 'anon' ? '新建匿名号码' : '添加小号'}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-center text-[13px] leading-snug">
+              {namingKind === 'anon'
+                ? '给这个身份起个名字，留空则默认「匿名账号」；创建后立即切换过去。'
+                : '给小号起个名字，留空则默认「小号N」；创建后立即切换过去。'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="px-5 pb-4">
+            <Input
+              data-testid="settings-account-name-input"
+              value={namingInput}
+              onChange={(e) => setNamingInput(e.target.value)}
+              placeholder={namingKind === 'anon' ? '匿名账号' : '小号N'}
+              maxLength={20}
+              aria-label="账号名称"
+            />
+          </div>
+          <AlertDialogFooter className="flex-row gap-0 border-t border-border sm:flex-row">
+            <AlertDialogCancel className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-normal text-foreground shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0">
+              取消
+            </AlertDialogCancel>
+            <span aria-hidden="true" className="w-px shrink-0 self-stretch bg-border" />
+            <AlertDialogAction
+              data-testid="settings-account-create-confirm"
+              className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-medium text-[#0A84FF] shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0"
+              onClick={() => {
+                const kind = namingKind;
+                setNamingKind(null);
+                if (!kind) return;
+                const acc = createAccount(kind, namingInput);
+                // 写标记 + location.reload()：页面立即重启进入新账号，勿再操作 DOM
+                switchAccount(acc.id);
+              }}
+            >
+              创建
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 删除确认：写明将清除该账号全部数据；API 兜底失败（大号/当前号）toast 提示 */}
+      <AlertDialog
+        open={deletingId !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeletingId(null);
+        }}
+      >
+        <AlertDialogContent className="w-[270px] gap-0 rounded-[14px] p-0 sm:w-[270px] sm:max-w-[270px]">
+          <AlertDialogHeader className="gap-1.5 px-5 pb-4 pt-5 sm:text-center">
+            <AlertDialogTitle className="text-center text-[17px] font-semibold leading-snug">
+              删除「{deletingAccount ? displayName(deletingAccount) : ''}」？
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-center text-[13px] leading-snug">
+              将删除该账号并清除其全部数据（聊天、联系人、记忆、朋友圈等），此操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-0 border-t border-border sm:flex-row">
+            <AlertDialogCancel className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-normal text-foreground shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0">
+              取消
+            </AlertDialogCancel>
+            <span aria-hidden="true" className="w-px shrink-0 self-stretch bg-border" />
+            <AlertDialogAction
+              data-testid="settings-account-delete-confirm"
+              className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-medium shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0"
+              style={{ color: IOS_RED }}
+              onClick={() => {
+                const id = deletingId;
+                setDeletingId(null);
+                if (!id) return;
+                const result = deleteAccount(id);
+                if (result.ok) {
+                  setAccounts(getAccounts());
+                  showToast('已删除该账号');
+                } else {
+                  showToast(result.error ?? '删除失败');
+                }
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <LocalToast msg={toast} />
+    </DetailShell>
+  );
+}
+
 function AboutPage({ onBack }: { onBack: () => void }) {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const uaShort = ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
@@ -4728,6 +5055,7 @@ export default function SettingsApp() {
   return (
     <IOSScreen className="relative">
       {page === 'root' && <RootPage onOpen={setPage} />}
+      {page === 'account' && <AccountSwitchPage onBack={() => setPage('root')} />}
       {page === 'profile' && <ProfilePage onBack={() => setPage('root')} />}
       {page === 'theme' && <ThemePage onBack={() => setPage('root')} />}
       {page === 'notification' && <NotificationPage onBack={() => setPage('root')} />}

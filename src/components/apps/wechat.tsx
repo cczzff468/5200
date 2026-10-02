@@ -182,7 +182,9 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
-import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+// 多账号（Task 40）：注册表/切换/创建/删除走 accounts API；排队补跑键按账号隔离（大号保持原键）
+import { MAIN_ACCOUNT_ID, accountScopedKey, createAccount, deleteAccount, getAccounts, getActiveAccountId, switchAccount, type PhoneAccount } from '@/lib/ios/accounts';
+import { loginWechat, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealName, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
@@ -467,7 +469,9 @@ let wxActiveChatId: string | null = null;
  *  37-a：队列项扩展 event 字段——回复中触发的系统事件（拉黑申请同意/拒绝、退卡）随补跑回合保留
  *  （原实现直接 runAiTurn：同会话已有流时 beginChatStream 返回 false，事件被静默丢弃、AI 绝口不提） */
 type WxQueuedTurn = { kind: 'kick'; event?: string };
-const WX_QUEUED_TURNS_KEY = 'wx-queued-turns';
+// 多账号（Task 40-D）：按账号隔离（大号=原键向后兼容；小号 wx-queued-turns--{id}）。
+// 页面生命周期内当前账号恒定（切换=整页 reload），模块加载时求值一次即安全。
+const WX_QUEUED_TURNS_KEY = accountScopedKey('wx-queued-turns');
 
 /** 读取并规范化排队表（兼容旧格式：contactId 字符串数组 = 纯消息补跑，无事件） */
 function readWxQueuedTurns(): Record<string, WxQueuedTurn[]> {
@@ -10823,8 +10827,26 @@ function ProfilePage({
 
 // ---------------- 微信设置页（含退出登录） ----------------
 
-function WxSettingsPage({ onBack, onLogout }: { onBack: () => void; onLogout: () => void }) {
-  const rows = ['账号与安全', '青少年模式', '关怀模式', '消息通知', '隐私', '通用', '关于微信'];
+function WxSettingsPage({
+  onBack,
+  onLogout,
+  onOpenAccountSwitch,
+}: {
+  onBack: () => void;
+  onLogout: () => void;
+  /** 多账号（Task 40-D）：「切换账号」行 → 打开切换子页 */
+  onOpenAccountSwitch: () => void;
+}) {
+  const rows: { label: string; onClick?: () => void; testid?: string }[] = [
+    { label: '账号与安全' },
+    { label: '切换账号', onClick: onOpenAccountSwitch, testid: 'wx-account-entry' },
+    { label: '青少年模式' },
+    { label: '关怀模式' },
+    { label: '消息通知' },
+    { label: '隐私' },
+    { label: '通用' },
+    { label: '关于微信' },
+  ];
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
       <div className="pt-[54px]">
@@ -10837,15 +10859,17 @@ function WxSettingsPage({ onBack, onLogout }: { onBack: () => void; onLogout: ()
       </div>
       <div className="flex-1 overflow-y-auto px-4 pt-3">
         <div className="overflow-hidden rounded-[10px] bg-white dark:bg-[#1A1A1A]">
-          {rows.map((label, i) => (
+          {rows.map((r, i) => (
             <button
-              key={label}
+              key={r.label}
               type="button"
+              data-testid={r.testid}
+              onClick={r.onClick}
               className={`flex w-full items-center justify-between px-4 py-3 text-[16px] active:bg-black/5 ${
                 i > 0 ? 'border-t border-black/5 dark:border-white/10' : ''
               }`}
             >
-              <span>{label}</span>
+              <span>{r.label}</span>
               <ChevronRight className="h-4 w-4 opacity-30" strokeWidth={2} />
             </button>
           ))}
@@ -10859,6 +10883,209 @@ function WxSettingsPage({ onBack, onLogout }: { onBack: () => void; onLogout: ()
           退出登录
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------- 切换账号页（多账号 Task 40-D：灰底 + 顶部大标题区 + 账号卡列表 + 添加 + 管理） ----------------
+
+/** 小号/匿名号首字母圆：小号暖色系 / 匿名号灰黑系，深色模式降饱和变体（与 QQ 端同规则） */
+function WxAccountBubble({ name, kind, size = 52 }: { name: string; kind: 'alt' | 'anon'; size?: number }) {
+  const first = name.trim().charAt(0) || (kind === 'anon' ? '匿' : '小');
+  const letter = /[a-z]/i.test(first) ? first.toUpperCase() : first;
+  return (
+    <div
+      aria-hidden="true"
+      className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${
+        kind === 'anon'
+          ? 'bg-gradient-to-br from-[#A9AEB6] to-[#5C6167] dark:from-[#767B82] dark:to-[#41454B]'
+          : 'bg-gradient-to-br from-[#FFB56E] to-[#EE7A4B] dark:from-[#A96B3F] dark:to-[#84502C]'
+      }`}
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.4) }}
+    >
+      {letter}
+    </div>
+  );
+}
+
+function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void }) {
+  // 页内 toast（App 根 toast 在提前 return 分支不渲染，同收藏页口径）
+  const [toast, showToast] = useLocalToast();
+  // 注册表账号列表：切换 = 整页重启（页面生命周期内不变）；删除成功后本地同步移除
+  //（当前账号/大号不可删，删除后无需 reload）
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts());
+  const activeId = getActiveAccountId();
+  /** 大号机主资料（跨账号直读大号库；不能用 me——小号视角下 me 是小号身份，Task 40-F 修正） */
+  const [mainOwner, setMainOwner] = useState<{ name: string; wechatId: string; avatar: string | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void mainOwnerContact().then((o) => {
+      if (alive) setMainOwner(o ? { name: o.name?.trim() ?? '', wechatId: o.wechatId?.trim() ?? '', avatar: o.avatar } : null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  /** 管理模式：非当前、非大号的卡片左上出现 ⊖ 删除钮 */
+  const [managing, setManaging] = useState(false);
+  /** 删除二次确认目标（受控弹窗，禁 window.confirm） */
+  const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
+
+  const handleAdd = () => {
+    // 新建小号并立即切换（switchAccount 写标记后整页重启，调用处不再 setState/跳转）
+    const acc = createAccount('alt');
+    switchAccount(acc.id);
+  };
+
+  const confirmDelete = () => {
+    const target = delTarget;
+    if (!target) return;
+    setDelTarget(null);
+    const res = deleteAccount(target.id);
+    if (res.ok) {
+      setAccounts(getAccounts());
+      setManaging(false);
+      showToast('已删除该账号');
+    } else {
+      // 大号/当前号等拒绝场景（防御：管理模式已过滤，正常不可达）
+      showToast(res.error || '删除失败');
+    }
+  };
+
+  return (
+    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+      {/* 顶栏：返回 + 居中标题 + 管理/完成（有多个账号才显示管理） */}
+      <div className="pt-[54px]">
+        <div className="relative flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-account-back" onClick={onBack} className="active:opacity-50">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-[17px] font-medium">切换账号</span>
+          {accounts.length > 1 && (
+            <button
+              type="button"
+              data-testid="wx-account-manage"
+              onClick={() => {
+                setDelTarget(null);
+                setManaging((v) => !v);
+              }}
+              className="ml-auto mr-1 min-w-[44px] text-right text-[15.5px] text-[#576B95] active:opacity-60"
+            >
+              {managing ? '完成' : '管理'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10 pt-9">
+        {/* 顶部：微信灰 logo + 大字（对照截图） */}
+        <div className="flex flex-col items-center" data-testid="wx-account-header">
+          <MessageCircle className="h-[52px] w-[52px] text-black/20 dark:text-white/20" strokeWidth={1.4} aria-hidden="true" />
+          <p className="mt-4 text-[19px] font-medium text-black/80 dark:text-white/80">轻触头像以切换账号</p>
+        </div>
+        <div className="mb-6 mt-5 h-px bg-black/10 dark:bg-white/10" />
+
+        {/* 账号卡列表：白卡（深色深灰卡）；当前账号绿点 +「当前使用」；点其他卡 → switchAccount */}
+        <div className="space-y-3">
+          {accounts.map((acc) => {
+            const isCurrent = acc.id === activeId;
+            const isMain = acc.id === MAIN_ACCOUNT_ID;
+            const name = isMain ? mainOwner?.name || '机主' : acc.name;
+            const wxid = isMain ? mainOwner?.wechatId || acc.wechatId : acc.kind === 'anon' ? acc.phone : acc.wechatId;
+            const showDelete = managing && !isCurrent && !isMain;
+            return (
+              <div key={acc.id} className="relative">
+                {showDelete && (
+                  <button
+                    type="button"
+                    aria-label={`删除账号${name}`}
+                    data-testid={`wx-account-delete-${acc.id}`}
+                    onClick={() => setDelTarget(acc)}
+                    className="absolute -left-3 -top-3 z-10 grid h-11 w-11 place-items-center active:opacity-70"
+                  >
+                    <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-[#FA5151] shadow-sm" aria-hidden="true">
+                      <span className="block h-[2px] w-[10px] rounded-full bg-white" />
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid={`wx-account-card-${acc.id}`}
+                  onClick={() => {
+                    if (managing || isCurrent) return;
+                    switchAccount(acc.id); // 写标记后整页重启，不再 setState
+                  }}
+                  className="flex w-full items-center gap-3 rounded-[14px] bg-white px-4 py-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
+                >
+                  {isMain ? (
+                    <WxAvatar src={mainOwner?.avatar ?? null} alt={name} size={52} />
+                  ) : (
+                    <WxAccountBubble name={name} kind={acc.kind === 'anon' ? 'anon' : 'alt'} size={52} />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[16.5px] font-medium">{name}</span>
+                    <span className="mt-0.5 block truncate text-[12.5px] text-black/40 dark:text-white/40">微信号：{wxid || '未设置'}</span>
+                  </span>
+                  {isCurrent && (
+                    <span className="flex shrink-0 items-center gap-1.5" aria-label="当前使用">
+                      <span className="h-2 w-2 rounded-full bg-[#07C160]" aria-hidden="true" />
+                      <span className="text-[13px] text-black/45 dark:text-white/45">当前使用</span>
+                    </span>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+
+          {/* 添加账号：虚线框卡（对照截图）→ 新建小号并立即切换 */}
+          <button
+            type="button"
+            data-testid="wx-account-add"
+            onClick={handleAdd}
+            className="flex h-[84px] w-full items-center justify-center gap-1.5 rounded-[14px] border-[1.5px] border-dashed border-black/20 text-black/40 active:bg-black/[0.03] dark:border-white/25 dark:text-white/40"
+          >
+            <Plus className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
+            <span className="text-[15.5px]">添加账号</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 删除二次确认（微信风受控弹窗）：该账号的独立聊天库/登录态等本地数据一并清除 */}
+      {delTarget && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-8" onClick={() => setDelTarget(null)}>
+          <div
+            role="dialog"
+            aria-label={`删除账号${delTarget.name}`}
+            className="w-full max-w-[320px] rounded-[10px] bg-white p-5 dark:bg-[#1A1A1A]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-[16px] font-medium">删除账号</p>
+            <p className="mt-2.5 text-[13.5px] leading-[1.7] text-black/70 dark:text-white/70">
+              将删除「{delTarget.name}」：该账号的聊天记录、联系人、登录态等本地数据会一并清除，此操作不可恢复。
+            </p>
+            <div className="mt-4 flex gap-2.5">
+              <button
+                type="button"
+                data-testid="wx-account-delete-cancel"
+                onClick={() => setDelTarget(null)}
+                className="h-10 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-80 dark:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="wx-account-delete-confirm"
+                onClick={confirmDelete}
+                className="h-10 flex-1 rounded-[8px] bg-[#FA5151] text-[14px] font-medium text-white active:opacity-80"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <LocalToast msg={toast} />
     </div>
   );
 }
@@ -10963,7 +11190,8 @@ type Page =
   | 'favorites'
   | 'album'
   | 'search'
-  | 'momentsSettings';
+  | 'momentsSettings'
+  | 'accountSwitch';
 
 // ---------------- 搜索页（对照微信真机：返回 + 搜索框「搜索本地或网络结果」+ 最近在搜 + 本地/网络结果） ----------------
 
@@ -12511,7 +12739,10 @@ function MainScreen({
   }
   if (page === 'profile')
     return <ProfilePage me={me} record={meRecord} onBack={() => setPage('main')} onToast={showToast} />;
-  if (page === 'settings') return <WxSettingsPage onBack={() => setPage('main')} onLogout={onLogout} />;
+  if (page === 'settings')
+    return <WxSettingsPage onBack={() => setPage('main')} onLogout={onLogout} onOpenAccountSwitch={() => setPage('accountSwitch')} />;
+  // 切换账号子页（Task 40-D）：注册表账号卡 + 添加 + 管理
+  if (page === 'accountSwitch') return <WxAccountSwitchPage me={me} onBack={() => setPage('settings')} />;
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
