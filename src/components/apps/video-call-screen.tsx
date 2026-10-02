@@ -36,6 +36,10 @@
  *   ②右上角 AI 头像卡再次加高（wx 104×160 / qq·phone 100×152，拨号卡+互换卡同步无跳变）；
  *   ③AI 头像卡支持按住拖拽移位（useMiniCardDrag：拨号卡/互换卡整通共享位置，移动 <6px
  *   仍算点按=互换不受影响，位置钳制在屏幕内）。
+ * - Task 28-e（用户追加）：①右上角「我的画面卡」与 AI 头像卡一样大（wx 104×160 /
+ *   qq·phone 100×152，原自适应高度改为与 AI 卡同高固定）；②「我的画面卡」同样支持
+ *   按住拖拽移位（独立 pipDrag 实例与 AI 卡互不干扰，移动 <6px 仍算点按互换；
+ *   两卡恒在最上层 z-20）。
  *
  * 权限边界：摄像头只在「拨出即开 / 接听时开」首次使用时申请；拒绝后文字/语音聊天与其他功能不受影响。
  */
@@ -369,11 +373,11 @@ function LocalFullView({
   );
 }
 
-/** 我方小窗（用户摄像头 PIP；关/拒绝时显示用户头像占位——Task 27 不再显示「摄像头已关」文字；
- *  基础量拆开传防 ref 容器对象渲染期访问）。
- *  Task 23：前置摄像头镜像预览（后置不镜像）+ 高度随视频实际宽高比自适应——
- *  固定高在宽高比不匹配时 object-cover 会重度裁剪，画面显得「太放大」；
- *  点击小窗与对方画面互换（Task 23：互换画面按钮已删，点右上角小窗互换） */
+/** 我方小窗（用户摄像头 PIP；关/拒绝时显示用户头像占位——Task 27 不再显示「摄像头已关」文字）。
+ *  Task 23：前置摄像头镜像预览（后置不镜像）；点击小窗与对方画面互换（Task 23：互换画面按钮已删）。
+ *  Task 28-e：尺寸恒与 AI 头像卡一致（wx 104×160 / qq·phone 100×152，不再随视频宽高比自适应）；
+ *  支持按住拖拽移位（dragPos/dragHandlers=useMiniCardDrag 产物，独立实例与 AI 卡互不干扰；
+ *  移动 <6px 仍算点按互换）；z-20 恒在最上层（与 AI 卡同层，拖到底部不被控制区吞点按） */
 function LocalPipView({
   videoRef,
   live,
@@ -381,10 +385,10 @@ function LocalPipView({
   testId,
   onClick,
   mirrored,
-  height,
-  onMeta,
   myAvatar,
   shape = 'circle',
+  dragPos = null,
+  dragHandlers,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   live: boolean;
@@ -393,14 +397,14 @@ function LocalPipView({
   onClick?: () => void;
   /** 前置摄像头镜像预览 */
   mirrored: boolean;
-  /** 自适应高度（px）；不传则用 className 里的默认高度 */
-  height?: number;
-  /** 视频实际分辨率上报（供高度自适应计算） */
-  onMeta?: (w: number, h: number) => void;
   /** 用户头像（关闭/拒绝时显示） */
   myAvatar?: string | null;
   /** 头像形状：wx=方形圆角 / qq·phone=圆形 */
   shape?: 'circle' | 'square';
+  /** 拖拽后的绝对定位（null=用 className 里的默认定位类）；尺寸由 className 恒与 AI 卡一致 */
+  dragPos?: { left: number; top: number } | null;
+  /** 按住拖拽移位（useMiniCardDrag.dragProps 展开；拖拽后自动拦截紧随的 click 防误触互换） */
+  dragHandlers?: React.HTMLAttributes<HTMLButtonElement>;
 }) {
   return (
     <button
@@ -408,8 +412,9 @@ function LocalPipView({
       aria-label={live ? '我的画面，点击与对方画面互换' : '我的摄像头已关闭，点击与对方画面互换'}
       data-testid={testId}
       onClick={onClick}
-      style={height ? { height } : undefined}
-      className={`absolute z-10 overflow-hidden ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)] transition-transform active:scale-95 ${className}`}
+      {...dragHandlers}
+      style={dragPos ? { left: dragPos.left, top: dragPos.top } : undefined}
+      className={`absolute z-20 overflow-hidden ring-1 ring-white/25 shadow-[0_8px_24px_rgba(0,0,0,0.45)] transition-transform active:scale-95 select-none touch-none ${className}`}
     >
       {live ? (
         <video
@@ -419,10 +424,6 @@ function LocalPipView({
           autoPlay
           className="h-full w-full object-cover"
           style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
-          onLoadedMetadata={(e) => {
-            const el = e.currentTarget;
-            if (el.videoWidth > 0 && el.videoHeight > 0) onMeta?.(el.videoWidth, el.videoHeight);
-          }}
         />
       ) : (
         <span className="flex h-full w-full items-center justify-center bg-[#1b1b1f]">
@@ -442,13 +443,6 @@ function LocalPipView({
   );
 }
 
-/** PIP 高度自适应（Task 23/24）：按摄像头实际宽高比把小窗高度收敛到视频比例，过度裁剪会显得太放大；
- *  下限 64（Task 24 从 100 下调：4:3 画面 96 宽只需 72 高，之前被抬到 100 反而又裁了 28%） */
-function pipAdaptiveHeight(size: { w: number; h: number } | null, width: number, fallback: number): number {
-  if (!size || size.w <= 0 || size.h <= 0) return fallback;
-  return Math.max(64, Math.min(152, Math.round((width * size.h) / size.w)));
-}
-
 /** 来电打字点动画（对照微信/QQ 来电截图：头像下的呼吸点） */
 function TypingDots() {
   return (
@@ -465,10 +459,10 @@ function TypingDots() {
   );
 }
 
-/** 右上角 AI 头像卡「按住拖拽移位」（Task 28-d）：
+/** 右上角 mini 卡「按住拖拽移位」（Task 28-d AI 头像卡 / Task 28-e 我方画面卡，同一 hook）：
  *  - pos=null 时卡片用各自默认定位类（wx 右上/qq 拨号左上…），首次按下拖动时把卡片当前位置
  *    换算成根容器内绝对坐标，此后整通共享该位置（同一皮肤的拨号卡/互换 mini 卡读写同一状态，
- *    拖过一次换到哪张卡都跟随）；
+ *    拖过一次换到哪张卡都跟随）；我方画面卡与 AI 卡用各自独立 hook 实例，位置互不干扰；
  *  - 指针事件统一鼠标/触摸（setPointerCapture 保证移出卡片仍持续跟踪）；移动 <6px 视为点按
  *    （互换卡的「点按互换」不受影响），拖拽过则在捕获阶段拦截紧随的 click 防误触互换；
  *  - 位置钳制在根容器内（8px 边距），touch-none+select-none 防触摸手势/长按选中劫持拖拽。 */
@@ -858,6 +852,8 @@ function WxVideoCall(props: VideoCallScreenProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Task 28-d：右上角 AI 头像卡拖拽移位（拨号卡/互换卡共享位置，点按互换不受影响）
   const miniDrag = useMiniCardDrag(rootRef);
+  // Task 28-e：我的画面卡拖拽移位（独立实例，与 AI 卡位置互不干扰；点按互换不受影响）
+  const pipDrag = useMiniCardDrag(rootRef);
   // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
   const camReq = useCamRequest();
   const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
@@ -1023,14 +1019,14 @@ function WxVideoCall(props: VideoCallScreenProps) {
             <LocalPipView
               videoRef={camera.videoRef}
               live={rt.camOn && camera.ready}
-              className="right-4 top-[108px] h-[140px] w-[104px] rounded-[14px]"
+              className={`h-[160px] w-[104px] rounded-[14px] ${pipDrag.pos ? '' : 'right-4 top-[108px]'}`}
               testId="wx-video-pip"
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
-              height={pipAdaptiveHeight(rt.camSize, 104, 140)}
-              onMeta={rt.onVideoMeta}
               myAvatar={props.myAvatar}
               shape="square"
+              dragPos={pipDrag.pos}
+              dragHandlers={pipDrag.dragProps}
             />
           )}
         </>
@@ -1237,6 +1233,8 @@ function QqVideoCall(props: VideoCallScreenProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Task 28-d：右上角 AI 头像卡拖拽移位（拨号卡/互换卡共享位置，点按互换不受影响）
   const miniDrag = useMiniCardDrag(rootRef);
+  // Task 28-e：我的画面卡拖拽移位（独立实例，与 AI 卡位置互不干扰；点按互换不受影响）
+  const pipDrag = useMiniCardDrag(rootRef);
   // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
   const camReq = useCamRequest();
   const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
@@ -1352,13 +1350,13 @@ function QqVideoCall(props: VideoCallScreenProps) {
             <LocalPipView
               videoRef={camera.videoRef}
               live={rt.camOn && camera.ready}
-              className="left-4 top-[100px] h-[132px] w-[100px] rounded-[14px]"
+              className={`h-[152px] w-[100px] rounded-[14px] ${pipDrag.pos ? '' : 'left-4 top-[100px]'}`}
               testId="qq-video-pip"
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
-              height={pipAdaptiveHeight(rt.camSize, 100, 132)}
-              onMeta={rt.onVideoMeta}
               myAvatar={props.myAvatar}
+              dragPos={pipDrag.pos}
+              dragHandlers={pipDrag.dragProps}
             />
           )}
         </>
@@ -1574,6 +1572,8 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Task 28-d：右上角 AI 头像卡拖拽移位（互换 mini 卡；点按互换不受影响）
   const miniDrag = useMiniCardDrag(rootRef);
+  // Task 28-e：我的画面卡拖拽移位（独立实例，与 AI 卡位置互不干扰；点按互换不受影响）
+  const pipDrag = useMiniCardDrag(rootRef);
   // C2（Task 28）：AI「想看看你」请求确认条状态（回调透传引擎，每通最多触发一次）
   const camReq = useCamRequest();
   const rt = useVideoCallRuntime(props, camReq.onCameraRequest);
@@ -1642,13 +1642,13 @@ function PhoneVideoCall(props: VideoCallScreenProps) {
             <LocalPipView
               videoRef={camera.videoRef}
               live={rt.camOn && camera.ready}
-              className="right-4 top-[100px] h-[132px] w-[100px] rounded-[14px]"
+              className={`h-[152px] w-[100px] rounded-[14px] ${pipDrag.pos ? '' : 'right-4 top-[100px]'}`}
               testId="phone-video-pip"
               onClick={rt.swapViews}
               mirrored={rt.facing === 'user'}
-              height={pipAdaptiveHeight(rt.camSize, 100, 132)}
-              onMeta={rt.onVideoMeta}
               myAvatar={props.myAvatar}
+              dragPos={pipDrag.pos}
+              dragHandlers={pipDrag.dragProps}
             />
           )}
         </>

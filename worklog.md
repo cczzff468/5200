@@ -13414,3 +13414,20 @@ Stage Summary:
 - 用户三条反馈全部落地并双端 E2E 验证：聊天模式 AI 头像重新入场（112px 与「我的头像」完全对称：AI 画面时显示 AI 头像、我的画面时显示我的头像，均在时长下方净空区）、AI 卡再加高（wx 104×160/qq·phone 100×152）、AI 卡按住拖拽移位（点按互换保留、位置整通共享、恒在最上层可点）
 - 产出：src/components/apps/video-call-screen.tsx（useMiniCardDrag hook+z-20+RemoteView chatMode 112 分支+五卡加高接拖拽）；voice-call-screen/wechat/qq/chat-call 零改动
 - tsc/eslint/bun run lint 全零错误、console 零错误、测试数据已清
+
+---
+Task ID: 28-e（追加反馈轮 3）
+Agent: Z.ai Code（主会话）
+Task: 用户反馈——「视频通话界面让右上角头像卡片我和ai的一样大，我的头像卡片也可以按住拖拽移位置」
+
+Work Log:
+- ①「我的画面卡」与 AI 头像卡统一尺寸：wx PIP 104×140→104×160、qq/phone PIP 100×132→100×152（原 pipAdaptiveHeight 自适应高度移除，固定与 AI 卡同高；pipAdaptiveHeight 函数与三处 height/onMeta 传参删除）
+- ②「我的画面卡」支持按住拖拽移位：LocalPipView 新增 dragPos/dragHandlers props（useMiniCardDrag.dragProps 展开到 button），三皮肤各建独立 pipDrag 实例（与 miniDrag 位置互不干扰）；z-10→z-20（28-d「恒在最上层」原则，拖到底部不被吞点按）；touch-none+select-none 防手势劫持；移动 <6px 仍算点按互换
+- 【E2E 工具故障与替代方案】agent-browser 本会话 CDP 原始输入通道中途失效（Playwright mouse down/move/up、wheel 全部不再到达页面，探针证实 document capture 层零事件；locator click/fill 仍正常）——拖拽验证改用 eval 派发 PointerEvent 序列（down→分步 move→up），React 合成事件响应完全等效；插桩核实事件序列与钳制数学逐项吻合（wx 落点钳制 8px 边距、反向拖回 (270,108) 精确命中）
+- E2E（wx me520 详情页 ActionSheet→视频通话；qq 88888888 加号面板→视频通话；种子 seed-me/seed-xiaoxue）：wx PIP 104×160@(270,108) 与 AI 卡同尺寸 ✓→拖到左下→反向拖回 (270,108) 精确 ✓→拖后 click1 拦截防误触 ✓ click2 互换 ✓→互换后 AI 卡 (270,108) 104×160 拖到 (22,344) ✓；qq PIP 100×152@(16,100) ✓→拖到 (274,328) 精确 ✓→click1 拦截 ✓ 互换后 AI 卡 (274,104) 100×152 ✓；两卡独立位置符合设计（PIP 拖到 (274,328) 后互换，AI 卡仍在默认位 (274,104)）；wx 挂断续聊 AI 消息、通话卡片（06:59）入流、C2 确认条两端弹出均回归通过；errors+console 零错误；测试数据 17 store+localStorage 全清
+- 已知工具边界：本会话 agent-browser CDP raw mouse 时序性失效（28-b 也遇过「部分按钮 mouse 无效」），后续 E2E 优先用 locator click/DOM .click()/dispatch PointerEvent
+
+Stage Summary:
+- 用户两条反馈落地：①右上角「我的画面卡」与 AI 头像卡完全同尺寸（wx 104×160 / qq·phone 100×152）；②「我的画面卡」支持按住拖拽移位（点按互换保留、防误触拦截、位置钳制屏幕内、与 AI 卡位置独立）
+- 产出：src/components/apps/video-call-screen.tsx（LocalPipView 参数化+三皮肤 pipDrag+pipAdaptiveHeight 删除）；voice-call-screen/wechat/qq/chat-call 零改动
+- wx/qq 双端 E2E 全过、tsc/eslint 零错误、console 零错误、测试数据已清
