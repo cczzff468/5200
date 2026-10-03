@@ -14290,3 +14290,23 @@ Stage Summary:
 - 项目已就绪：本地工作目录 = origin/main（Task 40-s），dev server 运行于 3000 端口，核心 AI 聊天链路（LLM+TTS）验证通过
 - git remote origin 已带 token，后续改完可直接 git push -u origin main
 - 等待用户提出具体修改/新增功能需求
+
+---
+Task ID: 2
+Agent: Z.ai Code (主控)
+Task: Task 41 四项需求——①切换账号列表只显示登录过的小号 ②退出登录后自由登录墙 ③④AI 好友按账号隔离（微信/QQ/信息，含匿名号）
+
+Work Log:
+- accounts.ts 新增 markAccountLoginHistory/accountLoginHistory（wx-login-hist 等设备级键）与 requestForceLoginWall/consumeForceLoginWall（一次性自由登录墙标记）
+- lib/contacts.ts：ContactRecord/Payload 新增 friendWxByAcc/friendQqByAcc/friendSmsByAcc；isFriendIn 改为账号感知（解析器注入模式保持纯函数模块，contacts-store 加载时 setFriendAccountResolver(getActiveAccountIdFor)）：分账号记录优先 → 大号回退旧全局标记（旧数据兼容）→ 小号/匿名号无记录=未添加。全部既有 isFriendIn 调用点（会话列表/通讯录/群候选/朋友圈过滤等 30 处）自动获得隔离语义，零调用点改动
+- contacts-store.ts：新增 setAppFriendFlag（加/删好友统一入口：标记落当前账号作用域，大号同步旧标记）；updateContact 合并三个新字段；loginWechat/loginQQ/loginAltSlot 结果带 altOf；自由登录首次激活（档案无密码时首登写入，与槽位同规则）
+- friend-state.ts 删好友/加回、chat.tsx 信息添加好友 → 全部改走 setAppFriendFlag
+- wechat.tsx：WxUser.altOf；LoginScreen 支持内嵌 onBack；根 handleLogin 先 switchAccountFor(u.altOf||main) 再记 hist+写会话（修自由登录落错作用域）；handleLogout=删会话+requestForceLoginWall+切回大号；boot 首事 consumeForceLoginWall 跳过会话恢复 + 大号作用域会话指向 alt 档案的串槽自愈；WxAccountSwitchPage 列表=大号+登录过的小号（hist/存量会话/当前保底），「登录小号」虚线卡改按钮开自由登录墙覆盖层；MainScreen 透传 onLoginAccount
+- qq.tsx：同微信全套；handleLogin 先切号再 purgeQqSessionData（purge 只清当前作用域，顺序修正保证自由登录小号时不误清大号数据）；SecurityPage 列表过滤 + 登录小号覆盖层（根容器补 relative）
+- tsc --noEmit 0 错误；eslint 改动文件全绿；dev.log 无运行时错误
+
+Stage Summary:
+- agent-browser E2E 全过：①联系人建小号 m(15871034957) 后微信切换列表只显大号+登录小号按钮 → 用小号账密登录成功后出现在列表（绿点当前使用）②退出登录 → 无「当前账号」行、不预填、不锁定 → 自由登回大号成功 ③微信大号通讯录有小晴（legacy 兼容）、小号 m 通讯录"还没有好友"（AI 隔离）④信息主号添加苏晴可见 → 匿名号码"还没有好友" → 匿名号独立添加成功 → 切回主号苏晴不受影响
+- 修复过程中发现并堵住两个隐患：LoginScreen 手工构造 user 丢 altOf（会串槽写会话）；QQ handleLogin purge 顺序（自由登录小号会误清大号会话数据）
+- localStorage 验证：wx-login-hist=[main,m]、qq-login-hist=[main]、active per-app 正确
+- 改动文件：src/lib/ios/accounts.ts、src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/lib/ios/friend-state.ts、src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

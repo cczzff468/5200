@@ -208,7 +208,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, getAccounts, getActiveAccountFor, getActiveAccountIdFor, parseScopedKey, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, consumeForceLoginWall, getAccounts, getActiveAccountFor, getActiveAccountIdFor, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
@@ -354,6 +354,8 @@ interface QQUser {
   qqId: string | null;
   phone: string | null;
   persona: string | null;
+  /** 多账号 Task 41：非空 = 登录身份是小号/匿名号档案（注册表账号 id），handleLogin 据此切账号作用域 */
+  altOf?: string | null;
 }
 
 interface QQMsg {
@@ -1537,7 +1539,7 @@ function QqSearch({ value, onChange, placeholder = '搜索' }: { value: string; 
 
 // ---------------- 登录页 ----------------
 
-function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: PhoneAccount | null }) {
+function LoginScreen({ onLogin, slot, onBack }: { onLogin: (u: QQUser) => void; slot?: PhoneAccount | null; /** 提供时（账号与安全页「登录小号」入口）：左上角变返回而非退出 QQ */ onBack?: () => void }) {
   const closeApp = useUI((s) => s.closeApp);
   // mode account：账号密码登录（QQ号/QID/邮箱 + QQ密码）；phone：手机号登录（+86 + QQ密码）
   const [mode, setMode] = useState<'account' | 'phone'>('account');
@@ -1608,6 +1610,8 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
             qqId: alt.user.qqId,
             phone: alt.user.phone,
             persona: alt.user.persona,
+            // Task 41：altOf 必须透传——根组件据此切账号作用域 + 记登录历史
+            altOf: alt.user.altOf,
           });
           return;
         }
@@ -1625,6 +1629,8 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
           qqId: rec.user.qqId,
           phone: rec.user.phone,
           persona: rec.user.persona,
+          // Task 41：自由登录命中小号档案时 altOf 非空——根组件据此切作用域（缺失会串槽）
+          altOf: rec.user.altOf,
         });
         return;
       }
@@ -1651,13 +1657,13 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
 
   return (
     <div className="relative flex h-full w-full flex-col bg-gradient-to-b from-[#EAE6F6] via-[#E4EBF7] to-[#E7F0F9] pt-[54px] text-[#1F2329] dark:from-[#23253A] dark:via-[#20293A] dark:to-[#1E2A38] dark:text-white">
-      {/* 顶部：关闭 + 帮助 */}
+      {/* 顶部：关闭/返回 + 帮助（内嵌登录小号时为返回） */}
       <div className="flex h-11 items-center justify-between px-4">
         <button
           type="button"
-          aria-label="关闭QQ"
-          data-testid="qq-login-close"
-          onClick={closeApp}
+          aria-label={onBack ? '返回' : '关闭QQ'}
+          data-testid={onBack ? 'qq-login-back' : 'qq-login-close'}
+          onClick={() => (onBack ? onBack() : closeApp())}
           className="-ml-1 rounded-full p-1.5 active:bg-black/5"
         >
           <ChevronLeft className="h-7 w-7" strokeWidth={2} />
@@ -1676,7 +1682,7 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: QQUser) => void; slot?: P
           {mode === 'account' ? '账号密码登录' : '手机号登录'}
         </h1>
 
-        {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正） */}
+        {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正）；退出后的自由登录墙无槽位不显示（Task 41） */}
         {slot && (
           <p data-testid="qq-login-slot" className="mt-2.5 text-center text-[13.5px] leading-relaxed text-black/45 dark:text-white/45">
             当前账号：{slotNameShown || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
@@ -12863,29 +12869,59 @@ function QqAccountBubble({ name, kind, size = 44 }: { name: string; kind: 'alt' 
   );
 }
 
+/**
+ * 可切换账号列表（Task 41）：大号恒在；小号只显示「登录过」的——登录历史标记 或 存量会话
+ * （升级兼容：老用户已登录的小号即使还没历史标记也照常显示）；当前账号保底不消失。
+ * 匿名号只属于电话/信息，不进 QQ。联系人 App 刚创建、从未登录过的小号不出现在这里，
+ * 用「登录小号」登录成功后（markAccountLoginHistory）才出现。
+ */
+function readQqSwitchableAccounts(activeId: string): PhoneAccount[] {
+  const hist = new Set(accountLoginHistory('qq'));
+  return getAccounts().filter((a) => {
+    if (a.kind === 'anon') return false;
+    if (a.id === MAIN_ACCOUNT_ID) return true;
+    if (a.id === activeId) return true;
+    if (hist.has(a.id)) return true;
+    // 存量兼容：该账号作用域下已有登录会话 = 登录过
+    try {
+      const key = a.id === MAIN_ACCOUNT_ID ? LS_SESSION : `${LS_SESSION}--${a.id}`;
+      return !!window.localStorage.getItem(key);
+    } catch {
+      return false;
+    }
+  });
+}
+
 function SecurityPage({
   me,
   onBack,
   onToast,
+  onLoginOther,
 }: {
   me: QQUser;
   onBack: () => void;
   onToast: (m: string) => void;
+  /** 「登录小号」自由登录成功 → 根组件 handleLogin（切作用域 + 记登录历史，Task 41） */
+  onLoginOther: (u: QQUser) => void;
 }) {
   // 多账号 v2（Task 40-2b）：账号管理区改读注册表（大号 + 小号；匿名号只属于电话/信息，不进 QQ）。
   // 切换账号不再整页刷新（switchAccountFor 事件驱动）→ 账号快照入组件 state 并订阅事件刷新（当前行蓝勾实时移动）
-  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts().filter((a) => a.kind !== 'anon'));
+  // 多账号 Task 41：只显示「登录过」的小号（登录历史 / 存量会话兼容 / 当前账号保底）——
+  // 联系人 App 刚创建、从未登录过的小号不进列表，用下方「登录小号」登录后才出现。
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => readQqSwitchableAccounts(getActiveAccountIdFor('qq')));
   const [activeId, setActiveId] = useState<string>(() => getActiveAccountIdFor('qq'));
   useEffect(() => {
     const refresh = (e: Event) => {
       const detail = (e as CustomEvent<{ app?: string }>).detail;
       if (detail && detail.app !== 'qq') return; // 其他 App 的账号切换与 QQ 账号列表无关
-      setAccounts(getAccounts().filter((a) => a.kind !== 'anon'));
+      setAccounts(readQqSwitchableAccounts(getActiveAccountIdFor('qq')));
       setActiveId(getActiveAccountIdFor('qq'));
     };
     window.addEventListener(ACCOUNT_CHANGED_EVENT, refresh);
     return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, refresh);
   }, []);
+  /** 「登录小号」自由登录墙（覆盖全页；slot=null 不绑定槽位，用任意小号账密登录） */
+  const [loginOpen, setLoginOpen] = useState(false);
   // 大号行显示资料（单库直读大号机主联系人 mainOwnerContact；Task 40-F 修正）:
   // 不能用 me（登录用户）——在小号视角下 me 是小号的登录身份，会把大号行显示成小号资料
   const [mainOwner, setMainOwner] = useState<{ name: string; qqId: string; avatar: string | null } | null>(null);
@@ -12943,7 +12979,7 @@ function SecurityPage({
   ];
 
   return (
-    <div className="flex h-full flex-col bg-[#F6F7F9] pt-[54px] dark:bg-[#111214]">
+    <div className="relative flex h-full flex-col bg-[#F6F7F9] pt-[54px] dark:bg-[#111214]">
       <div className="relative flex h-12 shrink-0 items-center bg-[#F6F7F9] px-3 dark:bg-[#111214]">
         <button type="button" aria-label="返回" onClick={onBack} className="-ml-1 rounded-full p-1.5 active:bg-black/5">
           <ChevronLeft className="h-6 w-6" strokeWidth={2.2} />
@@ -13000,19 +13036,22 @@ function SecurityPage({
             );
           })}
 
-          {/* 小号创建入口提示：小号统一在联系人 App 「小号」tab 创建，这里只负责登录与切换 */}
-          <div
-            data-testid="qq-account-add-hint"
-            className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 dark:border-white/[0.05]"
+          {/* 登录小号入口（Task 41）：小号统一在联系人 App 「小号」tab 创建；创建后不直接出现在列表，
+              在这里用小号账密登录成功后才出现（登录历史），登录过的小号切换不再需要登录 */}
+          <button
+            type="button"
+            data-testid="qq-account-login-alt"
+            onClick={() => setLoginOpen(true)}
+            className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.04] px-4 text-left active:bg-black/[0.03] dark:border-white/[0.05] dark:active:bg-white/[0.06]"
           >
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-black/[0.05] text-black/30 dark:bg-white/[0.08] dark:text-white/30">
               <Plus className="h-5 w-5" aria-hidden="true" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[15px] text-black/45 dark:text-white/45">新建小号：打开联系人 App → 「小号」</span>
-              <span className="mt-0.5 block truncate text-[12px] text-black/25 dark:text-white/25">创建后在这里登录即可使用，登录过的小号切换不再需要登录</span>
+              <span className="block truncate text-[15px] text-black/45 dark:text-white/45">登录小号</span>
+              <span className="mt-0.5 block truncate text-[12px] text-black/25 dark:text-white/25">新建小号：打开联系人 App → 「小号」；登录后出现在上面的列表</span>
             </span>
-          </div>
+          </button>
         </div>
         <p className="px-1 pt-2 text-[12px] leading-snug text-black/30 dark:text-white/30">切换仅作用于 QQ，不影响微信 / 信息 / 电话的账号；在联系人 App 删除小号后，正在使用它的 App 会自动退出该账号。</p>
 
@@ -13059,6 +13098,19 @@ function SecurityPage({
           ))}
         </div>
       </div>
+
+      {/* 登录小号：自由登录墙覆盖层（slot=null 不绑定槽位；返回关闭不退出 QQ） */}
+      {loginOpen && (
+        <div className="absolute inset-0 z-30">
+          <LoginScreen
+            onLogin={(u) => {
+              setLoginOpen(false);
+              onLoginOther(u);
+            }}
+            onBack={() => setLoginOpen(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -14930,12 +14982,15 @@ function MainScreen({
   onLogout,
   onPatchUser,
   refreshContacts,
+  onLoginAccount,
 }: {
   me: QQUser;
   contacts: ContactRecord[];
   onLogout: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
   refreshContacts: () => Promise<void>;
+  /** 账号与安全页「登录小号」自由登录成功 → 根组件 handleLogin（Task 41） */
+  onLoginAccount: (u: QQUser) => void;
 }) {
   const [route, setRoute] = useState<MainRoute>({ page: 'tabs', tab: '消息' });
   /** Task 28-b 资料页通话桥：好友资料页「音视频通话」ActionSheet 选语音/视频后暂存待拨通话——
@@ -15535,7 +15590,7 @@ function MainScreen({
           onToast={showToast}
         />
       ) : route.page === 'security' ? (
-        <SecurityPage me={me} onBack={() => setRoute({ page: 'settings' })} onToast={showToast} />
+        <SecurityPage me={me} onBack={() => setRoute({ page: 'settings' })} onToast={showToast} onLoginOther={onLoginAccount} />
       ) : route.page === 'group-create' ? (
         <QqGroupCreatePage
           contacts={contacts}
@@ -15962,6 +16017,14 @@ export default function QQApp() {
         switchAccountFor('qq', MAIN_ACCOUNT_ID);
         return;
       }
+      // 多账号 Task 41：退出登录后的自由登录墙（一次性消费）——本次启动不恢复任何会话，
+      // 直接进自由登录（不显示/不锁定「当前账号」，想登哪个登哪个）
+      if (consumeForceLoginWall('qq')) {
+        if (!alive) return;
+        setUser(null);
+        setBooting(false);
+        return;
+      }
       // 头像按 App 隔离：加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
       const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
       if (!alive) return;
@@ -15972,6 +16035,16 @@ export default function QQApp() {
         // Task 40 修正：小号/匿名号槽位的会话必须指向本槽位档案联系人——
         // 历史串槽登录态（在 A 小号槽位登了 B 的账密）在此自愈清除，避免切号页显示错账号
         const acc = getActiveAccountFor('qq');
+        // Task 41 补强：大号作用域的会话指向了小号/匿名号档案（历史串槽残留）→ 清除回自由登录
+        if (savedId && acc.kind === 'main') {
+          const saved = raw.find((c) => c.id === savedId && c.kind === 'user');
+          if (saved?.altOf) {
+            window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
+            setUser(null);
+            setBooting(false);
+            return;
+          }
+        }
         const slotProfile =
           acc.kind !== 'main' && savedId
             ? raw.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId))
@@ -15999,8 +16072,13 @@ export default function QQApp() {
   }, [accReloadKey]);
 
   const handleLogin = useCallback((u: QQUser) => {
-    // #11 换账号登录防串号：上次登录的是另一个账号时，先清掉上一账号的全部 QQ 会话态数据
-    //（聊天记录/空间动态/钱包/未读角标等，见 purgeQqSessionData）再进入新账号；
+    // 多账号 Task 41：登录身份先落到对应账号作用域——自由登录可能是某个小号（档案 altOf），
+    // 槽位登录已是本槽位（no-op）；大号机主档案回 main。必须先切再 purge：
+    // purgeQqSessionData 只清「当前作用域」的键，切号后正确落新账号（不会误清前一账号数据）。
+    const accId = u.altOf || MAIN_ACCOUNT_ID;
+    switchAccountFor('qq', accId);
+    // #11 换账号登录防串号：当前作用域上次登录的是另一个账号时，先清掉该作用域的全部 QQ 会话态数据
+    //（聊天记录/空间动态/钱包/未读角标等，见 purgeQqSessionData）再进入新身份；
     // 首次登录（无存储 id）只记录不清；同一账号重登不清（登出本就不删数据，重登应恢复）
     try {
       const lastId = kvGet<string>(QQ_LAST_LOGIN_ID_KEY);
@@ -16015,6 +16093,8 @@ export default function QQApp() {
     }
     setUser(u);
     try {
+      // 登录历史：切换账号列表只显示登录过的账号（Task 41）
+      markAccountLoginHistory('qq', accId);
       window.localStorage.setItem(accLs(LS_SESSION, 'qq'), u.id);
     } catch {
       // 忽略
@@ -16028,6 +16108,10 @@ export default function QQApp() {
     } catch {
       // 忽略
     }
+    // 多账号 Task 41：退出后回大号身份 + 自由登录墙——不显示「当前账号」、不锁定登录身份，
+    // 想登哪个登哪个；force 标记保证下次启动也不自动登录任何账号（一次性消费）。
+    requestForceLoginWall('qq');
+    switchAccountFor('qq', MAIN_ACCOUNT_ID);
   }, []);
 
   // 添加好友后刷新联系人列表（同步换成昵称展示名；头像按 App 隔离读 qq 槽位投影）
@@ -16075,5 +16159,5 @@ export default function QQApp() {
   }
 
   // key={accReloadKey}：切换 QQ 账号后 remount 主界面——route 归位消息 tab、子页全关、各页挂载重读当前账号数据
-  return <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} />;
+  return <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />;
 }

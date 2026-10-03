@@ -35,7 +35,7 @@
 
 import { kvGet, kvSet, kvDel } from './idb-kv';
 import { genId } from './db';
-import { getContact, ownerProfileFor, updateContact } from './contacts-store';
+import { getContact, ownerProfileFor, setAppFriendFlag } from './contacts-store';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL } from './block-state';
@@ -111,7 +111,8 @@ export async function removeFriendByUser(app: FriendDelApp, contactId: string): 
   kvSet(delKey(app, contactId), { at: Date.now() } satisfies FriendDelState);
   writeDelIndex(app, contactId, true);
   try {
-    await updateContact(contactId, app === 'wx' ? { friendWx: false } : { friendQq: false });
+    // 多账号 Task 41：删除标记落当前账号作用域（大号同步旧标记），不影响其他账号的好友关系
+    await setAppFriendFlag(app, contactId, false);
   } catch {
     // 联系人更新失败不阻塞状态标记（下次删除重写）
   }
@@ -124,7 +125,8 @@ export async function restoreFriendship(app: FriendDelApp, contactId: string): P
   kvDel(delKey(app, contactId));
   writeDelIndex(app, contactId, false);
   try {
-    await updateContact(contactId, app === 'wx' ? { friendWx: true } : { friendQq: true });
+    // 多账号 Task 41：好友标记落当前账号作用域（大号同步旧标记）
+    await setAppFriendFlag(app, contactId, true);
   } catch {
     // 联系人可能已被从联系人 App 彻底删除：申请状态仍流转，UI 层提示
   }

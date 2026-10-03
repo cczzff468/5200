@@ -281,6 +281,78 @@ export function switchAccount(id: string): void {
   switchAccountFor('sms', id);
 }
 
+// ---------------- 登录历史 / 退出后自由登录墙（Task 41） ----------------
+
+/**
+ * 登录历史（设备级 localStorage，每 App 一份 id 数组）：
+ * 切换账号列表只显示「登录过」的小号——联系人 App 里刚创建、从未在对应 App 登录过的账号
+ * 不进列表（真实微信/QQ 同款体验：列表 = 登录记录，不是账号全集）。
+ * 登录成功时由各 App 根组件 handleLogin 调 markAccountLoginHistory 记录。
+ */
+const LOGIN_HIST_KEY: Record<AccountApp, string> = {
+  wx: 'wx-login-hist',
+  qq: 'qq-login-hist',
+  sms: 'sms-login-hist',
+  phone: 'phone-login-hist',
+};
+
+export function markAccountLoginHistory(app: AccountApp, id: string): void {
+  if (!id) return;
+  const key = LOGIN_HIST_KEY[app];
+  let list: string[] = [];
+  try {
+    const raw = readLs(key);
+    if (raw) list = JSON.parse(raw) as string[];
+  } catch {
+    list = [];
+  }
+  if (!Array.isArray(list)) list = [];
+  if (list.includes(id)) return;
+  try {
+    writeLs(key, JSON.stringify([...list.filter((x) => typeof x === 'string'), id].slice(-50)));
+  } catch {
+    // 存储异常静默：仅影响切换列表展示
+  }
+}
+
+export function accountLoginHistory(app: AccountApp): string[] {
+  try {
+    const raw = readLs(LOGIN_HIST_KEY[app]);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 退出登录后的「自由登录墙」一次性标记（设备级 localStorage）：
+ * 退出账号后不自动登录任何账号（即使大号会话还在）、不锁定登录身份——
+ * 登录墙进自由模式（想登哪个登哪个）。各 App 启动 effect 首件事 consumeForceLoginWall：
+ * 有标记 → 跳过会话恢复直接进登录墙（消费即清除，登录成功后恢复正常持久化）。
+ */
+const FORCE_LOGIN_KEY: Record<AccountApp, string> = {
+  wx: 'wx-force-login',
+  qq: 'qq-force-login',
+  sms: 'sms-force-login',
+  phone: 'phone-force-login',
+};
+
+export function requestForceLoginWall(app: AccountApp): void {
+  writeLs(FORCE_LOGIN_KEY[app], '1');
+}
+
+/** 读并清除标记（一次性）；true = 本次启动跳过会话恢复，直接进自由登录墙 */
+export function consumeForceLoginWall(app: AccountApp): boolean {
+  if (readLs(FORCE_LOGIN_KEY[app]) !== '1') return false;
+  try {
+    window.localStorage.removeItem(FORCE_LOGIN_KEY[app]);
+  } catch {
+    // 忽略
+  }
+  return true;
+}
+
 // ---------------- 创建 / 删除 ----------------
 
 /**

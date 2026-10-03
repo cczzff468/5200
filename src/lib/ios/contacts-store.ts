@@ -11,6 +11,7 @@ import {
   getAccountById,
   getAccounts,
   getActiveAccountFor,
+  getActiveAccountIdFor,
   MAIN_ACCOUNT_ID,
   updateAccount,
   deleteAccount as deleteAccountFromRegistry,
@@ -33,6 +34,7 @@ import {
   normalizeAvatar,
   normalizeAvatarMap,
   normalizeText,
+  setFriendAccountResolver,
   withAvatarsForApp,
   type ContactAvatarApp,
   type ContactAvatarMap,
@@ -46,6 +48,37 @@ import { abortStreamsByPrefix } from '@/lib/chat-stream-store';
 import { purgeDeliveryQueueByPrefix } from './ai-delivery';
 
 const MIGRATED_KEY = 'ios-contacts-migrated';
+
+// 多账号 Task 41：好友标记按账号隔离的读取口径在 lib/contacts.isFriendIn（纯函数模块）——
+// 这里注入「App → 当前账号 id」解析器（getActiveAccountIdFor 兼容 FriendApp 子集），
+// 模块加载即安装：所有 App 组件都经 contacts-store 链路加载，渲染前解析器必然就绪。
+setFriendAccountResolver(getActiveAccountIdFor);
+
+/**
+ * 按当前账号写好友标记（Task 41 加/删好友统一入口）：
+ * - 标记落在当前账号作用域（friendWxByAcc/friendQqByAcc/friendSmsByAcc[accId]）——
+ *   大号加了 AI 小号看不见、小号之间互不可见、信息匿名号码与大号隔离；
+ * - 大号同时同步旧全局标记（friendWx/friendQq/friendSms），
+ *   未感知账号的读取点（联系人/电话 App、isPersonGoneEverywhere 等）保持一致；
+ * - USER 联系人不适用（恒为好友），直接原样返回。
+ */
+export async function setAppFriendFlag(
+  app: 'wx' | 'qq' | 'sms',
+  contactId: string,
+  friend: boolean,
+): Promise<ContactRecord | null> {
+  const existing = await getContact(contactId);
+  if (!existing || existing.kind === 'user') return existing ?? null;
+  const accId = getActiveAccountIdFor(app);
+  const mapKey = app === 'wx' ? 'friendWxByAcc' : app === 'qq' ? 'friendQqByAcc' : 'friendSmsByAcc';
+  const legacyKey = app === 'wx' ? 'friendWx' : app === 'qq' ? 'friendQq' : 'friendSms';
+  const map: Record<string, boolean> = { ...((existing[mapKey] as Record<string, boolean> | null | undefined) ?? {}), [accId]: friend };
+  const patch: Partial<ContactPayload> = { [mapKey]: map } as unknown as Partial<ContactPayload>;
+  if (accId === MAIN_ACCOUNT_ID) {
+    (patch as Record<string, unknown>)[legacyKey] = friend;
+  }
+  return updateContact(contactId, patch);
+}
 
 /**
  * 申请持久化存储权限：联系人/微信账号现在只存本地 IndexedDB，
@@ -415,6 +448,10 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if (typeof patch.friendWx === 'boolean') next.friendWx = existing.kind === 'user' ? true : patch.friendWx;
   if (typeof patch.friendQq === 'boolean') next.friendQq = existing.kind === 'user' ? true : patch.friendQq;
   if (typeof patch.friendSms === 'boolean') next.friendSms = existing.kind === 'user' ? true : patch.friendSms;
+  // 分账号好友标记（Task 41）：写入传完整 map（调用方 setAppFriendFlag 已按现有 map 合并）
+  if ('friendWxByAcc' in patch) next.friendWxByAcc = patch.friendWxByAcc ?? null;
+  if ('friendQqByAcc' in patch) next.friendQqByAcc = patch.friendQqByAcc ?? null;
+  if ('friendSmsByAcc' in patch) next.friendSmsByAcc = patch.friendSmsByAcc ?? null;
 
   await localDB.put('contacts', next);
 
@@ -789,6 +826,8 @@ export interface WxLoginSuccess {
     phone: string | null;
     qqId: string | null;
     persona: string | null;
+    /** 多账号 Task 41：非空 = 命中的是小号/匿名号档案（值为注册表账号 id），登录后切到该账号作用域 */
+    altOf: string | null;
   };
 }
 export type WxLoginResult = WxLoginSuccess | { ok: false; error: string };
@@ -819,7 +858,20 @@ export async function loginWechat(mode: 'phone' | 'wechat' | 'qq', rawAccount: s
   if (hit.kind !== 'user') return { ok: false, error: '该账号类型暂不支持登录，请使用 user 账号' };
 
   const expect = pwdKind === 'qq' ? hit.qqPassword : hit.wechatPassword;
-  if (!expect || expect !== password) return { ok: false, error: '账号或密码不正确，请重新输入' };
+  if (!expect || expect !== password) {
+    // Task 41（自由登录首次激活）：档案从未设过任何密码 → 首次登录即写入（与槽位登录同规则），
+    // 否则无密码的账号在自由登录墙永远登不进；已设密码但当前字段为空时回退另一字段校验
+    const other = pwdKind === 'qq' ? hit.wechatPassword : hit.qqPassword;
+    if (!expect && !other) {
+      const patched = await updateContact(
+        hit.id,
+        pwdKind === 'qq' ? { qqPassword: password.trim() } : { wechatPassword: password.trim() },
+      );
+      if (!patched) return { ok: false, error: '登录失败，请稍后重试' };
+    } else if (!expect || expect !== password) {
+      return { ok: false, error: '账号或密码不正确，请重新输入' };
+    }
+  }
 
   return {
     ok: true,
@@ -833,6 +885,8 @@ export async function loginWechat(mode: 'phone' | 'wechat' | 'qq', rawAccount: s
       phone: hit.phone,
       qqId: hit.qqId,
       persona: hit.persona,
+      // 多账号 Task 41：命中档案联系人 altOf → 自由登录落到对应小号账号作用域（null = 大号机主）
+      altOf: hit.altOf ?? null,
     },
   };
 }
@@ -860,6 +914,8 @@ export interface AltSlotLoginSuccess {
     phone: string | null;
     qqId: string | null;
     persona: string | null;
+    /** 槽位对应的注册表账号 id（Task 41：登录成功后根组件据此记登录历史） */
+    altOf: string | null;
   };
 }
 export type AltSlotLoginResult = AltSlotLoginSuccess | { ok: false; error: string };
@@ -916,6 +972,7 @@ export async function loginAltSlot(
     phone: profile.phone,
     qqId: profile.qqId,
     persona: profile.persona,
+    altOf: slot.id,
   };
   return app === 'wx' ? { ok: true, user } : { ok: true, user };
 }
@@ -941,6 +998,8 @@ export interface QQLoginSuccess {
     qqId: string | null;
     phone: string | null;
     persona: string | null;
+    /** 多账号 Task 41：非空 = 命中的是小号/匿名号档案（值为注册表账号 id），登录后切到该账号作用域 */
+    altOf: string | null;
   };
 }
 export type QQLoginResult = QQLoginSuccess | { ok: false; error: string };
@@ -967,7 +1026,15 @@ export async function loginQQ(mode: 'phone' | 'account', rawAccount: string, pas
   // char / npc 账号暂不支持登录（与微信一致，只放行 user）
   if (hit.kind !== 'user') return { ok: false, error: '该账号类型暂不支持登录，请使用 user 账号' };
 
-  if (!hit.qqPassword || hit.qqPassword !== password) return { ok: false, error: '账号或密码不正确，请重新输入' };
+  if (!hit.qqPassword || hit.qqPassword !== password) {
+    // Task 41（自由登录首次激活）：从未设过 QQ 密码 → 首次登录即写入（与槽位登录同规则）
+    if (!hit.qqPassword) {
+      const patched = await updateContact(hit.id, { qqPassword: password.trim() });
+      if (!patched) return { ok: false, error: '登录失败，请稍后重试' };
+    } else {
+      return { ok: false, error: '账号或密码不正确，请重新输入' };
+    }
+  }
 
   return {
     ok: true,
@@ -980,6 +1047,8 @@ export async function loginQQ(mode: 'phone' | 'account', rawAccount: string, pas
       qqId: hit.qqId,
       phone: hit.phone,
       persona: hit.persona,
+      // 多账号 Task 41：命中档案联系人 altOf → 自由登录落到对应小号账号作用域（null = 大号机主）
+      altOf: hit.altOf ?? null,
     },
   };
 }

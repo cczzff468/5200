@@ -184,7 +184,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accLs, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, consumeForceLoginWall, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
@@ -297,6 +297,8 @@ interface WxUser {
   wechatId: string | null;
   phone: string | null;
   qqId: string | null;
+  /** 多账号 Task 41：非空 = 登录身份是小号/匿名号档案（注册表账号 id），handleLogin 据此切账号作用域 */
+  altOf?: string | null;
 }
 
 interface WxRpData {
@@ -1791,7 +1793,7 @@ function PseudoQR({ seed, size = 176 }: { seed: string; size?: number }) {
 
 // ---------------- 登录页 ----------------
 
-function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: PhoneAccount | null }) {
+function LoginScreen({ onLogin, slot, onBack }: { onLogin: (u: WxUser) => void; slot?: PhoneAccount | null; /** 提供时（切换账号页「登录小号」入口）：左上角变返回而非关闭整个微信 */ onBack?: () => void }) {
   const closeApp = useUI((s) => s.closeApp);
   // mode phone：手机号 + 微信密码；account：微信号 / QQ号 / 邮箱 + 密码（后端自动识别）
   const [mode, setMode] = useState<'phone' | 'account'>('phone');
@@ -1846,6 +1848,8 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
             wechatId: alt.user.wechatId,
             phone: alt.user.phone,
             qqId: alt.user.qqId,
+            // Task 41：altOf 必须透传——根组件据此切账号作用域 + 记登录历史
+            altOf: alt.user.altOf,
           });
           return;
         }
@@ -1864,6 +1868,8 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
           wechatId: rec.user.wechatId,
           phone: rec.user.phone,
           qqId: rec.user.qqId,
+          // Task 41：自由登录命中小号档案时 altOf 非空——根组件据此切作用域（缺失会串槽）
+          altOf: rec.user.altOf,
         });
         return;
       }
@@ -1877,16 +1883,16 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
 
   return (
     <div className="flex h-full w-full flex-col bg-[#EDEDED] pt-[54px] text-black dark:bg-[#111111] dark:text-white">
-      {/* 顶部关闭 */}
+      {/* 顶部关闭/返回（切换账号页内嵌时为返回） */}
       <div className="flex h-11 items-center px-4">
         <button
           type="button"
-          aria-label="关闭微信"
-          data-testid="wx-login-close"
-          onClick={closeApp}
+          aria-label={onBack ? '返回' : '关闭微信'}
+          data-testid={onBack ? 'wx-login-back' : 'wx-login-close'}
+          onClick={() => (onBack ? onBack() : closeApp())}
           className="-ml-1 rounded-full p-1.5 active:bg-black/5"
         >
-          <X className="h-6 w-6" strokeWidth={1.8} />
+          {onBack ? <ChevronLeft className="h-6 w-6" strokeWidth={1.8} /> : <X className="h-6 w-6" strokeWidth={1.8} />}
         </button>
       </div>
 
@@ -1895,7 +1901,7 @@ function LoginScreen({ onLogin, slot }: { onLogin: (u: WxUser) => void; slot?: P
           {mode === 'phone' ? '手机号登录' : '微信账号登录'}
         </h1>
 
-        {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正） */}
+        {/* 小号/匿名号槽位：明示当前登录身份 + 档案账号（Task 40 修正）；退出后的自由登录墙无槽位不显示（Task 41） */}
         {slot && (
           <p data-testid="wx-login-slot" className="mt-2.5 text-center text-[13px] leading-relaxed text-black/45 dark:text-white/45">
             当前账号：{slotNameShown || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}
@@ -10964,6 +10970,29 @@ function WxSettingsPage({
 
 // ---------------- 切换账号页（多账号 Task 40-D：灰底 + 顶部大标题区 + 账号卡列表 + 添加 + 管理） ----------------
 
+/**
+ * 可切换账号列表（Task 41）：大号恒在；小号只显示「登录过」的——登录历史标记 或 存量会话
+ * （升级兼容：老用户已登录的小号即使还没历史标记也照常显示）；当前账号保底不消失。
+ * 匿名号只属于电话/信息，不进微信。联系人 App 刚创建、从未登录过的小号不出现在这里，
+ * 用「登录小号」登录成功后（markAccountLoginHistory）才出现。
+ */
+function readSwitchableAccounts(activeId: string): PhoneAccount[] {
+  const hist = new Set(accountLoginHistory('wx'));
+  return getAccounts().filter((a) => {
+    if (a.kind === 'anon') return false;
+    if (a.id === MAIN_ACCOUNT_ID) return true;
+    if (a.id === activeId) return true;
+    if (hist.has(a.id)) return true;
+    // 存量兼容：该账号作用域下已有登录会话 = 登录过
+    try {
+      const key = a.id === MAIN_ACCOUNT_ID ? LS_SESSION : `${LS_SESSION}--${a.id}`;
+      return !!window.localStorage.getItem(key);
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** 小号/匿名号首字母圆：小号暖色系 / 匿名号灰黑系，深色模式降饱和变体（与 QQ 端同规则） */
 function WxAccountBubble({ name, kind, size = 52 }: { name: string; kind: 'alt' | 'anon'; size?: number }) {
   const first = name.trim().charAt(0) || (kind === 'anon' ? '匿' : '小');
@@ -10983,25 +11012,29 @@ function WxAccountBubble({ name, kind, size = 52 }: { name: string; kind: 'alt' 
   );
 }
 
-function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void }) {
+function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack: () => void; /** 「登录小号」自由登录成功 → 根组件 handleLogin（切作用域 + 记登录历史） */ onLoginOther: (u: WxUser) => void }) {
   // 页内 toast（App 根 toast 在提前 return 分支不渲染，同收藏页口径）
   const [toast, showToast] = useLocalToast();
   // 注册表账号列表：切换不刷新网页（v2 事件驱动）；删除成功后本地同步移除
   //（当前账号/大号不可删；正在被其他 App 使用的账号删除时自动切回大号 = 自动退出）
-  // 匿名号不进微信（只属于电话/信息）：列表与切换一律排除
-  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => getAccounts().filter((a) => a.kind !== 'anon'));
+  // 匿名号不进微信（只属于电话/信息）：列表与切换一律排除。
+  // 多账号 Task 41：只显示「登录过」的小号（登录历史 / 存量会话兼容 / 当前账号保底）——
+  // 联系人 App 刚创建、从未登录过的小号不进列表，用下方「登录小号」登录后才出现。
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => readSwitchableAccounts(getActiveAccountIdFor('wx')));
   // 当前微信账号 id（per-app）：切换事件到达时刷新快照 → 绿点「当前使用」移到新卡（本页保持打开）
   const [activeId, setActiveId] = useState(() => getActiveAccountIdFor('wx'));
   useEffect(() => {
     const fn = (e: Event) => {
       const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
       if (!d || d.app !== 'wx') return;
-      setAccounts(getAccounts().filter((a) => a.kind !== 'anon'));
+      setAccounts(readSwitchableAccounts(getActiveAccountIdFor('wx')));
       setActiveId(getActiveAccountIdFor('wx'));
     };
     window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
     return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
   }, []);
+  /** 「登录小号」自由登录墙（覆盖全页；slot=null 不绑定槽位，用任意小号账密登录） */
+  const [loginOpen, setLoginOpen] = useState(false);
   /** 大号机主资料（跨账号直读大号库；不能用 me——小号视角下 me 是小号身份，Task 40-F 修正） */
   const [mainOwner, setMainOwner] = useState<{ name: string; wechatId: string; avatar: string | null } | null>(null);
   useEffect(() => {
@@ -11140,16 +11173,32 @@ function WxAccountSwitchPage({ me, onBack }: { me: WxUser; onBack: () => void })
             );
           })}
 
-          {/* 小号创建入口提示：小号统一在联系人 App 「小号」tab 创建，本页只负责登录与切换 */}
-          <div
-            data-testid="wx-account-add-hint"
-            className="flex h-[84px] w-full flex-col items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/15 px-4 text-center text-black/40 dark:border-white/20 dark:text-white/40"
+          {/* 登录小号入口（Task 41）：小号统一在联系人 App 「小号」tab 创建；创建后不直接出现在列表，
+              在这里用小号账密登录成功后才出现（登录历史），登录过的小号切换不再需要登录 */}
+          <button
+            type="button"
+            data-testid="wx-account-login-alt"
+            onClick={() => setLoginOpen(true)}
+            className="flex h-[84px] w-full flex-col items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/15 px-4 text-center text-black/40 active:bg-black/[0.03] dark:border-white/20 dark:text-white/40 dark:active:bg-white/[0.05]"
           >
-            <span className="text-[14.5px]">新建小号：打开联系人 App → 「小号」</span>
-            <span className="text-[12px] text-black/25 dark:text-white/25">创建后在这里登录即可使用，登录过的小号切换不再需要登录</span>
-          </div>
+            <span className="text-[14.5px]">登录小号</span>
+            <span className="text-[12px] text-black/25 dark:text-white/25">新建小号：打开联系人 App → 「小号」；用小号账密登录后出现在上面的列表</span>
+          </button>
         </div>
       </div>
+
+      {/* 登录小号：自由登录墙覆盖层（slot=null 不绑定槽位；返回关闭不退出微信） */}
+      {loginOpen && (
+        <div className="absolute inset-0 z-30">
+          <LoginScreen
+            onLogin={(u) => {
+              setLoginOpen(false);
+              onLoginOther(u);
+            }}
+            onBack={() => setLoginOpen(false)}
+          />
+        </div>
+      )}
 
       {/* 删除二次确认（微信风受控弹窗）：该账号的独立聊天库/登录态等本地数据一并清除 */}
       {delTarget && (
@@ -11758,6 +11807,7 @@ function MainScreen({
   reloadContacts,
   onLogout,
   onExit,
+  onLoginAccount,
 }: {
   me: WxUser;
   contacts: ContactRecord[];
@@ -11768,6 +11818,8 @@ function MainScreen({
   reloadContacts: () => Promise<void>;
   onLogout: () => void;
   onExit: () => void;
+  /** 切换账号页「登录小号」自由登录成功 → 根组件 handleLogin（Task 41） */
+  onLoginAccount: (u: WxUser) => void;
 }) {
   const [tab, setTab] = useState<Tab>('chats');
   const [chatPeer, setChatPeer] = useState<ContactRecord | null>(null);
@@ -12883,7 +12935,7 @@ function MainScreen({
   if (page === 'settings')
     return <WxSettingsPage onBack={() => setPage('main')} onLogout={onLogout} onOpenAccountSwitch={() => setPage('accountSwitch')} />;
   // 切换账号子页（Task 40-D）：注册表账号卡 + 添加 + 管理
-  if (page === 'accountSwitch') return <WxAccountSwitchPage me={me} onBack={() => setPage('settings')} />;
+  if (page === 'accountSwitch') return <WxAccountSwitchPage me={me} onBack={() => setPage('settings')} onLoginOther={onLoginAccount} />;
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
@@ -13651,6 +13703,14 @@ export default function WeChatApp() {
         switchAccountFor('wx', MAIN_ACCOUNT_ID);
         return;
       }
+      // 多账号 Task 41：退出登录后的自由登录墙（一次性消费）——本次启动不恢复任何会话，
+      // 直接进自由登录（不显示/不锁定「当前账号」，想登哪个登哪个）
+      if (consumeForceLoginWall('wx')) {
+        if (!alive) return;
+        setUser(null);
+        setBooting(false);
+        return;
+      }
       const list = await loadContacts().catch(() => [] as ContactRecord[]);
       if (!alive) return;
       setContacts(list);
@@ -13660,6 +13720,16 @@ export default function WeChatApp() {
         // Task 40 修正：小号/匿名号槽位的会话必须指向本槽位档案联系人——
         // 历史串槽登录态（在 A 小号槽位登了 B 的账密）在此自愈清除，避免切号页显示错账号
         const acc = getActiveAccountFor('wx');
+        // Task 41 补强：大号作用域的会话指向了小号/匿名号档案（历史串槽残留）→ 清除回自由登录
+        if (savedId && acc.kind === 'main') {
+          const saved = list.find((c) => c.id === savedId && c.kind === 'user');
+          if (saved?.altOf) {
+            window.localStorage.removeItem(sKey);
+            setUser(null);
+            setBooting(false);
+            return;
+          }
+        }
         const slotProfile =
           acc.kind !== 'main' && savedId
             ? list.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId))
@@ -13688,12 +13758,19 @@ export default function WeChatApp() {
   }, [loadContacts, toWxUser, accReloadKey]);
 
   const handleLogin = useCallback((u: WxUser) => {
-    setUser(u);
+    // 多账号 Task 41：登录身份落到对应账号作用域——自由登录可能是某个小号（档案 altOf），
+    // 槽位登录已是本槽位（switchAccountFor 同 id no-op）；大号机主档案回 main。
+    // 必须在写会话前切：事件驱动 boot 重跑时读到的已是新作用域的会话键。
+    const accId = u.altOf || MAIN_ACCOUNT_ID;
+    switchAccountFor('wx', accId);
     try {
+      // 登录历史：切换账号列表只显示登录过的账号（Task 41）
+      markAccountLoginHistory('wx', accId);
       window.localStorage.setItem(accLs(LS_SESSION, 'wx'), u.id);
     } catch {
       // 忽略
     }
+    setUser(u);
   }, []);
 
   const handleLogout = useCallback(() => {
@@ -13703,6 +13780,10 @@ export default function WeChatApp() {
     } catch {
       // 忽略
     }
+    // 多账号 Task 41：退出后回大号身份 + 自由登录墙——不显示「当前账号」、不锁定登录身份，
+    // 想登哪个登哪个；force 标记保证下次启动也不自动登录任何账号（一次性消费）。
+    requestForceLoginWall('wx');
+    switchAccountFor('wx', MAIN_ACCOUNT_ID);
   }, []);
 
   if (booting) {
@@ -13738,6 +13819,7 @@ export default function WeChatApp() {
       reloadContacts={reloadContacts}
       onLogout={handleLogout}
       onExit={closeApp}
+      onLoginAccount={handleLogin}
     />
   );
 }

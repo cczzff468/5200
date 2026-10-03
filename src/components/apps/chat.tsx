@@ -98,7 +98,7 @@ import {
   wbScanText,
 } from '@/lib/ios/worldbook';
 // listContactsFor：按 App 投影联系人（sms 槽位优先，回退全局 avatar）——信息 App 内一律用它加载
-import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact } from '@/lib/ios/contacts-store';
+import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealName, updateContact, setAppFriendFlag } from '@/lib/ios/contacts-store';
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 多账号 v2（Task 40-2c）：信息端账号一律走 For('sms')，AI 来电/留言归属电话 App 当前账号（For('phone')）；
 // accLs 每次「现算」账号作用域 localStorage 键（大号原键零迁移），严禁缓存成模块级常量
@@ -3854,7 +3854,8 @@ function AddFriendView({
     setAddingId(c.id);
     setError('');
     try {
-      const updated = await updateContact(c.id, { friendSms: true });
+      // 多账号 Task 41：好友标记落当前账号作用域（大号/小号/匿名号各自的好友圈互不可见）
+      const updated = await setAppFriendFlag('sms', c.id, true);
       if (!updated) throw new Error('联系人不存在');
       // 信息端不显示加好友过程（不写成功提示等系统消息，直接完成添加）
       onAddFriend(updated);

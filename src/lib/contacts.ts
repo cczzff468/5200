@@ -52,6 +52,13 @@ export interface ContactRecord {
   friendQq?: boolean;
   /** 信息 App 好友标记（缺省 = 沿用旧全局 isFriend） */
   friendSms?: boolean;
+  /** 微信好友标记·按账号隔离（多账号 Task 41）：键 = 账号 id（大号 'main'），值 = 好友与否。
+   *  大号无记录时回退旧全局 friendWx/isFriend（旧数据兼容）；小号/匿名号无记录 = 未添加。 */
+  friendWxByAcc?: Record<string, boolean> | null;
+  /** QQ 好友标记·按账号隔离（结构同 friendWxByAcc） */
+  friendQqByAcc?: Record<string, boolean> | null;
+  /** 信息好友标记·按账号隔离（结构同 friendWxByAcc；匿名号码与大号/小号互不可见） */
+  friendSmsByAcc?: Record<string, boolean> | null;
   /** 真实姓名（withDisplayNames 展示副本专用：昵称替换 name 时把原 name 存到这里；
    *  人设注入用——角色要知道自己的大名/真名，别人用真名叫 TA 时不能不承认） */
   realName?: string | null;
@@ -100,6 +107,10 @@ export interface ContactPayload {
   friendWx?: boolean;
   friendQq?: boolean;
   friendSms?: boolean;
+  /** 好友标记·按账号隔离（写入传完整 map；见 ContactRecord 同名字段说明） */
+  friendWxByAcc?: Record<string, boolean> | null;
+  friendQqByAcc?: Record<string, boolean> | null;
+  friendSmsByAcc?: Record<string, boolean> | null;
   remark?: string | null;
   /** 语音音色（角色在电话/微信/QQ 里的说话音色；空 = 用全局默认） */
   voiceId?: string | null;
@@ -193,18 +204,59 @@ export function meTileLabel(c: { name: string; nickname?: string | null; realNam
 export type FriendApp = 'wx' | 'qq' | 'sms';
 
 /**
- * 某 App 内是否已添加好友：
+ * 多账号：好友标记按「对应 App 当前账号」取。
+ * 本模块是前后端通用纯函数，不直接依赖客户端的 lib/ios/accounts——由客户端壳
+ * （contacts-store.ts 加载时）注入解析器；未注入（后端/SSR/极端时序）按大号口径走旧逻辑。
+ * 解析器返回账号 id（大号恒为 'main'，与 accounts.ts MAIN_ACCOUNT_ID 一致）。
+ */
+type FriendAccountResolver = (app: FriendApp) => string;
+
+let friendAccountResolver: FriendAccountResolver | null = null;
+
+export function setFriendAccountResolver(fn: FriendAccountResolver): void {
+  friendAccountResolver = fn;
+}
+
+function friendAccountIdOf(app: FriendApp): string {
+  try {
+    return friendAccountResolver ? friendAccountResolver(app) : 'main';
+  } catch {
+    return 'main';
+  }
+}
+
+/**
+ * 某 App 内「当前账号」是否已添加好友：
  * - USER 恒为好友（自己的账号）
- * - 分 App 标记（friendWx/friendQq/friendSms）已设置时以标记为准
- * - 标记缺省（历史数据）回退到全局 isFriend，老好友保持原状
+ * - 分账号标记（friendXxByAcc）有记录时以记录为准——大号加了 AI 小号看不见、
+ *   小号之间互不可见、信息匿名号码与大号隔离（Task 41）
+ * - 大号无分账号记录时回退旧全局标记（friendWx/friendQq/friendSms → isFriend，旧数据兼容）
+ * - 小号/匿名号无记录 = 未添加（小号好友列表从零开始，正是隔离语义）
  */
 export function isFriendIn(
-  c: Pick<ContactRecord, 'kind' | 'isFriend' | 'friendWx' | 'friendQq' | 'friendSms'>,
+  c: Pick<
+    ContactRecord,
+    | 'kind'
+    | 'isFriend'
+    | 'friendWx'
+    | 'friendQq'
+    | 'friendSms'
+    | 'friendWxByAcc'
+    | 'friendQqByAcc'
+    | 'friendSmsByAcc'
+  >,
   app: FriendApp
 ): boolean {
   if (c.kind === 'user') return true;
-  const v = app === 'wx' ? c.friendWx : app === 'qq' ? c.friendQq : c.friendSms;
-  return typeof v === 'boolean' ? v : !!c.isFriend;
+  const byAcc = app === 'wx' ? c.friendWxByAcc : app === 'qq' ? c.friendQqByAcc : c.friendSmsByAcc;
+  const accId = friendAccountIdOf(app);
+  const scoped = byAcc?.[accId];
+  if (typeof scoped === 'boolean') return scoped;
+  if (accId === 'main') {
+    const legacy = app === 'wx' ? c.friendWx : app === 'qq' ? c.friendQq : c.friendSms;
+    return typeof legacy === 'boolean' ? legacy : !!c.isFriend;
+  }
+  return false;
 }
 
 function pick(chars: string): string {
