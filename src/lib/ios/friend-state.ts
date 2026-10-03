@@ -35,8 +35,9 @@
 
 import { kvGet, kvSet, kvDel } from './idb-kv';
 import { genId } from './db';
-import { getContact, ownerProfileFor, setAppFriendFlag } from './contacts-store';
+import { getContact, ownerProfileFor, setAppFriendFlag, mainOwnerContact } from './contacts-store';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
+import { getActiveAccountIdFor, MAIN_ACCOUNT_ID } from './accounts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL } from './block-state';
 import { buildPersonaSystemPrompt } from './persona';
@@ -598,4 +599,247 @@ export async function charWelcomeReplyToApply(app: FriendDelApp, reqId: string, 
   const cur: FriendReqThreadMsg[] = fresh.thread && fresh.thread.length > 0 ? fresh.thread : base;
   if (cur.some((m) => m.who === 'peer')) return;
   updateFriendReq(app, reqId, { thread: [...cur, { who: 'peer' as const, text: reply, time: Date.now() }].slice(-30) });
+}
+
+// ---------------- 小号加好友：AI 决策（同意 / 拒绝 / 先回复） ----------------
+
+/**
+ * 小号（alt 账号）加好友不再「发送即通过」，改由 AI 按人设决定：
+ *
+ * 【流程】小号发出好友申请（验证消息）→ 条目 status='pending'（好友标记不置位，
+ * 联系人界面/会话列表不可见）→ AI 综合人设、与大号的关系、记忆、验证消息内容决策：
+ * - accept：通过好友申请（置好友标记 + 条目 accepted + 线程里回一句）；
+ * - reject：拒绝申请（条目 rejected + 线程里按人设回一句拒绝的话）；
+ * - reply：暂不决定，先回一句（继续了解）。
+ * 用户可以在验证消息线程里继续回复（详情页「回复」框），每条回复都会再次触发 AI 决策
+ * ——按人设「随时可以同意」：第一句就同意、聊几句再同意、坚决拒绝都符合预期。
+ * 【隔离语义不变】AI 不知道申请人和大号是同一个人；大号关系只作为「现实处境」参考
+ * （如已有对象时对陌生申请更警惕），回复中不提及大号。
+ */
+
+/** AI 决策结果 */
+export interface FriendDecision {
+  decision: 'accept' | 'reject' | 'reply';
+  /** 随决策回复的验证消息（通过后的第一句 / 拒绝的话 / 继续了解的追问） */
+  message: string;
+}
+
+/** AI 决策落盘（同意 = 好友标记变化）后广播：宿主刷新联系人列表（联系人界面即时出现/保持隐藏） */
+export const FRIEND_STATE_APPLIED_EVENT = 'friend-state-applied';
+
+function emitFriendStateApplied(): void {
+  try {
+    window.dispatchEvent(new CustomEvent(FRIEND_STATE_APPLIED_EVENT));
+  } catch {
+    // 忽略
+  }
+}
+
+/** 当前登录身份是否小号（alt 账号）：小号加好友走 AI 决策，大号保持「发送即通过」 */
+export function isAltAccountActiveFor(app: FriendDelApp): boolean {
+  return getActiveAccountIdFor(app) !== MAIN_ACCOUNT_ID;
+}
+
+/**
+ * 该条申请是否走「AI 决策」链路：当前账号是小号 + 用户主动发起（非 AI 加回申请）。
+ * 命中时：发送后保持 pending；线程回复触发 processAltFriendReq 重新决策。
+ */
+export function shouldUseAltDecisionFlow(app: FriendDelApp, req: Pick<FriendReqEntry, 'fromChar'>): boolean {
+  return isAltAccountActiveFor(app) && req.fromChar !== true;
+}
+
+/**
+ * 清除「删除好友」状态（不置好友标记）：小号重新发起申请时调用——
+ * 避免删除状态残留在 runFriendReqCatchUp 里再触发一条 AI 加回申请（和用户的申请打架）。
+ */
+export function clearFriendDelState(app: FriendDelApp, contactId: string): void {
+  if (!contactId) return;
+  kvDel(delKey(app, contactId));
+  writeDelIndex(app, contactId, false);
+}
+
+/** 大号（main 账号）是否添加过该角色（legacy 全局标记 + main 分账号标记同口径） */
+function mainAccountKnowsChar(contact: ContactRecord, app: FriendDelApp): boolean {
+  const byAcc = app === 'wx' ? contact.friendWxByAcc : contact.friendQqByAcc;
+  if (byAcc && typeof byAcc[MAIN_ACCOUNT_ID] === 'boolean') return byAcc[MAIN_ACCOUNT_ID];
+  const legacy = app === 'wx' ? contact.friendWx : contact.friendQq;
+  return typeof legacy === 'boolean' ? legacy : !!contact.isFriend;
+}
+
+/** 解析 AI 决策输出：优先 JSON（容错代码块围栏/多余文本），失败按关键词兜底 */
+function parseFriendDecision(raw: string): FriendDecision | null {
+  const t = (raw ?? '').trim();
+  if (!t) return null;
+  const jsonMatch = t.match(/\{[\s\S]*?\}/);
+  if (jsonMatch) {
+    try {
+      const obj = JSON.parse(jsonMatch[0]) as { decision?: unknown; message?: unknown };
+      const d = typeof obj.decision === 'string' ? obj.decision.trim().toLowerCase() : '';
+      const msg = cleanReqMessage(typeof obj.message === 'string' ? obj.message : '');
+      if ((d === 'accept' || d === 'reject' || d === 'reply') && msg) return { decision: d, message: msg };
+    } catch {
+      // JSON 解析失败走兜底
+    }
+  }
+  const dm = t.match(/"decision"\s*:\s*"(accept|reject|reply)"/i);
+  const mm = t.match(/"message"\s*:\s*"([^"]*)"/);
+  if (dm) {
+    const msg = cleanReqMessage(mm?.[1] ?? t.replace(jsonMatch?.[0] ?? '', ' '));
+    if (msg) return { decision: dm[1].toLowerCase() as FriendDecision['decision'], message: msg };
+  }
+  // 关键词兜底：整段文本按首个命中关键词定性，全文清洗后截断作回复
+  const low = t.toLowerCase();
+  const decision: FriendDecision['decision'] | null = /\baccept\b/.test(low) || t.includes('同意')
+    ? 'accept'
+    : /\breject\b/.test(low) || t.includes('拒绝')
+      ? 'reject'
+      : /\breply\b/.test(low) || t.includes('回复')
+        ? 'reply'
+        : null;
+  if (!decision) return null;
+  const msg = cleanReqMessage(t);
+  return msg ? { decision, message: msg } : null;
+}
+
+/**
+ * AI 决策一条小号发来的好友申请：人设 + 大号关系 + 记忆 + 验证消息线程。
+ * 返回 null = 无法决策（无人设/生成失败），申请保持原状（用户可再回复触发重试）。
+ */
+export async function decideCharFriendReq(
+  app: FriendDelApp,
+  contact: ContactRecord,
+  thread: FriendReqThreadMsg[],
+): Promise<FriendDecision | null> {
+  if (!(contact.persona ?? '').trim()) return null;
+  const { userName, userRealName, userNickname } = await ownerTriplet(app);
+  const channel = BLOCK_CHANNEL[app];
+  // 大号关系（现实处境参考）：当前是小号 + 大号认识该角色时注入（AI 不知道两者是同一人）
+  let mainIdentityLine = '';
+  if (isAltAccountActiveFor(app) && mainAccountKnowsChar(contact, app)) {
+    const owner = await mainOwnerContact().catch(() => null);
+    const mainName = owner?.name?.trim() || '机主';
+    const mainRelation = contact.relation?.trim() || '普通朋友';
+    mainIdentityLine = [
+      `- 现实处境：你和「${mainName}」的关系是「${mainRelation}」。把这个情况纳入你的判断`,
+      `  （例如你已经有对象/伴侣时，对陌生人的好友申请要更警惕），但申请人不知道你和${mainName}的关系，回复里绝对不要提起。`,
+    ].join('\n');
+  }
+
+  const sceneRules = [
+    '你不是在聊天，而是在处理一条「好友申请的验证消息」。申请人还不是你的好友。',
+    '你要完全按自己的人设、性格和现实处境，决定是否通过这条好友申请：',
+    '- 可以直接同意（decision=accept）：回一句通过后的反应/招呼（热情、冷淡、警惕都可以，按人设来）；',
+    '- 可以拒绝（decision=reject）：不喜欢加陌生人/性格警惕/有对象了/验证消息让你反感等，按人设来，拒绝也回一句话；',
+    '- 也可以先不决定（decision=reply）：回一句想进一步了解的话（问问是谁、怎么知道的等）。',
+    '第一句验证消息就同意是完全允许的（按人设判断），多聊几句再同意也可以。',
+  ];
+  const persona = buildPersonaSystemPrompt(contact, {
+    channel,
+    userName: userName || null,
+    userRealName,
+    userNickname,
+    multiApp: getMemSettings(contact.id).share,
+    extraRules: sceneRules,
+  });
+  const memoryBlock = memRecallBlock(contact.id, app, '');
+  const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
+  const system = [persona, memoryBlock, timeBlock, mainIdentityLine].filter(Boolean).join('\n\n');
+
+  const lines = thread.slice(-8).map((m) => `${m.who === 'me' ? userName : contactRealNameSafe(contact)}：${m.text}`);
+  const ask = [
+    `【重要情境】「${userName}」通过${channel}找到你的账号，发来一条好友申请（你们现在还不是好友）。验证消息对话如下：`,
+    ...lines,
+    ``,
+    `请以你的身份决策这条申请，输出一行 JSON（不要输出任何其他内容）：`,
+    `{"decision":"accept","message":"..."} 同意好友申请；`,
+    `{"decision":"reject","message":"..."} 拒绝好友申请；`,
+    `{"decision":"reply","message":"..."} 暂不决定，先回复一句。`,
+    `message 是你回在验证消息里的一句话，30 字以内，符合你的人设和说话语气。`,
+  ].join('\n');
+
+  const raw = await callLlmTwoTier(system, ask);
+  return parseFriendDecision(raw);
+}
+
+/**
+ * 处理一条小号发起的好友申请（发送时 + 用户每次在线程里回复后调用）：
+ * 读取申请 → AI 决策 → 落盘结果（状态/好友标记/线程回复/聊天记录成功提示）。
+ * 全程静默失败：决策不可用时申请保持原状，等待用户下一次回复再触发。
+ */
+export async function processAltFriendReq(app: FriendDelApp, reqId: string, contactId: string): Promise<void> {
+  const entry = loadFriendReqs(app).find((r) => r.id === reqId);
+  if (!entry || entry.fromChar) return;
+  if (entry.status !== 'pending' && entry.status !== 'rejected') return; // 已终态（accepted）不再处理
+  const contact = await getContact(contactId).catch(() => null);
+  if (!contact || contact.kind === 'user') return;
+  const thread: FriendReqThreadMsg[] =
+    entry.thread && entry.thread.length > 0
+      ? entry.thread
+      : entry.message.trim()
+        ? [{ who: 'me', text: entry.message, time: entry.time }]
+        : [];
+  if (!thread.some((m) => m.who === 'me')) return; // 没有用户发言，无从决策
+
+  const decision = await decideCharFriendReq(app, contact, thread);
+  if (!decision) return;
+
+  // 生成期间状态可能已变化（用户撤回/又回复/条目被清）→ 复核仍是同一条可处理的申请
+  const fresh = loadFriendReqs(app).find((r) => r.id === reqId);
+  if (!fresh || fresh.fromChar) return;
+  if (fresh.status !== 'pending' && fresh.status !== 'rejected') return;
+  const curThread: FriendReqThreadMsg[] =
+    fresh.thread && fresh.thread.length > 0
+      ? fresh.thread
+      : fresh.message.trim()
+        ? [{ who: 'me', text: fresh.message, time: fresh.time }]
+        : [];
+  if (curThread.length !== thread.length) return; // 期间有新发言：本次决策作废，等下一轮
+
+  if (decision.decision === 'accept') {
+    // 通过：置好友标记（当前账号作用域）+ 清删除状态（历史数据恢复可见）+ 条目置 accepted
+    try {
+      await restoreFriendship(app, contactId);
+    } catch {
+      // 联系人更新失败时仍流转状态（下次重新添加可恢复）
+    }
+    setFriendReqStatus(app, reqId, 'accepted');
+    updateFriendReq(app, reqId, {
+      thread: [...curThread, { who: 'peer' as const, text: decision.message, time: Date.now() }].slice(-30),
+    });
+    // 聊天记录落「已添加成功」提示（与既有 acceptFriendReqAction 同款；验证消息此前已在）
+    try {
+      const chatKey = `${app === 'wx' ? 'wx-chat-msgs:' : 'qq-chat-msgs:'}${contactId}`;
+      const existing = kvGet<unknown[]>(chatKey);
+      const list = Array.isArray(existing) ? [...existing] : [];
+      list.push({
+        id: genId(),
+        role: 'peer',
+        content: '',
+        time: Date.now(),
+        kind: 'sys',
+        sys: { text: `你已添加了${fresh.name}，现在可以开始聊天了。` },
+        fr: 'added',
+      });
+      kvSet(chatKey, list.slice(app === 'wx' ? -100 : -200));
+    } catch {
+      // 聊天记录写入失败不影响好友状态
+    }
+    emitFriendStateApplied();
+    return;
+  }
+
+  if (decision.decision === 'reject') {
+    // 拒绝：条目置 rejected（用户仍可在验证消息线程里回复 → 再次触发决策，按人设「随时可以同意」）
+    setFriendReqStatus(app, reqId, 'rejected');
+    updateFriendReq(app, reqId, {
+      thread: [...curThread, { who: 'peer' as const, text: decision.message, time: Date.now() }].slice(-30),
+    });
+    emitFriendStateApplied();
+    return;
+  }
+
+  // reply：暂不决定，先回一句（保持 pending）
+  updateFriendReq(app, reqId, {
+    thread: [...curThread, { who: 'peer' as const, text: decision.message, time: Date.now() }].slice(-30),
+  });
 }

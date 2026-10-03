@@ -184,7 +184,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, consumeForceLoginWall, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
@@ -215,6 +215,10 @@ import {
   appendReqThread,
   genCharThreadReply,
   charWelcomeReplyToApply,
+  processAltFriendReq,
+  shouldUseAltDecisionFlow,
+  clearFriendDelState,
+  FRIEND_STATE_APPLIED_EVENT,
   type FriendReqEntry,
   type FriendReqExtras,
   type FriendReqThreadMsg,
@@ -9891,8 +9895,13 @@ function FriendReqDetailPage({
     if (contact && (contact.persona ?? '').trim()) {
       setReplyBusy(true);
       try {
-        const reply = await genCharThreadReply('wx', contact, [...thread, msg], 'reply');
-        if (reply) appendReqThread('wx', req.id, { who: 'peer', text: reply, time: Date.now() });
+        if (shouldUseAltDecisionFlow('wx', req)) {
+          // 小号发起的申请：每条回复都触发 AI 重新决策（同意/拒绝/先回复，按人设随时可以同意）
+          await processAltFriendReq('wx', req.id, contact.id);
+        } else {
+          const reply = await genCharThreadReply('wx', contact, [...thread, msg], 'reply');
+          if (reply) appendReqThread('wx', req.id, { who: 'peer', text: reply, time: Date.now() });
+        }
       } catch {
         // 生成失败静默：用户消息已在线程里
       } finally {
@@ -10036,24 +10045,34 @@ function FriendReqDetailPage({
             前往验证
           </button>
         ) : pending ? (
-          <div className="mt-3 flex gap-px">
-            <button
-              type="button"
-              onClick={() => onAccept(req)}
-              disabled={!contact}
-              className="flex-1 bg-white py-[17px] text-center text-[17px] text-[#576B95] active:bg-black/[0.04] disabled:opacity-40 dark:bg-[#1A1A1A] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
+          req.fromChar ? (
+            <div className="mt-3 flex gap-px">
+              <button
+                type="button"
+                onClick={() => onAccept(req)}
+                disabled={!contact}
+                className="flex-1 bg-white py-[17px] text-center text-[17px] text-[#576B95] active:bg-black/[0.04] disabled:opacity-40 dark:bg-[#1A1A1A] dark:text-[#8FA5C9] dark:active:bg-white/[0.06]"
+              >
+                前往验证
+              </button>
+              <button
+                type="button"
+                data-testid="wx-reqdetail-reject"
+                onClick={() => onReject(req)}
+                className="flex-1 bg-white py-[17px] text-center text-[17px] text-red-500 active:bg-black/[0.04] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
+              >
+                拒绝
+              </button>
+            </div>
+          ) : (
+            // 小号发起、等待 AI 决策的申请：无同意/拒绝按钮（决策在对方手里），可继续回复验证消息
+            <p
+              className="mt-3 bg-white py-[17px] text-center text-[16px] text-black/35 dark:bg-[#1A1A1A] dark:text-white/35"
+              data-testid="wx-reqdetail-waiting"
             >
-              前往验证
-            </button>
-            <button
-              type="button"
-              data-testid="wx-reqdetail-reject"
-              onClick={() => onReject(req)}
-              className="flex-1 bg-white py-[17px] text-center text-[17px] text-red-500 active:bg-black/[0.04] dark:bg-[#1A1A1A] dark:active:bg-white/[0.06]"
-            >
-              拒绝
-            </button>
-          </div>
+              等待对方验证
+            </p>
+          )
         ) : (
           <p className="mt-3 bg-white py-[17px] text-center text-[16px] text-black/35 dark:bg-[#1A1A1A] dark:text-white/35" data-testid="wx-reqdetail-done">
             {status === 'rejected' ? '已拒绝该申请' : '已添加'}
@@ -12416,13 +12435,23 @@ function MainScreen({
     showToast(`已删除「${displayNameOf(contact)}」`);
   }, [delTarget, reloadContacts, showToast]);
 
-  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「新的朋友」
-   *  （验证消息线程 = 我: 打招呼内容）+ AI 在线程里回一句欢迎（一次性）；返回新建条目供导航 */
+  /** 申请添加朋友「发送」：
+   *  - 大号：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「新的朋友」（status=accepted）
+   *    + AI 在线程里回一句欢迎（一次性）——「发送即通过」，保持既有体验；
+   *  - 小号：AI 决策模式（2025）——不置好友标记（联系人界面不出现该联系人）、条目 status=pending，
+   *    由 AI 按人设+大号关系+记忆+验证消息决定同意/拒绝/先回复；用户可在验证消息线程里继续回复，
+   *    每条回复再次触发 AI 决策（按人设随时可以同意）。返回新建条目供导航。 */
   const handleApplySent = useCallback(
     async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }): Promise<WxFriendReq | null> => {
+      const altFlow = !!me.altOf && (target.persona ?? '').trim().length > 0; // 无人设角色无法决策：保持直接通过
       try {
         if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
-        await restoreFriendship('wx', target.id); // 未删过 = friendWx=true；删过 = 清删除状态并恢复好友
+        if (altFlow) {
+          // 小号：不置好友标记；清删除状态（重新加回场景，防止 catch-up 再发一条 AI 申请打架）
+          clearFriendDelState('wx', target.id);
+        } else {
+          await restoreFriendship('wx', target.id); // 未删过 = friendWx=true；删过 = 清删除状态并恢复好友
+        }
       } catch {
         showToast('添加失败，请重试');
         return null;
@@ -12434,20 +12463,23 @@ function MainScreen({
         avatar: target.avatar,
         message: payload.greeting,
         time: Date.now(),
-        status: 'accepted',
+        status: altFlow ? 'pending' : 'accepted',
         source: SOURCE_SEARCH_WX,
         fromChar: false,
         extras: payload.extras,
         thread: [{ who: 'me', text: payload.greeting, time: Date.now() }],
       };
       addFriendReq('wx', entry);
-      // 加好友过程落聊天记录：我的验证消息（fr=apply）+ 成功提示（fr=added 居中灰字）；验证消息永久保留，重启不丢
+      // 加好友过程落聊天记录：我的验证消息（fr=apply）永久保留，重启不丢；
+      // 小号模式下不加「已成功添加」提示（AI 同意后由 processAltFriendReq 补写）
       try {
         const now = Date.now();
-        saveMsgs(target.id, [
+        const msgs: WxMsg[] = [
           ...loadMsgs(target.id),
           { id: uid(), role: 'me' as const, content: payload.greeting, time: now, kind: 'text' as const, fr: 'apply' as const },
-          {
+        ];
+        if (!altFlow) {
+          msgs.push({
             id: uid(),
             role: 'peer' as const,
             content: '',
@@ -12455,19 +12487,25 @@ function MainScreen({
             kind: 'sys' as const,
             sys: { text: '我们已成功添加为好友，现在可以开始聊天啦～' },
             fr: 'added' as const,
-          },
-        ]);
+          });
+        }
+        saveMsgs(target.id, msgs);
       } catch {
         // 聊天记录写入失败不影响添加流程
       }
       setReqs(loadReqs());
       await reloadContacts();
-      showToast('已发送添加申请');
-      // AI 欢迎回复（一次性；fire-and-forget，生成完成经 FRIEND_REQS_EVENT 刷新）
-      void charWelcomeReplyToApply('wx', entry.id, target.id, payload.greeting).catch(() => {});
+      showToast(altFlow ? '验证消息已发送，等待对方处理' : '已发送添加申请');
+      if (altFlow) {
+        // AI 决策（fire-and-forget）：同意/拒绝/先回复；落盘后经 FRIEND_REQS_EVENT / FRIEND_STATE_APPLIED_EVENT 刷新
+        void processAltFriendReq('wx', entry.id, target.id).catch(() => {});
+      } else {
+        // AI 欢迎回复（一次性；fire-and-forget，生成完成经 FRIEND_REQS_EVENT 刷新）
+        void charWelcomeReplyToApply('wx', entry.id, target.id, payload.greeting).catch(() => {});
+      }
       return loadReqs().find((x) => x.id === entry.id) ?? entry;
     },
-    [reloadContacts, showToast]
+    [reloadContacts, showToast, me.altOf]
   );
 
   /** 同意好友申请（前往验证 / AI 加回申请）：恢复好友关系 + 状态流转 + 刷新 */
@@ -13686,6 +13724,9 @@ export default function WeChatApp() {
       wechatId: c.wechatId,
       phone: c.phone,
       qqId: c.qqId,
+      // 2025（小号加好友 AI 决策）：会话恢复也必须带 altOf——登录时 handleLogin 存入的
+      // altOf 会被账号切换事件触发的 boot 重跑（此处）覆盖，丢失后小号加好友会走错「发送即通过」旧链路
+      altOf: c.altOf ?? null,
     };
   }, []);
 
@@ -13719,6 +13760,14 @@ export default function WeChatApp() {
     const fn = () => void reloadContacts();
     window.addEventListener('contact-avatar-changed', fn);
     return () => window.removeEventListener('contact-avatar-changed', fn);
+  }, [reloadContacts]);
+
+  // 小号加好友 AI 决策落盘（2025）：同意 = 好友标记变化 → 刷新联系人（通讯录/会话列表即时出现）；
+  // 拒绝/先回复不改变好友标记，刷新无副作用
+  useEffect(() => {
+    const fn = () => void reloadContacts();
+    window.addEventListener(FRIEND_STATE_APPLIED_EVENT, fn);
+    return () => window.removeEventListener(FRIEND_STATE_APPLIED_EVENT, fn);
   }, [reloadContacts]);
 
   // 删好友后 AI 主动申请加回：定时器不跨刷新，微信挂载时扫描删除状态按冷却补跑
@@ -13755,9 +13804,11 @@ export default function WeChatApp() {
         switchAccountFor('wx', MAIN_ACCOUNT_ID);
         return;
       }
-      // 多账号 Task 41：退出登录后的自由登录墙（一次性消费）——本次启动不恢复任何会话，
-      // 直接进自由登录（不显示/不锁定「当前账号」，想登哪个登哪个）
-      if (consumeForceLoginWall('wx')) {
+      // 多账号 Task 41：退出登录后的自由登录墙——本次启动不恢复任何会话，
+      // 直接进自由登录（不显示/不锁定「当前账号」，想登哪个登哪个）。
+      // 2025 补充（登录态保持）：只检查不消费——标记持续到下一次登录成功（handleLogin 清除），
+      // 「退出 → 关掉 App → 再打开」仍是自由登录墙；登录过一次后所有账号免登录切换。
+      if (isForceLoginWallActive('wx')) {
         if (!alive) return;
         setUser(null);
         setBooting(false);
@@ -13818,6 +13869,8 @@ export default function WeChatApp() {
     try {
       // 登录历史：切换账号列表只显示登录过的账号（Task 41）
       markAccountLoginHistory('wx', accId);
+      // 登录成功 = 退出后的自由登录墙使命完成（标记在下次退出前不再出现）
+      clearForceLoginWall('wx');
       window.localStorage.setItem(accLs(LS_SESSION, 'wx'), u.id);
     } catch {
       // 忽略
@@ -13827,13 +13880,10 @@ export default function WeChatApp() {
 
   const handleLogout = useCallback(() => {
     setUser(null);
-    try {
-      window.localStorage.removeItem(accLs(LS_SESSION, 'wx'));
-    } catch {
-      // 忽略
-    }
-    // 多账号 Task 41：退出后回大号身份 + 自由登录墙——不显示「当前账号」、不锁定登录身份，
-    // 想登哪个登哪个；force 标记保证下次启动也不自动登录任何账号（一次性消费）。
+    // 登录态保持（2025）：退出只退「当前身份」，不删任何账号的会话键——
+    // 其他已登录账号（含刚退出的这个）在切换账号页点击仍直接进入，无需重新输密码；
+    // 退出后的自由登录墙持续到下一次登录成功（isForceLoginWallActive + handleLogin 清除）。
+    // 多账号 Task 41：退出后回大号身份 + 自由登录墙——不显示「当前账号」、不锁定登录身份。
     requestForceLoginWall('wx');
     switchAccountFor('wx', MAIN_ACCOUNT_ID);
   }, []);

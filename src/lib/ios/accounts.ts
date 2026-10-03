@@ -346,10 +346,14 @@ export function accountLoginHistory(app: AccountApp): string[] {
 }
 
 /**
- * 退出登录后的「自由登录墙」一次性标记（设备级 localStorage）：
+ * 退出登录后的「自由登录墙」标记（设备级 localStorage）：
  * 退出账号后不自动登录任何账号（即使大号会话还在）、不锁定登录身份——
- * 登录墙进自由模式（想登哪个登哪个）。各 App 启动 effect 首件事 consumeForceLoginWall：
- * 有标记 → 跳过会话恢复直接进登录墙（消费即清除，登录成功后恢复正常持久化）。
+ * 登录墙进自由模式（想登哪个登哪个）。各 App 启动 effect 首件事 isForceLoginWallActive：
+ * 有标记 → 跳过会话恢复直接进登录墙（**只检查不消费**——标记持续到下一次登录成功，
+ * 由各 App handleLogin 调 clearForceLoginWall 清除。这样「退出 → 关掉 App → 再打开」
+ * 仍是自由登录墙，而登录过一次后所有账号恢复正常免登录语义）。
+ * 2025 补充（登录态保持）：退出登录不再删除该账号的会话键——所有账号（含刚退出的）
+ * 的登录状态都保留，重新登录后切换任意账号均免重新输入密码。
  */
 const FORCE_LOGIN_KEY: Record<AccountApp, string> = {
   wx: 'wx-force-login',
@@ -362,15 +366,18 @@ export function requestForceLoginWall(app: AccountApp): void {
   writeLs(FORCE_LOGIN_KEY[app], '1');
 }
 
-/** 读并清除标记（一次性）；true = 本次启动跳过会话恢复，直接进自由登录墙 */
-export function consumeForceLoginWall(app: AccountApp): boolean {
-  if (readLs(FORCE_LOGIN_KEY[app]) !== '1') return false;
+/** 是否处于「退出后自由登录墙」（只检查不消费；登录成功时由 clearForceLoginWall 清除） */
+export function isForceLoginWallActive(app: AccountApp): boolean {
+  return readLs(FORCE_LOGIN_KEY[app]) === '1';
+}
+
+/** 登录成功：解除自由登录墙，恢复正常会话恢复/免登录切换 */
+export function clearForceLoginWall(app: AccountApp): void {
   try {
     window.localStorage.removeItem(FORCE_LOGIN_KEY[app]);
   } catch {
     // 忽略
   }
-  return true;
 }
 
 // ---------------- 创建 / 删除 ----------------

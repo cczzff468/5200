@@ -208,7 +208,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, consumeForceLoginWall, getAccounts, getActiveAccountFor, getActiveAccountIdFor, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
@@ -240,6 +240,10 @@ import {
   appendReqThread,
   genCharThreadReply,
   charWelcomeReplyToApply,
+  processAltFriendReq,
+  shouldUseAltDecisionFlow,
+  clearFriendDelState,
+  FRIEND_STATE_APPLIED_EVENT,
   type FriendReqEntry,
   type FriendReqExtras,
   type FriendReqThreadMsg,
@@ -10781,7 +10785,8 @@ function MeDrawer({
           }
         }}
       >
-        {/* 切换账号弹出卡片（对照真实 QQ 截图：头像+名字+号码+当前蓝勾，底部匿名账号行） */}
+        {/* 切换账号弹出卡片（对照真实 QQ 截图：头像+名字+号码+当前蓝勾；匿名号不在此展示——
+            匿名号码只属于电话/信息，2025 需求移除卡片内的匿名账号行） */}
         {accCardOpen && (
           <QqDrawerAccountCard
             onPick={(id) => {
@@ -10789,10 +10794,6 @@ function MeDrawer({
               switchAccountFor('qq', id);
             }}
             onClose={() => setAccCardOpen(false)}
-            onAnonTap={() => {
-              setAccCardOpen(false);
-              onToast('匿名号码仅用于电话与信息');
-            }}
           />
         )}
         {/* 整页滚动：顶部（打卡/头像/昵称）随内容一起滚动，不再固定 */}
@@ -11431,24 +11432,34 @@ function NewFriendsPage({
                     <p className="mt-0.5 truncate text-[12.5px] text-black/35 dark:text-white/35">来源：{r.source || '好友验证消息'}</p>
                   </div>
                   {status === 'pending' ? (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      data-testid={`qq-req-accept-${r.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAccept(r);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
+                    r.fromChar ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        data-testid={`qq-req-accept-${r.name}`}
+                        onClick={(e) => {
                           e.stopPropagation();
                           onAccept(r);
-                        }
-                      }}
-                      className="shrink-0 rounded-[6px] border border-black/15 px-4 py-1.5 text-[14px] active:bg-black/5 dark:border-white/25"
-                    >
-                      同意
-                    </span>
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            onAccept(r);
+                          }
+                        }}
+                        className="shrink-0 rounded-[6px] border border-black/15 px-4 py-1.5 text-[14px] active:bg-black/5 dark:border-white/25"
+                      >
+                        同意
+                      </span>
+                    ) : (
+                      // 小号发起、等待 AI 决策的申请：无「同意」按钮（决策在对方手里）
+                      <span
+                        className="shrink-0 text-[13.5px] text-black/35 dark:text-white/35"
+                        data-testid={`qq-req-waiting-${r.name}`}
+                      >
+                        等待验证
+                      </span>
+                    )
                   ) : (
                     <span className="shrink-0 text-[13.5px] text-black/35 dark:text-white/35" data-testid={`qq-req-status-${r.name}`}>
                       {status === 'rejected' ? '已拒绝' : '已同意'}
@@ -11539,8 +11550,13 @@ function FriendReqDetailPage({
     if (contact && (contact.persona ?? '').trim()) {
       setReplyBusy(true);
       try {
-        const reply = await genCharThreadReply('qq', contact, [...thread, msg], 'reply');
-        if (reply) appendReqThread('qq', req.id, { who: 'peer', text: reply, time: Date.now() });
+        if (shouldUseAltDecisionFlow('qq', req)) {
+          // 小号发起的申请：每条回复都触发 AI 重新决策（同意/拒绝/先回复，按人设随时可以同意）
+          await processAltFriendReq('qq', req.id, contact.id);
+        } else {
+          const reply = await genCharThreadReply('qq', contact, [...thread, msg], 'reply');
+          if (reply) appendReqThread('qq', req.id, { who: 'peer', text: reply, time: Date.now() });
+        }
       } catch {
         // 生成失败静默：用户消息已在线程里
       } finally {
@@ -11650,25 +11666,35 @@ function FriendReqDetailPage({
             前往验证
           </button>
         ) : pending ? (
-          <div className="mb-6 mt-8 flex flex-col gap-2.5">
-            <button
-              type="button"
-              onClick={() => onAccept(req)}
-              disabled={!contact}
-              className="h-12 w-full rounded-full text-[16px] font-medium text-white active:brightness-95 disabled:opacity-50"
-              style={{ backgroundColor: QQ_BLUE }}
+          req.fromChar ? (
+            <div className="mb-6 mt-8 flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={() => onAccept(req)}
+                disabled={!contact}
+                className="h-12 w-full rounded-full text-[16px] font-medium text-white active:brightness-95 disabled:opacity-50"
+                style={{ backgroundColor: QQ_BLUE }}
+              >
+                同意
+              </button>
+              <button
+                type="button"
+                data-testid="qq-reqdetail-reject"
+                onClick={() => onReject(req)}
+                className="h-12 w-full rounded-full bg-black/[0.05] text-[16px] text-red-500 active:opacity-70 dark:bg-white/[0.08]"
+              >
+                拒绝
+              </button>
+            </div>
+          ) : (
+            // 小号发起、等待 AI 决策的申请：无同意/拒绝按钮（决策在对方手里），可继续回复验证消息
+            <p
+              className="mb-6 mt-8 text-center text-[15px] text-black/35 dark:text-white/35"
+              data-testid="qq-reqdetail-waiting"
             >
-              同意
-            </button>
-            <button
-              type="button"
-              data-testid="qq-reqdetail-reject"
-              onClick={() => onReject(req)}
-              className="h-12 w-full rounded-full bg-black/[0.05] text-[16px] text-red-500 active:opacity-70 dark:bg-white/[0.08]"
-            >
-              拒绝
-            </button>
-          </div>
+              等待对方验证
+            </p>
+          )
         ) : (
           <p className="mt-8 text-center text-[15px] text-black/35 dark:text-white/35" data-testid="qq-reqdetail-done">
             {status === 'rejected' ? '已拒绝该申请' : '已同意'}
@@ -12926,11 +12952,11 @@ function readQqSwitchableAccounts(activeId: string): PhoneAccount[] {
 
 /**
  * 抽屉「切换账号」弹出卡片（对照真实 QQ 截图样式）：
- * 白色圆角卡 + 上箭头小三角；每行 头像 + 名字 + 号码，当前账号右侧蓝勾；
- * 底部「匿名账号」行（企鹅头像 + 脱敏号码）——匿名号只属于电话/信息，点击给出提示不切换。
+ * 白色圆角卡 + 上箭头小三角；每行 头像 + 名字 + 号码，当前账号右侧蓝勾。
+ * 匿名号码不在此展示（2025 需求：匿名号只属于电话/信息，与切换账号无关）。
  * 数据口径与 SecurityPage 一致：登录过的账号（登录历史/存量会话/当前保底）+ 档案展示名。
  */
-function QqDrawerAccountCard({ onPick, onClose, onAnonTap }: { onPick: (id: string) => void; onClose: () => void; onAnonTap: () => void }) {
+function QqDrawerAccountCard({ onPick, onClose }: { onPick: (id: string) => void; onClose: () => void }) {
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => readQqSwitchableAccounts(getActiveAccountIdFor('qq')));
   const [activeId, setActiveId] = useState<string>(() => getActiveAccountIdFor('qq'));
   useEffect(() => {
@@ -12976,11 +13002,7 @@ function QqDrawerAccountCard({ onPick, onClose, onAnonTap }: { onPick: (id: stri
     return (profile ? displayNameOf(profile) : '') || acc.name;
   };
   const accNoOf = (acc: PhoneAccount): string =>
-    acc.id === MAIN_ACCOUNT_ID ? mainOwner?.qqId || acc.qqId || '' : acc.kind === 'anon' ? acc.phone : acc.qqId;
-  // 匿名号（注册表里的 anon 账号）：仅展示；脱敏 +86 183******33 风格（前3后2）
-  const anonAccounts = getAccounts().filter((a) => a.kind === 'anon');
-  const maskAnon = (p: string): string =>
-    p.length >= 11 ? `+86 ${p.slice(0, 3)}******${p.slice(-2)}` : `+86 ${p}`;
+    acc.id === MAIN_ACCOUNT_ID ? mainOwner?.qqId || acc.qqId || '' : acc.qqId;
 
   return (
     <div className="absolute inset-0 z-50" onClick={onClose} data-testid="qq-drawer-acc-card-backdrop">
@@ -13018,24 +13040,6 @@ function QqDrawerAccountCard({ onPick, onClose, onAnonTap }: { onPick: (id: stri
               </button>
             );
           })}
-          {/* 匿名账号行（仅展示；匿名号只属于电话/信息，QQ 不提供匿名登录） */}
-          {anonAccounts.map((acc) => (
-            <button
-              key={acc.id}
-              type="button"
-              data-testid={`qq-drawer-acc-anon-${acc.id}`}
-              onClick={() => onAnonTap()}
-              className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.05] px-4 text-left active:bg-black/[0.04] dark:border-white/[0.06] dark:active:bg-white/[0.06]"
-            >
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white" aria-hidden="true">
-                <PenguinMark size={30} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[16px] font-medium leading-tight">{acc.name || '匿名账号'}</span>
-                <span className="mt-0.5 block truncate text-[13px] text-black/35 dark:text-white/35">{maskAnon(acc.phone)}</span>
-              </span>
-            </button>
-          ))}
         </div>
       </div>
     </div>
@@ -15197,13 +15201,23 @@ function MainScreen({
     showToast(`已删除「${displayNameOf(contact)}」`);
   }, [delTarget, refreshContacts, showToast]);
 
-  /** 申请添加朋友「发送」：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「好友通知」
-   *  （验证消息线程 = 我: 验证信息）+ AI 在线程里回一句欢迎（一次性）；返回新建条目供导航 */
+  /** 申请添加朋友「发送」：
+   *  - 大号：加好友（被删好友重新加回时同路径恢复历史数据可见）+ 写「好友通知」（status=accepted）
+   *    + AI 在线程里回一句欢迎（一次性）——「发送即通过」，保持既有体验；
+   *  - 小号：AI 决策模式（2025）——不置好友标记（联系人界面不出现该联系人）、条目 status=pending，
+   *    由 AI 按人设+大号关系+记忆+验证消息决定同意/拒绝/先回复；用户可在验证消息线程里继续回复，
+   *    每条回复再次触发 AI 决策（按人设随时可以同意）。返回新建条目供导航。 */
   const handleApplySent = useCallback(
     async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }): Promise<FriendReqEntry | null> => {
+      const altFlow = !!me.altOf && (target.persona ?? '').trim().length > 0; // 无人设角色无法决策：保持直接通过
       try {
         if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
-        await restoreFriendship('qq', target.id); // 未删过 = friendQq=true；删过 = 清删除状态并恢复好友
+        if (altFlow) {
+          // 小号：不置好友标记；清删除状态（重新加回场景，防止 catch-up 再发一条 AI 申请打架）
+          clearFriendDelState('qq', target.id);
+        } else {
+          await restoreFriendship('qq', target.id); // 未删过 = friendQq=true；删过 = 清删除状态并恢复好友
+        }
       } catch {
         showToast('添加失败，请重试');
         return null;
@@ -15215,20 +15229,23 @@ function MainScreen({
         avatar: target.avatar,
         message: payload.greeting,
         time: Date.now(),
-        status: 'accepted',
+        status: altFlow ? 'pending' : 'accepted',
         source: SOURCE_SEARCH_QQ,
         fromChar: false,
         extras: payload.extras,
         thread: [{ who: 'me', text: payload.greeting, time: Date.now() }],
       };
       addFriendReq('qq', entry);
-      // 加好友过程落聊天记录：我的验证消息（fr=apply）+ 成功提示（fr=added 居中灰字）；验证消息永久保留，重启不丢
+      // 加好友过程落聊天记录：我的验证消息（fr=apply）永久保留，重启不丢；
+      // 小号模式下不加「已成功添加」提示（AI 同意后由 processAltFriendReq 补写）
       try {
         const now = Date.now();
-        saveMsgs(target.id, [
+        const msgs = [
           ...loadMsgs(target.id),
           { id: genId(), role: 'me' as const, content: payload.greeting, time: now, kind: 'text' as const, fr: 'apply' as const },
-          {
+        ];
+        if (!altFlow) {
+          msgs.push({
             id: genId(),
             role: 'peer' as const,
             content: '',
@@ -15236,19 +15253,25 @@ function MainScreen({
             kind: 'sys' as const,
             sys: { text: '我们已成功添加为好友，现在可以开始聊天啦～' },
             fr: 'added' as const,
-          },
-        ]);
+          });
+        }
+        saveMsgs(target.id, msgs);
       } catch {
         // 聊天记录写入失败不影响添加流程
       }
       setQqReqs(loadFriendReqs('qq'));
       await refreshContacts();
-      showToast('已发送添加申请');
-      // AI 欢迎回复（一次性；fire-and-forget，生成完成经 FRIEND_REQS_EVENT 刷新）
-      void charWelcomeReplyToApply('qq', entry.id, target.id, payload.greeting).catch(() => {});
+      showToast(altFlow ? '验证消息已发送，等待对方处理' : '已发送添加申请');
+      if (altFlow) {
+        // AI 决策（fire-and-forget）：同意/拒绝/先回复；落盘后经 FRIEND_REQS_EVENT / FRIEND_STATE_APPLIED_EVENT 刷新
+        void processAltFriendReq('qq', entry.id, target.id).catch(() => {});
+      } else {
+        // AI 欢迎回复（一次性；fire-and-forget，生成完成经 FRIEND_REQS_EVENT 刷新）
+        void charWelcomeReplyToApply('qq', entry.id, target.id, payload.greeting).catch(() => {});
+      }
       return loadFriendReqs('qq').find((x) => x.id === entry.id) ?? entry;
     },
-    [refreshContacts, showToast]
+    [refreshContacts, showToast, me.altOf]
   );
 
   /** 同意好友申请（AI 加回申请）：恢复好友关系 + 状态流转 + 刷新 */
@@ -16165,9 +16188,11 @@ export default function QQApp() {
         switchAccountFor('qq', MAIN_ACCOUNT_ID);
         return;
       }
-      // 多账号 Task 41：退出登录后的自由登录墙（一次性消费）——本次启动不恢复任何会话，
-      // 直接进自由登录（不显示/不锁定「当前账号」，想登哪个登哪个）
-      if (consumeForceLoginWall('qq')) {
+      // 多账号 Task 41：退出登录后的自由登录墙——本次启动不恢复任何会话，
+      // 直接进自由登录（不显示/不锁定「当前账号」，想登哪个登哪个）。
+      // 2025 补充（登录态保持）：只检查不消费——标记持续到下一次登录成功（handleLogin 清除），
+      // 「退出 → 关掉 App → 再打开」仍是自由登录墙；登录过一次后所有账号免登录切换。
+      if (isForceLoginWallActive('qq')) {
         if (!alive) return;
         setUser(null);
         setBooting(false);
@@ -16203,7 +16228,9 @@ export default function QQApp() {
         } else {
           const u = savedId ? raw.find((c) => c.id === savedId && c.kind === 'user') : undefined;
           if (u) {
-            setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona });
+            // 2025（小号加好友 AI 决策）：会话恢复必须带 altOf——登录时存入的 altOf 会被
+            // 账号切换事件触发的 boot 重跑（此处）覆盖，丢失后小号加好友会走错「发送即通过」旧链路
+            setUser({ id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona, altOf: u.altOf ?? null });
           } else {
             if (savedId) window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
             setUser(null);
@@ -16243,6 +16270,8 @@ export default function QQApp() {
     try {
       // 登录历史：切换账号列表只显示登录过的账号（Task 41）
       markAccountLoginHistory('qq', accId);
+      // 登录成功 = 退出后的自由登录墙使命完成（标记在下次退出前不再出现）
+      clearForceLoginWall('qq');
       window.localStorage.setItem(accLs(LS_SESSION, 'qq'), u.id);
     } catch {
       // 忽略
@@ -16251,13 +16280,10 @@ export default function QQApp() {
 
   const handleLogout = useCallback(() => {
     setUser(null);
-    try {
-      window.localStorage.removeItem(accLs(LS_SESSION, 'qq'));
-    } catch {
-      // 忽略
-    }
-    // 多账号 Task 41：退出后回大号身份 + 自由登录墙——不显示「当前账号」、不锁定登录身份，
-    // 想登哪个登哪个；force 标记保证下次启动也不自动登录任何账号（一次性消费）。
+    // 登录态保持（2025）：退出只退「当前身份」，不删任何账号的会话键——
+    // 其他已登录账号（含刚退出的这个）在切换账号界面点击仍直接进入，无需重新输密码；
+    // 退出后的自由登录墙持续到下一次登录成功（isForceLoginWallActive + handleLogin 清除）。
+    // 多账号 Task 41：退出后回大号身份 + 自由登录墙——不显示「当前账号」、不锁定登录身份。
     requestForceLoginWall('qq');
     switchAccountFor('qq', MAIN_ACCOUNT_ID);
   }, []);
@@ -16274,6 +16300,14 @@ export default function QQApp() {
     const fn = () => void refreshContacts();
     window.addEventListener('contact-avatar-changed', fn);
     return () => window.removeEventListener('contact-avatar-changed', fn);
+  }, [refreshContacts]);
+
+  // 小号加好友 AI 决策落盘（2025）：同意 = 好友标记变化 → 刷新联系人（联系人列表即时出现）；
+  // 拒绝/先回复不改变好友标记，刷新无副作用
+  useEffect(() => {
+    const fn = () => void refreshContacts();
+    window.addEventListener(FRIEND_STATE_APPLIED_EVENT, fn);
+    return () => window.removeEventListener(FRIEND_STATE_APPLIED_EVENT, fn);
   }, [refreshContacts]);
 
   // 个签等本地资料更新（同步到 QQUser，落库在调用方完成）

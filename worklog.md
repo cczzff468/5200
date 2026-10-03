@@ -14339,3 +14339,24 @@ Stage Summary:
 - 交付：微信/QQ 切换账号后自动跳回主界面+切换 toast；QQ 抽屉截图样式账号卡片（含匿名账号展示行）；七条规则落地——账号隔离补齐未读/置顶/免打扰/背景/时间感知/回复条数/表情开关/语音频率/删好友状态/朋友圈收件箱/世界书挂载外的全部键作用域，关系感知（relationByAcc+persona 按账号解析+小号问对象按大号关系答+不主动点破+明确问可说），记忆注入带账号身份，删除账号数据保留由用户决定
 - 用户此前报告的「登录小号后切换页显示当前是大号」bug 经 E2E 确认不复现（绿点跟随实际登录身份）
 - 改动文件：src/lib/ios/accounts.ts、src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/lib/ios/persona.ts、src/lib/memory.ts、src/lib/unread-store.ts、src/lib/chat-flags.ts、src/lib/time-aware.ts、src/lib/reply-count.ts、src/lib/sticker-toggle.ts、src/lib/ios/ai-voice.ts、src/lib/ios/friend-state.ts、src/lib/moments.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx、src/components/apps/chat-settings.tsx、src/components/apps/settings.tsx、src/components/ios/AnonSwitchSheet.tsx
+
+---
+Task ID: 43
+Agent: Z.ai Code（主会话）
+Task: ①登录态保持——退出再登录后其他已登录账号免重新登录 ②QQ抽屉「切换账号」卡片移除匿名号码行 ③小号加好友AI决策（人设+大号关系+记忆+验证消息 → 同意/拒绝/先回复；用户可回复验证消息再触发决策；AI未同意前联系人界面不出现该联系人）
+
+Work Log:
+- accounts.ts：force登录墙从「boot一次性消费」改为「只检查不消费 + 登录成功时清除」——consumeForceLoginWall 拆为 isForceLoginWallActive（peek）+ clearForceLoginWall（handleLogin 调用），退出→重开App 仍是自由登录墙，登录过一次后全部账号恢复免登录切换
+- wechat.tsx/qq.tsx handleLogout：删除「删当前账号会话键」——退出只退当前身份，所有账号（含刚退出的）会话键保留，重新登录后切换任意账号免输密码（实测：登大号→登小小→登出→重登大号→点小小卡直接进+toast「已切换到 小小」）
+- qq.tsx QqDrawerAccountCard：移除底部匿名账号行 + onAnonTap prop + maskAnon（匿名号只属于电话/信息，卡片只剩大号+登录过的小号，注册表里的匿名号实测不再出现）
+- friend-state.ts 新增小号加好友AI决策模块：FriendDecision{accept|reject|reply,message}、decideCharFriendReq（buildPersonaSystemPrompt 注入决策规则 sceneRules + memRecallBlock 记忆 + 大号关系现实处境行【你和「机主」的关系是X…但申请人不知道，回复绝不提】+ 验证消息线程，输出JSON决策，三级解析兜底）、processAltFriendReq（守卫:pending/rejected+非fromChar+线程有用户发言；决策后落盘：accept=restoreFriendship+status accepted+线程回复+聊天记录sys「你已添加了X」+emitFriendStateApplied；reject=status rejected+线程回复；reply=仅线程回复保持pending）、shouldUseAltDecisionFlow/isAltAccountActiveFor/clearFriendDelState（小号重新申请时清删除状态防catch-up打架）、FRIEND_STATE_APPLIED_EVENT（AI同意=好友标记变化，微信/QQ根组件订阅后 reloadContacts/refreshContacts，联系人界面即时出现）
+- wechat.tsx/qq.tsx handleApplySent：altFlow=me.altOf且角色有人设 → 不调restoreFriendship（好友标记不置位=联系人不可见）、条目status=pending、聊天只落fr=apply验证消息（无「已成功添加」sys）、fire processAltFriendReq；大号路径原样（发送即通过+AI欢迎）——regression实测大号加小风立即accepted
+- 微信/QQ ReqDetailPage：sendReply 对 shouldUseAltDecisionFlow 命中的申请改走 processAltFriendReq（用户每条回复触发AI再决策=「随时可以同意」）；pending+!fromChar 渲染「等待对方验证」（无同意/拒绝按钮），QQ好友通知列表 pending+!fromChar 显示「等待验证」非「同意」按钮
+- 关键bug修复（E2E发现）：boot 会话恢复重建 user 丢失 altOf（toWxUser/QQ boot setUser 均无 altOf）——登录时 handleLogin 存入的 altOf 被账号切换事件触发的 boot 重跑覆盖，导致小号加好友走错「发送即通过」旧链路（第一轮E2E苏晴/凌霜均即时通过且聊天sys是旧文案实锤）；补 altOf 后QQ实测悠悠申请 status=pending+AI回「你是谁？怎么找到我的？」保持等待
+- agent-browser E2E 全过：①登录态保持（wx-session-user-id 登出后保留='seed_owner'、force标记='1'重开仍是墙、重登后切小小免密直进）②QQ抽屉卡片无匿名行（注册表有a_anon1实测不显示）③微信悠悠：pending「等待对方验证」→通讯录无悠悠→AI回「你好，朋友是谁？」(reply)→用户回复→AI「好的，很高兴认识你」+status已添加→通讯录出现悠悠+聊天sys「你已添加了悠悠」+thread四条完整④QQ悠悠：pending+AI追问保持等待+列表「等待验证」⑤回归：大号加小风秒通过（旧sys文案+AI欢迎）⑥E2E测试数据全清（6联系人/2注册表账号/全部scoped kv/会话/force标记/登录历史，35项）
+- bunx tsc --noEmit 0错误；bun run lint 全绿（仅qq/wechat>500KB BABEL提示）；dev.log无运行时错误
+
+Stage Summary:
+- 交付：退出登录不再清除任何账号登录态（其他账号免重新登录）；QQ抽屉切换账号卡片去匿名号；小号加好友完整AI决策闭环（pending等待→AI按人设/大号关系/记忆/验证消息同意|拒绝|先回复→用户可回复再触发→同意后联系人才出现+聊天落已添加提示）
+- 架构要点：好友标记（isFriendIn账号感知）是联系人可见性的唯一门控——pending期间不置位即满足「AI没同意前联系人界面无联系人」；决策链路完全复用 friend-state 既有 thread/req 存储（wx/qq-friend-reqs 账号作用域键），零新表
+- 改动文件：src/lib/ios/accounts.ts、src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

@@ -12,16 +12,15 @@
     tx.onerror = () => rej(tx.error);
   });
   await putContact({
-    id: "seed_lingshuang", kind: "char", name: "凌霜", nickname: null,
-    persona: "你叫凌霜，26岁，投行分析师。你高冷寡言，极度注重隐私，非常讨厌陌生人随便加你好友。对不认识的账号发来的好友申请，你一律拒绝，语气冷淡简短，不解释太多。只有真正熟悉的人你才温和。",
-    relation: null, phone: "13800000007", wechatId: "lingshuang007", wechatPassword: null,
-    qqId: "100070007", qqPassword: null, isFriend: false,
-    friendWxByAcc: { main: true }, friendQqByAcc: { main: true },
-    ownerId: null, gender: "女", age: "26", height: null, weight: null,
+    id: "seed_xiaofeng", kind: "char", name: "小风", nickname: null,
+    persona: "你叫小风，24岁，咖啡师，性格随和友善。",
+    relation: null, phone: "13800000008", wechatId: "xiaofeng008", wechatPassword: null,
+    qqId: "100080008", qqPassword: null, isFriend: false,
+    ownerId: null, gender: "男", age: "24", height: null, weight: null,
     background: null, occupation: null, company: null, region: "上海", birthday: null,
     avatar: null, avatars: null, voiceId: null, remark: null, realName: null,
     createdAt: iso,
   });
   db.close();
-  return "seeded lingshuang";
+  return "ok";
 })()
