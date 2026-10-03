@@ -5029,9 +5029,12 @@ function ChatPage({
           .join('\n\n') || undefined;
       // 每轮动态召回（引擎以「用户刚说的话」逐轮调用）：通话里 AI 能随话题变化召回相关记忆，
       // 主动提起之前聊过的事（文字聊过的事通话里能接上——互通开关决定召回范围）
+      // disclosureText 只用用户侧发言（当前轮 + 近期用户消息）：小号披露身份才解锁大号记忆（默认纯陌生人）
       const memoryBlockFn = (userText: string | null) =>
         memChatRecallBlock(peer.id, 'wx', wbScanText([userText, ...history.slice(-4).map((h) => h.content)]), {
           interopOn: effectiveInterop,
+          disclosureText: [userText ?? '', ...history.slice(-4).filter((h) => h.role === 'user').map((h) => h.content)].filter(Boolean).join(' '),
+          altMainName: cachedOwnerName(),
         }) || undefined;
       // Task 22 视频通话：记录本次媒体（引擎 onEnd 不回传，挂断落卡片时读回）；缺省语音
       lastCallMediaRef.current = opts?.media ?? 'voice';
@@ -5046,7 +5049,12 @@ function ChatPage({
         // video：全局层渲染视频通话页（主画面角色动态画面 + 用户摄像头小窗 + 识图循环）
         media: opts?.media ?? 'voice',
         initialHistory: history,
-        memoryBlock: memChatRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
+        memoryBlock:
+          memChatRecallBlock(peer.id, 'wx', memContext, {
+            interopOn: effectiveInterop,
+            disclosureText: history.filter((h) => h.role === 'user').map((h) => h.content).join(' '),
+            altMainName: cachedOwnerName(),
+          }) || undefined,
         memoryBlockFn,
         worldbookBlock,
         momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer }) || undefined,
@@ -5789,6 +5797,9 @@ function ChatPage({
     //  存储键即隔离边界，这里只影响该角色自己的召回范围）
     const memoryBlock = memChatRecallBlock(peer.id, 'wx', memContext, {
       interopOn: effectiveInterop,
+      // 小号披露门控（用户最新规则）：仅用户侧发言参与检测——默认纯陌生人，亮明身份才解锁大号记忆
+      disclosureText: [userMsg?.content ?? '', ...base.slice(-8).filter((m) => m.role === 'me').map(scanTextOf)].filter(Boolean).join(' '),
+      altMainName: cachedOwnerName(),
     });
     // 朋友圈动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看朋友圈平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）

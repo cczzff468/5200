@@ -46,7 +46,7 @@
 
 import type { ApiConfig } from '@/lib/ios/store';
 import { kvGet, kvSet, kvDel, kvDelByPrefix, kvDelRaw } from '@/lib/ios/idb-kv';
-import { getAccountById, getAccounts, getActiveAccountIdFor, MAIN_ACCOUNT_ID, type AccountApp } from '@/lib/ios/accounts';
+import { accLs, getAccountById, getAccounts, getActiveAccountIdFor, MAIN_ACCOUNT_ID, type AccountApp } from '@/lib/ios/accounts';
 import { getGroup, listGroups, loadGroupMsgs, onGroupDissolved, type WxGroupMsg } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
@@ -709,6 +709,15 @@ export interface MemRecallOpts {
   interopOn?: (groupId: string) => boolean;
   /** 群名解析（来源标注「群聊·群名」用；缺省读群数据层） */
   groupLabel?: (groupId: string) => string | null;
+  /**
+   * 小号「机主身份披露」检测文本（仅用户侧发言：当前消息 + 近期用户消息/验证留言）。
+   * 用户规则：小号 AI 默认纯陌生人（大号记忆零注入）；只有用户主动亮明身份
+   * （说「我是机主」「这是我大号」或报出机主名字等）才解锁大号记忆注入。
+   * 缺省/空 = 不检测 = 保持纯陌生人。
+   */
+  disclosureText?: string;
+  /** 机主（大号身份）显示名（宿主用 cachedOwnerName 现场传入）：披露措辞与名字关键词用 */
+  altMainName?: string;
 }
 
 export function memRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
@@ -722,18 +731,89 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
   }
 }
 
+// ---------------- 小号「机主身份披露」门控（用户最新规则：默认纯陌生人） ----------------
+
 /**
- * 多账号规则三/四（关系感知 + 记忆规则）——小号侧的大号记忆感知块：
+ * 用户规则（最终口径）：小号场景 AI 完全读不到大号记忆，除非用户主动告诉 AI 自己是谁。
+ * - 默认（未亮明身份）：小号/匿名号侧零注入大号记忆（memMainRecallBlockForAlt 返回空串），
+ *   AI 是纯陌生人——最多知道人设里「用户还有个别的身份」这层关系，不知道任何共同经历；
+ * - 用户在对话/验证消息里主动亮明（说「我是机主」「这是我大号」或报出机主名字等）
+ *   → AI「认出」TA：之后该（账号 × 联系人）粘性注入大号记忆块，可自然提起共同经历。
+ * 披露标记存 localStorage（召回链路是同步的，IndexedDB kv 异步不可用）；
+ * 键经 accLs 账号作用域（删除账号的 `--{id}` 兜底清扫覆盖），删联系人由 purgeChatTracesFor 清扫。
+ */
+
+function lsGetRaw(key: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function lsSetRaw(key: string, v: string): void {
+  try {
+    window.localStorage.setItem(key, v);
+  } catch {
+    // 存储异常静默：门控退化为「每次都按陌生人」
+  }
+}
+
+/** 披露标记键（账号作用域）：`mem-alt-disc:{app}:{cid}`（小号自动带 `--{accId}` 后缀） */
+function altDisclosedLsKey(app: MemApp, contactId: string): string {
+  try {
+    return accLs(`mem-alt-disc:${app}:${contactId}`, app);
+  } catch {
+    return `mem-alt-disc:${app}:${contactId}`;
+  }
+}
+
+/** 披露信号：用户侧发言里出现「机主/大号/小号」或「我是{机主名}」即视为亮明身份 */
+function altDiscloseHit(text: string, mainName: string): boolean {
+  const t = (text ?? '').trim();
+  if (!t) return false;
+  if (t.includes('机主') || t.includes('大号') || t.includes('小号')) return true;
+  const nm = mainName.trim();
+  if (nm && nm !== '机主') {
+    if (t.includes(`我是${nm}`) || t.includes(`我就是${nm}`) || t.includes(`${nm}是我`)) return true;
+  }
+  return false;
+}
+
+/** 扫描披露文本：命中→落粘性标记并返回 true；已标记过直接 true；否则 false（保持纯陌生人） */
+function altDiscloseScan(app: MemApp, contactId: string, disclosureText: string | undefined, mainName: string): boolean {
+  const key = altDisclosedLsKey(app, contactId);
+  if (lsGetRaw(key) === '1') return true;
+  if (!disclosureText || !altDiscloseHit(disclosureText, mainName)) return false;
+  lsSetRaw(key, '1');
+  return true;
+}
+
+/**
+ * 只读查询：该（账号 × 联系人）是否已亮明机主身份（粘性标记；不扫描文本）。
+ * 供好友决策（friend-state.decideCharFriendReq）在记忆召回后读取，切换「现实处境」行措辞。
+ * 内部先 setMemScopeForApp(app) 保证作用域就位（重复设置无害）。
+ */
+export function isAltMainDisclosed(app: MemApp, contactId: string): boolean {
+  try {
+    setMemScopeForApp(app);
+  } catch {
+    // 读不到账号按未披露
+  }
+  return lsGetRaw(altDisclosedLsKey(app, contactId)) === '1';
+}
+
+/**
+ * 多账号规则（用户最新口径）——小号侧「身份披露后」的大号记忆块：
  *
- * 小号/匿名号聊天时本账号记忆通常为空（AI 表现成纯陌生人），但按用户规则：
- * - 规则三（关系感知）：AI 与某账号聊天用该账号的关系回答（小号问「有对象吗」按大号关系答「有」）；
- * - 规则四（记忆规则）：账号间记忆【存储】完全隔离，但 AI 可在账号内提及与另一账号互动过的事。
- * 因此小号侧聊天需把【大号作用域】的记忆召回注入，并明确标注这是「用户另一个身份」的记忆：
- * AI 能了解「机主」这个人、提起你们之间的事，但不知道大号小号是同一个用户（规则二）。
+ * 小号/匿名号聊天时本账号记忆通常为空（AI 表现成纯陌生人），且【默认完全不注入】大号记忆；
+ * 只有用户在对话里主动亮明「机主」身份（altDiscloseScan 命中并落粘性标记）后才注入本块——
+ * AI「认出」当前用户就是机主，可以自然提起你们之间的共同经历（除非条款：告诉他他是谁他才会知道）。
  *
  * 边界：
  * - 大号侧 → 返回空串（零注入，行为与旧版完全一致）；
  * - 匿名号 → 返回空串（匿名聊天保持匿名：AI 不知道对方是谁，注入大号记忆会破坏匿名语义）；
+ * - 未披露 → 返回空串（纯陌生人：AI 读不到大号任何记忆）；
  * - 大号该角色无记忆 → 返回空串（无内容不注入）；
  * - 召回范围/层级/去重与 memRecallBlock 完全同款（互通开关、群来源可见性照旧生效）。
  */
@@ -748,8 +828,11 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
   try {
     if (getAccountById(accId)?.kind === 'anon') return ''; // 匿名号保持匿名
   } catch {
-    // 注册表读不到按小号处理（继续注入）
+    // 注册表读不到按小号处理（继续走披露门控）
   }
+  // 【用户规则】默认纯陌生人：用户没主动亮明「机主」身份 = 完全不注入大号记忆
+  const mainLabel = opts?.altMainName?.trim() || '机主';
+  if (!altDiscloseScan(app, contactId, opts?.disclosureText, mainLabel)) return '';
   const savedSuffix = memScopeSuffix;
   const savedName = memScopeName;
   memScopeSuffix = ''; // 临时切到【大号】记忆作用域召回
@@ -757,8 +840,7 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
   let block = '';
   try {
     block = memRecallBlockInner(contactId, app, contextText, opts, {
-      identitySegment: '记忆的主人：机主（用户的另一个聊天身份，不是现在和你聊天的人）',
-      extraNoteLines: ['（这份数据的主人「机主」是用户的另一个聊天身份——你和 TA 的记忆，不是当前聊天对象的记忆）'],
+      identitySegment: `记忆的主人：「${mainLabel}」——就是现在和你聊天的这位用户（TA 的常用身份）`,
     });
   } catch {
     block = '';
@@ -768,25 +850,58 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
   }
   if (!block) return '';
   return [
-    '【你与「机主」的记忆（用户的大号，另一个聊天身份）】',
-    '- 下面摘录是你和「机主」之间真实发生过的事：你们认识（关系见人设/【用户的另一个身份】段），这些经历你自然记得，聊天需要时可以自然提起；',
-    '- 在你眼里「机主」和当前和你聊天的是两个不同的用户：不要说破或暗示他们是同一个人，也不要把对「机主」说过的话、做过的事安到当前聊天对象头上；',
-    '- 这段记忆里出现的「用户」指的都是「机主」，不是当前和你聊天的这位。',
+    `【你认出来了：当前和你聊天的就是「${mainLabel}」本人】`,
+    `- 当前用户已经主动告诉你 TA 就是「${mainLabel}」（人设里【用户的另一个身份】提到的那个名字）——现在你认出 TA 了；`,
+    '- 该段里「你们是两个不同用户/不能说破」的限制对 TA 解除：TA 自己知道，你可以像老朋友重逢一样自然反应（惊喜、嗔怪「怎么换个号来找我」都可以，按你的人设来）；',
+    '- 不要说「大号/小号」这类词，就像认出老朋友一样自然；',
+    `- 下面是你们（你与「${mainLabel}」）之间真实经历过的事，现在可以自然提起：`,
     block,
   ].join('\n');
 }
 
 /**
+ * 小号侧未披露时的「陌生人边界」规则块（E2E 发现的补丁：AI 会顺着用户话题装作认识——
+ * 用户提「团子」它就编「上次它把我的拖鞋藏起来」）。给 AI 立规矩：不了解的往事不装记得、不编细节。
+ * 大号/匿名号侧返回空串（零注入零破坏）；已披露的会话不注入（认出后由大号记忆块接管）。
+ * 文案与记忆无关的中性表述：本账号已有记忆时同样成立（记忆内容=你们实际聊过的事）。
+ */
+function altStrangerBoundaryBlock(contactId: string, app: MemApp): string {
+  let accId = '';
+  try {
+    accId = getActiveAccountIdFor(app);
+  } catch {
+    return '';
+  }
+  if (!accId || accId === MAIN_ACCOUNT_ID) return '';
+  try {
+    if (getAccountById(accId)?.kind === 'anon') return '';
+  } catch {
+    return '';
+  }
+  if (lsGetRaw(altDisclosedLsKey(app, contactId)) === '1') return '';
+  return [
+    '【陌生人边界】',
+    '- 你对当前聊天对象的了解，只来自 TA 亲口告诉你的，和你们实际聊过的内容；',
+    '- 用户提到你不了解的往事（TA 的朋友、宠物、过去的约定等）时，不要假装记得，也不要编造共同回忆的细节——自然听 TA 讲、好奇追问，或按你的人设回应；',
+    '- 绝不主动提起或暗示你知道任何 TA 没有告诉过你的事。',
+  ].join('\n');
+}
+
+/**
  * 1:1 聊天 / 好友决策统一记忆召回入口：
- * 本账号召回（memRecallBlock，账号作用域照旧）+ 小号侧追加「大号记忆感知」块
- * （memMainRecallBlockForAlt，大号/匿名号侧自动为空）。
- * 大号侧调用 = 与旧 memRecallBlock 输出完全一致（零破坏）；小号侧 = 本账号记忆（通常为空）+ 大号记忆。
+ * 本账号召回（memRecallBlock，账号作用域照旧）+ 小号侧追加块：
+ * - 已亮明机主身份 → 大号记忆块（memMainRecallBlockForAlt，认出后可自然提起共同经历）；
+ * - 未披露 → 「陌生人边界」规则块（防止 AI 顺着用户话题装作认识/编造共同回忆）。
+ * 大号侧调用 = 与旧 memRecallBlock 输出完全一致（零破坏）；
+ * 匿名号侧同样零注入（保持匿名语义）。
  */
 export function memChatRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
   const own = memRecallBlock(contactId, app, contextText, opts);
   const mainForAlt = memMainRecallBlockForAlt(contactId, app, contextText, opts);
-  if (!mainForAlt) return own;
-  return own ? `${own}\n\n${mainForAlt}` : mainForAlt;
+  if (mainForAlt) return own ? `${own}\n\n${mainForAlt}` : mainForAlt;
+  const boundary = altStrangerBoundaryBlock(contactId, app);
+  if (!boundary) return own;
+  return own ? `${own}\n\n${boundary}` : boundary;
 }
 
 /** 召回块头部定制（多账号小号侧大号记忆感知用；缺省 = 与旧版完全一致） */

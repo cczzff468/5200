@@ -1670,7 +1670,12 @@ function ChatView({
           'sms',
           [userMsg?.content ?? '', ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'textcard' ? m.card?.text || '' : m.content))]
             .filter(Boolean)
-            .join(' ')
+            .join(' '),
+          {
+            // 小号披露门控（用户最新规则）：仅用户侧发言参与检测——默认纯陌生人，亮明身份才解锁大号记忆
+            disclosureText: [userMsg?.content ?? '', ...base.slice(-6).filter((m) => m.role === 'user').map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'textcard' ? m.card?.text || '' : m.content))].filter(Boolean).join(' '),
+            altMainName: cachedOwnerName(),
+          }
         )
       : '';
     // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（信息 App 无自有平台，

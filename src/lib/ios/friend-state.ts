@@ -41,7 +41,7 @@ import { getActiveAccountIdFor, MAIN_ACCOUNT_ID } from './accounts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL } from './block-state';
 import { buildPersonaSystemPrompt } from './persona';
-import { getMemSettings, memChatRecallBlock } from '@/lib/memory';
+import { getMemSettings, isAltMainDisclosed, memChatRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { cleanBubbleText } from '@/lib/chat-rich';
 
@@ -614,8 +614,10 @@ export async function charWelcomeReplyToApply(app: FriendDelApp, reqId: string, 
  * - reply：暂不决定，先回一句（继续了解）。
  * 用户可以在验证消息线程里继续回复（详情页「回复」框），每条回复都会再次触发 AI 决策
  * ——按人设「随时可以同意」：第一句就同意、聊几句再同意、坚决拒绝都符合预期。
- * 【隔离语义不变】AI 不知道申请人和大号是同一个人；大号关系只作为「现实处境」参考
- * （如已有对象时对陌生申请更警惕），回复中不提及大号。
+ * 【披露门控（用户最新规则）】默认纯陌生人：AI 不知道申请人和大号是同一个人，也读不到大号记忆；
+ * 大号关系只作为「现实处境」参考（如已有对象时对陌生申请更警惕），回复中不提及大号。
+ * 申请人在验证消息里主动亮明身份（「我是机主」/报出机主名字等）→ AI「认出 TA」：
+ * 现实处境行切换为认出口径 + 大号记忆解锁（除非条款：告诉他他是谁他才会知道）。
  */
 
 /** AI 决策结果 */
@@ -714,16 +716,32 @@ export async function decideCharFriendReq(
   if (!(contact.persona ?? '').trim()) return null;
   const { userName, userRealName, userNickname } = await ownerTriplet(app);
   const channel = BLOCK_CHANNEL[app];
-  // 大号关系（现实处境参考）：当前是小号 + 大号认识该角色时注入（AI 不知道两者是同一人）
-  let mainIdentityLine = '';
-  if (isAltAccountActiveFor(app) && mainAccountKnowsChar(contact, app)) {
+  // 大号关系（现实处境参考）：当前是小号 + 大号认识该角色时注入
+  // 【披露门控（用户最新规则）】申请人在验证消息里亮明自己就是机主（说「我是机主」或报出机主名字等）
+  // → AI「认出 TA」，现实处境行换成认出口径 + 记忆召回解锁大号记忆；默认纯陌生人（零大号记忆）
+  const altActive = isAltAccountActiveFor(app);
+  const knowsChar = altActive && mainAccountKnowsChar(contact, app);
+  let mainName = '机主';
+  if (knowsChar) {
     const owner = await mainOwnerContact().catch(() => null);
-    const mainName = owner?.name?.trim() || '机主';
+    mainName = owner?.name?.trim() || '机主';
+  }
+  // 用户侧发言（验证留言 + 线程回复）作为披露检测文本；召回先执行（内部完成扫描+标记落盘）
+  const threadMeText = thread.filter((m) => m.who === 'me').map((m) => m.text).join(' ');
+  const memoryBlock = memChatRecallBlock(contact.id, app, '', { disclosureText: threadMeText, altMainName: mainName });
+  const disclosed = altActive && isAltMainDisclosed(app, contact.id);
+  let mainIdentityLine = '';
+  if (knowsChar) {
     const mainRelation = contact.relation?.trim() || '普通朋友';
-    mainIdentityLine = [
-      `- 现实处境：你和「${mainName}」的关系是「${mainRelation}」。把这个情况纳入你的判断`,
-      `  （例如你已经有对象/伴侣时，对陌生人的好友申请要更警惕），但申请人不知道你和${mainName}的关系，回复里绝对不要提起。`,
-    ].join('\n');
+    mainIdentityLine = disclosed
+      ? [
+          `- 申请人已经在验证消息里表明自己就是「${mainName}」（你的${mainRelation}）——你认出 TA 了；`,
+          `  可以像老朋友/恋人重逢一样自然反应（比如惊喜「怎么换个号找我」），按你们的真实关系处理这条申请。`,
+        ].join('\n')
+      : [
+          `- 现实处境：你和「${mainName}」的关系是「${mainRelation}」。把这个情况纳入你的判断`,
+          `  （例如你已经有对象/伴侣时，对陌生人的好友申请要更警惕），但申请人不知道你和${mainName}的关系，回复里绝对不要提起。`,
+        ].join('\n');
   }
 
   const sceneRules = [
@@ -742,8 +760,6 @@ export async function decideCharFriendReq(
     multiApp: getMemSettings(contact.id).share,
     extraRules: sceneRules,
   });
-  // 多账号：小号决策同样注入大号记忆感知（AI 了解「机主」这个人/你们之间的事来判断申请，规则三/四）
-  const memoryBlock = memChatRecallBlock(contact.id, app, '');
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
   const system = [persona, memoryBlock, timeBlock, mainIdentityLine].filter(Boolean).join('\n\n');
 

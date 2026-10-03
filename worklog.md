@@ -14377,3 +14377,31 @@ Work Log:
 Stage Summary:
 - 交付：①小号加好友 AI 同意后，AI 的同意回复同时落进聊天记录（打开聊天即见对方通过后说的第一句话；微信/QQ 共用同一 accept 分支，一次修复两端覆盖直通同意/回复后再同意/拒绝后再同意全部路径）②小号场景大号记忆感知（规则三/四落地：AI 在小号侧能了解「机主」、提起你们之间的事，但不点破同一人；匿名号侧不注入保匿名；大号侧零注入零破坏）③11/13 原文丢失已在最终回复向用户说明并请其复述（同域自查未发现其它明显缺口：信息端加好友本就无验证消息流=即时通过属既有设计）
 - 改动文件：src/lib/memory.ts、src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx
+
+---
+Task ID: 45
+Agent: Z.ai Code（主会话）
+Task: 用户最新口径落地——①「信息」App 无验证流程（保持既有即时通过，不得添加验证流程）②小号场景 AI 完全读不到大号记忆（默认纯陌生人）③除非用户主动告知身份 AI 才会知道（披露触发解锁）
+
+Work Log:
+- 修正 Task 44 的过度实现：memMainRecallBlockForAlt 原本无条件给小号注入大号记忆感知块，与用户最新规则冲突——改为「身份披露门控」：
+  - memory.ts 新增披露门控模块：altDiscloseHit（用户侧发言含「机主/大号/小号」或「我是{机主名}」= 亮明身份）、altDiscloseScan（命中落粘性标记，localStorage 键 mem-alt-disc:{app}:{cid} 经 accLs 账号作用域，删除账号的 --{id} 兜底清扫自动覆盖）、isAltMainDisclosed（只读查询导出）
+  - MemRecallOpts 新增 disclosureText（仅用户侧发言：当前消息+近期用户消息/验证留言，绝不混入 AI 发言防「AI 自己提到机主」误触发）与 altMainName（cachedOwnerName 现场传入，供披露措辞与名字关键词）
+  - memMainRecallBlockForAlt：未披露→空串（纯陌生人零注入）；披露后→大号作用域召回 + 「你认出来了」包装段（明确解除人设【用户的另一个身份】段「不能说破」限制，指导像认出老朋友一样自然反应、不说大号/小号这类词）
+  - memChatRecallBlock 新增 altStrangerBoundaryBlock：小号未披露侧注入【陌生人边界】规则（不了解的往事不装记得、不编造共同回忆细节）——E2E 发现的补丁：用户提「团子」AI 会顺着编「上次它把我的拖鞋藏起来」；大号/匿名号/已披露侧零注入
+- friend-state.ts decideCharFriendReq：验证消息线程的用户侧发言作为披露检测文本；默认纯陌生人决策（人设+本账号记忆+验证消息），「现实处境」行保留（大号关系参考但不提起）；申请人在验证消息里亮明身份 → 现实处境行切「认出口径」（可惊喜「怎么换个号找我」按真实关系处理）+ memChatRecallBlock 解锁大号记忆
+- wechat.tsx/qq.tsx/chat.tsx 共 7 处 memChatRecallBlock 调用点（1:1 文字聊天+语音/视频通话 memoryBlock/每轮 memoryBlockFn）全部传 disclosureText（按 m.role==='me'/'user' 过滤只取用户侧发言）+ altMainName（cachedOwnerName()）；信息端 role 口径为 'user'（微信/QQ 为 'me'）
+- contacts-store.ts purgeChatTracesFor：删联系人时清扫 mem-alt-disc:{wx,qq,sms}:{cid} 及全部 --{accId} 后缀变体（重新添加回纯陌生人）
+- 「信息」App 验证流程确认：chat.tsx 零验证代码（无 shouldUseAltDecisionFlow/processAltFriendReq/验证 UI），加好友走 setAppFriendFlag 即时通过——保持既有设计不动
+- E2E（agent-browser 900x1100，UI 全链路）：种陈凡机主档案+小安小号+林小风/夏小雨（大号恋人+大号记忆「猫团子打翻杯子」）
+  ①小号加小风（验证消息「我是小安」无披露词）→ AI 陌生人决策 accept「你好呀，我是小风！很高兴认识你~」+ 披露标记空 + 聊天记录三段完整（apply→sys 已添加→AI 回复落聊天记录）
+  ②小号聊天问团子 → 修复前 AI 编造「把我的拖鞋藏起来」；加边界块后「团子是谁呀？是你家的宠物吗？」✓
+  ③小号发「我是机主陈凡啊，这是我小号」→ 标记落盘 mem-alt-disc:wx:c_xf_e2e45--a_e2e45 + AI「哎呀！陈凡你怎么突然冒出来吓我一跳！」+ 追问后准确引用种子记忆「团子前几天又调皮了，把你的杯子打翻了」✓
+  ④小号加夏小雨验证消息「我是陈凡，换了个号来找你」→ AI 认出口径接受「哎呀，你怎么换号了，小坏蛋」+ status=accepted + 同意回复落聊天记录 ✓
+  ⑤大号回归：切换页绿点正确、切回大号问同样问题 → 「团子前几天又调皮了，把你的杯子打翻了」（大号记忆召回与旧版完全一致，零破坏）✓
+- 测试数据全清（4 联系人/14 kv 键/4 localStorage 键/注册表还原，残留复查 0）；tsc 0 错误；eslint 全绿（仅 qq/wechat>500KB BABEL 提示）；dev.log 无运行时错误
+
+Stage Summary:
+- 交付（用户最新三句话口径）：「信息」App 保持无验证流程；小号 AI 默认纯陌生人（大号记忆零读取，含陌生人边界防 AI 顺着话题装认识）；用户主动告知身份（聊天或验证消息里说「我是机主/大号/小号/机主名字」）→ AI 认出 TA：大号记忆粘性解锁、可自然提起共同经历，不说大号小号这类词
+- 关键设计：披露检测只扫用户侧发言（防 AI 发言误触发）；粘性标记按 账号×App×联系人 作用域（删除账号/删联系人自动清）；披露解锁对聊天与好友决策双路径一致
+- 改动文件：src/lib/memory.ts、src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx、src/lib/ios/contacts-store.ts

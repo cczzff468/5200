@@ -655,6 +655,19 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       }
       if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
     }
+    // 小号「机主身份披露」标记（memory.ts 披露门控，localStorage 独立键 mem-alt-disc:{app}:{id}）：
+    // 删除联系人时一并清除（跨全部账号后缀变体）——重新添加后 AI 回到纯陌生人
+    try {
+      for (const app of ['wx', 'qq', 'sms'] as const) {
+        const base = `mem-alt-disc:${app}:${id}`;
+        window.localStorage.removeItem(base);
+        for (const acc of getAccounts()) {
+          if (acc.id !== MAIN_ACCOUNT_ID) window.localStorage.removeItem(`${base}--${acc.id}`);
+        }
+      }
+    } catch {
+      // 尽力而为
+    }
     // 互动状态孤儿键（IndexedDB kv store，全部按裸联系人 id 派生；38-c）：
     // 转发感知事件（wechat/wx-group/qq/qq-group 各自的 lsAiEventsKey）/ QQ 好感（qq.tsx lsBondKey）/
     // QQ 朋友圈点赞（qq.tsx LS_FRIEND_LIKE）/ 被踢·回群感知（group-social.ts kickKey）/
