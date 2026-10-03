@@ -14405,3 +14405,33 @@ Stage Summary:
 - 交付（用户最新三句话口径）：「信息」App 保持无验证流程；小号 AI 默认纯陌生人（大号记忆零读取，含陌生人边界防 AI 顺着话题装认识）；用户主动告知身份（聊天或验证消息里说「我是机主/大号/小号/机主名字」）→ AI 认出 TA：大号记忆粘性解锁、可自然提起共同经历，不说大号小号这类词
 - 关键设计：披露检测只扫用户侧发言（防 AI 发言误触发）；粘性标记按 账号×App×联系人 作用域（删除账号/删联系人自动清）；披露解锁对聊天与好友决策双路径一致
 - 改动文件：src/lib/memory.ts、src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx、src/lib/ios/contacts-store.ts
+---
+Task ID: 46
+Agent: Z.ai Code（主会话）
+Task: 小号记忆与猜测规则六条落地——①小号/大号记忆完全独立互不注入 ②AI 读不到大号记忆/关系状态/朋友圈/通话 ③AI 可凭人设记忆语气称呼猜测「你是不是XXX」但猜测不是事实 ④用户主动告知才关联、关联后大号+小号记忆并用 ⑤AI 不主动关联（无明确线索不认）⑥不破坏现有功能
+
+Work Log:
+- persona.ts 删除 buildMainIdentitySection + PersonaPromptCtx.mainIdentity：小号场景不再向人设注入大号名字/关系（规则二.2 零读取大号关系状态；旧「问感情按大号关系答」被新规则取代，未披露时按小号侧关系回答）
+- memory.ts 重写披露门控：
+  - 否定守卫 altNegatedAt/altNameClaimAt：「我不是机主」「我不是陈凡」「难道我是陈凡」「我是陈凡吗？」不再误命中（修复原 includes 纯子串误判）
+  - 新增猜后确认通道 altAiNameGuessRecent（扫当前账号会话 AI 侧近 4 轮发言：含机主名+猜测语气「猜/是不是/认出/难道」）+ altShortAffirmHit（整句短肯定「对/是我/没错/被你猜到了」≤12字，首段=当前消息优先，≤20字短线程退化为任一段）——AI 猜「你是不是陈凡？」用户回「对」即视为亲口承认（E2E 调试发现长拼接文本超旧 20 字门槛导致漏检，已修）
+  - altStrangerBoundaryBlock → altStrangerGuessBlock：陌生人边界（不装记得/不编造共同回忆）+ 身份猜测规则（语气/用词/称呼/人设/本号记忆为线索，可自然说「你是不是XXX」「我猜是你」「宝宝我知道是你」按人设来说；猜测不当事实、否认大方接受、亲口亮明才确认=规则三/五全文）
+  - MemRecallOpts.altMainRelation：披露解锁后「你认出来了」包装段带大号关系行（认出前零注入）；包装段措辞改为「TA 亲口承认（亮明身份或承认猜测）」
+- wechat.tsx/qq.tsx/chat.tsx：三端 buildPersonaPrompt 摘除 mainIdentity 注入与 mainKnowsChar 计算；7 处 memChatRecallBlock 调用补传 altMainRelation: peer.relation（信息端经模块级 activeContactRelation 由 openContactChat 写入/openAssistantChat 复位）
+- friend-state.ts decideCharFriendReq：摘除「现实处境：你和{mainName}的关系是{mainRelation}」行（大号关系状态零读取）→ 换验证消息场景猜测口径三行（可凭语气用词联想猜一句不当真/不因猜测通过申请/亲口承认才确认）；披露后认出口径不变
+- moments.ts：memorySnippets(app) 读前显式 setMemScopeForApp(app) + toggleUserMomentLike 取消赞清理前显式设作用域（调度器/重启后 ambient 作用域可能是大号 → 小号场景误读大号记忆的二.3 兜底）
+- E2E（agent-browser 900x1100，UI 全链路 + IDB 种子：陈凡机主/小安小号/林小风恋人+大号记忆「团子打翻杯子」/夏小雨老同学）：
+  ①主号回归：问团子 → AI 引用大号记忆「差点把你的杯子打翻」零破坏 ✓
+  ②小号纯陌生人+猜测：「你猜猜我是谁」→ AI 猜「你是不是经常出现在我朋友圈里那个爱猫人士呀？」（猜测行为出现、无大号记忆泄漏）✓
+  ③否定守卫：「我不是陈凡，你猜错啦」→ 披露标记不落盘、AI 保持陌生人 ✓
+  ④猜后确认：AI 点名猜「你是不是陈凡呀？！」→ 用户回「对」→ 标记落盘 mem-alt-disc:wx:{cid}--{accId} + AI「你怎么突然用小安的账号来找我啦？」（认出、不说大号小号）✓
+  ⑤解锁后双记忆：「团子最近干了什么好事」→「团子前几天可调皮了，把你的杯子打翻啦～」（大号记忆精确召回，本号记忆并用不互斥）✓
+  ⑥切回大号：切换面板「当前使用」绿点正确、点击即切回主界面、聊天历史与大号记忆原样 ✓
+  ⑦好友验证披露流：小号加夏小雨验证消息「我是陈凡，换了个号来找你」→ AI 接受「陈凡！换号找我啊，好久不见！」+ 同意回复落聊天记录 + 聊天引用大号记忆「我记得咱们毕业前一起爬的」✓
+  ⑧小号通讯录仅见小号好友（夏小雨只在大号侧）✓
+- 测试数据全清（4 联系人/18 kv 键含 --a_e2e46 后缀变体/localStorage 披露标记/注册表还原仅 main，重载复查 0 回写）；tsc 0 错误；eslint 全绿；dev.log 无运行时错误
+
+Stage Summary:
+- 交付：小号场景 AI 默认纯陌生人且零读取大号一切（记忆/关系/朋友圈/通话上下文全账号作用域化）；新增规则三猜测——AI 可凭人设/本号记忆/语气称呼自然表达「你是不是XXX」级猜测但不当事实；规则四闭环三通道解锁（亮明关键词/报出机主名/承认 AI 点名猜测）→ 大号+小号记忆并用 + 关系行注入；规则五 AI 无明确线索不主动关联（披露检测只扫用户侧发言）
+- 关键决策：①【用户的另一个身份】persona 段整体移除（与规则二.2 冲突），认出后关系认知改由记忆召回包装段 altMainRelation 承载 ②猜后确认短肯定句白名单整句匹配（普通闲聊「嗯，吃饭了吗」不误触发）③moments 读记忆前显式设作用域堵 ambient 漂移
+- 改动文件：src/lib/memory.ts、src/lib/ios/persona.ts、src/lib/ios/friend-state.ts、src/lib/moments.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx

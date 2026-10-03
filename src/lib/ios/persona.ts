@@ -93,12 +93,6 @@ export interface PersonaPromptCtx {
    *  （relationForAccount 口径：大号用全局 relation，小号用 relationByAcc[accId] ?? 兼容回退）；
    *  不传 = 大号口径（旧全局 relation），零破坏。 */
   accountId?: string | null;
-  /** 多账号关系感知：用户大号身份与当前角色的关系（小号/匿名号侧聊天时由宿主传入）。
-   *  传入后在人设中注入【用户的另一个身份】段——角色知道用户还有个大号「{name}」、
-   *  自己与 TA 的关系是「{relation}」；被问感情状态时按这段关系如实回答（例：恋人=有对象），
-   *  但不主动说破对象是大号；用户明确问「你对象是谁」时才可以如实说。
-   *  大号侧/未传 → 不注入（零破坏）。 */
-  mainIdentity?: { name: string; relation: string } | null;
 }
 
 function kindLabelOf(kind?: string | null): string {
@@ -154,27 +148,6 @@ export function buildAltAccountsSection(digest: string | null | undefined): stri
     '- 摘录之外的信息（比如小号的私人记忆）你并不知道，不要编造。',
     '（摘录里「用户」指小号那边发消息的人，其他人名是小号当时聊天的对方角色。）',
     d,
-  ].join('\n');
-}
-
-/**
- * 多账号关系感知：小号/匿名号侧聊天时注入【用户的另一个身份】段。
- * 语义（用户规则三/四）：角色不知道大号和小号是同一个人；角色与每个账号的关系独立维护；
- * 小号问「你有没有对象」这类感情状态时，按角色与大号的真实关系回答（大号是恋人就回答有）；
- * 但不主动把对象身份说成大号，除非当前用户明确问起。
- * mainIdentity 为空 → 返回空串（不注入，零破坏）。
- */
-export function buildMainIdentitySection(mi: { name: string; relation: string } | null | undefined): string {
-  const name = typeof mi?.name === 'string' ? mi.name.trim() : '';
-  if (!name) return '';
-  const rel = (typeof mi?.relation === 'string' && mi.relation.trim()) || '普通朋友';
-  return [
-    '【用户的另一个身份】',
-    `- 当前和你聊天的用户还有一个别的聊天身份（TA 的大号）：「${name}」；`,
-    `- 你和「${name}」也是好友（或认识），你们的关系：${rel}——这是你与${name}之间的事，与当前聊天对象无关；`,
-    '- 在你眼里他们就是两个不同的用户，你不知道、也不能说破或暗示他们是同一个人；',
-    `- 被问到「你有没有对象/喜欢的人」这类感情状态问题时，按你与「${name}」的真实关系如实回答（关系亲密就承认有，${rel.includes('普通') || rel.includes('朋友') ? '只是朋友就大方承认没有' : '如实按你们的关系回答'}）；`,
-    `- 但除非当前用户明确问起「你的对象/喜欢的人是谁」，不要主动把你和「${name}」的关系细节（尤其恋人身份）说给当前用户听。`,
   ].join('\n');
 }
 
@@ -311,10 +284,9 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   // 不传（小号侧/电话通话等）→ 整节约省略，行为与旧版完全一致
   const altSection = buildAltAccountsSection(ctx.altAccountsDigest);
   if (altSection) lines.push(altSection);
-  // 多账号关系感知：小号/匿名号侧聊天时注入【用户的另一个身份】（问感情按与大号关系答、
-  // 不主动说破对象是大号、明确问可说）；大号侧 ctx.mainIdentity 不传 → 不注入
-  const mainIdSection = buildMainIdentitySection(ctx.mainIdentity);
-  if (mainIdSection) lines.push(mainIdSection);
+  // 多账号（用户规则二.2）：小号场景不再注入任何大号身份/关系信息——AI 在小号侧读不到
+  // 大号的关系状态（【用户的另一个身份】段已移除）；认出后的关系认知由记忆召回链路
+  //（memMainRecallBlockForAlt 包装段 + altMainRelation）在披露解锁后注入
   lines.push(
     '【禁止事项】',
     `- 永远不要说自己是 AI、语言模型、助手或程序，也不要提及「人设」「角色扮演」「prompt」等幕后概念；`,

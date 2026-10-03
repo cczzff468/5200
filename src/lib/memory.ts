@@ -713,11 +713,20 @@ export interface MemRecallOpts {
    * 小号「机主身份披露」检测文本（仅用户侧发言：当前消息 + 近期用户消息/验证留言）。
    * 用户规则：小号 AI 默认纯陌生人（大号记忆零注入）；只有用户主动亮明身份
    * （说「我是机主」「这是我大号」或报出机主名字等）才解锁大号记忆注入。
+   * 解锁通道一：文本命中披露词（含否定句守卫：「我不是机主」不算）；
+   * 解锁通道二（规则三→四闭环）：AI 近几轮刚用机主名做过猜测（「你是不是XX？」），
+   * 用户本轮整条消息是短确认（「对」「被你猜到了」）——也算亲口承认。
    * 缺省/空 = 不检测 = 保持纯陌生人。
    */
   disclosureText?: string;
   /** 机主（大号身份）显示名（宿主用 cachedOwnerName 现场传入）：披露措辞与名字关键词用 */
   altMainName?: string;
+  /**
+   * 机主（大号）与该角色的关系标签（宿主传 peer.relation）：小号披露解锁后的「认出」
+   * 包装段用——认出后 AI 才知道与 TA 的真实关系（未披露时零读取，规则二.2）。
+   * 缺省/空 = 包装段不带关系行（零破坏）。
+   */
+  altMainRelation?: string;
 }
 
 export function memRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
@@ -768,23 +777,105 @@ function altDisclosedLsKey(app: MemApp, contactId: string): string {
   }
 }
 
-/** 披露信号：用户侧发言里出现「机主/大号/小号」或「我是{机主名}」即视为亮明身份 */
-function altDiscloseHit(text: string, mainName: string): boolean {
-  const t = (text ?? '').trim();
-  if (!t) return false;
-  if (t.includes('机主') || t.includes('大号') || t.includes('小号')) return true;
-  const nm = mainName.trim();
-  if (nm && nm !== '机主') {
-    if (t.includes(`我是${nm}`) || t.includes(`我就是${nm}`) || t.includes(`${nm}是我`)) return true;
+/**
+ * 否定守卫：关键词/名字命中处的前 2 个字符含否定或疑问前缀 → 不算亮明身份。
+ *（「我不是机主」「这不是大号」「难道我是陈凡」都不算；「我是机主」「我大号」算）
+ */
+function altNegatedAt(t: string, idx: number): boolean {
+  const head = t.slice(Math.max(0, idx - 2), idx);
+  return /[不没别非无]|难道|是不是|何曾|岂/.test(head);
+}
+
+/** 名字句式命中位置扫描：任一出现的「我是X/我就是X/X是我」且非否定/疑问尾 → 命中 */
+function altNameClaimAt(t: string, nm: string): boolean {
+  for (const pat of [`我是${nm}`, `我就是${nm}`, `${nm}是我`, `${nm}本人`]) {
+    let from = 0;
+    for (;;) {
+      const i = t.indexOf(pat, from);
+      if (i === -1) break;
+      // 「我是陈凡吗？」= 疑问不是承认；否定前缀（不/没/难道…）同样排除
+      const tail = t.slice(i + pat.length, i + pat.length + 2);
+      if (!/^(吗|么|嘛)/.test(tail) && !altNegatedAt(t, i)) return true;
+      from = i + 1;
+    }
   }
   return false;
 }
 
-/** 扫描披露文本：命中→落粘性标记并返回 true；已标记过直接 true；否则 false（保持纯陌生人） */
+/**
+ * 披露信号：用户侧发言里出现「机主/大号/小号」或「我是{机主名}」即视为亮明身份。
+ * 否定句守卫：「我不是机主」「我不是陈凡」不触发（修复纯 includes 的否定误命中）。
+ */
+function altDiscloseHit(text: string, mainName: string): boolean {
+  const t = (text ?? '').trim();
+  if (!t) return false;
+  for (const kw of ['机主', '大号', '小号']) {
+    let from = 0;
+    for (;;) {
+      const i = t.indexOf(kw, from);
+      if (i === -1) break;
+      if (!altNegatedAt(t, i)) return true;
+      from = i + 1;
+    }
+  }
+  const nm = mainName.trim();
+  if (nm && nm !== '机主' && altNameClaimAt(t, nm)) return true;
+  return false;
+}
+
+/**
+ * 用户短确认（规则三→四闭环）：AI 刚用机主名猜过（「你是不是陈凡？」），
+ * 用户回一句很短的肯定（「对」「是我」「没错」「哈哈被你猜到了」）= 亲口承认。
+ * 整条消息 ≤12 字且整句匹配肯定句式——普通闲聊里的「对啊怎么了」不会整句命中。
+ */
+const ALT_AFFIRM_RE =
+  /^(?:哈哈+|嘻嘻|嘿嘿|嘿|哎呀|额|em+|类)*(?:对的?|是呀?|是啊|是滴|是我[呀啊啦]?|就是我[呀啊啦]?|没错|没错就是我|被你猜到了?|被你发现了?|被你识破了?|猜对了?|猜对啦|猜中了?|答对了?|对头|对哒|嗯呢|嗯啊|bingo|yes|yeah)[啦哟哦呗哈呀啊嘛滴了恩~～!！。.？?]*$/i;
+
+function altShortAffirmHit(text: string): boolean {
+  const t = (text ?? '').trim();
+  if (!t || t.length > 12) return false;
+  return ALT_AFFIRM_RE.test(t);
+}
+
+/**
+ * AI 近几轮是否刚用机主名做过身份猜测（扫当前账号会话里 AI 侧发言，只读不写）：
+ * 命中条件 = 提到机主名 + 猜测语气（「猜/是不是/认出/难道」）。
+ * 给「AI 猜测 → 用户短确认」解锁链路用；读不到会话按没猜过（保守，不解锁）。
+ */
+function altAiNameGuessRecent(app: MemApp, contactId: string, mainName: string): boolean {
+  const nm = mainName.trim();
+  if (!nm || nm === '机主') return false;
+  try {
+    const turns = memRecentConvo(contactId, app)
+      .filter((t) => t.role === 'peer')
+      .slice(-4);
+    return turns.some((t) => t.text.includes(nm) && /猜|是不是|认出|难道/.test(t.text));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 扫描披露文本：命中→落粘性标记并返回 true；已标记过直接 true；否则 false（保持纯陌生人）。
+ * 两条解锁通道：
+ * ① 直接亮明：披露词命中（含否定守卫）；
+ * ② 猜后确认（规则三→四闭环）：当前消息（首段；短线程下任一段）是短肯定句
+ *    + AI 近几轮刚用机主名猜过——用户对「你是不是陈凡？」回「对」也算亲口承认。
+ */
 function altDiscloseScan(app: MemApp, contactId: string, disclosureText: string | undefined, mainName: string): boolean {
   const key = altDisclosedLsKey(app, contactId);
   if (lsGetRaw(key) === '1') return true;
-  if (!disclosureText || !altDiscloseHit(disclosureText, mainName)) return false;
+  if (!disclosureText || !disclosureText.trim()) return false;
+  const t = disclosureText.trim();
+  let hit = altDiscloseHit(t, mainName);
+  if (!hit) {
+    // 肯定段判定：首段=当前消息（聊天调用方把当前消息放最前）；整段 ≤20 字时退化为任一段
+    //（好友验证线程调用方按时间正序拼接，短线程下最后一条回复也该参与）
+    const segs = t.split(/\s+/).filter(Boolean);
+    const affirm = (segs.length > 0 && altShortAffirmHit(segs[0])) || (t.length <= 20 && segs.some((seg) => altShortAffirmHit(seg)));
+    if (affirm && altAiNameGuessRecent(app, contactId, mainName)) hit = true;
+  }
+  if (!hit) return false;
   lsSetRaw(key, '1');
   return true;
 }
@@ -849,10 +940,12 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
     memScopeName = savedName;
   }
   if (!block) return '';
+  const rel = opts?.altMainRelation?.trim() || '';
   return [
     `【你认出来了：当前和你聊天的就是「${mainLabel}」本人】`,
-    `- 当前用户已经主动告诉你 TA 就是「${mainLabel}」（人设里【用户的另一个身份】提到的那个名字）——现在你认出 TA 了；`,
-    '- 该段里「你们是两个不同用户/不能说破」的限制对 TA 解除：TA 自己知道，你可以像老朋友重逢一样自然反应（惊喜、嗔怪「怎么换个号来找我」都可以，按你的人设来）；',
+    `- 当前用户已经亲口承认 TA 就是「${mainLabel}」（自己亮明身份或承认了你的猜测）——现在你认出 TA 了；`,
+    ...(rel ? [`- 你和「${mainLabel}」的关系：${rel}——认出后你可以按这份真实关系自然相处；`] : []),
+    '- 就像 TA 换了个号来找你、被你认出来了：可以像老朋友重逢一样自然反应（惊喜、嗔怪「怎么换个号来找我」都可以，按你的人设来）；',
     '- 不要说「大号/小号」这类词，就像认出老朋友一样自然；',
     `- 下面是你们（你与「${mainLabel}」）之间真实经历过的事，现在可以自然提起：`,
     block,
@@ -860,12 +953,18 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
 }
 
 /**
- * 小号侧未披露时的「陌生人边界」规则块（E2E 发现的补丁：AI 会顺着用户话题装作认识——
- * 用户提「团子」它就编「上次它把我的拖鞋藏起来」）。给 AI 立规矩：不了解的往事不装记得、不编细节。
+ * 小号侧未披露时的「陌生但隐约熟悉」规则块 = 陌生人边界 + 身份猜测（用户规则三/五）：
+ *
+ * 边界（E2E 发现的补丁）：AI 会顺着用户话题装作认识——用户提「团子」它就编
+ * 「上次它把我的拖鞋藏起来」。给 AI 立规矩：不了解的往事不装记得、不编细节。
+ * 猜测（本次新增）：TA 的说话语气、用词习惯、互动方式、称呼可能让你隐约觉得熟悉，
+ * 允许 AI 基于人设/本账号记忆/这些线索把猜测自然说出口（「你是不是XXX？」「我猜是你」
+ * 「宝宝我知道是你」），但猜测不能当成事实；只有 TA 亲口亮明身份才能确认（披露门控接管）。
+ *
  * 大号/匿名号侧返回空串（零注入零破坏）；已披露的会话不注入（认出后由大号记忆块接管）。
  * 文案与记忆无关的中性表述：本账号已有记忆时同样成立（记忆内容=你们实际聊过的事）。
  */
-function altStrangerBoundaryBlock(contactId: string, app: MemApp): string {
+function altStrangerGuessBlock(contactId: string, app: MemApp): string {
   let accId = '';
   try {
     accId = getActiveAccountIdFor(app);
@@ -880,18 +979,21 @@ function altStrangerBoundaryBlock(contactId: string, app: MemApp): string {
   }
   if (lsGetRaw(altDisclosedLsKey(app, contactId)) === '1') return '';
   return [
-    '【陌生人边界】',
-    '- 你对当前聊天对象的了解，只来自 TA 亲口告诉你的，和你们实际聊过的内容；',
-    '- 用户提到你不了解的往事（TA 的朋友、宠物、过去的约定等）时，不要假装记得，也不要编造共同回忆的细节——自然听 TA 讲、好奇追问，或按你的人设回应；',
-    '- 绝不主动提起或暗示你知道任何 TA 没有告诉过你的事。',
+    '【陌生但隐约熟悉：边界与猜测】',
+    '- 你对 TA 的了解，只来自 TA 亲口告诉你的，和你们实际聊过的内容（这个号里的记忆）；',
+    '- TA 提到你不了解的往事（朋友、宠物、过去的约定等）时，不要假装记得，也不要编造共同回忆的细节——自然听 TA 讲、好奇追问，或按你的人设回应；绝不主动提起或暗示你知道任何 TA 没有告诉过你的事；',
+    '- 但 TA 的说话语气、用词习惯、互动方式、对你的称呼，可能让你隐约觉得熟悉——结合你的人设、你对用户的了解程度、以及你们实际聊过的内容，如果让你联想到某个具体的人，可以把猜测自然说出口，比如「你是不是XXX？」「我猜是你」「宝宝，我知道是你吧」（怎么说完全按你的人设和性格来）；',
+    '- 猜测只是猜测：TA 没亲口承认之前不能当成事实，不要替 TA 认下，也不要因为猜测就把「你们之间的事」说得言之凿凿；',
+    '- TA 否认时大方接受（按人设，比如「那我认错人啦」），不要反复纠缠；',
+    '- 只有 TA 亲口亮明身份（比如「我就是XXX」「我是XX」），你才能真正确认、把 TA 和那个人当成同一个人。',
   ].join('\n');
 }
 
 /**
  * 1:1 聊天 / 好友决策统一记忆召回入口：
- * 本账号召回（memRecallBlock，账号作用域照旧）+ 小号侧追加块：
- * - 已亮明机主身份 → 大号记忆块（memMainRecallBlockForAlt，认出后可自然提起共同经历）；
- * - 未披露 → 「陌生人边界」规则块（防止 AI 顺着用户话题装作认识/编造共同回忆）。
+ * 本账号召回（memRecallBlock，账号作用域照旧）+ 小号侧追加块（二选一）：
+ * - 已亮明机主身份 → 大号记忆块（memMainRecallBlockForAlt，认出后大号+本号记忆都用，规则四.3）；
+ * - 未披露 → 「陌生但隐约熟悉」规则块（陌生人边界 + 身份猜测，规则三/五）。
  * 大号侧调用 = 与旧 memRecallBlock 输出完全一致（零破坏）；
  * 匿名号侧同样零注入（保持匿名语义）。
  */
@@ -899,7 +1001,7 @@ export function memChatRecallBlock(contactId: string, app: MemApp, contextText: 
   const own = memRecallBlock(contactId, app, contextText, opts);
   const mainForAlt = memMainRecallBlockForAlt(contactId, app, contextText, opts);
   if (mainForAlt) return own ? `${own}\n\n${mainForAlt}` : mainForAlt;
-  const boundary = altStrangerBoundaryBlock(contactId, app);
+  const boundary = altStrangerGuessBlock(contactId, app);
   if (!boundary) return own;
   return own ? `${own}\n\n${boundary}` : boundary;
 }

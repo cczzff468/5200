@@ -42,6 +42,7 @@ import {
   memPurgeMomentSources,
   memRecentConvo,
   memRewriteMomentFragmentTexts,
+  setMemScopeForApp,
   type MemApp,
 } from '@/lib/memory';
 import { DEFAULT_BILINGUAL_PROMPT, getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -1311,6 +1312,11 @@ export function toggleUserMomentLike(platform: MomentPlatform, postId: string, u
     // 取消赞：只清该动态的「点赞」来源碎片（sourceKind==='like' 且无 commentId），
     // 不碰同库中该动态的其他记忆（如作者自己「发过这条动态」的 char-post 碎片）
     try {
+      try {
+        setMemScopeForApp(platformApp(platform)); // 多账号：按当前平台账号清（重启后ambient作用域可能是大号）
+      } catch {
+        // 作用域设置失败按调用方上下文
+      }
       const likeFrags = listFragments(post.peerId).filter(
         (f) => f.source === 'moments' && f.sourcePostId === postId && f.sourceKind === 'like' && !f.sourceCommentId
       );
@@ -1907,8 +1913,17 @@ function recentSelfTextsOf(peerId: string, limit = 8): string[] {
 }
 
 /** 记忆素材：该角色最近的活跃记忆——优先取「当前 App」的记忆（评论/发动态要基于该 App 的上下文），
- *  同 App 记忆不足 3 条时再混入其他 App 的记忆补齐（微信和 QQ 的素材池因此天然不同） */
+ *  同 App 记忆不足 3 条时再混入其他 App 的记忆补齐（微信和 QQ 的素材池因此天然不同）。
+ *  多账号（用户规则二.3）：读前显式把记忆作用域切到该平台当前账号——调度器/AI 发帖可能在
+ *  没有任何聊天召回的时机触发，不显式设置会沿用上次作用域（重启后=大号）→ 小号场景误读大号记忆。 */
 function memorySnippets(contactId: string, app?: MemApp, limit = 8): string[] {
+  if (app) {
+    try {
+      setMemScopeForApp(app);
+    } catch {
+      // 作用域设置失败按调用方上下文（与旧行为一致）
+    }
+  }
   const all = listFragments(contactId).filter((f) => !f.supersededAt && !f.expiredAt);
   let picked = all;
   if (app) {

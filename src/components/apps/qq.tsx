@@ -1377,10 +1377,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
   // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
   const mode = useSettings.getState().addressMode;
-  // 多账号关系感知：当前 QQ 账号；小号侧且大号加了该角色时注入【用户的另一个身份】
-  //（问感情按与大号关系答、不主动说破、明确问可说）；大号侧不注入
+  // 多账号（用户规则二.2）：小号/匿名号侧不再注入任何大号身份/关系信息（【用户的另一个身份】段已移除）
   const accId = activeAccountIdOf('qq');
-  const mainKnowsChar = peer.friendQq === true || !!peer.isFriend;
   return buildPersonaSystemPrompt(peer, {
     channel: 'QQ',
     userName: addressNameOf(me, mode),
@@ -1388,10 +1386,6 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
     userNickname: me.nickname ?? null,
     ownerName,
     accountId: accId,
-    mainIdentity:
-      accId !== 'main' && peer.kind !== 'user' && mainKnowsChar
-        ? { name: cachedOwnerName() || '机主', relation: peer.relation?.trim() || '普通朋友' }
-        : null,
     // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取）
     multiApp: getMemSettings(peer.id).share,
     ...npcExtra,
@@ -3529,6 +3523,7 @@ function ChatPage({
           interopOn: effectiveInterop,
           disclosureText: [userText ?? '', ...history.slice(-4).filter((h) => h.role === 'user').map((h) => h.content)].filter(Boolean).join(' '),
           altMainName: cachedOwnerName(),
+          altMainRelation: peer.relation?.trim() || '',
         }) || undefined;
       // Task 22 视频通话：记录本次通话媒体（onEnd 落卡片用）——放在守卫之后，只有真正发起才写 ref
       lastCallMediaRef.current = opts?.media ?? 'voice';
@@ -3548,6 +3543,7 @@ function ChatPage({
             interopOn: effectiveInterop,
             disclosureText: history.filter((h) => h.role === 'user').map((h) => h.content).join(' '),
             altMainName: cachedOwnerName(),
+            altMainRelation: peer.relation?.trim() || '',
           }) || undefined,
         memoryBlockFn,
         worldbookBlock,
@@ -4291,6 +4287,7 @@ function ChatPage({
       // 小号披露门控（用户最新规则）：仅用户侧发言参与检测——默认纯陌生人，亮明身份才解锁大号记忆
       disclosureText: [userMsg?.content ?? '', ...base.slice(-8).filter((m) => m.role === 'me').map(scanTextOf)].filter(Boolean).join(' '),
       altMainName: cachedOwnerName(),
+      altMainRelation: peer.relation?.trim() || '',
     });
     // QQ动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看 QQ 平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）

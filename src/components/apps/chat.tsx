@@ -481,13 +481,17 @@ async function recordMissedPhoneCall(
 /** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
  *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装；
  *  userReal/userNick：机主真实姓名/昵称（【用户的称呼】段注入用，名字/昵称不混淆） */
+/**
+ * 当前联系人会话的大号关系标签（openContactChat 打开会话时写入；AI 助手会话复位为空）：
+ * 信息端聊天发送流的 peer 只是显示对象，不带 relation——记忆召回的披露解锁包装段
+ *（memMainRecallBlockForAlt 的 altMainRelation）从这里取。
+ */
+let activeContactRelation = '';
 function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null, userReal?: string | null, userNick?: string | null): string {
   const mode = useSettings.getState().addressMode;
   const addrName = userReal ? addressNameOf({ name: userReal, nickname: userNick ?? null, realName: userReal }, mode) : null;
-  // 多账号关系感知：当前信息 App 账号（大号/小号/匿名号各自与角色的关系独立）；
-  // 小号/匿名号侧且大号加了该角色时注入【用户的另一个身份】段
+  // 多账号（用户规则二.2）：小号/匿名号侧不再注入任何大号身份/关系信息（【用户的另一个身份】段已移除）
   const accId = activeAccountIdOf('sms');
-  const mainKnowsChar = c.friendSms === true || !!c.isFriend;
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
     userName: addrName,
@@ -495,10 +499,6 @@ function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp
     userNickname: userNick ?? null,
     ownerName,
     accountId: accId,
-    mainIdentity:
-      accId !== 'main' && c.kind !== 'user' && mainKnowsChar
-        ? { name: cachedOwnerName() || '机主', relation: c.relation?.trim() || '普通朋友' }
-        : null,
     // 跨 App 身份感知：互通开关（打开会话时现场读取）
     multiApp,
     ...npcExtra,
@@ -1675,6 +1675,7 @@ function ChatView({
             // 小号披露门控（用户最新规则）：仅用户侧发言参与检测——默认纯陌生人，亮明身份才解锁大号记忆
             disclosureText: [userMsg?.content ?? '', ...base.slice(-6).filter((m) => m.role === 'user').map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'textcard' ? m.card?.text || '' : m.content))].filter(Boolean).join(' '),
             altMainName: cachedOwnerName(),
+            altMainRelation: activeContactRelation,
           }
         )
       : '';
@@ -4529,6 +4530,7 @@ export default function ChatApp() {
     if (cur) seenRef.current = lastAssistantMarkOf(cur);
     // 已删除/隐藏的会话重新进入即恢复显示
     setHidden(false);
+    activeContactRelation = ''; // AI 助手会话无联系人：清大号关系标签（披露解锁包装段不用）
     setChatSession({ key: 'assistant', peer: { title: ASSISTANT.phone, avatarSrc: null, name: ASSISTANT.name }, systemPrompt: null });
     setView('chat');
   };
@@ -4538,6 +4540,8 @@ export default function ChatApp() {
     const owner = c.ownerId ? contacts.find((o) => o.id === c.ownerId) : undefined;
     // 机主卡片（名字/昵称区分）：人设里明确「名字是凡凡，昵称是凑凑」
     const meCard = contacts.find((x) => x.kind === 'user');
+    // 大号关系标签：披露解锁后的「你认出来了」包装段用（memChatRecallBlock altMainRelation）
+    activeContactRelation = c.relation?.trim() || '';
     setChatSession({
       key: `c:${c.id}`,
       peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name, remark: c.remark ?? '' },
