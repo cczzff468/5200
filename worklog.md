@@ -14310,3 +14310,32 @@ Stage Summary:
 - 修复过程中发现并堵住两个隐患：LoginScreen 手工构造 user 丢 altOf（会串槽写会话）；QQ handleLogin purge 顺序（自由登录小号会误清大号会话数据）
 - localStorage 验证：wx-login-hist=[main,m]、qq-login-hist=[main]、active per-app 正确
 - 改动文件：src/lib/ios/accounts.ts、src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/lib/ios/friend-state.ts、src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: 42
+Agent: Z.ai Code（主会话）
+Task: ①微信切换账号后自动跳回微信界面 ②QQ 个人抽屉「切换账号」改截图样式账号卡片 ③「切换账号+小号」七条规则全面落地（账号隔离/角色共享/关系感知/记忆规则/切换规则/安全规则/范围限定）
+
+Work Log:
+- accounts.ts：新增 scopedConvKey（会话键按账号作用域：wx:/qq:/sms:/phone: 冒号风格 + wx-/qq- 连字符风格双识别）；deleteAccount 增加 opts.keepData（保留该账号全部后缀键数据+通话记录+留言+档案联系人，仅移出注册表+使用中 App 自动切回大号）
+- wechat.tsx：MainScreen 账号切换事件改为无条件 setPage('main')（原为切换页保持打开）+ toast「已切换到 xx」（档案展示名优先）；切换页 onLoginOther 包装后登录成功同样跳回；管理删除弹窗加「保留该账号的数据」勾选（delKeepData→deleteAccount keepData）
+- qq.tsx：MeDrawer 新增 QqDrawerAccountCard 弹出卡片（对照用户截图：白色圆角卡+上箭头三角、头像+名字+号码行、当前账号蓝勾、底部匿名账号行企鹅头像++86 脱敏号码，点匿名行提示「匿名号码仅用于电话与信息」）；「切换账号」胶囊从登出改为开卡片（移除 onSwitchAccount prop）；QQApp 根组件加 switchToast（挂在 remount 之外，切号 toast 不会被 MainScreen remount 吞掉）；根监听器移除 qqUnreadStore.prune([])/qqChatFlagsStore.reset 全清（store 已账号作用域化并自带切换重载，旧清法会误清新账号数据）
+- 聊天设置页关系行（chat-settings.tsx）：ChatSettingsPage 与 SmsChatSettingsPage 新增 relation/onSaveRelation props + 关系行 + 编辑弹窗（testid *-settings-relation/*-relation-input/*-relation-save），说明文案点明「当前账号视角、每账号独立」；三端接线：wechat.tsx（setAppRelation('wx')+onContactsChanged 刷新）、qq.tsx（本地乐观更新 relationLocal）、chat.tsx（父级 relationForAccount 计算+透传 props）
+- 多账号关系感知（contacts.ts/persona.ts/contacts-store.ts）：ContactRecord/Payload 新增 relationByAcc（按账号关系 map）；contacts.ts 新增 activeAccountIdOf/relationForAccount（大号=旧全局 relation；小号=分账号记录优先，有自己分账号好友标记→不继承大号关系，存量老数据→回退全局兼容）；contacts-store 新增 setAppRelation（大号写全局/小号写 relationByAcc）+ updateContact 合并 relationByAcc；persona.ts PersonaSource 新增 relationByAcc、ctx 新增 accountId/mainIdentity，relationForCtx 按账号解析关系，新增 buildMainIdentitySection（【用户的另一个身份】段：角色不知道大号小号是同一人；问感情状态按与大号关系如实回答；不主动说对象是大号、明确问可说）——三端 buildPersonaPrompt 均注入 accountId+mainIdentity（大号加了该角色才注入）
+- persona.ts buildAltAccountsSection 补一行「你和小号的关系、记忆与大号各自独立」
+- 数据隔离扫尾（规则一/五）：unread-store（wxUnreads/qqUnreads/chatBadge）与 chat-flags（wxChatFlags/qqChatFlags）存储键按 accLs 账号作用域+监听 ACCOUNT_CHANGED_EVENT 重载快照（角标/置顶/免打扰/背景随账号隔离）；time-aware/reply-count/sticker-toggle/ai-voice(freq+counter) 的会话键全部过 scopedConvKey；friend-state 删好友状态键改 `<app>-friend-del:<cid>` 进账号作用域映射；moments-inbox 键改 `wx-/qq-moments-inbox`（qq.tsx 清理点同步）；contacts-store purgeChatTracesFor 的时间感知/回复条数/语音频率 map 清理改为匹配 `--{accId}` 变体 + 未读/flags 跨账号兜底清扫
+- 记忆注入身份标注（规则四）：memory.ts setMemScopeForApp 记录作用域账号名，召回块头部加「当前身份：xx——这是这份记忆的主人，也是现在和你聊天的用户身份」
+- 安全规则（规则六）：微信切换页管理删除/设置账号管理删除/AnonSwitchSheet 匿名号删除三处确认弹窗均加「保留数据」勾选（默认不保留=旧行为）
+- 范围外说明：世界书/群本体/quit-flow/mute-notice 保持设备级（gid 唯一不跨账号碰撞；世界书=角色世界观属角色共享范畴）；offline-meet 键含 appId 但无账号维度（进行中见面跨账号共见， niche 场景，后续可加账号段）；电话 server 路由 persona 走大号口径（服务端无账号解析器，客户端 1:1 聊天全链路已覆盖）
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 全绿（仅 qq/wechat>500KB BABEL 提示）；agent-browser E2E 全过——
+  ①微信：种大号档案→登录→切号页显示 陈大大(绿点当前使用)+小王王(昵称口径)+登录小号按钮 → 点小王王卡自动跳回主界面+toast「已切换到 小王」→ 我页=小王王 → 切号页绿点在小王王（用户上次报的「登小号显示大号」bug 确认不复现）→ 切回大号同样自动跳回+toast「已切换到 机主」
+  ②QQ：88888888 登录→消息页右滑开抽屉→点「切换账号」胶囊→截图样式卡片（陈大大 88888888 蓝勾+小王王 3000111222）→点小王行→抽屉随 remount 关闭回消息 tab+根级 toast「已切换到 小王」仍可见→顶部身份=小王王→reload 后小号登录态直接恢复
+  ③关系感知：种苏晴(relation=恋人,friendQqByAcc[alt]=true)→小号好友列表有苏晴→聊天设置「关系」行显示「未设置」（不继承大号恋人）→保存「朋友」→DB 验证 relation=恋人(大号不变)+relationByAcc[alt]=朋友
+  ④AI 回归：小号视角苏晴聊天发「在吗？」→ AI 回复文本+语音条正常（称呼小王）
+  ⑤删除弹窗：微信管理删除弹窗出现「保留该账号的数据」勾选
+- 测试数据清理（seed 的 3 条联系人/账号注册表/登录历史/会话键全部还原，浏览器关闭）、dev.log 无错误
+
+Stage Summary:
+- 交付：微信/QQ 切换账号后自动跳回主界面+切换 toast；QQ 抽屉截图样式账号卡片（含匿名账号展示行）；七条规则落地——账号隔离补齐未读/置顶/免打扰/背景/时间感知/回复条数/表情开关/语音频率/删好友状态/朋友圈收件箱/世界书挂载外的全部键作用域，关系感知（relationByAcc+persona 按账号解析+小号问对象按大号关系答+不主动点破+明确问可说），记忆注入带账号身份，删除账号数据保留由用户决定
+- 用户此前报告的「登录小号后切换页显示当前是大号」bug 经 E2E 确认不复现（绿点跟随实际登录身份）
+- 改动文件：src/lib/ios/accounts.ts、src/lib/contacts.ts、src/lib/ios/contacts-store.ts、src/lib/ios/persona.ts、src/lib/memory.ts、src/lib/unread-store.ts、src/lib/chat-flags.ts、src/lib/time-aware.ts、src/lib/reply-count.ts、src/lib/sticker-toggle.ts、src/lib/ios/ai-voice.ts、src/lib/ios/friend-state.ts、src/lib/moments.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx、src/components/apps/chat-settings.tsx、src/components/apps/settings.tsx、src/components/ios/AnonSwitchSheet.tsx

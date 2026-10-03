@@ -185,7 +185,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, consumeForceLoginWall, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
-import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg } from '@/lib/ios/contacts-store';
+import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
@@ -195,7 +195,7 @@ import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
 import type { OfflineOnlineMsg } from '@/lib/offline-meet';
-import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
+import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -1282,12 +1282,21 @@ function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string |
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
   // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
   const mode = useSettings.getState().addressMode;
+  // 多账号关系感知：当前微信账号；小号侧且大号加了该角色时注入【用户的另一个身份】
+  //（问感情按与大号关系答、不主动说破、明确问可说）；大号侧不注入
+  const accId = activeAccountIdOf('wx');
+  const mainKnowsChar = peer.friendWx === true || !!peer.isFriend;
   return buildPersonaSystemPrompt(peer, {
     channel: '微信',
     userName: addressNameOf(me, mode),
     userRealName: me.realName ?? me.name,
     userNickname: me.nickname ?? null,
     ownerName,
+    accountId: accId,
+    mainIdentity:
+      accId !== 'main' && peer.kind !== 'user' && mainKnowsChar
+        ? { name: cachedOwnerName() || '机主', relation: peer.relation?.trim() || '普通朋友' }
+        : null,
     // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取）
     multiApp: getMemSettings(peer.id).share,
     ...npcExtra,
@@ -8136,6 +8145,18 @@ function ChatPage({
           idValue={peer.wechatId || peer.qqId || '未设置'}
           metaLine={[peer.region, peer.occupation].filter((x): x is string => Boolean(x)).join(' · ')}
           remark={peer.remark ?? ''}
+          relation={relationForAccount(peer, 'wx')}
+          onSaveRelation={selfChat ? undefined : (v) => {
+            // 多账号关系感知：关系落当前微信账号作用域（大号=全局 relation，小号=relationByAcc），重拉联系人刷新 peer
+            void (async () => {
+              try {
+                await setAppRelation('wx', peer.id, v);
+                await onContactsChanged?.();
+              } catch {
+                // 保存失败静默（弹窗已关闭，下次打开显示旧值）
+              }
+            })();
+          }}
           onSaveRemark={(v) => {
             void onSaveRemark(v);
           }}
@@ -11021,7 +11042,8 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
   // 多账号 Task 41：只显示「登录过」的小号（登录历史 / 存量会话兼容 / 当前账号保底）——
   // 联系人 App 刚创建、从未登录过的小号不进列表，用下方「登录小号」登录后才出现。
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => readSwitchableAccounts(getActiveAccountIdFor('wx')));
-  // 当前微信账号 id（per-app）：切换事件到达时刷新快照 → 绿点「当前使用」移到新卡（本页保持打开）
+  // 当前微信账号 id（per-app）：切换事件到达时刷新快照（页面会随 MainScreen 复位跳回主界面，
+  // 监听仅作兜底同步，绿点在跳转前一瞬已是新账号）
   const [activeId, setActiveId] = useState(() => getActiveAccountIdFor('wx'));
   useEffect(() => {
     const fn = (e: Event) => {
@@ -11066,17 +11088,21 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
   const [managing, setManaging] = useState(false);
   /** 删除二次确认目标（受控弹窗，禁 window.confirm） */
   const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
+  /** 删除时是否保留数据（规则：删除账号后数据是否保留由用户决定；默认不保留） */
+  const [delKeepData, setDelKeepData] = useState(false);
 
   const confirmDelete = async () => {
     const target = delTarget;
     if (!target) return;
     setDelTarget(null);
-    // v2 deleteAccount 为 async：正在使用中的账号删除时自动切回大号（退出该账号），不拦截
-    const res = await deleteAccount(target.id);
+    // v2 deleteAccount 为 async：正在使用中的账号删除时自动切回大号（退出该账号），不拦截；
+    // keepData：保留该账号的聊天/记忆等本地数据（孤儿化不可见）
+    const res = await deleteAccount(target.id, { keepData: delKeepData });
+    setDelKeepData(false);
     if (res.ok) {
       setAccounts(getAccounts());
       setManaging(false);
-      showToast('已删除该账号');
+      showToast(delKeepData ? '已删除该账号（数据已保留）' : '已删除该账号');
     } else {
       showToast(res.error || '删除失败');
     }
@@ -11200,7 +11226,7 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
         </div>
       )}
 
-      {/* 删除二次确认（微信风受控弹窗）：该账号的独立聊天库/登录态等本地数据一并清除 */}
+      {/* 删除二次确认（微信风受控弹窗）：默认清数据；可勾选「保留数据」由用户决定（规则六） */}
       {delTarget && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-8" onClick={() => setDelTarget(null)}>
           <div
@@ -11211,8 +11237,20 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
           >
             <p className="text-[16px] font-medium">删除账号</p>
             <p className="mt-2.5 text-[13.5px] leading-[1.7] text-black/70 dark:text-white/70">
-              将删除「{delTarget.name}」：该账号的聊天记录、登录态等本地数据会一并清除；若微信、QQ 等正在使用该账号，会自动退出并回到大号。此操作不可恢复。
+              将删除「{delTarget.name}」的账号与登录态；若微信、QQ 等正在使用该账号，会自动退出并回到大号。此操作不可恢复。
             </p>
+            <label
+              data-testid="wx-account-delete-keep"
+              className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-[8px] bg-black/[0.03] px-3 py-2.5 dark:bg-white/[0.06]"
+            >
+              <input
+                type="checkbox"
+                checked={delKeepData}
+                onChange={(e) => setDelKeepData(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-[#07C160]"
+              />
+              <span className="text-[13px] leading-[1.6] text-black/70 dark:text-white/70">保留该账号的数据（聊天记录、记忆、朋友圈等；数据不可见也无法恢复登录）</span>
+            </label>
             <div className="mt-4 flex gap-2.5">
               <button
                 type="button"
@@ -12321,12 +12359,16 @@ function MainScreen({
   // ---------------- 多账号 v2（Task 40-2a）：微信账号切换不刷新——本组件负责 UI 复位与数据重读 ----------------
   // 中断在途流/清理投递队列/排队补跑换仓由根组件 WeChatApp 处理；这里把界面复位回主列表并按新账号
   // 作用域重读全部列表数据（会话预览经 msgTick 重算；隐藏会话/群/朋友圈/互动消息/新的朋友重读）。
-  // 当前在切换账号页时保持打开（页内监听刷新账号快照绿点）；聊天页等子页卸载即清输入草稿等易残留态。
+  // 切换/登录成功后自动跳回微信主界面（用户要求：切完就能用，不留在切号页）+ toast 提示身份。
   useEffect(() => {
     const fn = (e: Event) => {
       const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
       if (!d || d.app !== 'wx') return;
-      setPage((p) => (p === 'accountSwitch' ? p : 'main'));
+      setPage('main');
+      // toast 报告切到了哪个身份（档案展示名优先，大号回退机主）
+      const acc = getActiveAccountFor('wx');
+      const prof = contacts.find((c) => c.altOf === acc.id || (acc.ownerContactId ? c.id === acc.ownerContactId : false));
+      showToast(`已切换到 ${prof ? displayNameOf(prof) : acc.name || '机主'}`);
       setTab('chats');
       setChatPeer(null);
       setGroupPeer(null);
@@ -12356,7 +12398,7 @@ function MainScreen({
     };
     window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
     return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
-  }, [reloadMoments, refreshWxNotices, refreshGroups]);
+  }, [reloadMoments, refreshWxNotices, refreshGroups, contacts, showToast]);
 
   const openDeleteConfirm = useCallback((c: ContactRecord, after: () => void) => {
     setDelTarget({ contact: c, after });
@@ -12934,8 +12976,18 @@ function MainScreen({
     return <ProfilePage me={me} record={meRecord} onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'settings')
     return <WxSettingsPage onBack={() => setPage('main')} onLogout={onLogout} onOpenAccountSwitch={() => setPage('accountSwitch')} />;
-  // 切换账号子页（Task 40-D）：注册表账号卡 + 添加 + 管理
-  if (page === 'accountSwitch') return <WxAccountSwitchPage me={me} onBack={() => setPage('settings')} onLoginOther={onLoginAccount} />;
+  // 切换账号子页（Task 40-D）：注册表账号卡 + 添加 + 管理；登录/切换成功后自动跳回主界面
+  if (page === 'accountSwitch')
+    return (
+      <WxAccountSwitchPage
+        me={me}
+        onBack={() => setPage('settings')}
+        onLoginOther={(u) => {
+          onLoginAccount(u);
+          setPage('main');
+        }}
+      />
+    );
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;

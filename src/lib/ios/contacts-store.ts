@@ -9,10 +9,11 @@
 import { localDB, genId } from './db';
 import {
   getAccountById,
-  getAccounts,
   getActiveAccountFor,
   getActiveAccountIdFor,
+  getAccounts,
   MAIN_ACCOUNT_ID,
+  scopedConvKey,
   updateAccount,
   deleteAccount as deleteAccountFromRegistry,
   type AccountApp,
@@ -81,6 +82,30 @@ export async function setAppFriendFlag(
 }
 
 /**
+ * 按当前账号写「与角色的关系」（多账号关系感知；与 setAppFriendFlag 同款入口）：
+ * - 大号：写旧全局 relation（历史口径，联系人 App 表单同样落全局）；
+ * - 小号/匿名号：写 relationByAcc[accId]（该账号与角色的关系独立维护，互不影响）；
+ * - USER 联系人不适用，原样返回。
+ */
+export async function setAppRelation(
+  app: 'wx' | 'qq' | 'sms' | 'phone',
+  contactId: string,
+  relation: string,
+): Promise<ContactRecord | null> {
+  const existing = await getContact(contactId);
+  if (!existing || existing.kind === 'user') return existing ?? null;
+  const accId = getActiveAccountIdFor(app);
+  const value = normalizeText(relation, 60);
+  if (accId === MAIN_ACCOUNT_ID) {
+    return updateContact(contactId, { relation: value });
+  }
+  const map: Record<string, string> = { ...(existing.relationByAcc ?? {}) };
+  if (value) map[accId] = value;
+  else delete map[accId];
+  return updateContact(contactId, { relationByAcc: Object.keys(map).length > 0 ? map : null });
+}
+
+/**
  * 申请持久化存储权限：联系人/微信账号现在只存本地 IndexedDB，
  * 不申请的话浏览器在磁盘压力下可能不经询问清掉数据（eviction）。
  * 在启动时（首次用户手势前）调用通常拿不到 granted，但 Chrome 对「已安装/常用站点」
@@ -115,10 +140,23 @@ function sortDesc(list: ContactRecord[]): ContactRecord[] {
   return [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
 }
 
+/** 机主显示名缓存（listContacts 每次刷新；仅客户端联系人加载后非空） */
+let ownerNameCache = '';
+
 /** 全量联系人（createdAt 倒序，与旧服务端 GET 顺序一致） */
 export async function listContacts(): Promise<ContactRecord[]> {
   const all = await localDB.getAll('contacts');
-  return sortDesc(all as ContactRecord[]);
+  const out = sortDesc(all as ContactRecord[]);
+  // 机主显示名缓存（同步读取口 cachedOwnerName 用；人设构建「发送现场」需要同步拿到大号身份名）
+  const owner = out.find((c) => c.kind === 'user' && !c.altOf);
+  ownerNameCache = owner ? displayNameOf(owner) || owner.name || '' : '';
+  return out;
+}
+
+/** 同步取机主显示名（备注/昵称优先）：多账号关系感知的人设注入（【用户的另一个身份】段）用；
+ *  尚未加载过联系人时返回空串（调用方自行回退「机主」） */
+export function cachedOwnerName(): string {
+  return ownerNameCache;
 }
 
 /**
@@ -452,6 +490,8 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if ('friendWxByAcc' in patch) next.friendWxByAcc = patch.friendWxByAcc ?? null;
   if ('friendQqByAcc' in patch) next.friendQqByAcc = patch.friendQqByAcc ?? null;
   if ('friendSmsByAcc' in patch) next.friendSmsByAcc = patch.friendSmsByAcc ?? null;
+  // 分账号关系（多账号关系感知）：写入传完整 map（调用方 setAppRelation 已按现有 map 合并）
+  if ('relationByAcc' in patch) next.relationByAcc = patch.relationByAcc ?? null;
 
   await localDB.put('contacts', next);
 
@@ -575,6 +615,7 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       window.localStorage.removeItem(k);
     }
     // 会话级设置 map（时间感知 / 回复条数）：按会话键删除该联系人条目
+    // 多账号（Task 42）：会话键已按账号作用域（wx:<id>--{accId} 变体），一并匹配删除
     for (const mapKey of ['chat-time-aware', 'chat-reply-counts']) {
       const raw = window.localStorage.getItem(mapKey);
       if (!raw) continue;
@@ -583,9 +624,11 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       const obj = parsed as Record<string, unknown>;
       let changed = false;
       for (const sk of [`wx:${id}`, `qq:${id}`, `sms:c:${id}`, `phone:${id}`]) {
-        if (sk in obj) {
-          delete obj[sk];
-          changed = true;
+        for (const k of Object.keys(obj)) {
+          if (k === sk || k.startsWith(`${sk}--`)) {
+            delete obj[k];
+            changed = true;
+          }
         }
       }
       if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
@@ -603,9 +646,11 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       const obj = parsed as Record<string, unknown>;
       let changed = false;
       for (const sk of [`wx:${id}`, `qq:${id}`, `sms:c:${id}`]) {
-        if (sk in obj) {
-          delete obj[sk];
-          changed = true;
+        for (const k of Object.keys(obj)) {
+          if (k === sk || k.startsWith(`${sk}--`)) {
+            delete obj[k];
+            changed = true;
+          }
         }
       }
       if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
@@ -699,6 +744,34 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
   // 会话标志：走总线 reset（内存 + localStorage + 订阅广播同步）
   wxChatFlags.reset(id);
   qqChatFlags.reset(id);
+  // 多账号（Task 42）：未读/标志/时间感知/回复条数/语音频率的存储已按账号作用域，
+  // 上方总线只清了当前账号；这里跨全部账号变体键兜底清扫（联系人本体已删，任何账号都不该残留）
+  try {
+    const stripId = (lsKey: string) => {
+      const raw = window.localStorage.getItem(lsKey);
+      if (!raw) return;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      const obj = parsed as Record<string, unknown>;
+      const doomed = Object.keys(obj).filter((k) => k === id || k === scopedConvKey(`wx:${id}`) || k === scopedConvKey(`qq:${id}`) || k === scopedConvKey(`sms:c:${id}`) || k.endsWith(`--${id}`));
+      if (doomed.length === 0) return;
+      for (const k of doomed) delete obj[k];
+      window.localStorage.setItem(lsKey, JSON.stringify(obj));
+    };
+    const suffix = `--${id}`;
+    const mapKeyVariants = (base: string): string[] => {
+      const out = [base];
+      for (const acc of getAccounts()) {
+        if (acc.kind !== 'main') out.push(`${base}${suffix}`);
+      }
+      return out;
+    };
+    for (const base of ['wx-chat-unreads', 'qq-chat-unreads', 'wx-chat-flags', 'qq-chat-flags']) {
+      for (const k of mapKeyVariants(base)) stripId(k);
+    }
+  } catch {
+    // 兜底清扫失败不阻塞删除
+  }
   // 群聊级联：把被删联系人从所有群的成员里移除（成员清空的群自动解散，群消息/未读/标志一并清理）；
   // 带上名字让留下的成员收到「XX退出了群聊」事件（AI 由此知道人为什么不见了）
   try {

@@ -31,6 +31,9 @@ export interface PersonaSource {
   background?: string | null;
   /** 与用户（或 NPC 归属者）的关系 */
   relation?: string | null;
+  /** 与角色的关系·按账号隔离（多账号关系感知）：键 = 账号 id；配合 ctx.accountId 取分账号关系，
+   *  无分账号记录时回退旧全局 relation（存量兼容）。NPC 的 relationToUser 仍全局（对机主的关系）。 */
+  relationByAcc?: Record<string, string> | null;
   /** 仅 NPC：对机主（USER）的关系（如 网友/同事/用户的朋友/情敌） */
   relationToUser?: string | null;
   /** 生日（几月几号；支持 6.20 / 6月20日 等写法，注入前经 formatBirthday 归一化，AI 无歧义理解） */
@@ -86,6 +89,16 @@ export interface PersonaPromptCtx {
    *  同时约束 AI 不主动说破「小号和大号是同一个人」。由 chat-stream-store 在主账号下计算传入；
    *  小号/匿名号侧、电话通话等不传（null/undefined）→ 整节约省略（零破坏）。 */
   altAccountsDigest?: string | null;
+  /** 多账号关系感知：当前聊天所在账号 id（'main' = 大号）。传入后「与用户的关系」按账号解析
+   *  （relationForAccount 口径：大号用全局 relation，小号用 relationByAcc[accId] ?? 兼容回退）；
+   *  不传 = 大号口径（旧全局 relation），零破坏。 */
+  accountId?: string | null;
+  /** 多账号关系感知：用户大号身份与当前角色的关系（小号/匿名号侧聊天时由宿主传入）。
+   *  传入后在人设中注入【用户的另一个身份】段——角色知道用户还有个大号「{name}」、
+   *  自己与 TA 的关系是「{relation}」；被问感情状态时按这段关系如实回答（例：恋人=有对象），
+   *  但不主动说破对象是大号；用户明确问「你对象是谁」时才可以如实说。
+   *  大号侧/未传 → 不注入（零破坏）。 */
+  mainIdentity?: { name: string; relation: string } | null;
 }
 
 function kindLabelOf(kind?: string | null): string {
@@ -96,6 +109,30 @@ function kindLabelOf(kind?: string | null): string {
 
 function clean(v?: string | null): string {
   return typeof v === 'string' ? v.trim() : '';
+}
+
+/**
+ * 多账号关系感知：当前聊天账号下，角色与用户的关系（与 contacts.relationForAccount 同口径）：
+ * - 大号（ctx.accountId 缺省/'main'）：旧全局 relation（历史口径，零破坏）；
+ * - 小号/匿名号：分账号记录（relationByAcc[accId]）优先；无记录时——该账号有自己的
+ *   分账号好友标记（friendXxByAcc 任意一张表里有本账号记录，即 Task 41 自己添加的）
+ *   → 视为独立关系（返回空串 → 人设回「普通朋友」默认，不继承大号处成的关系）；
+ *   连分账号好友标记都没有（存量老数据）→ 回退旧全局 relation（行为不变）。
+ */
+function relationForCtx(peer: PersonaSource, accountId?: string | null): string {
+  const globalRel = clean(peer.relation);
+  const accId = accountId ?? 'main';
+  if (accId === 'main') return globalRel;
+  const scoped = peer.relationByAcc?.[accId];
+  const t = typeof scoped === 'string' ? scoped.trim() : '';
+  if (t) return t;
+  const maps = [
+    (peer as { friendWxByAcc?: Record<string, boolean> | null }).friendWxByAcc,
+    (peer as { friendQqByAcc?: Record<string, boolean> | null }).friendQqByAcc,
+    (peer as { friendSmsByAcc?: Record<string, boolean> | null }).friendSmsByAcc,
+  ];
+  if (maps.some((m) => m && typeof m[accId] === 'boolean')) return '';
+  return globalRel;
 }
 
 /**
@@ -112,10 +149,32 @@ export function buildAltAccountsSection(digest: string | null | undefined): stri
     '【用户的小号（另一个聊天身份）】',
     '- 小号是用户使用的另一个聊天身份，对你来说是独立的聊天对象；',
     '- 用户问起小号的事时，可以参考下方摘录（小号与你的聊天记录）来回答；',
+    '- 你和小号的关系、你们聊过的内容，与你和大号的关系、记忆各自独立、互不相干；',
     '- 除非用户自己明说，否则不要说破、也不要暗示小号和大号（当前和你聊天的这个身份）是同一个人；',
     '- 摘录之外的信息（比如小号的私人记忆）你并不知道，不要编造。',
     '（摘录里「用户」指小号那边发消息的人，其他人名是小号当时聊天的对方角色。）',
     d,
+  ].join('\n');
+}
+
+/**
+ * 多账号关系感知：小号/匿名号侧聊天时注入【用户的另一个身份】段。
+ * 语义（用户规则三/四）：角色不知道大号和小号是同一个人；角色与每个账号的关系独立维护；
+ * 小号问「你有没有对象」这类感情状态时，按角色与大号的真实关系回答（大号是恋人就回答有）；
+ * 但不主动把对象身份说成大号，除非当前用户明确问起。
+ * mainIdentity 为空 → 返回空串（不注入，零破坏）。
+ */
+export function buildMainIdentitySection(mi: { name: string; relation: string } | null | undefined): string {
+  const name = typeof mi?.name === 'string' ? mi.name.trim() : '';
+  if (!name) return '';
+  const rel = (typeof mi?.relation === 'string' && mi.relation.trim()) || '普通朋友';
+  return [
+    '【用户的另一个身份】',
+    `- 当前和你聊天的用户还有一个别的聊天身份（TA 的大号）：「${name}」；`,
+    `- 你和「${name}」也是好友（或认识），你们的关系：${rel}——这是你与${name}之间的事，与当前聊天对象无关；`,
+    '- 在你眼里他们就是两个不同的用户，你不知道、也不能说破或暗示他们是同一个人；',
+    `- 被问到「你有没有对象/喜欢的人」这类感情状态问题时，按你与「${name}」的真实关系如实回答（关系亲密就承认有，${rel.includes('普通') || rel.includes('朋友') ? '只是朋友就大方承认没有' : '如实按你们的关系回答'}）；`,
+    `- 但除非当前用户明确问起「你的对象/喜欢的人是谁」，不要主动把你和「${name}」的关系细节（尤其恋人身份）说给当前用户听。`,
   ].join('\n');
 }
 
@@ -149,7 +208,8 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
       : [`【名字】${name}`];
   const persona = clean(peer.persona);
   const background = clean(peer.background);
-  const relation = clean(peer.relation);
+  // 多账号关系感知：当前聊天账号下与用户的关系（大号 = 旧全局；小号 = 分账号记录优先，见 relationForCtx）
+  const relation = relationForCtx(peer, ctx.accountId);
   const relationToUser = clean(peer.relationToUser);
   const ownerName = clean(ctx.ownerName) || clean(ctx.ownerLabel);
   // NPC 两种语义：
@@ -251,6 +311,10 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   // 不传（小号侧/电话通话等）→ 整节约省略，行为与旧版完全一致
   const altSection = buildAltAccountsSection(ctx.altAccountsDigest);
   if (altSection) lines.push(altSection);
+  // 多账号关系感知：小号/匿名号侧聊天时注入【用户的另一个身份】（问感情按与大号关系答、
+  // 不主动说破对象是大号、明确问可说）；大号侧 ctx.mainIdentity 不传 → 不注入
+  const mainIdSection = buildMainIdentitySection(ctx.mainIdentity);
+  if (mainIdSection) lines.push(mainIdSection);
   lines.push(
     '【禁止事项】',
     `- 永远不要说自己是 AI、语言模型、助手或程序，也不要提及「人设」「角色扮演」「prompt」等幕后概念；`,

@@ -72,6 +72,8 @@ export function AnonSwitchSheet({
   // 长按号码行 → 删除确认（Task 40 修正）：当前使用行删前自动切回主号；其他 App 正在使用的账号删除时也会自动退出该账号
   const [delTarget, setDelTarget] = useState<PhoneAccount | null>(null);
   const [delErr, setDelErr] = useState('');
+  // 删除时是否保留数据（规则六：是否保留由用户决定；默认不保留）
+  const [delKeepData, setDelKeepData] = useState(false);
   const pressTimer = useRef<number | null>(null);
   const firedRow = useRef<string | null>(null);
   const clearRowPress = useCallback(() => {
@@ -103,9 +105,11 @@ export function AnonSwitchSheet({
     const t = delTarget;
     if (!t) return;
     try {
-      // 本 App 正用这个匿名号 → 先切回主号再删（其他 App 若也在用，deleteAccount 自动切回大号退出该账号）
+      // 本 App 正用这个匿名号 → 先切回主号再删（其他 App 若也在用，deleteAccount 自动切回大号退出该账号）；
+      // keepData：由用户在确认弹窗里决定是否保留该号码的本地数据（规则六）
       if (getActiveAccountIdFor(app) === t.id) switchAccountFor(app, MAIN_ACCOUNT_ID);
-      const res = await deleteAccount(t.id);
+      const res = await deleteAccount(t.id, { keepData: delKeepData });
+      setDelKeepData(false);
       if (res.ok) {
         setDelTarget(null);
         setDelErr('');
@@ -302,6 +306,18 @@ export function AnonSwitchSheet({
                   {delErr}
                 </p>
               )}
+              <label
+                data-testid="anon-delete-keep"
+                className="mt-2.5 flex cursor-pointer items-start gap-2 rounded-[8px] bg-black/[0.04] px-2.5 py-2 text-left dark:bg-white/[0.08]"
+              >
+                <input
+                  type="checkbox"
+                  checked={delKeepData}
+                  onChange={(e) => setDelKeepData(e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#FF3B30]"
+                />
+                <span className="text-[12px] leading-[1.5] text-muted-foreground">保留该号码的数据（数据不可见也无法恢复登录）</span>
+              </label>
             </div>
             <div className="mt-4 flex border-t border-black/10 dark:border-white/10">
               <button

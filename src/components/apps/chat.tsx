@@ -56,7 +56,7 @@ import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { setPendingPhoneAnswer, triggerIncomingCall, useIncomingCall } from '@/lib/ios/incoming-call';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import { localDB, genId, type CallLogRecord, type VoicemailRecord } from '@/lib/ios/db';
-import { ownerProfile } from '@/lib/ios/contacts-store';
+import { ownerProfile, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { buildTimeAwareBlock as buildSmsTimeBlock } from '@/lib/time-aware';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -109,7 +109,7 @@ import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhot
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
-import { displayNameOf, isFriendIn, withDisplayNames, type ContactRecord } from '@/lib/contacts';
+import { displayNameOf, isFriendIn, withDisplayNames, activeAccountIdOf, relationForAccount, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
@@ -484,12 +484,21 @@ async function recordMissedPhoneCall(
 function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null, userReal?: string | null, userNick?: string | null): string {
   const mode = useSettings.getState().addressMode;
   const addrName = userReal ? addressNameOf({ name: userReal, nickname: userNick ?? null, realName: userReal }, mode) : null;
+  // 多账号关系感知：当前信息 App 账号（大号/小号/匿名号各自与角色的关系独立）；
+  // 小号/匿名号侧且大号加了该角色时注入【用户的另一个身份】段
+  const accId = activeAccountIdOf('sms');
+  const mainKnowsChar = c.friendSms === true || !!c.isFriend;
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
     userName: addrName,
     userRealName: userReal ?? null,
     userNickname: userNick ?? null,
     ownerName,
+    accountId: accId,
+    mainIdentity:
+      accId !== 'main' && c.kind !== 'user' && mainKnowsChar
+        ? { name: cachedOwnerName() || '机主', relation: c.relation?.trim() || '普通朋友' }
+        : null,
     // 跨 App 身份感知：互通开关（打开会话时现场读取）
     multiApp,
     ...npcExtra,
@@ -953,6 +962,10 @@ function ChatView({
   /** 联系人资料变更后通知父级刷新 contacts state + chatSession.peer.avatarSrc（仅联系人会话传入；
    *  AI 自主换头像后调用，保证退出会话再回主列表 / 重新进入会话时数据一致；#108/#119） */
   onContactChanged,
+  /** 当前账号与角色的关系（多账号关系感知；父级按联系人实时计算，AI 助手/USER 会话不传 = 隐藏） */
+  relation: relationProp,
+  /** 保存关系（当前账号作用域，父级调 setAppRelation + loadContacts）；不传 = 隐藏该行 */
+  onSaveRelation: onSaveRelationProp,
   /** 打开角色状态卡（点击顶栏对方头像时回调；仅联系人会话传入，小助手会话不弹） */
   onOpenPeerStatus,
 }: {
@@ -974,6 +987,10 @@ function ChatView({
   /** 联系人资料变更后通知父级刷新 contacts state + chatSession.peer.avatarSrc（仅联系人会话传入；
    *  AI 自主换头像后调用，保证退出会话再回主列表 / 重新进入会话时数据一致；#108/#119） */
   onContactChanged?: (contactId: string) => void;
+  /** 当前账号与角色的关系（多账号关系感知；父级计算；不传 = 隐藏关系行） */
+  relation?: string | null;
+  /** 保存关系（当前账号作用域；父级持久化）；不传 = 隐藏该行 */
+  onSaveRelation?: (v: string) => void;
   /** 打开角色状态卡（仅联系人会话传入；小助手会话不传 → 顶栏头像不可点） */
   onOpenPeerStatus?: () => void;
 }) {
@@ -1004,6 +1021,8 @@ function ChatView({
   const profileAvatar = useSettings((s) => s.profile.avatar);
   /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 回复条数入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 关系本地显示值（多账号关系感知）：保存后乐观更新（重进会话/切号后重读） */
+  const [relationLocal, setRelationLocal] = useState<string | null>(null);
   /** 图片全屏预览（点图片气泡打开；自动生图/历史图片共用；点任意处关闭） */
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   // ---- 加号面板（相机/图片/文字图片）：待发送图片预览条 + 原生相机/相册隐藏入口 ----
@@ -3581,6 +3600,16 @@ function ChatView({
           peerAvatar={peerAvatarSrc}
           phone={peer.title}
           remark={peer.remark ?? ''}
+          relation={relationLocal ?? relationProp ?? undefined}
+          onSaveRelation={
+            relationProp != null
+              ? (v) => {
+                  // 多账号关系感知：关系落信息 App 当前账号作用域（大号/匿名号各自独立）；乐观更新显示
+                  setRelationLocal(v);
+                  onSaveRelationProp?.(v);
+                }
+              : undefined
+          }
           onSaveRemark={(v) => {
             if (wbContactId) onSaveRemark?.(v);
           }}
@@ -4720,6 +4749,29 @@ export default function ChatApp() {
           onBack={() => setView('main')}
           onOpenPeerStatus={isAssistant ? undefined : () => setStatusCardOpen(true)}
           contactVoiceId={isAssistant ? null : contacts.find((c) => c.id === chatSession.key.slice(2))?.voiceId ?? null}
+          relation={
+            isAssistant
+              ? undefined
+              : (() => {
+                  const c = contacts.find((x) => x.id === chatSession.key.slice(2));
+                  return c && c.kind !== 'user' ? relationForAccount(c, 'sms') : undefined;
+                })()
+          }
+          onSaveRelation={
+            isAssistant
+              ? undefined
+              : (v) => {
+                  const cid = chatSession.key.slice(2);
+                  void (async () => {
+                    try {
+                      await setAppRelation('sms', cid, v);
+                      await loadContacts();
+                    } catch {
+                      // 持久化失败静默（关系为增强能力，本地显示值已乐观更新）
+                    }
+                  })();
+                }
+          }
           onSaveVoiceId={(vid) => {
             if (!chatSession || chatSession.key === 'assistant') return;
             const cid = chatSession.key.slice(2);

@@ -15,6 +15,8 @@
  *   「[发送了表情：XX]」进入上下文，AI（关闭时用纯文字）依旧能理解含义并回应。
  */
 
+import { scopedConvKey } from './ios/accounts';
+
 const KEY = 'chat-sticker-on';
 
 function loadBoolMap(): Record<string, boolean> {
@@ -43,16 +45,17 @@ function saveBoolMap(map: Record<string, boolean>): void {
   }
 }
 
-/** 读取某会话的表情包开关（未设置时默认开启，保持既有行为） */
+/** 读取某会话的表情包开关（未设置时默认开启，保持既有行为；会话键按账号作用域） */
 export function getStickersOn(sessionKey: string): boolean {
-  return loadBoolMap()[sessionKey] !== false;
+  return loadBoolMap()[scopedConvKey(sessionKey)] !== false;
 }
 
-/** 保存某会话的表情包开关（持久化到 localStorage，按 sessionKey 隔离） */
+/** 保存某会话的表情包开关（持久化到 localStorage，按会话键+账号隔离） */
 export function saveStickersOn(sessionKey: string, on: boolean): void {
+  const k = scopedConvKey(sessionKey);
   const map = loadBoolMap();
-  if (on) delete map[sessionKey];
-  else map[sessionKey] = false;
+  if (on) delete map[k];
+  else map[k] = false;
   saveBoolMap(map);
 }
 

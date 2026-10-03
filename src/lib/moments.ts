@@ -170,8 +170,10 @@ function isMomentPlatform(v: unknown): v is MomentPlatform {
 const WX_MOMENTS_KEY = 'wx-moments';
 const QQ_POSTS_KEY = 'qq-zone-posts';
 const QQ_COMMENTS_KEY = 'qq-zone-comments';
-/** 互动消息收件箱（与我的互动 / 空间消息），按平台分库 */
-const noticesKey = (platform: MomentPlatform) => `moments-inbox:${platform}`;
+/** 互动消息收件箱（与我的互动 / 空间消息），按平台分库；
+ *  多账号（Task 42）：键改 `wx-`/`qq-` 前缀命中账号作用域映射——收件箱随账号隔离，
+ *  切换账号只看到当前账号朋友圈的互动（旧裸键 moments-inbox:* 不再读写，残留自然失效） */
+const noticesKey = (platform: MomentPlatform) => `${platform}-moments-inbox`;
 /** 收件箱容量上限（新消息在前） */
 const NOTICE_CAP = 120;
 /** 各平台机主展示名（写入时记住，legacy 数据作者推断用） */

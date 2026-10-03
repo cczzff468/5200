@@ -1,5 +1,7 @@
 'use client';
 
+import { scopedConvKey } from './accounts';
+
 /**
  * AI 语音消息（AI 回复按频率用语音发送）+ AI 语音发送频率设置：
  *
@@ -83,17 +85,18 @@ function loadFreqMap(): Record<string, string> {
   }
 }
 
-/** 读取某会话的 AI 语音频率（未设置时默认『经常』——未配置语音 API 也照发语音条，静音展示；用户显式关闭过才不发） */
+/** 读取某会话的 AI 语音频率（未设置时默认『经常』——未配置语音 API 也照发语音条，静音展示；用户显式关闭过才不发；freqKey 按账号作用域） */
 export function getAiVoiceFreq(freqKey: string): AiVoiceFreq {
-  return normalizeAiVoiceFreq(loadFreqMap()[freqKey]);
+  return normalizeAiVoiceFreq(loadFreqMap()[scopedConvKey(freqKey)]);
 }
 
-/** 保存某会话的 AI 语音频率（localStorage 持久化，按 freqKey 隔离） */
+/** 保存某会话的 AI 语音频率（localStorage 持久化，按 freqKey+账号隔离） */
 export function saveAiVoiceFreq(freqKey: string, freq: AiVoiceFreq): void {
   if (typeof window === 'undefined') return;
+  const k = scopedConvKey(freqKey);
   const map = loadFreqMap();
-  if (freq === 'off') map[freqKey] = 'off'; // 显式关闭也要落盘：与「从未设置」区分（未设置=默认发语音，off=用户明确关闭）
-  else map[freqKey] = freq;
+  if (freq === 'off') map[k] = 'off'; // 显式关闭也要落盘：与「从未设置」区分（未设置=默认发语音，off=用户明确关闭）
+  else map[k] = freq;
   try {
     window.localStorage.setItem(FREQ_STORE_KEY, JSON.stringify(map));
   } catch {
@@ -146,10 +149,11 @@ export function decideAiVoiceMessage(freqKey: string, counterKey: string = freqK
   if (freq === 'off') return false;
   if (freq === 'always') return true;
   const every = FREQ_EVERY[freq];
+  const ck = scopedConvKey(counterKey);
   const map = loadCounters();
-  const n = map[counterKey] ?? 0;
+  const n = map[ck] ?? 0;
   const speak = n % every === 0;
-  map[counterKey] = speak ? 1 : n + 1;
+  map[ck] = speak ? 1 : n + 1;
   saveCounters(map);
   return speak;
 }

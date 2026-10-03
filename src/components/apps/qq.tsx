@@ -210,7 +210,7 @@ import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv'
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
 import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, consumeForceLoginWall, getAccounts, getActiveAccountFor, getActiveAccountIdFor, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
-import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
@@ -222,7 +222,7 @@ import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
-import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames } from '@/lib/contacts';
+import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -1373,12 +1373,21 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
   // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
   const mode = useSettings.getState().addressMode;
+  // 多账号关系感知：当前 QQ 账号；小号侧且大号加了该角色时注入【用户的另一个身份】
+  //（问感情按与大号关系答、不主动说破、明确问可说）；大号侧不注入
+  const accId = activeAccountIdOf('qq');
+  const mainKnowsChar = peer.friendQq === true || !!peer.isFriend;
   return buildPersonaSystemPrompt(peer, {
     channel: 'QQ',
     userName: addressNameOf(me, mode),
     userRealName: me.realName ?? me.name,
     userNickname: me.nickname ?? null,
     ownerName,
+    accountId: accId,
+    mainIdentity:
+      accId !== 'main' && peer.kind !== 'user' && mainKnowsChar
+        ? { name: cachedOwnerName() || '机主', relation: peer.relation?.trim() || '普通朋友' }
+        : null,
     // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取）
     multiApp: getMemSettings(peer.id).share,
     ...npcExtra,
@@ -2826,6 +2835,8 @@ function ChatPage({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   /** 聊天设置页（右上角菜单进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 关系本地显示值（多账号关系感知）：保存后乐观更新（peer 是快照，重挂载/切号后重读） */
+  const [relationLocal, setRelationLocal] = useState<string | null>(null);
   /** 角色状态卡（点击消息行对方头像弹出：心情/好感度/心声/动作/穿着/位置/时间，实时生成不影响聊天） */
   const [peerStatusOpen, setPeerStatusOpen] = useState(false);
   /** 查找聊天记录页 */
@@ -6701,6 +6712,13 @@ function ChatPage({
           idValue={peer.qqId || '未设置'}
           metaLine={[peer.region, peer.occupation].filter((x): x is string => Boolean(x)).join(' · ')}
           remark={peer.remark ?? ''}
+          relation={relationLocal ?? relationForAccount(peer, 'qq')}
+          onSaveRelation={peer.id === me.id ? undefined : (v) => {
+            // 多账号关系感知：关系落当前 QQ 账号作用域（大号=全局 relation，小号=relationByAcc）；
+            // peer 为快照，保存后乐观更新本地显示值（重进会话/切号后自动重读准确值）
+            setRelationLocal(v);
+            void setAppRelation('qq', peer.id, v).catch(() => undefined);
+          }}
           onSaveRemark={(v) => {
             void onSaveRemark(v);
           }}
@@ -10672,7 +10690,6 @@ function MeDrawer({
   onOpenFavorites,
   onOpenSettings,
   onOpenAlbum,
-  onSwitchAccount,
   onPatchUser,
   onToast,
 }: {
@@ -10684,13 +10701,14 @@ function MeDrawer({
   onOpenFavorites: () => void;
   onOpenSettings: () => void;
   onOpenAlbum: () => void;
-  onSwitchAccount: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
   onToast: (m: string) => void;
 }) {
   const [shown, setShown] = useState(false);
   const [editSign, setEditSign] = useState(false);
   const [signDraft, setSignDraft] = useState(me.persona ?? '');
+  /** 切换账号弹出卡片（对照截图样式）：胶囊按钮点开，点外面/再点关闭 */
+  const [accCardOpen, setAccCardOpen] = useState(false);
   useEffect(() => {
     const raf = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(raf);
@@ -10763,6 +10781,20 @@ function MeDrawer({
           }
         }}
       >
+        {/* 切换账号弹出卡片（对照真实 QQ 截图：头像+名字+号码+当前蓝勾，底部匿名账号行） */}
+        {accCardOpen && (
+          <QqDrawerAccountCard
+            onPick={(id) => {
+              setAccCardOpen(false);
+              switchAccountFor('qq', id);
+            }}
+            onClose={() => setAccCardOpen(false)}
+            onAnonTap={() => {
+              setAccCardOpen(false);
+              onToast('匿名号码仅用于电话与信息');
+            }}
+          />
+        )}
         {/* 整页滚动：顶部（打卡/头像/昵称）随内容一起滚动，不再固定 */}
         <div className="relative flex-1 overflow-y-auto">
         {/* 顶部（无背景图）：打卡/状态 pills 缩小行置顶，其下头像/昵称/切换账号；点击行间空白处关闭抽屉 */}
@@ -10788,7 +10820,7 @@ function MeDrawer({
               <button
                 type="button"
                 data-testid="qq-drawer-switch"
-                onClick={onSwitchAccount}
+                onClick={() => setAccCardOpen(true)}
                 className="mt-1.5 flex h-7 items-center rounded-full border border-black/12 px-3 text-[12px] text-black/60 active:opacity-60 dark:border-white/20 dark:text-white/60"
               >
                 切换账号
@@ -12890,6 +12922,124 @@ function readQqSwitchableAccounts(activeId: string): PhoneAccount[] {
       return false;
     }
   });
+}
+
+/**
+ * 抽屉「切换账号」弹出卡片（对照真实 QQ 截图样式）：
+ * 白色圆角卡 + 上箭头小三角；每行 头像 + 名字 + 号码，当前账号右侧蓝勾；
+ * 底部「匿名账号」行（企鹅头像 + 脱敏号码）——匿名号只属于电话/信息，点击给出提示不切换。
+ * 数据口径与 SecurityPage 一致：登录过的账号（登录历史/存量会话/当前保底）+ 档案展示名。
+ */
+function QqDrawerAccountCard({ onPick, onClose, onAnonTap }: { onPick: (id: string) => void; onClose: () => void; onAnonTap: () => void }) {
+  const [accounts, setAccounts] = useState<PhoneAccount[]>(() => readQqSwitchableAccounts(getActiveAccountIdFor('qq')));
+  const [activeId, setActiveId] = useState<string>(() => getActiveAccountIdFor('qq'));
+  useEffect(() => {
+    const refresh = (e: Event) => {
+      const detail = (e as CustomEvent<{ app?: string }>).detail;
+      if (detail && detail.app !== 'qq') return;
+      setAccounts(readQqSwitchableAccounts(getActiveAccountIdFor('qq')));
+      setActiveId(getActiveAccountIdFor('qq'));
+    };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, refresh);
+  }, []);
+  const [mainOwner, setMainOwner] = useState<{ name: string; qqId: string; avatar: string | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void mainOwnerContact().then((o) => {
+      if (alive) setMainOwner(o ? { name: o.name?.trim() ?? '', qqId: o.qqId?.trim() ?? '', avatar: o.avatar } : null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const [profiles, setProfiles] = useState<ContactRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void listContactsFor('qq')
+      .then((all) => {
+        if (alive) setProfiles(all);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const profileOf = (acc: PhoneAccount): ContactRecord | null =>
+    profiles.find((c) => c.kind === 'user' && (c.altOf === acc.id || c.id === acc.ownerContactId)) ?? null;
+  const accNameOf = (acc: PhoneAccount): string => {
+    if (acc.id === MAIN_ACCOUNT_ID) {
+      const mainProfile = profiles.find((c) => c.kind === 'user' && !c.altOf) ?? null;
+      return (mainProfile ? displayNameOf(mainProfile) : '') || mainOwner?.name || '机主';
+    }
+    const profile = profileOf(acc);
+    return (profile ? displayNameOf(profile) : '') || acc.name;
+  };
+  const accNoOf = (acc: PhoneAccount): string =>
+    acc.id === MAIN_ACCOUNT_ID ? mainOwner?.qqId || acc.qqId || '' : acc.kind === 'anon' ? acc.phone : acc.qqId;
+  // 匿名号（注册表里的 anon 账号）：仅展示；脱敏 +86 183******33 风格（前3后2）
+  const anonAccounts = getAccounts().filter((a) => a.kind === 'anon');
+  const maskAnon = (p: string): string =>
+    p.length >= 11 ? `+86 ${p.slice(0, 3)}******${p.slice(-2)}` : `+86 ${p}`;
+
+  return (
+    <div className="absolute inset-0 z-50" onClick={onClose} data-testid="qq-drawer-acc-card-backdrop">
+      <div
+        className="absolute left-5 top-[212px] w-[270px] overflow-visible rounded-[10px] bg-white shadow-[0_10px_38px_rgba(0,0,0,0.22)] dark:bg-[#232529]"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="qq-drawer-acc-card"
+      >
+        {/* 上箭头小三角（指向抽屉「切换账号」胶囊按钮） */}
+        <div aria-hidden="true" className="absolute -top-[6px] left-9 h-3 w-3 rotate-45 rounded-[2px] bg-white dark:bg-[#232529]" />
+        <div className="overflow-hidden rounded-[10px]">
+          {accounts.map((acc, idx) => {
+            const isCurrent = acc.id === activeId;
+            const name = accNameOf(acc);
+            return (
+              <button
+                key={acc.id}
+                type="button"
+                data-testid={`qq-drawer-acc-row-${acc.id}`}
+                onClick={isCurrent ? onClose : () => onPick(acc.id)}
+                className={`flex h-[64px] w-full items-center gap-3 px-4 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
+                  idx > 0 ? 'border-t border-black/[0.05] dark:border-white/[0.06]' : ''
+                }`}
+              >
+                {acc.id === MAIN_ACCOUNT_ID ? (
+                  <QqAvatar src={mainOwner?.avatar ?? null} alt={name} size={44} />
+                ) : (
+                  <QqAccountBubble name={name} kind="alt" size={44} />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[16px] font-medium leading-tight">{name}</span>
+                  <span className="mt-0.5 block truncate text-[13px] text-black/35 dark:text-white/35">{accNoOf(acc)}</span>
+                </span>
+                {isCurrent && <Check className="h-5 w-5 shrink-0 text-[#1E6FFF] dark:text-[#4AA3FF]" aria-hidden="true" />}
+              </button>
+            );
+          })}
+          {/* 匿名账号行（仅展示；匿名号只属于电话/信息，QQ 不提供匿名登录） */}
+          {anonAccounts.map((acc) => (
+            <button
+              key={acc.id}
+              type="button"
+              data-testid={`qq-drawer-acc-anon-${acc.id}`}
+              onClick={() => onAnonTap()}
+              className="flex h-[64px] w-full items-center gap-3 border-t border-black/[0.05] px-4 text-left active:bg-black/[0.04] dark:border-white/[0.06] dark:active:bg-white/[0.06]"
+            >
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white" aria-hidden="true">
+                <PenguinMark size={30} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[16px] font-medium leading-tight">{acc.name || '匿名账号'}</span>
+                <span className="mt-0.5 block truncate text-[13px] text-black/35 dark:text-white/35">{maskAnon(acc.phone)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SecurityPage({
@@ -15757,10 +15907,6 @@ function MainScreen({
             setDrawerOpen(false);
             setRoute({ page: 'settings' });
           }}
-          onSwitchAccount={() => {
-            setDrawerOpen(false);
-            onLogout();
-          }}
           onPatchUser={onPatchUser}
           onToast={showToast}
         />
@@ -15889,7 +16035,7 @@ function purgeQqSessionData(): void {
   // IndexedDB kv：整键清（空间动态/评论/点赞、打卡、钱包余额/银行卡/账单、小金库收益、空间互动收件箱、
   // #10 消息收藏 qq-favorites——旧身份收藏残留会出现在新身份收藏页）。
   // 多账号 v2：kvDel 裸键自动按当前 qq 账号作用域（大号原键/小号 --{id}），其他账号数据不动 ✓
-  for (const key of [LS_ZONE_POSTS, LS_ZONE_COMMENTS, LS_ZONE_LIKES, LS_QQ_CHECKIN, LS_WALLET, LS_WALLET_CARDS, LS_WALLET_BILLS, LS_VAULT_EARN, 'moments-inbox:qq', 'qq-favorites']) {
+  for (const key of [LS_ZONE_POSTS, LS_ZONE_COMMENTS, LS_ZONE_LIKES, LS_QQ_CHECKIN, LS_WALLET, LS_WALLET_CARDS, LS_WALLET_BILLS, LS_VAULT_EARN, 'qq-moments-inbox', 'moments-inbox:qq', 'qq-favorites']) {
     try {
       kvDel(key);
     } catch {
@@ -15969,13 +16115,16 @@ export default function QQApp() {
   // 多账号 v2（Task 40-2b，不刷新的关键）：切换 QQ 账号不刷新网页——监听切换事件：
   // ① 会话纪元递增，旧账号已调度的延迟回调（来电定时器/通话尾巴/分段投递闭包）整体作废；
   // ② 中断 qq 在途流 + 清投递队列（旧账号回复不再落盘）；
-  // ③ 清设备级会话态总线（未读/flags 单例背靠非作用域 LS 键，新账号不得残留旧账号角标/置顶）；
+  // ③（Task 42 起移除）未读/flags 总线已按账号作用域化并自带切换重载，无需再清
   // ④ 已消费转发事件登记清空（旧账号登记会吞新账号同文事件的回应）；
   // ⑤ 排队补跑内存队列重读新账号快照；
   // ⑥ bump accReloadKey → 启动加载 effect 重跑（联系人重读 + 按新账号作用域恢复登录态，无登录态 → 登录页）
   //   + remount 主界面回到消息列表主 tab（子页全关、各页挂载重读当前账号数据）。
   // wx/sms/phone 的账号切换与本 App 无关，忽略
   const [accReloadKey, setAccReloadKey] = useState(0);
+  // 账号切换 toast（规则五.1：切换要有 UI 提示）：挂在根组件上，remount 后仍能看到
+  const [switchToast, setSwitchToast] = useState<string | null>(null);
+  const switchToastTimer = useRef<number | null>(null);
   useEffect(() => {
     const fn = (e: Event) => {
       const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
@@ -15984,21 +16133,20 @@ export default function QQApp() {
       abortStreamsByPrefix('qq:');
       purgeDeliveryQueueByPrefix('qq:');
       try {
-        qqUnreadStore.prune([]);
-      } catch {
-        // 忽略
-      }
-      try {
-        for (const fid of Object.keys(qqChatFlagsStore.get())) qqChatFlagsStore.reset(fid);
-      } catch {
-        // 忽略
-      }
-      try {
         consumedQqAiEvents.clear();
       } catch {
         // 忽略
       }
       qqQueueReload();
+      // 切换提示：档案展示名优先，大号回退「机主」（登录成功/删除自动切回也一并提示）
+      try {
+        const acc = getActiveAccountFor('qq');
+        setSwitchToast(`已切换到 ${acc.id === MAIN_ACCOUNT_ID ? '机主' : acc.name || '新账号'}`);
+        if (switchToastTimer.current) window.clearTimeout(switchToastTimer.current);
+        switchToastTimer.current = window.setTimeout(() => setSwitchToast(null), 1800);
+      } catch {
+        // 忽略
+      }
       setAccReloadKey((k) => k + 1);
     };
     window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
@@ -16155,9 +16303,20 @@ export default function QQApp() {
   if (!user) {
     // 小号/匿名号槽位：登录墙绑定当前槽位（显示账号名/预填账号/只认本槽位账密）；大号保持原自由登录
     const acc = getActiveAccountFor('qq');
-    return <LoginScreen onLogin={handleLogin} slot={acc.kind === 'main' ? null : acc} />;
+    return (
+      <>
+        <LoginScreen onLogin={handleLogin} slot={acc.kind === 'main' ? null : acc} />
+        {switchToast && <QqToast text={switchToast} />}
+      </>
+    );
   }
 
   // key={accReloadKey}：切换 QQ 账号后 remount 主界面——route 归位消息 tab、子页全关、各页挂载重读当前账号数据
-  return <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />;
+  return (
+    <>
+      <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />
+      {/* 账号切换提示（规则五.1）：挂在根组件，remount 后依然可见 */}
+      {switchToast && <QqToast text={switchToast} />}
+    </>
+  );
 }

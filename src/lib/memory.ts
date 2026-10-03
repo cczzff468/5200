@@ -46,7 +46,7 @@
 
 import type { ApiConfig } from '@/lib/ios/store';
 import { kvGet, kvSet, kvDel, kvDelByPrefix, kvDelRaw } from '@/lib/ios/idb-kv';
-import { getAccounts, getActiveAccountIdFor, MAIN_ACCOUNT_ID, type AccountApp } from '@/lib/ios/accounts';
+import { getAccountById, getAccounts, getActiveAccountIdFor, MAIN_ACCOUNT_ID, type AccountApp } from '@/lib/ios/accounts';
 import { getGroup, listGroups, loadGroupMsgs, onGroupDissolved, type WxGroupMsg } from '@/lib/ios/groups';
 import {
   DEFAULT_MEM_SETTINGS,
@@ -130,19 +130,28 @@ export {
  * 前者跨账号共享配置，后者天然覆盖全部账号后缀键。
  */
 let memScopeSuffix = '';
+/** 当前记忆作用域账号的显示名（记忆块头部身份标注用；大号=「机主」，规则四：记忆注入带账号身份） */
+let memScopeName = '机主';
 
 export function setMemScopeForApp(app: AccountApp): void {
   try {
     const id = getActiveAccountIdFor(app);
     memScopeSuffix = id === MAIN_ACCOUNT_ID ? '' : `--${id}`;
+    memScopeName = id === MAIN_ACCOUNT_ID ? '机主' : getAccountById(id)?.name || '当前账号';
   } catch {
     memScopeSuffix = '';
+    memScopeName = '机主';
   }
 }
 
 /** 记忆库管理视图（无聊天 App 上下文）统一用信息 App 当前账号视角 */
 export function setMemScopeDefaultView(): void {
   setMemScopeForApp('sms');
+}
+
+/** 当前记忆作用域账号显示名（同步；setMemScopeForApp 已调用后有效） */
+export function memScopeAccountName(): string {
+  return memScopeName;
 }
 
 function scoped(base: string): string {
@@ -812,7 +821,7 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
     [...keepLongs, ...keepCores].some(({ m }) => m.hasRoleTag === true || memHasRoleTag(m.content)) ||
     keepFrags.some(({ f }) => f.hasRoleTag === true || memHasRoleTag(f.content));
   const lines: string[] = [
-    `【记忆库（${headScope}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
+    `【记忆库（${headScope}；当前身份：${memScopeAccountName()}——这是这份记忆的主人，也是现在和你聊天的用户身份；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
     '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
     ...(showRoleTagNote
       ? [

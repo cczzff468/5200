@@ -57,7 +57,12 @@ export interface FriendDelState {
   rejected?: boolean;
 }
 
-const delKey = (app: FriendDelApp, contactId: string) => `friend-del:${app}:${contactId}`;
+/**
+ * 删除状态键（多账号 Task 42）：改为 `<app>-friend-del:<contactId>`——`wx-`/`qq-` 前缀命中
+ * idb-kv 的账号作用域映射，键自动带 `--{accountId}` 后缀：大号删了好友不影响小号的关系
+ * （每个账号与角色的关系独立维护；旧裸键 `friend-del:*` 不再读写，存量状态自然失效，重新删除即重建）。
+ */
+const delKey = (app: FriendDelApp, contactId: string) => `${app}-friend-del:${contactId}`;
 
 /** 该联系人是否已被我在此 App 删除好友（同步读，渲染/门控随时可调） */
 export function isFriendDeleted(app: FriendDelApp, contactId: string): boolean {

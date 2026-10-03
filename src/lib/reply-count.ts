@@ -1,6 +1,7 @@
 'use client';
 
 import { splitActionDescParts } from './action-desc';
+import { scopedConvKey } from './ios/accounts';
 
 /**
  * 回复条数（AI 像真人一样一句一句连发多条消息）：
@@ -93,9 +94,9 @@ function loadMap(): Record<string, number> {
   }
 }
 
-/** 读取某会话的回复条数（fallback：该 App 未设置时的默认值） */
+/** 读取某会话的回复条数（fallback：该 App 未设置时的默认值；会话键按账号作用域） */
 export function getReplyCount(sessionKey: string, fallback: number = DEFAULT_REPLY_COUNT): number {
-  const v = loadMap()[sessionKey];
+  const v = loadMap()[scopedConvKey(sessionKey)];
   return typeof v === 'number' ? normalizeReplyCount(v, fallback) : normalizeReplyCount(fallback, fallback);
 }
 
@@ -104,14 +105,14 @@ export function getReplyCount(sessionKey: string, fallback: number = DEFAULT_REP
  * 预留：跨键探测「用户是否真的选过」的场景用（当前各端均只读本会话自己的键）。
  */
 export function hasReplyCount(sessionKey: string): boolean {
-  return loadMap()[sessionKey] !== undefined;
+  return loadMap()[scopedConvKey(sessionKey)] !== undefined;
 }
 
-/** 保存某会话的回复条数（持久化到 localStorage，按 sessionKey 隔离） */
+/** 保存某会话的回复条数（持久化到 localStorage，按会话键+账号隔离） */
 export function saveReplyCount(sessionKey: string, n: number): void {
   if (typeof window === 'undefined') return;
   const map = loadMap();
-  map[sessionKey] = normalizeReplyCount(n);
+  map[scopedConvKey(sessionKey)] = normalizeReplyCount(n);
   try {
     window.localStorage.setItem(STORE_KEY, JSON.stringify(map));
   } catch {

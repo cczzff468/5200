@@ -16,6 +16,7 @@
  */
 
 import { solarToLunar } from './ios/lunar';
+import { scopedConvKey } from './ios/accounts';
 
 const STORE_KEY = 'chat-time-aware';
 
@@ -36,16 +37,16 @@ function loadMap(): Record<string, boolean> {
   }
 }
 
-/** 读取某会话的时间感知开关（未设置时默认关闭） */
+/** 读取某会话的时间感知开关（未设置时默认关闭；会话键按账号作用域——多账号各自独立） */
 export function getTimeAware(sessionKey: string): boolean {
-  return loadMap()[sessionKey] ?? false;
+  return loadMap()[scopedConvKey(sessionKey)] ?? false;
 }
 
-/** 保存某会话的时间感知开关（持久化到 localStorage，按会话键隔离；立即影响下一次请求） */
+/** 保存某会话的时间感知开关（持久化到 localStorage，按会话键+账号隔离；立即影响下一次请求） */
 export function setTimeAware(sessionKey: string, on: boolean): void {
   if (typeof window === 'undefined') return;
   const map = loadMap();
-  map[sessionKey] = on;
+  map[scopedConvKey(sessionKey)] = on;
   try {
     window.localStorage.setItem(STORE_KEY, JSON.stringify(map));
   } catch {

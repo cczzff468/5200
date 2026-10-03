@@ -3423,6 +3423,8 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
   const [namingInput, setNamingInput] = useState('');
   // 待删除账号 id（确认弹窗）
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 删除时是否保留数据（规则：删除账号后数据是否保留由用户决定；默认不保留）
+  const [delKeepData, setDelKeepData] = useState(false);
   const [toast, showToast] = useLocalToast();
 
   // 机主资料异步加载（跨账号读大号库；失败回退「机主」+ 注册表字段）
@@ -3604,9 +3606,21 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
               删除「{deletingAccount ? displayName(deletingAccount) : ''}」？
             </AlertDialogTitle>
             <AlertDialogDescription className="text-center text-[13px] leading-snug">
-              将删除该账号并清除其全部数据（聊天、记忆、朋友圈等）；正在使用它的微信 / QQ 等会自动退出并回到大号。此操作不可恢复。
+              将删除该账号及登录态；正在使用它的微信 / QQ 等会自动退出并回到大号。此操作不可恢复。
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <label
+            data-testid="settings-account-delete-keep"
+            className="mx-5 mb-1 flex cursor-pointer items-start gap-2.5 rounded-[8px] bg-muted/60 px-3 py-2.5"
+          >
+            <input
+              type="checkbox"
+              checked={delKeepData}
+              onChange={(e) => setDelKeepData(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[#FF3B30]"
+            />
+            <span className="text-left text-[12.5px] leading-[1.55] text-muted-foreground">保留该账号的数据（聊天记录、记忆、朋友圈等；数据不可见也无法恢复登录）</span>
+          </label>
           <AlertDialogFooter className="flex-row gap-0 border-t border-border sm:flex-row">
             <AlertDialogCancel className="h-12 flex-1 rounded-none border-0 bg-transparent text-[16px] font-normal text-foreground shadow-none hover:bg-transparent focus-visible:ring-0 active:bg-muted/60 sm:mt-0">
               取消
@@ -3618,12 +3632,14 @@ function AccountSwitchPage({ onBack }: { onBack: () => void }) {
               style={{ color: IOS_RED }}
               onClick={() => {
                 const id = deletingId;
+                const keep = delKeepData;
                 setDeletingId(null);
+                setDelKeepData(false);
                 if (!id) return;
-                void deleteAccount(id).then((result) => {
+                void deleteAccount(id, { keepData: keep }).then((result) => {
                   if (result.ok) {
                     setAccounts(getAccounts());
-                    showToast('已删除该账号');
+                    showToast(keep ? '已删除该账号（数据已保留）' : '已删除该账号');
                   } else {
                     showToast(result.error ?? '删除失败');
                   }

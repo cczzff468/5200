@@ -59,6 +59,10 @@ export interface ContactRecord {
   friendQqByAcc?: Record<string, boolean> | null;
   /** 信息好友标记·按账号隔离（结构同 friendWxByAcc；匿名号码与大号/小号互不可见） */
   friendSmsByAcc?: Record<string, boolean> | null;
+  /** 与角色的关系·按账号隔离（多账号关系感知）：键 = 账号 id，值 = 该账号视角下的关系文本。
+   *  大号把苏晴处成恋人、小号刚加她只是普通朋友，两边互不影响（规则：每个账号和角色的关系独立维护）。
+   *  读取口径统一走 relationForAccount（分账号记录优先 → 大号/存量回退旧全局 relation）。 */
+  relationByAcc?: Record<string, string> | null;
   /** 真实姓名（withDisplayNames 展示副本专用：昵称替换 name 时把原 name 存到这里；
    *  人设注入用——角色要知道自己的大名/真名，别人用真名叫 TA 时不能不承认） */
   realName?: string | null;
@@ -111,6 +115,8 @@ export interface ContactPayload {
   friendWxByAcc?: Record<string, boolean> | null;
   friendQqByAcc?: Record<string, boolean> | null;
   friendSmsByAcc?: Record<string, boolean> | null;
+  /** 与角色的关系·按账号隔离（写入传完整 map；见 ContactRecord 同名字段说明） */
+  relationByAcc?: Record<string, string> | null;
   remark?: string | null;
   /** 语音音色（角色在电话/微信/QQ 里的说话音色；空 = 用全局默认） */
   voiceId?: string | null;
@@ -209,7 +215,7 @@ export type FriendApp = 'wx' | 'qq' | 'sms';
  * （contacts-store.ts 加载时）注入解析器；未注入（后端/SSR/极端时序）按大号口径走旧逻辑。
  * 解析器返回账号 id（大号恒为 'main'，与 accounts.ts MAIN_ACCOUNT_ID 一致）。
  */
-type FriendAccountResolver = (app: FriendApp) => string;
+type FriendAccountResolver = (app: 'wx' | 'qq' | 'sms' | 'phone') => string;
 
 let friendAccountResolver: FriendAccountResolver | null = null;
 
@@ -217,12 +223,44 @@ export function setFriendAccountResolver(fn: FriendAccountResolver): void {
   friendAccountResolver = fn;
 }
 
-function friendAccountIdOf(app: FriendApp): string {
+function friendAccountIdOf(app: 'wx' | 'qq' | 'sms' | 'phone'): string {
   try {
     return friendAccountResolver ? friendAccountResolver(app) : 'main';
   } catch {
     return 'main';
   }
+}
+
+/**
+ * 指定 App 当前账号 id（同步；供人设构建等「发送现场」场景使用）。
+ * 与 isFriendIn/relationForAccount 同一解析器：客户端由 contacts-store 注入，
+ * 后端/SSR 未注入时返回 'main'（大号口径，零破坏）。
+ */
+export function activeAccountIdOf(app: 'wx' | 'qq' | 'sms' | 'phone'): string {
+  return friendAccountIdOf(app);
+}
+
+/**
+ * 与角色的关系·按账号取（多账号关系感知）：
+ * - 大号：旧全局 relation（历史口径，写侧同样落全局）；
+ * - 小号/匿名号：分账号记录（relationByAcc[accId]）优先；
+ *   无记录时——该账号有自己的好友标记（Task 41 分账号添加的）→ 视为未设置（空串，
+ *   人设回「普通朋友」默认，大号处成的恋人不会自动变成小号的关系）；
+ *   连分账号好友标记都没有（存量老数据）→ 回退旧全局 relation（兼容，行为不变）。
+ */
+export function relationForAccount(
+  c: Pick<ContactRecord, 'relation' | 'relationByAcc' | 'friendWxByAcc' | 'friendQqByAcc' | 'friendSmsByAcc'>,
+  app: 'wx' | 'qq' | 'sms' | 'phone'
+): string {
+  const globalRel = c.relation?.trim() ?? '';
+  const accId = friendAccountIdOf(app);
+  if (accId === 'main') return globalRel;
+  const scoped = c.relationByAcc?.[accId];
+  const t = typeof scoped === 'string' ? scoped.trim() : '';
+  if (t) return t;
+  const byAcc = app === 'wx' ? c.friendWxByAcc : app === 'qq' ? c.friendQqByAcc : app === 'sms' ? c.friendSmsByAcc : undefined;
+  if (typeof byAcc?.[accId] === 'boolean') return ''; // 该账号自己加的好友：关系独立，不继承大号
+  return globalRel;
 }
 
 /**

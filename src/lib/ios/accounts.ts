@@ -249,6 +249,26 @@ export function accLs(key: string, app: AccountApp): string {
   return scopedKvKey(key, app);
 }
 
+/**
+ * 会话级语义键按账号作用域（localStorage map 的内层键 / 非映射前缀 kv 键通用）：
+ * 键带 `wx-` / `qq-` / `ios-chat-` / `sms-` 前缀 → 按对应 App 当前账号追加 `--{id}` 后缀
+ * （大号保持原键，旧数据零迁移）；其余键原样返回。
+ * 用途：未读角标 / 置顶免打扰 / 时间感知 / 回复条数 / 表情开关等「按会话记录的状态」
+ * 必须跟随账号隔离（规则：切换账号不能沿用上一个账号的数据）。
+ */
+export function scopedConvKey(key: string): string {
+  // 会话键风格一：`wx:<cid>` / `qq:<cid>` / `sms:<key>` / `phone:<cid>`（冒号风格，sessionKey）
+  let app: AccountApp | null = null;
+  if (key.startsWith('wx:')) app = 'wx';
+  else if (key.startsWith('qq:')) app = 'qq';
+  else if (key.startsWith('sms:')) app = 'sms';
+  else if (key.startsWith('phone:')) app = 'phone';
+  // 会话键风格二：kv 语义键的连字符前缀（wx-chat-msgs:* / qq-group-msgs:* / sms-* 等）
+  if (!app) app = accountAppOfKey(key);
+  if (!app) return key;
+  return scopedKvKey(key, app);
+}
+
 // ---------------- 兼容层（v1 全局账号 API → sms 语义；存量调用点迁移后删除） ----------------
 
 /** @deprecated 用 getActiveAccountIdFor(app) */
@@ -398,17 +418,25 @@ export function createAccount(
 /**
  * 删除账号：移出注册表 + 清理该账号的 localStorage 后缀键 + 清理主库中该账号作用域的
  * kv 键 / 通话记录 / 语音留言 + 删除其档案联系人（altOf）。大号不可删。
+ * opts.keepData=true 时保留该账号的全部本地数据（聊天记录/记忆/朋友圈等后缀键、通话
+ * 记录、档案联系人）——由用户在删除确认弹窗中决定（规则：删除账号后数据是否保留由
+ * 用户决定）；保留的数据成为无归属的孤儿数据（不可见、可在清除浏览器数据时一并清掉）。
  * 正在被某 App 使用的账号可直接删除：使用中的 App 自动切回大号（= 自动退出该账号，
  * switchAccountFor 事件驱动重读数据/登录态，全程不刷新网页；大号登录态保留）。
  */
-export async function deleteAccount(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteAccount(
+  id: string,
+  opts?: { keepData?: boolean },
+): Promise<{ ok: boolean; error?: string }> {
   if (id === MAIN_ACCOUNT_ID) return { ok: false, error: '大号不能删除' };
   const list = getAccounts();
   const target = list.find((a) => a.id === id);
   if (!target) return { ok: false, error: '账号不存在' };
   const usedBy = accountUsedBy(id);
   saveAccounts(list.filter((a) => a.id !== id));
-  // 清理该账号的隔离 localStorage 键（统一后缀 --{id}）
+  const keepData = opts?.keepData === true;
+  // 清理该账号的隔离 localStorage 键（统一后缀 --{id}）；保留数据时跳过
+  if (keepData) return finishAccountRemoval(id, usedBy);
   try {
     const suffix = `${SCOPE_SEP}${id}`;
     const doomed: string[] = [];
@@ -438,15 +466,23 @@ export async function deleteAccount(id: string): Promise<{ ok: boolean; error?: 
     await Promise.all(
       vms.filter((v) => v.account === id).map((v) => localDB.delete('voicemails', v.id)),
     );
-    const contacts = await localDB.getAll('contacts');
-    await Promise.all(
-      contacts
-        .filter((c) => (c as { altOf?: string }).altOf === id)
-        .map((c) => localDB.delete('contacts', c.id)),
-    );
+    // 档案联系人：保留数据时一并保留（否则联系人 App 里这个「人」会消失）
+    if (!keepData) {
+      const contacts = await localDB.getAll('contacts');
+      await Promise.all(
+        contacts
+          .filter((c) => (c as { altOf?: string }).altOf === id)
+          .map((c) => localDB.delete('contacts', c.id)),
+      );
+    }
   } catch {
     // 存储异常忽略（注册表已删，残留数据不可见）
   }
+  return finishAccountRemoval(id, usedBy);
+}
+
+/** 删除收尾：正在使用该账号的 App 自动切回大号（保留数据时数据不清理但同样要退出登录态） */
+async function finishAccountRemoval(id: string, usedBy: AccountApp[]): Promise<{ ok: boolean }> {
   // 正在使用该账号的 App 自动切回大号（= 自动退出该账号）：事件驱动各 App 重读数据/登录态，
   // 全程不刷新网页。必须放在数据清理之后——App 收到事件时旧账号数据已清干净，
   // 大号作用域数据/登录态（原键）不受影响，直接可用。

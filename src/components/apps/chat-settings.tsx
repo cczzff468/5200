@@ -147,6 +147,10 @@ export function ChatSettingsPage({
   worldBooksSummary,
   onBack,
   onSaveRemark,
+  /** 与角色的关系（当前账号视角，多账号关系感知）；不传 = 隐藏该行 */
+  relation,
+  /** 保存关系（当前账号作用域；宿主调 setAppRelation）；不传 = 隐藏该行 */
+  onSaveRelation,
   onTogglePinned,
   onToggleMuted,
   onOpenReplyCount,
@@ -204,6 +208,10 @@ export function ChatSettingsPage({
   onBack: () => void;
   /** 保存备注（空串 = 清除备注；宿主负责持久化并刷新展示名） */
   onSaveRemark: (v: string) => void;
+  /** 与角色的关系（当前账号视角；多账号关系感知）；不传 = 隐藏该行（用户/自己会话） */
+  relation?: string | null;
+  /** 保存关系（当前账号作用域，宿主调 setAppRelation）；不传 = 隐藏该行 */
+  onSaveRelation?: (v: string) => void;
   onTogglePinned: (v: boolean) => void;
   onToggleMuted: (v: boolean) => void;
   onOpenReplyCount: () => void;
@@ -251,6 +259,9 @@ export function ChatSettingsPage({
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
   const [remarkOpen, setRemarkOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
+  /** 关系编辑弹窗（多账号关系感知：保存当前账号视角下的关系） */
+  const [relationOpen, setRelationOpen] = useState(false);
+  const [relationDraft, setRelationDraft] = useState('');
 
   return (
     <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
@@ -323,6 +334,29 @@ export function ChatSettingsPage({
               <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
             </span>
           </button>
+          {/* 关系（多账号关系感知）：当前账号与这个角色的关系，决定 AI 怎么对待你；每个账号独立 */}
+          {typeof onSaveRelation === 'function' && (
+            <>
+              <div className={`border-t ${dividerCls}`} />
+              <button
+                type="button"
+                data-testid={`${testPrefix}-settings-relation`}
+                onClick={() => {
+                  setRelationDraft(relation ?? '');
+                  setRelationOpen(true);
+                }}
+                className={rowCls}
+              >
+                <span>关系</span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span data-testid={`${testPrefix}-relation-value`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+                    {relation?.trim() || '未设置'}
+                  </span>
+                  <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+                </span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* 置顶 / 免打扰开关（纯文字行，无图标） */}
@@ -586,6 +620,45 @@ export function ChatSettingsPage({
                   onClick={() => {
                     onSaveRemark(remarkDraft.trim());
                     setRemarkOpen(false);
+                  }}
+                  className="h-10 flex-1 rounded-[8px] text-[14px] font-medium text-white active:opacity-80"
+                  style={{ backgroundColor: accent }}
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 关系编辑弹窗（多账号关系感知） */}
+        {relationOpen && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setRelationOpen(false)}>
+            <div className={`w-full max-w-[300px] ${cardCls} p-5`} onClick={(e) => e.stopPropagation()}>
+              <p className="text-[16px] font-medium">关系</p>
+              <input
+                value={relationDraft}
+                onChange={(e) => setRelationDraft(e.target.value)}
+                placeholder={`你和${peerName}是什么关系（如：朋友 / 同事 / 恋人）`}
+                maxLength={30}
+                data-testid={`${testPrefix}-relation-input`}
+                className="mt-3 h-10 w-full rounded-[8px] bg-black/[0.05] px-3 text-[14px] outline-none placeholder:text-black/30 focus:ring-1 focus:ring-black/10 dark:bg-white/10 dark:placeholder:text-white/30 dark:focus:ring-white/15"
+              />
+              <p className="mt-2 text-[12px] leading-relaxed text-black/40 dark:text-white/40">这里保存的是「当前账号」和 TA 的关系，决定 AI 怎么称呼、对待你；每个账号互相独立、互不影响。清空保存可恢复默认。</p>
+              <div className="mt-4 flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setRelationOpen(false)}
+                  className="h-10 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-80 dark:bg-white/10"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  data-testid={`${testPrefix}-relation-save`}
+                  onClick={() => {
+                    onSaveRelation?.(relationDraft.trim());
+                    setRelationOpen(false);
                   }}
                   className="h-10 flex-1 rounded-[8px] text-[14px] font-medium text-white active:opacity-80"
                   style={{ backgroundColor: accent }}
@@ -1324,6 +1397,10 @@ export function SmsChatSettingsPage({
   worldBooksSummary,
   onBack,
   onSaveRemark,
+  /** 与角色的关系（当前账号视角，多账号关系感知）；不传 = 隐藏该行 */
+  relation,
+  /** 保存关系（当前账号作用域；宿主调 setAppRelation）；不传 = 隐藏该行 */
+  onSaveRelation,
   onOpenTranslate,
   onOpenReplyCount,
   onToggleSentenceSend,
@@ -1358,6 +1435,10 @@ export function SmsChatSettingsPage({
   onBack: () => void;
   /** 保存备注（空串 = 清除备注；宿主负责持久化并刷新展示名） */
   onSaveRemark: (v: string) => void;
+  /** 与角色的关系（当前账号视角；多账号关系感知）；不传 = 隐藏该行（AI 助手会话） */
+  relation?: string | null;
+  /** 保存关系（当前账号作用域，宿主调 setAppRelation）；不传 = 隐藏该行 */
+  onSaveRelation?: (v: string) => void;
   onOpenTranslate: () => void;
   /** 打开回复条数选择页（ChatReplyCountPage，variant=sms；信息端每会话独立） */
   onOpenReplyCount: () => void;
@@ -1384,6 +1465,9 @@ export function SmsChatSettingsPage({
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
   const [remarkOpen, setRemarkOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
+  /** 关系编辑弹窗（多账号关系感知：保存当前账号视角下的关系） */
+  const [relationOpen, setRelationOpen] = useState(false);
+  const [relationDraft, setRelationDraft] = useState('');
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏 */}
@@ -1437,6 +1521,26 @@ export function SmsChatSettingsPage({
               <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
             </span>
           </button>
+          {/* 关系（多账号关系感知）：当前账号与这个角色的关系；每个账号独立 */}
+          {typeof onSaveRelation === 'function' && (
+            <button
+              type="button"
+              data-testid="sms-settings-relation"
+              onClick={() => {
+                setRelationDraft(relation ?? '');
+                setRelationOpen(true);
+              }}
+              className={`${t.rowCls} border-t ${t.dividerCls}`}
+            >
+              <span>关系</span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span data-testid="sms-relation-value" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+                  {relation?.trim() || '未设置'}
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+              </span>
+            </button>
+          )}
         </div>
 
         {/* 翻译入口 */}
@@ -1610,6 +1714,44 @@ export function SmsChatSettingsPage({
                   onClick={() => {
                     onSaveRemark(remarkDraft.trim());
                     setRemarkOpen(false);
+                  }}
+                  className="h-10 flex-1 rounded-[8px] bg-[#007AFF] text-[14px] font-medium text-white active:opacity-80"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 关系编辑弹窗（多账号关系感知） */}
+        {relationOpen && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-8" onClick={() => setRelationOpen(false)}>
+            <div className={`w-full max-w-[300px] ${t.cardCls} p-5`} onClick={(e) => e.stopPropagation()}>
+              <p className="text-[16px] font-semibold">关系</p>
+              <input
+                value={relationDraft}
+                onChange={(e) => setRelationDraft(e.target.value)}
+                placeholder={`你和${peerName}是什么关系（如：朋友 / 同事 / 恋人）`}
+                maxLength={30}
+                data-testid="sms-relation-input"
+                className="mt-3 h-10 w-full rounded-[8px] bg-black/[0.05] px-3 text-[14px] outline-none placeholder:text-black/30 focus:ring-1 focus:ring-black/10 dark:bg-white/10 dark:placeholder:text-white/30 dark:focus:ring-white/15"
+              />
+              <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">这里保存的是「当前账号」和 TA 的关系，决定 AI 怎么称呼、对待你；每个账号互相独立、互不影响。清空保存可恢复默认。</p>
+              <div className="mt-4 flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setRelationOpen(false)}
+                  className="h-10 flex-1 rounded-[8px] bg-black/[0.05] text-[14px] active:opacity-80 dark:bg-white/10"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  data-testid="sms-relation-save"
+                  onClick={() => {
+                    onSaveRelation?.(relationDraft.trim());
+                    setRelationOpen(false);
                   }}
                   className="h-10 flex-1 rounded-[8px] bg-[#007AFF] text-[14px] font-medium text-white active:opacity-80"
                 >

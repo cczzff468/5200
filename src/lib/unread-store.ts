@@ -3,11 +3,14 @@
 /**
  * 会话未读计数总线（微信 / QQ 共用）：
  * - localStorage 持久化（wx-chat-unreads / qq-chat-unreads），旧版布尔 true 迁移为 1
+ * - 多账号（Task 42）：存储键按「对应 App 当前账号」自动作用域（accLs，wx-/qq- 前缀映射），
+ *   并监听账号切换事件重载内存快照——未读角标跟随账号隔离，切换账号不残留上一个账号的角标
  * - 组件通过 useUnreadMap 订阅：会话列表行角标、聊天页返回键角标、底部 tab 角标、
  *   主屏 App 图标角标实时同步
  * - 新消息 bump(id)，进聊天 clear(id)，长按菜单「标为未读/已读」toggle(id)
  */
 import { useSyncExternalStore } from 'react';
+import { ACCOUNT_CHANGED_EVENT, accLs, accountAppOfKey } from '@/lib/ios/accounts';
 
 export type UnreadMap = Record<string, number>;
 
@@ -47,17 +50,33 @@ export interface UnreadStore {
   prune: (validIds: Iterable<string>) => void;
 }
 
-export function createUnreadStore(lsKey: string): UnreadStore {
-  let map: UnreadMap = loadMap(lsKey);
+export function createUnreadStore(baseKey: string): UnreadStore {
+  // 多账号：存储键按对应 App 当前账号作用域（大号原键旧数据零迁移；小号/匿名号各存各的）；
+  // 账号切换事件到达时重载新账号的快照并广播（各 App 角标即时切换为当前账号数据）
+  const app = accountAppOfKey(baseKey);
+  const effKey = () => (app ? accLs(baseKey, app) : baseKey);
+  let curKey = effKey();
+  let map: UnreadMap = loadMap(curKey);
   const subs = new Set<() => void>();
   const persist = () => {
     try {
-      window.localStorage.setItem(lsKey, JSON.stringify(map));
+      window.localStorage.setItem(curKey, JSON.stringify(map));
     } catch {
       // 持久化失败忽略
     }
   };
   const emit = () => subs.forEach((fn) => fn());
+  if (app && typeof window !== 'undefined') {
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, (e: Event) => {
+      const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!d || d.app !== app) return;
+      const nextKey = effKey();
+      if (nextKey === curKey) return;
+      curKey = nextKey;
+      map = loadMap(curKey);
+      emit();
+    });
+  }
   return {
     get: () => map,
     subscribe(fn) {
@@ -148,16 +167,41 @@ export interface BadgeStore {
   set: (n: number) => void;
 }
 
-export function createBadgeStore(lsKey: string): BadgeStore {
+export function createBadgeStore(baseKey: string): BadgeStore {
+  // 多账号：存储键按对应 App 当前账号作用域（'ios-chat-' 前缀 → 信息 App；无映射的键全局），
+  // 账号切换事件到达时重载新账号的值并广播
+  const app = accountAppOfKey(baseKey);
+  const effKey = () => (app ? accLs(baseKey, app) : baseKey);
+  let curKey = effKey();
   let value = 0;
   try {
-    const raw = window.localStorage.getItem(lsKey);
+    const raw = window.localStorage.getItem(curKey);
     const n = Number(raw);
     if (Number.isFinite(n) && n >= 0) value = Math.min(Math.floor(n), 99);
   } catch {
     // 读取失败按 0
   }
   const subs = new Set<() => void>();
+  if (app && typeof window !== 'undefined') {
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, (e: Event) => {
+      const d = (e as CustomEvent<{ app?: string; id?: string }>).detail;
+      if (!d || d.app !== app) return;
+      const nextKey = effKey();
+      if (nextKey === curKey) return;
+      curKey = nextKey;
+      let next = 0;
+      try {
+        const raw = window.localStorage.getItem(curKey);
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0) next = Math.min(Math.floor(n), 99);
+      } catch {
+        // 按 0
+      }
+      if (next === value) return;
+      value = next;
+      subs.forEach((fn) => fn());
+    });
+  }
   return {
     get: () => value,
     subscribe(fn) {
@@ -171,7 +215,7 @@ export function createBadgeStore(lsKey: string): BadgeStore {
       if (next === value) return;
       value = next;
       try {
-        window.localStorage.setItem(lsKey, String(value));
+        window.localStorage.setItem(curKey, String(value));
       } catch {
         // 持久化失败忽略
       }
