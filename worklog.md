@@ -14360,3 +14360,20 @@ Stage Summary:
 - 交付：退出登录不再清除任何账号登录态（其他账号免重新登录）；QQ抽屉切换账号卡片去匿名号；小号加好友完整AI决策闭环（pending等待→AI按人设/大号关系/记忆/验证消息同意|拒绝|先回复→用户可回复再触发→同意后联系人才出现+聊天落已添加提示）
 - 架构要点：好友标记（isFriendIn账号感知）是联系人可见性的唯一门控——pending期间不置位即满足「AI没同意前联系人界面无联系人」；决策链路完全复用 friend-state 既有 thread/req 存储（wx/qq-friend-reqs 账号作用域键），零新表
 - 改动文件：src/lib/ios/accounts.ts、src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: 44
+Agent: Z.ai Code（主会话）
+Task: 用户从 13 项清单点名 1/2/4/5/6/8/11/13——①AI 同意好友的回复同步落一条进聊天记录（1/2/4/5/6 全部适用）②小号场景 AI 完全读不到大号记忆（当前=纯陌生人，违反规则三/四）③11/13 原文随上下文压缩丢失，按同域自查补漏
+
+Work Log:
+- memory.ts：memRecallBlockInner 加可选 headerOpts（identitySegment/extraNoteLines，缺省=旧版完全一致）；新增 memMainRecallBlockForAlt（小号侧临时切【大号作用域】召回+ finally 恢复作用域；大号侧/匿名号侧返回空串——匿名聊天保持匿名；头部标注「记忆的主人：机主（用户的另一个聊天身份）」+ 包裹段【你与「机主」的记忆】：这些经历自然记得可提起、但不知道大号小号是同一人、记忆里的「用户」都指机主）；新增 memChatRecallBlock 统一入口（本账号召回 + 小号侧追加大号记忆感知块，大号侧输出与旧 memRecallBlock 完全一致=零破坏）
+- friend-state.ts：processAltFriendReq accept 分支——AI 的同意回复（decision.message）以 peer text 消息同步落进聊天记录（sys「你已添加了X」在前、AI 回复紧随其后），此前只落 sys、回复只留在验证线程里；buildReqSystem（验证留言/线程回复生成）与 decideCharFriendReq（AI 决策）记忆召回换 memChatRecallBlock——AI 决策/回复时也能读到大号记忆
+- wechat.tsx/qq.tsx：1:1 文字聊天 + 语音/视频通话（memoryBlock 与逐轮 memoryBlockFn 共 3 处/端）换 memChatRecallBlock；chat.tsx：信息端 1:1 聊天换 memChatRecallBlock（missed-call 留言保持 memRecallBlock——电话域记忆+匿名语义不动）；群聊/朋友圈/世界书等域不动
+- E2E（agent-browser 900x1100，全链路 UI 驱动）：①小号安仔微信加林小风（人设热情）→ AI 直接 accept（thread 回复「你好小安！很高兴认识你，我是小风～」+ status=accepted）→ 聊天记录 IDB+UI 双验证：apply 消息(fr=apply)→「以上为验证消息」→sys「你已添加了小风」→AI 回复气泡，四段完整 ②种大号记忆（mem-ltm/mem-frag：猫团子打翻杯子）→ 小号聊天问「团子又闯祸了？」→ AI 回「这个小家伙也太调皮了，总是这么精力充沛」——小号不再是纯陌生人 ✓ ③大号回归：登录大号（先补种机主档案）加小风秒通过（旧 sys 文案+AI 欢迎语称呼凡凡）；大号聊天问「我们家团子最近乖吗」→ AI 回「前几天又把家里的杯子打翻了」——大号记忆召回与旧版一致 ✓ ④切换页绿点正确显示在当前使用的小安 ✓
+- 测试数据全清：3 联系人（林小风/安仔档案/陈凡机主）+12 条 kv（记忆锚点/碎片/核心/计数/会话/好友申请，全部含 cid 或 accId）+ localStorage 注册表/active/登录历史/session 键还原；残留复查=0 联系人/0 残留 kv
+- bunx tsc --noEmit 0 错误；eslint 改动 5 文件全绿（仅 qq/wechat>500KB BABEL 提示）；dev.log 无运行时错误
+
+Stage Summary:
+- 交付：①小号加好友 AI 同意后，AI 的同意回复同时落进聊天记录（打开聊天即见对方通过后说的第一句话；微信/QQ 共用同一 accept 分支，一次修复两端覆盖直通同意/回复后再同意/拒绝后再同意全部路径）②小号场景大号记忆感知（规则三/四落地：AI 在小号侧能了解「机主」、提起你们之间的事，但不点破同一人；匿名号侧不注入保匿名；大号侧零注入零破坏）③11/13 原文丢失已在最终回复向用户说明并请其复述（同域自查未发现其它明显缺口：信息端加好友本就无验证消息流=即时通过属既有设计）
+- 改动文件：src/lib/memory.ts、src/lib/ios/friend-state.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx

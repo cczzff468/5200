@@ -41,7 +41,7 @@ import { getActiveAccountIdFor, MAIN_ACCOUNT_ID } from './accounts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL } from './block-state';
 import { buildPersonaSystemPrompt } from './persona';
-import { getMemSettings, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memChatRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { cleanBubbleText } from '@/lib/chat-rich';
 
@@ -455,7 +455,8 @@ async function buildReqSystem(
     multiApp: getMemSettings(contact.id).share,
     extraRules: sceneRules[scene],
   });
-  const memoryBlock = memRecallBlock(contact.id, app, '');
+  // 多账号：小号侧追加大号记忆感知（规则三/四）；大号侧 = 纯本账号召回，输出与旧版一致
+  const memoryBlock = memChatRecallBlock(contact.id, app, '');
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
   return [persona, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
 }
@@ -741,7 +742,8 @@ export async function decideCharFriendReq(
     multiApp: getMemSettings(contact.id).share,
     extraRules: sceneRules,
   });
-  const memoryBlock = memRecallBlock(contact.id, app, '');
+  // 多账号：小号决策同样注入大号记忆感知（AI 了解「机主」这个人/你们之间的事来判断申请，规则三/四）
+  const memoryBlock = memChatRecallBlock(contact.id, app, '');
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
   const system = [persona, memoryBlock, timeBlock, mainIdentityLine].filter(Boolean).join('\n\n');
 
@@ -806,20 +808,26 @@ export async function processAltFriendReq(app: FriendDelApp, reqId: string, cont
     updateFriendReq(app, reqId, {
       thread: [...curThread, { who: 'peer' as const, text: decision.message, time: Date.now() }].slice(-30),
     });
-    // 聊天记录落「已添加成功」提示（与既有 acceptFriendReqAction 同款；验证消息此前已在）
+    // 聊天记录落「已添加成功」提示 + AI 的同意回复同步落一条进聊天记录：
+    // 同意回复不只留在验证消息线程里——打开聊天就能看到对方通过后说的第一句话
+    //（sys 提示在前，AI 回复紧随其后；写入失败不影响好友状态）
     try {
       const chatKey = `${app === 'wx' ? 'wx-chat-msgs:' : 'qq-chat-msgs:'}${contactId}`;
       const existing = kvGet<unknown[]>(chatKey);
       const list = Array.isArray(existing) ? [...existing] : [];
+      const now = Date.now();
       list.push({
         id: genId(),
         role: 'peer',
         content: '',
-        time: Date.now(),
+        time: now,
         kind: 'sys',
         sys: { text: `你已添加了${fresh.name}，现在可以开始聊天了。` },
         fr: 'added',
       });
+      if (decision.message.trim()) {
+        list.push({ id: genId(), role: 'peer', content: decision.message, time: now + 1, kind: 'text' });
+      }
       kvSet(chatKey, list.slice(app === 'wx' ? -100 : -200));
     } catch {
       // 聊天记录写入失败不影响好友状态

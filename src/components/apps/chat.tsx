@@ -84,7 +84,7 @@ import {
 } from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import {
@@ -1665,7 +1665,7 @@ function ChatView({
     const replyCount = systemPrompt ? getReplyCount(sessionKey) : 1;
     // 记忆库：联系人会话召回记忆（memContactId 为组件级常量：storageKey 形如 c:<contactId>；AI 助手会话无联系人 → 不注入）
     const memoryBlock = memContactId
-      ? memRecallBlock(
+      ? memChatRecallBlock(
           memContactId,
           'sms',
           [userMsg?.content ?? '', ...base.slice(-6).map((m) => (m.kind === 'voice' ? m.voice?.transcript || '' : m.kind === 'textcard' ? m.card?.text || '' : m.content))]

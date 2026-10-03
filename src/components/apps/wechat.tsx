@@ -158,7 +158,7 @@ import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memResetConvoCounters } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -5030,7 +5030,7 @@ function ChatPage({
       // 每轮动态召回（引擎以「用户刚说的话」逐轮调用）：通话里 AI 能随话题变化召回相关记忆，
       // 主动提起之前聊过的事（文字聊过的事通话里能接上——互通开关决定召回范围）
       const memoryBlockFn = (userText: string | null) =>
-        memRecallBlock(peer.id, 'wx', wbScanText([userText, ...history.slice(-4).map((h) => h.content)]), {
+        memChatRecallBlock(peer.id, 'wx', wbScanText([userText, ...history.slice(-4).map((h) => h.content)]), {
           interopOn: effectiveInterop,
         }) || undefined;
       // Task 22 视频通话：记录本次媒体（引擎 onEnd 不回传，挂断落卡片时读回）；缺省语音
@@ -5046,7 +5046,7 @@ function ChatPage({
         // video：全局层渲染视频通话页（主画面角色动态画面 + 用户摄像头小窗 + 识图循环）
         media: opts?.media ?? 'voice',
         initialHistory: history,
-        memoryBlock: memRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
+        memoryBlock: memChatRecallBlock(peer.id, 'wx', memContext, { interopOn: effectiveInterop }) || undefined,
         memoryBlockFn,
         worldbookBlock,
         momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer }) || undefined,
@@ -5787,7 +5787,7 @@ function ChatPage({
     // 记忆召回（私聊）：跨 App 互通开关照旧；群聊来源记忆按群级互通开关判断可见性
     //（effectiveInterop 只跟群开关；用户和角色 A 的私聊记忆默认不对角色 B 开放——
     //  存储键即隔离边界，这里只影响该角色自己的召回范围）
-    const memoryBlock = memRecallBlock(peer.id, 'wx', memContext, {
+    const memoryBlock = memChatRecallBlock(peer.id, 'wx', memContext, {
       interopOn: effectiveInterop,
     });
     // 朋友圈动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看朋友圈平台的动态），

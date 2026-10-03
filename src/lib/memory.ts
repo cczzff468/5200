@@ -722,7 +722,82 @@ export function memRecallBlock(contactId: string, app: MemApp, contextText: stri
   }
 }
 
-function memRecallBlockInner(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
+/**
+ * 多账号规则三/四（关系感知 + 记忆规则）——小号侧的大号记忆感知块：
+ *
+ * 小号/匿名号聊天时本账号记忆通常为空（AI 表现成纯陌生人），但按用户规则：
+ * - 规则三（关系感知）：AI 与某账号聊天用该账号的关系回答（小号问「有对象吗」按大号关系答「有」）；
+ * - 规则四（记忆规则）：账号间记忆【存储】完全隔离，但 AI 可在账号内提及与另一账号互动过的事。
+ * 因此小号侧聊天需把【大号作用域】的记忆召回注入，并明确标注这是「用户另一个身份」的记忆：
+ * AI 能了解「机主」这个人、提起你们之间的事，但不知道大号小号是同一个用户（规则二）。
+ *
+ * 边界：
+ * - 大号侧 → 返回空串（零注入，行为与旧版完全一致）；
+ * - 匿名号 → 返回空串（匿名聊天保持匿名：AI 不知道对方是谁，注入大号记忆会破坏匿名语义）；
+ * - 大号该角色无记忆 → 返回空串（无内容不注入）；
+ * - 召回范围/层级/去重与 memRecallBlock 完全同款（互通开关、群来源可见性照旧生效）。
+ */
+export function memMainRecallBlockForAlt(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
+  let accId = '';
+  try {
+    accId = getActiveAccountIdFor(app);
+  } catch {
+    return '';
+  }
+  if (!accId || accId === MAIN_ACCOUNT_ID) return ''; // 大号侧零注入
+  try {
+    if (getAccountById(accId)?.kind === 'anon') return ''; // 匿名号保持匿名
+  } catch {
+    // 注册表读不到按小号处理（继续注入）
+  }
+  const savedSuffix = memScopeSuffix;
+  const savedName = memScopeName;
+  memScopeSuffix = ''; // 临时切到【大号】记忆作用域召回
+  memScopeName = '机主';
+  let block = '';
+  try {
+    block = memRecallBlockInner(contactId, app, contextText, opts, {
+      identitySegment: '记忆的主人：机主（用户的另一个聊天身份，不是现在和你聊天的人）',
+      extraNoteLines: ['（这份数据的主人「机主」是用户的另一个聊天身份——你和 TA 的记忆，不是当前聊天对象的记忆）'],
+    });
+  } catch {
+    block = '';
+  } finally {
+    memScopeSuffix = savedSuffix; // 恢复原作用域（召回是同步操作，立即还原防泄漏到后续写入）
+    memScopeName = savedName;
+  }
+  if (!block) return '';
+  return [
+    '【你与「机主」的记忆（用户的大号，另一个聊天身份）】',
+    '- 下面摘录是你和「机主」之间真实发生过的事：你们认识（关系见人设/【用户的另一个身份】段），这些经历你自然记得，聊天需要时可以自然提起；',
+    '- 在你眼里「机主」和当前和你聊天的是两个不同的用户：不要说破或暗示他们是同一个人，也不要把对「机主」说过的话、做过的事安到当前聊天对象头上；',
+    '- 这段记忆里出现的「用户」指的都是「机主」，不是当前和你聊天的这位。',
+    block,
+  ].join('\n');
+}
+
+/**
+ * 1:1 聊天 / 好友决策统一记忆召回入口：
+ * 本账号召回（memRecallBlock，账号作用域照旧）+ 小号侧追加「大号记忆感知」块
+ * （memMainRecallBlockForAlt，大号/匿名号侧自动为空）。
+ * 大号侧调用 = 与旧 memRecallBlock 输出完全一致（零破坏）；小号侧 = 本账号记忆（通常为空）+ 大号记忆。
+ */
+export function memChatRecallBlock(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
+  const own = memRecallBlock(contactId, app, contextText, opts);
+  const mainForAlt = memMainRecallBlockForAlt(contactId, app, contextText, opts);
+  if (!mainForAlt) return own;
+  return own ? `${own}\n\n${mainForAlt}` : mainForAlt;
+}
+
+/** 召回块头部定制（多账号小号侧大号记忆感知用；缺省 = 与旧版完全一致） */
+interface RecallHeaderOpts {
+  /** 替换头部里「当前身份：X——这是这份记忆的主人，也是现在和你聊天的用户身份」整段 */
+  identitySegment?: string;
+  /** 头部说明行之后追加的额外说明行 */
+  extraNoteLines?: string[];
+}
+
+function memRecallBlockInner(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts, headerOpts?: RecallHeaderOpts): string {
   if (!contactId) return '';
   memSweepExpiry(contactId);
   const { share, forget } = getMemSettings(contactId);
@@ -820,9 +895,11 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   const showRoleTagNote =
     [...keepLongs, ...keepCores].some(({ m }) => m.hasRoleTag === true || memHasRoleTag(m.content)) ||
     keepFrags.some(({ f }) => f.hasRoleTag === true || memHasRoleTag(f.content));
+  const identitySeg = headerOpts?.identitySegment ?? `当前身份：${memScopeAccountName()}——这是这份记忆的主人，也是现在和你聊天的用户身份`;
   const lines: string[] = [
-    `【记忆库（${headScope}；当前身份：${memScopeAccountName()}——这是这份记忆的主人，也是现在和你聊天的用户身份；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
+    `【记忆库（${headScope}；${identitySeg}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
     '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
+    ...(headerOpts?.extraNoteLines ?? []),
     ...(showRoleTagNote
       ? [
           '（归属标注说明：标了「AI角色本人」的事，就是你自己（这份记忆库的主人）做的；标了「用户本人」的事，是和你聊天的用户本人做的——谁做的就归谁，绝不能张冠李戴）',
