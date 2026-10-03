@@ -692,11 +692,12 @@ function parseFriendDecision(raw: string): FriendDecision | null {
     if (msg) return { decision: dm[1].toLowerCase() as FriendDecision['decision'], message: msg };
   }
   // 关键词兜底：整段文本按首个命中关键词定性，全文清洗后截断作回复
+  // 否定表述优先（「不同意/不通过」含「同意/通过」子串，先查否定防「我不同意」误判成 accept）
   const low = t.toLowerCase();
-  const decision: FriendDecision['decision'] | null = /\baccept\b/.test(low) || t.includes('同意')
-    ? 'accept'
-    : /\breject\b/.test(low) || t.includes('拒绝')
-      ? 'reject'
+  const decision: FriendDecision['decision'] | null = /\breject\b/.test(low) || t.includes('拒绝') || t.includes('不同意') || t.includes('不通过') || t.includes('不予通过') || t.includes('不能通过') || t.includes('无法通过')
+    ? 'reject'
+    : /\baccept\b/.test(low) || t.includes('同意') || t.includes('通过')
+      ? 'accept'
       : /\breply\b/.test(low) || t.includes('回复')
         ? 'reply'
         : null;
@@ -749,11 +750,20 @@ export async function decideCharFriendReq(
 
   const sceneRules = [
     '你不是在聊天，而是在处理一条「好友申请的验证消息」。申请人还不是你的好友。',
-    '你要完全按自己的人设、性格和现实处境，决定是否通过这条好友申请：',
-    '- 可以直接同意（decision=accept）：回一句通过后的反应/招呼（热情、冷淡、警惕都可以，按人设来）；',
-    '- 可以拒绝（decision=reject）：不喜欢加陌生人/性格警惕/有对象了/验证消息让你反感等，按人设来，拒绝也回一句话；',
-    '- 也可以先不决定（decision=reply）：回一句想进一步了解的话（问问是谁、怎么知道的等）。',
-    '第一句验证消息就同意是完全允许的（按人设判断），多聊几句再同意也可以。',
+    '申请不等于必须通过：决定权完全在你手里，你不欠对方一个同意，也不需要讨好申请人。',
+    '你要根据四个因素判断：你的人设性格、验证消息内容、你们是否认识、你们当前的关系状态。',
+    '你的决策必须体现你自己的性格差异：高冷/警惕/慢热/社恐的人对陌生申请应倾向追问或拒绝；热情外向的人可以快一点同意，但也要看验证消息质量。绝对不要每个申请都无脑同意。',
+    '你有三种处理方式：',
+    '- decision=accept 直接同意：回一句通过后的反应/招呼（热情、冷淡、警惕都可以，按人设来）；',
+    '- decision=reply 先回复验证消息、暂不决定：回一句追问（问问是谁、怎么知道我账号的、有什么事），等对方回答后你再决定同不同意；',
+    '- decision=reject 拒绝：不喜欢加陌生人/性格警惕/有对象了/验证消息让你反感等，按人设来，拒绝也回一句话。',
+    '判断依据（结合你的人设权衡）：',
+    '- 验证消息是「我是XXX」：先回想你的记忆和经历里有没有「XXX」这个人——你的记忆里对 TA 毫无印象时，不要假装认识，追问一句「你是哪位？我们认识吗」或拒绝；只有你确实认识/有印象时才同意；',
+    '- 验证消息是空白的、或只打了句「你好」：多数性格都会先追问一句（reply），警惕或高冷的人设可以直接拒绝；',
+    '- 验证消息可疑（像广告、推销、诈骗、加好友卖东西）：拒绝，按人设回一句；',
+    '- 验证消息提到你们的共同回忆/经历：和你记忆对得上时，更容易同意；',
+    '- 语气无礼、冒犯：按人设怼回去并拒绝。',
+    '同意的时机完全由你决定：第一句验证消息就同意、或追问聊几句再同意，都随你，只要符合你的性格。',
   ];
   const persona = buildPersonaSystemPrompt(contact, {
     channel,
@@ -766,15 +776,19 @@ export async function decideCharFriendReq(
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
   const system = [persona, memoryBlock, timeBlock, mainIdentityLine].filter(Boolean).join('\n\n');
 
-  const lines = thread.slice(-8).map((m) => `${m.who === 'me' ? userName : contactRealNameSafe(contact)}：${m.text}`);
+  const lines = thread.slice(-8).map((m) => {
+    const who = m.who === 'me' ? userName : contactRealNameSafe(contact);
+    const text = m.text.trim();
+    return `${who}：${text || (m.who === 'me' ? '（没有填写验证消息，是空白申请）' : '（未发言）')}`;
+  });
   const ask = [
     `【重要情境】「${userName}」通过${channel}找到你的账号，发来一条好友申请（你们现在还不是好友）。验证消息对话如下：`,
     ...lines,
     ``,
-    `请以你的身份决策这条申请，输出一行 JSON（不要输出任何其他内容）：`,
+    `请以你的身份决策这条申请。先结合你的人设性格、你们是否认识、验证消息内容想一想这条申请放在你面前你会怎么处理，然后输出一行 JSON（不要输出任何其他内容）：`,
     `{"decision":"accept","message":"..."} 同意好友申请；`,
     `{"decision":"reject","message":"..."} 拒绝好友申请；`,
-    `{"decision":"reply","message":"..."} 暂不决定，先回复一句。`,
+    `{"decision":"reply","message":"..."} 暂不决定，先回复一句追问。`,
     `message 是你回在验证消息里的一句话，30 字以内，符合你的人设和说话语气。`,
   ].join('\n');
 
@@ -841,7 +855,7 @@ export async function processAltFriendReq(app: FriendDelApp, reqId: string, cont
         content: '',
         time: now,
         kind: 'sys',
-        sys: { text: `你已添加了${fresh.name}，现在可以开始聊天了。` },
+        sys: { text: '我们已成功添加为好友，现在可以开始聊天啦～' },
         fr: 'added',
       });
       if (decision.message.trim()) {
