@@ -26,6 +26,8 @@ import {
   Loader2,
   LogOut,
   MessageCircle,
+  MessageCircleMore,
+  MessagesSquare,
   MicVocal,
   MoreHorizontal,
   MoreVertical,
@@ -43,6 +45,7 @@ import {
   SkipForward,
   TriangleAlert,
   UserRound,
+  UserRoundPlus,
   UserRoundSearch,
   X,
 } from 'lucide-react';
@@ -86,8 +89,9 @@ export function MusicPlayer() {
   const [showMore, setShowMore] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
-  // 一起听右上角 ⋮ 菜单（重新匹配/查看记录/匹配偏好/举报/退出一起听）
+  // 一起听设置菜单（重新匹配/查看记录/匹配偏好/举报/退出一起听）+ 打开锚点（顶栏⋮ / 底部三点）
   const [showTgMenu, setShowTgMenu] = useState(false);
+  const [tgMenuAnchor, setTgMenuAnchor] = useState<'top' | 'bottom'>('top');
   const [showTgRecord, setShowTgRecord] = useState(false);
   // 重新匹配入口打开时，邀请面板标题切换
   const [inviteTitle, setInviteTitle] = useState('邀请一起听');
@@ -108,6 +112,26 @@ export function MusicPlayer() {
   useEffect(() => {
     if (current) void loadLyric(current.id);
   }, [current, loadLyric]);
+
+  // 评论总数（真实接口，仅用于底部数字展示）——render 期派生重置避免 effect 同步 setState
+  const curId = current?.id ?? 0;
+  const [cmtState, setCmtState] = useState<{ id: number; total: number | null }>({ id: 0, total: null });
+  if (cmtState.id !== curId) setCmtState({ id: curId, total: null });
+  useEffect(() => {
+    if (!curId) return;
+    let on = true;
+    void (async () => {
+      try {
+        const p = await commentsOf(curId, 1, 0);
+        if (on) setCmtState((s) => (s.id === curId ? { id: curId, total: p.total } : s));
+      } catch {
+        // 数量获取失败不展示数字
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, [curId]);
 
   if (!current) {
     return (
@@ -131,16 +155,16 @@ export function MusicPlayer() {
   const liked = likedIds.has(current.id);
   const chatMode = !!(together && showChat);
 
-  // 一起听底部胶囊（音乐/聊天切换，纯图标）——两种模式共用
+  // 一起听底部胶囊（音乐/聊天切换，方形圆角图标）+ 右侧三个点设置；自己一个人时显示「邀请好友一起听」
   const modeCapsule = together ? (
-    <div className="flex shrink-0 justify-center pb-4 pt-1">
-      <div className="flex items-center gap-1 rounded-full bg-white/10 p-1">
+    <div className="flex shrink-0 items-center justify-center gap-2.5 pb-4 pt-1">
+      <div className="flex items-center gap-1 rounded-[14px] bg-white/10 p-1">
         <button
           type="button"
           onClick={() => setChatOverride(false)}
           data-testid="music-tg-tab-music"
           aria-label="音乐视图"
-          className={`flex h-8 w-8 items-center justify-center rounded-full ${
+          className={`flex h-8 w-8 items-center justify-center rounded-[10px] ${
             !showChat ? 'bg-white/25 text-white' : 'text-white/55'
           }`}
         >
@@ -151,18 +175,42 @@ export function MusicPlayer() {
           onClick={() => setChatOverride(true)}
           data-testid="music-tg-open-chat"
           aria-label="聊天视图"
-          className={`flex h-8 w-8 items-center justify-center rounded-full ${
+          className={`flex h-8 w-8 items-center justify-center rounded-[10px] ${
             showChat ? 'bg-white/25 text-white' : 'text-white/55'
           }`}
         >
           <MessageCircle className="h-4 w-4" />
         </button>
       </div>
+      <button
+        type="button"
+        onClick={() => {
+          setTgMenuAnchor('bottom');
+          setShowTgMenu(true);
+        }}
+        data-testid="music-tg-dots"
+        aria-label="一起听设置"
+        className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white/10 text-white/80 active:scale-95"
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
     </div>
-  ) : null;
+  ) : (
+    <div className="flex shrink-0 justify-center pb-4 pt-1">
+      <button
+        type="button"
+        onClick={() => setShowInvite(true)}
+        data-testid="music-tg-invite-solo"
+        className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-[13px] text-white/85 active:scale-95"
+      >
+        <UserRoundPlus className="h-4 w-4" />
+        邀请好友一起听
+      </button>
+    </div>
+  );
 
   const togetherHead = together ? (
-    <TogetherHead session={togetherLive ?? together} />
+    <TogetherHead session={togetherLive ?? together} msgs={togetherMsgs} showBubbles={!showChat} />
   ) : null;
 
   // 结束一起听（⋮ 菜单内）
@@ -173,8 +221,11 @@ export function MusicPlayer() {
     })();
   };
 
-  // ⋮ 菜单动作
-  const openTgMenu = () => setShowTgMenu(true);
+  // 设置菜单动作（顶栏⋮ = 顶部锚点；底部三个点 = 底部锚点）
+  const openTgMenu = () => {
+    setTgMenuAnchor('top');
+    setShowTgMenu(true);
+  };
   const menuRematch = () => {
     setShowTgMenu(false);
     setInviteTitle('重新匹配');
@@ -217,9 +268,10 @@ export function MusicPlayer() {
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
         {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
-        {/* 一起听 ⋮ 菜单（聊天态） */}
+        {/* 一起听设置菜单（聊天态） */}
         {showTgMenu && (
           <TogetherMenu
+            anchor={tgMenuAnchor}
             onClose={() => setShowTgMenu(false)}
             onRematch={menuRematch}
             onRecords={menuRecords}
@@ -276,8 +328,8 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 歌名行 */}
-        <div className="flex items-end gap-3 px-6 pb-1">
+        {/* 歌名行 + 操作图标（信息/爱心/评论带数字，按截图） */}
+        <div className="flex items-center gap-2 pl-5 pr-4 pb-1">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-[19px] font-bold" data-testid="music-player-name">
@@ -293,20 +345,47 @@ export function MusicPlayer() {
               {songArtistText(current)}
             </p>
           </div>
+          {/* 信息图标：一起听时可在音乐界面打字聊天（自己听不显示） */}
+          {together && (
+            <button
+              type="button"
+              onClick={() => setChatOverride(true)}
+              data-testid="music-player-chat"
+              aria-label="发消息"
+              className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full bg-white/12 active:scale-95"
+            >
+              <MessagesSquare className="h-[21px] w-[21px] text-white/90" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void toggleLike(current)}
             data-testid="music-player-like"
             aria-label="红心"
-            className="p-1 active:scale-90"
+            className="relative shrink-0 p-1 active:scale-90"
           >
             <Heart
-              className={`h-6 w-6 ${liked ? 'text-[#EC4141]' : 'text-white/70'}`}
+              className={`h-[25px] w-[25px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
               fill={liked ? 'currentColor' : 'none'}
             />
+            <span className="absolute -top-2 left-full ml-0.5 whitespace-nowrap text-[11px] font-medium leading-none text-white/60">
+              {fmtCountW(fakeHotCount(current.id))}
+            </span>
           </button>
-          <button type="button" onClick={() => openComments(current)} aria-label="评论" className="p-1 active:scale-90">
-            <MessageCircle className="h-6 w-6 text-white/70" />
+          <button
+            type="button"
+            onClick={() => openComments(current)}
+            aria-label="评论"
+            data-testid="music-player-comment"
+            className="relative mr-6 shrink-0 p-1 active:scale-90"
+          >
+            <MessageCircleMore className="h-[25px] w-[25px] text-white/75" />
+            <span
+              className="absolute -top-2 left-full ml-0.5 whitespace-nowrap text-[11px] font-medium leading-none text-white/60"
+              data-testid="music-player-comment-count"
+            >
+              {cmtState.total === null ? '' : fmtCountW(cmtState.total)}
+            </span>
           </button>
         </div>
 
@@ -379,9 +458,8 @@ export function MusicPlayer() {
           </button>
         </div>
 
-        {/* 一起听底部胶囊 / 普通态底部留白 */}
+        {/* 一起听底部胶囊（音乐/聊天+设置）或「邀请好友一起听」 */}
         {modeCapsule}
-        {!together && <div className="h-[34px] shrink-0" />}
       </div>
 
       {/* 更多面板（仿网易云歌曲操作面板） */}
@@ -404,9 +482,10 @@ export function MusicPlayer() {
       {/* 邀请/重新匹配一起听 */}
       {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
-      {/* 一起听 ⋮ 菜单 */}
+      {/* 一起听设置菜单（顶栏⋮/底部三点共用，锚点跟随入口） */}
       {showTgMenu && together && (
         <TogetherMenu
+          anchor={tgMenuAnchor}
           onClose={() => setShowTgMenu(false)}
           onRematch={menuRematch}
           onRecords={menuRecords}
@@ -653,9 +732,32 @@ function SeekBar({
   );
 }
 
+// ---------------- 数字格式化（按截图：150w+ / 2w+） ----------------
+
+/** 数量格式化：≥1w 显示「Nw+」，否则原数 */
+function fmtCountW(n: number): string {
+  if (n >= 10_000) return `${Math.floor(n / 10_000)}w+`;
+  return `${n}`;
+}
+
+/** 歌曲热度（演示：按歌曲 id 稳定生成 40w~1100w+） */
+function fakeHotCount(id: number): number {
+  const n = Math.abs(id) || 1;
+  return 400_000 + (n % 350) * 30_000 + (n % 13) * 5_000;
+}
+
 // ---------------- 一起听头部 ----------------
 
-function TogetherHead({ session }: { session: TogetherSessionLike }) {
+function TogetherHead({
+  session,
+  msgs,
+  showBubbles = false,
+}: {
+  session: TogetherSessionLike;
+  /** 一起听消息（音乐视图下取双方最新一条，显示为头像下气泡） */
+  msgs?: TogetherMsgLike[];
+  showBubbles?: boolean;
+}) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
   const [, force] = useState(0);
@@ -666,23 +768,66 @@ function TogetherHead({ session }: { session: TogetherSessionLike }) {
   const myAvatar = loginUid ? loginAvatar : getGuestAvatar();
   // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
   const durText = fmtTogetherDur(Date.now() - session.since);
+  // 双方最新一条消息（推荐卡取文字）
+  let lastMine: TogetherMsgLike | undefined;
+  let lastPeer: TogetherMsgLike | undefined;
+  if (showBubbles && msgs) {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (!lastMine && m.role === 'me') lastMine = m;
+      if (!lastPeer && (m.role === 'peer' || m.role === 'recs')) lastPeer = m;
+      if (lastMine && lastPeer) break;
+    }
+  }
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      {/* 双头像（再变大；我方无边框，对方保留白环） */}
-      <div className="flex items-center gap-[3px]" data-testid="music-tg-avatars">
-        <CoverImg src={session.avatar} className="h-14 w-14 ring-2 ring-white/70" rounded="rounded-full" alt={session.name} />
-        <CoverImg src={myAvatar} className="h-14 w-14" rounded="rounded-full" alt="我" />
+      {/* 双头像（轻微重叠、无边框） */}
+      <div className="flex items-center" data-testid="music-tg-avatars">
+        <CoverImg src={session.avatar} className="h-14 w-14" rounded="rounded-full" alt={session.name} />
+        <CoverImg src={myAvatar} className="relative -ml-2.5 h-14 w-14" rounded="rounded-full" alt="我" />
       </div>
-      <p className="mt-1.5 text-[11px] text-white/70">
+      {/* 耳机线（装饰，仿网易云一起听） */}
+      <svg viewBox="0 0 220 22" className="mt-0.5 h-[22px] w-[220px]" fill="none" aria-hidden>
+        <path d="M84 1 C72 10, 46 12, 30 22" stroke="rgba(255,255,255,0.32)" strokeWidth="1.5" strokeLinecap="round" />
+        <path d="M136 1 C148 10, 174 12, 190 22" stroke="rgba(255,255,255,0.32)" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+      {/* 头像下气泡（音乐视图）：对方左 / 我右，尾巴朝上指向各自头像 */}
+      {showBubbles && (lastPeer || lastMine) && (
+        <div className="mt-0.5 flex w-full items-start gap-4 px-5">
+          <div className="flex min-w-0 flex-1 justify-start">
+            {lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
+          </div>
+          <div className="flex min-w-0 flex-1 justify-end">
+            {lastMine && <HeadBubble text={lastMine.text} mine />}
+          </div>
+        </div>
+      )}
+      <p className="mt-1 text-[11px] text-white/70">
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
     </div>
   );
 }
 
-// ---------------- 一起听 ⋮ 菜单（仿网易云：右上角下拉） ----------------
+/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴） */
+function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
+  return (
+    <div
+      className="relative mt-2 max-w-[190px] rounded-[20px] bg-[#5a5a5f] px-3.5 py-2"
+      data-testid={mine ? 'music-tg-bubble-me' : 'music-tg-bubble-peer'}
+    >
+      <span
+        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'right-6' : 'left-6'}`}
+      />
+      <p className="relative line-clamp-3 break-words text-[13px] leading-snug text-white/95">{text}</p>
+    </div>
+  );
+}
+
+// ---------------- 一起听设置菜单（仿网易云：顶栏⋮ / 底部三点两处入口） ----------------
 
 function TogetherMenu({
+  anchor = 'top',
   onClose,
   onRematch,
   onRecords,
@@ -690,6 +835,8 @@ function TogetherMenu({
   onReport,
   onExit,
 }: {
+  /** 弹出锚点：top=顶栏右上⋮（箭头朝上） bottom=底部三点（箭头朝下） */
+  anchor?: 'top' | 'bottom';
   onClose: () => void;
   onRematch: () => void;
   onRecords: () => void;
@@ -707,9 +854,13 @@ function TogetherMenu({
   return (
     <div className="absolute inset-0 z-[62]" data-testid="music-tg-menu">
       <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="absolute right-4 top-[102px] w-[188px]">
-        {/* 指向右上角按钮的小箭头 */}
-        <div className="absolute -top-[6px] right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d]" />
+      <div className={anchor === 'top' ? 'absolute right-4 top-[102px] w-[188px]' : 'absolute bottom-[96px] right-4 w-[188px]'}>
+        {/* 指向入口按钮的小箭头 */}
+        <div
+          className={`absolute right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] ${
+            anchor === 'top' ? '-top-[6px]' : '-bottom-[6px]'
+          }`}
+        />
         <div className="relative overflow-hidden rounded-[16px] bg-[#2b2b2d]/95 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
           {rows.map((r, i) => (
             <button

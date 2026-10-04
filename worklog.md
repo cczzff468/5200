@@ -14840,3 +14840,25 @@ Stage Summary:
 - 关键实现：chatOverride 派生重置用 React adjust-state-during-render 模式（规避 set-state-in-effect lint）；VipBadge 唱片改 style boxShadow 四层 inset 精确复刻截图盘面纹路
 - 范围限定遵守：仅动音乐 App 3 个文件（music-shared/music-mine/music-player），16 项受保护功能未触碰
 - 改动文件：src/components/apps/music-shared.tsx、music-mine.tsx、music-player.tsx
+
+---
+Task ID: 61
+Agent: Z.ai Code（主会话）
+Task: 用户第六轮反馈九项——一起听 tab 正方形圆角、双头像再挨近、底部爱心/评论显示数字（按截图）、新增信息图标打字聊天（自己听无）、气泡显示在头像下面、迷你播放器长方形背景排查修复、底部 tab 右侧三个点设置弹窗、自己一个人显示「邀请好友一起听」
+
+Work Log:
+- 一起听底部胶囊（music-player modeCapsule）：两个 tab 从圆形改方形圆角（按钮 rounded-[10px]、容器 rounded-[14px]）；tab 右侧新增三个点按钮（music-tg-dots，同方形圆角样式），点击打开一起听设置弹窗——TogetherMenu 加 anchor 参数（top=顶栏⋮箭头朝上 / bottom=底部三点箭头朝下，面板定位 bottom-[96px]），顶栏与底部两处入口共用同一菜单
+- 一起听双头像（TogetherHead）：gap-[3px] 改 -ml-2.5 轻微重叠（我方在上、双方均无边框）；头像下新增耳机线 SVG 装饰（两条向外弯细线，仿网易云一起听）
+- 头像下气泡（按用户截图 1:1）：TogetherHead 加 msgs+showBubbles 参数，音乐视图下取双方最新一条消息——对方气泡靠左、我的靠右，实色深灰 #5a5a5f 圆角气泡 + rotate-45 小尾巴指向各自头像（mine right-6 / peer left-6），line-clamp-3；聊天视图不显示（避免与消息流重复）；气泡行下保留「相距·一起听了」累计时长
+- 播放页底部操作栏（按截图重做）：信息图标（MessagesSquare 白色圆底钮 h-[46px]）仅一起听显示，点击切聊天视图可打字（自己听不渲染）；爱心/评论改 25px 描边图标，右上角悬浮数字（11px white/60）——爱心=按歌曲 id 稳定伪热度（40w~1100w+），评论=真实 commentsOf 总数（useCommentTotal hook，render 期派生重置防 lint，140652→「14w+」、1269→原数），fmtCountW（≥1w → Nw+）；评论图标 mr-6 留数字空间防裁切
+- 自己一个人入口：modeCapsule 无会话时渲染「邀请好友一起听」胶囊（UserRoundPlus+文字，music-tg-invite-solo），点击直达邀请面板；删原 h-[34px] 空白占位
+- 迷你播放条「长方形包裹」根因修复：白色胶囊下方紧贴 bg-white/85 的 TabBar + 白色垫条，与胶囊融为一条白色长带——MusicTabBar 背景改透明（露页面底色）、music.tsx 底部垫条删背景、MiniBar 阴影加强（0_4px_18px/13%，暗色 55%）+ mb-2——浅色/深色模式胶囊均独立浮起，无长条包裹感
+- E2E（agent-browser 420x900）全过：播放页爱心 135w+/评论 1269 真实显示 ✓；底部「邀请好友一起听」→ 邀请乐乐 → 进入默认音乐界面（方形圆角 tab+三点、双头像重叠无边框、耳机线）✓；信息圆钮→聊天打字「在听这首歌吗，好听嘛」→ AI 回复 ✓；切回音乐视图→双方最新消息气泡挂在各自头像下（尾巴朝上）✓；三点→设置弹窗底部锚点弹出（重新匹配/查看记录/匹配偏好/举报/退出）✓；查看记录正常 ✓；退出一起听→信息图标消失+恢复邀请胶囊 ✓；迷你条浅色/深色均无白色长带（胶囊独立浮起）✓；console/page errors 零
+- 测试数据清理：char-e2e-lele 联系人 + 6 个 music-* kv 键全清（隔离档案，用户数据不受影响）
+- bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：一起听 tab 方形圆角化+右侧三点设置弹窗（双锚点）；双头像轻微重叠无边框+耳机线装饰；头像下双方最新消息气泡（带朝向小尾巴，仿网易云截图）；播放页底部操作栏截图化（信息图标仅一起听+爱心/评论带数字，评论数真实）；独自听时「邀请好友一起听」直达入口；迷你播放条「长方形包裹感」根因消除（TabBar 透明化+胶囊阴影强化）
+- 关键实现：TogetherMenu anchor 参数化复用（顶栏/底部两入口）；TogetherHead msgs+showBubbles 让气泡只在音乐视图出现；useCommentTotal 用 render 期派生重置规避 set-state-in-effect lint；fakeHotCount 按歌曲 id 稳定（不闪变）
+- 范围限定遵守：仅动音乐 App 3 个文件（music-player/music-shared/music.tsx 各一小块），16 项受保护功能未触碰
+- 改动文件：src/components/apps/music-player.tsx、music-shared.tsx、music.tsx

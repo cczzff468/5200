@@ -486,13 +486,13 @@ const TABS: { key: MusicNav['tab']; label: string }[] = [
   { key: 'mine', label: '我的' },
 ];
 
-/** 底部 TabBar：纯文字（无图标），激活态加粗黑字（按截图） */
+/** 底部 TabBar：纯文字（无图标），激活态加粗黑字；背景透明露出页面底色（避免白色长条包裹迷你条） */
 export function MusicTabBar() {
   const tab = useMusic((s) => s.nav.tab);
   const setTab = useMusic((s) => s.setTab);
   return (
     <nav
-      className="flex h-[46px] shrink-0 items-stretch bg-white/85 backdrop-blur-xl dark:bg-zinc-900/85"
+      className="flex h-[46px] shrink-0 items-stretch"
       data-testid="music-tabbar"
     >
       {TABS.map((t) => {
@@ -531,7 +531,7 @@ export function MiniBar() {
   if (!current) return null;
   return (
     <div
-      className="mx-3 mb-1.5 flex h-[52px] shrink-0 items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_2px_12px_rgba(0,0,0,0.07)] dark:bg-zinc-800 dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]"
+      className="mx-3 mb-2 flex h-[52px] shrink-0 items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_4px_18px_rgba(0,0,0,0.13)] dark:bg-zinc-800 dark:shadow-[0_4px_18px_rgba(0,0,0,0.55)]"
       data-testid="music-minibar"
     >
       <button
