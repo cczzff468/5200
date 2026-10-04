@@ -14622,3 +14622,25 @@ Stage Summary:
 - 交付：主动发消息页新增设备级总开关（顶部玻璃卡，与三端「我」设置页同一存储、双向联动）；页面与弹窗完成「无光斑、无渐变」纯色简约化（光斑层删除、全部图标/按钮纯色、选中态光晕全去）；功能与 testid 完全兼容（新增 wx-proactive-master）
 - 视觉基调：毛玻璃卡片 + 纯色彩色图标 + 胶囊 chips，无任何渐变/光斑/光晕装饰
 - 改动文件：src/components/apps/proactive-msg-page.tsx（仅此一个文件）
+
+---
+Task ID: 53
+Agent: Z.ai Code（主会话）
+Task: 用户问「有没有免费的网易云API」后确认「帮我部署」——部署网易云音乐 API 本地 mini service（可行性已在前一轮实测）
+
+Work Log:
+- 调研补充：实测公共免费托管实例基本全灭（beryl 官方demo=FUNCTION_RUNTIME_DEPRECATED、welword/mindzone/hf-fun=无响应、GDStudio=Cloudflare拦截且仅直链解析）；确认两条免费路：经典版 NeteaseCloudMusicApi@4.32.0（npm 可用）+ 增强版 @neteasecloudmusicapienhanced/api@4.41.0（社区活跃，2026-10-03 仍在更新）；选定经典版打底（前一轮已验证登录链路）
+- 新建 mini-services/netease-api/（独立 bun 项目：package.json + index.js 入口 + node_modules）：
+  - 端口固定 3010；serveNcmApi({port:3010, checkVersion:false}) 启动
+  - bun run dev = node --watch index.js（关键：bun 运行时 crypto 与 eapi 加密不兼容，见下）
+  - .gitignore 增补 netease-api/dev.log
+- 排错记录（重要）：bun --hot 下 /login/qr/key 返回网易「参数错误」400，而同份代码 node 下正常——同一 node_modules 对照测试定位为 bun 运行时 crypto 与 eapi 加密（aes-128-ecb+md5）兼容差异（weapi 类接口 create/check/search 在 bun 下正常，eapi 类 unikey 失败）；解法：dev 脚本改用 node --watch（保留文件变更自动重启，仍由 bun run dev 启动）
+- 部署验证（全部经网关 http://localhost:81/...?XTransformPort=3010，即前端真实链路）：
+  ①/login/qr/key → unikey ✅ ②/login/qr/create?qrimg=true → 真实网易云登录二维码 base64 ✅ ③/login/qr/check → 状态机 ✅ ④规范流程（unikey→create→check）→ code 801「等待扫码」✅ ⑤/search 搜索真实曲库 ✅ ⑥服务日志无错误
+- 架构与后续接入约定：前端 fetch('/login/qr/key?timestamp=...&XTransformPort=3010') 相对路径 → Caddy(:81) 原路径转发 → 3010 → music.163.com；MUSIC_U 登录 cookie 由前端持有（/login/qr/check 803 响应体含 cookie 字段），后续请求 ?cookie= 回传，凭证不出本机
+- 手机号登录端点已就绪未实测发短信（/captcha/sent 会发真实短信，避免骚扰）；待音乐 App UI 接入时联调
+
+Stage Summary:
+- 交付：网易云音乐 API 本地 mini service（mini-services/netease-api，端口 3010，node --watch 常驻），扫码登录全链路（unikey→二维码→801等待扫码）+ 搜索经 Caddy 网关验证通过
+- 关键决策：运行时用 Node 而非 bun（eapi 加密兼容性，已对照实测）；cookie 由调用方持有不经服务落盘
+- 改动文件：mini-services/netease-api/{package.json,index.js,.gitignore 补充}（根项目零改动）
