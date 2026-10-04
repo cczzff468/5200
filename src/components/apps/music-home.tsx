@@ -23,13 +23,19 @@ import {
   type NcmSong,
   type NcmToplist,
 } from '@/lib/ios/music-api';
-import { useMusic } from '@/lib/ios/music-store';
+import { useMusic, getGuestProfile } from '@/lib/ios/music-store';
 import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
 
 export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const loginUid = useMusic((s) => s.loginUid);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
+  const loginNickname = useMusic((s) => s.loginNickname);
   const openPlaylist = useMusic((s) => s.openPlaylist);
   const playSong = useMusic((s) => s.playSong);
+  const [avatarSheet, setAvatarSheet] = useState(false);
+  const guest = getGuestProfile();
+  const headAvatar = loginUid ? loginAvatar : guest.avatar;
+  const headName = loginUid ? loginNickname || '网易云用户' : guest.nickname;
   const [recPlaylists, setRecPlaylists] = useState<NcmPlaylist[] | null>(null);
   const [tops, setTops] = useState<NcmToplist[] | null>(null);
   const [newSongs, setNewSongs] = useState<NcmSong[] | null>(null);
@@ -71,7 +77,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain pb-4">
-      {/* 顶栏 */}
+      {/* 顶栏：设置 + 标题 + 右上角头像（游客/登录都可点） */}
       <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
         <button
           type="button"
@@ -83,8 +89,63 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           <Settings2 className="h-[22px] w-[22px]" />
         </button>
         <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">音乐</span>
-        <span className="ml-auto text-[11px] text-zinc-400">网易云 API</span>
+        <button
+          type="button"
+          onClick={() => setAvatarSheet(true)}
+          data-testid="music-home-avatar"
+          className="ml-auto flex items-center gap-2 active:scale-95"
+          aria-label="账号"
+        >
+          <CoverImg src={headAvatar} className="h-8 w-8" rounded="rounded-full" alt={headName} />
+        </button>
       </div>
+
+      {/* 账号快开面板 */}
+      {avatarSheet && (
+        <div className="absolute inset-0 z-[65] flex items-end">
+          <button type="button" aria-label="关闭" onClick={() => setAvatarSheet(false)} className="absolute inset-0 bg-black/40" />
+          <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900" data-testid="music-avatar-sheet">
+            <div className="mb-4 flex items-center gap-3">
+              <CoverImg src={headAvatar} className="h-12 w-12" rounded="rounded-full" alt={headName} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[15px] font-bold text-zinc-900 dark:text-zinc-100">{headName}</p>
+                <p className="text-[11px] text-zinc-400">{loginUid ? '网易云账号已登录' : '游客模式 · 数据仅保存在本机'}</p>
+              </div>
+            </div>
+            {loginUid ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setAvatarSheet(false);
+                  onSettings();
+                }}
+                className="h-11 w-full rounded-full border border-zinc-300 text-[14px] text-zinc-700 active:scale-[0.98] dark:border-zinc-600 dark:text-zinc-200"
+              >
+                账号与设置
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setAvatarSheet(false);
+                  useMusic.setState({ guestMode: false }); // 回登录页
+                }}
+                data-testid="music-avatar-login"
+                className="h-11 w-full rounded-full bg-[#C20C0C] text-[14px] font-medium text-white active:scale-[0.98]"
+              >
+                登录网易云账号
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setAvatarSheet(false)}
+              className="mt-2.5 h-11 w-full rounded-full text-[13px] text-zinc-400"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 每日推荐 / 游客引导 */}
       {loginUid ? (

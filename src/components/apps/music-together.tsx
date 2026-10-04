@@ -21,11 +21,13 @@ export function TogetherChat() {
   const openPlayer = useMusic((s) => s.openPlayer);
   const [text, setText] = useState('');
   const [recBusy, setRecBusy] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const cid = together?.contactId ?? '';
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // 只滚动消息流容器自身（scrollIntoView 会冒泡滚动外层播放容器，把整页顶出屏幕）
+    const box = listRef.current;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
   }, [msgs.length]);
 
   const send = () => {
@@ -85,7 +87,7 @@ export function TogetherChat() {
       )}
 
       {/* 消息流 */}
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-2" data-testid="music-tg-msgs">
+      <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-2" data-testid="music-tg-msgs">
         {msgs.length === 0 && (
           <p className="pt-6 text-center text-[12px] leading-relaxed text-white/40">
             {together.name} 接受了邀请，正在和你一起听歌
@@ -150,7 +152,6 @@ export function TogetherChat() {
             </div>
           );
         })}
-        <div ref={bottomRef} />
       </div>
 
       {/* 输入区 */}

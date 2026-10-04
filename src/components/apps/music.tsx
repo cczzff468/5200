@@ -28,6 +28,7 @@ import {
   setMusicApiCfg,
   qrLoginCreate,
   qrLoginCheck,
+  completeQrLogin,
   sendCaptcha,
   loginByCaptcha,
   loginByPassword,
@@ -220,6 +221,7 @@ function QrLogin() {
         if (r.st === 'ok') {
           if (timerRef.current) clearInterval(timerRef.current);
           setStatus('ok');
+          await completeQrLogin(r.cookie); // 保存 cookie + 拉用户信息并持久化
           await useMusic.getState().refreshLoginUi();
         } else if (r.st === 'scanned') {
           setStatus('scanned');

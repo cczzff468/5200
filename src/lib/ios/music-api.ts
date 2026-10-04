@@ -250,6 +250,11 @@ export async function qrLoginCheck(key: string): Promise<QrPollResult> {
   return { st: 'waiting' };
 }
 
+/** 扫码成功后凭 cookie 完成登录（取用户信息并持久化）——必须在 803 后立即调用 */
+export async function completeQrLogin(cookie: string): Promise<MusicLogin> {
+  return persistLogin(cookie);
+}
+
 /** 发送手机验证码（会发真实短信） */
 export async function sendCaptcha(phone: string, countrycode = '86'): Promise<void> {
   await ncmRequest('captcha/sent', { phone, ctcode: countrycode });
@@ -494,7 +499,10 @@ export interface SongUrlResult {
   type: string;
 }
 
-/** 播放直链（level: standard/exhigher/higher 等） */
+/** 播放直链（level: standard/exhigher/higher 等）。
+ * realIP：伪造国内客户端 IP —— 本沙箱/服务器出口 IP 常为海外，网易对匿名请求直接拒发直链
+ * （游客连免费歌都 404）；带 realIP 后游客可拿免费歌完整直链 + VIP 歌试听片段
+ * （freeTrialInfo {start,end}），登录用户不受影响。 */
 export async function songUrl(id: number, level = 'standard'): Promise<SongUrlResult> {
   const j = await authRequest<{
     data: {
@@ -504,7 +512,7 @@ export async function songUrl(id: number, level = 'standard'): Promise<SongUrlRe
       type: string;
       freeTrialInfo?: { start: number; end: number } | null;
     }[];
-  }>('song/url/v1', { id, level });
+  }>('song/url/v1', { id, level, realIP: '116.25.146.177' });
   const d = j.data?.[0];
   if (!d) return { url: null, fee: 0, freeTrial: false, br: 0, type: '' };
   return {

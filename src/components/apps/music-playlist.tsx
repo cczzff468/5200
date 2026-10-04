@@ -29,7 +29,7 @@ import {
   type NcmPlaylist,
   type NcmSong,
 } from '@/lib/ios/music-api';
-import { mediaProxyUrl, useMusic } from '@/lib/ios/music-store';
+import { mediaProxyUrl, useMusic, getGuestPlaylists, guestPlaylistDelete, guestPlaylistRemoveSong } from '@/lib/ios/music-store';
 import { CoverImg, EmptyBlock, LoadingBlock, SongRow, fmtPlayCount } from './music-shared';
 
 export function MusicPlaylist() {
@@ -48,12 +48,27 @@ export function MusicPlaylist() {
 
   const isDaily = nav.playlistKind === 'daily';
   const isLikedAll = nav.playlistKind === 'liked';
+  const isGuestLocal = nav.playlistKind === 'guestLocal';
 
   const load = useCallback(async () => {
     setBusy(true);
     setErr('');
     try {
-      if (isDaily) {
+      if (isGuestLocal) {
+        // 游客本地歌单：kv 直读，同步加载
+        const gid = nav.guestPlId;
+        const pl = getGuestPlaylists().find((p) => p.id === gid);
+        if (!pl) throw new Error('歌单不存在或已删除');
+        const list = pl.songs;
+        setSongs(list);
+        setInfo({
+          id: 0,
+          name: pl.name,
+          coverImgUrl: list[0]?.album?.picUrl ?? '',
+          trackCount: list.length,
+          copywriter: '本地歌单 · 数据保存在本机',
+        });
+      } else if (isDaily) {
         const list = await dailyRecommendSongs();
         setSongs(list);
         setInfo({
@@ -98,7 +113,7 @@ export function MusicPlaylist() {
     } finally {
       setBusy(false);
     }
-  }, [isDaily, isLikedAll, nav.playlistId]);
+  }, [isDaily, isLikedAll, isGuestLocal, nav.playlistId, nav.guestPlId]);
 
   useEffect(() => {
     void load();
@@ -115,6 +130,12 @@ export function MusicPlaylist() {
   };
 
   const doDelete = async () => {
+    if (isGuestLocal) {
+      if (!confirm(`确定删除歌单「${info?.name}」？`)) return;
+      guestPlaylistDelete(nav.guestPlId ?? '');
+      closePlaylist();
+      return;
+    }
     if (!info?.id || !confirm(`确定删除歌单「${info.name}」？`)) return;
     try {
       await playlistDelete(info.id);
@@ -122,6 +143,12 @@ export function MusicPlaylist() {
     } catch {
       alert('删除失败');
     }
+  };
+
+  const removeLocalSong = (songId: number) => {
+    if (!confirm('从歌单移除这首歌？')) return;
+    guestPlaylistRemoveSong(nav.guestPlId ?? '', songId);
+    void load(); // 重读本地歌单
   };
 
   const playAll = () => {
@@ -199,8 +226,8 @@ export function MusicPlaylist() {
               {subbed ? '已收藏' : '收藏'}
             </button>
           ) : null}
-          {!isDaily && !isLikedAll && info && info.creator?.userId === useMusic.getState().loginUid && info.specialType !== 5 ? (
-            <button type="button" onClick={() => void doDelete()} aria-label="删除歌单">
+          {!isDaily && !isLikedAll && info && (isGuestLocal || (info.creator?.userId === useMusic.getState().loginUid && info.specialType !== 5)) ? (
+            <button type="button" onClick={() => void doDelete()} aria-label="删除歌单" data-testid="music-pl-del">
               <Trash2 className="h-[18px] w-[18px] text-red-500" />
             </button>
           ) : null}
@@ -265,7 +292,14 @@ export function MusicPlaylist() {
         {songs && songs.length > 0 && (
           <div className="pt-1" data-testid="music-pl-songs">
             {songs.map((s, i) => (
-              <SongRow key={`${s.id}-${i}`} song={s} queue={songs} index={i} showAlbum />
+              <SongRow
+                key={`${s.id}-${i}`}
+                song={s}
+                queue={songs}
+                index={i}
+                showAlbum
+                onMore={isGuestLocal ? () => removeLocalSong(s.id) : undefined}
+              />
             ))}
           </div>
         )}

@@ -14707,3 +14707,24 @@ Stage Summary:
 - 关键架构：播放引擎模块级（App 外继续播）；媒体统一 /api/music/stream 同源代理；NCM 统一 /api/music/ncm 代理（双通道一致）；cookie 由调用方持有不落服务端
 - 范围限定遵守：未触碰单聊/群聊/记忆引擎/朋友圈/红包/通话等任何现有模块（仅 PhoneShell 增深链接、eslint ignores 增补）
 - 改动文件：新增 src/lib/ios/music-{api,store,ai}.ts、src/app/api/music/{stream,ncm/[...path]}/route.ts、src/components/apps/music*.tsx ×8；重写 music.tsx；微调 PhoneShell.tsx、eslint.config.mjs
+
+---
+Task ID: 55
+Agent: Z.ai Code（主会话）
+Task: 用户反馈五项修复——扫码登录卡「正在进入」、游客「我的」页与登录态一致、游客 VIP 试听/免费歌完整、首页右上角头像、一起听界面错乱
+
+Work Log:
+- ①扫码登录卡死（P0）：根因 qrLoginCheck 803 返回的 cookie 从未保存——refreshLoginStatus 读不到本地凭证直接 return null，UI 永远停在「登录成功，正在进入…」。修复：music-api 新增 completeQrLogin(cookie)（→persistLogin：存 cookie + /user/account 拉 profile + setMusicLogin），music.tsx 扫码 ok 分支先 completeQrLogin 再 refreshLoginUi
+- ②游客播放解锁（P0）：实测发现沙箱出口 IP 为海外/数据中心，网易对匿名请求一律拒发直链（游客连免费歌都 404，登录用户不受影响）。解法：songUrl 统一加 realIP=116.25.146.177 伪造国内客户端 IP。实测游客：VIP 歌返回试听片段（freeTrialInfo {start:0,end:40}，实测片段 36s）+ 免费歌/fee=8 完整直链——正好实现「VIP 试听、非 VIP 完整」；试听结束 ended→next(auto) 自动切下一首；播放失败文案同步更新
+- ③游客「我的」页完整化：新增游客本地资料（kv music-guest-profile：昵称+头像，6 个 DiceBear 预设可选+保存）、关注/粉丝/歌单/红心统计行、本地歌单 CRUD（kv music-guest-playlists：新建/删除/加歌/移除，music-store 导出 guestPlaylist* 函数族）；我的页两态结构对齐（登录=云端，游客=本地）；本地歌单详情复用 MusicPlaylist（nav 新增 playlistKind='guestLocal'+guestPlId），行内 ⋯=移除歌曲（带确认）
+- ④首页右上角头像：顶栏右侧显示头像（登录=网易云头像，游客=本地自定义头像），点击弹账号快开面板（登录态→账号与设置；游客态→「登录网易云账号」一键回登录页 guestMode=false）
+- ⑤收藏到歌单：SongRow 默认右侧 ListPlus 按钮（歌单详情传入 onMore 时保持原行为）→ AddToSongSheet 半屏（红心切换 + 歌单列表点选加入 + 新建歌单；游客走本地歌单、登录走 playlistAddTracks）
+- ⑥一起听界面错乱修复（P0）：根因 TogetherChat 用 bottomRef.scrollIntoView 滚消息——该 API 会冒泡滚动所有可滚祖先，把整个播放容器 scroll 掉 225px（实测 closeBtn y=-166、z10 容器 scrollTop=225），顶部 PlayerTopBar/TogetherHead 全部被顶出屏幕、底部出现大空白。修复：消息滚动改消息流容器自身 scrollTo；播放器两个分支的 z10 容器加 overflow-hidden。聊天态重构为全屏独立布局（顶栏+双头像+距离/时长+TA主动聊天开关+结束按钮+nowplaying条+消息流+输入+音乐/聊天胶囊），不再与播放控制区堆叠
+- 附带修复：playSong 队列指针 bug——推荐卡/外部构造歌曲不在队列时旧逻辑 findIndex=-1→Math.max(0,-1)=0 错播队列第 0 首；改为插入当前播放位置之后并播放
+- E2E 复验（agent-browser 420x900 游客态）全过：登录页二维码+轮询 ✓；游客资料编辑（头像选 2 号+昵称「小明」保存生效）✓；我的页游客完整形态（头像/昵称/笔编辑标/0关注0粉丝/红心计数/登录按钮/快捷行/本地歌单空态）✓；搜索富士山下 → VIP 陈奕迅版播放（试听徽章+0:18/0:36 片段走动）✓；试听结束自动切《纯净女声版》（免费）完整播放 2:55 无徽章 ✓；邀请小暖 → 聊天态新布局全要素（顶栏/双头像/相距1058公里·一起听1分钟/TA主动聊天开关/结束按钮/nowplaying条/输入/胶囊，playerY=0 不再滚飞）✓；发消息 AI 回复（「女声版本好温柔…像春天的风~」）✓；首页右上角头像面板（小明+游客模式+登录网易云账号按钮→回登录页二维码重新生成）✓；收藏到歌单面板（红心加入→我的页红心=1）✓；dev.log/browser 零运行时错误
+- bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：扫码登录真正打通（803→completeQrLogin→持久化→进入 App）；游客可完整使用音乐 App（VIP 试听 40s 自动切歌/免费歌完整播/本地资料与歌单/红心/最近播放）；首页右上角头像一键登录；一起听聊天态布局重做且滚动 bug 根治；歌曲收藏到歌单全场景可用
+- 关键认知：网易直链接口对海外 IP 匿名请求全量拒绝（realIP 参数解锁）；scrollIntoView 在嵌套滚动容器会冒泡顶飞整页（必须用容器 scrollTo）
+- 改动文件：music-api.ts（completeQrLogin+realIP）、music-store.ts（playSong 插队/游客资料/本地歌单函数族/nav.guestPlId）、music.tsx（completeQrLogin 接入）、music-mine.tsx（游客我的页+资料编辑+本地歌单）、music-home.tsx（右上角头像+账号面板）、music-shared.tsx（SongRow ListPlus+AddToSongSheet）、music-playlist.tsx（guestLocal 支持+删除/移除）、music-player.tsx（聊天态全屏布局+overflow-hidden）、music-together.tsx（scrollTo 修复）

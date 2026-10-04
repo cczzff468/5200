@@ -101,6 +101,105 @@ export function MusicPlayer() {
   }
 
   const liked = likedIds.has(current.id);
+  const chatMode = !!(together && showChat);
+
+  // 一起听底部胶囊（音乐/聊天切换）——两种模式共用
+  const modeCapsule = together ? (
+    <div className="flex shrink-0 justify-center pb-5 pt-1">
+      <div className="flex rounded-full bg-white/10 p-0.5">
+        <button
+          type="button"
+          onClick={() => setChatOverride(false)}
+          className={`flex items-center gap-1 rounded-full px-5 py-1.5 text-[12px] ${
+            !showChat ? 'bg-white/25 text-white' : 'text-white/60'
+          }`}
+        >
+          <Music2 className="h-3.5 w-3.5" />
+          音乐
+        </button>
+        <button
+          type="button"
+          onClick={() => setChatOverride(true)}
+          data-testid="music-tg-open-chat"
+          className={`flex items-center gap-1 rounded-full px-5 py-1.5 text-[12px] ${
+            showChat ? 'bg-white/25 text-white' : 'text-white/60'
+          }`}
+        >
+          <MessageCircle className="h-3.5 w-3.5" />
+          聊天
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  const togetherHead = together ? (
+    <TogetherHead
+      name={together.name}
+      avatar={together.avatar}
+      distanceKm={together.distanceKm}
+      since={together.since}
+      aiChatter={together.aiChatter}
+      onToggleChatter={(v) => setTogetherAiChatter(v)}
+      onEnd={async () => {
+        await stopTogether();
+        setChatOverride(false);
+      }}
+    />
+  ) : null;
+
+  // 聊天态：全屏独立布局（顶栏+双头像+聊天区+胶囊），不再与播放控制区堆叠
+  if (chatMode) {
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden bg-[#101010] text-white" data-testid="music-player">
+        <div
+          className="absolute inset-0 scale-150 bg-cover bg-center opacity-40 blur-3xl"
+          style={{ backgroundImage: `url(${songCover(current)})` }}
+        />
+        <div className="absolute inset-0 bg-black/35" />
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <PlayerTopBar
+            onClose={close}
+            title="一起听"
+            light
+            together={together}
+            onMore={() => setShowMore(true)}
+          />
+          {togetherHead}
+          <div className="min-h-0 flex-1" data-testid="music-player-chat-mode">
+            <TogetherChat />
+          </div>
+          {modeCapsule}
+        </div>
+        {showMore && (
+          <MoreSheet
+            song={current}
+            liked={liked}
+            onClose={() => setShowMore(false)}
+            onToast={(m) => setMoreToast(m)}
+            onInvite={() => {
+              setShowMore(false);
+              setShowInvite(true);
+            }}
+            onShowQueue={() => {
+              setShowMore(false);
+              setShowQueue(true);
+            }}
+            onShowLyric={() => {
+              setShowMore(false);
+              setChatOverride(false);
+            }}
+          />
+        )}
+        {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
+        {showInvite && <InviteSheet onClose={() => setShowInvite(false)} />}
+        {moreToast && (
+          <div className="pointer-events-none absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
+            {moreToast}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-[#101010] text-white" data-testid="music-player">
@@ -111,7 +210,7 @@ export function MusicPlayer() {
       />
       <div className="absolute inset-0 bg-black/35" />
 
-      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
         <PlayerTopBar
           onClose={close}
           title={together ? '一起听' : 'Now Playing'}
@@ -120,26 +219,11 @@ export function MusicPlayer() {
           onMore={() => setShowMore(true)}
         />
 
-        {together && (
-          <TogetherHead
-            name={together.name}
-            avatar={together.avatar}
-            distanceKm={together.distanceKm}
-            since={together.since}
-            aiChatter={together.aiChatter}
-            onToggleChatter={(v) => setTogetherAiChatter(v)}
-            onEnd={async () => {
-              await stopTogether();
-              setChatOverride(false);
-            }}
-          />
-        )}
+        {togetherHead}
 
         {/* 封面/歌词切换区 */}
         <div className="relative flex min-h-0 flex-1 items-center justify-center px-8">
-          {showChat && together ? (
-            <TogetherChat />
-          ) : showLyric ? (
+          {showLyric ? (
             <LyricView onSwitch={() => setShowLyric(false)} />
           ) : (
             <VinylView
@@ -268,34 +352,8 @@ export function MusicPlayer() {
           </button>
         </div>
 
-        {/* 一起听底部胶囊（音乐/聊天切换） */}
-        {together && (
-          <div className="flex justify-center pb-6 pt-1">
-            <div className="flex rounded-full bg-white/10 p-0.5">
-              <button
-                type="button"
-                onClick={() => setChatOverride(false)}
-                className={`flex items-center gap-1 rounded-full px-5 py-1.5 text-[12px] ${
-                  !showChat ? 'bg-white/25 text-white' : 'text-white/60'
-                }`}
-              >
-                <Music2 className="h-3.5 w-3.5" />
-                音乐
-              </button>
-              <button
-                type="button"
-                onClick={() => setChatOverride(true)}
-                data-testid="music-tg-open-chat"
-                className={`flex items-center gap-1 rounded-full px-5 py-1.5 text-[12px] ${
-                  showChat ? 'bg-white/25 text-white' : 'text-white/60'
-                }`}
-              >
-                <MessageCircle className="h-3.5 w-3.5" />
-                聊天
-              </button>
-            </div>
-          </div>
-        )}
+        {/* 一起听底部胶囊 / 普通态底部留白 */}
+        {modeCapsule}
         {!together && <div className="h-[34px] shrink-0" />}
       </div>
 

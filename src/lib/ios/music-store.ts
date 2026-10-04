@@ -114,8 +114,10 @@ export interface MusicNav {
   tab: 'home' | 'search' | 'mine';
   /** 歌单详情参数 */
   playlistId: number | null;
-  /** 特殊歌单：daily=每日推荐 liked=我的红心（云端） */
-  playlistKind: 'normal' | 'daily' | 'liked';
+  /** 特殊歌单：daily=每日推荐 liked=我的红心（云端） guestLocal=游客本地歌单（id 在 guestPlId） */
+  playlistKind: 'normal' | 'daily' | 'liked' | 'guestLocal';
+  /** 游客本地歌单 id */
+  guestPlId: string | null;
 }
 
 /** 一起听会话/消息类型（具体逻辑在 music-ai.ts，状态放这里驱动 UI） */
@@ -180,6 +182,7 @@ interface MusicState {
   openPlayer: () => void;
   closePlayer: () => void;
   openPlaylist: (id: number, kind?: MusicNav['playlistKind']) => void;
+  openGuestPlaylistNav: (gid: string) => void;
   closePlaylist: () => void;
   openComments: (s: NcmSong) => void;
   closeComments: () => void;
@@ -240,7 +243,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   likedIds: new Set<number>(),
   likedSongs: {},
   history: [],
-  nav: { view: 'tabs', tab: 'home', playlistId: null, playlistKind: 'normal' },
+  nav: { view: 'tabs', tab: 'home', playlistId: null, playlistKind: 'normal', guestPlId: null },
   guestMode: false,
   commentSong: null,
   together: null,
@@ -277,17 +280,33 @@ export const useMusic = create<MusicState>((set, get) => ({
   openPlayer: () => set((s) => ({ nav: { ...s.nav, view: 'player' } })),
   closePlayer: () => set((s) => ({ nav: { ...s.nav, view: 'tabs' } })),
   openPlaylist: (id, kind = 'normal') =>
-    set((s) => ({ nav: { ...s.nav, view: 'playlist', playlistId: id, playlistKind: kind } })),
+    set((s) => ({
+      nav: { ...s.nav, view: 'playlist', playlistId: id, playlistKind: kind, guestPlId: null },
+    })),
+  openGuestPlaylistNav: (gid: string) =>
+    set((s) => ({
+      nav: { ...s.nav, view: 'playlist', playlistId: null, playlistKind: 'guestLocal', guestPlId: gid },
+    })),
   closePlaylist: () => set((s) => ({ nav: { ...s.nav, view: 'tabs' } })),
   openComments: (song) => set({ commentSong: song }),
   closeComments: () => set({ commentSong: null }),
 
   playSong: async (song, queue) => {
-    const q = queue && queue.length ? queue.slice() : get().queue.length ? get().queue : [song];
-    const idx = Math.max(0, q.findIndex((x) => x.id === song.id));
-    set({ queue: q, qIndex: idx, current: song, playError: '', freeTrial: false });
+    const s = get();
+    const base = queue && queue.length ? queue.slice() : s.queue.slice();
+    const idx = base.findIndex((x) => x.id === song.id);
+    if (idx >= 0) {
+      set({ queue: base, qIndex: idx, current: base[idx], playError: '', freeTrial: false });
+      saveSnapshot(get());
+      await get().playQueueAt(idx);
+      return;
+    }
+    // 队列中没有这首歌 → 插入到当前播放位置之后（不清空原有队列），立即播放
+    const insertAt = Math.max(0, s.qIndex) + 1;
+    const nextQueue = [...base.slice(0, insertAt), song, ...base.slice(insertAt)];
+    set({ queue: nextQueue, qIndex: insertAt, current: song, playError: '', freeTrial: false });
     saveSnapshot(get());
-    await get().playQueueAt(idx);
+    await get().playQueueAt(insertAt);
   },
 
   playQueueAt: async (index) => {
@@ -309,11 +328,7 @@ export const useMusic = create<MusicState>((set, get) => ({
     }
     if (!url) {
       set({ buffering: false });
-      get().failCurrent(
-        get().loginUid
-          ? '暂无播放链接：该歌曲可能需要 VIP 或已下架'
-          : '游客暂不能播放该歌曲，登录网易云账号后可完整播放',
-      );
+      get().failCurrent('暂无播放链接：该歌曲可能需要完整 VIP 或已下架');
       return;
     }
     a.src = mediaProxyUrl(url);
@@ -570,6 +585,90 @@ export function nowPlayingSnapshot(): { song: NcmSong; at: number } | null {
 
 export function musicEngineAudio(): HTMLAudioElement | null {
   return audio;
+}
+
+// ---------------- 游客本地资料与歌单（不登录也可用的"我的"） ----------------
+
+export interface GuestProfile {
+  nickname: string;
+  /** 空 = 使用默认头像 */
+  avatar: string;
+}
+
+const GUEST_PROFILE_KEY = 'music-guest-profile';
+const GUEST_PLAYLISTS_KEY = 'music-guest-playlists';
+export const GUEST_DEFAULT_AVATAR =
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=MusicGuest&backgroundColor=b6e3f4';
+
+/** 游客预设头像（本地歌单/资料编辑用） */
+export const GUEST_AVATAR_PRESETS: string[] = [
+  GUEST_DEFAULT_AVATAR,
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Sunny&backgroundColor=ffd5dc',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Melody&backgroundColor=ffdfbf',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Rhythm&backgroundColor=c0aede',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Echo&backgroundColor=d1d4f9',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Lyric&backgroundColor=caffbf',
+];
+
+export function getGuestProfile(): GuestProfile {
+  const v = kvGet<GuestProfile>(GUEST_PROFILE_KEY);
+  return { nickname: v?.nickname || '游客', avatar: v?.avatar || GUEST_DEFAULT_AVATAR };
+}
+
+export function setGuestProfile(p: Partial<GuestProfile>): GuestProfile {
+  const next = { ...getGuestProfile(), ...p };
+  kvSet(GUEST_PROFILE_KEY, next);
+  return next;
+}
+
+export interface GuestPlaylist {
+  id: string;
+  name: string;
+  songs: NcmSong[];
+  createdAt: number;
+}
+
+export function getGuestPlaylists(): GuestPlaylist[] {
+  return kvGet<GuestPlaylist[]>(GUEST_PLAYLISTS_KEY) ?? [];
+}
+
+function saveGuestPlaylists(list: GuestPlaylist[]): void {
+  kvSet(GUEST_PLAYLISTS_KEY, list.slice(0, 50));
+}
+
+export function guestPlaylistCreate(name: string): GuestPlaylist {
+  const pl: GuestPlaylist = { id: `gp-${Date.now().toString(36)}`, name: name.trim(), songs: [], createdAt: Date.now() };
+  saveGuestPlaylists([...getGuestPlaylists(), pl]);
+  return pl;
+}
+
+export function guestPlaylistDelete(id: string): void {
+  saveGuestPlaylists(getGuestPlaylists().filter((p) => p.id !== id));
+}
+
+export function guestPlaylistAddSong(pid: string, song: NcmSong): boolean {
+  const list = getGuestPlaylists();
+  const pl = list.find((p) => p.id === pid);
+  if (!pl || pl.songs.some((s) => s.id === song.id)) return false;
+  pl.songs.push(song);
+  saveGuestPlaylists(list);
+  return true;
+}
+
+export function guestPlaylistRemoveSong(pid: string, songId: number): void {
+  const list = getGuestPlaylists();
+  const pl = list.find((p) => p.id === pid);
+  if (!pl) return;
+  pl.songs = pl.songs.filter((s) => s.id !== songId);
+  saveGuestPlaylists(list);
+}
+
+export function guestPlaylistRename(pid: string, name: string): void {
+  const list = getGuestPlaylists();
+  const pl = list.find((p) => p.id === pid);
+  if (!pl || !name.trim()) return;
+  pl.name = name.trim();
+  saveGuestPlaylists(list);
 }
 
 // ---------------- 模块加载即同步恢复 ----------------
