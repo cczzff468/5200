@@ -14910,3 +14910,28 @@ Stage Summary:
 - 关键实现：VinylView aspect-square h-full 高度自适应是消除布局挤压重叠的关键；全局 MiniBar 层 z-[70] + TabBar 可见性派生（showTabBar）决定 bottom 偏移；底部弹层统一加 pb 防遮挡
 - 测试数据说明：E2E 在 agent-browser 独立 Chromium profile 进行，测试联系人「小音」/搜索历史/状态仅存在于该 profile，用户浏览器数据不受影响
 - 改动文件：src/components/apps/music-player.tsx、music-search.tsx（重写）、music-mine.tsx、music.tsx、music-shared.tsx、music-settings.tsx、src/lib/ios/music-api.ts
+
+---
+Task ID: 64
+Agent: Z.ai Code（主会话）
+Task: 用户第九轮反馈十一项——底部 tab 只在音乐视图显示、唱片缩小+唱针不挡时长、双头像变大、气泡聚拢头像正下方、快聊输入条键盘跟随+点空白消失、底部三点改开歌曲操作面板（正在一起听格子显示双方头像）、弹窗盖住迷你播放器、修复不显示歌手
+
+Work Log:
+- 底部胶囊只随音乐视图（music-player）：主 return `{modeCapsule}` → `{!showLyric && modeCapsule}`（歌词视图不再显示）；聊天视图整行删除；聊天视图顶栏新增中央「音乐界面」胶囊按钮（PlayerTopBar 加 onMusic prop，Music2 图标），切回音乐视图正常
+- 唱片缩小+唱针缩短（VinylView）：max-h 300→256px；唱针整体重画——top -30→-10px、总高 112→88px、针杆 84→64px、针头 15→13px，顶端只超出唱片 10px，不再遮挡上方「相距 x 公里·一起听了 x」时长行；封面/歌词切换区 pt-4 预留唱针空间
+- 双头像变大（TogetherHead）：h-14→h-16（64px）
+- 气泡聚拢头像正下方（TogetherHead）：气泡行从「双列 flex-1 左对齐」（对方气泡贴屏幕左缘、我的贴中线，都不在头像下）改为 `justify-center gap-10` 单行居中聚拢——对方气泡在双头像左下、我的在右下，尾巴朝上各指头像；单个气泡时居中显示在头像正下
+- 快聊输入条重做（QuickInputBar + useKeyboardOffset hook）：①新增 visualViewport 监听（resize/scroll），键盘高度 = innerHeight - vv.height - vv.offsetTop，输入条 translateY(-kb) 跟随键盘抬起（iOS overlay 键盘；Android resize 模式天然贴底）②input onFocus 用 requestAnimationFrame+150ms 双段 window.scrollTo 恢复滚动位置，保证界面不动 ③新增全屏透明遮罩（z-[39] backdrop），点击输入条以外任何地方立即收起；途中修复重写时丢失的 bottom-0（absolute 无 bottom 约束会停在 flex 静态位置=屏幕顶部）
+- 底部三个点改开歌曲操作面板（modeCapsule）：onClick openTgMenu → setShowMore(true)（第七轮曾改为设置菜单，按本轮语义改回 MoreSheet 仿网易云面板）；TogetherMenu 设置弹窗保留右上角⋮唯一入口
+- MoreSheet「正在一起听」格子显示双方头像：新增 tg prop（{peer,mine}，播放页传 togetherLive+myAvatarOf），在一起听时渲染 26px 双头像交叠（我方 ring-2 白环，仿网易云参考截图）；未在一起听保持双人剪影图标；聊天态/音乐态两处调用都传
+- 弹窗盖住迷你播放器（z 体系调整）：MiniBar 全局 z-[70]，把所有底部弹层统一提权——music-mine 四个弹层（资料/装扮/最近播放/状态）z-[65]→z-[80]、music-search 歌手专辑 sheet z-[65]→z-[80]、AddToSongSheet z-[70]→z-[80]、PlaylistCreateDialog z-[78]→z-[82]、ApiCfgSheet z-[70]→z-[80]；实测装扮弹窗 top=0 全屏覆盖迷你条（coversMini=true），关闭后迷你条恢复
+- 「未知歌手」三层根治：①music-api personalizedNewSongs 兼容新版返回（result 为数组、每项含 song 字段——旧代码假设 result.song 恒取空导致「新歌速递」整块空白，实测恢复「两难pt.2/加木」等数据）②music-store playQueueAt 对 artists 为空的歌异步 songsDetail 补全并同步 queue+current+快照（覆盖旧快照/推荐卡简化对象）③boot 恢复快照统一 map(normalizeSong)；顺手：首页「根据你喜爱的歌曲推荐」游客兜底——simi/song 需登录返回空时用种子歌手 artistSongs 热门歌（去种子自身）
+- E2E（agent-browser 420x900 游客态）全过：新歌速递有数据带歌手 ✓；搜索「爱情转移」→陈奕迅 ✓；播放页唱片 256px+唱针贴上缘不挡文字+歌手行「陈奕迅」+299w+/16w+ ✓；邀请「小音」→双头像 64px+时长行完整可见 ✓；三点→歌曲面板 1:1（正在一起听格子双头像交叠+评论(1308)真实数）✓；信息图标→输入条贴底（top 824/900）→原生 setter 发消息→双方气泡居中聚拢头像正下（我在右 TA 在左带尾巴）+时长行隐藏 ✓；点遮罩→输入条收起 ✓；歌词视图无底部胶囊→点空白回唱片 ✓；聊天视图无底部胶囊+顶部「音乐界面」按钮切回 ✓；「我的」页装扮弹窗 z-80 全屏盖住迷你条→关闭恢复 ✓；console/page errors 零
+- 测试数据清理：char-e2e-yinyue 联系人（IndexedDB）+ 7 个 music-*/together kv 键全清（agent-browser 独立 profile，用户数据不受影响）；顺手把该 profile 的 iOS 临时 SVG 头像废弃（fill=%23 非法色显示为黑，仅测试数据无碍）
+- bunx tsc 0 错误；bun run lint 0 错误 0 警告；dev.log 无 error
+
+Stage Summary:
+- 交付：底部胶囊（双 tab+三点/邀请）只在音乐唱片视图显示（歌词/聊天视图隐藏，聊天顶栏加「音乐界面」切回钮）；唱片 300→256px+唱针缩短至不挡时长；双头像 64px；气泡居中聚拢在头像正下；快聊输入条 visualViewport 键盘跟随+onFocus 防滚动+透明遮罩点击空白收起；底部三点改开仿网易云歌曲操作面板且「正在一起听」格子显示双方真实头像；全部底部弹层 z≥80 盖住迷你播放器；「未知歌手」三层根治（newsong result 数组适配/队列歌手异步补全/快照 normalize）+新歌速递复活+首页喜好推荐游客兜底
+- 关键实现：absolute 定位元素在 flex 容器里必须有 bottom 约束否则停在静态位置（本轮输入条浮顶根因）；React 受控 input 的 E2E 填值必须用原型 setter+input 事件；z 层体系=页面内容<30/迷你条 70/全屏弹层 80+/嵌套弹窗 82
+- 范围限定遵守：仅动音乐 App 6 个文件（music-player/music-store/music-api/music-home/music-search/music-mine z 值/music-shared z 值/music.tsx z 值），16 项受保护功能未触碰
+- 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-store.ts、src/lib/ios/music-api.ts、src/components/apps/music-home.tsx、src/components/apps/music-mine.tsx、src/components/apps/music-search.tsx、src/components/apps/music-shared.tsx、src/components/apps/music.tsx

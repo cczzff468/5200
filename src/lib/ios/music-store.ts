@@ -23,6 +23,7 @@ import {
   buildLyricLines,
   musicUid,
   getMusicLogin,
+  normalizeSong,
   type NcmSong,
   type NcmLyric,
 } from './music-api';
@@ -257,14 +258,15 @@ export const useMusic = create<MusicState>((set, get) => ({
     if (get().booted) return;
     set({ booted: true });
     ensureAudio();
-    // 恢复快照
+    // 恢复快照（旧版本存的歌可能缺歌手/封面字段，统一 normalize；缺歌手的再由 playQueueAt 异步补全）
     const snap = kvGet<PlayerSnapshot>(PLAYER_KEY);
     if (snap && Array.isArray(snap.queue) && snap.queue.length) {
-      const idx = Math.min(Math.max(0, snap.qIndex ?? 0), snap.queue.length - 1);
+      const queue = snap.queue.map(normalizeSong);
+      const idx = Math.min(Math.max(0, snap.qIndex ?? 0), queue.length - 1);
       set({
-        queue: snap.queue,
+        queue,
         qIndex: idx,
-        current: snap.queue[idx] ?? null,
+        current: queue[idx] ?? null,
         mode: snap.mode ?? 'order',
         volume: typeof snap.volume === 'number' ? snap.volume : 1,
       });
@@ -321,6 +323,24 @@ export const useMusic = create<MusicState>((set, get) => ({
     stopOtherAudio('music'); // 音频焦点：停语音/TTS
     set({ qIndex: index, current: song, position: 0, duration: songDurationSec(song), playError: '', buffering: true });
     saveSnapshot(get());
+    // 歌手/封面字段缺失（如旧快照、推荐卡简化对象）→ 异步拉详情补全，根治「未知歌手」
+    if (!song.artists?.length) {
+      void (async () => {
+        try {
+          const full = (await songsDetail([song.id]))[0];
+          if (!full?.artists?.length) return;
+          const st = get();
+          if (st.queue[index]?.id !== song.id) return; // 队列已变，不补
+          const queue = st.queue.map((x) => (x.id === song.id ? { ...x, ...full, name: x.name || full.name } : x));
+          const patch: Partial<MusicState> = { queue };
+          if (st.current?.id === song.id) patch.current = queue[index];
+          set(patch);
+          saveSnapshot(get());
+        } catch {
+          // 补全失败不影响播放
+        }
+      })();
+    }
     let url: string | null = null;
     let freeTrial = false;
     try {

@@ -383,8 +383,16 @@ export async function personalizedPlaylists(limit = 10): Promise<NcmPlaylist[]> 
 }
 
 export async function personalizedNewSongs(limit = 6): Promise<NcmSong[]> {
-  const j = await ncmRequest<{ result: { song: NcmSong[] } }>('personalized/newsong', { limit });
-  return (j.result?.song ?? []).map(normalizeSong);
+  // 两种返回结构兼容：新版 result 为数组（每项含 song 字段），旧版 result: { song: NcmSong[] }
+  const j = await ncmRequest<{ result: ({ song?: NcmSong } & Partial<NcmSong>)[] | { song: NcmSong[] } }>(
+    'personalized/newsong',
+    { limit },
+  );
+  const r = j.result;
+  const list: NcmSong[] = Array.isArray(r)
+    ? r.map((x) => (x && typeof x === 'object' && 'song' in x && x.song ? x.song : (x as NcmSong)))
+    : (r?.song ?? []);
+  return list.filter(Boolean).map(normalizeSong);
 }
 
 /** 每日推荐歌曲（需登录） */

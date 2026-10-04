@@ -16,6 +16,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import {
+  artistSongs,
   dailyRecommendSongs,
   personalizedNewSongs,
   personalizedPlaylists,
@@ -80,7 +81,9 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   }, [loginUid]);
 
   // 根据红心歌推荐：红心变化时以「最近红心的一首」为种子拉相似歌（去掉已红心的）
+  // simi/song 需登录（游客返回空）→ 游客兜底用种子歌手的热门歌曲（去掉种子自身）
   // 无红心时不在 effect 里 setState（渲染层直接隐藏区块）
+  const likedSongs = useMusic((s) => s.likedSongs);
   useEffect(() => {
     const ids = [...likedIds];
     if (!ids.length) return;
@@ -90,7 +93,15 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     let on = true;
     void (async () => {
       try {
-        const list = await simiSong(seed, 8);
+        let list = await simiSong(seed, 8);
+        if (!list.length) {
+          const seedSong = likedSongs[seed];
+          const artistId = seedSong?.artists?.[0]?.id;
+          if (artistId) {
+            const r = await artistSongs(artistId, 12);
+            list = r.songs.filter((x) => x.id !== seed);
+          }
+        }
         if (on && simiSeedRef.current === seed) {
           setSimiSongs(list.filter((s) => !likedIds.has(s.id)).slice(0, 6));
         }
@@ -101,7 +112,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     return () => {
       on = false;
     };
-  }, [likedIds]);
+  }, [likedIds, likedSongs]);
 
   const today = new Date();
 

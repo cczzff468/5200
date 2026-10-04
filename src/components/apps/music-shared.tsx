@@ -271,7 +271,7 @@ export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () =
   const liked = likedIds.has(song.id);
 
   return (
-    <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-addto-sheet">
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-addto-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative flex max-h-[72%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
         <div className="mx-auto mt-2.5 h-1 w-8 shrink-0 rounded-full bg-black/15 dark:bg-white/20" />
@@ -394,7 +394,7 @@ export function PlaylistCreateDialog({
   };
 
   return (
-    <div className="absolute inset-0 z-[78] flex items-center justify-center px-9" data-testid="music-pl-create-dialog">
+    <div className="absolute inset-0 z-[82] flex items-center justify-center px-9" data-testid="music-pl-create-dialog">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
       <div className="relative w-full max-w-[310px] overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-800">
         <p className="pt-5 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">新建歌单</p>

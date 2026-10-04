@@ -468,7 +468,7 @@ export function ApiCfgSheet({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-api-cfg-sheet">
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-api-cfg-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative w-full rounded-t-2xl bg-white p-5 pb-8 dark:bg-zinc-900">
         <div className="mb-1 flex items-center justify-between">

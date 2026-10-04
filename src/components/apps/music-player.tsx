@@ -174,7 +174,7 @@ export function MusicPlayer() {
     setShowTgMenu(true);
   };
 
-  // 一起听底部：音乐/聊天方形圆角胶囊居中；三个点贴最右，点击打开一起听设置弹窗；自己一个人时显示「邀请好友一起听」
+  // 一起听底部（仅音乐唱片视图显示）：音乐/聊天方形圆角胶囊居中；三个点贴最右开歌曲操作面板；自己一个人时显示「邀请好友一起听」
   const modeCapsule = together ? (
     <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
       <span className="h-8 w-8 shrink-0" aria-hidden />
@@ -204,9 +204,9 @@ export function MusicPlayer() {
       </div>
       <button
         type="button"
-        onClick={openTgMenu}
+        onClick={() => setShowMore(true)}
         data-testid="music-tg-dots"
-        aria-label="一起听设置"
+        aria-label="歌曲操作面板"
         className="flex h-8 w-8 shrink-0 items-center justify-center text-white/85 active:scale-95"
       >
         <MoreVertical className="h-[19px] w-[19px]" />
@@ -229,6 +229,10 @@ export function MusicPlayer() {
   const togetherHead = together ? (
     <TogetherHead session={togetherLive ?? together} msgs={togetherMsgs} showBubbles={!showChat} />
   ) : null;
+  // 歌曲操作面板「正在一起听」格子展示的双头像（在一起听时才传）
+  const tgAvatars = together
+    ? { peer: (togetherLive ?? together).avatar, mine: myAvatarOf(loginUid, loginAvatar) }
+    : null;
 
   // 结束一起听（⋮ 菜单内）
   const endTogether = () => {
@@ -270,12 +274,12 @@ export function MusicPlayer() {
         />
         <div className="absolute inset-0 bg-black/35" />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PlayerTopBar onClose={close} light onMenu={openTgMenu} dense />
+          <PlayerTopBar onClose={close} light onMenu={openTgMenu} onMusic={() => setChatOverride(false)} dense />
           {togetherHead}
           <div className="min-h-0 flex-1" data-testid="music-player-chat-mode">
             <TogetherChat />
           </div>
-          {modeCapsule}
+          {/* 聊天视图不再重复底部胶囊（只留输入区），顶部中央有切回音乐按钮 */}
         </div>
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
         {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
@@ -285,6 +289,7 @@ export function MusicPlayer() {
           <MoreSheet
             song={current}
             liked={liked}
+            tg={tgAvatars}
             onClose={() => setShowMore(false)}
             onToast={(m) => setMoreToast(m)}
             onInvite={() => {
@@ -343,8 +348,8 @@ export function MusicPlayer() {
         {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
         {!showLyric && togetherHead}
 
-        {/* 封面/歌词切换区 */}
-        <div className="relative flex min-h-0 flex-1 items-center justify-center px-8">
+      {/* 封面/歌词切换区（留出顶部唱针空间） */}
+        <div className="relative flex min-h-0 flex-1 items-center justify-center px-8 pt-4">
           {showLyric ? (
             <LyricView onSwitch={() => setShowLyric(false)} />
           ) : (
@@ -490,8 +495,8 @@ export function MusicPlayer() {
           </button>
         </div>
 
-        {/* 一起听底部胶囊（音乐/聊天+最右三个点开歌曲面板）或「邀请好友一起听」 */}
-        {modeCapsule}
+        {/* 一起听底部胶囊只在音乐唱片视图显示（歌词/聊天视图不重复展示） */}
+        {!showLyric && modeCapsule}
 
         {/* 音乐界面快聊输入条（一起听时点信息图标弹出；发送后气泡显示在头像下 5 秒） */}
         {together && showQuickInput && !showLyric && (
@@ -504,11 +509,12 @@ export function MusicPlayer() {
         )}
       </div>
 
-      {/* 更多面板（仿网易云歌曲操作面板） */}
+      {/* 更多面板（仿网易云歌曲操作面板；三个点入口，正在一起听格子显示双方头像） */}
       {showMore && (
         <MoreSheet
           song={current}
           liked={liked}
+          tg={tgAvatars}
           onClose={() => setShowMore(false)}
           onToast={(m) => setMoreToast(m)}
           onInvite={() => {
@@ -560,6 +566,7 @@ function PlayerTopBar({
   light,
   onMore,
   onMenu,
+  onMusic,
   dense,
 }: {
   onClose: () => void;
@@ -569,6 +576,8 @@ function PlayerTopBar({
   onMore?: () => void;
   /** 一起听态：右上角 ⋮ 菜单（重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
   onMenu?: () => void;
+  /** 聊天视图：顶部中央切回音乐视图按钮（底部胶囊已不再在聊天视图重复展示） */
+  onMusic?: () => void;
   /** 紧凑顶栏（一起听：双头像更贴顶） */
   dense?: boolean;
 }) {
@@ -577,8 +586,21 @@ function PlayerTopBar({
       <button type="button" onClick={onClose} aria-label="收起" data-testid="music-player-close">
         <ChevronDown className={`h-7 w-7 ${light ? 'text-white/85' : 'text-zinc-600'}`} />
       </button>
-      <div className="min-w-0 flex-1 text-center">
-        {title && <p className={`truncate text-[13px] ${light ? 'text-white/90' : 'text-zinc-700'}`}>{title}</p>}
+      <div className="flex min-w-0 flex-1 items-center justify-center">
+        {onMusic ? (
+          <button
+            type="button"
+            onClick={onMusic}
+            data-testid="music-tg-back-music"
+            aria-label="切回音乐界面"
+            className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-1.5 text-[12px] text-white/85 active:scale-95"
+          >
+            <Music2 className="h-3.5 w-3.5" />
+            音乐界面
+          </button>
+        ) : title ? (
+          <p className={`truncate text-[13px] ${light ? 'text-white/90' : 'text-zinc-700'}`}>{title}</p>
+        ) : null}
       </div>
       {onMenu ? (
         <button
@@ -621,20 +643,20 @@ function VinylView({
           onClick={onSwitch}
           data-testid="music-vinyl"
           aria-label="切换到歌词"
-          className="relative aspect-square h-full max-h-[300px] max-w-full shrink-0"
+          className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 唱针（深色金属风，右上角进入；播放贴盘 / 暂停抬起）——不再有白色块 */}
+          {/* 唱针（深色金属风，右上角进入；播放贴盘 / 暂停抬起）——缩短后整体限制在唱片上缘，不再挡住上方的时长文字 */}
           <div
-            className="absolute right-[4%] top-[-30px] z-20 h-[112px] w-[104px] origin-[10px_10px] transition-transform duration-500"
+            className="absolute right-[5%] top-[-10px] z-20 h-[88px] w-[96px] origin-[10px_10px] transition-transform duration-500"
             style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-26deg)' }}
           >
             {/* 轴承底座 */}
-            <div className="absolute left-0 top-0 h-5 w-5 rounded-full bg-[#2c2c30] shadow-[0_2px_6px_rgba(0,0,0,0.55)] ring-1 ring-white/20" />
-            <div className="absolute left-[5px] top-[5px] h-2.5 w-2.5 rounded-full bg-[#525257] ring-1 ring-black/60" />
+            <div className="absolute left-0 top-0 h-[18px] w-[18px] rounded-full bg-[#2c2c30] shadow-[0_2px_6px_rgba(0,0,0,0.55)] ring-1 ring-white/20" />
+            <div className="absolute left-[4.5px] top-[4.5px] h-2 w-2 rounded-full bg-[#525257] ring-1 ring-black/60" />
             {/* 针杆（细金属臂，向下伸向盘面） */}
-            <div className="absolute left-[9px] top-[9px] h-[84px] w-[2.5px] origin-top rotate-[26deg] rounded-full bg-gradient-to-b from-[#9a9aa2] via-[#5f5f66] to-[#38383d]" />
+            <div className="absolute left-[8px] top-[8px] h-[64px] w-[2.5px] origin-top rotate-[26deg] rounded-full bg-gradient-to-b from-[#9a9aa2] via-[#5f5f66] to-[#38383d]" />
             {/* 针头（深色小唱头，落在盘缘） */}
-            <div className="absolute left-[25px] top-[86px] h-[15px] w-[7px] rotate-[26deg] rounded-[3px] bg-[#3a3a40] shadow-[0_1px_3px_rgba(0,0,0,0.6)] ring-1 ring-white/10" />
+            <div className="absolute left-[22px] top-[66px] h-[13px] w-[6.5px] rotate-[26deg] rounded-[3px] bg-[#3a3a40] shadow-[0_1px_3px_rgba(0,0,0,0.6)] ring-1 ring-white/10" />
           </div>
 
           {/* 外缘深黑圈（不随旋转，提供立体边缘） */}
@@ -862,20 +884,16 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像（紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
+      {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
-        <CoverImg src={session.avatar} className="h-14 w-14" rounded="rounded-full" alt={session.name} />
-        <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-14 w-14" rounded="rounded-full" alt="我" />
+        <CoverImg src={session.avatar} className="h-16 w-16" rounded="rounded-full" alt={session.name} />
+        <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
-      {/* 头像下气泡（音乐视图）：对方左 / 我右，尾巴朝上各自指向头像，5 秒后消失；出现时隐藏时长行 */}
+      {/* 头像下气泡（音乐视图）：紧贴双头像正下方居中聚拢——对方在左、我在右，尾巴朝上各自指向头像，5 秒后消失；出现时隐藏时长行 */}
       {showBubbles && hasBubble && (
-        <div className="mx-auto mt-0.5 flex w-full max-w-[340px] items-start gap-3 px-4">
-          <div className="flex min-w-0 flex-1 justify-start">
-            {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
-          </div>
-          <div className="flex min-w-0 flex-1 justify-start">
-            {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
-          </div>
+        <div className="mx-auto mt-1 flex w-full max-w-[320px] items-start justify-center gap-10 px-4">
+          {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
+          {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
         </div>
       )}
       {!hasBubble && (
@@ -894,6 +912,28 @@ function myAvatarOf(loginUid: number | null, loginAvatar: string): string {
 
 // ---------------- 音乐界面底部快聊输入条（点信息图标弹出） ----------------
 
+/** 虚拟键盘抬起高度（iOS overlay 键盘：visualViewport 变小而布局视口不变；Android resize 模式天然贴底） */
+function useKeyboardOffset(): number {
+  const [kb, setKb] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const upd = () => {
+      // 键盘高度 ≈ 布局视口底 - 可视视口底（含被键盘推出的偏移）
+      const overlap = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      setKb(overlap);
+    };
+    vv.addEventListener('resize', upd);
+    vv.addEventListener('scroll', upd);
+    upd();
+    return () => {
+      vv.removeEventListener('resize', upd);
+      vv.removeEventListener('scroll', upd);
+    };
+  }, []);
+  return kb;
+}
+
 function QuickInputBar({
   value,
   onChange,
@@ -905,43 +945,65 @@ function QuickInputBar({
   onSend: () => void;
   onClose: () => void;
 }) {
+  const kb = useKeyboardOffset();
+  // 聚焦时浏览器会把页面往上推（scrollIntoView）——立即滚回原位，保证界面不动，只有输入条跟键盘抬起
+  const keepViewport = () => {
+    const y = window.scrollY;
+    requestAnimationFrame(() => window.scrollTo(0, y));
+    setTimeout(() => window.scrollTo(0, y), 150);
+  };
   return (
-    <div
-      className="absolute inset-x-0 bottom-0 z-[40] flex items-center gap-2 bg-black/55 px-4 pb-7 pt-3 backdrop-blur-xl"
-      data-testid="music-quick-input"
-      style={{ animation: 'quick-in-up 0.22s ease-out' }}
-    >
-      <input
-        autoFocus
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') onSend();
-        }}
-        placeholder="和 TA 聊聊这首歌…"
-        data-testid="music-quick-input-field"
-        className="h-9 min-w-0 flex-1 rounded-full bg-white/12 px-4 text-[13px] text-white outline-none placeholder:text-white/35"
-      />
+    <>
+      {/* 点击输入条以外的任何地方 → 收起输入条（透明遮罩，不改变背景观感） */}
       <button
         type="button"
-        onClick={onSend}
-        disabled={!value.trim()}
-        data-testid="music-quick-input-send"
-        aria-label="发送"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EC4141] text-white disabled:opacity-40 active:scale-95"
-      >
-        <SendHorizonal className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
         aria-label="收起输入框"
-        data-testid="music-quick-input-close"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/70 active:scale-95"
+        onClick={onClose}
+        data-testid="music-quick-input-backdrop"
+        className="absolute inset-0 z-[39] cursor-default"
+        style={{ backgroundColor: 'transparent' }}
+      />
+      <div
+        className="absolute inset-x-0 bottom-0 z-[40] flex items-center gap-2 bg-black/55 px-4 pb-7 pt-3 backdrop-blur-xl"
+        data-testid="music-quick-input"
+        style={{
+          animation: 'quick-in-up 0.22s ease-out',
+          transform: kb > 0 ? `translateY(-${kb}px)` : undefined,
+        }}
       >
-        <ChevronDown className="h-4 w-4" />
-      </button>
-    </div>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={keepViewport}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onSend();
+          }}
+          placeholder="和 TA 聊聊这首歌…"
+          data-testid="music-quick-input-field"
+          className="h-9 min-w-0 flex-1 rounded-full bg-white/12 px-4 text-[13px] text-white outline-none placeholder:text-white/35"
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={!value.trim()}
+          data-testid="music-quick-input-send"
+          aria-label="发送"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EC4141] text-white disabled:opacity-40 active:scale-95"
+        >
+          <SendHorizonal className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="收起输入框"
+          data-testid="music-quick-input-close"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/70 active:scale-95"
+        >
+          <ChevronDown className="h-4 w-4" />
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -1100,12 +1162,15 @@ const MORE_QUALITIES = ['标准', '较高', '极高'];
 function MoreSheet({
   song,
   liked,
+  tg,
   onClose,
   onToast,
   onInvite,
 }: {
   song: NcmSong;
   liked: boolean;
+  /** 在一起听时「正在一起听」格子显示双方真实头像 */
+  tg?: { peer: string; mine: string } | null;
   onClose: () => void;
   onToast: (m: string) => void;
   onInvite: () => void;
@@ -1261,7 +1326,18 @@ function MoreSheet({
               {
                 k: 'together',
                 label: '正在一起听',
-                icon: (
+                icon: tg ? (
+                  // 在一起听：显示双方真实头像（交叠，仿网易云）
+                  <span className="flex items-center" data-testid="music-more-tg-avatars">
+                    <CoverImg src={tg.peer} className="h-[26px] w-[26px]" rounded="rounded-full" alt="TA" />
+                    <CoverImg
+                      src={tg.mine}
+                      className="relative -ml-2 h-[26px] w-[26px] ring-2 ring-white dark:ring-zinc-900"
+                      rounded="rounded-full"
+                      alt="我"
+                    />
+                  </span>
+                ) : (
                   <span className="relative flex h-[22px] w-[32px] items-center justify-center">
                     <span className="flex h-[17px] w-[17px] items-center justify-center rounded-full bg-zinc-300 ring-2 ring-white dark:bg-zinc-600 dark:ring-zinc-900">
                       <UserRound className="h-2.5 w-2.5 text-white dark:text-zinc-300" fill="currentColor" />

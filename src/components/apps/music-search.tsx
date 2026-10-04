@@ -560,7 +560,7 @@ export function MusicSearch() {
 
       {/* 歌手/专辑半屏面板 */}
       {sheet && (
-        <div className="absolute inset-0 z-[65] flex items-end">
+        <div className="absolute inset-0 z-[80] flex items-end">
           <button type="button" aria-label="关闭" onClick={() => setSheet(null)} className="absolute inset-0 bg-black/40" />
           <div className="relative flex max-h-[75%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
             <div className="flex items-center gap-3 p-4 pb-2">

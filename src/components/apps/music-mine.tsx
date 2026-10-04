@@ -915,7 +915,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   const previewAvatar = avatar || globalAvatar || GUEST_DEFAULT_AVATAR;
 
   return (
-    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-profile-sheet">
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-profile-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
         <div className="mb-4 flex items-center justify-between">
@@ -1120,7 +1120,7 @@ function DressSheet({
   };
 
   return (
-    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-dress-sheet">
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-dress-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
         <div className="mb-4 flex items-center justify-between">
@@ -1254,7 +1254,7 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
     kind === 'recent' ? '最近播放' : kind === 'record' ? '听歌排行（所有时间）' : kind === 'liked' ? '我的红心歌曲' : '本地音乐';
 
   return (
-    <div className="absolute inset-0 z-[65] flex items-end">
+    <div className="absolute inset-0 z-[80] flex items-end">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative flex max-h-[78%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
         <div className="flex items-center justify-between px-4 py-3">
@@ -1308,7 +1308,7 @@ function StatusEditSheet({
 }) {
   const [text, setText] = useState(current);
   return (
-    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-status-sheet">
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-status-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
         <div className="mx-auto mb-3.5 h-1 w-8 rounded-full bg-black/10 dark:bg-white/20" />
