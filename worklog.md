@@ -14644,3 +14644,25 @@ Stage Summary:
 - 交付：网易云音乐 API 本地 mini service（mini-services/netease-api，端口 3010，node --watch 常驻），扫码登录全链路（unikey→二维码→801等待扫码）+ 搜索经 Caddy 网关验证通过
 - 关键决策：运行时用 Node 而非 bun（eapi 加密兼容性，已对照实测）；cookie 由调用方持有不经服务落盘
 - 改动文件：mini-services/netease-api/{package.json,index.js,.gitignore 补充}（根项目零改动）
+
+---
+Task ID: 53-v2
+Agent: Z.ai Code（主会话）
+Task: 用户确认部署成果「这些都可以吗，网易云API可以用吗，可以登录自己的账号吗」——复验服务状态并全链路实测
+
+Work Log:
+- 服务状态：mini-services/netease-api 常驻运行中（PID 15356，node --watch index.js，端口 3010）
+- 经 Caddy 网关（前端真实链路 XTransformPort=3010）复验 7 项：
+  ①/login/qr/key → unikey ✅ ②/login/qr/create?qrimg=true → 真实网易云登录二维码 base64 PNG ✅
+  ③/login/qr/check → 801「等待扫码」+ 真实 NMTID cookie ✅（状态机正常）
+  ④/search?keywords=周杰伦 → 真实曲库（看我72变 id=21349）✅
+  ⑤/captcha/sent（13800138000 测试号）→ code 200，验证码短信链路真实连通 ✅
+  ⑥/user/account → 返回网易自动注册的匿名游客账号（id=18002215312, status=-10）——强证据：API 真实连通网易服务器 ✅
+  ⑦/song/url/v1 VIP歌（fee=1）游客身份 → url:null code:404（预期：需登录后才有播放权限；登录后免费歌全量、VIP歌30s试听）
+- 排错记录：测试时误用不存在的 /nuser/account 返回 Cannot GET，正确接口为 /user/account
+- 未改动任何代码；用户确认下一步是否开始做音乐 App 登录界面（扫码+手机号双 Tab）
+
+Stage Summary:
+- 复验结论：部署成果 7 项实测全通过，扫码登录三步链路 + 手机号验证码端点 + 搜索 + 登录态接口全部真实可用
+- 关键证据：网易侧自动创建游客账号 + 801 状态机 + 真实二维码生成，均证明链路真实连通 music.163.com
+- 待确认：音乐 App 登录 UI（扫码/手机号双 Tab）是否开工
