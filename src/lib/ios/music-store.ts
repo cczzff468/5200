@@ -238,6 +238,8 @@ interface MusicState {
   // 一起听（活跃会话，由 music-ai 维护；状态放这里驱动播放页/聊天 UI）
   together: TogetherSessionLike | null;
   togetherMsgs: TogetherMsgLike[];
+  // AI 正在组织回复（聊天视图显示三个跳动点打字动画）
+  tgAiBusy: boolean;
 
   boot: () => Promise<void>;
   openAppNow: () => void;
@@ -332,6 +334,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   commentSong: null,
   together: null,
   togetherMsgs: [],
+  tgAiBusy: false,
 
   boot: async () => {
     if (get().booted) return;

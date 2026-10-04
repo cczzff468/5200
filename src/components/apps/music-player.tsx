@@ -44,6 +44,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Gift,
+  Timer,
   SkipBack,
   SkipForward,
   TriangleAlert,
@@ -67,7 +69,7 @@ import {
 } from '@/lib/ios/music-ai';
 import type { ContactRecord } from '@/lib/contacts';
 import { AddToSongSheet, CoverImg, fmtClock } from './music-shared';
-import { TogetherChat } from './music-together';
+import { TogetherChat, TogetherChatInput } from './music-together';
 
 export function MusicPlayer() {
   const close = useMusic((s) => s.closePlayer);
@@ -280,8 +282,18 @@ export function MusicPlayer() {
     else setMoreToast('还没有开始一起听');
   };
 
-  // 聊天态：全屏独立布局（顶栏+双头像+聊天区+胶囊），不再与播放控制区堆叠
+  // 聊天态：全屏独立布局（顶栏+双头像+歌名行+消息流+输入条+底部胶囊），仿网易云一起听聊天界面
   if (chatMode) {
+    const followChatArtist = async () => {
+      const artist = current.artists?.[0];
+      if (!artist) return;
+      try {
+        await artistSub(artist.id, 1);
+        setMoreToast(`已关注 ${artist.name}`);
+      } catch {
+        setMoreToast('登录网易云账号后才能关注歌手');
+      }
+    };
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#101010] text-white" data-testid="music-player">
         <div
@@ -290,12 +302,102 @@ export function MusicPlayer() {
         />
         <div className="absolute inset-0 bg-black/35" />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PlayerTopBar onClose={close} light onMenu={openTgMenu} onMusic={() => setChatOverride(false)} dense />
-          {togetherHead}
-          <div className="min-h-0 flex-1" data-testid="music-player-chat-mode">
+          {/* 顶部不再有「音乐界面」胶囊（第十四轮反馈）：切回音乐视图走底部 tab */}
+          <PlayerTopBar onClose={close} light onMenu={openTgMenu} dense />
+          {/* 双头像（带红色计时徽章）+ 相距/累计时长 */}
+          <TogetherHead session={togetherLive ?? together} msgs={togetherMsgs} showBubbles={false} showBadge />
+          {/* 正在听的歌：歌名+歌手+关注 | 红心热度 + 播放列表（参考截图样式） */}
+          <div className="flex items-end justify-between gap-3 px-5 pb-2.5 pt-2">
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-[22px] font-bold leading-tight" data-testid="music-tg-chat-song">
+                {current.name}
+              </h2>
+              <div className="mt-1 flex items-center gap-2">
+                <p className="min-w-0 truncate text-[13px] text-white/60">{songArtistText(current)}</p>
+                <button
+                  type="button"
+                  onClick={() => void followChatArtist()}
+                  data-testid="music-tg-chat-follow"
+                  className="shrink-0 rounded-full bg-white/12 px-2.5 py-[3px] text-[11px] leading-none text-white/85 active:scale-95"
+                >
+                  关注
+                </button>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-5 pb-0.5">
+              <button
+                type="button"
+                onClick={() => void toggleLike(current)}
+                aria-label="红心"
+                data-testid="music-tg-chat-like"
+                className="relative active:scale-90"
+              >
+                <Heart
+                  className={`h-[26px] w-[26px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
+                  fill={liked ? 'currentColor' : 'none'}
+                />
+                <span className="absolute -top-[13px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55">
+                  {fmtCountW(fakeHotCount(current.id))}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowQueue(true)}
+                aria-label="播放列表"
+                data-testid="music-tg-chat-queue"
+                className="active:scale-90"
+              >
+                <ListMusic className="h-6 w-6 text-white/85" />
+              </button>
+            </div>
+          </div>
+          <div className="mx-5 shrink-0 border-t border-white/10" />
+          {/* 消息流（双方同色气泡 + AI 回复三个跳动点） */}
+          <div className="flex min-h-0 flex-1 flex-col" data-testid="music-player-chat-mode">
             <TogetherChat />
           </div>
-          {/* 聊天视图不再重复底部胶囊（只留输入区），顶部中央有切回音乐按钮 */}
+          <TogetherChatInput onToast={setMoreToast} />
+          {/* 底部：礼物 | 音乐/聊天胶囊（常驻） | 歌曲操作面板 */}
+          <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
+            <button
+              type="button"
+              onClick={() => setMoreToast('礼物功能即将上线')}
+              aria-label="礼物"
+              data-testid="music-tg-chat-gift"
+              className="flex h-8 w-8 items-center justify-center text-white/80 active:scale-95"
+            >
+              <Gift className="h-5 w-5" />
+            </button>
+            <div className="flex items-center gap-1 rounded-[14px] bg-white/10 p-1">
+              <button
+                type="button"
+                onClick={() => setChatOverride(false)}
+                data-testid="music-tg-chat-tab-music"
+                aria-label="切到音乐视图"
+                className="flex h-8 w-8 items-center justify-center rounded-[10px] text-white/55 active:scale-95"
+              >
+                <Music2 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatOverride(true)}
+                data-testid="music-tg-chat-tab-chat"
+                aria-label="聊天视图"
+                className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white/25 text-white"
+              >
+                <MessageCircle className="h-4 w-4" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowMore(true)}
+              aria-label="歌曲操作面板"
+              data-testid="music-tg-chat-dots"
+              className="flex h-8 w-8 items-center justify-center text-white/85 active:scale-95"
+            >
+              <MoreVertical className="h-[19px] w-[19px]" />
+            </button>
+          </div>
         </div>
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
         {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
@@ -577,17 +679,14 @@ function PlayerTopBar({
   title,
   light,
   onMenu,
-  onMusic,
   dense,
 }: {
   onClose: () => void;
   /** 顶部标题（可选；一起听/播放模式默认不展示） */
   title?: string;
   light?: boolean;
-  /** 右上角 ⋮ 菜单（一起听/自己听通用：重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
+  /** 右上角 ⋮ 菜单（一起听：重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
   onMenu?: () => void;
-  /** 聊天视图：顶部中央切回音乐视图按钮（底部胶囊已不再在聊天视图重复展示） */
-  onMusic?: () => void;
   /** 紧凑顶栏（一起听：双头像更贴顶） */
   dense?: boolean;
 }) {
@@ -597,18 +696,7 @@ function PlayerTopBar({
         <ChevronDown className={`h-7 w-7 ${light ? 'text-white/85' : 'text-zinc-600'}`} />
       </button>
       <div className="flex min-w-0 flex-1 items-center justify-center">
-        {onMusic ? (
-          <button
-            type="button"
-            onClick={onMusic}
-            data-testid="music-tg-back-music"
-            aria-label="切回音乐界面"
-            className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-1.5 text-[12px] text-white/85 active:scale-95"
-          >
-            <Music2 className="h-3.5 w-3.5" />
-            音乐界面
-          </button>
-        ) : title ? (
+        {title ? (
           <p className={`truncate text-[13px] ${light ? 'text-white/90' : 'text-zinc-700'}`}>{title}</p>
         ) : null}
       </div>
@@ -854,11 +942,14 @@ function TogetherHead({
   session,
   msgs,
   showBubbles = false,
+  showBadge = false,
 }: {
   session: TogetherSessionLike;
   /** 一起听消息（音乐视图下取双方最新一条，显示为头像下气泡，5 秒后消失） */
   msgs?: TogetherMsgLike[];
   showBubbles?: boolean;
+  /** 聊天视图：头像对底部中央显示红色计时徽章（参考网易云） */
+  showBadge?: boolean;
 }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
@@ -891,10 +982,19 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
+      {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落）；聊天视图在底部中央加红色计时徽章 */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <CoverImg src={session.avatar} className="h-16 w-16" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
+        {showBadge && (
+          <span
+            className="absolute -bottom-[7px] left-1/2 z-20 flex h-[19px] w-[19px] -translate-x-1/2 items-center justify-center rounded-full bg-[#EC4141] ring-2 ring-[#101010]"
+            data-testid="music-tg-timer-badge"
+            aria-hidden="true"
+          >
+            <Timer className="h-[11px] w-[11px] text-white" fill="currentColor" strokeWidth={0} />
+          </span>
+        )}
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动 */}
       <p className={`mt-1.5 text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
@@ -1042,7 +1142,7 @@ function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
       <span
         className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'left-2' : 'right-2'}`}
       />
-      <p className="relative line-clamp-2 break-words text-[12px] leading-snug text-white/95">{text}</p>
+      <p className="relative break-words text-[12px] leading-snug text-white/95">{text}</p>
     </div>
   );
 }

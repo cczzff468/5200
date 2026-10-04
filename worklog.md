@@ -15074,3 +15074,26 @@ Stage Summary:
 - 关键实现：气泡对齐 = 尾巴位置由「头像圆心 ±27px 反推容器锚点 calc(50%+19px)」精确计算，不依赖屏幕百分比内缩；唱针锚定改为「右缘溢出 6px + 窄容器」使轴心与唱片尺寸解耦
 - 范围限定遵守：仅动音乐播放器与邀请卡层 2 个文件；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰
 - 改动文件：src/components/apps/music-player.tsx、src/components/ios/TogetherInviteLayer.tsx
+
+---
+Task ID: 70
+Agent: Z.ai Code（主会话）
+Task: 第十四轮反馈九项——一起听聊天界面按参考截图（网易云真实 UI）重做：删顶部「音乐界面」胶囊、底部两 tab 常驻、我的气泡与 AI 同色、AI 回复三个跳动点、音乐视图气泡长文向下延伸不截断、聊天界面结构对齐截图；「我」页添加状态上移；「我」页笔记与备忘录彻底解耦（跟随网易云账号）；音乐首页点「音乐」两字回主界面
+
+Work Log:
+- 聊天视图重做（music-player chatMode 块 + music-together.tsx 拆分）：PlayerTopBar 删 onMusic 胶囊（顶部只留收起+⋮）；TogetherHead 加 showBadge prop（聊天视图头像对底部中央红色计时徽章，Timer 图标）；新增歌名行（22px 粗体歌名+歌手+关注胶囊（artistSub 真实关注）| 红心+fakeHotCount 热度+播放列表按钮）+ 分隔线；输入条 TogetherChatInput（说点什么… 内嵌笑脸→有字变红色发送钮 + AudioLines 语音圆钮 toast 占位，推荐歌曲入口保留在输入条左侧）；底部条（礼物 Gift toast 占位 | 音乐/聊天胶囊常驻 | ⋮ 开 MoreSheet）
+- 我的气泡同色（music-together）：bg-[#EC4141] → bg-white/12（与 AI 相同深灰半透明），右侧头像布局保留；删逐条时间戳（参考截图无）
+- 打字动画：MusicState 加 tgAiBusy（music-store），music-ai 三个 AI 入口（togetherReply/aiComment/togetherRecommend）try/finally 置位/复位；TogetherChat 列表尾部渲染对方头像+三点 animate-bounce（-0.25s/-0.5s 错峰）气泡
+- 消息流重构（music-together）：TogetherChat 精简为纯列表（正在听条/输入区上移至布局层），自动滚动依赖 msgs.length+aiBusy
+- 音乐视图气泡不截断（HeadBubble）：删 line-clamp-2，长文完整向下延伸（绝对定位悬浮层，不挤动布局）
+- 「我」页（music-mine）：添加状态胶囊 -mt-2 上移贴顶栏（头像及其他不动）；NotesList 彻底重写——删 localDB('notes') 读取与 music-notes:{uid} 归属名单同步，改独立存储 music-notes-data:{musicUid()}，新增「写笔记」入口+底部弹层编辑器（标题/正文/保存）+卡片删除钮+新空态文案，账号切换用 render 期派生重置（adjust-state 模式，规避 setState-in-effect lint）
+- 首页回主界面（music-home）：顶栏「音乐」两字改按钮 → useUI.exitForegroundApp()
+- E2E（agent-browser 420x900 全新 profile，解锁→游客→CHAR小音→播歌→邀请一起听）全过：点首页「音乐」→回到手机主屏 ✓；笔记 Tab→写笔记→保存→卡片出现（周五夜歌单）✓；一起听聊天视图：无顶部胶囊+红计时徽章+歌名行（恶作剧/林依晨/关注/红心265w+/列表图标）+分隔线+底部礼物|tabs|⋮ ✓；发消息→我的气泡右侧同款深灰+头像 ✓；发送后 typing-dots-visible（三跳动点+对方头像）✓；AI 回复同色气泡落库 ✓（AI 还按语境执行了切歌控制）；切回音乐视图发 68 字长消息→气泡 6 行完整向下延伸无截断 ✓；console 零错误
+- dev.log 有 Turbopack worker uncaughtException（dev 模式内部噪音，非应用代码）；next-keeper 存活正常
+- bunx tsc 0 错误；bun run lint 0 错误
+
+Stage Summary:
+- 交付：一起听聊天界面 1:1 对齐网易云参考截图（头像徽章/歌名行/分隔线/同色气泡/输入条/底部常驻 tab）；AI 回复三点跳动打字动画；音乐视图气泡长文不截断；「我」页状态上移；音乐笔记独立化（自建存储+创建/删除，与备忘录零关联，按网易云账号隔离）；首页「音乐」两字回主界面
+- 关键实现：AI 忙碌态用 zustand 字段（tgAiBusy）跨模块 setState（music-ai 与 UI 解耦）；笔记解耦=换存储键而非过滤（结构性保证备忘录永不出现）；tab 常驻=聊天视图独立底部条与音乐视图同构（tab 位置一致切换不跳）
+- 范围限定遵守：仅动音乐 App 5 文件；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰
+- 改动文件：src/components/apps/music-player.tsx、music-together.tsx、music-mine.tsx、music-home.tsx、src/lib/ios/music-store.ts、music-ai.ts

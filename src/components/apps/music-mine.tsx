@@ -34,6 +34,7 @@ import {
   Shirt,
   Smile,
   Star,
+  X,
 } from 'lucide-react';
 import {
   djHot,
@@ -48,7 +49,6 @@ import {
   type NcmUserDetail,
   type VipInfo,
 } from '@/lib/ios/music-api';
-import { localDB } from '@/lib/ios/db';
 import {
   useMusic,
   getGuestProfile,
@@ -371,8 +371,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         </div>
 
-        {/* 状态（添加状态/已添加状态）——中轴与头像对齐，更贴顶栏；点击编辑 */}
-        <div className="mt-0 flex justify-center">
+        {/* 状态（添加状态/已添加状态）——上移贴近顶栏（第十四轮反馈）；点击编辑 */}
+        <div className="-mt-2 flex justify-center">
           <button
             type="button"
             onClick={() => setStatusOpen(true)}
@@ -1525,79 +1525,157 @@ function PodcastList() {
   );
 }
 
-// ---------------- 笔记 Tab（备忘录笔记按网易云账号隔离：music-notes:{uid} 记归属名单） ----------------
+// ---------------- 笔记 Tab（音乐 App 自己的笔记，按网易云账号隔离；不与备忘录互通——第十四轮反馈） ----------------
+
+/** 单条音乐笔记 */
+interface MusicNote {
+  id: string;
+  title: string;
+  content: string;
+  updatedAt: number;
+}
+
+/** 独立存储键：每个网易云账号（含游客）各一份，与备忘录 App 完全无关 */
+function musicNotesKey(): string {
+  return `music-notes-data:${musicUid()}`;
+}
+
+function loadMusicNotes(): MusicNote[] {
+  return (kvGet<MusicNote[]>(musicNotesKey()) ?? []).slice().sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function saveMusicNotes(list: MusicNote[]): void {
+  kvSet(musicNotesKey(), list);
+}
 
 function NotesList() {
   const loginUid = useMusic((s) => s.loginUid);
-  const [notes, setNotes] = useState<{ id: string; title: string; content: string; updatedAt: number }[] | null>(null);
-  useEffect(() => {
-    void (async () => {
-      try {
-        const all = await localDB.getAll('notes');
-        const list = (all as { id: string; title: string; content: string; updatedAt: number; pinned?: boolean }[])
-          .slice()
-          .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt - a.updatedAt);
-        // 按网易云账号隔离：首次打开把现有笔记全划给当前账号；之后备忘录新增的笔记归属当前账号、
-        // 已删除的从名单清理 —— 切换网易云账号后各看各的笔记
-        const key = `music-notes:${musicUid()}`;
-        const existIds = new Set(list.map((n) => n.id));
-        let owned = kvGet<string[]>(key);
-        if (!owned) {
-          owned = list.map((n) => n.id);
-          kvSet(key, owned);
-        } else {
-          const known = new Set(owned);
-          const fresh = list.map((n) => n.id).filter((id) => !known.has(id));
-          const cleaned = owned.filter((id) => existIds.has(id));
-          owned = [...cleaned, ...fresh];
-          if (fresh.length || cleaned.length !== known.size) kvSet(key, owned);
-        }
-        const ownedSet = new Set(owned);
-        setNotes(list.filter((n) => ownedSet.has(n.id)));
-      } catch {
-        setNotes([]);
-      }
-    })();
-  }, [loginUid]);
-  if (notes === null) {
-    return (
-      <div className="pb-[128px] pt-4">
-        <LoadingBlock />
-      </div>
-    );
+  const [notes, setNotes] = useState<MusicNote[]>(() => loadMusicNotes());
+  // 写笔记面板（标题 + 正文）
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  // 切换网易云账号（含登录/登出/游客切换）时重读当前账号的独立笔记（render 期派生重置，React 官方 adjust-state 模式）
+  const [prevUid, setPrevUid] = useState(loginUid);
+  if (prevUid !== loginUid) {
+    setPrevUid(loginUid);
+    setNotes(loadMusicNotes());
   }
-  if (notes.length === 0) {
-    return (
-      <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
-        <NotebookPen className="h-9 w-9 opacity-40" />
-        <p className="text-[13px]">还没有笔记</p>
-        <p className="text-[11px] text-zinc-300 dark:text-zinc-600">在备忘录里记下的笔记会出现在这里</p>
-      </div>
-    );
-  }
+
+  const createNote = () => {
+    const title = draftTitle.trim();
+    const content = draftBody.trim();
+    if (!title && !content) return;
+    const next = [{ id: `mn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, title, content, updatedAt: Date.now() }, ...loadMusicNotes()];
+    saveMusicNotes(next);
+    setNotes(next);
+    setDraftTitle('');
+    setDraftBody('');
+    setComposerOpen(false);
+  };
+
+  const removeNote = (id: string) => {
+    const next = loadMusicNotes().filter((n) => n.id !== id);
+    saveMusicNotes(next);
+    setNotes(next);
+  };
+
   return (
-    <div className="space-y-2 px-4 pb-[128px] pt-3" data-testid="music-mine-notes">
-      {notes.map((n) => (
-        <div
-          key={n.id}
-          className="rounded-xl bg-white p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.05)] dark:bg-zinc-800"
-          data-testid="music-mine-note-item"
+    <div className="pb-[128px] pt-3" data-testid="music-mine-notes">
+      {/* 写笔记入口（音乐 App 内创建，不进备忘录） */}
+      <div className="flex justify-end px-4">
+        <button
+          type="button"
+          onClick={() => setComposerOpen(true)}
+          data-testid="music-mine-note-add"
+          className="flex items-center gap-1 rounded-full bg-zinc-900 px-3.5 py-1.5 text-[12px] font-medium text-white active:scale-95 dark:bg-zinc-100 dark:text-zinc-900"
         >
-          <div className="flex items-center gap-2">
-            <p className="min-w-0 flex-1 truncate text-[14px] font-medium text-zinc-900 dark:text-zinc-100">
-              {n.title || '无标题笔记'}
-            </p>
-            <span className="shrink-0 text-[10px] text-zinc-400">
-              {new Date(n.updatedAt).getMonth() + 1}月{new Date(n.updatedAt).getDate()}日
-            </span>
-          </div>
-          {n.content && (
-            <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-              {n.content}
-            </p>
-          )}
+          <Plus className="h-3.5 w-3.5" />
+          写笔记
+        </button>
+      </div>
+      {notes.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 pt-12 text-zinc-400">
+          <NotebookPen className="h-9 w-9 opacity-40" />
+          <p className="text-[13px]">还没有笔记</p>
+          <p className="text-[11px] text-zinc-300 dark:text-zinc-600">点击右上角「写笔记」，记录你和音乐的故事</p>
         </div>
-      ))}
+      ) : (
+        <div className="space-y-2 px-4 pt-3">
+          {notes.map((n) => (
+            <div
+              key={n.id}
+              className="rounded-xl bg-white p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.05)] dark:bg-zinc-800"
+              data-testid="music-mine-note-item"
+            >
+              <div className="flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate text-[14px] font-medium text-zinc-900 dark:text-zinc-100">
+                  {n.title || '无标题笔记'}
+                </p>
+                <span className="shrink-0 text-[10px] text-zinc-400">
+                  {new Date(n.updatedAt).getMonth() + 1}月{new Date(n.updatedAt).getDate()}日
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeNote(n.id)}
+                  aria-label="删除笔记"
+                  data-testid="music-mine-note-del"
+                  className="shrink-0 text-zinc-300 active:scale-90 dark:text-zinc-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {n.content && (
+                <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+                  {n.content}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 写笔记面板（底部弹层：标题 + 正文 + 保存） */}
+      {composerOpen && (
+        <div className="absolute inset-0 z-[72] flex items-end" data-testid="music-mine-note-composer">
+          <button type="button" aria-label="关闭" onClick={() => setComposerOpen(false)} className="absolute inset-0 bg-black/45" />
+          <div className="relative w-full rounded-t-2xl bg-white pb-8 dark:bg-zinc-900">
+            <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+            <div className="flex items-center justify-between px-5 pt-3">
+              <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">写笔记</p>
+              <button type="button" aria-label="关闭" onClick={() => setComposerOpen(false)} className="text-zinc-400">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-3">
+              <input
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                placeholder="标题"
+                data-testid="music-mine-note-title"
+                className="w-full rounded-xl bg-zinc-100 px-3.5 py-2.5 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+              <textarea
+                value={draftBody}
+                onChange={(e) => setDraftBody(e.target.value)}
+                placeholder="今天听到了什么想记下来的…"
+                rows={5}
+                data-testid="music-mine-note-body"
+                className="mt-2.5 w-full resize-none rounded-xl bg-zinc-100 px-3.5 py-2.5 text-[13px] leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+              <button
+                type="button"
+                onClick={createNote}
+                disabled={!draftTitle.trim() && !draftBody.trim()}
+                data-testid="music-mine-note-save"
+                className="mt-3 w-full rounded-full bg-[#EC4141] py-2.5 text-[14px] font-medium text-white disabled:opacity-40 active:scale-[0.99]"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -481,6 +481,7 @@ function recentChatText(cid: string, n: number, who: string): string {
 export async function togetherReply(cid: string, userText: string): Promise<void> {
   if (replying) return;
   replying = true;
+  useMusic.setState({ tgAiBusy: true }); // 聊天视图显示三个跳动点
   try {
     const who = await ownerName();
     const history = recentChatText(cid, 10, who);
@@ -509,6 +510,7 @@ export async function togetherReply(cid: string, userText: string): Promise<void
     void runTgControls(controls);
   } finally {
     replying = false;
+    useMusic.setState({ tgAiBusy: false });
   }
 }
 
@@ -560,6 +562,7 @@ export function stopChatterTimer(): void {
 async function aiComment(cid: string, hint: string): Promise<void> {
   if (replying) return;
   replying = true;
+  useMusic.setState({ tgAiBusy: true });
   try {
     const who = await ownerName();
     const history = recentChatText(cid, 6, who);
@@ -579,6 +582,7 @@ async function aiComment(cid: string, hint: string): Promise<void> {
     void runTgControls(controls);
   } finally {
     replying = false;
+    useMusic.setState({ tgAiBusy: false });
   }
 }
 
@@ -588,12 +592,14 @@ async function aiComment(cid: string, hint: string): Promise<void> {
 export async function togetherRecommend(cid: string, wish: string): Promise<void> {
   const t = loadActiveTogether();
   if (!t) return;
-  appendMsg(cid, {
-    id: genMsgId(),
-    role: 'me',
-    text: wish.trim() || '给我推荐几首歌吧',
-    time: Date.now(),
-  });
+  useMusic.setState({ tgAiBusy: true });
+  try {
+    appendMsg(cid, {
+      id: genMsgId(),
+      role: 'me',
+      text: wish.trim() || '给我推荐几首歌吧',
+      time: Date.now(),
+    });
   const who = await ownerName();
   const history = recentChatText(cid, 8, who);
   const system = await personaSystemFor(
@@ -649,6 +655,9 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     time: Date.now(),
     songs,
   });
+  } finally {
+    useMusic.setState({ tgAiBusy: false });
+  }
 }
 
 // ---------------- 启动恢复 ----------------

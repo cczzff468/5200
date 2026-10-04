@@ -27,6 +27,7 @@ import {
   type NcmToplist,
 } from '@/lib/ios/music-api';
 import { useMusic, getGuestProfile, getGuestAvatar, exitGuestMode } from '@/lib/ios/music-store';
+import { useUI } from '@/lib/ios/store';
 import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
 
 export function MusicHome({ onSettings }: { onSettings: () => void }) {
@@ -129,7 +130,16 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         >
           <Menu className="h-[22px] w-[22px]" />
         </button>
-        <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">音乐</span>
+        {/* 点「音乐」两字退出到手机主界面（第十四轮反馈） */}
+        <button
+          type="button"
+          onClick={() => useUI.getState().exitForegroundApp()}
+          data-testid="music-home-title"
+          aria-label="返回主界面"
+          className="active:scale-95"
+        >
+          <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">音乐</span>
+        </button>
         <button
           type="button"
           onClick={() => setAvatarSheet(true)}
