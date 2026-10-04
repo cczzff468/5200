@@ -14600,3 +14600,25 @@ Stage Summary:
 - 交付：十条规则完善全部落地——每日/事件宽限补发、once 迟到补发+「来晚了」标注（生成 prompt + 历史徽章双呈现）、跨天提醒解析、聊天中不打扰守卫、三端全局总开关、定时「每天定时」钟表对齐模式、自主决策频率档、无时间事件入自主情境+手动触发、主动消息历史回看、事件查重；事件时间选择器换 iOS 风时/分滚轮，弹窗与整页二次简约毛玻璃化
 - 关键设计：宽限去重键统一用「计划时刻分钟戳」（同窗口只发一次）；提醒类触发不受对话活跃守卫限制（用户明确约定优先）；全局开关为设备级（一键全停）
 - 改动文件：src/lib/ios/proactive-msg.ts、src/components/apps/proactive-msg-page.tsx、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: 52
+Agent: Z.ai Code（主会话）
+Task: 用户反馈三项——「主动发消息添加开关」「界面再美化一下不要光斑」「图标不要渐变」
+
+Work Log:
+- 总开关（新增）：proactive-msg-page.tsx 状态头上方新增「主动消息总开关」玻璃卡（ChatToggle，testid ${variant}-proactive-master），设备级 kv proactive-msg-master-off 与三端「我」设置页 ProactiveMasterRow 同一存储
+  - 关闭时联动：状态头 Zap 徽章变灰 #8E8E93 + 呼吸灯熄灭（live = isActive && !masterOff）+ 摘要「总开关已关闭」+ 副文案「已关闭：所有角色暂停主动发消息」+「全部关闭」钮隐藏 + 分区容器整体 opacity-40（仍可编辑）
+  - masterOff 惰性初始化 + 并入 4s 轮询（与「我」设置页跨页同步）
+- 去光斑：整层移除背景装饰 blur-3xl 光斑（accent/紫/橙三色圆斑）；滚轮上下渐隐遮罩为 iOS picker 功能结构，保留
+- 图标去渐变：IconTile 组件 gradient/glow 双 prop → 单 color prop（纯色底、无阴影）；Zap 状态徽章 linear-gradient+光晕 → 纯色 accent；三处保存按钮渐变+光晕 → 纯色 accent；四处 chip 选中态 boxShadow 光晕全部移除（保留 active:scale-95 按压反馈）；分区图标定色：定时=accent / 事件=#FF9500 / 自主=#AF52DE / 提醒=#FF2D55 / 历史=#8E8E93
+- E2E（agent-browser 420x900）：种陈凡(kind:user,wechatId=cf2024)+林小暖(kind:char,wechatId=linxn2024) → 微信登录 → 添加朋友(搜索微信号→前往验证→发送申请) → 聊天 → 聊天信息 → 主动发消息页：
+  ①浅色截图：总开关卡在顶部、背景零光斑、五处图标纯色、无光晕 ✓ ②开启定时30秒 → 呼吸灯+「全部关闭」+Zap 纯色 rgb(7,193,96) ✓ ③关总开关 → 分区 opacity 0.4 + 摘要「总开关已关闭」+ close-all 消失 + kv true ✓ ④重开 → 全部恢复 opacity 1 ✓ ⑤跨页同步：微信「我→设置」页 wx-settings-proactive-master 切关 → 回本页 4s 轮询自动跟随（状态头/副文案/置灰）✓ ⑥深色模式（.dark 类）：暗玻璃卡+纯色图标+开关联动全部正常 ✓ ⑦事件弹窗：时/分滚轮+准时触发/仅情境分段+纯色保存钮正常 ✓ ⑧console 零错误、dev.log 无运行时错误
+- 测试数据全清：2 联系人 + 7 kv 键（proactive-msg-*、wx-chat-msgs、wx-friend-reqs、mem-frag、moments-auto-attempt）+ localStorage wx-session；复查 contacts/kv 零残留
+- bunx tsc --noEmit 0 错误；bun run lint 全绿（仅 qq/wechat>500KB BABEL 提示）
+- 排错记录：①微信登录「该账号尚未注册」→ 登录按联系人 wechatId 匹配，种子联系人补 wechatId 后成功 ②添加朋友按名字搜不到 → 搜索只匹配 phone/wechatId/qqId，改用微信号搜索 ③外部直写 IndexedDB kv 轮询不生效 → idb-kv 为内存写穿层（kvGetRaw 只读 memStore），同 JS 上下文内经 setProactiveMasterOff 写缓存即时可见，非缺陷
+
+Stage Summary:
+- 交付：主动发消息页新增设备级总开关（顶部玻璃卡，与三端「我」设置页同一存储、双向联动）；页面与弹窗完成「无光斑、无渐变」纯色简约化（光斑层删除、全部图标/按钮纯色、选中态光晕全去）；功能与 testid 完全兼容（新增 wx-proactive-master）
+- 视觉基调：毛玻璃卡片 + 纯色彩色图标 + 胶囊 chips，无任何渐变/光斑/光晕装饰
+- 改动文件：src/components/apps/proactive-msg-page.tsx（仅此一个文件）

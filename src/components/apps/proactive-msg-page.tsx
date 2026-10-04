@@ -1,14 +1,15 @@
 'use client';
 
 /**
- * 主动发消息设置页（Task 49 / Task 50 毛玻璃 / Task 51 规则完善+二次美化）——聊天设置二级页（微信/QQ/信息三端共用）：
+ * 主动发消息设置页（Task 49 / Task 50 毛玻璃 / Task 51 规则完善 / Task 52 总开关+简约纯色）——聊天设置二级页（微信/QQ/信息三端共用）：
+ * ⓪ 总开关：设备级一键暂停所有角色的主动发消息（与三端「我」设置页的全局开关同一存储，联动状态头与分区置灰）
  * ① 定时触发：开关 + 双模式（按间隔 30秒~24小时+自定义 ｜ 每天定时=钟表时刻滚轮），到点 AI 按人设/近况发消息
  * ② 事件触发：事件清单（名称 + 准时触发/仅情境 + 星期几 + 启用开关 + 立即发一条），增删改 + 同名查重
  * ③ 自主触发：开关（AI 自己决定发不发/何时发/发什么）+ 决策频率档位
  * ④ 定时提醒任务：自然语言解析产生的任务清单（到点 AI 自动发消息；迟到也补发并标注「来晚了」）
  * ⑤ 最近主动消息：每角色最近 20 条主动发送记录回看
  *
- * 视觉：iOS 毛玻璃胶囊风·简约——玻璃卡片、彩色渐变图标瓷砖、胶囊 chips/按钮、状态呼吸灯、
+ * 视觉（Task 52：无光斑、无渐变、更简约）——玻璃卡片、纯色图标瓷砖、胶囊 chips/按钮、状态呼吸灯、
  * 时/分滚轮选择器（iOS picker 风）、弹窗毛玻璃卡 + rAF 进出场动画（与 IOSActionSheet 同一套曲线）。
  *
  * 自包含数据读写（@/lib/ios/proactive-msg 的 cfg/reminders/hist API），宿主只需传 variant/contactId/contactName。
@@ -79,13 +80,13 @@ function emptyEvent(): ProactiveEvent {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-/** iOS 设置风彩色渐变图标瓷砖 */
-function IconTile({ children, gradient, glow }: { children: ReactNode; gradient: string; glow?: string }) {
+/** iOS 设置风纯色图标瓷砖（Task 52：去渐变去光晕，更简约） */
+function IconTile({ children, color }: { children: ReactNode; color: string }) {
   return (
     <span
       aria-hidden
       className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-[8.5px] text-white"
-      style={{ background: gradient, boxShadow: glow ? `0 3px 10px ${glow}` : undefined }}
+      style={{ background: color }}
     >
       {children}
     </span>
@@ -276,11 +277,21 @@ export function ProactiveMsgPage({
       return [];
     }
   });
-  /** 提醒/历史清单轻轮询（NL 解析可能在本页打开时于聊天里创建任务；4s 刷新足够） */
+  // 设备级总开关（Task 52）：与三端「我」设置页的全局开关同一存储，轮询保持同步
+  const [masterOff, setMasterOff] = useState<boolean>(() => {
+    try {
+      return isProactiveMasterOff();
+    } catch {
+      return false;
+    }
+  });
+
+  /** 提醒/历史清单/总开关轻轮询（NL 解析可能在本页打开时于聊天里创建任务；4s 刷新足够） */
   useEffect(() => {
     const t = window.setInterval(() => {
       setReminders(remindersFor(app, contactId));
       setHist(proactiveHistory(app, contactId));
+      setMasterOff(isProactiveMasterOff());
     }, 4_000);
     return () => window.clearInterval(t);
   }, [app, contactId]);
@@ -324,6 +335,8 @@ export function ProactiveMsgPage({
   }, [cfg, reminders.length]);
 
   const isActive = cfg ? cfgHasActiveTrigger(cfg) || reminders.length > 0 : false;
+  /** 呼吸灯亮起条件（总开关关闭 = 整体暂停，灯不亮） */
+  const live = isActive && !masterOff;
 
   const applyCustomInterval = (): void => {
     const n = Number(customVal);
@@ -372,13 +385,6 @@ export function ProactiveMsgPage({
 
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col overflow-hidden ${pageCls}`}>
-      {/* 背景装饰光斑（让毛玻璃有内容可透；低饱和更简约） */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -right-14 -top-8 h-48 w-48 rounded-full blur-3xl" style={{ background: `${accent}26` }} />
-        <div className="absolute -left-20 top-48 h-52 w-52 rounded-full blur-3xl" style={{ background: '#AF52DE17' }} />
-        <div className="absolute -right-10 bottom-16 h-44 w-44 rounded-full blur-3xl" style={{ background: '#FF950019' }} />
-      </div>
-
       {/* 顶栏 */}
       <div className="relative z-10 shrink-0 pt-[54px]">
         <div className={`flex ${headerH} items-center px-2`}>
@@ -390,19 +396,39 @@ export function ProactiveMsgPage({
       </div>
 
       <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-10 pt-2">
+        {/* ⓪ 总开关（Task 52：设备级，一键暂停所有角色的主动发消息；与三端「我」设置页同一存储） */}
+        <div className={`${glassCard} mb-3 flex items-center justify-between gap-3 px-4 py-3`}>
+          <span className="min-w-0">
+            <span className="block text-[15.5px] font-medium leading-tight">主动消息总开关</span>
+            <span className="mt-0.5 block text-[11.5px] leading-tight text-black/40 dark:text-white/40">
+              {masterOff ? '已关闭：所有角色暂停主动发消息' : '关闭后，所有角色暂停主动发消息'}
+            </span>
+          </span>
+          <ChatToggle
+            on={!masterOff}
+            onChange={(v) => {
+              setProactiveMasterOff(!v);
+              setMasterOff(!v);
+            }}
+            accent={accent}
+            testId={`${testPrefix}-proactive-master`}
+            label="主动消息总开关"
+          />
+        </div>
+
         {/* 状态头（毛玻璃胶囊） */}
         <div className={`${glassCard} mb-3.5 flex items-center gap-3 rounded-[20px] px-4 py-3`}>
           <span
             aria-hidden
             className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white"
-            style={{ background: `linear-gradient(135deg, ${accent}, ${accent}b3)`, boxShadow: `0 4px 14px ${accent}3d` }}
+            style={{ background: masterOff ? '#8E8E93' : accent }}
           >
             <Zap className="h-5 w-5" strokeWidth={2.1} />
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-medium leading-tight">{contactName}</p>
             <p className="mt-1 flex items-center gap-1.5 text-[12px] leading-tight text-black/45 dark:text-white/45">
-              {isActive ? (
+              {live ? (
                 <span aria-hidden className="relative flex h-2 w-2 shrink-0">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: accent }} />
                   <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: accent }} />
@@ -410,10 +436,10 @@ export function ProactiveMsgPage({
               ) : (
                 <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-black/20 dark:bg-white/25" />
               )}
-              <span className="truncate">{activeSummary || '未开启，选择下方的触发方式'}</span>
+              <span className="truncate">{masterOff ? '总开关已关闭' : activeSummary || '未开启，选择下方的触发方式'}</span>
             </p>
           </div>
-          {cfgHasActiveTrigger(cfg) && (
+          {cfgHasActiveTrigger(cfg) && !masterOff && (
             <button
               type="button"
               data-testid={`${testPrefix}-proactive-close-all`}
@@ -427,11 +453,13 @@ export function ProactiveMsgPage({
           )}
         </div>
 
+        {/* 分区容器：总开关关闭时整体置灰（仍可编辑，仅视觉提示） */}
+        <div className={`transition-opacity duration-300 ${masterOff ? 'opacity-40' : 'opacity-100'}`}>
         {/* ① 定时触发 */}
         <div className={`${glassCard} overflow-hidden`}>
           <div className={rowCls}>
             <span className="flex items-center gap-2.5">
-              <IconTile gradient={`linear-gradient(135deg, ${accent}, ${accent}c4)`} glow={`${accent}4d`}>
+              <IconTile color={accent}>
                 <Timer className="h-[15px] w-[15px]" strokeWidth={2.4} />
               </IconTile>
               <span>
@@ -476,7 +504,7 @@ export function ProactiveMsgPage({
                         data-testid={`${testPrefix}-proactive-timer-${ms}`}
                         onClick={() => update({ timerMs: ms })}
                         className={`${chipCls} ${cfg.timerMs === ms ? '' : chipIdle}`}
-                        style={cfg.timerMs === ms ? { background: accent, color: '#fff', boxShadow: `0 3px 12px ${accent}4d` } : undefined}
+                        style={cfg.timerMs === ms ? { background: accent, color: '#fff' } : undefined}
                       >
                         {intervalLabel(ms)}
                       </button>
@@ -490,7 +518,7 @@ export function ProactiveMsgPage({
                         setCustomUnit('m');
                       }}
                       className={`${chipCls} ${!isPreset ? '' : chipIdle}`}
-                      style={!isPreset ? { background: accent, color: '#fff', boxShadow: `0 3px 12px ${accent}4d` } : undefined}
+                      style={!isPreset ? { background: accent, color: '#fff' } : undefined}
                     >
                       自定义
                     </button>
@@ -531,7 +559,7 @@ export function ProactiveMsgPage({
         <div className={`${glassCard} mt-3 overflow-hidden`}>
           <div className={rowCls}>
             <span className="flex items-center gap-2.5">
-              <IconTile gradient="linear-gradient(135deg, #FF9500, #FF6A00)" glow="rgba(255,149,0,0.35)">
+              <IconTile color="#FF9500">
                 <CalendarClock className="h-[15px] w-[15px]" strokeWidth={2.4} />
               </IconTile>
               <span>
@@ -631,7 +659,7 @@ export function ProactiveMsgPage({
         <div className={`${glassCard} mt-3 overflow-hidden`}>
           <div className={rowCls}>
             <span className="flex items-center gap-2.5">
-              <IconTile gradient="linear-gradient(135deg, #AF52DE, #8B2FC9)" glow="rgba(175,82,222,0.35)">
+              <IconTile color="#AF52DE">
                 <Sparkles className="h-[15px] w-[15px]" strokeWidth={2.4} />
               </IconTile>
               <span>
@@ -655,7 +683,7 @@ export function ProactiveMsgPage({
                     data-testid={`${testPrefix}-proactive-autofreq-${m}`}
                     onClick={() => update({ autoFreqMin: m })}
                     className={`${chipCls} ${(cfg.autoFreqMin ?? 5) === m ? '' : chipIdle}`}
-                    style={(cfg.autoFreqMin ?? 5) === m ? { background: accent, color: '#fff', boxShadow: `0 3px 12px ${accent}4d` } : undefined}
+                    style={(cfg.autoFreqMin ?? 5) === m ? { background: accent, color: '#fff' } : undefined}
                   >
                     {m}分钟
                   </button>
@@ -672,7 +700,7 @@ export function ProactiveMsgPage({
         <div className={`${glassCard} mt-3 overflow-hidden`}>
           <div className={rowCls}>
             <span className="flex items-center gap-2.5">
-              <IconTile gradient="linear-gradient(135deg, #FF2D55, #FF5E7A)" glow="rgba(255,45,85,0.3)">
+              <IconTile color="#FF2D55">
                 <BellRing className="h-[15px] w-[15px]" strokeWidth={2.4} />
               </IconTile>
               <span>
@@ -730,7 +758,7 @@ export function ProactiveMsgPage({
           <div className={`${glassCard} mt-3 overflow-hidden`}>
             <div className={rowCls}>
               <span className="flex items-center gap-2.5">
-                <IconTile gradient="linear-gradient(135deg, #8E8E93, #63666B)">
+                <IconTile color="#8E8E93">
                   <History className="h-[15px] w-[15px]" strokeWidth={2.4} />
                 </IconTile>
                 <span>
@@ -761,6 +789,7 @@ export function ProactiveMsgPage({
           <p className="text-[11.5px] leading-[1.7] text-black/40 dark:text-white/40">
             主动发的消息基于角色人设、记忆、最近聊天和当前时间生成，会像正常聊天一样进入聊天记录并写入记忆；每个角色的设置相互独立，可随时关闭。
           </p>
+        </div>
         </div>
       </div>
 
@@ -814,7 +843,7 @@ export function ProactiveMsgPage({
               type="button"
               data-testid={`${testPrefix}-proactive-custom-save`}
               className="h-10 flex-1 rounded-full text-[14.5px] font-medium text-white transition-all active:scale-95"
-              style={{ background: `linear-gradient(135deg, ${accent}, ${accent}cc)`, boxShadow: `0 5px 16px ${accent}45` }}
+              style={{ background: accent }}
               onClick={applyCustomInterval}
             >
               保存
@@ -846,7 +875,7 @@ export function ProactiveMsgPage({
               type="button"
               data-testid={`${testPrefix}-proactive-timerdial-save`}
               className="h-10 flex-1 rounded-full text-[14.5px] font-medium text-white transition-all active:scale-95"
-              style={{ background: `linear-gradient(135deg, ${accent}, ${accent}cc)`, boxShadow: `0 5px 16px ${accent}45` }}
+              style={{ background: accent }}
               onClick={() => {
                 update({ timerMode: 'daily', timerDailyTime: `${pad2(dialH)}:${pad2(dialM)}` });
                 setDialOpen(false);
@@ -944,7 +973,7 @@ export function ProactiveMsgPage({
                         })
                       }
                       className={`h-9 flex-1 rounded-full text-[13px] transition-all active:scale-95 ${on ? '' : chipIdle}`}
-                      style={on ? { background: accent, color: '#fff', boxShadow: `0 3px 10px ${accent}45` } : undefined}
+                      style={on ? { background: accent, color: '#fff' } : undefined}
                     >
                       {w.label}
                     </button>
@@ -964,7 +993,7 @@ export function ProactiveMsgPage({
                 type="button"
                 data-testid={`${testPrefix}-proactive-event-save`}
                 className="h-10 flex-1 rounded-full text-[14.5px] font-medium text-white transition-all active:scale-95 disabled:opacity-40"
-                style={{ background: `linear-gradient(135deg, ${accent}, ${accent}cc)`, boxShadow: `0 5px 16px ${accent}45` }}
+                style={{ background: accent }}
                 onClick={saveEvent}
                 disabled={!evtDraft.name.trim()}
               >
