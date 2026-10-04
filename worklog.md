@@ -14666,3 +14666,44 @@ Stage Summary:
 - 复验结论：部署成果 7 项实测全通过，扫码登录三步链路 + 手机号验证码端点 + 搜索 + 登录态接口全部真实可用
 - 关键证据：网易侧自动创建游客账号 + 801 状态机 + 真实二维码生成，均证明链路真实连通 music.163.com
 - 待确认：音乐 App 登录 UI（扫码/手机号双 Tab）是否开工
+
+---
+Task ID: 54
+Agent: Z.ai Code（主会话）
+Task: 开发音乐 App（参考网易云）：真实账号登录（扫码/手机号）、自定义 API、完整在线播放、一起听（AI）、AI 音乐互动与记忆
+
+Work Log:
+- 新增 lib（3 个）：
+  · src/lib/ios/music-api.ts —— 网易云 API 客户端：双模式（内置默认=同源 Next 代理 /api/music/ncm/* → localhost:3010；自定义 baseUrl 直连+可选 X-API-Key）；登录态持久化（kv music-login，MUSIC_U cookie 本机保存）；全接口封装（扫码登录三步/验证码+密码登录/user-account/歌单 CRUD/收藏/搜索四类/歌词/直链/评论/榜单/听歌排行/红心）
+  · src/lib/ios/music-store.ts —— zustand useMusic + 惰性单例 HTMLAudioElement 播放引擎（App 卸载继续播）；队列/顺序/单曲/随机/音量持久化（kv music-player）；最近播放（music-history:{uid}）；红心（登录走云端 likelist、游客本地 kv）；模块加载即同步恢复（避免首帧闪登录页）；audio-focus 注册 'music' 与语音/TTS 互斥
+  · src/lib/ios/music-ai.ts —— 一起听会话（活跃 kv music-together-active:{uid} + 消息 kv music-together:{uid}:{cid}，按网易云账号+角色双隔离）；AI 回复=人设+记忆+音乐情境块（当前歌/进度/试听标记/听歌历史）两级 LLM；AI 主动评论（切歌 45% 概率+45~105s 空闲定时，会话级开关）；AI 推荐歌曲（LLM 出 JSON → /search 匹配真实曲库 → recs 消息卡）；听歌记忆 memAddEventFragment(sourceTag='music-play') 自动进所有聊天召回
+- 新增后端（2 个）：
+  · src/app/api/music/ncm/[...path]/route.ts —— NCM 代理（→ localhost:3010）：解决 Caddy(:81) 与直连(:3000) 双通道一致性（直连时 XTransformPort 相对路径 404）
+  · src/app/api/music/stream/route.ts —— 媒体流代理：http 直链混合内容拦截规避 + Referer 防盗链 + Range 透传（拖进度），白名单 *.126.net/*.netease.com 防 SSRF
+- 新增 UI（8 个文件，music.tsx 整体重写 953→网易云风在线版）：
+  · music.tsx 主框架：登录页（真实二维码 base64+2.5s 轮询 801/802/803/800 状态机+过期刷新；手机号+86/验证码 60s 倒计时/密码登录切换；API 设置 sheet（地址/Key/测试连接/保存即生效）；游客模式）+ tabs 容器（首页/搜索/我的+MiniBar+TabBar）+ player/playlist 视图路由 + 设置/评论覆盖层
+  · music-shared.tsx：CoverImg（http 封面自动走代理）/SongRow（当前歌高亮红/VIP 徽）/TabBar/MiniBar/格式化
+  · music-home.tsx 首页：每日推荐大卡（登录）/游客引导卡/排行榜横滑（/toplist 真实榜单）/推荐歌单网格（/personalized）/新歌速递
+  · music-search.tsx 搜索：热搜榜 chips + 单曲/歌手/歌单/专辑 4 tab；歌手/专辑半屏面板（热门歌曲+收藏）
+  · music-mine.tsx 我的：用户卡（头像/等级/听歌数）/最近播放/听歌排行/我的红心/收藏歌手 四半屏 + 创建歌单（prompt 命名）/收藏歌单列表
+  · music-playlist.tsx 歌单详情：daily 每日推荐/liked 云端红心/普通歌单三种数据源；收藏歌单/删除歌单（创建者）/播放全部/下载当前歌/分享
+  · music-comments.tsx 评论半屏：热门+最新评论/点赞（登录）/发表与回复（带回复引用条）
+  · music-player.tsx 播放页：封面模糊背景+黑胶唱片（spin 20s，暂停 animation-play-state）+唱针（播放贴合/暂停 -28° 抬起）；点击封面切歌词（LRC 解析+翻译对齐 ≤0.6s+当前行高亮自动居中+点行 seek）；进度条拖拽/音量/四模式循环；红心/评论/更多面板（播放列表/歌词/评论/一起听/下载/分享/加队列/清空）/队列管理 sheet/邀请一起听 sheet（AI 角色列表）
+  · music-together.tsx 一起听聊天：正听条（可暂停）/消息流（文字+推荐歌曲卡可点击播放）/推荐按钮/发送
+  · music-settings.tsx 设置：账号（用户卡/退出登录带确认）+API 配置（地址/Key/恢复默认/保存）+AI 说明+关于声明
+- PhoneShell.tsx：新增 ?open=<appId> 深链接（开机直达，锁屏不抢开；预览/E2E 便利入口）
+- 排错记录：
+  · lint react-hooks/set-state-in-effect 6 处：主框架登录态改 store 驱动（guestMode 入 store、模块级同步恢复）、QrLogin 初次创建内联 async IIFE（await 后 setState）、歌词/聊天视图改派生 state（chatOverride ?? !!together）
+  · 直连 3000 端口 XTransformPort 相对路径 404 → 新增 /api/music/ncm 代理层（双通道一致）
+  · 桌面图标 elementFromPoint 命中根容器（翻页容器 transform）→ E2E 用真实 mouse 事件+翻页后点击；顺带补深链接入口
+  · 我误 pkill "bun run dev" 连带杀掉 netease-api → 重新拉起两服务
+- E2E（agent-browser 420x900，游客+种子角色林小暖 e2e-music-ai）全过：
+  ①登录页：真实网易云二维码渲染+「等待扫码」轮询+手机号 tab（+86/验证码/密码切换/真实短信提示）✓ ②游客模式进入 ✓ ③首页：游客卡+排行榜（飙升/新歌/原创真实榜单图）+推荐歌单网格（真实封面播放数）✓ ④搜索「日落大道」真实曲库+4 tab+VIP 标 ✓ ⑤播放：cover 版真实音频播放（进度 0:13→2:37/3:22 走动）+MiniBar+播放页黑胶旋转+唱针贴合 ✓ ⑥歌词：LRC 滚动当前行白色高亮+其余 45% 透明+译开关 ✓ ⑦更多面板 8 项（含下载/一起听入口）✓ ⑧邀请一起听：林小暖出现于候选（好友/上海）✓ ⑨一起听聊天：用户发「这首歌好听吗」→ AI 回复（知道当前歌名/版本对比/人设波浪号）✓ ⑩AI 推荐：3 首真实歌卡（成都/平凡之路/理想三旬）可点击播放 ✓ ⑪VIP 歌游客拦截提示 ✓ ⑫记忆写入：mem-frag:e2e-music-ai =「机主和小暖一起听了《日落大道（cover:梁博）》（Soundplay深玩人声乐团）」✓ ⑬设置页：账号/API 配置/AI 说明/关于 ✓ ⑭深色模式 ✓ ⑮dev.log 零运行时错误、console 干净
+- 测试数据全清：林小暖联系人 + 10 个 kv 键（mem-frag/together/history/liked/music-now/player）+ wx-session
+- bunx tsc 0 错误；bun run lint 全绿（修 eslint.config.mjs ignores 增补 mini-services/download/e2e-tmp）
+
+Stage Summary:
+- 交付：音乐 App 网易云在线版全量落地——真实账号登录（扫码+手机号验证码+密码，凭证本机持久化、退出/切换）、内置默认 API（本机 mini service 经 Next 代理）+ 自定义 API（地址+Key+测试连接+持久化即生效）、首页/搜索/播放/歌单/收藏/播放记录/歌词（滚动+翻译）/评论（浏览+赞+发表回复）、播放页黑胶拟真+歌词视图、一起听（邀 AI 角色：双头像+距离/时长+聊天+AI 主动评论+推荐歌曲卡）、听歌记忆自动进角色记忆库参与后续所有聊天；音乐本地数据按网易云账号 uid 隔离
+- 关键架构：播放引擎模块级（App 外继续播）；媒体统一 /api/music/stream 同源代理；NCM 统一 /api/music/ncm 代理（双通道一致）；cookie 由调用方持有不落服务端
+- 范围限定遵守：未触碰单聊/群聊/记忆引擎/朋友圈/红包/通话等任何现有模块（仅 PhoneShell 增深链接、eslint ignores 增补）
+- 改动文件：新增 src/lib/ios/music-{api,store,ai}.ts、src/app/api/music/{stream,ncm/[...path]}/route.ts、src/components/apps/music*.tsx ×8；重写 music.tsx；微调 PhoneShell.tsx、eslint.config.mjs

@@ -1,0 +1,231 @@
+'use client';
+
+/**
+ * 音乐 App 首页：每日推荐大卡、排行榜横滑、推荐歌单网格、新歌速递。
+ * 未登录（游客）：推荐歌单/排行榜/新歌仍可用（公开接口），每日推荐引导登录。
+ */
+
+import { useEffect, useState } from 'react';
+import {
+  CalendarDays,
+  ChevronRight,
+  Play,
+  Settings2,
+  Signal,
+  TrendingUp,
+} from 'lucide-react';
+import {
+  dailyRecommendSongs,
+  personalizedNewSongs,
+  personalizedPlaylists,
+  toplist,
+  type NcmPlaylist,
+  type NcmSong,
+  type NcmToplist,
+} from '@/lib/ios/music-api';
+import { useMusic } from '@/lib/ios/music-store';
+import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
+
+export function MusicHome({ onSettings }: { onSettings: () => void }) {
+  const loginUid = useMusic((s) => s.loginUid);
+  const openPlaylist = useMusic((s) => s.openPlaylist);
+  const playSong = useMusic((s) => s.playSong);
+  const [recPlaylists, setRecPlaylists] = useState<NcmPlaylist[] | null>(null);
+  const [tops, setTops] = useState<NcmToplist[] | null>(null);
+  const [newSongs, setNewSongs] = useState<NcmSong[] | null>(null);
+  const [daily, setDaily] = useState<NcmSong[] | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setRecPlaylists(await personalizedPlaylists(9));
+      } catch {
+        setRecPlaylists([]);
+      }
+      try {
+        const t = await toplist();
+        setTops(t.slice(0, 6));
+      } catch {
+        setTops([]);
+      }
+      try {
+        setNewSongs(await personalizedNewSongs(6));
+      } catch {
+        setNewSongs([]);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!loginUid) return;
+    void (async () => {
+      try {
+        setDaily(await dailyRecommendSongs());
+      } catch {
+        setDaily([]);
+      }
+    })();
+  }, [loginUid]);
+
+  const today = new Date();
+
+  return (
+    <div className="h-full overflow-y-auto overscroll-contain pb-4">
+      {/* 顶栏 */}
+      <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
+        <button
+          type="button"
+          onClick={onSettings}
+          data-testid="music-home-settings"
+          className="text-zinc-600 dark:text-zinc-300"
+          aria-label="设置"
+        >
+          <Settings2 className="h-[22px] w-[22px]" />
+        </button>
+        <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">音乐</span>
+        <span className="ml-auto text-[11px] text-zinc-400">网易云 API</span>
+      </div>
+
+      {/* 每日推荐 / 游客引导 */}
+      {loginUid ? (
+        <button
+          type="button"
+          onClick={() => openPlaylist(0, 'daily')}
+          data-testid="music-home-daily"
+          className="mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-4 rounded-2xl bg-gradient-to-r from-[#C20C0C] to-[#E8452F] p-4 text-left text-white active:scale-[0.99]"
+        >
+          <div className="flex flex-col items-center rounded-xl bg-white/15 px-3 py-2">
+            <CalendarDays className="h-5 w-5" />
+            <span className="mt-0.5 text-[10px]">{today.getMonth() + 1}月</span>
+            <span className="text-[18px] font-bold leading-none">{today.getDate()}</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[17px] font-bold">每日推荐</p>
+            <p className="mt-0.5 truncate text-[12px] text-white/80">
+              {daily ? `今日限定好歌推荐 · ${daily.length} 首` : '根据你的口味生成个性化歌单'}
+            </p>
+          </div>
+          <Play className="h-6 w-6 shrink-0" fill="currentColor" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => useMusic.getState().setTab('mine')}
+          className="mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-4 rounded-2xl bg-gradient-to-r from-zinc-700 to-zinc-900 p-4 text-left text-white active:scale-[0.99]"
+          data-testid="music-home-guest-card"
+        >
+          <Signal className="h-8 w-8 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[16px] font-bold">游客模式</p>
+            <p className="mt-0.5 truncate text-[12px] text-white/70">
+              登录网易云账号后可听每日推荐与你的歌单
+            </p>
+          </div>
+          <ChevronRight className="h-5 w-5 shrink-0" />
+        </button>
+      )}
+
+      {/* 排行榜 */}
+      <SectionTitle
+        right={
+          <TrendingUp className="h-4 w-4 text-zinc-400" />
+        }
+      >
+        排行榜
+      </SectionTitle>
+      {tops === null ? (
+        <LoadingBlock />
+      ) : tops.length === 0 ? (
+        <EmptyBlock text="榜单获取失败，检查 API 设置" />
+      ) : (
+        <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-1">
+          {tops.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => openPlaylist(t.id)}
+              className="w-[150px] shrink-0 text-left active:scale-[0.98]"
+              data-testid={`music-toplist-${t.id}`}
+            >
+              <div className="relative">
+                <CoverImg src={t.coverImgUrl} className="h-[150px] w-[150px]" rounded="rounded-xl" alt={t.name} />
+                <span className="absolute bottom-1.5 left-2 rounded-full bg-black/45 px-2 py-0.5 text-[9px] text-white">
+                  {t.updateFrequency}
+                </span>
+              </div>
+              <p className="mt-1.5 truncate text-[13px] font-medium text-zinc-900 dark:text-zinc-100">{t.name}</p>
+              {t.tracks?.[0] && (
+                <p className="mt-0.5 truncate text-[10px] text-zinc-400">
+                  {t.tracks[0].first} - {t.tracks[0].second}
+                </p>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 推荐歌单 */}
+      <SectionTitle>推荐歌单</SectionTitle>
+      {recPlaylists === null ? (
+        <LoadingBlock />
+      ) : recPlaylists.length === 0 ? (
+        <EmptyBlock text="推荐获取失败" />
+      ) : (
+        <div className="grid grid-cols-3 gap-x-3 gap-y-3 px-4">
+          {recPlaylists.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => openPlaylist(p.id)}
+              className="text-left active:scale-[0.98]"
+              data-testid={`music-rec-pl-${p.id}`}
+            >
+              <div className="relative">
+                <CoverImg src={p.picUrl || p.coverImgUrl} className="aspect-square w-full" rounded="rounded-xl" alt={p.name} />
+                <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-black/40 px-1.5 py-0.5 text-[9px] text-white">
+                  <Play className="h-2.5 w-2.5" fill="currentColor" />
+                  {fmtPlayCount(p.playCount)}
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-[11px] leading-tight text-zinc-700 dark:text-zinc-300">
+                {p.name}
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 新歌速递 */}
+      <SectionTitle>新歌速递</SectionTitle>
+      {newSongs === null ? (
+        <LoadingBlock />
+      ) : newSongs.length === 0 ? (
+        <EmptyBlock text="暂无新歌" />
+      ) : (
+        <div className="space-y-0.5 px-1">
+          {newSongs.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => void playSong(s, newSongs)}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-1.5 text-left active:bg-black/5 dark:active:bg-white/10"
+            >
+              <CoverImg src={s.album?.picUrl} className="h-11 w-11" rounded="rounded-lg" alt={s.name} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14px] text-zinc-900 dark:text-zinc-100">{s.name}</p>
+                <p className="truncate text-[11px] text-zinc-400">
+                  {s.artists?.map((a) => a.name).join('/')}
+                </p>
+              </div>
+              {s.fee === 1 && (
+                <span className="shrink-0 rounded-[3px] border border-[#C20C0C]/50 px-1 text-[9px] leading-[14px] text-[#C20C0C]">
+                  VIP
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

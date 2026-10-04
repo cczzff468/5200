@@ -180,6 +180,11 @@ export default function PhoneShell() {
       // 多账号（Task 40）：为缺档案联系人的小号/匿名号自动建 user 档案（altOf 关联）
       await ensureAccountOwnerContacts();
       await load();
+      // 深链接：?open=<appId> 开机直达某 App（预览/E2E 便利入口，锁屏时不抢开）
+      const openParam = new URLSearchParams(window.location.search).get('open');
+      if (openParam && !useUI.getState().locked) {
+        useUI.getState().openApp(openParam as never);
+      }
       // 全局字体恢复（Task 33-d）：读持久化的 appFontId 写入 CSS 变量；内部全兜底，失败不阻塞开机
       await ensureAppFontApplied();
     })();
