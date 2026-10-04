@@ -14,6 +14,7 @@ import {
   Loader2,
   Pause,
   Play,
+  Plus,
   Search,
   UserRound,
 } from 'lucide-react';
@@ -21,10 +22,12 @@ import {
   mediaProxyUrl,
   useMusic,
   getGuestPlaylists,
+  getGuestAvatar,
   guestPlaylistAddSong,
   guestPlaylistCreate,
   type MusicNav,
 } from '@/lib/ios/music-store';
+import { useTogetherLive } from '@/lib/ios/music-ai';
 import {
   songAlbumText,
   songArtistText,
@@ -205,15 +208,16 @@ export function SongRow({
   );
 }
 
-// ---------------- 收藏到歌单面板 ----------------
+// ---------------- 收藏到歌单面板（仿网易云：网格封面 + 新建歌单） ----------------
 
 export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () => void }) {
   const loginUid = useMusic((s) => s.loginUid);
   const likedIds = useMusic((s) => s.likedIds);
   const toggleLike = useMusic((s) => s.toggleLike);
-  const [lists, setLists] = useState<{ id: string | number; name: string; count: number }[]>([]);
+  const [lists, setLists] = useState<{ id: string | number; name: string; count: number; pic?: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
 
   const showToast = (m: string) => {
     setToast(m);
@@ -229,11 +233,16 @@ export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () =
             pls
               .filter((p) => p.creator?.userId === loginUid && p.specialType !== 5)
               .slice(0, 20)
-              .map((p) => ({ id: p.id, name: p.name, count: p.trackCount })),
+              .map((p) => ({ id: p.id, name: p.name, count: p.trackCount, pic: p.coverImgUrl })),
           );
         } else {
           setLists(
-            getGuestPlaylists().map((p) => ({ id: p.id, name: p.name, count: p.songs.length })),
+            getGuestPlaylists().map((p) => ({
+              id: p.id,
+              name: p.name,
+              count: p.songs.length,
+              pic: p.songs[0]?.album?.picUrl,
+            })),
           );
         }
       } catch {
@@ -261,83 +270,74 @@ export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () =
     }
   };
 
-  const createNew = async () => {
-    const name = prompt('新歌单名称');
-    if (!name || !name.trim()) return;
-    try {
-      if (loginUid) {
-        const id = await playlistCreate(name.trim());
-        await addTo(id, name.trim());
-      } else {
-        const pl = guestPlaylistCreate(name.trim());
-        guestPlaylistAddSong(pl.id, song);
-        showToast(`已加入「${pl.name}」`);
-        setTimeout(onClose, 700);
-      }
-    } catch {
-      showToast('创建失败');
-    }
-  };
-
   const liked = likedIds.has(song.id);
 
   return (
     <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-addto-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
-        <div className="flex items-center gap-3 border-b border-black/5 px-4 py-3 dark:border-white/10">
-          <CoverImg src={songCover(song)} className="h-10 w-10" rounded="rounded-md" alt={song.name} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[13px] font-semibold text-zinc-900 dark:text-zinc-100">收藏到歌单</p>
-            <p className="truncate text-[11px] text-zinc-400">
-              {song.name} - {songArtistText(song)}
-            </p>
-          </div>
+      <div className="relative flex max-h-[72%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
+        <div className="mx-auto mt-2.5 h-1 w-8 shrink-0 rounded-full bg-black/15 dark:bg-white/20" />
+        <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
+          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">添加到歌单</p>
+          <button
+            type="button"
+            onClick={() => showToast('长按封面可拖动排序')}
+            className="text-[13px] text-zinc-400 active:opacity-70"
+          >
+            管理
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            void toggleLike(song);
-            showToast(liked ? '已取消红心' : '已加入红心歌曲');
-          }}
-          data-testid="music-addto-like"
-          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/5 dark:active:bg-white/10"
-        >
-          <Heart className={`h-5 w-5 ${liked ? 'text-[#C20C0C]' : 'text-zinc-400'}`} fill={liked ? 'currentColor' : 'none'} />
-          <span className="text-[14px] text-zinc-900 dark:text-zinc-100">{liked ? '取消红心' : '加入红心歌曲'}</span>
-        </button>
-        <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-2">
           {loading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
             </div>
           ) : (
-            <>
+            <div className="grid grid-cols-3 gap-x-3 gap-y-4">
+              {/* 新建歌单 */}
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                data-testid="music-addto-new"
+                className="flex flex-col items-center gap-1.5"
+              >
+                <span className="flex aspect-square w-full items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 active:bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800/60">
+                  <Plus className="h-6 w-6 text-[#C20C0C]" />
+                </span>
+                <span className="w-full truncate text-center text-[11px] text-zinc-500 dark:text-zinc-400">新建歌单</span>
+              </button>
+              {/* 我喜欢的音乐（红心） */}
+              <button
+                type="button"
+                onClick={() => {
+                  void toggleLike(song);
+                  showToast(liked ? '已取消红心' : '已加入红心歌曲');
+                }}
+                data-testid="music-addto-like"
+                className="flex flex-col items-center gap-1.5"
+              >
+                <span className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-zinc-400 dark:bg-zinc-700">
+                  <Heart className="h-7 w-7 text-white" fill="currentColor" />
+                  {liked && <span className="absolute inset-0 bg-black/25" />}
+                </span>
+                <span className="w-full truncate text-center text-[11px] text-zinc-500 dark:text-zinc-400">我喜欢的音乐</span>
+              </button>
+              {/* 我的歌单 */}
               {lists.map((l) => (
                 <button
                   key={l.id}
                   type="button"
                   onClick={() => void addTo(l.id, l.name)}
                   data-testid={`music-addto-pl-${l.id}`}
-                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left active:bg-black/5 dark:active:bg-white/10"
+                  className="flex flex-col items-center gap-1.5"
                 >
-                  <ListMusic className="h-5 w-5 shrink-0 text-zinc-400" />
-                  <span className="min-w-0 flex-1 truncate text-[14px] text-zinc-900 dark:text-zinc-100">{l.name}</span>
-                  <span className="shrink-0 text-[11px] text-zinc-400">{l.count}首</span>
+                  <CoverImg src={l.pic} className="aspect-square w-full" rounded="rounded-lg" alt={l.name} />
+                  <span className="w-full truncate text-center text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {l.name}
+                  </span>
                 </button>
               ))}
-              <button
-                type="button"
-                onClick={() => void createNew()}
-                data-testid="music-addto-new"
-                className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-black/5 dark:active:bg-white/10"
-              >
-                <span className="flex h-5 w-5 items-center justify-center rounded bg-zinc-200 dark:bg-zinc-700">
-                  <ListPlus className="h-4 w-4 text-zinc-600 dark:text-zinc-300" />
-                </span>
-                <span className="text-[14px] font-medium text-[#C20C0C]">新建歌单</span>
-              </button>
-            </>
+            </div>
           )}
         </div>
         {toast && (
@@ -345,6 +345,105 @@ export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () =
             {toast}
           </div>
         )}
+      </div>
+      {createOpen && (
+        <PlaylistCreateDialog
+          onClose={() => setCreateOpen(false)}
+          onSubmit={async (name, privacy) => {
+            if (loginUid) {
+              const id = await playlistCreate(name, privacy ? 10 : 0);
+              await addTo(id, name);
+            } else {
+              const pl = guestPlaylistCreate(name);
+              guestPlaylistAddSong(pl.id, song);
+              showToast(`已加入「${pl.name}」`);
+              setTimeout(onClose, 700);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------- 新建歌单弹窗（仿网易云居中卡片：输入 + 隐私 + 取消/创建） ----------------
+
+export function PlaylistCreateDialog({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void;
+  /** 创建（失败请抛错，弹窗内展示）；成功后弹窗自动关闭 */
+  onSubmit: (name: string, privacy: boolean) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [privacy, setPrivacy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = async () => {
+    const n = name.trim();
+    if (!n || busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await onSubmit(n, privacy);
+      onClose();
+    } catch (e) {
+      setErr((e as Error).message || '创建失败，请重试');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="absolute inset-0 z-[78] flex items-center justify-center px-9" data-testid="music-pl-create-dialog">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
+      <div className="relative w-full max-w-[310px] overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-800">
+        <p className="pt-5 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">新建歌单</p>
+        <div className="px-5 pt-4">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value.slice(0, 20))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void submit();
+            }}
+            placeholder="输入歌单名字"
+            data-testid="music-pl-create-name"
+            className="h-10 w-full rounded-lg bg-zinc-100 px-3 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-700 dark:text-zinc-100"
+          />
+          <label className="mt-3 flex w-fit cursor-pointer items-center gap-2 text-[13px] text-zinc-600 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              checked={privacy}
+              onChange={(e) => setPrivacy(e.target.checked)}
+              data-testid="music-pl-create-privacy"
+              className="h-[15px] w-[15px] accent-[#C20C0C]"
+            />
+            设为隐私歌单
+          </label>
+          {err && <p className="mt-2 text-[12px] text-red-500">{err}</p>}
+        </div>
+        <div className="mt-5 flex border-t border-black/5 dark:border-white/10">
+          <button
+            type="button"
+            onClick={onClose}
+            data-testid="music-pl-create-cancel"
+            className="flex-1 border-r border-black/5 py-[13px] text-[15px] text-zinc-500 active:bg-black/5 dark:border-white/10 dark:text-zinc-400 dark:active:bg-white/10"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={!name.trim() || busy}
+            data-testid="music-pl-create-submit"
+            className="flex flex-1 items-center justify-center gap-1.5 py-[13px] text-[15px] font-medium text-[#C20C0C] active:bg-[#C20C0C]/5 disabled:text-zinc-300 dark:disabled:text-zinc-600"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            创建
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -394,7 +493,7 @@ export function MusicTabBar() {
   const setTab = useMusic((s) => s.setTab);
   return (
     <nav
-      className="flex h-[52px] shrink-0 items-stretch border-t border-black/5 bg-white/85 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/85"
+      className="flex h-[52px] shrink-0 items-stretch border-t border-black/5 bg-white/85 pt-[5px] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/85"
       data-testid="music-tabbar"
     >
       {TABS.map((t) => {
@@ -418,17 +517,21 @@ export function MusicTabBar() {
   );
 }
 
-// ---------------- 迷你播放条 ----------------
+// ---------------- 迷你播放条（无背景；一起听时左侧双头像） ----------------
 
 export function MiniBar() {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const toggle = useMusic((s) => s.toggle);
   const openPlayer = useMusic((s) => s.openPlayer);
+  const loginUid = useMusic((s) => s.loginUid);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
+  // 一起听会话（跟随全局联系人资料）
+  const live = useTogetherLive();
   if (!current) return null;
   return (
     <div
-      className="mx-3 mb-1 flex h-[52px] shrink-0 items-center gap-2.5 rounded-full border border-black/5 bg-white/95 pl-1.5 pr-1.5 shadow-[0_4px_16px_rgba(0,0,0,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95"
+      className="mx-3 flex h-[52px] shrink-0 items-center gap-2.5 pl-1.5 pr-1.5"
       data-testid="music-minibar"
     >
       <button
@@ -436,14 +539,32 @@ export function MiniBar() {
         onClick={openPlayer}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
       >
-        <span className="relative shrink-0">
-          <CoverImg src={songCover(current)} className="h-10 w-10" rounded="rounded-full" alt={current.name} />
-          <ListMusic
-            className={`absolute -right-0.5 -bottom-0.5 h-4 w-4 rounded-full bg-white p-0.5 text-zinc-500 dark:bg-zinc-800 ${
-              playing ? 'text-[#C20C0C]' : ''
-            }`}
-          />
-        </span>
+        {live ? (
+          // 一起听：前面显示两个人的头像（重叠）
+          <span className="flex shrink-0 items-center" data-testid="music-minibar-tg-avatars">
+            <CoverImg
+              src={live.avatar}
+              className="h-10 w-10 ring-[2px] ring-white/95 dark:ring-zinc-800"
+              rounded="rounded-full"
+              alt={live.name}
+            />
+            <CoverImg
+              src={loginUid ? loginAvatar : getGuestAvatar()}
+              className="-ml-2.5 h-10 w-10 ring-[2px] ring-white/95 dark:ring-zinc-800"
+              rounded="rounded-full"
+              alt="我"
+            />
+          </span>
+        ) : (
+          <span className="relative shrink-0">
+            <CoverImg src={songCover(current)} className="h-10 w-10" rounded="rounded-full" alt={current.name} />
+            <ListMusic
+              className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full bg-white p-0.5 text-zinc-500 dark:bg-zinc-800 ${
+                playing ? 'text-[#C20C0C]' : ''
+              }`}
+            />
+          </span>
+        )}
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
             {current.name}
@@ -457,13 +578,13 @@ export function MiniBar() {
         type="button"
         onClick={toggle}
         data-testid="music-minibar-toggle"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/5 text-zinc-800 active:scale-95 dark:bg-white/10 dark:text-zinc-100"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-800 active:scale-95 dark:text-zinc-100"
         aria-label={playing ? '暂停' : '播放'}
       >
         {playing ? (
-          <Pause className="h-[18px] w-[18px]" fill="currentColor" />
+          <Pause className="h-[22px] w-[22px]" fill="currentColor" />
         ) : (
-          <Play className="ml-0.5 h-[18px] w-[18px]" fill="currentColor" />
+          <Play className="ml-0.5 h-[22px] w-[22px]" fill="currentColor" />
         )}
       </button>
     </div>

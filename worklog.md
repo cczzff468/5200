@@ -14796,3 +14796,24 @@ Stage Summary:
 - 关键实现：since 展示锚点（now-累计）+ segStart 段落标记双字段让时长 UI 与歌曲过滤解耦；simiSong 复用支撑首页推荐与漫游两处；推荐区块空态隐藏策略规避 effect setState lint
 - 范围限定遵守：仅动音乐 App（music-player/mine/home/settings/music-ai/music-store/music-api），16 项受保护功能未触碰
 - 改动文件：src/lib/ios/music-api.ts、music-store.ts、music-ai.ts、src/components/apps/music-player.tsx、music-mine.tsx、music-home.tsx、music-settings.tsx
+
+---
+Task ID: 59
+Agent: Z.ai Code（主会话）
+Task: 用户第四轮反馈十二项——登录后显示真实 VIP 等级、VIP 徽章再美化（跟网易云一模一样）、一起听双头像再挨近、「我」页添加状态与头像对齐且状态显示在添加状态处、添加状态弹窗美化、删名字后红色图标、添加歌单弹窗仿网易云、迷你播放器去背景、一起听迷你条双头像、「我」页头部随滚动、底部 tab 下移
+
+Work Log:
+- music-api.ts 新增 vipInfo()：/vip/info 解析 associator（黑胶VIP）与 redplus（黑胶SVIP）的 vipLevel+expireTime（在期判断），profile.vipType（11/100）兜底；实测内置代理 /api/music/ncm/vip/info 返回该结构 ✓
+- 「我的」页（music-mine.tsx）：①登录态 loginVip state——登录后 vipInfo() 拉真实等级，VipBadge 显示「VIP·柒」式繁体数字真实等级；非会员显示无数字 VIP 胶囊（level<1 不渲染「·N」）②VipBadge 重画：立体渐变黑胶囊（内高光/内阴影）+黑胶唱片（外缘白环+双纹路+红标芯白描边+中心孔），SVIP 金渐变胶囊金盘深金字③删掉昵称后的红色 Timer 听歌徽章④「添加状态」从顶栏移出——改为头像上方居中胶囊（带指向小箭头，与头像同一中轴线），未设置显示「+ 添加状态」，已设置显示状态文字（点击继续编辑）⑤原昵称下方状态胶囊删除（避免重复）⑥StatusEditSheet 替换 prompt：底部面板（抓手+居中标题+圆角输入框带 N/20 计数+6 个预设状态 chips 选中高亮+保存+清除状态）⑦新建歌单 prompt 替换为 PlaylistCreateDialog（网易云居中卡片：居中标题+圆角输入框+「设为隐私歌单」checkbox+底部分隔线 取消|创建，创建按钮空名禁用+busy spinner，登录态 privacy→playlistCreate(name,10)）⑧整页重构为单一滚动容器（music-mine-scroll）——深色头部随内容一起滚动，主 Tab 行保持 sticky top-0
+- music-shared.tsx：①AddToSongSheet 整个重做成网易云「添加到歌单」——抓手+左标题右「管理」+3 列封面网格（新建歌单虚线红+格 / 我喜欢的音乐心形块 / 我的歌单真实封面，名称在封面下方居中）②新建歌单入口内嵌 PlaylistCreateDialog（创建后自动加入歌单）③MiniBar 去背景（删 border/bg/shadow/blur，内容直接浮在页面上）④一起听时迷你条前面显示双人重叠头像（对方头像+我的头像 -ml-2.5 叠放，信息走 useTogetherLive 跟随全局）⑤MusicTabBar pt-[5px] 内容下移
+- music.tsx：底部 tab 下空白条 h-[20px]→h-[10px]（tab 整体往下）
+- music-player.tsx：TogetherHead 双头像 gap-2→gap-[3px]（几乎贴在一起）
+- E2E（agent-browser 420x900 游客态）全过：「我」页——添加状态胶囊在头像正上方对齐+小箭头 ✓；添加状态面板（预设 chips+输入框 0/20+保存）选「🎧 正在听歌」保存后胶囊立即显示 ✓；新建歌单居中卡片 1:1（输入「深夜循环」创建成功+创建³ 计数）✓；VIP·柒 徽章+SVIP·贰拾壹 金徽章预览/保存/还原 ✓；名字后无红色图标 ✓；整页滚动 scrollTop=24 头部随动 ✓；深色模式 ✓；添加到歌单网格（新建歌单/我喜欢的音乐/3 个本地歌单封面）+红心 toast ✓；播放→迷你条无背景（bg transparent/shadow none）✓；邀请小陈一起听→双头像 gap≈3px+累计时长显示 ✓；退出一起听→迷你条显示双人重叠头像 ✓；⋮ 菜单退出正常 ✓；console/dev.log 零错误 ✓
+- 测试数据清理：注入的 char-e2e-chen 联系人 + 3 个游客歌单 + 状态 + 红心 + 历史 + music-player 快照等 kv 键全清（隔离档案）
+- bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：登录后「我的」页 VIP 徽章显示账号真实等级（/vip/info，SVIP 优先，非会员无数字胶囊）；VIP 徽章立体黑胶化（VIP 黑/SVIP 金，繁体数字）；「我」页添加状态胶囊与头像中轴对齐、已添加状态显示在该处、状态弹窗网易云化；删名字后红色图标；添加到歌单弹窗网格化+新建歌单居中卡片（含隐私歌单）；迷你播放器无背景；一起听时迷你条前置双人重叠头像；「我」页头部随整页滚动；底部 tab 下移；一起听双头像再挨近
+- 关键实现：vipBlockActive 在期判断（vipLevel>0 且未过期）；level<1 隐藏数字的 VipBadge 复用（登录非会员/游客自定义共用）；PlaylistCreateDialog 抽到 music-shared 供「我的」页与添加歌单面板两处复用；MiniBar 接 useTogetherLive 实现一起听双头像（数据跟随全局联系人）
+- 范围限定遵守：仅动音乐 App 5 个文件（music-api/music-mine/music-shared/music-player/music.tsx），16 项受保护功能未触碰
+- 改动文件：src/lib/ios/music-api.ts、src/components/apps/music-mine.tsx、music-shared.tsx、music-player.tsx、music.tsx

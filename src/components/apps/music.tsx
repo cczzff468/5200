@@ -75,7 +75,7 @@ export default function MusicApp() {
               </div>
               <MiniBar />
               <MusicTabBar />
-              <div className="h-[20px] shrink-0 bg-white/85 dark:bg-zinc-900/85" />
+              <div className="h-[10px] shrink-0 bg-white/85 dark:bg-zinc-900/85" />
             </div>
           )}
           {nav.view === 'player' && <MusicPlayer />}

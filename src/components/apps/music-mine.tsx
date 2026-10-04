@@ -31,14 +31,15 @@ import {
   Shirt,
   Smile,
   Star,
-  Timer,
 } from 'lucide-react';
 import {
   playlistDelete,
   userDetail,
   userPlaylists,
+  vipInfo,
   type NcmPlaylist,
   type NcmUserDetail,
+  type VipInfo,
 } from '@/lib/ios/music-api';
 import {
   useMusic,
@@ -54,7 +55,7 @@ import {
 } from '@/lib/ios/music-store';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { useSettings } from '@/lib/ios/store';
-import { CoverImg, LoadingBlock, fmtPlayCount } from './music-shared';
+import { CoverImg, LoadingBlock, PlaylistCreateDialog, fmtPlayCount } from './music-shared';
 
 type SheetKind = 'recent' | 'record' | 'liked' | 'local' | 'dress' | 'profile' | null;
 type MainTab = 'music' | 'podcast' | 'notes';
@@ -73,36 +74,45 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（仿网易云黑胶 VIP：渐变黑胶囊 + 小黑胶唱片（红标芯+白色孔）+「VIP·柒」繁体数字；
- * SVIP 为金胶金盘金芯）。
+ * VIP 徽章（仿网易云黑胶 VIP：立体渐变黑胶囊 + 小黑胶唱片（盘面双纹路+红标芯白圈+中心孔）
+ * +「VIP·柒」繁体数字；SVIP 为金胶金盘深金字）。level<1 时只显示「VIP」不带数字。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
   return (
     <span
-      className={`flex shrink-0 items-center rounded-full py-[3px] pl-[4px] pr-[8px] shadow-sm ${
+      className={`flex shrink-0 items-center rounded-full py-[2.5px] pl-[4px] pr-[9px] ${
         svip
-          ? 'bg-gradient-to-b from-[#F3DCA8] to-[#D3A44B] ring-1 ring-[#B8862F]/60'
-          : 'bg-gradient-to-b from-[#333336] to-[#101012] ring-1 ring-white/15'
+          ? 'bg-[linear-gradient(180deg,#F7E7B4_0%,#E5C075_48%,#C8963A_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.65),inset_0_-1px_0_rgba(122,79,10,0.45),0_1px_3px_rgba(0,0,0,0.18)]'
+          : 'bg-[linear-gradient(180deg,#414147_0%,#26262b_46%,#0c0c0e_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.2),inset_0_-1px_0_rgba(0,0,0,0.65),0_1px_3px_rgba(0,0,0,0.3)]'
       }`}
       data-testid="music-mine-vip"
     >
-      {/* 小黑胶唱片：盘面 + 标芯 + 中心孔 */}
-      <span className="relative mr-1 flex h-[15px] w-[15px] items-center justify-center rounded-full bg-[#0d0d0d] shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.38)]">
+      {/* 小黑胶唱片：盘面（外缘白环+内纹路）+ 红标芯（白描边）+ 中心孔 */}
+      <span
+        className={`relative mr-[5px] flex h-[16px] w-[16px] items-center justify-center rounded-full ${
+          svip ? 'bg-[#1a1206]' : 'bg-[#060606]'
+        } shadow-[inset_0_0_0_1.1px_rgba(255,255,255,0.55),inset_0_0_0_2.2px_rgba(0,0,0,1),inset_0_0_0_2.8px_rgba(255,255,255,0.22),inset_0_1px_1px_rgba(255,255,255,0.35)]`}
+      >
         <span
-          className={`flex h-[7.5px] w-[7.5px] items-center justify-center rounded-full ${
-            svip ? 'bg-[#8A5C13]' : 'bg-[#EC4141]'
+          className={`flex h-[8px] w-[8px] items-center justify-center rounded-full ${
+            svip
+              ? 'bg-[linear-gradient(135deg,#F3D68C_0%,#8A5C13_100%)] shadow-[0_0_0_1.1px_rgba(255,255,255,0.85)]'
+              : 'bg-[linear-gradient(135deg,#F2585A_0%,#C81E1E_100%)] shadow-[0_0_0_1.1px_rgba(255,255,255,0.9)]'
           }`}
         >
-          <span className="h-[2px] w-[2px] rounded-full bg-white/90" />
+          <span className={`h-[2.2px] w-[2.2px] rounded-full ${svip ? 'bg-[#3a2a08]' : 'bg-white'}`} />
         </span>
       </span>
       <span
-        className={`text-[11px] font-semibold tracking-wide ${
-          svip ? 'text-[#4A3005]' : 'text-white/95'
+        className={`text-[11.5px] font-bold leading-none tracking-[0.01em] ${
+          svip ? 'text-[#4A3005]' : 'text-white'
         }`}
       >
-        {svip ? 'SVIP' : 'VIP'}·{cnNum(level)}
+        {svip ? 'SVIP' : 'VIP'}
+        {level >= 1 && (
+          <span className="font-semibold">·{cnNum(level)}</span>
+        )}
       </span>
     </span>
   );
@@ -171,6 +181,11 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const [profRev, setProfRev] = useState(0);
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState('');
+  // 添加状态弹窗 / 新建歌单弹窗
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  // 登录账号真实 VIP（VIP 是几显示几）
+  const [loginVip, setLoginVip] = useState<VipInfo | null>(null);
 
   const showToast = (m: string) => {
     setToast(m);
@@ -202,6 +217,25 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
     setThemeIdx(kvGetIdx(dressKeyOf(scope)));
   }, [scope]);
 
+  // 登录态拉取真实 VIP 等级（/vip/info：associator=黑胶VIP redplus=黑胶SVIP）
+  useEffect(() => {
+    if (!loginUid) {
+      setLoginVip(null);
+      return;
+    }
+    let on = true;
+    void vipInfo()
+      .then((v) => {
+        if (on) setLoginVip(v);
+      })
+      .catch(() => {
+        if (on) setLoginVip({ isVip: false, type: 'vip', level: 0 });
+      });
+    return () => {
+      on = false;
+    };
+  }, [loginUid]);
+
   const guest = getGuestProfile();
   void profRev; // 依赖：保存资料后重读
   const name = loginUid ? loginNickname || detail?.profile.nickname || '…' : guest.nickname;
@@ -217,22 +251,19 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const theme = MINE_THEMES[Math.min(Math.max(themeIdx, 0), MINE_THEMES.length - 1)];
   const customDress = themeIdx === -1 && !!dressImg;
 
-  const doCreate = async () => {
-    const n = prompt('歌单名称');
-    if (!n || !n.trim()) return;
+  // 新建歌单（弹窗提交；失败抛错由弹窗展示）
+  const doCreate = async (name: string, privacy: boolean) => {
     setCreating(true);
     try {
       if (loginUid) {
         const { playlistCreate } = await import('@/lib/ios/music-api');
-        await playlistCreate(n.trim());
+        await playlistCreate(name, privacy ? 10 : 0);
         setPlaylists(await userPlaylists(loginUid));
       } else {
-        guestPlaylistCreate(n.trim());
+        guestPlaylistCreate(name);
         refreshGuest();
       }
       showToast('已创建歌单');
-    } catch {
-      showToast('创建失败');
     } finally {
       setCreating(false);
     }
@@ -256,10 +287,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
     showToast('已删除');
   };
 
-  const editStatus = () => {
-    const v = prompt('设置状态文字（留空清除）', statusText);
-    if (v === null) return;
-    const t = v.trim().slice(0, 20);
+  // 保存状态（添加状态弹窗提交；空串 = 清除）
+  const saveStatus = (t: string) => {
     setStatusText(t);
     kvSetStr(statusKeyOf(scope), t);
   };
@@ -295,10 +324,12 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   };
 
   return (
-    <div className="flex h-full flex-col" data-testid="music-mine">
+    <div className="relative flex h-full flex-col" data-testid="music-mine">
+      {/* 整页滚动容器：头部随内容一起滚（不再固定） */}
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="music-mine-scroll">
       {/* ================= 深色头部 ================= */}
       <div
-        className="relative shrink-0 text-white"
+        className="relative text-white"
         style={
           customDress
             ? {
@@ -308,7 +339,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         }
       >
         {/* 顶栏 */}
-        <div className="flex items-center px-4 pb-1 pt-[58px]">
+        <div className="flex items-center justify-between px-4 pb-1 pt-[58px]">
           <button
             type="button"
             onClick={onSettings}
@@ -318,17 +349,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           >
             <Menu className="h-[26px] w-[26px]" />
           </button>
-          <button
-            type="button"
-            onClick={editStatus}
-            className="mx-auto flex items-center gap-0.5 rounded-full px-3 py-1 text-[14px] text-white/85 active:bg-white/10"
-            data-testid="music-mine-add-status"
-          >
-            <Plus className="h-4 w-4" />
-            添加状态
-          </button>
           <div className="flex items-center gap-4">
-            <button type="button" onClick={() => void doCreate()} aria-label="新建歌单" className="p-1 active:scale-90">
+            <button type="button" onClick={() => setCreateOpen(true)} aria-label="新建歌单" className="p-1 active:scale-90">
               <Plus className="h-[26px] w-[26px]" />
             </button>
             <button type="button" onClick={() => void shareProfile()} aria-label="分享主页" className="p-1 active:scale-90">
@@ -337,8 +359,25 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         </div>
 
-        {/* 头像（游客：点按编辑资料；无编辑图标） */}
+        {/* 状态（添加状态/已添加状态）——中轴与头像对齐；点击编辑 */}
         <div className="mt-2 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setStatusOpen(true)}
+            data-testid="music-mine-add-status"
+            className="relative flex items-center gap-1 rounded-full bg-white/15 py-[6px] pl-[11px] pr-[13px] text-[12px] leading-none text-white/90 backdrop-blur-sm active:bg-white/25"
+          >
+            {statusText ? <Smile className="h-[14px] w-[14px] shrink-0" /> : <Plus className="h-[14px] w-[14px] shrink-0" />}
+            <span className="max-w-[190px] truncate" data-testid="music-mine-status-text">
+              {statusText || '添加状态'}
+            </span>
+            {/* 指向头像的小箭头 */}
+            <span className="absolute -bottom-[3.5px] left-1/2 h-[7px] w-[7px] -translate-x-1/2 rotate-45 rounded-[1.5px] bg-white/15" />
+          </button>
+        </div>
+
+        {/* 头像（游客：点按编辑资料；无编辑图标） */}
+        <div className="mt-2.5 flex justify-center">
           <button
             type="button"
             onClick={loginUid ? undefined : () => setSheet('profile')}
@@ -357,35 +396,23 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </button>
         </div>
 
-        {/* 昵称 + 徽章 */}
+        {/* 昵称 + VIP 徽章 */}
         <div className="mt-2.5 flex items-center justify-center gap-2 px-6">
-          <h2 className="max-w-[55%] truncate text-[21px] font-bold" data-testid="music-mine-nickname">
+          <h2 className="max-w-[62%] truncate text-[21px] font-bold" data-testid="music-mine-nickname">
             {name}
           </h2>
-          {loginUid && (
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[#EC4141]" title="听歌徽章">
-              <Timer className="h-3 w-3 text-white" fill="currentColor" />
-            </span>
-          )}
           {loginUid ? (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-black/45 py-[3px] pl-[5px] pr-2 text-[10px] font-medium text-white/90">
-              <span className="h-3 w-3 rounded-full bg-[#EC4141] ring-[1.5px] ring-white/40" />
-              VIP
-            </span>
+            loginVip ? (
+              loginVip.isVip ? (
+                <VipBadge type={loginVip.type} level={loginVip.level} />
+              ) : (
+                <VipBadge type="vip" level={0} />
+              )
+            ) : null
           ) : (
             <VipBadge type={guest.vipType} level={guest.vipLevel} />
           )}
         </div>
-
-        {/* 状态胶囊 */}
-        {statusText && (
-          <div className="mt-1.5 flex justify-center">
-            <span className="inline-flex max-w-[82%] items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-[11px] text-white/90">
-              <Smile className="h-3 w-3 shrink-0" />
-              <span className="truncate">{statusText}</span>
-            </span>
-          </div>
-        )}
 
         {/* 签名 */}
         <p className="mt-1 truncate px-10 text-center text-[12px] text-white/60" data-testid="music-mine-signature">
@@ -443,7 +470,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
       </div>
 
       {/* ================= 白色面板 ================= */}
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8F8F8] dark:bg-zinc-900">
+      <div className="bg-[#F8F8F8] dark:bg-zinc-900">
         {mainTab === 'music' && (
           <>
             {/* 主 Tab 行（音乐/播客/笔记） */}
@@ -497,7 +524,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
                 <button type="button" onClick={refreshData} aria-label="刷新" data-testid="music-mine-refresh" className="active:scale-90">
                   <RotateCcw className="h-[18px] w-[18px]" />
                 </button>
-                <button type="button" onClick={() => void doCreate()} aria-label="新建歌单" data-testid="music-mine-create-pl" className="active:scale-90">
+                <button type="button" onClick={() => setCreateOpen(true)} aria-label="新建歌单" data-testid="music-mine-create-pl" className="active:scale-90">
                   {creating ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <MoreVertical className="h-[18px] w-[18px]" />}
                 </button>
               </div>
@@ -611,7 +638,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
               <div className="pb-28" data-testid="music-mine-list-created">
                 <button
                   type="button"
-                  onClick={() => void doCreate()}
+                  onClick={() => setCreateOpen(true)}
                   data-testid="music-mine-create-row"
                   className="flex w-full items-center gap-3 px-5 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
                 >
@@ -682,6 +709,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         )}
       </div>
+      </div>
 
       {/* ================= 半屏面板 ================= */}
       {sheet === 'profile' && (
@@ -714,6 +742,26 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
       )}
       {sheet && sheet !== 'profile' && sheet !== 'dress' && (
         <MineSheet kind={sheet} onClose={() => setSheet(null)} />
+      )}
+
+      {/* 添加状态弹窗 */}
+      {statusOpen && (
+        <StatusEditSheet
+          current={statusText}
+          onClose={() => setStatusOpen(false)}
+          onSubmit={(t) => {
+            saveStatus(t);
+            setStatusOpen(false);
+          }}
+        />
+      )}
+
+      {/* 新建歌单弹窗（网易云居中卡片） */}
+      {createOpen && (
+        <PlaylistCreateDialog
+          onClose={() => setCreateOpen(false)}
+          onSubmit={(n, privacy) => doCreate(n, privacy)}
+        />
       )}
 
       {toast && (
@@ -1233,6 +1281,80 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
             ))
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 添加状态弹窗（网易云式底部面板：预设 + 输入） ----------------
+
+const STATUS_PRESETS = ['🎧 正在听歌', '🌙 晚安中', '💻 工作中', '📖 看书中', '🎮 玩游戏中', '🚶 出门中'];
+
+function StatusEditSheet({
+  current,
+  onSubmit,
+  onClose,
+}: {
+  current: string;
+  onSubmit: (t: string) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(current);
+  return (
+    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-status-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+        <div className="mx-auto mb-3.5 h-1 w-8 rounded-full bg-black/10 dark:bg-white/20" />
+        <p className="mb-4 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">添加状态</p>
+        <div className="relative">
+          <input
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value.slice(0, 20))}
+            placeholder="记录此刻的状态…"
+            data-testid="music-status-input"
+            className="h-11 w-full rounded-xl border border-black/10 bg-zinc-100 px-3.5 pr-12 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-[#C20C0C]/50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+          />
+          <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] tabular-nums text-zinc-400">
+            {text.length}/20
+          </span>
+        </div>
+        <p className="mb-2 mt-4 text-[12px] text-zinc-400">挑一个现成的</p>
+        <div className="flex flex-wrap gap-2">
+          {STATUS_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setText(p.slice(0, 20))}
+              data-testid={`music-status-preset-${STATUS_PRESETS.indexOf(p)}`}
+              className={`rounded-full px-3 py-1.5 text-[12px] active:scale-95 ${
+                text === p
+                  ? 'bg-[#C20C0C]/10 text-[#C20C0C] ring-1 ring-[#C20C0C]/40'
+                  : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => onSubmit(text.trim().slice(0, 20))}
+          data-testid="music-status-save"
+          className="mt-5 h-11 w-full rounded-full bg-[#C20C0C] text-[14px] font-medium text-white active:scale-[0.98]"
+        >
+          保存
+        </button>
+        {current && (
+          <button
+            type="button"
+            onClick={() => onSubmit('')}
+            data-testid="music-status-clear"
+            className="mt-2.5 h-10 w-full rounded-full border border-black/10 text-[13px] text-zinc-500 active:scale-[0.98] dark:border-white/10 dark:text-zinc-400"
+          >
+            清除状态
+          </button>
+        )}
       </div>
     </div>
   );

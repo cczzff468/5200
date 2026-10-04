@@ -660,6 +660,54 @@ export async function userDetail(uid: number): Promise<NcmUserDetail | null> {
   }
 }
 
+// ---------------- VIP 信息 ----------------
+
+export interface VipInfo {
+  /** 是否有效会员（黑胶VIP / 黑胶SVIP 任一在期） */
+  isVip: boolean;
+  type: 'vip' | 'svip';
+  /** VIP 等级（1-7+，0 = 非会员） */
+  level: number;
+}
+
+interface VipBlockLike {
+  vipCode?: number;
+  expireTime?: number;
+  vipLevel?: number;
+}
+
+/** 黑胶块是否在期（vipLevel>0 且未过期；expireTime=0 视为无会员） */
+function vipBlockActive(b: VipBlockLike | undefined, now: number): boolean {
+  if (!b || !b.vipLevel || b.vipLevel <= 0) return false;
+  return !b.expireTime || b.expireTime > now;
+}
+
+/**
+ * 当前登录账号的真实 VIP 信息（「我的」页 VIP 是几显示几）：
+ * - associator = 黑胶VIP，redplus = 黑胶SVIP；等级取对应块的 vipLevel
+ * - 非会员/接口失败 → { isVip:false, level:0 }（展示无数字的 VIP 胶囊）
+ */
+export async function vipInfo(): Promise<VipInfo> {
+  const now = Date.now();
+  try {
+    const j = await authRequest<{ data?: { associator?: VipBlockLike; redplus?: VipBlockLike } }>('vip/info');
+    const rp = j.data?.redplus;
+    const aso = j.data?.associator;
+    if (vipBlockActive(rp, now)) {
+      return { isVip: true, type: 'svip', level: Math.floor(rp!.vipLevel as number) };
+    }
+    if (vipBlockActive(aso, now)) {
+      return { isVip: true, type: 'vip', level: Math.floor(aso!.vipLevel as number) };
+    }
+  } catch {
+    // 接口失败走 profile 兜底
+  }
+  // 兜底：profile.vipType（11=黑胶VIP 100=黑胶SVIP），等级未知按 1 展示
+  const vt = getMusicLogin()?.profile.vipType ?? 0;
+  if (vt === 11 || vt === 100) return { isVip: true, type: vt === 100 ? 'svip' : 'vip', level: 1 };
+  return { isVip: false, type: 'vip', level: 0 };
+}
+
 // ---------------- 收藏歌手/专辑列表 ----------------
 
 export async function artistSublist(): Promise<NcmArtist[]> {

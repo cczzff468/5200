@@ -660,8 +660,8 @@ function TogetherHead({ session }: { session: TogetherSessionLike }) {
   const durText = fmtTogetherDur(Date.now() - session.since);
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      {/* 双头像（挨近一点） */}
-      <div className="flex items-center gap-2" data-testid="music-tg-avatars">
+      {/* 双头像（挨近一点，几乎贴在一起） */}
+      <div className="flex items-center gap-[3px]" data-testid="music-tg-avatars">
         <CoverImg src={session.avatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt="我" />
       </div>
