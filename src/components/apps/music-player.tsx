@@ -41,6 +41,9 @@ import {
   Shuffle,
   SlidersHorizontal,
   ShoppingCart,
+  Check,
+  ChevronLeft,
+  ChevronRight,
   SkipBack,
   SkipForward,
   TriangleAlert,
@@ -352,7 +355,8 @@ export function MusicPlayer() {
           onClose={close}
           light
           dense={!!together}
-          onMenu={openTgMenu}
+          // 右上角 ⋮ 仅一起听显示（自己听不显示：用户第十三轮反馈）；聊天视图为一起听专属恒显示
+          onMenu={together ? openTgMenu : undefined}
         />
 
         {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
@@ -647,18 +651,20 @@ function VinylView({
           aria-label="切换到歌词"
           className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 唱针（深色金属风，右上角进入；播放贴盘 / 暂停抬起）——缩短后整体限制在唱片上缘，不再挡住上方的时长文字 */}
+          {/* 唱针（深色金属风，播放贴盘 / 暂停抬起）——轴承固定在唱片右上角边缘：
+              容器右缘超出唱片 6px，轴心（origin 9,9）落在距唱片右缘 ~25px 处（大比例不随唱片尺寸漂移），
+              针杆向右下 18° 自然搭在最外圈纹路上，不再悬在唱片中上方 */}
           <div
-            className="absolute right-[5%] top-[-10px] z-20 h-[88px] w-[96px] origin-[10px_10px] transition-transform duration-500"
-            style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-26deg)' }}
+            className="absolute right-[-6px] top-[-12px] z-20 h-[92px] w-[40px] origin-[9px_9px] transition-transform duration-500"
+            style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-24deg)' }}
           >
             {/* 轴承底座 */}
             <div className="absolute left-0 top-0 h-[18px] w-[18px] rounded-full bg-[#2c2c30] shadow-[0_2px_6px_rgba(0,0,0,0.55)] ring-1 ring-white/20" />
             <div className="absolute left-[4.5px] top-[4.5px] h-2 w-2 rounded-full bg-[#525257] ring-1 ring-black/60" />
-            {/* 针杆（细金属臂，向下伸向盘面） */}
-            <div className="absolute left-[8px] top-[8px] h-[64px] w-[2.5px] origin-top rotate-[26deg] rounded-full bg-gradient-to-b from-[#9a9aa2] via-[#5f5f66] to-[#38383d]" />
-            {/* 针头（深色小唱头，落在盘缘） */}
-            <div className="absolute left-[22px] top-[66px] h-[13px] w-[6.5px] rotate-[26deg] rounded-[3px] bg-[#3a3a40] shadow-[0_1px_3px_rgba(0,0,0,0.6)] ring-1 ring-white/10" />
+            {/* 针杆（细金属臂，向下伸向盘面外缘） */}
+            <div className="absolute left-[8px] top-[8px] h-[62px] w-[2.5px] origin-top rotate-[18deg] rounded-full bg-gradient-to-b from-[#9a9aa2] via-[#5f5f66] to-[#38383d]" />
+            {/* 针头（深色小唱头，落在盘缘最外圈） */}
+            <div className="absolute left-[24px] top-[62px] h-[13px] w-[6.5px] rotate-[18deg] rounded-[3px] bg-[#3a3a40] shadow-[0_1px_3px_rgba(0,0,0,0.6)] ring-1 ring-white/10" />
           </div>
 
           {/* 外缘深黑圈（不随旋转，提供立体边缘） */}
@@ -694,7 +700,6 @@ function VinylView({
           </div>
         </button>
       </div>
-      <p className="shrink-0 pb-1 pt-1.5 text-[11px] text-white/40">点按封面查看歌词</p>
     </div>
   );
 }
@@ -896,14 +901,16 @@ function TogetherHead({
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
-          按参考截图：AI 气泡恒在左、我的气泡恒在右（各自独立锚定，不因对方没发消息而换边），
-          两侧各收进 ~19%（不贴屏幕边），尾巴朝上指各自头像，5 秒后消失 */}
+          双头像交叠居中（对方在左/我在右，交叠 10px，各自圆心距中线 ±27px）：
+          对方气泡右缘锚在对方头像圆心 +8px（尾巴在气泡右上，指向对方头像）；
+          我的气泡左缘锚在我头像圆心 -8px（尾巴在气泡左上，指向我头像）——
+          两条尾巴各自垂直指向发送者头像，短气泡贴头像、长气泡向外展开互不重叠，5 秒后消失 */}
       {showBubbles && hasBubble && (
-        <div className="pointer-events-none absolute inset-x-0 top-[78px] z-20 flex items-start justify-between gap-3 px-[19%]">
-          <div className="flex min-w-0 justify-start">
+        <div className="pointer-events-none absolute inset-x-0 top-[78px] z-20 h-0">
+          <div className="absolute right-[calc(50%+19px)] top-0 flex max-w-[46%] justify-end">
             {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
           </div>
-          <div className="flex min-w-0 justify-end">
+          <div className="absolute left-[calc(50%+19px)] top-0 flex max-w-[46%] justify-start">
             {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
           </div>
         </div>
@@ -1025,7 +1032,7 @@ function QuickInputBar({
   );
 }
 
-/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴；按参考截图：对方尾巴在左上、我的尾巴在左上角指向我头像，最宽 165px） */
+/** 头像下的小气泡（实色深灰，尾巴从气泡顶部指向发送者头像：对方尾巴在右上/我的尾巴在左上，最宽 165px） */
 function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
   return (
     <div
@@ -1033,7 +1040,7 @@ function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
       data-testid={mine ? 'music-tg-bubble-me' : 'music-tg-bubble-peer'}
     >
       <span
-        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'left-2' : 'left-5'}`}
+        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'left-2' : 'right-2'}`}
       />
       <p className="relative line-clamp-2 break-words text-[12px] leading-snug text-white/95">{text}</p>
     </div>
@@ -1233,19 +1240,6 @@ function MoreSheet({
     }
   };
 
-  const share = async () => {
-    const text = `正在听《${song.name}》 ${songArtistText(song)}`;
-    try {
-      if (navigator.share) await navigator.share({ title: text, text });
-      else {
-        await navigator.clipboard.writeText(text);
-        onToast('已复制到剪贴板');
-      }
-    } catch {
-      // 取消
-    }
-  };
-
   // 关注歌手（真实接口；游客态会提示需登录）
   const followArtist = async () => {
     const artist = song.artists?.[0];
@@ -1339,7 +1333,8 @@ function MoreSheet({
                 k: 'share',
                 label: '分享',
                 icon: <Forward className="h-[22px] w-[22px]" />,
-                on: () => void share(),
+                // 分享 = 把这首歌发给联系人（两步：先选微信/QQ → 再选联系人，Task 68 歌曲卡片链路）
+                on: () => setShowShareChat(true),
               },
               {
                 k: 'together',
@@ -1409,13 +1404,6 @@ function MoreSheet({
                 </span>
               </span>
             </MoreRow>
-            <MoreRow
-              icon={<MessageCircleMore className="h-[19px] w-[19px]" />}
-              testid="music-more-share-chat"
-              onClick={() => setShowShareChat(true)}
-            >
-              分享给好友（歌曲卡片）
-            </MoreRow>
             <MoreRow icon={<Info className="h-[19px] w-[19px]" />} onClick={() => onToast('暂未收录这首歌的百科')}>
               查看歌曲百科
             </MoreRow>
@@ -1463,9 +1451,9 @@ function MoreSheet({
 }
 
 /**
- * 分享给好友（Task 68）：把当前歌曲以「歌曲卡片」消息写进微信/QQ 的私聊记录（role=me），
+ * 分享给好友（Task 68 引入，第十三轮反馈改两步流程）：把当前歌曲以「歌曲卡片」消息写进微信/QQ 的私聊记录（role=me），
  * 用户切回聊天 App 就能看到可点击播放的卡片；同时给角色写一条分享记忆（AI 能接住话题）。
- * 目标列表 = AI 角色（kind='char'）；每行可分别发微信 / QQ（同一人可两边都发，发过打勾）。
+ * 流程 = 先选分享到微信还是 QQ → 再选该 App 里的联系人发送；发完打勾可继续选其他人，左上角返回可换 App。
  */
 function ShareToChatSheet({
   song,
@@ -1479,6 +1467,11 @@ function ShareToChatSheet({
   const [chars, setChars] = useState<ContactRecord[]>([]);
   const [sent, setSent] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  // 两步流程：step='app' 选微信/QQ；step='contact' 选该 App 下的联系人
+  const [step, setStep] = useState<'app' | 'contact'>('app');
+  const [app, setApp] = useState<'wx' | 'qq'>('wx');
+  const appLabel = app === 'wx' ? '微信' : 'QQ';
+  const appColor = app === 'wx' ? '#07C160' : '#12B7F5';
 
   useEffect(() => {
     let on = true;
@@ -1495,7 +1488,7 @@ function ShareToChatSheet({
     };
   }, []);
 
-  const send = (app: 'wx' | 'qq', c: ContactRecord) => {
+  const send = (target: 'wx' | 'qq', c: ContactRecord) => {
     const artist = songArtistText(song);
     const cover = songCover(song) || undefined;
     const msg = {
@@ -1506,7 +1499,7 @@ function ShareToChatSheet({
       kind: 'song' as const,
       song: { name: song.name, artist, cover, songId: song.id },
     };
-    const key = app === 'wx' ? `wx-chat-msgs:${c.id}` : `qq-chat-msgs:${c.id}`;
+    const key = target === 'wx' ? `wx-chat-msgs:${c.id}` : `qq-chat-msgs:${c.id}`;
     try {
       const cur = kvGet<unknown[]>(key) ?? [];
       kvSet(key, [...cur, msg].slice(-100));
@@ -1515,15 +1508,15 @@ function ShareToChatSheet({
       return;
     }
     try {
-      memAddEventFragment(c.id, app, `机主分享了一首《${song.name}》（${artist}）给你`, {
+      memAddEventFragment(c.id, target, `机主分享了一首《${song.name}》（${artist}）给你`, {
         eventTime: Date.now(),
         sourceTag: 'music-share',
       });
     } catch {
       // 记忆失败不影响分享
     }
-    setSent((prev) => new Set(prev).add(`${app}:${c.id}`));
-    onToast(`已把《${song.name}》分享给${c.nickname || c.name}（${app === 'wx' ? '微信' : 'QQ'}）`);
+    setSent((prev) => new Set(prev).add(`${target}:${c.id}`));
+    onToast(`已把《${song.name}》分享给${c.nickname || c.name}（${target === 'wx' ? '微信' : 'QQ'}）`);
   };
 
   return (
@@ -1531,51 +1524,127 @@ function ShareToChatSheet({
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
       <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl bg-white pb-6 dark:bg-zinc-900">
         <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
-        <div className="flex items-center justify-between px-5 pt-3">
-          <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">分享给好友</p>
-          <button type="button" aria-label="关闭" onClick={onClose} className="text-zinc-400">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <p className="px-5 pt-1 text-[12px] text-zinc-400">
-          《{song.name}》 {songArtistText(song)} · 以歌曲卡片发进聊天
-        </p>
-        <div className="mt-2 min-h-0 flex-1 overflow-y-auto no-scrollbar px-2 pb-2">
-          {loading ? (
-            <p className="py-8 text-center text-[13px] text-zinc-400">加载中…</p>
-          ) : chars.length === 0 ? (
-            <p className="py-8 text-center text-[13px] text-zinc-400">还没有可以分享的 AI 好友</p>
-          ) : (
-            chars.map((c) => (
-              <div key={c.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5 active:bg-black/5 dark:active:bg-white/10">
-                <CoverImg src={c.avatar || ''} className="h-10 w-10 shrink-0" rounded="rounded-full" alt={c.nickname || c.name} />
-                <p className="min-w-0 flex-1 truncate text-[14px] text-zinc-800 dark:text-zinc-200">{c.nickname || c.name}</p>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    data-testid={`music-share-wx-${c.id}`}
-                    onClick={() => send('wx', c)}
-                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium active:scale-95 ${
-                      sent.has(`wx:${c.id}`) ? 'bg-zinc-200 text-zinc-400 dark:bg-zinc-700' : 'bg-[#07C160] text-white'
-                    }`}
-                  >
-                    {sent.has(`wx:${c.id}`) ? '已分享' : '微信'}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid={`music-share-qq-${c.id}`}
-                    onClick={() => send('qq', c)}
-                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium active:scale-95 ${
-                      sent.has(`qq:${c.id}`) ? 'bg-zinc-200 text-zinc-400 dark:bg-zinc-700' : 'bg-[#12B7F5] text-white'
-                    }`}
-                  >
-                    {sent.has(`qq:${c.id}`) ? '已分享' : 'QQ'}
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+
+        {step === 'app' ? (
+          <>
+            {/* 第一步：选择分享到微信还是 QQ */}
+            <div className="flex items-center justify-between px-5 pt-3">
+              <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">分享给好友</p>
+              <button type="button" aria-label="关闭" onClick={onClose} className="text-zinc-400">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="px-5 pt-1 text-[12px] text-zinc-400">
+              《{song.name}》 {songArtistText(song)} · 以歌曲卡片发进聊天
+            </p>
+            <p className="px-5 pb-1 pt-4 text-[12px] font-medium text-zinc-500 dark:text-zinc-400">选择分享到的 App</p>
+            <div className="px-3 pb-2">
+              <button
+                type="button"
+                data-testid="music-share-app-wx"
+                onClick={() => {
+                  setApp('wx');
+                  setStep('contact');
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left active:bg-black/5 dark:active:bg-white/10"
+              >
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] bg-[#07C160] text-white">
+                  <MessageCircle className="h-6 w-6" fill="currentColor" strokeWidth={0} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-zinc-800 dark:text-zinc-200">微信</span>
+                  <span className="block text-[11px] text-zinc-400">发给微信好友</span>
+                </span>
+                <ChevronRight className="h-5 w-5 shrink-0 text-zinc-300 dark:text-zinc-600" />
+              </button>
+              <button
+                type="button"
+                data-testid="music-share-app-qq"
+                onClick={() => {
+                  setApp('qq');
+                  setStep('contact');
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left active:bg-black/5 dark:active:bg-white/10"
+              >
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] bg-[#12B7F5] text-white">
+                  <span className="text-[15px] font-bold leading-none">QQ</span>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-zinc-800 dark:text-zinc-200">QQ</span>
+                  <span className="block text-[11px] text-zinc-400">发给 QQ 好友</span>
+                </span>
+                <ChevronRight className="h-5 w-5 shrink-0 text-zinc-300 dark:text-zinc-600" />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* 第二步：选择该 App 下的联系人发送 */}
+            <div className="flex items-center gap-1.5 px-3 pt-3">
+              <button
+                type="button"
+                aria-label="返回选择 App"
+                data-testid="music-share-back"
+                onClick={() => setStep('app')}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-black/5 dark:active:bg-white/10"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <p className="min-w-0 flex-1 truncate text-[15px] font-bold text-zinc-900 dark:text-zinc-100">
+                分享到{appLabel}
+              </p>
+              <button type="button" aria-label="关闭" onClick={onClose} className="shrink-0 text-zinc-400">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="px-5 pt-1 text-[12px] text-zinc-400">
+              《{song.name}》 · 点击好友即发送歌曲卡片
+            </p>
+            <div className="mt-2 min-h-0 flex-1 overflow-y-auto no-scrollbar px-2 pb-2">
+              {loading ? (
+                <p className="py-8 text-center text-[13px] text-zinc-400">加载中…</p>
+              ) : chars.length === 0 ? (
+                <p className="py-8 text-center text-[13px] text-zinc-400">还没有可以分享的 AI 好友</p>
+              ) : (
+                chars.map((c) => {
+                  const done = sent.has(`${app}:${c.id}`);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      data-testid={`music-share-${app}-${c.id}`}
+                      onClick={() => send(app, c)}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left active:bg-black/5 dark:active:bg-white/10"
+                    >
+                      <CoverImg
+                        src={c.avatar || ''}
+                        className="h-10 w-10 shrink-0"
+                        rounded="rounded-full"
+                        alt={c.nickname || c.name}
+                      />
+                      <p className="min-w-0 flex-1 truncate text-[14px] text-zinc-800 dark:text-zinc-200">
+                        {c.nickname || c.name}
+                      </p>
+                      {done ? (
+                        <span className="flex shrink-0 items-center gap-1 rounded-full bg-zinc-100 px-2.5 py-1.5 text-[12px] text-zinc-400 dark:bg-zinc-800">
+                          <Check className="h-3.5 w-3.5" />
+                          已分享
+                        </span>
+                      ) : (
+                        <span
+                          className="shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-medium text-white active:scale-95"
+                          style={{ backgroundColor: appColor }}
+                        >
+                          发送
+                        </span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

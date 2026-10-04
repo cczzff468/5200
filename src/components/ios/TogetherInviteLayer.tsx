@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X, Check } from 'lucide-react';
 import { useTogetherInvite, acceptTogetherInvite, declineTogetherInvite } from '@/lib/ios/together-invite';
-import { useSettings } from '@/lib/ios/store';
+import { useMusic, getGuestAvatar } from '@/lib/ios/music-store';
 
 /** 双头像下缘的耳机线（两条对称贝塞尔曲线从头像内缘垂到中点交汇），纯装饰 */
 function EarphoneWires() {
@@ -29,7 +29,10 @@ function EarphoneWires() {
 
 /** 单张邀请卡（key=invite.id 挂载，leaving 状态随新卡片天然重置） */
 function InviteCard({ inviteId }: { inviteId: string }) {
-  const myAvatar = useSettings((s) => s.profile.avatar);
+  // 我的头像跟随音乐 App：网易云登录账号头像 > 游客自定义头像（与一起听界面 TogetherHead 同源）
+  const loginUid = useMusic((s) => s.loginUid);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
+  const myAvatar = loginUid ? loginAvatar : getGuestAvatar();
   const [leaving, setLeaving] = useState(false);
 
   // 45s 无响应自动收回（setLeaving 只在定时器回调里调用，非 effect body 同步 setState）

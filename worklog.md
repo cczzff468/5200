@@ -15051,3 +15051,26 @@ Stage Summary:
 - ⚠️ 重要：mini-services/netease-api/index.js 头部的 [next-keeper] 注入块和 next-keeper.sh 是预览保活机制，后续任务严禁删除；dev server 生命周期由 keeper 管理，无需手动启动
 - ⚠️ 沙箱特性：Bash 工具后台进程在调用边界必被回收；需要常驻进程时必须借启动树成员（如 netease-api）拉起
 - dev server 内存 ~1.5GB，机器 4GB：不要同时运行 agent-browser 与大内存任务过久，浏览器验证后立即关闭
+
+---
+Task ID: 69
+Agent: Z.ai Code（主会话）
+Task: 第十三轮反馈六项——一起听气泡仍有问题（附截图）、邀请卡我的头像跟随音乐 App、自己听右上角三点删除（一起听保留）、设置弹窗分享改两步流程（先选微信/QQ 再选联系人）、删除「点按封面查看歌词」、唱片上白色东西（唱针）归位
+
+Work Log:
+- 一起听气泡根因 = 尾巴没指向头像：旧实现 justify-between + 19% 内缩使对方尾巴落在 ~23%（对方头像圆心在 ~43%）、我的尾巴落在 ~74%（我头像圆心在 ~57%），两条尾巴都指向空白。重做为头像锚定：双头像交叠居中（各 64px、-ml-2.5 交叠 10px → 圆心距中线 ±27px），对方气泡右缘 right-[calc(50%+19px)]（尾巴 right-2 恰落对方头像圆心），我的气泡左缘 left-[calc(50%+19px)]（尾巴 left-2 恰落我头像圆心）；max-w-[46%] 防溢出，长文本向外展开互不重叠；实测 420px 视口我的气泡左缘 229px+8px 尾巴=237px vs 头像圆心 240px ✓
+- 邀请卡我的头像（TogetherInviteLayer.InviteCard）：useSettings.profile.avatar（全局机主头像）→ useMusic loginUid/loginAvatar + getGuestAvatar 兜底，与一起听界面 TogetherHead 同源（网易云账号头像 > 游客自定义）
+- 自己听右上角⋮删除：主视图 PlayerTopBar onMenu={together ? openTgMenu : undefined}（聊天视图一起听专属恒显示）；一起听右上角⋮保留（重新匹配/查看记录/匹配偏好/举报/退出）
+- 分享两步流程（MoreSheet）：网格「分享」改开 ShareToChatSheet（原 navigator.share 已删）；删除冗余行「分享给好友（歌曲卡片）」（保留漫游/单曲购买）；ShareToChatSheet 重构为 step='app'（微信 #07C160 / QQ #12B7F5 两大行+chevron）→ step='contact'（左上返回可换 App，联系人行点击即发歌曲卡片，已分享打勾✓可连续发多人）；send() 写 kv + 记忆逻辑与 Task 68 一致未动
+- 删除唱片下方「点按封面查看歌词」文字（点封面切歌词交互保留）
+- 唱针归位：旧实现容器 w-[96px] right-[5%] 使轴心落在唱片水平中点附近（小唱片时唱针悬在盘面中上方=用户截图里的「白色东西」）；改为 right-[-6px] w-[40px]（轴心距唱片右缘 ~25px，不随唱片尺寸漂移），针杆 rotate 26°→18° 搭在最外圈纹路，针头同步移到杆底，暂停抬臂 -26°→-24°
+- E2E（agent-browser 420x900 全新 profile）全过：solo 播放页右上角无⋮+底部三点在+无「点按封面查看歌词」+唱针贴右上角边缘 ✓；邀请小音→一起听（双头像+相距360公里）✓；一起听右上角⋮在 ✓；快聊发消息→我的气泡右侧尾巴左上指向我头像（229+8=237≈240）✓；AI 回复气泡左侧尾巴右上指向对方头像 ✓；⋮→分享→第一步微信/QQ 大行 ✓→第二步联系人列表+点击发送+「✓已分享」态 ✓；console 零错误、dev.log 无新增 error
+- 途中环境事件：dev server 一次自行退出（exit 0），next-keeper 3 秒内自动拉起（上一 hotfix 部署的守护生效），验证后继续
+- bunx tsc 0 错误；bun run lint 0 错误
+- 未做：微信 App 内卡片落库视觉复查（agent-browser 全新 profile 需走微信注册+LLM 邀约长链路；send() 写库逻辑与 Task 68 已验证版本逐字节一致，仅选择流程重排）；邀请卡新头像源为代码级验证（useMusic 同源读取，卡片其余结构未动）
+
+Stage Summary:
+- 交付：一起听气泡双尾巴精确指向各自头像（几何锚定而非经验内缩）；邀请卡「我」头像跟随网易云账号；自己听界面右上角恢复干净（⋮ 仅一起听）；分享改「选 App → 选联系人」两步直发歌曲卡片；唱针从「悬在盘面中上的白色东西」归位到唱片右上角边缘
+- 关键实现：气泡对齐 = 尾巴位置由「头像圆心 ±27px 反推容器锚点 calc(50%+19px)」精确计算，不依赖屏幕百分比内缩；唱针锚定改为「右缘溢出 6px + 窄容器」使轴心与唱片尺寸解耦
+- 范围限定遵守：仅动音乐播放器与邀请卡层 2 个文件；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰
+- 改动文件：src/components/apps/music-player.tsx、src/components/ios/TogetherInviteLayer.tsx
