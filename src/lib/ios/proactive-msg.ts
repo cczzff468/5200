@@ -21,7 +21,7 @@
  */
 
 import { genId } from './db';
-import { kvGet, kvSet, kvDel } from './idb-kv';
+import { kvGet, kvSet, kvDel, kvGetRaw, kvSetRaw } from './idb-kv';
 import { getActiveAccountIdFor, scopedKvKey, type AccountApp } from './accounts';
 import { listContacts, ownerProfileFor, cachedOwnerName } from './contacts-store';
 import { avatarFor, type ContactRecord } from '@/lib/contacts';
@@ -59,12 +59,18 @@ export interface ProactiveEvent {
 export interface ProactiveMsgConfig {
   /** 定时触发 */
   timerOn: boolean;
+  /** 定时模式：按间隔（默认）| 每天定时（对齐钟表时刻；Task 51 B3） */
+  timerMode?: 'interval' | 'daily';
   /** 定时间隔（毫秒；最小 15s，UI 档位 30s~24h+自定义） */
   timerMs: number;
+  /** timerMode=daily 时的每天发送时刻 'HH:mm' */
+  timerDailyTime?: string;
   /** 事件清单 */
   events: ProactiveEvent[];
   /** 自主触发（AI 自己决定发不发/何时发/发什么） */
   autoOn: boolean;
+  /** 自主决策节奏（分钟；Task 51 B4 可调，默认 5） */
+  autoFreqMin?: number;
 }
 
 /** 定时提醒任务（自然语言解析产物） */
@@ -93,12 +99,20 @@ const LAST_KEY_PREFIX = 'proactive-msg-last:';
 const REMINDERS_KEY = 'proactive-msg-reminders';
 /** 索引（设备级）：配置过的 {app, cid} 全集；引擎按当前账号读 scoped 配置，无配置自然跳过 */
 const INDEX_KEY = 'proactive-msg-index';
+/** 最近主动消息历史（按联系人，Task 51 C2） */
+const HIST_KEY_PREFIX = 'proactive-msg-hist:';
+/** 全局总开关（设备级，Task 51 B2）：true = 所有角色暂停主动发消息（一键全停） */
+const MASTER_OFF_KEY = 'proactive-msg-master-off';
 
 /** tick 周期（事件/提醒按分钟判定，10s 轮询足够；定时最细 30s 档误差 ≤10s 可接受） */
 export const PROACTIVE_MSG_TICK_MS = 10_000;
 /** 到期触发宽限：定时/事件错过 tick（浏览器休眠等）在宽限窗口内仍补发一次 */
 const FIRE_GRACE_MS = 90_000;
-/** 自主决策间隔基准：每个开启自主模式的角色约每 5 分钟做一次「要不要主动发」决策 */
+/** 每日类触发（事件/daily 提醒/每天定时刻）宽限：错过精确分钟（页面没开/休眠）在 N 分钟内仍补发一次（Task 51 A1） */
+const SCHEDULED_GRACE_MIN = 5;
+/** 对话活跃守卫（Task 51 B1）：最近有消息往来时跳过定时/自主触发，避免打断正在进行的聊天 */
+const CONVO_ACTIVE_MS = 120_000;
+/** 自主决策间隔基准：每个开启自主模式的角色约每 5 分钟做一次「要不要主动发」决策（可经 autoFreqMin 调整） */
 const AUTO_DECIDE_BASE_MS = 5 * 60_000;
 /** 自主模式深夜静默：本地时间 [1, 7) 不自主发起（定时/事件/提醒是用户明确意图，不受此限） */
 const AUTO_QUIET_START_HOUR = 1;
@@ -109,7 +123,27 @@ const AUTO_WAIT_MAX_MINUTES = 120;
 /** 生成消息的最大长度（超出截断；主动消息就该短） */
 const MAX_PROACTIVE_LEN = 220;
 
-const DEFAULT_CFG: ProactiveMsgConfig = { timerOn: false, timerMs: 5 * 60_000, events: [], autoOn: false };
+const DEFAULT_CFG: ProactiveMsgConfig = { timerOn: false, timerMode: 'interval', timerMs: 5 * 60_000, timerDailyTime: '', events: [], autoOn: false, autoFreqMin: 5 };
+
+// ---------------- 全局总开关（Task 51 B2：设备级，一键全停所有角色） ----------------
+
+/** 主动消息是否被全局暂停（设置页里的总开关；设备级，不分账号） */
+export function isProactiveMasterOff(): boolean {
+  try {
+    return kvGetRaw(MASTER_OFF_KEY) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 设置全局总开关（true=暂停全部主动发消息） */
+export function setProactiveMasterOff(v: boolean): void {
+  try {
+    kvSetRaw(MASTER_OFF_KEY, v === true);
+  } catch {
+    /* 静默 */
+  }
+}
 
 // ---------------- 配置存储（按 App 当前账号作用域） ----------------
 
@@ -132,11 +166,15 @@ function sanitizeCfg(raw: unknown): ProactiveMsgConfig {
         .slice(0, 20)
     : [];
   const timerMs = typeof r.timerMs === 'number' && Number.isFinite(r.timerMs) ? Math.max(15_000, Math.min(r.timerMs, 7 * 24 * 3600_000)) : DEFAULT_CFG.timerMs;
+  const autoFreqMin = typeof r.autoFreqMin === 'number' && Number.isFinite(r.autoFreqMin) ? Math.max(2, Math.min(Math.round(r.autoFreqMin), 120)) : 5;
   return {
     timerOn: r.timerOn === true,
+    timerMode: r.timerMode === 'daily' ? 'daily' : 'interval',
     timerMs,
+    timerDailyTime: typeof r.timerDailyTime === 'string' && /^\d{2}:\d{2}$/.test(r.timerDailyTime) ? r.timerDailyTime : '',
     events,
     autoOn: r.autoOn === true,
+    autoFreqMin,
   };
 }
 
@@ -165,7 +203,7 @@ export function proactiveCfgSummary(app: ProactiveApp, cid: string): string {
     return '未开启';
   }
   const parts: string[] = [];
-  if (cfg.timerOn) parts.push(`定时${intervalLabel(cfg.timerMs)}`);
+  if (cfg.timerOn) parts.push(cfg.timerMode === 'daily' && cfg.timerDailyTime ? `每天 ${cfg.timerDailyTime}` : `定时${intervalLabel(cfg.timerMs)}`);
   const evtOn = cfg.events.filter((e) => e.enabled).length;
   if (evtOn > 0) parts.push(`事件 ${evtOn}`);
   if (cfg.autoOn) parts.push('自主');
@@ -339,7 +377,7 @@ const REMINDER_PARSE_SYSTEM = `你是一个定时任务解析器。用户正在�
 
 判定规则：
 1. match=false：不是定时发消息指令（普通聊天、问句、没有明确的时间意图）。
-2. kind=once：一次性的（"3分钟后给我发消息"、"晚上8点提醒我……"、"20分钟以后叫我"）。minutesLater=从当前时间算起的分钟数（能精确到今天某时刻就换算成分钟差，必须为正数）。
+2. kind=once：一次性的（"3分钟后给我发消息"、"晚上8点提醒我……"、"20分钟以后叫我"）。minutesLater=从当前时间算起的分钟数：能精确到今天某时刻就换算成分钟差；如果那个时刻今天已经过了（如现在 21 点说"晚上8点提醒我"），按明天同一时刻换算（加 1440 分钟）；必须为正数，不允许负数或零。
 3. kind=daily：每天重复（"以后每天早上8点给我发消息"、"每天晚上10点说晚安"）。dailyTime="HH:mm"（24小时制，"早上8点"="08:00"，"晚上10点"="22:00"，"中午12点半"="12:30"）。
 4. kind=interval：按间隔循环（"每隔1小时给我发个消息"、"每30分钟发一次消息"）。intervalMinutes=分钟数。
 5. note=用户想让消息带的内容/目的摘要（如"提醒我喝水""说晚安"）；没有具体目的就写"主动找我聊聊"。
@@ -385,6 +423,53 @@ export async function parseReminderInstruction(app: ProactiveApp, cid: string, t
   } catch {
     return null;
   }
+}
+
+// ---------------- 最近主动消息历史（Task 51 C2：设置页回看） ----------------
+
+export interface ProactiveHistEntry {
+  text: string;
+  at: number;
+  kind: 'timer' | 'event' | 'auto' | 'reminder';
+  /** 迟到补发的提醒（Task 51 A2） */
+  late?: boolean;
+}
+
+function histKeyOf(app: ProactiveApp, cid: string): string {
+  return scopedKvKey(`${HIST_KEY_PREFIX}${app}:${cid}`, app as AccountApp);
+}
+
+function pushHist(app: ProactiveApp, cid: string, entry: ProactiveHistEntry): void {
+  try {
+    const list = kvGet<ProactiveHistEntry[]>(histKeyOf(app, cid));
+    const next = Array.isArray(list) ? list : [];
+    next.push(entry);
+    kvSet(histKeyOf(app, cid), next.slice(-20));
+  } catch {
+    /* 静默 */
+  }
+}
+
+/** 某角色最近主动消息（新的在前；设置页展示用） */
+export function proactiveHistory(app: ProactiveApp, cid: string): ProactiveHistEntry[] {
+  try {
+    const list = kvGet<ProactiveHistEntry[]>(histKeyOf(app, cid));
+    return Array.isArray(list) ? [...list].reverse().filter((e) => e && typeof e.text === 'string' && typeof e.at === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 历史时间短标签：今天 HH:MM / 昨天 HH:MM / M月D日 */
+export function histTimeLabel(at: number): string {
+  const d = new Date(at);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const now = new Date();
+  const dayOf = (x: Date): number => Math.floor(x.getTime() / 86_400_000);
+  const diff = dayOf(now) - dayOf(d);
+  if (diff === 0) return `今天 ${hm}`;
+  if (diff === 1) return `昨天 ${hm}`;
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
 // ---------------- 消息读取（三端 kv 键归一化；与 proactive-call 同口径） ----------------
@@ -541,7 +626,7 @@ function triggerDesc(trigger: FireTrigger): string {
     case 'event':
       return `事件触发：现在正是「${trigger.eventName ?? ''}」的时候，你因为这个事件想给对方发条消息。`;
     case 'reminder':
-      return `定时提醒：对方之前请你「${trigger.note ?? '到点给 TA 发条消息'}」，现在到时间了，你要兑现这个约定。`;
+      return `定时提醒：对方之前请你「${trigger.note ?? '到点给 TA 发条消息'}」，现在到时间了，你要兑现这个约定${trigger.late ? '（这次提醒比约定时间晚到了——设备可能没开着，你要自然地带一句歉意，比如开头说「来晚了」，然后把该说的说完）' : ''}。`;
     case 'auto':
       return '自主触发：你自己决定此刻主动发一条消息（系统判断当前时机合适，你按自己的性格和心情自由发挥）。';
   }
@@ -575,6 +660,8 @@ interface FireTrigger {
   kind: 'timer' | 'event' | 'auto' | 'reminder';
   eventName?: string;
   note?: string;
+  /** 提醒迟到补发（Task 51 A2）：生成时带歉意 */
+  late?: boolean;
 }
 
 /**
@@ -687,7 +774,17 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
     altMainRelation: contact.relation?.trim() || '',
   });
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: norm.length > 0 ? norm[norm.length - 1].time : null, regionHint: contact.region || null });
-  const system = [persona, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
+  // Task 51 C1：启用中的事件（含未设时间的纯情境事件）作为自主决策的情境参考
+  let eventsBlock = '';
+  try {
+    const evts = getProactiveCfg(app, contact.id).events.filter((e) => e.enabled);
+    if (evts.length > 0) {
+      eventsBlock = `【你生活中的事件安排（可作为自然的开场由头）】\n${evts.map((e) => `- ${e.name}${e.time ? `（${dayLabel(e.days)} ${e.time}）` : ''}`).join('\n')}`;
+    }
+  } catch {
+    /* 忽略 */
+  }
+  const system = [persona, memoryBlock, timeBlock, eventsBlock].filter(Boolean).join('\n\n');
 
   const recent = convoLines(norm, 10, contact.name, userName);
   const gapDesc = (() => {
@@ -721,7 +818,7 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
 // ---------------- 投递（落库 + 通知 + 角标 + 记忆） ----------------
 
 /** 主动消息投递：写三端消息记录 + pushChatNotification + wx/qq 未读角标（正在看不计数） */
-async function deliverProactiveMsg(app: ProactiveApp, contact: ContactRecord, text: string): Promise<void> {
+async function deliverProactiveMsg(app: ProactiveApp, contact: ContactRecord, text: string, trigger: FireTrigger): Promise<void> {
   const cid = contact.id;
   const sessionKey = app === 'wx' ? `wx:${cid}` : app === 'qq' ? `qq:${cid}` : `sms:c:${cid}`;
   const notifyApp = app === 'wx' ? ('wechat' as const) : app === 'qq' ? ('qq' as const) : ('chat' as const);
@@ -765,6 +862,8 @@ async function deliverProactiveMsg(app: ProactiveApp, contact: ContactRecord, te
   );
 
   setLast(app, cid, { lastSentText: text, sentAt: now });
+  // 最近主动消息历史（Task 51 C2：设置页回看，每角色最近 20 条）
+  pushHist(app, cid, { text, at: now, kind: trigger.kind, late: trigger.late });
 
   // 写记忆：主动消息同样进记忆管线（七.2）——与三端聊天 memAfterAiTurn 同口径
   try {
@@ -818,37 +917,60 @@ export async function runProactiveMsgTick(): Promise<void> {
   }
 }
 
-/** 事件此刻是否到期（分钟粒度；同分钟只触发一次） */
-function dueEventOf(e: ProactiveEvent, now: number, firedEvtAt: Record<string, number> | undefined): boolean {
-  if (!e.enabled || !e.time) return false;
-  const d = new Date(now);
-  const curHM = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  if (e.time !== curHM) return false;
-  if (e.days.length > 0 && !e.days.includes(d.getDay())) return false;
-  const curMinute = Math.floor(now / 60_000);
-  return (firedEvtAt?.[e.id] ?? -1) !== curMinute;
+/** 同一自然日判定（daily 类触发的按天去重） */
+function sameDay(a: number | undefined, b: number): boolean {
+  if (typeof a !== 'number') return false;
+  const x = new Date(a);
+  const y = new Date(b);
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
 }
 
-/** 到期的提醒任务（宽限窗口内；once 过期太久直接丢弃防陈旧补发） */
-function dueReminderOf(app: ProactiveApp, cid: string, now: number): ProactiveReminder | null {
+/** 分钟数（自当日零点）→ 当日该时刻的分钟戳 */
+function schedMinuteStamp(now: number, minutesOfDay: number): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor((d.getTime() + minutesOfDay * 60_000) / 60_000);
+}
+
+/**
+ * 事件此刻是否到期（Task 51 A1：宽限窗口 SCHEDULED_GRACE_MIN 分钟内错过仍补发；
+ * 返回值 = 计划时刻的分钟戳（防重发去重键），null = 未到期）。
+ */
+function dueEventOf(e: ProactiveEvent, now: number, firedEvtAt: Record<string, number> | undefined): number | null {
+  if (!e.enabled || !e.time) return null;
+  const d = new Date(now);
+  const [hh, mm] = e.time.split(':').map(Number);
+  const dm = hh * 60 + mm;
+  const cm = d.getHours() * 60 + d.getMinutes();
+  if (cm < dm || cm - dm > SCHEDULED_GRACE_MIN) return null;
+  if (e.days.length > 0 && !e.days.includes(d.getDay())) return null;
+  const stamp = schedMinuteStamp(now, dm);
+  return (firedEvtAt?.[e.id] ?? -1) !== stamp ? stamp : null;
+}
+
+/**
+ * 到期的提醒任务（Task 51 A1/A2）：
+ * once — 到点就发，不再静默丢弃：迟到也补发（late=超过宽限），任务触发后照常删除；
+ * daily — 按天去重 + SCHEDULED_GRACE_MIN 分钟宽限（错过精确分钟仍补发）；
+ * interval — 间隔到了就发（天然带宽限）。
+ */
+function dueReminderOf(app: ProactiveApp, cid: string, now: number): { r: ProactiveReminder; late: boolean } | null {
   const list = readReminders(app).filter((r) => r.cid === cid);
   const d = new Date(now);
-  const curHM = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  const curMinute = Math.floor(now / 60_000);
+  const cm = d.getHours() * 60 + d.getMinutes();
   for (const r of list) {
     if (r.kind === 'once' && typeof r.at === 'number' && !r.lastFiredAt) {
-      if (r.at <= now && now - r.at <= FIRE_GRACE_MS) return r;
-      if (r.at < now - FIRE_GRACE_MS) {
-        removeReminder(app, r.id); // 错过窗口的过期任务清理（页面一直没开等场景）
-      }
+      if (r.at <= now) return { r, late: now - r.at > FIRE_GRACE_MS };
       continue;
     }
     if (r.kind === 'daily' && r.dailyTime) {
-      if (r.dailyTime === curHM && Math.floor((r.lastFiredAt ?? -1) / 60_000) !== curMinute) return r;
+      const [hh, mm] = r.dailyTime.split(':').map(Number);
+      const dm = hh * 60 + mm;
+      if (cm >= dm && cm - dm <= SCHEDULED_GRACE_MIN && !sameDay(r.lastFiredAt, now)) return { r, late: cm - dm > 1 };
       continue;
     }
     if (r.kind === 'interval' && r.intervalMs) {
-      if (now - (r.lastFiredAt ?? r.createdAt) >= r.intervalMs) return r;
+      if (now - (r.lastFiredAt ?? r.createdAt) >= r.intervalMs) return { r, late: false };
       continue;
     }
   }
@@ -857,6 +979,9 @@ function dueReminderOf(app: ProactiveApp, cid: string, now: number): ProactiveRe
 
 async function tickInner(): Promise<void> {
   const nowMs = Date.now();
+
+  // 全局总开关（Task 51 B2）：一键暂停所有角色的主动发消息
+  if (isProactiveMasterOff()) return;
 
   // 交互中守卫（与主动来电同口径）：来电响铃/通话进行中不主动发消息（真实手机语义：通话里不来新消息提示音轰炸）
   if (useIncomingCall.getState().call) return;
@@ -880,39 +1005,66 @@ async function tickInner(): Promise<void> {
     const blk = loadBlock(app, cid);
     if (blk.byUser || blk.byChar) continue;
 
+    // 对话活跃守卫（Task 51 B1）：最近 2 分钟内有消息往来时跳过定时/自主触发（不打断正在进行的聊天；
+    // 事件/提醒是用户明确约定，不受此限）。10s tick 稍后再试。
+    let convActive = false;
+    try {
+      const norm = readNormMsgs(app, cid);
+      convActive = norm.length > 0 && nowMs - norm[norm.length - 1].time < CONVO_ACTIVE_MS;
+    } catch {
+      convActive = false;
+    }
+
     const last = getLast(app, cid);
     const npcExtra = contact.kind === 'npc' ? (buildNpcPromptExtra(contact, allContacts) as unknown as Record<string, unknown> | null) : null;
 
-    // ① 定时触发
-    if (cfg.timerOn) {
-      if (nowMs - (last.timerAt ?? 0) >= cfg.timerMs) {
+    // ① 定时触发（interval=按间隔累计；daily=对齐钟表时刻，按天去重+宽限）
+    if (cfg.timerOn && !convActive) {
+      if (cfg.timerMode === 'daily' && cfg.timerDailyTime) {
+        const [hh, mm] = cfg.timerDailyTime.split(':').map(Number);
+        const dm = hh * 60 + mm;
+        const d = new Date(nowMs);
+        const cm = d.getHours() * 60 + d.getMinutes();
+        if (cm >= dm && cm - dm <= SCHEDULED_GRACE_MIN && !sameDay(last.timerAt, nowMs)) {
+          setLast(app, cid, { timerAt: nowMs });
+          await fireProactive(app, contact, { kind: 'timer' }, npcExtra);
+          continue;
+        }
+      } else if (nowMs - (last.timerAt ?? 0) >= cfg.timerMs) {
         setLast(app, cid, { timerAt: nowMs });
         await fireProactive(app, contact, { kind: 'timer' }, npcExtra);
         continue;
       }
     }
 
-    // ② 事件触发
+    // ② 事件触发（宽限窗口内错过仍补发；按计划时刻分钟戳去重）
     const firedEvt = last.evtAt ?? {};
-    const evt = cfg.events.find((e) => dueEventOf(e, nowMs, firedEvt));
-    if (evt) {
-      setLast(app, cid, { evtAt: { ...firedEvt, [evt.id]: Math.floor(nowMs / 60_000) } });
-      await fireProactive(app, contact, { kind: 'event', eventName: evt.name }, npcExtra);
-      continue;
+    let evtFired = false;
+    for (const e of cfg.events) {
+      const stamp = dueEventOf(e, nowMs, firedEvt);
+      if (stamp !== null) {
+        setLast(app, cid, { evtAt: { ...firedEvt, [e.id]: stamp } });
+        await fireProactive(app, contact, { kind: 'event', eventName: e.name }, npcExtra);
+        evtFired = true;
+        break;
+      }
     }
+    if (evtFired) continue;
 
-    // ③ 定时提醒（自然语言任务）
-    const rem = dueReminderOf(app, cid, nowMs);
-    if (rem) {
+    // ③ 定时提醒（自然语言任务；once 迟到也补发并标注 late）
+    const due = dueReminderOf(app, cid, nowMs);
+    if (due) {
+      const rem = due.r;
       if (rem.kind === 'once') removeReminder(app, rem.id);
       else writeReminders(app, readReminders(app).map((r) => (r.id === rem.id ? { ...r, lastFiredAt: nowMs, firedCount: (r.firedCount ?? 0) + 1 } : r)));
-      await fireProactive(app, contact, { kind: 'reminder', note: rem.note }, npcExtra);
+      await fireProactive(app, contact, { kind: 'reminder', note: rem.note, late: due.late }, npcExtra);
       continue;
     }
 
-    // ④ 自主触发（深夜静默；基准间隔 5min，wait 决策会推迟下次决策点）
-    if (cfg.autoOn && !isAutoQuietHour(nowMs)) {
-      if (nowMs - (last.autoAt ?? 0) >= AUTO_DECIDE_BASE_MS) {
+    // ④ 自主触发（深夜静默；决策节奏可调 autoFreqMin，wait 决策会推迟下次决策点）
+    if (cfg.autoOn && !convActive && !isAutoQuietHour(nowMs)) {
+      const baseMs = Math.max(2, cfg.autoFreqMin ?? 5) * 60_000;
+      if (nowMs - (last.autoAt ?? 0) >= baseMs) {
         setLast(app, cid, { autoAt: nowMs });
         await fireProactive(app, contact, { kind: 'auto' }, npcExtra);
       }
@@ -938,9 +1090,10 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
     if (trigger.kind === 'auto') {
       const decision = await decideAutonomous(app, contact, npcExtra);
       if (decision.action !== 'send' || !decision.message) {
-        // wait：把下次决策推迟到建议时间（autoAt 后移，min 5min）
+        // wait：把下次决策推迟到建议时间（autoAt 后移，min 5min；基准用当前配置的决策节奏）
         const delayMs = (decision.delayMinutes ?? AUTO_WAIT_MIN_MINUTES) * 60_000;
-        setLast(app, contact.id, { autoAt: Date.now() + Math.max(0, delayMs - AUTO_DECIDE_BASE_MS) });
+        const baseMs = Math.max(2, getProactiveCfg(app, contact.id).autoFreqMin ?? AUTO_DECIDE_BASE_MS / 60_000) * 60_000;
+        setLast(app, contact.id, { autoAt: Date.now() + Math.max(0, delayMs - baseMs) });
         return;
       }
       text = decision.message;
@@ -953,7 +1106,7 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
     const lastSent = getLast(app, contact.id).lastSentText?.trim();
     if (lastSent) recent.push(lastSent);
     if (recent.includes(text)) return;
-    await deliverProactiveMsg(app, contact, text);
+    await deliverProactiveMsg(app, contact, text, trigger);
   } catch {
     /* 静默 */
   } finally {
@@ -982,12 +1135,13 @@ export function buildReminderSysMsg(app: ProactiveApp, label: string): Record<st
 
 // ---------------- 联系人删除清理 ----------------
 
-/** 删除联系人时清扫主动发消息的全部痕迹（配置/执行记录/提醒任务/索引） */
+/** 删除联系人时清扫主动发消息的全部痕迹（配置/执行记录/提醒任务/历史/索引） */
 export function purgeProactiveForContact(cid: string): void {
   try {
     for (const app of ['wx', 'qq', 'sms'] as ProactiveApp[]) {
       kvDel(scopedKvKey(`${CFG_KEY_PREFIX}${app}:${cid}`, app as AccountApp));
       kvDel(scopedKvKey(`${LAST_KEY_PREFIX}${app}:${cid}`, app as AccountApp));
+      kvDel(scopedKvKey(`${HIST_KEY_PREFIX}${app}:${cid}`, app as AccountApp));
       writeReminders(
         app,
         readReminders(app).filter((r) => r.cid !== cid),
@@ -998,6 +1152,30 @@ export function purgeProactiveForContact(cid: string): void {
     removeFromIndex('sms', cid);
   } catch {
     /* 清理失败静默 */
+  }
+}
+
+// ---------------- 手动触发（Task 51 C1：事件行「立即发一条」） ----------------
+
+/**
+ * 立即按指定事件生成并发送一条主动消息（设置页手动触发；不走定时判定，不影响 evtAt 记录）。
+ * 返回是否成功进入生成/投递（去重/锁/拉黑等与自动触发同口径）。
+ */
+export async function manuallyFireEvent(app: ProactiveApp, cid: string, eventId: string): Promise<boolean> {
+  try {
+    const cfg = getProactiveCfg(app, cid);
+    const evt = cfg.events.find((e) => e.id === eventId);
+    if (!evt) return false;
+    const all = await listContacts().catch(() => [] as ContactRecord[]);
+    const contact = all.find((c) => c.id === cid);
+    if (!contact || contact.kind === 'user' || !contact.name?.trim() || !contact.persona?.trim()) return false;
+    const blk = loadBlock(app, cid);
+    if (blk.byUser || blk.byChar) return false;
+    const npcExtra = contact.kind === 'npc' ? (buildNpcPromptExtra(contact, all) as unknown as Record<string, unknown> | null) : null;
+    await fireProactive(app, contact, { kind: 'event', eventName: evt.name }, npcExtra);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -32,6 +32,7 @@ import type { ContactRecord } from '@/lib/contacts';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
 import { COMMON_TRANSLATE_LANGS, MORE_TRANSLATE_LANGS, translateLangLabel, type ChatTranslateCfg, type TranslateLang } from '@/lib/chat-translate';
 import { AI_VOICE_FREQ_OPTIONS, aiVoiceFreqLabel, type AiVoiceFreq } from '@/lib/ios/ai-voice';
+import { isProactiveMasterOff, setProactiveMasterOff } from '@/lib/ios/proactive-msg';
 import { BUILTIN_TTS_VOICES, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { useMyVoices } from '@/lib/ios/my-voices';
@@ -1496,6 +1497,14 @@ export function SmsChatSettingsPage({
   proactiveSummary?: string;
 }) {
   const t = translateTokens('sms');
+  /** AI 主动消息全局总开关（Task 51 B2：设备级，关闭后所有角色暂停主动发消息） */
+  const [proactiveMasterOff, setProactiveMasterOffState] = useState<boolean>(() => {
+    try {
+      return isProactiveMasterOff();
+    } catch {
+      return false;
+    }
+  });
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
   const [remarkOpen, setRemarkOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
@@ -1629,22 +1638,42 @@ export function SmsChatSettingsPage({
           </div>
         </div>
 
-        {/* 主动发消息：定时/事件/自主/自然语言提醒四类触发（独立二级页，每角色独立设置） */}
+        {/* 主动发消息：全局总开关 + 每角色独立设置入口（独立二级页，每角色独立设置） */}
         {onOpenProactive && (
-          <div className={`${t.cardCls} mt-3`}>
-            <button type="button" data-testid="sms-settings-proactive" onClick={onOpenProactive} className={t.rowCls}>
-              <span className="flex items-center gap-2.5">
-                <Zap className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
-                主动发消息
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                <span data-testid="sms-proactive-summary" className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
-                  {proactiveSummary || '未开启'}
+          <>
+            <div className={`${t.cardCls} mt-3`}>
+              <div className={`flex items-center justify-between ${t.rowCls}`}>
+                <span className="min-w-0">
+                  <span className="block">AI 主动消息</span>
+                  <span className="mt-0.5 block text-[12px] text-muted-foreground">关闭后，所有角色暂停主动给你发消息</span>
                 </span>
-                <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
-              </span>
-            </button>
-          </div>
+                <ChatToggle
+                  on={!proactiveMasterOff}
+                  onChange={(v) => {
+                    setProactiveMasterOff(!v);
+                    setProactiveMasterOffState(!v);
+                  }}
+                  accent="#34C759"
+                  testId="sms-settings-proactive-master"
+                  label="AI 主动消息"
+                />
+              </div>
+            </div>
+            <div className={`${t.cardCls} mt-3`}>
+              <button type="button" data-testid="sms-settings-proactive" onClick={onOpenProactive} className={t.rowCls}>
+                <span className="flex items-center gap-2.5">
+                  <Zap className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
+                  主动发消息
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span data-testid="sms-proactive-summary" className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+                    {proactiveSummary || '未开启'}
+                  </span>
+                  <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+                </span>
+              </button>
+            </div>
+          </>
         )}
 
         {/* 动作描写：AI 回复中动作/情景描写的显示开关（与微信/QQ 同套逻辑，按会话独立） */}

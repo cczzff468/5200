@@ -14565,3 +14565,38 @@ Stage Summary:
   ⑧「晚上8点提醒我」在 8 点后说会解析失败无任务无反馈（可改跨天=明天）
   ⑨无主动消息历史回看；⑩事件可重名
 - 改动文件：src/components/apps/proactive-msg-page.tsx（仅此一个文件）
+
+---
+Task ID: 51
+Agent: Z.ai Code（主会话）
+Task: 「AI 主动发消息」规则全面完善（用户选了全部：A1/A2/A3/B1/B2/B3/B4/C1/C2/C3，其中 A2 指定「迟到也补发+标注来晚了」）+ 界面/弹窗二次美化（简约毛玻璃胶囊）+ 事件时间选择器（几点几分）重点美化
+
+Work Log:
+- 引擎 src/lib/ios/proactive-msg.ts：
+  - A1 每日宽限：dueEventOf 改返回「计划时刻分钟戳」作去重键 + SCHEDULED_GRACE_MIN=5 分钟宽限（错过精确分钟/休眠唤醒仍补发）；dueReminderOf daily 分支同宽限 + sameDay 按天去重（替代原精确分钟匹配）
+  - A2 迟到补发：once 提醒 r.at<=now 就发（不再 90s 后静默删除），late=超宽限标记 → triggerDesc 注入「比约定时间晚到了，要自然带一句歉意如『来晚了』」；E2E 实测种 10 分钟前过期的 once 任务 → tick 自动补发「来晚了~该喝水啦！记得多喝水哦~」+ 历史 late:true
+  - A3 跨天解析：REMINDER_PARSE_SYSTEM 规则 2 增加「时刻今天已过 → 按明天同一时刻换算（+1440 分钟）」
+  - B1 对话活跃守卫：tickInner 每联系人读最近消息，2 分钟内有往来（CONVO_ACTIVE_MS=120s）跳过定时/自主触发（事件/提醒=明确约定不受限），防打断正在进行的聊天
+  - B2 全局总开关：MASTER_OFF_KEY 设备级 kv + isProactiveMasterOff/setProactiveMasterOff，tickInner 最先早退；三端设置页接入（见下）
+  - B3 每天定时模式：ProactiveMsgConfig 增 timerMode('interval'|'daily')/timerDailyTime('HH:mm')；daily 分支按天去重+宽限，对齐钟表时刻；摘要「每天 21:30」
+  - B4 自主频率可调：autoFreqMin（2~120 分钟，档位 3/5/10/15/30）；决策节奏与 wait 推迟基准都改用配置值
+  - C1 事件价值提升：①decideAutonomous 注入启用事件清单（含无时间事件）作「生活安排」情境参考 ②manuallyFireEvent(app,cid,eventId) 手动触发导出（同口径锁/去重/拉黑）
+  - C2 主动消息历史：proactive-msg-hist:<app>:<cid>（账号作用域，cap 20）+ pushHist 于投递后记录 {text,at,kind,late} + proactiveHistory/histTimeLabel 导出
+  - C3 事件同名查重：设置页 saveEvent 同名拒绝 + 提示
+  - deliverProactiveMsg 增 trigger 参数记录历史 kind；purgeProactiveForContact 清扫历史键
+- UI src/components/apps/proactive-msg-page.tsx（二次美化+新功能 UI）：
+  - 新组件 WheelColumn：iOS picker 风 时/分滚轮（scroll-snap + 40px 项 + 中心毛玻璃选中胶囊垫底文字浮上 + 上下渐隐 + 点击平滑定位）；修 v1 首版 backdrop-blur 盖字问题（胶囊改 z-0 垫底）
+  - 事件弹窗「几点几分」重做：原生 time input → 双滚轮 + 「准时触发｜仅情境」胶囊分段（仅情境=不自动触发，开启自主后作情境参考，对齐 C1 语义）
+  - 定时触发双模式：胶囊分段「按间隔｜每天定时」；daily 显示 21:30 大字行 → 「每天发送时刻」玻璃弹窗（双滚轮 dial）
+  - 自主模式频率档 chips；事件行「立即发一条」Send 圆钮；「最近主动消息」历史卡（kind 徽章 + 来晚了琥珀徽章 + 今天/昨天/M月D日 HH:MM）；事件重名红字提示
+  - 简约化：阴影/光晕减弱、边框变细、弹窗标题去图标、光斑透明度降低
+  - 新导出 ProactiveMasterRow（全局总开关行，供三端设置页共用）
+- 三端设置页接入 B2：wechat.tsx WxSettingsPage（rows 卡下方独立卡）/ qq.tsx SettingsPage（功能组内分隔行）/ chat-settings.tsx SmsChatSettingsPage（主动发消息入口行上方卡，为避免循环依赖内联实现而非复用 ProactiveMasterRow）
+- E2E（agent-browser 420x900，种陈凡+林小暖）：
+  ①新设置页浅色渲染 ✓ ②每天定时模式：分段切换 → 拨盘弹窗（滚轮选 21:30 → 保存 → 行显示 21:30 + 摘要「每天 21:30」+ 呼吸灯）✓ ③自主频率档 10分钟 生效 ✓ ④事件弹窗滚轮选 16:30 保存 → 行徽章「每天 16:30」✓ ⑤事件「立即发一条」→ 实时横幅通知 + 人设口吻消息（颜文字）✓ ⑥A2 迟到补发：种 10 分钟前 once 任务 → 25s 内 tick 补发「来晚了~该喝水啦！」+ 历史 late:true + UI 琥珀「来晚了」徽章 ✓ ⑦历史卡 3 条（提醒/事件/定时 + 时间标签）✓ ⑧wx 设置页全局开关：开→kv true / 关→kv false ✓ ⑨深色模式：设置页开关行 + 拨盘滚轮全部正常 ✓ ⑩控制台零错误、dev.log 无运行时错误
+- 测试数据全清：2 联系人 + 11 kv 键（proactive-*、聊天、记忆、moments、master-off）+ localStorage 会话；bunx tsc 0 错误；bun run lint 全绿（修一处 React Compiler ref-in-render 违规：WheelColumn useState 初始化不再读 ref）
+
+Stage Summary:
+- 交付：十条规则完善全部落地——每日/事件宽限补发、once 迟到补发+「来晚了」标注（生成 prompt + 历史徽章双呈现）、跨天提醒解析、聊天中不打扰守卫、三端全局总开关、定时「每天定时」钟表对齐模式、自主决策频率档、无时间事件入自主情境+手动触发、主动消息历史回看、事件查重；事件时间选择器换 iOS 风时/分滚轮，弹窗与整页二次简约毛玻璃化
+- 关键设计：宽限去重键统一用「计划时刻分钟戳」（同窗口只发一次）；提醒类触发不受对话活跃守卫限制（用户明确约定优先）；全局开关为设备级（一键全停）
+- 改动文件：src/lib/ios/proactive-msg.ts、src/components/apps/proactive-msg-page.tsx、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

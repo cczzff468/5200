@@ -255,7 +255,7 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
-import { ProactiveMsgPage } from './proactive-msg-page';
+import { ProactiveMsgPage, ProactiveMasterRow } from './proactive-msg-page';
 import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
@@ -11019,6 +11019,10 @@ function WxSettingsPage({
               <ChevronRight className="h-4 w-4 opacity-30" strokeWidth={2} />
             </button>
           ))}
+        </div>
+        {/* AI 主动消息总开关（Task 51 B2：一键暂停/恢复所有角色的主动发消息） */}
+        <div className="mt-4 overflow-hidden rounded-[10px] bg-white dark:bg-[#1A1A1A]">
+          <ProactiveMasterRow accent="#07C160" testId="wx-settings-proactive-master" className="px-4 py-3" />
         </div>
         {/* 切换账号：独立卡片行（设置列表外，退出登录上方；用户要求对照截图样式） */}
         <button

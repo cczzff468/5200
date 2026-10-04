@@ -321,7 +321,7 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
-import { ProactiveMsgPage } from './proactive-msg-page';
+import { ProactiveMsgPage, ProactiveMasterRow } from './proactive-msg-page';
 import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
@@ -12878,6 +12878,10 @@ function SettingsPage({
               <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
             </button>
           ))}
+          {/* AI 主动消息总开关（Task 51 B2：一键暂停/恢复所有角色的主动发消息） */}
+          <div className="border-t border-black/[0.04] dark:border-white/[0.05]">
+            <ProactiveMasterRow accent="#0099FF" testId="qq-settings-proactive-master" className="px-4 py-3" />
+          </div>
         </div>
 
         <p className="px-1 pb-1.5 pt-5 text-[13px] text-black/35 dark:text-white/35">隐私</p>
