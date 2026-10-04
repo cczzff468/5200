@@ -437,6 +437,12 @@ export async function hotSearch(): Promise<HotSearchItem[]> {
   return j.data ?? [];
 }
 
+/** 相似歌曲（首页「根据你喜爱的歌曲推荐」/ 播放页「开始相似歌曲漫游」） */
+export async function simiSong(id: number, limit = 6): Promise<NcmSong[]> {
+  const j = await ncmRequest<{ songs?: NcmSong[] }>('simi/song', { id, limit });
+  return (j.songs ?? []).map(normalizeSong);
+}
+
 /** 歌手热门歌曲 */
 export async function artistSongs(id: number, limit = 30): Promise<{ artist: NcmArtist; songs: NcmSong[] }> {
   const j = await ncmRequest<{ artist: NcmArtist; hotSongs: NcmSong[] }>('artists', { id, limit });

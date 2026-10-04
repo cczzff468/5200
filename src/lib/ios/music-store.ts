@@ -127,7 +127,10 @@ export interface TogetherSessionLike {
   name: string;
   avatar: string;
   distanceKm: number;
+  /** 展示锚点 = 累计起点（现在 - 历史累计时长），时长跨会话永久累计 */
   since: number;
+  /** 本次段落真实开始时间（用于「这次听过的歌」过滤与退出时累加） */
+  segStart?: number;
   aiChatter: boolean;
 }
 export interface TogetherMsgLike {
@@ -539,7 +542,8 @@ export const useMusic = create<MusicState>((set, get) => ({
       loadHistoryFor();
     } else {
       // 未登录：保留 guestMode（游客标记持久化，刷新后仍是游客模式）
-      set({ loginUid: null, loginNickname: '', loginAvatar: '', likedIds: new Set(), likedSongs: {} });
+      set({ loginUid: null, loginNickname: '', loginAvatar: '' });
+      void get().initLiked(); // 游客红心从本地 kv 恢复（首页根据喜爱推荐依赖）
       loadHistoryFor();
     }
   },

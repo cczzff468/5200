@@ -5,12 +5,13 @@
  * 未登录（游客）：推荐歌单/排行榜/新歌仍可用（公开接口），每日推荐引导登录。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CalendarDays,
   ChevronRight,
+  Heart,
+  Menu,
   Play,
-  Settings2,
   Signal,
   TrendingUp,
 } from 'lucide-react';
@@ -18,6 +19,7 @@ import {
   dailyRecommendSongs,
   personalizedNewSongs,
   personalizedPlaylists,
+  simiSong,
   toplist,
   type NcmPlaylist,
   type NcmSong,
@@ -40,6 +42,10 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const [tops, setTops] = useState<NcmToplist[] | null>(null);
   const [newSongs, setNewSongs] = useState<NcmSong[] | null>(null);
   const [daily, setDaily] = useState<NcmSong[] | null>(null);
+  // 根据你喜爱的歌曲推荐（取最近一首红心歌的相似歌）
+  const likedIds = useMusic((s) => s.likedIds);
+  const [simiSongs, setSimiSongs] = useState<NcmSong[]>([]);
+  const simiSeedRef = useRef<number | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -73,6 +79,30 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     })();
   }, [loginUid]);
 
+  // 根据红心歌推荐：红心变化时以「最近红心的一首」为种子拉相似歌（去掉已红心的）
+  // 无红心时不在 effect 里 setState（渲染层直接隐藏区块）
+  useEffect(() => {
+    const ids = [...likedIds];
+    if (!ids.length) return;
+    const seed = ids[ids.length - 1];
+    if (simiSeedRef.current === seed) return;
+    simiSeedRef.current = seed;
+    let on = true;
+    void (async () => {
+      try {
+        const list = await simiSong(seed, 8);
+        if (on && simiSeedRef.current === seed) {
+          setSimiSongs(list.filter((s) => !likedIds.has(s.id)).slice(0, 6));
+        }
+      } catch {
+        // 拉取失败保持现状（区块不展示）
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, [likedIds]);
+
   const today = new Date();
 
   return (
@@ -83,10 +113,10 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           type="button"
           onClick={onSettings}
           data-testid="music-home-settings"
-          className="text-zinc-600 dark:text-zinc-300"
+          className="text-zinc-600 active:scale-95 dark:text-zinc-300"
           aria-label="设置"
         >
-          <Settings2 className="h-[22px] w-[22px]" />
+          <Menu className="h-[22px] w-[22px]" />
         </button>
         <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">音乐</span>
         <button
@@ -254,6 +284,42 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
             </button>
           ))}
         </div>
+      )}
+
+      {/* 根据你喜爱的歌曲推荐（有红心歌才展示） */}
+      {likedIds.size > 0 && simiSongs.length > 0 && (
+        <>
+          <SectionTitle
+            right={
+              <Heart className="h-4 w-4 text-zinc-400" />
+            }
+          >
+            根据你喜爱的歌曲推荐
+          </SectionTitle>
+          <div className="space-y-0.5 px-1" data-testid="music-home-simi">
+            {simiSongs.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => void playSong(s, simiSongs)}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-1.5 text-left active:bg-black/5 dark:active:bg-white/10"
+              >
+                <CoverImg src={s.album?.picUrl} className="h-11 w-11" rounded="rounded-lg" alt={s.name} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[14px] text-zinc-900 dark:text-zinc-100">{s.name}</p>
+                  <p className="truncate text-[11px] text-zinc-400">
+                    {s.artists?.map((a) => a.name).join('/')}
+                  </p>
+                </div>
+                {s.fee === 1 && (
+                  <span className="shrink-0 rounded-[3px] border border-[#C20C0C]/50 px-1 text-[9px] leading-[14px] text-[#C20C0C]">
+                    VIP
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {/* 新歌速递 */}

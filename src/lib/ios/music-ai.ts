@@ -51,19 +51,46 @@ export interface TogetherSession {
   avatar: string;
   /** 虚构距离（公里，按角色稳定） */
   distanceKm: number;
+  /** 展示锚点 = 累计起点（现在 - 历史累计时长）：退出后重进，时长接着上次累计 */
   since: number;
+  /** 本次段落真实开始时间（退出时把这段累加进总数） */
+  segStart?: number;
   /** AI 主动评论开关（会话级） */
   aiChatter: boolean;
 }
 
 const ACTIVE_KEY_PREFIX = 'music-together-active:';
 const MSGS_KEY_PREFIX = 'music-together:';
+/** 每个角色的累计一起听时长（毫秒，永久保存：退出累加，重进接着算） */
+const DUR_KEY_PREFIX = 'music-tg-dur:';
 
 function activeKey(): string {
   return `${ACTIVE_KEY_PREFIX}${musicUid()}`;
 }
 function msgsKey(cid: string): string {
   return `${MSGS_KEY_PREFIX}${musicUid()}:${cid}`;
+}
+function durKey(cid: string): string {
+  return `${DUR_KEY_PREFIX}${musicUid()}:${cid}`;
+}
+
+/** 读取与某角色的累计一起听时长（毫秒） */
+export function togetherTotalMs(cid: string): number {
+  return kvGet<number>(durKey(cid)) ?? 0;
+}
+
+/** 把当前活跃会话的这一段时长累加进总数（退出/换人前调用） */
+function accumulateSegment(s: TogetherSession | null): void {
+  if (!s) return;
+  const seg = s.segStart ? Math.max(0, Date.now() - s.segStart) : 0;
+  if (seg <= 0) return;
+  kvSet(durKey(s.contactId), togetherTotalMs(s.contactId) + seg);
+}
+
+/** 格式化累计时长（X小时Y分钟 / Y分钟） */
+export function fmtTogetherDur(ms: number): string {
+  const mins = Math.max(1, Math.floor(ms / 60_000));
+  return mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60}分钟` : `${mins}分钟`;
 }
 
 // ---------------- 会话管理 ----------------
@@ -73,17 +100,23 @@ export function loadActiveTogether(): TogetherSession | null {
 }
 
 export function startTogether(contact: ContactRecord): TogetherSession {
+  // 若已有活跃会话，先把那段时长累加进对应角色（不丢失）
+  accumulateSegment(loadActiveTogether());
   // 距离：按角色 id+region 稳定虚构（50~1800 km）
   const seedStr = `${contact.id}:${contact.region ?? ''}`;
   let h = 0;
   for (let i = 0; i < seedStr.length; i++) h = (h * 31 + seedStr.charCodeAt(i)) >>> 0;
   const distanceKm = 50 + (h % 1750);
+  const now = Date.now();
+  // 时长永久累计：since 锚点 = 现在 - 历史累计（下次邀请从上次的时长继续）
+  const carriedMs = togetherTotalMs(contact.id);
   const session: TogetherSession = {
     contactId: contact.id,
     name: contact.nickname || contact.name,
     avatar: contact.avatar || '',
     distanceKm,
-    since: Date.now(),
+    since: now - carriedMs,
+    segStart: now,
     aiChatter: true,
   };
   kvSet(activeKey(), session);
@@ -93,11 +126,19 @@ export function startTogether(contact: ContactRecord): TogetherSession {
 
 export async function stopTogether(): Promise<void> {
   const s = loadActiveTogether();
-  kvDel(activeKey());
-  useMusic.setState({ together: null });
-  stopChatterTimer();
   if (s) {
-    await writeTogetherMemory(s.contactId, '结束了这次一起听');
+    accumulateSegment(s); // 本段时长写入累计总数
+    kvDel(activeKey());
+    useMusic.setState({ together: null });
+    stopChatterTimer();
+    await writeTogetherMemory(
+      s.contactId,
+      `结束了这次一起听（累计一起听了 ${fmtTogetherDur(Date.now() - s.since)}）`,
+    );
+  } else {
+    kvDel(activeKey());
+    useMusic.setState({ together: null });
+    stopChatterTimer();
   }
 }
 

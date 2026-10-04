@@ -4,7 +4,6 @@
  * 音乐 App 设置页：
  * - API 配置卡（地址/API Key/测试连接/恢复默认）
  * - 账号卡（当前用户/退出登录；退出后回登录页）
- * - AI 互动说明（一起听主动聊天开关在会话头部；听歌记忆说明）
  * - 关于（非官方 API 声明/VIP 试听说明）
  */
 
@@ -152,16 +151,6 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
               {saved ? '已保存 ✓ 立即生效' : '保存配置'}
             </button>
           </div>
-        </section>
-
-        {/* AI 互动 */}
-        <section className="rounded-2xl border border-black/5 bg-white p-4 dark:border-white/10 dark:bg-zinc-900">
-          <p className="mb-2 text-[13px] font-bold text-zinc-500">AI 一起听</p>
-          <ul className="space-y-1.5 text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-            <li>· 在播放页「更多 → 一起听」邀请 AI 角色一起听歌、聊天、让 TA 推荐歌曲；</li>
-            <li>· 一起听时每首歌会写入该角色的记忆，之后在任何聊天里 TA 都记得你们听过什么；</li>
-            <li>· 一起听时 TA 会主动聊音乐、推荐歌曲（默认开启）。</li>
-          </ul>
         </section>
 
         {/* 关于 */}

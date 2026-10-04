@@ -60,33 +60,48 @@ type SheetKind = 'recent' | 'record' | 'liked' | 'local' | 'dress' | 'profile' |
 type MainTab = 'music' | 'podcast' | 'notes';
 type SubTab = 'recent' | 'created';
 
-/** 中文数字（VIP 等级展示：1→一 … 7→柒? 不，大写金额才用柒；这里跟网易云用小写中文数字） */
-const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+/** 中文数字（VIP 等级展示，跟网易云一样用大写/繁体数字：壹贰叁肆伍陆柒捌玖拾） */
+const CN_DIGITS = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖'];
+const CN_TEN = '拾';
 
 export function cnNum(n: number): string {
   const x = Math.max(1, Math.min(99, Math.floor(n)));
   if (x < 10) return CN_DIGITS[x];
   const t = Math.floor(x / 10);
   const o = x % 10;
-  return (t > 1 ? CN_DIGITS[t] : '') + '十' + (o ? CN_DIGITS[o] : '');
+  return (t > 1 ? CN_DIGITS[t] : '') + CN_TEN + (o ? CN_DIGITS[o] : '');
 }
 
-/** VIP 徽章（仿网易云：黑色胶囊 + 黑胶唱片图标 + VIP·中文数字；SVIP 为金胶） */
+/**
+ * VIP 徽章（仿网易云黑胶 VIP：渐变黑胶囊 + 小黑胶唱片（红标芯+白色孔）+「VIP·柒」繁体数字；
+ * SVIP 为金胶金盘金芯）。
+ */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
   return (
     <span
-      className="flex shrink-0 items-center rounded-full bg-black/60 py-[3px] pl-[5px] pr-2"
+      className={`flex shrink-0 items-center rounded-full py-[3px] pl-[4px] pr-[8px] shadow-sm ${
+        svip
+          ? 'bg-gradient-to-b from-[#F3DCA8] to-[#D3A44B] ring-1 ring-[#B8862F]/60'
+          : 'bg-gradient-to-b from-[#333336] to-[#101012] ring-1 ring-white/15'
+      }`}
       data-testid="music-mine-vip"
     >
+      {/* 小黑胶唱片：盘面 + 标芯 + 中心孔 */}
+      <span className="relative mr-1 flex h-[15px] w-[15px] items-center justify-center rounded-full bg-[#0d0d0d] shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.38)]">
+        <span
+          className={`flex h-[7.5px] w-[7.5px] items-center justify-center rounded-full ${
+            svip ? 'bg-[#8A5C13]' : 'bg-[#EC4141]'
+          }`}
+        >
+          <span className="h-[2px] w-[2px] rounded-full bg-white/90" />
+        </span>
+      </span>
       <span
-        className={`relative mr-1 flex h-[15px] w-[15px] items-center justify-center rounded-full ${
-          svip ? 'bg-[#e7c583]' : 'bg-[#161616] ring-[1.5px] ring-white/45'
+        className={`text-[11px] font-semibold tracking-wide ${
+          svip ? 'text-[#4A3005]' : 'text-white/95'
         }`}
       >
-        <span className={`h-[6.5px] w-[6.5px] rounded-full ${svip ? 'bg-[#8a5c13]' : 'bg-[#EC4141]'}`} />
-      </span>
-      <span className="text-[11px] font-semibold tracking-wide text-white/95">
         {svip ? 'SVIP' : 'VIP'}·{cnNum(level)}
       </span>
     </span>

@@ -14772,3 +14772,27 @@ Stage Summary:
 - 关键实现：getGuestAvatar 三级回退；profRev 强制重渲染；themeIdx=-1 自定义装扮槽；useTogetherLive 覆盖值+contact-avatar-changed 事件重读（不在 effect 同步 setState，规避 react-hooks/set-state-in-effect）；chatMode 早退分支补渲染菜单（E2E 当场抓到）
 - 范围限定遵守：仅动音乐 App 6 个文件（music-mine/player/together/home、music-store、music-ai），未触碰聊天/钱包/通话/朋友圈等 16 项受保护功能
 - 改动文件：src/lib/ios/music-store.ts、src/lib/ios/music-ai.ts、src/components/apps/music-mine.tsx、music-player.tsx、music-together.tsx、music-home.tsx
+
+---
+Task ID: 58
+Agent: Z.ai Code（主会话）
+Task: 用户第三轮反馈八项——歌词页点空白回唱片、自己听删音量滑块、一起听时长永久累计保存、VIP 徽章仿网易云（繁体数字）、首页左上角三条杠、新歌速递上方加「根据你喜爱的歌曲推荐」、设置页删底部 AI 一起听、自己听右上角设置改为网易云式歌曲面板（按截图）
+
+Work Log:
+- 歌词页点击空白回唱片（music-player LyricView）：歌词滚动容器整体 onClick=返回唱片（music-lyric-backdrop），歌词行 onClick stopPropagation（点行=跳进度不返回）；实测点行留在歌词页、点空白/上下留白回唱片 ✓
+- 自己听底部音量滑块删除（music-player）：音量行整体删除（Volume2/setVolume/volume 全清），一起听与自听两态都没有音量条
+- 一起听时长永久保存（music-ai + music-store）：新增 kv music-tg-dur:{uid}:{cid} 每角色累计毫秒；TogetherSession/TogetherSessionLike 新增 segStart（本段真实开始）——startTogether 把 since 锚点设为 now-历史累计（重邀从上次时长继续）、先把旧活跃会话段累加；stopTogether 累加本段（退出不丢）；TogetherHead/记录页时长改用 fmtTogetherDur(累计)；记录页「这次一起听过的歌」改按 segStart 过滤（跨段不混入）；退出记忆文案带累计时长。实测：种子 1 小时 → 邀请显示「1小时0分钟」→ 退出 kv=3612110ms（本段已累加）→ 重邀仍 1小时0分钟 → 跨过 61 分钟边界实时变「1小时1分钟」✓
+- VIP 徽章仿网易云+繁体数字（music-mine）：cnNum 改大写繁体 壹贰叁肆伍陆柒捌玖+拾（21→贰拾壹）；VipBadge 重画——渐变黑胶囊+小黑胶唱片（白环盘面+红标芯+白色中心孔）+「VIP·柒」，SVIP 金渐变胶囊金盘金芯深棕字；实测 SVIP·21 → 「SVIP·贰拾壹」金色徽章上屏 ✓
+- 首页左上角三条杠（music-home）：Settings2 → lucide Menu（三条横线），testid 不变
+- 首页「根据你喜爱的歌曲推荐」（music-home + music-api）：music-api 新增 simiSong（/simi/song 相似歌曲）；首页新增区块——取「最近红心的一首」为种子拉 8 首相似、滤掉已红心取 6 首，列表行样式同新歌速递，位于新歌速递上方；无红心/接口空时整块隐藏（不 setState 于 effect 同步体，规避 lint）；refreshLoginUi 未登录分支补 initLiked()（游客红心启动即恢复，首页推荐依赖）。实测红心「泡沫」→ 首页出现 6 首推荐（别哭了我爱你/幻痛药…）位于新歌速递上方 ✓
+- 设置页底部「AI 一起听」说明卡删除（music-settings），只剩 账号/API 配置/关于/我的音乐主页
+- 自己听右上角「⋯」改为网易云式歌曲面板（music-player MoreSheet 整个重写，按截图 1:1）：白色圆角底部面板+抓手；头部=封面+歌名+VIP 角标+歌手+右侧「为TA心动」胶囊（点=红心，已心动变红）；四宫格（无底圈纯图标+文字）：收藏（复用 AddToSongSheet）/下载（图标带金 VIP 角标，真实下载）/分享（Forward，系统分享或剪贴板）/正在一起听（双人重叠头像，点开邀请）；信息行：评论(N)（真实 commentsOf 拉总数，实测 140652）/专辑：X/歌手：X+红色「+关注」胶囊（真实 artistSub，游客提示需登录）/查看歌曲百科/开始相似歌曲漫游（simiSong 换队列开播，实测切到相似歌）/单曲购买；分隔线下：音质：极高+迷你黑胶 VIP 胶囊（点击循环 标准/较高/极高）/音效/播放器样式；深色模式适配；原 8 圆形图标暗面板废弃
+- E2E（agent-browser 420x900 游客态）全过：三条杠 ✓；搜泡沫播放→播放页无音量条 ✓；黑胶→歌词→点空白回唱片+点歌词行仅跳进度 ✓；⋯ 新面板全要素（评论数真实/专辑/歌手+关注/音质 VIP 胶囊）✓；为TA心动→已心动 ✓；收藏→歌单面板 ✓；相似漫游→切歌 ✓；首页推荐区块（红心后出现，位于新歌速递上方）✓；设置无 AI 一起听 ✓；VIP·柒→SVIP·贰拾壹 ✓；一起听邀请小陈→1小时0分钟→退出累加→重邀接续→1小时1分钟 ✓；查看记录累计时长+本段歌曲过滤 ✓；聊天 AI 回复 ✓；深色模式 ✓；console/dev.log 零错误
+- 测试数据清理：e2e-chen 联系人 + 全部 music-* kv 键清空（隔离档案，用户数据不受影响）
+- bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：歌词页「点行跳进度、点空白回唱片」；自听/一起听均无音量滑块；一起听时长按角色永久累计（退出累加、重邀接续、记录页区分累计时长与本段歌曲）；VIP 徽章仿网易云黑胶样式+繁体数字（VIP·柒/SVIP·贰拾壹）；首页左上角三条杠；首页新增「根据你喜爱的歌曲推荐」（红心驱动，真实 simi/song）；设置页删 AI 一起听；自听右上角 ⋯ 换成网易云式歌曲操作面板（心动/收藏/下载/分享/正在一起听/评论数/专辑/歌手关注/百科/漫游/购买/音质/音效/样式）
+- 关键实现：since 展示锚点（now-累计）+ segStart 段落标记双字段让时长 UI 与歌曲过滤解耦；simiSong 复用支撑首页推荐与漫游两处；推荐区块空态隐藏策略规避 effect setState lint
+- 范围限定遵守：仅动音乐 App（music-player/mine/home/settings/music-ai/music-store/music-api），16 项受保护功能未触碰
+- 改动文件：src/lib/ios/music-api.ts、music-store.ts、music-ai.ts、src/components/apps/music-player.tsx、music-mine.tsx、music-home.tsx、music-settings.tsx

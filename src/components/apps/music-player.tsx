@@ -3,43 +3,53 @@
 /**
  * 音乐 App 播放页（仿网易云黑胶）：
  * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 唱针（播放贴合/暂停抬起）
- * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中）
- * - 进度条拖拽 / 音量 / 循环模式 / 播放暂停 / 上下首 / 播放列表
- * - 红心 / 评论 / 更多（一起听邀请、下载、加入队列、清空队列）
- * - 一起听态：顶部双头像重叠 + 距离/时长 + 音乐/聊天胶囊切换
+ * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；点空白处回唱片）
+ * - 进度条拖拽 / 循环模式 / 播放暂停 / 上下首 / 播放列表
+ * - 右上角更多：仿网易云歌曲面板（为TA心动/收藏/下载/分享/一起听/评论/相似漫游/音质）
+ * - 一起听态：顶部双头像 + 累计时长（跨会话永久保存） + 音乐/聊天胶囊切换
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AudioLines,
   ChevronDown,
   ClipboardList,
+  Disc2,
+  DiscAlbum,
+  Disc3,
   Download,
+  FolderPlus,
+  Forward,
   Heart,
+  Info,
   ListMusic,
   Loader2,
   LogOut,
   MessageCircle,
+  MicVocal,
   MoreHorizontal,
   MoreVertical,
   Music2,
   Pause,
   Play,
+  Plus,
+  Radio,
   Repeat,
   Repeat1,
   Shuffle,
   SlidersHorizontal,
+  ShoppingCart,
   SkipBack,
   SkipForward,
-  Trash2,
   TriangleAlert,
-  UserPlus,
+  UserRound,
   UserRoundSearch,
-  Volume2,
   X,
 } from 'lucide-react';
-import { songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
+import { artistSub, commentsOf, simiSong, songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
 import { useMusic, getGuestAvatar, type RepeatMode, type TogetherSessionLike, type TogetherMsgLike } from '@/lib/ios/music-store';
 import {
+  fmtTogetherDur,
   listTogetherCandidates,
   startTogether,
   stopTogether,
@@ -47,7 +57,7 @@ import {
   useTogetherLive,
 } from '@/lib/ios/music-ai';
 import type { ContactRecord } from '@/lib/contacts';
-import { CoverImg, fmtClock } from './music-shared';
+import { AddToSongSheet, CoverImg, fmtClock } from './music-shared';
 import { TogetherChat } from './music-together';
 
 export function MusicPlayer() {
@@ -58,7 +68,6 @@ export function MusicPlayer() {
   const position = useMusic((s) => s.position);
   const duration = useMusic((s) => s.duration);
   const mode = useMusic((s) => s.mode);
-  const volume = useMusic((s) => s.volume);
   const playError = useMusic((s) => s.playError);
   const freeTrial = useMusic((s) => s.freeTrial);
   const together = useMusic((s) => s.together);
@@ -69,7 +78,6 @@ export function MusicPlayer() {
   const next = useMusic((s) => s.next);
   const prev = useMusic((s) => s.prev);
   const seek = useMusic((s) => s.seek);
-  const setVolume = useMusic((s) => s.setVolume);
   const setMode = useMusic((s) => s.setMode);
   const openComments = useMusic((s) => s.openComments);
   const loadLyric = useMusic((s) => s.loadLyric);
@@ -198,26 +206,6 @@ export function MusicPlayer() {
           </div>
           {modeCapsule}
         </div>
-        {showMore && (
-          <MoreSheet
-            song={current}
-            liked={liked}
-            onClose={() => setShowMore(false)}
-            onToast={(m) => setMoreToast(m)}
-            onInvite={() => {
-              setShowMore(false);
-              setShowInvite(true);
-            }}
-            onShowQueue={() => {
-              setShowMore(false);
-              setShowQueue(true);
-            }}
-            onShowLyric={() => {
-              setShowMore(false);
-              setChatOverride(false);
-            }}
-          />
-        )}
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
         {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
@@ -328,23 +316,6 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 音量（一起听模式下隐藏） */}
-        {!together && (
-          <div className="flex items-center gap-2 px-6 pt-1">
-            <Volume2 className="h-3.5 w-3.5 shrink-0 text-white/50" />
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(volume * 100)}
-              onChange={(e) => setVolume(Number(e.target.value) / 100)}
-              className="music-volume-slider h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/20"
-              style={{ accentColor: '#EC4141' }}
-              aria-label="音量"
-            />
-          </div>
-        )}
-
         {/* 控制区 */}
         <div className="flex items-center justify-between px-8 pb-2 pt-3">
           <button
@@ -405,7 +376,7 @@ export function MusicPlayer() {
         {!together && <div className="h-[34px] shrink-0" />}
       </div>
 
-      {/* 更多面板 */}
+      {/* 更多面板（仿网易云歌曲操作面板） */}
       {showMore && (
         <MoreSheet
           song={current}
@@ -415,14 +386,6 @@ export function MusicPlayer() {
           onInvite={() => {
             setShowMore(false);
             setShowInvite(true);
-          }}
-          onShowQueue={() => {
-            setShowMore(false);
-            setShowQueue(true);
-          }}
-          onShowLyric={() => {
-            setShowMore(false);
-            setShowLyric(true);
           }}
         />
       )}
@@ -603,7 +566,12 @@ function LyricView({ onSwitch }: { onSwitch: () => void }) {
           <ChevronDown className="h-4 w-4" />
         </button>
       </div>
-      <div ref={containerRef} className="h-full overflow-y-auto py-[45%] no-scrollbar" data-testid="music-lyric-scroll">
+      <div
+        ref={containerRef}
+        onClick={onSwitch}
+        data-testid="music-lyric-backdrop"
+        className="h-full overflow-y-auto py-[45%] no-scrollbar"
+      >
         {loading && <p className="text-center text-[13px] text-white/40">歌词加载中…</p>}
         {!loading && lyricLines.length === 0 && (
           <p className="text-center text-[13px] text-white/40">暂无歌词</p>
@@ -612,7 +580,10 @@ function LyricView({ onSwitch }: { onSwitch: () => void }) {
           <div
             key={`${i}-${l.t}`}
             ref={i === activeIdx ? activeRef : null}
-            onClick={() => seek(Math.max(0, l.t - 0.3))}
+            onClick={(e) => {
+              e.stopPropagation(); // 点歌词行=跳播进度，不返回唱片
+              seek(Math.max(0, l.t - 0.3));
+            }}
             className={`cursor-pointer px-2 py-2.5 text-center transition-all duration-300 ${
               i === activeIdx ? 'scale-100' : 'opacity-45'
             }`}
@@ -685,8 +656,8 @@ function TogetherHead({ session }: { session: TogetherSessionLike }) {
     return () => clearInterval(t);
   }, []);
   const myAvatar = loginUid ? loginAvatar : getGuestAvatar();
-  const mins = Math.max(1, Math.floor((Date.now() - session.since) / 60_000));
-  const durText = mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60}分钟` : `${mins}分钟`;
+  // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
+  const durText = fmtTogetherDur(Date.now() - session.since);
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
       {/* 双头像（挨近一点） */}
@@ -764,21 +735,21 @@ function TgRecordSheet({
   onClose: () => void;
 }) {
   const history = useMusic((s) => s.history);
-  // 本次一起听（since 之后）听过的歌（去重、新在前）
+  // 本次一起听（segStart 之后）听过的歌（去重、新在前）；时长展示用累计锚点
+  const segStart = session.segStart ?? session.since;
   const songs = useMemo(() => {
     const seen = new Set<number>();
     const out: NcmSong[] = [];
     for (let i = history.length - 1; i >= 0; i--) {
       const h = history[i];
-      if (h.playedAt >= session.since && !seen.has(h.song.id)) {
+      if (h.playedAt >= segStart && !seen.has(h.song.id)) {
         seen.add(h.song.id);
         out.push(h.song);
       }
     }
     return out;
-  }, [history, session.since]);
-  const mins = Math.max(1, Math.floor((Date.now() - session.since) / 60_000));
-  const durText = mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60}分钟` : `${mins}分钟`;
+  }, [history, segStart]);
+  const durText = fmtTogetherDur(Date.now() - session.since);
   const chatCount = msgs.filter((m) => m.role !== 'recs').length;
   return (
     <div className="absolute inset-0 z-[63] flex items-end" data-testid="music-tg-record">
@@ -820,7 +791,9 @@ function TgRecordSheet({
   );
 }
 
-// ---------------- 更多面板 ----------------
+// ---------------- 更多面板（仿网易云歌曲操作面板） ----------------
+
+const MORE_QUALITIES = ['标准', '较高', '极高'];
 
 function MoreSheet({
   song,
@@ -828,21 +801,35 @@ function MoreSheet({
   onClose,
   onToast,
   onInvite,
-  onShowQueue,
-  onShowLyric,
 }: {
   song: NcmSong;
   liked: boolean;
   onClose: () => void;
   onToast: (m: string) => void;
   onInvite: () => void;
-  onShowQueue: () => void;
-  onShowLyric: () => void;
 }) {
-  const addToQueue = useMusic((s) => s.addToQueue);
-  const clearQueue = useMusic((s) => s.clearQueue);
   const openComments = useMusic((s) => s.openComments);
-  const queue = useMusic((s) => s.queue);
+  const toggleLike = useMusic((s) => s.toggleLike);
+  const playSong = useMusic((s) => s.playSong);
+  const [showAdd, setShowAdd] = useState(false);
+  const [cmtTotal, setCmtTotal] = useState<number | null>(null);
+  const [qIdx, setQIdx] = useState(2);
+
+  // 评论数（真实接口，只取总数）
+  useEffect(() => {
+    let on = true;
+    void (async () => {
+      try {
+        const p = await commentsOf(song.id, 1, 0);
+        if (on) setCmtTotal(p.total);
+      } catch {
+        // 数量获取失败不影响面板
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, [song.id]);
 
   const download = async () => {
     try {
@@ -874,53 +861,239 @@ function MoreSheet({
     }
   };
 
+  // 关注歌手（真实接口；游客态会提示需登录）
+  const followArtist = async () => {
+    const artist = song.artists?.[0];
+    if (!artist) return;
+    try {
+      await artistSub(artist.id, 1);
+      onToast(`已关注 ${artist.name}`);
+    } catch {
+      onToast('登录网易云账号后才能关注歌手');
+    }
+  };
+
+  // 相似歌曲漫游：以当前歌的相似歌开播
+  const roam = async () => {
+    try {
+      const list = await simiSong(song.id, 20);
+      if (!list.length) {
+        onToast('暂时没有找到相似歌曲');
+        return;
+      }
+      onClose();
+      void playSong(list[0], list);
+      onToast('已开始相似歌曲漫游');
+    } catch {
+      onToast('漫游启动失败，稍后再试');
+    }
+  };
+
+  const artistName = songArtistText(song);
+
   return (
     <div className="absolute inset-0 z-[66] flex items-end" data-testid="music-player-more-sheet">
-      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div className="relative w-full rounded-t-2xl bg-[#1c1c1e]/95 p-4 pb-9 backdrop-blur-xl">
-        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20" />
-        <div className="grid grid-cols-4 gap-y-4">
-          {[
-            {
-              k: 'queue',
-              label: `播放列表(${queue.length})`,
-              icon: <ListMusic className="h-5 w-5" />,
-              on: onShowQueue,
-            },
-            { k: 'lyric', label: '歌词', icon: <Music2 className="h-5 w-5" />, on: onShowLyric },
-            { k: 'comment', label: '评论', icon: <MessageCircle className="h-5 w-5" />, on: () => { onClose(); openComments(song); } },
-            { k: 'invite', label: '一起听', icon: <UserPlus className="h-5 w-5" />, on: onInvite },
-            { k: 'download', label: '下载', icon: <Download className="h-5 w-5" />, on: () => void download() },
-            { k: 'share', label: '分享', icon: <ChevronDown className="h-5 w-5" />, on: () => void share() },
-            { k: 'addq', label: '加入队列', icon: <Play className="h-5 w-5" />, on: () => { addToQueue([song]); onToast('已加入队列'); onClose(); } },
-            {
-              k: 'clear',
-              label: '清空队列',
-              icon: <Trash2 className="h-5 w-5" />,
-              on: () => {
-                clearQueue();
-                onClose();
-              },
-            },
-          ].map((it) => (
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
+      <div className="relative flex max-h-[82%] w-full flex-col rounded-t-2xl bg-white pb-6 dark:bg-zinc-900">
+        <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+        <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+          {/* 歌曲信息 + 为TA心动 */}
+          <div className="flex items-center gap-3 px-5 pt-4">
+            <CoverImg src={songCover(song)} className="h-12 w-12 shrink-0" rounded="rounded-lg" alt={song.name} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-[16px] font-bold text-zinc-900 dark:text-zinc-100">{song.name}</p>
+                {song.fee === 1 && (
+                  <span className="shrink-0 rounded-[3px] border border-[#EC4141]/50 px-1 text-[9px] leading-[14px] text-[#EC4141]">
+                    VIP
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 truncate text-[12px] text-zinc-400">{artistName}</p>
+            </div>
             <button
-              key={it.k}
               type="button"
-              onClick={it.on}
-              data-testid={`music-more-${it.k}`}
-              className="flex flex-col items-center gap-1.5 text-white/85 active:scale-95"
+              onClick={() => void toggleLike(song)}
+              data-testid="music-more-heart"
+              className={`flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-[12px] active:scale-95 ${
+                liked
+                  ? 'border-[#EC4141]/40 text-[#EC4141]'
+                  : 'border-zinc-300 text-zinc-700 dark:border-zinc-600 dark:text-zinc-200'
+              }`}
             >
-              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10">{it.icon}</span>
-              <span className="text-[10px]">{it.label}</span>
+              <Heart className="h-3.5 w-3.5" fill={liked ? 'currentColor' : 'none'} />
+              {liked ? '已心动' : '为TA心动'}
             </button>
-          ))}
+          </div>
+
+          <div className="mx-5 mt-4 border-t border-black/5 dark:border-white/10" />
+
+          {/* 收藏 / 下载 / 分享 / 正在一起听 */}
+          <div className="grid grid-cols-4 gap-y-2 px-3 py-4">
+            {[
+              {
+                k: 'collect',
+                label: '收藏',
+                icon: <FolderPlus className="h-[22px] w-[22px]" />,
+                on: () => setShowAdd(true),
+              },
+              {
+                k: 'download',
+                label: '下载',
+                icon: (
+                  <span className="relative">
+                    <Download className="h-[22px] w-[22px]" />
+                    <span className="absolute -bottom-1.5 -right-2.5 rounded-full bg-zinc-800 px-[3px] text-[7px] font-bold leading-[10px] text-[#F0D9A6] dark:bg-zinc-600">
+                      VIP
+                    </span>
+                  </span>
+                ),
+                on: () => void download(),
+              },
+              {
+                k: 'share',
+                label: '分享',
+                icon: <Forward className="h-[22px] w-[22px]" />,
+                on: () => void share(),
+              },
+              {
+                k: 'together',
+                label: '正在一起听',
+                icon: (
+                  <span className="relative flex h-[22px] w-[32px] items-center justify-center">
+                    <span className="flex h-[17px] w-[17px] items-center justify-center rounded-full bg-zinc-300 ring-2 ring-white dark:bg-zinc-600 dark:ring-zinc-900">
+                      <UserRound className="h-2.5 w-2.5 text-white dark:text-zinc-300" fill="currentColor" />
+                    </span>
+                    <span className="-ml-1.5 flex h-[17px] w-[17px] items-center justify-center rounded-full bg-zinc-800 ring-2 ring-white dark:bg-zinc-300 dark:ring-zinc-900">
+                      <UserRound className="h-2.5 w-2.5 text-zinc-600" fill="currentColor" />
+                    </span>
+                  </span>
+                ),
+                on: onInvite,
+              },
+            ].map((it) => (
+              <button
+                key={it.k}
+                type="button"
+                onClick={it.on}
+                data-testid={`music-more-${it.k}`}
+                className="flex flex-col items-center gap-1.5 text-zinc-700 active:scale-95 dark:text-zinc-200"
+              >
+                {it.icon}
+                <span className="text-[11px]">{it.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* 信息与功能行 */}
+          <div className="px-5">
+            <MoreRow
+              icon={<MessageCircle className="h-[19px] w-[19px]" />}
+              testid="music-more-comment"
+              onClick={() => {
+                onClose();
+                openComments(song);
+              }}
+            >
+              {cmtTotal === null ? '评论' : `评论(${cmtTotal})`}
+            </MoreRow>
+            {song.album?.name && (
+              <MoreRow icon={<DiscAlbum className="h-[19px] w-[19px]" />}>专辑：{song.album.name}</MoreRow>
+            )}
+            <MoreRow
+              icon={<MicVocal className="h-[19px] w-[19px]" />}
+              testid="music-more-follow"
+              onClick={() => void followArtist()}
+            >
+              <span className="inline-flex items-center gap-2">
+                歌手：{artistName}
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-[#EC4141] px-2 py-[3px] text-[10px] font-medium text-white">
+                  <Plus className="h-3 w-3" />
+                  关注
+                </span>
+              </span>
+            </MoreRow>
+            <MoreRow icon={<Info className="h-[19px] w-[19px]" />} onClick={() => onToast('暂未收录这首歌的百科')}>
+              查看歌曲百科
+            </MoreRow>
+            <MoreRow icon={<Radio className="h-[19px] w-[19px]" />} testid="music-more-roam" onClick={() => void roam()}>
+              开始相似歌曲漫游
+            </MoreRow>
+            <MoreRow icon={<ShoppingCart className="h-[19px] w-[19px]" />} onClick={() => onToast('演示环境暂不支持单曲购买')}>
+              单曲购买
+            </MoreRow>
+          </div>
+
+          <div className="mx-5 mt-2 border-t border-black/5 dark:border-white/10" />
+
+          <div className="px-5">
+            <MoreRow
+              icon={<Disc3 className="h-[19px] w-[19px]" />}
+              testid="music-more-quality"
+              onClick={() => {
+                const nx = (qIdx + 1) % MORE_QUALITIES.length;
+                setQIdx(nx);
+                onToast(`音质已切换为${MORE_QUALITIES[nx]}`);
+              }}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                音质：{MORE_QUALITIES[qIdx]}
+                <VipChip />
+              </span>
+            </MoreRow>
+            <MoreRow icon={<AudioLines className="h-[19px] w-[19px]" />} onClick={() => onToast('3D 环绕音效已开启（演示）')}>
+              音效
+            </MoreRow>
+            <MoreRow icon={<Disc2 className="h-[19px] w-[19px]" />} onClick={() => onToast('当前播放器样式：黑胶唱片')}>
+              播放器样式
+            </MoreRow>
+          </div>
         </div>
-        <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-white/40">
-          <Heart className={`h-3.5 w-3.5 ${liked ? 'text-[#EC4141]' : ''}`} fill={liked ? 'currentColor' : 'none'} />
-          {liked ? '已红心这首歌' : '红心在播放页右侧按钮'}
-        </div>
+
+        {/* 收藏到歌单（复用全局组件） */}
+        {showAdd && <AddToSongSheet song={song} onClose={() => setShowAdd(false)} />}
       </div>
     </div>
+  );
+}
+
+/** 更多面板列表行（左侧图标 + 文案；无 onClick 时纯展示） */
+function MoreRow({
+  icon,
+  children,
+  onClick,
+  testid,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  onClick?: () => void;
+  testid?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={testid}
+      disabled={!onClick}
+      className={`flex w-full items-center gap-4 py-[13px] text-left ${
+        onClick ? 'active:bg-black/5 dark:active:bg-white/10' : 'cursor-default'
+      }`}
+    >
+      <span className="shrink-0 text-zinc-500 dark:text-zinc-400">{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-[14px] text-zinc-800 dark:text-zinc-200">{children}</span>
+    </button>
+  );
+}
+
+/** 迷你 VIP 胶囊（音质行内，仿网易云黑胶小标） */
+function VipChip() {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full bg-zinc-900 py-[2.5px] pl-[4px] pr-[6px] dark:bg-zinc-700">
+      <span className="relative mr-[3px] flex h-[11px] w-[11px] items-center justify-center rounded-full bg-[#101010] ring-[1px] ring-white/40">
+        <span className="h-[4.5px] w-[4.5px] rounded-full bg-[#EC4141]" />
+      </span>
+      <span className="text-[9px] font-semibold leading-none text-white">VIP</span>
+    </span>
   );
 }
 
