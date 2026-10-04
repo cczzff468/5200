@@ -15097,3 +15097,26 @@ Stage Summary:
 - 关键实现：AI 忙碌态用 zustand 字段（tgAiBusy）跨模块 setState（music-ai 与 UI 解耦）；笔记解耦=换存储键而非过滤（结构性保证备忘录永不出现）；tab 常驻=聊天视图独立底部条与音乐视图同构（tab 位置一致切换不跳）
 - 范围限定遵守：仅动音乐 App 5 文件；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰
 - 改动文件：src/components/apps/music-player.tsx、music-together.tsx、music-mine.tsx、music-home.tsx、src/lib/ios/music-store.ts、music-ai.ts
+---
+Task ID: 71
+Agent: Z.ai Code（主会话）
+Task: 第十五轮反馈六项——①我页添加状态上移但背景图不动 ②一起听聊天视图头像红徽章删除 ③AI 重复回复根治（「为什么老是发一模一样的话」）④设置弹窗播放器样式支持手机上传听歌背景图 ⑤完善设置弹窗功能 ⑥提示 3 秒消失
+
+Work Log:
+- ①根因=第十四轮把状态胶囊改 -mt-2（流入式上移）压缩头部总高 8px，自定义装扮背景的 cover 裁剪随之变化（=用户说的「背景图往上移」）；修复=容器恢复 mt-0（头部流式高度与第十三轮逐像素一致），胶囊加 relative -top-2（视觉上移不占布局）→ 胶囊位置与第十四轮完全相同、背景裁剪完全不动
+- ②TogetherHead 删 showBadge prop 全链路（聊天视图调用处+签名+红色计时徽章 JSX+Timer 图标 import）；音乐/聊天两视图头像对都干净
+- ③根因=/api/chat 无缓存（已排查），重复回复 = 空闲闲聊定时器每 45~105s 用完全相同上下文（同一首歌+无新消息）发请求，模型对同输入给同输出；三层修复（music-ai.ts）：
+  a) genUniqueReply：每次请求带多样性种子（时间+随机 base36）；生成后与最近 6 条 peer 消息做归一化查重（去标点/空白/大小写），重复则带「换全新角度」指令重试一次（最多 2 次）
+  b) system 规则加「绝对禁止复读：聊天记录里已有的句子/句式/意思都不许重复，每次换没聊过的切入口」
+  c) 反独白：空闲闲聊触发时若最后一条不是机主发的（AI 刚说过话）则跳过本轮——根治 AI 自己连发一串（截图里连续四条同文消息的模式）
+- ④music-store 新增 playerBg（dataURL，music-player-bg:{uid} 按网易云账号隔离，boot/reloadForAccount 恢复）+ setPlayerBg；music-player 两个视图（聊天/唱片）背景三分支=自定义图(暗化45%) > 封面模糊；PlayerStyleSheet 弹层=默认样式(勾选态)/从手机上传(压缩到宽1280 JPEG 0.82)/当前背景缩略图预览；E2E 用 canvas→File→DataTransfer→input[type=file] 模拟手机上传成功，背景立即生效
+- ⑤MoreSheet 完善：音质从「本地 qIdx 假状态」改 store 持久化（PlayerSnapshot 扩展 quality 字段，playQueueAt 真实传 songUrl(id, level)，标准/较高/极高=standard/higher/exhigh）；音效 3D 环绕改持久化开关（toggle UI+开/关状态字）；新增「定时关闭」（sleepAt 截止时间戳+真实 setTimeout 到点暂停，15/30/60/90 分钟，行内显示剩余分钟，可取消）；「查看歌曲百科」从 toast 占位改 SongInfoSheet 真实信息（歌手/专辑/时长/热度/音质/歌曲ID）
+- ⑥根因=moreToast 无自动消失定时器（「语音消息即将上线」永远停留）；修复=useEffect 3 秒 clear；连带修复 toast z-20 被 MoreSheet z-66 盖住（弹窗内操作反馈不可见）→ z-[80] 两处渲染点
+- E2E（agent-browser 420x900，旧 profile+游客模式）：创建 CHAR 小柔→一起听建立→聊天视图无红徽章 ✓；发消息→AI 回复贴歌名语境 ✓；连发两条「继续说啊」→三条 AI 回复分别从旋律/人声/编曲三个角度零重复 ✓；播放器样式上传紫粉渐变图→唱片+聊天双视图背景生效 ✓；定时 15 分钟→行显「剩 15 分钟」✓；歌曲百科真实数据（时长 3:21/热度 228w+/ID）✓；音质切「较高」→刷新后保持 ✓；音效 toggle 开→关 ✓；toast DOM 时序=点击后 300ms 存在、3s 后消失、z=80 ✓；我页状态胶囊贴顶栏 ✓
+- bunx tsc 0 错误；bun run lint 0 错误；agent-browser console 零错误（dev.log 的 Turbopack worker 噪音非应用代码）；浏览器已关闭
+
+Stage Summary:
+- 交付：状态上移与背景解耦（relative 偏移不占布局的通用手法）；AI 重复回复三层根治（种子+查重重试+反独白）；播放器可上传自定义背景（按账号隔离持久化）；设置弹窗从 3 个 toast 占位变 4 个真实功能（音质真实生效/音效开关/定时关闭/歌曲百科）；toast 3 秒消失+弹窗上层可见
+- 关键实现：防复读=归一化查重（去标点后全等比较）而不是模糊匹配，重试带明确换角度指令；反独白=闲聊定时器只允许在「最后说话的是机主」时触发；自定义背景=简单 dataURL 存 IndexedDB kv（不建表，复用 idb-kv）
+- 范围限定遵守：仅动音乐 App 4 文件（music-player/music-mine/music-store/music-ai）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰
+- 改动文件：src/components/apps/music-player.tsx、music-mine.tsx、src/lib/ios/music-store.ts、music-ai.ts

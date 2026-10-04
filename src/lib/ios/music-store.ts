@@ -52,6 +52,27 @@ interface PlayerSnapshot {
   qIndex: number;
   mode: RepeatMode;
   volume: number;
+  /** 音质（真实传给 songUrl level，第十五轮反馈） */
+  quality?: QualityLevel;
+  /** 3D 环绕音效开关（设置弹窗记忆） */
+  surround3d?: boolean;
+}
+
+export type QualityLevel = 'standard' | 'higher' | 'exhigh';
+export const QUALITY_LABELS: Record<QualityLevel, string> = {
+  standard: '标准',
+  higher: '较高',
+  exhigh: '极高',
+};
+export const QUALITY_ORDER: QualityLevel[] = ['standard', 'higher', 'exhigh'];
+
+/** 播放器自定义背景（手机上传，第十五轮反馈）：按网易云账号隔离 */
+const PLAYER_BG_PREFIX = 'music-player-bg:';
+function playerBgKey(): string {
+  return `${PLAYER_BG_PREFIX}${musicUid()}`;
+}
+function readPlayerBg(): string {
+  return kvGet<string>(playerBgKey()) ?? '';
 }
 
 const HISTORY_PREFIX = 'music-history:';
@@ -217,6 +238,15 @@ interface MusicState {
   volume: number;
   playError: string;
   freeTrial: boolean;
+  // 播放器外观/音质（设置弹窗，第十五轮反馈）
+  /** 自定义背景图（dataURL；空 = 默认封面模糊） */
+  playerBg: string;
+  /** 音质（真实作用于 songUrl 的 level） */
+  quality: QualityLevel;
+  /** 3D 环绕音效开关 */
+  surround3d: boolean;
+  /** 定时关闭截止时间戳（毫秒；null = 未定时；会话级不持久化） */
+  sleepAt: number | null;
   // 歌词
   lyricLines: LyricLine[];
   lyricLoading: boolean;
@@ -260,6 +290,11 @@ interface MusicState {
   seek: (sec: number) => void;
   setVolume: (v: number) => void;
   setMode: (m: RepeatMode) => void;
+  setPlayerBg: (v: string) => void;
+  setQuality: (q: QualityLevel) => void;
+  setSurround3d: (v: boolean) => void;
+  /** 定时关闭：传分钟数（null = 取消） */
+  setSleepAt: (min: number | null) => void;
   addToQueue: (songs: NcmSong[]) => void;
   removeFromQueue: (index: number) => void;
   clearQueue: () => void;
@@ -281,14 +316,32 @@ function saveSnapshot(s: MusicState): void {
     qIndex: s.qIndex,
     mode: s.mode,
     volume: s.volume,
+    quality: s.quality,
+    surround3d: s.surround3d,
   };
   kvSet(playerKey(), snap);
 }
 
-/** 按当前账号重载播放快照 + 听歌时长（登录/退出后「所有数据跟随账号」；正在播放时不打断） */
+// ---------------- 定时关闭（会话级：到点自动暂停） ----------------
+
+let sleepTimer: ReturnType<typeof setTimeout> | null = null;
+function armSleepTimer(min: number): void {
+  if (sleepTimer) {
+    clearTimeout(sleepTimer);
+    sleepTimer = null;
+  }
+  sleepTimer = setTimeout(() => {
+    sleepTimer = null;
+    useMusic.setState({ sleepAt: null });
+    const st = useMusic.getState();
+    if (st.playing) st.toggle(); // 到点暂停（不打断当前歌进度）
+  }, min * 60_000);
+}
+
+/** 按当前账号重载播放快照 + 听歌时长 + 播放器外观（登录/退出后「所有数据跟随账号」；正在播放时不打断） */
 function reloadForAccount(): void {
   const st = useMusic.getState();
-  useMusic.setState({ listenSec: readListenSec() });
+  useMusic.setState({ listenSec: readListenSec(), playerBg: readPlayerBg() });
   if (st.playing) return; // 正在播放不打断（退出登录时切歌前先停）
   const snap = readPlayerSnapshot();
   if (snap && Array.isArray(snap.queue) && snap.queue.length) {
@@ -300,6 +353,8 @@ function reloadForAccount(): void {
       current: queue[idx] ?? null,
       mode: snap.mode ?? 'order',
       volume: typeof snap.volume === 'number' ? snap.volume : 1,
+      quality: snap.quality ?? 'standard',
+      surround3d: snap.surround3d ?? false,
     });
     if (audio) audio.volume = typeof snap.volume === 'number' ? snap.volume : 1;
   }
@@ -321,6 +376,10 @@ export const useMusic = create<MusicState>((set, get) => ({
   volume: 1,
   playError: '',
   freeTrial: false,
+  playerBg: '',
+  quality: 'standard',
+  surround3d: false,
+  sleepAt: null,
   lyricLines: [],
   lyricLoading: false,
   lyricFor: null,
@@ -353,6 +412,8 @@ export const useMusic = create<MusicState>((set, get) => ({
         current: queue[idx] ?? null,
         mode: snap.mode ?? 'order',
         volume: typeof snap.volume === 'number' ? snap.volume : 1,
+        quality: snap.quality ?? 'standard',
+        surround3d: snap.surround3d ?? false,
       });
       if (audio) audio.volume = typeof snap.volume === 'number' ? snap.volume : 1;
     }
@@ -360,6 +421,8 @@ export const useMusic = create<MusicState>((set, get) => ({
     loadHistoryFor();
     // 恢复累计听歌时长（按账号隔离）
     useMusic.setState({ listenSec: readListenSec() });
+    // 恢复播放器自定义背景（按账号隔离）
+    useMusic.setState({ playerBg: readPlayerBg() });
     // 登录态（异步校验）
     void get().refreshLoginUi();
   },
@@ -430,7 +493,7 @@ export const useMusic = create<MusicState>((set, get) => ({
     let url: string | null = null;
     let freeTrial = false;
     try {
-      const r = await songUrl(song.id);
+      const r = await songUrl(song.id, get().quality); // 音质真实生效（第十五轮反馈）
       url = r.url;
       freeTrial = r.freeTrial;
     } catch {
@@ -529,6 +592,38 @@ export const useMusic = create<MusicState>((set, get) => ({
   setMode: (m) => {
     set({ mode: m });
     saveSnapshot(get());
+  },
+
+  // 播放器自定义背景（第十五轮反馈）：按网易云账号持久化
+  setPlayerBg: (v) => {
+    if (v) kvSet(playerBgKey(), v);
+    else kvDel(playerBgKey());
+    set({ playerBg: v });
+  },
+
+  // 音质切换（真实作用于下一次起播的 songUrl level）
+  setQuality: (q) => {
+    set({ quality: q });
+    saveSnapshot(get());
+  },
+
+  setSurround3d: (v) => {
+    set({ surround3d: v });
+    saveSnapshot(get());
+  },
+
+  // 定时关闭：到点自动暂停（会话级，重启后需重设）
+  setSleepAt: (min) => {
+    if (sleepTimer) {
+      clearTimeout(sleepTimer);
+      sleepTimer = null;
+    }
+    if (!min) {
+      set({ sleepAt: null });
+      return;
+    }
+    set({ sleepAt: Date.now() + min * 60_000 });
+    armSleepTimer(min);
   },
 
   addToQueue: (songs) => {

@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlarmClock,
   AudioLines,
   ChevronDown,
   ClipboardList,
@@ -21,6 +22,7 @@ import {
   FolderPlus,
   Forward,
   Heart,
+  ImageUp,
   Info,
   ListMusic,
   Loader2,
@@ -45,7 +47,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Gift,
-  Timer,
   SkipBack,
   SkipForward,
   TriangleAlert,
@@ -55,7 +56,16 @@ import {
   X,
 } from 'lucide-react';
 import { artistSub, commentsOf, simiSong, songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
-import { useMusic, getGuestAvatar, type RepeatMode, type TogetherSessionLike, type TogetherMsgLike } from '@/lib/ios/music-store';
+import {
+  useMusic,
+  getGuestAvatar,
+  QUALITY_LABELS,
+  QUALITY_ORDER,
+  type QualityLevel,
+  type RepeatMode,
+  type TogetherSessionLike,
+  type TogetherMsgLike,
+} from '@/lib/ios/music-store';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { memAddEventFragment } from '@/lib/memory';
 import {
@@ -118,6 +128,14 @@ export function MusicPlayer() {
     if (chatOverride !== null) setChatOverride(null);
   }
   const [moreToast, setMoreToast] = useState('');
+  // 提示 3 秒自动消失（第十五轮反馈；此前会一直停留在屏幕上）
+  useEffect(() => {
+    if (!moreToast) return;
+    const t = setTimeout(() => setMoreToast(''), 3000);
+    return () => clearTimeout(t);
+  }, [moreToast]);
+  // 播放器自定义背景（手机上传；空 = 默认封面模糊）
+  const playerBg = useMusic((s) => s.playerBg);
   // 对方信息跟随全局（联系人库里最新头像/昵称）
   const togetherLive = useTogetherLive();
 
@@ -296,16 +314,29 @@ export function MusicPlayer() {
     };
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#101010] text-white" data-testid="music-player">
-        <div
-          className="absolute inset-0 scale-150 bg-cover bg-center opacity-40 blur-3xl"
-          style={{ backgroundImage: `url(${songCover(current)})` }}
-        />
-        <div className="absolute inset-0 bg-black/35" />
+        {/* 背景：自定义背景图（手机上传）优先，否则封面模糊 */}
+        {playerBg ? (
+          <>
+            <div
+              className="absolute inset-0 bg-cover bg-center"
+              style={{ backgroundImage: `url(${playerBg})` }}
+            />
+            <div className="absolute inset-0 bg-black/45" />
+          </>
+        ) : (
+          <>
+            <div
+              className="absolute inset-0 scale-150 bg-cover bg-center opacity-40 blur-3xl"
+              style={{ backgroundImage: `url(${songCover(current)})` }}
+            />
+            <div className="absolute inset-0 bg-black/35" />
+          </>
+        )}
         <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* 顶部不再有「音乐界面」胶囊（第十四轮反馈）：切回音乐视图走底部 tab */}
           <PlayerTopBar onClose={close} light onMenu={openTgMenu} dense />
-          {/* 双头像（带红色计时徽章）+ 相距/累计时长 */}
-          <TogetherHead session={togetherLive ?? together} msgs={togetherMsgs} showBubbles={false} showBadge />
+          {/* 双头像 + 相距/累计时长（红色计时徽章已按第十五轮反馈删除） */}
+          <TogetherHead session={togetherLive ?? together} msgs={togetherMsgs} showBubbles={false} />
           {/* 正在听的歌：歌名+歌手+关注 | 红心热度 + 播放列表（参考截图样式） */}
           <div className="flex items-end justify-between gap-3 px-5 pb-2.5 pt-2">
             <div className="min-w-0 flex-1">
@@ -435,7 +466,7 @@ export function MusicPlayer() {
         )}
 
         {moreToast && (
-          <div className="pointer-events-none absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
+          <div className="pointer-events-none absolute bottom-24 left-1/2 z-[80] -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
             {moreToast}
           </div>
         )}
@@ -445,12 +476,24 @@ export function MusicPlayer() {
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-[#101010] text-white" data-testid="music-player">
-      {/* 背景：封面模糊 */}
-      <div
-        className="absolute inset-0 scale-150 bg-cover bg-center opacity-40 blur-3xl"
-        style={{ backgroundImage: `url(${songCover(current)})` }}
-      />
-      <div className="absolute inset-0 bg-black/35" />
+      {/* 背景：自定义背景图（手机上传）优先，否则封面模糊 */}
+      {playerBg ? (
+        <>
+          <div
+            className="absolute inset-0 bg-cover bg-center"
+            style={{ backgroundImage: `url(${playerBg})` }}
+          />
+          <div className="absolute inset-0 bg-black/45" />
+        </>
+      ) : (
+        <>
+          <div
+            className="absolute inset-0 scale-150 bg-cover bg-center opacity-40 blur-3xl"
+            style={{ backgroundImage: `url(${songCover(current)})` }}
+          />
+          <div className="absolute inset-0 bg-black/35" />
+        </>
+      )}
 
       <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
         <PlayerTopBar
@@ -664,7 +707,7 @@ export function MusicPlayer() {
       )}
 
       {moreToast && (
-        <div className="pointer-events-none absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-[80] -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
           {moreToast}
         </div>
       )}
@@ -942,14 +985,11 @@ function TogetherHead({
   session,
   msgs,
   showBubbles = false,
-  showBadge = false,
 }: {
   session: TogetherSessionLike;
   /** 一起听消息（音乐视图下取双方最新一条，显示为头像下气泡，5 秒后消失） */
   msgs?: TogetherMsgLike[];
   showBubbles?: boolean;
-  /** 聊天视图：头像对底部中央显示红色计时徽章（参考网易云） */
-  showBadge?: boolean;
 }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
@@ -982,19 +1022,10 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落）；聊天视图在底部中央加红色计时徽章 */}
+      {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <CoverImg src={session.avatar} className="h-16 w-16" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
-        {showBadge && (
-          <span
-            className="absolute -bottom-[7px] left-1/2 z-20 flex h-[19px] w-[19px] -translate-x-1/2 items-center justify-center rounded-full bg-[#EC4141] ring-2 ring-[#101010]"
-            data-testid="music-tg-timer-badge"
-            aria-hidden="true"
-          >
-            <Timer className="h-[11px] w-[11px] text-white" fill="currentColor" strokeWidth={0} />
-          </span>
-        )}
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动 */}
       <p className={`mt-1.5 text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
@@ -1281,8 +1312,6 @@ function TgRecordSheet({
 
 // ---------------- 更多面板（仿网易云歌曲操作面板） ----------------
 
-const MORE_QUALITIES = ['标准', '较高', '极高'];
-
 function MoreSheet({
   song,
   liked,
@@ -1302,10 +1331,19 @@ function MoreSheet({
   const openComments = useMusic((s) => s.openComments);
   const toggleLike = useMusic((s) => s.toggleLike);
   const playSong = useMusic((s) => s.playSong);
+  // 音质/音效/定时关闭（store 持久化，第十五轮反馈完善）
+  const quality = useMusic((s) => s.quality);
+  const setQuality = useMusic((s) => s.setQuality);
+  const surround3d = useMusic((s) => s.surround3d);
+  const setSurround3d = useMusic((s) => s.setSurround3d);
+  const sleepAt = useMusic((s) => s.sleepAt);
+  const setSleepAt = useMusic((s) => s.setSleepAt);
   const [showAdd, setShowAdd] = useState(false);
   const [showShareChat, setShowShareChat] = useState(false);
+  const [showStyle, setShowStyle] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [showSleep, setShowSleep] = useState(false);
   const [cmtTotal, setCmtTotal] = useState<number | null>(null);
-  const [qIdx, setQIdx] = useState(2);
 
   // 评论数（真实接口，只取总数）
   useEffect(() => {
@@ -1504,7 +1542,7 @@ function MoreSheet({
                 </span>
               </span>
             </MoreRow>
-            <MoreRow icon={<Info className="h-[19px] w-[19px]" />} onClick={() => onToast('暂未收录这首歌的百科')}>
+            <MoreRow icon={<Info className="h-[19px] w-[19px]" />} testid="music-more-info" onClick={() => setShowInfo(true)}>
               查看歌曲百科
             </MoreRow>
             <MoreRow icon={<Radio className="h-[19px] w-[19px]" />} testid="music-more-roam" onClick={() => void roam()}>
@@ -1522,20 +1560,54 @@ function MoreSheet({
               icon={<Disc3 className="h-[19px] w-[19px]" />}
               testid="music-more-quality"
               onClick={() => {
-                const nx = (qIdx + 1) % MORE_QUALITIES.length;
-                setQIdx(nx);
-                onToast(`音质已切换为${MORE_QUALITIES[nx]}`);
+                // 音质真实生效（第十五轮反馈）：写 store 持久化，下一次起播传给 songUrl level
+                const nx = QUALITY_ORDER[(QUALITY_ORDER.indexOf(quality) + 1) % QUALITY_ORDER.length];
+                setQuality(nx);
+                onToast(`音质已设为${QUALITY_LABELS[nx]}，从下一首起生效`);
               }}
             >
               <span className="inline-flex items-center gap-1.5">
-                音质：{MORE_QUALITIES[qIdx]}
+                音质：{QUALITY_LABELS[quality]}
                 <VipChip />
               </span>
             </MoreRow>
-            <MoreRow icon={<AudioLines className="h-[19px] w-[19px]" />} onClick={() => onToast('3D 环绕音效已开启（演示）')}>
-              音效
+            <MoreRow
+              icon={<AudioLines className="h-[19px] w-[19px]" />}
+              testid="music-more-surround"
+              onClick={() => {
+                const nv = !surround3d;
+                setSurround3d(nv);
+                onToast(nv ? '3D 环绕音效已开启' : '3D 环绕音效已关闭');
+              }}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                音效：3D 环绕
+                <span
+                  className={`inline-flex h-[18px] w-[34px] items-center rounded-full p-[2px] transition-colors ${
+                    surround3d ? 'bg-[#EC4141]' : 'bg-zinc-300 dark:bg-zinc-600'
+                  }`}
+                >
+                  <span
+                    className={`h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
+                      surround3d ? 'translate-x-[16px]' : ''
+                    }`}
+                  />
+                </span>
+                {surround3d ? '开' : '关'}
+              </span>
             </MoreRow>
-            <MoreRow icon={<Disc2 className="h-[19px] w-[19px]" />} onClick={() => onToast('当前播放器样式：黑胶唱片')}>
+            <MoreRow
+              icon={<AlarmClock className="h-[19px] w-[19px]" />}
+              testid="music-more-sleep"
+              onClick={() => setShowSleep(true)}
+            >
+              定时关闭{sleepAt ? `（剩 ${Math.max(1, Math.ceil((sleepAt - Date.now()) / 60_000))} 分钟）` : ''}
+            </MoreRow>
+            <MoreRow
+              icon={<Disc2 className="h-[19px] w-[19px]" />}
+              testid="music-more-style"
+              onClick={() => setShowStyle(true)}
+            >
               播放器样式
             </MoreRow>
           </div>
@@ -1545,6 +1617,231 @@ function MoreSheet({
         {showAdd && <AddToSongSheet song={song} onClose={() => setShowAdd(false)} />}
         {/* 分享给好友（歌曲卡片进聊天，Task 68） */}
         {showShareChat && <ShareToChatSheet song={song} onClose={() => setShowShareChat(false)} onToast={onToast} />}
+        {/* 播放器样式（含手机上传听歌背景图，第十五轮反馈） */}
+        {showStyle && <PlayerStyleSheet onClose={() => setShowStyle(false)} onToast={onToast} />}
+        {/* 歌曲百科（真实歌曲信息） */}
+        {showInfo && <SongInfoSheet song={song} onClose={() => setShowInfo(false)} />}
+        {/* 定时关闭（到点真实自动暂停） */}
+        {showSleep && <SleepSheet onClose={() => setShowSleep(false)} onToast={onToast} />}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 播放器样式 / 歌曲百科 / 定时关闭（第十五轮反馈完善设置弹窗） ----------------
+
+/** 从手机相册选图 → 等比压到宽 ≤1280px → JPEG dataURL（cover 裁剪交给 CSS） */
+function compressPlayerBg(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('decode failed'));
+      img.onload = () => {
+        const maxW = 1280;
+        const scale = Math.min(1, maxW / Math.max(1, img.width));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas unavailable'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.src = String(reader.result ?? '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 播放器样式面板：默认封面模糊背景 / 从手机上传听歌界面背景图 / 恢复默认（按网易云账号持久化） */
+function PlayerStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: string) => void }) {
+  const playerBg = useMusic((s) => s.playerBg);
+  const setPlayerBg = useMusic((s) => s.setPlayerBg);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  const pick = async (f: File | undefined | null) => {
+    if (!f) return;
+    if (!f.type.startsWith('image/')) {
+      onToast('请选择图片文件');
+      return;
+    }
+    setBusy(true);
+    try {
+      const dataUrl = await compressPlayerBg(f);
+      setPlayerBg(dataUrl);
+      onToast('已应用自定义背景');
+      onClose();
+    } catch {
+      onToast('图片处理失败，请换一张试试');
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-player-style-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
+      <div className="relative w-full rounded-t-2xl bg-white pb-7 dark:bg-zinc-900">
+        <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+        <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">播放器样式</p>
+        <div className="mt-2 px-3">
+          <button
+            type="button"
+            onClick={() => {
+              setPlayerBg('');
+              onToast('已恢复默认封面背景');
+              onClose();
+            }}
+            data-testid="music-style-default"
+            className="flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left text-[14px] text-zinc-800 active:bg-zinc-100 dark:text-zinc-200 dark:active:bg-zinc-800"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800">
+              <Disc2 className="h-[18px] w-[18px] text-zinc-500 dark:text-zinc-400" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block">默认样式</span>
+              <span className="block text-[11px] text-zinc-400">黑胶唱片 · 封面模糊背景</span>
+            </span>
+            {!playerBg && <Check className="h-[18px] w-[18px] shrink-0 text-[#EC4141]" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={busy}
+            data-testid="music-style-upload"
+            className="flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left text-[14px] text-zinc-800 active:bg-zinc-100 disabled:opacity-60 dark:text-zinc-200 dark:active:bg-zinc-800"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800">
+              {busy ? <Loader2 className="h-[18px] w-[18px] animate-spin text-zinc-500" /> : <ImageUp className="h-[18px] w-[18px] text-zinc-500 dark:text-zinc-400" />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block">从手机上传听歌背景图</span>
+              <span className="block text-[11px] text-zinc-400">选一张相册图片作为听歌界面背景</span>
+            </span>
+            {playerBg && !busy && (
+              <span className="flex shrink-0 items-center gap-1.5">
+                <img src={playerBg} alt="当前背景" className="h-8 w-8 rounded-md object-cover" />
+                <Check className="h-[18px] w-[18px] text-[#EC4141]" />
+              </span>
+            )}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => void pick(e.target.files?.[0])}
+          />
+        </div>
+        <p className="px-6 pt-2 text-center text-[11px] leading-relaxed text-zinc-400">
+          上传后立即生效，按网易云账号分别保存
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** 歌曲百科：当前歌曲的真实信息（歌手/专辑/时长/热度/音质/ID） */
+function SongInfoSheet({ song, onClose }: { song: NcmSong; onClose: () => void }) {
+  const duration = useMusic((s) => s.duration);
+  const quality = useMusic((s) => s.quality);
+  const durSec = duration > 0 ? duration : (song.duration ?? song.dt ?? 0) / 1000;
+  const rows: [string, string][] = [
+    ['歌手', songArtistText(song)],
+    ...(song.album?.name ? ([['专辑', song.album.name]] as [string, string][]) : []),
+    ['时长', fmtClock(durSec)],
+    ['热度', `${fmtCountW(fakeHotCount(song.id))} 次播放`],
+    ['音质', `${QUALITY_LABELS[quality]}${song.fee === 1 ? '（VIP 歌曲可能只播试听片段）' : ''}`],
+    ['歌曲 ID', String(song.id)],
+  ];
+  return (
+    <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-player-info-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
+      <div className="relative w-full rounded-t-2xl bg-white pb-7 dark:bg-zinc-900">
+        <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+        <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">歌曲百科</p>
+        <div className="flex items-center gap-3 px-5 pt-4">
+          <CoverImg src={songCover(song)} className="h-14 w-14 shrink-0" rounded="rounded-lg" alt={song.name} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[16px] font-bold text-zinc-900 dark:text-zinc-100">{song.name}</p>
+            <p className="mt-0.5 truncate text-[12px] text-zinc-400">{songArtistText(song)}</p>
+          </div>
+          {song.fee === 1 && (
+            <span className="shrink-0 rounded-[3px] border border-[#EC4141]/50 px-1 text-[9px] leading-[14px] text-[#EC4141]">
+              VIP
+            </span>
+          )}
+        </div>
+        <div className="mt-3 space-y-2.5 px-6">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex items-start gap-3 text-[13px]">
+              <span className="w-14 shrink-0 text-zinc-400">{k}</span>
+              <span className="min-w-0 flex-1 break-words text-zinc-800 dark:text-zinc-200">{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 定时关闭：到点真实自动暂停播放（会话级） */
+function SleepSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: string) => void }) {
+  const sleepAt = useMusic((s) => s.sleepAt);
+  const setSleepAt = useMusic((s) => s.setSleepAt);
+  const options = [15, 30, 60, 90];
+  const pick = (min: number | null) => {
+    setSleepAt(min);
+    onToast(min ? `将在 ${min} 分钟后自动暂停播放` : '已取消定时关闭');
+    onClose();
+  };
+  return (
+    <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-player-sleep-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
+      <div className="relative w-full rounded-t-2xl bg-white pb-7 dark:bg-zinc-900">
+        <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+        <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">定时关闭</p>
+        <div className="mt-2 px-3">
+          {sleepAt && (
+            <button
+              type="button"
+              onClick={() => pick(null)}
+              data-testid="music-sleep-cancel"
+              className="flex w-full items-center justify-between rounded-xl px-2.5 py-3 text-left text-[14px] text-[#EC4141] active:bg-zinc-100 dark:active:bg-zinc-800"
+            >
+              <span className="inline-flex items-center gap-3">
+                <X className="h-[16px] w-[16px]" />
+                取消定时
+              </span>
+              <span className="text-[12px] tabular-nums text-zinc-400">
+                剩 {Math.max(1, Math.ceil((sleepAt - Date.now()) / 60_000))} 分钟
+              </span>
+            </button>
+          )}
+          {options.map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => pick(m)}
+              data-testid={`music-sleep-${m}`}
+              className="flex w-full items-center justify-between rounded-xl px-2.5 py-3 text-left text-[14px] text-zinc-800 active:bg-zinc-100 dark:text-zinc-200 dark:active:bg-zinc-800"
+            >
+              <span className="inline-flex items-center gap-3">
+                <AlarmClock className="h-[16px] w-[16px] text-zinc-400" />
+                {m} 分钟后暂停
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

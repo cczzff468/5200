@@ -371,13 +371,14 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         </div>
 
-        {/* 状态（添加状态/已添加状态）——上移贴近顶栏（第十四轮反馈）；点击编辑 */}
-        <div className="-mt-2 flex justify-center">
+        {/* 状态（添加状态/已添加状态）——只让胶囊本身视觉上移（relative -top-2，不参与布局占位），
+            头部流式高度保持原样：自定义背景图的 cover 裁剪完全不动（第十五轮反馈「状态上移，不是背景图上移」） */}
+        <div className="mt-0 flex justify-center">
           <button
             type="button"
             onClick={() => setStatusOpen(true)}
             data-testid="music-mine-add-status"
-            className="relative flex items-center gap-1 rounded-full bg-white/15 py-[6px] pl-[11px] pr-[13px] text-[12px] leading-none text-white/90 backdrop-blur-sm active:bg-white/25"
+            className="relative -top-2 flex items-center gap-1 rounded-full bg-white/15 py-[6px] pl-[11px] pr-[13px] text-[12px] leading-none text-white/90 backdrop-blur-sm active:bg-white/25"
           >
             {/* 已有状态且自带表情图标时不再叠加笑脸；无状态时显示加号 */}
             {!statusText ? (

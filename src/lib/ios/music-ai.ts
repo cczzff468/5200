@@ -363,6 +363,7 @@ function playingBlock(extra: string, who: string): string {
     '【一起听聊天规则】',
     '- 你正在和对方一起实时听歌，像坐在同一间屋子里各戴一只耳机那样自然聊天；',
     '- 可以聊当下这首歌的感受、歌手、歌词、回忆，也可以说日常；消息要口语化、短（1~2 句）、符合你的人设语气；',
+    '- 绝对禁止复读：聊天记录里（不管是你还是对方说过的）已有的句子、句式和意思都不许再重复，每次都要换一个全新的角度（旋律/歌手音色/歌词/回忆/当下氛围/联想画面……任选一个没聊过的切入口）；',
     '- 不要输出 markdown、不要伪装成系统；直接输出消息正文。',
     '',
     '【播放控制】你在陪对方听歌，可以控制播放（指令写在消息末尾，系统会真实执行，不要在正文里描述指令本身，不要加引号/代码块）：',
@@ -492,9 +493,11 @@ export async function togetherReply(cid: string, userText: string): Promise<void
         who,
       ),
     );
-    const raw = await callLlmTwoTier(system, userText || '（对方点了推荐按钮，想让你推荐几首歌）');
-    const { text: ctrlText, controls } = extractTgControls(raw);
-    const text = cleanAiText(ctrlText);
+    const { text, controls } = await genUniqueReply(
+      cid,
+      system,
+      userText || '（对方点了推荐按钮，想让你推荐几首歌）',
+    );
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     } else {
@@ -524,6 +527,51 @@ function genMsgId(): string {
   return `tg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// ---------------- 防复读（第十五轮反馈：为什么老是发一模一样的话） ----------------
+
+/** 多样性种子：让每次请求的 prompt 都不同（绕开同输入→同输出），同时提醒模型换角度 */
+function varietySeed(): string {
+  return `${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`;
+}
+
+/** 归一化（去标点/空白/大小写）后比较，避免只换标点的假变化 */
+function normDup(s: string): string {
+  return (s ?? '').replace(/[\s，。！？、,.!?:：;；'"“”「」『』()（）…·\-~～]/g, '').toLowerCase();
+}
+
+/** 是否与最近几条对方消息重复（同义复读检测） */
+function isDupOfRecent(cid: string, text: string): boolean {
+  const n = normDup(text);
+  if (!n) return false;
+  return loadTogetherMsgs(cid)
+    .slice(-6)
+    .some((m) => m.role === 'peer' && normDup(m.text) === n);
+}
+
+/**
+ * 生成一条不与近期消息重复的对方回复：首次带种子请求；若与最近消息重复，
+ * 带明确换角度指令重试一次（最多 2 次），避免「同一句话发 N 遍」。
+ */
+async function genUniqueReply(
+  cid: string,
+  system: string,
+  userBase: string,
+): Promise<{ text: string; controls: TgControl[] }> {
+  const run = async (userContent: string) => {
+    const raw = await callLlmTwoTier(system, userContent);
+    const { text: ctrlText, controls } = extractTgControls(raw);
+    return { text: cleanAiText(ctrlText), controls };
+  };
+  let out = await run(`${userBase}\n（回复多样性种子：${varietySeed()}）`);
+  if (out.text && isDupOfRecent(cid, out.text)) {
+    out = await run(
+      `${userBase}\n（系统提醒：你刚才的回复和聊天记录里已说过的话重复了，必须换一个完全不同的切入角度重新回复，只输出新消息正文。多样性种子：${varietySeed()}）`,
+    );
+  }
+  return out;
+}
+
+
 /** 用户发消息入口 */
 export function sendTogetherText(text: string): void {
   const t = loadActiveTogether();
@@ -546,6 +594,13 @@ export function startChatterTimer(): void {
     if (!cur || !cur.aiChatter) return;
     const st = useMusic.getState();
     if (!st.current) return;
+    // 反独白：最后一条不是机主发的（AI 刚说过话/刚开始还没人聊）就不再主动接话，
+    // 等用户开口或切歌时再评——避免 AI 自己连发一串（第十五轮反馈截图里连续四条同文消息）
+    const msgs = loadTogetherMsgs(cur.contactId);
+    if (msgs.length > 0 && msgs[msgs.length - 1].role !== 'me') {
+      startChatterTimer();
+      return;
+    }
     void aiComment(cur.contactId, '');
     startChatterTimer();
   }, delay);
@@ -569,13 +624,11 @@ async function aiComment(cid: string, hint: string): Promise<void> {
     const system = await personaSystemFor(
       cid,
       playingBlock(
-        `${hint ? `【情境】${hint}\n` : ''}【聊天记录】\n${history || '（还没聊过）'}\n\n请主动发一条消息（可以是此刻这首歌的感受、一句联想或闲聊）。`,
+        `${hint ? `【情境】${hint}\n` : ''}【聊天记录】\n${history || '（还没聊过）'}\n\n请主动发一条消息（可以是此刻这首歌的感受、一句联想或闲聊），不要重复聊天记录里任何已有的句子。`,
         who,
       ),
     );
-    const raw = await callLlmTwoTier(system, '（主动发一条一起听的消息）');
-    const { text: ctrlText, controls } = extractTgControls(raw);
-    const text = cleanAiText(ctrlText);
+    const { text, controls } = await genUniqueReply(cid, system, '（主动发一条一起听的消息）');
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     }
