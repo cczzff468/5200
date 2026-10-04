@@ -14728,3 +14728,28 @@ Stage Summary:
 - 交付：扫码登录真正打通（803→completeQrLogin→持久化→进入 App）；游客可完整使用音乐 App（VIP 试听 40s 自动切歌/免费歌完整播/本地资料与歌单/红心/最近播放）；首页右上角头像一键登录；一起听聊天态布局重做且滚动 bug 根治；歌曲收藏到歌单全场景可用
 - 关键认知：网易直链接口对海外 IP 匿名请求全量拒绝（realIP 参数解锁）；scrollIntoView 在嵌套滚动容器会冒泡顶飞整页（必须用容器 scrollTo）
 - 改动文件：music-api.ts（completeQrLogin+realIP）、music-store.ts（playSong 插队/游客资料/本地歌单函数族/nav.guestPlId）、music.tsx（completeQrLogin 接入）、music-mine.tsx（游客我的页+资料编辑+本地歌单）、music-home.tsx（右上角头像+账号面板）、music-shared.tsx（SongRow ListPlus+AddToSongSheet）、music-playlist.tsx（guestLocal 支持+删除/移除）、music-player.tsx（聊天态全屏布局+overflow-hidden）、music-together.tsx（scrollTo 修复）
+
+---
+Task ID: 56
+Agent: Z.ai Code（主会话）
+Task: 用户反馈七项——游客模式刷新后保持、「我的」页按截图 1:1 美化、游客头像手机上传+关注粉丝可编辑、一起听界面精简（删TA主动聊天开关/结束移右上角/双头像分开/删标题/删音量）、自己听删 Now Playing
+
+Work Log:
+- 游客模式持久化（P0）：music-store 新增 GUEST_MODE_KEY('music-guest-mode') + enterGuestMode()/exitGuestMode()；模块加载恢复时未登录且标记存在 → guestMode=true（刷新后直接进游客态不弹登录页）；refreshLoginUi 未登录分支不再强刷 guestMode=false（保留游客态），登录成功分支 kvDel 标记；music.tsx 登录页「先逛逛」、music-home 头像面板「登录网易云账号」、music-settings 新增游客登录按钮全部走 enter/exitGuestMode
+- 「我的」页 1:1 重写（music-mine.tsx 535→1057 行）：对标网易云截图——
+  · 深色渐变头部（固定不滚动，状态栏自动翻转白字）：≡菜单(开设置) / +添加状态(prompt→签名下状态胶囊) / +(新建歌单) / ⋮(分享主页)；大圆头像(86px 白环)
+  · 昵称 + 红色听歌徽章(Timer) + VIP 徽章(红点胶囊，登录按 vipType 显示 VIP/游客显示 游客) + 签名 + 状态胶囊
+  · 统计行：登录=关注/粉丝(云端 follows/followeds)+Lv.X+N首；游客=关注/粉丝(可编辑)+歌单+红心
+  · 胶囊入口：最近/本地/收藏/装扮 + ▦(设置)；装扮=4 套头部主题色(曜石黑/绯红夜/松涛绿/暖棕)即时生效持久化(kv music-mine-dress:{uid})
+  · 白色圆角面板（圆角帽贴在头部内实现无缝衔接）：音乐/播客/笔记 主 Tab(下划线) + 🔒近期/创建ⁿ 子 Tab + 刷新/⋮；歌单行=心形块「我喜欢的音乐」(🔒N首·N次播放)/图表块「听歌排行」(累计听歌N首+图钉)/创建歌单(⋮删除)/收藏歌单；播客笔记空态
+- 游客个性化：头像支持从手机上传（file input → canvas 居中裁方 288px JPEG 压缩 → dataURL 存本机）+ 6 预设；昵称/个性签名可编辑；关注/粉丝数可编辑（数字输入半屏）；全部持久化 kv
+- 一起听界面精简（music-player.tsx）：TA 主动聊天开关删除（行为默认开）；结束一起听从头像下方移至顶栏右上角（白/10胶囊+X图标，聊天态与音乐态都有）；双头像改为 TA+我 两个真实头像 gap-3.5 分开排列（我的头像取登录/游客资料）；顶部「一起听」标题与「和 xx」副标题删除（顶栏居中留空）；一起听音乐视图底部音量滑条删除（自己听保留）
+- 自己听播放页：顶部「Now Playing」标题删除（顶栏居中留空）；空队列占位页保留「播放器」标题
+- music-settings：AI 一起听说明改为「TA 会主动聊音乐、推荐歌曲（默认开启）」；游客态账号卡新增「登录网易云账号」按钮
+- E2E（agent-browser 420x900）全过：游客进入→刷新解锁→重开音乐**直接游客态不弹登录页** ✓；我的页新版全要素（深色头部/徽章/统计/胶囊/白色面板/红心行）✓；头像上传（真实文件→预览→保存生效）✓；昵称「小明」+签名「接受一切事与愿违」保存 ✓；关注5/粉丝33 编辑生效 ✓；状态胶囊「♪正在循环《日落大道》」✓；装扮绯红夜即时换色+切回曜石黑 ✓；创建子tab新建「我的 private 歌单」+计数¹ ✓；搜索→播放→播放页顶栏无 Now Playing+音量在（自己听）✓；邀请小暖→聊天态：右上角结束按钮/双头像分开/无标题无和xx/无TA主动聊天开关 ✓；发消息 AI 回复（和声层次感比原版有爵士韵味~）✓；音乐视图无音量滑条 ✓；右上角结束一起听→回普通播放页（音量恢复）✓；深色模式 ✓；设置页游客登录按钮 ✓；console/dev.log 零错误
+- 测试数据清理：种子联系人林小暖 + 10 个 music-*/mem-frag kv 键全清，恢复干净首态
+
+Stage Summary:
+- 交付：游客模式持久化（选一次刷新后仍是游客，登录成功自动解除）；「我的」页 1:1 对标网易云截图（深色头部+胶囊+白色面板+三主Tab+双子Tab）；游客资料全面可定制（手机上传头像/签名/关注粉丝数/状态/装扮主题）；一起听界面按用户要求精简（无TA主动聊天开关、结束在右上角、双头像分开、无标题、无音量）；自己听无 Now Playing
+- 关键实现：游客标记 kv + 模块恢复注入；头像 canvas 裁方压缩防 IndexedDB 膨胀；顶栏 onEnd 槽位复用（一起听=结束按钮，自己听=更多）；白色面板圆角帽内嵌头部避免负 margin 滚动问题
+- 改动文件：src/lib/ios/music-store.ts、src/lib/ios/music-api.ts(NcmUser+follows/followeds)、src/components/apps/music.tsx、music-home.tsx、music-mine.tsx(重写)、music-player.tsx、music-settings.tsx

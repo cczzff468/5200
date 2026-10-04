@@ -17,7 +17,6 @@ import {
   ListMusic,
   Loader2,
   MessageCircle,
-  Mic2,
   MoreHorizontal,
   Music2,
   Pause,
@@ -33,10 +32,9 @@ import {
   X,
 } from 'lucide-react';
 import { songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
-import { useMusic, type RepeatMode } from '@/lib/ios/music-store';
+import { useMusic, getGuestProfile, type RepeatMode } from '@/lib/ios/music-store';
 import {
   listTogetherCandidates,
-  setTogetherAiChatter,
   startTogether,
   stopTogether,
   togetherRecommend,
@@ -138,14 +136,16 @@ export function MusicPlayer() {
       avatar={together.avatar}
       distanceKm={together.distanceKm}
       since={together.since}
-      aiChatter={together.aiChatter}
-      onToggleChatter={(v) => setTogetherAiChatter(v)}
-      onEnd={async () => {
-        await stopTogether();
-        setChatOverride(false);
-      }}
     />
   ) : null;
+
+  // 结束一起听（顶栏右上角）
+  const endTogether = () => {
+    void (async () => {
+      await stopTogether();
+      setChatOverride(false);
+    })();
+  };
 
   // 聊天态：全屏独立布局（顶栏+双头像+聊天区+胶囊），不再与播放控制区堆叠
   if (chatMode) {
@@ -157,13 +157,7 @@ export function MusicPlayer() {
         />
         <div className="absolute inset-0 bg-black/35" />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PlayerTopBar
-            onClose={close}
-            title="一起听"
-            light
-            together={together}
-            onMore={() => setShowMore(true)}
-          />
+          <PlayerTopBar onClose={close} light onEnd={endTogether} />
           {togetherHead}
           <div className="min-h-0 flex-1" data-testid="music-player-chat-mode">
             <TogetherChat />
@@ -213,10 +207,9 @@ export function MusicPlayer() {
       <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
         <PlayerTopBar
           onClose={close}
-          title={together ? '一起听' : 'Now Playing'}
           light
-          together={together}
-          onMore={() => setShowMore(true)}
+          onMore={together ? undefined : () => setShowMore(true)}
+          onEnd={together ? endTogether : undefined}
         />
 
         {togetherHead}
@@ -282,20 +275,22 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 音量 */}
-        <div className="flex items-center gap-2 px-6 pt-1">
-          <Volume2 className="h-3.5 w-3.5 shrink-0 text-white/50" />
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(volume * 100)}
-            onChange={(e) => setVolume(Number(e.target.value) / 100)}
-            className="music-volume-slider h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/20"
-            style={{ accentColor: '#EC4141' }}
-            aria-label="音量"
-          />
-        </div>
+        {/* 音量（一起听模式下隐藏） */}
+        {!together && (
+          <div className="flex items-center gap-2 px-6 pt-1">
+            <Volume2 className="h-3.5 w-3.5 shrink-0 text-white/50" />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(volume * 100)}
+              onChange={(e) => setVolume(Number(e.target.value) / 100)}
+              className="music-volume-slider h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/20"
+              style={{ accentColor: '#EC4141' }}
+              aria-label="音量"
+            />
+          </div>
+        )}
 
         {/* 控制区 */}
         <div className="flex items-center justify-between px-8 pb-2 pt-3">
@@ -401,13 +396,15 @@ function PlayerTopBar({
   title,
   light,
   onMore,
-  together,
+  onEnd,
 }: {
   onClose: () => void;
-  title: string;
+  /** 顶部标题（可选；一起听/播放模式默认不展示） */
+  title?: string;
   light?: boolean;
   onMore?: () => void;
-  together?: { name: string } | null;
+  /** 一起听态：右上角「结束一起听」 */
+  onEnd?: () => void;
 }) {
   return (
     <div className="flex items-center gap-3 px-5 pb-1 pt-[58px]">
@@ -415,10 +412,19 @@ function PlayerTopBar({
         <ChevronDown className={`h-7 w-7 ${light ? 'text-white/85' : 'text-zinc-600'}`} />
       </button>
       <div className="min-w-0 flex-1 text-center">
-        <p className={`truncate text-[13px] ${light ? 'text-white/90' : 'text-zinc-700'}`}>{title}</p>
-        {together && <p className="truncate text-[10px] text-white/50">和 {together.name}</p>}
+        {title && <p className={`truncate text-[13px] ${light ? 'text-white/90' : 'text-zinc-700'}`}>{title}</p>}
       </div>
-      {onMore ? (
+      {onEnd ? (
+        <button
+          type="button"
+          onClick={onEnd}
+          data-testid="music-tg-end"
+          className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-3 py-1.5 text-[11px] text-white/85 active:scale-95"
+        >
+          <X className="h-3 w-3" />
+          结束一起听
+        </button>
+      ) : onMore ? (
         <button type="button" onClick={onMore} aria-label="更多" data-testid="music-player-more">
           <MoreHorizontal className={`h-6 w-6 ${light ? 'text-white/85' : 'text-zinc-600'}`} />
         </button>
@@ -605,56 +611,32 @@ function TogetherHead({
   avatar,
   distanceKm,
   since,
-  aiChatter,
-  onToggleChatter,
-  onEnd,
 }: {
   name: string;
   avatar: string;
   distanceKm: number;
   since: number;
-  aiChatter: boolean;
-  onToggleChatter: (v: boolean) => void;
-  onEnd: () => void;
 }) {
+  const loginUid = useMusic((s) => s.loginUid);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
   const [, force] = useState(0);
   useEffect(() => {
     const t = setInterval(() => force((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
+  const myAvatar = loginUid ? loginAvatar : getGuestProfile().avatar;
   const mins = Math.max(1, Math.floor((Date.now() - since) / 60_000));
   const durText = mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60}分钟` : `${mins}分钟`;
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      <div className="flex items-center">
-        <CoverImg src={avatar} className="h-11 w-11 ring-2 ring-white/70" rounded="rounded-full" alt={name} />
-        <span className="relative -ml-3 flex h-11 w-11 items-center justify-center rounded-full bg-zinc-700 ring-2 ring-white/70">
-          <Mic2 className="h-4 w-4 text-white/70" />
-        </span>
+      {/* 双头像（分开一点，不再重叠） */}
+      <div className="flex items-center gap-3.5" data-testid="music-tg-avatars">
+        <CoverImg src={avatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt={name} />
+        <CoverImg src={myAvatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt="我" />
       </div>
-      <p className="mt-1 text-[11px] text-white/70">
+      <p className="mt-1.5 text-[11px] text-white/70">
         相距 {distanceKm} 公里 · 一起听了 {durText}
       </p>
-      <div className="mt-1 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onToggleChatter(!aiChatter)}
-          data-testid="music-tg-chatter"
-          className={`rounded-full px-2.5 py-0.5 text-[10px] ${
-            aiChatter ? 'bg-[#EC4141]/80 text-white' : 'bg-white/10 text-white/50'
-          }`}
-        >
-          TA 主动聊天 {aiChatter ? '开' : '关'}
-        </button>
-        <button
-          type="button"
-          onClick={onEnd}
-          data-testid="music-tg-end"
-          className="rounded-full bg-white/10 px-2.5 py-0.5 text-[10px] text-white/60"
-        >
-          结束一起听
-        </button>
-      </div>
     </div>
   );
 }

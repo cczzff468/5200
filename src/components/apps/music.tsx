@@ -34,7 +34,7 @@ import {
   loginByPassword,
   type QrState,
 } from '@/lib/ios/music-api';
-import { useMusic } from '@/lib/ios/music-store';
+import { useMusic, enterGuestMode } from '@/lib/ios/music-store';
 import { bootMusicAi } from '@/lib/ios/music-ai';
 import { MusicTabBar, MiniBar } from './music-shared';
 import { MusicHome } from './music-home';
@@ -71,7 +71,7 @@ export default function MusicApp() {
               <div className="min-h-0 flex-1 overflow-hidden">
                 {nav.tab === 'home' && <MusicHome onSettings={() => setShowSettings(true)} />}
                 {nav.tab === 'search' && <MusicSearch />}
-                {nav.tab === 'mine' && <MusicMine />}
+                {nav.tab === 'mine' && <MusicMine onSettings={() => setShowSettings(true)} />}
               </div>
               <MiniBar />
               <MusicTabBar />
@@ -144,7 +144,7 @@ function LoginView() {
         <div className="flex items-center justify-center gap-4">
           <button
             type="button"
-            onClick={() => useMusic.setState({ guestMode: true })}
+            onClick={() => enterGuestMode()}
             data-testid="music-guest-enter"
             className="rounded-full border border-zinc-300 px-5 py-2 text-[13px] text-zinc-600 active:scale-95 dark:border-zinc-600 dark:text-zinc-300"
           >

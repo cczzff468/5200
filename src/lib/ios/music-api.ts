@@ -72,6 +72,8 @@ export interface NcmUser {
   avatarUrl: string;
   signature?: string;
   vipType?: number;
+  follows?: number; // 关注数（/user/detail profile 内返回）
+  followeds?: number; // 粉丝数
 }
 
 export interface NcmToplist {

@@ -23,7 +23,7 @@ import {
   type NcmSong,
   type NcmToplist,
 } from '@/lib/ios/music-api';
-import { useMusic, getGuestProfile } from '@/lib/ios/music-store';
+import { useMusic, getGuestProfile, exitGuestMode } from '@/lib/ios/music-store';
 import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
 
 export function MusicHome({ onSettings }: { onSettings: () => void }) {
@@ -128,7 +128,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
                 type="button"
                 onClick={() => {
                   setAvatarSheet(false);
-                  useMusic.setState({ guestMode: false }); // 回登录页
+                  exitGuestMode(); // 回登录页（清除游客持久标记）
                 }}
                 data-testid="music-avatar-login"
                 className="h-11 w-full rounded-full bg-[#C20C0C] text-[14px] font-medium text-white active:scale-[0.98]"

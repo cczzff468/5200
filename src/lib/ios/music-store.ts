@@ -26,7 +26,7 @@ import {
   type NcmSong,
   type NcmLyric,
 } from './music-api';
-import { kvGet, kvSet, isKvReady } from './idb-kv';
+import { kvGet, kvSet, kvDel, isKvReady } from './idb-kv';
 import { registerAudioSource, stopOtherAudio } from './audio-focus';
 
 export type RepeatMode = 'order' | 'repeat' | 'one' | 'shuffle';
@@ -531,11 +531,14 @@ export const useMusic = create<MusicState>((set, get) => ({
     const { refreshLoginStatus } = await import('./music-api');
     const l = await refreshLoginStatus();
     if (l) {
+      // 登录成功：退出游客态并清除游客标记（下次刷新不再回到游客）
+      kvDel(GUEST_MODE_KEY);
       set({ loginUid: l.profile.userId, loginNickname: l.profile.nickname, loginAvatar: l.profile.avatarUrl, guestMode: false });
       void get().initLiked();
       loadHistoryFor();
     } else {
-      set({ loginUid: null, loginNickname: '', loginAvatar: '', likedIds: new Set(), likedSongs: {}, guestMode: false });
+      // 未登录：保留 guestMode（游客标记持久化，刷新后仍是游客模式）
+      set({ loginUid: null, loginNickname: '', loginAvatar: '', likedIds: new Set(), likedSongs: {} });
       loadHistoryFor();
     }
   },
@@ -593,10 +596,30 @@ export interface GuestProfile {
   nickname: string;
   /** 空 = 使用默认头像 */
   avatar: string;
+  /** 个性签名（「我的」页展示，可编辑） */
+  signature: string;
+  /** 关注数（游客本地可编辑） */
+  follows: number;
+  /** 粉丝数（游客本地可编辑） */
+  fans: number;
 }
 
 const GUEST_PROFILE_KEY = 'music-guest-profile';
 const GUEST_PLAYLISTS_KEY = 'music-guest-playlists';
+const GUEST_MODE_KEY = 'music-guest-mode';
+
+/** 游客模式开关（持久化：选一次，刷新后仍为游客模式；登录成功后自动清除） */
+export function enterGuestMode(): void {
+  kvSet(GUEST_MODE_KEY, true);
+  useMusic.setState({ guestMode: true });
+}
+
+/** 退出游客模式（回登录页；不清理游客本地资料） */
+export function exitGuestMode(): void {
+  kvDel(GUEST_MODE_KEY);
+  useMusic.setState({ guestMode: false });
+}
+
 export const GUEST_DEFAULT_AVATAR =
   'https://api.dicebear.com/7.x/adventurer/svg?seed=MusicGuest&backgroundColor=b6e3f4';
 
@@ -611,8 +634,14 @@ export const GUEST_AVATAR_PRESETS: string[] = [
 ];
 
 export function getGuestProfile(): GuestProfile {
-  const v = kvGet<GuestProfile>(GUEST_PROFILE_KEY);
-  return { nickname: v?.nickname || '游客', avatar: v?.avatar || GUEST_DEFAULT_AVATAR };
+  const v = kvGet<Partial<GuestProfile>>(GUEST_PROFILE_KEY);
+  return {
+    nickname: v?.nickname || '游客',
+    avatar: v?.avatar || GUEST_DEFAULT_AVATAR,
+    signature: v?.signature ?? '这个人很懒，什么都没留下',
+    follows: typeof v?.follows === 'number' ? v.follows : 0,
+    fans: typeof v?.fans === 'number' ? v.fans : 0,
+  };
 }
 
 export function setGuestProfile(p: Partial<GuestProfile>): GuestProfile {
@@ -683,6 +712,9 @@ if (typeof window !== 'undefined' && isKvReady()) {
       loginNickname: l.profile.nickname,
       loginAvatar: l.profile.avatarUrl,
     });
+  } else if (kvGet<boolean>(GUEST_MODE_KEY)) {
+    // 游客模式持久化：上次选过「游客模式」，刷新后直接进入游客态（不再弹登录页）
+    useMusic.setState({ guestMode: true });
   }
   const snap = kvGet<PlayerSnapshot>(PLAYER_KEY);
   if (snap && Array.isArray(snap.queue) && snap.queue.length) {

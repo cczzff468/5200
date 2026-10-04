@@ -16,7 +16,7 @@ import {
   setMusicApiCfg,
   DEFAULT_MUSIC_API_CFG,
 } from '@/lib/ios/music-api';
-import { useMusic } from '@/lib/ios/music-store';
+import { useMusic, exitGuestMode } from '@/lib/ios/music-store';
 import { CoverImg } from './music-shared';
 
 export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; onBack?: () => void }) {
@@ -89,7 +89,20 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
               </button>
             </div>
           ) : (
-            <p className="text-[13px] text-zinc-400">未登录（游客模式）</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[13px] text-zinc-400">未登录（游客模式）</p>
+              <button
+                type="button"
+                onClick={() => {
+                  exitGuestMode(); // 回登录页
+                  if (asSheet) onBack?.();
+                }}
+                data-testid="music-settings-login"
+                className="rounded-full bg-[#C20C0C] px-3.5 py-1.5 text-[12px] font-medium text-white active:scale-95"
+              >
+                登录网易云账号
+              </button>
+            </div>
           )}
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">
             登录状态保存在本机，重启 App 后仍有效；退出后可重新扫码或用手机号登录（切换账号）。
@@ -147,7 +160,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
           <ul className="space-y-1.5 text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
             <li>· 在播放页「更多 → 一起听」邀请 AI 角色一起听歌、聊天、让 TA 推荐歌曲；</li>
             <li>· 一起听时每首歌会写入该角色的记忆，之后在任何聊天里 TA 都记得你们听过什么；</li>
-            <li>· 「TA 主动聊天」开关在播放页一起听头像下方。</li>
+            <li>· 一起听时 TA 会主动聊音乐、推荐歌曲（默认开启）。</li>
           </ul>
         </section>
 

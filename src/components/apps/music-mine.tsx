@@ -1,37 +1,44 @@
 'use client';
 
 /**
- * 音乐 App「我的」页：
- * - 登录态：网易云用户卡（头像/昵称/等级/听歌数）、创建与收藏的歌单（云端 CRUD）、
- *   最近播放 / 听歌排行 / 我的红心 / 收藏歌手
- * - 游客态：本地资料卡（头像+昵称可编辑，存本机）、关注/粉丝展示、本地歌单 CRUD、
- *   最近播放 / 我的红心 —— 与登录态结构一致，数据来源不同
+ * 音乐 App「我的」页 —— 1:1 对标网易云 App「我的」：
+ * - 深色渐变头部：菜单(≡)/添加状态/新建(+)/分享(⋮)、大圆头像（游客可从手机上传）、
+ *   昵称 + 听歌徽章 + VIP 徽章、签名、状态胶囊、统计行（关注/粉丝/等级/听歌）、
+ *   最近 / 本地 / 收藏 / 装扮 / 更多 胶囊入口（装扮 = 换头部主题色）
+ * - 白色圆角面板：音乐 / 播客 / 笔记 主 Tab，近期 / 创建 子 Tab，
+ *   歌单行（我喜欢的音乐心形块、听歌排行图表块+图钉、创建与收藏的歌单）
+ * - 登录态数据来自云端（user/detail + user/playlist）；游客态本地可编辑（签名/关注/粉丝/歌单）
  */
 
 import { useEffect, useState } from 'react';
 import {
-  ChevronRight,
+  ArrowDownToLine,
+  BarChart2,
   Clock3,
   Heart,
+  LayoutGrid,
   ListMusic,
   Loader2,
-  Mic2,
+  Lock,
+  Menu,
+  MoreVertical,
+  NotebookPen,
   Pencil,
+  Pin,
   Plus,
+  Podcast,
+  RotateCcw,
+  Shirt,
+  Smile,
   Star,
-  Trash2,
-  UserRound,
+  Timer,
 } from 'lucide-react';
 import {
-  getMusicLogin,
+  playlistDelete,
   userDetail,
   userPlaylists,
-  artistSublist,
-  playlistCreate,
   type NcmPlaylist,
   type NcmUserDetail,
-  type NcmArtist,
-  type NcmSong,
 } from '@/lib/ios/music-api';
 import {
   useMusic,
@@ -43,21 +50,70 @@ import {
   getGuestPlaylists,
   type GuestPlaylist,
 } from '@/lib/ios/music-store';
-import { CoverImg, EmptyBlock, LoadingBlock, fmtPlayCount } from './music-shared';
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { CoverImg, LoadingBlock, fmtPlayCount } from './music-shared';
 
-type SheetKind = 'recent' | 'record' | 'liked' | 'artists' | 'profile' | 'gpls' | null;
+type SheetKind = 'recent' | 'record' | 'liked' | 'local' | 'dress' | 'profile' | 'stats' | null;
+type MainTab = 'music' | 'podcast' | 'notes';
+type SubTab = 'recent' | 'created';
 
-export function MusicMine() {
+/** 头部主题（装扮） */
+const MINE_THEMES = [
+  { name: '曜石黑', from: '#85858c', via: '#414147', to: '#1f1f24' },
+  { name: '绯红夜', from: '#9a5a60', via: '#5e2f35', to: '#2a161b' },
+  { name: '松涛绿', from: '#5f7f6f', via: '#31493e', to: '#182620' },
+  { name: '暖棕调', from: '#96795c', via: '#5c4530', to: '#2b2014' },
+];
+
+const statusKeyOf = (scope: string) => `music-mine-status:${scope}`;
+const dressKeyOf = (scope: string) => `music-mine-dress:${scope}`;
+
+/** 从手机选择图片 → 居中裁方 → 压缩为 288px JPEG dataURL（存 IndexedDB 体积可控） */
+function fileToAvatarDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取失败'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('图片解析失败'));
+      img.onload = () => {
+        const S = 288;
+        const c = document.createElement('canvas');
+        c.width = S;
+        c.height = S;
+        const ctx = c.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas 不可用'));
+          return;
+        }
+        const s = Math.min(img.width, img.height);
+        ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, S, S);
+        resolve(c.toDataURL('image/jpeg', 0.86));
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginNickname = useMusic((s) => s.loginNickname);
   const loginAvatar = useMusic((s) => s.loginAvatar);
+  const likedIds = useMusic((s) => s.likedIds);
   const openPlaylist = useMusic((s) => s.openPlaylist);
-  const history = useMusic((s) => s.history);
   const guestTick = useMusic((s) => s.guestMode); // 游客态切换时重渲染
+
+  const scope = loginUid ? `u${loginUid}` : 'guest';
+
   const [detail, setDetail] = useState<NcmUserDetail | null>(null);
   const [playlists, setPlaylists] = useState<NcmPlaylist[] | null>(null);
   const [guestLists, setGuestLists] = useState<GuestPlaylist[]>([]);
   const [sheet, setSheet] = useState<SheetKind>(null);
+  const [mainTab, setMainTab] = useState<MainTab>('music');
+  const [subTab, setSubTab] = useState<SubTab>('recent');
+  const [statusText, setStatusText] = useState<string>(() => kvGetStr(statusKeyOf(scope)));
+  const [themeIdx, setThemeIdx] = useState<number>(() => kvGetIdx(dressKeyOf(scope)));
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState('');
 
@@ -66,14 +122,15 @@ export function MusicMine() {
     setTimeout(() => setToast(''), 1500);
   };
 
-  // 游客本地歌单（每次进入/操作后刷新）
   const refreshGuest = () => setGuestLists(getGuestPlaylists());
-  useEffect(() => {
-    if (!loginUid) refreshGuest();
-  }, [loginUid, guestTick]);
 
+  // 数据加载：登录 = 云端；游客 = 本地 + 红心
   useEffect(() => {
-    if (!loginUid) return;
+    if (!loginUid) {
+      refreshGuest();
+      void useMusic.getState().initLiked();
+      return;
+    }
     void (async () => {
       setDetail(await userDetail(loginUid));
       try {
@@ -82,23 +139,41 @@ export function MusicMine() {
         setPlaylists([]);
       }
     })();
-  }, [loginUid]);
+  }, [loginUid, guestTick]);
 
-  const doCreateGuest = () => {
-    const name = prompt('歌单名称');
-    if (!name || !name.trim()) return;
-    guestPlaylistCreate(name);
-    refreshGuest();
-    showToast('已创建歌单');
-  };
+  // 切换账号/游客时重读装扮与状态
+  useEffect(() => {
+    setStatusText(kvGetStr(statusKeyOf(scope)));
+    setThemeIdx(kvGetIdx(dressKeyOf(scope)));
+  }, [scope]);
 
-  const doCreateCloud = async () => {
-    const name = prompt('歌单名称');
-    if (!name || !name.trim() || !loginUid) return;
+  const guest = getGuestProfile();
+  const name = loginUid ? loginNickname || detail?.profile.nickname || '…' : guest.nickname;
+  const avatar = loginUid ? loginAvatar || detail?.profile.avatarUrl : guest.avatar;
+  const signature = loginUid ? detail?.profile.signature || '' : guest.signature;
+
+  const owned = (playlists ?? []).filter((p) => p.creator?.userId === loginUid);
+  const likedPl = owned.find((p) => p.specialType === 5) ?? owned[0] ?? null;
+  const createdPls = owned.filter((p) => p.id !== likedPl?.id);
+  const subPls = (playlists ?? []).filter((p) => p.creator?.userId !== loginUid);
+  const createdCount = loginUid ? createdPls.length : guestLists.length;
+
+  const theme = MINE_THEMES[Math.min(themeIdx, MINE_THEMES.length - 1)];
+
+  const doCreate = async () => {
+    const n = prompt('歌单名称');
+    if (!n || !n.trim()) return;
     setCreating(true);
     try {
-      await playlistCreate(name.trim());
-      setPlaylists(await userPlaylists(loginUid));
+      if (loginUid) {
+        const { playlistCreate } = await import('@/lib/ios/music-api');
+        await playlistCreate(n.trim());
+        setPlaylists(await userPlaylists(loginUid));
+      } else {
+        guestPlaylistCreate(n.trim());
+        refreshGuest();
+      }
+      showToast('已创建歌单');
     } catch {
       showToast('创建失败');
     } finally {
@@ -106,270 +181,590 @@ export function MusicMine() {
     }
   };
 
-  const guest = getGuestProfile();
+  const doDeleteCloud = async (p: NcmPlaylist) => {
+    if (!confirm(`确定删除歌单「${p.name}」？`)) return;
+    try {
+      await playlistDelete(p.id);
+      if (loginUid) setPlaylists(await userPlaylists(loginUid));
+      showToast('已删除');
+    } catch {
+      showToast('删除失败');
+    }
+  };
+
+  const doDeleteGuest = (p: GuestPlaylist) => {
+    if (!confirm(`确定删除歌单「${p.name}」？`)) return;
+    guestPlaylistDelete(p.id);
+    refreshGuest();
+    showToast('已删除');
+  };
+
+  const editStatus = () => {
+    const v = prompt('设置状态文字（留空清除）', statusText);
+    if (v === null) return;
+    const t = v.trim().slice(0, 20);
+    setStatusText(t);
+    kvSetStr(statusKeyOf(scope), t);
+  };
+
+  const shareProfile = async () => {
+    const text = `「${name}」的网易云音乐主页`;
+    try {
+      if (navigator.share) await navigator.share({ title: text, text });
+      else {
+        await navigator.clipboard.writeText(text);
+        showToast('已复制到剪贴板');
+      }
+    } catch {
+      // 用户取消
+    }
+  };
+
+  const refreshData = () => {
+    if (!loginUid) {
+      refreshGuest();
+      void useMusic.getState().initLiked();
+    } else {
+      void (async () => {
+        setDetail(await userDetail(loginUid));
+        try {
+          setPlaylists(await userPlaylists(loginUid));
+        } catch {
+          /* 保留旧数据 */
+        }
+      })();
+    }
+    showToast('已刷新');
+  };
 
   return (
-    <div className="relative h-full overflow-y-auto pb-4" data-testid="music-mine">
-      {/* 顶栏 */}
-      <div className="sticky top-0 z-20 flex items-center bg-[#F8F8F8]/90 px-4 pb-2 pt-[58px] backdrop-blur-xl dark:bg-black/90">
-        <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">我的</span>
-      </div>
-
-      {/* 用户卡：登录 = 云端资料；游客 = 本地资料（可编辑） */}
-      <div className="mx-4 mt-1 rounded-2xl border border-black/5 bg-white p-4 dark:border-white/10 dark:bg-zinc-900" data-testid="music-mine-card">
-        {loginUid ? (
-          <>
-            <div className="flex items-center gap-3.5">
-              <CoverImg src={loginAvatar || detail?.profile.avatarUrl} className="h-14 w-14" rounded="rounded-full" alt={loginNickname} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-mine-nickname">
-                  {loginNickname || detail?.profile.nickname || '…'}
-                </p>
-                <p className="mt-0.5 text-[11px] text-zinc-400">
-                  {detail ? `Lv.${detail.level} · 累计听歌 ${detail.listenSongs} 首` : '资料加载中…'}
-                </p>
-              </div>
-            </div>
-            <div className="mt-3 flex items-center gap-5 border-t border-black/5 pt-3 text-center dark:border-white/10">
-              <Stat label="关注" value="—" />
-              <Stat label="粉丝" value="—" />
-              <Stat label="歌单" value={String(playlists?.length ?? '—')} />
-              <Stat label="动态" value="—" />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-3.5">
-              <button type="button" onClick={() => setSheet('profile')} className="relative shrink-0 active:scale-95" data-testid="music-mine-avatar">
-                <CoverImg src={guest.avatar} className="h-14 w-14" rounded="rounded-full" alt={guest.nickname} />
-                <span className="absolute -bottom-1 -right-1 rounded-full bg-zinc-800 p-1 ring-2 ring-white dark:ring-zinc-900">
-                  <Pencil className="h-2.5 w-2.5 text-white" />
-                </span>
-              </button>
-              <div className="min-w-0 flex-1">
-                <button type="button" onClick={() => setSheet('profile')} className="flex items-center gap-1.5" data-testid="music-mine-guest-name">
-                  <span className="truncate text-[17px] font-bold text-zinc-900 dark:text-zinc-100">{guest.nickname}</span>
-                  <Pencil className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                </button>
-                <p className="mt-0.5 text-[11px] text-zinc-400">游客 · 资料与歌单保存在本机</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => useMusic.setState({ guestMode: false })}
-                className="shrink-0 rounded-full bg-[#C20C0C] px-3 py-1.5 text-[11px] font-medium text-white active:scale-95"
-                data-testid="music-mine-login-btn"
-              >
-                登录
-              </button>
-            </div>
-            <div className="mt-3 flex items-center gap-5 border-t border-black/5 pt-3 text-center dark:border-white/10">
-              <Stat label="关注" value="0" />
-              <Stat label="粉丝" value="0" />
-              <Stat label="歌单" value={String(guestLists.length)} />
-              <Stat label="红心" value={String(useMusic.getState().likedIds.size)} />
-            </div>
-          </>
-        )}
-
-        {/* 快捷入口（两态各自独立） */}
-        <div className="mt-4 grid grid-cols-4 gap-1">
-          {(loginUid
-            ? [
-                { k: 'recent', label: '最近播放', icon: <Clock3 className="h-5 w-5" /> },
-                { k: 'record', label: '听歌排行', icon: <ListMusic className="h-5 w-5" /> },
-                { k: 'liked', label: '我的红心', icon: <Heart className="h-5 w-5" /> },
-                { k: 'artists', label: '收藏歌手', icon: <Star className="h-5 w-5" /> },
-              ]
-            : [
-                { k: 'recent', label: '最近播放', icon: <Clock3 className="h-5 w-5" /> },
-                { k: 'liked', label: '我的红心', icon: <Heart className="h-5 w-5" /> },
-                { k: 'gpls', label: '我的歌单', icon: <ListMusic className="h-5 w-5" /> },
-                { k: 'login', label: '登录账号', icon: <UserRound className="h-5 w-5" /> },
-              ]
-          ).map((it) => (
-            <button
-              key={it.k}
-              type="button"
-              onClick={() => {
-                if (it.k === 'login') {
-                  useMusic.setState({ guestMode: false });
-                  return;
-                }
-                setSheet(it.k as SheetKind);
-              }}
-              data-testid={`music-mine-${it.k}`}
-              className="flex flex-col items-center gap-1 rounded-xl py-2 text-zinc-700 active:bg-black/5 dark:text-zinc-200 dark:active:bg-white/10"
-            >
-              {it.icon}
-              <span className="text-[10px]">{it.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 歌单区：游客 = 本地歌单；登录 = 创建 + 收藏 */}
-      <div className="mt-4 px-4">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-[14px] font-bold text-zinc-900 dark:text-zinc-100">
-            {loginUid ? '创建的歌单' : '我的歌单'}{' '}
-            <span className="text-[11px] font-normal text-zinc-400">
-              {loginUid ? (playlists?.filter((p) => p.creator?.userId === loginUid).length ?? 0) : guestLists.length}
-            </span>
-          </p>
+    <div className="flex h-full flex-col" data-testid="music-mine">
+      {/* ================= 深色头部 ================= */}
+      <div
+        className="relative shrink-0 text-white"
+        style={{ background: `linear-gradient(180deg, ${theme.from} 0%, ${theme.via} 52%, ${theme.to} 100%)` }}
+      >
+        {/* 顶栏 */}
+        <div className="flex items-center px-4 pb-1 pt-[58px]">
           <button
             type="button"
-            onClick={loginUid ? () => void doCreateCloud() : doCreateGuest}
-            disabled={creating}
-            data-testid="music-mine-create-pl"
-            className="flex items-center gap-1 text-[12px] text-[#C20C0C] disabled:opacity-40"
+            onClick={onSettings}
+            aria-label="菜单"
+            data-testid="music-mine-menu"
+            className="p-1 active:scale-90"
           >
-            {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-            新建
+            <Menu className="h-[26px] w-[26px]" />
+          </button>
+          <button
+            type="button"
+            onClick={editStatus}
+            className="mx-auto flex items-center gap-0.5 rounded-full px-3 py-1 text-[14px] text-white/85 active:bg-white/10"
+            data-testid="music-mine-add-status"
+          >
+            <Plus className="h-4 w-4" />
+            添加状态
+          </button>
+          <div className="flex items-center gap-4">
+            <button type="button" onClick={() => void doCreate()} aria-label="新建歌单" className="p-1 active:scale-90">
+              <Plus className="h-[26px] w-[26px]" />
+            </button>
+            <button type="button" onClick={() => void shareProfile()} aria-label="分享主页" className="p-1 active:scale-90">
+              <MoreVertical className="h-[24px] w-[24px]" />
+            </button>
+          </div>
+        </div>
+
+        {/* 头像 */}
+        <div className="mt-2 flex justify-center">
+          <button
+            type="button"
+            onClick={loginUid ? undefined : () => setSheet('profile')}
+            disabled={!!loginUid}
+            aria-label={loginUid ? '头像' : '编辑头像'}
+            data-testid="music-mine-avatar"
+            className="relative active:scale-95 disabled:active:scale-100"
+          >
+            <CoverImg
+              src={avatar}
+              className="h-[86px] w-[86px]"
+              rounded="rounded-full"
+              alt={name}
+            />
+            <span className="absolute inset-0 rounded-full ring-[3px] ring-white/90" />
+            {!loginUid && (
+              <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-white p-1 shadow">
+                <Pencil className="h-3 w-3 text-zinc-700" />
+              </span>
+            )}
           </button>
         </div>
 
-        {loginUid ? (
-          playlists === null ? (
-            <LoadingBlock />
-          ) : playlists.filter((p) => p.creator?.userId === loginUid).length === 0 ? (
-            <EmptyBlock text="还没有创建歌单" />
+        {/* 昵称 + 徽章 */}
+        <div className="mt-2.5 flex items-center justify-center gap-2 px-6">
+          <h2 className="max-w-[55%] truncate text-[21px] font-bold" data-testid="music-mine-nickname">
+            {name}
+          </h2>
+          {loginUid && (
+            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[#EC4141]" title="听歌徽章">
+              <Timer className="h-3 w-3 text-white" fill="currentColor" />
+            </span>
+          )}
+          <span
+            className="flex shrink-0 items-center gap-1 rounded-full bg-black/45 py-[3px] pl-[5px] pr-2 text-[10px] font-medium text-white/90"
+            data-testid="music-mine-vip"
+          >
+            <span className="h-3 w-3 rounded-full bg-[#EC4141] ring-[1.5px] ring-white/40" />
+            {loginUid ? 'VIP' : '游客'}
+          </span>
+        </div>
+
+        {/* 状态胶囊 */}
+        {statusText && (
+          <div className="mt-1.5 flex justify-center">
+            <span className="inline-flex max-w-[82%] items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-[11px] text-white/90">
+              <Smile className="h-3 w-3 shrink-0" />
+              <span className="truncate">{statusText}</span>
+            </span>
+          </div>
+        )}
+
+        {/* 签名 */}
+        <p className="mt-1 truncate px-10 text-center text-[12px] text-white/60" data-testid="music-mine-signature">
+          {signature || (loginUid ? '编辑我的签名~' : '点击头像设置资料')}
+        </p>
+
+        {/* 统计行 */}
+        <div className="mt-3 flex items-center justify-center gap-7">
+          {loginUid ? (
+            <>
+              <StatV v={detail ? `${detail.profile.follows ?? 0}` : '—'} l="关注" />
+              <StatV v={detail ? `${detail.profile.followeds ?? 0}` : '—'} l="粉丝" />
+              <StatV v={detail ? `Lv.${detail.level}` : '—'} l="" />
+              <StatV v={detail ? `${detail.listenSongs}` : '—'} l="首" />
+            </>
           ) : (
-            <CloudPlaylistRows list={playlists.filter((p) => p.creator?.userId === loginUid)} />
-          )
-        ) : guestLists.length === 0 ? (
-          <EmptyBlock text="还没有歌单，去搜几首歌加进来吧" />
-        ) : (
-          <div className="space-y-1">
-            {guestLists.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 rounded-xl p-1.5 active:bg-black/5 dark:active:bg-white/10">
-                <button type="button" onClick={() => openGuestPlaylist(p.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left" data-testid={`music-mine-gpl-${p.id}`}>
-                  <CoverImg src={p.songs[0]?.album?.picUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[14px] text-zinc-900 dark:text-zinc-100">{p.name}</p>
-                    <p className="mt-0.5 text-[11px] text-zinc-400">{p.songs.length} 首 · 本地歌单</p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300" />
+            <>
+              <button type="button" onClick={() => setSheet('stats')} data-testid="music-mine-edit-stats" className="flex items-baseline gap-1 active:opacity-70">
+                <span className="text-[15px] font-bold">{guest.follows}</span>
+                <span className="text-[12px] text-white/60">关注</span>
+                <Pencil className="h-2.5 w-2.5 self-center text-white/50" />
+              </button>
+              <button type="button" onClick={() => setSheet('stats')} className="flex items-baseline gap-1 active:opacity-70">
+                <span className="text-[15px] font-bold">{guest.fans}</span>
+                <span className="text-[12px] text-white/60">粉丝</span>
+                <Pencil className="h-2.5 w-2.5 self-center text-white/50" />
+              </button>
+              <StatV v={`${guestLists.length}`} l="歌单" />
+              <StatV v={`${likedIds.size}`} l="红心" />
+            </>
+          )}
+        </div>
+
+        {/* 胶囊入口 */}
+        <div className="mt-4 flex items-center gap-2 overflow-x-auto px-4 no-scrollbar">
+          <Pill icon={<Clock3 className="h-[18px] w-[18px]" />} label="最近" onClick={() => setSheet('recent')} testId="music-mine-recent" />
+          <Pill icon={<ArrowDownToLine className="h-[18px] w-[18px]" />} label="本地" onClick={() => setSheet('local')} testId="music-mine-local" />
+          <Pill icon={<Star className="h-[18px] w-[18px]" />} label="收藏" onClick={() => setSheet('liked')} testId="music-mine-liked" />
+          <Pill icon={<Shirt className="h-[18px] w-[18px]" />} label="装扮" onClick={() => setSheet('dress')} testId="music-mine-dress" />
+          <button
+            type="button"
+            onClick={onSettings}
+            aria-label="更多"
+            data-testid="music-mine-more"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white/90 active:bg-white/20"
+          >
+            <LayoutGrid className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+
+        {/* 白色面板圆角帽（同一底色，形成圆角衔接） */}
+        <div className="mt-4 h-[16px] rounded-t-[16px] bg-[#F8F8F8] dark:bg-zinc-900" />
+      </div>
+
+      {/* ================= 白色面板 ================= */}
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8F8F8] dark:bg-zinc-900">
+        {mainTab === 'music' && (
+          <>
+            {/* 主 Tab 行（音乐/播客/笔记） */}
+            <div className="sticky top-0 z-10 border-b border-black/5 bg-[#F8F8F8] px-5 dark:border-white/10 dark:bg-zinc-900">
+              <div className="flex items-center gap-8">
+                {(
+                  [
+                    { k: 'music', label: '音乐' },
+                    { k: 'podcast', label: '播客' },
+                    { k: 'notes', label: '笔记' },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.k}
+                    type="button"
+                    onClick={() => setMainTab(t.k)}
+                    data-testid={`music-mine-tab-${t.k}`}
+                    className="relative py-2.5 text-[18px] leading-none"
+                  >
+                    <span className={mainTab === t.k ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400 dark:text-zinc-500'}>
+                      {t.label}
+                    </span>
+                    {mainTab === t.k && (
+                      <span className="absolute inset-x-0 -bottom-[1px] mx-auto h-[3px] w-7 rounded-full bg-zinc-900 dark:bg-white" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 子 Tab 行 */}
+            <div className="flex items-center px-5 pb-1 pt-3">
+              <button
+                type="button"
+                onClick={() => setSubTab('recent')}
+                data-testid="music-mine-subtab-recent"
+                className={`flex items-center gap-1 text-[15px] ${subTab === 'recent' ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400'}`}
+              >
+                <Lock className="h-3.5 w-3.5" />
+                近期
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTab('created')}
+                data-testid="music-mine-subtab-created"
+                className={`ml-5 text-[15px] ${subTab === 'created' ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400'}`}
+              >
+                创建<sup className="text-[10px]">{createdCount}</sup>
+              </button>
+              <div className="ml-auto flex items-center gap-4 text-zinc-400">
+                <button type="button" onClick={refreshData} aria-label="刷新" data-testid="music-mine-refresh" className="active:scale-90">
+                  <RotateCcw className="h-[18px] w-[18px]" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm(`删除歌单「${p.name}」？`)) {
-                      guestPlaylistDelete(p.id);
-                      refreshGuest();
-                    }
-                  }}
-                  aria-label="删除歌单"
-                  className="shrink-0 p-2 text-zinc-300 active:scale-90"
-                >
-                  <Trash2 className="h-4 w-4 text-red-400" />
+                <button type="button" onClick={() => void doCreate()} aria-label="新建歌单" data-testid="music-mine-create-pl" className="active:scale-90">
+                  {creating ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <MoreVertical className="h-[18px] w-[18px]" />}
                 </button>
               </div>
-            ))}
+            </div>
+
+            {/* 歌单列表 */}
+            {subTab === 'recent' ? (
+              <div className="pb-28" data-testid="music-mine-list">
+                {loginUid ? (
+                  playlists === null ? (
+                    <LoadingBlock />
+                  ) : (
+                    <>
+                      {likedPl && (
+                        <PlRow
+                          tile={<HeartTile />}
+                          name="我喜欢的音乐"
+                          sub={
+                            <>
+                              <Lock className="h-3 w-3 shrink-0" />
+                              {likedPl.trackCount}首{likedPl.playCount ? ` · ${fmtPlayCount(likedPl.playCount)}次播放` : ''}
+                            </>
+                          }
+                          onClick={() => openPlaylist(likedPl.id, 'liked')}
+                          testId="music-mine-pl-liked"
+                        />
+                      )}
+                      <PlRow
+                        tile={<RankTile />}
+                        name="听歌排行"
+                        sub={<>累计听歌{detail?.listenSongs ?? '—'}首</>}
+                        right={<Pin className="h-4 w-4 shrink-0 rotate-45 text-zinc-300 dark:text-zinc-600" />}
+                        onClick={() => setSheet('record')}
+                        testId="music-mine-pl-record"
+                      />
+                      {createdPls.map((p) => (
+                        <PlRow
+                          key={p.id}
+                          tile={<CoverImg src={p.coverImgUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />}
+                          name={p.name}
+                          sub={<>歌单 · {p.trackCount}首{p.creator?.nickname ? ` · ${p.creator.nickname}` : ''}</>}
+                          right={
+                            <button
+                              type="button"
+                              onClick={() => void doDeleteCloud(p)}
+                              aria-label="删除歌单"
+                              className="shrink-0 p-1.5 text-zinc-300 active:scale-90"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
+                          }
+                          onClick={() => openPlaylist(p.id)}
+                          testId={`music-mine-pl-${p.id}`}
+                        />
+                      ))}
+                      {subPls.map((p) => (
+                        <PlRow
+                          key={p.id}
+                          tile={<CoverImg src={p.coverImgUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />}
+                          name={p.name}
+                          sub={<>歌单 · {p.trackCount}首{p.creator?.nickname ? ` · ${p.creator.nickname}` : ''}</>}
+                          onClick={() => openPlaylist(p.id)}
+                          testId={`music-mine-pl-${p.id}`}
+                        />
+                      ))}
+                    </>
+                  )
+                ) : (
+                  <>
+                    <PlRow
+                      tile={<HeartTile />}
+                      name="我的红心"
+                      sub={
+                        <>
+                          <Lock className="h-3 w-3 shrink-0" />
+                          {likedIds.size}首
+                        </>
+                      }
+                      onClick={() => setSheet('liked')}
+                      testId="music-mine-pl-liked"
+                    />
+                    {guestLists.map((p) => (
+                      <PlRow
+                        key={p.id}
+                        tile={<CoverImg src={p.songs[0]?.album?.picUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />}
+                        name={p.name}
+                        sub={<>{p.songs.length}首 · 本地歌单</>}
+                        right={
+                          <button
+                            type="button"
+                            onClick={() => doDeleteGuest(p)}
+                            aria-label="删除歌单"
+                            className="shrink-0 p-1.5 text-zinc-300 active:scale-90"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+                        }
+                        onClick={() => useMusic.getState().openGuestPlaylistNav(p.id)}
+                        testId={`music-mine-gpl-${p.id}`}
+                      />
+                    ))}
+                    {guestLists.length === 0 && (
+                      <p className="px-5 pb-6 pt-2 text-center text-[12px] text-zinc-400">
+                        还没有歌单，切到「创建」新建一个吧
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="pb-28" data-testid="music-mine-list-created">
+                <button
+                  type="button"
+                  onClick={() => void doCreate()}
+                  data-testid="music-mine-create-row"
+                  className="flex w-full items-center gap-3 px-5 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
+                >
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 text-zinc-400 dark:border-zinc-600">
+                    <Plus className="h-5 w-5" />
+                  </span>
+                  <span className="text-[15px] text-zinc-500 dark:text-zinc-400">新建歌单</span>
+                </button>
+                {loginUid
+                  ? createdPls.map((p) => (
+                      <PlRow
+                        key={p.id}
+                        tile={<CoverImg src={p.coverImgUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />}
+                        name={p.name}
+                        sub={<>歌单 · {p.trackCount}首{p.creator?.nickname ? ` · ${p.creator.nickname}` : ''}</>}
+                        right={
+                          <button
+                            type="button"
+                            onClick={() => void doDeleteCloud(p)}
+                            aria-label="删除歌单"
+                            className="shrink-0 p-1.5 text-zinc-300 active:scale-90"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+                        }
+                        onClick={() => openPlaylist(p.id)}
+                        testId={`music-mine-pl-${p.id}`}
+                      />
+                    ))
+                  : guestLists.map((p) => (
+                      <PlRow
+                        key={p.id}
+                        tile={<CoverImg src={p.songs[0]?.album?.picUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />}
+                        name={p.name}
+                        sub={<>{p.songs.length}首 · 本地歌单</>}
+                        right={
+                          <button
+                            type="button"
+                            onClick={() => doDeleteGuest(p)}
+                            aria-label="删除歌单"
+                            className="shrink-0 p-1.5 text-zinc-300 active:scale-90"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+                        }
+                        onClick={() => useMusic.getState().openGuestPlaylistNav(p.id)}
+                        testId={`music-mine-gpl-${p.id}`}
+                      />
+                    ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {mainTab === 'podcast' && (
+          <div className="flex flex-col items-center gap-2 pb-28 pt-14 text-zinc-400">
+            <Podcast className="h-9 w-9 opacity-40" />
+            <p className="text-[13px]">暂无播客内容</p>
+            <p className="text-[11px] text-zinc-300 dark:text-zinc-600">订阅的播客会出现在这里</p>
+          </div>
+        )}
+
+        {mainTab === 'notes' && (
+          <div className="flex flex-col items-center gap-2 pb-28 pt-14 text-zinc-400">
+            <NotebookPen className="h-9 w-9 opacity-40" />
+            <p className="text-[13px]">还没有笔记</p>
+            <p className="text-[11px] text-zinc-300 dark:text-zinc-600">听歌感悟可以记在这里</p>
           </div>
         )}
       </div>
 
-      {/* 收藏的歌单（登录） */}
-      {loginUid && playlists && playlists.filter((p) => p.creator?.userId !== loginUid).length > 0 && (
-        <div className="mt-4 px-4">
-          <p className="mb-2 text-[14px] font-bold text-zinc-900 dark:text-zinc-100">
-            收藏的歌单 <span className="text-[11px] font-normal text-zinc-400">{playlists.filter((p) => p.creator?.userId !== loginUid).length}</span>
-          </p>
-          <CloudPlaylistRows list={playlists.filter((p) => p.creator?.userId !== loginUid)} />
-        </div>
-      )}
-
-      {/* 各类半屏 */}
+      {/* ================= 半屏面板 ================= */}
       {sheet === 'profile' && <ProfileEditSheet onClose={() => { setSheet(null); refreshGuest(); }} />}
-      {sheet === 'gpls' && (
-        <div className="absolute inset-0 z-[65] flex items-end">
-          <button type="button" aria-label="关闭" onClick={() => setSheet(null)} className="absolute inset-0 bg-black/40" />
-          <div className="relative flex max-h-[60%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
-            <div className="flex items-center justify-between px-4 py-3">
-              <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">我的歌单</p>
-              <button type="button" onClick={() => setSheet(null)} className="text-[13px] text-zinc-400">关闭</button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto pb-8">
-              {guestLists.length === 0 ? <EmptyBlock text="还没有歌单，下方新建" /> : guestLists.map((p) => (
-                <button key={p.id} type="button" onClick={() => { setSheet(null); useMusic.getState().openGuestPlaylistNav(p.id); }} className="flex w-full items-center gap-3 px-4 py-2 text-left active:bg-black/5 dark:active:bg-white/10">
-                  <CoverImg src={p.songs[0]?.album?.picUrl} className="h-11 w-11" rounded="rounded-lg" alt={p.name} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[14px] text-zinc-900 dark:text-zinc-100">{p.name}</p>
-                    <p className="text-[11px] text-zinc-400">{p.songs.length} 首</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+      {sheet === 'stats' && <StatsEditSheet onClose={() => setSheet(null)} />}
+      {sheet === 'dress' && (
+        <DressSheet
+          current={themeIdx}
+          onPick={(i) => {
+            setThemeIdx(i);
+            kvSetIdx(dressKeyOf(scope), i);
+            showToast('已更换装扮');
+          }}
+          onClose={() => setSheet(null)}
+        />
       )}
-      {sheet && sheet !== 'profile' && sheet !== 'gpls' && <MineSheet kind={sheet} onClose={() => setSheet(null)} />}
+      {sheet && sheet !== 'profile' && sheet !== 'stats' && sheet !== 'dress' && (
+        <MineSheet kind={sheet} onClose={() => setSheet(null)} />
+      )}
 
       {toast && (
-        <div className="pointer-events-none absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-4 py-1.5 text-[12px] text-white">
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/75 px-4 py-1.5 text-[12px] text-white">
           {toast}
         </div>
       )}
     </div>
   );
-
-  function openGuestPlaylist(id: string) {
-    useMusic.getState().openGuestPlaylistNav(id);
-  }
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+// ---------------- 小件 ----------------
+
+/** 统计项（值加粗 + 标签） */
+function StatV({ v, l }: { v: string; l: string }) {
   return (
-    <div className="flex-1">
-      <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">{value}</p>
-      <p className="mt-0.5 text-[10px] text-zinc-400">{label}</p>
+    <div className="flex items-baseline gap-1">
+      <span className="text-[15px] font-bold">{v}</span>
+      {l && <span className="text-[12px] text-white/60">{l}</span>}
     </div>
   );
 }
 
-function CloudPlaylistRows({ list }: { list: NcmPlaylist[] }) {
-  const openPlaylist = useMusic((s) => s.openPlaylist);
+/** 头部胶囊入口 */
+function Pill({
+  icon,
+  label,
+  onClick,
+  testId,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  testId: string;
+}) {
   return (
-    <div className="space-y-1">
-      {list.map((p) => (
-        <button
-          key={p.id}
-          type="button"
-          onClick={() => openPlaylist(p.id)}
-          className="flex w-full items-center gap-3 rounded-xl p-1.5 text-left active:bg-black/5 dark:active:bg-white/10"
-          data-testid={`music-mine-pl-${p.id}`}
-        >
-          <CoverImg src={p.coverImgUrl} className="h-12 w-12" rounded="rounded-lg" alt={p.name} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[14px] text-zinc-900 dark:text-zinc-100">{p.name}</p>
-            <p className="mt-0.5 truncate text-[11px] text-zinc-400">
-              {p.trackCount}首 · {fmtPlayCount(p.playCount)}次播放
-            </p>
-          </div>
-          <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300" />
-        </button>
-      ))}
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={testId}
+      className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-white/10 px-3.5 text-[13px] text-white/90 active:bg-white/20"
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+/** 「我喜欢的音乐」心形块 */
+function HeartTile() {
+  return (
+    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-zinc-400 dark:bg-zinc-700">
+      <Heart className="h-6 w-6 text-white" fill="currentColor" />
+    </span>
+  );
+}
+
+/** 「听歌排行」图表块 */
+function RankTile() {
+  return (
+    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-zinc-600 dark:bg-zinc-800">
+      <BarChart2 className="h-6 w-6 text-white" />
+    </span>
+  );
+}
+
+/** 歌单行 */
+function PlRow({
+  tile,
+  name,
+  sub,
+  right,
+  onClick,
+  testId,
+}: {
+  tile: React.ReactNode;
+  name: string;
+  sub: React.ReactNode;
+  right?: React.ReactNode;
+  onClick: () => void;
+  testId: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-5 py-2">
+      <button type="button" onClick={onClick} data-testid={testId} className="flex min-w-0 flex-1 items-center gap-3 text-left active:opacity-70">
+        {tile}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[15px] font-medium text-zinc-900 dark:text-zinc-100">{name}</span>
+          <span className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-zinc-400">{sub}</span>
+        </span>
+      </button>
+      {right}
     </div>
   );
 }
 
-// ---------------- 游客资料编辑 ----------------
+// ---------------- 游客资料编辑（头像上传 + 预设 + 昵称 + 签名） ----------------
 
 function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   const cur = getGuestProfile();
   const [nickname, setNickname] = useState(cur.nickname === '游客' ? '' : cur.nickname);
+  const [signature, setSignature] = useState(cur.signature);
   const [avatar, setAvatar] = useState(cur.avatar);
-  const [, force] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = ''; // 允许重复选同一张
+    if (!f) return;
+    setBusy(true);
+    setErr('');
+    fileToAvatarDataUrl(f)
+      .then((d) => setAvatar(d))
+      .catch((er: Error) => setErr(er.message || '图片处理失败'))
+      .finally(() => setBusy(false));
+  };
 
   const save = () => {
-    setGuestProfile({ nickname: nickname.trim() || '游客', avatar });
+    setGuestProfile({ nickname: nickname.trim() || '游客', avatar, signature: signature.trim().slice(0, 40) });
     onClose();
   };
 
   return (
     <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-profile-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+      <div className="relative max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">编辑资料</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -378,27 +773,43 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
         </div>
         <div className="mb-4 flex items-center gap-4">
           <CoverImg src={avatar} className="h-16 w-16" rounded="rounded-full" alt="头像预览" />
-          <div className="min-w-0 flex-1">
-            <label className="mb-1 block text-[12px] text-zinc-500">昵称</label>
-            <input
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value.slice(0, 16))}
-              placeholder="给自己起个名字"
-              data-testid="music-profile-nickname"
-              className="h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
-            />
+          <div className="min-w-0 flex-1 space-y-2">
+            {/* 从手机上传头像 */}
+            <label
+              data-testid="music-avatar-upload"
+              className="flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-full bg-zinc-900 text-[13px] font-medium text-white active:scale-[0.98] dark:bg-white dark:text-zinc-900"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownToLine className="h-4 w-4 rotate-180" />}
+              从手机上传头像
+              <input type="file" accept="image/*" className="hidden" onChange={onFile} data-testid="music-avatar-file" />
+            </label>
+            <p className="text-[10px] leading-snug text-zinc-400">支持相册/拍摄，自动裁方压缩后保存在本机</p>
           </div>
         </div>
-        <p className="mb-2 text-[12px] text-zinc-500">选个头像</p>
+        {err && <p className="mb-2 text-[12px] text-red-500">{err}</p>}
+        <label className="mb-1 block text-[12px] text-zinc-500">昵称</label>
+        <input
+          value={nickname}
+          onChange={(e) => setNickname(e.target.value.slice(0, 16))}
+          placeholder="给自己起个名字"
+          data-testid="music-profile-nickname"
+          className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+        />
+        <label className="mb-1 block text-[12px] text-zinc-500">个性签名</label>
+        <input
+          value={signature}
+          onChange={(e) => setSignature(e.target.value.slice(0, 40))}
+          placeholder="写一句签名展示在主页"
+          data-testid="music-profile-signature"
+          className="mb-4 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+        />
+        <p className="mb-2 text-[12px] text-zinc-500">或选一个预设头像</p>
         <div className="mb-5 flex flex-wrap gap-2.5">
           {GUEST_AVATAR_PRESETS.map((a) => (
             <button
               key={a}
               type="button"
-              onClick={() => {
-                setAvatar(a);
-                force((n) => n + 1);
-              }}
+              onClick={() => setAvatar(a)}
               className={`overflow-hidden rounded-full ring-2 ${avatar === a ? 'ring-[#C20C0C]' : 'ring-transparent'}`}
               data-testid={`music-avatar-opt-${GUEST_AVATAR_PRESETS.indexOf(a)}`}
             >
@@ -419,9 +830,113 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ---------------- 半屏面板（最近播放/听歌排行/红心/收藏歌手） ----------------
+// ---------------- 游客关注/粉丝编辑 ----------------
 
-function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | null>; onClose: () => void }) {
+function StatsEditSheet({ onClose }: { onClose: () => void }) {
+  const cur = getGuestProfile();
+  const [follows, setFollows] = useState(String(cur.follows));
+  const [fans, setFans] = useState(String(cur.fans));
+
+  const save = () => {
+    const f = Math.max(0, Math.min(999999, Number(follows.replace(/\D/g, '')) || 0));
+    const x = Math.max(0, Math.min(999999, Number(fans.replace(/\D/g, '')) || 0));
+    setGuestProfile({ follows: f, fans: x });
+    onClose();
+  };
+
+  return (
+    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-stats-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">编辑关注 / 粉丝</p>
+          <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
+            取消
+          </button>
+        </div>
+        <div className="mb-4 flex gap-3">
+          <div className="flex-1">
+            <label className="mb-1 block text-[12px] text-zinc-500">关注数</label>
+            <input
+              value={follows}
+              onChange={(e) => setFollows(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              data-testid="music-stats-follows"
+              className="h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="mb-1 block text-[12px] text-zinc-500">粉丝数</label>
+            <input
+              value={fans}
+              onChange={(e) => setFans(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              data-testid="music-stats-fans"
+              className="h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </div>
+        </div>
+        <p className="mb-4 text-[10px] text-zinc-400">游客模式的展示数据，仅保存在本机</p>
+        <button
+          type="button"
+          onClick={save}
+          data-testid="music-stats-save"
+          className="h-11 w-full rounded-full bg-[#C20C0C] text-[14px] font-medium text-white active:scale-[0.98]"
+        >
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 装扮（头部主题色） ----------------
+
+function DressSheet({
+  current,
+  onPick,
+  onClose,
+}: {
+  current: number;
+  onPick: (i: number) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-dress-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">主页装扮</p>
+          <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
+            关闭
+          </button>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          {MINE_THEMES.map((t, i) => (
+            <button
+              key={t.name}
+              type="button"
+              onClick={() => onPick(i)}
+              data-testid={`music-dress-${i}`}
+              className={`overflow-hidden rounded-xl ring-2 ${current === i ? 'ring-[#C20C0C]' : 'ring-black/5 dark:ring-white/10'}`}
+            >
+              <span
+                className="block h-16 w-full"
+                style={{ background: `linear-gradient(180deg, ${t.from} 0%, ${t.via} 52%, ${t.to} 100%)` }}
+              />
+              <span className="block py-1.5 text-center text-[11px] text-zinc-600 dark:text-zinc-300">{t.name}</span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-center text-[10px] text-zinc-400">点击即时生效，装扮保存在本机</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 半屏面板（最近播放/听歌排行/红心/本地） ----------------
+
+function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'stats' | 'dress' | null>; onClose: () => void }) {
   const uid = useMusic((s) => s.loginUid) ?? 0;
   const [items, setItems] = useState<
     { key: string; title: string; subtitle: string; pic?: string; play?: () => void }[]
@@ -458,7 +973,7 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | nul
         } else if (kind === 'liked') {
           const st = useMusic.getState();
           await st.initLiked();
-          const songs: NcmSong[] = [...st.likedIds].map((id) => st.likedSongs[id]).filter(Boolean);
+          const songs = [...st.likedIds].map((id) => st.likedSongs[id]).filter(Boolean);
           setItems(
             songs.map((s) => ({
               key: `l-${s.id}`,
@@ -468,15 +983,8 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | nul
               play: () => void playSong(s, songs),
             })),
           );
-        } else if (kind === 'artists') {
-          let list: NcmArtist[] = [];
-          try {
-            list = await artistSublist();
-          } catch {
-            list = [];
-          }
-          setItems(list.map((a) => ({ key: `a-${a.id}`, title: a.name, subtitle: '歌手', pic: a.img1v1Url || a.picUrl })));
         }
+        // kind === 'local'：本地音乐暂无下载缓存，保持空列表
       } finally {
         setLoading(false);
       }
@@ -484,7 +992,7 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | nul
   }, [kind, uid, playSong]);
 
   const title =
-    kind === 'recent' ? '最近播放' : kind === 'record' ? '听歌排行（所有时间）' : kind === 'liked' ? '我的红心歌曲' : '收藏的歌手';
+    kind === 'recent' ? '最近播放' : kind === 'record' ? '听歌排行（所有时间）' : kind === 'liked' ? '我的红心歌曲' : '本地音乐';
 
   return (
     <div className="absolute inset-0 z-[65] flex items-end">
@@ -500,7 +1008,10 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | nul
           {loading ? (
             <LoadingBlock />
           ) : items.length === 0 ? (
-            <EmptyBlock text="这里还是空的" />
+            <div className="flex flex-col items-center gap-2 py-12 text-zinc-400">
+              <ListMusic className="h-8 w-8 opacity-40" />
+              <p className="text-[13px]">{kind === 'local' ? '下载的歌曲会保存在这里' : '这里还是空的'}</p>
+            </div>
           ) : (
             items.map((it) => (
               <button
@@ -523,13 +1034,21 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | nul
   );
 }
 
-// 未用导入兜底（Mic2/UserRound 留给未登录提示使用）
-export function MineEmptyHint() {
-  return (
-    <div className="flex flex-col items-center gap-2 py-10 text-zinc-400">
-      <Mic2 className="h-8 w-8 opacity-40" />
-      <UserRound className="hidden" />
-      <p className="text-[13px]">登录后同步云端歌单</p>
-    </div>
-  );
+// ---------------- kv 小工具 ----------------
+
+function kvGetStr(key: string): string {
+  return kvGet<string>(key) ?? '';
+}
+
+function kvSetStr(key: string, v: string): void {
+  kvSet(key, v);
+}
+
+function kvGetIdx(key: string): number {
+  const n = Number(kvGetStr(key));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function kvSetIdx(key: string, v: number): void {
+  kvSetStr(key, String(v));
 }
