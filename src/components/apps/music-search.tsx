@@ -35,6 +35,7 @@ import {
   search,
   getMusicLogin,
   toplist,
+  toplistTracks,
   type HotSearchItem,
   type NcmAlbum,
   type NcmArtist,
@@ -113,11 +114,23 @@ export function MusicSearch() {
       } catch {
         setHot([]);
       }
+      // 热歌榜：/toplist 的 tracks 已被网易置空（恒 null）→ 拿到榜单后用 playlist/detail+song/detail 补曲目；
+      // toplist 整体失败时也直接走兜底通道拉热歌榜（3778678）
       try {
         const tops = await toplist();
-        setHotSongsTop(tops.find((t) => t.id === 3778678 || t.name === '热歌榜') ?? tops[0] ?? null);
+        const board = tops.find((t) => t.id === 3778678 || t.name === '热歌榜') ?? tops[0] ?? null;
+        if (board) {
+          if (!board.tracks?.length) board.tracks = await toplistTracks(board.id, 8);
+          setHotSongsTop(board);
+        } else {
+          setHotSongsTop({ id: 3778678, name: '热歌榜', tracks: await toplistTracks(3778678, 8) });
+        }
       } catch {
-        setHotSongsTop(null);
+        try {
+          setHotSongsTop({ id: 3778678, name: '热歌榜', tracks: await toplistTracks(3778678, 8) });
+        } catch {
+          setHotSongsTop(null);
+        }
       }
     })();
   }, []);

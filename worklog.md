@@ -14960,3 +14960,28 @@ Stage Summary:
 - 关键实现：键盘偏移必须 focus 生命周期管理（blur 清零）而非纯 viewport 事件监听；主 Tab 行移出条件分支；listenSec 用 audio timeupdate 增量（0<dt<3 过滤 seek），flush 直接写内存 truth 防双计
 - 范围限定遵守：仅动音乐 App 5 文件（music-player/music-store/music-api/music-mine/music.tsx+music-playlist padding），16 项受保护功能未触碰
 - 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-store.ts、src/lib/ios/music-api.ts、src/components/apps/music-mine.tsx、src/components/apps/music.tsx、src/components/apps/music-playlist.tsx
+
+---
+Task ID: 66
+Agent: Z.ai Code（主会话）
+Task: 用户第十一轮反馈九项——登录网易云账号后所有数据跟随账号、账号快开弹窗被迷你播放器遮挡、一起听气泡方向（AI 左伸/我右伸）、听歌排行改截图1弹层样式、搜索页热歌榜榜单获取失败、点击信息图标界面还是会动、歌单页右下角红色图标删除、自己听界面右下角加三个点、右上角三点菜单改截图3深色样式
+
+Work Log:
+- 数据跟随网易云账号（music-store）：music-player 播放快照与 music-listen-sec 听歌时长原为全局键，改为按 uid 隔离（music-player:{uid} / music-listen-sec:{uid}，登录 uid / guest；旧无后缀键作首次迁移回退）；新增 reloadForAccount()——refreshLoginUi 登录/退出后按当前账号重载快照+时长（正在播放时不打断）；至此历史/红心/搜索历史/一起听消息/播放快照/听歌时长全部跟随网易云账号
+- 弹窗遮挡根因（music-home）：用户截图1 = 首页账号快开面板（avatarSheet）z-[65] 被全局迷你条 z-[70] 盖住（Task 64 提权时漏了这个面板）→ 提到 z-[80]，实测面板盖住迷你条
+- 气泡方向（music-player TogetherHead/HeadBubble）：容器从 max-w-[300px] justify-center gap-8 居中聚拢改为 max-w-[360px] justify-between——AI 气泡靠左伸展（x=46）、我的气泡靠右伸展（距右缘46px），聊天式对向布局；气泡 max-w 150→190px
+- 听歌排行改截图1样式（music-mine RecordPage）：全屏页改底部弹层（z-80，h-86% 圆角顶部）——头部头像+昵称+「网易云账号已登录」/「游客模式·数据仅保存在本机」、最近一周/所有时间 Tab+累计信息、圆角描边排行列表框（1-3名红色/占比条/点击播放）、底部「取消」按钮；登录态 userRecord 云端接口、游客本地历史聚合逻辑保留
+- 热歌榜获取失败根治（music-api + music-search）：实测 /toplist 返回里所有榜单的 tracks 字段恒为 null（网易改接口）→ 新增 toplistTracks(id)：playlist/detail 拿 trackIds 再 song/detail 补全歌名歌手，仿 {first,second} 形状；搜索页三重兜底（toplist 成功但 tracks 空 → toplistTracks；toplist 整体失败 → 直连热歌榜 3778678 兜底），实测热歌榜显示 8 首真实歌曲
+- 信息图标点击界面不动（music-player QuickInputBar）：autoFocus 的浏览器 scrollIntoView 行为是界面抖动根因 → 删 autoFocus 改挂载后 inputRef.focus({ preventScroll: true })，keepViewport 补 120/320ms 双段恢复；实测打开后 scrollY=0、焦点正常、输入条贴底
+- 歌单页红色悬浮球删除（music-playlist）：右下角 bg-[#C20C0C]「当前播放」FAB 整块删除（迷你条已全局常驻功能重复），ListMusic 导入清理
+- 自己听三个点（music-player modeCapsule）：solo 分支改 justify-between——左占位/居中「邀请好友一起听」/右下角三个点（data-testid=music-solo-dots）→ setShowMore(true) 打开与一起听一致的歌曲操作面板 MoreSheet
+- 右上角三点菜单改截图3样式（music-player TogetherMenu）：删除 Task 63 加的双方头像头部（用户本轮以截图3为准），纯深色菜单 #2b2b2d/95 圆角16 + 顶部小箭头指向⋮，五项行（重新匹配/查看记录/匹配偏好设置/举报/退出一起听）icon 20px + py-[15px] font-medium，位置 top-[100px] right-4；组件去掉 session/myAvatar 参数，两处调用点同步更新
+- E2E（agent-browser 420x900 游客态）全过：账号快开面板 z-80 盖住迷你条（elementFromPoint 实测 covered）✓；热歌榜 8 首真实歌 ✓；听歌排行弹层结构（头像/昵称/游客模式副标题/描边列表框/取消）✓；歌单页右下角无红色 FAB ✓；播放「两难pt.2」→ solo 三点打开歌曲操作面板（评论23178/专辑/歌手关注全真数据）✓；邀请「小测」→ ⋮ 菜单无头像头部+五项+箭头（截图3 1:1）✓；信息图标→输入条 focus 后 scrollY=0 贴底 ✓；发消息→AI 气泡靠左（x=46）/我的靠右（距右46px）✓；退出一起听恢复 solo（邀请+三点）✓；console/page errors 零、dev.log 无 error
+- 测试数据清理：char-e2e-t66 联系人 + music-* kv 键全清（agent-browser 独立 profile，用户数据不受影响）；途中 dev server 一次意外退出，重启后复验通过
+- bunx tsc 0 错误；bun run lint 0 错误 0 警告
+
+Stage Summary:
+- 交付：登录网易云账号后播放快照/听歌时长也按账号隔离（reloadForAccount 随登录态切换，旧键迁移回退）；首页账号快开面板提权 z-80 修复弹窗被迷你播放器遮挡（用户截图1根因）；一起听气泡 AI 左伸/我右伸；听歌排行改截图1同款底部弹层（头像+昵称+账号状态+描边列表+取消）；搜索页热歌榜 /toplist tracks=null 根治（playlist/detail+song/detail 兜底三重回退）；快聊输入条 preventScroll 根治界面抖动；歌单页红色悬浮球删除；自己听右下角三点开统一歌曲操作面板；右上角⋮菜单改截图3纯深色五项样式
+- 关键实现：NetEase 已把 /toplist 的 tracks 置空——任何依赖该字段的榜单预览都要走 playlist/detail 兜底；z 层体系补完（avatarSheet 65→80）；focus({preventScroll:true}) 是消除聚焦跳动的正解（autoFocus 无法带参）
+- 范围限定遵守：仅动音乐 App 7 个文件，16 项受保护功能未触碰
+- 改动文件：src/lib/ios/music-store.ts、src/lib/ios/music-api.ts、src/components/apps/music.tsx 同级（无改动）、music-home.tsx、music-search.tsx、music-playlist.tsx、music-player.tsx、music-mine.tsx

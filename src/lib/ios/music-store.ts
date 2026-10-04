@@ -6,10 +6,12 @@
  * - 模块级 zustand `useMusic` + 惰性单例 HTMLAudioElement：App 组件卸载后音乐继续播。
  * - 媒体统一走同源代理 /api/music/stream?url=...（规避 http 直链混合内容拦截 + 补 Referer）。
  * - 持久化（IndexedDB kv，经 idb-kv）：
- *   · music-player        播放器快照（队列/当前歌/模式/音量），重启恢复队列不自动播
+ *   · music-player:{uid}        播放器快照（队列/当前歌/模式/音量），按网易云账号隔离
  *   · music-history:{uid} 最近播放（按网易云账号隔离，未登录 guest）
  *   · music-liked:{uid}   本地红心（登录态以云端 likelist 为准，此键为游客与镜像）
+ *   · music-listen-sec:{uid}    累计听歌时长（按网易云账号隔离）
  *   · music-now           当前正在听的歌（供一起听/AI 上下文读取）
+ *   登录网易云账号后所有本地数据都跟随账号（旧版无 uid 后缀的键作为首次迁移回退）。
  * - 音频焦点：注册 'music'，开播前停掉语音/TTS 等其他音频。
  */
 
@@ -52,11 +54,29 @@ interface PlayerSnapshot {
   volume: number;
 }
 
-const PLAYER_KEY = 'music-player';
 const HISTORY_PREFIX = 'music-history:';
 const LIKED_PREFIX = 'music-liked:';
 const NOW_KEY = 'music-now';
-const LISTEN_KEY = 'music-listen-sec';
+
+/** 播放器快照键：按网易云账号隔离（登录 uid / guest），旧无后缀键作首次迁移回退 */
+function playerKey(): string {
+  return `music-player:${musicUid()}`;
+}
+function readPlayerSnapshot(): PlayerSnapshot | null {
+  const cur = kvGet<PlayerSnapshot>(playerKey());
+  if (cur) return cur;
+  return kvGet<PlayerSnapshot>('music-player'); // 旧版本无 uid 后缀键（迁移回退）
+}
+
+/** 听歌时长键：按网易云账号隔离 + 旧键回退 */
+function listenKey(): string {
+  return `music-listen-sec:${musicUid()}`;
+}
+function readListenSec(): number {
+  const cur = kvGet<number>(listenKey());
+  if (typeof cur === 'number') return cur;
+  return Number(kvGet<number>('music-listen-sec')) || 0;
+}
 
 /** 歌曲播放成功钩子（music-ai 注入：写一起听记忆等） */
 type SongPlayedHook = (song: NcmSong) => void;
@@ -80,11 +100,11 @@ function accumulateListen(): void {
   const next = useMusic.getState().listenSec + dt;
   useMusic.setState({ listenSec: next });
   // 每 30 秒落盘一次（listenSec 内存值已完整，直接写）
-  if (Math.round(next) % 30 === 0) kvSet(LISTEN_KEY, Math.round(next));
+  if (Math.round(next) % 30 === 0) kvSet(listenKey(), Math.round(next));
 }
 function flushListen(): void {
   const sec = useMusic.getState().listenSec;
-  if (sec > 0) kvSet(LISTEN_KEY, Math.round(sec));
+  if (sec > 0) kvSet(listenKey(), Math.round(sec));
 }
 
 function ensureAudio(): HTMLAudioElement {
@@ -246,7 +266,27 @@ function saveSnapshot(s: MusicState): void {
     mode: s.mode,
     volume: s.volume,
   };
-  kvSet(PLAYER_KEY, snap);
+  kvSet(playerKey(), snap);
+}
+
+/** 按当前账号重载播放快照 + 听歌时长（登录/退出后「所有数据跟随账号」；正在播放时不打断） */
+function reloadForAccount(): void {
+  const st = useMusic.getState();
+  useMusic.setState({ listenSec: readListenSec() });
+  if (st.playing) return; // 正在播放不打断（退出登录时切歌前先停）
+  const snap = readPlayerSnapshot();
+  if (snap && Array.isArray(snap.queue) && snap.queue.length) {
+    const queue = snap.queue.map(normalizeSong);
+    const idx = Math.min(Math.max(0, snap.qIndex ?? 0), queue.length - 1);
+    useMusic.setState({
+      queue,
+      qIndex: idx,
+      current: queue[idx] ?? null,
+      mode: snap.mode ?? 'order',
+      volume: typeof snap.volume === 'number' ? snap.volume : 1,
+    });
+    if (audio) audio.volume = typeof snap.volume === 'number' ? snap.volume : 1;
+  }
 }
 
 export const useMusic = create<MusicState>((set, get) => ({
@@ -284,7 +324,7 @@ export const useMusic = create<MusicState>((set, get) => ({
     set({ booted: true });
     ensureAudio();
     // 恢复快照（旧版本存的歌可能缺歌手/封面字段，统一 normalize；缺歌手的再由 playQueueAt 异步补全）
-    const snap = kvGet<PlayerSnapshot>(PLAYER_KEY);
+    const snap = readPlayerSnapshot();
     if (snap && Array.isArray(snap.queue) && snap.queue.length) {
       const queue = snap.queue.map(normalizeSong);
       const idx = Math.min(Math.max(0, snap.qIndex ?? 0), queue.length - 1);
@@ -299,8 +339,8 @@ export const useMusic = create<MusicState>((set, get) => ({
     }
     // 恢复历史
     loadHistoryFor();
-    // 恢复累计听歌时长
-    useMusic.setState({ listenSec: Number(kvGet<number>(LISTEN_KEY)) || 0 });
+    // 恢复累计听歌时长（按账号隔离）
+    useMusic.setState({ listenSec: readListenSec() });
     // 登录态（异步校验）
     void get().refreshLoginUi();
   },
@@ -587,11 +627,13 @@ export const useMusic = create<MusicState>((set, get) => ({
       set({ loginUid: l.profile.userId, loginNickname: l.profile.nickname, loginAvatar: l.profile.avatarUrl, guestMode: false });
       void get().initLiked();
       loadHistoryFor();
+      reloadForAccount(); // 播放快照/听歌时长切到该网易云账号的存档
     } else {
       // 未登录：保留 guestMode（游客标记持久化，刷新后仍是游客模式）
       set({ loginUid: null, loginNickname: '', loginAvatar: '' });
       void get().initLiked(); // 游客红心从本地 kv 恢复（首页根据喜爱推荐依赖）
       loadHistoryFor();
+      reloadForAccount();
     }
   },
 }));
@@ -790,7 +832,7 @@ if (typeof window !== 'undefined' && isKvReady()) {
     // 游客模式持久化：上次选过「游客模式」，刷新后直接进入游客态（不再弹登录页）
     useMusic.setState({ guestMode: true });
   }
-  const snap = kvGet<PlayerSnapshot>(PLAYER_KEY);
+  const snap = readPlayerSnapshot();
   if (snap && Array.isArray(snap.queue) && snap.queue.length) {
     const idx = Math.min(Math.max(0, snap.qIndex ?? 0), snap.queue.length - 1);
     useMusic.setState({
@@ -801,5 +843,6 @@ if (typeof window !== 'undefined' && isKvReady()) {
       volume: typeof snap.volume === 'number' ? snap.volume : 1,
     });
   }
+  useMusic.setState({ listenSec: readListenSec() });
   loadHistoryFor();
 }

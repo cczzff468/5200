@@ -9,7 +9,6 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ChevronLeft,
   Download,
-  ListMusic,
   Loader2,
   Play,
   Share2,
@@ -305,17 +304,7 @@ export function MusicPlaylist() {
         )}
       </div>
 
-      {/* 当前播放悬浮（进播放页） */}
-      {current && (
-        <button
-          type="button"
-          onClick={openPlayer}
-          className="absolute bottom-6 right-5 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-[#C20C0C] text-white shadow-lg active:scale-95"
-          aria-label="当前播放"
-        >
-          <ListMusic className="h-5 w-5" />
-        </button>
-      )}
+      {/* （原右下角红色「当前播放」悬浮球已按反馈删除：迷你播放条已全局常驻，功能重复且挡内容） */}
 
       {busy && (
         <div className="pointer-events-none absolute left-1/2 top-[70px] z-20 -translate-x-1/2">

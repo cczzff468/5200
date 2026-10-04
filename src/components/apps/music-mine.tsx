@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import {
   ArrowDownToLine,
   BarChart2,
-  ChevronLeft,
+  ChevronDown,
   Clock3,
   Heart,
   ImagePlus,
@@ -1309,12 +1309,17 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
   );
 }
 
-// ---------------- 听歌排行（单独全屏界面；登录=云端接口，游客=本地播放历史聚合） ----------------
+// ---------------- 听歌排行（底部弹层，按用户参考截图：头像+昵称+「网易云账号已登录」头部 + 圆角描边排行列表 + 取消；登录=云端接口，游客=本地播放历史聚合） ----------------
 
 function RecordPage({ onClose }: { onClose: () => void }) {
   const uid = useMusic((s) => s.loginUid);
+  const loginNickname = useMusic((s) => s.loginNickname);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
   const listenSec = useMusic((s) => s.listenSec);
   const playSong = useMusic((s) => s.playSong);
+  const guest = getGuestProfile();
+  const headAvatar = uid ? loginAvatar || getGuestAvatar() : getGuestAvatar();
+  const headName = uid ? loginNickname || '网易云用户' : guest.nickname;
   const [range, setRange] = useState<'week' | 'all'>('all');
   const [items, setItems] = useState<{ song: NcmSong; count: number }[] | null>(null);
 
@@ -1347,90 +1352,119 @@ function RecordPage({ onClose }: { onClose: () => void }) {
   const totalPlays = items?.reduce((n, x) => n + x.count, 0) ?? 0;
 
   return (
-    <div className="absolute inset-0 z-[80] flex flex-col bg-[#F8F8F8] dark:bg-zinc-900" data-testid="music-record-page">
-      {/* 顶栏 */}
-      <div className="flex items-center gap-3 border-b border-black/5 px-4 pb-2.5 pt-[54px] dark:border-white/10">
-        <button type="button" onClick={onClose} aria-label="返回" data-testid="music-record-back" className="active:scale-90">
-          <ChevronLeft className="h-6 w-6 text-zinc-700 dark:text-zinc-200" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">听歌排行</p>
-          <p className="text-[11px] text-zinc-400">
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-record-page">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <div className="relative flex h-[86%] w-full flex-col rounded-t-2xl bg-white px-5 pb-7 pt-5 dark:bg-zinc-900">
+        {/* 头部：头像 + 昵称 + 账号状态（按参考截图） */}
+        <div className="flex items-center gap-3">
+          <CoverImg src={headAvatar} className="h-12 w-12" rounded="rounded-full" alt={headName} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[17px] font-bold text-zinc-900 dark:text-zinc-100">{headName}</p>
+            <p className="mt-0.5 truncate text-[12px] text-zinc-400">
+              {uid ? '网易云账号已登录' : '游客模式 · 数据仅保存在本机'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭"
+            data-testid="music-record-back"
+            className="text-zinc-400 active:scale-90"
+          >
+            <ChevronDown className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* 周 / 所有时间 + 累计信息（游客只有本地总数据，仍可切换但数据一致） */}
+        <div className="mt-2 flex items-end justify-between border-b border-black/[0.06] dark:border-white/10">
+          <div className="flex gap-5">
+            {(
+              [
+                { k: 'week', label: '最近一周' },
+                { k: 'all', label: '所有时间' },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.k}
+                type="button"
+                onClick={() => setRange(t.k)}
+                data-testid={`music-record-range-${t.k}`}
+                className={`relative pb-2 text-[15px] ${
+                  range === t.k ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400'
+                }`}
+              >
+                {t.label}
+                {range === t.k && <span className="absolute inset-x-0 -bottom-[1px] h-[3px] rounded-full bg-[#EC4141]" />}
+              </button>
+            ))}
+          </div>
+          <p className="pb-2 text-[11px] tabular-nums text-zinc-400">
             累计听歌 {fmtListenDur(listenSec)} · {totalPlays} 次播放
           </p>
         </div>
-        <BarChart2 className="h-5 w-5 shrink-0 text-zinc-300 dark:text-zinc-600" />
-      </div>
 
-      {/* 周 / 所有时间（游客只有本地总数据，仍可切换但数据一致） */}
-      <div className="flex gap-5 px-5 pb-1 pt-3">
-        {(
-          [
-            { k: 'week', label: '最近一周' },
-            { k: 'all', label: '所有时间' },
-          ] as const
-        ).map((t) => (
-          <button
-            key={t.k}
-            type="button"
-            onClick={() => setRange(t.k)}
-            data-testid={`music-record-range-${t.k}`}
-            className={`relative pb-1.5 text-[15px] ${range === t.k ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400'}`}
-          >
-            {t.label}
-            {range === t.k && <span className="absolute inset-x-1 -bottom-[1px] h-[3px] rounded-full bg-[#EC4141]" />}
-          </button>
-        ))}
-      </div>
-
-      {/* 排行列表 */}
-      <div className="min-h-0 flex-1 overflow-y-auto pb-[90px]">
-        {items === null ? (
-          <LoadingBlock />
-        ) : items.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-14 text-zinc-400">
-            <BarChart2 className="h-8 w-8 opacity-40" />
-            <p className="text-[13px]">还没有听歌数据，去听几首吧</p>
-          </div>
-        ) : (
-          items.map((it, i) => (
-            <button
-              key={it.song.id}
-              type="button"
-              onClick={() => void playSong(it.song, items.map((x) => x.song))}
-              data-testid={`music-record-item-${i}`}
-              className="flex w-full items-center gap-3 px-4 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
-            >
-              <span
-                className={`w-6 shrink-0 text-center text-[15px] font-bold tabular-nums ${
-                  i < 3 ? 'text-[#EC4141]' : 'text-zinc-400'
-                }`}
+        {/* 排行列表（圆角描边框，按参考截图；弹层内滚动） */}
+        <div
+          className="no-scrollbar mt-2.5 min-h-0 flex-1 overflow-y-auto rounded-[18px] border border-black/[0.08] p-1 dark:border-white/10"
+          data-testid="music-record-list"
+        >
+          {items === null ? (
+            <LoadingBlock />
+          ) : items.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-14 text-zinc-400">
+              <BarChart2 className="h-8 w-8 opacity-40" />
+              <p className="text-[13px]">还没有听歌数据，去听几首吧</p>
+            </div>
+          ) : (
+            items.map((it, i) => (
+              <button
+                key={it.song.id}
+                type="button"
+                onClick={() => void playSong(it.song, items.map((x) => x.song))}
+                data-testid={`music-record-item-${i}`}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
               >
-                {i + 1}
-              </span>
-              <CoverImg src={it.song.album?.picUrl} className="h-11 w-11 shrink-0" rounded="rounded-lg" alt={it.song.name} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[14px] text-zinc-900 dark:text-zinc-100">{it.song.name}</span>
-                <span className="mt-0.5 block truncate text-[11px] text-zinc-400">
-                  {it.song.artists?.map((a) => a.name).join('/')}
+                <span
+                  className={`w-6 shrink-0 text-center text-[15px] font-bold tabular-nums ${
+                    i < 3 ? 'text-[#EC4141]' : 'text-zinc-400'
+                  }`}
+                >
+                  {i + 1}
                 </span>
-                {/* 播放次数占比条 */}
-                <span className="mt-1 block h-[3px] w-full overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/10">
-                  <span
-                    className="block h-full rounded-full bg-[#EC4141]/70"
-                    style={{ width: `${Math.max(6, Math.round((it.count / maxCount) * 100))}%` }}
-                  />
+                <CoverImg src={it.song.album?.picUrl} className="h-11 w-11 shrink-0" rounded="rounded-lg" alt={it.song.name} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] text-zinc-900 dark:text-zinc-100">{it.song.name}</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-zinc-400">
+                    {it.song.artists?.map((a) => a.name).join('/')}
+                  </span>
+                  {/* 播放次数占比条 */}
+                  <span className="mt-1 block h-[3px] w-full overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/10">
+                    <span
+                      className="block h-full rounded-full bg-[#EC4141]/70"
+                      style={{ width: `${Math.max(6, Math.round((it.count / maxCount) * 100))}%` }}
+                    />
+                  </span>
                 </span>
-              </span>
-              <span className="shrink-0 text-right">
-                <span className="flex items-center gap-1 text-[11px] tabular-nums text-zinc-400">
-                  <Play className="h-3 w-3" fill="currentColor" />
-                  {it.count}次
+                <span className="shrink-0 text-right">
+                  <span className="flex items-center gap-1 text-[11px] tabular-nums text-zinc-400">
+                    <Play className="h-3 w-3" fill="currentColor" />
+                    {it.count}次
+                  </span>
                 </span>
-              </span>
-            </button>
-          ))
-        )}
+              </button>
+            ))
+          )}
+        </div>
+
+        {/* 取消（按参考截图底部取消按钮） */}
+        <button
+          type="button"
+          onClick={onClose}
+          data-testid="music-record-cancel"
+          className="mt-3 h-10 w-full shrink-0 rounded-full text-[14px] text-zinc-400 active:scale-[0.98]"
+        >
+          取消
+        </button>
       </div>
     </div>
   );

@@ -213,7 +213,9 @@ export function MusicPlayer() {
       </button>
     </div>
   ) : (
-    <div className="flex shrink-0 justify-center pb-4 pt-1">
+    // 自己一个人听：居中「邀请好友一起听」+ 右下角三个点（点击打开与一起听一致的歌曲操作面板）
+    <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
+      <span className="h-8 w-8 shrink-0" aria-hidden />
       <button
         type="button"
         onClick={() => setShowInvite(true)}
@@ -222,6 +224,15 @@ export function MusicPlayer() {
       >
         <UserRoundPlus className="h-4 w-4" />
         邀请好友一起听
+      </button>
+      <button
+        type="button"
+        onClick={() => setShowMore(true)}
+        data-testid="music-solo-dots"
+        aria-label="歌曲操作面板"
+        className="flex h-8 w-8 shrink-0 items-center justify-center text-white/85 active:scale-95"
+      >
+        <MoreVertical className="h-[19px] w-[19px]" />
       </button>
     </div>
   );
@@ -302,8 +313,6 @@ export function MusicPlayer() {
         {/* 一起听设置菜单（聊天态） */}
         {showTgMenu && (
           <TogetherMenu
-            session={together!}
-            myAvatar={myAvatarOf(loginUid, loginAvatar)}
             onClose={() => setShowTgMenu(false)}
             onRematch={menuRematch}
             onRecords={menuRecords}
@@ -530,11 +539,9 @@ export function MusicPlayer() {
       {/* 邀请/重新匹配一起听 */}
       {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
-      {/* 一起听设置菜单（顶栏⋮ / 底部三点） */}
+      {/* 一起听设置菜单（顶栏⋮） */}
       {showTgMenu && together && (
         <TogetherMenu
-          session={togetherLive ?? together}
-          myAvatar={myAvatarOf(loginUid, loginAvatar)}
           onClose={() => setShowTgMenu(false)}
           onRematch={menuRematch}
           onRecords={menuRecords}
@@ -889,9 +896,9 @@ function TogetherHead({
         <CoverImg src={session.avatar} className="h-16 w-16" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
-      {/* 头像下气泡（音乐视图）：紧贴双头像正下方居中聚拢——对方在左、我在右，尾巴朝上各自指向头像，5 秒后消失；出现时隐藏时长行 */}
+      {/* 头像下气泡（音乐视图）：AI 气泡靠左伸展、我的气泡靠右伸展（聊天式对向布局），尾巴朝上，5 秒后消失；出现时隐藏时长行 */}
       {showBubbles && hasBubble && (
-        <div className="mx-auto mt-1 flex w-full max-w-[300px] items-start justify-center gap-8 px-4">
+        <div className="mx-auto mt-1 flex w-full max-w-[360px] items-start justify-between gap-3 px-4">
           {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
           {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
         </div>
@@ -926,6 +933,12 @@ function QuickInputBar({
   // 键盘偏移只在输入框聚焦时计算，失焦立即归零（防止键盘已收起但 visualViewport 事件残留导致输入条浮顶）
   const [focused, setFocused] = useState(false);
   const [kb, setKb] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // 挂载即聚焦：必须用 focus({ preventScroll: true })——autoFocus 默认会把页面/容器滚动到输入框
+  // （浏览器 scrollIntoView 行为），整个界面跟着抖动；preventScroll 后只有输入条跟键盘抬起，界面纹丝不动
+  useEffect(() => {
+    inputRef.current?.focus({ preventScroll: true });
+  }, []);
   useEffect(() => {
     if (!focused) return;
     const vv = window.visualViewport;
@@ -945,8 +958,10 @@ function QuickInputBar({
   // 聚焦时浏览器会把页面往上推（scrollIntoView）——立即滚回原位，保证界面不动，只有输入条跟键盘抬起
   const keepViewport = () => {
     const y = window.scrollY;
-    requestAnimationFrame(() => window.scrollTo(0, y));
-    setTimeout(() => window.scrollTo(0, y), 150);
+    const x = window.scrollX;
+    requestAnimationFrame(() => window.scrollTo(x, y));
+    setTimeout(() => window.scrollTo(x, y), 120);
+    setTimeout(() => window.scrollTo(x, y), 320);
   };
   return (
     <>
@@ -968,7 +983,7 @@ function QuickInputBar({
         }}
       >
         <input
-          autoFocus
+          ref={inputRef}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onFocus={() => {
@@ -1010,11 +1025,11 @@ function QuickInputBar({
   );
 }
 
-/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴；紧凑宽度不遮挡唱片） */
+/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴；对方靠左伸展、我的靠右伸展，可到 190px 宽） */
 function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
   return (
     <div
-      className="relative mt-2 max-w-[150px] rounded-[18px] bg-[#5a5a5f] px-3 py-1.5"
+      className="relative mt-2 max-w-[190px] rounded-[18px] bg-[#5a5a5f] px-3 py-1.5"
       data-testid={mine ? 'music-tg-bubble-me' : 'music-tg-bubble-peer'}
     >
       <span
@@ -1025,11 +1040,9 @@ function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
   );
 }
 
-// ---------------- 一起听设置菜单（仿网易云：顶栏⋮ / 底部三点两处入口；顶部显示双方头像） ----------------
+// ---------------- 一起听设置菜单（仿网易云：右上角⋮ 弹出深色菜单；无头像头部，纯五项操作） ----------------
 
 function TogetherMenu({
-  session,
-  myAvatar,
   onClose,
   onRematch,
   onRecords,
@@ -1037,10 +1050,6 @@ function TogetherMenu({
   onReport,
   onExit,
 }: {
-  /** 当前一起听会话（顶部展示双方头像） */
-  session: TogetherSessionLike;
-  /** 我的头像（登录 > 游客） */
-  myAvatar: string;
   onClose: () => void;
   onRematch: () => void;
   onRecords: () => void;
@@ -1049,34 +1058,26 @@ function TogetherMenu({
   onExit: () => void;
 }) {
   const rows = [
-    { k: 'rematch', label: '重新匹配', icon: <UserRoundSearch className="h-[19px] w-[19px]" /> , on: onRematch },
-    { k: 'records', label: '查看记录', icon: <ClipboardList className="h-[19px] w-[19px]" />, on: onRecords },
-    { k: 'pref', label: '匹配偏好设置', icon: <SlidersHorizontal className="h-[19px] w-[19px]" />, on: onPref },
-    { k: 'report', label: '举报', icon: <TriangleAlert className="h-[19px] w-[19px]" />, on: onReport },
-    { k: 'exit', label: '退出一起听', icon: <LogOut className="h-[19px] w-[19px]" />, on: onExit },
+    { k: 'rematch', label: '重新匹配', icon: <UserRoundSearch className="h-[20px] w-[20px]" /> , on: onRematch },
+    { k: 'records', label: '查看记录', icon: <ClipboardList className="h-[20px] w-[20px]" />, on: onRecords },
+    { k: 'pref', label: '匹配偏好设置', icon: <SlidersHorizontal className="h-[20px] w-[20px]" />, on: onPref },
+    { k: 'report', label: '举报', icon: <TriangleAlert className="h-[20px] w-[20px]" />, on: onReport },
+    { k: 'exit', label: '退出一起听', icon: <LogOut className="h-[20px] w-[20px]" />, on: onExit },
   ];
   return (
     <div className="absolute inset-0 z-[62]" data-testid="music-tg-menu">
       <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="absolute right-4 top-[102px] w-[188px]">
+      <div className="absolute right-4 top-[100px] w-[200px]">
         {/* 指向入口按钮的小箭头 */}
-        <div className="absolute right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] -top-[6px]" />
+        <div className="absolute right-[22px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] -top-[6px]" />
         <div className="relative overflow-hidden rounded-[16px] bg-[#2b2b2d]/95 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
-          {/* 双方头像（一起听中） */}
-          <div className="flex flex-col items-center gap-1.5 border-b border-white/[0.07] px-4 pb-3 pt-3.5">
-            <div className="flex items-center">
-              <CoverImg src={session.avatar} className="h-11 w-11" rounded="rounded-full" alt={session.name} />
-              <CoverImg src={myAvatar} className="relative -ml-2 h-11 w-11" rounded="rounded-full" alt="我" />
-            </div>
-            <p className="max-w-full truncate text-[10px] text-white/55">正在和 {session.name} 一起听</p>
-          </div>
           {rows.map((r, i) => (
             <button
               key={r.k}
               type="button"
               onClick={r.on}
               data-testid={`music-tg-menu-${r.k}`}
-              className={`flex w-full items-center gap-3.5 px-4 py-[13px] text-left text-[15px] text-white/95 active:bg-white/10 ${
+              className={`flex w-full items-center gap-4 px-5 py-[15px] text-left text-[15px] font-medium text-white/95 active:bg-white/10 ${
                 i > 0 ? 'border-t border-white/[0.07]' : ''
               }`}
             >

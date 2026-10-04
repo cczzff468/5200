@@ -141,9 +141,9 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         </button>
       </div>
 
-      {/* 账号快开面板 */}
+      {/* 账号快开面板（z-80：必须盖住全局迷你播放条 z-70，否则迷你条悬浮在弹窗中间挡住内容） */}
       {avatarSheet && (
-        <div className="absolute inset-0 z-[65] flex items-end">
+        <div className="absolute inset-0 z-[80] flex items-end">
           <button type="button" aria-label="关闭" onClick={() => setAvatarSheet(false)} className="absolute inset-0 bg-black/40" />
           <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900" data-testid="music-avatar-sheet">
             <div className="mb-4 flex items-center gap-3">

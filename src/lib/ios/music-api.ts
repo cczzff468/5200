@@ -406,6 +406,19 @@ export async function toplist(): Promise<NcmToplist[]> {
   return j.list ?? [];
 }
 
+/**
+ * 榜单曲目（搜索页热歌榜等）。
+ * /toplist 返回的 tracks 字段已被网易置空（恒为 null）→ 用 playlist/detail 拿 trackIds
+ * 再 song/detail 补全歌名/歌手，仿原 tracks 的 { first, second } 形状。
+ */
+export async function toplistTracks(id: number, limit = 8): Promise<{ first: string; second: string }[]> {
+  const p = await playlistDetail(id);
+  const ids = (p.trackIds ?? []).slice(0, limit).map((t) => t.id);
+  if (!ids.length) return [];
+  const songs = await songsDetail(ids);
+  return songs.map((s) => ({ first: s.name, second: songArtistText(s) }));
+}
+
 export interface NcmDjRadio {
   id: number;
   name: string;
