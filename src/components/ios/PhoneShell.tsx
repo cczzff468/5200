@@ -45,6 +45,14 @@ const ProactiveMsgWatcher = dynamic(() => import('./ProactiveMsgWatcher'), { ssr
 const TogetherInviteLayer = dynamic(() => import('./TogetherInviteLayer'), { ssr: false });
 const TogetherInviteWatcher = dynamic(() => import('./TogetherInviteWatcher'), { ssr: false });
 
+// 全局迷你播放器（第十六轮反馈）：音乐在播时主屏幕/其他 App 的悬浮播放控件
+// （底部迷你条 / 悬浮旋转唱片 / 隐藏 三形态，形态持久化）
+const MusicGlobalMini = dynamic(() => import('./MusicGlobalMini'), { ssr: false });
+
+// 音乐灵动岛（第十六轮反馈）：音乐在播时占据灵动岛锚位的常驻音乐弹窗，所有界面都显示
+// （小弹窗常驻 / 大弹窗 5 秒 / 点小弹窗展开 / 点大弹窗跳听歌 / 点别处收回；消息通知展示期间隐身）
+const MusicIsland = dynamic(() => import('./MusicIsland'), { ssr: false });
+
 // 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
 const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
 
@@ -244,6 +252,9 @@ export default function PhoneShell() {
             与 App 窗口平级，退出聊天页/切换 App 电话不断；点小窗回通话页，拖到边缘只露一条边 */}
         <GlobalCallLayer />
 
+        {/* 全局迷你播放器（z-55：高于 App 窗口 z-40，低于切换器/锁屏；音乐 App 前台时不显示） */}
+        <MusicGlobalMini />
+
         {/* 全局来电层：AI 来电弹窗（电话横幅/微信大窗 5s→胶囊，z-94，灵动岛原位弹出/收回、弹出期间盖住灵动岛）+
             iOS 全屏来电界面（z-84，仅电话来电自动显示、左上可退出，界面可见时不叠加弹窗；
             微信来电响铃期间不显示任何通话 UI，点弹窗非按钮区域才展开全屏来电页）——高于一切 App/锁屏，任何界面都显示 */}
@@ -295,6 +306,9 @@ export default function PhoneShell() {
           />
         )}
         <IslandNotificationLayer />
+
+        {/* 音乐灵动岛（z-81：同位盖住静态灵动岛，低于聊天通知 z-93；消息通知展示期间整层隐身） */}
+        <MusicIsland />
 
         {/* 通知权限友好申请卡（首次使用时展示，应用内说明 → 用户手势内才弹浏览器授权框） */}
         <NotifyPermissionCard />

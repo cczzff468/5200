@@ -283,3 +283,13 @@
     transform: translateY(0);
   }
 }
+
+/* 全局迷你播放器悬浮唱片旋转（第十六轮反馈）：播放中旋转、暂停时 animationPlayState 暂停 */
+@keyframes mini-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

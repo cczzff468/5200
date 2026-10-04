@@ -78,6 +78,7 @@ import {
   useTogetherLive,
 } from '@/lib/ios/music-ai';
 import type { ContactRecord } from '@/lib/contacts';
+import { MINI_MODE_LABELS, useMiniPlayer } from '@/components/ios/MusicGlobalMini';
 import { AddToSongSheet, CoverImg, fmtClock } from './music-shared';
 import { TogetherChat, TogetherChatInput } from './music-together';
 
@@ -1338,6 +1339,9 @@ function MoreSheet({
   const setSurround3d = useMusic((s) => s.setSurround3d);
   const sleepAt = useMusic((s) => s.sleepAt);
   const setSleepAt = useMusic((s) => s.setSleepAt);
+  // 全局迷你播放器形态（第十六轮反馈：底部条/悬浮唱片/隐藏，可在面板里切换）
+  const miniMode = useMiniPlayer((s) => s.mode);
+  const miniCycle = useMiniPlayer((s) => s.cycle);
   const [showAdd, setShowAdd] = useState(false);
   const [showShareChat, setShowShareChat] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
@@ -1609,6 +1613,16 @@ function MoreSheet({
               onClick={() => setShowStyle(true)}
             >
               播放器样式
+            </MoreRow>
+            <MoreRow
+              icon={<ListMusic className="h-[19px] w-[19px]" />}
+              testid="music-more-mini"
+              onClick={() => {
+                const nx = miniCycle();
+                onToast(nx === 'hidden' ? '迷你播放器已隐藏' : `迷你播放器：${MINI_MODE_LABELS[nx]}`);
+              }}
+            >
+              迷你播放器：{MINI_MODE_LABELS[miniMode]}
             </MoreRow>
           </div>
         </div>

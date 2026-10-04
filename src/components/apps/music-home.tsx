@@ -5,11 +5,13 @@
  * 未登录（游客）：推荐歌单/排行榜/新歌仍可用（公开接口），每日推荐引导登录。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CalendarDays,
   ChevronRight,
+  ChevronsUp,
   Heart,
+  Loader2,
   Menu,
   Play,
   Signal,
@@ -48,38 +50,49 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const likedIds = useMusic((s) => s.likedIds);
   const [simiSongs, setSimiSongs] = useState<NcmSong[]>([]);
   const simiSeedRef = useRef<number | null>(null);
+  // 上滑刷新（第十六轮反馈）：nonce 变化强制重拉相似歌
+  const [simiNonce, setSimiNonce] = useState(0);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        setRecPlaylists(await personalizedPlaylists(9));
-      } catch {
-        setRecPlaylists([]);
-      }
-      try {
-        const t = await toplist();
-        setTops(t.slice(0, 6));
-      } catch {
-        setTops([]);
-      }
-      try {
-        setNewSongs(await personalizedNewSongs(6));
-      } catch {
-        setNewSongs([]);
-      }
-    })();
+  // 首页各区块数据加载拆成可重复调用的函数（上滑刷新时全部重拉）
+  const loadStatic = useCallback(async () => {
+    try {
+      setRecPlaylists(await personalizedPlaylists(9));
+    } catch {
+      setRecPlaylists([]);
+    }
+    try {
+      const t = await toplist();
+      setTops(t.slice(0, 6));
+    } catch {
+      setTops([]);
+    }
+    try {
+      setNewSongs(await personalizedNewSongs(6));
+    } catch {
+      setNewSongs([]);
+    }
   }, []);
 
-  useEffect(() => {
+  const loadDaily = useCallback(async () => {
     if (!loginUid) return;
-    void (async () => {
-      try {
-        setDaily(await dailyRecommendSongs());
-      } catch {
-        setDaily([]);
-      }
-    })();
+    try {
+      setDaily(await dailyRecommendSongs());
+    } catch {
+      setDaily([]);
+    }
   }, [loginUid]);
+
+  useEffect(() => {
+    void (async () => {
+      await loadStatic();
+    })();
+  }, [loadStatic]);
+
+  useEffect(() => {
+    void (async () => {
+      await loadDaily();
+    })();
+  }, [loadDaily]);
 
   // 根据红心歌推荐：红心变化时以「最近红心的一首」为种子拉相似歌（去掉已红心的）
   // simi/song 需登录（游客返回空）→ 游客兜底用种子歌手的热门歌曲（去掉种子自身）
@@ -113,12 +126,97 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     return () => {
       on = false;
     };
-  }, [likedIds, likedSongs]);
+  }, [likedIds, likedSongs, simiNonce]);
+
+  // ---------------- 上滑刷新（第十六轮反馈：滑到底部继续上滑 → 重拉首页全部内容） ----------------
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** idle=未在拉取 pulling=上滑中 ready=超过阈值可松手 loading=刷新中 done=刚完成 */
+  const [pullState, setPullState] = useState<'idle' | 'pulling' | 'ready' | 'loading' | 'done'>('idle');
+  const [pullDist, setPullDist] = useState(0);
+  const gestureRef = useRef<{ startY: number; fromBottom: boolean } | null>(null);
+  const PULL_THRESHOLD = 64;
+
+  const atBottomNow = () => {
+    const el = scrollRef.current;
+    if (!el) return false;
+    return el.scrollTop + el.clientHeight >= el.scrollHeight - 6;
+  };
+
+  const beginPull = (y: number) => {
+    if (pullState === 'loading') return;
+    gestureRef.current = { startY: y, fromBottom: atBottomNow() };
+  };
+
+  const movePull = (y: number) => {
+    const g = gestureRef.current;
+    if (!g || pullState === 'loading' || pullState === 'done') return;
+    if (!g.fromBottom) return;
+    const dist = g.startY - y; // 手指向上为正
+    if (dist <= 0) {
+      setPullDist(0);
+      setPullState('idle');
+      return;
+    }
+    setPullDist(Math.min(dist, 120));
+    setPullState(dist > PULL_THRESHOLD ? 'ready' : 'pulling');
+  };
+
+  const endPull = () => {
+    const g = gestureRef.current;
+    gestureRef.current = null;
+    if (!g || !g.fromBottom) return;
+    if (pullState !== 'ready') {
+      setPullDist(0);
+      setPullState('idle');
+      return;
+    }
+    // 触发刷新：首页所有区块（推荐歌单/排行榜/新歌/每日推荐/相似推荐）全部重拉
+    setPullState('loading');
+    setPullDist(44);
+    simiSeedRef.current = null;
+    setSimiNonce((n) => n + 1);
+    void Promise.all([loadStatic(), loadDaily()]).finally(() => {
+      setPullState('done');
+      setPullDist(0);
+      setTimeout(() => setPullState('idle'), 1200);
+    });
+  };
 
   const today = new Date();
 
+  /** 上滑刷新指示区文案 */
+  const pullHintText =
+    pullState === 'ready'
+      ? '松开立即刷新'
+      : pullState === 'loading'
+        ? '刷新中…'
+        : pullState === 'done'
+          ? '已更新 ✓'
+          : '上滑刷新';
+
   return (
-    <div className="h-full overflow-y-auto overscroll-contain pb-[126px]">
+    <div
+      ref={scrollRef}
+      className="h-full overflow-y-auto overscroll-contain pb-[126px]"
+      onTouchStart={(e) => beginPull(e.touches[0]?.clientY ?? 0)}
+      onTouchMove={(e) => movePull(e.touches[0]?.clientY ?? 0)}
+      onTouchEnd={endPull}
+      onTouchCancel={endPull}
+      // 桌面鼠标也能拖拽刷新（E2E/桌面体验）；触摸设备走上面的 touch 事件（滚动接管后 pointercancel 不影响）
+      onPointerDown={(e) => {
+        if (e.pointerType === 'mouse') beginPull(e.clientY);
+      }}
+      onPointerMove={(e) => {
+        if (e.pointerType === 'mouse') movePull(e.clientY);
+      }}
+      onPointerUp={(e) => {
+        if (e.pointerType === 'mouse') endPull();
+      }}
+      onPointerCancel={(e) => {
+        if (e.pointerType === 'mouse') endPull();
+      }}
+    >
       {/* 顶栏：设置 + 标题 + 右上角头像（游客/登录都可点） */}
       <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
         <button
@@ -204,20 +302,26 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           type="button"
           onClick={() => openPlaylist(0, 'daily')}
           data-testid="music-home-daily"
-          className="mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-4 rounded-2xl bg-gradient-to-r from-[#C20C0C] to-[#E8452F] p-4 text-left text-white active:scale-[0.99]"
+          className="relative mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-4 overflow-hidden rounded-2xl p-4 text-left active:scale-[0.99]"
         >
-          <div className="flex flex-col items-center rounded-xl bg-white/15 px-3 py-2">
-            <CalendarDays className="h-5 w-5" />
-            <span className="mt-0.5 text-[10px]">{today.getMonth() + 1}月</span>
-            <span className="text-[18px] font-bold leading-none">{today.getDate()}</span>
+          {/* 毛玻璃风格（第十六轮反馈；第十七轮修订：删除红色底层，纯磨砂玻璃） */}
+          <span aria-hidden="true" className="absolute inset-0 bg-white/60 backdrop-blur-2xl dark:bg-zinc-800/55" />
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 rounded-2xl ring-1 ring-white/80 ring-inset dark:ring-white/10"
+          />
+          <div className="relative flex flex-col items-center rounded-xl bg-white/60 px-3 py-2 ring-1 ring-black/5 dark:bg-white/10 dark:ring-white/10">
+            <CalendarDays className="h-5 w-5 text-zinc-800 dark:text-zinc-100" />
+            <span className="mt-0.5 text-[10px] text-zinc-700 dark:text-zinc-200">{today.getMonth() + 1}月</span>
+            <span className="text-[18px] font-bold leading-none text-zinc-900 dark:text-white">{today.getDate()}</span>
           </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[17px] font-bold">每日推荐</p>
-            <p className="mt-0.5 truncate text-[12px] text-white/80">
+          <div className="relative min-w-0 flex-1">
+            <p className="text-[17px] font-bold text-zinc-900 dark:text-white">每日推荐</p>
+            <p className="mt-0.5 truncate text-[12px] text-zinc-600 dark:text-zinc-300">
               {daily ? `今日限定好歌推荐 · ${daily.length} 首` : '根据你的口味生成个性化歌单'}
             </p>
           </div>
-          <Play className="h-6 w-6 shrink-0" fill="currentColor" />
+          <Play className="relative h-6 w-6 shrink-0 text-zinc-900 dark:text-white" fill="currentColor" />
         </button>
       ) : (
         <button
@@ -374,6 +478,28 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           ))}
         </div>
       )}
+
+      {/* 上滑刷新指示区（第十六轮反馈）：随上滑距离展开，松手刷新/刷新中/已更新 */}
+      <div
+        className="flex items-center justify-center gap-1.5 overflow-hidden text-[11px] text-zinc-400 transition-[height] duration-150"
+        style={{
+          height:
+            pullState === 'loading' || pullState === 'done'
+              ? 36
+              : pullDist > 0
+                ? Math.min(pullDist * 0.5, 56)
+                : 0,
+        }}
+        data-testid="music-home-pull-hint"
+        aria-live="polite"
+      >
+        {pullState === 'loading' ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ChevronsUp className={`h-3.5 w-3.5 ${pullState === 'ready' ? 'text-[#C20C0C]' : ''}`} />
+        )}
+        <span className={pullState === 'ready' ? 'font-medium text-[#C20C0C]' : ''}>{pullHintText}</span>
+      </div>
     </div>
   );
 }
