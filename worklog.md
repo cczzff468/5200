@@ -14817,3 +14817,26 @@ Stage Summary:
 - 关键实现：vipBlockActive 在期判断（vipLevel>0 且未过期）；level<1 隐藏数字的 VipBadge 复用（登录非会员/游客自定义共用）；PlaylistCreateDialog 抽到 music-shared 供「我的」页与添加歌单面板两处复用；MiniBar 接 useTogetherLive 实现一起听双头像（数据跟随全局联系人）
 - 范围限定遵守：仅动音乐 App 5 个文件（music-api/music-mine/music-shared/music-player/music.tsx），16 项受保护功能未触碰
 - 改动文件：src/lib/ios/music-api.ts、src/components/apps/music-mine.tsx、music-shared.tsx、music-player.tsx、music.tsx
+
+---
+Task ID: 60
+Agent: Z.ai Code（主会话）
+Task: 用户第五轮反馈九项——迷你播放器胶囊包裹化（按截图）、VIP 徽章完全按截图重做、一起听进入默认音乐界面、一起听双 tab 只留图标、双头像删我方边框并再变大、「我」页添加状态上移、头部背景变窄、底部 tab 删图标
+
+Work Log:
+- 迷你播放条胶囊化（music-shared MiniBar 重写，按截图 1:1）：白色圆角胶囊（rounded-full bg-white shadow，深色 zinc-800）包裹全部内容——左侧圆形封面 42px（一起听时双头像重叠，去掉旧 ListMusic 角标）、单行「歌名加粗黑字 + " - 歌手"灰字」（原来两行改一行，同截图「爱与诚 - 古巨基」）、圆环暂停键（border-[2.5px] 灰描边圆圈 + 实心 Pause/Play）、右侧播放列表图标（ListMusic，点击进播放页）；mb-1.5 与 tab 行留空隙
+- VIP 徽章完全按截图重做（music-mine VipBadge）：纯黑立体胶囊（内高光+内阴影）+ 小黑胶唱片 17px——黑盘、外缘白高光环、盘面双纹路（boxShadow 四层 inset）、红标芯（VIP 红粉渐变 / SVIP 红橙渐变）白描边 + 中心白孔、文字 VIP 奶白 #F4EDDC / SVIP 金 #E9CB86，繁体数字「VIP·柒」「SVIP·陆」（与用户两张截图逐像素对标：SVIP 唱片换金环金纹路）
+- 一起听进入默认音乐界面（music-player）：showChat 默认值 !!together → false；新增 tgKey=contactId:since 派生重置（React adjust-state 模式，prevTgKey 不一致时 setChatOverride(null)）——换人重邀/退出重进都回到音乐视图，手动切换过则以手动为准
+- 一起听双 tab 只留图标（music-player modeCapsule）：删「音乐」「聊天」文字，改两个 32px 圆形图标按钮（Music2 / MessageCircle，激活态 bg-white/25），胶囊 p-1 居中
+- 一起听双头像（music-player TogetherHead）：再变大 h-12→h-14（56px）；「我们的边框删除」——我方头像去掉 ring-2 ring-white/70（对方保留白环）
+- 「我」页（music-mine）：①添加状态胶囊上移——顶栏 pb-1→0、状态行 mt-2→mt-1（胶囊紧贴顶栏）②头部背景上下变窄——头像行 mt-2.5→2、头像 86→82px、昵称行 mt-2.5→2、统计行 mt-3→2、胶囊入口 mt-4→3、圆角帽 mt-4→3（整条头部收窄约 24px）
+- 底部 TabBar 删图标（music-shared MusicTabBar）：三个 tab 全部只留文字，text-[16px]，激活态加粗黑字（按截图「我的」黑色加粗、未激活灰字，不再用红色），高度 52→46px；Search/UserRound 图标 import 清理
+- E2E（agent-browser 420x900 游客态）全过：搜索「日落大道」→播放→迷你条白胶囊包裹（圆形封面+加粗歌名-灰歌手+圆环暂停+队列图标）✓；点胶囊进播放页 ✓；⋯→正在一起听→邀请「晓晓」→进入默认音乐界面（黑胶+双头像 56px+我方无边框+对方白环+底部纯图标胶囊）✓；图标切聊天→AI 回复「是啊~梁博的原版就很有味道…」✓；图标切回音乐 ✓；⋮→退出一起听 ✓；重邀后收起播放器→迷你条双头像重叠 ✓；「我」页——添加状态紧贴顶栏/头部收窄/VIP·柒 徽章（黑胶囊红芯唱片奶白字）✓；编辑面板 SVIP+等级 6→预览「SVIP·陆」金字金环唱片→保存生效→改回 VIP·柒 ✓；底部 tab 纯文字（我的加粗黑字）✓；深色模式（深色胶囊/白色激活字）✓；console/page errors/dev.log 全零
+- 测试数据清理：char-e2e-xiaochen 联系人 + music-history/now/player/tg-dur/together-active/together-msgs 共 6 个 kv 键全清（隔离档案）；VIP 徽章还原默认 VIP·柒
+- bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：迷你播放条按截图胶囊包裹化（单行歌名-歌手+圆环暂停键+队列图标+一起听双头像）；VIP 徽章完全按用户截图（纯黑胶囊+黑胶唱片红芯白孔，VIP 奶白字/SVIP 金字金环，繁体数字）；一起听进入默认音乐界面（新会话自动重置视图）；一起听双 tab 只留图标；双头像变大且我方无边框；「我」页添加状态上移+头部背景收窄；底部 tab 删图标改纯文字加粗激活
+- 关键实现：chatOverride 派生重置用 React adjust-state-during-render 模式（规避 set-state-in-effect lint）；VipBadge 唱片改 style boxShadow 四层 inset 精确复刻截图盘面纹路
+- 范围限定遵守：仅动音乐 App 3 个文件（music-shared/music-mine/music-player），16 项受保护功能未触碰
+- 改动文件：src/components/apps/music-shared.tsx、music-mine.tsx、music-player.tsx

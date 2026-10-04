@@ -15,8 +15,6 @@ import {
   Pause,
   Play,
   Plus,
-  Search,
-  UserRound,
 } from 'lucide-react';
 import {
   mediaProxyUrl,
@@ -482,18 +480,19 @@ export function EmptyBlock({ text }: { text: string }) {
 
 // ---------------- 底部 TabBar ----------------
 
-const TABS: { key: MusicNav['tab']; label: string; icon: React.ReactNode }[] = [
-  { key: 'home', label: '首页', icon: <Disc3 className="h-[22px] w-[22px]" /> },
-  { key: 'search', label: '搜索', icon: <Search className="h-[22px] w-[22px]" /> },
-  { key: 'mine', label: '我的', icon: <UserRound className="h-[22px] w-[22px]" /> },
+const TABS: { key: MusicNav['tab']; label: string }[] = [
+  { key: 'home', label: '首页' },
+  { key: 'search', label: '搜索' },
+  { key: 'mine', label: '我的' },
 ];
 
+/** 底部 TabBar：纯文字（无图标），激活态加粗黑字（按截图） */
 export function MusicTabBar() {
   const tab = useMusic((s) => s.nav.tab);
   const setTab = useMusic((s) => s.setTab);
   return (
     <nav
-      className="flex h-[52px] shrink-0 items-stretch border-t border-black/5 bg-white/85 pt-[5px] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/85"
+      className="flex h-[46px] shrink-0 items-stretch bg-white/85 backdrop-blur-xl dark:bg-zinc-900/85"
       data-testid="music-tabbar"
     >
       {TABS.map((t) => {
@@ -504,12 +503,13 @@ export function MusicTabBar() {
             type="button"
             onClick={() => setTab(t.key)}
             data-testid={`music-tab-${t.key}`}
-            className={`flex flex-1 flex-col items-center justify-center gap-0.5 ${
-              active ? 'text-[#C20C0C]' : 'text-zinc-400 dark:text-zinc-500'
+            className={`flex flex-1 items-center justify-center ${
+              active
+                ? 'font-bold text-zinc-900 dark:text-white'
+                : 'font-medium text-zinc-400 dark:text-zinc-500'
             }`}
           >
-            {t.icon}
-            <span className="text-[10px] leading-none">{t.label}</span>
+            <span className="text-[16px] leading-none">{t.label}</span>
           </button>
         );
       })}
@@ -517,7 +517,7 @@ export function MusicTabBar() {
   );
 }
 
-// ---------------- 迷你播放条（无背景；一起听时左侧双头像） ----------------
+// ---------------- 迷你播放条（白色圆角胶囊包裹；一起听时左侧双头像） ----------------
 
 export function MiniBar() {
   const current = useMusic((s) => s.current);
@@ -531,12 +531,13 @@ export function MiniBar() {
   if (!current) return null;
   return (
     <div
-      className="mx-3 flex h-[52px] shrink-0 items-center gap-2.5 pl-1.5 pr-1.5"
+      className="mx-3 mb-1.5 flex h-[52px] shrink-0 items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_2px_12px_rgba(0,0,0,0.07)] dark:bg-zinc-800 dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]"
       data-testid="music-minibar"
     >
       <button
         type="button"
         onClick={openPlayer}
+        data-testid="music-minibar-open"
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
       >
         {live ? (
@@ -544,48 +545,49 @@ export function MiniBar() {
           <span className="flex shrink-0 items-center" data-testid="music-minibar-tg-avatars">
             <CoverImg
               src={live.avatar}
-              className="h-10 w-10 ring-[2px] ring-white/95 dark:ring-zinc-800"
+              className="h-[42px] w-[42px]"
               rounded="rounded-full"
               alt={live.name}
             />
             <CoverImg
               src={loginUid ? loginAvatar : getGuestAvatar()}
-              className="-ml-2.5 h-10 w-10 ring-[2px] ring-white/95 dark:ring-zinc-800"
+              className="-ml-3 h-[42px] w-[42px] ring-2 ring-white dark:ring-zinc-800"
               rounded="rounded-full"
               alt="我"
             />
           </span>
         ) : (
-          <span className="relative shrink-0">
-            <CoverImg src={songCover(current)} className="h-10 w-10" rounded="rounded-full" alt={current.name} />
-            <ListMusic
-              className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full bg-white p-0.5 text-zinc-500 dark:bg-zinc-800 ${
-                playing ? 'text-[#C20C0C]' : ''
-              }`}
-            />
-          </span>
+          <CoverImg src={songCover(current)} className="h-[42px] w-[42px]" rounded="rounded-full" alt={current.name} />
         )}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
-            {current.name}
-          </span>
-          <span className="block truncate text-[11px] text-zinc-500">
-            {songArtistText(current)}
-          </span>
+        {/* 单行：歌名加粗 + 「 - 歌手」灰字（按截图） */}
+        <span className="min-w-0 flex-1 truncate text-[14px] leading-none">
+          <span className="font-bold text-zinc-900 dark:text-zinc-100">{current.name}</span>
+          <span className="text-zinc-400 dark:text-zinc-500"> - {songArtistText(current)}</span>
         </span>
       </button>
+      {/* 圆环暂停键（按截图：灰描边圆圈 + 实心暂停图标） */}
       <button
         type="button"
         onClick={toggle}
         data-testid="music-minibar-toggle"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-800 active:scale-95 dark:text-zinc-100"
+        className="mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-[2.5px] border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
         aria-label={playing ? '暂停' : '播放'}
       >
         {playing ? (
-          <Pause className="h-[22px] w-[22px]" fill="currentColor" />
+          <Pause className="h-4 w-4" fill="currentColor" />
         ) : (
-          <Play className="ml-0.5 h-[22px] w-[22px]" fill="currentColor" />
+          <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
         )}
+      </button>
+      {/* 播放列表入口 */}
+      <button
+        type="button"
+        onClick={openPlayer}
+        aria-label="播放列表"
+        data-testid="music-minibar-queue"
+        className="flex h-9 w-8 shrink-0 items-center justify-center text-zinc-800 active:scale-95 dark:text-zinc-100"
+      >
+        <ListMusic className="h-[22px] w-[22px]" />
       </button>
     </div>
   );

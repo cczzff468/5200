@@ -91,9 +91,16 @@ export function MusicPlayer() {
   const [showTgRecord, setShowTgRecord] = useState(false);
   // 重新匹配入口打开时，邀请面板标题切换
   const [inviteTitle, setInviteTitle] = useState('邀请一起听');
-  // 一起听时默认聊天视图；用户手动切换后以手动值为准（chatOverride=null 表示跟随默认）
+  // 一起听进入时默认显示音乐界面；用户手动切换后以手动值为准（chatOverride=null 表示跟随默认）
   const [chatOverride, setChatOverride] = useState<boolean | null>(null);
-  const showChat = chatOverride ?? !!together;
+  const showChat = chatOverride ?? false;
+  // 新会话开始/换人时回到默认（音乐界面）——render 期派生重置（React 官方 adjust-state 模式）
+  const tgKey = together ? `${together.contactId}:${together.since}` : '';
+  const [prevTgKey, setPrevTgKey] = useState(tgKey);
+  if (tgKey !== prevTgKey) {
+    setPrevTgKey(tgKey);
+    if (chatOverride !== null) setChatOverride(null);
+  }
   const [moreToast, setMoreToast] = useState('');
   // 对方信息跟随全局（联系人库里最新头像/昵称）
   const togetherLive = useTogetherLive();
@@ -124,30 +131,31 @@ export function MusicPlayer() {
   const liked = likedIds.has(current.id);
   const chatMode = !!(together && showChat);
 
-  // 一起听底部胶囊（音乐/聊天切换）——两种模式共用
+  // 一起听底部胶囊（音乐/聊天切换，纯图标）——两种模式共用
   const modeCapsule = together ? (
-    <div className="flex shrink-0 justify-center pb-5 pt-1">
-      <div className="flex rounded-full bg-white/10 p-0.5">
+    <div className="flex shrink-0 justify-center pb-4 pt-1">
+      <div className="flex items-center gap-1 rounded-full bg-white/10 p-1">
         <button
           type="button"
           onClick={() => setChatOverride(false)}
-          className={`flex items-center gap-1 rounded-full px-5 py-1.5 text-[12px] ${
-            !showChat ? 'bg-white/25 text-white' : 'text-white/60'
+          data-testid="music-tg-tab-music"
+          aria-label="音乐视图"
+          className={`flex h-8 w-8 items-center justify-center rounded-full ${
+            !showChat ? 'bg-white/25 text-white' : 'text-white/55'
           }`}
         >
-          <Music2 className="h-3.5 w-3.5" />
-          音乐
+          <Music2 className="h-4 w-4" />
         </button>
         <button
           type="button"
           onClick={() => setChatOverride(true)}
           data-testid="music-tg-open-chat"
-          className={`flex items-center gap-1 rounded-full px-5 py-1.5 text-[12px] ${
-            showChat ? 'bg-white/25 text-white' : 'text-white/60'
+          aria-label="聊天视图"
+          className={`flex h-8 w-8 items-center justify-center rounded-full ${
+            showChat ? 'bg-white/25 text-white' : 'text-white/55'
           }`}
         >
-          <MessageCircle className="h-3.5 w-3.5" />
-          聊天
+          <MessageCircle className="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -660,10 +668,10 @@ function TogetherHead({ session }: { session: TogetherSessionLike }) {
   const durText = fmtTogetherDur(Date.now() - session.since);
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      {/* 双头像（挨近一点，几乎贴在一起） */}
+      {/* 双头像（再变大；我方无边框，对方保留白环） */}
       <div className="flex items-center gap-[3px]" data-testid="music-tg-avatars">
-        <CoverImg src={session.avatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt={session.name} />
-        <CoverImg src={myAvatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt="我" />
+        <CoverImg src={session.avatar} className="h-14 w-14 ring-2 ring-white/70" rounded="rounded-full" alt={session.name} />
+        <CoverImg src={myAvatar} className="h-14 w-14" rounded="rounded-full" alt="我" />
       </div>
       <p className="mt-1.5 text-[11px] text-white/70">
         相距 {session.distanceKm} 公里 · 一起听了 {durText}

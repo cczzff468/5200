@@ -74,45 +74,46 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（仿网易云黑胶 VIP：立体渐变黑胶囊 + 小黑胶唱片（盘面双纹路+红标芯白圈+中心孔）
- * +「VIP·柒」繁体数字；SVIP 为金胶金盘深金字）。level<1 时只显示「VIP」不带数字。
+ * VIP 徽章（完全按用户截图：纯黑胶囊 + 小黑胶唱片（黑盘白环高光+红标芯白中心孔）
+ * +「VIP·柒」奶白粗字繁体数字；SVIP 同款胶囊金字、唱片金环红橙芯）。level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
   return (
     <span
-      className={`flex shrink-0 items-center rounded-full py-[2.5px] pl-[4px] pr-[9px] ${
+      className={`flex shrink-0 items-center rounded-full py-[3px] pl-[3.5px] pr-[10px] ${
         svip
-          ? 'bg-[linear-gradient(180deg,#F7E7B4_0%,#E5C075_48%,#C8963A_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.65),inset_0_-1px_0_rgba(122,79,10,0.45),0_1px_3px_rgba(0,0,0,0.18)]'
-          : 'bg-[linear-gradient(180deg,#414147_0%,#26262b_46%,#0c0c0e_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.2),inset_0_-1px_0_rgba(0,0,0,0.65),0_1px_3px_rgba(0,0,0,0.3)]'
+          ? 'bg-[linear-gradient(180deg,#2e2c24_0%,#181710_52%,#050503_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),inset_0_-1px_1px_rgba(0,0,0,0.8),0_1px_3px_rgba(0,0,0,0.4)]'
+          : 'bg-[linear-gradient(180deg,#2c2c31_0%,#161618_52%,#030304_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),inset_0_-1px_1px_rgba(0,0,0,0.8),0_1px_3px_rgba(0,0,0,0.4)]'
       }`}
       data-testid="music-mine-vip"
     >
-      {/* 小黑胶唱片：盘面（外缘白环+内纹路）+ 红标芯（白描边）+ 中心孔 */}
+      {/* 小黑胶唱片：黑盘（外缘白高光环+盘面双纹路）+ 红标芯（白描边）+ 中心白孔 */}
       <span
-        className={`relative mr-[5px] flex h-[16px] w-[16px] items-center justify-center rounded-full ${
-          svip ? 'bg-[#1a1206]' : 'bg-[#060606]'
-        } shadow-[inset_0_0_0_1.1px_rgba(255,255,255,0.55),inset_0_0_0_2.2px_rgba(0,0,0,1),inset_0_0_0_2.8px_rgba(255,255,255,0.22),inset_0_1px_1px_rgba(255,255,255,0.35)]`}
+        className="relative mr-[5px] flex h-[17px] w-[17px] items-center justify-center rounded-full bg-[#070708]"
+        style={{
+          boxShadow: svip
+            ? 'inset 0 0 0 1px rgba(236,203,128,0.75), inset 0 0 0 2.6px rgba(0,0,0,1), inset 0 0 0 3.3px rgba(236,203,128,0.35), inset 0 1.5px 1.5px rgba(255,255,255,0.28)'
+            : 'inset 0 0 0 1px rgba(255,255,255,0.6), inset 0 0 0 2.6px rgba(0,0,0,1), inset 0 0 0 3.3px rgba(255,255,255,0.18), inset 0 1.5px 1.5px rgba(255,255,255,0.28)',
+        }}
       >
         <span
-          className={`flex h-[8px] w-[8px] items-center justify-center rounded-full ${
+          className={`flex h-[8.5px] w-[8.5px] items-center justify-center rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.92)] ${
             svip
-              ? 'bg-[linear-gradient(135deg,#F3D68C_0%,#8A5C13_100%)] shadow-[0_0_0_1.1px_rgba(255,255,255,0.85)]'
-              : 'bg-[linear-gradient(135deg,#F2585A_0%,#C81E1E_100%)] shadow-[0_0_0_1.1px_rgba(255,255,255,0.9)]'
+              ? 'bg-[linear-gradient(135deg,#F58A5A_0%,#C43E22_100%)]'
+              : 'bg-[linear-gradient(135deg,#F26D6D_0%,#C22424_100%)]'
           }`}
         >
-          <span className={`h-[2.2px] w-[2.2px] rounded-full ${svip ? 'bg-[#3a2a08]' : 'bg-white'}`} />
+          <span className="h-[2px] w-[2px] rounded-full bg-white" />
         </span>
       </span>
       <span
-        className={`text-[11.5px] font-bold leading-none tracking-[0.01em] ${
-          svip ? 'text-[#4A3005]' : 'text-white'
+        className={`text-[12px] font-bold leading-none tracking-[0.01em] ${
+          svip ? 'text-[#E9CB86]' : 'text-[#F4EDDC]'
         }`}
       >
         {svip ? 'SVIP' : 'VIP'}
-        {level >= 1 && (
-          <span className="font-semibold">·{cnNum(level)}</span>
-        )}
+        {level >= 1 && <span className="font-semibold">·{cnNum(level)}</span>}
       </span>
     </span>
   );
@@ -339,7 +340,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         }
       >
         {/* 顶栏 */}
-        <div className="flex items-center justify-between px-4 pb-1 pt-[58px]">
+        <div className="flex items-center justify-between px-4 pt-[56px]">
           <button
             type="button"
             onClick={onSettings}
@@ -359,8 +360,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         </div>
 
-        {/* 状态（添加状态/已添加状态）——中轴与头像对齐；点击编辑 */}
-        <div className="mt-2 flex justify-center">
+        {/* 状态（添加状态/已添加状态）——中轴与头像对齐；点击编辑（更贴顶栏） */}
+        <div className="mt-1 flex justify-center">
           <button
             type="button"
             onClick={() => setStatusOpen(true)}
@@ -377,7 +378,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         </div>
 
         {/* 头像（游客：点按编辑资料；无编辑图标） */}
-        <div className="mt-2.5 flex justify-center">
+        <div className="mt-2 flex justify-center">
           <button
             type="button"
             onClick={loginUid ? undefined : () => setSheet('profile')}
@@ -388,7 +389,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           >
             <CoverImg
               src={avatar}
-              className="h-[86px] w-[86px]"
+              className="h-[82px] w-[82px]"
               rounded="rounded-full"
               alt={name}
             />
@@ -397,7 +398,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         </div>
 
         {/* 昵称 + VIP 徽章 */}
-        <div className="mt-2.5 flex items-center justify-center gap-2 px-6">
+        <div className="mt-2 flex items-center justify-center gap-2 px-6">
           <h2 className="max-w-[62%] truncate text-[21px] font-bold" data-testid="music-mine-nickname">
             {name}
           </h2>
@@ -420,7 +421,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         </p>
 
         {/* 统计行 */}
-        <div className="mt-3 flex items-center justify-center gap-7">
+        <div className="mt-2 flex items-center justify-center gap-7">
           {loginUid ? (
             <>
               <StatV v={detail ? `${detail.profile.follows ?? 0}` : '—'} l="关注" />
@@ -449,7 +450,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         </div>
 
         {/* 胶囊入口 */}
-        <div className="mt-4 flex items-center gap-2 overflow-x-auto px-4 no-scrollbar">
+        <div className="mt-3 flex items-center gap-2 overflow-x-auto px-4 no-scrollbar">
           <Pill icon={<Clock3 className="h-[18px] w-[18px]" />} label="最近" onClick={() => setSheet('recent')} testId="music-mine-recent" />
           <Pill icon={<ArrowDownToLine className="h-[18px] w-[18px]" />} label="本地" onClick={() => setSheet('local')} testId="music-mine-local" />
           <Pill icon={<Star className="h-[18px] w-[18px]" />} label="收藏" onClick={() => setSheet('liked')} testId="music-mine-liked" />
@@ -466,7 +467,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         </div>
 
         {/* 白色面板圆角帽（同一底色，形成圆角衔接） */}
-        <div className="mt-4 h-[16px] rounded-t-[16px] bg-[#F8F8F8] dark:bg-zinc-900" />
+        <div className="mt-3 h-[16px] rounded-t-[16px] bg-[#F8F8F8] dark:bg-zinc-900" />
       </div>
 
       {/* ================= 白色面板 ================= */}
