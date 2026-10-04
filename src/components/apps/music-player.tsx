@@ -29,7 +29,6 @@ import {
   MessageCircleMore,
   MessagesSquare,
   MicVocal,
-  MoreHorizontal,
   MoreVertical,
   Music2,
   Pause,
@@ -272,7 +271,8 @@ export function MusicPlayer() {
   };
   const menuExit = () => {
     setShowTgMenu(false);
-    endTogether();
+    if (together) endTogether();
+    else setMoreToast('还没有开始一起听');
   };
 
   // 聊天态：全屏独立布局（顶栏+双头像+聊天区+胶囊），不再与播放控制区堆叠
@@ -350,8 +350,7 @@ export function MusicPlayer() {
           onClose={close}
           light
           dense={!!together}
-          onMore={together ? undefined : () => setShowMore(true)}
-          onMenu={together ? openTgMenu : undefined}
+          onMenu={openTgMenu}
         />
 
         {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
@@ -539,8 +538,8 @@ export function MusicPlayer() {
       {/* 邀请/重新匹配一起听 */}
       {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
-      {/* 一起听设置菜单（顶栏⋮） */}
-      {showTgMenu && together && (
+      {/* 一起听设置菜单（顶栏⋮；自己听也能打开：重新匹配/查看记录可用，退出时提示未在一起听） */}
+      {showTgMenu && (
         <TogetherMenu
           onClose={() => setShowTgMenu(false)}
           onRematch={menuRematch}
@@ -551,8 +550,8 @@ export function MusicPlayer() {
         />
       )}
 
-      {/* 查看一起听记录 */}
-      {showTgRecord && together && (
+      {/* 查看一起听记录（自己听无会话 → 空态） */}
+      {showTgRecord && (
         <TgRecordSheet session={together} msgs={togetherMsgs} onClose={() => setShowTgRecord(false)} />
       )}
 
@@ -571,7 +570,6 @@ function PlayerTopBar({
   onClose,
   title,
   light,
-  onMore,
   onMenu,
   onMusic,
   dense,
@@ -580,8 +578,7 @@ function PlayerTopBar({
   /** 顶部标题（可选；一起听/播放模式默认不展示） */
   title?: string;
   light?: boolean;
-  onMore?: () => void;
-  /** 一起听态：右上角 ⋮ 菜单（重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
+  /** 右上角 ⋮ 菜单（一起听/自己听通用：重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
   onMenu?: () => void;
   /** 聊天视图：顶部中央切回音乐视图按钮（底部胶囊已不再在聊天视图重复展示） */
   onMusic?: () => void;
@@ -618,10 +615,6 @@ function PlayerTopBar({
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/30 active:scale-95"
         >
           <MoreVertical className="h-[19px] w-[19px] text-white/90" />
-        </button>
-      ) : onMore ? (
-        <button type="button" onClick={onMore} aria-label="更多" data-testid="music-player-more">
-          <MoreHorizontal className={`h-6 w-6 ${light ? 'text-white/85' : 'text-zinc-600'}`} />
         </button>
       ) : (
         <span className="w-6" />
@@ -890,23 +883,28 @@ function TogetherHead({
   // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
-    <div className="flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
+    <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
       {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <CoverImg src={session.avatar} className="h-16 w-16" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
-      {/* 头像下气泡（音乐视图）：AI 气泡靠左伸展、我的气泡靠右伸展（聊天式对向布局），尾巴朝上，5 秒后消失；出现时隐藏时长行 */}
+      {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动 */}
+      <p className={`mt-1.5 text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+        相距 {session.distanceKm} 公里 · 一起听了 {durText}
+      </p>
+      {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
+          按参考截图：AI 气泡恒在左、我的气泡恒在右（各自独立锚定，不因对方没发消息而换边），
+          两侧各收进 ~19%（不贴屏幕边），尾巴朝上指各自头像，5 秒后消失 */}
       {showBubbles && hasBubble && (
-        <div className="mx-auto mt-1 flex w-full max-w-[360px] items-start justify-between gap-3 px-4">
-          {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
-          {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
+        <div className="pointer-events-none absolute inset-x-0 top-[78px] z-20 flex items-start justify-between gap-3 px-[19%]">
+          <div className="flex min-w-0 justify-start">
+            {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
+          </div>
+          <div className="flex min-w-0 justify-end">
+            {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
+          </div>
         </div>
-      )}
-      {!hasBubble && (
-        <p className="mt-1.5 text-[11px] text-white/70">
-          相距 {session.distanceKm} 公里 · 一起听了 {durText}
-        </p>
       )}
     </div>
   );
@@ -1025,15 +1023,15 @@ function QuickInputBar({
   );
 }
 
-/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴；对方靠左伸展、我的靠右伸展，可到 190px 宽） */
+/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴；按参考截图：对方尾巴在左上、我的尾巴在左上角指向我头像，最宽 165px） */
 function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
   return (
     <div
-      className="relative mt-2 max-w-[190px] rounded-[18px] bg-[#5a5a5f] px-3 py-1.5"
+      className="relative max-w-[165px] min-w-0 rounded-[16px] bg-[#5a5a5f] px-3 py-1.5"
       data-testid={mine ? 'music-tg-bubble-me' : 'music-tg-bubble-peer'}
     >
       <span
-        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'right-5' : 'left-5'}`}
+        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'left-2' : 'left-5'}`}
       />
       <p className="relative line-clamp-2 break-words text-[12px] leading-snug text-white/95">{text}</p>
     </div>
@@ -1098,14 +1096,16 @@ function TgRecordSheet({
   msgs,
   onClose,
 }: {
-  session: TogetherSessionLike;
+  /** 当前一起听会话；自己听（还没匹配）时为 null → 空态 */
+  session: TogetherSessionLike | null;
   msgs: TogetherMsgLike[];
   onClose: () => void;
 }) {
   const history = useMusic((s) => s.history);
-  // 本次一起听（segStart 之后）听过的歌（去重、新在前）；时长展示用累计锚点
-  const segStart = session.segStart ?? session.since;
+  // 本次一起听（segStart 之后）听过的歌（去重、新在前）；时长展示用累计锚点；自己听无会话 → 空
+  const segStart = session ? session.segStart ?? session.since : 0;
   const songs = useMemo(() => {
+    if (!session) return [];
     const seen = new Set<number>();
     const out: NcmSong[] = [];
     for (let i = history.length - 1; i >= 0; i--) {
@@ -1116,8 +1116,8 @@ function TgRecordSheet({
       }
     }
     return out;
-  }, [history, segStart]);
-  const durText = fmtTogetherDur(Date.now() - session.since);
+  }, [history, segStart, session]);
+  const durText = session ? fmtTogetherDur(Date.now() - session.since) : '';
   const chatCount = msgs.filter((m) => m.role !== 'recs').length;
   return (
     <div className="absolute inset-0 z-[63] flex items-end" data-testid="music-tg-record">
@@ -1130,28 +1130,39 @@ function TgRecordSheet({
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto pb-8">
-          <div className="flex items-center gap-3 px-5 py-2">
-            <CoverImg src={session.avatar} className="h-11 w-11" rounded="rounded-full" alt={session.name} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[14px] text-white/95">和 {session.name} 一起听</p>
-              <p className="text-[11px] text-white/45">
-                已一起听 {durText} · 聊了 {chatCount} 条消息
-              </p>
-            </div>
-          </div>
-          <p className="px-5 pb-1 pt-3 text-[12px] text-white/40">这次一起听过的歌（{songs.length}）</p>
-          {songs.length === 0 ? (
-            <p className="py-8 text-center text-[13px] text-white/40">还没一起听过歌</p>
-          ) : (
-            songs.map((s) => (
-              <div key={s.id} className="flex items-center gap-3 px-5 py-2">
-                <CoverImg src={songCover(s)} className="h-10 w-10" rounded="rounded-md" alt={s.name} />
+          {session ? (
+            <>
+              <div className="flex items-center gap-3 px-5 py-2">
+                <CoverImg src={session.avatar} className="h-11 w-11" rounded="rounded-full" alt={session.name} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] text-white/90">{s.name}</p>
-                  <p className="truncate text-[11px] text-white/40">{songArtistText(s)}</p>
+                  <p className="truncate text-[14px] text-white/95">和 {session.name} 一起听</p>
+                  <p className="text-[11px] text-white/45">
+                    已一起听 {durText} · 聊了 {chatCount} 条消息
+                  </p>
                 </div>
               </div>
-            ))
+              <p className="px-5 pb-1 pt-3 text-[12px] text-white/40">这次一起听过的歌（{songs.length}）</p>
+              {songs.length === 0 ? (
+                <p className="py-8 text-center text-[13px] text-white/40">还没一起听过歌</p>
+              ) : (
+                songs.map((s) => (
+                  <div key={s.id} className="flex items-center gap-3 px-5 py-2">
+                    <CoverImg src={songCover(s)} className="h-10 w-10" rounded="rounded-md" alt={s.name} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13px] text-white/90">{s.name}</p>
+                      <p className="truncate text-[11px] text-white/40">{songArtistText(s)}</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-2 px-5 py-10 text-center" data-testid="music-tg-record-empty">
+              <p className="text-[14px] text-white/85">还没有一起听的记录</p>
+              <p className="text-[11px] leading-relaxed text-white/45">
+                邀请好友一起听后，听过的歌和聊天都会记在这里
+              </p>
+            </div>
           )}
         </div>
       </div>

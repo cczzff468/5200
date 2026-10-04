@@ -58,24 +58,38 @@ const HISTORY_PREFIX = 'music-history:';
 const LIKED_PREFIX = 'music-liked:';
 const NOW_KEY = 'music-now';
 
-/** 播放器快照键：按网易云账号隔离（登录 uid / guest），旧无后缀键作首次迁移回退 */
+/** 播放器快照键：按网易云账号隔离（登录 uid / guest），各自存档互不共享 */
 function playerKey(): string {
   return `music-player:${musicUid()}`;
 }
 function readPlayerSnapshot(): PlayerSnapshot | null {
-  const cur = kvGet<PlayerSnapshot>(playerKey());
-  if (cur) return cur;
-  return kvGet<PlayerSnapshot>('music-player'); // 旧版本无 uid 后缀键（迁移回退）
+  return kvGet<PlayerSnapshot>(playerKey());
 }
 
-/** 听歌时长键：按网易云账号隔离 + 旧键回退 */
+/** 听歌时长键：按网易云账号隔离，各自存档互不共享 */
 function listenKey(): string {
   return `music-listen-sec:${musicUid()}`;
 }
 function readListenSec(): number {
-  const cur = kvGet<number>(listenKey());
-  if (typeof cur === 'number') return cur;
-  return Number(kvGet<number>('music-listen-sec')) || 0;
+  return Number(kvGet<number>(listenKey())) || 0;
+}
+
+/**
+ * 一次性迁移：旧版无 uid 后缀的全局键 → 当前网易云账号名下（目标键缺失时才写入，随后删旧键）。
+ * 旧实现对缺失的账号键回退读全局键，导致切到任何账号都看到同一份旧时长/队列
+ * （「我页时长不跟随网易云账号」的根因）；改为开机一次性归属当前账号，其余账号从 0 开始。
+ */
+function migrateLegacyAccountKeys(): void {
+  const legacyListen = kvGet<number>('music-listen-sec');
+  if (typeof legacyListen === 'number') {
+    if (kvGet<number>(listenKey()) == null) kvSet(listenKey(), legacyListen);
+    kvDel('music-listen-sec');
+  }
+  const legacySnap = kvGet<PlayerSnapshot>('music-player');
+  if (legacySnap) {
+    if (!kvGet<PlayerSnapshot>(playerKey())) kvSet(playerKey(), legacySnap);
+    kvDel('music-player');
+  }
 }
 
 /** 歌曲播放成功钩子（music-ai 注入：写一起听记忆等） */
@@ -323,6 +337,8 @@ export const useMusic = create<MusicState>((set, get) => ({
     if (get().booted) return;
     set({ booted: true });
     ensureAudio();
+    // 旧全局键一次性归属当前网易云账号（时长/快照真正按账号隔离）
+    migrateLegacyAccountKeys();
     // 恢复快照（旧版本存的歌可能缺歌手/封面字段，统一 normalize；缺歌手的再由 playQueueAt 异步补全）
     const snap = readPlayerSnapshot();
     if (snap && Array.isArray(snap.queue) && snap.queue.length) {

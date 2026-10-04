@@ -14985,3 +14985,24 @@ Stage Summary:
 - 关键实现：NetEase 已把 /toplist 的 tracks 置空——任何依赖该字段的榜单预览都要走 playlist/detail 兜底；z 层体系补完（avatarSheet 65→80）；focus({preventScroll:true}) 是消除聚焦跳动的正解（autoFocus 无法带参）
 - 范围限定遵守：仅动音乐 App 7 个文件，16 项受保护功能未触碰
 - 改动文件：src/lib/ios/music-store.ts、src/lib/ios/music-api.ts、src/components/apps/music.tsx 同级（无改动）、music-home.tsx、music-search.tsx、music-playlist.tsx、music-player.tsx、music-mine.tsx
+
+---
+Task ID: 67
+Agent: Z.ai Code（主会话）
+Task: 用户第十二轮反馈五项——一起听气泡有问题（附参考截图1）、「我」界面时长根据网易云账号来、笔记也根据网易云账号来、听歌排行界面变成单独的界面、自己听界面点击右上角三个点变成截图2那样
+
+Work Log:
+- 一起听气泡按参考截图重做（music-player TogetherHead/HeadBubble）：①我的气泡尾巴从 right-5（右上）改 left-2（左上角、指向右上方我头像）——用 Pillow 对参考截图逐像素测量确认双方尾巴都在气泡左侧；②气泡行两侧各收进 19%（px-[19%]，实测参考图左右内缩均 19.7%），不再贴屏幕边；③单侧锚定改为双槽结构（左槽 peer/右槽 mine 各自 justify-start/end）——修复只发一条消息时 justify-between 把唯一气泡排到左边的问题，AI 气泡恒左、我的恒右；④气泡行改绝对定位（top-[78px] z-20 pointer-events-none）悬浮在唱片上方 + 时长行常驻占位（有气泡时 invisible 不卸载）——气泡出现/消失/自动隐藏（5s TTL）全程零布局位移，实测歌名行 y=514→514；气泡 max-w 190→165px、圆角 18→16（按截图比例）
+- 自己听右上角三个点 → 深色五项菜单（music-player）：PlayerTopBar 删 onMore 分支（MoreHorizontal 图标删除），onMenu 自己听/一起听通用 → ⋮（黑底圆形）打开 TogetherMenu（重新匹配/查看记录/匹配偏好设置/举报/退出一起听，截图2 1:1）；TgRecordSheet 的 session 改可空——自己听「查看记录」显示空态「还没有一起听的记录」；「退出一起听」自己听时 toast「还没有开始一起听」（一起听时行为不变=结束会话）；自己听底部三个点保留（歌曲操作面板 MoreSheet）
+- 时长/快照真正按网易云账号隔离（music-store）：根因 = 旧实现对缺失账号键回退读无后缀全局键 music-listen-sec / music-player，切到任何新账号都看到同一份旧数据；改为 readListenSec/readPlayerSnapshot 只读 per-uid 键，新增 migrateLegacyAccountKeys() 在 boot 一次性把旧全局键归属给当前账号（目标键缺失才写、随后删旧键）——当前账号继承旧时长、其余账号从 0 开始
+- 笔记按网易云账号隔离（music-mine NotesList）：新增 music-notes:{uid} 归属名单——首次打开把现有备忘录笔记全划给当前账号；之后备忘录新增笔记归属打开时的账号、已删除的从名单清理；loginUid 变化时重载。实测备忘录新建「网易云日记」→ 音乐笔记 Tab 立即出现
+- 听歌排行改回单独全屏界面（music-mine RecordPage）：从 Task 66 的底部弹层（86% 高+取消按钮）改为整页——顶栏 ChevronLeft 返回+居中标题「听歌排行」、头像+昵称+账号状态头部、最近一周/所有时间 Tab+「累计听歌 X · N 次播放」、整页滚动排行列表（1-3 名红色序号/封面/占比条/播放次数），去掉描边框与取消按钮
+- E2E（agent-browser 500x757 游客态，全新 profile：解锁→创建 CHAR「小音」→播歌）全过：自己听 ⋮ →五项深色菜单（截图2样式+小箭头）✓；查看记录→空态 ✓；退出一起听→toast ✓；底部三点→歌曲操作面板 ✓；邀请小音→一起听；发「这歌单绝了」→我的气泡在右（right 内缩 95px/500=19%，y=164，尾巴左上）✓；AI 回复气泡在左+尾巴左上 ✓；气泡显示期间/消失后歌名行 y=514 恒定（零跳动）✓；5 秒自动隐藏+时长行恢复可见 ✓；听歌排行全屏页（返回+标题+游客副标题+周/总 Tab 周榜 8 条+返回）✓；备忘录新建笔记→音乐笔记 Tab 同步 ✓；console/page errors 零、dev.log 无 error
+- 测试数据清理：agent-browser 独立 profile 内 music-* kv 键 8 个+网易云日记笔记已清（用户数据不受影响）
+- bunx tsc 0 错误；bun run lint 0 错误 0 警告
+
+Stage Summary:
+- 交付：一起听气泡 1:1 对齐参考截图（双尾巴左上、AI 左/我右恒定锚定、19% 内收、绝对定位零布局位移）；自己听右上角 ⋮ 打开与一起听一致的深色五项菜单（查看记录空态/退出提示未在一起听）；听歌时长+播放快照 per-uid 键唯一化（旧全局键开机一次性迁移，多账号不再共享旧值）；音乐笔记 Tab 按网易云账号归属（music-notes:{uid}）；听歌排行恢复独立全屏界面
+- 关键实现：气泡不挤动布局 = 绝对定位浮层 + 占位行 invisible（而非卸载）；单气泡换边 bug = 双槽锚定而非 justify-between 动态子项；账号数据隔离必须去掉 read 回退（回退会让所有新账号看到同一份旧数据），改「一次性迁移+删旧键」
+- 范围限定遵守：仅动音乐 App 3 个文件，16 项受保护功能未触碰
+- 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-store.ts、src/components/apps/music-mine.tsx

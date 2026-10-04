@@ -15,6 +15,7 @@ import {
   ArrowDownToLine,
   BarChart2,
   ChevronDown,
+  ChevronLeft,
   Clock3,
   Heart,
   ImagePlus,
@@ -36,6 +37,7 @@ import {
 } from 'lucide-react';
 import {
   djHot,
+  musicUid,
   playlistDelete,
   userDetail,
   userPlaylists,
@@ -1309,7 +1311,7 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
   );
 }
 
-// ---------------- 听歌排行（底部弹层，按用户参考截图：头像+昵称+「网易云账号已登录」头部 + 圆角描边排行列表 + 取消；登录=云端接口，游客=本地播放历史聚合） ----------------
+// ---------------- 听歌排行（单独全屏界面：顶栏返回+标题、用户头部、周/总 Tab、排行列表；登录=云端接口，游客=本地播放历史聚合） ----------------
 
 function RecordPage({ onClose }: { onClose: () => void }) {
   const uid = useMusic((s) => s.loginUid);
@@ -1352,31 +1354,37 @@ function RecordPage({ onClose }: { onClose: () => void }) {
   const totalPlays = items?.reduce((n, x) => n + x.count, 0) ?? 0;
 
   return (
-    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-record-page">
-      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative flex h-[86%] w-full flex-col rounded-t-2xl bg-white px-5 pb-7 pt-5 dark:bg-zinc-900">
-        {/* 头部：头像 + 昵称 + 账号状态（按参考截图） */}
-        <div className="flex items-center gap-3">
-          <CoverImg src={headAvatar} className="h-12 w-12" rounded="rounded-full" alt={headName} />
+    <div className="absolute inset-0 z-[80] flex flex-col bg-white dark:bg-zinc-900" data-testid="music-record-page">
+      {/* 顶栏：返回 + 标题 */}
+      <div className="flex items-center px-4 pb-2 pt-[52px]">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="返回"
+          data-testid="music-record-back"
+          className="p-1 text-zinc-700 active:scale-90 dark:text-zinc-200"
+        >
+          <ChevronLeft className="h-6 w-6" />
+        </button>
+        <p className="min-w-0 flex-1 pr-8 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">
+          听歌排行
+        </p>
+      </div>
+
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
+        {/* 用户头部：头像 + 昵称 + 账号状态 */}
+        <div className="flex items-center gap-3 px-5 pt-2">
+          <CoverImg src={headAvatar} className="h-14 w-14" rounded="rounded-full" alt={headName} />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[17px] font-bold text-zinc-900 dark:text-zinc-100">{headName}</p>
+            <p className="truncate text-[18px] font-bold text-zinc-900 dark:text-zinc-100">{headName}</p>
             <p className="mt-0.5 truncate text-[12px] text-zinc-400">
               {uid ? '网易云账号已登录' : '游客模式 · 数据仅保存在本机'}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            data-testid="music-record-back"
-            className="text-zinc-400 active:scale-90"
-          >
-            <ChevronDown className="h-5 w-5" />
-          </button>
         </div>
 
         {/* 周 / 所有时间 + 累计信息（游客只有本地总数据，仍可切换但数据一致） */}
-        <div className="mt-2 flex items-end justify-between border-b border-black/[0.06] dark:border-white/10">
+        <div className="mt-3 flex items-end justify-between border-b border-black/[0.06] px-5 dark:border-white/10">
           <div className="flex gap-5">
             {(
               [
@@ -1403,11 +1411,8 @@ function RecordPage({ onClose }: { onClose: () => void }) {
           </p>
         </div>
 
-        {/* 排行列表（圆角描边框，按参考截图；弹层内滚动） */}
-        <div
-          className="no-scrollbar mt-2.5 min-h-0 flex-1 overflow-y-auto rounded-[18px] border border-black/[0.08] p-1 dark:border-white/10"
-          data-testid="music-record-list"
-        >
+        {/* 排行列表（整页滚动） */}
+        <div className="pb-10 pt-1" data-testid="music-record-list">
           {items === null ? (
             <LoadingBlock />
           ) : items.length === 0 ? (
@@ -1422,7 +1427,7 @@ function RecordPage({ onClose }: { onClose: () => void }) {
                 type="button"
                 onClick={() => void playSong(it.song, items.map((x) => x.song))}
                 data-testid={`music-record-item-${i}`}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
               >
                 <span
                   className={`w-6 shrink-0 text-center text-[15px] font-bold tabular-nums ${
@@ -1455,16 +1460,6 @@ function RecordPage({ onClose }: { onClose: () => void }) {
             ))
           )}
         </div>
-
-        {/* 取消（按参考截图底部取消按钮） */}
-        <button
-          type="button"
-          onClick={onClose}
-          data-testid="music-record-cancel"
-          className="mt-3 h-10 w-full shrink-0 rounded-full text-[14px] text-zinc-400 active:scale-[0.98]"
-        >
-          取消
-        </button>
       </div>
     </div>
   );
@@ -1530,9 +1525,10 @@ function PodcastList() {
   );
 }
 
-// ---------------- 笔记 Tab（读取备忘录 App 的笔记，能显示的都显示） ----------------
+// ---------------- 笔记 Tab（备忘录笔记按网易云账号隔离：music-notes:{uid} 记归属名单） ----------------
 
 function NotesList() {
+  const loginUid = useMusic((s) => s.loginUid);
   const [notes, setNotes] = useState<{ id: string; title: string; content: string; updatedAt: number }[] | null>(null);
   useEffect(() => {
     void (async () => {
@@ -1541,12 +1537,28 @@ function NotesList() {
         const list = (all as { id: string; title: string; content: string; updatedAt: number; pinned?: boolean }[])
           .slice()
           .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt - a.updatedAt);
-        setNotes(list);
+        // 按网易云账号隔离：首次打开把现有笔记全划给当前账号；之后备忘录新增的笔记归属当前账号、
+        // 已删除的从名单清理 —— 切换网易云账号后各看各的笔记
+        const key = `music-notes:${musicUid()}`;
+        const existIds = new Set(list.map((n) => n.id));
+        let owned = kvGet<string[]>(key);
+        if (!owned) {
+          owned = list.map((n) => n.id);
+          kvSet(key, owned);
+        } else {
+          const known = new Set(owned);
+          const fresh = list.map((n) => n.id).filter((id) => !known.has(id));
+          const cleaned = owned.filter((id) => existIds.has(id));
+          owned = [...cleaned, ...fresh];
+          if (fresh.length || cleaned.length !== known.size) kvSet(key, owned);
+        }
+        const ownedSet = new Set(owned);
+        setNotes(list.filter((n) => ownedSet.has(n.id)));
       } catch {
         setNotes([]);
       }
     })();
-  }, []);
+  }, [loginUid]);
   if (notes === null) {
     return (
       <div className="pb-[128px] pt-4">
