@@ -14463,3 +14463,22 @@ Stage Summary:
 - 交付：好友申请 AI 决策 prompt 按五节规格重做——AI 不再无脑同意：申请人先按「人设性格×验证消息质量×是否认识×关系状态」判断，记忆里毫无印象的人报名字会被追问「你是哪位？」、广告直接拒绝、说得出具体共同点才更容易通过；同意/拒绝/追问三态全部按人设自然出现；同意后聊天界面落「我们已成功添加为好友」+ 验证消息永久保留聊天记录；大号加角色保持立马同意零破坏
 - 关键修复：兜底解析「我不同意」误判 accept（否定优先）；空白申请显式标注给 AI；决策 ask 增加先思考后输出引导
 - 改动文件：src/lib/ios/friend-state.ts（仅此一个文件，决策链路两端共用，微信/QQ 同时生效）
+
+---
+Task ID: 48
+Agent: Z.ai Code（主会话）
+Task: 从 GitHub 仓库 cczzff468/5200 拉取代码到本地工作目录，恢复可运行状态（用户将在此代码基础上提出修改/新增需求）
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git（HEAD=47d5f90 好友申请AI决策按人设判断）到 /tmp/repo-5200
+- rsync 全量同步到 /home/z/my-project（含 .git、排除 node_modules/.next/dev.log；chgrp 报错不影响内容）
+- bun install 补齐 4 个依赖差量：idb@8/jsmediatags@3.9.7/remark-gfm@4/web-push@3.6.7
+- bun run db:push（数据库已同步）+ prisma generate 重新生成客户端
+- 端口占用清理 + 清 .next 缓存干净重启 dev server
+- 修复 /api/contacts/migrate 500（db.contact undefined=服务器启动早于 prisma generate 用了旧客户端缓存；干净重启后恢复，curl 验证 {"ok":true,"contacts":[],"backgrounds":{}}）
+- agent-browser E2E：420x900 视口打开首页 200 → 锁屏渲染正常（时间/电量/天气/日历小组件）→ 触摸手势上滑解锁 → 主屏幕完整渲染（天气小组件 19° 北京/8 图标/搜索/Dock 四 App 含未读角标）→ 控制台零错误
+- git remote 已配置 origin（PAT 内嵌）指向 cczzff468/5200，分支 main，工作区干净
+
+Stage Summary:
+- 本地工作区 = 仓库 47d5f90 完整代码且可运行：首页 200、锁屏/解锁/主屏幕 E2E 通过、Prisma 接口正常、dev.log 无运行时错误
+- 待用户提出具体修改/新增需求后在此基线上开发
