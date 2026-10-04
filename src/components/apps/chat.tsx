@@ -87,6 +87,8 @@ import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
+import { ProactiveMsgPage } from './proactive-msg-page';
+import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import {
   WB_EMPTY_BLOCKS,
   applyWbUserBlocks,
@@ -1132,6 +1134,15 @@ function ChatView({
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [wbOpen, setWbOpen] = useState(false);
+  /** 主动发消息设置页（聊天设置二级页：定时/事件/自主/提醒四类触发，仅联系人会话） */
+  const [proactiveOpen, setProactiveOpen] = useState(false);
+  // 主动发消息角标守卫登记：用户正看着该会话时主动消息不涨角标（联系人会话才有角色，助手会话不参与）
+  useEffect(() => {
+    setActiveProactiveChat('sms', wbContactId);
+    return () => {
+      setActiveProactiveChat('sms', null);
+    };
+  }, [wbContactId]);
   // 46-g 视觉管理：头像本地覆盖（pick-album-avatar 落库后即时刷新顶栏头像；reset 入口已移除）
   const [avatarOverride, setAvatarOverride] = useState<string | null>(null);
   /** 顶栏头像（pick-album-avatar 落库后本地 override 优先；切会话随组件重挂载复位 → 自动回退 peer.avatarSrc） */
@@ -2219,7 +2230,7 @@ function ChatView({
     );
   };
 
-  const send = () => {
+  const send = async () => {
     const text = input.trim();
     if (!text) return;
 
@@ -2271,6 +2282,18 @@ function ChatView({
       setPendingDispatch(true);
       markPendingBatch(sessionKey, true);
       return;
+    }
+    // Task 49 定时提醒：用户消息像「定时发消息」指令时先解析（LLM 两级兜底；正则闸未命中零开销）；
+    // 落任务后：聊天里落灰色系统行（确定性反馈）+ 本轮 sysEvent 带确认提示（AI 自然确认）；仅联系人会话
+    if (wbContactId && reminderHintHit(userMsg.content)) {
+      const label = await parseReminderInstruction('sms', wbContactId, userMsg.content);
+      if (label) {
+        const sys = buildReminderSysMsg('sms', label) as unknown as ChatMsg;
+        saveMsgs(storageKey, appendWithBoundary(sessionKey, loadMsgs(storageKey) ?? [], sys));
+        setMsgs((prev) => (prev.some((m) => m.id === sys.id) ? prev : [...prev, sys]));
+        startAiTurn(userMsg, reminderSysHint(label));
+        return;
+      }
     }
     startAiTurn(userMsg);
   };
@@ -3657,9 +3680,16 @@ function ChatView({
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
           voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)}
           onOpenVoice={wbContactId ? () => setVoiceOpen(true) : undefined}
+          onOpenProactive={wbContactId ? () => setProactiveOpen(true) : undefined}
+          proactiveSummary={wbContactId ? proactiveCfgSummary('sms', wbContactId) : undefined}
           blockedByUser={blk.byUser === true}
           onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
         />
+      )}
+
+      {/* 主动发消息设置页（聊天设置二级页，仅联系人会话）：定时/事件/自主/提醒四类触发 */}
+      {proactiveOpen && wbContactId && (
+        <ProactiveMsgPage variant="sms" contactId={wbContactId} contactName={peerLabel} onBack={() => setProactiveOpen(false)} />
       )}
 
       {/* 回复条数选择页（聊天设置二级页）：信息端每会话独立，选择后立即持久化生效 */}

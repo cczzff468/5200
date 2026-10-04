@@ -744,6 +744,11 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       const next = list.filter((card) => card && typeof card === 'object' && card.friendId !== id);
       if (next.length !== list.length) kvSet(fcKey, next);
     }
+    // Task 49 主动发消息痕迹清扫（配置/执行记录/提醒任务/索引；动态 import 防循环依赖：
+    // proactive-msg 反向依赖本模块的 listContacts/ownerProfileFor/cachedOwnerName）
+    void import('./proactive-msg')
+      .then((m) => m.purgeProactiveForContact(id))
+      .catch(() => undefined);
   } catch {
     // 清理失败不阻塞删除
   }

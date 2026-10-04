@@ -321,6 +321,8 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
+import { ProactiveMsgPage } from './proactive-msg-page';
+import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
@@ -2881,6 +2883,8 @@ function ChatPage({
   const actionDescOn = useActionDescOn(sessionKey);
   /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
   const [wbOpen, setWbOpen] = useState(false);
+  /** 主动发消息设置页（聊天设置二级页：定时/事件/自主/提醒四类触发） */
+  const [proactiveOpen, setProactiveOpen] = useState(false);
   /** 当前联系人挂载的世界书 id（切换联系人/挂载变化时重读） */
   const [wbBound, setWbBound] = useState<string[]>(() => getBoundBookIds(peer.id));
   useEffect(() => {
@@ -2894,8 +2898,11 @@ function ChatPage({
   /** 登记当前正在查看的聊天：AI 回复落盘时按此决定是否计未读角标（退出聊天页后 AI 回复 → 角标 +1） */
   useEffect(() => {
     qqActiveChatId = peer.id;
+    // 主动发消息角标守卫同步登记：用户正看着该会话时主动消息不涨角标（消息实时可见）
+    setActiveProactiveChat('qq', peer.id);
     return () => {
       if (qqActiveChatId === peer.id) qqActiveChatId = null;
+      setActiveProactiveChat('qq', null);
     };
   }, [peer.id]);
   /** 单聊卡片过期清算（进聊天页即扫 + 同步本会话视图）：AI 发的红包/转账超 24h 未领取/未收款 →
@@ -4794,7 +4801,7 @@ function ChatPage({
   /** 文字转语音发送（定义在下方；send 在前引用 → 同 runAiTurnRef 的 ref 模式） */
   const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
 
-  const send = useCallback(() => {
+  const send = useCallback(async () => {
     const text = input.trim();
     const staged = pendingImgsRef.current;
     // 40-a 拉黑拦截：被角色拉黑（byChar）后本 App 内不能发送任何消息（toast + 不落库）；
@@ -4874,6 +4881,18 @@ function ChatPage({
       setPendingDispatch(true);
       markPendingBatch(sessionKey, true);
       return;
+    }
+    // Task 49 定时提醒：用户消息像「定时发消息」指令时先解析（LLM 两级兜底；正则闸未命中零开销）；
+    // 落任务后：聊天里落灰色系统行（确定性反馈）+ 本轮 sysEvent 带确认提示（AI 自然确认）
+    if (reminderHintHit(userMsg.content)) {
+      const label = await parseReminderInstruction('qq', peer.id, userMsg.content);
+      if (label) {
+        const sys = buildReminderSysMsg('qq', label) as unknown as QQMsg;
+        saveMsgs(peer.id, appendWithBoundary(sessionKey, loadMsgs(peer.id), sys));
+        setMsgs((prev) => (prev.some((m) => m.id === sys.id) ? prev : [...prev, sys]));
+        runAiTurn(userMsg, undefined, reminderSysHint(label));
+        return;
+      }
     }
     runAiTurn(userMsg);
   }, [flushPendingImages, input, me.id, peer.id, runAiTurn, sessionKey, sentenceSend, quote, ttsSend]);
@@ -6736,6 +6755,8 @@ function ChatPage({
           }}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
+          onOpenProactive={peer.id === me.id ? undefined : () => setProactiveOpen(true)}
+          proactiveSummary={proactiveCfgSummary('qq', peer.id)}
           pinned={flags.pinned === true}
           muted={flags.muted === true}
           bg={bg}
@@ -6788,6 +6809,9 @@ function ChatPage({
           onOpenPeerProfile={onOpenFriendProfile}
         />
       ) : null}
+
+      {/* 主动发消息设置页（聊天设置二级页）：定时/事件/自主/提醒四类触发（每角色独立） */}
+      {proactiveOpen ? <ProactiveMsgPage variant="qq" contactId={peer.id} contactName={peer.name} onBack={() => setProactiveOpen(false)} /> : null}
 
       {/* 世界书挂载页（聊天设置二级页）：为联系人勾选挂载的书籍（按联系人隔离持久化） */}
       {wbOpen ? (

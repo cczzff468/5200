@@ -255,6 +255,8 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
+import { ProactiveMsgPage } from './proactive-msg-page';
+import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
@@ -4608,6 +4610,8 @@ function ChatPage({
   const actionDescOn = useActionDescOn(sessionKey);
   /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
   const [wbOpen, setWbOpen] = useState(false);
+  /** 主动发消息设置页（聊天设置二级页：定时/事件/自主/提醒四类触发） */
+  const [proactiveOpen, setProactiveOpen] = useState(false);
   /** 当前联系人挂载的世界书 id（切换联系人/挂载变化时重读） */
   const [wbBound, setWbBound] = useState<string[]>(() => getBoundBookIds(peer.id));
   useEffect(() => {
@@ -4621,8 +4625,11 @@ function ChatPage({
   /** 登记当前正在查看的聊天：AI 回复落盘时按此决定是否计未读角标（退出聊天页后 AI 回复 → 角标 +1） */
   useEffect(() => {
     wxActiveChatId = peer.id;
+    // 主动发消息角标守卫同步登记：用户正看着该会话时主动消息不涨角标（消息实时可见）
+    setActiveProactiveChat('wx', peer.id);
     return () => {
       if (wxActiveChatId === peer.id) wxActiveChatId = null;
+      setActiveProactiveChat('wx', null);
     };
   }, [peer.id]);
   /** 搜索定位命中的消息 id（短暂高亮） */
@@ -6225,7 +6232,7 @@ function ChatPage({
   /** 文字转语音发送（定义在下方；send 在前引用 → 同 runAiTurnRef 的 ref 模式） */
   const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
 
-  const send = useCallback(() => {
+  const send = useCallback(async () => {
     const text = input.trim();
     if (!text && pendingImgs.length === 0) return;
     // 40-a 拉黑拦截：被角色拉黑（byChar）后本 App 内不能发送任何消息（toast + 不落库）；
@@ -6280,6 +6287,18 @@ function ChatPage({
       return;
     }
     setMsgs((prev) => [...prev, ...batch]);
+    // Task 49 定时提醒：用户消息像「定时发消息」指令时先解析（LLM 两级兜底；正则闸未命中零开销）；
+    // 落任务后：聊天里落灰色系统行（确定性反馈）+ 本轮 sysEvent 带确认提示（AI 自然确认）
+    if (userMsg && reminderHintHit(userMsg.content)) {
+      const label = await parseReminderInstruction('wx', peer.id, userMsg.content);
+      if (label) {
+        const sys = buildReminderSysMsg('wx', label) as unknown as WxMsg;
+        saveMsgs(peer.id, appendWithBoundary(sessionKey, loadMsgs(peer.id), sys));
+        setMsgs((prev) => (prev.some((m) => m.id === sys.id) ? prev : [...prev, sys]));
+        runAiTurnRef.current?.(userMsg, created, reminderSysHint(label));
+        return;
+      }
+    }
     runAiTurnRef.current?.(userMsg, created);
   }, [input, me, peer, sessionKey, sentenceSend, quote, ttsSend, pendingImgs, onToast]);
 
@@ -8189,6 +8208,8 @@ function ChatPage({
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}
+          onOpenProactive={selfChat ? undefined : () => setProactiveOpen(true)}
+          proactiveSummary={proactiveCfgSummary('wx', peer.id)}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => wxChatFlagsStore.update(peer.id, { pinned: v })}
           onToggleMuted={(v) => wxChatFlagsStore.update(peer.id, { muted: v })}
@@ -8228,6 +8249,11 @@ function ChatPage({
           // chat-settings.tsx 的 4 个 prop 仍可选（未传则入口行不渲染），由 47-a 决定是否彻底删 prop；
           // 容器层的 4 个 handler 已删，新需求改为「进他朋友圈点击封面上传换封面」（MomentsPage !isMine 分支）。
         />
+      )}
+
+      {/* 主动发消息设置页（聊天设置二级页）：定时/事件/自主/提醒四类触发（每角色独立） */}
+      {proactiveOpen && (
+        <ProactiveMsgPage variant="wx" contactId={peer.id} contactName={peer.name} onBack={() => setProactiveOpen(false)} />
       )}
 
       {/* 世界书挂载页（聊天设置二级页）：为联系人勾选挂载的书籍（按联系人隔离持久化） */}

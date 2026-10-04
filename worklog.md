@@ -14482,3 +14482,44 @@ Work Log:
 Stage Summary:
 - 本地工作区 = 仓库 47d5f90 完整代码且可运行：首页 200、锁屏/解锁/主屏幕 E2E 通过、Prisma 接口正常、dev.log 无运行时错误
 - 待用户提出具体修改/新增需求后在此基线上开发
+
+---
+Task ID: 49
+Agent: Z.ai Code（主会话）
+Task: 聊天设置页「AI 主动发消息」功能——定时触发/事件触发/自主触发/自然语言定时提醒四类触发 + 消息生成（人设/记忆/上下文/时间感知）+ 投递（通知/角标/写记忆）+ 三端接线 + 每角色独立管理
+
+Work Log:
+- 新建 src/lib/ios/proactive-msg.ts（核心引擎 ~1000 行）：
+  - 配置存储 ProactiveMsgConfig{timerOn,timerMs,events[],autoOn} 经 scopedKvKey 按「App 当前账号」隔离（键 proactive-msg-cfg:<app>:<cid>），设备级索引 proactive-msg-index 枚举配置过的 app×cid
+  - 执行记录 proactive-msg-last:<app>:<cid>（timerAt/evtAt 按分钟戳/autoAt/lastSentText 防重复）
+  - 提醒任务 ProactiveReminder{once|daily|interval} 存 proactive-msg-reminders（账号作用域数组，上限 50）
+  - tick 引擎 runProactiveMsgTick：守卫（来电响铃/通话/闹钟，与 proactive-call 同口径）→ 遍历索引 → 联系人有效性+persona+拉黑守卫 → 四类触发判定（优先级 定时>事件>提醒>自主，每角色每 tick 至多一条）
+  - 事件判定 dueEventOf：HH:mm 精确匹配 + 星期过滤（空=每天）+ 分钟戳防同分钟重发；提醒判定含 90s 宽限 + 过期 once 任务自动清理
+  - 消息生成 generateProactiveText：buildPersonaSystemPrompt（channel=微信/QQ/短信 + genRules 生成规则 6 条：非回复/口语化 1-2 句/触发情境/延续话题/严禁重复/开头多样化 + 时间感知条件注入）+ memChatRecallBlock（disclosureText/altMainName/altMainRelation 与三端聊天同源，小号披露门控继承）+ buildTimeAwareBlock；user prompt=最近 12 条对话+上次主动消息（防重复）+输出指令；两级 LLM 兜底（/api/chat config→forceSdk）；清洗剥引号/前缀/多行取首行 ≤220 字
+  - 自主触发 decideAutonomous：JSON 决策 {action:send|wait,message,delayMinutes,reason}，决策+生成一次调用完成；考虑人设/记忆/最近对话/时间距（gapDesc）/深夜静默 [1,7)；wait 推迟下次决策 5~120min；deep-night 只限自主（定时/事件/提醒=用户明确意图不受限）
+  - 投递 deliverProactiveMsg：scheduleAiDelivery（逐条节奏管线）→ saveMsgs（三端 kv 键/消息形状各异：wx/qq role=peer、sms role=assistant）→ pushChatNotification（灵动岛/横幅/系统通知，免打扰闸门内置）→ wxUnreads/qqUnreads.bump（setActiveProactiveChat 登记正在看的会话不计数）→ memAfterAiTurn 写记忆管线（scene=xx主动发消息）
+  - fireProactive 统一入口：联系人级生成锁（generating Set，防间隔<生成耗时的重叠生成）+ 投递前去重（与最近 6 条 AI 发言/上次主动消息完全相同→丢弃）
+  - NL 提醒解析 parseReminderInstruction：reminderHintHit 正则闸（≤60 字+提醒/发消息词+时间词，未命中零开销）→ LLM JSON 解析（match/kind/minutesLater/dailyTime/intervalMinutes/note，三级 JSON 兜底）→ 落任务；reminderSysHint 生成 AI 确认提示；buildReminderSysMsg 三端 sys 胶囊消息
+  - purgeProactiveForContact：删联系人清扫配置/记录/提醒/索引
+- 新建 src/components/ios/ProactiveMsgWatcher.tsx：递归 setTimeout 每 10s tick（ProactiveCallWatcher 同模式：模块级单例 owned + 首跳 8s 等 kv 预热）；挂载 PhoneShell（dynamic ssr:false）
+- 新建 src/components/apps/proactive-msg-page.tsx：设置页二级页（wx/qq/sms 三主题 token）——①定时触发 ChatToggle+间隔 chips（30秒/1分钟/5分钟/15分钟/30分钟/1小时/3小时/6小时/12小时/1天/自定义秒分时面板）②事件触发 事件清单（名称/HH:mm 时间/星期 chips 空选=每天/启用开关/删除）+添加编辑弹层 ③自主触发开关+说明 ④定时提醒任务清单（label/note/类型/删除，4s 轻轮询）；头部摘要（定时·事件·提醒 N）+全部关闭；testid 规范 wx-proactive-*
+- chat-settings.tsx：ChatSettingsPage/SmsChatSettingsPage 新增 onOpenProactive+proactiveSummary props + 「主动发消息」入口行（Zap 图标+摘要+ChevronRight，置于时间感知行后，不传=隐藏）
+- 三端接线：wechat.tsx（proactiveOpen state+ProactiveMsgPage 渲染+入口 props+selfChat 隐藏+wxActiveChatId effect 同步 setActiveProactiveChat('wx')+send 改 async：reminderHintHit 命中→parseReminderInstruction→落 sys 胶囊（saveMsgs+setMsgs 幂等）→runAiTurn 带 reminderSysHint sysEvent）；qq.tsx 同构（'qq'）；chat.tsx（wbContactId 会话限定+'sms'+startAiTurn sysEvent）
+- contacts-store.ts purgeChatTracesFor：动态 import purgeProactiveForContact（防循环依赖：proactive-msg 反向依赖 listContacts/ownerProfileFor/cachedOwnerName）
+- E2E（agent-browser 420x900，全 UI 链路；种林小暖 char+陈凡 owner+wx-session）：
+  ①设置页渲染：聊天信息页「主动发消息」行（未开启）→ 二级页四分区完整
+  ②定时触发：开 30 秒档 → 返回聊天 → 多条主动消息到达（「凡凡，我刚刚画完一张超可爱的插画…」等人设口吻/时间感知）；发现「间隔 30s < 生成耗时」竞态重复 → 加生成锁+投递前去重修复，修复后新消息不再重复
+  ③NL 提醒 once：「1分钟后提醒我喝水」→ sys 胶囊「已设置定时提醒：今天 03:43｜提醒我喝水」→ AI 语音回复确认 → 03:44 主动消息「凡凡，喝水时间到啦！记得多喝点水哦～」（贴合 note+人设）✓
+  ④NL 提醒 daily：「每天晚上10点给我发消息说晚安」→「已设置定时提醒：每天 22:00｜说晚安」→ AI「好的凡凡，我会每天晚上10点给你发晚安消息的~」✓
+  ⑤设置页任务清单：显示「每天 22:00 说晚安」行（每天重复+删除钮）；once 任务触发后自动消失 ✓
+  ⑥事件编辑器：添加「下午茶时间」16:30（每天）→ 清单行+启用开关+摘要「事件」+全部关闭 ✓
+  ⑦记忆写入：mem-frag/mem-ltm 确认主动消息与提醒承诺入记忆（「答应陈凡1分钟后提醒喝水」）✓
+  ⑧消息实时上屏：聊天页打开时主动消息经 subscribeAiDelivery 合并实时显示 ✓
+- 测试数据全清：2 联系人/46 键（配置/记录/提醒/索引/聊天/记忆/会话/map 条目）+2 残留补清；复查 0 联系人 0 残留键
+- bunx tsc --noEmit 0 错误；bun run lint 全绿（仅 qq/wechat>500KB BABEL 提示）；dev.log 无运行时错误
+
+Stage Summary:
+- 交付：AI 主动发消息完整系统——①定时触发（11 档+自定义秒/分/时，随时改关）②事件触发（名称+可选 HH:mm+星期几，每角色多事件）③自主触发（AI 按人设/记忆/上下文/时间自己决定发不发/何时发/发什么，约 5min 决策节奏+深夜静默）④NL 定时提醒（几分钟后/每天几点/每隔多久，正则闸+LLM 解析+sys 胶囊+AI 自然确认）⑤生成基于人设+记忆+上下文+时间感知，非模板/不重复/可延续话题⑥每角色独立设置随时关闭⑦主动消息入聊天记录+灵动岛通知+未读角标+写记忆；多账号作用域隔离；删联系人全痕迹清扫
+- 关键设计：三端消息形状/存储键/投递管线差异全部在 deliverProactiveMsg 内适配；生成锁+去重解决短间隔竞态；时间感知按会话开关注入（自主模式强制注入）；提醒 once 过期 90s 自动清理防陈旧补发
+- 范围外说明：引擎为客户端运行（页面关闭时不触发，与现有 ProactiveCallWatcher/MomentsScheduler 同架构）；群聊不在范围（1:1 专属）
+- 改动文件：src/lib/ios/proactive-msg.ts（新）、src/components/ios/ProactiveMsgWatcher.tsx（新）、src/components/apps/proactive-msg-page.tsx（新）、src/components/ios/PhoneShell.tsx、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx、src/lib/ios/contacts-store.ts

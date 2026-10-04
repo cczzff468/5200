@@ -38,6 +38,9 @@ const QuitFlowScheduler = dynamic(() => import('./QuitFlowScheduler'), { ssr: fa
 // AI 主动来电全局调度（根据人设/聊天/时间自主决策并真正拨打电话）：同样懒加载，挂载即后台运行
 const ProactiveCallWatcher = dynamic(() => import('./ProactiveCallWatcher'), { ssr: false });
 
+// AI 主动发消息全局调度（定时/事件/自主/自然语言提醒四类触发，App 不打开也生效）：同样懒加载，挂载即后台运行
+const ProactiveMsgWatcher = dynamic(() => import('./ProactiveMsgWatcher'), { ssr: false });
+
 // 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
 const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
 
@@ -301,6 +304,9 @@ export default function PhoneShell() {
 
         {/* AI 主动来电全局调度：根据人设/聊天内容/时间自主决策并真正拨打（接听/拒接/超时走全局来电层） */}
         <ProactiveCallWatcher />
+
+        {/* AI 主动发消息全局调度：定时/事件/自主/自然语言提醒四类触发，到点 AI 主动给用户发消息（App 不打开也生效） */}
+        <ProactiveMsgWatcher />
 
         {/* 电源键（桌面端机身右侧：熄屏 ↔ 亮屏锁定） */}
         <button

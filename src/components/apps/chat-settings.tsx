@@ -26,7 +26,7 @@
  *   （形象锁定/锁脸页已迁移到「设置 › 图像生成」页尾的 FaceLockSection，数据层 @/lib/imggen 不变）
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search } from 'lucide-react';
+import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search, Zap } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import type { ContactRecord } from '@/lib/contacts';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
@@ -172,6 +172,10 @@ export function ChatSettingsPage({
   voiceSummary,
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice,
+  /** 打开「主动发消息」设置页；不传 = 隐藏该入口行 */
+  onOpenProactive,
+  /** 主动发消息入口行摘要（宿主用 proactiveCfgSummary 计算） */
+  proactiveSummary,
   onDeleteContact,
 }: {
   variant: ChatSettingsVariant;
@@ -238,6 +242,10 @@ export function ChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行 */
   onOpenVoice?: () => void;
+  /** 打开「主动发消息」设置页（定时/事件/自主/提醒四类触发）；不传 = 隐藏该入口行 */
+  onOpenProactive?: () => void;
+  /** 主动发消息入口行摘要（宿主用 proactiveCfgSummary 计算；空 = 未开启） */
+  proactiveSummary?: string;
   /** 删除联系人（删除好友关系：列表移除/聊天关闭；记录/记忆/朋友圈/通话保留但不可见，加回恢复）。不传 = 隐藏入口 */
   onDeleteContact?: () => void;
 }) {
@@ -476,6 +484,24 @@ export function ChatSettingsPage({
             />
           </div>
         </div>
+
+        {/* 主动发消息：定时/事件/自主/自然语言提醒四类触发（独立二级页，每角色独立设置） */}
+        {onOpenProactive && (
+          <div className={`${cardCls} mt-3 overflow-hidden`}>
+            <button type="button" data-testid={`${testPrefix}-settings-proactive`} onClick={onOpenProactive} className={rowCls}>
+              <span className="flex items-center gap-2.5">
+                <Zap className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
+                主动发消息
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span data-testid={`${testPrefix}-proactive-summary`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+                  {proactiveSummary || '未开启'}
+                </span>
+                <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+              </span>
+            </button>
+          </div>
+        )}
 
         {/* 表情包：AI 发表情包与 emoji 的总开关（关闭后不发表情包也不发 emoji，按会话独立，发送时现场读取） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1415,6 +1441,10 @@ export function SmsChatSettingsPage({
   /** 他的声音摘要（角色音色展示名；空 = 默认）；不传 onOpenVoice = 隐藏该入口 */
   voiceSummary,
   onOpenVoice,
+  /** 打开「主动发消息」设置页；不传 = 隐藏该入口行 */
+  onOpenProactive,
+  /** 主动发消息入口行摘要（宿主用 proactiveCfgSummary 计算） */
+  proactiveSummary,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1460,6 +1490,10 @@ export function SmsChatSettingsPage({
   voiceSummary?: string;
   /** 打开「他的声音」页；不传 = 隐藏该入口行（AI 助手会话无角色音色） */
   onOpenVoice?: () => void;
+  /** 打开「主动发消息」设置页（定时/事件/自主/提醒四类触发）；不传 = 隐藏该入口行 */
+  onOpenProactive?: () => void;
+  /** 主动发消息入口行摘要（宿主用 proactiveCfgSummary 计算；空 = 未开启） */
+  proactiveSummary?: string;
 }) {
   const t = translateTokens('sms');
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
@@ -1594,6 +1628,24 @@ export function SmsChatSettingsPage({
             />
           </div>
         </div>
+
+        {/* 主动发消息：定时/事件/自主/自然语言提醒四类触发（独立二级页，每角色独立设置） */}
+        {onOpenProactive && (
+          <div className={`${t.cardCls} mt-3`}>
+            <button type="button" data-testid="sms-settings-proactive" onClick={onOpenProactive} className={t.rowCls}>
+              <span className="flex items-center gap-2.5">
+                <Zap className="h-[18px] w-[18px] text-black/60 dark:text-white/60" strokeWidth={1.9} aria-hidden="true" />
+                主动发消息
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span data-testid="sms-proactive-summary" className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
+                  {proactiveSummary || '未开启'}
+                </span>
+                <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
+              </span>
+            </button>
+          </div>
+        )}
 
         {/* 动作描写：AI 回复中动作/情景描写的显示开关（与微信/QQ 同套逻辑，按会话独立） */}
         <div className={`${t.cardCls} mt-3`}>
