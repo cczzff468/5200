@@ -271,3 +271,15 @@
 .animate-call-caption {
   animation: call-caption-in 0.42s cubic-bezier(0.26, 0.68, 0.44, 0.94) both;
 }
+
+/* 一起听音乐界面底部快聊输入条滑入 */
+@keyframes quick-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

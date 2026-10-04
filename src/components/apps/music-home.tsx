@@ -106,7 +106,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const today = new Date();
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain pb-4">
+    <div className="h-full overflow-y-auto overscroll-contain pb-[126px]">
       {/* 顶栏：设置 + 标题 + 右上角头像（游客/登录都可点） */}
       <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
         <button

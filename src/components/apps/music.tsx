@@ -67,12 +67,23 @@ export default function MusicApp() {
       ) : (
         <>
           {nav.view === 'tabs' && (
-            <div className="flex h-full flex-col">
+            <div className="relative flex h-full flex-col">
               <div className="min-h-0 flex-1 overflow-hidden">
                 {nav.tab === 'home' && <MusicHome onSettings={() => setShowSettings(true)} />}
                 {nav.tab === 'search' && <MusicSearch />}
                 {nav.tab === 'mine' && <MusicMine onSettings={() => setShowSettings(true)} />}
               </div>
+              {/* 底部悬浮层：迷你播放条 + TabBar 透明浮在页面上，页面背景一直铺到屏幕底（消除长方形色带） */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
+                <MiniBar />
+                <MusicTabBar />
+                <div className="h-[10px] shrink-0" />
+              </div>
+            </div>
+          )}
+          {/* 底部悬浮层：歌单页也显示（迷你条+TabBar 透明浮在页面上，页面背景铺到屏幕底） */}
+          {nav.view === 'playlist' && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
               <MiniBar />
               <MusicTabBar />
               <div className="h-[10px] shrink-0" />

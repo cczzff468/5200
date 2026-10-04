@@ -325,7 +325,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   };
 
   return (
-    <div className="relative flex h-full flex-col" data-testid="music-mine">
+    <div className="relative flex h-full flex-col bg-[#F8F8F8] dark:bg-zinc-900" data-testid="music-mine">
       {/* 整页滚动容器：头部随内容一起滚（不再固定） */}
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="music-mine-scroll">
       {/* ================= 深色头部 ================= */}
@@ -533,7 +533,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
 
             {/* 歌单列表 */}
             {subTab === 'recent' ? (
-              <div className="pb-28" data-testid="music-mine-list">
+              <div className="pb-[128px]" data-testid="music-mine-list">
                 {loginUid ? (
                   playlists === null ? (
                     <LoadingBlock />
@@ -636,7 +636,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
                 )}
               </div>
             ) : (
-              <div className="pb-28" data-testid="music-mine-list-created">
+              <div className="pb-[128px]" data-testid="music-mine-list-created">
                 <button
                   type="button"
                   onClick={() => setCreateOpen(true)}
@@ -695,7 +695,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         )}
 
         {mainTab === 'podcast' && (
-          <div className="flex flex-col items-center gap-2 pb-28 pt-14 text-zinc-400">
+          <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
             <Podcast className="h-9 w-9 opacity-40" />
             <p className="text-[13px]">暂无播客内容</p>
             <p className="text-[11px] text-zinc-300 dark:text-zinc-600">订阅的播客会出现在这里</p>
@@ -703,7 +703,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         )}
 
         {mainTab === 'notes' && (
-          <div className="flex flex-col items-center gap-2 pb-28 pt-14 text-zinc-400">
+          <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
             <NotebookPen className="h-9 w-9 opacity-40" />
             <p className="text-[13px]">还没有笔记</p>
             <p className="text-[11px] text-zinc-300 dark:text-zinc-600">听歌感悟可以记在这里</p>

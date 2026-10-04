@@ -189,7 +189,7 @@ export function MusicSearch() {
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-[126px]">
         {/* 热搜 */}
         {!results && !loading && (
           <div className="px-4 pt-3">

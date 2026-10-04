@@ -14,6 +14,7 @@ import {
   AudioLines,
   ChevronDown,
   ClipboardList,
+  Clock3,
   Disc2,
   DiscAlbum,
   Disc3,
@@ -38,6 +39,7 @@ import {
   Radio,
   Repeat,
   Repeat1,
+  SendHorizonal,
   Shuffle,
   SlidersHorizontal,
   ShoppingCart,
@@ -54,6 +56,7 @@ import { useMusic, getGuestAvatar, type RepeatMode, type TogetherSessionLike, ty
 import {
   fmtTogetherDur,
   listTogetherCandidates,
+  sendTogetherText,
   startTogether,
   stopTogether,
   togetherRecommend,
@@ -89,9 +92,11 @@ export function MusicPlayer() {
   const [showMore, setShowMore] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
-  // 一起听设置菜单（重新匹配/查看记录/匹配偏好/举报/退出一起听）+ 打开锚点（顶栏⋮ / 底部三点）
+  // 一起听设置菜单（重新匹配/查看记录/匹配偏好/举报/退出一起听）——顶栏⋮入口
   const [showTgMenu, setShowTgMenu] = useState(false);
-  const [tgMenuAnchor, setTgMenuAnchor] = useState<'top' | 'bottom'>('top');
+  // 音乐界面底部快聊输入条（点信息图标弹出，可直接打字发送，不切聊天视图）
+  const [showQuickInput, setShowQuickInput] = useState(false);
+  const [quickText, setQuickText] = useState('');
   const [showTgRecord, setShowTgRecord] = useState(false);
   // 重新匹配入口打开时，邀请面板标题切换
   const [inviteTitle, setInviteTitle] = useState('邀请一起听');
@@ -155,9 +160,18 @@ export function MusicPlayer() {
   const liked = likedIds.has(current.id);
   const chatMode = !!(together && showChat);
 
-  // 一起听底部胶囊（音乐/聊天切换，方形圆角图标）+ 右侧三个点设置；自己一个人时显示「邀请好友一起听」
+  // 快聊发送（不切视图，直接发 → 气泡显示在头像下 5 秒）
+  const sendQuick = () => {
+    const t = quickText.trim();
+    if (!t || !together) return;
+    sendTogetherText(t);
+    setQuickText('');
+  };
+
+  // 一起听底部：音乐/聊天方形圆角胶囊居中；三个点贴最右，点击打开歌曲操作面板；自己一个人时显示「邀请好友一起听」
   const modeCapsule = together ? (
-    <div className="flex shrink-0 items-center justify-center gap-2.5 pb-4 pt-1">
+    <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
+      <span className="h-8 w-8 shrink-0" aria-hidden />
       <div className="flex items-center gap-1 rounded-[14px] bg-white/10 p-1">
         <button
           type="button"
@@ -184,15 +198,12 @@ export function MusicPlayer() {
       </div>
       <button
         type="button"
-        onClick={() => {
-          setTgMenuAnchor('bottom');
-          setShowTgMenu(true);
-        }}
+        onClick={() => setShowMore(true)}
         data-testid="music-tg-dots"
-        aria-label="一起听设置"
-        className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white/10 text-white/80 active:scale-95"
+        aria-label="歌曲操作"
+        className="flex h-8 w-8 shrink-0 items-center justify-center text-white/85 active:scale-95"
       >
-        <MoreVertical className="h-4 w-4" />
+        <MoreVertical className="h-[19px] w-[19px]" />
       </button>
     </div>
   ) : (
@@ -221,9 +232,8 @@ export function MusicPlayer() {
     })();
   };
 
-  // 设置菜单动作（顶栏⋮ = 顶部锚点；底部三个点 = 底部锚点）
+  // 设置菜单动作（顶栏⋮）
   const openTgMenu = () => {
-    setTgMenuAnchor('top');
     setShowTgMenu(true);
   };
   const menuRematch = () => {
@@ -268,10 +278,23 @@ export function MusicPlayer() {
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
         {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
+        {/* 更多面板（聊天态也可用） */}
+        {showMore && (
+          <MoreSheet
+            song={current}
+            liked={liked}
+            onClose={() => setShowMore(false)}
+            onToast={(m) => setMoreToast(m)}
+            onInvite={() => {
+              setShowMore(false);
+              setShowInvite(true);
+            }}
+          />
+        )}
+
         {/* 一起听设置菜单（聊天态） */}
         {showTgMenu && (
           <TogetherMenu
-            anchor={tgMenuAnchor}
             onClose={() => setShowTgMenu(false)}
             onRematch={menuRematch}
             onRecords={menuRecords}
@@ -345,14 +368,16 @@ export function MusicPlayer() {
               {songArtistText(current)}
             </p>
           </div>
-          {/* 信息图标：一起听时可在音乐界面打字聊天（自己听不显示） */}
+          {/* 信息图标：一起听时点击底部弹出输入框，可直接打字发消息（气泡显示在头像下）；自己听不显示 */}
           {together && (
             <button
               type="button"
-              onClick={() => setChatOverride(true)}
+              onClick={() => setShowQuickInput((v) => !v)}
               data-testid="music-player-chat"
               aria-label="发消息"
-              className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full bg-white/12 active:scale-95"
+              className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full active:scale-95 ${
+                showQuickInput ? 'bg-white/30' : 'bg-white/12'
+              }`}
             >
               <MessagesSquare className="h-[21px] w-[21px] text-white/90" />
             </button>
@@ -458,8 +483,18 @@ export function MusicPlayer() {
           </button>
         </div>
 
-        {/* 一起听底部胶囊（音乐/聊天+设置）或「邀请好友一起听」 */}
+        {/* 一起听底部胶囊（音乐/聊天+最右三个点开歌曲面板）或「邀请好友一起听」 */}
         {modeCapsule}
+
+        {/* 音乐界面快聊输入条（一起听时点信息图标弹出；发送后气泡显示在头像下 5 秒） */}
+        {together && showQuickInput && !showLyric && (
+          <QuickInputBar
+            value={quickText}
+            onChange={setQuickText}
+            onSend={sendQuick}
+            onClose={() => setShowQuickInput(false)}
+          />
+        )}
       </div>
 
       {/* 更多面板（仿网易云歌曲操作面板） */}
@@ -482,10 +517,9 @@ export function MusicPlayer() {
       {/* 邀请/重新匹配一起听 */}
       {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
-      {/* 一起听设置菜单（顶栏⋮/底部三点共用，锚点跟随入口） */}
+      {/* 一起听设置菜单（顶栏⋮） */}
       {showTgMenu && together && (
         <TogetherMenu
-          anchor={tgMenuAnchor}
           onClose={() => setShowTgMenu(false)}
           onRematch={menuRematch}
           onRecords={menuRecords}
@@ -570,7 +604,7 @@ function VinylView({
     <div className="relative flex h-full w-full flex-col items-center justify-center">
       {/* 唱针 */}
       <div
-        className="absolute left-1/2 top-[-6px] z-20 h-[120px] w-[120px] origin-[14px_14px] transition-transform duration-500"
+        className="absolute left-1/2 top-[-10px] z-20 h-[120px] w-[120px] origin-[14px_14px] transition-transform duration-500"
         style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-28deg)' }}
       >
         <div className="absolute left-[7px] top-[7px] h-3.5 w-3.5 rounded-full bg-zinc-200 shadow" />
@@ -578,29 +612,47 @@ function VinylView({
         <div className="absolute left-[38px] top-[82px] h-4 w-2.5 rotate-[26deg] rounded-[2px] bg-zinc-300 shadow" />
       </div>
 
-      {/* 黑胶 */}
+      {/* 黑胶（细密纹路 + 立体边缘，仿网易云） */}
       <button
         type="button"
         onClick={onSwitch}
         data-testid="music-vinyl"
         aria-label="切换到歌词"
-        className="relative mt-6 aspect-square w-full max-w-[290px]"
+        className="relative mt-4 aspect-square w-full max-w-[300px]"
       >
+        {/* 外缘深黑圈（不随旋转，提供立体边缘） */}
+        <div className="absolute inset-0 rounded-full bg-[#050505] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)]" />
+        {/* 胶片主体（旋转）：细密同心纹路 */}
         <div
-          className="absolute inset-0 animate-[spin_20s_linear_infinite] rounded-full bg-[radial-gradient(circle,#2a2a2a_28%,#181818_29%,#232323_42%,#151515_43%,#1f1f1f_58%,#121212_59%,#1c1c1c_72%,#141414_73%,#191919_100%)] shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
-          style={playing ? undefined : { animationPlayState: 'paused' }}
+          className="absolute inset-[2.5%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
+          style={
+            playing
+              ? {
+                  background:
+                    'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
+                  boxShadow:
+                    'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
+                }
+              : {
+                  background:
+                    'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
+                  boxShadow:
+                    'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
+                  animationPlayState: 'paused',
+                }
+          }
         >
-          {/* 高光 */}
-          <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,rgba(255,255,255,0.07),transparent_18%,rgba(255,255,255,0.05)_30%,transparent_52%,rgba(255,255,255,0.06)_75%,transparent_92%)]" />
-          {/* 封面 */}
-          <div className="absolute inset-[27%] overflow-hidden rounded-full ring-[3px] ring-black/60">
+          {/* 斜向高光 */}
+          <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_210deg,rgba(255,255,255,0.09),transparent_16%,rgba(255,255,255,0.05)_32%,transparent_55%,rgba(255,255,255,0.07)_74%,transparent_93%)]" />
+          {/* 封面（占比更大） */}
+          <div className="absolute inset-[23.5%] overflow-hidden rounded-full ring-[3px] ring-black/70">
             <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
           </div>
           {/* 中心孔 */}
-          <div className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0a0a0a] ring-1 ring-white/20" />
+          <div className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0a0a0a] ring-1 ring-white/25" />
         </div>
       </button>
-      <p className="mt-4 text-[11px] text-white/40">点按封面查看歌词</p>
+      <p className="mt-3 text-[11px] text-white/40">点按封面查看歌词</p>
     </div>
   );
 }
@@ -748,26 +800,21 @@ function fakeHotCount(id: number): number {
 
 // ---------------- 一起听头部 ----------------
 
+/** 气泡展示时长（毫秒）：超过后自动隐藏 */
+const BUBBLE_TTL = 5000;
+
 function TogetherHead({
   session,
   msgs,
   showBubbles = false,
 }: {
   session: TogetherSessionLike;
-  /** 一起听消息（音乐视图下取双方最新一条，显示为头像下气泡） */
+  /** 一起听消息（音乐视图下取双方最新一条，显示为头像下气泡，5 秒后消失） */
   msgs?: TogetherMsgLike[];
   showBubbles?: boolean;
 }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
-  const [, force] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => force((n) => n + 1), 30_000);
-    return () => clearInterval(t);
-  }, []);
-  const myAvatar = loginUid ? loginAvatar : getGuestAvatar();
-  // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
-  const durText = fmtTogetherDur(Date.now() - session.since);
   // 双方最新一条消息（推荐卡取文字）
   let lastMine: TogetherMsgLike | undefined;
   let lastPeer: TogetherMsgLike | undefined;
@@ -779,32 +826,129 @@ function TogetherHead({
       if (lastMine && lastPeer) break;
     }
   }
+  // 气泡 5 秒自动消失：到期后触发一次重渲染抹掉
+  const lastAt = Math.max(lastMine?.time ?? 0, lastPeer?.time ?? 0);
+  const [, tickNow] = useState(0);
+  useEffect(() => {
+    if (!showBubbles || !lastAt) return;
+    const remain = BUBBLE_TTL - (Date.now() - lastAt);
+    if (remain <= 0) return;
+    const t = setTimeout(() => tickNow((n) => n + 1), remain + 60);
+    return () => clearTimeout(t);
+  }, [lastAt, showBubbles]);
+  const nowMs = Date.now();
+  const visMine = !!lastMine && nowMs - lastMine.time < BUBBLE_TTL;
+  const visPeer = !!lastPeer && nowMs - lastPeer.time < BUBBLE_TTL;
+  // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
+  const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      {/* 双头像（轻微重叠、无边框） */}
-      <div className="flex items-center" data-testid="music-tg-avatars">
-        <CoverImg src={session.avatar} className="h-14 w-14" rounded="rounded-full" alt={session.name} />
-        <CoverImg src={myAvatar} className="relative -ml-2.5 h-14 w-14" rounded="rounded-full" alt="我" />
+      {/* 双头像 + 耳机线 + 计时徽章 */}
+      <div className="relative" data-testid="music-tg-avatars">
+        {/* 共享耳机线：从两头像中间交叠处向下向两侧弯出（藏在头像后，仿网易云） */}
+        <svg
+          viewBox="0 0 280 64"
+          className="pointer-events-none absolute left-1/2 top-[22px] z-0 h-[64px] w-[280px] -translate-x-1/2"
+          fill="none"
+          aria-hidden
+        >
+          <path
+            d="M140 14 C 110 17, 62 22, 40 62"
+            stroke="rgba(255,255,255,0.36)"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          <path
+            d="M140 14 C 170 17, 218 22, 240 62"
+            stroke="rgba(255,255,255,0.36)"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className="relative z-10 flex items-center">
+          <CoverImg src={session.avatar} className="h-14 w-14" rounded="rounded-full" alt={session.name} />
+          <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-14 w-14" rounded="rounded-full" alt="我" />
+        </div>
+        {/* 红色计时徽章（两头像交叠处下方，仿网易云一起听） */}
+        <span
+          className="absolute bottom-[-5px] left-[calc(50%-24px)] z-20 flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[#EC4141] ring-[2.5px] ring-[#101010]"
+          data-testid="music-tg-timer-badge"
+        >
+          <Clock3 className="h-[13px] w-[13px] text-white" />
+        </span>
       </div>
-      {/* 耳机线（装饰，仿网易云一起听） */}
-      <svg viewBox="0 0 220 22" className="mt-0.5 h-[22px] w-[220px]" fill="none" aria-hidden>
-        <path d="M84 1 C72 10, 46 12, 30 22" stroke="rgba(255,255,255,0.32)" strokeWidth="1.5" strokeLinecap="round" />
-        <path d="M136 1 C148 10, 174 12, 190 22" stroke="rgba(255,255,255,0.32)" strokeWidth="1.5" strokeLinecap="round" />
-      </svg>
-      {/* 头像下气泡（音乐视图）：对方左 / 我右，尾巴朝上指向各自头像 */}
-      {showBubbles && (lastPeer || lastMine) && (
+      {/* 头像下气泡（音乐视图）：对方左 / 我右，尾巴朝上指向各自头像，5 秒后消失 */}
+      {showBubbles && (visPeer || visMine) && (
         <div className="mt-0.5 flex w-full items-start gap-4 px-5">
           <div className="flex min-w-0 flex-1 justify-start">
-            {lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
+            {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
           </div>
           <div className="flex min-w-0 flex-1 justify-end">
-            {lastMine && <HeadBubble text={lastMine.text} mine />}
+            {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
           </div>
         </div>
       )}
       <p className="mt-1 text-[11px] text-white/70">
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
+    </div>
+  );
+}
+
+/** 我的头像（登录 > 游客自定义/全局） */
+function myAvatarOf(loginUid: number | null, loginAvatar: string): string {
+  return loginUid ? loginAvatar : getGuestAvatar();
+}
+
+// ---------------- 音乐界面底部快聊输入条（点信息图标弹出） ----------------
+
+function QuickInputBar({
+  value,
+  onChange,
+  onSend,
+  onClose,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="absolute inset-x-0 bottom-0 z-[40] flex items-center gap-2 bg-black/55 px-4 pb-7 pt-3 backdrop-blur-xl"
+      data-testid="music-quick-input"
+      style={{ animation: 'quick-in-up 0.22s ease-out' }}
+    >
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onSend();
+        }}
+        placeholder="和 TA 聊聊这首歌…"
+        data-testid="music-quick-input-field"
+        className="h-9 min-w-0 flex-1 rounded-full bg-white/12 px-4 text-[13px] text-white outline-none placeholder:text-white/35"
+      />
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={!value.trim()}
+        data-testid="music-quick-input-send"
+        aria-label="发送"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EC4141] text-white disabled:opacity-40 active:scale-95"
+      >
+        <SendHorizonal className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="收起输入框"
+        data-testid="music-quick-input-close"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/70 active:scale-95"
+      >
+        <ChevronDown className="h-4 w-4" />
+      </button>
     </div>
   );
 }
@@ -827,7 +971,6 @@ function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
 // ---------------- 一起听设置菜单（仿网易云：顶栏⋮ / 底部三点两处入口） ----------------
 
 function TogetherMenu({
-  anchor = 'top',
   onClose,
   onRematch,
   onRecords,
@@ -835,8 +978,6 @@ function TogetherMenu({
   onReport,
   onExit,
 }: {
-  /** 弹出锚点：top=顶栏右上⋮（箭头朝上） bottom=底部三点（箭头朝下） */
-  anchor?: 'top' | 'bottom';
   onClose: () => void;
   onRematch: () => void;
   onRecords: () => void;
@@ -854,13 +995,9 @@ function TogetherMenu({
   return (
     <div className="absolute inset-0 z-[62]" data-testid="music-tg-menu">
       <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className={anchor === 'top' ? 'absolute right-4 top-[102px] w-[188px]' : 'absolute bottom-[96px] right-4 w-[188px]'}>
+      <div className="absolute right-4 top-[102px] w-[188px]">
         {/* 指向入口按钮的小箭头 */}
-        <div
-          className={`absolute right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] ${
-            anchor === 'top' ? '-top-[6px]' : '-bottom-[6px]'
-          }`}
-        />
+        <div className="absolute right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] -top-[6px]" />
         <div className="relative overflow-hidden rounded-[16px] bg-[#2b2b2d]/95 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
           {rows.map((r, i) => (
             <button

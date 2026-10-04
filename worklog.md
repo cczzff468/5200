@@ -14862,3 +14862,25 @@ Stage Summary:
 - 关键实现：TogetherMenu anchor 参数化复用（顶栏/底部两入口）；TogetherHead msgs+showBubbles 让气泡只在音乐视图出现；useCommentTotal 用 render 期派生重置规避 set-state-in-effect lint；fakeHotCount 按歌曲 id 稳定（不闪变）
 - 范围限定遵守：仅动音乐 App 3 个文件（music-player/music-shared/music.tsx 各一小块），16 项受保护功能未触碰
 - 改动文件：src/components/apps/music-player.tsx、music-shared.tsx、music.tsx
+
+---
+Task ID: 62
+Agent: Z.ai Code（主会话）
+Task: 用户第七轮反馈七项——一起听音乐界面气泡5秒消失、底部三个点移到最右且点击打开歌曲操作面板（按截图）、头像白色连接线整理+红色计时徽章（按截图）、唱片美化（按截图）、信息图标点击底部弹出输入框可直接发消息、迷你播放器「长方形包裹」根因修复、歌单页补迷你条
+
+Work Log:
+- 迷你播放器「长方形包裹」根因确诊并修复：此前 MiniBar+TabBar+垫条排在内容区外面（flex 兄弟节点），底部区域露出的是 IOSScreen 的 bg-background 纯白，而内容页是 #F8F8F8 浅灰（IOSScreen 双背景类 bg-background 与 bg-[#F8F8F8] 并存时白色胜出）——白色胶囊后面横贯一条与内容色不同的色带=用户感知的「长方形」。修复：music.tsx 改为悬浮布局——底部 overlay（pointer-events-none absolute inset-x-0 bottom-0 z-30）内放 MiniBar/MusicTabBar/垫条，页面背景自然铺到屏幕底、无任何色带边界；MiniBar/MusicTabBar 根节点加 pointer-events-auto；内容从胶囊与 tab 文字后面滚过（网易云 Android 行为）；四个内容页滚动 padding 补足（home pb-4→pb-[126px]、search pb-4→pb-[126px]、mine 三处 pb-28→pb-[128px]+根节点补 bg-[#F8F8F8]、playlist pb-28→pb-[128px]）；歌单页（nav.view==='playlist'，用户截图4场景）此前完全没有迷你条，新增同一悬浮层（setTab 会把 view 切回 tabs，点 tab 安全）
+- 气泡 5 秒消失（music-player TogetherHead）：BUBBLE_TTL=5000，取双方最新消息 time，useEffect 里 setTimeout(remain+60) 到期触发一次重渲染抹掉；渲染期 nowMs 判定 visMine/visPeer；发新消息（快聊输入条/聊天 tab）立即重新出现并重新计时
+- 底部三个点重做（music-player modeCapsule）：justify-between 布局——左侧等宽占位、双 tab 胶囊绝对居中、三个点贴最右（去底色纯图标）；点击从「设置菜单」改为打开歌曲操作面板 MoreSheet（用户截图1：为TA心动/收藏/下载VIP/分享/正在一起听/评论(N)/专辑/歌手+关注/百科/相似漫游/单曲购买/音质VIP/音效/播放器样式），一起听音乐态与聊天态都可打开（聊天态早退分支补渲染 MoreSheet）；TogetherMenu 设置菜单保留右上角⋮唯一入口（anchor 参数与底部锚点逻辑删除，组件简化为固定顶部弹出）
+- 头像白色连接线整理+红色计时徽章（music-player TogetherHead，按截图2）：耳机线 SVG 重画——viewBox 0 0 280 64，两条曲线从两头像中间交叠处（M140 14）沿头像背后向两侧下弯（C 110 17,62 22,40 62 / 镜像），SVG absolute top-[22px] z-0 藏在头像（z-10）后面，起点被遮、只露两侧下弯弧线；新增红色圆形计时徽章（26px bg-[#EC4141] ring-[2.5px] ring-[#101010] + Clock3 图标）挂两头像交叠处下方（left-[calc(50%-24px)] bottom-[-5px] z-20），testid=music-tg-timer-badge
+- 唱片美化（music-player VinylView，按截图3）：整体加大 290→300px；新增不旋转外缘深黑圈（bg-[#050505] + 双层投影）提供立体边缘；胶片主体改细密同心纹路 repeating-radial-gradient（4.5px 周期四段明暗）+ radial 大环带 + conic 斜向高光 + 三层 inset 阴影（顶部内高光/底部内阴影/整体内晕）；封面占比 46%→53%（inset-[27%]→inset-[23.5%]）；中心孔 ring 白环提亮
+- 信息图标→底部快聊输入条（music-player，按本轮要求改交互）：点击圆形信息图标不再切换聊天视图，而是底部弹出 QuickInputBar（absolute inset-x-0 bottom-0 z-[40]，bg-black/55 backdrop-blur-xl，quick-in-up 滑入动画写进 globals.css）——圆角输入框（autoFocus「和 TA 聊聊这首歌…」）+ 红色发送钮 + 收起钮；Enter/发送调 sendTogetherText（AI 照常回复），发完不清空焦点可连续聊；再次点信息图标或点收起关闭；发送后气泡立即显示在头像下并 5 秒消失；歌词视图下不弹（!showLyric）；信息图标激活态高亮 bg-white/30
+- E2E（agent-browser 420x900）全过：解锁→音乐→游客→飙升榜播放→黑胶唱片（细纹路+外缘+大封面）✓；邀请「小团」→默认音乐界面（双头像重叠+红计时徽章+耳机线两侧弯出+「相距685公里·一起听了1分钟」）✓；信息图标→底部输入条滑入→发「这首歌的前奏好戳我」→气泡立即出现在头像下（我右/TA左带尾巴）+AI 回复气泡同现 ✓；等6秒→气泡自动消失 ✓；收起输入条→三点（最右）→歌曲操作面板 1:1 对齐截图1（评论1274真实数/专辑/歌手关注/音质VIP胶囊）✓；右上角⋮设置菜单（重新匹配/查看记录/匹配偏好/举报/退出）✓；聊天 tab 消息流完整 ✓；退出一起听→信息图标消失+恢复「邀请好友一起听」+右上角恢复⋯ ✓；迷你条悬浮：首页/我的页/歌单页（截图4场景补齐）均无色带长方形、内容从胶囊后滚过 ✓；浅色/深色模式 ✓；点歌词空白回唱片 ✓；console/page errors 零、dev.log 全 200
+- 测试数据清理：char-e2e-tuan 联系人 + 8 个 music-*/mem-frag kv 键全清（隔离档案，用户数据不受影响）
+- 途中 dev server 意外退出一次（与改动无关），重启后复验通过；bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：迷你播放器「长方形包裹感」根因消除（底部悬浮布局：胶囊+tab 透明浮在页面背景上，无任何色带；歌单页补齐迷你条）；一起听音乐界面头像下气泡 5 秒自动消失；底部三个点移到最右、点击打开网易云式歌曲操作面板（截图1 1:1，设置菜单保留右上角⋮）；头像连接线重画（中间交叠处向两侧下弯、藏在头像后）+红色圆形计时徽章（截图2）；黑胶唱片美化（细密纹路/立体外缘/封面占比 53%/300px）；信息图标点击底部弹出快聊输入条（不切视图直接发，气泡头像下 5 秒）
+- 关键实现：pointer-events-none 悬浮层 + 页面根背景铺底是消除色带的唯一正解（渐变/透明块都会引入新边界）；TogetherMenu anchor 简化；BUBBLE_TTL 定时器只在消息更新时挂载；QuickInputBar 动画 quick-in-up 入 globals.css
+- 范围限定遵守：仅动音乐 App 4 个文件（music.tsx/music-player.tsx/music-shared.tsx/music-mine.tsx padding+bg）+ globals.css 追加动画 + home/search/playlist padding，16 项受保护功能未触碰
+- 改动文件：src/components/apps/music.tsx、music-player.tsx、music-shared.tsx、music-mine.tsx、music-home.tsx、music-search.tsx、music-playlist.tsx、src/app/globals.css

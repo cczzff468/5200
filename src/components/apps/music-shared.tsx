@@ -492,7 +492,7 @@ export function MusicTabBar() {
   const setTab = useMusic((s) => s.setTab);
   return (
     <nav
-      className="flex h-[46px] shrink-0 items-stretch"
+      className="pointer-events-auto flex h-[46px] shrink-0 items-stretch"
       data-testid="music-tabbar"
     >
       {TABS.map((t) => {
@@ -531,7 +531,7 @@ export function MiniBar() {
   if (!current) return null;
   return (
     <div
-      className="mx-3 mb-2 flex h-[52px] shrink-0 items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_4px_18px_rgba(0,0,0,0.13)] dark:bg-zinc-800 dark:shadow-[0_4px_18px_rgba(0,0,0,0.55)]"
+      className="pointer-events-auto mx-3 mb-2 flex h-[52px] shrink-0 items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_4px_18px_rgba(0,0,0,0.13)] dark:bg-zinc-800 dark:shadow-[0_4px_18px_rgba(0,0,0,0.55)]"
       data-testid="music-minibar"
     >
       <button
