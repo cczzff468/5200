@@ -15161,3 +15161,33 @@ Stage Summary:
 - 关键实现：关注状态放 zustand 内存缓存而非持久化（服务端为唯一事实源，面板每次打开对齐一次）；mock 验证法=network route 拦截 artist/sublist 与 artist/sub?*（glob 区分子路径）实现无登录账号的已关注态 E2E 闭环
 - 范围限定遵守：仅动音乐 App 3 文件（MusicIsland/music-player/music-store）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；一起听聊天视图 FollowPill 因全新 profile 无角色联系人未走浏览器验证（与 MoreSheet 同一 toggleArtistFollow+store 选择器，代码同源）
 - 改动文件：src/components/ios/MusicIsland.tsx、src/components/apps/music-player.tsx、src/lib/ios/music-store.ts
+
+---
+Task ID: 79
+Agent: Z.ai Code（主会话）
+Task: 第二十轮——规则 P1/P2/P4/P5/P6/P7+A/B/C/D/F 共 11 项落地；波形动画改条形声纹样式（用户截图）；暂停后音乐弹窗延迟 5 秒消失；全局迷你播放器点击穿透修复
+
+Work Log:
+- 规则（music-ai.ts）：
+  - P1 togetherRecommend 纳入全局 replying 互斥锁（进行中不接受新推荐，finally 双向复位）
+  - P2 runTgControls 加 cid 参数：[放歌] 搜索失败/无命中时自动补 peer 兜底消息「《歌名》这首歌曲库里没有诶，换一首听听？」
+  - P4 isDupOfRecent 窗口 6→12 条 + 去掉 role==='peer' 过滤（AI 复读机主原话也算重复，与规则文案对齐）
+  - P5 推荐数量 3 → 2~4（prompt「几首由你按语境定」+ slice(0,4) + JSON 格式行同步）
+  - P6 推荐理由防复读：理由数组依次挑第一条 !isDupOfRecent 的做开头 + user prompt 加多样性种子与「理由不与聊天记录重复」指令
+  - P7 startChatterTimer 暂停分支：暂停时不再点评歌曲，35% 概率以 hint「对方把音乐暂停了」自然追问
+  - A lyricNowBlock()：用 lyricFor===current.id 校验 + position 扫描当前行，注入「上一句/正在唱/下一句」（含翻译 tr）到 playingBlock；聊天规则加「可引用一 two 句歌词但不整段抄」
+  - B music-tg-songplay:{uid}:{cid}:{songId} 计数（hook 里 song.id!==lastSongId 时 bump）+ playingBlock 注入累计时长（>1 分钟）与同歌遍数（>=2 遍）
+  - C [红心]/[点赞]/[收藏] 指令 → type:'like' → st.current && !isLiked → toggleLike（不会误取消）
+  - D [快进:N秒] 指令（上限 300）→ type:'seek' → seek(position+delta) 钳制 [0, duration-1]
+  - F music-store 定时关闭 sleepWarnTimer（min-1 分钟处 dispatch music-sleep-warning 事件 + clearSleepTimers 统一清理）；music-ai bindSleepWarning 单次绑定 → 一起听中 aiComment「定时关闭快到了…」
+- UI-1 Waveform（MusicIsland.tsx）按用户截图重写：正弦波 → 白色圆角竖条声纹（小 7 条 30×15 / 大 9 条 47×26；高度对称分布，首条=小圆点），播放时 scaleY [1,0.35,1] 每条 delay i*0.09s 阶梯律动（声纹滚动感），暂停压平成 0.14 小圆点排；删 useId/渐变/SVG（div 条实现）
+- UI-2 MusicIsland 暂停宽限：pauseGrace state + useMusic.subscribe 捕获 playing true→false 跳变（PAUSE_GRACE_MS=5s 后隐藏，恢复播放立即取消宽限）；hidden 派生改为 (!playing && !pauseGrace)；冷启动（本来就暂停）不进宽限不闪弹窗；isHiddenNow 保持 !playing 口径（暂停瞬间大弹窗立即复位为小弹窗，小弹窗吃满 5 秒宽限）
+- UI-3 MusicGlobalMini 点击穿透修复：根因 = 点按条身 → tap guard 开播放页 → activeApp='music' → visible=false → 组件立即卸载 → 浏览器随后的原生 click「落空」重新命中当前位置底下 App 的内容/图标（同一次点按穿透）；修复 = visible 变 false 后延迟 350ms 卸载，期间 opacity-0 但条身仍 pointer-events-auto 接住这次 click；visible 变 true 用 render 期 adjust-state 模式（规避 set-state-in-effect lint）
+- E2E（agent-browser 420×900 全程同会话）：播晴天 → 大弹窗自动展开条形波形（DOM=7 条/rounded-full/bg-white/宽30）✓；点小弹窗展开 → 点暂停 → +2.2s 弹窗仍在（压平小圆点排）✓ → +6.4s 弹窗消失 ✓ → 恢复播放弹窗回归 ✓；回主屏 → document capture 阶段 click 追踪器 → 点迷你条条身 → click 落点=条身内歌名 SPAN（非 dock 图标/底下 App）+ 播放页正常打开 ✓（修复前该 click 会穿透到底下 App）；console/errors 零错误；浏览器已关闭
+- bunx tsc 0 错误；bun run lint 0 错误；dev.log 仅 Turbopack worker 噪音（非应用代码）
+
+Stage Summary:
+- 交付：一起听 AI 规则 11 项全落地（互斥锁/兜底消息/防复读 12 条窗口/推荐 2~4 首/理由防重复/暂停语境/歌词注入/一起听次数/[红心]/[快进]/睡前提醒）；波形按用户截图改为白色圆角条形声纹（律动+压平语义保留）；暂停后弹窗 5 秒宽限消失；迷你播放器点击穿透根修（延迟卸载接住落空 click）
+- 关键实现：穿透修复=「卸载时序竞态」经典解法（透明层延迟卸载接住原生 click）；歌词注入复用播放器 lyricFor/position 状态（零新存储）；同歌次数计数挂在「song.id!==lastSongId」分支与记忆写入同频；F 用 window CustomEvent 解耦 music-store→music-ai（避免循环依赖）
+- 范围限定遵守：仅动音乐 App 4 文件（music-ai/music-store/MusicIsland/MusicGlobalMini）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；[快进] 用既有 seek、[红心] 用既有 toggleLike，无新增播放引擎逻辑
+- 改动文件：src/lib/ios/music-ai.ts、src/lib/ios/music-store.ts、src/components/ios/MusicIsland.tsx、src/components/ios/MusicGlobalMini.tsx

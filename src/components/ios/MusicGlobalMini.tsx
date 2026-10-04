@@ -11,14 +11,15 @@
  * - hidden 不显示：完全隐藏，可在音乐播放页右上角 ⋮ 面板的「迷你播放器」行重新开启。
  *
  * 显示条件：有正在播放/上次的歌 && 未锁屏 && 未熄屏 && 切换器未打开 && 音乐 App 不在前台
- * （音乐 App 内有自己的迷你条，避免双重显示）。
+ * （音乐 App 内有自己的迷你条，避免双重显示）。离开显示条件后延迟 350ms 卸载：
+ * 接住「点按开播放页→卸载→原生 click 落空穿透到底下 App」的竞态（第二十轮修复）。
  *
  * 层级 z-[55]：高于 App 窗口（z-40），低于多任务切换器（z-60）/锁屏（z-65）/状态栏（z-70），
  * 来电/通话等更高层级界面自然盖住。
  */
 
 import { create } from 'zustand';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Disc3, ListMusic, Pause, Play, X } from 'lucide-react';
 import { useUI } from '@/lib/ios/store';
@@ -277,12 +278,32 @@ export default function MusicGlobalMini() {
   const layerRef = useRef<HTMLDivElement | null>(null);
 
   const visible = !!current && mode !== 'hidden' && !locked && !screenOff && !switcherOpen && activeApp !== 'music';
-  if (!visible) return null;
+
+  // 点击穿透修复（第二十轮反馈：点条身开播放页时，底下 App/图标也被打开）：
+  // 点按 → 打开播放页 → activeApp='music' → visible 立即变 false；若此刻直接卸载，
+  // 浏览器随后的原生 click 会「落空」重新命中当前位置下的 App 内容/图标（同一次点按穿透到底下 App）。
+  // 延迟 350ms 再卸载：期间以透明层（opacity-0，条身仍 pointer-events-auto）留在原地接住这次 click，
+  // click 落在条身/按钮上 = 无额外操作；350ms 后正常卸载。
+  const [mounted, setMounted] = useState(visible);
+  const [prevVisible, setPrevVisible] = useState(visible);
+  // visible 变 true 时立即重新挂载（render 期 adjust-state 模式，规避 effect 内 setState）
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (visible) setMounted(true);
+  }
+  useEffect(() => {
+    if (visible) return;
+    const t = setTimeout(() => setMounted(false), 350);
+    return () => clearTimeout(t);
+  }, [visible]);
+
+  if (!mounted || !current) return null;
 
   return (
     <div
       ref={layerRef}
       className="pointer-events-none absolute inset-0 z-[55]"
+      style={{ opacity: visible ? 1 : 0 }}
       data-testid="music-global-mini"
       data-suppress-edge-gesture
     >

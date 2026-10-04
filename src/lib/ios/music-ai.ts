@@ -75,6 +75,25 @@ function durKey(cid: string): string {
   return `${DUR_KEY_PREFIX}${musicUid()}:${cid}`;
 }
 
+const SONGPLAY_KEY_PREFIX = 'music-tg-songplay:';
+function songPlayKey(cid: string, songId: number): string {
+  return `${SONGPLAY_KEY_PREFIX}${musicUid()}:${cid}:${songId}`;
+}
+
+/** B（第二十轮）：同一首歌「一起听过几遍」真实计数（一起听中每放一首新歌 +1），
+ *  供 AI 说「这是我们一起听的第三遍了」这类基于事实的话 */
+function bumpTogetherSongPlay(cid: string, songId: number): void {
+  try {
+    kvSet(songPlayKey(cid, songId), (kvGet<number>(songPlayKey(cid, songId)) ?? 0) + 1);
+  } catch {
+    /* 静默 */
+  }
+}
+
+function togetherSongPlayCount(cid: string, songId: number): number {
+  return kvGet<number>(songPlayKey(cid, songId)) ?? 0;
+}
+
 /** 读取与某角色的累计一起听时长（毫秒） */
 export function togetherTotalMs(cid: string): number {
   return kvGet<number>(durKey(cid)) ?? 0;
@@ -208,10 +227,14 @@ export function installMusicAiHook(): void {
       if (t) {
         const c = await getContact(t.contactId);
         if (!c) return;
-        if (song.id !== lastSongId || Date.now() - lastWrittenAt > 10 * 60_000) {
-          await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
+        if (song.id !== lastSongId) {
           lastSongId = song.id;
           lastWrittenAt = Date.now();
+          await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
+          bumpTogetherSongPlay(t.contactId, song.id); // B：同歌「一起听过几遍」计数
+        } else if (Date.now() - lastWrittenAt > 10 * 60_000) {
+          lastWrittenAt = Date.now();
+          await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
         }
         if (t.aiChatter && Math.random() < 0.45) {
           void aiComment(t.contactId, `刚刚切到了《${song.name}》（${artist}）`);
@@ -340,7 +363,31 @@ function historyBlock(): string {
   return `【${'机主'}最近在听的歌】\n${recent.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
 }
 
-function playingBlock(extra: string, who: string): string {
+/** A（第二十轮）：当前歌词上下文块（正在唱的一句 + 前后各一句，含翻译）——
+ *  之前 AI 只知道歌名/进度，看不到歌词，聊不了「这句词好戳」这种细节 */
+function lyricNowBlock(): string {
+  const st = useMusic.getState();
+  if (!st.current || st.lyricFor !== st.current.id || st.lyricLines.length === 0) return '';
+  const lines = st.lyricLines;
+  let idx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].t <= st.position + 0.2) idx = i;
+    else break;
+  }
+  if (idx < 0) return '';
+  const at = (i: number): string => {
+    const l = lines[i];
+    if (!l) return '';
+    return l.tr ? `${l.text}（${l.tr}）` : l.text;
+  };
+  const parts: string[] = [];
+  if (idx > 0) parts.push(`上一句：${at(idx - 1)}`);
+  parts.push(`正在唱：${at(idx)}`);
+  if (idx + 1 < lines.length) parts.push(`下一句：${at(idx + 1)}`);
+  return `【正在唱到的歌词】\n${parts.join('\n')}`;
+}
+
+function playingBlock(extra: string, who: string, cid: string): string {
   const st = useMusic.getState();
   const cur = st.current;
   const lines: string[] = ['【一起听 · 音乐情境（真实数据）】'];
@@ -358,11 +405,24 @@ function playingBlock(extra: string, who: string): string {
   if (extra) lines.push(extra);
   const hb = historyBlock();
   if (hb) lines.push('', hb);
+  // A：当前歌词上下文
+  const lb = lyricNowBlock();
+  if (lb) lines.push('', lb);
+  // B：真实的一起听统计（累计时长 + 同一首歌听过几遍）
+  if (cid) {
+    const totalMs = togetherTotalMs(cid);
+    if (totalMs > 60_000) lines.push(`你们累计一起听了 ${fmtTogetherDur(totalMs)}。`);
+    if (cur) {
+      const played = togetherSongPlayCount(cid, cur.id);
+      if (played >= 2) lines.push(`《${cur.name}》你们已经一起听过 ${played} 遍了。`);
+    }
+  }
   lines.push(
     '',
     '【一起听聊天规则】',
     '- 你正在和对方一起实时听歌，像坐在同一间屋子里各戴一只耳机那样自然聊天；',
     '- 可以聊当下这首歌的感受、歌手、歌词、回忆，也可以说日常；消息要口语化、短（1~2 句）、符合你的人设语气；',
+    '- 可以引用「正在唱到的歌词」里的一两句聊感受，但不要整段抄歌词；',
     '- 绝对禁止复读：聊天记录里（不管是你还是对方说过的）已有的句子、句式和意思都不许再重复，每次都要换一个全新的角度（旋律/歌手音色/歌词/回忆/当下氛围/联想画面……任选一个没聊过的切入口）；',
     '- 不要输出 markdown、不要伪装成系统；直接输出消息正文。',
     '',
@@ -370,6 +430,8 @@ function playingBlock(extra: string, who: string): string {
     '- 想切下一首：[切歌]；想回上一首：[上一首]；',
     '- 想暂停音乐：[暂停]；想继续放：[继续]；',
     '- 想放一首具体的歌（选歌/换到你们聊到的歌）：[放歌:歌名:歌手]（写真实存在的歌，如 [放歌:晴天:周杰伦]）；',
+    '- 觉得这首歌好听、想帮对方收藏：[红心]（把当前歌加进对方红心，同一首歌别重复发）；',
+    '- 想跳过前奏/直接听副歌：[快进:秒数]（如 [快进:30]，最多 300 秒）；',
     '- 选什么歌、什么时候切，完全按你的人设、你们的聊天内容和这首歌的氛围来；用户随时会手动操作播放器，别抢节奏，不要每条消息都带指令。',
   );
   void who;
@@ -419,9 +481,11 @@ async function personaSystemFor(cid: string, musicBlock: string): Promise<string
 // ---------------- AI 播放控制（需求五：一起听 AI 自动播放/关闭/选歌/切歌） ----------------
 
 interface TgControl {
-  type: 'next' | 'prev' | 'pause' | 'resume' | 'play';
+  type: 'next' | 'prev' | 'pause' | 'resume' | 'play' | 'like' | 'seek';
   name?: string;
   artist?: string;
+  /** type='seek' 时：快进秒数（最多 300） */
+  delta?: number;
 }
 
 /** 从 AI 原文里抽出播放控制指令并从正文剔除：[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手] */
@@ -441,11 +505,22 @@ function extractTgControls(raw: string): { text: string; controls: TgControl[] }
     else controls.push({ type: 'resume' });
     return '';
   });
+  // C（第二十轮）：[红心] 指令——帮对方把当前歌加入红心
+  text = text.replace(/\[(?:红心|点赞|收藏)\]/g, () => {
+    controls.push({ type: 'like' });
+    return '';
+  });
+  // D（第二十轮）：[快进:秒数] 指令——真实拖进度
+  text = text.replace(/\[快进[:：]\s*(\d{1,3})\s*(?:秒|s)?\]/g, (_m, sec) => {
+    const n = parseInt(String(sec), 10);
+    if (Number.isFinite(n) && n > 0) controls.push({ type: 'seek', delta: Math.min(n, 300) });
+    return '';
+  });
   return { text: text.replace(/[ \t]+$/gm, '').trim(), controls };
 }
 
 /** 执行一起听 AI 的播放控制（直接调 useMusic action；用户随时可手动覆盖，store 层天然以最后操作为准） */
-async function runTgControls(controls: TgControl[]): Promise<void> {
+async function runTgControls(cid: string, controls: TgControl[]): Promise<void> {
   if (controls.length === 0) return;
   const st = useMusic.getState();
   for (const c of controls.slice(0, 3)) {
@@ -456,10 +531,33 @@ async function runTgControls(controls: TgControl[]): Promise<void> {
         if (st.playing) st.toggle();
       } else if (c.type === 'resume') {
         if (!st.playing && st.current) st.toggle();
+      } else if (c.type === 'like') {
+        // C：帮对方把当前歌加入红心（已红心则跳过，不会取消）
+        if (st.current && !st.isLiked(st.current.id)) await st.toggleLike(st.current);
+      } else if (c.type === 'seek') {
+        // D：真实拖进度（钳制在歌曲时长内）
+        if (st.current && st.duration > 0 && c.delta) {
+          st.seek(Math.min(st.duration - 1, Math.max(0, st.position + c.delta)));
+        }
       } else if (c.type === 'play' && c.name) {
-        const r = await search(`${c.name} ${c.artist ?? ''}`.trim(), 1, 1);
-        const hit = r.songs[0];
+        // P2：AI 点歌搜不到时不再静默——自动补一条兑底消息
+        //（规则要求正文不描述指令，静默失败时用户会困惑「说了放歌但什么都没发生」）
+        let hit: NcmSong | undefined;
+        try {
+          const r = await search(`${c.name} ${c.artist ?? ''}`.trim(), 1, 1);
+          hit = r.songs[0];
+        } catch {
+          hit = undefined;
+        }
         if (hit) await st.playSong(hit, [hit]);
+        else {
+          appendMsg(cid, {
+            id: genMsgId(),
+            role: 'peer',
+            text: `《${c.name}》这首歌曲库里没有诶，换一首听听？`,
+            time: Date.now(),
+          });
+        }
       }
     } catch {
       // 单条指令失败不影响其余
@@ -491,6 +589,7 @@ export async function togetherReply(cid: string, userText: string): Promise<void
       playingBlock(
         `【聊天记录】\n${history || '（刚开始聊）'}\n\n对方（${who}）刚发来一条消息，请回复。`,
         who,
+        cid,
       ),
     );
     const { text, controls } = await genUniqueReply(
@@ -509,8 +608,8 @@ export async function togetherReply(cid: string, userText: string): Promise<void
         error: true,
       });
     }
-    // AI 的播放控制指令（切歌/暂停/选歌）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
-    void runTgControls(controls);
+    // AI 的播放控制指令（切歌/暂停/选歌/红心/快进）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
+    void runTgControls(cid, controls);
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
@@ -539,13 +638,13 @@ function normDup(s: string): string {
   return (s ?? '').replace(/[\s，。！？、,.!?:：;；'"“”「」『』()（）…·\-~～]/g, '').toLowerCase();
 }
 
-/** 是否与最近几条对方消息重复（同义复读检测） */
+/** 是否与最近几条消息重复（同义复读检测；P4：窗口 6→12 条，双方消息都查——AI 复读机主原话同样算重复） */
 function isDupOfRecent(cid: string, text: string): boolean {
   const n = normDup(text);
   if (!n) return false;
   return loadTogetherMsgs(cid)
-    .slice(-6)
-    .some((m) => m.role === 'peer' && normDup(m.text) === n);
+    .slice(-12)
+    .some((m) => normDup(m.text) === n);
 }
 
 /**
@@ -601,6 +700,12 @@ export function startChatterTimer(): void {
       startChatterTimer();
       return;
     }
+    // P7：音乐暂停时不再点评歌曲（穿越感）——35% 概率自然问一句「怎么停了」
+    if (!st.playing) {
+      if (Math.random() < 0.35) void aiComment(cur.contactId, '对方把音乐暂停了');
+      startChatterTimer();
+      return;
+    }
     void aiComment(cur.contactId, '');
     startChatterTimer();
   }, delay);
@@ -626,13 +731,14 @@ async function aiComment(cid: string, hint: string): Promise<void> {
       playingBlock(
         `${hint ? `【情境】${hint}\n` : ''}【聊天记录】\n${history || '（还没聊过）'}\n\n请主动发一条消息（可以是此刻这首歌的感受、一句联想或闲聊），不要重复聊天记录里任何已有的句子。`,
         who,
+        cid,
       ),
     );
     const { text, controls } = await genUniqueReply(cid, system, '（主动发一条一起听的消息）');
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     }
-    void runTgControls(controls);
+    void runTgControls(cid, controls);
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
@@ -641,10 +747,12 @@ async function aiComment(cid: string, hint: string): Promise<void> {
 
 // ---------------- AI 推荐歌曲 ----------------
 
-/** 让 AI 推荐 3 首歌：LLM 出 JSON → 搜索匹配真实曲库 → recs 消息 */
+/** 让 AI 推荐 2~4 首歌（P5：数量由 AI 按语境定）：LLM 出 JSON → 搜索匹配真实曲库 → recs 消息 */
 export async function togetherRecommend(cid: string, wish: string): Promise<void> {
   const t = loadActiveTogether();
   if (!t) return;
+  if (replying) return; // P1：回复/点评进行中不接受推荐（全局互斥锁），避免两条 AI 消息并发交错
+  replying = true;
   useMusic.setState({ tgAiBusy: true });
   try {
     appendMsg(cid, {
@@ -658,13 +766,14 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
   const system = await personaSystemFor(
     cid,
     playingBlock(
-      `【聊天记录】\n${history}\n\n对方（${who}）想让你推荐歌曲。结合你们正在听的歌、${who}的听歌历史和你们的聊天，推荐 3 首真实存在的歌曲。`,
+      `【聊天记录】\n${history}\n\n对方（${who}）想让你推荐歌曲。结合你们正在听的歌、${who}的听歌历史和你们的聊天，推荐 2~4 首真实存在的歌曲（几首由你按语境定）。`,
       who,
+      cid,
     ),
   );
   const user = `请严格只输出 JSON 数组（不要解释、不要 markdown 代码块），格式：
 [{"title":"歌名","artist":"歌手","reason":"一句话推荐理由（20字内，用你的口吻）"}]
-共 3 项。`;
+共 2~4 项（几首由你定）。理由不要和聊天记录里已说过的句子重复。多样性种子：${varietySeed()}`;
   const raw = await callLlmTwoTier(system, user);
   const arr = extractJsonArray(raw);
   if (!arr || !arr.length) {
@@ -677,7 +786,7 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     return;
   }
   const songs: TgRecSong[] = [];
-  for (const item of arr.slice(0, 3)) {
+  for (const item of arr.slice(0, 4)) {
     const title = String(item.title ?? '').trim();
     const artist = String(item.artist ?? '').trim();
     if (!title) continue;
@@ -700,7 +809,12 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     });
     return;
   }
-  const lead = cleanAiText(String(arr[0]?.reason ?? ''));
+  // P6：推荐理由也过防复读——依次挑第一条与近期消息不重复的理由做开头
+  const reasons = arr
+    .slice(0, 4)
+    .map((it) => cleanAiText(String(it.reason ?? '')))
+    .filter(Boolean);
+  const lead = reasons.find((r) => !isDupOfRecent(cid, r)) ?? '';
   appendMsg(cid, {
     id: genMsgId(),
     role: 'recs',
@@ -709,15 +823,30 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     songs,
   });
   } finally {
+    replying = false;
     useMusic.setState({ tgAiBusy: false });
   }
 }
 
 // ---------------- 启动恢复 ----------------
 
+let sleepWarnBound = false;
+/** F（第二十轮）：睡前提醒——定时关闭剩 1 分钟时（music-store 广播 music-sleep-warning 事件），
+ *  一起听中的角色自然说一句「要睡着了？音乐快停了哦」 */
+function bindSleepWarning(): void {
+  if (sleepWarnBound || typeof window === 'undefined') return;
+  sleepWarnBound = true;
+  window.addEventListener('music-sleep-warning', () => {
+    const t = loadActiveTogether();
+    if (!t || !t.aiChatter) return;
+    void aiComment(t.contactId, '定时关闭快到了，音乐还有一分钟就要停');
+  });
+}
+
 /** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子 + 重启空闲定时 */
 export async function bootMusicAi(): Promise<void> {
   installMusicAiHook();
+  bindSleepWarning();
   const t = loadActiveTogether();
   if (t) {
     const c = await getContact(t.contactId);

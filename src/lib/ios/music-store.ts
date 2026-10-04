@@ -330,10 +330,25 @@ function saveSnapshot(s: MusicState): void {
 // ---------------- 定时关闭（会话级：到点自动暂停） ----------------
 
 let sleepTimer: ReturnType<typeof setTimeout> | null = null;
-function armSleepTimer(min: number): void {
+let sleepWarnTimer: ReturnType<typeof setTimeout> | null = null;
+function clearSleepTimers(): void {
   if (sleepTimer) {
     clearTimeout(sleepTimer);
     sleepTimer = null;
+  }
+  if (sleepWarnTimer) {
+    clearTimeout(sleepWarnTimer);
+    sleepWarnTimer = null;
+  }
+}
+function armSleepTimer(min: number): void {
+  clearSleepTimers();
+  // F（第二十轮）：到点前 1 分钟广播提醒事件（music-ai 监听 → 一起听角色自然说一句睡前提醒）
+  if (min > 1) {
+    sleepWarnTimer = setTimeout(() => {
+      sleepWarnTimer = null;
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('music-sleep-warning'));
+    }, (min - 1) * 60_000);
   }
   sleepTimer = setTimeout(() => {
     sleepTimer = null;
@@ -625,10 +640,7 @@ export const useMusic = create<MusicState>((set, get) => ({
 
   // 定时关闭：到点自动暂停（会话级，重启后需重设）
   setSleepAt: (min) => {
-    if (sleepTimer) {
-      clearTimeout(sleepTimer);
-      sleepTimer = null;
-    }
+    clearSleepTimers();
     if (!min) {
       set({ sleepAt: null });
       return;
