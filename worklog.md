@@ -14523,3 +14523,45 @@ Stage Summary:
 - 关键设计：三端消息形状/存储键/投递管线差异全部在 deliverProactiveMsg 内适配；生成锁+去重解决短间隔竞态；时间感知按会话开关注入（自主模式强制注入）；提醒 once 过期 90s 自动清理防陈旧补发
 - 范围外说明：引擎为客户端运行（页面关闭时不触发，与现有 ProactiveCallWatcher/MomentsScheduler 同架构）；群聊不在范围（1:1 专属）
 - 改动文件：src/lib/ios/proactive-msg.ts（新）、src/components/ios/ProactiveMsgWatcher.tsx（新）、src/components/apps/proactive-msg-page.tsx（新）、src/components/ios/PhoneShell.tsx、src/components/apps/chat-settings.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx、src/lib/ios/contacts-store.ts
+
+---
+Task ID: 50
+Agent: Z.ai Code（主会话）
+Task: 主动发消息设置页 + 弹窗毛玻璃胶囊风美化（用户要求「界面美化、弹窗毛玻璃胶囊风格」），并复查功能规则列出待完善项供用户选择
+
+Work Log:
+- 重写 src/components/apps/proactive-msg-page.tsx（纯视觉层，功能/testid 零改动）：
+  - 毛玻璃卡片 tokens：rounded-[18px] border-white/60 bg-white/70 backdrop-blur-xl + 柔和阴影，深色模式 dark:bg-white/[0.055] 暗玻璃
+  - 背景装饰光斑层：accent/紫/橙三色 blur-3xl 渐变圆斑（pointer-events-none），让毛玻璃有内容可透
+  - 状态头毛玻璃胶囊：渐变 Zap 圆徽 + 角色名 + 呼吸灯圆点（animate-ping，active 时）+ 状态摘要 + 「全部关闭」玻璃胶囊钮
+  - 四分区图标瓷砖（iOS 设置风彩色渐变）：定时=accent 绿、事件=橙 #FF9500、自主=紫 #AF52DE、提醒=粉 #FF2D55，带同色 glow 阴影 + 副标题小字
+  - 间隔档位 chips：胶囊形，选中态 accent 底 + 0 4px 14px 同色光晕 + active:scale-95 按压反馈
+  - 事件/提醒行：mini 胶囊卡（bg-black/[0.035] rounded-[14px]）+ tinted 徽章（每天 16:30 / 一次性·每天·循环 / 已停用 / N 个）
+  - 底部说明也包成玻璃胶囊卡
+- 新增 GlassModal 弹窗组件（文件内）：rAF 驱动进出场（scale 0.95→1 + translate-y-3→0 + fade，260ms iOS 曲线 cubic-bezier(0.32,0.72,0,1) 与 IOSActionSheet 一致），遮罩 bg-black/40 + backdrop-blur-[3px]，面板 rounded-[26px] 玻璃卡 + 深阴影；两个弹窗（自定义间隔/事件编辑器）全部迁移
+- 弹窗内部胶囊化：标题居中+图标瓷砖、输入框 rounded-full 玻璃底、单位选择器胶囊分段控件、星期 chips 胶囊、底部取消/保存双胶囊按钮（保存=accent 渐变+光晕）
+- 事件弹窗触发时间 label 明示「不填不会自动触发」（对齐引擎规则，防误解）
+- E2E（agent-browser 420x900）：种陈凡机主+林小暖角色 → 微信登录 → 聊天 → 聊天信息 → 主动发消息页：
+  ①浅色：玻璃卡/彩色瓷砖/状态头呼吸灯/全部关闭胶囊 ✓
+  ②定时开启：胶囊 chips 组、选中光晕、「当前：每隔45分钟」摘要 ✓
+  ③自定义弹窗：玻璃胶囊卡+动画+填 45 保存 → 自定义 chip 选中态正确 ✓
+  ④事件弹窗：填「下午茶时间 16:30」保存 → 清单 mini 卡+绿徽章 ✓；状态头摘要「定时 · 事件 · 提醒 1」✓
+  ⑤提醒任务清单：种 daily 22:00 说晚安 → 「每天」徽章+「每天 22:00」+删除钮 ✓
+  ⑥深色模式（.dark 类）：暗玻璃卡/边框/徽章对比度全部正常 ✓
+  ⑦控制台零错误、dev.log 无运行时错误 ✓
+- 测试数据全清：2 联系人/9 个 kv（proactive-*、wx-chat-msgs、mem-*、moments-*）/localStorage wx-session 等 4 键；复查 0 残留
+- bunx tsc --noEmit 0 错误；bun run lint 全绿（仅 qq/wechat>500KB BABEL 提示）
+
+Stage Summary:
+- 交付：主动发消息设置页全面毛玻璃胶囊化（卡片/chips/徽章/按钮/弹窗），弹窗带 iOS 曲线进出场动画；功能与 testid 完全不变，E2E 全链路验证浅色+深色渲染正常
+- 规则复查发现的真实缺陷/待完善项（已列给用户选择，未擅自改动）：
+  ①daily 提醒与事件为精确分钟匹配，错过那一分钟（页面没开/休眠）当天不再补发（once 有 90s 宽限，daily/事件没有）
+  ②once 提醒错过 90s 宽限被静默删除，用户永远收不到也无提示
+  ③无时间事件永远不会自动触发（纯记录，已加 UI 提示；可改为自主模式情境参考或加手动触发钮）
+  ④正在聊天时定时/自主消息无硬守卫可能打断对话（仅 prompt 提示）
+  ⑤无全局总开关（逐角色关）
+  ⑥定时按开启时刻累计不对齐钟表（想要「每天早9点」需用事件）
+  ⑦自主决策频率固定 5 分钟不可调
+  ⑧「晚上8点提醒我」在 8 点后说会解析失败无任务无反馈（可改跨天=明天）
+  ⑨无主动消息历史回看；⑩事件可重名
+- 改动文件：src/components/apps/proactive-msg-page.tsx（仅此一个文件）
