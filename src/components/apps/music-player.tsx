@@ -14,7 +14,6 @@ import {
   AudioLines,
   ChevronDown,
   ClipboardList,
-  Clock3,
   Disc2,
   DiscAlbum,
   Disc3,
@@ -78,6 +77,8 @@ export function MusicPlayer() {
   const freeTrial = useMusic((s) => s.freeTrial);
   const together = useMusic((s) => s.together);
   const togetherMsgs = useMusic((s) => s.togetherMsgs);
+  const loginUid = useMusic((s) => s.loginUid);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
   const likedIds = useMusic((s) => s.likedIds);
   const toggleLike = useMusic((s) => s.toggleLike);
   const toggle = useMusic((s) => s.toggle);
@@ -168,7 +169,12 @@ export function MusicPlayer() {
     setQuickText('');
   };
 
-  // 一起听底部：音乐/聊天方形圆角胶囊居中；三个点贴最右，点击打开歌曲操作面板；自己一个人时显示「邀请好友一起听」
+  // 设置菜单动作（顶栏⋮ / 底部三个点共用）
+  const openTgMenu = () => {
+    setShowTgMenu(true);
+  };
+
+  // 一起听底部：音乐/聊天方形圆角胶囊居中；三个点贴最右，点击打开一起听设置弹窗；自己一个人时显示「邀请好友一起听」
   const modeCapsule = together ? (
     <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
       <span className="h-8 w-8 shrink-0" aria-hidden />
@@ -198,9 +204,9 @@ export function MusicPlayer() {
       </div>
       <button
         type="button"
-        onClick={() => setShowMore(true)}
+        onClick={openTgMenu}
         data-testid="music-tg-dots"
-        aria-label="歌曲操作"
+        aria-label="一起听设置"
         className="flex h-8 w-8 shrink-0 items-center justify-center text-white/85 active:scale-95"
       >
         <MoreVertical className="h-[19px] w-[19px]" />
@@ -232,10 +238,6 @@ export function MusicPlayer() {
     })();
   };
 
-  // 设置菜单动作（顶栏⋮）
-  const openTgMenu = () => {
-    setShowTgMenu(true);
-  };
   const menuRematch = () => {
     setShowTgMenu(false);
     setInviteTitle('重新匹配');
@@ -268,7 +270,7 @@ export function MusicPlayer() {
         />
         <div className="absolute inset-0 bg-black/35" />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PlayerTopBar onClose={close} light onMenu={openTgMenu} />
+          <PlayerTopBar onClose={close} light onMenu={openTgMenu} dense />
           {togetherHead}
           <div className="min-h-0 flex-1" data-testid="music-player-chat-mode">
             <TogetherChat />
@@ -295,6 +297,8 @@ export function MusicPlayer() {
         {/* 一起听设置菜单（聊天态） */}
         {showTgMenu && (
           <TogetherMenu
+            session={together!}
+            myAvatar={myAvatarOf(loginUid, loginAvatar)}
             onClose={() => setShowTgMenu(false)}
             onRematch={menuRematch}
             onRecords={menuRecords}
@@ -331,6 +335,7 @@ export function MusicPlayer() {
         <PlayerTopBar
           onClose={close}
           light
+          dense={!!together}
           onMore={together ? undefined : () => setShowMore(true)}
           onMenu={together ? openTgMenu : undefined}
         />
@@ -351,9 +356,9 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 歌名行 + 操作图标（信息/爱心/评论带数字，按截图） */}
-        <div className="flex items-center gap-2 pl-5 pr-4 pb-1">
-          <div className="min-w-0 flex-1">
+        {/* 歌名行 + 操作图标（信息/爱心/评论；数字在各自图标正上方，等距排开不重叠） */}
+        <div className="flex items-end justify-between gap-2 pl-5 pr-8 pb-1">
+          <div className="min-w-0 flex-1 pb-0.5">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-[19px] font-bold" data-testid="music-player-name">
                 {current.name}
@@ -368,50 +373,52 @@ export function MusicPlayer() {
               {songArtistText(current)}
             </p>
           </div>
-          {/* 信息图标：一起听时点击底部弹出输入框，可直接打字发消息（气泡显示在头像下）；自己听不显示 */}
-          {together && (
+          {/* 信息图标：一起听时点击底部弹出输入框（气泡显示在头像下）；自己听不显示；纯图标无底色 */}
+          <div className="flex shrink-0 items-center gap-7 pt-4">
+            {together && (
+              <button
+                type="button"
+                onClick={() => setShowQuickInput((v) => !v)}
+                data-testid="music-player-chat"
+                aria-label="发消息"
+                className={`flex h-6 w-6 shrink-0 items-center justify-center active:scale-95 ${
+                  showQuickInput ? 'text-white' : 'text-white/75'
+                }`}
+              >
+                <MessagesSquare className="h-[22px] w-[22px]" />
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowQuickInput((v) => !v)}
-              data-testid="music-player-chat"
-              aria-label="发消息"
-              className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full active:scale-95 ${
-                showQuickInput ? 'bg-white/30' : 'bg-white/12'
-              }`}
+              onClick={() => void toggleLike(current)}
+              data-testid="music-player-like"
+              aria-label="红心"
+              className="relative shrink-0 p-0.5 active:scale-90"
             >
-              <MessagesSquare className="h-[21px] w-[21px] text-white/90" />
+              <Heart
+                className={`h-[25px] w-[25px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
+                fill={liked ? 'currentColor' : 'none'}
+              />
+              <span className="absolute -top-[15px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55">
+                {fmtCountW(fakeHotCount(current.id))}
+              </span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => void toggleLike(current)}
-            data-testid="music-player-like"
-            aria-label="红心"
-            className="relative shrink-0 p-1 active:scale-90"
-          >
-            <Heart
-              className={`h-[25px] w-[25px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
-              fill={liked ? 'currentColor' : 'none'}
-            />
-            <span className="absolute -top-2 left-full ml-0.5 whitespace-nowrap text-[11px] font-medium leading-none text-white/60">
-              {fmtCountW(fakeHotCount(current.id))}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => openComments(current)}
-            aria-label="评论"
-            data-testid="music-player-comment"
-            className="relative mr-6 shrink-0 p-1 active:scale-90"
-          >
-            <MessageCircleMore className="h-[25px] w-[25px] text-white/75" />
-            <span
-              className="absolute -top-2 left-full ml-0.5 whitespace-nowrap text-[11px] font-medium leading-none text-white/60"
-              data-testid="music-player-comment-count"
+            <button
+              type="button"
+              onClick={() => openComments(current)}
+              aria-label="评论"
+              data-testid="music-player-comment"
+              className="relative shrink-0 p-0.5 active:scale-90"
             >
-              {cmtState.total === null ? '' : fmtCountW(cmtState.total)}
-            </span>
-          </button>
+              <MessageCircleMore className="h-[25px] w-[25px] text-white/75" />
+              <span
+                className="absolute -top-[15px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55"
+                data-testid="music-player-comment-count"
+              >
+                {cmtState.total === null ? '' : fmtCountW(cmtState.total)}
+              </span>
+            </button>
+          </div>
         </div>
 
         {/* 进度条 */}
@@ -517,9 +524,11 @@ export function MusicPlayer() {
       {/* 邀请/重新匹配一起听 */}
       {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
 
-      {/* 一起听设置菜单（顶栏⋮） */}
+      {/* 一起听设置菜单（顶栏⋮ / 底部三点） */}
       {showTgMenu && together && (
         <TogetherMenu
+          session={togetherLive ?? together}
+          myAvatar={myAvatarOf(loginUid, loginAvatar)}
           onClose={() => setShowTgMenu(false)}
           onRematch={menuRematch}
           onRecords={menuRecords}
@@ -551,6 +560,7 @@ function PlayerTopBar({
   light,
   onMore,
   onMenu,
+  dense,
 }: {
   onClose: () => void;
   /** 顶部标题（可选；一起听/播放模式默认不展示） */
@@ -559,9 +569,11 @@ function PlayerTopBar({
   onMore?: () => void;
   /** 一起听态：右上角 ⋮ 菜单（重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
   onMenu?: () => void;
+  /** 紧凑顶栏（一起听：双头像更贴顶） */
+  dense?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 px-5 pb-1 pt-[58px]">
+    <div className={`flex items-center gap-3 px-5 pb-1 ${dense ? 'pt-[46px]' : 'pt-[58px]'}`}>
       <button type="button" onClick={onClose} aria-label="收起" data-testid="music-player-close">
         <ChevronDown className={`h-7 w-7 ${light ? 'text-white/85' : 'text-zinc-600'}`} />
       </button>
@@ -601,58 +613,64 @@ function VinylView({
   onSwitch: () => void;
 }) {
   return (
-    <div className="relative flex h-full w-full flex-col items-center justify-center">
-      {/* 唱针 */}
-      <div
-        className="absolute left-1/2 top-[-10px] z-20 h-[120px] w-[120px] origin-[14px_14px] transition-transform duration-500"
-        style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-28deg)' }}
-      >
-        <div className="absolute left-[7px] top-[7px] h-3.5 w-3.5 rounded-full bg-zinc-200 shadow" />
-        <div className="absolute left-[13px] top-[13px] h-[74px] w-[3px] origin-top rotate-[26deg] rounded-full bg-gradient-to-b from-zinc-200 to-zinc-400" />
-        <div className="absolute left-[38px] top-[82px] h-4 w-2.5 rotate-[26deg] rounded-[2px] bg-zinc-300 shadow" />
-      </div>
-
-      {/* 黑胶（细密纹路 + 立体边缘，仿网易云） */}
-      <button
-        type="button"
-        onClick={onSwitch}
-        data-testid="music-vinyl"
-        aria-label="切换到歌词"
-        className="relative mt-4 aspect-square w-full max-w-[300px]"
-      >
-        {/* 外缘深黑圈（不随旋转，提供立体边缘） */}
-        <div className="absolute inset-0 rounded-full bg-[#050505] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)]" />
-        {/* 胶片主体（旋转）：细密同心纹路 */}
-        <div
-          className="absolute inset-[2.5%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
-          style={
-            playing
-              ? {
-                  background:
-                    'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
-                  boxShadow:
-                    'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
-                }
-              : {
-                  background:
-                    'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
-                  boxShadow:
-                    'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
-                  animationPlayState: 'paused',
-                }
-          }
+    <div className="relative flex h-full w-full flex-col items-center">
+      <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+        {/* 黑胶（细密纹路 + 立体边缘 + 深色唱针，仿网易云；尺寸随空间自适应不溢出） */}
+        <button
+          type="button"
+          onClick={onSwitch}
+          data-testid="music-vinyl"
+          aria-label="切换到歌词"
+          className="relative aspect-square h-full max-h-[300px] max-w-full shrink-0"
         >
-          {/* 斜向高光 */}
-          <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_210deg,rgba(255,255,255,0.09),transparent_16%,rgba(255,255,255,0.05)_32%,transparent_55%,rgba(255,255,255,0.07)_74%,transparent_93%)]" />
-          {/* 封面（占比更大） */}
-          <div className="absolute inset-[23.5%] overflow-hidden rounded-full ring-[3px] ring-black/70">
-            <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
+          {/* 唱针（深色金属风，右上角进入；播放贴盘 / 暂停抬起）——不再有白色块 */}
+          <div
+            className="absolute right-[4%] top-[-30px] z-20 h-[112px] w-[104px] origin-[10px_10px] transition-transform duration-500"
+            style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-26deg)' }}
+          >
+            {/* 轴承底座 */}
+            <div className="absolute left-0 top-0 h-5 w-5 rounded-full bg-[#2c2c30] shadow-[0_2px_6px_rgba(0,0,0,0.55)] ring-1 ring-white/20" />
+            <div className="absolute left-[5px] top-[5px] h-2.5 w-2.5 rounded-full bg-[#525257] ring-1 ring-black/60" />
+            {/* 针杆（细金属臂，向下伸向盘面） */}
+            <div className="absolute left-[9px] top-[9px] h-[84px] w-[2.5px] origin-top rotate-[26deg] rounded-full bg-gradient-to-b from-[#9a9aa2] via-[#5f5f66] to-[#38383d]" />
+            {/* 针头（深色小唱头，落在盘缘） */}
+            <div className="absolute left-[25px] top-[86px] h-[15px] w-[7px] rotate-[26deg] rounded-[3px] bg-[#3a3a40] shadow-[0_1px_3px_rgba(0,0,0,0.6)] ring-1 ring-white/10" />
           </div>
-          {/* 中心孔 */}
-          <div className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0a0a0a] ring-1 ring-white/25" />
-        </div>
-      </button>
-      <p className="mt-3 text-[11px] text-white/40">点按封面查看歌词</p>
+
+          {/* 外缘深黑圈（不随旋转，提供立体边缘） */}
+          <div className="absolute inset-0 rounded-full bg-[#050505] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)]" />
+          {/* 胶片主体（旋转）：细密同心纹路 */}
+          <div
+            className="absolute inset-[2.5%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
+            style={
+              playing
+                ? {
+                    background:
+                      'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
+                    boxShadow:
+                      'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
+                  }
+                : {
+                    background:
+                      'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
+                    boxShadow:
+                      'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
+                    animationPlayState: 'paused',
+                  }
+            }
+          >
+            {/* 斜向高光 */}
+            <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_210deg,rgba(255,255,255,0.09),transparent_16%,rgba(255,255,255,0.05)_32%,transparent_55%,rgba(255,255,255,0.07)_74%,transparent_93%)]" />
+            {/* 封面（占比更大） */}
+            <div className="absolute inset-[23.5%] overflow-hidden rounded-full ring-[3px] ring-black/70">
+              <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
+            </div>
+            {/* 中心孔 */}
+            <div className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0a0a0a] ring-1 ring-white/25" />
+          </div>
+        </button>
+      </div>
+      <p className="shrink-0 pb-1 pt-1.5 text-[11px] text-white/40">点按封面查看歌词</p>
     </div>
   );
 }
@@ -839,58 +857,32 @@ function TogetherHead({
   const nowMs = Date.now();
   const visMine = !!lastMine && nowMs - lastMine.time < BUBBLE_TTL;
   const visPeer = !!lastPeer && nowMs - lastPeer.time < BUBBLE_TTL;
+  const hasBubble = visMine || visPeer;
   // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
-    <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      {/* 双头像 + 耳机线 + 计时徽章 */}
-      <div className="relative" data-testid="music-tg-avatars">
-        {/* 共享耳机线：从两头像中间交叠处向下向两侧弯出（藏在头像后，仿网易云） */}
-        <svg
-          viewBox="0 0 280 64"
-          className="pointer-events-none absolute left-1/2 top-[22px] z-0 h-[64px] w-[280px] -translate-x-1/2"
-          fill="none"
-          aria-hidden
-        >
-          <path
-            d="M140 14 C 110 17, 62 22, 40 62"
-            stroke="rgba(255,255,255,0.36)"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-          <path
-            d="M140 14 C 170 17, 218 22, 240 62"
-            stroke="rgba(255,255,255,0.36)"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
-        <div className="relative z-10 flex items-center">
-          <CoverImg src={session.avatar} className="h-14 w-14" rounded="rounded-full" alt={session.name} />
-          <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-14 w-14" rounded="rounded-full" alt="我" />
-        </div>
-        {/* 红色计时徽章（两头像交叠处下方，仿网易云一起听） */}
-        <span
-          className="absolute bottom-[-5px] left-[calc(50%-24px)] z-20 flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[#EC4141] ring-[2.5px] ring-[#101010]"
-          data-testid="music-tg-timer-badge"
-        >
-          <Clock3 className="h-[13px] w-[13px] text-white" />
-        </span>
+    <div className="flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
+      {/* 双头像（紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
+      <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
+        <CoverImg src={session.avatar} className="h-14 w-14" rounded="rounded-full" alt={session.name} />
+        <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-14 w-14" rounded="rounded-full" alt="我" />
       </div>
-      {/* 头像下气泡（音乐视图）：对方左 / 我右，尾巴朝上指向各自头像，5 秒后消失 */}
-      {showBubbles && (visPeer || visMine) && (
-        <div className="mt-0.5 flex w-full items-start gap-4 px-5">
+      {/* 头像下气泡（音乐视图）：对方左 / 我右，尾巴朝上各自指向头像，5 秒后消失；出现时隐藏时长行 */}
+      {showBubbles && hasBubble && (
+        <div className="mx-auto mt-0.5 flex w-full max-w-[340px] items-start gap-3 px-4">
           <div className="flex min-w-0 flex-1 justify-start">
             {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
           </div>
-          <div className="flex min-w-0 flex-1 justify-end">
+          <div className="flex min-w-0 flex-1 justify-start">
             {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
           </div>
         </div>
       )}
-      <p className="mt-1 text-[11px] text-white/70">
-        相距 {session.distanceKm} 公里 · 一起听了 {durText}
-      </p>
+      {!hasBubble && (
+        <p className="mt-1.5 text-[11px] text-white/70">
+          相距 {session.distanceKm} 公里 · 一起听了 {durText}
+        </p>
+      )}
     </div>
   );
 }
@@ -968,9 +960,11 @@ function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
   );
 }
 
-// ---------------- 一起听设置菜单（仿网易云：顶栏⋮ / 底部三点两处入口） ----------------
+// ---------------- 一起听设置菜单（仿网易云：顶栏⋮ / 底部三点两处入口；顶部显示双方头像） ----------------
 
 function TogetherMenu({
+  session,
+  myAvatar,
   onClose,
   onRematch,
   onRecords,
@@ -978,6 +972,10 @@ function TogetherMenu({
   onReport,
   onExit,
 }: {
+  /** 当前一起听会话（顶部展示双方头像） */
+  session: TogetherSessionLike;
+  /** 我的头像（登录 > 游客） */
+  myAvatar: string;
   onClose: () => void;
   onRematch: () => void;
   onRecords: () => void;
@@ -999,13 +997,21 @@ function TogetherMenu({
         {/* 指向入口按钮的小箭头 */}
         <div className="absolute right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] -top-[6px]" />
         <div className="relative overflow-hidden rounded-[16px] bg-[#2b2b2d]/95 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+          {/* 双方头像（一起听中） */}
+          <div className="flex flex-col items-center gap-1.5 border-b border-white/[0.07] px-4 pb-3 pt-3.5">
+            <div className="flex items-center">
+              <CoverImg src={session.avatar} className="h-11 w-11" rounded="rounded-full" alt={session.name} />
+              <CoverImg src={myAvatar} className="relative -ml-2 h-11 w-11" rounded="rounded-full" alt="我" />
+            </div>
+            <p className="max-w-full truncate text-[10px] text-white/55">正在和 {session.name} 一起听</p>
+          </div>
           {rows.map((r, i) => (
             <button
               key={r.k}
               type="button"
               onClick={r.on}
               data-testid={`music-tg-menu-${r.k}`}
-              className={`flex w-full items-center gap-3.5 px-4 py-[14px] text-left text-[15px] text-white/95 active:bg-white/10 ${
+              className={`flex w-full items-center gap-3.5 px-4 py-[13px] text-left text-[15px] text-white/95 active:bg-white/10 ${
                 i > 0 ? 'border-t border-white/[0.07]' : ''
               }`}
             >

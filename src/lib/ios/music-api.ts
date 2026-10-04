@@ -42,7 +42,8 @@ export interface NcmSong {
   id: number;
   name: string;
   artists?: NcmArtist[];
-  ar?: NcmArtist; // song/detail 新格式
+  /** song/detail 新格式为单个对象，cloudsearch 新格式为数组 */
+  ar?: NcmArtist | NcmArtist[];
   album?: NcmAlbum;
   al?: NcmAlbum; // 新格式
   duration?: number; // 毫秒
@@ -409,6 +410,7 @@ export interface SearchResults {
 }
 
 export async function search(keywords: string, type: SearchType = 1, limit = 30, offset = 0): Promise<SearchResults> {
+  // 用 cloudsearch（旧 /search 的专辑 picUrl 为空、歌手字段缺失 → 封面灰块 +「未知歌手」）
   const j = await ncmRequest<{
     result: {
       songs?: NcmSong[];
@@ -416,7 +418,7 @@ export async function search(keywords: string, type: SearchType = 1, limit = 30,
       playlists?: NcmPlaylist[];
       albums?: NcmAlbum[];
     };
-  }>('search', { keywords, type, limit, offset });
+  }>('cloudsearch', { keywords, type, limit, offset });
   const r = j.result ?? {};
   return {
     songs: (r.songs ?? []).map(normalizeSong),
@@ -467,10 +469,12 @@ export async function albumSub(id: number, t: 1 | 2): Promise<void> {
 
 /** song/detail 新旧格式统一 */
 export function normalizeSong(s: NcmSong): NcmSong {
+  // ar：song/detail 新格式为单个对象，cloudsearch 为数组 —— 统一成 artists 数组
+  const ar = s.ar;
   return {
     ...s,
     name: s.name,
-    artists: s.artists ?? (s.ar ? [s.ar] : []),
+    artists: s.artists ?? (Array.isArray(ar) ? ar : ar ? [ar] : []),
     album: s.album ?? s.al,
     duration: s.duration ?? s.dt ?? 0,
   };

@@ -14884,3 +14884,29 @@ Stage Summary:
 - 关键实现：pointer-events-none 悬浮层 + 页面根背景铺底是消除色带的唯一正解（渐变/透明块都会引入新边界）；TogetherMenu anchor 简化；BUBBLE_TTL 定时器只在消息更新时挂载；QuickInputBar 动画 quick-in-up 入 globals.css
 - 范围限定遵守：仅动音乐 App 4 个文件（music.tsx/music-player.tsx/music-shared.tsx/music-mine.tsx padding+bg）+ globals.css 追加动画 + home/search/playlist padding，16 项受保护功能未触碰
 - 改动文件：src/components/apps/music.tsx、music-player.tsx、music-shared.tsx、music-mine.tsx、music-home.tsx、music-search.tsx、music-playlist.tsx、src/app/globals.css
+
+---
+Task ID: 63
+Agent: Z.ai Code（主会话）
+Task: 用户第八轮反馈十四项——一起听界面乱序整理（头像上移/删红色徽章/删耳机线/气泡收紧+出现时隐藏时长/唱片白色块修复/爱心评论数字重排）、三点设置弹窗显示双方头像、底部 Tab 实色、迷你播放器全界面常驻、VIP 徽章简约化、添加状态上移+表情状态隐藏笑脸、搜索页按截图 1:1 重做
+
+Work Log:
+- 一起听头部重做（music-player TogetherHead）：双头像贴顶（PlayerTopBar 新增 dense，pt-58→pt-46）并紧贴交叠（保留 -ml-2.5 无边框）；删除红色计时徽章（用户：「两个头像那里的红色图标删除」）；删除耳机线 SVG（用户：「界面好乱」）；气泡行收紧为 max-w-[340px] 居中容器、双列左对齐、尾巴各自指向头像；「相距 x 公里 · 一起听了 x」时长行在任一气泡可见时隐藏、气泡 5 秒消失后恢复（hasBubble 派生条件）
+- 底部三个点改开「一起听设置弹窗」（music-player modeCapsule）：此前开的是歌曲操作面板 MoreSheet，按用户第八轮语义改回 openTgMenu（openTgMenu 声明上移修复 use-before-declaration）；TogetherMenu 顶部新增双方头像卡（对方+我 11px 交叠 + 「正在和 xx 一起听」），音乐态/聊天态、顶栏⋮/底部三点四处入口共用
+- 唱片白色块根因修复（music-player VinylView）：用户连续两轮报告的「唱片上一块白色的东西」= 旧唱针的浅灰元件（pivot bg-zinc-200 + 针头 bg-zinc-300 h-4 w-2.5）落在盘面上像贴了白色方块；重画为深色金属风唱针（轴承 #2c2c30 双层 + 针杆渐变 #9a9aa2→#38383d + 针头 #3a3a40），右上角进入、播放贴盘/暂停抬起 rotate(-26deg)；唱片改高度自适应（aspect-square h-full max-h-[300px]），布局挤压时不再溢出遮挡时长/标题行（第八轮「界面好乱」的结构性根因之一）
+- 爱心/评论图标区重排（music-player 歌名行）：数字从「图标右侧 -top-2 left-full」（互相叠压+压住评论图标）改为「各自图标正上方 -top-[15px] 居中」，图标组 gap-7 + pt-4 预留数字空间；信息图标删掉 46px 半透明圆底改纯图标（此前圆底压住「点按封面查看歌词」）；行改 justify-between + pr-8
+- 底部 TabBar 实色化（music.tsx）：用户「为什么音乐界面底部的tab是透明的」——tabs/playlist 两处底部悬浮层加 bg-[#F8F8F8] dark:bg-[#141416] + border-t 细分割线，迷你条独立全局层
+- 迷你播放器全界面常驻（music.tsx 重构）：MiniBar 从 tabs/playlist 悬浮层抽出，改为 MusicApp 级全局渲染（nav.view!=='player' 且无评论弹层时显示，z-[70] 盖过设置页 z-60；TabBar 可见时 bottom-58 贴其上方，否则 bottom-0）；设置页滚动内容 pb-10→pb-[110px]、添加到歌单/最近播放/编辑资料/主页装扮/添加状态五个底部弹层 pb 加到 100~104px 防止主按钮被迷你条遮挡
+- VIP 徽章简约化（music-mine VipBadge）：删三层渐变+四重 inset 阴影的立体小唱片，改扁平纯黑胶囊（#1a1a1c）+ 11px 迷你黑胶圆点（黑盘白环红芯）+ 奶白「VIP·柒」；SVIP 金字金环橙芯（#26221a/#e9cb86）
+- 添加状态两处（music-mine）：状态胶囊 mt-1→mt-0 上移；新增 statusStartsWithPict（首字符码点 ≥0x1F000 / 0x2600-0x27BF / 0x2B00-0x2BFF / 0x2190-0x21FF 判定表情图标）——状态自带表情（如 🎧 正在听歌）时不再叠加笑脸图标，纯文字状态保留笑脸，无状态显示加号
+- 搜索页 1:1 重做（music-search.tsx 整页重写）：返回箭头 + 白底胶囊搜索框（放大镜 + 热搜词每 5 秒轮播 placeholder + 竖分隔线 + 「搜索」实字钮）；五宫格分类（歌手/曲风/专区/识曲/听书，lucide 纯图标）；搜索历史（idb-kv 按账号/游客隔离 music-search-hist:*，chips、垃圾桶清空、V 形收起/展开）；猜你喜欢（热搜池轮换取 6 个 + 刷新换一批）；热搜榜/热歌榜横滑白卡（红色 1-3 名、#1 爆徽章、#3 红箭头、▶播放钮，热歌榜取 toplist id 3778678）；点词条/历史/猜你喜欢即搜
+- 顺手修两个真实数据 bug（music-api.ts，用户截图里「未知歌手」+灰封面的根因）：① search() 从旧 /search 切到 /cloudsearch——旧接口 album.picUrl 恒为 null（只有 picId）导致封面全是灰块；② normalizeSong 的 artists 映射 bug `s.artists ?? (s.ar ? [s.ar] : [])` 把 cloudsearch 的 ar 数组又包了一层导致歌手名全部丢失显示「未知歌手」；NcmSong.ar 类型放宽为 NcmArtist | NcmArtist[] 兼容两种格式
+- E2E（agent-browser 420x900）全过：游客模式刷新保持 ✓；搜索页首屏（轮播热词 placeholder/五宫格/历史/猜你喜欢/双榜单卡 爆+↑ 徽章/热歌榜标题正确）✓；点猜你喜欢吃搜索、历史 chip 落地 ✓；播放爱情转移→迷你条带封面悬于实色 TabBar 上方 ✓；全屏播放页：深色唱针无白块+真实专辑封面+「陈奕迅」歌手名+299w+/16w+ 数字在图标正上方 ✓；邀请小音→一起听默认音乐界面：双头像贴顶无红徽章无耳机线+时长行 ✓；点信息图标→底部输入条→发消息→双方气泡在头像正下、时长行隐藏 ✓；6 秒后气泡消失、时长行恢复 ✓；底部三点→设置弹窗顶部双方头像+「正在和 小音 一起听」+五项操作 ✓；聊天 tab 正常 ✓；「我」页：状态胶囊上移+🎧表情状态无笑脸+纯文字状态有笑脸+简约 VIP 徽章 ✓；设置页底部迷你条常驻 ✓；深色模式 TabBar #141416 实色 ✓；console/page errors 零
+- bunx tsc 0 错误；bun run lint 0 错误 0 警告
+
+Stage Summary:
+- 交付：一起听界面大整理（头像贴顶/删红徽章/删耳机线/气泡头像正下+5秒消失且出现时隐藏时长/唱片深色唱针修复白块+高度自适应防挤压重叠/爱心评论数字图标正上方）；三点改开设置弹窗且弹窗顶部显示双方头像；底部 TabBar 实色；迷你播放条全局常驻（设置页也显示）；VIP 徽章扁平简约；添加状态上移+表情状态隐藏笑脸图标；搜索页按截图 1:1 重做（分类宫格/搜索历史/猜你喜欢/热搜榜热歌榜）
+- 根因修复：搜索封面灰块 = 旧 /search 接口 picUrl 恒空 → 切 cloudsearch；「未知歌手」= normalizeSong 把 ar 数组再包一层 → 摊平。这两个 bug 同时解释了用户第七轮截图1里「爱情转移/未知歌手」的现象
+- 关键实现：VinylView aspect-square h-full 高度自适应是消除布局挤压重叠的关键；全局 MiniBar 层 z-[70] + TabBar 可见性派生（showTabBar）决定 bottom 偏移；底部弹层统一加 pb 防遮挡
+- 测试数据说明：E2E 在 agent-browser 独立 Chromium profile 进行，测试联系人「小音」/搜索历史/状态仅存在于该 profile，用户浏览器数据不受影响
+- 改动文件：src/components/apps/music-player.tsx、music-search.tsx（重写）、music-mine.tsx、music.tsx、music-shared.tsx、music-settings.tsx、src/lib/ios/music-api.ts

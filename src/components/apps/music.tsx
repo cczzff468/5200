@@ -59,6 +59,10 @@ export default function MusicApp() {
   }, [openAppNow]);
 
   const loggedIn = !!loginUid;
+  // 迷你播放条显示策略：除全屏播放页外所有界面都显示（含设置页等浮层）；评论弹层带输入框不遮
+  const showMini = nav.view !== 'player' && !commentSong;
+  // TabBar 只在 tabs/playlist 视图显示（设置/评论浮层盖住时不重复展示）
+  const showTabBar = (nav.view === 'tabs' || nav.view === 'playlist') && !showSettings && !commentSong;
 
   return (
     <IOSScreen className="relative bg-[#F8F8F8] dark:bg-black">
@@ -73,24 +77,39 @@ export default function MusicApp() {
                 {nav.tab === 'search' && <MusicSearch />}
                 {nav.tab === 'mine' && <MusicMine onSettings={() => setShowSettings(true)} />}
               </div>
-              {/* 底部悬浮层：迷你播放条 + TabBar 透明浮在页面上，页面背景一直铺到屏幕底（消除长方形色带） */}
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
-                <MiniBar />
+              {/* 底部悬浮层：TabBar 实色底（不再透明露内容），迷你条由全局层渲染 */}
+              {showTabBar && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
+                  <div className="pointer-events-auto border-t border-black/[0.06] bg-[#F8F8F8] dark:border-white/10 dark:bg-[#141416]">
+                    <MusicTabBar />
+                    <div className="h-[10px] shrink-0" />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {/* 歌单页：同一实色 TabBar 悬浮层 */}
+          {nav.view === 'playlist' && showTabBar && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
+              <div className="pointer-events-auto border-t border-black/[0.06] bg-[#F8F8F8] dark:border-white/10 dark:bg-[#141416]">
                 <MusicTabBar />
                 <div className="h-[10px] shrink-0" />
               </div>
             </div>
           )}
-          {/* 底部悬浮层：歌单页也显示（迷你条+TabBar 透明浮在页面上，页面背景铺到屏幕底） */}
-          {nav.view === 'playlist' && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
-              <MiniBar />
-              <MusicTabBar />
-              <div className="h-[10px] shrink-0" />
-            </div>
-          )}
           {nav.view === 'player' && <MusicPlayer />}
           {nav.view === 'playlist' && <MusicPlaylist />}
+
+          {/* 全局迷你播放条：tabs/歌单/设置页都悬浮显示（全屏播放页除外）；TabBar 可见时贴其上方 */}
+          {showMini && (
+            <div
+              className="pointer-events-none absolute inset-x-0 z-[70]"
+              style={{ bottom: showTabBar ? 58 : 0 }}
+              data-testid="music-minibar-global"
+            >
+              <MiniBar />
+            </div>
+          )}
         </>
       )}
       {/* 设置页覆盖（游客/登录都可进） */}

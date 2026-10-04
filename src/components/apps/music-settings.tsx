@@ -64,7 +64,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
         <span className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100">设置</span>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-10">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-[110px]">
         {/* 账号 */}
         <section className="rounded-2xl border border-black/5 bg-white p-4 dark:border-white/10 dark:bg-zinc-900" data-testid="music-settings-account">
           <p className="mb-3 text-[13px] font-bold text-zinc-500">账号</p>

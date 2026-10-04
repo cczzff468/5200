@@ -285,7 +285,7 @@ export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () =
             管理
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[100px] pt-2">
           {loading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />

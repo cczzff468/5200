@@ -74,42 +74,29 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（完全按用户截图：纯黑胶囊 + 小黑胶唱片（黑盘白环高光+红标芯白中心孔）
- * +「VIP·柒」奶白粗字繁体数字；SVIP 同款胶囊金字、唱片金环红橙芯）。level<1 只显示 VIP。
+ * VIP 徽章（简约版）：纯黑扁平胶囊 + 迷你黑胶圆点（黑盘白环红芯）+「VIP·柒」奶白字繁体数字；
+ * SVIP 同款胶囊金字金环橙芯。无渐变无立体阴影，干净不抢眼。level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
   return (
     <span
-      className={`flex shrink-0 items-center rounded-full py-[3px] pl-[3.5px] pr-[10px] ${
-        svip
-          ? 'bg-[linear-gradient(180deg,#2e2c24_0%,#181710_52%,#050503_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),inset_0_-1px_1px_rgba(0,0,0,0.8),0_1px_3px_rgba(0,0,0,0.4)]'
-          : 'bg-[linear-gradient(180deg,#2c2c31_0%,#161618_52%,#030304_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),inset_0_-1px_1px_rgba(0,0,0,0.8),0_1px_3px_rgba(0,0,0,0.4)]'
+      className={`flex shrink-0 items-center rounded-full py-[3.5px] pl-[6px] pr-[9px] ${
+        svip ? 'bg-[#26221a]' : 'bg-[#1a1a1c]'
       }`}
       data-testid="music-mine-vip"
     >
-      {/* 小黑胶唱片：黑盘（外缘白高光环+盘面双纹路）+ 红标芯（白描边）+ 中心白孔 */}
+      {/* 迷你黑胶圆点：黑盘 + 外环 + 红芯 */}
       <span
-        className="relative mr-[5px] flex h-[17px] w-[17px] items-center justify-center rounded-full bg-[#070708]"
-        style={{
-          boxShadow: svip
-            ? 'inset 0 0 0 1px rgba(236,203,128,0.75), inset 0 0 0 2.6px rgba(0,0,0,1), inset 0 0 0 3.3px rgba(236,203,128,0.35), inset 0 1.5px 1.5px rgba(255,255,255,0.28)'
-            : 'inset 0 0 0 1px rgba(255,255,255,0.6), inset 0 0 0 2.6px rgba(0,0,0,1), inset 0 0 0 3.3px rgba(255,255,255,0.18), inset 0 1.5px 1.5px rgba(255,255,255,0.28)',
-        }}
+        className={`relative mr-[4.5px] flex h-[11px] w-[11px] shrink-0 items-center justify-center rounded-full ring-1 ${
+          svip ? 'bg-[#0c0a06] ring-[#c9a86a]/80' : 'bg-[#0b0b0c] ring-white/45'
+        }`}
       >
-        <span
-          className={`flex h-[8.5px] w-[8.5px] items-center justify-center rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.92)] ${
-            svip
-              ? 'bg-[linear-gradient(135deg,#F58A5A_0%,#C43E22_100%)]'
-              : 'bg-[linear-gradient(135deg,#F26D6D_0%,#C22424_100%)]'
-          }`}
-        >
-          <span className="h-[2px] w-[2px] rounded-full bg-white" />
-        </span>
+        <span className={`h-[3.5px] w-[3.5px] rounded-full ${svip ? 'bg-[#e2b25f]' : 'bg-[#ec4141]'}`} />
       </span>
       <span
-        className={`text-[12px] font-bold leading-none tracking-[0.01em] ${
-          svip ? 'text-[#E9CB86]' : 'text-[#F4EDDC]'
+        className={`text-[11px] font-semibold leading-none tracking-[0.01em] ${
+          svip ? 'text-[#e9cb86]' : 'text-[#f4eddc]'
         }`}
       >
         {svip ? 'SVIP' : 'VIP'}
@@ -130,6 +117,20 @@ const MINE_THEMES = [
 const statusKeyOf = (scope: string) => `music-mine-status:${scope}`;
 const dressKeyOf = (scope: string) => `music-mine-dress:${scope}`;
 const dressImgKeyOf = (scope: string) => `music-mine-dress-img:${scope}`;
+
+/** 状态文本是否以表情/符号图标开头（🎧/🌙/💻…）——是则状态胶囊里不再叠笑脸图标 */
+function statusStartsWithPict(s: string): boolean {
+  if (!s) return false;
+  const cp = s.codePointAt(0) ?? 0;
+  return (
+    cp >= 0x1f000 || // emoji 主区
+    (cp >= 0x2600 && cp <= 0x27bf) || // 杂项符号/丁贝符
+    (cp >= 0x2b00 && cp <= 0x2bff) || // 箭头等符号
+    (cp >= 0x2190 && cp <= 0x21ff) || // 箭头
+    (cp >= 0xfe00 && cp <= 0xfe0f) || // 变体选择符
+    cp === 0x200d
+  ); // 零宽连接符
+}
 
 /** 从手机选择图片 → 居中裁方 → 压缩为 288px JPEG dataURL（存 IndexedDB 体积可控） */
 function fileToAvatarDataUrl(file: File): Promise<string> {
@@ -360,15 +361,20 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         </div>
 
-        {/* 状态（添加状态/已添加状态）——中轴与头像对齐；点击编辑（更贴顶栏） */}
-        <div className="mt-1 flex justify-center">
+        {/* 状态（添加状态/已添加状态）——中轴与头像对齐，更贴顶栏；点击编辑 */}
+        <div className="mt-0 flex justify-center">
           <button
             type="button"
             onClick={() => setStatusOpen(true)}
             data-testid="music-mine-add-status"
             className="relative flex items-center gap-1 rounded-full bg-white/15 py-[6px] pl-[11px] pr-[13px] text-[12px] leading-none text-white/90 backdrop-blur-sm active:bg-white/25"
           >
-            {statusText ? <Smile className="h-[14px] w-[14px] shrink-0" /> : <Plus className="h-[14px] w-[14px] shrink-0" />}
+            {/* 已有状态且自带表情图标时不再叠加笑脸；无状态时显示加号 */}
+            {!statusText ? (
+              <Plus className="h-[14px] w-[14px] shrink-0" />
+            ) : !statusStartsWithPict(statusText) ? (
+              <Smile className="h-[14px] w-[14px] shrink-0" />
+            ) : null}
             <span className="max-w-[190px] truncate" data-testid="music-mine-status-text">
               {statusText || '添加状态'}
             </span>
@@ -911,7 +917,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-profile-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+      <div className="relative max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">编辑资料</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -1116,7 +1122,7 @@ function DressSheet({
   return (
     <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-dress-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">主页装扮</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -1257,7 +1263,7 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
             关闭
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+        <div className="min-h-0 flex-1 overflow-y-auto pb-[100px]">
           {loading ? (
             <LoadingBlock />
           ) : items.length === 0 ? (
@@ -1304,7 +1310,7 @@ function StatusEditSheet({
   return (
     <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-status-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
         <div className="mx-auto mb-3.5 h-1 w-8 rounded-full bg-black/10 dark:bg-white/20" />
         <p className="mb-4 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">添加状态</p>
         <div className="relative">
