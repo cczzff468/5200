@@ -23,6 +23,7 @@ import { useSettings } from './store';
 import { useEffect, useState } from 'react';
 import { useMusic, setSongPlayedHook } from './music-store';
 import { search, songArtistText, musicUid, type NcmSong } from './music-api';
+import { buildCrossContextBlocks } from './cross-app-context';
 
 // ---------------- 类型 ----------------
 
@@ -195,28 +196,86 @@ export async function writeTogetherMemory(contactId: string, what: string): Prom
   }
 }
 
-/** 播放钩子：一起听中每次放新歌 → 记忆 + 概率触发 AI 评论 */
+/** 播放钩子：一起听中每次放新歌 → 记忆 + 概率触发 AI 评论；solo 听歌 → 轻量记忆（30 分钟节流） */
 export function installMusicAiHook(): void {
   let lastSongId = 0;
   let lastWrittenAt = 0;
+  let lastSoloMemAt = 0;
   setSongPlayedHook((song: NcmSong) => {
     void (async () => {
       const t = loadActiveTogether();
-      if (!t) return;
-      const c = await getContact(t.contactId);
-      if (!c) return;
       const artist = songArtistText(song);
-      if (song.id !== lastSongId || Date.now() - lastWrittenAt > 10 * 60_000) {
-        await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
-        lastSongId = song.id;
-        lastWrittenAt = Date.now();
+      if (t) {
+        const c = await getContact(t.contactId);
+        if (!c) return;
+        if (song.id !== lastSongId || Date.now() - lastWrittenAt > 10 * 60_000) {
+          await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
+          lastSongId = song.id;
+          lastWrittenAt = Date.now();
+        }
+        if (t.aiChatter && Math.random() < 0.45) {
+          void aiComment(t.contactId, `刚刚切到了《${song.name}》（${artist}）`);
+        }
+        startChatterTimer();
+        return;
       }
-      if (t.aiChatter && Math.random() < 0.45) {
-        void aiComment(t.contactId, `刚刚切到了《${song.name}》（${artist}）`);
+      // solo 听歌记忆（需求一.4）：非一起听时也给最近聊过的角色留一笔听歌痕迹，
+      // 参与后续聊天召回（全局 30 分钟节流，不吵）；实时近况另有 cross-app 音乐块注入
+      if (Date.now() - lastSoloMemAt > 30 * 60_000) {
+        lastSoloMemAt = Date.now();
+        try {
+          const cids = await recentChatCharIds(3);
+          if (cids.length > 0) {
+            const who = await ownerName();
+            for (const cid of cids) {
+              memAddEventFragment(cid, 'wx', `${who}听了《${song.name}》（${artist}）`, {
+                eventTime: Date.now(),
+                sourceTag: 'music-solo',
+              });
+            }
+          }
+        } catch {
+          // 静默
+        }
       }
-      startChatterTimer();
     })();
   });
+}
+
+/** 最近聊过天的 char 角色 id（读三个聊天 App 当前账号会话的最后消息时间，倒序前 n） */
+async function recentChatCharIds(n: number): Promise<string[]> {
+  try {
+    const { listContacts } = await import('./contacts-store');
+    const { kvGetScoped } = await import('./idb-kv');
+    const all = await listContacts();
+    const chars = all.filter((c) => c.kind === 'char');
+    const scored: { id: string; ts: number }[] = [];
+    for (const c of chars) {
+      let ts = 0;
+      for (const [app, key] of [
+        ['wx', `wx-chat-msgs:${c.id}`],
+        ['qq', `qq-chat-msgs:${c.id}`],
+        ['sms', `ios-chat-msgs:c:${c.id}`],
+      ] as const) {
+        try {
+          const msgs = kvGetScoped<{ time?: number }[]>(key, app);
+          if (Array.isArray(msgs) && msgs.length > 0) {
+            const t = Number(msgs[msgs.length - 1]?.time ?? 0);
+            if (Number.isFinite(t) && t > ts) ts = t;
+          }
+        } catch {
+          // 单端失败跳过
+        }
+      }
+      if (ts > 0) scored.push({ id: c.id, ts });
+    }
+    return scored
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, n)
+      .map((x) => x.id);
+  } catch {
+    return [];
+  }
 }
 
 // ---------------- LLM（两级兜底，与 proactive-msg 同款） ----------------
@@ -305,6 +364,12 @@ function playingBlock(extra: string, who: string): string {
     '- 你正在和对方一起实时听歌，像坐在同一间屋子里各戴一只耳机那样自然聊天；',
     '- 可以聊当下这首歌的感受、歌手、歌词、回忆，也可以说日常；消息要口语化、短（1~2 句）、符合你的人设语气；',
     '- 不要输出 markdown、不要伪装成系统；直接输出消息正文。',
+    '',
+    '【播放控制】你在陪对方听歌，可以控制播放（指令写在消息末尾，系统会真实执行，不要在正文里描述指令本身，不要加引号/代码块）：',
+    '- 想切下一首：[切歌]；想回上一首：[上一首]；',
+    '- 想暂停音乐：[暂停]；想继续放：[继续]；',
+    '- 想放一首具体的歌（选歌/换到你们聊到的歌）：[放歌:歌名:歌手]（写真实存在的歌，如 [放歌:晴天:周杰伦]）；',
+    '- 选什么歌、什么时候切，完全按你的人设、你们的聊天内容和这首歌的氛围来；用户随时会手动操作播放器，别抢节奏，不要每条消息都带指令。',
   );
   void who;
   return lines.join('\n');
@@ -319,6 +384,15 @@ async function personaSystemFor(cid: string, musicBlock: string): Promise<string
     memory = memChatRecallBlock(cid, 'wx', c.persona || '音乐', {});
   } catch {
     memory = '';
+  }
+  // 跨 App 感知（需求二）：以 'music' 身份拉【当前环境】+ 其他 App 最近消息 + 共同群近况——
+  // AI 带着微信/QQ/信息/电话的记忆进音乐 App，也知道「现在是在音乐 App 聊天」
+  let crossBlock = '';
+  try {
+    const blocks = await buildCrossContextBlocks(cid, 'music', userName);
+    crossBlock = [blocks.crossAppBlock, blocks.groupBlock].filter(Boolean).join('\n\n');
+  } catch {
+    crossBlock = '';
   }
   let share = true;
   try {
@@ -338,7 +412,58 @@ async function personaSystemFor(cid: string, musicBlock: string): Promise<string
       '当前场景是音乐 App 的「一起听」聊天：你们的聊天围绕正在听的音乐展开，语气随意自然，消息很短（一两句话）。',
     ],
   });
-  return [persona, memory, musicBlock].filter(Boolean).join('\n\n');
+  return [persona, memory, crossBlock, musicBlock].filter(Boolean).join('\n\n');
+}
+
+// ---------------- AI 播放控制（需求五：一起听 AI 自动播放/关闭/选歌/切歌） ----------------
+
+interface TgControl {
+  type: 'next' | 'prev' | 'pause' | 'resume' | 'play';
+  name?: string;
+  artist?: string;
+}
+
+/** 从 AI 原文里抽出播放控制指令并从正文剔除：[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手] */
+function extractTgControls(raw: string): { text: string; controls: TgControl[] } {
+  const controls: TgControl[] = [];
+  let text = raw ?? '';
+  text = text.replace(/\[(?:放歌|播放|来一首|来首)[:：]([^\][]*)(?:[:：]([^\][]*))?\]/g, (_m, name, artist) => {
+    const n = String(name ?? '').trim();
+    if (n) controls.push({ type: 'play', name: n, artist: String(artist ?? '').trim() });
+    return '';
+  });
+  text = text.replace(/\[(切歌|下一首|上一首|暂停|继续|停下|关音乐)\]/g, (_m, k) => {
+    const key = String(k);
+    if (key === '切歌' || key === '下一首') controls.push({ type: 'next' });
+    else if (key === '上一首') controls.push({ type: 'prev' });
+    else if (key === '暂停' || key === '停下' || key === '关音乐') controls.push({ type: 'pause' });
+    else controls.push({ type: 'resume' });
+    return '';
+  });
+  return { text: text.replace(/[ \t]+$/gm, '').trim(), controls };
+}
+
+/** 执行一起听 AI 的播放控制（直接调 useMusic action；用户随时可手动覆盖，store 层天然以最后操作为准） */
+async function runTgControls(controls: TgControl[]): Promise<void> {
+  if (controls.length === 0) return;
+  const st = useMusic.getState();
+  for (const c of controls.slice(0, 3)) {
+    try {
+      if (c.type === 'next') await st.next(false);
+      else if (c.type === 'prev') await st.prev();
+      else if (c.type === 'pause') {
+        if (st.playing) st.toggle();
+      } else if (c.type === 'resume') {
+        if (!st.playing && st.current) st.toggle();
+      } else if (c.type === 'play' && c.name) {
+        const r = await search(`${c.name} ${c.artist ?? ''}`.trim(), 1, 1);
+        const hit = r.songs[0];
+        if (hit) await st.playSong(hit, [hit]);
+      }
+    } catch {
+      // 单条指令失败不影响其余
+    }
+  }
 }
 
 // ---------------- AI 回复 ----------------
@@ -367,7 +492,8 @@ export async function togetherReply(cid: string, userText: string): Promise<void
       ),
     );
     const raw = await callLlmTwoTier(system, userText || '（对方点了推荐按钮，想让你推荐几首歌）');
-    const text = cleanAiText(raw);
+    const { text: ctrlText, controls } = extractTgControls(raw);
+    const text = cleanAiText(ctrlText);
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     } else {
@@ -379,6 +505,8 @@ export async function togetherReply(cid: string, userText: string): Promise<void
         error: true,
       });
     }
+    // AI 的播放控制指令（切歌/暂停/选歌）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
+    void runTgControls(controls);
   } finally {
     replying = false;
   }
@@ -443,10 +571,12 @@ async function aiComment(cid: string, hint: string): Promise<void> {
       ),
     );
     const raw = await callLlmTwoTier(system, '（主动发一条一起听的消息）');
-    const text = cleanAiText(raw);
+    const { text: ctrlText, controls } = extractTgControls(raw);
+    const text = cleanAiText(ctrlText);
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     }
+    void runTgControls(controls);
   } finally {
     replying = false;
   }

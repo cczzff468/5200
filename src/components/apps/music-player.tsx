@@ -51,6 +51,8 @@ import {
 } from 'lucide-react';
 import { artistSub, commentsOf, simiSong, songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
 import { useMusic, getGuestAvatar, type RepeatMode, type TogetherSessionLike, type TogetherMsgLike } from '@/lib/ios/music-store';
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { memAddEventFragment } from '@/lib/memory';
 import {
   fmtTogetherDur,
   listTogetherCandidates,
@@ -1194,6 +1196,7 @@ function MoreSheet({
   const toggleLike = useMusic((s) => s.toggleLike);
   const playSong = useMusic((s) => s.playSong);
   const [showAdd, setShowAdd] = useState(false);
+  const [showShareChat, setShowShareChat] = useState(false);
   const [cmtTotal, setCmtTotal] = useState<number | null>(null);
   const [qIdx, setQIdx] = useState(2);
 
@@ -1406,6 +1409,13 @@ function MoreSheet({
                 </span>
               </span>
             </MoreRow>
+            <MoreRow
+              icon={<MessageCircleMore className="h-[19px] w-[19px]" />}
+              testid="music-more-share-chat"
+              onClick={() => setShowShareChat(true)}
+            >
+              分享给好友（歌曲卡片）
+            </MoreRow>
             <MoreRow icon={<Info className="h-[19px] w-[19px]" />} onClick={() => onToast('暂未收录这首歌的百科')}>
               查看歌曲百科
             </MoreRow>
@@ -1445,6 +1455,127 @@ function MoreSheet({
 
         {/* 收藏到歌单（复用全局组件） */}
         {showAdd && <AddToSongSheet song={song} onClose={() => setShowAdd(false)} />}
+        {/* 分享给好友（歌曲卡片进聊天，Task 68） */}
+        {showShareChat && <ShareToChatSheet song={song} onClose={() => setShowShareChat(false)} onToast={onToast} />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 分享给好友（Task 68）：把当前歌曲以「歌曲卡片」消息写进微信/QQ 的私聊记录（role=me），
+ * 用户切回聊天 App 就能看到可点击播放的卡片；同时给角色写一条分享记忆（AI 能接住话题）。
+ * 目标列表 = AI 角色（kind='char'）；每行可分别发微信 / QQ（同一人可两边都发，发过打勾）。
+ */
+function ShareToChatSheet({
+  song,
+  onClose,
+  onToast,
+}: {
+  song: NcmSong;
+  onClose: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [chars, setChars] = useState<ContactRecord[]>([]);
+  const [sent, setSent] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let on = true;
+    void listTogetherCandidates()
+      .then((cs) => {
+        if (on) setChars(cs);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (on) setLoading(false);
+      });
+    return () => {
+      on = false;
+    };
+  }, []);
+
+  const send = (app: 'wx' | 'qq', c: ContactRecord) => {
+    const artist = songArtistText(song);
+    const cover = songCover(song) || undefined;
+    const msg = {
+      id: `song-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      role: 'me' as const,
+      content: `[歌曲]《${song.name}》${artist}`,
+      time: Date.now(),
+      kind: 'song' as const,
+      song: { name: song.name, artist, cover, songId: song.id },
+    };
+    const key = app === 'wx' ? `wx-chat-msgs:${c.id}` : `qq-chat-msgs:${c.id}`;
+    try {
+      const cur = kvGet<unknown[]>(key) ?? [];
+      kvSet(key, [...cur, msg].slice(-100));
+    } catch {
+      onToast('分享失败，稍后再试');
+      return;
+    }
+    try {
+      memAddEventFragment(c.id, app, `机主分享了一首《${song.name}》（${artist}）给你`, {
+        eventTime: Date.now(),
+        sourceTag: 'music-share',
+      });
+    } catch {
+      // 记忆失败不影响分享
+    }
+    setSent((prev) => new Set(prev).add(`${app}:${c.id}`));
+    onToast(`已把《${song.name}》分享给${c.nickname || c.name}（${app === 'wx' ? '微信' : 'QQ'}）`);
+  };
+
+  return (
+    <div className="absolute inset-0 z-[72] flex items-end" data-testid="music-share-chat-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
+      <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl bg-white pb-6 dark:bg-zinc-900">
+        <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+        <div className="flex items-center justify-between px-5 pt-3">
+          <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">分享给好友</p>
+          <button type="button" aria-label="关闭" onClick={onClose} className="text-zinc-400">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <p className="px-5 pt-1 text-[12px] text-zinc-400">
+          《{song.name}》 {songArtistText(song)} · 以歌曲卡片发进聊天
+        </p>
+        <div className="mt-2 min-h-0 flex-1 overflow-y-auto no-scrollbar px-2 pb-2">
+          {loading ? (
+            <p className="py-8 text-center text-[13px] text-zinc-400">加载中…</p>
+          ) : chars.length === 0 ? (
+            <p className="py-8 text-center text-[13px] text-zinc-400">还没有可以分享的 AI 好友</p>
+          ) : (
+            chars.map((c) => (
+              <div key={c.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5 active:bg-black/5 dark:active:bg-white/10">
+                <CoverImg src={c.avatar || ''} className="h-10 w-10 shrink-0" rounded="rounded-full" alt={c.nickname || c.name} />
+                <p className="min-w-0 flex-1 truncate text-[14px] text-zinc-800 dark:text-zinc-200">{c.nickname || c.name}</p>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid={`music-share-wx-${c.id}`}
+                    onClick={() => send('wx', c)}
+                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium active:scale-95 ${
+                      sent.has(`wx:${c.id}`) ? 'bg-zinc-200 text-zinc-400 dark:bg-zinc-700' : 'bg-[#07C160] text-white'
+                    }`}
+                  >
+                    {sent.has(`wx:${c.id}`) ? '已分享' : '微信'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`music-share-qq-${c.id}`}
+                    onClick={() => send('qq', c)}
+                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium active:scale-95 ${
+                      sent.has(`qq:${c.id}`) ? 'bg-zinc-200 text-zinc-400 dark:bg-zinc-700' : 'bg-[#12B7F5] text-white'
+                    }`}
+                  >
+                    {sent.has(`qq:${c.id}`) ? '已分享' : 'QQ'}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

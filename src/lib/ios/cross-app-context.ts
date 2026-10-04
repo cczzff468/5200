@@ -41,6 +41,7 @@
  */
 
 import { kvGetScoped } from './idb-kv';
+import { kvGet } from './idb-kv';
 // 多账号（Task 40-2d v2）：跨 App 读其他 App 的消息用 kvGetScoped（显式按对应 App 当前账号，
 // 不依赖键前缀隐式映射）；电话 call-logs/voicemails 按电话 App 当前账号过滤
 import { getActiveAccountIdFor } from './accounts';
@@ -48,15 +49,18 @@ import { localDB, type CallLogRecord, type VoicemailRecord } from './db';
 import { getContact } from './contacts-store';
 import { getMemSettings } from '@/lib/memory';
 import { listGroups, loadGroupMsgs, type WxGroupMsg } from './groups';
+import { musicUid } from './music-api';
 
-/** 四端标识（与 memory-core 的 MemApp 同形；本模块不 import memory-core 避免耦合） */
-export type CrossAppId = 'wx' | 'qq' | 'sms' | 'phone';
+/** 五端标识（与 memory-core 的 MemApp 同形；本模块不 import memory-core 避免耦合）。
+ *  music = 音乐 App（Task 68）：一起听聊天以 'music' 身份接入跨 App 感知，
+ *  其他四端聊天也能读到音乐 App 的听歌动态（正在听/最近播放/收藏/一起听消息）。 */
+export type CrossAppId = 'wx' | 'qq' | 'sms' | 'phone' | 'music';
 
 /** App 显示名（system 文案用） */
-const APP_LABEL: Record<CrossAppId, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话' };
+const APP_LABEL: Record<CrossAppId, string> = { wx: '微信', qq: 'QQ', sms: '信息', phone: '电话', music: '音乐' };
 
-/** 各私聊 App 的消息 kv 键（与各 App 落盘键严格一致；sms 会话键形如 c:<contactId>） */
-function chatMsgsKey(app: Exclude<CrossAppId, 'phone'>, contactId: string): string {
+/** 各私聊 App 的消息 kv 键（与各 App 落盘键严格一致；sms 会话键形如 c:<contactId>；music 无私聊消息键） */
+function chatMsgsKey(app: Exclude<CrossAppId, 'phone' | 'music'>, contactId: string): string {
   return app === 'wx' ? `wx-chat-msgs:${contactId}` : app === 'qq' ? `qq-chat-msgs:${contactId}` : `ios-chat-msgs:c:${contactId}`;
 }
 
@@ -167,6 +171,13 @@ function msgText(m: unknown): string | null {
   if (kind === 'redpacket') return '[红包]';
   if (kind === 'transfer') return '[转账]';
   if (kind === 'family') return '[亲属卡]';
+  if (kind === 'song') {
+    // 歌曲卡片（音乐 App × AI 深度互动）：AI 读到歌名/歌手，知道分享过什么歌
+    const s = o.song as { name?: unknown; artist?: unknown } | null | undefined;
+    const n = typeof s?.name === 'string' ? s.name.trim() : '';
+    const a = typeof s?.artist === 'string' ? s.artist.trim() : '';
+    return n ? truncate(`[歌曲卡片]《${n}》${a}`.trim(), LINE_CAP_PRIVATE) : '[歌曲卡片]';
+  }
   if (kind === 'groupcard') return '[群聊邀请]';
   if (kind === 'blockreq') {
     const b = o.blkreq as { reason?: unknown } | null | undefined;
@@ -225,13 +236,83 @@ function joinSections(intro: string, sections: BlockSection[], budget: number): 
   return out;
 }
 
+// ---------------- 音乐动态（Task 68：音乐 App 听歌数据注入所有聊天端） ----------------
+
+/** 鸭子读一首歌的《名》（歌手）文本（music-now/history/liked 的 song 都是 NcmSong 形状） */
+function songBrief(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return '';
+  const s = raw as Record<string, unknown>;
+  const name = typeof s.name === 'string' ? s.name.trim() : '';
+  if (!name) return '';
+  let artist = '';
+  const arts = Array.isArray(s.artists) ? s.artists : Array.isArray(s.ar) ? s.ar : [];
+  for (const a of arts) {
+    const n = a && typeof a === 'object' && typeof (a as Record<string, unknown>).name === 'string' ? ((a as Record<string, unknown>).name as string).trim() : '';
+    if (n) artist = artist ? `${artist}/${n}` : n;
+  }
+  return `《${name}》${artist ? `（${artist}）` : ''}`;
+}
+
+/**
+ * 音乐 App 动态行（AI 知道用户在听什么）：
+ * - 正在听的歌（music-now 全局快照；含是否在一起听中）；
+ * - 最近播放前 5（music-history:{uid}）；
+ * - 红心收藏前 3（music-liked:{uid}）；
+ * - 与该角色的一起听近况：活跃会话在听哪首 + 最近几条一起听消息（机主=userLabel/角色=你）。
+ * 全部直接读 kv（不依赖音乐 App 是否打开过），防御性容错，任何失败跳过该行。
+ */
+function readMusicLines(contactId: string, userLabel: string, currentApp: CrossAppId): string[] {
+  const lines: string[] = [];
+  try {
+    const uid = musicUid();
+    // 正在听（全局快照；仅当属当前音乐账号时采信——切号后旧快照不读）
+    const now = kvGet<{ song?: unknown; at?: number; uid?: unknown }>('music-now');
+    const inTg = currentApp !== 'music' && Boolean(kvGet<unknown>(`music-together-active:${uid}`));
+    const cur = songBrief(now?.song);
+    if (cur && (now?.uid ?? uid) === uid) {
+      lines.push(`正在听：${cur}${inTg ? '（正在和 AI 角色一起听）' : ''}`);
+    }
+    // 最近播放（新歌在前）
+    const hist = kvGet<{ song?: unknown }[]>(`music-history:${uid}`);
+    if (Array.isArray(hist) && hist.length > 0) {
+      const items = hist.slice(0, 5).map((h) => songBrief(h?.song)).filter(Boolean);
+      if (items.length > 0) lines.push(`最近听过：${items.join('、')}`);
+    }
+    // 红心收藏
+    const liked = kvGet<{ song?: unknown }[]>(`music-liked:${uid}`);
+    if (Array.isArray(liked) && liked.length > 0) {
+      const items = liked.slice(0, 3).map((h) => songBrief(h?.song)).filter(Boolean);
+      if (items.length > 0) lines.push(`收藏的歌（红心）：${items.join('、')}`);
+    }
+    // 与该角色的一起听近况（消息按角色隔离，只读本角色的）
+    if (contactId) {
+      const tgMsgs = kvGet<{ role?: unknown; text?: unknown; songs?: unknown }[]>(`music-together:${uid}:${contactId}`);
+      if (Array.isArray(tgMsgs) && tgMsgs.length > 0) {
+        const recent = tgMsgs.slice(-3);
+        const rows: string[] = [];
+        for (const m of recent) {
+          const text = typeof m?.text === 'string' ? m.text.trim() : '';
+          if (!text) continue;
+          const who = m.role === 'me' ? userLabel : m.role === 'recs' ? '你' : '你';
+          const body = m.role === 'recs' ? `（你推荐了歌：${text}）` : text;
+          rows.push(`${who}：${truncate(body, 60)}`);
+        }
+        if (rows.length > 0) lines.push(`你们在音乐 App 一起听时的对话（最近）：`, ...rows);
+      }
+    }
+  } catch {
+    // 音乐数据读不到：跳过（不阻断消息发送）
+  }
+  return lines;
+}
+
 // ---------------- 跨 App 块 ----------------
 
 /** 读某私聊 App 的最近消息行（机主=userLabel/角色=你：；userLabel 缺省回退「机主」；空返回 []）。
  *  多账号（Task 40-2d v2）：本函数只读「其他 App」（buildCrossAppBlock 的 others 循环），
  *  消息键用 kvGetScoped 显式按对应 App 的当前账号读（wx→wx 账号 / qq→qq 账号 / sms→sms 账号），
  *  与调用方所在 App 的当前账号无关 */
-function readPrivateLines(app: Exclude<CrossAppId, 'phone'>, contactId: string, userLabel?: string): string[] {
+function readPrivateLines(app: Exclude<CrossAppId, 'phone' | 'music'>, contactId: string, userLabel?: string): string[] {
   const raw: unknown = kvGetScoped(chatMsgsKey(app, contactId), app);
   if (!Array.isArray(raw)) return [];
   const msgs = sortAsc(raw.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === 'object')).slice(-MSGS_PER_APP);
@@ -346,15 +427,17 @@ export async function buildCrossAppBlock(contactId: string, currentApp: CrossApp
     } catch {
       charName = '';
     }
-    const others = (['wx', 'qq', 'sms', 'phone'] as CrossAppId[]).filter((a) => a !== currentApp);
+    const others = (['wx', 'qq', 'sms', 'phone', 'music'] as CrossAppId[]).filter((a) => a !== currentApp);
     const sections: BlockSection[] = [];
     for (const app of others) {
       const lines =
         app === 'phone'
           ? await readPhoneLines(contactId, charName)
-          : readPrivateLines(app, contactId, userLabel);
+          : app === 'music'
+            ? readMusicLines(contactId, userLabel, currentApp)
+            : readPrivateLines(app, contactId, userLabel);
       if (lines.length === 0) continue; // 空会话的 App 整段跳过
-      sections.push({ header: `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : '对话'}：`, lines });
+      sections.push({ header: `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : app === 'music' ? '听歌动态' : '对话'}：`, lines });
     }
     if (sections.length === 0) return envLine; // 全部其他 App 都无记录：只保留当前环境行
     // fix3-4 块头锚点：「你：」= AI 本人说过的话；「{userLabel}：」= 机主说的（与行前缀实际用字一致）

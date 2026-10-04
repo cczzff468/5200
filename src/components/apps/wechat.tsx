@@ -123,7 +123,10 @@ import {
   type PendingCardInfo,
   type RichAction,
   type RichMsg,
+  type RichSong,
 } from '@/lib/chat-rich';
+import SongMsgBubble from './song-msg-bubble';
+import { triggerInviteFromChat } from '@/lib/ios/together-invite';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -158,7 +161,7 @@ import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
+import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -379,11 +382,14 @@ interface WxMsg {
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
   fam?: WxFamData;
+  /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：name/artist 必填，cover/songId 落库时已知可带（免搜索），
+   *  note = 分享语，autoPlay = AI 点播（投递后自动播放），invite = 同时触发过全局一起听邀请（防重复触发） */
+  song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean };
   /** 图片消息（kind='image'）：src = 压缩 dataURL；desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」，旧记录无此字段照常兼容）；
    *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带）；
    *  prevSrc = 「重新生成」替换前保留的旧图（长按菜单「恢复上一张」换回，可来回切换） */
@@ -1276,7 +1282,54 @@ function richToWxMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
         ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } }
         : { id, role: 'peer', content: '[表情包]', time };
     }
+    case 'song':
+      return songRichToWxMsg(rich, id, time, peer);
   }
+}
+
+/**
+ * 歌曲卡片标记 → 微信消息（Task 68 音乐 × AI）：卡片可点击播放；
+ * - 分享/点播写入角色记忆（你分享了《X》，AI 后续能接住话题）；
+ * - invite（[邀请一起听:...]）：同时弹全局邀请卡（去重：消息落库前只在首次解析时触发）。
+ */
+function songRichToWxMsg(rich: RichSong, id: string, time: number, peer: ContactRecord): WxMsg {
+  const label = rich.artist ? `《${rich.name}》（${rich.artist}）` : `《${rich.name}》`;
+  try {
+    if (rich.autoPlay) {
+      // AI 点播：给机主放歌 → 记忆
+      memAddEventFragment(peer.id, 'wx', `你给机主放了${label}，点卡片就能听`, {
+        eventTime: time,
+        sourceTag: 'music-share',
+      });
+    } else if (rich.invite) {
+      memAddEventFragment(peer.id, 'wx', `你想邀请机主一起听${label}`, {
+        eventTime: time,
+        sourceTag: 'music-share',
+      });
+    } else {
+      memAddEventFragment(peer.id, 'wx', `你分享了${label}给机主${rich.note ? `，说：${rich.note}` : ''}`, {
+        eventTime: time,
+        sourceTag: 'music-share',
+      });
+    }
+  } catch {
+    // 记忆失败不影响消息
+  }
+  if (rich.invite) {
+    try {
+      triggerInviteFromChat({ id: peer.id, name: peer.nickname || peer.name, avatar: peer.avatar }, rich.name, rich.artist);
+    } catch {
+      // 邀请卡失败不影响卡片消息
+    }
+  }
+  return {
+    id,
+    role: 'peer',
+    content: rich.autoPlay ? `[点播]${label}` : `[歌曲]${label}`,
+    time,
+    kind: 'song',
+    song: { name: rich.name, artist: rich.artist, note: rich.note || undefined, autoPlay: rich.autoPlay || undefined, inviteDone: rich.invite || undefined },
+  };
 }
 
 /** 联系人 AI 人设（微信聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
@@ -5685,7 +5738,7 @@ function ChatPage({
       .filter(
         (m) =>
           // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'location' || m.kind === 'song') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -5711,6 +5764,13 @@ function ChatPage({
               m.img?.desc
               ? `[图片]（图片内容：${m.img.desc}）`
               : '[图片]'
+            : m.kind === 'song' && m.song
+            ? // 歌曲卡片（Task 68）：AI 发的回写成示范格式（自己知道发过什么歌）；我发的用占位描述
+              m.role === 'me'
+              ? `[歌曲卡片]《${m.song.name}》${m.song.artist}`
+              : m.song.autoPlay
+                ? `[放歌:${m.song.name}:${m.song.artist}]`
+                : `[分享歌曲:${m.song.name}:${m.song.artist}]`
             : m.kind === 'textcard' && m.card
             ? // 文字图片卡片：AI 知道发过什么卡片（历史可回看，避免接不上话题）
               `[文字图片]（卡片上写着：${m.card.text}）`
@@ -6455,6 +6515,8 @@ function ChatPage({
             : '[语音]'
           : m.kind === 'location'
           ? `[位置] ${m.loc?.name ?? ''}`
+          : m.kind === 'song' && m.song
+          ? `[歌曲]《${m.song.name}》${m.song.artist}`
           : m.kind === 'redpacket' && m.rp
             ? `[红包] ¥${m.rp.amount} ${m.rp.blessing}`
             : m.kind === 'transfer' && m.tr
@@ -6569,6 +6631,8 @@ function ChatPage({
     if (m.kind === 'sticker' && m.stk) return { id, role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image' && m.img) return { id, role: 'me', content: '', time: Date.now(), kind: 'image', img: { ...m.img } };
     if (m.kind === 'location' && m.loc) return { id, role: 'me', content: '', time: Date.now(), kind: 'location', loc: { ...m.loc } };
+    // 歌曲卡片可转发（同类型卡片新 id；autoPlay/invite 不随转发保留——转发后不自动播/不再弹邀请）
+    if (m.kind === 'song' && m.song) return { id, role: 'me', content: `[歌曲]《${m.song.name}》${m.song.artist}`, time: Date.now(), kind: 'song', song: { name: m.song.name, artist: m.song.artist, cover: m.song.cover, songId: m.song.songId } };
     // 语音消息整条克隆（含音频 dataURL），目标会话里照常可播放
     if (m.kind === 'voice' && m.voice) return { id, role: 'me', content: '', time: Date.now(), kind: 'voice', voice: { ...m.voice } };
     const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'textcard';
@@ -7524,7 +7588,23 @@ function ChatPage({
                   <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
                 </button>
               )}
-              {m.kind === 'redpacket' && m.rp ? (
+              {m.kind === 'song' && m.song ? (
+                /* 歌曲卡片（Task 68 音乐 × AI）：封面+歌名+歌手+播放按钮，点击直接播放；
+                   行容器自带 bubblePress 长按（复制/删除/转发走通用菜单，内容快照见 quoteContentOf） */
+                <div {...bubblePress} className="max-w-[236px]">
+                  <SongMsgBubble
+                    msgId={m.id}
+                    role={m.role}
+                    name={m.song.name}
+                    artist={m.song.artist}
+                    note={m.song.note}
+                    cover={m.song.cover}
+                    songId={m.song.songId}
+                    autoPlay={m.song.autoPlay}
+                    time={m.time}
+                  />
+                </div>
+              ) : m.kind === 'redpacket' && m.rp ? (
                 <RpBubble
                   blessing={m.rp.blessing}
                   sub={m.rp.status === 'returned' ? '已退回' : m.rp.status === 'rejected' ? '已拒收' : m.rp.opened ? '已领取' : '待领取'}

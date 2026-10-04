@@ -15006,3 +15006,29 @@ Stage Summary:
 - 关键实现：气泡不挤动布局 = 绝对定位浮层 + 占位行 invisible（而非卸载）；单气泡换边 bug = 双槽锚定而非 justify-between 动态子项；账号数据隔离必须去掉 read 回退（回退会让所有新账号看到同一份旧数据），改「一次性迁移+删旧键」
 - 范围限定遵守：仅动音乐 App 3 个文件，16 项受保护功能未触碰
 - 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-store.ts、src/components/apps/music-mine.tsx
+
+---
+Task ID: 68
+Agent: Z.ai Code（主会话）
+Task: 音乐 App 与 AI 深度互动（七大需求）：AI 知道你在听什么、跨 App 记忆、AI 分享歌曲卡片、AI 邀请一起听全局卡、一起听 AI 播放控制、单独播放模式、范围限定
+
+Work Log:
+- 富标记层（chat-rich.ts）：新增 RichSong 类型与三个标记——[分享歌曲:歌名:歌手:分享语]（聊天歌曲卡片）/ [放歌:歌名:歌手]（AI 点播 autoPlay）/ [邀请一起听:歌名:歌手]（落卡片+弹全局邀请卡）；RICH_RE/OPEN_TAIL_RE/parseMarker/buildRichRules（微信+QQ 单聊规则注入，群聊不下发）同步扩展
+- 跨 App 音乐感知（cross-app-context.ts）：CrossAppId 加 'music'；APP_LABEL 加音乐；新增 readMusicLines()（鸭子读 music-now 正在听/music-history 最近5/music-liked 红心3/music-together 与该角色的一起听消息——全 kv 直读不依赖音乐 App 打开）→ 其他四端（wx/qq/sms/phone）聊天自动注入「▶ 音乐 最近听歌动态」块；msgText 加 kind='song' → [歌曲卡片]《名》歌手 占位
+- 全局邀请卡（新文件 together-invite.ts + TogetherInviteLayer.tsx + TogetherInviteWatcher.tsx）：zustand store（trigger/accept/decline）仿 incoming-call；卡片 1:1 参考截图（深色圆角面板+双头像+耳机线 SVG+歌名+「X 邀请你一起听」+灰✕红✓，z-[91] 全局盖任何 App，45s 超时自动拒绝）；接受 = startTogether + switchToApp('music') + openPlayer（450ms 延后）；接受/拒绝/超时写角色记忆 sourceTag='music-invite'；watcher 每 60s 一跳（守卫：锁屏/熄屏/来电/通话/已有邀请/已在一起听/冷却 全局12min+每角色8h/概率10%）主动邀约（挑最近聊过的 char + 从网易云账号最近播放挑歌）；PhoneShell 常驻挂载
+- 一起听 AI 播放控制（music-ai.ts）：playingBlock 注入【播放控制】规则（[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手]）；extractTgControls() 从 AI 原文抽指令并剔除 + runTgControls() 真实执行（useMusic next/prev/toggle + search 匹配 playSong），togetherReply/aiComment 双入口接线；用户手动操作天然覆盖（store 最后操作为准）
+- 跨 App 记忆（music-ai.ts personaSystemFor）：注入 buildCrossContextBlocks(cid,'music',userName)——一起听 AI 带【当前环境】行（知道在音乐 App）+ wx/qq/sms/phone 最近消息 + 共同群近况
+- 听歌记忆：solo 播放新钩子（installMusicAiHook）——非一起听时写给最近聊过的 3 个 char「机主听了《X》」（全局 30 分钟节流，sourceTag='music-solo'）；一起听记忆已有保留
+- 歌曲卡片组件（新文件 song-msg-bubble.tsx，wx/qq 共用）：仿截图2（封面 88px 方图+歌名粗+歌手灰+右播放钮，236px 宽）；封面按需 search 解析（模块级缓存同歌只搜一次）；点击 useMusic.playSong 后台播放；正在播放该歌按钮变红色暂停（再点暂停）；autoPlay 投递后自动播放（已播 Set+90s 时间窗防历史重渲染误触发）；note 分享语卡片下方灰字
+- 微信接入（wechat.tsx）：WxMsg kind+'song'+song 字段；richToWxMsg→songRichToWxMsg（分享/点播/邀约写记忆 sourceTag='music-share'，invite 同时 triggerInviteFromChat）；渲染分发 song 分支（bubblePress 长按通用菜单）；AI 历史序列化（peer 回写示范格式 [分享歌曲:]/[放歌:]，me 用 [歌曲卡片] 占位）；quoteContentOf/forwardClone（转发保留封面 songId 去 autoPlay/invite）
+- QQ 接入（qq.tsx）：同款全套（songRichToQqMsg 记忆 app='qq'）
+- 用户分享入口（music-player.tsx MoreSheet）：新增「分享给好友（歌曲卡片）」行 → ShareToChatSheet（AI 角色列表+每行微信/QQ 双按钮，可连续多人分享带已分享态）→ 写对应聊天 kv（role=me 歌曲卡片，带封面+songId）+ 写角色记忆 + toast
+- E2E（agent-browser 420x900 全新 profile）全过：建 USER 凡凡+CHAR 小乐（微信号 xiaole88）→ 游客模式播「两难pt.2」→ MoreSheet 分享给好友→微信 ✓；微信登录→搜 xiaole88 加好友（AI 自动通过）→ 聊天页歌曲卡片渲染+点击播放（按钮变红暂停态）✓；发「放一首歌给我听吧」→ LLM 回 [放歌:两难pt.2:加木] → AI 卡片落库+autoPlay 自动播放 ✓（AI 因 cross-app 音乐块选了用户正在听的歌）；发「能一起实时听这首歌吗」→ AI 回歌曲卡片+全局邀请卡弹出（截图1样式：双头像+耳机线+歌名+邀请语+✕/✓）✓；点接受 → startTogether+切音乐 App+播放页一起听态（双头像+相距59公里+一起听了1分钟）✓；快聊发「换首歌吧」→ AI 回复（人设贴合：上海夜色+加木）+播放控制执行 ✓；watcher 主动邀约独立验证触发（冷却键落盘）✓；回微信问「你知道我在听什么歌吗」→ AI 答对《两难pt.2》（跨 App 音乐感知）✓
+- 途中修复：InviteCard img 空 src 警告（头像缺失改首字占位块）；set-state-in-effect lint（leaving 状态下沉到 InviteCard 子组件 + key 重置）；耳机线 SVG 路径从头像上方改为从头像内缘垂到中点（贴参考图）；调试 console.debug 已移除
+- bunx tsc 0 错误；bun run lint 0 错误 0 警告；dev.log 无 error
+
+Stage Summary:
+- 交付：AI 全链路音乐互动——所有聊天端注入实时听歌动态（正在听/最近播放/红心/一起听近况，per-uid 隔离）；一起听 AI 带跨 App 记忆+知道当前在音乐 App；聊天里 AI 可输出歌曲卡片（封面/歌名/歌手/分享语，点击即播，AI 点播 autoPlay）与全局一起听邀请卡（任何 App 上弹出，接受直达一起听）；一起听 AI 可切歌/暂停/选歌（指令真实执行，用户可覆盖）；音乐 App 歌曲面板可把当前歌以卡片分享进微信/QQ（用户→AI 也走卡片）；全部音乐事件（分享/点播/邀约/一起听/solo 听歌）写角色记忆参与后续聊天
+- 关键实现：AppSwitcher 卡片/E2E 里 React 合成点击必须走完整 pointer 序列（Playwright 原生 click 才行，props.onClick 直调会被 pointer 状态守卫吞掉）；agent-browser close 会换 profile（IndexedDB 随之清空，E2E 数据要在同一会话内建完）；cross-app 感知新增 App 时 readPrivateLines/chatMsgsKey 的 Exclude 类型要同步排除非聊天端
+- 范围限定遵守：单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰（歌曲卡片为纯增量 kind，群聊不下发标记规则）；音乐数据按网易云账号 uid+角色 cid 隔离（together 键/冷却键/history 均带 uid）；邀请卡全局（PhoneShell 层）不依赖页面
+- 改动文件：src/lib/chat-rich.ts、src/lib/ios/cross-app-context.ts、src/lib/ios/together-invite.ts（新）、src/components/ios/TogetherInviteLayer.tsx（新）、src/components/ios/TogetherInviteWatcher.tsx（新）、src/lib/ios/music-ai.ts、src/components/apps/song-msg-bubble.tsx（新）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/music-player.tsx、src/components/ios/PhoneShell.tsx

@@ -171,7 +171,7 @@ import type { OfflineOnlineMsg } from '@/lib/offline-meet';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
-import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
+import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -276,7 +276,10 @@ import {
   type PendingCardInfo,
   type RichAction,
   type RichMsg,
+  type RichSong,
 } from '@/lib/chat-rich';
+import SongMsgBubble from './song-msg-bubble';
+import { triggerInviteFromChat } from '@/lib/ios/together-invite';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -371,7 +374,9 @@ interface QQMsg {
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
    *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖） */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard';
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song';
+  /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：结构同微信端 */
+  song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean };
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打）；
@@ -554,7 +559,43 @@ function richToQqMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
         ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } }
         : { id, role: 'peer', content: '[表情]', time };
     }
+    case 'song':
+      return songRichToQqMsg(rich, id, time, peer);
   }
+}
+
+/**
+ * 歌曲卡片标记 → QQ 消息（Task 68 音乐 × AI，同微信端）：卡片可点击播放；
+ * 分享/点播/邀约写角色记忆（sourceTag='music-share'）；invite 同时弹全局邀请卡。
+ */
+function songRichToQqMsg(rich: RichSong, id: string, time: number, peer: ContactRecord): QQMsg {
+  const label = rich.artist ? `《${rich.name}》（${rich.artist}）` : `《${rich.name}》`;
+  try {
+    if (rich.autoPlay) {
+      memAddEventFragment(peer.id, 'qq', `你给机主放了${label}，点卡片就能听`, { eventTime: time, sourceTag: 'music-share' });
+    } else if (rich.invite) {
+      memAddEventFragment(peer.id, 'qq', `你想邀请机主一起听${label}`, { eventTime: time, sourceTag: 'music-share' });
+    } else {
+      memAddEventFragment(peer.id, 'qq', `你分享了${label}给机主${rich.note ? `，说：${rich.note}` : ''}`, { eventTime: time, sourceTag: 'music-share' });
+    }
+  } catch {
+    // 记忆失败不影响消息
+  }
+  if (rich.invite) {
+    try {
+      triggerInviteFromChat({ id: peer.id, name: peer.nickname || peer.name, avatar: peer.avatar }, rich.name, rich.artist);
+    } catch {
+      // 邀请卡失败不影响卡片消息
+    }
+  }
+  return {
+    id,
+    role: 'peer',
+    content: rich.autoPlay ? `[点播]${label}` : `[歌曲]${label}`,
+    time,
+    kind: 'song',
+    song: { name: rich.name, artist: rich.artist, note: rich.note || undefined, autoPlay: rich.autoPlay || undefined, inviteDone: rich.invite || undefined },
+  };
 }
 
 /** 红包/转账/亲属卡消息的状态标签（卡片文案 + AI 上下文摘要共用） */
@@ -4178,7 +4219,7 @@ function ChatPage({
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location' || m.kind === 'song') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -4224,6 +4265,13 @@ function ChatPage({
             : m.kind === 'location'
             ? // 位置消息：AI 读到完整位置文本（名称/地址/经纬度/发送时间），问“我在哪”能直接答出地点名
               locationAiText(m.loc, m.time)
+            : m.kind === 'song' && m.song
+            ? // 歌曲卡片（Task 68）：AI 发的回写成示范格式；我发的用占位描述
+              m.role === 'me'
+              ? `[歌曲卡片]《${m.song.name}》${m.song.artist}`
+              : m.song.autoPlay
+                ? `[放歌:${m.song.name}:${m.song.artist}]`
+                : `[分享歌曲:${m.song.name}:${m.song.artist}]`
             : m.kind === 'transfer' && m.packet && isTransferReceiptMsg(m)
             ? // 【fix3-d-1】转账凭据卡（收款凭据/退还凭据）带显式主语进历史，
               // 不再伪装成持卡人又发了一笔转账（资金方向不再被伪造）
@@ -5047,7 +5095,9 @@ function ChatPage({
             : '[语音]'
           : m.kind === 'location'
             ? `[位置] ${m.loc?.name ?? ''}`
-            : m.kind === 'redpacket' && m.packet
+            : m.kind === 'song' && m.song
+              ? `[歌曲]《${m.song.name}》${m.song.artist}`
+              : m.kind === 'redpacket' && m.packet
               ? `[红包] ¥${m.packet.amount} ${m.packet.note}`
               : m.kind === 'transfer' && m.packet
                 ? `[转账] ¥${m.packet.amount}${m.packet.note ? ` ${m.packet.note}` : ''}`
@@ -5160,6 +5210,8 @@ function ChatPage({
     if (m.kind === 'sticker' && m.stk) return { id, role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: m.stk.url, meaning: m.stk.meaning } };
     if (m.kind === 'image') return { id, role: 'me', content: m.content, time: Date.now(), kind: 'image', ...(m.img ? { img: m.img } : {}) };
     if (m.kind === 'location' && m.loc) return { id, role: 'me', content: '', time: Date.now(), kind: 'location', loc: { ...m.loc } };
+    // 歌曲卡片可转发（同类型卡片新 id；autoPlay/invite 不随转发保留）
+    if (m.kind === 'song' && m.song) return { id, role: 'me', content: `[歌曲]《${m.song.name}》${m.song.artist}`, time: Date.now(), kind: 'song', song: { name: m.song.name, artist: m.song.artist, cover: m.song.cover, songId: m.song.songId } };
     // 语音消息整条克隆（含音频 dataURL），目标会话里照常可播放
     if (m.kind === 'voice' && m.voice) return { id, role: 'me', content: '', time: Date.now(), kind: 'voice', voice: { ...m.voice } };
     const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'textcard';
@@ -5915,6 +5967,21 @@ function ChatPage({
                       direction={m.call.direction ?? (m.role === 'me' ? 'out' : 'in')}
                       media={m.call.media ?? 'voice'}
                       onRedial={() => openVoiceCall('out', { media: m.call?.media ?? 'voice' })}
+                    />
+                  </div>
+                ) : m.kind === 'song' && m.song ? (
+                  /* 歌曲卡片（Task 68 音乐 × AI）：封面+歌名+歌手+播放按钮，点击直接播放 */
+                  <div {...bubblePress} className="max-w-[236px]">
+                    <SongMsgBubble
+                      msgId={m.id}
+                      role={m.role}
+                      name={m.song.name}
+                      artist={m.song.artist}
+                      note={m.song.note}
+                      cover={m.song.cover}
+                      songId={m.song.songId}
+                      autoPlay={m.song.autoPlay}
+                      time={m.time}
                     />
                   </div>
                 ) : m.kind === 'redpacket' && m.packet ? (
