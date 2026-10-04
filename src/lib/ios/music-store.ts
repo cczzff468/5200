@@ -28,6 +28,7 @@ import {
 } from './music-api';
 import { kvGet, kvSet, kvDel, isKvReady } from './idb-kv';
 import { registerAudioSource, stopOtherAudio } from './audio-focus';
+import { useSettings } from './store';
 
 export type RepeatMode = 'order' | 'repeat' | 'one' | 'shuffle';
 
@@ -593,15 +594,19 @@ export function musicEngineAudio(): HTMLAudioElement | null {
 // ---------------- 游客本地资料与歌单（不登录也可用的"我的"） ----------------
 
 export interface GuestProfile {
-  nickname: string;
-  /** 空 = 使用默认头像 */
+  /** 空 = 跟随全局头像（设置里的机主头像），可从手机上传/预设覆盖 */
   avatar: string;
+  nickname: string;
   /** 个性签名（「我的」页展示，可编辑） */
   signature: string;
   /** 关注数（游客本地可编辑） */
   follows: number;
   /** 粉丝数（游客本地可编辑） */
   fans: number;
+  /** VIP 徽章类型（游客可自定义） */
+  vipType: 'vip' | 'svip';
+  /** VIP 等级（展示为中文数字，如 VIP·柒） */
+  vipLevel: number;
 }
 
 const GUEST_PROFILE_KEY = 'music-guest-profile';
@@ -636,12 +641,30 @@ export const GUEST_AVATAR_PRESETS: string[] = [
 export function getGuestProfile(): GuestProfile {
   const v = kvGet<Partial<GuestProfile>>(GUEST_PROFILE_KEY);
   return {
+    avatar: typeof v?.avatar === 'string' ? v.avatar : '',
     nickname: v?.nickname || '游客',
-    avatar: v?.avatar || GUEST_DEFAULT_AVATAR,
     signature: v?.signature ?? '这个人很懒，什么都没留下',
     follows: typeof v?.follows === 'number' ? v.follows : 0,
     fans: typeof v?.fans === 'number' ? v.fans : 0,
+    vipType: v?.vipType === 'svip' ? 'svip' : 'vip',
+    vipLevel: typeof v?.vipLevel === 'number' && v.vipLevel >= 1 ? Math.min(99, Math.floor(v.vipLevel)) : 7,
   };
+}
+
+/**
+ * 游客实际展示头像：自定义 > 全局头像（设置里的机主头像）> 默认预设。
+ * 「一开始跟随全局」：没自定义过就用机主在设置里传的那张。
+ */
+export function getGuestAvatar(): string {
+  const custom = getGuestProfile().avatar;
+  if (custom) return custom;
+  try {
+    const global = useSettings.getState().profile.avatar;
+    if (global) return global;
+  } catch {
+    // store 未就绪时忽略
+  }
+  return GUEST_DEFAULT_AVATAR;
 }
 
 export function setGuestProfile(p: Partial<GuestProfile>): GuestProfile {

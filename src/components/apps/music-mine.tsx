@@ -16,6 +16,7 @@ import {
   BarChart2,
   Clock3,
   Heart,
+  ImagePlus,
   LayoutGrid,
   ListMusic,
   Loader2,
@@ -23,7 +24,6 @@ import {
   Menu,
   MoreVertical,
   NotebookPen,
-  Pencil,
   Pin,
   Plus,
   Podcast,
@@ -43,7 +43,9 @@ import {
 import {
   useMusic,
   getGuestProfile,
+  getGuestAvatar,
   setGuestProfile,
+  GUEST_DEFAULT_AVATAR,
   GUEST_AVATAR_PRESETS,
   guestPlaylistCreate,
   guestPlaylistDelete,
@@ -51,11 +53,45 @@ import {
   type GuestPlaylist,
 } from '@/lib/ios/music-store';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { useSettings } from '@/lib/ios/store';
 import { CoverImg, LoadingBlock, fmtPlayCount } from './music-shared';
 
-type SheetKind = 'recent' | 'record' | 'liked' | 'local' | 'dress' | 'profile' | 'stats' | null;
+type SheetKind = 'recent' | 'record' | 'liked' | 'local' | 'dress' | 'profile' | null;
 type MainTab = 'music' | 'podcast' | 'notes';
 type SubTab = 'recent' | 'created';
+
+/** 中文数字（VIP 等级展示：1→一 … 7→柒? 不，大写金额才用柒；这里跟网易云用小写中文数字） */
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+export function cnNum(n: number): string {
+  const x = Math.max(1, Math.min(99, Math.floor(n)));
+  if (x < 10) return CN_DIGITS[x];
+  const t = Math.floor(x / 10);
+  const o = x % 10;
+  return (t > 1 ? CN_DIGITS[t] : '') + '十' + (o ? CN_DIGITS[o] : '');
+}
+
+/** VIP 徽章（仿网易云：黑色胶囊 + 黑胶唱片图标 + VIP·中文数字；SVIP 为金胶） */
+export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
+  const svip = type === 'svip';
+  return (
+    <span
+      className="flex shrink-0 items-center rounded-full bg-black/60 py-[3px] pl-[5px] pr-2"
+      data-testid="music-mine-vip"
+    >
+      <span
+        className={`relative mr-1 flex h-[15px] w-[15px] items-center justify-center rounded-full ${
+          svip ? 'bg-[#e7c583]' : 'bg-[#161616] ring-[1.5px] ring-white/45'
+        }`}
+      >
+        <span className={`h-[6.5px] w-[6.5px] rounded-full ${svip ? 'bg-[#8a5c13]' : 'bg-[#EC4141]'}`} />
+      </span>
+      <span className="text-[11px] font-semibold tracking-wide text-white/95">
+        {svip ? 'SVIP' : 'VIP'}·{cnNum(level)}
+      </span>
+    </span>
+  );
+}
 
 /** 头部主题（装扮） */
 const MINE_THEMES = [
@@ -67,6 +103,7 @@ const MINE_THEMES = [
 
 const statusKeyOf = (scope: string) => `music-mine-status:${scope}`;
 const dressKeyOf = (scope: string) => `music-mine-dress:${scope}`;
+const dressImgKeyOf = (scope: string) => `music-mine-dress-img:${scope}`;
 
 /** 从手机选择图片 → 居中裁方 → 压缩为 288px JPEG dataURL（存 IndexedDB 体积可控） */
 function fileToAvatarDataUrl(file: File): Promise<string> {
@@ -114,6 +151,9 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const [subTab, setSubTab] = useState<SubTab>('recent');
   const [statusText, setStatusText] = useState<string>(() => kvGetStr(statusKeyOf(scope)));
   const [themeIdx, setThemeIdx] = useState<number>(() => kvGetIdx(dressKeyOf(scope)));
+  const [dressImg, setDressImg] = useState<string>(() => kvGetStr(dressImgKeyOf(scope)));
+  // 资料版本号：游客保存资料后 +1 强制重渲染（确保关注/粉丝/头像等立即刷新）
+  const [profRev, setProfRev] = useState(0);
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState('');
 
@@ -148,8 +188,9 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   }, [scope]);
 
   const guest = getGuestProfile();
+  void profRev; // 依赖：保存资料后重读
   const name = loginUid ? loginNickname || detail?.profile.nickname || '…' : guest.nickname;
-  const avatar = loginUid ? loginAvatar || detail?.profile.avatarUrl : guest.avatar;
+  const avatar = loginUid ? loginAvatar || detail?.profile.avatarUrl : getGuestAvatar();
   const signature = loginUid ? detail?.profile.signature || '' : guest.signature;
 
   const owned = (playlists ?? []).filter((p) => p.creator?.userId === loginUid);
@@ -158,7 +199,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const subPls = (playlists ?? []).filter((p) => p.creator?.userId !== loginUid);
   const createdCount = loginUid ? createdPls.length : guestLists.length;
 
-  const theme = MINE_THEMES[Math.min(themeIdx, MINE_THEMES.length - 1)];
+  const theme = MINE_THEMES[Math.min(Math.max(themeIdx, 0), MINE_THEMES.length - 1)];
+  const customDress = themeIdx === -1 && !!dressImg;
 
   const doCreate = async () => {
     const n = prompt('歌单名称');
@@ -242,7 +284,13 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
       {/* ================= 深色头部 ================= */}
       <div
         className="relative shrink-0 text-white"
-        style={{ background: `linear-gradient(180deg, ${theme.from} 0%, ${theme.via} 52%, ${theme.to} 100%)` }}
+        style={
+          customDress
+            ? {
+                background: `linear-gradient(180deg, rgba(10,10,12,0.30) 0%, rgba(10,10,12,0.10) 45%, rgba(10,10,12,0.52) 100%), url(${dressImg}) center / cover no-repeat`,
+              }
+            : { background: `linear-gradient(180deg, ${theme.from} 0%, ${theme.via} 52%, ${theme.to} 100%)` }
+        }
       >
         {/* 顶栏 */}
         <div className="flex items-center px-4 pb-1 pt-[58px]">
@@ -274,13 +322,13 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </div>
         </div>
 
-        {/* 头像 */}
+        {/* 头像（游客：点按编辑资料；无编辑图标） */}
         <div className="mt-2 flex justify-center">
           <button
             type="button"
             onClick={loginUid ? undefined : () => setSheet('profile')}
             disabled={!!loginUid}
-            aria-label={loginUid ? '头像' : '编辑头像'}
+            aria-label={loginUid ? '头像' : '编辑资料'}
             data-testid="music-mine-avatar"
             className="relative active:scale-95 disabled:active:scale-100"
           >
@@ -291,11 +339,6 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
               alt={name}
             />
             <span className="absolute inset-0 rounded-full ring-[3px] ring-white/90" />
-            {!loginUid && (
-              <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-white p-1 shadow">
-                <Pencil className="h-3 w-3 text-zinc-700" />
-              </span>
-            )}
           </button>
         </div>
 
@@ -309,13 +352,14 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
               <Timer className="h-3 w-3 text-white" fill="currentColor" />
             </span>
           )}
-          <span
-            className="flex shrink-0 items-center gap-1 rounded-full bg-black/45 py-[3px] pl-[5px] pr-2 text-[10px] font-medium text-white/90"
-            data-testid="music-mine-vip"
-          >
-            <span className="h-3 w-3 rounded-full bg-[#EC4141] ring-[1.5px] ring-white/40" />
-            {loginUid ? 'VIP' : '游客'}
-          </span>
+          {loginUid ? (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-black/45 py-[3px] pl-[5px] pr-2 text-[10px] font-medium text-white/90">
+              <span className="h-3 w-3 rounded-full bg-[#EC4141] ring-[1.5px] ring-white/40" />
+              VIP
+            </span>
+          ) : (
+            <VipBadge type={guest.vipType} level={guest.vipLevel} />
+          )}
         </div>
 
         {/* 状态胶囊 */}
@@ -344,15 +388,17 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
             </>
           ) : (
             <>
-              <button type="button" onClick={() => setSheet('stats')} data-testid="music-mine-edit-stats" className="flex items-baseline gap-1 active:opacity-70">
-                <span className="text-[15px] font-bold">{guest.follows}</span>
+              <button type="button" onClick={() => setSheet('profile')} data-testid="music-mine-edit-stats" className="flex items-baseline gap-1 active:opacity-70">
+                <span className="text-[15px] font-bold" data-testid="music-mine-follows">
+                  {guest.follows}
+                </span>
                 <span className="text-[12px] text-white/60">关注</span>
-                <Pencil className="h-2.5 w-2.5 self-center text-white/50" />
               </button>
-              <button type="button" onClick={() => setSheet('stats')} className="flex items-baseline gap-1 active:opacity-70">
-                <span className="text-[15px] font-bold">{guest.fans}</span>
+              <button type="button" onClick={() => setSheet('profile')} data-testid="music-mine-fans-btn" className="flex items-baseline gap-1 active:opacity-70">
+                <span className="text-[15px] font-bold" data-testid="music-mine-fans">
+                  {guest.fans}
+                </span>
                 <span className="text-[12px] text-white/60">粉丝</span>
-                <Pencil className="h-2.5 w-2.5 self-center text-white/50" />
               </button>
               <StatV v={`${guestLists.length}`} l="歌单" />
               <StatV v={`${likedIds.size}`} l="红心" />
@@ -623,20 +669,35 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
       </div>
 
       {/* ================= 半屏面板 ================= */}
-      {sheet === 'profile' && <ProfileEditSheet onClose={() => { setSheet(null); refreshGuest(); }} />}
-      {sheet === 'stats' && <StatsEditSheet onClose={() => setSheet(null)} />}
+      {sheet === 'profile' && (
+        <ProfileEditSheet
+          onClose={() => {
+            setSheet(null);
+            refreshGuest();
+            setProfRev((r) => r + 1); // 保存后强制重渲染，关注/粉丝/头像立即生效
+          }}
+        />
+      )}
       {sheet === 'dress' && (
         <DressSheet
           current={themeIdx}
+          customImg={dressImg}
           onPick={(i) => {
             setThemeIdx(i);
             kvSetIdx(dressKeyOf(scope), i);
             showToast('已更换装扮');
           }}
+          onCustom={(img) => {
+            setDressImg(img);
+            kvSetStr(dressImgKeyOf(scope), img);
+            setThemeIdx(-1);
+            kvSetIdx(dressKeyOf(scope), -1);
+            showToast('已应用自定义背景');
+          }}
           onClose={() => setSheet(null)}
         />
       )}
-      {sheet && sheet !== 'profile' && sheet !== 'stats' && sheet !== 'dress' && (
+      {sheet && sheet !== 'profile' && sheet !== 'dress' && (
         <MineSheet kind={sheet} onClose={() => setSheet(null)} />
       )}
 
@@ -734,13 +795,25 @@ function PlRow({
   );
 }
 
-// ---------------- 游客资料编辑（头像上传 + 预设 + 昵称 + 签名） ----------------
+// ---------------- 游客资料编辑（头像/昵称/签名/关注粉丝/VIP 一站式；无编辑图标，点头像进入） ----------------
 
 function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   const cur = getGuestProfile();
+  const globalAvatar = (() => {
+    try {
+      return useSettings.getState().profile.avatar || '';
+    } catch {
+      return '';
+    }
+  })();
   const [nickname, setNickname] = useState(cur.nickname === '游客' ? '' : cur.nickname);
   const [signature, setSignature] = useState(cur.signature);
+  // '' = 跟随全局头像
   const [avatar, setAvatar] = useState(cur.avatar);
+  const [follows, setFollows] = useState(String(cur.follows));
+  const [fans, setFans] = useState(String(cur.fans));
+  const [vipType, setVipType] = useState<'vip' | 'svip'>(cur.vipType);
+  const [vipLevel, setVipLevel] = useState(String(cur.vipLevel));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -757,9 +830,19 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   };
 
   const save = () => {
-    setGuestProfile({ nickname: nickname.trim() || '游客', avatar, signature: signature.trim().slice(0, 40) });
+    setGuestProfile({
+      nickname: nickname.trim() || '游客',
+      avatar,
+      signature: signature.trim().slice(0, 40),
+      follows: Math.max(0, Math.min(999999, Number(follows.replace(/\D/g, '')) || 0)),
+      fans: Math.max(0, Math.min(999999, Number(fans.replace(/\D/g, '')) || 0)),
+      vipType,
+      vipLevel: Math.max(1, Math.min(99, Number(vipLevel.replace(/\D/g, '')) || 7)),
+    });
     onClose();
   };
+
+  const previewAvatar = avatar || globalAvatar || GUEST_DEFAULT_AVATAR;
 
   return (
     <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-profile-sheet">
@@ -771,8 +854,10 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
             取消
           </button>
         </div>
+
+        {/* 头像：上传 / 跟随全局 / 预设 */}
         <div className="mb-4 flex items-center gap-4">
-          <CoverImg src={avatar} className="h-16 w-16" rounded="rounded-full" alt="头像预览" />
+          <CoverImg src={previewAvatar} className="h-16 w-16" rounded="rounded-full" alt="头像预览" />
           <div className="min-w-0 flex-1 space-y-2">
             {/* 从手机上传头像 */}
             <label
@@ -787,6 +872,33 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         {err && <p className="mb-2 text-[12px] text-red-500">{err}</p>}
+        <p className="mb-2 text-[12px] text-zinc-500">或选一个头像（第一个为全局头像，跟随设置里的机主头像）</p>
+        <div className="mb-5 flex flex-wrap gap-2.5">
+          {/* 跟随全局头像选项 */}
+          <button
+            type="button"
+            onClick={() => setAvatar('')}
+            data-testid="music-avatar-opt-global"
+            className={`relative shrink-0 overflow-hidden rounded-full ring-2 ${avatar === '' ? 'ring-[#C20C0C]' : 'ring-black/10 dark:ring-white/15'}`}
+            title="跟随全局头像"
+          >
+            <CoverImg src={globalAvatar || GUEST_DEFAULT_AVATAR} className="h-11 w-11" rounded="rounded-full" alt="全局头像" />
+            <span className="absolute inset-x-0 bottom-0 bg-black/55 text-center text-[8px] leading-4 text-white">全局</span>
+          </button>
+          {GUEST_AVATAR_PRESETS.map((a) => (
+            <button
+              key={a}
+              type="button"
+              onClick={() => setAvatar(a)}
+              className={`overflow-hidden rounded-full ring-2 ${avatar === a ? 'ring-[#C20C0C]' : 'ring-transparent'}`}
+              data-testid={`music-avatar-opt-${GUEST_AVATAR_PRESETS.indexOf(a) + 1}`}
+            >
+              <CoverImg src={a} className="h-11 w-11" rounded="rounded-full" alt="头像" />
+            </button>
+          ))}
+        </div>
+
+        {/* 昵称 / 签名 */}
         <label className="mb-1 block text-[12px] text-zinc-500">昵称</label>
         <input
           value={nickname}
@@ -803,57 +915,8 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
           data-testid="music-profile-signature"
           className="mb-4 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
         />
-        <p className="mb-2 text-[12px] text-zinc-500">或选一个预设头像</p>
-        <div className="mb-5 flex flex-wrap gap-2.5">
-          {GUEST_AVATAR_PRESETS.map((a) => (
-            <button
-              key={a}
-              type="button"
-              onClick={() => setAvatar(a)}
-              className={`overflow-hidden rounded-full ring-2 ${avatar === a ? 'ring-[#C20C0C]' : 'ring-transparent'}`}
-              data-testid={`music-avatar-opt-${GUEST_AVATAR_PRESETS.indexOf(a)}`}
-            >
-              <CoverImg src={a} className="h-11 w-11" rounded="rounded-full" alt="头像" />
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={save}
-          data-testid="music-profile-save"
-          className="h-11 w-full rounded-full bg-[#C20C0C] text-[14px] font-medium text-white active:scale-[0.98]"
-        >
-          保存
-        </button>
-      </div>
-    </div>
-  );
-}
 
-// ---------------- 游客关注/粉丝编辑 ----------------
-
-function StatsEditSheet({ onClose }: { onClose: () => void }) {
-  const cur = getGuestProfile();
-  const [follows, setFollows] = useState(String(cur.follows));
-  const [fans, setFans] = useState(String(cur.fans));
-
-  const save = () => {
-    const f = Math.max(0, Math.min(999999, Number(follows.replace(/\D/g, '')) || 0));
-    const x = Math.max(0, Math.min(999999, Number(fans.replace(/\D/g, '')) || 0));
-    setGuestProfile({ follows: f, fans: x });
-    onClose();
-  };
-
-  return (
-    <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-stats-sheet">
-      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900">
-        <div className="mb-4 flex items-center justify-between">
-          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">编辑关注 / 粉丝</p>
-          <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
-            取消
-          </button>
-        </div>
+        {/* 关注 / 粉丝 */}
         <div className="mb-4 flex gap-3">
           <div className="flex-1">
             <label className="mb-1 block text-[12px] text-zinc-500">关注数</label>
@@ -876,11 +939,45 @@ function StatsEditSheet({ onClose }: { onClose: () => void }) {
             />
           </div>
         </div>
-        <p className="mb-4 text-[10px] text-zinc-400">游客模式的展示数据，仅保存在本机</p>
+
+        {/* VIP 徽章自定义 */}
+        <p className="mb-2 text-[12px] text-zinc-500">VIP 徽章</p>
+        <div className="mb-3 flex items-center gap-3">
+          <div className="flex rounded-full bg-zinc-100 p-0.5 dark:bg-zinc-800">
+            {(['vip', 'svip'] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setVipType(t)}
+                data-testid={`music-vip-type-${t}`}
+                className={`rounded-full px-4 py-1.5 text-[12px] font-medium ${
+                  vipType === t ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-600 dark:text-white' : 'text-zinc-400'
+                }`}
+              >
+                {t === 'vip' ? 'VIP' : 'SVIP'}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-1 items-center gap-2">
+            <span className="shrink-0 text-[12px] text-zinc-500">等级</span>
+            <input
+              value={vipLevel}
+              onChange={(e) => setVipLevel(e.target.value.replace(/\D/g, '').slice(0, 2))}
+              inputMode="numeric"
+              data-testid="music-vip-level"
+              className="h-10 w-full min-w-0 rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-[12px] text-zinc-400">预览</span>
+            <VipBadge type={vipType} level={Number(vipLevel.replace(/\D/g, '')) || 1} />
+          </div>
+        </div>
+
         <button
           type="button"
           onClick={save}
-          data-testid="music-stats-save"
+          data-testid="music-profile-save"
           className="h-11 w-full rounded-full bg-[#C20C0C] text-[14px] font-medium text-white active:scale-[0.98]"
         >
           保存
@@ -890,17 +987,68 @@ function StatsEditSheet({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ---------------- 装扮（头部主题色） ----------------
+// ---------------- 装扮（头部主题色 + 手机上传自定义背景） ----------------
+
+/** 从手机选择图片 → 等比压到宽≤820px → JPEG dataURL（作头部背景，cover 裁剪交给 CSS） */
+function fileToDressDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取失败'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('图片解析失败'));
+      img.onload = () => {
+        const w = img.width || 800;
+        const h = img.height || 800;
+        const scale = Math.min(1, 820 / Math.max(w, h));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(w * scale));
+        c.height = Math.max(1, Math.round(h * scale));
+        const ctx = c.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas 不可用'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.82));
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 function DressSheet({
   current,
+  customImg,
   onPick,
+  onCustom,
   onClose,
 }: {
   current: number;
+  /** 当前是否使用自定义背景（themeIdx === -1） */
+  customImg: string;
   onPick: (i: number) => void;
+  /** 上传并应用自定义背景 */
+  onCustom: (img: string) => void;
   onClose: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const usingCustom = current === -1 && !!customImg;
+
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setBusy(true);
+    setErr('');
+    fileToDressDataUrl(f)
+      .then((d) => onCustom(d))
+      .catch((er: Error) => setErr(er.message || '图片处理失败'))
+      .finally(() => setBusy(false));
+  };
+
   return (
     <div className="absolute inset-0 z-[65] flex items-end" data-testid="music-dress-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
@@ -910,6 +1058,47 @@ function DressSheet({
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
             关闭
           </button>
+        </div>
+        {/* 自定义背景（手机上传） */}
+        <div className="mb-4">
+          <div className="flex items-stretch gap-3">
+            <button
+              type="button"
+              onClick={customImg ? onCustom.bind(null, customImg) : undefined}
+              data-testid="music-dress-custom-tile"
+              disabled={!customImg || busy}
+              className={`w-[72px] shrink-0 overflow-hidden rounded-xl ring-2 ${
+                usingCustom ? 'ring-[#C20C0C]' : 'ring-black/5 dark:ring-white/10'
+              } ${customImg ? '' : 'opacity-60'}`}
+              title={customImg ? '应用我的自定义背景' : '先上传一张图片'}
+            >
+              {customImg ? (
+                <span
+                  className="block h-16 w-full"
+                  style={{ background: `url(${customImg}) center / cover no-repeat` }}
+                />
+              ) : (
+                <span className="flex h-16 w-full items-center justify-center bg-zinc-100 dark:bg-zinc-800">
+                  <ImagePlus className="h-5 w-5 text-zinc-400" />
+                </span>
+              )}
+              <span className="block py-1.5 text-center text-[11px] text-zinc-600 dark:text-zinc-300">我的</span>
+            </button>
+            <div className="flex min-w-0 flex-1 flex-col justify-center">
+              <label
+                data-testid="music-dress-upload"
+                className="flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-full bg-zinc-900 text-[13px] font-medium text-white active:scale-[0.98] dark:bg-white dark:text-zinc-900"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                从手机上传装扮背景
+                <input type="file" accept="image/*" className="hidden" onChange={onFile} data-testid="music-dress-file" />
+              </label>
+              <p className="mt-1.5 text-[10px] leading-snug text-zinc-400">
+                选一张相册里的图片作为主页头部背景，上传后立即生效
+              </p>
+              {err && <p className="mt-1 text-[11px] text-red-500">{err}</p>}
+            </div>
+          </div>
         </div>
         <div className="grid grid-cols-4 gap-3">
           {MINE_THEMES.map((t, i) => (

@@ -12,32 +12,39 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
+  ClipboardList,
   Download,
   Heart,
   ListMusic,
   Loader2,
+  LogOut,
   MessageCircle,
   MoreHorizontal,
+  MoreVertical,
   Music2,
   Pause,
   Play,
   Repeat,
   Repeat1,
   Shuffle,
+  SlidersHorizontal,
   SkipBack,
   SkipForward,
   Trash2,
+  TriangleAlert,
   UserPlus,
+  UserRoundSearch,
   Volume2,
   X,
 } from 'lucide-react';
 import { songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
-import { useMusic, getGuestProfile, type RepeatMode } from '@/lib/ios/music-store';
+import { useMusic, getGuestAvatar, type RepeatMode, type TogetherSessionLike, type TogetherMsgLike } from '@/lib/ios/music-store';
 import {
   listTogetherCandidates,
   startTogether,
   stopTogether,
   togetherRecommend,
+  useTogetherLive,
 } from '@/lib/ios/music-ai';
 import type { ContactRecord } from '@/lib/contacts';
 import { CoverImg, fmtClock } from './music-shared';
@@ -55,6 +62,7 @@ export function MusicPlayer() {
   const playError = useMusic((s) => s.playError);
   const freeTrial = useMusic((s) => s.freeTrial);
   const together = useMusic((s) => s.together);
+  const togetherMsgs = useMusic((s) => s.togetherMsgs);
   const likedIds = useMusic((s) => s.likedIds);
   const toggleLike = useMusic((s) => s.toggleLike);
   const toggle = useMusic((s) => s.toggle);
@@ -70,10 +78,17 @@ export function MusicPlayer() {
   const [showMore, setShowMore] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
+  // 一起听右上角 ⋮ 菜单（重新匹配/查看记录/匹配偏好/举报/退出一起听）
+  const [showTgMenu, setShowTgMenu] = useState(false);
+  const [showTgRecord, setShowTgRecord] = useState(false);
+  // 重新匹配入口打开时，邀请面板标题切换
+  const [inviteTitle, setInviteTitle] = useState('邀请一起听');
   // 一起听时默认聊天视图；用户手动切换后以手动值为准（chatOverride=null 表示跟随默认）
   const [chatOverride, setChatOverride] = useState<boolean | null>(null);
   const showChat = chatOverride ?? !!together;
   const [moreToast, setMoreToast] = useState('');
+  // 对方信息跟随全局（联系人库里最新头像/昵称）
+  const togetherLive = useTogetherLive();
 
   useEffect(() => {
     if (current) void loadLyric(current.id);
@@ -131,20 +146,39 @@ export function MusicPlayer() {
   ) : null;
 
   const togetherHead = together ? (
-    <TogetherHead
-      name={together.name}
-      avatar={together.avatar}
-      distanceKm={together.distanceKm}
-      since={together.since}
-    />
+    <TogetherHead session={togetherLive ?? together} />
   ) : null;
 
-  // 结束一起听（顶栏右上角）
+  // 结束一起听（⋮ 菜单内）
   const endTogether = () => {
     void (async () => {
       await stopTogether();
       setChatOverride(false);
     })();
+  };
+
+  // ⋮ 菜单动作
+  const openTgMenu = () => setShowTgMenu(true);
+  const menuRematch = () => {
+    setShowTgMenu(false);
+    setInviteTitle('重新匹配');
+    setShowInvite(true);
+  };
+  const menuRecords = () => {
+    setShowTgMenu(false);
+    setShowTgRecord(true);
+  };
+  const menuPref = () => {
+    setShowTgMenu(false);
+    setMoreToast('已按你们的听歌口味自动匹配~');
+  };
+  const menuReport = () => {
+    setShowTgMenu(false);
+    if (confirm('确定举报 TA 在一起听中的行为吗？')) setMoreToast('已提交举报，感谢反馈');
+  };
+  const menuExit = () => {
+    setShowTgMenu(false);
+    endTogether();
   };
 
   // 聊天态：全屏独立布局（顶栏+双头像+聊天区+胶囊），不再与播放控制区堆叠
@@ -157,7 +191,7 @@ export function MusicPlayer() {
         />
         <div className="absolute inset-0 bg-black/35" />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PlayerTopBar onClose={close} light onEnd={endTogether} />
+          <PlayerTopBar onClose={close} light onMenu={openTgMenu} />
           {togetherHead}
           <div className="min-h-0 flex-1" data-testid="music-player-chat-mode">
             <TogetherChat />
@@ -185,7 +219,25 @@ export function MusicPlayer() {
           />
         )}
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
-        {showInvite && <InviteSheet onClose={() => setShowInvite(false)} />}
+        {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
+
+        {/* 一起听 ⋮ 菜单（聊天态） */}
+        {showTgMenu && (
+          <TogetherMenu
+            onClose={() => setShowTgMenu(false)}
+            onRematch={menuRematch}
+            onRecords={menuRecords}
+            onPref={menuPref}
+            onReport={menuReport}
+            onExit={menuExit}
+          />
+        )}
+
+        {/* 查看一起听记录（聊天态） */}
+        {showTgRecord && (
+          <TgRecordSheet session={together!} msgs={togetherMsgs} onClose={() => setShowTgRecord(false)} />
+        )}
+
         {moreToast && (
           <div className="pointer-events-none absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
             {moreToast}
@@ -209,10 +261,11 @@ export function MusicPlayer() {
           onClose={close}
           light
           onMore={together ? undefined : () => setShowMore(true)}
-          onEnd={together ? endTogether : undefined}
+          onMenu={together ? openTgMenu : undefined}
         />
 
-        {togetherHead}
+        {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
+        {!showLyric && togetherHead}
 
         {/* 封面/歌词切换区 */}
         <div className="relative flex min-h-0 flex-1 items-center justify-center px-8">
@@ -377,8 +430,25 @@ export function MusicPlayer() {
       {/* 播放列表 */}
       {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
 
-      {/* 邀请一起听 */}
-      {showInvite && <InviteSheet onClose={() => setShowInvite(false)} />}
+      {/* 邀请/重新匹配一起听 */}
+      {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
+
+      {/* 一起听 ⋮ 菜单 */}
+      {showTgMenu && together && (
+        <TogetherMenu
+          onClose={() => setShowTgMenu(false)}
+          onRematch={menuRematch}
+          onRecords={menuRecords}
+          onPref={menuPref}
+          onReport={menuReport}
+          onExit={menuExit}
+        />
+      )}
+
+      {/* 查看一起听记录 */}
+      {showTgRecord && together && (
+        <TgRecordSheet session={together} msgs={togetherMsgs} onClose={() => setShowTgRecord(false)} />
+      )}
 
       {moreToast && (
         <div className="pointer-events-none absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/20 px-4 py-1.5 text-[12px] text-white backdrop-blur">
@@ -396,15 +466,15 @@ function PlayerTopBar({
   title,
   light,
   onMore,
-  onEnd,
+  onMenu,
 }: {
   onClose: () => void;
   /** 顶部标题（可选；一起听/播放模式默认不展示） */
   title?: string;
   light?: boolean;
   onMore?: () => void;
-  /** 一起听态：右上角「结束一起听」 */
-  onEnd?: () => void;
+  /** 一起听态：右上角 ⋮ 菜单（重新匹配/查看记录/匹配偏好设置/举报/退出一起听） */
+  onMenu?: () => void;
 }) {
   return (
     <div className="flex items-center gap-3 px-5 pb-1 pt-[58px]">
@@ -414,15 +484,15 @@ function PlayerTopBar({
       <div className="min-w-0 flex-1 text-center">
         {title && <p className={`truncate text-[13px] ${light ? 'text-white/90' : 'text-zinc-700'}`}>{title}</p>}
       </div>
-      {onEnd ? (
+      {onMenu ? (
         <button
           type="button"
-          onClick={onEnd}
-          data-testid="music-tg-end"
-          className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-3 py-1.5 text-[11px] text-white/85 active:scale-95"
+          onClick={onMenu}
+          aria-label="一起听菜单"
+          data-testid="music-tg-menu-btn"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/30 active:scale-95"
         >
-          <X className="h-3 w-3" />
-          结束一起听
+          <MoreVertical className="h-[19px] w-[19px] text-white/90" />
         </button>
       ) : onMore ? (
         <button type="button" onClick={onMore} aria-label="更多" data-testid="music-player-more">
@@ -606,17 +676,7 @@ function SeekBar({
 
 // ---------------- 一起听头部 ----------------
 
-function TogetherHead({
-  name,
-  avatar,
-  distanceKm,
-  since,
-}: {
-  name: string;
-  avatar: string;
-  distanceKm: number;
-  since: number;
-}) {
+function TogetherHead({ session }: { session: TogetherSessionLike }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
   const [, force] = useState(0);
@@ -624,19 +684,138 @@ function TogetherHead({
     const t = setInterval(() => force((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
-  const myAvatar = loginUid ? loginAvatar : getGuestProfile().avatar;
-  const mins = Math.max(1, Math.floor((Date.now() - since) / 60_000));
+  const myAvatar = loginUid ? loginAvatar : getGuestAvatar();
+  const mins = Math.max(1, Math.floor((Date.now() - session.since) / 60_000));
   const durText = mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60}分钟` : `${mins}分钟`;
   return (
     <div className="flex flex-col items-center pb-1 pt-1" data-testid="music-tg-head">
-      {/* 双头像（分开一点，不再重叠） */}
-      <div className="flex items-center gap-3.5" data-testid="music-tg-avatars">
-        <CoverImg src={avatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt={name} />
+      {/* 双头像（挨近一点） */}
+      <div className="flex items-center gap-2" data-testid="music-tg-avatars">
+        <CoverImg src={session.avatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatar} className="h-12 w-12 ring-2 ring-white/70" rounded="rounded-full" alt="我" />
       </div>
       <p className="mt-1.5 text-[11px] text-white/70">
-        相距 {distanceKm} 公里 · 一起听了 {durText}
+        相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
+    </div>
+  );
+}
+
+// ---------------- 一起听 ⋮ 菜单（仿网易云：右上角下拉） ----------------
+
+function TogetherMenu({
+  onClose,
+  onRematch,
+  onRecords,
+  onPref,
+  onReport,
+  onExit,
+}: {
+  onClose: () => void;
+  onRematch: () => void;
+  onRecords: () => void;
+  onPref: () => void;
+  onReport: () => void;
+  onExit: () => void;
+}) {
+  const rows = [
+    { k: 'rematch', label: '重新匹配', icon: <UserRoundSearch className="h-[19px] w-[19px]" /> , on: onRematch },
+    { k: 'records', label: '查看记录', icon: <ClipboardList className="h-[19px] w-[19px]" />, on: onRecords },
+    { k: 'pref', label: '匹配偏好设置', icon: <SlidersHorizontal className="h-[19px] w-[19px]" />, on: onPref },
+    { k: 'report', label: '举报', icon: <TriangleAlert className="h-[19px] w-[19px]" />, on: onReport },
+    { k: 'exit', label: '退出一起听', icon: <LogOut className="h-[19px] w-[19px]" />, on: onExit },
+  ];
+  return (
+    <div className="absolute inset-0 z-[62]" data-testid="music-tg-menu">
+      <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 bg-black/45" />
+      <div className="absolute right-4 top-[102px] w-[188px]">
+        {/* 指向右上角按钮的小箭头 */}
+        <div className="absolute -top-[6px] right-[24px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d]" />
+        <div className="relative overflow-hidden rounded-[16px] bg-[#2b2b2d]/95 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+          {rows.map((r, i) => (
+            <button
+              key={r.k}
+              type="button"
+              onClick={r.on}
+              data-testid={`music-tg-menu-${r.k}`}
+              className={`flex w-full items-center gap-3.5 px-4 py-[14px] text-left text-[15px] text-white/95 active:bg-white/10 ${
+                i > 0 ? 'border-t border-white/[0.07]' : ''
+              }`}
+            >
+              {r.icon}
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 查看一起听记录 ----------------
+
+function TgRecordSheet({
+  session,
+  msgs,
+  onClose,
+}: {
+  session: TogetherSessionLike;
+  msgs: TogetherMsgLike[];
+  onClose: () => void;
+}) {
+  const history = useMusic((s) => s.history);
+  // 本次一起听（since 之后）听过的歌（去重、新在前）
+  const songs = useMemo(() => {
+    const seen = new Set<number>();
+    const out: NcmSong[] = [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const h = history[i];
+      if (h.playedAt >= session.since && !seen.has(h.song.id)) {
+        seen.add(h.song.id);
+        out.push(h.song);
+      }
+    }
+    return out;
+  }, [history, session.since]);
+  const mins = Math.max(1, Math.floor((Date.now() - session.since) / 60_000));
+  const durText = mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60}分钟` : `${mins}分钟`;
+  const chatCount = msgs.filter((m) => m.role !== 'recs').length;
+  return (
+    <div className="absolute inset-0 z-[63] flex items-end" data-testid="music-tg-record">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
+      <div className="relative flex max-h-[68%] w-full flex-col rounded-t-2xl bg-[#1c1c1e]/95 backdrop-blur-xl">
+        <div className="flex items-center justify-between px-5 py-3.5">
+          <p className="text-[15px] font-bold text-white">一起听记录</p>
+          <button type="button" onClick={onClose} aria-label="关闭">
+            <X className="h-5 w-5 text-white/60" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+          <div className="flex items-center gap-3 px-5 py-2">
+            <CoverImg src={session.avatar} className="h-11 w-11" rounded="rounded-full" alt={session.name} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[14px] text-white/95">和 {session.name} 一起听</p>
+              <p className="text-[11px] text-white/45">
+                已一起听 {durText} · 聊了 {chatCount} 条消息
+              </p>
+            </div>
+          </div>
+          <p className="px-5 pb-1 pt-3 text-[12px] text-white/40">这次一起听过的歌（{songs.length}）</p>
+          {songs.length === 0 ? (
+            <p className="py-8 text-center text-[13px] text-white/40">还没一起听过歌</p>
+          ) : (
+            songs.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 px-5 py-2">
+                <CoverImg src={songCover(s)} className="h-10 w-10" rounded="rounded-md" alt={s.name} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] text-white/90">{s.name}</p>
+                  <p className="truncate text-[11px] text-white/40">{songArtistText(s)}</p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -814,7 +993,7 @@ function QueueSheet({ onClose }: { onClose: () => void }) {
 
 // ---------------- 邀请一起听 ----------------
 
-function InviteSheet({ onClose }: { onClose: () => void }) {
+function InviteSheet({ title = '邀请一起听', onClose }: { title?: string; onClose: () => void }) {
   const [list, setList] = useState<ContactRecord[] | null>(null);
   const [busyId, setBusyId] = useState('');
 
@@ -844,7 +1023,7 @@ function InviteSheet({ onClose }: { onClose: () => void }) {
       <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
         <div className="flex items-center justify-between px-5 py-3.5">
           <div>
-            <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">邀请一起听</p>
+            <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">{title}</p>
             <p className="text-[11px] text-zinc-400">选一位 AI 好友，和 TA 实时听歌聊天</p>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭">

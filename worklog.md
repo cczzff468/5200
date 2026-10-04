@@ -14753,3 +14753,22 @@ Stage Summary:
 - 交付：游客模式持久化（选一次刷新后仍是游客，登录成功自动解除）；「我的」页 1:1 对标网易云截图（深色头部+胶囊+白色面板+三主Tab+双子Tab）；游客资料全面可定制（手机上传头像/签名/关注粉丝数/状态/装扮主题）；一起听界面按用户要求精简（无TA主动聊天开关、结束在右上角、双头像分开、无标题、无音量）；自己听无 Now Playing
 - 关键实现：游客标记 kv + 模块恢复注入；头像 canvas 裁方压缩防 IndexedDB 膨胀；顶栏 onEnd 槽位复用（一起听=结束按钮，自己听=更多）；白色面板圆角帽内嵌头部避免负 margin 滚动问题
 - 改动文件：src/lib/ios/music-store.ts、src/lib/ios/music-api.ts(NcmUser+follows/followeds)、src/components/apps/music.tsx、music-home.tsx、music-mine.tsx(重写)、music-player.tsx、music-settings.tsx
+
+---
+Task ID: 57
+Agent: Z.ai Code（主会话）
+Task: 用户第二轮反馈十项——游客删编辑图标、头像跟随全局可自定义、关注粉丝合并编辑并修显示 bug、VIP 等级自定义（VIP·柒/SVIP·陆）、一起听头像挨近、AI 头像跟随全局、歌词界面隐藏头像、退出一起听改 ⋮ 菜单（仿网易云截图）、主页装扮手机上传
+
+Work Log:
+- 游客资料模型扩展（music-store.ts）：GuestProfile 新增 vipType('vip'|'svip')/vipLevel(1-99，默认 7)；avatar 语义改为「空串=跟随全局」；新增 getGuestAvatar()（自定义 > 设置里机主全局头像 > 默认预设），music-mine/music-home/music-player/music-together 四处统一改走该入口
+- 「我的」页（music-mine.tsx）：①删除全部编辑图标——头像右上角白色铅笔徽章、关注/粉丝旁两枚小铅笔全删（游客点头像或数字进入编辑，登录态不变）②VIP 徽章仿截图重做：黑色胶囊 + 黑胶唱片图标（红芯）+「VIP·柒」中文数字；SVIP 为金胶（金盘深芯）+「SVIP·陆」，新增 cnNum() 中文数字与 VipBadge 组件 ③合并编辑面板：原「编辑资料」+「编辑关注/粉丝」两 sheet 合一——头像（手机上传/全局头像选项带「全局」角标/6 预设）+ 昵称 + 签名 + 关注数 + 粉丝数 + VIP 徽章编辑（VIP/SVIP 切换 + 等级输入 + 实时预览），StatsEditSheet 删除 ④修「关注/粉丝设置了不显示」：根因是保存后无状态翻转不保证重渲染——MusicMine 增加 profRev 版本号，ProfileEditSheet onClose 时 setProfRev+1 强制重读（idb-kv 内存写穿本同步，双保险），实测保存后 5/33 立即上屏 ⑤装扮上传：DressSheet 新增「从手机上传装扮背景」（等比压缩宽≤820 JPEG）+「我的」缩略图选中态；themeIdx=-1 表示自定义，头部背景 = 图片 cover + 顶部/底部暗化渐变（保证白字可读），持久化 music-mine-dress-img:{scope}
+- 一起听（music-player.tsx + music-ai.ts + music-together.tsx）：①双头像 gap-3.5→gap-2（挨近一点）②「结束一起听」胶囊删除，右上角改为深色圆底 ⋮ 按钮 ③⋮ 点开仿网易云深色下拉菜单（右上小箭头指向按钮 + 分隔线）：重新匹配（打开重命名标题的邀请面板换人）/ 查看记录（新 TgRecordSheet：对象+时长+消息条数+本次会话听过的歌，history.playedAt>=since 去重）/ 匹配偏好设置（toast「已按你们的听歌口味自动匹配~」）/ 举报（confirm→已提交 toast）/ 退出一起听（stopTogether）④聊天态 return 缺菜单渲染的 bug 当场发现并修（chatMode 早退分支补 TogetherMenu/TgRecordSheet/InviteSheet title）⑤歌词界面隐藏双头像（!showLyric 才渲染 togetherHead，黑胶视图保留）⑥AI 头像跟随全局：新增 useTogetherLive() hook——读联系人库最新头像/昵称覆盖会话快照 + 监听 contact-avatar-changed 事件实时刷新（微信里换头像，一起听界面与消息流头像即时同步），TogetherHead/TogetherChat/消息气泡全部接入；聊天里「我」的占位字圆圈换成真实头像
+- E2E（agent-browser 420x900 游客态）全过：登录页→游客进入 ✓；我的页无编辑图标+VIP·柒黑胶徽章 ✓；合并编辑面板全要素（全局头像选项角标/上传头像生效/昵称小明/签名/关注5粉丝33/SVIP+等级6→金胶 SVIP·陆 预览）✓；保存后统计行立即显示 5/33（bug 修复确认）✓；装扮上传 dark-stream 烟雾背景即时生效+「我的」缩略图选中 ✓；搜索晴天→播放→更多→邀请小暖 ✓；一起听聊天态：双头像挨近/右上角⋮/无标题/无结束胶囊 ✓；⋮ 菜单 1:1 仿截图（重新匹配/查看记录/匹配偏好设置/举报/退出一起听+箭头）✓；查看记录 sheet（对象/时长/消息数/歌曲列表）✓；音乐视图黑胶+头像显示/歌词视图头像消失 ✓；退出一起听→回普通播放页（音量条恢复/⋯ 恢复）✓；改小暖全局头像+dispatch 事件→一起听头像区与消息气泡实时换新头像（跟随全局验证）✓；重新匹配面板标题切换 ✓；刷新重进→游客态保持+自定义头像保持 ✓；深色模式 ✓；console/dev.log 零错误
+- 测试数据清理：agent-browser 档案内种子联系人（林小暖/owner-e2e）+ 10 个 music-*/mem-frag kv 键全清（隔离档案，不影响用户浏览器数据）
+- bunx tsc 0 错误；bun run lint 全绿
+
+Stage Summary:
+- 交付：游客「我的」页彻底无编辑图标；头像「一开始跟随全局（设置里的机主头像）也可自定义（手机上传/预设/一键回全局）」；关注/粉丝与头像/VIP 合并进单一「编辑资料」面板且保存即刷新（修掉不显示 bug）；VIP 徽章仿网易云黑胶样式且类型+等级（中文数字）全自定义（VIP·柒/SVIP·陆）；主页装扮支持手机上传自定义背景（暗化渐变保证可读、持久化）；一起听：双头像挨近、AI 头像/昵称实时跟随全局联系人（事件驱动）、歌词界面隐藏双头像、右上角 ⋮ 仿网易云菜单（重新匹配/查看记录/匹配偏好设置/举报/退出一起听）
+- 关键实现：getGuestAvatar 三级回退；profRev 强制重渲染；themeIdx=-1 自定义装扮槽；useTogetherLive 覆盖值+contact-avatar-changed 事件重读（不在 effect 同步 setState，规避 react-hooks/set-state-in-effect）；chatMode 早退分支补渲染菜单（E2E 当场抓到）
+- 范围限定遵守：仅动音乐 App 6 个文件（music-mine/player/together/home、music-store、music-ai），未触碰聊天/钱包/通话/朋友圈等 16 项受保护功能
+- 改动文件：src/lib/ios/music-store.ts、src/lib/ios/music-ai.ts、src/components/apps/music-mine.tsx、music-player.tsx、music-together.tsx、music-home.tsx

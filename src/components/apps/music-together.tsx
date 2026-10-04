@@ -7,22 +7,26 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Music4, SendHorizonal } from 'lucide-react';
-import { useMusic } from '@/lib/ios/music-store';
-import { sendTogetherText, togetherRecommend } from '@/lib/ios/music-ai';
+import { useMusic, getGuestAvatar } from '@/lib/ios/music-store';
+import { sendTogetherText, togetherRecommend, useTogetherLive } from '@/lib/ios/music-ai';
 import { CoverImg } from './music-shared';
 
 export function TogetherChat() {
   const msgs = useMusic((s) => s.togetherMsgs);
-  const together = useMusic((s) => s.together);
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const toggle = useMusic((s) => s.toggle);
   const playSong = useMusic((s) => s.playSong);
   const openPlayer = useMusic((s) => s.openPlayer);
+  const loginUid = useMusic((s) => s.loginUid);
+  const loginAvatar = useMusic((s) => s.loginAvatar);
+  // 对方信息跟随全局联系人（改头像/昵称立即同步）
+  const together = useTogetherLive();
   const [text, setText] = useState('');
   const [recBusy, setRecBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const cid = together?.contactId ?? '';
+  const myAvatar = loginUid ? loginAvatar : getGuestAvatar();
 
   useEffect(() => {
     // 只滚动消息流容器自身（scrollIntoView 会冒泡滚动外层播放容器，把整页顶出屏幕）
@@ -100,9 +104,7 @@ export function TogetherChat() {
           return (
             <div key={m.id} className={`flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
               {mine ? (
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-[11px] text-white/70">
-                  我
-                </span>
+                <CoverImg src={myAvatar} className="h-8 w-8 shrink-0" rounded="rounded-full" alt="我" />
               ) : (
                 <CoverImg src={together.avatar} className="h-8 w-8 shrink-0" rounded="rounded-full" alt={together.name} />
               )}

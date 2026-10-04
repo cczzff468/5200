@@ -23,7 +23,7 @@ import {
   type NcmSong,
   type NcmToplist,
 } from '@/lib/ios/music-api';
-import { useMusic, getGuestProfile, exitGuestMode } from '@/lib/ios/music-store';
+import { useMusic, getGuestProfile, getGuestAvatar, exitGuestMode } from '@/lib/ios/music-store';
 import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
 
 export function MusicHome({ onSettings }: { onSettings: () => void }) {
@@ -34,7 +34,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const playSong = useMusic((s) => s.playSong);
   const [avatarSheet, setAvatarSheet] = useState(false);
   const guest = getGuestProfile();
-  const headAvatar = loginUid ? loginAvatar : guest.avatar;
+  const headAvatar = loginUid ? loginAvatar : getGuestAvatar();
   const headName = loginUid ? loginNickname || '网易云用户' : guest.nickname;
   const [recPlaylists, setRecPlaylists] = useState<NcmPlaylist[] | null>(null);
   const [tops, setTops] = useState<NcmToplist[] | null>(null);

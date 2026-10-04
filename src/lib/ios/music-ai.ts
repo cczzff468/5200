@@ -20,6 +20,7 @@ import { listContacts, getContact, ownerRealName } from './contacts-store';
 import type { ContactRecord } from '../contacts';
 import { kvGet, kvSet, kvDel } from './idb-kv';
 import { useSettings } from './store';
+import { useEffect, useState } from 'react';
 import { useMusic, setSongPlayedHook } from './music-store';
 import { search, songArtistText, musicUid, type NcmSong } from './music-api';
 
@@ -500,4 +501,47 @@ export async function bootMusicAi(): Promise<void> {
 export async function listTogetherCandidates(): Promise<ContactRecord[]> {
   const all = await listContacts();
   return all.filter((c) => c.kind === 'char');
+}
+
+/**
+ * 一起听对方信息「跟随全局」：头像/昵称始终读联系人库里的最新值，
+ * （在微信/QQ里改了头像、昵称后一起听界面立即同步），联系人被删时回退会话快照。
+ */
+export function useTogetherLive(): TogetherSession | null {
+  const session = useMusic((s) => s.together);
+  // 只缓存联系人的覆盖值（不在 effect 里同步 setState，避免级联渲染）
+  const [override, setOverride] = useState<{ cid: string; name?: string; avatar?: string } | null>(null);
+  // 版本号：联系人头像/资料变更事件触达时 +1，强制重读联系人库
+  const [rev, setRev] = useState(0);
+  const cid = session?.contactId ?? '';
+  useEffect(() => {
+    if (!cid) return;
+    const reread = () => setRev((n) => n + 1);
+    window.addEventListener('contact-avatar-changed', reread);
+    return () => window.removeEventListener('contact-avatar-changed', reread);
+  }, [cid]);
+  useEffect(() => {
+    if (!cid) return;
+    let on = true;
+    void getContact(cid)
+      .then((c) => {
+        if (!on) return;
+        setOverride(c ? { cid, name: c.nickname || c.name || '', avatar: c.avatar || '' } : null);
+      })
+      .catch(() => {
+        /* 联系人库不可用时保持快照 */
+      });
+    return () => {
+      on = false;
+    };
+  }, [cid, rev]);
+  if (!session) return null;
+  if (override && override.cid === cid) {
+    return {
+      ...session,
+      name: override.name || session.name,
+      avatar: override.avatar || session.avatar,
+    };
+  }
+  return session;
 }
