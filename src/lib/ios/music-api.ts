@@ -406,6 +406,22 @@ export async function toplist(): Promise<NcmToplist[]> {
   return j.list ?? [];
 }
 
+export interface NcmDjRadio {
+  id: number;
+  name: string;
+  picUrl?: string;
+  programCount?: number;
+  subCount?: number;
+  rcmdtext?: string;
+  dj?: { nickname?: string; avatarUrl?: string };
+}
+
+/** 热门播客（电台）——「我」页播客 Tab 展示 */
+export async function djHot(limit = 20): Promise<NcmDjRadio[]> {
+  const j = await ncmRequest<{ djRadios: NcmDjRadio[] }>('dj/hot', { limit });
+  return j.djRadios ?? [];
+}
+
 // ---------------- 搜索 ----------------
 
 export type SearchType = 1 | 10 | 100 | 1000; // 单曲/歌手/歌单/专辑

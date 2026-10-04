@@ -61,8 +61,8 @@ export default function MusicApp() {
   const loggedIn = !!loginUid;
   // 迷你播放条显示策略：除全屏播放页外所有界面都显示（含设置页等浮层）；评论弹层带输入框不遮
   const showMini = nav.view !== 'player' && !commentSong;
-  // TabBar 只在 tabs/playlist 视图显示（设置/评论浮层盖住时不重复展示）
-  const showTabBar = (nav.view === 'tabs' || nav.view === 'playlist') && !showSettings && !commentSong;
+  // TabBar 只在音乐/搜索/我三个主界面显示（歌单/播放/设置等子界面不重复展示）
+  const showTabBar = nav.view === 'tabs' && !showSettings && !commentSong;
 
   return (
     <IOSScreen className="relative bg-[#F8F8F8] dark:bg-black">
@@ -88,15 +88,7 @@ export default function MusicApp() {
               )}
             </div>
           )}
-          {/* 歌单页：同一实色 TabBar 悬浮层 */}
-          {nav.view === 'playlist' && showTabBar && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
-              <div className="pointer-events-auto border-t border-black/[0.06] bg-[#F8F8F8] dark:border-white/10 dark:bg-[#141416]">
-                <MusicTabBar />
-                <div className="h-[10px] shrink-0" />
-              </div>
-            </div>
-          )}
+          {/* 歌单页：不再显示 TabBar（只在音乐/搜索/我三个主界面显示），迷你条由全局层贴底 */}
           {nav.view === 'player' && <MusicPlayer />}
           {nav.view === 'playlist' && <MusicPlaylist />}
 

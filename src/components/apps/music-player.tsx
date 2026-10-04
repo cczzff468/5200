@@ -891,7 +891,7 @@ function TogetherHead({
       </div>
       {/* 头像下气泡（音乐视图）：紧贴双头像正下方居中聚拢——对方在左、我在右，尾巴朝上各自指向头像，5 秒后消失；出现时隐藏时长行 */}
       {showBubbles && hasBubble && (
-        <div className="mx-auto mt-1 flex w-full max-w-[320px] items-start justify-center gap-10 px-4">
+        <div className="mx-auto mt-1 flex w-full max-w-[300px] items-start justify-center gap-8 px-4">
           {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
           {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
         </div>
@@ -912,28 +912,6 @@ function myAvatarOf(loginUid: number | null, loginAvatar: string): string {
 
 // ---------------- 音乐界面底部快聊输入条（点信息图标弹出） ----------------
 
-/** 虚拟键盘抬起高度（iOS overlay 键盘：visualViewport 变小而布局视口不变；Android resize 模式天然贴底） */
-function useKeyboardOffset(): number {
-  const [kb, setKb] = useState(0);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const upd = () => {
-      // 键盘高度 ≈ 布局视口底 - 可视视口底（含被键盘推出的偏移）
-      const overlap = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
-      setKb(overlap);
-    };
-    vv.addEventListener('resize', upd);
-    vv.addEventListener('scroll', upd);
-    upd();
-    return () => {
-      vv.removeEventListener('resize', upd);
-      vv.removeEventListener('scroll', upd);
-    };
-  }, []);
-  return kb;
-}
-
 function QuickInputBar({
   value,
   onChange,
@@ -945,7 +923,25 @@ function QuickInputBar({
   onSend: () => void;
   onClose: () => void;
 }) {
-  const kb = useKeyboardOffset();
+  // 键盘偏移只在输入框聚焦时计算，失焦立即归零（防止键盘已收起但 visualViewport 事件残留导致输入条浮顶）
+  const [focused, setFocused] = useState(false);
+  const [kb, setKb] = useState(0);
+  useEffect(() => {
+    if (!focused) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const upd = () => {
+      // iOS overlay 键盘：布局视口不变、可视视口变小；overlap ≈ 键盘高度。Android resize 模式 overlap≈0 天然贴底
+      setKb(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
+    };
+    vv.addEventListener('resize', upd);
+    vv.addEventListener('scroll', upd);
+    upd();
+    return () => {
+      vv.removeEventListener('resize', upd);
+      vv.removeEventListener('scroll', upd);
+    };
+  }, [focused]);
   // 聚焦时浏览器会把页面往上推（scrollIntoView）——立即滚回原位，保证界面不动，只有输入条跟键盘抬起
   const keepViewport = () => {
     const y = window.scrollY;
@@ -975,7 +971,14 @@ function QuickInputBar({
           autoFocus
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onFocus={keepViewport}
+          onFocus={() => {
+            setFocused(true);
+            keepViewport();
+          }}
+          onBlur={() => {
+            setFocused(false);
+            setKb(0); // 失焦立即归零（键盘收起后不再保留上移偏移）
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') onSend();
           }}
@@ -1007,17 +1010,17 @@ function QuickInputBar({
   );
 }
 
-/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴） */
+/** 头像下的小气泡（实色深灰，带朝向头像的小尾巴；紧凑宽度不遮挡唱片） */
 function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
   return (
     <div
-      className="relative mt-2 max-w-[190px] rounded-[20px] bg-[#5a5a5f] px-3.5 py-2"
+      className="relative mt-2 max-w-[150px] rounded-[18px] bg-[#5a5a5f] px-3 py-1.5"
       data-testid={mine ? 'music-tg-bubble-me' : 'music-tg-bubble-peer'}
     >
       <span
-        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'right-6' : 'left-6'}`}
+        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'right-5' : 'left-5'}`}
       />
-      <p className="relative line-clamp-3 break-words text-[13px] leading-snug text-white/95">{text}</p>
+      <p className="relative line-clamp-2 break-words text-[12px] leading-snug text-white/95">{text}</p>
     </div>
   );
 }

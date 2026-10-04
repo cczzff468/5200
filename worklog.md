@@ -14935,3 +14935,28 @@ Stage Summary:
 - 关键实现：absolute 定位元素在 flex 容器里必须有 bottom 约束否则停在静态位置（本轮输入条浮顶根因）；React 受控 input 的 E2E 填值必须用原型 setter+input 事件；z 层体系=页面内容<30/迷你条 70/全屏弹层 80+/嵌套弹窗 82
 - 范围限定遵守：仅动音乐 App 6 个文件（music-player/music-store/music-api/music-home/music-search/music-mine z 值/music-shared z 值/music.tsx z 值），16 项受保护功能未触碰
 - 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-store.ts、src/lib/ios/music-api.ts、src/components/apps/music-home.tsx、src/components/apps/music-mine.tsx、src/components/apps/music-search.tsx、src/components/apps/music-shared.tsx、src/components/apps/music.tsx
+
+---
+Task ID: 65
+Agent: Z.ai Code（主会话）
+Task: 用户第十轮反馈——一起听气泡/输入条修复、Tab 只在音乐/搜索/我三个主界面显示、我页笔记与播客真实内容、听歌排行独立全屏页、添加状态再上移、等级右边改听歌时长
+
+Work Log:
+- 一起听输入条浮顶根治（music-player QuickInputBar）：键盘偏移改为 focus 驱动——input onFocus 才订阅 visualViewport（resize/scroll）计算 translateY(-kb)，onBlur 立即 setKb(0)+setFocused(false)（此前键盘收起后 visualViewport 事件残留导致 transform 残留、输入条浮到屏幕顶部=用户截图现象）；lint set-state-in-effect 规避：归零放 onBlur 事件回调而非 effect 分支
+- 气泡收紧（HeadBubble/TogetherHead）：max-w 190→150px、text 13→12px、line-clamp-3→2、容器 max-w 320→300 gap-10→8——实测对方 3 行长消息截为 150px 两行、我的短消息自适应 86px，双方聚拢头像正下不再遮挡唱片
+- TabBar 只在音乐/搜索/我显示（music.tsx）：showTabBar 条件删掉 `|| nav.view === 'playlist'`，歌单页 TabBar 渲染块整块删除；歌单页迷你条贴底，歌单页内容 pb-[128px]→pb-[76px]
+- 我页主 Tab 行 bug 修复（music-mine）：音乐/播客/笔记主 Tab 行原来只在 mainTab==='music' 分支内渲染，切到播客/笔记后无法切回——移出条件分支始终 sticky 显示
+- 笔记 Tab 真实内容（NotesList）：读备忘录 App 的 localDB notes（getAll('notes')），置顶优先+更新时间倒序，白卡片列表（标题+日期+内容两行摘要），空态保留
+- 播客 Tab 真实内容（PodcastList）：music-api 新增 djHot()（/dj/hot 热门电台 20 个），行=封面+名字+推荐语/主播+期数+订阅数，点击 toast 提示；实测 20 条正常
+- 听歌排行独立全屏页（RecordPage）：从半屏 MineSheet 改为全屏界面（z-[80]）——返回箭头+标题+「累计听歌 X · N 次播放」副标题+最近一周/所有时间 Tab+排名列表（1-3 名红色序号、封面、歌名歌手、播放次数红色占比条、点击播放）；登录态 userRecord(uid,1|0)，游客本地 history 聚合；游客「我」页也补了听歌排行入口行（本地播放记录·时长）
+- 等级右面改时长（我页统计行）：登录态第 4 项从 listenSongs「X首」改为本地累计听歌时长「X小时Y分/分钟」（StatV 无标签）；music-store 新增 listenSec state——audio timeupdate 增量累计（dt∈(0,3) 防跳播）、每 30 秒节流落盘 kv music-listen-sec、pause 时 flush；boot 恢复；修复 flush 重复计算（原 listenSec+listenDirty 双计，listenSec 内存值已完整直接写）
+- 添加状态再上移（music-mine 头部）：顶栏 pt-[56px]→pt-[50px]、头像行 mt-2→mt-1.5
+- E2E（agent-browser 420x900 游客态）全过：我页添加状态贴顶（y=84）✓；笔记 tab 显示 2 条备忘录卡片（置顶优先）✓；播客 tab 20 条热门电台 ✓；主 Tab 行三处都能切回 ✓；听歌排行全屏页（副标题时长/2 次播放/排名列表）✓；歌单页无 TabBar+迷你条贴底 ✓；播放「雨爱」→一起听「小音」：双头像 64px+时长行清晰+唱针不挡+歌手「杨丞琳」✓；发快聊→气泡聚拢头像正下（对方 150px 两行/我 86px）+时长隐藏 ✓；点遮罩输入条收起 ✓；7 秒后气泡消失时长恢复 ✓；console/page errors 零
+- 途中 dev server 一次退出（与改动无关），重启后复验；测试数据清理：char-e2e-yinyue2 联系人+note-e2e-* 2 条+7 个 music-* kv 键全清
+- bunx tsc 0 错误；bun run lint 0 错误；dev.log 无 error
+
+Stage Summary:
+- 交付：一起听输入条浮顶根治（focus 驱动键盘偏移）+气泡紧凑化；TabBar 只在音乐/搜索/我三个主界面显示（歌单页移除）；我页主 Tab 行常驻修复；笔记 Tab 接备忘录真实数据、播客 Tab 接网易云热门电台；听歌排行改独立全屏页（周/总 Tab+排名+占比条，游客本地聚合也支持）；我页等级右侧改本地累计听歌时长（timeupdate 精确累计+持久化）；添加状态再上移
+- 关键实现：键盘偏移必须 focus 生命周期管理（blur 清零）而非纯 viewport 事件监听；主 Tab 行移出条件分支；listenSec 用 audio timeupdate 增量（0<dt<3 过滤 seek），flush 直接写内存 truth 防双计
+- 范围限定遵守：仅动音乐 App 5 文件（music-player/music-store/music-api/music-mine/music.tsx+music-playlist padding），16 项受保护功能未触碰
+- 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-store.ts、src/lib/ios/music-api.ts、src/components/apps/music-mine.tsx、src/components/apps/music.tsx、src/components/apps/music-playlist.tsx

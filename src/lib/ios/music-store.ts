@@ -56,6 +56,7 @@ const PLAYER_KEY = 'music-player';
 const HISTORY_PREFIX = 'music-history:';
 const LIKED_PREFIX = 'music-liked:';
 const NOW_KEY = 'music-now';
+const LISTEN_KEY = 'music-listen-sec';
 
 /** 歌曲播放成功钩子（music-ai 注入：写一起听记忆等） */
 type SongPlayedHook = (song: NcmSong) => void;
@@ -69,6 +70,23 @@ export function setSongPlayedHook(fn: SongPlayedHook | null): void {
 let audio: HTMLAudioElement | null = null;
 let engineBound = false;
 
+/** 听歌时长累计（秒）：timeupdate 增量累加，节流写 kv（“我”页统计行显示） */
+let listenTick = 0;
+function accumulateListen(): void {
+  const cur = audio?.currentTime ?? 0;
+  const dt = cur - listenTick;
+  listenTick = cur;
+  if (!(dt > 0 && dt < 3)) return; // 跳转/重播不累计
+  const next = useMusic.getState().listenSec + dt;
+  useMusic.setState({ listenSec: next });
+  // 每 30 秒落盘一次（listenSec 内存值已完整，直接写）
+  if (Math.round(next) % 30 === 0) kvSet(LISTEN_KEY, Math.round(next));
+}
+function flushListen(): void {
+  const sec = useMusic.getState().listenSec;
+  if (sec > 0) kvSet(LISTEN_KEY, Math.round(sec));
+}
+
 function ensureAudio(): HTMLAudioElement {
   if (audio) return audio;
   audio = new Audio();
@@ -76,6 +94,7 @@ function ensureAudio(): HTMLAudioElement {
   if (!engineBound) {
     engineBound = true;
     audio.addEventListener('timeupdate', () => {
+      accumulateListen();
       useMusic.setState({ position: audio?.currentTime ?? 0 });
     });
     audio.addEventListener('durationchange', () => {
@@ -83,7 +102,10 @@ function ensureAudio(): HTMLAudioElement {
       if (d && Number.isFinite(d)) useMusic.setState({ duration: d });
     });
     audio.addEventListener('play', () => useMusic.setState({ playing: true }));
-    audio.addEventListener('pause', () => useMusic.setState({ playing: false }));
+    audio.addEventListener('pause', () => {
+      flushListen();
+      useMusic.setState({ playing: false });
+    });
     audio.addEventListener('waiting', () => useMusic.setState({ buffering: true }));
     audio.addEventListener('playing', () => useMusic.setState({ buffering: false }));
     audio.addEventListener('ended', () => {
@@ -171,6 +193,8 @@ interface MusicState {
   likedSongs: Record<number, NcmSong>;
   // 历史
   history: HistoryItem[];
+  /** 累计听歌秒数（本地统计，timeupdate 增量累加；「我」页统计行显示时长） */
+  listenSec: number;
   // 导航
   nav: MusicNav;
   // 游客模式（未登录时「先逛逛」进入）
@@ -248,6 +272,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   likedIds: new Set<number>(),
   likedSongs: {},
   history: [],
+  listenSec: 0,
   nav: { view: 'tabs', tab: 'home', playlistId: null, playlistKind: 'normal', guestPlId: null },
   guestMode: false,
   commentSong: null,
@@ -274,6 +299,8 @@ export const useMusic = create<MusicState>((set, get) => ({
     }
     // 恢复历史
     loadHistoryFor();
+    // 恢复累计听歌时长
+    useMusic.setState({ listenSec: Number(kvGet<number>(LISTEN_KEY)) || 0 });
     // 登录态（异步校验）
     void get().refreshLoginUi();
   },

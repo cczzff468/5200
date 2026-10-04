@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import {
   ArrowDownToLine,
   BarChart2,
+  ChevronLeft,
   Clock3,
   Heart,
   ImagePlus,
@@ -25,6 +26,7 @@ import {
   MoreVertical,
   NotebookPen,
   Pin,
+  Play,
   Plus,
   Podcast,
   RotateCcw,
@@ -33,14 +35,18 @@ import {
   Star,
 } from 'lucide-react';
 import {
+  djHot,
   playlistDelete,
   userDetail,
   userPlaylists,
   vipInfo,
+  type NcmDjRadio,
   type NcmPlaylist,
+  type NcmSong,
   type NcmUserDetail,
   type VipInfo,
 } from '@/lib/ios/music-api';
+import { localDB } from '@/lib/ios/db';
 import {
   useMusic,
   getGuestProfile,
@@ -165,6 +171,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const loginNickname = useMusic((s) => s.loginNickname);
   const loginAvatar = useMusic((s) => s.loginAvatar);
   const likedIds = useMusic((s) => s.likedIds);
+  const listenSec = useMusic((s) => s.listenSec);
   const openPlaylist = useMusic((s) => s.openPlaylist);
   const guestTick = useMusic((s) => s.guestMode); // 游客态切换时重渲染
 
@@ -183,9 +190,10 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const [profRev, setProfRev] = useState(0);
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState('');
-  // 添加状态弹窗 / 新建歌单弹窗
+  // 添加状态弹窗 / 新建歌单弹窗 / 听歌排行全屏页
   const [statusOpen, setStatusOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [showRecord, setShowRecord] = useState(false);
   // 登录账号真实 VIP（VIP 是几显示几）
   const [loginVip, setLoginVip] = useState<VipInfo | null>(null);
 
@@ -340,8 +348,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
             : { background: `linear-gradient(180deg, ${theme.from} 0%, ${theme.via} 52%, ${theme.to} 100%)` }
         }
       >
-        {/* 顶栏 */}
-        <div className="flex items-center justify-between px-4 pt-[56px]">
+        {/* 顶栏（收窄上边距，添加状态胶囊整体上移） */}
+        <div className="flex items-center justify-between px-4 pt-[50px]">
           <button
             type="button"
             onClick={onSettings}
@@ -384,7 +392,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         </div>
 
         {/* 头像（游客：点按编辑资料；无编辑图标） */}
-        <div className="mt-2 flex justify-center">
+        <div className="mt-1.5 flex justify-center">
           <button
             type="button"
             onClick={loginUid ? undefined : () => setSheet('profile')}
@@ -433,7 +441,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
               <StatV v={detail ? `${detail.profile.follows ?? 0}` : '—'} l="关注" />
               <StatV v={detail ? `${detail.profile.followeds ?? 0}` : '—'} l="粉丝" />
               <StatV v={detail ? `Lv.${detail.level}` : '—'} l="" />
-              <StatV v={detail ? `${detail.listenSongs}` : '—'} l="首" />
+              {/* 等级右面显示累计听歌时长（本地真实累计），不是歌数 */}
+              <StatV v={fmtListenDur(listenSec)} l="" />
             </>
           ) : (
             <>
@@ -478,36 +487,36 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
 
       {/* ================= 白色面板 ================= */}
       <div className="bg-[#F8F8F8] dark:bg-zinc-900">
+        {/* 主 Tab 行（音乐/播客/笔记）——始终显示，任意 Tab 下都能切换 */}
+        <div className="sticky top-0 z-10 border-b border-black/5 bg-[#F8F8F8] px-5 dark:border-white/10 dark:bg-zinc-900">
+          <div className="flex items-center gap-8">
+            {(
+              [
+                { k: 'music', label: '音乐' },
+                { k: 'podcast', label: '播客' },
+                { k: 'notes', label: '笔记' },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.k}
+                type="button"
+                onClick={() => setMainTab(t.k)}
+                data-testid={`music-mine-tab-${t.k}`}
+                className="relative py-2.5 text-[18px] leading-none"
+              >
+                <span className={mainTab === t.k ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400 dark:text-zinc-500'}>
+                  {t.label}
+                </span>
+                {mainTab === t.k && (
+                  <span className="absolute inset-x-0 -bottom-[1px] mx-auto h-[3px] w-7 rounded-full bg-zinc-900 dark:bg-white" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {mainTab === 'music' && (
           <>
-            {/* 主 Tab 行（音乐/播客/笔记） */}
-            <div className="sticky top-0 z-10 border-b border-black/5 bg-[#F8F8F8] px-5 dark:border-white/10 dark:bg-zinc-900">
-              <div className="flex items-center gap-8">
-                {(
-                  [
-                    { k: 'music', label: '音乐' },
-                    { k: 'podcast', label: '播客' },
-                    { k: 'notes', label: '笔记' },
-                  ] as const
-                ).map((t) => (
-                  <button
-                    key={t.k}
-                    type="button"
-                    onClick={() => setMainTab(t.k)}
-                    data-testid={`music-mine-tab-${t.k}`}
-                    className="relative py-2.5 text-[18px] leading-none"
-                  >
-                    <span className={mainTab === t.k ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400 dark:text-zinc-500'}>
-                      {t.label}
-                    </span>
-                    {mainTab === t.k && (
-                      <span className="absolute inset-x-0 -bottom-[1px] mx-auto h-[3px] w-7 rounded-full bg-zinc-900 dark:bg-white" />
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* 子 Tab 行 */}
             <div className="flex items-center px-5 pb-1 pt-3">
               <button
@@ -536,7 +545,6 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
                 </button>
               </div>
             </div>
-
             {/* 歌单列表 */}
             {subTab === 'recent' ? (
               <div className="pb-[128px]" data-testid="music-mine-list">
@@ -564,7 +572,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
                         name="听歌排行"
                         sub={<>累计听歌{detail?.listenSongs ?? '—'}首</>}
                         right={<Pin className="h-4 w-4 shrink-0 rotate-45 text-zinc-300 dark:text-zinc-600" />}
-                        onClick={() => setSheet('record')}
+                        onClick={() => setShowRecord(true)}
                         testId="music-mine-pl-record"
                       />
                       {createdPls.map((p) => (
@@ -612,6 +620,15 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
                       }
                       onClick={() => setSheet('liked')}
                       testId="music-mine-pl-liked"
+                    />
+                    {/* 游客也有听歌排行（本地播放记录聚合，单独全屏界面） */}
+                    <PlRow
+                      tile={<RankTile />}
+                      name="听歌排行"
+                      sub={<>本地播放记录 · {fmtListenDur(listenSec)}</>}
+                      right={<Pin className="h-4 w-4 shrink-0 rotate-45 text-zinc-300 dark:text-zinc-600" />}
+                      onClick={() => setShowRecord(true)}
+                      testId="music-mine-pl-record"
                     />
                     {guestLists.map((p) => (
                       <PlRow
@@ -700,25 +717,14 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </>
         )}
 
-        {mainTab === 'podcast' && (
-          <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
-            <Podcast className="h-9 w-9 opacity-40" />
-            <p className="text-[13px]">暂无播客内容</p>
-            <p className="text-[11px] text-zinc-300 dark:text-zinc-600">订阅的播客会出现在这里</p>
-          </div>
-        )}
+        {mainTab === 'podcast' && <PodcastList />}
 
-        {mainTab === 'notes' && (
-          <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
-            <NotebookPen className="h-9 w-9 opacity-40" />
-            <p className="text-[13px]">还没有笔记</p>
-            <p className="text-[11px] text-zinc-300 dark:text-zinc-600">听歌感悟可以记在这里</p>
-          </div>
-        )}
+        {mainTab === 'notes' && <NotesList />}
       </div>
       </div>
 
       {/* ================= 半屏面板 ================= */}
+      {showRecord && <RecordPage onClose={() => setShowRecord(false)} />}
       {sheet === 'profile' && (
         <ProfileEditSheet
           onClose={() => {
@@ -781,6 +787,16 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
 }
 
 // ---------------- 小件 ----------------
+
+/** 时长格式化：60 分内「X分钟」，以上「X小时Y分」 */
+function fmtListenDur(sec: number): string {
+  const m = Math.floor(sec / 60);
+  if (m < 1) return '0分钟';
+  if (m < 60) return `${m}分钟`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}小时${rm}分` : `${h}小时`;
+}
 
 /** 统计项（值加粗 + 标签） */
 function StatV({ v, l }: { v: string; l: string }) {
@@ -1289,6 +1305,253 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------- 听歌排行（单独全屏界面；登录=云端接口，游客=本地播放历史聚合） ----------------
+
+function RecordPage({ onClose }: { onClose: () => void }) {
+  const uid = useMusic((s) => s.loginUid);
+  const listenSec = useMusic((s) => s.listenSec);
+  const playSong = useMusic((s) => s.playSong);
+  const [range, setRange] = useState<'week' | 'all'>('all');
+  const [items, setItems] = useState<{ song: NcmSong; count: number }[] | null>(null);
+
+  useEffect(() => {
+    setItems(null);
+    void (async () => {
+      try {
+        if (uid) {
+          const { userRecord, normalizeSong } = await import('@/lib/ios/music-api');
+          const rec = await userRecord(uid, range === 'week' ? 1 : 0);
+          setItems(rec.map((r) => ({ song: normalizeSong(r.song), count: r.playCount })));
+        } else {
+          // 游客：本地播放历史聚合（能显示的都显示）
+          const st = useMusic.getState();
+          const map = new Map<number, { song: NcmSong; count: number }>();
+          for (const h of st.history) {
+            const e = map.get(h.song.id) ?? { song: h.song, count: 0 };
+            e.count += 1;
+            map.set(h.song.id, e);
+          }
+          setItems([...map.values()].sort((a, b) => b.count - a.count).slice(0, 100));
+        }
+      } catch {
+        setItems([]);
+      }
+    })();
+  }, [uid, range]);
+
+  const maxCount = items?.[0]?.count ?? 1;
+  const totalPlays = items?.reduce((n, x) => n + x.count, 0) ?? 0;
+
+  return (
+    <div className="absolute inset-0 z-[80] flex flex-col bg-[#F8F8F8] dark:bg-zinc-900" data-testid="music-record-page">
+      {/* 顶栏 */}
+      <div className="flex items-center gap-3 border-b border-black/5 px-4 pb-2.5 pt-[54px] dark:border-white/10">
+        <button type="button" onClick={onClose} aria-label="返回" data-testid="music-record-back" className="active:scale-90">
+          <ChevronLeft className="h-6 w-6 text-zinc-700 dark:text-zinc-200" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">听歌排行</p>
+          <p className="text-[11px] text-zinc-400">
+            累计听歌 {fmtListenDur(listenSec)} · {totalPlays} 次播放
+          </p>
+        </div>
+        <BarChart2 className="h-5 w-5 shrink-0 text-zinc-300 dark:text-zinc-600" />
+      </div>
+
+      {/* 周 / 所有时间（游客只有本地总数据，仍可切换但数据一致） */}
+      <div className="flex gap-5 px-5 pb-1 pt-3">
+        {(
+          [
+            { k: 'week', label: '最近一周' },
+            { k: 'all', label: '所有时间' },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.k}
+            type="button"
+            onClick={() => setRange(t.k)}
+            data-testid={`music-record-range-${t.k}`}
+            className={`relative pb-1.5 text-[15px] ${range === t.k ? 'font-bold text-zinc-900 dark:text-white' : 'text-zinc-400'}`}
+          >
+            {t.label}
+            {range === t.k && <span className="absolute inset-x-1 -bottom-[1px] h-[3px] rounded-full bg-[#EC4141]" />}
+          </button>
+        ))}
+      </div>
+
+      {/* 排行列表 */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-[90px]">
+        {items === null ? (
+          <LoadingBlock />
+        ) : items.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 py-14 text-zinc-400">
+            <BarChart2 className="h-8 w-8 opacity-40" />
+            <p className="text-[13px]">还没有听歌数据，去听几首吧</p>
+          </div>
+        ) : (
+          items.map((it, i) => (
+            <button
+              key={it.song.id}
+              type="button"
+              onClick={() => void playSong(it.song, items.map((x) => x.song))}
+              data-testid={`music-record-item-${i}`}
+              className="flex w-full items-center gap-3 px-4 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
+            >
+              <span
+                className={`w-6 shrink-0 text-center text-[15px] font-bold tabular-nums ${
+                  i < 3 ? 'text-[#EC4141]' : 'text-zinc-400'
+                }`}
+              >
+                {i + 1}
+              </span>
+              <CoverImg src={it.song.album?.picUrl} className="h-11 w-11 shrink-0" rounded="rounded-lg" alt={it.song.name} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] text-zinc-900 dark:text-zinc-100">{it.song.name}</span>
+                <span className="mt-0.5 block truncate text-[11px] text-zinc-400">
+                  {it.song.artists?.map((a) => a.name).join('/')}
+                </span>
+                {/* 播放次数占比条 */}
+                <span className="mt-1 block h-[3px] w-full overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/10">
+                  <span
+                    className="block h-full rounded-full bg-[#EC4141]/70"
+                    style={{ width: `${Math.max(6, Math.round((it.count / maxCount) * 100))}%` }}
+                  />
+                </span>
+              </span>
+              <span className="shrink-0 text-right">
+                <span className="flex items-center gap-1 text-[11px] tabular-nums text-zinc-400">
+                  <Play className="h-3 w-3" fill="currentColor" />
+                  {it.count}次
+                </span>
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- 播客 Tab（网易云热门电台，能显示的都显示） ----------------
+
+function PodcastList() {
+  const [list, setList] = useState<NcmDjRadio[] | null>(null);
+  const showToastMine = (m: string) => {
+    // 简易 toast（挂 body 层级足够）
+    const el = document.createElement('div');
+    el.textContent = m;
+    el.style.cssText =
+      'position:fixed;left:50%;bottom:120px;transform:translateX(-50%);background:rgba(0,0,0,0.75);color:#fff;padding:6px 14px;border-radius:999px;font-size:12px;z-index:9999;pointer-events:none';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1400);
+  };
+  useEffect(() => {
+    void (async () => {
+      try {
+        setList(await djHot(20));
+      } catch {
+        setList([]);
+      }
+    })();
+  }, []);
+  if (list === null) {
+    return (
+      <div className="pb-[128px] pt-4">
+        <LoadingBlock />
+      </div>
+    );
+  }
+  if (list.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
+        <Podcast className="h-9 w-9 opacity-40" />
+        <p className="text-[13px]">暂无播客内容</p>
+      </div>
+    );
+  }
+  return (
+    <div className="pb-[128px]" data-testid="music-mine-podcasts">
+      {list.map((d) => (
+        <button
+          key={d.id}
+          type="button"
+          onClick={() => showToastMine('演示环境：播客播放即将上线')}
+          className="flex w-full items-center gap-3 px-4 py-2 text-left active:bg-black/5 dark:active:bg-white/10"
+        >
+          <CoverImg src={d.picUrl} className="h-12 w-12 shrink-0" rounded="rounded-lg" alt={d.name} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] text-zinc-900 dark:text-zinc-100">{d.name}</span>
+            <span className="block truncate text-[11px] text-zinc-400">
+              {d.rcmdtext || d.dj?.nickname || '网易云播客'} · {d.programCount ?? 0}期
+            </span>
+          </span>
+          <span className="shrink-0 text-[11px] tabular-nums text-zinc-400">{fmtPlayCount(d.subCount)}订阅</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------- 笔记 Tab（读取备忘录 App 的笔记，能显示的都显示） ----------------
+
+function NotesList() {
+  const [notes, setNotes] = useState<{ id: string; title: string; content: string; updatedAt: number }[] | null>(null);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const all = await localDB.getAll('notes');
+        const list = (all as { id: string; title: string; content: string; updatedAt: number; pinned?: boolean }[])
+          .slice()
+          .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt - a.updatedAt);
+        setNotes(list);
+      } catch {
+        setNotes([]);
+      }
+    })();
+  }, []);
+  if (notes === null) {
+    return (
+      <div className="pb-[128px] pt-4">
+        <LoadingBlock />
+      </div>
+    );
+  }
+  if (notes.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 pb-[128px] pt-14 text-zinc-400">
+        <NotebookPen className="h-9 w-9 opacity-40" />
+        <p className="text-[13px]">还没有笔记</p>
+        <p className="text-[11px] text-zinc-300 dark:text-zinc-600">在备忘录里记下的笔记会出现在这里</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2 px-4 pb-[128px] pt-3" data-testid="music-mine-notes">
+      {notes.map((n) => (
+        <div
+          key={n.id}
+          className="rounded-xl bg-white p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.05)] dark:bg-zinc-800"
+          data-testid="music-mine-note-item"
+        >
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 truncate text-[14px] font-medium text-zinc-900 dark:text-zinc-100">
+              {n.title || '无标题笔记'}
+            </p>
+            <span className="shrink-0 text-[10px] text-zinc-400">
+              {new Date(n.updatedAt).getMonth() + 1}月{new Date(n.updatedAt).getDate()}日
+            </span>
+          </div>
+          {n.content && (
+            <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+              {n.content}
+            </p>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

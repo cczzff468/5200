@@ -234,7 +234,7 @@ export function MusicPlaylist() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-[128px]">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-[76px]">
         {/* 信息区 */}
         <div className="flex items-start gap-4 px-4 pb-3">
           <CoverImg
