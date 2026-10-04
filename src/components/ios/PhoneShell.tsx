@@ -159,6 +159,10 @@ export default function PhoneShell() {
       // 录音按住进行中（如另一根手指按下）：不启动边缘手势
       if (isVoiceHoldActive()) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      // 悬浮拖拽控件（全局迷你播放器等，data-suppress-edge-gesture 标记）起手：
+      // 不认领边缘手势——否则拖动贴底悬浮的迷你条会误开多任务切换器
+      const tgt = e.target as Element | null;
+      if (tgt && typeof tgt.closest === 'function' && tgt.closest('[data-suppress-edge-gesture]')) return;
       const rect = shellRef.current?.getBoundingClientRect();
       if (!rect) return;
       if (e.clientX < rect.left || e.clientX > rect.right) return;

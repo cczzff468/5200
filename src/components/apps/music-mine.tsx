@@ -18,13 +18,11 @@ import {
   ChevronLeft,
   Clock3,
   Heart,
-  Image as ImageIcon,
   ImagePlus,
   LayoutGrid,
   ListMusic,
   Loader2,
   Lock,
-  Maximize2,
   Menu,
   MoreVertical,
   NotebookPen,
@@ -127,9 +125,6 @@ const MINE_THEMES = [
 const statusKeyOf = (scope: string) => `music-mine-status:${scope}`;
 const dressKeyOf = (scope: string) => `music-mine-dress:${scope}`;
 const dressImgKeyOf = (scope: string) => `music-mine-dress-img:${scope}`;
-/** 装扮背景应用范围（第十六轮反馈）：header = 仅头部图片背景；full = 整个「我」页全屏背景 */
-type DressMode = 'header' | 'full';
-const dressModeKeyOf = (scope: string) => `music-mine-dress-mode:${scope}`;
 
 /** 状态文本是否以表情/符号图标开头（🎧/🌙/💻…）——是则状态胶囊里不再叠笑脸图标 */
 function statusStartsWithPict(s: string): boolean {
@@ -193,10 +188,6 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const [statusText, setStatusText] = useState<string>(() => kvGetStr(statusKeyOf(scope)));
   const [themeIdx, setThemeIdx] = useState<number>(() => kvGetIdx(dressKeyOf(scope)));
   const [dressImg, setDressImg] = useState<string>(() => kvGetStr(dressImgKeyOf(scope)));
-  // 装扮背景应用范围（第十六轮反馈：点击装扮可选择图片背景还是全屏背景）
-  const [dressMode, setDressMode] = useState<DressMode>(() =>
-    kvGetStr(dressModeKeyOf(scope)) === 'full' ? 'full' : 'header',
-  );
   // 资料版本号：游客保存资料后 +1 强制重渲染（确保关注/粉丝/头像等立即刷新）
   const [profRev, setProfRev] = useState(0);
   const [creating, setCreating] = useState(false);
@@ -236,7 +227,6 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   useEffect(() => {
     setStatusText(kvGetStr(statusKeyOf(scope)));
     setThemeIdx(kvGetIdx(dressKeyOf(scope)));
-    setDressMode(kvGetStr(dressModeKeyOf(scope)) === 'full' ? 'full' : 'header');
   }, [scope]);
 
   // 登录态拉取真实 VIP 等级（/vip/info：associator=黑胶VIP redplus=黑胶SVIP）
@@ -271,17 +261,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const createdCount = loginUid ? createdPls.length : guestLists.length;
 
   const theme = MINE_THEMES[Math.min(Math.max(themeIdx, 0), MINE_THEMES.length - 1)];
+  /** 头部图片背景：自定义图只作头部背景（第十八轮反馈：全屏背景已删除，仅保留图片背景） */
   const customDress = themeIdx === -1 && !!dressImg;
-  /** 全屏背景：自定义图铺满整个「我」页（第十六轮反馈） */
-  const fullDress = customDress && dressMode === 'full';
-  /** 头部图片背景：自定义图只作头部背景（原有行为） */
-  const headerDress = customDress && dressMode === 'header';
-
-  /** 切换装扮背景应用范围（弹窗选择图片背景/全屏背景；立即生效并持久化） */
-  const changeDressMode = (m: DressMode) => {
-    setDressMode(m);
-    kvSetStr(dressModeKeyOf(scope), m);
-  };
 
   // 新建歌单（弹窗提交；失败抛错由弹窗展示）
   const doCreate = async (name: string, privacy: boolean) => {
@@ -356,37 +337,18 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   };
 
   return (
-    <div
-      className="relative flex h-full flex-col bg-[#F8F8F8] dark:bg-zinc-900"
-      style={
-        fullDress
-          ? {
-              backgroundImage: `url(${dressImg})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              backgroundRepeat: 'no-repeat',
-            }
-          : undefined
-      }
-      data-testid="music-mine"
-    >
+    <div className="relative flex h-full flex-col bg-[#F8F8F8] dark:bg-zinc-900" data-testid="music-mine">
       {/* 整页滚动容器：头部随内容一起滚（不再固定） */}
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="music-mine-scroll">
       {/* ================= 深色头部 ================= */}
       <div
         className="relative text-white"
         style={
-          fullDress
-            ? // 全屏背景模式：根部已铺满图，头部只叠暗化渐变保证白字可读（第十六轮反馈）
-              {
-                background:
-                  'linear-gradient(180deg, rgba(10,10,12,0.30) 0%, rgba(10,10,12,0.10) 45%, rgba(10,10,12,0.52) 100%)',
+          customDress
+            ? {
+                background: `linear-gradient(180deg, rgba(10,10,12,0.30) 0%, rgba(10,10,12,0.10) 45%, rgba(10,10,12,0.52) 100%), url(${dressImg}) center / cover no-repeat`,
               }
-            : headerDress
-              ? {
-                  background: `linear-gradient(180deg, rgba(10,10,12,0.30) 0%, rgba(10,10,12,0.10) 45%, rgba(10,10,12,0.52) 100%), url(${dressImg}) center / cover no-repeat`,
-                }
-              : { background: `linear-gradient(180deg, ${theme.from} 0%, ${theme.via} 52%, ${theme.to} 100%)` }
+            : { background: `linear-gradient(180deg, ${theme.from} 0%, ${theme.via} 52%, ${theme.to} 100%)` }
         }
       >
         {/* 顶栏（收窄上边距，添加状态胶囊整体上移） */}
@@ -522,28 +484,14 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </button>
         </div>
 
-        {/* 白色面板圆角帽（同一底色，形成圆角衔接；全屏背景下改半透明透出图片，第十七轮反馈：更透明） */}
-        <div
-          className={`mt-3 h-[16px] rounded-t-[16px] ${
-            fullDress ? 'bg-[#F8F8F8]/55 backdrop-blur-md dark:bg-zinc-900/60' : 'bg-[#F8F8F8] dark:bg-zinc-900'
-          }`}
-        />
+        {/* 白色面板圆角帽（同一底色，形成圆角衔接） */}
+        <div className="mt-3 h-[16px] rounded-t-[16px] bg-[#F8F8F8] dark:bg-zinc-900" />
       </div>
 
-      {/* ================= 白色面板（全屏背景时透明透出背景图，第十七轮反馈） ================= */}
-      <div
-        className={
-          fullDress
-            ? 'bg-[#F8F8F8]/55 backdrop-blur-md dark:bg-zinc-900/60'
-            : 'bg-[#F8F8F8] dark:bg-zinc-900'
-        }
-      >
+      {/* ================= 白色面板 ================= */}
+      <div className="bg-[#F8F8F8] dark:bg-zinc-900">
         {/* 主 Tab 行（音乐/播客/笔记）——始终显示，任意 Tab 下都能切换 */}
-        <div
-          className={`sticky top-0 z-10 border-b border-black/5 px-5 dark:border-white/10 ${
-            fullDress ? 'bg-[#F8F8F8]/75 backdrop-blur-md dark:bg-zinc-900/80' : 'bg-[#F8F8F8] dark:bg-zinc-900'
-          }`}
-        >
+        <div className="sticky top-0 z-10 border-b border-black/5 bg-[#F8F8F8] px-5 dark:border-white/10 dark:bg-zinc-900">
           <div className="flex items-center gap-8">
             {(
               [
@@ -793,11 +741,6 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
         <DressSheet
           current={themeIdx}
           customImg={dressImg}
-          mode={dressMode}
-          onMode={(m) => {
-            changeDressMode(m);
-            showToast(m === 'full' ? '已切换为全屏背景' : '已切换为图片背景');
-          }}
           onPick={(i) => {
             setThemeIdx(i);
             kvSetIdx(dressKeyOf(scope), i);
@@ -1167,8 +1110,6 @@ function fileToDressDataUrl(file: File): Promise<string> {
 function DressSheet({
   current,
   customImg,
-  mode,
-  onMode,
   onPick,
   onCustom,
   onClose,
@@ -1176,9 +1117,6 @@ function DressSheet({
   current: number;
   /** 当前是否使用自定义背景（themeIdx === -1） */
   customImg: string;
-  /** 背景应用范围（第十六轮反馈）：header = 仅头部；full = 整个「我」页全屏背景 */
-  mode: DressMode;
-  onMode: (m: DressMode) => void;
   onPick: (i: number) => void;
   /** 上传并应用自定义背景 */
   onCustom: (img: string) => void;
@@ -1210,37 +1148,7 @@ function DressSheet({
             关闭
           </button>
         </div>
-        {/* 背景应用范围（第十六轮反馈）：点击装扮可选择图片背景还是全屏背景 */}
-        <div className="mb-4">
-          <p className="mb-2 text-[12px] font-medium text-zinc-500 dark:text-zinc-400">背景应用范围</p>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => onMode('header')}
-              data-testid="music-dress-mode-header"
-              className={`flex flex-col items-center gap-1.5 rounded-xl py-3 ring-2 active:scale-[0.98] ${
-                mode === 'header' ? 'ring-[#C20C0C]' : 'ring-black/5 dark:ring-white/10'
-              }`}
-            >
-              <ImageIcon className="h-5 w-5 text-zinc-700 dark:text-zinc-200" />
-              <span className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">图片背景</span>
-              <span className="text-[10px] text-zinc-400">仅主页头部区域</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onMode('full')}
-              data-testid="music-dress-mode-full"
-              className={`flex flex-col items-center gap-1.5 rounded-xl py-3 ring-2 active:scale-[0.98] ${
-                mode === 'full' ? 'ring-[#C20C0C]' : 'ring-black/5 dark:ring-white/10'
-              }`}
-            >
-              <Maximize2 className="h-5 w-5 text-zinc-700 dark:text-zinc-200" />
-              <span className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">全屏背景</span>
-              <span className="text-[10px] text-zinc-400">整个「我」页面</span>
-            </button>
-          </div>
-        </div>
-        {/* 自定义背景（手机上传） */}
+        {/* 自定义背景（手机上传）——第十八轮反馈：全屏背景选项已删除，自定义图仅作头部图片背景 */}
         <div className="mb-4">
           <div className="flex items-stretch gap-3">
             <button

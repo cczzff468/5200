@@ -1,15 +1,16 @@
 'use client';
 
 /**
- * 音乐灵动岛（第十六轮反馈）：音乐在播时占据灵动岛锚位的常驻音乐弹窗，所有界面都显示。
+ * 音乐灵动岛（第十六轮反馈，第十八轮修订）：音乐在播时占据灵动岛锚位的常驻音乐弹窗，所有界面都显示。
  *
  * 形态与交互（按用户规格）：
- * - 小弹窗：黑色胶囊（封面 + 歌名 + 橙红跳动声纹），常驻显示（主屏幕/所有 App/锁屏都显示）；
+ * - 小弹窗：黑色胶囊（封面 + 歌名 + 红色波形动画），常驻显示（主屏幕/所有 App/锁屏都显示）；
  * - 大弹窗：展开的播放卡（封面 + 歌名 + 当前歌词行 + 进度条 + 上/暂停/下 + 红心，参考网易云通知播放卡），
  *   自动展开时显示 5 秒后收回小弹窗；开始播放/切歌时自动展开一次；
  * - 点小弹窗 → 展开为大弹窗并一直显示（不自动收回）；
  * - 点大弹窗 → 跳转到音乐 App 听歌界面（锁屏/熄屏时只展开收起不跳转）；
  * - 点大弹窗以外的地方 → 收回小弹窗（透明捕获层，仅展开期间存在）；
+ * - 不放音乐（无歌/暂停）时弹窗整体消失（第十八轮反馈），恢复播放后小弹窗回归；
  * - 聊天消息灵动岛通知展示期间 → 音乐弹窗整体消失（通知收起后音乐弹窗恢复）；
  *   来电响铃/熄屏期间同样隐身；设置里关闭状态栏（灵动岛）时一并隐藏。
  *
@@ -48,6 +49,8 @@ function useIncomingCallPresenting(): boolean {
 
 /** 非订阅环境下判断整层是否隐身（订阅回调用；与组件内 hidden 派生同口径） */
 function isHiddenNow(): boolean {
+  const m = useMusic.getState();
+  if (!m.current || !m.playing) return true; // 第十八轮反馈：不放音乐（无歌/暂停）时弹窗消失
   if (!useSettings.getState().statusBarVisible) return true;
   if (useUI.getState().screenOff) return true;
   const n = useIslandNotify.getState();
@@ -67,37 +70,43 @@ function openPlayerFromIsland(): void {
   ui.switchToApp('music');
 }
 
-/** 小弹窗右侧的跳动声纹（播放时跳动、暂停时静止矮条）；big = 大弹窗标题行右侧的加高版 */
-function WaveBars({ playing, big = false }: { playing: boolean; big?: boolean }) {
-  const bars = big
-    ? [
-        { h: 18, dur: 0.82, delay: 0 },
-        { h: 24, dur: 0.66, delay: 0.14 },
-        { h: 14, dur: 0.74, delay: 0.28 },
-        { h: 21, dur: 0.6, delay: 0.42 },
-        { h: 16, dur: 0.78, delay: 0.56 },
-      ]
-    : [
-        { h: 13, dur: 0.82, delay: 0 },
-        { h: 17, dur: 0.66, delay: 0.14 },
-        { h: 10, dur: 0.74, delay: 0.28 },
-        { h: 15, dur: 0.6, delay: 0.42 },
-      ];
+/** 弹窗尾部的波形动画（第十八轮反馈：原跳动声纹条改为正弦波形横移）；
+ *  播放时波形起伏滚动、暂停时压平成直线；big = 大弹窗标题行右侧的加高版 */
+function Waveform({ playing, big = false }: { playing: boolean; big?: boolean }) {
+  const H = big ? 26 : 15;
+  const W = big ? 54 : 32;
+  const amp = H / 2 - 2; // 振幅
+  const lambda = big ? 15 : 11; // 波长（位移一个波长 = 无缝循环）
+  const total = W + lambda * 2; // 左右各多画一个波长供横移
+  const pts: string[] = [];
+  for (let x = 0; x <= total; x += 2) {
+    const y = H / 2 + amp * Math.sin((x / lambda) * Math.PI * 2);
+    pts.push(`${x === 0 ? 'M' : 'L'}${x} ${y.toFixed(2)}`);
+  }
   return (
-    <span className="flex shrink-0 items-end gap-[2.5px]" aria-hidden="true" data-testid="music-island-wave">
-      {bars.map((b, i) => (
-        <motion.span
-          key={i}
-          className="w-[2.5px] rounded-full bg-[#EC4141]"
-          style={{ height: b.h, originY: 1 }}
-          animate={playing ? { scaleY: [0.35, 1, 0.45, 0.9, 0.35] } : { scaleY: 0.32 }}
-          transition={
-            playing
-              ? { duration: b.dur, repeat: Infinity, delay: b.delay, ease: 'easeInOut' }
-              : { duration: 0.18 }
-          }
-        />
-      ))}
+    <span
+      className="shrink-0"
+      style={{ width: W, height: H, overflow: 'hidden' }}
+      aria-hidden="true"
+      data-testid="music-island-wave"
+    >
+      <svg width={total} height={H} viewBox={`0 0 ${total} ${H}`} style={{ display: 'block' }}>
+        <motion.g
+          animate={playing ? { x: [0, -lambda] } : { x: 0 }}
+          transition={playing ? { duration: 1.5, ease: 'linear', repeat: Infinity } : { duration: 0.2 }}
+        >
+          <motion.path
+            d={pts.join(' ')}
+            fill="none"
+            stroke="#EC4141"
+            strokeWidth={big ? 2.2 : 1.8}
+            strokeLinecap="round"
+            style={{ originY: 0.5 }}
+            animate={{ scaleY: playing ? 1 : 0.06 }}
+            transition={{ duration: 0.22 }}
+          />
+        </motion.g>
+      </svg>
     </span>
   );
 }
@@ -124,7 +133,8 @@ export default function MusicIsland() {
   const expandedRef = useRef(false);
   const lastPlayIdRef = useRef<number | null>(null);
 
-  const hidden = !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !current;
+  // 第十八轮反馈：不放音乐（无歌/暂停）时弹窗整体消失
+  const hidden = !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !current || !playing;
 
   useEffect(() => {
     expandedRef.current = expanded;
@@ -137,7 +147,7 @@ export default function MusicIsland() {
     }
   };
 
-  /** 整层隐身（消息通知/来电/熄屏/关闭状态栏）时把展开态复位，恢复后从小弹窗开始：
+  /** 整层隐身（不放音乐/消息通知/来电/熄屏/关闭状态栏）时把展开态复位，恢复后从小弹窗开始：
    *  订阅相关 store 在回调里 setState（外部系统订阅），渲染期不碰 ref */
   useEffect(() => {
     const maybeReset = () => {
@@ -151,6 +161,7 @@ export default function MusicIsland() {
     };
     maybeReset();
     const unsubs = [
+      useMusic.subscribe(maybeReset),
       useUI.subscribe(maybeReset),
       useSettings.subscribe(maybeReset),
       useIslandNotify.subscribe(maybeReset),
@@ -268,7 +279,7 @@ export default function MusicIsland() {
             <span className="min-w-0 flex-1 truncate text-[11px] font-medium leading-none text-white/90">
               {current?.name}
             </span>
-            <WaveBars playing={playing} />
+            <Waveform playing={playing} />
           </motion.div>
 
           {/* ---------- 大弹窗内容（展开基本完成后淡入） ---------- */}
@@ -293,8 +304,8 @@ export default function MusicIsland() {
                   {lyricText}
                 </p>
               </div>
-              {/* 标题行右侧：跳动声纹（第十七轮反馈：原此处的爱心移到控制行右下角） */}
-              <WaveBars playing={playing} big />
+              {/* 标题行右侧：波形动画（第十八轮反馈：图标动画改为波形动画） */}
+              <Waveform playing={playing} big />
             </div>
 
             {/* 进度条 + 时间（点击不跳转，只拖动进度） */}
@@ -322,7 +333,8 @@ export default function MusicIsland() {
               <span className="shrink-0 text-[10px] tabular-nums text-white/55">{fmtClock(dur)}</span>
             </div>
 
-            {/* 控制条：上一首 / 播放暂停 / 下一首居中，红心贴右下角（第十七轮反馈）；点击不跳转 */}
+            {/* 控制条：上一首 / 播放暂停 / 下一首居中，红心同行贴右并与按钮垂直居中对齐
+                （第十八轮反馈：爱心与前进/后退/暂停按钮对齐）；点击不跳转 */}
             <div className="relative flex items-center justify-center gap-10 px-6 py-3" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
@@ -355,7 +367,7 @@ export default function MusicIsland() {
               >
                 <SkipForward className="h-[22px] w-[22px] text-white" fill="currentColor" />
               </button>
-              {/* 红心：右下角（点击不跳转，只收藏） */}
+              {/* 红心：与控制按钮同一水平线（top-1/2 垂直居中对齐；点击不跳转，只收藏） */}
               <button
                 type="button"
                 aria-label={liked ? '取消红心' : '红心'}
@@ -363,7 +375,7 @@ export default function MusicIsland() {
                 onClick={() => {
                   if (current) void useMusic.getState().toggleLike(current);
                 }}
-                className="absolute bottom-2.5 right-3.5 p-1 active:scale-90"
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 active:scale-90"
               >
                 <Heart
                   className={`h-[20px] w-[20px] ${liked ? 'text-[#EC4141]' : 'text-white/85'}`}

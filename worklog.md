@@ -15120,3 +15120,26 @@ Stage Summary:
 - 关键实现：防复读=归一化查重（去标点后全等比较）而不是模糊匹配，重试带明确换角度指令；反独白=闲聊定时器只允许在「最后说话的是机主」时触发；自定义背景=简单 dataURL 存 IndexedDB kv（不建表，复用 idb-kv）
 - 范围限定遵守：仅动音乐 App 4 文件（music-player/music-mine/music-store/music-ai）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰
 - 改动文件：src/components/apps/music-player.tsx、music-mine.tsx、src/lib/ios/music-store.ts、music-ai.ts
+
+---
+Task ID: 77
+Agent: Z.ai Code（主会话）
+Task: 第十八轮反馈五项——①装扮删除「全屏背景」②不放音乐时灵动岛弹窗消失③大弹窗爱心与前进/暂停/后退按钮对齐④弹窗尾部图标动画改波形动画⑤全局迷你播放器变小+可拖动（圆形也可拖动）+✕号变小
+
+Work Log:
+- ①music-mine.tsx 删全屏背景整链路：DressMode 类型/dressModeKeyOf/dressMode state/changeDressMode 全删；根部容器 backgroundImage 分支删除；头部样式收敛为 customDress 二分支；白色面板圆角帽/白色面板/tab 行三处 fullDress 半透明分支全部还原为不透明；DressSheet 删「背景应用范围」选择区（图片背景/全屏背景双卡）与 mode/onMode props；Maximize2/ImageIcon import 删除；持久化残留键 music-mine-dress-mode:* 无读者自然失效
+- ②MusicIsland：hidden 加 `|| !playing`（isHiddenNow 同口径加 `!m.current || !m.playing`）；复位订阅组新增 useMusic.subscribe(maybeReset)——暂停时若处展开态同步复位，恢复播放从小弹窗回归（lastPlayIdRef 保证同曲恢复不重抢 5 秒大窗）
+- ③大弹窗红心从 absolute bottom-2.5 right-3.5 改 top-1/2 -translate-y-1/2：实测 like/toggle/prev/next 中心线 cy 全部=131px 完全对齐
+- ④WaveBars（跳动声纹条）整体重写为 Waveform：SVG 正弦波（波长 11/15px、左右各多画一个波长）motion.g x:[0,-λ] 线性无限横移=无缝滚动；暂停时 scaleY→0.06 压平成直线；小弹窗 32×15 / 大弹窗 54×26 两档
+- ⑤MusicGlobalMini：条形 h-52→42、封面 42→34、字 14→12、播放钮 36→32、列表/唱片钮缩小、全宽改内容自适应（实测 260×42）；motion.div drag（2D 自由拖）+dragConstraints=layerRef；唱片 drag="y"→drag（右缘贴边拖改全屏自由拖）；✕ 20→15px（图标 11→9px，偏移 6→4px）
+- 架构修复 A（拖动误开多任务）：迷你条初始位在 PhoneShell 底边 72px 手势识别带内，拖动必触发上滑切器；手势是 window 捕获阶段监听（子元素 stopPropagation 拦不住）——改为 onDown 里检查 e.target.closest('[data-suppress-edge-gesture]') 跳过认领，MusicGlobalMini 层根打该标记
+- 架构修复 B（拖动后误触点按）：framer onTap 与 drag 结束的 pointerup 存在竞态，400px 拖拽结束后仍触发 onTap 误开播放页（浏览器实测两次复现）；删两处 onTap，改 useTapGuard（pointerdown 记起点、pointerup 位移<6px 才算点按）确定性判定；内部按钮沿用原生 pointerdown/up stopPropagation 拦截（不参与拖拽也不触发条身点按，onClick 正常）
+- E2E（agent-browser 420×900）全过：播「罗生门(Follow)」→大弹窗自动展开波形动画+红心与三钮同线（cy=131×4）✓；点小弹窗展开→暂停→弹窗整体消失（islandVisible:false）✓；恢复播放→小弹窗回归 156×33（SVG 波形）✓；回主屏：迷你条 260×42 左下 → 拖到 (147,409) 屏幕中部（无切器/无播放页误开）✓ → 轻点条身开播放页 ✓；唱片形态 56×56+✕15px → 自由拖到 (72,172) 左上（无误触）✓ → 轻点唱片切回条形 ✓；我的→装扮：无背景应用范围区/无全屏背景按钮/上传行+4 主题块在 ✓；canvas→File 模拟上传装扮图→头部背景生效且白色面板保持不透明（全屏透出已根除）✓
+- 途中环境事件：HMR 一次导致 CDP 超时，agent-browser 重启（close 会换 profile+视口，重新 set viewport 420×900 并重走解锁/游客/播歌链路）
+- bun run lint 0 错误 0 警告；bunx tsc 0 错误；agent-browser errors/console 零 error；浏览器已关闭
+
+Stage Summary:
+- 交付：装扮只保留图片背景（全屏背景从 UI 到渲染分支全部根除）；音乐弹窗只在播放时存在（暂停即隐、恢复即回）；大弹窗爱心与控制按钮几何精确同线；弹窗尾部换成正弦波形滚动动画（暂停压平）；迷你播放器小型化+全屏自由拖动（条形/唱片皆可）+✕ 缩小，点按与拖拽用位移判定彻底解耦
+- 关键实现：悬浮拖拽控件与系统底边手势共存=data-suppress-edge-gesture 标记 + PhoneShell onDown closest 跳过（window 捕获阶段监听无法被子元素拦截，只能在源头认领处排除）；拖拽/点按共存=位移阈值判定替代 framer onTap（onTap 在 drag 结束 pointerup 上有竞态）
+- 范围限定遵守：仅动音乐 App 3 文件+PhoneShell 一处手势守卫；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；音乐数据按 uid 隔离未动
+- 改动文件：src/components/apps/music-mine.tsx、src/components/ios/MusicIsland.tsx、src/components/ios/MusicGlobalMini.tsx、src/components/ios/PhoneShell.tsx

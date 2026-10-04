@@ -1,13 +1,13 @@
 'use client';
 
 /**
- * 全局迷你播放器（第十六轮反馈，第十七轮修订）：音乐在播时，主屏幕/其他 App 上悬浮的播放控件。
+ * 全局迷你播放器（第十六轮反馈，第十八轮修订）：音乐在播时，主屏幕/其他 App 上悬浮的播放控件。
  *
  * 三种显示形态（可互相切换，选择持久化在 localStorage）：
- * - bar    底部迷你条：与音乐 App 内底部迷你播放条同款样式（封面 + 歌名 - 歌手 + 播放/暂停 + 列表），
- *          点按条身打开播放页；右侧唱片图标按钮循环切换样式（条 → 唱片 → 隐藏 → 条）；
+ * - bar    迷你小条（第十八轮反馈：变小+可拖动）：封面 + 歌名 - 歌手 + 播放/暂停 + 列表 + 换样式，
+ *          点按条身打开播放页；可在屏幕内任意拖动；右侧唱片图标按钮循环切换样式（条 → 唱片 → 隐藏 → 条）；
  * - record 悬浮圆形唱片：贴右边缘的旋转唱片，点按 = 换样式（切回底部条），
- *          右上角 ✕ 点击 = 隐藏，沿右边缘可上下拖动；
+ *          右上角 ✕（第十八轮反馈：更小）点击 = 隐藏，可在屏幕内任意拖动；
  * - hidden 不显示：完全隐藏，可在音乐播放页右上角 ⋮ 面板的「迷你播放器」行重新开启。
  *
  * 显示条件：有正在播放/上次的歌 && 未锁屏 && 未熄屏 && 切换器未打开 && 音乐 App 不在前台
@@ -84,90 +84,136 @@ function openPlayerGlobal() {
   useUI.getState().switchToApp('music');
 }
 
-/** 底部迷你条形态：与音乐 App 内 MiniBar 同款（一起听时左侧双头像） */
-function GlobalMiniBar() {
+/** 内部小按钮的原生 pointer 拦截：阻止冒泡到父级 motion.div（否则按按钮会同时触发拖拽/换样式 tap）。
+ *  与唱片 ✕ 同款方案；React onClick 不受影响（stopPropagation 只阻断冒泡，不取消本元素点击） */
+function useStopPointerBubble(
+  ref: React.RefObject<HTMLElement | null>,
+  deps: unknown[],
+): void {
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const buttons = Array.from(root.querySelectorAll('button'));
+    const offs: Array<() => void> = [];
+    for (const el of buttons) {
+      const stop = (e: Event) => e.stopPropagation();
+      el.addEventListener('pointerdown', stop);
+      el.addEventListener('pointerup', stop);
+      offs.push(() => {
+        el.removeEventListener('pointerdown', stop);
+        el.removeEventListener('pointerup', stop);
+      });
+    }
+    return () => offs.forEach((f) => f());
+  }, deps);
+}
+
+/** 点按判定（拖拽与点按共存的确定性方案）：pointerdown 记录起点，pointerup 位移 <6px 视为点按。
+ *  不用 framer 的 onTap：拖拽结束的 pointerup 与 drag 完成标记存在竞态，拖拽后可能误触发点按 */
+function useTapGuard(action: () => void) {
+  const down = useRef<{ x: number; y: number } | null>(null);
+  const onPointerDown = (e: React.PointerEvent) => {
+    down.current = { x: e.clientX, y: e.clientY };
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!down.current) return;
+    const d = Math.hypot(e.clientX - down.current.x, e.clientY - down.current.y);
+    down.current = null;
+    if (d < 6) action();
+  };
+  return { onPointerDown, onPointerUp };
+}
+
+/** 迷你小条形态（第十八轮反馈：变小 + 可在屏幕内任意拖动）：
+ *  条身点按打开播放页（位移判定的 tap）；内部按钮原生拦截不参与拖拽/点按 */
+function GlobalMiniBar({ layerRef }: { layerRef: React.RefObject<HTMLDivElement | null> }) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
   const live = useTogetherLive();
   const cycle = useMiniPlayer((s) => s.cycle);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  useStopPointerBubble(barRef, [current?.id, live]);
+  const tap = useTapGuard(openPlayerGlobal);
   if (!current) return null;
   return (
-    <div
-      className="pointer-events-auto mx-3 flex h-[52px] items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_4px_18px_rgba(0,0,0,0.16)] dark:bg-zinc-800 dark:shadow-[0_4px_18px_rgba(0,0,0,0.6)]"
+    <motion.div
+      ref={barRef}
+      drag
+      dragConstraints={layerRef}
+      dragElastic={0.08}
+      dragMomentum={false}
+      onPointerDown={tap.onPointerDown}
+      onPointerUp={tap.onPointerUp}
+      className="pointer-events-auto absolute bottom-[36px] left-3 z-[55] flex h-[42px] touch-none select-none items-center gap-1.5 rounded-full bg-white pl-1 pr-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.16)] dark:bg-zinc-800 dark:shadow-[0_4px_18px_rgba(0,0,0,0.6)]"
       data-testid="music-global-mini-bar"
     >
-      <button
-        type="button"
-        onClick={openPlayerGlobal}
-        data-testid="music-global-mini-open"
-        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-        aria-label="打开播放页"
-      >
-        {live ? (
-          <span className="flex shrink-0 items-center">
-            <img src={live.avatar} alt={live.name} className="h-[42px] w-[42px] rounded-full bg-muted object-cover" draggable={false} />
-            <img
-              src={loginUid ? loginAvatar : getGuestAvatar()}
-              alt="我"
-              className="-ml-3 h-[42px] w-[42px] rounded-full object-cover ring-2 ring-white dark:ring-zinc-800"
-              draggable={false}
-            />
-          </span>
-        ) : (
+      {live ? (
+        <span className="flex shrink-0 items-center">
+          <img src={live.avatar} alt={live.name} className="h-[34px] w-[34px] rounded-full bg-muted object-cover" draggable={false} />
           <img
-            src={songCover(current)}
-            alt={current.name}
-            className="h-[42px] w-[42px] rounded-full bg-muted object-cover"
+            src={loginUid ? loginAvatar : getGuestAvatar()}
+            alt="我"
+            className="-ml-2.5 h-[34px] w-[34px] rounded-full object-cover ring-2 ring-white dark:ring-zinc-800"
             draggable={false}
           />
-        )}
-        <span className="min-w-0 flex-1 truncate text-[14px] leading-none">
-          <span className="font-bold text-zinc-900 dark:text-zinc-100">{current.name}</span>
-          <span className="text-zinc-400 dark:text-zinc-500"> - {songArtistText(current)}</span>
         </span>
-      </button>
+      ) : (
+        <img
+          src={songCover(current)}
+          alt={current.name}
+          className="h-[34px] w-[34px] shrink-0 rounded-full bg-muted object-cover"
+          draggable={false}
+        />
+      )}
+      <span
+        className="min-w-0 max-w-[104px] truncate text-[12px] leading-none"
+        data-testid="music-global-mini-open"
+      >
+        <span className="font-bold text-zinc-900 dark:text-zinc-100">{current.name}</span>
+        <span className="text-zinc-400 dark:text-zinc-500"> - {songArtistText(current)}</span>
+      </span>
       <button
         type="button"
         onClick={() => useMusic.getState().toggle()}
         data-testid="music-global-mini-toggle"
-        className="mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-[2.5px] border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
         aria-label={playing ? '暂停' : '播放'}
       >
-        {playing ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}
+        {playing ? <Pause className="h-3.5 w-3.5" fill="currentColor" /> : <Play className="ml-0.5 h-3.5 w-3.5" fill="currentColor" />}
       </button>
       <button
         type="button"
         onClick={openPlayerGlobal}
         aria-label="播放列表"
-        className="flex h-9 w-8 shrink-0 items-center justify-center text-zinc-800 active:scale-95 dark:text-zinc-100"
+        className="flex h-8 w-7 shrink-0 items-center justify-center text-zinc-800 active:scale-95 dark:text-zinc-100"
       >
-        <ListMusic className="h-[22px] w-[22px]" />
+        <ListMusic className="h-[18px] w-[18px]" />
       </button>
-      {/* 形态切换：底部条 → 悬浮唱片 → 隐藏（第十七轮反馈：点按即换样式） */}
+      {/* 形态切换：底部条 → 悬浮唱片 → 隐藏（点按即换样式） */}
       <button
         type="button"
         onClick={() => cycle()}
         data-testid="music-global-mini-mode"
         aria-label="切换迷你播放器样式"
         title="切换迷你播放器样式"
-        className="flex h-9 w-8 shrink-0 items-center justify-center text-zinc-500 active:scale-95 dark:text-zinc-400"
+        className="flex h-8 w-7 shrink-0 items-center justify-center text-zinc-500 active:scale-95 dark:text-zinc-400"
       >
-        <Disc3 className="h-[19px] w-[19px]" />
+        <Disc3 className="h-[17px] w-[17px]" />
       </button>
-    </div>
+    </motion.div>
   );
 }
 
-/** 悬浮唱片形态：点按 = 换样式（切回底部条，第十七轮反馈），右上角 ✕ 点击隐藏，沿右边缘可上下拖动 */
+/** 悬浮唱片形态：点按 = 换样式（切回底部条），右上角 ✕（更小）点击隐藏，可在屏幕内任意拖动（第十八轮反馈） */
 function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivElement | null> }) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const setMode = useMiniPlayer((s) => s.setMode);
-  // ✕ 按钮的原生拦截：framer-motion 的 tap 手势直接在 motion.div 上挂原生 pointer 监听
-  // （先于 React 合成事件触发），必须在 ✕ 的 target 阶段原生拦截 pointer 事件，
-  // 否则点 ✕ 会同时触发唱片的换样式 onTap
+  const tap = useTapGuard(() => setMode('bar'));
+  // ✕ 按钮的原生拦截：条身/唱片身用 pointer 位移判定点按（useTapGuard），
+  // 必须在 ✕ 的 target 阶段原生拦截 pointer 事件，否则点 ✕ 会同时触发唱片的换样式点按
   const xRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const el = xRef.current;
@@ -184,13 +230,14 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
   if (!current) return null;
   return (
     <motion.div
-      drag="y"
+      drag
       dragConstraints={layerRef}
       dragElastic={0.08}
       dragMomentum={false}
+      onPointerDown={tap.onPointerDown}
+      onPointerUp={tap.onPointerUp}
       className="pointer-events-auto absolute right-[10px] top-[38%] z-[55] touch-none select-none"
       data-testid="music-global-mini-record"
-      onTap={() => setMode('bar')}
     >
       <div className="relative h-[56px] w-[56px]">
         <img
@@ -200,7 +247,7 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
           className="h-full w-full rounded-full bg-muted object-cover shadow-[0_6px_20px_rgba(0,0,0,0.35)] ring-2 ring-white/70 dark:ring-white/20"
           style={{ animation: 'mini-spin 9s linear infinite', animationPlayState: playing ? 'running' : 'paused' }}
         />
-        {/* 右上角 ✕：点击隐藏迷你播放器（原生拦截 pointer 冒泡：不触发换样式/拖拽） */}
+        {/* 右上角 ✕（第十八轮反馈：更小）：点击隐藏迷你播放器（原生拦截 pointer 冒泡：不触发换样式/拖拽） */}
         <button
           ref={xRef}
           type="button"
@@ -210,9 +257,9 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
             e.stopPropagation();
             setMode('hidden');
           }}
-          className="absolute -right-[6px] -top-[6px] flex h-[20px] w-[20px] items-center justify-center rounded-full bg-black/75 text-white shadow ring-1 ring-white/30 active:scale-90"
+          className="absolute -right-[4px] -top-[4px] flex h-[15px] w-[15px] items-center justify-center rounded-full bg-black/75 text-white shadow ring-1 ring-white/30 active:scale-90"
         >
-          <X className="h-[11px] w-[11px]" strokeWidth={3} />
+          <X className="h-[9px] w-[9px]" strokeWidth={3} />
         </button>
       </div>
     </motion.div>
@@ -233,11 +280,14 @@ export default function MusicGlobalMini() {
   if (!visible) return null;
 
   return (
-    <div ref={layerRef} className="pointer-events-none absolute inset-0 z-[55]" data-testid="music-global-mini">
+    <div
+      ref={layerRef}
+      className="pointer-events-none absolute inset-0 z-[55]"
+      data-testid="music-global-mini"
+      data-suppress-edge-gesture
+    >
       {mode === 'bar' ? (
-        <div className="absolute inset-x-0 bottom-[36px]">
-          <GlobalMiniBar />
-        </div>
+        <GlobalMiniBar layerRef={layerRef} />
       ) : (
         <GlobalMiniRecord layerRef={layerRef} />
       )}
