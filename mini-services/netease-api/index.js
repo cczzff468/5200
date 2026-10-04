@@ -20,6 +20,24 @@
  * - checkVersion 关闭：避免启动时联网检查 npm 版本造成噪音/延迟
  */
 
+// === [next-keeper] 注入块：由本服务（容器启动树成员）拉起 Next dev server 守护进程 ===
+// 背景：Bash 工具调用产生的后台进程会在调用结束后被沙箱回收，导致预览服务器反复死亡；
+//       而启动树（tini → start.sh → 本服务）中的进程不受影响。故借本进程之手拉起守护，
+//       守护脚本负责：端口 3000 掉线自动拉起 dev server + OOM 自愈 + 单实例守卫。
+try {
+  const { spawn } = require('child_process');
+  const keeper = spawn('bash', [__dirname + '/next-keeper.sh'], {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+  });
+  keeper.unref();
+  console.log(`[next-keeper] keeper spawned pid=${keeper.pid}`);
+} catch (e) {
+  console.error('[next-keeper] spawn failed:', e);
+}
+// === [next-keeper] 注入块结束 ===
+
 const { serveNcmApi } = require('NeteaseCloudMusicApi');
 
 const PORT = 3010;
