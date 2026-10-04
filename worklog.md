@@ -15143,3 +15143,21 @@ Stage Summary:
 - 关键实现：悬浮拖拽控件与系统底边手势共存=data-suppress-edge-gesture 标记 + PhoneShell onDown closest 跳过（window 捕获阶段监听无法被子元素拦截，只能在源头认领处排除）；拖拽/点按共存=位移阈值判定替代 framer onTap（onTap 在 drag 结束 pointerup 上有竞态）
 - 范围限定遵守：仅动音乐 App 3 文件+PhoneShell 一处手势守卫；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；音乐数据按 uid 隔离未动
 - 改动文件：src/components/apps/music-mine.tsx、src/components/ios/MusicIsland.tsx、src/components/ios/MusicGlobalMini.tsx、src/components/ios/PhoneShell.tsx
+
+---
+Task ID: 78
+Agent: Z.ai Code（主会话）
+Task: 第十九轮反馈三项——①波形动画再美化 ②听歌界面设置弹窗歌手关注后显示「已关注」③审查一起听 AI 规则并列出问题/完善项供用户选择（只列不做）
+
+Work Log:
+- ①Waveform（MusicIsland.tsx）整体重写：单条正弦线 → 双层波（主波全振幅+回声波更矮更密错相 60% 波长），主波垂直渐变描边（FF8E8E→EC4141→C22F2F，垂直方向不受横向滚动影响故循环无缝）+ drop-shadow 柔辉光；播放中两波各自缓慢「呼吸」（scaleY 0.88~1.12 / 0.9~1.1，周期 2.6s/1.9s 错开）+ 横移（1.5s/2.4s 视差）；暂停同步压平成直线并调暗（回声波 opacity 0.45→0.28）；footprint 不变（小 32×15 / 大 54×26）；渐变 id 用 useId 防止大小弹窗实例冲突
+- ②关注状态链路新建：music-store 加 followedArtists: Record<number,boolean>（内存缓存）+ setArtistFollowed；music-player 新增模块级 toggleArtistFollow（真实 artistSub 接口，已关注点击=取关 t=2，游客态提示登录）+ FollowPill 组件；MoreSheet 打开时 artistSublist() 拉真实已关注列表对齐 store（失败静默保持本地），歌手行按钮三态=红底+关注 / 灰底✓已关注；一起听聊天视图歌名行关注胶囊替换为 FollowPill（与设置弹窗同一 store 状态源，两处同步显示）
+- ③规则审查（music-ai.ts 全文通读）：发现 7 个问题/完善点 + 6 个可添加能力，已列清单交用户选择，本轮未改任何规则代码
+- E2E（agent-browser 420×900）全过：播「晴天(原唱 周杰伦)」→ 大弹窗自动展开波形（DOM=2 path+3 stop 渐变+动画组）✓；5 秒后收小弹窗（32 宽波形正常）✓；原生点击小弹窗展开常显 ✓；点大弹窗标题区跳转听歌页 ✓（点进度区不跳转=stopPropagation 按设计）；⋮ 开 MoreSheet → 歌手行红底+关注 ✓；游客点击 → toast「登录网易云账号后才能关注歌手」✓；network route mock artist/sublist 返回该歌手 → 重开面板 → 灰底✓已关注 ✓；点击 → toast「已取消关注 RyaVocal」回+关注 ✓；再点 → toast「已关注 RyaVocal」回已关注 ✓（开关全链路闭环）；console/errors 零错误；浏览器已关闭
+- bunx tsc 0 错误；bun run lint 0 错误；dev.log 无新增 error
+
+Stage Summary:
+- 交付：波形动画双层波+渐变+辉光+呼吸感（层次感明显提升，暂停语义保留）；歌手关注状态真实化（服务端 artistSublist 对齐 + 关注/取关切换 + 已关注灰底✓态，设置弹窗与一起听聊天胶囊共享状态源）；AI 规则问题清单已产出待用户选择
+- 关键实现：关注状态放 zustand 内存缓存而非持久化（服务端为唯一事实源，面板每次打开对齐一次）；mock 验证法=network route 拦截 artist/sublist 与 artist/sub?*（glob 区分子路径）实现无登录账号的已关注态 E2E 闭环
+- 范围限定遵守：仅动音乐 App 3 文件（MusicIsland/music-player/music-store）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；一起听聊天视图 FollowPill 因全新 profile 无角色联系人未走浏览器验证（与 MoreSheet 同一 toggleArtistFollow+store 选择器，代码同源）
+- 改动文件：src/components/ios/MusicIsland.tsx、src/components/apps/music-player.tsx、src/lib/ios/music-store.ts

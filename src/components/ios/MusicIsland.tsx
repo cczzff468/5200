@@ -18,7 +18,7 @@
  * 大弹窗的「点击别处」捕获层 z-[80]（展开期间拦截一次点击用于收起，iOS 灵动岛同语义）。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { motion, type Transition } from 'framer-motion';
 import { Heart, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { useSettings, useSystemDark, useUI } from '@/lib/ios/store';
@@ -70,19 +70,29 @@ function openPlayerFromIsland(): void {
   ui.switchToApp('music');
 }
 
-/** 弹窗尾部的波形动画（第十八轮反馈：原跳动声纹条改为正弦波形横移）；
- *  播放时波形起伏滚动、暂停时压平成直线；big = 大弹窗标题行右侧的加高版 */
+/** 弹窗尾部的波形动画（第十九轮美化：双层正弦波 + 垂直渐变 + 辉光 + 呼吸感）；
+ *  主波全振幅渐变描边慢速横移，回声波更矮更密错相随行（视差层次）；
+ *  播放时两波各自轻微起伏「呼吸」，暂停时同步压平成一条直线并调暗；
+ *  big = 大弹窗标题行右侧的加高版（尺寸不变：小 32×15 / 大 54×26） */
 function Waveform({ playing, big = false }: { playing: boolean; big?: boolean }) {
   const H = big ? 26 : 15;
   const W = big ? 54 : 32;
-  const amp = H / 2 - 2; // 振幅
-  const lambda = big ? 15 : 11; // 波长（位移一个波长 = 无缝循环）
+  const amp = H / 2 - 2; // 主波振幅
+  const lambda = big ? 15 : 11; // 主波波长（位移一个波长 = 无缝循环）
+  const lambda2 = lambda * 0.6; // 回声波波长（更密）
   const total = W + lambda * 2; // 左右各多画一个波长供横移
-  const pts: string[] = [];
-  for (let x = 0; x <= total; x += 2) {
-    const y = H / 2 + amp * Math.sin((x / lambda) * Math.PI * 2);
-    pts.push(`${x === 0 ? 'M' : 'L'}${x} ${y.toFixed(2)}`);
-  }
+  const uid = useId();
+  const gid = `wg${uid.replace(/[^a-zA-Z0-9]/g, '')}`;
+  /** 生成一条正弦波路径（l=波长 a=振幅 phase=初始相位） */
+  const build = (l: number, a: number, phase: number): string => {
+    const span = W + l * 2;
+    const pts: string[] = [];
+    for (let x = 0; x <= span; x += 2) {
+      const y = H / 2 + a * Math.sin((x / l) * Math.PI * 2 + phase);
+      pts.push(`${x === 0 ? 'M' : 'L'}${x} ${y.toFixed(2)}`);
+    }
+    return pts.join(' ');
+  };
   return (
     <span
       className="shrink-0"
@@ -91,19 +101,47 @@ function Waveform({ playing, big = false }: { playing: boolean; big?: boolean })
       data-testid="music-island-wave"
     >
       <svg width={total} height={H} viewBox={`0 0 ${total} ${H}`} style={{ display: 'block' }}>
+        <defs>
+          {/* 垂直渐变：顶端亮珊瑚 → 核心红 → 底部深红（不受横向滚动影响，循环无缝） */}
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#FF8E8E" />
+            <stop offset="50%" stopColor="#EC4141" />
+            <stop offset="100%" stopColor="#C22F2F" />
+          </linearGradient>
+        </defs>
+        {/* 回声波：更矮更密、半透明、慢速横移 + 独立呼吸节奏（视差感） */}
         <motion.g
-          animate={playing ? { x: [0, -lambda] } : { x: 0 }}
-          transition={playing ? { duration: 1.5, ease: 'linear', repeat: Infinity } : { duration: 0.2 }}
+          animate={playing ? { x: [0, -lambda2] } : { x: 0 }}
+          transition={playing ? { duration: 2.4, ease: 'linear', repeat: Infinity } : { duration: 0.25 }}
         >
           <motion.path
-            d={pts.join(' ')}
+            d={build(lambda2, amp * 0.5, Math.PI / 3)}
             fill="none"
-            stroke="#EC4141"
-            strokeWidth={big ? 2.2 : 1.8}
+            stroke="#FF8E8E"
+            strokeWidth={big ? 1.6 : 1.2}
             strokeLinecap="round"
             style={{ originY: 0.5 }}
-            animate={{ scaleY: playing ? 1 : 0.06 }}
-            transition={{ duration: 0.22 }}
+            animate={{
+              scaleY: playing ? [0.9, 1.1, 0.9] : 0.06,
+              opacity: playing ? 0.45 : 0.28,
+            }}
+            transition={playing ? { duration: 1.9, ease: 'easeInOut', repeat: Infinity } : { duration: 0.22 }}
+          />
+        </motion.g>
+        {/* 主波：全振幅、渐变描边、柔辉光、缓慢呼吸 */}
+        <motion.g
+          animate={playing ? { x: [0, -lambda] } : { x: 0 }}
+          transition={playing ? { duration: 1.5, ease: 'linear', repeat: Infinity } : { duration: 0.25 }}
+        >
+          <motion.path
+            d={build(lambda, amp, 0)}
+            fill="none"
+            stroke={`url(#${gid})`}
+            strokeWidth={big ? 2.2 : 1.8}
+            strokeLinecap="round"
+            style={{ originY: 0.5, filter: 'drop-shadow(0 0 3px rgba(236,65,61,0.5))' }}
+            animate={{ scaleY: playing ? [0.88, 1.12, 0.88] : 0.06 }}
+            transition={playing ? { duration: 2.6, ease: 'easeInOut', repeat: Infinity } : { duration: 0.22 }}
           />
         </motion.g>
       </svg>

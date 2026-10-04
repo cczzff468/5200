@@ -55,7 +55,15 @@ import {
   UserRoundSearch,
   X,
 } from 'lucide-react';
-import { artistSub, commentsOf, simiSong, songArtistText, songCover, type NcmSong } from '@/lib/ios/music-api';
+import {
+  artistSub,
+  artistSublist,
+  commentsOf,
+  simiSong,
+  songArtistText,
+  songCover,
+  type NcmSong,
+} from '@/lib/ios/music-api';
 import {
   useMusic,
   getGuestAvatar,
@@ -303,16 +311,6 @@ export function MusicPlayer() {
 
   // 聊天态：全屏独立布局（顶栏+双头像+歌名行+消息流+输入条+底部胶囊），仿网易云一起听聊天界面
   if (chatMode) {
-    const followChatArtist = async () => {
-      const artist = current.artists?.[0];
-      if (!artist) return;
-      try {
-        await artistSub(artist.id, 1);
-        setMoreToast(`已关注 ${artist.name}`);
-      } catch {
-        setMoreToast('登录网易云账号后才能关注歌手');
-      }
-    };
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#101010] text-white" data-testid="music-player">
         {/* 背景：自定义背景图（手机上传）优先，否则封面模糊 */}
@@ -346,14 +344,7 @@ export function MusicPlayer() {
               </h2>
               <div className="mt-1 flex items-center gap-2">
                 <p className="min-w-0 truncate text-[13px] text-white/60">{songArtistText(current)}</p>
-                <button
-                  type="button"
-                  onClick={() => void followChatArtist()}
-                  data-testid="music-tg-chat-follow"
-                  className="shrink-0 rounded-full bg-white/12 px-2.5 py-[3px] text-[11px] leading-none text-white/85 active:scale-95"
-                >
-                  关注
-                </button>
+                <FollowPill song={current} onToast={setMoreToast} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-5 pb-0.5">
@@ -1313,6 +1304,49 @@ function TgRecordSheet({
 
 // ---------------- 更多面板（仿网易云歌曲操作面板） ----------------
 
+/** 关注/取关歌手（真实接口；状态写 music-store.followedArtists，
+ *  设置弹窗/一起听聊天胶囊同步显示「关注/已关注」；游客态提示需登录） */
+async function toggleArtistFollow(
+  artistId: number,
+  artistName: string,
+  onToast: (m: string) => void,
+): Promise<void> {
+  const on = useMusic.getState().followedArtists[artistId] ?? false;
+  try {
+    await artistSub(artistId, on ? 2 : 1);
+    useMusic.getState().setArtistFollowed(artistId, !on);
+    onToast(on ? `已取消关注 ${artistName}` : `已关注 ${artistName}`);
+  } catch {
+    onToast('登录网易云账号后才能关注歌手');
+  }
+}
+
+/** 关注歌手胶囊（一起听聊天视图歌名行）：读 store 关注状态，点击关注/取关 */
+function FollowPill({ song, onToast }: { song: NcmSong; onToast: (m: string) => void }) {
+  const artist = song.artists?.[0];
+  const followed = useMusic((s) => (artist ? (s.followedArtists[artist.id] ?? false) : false));
+  return (
+    <button
+      type="button"
+      data-testid="music-tg-chat-follow"
+      onClick={() => {
+        if (artist) void toggleArtistFollow(artist.id, artist.name, onToast);
+      }}
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-white/12 px-2.5 py-[3px] text-[11px] leading-none active:scale-95"
+      style={{ color: followed ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.85)' }}
+    >
+      {followed ? (
+        <>
+          <Check className="h-3 w-3" />
+          已关注
+        </>
+      ) : (
+        '关注'
+      )}
+    </button>
+  );
+}
+
 function MoreSheet({
   song,
   liked,
@@ -1365,6 +1399,26 @@ function MoreSheet({
     };
   }, [song.id]);
 
+  // 关注状态与服务端对齐（第十九轮反馈：打开面板时拉一次已关注歌手列表，
+  // 关注过的歌手显示「已关注」；游客/接口失败时保持本地缓存状态）
+  useEffect(() => {
+    const artist = song.artists?.[0];
+    if (!artist) return;
+    let on = true;
+    void (async () => {
+      try {
+        const list = await artistSublist();
+        if (!on) return;
+        useMusic.getState().setArtistFollowed(artist.id, list.some((a) => a.id === artist.id));
+      } catch {
+        // 未登录/接口失败：保持本地缓存状态
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, [song.id]);
+
   const download = async () => {
     try {
       const { songUrl } = await import('@/lib/ios/music-api');
@@ -1382,16 +1436,12 @@ function MoreSheet({
     }
   };
 
-  // 关注歌手（真实接口；游客态会提示需登录）
+  // 关注/取关歌手（真实接口；点击已关注 = 取关，状态写 store 供各界面同步）
+  const artist0 = song.artists?.[0];
+  const followed = useMusic((s) => (artist0 ? (s.followedArtists[artist0.id] ?? false) : false));
   const followArtist = async () => {
-    const artist = song.artists?.[0];
-    if (!artist) return;
-    try {
-      await artistSub(artist.id, 1);
-      onToast(`已关注 ${artist.name}`);
-    } catch {
-      onToast('登录网易云账号后才能关注歌手');
-    }
+    if (!artist0) return;
+    void toggleArtistFollow(artist0.id, artist0.name, onToast);
   };
 
   // 相似歌曲漫游：以当前歌的相似歌开播
@@ -1540,10 +1590,20 @@ function MoreSheet({
             >
               <span className="inline-flex items-center gap-2">
                 歌手：{artistName}
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-[#EC4141] px-2 py-[3px] text-[10px] font-medium text-white">
-                  <Plus className="h-3 w-3" />
-                  关注
-                </span>
+                {followed ? (
+                  <span
+                    data-testid="music-more-follow-state"
+                    className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.06] px-2 py-[3px] text-[10px] font-medium text-zinc-500 dark:bg-white/10 dark:text-zinc-400"
+                  >
+                    <Check className="h-3 w-3" />
+                    已关注
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-0.5 rounded-full bg-[#EC4141] px-2 py-[3px] text-[10px] font-medium text-white">
+                    <Plus className="h-3 w-3" />
+                    关注
+                  </span>
+                )}
               </span>
             </MoreRow>
             <MoreRow icon={<Info className="h-[19px] w-[19px]" />} testid="music-more-info" onClick={() => setShowInfo(true)}>

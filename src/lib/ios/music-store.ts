@@ -270,6 +270,9 @@ interface MusicState {
   togetherMsgs: TogetherMsgLike[];
   // AI 正在组织回复（聊天视图显示三个跳动点打字动画）
   tgAiBusy: boolean;
+  // 歌手关注状态（内存缓存；设置弹窗打开时用 artistSublist 与服务端对齐，关注/取关即时写入，
+  // 供设置弹窗/一起听聊天胶囊同步显示「关注/已关注」）
+  followedArtists: Record<number, boolean>;
 
   boot: () => Promise<void>;
   openAppNow: () => void;
@@ -291,6 +294,8 @@ interface MusicState {
   setVolume: (v: number) => void;
   setMode: (m: RepeatMode) => void;
   setPlayerBg: (v: string) => void;
+  /** 写入歌手关注状态（内存缓存，服务端为准） */
+  setArtistFollowed: (id: number, on: boolean) => void;
   setQuality: (q: QualityLevel) => void;
   setSurround3d: (v: boolean) => void;
   /** 定时关闭：传分钟数（null = 取消） */
@@ -394,6 +399,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   together: null,
   togetherMsgs: [],
   tgAiBusy: false,
+  followedArtists: {},
 
   boot: async () => {
     if (get().booted) return;
@@ -599,6 +605,11 @@ export const useMusic = create<MusicState>((set, get) => ({
     if (v) kvSet(playerBgKey(), v);
     else kvDel(playerBgKey());
     set({ playerBg: v });
+  },
+
+  // 歌手关注状态（内存缓存，服务端为准；关注/取关后各界面即时同步）
+  setArtistFollowed: (id, on) => {
+    set((s) => ({ followedArtists: { ...s.followedArtists, [id]: on } }));
   },
 
   // 音质切换（真实作用于下一次起播的 songUrl level）
