@@ -2,23 +2,23 @@
 
 /**
  * 音乐 App 评论页（独立全屏界面，仿网易云 App 截图）：
- * - 头部：返回箭头 + 居中「评论」标题（标题下红色短条）
+ * - 头部：返回箭头（←）+ 居中「评论」标题（标题下红色短条）
  * - 歌曲行：圆形封面 + 「歌名 - 歌手」
- * - 排序档：「评论 (N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页）
+ * - 排序档：「评论(N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页）
  * - 评论流：头像 / 昵称 + VIP·等级徽章 / 日期 + IP 属地 / 内容 / 右侧点赞（大拇指），
- *   楼层回复「展开 N 条回复」（/comment/floor）
- * - 底部：话题胶囊行 + 「随乐而起，有感而发」输入条（点赞/发表需登录，游客 toast 引导）
+ *   楼层回复内联直排（第三十二轮去卡片底色，进视口自动预览前 2 条，仿截图），
+ *   「展开更多回复」灰色链接（/comment/floor）
+ * - 底部：话题胶囊行 + 「听了这么多，可能你有话想说」输入条 + 「发送」文字键
+ *   （点赞/发表需登录，游客 toast 引导）
  */
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   Loader2,
   MessageSquareText,
-  Send,
-  Smile,
   ThumbsUp,
 } from 'lucide-react';
 import {
@@ -51,6 +51,8 @@ interface FloorState {
   loading: boolean;
   list: NcmComment[];
   total: number;
+  /** 预览态：进视口自动拉的前 2 条内联展示（第三十二轮仿截图）；false=完整展开 */
+  preview: boolean;
 }
 
 interface ListData {
@@ -131,7 +133,7 @@ export function CommentsPage() {
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 260) loadMore();
   };
 
-  const like = async (c: NcmComment) => {
+  const like = async (c: NcmComment, floorId?: number) => {
     if (!getMusicLogin()) {
       showToast('登录后才能点赞');
       return;
@@ -150,8 +152,8 @@ export function CommentsPage() {
             }
           : d,
       );
-      const fl = floors[c.commentId];
-      if (fl?.open) {
+      const fl = floors[floorId ?? c.commentId];
+      if (fl) {
         setFloors((m) => ({
           ...m,
           [c.commentId]: {
@@ -169,31 +171,81 @@ export function CommentsPage() {
     }
   };
 
-  // 展开/收起楼层回复（首次展开拉取，收起只翻状态）
+  // 展开/收起楼层回复（预览态首次点击拉全量；收起只翻状态，内联仍显示前 2 条）
   const toggleFloor = async (c: NcmComment) => {
     const cur = floors[c.commentId];
     if (cur && (cur.open || cur.loading)) {
       setFloors((m) => ({ ...m, [c.commentId]: { ...cur, open: false, loading: false } }));
       return;
     }
-    if (cur && cur.list.length > 0) {
+    if (cur && !cur.preview && cur.list.length > 0) {
       setFloors((m) => ({ ...m, [c.commentId]: { ...cur, open: true } }));
       return;
     }
     setFloors((m) => ({
       ...m,
-      [c.commentId]: { open: true, loading: true, list: [], total: c.showFloorComment?.replyCount ?? 0 },
+      [c.commentId]: {
+        open: true,
+        loading: true,
+        list: cur?.list ?? [],
+        total: c.showFloorComment?.replyCount ?? 0,
+        preview: false,
+      },
     }));
     try {
       const f = await commentFloor(song.id, c.commentId, 20);
       setFloors((m) => ({
         ...m,
-        [c.commentId]: { open: true, loading: false, list: f.comments, total: f.total },
+        [c.commentId]: { open: true, loading: false, list: f.comments, total: f.total, preview: false },
       }));
     } catch {
       showToast('回复加载失败');
-      setFloors((m) => ({ ...m, [c.commentId]: { open: false, loading: false, list: [], total: 0 } }));
+      setFloors((m) => ({
+        ...m,
+        [c.commentId]: {
+          open: false,
+          loading: false,
+          list: cur?.list ?? [],
+          total: cur?.total ?? c.showFloorComment?.replyCount ?? 0,
+          preview: cur?.preview ?? false,
+        },
+      }));
     }
+  };
+
+  // 进视口静默预览：自动拉前 2 条回复内联展示（第三十二轮仿截图；失败不留痕可重试）
+  const previewFloor = (c: NcmComment) => {
+    const cid = c.commentId;
+    setFloors((m) => {
+      if (m[cid]) return m;
+      return {
+        ...m,
+        [cid]: {
+          open: false,
+          loading: true,
+          list: [],
+          total: c.showFloorComment?.replyCount ?? 0,
+          preview: true,
+        },
+      };
+    });
+    void (async () => {
+      try {
+        const f = await commentFloor(song.id, cid, 2);
+        setFloors((m) => {
+          const cur = m[cid];
+          if (!cur || !cur.preview || cur.open) return m;
+          return { ...m, [cid]: { ...cur, loading: false, list: f.comments, total: f.total } };
+        });
+      } catch {
+        setFloors((m) => {
+          if (!m[cid]) return m;
+          const next = { ...m };
+          delete next[cid];
+          return next;
+        });
+      }
+    })();
   };
 
   const send = async () => {
@@ -235,10 +287,10 @@ export function CommentsPage() {
           data-testid="music-comment-back"
           className="absolute bottom-1 left-1.5 p-2 text-zinc-800 active:scale-95 dark:text-zinc-200"
         >
-          <ChevronLeft className="h-6 w-6" />
+          <ArrowLeft className="h-6 w-6" />
         </button>
         <div className="flex flex-col items-center">
-          <p className="text-[16px] font-semibold text-zinc-900 dark:text-zinc-100">评论</p>
+          <p className="text-[17px] font-semibold text-zinc-900 dark:text-zinc-100">评论</p>
           <span
             className="mt-[3px] h-[3px] w-6 rounded-full bg-[#C20C0C]"
             aria-hidden
@@ -259,7 +311,7 @@ export function CommentsPage() {
       {/* 排序档：评论 (N) + 推荐|最热|最新 */}
       <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-1">
         <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-comment-total">
-          评论 {data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
+          评论{data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
         </p>
         <div className="flex items-center">
           {SORT_ORDER.map((k, i) => (
@@ -295,12 +347,14 @@ export function CommentsPage() {
           <>
             {data.list.map((c) => (
               <CommentRow
-                key={c.commentId}
+                key={`${sort}-${c.commentId}`}
                 c={c}
                 floor={floors[c.commentId]}
                 onLike={() => void like(c)}
+                onLikeFloor={(r) => void like(r, c.commentId)}
                 onReply={() => setReplyTo(c)}
                 onToggleFloor={() => void toggleFloor(c)}
+                onPreview={() => previewFloor(c)}
               />
             ))}
             {loadingMore && (
@@ -351,32 +405,29 @@ export function CommentsPage() {
         </div>
       )}
 
-      {/* 输入条：「随乐而起，有感而发」+ 表情（有文字时变红色发送键） */}
-      <div className="flex shrink-0 items-center gap-2 px-4 pb-7 pt-2">
+      {/* 输入条：「听了这么多，可能你有话想说」+ 右侧「发送」文字键（有字变红，仿截图） */}
+      <div className="flex shrink-0 items-center gap-3 px-4 pb-7 pt-2">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') void send();
           }}
-          placeholder={getMusicLogin() ? '随乐而起，有感而发' : '登录后可评论（可先浏览）'}
+          placeholder={getMusicLogin() ? '听了这么多，可能你有话想说' : '登录后可评论（可先浏览）'}
           data-testid="music-comment-input"
           className="h-10 min-w-0 flex-1 rounded-full bg-black/[0.05] px-4 text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-white/10 dark:text-zinc-100"
         />
-        {text.trim() ? (
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={sending}
-            data-testid="music-comment-send"
-            aria-label="发送"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#C20C0C] text-white disabled:opacity-40 active:scale-95"
-          >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </button>
-        ) : (
-          <Smile className="h-6 w-6 shrink-0 text-zinc-400" aria-hidden />
-        )}
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={sending || !text.trim()}
+          data-testid="music-comment-send"
+          className={`shrink-0 text-[15px] active:opacity-70 ${
+            text.trim() ? 'font-medium text-[#C20C0C]' : 'text-zinc-400'
+          }`}
+        >
+          {sending ? '发送中…' : '发送'}
+        </button>
       </div>
 
       {toast && (
@@ -394,19 +445,50 @@ function CommentRow({
   c,
   floor,
   onLike,
+  onLikeFloor,
   onReply,
   onToggleFloor,
+  onPreview,
 }: {
   c: NcmComment;
   floor?: FloorState;
   onLike: () => void;
+  /** 点赞楼层里的回复（floorId=父评论 id，乐观更新父楼层列表） */
+  onLikeFloor: (r: NcmComment) => void;
   onReply: () => void;
   onToggleFloor: () => void;
+  onPreview: () => void;
 }) {
   const loc = c.ipLocation?.location || '';
   const replyCount = c.showFloorComment?.replyCount ?? 0;
+  // 进视口自动预览前 2 条回复（第三十二轮仿截图：楼层内联直排）；rootMargin 提前预取
+  const rowRef = useRef<HTMLDivElement>(null);
+  const askedRef = useRef(false);
+  useEffect(() => {
+    if (replyCount <= 0 || floor) return;
+    const el = rowRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (es) => {
+        if (askedRef.current || !es.some((e) => e.isIntersecting)) return;
+        askedRef.current = true;
+        io.disconnect();
+        onPreview();
+      },
+      { rootMargin: '140px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [replyCount, floor, onPreview]);
+  const list = floor?.list ?? [];
+  const shown = floor?.open ? list : list.slice(0, 2);
+  // 收起态下回复已全部内联展示（如只有 1~2 条）则隐藏展开链接
+  const allCollapsed = !!floor && !floor.open && list.length > 0 && list.length >= floor.total;
   return (
-    <div className="flex gap-3 border-b border-black/[0.04] py-3.5 last:border-b-0 dark:border-white/[0.06]">
+    <div
+      ref={rowRef}
+      className="flex gap-3 border-b border-black/[0.04] py-3.5 last:border-b-0 dark:border-white/[0.06]"
+    >
       <CoverImg src={c.user?.avatarUrl} className="h-10 w-10 shrink-0" rounded="rounded-full" alt={c.user?.nickname} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2">
@@ -437,7 +519,7 @@ function CommentRow({
           </button>
         </div>
         <p
-          className="mt-1.5 whitespace-pre-wrap break-words text-[15px] leading-[1.6] text-zinc-900 dark:text-zinc-100"
+          className="mt-1.5 whitespace-pre-wrap break-words text-[16px] leading-[1.65] text-zinc-900 dark:text-zinc-100"
           onClick={onReply}
         >
           {c.content}
@@ -447,56 +529,70 @@ function CommentRow({
             @{c.beRepliedComment.user?.nickname}：{c.beRepliedComment.content}
           </p>
         )}
-        {/* 展开 N 条回复（楼层） */}
-        {replyCount > 0 && (
+        {/* 楼层回复：内联直排（去卡片底色，仿截图）；进视口自动预览前 2 条，展开后全量 */}
+        {shown.length > 0 && (
+          <div className="mt-2.5 space-y-3.5" data-testid={`music-comment-floor-list-${c.commentId}`}>
+            {shown.map((r) => (
+              <FloorReply key={r.commentId} r={r} onLike={() => onLikeFloor(r)} />
+            ))}
+          </div>
+        )}
+        {floor?.open && floor.loading && <p className="mt-2 text-[12px] text-zinc-400">回复加载中…</p>}
+        {/* 展开/收起楼层回复（灰色链接 + 横线前缀，仿截图「—— 展开更多回复 ∨」） */}
+        {replyCount > 0 && !allCollapsed && (
           <button
             type="button"
             onClick={onToggleFloor}
             data-testid={`music-comment-floor-${c.commentId}`}
-            className="mt-2 flex items-center gap-2 text-[13px] text-[#4791EB] active:opacity-70"
+            className="mt-2.5 flex items-center gap-2 text-[13px] text-zinc-500 active:opacity-70 dark:text-zinc-400"
           >
-            <span className="h-px w-6 bg-zinc-200 dark:bg-zinc-700" aria-hidden />
-            {floor?.open ? '收起回复' : `展开 ${replyCount} 条回复`}
+            <span className="h-px w-6 bg-zinc-300 dark:bg-zinc-600" aria-hidden />
+            {floor?.open ? '收起回复' : '展开更多回复'}
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${floor?.open ? 'rotate-180' : ''}`} />
           </button>
         )}
-        {floor?.open && (
-          <div className="mt-2 space-y-3 rounded-xl bg-black/[0.03] p-3 dark:bg-white/[0.05]">
-            {floor.loading ? (
-              <p className="text-[12px] text-zinc-400">回复加载中…</p>
-            ) : floor.list.length === 0 ? (
-              <p className="text-[12px] text-zinc-400">暂无回复</p>
-            ) : (
-              <>
-                {floor.list.map((r) => (
-                  <FloorReply key={r.commentId} r={r} />
-                ))}
-                {floor.total > floor.list.length && (
-                  <p className="text-[11px] text-zinc-400">仅展示前 {floor.list.length} 条回复</p>
-                )}
-              </>
-            )}
-          </div>
+        {floor?.open && !floor.loading && floor.total > floor.list.length && (
+          <p className="mt-1.5 text-[11px] text-zinc-400">仅展示前 {floor.list.length} 条回复</p>
         )}
       </div>
     </div>
   );
 }
 
-/** 楼层回复条目（缩进小卡） */
-function FloorReply({ r }: { r: NcmComment }) {
+/** 楼层回复条目（内联直排：小头像 + 昵称 + VIP 徽章 / 日期 + IP / 内容 / 右侧点赞，仿截图） */
+function FloorReply({ r, onLike }: { r: NcmComment; onLike: () => void }) {
   const loc = r.ipLocation?.location || '';
   return (
     <div className="flex gap-2">
-      <CoverImg src={r.user?.avatarUrl} className="h-6 w-6 shrink-0" rounded="rounded-full" alt={r.user?.nickname} />
+      <CoverImg src={r.user?.avatarUrl} className="h-7 w-7 shrink-0" rounded="rounded-full" alt={r.user?.nickname} />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[12px] text-zinc-500 dark:text-zinc-400">{r.user?.nickname}</p>
-        <p className="mt-0.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-zinc-800 dark:text-zinc-200">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p className="min-w-0 truncate text-[13px] text-zinc-500 dark:text-zinc-400">{r.user?.nickname}</p>
+              <VipBadge user={r.user} />
+            </div>
+            <p className="mt-0.5 text-[10px] text-zinc-400">
+              {commentDate(r)}
+              {loc ? ` ${loc}` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onLike}
+            data-testid={`music-comment-reply-like-${r.commentId}`}
+            aria-label="点赞回复"
+            className="flex shrink-0 items-center gap-1 pt-0.5 text-zinc-400 active:scale-95"
+          >
+            <span className="text-[11px] tabular-nums">{fmtPlayCount(r.likedCount)}</span>
+            <ThumbsUp
+              className={`h-3.5 w-3.5 ${r.liked ? 'text-[#C20C0C]' : ''}`}
+              fill={r.liked ? 'currentColor' : 'none'}
+            />
+          </button>
+        </div>
+        <p className="mt-1 whitespace-pre-wrap break-words text-[14px] leading-[1.6] text-zinc-900 dark:text-zinc-100">
           {r.content}
-        </p>
-        <p className="mt-0.5 text-[10px] text-zinc-400">
-          {commentDate(r)}
-          {loc ? ` ${loc}` : ''}
         </p>
       </div>
     </div>

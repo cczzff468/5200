@@ -3,7 +3,7 @@
 /**
  * 音乐 App 播放页（仿网易云黑胶）：
  * - 封面模糊背景 + 黑胶唱片（旋转动画；仿用户参考图：细密纹路/外缘光环/大封面占比；
- *   白色圆轴承悬在盘上方、白针杆已删除，第三十一轮）
+ *   白色轴承与针杆均已整体删除、盘面斜向高光已移除（泛白块根因），第三十二轮）
  * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；胶囊仅手动滚动浏览时
  *   显示且跟随滚动位置——滚到哪句亮哪句，第三十一轮；点歌词以外的任何位置回唱片）
  * - 进度条拖拽 / 循环模式 / 播放暂停 / 上下首 / 播放列表
@@ -502,7 +502,7 @@ export function MusicPlayer() {
         {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
         {!showLyric && togetherHead}
 
-      {/* 封面/歌词切换区（留出顶部唱针空间；歌词视图加宽到近全宽，仿网易云歌词页） */}
+      {/* 封面/歌词切换区（歌词视图加宽到近全宽，仿网易云歌词页） */}
         <div
           className={`relative flex min-h-0 flex-1 items-center justify-center pt-4 ${showLyric ? 'px-3' : 'px-8'}`}
           // 歌词视图：点歌词区以外（左右留白/顶部空隙）也返回唱片界面（第二十六轮反馈）
@@ -808,7 +808,7 @@ function TgChatGlyph({ className }: { className?: string }) {
 
 // ---------------- 黑胶视图（第三十一轮按用户参考图再美化：
 // 细密同心纹路 + 纹路明暗带 + 外缘悬浮光环 + 大封面占比；
-// 白色圆轴承保留悬在盘上方偏右、与盘缘留隙，白色针杆整体删除（用户要求）） ----------------
+// 第三十二轮：白色圆轴承整体删除（用户要求）、盘面斜向高光层删除（泛白块根因）） ----------------
 
 function VinylView({
   song,
@@ -830,15 +830,6 @@ function VinylView({
           aria-label="切换到歌词"
           className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 白色圆轴承：悬在唱片右上上方、与盘缘留隙（第三十一轮：针杆删除，只留轴承悬浮；
-              不随播放旋转）；全百分比定位随唱片尺寸等比缩放 */}
-          <div
-            className="absolute left-[88%] top-[-13%] z-20 h-[10%] w-[10%] rounded-full bg-gradient-to-b from-white to-[#eae6dc] shadow-[0_4px_10px_rgba(0,0,0,0.35)]"
-            data-testid="music-tonearm-pivot"
-          >
-            <div className="absolute left-1/2 top-1/2 h-[38%] w-[38%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#cfc9ba] ring-1 ring-black/10" />
-          </div>
-
           {/* 盘后氛围光晕（悬浮立体感） */}
           <div className="absolute inset-[-7%] rounded-full bg-black/30 blur-2xl" />
           {/* 外缘悬浮光环（仿参考图盘缘外一圈微光，与盘面留出细缝） */}
@@ -872,8 +863,7 @@ function VinylView({
                   }
             }
           >
-            {/* 斜向高光（柔化：参考图盘面只有轻微反光） */}
-            <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_205deg,rgba(255,255,255,0.09),transparent_18%,rgba(255,255,255,0.045)_36%,transparent_58%,rgba(255,255,255,0.07)_76%,transparent_94%)]" />
+            {/* 斜向高光已整体删除（第三十二轮：conic 高光在盘面左下形成一块楔形泛白，用户反馈去除） */}
             {/* 封面（大占比仿参考图：盘径 ~59%，细黑圈与纹路分隔） */}
             <div className="absolute inset-[20.5%] overflow-hidden rounded-full ring-[3px] ring-black/80">
               <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
@@ -1433,8 +1423,9 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          mt-[40px] 给缩短后的耳机线留出空间（线尾渐隐段在时长行上方 ~26px） */}
-      <p className={`mt-[40px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+          第三十二轮 mt-[40px]→mt-[30px] 整体上移 10px（用户要求「时长往上一点」），
+          线尾渐隐段（页面 y≈75px）仍在时长行上方 ~19px 不相交 */}
+      <p className={`mt-[30px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——

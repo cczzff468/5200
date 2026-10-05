@@ -15472,3 +15472,29 @@ Stage Summary:
 - 关键决策：①排序用新版 /comment/new（三档原生支持+cursor 翻页），旧 /comment/music 仅留给播放器计数（零改动）；②VIP 徽章等级取 redVipLevel 大写数字（vipType 11=SVIP 金字/1~10=VIP 白字+红点），字段缺失不渲染；③头部 pt-[58px] 避让灵动岛（首版被盖住，截图发现即修）；④耳机线缩短=压 svg 高度+渐变段前移，不动头部其余布局；⑤歌词 focusIdx 单一渲染分支同时驱动胶囊/加粗/淡出，自动跟播路径零额外计算
 - 范围限定遵守：改 4 文件（music-player/music-comments 整页重写/music-api/music.tsx 仅挂载）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅 SVG 线形与时长行间距）；播放器计数、点赞、发表评论既有逻辑保留移植；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx、src/lib/ios/music-api.ts、src/components/apps/music.tsx
+
+---
+Task ID: 91
+Agent: Z.ai Code（主会话）
+Task: 第三十二轮——①删除白色圆轴承 ②修复唱片面泛白块（删斜向高光层）③一起听时长行上移 ④评论页按新截图再美化（←箭头/评论(N)无空格/16px 正文/楼层回复内联直排+进视口自动预览 2 条/灰色「展开更多回复」/回复点赞/「听了这么多」输入条+发送文字键）
+
+Work Log:
+- ①轴承删除（music-player.tsx VinylView）：删 music-tonearm-pivot 白色圆轴承两元素（第三十一轮已删针杆，本轮连轴承一起删——用户「把那个白色的删除」）；E2E 实测 querySelector('[data-testid=music-tonearm-pivot]')=GONE；文件头/VinylView 段注释同步
+- ②泛白块根因修复：盘面「斜向高光」conic-gradient 层（from_205deg 白色 0.09/0.045/0.07 扇形叠加）在盘面左下形成一块楔形泛白（用户截图可见）——整层删除；细密纹路/明暗带/外缘光环/大封面保留，E2E 截图确认盘面纹路均匀无泛白
+- ③时长行上移（TogetherHead）：mt-[40px]→mt-[30px]（上移 10px）；E2E 实测 avatarsBottom=154/durTop=184 间距 30px，耳机线尾渐隐段（页面 y≈165）仍在时长行上方 ~19px 不相交；注释同步
+- ④评论页美化（music-comments.tsx）：
+  - 头部 ChevronLeft→ArrowLeft（仿截图 ← 全箭头）、标题 16→17px
+  - 计数「评论 (N)」→「评论(N)」去空格（E2E：评论(5万)）
+  - 正文 15px/1.6→16px/1.65（贴近截图大字）
+  - 楼层回复内联直排：删灰底圆角卡片，FloorReply 重构=28px 小头像+昵称+VipBadge 徽章/日期+IP 属地/14px 内容/右侧点赞数+ThumbsUp（可点赞，乐观更新走 like(r, floorId) 新签名）
+  - 进视口自动预览：CommentRow IntersectionObserver（rootMargin 140px）进视口静默拉前 2 条回复内联展示（silent 预览不转圈、失败不留痕可重试、askedRef 防重复）；行 key 加 sort 前缀切档重挂载重置观察
+  - 展开链接仿截图：蓝色「展开 N 条回复」→ 灰色「—— 展开更多回复 ∨」（收起态回复已全部内联时自动隐藏）；toggleFloor 重写支持预览态→点击拉全量 20 条（收起后内联仍显示前 2 条）
+  - 输入条：占位改「听了这么多，可能你有话想说」（登录态；游客仍引导文案）、Smile 图标/Send 圆钮 → 右侧「发送」文字键（空/游客灰禁用，有字红色 font-medium）
+- E2E（agent-browser 420×900 一次性会话）：解锁→翻页→音乐游客模式→搜晴天播 Jay→迷你条展开播放器（pivot=GONE、唱片截图无白块无轴承、爱心 880w+ 角标右上✓）→IDB 注入 e2e-r32-char 联系人+music-together-active:guest 会话（1314 公里/1小时15分钟）→reload 解锁重进→一起听视图（时长行距头像 30px、耳机线渐隐不相交、截图✓）→评论页（arrow=true、评论(5) 无空格、楼层自动内联预览「爅岛 SVIP·叁」✓）→搜海阔天空播 Beyond→评论页（评论(5万)、13 个「展开更多回复」、点击展开 20 rows→收起 2 rows+expander 复原✓、回复点赞数 593/620/166 展示✓）→errors 零应用错误→清理 IDB（kv together-active+contacts 复核 tgLeft=[] contacts=0）→关浏览器
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 无应用错误（POST /api/moments/generate 200、GET / 200）
+
+Stage Summary:
+- 交付：白圆轴承整体删除（唱针系统全清）；唱片泛白块根因修复（conic 斜向高光层删除）；一起听时长行上移 10px；评论页按新截图再美化（←箭头/评论(N)/16px 正文/楼层回复内联直排+进视口自动预览 2 条/灰色展开链接/回复点赞/「听了这么多，可能你有话想说」+「发送」文字键）
+- 关键决策：①泛白块=conic 高光扇形叠加层而非纹路带（radial 明暗带是均匀圆环不形成「块」），整层删除最干净；②楼层回复从「点击才展开+灰卡」改为「进视口自动预览前 2 条+内联直排」贴近截图形态，展开/收起语义保留（收起回 2 条不空）；③回复点赞复用 commentLike 接口，like() 加 floorId 参数定位父楼层列表做乐观更新；④切排序时行 key 带 sort 前缀强制重挂载，重置 IntersectionObserver/askedRef 防预览失效
+- 范围限定遵守：改 2 文件（music-player.tsx / music-comments.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅时长行 margin）；评论数据接口未动（/comment/new+/comment/floor 沿用）；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx
