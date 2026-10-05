@@ -10,7 +10,9 @@
  *   主动邀约：守卫（锁屏/来电/通话/已有邀请/已在听/冷却）→ 选最近聊过的 AI 角色 → 从
  *   最近播放里挑一首「TA 想和你一起听」的歌；
  * - 接受：startTogether 建会话 → switchToApp('music') → 进播放页（一起听模式）；
- * - 接受/拒绝/超时都写角色记忆（sourceTag='music-invite'，参与后续聊天召回）；
+ * - 【39 聚合制】邀约/接受不再写记忆（邀约→接受→一起听是同一件事，一次最多一条）——
+ *   接受后听听过的歌由 music-ai 聚合缓冲攒批写（startTogether 已把正在放的歌记进缓冲）；
+ *   只有「拒绝」单独写一条（独立社交信号，角色下次聊天接得住「刚才不想听」）；
  * - 冷却持久化（全局 12 分钟 / 每角色 8 小时），按网易云账号隔离（键带 uid）。
  */
 
@@ -121,6 +123,8 @@ export async function writeInviteMemory(contactId: string, what: string): Promis
 /**
  * 接受邀请：清卡片 → 建一起听会话 → 切到音乐 App → 进播放页。
  * （音乐 App 未打开时 switchToApp 会挂载 MusicApp，bootMusicAi 恢复会话；openPlayer 延迟到挂载完成）
+ * 【39 聚合制】接受不再单独写记忆（原「接受了XX的一起听邀请」逐条刷记忆库）——
+ * 一起听听过的歌由 music-ai 聚合缓冲攒批合并写一条（startTogether 已把正在放的歌记进缓冲）。
  */
 export async function acceptTogetherInvite(): Promise<void> {
   const inv = useTogetherInvite.getState().invite;
@@ -137,10 +141,6 @@ export async function acceptTogetherInvite(): Promise<void> {
       else useMusic.getState().openPlayer();
       // App 挂载动画 ~380ms，延后进播放页保证 nav 已就绪
       window.setTimeout(() => useMusic.getState().openPlayer(), 450);
-      await writeInviteMemory(
-        inv.contactId,
-        `接受了${inv.name}的一起听邀请，正在一起听《${inv.songName}》`,
-      );
     }
   } catch {
     // 接受失败静默（卡片已清，不残留）
@@ -258,7 +258,8 @@ export async function runTogetherInviteTick(): Promise<void> {
       songName: song.name,
       artist: song.artist,
     });
-    await writeInviteMemory(c.id, `向你发起了一起听邀请（《${song.name}》${song.artist ? `·${song.artist}` : ''}），等你接受`);
+    // 【39 聚合制】邀约本身不写记忆：接受 → 聚合记忆一条；拒绝 → 拒绝记忆一条；忽略 → 零条
+    //（原「向你发起了一起听邀请…等你接受」与后续接受/拒绝记忆重复记录同一件事）
   } catch {
     // 后台增强能力：任何异常静默
   }

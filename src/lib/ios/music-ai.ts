@@ -17,8 +17,10 @@
  *      （原实现暂停期间反复重排定时器）+ 主动消息全局 15 分钟冷却；
  *      主动消息提示词改为人设/记忆/上下文驱动，明确不点评歌曲。
  * 2. AI 推荐歌曲：LLM 返回 JSON 歌单 → /search 匹配真实曲库 → 消息内歌曲卡（点击播放）；
- * 3. 听歌记忆：一起听中播放的歌写角色记忆（memAddEventFragment, sourceTag='music-play'），
- *    自动参与后续所有聊天 App 的记忆召回——无需改任何聊天代码。
+ * 3. 听歌记忆：【39 聚合制】一起听的歌/结束不再逐条写记忆——会话内攒批（歌名去重保序），
+ *    攒满 5 首、退出一起听或切后台时合并写一条（memAddEventFragment, sourceTag='music-play'），
+ *    自动参与后续所有聊天 App 的记忆召回——无需改任何聊天代码；
+ *    solo 听歌同理（24h/8 首阈值合并一条，sourceTag='music-solo'）。
  */
 
 import { buildPersonaSystemPrompt, type PersonaSource } from './persona';
@@ -161,6 +163,10 @@ export function startTogether(contact: ContactRecord): TogetherSession {
   };
   kvSet(activeKey(), session);
   useMusic.setState({ together: session, togetherMsgs: loadTogetherMsgs(contact.id) });
+  // 【39 聚合制】邀请时正在放的那首歌进聚合缓冲（它不会触发 setSongPlayedHook 的新歌事件，
+  // 不主动记的话聚合记忆会漏掉一起听的第一首）
+  const cur = useMusic.getState().current;
+  if (cur) noteTogetherListen(contact.id, { name: cur.name, artist: songArtistText(cur) });
   return session;
 }
 
@@ -171,10 +177,9 @@ export async function stopTogether(): Promise<void> {
     flushTgChatLog(s.contactId); // 一起听聊天内容落记忆（第二十四轮）
     kvDel(activeKey());
     useMusic.setState({ together: null });
-    await writeTogetherMemory(
-      s.contactId,
-      `结束了这次一起听（累计一起听了 ${fmtTogetherDur(Date.now() - s.since)}）`,
-    );
+    // 【39 聚合制】结束时把本次会话听过的歌 + 累计时长合并写一条记忆
+    //（不再单独写「结束了这次一起听」——与歌曲聚合合并，一次一起听一条）
+    await flushTogetherMemory(s.contactId, Date.now() - s.since);
   } else {
     kvDel(activeKey());
     useMusic.setState({ together: null });
@@ -247,12 +252,17 @@ function flushTgChatLog(cid: string): void {
 let tgFlushBound = false;
 /** 切后台/关页兑底 flush（第二十六轮）：缓冲不足 6 条时原本只靠手动退出一起听落记忆，
  *  直接杀页面会丢最后几条——pagehide / visibilitychange(hidden) 时立即 flush 全部缓冲
- *  （flush 同步清缓冲再异步落库，重复触发不会写重） */
+ *  （flush 同步清缓冲再异步落库，重复触发不会写重）。
+ *  【39 聚合制】一起听歌曲聚合缓冲与 solo 听歌缓冲同场兜底：切后台/关页时把已攒的歌
+ *  合并落一条（结束时的最终 flush 由 stopTogether 负责，此处覆盖「没退出直接关页面」） */
 function bindTgLogFlush(): void {
   if (tgFlushBound || typeof window === 'undefined') return;
   tgFlushBound = true;
   const flushAll = () => {
     for (const cid of Array.from(tgLogBufs.keys())) flushTgChatLog(cid);
+    // 歌曲聚合缓冲：每个有缓冲的角色各落一条（一起听中的会话）
+    const bufs = loadTgMemBufs();
+    for (const cid of Object.keys(bufs)) void flushTogetherMemory(cid);
   };
   window.addEventListener('pagehide', flushAll);
   document.addEventListener('visibilitychange', () => {
@@ -260,7 +270,7 @@ function bindTgLogFlush(): void {
   });
 }
 
-// ---------------- 记忆写入 ----------------
+// ---------------- 记忆写入（【39 聚合制】：攒批合并，不再一条事件一条记忆） ----------------
 
 async function ownerName(): Promise<string> {
   try {
@@ -270,14 +280,85 @@ async function ownerName(): Promise<string> {
   }
 }
 
-/** 一起听记忆（写角色碎片记忆，sourceTag='music-play'，参与后续聊天召回） */
-export async function writeTogetherMemory(contactId: string, what: string): Promise<void> {
+/** 歌名列表 → 「《A》（歌手1）、《B》（歌手2）…」，最多列 5 首，多余的「等 N 首」（聚合记忆用） */
+function songListText(songs: { name: string; artist: string }[]): string {
+  const head = songs.slice(0, 5).map((s) => `《${s.name}》${s.artist ? `（${s.artist}）` : ''}`);
+  const rest = songs.length - head.length;
+  return head.join('') + (rest > 0 ? `等${songs.length}首` : '');
+}
+
+/** 【39 聚合制】一起听记忆缓冲：一次一起听会话攒一批歌（同名同歌手去重、保序），
+ *  攒满 TG_MEM_FLUSH_EVERY 首 / 退出一起听 / 切后台兜底时合并写一条记忆。
+ *  kv 持久化（music-tg-mem-buf:{uid}）——刷新/杀页面后缓冲不丢，回来接着攒。 */
+interface TgMemSong {
+  name: string;
+  artist: string;
+}
+interface TgMemBuf {
+  /** 会话内听过的歌（保序去重） */
+  songs: TgMemSong[];
+  /** 缓冲起点（首批歌入缓冲的时间，聚合记忆的 eventTime 用） */
+  since: number;
+}
+const TG_MEM_FLUSH_EVERY = 5;
+const TG_MEM_BUF_KEY_PREFIX = 'music-tg-mem-buf:';
+
+function tgMemBufKey(): string {
+  return `${TG_MEM_BUF_KEY_PREFIX}${musicUid()}`;
+}
+
+function loadTgMemBufs(): Record<string, TgMemBuf> {
+  return kvGet<Record<string, TgMemBuf>>(tgMemBufKey()) ?? {};
+}
+
+function saveTgMemBufs(map: Record<string, TgMemBuf>): void {
+  kvSet(tgMemBufKey(), map);
+}
+
+/** 一起听中放了一首歌 → 进缓冲（去重保序）；攒满阈值时中途落一条（超长会话分段沉淀，防只靠结束写） */
+export function noteTogetherListen(cid: string, song: { name: string; artist: string }): void {
   try {
-    const c = await getContact(contactId);
+    const map = loadTgMemBufs();
+    const buf = map[cid] ?? { songs: [], since: Date.now() };
+    const key = `${song.name}|${song.artist}`;
+    if (!buf.songs.some((s) => `${s.name}|${s.artist}` === key)) {
+      buf.songs = [...buf.songs, { name: song.name, artist: song.artist }];
+    }
+    map[cid] = buf;
+    saveTgMemBufs(map);
+    if (buf.songs.length >= TG_MEM_FLUSH_EVERY) void flushTogetherMemory(cid);
+  } catch {
+    // 聚合失败静默（记忆是增强能力）
+  }
+}
+
+/**
+ * 【39 聚合制】把缓冲的歌曲合并写一条一起听记忆：
+ * 「X和Y一起听了《A》（歌手）、《B》（歌手）…（累计一起听了 N 分钟）」——
+ * endedMs 传累计时长时附带（退出一起听时），不传（攒满/切后台兜底）只写歌单。
+ * 缓冲为空且非结束时不动（无内容不写）；结束时缓冲为空也写一条轻量记录
+ * （一起听本身是关系事件：「一起听了一会儿歌」）。写完清缓冲。
+ */
+export async function flushTogetherMemory(cid: string, endedMs?: number): Promise<void> {
+  try {
+    const map = loadTgMemBufs();
+    const buf = map[cid];
+    if (!buf && endedMs == null) return;
+    const songs = buf?.songs ?? [];
+    if (songs.length === 0 && endedMs == null) return;
+    if (buf) {
+      delete map[cid];
+      saveTgMemBufs(map);
+    }
+    const c = await getContact(cid);
     if (!c || c.kind !== 'char') return;
     const who = await ownerName();
-    memAddEventFragment(contactId, 'wx', `${who}和${c.nickname || c.name}${what}`, {
-      eventTime: Date.now(),
+    const parts: string[] = [];
+    if (songs.length > 0) parts.push(`一起听了${songListText(songs)}`);
+    else parts.push('一起听了一会儿歌');
+    if (endedMs != null) parts.push(`累计一起听了 ${fmtTogetherDur(endedMs)}`);
+    memAddEventFragment(cid, 'wx', `${who}和${c.nickname || c.name}${parts.join('，')}`, {
+      eventTime: buf?.since ?? Date.now(),
       sourceTag: 'music-play',
     });
   } catch {
@@ -285,12 +366,65 @@ export async function writeTogetherMemory(contactId: string, what: string): Prom
   }
 }
 
-/** 播放钩子：一起听中每次放新歌 → 记忆 + 同歌计数（B）；solo 听歌 → 轻量记忆（30 分钟节流）。
+/** 【39 聚合制】solo 听歌记忆缓冲：不再每 30 分钟一条，按 24h / 8 首阈值攒批，
+ *  合并写「X听了《A》《B》《C》」给最近聊过的角色（sourceTag='music-solo'）。
+ *  kv 持久化（music-solo-mem-buf:{uid}）——听歌痕迹低价值，一天一条足够。 */
+const SOLO_MEM_FLUSH_EVERY = 8;
+const SOLO_MEM_FLUSH_MS = 24 * 3_600_000;
+const SOLO_MEM_BUF_KEY_PREFIX = 'music-solo-mem-buf:';
+
+interface SoloMemBuf {
+  songs: TgMemSong[];
+  /** 本批最早一首入缓冲的时间（eventTime + 24h 判定用） */
+  since: number;
+}
+
+function soloMemBufKey(): string {
+  return `${SOLO_MEM_BUF_KEY_PREFIX}${musicUid()}`;
+}
+
+/** solo 听歌 → 进缓冲（去重保序）；满 8 首或本批已跨 24h 时合并落一条 */
+function noteSoloListen(song: { name: string; artist: string }): void {
+  try {
+    const buf = kvGet<SoloMemBuf>(soloMemBufKey()) ?? { songs: [], since: Date.now() };
+    const key = `${song.name}|${song.artist}`;
+    if (!buf.songs.some((s) => `${s.name}|${s.artist}` === key)) {
+      buf.songs = [...buf.songs, { name: song.name, artist: song.artist }];
+    }
+    kvSet(soloMemBufKey(), buf);
+    const spanOk = Date.now() - buf.since >= SOLO_MEM_FLUSH_MS;
+    if (buf.songs.length >= SOLO_MEM_FLUSH_EVERY || spanOk) void flushSoloMemory();
+  } catch {
+    // 静默
+  }
+}
+
+/** 把 solo 缓冲合并写一条听歌记忆（给最近聊过的角色各写一条；写完清缓冲） */
+async function flushSoloMemory(): Promise<void> {
+  try {
+    const buf = kvGet<SoloMemBuf>(soloMemBufKey());
+    if (!buf || buf.songs.length === 0) return;
+    kvSet(soloMemBufKey(), { songs: [], since: Date.now() });
+    const cids = await recentChatCharIds(3);
+    if (cids.length === 0) return;
+    const who = await ownerName();
+    const text = `${who}听了${songListText(buf.songs)}`;
+    for (const cid of cids) {
+      memAddEventFragment(cid, 'wx', text, {
+        eventTime: buf.since,
+        sourceTag: 'music-solo',
+      });
+    }
+  } catch {
+    // 静默
+  }
+}
+
+/** 播放钩子：一起听中每次放新歌 → 进聚合缓冲（攒批写记忆）+ 同歌计数（B）；
+ *  solo 听歌 → 进 solo 聚合缓冲（24h/8 首阈值合并写）。
  *  第二十一轮反馈：切歌不再触发 AI 点评（点评歌曲功能已删除） */
 export function installMusicAiHook(): void {
   let lastSongId = 0;
-  let lastWrittenAt = 0;
-  let lastSoloMemAt = 0;
   setSongPlayedHook((song: NcmSong) => {
     void (async () => {
       const t = loadActiveTogether();
@@ -300,34 +434,15 @@ export function installMusicAiHook(): void {
         if (!c) return;
         if (song.id !== lastSongId) {
           lastSongId = song.id;
-          lastWrittenAt = Date.now();
-          await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
+          // 【39 聚合制】进缓冲（同名同歌手去重），攒满/退出/切后台时合并写一条
+          noteTogetherListen(t.contactId, { name: song.name, artist });
           bumpTogetherSongPlay(t.contactId, song.id); // B：同歌「一起听过几遍」计数
-        } else if (Date.now() - lastWrittenAt > 10 * 60_000) {
-          lastWrittenAt = Date.now();
-          await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
         }
         return;
       }
       // solo 听歌记忆（需求一.4）：非一起听时也给最近聊过的角色留一笔听歌痕迹，
-      // 参与后续聊天召回（全局 30 分钟节流，不吵）；实时近况另有 cross-app 音乐块注入
-      if (Date.now() - lastSoloMemAt > 30 * 60_000) {
-        lastSoloMemAt = Date.now();
-        try {
-          const cids = await recentChatCharIds(3);
-          if (cids.length > 0) {
-            const who = await ownerName();
-            for (const cid of cids) {
-              memAddEventFragment(cid, 'wx', `${who}听了《${song.name}》（${artist}）`, {
-                eventTime: Date.now(),
-                sourceTag: 'music-solo',
-              });
-            }
-          }
-        } catch {
-          // 静默
-        }
-      }
+      // 【39 聚合制】24h / 8 首阈值攒批合并一条（原 30 分钟节流逐条写入太密）；实时近况另有 cross-app 音乐块注入
+      noteSoloListen({ name: song.name, artist });
     })();
   });
 }

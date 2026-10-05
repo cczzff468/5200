@@ -8,11 +8,11 @@
  *   AI 邀请被接受（全局邀请卡 ✓）→ 我是接受方 → 只有我发「已同意一起听」，TA（邀请方）不再补发；
  * - 卡片落库与音乐 App 分享同款（kv 直写 wx/qq-chat-msgs）；聊天页在场时由调用方传 insert
  *   实时插入（setMsgs + saveMsgs），不在场时 kv 直写（回到聊天页 loadMsgs 恢复）；
- * - 邀请/接受都写角色记忆（sourceTag='music-invite'），后续所有聊天可召回。
+ * - 【39 聚合制】邀请/接受不再各自写角色记忆——一起听听过的歌由 music-ai 的聚合缓冲攒批
+ *   （sourceTag='music-play'），一次一起听合并一条。
  */
 
 import { kvGet, kvSet } from './idb-kv';
-import { memAddEventFragment } from '../memory';
 import { loadActiveTogether, startTogether } from './music-ai';
 import type { ContactRecord } from '../contacts';
 
@@ -99,15 +99,6 @@ export async function lastChatAppOf(cid: string): Promise<'wx' | 'qq'> {
   }
 }
 
-async function ownerName(): Promise<string> {
-  try {
-    const { ownerRealName } = await import('./contacts-store');
-    return (await ownerRealName()) || '机主';
-  } catch {
-    return '机主';
-  }
-}
-
 // ---------------- 我邀请 AI 一起听（播放器邀请面板 / 聊天加号面板） ----------------
 
 export interface UserInviteOptions {
@@ -119,31 +110,16 @@ export interface UserInviteOptions {
   insert?: (msg: TgCardMsg) => void;
 }
 
-/** 接受记忆（同 writeInviteMemory 格式：谁和谁接受了邀请；本地实现避免与 together-invite 循环依赖） */
-async function writeAcceptedMemory(cid: string, song: TgCardSong): Promise<void> {
-  try {
-    const { getContact } = await import('./contacts-store');
-    const c = await getContact(cid);
-    if (!c || c.kind !== 'char') return;
-    const who = await ownerName();
-    memAddEventFragment(cid, 'wx', `${who}和${c.nickname || c.name}接受了邀请，正在一起听《${song.name}》`, {
-      eventTime: Date.now(),
-      sourceTag: 'music-invite',
-    });
-  } catch {
-    // 记忆失败静默
-  }
-}
-
 /**
  * 我邀请 TA 一起听：
- * 1. 立即发「邀请你一起听」卡片（我方）+ 写邀请记忆；
+ * 1. 立即发「邀请你一起听」卡片（我方）；
  * 2. 1.3~2.6s 后 AI「接受」→ 只有 TA（接受方）发同意卡 → 建一起听会话；
- * 3. 接受写记忆（TA 后续聊天接得住「一起听过了」）。
+ * 3. 【39 聚合制】邀请/接受不再单独写记忆（原「发了邀请卡片」「接受了邀请正在一起听《X》」
+ *    每次邀请各一条刷爆记忆库）——一起听听过的歌由 music-ai 聚合缓冲攒批，
+ *    攒满/退出/切后台时合并写一条（startTogether 会把邀请时正在放的歌记进缓冲）。
  */
 export function sendUserTogetherInvite(opts: UserInviteOptions): void {
   const { contact, app, song, insert } = opts;
-  const charName = contact.nickname || contact.name;
   const put = (msg: TgCardMsg) => {
     if (insert) {
       try {
@@ -167,19 +143,6 @@ export function sendUserTogetherInvite(opts: UserInviteOptions): void {
   }
   // 1. 我方邀请卡
   put(buildTgCardMsg('me', 'invite', song));
-  void (async () => {
-    try {
-      const who = await ownerName();
-      memAddEventFragment(
-        contact.id,
-        app,
-        `${who}邀请${charName}一起听《${song.name}》${song.artist ? `（${song.artist}）` : ''}，发了邀请卡片`,
-        { eventTime: Date.now(), sourceTag: 'music-invite' },
-      );
-    } catch {
-      // 记忆失败不影响邀请
-    }
-  })();
   if (contact.kind !== 'char') return; // 只有 AI 角色会接受
   // 2. AI 接受（延迟拟真）
   window.setTimeout(
@@ -190,7 +153,6 @@ export function sendUserTogetherInvite(opts: UserInviteOptions): void {
       } catch {
         // 会话失败卡片保留
       }
-      void writeAcceptedMemory(contact.id, song);
     },
     1300 + Math.floor(Math.random() * 1300),
   );

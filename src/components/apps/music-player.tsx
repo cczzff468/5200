@@ -1679,7 +1679,7 @@ function TogetherHead({
             aria-label="点击自定义距离"
             title="点击自定义距离"
             data-testid="music-tg-dist"
-            className="border-b border-dashed border-white/40 pb-px leading-none tabular-nums active:opacity-60"
+            className="leading-none tabular-nums active:opacity-60"
           >
             {session.distanceKm}
           </button>

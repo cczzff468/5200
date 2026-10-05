@@ -15643,3 +15643,39 @@ Stage Summary:
 - 关键决策：①距离自定义存独立 kv（music-tg-dist-cust:{uid}:{cid}）并在 startTogether 优先读——重开同一角色会话距离不回跳，换角色按 seed 重算；②点播闸门=「system 注入了音乐块」而非「一起听会话」——群聊不注入天然豁免，正文方括号误吞风险由提示词约束+意图兜底正则收紧（必须书名号紧邻放/播/来）控制；③意图兜底是本轮成败关键——内置模型对长 system 中段的指令格式遵循差（5 连不发指令），few-shot+强约束仍压不住，客户端解析「放首《X》+X的歌」意图 100% 命中且气泡文字零侵入；④searchSongMatched 翻唱标注兜底——网易云「X (原唱 Y)」「X (钢琴版) [原唱: Y]」是版权缺失下的常态，原唱标注匹配+歌名兜底让「放晴天」这类需求必然有产出；⑤模型对「进度」的回答用意图式说法（十几秒/1分15秒左右）而非伪造精确值——块里给的是精确秒数，模型自行措辞，符合不编造原则
 - 范围限定遵守：改 4 文件（music-remote.ts 重构 / music-ai.ts setTogetherDistance+searchSongMatched 兜底+正则 / music-player.tsx UI / wechat.tsx+qq.tsx 仅注释）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话核心逻辑未触碰；一起听邀请/同意/退出/记忆链路未动；音乐 App 内一起听聊天链路未动（仅 searchSongMatched 兜底共享）；评论/搜索/歌单页未动
 - 改动文件：src/lib/ios/music-remote.ts、src/lib/ios/music-ai.ts、src/components/apps/music-player.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: 98
+Agent: Z.ai Code（主会话）
+Task: 第三十九轮——①一起听「相距N公里」数字下面的虚线删除 ②记忆提取逻辑修复：提取按设置频率（攒够N轮才提取）、音乐事件不再逐条写记忆（聚合制）、验证消息/好友申请/系统提示不入库、同一事件不重复写、记忆合并去重
+
+Work Log:
+- ①虚线删除（music-player.tsx TogetherHead）：music-tg-dist 按钮 className 从「border-b border-dashed border-white/40 pb-px」改为纯排版类（leading-none tabular-nums active:opacity-60），保留点击自定义与按压反馈、删除虚线下划线提示；E2E getComputedStyle 实测 borderBottomWidth=0px/paddingBottom=0px，显示纯数字「1058」✓
+- ②记忆提取排查结论（对照用户 5 个排查方向）：
+  - 排查1（音乐事件绕过攒N轮）→ 实锤：memAddEventFragment 直写不经 memAfterAiTurn 计数；installMusicAiHook 每首新歌写一条（同歌10分钟重复写）、stopTogether 单独写「结束了这次一起听」、together-flow 邀请+接受各一条、together-invite AI邀约+接受+拒绝各一条、solo听歌30分钟节流逐条——一次一起听最多 5~6 条
+  - 排查2（提取触发条件）→ 正常：memAfterAiTurn 按设置「对话总结频率」（interval，消息条数口径默认10条）计数触发，锚点增量计数，未达标不清零；无需改动
+  - 排查3（验证消息为何入库）→ 实锤：好友验证消息 fr='apply'/'greet'/'added' 同步落聊天记录（好友流程持久化），memConvoFromRaw 无 fr 过滤 → 被 extract 当对话提炼（「凡凡自称Z」来源）；sys 行 content 为空天然被空文本过滤，但加显式条件双保险
+  - 排查4（有没有判断哪些该记）→ 无：音乐事件一律直写
+  - 排查5（有没有去重合并）→ 存储层已有（appendFragments 精确重复→加强/2-gram≥0.6 相似→合并/supersedes 矛盾更新），但不同歌名内容相似度低无法合并——修复在写入端聚合
+- ②修复-验证消息过滤（memory.ts memConvoFromRaw）：RawishMsg 增 fr/sys 字段；过滤 fr==='apply'|'greet'|'added'（验证消息/打招呼/加好友成功提示）+ kind==='sys' 或 sys 字段为对象（wx/qq/sms 系统提示）——手动「立即总结」、自动提取、跨App兜底全部调用方共用此过滤；E2E：注入含验证消息（我是Z）+greet（你好呀我是Z）+sys行+4条正常聊天的记录 → 记忆库立即总结 → 3 条碎片全部来自正常聊天（乐乐喜欢辣味食物/凡凡不吃香菜/约好周末吃川菜），验证消息与系统提示零入库 ✓
+- ②修复-一起听记忆聚合制（music-ai.ts）：
+  - 新增 TgMemBuf 聚合缓冲（music-tg-mem-buf:{uid} kv 持久化防刷新丢失）：noteTogetherListen(cid,song) 进缓冲（同名同歌手去重保序），攒满 5 首/退出/切后台兜底时 flushTogetherMemory 合并写一条
+  - flushTogetherMemory(cid, endedMs?)：「X和Y一起听了《A》（歌手）《B》（歌手）等N首，累计一起听了 N分钟」（endedMs=退出时传累计时长）；缓冲空+非结束不写；结束但没放过歌写轻量「一起听了一会儿歌，累计…」；eventTime=缓冲起点
+  - songListText：最多列 5 首余者「等N首」
+  - startTogether 把邀请时正在放的歌主动 note 进缓冲（它不触发 setSongPlayedHook 新歌事件，不记会漏掉第一首）
+  - stopTogether 删除单独「结束了这次一起听」→ flushTogetherMemory(cid, 累计时长)（一次一起听一条）
+  - installMusicAiHook：一起听分支删 10 分钟重复写入 → noteTogetherListen；solo 分支删 30 分钟节流逐条写 → noteSoloListen
+  - solo 聚合缓冲（music-solo-mem-buf:{uid}）：24h 或满 8 首合并写一条「X听了《A》《B》…」给最近聊过的 3 个角色（sourceTag='music-solo'）——听歌痕迹低价值，一天一条
+  - bindTgLogFlush 切后台/关页兜底：加入一起听歌曲缓冲逐角色 flush（覆盖「没退出直接关页面」）
+  - 删除 writeTogetherMemory（无外部引用）；保留 music-chat（一起听聊天6条一合并，本就聚合）与 music-recs（用户主动触发的低频推荐事件）、歌曲分享类记忆（主动社交事件）不动
+- ②修复-邀请/接受去重（together-flow.ts + together-invite.ts）：
+  - together-flow：删「发了邀请卡片」+「接受了邀请正在一起听《X》」两条直写（writeAcceptedMemory/ownerName 函数删除，memAddEventFragment import 移除）——聚合记忆已涵盖
+  - together-invite：接受邀请不写（acceptTogetherInvite 里 writeInviteMemory 删除）、AI 主动邀约不写（runTogetherInviteTick 里删除——邀约→接受→一起听是同一件事）——一次邀约生命周期最多一条：拒绝写「拒绝了…」（保留，独立社交信号）/接受写聚合一条/忽略零条
+- E2E（agent-browser 420×900）：注入 owner「乐乐」+char「凡凡」+聊天记录（验证消息+greet+sys+4条正常）→ 记忆库立即总结 3 条全来自正常聊天 → 音乐App游客模式 → 搜晴天播放 → 邀请凡凡一起听 → AI接受 → 一起听视图距离数字无虚线 → 切歌2次（缓冲3首，记忆0条音乐碎片）→ ⋮菜单退出一起听 → 恰好1条「乐乐和凡凡一起听了《你还要我怎样(Cover 薛之谦)》（晴天）《晴天(R&B版)》（屿间凉音）《晴天(钢琴版)》（CIP Music），累计一起听了1分钟」（sourceTag=music-play，eventTime=会话起点）→ 记忆库详情页 UI 确认展示 ✓ → 清理 E2E 数据（联系人/聊天/记忆/缓冲/会话键）→ errors 零应用错误
+- bun run lint 0 错误；bunx tsc 0 错误；dev server Turbopack worker 崩溃复发（多轮已知问题）重启后恢复，GET / 200 无应用错误
+
+Stage Summary:
+- 交付：一起听距离数字虚线删除（纯数字+按压反馈）；记忆提取三重修复——①聊天 extract 素材过滤验证消息（fr=apply/greet/added）与系统提示（kind=sys/sys字段），「凡凡自称Z」类脏记忆不再产生；②一起听/邀请/接受/结束全部改聚合制：一次一起听会话攒批合并恰好一条记忆（满5首中途分段+退出时终写+切后台兜底，kv 持久化防丢），solo 听歌 24h/8首阈值一条，替代原「每首歌/每次结束/每次邀请/每次接受各一条」的直写；③提取频率确认遵循设置「对话总结频率」无需改动（memAfterAiTurn 计数逻辑本就正确，用户看到的「一条一条记」是音乐事件直写绕过所致）
+- 关键决策：①修复在写入端聚合而非依赖存储端相似合并——不同歌名 2-gram 相似度低天然合并不了，sourceTag 同标签跳过相似合并的设计（防不同事件互吞）也使 music-play 碎片互不合并；②验证消息过滤放 memConvoFromRaw（所有提取路径共用：手动总结/自动提取/跨App兜底/群聊兜底）而非各调用点——一处过滤全局生效；③邀请/接受/邀约三类前置事件零记忆化——邀约→接受→一起听→结束视为同一件事，生命周期最多一条聚合记忆（拒绝是独立社交信号单独保留）；④startTogether 主动 note 当前歌——hook 只在切歌时触发，不补记会漏掉一起听的第一首；⑤solo 缓冲 pagehide 不 flush 只持久化——听歌痕迹低价值，宁可晚一天也不碎片化
+- 范围限定遵守：改 4 文件（memory.ts 仅 memConvoFromRaw 过滤+类型、music-ai.ts 聚合器+钩子、together-flow.ts/together-invite.ts 删直写、music-player.tsx 仅虚线样式）；单聊/群聊/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机核心逻辑未触碰；memAfterAiTurn 计数/锚点/核心总结/长期总结管线未动；appendFragments 去重合并/矛盾更新/容量上限未动；music-chat/music-recs/歌曲分享/通话/亲属卡/见面/状态卡等其他 memAddEventFragment 场景未动；一起听邀请/同意/退出交互与聊天卡片链路未动（仅删记忆直写）
+- 改动文件：src/lib/memory.ts、src/lib/ios/music-ai.ts、src/lib/ios/together-flow.ts、src/lib/ios/together-invite.ts、src/components/apps/music-player.tsx

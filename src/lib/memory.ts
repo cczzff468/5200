@@ -2414,6 +2414,12 @@ interface RawishMsg {
   tr?: unknown;
   /** 【fix3-a 9】kind='family'：亲属卡卡片数据（WxFamData：monthlyLimit/relation/message/claimed/rejected） */
   fam?: unknown;
+  /** 【39】好友添加过程标记（wx/qq 同构）：apply=用户验证消息 / greet=AI 打招呼 / added=加好友成功提示
+   *  ——验证消息线程是「加好友流程」不是聊天记忆素材（第三十九轮：修复验证消息被 extract 提炼入库，
+   *  如「凡凡自称Z」这类来自验证消息对话的脏记忆） */
+  fr?: unknown;
+  /** 【39】系统提示行数据（wx/qq kind='sys' 携带；sms 无 kind 直接带 sys 字段）——系统提示不进记忆素材 */
+  sys?: unknown;
 }
 
 /**
@@ -2522,13 +2528,20 @@ function isMemErrPlaceholder(text: string): boolean {
 
 /** 把任意 App 的消息数组整理成 {role, text} 问答对（撤回/失败/错误占位剔除）。
  *  富媒体与群聊 memGroupMsgText 同口径：语音带转写、图片带识图描述、表情带含义、位置带地名；
- *  其余卡片类映射为短标签，保证提取器可读 */
+ *  其余卡片类映射为短标签，保证提取器可读。
+ *  【39】好友验证消息（fr=apply/greet/added）与系统提示（kind='sys' / sms 的 sys 字段）不进记忆素材：
+ *  - 验证消息是「加好友流程」对话（打招呼/身份核验），沉淀成记忆会产生「凡凡自称Z」这类脏碎片，
+ *    且申请通过后正常聊天才是记忆素材的真实来源；
+ *  - 系统提示（拉黑/换头像/拍照中…）是状态播报，wx/qq/sms 的 sys 行 content 本就为空（天然被
+ *    空文本过滤跳过），这里再加显式条件双保险（防未来 sys 行带文案） */
 export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn[] {
   const out: MemConvoTurn[] = [];
   for (const raw of msgs) {
     if (!raw || typeof raw !== 'object') continue;
     const m = raw as RawishMsg;
     if (m.recalled === true || m.error === true) continue;
+    if (m.fr === 'apply' || m.fr === 'greet' || m.fr === 'added') continue; // 【39】验证消息不入记忆
+    if (m.kind === 'sys' || (m.sys && typeof m.sys === 'object')) continue; // 【39】系统提示不入记忆
     const label =
       m.kind === 'location'
         ? locLabelOf(m.loc)
