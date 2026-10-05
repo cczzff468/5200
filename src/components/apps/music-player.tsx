@@ -3,7 +3,7 @@
 /**
  * 音乐 App 播放页（仿网易云黑胶）：
  * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 白色唱针（播放贴盘/暂停抬起，仿网易云截图；
- *   轴承悬盘上方偏右避开时长文字，第二十七轮）
+ *   轴承悬盘上方偏右且与盘缘留隙、针头落外圈纹路，第三十轮）
  * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；胶囊仅手动滚动浏览时
  *   显示，第二十七轮；点歌词以外的任何位置回唱片）
  * - 进度条拖拽 / 循环模式 / 播放暂停 / 上下首 / 播放列表
@@ -807,7 +807,8 @@ function TgChatGlyph({ className }: { className?: string }) {
 }
 
 // ---------------- 黑胶视图（第二十六轮美化：白色拟真唱针仿用户截图；
-// 第二十七轮：轴承移到盘上方偏右（不再挡住顶部时长文字），针杆颜色调淡） ----------------
+// 第二十七轮：轴承移到盘上方偏右（不再挡住顶部时长文字），针杆颜色调淡；
+// 第三十轮：轴承再上抬右移与盘缘留隙、针头改落盘面右上外圈纹路（不再深入标签区），针杆颜色再调淡） ----------------
 
 function VinylView({
   song,
@@ -829,22 +830,23 @@ function VinylView({
           aria-label="切换到歌词"
           className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 唱针（白色拟真风，仿用户参考截图）：白色圆轴承悬在唱片上方偏右（第二十七轮
-              从中上移到右上，避开居中的「相距/一起听了」时长行，仍悬在盘上方），
-              白色针杆从轴心斜搭到盘面纹路上；全百分比定位随唱片尺寸等比缩放。
-              CSS 正角把向下的针臂摆向左——轴承在右上时，播放用 +21° 让针头摆回盘面右上纹路上；
-              暂停 → 抬起 + -26° 摆开（针头离开盘面右侧，靠在盘边）。针杆颜色调淡（半透明白渐变，第二十七轮） */}
+          {/* 唱针（白色拟真风）：白色圆轴承悬在唱片右上上方（第三十轮再上抬右移，
+              与盘缘留出明显间隙、不压盘面），白色针杆从轴心斜搭到盘面右上外圈纹路上
+              （播放落点约 1 点半方向 r≈0.8R，第三十轮修正——旧 +21° 会把针头甩进盘芯标签区）；
+              全百分比定位随唱片尺寸等比缩放。CSS 正角把向下的针臂摆向左——
+              播放 rotate(27°) 针头落外圈纹路；暂停 → 抬起 + -22° 摆开（针头离开盘面右侧）。
+              针杆颜色再调淡（低不透明度白渐变，第三十轮） */}
           <div
-            className="absolute left-[84.7%] top-[-9.5%] z-20 h-[58%] w-[2.6%] origin-top rounded-full bg-gradient-to-b from-white/90 via-white/60 to-white/40 shadow-[0_2px_5px_rgba(0,0,0,0.18)] transition-transform duration-500"
-            style={{ transform: playing ? 'rotate(21deg)' : 'translateY(-10px) rotate(-26deg)' }}
+            className="absolute left-[92.6%] top-[-6.3%] z-20 h-[31.3%] w-[2.4%] origin-top rounded-full bg-gradient-to-b from-white/70 via-white/45 to-white/28 shadow-[0_2px_4px_rgba(0,0,0,0.14)] transition-transform duration-500"
+            style={{ transform: playing ? 'rotate(27deg)' : 'translateY(-8px) rotate(-22deg)' }}
             data-testid="music-tonearm-arm"
           >
             {/* 针头（白色唱头，随针臂同角度，落在盘面外圈） */}
-            <div className="absolute -bottom-[5%] left-1/2 h-[8%] w-[260%] -translate-x-1/2 rotate-[4deg] rounded-[3px] bg-gradient-to-b from-white/85 to-white/50 shadow-[0_1px_3px_rgba(0,0,0,0.22)] ring-1 ring-black/5" />
+            <div className="absolute -bottom-[5%] left-1/2 h-[8%] w-[260%] -translate-x-1/2 rotate-[4deg] rounded-[3px] bg-gradient-to-b from-white/60 to-white/35 shadow-[0_1px_2px_rgba(0,0,0,0.16)] ring-1 ring-black/5" />
           </div>
-          {/* 轴承（白色圆钮，压住针臂轴心，不随播放旋转） */}
-          <div className="absolute left-[81.5%] top-[-14%] z-30 h-[9%] w-[9%] rounded-full bg-gradient-to-b from-white to-[#e9e5da] shadow-[0_3px_10px_rgba(0,0,0,0.4)]" data-testid="music-tonearm-pivot">
-            <div className="absolute left-1/2 top-1/2 h-[38%] w-[38%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#c9c3b4] ring-1 ring-black/10" />
+          {/* 轴承（白色圆钮，压住针臂轴心，不随播放旋转；悬在盘上方偏右、与盘缘留隙） */}
+          <div className="absolute left-[89%] top-[-11%] z-30 h-[9.5%] w-[9.5%] rounded-full bg-gradient-to-b from-white to-[#ece8de] shadow-[0_3px_9px_rgba(0,0,0,0.35)]" data-testid="music-tonearm-pivot">
+            <div className="absolute left-1/2 top-1/2 h-[38%] w-[38%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#cfc9ba] ring-1 ring-black/10" />
           </div>
 
           {/* 盘后氛围光晕（增加悬浮立体感）+ 外缘深黑圈（不随旋转，提供立体边缘） */}
@@ -1356,27 +1358,35 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像 + 耳机线（第二十九轮按用户反馈重画）：两根细线位于双头像的两侧
-          （左线在左头像左缘内、右线在右头像右缘内），从头像背后钻出后近乎垂直向下延伸、
-          尾端轻微内收，像两只耳机各垂下一根线；头像（relative z-10）盖在线上方 */}
+      {/* 双头像 + 耳机线（第三十轮按参考图重画）：两根细线分别从左头像左缘/右头像右缘
+          （约圆心高度）钻出，先贴着圆弧外侧垂下，再自然下垂微微向内，尾端渐隐在时长行上方——
+          像两只耳机各垂下一根松驰的线；头像（relative）盖在线上方 */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <svg
-          viewBox="0 0 118 60"
-          className="pointer-events-none absolute inset-x-0 top-[40px] z-0 h-[60px] w-full"
+          viewBox="0 0 118 72"
+          className="pointer-events-none absolute inset-x-0 top-[32px] z-0 h-[72px] w-full"
           fill="none"
           aria-hidden="true"
         >
-          {/* 左线：左头像左下缘向下延伸；右线镜像（右头像右下缘） */}
+          <defs>
+            {/* 尾端渐隐：从头像下缘附近开始变淡，落到时长行上方前完全消失 */}
+            <linearGradient id="tg-wire-fade" gradientUnits="userSpaceOnUse" x1="0" y1="28" x2="0" y2="68">
+              <stop offset="0" stopColor="#ffffff" stopOpacity="0.95" />
+              <stop offset="0.5" stopColor="#ffffff" stopOpacity="0.55" />
+              <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {/* 左线：左头像左缘（圆心高度）出发、贴弧垂下微向内；右线镜像（右头像右缘） */}
           <path
-            d="M 12 0 C 8 18, 9 40, 13 56"
-            stroke="rgba(255,255,255,0.9)"
-            strokeWidth="1.8"
+            d="M 0 1 C 1 12, 4 24, 8.5 35 C 12.5 45, 15.5 56, 16.5 66"
+            stroke="url(#tg-wire-fade)"
+            strokeWidth="1.6"
             strokeLinecap="round"
           />
           <path
-            d="M 106 0 C 110 18, 109 40, 105 56"
-            stroke="rgba(255,255,255,0.9)"
-            strokeWidth="1.8"
+            d="M 118 1 C 117 12, 114 24, 109.5 35 C 105.5 45, 102.5 56, 101.5 66"
+            stroke="url(#tg-wire-fade)"
+            strokeWidth="1.6"
             strokeLinecap="round"
           />
         </svg>
@@ -1384,7 +1394,7 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          mt-[48px] 给耳机线下垂留出空间（线在中缝下方汇拢，尾端落在时长行上方） */}
+          mt-[48px] 给耳机线下垂留出空间（线尾渐隐段落在时长行上方 ~12px） */}
       <p className={`mt-[48px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>

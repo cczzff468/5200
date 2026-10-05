@@ -6,7 +6,8 @@
  * - PhoneShell 常驻挂载：不管用户在哪个 App / 主屏幕，只要 useTogetherInvite 有邀请就弹出；
  * - 卡片 1:1 参考截图：深色圆角面板、左（角色）/右（机主）双头像、两条耳机线在中间交汇、
  *   歌名 +「邀请你一起听」、底部灰色 ✕（拒绝）与红色 ✓（接受）；
- *   第二十八轮反馈：头像外圈的描边边框删除（只留无边界圆形头像）。
+ *   第二十八轮反馈：头像外圈的描边边框删除（只留无边界圆形头像）；
+ *   第三十轮反馈：容器占位底色晕圈（104 容器 vs 92 头像的 6px 环）一并删除——头像填满容器，外围零边框。
  * - z-[91]：高于一切 App 内容与迷你播放器，低于灵动岛通知(93)/来电(94)/锁屏，互不打架；
  * - 接受 → acceptTogetherInvite（建一起听会话 + 切到音乐 App 播放页）；
  *   拒绝 → declineTogetherInvite（写记忆 + 冷却）；45s 无响应自动收回（同网易云超时语义）。
@@ -78,28 +79,28 @@ function InviteCard({ inviteId }: { inviteId: string }) {
         className="relative w-full max-w-[300px] rounded-[24px] bg-[#1D1D1F]/[0.97] px-6 pb-7 pt-9 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.8)]"
         data-testid="together-invite-card"
       >
-        {/* 双头像 + 耳机线 */}
+        {/* 双头像 + 耳机线（第三十轮：容器去占位底色、头像填满 104px——外围无任何边框/晕圈） */}
         <div className="relative mx-auto h-[104px] w-[240px]">
           <EarphoneWires />
-          <div className="absolute left-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="absolute left-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full">
             {invite?.avatar ? (
               <img
                 src={invite.avatar}
                 alt={invite.name || '对方'}
-                className="h-[92px] w-[92px] rounded-full object-cover"
+                className="h-[104px] w-[104px] rounded-full object-cover"
                 data-testid="together-invite-avatar"
               />
             ) : (
-              <span className="flex h-[92px] w-[92px] items-center justify-center rounded-full bg-zinc-700 text-[34px] font-bold text-white/80">
+              <span className="flex h-[104px] w-[104px] items-center justify-center rounded-full bg-zinc-700 text-[34px] font-bold text-white/80">
                 {(invite?.name || 'T').slice(0, 1)}
               </span>
             )}
           </div>
-          <div className="absolute right-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="absolute right-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full">
             {myAvatar ? (
-              <img src={myAvatar} alt="我" className="h-[92px] w-[92px] rounded-full object-cover" />
+              <img src={myAvatar} alt="我" className="h-[104px] w-[104px] rounded-full object-cover" />
             ) : (
-              <span className="flex h-[92px] w-[92px] items-center justify-center rounded-full bg-zinc-600 text-[34px] font-bold text-white/80">
+              <span className="flex h-[104px] w-[104px] items-center justify-center rounded-full bg-zinc-600 text-[34px] font-bold text-white/80">
                 我
               </span>
             )}

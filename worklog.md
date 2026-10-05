@@ -15429,3 +15429,22 @@ Stage Summary:
 - 关键决策：①黑块根因=上一轮为「歌名不透明」叠加的黑渐变层在封面色背景上成块，模糊本身足够遮歌词故删黑留糊；②箭头语义升级为「退出听歌界面」与黑胶视图一致（原「回唱片」与点空白重复）；③耳机线经历 U 形→外八字→中缝汇拢→两侧垂直四版，本轮按用户最新文字描述「从头像两侧向下延伸」实现，线位取双头像组合体外侧
 - 范围限定遵守：改 3 文件（music-player/music-home/music-playlist）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅 SVG 线形）；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-home.tsx、src/components/apps/music-playlist.tsx
+
+---
+Task ID: 89
+Agent: Z.ai Code（主会话）
+Task: 第三十轮——①一起听双头像耳机线按用户新参考图再调整（外缘圆心高度钻出、贴弧垂下、尾端渐隐）②一起听邀请弹窗头像外面的边框删除（容器占位晕圈）③白圆轴承悬在盘上方与盘缘留隙、白针杆颜色调淡、位置整体调整（针头落外圈纹路不再压盘芯）
+
+Work Log:
+- ①耳机线第五版（TogetherHead）：第二十九轮「两侧近乎垂直垂下」按参考图重画——svg 改 viewBox 118×72、top-[40px]→top-[32px]（svg y=0 = 头像圆心高度）；左线起点 (0,1) 恰在左头像左缘（圆心高度处圆弧上，x=32-√(32²-1²)≈0.02）、右线镜像 (118,1)；两段贝塞尔先贴着圆弧外侧垂下再自然下垂微微向内（左 M0,1 C1,12 4,24 8.5,35 C12.5,45 15.5,56 16.5,66，向内漂移 16.5px/65px，与参考图 63px/200px 等比一致），尾端 stroke 换 linearGradient userSpaceOnUse（y28→68：0.95→0.55→0）实现「落到时长行上方前渐隐消失」（参考图线尾渐隐同构）；线尾 y=68 → 页面 y≈190，时长行 y=202 上方 ~12px；strokeWidth 1.8→1.6；mt-[48px] 留位注释同步
+- ②邀请弹窗头像边框根治（TogetherInviteLayer）：第二十八轮删了 ring-1 ring-white/10 但仍残留「边框」——根因是 104px 容器带 bg-white/[0.06] 占位底色而头像 img 只有 92px，6px 宽的底色环露在头像外圈成视觉边框；本轮删两处容器的 bg-white/[0.06]、img 与字母兜底 span 92px→104px 填满容器（视觉尺寸不变），外围零边框；头注释同步
+- ③唱针轴承重定位 + 针杆再调淡（VinylView）：轴承中心从 (86%,-9.5%) 移到 (94%,-11%)（left-[89%] top-[-11%] h/w-9.5%）——E2E 实测轴承底缘悬在盘缘上方 69.9px（不压盘面、悬于盘上方）；针臂 h-[58%]→h-[31.3%]、left-[92.6%] top-[-6.3%]、w-[2.4%]，播放角 +21°→+27°——针头落点从 r≈0.16R（旧版深压盘芯标签区，用户截图可见针头在紫色标签上）修到 r=0.815R（外圈纹路带 [0.53R,0.97R] 内、距标签 1.54 倍标签半径）；暂停 translateY(-10px)→(-8px) + rotate(-26°)→(-22°)，针头摆开盘面右侧悬空；针杆渐变 from-white/90 via-white/60 to-white/40 → from-white/70 via-white/45 to-white/28、唱头 /85→/60·/50→/35、阴影减弱（再调淡）；轴承渐变/内点微调（#e9e5da→#ece8de、#c9c3b4→#cfc9ba）、阴影 0.4→0.35；文件头注释同步
+- E2E（agent-browser 420×900 一次性会话，用完即关）：IDB 注入 e2e-r30-char/user 联系人 + music-together-active:guest 会话（13.14 公里/520小时14分钟）→ reload → 音乐 App 游客模式 → 搜「晴天」播 Jay 版 → 迷你条展开播放器 → 收起灵动岛 → 一起听态：双头像 + 两根线从外缘垂下渐隐 +「相距 13.14 公里 · 一起听了 520小时15分钟」（与参考图同构，截图对照）✓；数值测量：针头 r=0.815R（纹路带内）、轴承悬盘缘上方 69.9px、pivotInsideDisc=false ✓；播放态截图（针落外圈）+ 暂停态截图（针抬离盘右侧）✓；微信 e2e30/e2e30 登录 → 小柔聊天 → 要求原样输出标记 → AI 回复 [邀请一起听:晴天:Jay] → 全局邀请卡弹出（晴天/小柔 邀请你一起听/✕✓）→ 头像区放大截图：字母头像与满圆头像外围均无边框晕圈 ✓ → 点 ✕ 拒绝收卡
+- 清理：kv 删 8 键（music-together-active:guest / wx-chat-msgs / mem-frag·anchor·msgcount / music-invite-last·cid / music-tg-songplay）+ contacts 删 2 条 + moments-auto-attempt 残留键 + wx-session LS；reload 复核 e2eKvLeft=[] e2eContactLeft=[] contacts=0；wx-login-hist 仅 ["main"] 无残留
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 仅历史 Turbopack worker 噪音（与代码无关）
+
+Stage Summary:
+- 交付：一起听双头像耳机线按新参考图第五版重画（外缘钻出/贴弧垂下/尾端渐隐）；邀请弹窗头像外围边框根因清除（占位底色晕圈 + 头像填满容器）；唱针轴承悬盘上方留隙 70px、针头改落盘面右上外圈纹路（0.815R）、针杆/唱头透明度再降（针杆调淡）
+- 关键决策：①耳机线起点取「圆心高度的圆缘」而非背后钻出——参考图线头贴在圆缘上可见；渐隐用 userSpaceOnUse 纵向渐变（两线共用一份 defs，双实例同 id 同形无冲突）；②「边框删除」二次反馈的根因不是 ring 而是容器占位底色环（104 容器 vs 92 头像的 6px 环）——删底色并把头像填满容器，视觉尺寸不变边框消失；③唱针修正重点=播放落点几何：轴承右上 + 短臂 +27° 落外圈纹路（旧长臂 +21° 落 r≈0.16R 深压标签区），暂停 -22°+抬起 8px 摆开盘面
+- 范围限定遵守：改 2 文件（music-player.tsx / TogetherInviteLayer.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅绘制层 SVG/尺寸/定位）；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/ios/TogetherInviteLayer.tsx
