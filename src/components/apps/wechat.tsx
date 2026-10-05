@@ -26,6 +26,7 @@ import {
   Gift,
   Globe,
   Heart,
+  Headphones,
   Image as ImageIcon,
   Loader2,
   MailOpen,
@@ -127,6 +128,9 @@ import {
 } from '@/lib/chat-rich';
 import SongMsgBubble from './song-msg-bubble';
 import { triggerInviteFromChat } from '@/lib/ios/together-invite';
+import { sendUserTogetherInvite, type TgCardMsg } from '@/lib/ios/together-flow';
+import { TogetherInviteSheet } from './together-invite-sheet';
+import { songArtistText, songCover } from '@/lib/ios/music-api';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -389,7 +393,7 @@ interface WxMsg {
   fam?: WxFamData;
   /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：name/artist 必填，cover/songId 落库时已知可带（免搜索），
    *  note = 分享语，autoPlay = AI 点播（投递后自动播放），invite = 同时触发过全局一起听邀请（防重复触发） */
-  song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean };
+  song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean; agree?: boolean };
   /** 图片消息（kind='image'）：src = 压缩 dataURL；desc = 识图描述（AI 历史可读「[图片]（图片内容：…）」，旧记录无此字段照常兼容）；
    *  fromCard = 文字图片卡片转出的图（长按可重新生成；AI 卡片转图带角色锁脸，我的卡片不带）；
    *  prevSrc = 「重新生成」替换前保留的旧图（长按菜单「恢复上一张」换回，可来回切换） */
@@ -3267,7 +3271,7 @@ function WxFcManagePage({
 
 // ---------------- 聊天加号面板 + 红包/转账（对照用户微信截图 1:1） ----------------
 
-type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'textcard';
+type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'textcard' | 'together';
 
 /**
  * 「文字图片」弹层（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖）。
@@ -3359,6 +3363,7 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'offline', label: '线下', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'textcard', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
   return (
     <div
@@ -4468,6 +4473,8 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 加号面板展开（输入框保持在面板上方） */
   const [plusOpen, setPlusOpen] = useState(false);
+  /** 一起听选歌弹层（加号面板「一起听」入口；选歌后我方发邀请卡进聊天，AI 接受后双方发同意卡） */
+  const [tgPickOpen, setTgPickOpen] = useState(false);
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置/文字图片功能页（相机/图片直接调起手机原生能力） */
@@ -7252,6 +7259,17 @@ function ChatPage({
       setCompose('textcard');
       return;
     }
+    if (a === 'together') {
+      // 一起听（第二十四轮）：选一首歌，以邀请卡发进聊天，AI 接受后双方发同意卡并开始一起听
+      setPlusOpen(false);
+      setStickerOpen(false);
+      if (peer.kind !== 'char') {
+        onToast('只有 AI 好友可以一起听');
+        return;
+      }
+      setTgPickOpen(true);
+      return;
+    }
     const label: Record<string, string> = {};
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
@@ -7598,6 +7616,7 @@ function ChatPage({
                     name={m.song.name}
                     artist={m.song.artist}
                     invite={m.song.inviteDone}
+                    agree={m.song.agree}
                     cover={m.song.cover}
                     songId={m.song.songId}
                     autoPlay={m.song.autoPlay}
@@ -8139,6 +8158,26 @@ function ChatPage({
           error={cardError}
           onClose={() => (cardBusy ? undefined : setCompose(null))}
           onSubmit={(t) => void submitTextCard(t)}
+        />
+      )}
+      {/* 一起听选歌弹层（第二十四轮）：选歌 → 我方发邀请卡进聊天，AI 接受后双方发同意卡并建会话 */}
+      {tgPickOpen && (
+        <TogetherInviteSheet
+          peerName={peer.nickname || peer.name}
+          onClose={() => setTgPickOpen(false)}
+          onPick={(song) => {
+            setTgPickOpen(false);
+            sendUserTogetherInvite({
+              contact: peer,
+              app: 'wx',
+              song: { id: song.id, name: song.name, artist: songArtistText(song), cover: songCover(song) || undefined },
+              insert: (m: TgCardMsg) => {
+                const wx = m as unknown as WxMsg;
+                saveMsgs(peer.id, [...loadMsgs(peer.id), wx]);
+                setMsgs((prev) => (prev.some((x) => x.id === wx.id) ? prev : [...prev, wx]));
+              },
+            });
+          }}
         />
       )}
       {/* 点击「文字图片」卡片弹出的操作面板：用图像生成生成图片 / 复制文字（三端共用组件） */}

@@ -15280,3 +15280,35 @@ Stage Summary:
 - 关键实现：状态栏图标隐藏不走重复口径（MusicIsland 唯一真源写 islandVisible，StatusBar 只读）；带偏根因=旧规则明写「聊天围绕音乐展开」+音乐情境块在 system 中权重过高，修复=规则层声明优先级+user 层显式引用用户原话双保险
 - 范围限定遵守：改 6 文件（music-ai/cross-app-context/music-store/MusicIsland/StatusBar/MusicGlobalMini/song-msg-bubble）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项核心逻辑未触碰（cross-app-context 仅音乐节头文案 1 处）；音乐数据按账号隔离未动
 - 改动文件：src/lib/ios/music-ai.ts、src/lib/ios/cross-app-context.ts、src/lib/ios/music-store.ts、src/components/ios/MusicIsland.tsx、src/components/ios/StatusBar.tsx、src/components/ios/MusicGlobalMini.tsx、src/components/apps/song-msg-bubble.tsx
+
+---
+Task ID: 83
+Agent: Z.ai Code（主会话）
+Task: 第二十四轮——①我邀请 AI 一起听也发邀请卡片 ②聊天底部加号加「一起听」按钮（微信+QQ） ③同意一起听后 AI 和我各发一张同意卡 ④一起听的歌+聊天内容写入记忆 ⑤播放器歌词视图按网易云截图重做+滚动歌词全套交互
+
+Work Log:
+- ⑤歌词视图重做（music-player.tsx LyricView 整体重写）：
+  - 样式=用户截图：当前行胶囊高亮（rounded-[12px] bg-white/[0.08]，左侧行时间 mm:ss + 右侧播放/暂停小键可点击），上下行按距离淡出（0.62/0.42/0.28/0.18）+ 容器上下 15% mask-image 渐隐（聚焦效果），居中排版，歌词区加宽到近全屏（容器 px-8→px-3 条件切换）
+  - 同步：进度跳变 >1.2s（拖进度条/点行/切歌）→ 立即跟随当前行；activeIdx 变化自动 smooth 居中；暂停时 activeIdx 不变自然停住（验证 4s scrollTop 不动）；挂载立即定位不动画
+  - 交互：点行跳播（seek l.t-0.3）；长按 500ms 复制该句（含翻译，clipboard API+execCommand 兜底，复制后吞掉 click 防误跳，toast「已复制歌词」1.6s）；触摸/滚轮手动浏览暂停跟随，松手 3 秒无操作回当前行；黑胶↔歌词点击切换（隐藏/显示）；译 按钮保留（中英对照）；空态「暂无歌词」/加载态居中
+  - music-api.lyricOf 加歌曲 ID Map 缓存（FIFO 上限 120，无歌词空结果也缓存）——切回听过的歌不再重复请求
+- ①②③④一起听邀请/同意卡片链路（新文件 src/lib/ios/together-flow.ts）：
+  - buildTgCardMsg(role,'invite'|'agree',song)：邀请卡 content=[邀请一起听]《歌》（歌手）+ song.inviteDone；同意卡 content=[一起听]…+ song.agree；微信/QQ kind:'song' 同构复用
+  - sendUserTogetherInvite(contact,app,song,insert?)：我方邀请卡立即落库（聊天页在场走 insert=setMsgs+saveMsgs 实时刷；不在场 kv 直写 wx/qq-chat-msgs）→ 写记忆「凡凡邀请小柔一起听《x》，发了邀请卡片」→ 1.3~2.6s AI 接受：TA 同意卡 → startTogether → 0.9s 后我同意卡 → 写接受记忆（本地 writeAcceptedMemory 与 together-invite 解耦防循环依赖）
+  - sendAgreePairForAccept(cid,song)：AI 邀请被全局弹卡 ✓ 接受后，我先发同意卡（接受方）→ 1s 后 TA 补一张；together-invite.acceptTogetherInvite 挂载调用
+  - lastChatAppOf(cid)：wx/qq 最后消息时间较晚者（卡片发到最近聊天的 App）
+  - song-msg-bubble.tsx：新增 agree prop，卡片顶部小字「已同意一起听」（与邀请卡同布局）；wechat/qq 消息类型 song 字段 + agree + 渲染传参
+- ②聊天加号「一起听」：微信 PlusAction+'together' + PlusPanel 耳机图标项 + handlePlusAction（非 char 提示）+ TogetherInviteSheet 选歌弹层；QQ plusItems 加同款（#EC4141）；新组件 together-invite-sheet.tsx：最近播放 12 首（空态提示）+ 曲库搜索（350ms 防抖、seq 作废在途、失败/无结果态）
+- ④一起听聊天记忆（music-ai.ts）：appendMsg 单一收口 → logTgChatLine 缓冲（80 字/条、24 条封顶）；每满 6 条或 stopTogether 时 flushTgChatLog 合并写一条 memAddEventFragment（「一起听时聊了这些：{who}：…；{char}：…」sourceTag='music-chat'），避免每句一条碎片刷爆记忆库；听歌记忆既有（installMusicAiHook 每次换歌写一笔）
+- E2E（agent-browser 420×900，全程原生 mouse 事件+IDB 注入测试角色，用完即关）：
+  - 歌词：黑胶点击切歌词 ✓ 胶囊高亮+行时间+播放键+上下淡出（截图确认）✓ 点行跳播（0:47→0:52 高亮跟随）✓ 长按复制 toast「已复制歌词」✓ 手动浏览（滚至 1051）松手 3s 精确回弹当前行（195==expected diff 0）✓ 暂停 4s 歌词停住 ✓ 拖进度条到 100s 歌词跳到 1:41 行 ✓ 试听结束自动切歌后歌词视图正常重定位 ✓
+  - 一起听：IDB 注入 e2e-user/e2e-char → 微信登录 → 小柔聊天 → 加号面板「一起听」耳机项出现 ✓ → 选歌弹层（标题/空态/搜索晴天出结果）✓ → 选「晴天 Jay」→ 我方邀请卡（邀请你一起听/晴天/Jay）实时出现在聊天 ✓ → 4.2s 后 TA 同意卡+我同意卡依序出现（song-bubble 三卡文本确认）✓ → kv music-together-active:guest = {e2e-char,小柔,950km} 会话建立 ✓ → 播放页双头像+「相距 950 公里·一起听了 1分钟」+音乐/聊天胶囊 ✓ → 聊天视图发「我今天有点累…」AI 回「嗯嗯，能让你开心就好～我也挺喜欢这首歌的」（先接情绪再带歌，R4 优先级修复生效）✓
+  - 记忆落库：mem-frag:e2e-char 含「凡凡邀请小柔一起听《晴天》（Jay），发了邀请卡片」「凡凡和小柔接受了邀请，正在一起听《晴天》」（sourceTag=music-invite）✓
+  - 清理：测试联系人/全部 kv（聊天、会话、记忆、moments-attempt）/wx 登录态 LS 全部删除（复核 kvLeft=[] contacts=[]）；console/errors 零应用错误（dev.log 一条 /api/chat 502 为两级兜底正常降级，最终 200）
+- bun run lint 0 错误 0 警告（修复 set-state-in-effect、refs-during-render、未用 eslint-disable 三处）；bunx tsc 0 错误
+
+Stage Summary:
+- 交付：歌词视图按截图完整重做（胶囊当前行/淡出聚焦/逐行滚动/点行跳播/长按复制/手动浏览回弹/拖进度跟随/暂停停住/译/暂无歌词/ID 缓存）；一起听双向卡片链路（我邀请→邀请卡→AI 接受→双方同意卡→建会话；AI 邀请被接受→双方同意卡）；微信+QQ 加号面板「一起听」选歌弹层；一起听聊天内容批量写入记忆（+既有歌曲记忆）
+- 关键实现：appendMsg 作为一起听消息单一收口挂记忆日志；insert 回调模式让同一 sendUserTogetherInvite 兼容「聊天页在场实时刷/不在场 kv 直写」两种落库；together-flow 独立模块避免 music-ai/together-invite 循环依赖
+- 范围限定遵守：改动 9 文件（music-api/music-ai/together-invite/together-flow 新/music-player/song-msg-bubble/together-invite-sheet 新/wechat/qq）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话核心逻辑未触碰（wechat/qq 仅加号项+渲染传参各 3 处）；音乐数据按账号隔离未动
+- 改动文件：src/lib/ios/music-api.ts、src/lib/ios/music-ai.ts、src/lib/ios/together-invite.ts、src/lib/ios/together-flow.ts（新）、src/components/apps/music-player.tsx、src/components/apps/song-msg-bubble.tsx、src/components/apps/together-invite-sheet.tsx（新）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

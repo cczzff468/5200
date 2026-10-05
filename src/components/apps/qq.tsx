@@ -78,6 +78,7 @@ import {
   Gem,
   Gift,
   GraduationCap,
+  Headphones,
   Image as ImageIcon,
   Inbox,
   Info,
@@ -280,6 +281,9 @@ import {
 } from '@/lib/chat-rich';
 import SongMsgBubble from './song-msg-bubble';
 import { triggerInviteFromChat } from '@/lib/ios/together-invite';
+import { sendUserTogetherInvite, type TgCardMsg } from '@/lib/ios/together-flow';
+import { TogetherInviteSheet } from './together-invite-sheet';
+import { songArtistText, songCover } from '@/lib/ios/music-api';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -376,7 +380,7 @@ interface QQMsg {
    *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖） */
   kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song';
   /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：结构同微信端 */
-  song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean };
+  song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean; agree?: boolean };
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打）；
@@ -2851,6 +2855,8 @@ function ChatPage({
   const scrollRef = useRef<HTMLDivElement>(null);
   // 加号面板（弹出时把输入行+工具栏整体顶起，输入框跟随面板上浮）
   const [plusOpen, setPlusOpen] = useState(false);
+  /** 一起听选歌弹层（加号面板「一起听」入口；选歌后我方发邀请卡进聊天，AI 接受后双方发同意卡） */
+  const [tgPickOpen, setTgPickOpen] = useState(false);
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   // 表情面板（与加号面板互斥）
@@ -5626,6 +5632,21 @@ function ChatPage({
         setLayer({ view: 'textcard' });
       },
     },
+    {
+      // 一起听（第二十四轮）：选一首歌，以邀请卡发进聊天，AI 接受后双方发同意卡并开始一起听
+      key: 'together',
+      label: '一起听',
+      color: '#EC4141',
+      icon: <Headphones className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        setPlusOpen(false);
+        if (peer.kind !== 'char') {
+          onToast('只有 AI 好友可以一起听');
+          return;
+        }
+        setTgPickOpen(true);
+      },
+    },
   ];
 
   // 聊天设置：置顶 / 免打扰 / 聊天背景 / 查找聊天记录
@@ -5978,6 +5999,7 @@ function ChatPage({
                       name={m.song.name}
                       artist={m.song.artist}
                       invite={m.song.inviteDone}
+                      agree={m.song.agree}
                       cover={m.song.cover}
                       songId={m.song.songId}
                       autoPlay={m.song.autoPlay}
@@ -6493,6 +6515,26 @@ function ChatPage({
             onPick={sendSticker}
             onClose={() => setStickerOpen(false)}
             onToast={onToast}
+          />
+        ) : null}
+        {/* 一起听选歌弹层（第二十四轮）：选歌 → 我方发邀请卡进聊天，AI 接受后双方发同意卡并建会话 */}
+        {tgPickOpen ? (
+          <TogetherInviteSheet
+            peerName={peer.nickname || peer.name}
+            onClose={() => setTgPickOpen(false)}
+            onPick={(song) => {
+              setTgPickOpen(false);
+              sendUserTogetherInvite({
+                contact: peer,
+                app: 'qq',
+                song: { id: song.id, name: song.name, artist: songArtistText(song), cover: songCover(song) || undefined },
+                insert: (m: TgCardMsg) => {
+                  const qm = m as unknown as QQMsg;
+                  saveMsgs(peer.id, [...loadMsgs(peer.id), qm]);
+                  setMsgs((prev) => (prev.some((x) => x.id === qm.id) ? prev : [...prev, qm]));
+                },
+              });
+            }}
           />
         ) : null}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}

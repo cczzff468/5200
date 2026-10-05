@@ -149,6 +149,7 @@ export async function stopTogether(): Promise<void> {
   const s = loadActiveTogether();
   if (s) {
     accumulateSegment(s); // 本段时长写入累计总数
+    flushTgChatLog(s.contactId); // 一起听聊天内容落记忆（第二十四轮）
     kvDel(activeKey());
     useMusic.setState({ together: null });
     await writeTogetherMemory(
@@ -177,6 +178,51 @@ function appendMsg(cid: string, m: TgMsg): void {
   if (cur.together?.contactId === cid) {
     useMusic.setState({ togetherMsgs: next });
   }
+  // 一起听聊天记忆（第二十四轮）：双方消息都记入会话日志，攒够一批写进角色记忆
+  if (m.role === 'me' || m.role === 'peer') logTgChatLine(cid, m.role, m.text);
+}
+
+// ---------------- 一起听聊天记忆（第二十四轮：听的什么歌、聊的什么都记在记忆里） ----------------
+
+/** 歌曲记忆已有（installMusicAiHook 每次换歌写一笔）；这里补聊天内容：
+ *  会话日志内存缓冲，每满 6 条（或退出一起听时）合并写成一条记忆碎片，
+ *  避免每句话一条碎片刷爆记忆库；sourceTag='music-chat' 参与后续聊天召回。 */
+const TG_LOG_FLUSH_EVERY = 6;
+interface TgLogItem {
+  who: 'me' | 'peer';
+  text: string;
+}
+const tgLogBufs = new Map<string, TgLogItem[]>();
+
+function logTgChatLine(cid: string, role: 'me' | 'peer', text: string): void {
+  const t = (text ?? '').trim();
+  if (!t) return;
+  let buf = tgLogBufs.get(cid) ?? [];
+  buf.push({ who: role, text: t.slice(0, 80) });
+  if (buf.length > 24) buf = buf.slice(-24);
+  tgLogBufs.set(cid, buf);
+  if (buf.length >= TG_LOG_FLUSH_EVERY) flushTgChatLog(cid);
+}
+
+/** 把缓冲的聊天记录合并写成一条角色记忆（异步，失败静默） */
+function flushTgChatLog(cid: string): void {
+  const buf = tgLogBufs.get(cid);
+  if (!buf || buf.length === 0) return;
+  tgLogBufs.set(cid, []);
+  void (async () => {
+    try {
+      const who = await ownerName();
+      const c = await getContact(cid);
+      const charName = c?.nickname || c?.name || '对方';
+      const lines = buf.slice(-12).map((x) => `${x.who === 'me' ? who : charName}：${x.text}`);
+      memAddEventFragment(cid, 'wx', `一起听时聊了这些：${lines.join('；')}`, {
+        eventTime: Date.now(),
+        sourceTag: 'music-chat',
+      });
+    } catch {
+      // 记忆失败静默
+    }
+  })();
 }
 
 // ---------------- 记忆写入 ----------------

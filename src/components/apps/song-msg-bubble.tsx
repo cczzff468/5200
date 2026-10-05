@@ -13,6 +13,8 @@
  *   卡片下方的分享语/邀请语小字已按用户要求整体移除（卡片本身干净无附注）。
  * - 第二十三轮反馈：卡片圆角调小（10→6px，之前太圆）；邀请卡的「邀请你一起听」
  *   从歌名同行拆出，单独放到歌名的上方一行（邀请语小字 / 歌名粗体 / 歌手）。
+ * - 第二十四轮：agree（同意一起听卡片）——用户邀请 AI / AI 邀请被接受后，双方各发一张
+ *   同意卡（顶部小字「已同意一起听」），点击同样播放该歌。
  */
 
 import { useEffect, useState } from 'react';
@@ -49,6 +51,8 @@ export interface SongMsgBubbleProps {
   artist: string;
   /** 邀请一起听卡：歌名行显示「邀请你一起听歌名」（第二十二轮反馈，不再用卡片下方小字） */
   invite?: boolean;
+  /** 同意一起听卡：歌名行上方小字显示「已同意一起听」（第二十四轮） */
+  agree?: boolean;
   /** 落库时已知的封面（音乐 App 分享带；AI 标记无则异步解析） */
   cover?: string;
   /** 落库时已知的曲库 id（有则免搜索） */
@@ -59,7 +63,7 @@ export interface SongMsgBubbleProps {
   time: number;
 }
 
-export default function SongMsgBubble({ msgId, role, name, artist, invite, cover, songId, autoPlay, time }: SongMsgBubbleProps) {
+export default function SongMsgBubble({ msgId, role, name, artist, invite, agree, cover, songId, autoPlay, time }: SongMsgBubbleProps) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const playSong = useMusic((s) => s.playSong);
@@ -133,16 +137,18 @@ export default function SongMsgBubble({ msgId, role, name, artist, invite, cover
             </span>
           )}
         </span>
-        {/* 歌名 / 歌手 / 播放钮。invite 卡（第二十三轮反馈）：「邀请你一起听」单独放歌名上方一行 */}
+        {/* 歌名 / 歌手 / 播放钮。invite/agree 卡：小字单独放歌名上方一行（邀请你一起听 / 已同意一起听） */}
         <span className="flex min-w-0 flex-1 items-center gap-1 px-2.5">
           <span className="min-w-0 flex-1">
-            {invite && (
-              <span className="block truncate text-[11px] leading-[14px] text-zinc-400">邀请你一起听</span>
+            {(invite || agree) && (
+              <span className="block truncate text-[11px] leading-[14px] text-zinc-400">
+                {agree ? '已同意一起听' : '邀请你一起听'}
+              </span>
             )}
-            <span className={`block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100 ${invite ? 'mt-[1px]' : ''}`}>
+            <span className={`block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100 ${invite || agree ? 'mt-[1px]' : ''}`}>
               {name}
             </span>
-            <span className={`block truncate text-[12px] text-zinc-400 ${invite ? 'mt-[1px]' : 'mt-0.5'}`}>{artist || '未知歌手'}</span>
+            <span className={`block truncate text-[12px] text-zinc-400 ${invite || agree ? 'mt-[1px]' : 'mt-0.5'}`}>{artist || '未知歌手'}</span>
           </span>
           <span
             className={`flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full ${

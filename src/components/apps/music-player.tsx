@@ -85,6 +85,7 @@ import {
   togetherRecommend,
   useTogetherLive,
 } from '@/lib/ios/music-ai';
+import { lastChatAppOf, sendUserTogetherInvite } from '@/lib/ios/together-flow';
 import type { ContactRecord } from '@/lib/contacts';
 import { MINI_MODE_LABELS, useMiniPlayer } from '@/components/ios/MusicGlobalMini';
 import { AddToSongSheet, CoverImg, fmtClock } from './music-shared';
@@ -423,7 +424,13 @@ export function MusicPlayer() {
           </div>
         </div>
         {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
-        {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
+        {showInvite && (
+          <InviteSheet
+            title={inviteTitle}
+            onClose={() => setShowInvite(false)}
+            onInvited={(n) => setMoreToast(`已向 ${n} 发送一起听邀请`)}
+          />
+        )}
 
         {/* 更多面板（聊天态也可用） */}
         {showMore && (
@@ -499,8 +506,8 @@ export function MusicPlayer() {
         {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
         {!showLyric && togetherHead}
 
-      {/* 封面/歌词切换区（留出顶部唱针空间） */}
-        <div className="relative flex min-h-0 flex-1 items-center justify-center px-8 pt-4">
+      {/* 封面/歌词切换区（留出顶部唱针空间；歌词视图加宽到近全宽，仿网易云歌词页） */}
+        <div className={`relative flex min-h-0 flex-1 items-center justify-center pt-4 ${showLyric ? 'px-3' : 'px-8'}`}>
           {showLyric ? (
             <LyricView onSwitch={() => setShowLyric(false)} />
           ) : (
@@ -679,7 +686,13 @@ export function MusicPlayer() {
       {showQueue && <QueueSheet onClose={() => setShowQueue(false)} />}
 
       {/* 邀请/重新匹配一起听 */}
-      {showInvite && <InviteSheet title={inviteTitle} onClose={() => setShowInvite(false)} />}
+      {showInvite && (
+        <InviteSheet
+          title={inviteTitle}
+          onClose={() => setShowInvite(false)}
+          onInvited={(n) => setMoreToast(`已向 ${n} 发送一起听邀请`)}
+        />
+      )}
 
       {/* 一起听设置菜单（顶栏⋮；自己听也能打开：重新匹配/查看记录可用，退出时提示未在一起听） */}
       {showTgMenu && (
@@ -827,7 +840,32 @@ function VinylView({
   );
 }
 
-// ---------------- 歌词视图 ----------------
+// ---------------- 歌词视图（第二十四轮重做：仿网易云歌词页——
+// 当前行胶囊高亮（行时间+播放键），上下行淡出聚焦，逐行滚动；
+// 点行跳播、长按复制、手动滑动浏览松手 3 秒后回当前行、拖进度条歌词跟随） ----------------
+
+/** 剪贴板写入（clipboard API 失败回退 execCommand） */
+async function copyLyricText(t: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(t);
+    return true;
+  } catch {
+    // 回退方案
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 function LyricView({ onSwitch }: { onSwitch: () => void }) {
   const lyricLines = useMusic((s) => s.lyricLines);
@@ -835,9 +873,19 @@ function LyricView({ onSwitch }: { onSwitch: () => void }) {
   const showTr = useMusic((s) => s.lyricShowTr);
   const setShowTr = useMusic((s) => s.setLyricShowTr);
   const position = useMusic((s) => s.position);
+  const playing = useMusic((s) => s.playing);
   const seek = useMusic((s) => s.seek);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const activeRef = useRef<HTMLDivElement>(null);
+  const toggle = useMusic((s) => s.toggle);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // 手动浏览中：暂停自动跟随；松手 3 秒无操作回当前行（需求三.3）
+  const manualRef = useRef(false);
+  const manualTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 长按复制后吞掉随后的 click（避免复制时误跳进度）
+  const suppressClickRef = useRef(false);
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [copied, setCopied] = useState('');
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeIdx = useMemo(() => {
     let idx = -1;
@@ -847,17 +895,86 @@ function LyricView({ onSwitch }: { onSwitch: () => void }) {
     }
     return idx;
   }, [lyricLines, position]);
-
+  const activeIdxRef = useRef(activeIdx);
   useEffect(() => {
-    // 当前行滚动居中
-    const el = activeRef.current;
-    const box = containerRef.current;
-    if (!el || !box) return;
-    box.scrollTo({
-      top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2,
-      behavior: 'smooth',
-    });
+    activeIdxRef.current = activeIdx;
   }, [activeIdx]);
+
+  const scrollToLine = (idx: number, behavior: ScrollBehavior) => {
+    const box = boxRef.current;
+    const el = lineRefs.current[idx];
+    if (!box || !el || idx < 0) return;
+    box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior });
+  };
+
+  // 挂载：立即定位到当前行（不动画）
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (didMountRef.current) return;
+    didMountRef.current = true;
+    if (activeIdxRef.current >= 0) scrollToLine(activeIdxRef.current, 'auto');
+    return () => {
+      if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  // 进度跳变（拖进度条/点行跳播/切歌）→ 立即跟随当前行（需求二.3）
+  const prevPosRef = useRef(position);
+  useEffect(() => {
+    const jumped = Math.abs(position - prevPosRef.current) > 1.2;
+    prevPosRef.current = position;
+    if (!jumped) return;
+    manualRef.current = false;
+    if (manualTimerRef.current) {
+      clearTimeout(manualTimerRef.current);
+      manualTimerRef.current = null;
+    }
+    scrollToLine(activeIdxRef.current, 'smooth');
+  }, [position]);
+
+  // 当前行变化自动滚动（手动浏览中不抢滚动；暂停时 activeIdx 不变自然停住，需求二.4）
+  useEffect(() => {
+    if (manualRef.current) return;
+    if (activeIdx >= 0) scrollToLine(activeIdx, 'smooth');
+  }, [activeIdx]);
+
+  // 手动浏览标记（触摸/滚轮都算）：刷新 3 秒回跳计时器
+  const markManual = () => {
+    manualRef.current = true;
+    if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+    manualTimerRef.current = setTimeout(() => {
+      manualTimerRef.current = null;
+      manualRef.current = false;
+      scrollToLine(activeIdxRef.current, 'smooth');
+    }, 3000);
+  };
+
+  const flashCopied = (msg: string) => {
+    setCopied(msg);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(''), 1600);
+  };
+
+  const clearPress = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  // 长按行 500ms → 复制该句歌词（含翻译，需求三.2）
+  const startPress = (l: { text: string; tr: string }) => {
+    clearPress();
+    pressTimerRef.current = setTimeout(() => {
+      pressTimerRef.current = null;
+      suppressClickRef.current = true;
+      void copyLyricText(l.tr ? `${l.text}\n${l.tr}` : l.text).then((ok) =>
+        flashCopied(ok ? '已复制歌词' : '复制失败'),
+      );
+    }, 500);
+  };
 
   return (
     <div className="relative h-full w-full" data-testid="music-lyric-view">
@@ -875,42 +992,113 @@ function LyricView({ onSwitch }: { onSwitch: () => void }) {
           <ChevronDown className="h-4 w-4" />
         </button>
       </div>
+      {/* 复制反馈（浮在歌词区顶部，不打断布局） */}
+      {copied && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-1 z-20 -translate-x-1/2 rounded-full bg-white/20 px-3 py-1 text-[11px] text-white backdrop-blur"
+          data-testid="music-lyric-copy-toast"
+        >
+          {copied}
+        </div>
+      )}
       <div
-        ref={containerRef}
+        ref={boxRef}
         onClick={onSwitch}
         data-testid="music-lyric-backdrop"
-        className="h-full overflow-y-auto py-[45%] no-scrollbar"
+        className="relative h-full overflow-y-auto py-[42%] no-scrollbar"
+        style={{
+          // 上下淡出（聚焦效果，需求一.3）
+          WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%)',
+          maskImage: 'linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%)',
+        }}
+        onTouchStart={markManual}
+        onTouchMove={markManual}
+        onTouchEnd={markManual}
+        onTouchCancel={markManual}
+        onWheel={markManual}
       >
-        {loading && <p className="text-center text-[13px] text-white/40">歌词加载中…</p>}
-        {!loading && lyricLines.length === 0 && (
-          <p className="text-center text-[13px] text-white/40">暂无歌词</p>
+        {loading && (
+          <div className="flex h-[60%] items-center justify-center">
+            <p className="text-[13px] text-white/40">歌词加载中…</p>
+          </div>
         )}
-        {lyricLines.map((l, i) => (
-          <div
-            key={`${i}-${l.t}`}
-            ref={i === activeIdx ? activeRef : null}
-            onClick={(e) => {
-              e.stopPropagation(); // 点歌词行=跳播进度，不返回唱片
-              seek(Math.max(0, l.t - 0.3));
-            }}
-            className={`cursor-pointer px-2 py-2.5 text-center transition-all duration-300 ${
-              i === activeIdx ? 'scale-100' : 'opacity-45'
-            }`}
-          >
-            <p
-              className={`text-[15px] font-medium leading-relaxed ${
-                i === activeIdx ? 'text-white' : 'text-white/70'
+        {!loading && lyricLines.length === 0 && (
+          <div className="flex h-[60%] items-center justify-center">
+            <p className="text-[13px] text-white/40">暂无歌词</p>
+          </div>
+        )}
+        {lyricLines.map((l, i) => {
+          const isActive = i === activeIdx;
+          const dist = Math.abs(i - activeIdx);
+          const dimCls = dist === 1 ? 'opacity-[0.62]' : dist === 2 ? 'opacity-[0.42]' : dist === 3 ? 'opacity-[0.28]' : 'opacity-[0.18]';
+          return (
+            <div
+              key={`${i}-${l.t}`}
+              ref={(el) => {
+                lineRefs.current[i] = el;
+              }}
+              data-testid={isActive ? 'music-lyric-active' : undefined}
+              onClick={(e) => {
+                e.stopPropagation(); // 点歌词行=跳播进度，不返回唱片
+                if (suppressClickRef.current) {
+                  suppressClickRef.current = false;
+                  return;
+                }
+                seek(Math.max(0, l.t - 0.3));
+              }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                startPress(l);
+              }}
+              onPointerUp={clearPress}
+              onPointerLeave={clearPress}
+              onPointerCancel={clearPress}
+              onContextMenu={(e) => e.preventDefault()}
+              className={`cursor-pointer select-none transition-all duration-300 ${
+                isActive
+                  ? 'flex items-center gap-2 rounded-[12px] bg-white/[0.08] py-2.5 pl-3 pr-2'
+                  : `px-2 py-2.5 text-center ${dimCls}`
               }`}
             >
-              {l.text}
-            </p>
-            {showTr && l.tr && (
-              <p className={`mt-0.5 text-[12px] leading-relaxed ${i === activeIdx ? 'text-white/80' : 'text-white/40'}`}>
-                {l.tr}
-              </p>
-            )}
-          </div>
-        ))}
+              {isActive ? (
+                <>
+                  <span className="w-[40px] shrink-0 text-left text-[12px] leading-none tabular-nums text-white/75">
+                    {fmtClock(l.t)}
+                  </span>
+                  <span className="min-w-0 flex-1 text-center">
+                    <span className="block text-[16px] font-semibold leading-relaxed text-white">{l.text}</span>
+                    {showTr && l.tr && (
+                      <span className="mt-0.5 block text-[12px] leading-relaxed text-white/70">{l.tr}</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggle();
+                    }}
+                    aria-label={playing ? '暂停' : '播放'}
+                    data-testid="music-lyric-play-toggle"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center text-white/85 active:scale-90"
+                  >
+                    {playing ? (
+                      <Pause className="h-[14px] w-[14px]" fill="currentColor" strokeWidth={0} />
+                    ) : (
+                      <Play className="h-[14px] w-[14px]" fill="currentColor" strokeWidth={0} />
+                    )}
+                  </button>
+                </>
+              ) : (
+                <span className="block">
+                  <span className="block text-[15px] font-medium leading-relaxed text-white">{l.text}</span>
+                  {showTr && l.tr && (
+                    <span className="mt-0.5 block text-[12px] leading-relaxed text-white/60">{l.tr}</span>
+                  )}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2230,7 +2418,16 @@ function QueueSheet({ onClose }: { onClose: () => void }) {
 
 // ---------------- 邀请一起听 ----------------
 
-function InviteSheet({ title = '邀请一起听', onClose }: { title?: string; onClose: () => void }) {
+function InviteSheet({
+  title = '邀请一起听',
+  onClose,
+  onInvited,
+}: {
+  title?: string;
+  onClose: () => void;
+  /** 邀请卡已发出（第二十四轮：邀请也走聊天卡片 + AI 接受后双方同意卡） */
+  onInvited?: (name: string) => void;
+}) {
   const [list, setList] = useState<ContactRecord[] | null>(null);
   const [busyId, setBusyId] = useState('');
 
@@ -2249,7 +2446,21 @@ function InviteSheet({ title = '邀请一起听', onClose }: { title?: string; o
     void (async () => {
       const candidates = (await listTogetherCandidates()) ?? [];
       const c = candidates.find((x) => x.id === cid);
-      if (c) startTogether(c);
+      if (c) {
+        const song = useMusic.getState().current;
+        if (song) {
+          // 第二十四轮：我邀请也发「邀请你一起听」卡片 → AI 接受后双方各发同意卡 → 建会话
+          const app = await lastChatAppOf(c.id);
+          sendUserTogetherInvite({
+            contact: c,
+            app,
+            song: { id: song.id, name: song.name, artist: songArtistText(song), cover: songCover(song) || undefined },
+          });
+          onInvited?.(c.nickname || c.name);
+        } else {
+          startTogether(c); // 无在播歌时退回直接开始
+        }
+      }
       onClose();
     })();
   };

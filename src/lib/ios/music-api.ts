@@ -598,14 +598,27 @@ function parseLrcLines(raw: string): { t: number; text: string }[] {
   return out.sort((a, b) => a.t - b.t);
 }
 
+/** 歌词缓存（按歌曲 ID；含「无歌词」的空结果也缓存——切回听过的歌不重复请求） */
+const lyricCache = new Map<number, NcmLyric>();
+const LYRIC_CACHE_MAX = 120;
+
 export async function lyricOf(id: number): Promise<NcmLyric> {
+  const hit = lyricCache.get(id);
+  if (hit) return hit;
   const j = await ncmRequest<{
     lrc?: { lyric?: string };
     tlyric?: { lyric?: string };
   }>('lyric', { id, tv: -1, rv: -1, lv: -1, kv: -1 });
   const lrc = j.lrc?.lyric ?? '';
   const tl = j.tlyric?.lyric ?? '';
-  return { lrc, tlyric: tl, hasTranslation: tl.trim().length > 0 };
+  const ly: NcmLyric = { lrc, tlyric: tl, hasTranslation: tl.trim().length > 0 };
+  // 简单 FIFO 上限，防长会话内存膨胀
+  if (lyricCache.size >= LYRIC_CACHE_MAX) {
+    const oldest = lyricCache.keys().next().value;
+    if (oldest !== undefined) lyricCache.delete(oldest);
+  }
+  lyricCache.set(id, ly);
+  return ly;
 }
 
 /** 解析歌词 + 翻译对齐（按时间戳就近匹配 ≤0.5s） */
