@@ -1,26 +1,29 @@
 'use client';
 
 /**
- * 一起听遥控（第三十七轮）：微信/QQ 聊天端 × 音乐 App 一起听的播放联动。
+ * 聊天端音乐遥控（第三十八轮扩展）：微信/QQ 私聊 × 音乐播放器的播放联动。
  *
- * 背景：音乐 App 内一起听的 AI 已有完整播放控制（music-ai.ts 的 [切歌]/[暂停]/[放歌] 等指令，
- * 只在音乐 App 的聊天视图生效）；但用户回到微信/QQ 和同一位 AI 角色聊天时，对方只通过
- * cross-app-context 的「听歌动态」知道歌名/歌手——不知道播放到哪里、看不到歌词，也无法控制播放。
+ * 第三十七轮只覆盖「一起听进行中」的会话；第三十八轮起扩展到全部私聊（用户需求：
+ * 「不跟 ai 一起听，ai 可以给我播放音乐」）——两种情境，同一套注入/剥离/执行管线：
  *
- * 本模块给微信/QQ 私聊补上同一套能力（仅「与该角色的一起听会话进行中」生效）：
- * 1. togetherLiveBlock(cid, userLabel)：发消息时现场构建的实时音乐情境块——
- *    正在听的歌/歌手/播放进度（几分几秒、播放中还是暂停）/正在唱到的歌词窗口 + 播放控制指令说明，
- *    注入聊天 system（wechat.tsx / qq.tsx 的 runAiTurn，位置在跨 App 块之后）；
+ * 1. togetherLiveBlock(cid, userLabel)：发消息时现场构建的实时音乐情境块（非缓存）：
+ *    - 一起听进行中（该角色）→「一起听」块：正在一起听的歌/歌手/进度/歌词 + 播控指令；
+ *    - 其余私聊 →「音乐点播」块：播放器此刻在放什么（歌名/歌手/进度/歌词窗口，没放就说没放）
+ *      + 主动放歌引导（用户点名就放；用户没点名时按对他的了解自己挑）+ 播控指令说明。
+ *    注入聊天 system（wechat.tsx / qq.tsx 的 systemFull，位置在跨 App 块之后）。
  * 2. takeMusicRemote(raw)：从 AI 回复里抽出播放控制指令并从正文剔除
- *    （指令语法与音乐 App 一起听完全一致：[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手]/[快进:秒]/[快退:秒]）；
+ *    （语法与音乐 App 一起听完全一致：[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手]/[快进:秒]/[快退:秒]）。
+ *    闸门变化（第三十八轮）：不再要求一起听会话——所有私聊的 system 都注入了音乐块（AI 才被授予
+ *    指令能力），回复里出现指令即剥离执行；群聊管线不经过本模块，天然不受影响。
  * 3. cutUnfinishedMusicTag(text)：流式分段防撕裂——尾部未闭合的半截指令括号留住（下次拼回），
- *    防止「[快进:」被分段器切开、一半进了气泡一半丢了指令；
+ *    防止「[快进:」被分段器切开、一半进了气泡一半丢了指令。
  * 4. runMusicRemote(controls)：把指令真实作用到播放器（useMusic store，用户随时可手动覆盖）。
  *
  * 安全边界：
- * - takeMusicRemote 有会话闸门：没有进行中的一起听会话时原文原样返回（聊天正文里的方括号文案不吞不执行）；
- * - 指令最多执行 3 条/条回复；不弹任何兑底消息（音乐 App 侧才有「没找到这首歌」的回复链路），
- *   微信/QQ 侧搜不到歌就静默失败——AI 用的是意图式说法（"我切一下歌"），没放成也不显得说谎；
+ * - 指令最多执行 3 条/条回复；搜不到歌静默失败（不弹兑底消息，音乐 App 侧才有回复链路）——
+ *   AI 用的是意图式说法（"我切一下歌"），没放成也不显得说谎；
+ * - 提示词层约束误触发：正常聊天没提听歌就不要动播放器、用户问"怎么切歌"这类操作问题用文字
+ *   解释不要真输出指令（正文里聊到方括号的场景概率极低，且指令词表只有 7 个，误吞后果轻）；
  * - 本模块不写消息、不写记忆，只动播放器。
  */
 
@@ -46,7 +49,8 @@ interface TgActiveSnapshot {
   name?: unknown;
 }
 
-/** 是否有进行中的一起听会话（有则返回会话快照） */
+/** 是否有进行中的一起听会话（读 kv 而非 store：页面刷新后没开过音乐 App 时 store 可能还没恢复，
+ *  kv 经 ensureKvReady 注水后同步可读，判定可靠；有则返回会话快照） */
 function activeTogether(): TgActiveSnapshot | null {
   try {
     const t = kvGet<TgActiveSnapshot>(`music-together-active:${musicUid()}`);
@@ -59,14 +63,13 @@ function activeTogether(): TgActiveSnapshot | null {
 // ---------------- 指令抽取 ----------------
 
 /** 从 AI 原文里抽出播放控制指令并从正文剔除（与 music-ai.extractTgControls 同一套语法）。
- *  闸门：没有进行中的一起听会话时原文原样返回——聊天正文里的方括号文案（「点[切歌]按钮」这类）
- *  不吞、不执行，只有一起听中的 AI 被授予了指令能力。 */
+ *  第三十八轮起全部私聊生效：微信/QQ 的私聊 system 已注入音乐情境块（AI 被授予指令能力），
+ *  回复里出现指令即剥离执行；群聊管线（wx-group/qq-group）不经过本模块，正文里的方括号不受影响。 */
 export function takeMusicRemote(raw: string): { text: string; controls: MusicRemoteControl[] } {
   const src = raw ?? '';
-  if (!activeTogether()) return { text: src, controls: [] };
   const controls: MusicRemoteControl[] = [];
   let text = src;
-  text = text.replace(/\[(?:放歌|播放|来一首|来首)[:：]([^\][]*)(?:[:：]([^\][]*))?\]/g, (_m, name, artist) => {
+  text = text.replace(/\[(?:放歌|播放|来一首|来首)[:：]([^:：\][]*)(?:[:：]([^:：\][]*))?\]/g, (_m, name, artist) => {
     const n = String(name ?? '').trim();
     if (n) controls.push({ type: 'play', name: n, artist: String(artist ?? '').trim() });
     return '';
@@ -86,6 +89,19 @@ export function takeMusicRemote(raw: string): { text: string; controls: MusicRem
     }
     return '';
   });
+  // 放歌意图兜底（第三十八轮）：实测模型常「说放不给指令」（正文「放首《晴天》给你」但漏掉 [放歌:…] 标记，
+  // few-shot 也压不住）——正文带明确放歌意图（放/播/来 + 书名号歌名紧邻）时，客户端直接解析歌名/歌手
+  // 真实放歌；气泡文字原样保留（AI 的话本身自然，播放由系统完成），每条回复至多兜底 1 条
+  if (controls.length === 0) {
+    const intent = /(?:放|播|来)\s*(?:一首|一首歌|首|个)?[《「『]([^\n《》「」『』]{1,30})[》」』]/.exec(text);
+    if (intent) {
+      const name = intent[1].trim();
+      // 歌手从「X的歌」提取（如「周杰伦的歌」）；「原唱」标注不算歌手意图
+      const artistM = /([\u4e00-\u9fa5A-Za-z0-9·]{2,14})的歌/.exec(text);
+      const artist = artistM && !artistM[1].includes('原唱') ? artistM[1].trim() : '';
+      if (name) controls.push({ type: 'play', name, artist });
+    }
+  }
   return { text: text.replace(/[ \t]+$/gm, '').trim(), controls };
 }
 
@@ -162,44 +178,69 @@ function lyricWindowBlock(): string {
   return `正在唱到的歌词：\n${parts.join('\n')}`;
 }
 
+/** 播放器此刻的播放状态描述（有歌：歌名/歌手/进度/播放状态；没歌：提示未放歌） */
+function nowPlayingLines(lines: string[]): void {
+  // 冷启动兜底（幂等）：页面刷新后没开过音乐 App 时，从播放器快照恢复队列/当前歌/歌词（同步完成）
+  void useMusic.getState().boot();
+  const st = useMusic.getState();
+  if (st.current) {
+    lines.push(`正在放的歌：《${st.current.name}》${songArtistText(st.current)}`);
+    if (st.duration > 0) {
+      lines.push(
+        `播放进度：${fmtClock(st.position)} / ${fmtClock(st.duration)}（${st.playing ? '正在播放' : '已暂停'}）`,
+      );
+    }
+    if (st.freeTrial) lines.push('（这是 VIP 歌曲，当前只播放试听片段）');
+  } else {
+    lines.push('播放器现在没放歌。');
+  }
+}
+
 /**
- * 一起听实时情境块：与该角色的一起听会话进行中时，返回注入聊天 system 的实时数据块
- * （歌名/歌手/进度/播放状态/歌词 + 播放控制指令说明）；没在一起听（或一起听的不是这位角色）返回空串。
- * 与 cross-app-context 的「听歌动态」不同：那个走跨 App 缓存（可能滞后一轮），本块在发消息瞬间构建，
- * 数据是此刻的真实进度；指令说明也只在这里给（AI 只有一起听中才被授予播控能力）。
+ * 音乐实时情境块：发给某角色消息时，返回注入聊天 system 的实时数据块（发消息瞬间构建，非缓存）：
+ * - 与该角色的一起听进行中 →「一起听」块（歌名/歌手/进度/歌词 + 播控指令，陪伴式说法）；
+ * - 其余私聊 →「音乐点播」块（播放器此刻状态 + 主动放歌引导 + 播控指令）——
+ *   用户需求：不一起听时也能让 AI 放歌（点名放 / 按喜好推荐放），并且 AI 知道正在放什么、
+ *   放到哪里了、唱到哪句歌词，能切歌/前进/后退/暂停。
+ * 与 cross-app-context 的「听歌动态」不同：那个走跨 App 缓存（可能滞后一轮），本块是实时进度。
  */
 export function togetherLiveBlock(contactId: string, userLabel: string): string {
   try {
-    const t = activeTogether();
-    if (!t || typeof t.contactId !== 'string' || t.contactId !== contactId) return '';
-    // 冷启动兜底（幂等）：页面刷新后没开过音乐 App 时，从播放器快照恢复队列/当前歌（同步完成）
-    void useMusic.getState().boot();
-    const st = useMusic.getState();
     const who = (userLabel ?? '').trim().slice(0, 20) || '机主';
-    const lines: string[] = ['【一起听 · 实时音乐情境（你正和' + who + '在音乐 App 里一起听歌，以下是此刻的实时数据）】'];
-    if (st.current) {
-      lines.push(`正在一起听：《${st.current.name}》${songArtistText(st.current)}`);
-      if (st.duration > 0) {
-        lines.push(
-          `播放进度：${fmtClock(st.position)} / ${fmtClock(st.duration)}（${st.playing ? '正在播放' : '已暂停'}）`,
-        );
-      }
-      if (st.freeTrial) lines.push('（这是 VIP 歌曲，当前只播放试听片段）');
+    const t = activeTogether();
+    const lines: string[] = [];
+    if (t && typeof t.contactId === 'string' && t.contactId === contactId) {
+      // —— 一起听情境（第三十七轮原样保留）——
+      lines.push(`【一起听 · 实时音乐情境（你正和${who}在音乐 App 里一起听歌，以下是此刻的实时数据）】`);
+      nowPlayingLines(lines);
+      const lw = lyricWindowBlock();
+      if (lw) lines.push(lw);
+      lines.push(
+        '',
+        '【一起听播放控制（真实生效）】你陪着' + who + '听歌，可以控制播放（指令写在回复末尾，系统会真实执行并从气泡里剔除，不要在正文里描述指令本身，不要加引号/代码块）：',
+        '- 无论执行什么指令，正文都必须至少带一句自然的话——绝对不要只发指令不带任何文字；',
+        '- 想切下一首：[切歌]；想回上一首：[上一首]；想暂停：[暂停]；想继续放：[继续]；',
+        '- 想放一首具体的歌：[放歌:歌名:歌手]（写真实存在的歌）；想快进：[快进:秒数]；想倒回：[快退:秒数]（最多 600 秒）；',
+        '- 完整示例：' + who + '说"放首稻香"，你回复：好呀，放首《稻香》～[放歌:稻香:周杰伦]；',
+        '- 选什么歌、什么时候切，按你的人设、你们的聊天内容和这首歌的氛围来；' + who + '随时会手动操作播放器，别抢节奏，不要每条消息都带指令。',
+      );
     } else {
-      lines.push('播放器还没开始放歌（对方还没选歌）。');
+      // —— 日常点播情境（第三十八轮新增）：不在一起听也能放歌/播控 ——
+      lines.push(`【音乐播放器 · 实时情境（你有一个真实可控的音乐播放器，可以给${who}放歌）】`);
+      nowPlayingLines(lines);
+      const lw = lyricWindowBlock();
+      if (lw) lines.push(lw);
+      lines.push(
+        '',
+        '【播放控制（真实生效）】你可以在聊天里直接操控这个播放器（指令写在回复末尾，系统会真实执行并从气泡里剔除，不要在正文里描述指令本身，不要加引号/代码块）：',
+        `- 放歌指令：[放歌:歌名:歌手]（歌要真实存在）；换歌：[切歌]；回上一首：[上一首]；暂停：[暂停]；继续：[继续]；快进：[快进:秒数]；倒回：[快退:秒数]（最多 600 秒）；`,
+        `- 完整示例一：${who}说"来一首周杰伦的歌"，你回复：来啦，来首周杰伦的《晴天》～[放歌:晴天:周杰伦]；`,
+        `- 完整示例二：${who}说"放首歌"（没点名），你按对他的了解挑一首：给你放首你上次说喜欢的《xxx》～[放歌:xxx:歌手]；`,
+        `- 无论执行什么指令，正文都必须至少带一句自然的话——绝对不要只发指令不带文字；`,
+        `- 时机自然：不要每条消息都动播放器——正常聊天没提到听歌就不要放歌；${who}问"怎么切歌"这类操作问题时用文字解释，不要真的输出指令；`,
+        '- 正文用意图式说法（"我放一首""切了哦"），不要用完成时说"已经切好了"——万一没放成也不显得说谎。',
+      );
     }
-    const lw = lyricWindowBlock();
-    if (lw) lines.push(lw);
-    lines.push(
-      '',
-      '【一起听播放控制（真实生效）】你陪着' + who + '听歌，可以控制播放（指令写在回复末尾，系统会真实执行并从气泡里剔除，不要在正文里描述指令本身，不要加引号/代码块）：',
-      '- 正文用意图式说法（如"我切一下歌""放首X听听"），不要用完成时说"已经切好了"——万一没放成也不显得说谎；',
-      '- 想切下一首：[切歌]；想回上一首：[上一首]；',
-      '- 想暂停音乐：[暂停]；想继续放：[继续]；',
-      '- 想放一首具体的歌：[放歌:歌名:歌手]（写真实存在的歌，如 [放歌:晴天:周杰伦]）；',
-      '- 想跳过前奏/直接听副歌：[快进:秒数]（如 [快进:30]）；想倒回去重听：[快退:秒数]（如 [快退:45]）；最多 600 秒；',
-      '- 选什么歌、什么时候切，按你的人设、你们的聊天内容和这首歌的氛围来；' + who + '随时会手动操作播放器，别抢节奏，不要每条消息都带指令。',
-    );
     return lines.join('\n');
   } catch {
     return ''; // 任何意外都不阻断消息发送

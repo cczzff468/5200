@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { motion } from 'framer-motion';
 import {
   AlarmClock,
   ChevronDown,
@@ -80,6 +81,7 @@ import {
   fmtTogetherDur,
   listTogetherCandidates,
   sendTogetherText,
+  setTogetherDistance,
   startTogether,
   stopTogether,
   togetherRecommend,
@@ -102,8 +104,8 @@ const MODE_LABELS: Record<RepeatMode, string> = {
 };
 
 /** 循环圆环箭头（one=true 圆心带「1」= 单曲循环）：圆环右上留缺口 + 顺时针箭头，仿参考截图。
- *  第三十七轮美化：弧线尾与箭头衔接更顺（缺口收紧，箭头几乎搭上弧线起点）、
- *  箭头比例收窄更利落、线宽 1.7→1.8 更饱满 */
+ *  第三十八轮再美化：线宽加粗到 2（更饱满）、箭头加大更醒目、单曲「1」字号加大，
+ *  缺口收紧让弧尾与箭头几乎衔接成完整圆环 */
 function LoopArrowIcon({ one = false, className }: { one?: boolean; className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
@@ -111,17 +113,17 @@ function LoopArrowIcon({ one = false, className }: { one?: boolean; className?: 
       <path
         d="M16.93 6 A8 8 0 1 1 13.11 4.38"
         stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="2"
         strokeLinecap="round"
       />
       {/* 箭头（实心小三角，指向顺时针切线方向，与弧尾同向衔接） */}
-      <polygon points="16.48,4.85 12.83,6.36 13.39,2.40" fill="currentColor" />
+      <polygon points="16.9,4.75 12.55,6.55 13.2,1.85" fill="currentColor" />
       {one && (
         <text
           x="12"
-          y="15.6"
+          y="15.8"
           textAnchor="middle"
-          fontSize="9.5"
+          fontSize="10"
           fontWeight="700"
           fill="currentColor"
           stroke="none"
@@ -463,8 +465,9 @@ export function MusicPlayer() {
                   className={`h-[26px] w-[26px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                   fill={liked ? 'currentColor' : 'none'}
                 />
-                {/* 热度数（红色）挂图标右上角（第二十七轮：左锚伸出式，不再盖在爱心上方） */}
-                <span className="absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
+                {/* 热度数挂图标右上角（第二十七轮改左锚伸出式；第三十八轮：默认白色半透明，
+                    点击爱心点赞后才变红——用户「点击爱心了以后才变红色」） */}
+                <span className={`absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums [text-shadow:0_1px_3px_rgba(0,0,0,0.45)] ${liked ? 'text-[#EC4141]' : 'text-white/70'}`}>
                   {fmtCountW(fakeHotCount(current.id))}
                 </span>
               </button>
@@ -685,9 +688,10 @@ export function MusicPlayer() {
                 fill={liked ? 'currentColor' : 'none'}
               />
               {/* 热度数挂图标右上角（第二十七轮改左锚伸出式：数字从爱心右缘向右上伸出，
-                  之前 -right 锚定导致长数字盖在爱心正上方、看着不在角上） */}
+                  之前 -right 锚定导致长数字盖在爱心正上方、看着不在角上）；
+                  第三十八轮：默认白色半透明，点赞后才变红 */}
               <span
-                className="absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
+                className={`absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums [text-shadow:0_1px_3px_rgba(0,0,0,0.45)] ${liked ? 'text-[#EC4141]' : 'text-white/70'}`}
                 data-testid="music-player-like-count"
               >
                 {fmtCountW(fakeHotCount(current.id))}
@@ -737,10 +741,20 @@ export function MusicPlayer() {
               aria-label="播放模式"
               className="block p-1 text-white/80 active:scale-90"
             >
-              {mode === 'order' && <OrderPlayIcon className="h-[23px] w-[23px]" />}
-              {mode === 'repeat' && <LoopArrowIcon className="h-[23px] w-[23px] text-[#EC4141]" />}
-              {mode === 'one' && <LoopArrowIcon one className="h-[23px] w-[23px] text-[#EC4141]" />}
-              {mode === 'shuffle' && <Shuffle className="h-[23px] w-[23px] text-[#EC4141]" />}
+              {/* 模式图标切换动画（第三十八轮）：每次点击图标带旋转+缩放进场，让「点一下就变了」
+                  有明确的视觉反馈（配合浮层模式名，从感知层面根治「点两下才发现变了」） */}
+              <motion.span
+                key={mode}
+                className="flex"
+                initial={{ rotate: -120, opacity: 0, scale: 0.55 }}
+                animate={{ rotate: 0, opacity: 1, scale: 1 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 26 }}
+              >
+                {mode === 'order' && <OrderPlayIcon className="h-[23px] w-[23px]" />}
+                {mode === 'repeat' && <LoopArrowIcon className="h-[23px] w-[23px] text-[#EC4141]" />}
+                {mode === 'one' && <LoopArrowIcon one className="h-[23px] w-[23px] text-[#EC4141]" />}
+                {mode === 'shuffle' && <Shuffle className="h-[23px] w-[23px] text-[#EC4141]" />}
+              </motion.span>
             </button>
             {/* 模式浮层提示：每次切换立刻报出模式名（修复「点两下才发现变了」的感知问题），1.4 秒后淡出 */}
             <span
@@ -1579,6 +1593,23 @@ function TogetherHead({
   const hasBubble = visMine || visPeer;
   // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
   const durText = fmtTogetherDur(nowMs - session.since);
+  // 自定义距离（第三十八轮）：点击「相距 N 公里」的数字进入行内编辑，确认后写回活跃会话 + 按角色持久化
+  const [distEditing, setDistEditing] = useState(false);
+  const [distDraft, setDistDraft] = useState('');
+  const distInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!distEditing) return;
+    const el = distInputRef.current;
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  }, [distEditing]);
+  const commitDist = () => {
+    const n = parseInt(distDraft.replace(/[^\d]/g, ''), 10);
+    if (Number.isFinite(n) && n > 0) setTogetherDistance(Math.min(9_999_999, n));
+    setDistEditing(false);
+  };
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
       {/* 双头像 + 耳机线（第三十一轮：在第三十轮形状基础上下段缩短——线尾从时长行上方 ~12px
@@ -1593,8 +1624,9 @@ function TogetherHead({
           aria-hidden="true"
         >
           <defs>
-            {/* 尾端渐隐：从头像下缘附近开始变淡，下段提前消失 */}
-            <linearGradient id="tg-wire-fade" gradientUnits="userSpaceOnUse" x1="0" y1="18" x2="0" y2="43">
+            {/* 尾端渐隐：从头像下缘附近开始变淡，下段提前消失（第三十八轮 y2 43→40：
+                时长行再上移后线尾渐隐段同步提前，保证不相交） */}
+            <linearGradient id="tg-wire-fade" gradientUnits="userSpaceOnUse" x1="0" y1="18" x2="0" y2="40">
               <stop offset="0" stopColor="#ffffff" stopOpacity="0.95" />
               <stop offset="0.5" stopColor="#ffffff" stopOpacity="0.55" />
               <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
@@ -1618,10 +1650,41 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          第三十七轮 mt-[18px]→mt-[14px] 再上移 4px（用户「往上移一点点」），
-          耳机线尾在 svg 内 y=43（容器 y≈75）处已完全渐隐为透明，时长行上缘（y≈78）与之不相交 */}
-      <p className={`mt-[14px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
-        相距 {session.distanceKm} 公里 · 一起听了 {durText}
+          第三十八轮 mt-[14px]→mt-[8px] 再上移 6px（用户「往上移一点点」），
+          耳机线尾渐变同步收紧（y2 43→40，容器 y≈72 已完全透明），时长行上缘（y≈76）不相交 */}
+      <p className={`mt-[8px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+        相距{' '}
+        {distEditing ? (
+          <input
+            ref={distInputRef}
+            value={distDraft}
+            onChange={(e) => setDistDraft(e.target.value)}
+            onBlur={commitDist}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitDist();
+              if (e.key === 'Escape') setDistEditing(false);
+            }}
+            inputMode="numeric"
+            aria-label="自定义距离（公里）"
+            data-testid="music-tg-dist-input"
+            className="w-14 rounded-[4px] border border-white/30 bg-white/15 px-1 text-center text-[11px] tabular-nums text-white outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setDistDraft(String(session.distanceKm));
+              setDistEditing(true);
+            }}
+            aria-label="点击自定义距离"
+            title="点击自定义距离"
+            data-testid="music-tg-dist"
+            className="border-b border-dashed border-white/40 pb-px leading-none tabular-nums active:opacity-60"
+          >
+            {session.distanceKm}
+          </button>
+        )}{' '}
+        公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
           双头像交叠居中（对方在左/我在右，交叠 10px，各自圆心距中线 ±27px）：

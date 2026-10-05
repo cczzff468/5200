@@ -15611,3 +15611,35 @@ Stage Summary:
 - 关键决策：①liveBlock 在 runAiTurn 发消息瞬间构建而非走 crossCtxRef 缓存——跨 App 块每轮才刷新一次会滞后一轮，进度/歌词必须实时；②指令闸门放在 takeMusicRemote 入口（无一起听会话原文原样返回）——聊天正文里「点[切歌]按钮」这类方括号文案永不吞字；③播控执行挂 buildReplyMsgs 入口而非各投递点——分段/收尾/接力拉取/bg 兜底全部路径一处覆盖；④musicActed 标记解决「纯指令回复被误报对方暂无回复」（E2E 实测踩中：AI 回复只有 [放歌:稻香:周杰伦] 时歌切了但落了错误占位）；⑤boot 预载歌词让「刷新后直接聊天」场景 AI 也能引用歌词
 - 范围限定遵守：改 5 文件（music-remote.ts 新增 / music-ai.ts 仅加 export / music-player.tsx / wechat.tsx / qq.tsx / music-store.ts 仅 boot 预载歌词）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话核心逻辑未触碰；音乐 App 内一起听聊天链路未动（music-ai.ts 只加了 searchSongMatched export）；群聊不注入 liveBlock（一起听本就 1 对 1）；评论/搜索/歌单页未动
 - 改动文件：src/lib/ios/music-remote.ts（新增）、src/lib/ios/music-ai.ts、src/lib/ios/music-store.ts、src/components/apps/music-player.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: 97
+Agent: Z.ai Code（主会话）
+Task: 第三十八轮——①一起听「相距 N 公里」数字点击可自定义 ②爱心热度数字点赞后才变红 ③时长行再上移 ④循环按钮再美化+切换动画 ⑤微信/QQ 不一起听也能让 AI 放歌（点播：点名放/按喜好推荐放）+ AI 知道歌名/歌手/进度/歌词 + 可切歌/前进后退/暂停
+
+Work Log:
+- ①距离自定义（music-player.tsx TogetherHead + music-ai.ts setTogetherDistance）：「相距 1314 公里」的数字改为可点按钮（虚线下划提示），点击行内变 input（自动 focus+全选，Enter/失焦确认、Esc 取消），确认后 setTogetherDistance 写活跃会话快照（kv+store 立即生效）+ 按角色持久化 kv music-tg-dist-cust:{uid}:{cid}（startTogether 时优先读自定义值——重新邀请同一角色距离不变，换角色按 seed 重算）；E2E：点 1314 → input 出现 → 输入 888 → Enter → 显示 888；kv 复核 custKey=888/activeKm=888；reload 后仍 888 ✓
+- ②爱心数字变红（music-player.tsx 两处：一起听聊天视图 music-tg-chat-like + 音乐视图 music-player-like-count）：热度数字从固定红色改为 liked ? 红(#EC4141) : 白/70——未点赞时白色半透明、点击爱心点赞后才变红（与爱心本体同态）；E2E：默认 oklab(白/0.7) → 点击后 rgb(236,65,65)，取消点赞回白，两视图一致 ✓
+- ③时长行（TogetherHead）：mt-[14px]→mt-[8px] 再上移 6px；耳机线渐变 y2 43→40 同步收紧（线尾容器 y≈72 全透明，时长行上缘 y≈76 不相交）；E2E 实测 gap=8px ✓
+- ④循环按钮（music-player.tsx）：LoopArrowIcon 线宽 1.8→2、箭头加大、单曲「1」字号 9.5→10；四模式图标包 motion.span（key=mode，rotate -120°+scale 0.55 spring 进场动画）——每次点击图标旋转进场+浮层报模式名，「点一下就变了」视觉反馈明确；E2E：ORDER→一键 LOOP(红 rgb(236,65,65))+tip「列表循环」opacity=1、1.4s 淡出、ONE 图标带 1+动画 span 存在、截图 ✓
+- ⑤聊天点播（music-remote.ts 重构）：
+  - togetherLiveBlock 双情境：一起听会话（contactId 匹配）→ 原「一起听」块；其余私聊 → 新「音乐点播」块——播放器此刻状态（歌名/歌手/进度/播放状态/VIP 试听提示/歌词窗口，nowPlayingLines+lyricWindowBlock 复用）+ 播控指令说明（[放歌:歌名:歌手]/[切歌]/[上一首]/[暂停]/[继续]/[快进:秒]/[快退:秒]）+ few-shot 完整示例（示例一：点名歌手→挑代表作放；示例二：没点名→按喜好挑）+ 强制「正文必须带一句话」
+  - takeMusicRemote 闸门放宽：去掉「仅一起听会话」限制（私聊全部生效——system 注入了音乐块 AI 才有指令能力；群聊管线不经过本模块）；放歌正则修复 BUG（`([^\][]*)` 贪婪吞冒号 → `([^:：\][]*)`，此前 [放歌:晴天:周杰伦] 的 name 整个吞成「晴天:周杰伦」歌手丢失，music-ai.ts extractTgControls 同步修复）
+  - 放歌意图兜底（关键）：实测内置模型高频「说放不给指令」（正文「放首《晴天》给你，周杰伦的歌。」无任何方括号标记，few-shot 也压不住）——新增正文意图解析：/(放|播|来)(一?首|个)?[《「『]歌名[》」』]/ + 「X的歌」提取歌手 → 客户端直接 searchSongMatched+playSong（气泡文字原样保留），每回复至多 1 条；模型输出指令时仍走原链路（更精准）
+  - searchSongMatched 兜底放宽（music-ai.ts）：原版常因版权搜不到（「晴天 周杰伦」5 条全是翻唱且歌手文本无一含周杰伦）——①歌名含「原唱: 歌手」标注的翻唱视为可用版本；②全不匹配时兜底放「歌名对得上」的第一首（静默失败比放翻唱更伤体验）
+  - wechat.tsx / qq.tsx 调用点签名零改动（仅注释同步）
+- E2E（agent-browser 420×900，微信聊注入联系人小柔 e2e-r38-char+owner+好友标记+微信登录）：
+  - 点播点名：「来一首周杰伦的歌」→ AI「放首《七里香》给你，周杰伦的歌。」→ 兜底解析 {play,七里香,周杰伦} → playSong → music-now=七里香钢琴版/纪钧瀚 + 灵动岛通知 + mini 条 ✓
+  - 情境感知：「现在放的什么歌」→「《七里香》钢琴版，纪钧瀚演奏的，原唱是周杰伦的」（歌名+演奏者+原唱）✓
+  - 进度：「现在放到哪里了」→「刚开始没多久，才放了十几秒」（播 15s 时）→「快进30秒」→ 模型输出 [快进:30]（few-shot 生效）→ seek 执行 → 再问「现在快进到1分15秒左右了」（十几秒+30s+间隔自洽）✓
+  - 歌词：「现在唱到哪句歌词了」→「唱到'雨下整夜，我的爱溢出就像雨水'这句了」（真实歌词）✓
+  - 指令剔除：纯指令回复不进气泡、不落「暂无回复」占位 ✓；对话全流程截图（灵动岛音波+mini 条+完整对话流）✓
+  - QQ 侧与微信共用同一 music-remote 管线（同构接入），微信已全链路验证，QQ 未重复浏览器验证
+- 环境记录：会话中曾出现 AppWindow 层 x=-840 移出视口的异常状态（与本次改动无关，reload 恢复）；调试用的 MUSIC-BLOCK-DEBUG/MR-DBG console.log 已全部移除
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 无应用错误；E2E 注入数据（联系人/会话/距离/聊天记录/music-now）已全部清理
+
+Stage Summary:
+- 交付：一起听距离数字点击自定义（按角色持久化）；两视图爱心热度数字点赞后才变红；时长行再上移 6px（耳机线渐变同步收紧）；循环按钮再美化（线宽/箭头/「1」）+ 模式切换旋转进场动画；微信/QQ 私聊全面接入音乐点播——不一起听也能让 AI 放歌（点名放/按心情喜好推荐放），AI 实时知道歌名/歌手/播放进度/正在唱的歌词，可切歌/上一首/暂停/继续/快进/快退（指令剥离执行+意图兜底双通道）
+- 关键决策：①距离自定义存独立 kv（music-tg-dist-cust:{uid}:{cid}）并在 startTogether 优先读——重开同一角色会话距离不回跳，换角色按 seed 重算；②点播闸门=「system 注入了音乐块」而非「一起听会话」——群聊不注入天然豁免，正文方括号误吞风险由提示词约束+意图兜底正则收紧（必须书名号紧邻放/播/来）控制；③意图兜底是本轮成败关键——内置模型对长 system 中段的指令格式遵循差（5 连不发指令），few-shot+强约束仍压不住，客户端解析「放首《X》+X的歌」意图 100% 命中且气泡文字零侵入；④searchSongMatched 翻唱标注兜底——网易云「X (原唱 Y)」「X (钢琴版) [原唱: Y]」是版权缺失下的常态，原唱标注匹配+歌名兜底让「放晴天」这类需求必然有产出；⑤模型对「进度」的回答用意图式说法（十几秒/1分15秒左右）而非伪造精确值——块里给的是精确秒数，模型自行措辞，符合不编造原则
+- 范围限定遵守：改 4 文件（music-remote.ts 重构 / music-ai.ts setTogetherDistance+searchSongMatched 兜底+正则 / music-player.tsx UI / wechat.tsx+qq.tsx 仅注释）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话核心逻辑未触碰；一起听邀请/同意/退出/记忆链路未动；音乐 App 内一起听聊天链路未动（仅 searchSongMatched 兜底共享）；评论/搜索/歌单页未动
+- 改动文件：src/lib/ios/music-remote.ts、src/lib/ios/music-ai.ts、src/components/apps/music-player.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

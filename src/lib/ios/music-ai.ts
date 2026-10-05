@@ -69,6 +69,8 @@ const ACTIVE_KEY_PREFIX = 'music-together-active:';
 const MSGS_KEY_PREFIX = 'music-together:';
 /** 每个角色的累计一起听时长（毫秒，永久保存：退出累加，重进接着算） */
 const DUR_KEY_PREFIX = 'music-tg-dur:';
+/** 用户自定义距离（第三十八轮）：按角色记，重新邀请同一角色时继续沿用 */
+const DIST_CUST_KEY_PREFIX = 'music-tg-dist-cust:';
 
 function activeKey(): string {
   return `${ACTIVE_KEY_PREFIX}${musicUid()}`;
@@ -78,6 +80,9 @@ function msgsKey(cid: string): string {
 }
 function durKey(cid: string): string {
   return `${DUR_KEY_PREFIX}${musicUid()}:${cid}`;
+}
+function distCustKey(cid: string): string {
+  return `${DIST_CUST_KEY_PREFIX}${musicUid()}:${cid}`;
 }
 
 const SONGPLAY_KEY_PREFIX = 'music-tg-songplay:';
@@ -124,6 +129,17 @@ export function loadActiveTogether(): TogetherSession | null {
   return kvGet<TogetherSession>(activeKey());
 }
 
+/** 自定义一起听距离（第三十八轮）：用户点击「相距 N 公里」的数字后手动填写。
+ *  写活跃会话快照 + store 立即生效 + 按角色持久化（重新邀请同一角色时沿用）；无活跃会话时静默。 */
+export function setTogetherDistance(km: number): void {
+  const s = loadActiveTogether();
+  if (!s || !Number.isFinite(km) || km <= 0) return;
+  const next: TogetherSession = { ...s, distanceKm: Math.min(9_999_999, Math.round(km)) };
+  kvSet(activeKey(), next);
+  kvSet(distCustKey(s.contactId), next.distanceKm);
+  useMusic.setState({ together: next });
+}
+
 export function startTogether(contact: ContactRecord): TogetherSession {
   // 若已有活跃会话，先把那段时长累加进对应角色（不丢失）
   accumulateSegment(loadActiveTogether());
@@ -131,7 +147,7 @@ export function startTogether(contact: ContactRecord): TogetherSession {
   const seedStr = `${contact.id}:${contact.region ?? ''}`;
   let h = 0;
   for (let i = 0; i < seedStr.length; i++) h = (h * 31 + seedStr.charCodeAt(i)) >>> 0;
-  const distanceKm = 50 + (h % 1750);
+  const distanceKm = kvGet<number>(distCustKey(contact.id)) ?? 50 + (h % 1750);
   const now = Date.now();
   // 时长永久累计：since 锚点 = 现在 - 历史累计（下次邀请从上次的时长继续）
   const carriedMs = togetherTotalMs(contact.id);
@@ -555,7 +571,7 @@ interface TgControl {
 function extractTgControls(raw: string): { text: string; controls: TgControl[] } {
   const controls: TgControl[] = [];
   let text = raw ?? '';
-  text = text.replace(/\[(?:放歌|播放|来一首|来首)[:：]([^\][]*)(?:[:：]([^\][]*))?\]/g, (_m, name, artist) => {
+  text = text.replace(/\[(?:放歌|播放|来一首|来首)[:：]([^:：\][]*)(?:[:：]([^:：\][]*))?\]/g, (_m, name, artist) => {
     const n = String(name ?? '').trim();
     if (n) controls.push({ type: 'play', name: n, artist: String(artist ?? '').trim() });
     return '';
@@ -584,8 +600,9 @@ function extractTgControls(raw: string): { text: string; controls: TgControl[] }
   return { text: text.replace(/[ \t]+$/gm, '').trim(), controls };
 }
 
-/** 带歌手一致性校验的曲库搜索（第二十二轮审计⑤：防止 AI 编的歌名匹配到翻唱/remix/伴奏版）：
- *  取前 5 条结果，优先返回歌手名与要求吻合的第一条；没写歌手或全部不吻合时返回 undefined（调用方按没搜到处理）。
+/** 带歌手一致性校验的曲库搜索（第二十二轮审计⑤：防止 AI 编的歌名匹配到完全无关的翻唱/remix/伴奏版）：
+ *  取前 5 条结果，优先返回歌手名与要求吻合的第一条；歌名带「原唱: 歌手」标注的翻唱视为可用版本；
+ *  全都不吻合时兜底放「歌名对得上」的第一首（第三十八轮：静默失败比放翻唱更伤体验）。
  *  第三十七轮导出：微信/QQ 聊天端的「一起听遥控」（music-remote.ts）复用同一套选歌校验 */
 export async function searchSongMatched(title: string, artist: string): Promise<NcmSong | undefined> {
   let hits: NcmSong[] = [];
@@ -602,11 +619,22 @@ export async function searchSongMatched(title: string, artist: string): Promise<
   const tokens = want.split(/[/、,，]/).map((t) => t.trim()).filter(Boolean);
   const ok = (s: NcmSong): boolean => {
     const got = gotOf(s);
-    if (!got) return false;
-    if (got.includes(want) || want.includes(got)) return true;
-    return tokens.some((t) => t.length >= 2 && (got.includes(t) || t.includes(got)));
+    if (got) {
+      if (got.includes(want) || want.includes(got)) return true;
+      if (tokens.some((t) => t.length >= 2 && (got.includes(t) || t.includes(got)))) return true;
+    }
+    // 翻唱标注兜底（第三十八轮）：原版常因版权搜不到，结果里是「晴天 (原唱 周杰伦)」「七里香 (钢琴版)
+    // [原唱: 周杰伦]」这类翻唱——歌名里带的原唱标注与请求歌手一致时视为该歌手的可用版本
+    const nameLc = (s.name || '').toLowerCase().replace(/\s+/g, '');
+    if (nameLc.includes(`原唱:${want}`) || nameLc.includes(`原唱${want}`)) return true;
+    return false;
   };
-  return hits.find(ok);
+  const matched = hits.find(ok);
+  if (matched) return matched;
+  // 最终兜底（第三十八轮）：全都不匹配时放「歌名对得上」的第一首——
+  // AI 已用意图式说法说了「放一首」，一个都放不出（静默）比放翻唱尴尬得多
+  const t = title.toLowerCase().replace(/\s+/g, '');
+  return hits.find((s) => (s.name || '').toLowerCase().replace(/\s+/g, '').includes(t)) ?? hits[0];
 }
 
 /** 执行一起听 AI 的播放控制（直接调 useMusic action；用户随时可手动覆盖，store 层天然以最后操作为准）。

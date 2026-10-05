@@ -5424,8 +5424,8 @@ function ChatPage({
     baseTime: number,
     ctx: WxTurnCtx,
   ): { msgs: WxMsg[]; cur: WxMsg[]; dirty: boolean } => {
-    // 一起听遥控（第三十七轮）：剥出回复里的播控指令（[切歌]/[暂停]/[放歌:歌:歌手]…）并真实执行；
-    // 仅音乐一起听进行中生效（无会话时原文原样返回），指令不出现在任何气泡里
+    // 聊天端音乐遥控（第三十八轮）：剥出回复里的播控指令（[切歌]/[暂停]/[放歌:歌:歌手]…）并真实执行；
+    // 私聊全部生效（system 已注入音乐实时情境块，AI 才有指令能力），指令不出现在任何气泡里
     const mrRemote = takeMusicRemote(rawText);
     if (mrRemote.controls.length > 0) {
       void runMusicRemote(mrRemote.controls);
@@ -5959,7 +5959,8 @@ function ChatPage({
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,
-      // 一起听实时情境（第三十七轮）：与该角色的一起听进行中时注入歌名/歌手/进度/歌词 + 播控指令说明（发消息瞬间现场构建，非缓存）
+      // 音乐实时情境（第三十八轮）：一起听中=一起听块；其余私聊=音乐点播块（播放器此刻歌名/歌手/进度/歌词
+      // + 主动放歌引导 + 播控指令说明）（发消息瞬间现场构建，非缓存）
       togetherLiveBlock(peer.id, me.name),
       momentsBlock,
       locBlock,
