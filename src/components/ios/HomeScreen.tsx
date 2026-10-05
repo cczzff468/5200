@@ -235,8 +235,10 @@ function flowPositions(tiles: Tile[]): {
   return { starts, after, end: { r: cr, c: cc } };
 }
 
-/** 拖拽命中位置：grid 带页号（index 为页内下标，padEmpty 为插入前需补的空占位格数），dock 只有下标 */
-type Hit = { zone: 'grid'; page: number; index: number; padEmpty?: number } | { zone: 'dock'; index: number };
+/** 拖拽命中位置：grid 带页号（index 为页内下标，padEmpty 为插入前需补的空占位格数）
+ *  fillEmpty = 直接填入的既有空占位格（隐形洞）真实下标：指针压到历史垫格上松手 →
+ *  App 占据该格（删除该空占位格而非再垫新格），否则隐形洞会永久挡住该位置的放置 */
+type Hit = { zone: 'grid'; page: number; index: number; padEmpty?: number; fillEmpty?: number } | { zone: 'dock'; index: number };
 
 interface HomeLayout {
   /** 布局版本（v2 = 微信/音乐/文件/提醒事项在第二页、音乐移出 Dock）；旧版自动迁移 */
@@ -589,7 +591,14 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   const target = pages[Math.min(to.page, pages.length - 1)];
   const samePageMove = fromZone === 'grid' && fromPage === to.page;
   const padEmpty = to.zone === 'grid' ? Math.max(0, Math.min(8, to.padEmpty ?? 0)) : 0;
-  if (!samePageMove && target.length + padEmpty >= pageCap(target, isWidget)) {
+  // 填洞命中：删除该隐形空占位格并原位插入被拖项（数量不变 → 等效同页换位，恒放行）。
+  // fillEmpty 是「清预览垫格 + 摘除被拖项之前」的序列下标，先修正被摘项/垫格清理造成的偏移
+  let fillAt = -1;
+  if (to.zone === 'grid' && typeof to.fillEmpty === 'number' && to.fillEmpty >= 0) {
+    fillAt = to.fillEmpty;
+    if (fromZone === 'grid' && fromPage === to.page && fromIndex < fillAt) fillAt--;
+  }
+  if (!samePageMove && fillAt < 0 && target.length + padEmpty >= pageCap(target, isWidget)) {
     if (fromZone === 'grid') {
       pages[fromPage].splice(
         Math.max(0, Math.min(pages[fromPage].length, fromIndex)),
@@ -601,9 +610,11 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
     }
     return { ...layout, pages, dock };
   }
-  const idx = Math.max(0, Math.min(target.length, to.index));
+  const idx = Math.max(0, Math.min(target.length, fillAt >= 0 ? fillAt : to.index));
+  // 填洞：先删掉被占据的隐形空占位格再插入（App 占其位，洞消失）
+  if (fillAt >= 0) target.splice(Math.max(0, Math.min(target.length, fillAt)), 1);
   // 空占位格：把新项从自然落点推到指针所指的（行,列）（拖到行尾空位/任意空白格的精确定位）
-  const empties: Tile[] = Array.from({ length: padEmpty }, () => ({ kind: 'empty' as const }));
+  const empties: Tile[] = Array.from({ length: fillAt >= 0 ? 0 : padEmpty }, () => ({ kind: 'empty' as const }));
   const tile: Tile = isWidget ? { kind: 'widget', widget: widgetOfKey(id) } : { kind: 'app', id: id as AppId };
   target.splice(idx, 0, ...empties, tile);
   return { ...layout, pages, dock };
@@ -615,8 +626,9 @@ function sameHit(a: Hit | null, b: Hit | null): boolean {
   if (a.zone === 'dock' && b.zone === 'dock') return a.index === b.index;
   if (a.zone === 'grid' && b.zone === 'grid')
     // padEmpty 也要比：拖到自己紧后方的空白位时 index 与原位相同但需要垫空占位格，
-    // 若只比 page/index 会被误判为「拖回原位」而放弃（预览/松手都弹回，用户实测）
-    return a.page === b.page && a.index === b.index && (a.padEmpty ?? 0) === (b.padEmpty ?? 0);
+    // 若只比 page/index 会被误判为「拖回原位」而放弃（预览/松手都弹回，用户实测）；
+    // fillEmpty 同理（填洞命中与普通插入可同 index 不同语义）
+    return a.page === b.page && a.index === b.index && (a.padEmpty ?? 0) === (b.padEmpty ?? 0) && (a.fillEmpty ?? -1) === (b.fillEmpty ?? -1);
   return false;
 }
 
@@ -1181,6 +1193,25 @@ export default function HomeScreen() {
     }
   };
   /** 退出编辑模式：顺带回收空白页（拖拽建页的副产品），并夹回当前页（顺带关掉 + 画廊） */
+  /** 进编辑模式前压平布局：清掉历史拖拽垫入的隐形空占位格（洞不可见却占格，
+   *  会挡住后续把 App 放到洞位——「App 放小组件边上放不了」的元凶），顺带回收空页。
+   *  布局无变化时不落盘（避免无谓写入） */
+  const compactPages = () => {
+    const cur = layoutRef.current;
+    if (!cur.pages.some((p) => p.length === 0 || p.some((t) => t.kind === 'empty'))) return;
+    const pages = cur.pages.map((p) => p.filter((t) => t.kind !== 'empty')).filter((p) => p.length > 0);
+    if (pages.length === 0) pages.push([]);
+    const next: HomeLayout = { ...cur, pages };
+    layoutRef.current = next;
+    setLayout(next);
+    persist(next);
+    const last = Math.max(0, pages.length - 1);
+    if (pageRef.current > last) {
+      pageRef.current = last;
+      setPage(last);
+    }
+  };
+
   const exitEdit = () => {
     setEdit(false);
     setGalleryOpen(false);
@@ -1320,9 +1351,12 @@ export default function HomeScreen() {
       // 判定结果因此与预览状态无关、停同一指针位置恒得同一落点）
       const recEmpties = dragEmpties.current;
       const pageTiles = layoutRef.current.pages[p] ?? [];
+      /** sim[j] 在 pageTiles（reorderForDrag 清预览垫格前的真实序列）中的下标：填洞定位用 */
+      const originIdx: number[] = [];
       const sim = pageTiles.filter((t, j) => {
         if (dragId0 !== undefined && tileKey(t) === dragId0) return false;
         if (recEmpties && recEmpties.page === p && j >= recEmpties.at && j < recEmpties.at + recEmpties.count && t.kind === 'empty') return false;
+        originIdx.push(j);
         return true;
       });
       const { starts, after, end } = flowPositions(sim);
@@ -1336,6 +1370,15 @@ export default function HomeScreen() {
           idx = i;
           break;
         }
+      }
+      // 填洞：目标格恰是历史垫入的隐形空占位格 → App 直接占据该格（删除洞而非再垫新格）。
+      // 不做这步的话洞永远挡在指针位置前面，App 落到洞前一格，用户观感就是「放不进去」
+      if (idx < sim.length && sim[idx].kind === 'empty' && starts[idx].r === targetRow && starts[idx].c === targetCol) {
+        const at = originIdx[idx];
+        if (!(cur && cur.zone === 'grid' && cur.page === p && (cur.fillEmpty ?? -1) === at)) {
+          return { zone: 'grid', page: p, index: at, fillEmpty: at };
+        }
+        return cur;
       }
       // 垫格：从插入点游标推进到目标格（跨行时垫完整空行）
       const cb = idx === 0 ? { r: 0, c: 0 } : after[idx - 1];
@@ -1357,7 +1400,13 @@ export default function HomeScreen() {
     const rec = dragEmpties.current;
     dragEmpties.current = null;
     let work = layoutRef.current;
+    let hitAdj = hit;
     if (rec) {
+      // 填洞下标从「含预览垫格」序列换算到「清垫格后」序列：减去洞位之前的垫格删除数
+      if (hit.zone === 'grid' && hit.page === rec.page && typeof hit.fillEmpty === 'number' && hit.fillEmpty >= 0) {
+        const shifted = hit.fillEmpty - Math.max(0, Math.min(rec.count, hit.fillEmpty - rec.at));
+        hitAdj = { ...hit, fillEmpty: Math.max(0, shifted) };
+      }
       const pages = work.pages.map((p, i) => {
         if (i !== rec.page) return p;
         const out = p.slice();
@@ -1370,9 +1419,10 @@ export default function HomeScreen() {
       });
       work = { ...work, pages };
     }
-    const next = reorder(work, id, hit);
+    const next = reorder(work, id, hitAdj);
     layoutRef.current = next;
-    if (hit.zone === 'grid') {
+    if (hit.zone === 'grid' && (hit.padEmpty ?? 0) > 0 && (hit.fillEmpty ?? -1) < 0) {
+      // 记录本次预览垫入、且恰好紧邻被拖项之前的空占位格（下次命中变化时先撤掉）
       const pad = Math.max(0, Math.min(3, hit.padEmpty ?? 0));
       if (pad > 0) {
         const pi = Math.min(hit.page, next.pages.length - 1);
@@ -1653,6 +1703,7 @@ export default function HomeScreen() {
       pressTimer.current = null;
       pressStart.current = null;
       suppressClick.current = true;
+      compactPages();
       setEdit(true);
       beginDrag(id, e.clientX, e.clientY);
     }, LONG_PRESS_MS);
@@ -1728,6 +1779,7 @@ export default function HomeScreen() {
     blankTimer.current = window.setTimeout(() => {
       blankTimer.current = null;
       blankStart.current = null;
+      compactPages();
       setEdit(true);
       try {
         navigator.vibrate?.(10);
