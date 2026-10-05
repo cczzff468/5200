@@ -6,6 +6,7 @@
  * - PhoneShell 常驻挂载：不管用户在哪个 App / 主屏幕，只要 useTogetherInvite 有邀请就弹出；
  * - 卡片 1:1 参考截图：深色圆角面板、左（角色）/右（机主）双头像、两条耳机线在中间交汇、
  *   歌名 +「邀请你一起听」、底部灰色 ✕（拒绝）与红色 ✓（接受）；
+ *   第二十八轮反馈：头像外圈的描边边框删除（只留无边界圆形头像）。
  * - z-[91]：高于一切 App 内容与迷你播放器，低于灵动岛通知(93)/来电(94)/锁屏，互不打架；
  * - 接受 → acceptTogetherInvite（建一起听会话 + 切到音乐 App 播放页）；
  *   拒绝 → declineTogetherInvite（写记忆 + 冷却）；45s 无响应自动收回（同网易云超时语义）。
@@ -80,7 +81,7 @@ function InviteCard({ inviteId }: { inviteId: string }) {
         {/* 双头像 + 耳机线 */}
         <div className="relative mx-auto h-[104px] w-[240px]">
           <EarphoneWires />
-          <div className="absolute left-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-white/[0.06] ring-1 ring-white/10">
+          <div className="absolute left-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-white/[0.06]">
             {invite?.avatar ? (
               <img
                 src={invite.avatar}
@@ -94,7 +95,7 @@ function InviteCard({ inviteId }: { inviteId: string }) {
               </span>
             )}
           </div>
-          <div className="absolute right-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-white/[0.06] ring-1 ring-white/10">
+          <div className="absolute right-[24px] top-0 flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-white/[0.06]">
             {myAvatar ? (
               <img src={myAvatar} alt="我" className="h-[92px] w-[92px] rounded-full object-cover" />
             ) : (

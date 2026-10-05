@@ -302,26 +302,29 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           type="button"
           onClick={() => openPlaylist(0, 'daily')}
           data-testid="music-home-daily"
-          className="relative mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-4 overflow-hidden rounded-2xl p-4 text-left active:scale-[0.99]"
+          className="relative mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-3 overflow-hidden rounded-full py-2.5 pl-3 pr-3 text-left active:scale-[0.99]"
         >
-          {/* 毛玻璃风格（第十六轮反馈；第十七轮修订：删除红色底层，纯磨砂玻璃） */}
-          <span aria-hidden="true" className="absolute inset-0 bg-white/60 backdrop-blur-2xl dark:bg-zinc-800/55" />
+          {/* 毛玻璃胶囊风格（第二十八轮反馈）：全圆角胶囊 + 磨砂玻璃 + 内缘高光描边 */}
+          <span aria-hidden="true" className="absolute inset-0 bg-white/55 backdrop-blur-2xl dark:bg-zinc-800/55" />
           <span
             aria-hidden="true"
-            className="absolute inset-0 rounded-2xl ring-1 ring-white/80 ring-inset dark:ring-white/10"
+            className="absolute inset-0 rounded-full ring-1 ring-white/80 ring-inset dark:ring-white/10"
           />
-          <div className="relative flex flex-col items-center rounded-xl bg-white/60 px-3 py-2 ring-1 ring-black/5 dark:bg-white/10 dark:ring-white/10">
-            <CalendarDays className="h-5 w-5 text-zinc-800 dark:text-zinc-100" />
-            <span className="mt-0.5 text-[10px] text-zinc-700 dark:text-zinc-200">{today.getMonth() + 1}月</span>
-            <span className="text-[18px] font-bold leading-none text-zinc-900 dark:text-white">{today.getDate()}</span>
-          </div>
-          <div className="relative min-w-0 flex-1">
-            <p className="text-[17px] font-bold text-zinc-900 dark:text-white">每日推荐</p>
-            <p className="mt-0.5 truncate text-[12px] text-zinc-600 dark:text-zinc-300">
+          <span className="relative flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-full bg-white/70 ring-1 ring-black/5 dark:bg-white/10 dark:ring-white/10">
+            <CalendarDays className="h-[18px] w-[18px] text-zinc-800 dark:text-zinc-100" />
+            <span className="text-[9px] leading-none text-zinc-600 dark:text-zinc-300">
+              {today.getMonth() + 1}.{today.getDate()}
+            </span>
+          </span>
+          <span className="relative min-w-0 flex-1">
+            <span className="block text-[15px] font-bold leading-tight text-zinc-900 dark:text-white">每日推荐</span>
+            <span className="mt-0.5 block truncate text-[11px] text-zinc-600 dark:text-zinc-300">
               {daily ? `今日限定好歌推荐 · ${daily.length} 首` : '根据你的口味生成个性化歌单'}
-            </p>
-          </div>
-          <Play className="relative h-6 w-6 shrink-0 text-zinc-900 dark:text-white" fill="currentColor" />
+            </span>
+          </span>
+          <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900/85 text-white dark:bg-white dark:text-zinc-900">
+            <Play className="h-4 w-4" fill="currentColor" strokeWidth={0} />
+          </span>
         </button>
       ) : (
         <button

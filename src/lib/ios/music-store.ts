@@ -54,8 +54,6 @@ interface PlayerSnapshot {
   volume: number;
   /** 音质（真实传给 songUrl level，第十五轮反馈） */
   quality?: QualityLevel;
-  /** 3D 环绕音效开关（设置弹窗记忆） */
-  surround3d?: boolean;
 }
 
 export type QualityLevel = 'standard' | 'higher' | 'exhigh';
@@ -242,8 +240,6 @@ interface MusicState {
   playerBg: string;
   /** 音质（真实作用于 songUrl 的 level） */
   quality: QualityLevel;
-  /** 3D 环绕音效开关 */
-  surround3d: boolean;
   /** 定时关闭截止时间戳（毫秒；null = 未定时；会话级不持久化） */
   sleepAt: number | null;
   // 歌词
@@ -299,7 +295,6 @@ interface MusicState {
   /** 写入歌手关注状态（内存缓存，服务端为准） */
   setArtistFollowed: (id: number, on: boolean) => void;
   setQuality: (q: QualityLevel) => void;
-  setSurround3d: (v: boolean) => void;
   /** 定时关闭：传分钟数（null = 取消） */
   setSleepAt: (min: number | null) => void;
   addToQueue: (songs: NcmSong[]) => void;
@@ -324,7 +319,6 @@ function saveSnapshot(s: MusicState): void {
     mode: s.mode,
     volume: s.volume,
     quality: s.quality,
-    surround3d: s.surround3d,
   };
   kvSet(playerKey(), snap);
 }
@@ -376,7 +370,6 @@ function reloadForAccount(): void {
       mode: snap.mode ?? 'order',
       volume: typeof snap.volume === 'number' ? snap.volume : 1,
       quality: snap.quality ?? 'standard',
-      surround3d: snap.surround3d ?? false,
     });
     if (audio) audio.volume = typeof snap.volume === 'number' ? snap.volume : 1;
   }
@@ -400,7 +393,6 @@ export const useMusic = create<MusicState>((set, get) => ({
   freeTrial: false,
   playerBg: '',
   quality: 'standard',
-  surround3d: false,
   sleepAt: null,
   lyricLines: [],
   lyricLoading: false,
@@ -437,7 +429,6 @@ export const useMusic = create<MusicState>((set, get) => ({
         mode: snap.mode ?? 'order',
         volume: typeof snap.volume === 'number' ? snap.volume : 1,
         quality: snap.quality ?? 'standard',
-        surround3d: snap.surround3d ?? false,
       });
       if (audio) audio.volume = typeof snap.volume === 'number' ? snap.volume : 1;
     }
@@ -633,11 +624,6 @@ export const useMusic = create<MusicState>((set, get) => ({
   // 音质切换（真实作用于下一次起播的 songUrl level）
   setQuality: (q) => {
     set({ quality: q });
-    saveSnapshot(get());
-  },
-
-  setSurround3d: (v) => {
-    set({ surround3d: v });
     saveSnapshot(get());
   },
 

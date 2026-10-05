@@ -15383,3 +15383,27 @@ Stage Summary:
 - 关键决策：①胶囊语义从「行切换计时显示」改为「手动浏览会话内显示」——markManual 开、3 秒回跳定时关，进度跳变视为非手动同步关；②轴承水平位置取 86%（盘宽）——典型时长文案水平右缘 ~315px/420，轴承 290-314px 仅极端长文案水平相切，垂直 63px 间距兜底；③CDP mouse wheel 走 JS 滚动兜底不派发 wheel 事件（测试器假象），以合成 WheelEvent 验证 onWheel 链路，真机触摸/滚轮不受影响
 - 范围限定遵守：改 2 文件（music-player/song-msg-bubble 仅文案）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅卡片小字文案回退）；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/song-msg-bubble.tsx
+
+---
+Task ID: 87
+Agent: Z.ai Code（主会话）
+Task: 第二十八轮——①歌词头部遮罩按第二张参考图重做（渐进模糊）②修复歌词滚动右移 ③行时间默认隐藏仅手动滚动显示 ④点歌词不再跳播 ⑤点歌词界面任何位置回唱片 ⑥一起听耳机线改与邀请弹窗同款 ⑦邀请弹窗头像外边框删除 ⑧设置弹窗删 3D 环绕开关（含 store 防死代码）⑨右上角「邀请好友一起听」→「一起听」 ⑩首页每日推荐改毛玻璃胶囊
+
+Work Log:
+- ①头部遮罩重做（LyricView）：单一黑色渐变（h-136 from-black/85）换双层「渐进模糊」遮罩（h-170）——backdrop-blur-2xl + mask-image 线性渐变（上 48% 全模糊→底部透明）实现「越靠近标题越模糊」，叠 from-black/60 via-black/30 轻黑渐变压暗；歌词滚入标题区先被模糊再渐隐消失，无黑色条带断崖（对照用户第二张参考图：不分手的恋爱头部平滑过渡）
+- ②③当前行结构重构（修复滚动右移 + 时间默认隐藏）：旧结构=flex 布局 pl-3 pr-2 + 左侧 40px 时间占位 + 右侧 24px 播放键占位（capsuleOn 熄灭后占位仍保留），当前行文字中心比其他行右偏 ~10px，滚动时行切换视觉上「歌词往右移」；新结构=行容器统一 relative px-2 py-2.5 text-center（与非当前行完全一致），胶囊背景/行时间/播放键全部绝对定位悬浮（inset-0 / left-3 / right-2 各 -translate-y-1/2），文字全宽常居中——E2E 实测滚动前后与其他行中心 X 恒等 210=视口中心；时间/播放键 opacity 由 capsuleOn 驱动（仅手动滚动亮起，第二十七轮语义保留），胶囊熄灭零布局跳动
+- ④⑤点歌词语义变更：行 onClick 删 seek(l.t-0.3) 跳播，只保留长按复制后的 suppressClickRef 吞点击（stopPropagation 防复制完歌词页立即消失）；其余点击自然冒泡到根节点/滚动容器 onSwitch=返回唱片——「点歌词界面任何位置都回唱片」全区域闭环（E2E：点头部标题块与点正文行均 lyricGone+vinylBack=true，进度仅自然推进 106→107 无跳变）；LyricView 删未用的 seek selector；胶囊内播放/暂停小键保留（明确控件 stopPropagation 不误触返回）
+- ⑥耳机线第三版（TogetherHead）：第二十七轮「外八字渐隐」改回邀请弹窗 EarphoneWires 同款——两根实色线（rgba(255,255,255,0.9) strokeWidth 1.8 无渐隐）从头像内下缘（中缝处）钻出、向下向中间汇拢（S 弧 M41,0 C37,20 44,40 57,52 / 右镜像），viewBox 118×56 置 top-[44px]，线尾在时长行上方 16px；形状/颜色/粗细与 TogetherInviteLayer 邀请卡一致（用户指定「和一起听卡片弹窗上面的一样」）
+- ⑦邀请弹窗头像边框删除（TogetherInviteLayer）：左右两头像容器 ring-1 ring-white/10 删除（保留 bg-white/[0.06] 占位底色），头注释同步
+- ⑧3D 环绕开关整体移除（防死代码口径）：MoreSheet 删「音效：3D 环绕」MoreRow + AudioLines import + surround3d/setSurround3d selector；music-store.ts 删干净全部 9 处（PlayerSnapshot 字段/state 字段/action 类型/默认值/saveSnapshot/两处 snapshot 恢复/setSurround3d 实现）——旧 snapshot 多余字段被 persist 忽略，兼容安全
+- ⑨PlayerTopBar 右上角文案「邀请好友一起听」→「一起听」+ 三处过时注释同步（InviteSheet 内引导语「邀请好友一起听后…」属弹层说明文字非按钮文案，按最小改动保留）
+- ⑩每日推荐毛玻璃胶囊（music-home）：rounded-2xl 大卡 → rounded-full 胶囊（py-2.5 pl-3 pr-3），磨砂玻璃层（bg-white/55 backdrop-blur-2xl + ring-white/80 内缘描边 dark 适配）保留；左侧日历块改 44px 圆形（图标+M.D 紧凑布局）、右侧播放图标改 36px 深色圆钮（dark 白底）；游客引导卡不动
+- E2E（agent-browser 420×900 一次性会话）：锁屏上滑解锁→主屏翻页→音乐 App 游客模式→搜「晴天 周杰伦」播 Jay 版→迷你条展开播放器（顶栏右上角按钮文本=「一起听」✓ 爱心 880w+ 红色角标右上角✓ 轴承悬盘上方✓）→点唱片切歌词（头部「晴天/Jay/关注/⋮/译」齐、无黑色条带、歌词在标题区平滑隐入✓ 自动跟播当前行白字无胶囊无时间✓）→合成 WheelEvent 手动滚动（capsule opacity=0.998、time opacity=0.998、当前行/其他行/视口中心 X 三者恒等 210✓）→3 秒回跳熄灭✓→点头部与点歌词行均返回唱片且进度不跳播✓→MoreSheet 打开（has3d=false、音质/定时关闭/播放器样式在位✓）→IDB 注入 e2e-r28-char 联系人+music-together-active:guest 会话→reload→播放器一起听态（双头像+两根线中缝下方汇拢耳机线截图✓「相距 950 公里·一起听了 1小时15分钟」✓）→清理测试数据（contacts/kv 复核 e2eLeft=0 tgLeft=0）→关浏览器
+- 每日推荐胶囊为登录态专属（游客模式显示引导卡）：浏览器端不可视验证，以代码级审查代替（rounded-full+毛玻璃+圆日历块+圆播放钮 JSX 简单低风险）；邀请弹窗边框删除同为纯 class 删除，grep 复核无 ring-1 ring-white/10 残留
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 无应用错误（/api/chat 502 为两级兜底正常降级）
+
+Stage Summary:
+- 交付：歌词页六项交互/视觉精修（渐进模糊头部遮罩/滚动右移根修/时间仅手动滚动显示/点歌词不跳播/全区域点击回唱片）+ 一起听耳机线与邀请弹窗统一 + 邀请弹窗去头像边框 + 3D 环绕开关全链路移除（UI+store 防死代码）+「一起听」文案精简 + 首页每日推荐毛玻璃胶囊
+- 关键决策：①右移根因=capsuleOn 熄灭后时间/播放键占位保留导致当前行文字偏右 10px，悬浮件绝对定位让「胶囊亮灭/滚动/行切换」三种场景文字中心恒定；②渐进模糊遮罩用 backdrop-blur+mask 渐变而非加深黑色——贴近参考图「歌词隐入头部」观感；③点歌词行语义让位给「返回唱片」（用户明确），长按复制保留且复制后吞点击防误退；④耳机线以邀请弹窗 EarphoneWires 为唯一参照（用户指定基准），TogetherHead 交叠头像几何下按同形状重绘
+- 范围限定遵守：改 4 文件（music-player/music-home/music-store/TogetherInviteLayer）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅绘制与 class）；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-home.tsx、src/lib/ios/music-store.ts、src/components/ios/TogetherInviteLayer.tsx
