@@ -15448,3 +15448,27 @@ Stage Summary:
 - 关键决策：①耳机线起点取「圆心高度的圆缘」而非背后钻出——参考图线头贴在圆缘上可见；渐隐用 userSpaceOnUse 纵向渐变（两线共用一份 defs，双实例同 id 同形无冲突）；②「边框删除」二次反馈的根因不是 ring 而是容器占位底色环（104 容器 vs 92 头像的 6px 环）——删底色并把头像填满容器，视觉尺寸不变边框消失；③唱针修正重点=播放落点几何：轴承右上 + 短臂 +27° 落外圈纹路（旧长臂 +21° 落 r≈0.16R 深压标签区），暂停 -22°+抬起 8px 摆开盘面
 - 范围限定遵守：改 2 文件（music-player.tsx / TogetherInviteLayer.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅绘制层 SVG/尺寸/定位）；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/ios/TogetherInviteLayer.tsx
+
+---
+Task ID: 90
+Agent: Z.ai Code（主会话）
+Task: 第三十一轮——①唱片再美化（仿用户参考图：细密纹路/纹路带/外缘光环/大封面占比）②白圆轴承悬在盘上方、白针杆整体删除 ③一起听双头像耳机线下段缩短 ④评论界面改成独立全屏界面（仿网易云评论页截图：红条标题/歌曲行/推荐|最热|最新/VIP 徽章/IP 属地/展开 N 条回复/话题胶囊/输入条）⑤歌词当前行胶囊高亮跟随滚动位置（滚到哪句亮在哪句）
+
+Work Log:
+- ②唱针删除（music-player.tsx VinylView）：删 music-tonearm-arm 白针杆+针头两元素（播放/暂停旋转逻辑一并移除），只留白色圆轴承（left-[88%] top-[-13%] h/w-10%，从第三十轮 89%/-11%/9.5% 微调）；E2E 实测轴承底缘悬盘上方 8px（pivotBottomAboveDiscTop=8）
+- ①唱片美化（VinylView）：纹路从 4.5px 周期改 2.4px 细密周期（#101010/#1f1f1f/#0a0a0a/#161616）+ 三圈明暗带（39%/54%/70%/84% 处 0.9px 微光带 radial-gradient 叠加）+ 基底纵深 radial；外缘新增「悬浮光环」层（inset-[-2.5%] radial 88%→94% 微光环 + 投影，仿参考图盘缘外一圈微光）；斜向高光柔化（0.13→0.09 尖峰减弱）；封面占比 53%→59%（inset-[23.5%]→inset-[20.5%]，对齐参考图量测值）；删中心孔（参考图封面区无孔）；外缘深黑圈 #050505→#060606 保持
+- ③耳机线下段缩短（TogetherHead）：viewBox 118×72→118×48、线尾 y 66→43、渐变段 28~68→18~43（尾端提前渐隐）；时长行 mt-[48px]→mt-[40px]；E2E 实测线尾页面 y=84（原 104）、时长行 y=108，上方 24px 渐隐收尾（原 ~12px），垂坠感更短更利落
+- ④评论独立界面（music-comments.tsx 整页重写 248→~570 行；music.tsx 挂载改 CommentsPage）：
+  - 数据层（music-api.ts）：NcmComment 扩展 timeStr/ipLocation/showFloorComment/user.vipType/user.vipRights.redVipLevel；新增 commentsNew（/comment/new，sortType 1推荐/2最热/3最新，cursor 翻页，pageNo=1+pageSize）与 commentFloor（/comment/floor，id=歌 id+parentCommentId+type=0+limit）；commentsOf 旧签名保留（播放器计数两处调用不动）
+  - 页面结构（仿截图）：头部 pt-[58px] 避让灵动岛（首轮实现 h-[54px] 顶到状态栏被灵动岛盖住标题，E2E 截图发现即修）+ 返回 ChevronLeft + 居中「评论」+ 红色短条下划线；歌曲行圆封面+「歌名 - 歌手」双色；「评论 (5万)」+ 推荐|最热|最新 三档 tab（细竖线分隔、active 加粗黑）；评论行 = 40px 圆头像/昵称+VIP 徽章（黑底胶囊：vipType 11=SVIP 金字、1~10=白字+红点、等级 redVipLevel 大写数字 壹贰叁肆伍陆柒捌玖拾）/日期（timeStr 同年 MM-DD 跨年 YYYY-MM-DD）+IP 属地/15px 内容/右侧点赞数+ThumbsUp；「—— 展开 N 条回复 ∨」蓝色链接（showFloorComment.replyCount>0）点击 /comment/floor 内联展开（缩进小卡+收起切换）；底部话题胶囊行（深色「话题 >」+ 灰色 # 话题×4，点击 toast）+「随乐而起，有感而发」输入条（空=Smile 图标、有字=红色发送键，Enter 发送，游客点赞/发布 toast 引导登录）
+  - 翻页：列表近底部 260px 自动 loadMore（cursor 原样带回）；切档 seqRef 作废在途请求；点赞本地乐观更新（主列表+已展开楼层同步）
+- ⑤歌词高亮跟随滚动（LyricView）：新增 viewIdx 状态+ref，容器 onScroll 时算「视口中线最近行」（manualRef+capsuleOn 双闸门）；focusIdx = capsuleOn&&viewIdx>=0 ? viewIdx : activeIdx —— 胶囊背景/行时间/播放键/白色加粗/淡出距离全部改按 focusIdx 渲染；markManual 起手先亮在播放行（viewIdx=activeIdx），滚动中实时跟随；3 秒回跳定时器/进度跳变 effect 同步复位 viewIdx；E2E：真实 scrollTop 滚动后 active 行=视口中线行（「0:56 好想再淋一遍」match=true）✓ 3.4s 后胶囊熄灭回弹播放行 ✓
+- E2E（agent-browser 420×900 一次性会话）：解锁→翻页 3→音乐游客模式→搜晴天播 Jay→迷你条展开播放器→唱针区（armDeleted=true/pivot 悬盘上方 8px）+唱片截图（细纹路+光环+大封面，对照参考图）→点盘切歌词→WheelEvent 亮胶囊（opacity 1）→真实滚动 scrollTop+260→active=视口中线行 match=true→3.4s 回弹熄灭→切歌《海阔天空 Beyond》→评论页全屏 420×900（红条标题 pt-[58px] 不被灵动岛遮挡 titleCoveredBy=self/评论 (5万)/23 行/SVIP·叁肆徽章/「2023-01-13 山东」IP 属地/展开 270 条回复→楼层展开+收起/滚到底自动翻页 23→69 行/最新 tab 切换出「09:11 河南」当日评论）→有字出红色发送键→IDB 注入联系人+一起听会话（首轮只注会话被 bootMusicAi stopTogether 清掉的坑：恢复时联系人缺失→stopTogether 删 kv；先注联系人再注会话解决）→一起听视图（耳机线 118×48 线尾 y=84/时长行上方 24px/「相距 13 公里·一起听了 1小时15分钟」截图）→console 零应用错误→清理（contacts+kv 复核删除）→关浏览器
+- 环境：dev.log 中 uncaughtException「Unexpected response from worker」为 Turbopack worker 历史噪音（累计 11.6 万条，与本轮代码无关），server 200 正常
+- bun run lint 0 错误；bunx tsc 0 错误
+
+Stage Summary:
+- 交付：黑胶唱片按参考图再美化（细纹路/纹路带/外缘悬浮光环/59% 大封面/删中心孔）+ 白针杆整体删除只留白圆轴承悬盘上方；一起听耳机线下段缩短提前渐隐；评论改为独立全屏界面（仿网易云截图完整还原：红条标题/歌曲行/三档排序/VIP·等级徽章/日期+IP 属地/楼层回复/话题胶囊/随乐而起输入条，数据走 /comment/new+/comment/floor 真实接口）；歌词胶囊高亮跟随滚动位置（滚到哪句亮在哪句，回弹熄灭逻辑保留）
+- 关键决策：①排序用新版 /comment/new（三档原生支持+cursor 翻页），旧 /comment/music 仅留给播放器计数（零改动）；②VIP 徽章等级取 redVipLevel 大写数字（vipType 11=SVIP 金字/1~10=VIP 白字+红点），字段缺失不渲染；③头部 pt-[58px] 避让灵动岛（首版被盖住，截图发现即修）；④耳机线缩短=压 svg 高度+渐变段前移，不动头部其余布局；⑤歌词 focusIdx 单一渲染分支同时驱动胶囊/加粗/淡出，自动跟播路径零额外计算
+- 范围限定遵守：改 4 文件（music-player/music-comments 整页重写/music-api/music.tsx 仅挂载）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅 SVG 线形与时长行间距）；播放器计数、点赞、发表评论既有逻辑保留移植；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx、src/lib/ios/music-api.ts、src/components/apps/music.tsx

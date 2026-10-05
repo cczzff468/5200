@@ -6,7 +6,7 @@
  * 结构：
  * - 未登录 → 登录页（扫码 / 手机号验证码 / 密码 三种方式 + API 配置 + 游客模式）
  * - 已登录或游客 → Tab 框架（首页/搜索/我的 + 迷你播放条）
- * - 全屏覆盖层：播放页（黑胶+歌词）、歌单详情、设置页、评论半屏
+ * - 全屏覆盖层：播放页（黑胶+歌词）、歌单详情、设置页、评论页（独立界面）
  *
  * 全局播放引擎与登录态在 music-store / music-ai（模块级持久化，App 外仍播放）。
  */
@@ -43,7 +43,7 @@ import { MusicMine } from './music-mine';
 import { MusicPlayer } from './music-player';
 import { MusicPlaylist } from './music-playlist';
 import { MusicSettings } from './music-settings';
-import { CommentsSheet } from './music-comments';
+import { CommentsPage } from './music-comments';
 
 export default function MusicApp() {
   const nav = useMusic((s) => s.nav);
@@ -110,8 +110,8 @@ export default function MusicApp() {
           <MusicSettings asSheet onBack={() => setShowSettings(false)} />
         </div>
       )}
-      {/* 评论半屏 */}
-      {commentSong && <CommentsSheet />}
+      {/* 评论页（独立全屏界面） */}
+      {commentSong && <CommentsPage />}
     </IOSScreen>
   );
 }

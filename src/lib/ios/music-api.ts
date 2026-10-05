@@ -89,9 +89,23 @@ export interface NcmComment {
   commentId: number;
   content: string;
   time: number;
+  /** 接口直接返回的日期串（如 2024-12-05），优先于 time 格式化 */
+  timeStr?: string;
   likedCount: number;
   liked?: boolean;
-  user: { userId: number; nickname: string; avatarUrl: string };
+  user: {
+    userId: number;
+    nickname: string;
+    avatarUrl: string;
+    /** >0 为 VIP（11 = SVIP），用于评论页黑胶徽章 */
+    vipType?: number;
+    /** 红心会员等级（redVipLevel），徽章「VIP·柒」的等级数字 */
+    vipRights?: { redVipLevel?: number } | null;
+  };
+  /** 评论 IP 属地（location 如「广东」，老评论可能为空串） */
+  ipLocation?: { location?: string } | null;
+  /** 楼层回复信息（replyCount>0 显示「展开 N 条回复」） */
+  showFloorComment?: { replyCount?: number; showReplyCount?: boolean } | null;
   beRepliedComment?: { content: string; user: { nickname: string } } | null;
 }
 
@@ -668,6 +682,56 @@ export async function commentsOf(songId: number, limit = 20, offset = 0): Promis
 
 export async function commentLike(songId: number, commentId: number, t: 1 | 2): Promise<void> {
   await authRequest('comment/like', { id: songId, commentId, t }); // t=1 赞 t=2 取消
+}
+
+/** 新版评论列表排序：1 推荐 / 2 最热 / 3 最新（/comment/new，按截图评论页三档 tab） */
+export type CommentSortType = 1 | 2 | 3;
+
+export interface CommentNewPage {
+  total: number;
+  comments: NcmComment[];
+  hasMore: boolean;
+  /** 翻页游标（下一页原样带回；sortType=3 为时间戳、1/2 为 hot#N 形式） */
+  cursor: string;
+}
+
+/** 新版评论列表（独立评论页数据源；cursor 翻页） */
+export async function commentsNew(
+  songId: number,
+  sortType: CommentSortType,
+  pageSize = 20,
+  cursor = '',
+): Promise<CommentNewPage> {
+  const j = await authRequest<{
+    data?: { comments?: NcmComment[]; totalCount?: number; hasMore?: boolean; cursor?: string };
+  }>('comment/new', {
+    id: songId,
+    type: 0,
+    pageNo: 1,
+    pageSize,
+    sortType,
+    ...(cursor ? { cursor } : {}),
+  });
+  const d = j.data ?? {};
+  return {
+    total: d.totalCount ?? 0,
+    comments: d.comments ?? [],
+    hasMore: !!d.hasMore,
+    cursor: d.cursor ?? '',
+  };
+}
+
+/** 楼层回复（评论页「展开 N 条回复」） */
+export async function commentFloor(
+  songId: number,
+  parentCommentId: number,
+  limit = 20,
+): Promise<{ total: number; comments: NcmComment[]; hasMore: boolean }> {
+  const j = await authRequest<{
+    data?: { comments?: NcmComment[]; totalCount?: number; hasMore?: boolean };
+  }>('comment/floor', { id: songId, parentCommentId, type: 0, limit });
+  const d = j.data ?? {};
+  return { total: d.totalCount ?? 0, comments: d.comments ?? [], hasMore: !!d.hasMore };
 }
 
 /** 发表评论（t=1）/ 回复评论（t=2 + commentId） */

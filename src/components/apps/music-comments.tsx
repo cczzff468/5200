@@ -1,34 +1,81 @@
 'use client';
 
 /**
- * 音乐 App 评论半屏面板：热门评论 + 最新评论、点赞（登录）、发表/回复（登录）。
- * 游客可浏览；点赞/发表引导登录（toast 提示）。
+ * 音乐 App 评论页（独立全屏界面，仿网易云 App 截图）：
+ * - 头部：返回箭头 + 居中「评论」标题（标题下红色短条）
+ * - 歌曲行：圆形封面 + 「歌名 - 歌手」
+ * - 排序档：「评论 (N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页）
+ * - 评论流：头像 / 昵称 + VIP·等级徽章 / 日期 + IP 属地 / 内容 / 右侧点赞（大拇指），
+ *   楼层回复「展开 N 条回复」（/comment/floor）
+ * - 底部：话题胶囊行 + 「随乐而起，有感而发」输入条（点赞/发表需登录，游客 toast 引导）
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Heart, Loader2, Send } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  MessageSquareText,
+  Send,
+  Smile,
+  ThumbsUp,
+} from 'lucide-react';
+import {
+  commentFloor,
   commentLike,
-  commentsOf,
+  commentsNew,
   getMusicLogin,
   postComment,
+  songArtistText,
+  songCover,
+  type CommentSortType,
   type NcmComment,
 } from '@/lib/ios/music-api';
 import { useMusic } from '@/lib/ios/music-store';
 import { CoverImg, EmptyBlock, LoadingBlock, fmtPlayCount } from './music-shared';
 
-export function CommentsSheet() {
+type SortKey = 'rec' | 'hot' | 'new';
+const SORT_ORDER: SortKey[] = ['rec', 'hot', 'new'];
+const SORT_LABEL: Record<SortKey, string> = { rec: '推荐', hot: '最热', new: '最新' };
+const SORT_TYPE: Record<SortKey, CommentSortType> = { rec: 1, hot: 2, new: 3 };
+
+/** 底部话题胶囊（展示用，与网易云热榜话题同风格） */
+const TOPICS = ['耳机常驻歌曲', '一听前奏就红心', '科学听歌大法', '单曲循环一整天'];
+
+/** VIP 等级数字大写（徽章「VIP·柒」；>10 直接数字） */
+const CN_NUM = ['', '', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖', '拾'];
+
+interface FloorState {
+  open: boolean;
+  loading: boolean;
+  list: NcmComment[];
+  total: number;
+}
+
+interface ListData {
+  list: NcmComment[];
+  total: number;
+  hasMore: boolean;
+  cursor: string;
+}
+
+export function CommentsPage() {
   const song = useMusic((s) => s.commentSong)!;
   const close = useMusic((s) => s.closeComments);
-  const [data, setData] = useState<{ hot: NcmComment[]; comments: NcmComment[]; total: number } | null>(null);
+  const [sort, setSort] = useState<SortKey>('rec');
+  const [data, setData] = useState<ListData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [more, setMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [floors, setFloors] = useState<Record<number, FloorState>>({});
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState<NcmComment | null>(null);
   const [sending, setSending] = useState(false);
   const [toast, setToast] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 切排序/切歌时作废在途请求
+  const seqRef = useRef(0);
 
   const showToast = (m: string) => {
     setToast(m);
@@ -36,29 +83,53 @@ export function CommentsSheet() {
     toastTimer.current = setTimeout(() => setToast(''), 1600);
   };
 
-  const load = async (offset: number) => {
+  // 拉取一页（replace=true 首屏/切档；false = cursor 追加翻页）
+  const load = async (key: SortKey, cursor = '', replace: boolean) => {
+    const mySeq = seqRef.current;
     try {
-      const page = await commentsOf(song.id, 20, offset);
+      const page = await commentsNew(song.id, SORT_TYPE[key], 20, cursor);
+      if (seqRef.current !== mySeq) return;
       setData((d) =>
-        d && offset > 0
-          ? { hot: d.hot, comments: [...d.comments, ...page.comments], total: page.total }
-          : { hot: page.hot, comments: page.comments, total: page.total },
+        !replace && d
+          ? { list: [...d.list, ...page.comments], total: page.total, hasMore: page.hasMore, cursor: page.cursor }
+          : { list: page.comments, total: page.total, hasMore: page.hasMore, cursor: page.cursor },
       );
-      setMore(page.hasMore);
     } catch {
+      if (seqRef.current !== mySeq) return;
       showToast('评论加载失败');
     } finally {
-      setLoading(false);
+      if (seqRef.current === mySeq) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   };
 
+  // 切歌/切排序：重置并重拉（楼层回复与输入引用一并清空）
   useEffect(() => {
-    void load(0);
+    seqRef.current += 1;
+    setData(null);
+    setFloors({});
+    setReplyTo(null);
+    setLoading(true);
+    void load(sort, '', true);
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
-     
-  }, [song.id]);
+  }, [song.id, sort]);
+
+  const loadMore = () => {
+    if (!data?.hasMore || loadingMore || loading) return;
+    setLoadingMore(true);
+    void load(sort, data.cursor, false);
+  };
+
+  // 滚动近底部自动翻页
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (!el || !data?.hasMore || loadingMore || loading) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 260) loadMore();
+  };
 
   const like = async (c: NcmComment) => {
     if (!getMusicLogin()) {
@@ -71,17 +142,57 @@ export function CommentsSheet() {
         d
           ? {
               ...d,
-              hot: d.hot.map((x) =>
-                x.commentId === c.commentId ? { ...x, liked: !x.liked, likedCount: x.likedCount + (x.liked ? -1 : 1) } : x,
-              ),
-              comments: d.comments.map((x) =>
-                x.commentId === c.commentId ? { ...x, liked: !x.liked, likedCount: x.likedCount + (x.liked ? -1 : 1) } : x,
+              list: d.list.map((x) =>
+                x.commentId === c.commentId
+                  ? { ...x, liked: !x.liked, likedCount: x.likedCount + (x.liked ? -1 : 1) }
+                  : x,
               ),
             }
           : d,
       );
+      const fl = floors[c.commentId];
+      if (fl?.open) {
+        setFloors((m) => ({
+          ...m,
+          [c.commentId]: {
+            ...fl,
+            list: fl.list.map((x) =>
+              x.commentId === c.commentId
+                ? { ...x, liked: !x.liked, likedCount: x.likedCount + (x.liked ? -1 : 1) }
+                : x,
+            ),
+          },
+        }));
+      }
     } catch {
       showToast('点赞失败');
+    }
+  };
+
+  // 展开/收起楼层回复（首次展开拉取，收起只翻状态）
+  const toggleFloor = async (c: NcmComment) => {
+    const cur = floors[c.commentId];
+    if (cur && (cur.open || cur.loading)) {
+      setFloors((m) => ({ ...m, [c.commentId]: { ...cur, open: false, loading: false } }));
+      return;
+    }
+    if (cur && cur.list.length > 0) {
+      setFloors((m) => ({ ...m, [c.commentId]: { ...cur, open: true } }));
+      return;
+    }
+    setFloors((m) => ({
+      ...m,
+      [c.commentId]: { open: true, loading: true, list: [], total: c.showFloorComment?.replyCount ?? 0 },
+    }));
+    try {
+      const f = await commentFloor(song.id, c.commentId, 20);
+      setFloors((m) => ({
+        ...m,
+        [c.commentId]: { open: true, loading: false, list: f.comments, total: f.total },
+      }));
+    } catch {
+      showToast('回复加载失败');
+      setFloors((m) => ({ ...m, [c.commentId]: { open: false, loading: false, list: [], total: 0 } }));
     }
   };
 
@@ -97,9 +208,10 @@ export function CommentsSheet() {
       setText('');
       setReplyTo(null);
       showToast('已发布');
+      seqRef.current += 1;
       setLoading(true);
       setData(null);
-      await load(0);
+      await load(sort, '', true);
     } catch {
       showToast('发布失败（可能需要实名/VIP）');
     } finally {
@@ -107,98 +219,263 @@ export function CommentsSheet() {
     }
   };
 
+  const artist = songArtistText(song);
+
   return (
-    <div className="absolute inset-0 z-[68] flex items-end" data-testid="music-comments">
-      <button type="button" aria-label="关闭" onClick={close} className="absolute inset-0 bg-black/45" />
-      <div className="relative flex h-[82%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
-        {/* 头部 */}
-        <div className="flex items-center gap-3 border-b border-black/5 px-4 py-3 dark:border-white/10">
-          <button type="button" onClick={close} aria-label="收起">
-            <ChevronDown className="h-5 w-5 text-zinc-500" />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[14px] font-semibold text-zinc-900 dark:text-zinc-100">
-              评论 ({data ? fmtPlayCount(data.total) : '…'})
-            </p>
-            <p className="truncate text-[11px] text-zinc-400">
-              {song.name} - {song.artists?.map((a) => a.name).join('/')}
-            </p>
-          </div>
-          <CoverImg src={song.album?.picUrl} className="h-9 w-9" rounded="rounded-md" alt={song.name} />
-        </div>
-
-        {/* 列表 */}
-        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
-          {loading && !data ? (
-            <LoadingBlock />
-          ) : !data || (data.hot.length === 0 && data.comments.length === 0) ? (
-            <EmptyBlock text="还没有评论，来抢沙发" />
-          ) : (
-            <>
-              {data.hot.length > 0 && (
-                <>
-                  <p className="pb-1 pt-3 text-[12px] font-bold text-zinc-500">热门评论</p>
-                  {data.hot.map((c) => (
-                    <CommentRow key={c.commentId} c={c} onLike={() => void like(c)} onReply={() => setReplyTo(c)} />
-                  ))}
-                </>
-              )}
-              <p className="pb-1 pt-3 text-[12px] font-bold text-zinc-500">最新评论</p>
-              {data.comments.map((c) => (
-                <CommentRow key={c.commentId} c={c} onLike={() => void like(c)} onReply={() => setReplyTo(c)} />
-              ))}
-              {more && (
-                <button
-                  type="button"
-                  onClick={() => void load(data.comments.length)}
-                  className="mx-auto my-3 block rounded-full border border-zinc-300 px-4 py-1.5 text-[12px] text-zinc-500 dark:border-zinc-600"
-                >
-                  加载更多
-                </button>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* 回复引用条 */}
-        {replyTo && (
-          <div className="flex items-center gap-2 border-t border-black/5 px-4 py-1.5 text-[11px] text-zinc-400 dark:border-white/10">
-            <span className="truncate">
-              回复 {replyTo.user.nickname}：{replyTo.content}
-            </span>
-            <button type="button" onClick={() => setReplyTo(null)} className="ml-auto shrink-0 text-zinc-400">
-              取消
-            </button>
-          </div>
-        )}
-
-        {/* 输入区 */}
-        <div className="flex items-center gap-2 px-4 pb-8 pt-2">
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void send();
-            }}
-            placeholder={getMusicLogin() ? '说点什么…' : '登录后可评论（可先浏览）'}
-            data-testid="music-comment-input"
-            className="h-10 min-w-0 flex-1 rounded-full bg-black/5 px-4 text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-white/10 dark:text-zinc-100"
+    <div
+      className="absolute inset-0 z-[68] flex flex-col bg-white dark:bg-zinc-950"
+      data-testid="music-comments"
+    >
+      {/* 头部：返回 + 居中「评论」标题（红色短条下划线，仿截图）；pt-[58px] 避让状态栏+灵动岛 */}
+      <div className="relative shrink-0 border-b border-black/[0.04] px-3 pb-2 pt-[58px] dark:border-white/[0.06]">
+        <button
+          type="button"
+          onClick={close}
+          aria-label="返回"
+          data-testid="music-comment-back"
+          className="absolute bottom-1 left-1.5 p-2 text-zinc-800 active:scale-95 dark:text-zinc-200"
+        >
+          <ChevronLeft className="h-6 w-6" />
+        </button>
+        <div className="flex flex-col items-center">
+          <p className="text-[16px] font-semibold text-zinc-900 dark:text-zinc-100">评论</p>
+          <span
+            className="mt-[3px] h-[3px] w-6 rounded-full bg-[#C20C0C]"
+            aria-hidden
+            data-testid="music-comment-underline"
           />
+        </div>
+      </div>
+
+      {/* 歌曲行：圆封面 + 歌名 - 歌手 */}
+      <div className="flex shrink-0 items-center gap-3 px-4 py-3">
+        <CoverImg src={songCover(song)} className="h-11 w-11 shrink-0" rounded="rounded-full" alt={song.name} />
+        <p className="min-w-0 flex-1 truncate text-[16px]" data-testid="music-comment-song">
+          <span className="font-medium text-zinc-900 dark:text-zinc-100">{song.name}</span>
+          <span className="text-zinc-400"> - {artist}</span>
+        </p>
+      </div>
+
+      {/* 排序档：评论 (N) + 推荐|最热|最新 */}
+      <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-1">
+        <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-comment-total">
+          评论 {data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
+        </p>
+        <div className="flex items-center">
+          {SORT_ORDER.map((k, i) => (
+            <Fragment key={k}>
+              {i > 0 && <span className="mx-3 h-3 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />}
+              <button
+                type="button"
+                onClick={() => setSort(k)}
+                data-testid={`music-comment-sort-${k}`}
+                className={`text-[14px] active:opacity-70 ${
+                  sort === k ? 'font-semibold text-zinc-900 dark:text-zinc-100' : 'text-zinc-400'
+                }`}
+              >
+                {SORT_LABEL[k]}
+              </button>
+            </Fragment>
+          ))}
+        </div>
+      </div>
+
+      {/* 评论流（近底部自动翻页） */}
+      <div
+        ref={listRef}
+        onScroll={onListScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-4"
+        data-testid="music-comment-list"
+      >
+        {loading && !data ? (
+          <LoadingBlock />
+        ) : !data || data.list.length === 0 ? (
+          <EmptyBlock text="还没有评论，来抢沙发" />
+        ) : (
+          <>
+            {data.list.map((c) => (
+              <CommentRow
+                key={c.commentId}
+                c={c}
+                floor={floors[c.commentId]}
+                onLike={() => void like(c)}
+                onReply={() => setReplyTo(c)}
+                onToggleFloor={() => void toggleFloor(c)}
+              />
+            ))}
+            {loadingMore && (
+              <div className="flex justify-center py-3">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+              </div>
+            )}
+            {!data.hasMore && data.list.length > 0 && (
+              <p className="py-4 text-center text-[11px] text-zinc-300 dark:text-zinc-600">已经到底啦</p>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* 话题胶囊行 */}
+      <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-t border-black/[0.04] px-4 py-2 no-scrollbar dark:border-white/[0.06]">
+        <button
+          type="button"
+          onClick={() => showToast('话题功能敬请期待')}
+          className="flex shrink-0 items-center gap-1 rounded-full bg-zinc-900 px-3 py-1.5 text-[12px] font-medium text-white active:scale-95 dark:bg-zinc-700"
+        >
+          <MessageSquareText className="h-3.5 w-3.5" />
+          话题
+          <ChevronRight className="h-3 w-3" />
+        </button>
+        {TOPICS.map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => showToast('话题功能敬请期待')}
+            className="flex shrink-0 items-center gap-0.5 rounded-full bg-black/[0.05] px-3 py-1.5 text-[12px] text-zinc-600 active:scale-95 dark:bg-white/10 dark:text-zinc-300"
+          >
+            <span className="text-zinc-400">#</span>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {/* 回复引用条 */}
+      {replyTo && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-black/[0.04] px-4 py-1.5 text-[11px] text-zinc-400 dark:border-white/[0.06]">
+          <span className="truncate">
+            回复 {replyTo.user.nickname}：{replyTo.content}
+          </span>
+          <button type="button" onClick={() => setReplyTo(null)} className="ml-auto shrink-0 text-zinc-400">
+            取消
+          </button>
+        </div>
+      )}
+
+      {/* 输入条：「随乐而起，有感而发」+ 表情（有文字时变红色发送键） */}
+      <div className="flex shrink-0 items-center gap-2 px-4 pb-7 pt-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void send();
+          }}
+          placeholder={getMusicLogin() ? '随乐而起，有感而发' : '登录后可评论（可先浏览）'}
+          data-testid="music-comment-input"
+          className="h-10 min-w-0 flex-1 rounded-full bg-black/[0.05] px-4 text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-white/10 dark:text-zinc-100"
+        />
+        {text.trim() ? (
           <button
             type="button"
             onClick={() => void send()}
-            disabled={sending || !text.trim()}
+            disabled={sending}
             data-testid="music-comment-send"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#C20C0C] text-white disabled:opacity-40 active:scale-95"
             aria-label="发送"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#C20C0C] text-white disabled:opacity-40 active:scale-95"
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </button>
-        </div>
+        ) : (
+          <Smile className="h-6 w-6 shrink-0 text-zinc-400" aria-hidden />
+        )}
+      </div>
 
-        {toast && (
-          <div className="pointer-events-none absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-4 py-1.5 text-[12px] text-white">
-            {toast}
+      {toast && (
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/85 px-4 py-1.5 text-[12px] text-white">
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- 评论行 ----------------
+
+function CommentRow({
+  c,
+  floor,
+  onLike,
+  onReply,
+  onToggleFloor,
+}: {
+  c: NcmComment;
+  floor?: FloorState;
+  onLike: () => void;
+  onReply: () => void;
+  onToggleFloor: () => void;
+}) {
+  const loc = c.ipLocation?.location || '';
+  const replyCount = c.showFloorComment?.replyCount ?? 0;
+  return (
+    <div className="flex gap-3 border-b border-black/[0.04] py-3.5 last:border-b-0 dark:border-white/[0.06]">
+      <CoverImg src={c.user?.avatarUrl} className="h-10 w-10 shrink-0" rounded="rounded-full" alt={c.user?.nickname} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p className="min-w-0 truncate text-[14px] font-medium text-zinc-800 dark:text-zinc-200">
+                {c.user?.nickname}
+              </p>
+              <VipBadge user={c.user} />
+            </div>
+            <p className="mt-0.5 text-[11px] text-zinc-400">
+              {commentDate(c)}
+              {loc ? ` ${loc}` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onLike}
+            data-testid={`music-comment-like-${c.commentId}`}
+            aria-label="点赞"
+            className="flex shrink-0 items-center gap-1 pt-0.5 text-zinc-400 active:scale-95"
+          >
+            <span className="text-[12px] tabular-nums">{fmtPlayCount(c.likedCount)}</span>
+            <ThumbsUp
+              className={`h-4 w-4 ${c.liked ? 'text-[#C20C0C]' : ''}`}
+              fill={c.liked ? 'currentColor' : 'none'}
+            />
+          </button>
+        </div>
+        <p
+          className="mt-1.5 whitespace-pre-wrap break-words text-[15px] leading-[1.6] text-zinc-900 dark:text-zinc-100"
+          onClick={onReply}
+        >
+          {c.content}
+        </p>
+        {c.beRepliedComment && (
+          <p className="mt-1 truncate rounded bg-black/[0.04] px-2 py-1 text-[11px] text-zinc-400 dark:bg-white/10">
+            @{c.beRepliedComment.user?.nickname}：{c.beRepliedComment.content}
+          </p>
+        )}
+        {/* 展开 N 条回复（楼层） */}
+        {replyCount > 0 && (
+          <button
+            type="button"
+            onClick={onToggleFloor}
+            data-testid={`music-comment-floor-${c.commentId}`}
+            className="mt-2 flex items-center gap-2 text-[13px] text-[#4791EB] active:opacity-70"
+          >
+            <span className="h-px w-6 bg-zinc-200 dark:bg-zinc-700" aria-hidden />
+            {floor?.open ? '收起回复' : `展开 ${replyCount} 条回复`}
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${floor?.open ? 'rotate-180' : ''}`} />
+          </button>
+        )}
+        {floor?.open && (
+          <div className="mt-2 space-y-3 rounded-xl bg-black/[0.03] p-3 dark:bg-white/[0.05]">
+            {floor.loading ? (
+              <p className="text-[12px] text-zinc-400">回复加载中…</p>
+            ) : floor.list.length === 0 ? (
+              <p className="text-[12px] text-zinc-400">暂无回复</p>
+            ) : (
+              <>
+                {floor.list.map((r) => (
+                  <FloorReply key={r.commentId} r={r} />
+                ))}
+                {floor.total > floor.list.length && (
+                  <p className="text-[11px] text-zinc-400">仅展示前 {floor.list.length} 条回复</p>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -206,43 +483,49 @@ export function CommentsSheet() {
   );
 }
 
-function CommentRow({ c, onLike, onReply }: { c: NcmComment; onLike: () => void; onReply: () => void }) {
+/** 楼层回复条目（缩进小卡） */
+function FloorReply({ r }: { r: NcmComment }) {
+  const loc = r.ipLocation?.location || '';
   return (
-    <div className="flex gap-2.5 py-2.5">
-      <CoverImg src={c.user?.avatarUrl} className="h-8 w-8 shrink-0" rounded="rounded-full" alt={c.user?.nickname} />
+    <div className="flex gap-2">
+      <CoverImg src={r.user?.avatarUrl} className="h-6 w-6 shrink-0" rounded="rounded-full" alt={r.user?.nickname} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-[12px] font-medium text-zinc-500">{c.user?.nickname}</p>
-          <span className="ml-auto shrink-0 text-[10px] text-zinc-300">
-            {new Date(c.time).toLocaleDateString('zh-CN')}
-          </span>
-        </div>
-        {c.beRepliedComment && (
-          <p className="mt-0.5 truncate rounded bg-black/5 px-2 py-1 text-[11px] text-zinc-400 dark:bg-white/10">
-            @{c.beRepliedComment.user?.nickname}：{c.beRepliedComment.content}
-          </p>
-        )}
-        <p className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-zinc-800 dark:text-zinc-200">
-          {c.content}
+        <p className="truncate text-[12px] text-zinc-500 dark:text-zinc-400">{r.user?.nickname}</p>
+        <p className="mt-0.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-zinc-800 dark:text-zinc-200">
+          {r.content}
         </p>
-        <div className="mt-1 flex items-center gap-4 text-[11px] text-zinc-400">
-          <button
-            type="button"
-            onClick={onLike}
-            data-testid={`music-comment-like-${c.commentId}`}
-            className="flex items-center gap-1 active:scale-95"
-          >
-            <Heart
-              className={`h-3.5 w-3.5 ${c.liked ? 'text-[#C20C0C]' : ''}`}
-              fill={c.liked ? 'currentColor' : 'none'}
-            />
-            {fmtPlayCount(c.likedCount) || '赞'}
-          </button>
-          <button type="button" onClick={onReply} className="active:scale-95">
-            回复
-          </button>
-        </div>
+        <p className="mt-0.5 text-[10px] text-zinc-400">
+          {commentDate(r)}
+          {loc ? ` ${loc}` : ''}
+        </p>
       </div>
     </div>
   );
+}
+
+/** VIP 徽章（黑底胶囊：VIP 白字+红点 / SVIP 金字，等级大写数字，仿截图） */
+function VipBadge({ user }: { user: NcmComment['user'] }) {
+  const vip = user?.vipType ?? 0;
+  if (vip <= 0) return null;
+  const lv = user.vipRights?.redVipLevel ?? 0;
+  const lvText = lv >= 1 && lv <= 10 ? CN_NUM[lv] : lv > 10 ? `${lv}` : '';
+  const svip = vip >= 11;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-[3px] rounded-[3px] bg-zinc-900 px-[4px] py-[1px] text-[9px] font-semibold leading-[13px] dark:bg-zinc-800 ${
+        svip ? 'text-amber-300' : 'text-white'
+      }`}
+    >
+      {!svip && <span className="h-[7px] w-[7px] rounded-full bg-[#EC4141]" aria-hidden />}
+      {svip ? 'SVIP' : 'VIP'}
+      {lvText ? `·${lvText}` : ''}
+    </span>
+  );
+}
+
+/** 评论日期：同一年显示「MM-DD」、跨年「YYYY-MM-DD」（timeStr 优先） */
+function commentDate(c: NcmComment): string {
+  const s = c.timeStr || (c.time ? new Date(c.time).toLocaleDateString('zh-CN') : '');
+  const y = `${new Date().getFullYear()}-`;
+  return s.startsWith(y) ? s.slice(y.length) : s;
 }

@@ -2,10 +2,10 @@
 
 /**
  * 音乐 App 播放页（仿网易云黑胶）：
- * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 白色唱针（播放贴盘/暂停抬起，仿网易云截图；
- *   轴承悬盘上方偏右且与盘缘留隙、针头落外圈纹路，第三十轮）
+ * - 封面模糊背景 + 黑胶唱片（旋转动画；仿用户参考图：细密纹路/外缘光环/大封面占比；
+ *   白色圆轴承悬在盘上方、白针杆已删除，第三十一轮）
  * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；胶囊仅手动滚动浏览时
- *   显示，第二十七轮；点歌词以外的任何位置回唱片）
+ *   显示且跟随滚动位置——滚到哪句亮哪句，第三十一轮；点歌词以外的任何位置回唱片）
  * - 进度条拖拽 / 循环模式 / 播放暂停 / 上下首 / 播放列表
  * - 右上角更多：仿网易云歌曲面板（为TA心动/收藏/下载/分享/一起听/评论/相似漫游/音质）
  * - 一起听态：顶部双头像 + 累计时长（跨会话永久保存） + 音乐/聊天胶囊切换
@@ -806,9 +806,9 @@ function TgChatGlyph({ className }: { className?: string }) {
   );
 }
 
-// ---------------- 黑胶视图（第二十六轮美化：白色拟真唱针仿用户截图；
-// 第二十七轮：轴承移到盘上方偏右（不再挡住顶部时长文字），针杆颜色调淡；
-// 第三十轮：轴承再上抬右移与盘缘留隙、针头改落盘面右上外圈纹路（不再深入标签区），针杆颜色再调淡） ----------------
+// ---------------- 黑胶视图（第三十一轮按用户参考图再美化：
+// 细密同心纹路 + 纹路明暗带 + 外缘悬浮光环 + 大封面占比；
+// 白色圆轴承保留悬在盘上方偏右、与盘缘留隙，白色针杆整体删除（用户要求）） ----------------
 
 function VinylView({
   song,
@@ -822,7 +822,7 @@ function VinylView({
   return (
     <div className="relative flex h-full w-full flex-col items-center">
       <div className="flex min-h-0 w-full flex-1 items-center justify-center">
-        {/* 黑胶（细密纹路 + 立体边缘，仿网易云；尺寸随空间自适应不溢出） */}
+        {/* 黑胶（细密纹路 + 立体边缘，仿参考图；尺寸随空间自适应不溢出） */}
         <button
           type="button"
           onClick={onSwitch}
@@ -830,56 +830,54 @@ function VinylView({
           aria-label="切换到歌词"
           className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 唱针（白色拟真风）：白色圆轴承悬在唱片右上上方（第三十轮再上抬右移，
-              与盘缘留出明显间隙、不压盘面），白色针杆从轴心斜搭到盘面右上外圈纹路上
-              （播放落点约 1 点半方向 r≈0.8R，第三十轮修正——旧 +21° 会把针头甩进盘芯标签区）；
-              全百分比定位随唱片尺寸等比缩放。CSS 正角把向下的针臂摆向左——
-              播放 rotate(27°) 针头落外圈纹路；暂停 → 抬起 + -22° 摆开（针头离开盘面右侧）。
-              针杆颜色再调淡（低不透明度白渐变，第三十轮） */}
+          {/* 白色圆轴承：悬在唱片右上上方、与盘缘留隙（第三十一轮：针杆删除，只留轴承悬浮；
+              不随播放旋转）；全百分比定位随唱片尺寸等比缩放 */}
           <div
-            className="absolute left-[92.6%] top-[-6.3%] z-20 h-[31.3%] w-[2.4%] origin-top rounded-full bg-gradient-to-b from-white/70 via-white/45 to-white/28 shadow-[0_2px_4px_rgba(0,0,0,0.14)] transition-transform duration-500"
-            style={{ transform: playing ? 'rotate(27deg)' : 'translateY(-8px) rotate(-22deg)' }}
-            data-testid="music-tonearm-arm"
+            className="absolute left-[88%] top-[-13%] z-20 h-[10%] w-[10%] rounded-full bg-gradient-to-b from-white to-[#eae6dc] shadow-[0_4px_10px_rgba(0,0,0,0.35)]"
+            data-testid="music-tonearm-pivot"
           >
-            {/* 针头（白色唱头，随针臂同角度，落在盘面外圈） */}
-            <div className="absolute -bottom-[5%] left-1/2 h-[8%] w-[260%] -translate-x-1/2 rotate-[4deg] rounded-[3px] bg-gradient-to-b from-white/60 to-white/35 shadow-[0_1px_2px_rgba(0,0,0,0.16)] ring-1 ring-black/5" />
-          </div>
-          {/* 轴承（白色圆钮，压住针臂轴心，不随播放旋转；悬在盘上方偏右、与盘缘留隙） */}
-          <div className="absolute left-[89%] top-[-11%] z-30 h-[9.5%] w-[9.5%] rounded-full bg-gradient-to-b from-white to-[#ece8de] shadow-[0_3px_9px_rgba(0,0,0,0.35)]" data-testid="music-tonearm-pivot">
             <div className="absolute left-1/2 top-1/2 h-[38%] w-[38%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#cfc9ba] ring-1 ring-black/10" />
           </div>
 
-          {/* 盘后氛围光晕（增加悬浮立体感）+ 外缘深黑圈（不随旋转，提供立体边缘） */}
+          {/* 盘后氛围光晕（悬浮立体感） */}
           <div className="absolute inset-[-7%] rounded-full bg-black/30 blur-2xl" />
-          <div className="absolute inset-0 rounded-full bg-[#050505] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)] ring-1 ring-white/10" />
-          {/* 胶片主体（旋转）：细密同心纹路 */}
+          {/* 外缘悬浮光环（仿参考图盘缘外一圈微光，与盘面留出细缝） */}
           <div
-            className="absolute inset-[2.5%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
+            className="absolute inset-[-2.5%] rounded-full"
+            style={{
+              background:
+                'radial-gradient(circle, transparent 0%, transparent 88%, rgba(255,255,255,0.07) 94%, rgba(255,255,255,0.02) 100%)',
+              boxShadow: '0 18px 50px rgba(0,0,0,0.55)',
+            }}
+          />
+          {/* 盘体外缘（深黑圈，立体边缘，不随旋转） */}
+          <div className="absolute inset-0 rounded-full bg-[#060606] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)] ring-1 ring-white/10" />
+          {/* 胶片主体（旋转）：细密同心纹路 + 三圈明暗带分組（仿参考图纹路带） */}
+          <div
+            className="absolute inset-[1.8%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
             style={
               playing
                 ? {
                     background:
-                      'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
+                      'repeating-radial-gradient(circle at 50% 50%, #101010 0px, #1f1f1f 0.8px, #0a0a0a 1.6px, #161616 2.4px), radial-gradient(circle, transparent 0%, transparent 38.5%, rgba(255,255,255,0.045) 39.3%, transparent 40.2%, transparent 53.5%, rgba(255,255,255,0.035) 54.3%, transparent 55.2%, transparent 69.5%, rgba(255,255,255,0.03) 70.3%, transparent 71.2%, transparent 83.5%, rgba(255,255,255,0.028) 84.3%, transparent 85.2%), radial-gradient(circle, #191919 0%, #131313 36%, #171717 60%, #0e0e0e 82%, #181818 100%)',
                     boxShadow:
-                      'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
+                      'inset 0 1px 3px rgba(255,255,255,0.09), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 30px rgba(0,0,0,0.5)',
                   }
                 : {
                     background:
-                      'repeating-radial-gradient(circle at 50% 50%, #141414 0px, #232323 1.5px, #0d0d0d 3px, #1a1a1a 4.5px), radial-gradient(circle, #1e1e1e 0%, #161616 34%, #1b1b1b 58%, #111111 78%, #191919 100%)',
+                      'repeating-radial-gradient(circle at 50% 50%, #101010 0px, #1f1f1f 0.8px, #0a0a0a 1.6px, #161616 2.4px), radial-gradient(circle, transparent 0%, transparent 38.5%, rgba(255,255,255,0.045) 39.3%, transparent 40.2%, transparent 53.5%, rgba(255,255,255,0.035) 54.3%, transparent 55.2%, transparent 69.5%, rgba(255,255,255,0.03) 70.3%, transparent 71.2%, transparent 83.5%, rgba(255,255,255,0.028) 84.3%, transparent 85.2%), radial-gradient(circle, #191919 0%, #131313 36%, #171717 60%, #0e0e0e 82%, #181818 100%)',
                     boxShadow:
-                      'inset 0 2px 5px rgba(255,255,255,0.10), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 34px rgba(0,0,0,0.55)',
+                      'inset 0 1px 3px rgba(255,255,255,0.09), inset 0 -3px 8px rgba(0,0,0,0.85), inset 0 0 30px rgba(0,0,0,0.5)',
                     animationPlayState: 'paused',
                   }
             }
           >
-            {/* 斜向高光（第二十六轮增强质感） */}
-            <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_210deg,rgba(255,255,255,0.13),transparent_16%,rgba(255,255,255,0.07)_32%,transparent_55%,rgba(255,255,255,0.1)_74%,transparent_93%)]" />
-            {/* 封面（占比更大） */}
-            <div className="absolute inset-[23.5%] overflow-hidden rounded-full ring-[3px] ring-black/70">
+            {/* 斜向高光（柔化：参考图盘面只有轻微反光） */}
+            <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_205deg,rgba(255,255,255,0.09),transparent_18%,rgba(255,255,255,0.045)_36%,transparent_58%,rgba(255,255,255,0.07)_76%,transparent_94%)]" />
+            {/* 封面（大占比仿参考图：盘径 ~59%，细黑圈与纹路分隔） */}
+            <div className="absolute inset-[20.5%] overflow-hidden rounded-full ring-[3px] ring-black/80">
               <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
             </div>
-            {/* 中心孔 */}
-            <div className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0a0a0a] ring-1 ring-white/25" />
           </div>
         </button>
       </div>
@@ -889,6 +887,7 @@ function VinylView({
 
 // ---------------- 歌词视图（第二十四轮重做：仿网易云歌词页——
 // 当前行胶囊高亮（行时间+播放键）仅手动滚动浏览时显示（第二十七轮，自动跟随不显示），
+// 且高亮跟随滚动位置——滚到哪句就亮在哪句（第三十一轮，focusIdx 跟随视口中线最近行），
 // 上下行淡出聚焦，逐行滚动；
 // 第二十八轮：点歌词不再跳播（点歌词界面任何位置都回唱片）、行时间默认隐藏
 // 仅自己滚动时显示（悬浮件绝对定位，文字全宽常居中，修复滚动时歌词右移）；
@@ -970,8 +969,13 @@ function LyricView({
 
   // 当前行胶囊高亮只在「自己手动滚动浏览」时显示（第二十七轮反馈：自动跟随播放/拖进度条
   // 时不显示胶囊，自己滑过歌词才亮起）；松手 3 秒无操作自动回当前行并熄灭；
-  // 胶囊隐藏后行文字仍保持高亮白，仅背景/时间/播放键淡出（占位不变不跳动）
+  // 胶囊隐藏后行文字仍保持高亮白，仅背景/时间/播放键淡出（占位不变不跳动）；
+  // 第三十一轮：手动滚动时高亮跟随滚动位置——滚到哪句亮在哪句（viewIdx = 视口中线最近行）
   const [capsuleOn, setCapsuleOn] = useState(false);
+  const [viewIdx, setViewIdx] = useState(-1);
+  const viewIdxRef = useRef(-1);
+  // 高亮目标行：手动浏览中 = 滚动位置所在行；其余 = 播放当前行
+  const focusIdx = capsuleOn && viewIdx >= 0 ? viewIdx : activeIdx;
 
   const scrollToLine = (idx: number, behavior: ScrollBehavior) => {
     const box = boxRef.current;
@@ -1004,9 +1008,13 @@ function LyricView({
       clearTimeout(manualTimerRef.current);
       manualTimerRef.current = null;
     }
-    // 拖进度条/点行跳播不算手动浏览：胶囊一并熄灭（第二十七轮）。
+    // 拖进度条/点行跳播不算手动浏览：胶囊一并熄灭（第二十七轮），滚动高亮同步复位。
     // queueMicrotask：lint（set-state-in-effect）合规，且微任务在绘制前执行、无可视闪烁
-    queueMicrotask(() => setCapsuleOn(false));
+    viewIdxRef.current = -1;
+    queueMicrotask(() => {
+      setCapsuleOn(false);
+      setViewIdx(-1);
+    });
     scrollToLine(activeIdxRef.current, 'smooth');
   }, [position]);
 
@@ -1016,17 +1024,45 @@ function LyricView({
     if (activeIdx >= 0) scrollToLine(activeIdx, 'smooth');
   }, [activeIdx]);
 
-  // 手动浏览标记（触摸/滚轮都算）：亮起胶囊 + 刷新 3 秒回跳计时器
+  // 手动浏览标记（触摸/滚轮都算）：亮起胶囊（起点先亮在播放当前行）+ 刷新 3 秒回跳计时器
   const markManual = () => {
     manualRef.current = true;
+    viewIdxRef.current = activeIdxRef.current;
+    setViewIdx(activeIdxRef.current);
     setCapsuleOn(true);
     if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
     manualTimerRef.current = setTimeout(() => {
       manualTimerRef.current = null;
       manualRef.current = false;
       setCapsuleOn(false);
+      viewIdxRef.current = -1;
+      setViewIdx(-1);
       scrollToLine(activeIdxRef.current, 'smooth');
     }, 3000);
+  };
+
+  // 滚动中高亮跟随（第三十一轮）：算视口中线最近的歌词行，滚到哪句胶囊亮在哪句；
+  // 仅手动浏览中生效（自动跟播时 focusIdx 恒为 activeIdx，无需计算）
+  const handleScroll = () => {
+    if (!manualRef.current || !capsuleOn) return;
+    const box = boxRef.current;
+    if (!box) return;
+    const mid = box.scrollTop + box.clientHeight / 2;
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < lineRefs.current.length; i++) {
+      const el = lineRefs.current[i];
+      if (!el) continue;
+      const d = Math.abs(el.offsetTop + el.clientHeight / 2 - mid);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best >= 0 && best !== viewIdxRef.current) {
+      viewIdxRef.current = best;
+      setViewIdx(best);
+    }
   };
 
   const flashCopied = (msg: string) => {
@@ -1163,6 +1199,7 @@ function LyricView({
         onTouchEnd={markManual}
         onTouchCancel={markManual}
         onWheel={markManual}
+        onScroll={handleScroll}
       >
         {loading && (
           <div className="flex h-[60%] items-center justify-center">
@@ -1175,8 +1212,9 @@ function LyricView({
           </div>
         )}
         {lyricLines.map((l, i) => {
-          const isActive = i === activeIdx;
-          const dist = Math.abs(i - activeIdx);
+          // 高亮/胶囊目标行：手动滚动时跟随滚动位置（滚到哪句亮哪句），否则为播放当前行
+          const isActive = i === focusIdx;
+          const dist = Math.abs(i - focusIdx);
           const dimCls = dist === 1 ? 'opacity-[0.62]' : dist === 2 ? 'opacity-[0.42]' : dist === 3 ? 'opacity-[0.28]' : 'opacity-[0.18]';
           return (
             <div
@@ -1206,14 +1244,14 @@ function LyricView({
             >
               {isActive && (
                 <>
-                  {/* 胶囊背景：绝对铺满，仅手动滚动浏览（capsuleOn）时亮起，悬浮件不占布局 */}
+                  {/* 胶囊背景：绝对铺满，仅手动滚动浏览（capsuleOn）时亮起且跟随滚动行，悬浮件不占布局 */}
                   <span
                     aria-hidden="true"
                     className={`pointer-events-none absolute inset-0 rounded-[12px] bg-white/[0.08] transition-opacity duration-500 ${
                       capsuleOn ? 'opacity-100' : 'opacity-0'
                     }`}
                   />
-                  {/* 行时间（左侧悬浮）：默认隐藏，自己滚动时才显示（第二十八轮反馈）——
+                  {/* 行时间（左侧悬浮，显示所在行时间）：默认隐藏，自己滚动时才显示（第二十八轮反馈）——
                       绝对定位不占布局，文字永远全宽居中（修复滚动时歌词「往右移」） */}
                   <span
                     className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[12px] leading-none tabular-nums text-white/75 transition-opacity duration-500 ${
@@ -1358,19 +1396,20 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像 + 耳机线（第三十轮按参考图重画）：两根细线分别从左头像左缘/右头像右缘
-          （约圆心高度）钻出，先贴着圆弧外侧垂下，再自然下垂微微向内，尾端渐隐在时长行上方——
-          像两只耳机各垂下一根松驰的线；头像（relative）盖在线上方 */}
+      {/* 双头像 + 耳机线（第三十一轮：在第三十轮形状基础上下段缩短——线尾从时长行上方 ~12px
+          提前到 ~26px 处渐隐，垂坠感更短更利落）；两根细线分别从左头像左缘/右头像右缘
+          （约圆心高度）钻出，先贴着圆弧外侧垂下，再自然下垂微微向内，尾端渐隐；
+          头像（relative）盖在线上方 */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <svg
-          viewBox="0 0 118 72"
-          className="pointer-events-none absolute inset-x-0 top-[32px] z-0 h-[72px] w-full"
+          viewBox="0 0 118 48"
+          className="pointer-events-none absolute inset-x-0 top-[32px] z-0 h-[48px] w-full"
           fill="none"
           aria-hidden="true"
         >
           <defs>
-            {/* 尾端渐隐：从头像下缘附近开始变淡，落到时长行上方前完全消失 */}
-            <linearGradient id="tg-wire-fade" gradientUnits="userSpaceOnUse" x1="0" y1="28" x2="0" y2="68">
+            {/* 尾端渐隐：从头像下缘附近开始变淡，下段提前消失 */}
+            <linearGradient id="tg-wire-fade" gradientUnits="userSpaceOnUse" x1="0" y1="18" x2="0" y2="43">
               <stop offset="0" stopColor="#ffffff" stopOpacity="0.95" />
               <stop offset="0.5" stopColor="#ffffff" stopOpacity="0.55" />
               <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
@@ -1378,13 +1417,13 @@ function TogetherHead({
           </defs>
           {/* 左线：左头像左缘（圆心高度）出发、贴弧垂下微向内；右线镜像（右头像右缘） */}
           <path
-            d="M 0 1 C 1 12, 4 24, 8.5 35 C 12.5 45, 15.5 56, 16.5 66"
+            d="M 0 1 C 1 9, 3 18, 6.5 26 C 9.5 33, 11.5 38, 12.5 43"
             stroke="url(#tg-wire-fade)"
             strokeWidth="1.6"
             strokeLinecap="round"
           />
           <path
-            d="M 118 1 C 117 12, 114 24, 109.5 35 C 105.5 45, 102.5 56, 101.5 66"
+            d="M 118 1 C 117 9, 115 18, 111.5 26 C 108.5 33, 106.5 38, 105.5 43"
             stroke="url(#tg-wire-fade)"
             strokeWidth="1.6"
             strokeLinecap="round"
@@ -1394,8 +1433,8 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          mt-[48px] 给耳机线下垂留出空间（线尾渐隐段落在时长行上方 ~12px） */}
-      <p className={`mt-[48px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+          mt-[40px] 给缩短后的耳机线留出空间（线尾渐隐段在时长行上方 ~26px） */}
+      <p className={`mt-[40px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
