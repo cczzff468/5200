@@ -15498,3 +15498,25 @@ Stage Summary:
 - 关键决策：①泛白块=conic 高光扇形叠加层而非纹路带（radial 明暗带是均匀圆环不形成「块」），整层删除最干净；②楼层回复从「点击才展开+灰卡」改为「进视口自动预览前 2 条+内联直排」贴近截图形态，展开/收起语义保留（收起回 2 条不空）；③回复点赞复用 commentLike 接口，like() 加 floorId 参数定位父楼层列表做乐观更新；④切排序时行 key 带 sort 前缀强制重挂载，重置 IntersectionObserver/askedRef 防预览失效
 - 范围限定遵守：改 2 文件（music-player.tsx / music-comments.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅时长行 margin）；评论数据接口未动（/comment/new+/comment/floor 沿用）；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx
+
+---
+Task ID: 92
+Agent: Z.ai Code（主会话）
+Task: 第三十三轮——①歌词胶囊播放键=播这一句（未播时段点击跳到该行播放）②一起听时长再上移 ③评论页上滑标题栏/歌曲行跟随滑走、评论(N)+排序吸顶 ④「展开更多回复」改蓝色且带条数 ⑤搜索页左上角返回键删除 ⑥状态栏颜色跟随背景实时变化（深底白字/白底黑字）
+
+Work Log:
+- ①胶囊播放键语义（music-player.tsx LyricView）：原实现只 toggle 播放/暂停；新增 seek selector，点击时判断聚焦行时间段（l.t → 下一行起点）——position 不在该段内 → seek(l.t-0.2) 且暂停态补 toggle() 恢复播放（seek 后按既有进度跳变语义胶囊熄灭、歌词自动跟随新播放行）；已在播该段 → 维持播放/暂停切换；E2E：暂停态点「1:28 我只能收起喜欢藏得更紧」行的播放键 → 底部进度精确=1:28 且恢复播放（暂停 label→暂停 label 计 3 个）✓
+- ②时长行再上移（TogetherHead）：mt-[30px]→mt-[22px]（第三十三轮再上移 8px）；E2E 实测 avatarsBottom→durTop gap=22px、耳机线尾渐隐段仍不相交
+- ③评论页滚动重构（music-comments.tsx）：滚动容器改为整页列表——标题栏（返回+评论+红条）与歌曲行移入滚动流（跟随滑走），「评论(N)+推荐|最热|最新」行 sticky top-0 z-10 bg-white 吸顶不随滚（对齐用户截图吸顶态：计数行独悬顶部的样式）；切歌/切排序时 listRef.scrollTo(top:0) 防停在半途头部已滑走的状态；E2E：scrollTop=500 时 stickyRowTop=0、返回箭头 bottom=-406（已滑出视口）✓
+- ④展开链接（CommentRow）：灰色「展开更多回复」→ 蓝色 #4791EB 且文案带条数「展开{replyCount}条回复」（对齐用户截图「—— 展开48条回复 ∨」），展开态仍「收起回复」；E2E：展开715条回复/展开304条回复 color=rgb(71,145,235) ✓
+- ⑤搜索页返回键删除（music-search.tsx）：删 music-search-back 按钮（原 onClick 回首页 tab），搜索胶囊框占满整行；ChevronLeft 其余用法（专辑 sheet）保留；E2E backDeleted=true ✓
+- ⑥状态栏颜色实时跟随背景（新机制）：新建 src/lib/ios/status-bar-tone.ts——屏幕级基调栈（push/pop + useSyncExternalStore，'light'=白字配深底 / 'dark'=黑字配浅底，空栈默认白字）；foreground.useLightForeground 在 App 前台分支接入（屏幕级基调最优先，锁屏/手电筒/响铃/切换器语义不变、不越界）；MusicApp 按 nav.view+浮层统一推送：播放页（且无评论/设置浮层）→'light'，登录/首页/搜索/我的/歌单/设置/评论（浅底）→主题 dark?'light':'dark'（深色主题下浅底页转黑底自动改白字）；E2E：搜索页 statusbar-white=false（黑字）→展开播放页 statusbar-white=true（白字）→评论页截图黑字 ✓
+- 环境修复：验证中发现 CSS 包陈旧（含 mt-[30px] 无 mt-[22px]）——Turbopack CSS worker 崩溃（dev.log uncaughtException「Unexpected response from worker」），touch 不生效后重启 dev server（kill next dev 进程 + bun run dev 后台拉起），新 CSS 包确认含 .mt-\[22px\] 后重测
+- E2E（agent-browser 420×900 一次性会话）：解锁→第 3 页→音乐游客模式→搜晴天播 Jay→搜索页（返回键已删+状态栏黑字）→播放页（状态栏白字）→歌词页合成 WheelEvent 亮胶囊（agent-browser 真实滚轮走 JS 兜底不派发 wheel 事件，沿用 R31 结论）→滚动远离当前行→暂停态点 1:28 行播放键→跳 1:28+恢复播放✓→海阔天空 Beyond→评论页（评论(1万)、滚动 500px 标题栏滑出/计数行吸顶 y=0、展开715条回复蓝色、楼层内联+点赞数）→状态栏评论页黑字✓→注入 e2e-r33-char+会话→reload→一起听态 gap=22px（相距 1314 公里·1小时17分钟）✓→清理 IDB（contacts=0、tgLeft=[]）→关浏览器
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 重启后仅正常 API 200（comment 计数/artist sublist 等）
+
+Stage Summary:
+- 交付：歌词胶囊播放键升级为「播这一句」（未播时段点击跳到该行播放、暂停态自动恢复、在播时段维持暂停/继续）；一起听时长再上移 8px；评论页上滑时标题栏+歌曲行跟随滑走、评论(N)+排序吸顶；展开回复链接改蓝色带条数（展开N条回复）；搜索页返回键删除；状态栏前景色按当前界面背景明暗实时切换（新屏幕级基调栈机制，音乐 App 全页面接入，深色主题自适应）
+- 关键决策：①胶囊播放键=「该行时间段判定」——inSegment 用 l.t→下一行起点区间比较，跳播后沿用既有「进度跳变→胶囊熄灭+歌词跟随」语义不特殊化；②状态栏基调用栈而非单值——评论页/设置页等浮层盖在播放页上时后挂载者优先、卸载自动恢复，且锁屏/切换器/通话层优先级高于屏幕基调（不越界）；③音乐 App 基调集中在 MusicApp 一处按 nav/浮层推导（不在各页面散布 hook），评论/设置浮层状态也在 MusicApp scope；④评论页吸顶行用纯 sticky+白底（与截图一致不加边框），标题栏/歌曲行移入滚动流即可，列表其余逻辑零改动
+- 范围限定遵守：改 5 文件（music-player.tsx / music-comments.tsx / music-search.tsx / music.tsx / foreground.ts）+ 新增 1 文件（status-bar-tone.ts）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动（仅时长 margin）；评论数据接口未动；天气/相机等既有 App 状态栏声明未动（无基调推送时走原逻辑）
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx、src/components/apps/music-search.tsx、src/components/apps/music.tsx、src/lib/ios/foreground.ts、src/lib/ios/status-bar-tone.ts（新增）

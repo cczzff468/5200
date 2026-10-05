@@ -237,18 +237,9 @@ export function MusicSearch() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 搜索栏：返回 + 胶囊框（放大镜 + 热词轮播 + 搜索钮） */}
+      {/* 搜索栏：胶囊框（放大镜 + 热词轮播 + 搜索钮）；返回键已删除（第三十三轮反馈） */}
       <div className="sticky top-0 z-20 bg-[#F8F8F8]/95 px-4 pb-2 pt-[54px] backdrop-blur-xl dark:bg-black/95">
         <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => setTab('home')}
-            aria-label="返回"
-            data-testid="music-search-back"
-            className="shrink-0 text-zinc-800 active:scale-95 dark:text-zinc-200"
-          >
-            <ChevronLeft className="h-[22px] w-[22px]" />
-          </button>
           <div className="flex h-[38px] min-w-0 flex-1 items-center rounded-full border border-black/[0.08] bg-white px-3 dark:border-white/10 dark:bg-zinc-900">
             <Search className="h-[17px] w-[17px] shrink-0 text-zinc-500 dark:text-zinc-400" />
             <input

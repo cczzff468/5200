@@ -4,10 +4,11 @@
  * 音乐 App 评论页（独立全屏界面，仿网易云 App 截图）：
  * - 头部：返回箭头（←）+ 居中「评论」标题（标题下红色短条）
  * - 歌曲行：圆形封面 + 「歌名 - 歌手」
- * - 排序档：「评论(N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页）
+ * - 排序档：「评论(N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页；
+ *   第三十三轮起吸顶不随滚动，标题栏/歌曲行随内容滑走）
  * - 评论流：头像 / 昵称 + VIP·等级徽章 / 日期 + IP 属地 / 内容 / 右侧点赞（大拇指），
  *   楼层回复内联直排（第三十二轮去卡片底色，进视口自动预览前 2 条，仿截图），
- *   「展开更多回复」灰色链接（/comment/floor）
+ *   「展开N条回复」蓝色链接（第三十三轮，/comment/floor）
  * - 底部：话题胶囊行 + 「听了这么多，可能你有话想说」输入条 + 「发送」文字键
  *   （点赞/发表需登录，游客 toast 引导）
  */
@@ -107,13 +108,14 @@ export function CommentsPage() {
     }
   };
 
-  // 切歌/切排序：重置并重拉（楼层回复与输入引用一并清空）
+  // 切歌/切排序：重置并重拉（楼层回复与输入引用一并清空；滚动回顶避免停在半途头部已滑走的状态）
   useEffect(() => {
     seqRef.current += 1;
     setData(null);
     setFloors({});
     setReplyTo(null);
     setLoading(true);
+    listRef.current?.scrollTo({ top: 0 });
     void load(sort, '', true);
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -278,95 +280,98 @@ export function CommentsPage() {
       className="absolute inset-0 z-[68] flex flex-col bg-white dark:bg-zinc-950"
       data-testid="music-comments"
     >
-      {/* 头部：返回 + 居中「评论」标题（红色短条下划线，仿截图）；pt-[58px] 避让状态栏+灵动岛 */}
-      <div className="relative shrink-0 border-b border-black/[0.04] px-3 pb-2 pt-[58px] dark:border-white/[0.06]">
-        <button
-          type="button"
-          onClick={close}
-          aria-label="返回"
-          data-testid="music-comment-back"
-          className="absolute bottom-1 left-1.5 p-2 text-zinc-800 active:scale-95 dark:text-zinc-200"
-        >
-          <ArrowLeft className="h-6 w-6" />
-        </button>
-        <div className="flex flex-col items-center">
-          <p className="text-[17px] font-semibold text-zinc-900 dark:text-zinc-100">评论</p>
-          <span
-            className="mt-[3px] h-[3px] w-6 rounded-full bg-[#C20C0C]"
-            aria-hidden
-            data-testid="music-comment-underline"
-          />
-        </div>
-      </div>
-
-      {/* 歌曲行：圆封面 + 歌名 - 歌手 */}
-      <div className="flex shrink-0 items-center gap-3 px-4 py-3">
-        <CoverImg src={songCover(song)} className="h-11 w-11 shrink-0" rounded="rounded-full" alt={song.name} />
-        <p className="min-w-0 flex-1 truncate text-[16px]" data-testid="music-comment-song">
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">{song.name}</span>
-          <span className="text-zinc-400"> - {artist}</span>
-        </p>
-      </div>
-
-      {/* 排序档：评论 (N) + 推荐|最热|最新 */}
-      <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-1">
-        <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-comment-total">
-          评论{data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
-        </p>
-        <div className="flex items-center">
-          {SORT_ORDER.map((k, i) => (
-            <Fragment key={k}>
-              {i > 0 && <span className="mx-3 h-3 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />}
-              <button
-                type="button"
-                onClick={() => setSort(k)}
-                data-testid={`music-comment-sort-${k}`}
-                className={`text-[14px] active:opacity-70 ${
-                  sort === k ? 'font-semibold text-zinc-900 dark:text-zinc-100' : 'text-zinc-400'
-                }`}
-              >
-                {SORT_LABEL[k]}
-              </button>
-            </Fragment>
-          ))}
-        </div>
-      </div>
-
-      {/* 评论流（近底部自动翻页） */}
+      {/* 滚动容器（第三十三轮）：向上滑动时标题栏与歌曲行跟随滑走，评论(N)+排序 tab 吸顶不随滚 */}
       <div
         ref={listRef}
         onScroll={onListScroll}
-        className="min-h-0 flex-1 overflow-y-auto px-4"
+        className="min-h-0 flex-1 overflow-y-auto"
         data-testid="music-comment-list"
       >
-        {loading && !data ? (
-          <LoadingBlock />
-        ) : !data || data.list.length === 0 ? (
-          <EmptyBlock text="还没有评论，来抢沙发" />
-        ) : (
-          <>
-            {data.list.map((c) => (
-              <CommentRow
-                key={`${sort}-${c.commentId}`}
-                c={c}
-                floor={floors[c.commentId]}
-                onLike={() => void like(c)}
-                onLikeFloor={(r) => void like(r, c.commentId)}
-                onReply={() => setReplyTo(c)}
-                onToggleFloor={() => void toggleFloor(c)}
-                onPreview={() => previewFloor(c)}
-              />
+        {/* 头部（随滚动滑走）：返回 + 居中「评论」标题（红色短条下划线，仿截图）；pt-[58px] 避让状态栏+灵动岛 */}
+        <div className="relative border-b border-black/[0.04] px-3 pb-2 pt-[58px] dark:border-white/[0.06]">
+          <button
+            type="button"
+            onClick={close}
+            aria-label="返回"
+            data-testid="music-comment-back"
+            className="absolute bottom-1 left-1.5 p-2 text-zinc-800 active:scale-95 dark:text-zinc-200"
+          >
+            <ArrowLeft className="h-6 w-6" />
+          </button>
+          <div className="flex flex-col items-center">
+            <p className="text-[17px] font-semibold text-zinc-900 dark:text-zinc-100">评论</p>
+            <span
+              className="mt-[3px] h-[3px] w-6 rounded-full bg-[#C20C0C]"
+              aria-hidden
+              data-testid="music-comment-underline"
+            />
+          </div>
+        </div>
+
+        {/* 歌曲行（随滚动滑走）：圆封面 + 歌名 - 歌手 */}
+        <div className="flex items-center gap-3 px-4 py-3">
+          <CoverImg src={songCover(song)} className="h-11 w-11 shrink-0" rounded="rounded-full" alt={song.name} />
+          <p className="min-w-0 flex-1 truncate text-[16px]" data-testid="music-comment-song">
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">{song.name}</span>
+            <span className="text-zinc-400"> - {artist}</span>
+          </p>
+        </div>
+
+        {/* 排序档（吸顶不随滚动）：评论 (N) + 推荐|最热|最新 */}
+        <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-4 pb-2 pt-2 dark:bg-zinc-950">
+          <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-comment-total">
+            评论{data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
+          </p>
+          <div className="flex items-center">
+            {SORT_ORDER.map((k, i) => (
+              <Fragment key={k}>
+                {i > 0 && <span className="mx-3 h-3 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />}
+                <button
+                  type="button"
+                  onClick={() => setSort(k)}
+                  data-testid={`music-comment-sort-${k}`}
+                  className={`text-[14px] active:opacity-70 ${
+                    sort === k ? 'font-semibold text-zinc-900 dark:text-zinc-100' : 'text-zinc-400'
+                  }`}
+                >
+                  {SORT_LABEL[k]}
+                </button>
+              </Fragment>
             ))}
-            {loadingMore && (
-              <div className="flex justify-center py-3">
-                <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
-              </div>
-            )}
-            {!data.hasMore && data.list.length > 0 && (
-              <p className="py-4 text-center text-[11px] text-zinc-300 dark:text-zinc-600">已经到底啦</p>
-            )}
-          </>
-        )}
+          </div>
+        </div>
+
+        {/* 评论流（近底部自动翻页） */}
+        <div className="px-4">
+          {loading && !data ? (
+            <LoadingBlock />
+          ) : !data || data.list.length === 0 ? (
+            <EmptyBlock text="还没有评论，来抢沙发" />
+          ) : (
+            <>
+              {data.list.map((c) => (
+                <CommentRow
+                  key={`${sort}-${c.commentId}`}
+                  c={c}
+                  floor={floors[c.commentId]}
+                  onLike={() => void like(c)}
+                  onLikeFloor={(r) => void like(r, c.commentId)}
+                  onReply={() => setReplyTo(c)}
+                  onToggleFloor={() => void toggleFloor(c)}
+                  onPreview={() => previewFloor(c)}
+                />
+              ))}
+              {loadingMore && (
+                <div className="flex justify-center py-3">
+                  <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+                </div>
+              )}
+              {!data.hasMore && data.list.length > 0 && (
+                <p className="py-4 text-center text-[11px] text-zinc-300 dark:text-zinc-600">已经到底啦</p>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* 话题胶囊行 */}
@@ -538,16 +543,16 @@ function CommentRow({
           </div>
         )}
         {floor?.open && floor.loading && <p className="mt-2 text-[12px] text-zinc-400">回复加载中…</p>}
-        {/* 展开/收起楼层回复（灰色链接 + 横线前缀，仿截图「—— 展开更多回复 ∨」） */}
+        {/* 展开/收起楼层回复（蓝色链接 + 横线前缀，第三十三轮按用户截图：「—— 展开48条回复 ∨」） */}
         {replyCount > 0 && !allCollapsed && (
           <button
             type="button"
             onClick={onToggleFloor}
             data-testid={`music-comment-floor-${c.commentId}`}
-            className="mt-2.5 flex items-center gap-2 text-[13px] text-zinc-500 active:opacity-70 dark:text-zinc-400"
+            className="mt-2.5 flex items-center gap-2 text-[13px] text-[#4791EB] active:opacity-70"
           >
             <span className="h-px w-6 bg-zinc-300 dark:bg-zinc-600" aria-hidden />
-            {floor?.open ? '收起回复' : '展开更多回复'}
+            {floor?.open ? '收起回复' : `展开${replyCount}条回复`}
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${floor?.open ? 'rotate-180' : ''}`} />
           </button>
         )}

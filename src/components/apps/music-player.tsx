@@ -934,6 +934,7 @@ function LyricView({
   const position = useMusic((s) => s.position);
   const playing = useMusic((s) => s.playing);
   const toggle = useMusic((s) => s.toggle);
+  const seek = useMusic((s) => s.seek);
   const boxRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   // 手动浏览中：暂停自动跟随；松手 3 秒无操作回当前行（需求三.3）
@@ -1260,12 +1261,22 @@ function LyricView({
               )}
               {isActive && (
                 /* 播放/暂停小键（右侧悬浮）：胶囊亮起时才可点（胶囊内明确的播放控件，
-                    点它不算「点歌词」，stopPropagation 防误触返回唱片） */
+                    点它不算「点歌词」，stopPropagation 防误触返回唱片）；
+                    第三十三轮反馈：胶囊后播放键=播这一句——该行时间段（l.t→下一行起点）
+                    不在播放时跳到该行起点播放（seek 后胶囊按进度跳变语义熄灭、歌词跟随
+                    新播放行），已在播该段则维持播放/暂停切换 */
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggle();
+                    const nextT = lyricLines[i + 1]?.t;
+                    const inSegment = position >= l.t - 0.3 && (nextT === undefined || position < nextT);
+                    if (!inSegment) {
+                      seek(Math.max(0, l.t - 0.2));
+                      if (!playing) toggle();
+                    } else {
+                      toggle();
+                    }
                   }}
                   aria-label={playing ? '暂停' : '播放'}
                   data-testid="music-lyric-play-toggle"
@@ -1423,9 +1434,9 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          第三十二轮 mt-[40px]→mt-[30px] 整体上移 10px（用户要求「时长往上一点」），
-          线尾渐隐段（页面 y≈75px）仍在时长行上方 ~19px 不相交 */}
-      <p className={`mt-[30px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+          第三十三轮 mt-[30px]→mt-[22px] 再上移 8px（用户「时长再往上一点」），
+          线尾渐隐段（页面 y≈165）仍在时长行上方 ~11px 不相交 */}
+      <p className={`mt-[22px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——

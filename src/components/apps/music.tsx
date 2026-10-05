@@ -7,6 +7,7 @@
  * - 未登录 → 登录页（扫码 / 手机号验证码 / 密码 三种方式 + API 配置 + 游客模式）
  * - 已登录或游客 → Tab 框架（首页/搜索/我的 + 迷你播放条）
  * - 全屏覆盖层：播放页（黑胶+歌词）、歌单详情、设置页、评论页（独立界面）
+ * - 状态栏前景实时跟随界面背景明暗（第三十三轮：浅底页黑字 / 深色播放页白字）
  *
  * 全局播放引擎与登录态在 music-store / music-ai（模块级持久化，App 外仍播放）。
  */
@@ -35,6 +36,8 @@ import {
   type QrState,
 } from '@/lib/ios/music-api';
 import { useMusic, enterGuestMode } from '@/lib/ios/music-store';
+import { useSettings, useSystemDark } from '@/lib/ios/store';
+import { useStatusBarToneEffect, type StatusBarTone } from '@/lib/ios/status-bar-tone';
 import { bootMusicAi } from '@/lib/ios/music-ai';
 import { MusicTabBar, MiniBar } from './music-shared';
 import { MusicHome } from './music-home';
@@ -52,6 +55,16 @@ export default function MusicApp() {
   const guestMode = useMusic((s) => s.guestMode);
   const openAppNow = useMusic((s) => s.openAppNow);
   const [showSettings, setShowSettings] = useState(false);
+
+  // 状态栏前景实时跟随当前界面背景明暗（第三十三轮反馈：背景深→状态栏白，背景白→状态栏黑）：
+  // 播放页（封面模糊深色底）→ 白字；登录/首页/搜索/我的/歌单/设置/评论（浅底）→ 黑字；
+  // 深色主题下浅底页转黑底 → 白字。评论页/设置页盖在其它页上时优先
+  const theme = useSettings((s) => s.theme);
+  const systemDark = useSystemDark();
+  const themeDark = theme === 'auto' ? systemDark : theme === 'dark';
+  const tone: StatusBarTone =
+    nav.view === 'player' && !commentSong && !showSettings ? 'light' : themeDark ? 'light' : 'dark';
+  useStatusBarToneEffect(tone);
 
   useEffect(() => {
     openAppNow(); // 幂等 boot：音频引擎 + 登录态异步校验 + 历史

@@ -10,6 +10,7 @@ import {
   WALLPAPER_PRESETS,
   type AppId,
 } from '@/lib/ios/store';
+import { useStatusBarTone } from './status-bar-tone';
 
 /** 与 registry 各 App 声明的 statusBarLight 保持一致（内联小表，避免为取一个布尔值把整个 App 注册表拉进首屏包） */
 const APP_STATUS_BAR_LIGHT: Partial<Record<AppId, boolean>> = {
@@ -66,9 +67,14 @@ export function useLightForeground(region: 'top' | 'bottom' = 'top'): boolean {
   const preset = WALLPAPER_PRESETS.find((w) => w.id === effPresetId);
   const staticLight = !effCustom && (preset?.light ?? false);
   const lightWallpaper = (region === 'top' ? measured.top : measured.bottom) ?? staticLight;
+  // 屏幕级实时基调（第三十三轮）：最上层页面自己声明的背景明暗（如音乐 App 白底页/深色播放页切换）
+  const toneOverride = useStatusBarTone();
 
   if (callActive) return true; // 电话通话全屏层（深色渐变，盖在 App 上）→ 白前景
   if (activeApp && !switcherOpen) {
+    // 屏幕级基调最优先（锁屏时页面虽仍挂载但状态栏在锁屏壁纸上，基调不越界）；
+    // 无覆盖时回落 App 静态声明/主题
+    if (toneOverride && !locked) return toneOverride === 'light';
     return APP_STATUS_BAR_LIGHT[activeApp] ?? dark;
   }
   if (torchOpen) return false; // 全屏白 → 黑前景
