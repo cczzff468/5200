@@ -360,7 +360,7 @@ export function MusicPlayer() {
                   className={`h-[26px] w-[26px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                   fill={liked ? 'currentColor' : 'none'}
                 />
-                <span className="absolute -top-[13px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55">
+                <span className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
                   {fmtCountW(fakeHotCount(current.id))}
                 </span>
               </button>
@@ -509,7 +509,12 @@ export function MusicPlayer() {
       {/* 封面/歌词切换区（留出顶部唱针空间；歌词视图加宽到近全宽，仿网易云歌词页） */}
         <div className={`relative flex min-h-0 flex-1 items-center justify-center pt-4 ${showLyric ? 'px-3' : 'px-8'}`}>
           {showLyric ? (
-            <LyricView onSwitch={() => setShowLyric(false)} />
+            <LyricView
+              song={current}
+              onSwitch={() => setShowLyric(false)}
+              onMore={() => setShowMore(true)}
+              onToast={setMoreToast}
+            />
           ) : (
             <VinylView
               song={current}
@@ -519,7 +524,7 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 歌名行 + 操作图标（信息/爱心/评论；数字在各自图标正上方，等距排开不重叠） */}
+        {/* 歌名行 + 操作图标（信息/爱心/评论；数字挂在各自图标右上角角标位，第二十五轮） */}
         <div className="flex items-end justify-between gap-2 pl-5 pr-8 pb-1">
           <div className="min-w-0 flex-1 pb-0.5">
             <div className="flex items-center gap-2">
@@ -562,7 +567,10 @@ export function MusicPlayer() {
                 className={`h-[25px] w-[25px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                 fill={liked ? 'currentColor' : 'none'}
               />
-              <span className="absolute -top-[15px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55">
+              <span
+                className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
+                data-testid="music-player-like-count"
+              >
                 {fmtCountW(fakeHotCount(current.id))}
               </span>
             </button>
@@ -575,7 +583,7 @@ export function MusicPlayer() {
             >
               <MessageCircleMore className="h-[25px] w-[25px] text-white/75" />
               <span
-                className="absolute -top-[15px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55"
+                className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
                 data-testid="music-player-comment-count"
               >
                 {cmtState.total === null ? '' : fmtCountW(cmtState.total)}
@@ -867,7 +875,18 @@ async function copyLyricText(t: string): Promise<boolean> {
   }
 }
 
-function LyricView({ onSwitch }: { onSwitch: () => void }) {
+function LyricView({
+  song,
+  onSwitch,
+  onMore,
+  onToast,
+}: {
+  song: NcmSong;
+  onSwitch: () => void;
+  /** 右上角更多钮 → 歌曲操作面板（MoreSheet） */
+  onMore: () => void;
+  onToast: (m: string) => void;
+}) {
   const lyricLines = useMusic((s) => s.lyricLines);
   const loading = useMusic((s) => s.lyricLoading);
   const showTr = useMusic((s) => s.lyricShowTr);
@@ -978,20 +997,63 @@ function LyricView({ onSwitch }: { onSwitch: () => void }) {
 
   return (
     <div className="relative h-full w-full" data-testid="music-lyric-view">
-      <div className="absolute right-1 top-0 z-10 flex gap-2">
+      {/* 顶部歌名/歌手头部（第二十五轮，按用户截图：左下拉箭头回黑胶 / 中间 VIP+歌名+歌手+关注 / 右侧更多钮开歌曲面板） */}
+      <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-2 px-4">
         <button
           type="button"
-          onClick={() => setShowTr(!showTr)}
-          className={`rounded-full px-2.5 py-1 text-[10px] ${
-            showTr ? 'bg-white/20 text-white' : 'bg-white/5 text-white/40'
-          }`}
+          onClick={onSwitch}
+          aria-label="返回黑胶"
+          data-testid="music-lyric-back"
+          className="-ml-1 mt-1 p-1 text-white/85 active:scale-95"
         >
-          译
+          <ChevronDown className="h-7 w-7" />
         </button>
-        <button type="button" onClick={onSwitch} aria-label="返回封面" className="rounded-full bg-white/5 p-1.5 text-white/50">
-          <ChevronDown className="h-4 w-4" />
+        <div className="flex min-w-0 flex-1 flex-col items-center pt-0.5">
+          <div className="flex max-w-full items-center gap-1.5">
+            {song.fee === 1 && (
+              <span
+                className="shrink-0 rounded-[4px] border border-white/60 px-[5px] text-[10px] leading-[15px] text-white/85"
+                data-testid="music-lyric-vip"
+              >
+                VIP
+              </span>
+            )}
+            <h2
+              className="truncate text-[20px] font-bold leading-tight text-white"
+              data-testid="music-lyric-song-name"
+            >
+              {song.name}
+            </h2>
+          </div>
+          <div className="mt-1 flex max-w-full items-center gap-2">
+            <p className="min-w-0 truncate text-[13px] text-white/65" data-testid="music-lyric-artist">
+              {songArtistText(song)}
+            </p>
+            <FollowPill song={song} onToast={onToast} />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onMore}
+          aria-label="歌曲操作面板"
+          data-testid="music-lyric-more"
+          className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
+        >
+          <MoreVertical className="h-[17px] w-[17px] text-white/90" />
         </button>
       </div>
+      {/* 翻译开关（头部下方右侧悬浮，不占头部一行；中英对照能力保留） */}
+      <button
+        type="button"
+        onClick={() => setShowTr(!showTr)}
+        aria-label="翻译开关"
+        data-testid="music-lyric-tr-toggle"
+        className={`absolute right-3 top-[56px] z-20 rounded-full px-2.5 py-1 text-[10px] ${
+          showTr ? 'bg-white/20 text-white' : 'bg-white/5 text-white/40'
+        }`}
+      >
+        译
+      </button>
       {/* 复制反馈（浮在歌词区顶部，不打断布局） */}
       {copied && (
         <div

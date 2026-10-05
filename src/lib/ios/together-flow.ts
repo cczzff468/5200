@@ -4,8 +4,8 @@
  * 一起听邀请/同意卡片链路（第二十四轮）：
  *
  * - 我邀请 AI 一起听时，我也要在聊天里发一张「邀请你一起听」歌曲卡片（kind='song' + inviteDone）；
- * - AI「接受」后，双方各发一张「已同意一起听」卡片（kind='song' + agree），随后建一起听会话；
- * - AI 邀请被接受（全局邀请卡 ✓）时走同一套同意卡：我先发（接受方），TA 随后补一张；
+ * - 同意卡只有「接受方」发一张（第二十五轮反馈）：我邀请 → TA 接受 → 只有 TA 发「已同意一起听」；
+ *   AI 邀请被接受（全局邀请卡 ✓）→ 我是接受方 → 只有我发「已同意一起听」，TA（邀请方）不再补发；
  * - 卡片落库与音乐 App 分享同款（kv 直写 wx/qq-chat-msgs）；聊天页在场时由调用方传 insert
  *   实时插入（setMsgs + saveMsgs），不在场时 kv 直写（回到聊天页 loadMsgs 恢复）；
  * - 邀请/接受都写角色记忆（sourceTag='music-invite'），后续所有聊天可召回。
@@ -46,7 +46,7 @@ function genCardId(): string {
   return `tgc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** 构造一起听卡片：kind='invite' 邀请卡（我发）/ kind='agree' 同意卡（双方各发一张） */
+/** 构造一起听卡片：kind='invite' 邀请卡（我发）/ kind='agree' 同意卡（接受方发一张） */
 export function buildTgCardMsg(role: 'me' | 'peer', kind: 'invite' | 'agree', song: TgCardSong): TgCardMsg {
   const label = song.artist ? `《${song.name}》（${song.artist}）` : `《${song.name}》`;
   return {
@@ -129,7 +129,7 @@ async function writeAcceptedMemory(cid: string, song: TgCardSong): Promise<void>
 /**
  * 我邀请 TA 一起听：
  * 1. 立即发「邀请你一起听」卡片（我方）+ 写邀请记忆；
- * 2. 1.3~2.6s 后 AI「接受」→ TA 的同意卡 → 建一起听会话 → ~0.9s 后我的同意卡；
+ * 2. 1.3~2.6s 后 AI「接受」→ 只有 TA（接受方）发同意卡 → 建一起听会话；
  * 3. 接受写记忆（TA 后续聊天接得住「一起听过了」）。
  */
 export function sendUserTogetherInvite(opts: UserInviteOptions): void {
@@ -175,13 +175,12 @@ export function sendUserTogetherInvite(opts: UserInviteOptions): void {
   // 2. AI 接受（延迟拟真）
   window.setTimeout(
     () => {
-      put(buildTgCardMsg('peer', 'agree', song)); // TA 的同意卡
+      put(buildTgCardMsg('peer', 'agree', song)); // 只有接受方（TA）发同意卡（第二十五轮反馈，我方不再补发）
       try {
         startTogether(contact);
       } catch {
         // 会话失败卡片保留
       }
-      window.setTimeout(() => put(buildTgCardMsg('me', 'agree', song)), 900); // 我的同意卡
       void writeAcceptedMemory(contact.id, song);
     },
     1300 + Math.floor(Math.random() * 1300),
@@ -191,16 +190,12 @@ export function sendUserTogetherInvite(opts: UserInviteOptions): void {
 // ---------------- AI 邀请被接受（全局邀请卡 ✓） ----------------
 
 /**
- * AI 一起听邀请被接受后，双方各发一张「已同意一起听」卡片：
- * 我先发（我是接受方），TA ~1s 后补一张（「好，开始吧」）。
- * 聊天页多半不在场（全局弹卡），走 kv 直写。
+ * AI 一起听邀请被接受后，只有接受方（我）发一张「已同意一起听」卡片
+ * （第二十五轮反馈：邀请方 TA 不再补发同意卡）。聊天页多半不在场（全局弹卡），走 kv 直写。
  */
-export function sendAgreePairForAccept(cid: string, song: TgCardSong): void {
+export function sendAgreeCardForAccept(cid: string, song: TgCardSong): void {
   void (async () => {
     const app = await lastChatAppOf(cid);
     kvInsertCard(cid, app, buildTgCardMsg('me', 'agree', song));
-    window.setTimeout(() => {
-      kvInsertCard(cid, app, buildTgCardMsg('peer', 'agree', song));
-    }, 1000);
   })();
 }

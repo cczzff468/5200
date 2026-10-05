@@ -23,7 +23,7 @@ import { useGlobalCall } from './global-call';
 import { useMusic } from './music-store';
 import { getContact, listContacts } from './contacts-store';
 import { loadActiveTogether, startTogether } from './music-ai';
-import { sendAgreePairForAccept } from './together-flow';
+import { sendAgreeCardForAccept } from './together-flow';
 import { memAddEventFragment } from '../memory';
 import type { ContactRecord } from '../contacts';
 
@@ -130,8 +130,8 @@ export async function acceptTogetherInvite(): Promise<void> {
     const contact = await getContact(inv.contactId);
     if (contact && contact.kind === 'char') {
       startTogether(contact);
-      // 第二十四轮：同意一起听后双方各发一张同意卡（我先发，TA 随后补）
-      sendAgreePairForAccept(inv.contactId, { name: inv.songName, artist: inv.artist });
+      // 同意卡只有接受方（我）发一张（第二十五轮反馈，TA 邀请方不再补发）
+      sendAgreeCardForAccept(inv.contactId, { name: inv.songName, artist: inv.artist });
       const ui = useUI.getState();
       if (ui.activeApp !== 'music') ui.switchToApp('music');
       else useMusic.getState().openPlayer();

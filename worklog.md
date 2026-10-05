@@ -15312,3 +15312,30 @@ Stage Summary:
 - 关键实现：appendMsg 作为一起听消息单一收口挂记忆日志；insert 回调模式让同一 sendUserTogetherInvite 兼容「聊天页在场实时刷/不在场 kv 直写」两种落库；together-flow 独立模块避免 music-ai/together-invite 循环依赖
 - 范围限定遵守：改动 9 文件（music-api/music-ai/together-invite/together-flow 新/music-player/song-msg-bubble/together-invite-sheet 新/wechat/qq）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话核心逻辑未触碰（wechat/qq 仅加号项+渲染传参各 3 处）；音乐数据按账号隔离未动
 - 改动文件：src/lib/ios/music-api.ts、src/lib/ios/music-ai.ts、src/lib/ios/together-invite.ts、src/lib/ios/together-flow.ts（新）、src/components/apps/music-player.tsx、src/components/apps/song-msg-bubble.tsx、src/components/apps/together-invite-sheet.tsx（新）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+
+---
+Task ID: 84
+Agent: Z.ai Code（主会话）
+Task: 第二十五轮——①歌词界面顶部加歌名/歌手头部（按用户截图：左下拉箭头/VIP+歌名/歌手+关注/右更多钮）②同意卡只由「接受方」发一张（我邀请→只有 TA 发；TA 邀请被接受→只有我发）③听歌界面爱心/评论数字移到图标右上角
+
+Work Log:
+- ①歌词头部（music-player.tsx LyricView）：
+  - 新签名 song/onMore/onToast 三 props（调用点传 current/setShowMore/setMoreToast）；原「译+下拉箭头」小行整体替换为截图同款头部——左：下拉箭头回黑胶（music-lyric-back）；中：VIP 徽章（song.fee===1 才显示，白描边胶囊）+歌名 20px 粗体居中（music-lyric-song-name），下一行 歌手 13px+FollowPill 关注胶囊（与设置弹窗/一起听聊天视图同一 store 状态源）；右：bg-white/10 圆形钮（music-lyric-more）开歌曲操作面板 MoreSheet
+  - 「译」按钮保留（中英对照能力不丢）：头部下方右侧悬浮 top-[56px]，不占头部一行
+- ②同意卡语义修正（together-flow.ts + together-invite.ts）：
+  - sendUserTogetherInvite：删「~0.9s 后我的同意卡」定时器——我是邀请方不再发同意卡，AI（接受方）发唯一一张
+  - sendAgreePairForAccept 改名 sendAgreeCardForAccept：删「TA ~1s 后补一张」——AI 邀请被接受后只有我（接受方）发一张；together-invite.ts import/调用点/注释同步
+  - 文件头/函数注释/_song-msg-bubble 头注释同步更新（「双方各发」→「只有接受方发一张」）
+- ③计数角标（music-player.tsx 三处）：音乐视图爱心数/评论数 + 一起听聊天视图爱心数，从「图标正上方居中」(-top-15 left-1/2 -translate-x-1/2) 改为「图标右上角」(-right-[7px] -top-[8px] 无 translate)，加 [text-shadow] 防背景花色吃字；like-count 补 data-testid
+- E2E（agent-browser 420×900 隔离会话，原生 mouse 全程）：
+  - 角标：爱心 icon right=331/数字 right=338、top=675 vs icon 683（右上角 +7/-8 精确命中）✓；评论数同位 ✓；504w+/16w+ 显示
+  - 歌词头部：游客搜「匆匆那年王菲」播放 → 黑胶点击切歌词 → 头部五件套齐（歌名/王菲/VIP/关注胶囊/更多钮/回黑胶箭头/译）✓；VIP 徽章 fee===1 才渲染——fee=8 的同名单不在场、队列中 fee=1 版本（id 29713754）经播放列表点播后徽章出现（截图与用户参考图同构：VIP+匆匆那年居中、王菲+关注在下）✓；更多钮开 MoreSheet ✓；回黑胶箭头歌词→黑胶 ✓（首次点击被 MoreSheet 关闭动画吞掉属时序，重按正常）
+  - 同意卡：IDB 种 e2e-r25-user/char（isFriend 补 true 后入列表）→ wx 登录 → 小柔聊天 → 加号「一起听」→ 选「千千阙歌 陈慧娴」→ 我方邀请卡即时出现 → ~2s TA 同意卡 → 全程仅 2 张卡（song-bubble-me 邀请 + song-bubble-peer 已同意），第三张「我的同意卡」不再出现 ✓；music-together-active:guest = e2e-r25-char 会话建立 ✓
+  - 清理：测试联系人/kv（聊天/会话/记忆/一起听）/wx-session 全删，contacts=[]、e2e 键零残留；console/errors 零应用错误
+- bunx tsc 0 错误；bun run lint 0 错误；dev.log 无应用错误（两条 Turbopack worker 噪音与代码无关）
+
+Stage Summary:
+- 交付：歌词页顶部歌名/歌手头部（截图同款五件套+译保留）；一起听同意卡改为「只有接受方发一张」（两条链路对称修正）；听歌界面爱心/评论计数全部挂图标右上角
+- 关键决策：①同意卡归属=接受方（用户指出邀请方再发同意卡不合常理，邀请卡已表达意愿）；②VIP 徽章沿用 fee===1 判定（与 MoreSheet 同口径，fee=8 低音质免费不显示）；③「译」不进头部行保持截图构图，悬浮在头部下方
+- 范围限定遵守：改 4 文件（music-player/together-flow/together-invite/song-msg-bubble 注释）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项未触碰；一起听记忆写入/邀请记忆逻辑未动
+- 改动文件：src/components/apps/music-player.tsx、src/lib/ios/together-flow.ts、src/lib/ios/together-invite.ts、src/components/apps/song-msg-bubble.tsx（仅头注释）
