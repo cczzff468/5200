@@ -14,6 +14,7 @@ import { ensureKvReady } from '@/lib/ios/idb-kv';
 import { migrateLegacyAccounts } from '@/lib/ios/accounts';
 import StatusBar from './StatusBar';
 import HomeScreen from './HomeScreen';
+import { preloadHeavyApps } from '@/components/apps/registry';
 import { CustomWallpaperLayers } from './WallpaperLayers';
 import AppWindow from './AppWindow';
 import AppSwitcher from './AppSwitcher';
@@ -94,6 +95,13 @@ export default function PhoneShell() {
   // 启动时一次性迁移：旧版存服务端的联系人/微信背景图 → 本地 IndexedDB（先搬后删，详见 contacts-store.ts）
   useEffect(() => {
     void migrateFromServer();
+  }, []);
+
+  // 主屏空闲预热（刷新后首次打开音乐 App 不再等 chunk 编译/下载数秒）：首帧稳定 ~2.5s 后
+  // 后台预载音乐 App chunk + 提前音乐 boot/一起听恢复（preloadHeavyApps 幂等，失败静默）
+  useEffect(() => {
+    const t = window.setTimeout(() => preloadHeavyApps(), 2500);
+    return () => window.clearTimeout(t);
   }, []);
 
   // 底部边缘上滑手势（全局）：从屏幕最底下往上滑 → 打开多任务切换器，主屏幕与所有 App 内均生效（含时钟）。

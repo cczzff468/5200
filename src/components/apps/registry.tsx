@@ -393,3 +393,28 @@ export const GRID_APPS: AppMeta[] = APPS.filter((a) => !DOCK_IDS.includes(a.id))
 
 /** 底部 Dock（4 个） */
 export const DOCK_APPS: AppMeta[] = DOCK_IDS.map((id) => APP_MAP[id]);
+
+/**
+ * 主屏空闲预热重 App（解决「刷新网页后首次打开音乐 App 要等一会」）：
+ * 音乐 App 是 dynamic 懒加载（上方 MusicApp），刷新后首次点开要现场编译/下载大 chunk
+ * （music.tsx + home/player/search/mine/playlist/settings/comments 数千行）再挂载 boot，
+ * 冷启动明显卡顿。主屏挂载 ~2.5s 后（首帧稳定、用户尚未操作）后台预热：
+ * ① 预载音乐 App chunk（与 dynamic 同一模块引用，重复调用幂等，打开时直接命中缓存）；
+ * ② 提前执行音乐 boot（幂等：音频引擎惰性建 + 登录态校验 + 快照/历史恢复）；
+ * ③ 提前恢复一起听会话与 AI 钩子（bootMusicAi 幂等）。
+ */
+export function preloadHeavyApps(): void {
+  void import('./music');
+  void import('@/lib/ios/music-store')
+    .then((m) => {
+      try {
+        void m.useMusic.getState().boot();
+      } catch {
+        /* 预热失败静默（App 打开时 boot 会重试） */
+      }
+    })
+    .catch(() => undefined);
+  void import('@/lib/ios/music-ai')
+    .then((m) => void m.bootMusicAi())
+    .catch(() => undefined);
+}

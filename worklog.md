@@ -15864,3 +15864,18 @@ Stage Summary:
 - 新增文件：src/components/ios/MusicWidget.tsx
 - 修改：HomeScreen.tsx（注册+v10 迁移）、WidgetGallery.tsx（注册）、NeteaseCard.tsx（真实播放）、VinylCard.tsx（真实播放+light prop）、music-shared.tsx（MiniBar 进度环）、MusicGlobalMini.tsx（悬浮条进度环）
 - 决策：小组件点击空白开音乐 App 由 WIDGET_META.openApp 驱动，内部控制键 pointerdown+click 双拦截；时长回退歌曲元数据（durationchange 前）；爱心已喜欢态用 iOS 系统红；布局走 v10 重置迁移（保留 hidden）
+
+---
+Task ID: music-widget-r2
+Agent: main
+Task: 音乐小组件四项优化——控制键放大、空态改默认态（去掉「尚未播放音乐」文案）、声波条律动动画、修复刷新后首次打开音乐 App 等待数秒
+
+Work Log:
+- MusicWidget.tsx：控制键图标放大（Heart 20→23px / Skip 21→24px / Play·Pause 25→28px，热区 32→34px、播放键 36→40px，三连 gap 30→26px 仍居中不溢出）；空态重构为「默认态」——与正常布局完全同构（音符占位封面 + 「音乐」粗体标题 + 0:00/空进度条/-0:00 + 全套控制键），删除「尚未播放音乐」文案分支（music-widget-empty testid 移除）；爱心/切歌无 current 时 no-op，播放键保留（有快照队列可恢复播放）
+- 声波动画：globals.css 新增 @keyframes music-wave（scaleY 1→0.4→1），播放中每根 bar 挂 animate-[music-wave_0.9s_ease-in-out_infinite] 且 animationDelay=i*-0.13s 错峰跳动（transformOrigin center），暂停静止保留 transition-colors
+- 打开慢修复：根因=MusicApp 走 next/dynamic 懒加载，刷新后首次点开需现场编译/下载数千行 chunk（music+home/player/search/mine/playlist/settings/comments）再 boot；registry.tsx 新增 preloadHeavyApps()（预载音乐 chunk + 提前 useMusic.boot()（幂等：引擎惰性建/登录校验/快照历史恢复）+ bootMusicAi()（幂等）），PhoneShell 挂载 2.5s 后 setTimeout 调用（首帧稳定后空闲预热，失败静默）
+- 验证（agent-browser 430×932）：刷新解锁后等预热，点小组件开音乐 App 实测 582ms（此前数秒）；主屏默认态截图（音符占位+「音乐」+空进度，无旧文案）；游客模式播放「偷心」后小组件实时进度 0:34/-3:13、computed style 确认 animationName=music-wave/0.9s/infinite 运行中、按钮放大视觉明显；lint 通过；浏览器 console/errors 无错误（dev.log 仅 Turbopack 编译期 worker 记录）
+
+Stage Summary:
+- 修改：MusicWidget.tsx（放大/默认态/动画）、globals.css（music-wave keyframes）、registry.tsx（preloadHeavyApps）、PhoneShell.tsx（2.5s 空闲预热 effect）
+- 决策：默认态保持完整布局同构避免增删跳动；预热延迟 2.5s 避开首帧；boot/bootMusicAi 均幂等可安全提前调用

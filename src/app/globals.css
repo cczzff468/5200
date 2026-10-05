@@ -250,6 +250,17 @@
   }
 }
 
+/* 音乐小组件声波条律动（播放中每根条错峰缩放跳动，暂停时静止） */
+@keyframes music-wave {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.4);
+  }
+}
+
 /* 通话弹幕字幕：逐条弹跳入场（头像/名字下方实时字幕流，跳动特效——落下→弹起→回弹稳定） */
 @keyframes call-caption-in {
   0% {
