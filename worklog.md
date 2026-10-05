@@ -15822,3 +15822,24 @@ Stage Summary:
 - 关键决策：①探针走既有屏幕级基调栈（foreground toneOverride 通道）而非改 StatusBar——音乐自管/锁屏/切换器/通话全屏层既有优先级全部免改；②空栈语义从「默认 light」改「null=无覆盖」——根治探针失效期所有 App 白字的隐性陷阱；③[放歌] 收敛到 music-remote 唯一权威、[红心] 只在真实可解析侧教学——「只教真实可执行的」；④亲属卡按用户口径 QQ 整体移除教学（QQ 发送解析器保留无害）；⑤群名单合并走条件化（速览缺失时名单仍是机主名唯一来源）
 - 范围限定遵守：单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机/音乐核心逻辑未触碰——全部改动为提示词文案、过滤条件、纯展示组件与状态栏基调；红包/转账解析与落盘、记忆提取频率计数、appendFragments 去重、条数 min~N 计算、播控指令语法与剥离正则逐一核实零变化
 - 改动文件：src/lib/chat-rich.ts、src/lib/ios/persona.ts、src/lib/ios/worldbook.ts、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx、src/lib/memory.ts、src/lib/time-aware.ts、src/lib/reply-count.ts、src/lib/chat-stream-store.ts、src/lib/ios/music-remote.ts、src/lib/ios/music-ai.ts、src/lib/ios/chat-call.ts、src/app/api/phone/turn/route.ts、src/lib/ios/quit-flow.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/ios/StatusBarToneProbe.tsx（新增）、src/components/ios/AppWindow.tsx、src/components/apps/registry.tsx、src/lib/ios/status-bar-tone.ts
+
+---
+Task ID: storage-ui
+Agent: Z.ai Code (main)
+Task: 设置→存储 页面按用户参考截图重构为 iOS「iPhone 储存空间」样式
+
+Work Log:
+- 定位实现：src/components/apps/settings.tsx 的 StoragePage（原为简单的设备存储条 + 分类计数列表）
+- 重构为截图样式：iPhone 总览卡（已使用 x.xx GB/256 GB + 红/橙/灰/浅灰四分类堆叠条 + 空闲空间数值内嵌条内 + 图例）
+- 新增「大小 ⇕」排序控件（蓝色，点击切换升降序，箭头旋转反馈）
+- App 占用列表：22 个 App 用 AppIconTile 真实图标 + 名称 + 「上次使用：今天/昨天/上周/日期」（今天 = recentApps 命中）+ 大小（≥1GB x.xx GB / <1GB xxx.x MB）+ chevron
+- 数值模型：各 App 按 appId 哈希在预设区间取稳定值（微信 14-24GB 最大、工具类几十 MB），照片/语音备忘录/音乐叠加 IndexedDB 真实 blob 字节；iOS 10.8-13.6GB、系统数据 4.2-8.6GB；容量固定 256GB
+- 保留原功能：清理媒体缓存按钮 + 结果提示 + 真实浏览器占用脚注（readStorageEstimate/formatMB 复用避免死代码）
+- 导入调整：加 APPS/AppIconTile（registry）、ChevronsUpDown、useSystemDark、type AppId、useMemo；移除不再使用的 Progress
+- 修复自查发现的编译错误：useSystemDark 双重导入（报"defined multiple times"），删除大导入块中重复项
+- 浏览器端到端验证（agent-browser，430x932）：锁屏上滑解锁 → 设置 → 存储：浅色/深色两主题渲染正常、列表按大小降序、点大小切为升序再复原、清理按钮在位、dev.log 无运行时错误
+
+Stage Summary:
+- 产出：StoragePage 完整重写（settings.tsx 879-1132 行区域），与用户参考截图版式一致
+- 决策：App 占用为确定性模拟数值 + 媒体类真实字节叠加（页面脚注已注明），排序控件可交互
+- 验证：lint 通过；浏览器实测浅色/深色、升/降序、返回导航全部正常

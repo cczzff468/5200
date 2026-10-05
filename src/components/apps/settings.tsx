@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import {
   AlertCircle,
@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
   Database,
   Eye,
   EyeOff,
@@ -47,13 +48,15 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import PasscodePad from '@/components/ios/PasscodePad';
-import { useUI } from '@/lib/ios/store';
+import { APPS, AppIconTile } from './registry';
+import { useUI, useSystemDark } from '@/lib/ios/store';
 import { genId, localDB } from '@/lib/ios/db';
 import {
   DEFAULT_API_CONFIG,
   WALLPAPER_PRESETS,
   useSettings,
   type ApiPreset,
+  type AppId,
   type ImgGenConfig,
   type ImgGenPreset,
   type ThemeMode,
@@ -62,7 +65,6 @@ import {
 } from '@/lib/ios/store';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Progress } from '@/components/ui/progress';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -873,38 +875,108 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   );
 }
 
-// ---------------- 存储空间 ----------------
+// ---------------- 存储空间（iOS「iPhone 储存空间」：四分类堆叠条 + 按 App 占用列表） ----------------
 
-interface StorageCounts {
-  photos: number;
-  recordings: number;
-  music: number;
-  notes: number;
-  events: number;
+/** 分类条配色（对齐用户参考截图：红=应用程序 / 橙=照片 / 灰=iOS / 浅灰=系统数据） */
+const CAT_APPS_COLOR = '#FF3B30';
+const CAT_PHOTOS_COLOR = '#FF9500';
+const CAT_IOS_COLOR = '#8E8E93';
+
+/** 图例小圆点 */
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span aria-hidden="true" className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
+/** 稳定伪随机（种子哈希 → [0,1)）：同一 App 每次进入数值一致，不同 App 分布自然 */
+function hash01(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 100000) / 100000;
+}
+
+function rangedGB(id: string, min: number, max: number): number {
+  return min + hash01(`size:${id}`) * (max - min);
+}
+
+/** iOS 风容量格式：≥1 GB → x.xx GB；不足 1 GB → xxx.x MB */
+function formatSizeGB(gb: number): string {
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  const mb = gb * 1024;
+  return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
+}
+
+/** 各 App 占用区间（GB）：聊天/媒体类大、工具类小，贴近真实 iPhone 分布；
+ *  照片/语音备忘录/音乐在区间基础上叠加 IndexedDB 真实文件字节 */
+const APP_SIZE_RANGE: Partial<Record<AppId, [number, number]>> = {
+  wechat: [14, 24],
+  qq: [7, 13],
+  photos: [2.6, 6.2],
+  music: [1.2, 4],
+  chat: [1.5, 4],
+  browser: [0.8, 2.2],
+  memory: [0.9, 2],
+  appstore: [0.6, 1.6],
+  themes: [0.4, 1.1],
+  worldbook: [0.5, 1.2],
+  camera: [0.25, 0.8],
+  settings: [0.3, 0.8],
+  files: [0.2, 0.6],
+  phone: [0.15, 0.5],
+  notes: [0.12, 0.4],
+  clock: [0.1, 0.3],
+  weather: [0.08, 0.25],
+  calendar: [0.1, 0.3],
+  reminders: [0.08, 0.25],
+  recorder: [0.1, 0.5],
+  contacts: [0.08, 0.2],
+  calculator: [0.05, 0.15],
+};
+
+const BYTES_PER_GB = 1024 * 1024 * 1024;
+
+/** 「上次使用」文案：多任务里还留着的 = 今天，其余按稳定哈希落在 昨天/上周/过去一年内的日期 */
+function lastUsedLabel(id: AppId, openedRecently: boolean): string {
+  if (openedRecently) return '今天';
+  const r = hash01(`last:${id}`);
+  if (r < 0.3) return '昨天';
+  if (r < 0.48) return '上周';
+  const days = Math.floor(20 + r * 300);
+  const d = new Date(Date.now() - days * 86400000);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 function StoragePage({ onBack }: { onBack: () => void }) {
-  const [usage, setUsage] = useState<number | null>(null);
-  const [quota, setQuota] = useState<number | null>(null);
-  const [counts, setCounts] = useState<StorageCounts | null>(null);
+  const dark = useSystemDark();
+  const recentApps = useUI((s) => s.recentApps);
+  const [realUsage, setRealUsage] = useState<number | null>(null);
+  const [realQuota, setRealQuota] = useState<number | null>(null);
+  const [mediaBytes, setMediaBytes] = useState({ photos: 0, recordings: 0, music: 0 });
+  const [sortDesc, setSortDesc] = useState(true);
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState('');
 
   const loadStats = useCallback(async () => {
     const est = await readStorageEstimate();
-    setUsage(est.usage);
-    setQuota(est.quota);
+    setRealUsage(est.usage);
+    setRealQuota(est.quota);
     try {
-      const [photos, recordings, music, notes, events] = await Promise.all([
-        localDB.count('photos'),
-        localDB.count('recordings'),
-        localDB.count('music'),
-        localDB.count('notes'),
-        localDB.count('events'),
+      const [photos, recordings, music] = await Promise.all([
+        localDB.getAll('photos'),
+        localDB.getAll('recordings'),
+        localDB.getAll('music'),
       ]);
-      setCounts({ photos, recordings, music, notes, events });
+      const sum = (rows: { blob: Blob }[]) => rows.reduce((acc, r) => acc + (r.blob?.size ?? 0), 0);
+      setMediaBytes({ photos: sum(photos), recordings: sum(recordings), music: sum(music) });
     } catch {
-      setCounts({ photos: 0, recordings: 0, music: 0, notes: 0, events: 0 });
+      setMediaBytes({ photos: 0, recordings: 0, music: 0 });
     }
   }, []);
 
@@ -929,53 +1001,94 @@ function StoragePage({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const percent =
-    usage !== null && quota !== null && quota > 0
-      ? Math.min(100, Math.round((usage / quota) * 1000) / 10)
-      : 0;
+  /** App 占用列表（GB）：哈希基准值 + 媒体类叠加真实文件字节 */
+  const appRows = useMemo(() => {
+    const real = {
+      photos: mediaBytes.photos / BYTES_PER_GB,
+      recorder: mediaBytes.recordings / BYTES_PER_GB,
+      music: mediaBytes.music / BYTES_PER_GB,
+    };
+    return APPS.map((a) => {
+      const [min, max] = APP_SIZE_RANGE[a.id] ?? [0.1, 0.5];
+      let gb = rangedGB(a.id, min, max);
+      if (a.id === 'photos') gb += real.photos;
+      if (a.id === 'recorder') gb += real.recorder;
+      if (a.id === 'music') gb += real.music;
+      return { id: a.id, name: a.name, gb, last: lastUsedLabel(a.id, recentApps.includes(a.id)) };
+    });
+  }, [mediaBytes, recentApps]);
 
-  const rows: { label: string; count: number; unit: string }[] = counts
-    ? [
-        { label: '照片', count: counts.photos, unit: '张' },
-        { label: '录音', count: counts.recordings, unit: '条' },
-        { label: '音乐', count: counts.music, unit: '首' },
-        { label: '备忘录', count: counts.notes, unit: '条' },
-        { label: '事件', count: counts.events, unit: '项' },
-      ]
-    : [];
+  /** 顶部分类堆叠条：应用程序（照片外的全部 App）/ 照片 / iOS / 系统数据，剩余为可用空间 */
+  const CAPACITY_GB = 256;
+  const photosLibGB = appRows.find((r) => r.id === 'photos')?.gb ?? 0;
+  const appsGB = appRows.reduce((acc, r) => (r.id === 'photos' ? acc : acc + r.gb), 0);
+  const iosGB = rangedGB('ios-system', 10.8, 13.6);
+  const systemGB = rangedGB('system-data', 4.2, 8.6);
+  const usedGB = appsGB + photosLibGB + iosGB + systemGB;
+  const freeGB = Math.max(0, CAPACITY_GB - usedGB);
+  const pct = (gb: number) => `${((gb / CAPACITY_GB) * 100).toFixed(3)}%`;
+
+  const systemDataColor = dark ? '#5A5A5F' : '#D1D1D6';
+  const sortedRows = useMemo(
+    () => [...appRows].sort((a, b) => (sortDesc ? b.gb - a.gb : a.gb - b.gb)),
+    [appRows, sortDesc],
+  );
 
   return (
-    <DetailShell title="存储空间" onBack={onBack} gray>
+    <DetailShell title="储存空间" onBack={onBack} gray>
       <GroupCard>
         <div className="p-4">
           <div className="flex items-baseline justify-between gap-3">
-            <span className="text-[16px]">设备存储</span>
-            <span className="text-right text-[13px] tabular-nums text-muted-foreground">
-              {usage === null || quota === null
-                ? '计算中…'
-                : `已用 ${formatMB(usage)} / 可用约 ${formatMB(quota)}`}
+            <span className="text-[17px] font-semibold">iPhone</span>
+            <span className="text-right text-[15px] tabular-nums text-muted-foreground">
+              已使用 {usedGB.toFixed(2)} GB/{CAPACITY_GB} GB
             </span>
           </div>
-          <Progress value={percent} className="mt-3 h-2" />
+          <div className="mt-3 flex h-[22px] gap-[3px] overflow-hidden rounded-[5px] bg-white ring-1 ring-black/[0.08] dark:bg-white/[0.06] dark:ring-white/[0.12]">
+            <div className="h-full" style={{ width: pct(appsGB), background: CAT_APPS_COLOR }} />
+            <div className="h-full" style={{ width: pct(photosLibGB), background: CAT_PHOTOS_COLOR }} />
+            <div className="h-full" style={{ width: pct(iosGB), background: CAT_IOS_COLOR }} />
+            <div className="h-full" style={{ width: pct(systemGB), background: systemDataColor }} />
+            <div className="flex h-full min-w-0 flex-1 items-center justify-end pr-2 text-[13px] tabular-nums text-foreground/70">
+              {freeGB.toFixed(2)} GB
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px]">
+            <LegendDot color={CAT_APPS_COLOR} label="应用程序" />
+            <LegendDot color={CAT_PHOTOS_COLOR} label="照片" />
+            <LegendDot color={CAT_IOS_COLOR} label="iOS" />
+            <LegendDot color={systemDataColor} label="系统数据" />
+          </div>
         </div>
       </GroupCard>
 
-      <div className="mt-6">
+      <div className="mt-5 flex items-center justify-end">
+        <button
+          type="button"
+          onClick={() => setSortDesc((v) => !v)}
+          className="flex items-center gap-1 px-1 text-[15px] transition-opacity active:opacity-50"
+          style={{ color: TONE_BLUE }}
+        >
+          大小
+          <ChevronsUpDown className={`h-4 w-4 transition-transform ${sortDesc ? '' : 'rotate-180'}`} />
+        </button>
+      </div>
+
+      <div className="mt-2">
         <GroupCard>
-          {rows.length === 0 ? (
-            <div className="flex h-[46px] items-center px-4 text-[15px] text-muted-foreground">
-              统计中…
-            </div>
-          ) : (
-            rows.map((r) => (
-              <div key={r.label} className="flex h-[46px] items-center justify-between px-4">
-                <span className="text-[16px]">{r.label}</span>
-                <span className="text-[15px] tabular-nums text-muted-foreground">
-                  {r.count} {r.unit}
-                </span>
+          {sortedRows.map((r) => (
+            <div key={r.id} className="flex h-[62px] items-center gap-3 px-4">
+              <div className="relative h-[46px] w-[46px] shrink-0 overflow-hidden rounded-[11px]">
+                <AppIconTile id={r.id} />
               </div>
-            ))
-          )}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[16px] leading-tight">{r.name}</div>
+                <div className="mt-0.5 truncate text-[13px] text-muted-foreground">上次使用：{r.last}</div>
+              </div>
+              <span className="shrink-0 text-[15px] tabular-nums text-muted-foreground">{formatSizeGB(r.gb)}</span>
+              <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+            </div>
+          ))}
         </GroupCard>
       </div>
 
@@ -1006,6 +1119,12 @@ function StoragePage({ onBack }: { onBack: () => void }) {
       )}
       <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
         清理将删除全部照片、录音与音乐文件，备忘录和日程不受影响。
+        {realUsage !== null && realQuota !== null && (
+          <>
+            <br />
+            浏览器实际占用 {formatMB(realUsage)} / 配额约 {formatMB(realQuota)}；App 占用为模拟数值，照片、语音备忘录与音乐行已叠加真实文件大小。
+          </>
+        )}
       </p>
     </DetailShell>
   );
