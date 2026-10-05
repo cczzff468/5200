@@ -15566,3 +15566,21 @@ Stage Summary:
 - 关键决策：①AI 刷屏根因是「暂停期间 store 任意变更重排 3 分钟定时器」而非提示词单方面问题——标记位+冷却双保险治本，提示词改写治标（不再产出歌曲乐评）；②下拉刷新指示区放滚动流第一子元素而非 fixed——sticky 顶栏天然被推下，零额外布局代码；③内容轮换用「多拉 30 条+洗牌截取」而非换接口——同一接口每次刷新出不同切片，游客/登录态都可用；④歌词行按钮无条件渲染、透明度受 capsuleOn 控制——与第三十四轮「仅播放行」改为「每行」，保留胶囊熄灭时不可点语义
 - 范围限定遵守：改 4 文件（music-player.tsx / music-ai.ts / music-home.tsx / music-shared.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动；评论/搜索/歌单页未动；聊天 App 主动消息系统（proactive-msg.ts）未动（本轮问题定位在音乐一起听侧）
 - 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-ai.ts、src/components/apps/music-home.tsx、src/components/apps/music-shared.tsx
+
+---
+Task ID: 95
+Agent: Z.ai Code（主会话）
+Task: 第三十六轮——①评论页滚动内容从吸顶行上方缝隙穿到状态栏后面（截图：长评论与 13:42 重叠）②歌词不是每句都要有三角播放键（只在当前高亮行显示）③首页刷新图标移到顶部标签栏下方（+顺手修下拉松手误触打开歌单）
+
+Work Log:
+- ①评论页顶部遮罩条（music-comments.tsx）：根因=吸顶行 sticky top-[54px] 让出状态栏区，但滚动容器是全高的，评论流上滚时从 0~54px 的透明缝隙穿出去、与状态栏时间重叠（用户截图里「孩子了，看着她甚至出了神…像极了当年的…」就是一条长评论的尾部露出）。修复：CommentsPage 根节点下加 absolute inset-x-0 top-0 h-[54px] bg-white dark:bg-zinc-950 z-10 pointer-events-none 遮罩条（与页面同色、不挡点击），内容从其下穿过被裁住；scroll=0 时该区域本就是头部 pt-58 留白，无视觉变化。E2E：千千阙歌 评论(10万)（与用户截图同曲）滚动 600px → stickyTop=54、strip=[420×54] bg=rgb(255,255,255) z=10、截图确认状态栏区纯白无文字（用户截图里同一条长评论现在被正确裁在吸顶行下方）
+- ②歌词行播放键只在当前高亮行显示（music-player.tsx LyricView）：渲染条件从「每行都渲染（第三十五轮）」改为 `i === focusIdx &&`——手动浏览到没播的行=该行右侧一个三角键（点击=播这一句，沿用第三十三轮 seek 语义）、滚回播放行=暂停双条键、其余行一律不渲染；胶囊熄灭（5 秒回跳/进度跳变）时仍不可见不可点。E2E：自动跟随态 rendered=1 visible=0（无键）；合成 wheel+scrollTop 滚到未播行 → 全页仅 1 个键且为 music-lyric-row-play（aria=播放）三角；滚回播放行 → 仅 1 个 music-lyric-play-toggle（aria=暂停）；截图确认高亮行右侧暂停键、其他行干净；点三角键 → 进度从 1:00 跳到 0:43 该行起点并继续播放 ✓
+- ③首页刷新图标移到顶部标签栏下方（music-home.tsx）：下拉刷新指示区从滚动流最顶部（第一子元素）移到 sticky 顶栏之后——原位置下拉时图标顶进状态栏/灵动岛区域；现在图标出现在「音乐」顶栏正下方、内容从栏下滑出。顺手修复：下拉拖拽过的手势（dist>12px）在松手时吞掉随后的 click（onClickCapture + 400ms 定时复位）——此前松手会误触手指下方的歌单/榜单卡片（E2E 实测松手打开了新歌榜页）。E2E：下拉到「松开立即刷新」截图确认图标在顶栏下方 y≈140（不在状态栏区）→ 松手「刷新中…」h=36 → 刷新完成回 idle 且仍留在首页（无误触导航）→ 榜单 id 序列轮换 ✓
+- 环境处理：dev.log 出现大量 Turbopack「Unexpected response from worker」uncaughtException、GET / 编译劣化到 22.8s（第三十三轮同类问题）——重启 dev server（kill next 进程 + nohup bun run dev）后恢复（GET / 82ms）；重启后发现 mini-services/netease-api（端口 3010）未运行导致评论接口 502「网易云 API 服务不可达」——nohup bun run dev 拉起后 /api/music/ncm/comment/new 恢复 200；清理两个孤儿 bun run dev 进程
+- bun run lint 0 错误；bunx tsc 0 错误；重启后 dev.log 编译正常（compile 4~82ms）、无应用错误
+
+Stage Summary:
+- 交付：评论页顶部 0~54px 同色遮罩条（评论流不再穿透到状态栏后面，用户截图问题根修）；歌词行播放键改「仅当前高亮行」渲染（浏览未播行=该行三角键播这一句、播放行=暂停键、其他行无键，第三十五轮的每行三角撤回）；首页下拉刷新图标移到顶部标签栏下方（不再顶进状态栏区）+ 下拉松手不再误触打开卡片
+- 关键决策：①遮罩条方案而非改 sticky top-0——sticky top-0+内衬 padding 会让未吸顶时出现 54px 空档，绝对定位遮罩条零布局影响且 scroll=0 时本来就是空白区；②播放键跟随 focusIdx（高亮行）而非 activeIdx——「滚到哪句亮哪句」的高亮行即用户视线焦点，键随高亮行走，同屏永远至多一个键，正合「不是每一句都有三角形」；③下拉吞 click 用 moved 标记（dist>12px）而非 pullState——轻点（无拖拽）仍正常点击卡片，只有真实拖拽过的手势才吞
+- 范围限定遵守：改 3 文件（music-comments.tsx / music-player.tsx / music-home.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动；评论数据接口/排序/翻页/点赞/发表逻辑未动；歌词胶囊高亮跟随/5 秒回跳/长按复制语义未动；下拉刷新阈值/全部区块轮换逻辑未动（仅指示区位置+吞 click）
+- 改动文件：src/components/apps/music-comments.tsx、src/components/apps/music-player.tsx、src/components/apps/music-home.tsx

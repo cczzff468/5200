@@ -4,6 +4,7 @@
  * 音乐 App 首页：每日推荐大卡、排行榜横滑、推荐歌单网格、新歌速递。
  * 未登录（游客）：推荐歌单/排行榜/新歌仍可用（公开接口），每日推荐引导登录。
  * 第三十五轮：下拉刷新（顶部下拉，原「上滑刷新」搞错了）——刷新时全部区块重拉并轮换内容。
+ * 第三十六轮：刷新指示图标移到顶部标签栏下方（原在滚动流最顶部会顶进状态栏区域）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -149,7 +150,9 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   /** idle=未在拉取 pulling=下拉中 ready=超过阈值可松手 loading=刷新中 done=刚完成 */
   const [pullState, setPullState] = useState<'idle' | 'pulling' | 'ready' | 'loading' | 'done'>('idle');
   const [pullDist, setPullDist] = useState(0);
-  const gestureRef = useRef<{ startY: number; fromTop: boolean } | null>(null);
+  const gestureRef = useRef<{ startY: number; fromTop: boolean; moved: boolean } | null>(null);
+  // 下拉后吞掉随后的 click（否则松手会误触手指下方的歌单/榜单卡片，第三十六轮）
+  const suppressClickRef = useRef(false);
   const PULL_THRESHOLD = 64;
 
   const atTopNow = () => {
@@ -160,7 +163,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
 
   const beginPull = (y: number) => {
     if (pullState === 'loading' || pullState === 'done') return;
-    gestureRef.current = { startY: y, fromTop: atTopNow() };
+    gestureRef.current = { startY: y, fromTop: atTopNow(), moved: false };
   };
 
   const movePull = (y: number) => {
@@ -173,6 +176,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
       setPullState('idle');
       return;
     }
+    if (dist > 12) g.moved = true;
     setPullDist(Math.min(dist, 120));
     setPullState(dist > PULL_THRESHOLD ? 'ready' : 'pulling');
   };
@@ -180,6 +184,13 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const endPull = () => {
     const g = gestureRef.current;
     gestureRef.current = null;
+    // 拖拽过的手势吞掉后续 click（click 在 pointerup 后立即派发，捕获阶段拦截）；400ms 后自动复位
+    if (g?.moved) {
+      suppressClickRef.current = true;
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 400);
+    }
     if (!g || !g.fromTop) return;
     if (pullState !== 'ready') {
       setPullDist(0);
@@ -214,6 +225,13 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     <div
       ref={scrollRef}
       className="h-full overflow-y-auto overscroll-contain pb-[126px]"
+      // 下拉拖拽过的手势不当作点击（防松手误触卡片）；定时复位防永久吞点击
+      onClickCapture={(e) => {
+        if (!suppressClickRef.current) return;
+        e.stopPropagation();
+        e.preventDefault();
+        suppressClickRef.current = false;
+      }}
       onTouchStart={(e) => beginPull(e.touches[0]?.clientY ?? 0)}
       onTouchMove={(e) => movePull(e.touches[0]?.clientY ?? 0)}
       onTouchEnd={endPull}
@@ -232,29 +250,6 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         if (e.pointerType === 'mouse') endPull();
       }}
     >
-      {/* 下拉刷新指示区（第三十五轮：在顶部下拉触发，随下拉距离展开，松手刷新/刷新中/已更新）
-          放在滚动流最顶部：下拉时把整页内容（含 sticky 顶栏）往下推，仿原生拉刷新 */}
-      <div
-        className="flex items-end justify-center gap-1.5 overflow-hidden text-[11px] text-zinc-400 transition-[height] duration-150"
-        style={{
-          height:
-            pullState === 'loading' || pullState === 'done'
-              ? 36
-              : pullDist > 0
-                ? Math.min(pullDist * 0.5, 56)
-                : 0,
-        }}
-        data-testid="music-home-pull-hint"
-        aria-live="polite"
-      >
-        {pullState === 'loading' ? (
-          <Loader2 className="mb-2 h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <ChevronsDown className={`mb-2 h-3.5 w-3.5 ${pullState === 'ready' ? 'text-[#C20C0C]' : ''}`} />
-        )}
-        <span className={`mb-2 ${pullState === 'ready' ? 'font-medium text-[#C20C0C]' : ''}`}>{pullHintText}</span>
-      </div>
-
       {/* 顶栏：设置 + 标题 + 右上角头像（游客/登录都可点） */}
       <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
         <button
@@ -285,6 +280,29 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         >
           <CoverImg src={headAvatar} className="h-8 w-8" rounded="rounded-full" alt={headName} />
         </button>
+      </div>
+
+      {/* 下拉刷新指示区（第三十五轮：在顶部下拉触发，随下拉距离展开，松手刷新/刷新中/已更新；
+          第三十六轮反馈：移到顶部标签栏下方——原放滚动流最顶部时图标会顶进状态栏/灵动岛区域） */}
+      <div
+        className="flex items-end justify-center gap-1.5 overflow-hidden text-[11px] text-zinc-400 transition-[height] duration-150"
+        style={{
+          height:
+            pullState === 'loading' || pullState === 'done'
+              ? 36
+              : pullDist > 0
+                ? Math.min(pullDist * 0.5, 56)
+                : 0,
+        }}
+        data-testid="music-home-pull-hint"
+        aria-live="polite"
+      >
+        {pullState === 'loading' ? (
+          <Loader2 className="mb-2 h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ChevronsDown className={`mb-2 h-3.5 w-3.5 ${pullState === 'ready' ? 'text-[#C20C0C]' : ''}`} />
+        )}
+        <span className={`mb-2 ${pullState === 'ready' ? 'font-medium text-[#C20C0C]' : ''}`}>{pullHintText}</span>
       </div>
 
       {/* 账号快开面板（z-80：必须盖住全局迷你播放条 z-70，否则迷你条悬浮在弹窗中间挡住内容） */}

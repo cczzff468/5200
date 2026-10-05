@@ -6,7 +6,8 @@
  * - 歌曲行：圆形封面 + 「歌名 - 歌手」
  * - 排序档：「评论(N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页；
  *   第三十三轮起吸顶不随滚动，标题栏/歌曲行随内容滑走；
- *   第三十四轮吸顶位改 top-[54px] 停在状态栏/灵动岛下方，不再与状态栏重叠）
+ *   第三十四轮吸顶位改 top-[54px] 停在状态栏/灵动岛下方，不再与状态栏重叠；
+ *   第三十六轮顶部加同色遮罩条，评论流不再从吸顶行上方缝隙穿到状态栏后）
  * - 评论流：头像 / 昵称 + VIP·等级徽章 / 日期 + IP 属地 / 内容 / 右侧点赞（大拇指），
  *   楼层回复内联直排（第三十二轮去卡片底色，进视口自动预览前 2 条，仿截图），
  *   「展开N条回复」蓝色链接（第三十三轮，/comment/floor）
@@ -281,6 +282,14 @@ export function CommentsPage() {
       className="absolute inset-0 z-[68] flex flex-col bg-white dark:bg-zinc-950"
       data-testid="music-comments"
     >
+      {/* 顶部遮罩条（第三十六轮修复「评论界面还是有问题」）：吸顶行停在 top-[54px] 让出状态栏区，
+          但评论流上滚时会从这条 0~54px 的缝隙里穿出去、和状态栏时间重叠（用户截图：长评论尾部
+          露在「评论(N)」行上方）。盖一条与页面同色的不透明遮罩（pointer-events-none 不挡点击），
+          内容从遮罩下穿过即被裁住；scroll=0 时该区域本就是头部留白，无视觉变化 */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[54px] bg-white dark:bg-zinc-950"
+      />
       {/* 滚动容器（第三十三轮）：向上滑动时标题栏与歌曲行跟随滑走，评论(N)+排序 tab 吸顶不随滚 */}
       <div
         ref={listRef}
