@@ -2,10 +2,13 @@
 
 import { useUI } from '@/lib/ios/store';
 import { APP_MAP } from '../apps/registry';
+import StatusBarToneProbe from './StatusBarToneProbe';
 
 /**
  * App 窗口容器：iOS 风格的打开/关闭缩放动画。
  * Home 指示条由 PhoneShell 统一常显渲染（所有页面一致，mix-blend-difference 自适应背景）。
+ * 容器内末尾挂自动基调探针（Task 100-f）：非自管基调的 App，状态栏前景实时跟随
+ * 实际渲染背景明暗（深底白字/浅底黑字）；音乐 App 自管基调不挂（避免推栈打架）。
  */
 export default function AppWindow() {
   const activeApp = useUI((s) => s.activeApp);
@@ -25,6 +28,7 @@ export default function AppWindow() {
       }`}
     >
       <App />
+      {!meta.statusBarToneSelfManaged && <StatusBarToneProbe />}
     </div>
   );
 }

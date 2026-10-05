@@ -1337,12 +1337,20 @@ function songRichToWxMsg(rich: RichSong, id: string, time: number, peer: Contact
   };
 }
 
+/** 100-e AI 文字升级语音条的告知规则（aiVoiceOn=true 时随 buildPersonaPrompt extraRules 注入）：
+ *  AI 语音频率开关开启（非「关闭」档）的会话里，AI 的普通文字消息在投递时会按频率静默升级成语音条
+ *  （deliverAiMsg → decideAiVoiceMessage，见 @/lib/ios/ai-voice）——规则不告知的话，AI 说
+ *  「我给你发条语音」时系统并不会真的发语音条。开关关闭（off，永不升级）时零注入 */
+const AI_VOICE_DELIVERY_RULE =
+  '（你的文字消息有时会以语音条的形式送达对方——这是正常的送达方式，不用在意；但不要在正文里说「我给你发条语音」这类话，也不要主动承诺发语音，用文字自然聊就好。）';
+
 /** 联系人 AI 人设（微信聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
  *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入（表情包开关关闭时不下发表情包规则，
  *  并注入禁用 emoji/表情包的显式规则）；
  *  actionDescOn：动作描写开关（开启注入 *...* 格式约定、关闭注入显式禁令，见 @/lib/action-desc）；
- *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况） */
-function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, actionDescOn: boolean, npcExtra?: NpcPromptExtra | null): string {
+ *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况）；
+ *  aiVoiceOn：AI 语音频率开关（100-e，开启时告知「文字消息可能以语音条送达」，见 AI_VOICE_DELIVERY_RULE） */
+function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, actionDescOn: boolean, npcExtra?: NpcPromptExtra | null, aiVoiceOn?: boolean): string {
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
   // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
   const mode = useSettings.getState().addressMode;
@@ -1364,6 +1372,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string |
       ...buildRichRules(stickersOn ? stickers : []),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
       ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE]),
+      // 100-e 文字升级语音条告知（开关开启才注入，off 零注入）
+      ...(aiVoiceOn ? [AI_VOICE_DELIVERY_RULE] : []),
     ],
   });
 }
@@ -5081,13 +5091,14 @@ function ChatPage({
         .map((m) => ({
           role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
           // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间）；图片取识图描述，通话里 AI 同样知道聊过的图片内容
+          // 100-e 带描述的图片带消息 ID 进上下文（AI 需要抄写 ID 时能抄到真实的）
           content:
             m.kind === 'voice'
               ? m.voice?.transcript || m.voice?.localText || '[语音]'
               : m.kind === 'location'
                 ? locationAiText(m.loc, m.time)
                 : m.kind === 'image' && m.img?.desc
-                  ? `[图片]（图片内容：${m.img.desc}）`
+                  ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
                   : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
@@ -5797,8 +5808,10 @@ function ChatPage({
             ? `[聊天记录：${(m.fwd.records ?? []).slice(-8).map((r) => `${r.name}：${r.text}`).join(' ／ ')}]`
             : m.kind === 'image'
             ? // 图片消息：有识图描述时 AI 读到内容（历史可回看）；无描述时占位（防编造规则由 system 注入）
+              // 100-e 带描述的图片带消息 ID 进上下文：视觉自主决策规则要求 AI 原样抄写图片消息 ID
+              // 来 [换头像:ID]/[换背景:ID]/[存入相册:ID]，上下文里没有 ID 它只能编造；无描述仍「[图片]」
               m.img?.desc
-              ? `[图片]（图片内容：${m.img.desc}）`
+              ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
               : '[图片]'
             : m.kind === 'song' && m.song
             ? // 歌曲卡片（Task 68）：AI 发的回写成示范格式（自己知道发过什么歌）；我发的用占位描述
@@ -5861,7 +5874,7 @@ function ChatPage({
     const stickersOn = getStickersOn(sessionKey);
     // 动作描写开关（发送时现场读取）：开启注入格式约定、关闭注入显式禁令（见 @/lib/action-desc）
     const actionDescOn = getActionDescOn(sessionKey);
-    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(peer, contacts));
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(peer, contacts), getAiVoiceFreq(sessionKey) !== 'off');
     // 40-a 拉黑拦截（仅申请卡模式）：待处理卡清单不注入（buildActionRules 空清单返回空数组）——
     // 否则 AI 照提示词输出 [领取红包:ID]/[收款转账:ID] 等标记；动作分支虽已拦截，提示词层面也不该给。
     // 拉黑类动作说明由 blkBlock（buildBlockPromptBlock）单独注入，与此处无关
@@ -5949,7 +5962,10 @@ function ChatPage({
     const albumSummary = albumCacheRef.current.length > 0
       ? albumCacheRef.current.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
       : null;
-    const visionRules = buildVisionRules(albumSummary);
+    // 100-e 按需注入：本会话消息列表（base 已含本轮新消息）里从未出现过图片消息时不注入视觉规则——
+    // 从不发图的会话常年白占 token；出现过 ≥1 条图片消息才下发。【选图操作】等相册相关块仍由
+    // buildVisionRules 内部的 albumSummary 条件控制，现有条件不动
+    const visionRules = base.some((m) => m.kind === 'image') ? buildVisionRules(albumSummary) : [];
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
     const systemFull = [

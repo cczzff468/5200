@@ -15679,3 +15679,146 @@ Stage Summary:
 - 关键决策：①修复在写入端聚合而非依赖存储端相似合并——不同歌名 2-gram 相似度低天然合并不了，sourceTag 同标签跳过相似合并的设计（防不同事件互吞）也使 music-play 碎片互不合并；②验证消息过滤放 memConvoFromRaw（所有提取路径共用：手动总结/自动提取/跨App兜底/群聊兜底）而非各调用点——一处过滤全局生效；③邀请/接受/邀约三类前置事件零记忆化——邀约→接受→一起听→结束视为同一件事，生命周期最多一条聚合记忆（拒绝是独立社交信号单独保留）；④startTogether 主动 note 当前歌——hook 只在切歌时触发，不补记会漏掉一起听的第一首；⑤solo 缓冲 pagehide 不 flush 只持久化——听歌痕迹低价值，宁可晚一天也不碎片化
 - 范围限定遵守：改 4 文件（memory.ts 仅 memConvoFromRaw 过滤+类型、music-ai.ts 聚合器+钩子、together-flow.ts/together-invite.ts 删直写、music-player.tsx 仅虚线样式）；单聊/群聊/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机核心逻辑未触碰；memAfterAiTurn 计数/锚点/核心总结/长期总结管线未动；appendFragments 去重合并/矛盾更新/容量上限未动；music-chat/music-recs/歌曲分享/通话/亲属卡/见面/状态卡等其他 memAddEventFragment 场景未动；一起听邀请/同意/退出交互与聊天卡片链路未动（仅删记忆直写）
 - 改动文件：src/lib/memory.ts、src/lib/ios/music-ai.ts、src/lib/ios/together-flow.ts、src/lib/ios/together-invite.ts、src/components/apps/music-player.tsx
+
+---
+Task ID: 100-e
+Agent: 微信/QQ 聊天规则修复
+Task: 修复微信/QQ 聊天规则注入六项——QQ 亲属卡教学移除、拼手气红包部分领取状态矛盾、图片消息 ID 进上下文、【视觉自主决策】按需注入、两端漂移统一（表情文案/[表情包]占位/世界书锚点）、AI 文字升级语音条告知规则
+
+Work Log:
+- 前置阅读 worklog.md 末 150 行（Task 97/98 音乐播控与记忆过滤上下文）；确认并行任务 100-a 的 chat-rich.ts 新签名 buildRichRules(stickers, opts?: { familyCard?: boolean }) / buildActionRules(pending, opts?) 已落库（默认 true=含亲属卡，tsc 全绿佐证）
+- 修改1（QQ 亲属卡规则移除）：Grep 定位 qq.tsx 两处调用点——buildPersonaPrompt 内 buildRichRules（约 1465）与 runAiTurn 内 buildActionRules（约 4374），全部追加第二参 { familyCard: false }（QQ 无亲属卡功能，规则与待处理清单教学都不再下发亲属卡）；wechat.tsx 的两处调用点（1372/5881）零改动逐字核实
+- 修改2（QQ 拼手气红包部分领取矛盾）：qq.tsx cardStateLabel（606 区域）红包分支改三档——count>1 且 0<claims.length<count 返回「已领取（n/m份）」（读 packet.claims/packet.count 实际字段）、全部领完「已领取」、0 份「待领取」；expired/returned/rejected 前置分支不变（部分领取标签不可能流入 cardIsFinal 的兜底比较，cardIsFinal 特判「未领完非终态」核对不改）；历史序列化 [红包 ID:…，已领取（n/m份）] 走 cardStateLabel 自动传播；collectPendingCards（691 区域）红包 label 对 count>1 加份额「拼手气红包（共m份），祝福语"xxx"」（普通红包 label 不变）——AI 看到「已领取（1/3份）」+ 待处理清单不再矛盾、敢继续领剩余份额；红包气泡 UI（RedPacketBubble rpNote 独立实现）不受影响
+- 修改3（图片消息 ID 进上下文）：Grep「图片内容」定位两端各两处历史序列化（微信 5101 通话/5814 主聊、QQ 3594 通话/4319 主聊），带识图描述的图片消息统一序列化为「[图片 ID:消息id]（图片内容：…）」（m.id 现有字段）；无描述仍「[图片]」。自查三件：①RICH_RE/OPEN_TAIL_RE/STICKER_LOOSE_RE 均不含「图片」分支、序列化是 prompt 单向通道无回流解析路径 ✓；②buildImagePlaceholderRule 按 m.kind==='image'+m.img?.desc 扫消息对象、不读序列化文本 ✓；③【图片占位】规则仅在存在无描述图片时注入、此时上下文里出现的「[图片]」仍恒为无描述图片，规则文案「聊天记录里的『[图片]』…」继续成立（无冲突，采用标准写法，无需「[图片]（ID:…）」兼容变体）✓
+- 修改4（视觉自主决策按需注入）：wechat.tsx 5968 / qq.tsx 4469——visionRules 计算改为 base.some((m) => m.kind === 'image') ? buildVisionRules(...) : []（base 为含本轮新消息的会话全量消息数组，两文件同口径）；【选图操作】等相册相关块仍由 buildVisionRules 内部 albumSummary 条件控制，现有条件零改动
+- 修改5（QQ 对齐微信漂移）：
+  - a) 用户表情理解 extraRules 整句替换为微信版原文（『』→「」逐字一致，qq 1463）
+  - b) Grep qq.tsx 全部「[表情]」共 5 处：与微信逐一对照——会话预览 514/引用快照 5150/聊天搜索 5758/全局搜索 9506 四处微信同位置同为「[表情]」（非漂移不动）；唯一漂移=AI 发表情兜底消息内容（qq 567 vs 微信 1288），改「[表情]」→「[表情包]」；逻辑匹配排查：唯一含 ']' 完整匹配是表情包关闭时剥除正则 /\[表情包\]|\[表情\]/g（qq 4216），两种写法都覆盖且 alternation 已是「表情包」在前，改后零影响、旧数据「[表情]」仍被剥除
+  - c) collectWbBlocks 补第三参 labels 对齐微信（worldbook.ts 签名 WbLabels 已支持，未改该文件）：主聊 4428 与微信 5924 同款 { charName: peer.name, userName: me.name }；通话 3601 与微信 5098 同款（两端漂移成对修复）
+- 修改6（AI 文字升级语音条告知）：读懂 ai-voice.ts gating——decideAiVoiceMessage 按会话频率档位判定（off=永不升级/always=全升/often|sometimes|rarely=每 N 条 1 条），deliverAiMsg 仅对普通文本消息（非 error、非〔〕占位）升级；注入闸门取「会话开关非 off」= getAiVoiceFreq(sessionKey) !== 'off'（sessionKey=wx:/qq:+peer.id，与判定处同键）。两文件各新增模块级常量 AI_VOICE_DELIVERY_RULE（任务指定原文），buildPersonaPrompt 加第 8 参 aiVoiceOn?: boolean 注入 extraRules 末尾（微信 1376/qq 1469），调用点传 getAiVoiceFreq(sessionKey) !== 'off'（微信 5877/qq 4369）——开关关闭零注入
+- 验证：bunx tsc --noEmit 0 错误；eslint . 0 错误（bun run lint 包装器在本沙箱 OOM SIGKILL，直跑 ./node_modules/.bin/eslint . 带 8G 堆 exit=0；bunx eslint src 及两文件单测亦零输出）；git diff 确认本次仅动 qq.tsx（+60 行级）/wechat.tsx（+28 行级）两文件，qq-group.tsx/wx-group.tsx/chat-rich.ts 等其余 diff 均为并行任务所有、未触碰
+
+Stage Summary:
+- 交付：QQ 侧亲属卡教学全面消失（buildRichRules/buildActionRules 双调用点 familyCard=false，微信零改动）；拼手气红包部分领取状态矛盾根修（上下文「已领取（n/m份）」三档语义+待处理清单标「拼手气红包（共m份）」，AI 可继续领剩余份额）；带识图描述的图片消息在微信/QQ 主聊与通话历史里都携带真实消息 ID（AI 抄写 [换头像:ID]/[换背景:ID]/[存入相册:ID] 不再编造，执行器不再多图拿错）；【视觉自主决策】规则按会话是否出现过图片消息按需注入（不发图的会话不再常年占 token）；QQ 五处端间漂移统一（表情理解文案逐字对齐、发表情兜底占位 [表情包]、主聊+通话世界书锚点 labels 补齐）；AI 语音频率开关开启的会话注入「文字消息可能以语音条送达」告知规则（off 零注入，AI 不再在正文里空头承诺发语音）
+- 关键决策：①部分领取用「已领取（n/m份）」而非「待领取」——既保真（确实领过一部分）又消歧（与待处理清单同现不再矛盾），并刻意让该标签不可能流入 cardIsFinal 兜底比较（expired/status 前置分支拦截，终态判定零回归）；②图片 ID 采用任务标准格式「[图片 ID:msg-x]（图片内容：…）」——三项自查全部通过无冲突（RICH_RE 不含图片分支、占位规则按消息对象扫描、无描述图片序列化不变），无需兼容写法；③语音告知注入闸门取「会话档位≠off」而非逐条模拟计数——always/often/… 档位必然产生语音送达，逐条预测既脆又会被计数器副作用干扰，规则文案「有时会」已兼容各档位随机性；④世界书锚点对齐同时修主聊与通话两处（微信两处本就有参，QQ 两处缺参是同源漂移）；⑤[表情]→[表情包] 只改 AI 发表情兜底消息内容一处——其余四处微信同位置同为 [表情] 属两端一致约定，盲目全改反而制造新漂移
+- 范围限定遵守：仅改 src/components/apps/wechat.tsx、src/components/apps/qq.tsx 两文件；chat-rich.ts（100-a）、worldbook.ts、memory.ts、qq-group.tsx/wx-group.tsx 等并行任务文件零触碰；微信侧除修改 3/4/6 外零行为变化（buildRichRules/buildActionRules 调用点逐字核实未动）；红包气泡 UI/详情页文案不受 cardStateLabel 改动影响（其展示走 RedPacketBubble 独立 rpNote 逻辑）；语音升级判定/计数器/合成链路未动（仅提示词告知）
+- 改动文件：src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+---
+Task ID: 100-b
+Agent: 规则一致性修复（persona/worldbook/groups）
+Task: 修复提示词系统五处自相矛盾——persona 括号禁令误伤系统标记、worldbook 优先级给 AI 压用户发言的依据、群聊 [SKIP] 与 persona 附和条款拉扯、发钱节流误禁处理标记、群成员名单与速览双份注入
+
+Work Log:
+- 通读 worklog 末 150 行 + 四个目标文件，Grep 定位全部注入点（persona.ts:296 括号禁令；worldbook.ts wbRulesBlock:526-537 + 锚点行:486；wx-group.tsx:3009/3034/3083/3117；qq-group.tsx:2624/2649/2697/2732）
+- 修改1（persona.ts）：【禁止事项】「不要输出 markdown、列表、序号、引号或括号舞台说明」后紧插豁免条款一行——方括号/〔〕系统标记（发红包、转账、发表情、切歌、挂断、建群）是操作指令不是排版格式，按功能块说明正常输出不受限；其余零改动
+- 修改2（worldbook.ts）：wbRulesBlock 优先级列表与冲突处理按任务文本整段重写——①优先级从「从高到低依次为」改为「按顺序理解使用，底线=用户新消息永远第一时间回应」，第7条从「（最低，但必须回应）」改为「必须第一时间直接回应，任何设定、记忆都不能成为无视或压制对方当前发言的理由」；②第1条系统规则明确包括人设【禁止事项】的格式与安全红线（任何设定不能解除）；③第3条人设=性格与说话风格，世界书改变背景认知不改说话方式与输出格式；④冲突处理删掉「除非人设标注'覆盖世界书'」死通道（persona 从不输出该标注），改为世界观/背景类以世界书为准但【禁止事项】红线始终优先；⑤新增第4条小号/陌生阶段降级（共同经历的世界书设定等关系对上再生效，防穿帮）；使用规则 1-6 条原样保留
+- 修改2附（worldbook.ts:486）：锚点行「世界书《XX》为客观背景设定」→「《XX》背景设定为客观背景设定」——system 里不再出现 AI 被禁说的「世界书」字眼，规则第5条（回复不暴露"这是设定"/"世界书"）自洽；使用规则各条与包裹标记【世界设定开始/结束】本就不用「世界书」一词
+- 修改3（wx-group.tsx+qq-group.tsx 同步）：【发言判断】末尾补 [SKIP] 边界句——『与你无关』=话题完全沾不上边；被@/被点名/被问/涉及你和你在意的人正常回应；聊得热闹想接一句也可发言，拿不准才 [SKIP]（与 persona「没被点名可简短附和」对齐，防弱模型一律潜水）；QQ 版措辞与微信版逐字一致
+- 修改4（两文件同步）：先读 chat-rich.ts buildActionRules 确认处理标记实际语法（[领取红包:红包ID]/[收款转账:转账ID]/[退回红包:红包ID]/[退回转账:转账ID]/[拒收*] 等，任务文里的「[收下转账:ID]」实为 [收款转账:转账ID]，按实际写法）；【发钱节流】改为「冷却期内不要再发新的红包/转账（[红包:…]/[转账:…] 这类发钱标记）…处理别人发来的卡的标记（[领取红包:红包ID]、[收款转账:转账ID] 这些）不受影响，照常可用」；核实落盘层硬节流（3294/2907 行）只丢 redpacket/transfer 发钱卡、处理标记走 applyGroupAiAction 另一条执行器不受冷却影响——提示词与硬层口径一致，与同请求注入的【群红包/转账】待处理清单不再反向冲突
+- 修改5（两文件同步）：核实【群成员速览】注入条件=others.length>0（memberLines 由 others 逐人 map，非无条件；且建群/拉人候选均 filter kind!=='user'，memberIds 永不含机主 → 速览只列其他 AI 成员、不含机主）——按任务预案走条件化收敛：速览会注入时（others.length>0）【群聊模式】名单收敛为「meName（机主用户）等共 N 名成员（你+其他 M 人），其余成员的名字、身份和与你的关系见下方【群成员速览】」（N=others+2、M=others+1，口径与群花名册=机主+memberIds 核对一致）；速览不注入时（群内只有机主+当前角色，名单是机主名字唯一来源）保持完整原句不变；机主身份行两种情形都保留（速览不覆盖机主）；「发言者：内容前缀」等其余行未动；两处条件同源（others 数组）并在注释里标注必须同步
+- 验证：bunx tsc --noEmit 三轮全 0 错误（首跑曾见 qq.tsx:4364 一条错误，来自并行 agent 的 in-flight 编辑，与本任务文件无关，复跑已消）；bun run lint（eslint .）因沙箱内存 4GB 仅剩 ~380MB 被并行进程 SIGKILL（OOM，非 lint 失败）——改用项目同款 eslint 分块跑通：src/lib/**/*.ts、src/components/**/*.tsx、根配置文件全 0 错误（含本人 4 文件逐个直 lint 0 错误）
+- 环境记录：工作区存在并行 agent 的未提交改动（qq.tsx/wechat.tsx/chat-rich.ts/chat-stream-store.ts/memory.ts/reply-count.ts/time-aware.ts + 未跟踪 chat-rich-verify-old.ts），全程未触碰
+
+Stage Summary:
+- 交付五处规则自洽修复：①persona 括号禁令加「系统标记豁免」条款（弱模型不再泛化禁令回避输出 [红包:…]/〔挂断〕等功能标记）；②worldbook 优先级重写——用户新消息从「最低」改为「必须第一时间直接回应」的底线条款、persona【禁止事项】红线明确不可被任何设定解除、删除永不生效的「覆盖世界书」死豁免通道、新增小号/陌生阶段世界书降级条款、注入锚点去「世界书」字眼防自相矛盾；③群聊 [SKIP] 补边界句（被点名/涉及在意的人/想接话都可发言，拿不准才 SKIP）；④发钱节流改「只禁发钱标记、处理标记照常可用」（消除与待处理清单的反向冲突，语法按实际 [领取红包:红包ID]/[收款转账:转账ID]）；⑤群成员名单条件化收敛（速览存在时只留机主行+人数+指引，大群每回合省一份全员枚举 token；速览不存在时名单保留）
+- 关键决策：①修改5采用任务预案的条件化处理而非一刀切砍名单——查实速览注入条件为 others.length>0 且速览不含机主（memberIds 只含 AI 成员），盲砍会丢机主名字这一个唯一来源；②发钱节流的「处理标记不受影响」先核实了硬层行为（落盘节流只丢发钱卡，处理标记走独立执行器）再写进提示词，保证提示词承诺与硬层能力一致；③worldbook 优先级第3条把人设收窄为「性格与说话风格」、冲突处理收窄为「世界观与背景类以世界书为准」，从根上拆掉「世界书可推翻 persona 格式/安全禁令」的通道；④锚点行按任务字面替换为「《XX》背景设定为客观背景设定」（system 侧文案略有重复但消除了被禁词）；⑤所有改动均为提示词文案与纯展示字符串，零函数签名/数据流/状态管理变更（others 数组、memberLines、节流计时器、[SKIP] 丢弃逻辑全部未动）
+- 范围限定遵守：改 4 文件（persona.ts 一行、worldbook.ts 锚点+优先级段、wx-group.tsx 与 qq-group.tsx 各三处提示词文案+注释）；单聊/记忆/时间感知/回复条数/朋友圈/识图/红包转账数据层/长按菜单/群管理/拉黑/语音/通话/视频通话逻辑未触碰；群红包/转账状态机与节流硬层未动（仅冷却期提示词措辞）；群成员速览生成逻辑未动（仅名单收敛指向它）；并行 agent 改动文件（qq.tsx/wechat.tsx/chat-rich.ts 等 7 个）未触碰
+- 改动文件：src/lib/ios/persona.ts、src/lib/ios/worldbook.ts、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx
+
+---
+Task ID: 100-a
+Agent: 规则库修复（chat-rich）
+Task: chat-rich.ts 规则系统四项修复——①亲属卡规则参数化（opts.familyCard，QQ 端不下发任何亲属卡教学）②【分享歌曲】删 [放歌] 双定义教学③buildActionRules 加 24h 自动退回告知④buildGroupRichRules 加群聊能力边界
+
+Work Log:
+- 先读 worklog 尾部 200 行（Task 92~98 音乐/记忆轮）确认前序上下文；Grep 全库定位调用点：buildRichRules 仅 wechat.tsx:1364、qq.tsx:1445（qq 侧并行工程师已先写好 { familyCard: false } 调用等待本 API，此刻 tsc 报参数数错误属预期中间态）；buildActionRules 共 wechat.tsx:5868 / qq.tsx:4346 / wx-group.tsx:3042 / qq-group.tsx:2657 四处；buildGroupRichRules 仅 wx-group/qq-group 两处；chat.tsx 对三个函数零调用、也不教/不解析 [放歌]（无需改动，未触碰）
+- [放歌] 管线确认（修改2）：教学仅三处——chat-rich.ts buildRichRules（本轮删除）、music-remote.ts 播放控制块（togetherLiveBlock 仅 wechat.tsx/qq.tsx 私聊注入，保留，成为该标记唯一权威教学）、music-ai.ts:626（音乐 App 一起听聊天自有管线、自有 extractTgControls 执行，非 chat 管线，按任务约定不动不补教学，仅报告）；解析层 parseMarker('放歌')/RICH_RE 保留不动（群聊无遥控块时的兜底解析 + wechat.tsx:5808 / qq.tsx:4308 历史回写 [放歌:…] 格式兼容仍需要）
+- 24h 清算逻辑确认（修改3文案依据）：wechat.tsx wxExpireStalePeerCards（单聊红包+转账双向清算，注释明示「亲属卡不在清算范围——收卡方可随时退还、按月扣费」）、qq.tsx expireStaleSingleCards（单聊同口径，family 不扫，注：qq 单聊函数名与任务描述的 expireStalePackets 不同）、wx-group.tsx / qq-group.tsx expireStalePackets（群聊仅红包）；据此 24h 告知句只写「红包/转账」不提亲属卡（任务给的「有亲属卡时加：/亲属卡」与实际清算行为不符，按「如有出入按实际改文案」执行）
+- 修改1（familyCard 参数化）：buildRichRules/buildActionRules 均加第二参 opts?: { familyCard?: boolean }，默认 true（opts?.familyCard !== false）——buildRichRules 4 处条件化：【特殊消息】触发词（想发红包/转账[/亲属卡]/位置/表情包）与 [亲属卡:每月额度:留言] 教学示例、【发红包/转账·格式铁律】的「/亲属卡」、【发钱纪律】开头「红包/转账[/亲属卡]按你的人设」与「、亲属卡每月额度不超过 1000 元」上限句（发钱纪律开头一处在任务 a/b/c 明列条目之外，属「QQ 端不再教学亲属卡」整体目标内，一并条件化）；buildActionRules familyCard=false 时标题改【处理对方发来的红包/转账】、正文去掉「、亲属卡」、删 [收下亲属卡]/[拒收亲属卡] 标记教学、待处理清单 filter 掉 kind='family' 条目（滤空则整段 return []）
+- 修改2：【分享歌曲】整段删 [放歌:歌名:歌手] 教学（含示例与「卡片发出后直接开始播放」可见卡片语义），触发条件去掉「或对方让你放歌/点歌时」，保留 [分享歌曲]/[邀请一起听] 两标记教学与「标记里不要出现方括号；分享语一句话即可…要不要分享…不要每轮都发」全部尾段；文件头 RichSong jsdoc 的 [放歌] 条目同步改注「教学统一归音乐遥控块（回复末尾指令、系统执行并从气泡剔除）、本库只保留解析兼容」
+- 修改3：buildActionRules 第 1 条规则尾部追加「对方发来的红包/转账如果一直不处理，24 小时后会自动退回——想收想拒都趁早，不要放着不管。」（familyCard 两种取值都注入且都不提亲属卡）
+- 修改4：buildGroupRichRules 在【发钱纪律】之后插入「【群里发不了的东西】群里发不了图片、语音条和亲属卡——被要求发照片/发语音/办卡时，按你的人设自然回应（比如「见面给你看」「回头单独发你」），不要假装已经发出，也不要输出私聊里的那些标记。」（放表情包规则/清单之前：行为规则聚组、参考清单殿后）
+- 逐字节验证：cp 改动前快照为 src/lib/chat-rich-verify-old.ts，bun 脚本双版本对跑 45 项断言全过——默认参数下 buildRichRules（有/无表情包两 fixture）均仅【分享歌曲】1 条变化（=修改2 预期）其余逐字节一致；buildActionRules 仅第 1 条多 24h 句、2/3 条逐字节一致；buildGroupRichRules 恰好新增 1 条原有各条逐字节一致；familyCard:true 与省略 opts 完全一致；familyCard:false 下 buildRichRules/buildActionRules 全规则零「亲属卡」零「放歌」、纯亲属卡清单整段不注入；验证后删除快照与脚本，工作区零残留
+- bunx tsc --noEmit 全库 0 错误（改动后跑两次均 0）；bun run lint 0 错误（期间两次被 SIGKILL=OOM，为 dev server 占满 4GB 内存的环境性压力，等待回落重跑通过 exit=0；另按目录分片 eslint 交叉验证 src/lib/src/components 通过、db/scripts/mini-services 等目录为 eslint config ignore 范围与 eslint . 行为一致）
+
+Stage Summary:
+- 交付：chat-rich.ts 四项修复落地——①buildRichRules/buildActionRules 增 opts.familyCard 开关（QQ 端亲属卡教学整段摘除：特殊消息触发词+标记示例、格式铁律、发钱纪律开头与 1000 元上限、动作规则标题与收/拒标记教学、待处理清单亲属卡条目过滤）②【分享歌曲】不再教 [放歌]（与 music-remote 播放控制块的「指令写在回复末尾、系统执行并从气泡剔除」定义冲突消除，遥控块成为唯一教学源）③处理规则尾部 24h 自动退回告知④群聊规则新增「群里发不了图片/语音条/亲属卡」能力边界
+- 最终 API 签名（E 任务/并行任务依赖）：
+  - buildRichRules(stickers: Sticker[], opts?: { familyCard?: boolean }): string[]
+  - buildActionRules(pending: PendingCardInfo[], opts?: { familyCard?: boolean }): string[]（pending 空数组直接 []；familyCard=false 且清单过滤后为空也返回 []）
+  - buildGroupRichRules(stickers: Sticker[]): string[]（签名不变，输出多 1 条能力边界规则）
+  - 语义：opts 省略或 { familyCard: true } = 微信原行为（除修改2/3/4 三处既定全局变更外逐字节不变）；{ familyCard: false } = QQ 端全部输出零「亲属卡」字样、零 [放歌] 教学
+- 关键决策：①24h 告知不含亲属卡——wx/qq 清算代码均明确排除亲属卡（按月扣费模型无悬挂资金），按任务「如有出入按实际改文案」执行；②亲属卡过滤做在 buildActionRules 库内而非调用点——「整段不含亲属卡」由库内保证（含【待处理清单】行），防调用方漏参；③[放歌] 解析层不动只摘教学——历史回写与群聊兜底解析仍依赖；④群聊边界规则插在【发钱纪律】后、表情包块前——行为规则聚组、ID 清单类参考数据殿后
+- 范围限定遵守：仅改 src/lib/chat-rich.ts；chat.tsx 无 buildRichRules/buildActionRules 调用零改动；wechat.tsx/qq.tsx/wx-group.tsx/qq-group.tsx/music-remote.ts/music-ai.ts 一律未触碰（qq.tsx 工作区现存 { familyCard: false } 调用为并行 Task 100-e 所写）；parseRichParts/mergeRichSegments/prettifyRichText/表情三级匹配/金额兜底/AI_AMOUNT_CAP/extractRichActionParts 等其余逻辑零改动
+- 改动文件：src/lib/chat-rich.ts
+
+---
+Task ID: 100-d
+Agent: 场景规则修复（music/call/quit）
+Task: 统一音乐播控/通话/退群三处场景规则——播控教学收敛单一来源（music-remote+music-ai）、一起听「最高优先级」自封降级、通话内 App 操作桥接、视频通话卡顿断线应答、退群挽留私信补时间感知
+
+Work Log:
+- 通读 worklog 尾部（Task 97/98 播控模块与记忆聚合）+ 五个所属文件 + time-aware.ts/proactive-msg.ts 参考
+- 修改1 播控教学收敛：Grep 确认 [放歌]/[切歌] 教学共三处（music-remote 两分支 + music-ai playingBlock）且已漂移；Grep 确认 [红心] 仅 music-ai.extractTgControls 解析（/\[(?:红心|点赞|收藏)\]/，takeMusicRemote 不解析）→ redHeart 仅 music-ai 侧传 true（「只教真实可执行的」）
+- 修改1a music-remote.ts 新增 export playControlCommonLines(opts:{who:string;redHeart?:boolean}):string[]——7 行共用教学（执行剔除规则/正文必须带自然话/四基础标记/[放歌]（更完整版含示例）/[红心]（redHeart 门控）/[快进][快退]（更完整版）/选歌时机+别抢节奏），who 空串回退「机主」
+- 修改1b 三个调用点改造：music-remote 一起听分支=情境头（「你陪着X听歌」保留）+共用行+稻香示例；点播分支=情境头+共用行+示例一/二+时机自然/意图式说法（各自独有行保留）；music-ai.playingBlock=头+异步执行说明+共用行(redHeart:true)，删 void who（who 改为真实传入生成器）
+- 修改1 语义逐句核对：原 17 句教学全部保留（无删除），仅重复句统一为同一措辞——「不带任何文字」→「不带文字」（取多数版）、放歌/快进快退语法行以 music-ai 更完整版统一（标记拼写逐字不变：[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手]/[红心]/[快进:秒数]/[快退:秒数]，与 takeMusicRemote/extractTgControls 两套正则仍一一对应）、头部括注「指令写在回复末尾…」改为共用首行（措辞取 music-remote 版）；示例全部原样保留（稻香/晴天/示例二）；music-ai 侧净增两行（P 首行+正文必须带话——规格要求的共用行，与其剥离管线一致且降低「纯指令回复落兜底」概率）
+- 修改1 循环依赖：music-ai → music-remote（playControlCommonLines）与 music-remote → music-ai（searchSongMatched）构成有意循环——两侧都只在运行时函数体内使用对方导出、无模块级求值，ESM live binding 安全，已注释说明
+- 修改2 music-ai.ts 一起听块头「【聊天优先级（最高规则，压倒下面所有规则）】」→「【一起听 · 当前情境】现在是聊天回合：先像平常一样自然回应用户这句话，再考虑一起听的互动（下面的规则都服务于这个前提）」，其下 4 条规则逐字未动
+- 修改3 turn/route.ts buildCallSystemPrompt 固定 extraRules 数组（73-89 行区）新增一条：通话做不了发红包/转账/放歌 → 一句话自然答应（「挂了电话我就发你」「回头发你链接」）、不假装已发；截断核对：slice(0,8) 只作用于调用方传入的 extraRules（chatCallExtraRules 语音 3 条/视频 7 条、phone.tsx 3 条，均 ≤8），新增固定条目不在截断子集内，上限无需放宽
+- 修改4 chat-call.ts chatCallExtraRules 视频段（videoRules）新增「画面卡/听不清/断开→自然应对（重新连一下/再说一遍），不当没听见、不编造错过内容」；插入位置=两条画面规则之后、C2 [想看看你] 之前；视频通话条数 6→7 仍 ≤8 不被截
+- 修改5 quit-flow.ts 挽留私信补时间感知：import { buildTimeAwareBlock, getTimeAware } from '../time-aware'；sendQuitDm 内按 proactive-msg.ts:678-682 同款——开关=getTimeAware(sKey)（sKey=wx/qq:<cid> 与主聊天同键，会话级开关天然同源）、lastMsgTime=该私聊最后一条消息时间、regionHint=contact.region；sysFull=[system, recentBlock, memoryBlock, timeBlock]（timeBlock 插在 memoryBlock 后，其余结构不变）；开关关闭时 timeBlock='' 被 filter(Boolean) 剔除，sysFull 与旧行为逐字节一致
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 首两次被沙箱 OOM SIGKILL（dev server+并行任务占内存所致，非代码问题），第三次完整跑通 exit 0 无错误（另按 src/lib、src/app、src/components 分片各自 0 错误复核）
+- 观察（不动别人文件）：并行 Task 100-a 已把 [放歌] 教学从 chat-rich.ts 移除、统一归 music-remote 播控块——与本任务收敛方向吻合，[放歌] 现在唯一的教处就是共用生成器；「标记里不要出现方括号」一句仅存在于 chat-rich.ts【分享歌曲】段（本任务两文件中无此句，无可收敛项）
+
+Stage Summary:
+- 交付：①播控指令教学收敛单一来源 music-remote.playControlCommonLines（music-remote 一起听/点播两情境 + music-ai 音乐 App 一起听聊天三处共用，终结三份文案漂移；[红心] 按解析管线门控，只有音乐 App 侧教）；②一起听聊天「最高规则」自封降级为情境说明（规则内容零变化）；③通话 system 新增「App 操作做不了→口头答应不装已办」桥接规则（三端通话通用）；④视频通话卡顿/断线应答引导；⑤退群挽留私信接入会话级时间感知（开关关闭行为逐字节不变）
+- 共享生成器签名：export function playControlCommonLines(opts: { who: string; redHeart?: boolean }): string[]（music-remote.ts；who=机主称呼、redHeart 仅 music-ai 传 true）
+- 关键决策：①[红心] 能力漂移的消除方式是「只教真实可执行的」——Grep 实锤 takeMusicRemote 不解析 [红心]，music-remote 侧不传 redHeart 即不教；②语法行统一取更完整的 music-ai 版但标记拼写逐字零变化（与两套剥离正则互为镜像，聊天功能红线）；③头部括注「指令写在回复末尾…」升为共用首行而非三处各留一份（防再次漂移）；④music-ai 侧接受规格内的两行净增（执行剔除说明+正文必须带话），与其 extractTgControls 剥离+空文本兜底管线语义一致；⑤挽留私信时间块沿用 proactive-msg 的开关判断+构建函数、插在 memoryBlock 之后（sysFull 四段结构），sessionKey 同键复用主聊天的会话级开关
+- 改动文件：src/lib/ios/music-remote.ts、src/lib/ios/music-ai.ts、src/lib/ios/chat-call.ts、src/app/api/phone/turn/route.ts、src/lib/ios/quit-flow.ts（time-aware.ts 仅 import 未改动）
+
+---
+Task ID: 100-c
+Agent: 记忆/时间/条数规则修复
+Task: 规则系统五修——记忆召回块去幕后概念+「都聊过」断言收窄+裁决口径统一、提取素材补 call/groupcard/blockreq 过滤、时间感知去方括号模板/去「最高优先级」/时间旅行兜底/时区行、连发条数措辞软化、未配置识图文案剧情化
+
+Work Log:
+- 修改1 记忆召回块头部（memory.ts memRecallBlockInner 拼装处，全注入文案仅此一处拼装点）：块标题【记忆库（跨应用记忆库：你在微信/QQ/信息/电话都和TA聊过…不要逐条复述或主动承认看过记忆）】→【共同经历（下面是你在微信、QQ、信息、电话里和TA亲身经历过的事，带App标注的条目来自对应那一端；当前时间：X；聊天时自然运用：这些都是你自己经历过、记得的事，不要逐条罗列复述，也不要说「记录」「记忆库」「看过资料」这类话）】——「记忆库/记忆的主人/看过记忆」幕后词全清除，「都和TA聊过」过强断言（诱导编造电话聊天）收窄为「亲身经历过的事+条目来自对应那一端」；群聊/互通关闭两分支 scope 文案同步去「记忆/注入」系统语（语义不变）
+- 修改1 时间裁决行（与世界书「长期/核心＞碎片」相反裁决统一）：「时间越近的记忆越可信…以时间更近的为准」→「长期记忆/核心记忆是稳定的画像，记忆碎片是最新进展：同一件事新旧不一致时，通常按更新的理解——人是在变化的；拿旧印象纠正对方刚说的话之前，先想想对方是不是已经变了」；长期记忆行「回复时应始终符合这些事实」→「回复时参考这些稳定事实」；归属标注说明行保留，去「（这份记忆库的主人）」改为「就是你自己做的」
+- 修改1 identitySeg 默认段剧情化：「当前身份：X——这是这份记忆的主人，也是现在和你聊天的用户身份」→「现在和你聊天的人用的是：X」（信息等价：账号身份+是眼前人）；小号「认出来了」块的 identitySegment 定制同步：「记忆的主人：「机主」——就是现在和你聊天的这位用户」→「现在和你聊天的这位用户就是「机主」本人」
+- 修改1 「陌生但隐约熟悉」块剧情化（约 981-989）：「（这个号里的记忆）」→「（这个身份里的经历）」；写死示例台词「宝宝，我知道是你吧」删除，改按关系泛化「按你们的关系自然开口，比如直接叫出只有你们之间才知道的称呼，或者问「你是不是XXX？」「我猜是你」」；Grep 全文件确认「记忆的主人」「【记忆库」「跨应用记忆库：你在…都和TA聊过」注入文案零残留（其余命中均为注释/其他文件自身文案）
+- 修改2 提取素材 kind 过滤（memory.ts memConvoFromRaw，【39】过滤处追加一行）：kind==='call'（通话卡片 content 是第一人称通话摘要「[语音通话：我打给你…]」，混进对话提取视角错乱；通话记忆由 chat-call 通话转写提取/挂断总结与 phone 事件碎片链路负责，双轨重复）|| kind==='groupcard'（群邀请卡）|| kind==='blockreq'（拉黑申请卡）直接跳过——后两者 content 恒为空此前只靠空文本巧合挡住；注释写明理由；song/textcard/forward/transfer 等其余 kind 不过滤（bun 直跑实测：call/groupcard/blockreq 零入库，song/textcard/forward/transfer/fr=apply/sys/空文本行为与改前一致）
+- 修改3 时间感知（time-aware.ts buildTimeAwareBlock）：a)【时空感知内化协议（最高优先级）】+方括号模板整段删除（模板外泄=persona 禁止+客户端标记括号文本；多处「最高优先级」自封互打架），重写为【时间内化（组织每条回复前在心里过一遍，不要在回复里输出任何形式的时间标注）】+自然语言两行（深夜别道早安/工作日别问周末/跨年长一岁/绝不把时间戳日期格式文本写进正文）；regionLine（角色所在地区参考）保留拼在段尾防悬空；b) 时间旅行兜底：lastMsgTime 超前 now 时不再误报「这是第一次聊天」（错误事实），Math.max(0, 间隔) 按 0 处理 → 现有 formatChatGap 显示「不足 1 分钟」；c) 事件时长规则去「对比上一次时间戳…计算经过了多少分钟」（聊天上下文没有逐条消息时间戳，诱导编造），改为对照块内「距离上次聊天」行判断跨度（隔了一夜/过了饭点/隔了工作日→很多事自然完成；片刻→可能仍在进行），量级把握不凭空精确到分钟，「说出耗时前先验证现实常识」保留；d) 当前时间行后补时区行「（若你的人设住在国外，按TA所在时区理解日期与作息：问候、节日、饭点按当地时间。）」
+- 修改4 连发条数措辞（reply-count.ts buildReplyCountPrompt）：单聊「N 条是上限，尽量往多了发…绝不能只发 1 条就结束（最少 min 条）」→「能自然拆开就往多了拆（每条哪怕很短）；内容实在不多时可以少发几条，不用硬凑——不要为了凑条数说车轱辘话或发空话，自然优先」（min~N 区间展示与 replyMinTarget 计算逻辑零改动）；「追问/展开新话题」→「追问或顺着话题补充」（对齐 persona「不丢下对方话题自顾自说」）；「不要加序号、项目符号或任何分隔标记」句尾补「（方括号系统标记是操作指令，按对应功能块的说明输出，不受这条限制）」防泛化压制红包/转账/切歌等功能指令；群聊版同款软化（追问句+方括号豁免），群聊收敛上限逻辑（1~min(N,5) 硬上限、别刷屏）原样保留；文件头/函数注释同步
+- 修改5 未配置识图文案（chat-stream-store.ts #26 兜底）：「你还没有配置识图模型，看不到图片内容…」→「（我发了一张图片，不过图片还在加载中，你暂时看不到内容——不要编造图片里有什么，可以泛泛回应，或自然让我重新发一次。）」（多图版复数句式同构）；注入条件（vision.baseUrl 为空且本轮有图）、role='user'、拼在 baseMessages 尾部完全不变，只换文案
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 0 错误（期间多次 SIGKILL 为多任务并行 lint 抢占 4GB 内存，错峰后复跑通过）；bun 直跑三模块行为实测：①lastMsgTime 超前→「不足 1 分钟」、正常 3h→「3 小时」、缺省→「这是第一次聊天」；②时间块无「[YYYY」模板无「最高优先级」、时区行与 regionLine 在位；③条数块 5 条=「3~5 条：能自然拆开就往多了拆…自然优先」、群聊块 1~5 硬上限保留、两版均带方括号豁免；④memConvoFromRaw 注入 12 类消息实测过滤精确（call/groupcard/blockreq 跳过，其余全保留）；⑤memRecallBlock 渲染实测新头部（共同经历+身份+当前时间+自然运用）与裁决行输出正确、幕后词零残留
+- 环境记录：会话中 tsc 曾报 qq.tsx 1455/4361 两处 TS2554——为并行任务 100-e 正在改的 buildActionRules 第二参数（其所有文件 qq.tsx/chat-rich.ts/wechat.tsx），与 100-c 无关，其落盘后复跑 tsc 已 0 错误
+
+Stage Summary:
+- 交付：记忆召回块全面去幕后概念（【共同经历】标题、无「记忆库/记忆的主人/看过资料/这个号」措辞、写死台词按关系泛化）+「都聊过」断言收窄为「亲身经历过的事」+ 新旧记忆裁决与世界书口径统一（长期/核心=稳定画像、碎片=最新进展、按更新理解，不再「越近越可信」一刀切）；提取素材显式过滤通话/群邀请/拉黑申请三类卡片（通话走事件链路不双轨入库）；时间感知去方括号模板与「最高优先级」自封改自然语言时间内化、时间旅行按 0 间隔兜底、事件时长改按「距离上次聊天」跨度把握、补国外人设时区行；连发条数从「尽量发满+绝不能只发1条」软化为「自然优先不强凑」+方括号系统标记豁免（群聊收敛上限保留）；未配置识图的注入文案剧情化为「图片还在加载中」
+- 关键决策：①头部拼装点唯一（memRecallBlockInner），小号「认出来了」identitySegment 定制与默认段同步改写，保证多账号场景语义等价（谁在聊天+用哪个身份）而措辞剧情化；②kind 过滤只新增三个值且放 memConvoFromRaw 单点（【39】同款位置）——手动总结/自动提取/跨App兜底/群聊兜底全部路径一次生效，song/textcard/forward 保持现状等产品口径；③时间模板删除后 regionLine 拼进时间内化段尾而非删除——地区参考信息不丢；④时间旅行兜底用 Math.max(0,·) 复用现有 formatChatGap（「不足 1 分钟」）而非新造「刚刚」格式；⑤条数 min 下限逻辑（replyMinTarget）保留只软文案——切分端/设置端零改动，纯提示词语义变化
+- 范围限定遵守：只改 4 文件（memory.ts 仅注入文案与 memConvoFromRaw 过滤行、time-aware.ts 仅 buildTimeAwareBlock 文案与 gap 兜底、reply-count.ts 仅 buildReplyCountPrompt 文案与注释、chat-stream-store.ts 仅识图兜底文案）；函数签名/注入时机/数据流/召回排序去重/提取频率计数/切分边界/流式分段全部零改动；单聊/群聊/世界书/朋友圈/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话逻辑未触碰；并行任务 100-e 的 qq.tsx/chat-rich.ts/wechat.tsx 改动未触碰
+- 改动文件：src/lib/memory.ts、src/lib/time-aware.ts、src/lib/reply-count.ts、src/lib/chat-stream-store.ts
+
+---
+Task ID: 100
+Agent: Z.ai Code（主会话）
+Task: 第四十轮——规则系统体检后全量修复（用户选中 2~21 全部 + 1 改为「QQ 砍掉亲属卡规则」）+ 状态栏全 App 实时跟随背景明暗
+
+Work Log:
+- 规则审计（三路并行 Explore）：聊天主链路 / 记忆·世界书·时间·条数 / 群聊·电话·主动消息·好友·挽留·音乐，共产出 6 组 21 项发现，用户全选修复
+- Task 100-a（chat-rich.ts）：buildRichRules/buildActionRules 加 opts {familyCard?}（默认 true=微信零变化）；familyCard=false 摘除全部亲属卡教学与待处理清单条目；【分享歌曲】删 [放歌] 教学（[放歌] 唯一权威定义收敛到 music-remote 播控块，消除「可见卡片 vs 隐形指令」双定义）；buildActionRules 追加「24h 不处理自动退回」告知（亲属卡本就不在清算范围故不提）；buildGroupRichRules 追加【群里发不了的东西】（图/语音/亲属卡）；45 项快照断言验证默认参数逐字节兼容
+- Task 100-b（persona/worldbook/wx-group/qq-group）：persona【禁止事项】括号禁令后插系统标记豁免条（方括号指令不受格式禁令限）；wbRulesBlock 优先级表重写——「用户新消息（最低）」改「必须第一时间直接回应」、第 1 条明确含人设禁止事项红线不可被设定解除、删永不生效的「覆盖世界书」死通道、新增第 4 条陌生/小号阶段世界书降级；注入锚点去「世界书」字眼；群【发言判断】[SKIP] 边界（完全沾不上边才 SKIP）与【发钱节流】边界（只禁发钱标记、处理标记照常）两文件镜像；【群聊模式】全员名单与【群成员速览】双份合并（速览存在时名单收敛一行，速览缺失时保持原句——速览有 others.length>0 条件且不含机主）
+- Task 100-c（memory/time-aware/reply-count/chat-stream-store）：记忆召回块头全面剧情化（【记忆库/记忆的主人/看过记忆】→【共同经历】，「都和TA聊过」过强断言收窄，小号块/「宝宝我知道是你吧」示例同步泛化）；新旧记忆裁决与世界书口径统一（长期/核心=稳定画像、碎片=最新进展按更新理解）；memConvoFromRaw 显式过滤 kind=call/groupcard/blockreq（通话卡片第一人称不再混入提取素材双轨入库）；time-aware 删方括号内化模板与「最高优先级」自封改自然语言【时间内化】、时间旅行兜底改 Math.max(0,·)「不足1分钟」、事件时长改按「距离上次聊天」跨度、补国外人设时区行；reply-count「尽量往多了发+绝不能只发1条」软化为「自然优先不强凑」+方括号指令豁免（min~N 逻辑零改动）；未配置识图文案剧情化「图片还在加载中」
+- Task 100-d（music-remote/music-ai/chat-call/phone-turn/quit-flow）：播控教学收敛 playControlCommonLines({who,redHeart?}) 单一来源（三调用点接 shared，[红心] 实锤仅 music-ai 链路解析故仅该侧教学）；「聊天优先级（最高规则）」降级为情境说明；电话 extraRules 加「通话里做不了红包/转账/放歌→口头答应不装已办」；chat-call 视频段加卡顿/听不清/断线自然应对；quit-flow 挽留私信 sysFull 补 timeBlock（复用 proactive-msg 开关判断与 buildTimeAwareBlock，开关关闭逐字节不变）
+- Task 100-e（wechat/qq）：qq 调用点传 {familyCard:false}（亲属卡规则 QQ 端消失）；拼手气红包部分领取状态标签「已领取（n/m份）」+ 待处理清单 label「拼手气红包（共m份）」；带描述图片历史序列化加 ID「[图片 ID:msg-x]（图片内容…）」（视觉自主决策 ID 可抄，多图不再拿错）；【视觉自主决策】改按「会话存在图片消息」按需注入；QQ 对齐微信（表情理解句逐字统一、AI 表情兜底占位 [表情]→[表情包]、collectWbBlocks 补 charName/userName 锚点）；语音条升级开启时注入「文字偶尔以语音送达，别说『我发了语音』不承诺发语音」规则（off 档零注入）
+- Task 100-f（状态栏实时基调）：新增 StatusBarToneProbe（AppWindow 容器内挂载，500ms+依赖变化采样 y=27 两个 x 点 elementFromPoint→祖先链 alpha 合成有效背景（透明回落渐变首停）→oklch/lab 经离屏画布规范化→sRGB 相对亮度 L<0.5 判深）→push/pop 屏幕级基调栈；registry 加 statusBarToneSelfManaged（music=true 探针不介入防推栈打架）；status-bar-tone getSnapshot 空栈改返 null（旧空栈默认 'light' 被 truthy 判断当有效覆盖，把无自管 App 钉死白字）；foreground toneOverride 空栈时正确回落 App 静态声明/主题
+- E2E（agent-browser 420×900）：主屏深壁纸白字；设置白底黑字；深色主题切换白字实时；切回浅色黑字；天气蓝天渐变白字（渐变首停路径）；微信/QQ/世界书渲染无崩溃；QQ 登录页黑字；全程 errors 零应用错误
+- 修复过程中抓出并根治两个探针 BUG：①parseCssColor 只设 fillStyle 未 fillRect（像素恒透明→一切颜色 a=0→探针从未推栈）；②compositeBg 对 rgba(0,0,0,0) 返回 a=0 对象挡住渐变回退（天气蓝天误判白）——均 E2E 复现→修复→复验
+- bunx tsc 0 错误；eslint 0 错误；调试埋点全部移除；dev.log 无应用错误
+
+Stage Summary:
+- 交付：21 项规则问题全量修复（QQ 亲属卡规则移除/拼手气状态矛盾/视觉 ID 进上下文/通话卡片过滤/括号禁令豁免/[放歌] 单一语义/四套优先级统一/条数软化/最高优先级降级/群边界×2/记忆块剧情化/提取过滤补全/时间感知四修/通话·视频·挽留·语音条四缺口/播控收敛/群名单去重/两端漂移统一/视觉规则按需注入）+ 状态栏全 App 实时基调（深底白字浅底黑字，音乐 App 自管保留，锁屏/切换器/主屏回落壁纸逻辑）
+- 关键决策：①探针走既有屏幕级基调栈（foreground toneOverride 通道）而非改 StatusBar——音乐自管/锁屏/切换器/通话全屏层既有优先级全部免改；②空栈语义从「默认 light」改「null=无覆盖」——根治探针失效期所有 App 白字的隐性陷阱；③[放歌] 收敛到 music-remote 唯一权威、[红心] 只在真实可解析侧教学——「只教真实可执行的」；④亲属卡按用户口径 QQ 整体移除教学（QQ 发送解析器保留无害）；⑤群名单合并走条件化（速览缺失时名单仍是机主名唯一来源）
+- 范围限定遵守：单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机/音乐核心逻辑未触碰——全部改动为提示词文案、过滤条件、纯展示组件与状态栏基调；红包/转账解析与落盘、记忆提取频率计数、appendFragments 去重、条数 min~N 计算、播控指令语法与剥离正则逐一核实零变化
+- 改动文件：src/lib/chat-rich.ts、src/lib/ios/persona.ts、src/lib/ios/worldbook.ts、src/components/apps/wx-group.tsx、src/components/apps/qq-group.tsx、src/lib/memory.ts、src/lib/time-aware.ts、src/lib/reply-count.ts、src/lib/chat-stream-store.ts、src/lib/ios/music-remote.ts、src/lib/ios/music-ai.ts、src/lib/ios/chat-call.ts、src/app/api/phone/turn/route.ts、src/lib/ios/quit-flow.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/ios/StatusBarToneProbe.tsx（新增）、src/components/ios/AppWindow.tsx、src/components/apps/registry.tsx、src/lib/ios/status-bar-tone.ts

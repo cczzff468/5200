@@ -559,10 +559,12 @@ function richToQqMsg(rich: RichMsg, id: string, time: number, peer: ContactRecor
     }
     case 'sticker': {
       // parseRichParts 已保证 ID/意思能匹配上；取不到时兑底为文字
+      // 100-e 兑底占位统一为微信同款「[表情包]」（此前 QQ 写「[表情]」，两端漂移；
+      // 表情包开关关闭时的剥除正则 /\[表情包\]|\[表情\]/g 两种都覆盖，旧数据兼容不受影响）
       const s = loadStickers('qq').find((x) => x.id === rich.stickerId);
       return s
         ? { id, role: 'peer', content: '', time, kind: 'sticker', stk: { url: s.url, meaning: s.meaning, sid: s.id } }
-        : { id, role: 'peer', content: '[表情]', time };
+        : { id, role: 'peer', content: '[表情包]', time };
     }
     case 'song':
       return songRichToQqMsg(rich, id, time, peer);
@@ -609,7 +611,14 @@ function cardStateLabel(m: QQMsg): string {
     if (m.packet.expired) return '已过期';
     if (m.packet.status === 'returned') return '已退回';
     if (m.packet.status === 'rejected') return '已拒收';
-    return (m.packet.claims ?? []).length > 0 ? '已领取' : '待领取';
+    // 100-e 拼手气红包（多份）部分领取：状态区分三档——全部领完「已领取」、领了一部分
+    // 「已领取（n/m份）」、一份没领「待领取」；旧逻辑部分领取也写「已领取」，与 cardIsFinal
+    // （未领完非终态）和待处理清单自相矛盾，AI 看到上下文里「已领取」+「待处理」不敢再领剩余份额；
+    // 历史序列化（[红包 ID:…，已领取（n/m份）]）与待处理清单共用本函数，修复自动传播
+    const claimedN = (m.packet.claims ?? []).length;
+    const totalCount = m.packet.count ?? 1;
+    if (totalCount > 1 && claimedN > 0 && claimedN < totalCount) return `已领取（${claimedN}/${totalCount}份）`;
+    return claimedN > 0 ? '已领取' : '待领取';
   }
   if (m.kind === 'transfer' && m.packet) {
     if (m.packet.expired) return '已过期';
@@ -686,7 +695,9 @@ function collectPendingCards(msgs: QQMsg[]): PendingCardInfo[] {
     .filter((m) => m.role === 'me' && !m.recalled && !cardIsFinal(m))
     .map<PendingCardInfo | null>((m) => {
       if (m.kind === 'redpacket' && m.packet) {
-        return { id: m.packet.cid ?? m.id, kind: 'redpacket', amount: m.packet.amount, label: `祝福语"${m.packet.note}"` };
+        // 100-e 拼手气红包（count>1）在清单里标注总份数，AI 知道还有剩余份额可领；普通红包 label 不变
+        const shareSuffix = (m.packet.count ?? 1) > 1 ? `（共${m.packet.count}份）` : '';
+        return { id: m.packet.cid ?? m.id, kind: 'redpacket', amount: m.packet.amount, label: `拼手气红包${shareSuffix}，祝福语"${m.packet.note}"` };
       }
       if (m.kind === 'transfer' && m.packet) {
         return { id: m.packet.cid ?? m.id, kind: 'transfer', amount: m.packet.amount, label: m.packet.note ? `备注"${m.packet.note}"` : '无备注' };
@@ -1416,12 +1427,20 @@ function qqQuoteTime(ts: number): string {
   return `${y}${d.getMonth() + 1}月${d.getDate()}日${hm}`;
 }
 
+/** 100-e AI 文字升级语音条的告知规则（aiVoiceOn=true 时随 buildPersonaPrompt extraRules 注入）：
+ *  AI 语音频率开关开启（非「关闭」档）的会话里，AI 的普通文字消息在投递时会按频率静默升级成语音条
+ *  （deliverAiMsg → decideAiVoiceMessage，见 @/lib/ios/ai-voice）——规则不告知的话，AI 说
+ *  「我给你发条语音」时系统并不会真的发语音条。开关关闭（off，永不升级）时零注入 */
+const AI_VOICE_DELIVERY_RULE =
+  '（你的文字消息有时会以语音条的形式送达对方——这是正常的送达方式，不用在意；但不要在正文里说「我给你发条语音」这类话，也不要主动承诺发语音，用文字自然聊就好。）';
+
 /** 联系人 AI 人设（QQ 聊天语境）：七要素结构化人设由全 App 共用模块组装，从联系人数据读取；
  *  特殊消息规则（红包/转账/亲属卡/位置/表情包标记）随表情包清单一起注入（表情包开关关闭时不下发表情包规则，
  *  并注入禁用 emoji/表情包的显式规则）；
  *  actionDescOn：动作描写开关（开启注入 *...* 格式约定、关闭注入显式禁令，见 @/lib/action-desc）；
- *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况） */
-function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, actionDescOn: boolean, npcExtra?: NpcPromptExtra | null): string {
+ *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况）；
+ *  aiVoiceOn：AI 语音频率开关（100-e，开启时告知「文字消息可能以语音条送达」，见 AI_VOICE_DELIVERY_RULE） */
+function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, actionDescOn: boolean, npcExtra?: NpcPromptExtra | null, aiVoiceOn?: boolean): string {
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
   // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
   const mode = useSettings.getState().addressMode;
@@ -1440,10 +1459,14 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
     extraRules: [
       // 【fix3-d-2】点明该标记只出现在「对方（用户）」消息里：与历史序列化中 AI 自己表情的
       // 「[表情包:ID]」/「[你发送了表情：XX]」写法区分开，防止 AI 把兜底标记当成自己的输出格式
-      '出现在对方（用户）消息里的『[发送了表情：XX]』表示对方发来一张含义为『XX』的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
-      ...buildRichRules(stickersOn ? stickers : []),
+      // 100-e 与微信端文案逐字一致（此前两端手工复制引号风格漂移『』vs「」）
+      '出现在对方（用户）消息里的「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      // 100-e QQ 没有亲属卡功能：亲属卡教学不下发（opts.familyCard=false，与微信区分）
+      ...buildRichRules(stickersOn ? stickers : [], { familyCard: false }),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
       ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE]),
+      // 100-e 文字升级语音条告知（开关开启才注入，off 零注入）
+      ...(aiVoiceOn ? [AI_VOICE_DELIVERY_RULE] : []),
     ],
   });
 }
@@ -3561,19 +3584,21 @@ function ChatPage({
         .map((m) => ({
           role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
           // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间）；图片取识图描述，通话里 AI 同样知道聊过的图片内容
+          // 100-e 带描述的图片带消息 ID 进上下文（AI 需要抄写 ID 时能抄到真实的）
           content:
             m.kind === 'voice'
               ? m.voice?.transcript || m.voice?.localText || '[语音]'
               : m.kind === 'location'
                 ? locationAiText(m.loc, m.time)
                 : m.kind === 'image' && m.img?.desc && !m.content.startsWith('data:')
-                  ? `[图片]（图片内容：${m.img.desc}）`
+                  ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
                   : m.content,
         }));
       const memContext = history.map((h) => h.content).join(' ');
       // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
       // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
-      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]));
+      // 100-e 世界书锚点对齐微信通话同款第三参 labels（「文中的『你』指谁」消歧）
+      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]), { charName: peer.name, userName: me.name });
       const worldbookBlock =
         [
           callWb.beforeSystem,
@@ -4288,8 +4313,10 @@ function ChatPage({
                 : `[你发送了表情：${m.stk.meaning || '无描述'}]`
             : m.kind === 'image'
             ? // 图片消息：有识图描述时 AI 读到内容（历史可回看）；无描述时占位（防编造规则由 system 注入）
+              // 100-e 带描述的图片带消息 ID 进上下文：视觉自主决策规则要求 AI 原样抄写图片消息 ID
+              // 来 [换头像:ID]/[换背景:ID]/[存入相册:ID]，上下文里没有 ID 它只能编造；无描述仍「[图片]」
               m.img?.desc
-              ? `[图片]（图片内容：${m.img.desc}）`
+              ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
               : '[图片]'
             : m.kind === 'textcard' && m.card
             ? // 文字图片卡片：AI 知道发过什么卡片（历史可回看，避免接不上话题）
@@ -4339,11 +4366,12 @@ function ChatPage({
     const stickersOn = getStickersOn(sessionKey);
     // 动作描写开关（发送时现场读取）：开启注入格式约定、关闭注入显式禁令（见 @/lib/action-desc）
     const actionDescOn = getActionDescOn(sessionKey);
-    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(peer, contacts));
+    const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(peer, contacts), getAiVoiceFreq(sessionKey) !== 'off');
     // 40-a 拉黑破口修复：仅申请卡模式（requestOnly）下不再注入待处理卡清单与资金动作规则——
     // AI 在拉黑期间不能处理任何红包/转账（即使输出了处理标记也会被 buildReplyMsgs 丢弃），
     // 注入清单反而会诱导模型输出永远落不了地的处理动作
-    const actionRules = requestOnly ? [] : buildActionRules(collectPendingCards(base));
+    // 100-e QQ 没有亲属卡功能：处理动作规则不下发亲属卡教学（opts.familyCard=false，与微信区分）
+    const actionRules = requestOnly ? [] : buildActionRules(collectPendingCards(base), { familyCard: false });
     // 退群挽留背景（需求二）：该联系人所在的某个群存在活跃的退群流程时，注入退群事件、群内近况与
     // 拉回群/给权限标记说明（AI 按人设决定是否提起、是否拉回；每次退群最多一次，拒绝后不再提）
     const quitCtx = activeQuitFlowFor(peer.id);
@@ -4395,7 +4423,9 @@ function ChatPage({
     //（每本书独立包裹成【世界设定开始】/【世界设定结束】块；系统/角色定义前后进 system，
     // 用户消息前后包裹最后一条 user 消息；未命中不发送；有内容时 system 末尾附带使用规则；
     // 图片消息以 [图片] 占位、语音消息以转写文本参与，防 dataURL 进入触发词扫描）
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]));
+    // 100-e 世界书锚点对齐微信（主聊同款 collectWbBlocks 第三参 labels）：锚点块头注标注
+    // 「文中的『你』指{角色名}、『机主/用户』指{机主名}」，消除世界书消歧「文中的你指谁」漂移
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]), { charName: peer.name, userName: me.name });
     // 位置感知：用户最近发过的位置消息（名称/地址/经纬度/发送时间）注入 system——
     // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造；
     // 【fix3-d-5】补传 peerLabel：AI 角色自己发的位置在注入块里标明「AI角色本人，就是你自己」，
@@ -4434,7 +4464,9 @@ function ChatPage({
       // 读相册失败不阻塞聊天主流程，仅放弃本回合的【选图操作】规则
     }
     // 【fix3-d-6】传 app='qq'：视觉规则里的「换朋友圈背景」文案按端区分（QQ 端说明改的是 QQ 资料页封面）
-    const visionRules = buildVisionRules(albumSummary, 'qq');
+    // 100-e 按需注入：本会话消息列表（base 已含本轮新消息）里从未出现过图片消息时不注入视觉规则——
+    // 从不发图的会话不占 token；出现过 ≥1 条图片消息才下发（与微信同口径）
+    const visionRules = base.some((m) => m.kind === 'image') ? buildVisionRules(albumSummary, 'qq') : [];
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
     const systemFull = [

@@ -931,7 +931,7 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
   let block = '';
   try {
     block = memRecallBlockInner(contactId, app, contextText, opts, {
-      identitySegment: `记忆的主人：「${mainLabel}」——就是现在和你聊天的这位用户（TA 的常用身份）`,
+      identitySegment: `现在和你聊天的这位用户就是「${mainLabel}」本人（TA 的常用身份）`,
     });
   } catch {
     block = '';
@@ -980,9 +980,9 @@ function altStrangerGuessBlock(contactId: string, app: MemApp): string {
   if (lsGetRaw(altDisclosedLsKey(app, contactId)) === '1') return '';
   return [
     '【陌生但隐约熟悉：边界与猜测】',
-    '- 你对 TA 的了解，只来自 TA 亲口告诉你的，和你们实际聊过的内容（这个号里的记忆）；',
+    '- 你对 TA 的了解，只来自 TA 亲口告诉你的，和你们实际聊过的内容（这个身份里的经历）；',
     '- TA 提到你不了解的往事（朋友、宠物、过去的约定等）时，不要假装记得，也不要编造共同回忆的细节——自然听 TA 讲、好奇追问，或按你的人设回应；绝不主动提起或暗示你知道任何 TA 没有告诉过你的事；',
-    '- 但 TA 的说话语气、用词习惯、互动方式、对你的称呼，可能让你隐约觉得熟悉——结合你的人设、你对用户的了解程度、以及你们实际聊过的内容，如果让你联想到某个具体的人，可以把猜测自然说出口，比如「你是不是XXX？」「我猜是你」「宝宝，我知道是你吧」（怎么说完全按你的人设和性格来）；',
+    '- 但 TA 的说话语气、用词习惯、互动方式、对你的称呼，可能让你隐约觉得熟悉——结合你的人设、你对用户的了解程度、以及你们实际聊过的内容，如果让你联想到某个具体的人，可以把猜测自然说出口——按你们的关系自然开口，比如直接叫出只有你们之间才知道的称呼，或者问「你是不是XXX？」「我猜是你」（怎么说完全按你的人设和性格来）；',
     '- 猜测只是猜测：TA 没亲口承认之前不能当成事实，不要替 TA 认下，也不要因为猜测就把「你们之间的事」说得言之凿凿；',
     '- TA 否认时大方接受（按人设，比如「那我认错人啦」），不要反复纠缠；',
     '- 只有 TA 亲口亮明身份（比如「我就是XXX」「我是XX」），你才能真正确认、把 TA 和那个人当成同一个人。',
@@ -1008,7 +1008,7 @@ export function memChatRecallBlock(contactId: string, app: MemApp, contextText: 
 
 /** 召回块头部定制（多账号小号侧大号记忆感知用；缺省 = 与旧版完全一致） */
 interface RecallHeaderOpts {
-  /** 替换头部里「当前身份：X——这是这份记忆的主人，也是现在和你聊天的用户身份」整段 */
+  /** 替换头部里「现在和你聊天的人用的是：X」整段（小号侧大号记忆「认出来了」场景用） */
   identitySegment?: string;
   /** 头部说明行之后追加的额外说明行 */
   extraNoteLines?: string[];
@@ -1100,26 +1100,26 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   // 头部说明按互通状态分文案（跨 App 互通修复）：角色必须被告知「多端同一个人」以及
   // 本次能看到哪些来源的记忆——否则带「·微信」标注的碎片会被当成无关信息，甚至否认在别处的对话
   const headScope = isGroupMode
-    ? '群聊模式：只注入本群可见的记忆'
+    ? '群聊模式：下面只给本群可见的共同经历'
     : share
-      ? '跨应用记忆库：你在微信/QQ/信息/电话都和TA聊过，下面带App标注的记忆可能来自任何一端，都是你亲身经历的事'
-      : '仅本App记忆（跨应用互通已关闭）：你在其他App和TA聊过的内容这里看不到';
+      ? '下面是你在微信、QQ、信息、电话里和TA亲身经历过的事，带App标注的条目来自对应那一端'
+      : '仅本App的经历（跨应用互通已关闭）：你在其他App和TA聊过的内容这里看不到';
   // 归属标注说明（朋友圈/QQ动态来源记忆自带「（AI角色本人）/（用户本人）」标注）：
   // 只要注入内容里出现这类标注，就附一行解释——AI 必须能区分「是我自己发的动态」还是「用户发的」，
-  // 绝不能把自己（记忆库主人）发的动态当成用户的行为（反之亦然）。
+  // 绝不能把自己（AI 本人）发的动态当成用户的行为（反之亦然）。
   // 【fix3-a 8】判定改为「显式 hasRoleTag 标记 || 字符串检测」：总结可能把标注磨掉，
   // 总结落库时聚合来源标记（hasRoleTag=true）后，这里仍能靠标记兜底展示说明行
   const showRoleTagNote =
     [...keepLongs, ...keepCores].some(({ m }) => m.hasRoleTag === true || memHasRoleTag(m.content)) ||
     keepFrags.some(({ f }) => f.hasRoleTag === true || memHasRoleTag(f.content));
-  const identitySeg = headerOpts?.identitySegment ?? `当前身份：${memScopeAccountName()}——这是这份记忆的主人，也是现在和你聊天的用户身份`;
+  const identitySeg = headerOpts?.identitySegment ?? `现在和你聊天的人用的是：${memScopeAccountName()}`;
   const lines: string[] = [
-    `【记忆库（${headScope}；${identitySeg}；当前时间：${memNowLabel(now)}；聊天时自然运用，不要逐条复述或主动承认看过记忆）】`,
-    '（时间越近的记忆越可信：优先参考时间更近的；同一事实新旧矛盾时，以时间更近的为准）',
+    `【共同经历（${headScope}；${identitySeg}；当前时间：${memNowLabel(now)}；聊天时自然运用：这些都是你自己经历过、记得的事，不要逐条罗列复述，也不要说「记录」「记忆库」「看过资料」这类话）】`,
+    '（长期记忆/核心记忆是稳定的画像，记忆碎片是最新进展：同一件事新旧不一致时，通常按更新的理解——人是在变化的；拿旧印象纠正对方刚说的话之前，先想想对方是不是已经变了）',
     ...(headerOpts?.extraNoteLines ?? []),
     ...(showRoleTagNote
       ? [
-          '（归属标注说明：标了「AI角色本人」的事，就是你自己（这份记忆库的主人）做的；标了「用户本人」的事，是和你聊天的用户本人做的——谁做的就归谁，绝不能张冠李戴）',
+          '（归属标注说明：标了「AI角色本人」的事，就是你自己做的；标了「用户本人」的事，是和你聊天的用户本人做的——谁做的就归谁，绝不能张冠李戴）',
         ]
       : []),
   ];
@@ -1127,7 +1127,7 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   //（单来源「·微信」，多来源「·微信/电话」；旧数据 apps 缺失时回退不带来源的原格式）
   const appsSrcLabel = (apps: MemApp[]): string => (apps.length > 0 ? apps.map((a) => MEM_APP_LABEL[a] ?? a).join('/') : '');
   if (keepLongs.length > 0) {
-    lines.push('◇ 长期记忆（最稳定的画像；回复时应始终符合这些事实）：');
+    lines.push('◇ 长期记忆（最稳定的画像；回复时参考这些稳定事实）：');
     keepLongs.forEach(({ m }, i) => {
       const src = appsSrcLabel(m.apps ?? []);
       lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`);
@@ -2533,7 +2533,12 @@ function isMemErrPlaceholder(text: string): boolean {
  *  - 验证消息是「加好友流程」对话（打招呼/身份核验），沉淀成记忆会产生「凡凡自称Z」这类脏碎片，
  *    且申请通过后正常聊天才是记忆素材的真实来源；
  *  - 系统提示（拉黑/换头像/拍照中…）是状态播报，wx/qq/sms 的 sys 行 content 本就为空（天然被
- *    空文本过滤跳过），这里再加显式条件双保险（防未来 sys 行带文案） */
+ *    空文本过滤跳过），这里再加显式条件双保险（防未来 sys 行带文案）
+ *  【100-c】通话/群邀请/拉黑申请三类卡片（kind='call'/'groupcard'/'blockreq'）也不进素材：
+ *  - 通话卡片 content 是第一人称通话摘要（「[语音通话：我打给你…]」），混进对话提取会造成
+ *    视角错乱；通话记忆由专门链路负责（chat-call 通话转写提取/挂断总结、phone 事件碎片），
+ *    不走对话提取，这里过滤掉避免同一通电话双轨重复入库；
+ *  - 群邀请卡/拉黑申请卡是纯系统动作卡片（content 恒为空，此前只靠空文本巧合挡住），显式跳过。 */
 export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn[] {
   const out: MemConvoTurn[] = [];
   for (const raw of msgs) {
@@ -2542,6 +2547,7 @@ export function memConvoFromRaw(msgs: unknown[], peerName: string): MemConvoTurn
     if (m.recalled === true || m.error === true) continue;
     if (m.fr === 'apply' || m.fr === 'greet' || m.fr === 'added') continue; // 【39】验证消息不入记忆
     if (m.kind === 'sys' || (m.sys && typeof m.sys === 'object')) continue; // 【39】系统提示不入记忆
+    if (m.kind === 'call' || m.kind === 'groupcard' || m.kind === 'blockreq') continue; // 【100-c】通话/群邀请/拉黑申请卡片不入素材（通话走事件链路，见上方注释）
     const label =
       m.kind === 'location'
         ? locLabelOf(m.loc)

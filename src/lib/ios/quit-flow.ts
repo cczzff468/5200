@@ -46,6 +46,8 @@ import { buildNpcPromptExtra } from './npc-bond';
 import { buildPersonaSystemPrompt } from './persona';
 import { kvDel, kvGet, kvSet } from './idb-kv';
 import { pushChatNotification } from './island-notify';
+// 【100-d】挽留私信补时间感知：与主动消息（proactive-msg）同一套会话级开关 + 构建函数
+import { buildTimeAwareBlock, getTimeAware } from '../time-aware';
 
 // ---------------- 状态与存储 ----------------
 
@@ -552,6 +554,20 @@ async function sendQuitDm(st: QuitFlowState, contacts: ContactRecord[]): Promise
   const memContext = [`${meName}退出了群聊「${st.groupName}」`, `为什么退群`, `和${meName}的关系`, ...st.recentMsgs.filter((m) => m.kind !== 'notice' && !m.recalled).slice(-4).map((m) => snapshotMsgLine(m, meName))]
     .join(' ');
   const memoryBlock = memRecallBlock(contact.id, app, memContext, { interopOn: () => share });
+  // 时间感知（【100-d】）：挽留私信与主动消息同一套开关判断（会话级 time-aware，sKey = wx/qq:<cid> 与
+  // 主聊天同键）与同一构建函数；开关关闭时 timeBlock 为空串，sysFull 结构与注入行为和之前完全一致。
+  // 修复：深夜触发的挽留私信没有时间参照，可能发出不合时宜的元气挽留
+  const lastPrivMsgTime = (() => {
+    const msgs = loadPrivateMsgs(app, contact.id);
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const t = msgs[i].time;
+      if (typeof t === 'number' && t > 0) return t;
+    }
+    return null;
+  })();
+  const timeBlock = getTimeAware(sKey)
+    ? buildTimeAwareBlock({ lastMsgTime: lastPrivMsgTime, regionHint: contact.region || null })
+    : '';
   // 群聊近况（需求五.3：私信要参考群里最近发生的事件和对话）——从退群快照取，退群前的真实在场记录
   const evtLines = st.recentMsgs
     .filter((m) => m.evt && m.noticeText)
@@ -565,7 +581,7 @@ async function sendQuitDm(st: QuitFlowState, contacts: ContactRecord[]): Promise
     evtLines.length > 0 || dlgLines.length > 0
       ? ['【群聊近况】退群前群里的情况（你都在场，这些是真实发生过的）：', ...(evtLines.length > 0 ? ['最近事件：', ...evtLines] : []), ...(dlgLines.length > 0 ? ['最近对话：', ...dlgLines] : [])].join('\n')
       : '';
-  const sysFull = [system, recentBlock, memoryBlock].filter(Boolean).join('\n\n');
+  const sysFull = [system, recentBlock, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
   const quitAt = st.quitAt;
   const ok = beginChatStream({
     sessionKey: sKey,

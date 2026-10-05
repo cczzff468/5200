@@ -33,6 +33,10 @@ import { useEffect, useState } from 'react';
 import { useMusic, setSongPlayedHook } from './music-store';
 import { search, songArtistText, musicUid, type NcmSong } from './music-api';
 import { buildCrossContextBlocks } from './cross-app-context';
+// 【100-d】播控教学收敛单一来源：指令教学行从 music-remote 的共享生成器取（与本模块
+// extractTgControls 的解析正则一一对应）。循环依赖是有意为之且安全：两侧都只在运行时函数内
+// 使用对方导出（本文件用 playControlCommonLines，music-remote 用 searchSongMatched），无模块级求值。
+import { playControlCommonLines } from './music-remote';
 
 // ---------------- 类型 ----------------
 
@@ -606,7 +610,8 @@ function playingBlock(extra: string, who: string, cid: string): string {
   }
   lines.push(
     '',
-    '【聊天优先级（最高规则，压倒下面所有规则）】',
+    // 【100-d】「最高规则」自封降级：多个块都自称最高会互相打架——改为情境说明，规则内容不变
+    '【一起听 · 当前情境】现在是聊天回合：先像平常一样自然回应用户这句话，再考虑一起听的互动（下面的规则都服务于这个前提）',
     '- 对方刚发来的消息永远是最重要的：必须先直接接住对方说的话（回应内容/情绪/问题），像正常聊天那样回；',
     '- 绝对禁止无视对方的话、自顾自聊歌：哪怕对方只发两个字，也要先回应这句话本身；',
     '- 音乐只是背景：你们正在一起听歌，但聊天跟平时一样，对方没提歌、没问歌时就不要主动聊歌；',
@@ -619,16 +624,12 @@ function playingBlock(extra: string, who: string, cid: string): string {
     '- 绝对禁止复读：聊天记录里（不管是你还是对方说过的）已有的句子、句式和意思都不许再重复，每次都要换一个全新的角度（旋律/歌手音色/歌词/回忆/当下氛围/联想画面……任选一个没聊过的切入口）；',
     '- 不要输出 markdown、不要伪装成系统；直接输出消息正文。',
     '',
-    '【播放控制】你在陪对方听歌，可以控制播放（指令写在消息末尾，系统会真实执行，不要在正文里描述指令本身，不要加引号/代码块）：',
+    '【播放控制】你在陪对方听歌，可以控制播放：',
     '- 指令由系统在你发完消息后异步执行：正文用意图式说法（如"我切一下歌""放首X听听"），不要用完成时说"已经切好了/已经放出来了"——万一没放成也不显得说谎；',
-    '- 想切下一首：[切歌]；想回上一首：[上一首]；',
-    '- 想暂停音乐：[暂停]；想继续放：[继续]；',
-    '- 想放一首具体的歌（选歌/换到你们聊到的歌）：[放歌:歌名:歌手]（写真实存在的歌，如 [放歌:晴天:周杰伦]）；',
-    '- 觉得这首歌好听、想帮对方收藏：[红心]（把当前歌加进对方红心，同一首歌别重复发）；',
-    '- 想跳过前奏/直接听副歌：[快进:秒数]（如 [快进:30]）；想倒回去重听：[快退:秒数]（如 [快退:45]）；最多 600 秒；',
-    '- 选什么歌、什么时候切，完全按你的人设、你们的聊天内容和这首歌的氛围来；用户随时会手动操作播放器，别抢节奏，不要每条消息都带指令。',
+    // 【100-d】指令教学行收敛到 music-remote.playControlCommonLines（单一来源）；
+    // [红心] 只有本链路（extractTgControls）解析执行，redHeart 仅此处传 true
+    ...playControlCommonLines({ who, redHeart: true }),
   );
-  void who;
   return lines.join('\n');
 }
 

@@ -62,6 +62,9 @@ export interface AppMeta {
   component: ComponentType;
   /** 状态栏强制白字（App 顶部背景非背景色系时用：天气蓝天/相机黑底）；缺省=跟随主题明暗 */
   statusBarLight?: boolean;
+  /** App 自管屏幕级基调（音乐 App 各页面按背景明暗自行 push/pop）；
+   *  true 时自动基调探针不介入（双方都推栈会互相打架） */
+  statusBarToneSelfManaged?: boolean;
 }
 
 function IconTile({ className = '', children }: { className?: string; children?: ReactNode }) {
@@ -189,6 +192,7 @@ interface AppDef {
   image?: string;
   component: ComponentType;
   statusBarLight?: boolean;
+  statusBarToneSelfManaged?: boolean;
 }
 
 const APP_DEFS: AppDef[] = [
@@ -319,6 +323,9 @@ const APP_DEFS: AppDef[] = [
     image: '/icons/music.png',
     glyph: <Music2 className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: MusicApp,
+    // 音乐 App 各页面（白底首页/搜索 ⇄ 深色播放页）自行 push/pop 基调（第三十三轮），
+    // 自动基调探针不介入（statusBarToneSelfManaged），否则双方推栈互相打架
+    statusBarToneSelfManaged: true,
   },
   {
     id: 'camera',
