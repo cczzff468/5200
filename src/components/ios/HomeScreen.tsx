@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { Plus, Search, X } from 'lucide-react';
 import { useUI, useSettings, type AppId } from '@/lib/ios/store';
@@ -97,6 +97,12 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - 布局持久化到 IndexedDB（settings store，key = 'homeLayout'），兼容旧单页格式
  *   （旧 grid 迁移为第 1 页；v6 起旧版本整体重置为新排布）。
  *
+ * - 文件夹（iOS 同款）：编辑模式拖 App 悬停到另一 App/文件夹上（~550ms）出现合并预览，
+ *   松手建夹/入夹/并夹（快速划过仍走挤位换位）；文件夹图标 = 毛玻璃圆角方（前 6 个 App
+ *   缩略图 3×2 + 超额数量角标）+ 名称；点按弹出全屏毛玻璃面板（点名称改名/分页滑动/
+ *   点外部收起/点 App 打开），编辑模式可 × 整夹删除（App 退回主屏）、面板内长按 320ms
+ *   拖出 App 到桌面、× 退回单个 App；夹内 App 全部拖出后文件夹自动消失；
+ *   文件夹结构持久化（layout.folders，App 实体存在夹内，从主网格移除）。
  * 编辑模式（长按任意图标/小组件或长按空白处进入）：
  * - 全部图标/小组件抖动，左上角出现深色「删除」× 角标；
  * - 左上角「+」→ 小组件画廊浮层（全部 14 种小组件 1:1 预览，点 + 添加回主屏，
@@ -116,7 +122,9 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
 
 /** 桌面小组件种类：时钟（大数字卡）/ 天气 / 信息卡片（个人名片）/ 气泡（双头像+各自头顶气泡）/ 日记（日记卡）/ 一起听（双人气泡+迷你播放器）/ 音乐（封面+进度+控制键，真实播放状态）/ 网易云（黑胶播放器卡）/ 对话气泡（双头像+交错双气泡）/ 黑胶（大唱片+唱针）/ 日历（月历横版）/ iCity（名字+日期+头像胶囊）/ 表盘时钟（刻度表圈）/ 拍立得（三张胶片照） */
 export type WidgetKind = 'weather' | 'clock' | 'profile' | 'bubble' | 'diary' | 'listen' | 'music' | 'netease' | 'dialog' | 'vinyl' | 'calendar' | 'icity' | 'tickclock' | 'polaroid';
-type Tile = { kind: 'widget'; widget: WidgetKind } | { kind: 'app'; id: AppId } | { kind: 'empty' };
+/** 桌面文件夹：名称 + 内部 App 序列（App 从主网格移入；全部拖出后文件夹自动消失） */
+type FolderData = { id: string; name: string; apps: AppId[] };
+type Tile = { kind: 'widget'; widget: WidgetKind } | { kind: 'app'; id: AppId } | { kind: 'folder'; id: string } | { kind: 'empty' };
 type Zone = 'grid' | 'dock';
 
 const WIDGET_KINDS: WidgetKind[] = ['weather', 'clock', 'profile', 'bubble', 'diary', 'listen', 'music', 'netease', 'dialog', 'vinyl', 'calendar', 'icity', 'tickclock', 'polaroid'];
@@ -181,8 +189,15 @@ const widgetOfKey = (id: string): WidgetKind => {
   const k = id.slice('widget:'.length);
   return (WIDGET_KINDS as string[]).includes(k) ? (k as WidgetKind) : 'weather';
 };
-/** tile 唯一键（小组件用带前缀键，App 用自身 id，空占位格不参与交互用常量键） */
-const tileKey = (t: Tile): string => (t.kind === 'widget' ? widgetKey(t.widget) : t.kind === 'empty' ? 'empty' : t.id);
+/** 文件夹稳定键（data-id / 拖拽 id 用）：带前缀避免与同名 App id 冲突 */
+const folderKey = (id: string): string => `folder:${id}`;
+const isFolderKey = (id: string): boolean => id.startsWith('folder:');
+const folderIdOfKey = (id: string): string => id.slice('folder:'.length);
+/** 新建文件夹 id（时间戳+序号，重启后不重复） */
+let folderSeq = 0;
+const newFolderId = (): string => `f${Date.now().toString(36)}${(folderSeq++).toString(36)}`;
+/** tile 唯一键（小组件/文件夹用带前缀键，App 用自身 id，空占位格不参与交互用常量键） */
+const tileKey = (t: Tile): string => (t.kind === 'widget' ? widgetKey(t.widget) : t.kind === 'empty' ? 'empty' : t.kind === 'folder' ? folderKey(t.id) : t.id);
 
 const GRID_GAP_X = 8;
 
@@ -235,8 +250,13 @@ function flowPositions(tiles: Tile[]): {
   return { starts, after, end: { r: cr, c: cc } };
 }
 
-/** 拖拽命中位置：grid 带页号（index 为页内下标，padEmpty 为插入前需补的空占位格数），dock 只有下标 */
-type Hit = { zone: 'grid'; page: number; index: number; padEmpty?: number } | { zone: 'dock'; index: number };
+/** 拖拽命中位置：grid 带页号（index 为页内下标，padEmpty 为插入前需补的空占位格数，
+ *  overId 为矩形命中时所指的原槽位 tile 键——悬停建夹/入夹用），dock 只有下标；
+ *  folder 仅作拖拽源（从文件夹里拖出 App 时 zoneIndexOf 的返回），不是落点 */
+type Hit =
+  | { zone: 'grid'; page: number; index: number; padEmpty?: number; overId?: string }
+  | { zone: 'dock'; index: number }
+  | { zone: 'folder'; folderId: string; index: number };
 
 interface HomeLayout {
   /** 布局版本（v2 = 微信/音乐/文件/提醒事项在第二页、音乐移出 Dock）；旧版自动迁移 */
@@ -246,6 +266,8 @@ interface HomeLayout {
   dock: AppId[];
   /** 用户删除过的项（'widget:weather'/'widget:clock' 或 AppId）：重新加载时不自动补回 */
   hidden: string[];
+  /** 桌面文件夹（页内以 {kind:'folder', id} tile 引用；App 实体存在这里） */
+  folders?: FolderData[];
 }
 
 const LAYOUT_KEY = 'homeLayout';
@@ -271,6 +293,11 @@ const HIT_PAD_PX = 6;
 /** 拖拽命中：Dock 槽位外扩（px）——Dock 图标间隙 18px，需要更大的感应范围才能
  *  顺畅地插入/排序 Dock（同时避免拖到 Dock 上方空白时误入网格兜底） */
 const DOCK_HIT_PAD_PX = 30;
+/** 拖拽悬停建夹/入夹判定时长：App 拖到另一 App/文件夹上停留超过该时长 → 出现合并预览，
+ *  松手即建夹/入夹；快速划过仍走原有挤位换位（与 iOS 手感一致） */
+const MERGE_HOVER_MS = 550;
+/** 文件夹展开面板每页 App 数（3 列 × 4 行） */
+const FOLDER_PANEL_PAGE = 12;
 /** 翻页后页点保持显示的时长（之后淡出回搜索胶囊） */
 const DOTS_LINGER_MS = 1100;
 /** 页网格行间距（gap-y-[16px]，与渲染处保持一致；行距拟合用） */
@@ -418,6 +445,9 @@ function sanitizeLayout(raw: unknown): HomeLayout {
         if (widgetSeen[w]) continue;
         widgetSeen[w] = true;
         page.push({ kind: 'widget', widget: w });
+      } else if (o.kind === 'folder' && typeof o.id === 'string' && o.id) {
+        // 文件夹 tile：先原样保留，等 folders 解析后统一剔除无效/重复项（校验需要 folders 数据）
+        page.push({ kind: 'folder', id: o.id });
       } else if (o.kind === 'app' && typeof o.id === 'string' && (allIds as string[]).includes(o.id)) {
         const id = o.id as AppId;
         if (hidden.has(id) || placed.has(id)) continue;
@@ -428,6 +458,40 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     pages.push(page);
   }
   if (pages.length === 0) pages.push([]);
+
+  // 文件夹解析：校验 id/名称/App 合法性（App 去重、不与网格/Dock 重复、hidden 剔除），
+  // 空文件夹与无 tile 的孤儿文件夹剔除；文件夹里的 App 计入 placed（缺失 App 补位时不会重复入网格）
+  const validFolderIds = new Set<string>();
+  const foldersOut: FolderData[] = [];
+  if (Array.isArray(r.folders)) {
+    for (const f of r.folders) {
+      if (!f || typeof f !== 'object') continue;
+      const fo = f as { id?: unknown; name?: unknown; apps?: unknown };
+      if (typeof fo.id !== 'string' || !fo.id || validFolderIds.has(fo.id)) continue;
+      const apps: AppId[] = [];
+      if (Array.isArray(fo.apps)) {
+        for (const a of fo.apps) {
+          if (typeof a !== 'string' || !(allIds as string[]).includes(a)) continue;
+          if (hidden.has(a as AppId) || placed.has(a as AppId) || apps.includes(a as AppId)) continue;
+          apps.push(a as AppId);
+          placed.add(a as AppId);
+        }
+      }
+      validFolderIds.add(fo.id);
+      foldersOut.push({ id: fo.id, name: typeof fo.name === 'string' && fo.name.trim() ? fo.name.trim().slice(0, 30) : '文件夹', apps });
+    }
+  }
+  const seenFolderTiles = new Set<string>();
+  for (const pg of pages) {
+    for (let i = pg.length - 1; i >= 0; i--) {
+      const t = pg[i];
+      if (t.kind !== 'folder') continue;
+      const ok = validFolderIds.has(t.id) && !seenFolderTiles.has(t.id) && (foldersOut.find((f) => f.id === t.id)?.apps.length ?? 0) > 0;
+      if (ok) seenFolderTiles.add(t.id);
+      else pg.splice(i, 1);
+    }
+  }
+  const folders = foldersOut.filter((f) => seenFolderTiles.has(f.id));
   // 缺失的小组件按默认位置补回（hidden 的不补——默认收起的第 3/4 页小组件与被删除的
   // 小组件都在 hidden 里，不会自动复活；用户主动加回后此处不再介入）：时钟→第 1 页头、
   // 天气→时钟旁、信息卡片→第 2 页头、气泡→信息卡片后、日记/一起听/网易云→第 3 页、
@@ -515,13 +579,13 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     pages[target].push({ kind: 'app', id });
     placed.add(id);
   }
-  return { v: LAYOUT_VERSION, pages, dock, hidden: Array.from(hidden) };
+  return { v: LAYOUT_VERSION, pages, dock, hidden: Array.from(hidden), folders };
 }
 
 /** 布局持久化（模块级：初始加载迁移回写与组件内拖拽/删除等共用同一写入口） */
 const persist = (l: HomeLayout) => {
   void localDB
-    .put('settings', { key: LAYOUT_KEY, value: { v: l.v ?? LAYOUT_VERSION, pages: l.pages, dock: l.dock, hidden: l.hidden } })
+    .put('settings', { key: LAYOUT_KEY, value: { v: l.v ?? LAYOUT_VERSION, pages: l.pages, dock: l.dock, hidden: l.hidden, folders: l.folders ?? [] } })
     .then(() => {
       // 落库成功后广播：App Store「已移除」等跨组件视图据此刷新（App Store 窗口保活，
       // 只靠 mount 时读一次会漏掉编辑模式里的删除/恢复）
@@ -531,18 +595,23 @@ const persist = (l: HomeLayout) => {
 };
 
 /**
- * 把拖拽项移动到目标区/目标页/目标索引（跨区、跨页可搬；小组件不可进 Dock；
+ * 把拖拽项移动到目标区/目标页/目标索引（跨区、跨页可搬；小组件/文件夹不可进 Dock；
  * Dock 超员时挤出最后一个回网格；目标页超容量则整体放弃）。
  * 命中索引来自拖拽开始时捕获的静态几何，先移除被拖项再插入目标索引即可。
+ * 拖拽源支持文件夹（zone:'folder'）：把 App 从文件夹里移出；
+ * 变更后自动清空空文件夹（App 全部拖出后文件夹消失，tile 同步剔除）。
  */
 function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   const pages = layout.pages.map((p) => p.slice());
   const dock = layout.dock.slice();
+  const folders = (layout.folders ?? []).map((f) => ({ ...f, apps: f.apps.slice() }));
 
   const isWidget = isWidgetKey(id);
-  let fromZone: Zone | null = null;
+  const isFolder = isFolderKey(id);
+  let fromZone: Zone | 'folder' | null = null;
   let fromPage = -1;
   let fromIndex = -1;
+  let fromFolderId: string | null = null;
   for (let p = 0; p < pages.length; p++) {
     const i = pages[p].findIndex((t) => tileKey(t) === id);
     if (i >= 0) {
@@ -557,6 +626,16 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
     if (di >= 0) {
       fromZone = 'dock';
       fromIndex = di;
+    } else if (!isFolder) {
+      // App 可能从文件夹里拖出（面板拖拽）
+      const fi = folders.findIndex((f) => f.apps.includes(id as AppId));
+      if (fi >= 0) {
+        fromZone = 'folder';
+        fromFolderId = folders[fi].id;
+        fromIndex = folders[fi].apps.indexOf(id as AppId);
+      } else {
+        return layout;
+      }
     } else {
       return layout;
     }
@@ -564,16 +643,25 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
 
   // 取出被拖项
   if (fromZone === 'grid') pages[fromPage].splice(fromIndex, 1);
-  else dock.splice(fromIndex, 1);
+  else if (fromZone === 'dock') dock.splice(fromIndex, 1);
+  else {
+    const fi = folders.findIndex((f) => f.id === fromFolderId);
+    if (fi >= 0) {
+      const ai = folders[fi].apps.indexOf(id as AppId);
+      if (ai >= 0) folders[fi].apps.splice(ai, 1);
+    }
+  }
 
   if (to.zone === 'dock') {
-    if (isWidget) {
-      // 小组件不可进 Dock：放回原位
-      pages[fromPage].splice(Math.max(0, Math.min(pages[fromPage].length, fromIndex)), 0, {
-        kind: 'widget',
-        widget: widgetOfKey(id),
-      });
-      return { ...layout, pages, dock };
+    if (isWidget || isFolder) {
+      // 小组件/文件夹不可进 Dock：放回原位
+      const tile: Tile = isFolder ? { kind: 'folder', id: folderIdOfKey(id) } : { kind: 'widget', widget: widgetOfKey(id) };
+      pages[fromZone === 'grid' ? fromPage : Math.max(0, pages.length - 1)].splice(
+        Math.max(0, Math.min(pages[fromZone === 'grid' ? fromPage : pages.length - 1].length, fromIndex)),
+        0,
+        tile
+      );
+      return { ...layout, pages, dock, folders };
     }
     dock.splice(Math.max(0, Math.min(dock.length, to.index)), 0, id as AppId);
     if (dock.length > DOCK_CAPACITY) {
@@ -582,7 +670,7 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
       const insertAt = fromZone === 'grid' ? Math.max(0, Math.min(pages[homePage].length, fromIndex)) : pages[homePage].length;
       pages[homePage].splice(insertAt, 0, { kind: 'app', id: moved });
     }
-    return { ...layout, pages, dock };
+    return { ...layout, pages, dock, folders };
   }
 
   // 落入网格某页：超容量整体放弃（放回原位）；同页内换位不改变页内数量，始终放行
@@ -590,35 +678,59 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   const samePageMove = fromZone === 'grid' && fromPage === to.page;
   const padEmpty = to.zone === 'grid' ? Math.max(0, Math.min(8, to.padEmpty ?? 0)) : 0;
   if (!samePageMove && target.length + padEmpty >= pageCap(target, isWidget)) {
-    if (fromZone === 'grid') {
-      pages[fromPage].splice(
-        Math.max(0, Math.min(pages[fromPage].length, fromIndex)),
-        0,
-        isWidget ? { kind: 'widget', widget: widgetOfKey(id) } : { kind: 'app', id: id as AppId }
-      );
+    if (fromZone === 'grid' || fromZone === 'folder') {
+      const homePage = fromZone === 'grid' ? fromPage : Math.max(0, pages.length - 1);
+      const tile: Tile = isWidget
+        ? { kind: 'widget', widget: widgetOfKey(id) }
+        : isFolder
+          ? { kind: 'folder', id: folderIdOfKey(id) }
+          : { kind: 'app', id: id as AppId };
+      pages[homePage].splice(Math.max(0, Math.min(pages[homePage].length, fromIndex)), 0, tile);
     } else {
       dock.splice(fromIndex, 0, id as AppId);
     }
-    return { ...layout, pages, dock };
+    return { ...layout, pages, dock, folders };
   }
   const idx = Math.max(0, Math.min(target.length, to.index));
   // 空占位格：把新项从自然落点推到指针所指的（行,列）（拖到行尾空位/任意空白格的精确定位）
   const empties: Tile[] = Array.from({ length: padEmpty }, () => ({ kind: 'empty' as const }));
-  const tile: Tile = isWidget ? { kind: 'widget', widget: widgetOfKey(id) } : { kind: 'app', id: id as AppId };
+  const tile: Tile = isWidget
+    ? { kind: 'widget', widget: widgetOfKey(id) }
+    : isFolder
+      ? { kind: 'folder', id: folderIdOfKey(id) }
+      : { kind: 'app', id: id as AppId };
   target.splice(idx, 0, ...empties, tile);
-  return { ...layout, pages, dock };
+  return { ...layout, pages, dock, folders };
+}
+
+/** 清空空文件夹（App 全部拖出/移除后文件夹自动消失，页内 tile 同步剔除） */
+function pruneEmptyFolders(l: HomeLayout): HomeLayout {
+  const folders = l.folders ?? [];
+  if (!folders.some((f) => f.apps.length === 0)) return l;
+  const dead = new Set(folders.filter((f) => f.apps.length === 0).map((f) => folderKey(f.id)));
+  return {
+    ...l,
+    pages: l.pages.map((p) => p.filter((t) => !(t.kind === 'folder' && dead.has(folderKey(t.id))))),
+    folders: folders.filter((f) => f.apps.length > 0),
+  };
 }
 
 function sameHit(a: Hit | null, b: Hit | null): boolean {
   if (!a || !b) return false;
   if (a.zone !== b.zone) return false;
   if (a.zone === 'dock' && b.zone === 'dock') return a.index === b.index;
+  if (a.zone === 'folder' && b.zone === 'folder') return a.folderId === b.folderId && a.index === b.index;
   if (a.zone === 'grid' && b.zone === 'grid')
     // padEmpty 也要比：拖到自己紧后方的空白位时 index 与原位相同但需要垫空占位格，
     // 若只比 page/index 会被误判为「拖回原位」而放弃（预览/松手都弹回，用户实测）
     return a.page === b.page && a.index === b.index && (a.padEmpty ?? 0) === (b.padEmpty ?? 0);
   return false;
 }
+
+/** 悬停合并预览数据：targetKey = 目标 tile 键；targetPos = 目标被移除前的页/下标（建夹落点兑底用） */
+type MergePreviewData =
+  | { targetKey: string; kind: 'app'; appId: AppId; targetPos: { page: number; index: number } }
+  | { targetKey: string; kind: 'folder'; folderId: string; targetPos: { page: number; index: number } };
 
 /** 编辑模式 × 删除角标（深色圆底白叉，位于图标/小组件左上角） */
 function DeleteBadge({
@@ -672,6 +784,216 @@ function AppUnreadBadge({
     >
       {count > 99 ? '99+' : count}
     </span>
+  );
+}
+
+/**
+ * 文件夹展开面板：全屏毛玻璃（iOS 风格：壁纸重模糊+暗化，内容从中心弹出）。
+ * - 顶部文件夹名：点按进入改名（回车/失焦提交，Esc 取消）；
+ * - App 网格：3 列 × 4 行 = 每页 12 个，多页时左右滑动（跟手 + 阈值翻页）+ 页点；
+ * - 点面板外部收起；点 App 打开 App（面板同步关闭）；
+ * - 编辑模式：App 抖动 + × 退回主屏；按住 320ms 起拖（拖出即关面板，进入桌面级拖拽，
+ *   可落到网格任意格/其他文件夹/Dock）。
+ */
+function FolderPanel({
+  folder,
+  edit,
+  appIconNode,
+  appUnreadOf,
+  onClose,
+  onOpenApp,
+  onRename,
+  onRemoveApp,
+  onDragOut,
+}: {
+  folder: FolderData;
+  edit: boolean;
+  appIconNode: (id: AppId) => ReactNode;
+  appUnreadOf: (id: AppId) => number;
+  onClose: () => void;
+  onOpenApp: (id: AppId) => void;
+  onRename: (name: string) => void;
+  onRemoveApp: (id: AppId) => void;
+  onDragOut: (id: AppId, x: number, y: number) => void;
+}) {
+  const chunks: AppId[][] = [];
+  for (let i = 0; i < folder.apps.length; i += FOLDER_PANEL_PAGE) chunks.push(folder.apps.slice(i, i + FOLDER_PANEL_PAGE));
+  const [pi, setPi] = useState(0);
+  const safePi = Math.min(pi, Math.max(0, chunks.length - 1));
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(folder.name);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const swipeP = useRef<{ x: number; y: number; claimed: boolean; dx: number } | null>(null);
+  const pressT = useRef<number | null>(null);
+  const pressPos = useRef<{ x: number; y: number } | null>(null);
+
+  const commitRename = () => {
+    setRenaming(false);
+    const n = draft.trim();
+    if (n && n !== folder.name) onRename(n);
+    else if (!n) setDraft(folder.name);
+  };
+
+  const clearPress = () => {
+    if (pressT.current !== null) {
+      window.clearTimeout(pressT.current);
+      pressT.current = null;
+    }
+    pressPos.current = null;
+  };
+
+  /** 编辑模式面板内 App：按住 320ms 起拖（轻点不误拖，拖出即关面板交给桌面级拖拽） */
+  const cellDown = (id: AppId) => (e: React.PointerEvent<HTMLElement>) => {
+    if (!edit) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.stopPropagation();
+    pressPos.current = { x: e.clientX, y: e.clientY };
+    pressT.current = window.setTimeout(() => {
+      pressT.current = null;
+      const p = pressPos.current;
+      pressPos.current = null;
+      if (p) onDragOut(id, p.x, p.y);
+    }, 320);
+  };
+  const cellMove = (e: React.PointerEvent<HTMLElement>) => {
+    const p = pressPos.current;
+    if (!p) return;
+    if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) clearPress();
+  };
+
+  /** 面板分页跟手（首页/末页橡皮筋阻尼） */
+  const trackFollow = (dx: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const rb = (safePi === 0 && dx > 0) || (safePi === chunks.length - 1 && dx < 0) ? dx * 0.32 : dx;
+    track.style.transform = `translateX(calc(${-safePi * 100}% + ${rb}px))`;
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`文件夹${folder.name}`}
+      data-testid="folder-panel"
+      className="folder-fade absolute inset-0 z-40 flex flex-col items-center bg-black/30 pb-[120px] pt-[96px] backdrop-blur-2xl"
+      onPointerDown={(e) => {
+        // 面板分页滑动起手（阻断向主屏冒泡，避免误触主屏手势）
+        swipeP.current = { x: e.clientX, y: e.clientY, claimed: false, dx: 0 };
+        e.stopPropagation();
+      }}
+      onPointerMove={(e) => {
+        const s = swipeP.current;
+        if (!s) return;
+        const dx = e.clientX - s.x;
+        const dy = e.clientY - s.y;
+        if (!s.claimed && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+          s.claimed = true;
+          const track = trackRef.current;
+          if (track) track.style.transition = 'none';
+        }
+        if (s.claimed) {
+          s.dx = dx;
+          trackFollow(dx);
+        }
+      }}
+      onPointerUp={() => {
+        const s = swipeP.current;
+        swipeP.current = null;
+        if (!s?.claimed) return;
+        const track = trackRef.current;
+        if (track) {
+          track.style.transition = '';
+          const np = Math.max(0, Math.min(chunks.length - 1, s.dx < -40 ? safePi + 1 : s.dx > 40 ? safePi - 1 : safePi));
+          track.style.transform = `translateX(-${np * 100}%)`;
+          setPi(np);
+        }
+      }}
+      onPointerCancel={() => {
+        swipeP.current = null;
+      }}
+      onClick={onClose}
+    >
+      <div className="folder-pop flex w-full max-w-[312px] flex-col items-center" onClick={(e) => e.stopPropagation()}>
+        {/* 名称：点按进入改名 */}
+        <div className="mb-5 flex h-[36px] items-center justify-center" data-testid="folder-name-bar">
+          {renaming ? (
+            <input
+              autoFocus
+              data-testid="folder-name-input"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                if (e.key === 'Escape') {
+                  setDraft(folder.name);
+                  setRenaming(false);
+                }
+              }}
+              aria-label="文件夹名称"
+              className="w-[190px] rounded-[10px] bg-white/15 px-3 py-1 text-center text-[20px] font-semibold text-white outline-none ring-2 ring-white/40"
+            />
+          ) : (
+            <button
+              type="button"
+              data-testid="folder-name"
+              onClick={() => setRenaming(true)}
+              className="max-w-[240px] truncate rounded-[10px] px-3 py-1 text-[22px] font-semibold text-white [text-shadow:0_1px_6px_rgba(0,0,0,0.45)] transition-colors active:bg-white/10"
+            >
+              {folder.name}
+            </button>
+          )}
+        </div>
+        {/* 分页轨道：每页 3 列 × 4 行 = 12 个 App */}
+        <div className="w-full overflow-hidden" data-testid="folder-pages">
+          <div
+            ref={trackRef}
+            className="flex transition-transform duration-300"
+            style={{ transform: `translateX(-${safePi * 100}%)`, transitionTimingFunction: 'cubic-bezier(0.32, 0.72, 0, 1)' }}
+          >
+            {chunks.map((apps, ci) => (
+              <div key={ci} className="grid w-full shrink-0 grid-cols-3 gap-y-[18px] px-2 py-2" aria-hidden={ci !== safePi}>
+                {apps.map((id) => (
+                  <div
+                    key={id}
+                    data-testid={`folder-app-${id}`}
+                    data-fdrag={edit ? id : undefined}
+                    className="flex touch-none select-none flex-col items-center gap-[6px]"
+                    onPointerDown={cellDown(id)}
+                    onPointerMove={cellMove}
+                    onPointerUp={clearPress}
+                    onPointerCancel={clearPress}
+                    onClick={() => {
+                      if (!edit) onOpenApp(id);
+                    }}
+                  >
+                    <span className="relative block h-[64px] w-[64px]">
+                      <span className={`block h-full w-full overflow-hidden rounded-[15px] ${edit ? 'home-jiggle' : 'transition-transform duration-150 active:scale-90'}`}>
+                        {appIconNode(id)}
+                      </span>
+                      <AppUnreadBadge appId={id} count={appUnreadOf(id)} size="grid" />
+                      {edit && <DeleteBadge label={APP_MAP[id].name} onRemove={() => onRemoveApp(id)} className="-left-[7px] -top-[7px]" />}
+                    </span>
+                    <span className="max-w-[78px] truncate text-center text-[11px] font-medium leading-none text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.5)]">
+                      {APP_MAP[id].name}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* 页点（多页时显示） */}
+        {chunks.length > 1 && (
+          <div className="mt-4 flex items-center justify-center gap-[7px]">
+            {chunks.map((_, i) => (
+              <span key={i} className={`h-[7px] rounded-full transition-all duration-200 ${i === safePi ? 'w-[20px] bg-white' : 'w-[7px] bg-white/40'}`} />
+            ))}
+          </div>
+        )}
+        <p className="mt-5 text-[12px] text-white/60">{edit ? '长按 App 拖出到桌面 · × 退回主屏' : '点按名称可改名 · 点面板外收起'}</p>
+      </div>
+    </div>
   );
 }
 
@@ -821,6 +1143,10 @@ export default function HomeScreen() {
   const [edit, setEdit] = useState(false);
   /** 编辑模式「+」小组件画廊浮层（第三/四页小组件 1:1 预览，点 + 添加回主屏） */
   const [galleryOpen, setGalleryOpen] = useState(false);
+  /** 已展开的文件夹 id（null = 无；展开面板为全屏毛玻璃浮层，点外部收起） */
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
+  /** 悬停合并预览（App 拖到另一 App/文件夹上停留后出现；松手建夹/入夹/并夹） */
+  const [mergePreview, setMergePreview] = useState<MergePreviewData | null>(null);
   /** 页点是否显示（滑动中/翻页后短暂显示；编辑模式常显；平时该位置显示搜索胶囊） */
   const [dotsShown, setDotsShown] = useState(false);
   /** 正在拖拽的项 id（null = 未拖拽；用 state 而非 ref 以便渲染期读取） */
@@ -885,6 +1211,9 @@ export default function HomeScreen() {
   } | null>(null);
   /** 页点显示的自动淡出计时器 */
   const dotsTimer = useRef<number | null>(null);
+  /** 悬停合并预览（非响应式镜像，事件处理里读）+ 悬停计时器（同一目标只起一次） */
+  const mergeRef = useRef<MergePreviewData | null>(null);
+  const hoverMerge = useRef<{ id: string; timer: number } | null>(null);
 
   // ref 与 state 同步（render 期间禁止写 ref，故放 effect）
   useEffect(() => {
@@ -1091,8 +1420,12 @@ export default function HomeScreen() {
     return map;
   };
 
-  /** 编辑模式：× 删除图标/小组件（记入 hidden，刷新不复活） */
+  /** 编辑模式：× 删除图标/小组件/文件夹（记入 hidden，刷新不复活；文件夹 → App 退回主屏） */
   const removeTile = (id: string) => {
+    if (isFolderKey(id)) {
+      removeFolderReturnApps(folderIdOfKey(id));
+      return;
+    }
     const cur = layoutRef.current;
     const next: HomeLayout = {
       ...cur,
@@ -1110,8 +1443,232 @@ export default function HomeScreen() {
     }
   };
 
-  /** 编辑模式：恢复默认布局（App/默认上屏的小组件回默认位；默认收起的八枚小组件保持
-   *  hidden，可从「+」画廊一键找回） */
+  /** 按 tileKey 找布局里的 tile（含所在页/下标）；悬停合并判定/激活用 */
+  const findTileInLayout = (l: HomeLayout, key: string): { tile: Tile; page: number; index: number } | null => {
+    for (let p = 0; p < l.pages.length; p++) {
+      const i = l.pages[p].findIndex((t) => tileKey(t) === key);
+      if (i >= 0) return { tile: l.pages[p][i], page: p, index: i };
+    }
+    return null;
+  };
+
+  /** 悬停合并预览激活：App→App = 目标 App 隐入合并气泡（气泡由被拖项占位槽渲染）；
+   *  App/文件夹→文件夹 = 文件夹放大高亮（松手入夹/并夹） */
+  const activateMerge = (targetKey: string) => {
+    const found = findTileInLayout(layoutRef.current, targetKey);
+    if (!found) return;
+    let data: MergePreviewData | null = null;
+    if (found.tile.kind === 'app') {
+      // 目标 App 从网格隐去（视觉上进入合并气泡）
+      const next: HomeLayout = {
+        ...layoutRef.current,
+        pages: layoutRef.current.pages.map((p) => p.filter((t) => tileKey(t) !== targetKey)),
+      };
+      layoutRef.current = next;
+      setLayout(next);
+      data = { targetKey, kind: 'app', appId: found.tile.id, targetPos: { page: found.page, index: found.index } };
+    } else if (found.tile.kind === 'folder') {
+      data = { targetKey, kind: 'folder', folderId: found.tile.id, targetPos: { page: found.page, index: found.index } };
+    }
+    if (!data) return;
+    mergeRef.current = data;
+    setMergePreview(data);
+    try {
+      navigator.vibrate?.(12);
+    } catch {
+      /* 震动不可用 */
+    }
+  };
+
+  /** 取消悬停合并：恢复拖拽起点布局，再按当前指针位置重新走挤位预览 */
+  const cancelMerge = (x: number, y: number) => {
+    const m = dragMeta.current;
+    mergeRef.current = null;
+    setMergePreview(null);
+    const origin = dragOrigin.current;
+    if (origin) {
+      const restored = structuredClone(origin.layout);
+      layoutRef.current = restored;
+      setLayout(restored);
+    }
+    if (!m) return;
+    const hit = hitTestAt(x, y);
+    lastDragHit.current = hit;
+    const cur = zoneIndexOf(m.id);
+    if (hit && (!cur || !sameHit(cur, hit))) setLayout(reorderForDrag(m.id, hit));
+  };
+
+  /** 悬停合并落手：建夹（App→App）/ 入夹（App→文件夹）/ 并夹（文件夹→文件夹） */
+  const applyMerge = (merge: MergePreviewData, draggedId: string) => {
+    const cur = layoutRef.current;
+    const pages = cur.pages.map((p) => p.slice());
+    const dock = cur.dock.slice();
+    const folders = (cur.folders ?? []).map((f) => ({ ...f, apps: f.apps.slice() }));
+    // 摘除被拖项（网格/Dock）
+    let dragPos: { page: number; index: number } | null = null;
+    for (let p = 0; p < pages.length; p++) {
+      const i = pages[p].findIndex((t) => tileKey(t) === draggedId);
+      if (i >= 0) {
+        pages[p].splice(i, 1);
+        dragPos = { page: p, index: i };
+        break;
+      }
+    }
+    if (!dragPos) {
+      const di = dock.indexOf(draggedId as AppId);
+      if (di >= 0) dock.splice(di, 1);
+    }
+    const at = dragPos ?? merge.targetPos;
+    const insertAt = (tile: Tile) => {
+      const pg = Math.min(at.page, pages.length - 1);
+      pages[pg].splice(Math.max(0, Math.min(pages[pg].length, at.index)), 0, tile);
+    };
+    if (merge.kind === 'app' && !isFolderKey(draggedId)) {
+      // App→App：在落点建夹（目标 App 在前、被拖 App 在后），默认名「文件夹」
+      const fid = newFolderId();
+      folders.push({ id: fid, name: '文件夹', apps: [merge.appId, draggedId as AppId] });
+      insertAt({ kind: 'folder', id: fid });
+    } else if (merge.kind === 'folder') {
+      const dst = folders.find((f) => f.id === merge.folderId);
+      if (isFolderKey(draggedId)) {
+        // 文件夹→文件夹：并入目标后自身消失
+        const src = folders.find((f) => folderKey(f.id) === draggedId);
+        if (dst && src) {
+          for (const a of src.apps) if (!dst.apps.includes(a)) dst.apps.push(a);
+          folders.splice(folders.indexOf(src), 1);
+        }
+      } else if (dst && !dst.apps.includes(draggedId as AppId)) {
+        dst.apps.push(draggedId as AppId);
+      }
+    } else {
+      // 防御兑底：无合并语义时被拖项原样放回落点
+      insertAt(isFolderKey(draggedId) ? { kind: 'folder', id: folderIdOfKey(draggedId) } : { kind: 'app', id: draggedId as AppId });
+    }
+    const next = pruneEmptyFolders({ ...cur, pages, dock, folders });
+    layoutRef.current = next;
+    setLayout(next);
+    persist(next);
+    try {
+      navigator.vibrate?.(15);
+    } catch {
+      /* 震动不可用 */
+    }
+  };
+
+  /** 编辑模式 × 删除文件夹：夹内 App 全部退回主屏（从文件夹原位置起顺延；页满顺延到
+   *  后面的页/新开页），文件夹消失 */
+  const removeFolderReturnApps = (folderId: string) => {
+    const cur = layoutRef.current;
+    const folder = (cur.folders ?? []).find((f) => f.id === folderId);
+    if (!folder) return;
+    const pages = cur.pages.map((p) => p.slice());
+    let pg = -1;
+    let idx = -1;
+    for (let p = 0; p < pages.length; p++) {
+      const i = pages[p].findIndex((t) => t.kind === 'folder' && t.id === folderId);
+      if (i >= 0) {
+        pg = p;
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0) pages[pg].splice(idx, 1);
+    const queue = [...folder.apps];
+    let cur2 = pg;
+    let at = Math.max(0, idx);
+    while (queue.length) {
+      if (cur2 < 0 || cur2 >= pages.length) {
+        for (let i = pages.length - 1; i >= 0; i--) {
+          if (pages[i].length < pageCap(pages[i])) {
+            cur2 = i;
+            break;
+          }
+        }
+        if (cur2 < 0 || cur2 >= pages.length) {
+          pages.push([]);
+          cur2 = pages.length - 1;
+        }
+        at = pages[cur2].length;
+      }
+      while (queue.length && pages[cur2].length < pageCap(pages[cur2])) {
+        pages[cur2].splice(Math.min(at, pages[cur2].length), 0, { kind: 'app', id: queue.shift() as AppId });
+        at++;
+      }
+      if (!queue.length) break;
+      let next2 = -1;
+      for (let i = cur2 + 1; i < pages.length; i++) {
+        if (pages[i].length < pageCap(pages[i])) {
+          next2 = i;
+          break;
+        }
+      }
+      if (next2 === -1) {
+        pages.push([]);
+        next2 = pages.length - 1;
+      }
+      cur2 = next2;
+      at = pages[cur2].length;
+    }
+    const next: HomeLayout = { ...cur, pages, folders: (cur.folders ?? []).filter((f) => f.id !== folderId) };
+    layoutRef.current = next;
+    setLayout(next);
+    persist(next);
+    try {
+      navigator.vibrate?.(8);
+    } catch {
+      /* 震动不可用 */
+    }
+  };
+
+  /** 面板 × 退回：把单个 App 从文件夹退回主屏（优先插回文件夹 tile 后一格，页满顺延） */
+  const removeAppFromFolder = (folderId: string, appId: AppId) => {
+    const cur = layoutRef.current;
+    if (!(cur.folders ?? []).some((f) => f.id === folderId && f.apps.includes(appId))) return;
+    const pages = cur.pages.map((p) => p.slice());
+    const folders = (cur.folders ?? []).map((f) => (f.id === folderId ? { ...f, apps: f.apps.filter((a) => a !== appId) } : { ...f, apps: f.apps.slice() }));
+    let placed = false;
+    for (let p = 0; p < pages.length; p++) {
+      const fi = pages[p].findIndex((t) => t.kind === 'folder' && t.id === folderId);
+      if (fi < 0) continue;
+      if (pages[p].length < pageCap(pages[p])) {
+        pages[p].splice(fi + 1, 0, { kind: 'app', id: appId });
+        placed = true;
+      }
+      break;
+    }
+    if (!placed) {
+      for (let p = 0; p < pages.length; p++) {
+        if (pages[p].length < pageCap(pages[p])) {
+          pages[p].push({ kind: 'app', id: appId });
+          placed = true;
+          break;
+        }
+      }
+    }
+    if (!placed) pages.push([{ kind: 'app', id: appId }]);
+    const next = pruneEmptyFolders({ ...cur, pages, folders });
+    layoutRef.current = next;
+    setLayout(next);
+    persist(next);
+    if (openFolderId === folderId && (next.folders ?? []).every((f) => f.id !== folderId)) setOpenFolderId(null);
+    try {
+      navigator.vibrate?.(8);
+    } catch {
+      /* 震动不可用 */
+    }
+  };
+
+  /** 面板改名：更新文件夹名称并持久化（空名忽略） */
+  const renameFolder = (folderId: string, name: string) => {
+    const trimmed = name.trim().slice(0, 30);
+    if (!trimmed) return;
+    const cur = layoutRef.current;
+    if (!(cur.folders ?? []).some((f) => f.id === folderId)) return;
+    const next: HomeLayout = { ...cur, folders: (cur.folders ?? []).map((f) => (f.id === folderId ? { ...f, name: trimmed } : f)) };
+    layoutRef.current = next;
+    setLayout(next);
+    persist(next);
+  };
   const restoreDefault = () => {
     const def = defaultLayout();
     layoutRef.current = def;
@@ -1235,6 +1792,13 @@ export default function HomeScreen() {
     }
     const di = dock.indexOf(id as AppId);
     if (di >= 0) return { zone: 'dock', index: di };
+    if (!isWidgetKey(id) && !isFolderKey(id)) {
+      // App 可能在文件夹里（面板拖拽源）
+      for (const f of layoutRef.current.folders ?? []) {
+        const ai = f.apps.indexOf(id as AppId);
+        if (ai >= 0) return { zone: 'folder', folderId: f.id, index: ai };
+      }
+    }
     return null;
   };
 
@@ -1266,6 +1830,7 @@ export default function HomeScreen() {
       dockRect &&
       dragId0 !== undefined &&
       !isWidgetKey(dragId0) &&
+      !isFolderKey(dragId0) &&
       x >= dockRect.left - 8 &&
       x <= dockRect.right + 8 &&
       y >= dockRect.top - 24 &&
@@ -1295,7 +1860,8 @@ export default function HomeScreen() {
       const d = ddx * ddx + ddy * ddy;
       if (d < bestDist) {
         bestDist = d;
-        best = g.zone === 'grid' ? { zone: 'grid', page: g.page, index: g.index } : { zone: 'dock', index: g.index };
+        // overId = 矩形命中所指的原槽位 tile 键（悬停建夹/入夹判定用；空白兜底 ③ 无此字段）
+        best = g.zone === 'grid' ? { zone: 'grid', page: g.page, index: g.index, overId: g.id } : { zone: 'dock', index: g.index };
       }
     }
     if (best) return best;
@@ -1372,7 +1938,7 @@ export default function HomeScreen() {
   const reorderForDrag = (id: string, hit: Hit) => {
     const cur = layoutRef.current;
     const pages = cur.pages.map((p) => p.filter((t) => t.kind !== 'empty'));
-    const next = reorder({ ...cur, pages }, id, hit);
+    const next = pruneEmptyFolders(reorder({ ...cur, pages }, id, hit));
     layoutRef.current = next;
     return next;
   };
@@ -1452,7 +2018,8 @@ export default function HomeScreen() {
   const beginDrag = (id: string, x: number, y: number) => {
     const loc = zoneIndexOf(id);
     if (!loc) return;
-    const el = tileEls.current.get(id);
+    // 面板拖拽源（App 在文件夹里）不在 tileEls 里：从面板 cell 的 data-fdrag 兑底取元素
+    const el = tileEls.current.get(id) ?? rootRef.current?.querySelector<HTMLElement>(`[data-fdrag="${id}"]`) ?? null;
     if (!el) return;
     // 先结束上一轮落位/FLIP 残留动画，保证 rect/几何采样干净
     finishTileAnimations();
@@ -1489,6 +2056,13 @@ export default function HomeScreen() {
     dragMeta.current = { id, startX: x, startY: y };
     pageCreated.current = false;
     lastDragHit.current = null;
+    // 清理上一轮悬停合并残留（拖拽总是从干净状态开始）
+    if (hoverMerge.current) {
+      window.clearTimeout(hoverMerge.current.timer);
+      hoverMerge.current = null;
+    }
+    mergeRef.current = null;
+    setMergePreview(null);
     dragOrigin.current = { hit: loc, layout: structuredClone(layoutRef.current) };
     setDragId(id);
     try {
@@ -1511,17 +2085,38 @@ export default function HomeScreen() {
       dragMeta.current = null;
       // 拖回原位松手 → 整布局复原（撤销拖拽过程中的一切中间换位）。
       // 命中判定用「最近 tile 兜底」，落在格子间隙也能正确还原。
-      const origin = dragOrigin.current;
-      dragOrigin.current = null;
-      if (e && origin) {
-        const hit = hitTestAt(e.clientX, e.clientY);
-        if (sameHit(hit, origin.hit)) {
-          layoutRef.current = origin.layout;
-          setLayout(origin.layout);
+      const merge = mergeRef.current;
+      mergeRef.current = null;
+      if (hoverMerge.current) {
+        window.clearTimeout(hoverMerge.current.timer);
+        hoverMerge.current = null;
+      }
+      let merged = false;
+      if (merge) {
+        // 悬停合并落手：建夹/入夹/并夹（被拖项已被合并消费，不做落位动画）
+        setMergePreview(null);
+        merged = true;
+        applyMerge(merge, m.id);
+      } else if (e) {
+        const origin = dragOrigin.current;
+        if (origin) {
+          const hit = hitTestAt(e.clientX, e.clientY);
+          if (sameHit(hit, origin.hit)) {
+            layoutRef.current = origin.layout;
+            setLayout(origin.layout);
+          } else if (!hit && origin.hit.zone === 'folder') {
+            // 从文件夹拖出的 App 没找到落点 → 退回文件夹
+            layoutRef.current = origin.layout;
+            setLayout(origin.layout);
+          }
+          // 编辑模式轻点文件夹（位移 < 8px）= 打开面板
+          if (Math.hypot(e.clientX - m.startX, e.clientY - m.startY) < 8 && isFolderKey(m.id)) {
+            setOpenFolderId(folderIdOfKey(m.id));
+          }
         }
       }
       const v = dragVisualRef.current;
-      if (v) {
+      if (v && !merged) {
         // 记录浮动副本最后视觉位置，落位动画从这里滑回网格槽位
         pendingSettle.current = { id: m.id, x: v.x + dragDeltaRef.current.dx, y: v.y + dragDeltaRef.current.dy };
       }
@@ -1560,7 +2155,42 @@ export default function HomeScreen() {
         dragDeltaRef.current = d;
         setDragDelta(d);
         updateEdgeFlip(cx);
+        // 悬停合并进行中：指针仍压在目标 tile 静态矩形上 → 维持预览；压出范围 → 取消并继续正常预览
+        if (mergeRef.current) {
+          const tgt = mergeRef.current;
+          const g = dragGeo.current.find((gg) => gg.zone === 'grid' && gg.id === tgt.targetKey);
+          const mpad = 14;
+          if (g && cx >= g.left - mpad && cx <= g.left + g.w + mpad && cy >= g.top - mpad && cy <= g.top + g.h + mpad) return;
+          cancelMerge(cx, cy);
+        }
         const hit = hitTestAt(cx, cy);
+        // 悬停建夹/入夹检测：矩形命中另一 App/文件夹 → 起计时器（移开则清除）；
+        // 计时器走完 → 合并预览，松手即建夹/入夹；快速划过仍走下方挤位换位（iOS 手感）
+        const overId = hit && hit.zone === 'grid' ? (hit.overId ?? null) : null;
+        let mergeable = false;
+        if (overId && overId !== m.id && !isWidgetKey(m.id)) {
+          const t = findTileInLayout(layoutRef.current, overId);
+          if (t) {
+            if (t.tile.kind === 'folder') mergeable = true;
+            else if (t.tile.kind === 'app') mergeable = !isFolderKey(m.id);
+          }
+        }
+        if (mergeable && overId) {
+          if (hoverMerge.current?.id !== overId) {
+            if (hoverMerge.current) window.clearTimeout(hoverMerge.current.timer);
+            const tid = overId;
+            hoverMerge.current = {
+              id: tid,
+              timer: window.setTimeout(() => {
+                hoverMerge.current = null;
+                if (dragMeta.current) activateMerge(tid);
+              }, MERGE_HOVER_MS),
+            };
+          }
+        } else if (hoverMerge.current) {
+          window.clearTimeout(hoverMerge.current.timer);
+          hoverMerge.current = null;
+        }
         if (!hit) {
           lastDragHit.current = null;
           return;
@@ -1782,6 +2412,8 @@ export default function HomeScreen() {
 
   // ---------------- 渲染 ----------------
   const results = APPS; // Spotlight 全量列表
+  const folders = layout.folders ?? [];
+  const openFolder = openFolderId ? (folders.find((f) => f.id === openFolderId) ?? null) : null;
   /** 页点可见性：编辑模式常显；平时滑动中/翻页后短暂显示，静止时同位置显示搜索胶囊 */
   const dotsVisible = edit || dotsShown;
 
@@ -1818,8 +2450,22 @@ export default function HomeScreen() {
   const floatingTile: Tile | null = dragId
     ? isWidgetKey(dragId)
       ? { kind: 'widget', widget: widgetOfKey(dragId) }
-      : { kind: 'app', id: dragId as AppId }
+      : isFolderKey(dragId)
+        ? { kind: 'folder', id: folderIdOfKey(dragId) }
+        : { kind: 'app', id: dragId as AppId }
     : null;
+
+  /** 悬停合并气泡：目标 + 被拖两个 App 缩略图并排在毛玻璃圆角方里（占位槽用） */
+  const mergeBlobNode = () => {
+    if (!mergePreview || mergePreview.kind !== 'app' || !dragId) return null;
+    const draggedIcon = !isWidgetKey(dragId) && !isFolderKey(dragId) ? appIconNode(dragId as AppId) : null;
+    return (
+      <div className="flex h-[60px] w-[60px] items-center justify-center gap-[5px] rounded-[16px] bg-white/[0.28] shadow-[0_8px_22px_rgba(0,0,0,0.3)] ring-1 ring-white/40 backdrop-blur-md">
+        <span className="block h-[25px] w-[25px] overflow-hidden rounded-[7px] shadow-[0_1px_4px_rgba(0,0,0,0.3)]">{appIconNode(mergePreview.appId)}</span>
+        <span className="block h-[25px] w-[25px] overflow-hidden rounded-[7px] shadow-[0_1px_4px_rgba(0,0,0,0.3)]">{draggedIcon}</span>
+      </div>
+    );
+  };
 
   const handlersFor = (id: string) => ({
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => cellPointerDown(e, id),
@@ -1871,6 +2517,49 @@ export default function HomeScreen() {
       );
     }
     if (tile.kind === 'empty') return null; // 空占位格无内容（调用方不会以 empty 调用，此处仅为类型收窄）
+    if (tile.kind === 'folder') {
+      const f = folders.find((x) => x.id === tile.id);
+      const key = folderKey(tile.id);
+      const merging = mergePreview?.kind === 'folder' && mergePreview.targetKey === key;
+      const apps6 = (f?.apps ?? []).slice(0, 6);
+      const appCount = f?.apps.length ?? 0;
+      return (
+        <div
+          className={`flex w-[68px] flex-col items-center gap-[5px] ${edit && dragId !== key ? 'home-jiggle' : 'transition-transform duration-150 active:scale-90'}`}
+          style={edit ? { animationDelay: `${(i % 5) * -0.06}s` } : undefined}
+        >
+          <span
+            className={`relative block h-[60px] w-[60px] rounded-[15px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md transition-transform duration-200 ${
+              merging ? 'scale-[1.14] ring-2 ring-white/90' : ''
+            }`}
+          >
+            <span className="grid h-full w-full grid-cols-3 grid-rows-2 place-items-center gap-[2px]">
+              {apps6.map((id) => (
+                <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[4px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
+                  {appIconNode(id)}
+                </span>
+              ))}
+            </span>
+            {appCount > 6 && (
+              <span
+                aria-label={`共 ${appCount} 个App`}
+                data-testid="folder-count-badge"
+                className="absolute -bottom-[3px] -right-[3px] flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[#8E8E93] px-[3px] text-[9px] font-semibold leading-none text-white shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+              >
+                {appCount}
+              </span>
+            )}
+          </span>
+          <span
+            className={`max-w-[74px] truncate text-center text-[11px] font-medium leading-none ${
+              wallpaperLight ? 'text-[#1c1c1e] [text-shadow:0_1px_3px_rgba(255,255,255,0.75)]' : 'text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.65)]'
+            }`}
+          >
+            {f?.name ?? '文件夹'}
+          </span>
+        </div>
+      );
+    }
     const app = APP_MAP[tile.id];
     return (
       <div
@@ -1899,6 +2588,8 @@ export default function HomeScreen() {
   /** 浮动副本（fixed + 跟随指针，挂在根层级渲染，绝不落入带 backdrop-filter 的容器内） */
   const floatingCopy = (tile: Tile | null) => {
     if (!dragVisual || !tile) return null;
+    // App→App 悬停合并中：浮动副本隐去（合并气泡由占位槽渲染，模拟图标「飞入」）
+    if (mergePreview?.kind === 'app') return null;
     return (
       <div
         aria-hidden="true"
@@ -1928,6 +2619,7 @@ export default function HomeScreen() {
     if (dragId === id) {
       // 占位槽：保持原位置网格空位，尺寸/跨度取该 tile 真实槽位（跨区拖拽时不压缩行高）
       const slot = slotSize(tile.kind === 'widget' ? 'widget' : 'app', 'grid', id);
+      const showBlob = mergePreview?.kind === 'app';
       return (
         <div
           key={id}
@@ -1938,9 +2630,11 @@ export default function HomeScreen() {
           data-id={id}
           data-dragging="true"
           aria-hidden="true"
-          className={tile.kind === 'widget' ? WIDGET_SPAN[tile.widget] : 'col-span-1'}
+          className={`${tile.kind === 'widget' ? WIDGET_SPAN[tile.widget] : 'col-span-1'} ${showBlob ? 'flex items-center justify-center' : ''}`}
           style={slot ? { height: slot.h } : undefined}
-        />
+        >
+          {showBlob && mergeBlobNode()}
+        </div>
       );
     }
     if (tile.kind === 'widget') {
@@ -1974,6 +2668,33 @@ export default function HomeScreen() {
         >
           {renderTileContent(tile, i)}
           {edit && <DeleteBadge label={meta.label} onRemove={() => removeTile(id)} className="left-[4px] top-[4px]" />}
+        </div>
+      );
+    }
+    if (tile.kind === 'folder') {
+      const f = folders.find((x) => x.id === tile.id);
+      return (
+        <div
+          key={id}
+          ref={setTileRef(id)}
+          data-testid="folder-tile"
+          data-folder-id={tile.id}
+          data-tile
+          data-zone="grid"
+          data-page={p}
+          data-index={i}
+          data-id={id}
+          className={`relative col-span-1 flex select-none justify-center ${edit ? 'touch-none' : '[touch-action:pan-y]'}`}
+          role="button"
+          tabIndex={0}
+          aria-label={`打开文件夹${f?.name ?? '文件夹'}`}
+          onClick={() => {
+            if (!edit) setOpenFolderId(tile.id);
+          }}
+          {...handlersFor(id)}
+        >
+          {renderTileContent(tile, i)}
+          {edit && <DeleteBadge label={f?.name ?? '文件夹'} onRemove={() => removeTile(id)} className="left-[2px] top-[2px]" />}
         </div>
       );
     }
@@ -2307,6 +3028,28 @@ export default function HomeScreen() {
           onSave={(d) => {
             savePolaroidCard(d);
             setPolaroidEditorOpen(false);
+          }}
+        />
+      )}
+
+      {/* 文件夹展开面板（全屏毛玻璃；打开时才挂载；点外部收起，编辑模式可拖出/退回 App） */}
+      {openFolder && (
+        <FolderPanel
+          key={openFolder.id}
+          folder={openFolder}
+          edit={edit}
+          appIconNode={appIconNode}
+          appUnreadOf={appUnreadOf}
+          onClose={() => setOpenFolderId(null)}
+          onOpenApp={(id) => {
+            setOpenFolderId(null);
+            openWith(id);
+          }}
+          onRename={(name) => renameFolder(openFolder.id, name)}
+          onRemoveApp={(id) => removeAppFromFolder(openFolder.id, id)}
+          onDragOut={(id, x, y) => {
+            setOpenFolderId(null);
+            beginDrag(id, x, y);
           }}
         />
       )}

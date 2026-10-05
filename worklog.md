@@ -15915,3 +15915,25 @@ Stage Summary:
 - 修改：HomeScreen.tsx（compactPages 新增 + 两处进编辑入口调用；reorderForDrag 每轮压平全部页；hitTestAt ③ 紧凑 sim；dragEmpties 机制退役；fillEmpty 方案试错后完整回滚）
 - 决策：保留「拖到行尾空位精确定位」的垫格行为（松手落定位），洞的清理收敛到「进编辑压平 + 预览压平」两个时机；拖到内容下方空白仍不新开行（既有 clamp 设计未动）
 - 验证：lint 通过；浏览器实测清洞/挤位/让位/复原全链路正常，无运行时错误
+
+---
+Task ID: home-folder
+Agent: main
+Task: 桌面「文件夹」功能——iOS 同款拖拽建夹/入夹/并夹、毛玻璃面板、持久化，与既有拖拽体系共用一套逻辑
+
+Work Log:
+- 数据模型：Tile 新增 {kind:'folder', id}（1×1 格，folderKey='folder:'+id 防与 App id 冲突）；HomeLayout 新增 folders?: FolderData[]（{id,name,apps[]}）；Hit 新增 {zone:'folder'}（拖拽源）与 grid hit.overId（矩形命中所指槽位 tile 键，悬停合并判定用）
+- 持久化：persist 写入 folders；sanitizeLayout 解析校验（App 去重/不与网格 Dock 重复/hidden 剔除/空夹与孤儿夹剔除/重复 tile 剔除；网格优先于夹——同一 App 两处出现时留在网格）；不升 LAYOUT_VERSION（v10 布局直接兼容，避免重置清掉用户夹）；App Store/主题页写布局均 {...raw} 展开式，folders 字段自然存活
+- 悬停合并（iOS 手感）：拖 App/文件夹到另一 App/文件夹静态槽位上停留 550ms（MERGE_HOVER_MS）→ activateMerge 合并预览（App→App=目标 App 隐入、被拖项占位槽渲染毛玻璃双图标气泡、浮动副本隐藏；→文件夹=文件夹放大高亮 ring）→ 松手 applyMerge：App→App 建夹（默认名「文件夹」、目标 App 在前）/ App→文件夹 入夹 / 文件夹→文件夹 并夹后自身消失；指针压出目标静态矩形 → cancelMerge（从 dragOrigin 恢复再按当前指针重走挤位预览）；快速划过仍走原有挤位换位（不破坏重排）；每次 reorder/reorderForDrag 后 pruneEmptyFolders（夹空自动消失）
+- 拖拽管线共用：reorder 支持文件夹拖拽源（zoneIndexOf 扩展搜 folders.apps）与文件夹 tile 的 Dock 拒绝（同小组件）；beginDrag 从面板起拖时经 data-fdrag 兜底取元素；endDrag 夹源无落点退回文件夹、位移<8px 轻点文件夹=开面板
+- 文件夹图标：毛玻璃圆角方（60px rounded-15 bg-white/22 backdrop-blur）+ 前 6 个 App 缩略图（3 列×2 行 14px mini，用户写的「3×4」按 6 格方图标现实排布取 3×2）+ 超 6 个右下角数量角标 + 名称（壁纸明暗自适应标签色）；编辑抖动同 App
+- FolderPanel 面板：全屏毛玻璃（bg-black/30+backdrop-blur-2xl，folder-fade/folder-pop 入场动画）+ 点名称改名（输入框回车/失焦提交/Esc 取消，持久化）+ 3 列×4 行=每页 12 App（FOLDER_PANEL_PAGE）分页轨道（跟手+首末页橡皮筋+40px 阈值翻页+页点）+ 点外部收起 + 点 App 打开（面板关）；编辑模式：App 抖动+× 退回主屏（removeAppFromFolder 优先插回夹 tile 后一格）、按住 320ms 起拖出面板（关面板→beginDrag 进桌面级拖拽，可落任意格/其他夹/Dock）
+- 删除文件夹：× 角标（夹 tile 上）→ removeFolderReturnApps 把夹内 App 从原位置起顺延退回主屏（页满顺延后页/新开页）；恢复默认清空 folders
+- E2E（agent-browser 430×932）：拖音乐悬停微信建夹✓（周边顺移让位）；改名「常用」✓；QQ 悬停入夹✓（缩略图 3 个+数量逻辑）；编辑模式轻点开面板✓；面板内长按拖出音乐到桌面✓；× 退回 QQ/微信→夹空自动消失+面板同步关✓（18 App 完整无丢失）；重建「社交」夹刷新后结构/名称/App 完整✓；注入 13 App 夹验证分页 12+1 跟手滑动翻页+页点✓；面板点 App 打开微信✓；长按夹进编辑+× 角标✓；恢复默认清夹不崩✓；翻页/小组件/Dock/锁屏回归正常✓
+- 期间修复 bug：FolderPanel swipeP 在 onPointerDown 漏初始化 → 分页滑动永不生效（首测 transform 恒 0%），补 swipeP.current={x,y,claimed:false,dx:0} 修复
+- 测试数据管理：分页测试用 IndexedDB 注入 13 App 夹（首次注入 appstore 同时在网格与夹内，sanitize 按设计网格优先剔夹内副本致单页——修正注入数据后两页正常），测毕还原社交夹布局、最后恢复默认布局清空全部测试夹
+
+Stage Summary:
+- 修改：HomeScreen.tsx（Tile/Hit/HomeLayout 类型、sanitize/persist、reorder+pruneEmptyFolders、悬停合并 activateMerge/cancelMerge/applyMerge、removeFolderReturnApps/removeAppFromFolder/renameFolder、文件夹图标渲染、合并气泡占位槽、FolderPanel 面板组件、beginDrag/endDrag/onMove/hitTestAt/zoneIndexOf 接入）、globals.css（folder-fade/folder-pop 动画）
+- 决策：悬停 550ms 建夹而非松手即建（保留挤位重排手感）；文件夹不进 Dock；夹内 App 实体存 folders、网格仅留 tile 引用；网格优先去重（sanitize）；不升布局版本号避免重置用户数据
+- 验证：lint 通过；浏览器实测建夹/改名/入夹/拖出/退回/清空自消/持久化/分页/恢复默认/回归全链路通过，无运行时错误（dev.log 仅 Turbopack 编译期 worker 记录）
