@@ -235,10 +235,8 @@ function flowPositions(tiles: Tile[]): {
   return { starts, after, end: { r: cr, c: cc } };
 }
 
-/** 拖拽命中位置：grid 带页号（index 为页内下标，padEmpty 为插入前需补的空占位格数）
- *  fillEmpty = 直接填入的既有空占位格（隐形洞）真实下标：指针压到历史垫格上松手 →
- *  App 占据该格（删除该空占位格而非再垫新格），否则隐形洞会永久挡住该位置的放置 */
-type Hit = { zone: 'grid'; page: number; index: number; padEmpty?: number; fillEmpty?: number } | { zone: 'dock'; index: number };
+/** 拖拽命中位置：grid 带页号（index 为页内下标，padEmpty 为插入前需补的空占位格数），dock 只有下标 */
+type Hit = { zone: 'grid'; page: number; index: number; padEmpty?: number } | { zone: 'dock'; index: number };
 
 interface HomeLayout {
   /** 布局版本（v2 = 微信/音乐/文件/提醒事项在第二页、音乐移出 Dock）；旧版自动迁移 */
@@ -591,14 +589,7 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   const target = pages[Math.min(to.page, pages.length - 1)];
   const samePageMove = fromZone === 'grid' && fromPage === to.page;
   const padEmpty = to.zone === 'grid' ? Math.max(0, Math.min(8, to.padEmpty ?? 0)) : 0;
-  // 填洞命中：删除该隐形空占位格并原位插入被拖项（数量不变 → 等效同页换位，恒放行）。
-  // fillEmpty 是「清预览垫格 + 摘除被拖项之前」的序列下标，先修正被摘项/垫格清理造成的偏移
-  let fillAt = -1;
-  if (to.zone === 'grid' && typeof to.fillEmpty === 'number' && to.fillEmpty >= 0) {
-    fillAt = to.fillEmpty;
-    if (fromZone === 'grid' && fromPage === to.page && fromIndex < fillAt) fillAt--;
-  }
-  if (!samePageMove && fillAt < 0 && target.length + padEmpty >= pageCap(target, isWidget)) {
+  if (!samePageMove && target.length + padEmpty >= pageCap(target, isWidget)) {
     if (fromZone === 'grid') {
       pages[fromPage].splice(
         Math.max(0, Math.min(pages[fromPage].length, fromIndex)),
@@ -610,11 +601,9 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
     }
     return { ...layout, pages, dock };
   }
-  const idx = Math.max(0, Math.min(target.length, fillAt >= 0 ? fillAt : to.index));
-  // 填洞：先删掉被占据的隐形空占位格再插入（App 占其位，洞消失）
-  if (fillAt >= 0) target.splice(Math.max(0, Math.min(target.length, fillAt)), 1);
+  const idx = Math.max(0, Math.min(target.length, to.index));
   // 空占位格：把新项从自然落点推到指针所指的（行,列）（拖到行尾空位/任意空白格的精确定位）
-  const empties: Tile[] = Array.from({ length: fillAt >= 0 ? 0 : padEmpty }, () => ({ kind: 'empty' as const }));
+  const empties: Tile[] = Array.from({ length: padEmpty }, () => ({ kind: 'empty' as const }));
   const tile: Tile = isWidget ? { kind: 'widget', widget: widgetOfKey(id) } : { kind: 'app', id: id as AppId };
   target.splice(idx, 0, ...empties, tile);
   return { ...layout, pages, dock };
@@ -626,9 +615,8 @@ function sameHit(a: Hit | null, b: Hit | null): boolean {
   if (a.zone === 'dock' && b.zone === 'dock') return a.index === b.index;
   if (a.zone === 'grid' && b.zone === 'grid')
     // padEmpty 也要比：拖到自己紧后方的空白位时 index 与原位相同但需要垫空占位格，
-    // 若只比 page/index 会被误判为「拖回原位」而放弃（预览/松手都弹回，用户实测）；
-    // fillEmpty 同理（填洞命中与普通插入可同 index 不同语义）
-    return a.page === b.page && a.index === b.index && (a.padEmpty ?? 0) === (b.padEmpty ?? 0) && (a.fillEmpty ?? -1) === (b.fillEmpty ?? -1);
+    // 若只比 page/index 会被误判为「拖回原位」而放弃（预览/松手都弹回，用户实测）
+    return a.page === b.page && a.index === b.index && (a.padEmpty ?? 0) === (b.padEmpty ?? 0);
   return false;
 }
 
@@ -866,10 +854,6 @@ export default function HomeScreen() {
   const dragRootRect = useRef<DOMRect | null>(null);
   /** Dock 容器矩形（beginDrag 时捕获）：拖到 Dock 图标右侧空位也能落入 Dock */
   const dragDockRect = useRef<DOMRect | null>(null);
-  /** 本次拖拽预览中、由空白位插入垫入的空占位格（页号+起始下标+个数）。
-   *  拖拽滑过多个空白位时，上一次预览垫的空格若不摘除会逐点残留，
-   *  把页面塞满到容量上限后，后续放置全部被「页满」拒绝 → App 弹回原位。 */
-  const dragEmpties = useRef<{ page: number; at: number; count: number } | null>(null);
   const dragPageW = useRef(0);
   /** 上一次拖拽预览的命中位置（sameHit 去重）：预览垫格后被拖项的实际下标与命中下标
    *  永不相等（命中定义在摘除垫格的序列上），必须靠 lastHit 去重，否则同一指针位置
@@ -1347,17 +1331,13 @@ export default function HomeScreen() {
       const top0 = rowTops[0];
       // 行边界取行间隙中点：round(f - 0.41)（行高 ≈76、行距 ≈92 → 间隙中点在 0.913 行距处）
       const gridRow = Math.max(0, Math.round((y - top0) / pitch - 0.41));
-      // 在「当前布局 − 被拖项 − 本次预览垫格」上模拟 flow（该序列在整次拖拽中不变，
-      // 判定结果因此与预览状态无关、停同一指针位置恒得同一落点）
-      const recEmpties = dragEmpties.current;
+      // 在「当前布局 − 被拖项 − 全部空占位格」上模拟 flow（紧凑序列，整个拖拽中恒定，
+      // 判定结果与预览状态无关、停同一指针位置恒得同一落点）。历史垫格（隐形洞）不参与：
+      // 否则多轮预览的洞会逐点累积污染落点，把 App 推到洞后的错位格
       const pageTiles = layoutRef.current.pages[p] ?? [];
-      /** sim[j] 在 pageTiles（reorderForDrag 清预览垫格前的真实序列）中的下标：填洞定位用 */
-      const originIdx: number[] = [];
-      const sim = pageTiles.filter((t, j) => {
+      const sim = pageTiles.filter((t) => {
         if (dragId0 !== undefined && tileKey(t) === dragId0) return false;
-        if (recEmpties && recEmpties.page === p && j >= recEmpties.at && j < recEmpties.at + recEmpties.count && t.kind === 'empty') return false;
-        originIdx.push(j);
-        return true;
+        return t.kind !== 'empty';
       });
       const { starts, after, end } = flowPositions(sim);
       // 目标行夹到 flow 末行：内容下方空白不新开行，落到 flow 末行并按列定位
@@ -1370,15 +1350,6 @@ export default function HomeScreen() {
           idx = i;
           break;
         }
-      }
-      // 填洞：目标格恰是历史垫入的隐形空占位格 → App 直接占据该格（删除洞而非再垫新格）。
-      // 不做这步的话洞永远挡在指针位置前面，App 落到洞前一格，用户观感就是「放不进去」
-      if (idx < sim.length && sim[idx].kind === 'empty' && starts[idx].r === targetRow && starts[idx].c === targetCol) {
-        const at = originIdx[idx];
-        if (!(cur && cur.zone === 'grid' && cur.page === p && (cur.fillEmpty ?? -1) === at)) {
-          return { zone: 'grid', page: p, index: at, fillEmpty: at };
-        }
-        return cur;
       }
       // 垫格：从插入点游标推进到目标格（跨行时垫完整空行）
       const cb = idx === 0 ? { r: 0, c: 0 } : after[idx - 1];
@@ -1394,45 +1365,15 @@ export default function HomeScreen() {
     return null;
   };
 
-  /** 拖拽预览专用 reorder：先摘除上一次预览垫入的空占位格再换位，并记录新垫入的空占位格
-   *  （只记本次插入、且恰好紧邻被拖项之前的那几个，不碰既有布局里用户保留的空占位格） */
+  /** 拖拽预览专用 reorder：先把各页的空占位格全部压平（历史垫格洞是隐形占位，
+   *  留在序列里会污染后续 hitTest 的 flow 模拟，洞后 App 错位、洞位永久放不进东西；
+   *  洞只在松手落定位存在，下次拖拽预览开始时自动吸收归位）再按命中换位。
+   *  垫格按 hit.padEmpty 重新垫（reorder 内部），与 hitTest 的紧凑 flow 模拟保持同构 */
   const reorderForDrag = (id: string, hit: Hit) => {
-    const rec = dragEmpties.current;
-    dragEmpties.current = null;
-    let work = layoutRef.current;
-    let hitAdj = hit;
-    if (rec) {
-      // 填洞下标从「含预览垫格」序列换算到「清垫格后」序列：减去洞位之前的垫格删除数
-      if (hit.zone === 'grid' && hit.page === rec.page && typeof hit.fillEmpty === 'number' && hit.fillEmpty >= 0) {
-        const shifted = hit.fillEmpty - Math.max(0, Math.min(rec.count, hit.fillEmpty - rec.at));
-        hitAdj = { ...hit, fillEmpty: Math.max(0, shifted) };
-      }
-      const pages = work.pages.map((p, i) => {
-        if (i !== rec.page) return p;
-        const out = p.slice();
-        let removed = 0;
-        while (rec.at + removed < out.length && removed < rec.count && out[rec.at + removed].kind === 'empty') {
-          out.splice(rec.at + removed, 1);
-          removed++;
-        }
-        return out;
-      });
-      work = { ...work, pages };
-    }
-    const next = reorder(work, id, hitAdj);
+    const cur = layoutRef.current;
+    const pages = cur.pages.map((p) => p.filter((t) => t.kind !== 'empty'));
+    const next = reorder({ ...cur, pages }, id, hit);
     layoutRef.current = next;
-    if (hit.zone === 'grid' && (hit.padEmpty ?? 0) > 0 && (hit.fillEmpty ?? -1) < 0) {
-      // 记录本次预览垫入、且恰好紧邻被拖项之前的空占位格（下次命中变化时先撤掉）
-      const pad = Math.max(0, Math.min(3, hit.padEmpty ?? 0));
-      if (pad > 0) {
-        const pi = Math.min(hit.page, next.pages.length - 1);
-        const page = next.pages[pi];
-        const pos = page.findIndex((t) => tileKey(t) === id);
-        if (pos >= pad && page.slice(pos - pad, pos).every((t) => t.kind === 'empty')) {
-          dragEmpties.current = { page: pi, at: pos - pad, count: pad };
-        }
-      }
-    }
     return next;
   };
 
@@ -1547,7 +1488,6 @@ export default function HomeScreen() {
     setDragDelta({ dx: 0, dy: 0 });
     dragMeta.current = { id, startX: x, startY: y };
     pageCreated.current = false;
-    dragEmpties.current = null;
     lastDragHit.current = null;
     dragOrigin.current = { hit: loc, layout: structuredClone(layoutRef.current) };
     setDragId(id);
@@ -1565,7 +1505,6 @@ export default function HomeScreen() {
     }
     clearFlipTimer();
     dragDockRect.current = null;
-    dragEmpties.current = null;
     lastDragHit.current = null;
     if (dragMeta.current) {
       const m = dragMeta.current;

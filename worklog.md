@@ -15896,3 +15896,22 @@ Stage Summary:
 - 修改：MusicWidget.tsx（控制键终版=无底色粗壮字形 + 圆形按压高亮 + shrink-0；第一版黑圆主按钮方案被用户否掉已移除）
 - 决策：加粗采用 lucide 实心图标 + strokeWidth=2 描边外扩（非换粗图标），与播放页视觉语言统一；时长不受 flex/grid 压缩靠 shrink-0 保证
 - 验证：lint 通过；浏览器实测播放/暂停/切歌/进度/爱心全部正常，无运行时错误
+
+---
+Task ID: home-drag-hole-fix
+Agent: main
+Task: 排查并修复「App 放不到小组件边上」——主屏拖拽落位被隐形空占位格（empty tile 洞）挡路
+
+Work Log:
+- 复现定位（agent-browser 全流程拖拽实验 + DOM rect 逐格核对）：第 3 页布局序列里存在拖拽松手后残留的 empty 空占位格（不可见但占格），用户拖 App 压到洞位时 hitTestAt ③ 的插入点落在洞前、App 落到洞前一格，观感即「明明有空位却放不进去」；根因=旧 reorderForDrag 只撤「上一轮预览垫格」，多轮预览的历史洞逐点累积污染 flow 模拟（实测一轮拖拽曾累积 3 个洞）
+- 另查明产品层事实：music 小组件是 4×2 通栏（占满 4 列），物理上没有「边上」可放 App（iOS 中号小组件同理）；2×3 竖版小组件（网易云/一起听/黑胶）旁边可正常放 App（拖拽挤位实测通过）
+- 修复一（治存量）：新增 compactPages()——进入编辑模式（图标长按/空白长按两处入口）前压平全部页（滤 empty + 回收空页 + 页号夹取 + persist），存量隐形洞自动清除
+- 修复二（治增量）：reorderForDrag 重构为每轮预览先压平各页（filter 掉全部 empty）再 reorder；hitTestAt ③ 的 sim 同步改为「摘被拖项 + 滤全部 empty」的紧凑恒定序列——落点计算与渲染永远同构，洞只在松手落定位存在、下次拖拽自动吸收归位
+- 中途试过「指针压洞即填洞（fillEmpty）」方案，因多轮预览坐标换算与清洞逻辑冲突（清洞后洞下标漂移）改为上述压平方案，fillEmpty 相关代码全部回滚删除（Hit 类型/sameHit/reorder/reorderForDrag/dragEmpties ref 共 7 处）
+- E2E 全链路验证：进编辑自动清洞（序列恢复紧凑）；拖 App 到网易云右侧成功挤位；拖 App 到行尾下方空白=落 flow 末行（既有 clamp 设计）；拖 App 压 music 通栏=插到其前面让位（iOS 同款）；松手后布局无洞残留；「恢复默认」后三页布局与 v10 默认一致（第 1/2 页测试顺序已还原）
+- 测试期间发现页面布局被实验改乱，用「恢复默认」+ 默认布局核对完全复位（当时用户布局本就无自定义）
+
+Stage Summary:
+- 修改：HomeScreen.tsx（compactPages 新增 + 两处进编辑入口调用；reorderForDrag 每轮压平全部页；hitTestAt ③ 紧凑 sim；dragEmpties 机制退役；fillEmpty 方案试错后完整回滚）
+- 决策：保留「拖到行尾空位精确定位」的垫格行为（松手落定位），洞的清理收敛到「进编辑压平 + 预览压平」两个时机；拖到内容下方空白仍不新开行（既有 clamp 设计未动）
+- 验证：lint 通过；浏览器实测清洞/挤位/让位/复原全链路正常，无运行时错误
