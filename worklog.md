@@ -15362,3 +15362,24 @@ Stage Summary:
 - 关键决策：①胶囊淡出按「行切换重新计时」实现——唱歌时高亮跟随、长间奏/暂停消失，避免时间/播放键永久不可用；②歌词态隐藏 PlayerTopBar 让歌名头部即顶栏（消除双行堆叠，标题自然与右上 ⋮ 同行）；③AppWindow 切换即卸载非活跃 App（源码确认），落库监听覆盖「聊天页在场收到卡片」的全部场景且与投递 tick 合并幂等（id 去重）；④唱针角度用播放 -21°/暂停 +26°+抬起 10px 表达贴合/离盘
 - 范围限定遵守：改 6 文件（music-player/together-flow/together-invite 未动/wechat/qq/music-ai/song-msg-bubble）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰（wechat/qq 仅新增监听 effect 与 import 各 1 处）；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-together.tsx（未改）、src/lib/ios/together-flow.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/ios/music-ai.ts、src/components/apps/song-msg-bubble.tsx
+
+---
+Task ID: 86
+Agent: Z.ai Code（主会话）
+Task: 第二十七轮——①一起听双头像耳机线按用户新参考图重做（两根细线内侧垂下向外分开渐隐）②歌词胶囊高亮仅自己手动滚动时显示 ③歌词头部歌名后面加底衬不透出歌词 ④底部爱心/评论数字挂图标右上角（左锚伸出式）⑤同意卡方向文案回退固定「已同意一起听」⑥唱针轴承移盘上方偏右避开时长文字+针杆调淡
+
+Work Log:
+- ①TogetherHead 耳机线重做：单根「U 形弧线」换两根对称细线（viewBox 118×72、strokeWidth 1.8、垂直渐变 0.9→0.5→0 透明尾端）——起点藏头像背后（左 M48,0 / 右 M70,0，经轮廓校验从两圆相接的内侧下缘钻出），C 曲线向下向外分开成「八」字、尾端渐隐（左至 (20,68)/右 (98,68)）；时长行 mt-4→mt-[48px]，线尾渐隐段落在说明文字附近（构图同用户截图：双圆+垂线+下方「相距…一起听了…」）
+- ②胶囊高亮改语义：删「行切换置亮+3 秒淡出」（capsulePrevIdx render 期模式整体移除），capsuleOn 只由 markManual（触摸/滚轮）置 true、由 3 秒回跳定时器置 false；进度跳变 effect（拖进度条/点行跳播/切歌）同步熄灭胶囊（queueMicrotask 包裹满足 react-hooks/set-state-in-effect，微任务绘制前执行无可视闪烁）；自动跟播时当前行仍保持高亮白，仅胶囊背景/行时间/播放键隐藏
+- ③LyricView 头部底衬：新增 pointer-events-none 绝对层 h-[136px] bg-gradient-to-b from-black/85 via-black/55 to-transparent（z-10，位于滚动区之上头部 z-20 之下）——歌词从「匆匆那年/王菲+关注」标题后滚过被压暗不再叠字
+- ④计数角标改左锚伸出式：三处（独听底部爱心/评论 + 一起听聊天视图爱心）从 -right-[7px]（长数字反向盖住图标顶、视觉不在角上）改 left-[calc(100%-6px)] -top-[6px]——数字从图标右缘向右上伸出，超级上标式右上角
+- ⑤同意卡文案回退（song-msg-bubble）：{agree ? (role==='me'?'你接受了TA的邀请':'TA接受了你的邀请') : …} → {agree ? '已同意一起听' : '邀请你一起听'}，注释同步
+- ⑥唱针轴承重定位：pivot/臂从中上（46.5%/49.7%）移到右上（pivot left-81.5% top--14%、臂 left-84.7% top--9.5% h-58%）——悬盘上方且水平避开居中时长行；播放/暂停角度符号对调（+21° 摆回盘面右上纹路 / -26°+抬起摆开盘右侧——原 -21° 在新轴承位会把针甩出盘外，E2E 发现即修）；针杆渐变 from-white→#dcd7c9 改半透明白 from-white/90 via-white/60 to-white/40（调淡），唱头同步 /85→/50、阴影减弱；pivot/arm 加 data-testid
+- E2E（agent-browser 420×900）：独听——播放态唱针 tipOnDisc=true/整体在盘内（截图）✓ 暂停态 -26° 靠边抬起 ✓；歌词自动跟播行切换两次胶囊恒隐藏（bg 透明+时间/播放键 opacity 0）✓ 合成 wheel 手动滚动→胶囊亮起（bg-white/[0.08]+时间可见）✓ 3.4s 后熄灭+回弹当前行居中 ✓ 手动滚动后拖进度条 seek 120s→胶囊立即熄灭+歌词跟随 ✓ 头部底衬歌词不再穿透标题（截图）✓ 爱心 208w+/评论 5w+ 均在图标右上角（截图）✓；一起听——IDB 注入 char 联系人+会话（13.14km/520小时14分钟）→头部说明与用户截图同文 ✓ 轴承与说明文字 bbox 垂直间距 63px 零相交（vOverlap=false）✓ 耳机线两根外八字渐隐（截图对照参考图）✓；同意卡——IDB 注入 user 联系人+wx 登录+两条歌卡 → song-bubble-peer=「已同意一起听匆匆那年王菲」✓ song-bubble-me=「邀请你一起听…」✓；console/errors 零应用错误；测试数据全清（kv 5 键+contacts 2 条+wx-session LS，复核 e2eLeft=0）
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 仅历史 Turbopack worker 噪音
+
+Stage Summary:
+- 交付：一起听耳机线按新参考图重做（两根细线内侧垂下向外八字渐隐）；歌词胶囊只在手动滚动浏览时出现（自动跟播/拖进度/点行跳播全程隐藏，松手 3 秒回弹并熄灭）；歌词标题区底衬遮挡滚过歌词；爱心/评论计数改图标右上角伸出式角标（三处）；同意卡文案回退固定「已同意一起听」；唱针轴承移右上避开时长行且播放态正确落盘（角度符号修正）、针杆半透明调淡
+- 关键决策：①胶囊语义从「行切换计时显示」改为「手动浏览会话内显示」——markManual 开、3 秒回跳定时关，进度跳变视为非手动同步关；②轴承水平位置取 86%（盘宽）——典型时长文案水平右缘 ~315px/420，轴承 290-314px 仅极端长文案水平相切，垂直 63px 间距兜底；③CDP mouse wheel 走 JS 滚动兜底不派发 wheel 事件（测试器假象），以合成 WheelEvent 验证 onWheel 链路，真机触摸/滚轮不受影响
+- 范围限定遵守：改 2 文件（music-player/song-msg-bubble 仅文案）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅卡片小字文案回退）；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/song-msg-bubble.tsx

@@ -2,9 +2,10 @@
 
 /**
  * 音乐 App 播放页（仿网易云黑胶）：
- * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 白色唱针（播放贴盘/暂停抬起，仿网易云截图）
- * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；胶囊 3 秒淡出；
- *   点歌词以外的任何位置回唱片）
+ * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 白色唱针（播放贴盘/暂停抬起，仿网易云截图；
+ *   轴承悬盘上方偏右避开时长文字，第二十七轮）
+ * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；胶囊仅手动滚动浏览时
+ *   显示，第二十七轮；点歌词以外的任何位置回唱片）
  * - 进度条拖拽 / 循环模式 / 播放暂停 / 上下首 / 播放列表
  * - 右上角更多：仿网易云歌曲面板（为TA心动/收藏/下载/分享/一起听/评论/相似漫游/音质）
  * - 一起听态：顶部双头像 + 累计时长（跨会话永久保存） + 音乐/聊天胶囊切换
@@ -350,8 +351,8 @@ export function MusicPlayer() {
                   className={`h-[26px] w-[26px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                   fill={liked ? 'currentColor' : 'none'}
                 />
-                {/* 热度数（第二十六轮按截图：爱心数红色，与评论数灰白区分） */}
-                <span className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
+                {/* 热度数（红色）挂图标右上角（第二十七轮：左锚伸出式，不再盖在爱心上方） */}
+                <span className="absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
                   {fmtCountW(fakeHotCount(current.id))}
                 </span>
               </button>
@@ -569,9 +570,10 @@ export function MusicPlayer() {
                 className={`h-[25px] w-[25px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                 fill={liked ? 'currentColor' : 'none'}
               />
-              {/* 热度数挂图标右上角（第二十五轮）；第二十六轮改红色（仿网易云截图） */}
+              {/* 热度数挂图标右上角（第二十七轮改左锚伸出式：数字从爱心右缘向右上伸出，
+                  之前 -right 锚定导致长数字盖在爱心正上方、看着不在角上） */}
               <span
-                className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
+                className="absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
                 data-testid="music-player-like-count"
               >
                 {fmtCountW(fakeHotCount(current.id))}
@@ -586,7 +588,7 @@ export function MusicPlayer() {
             >
               <MessageCircleMore className="h-[25px] w-[25px] text-white/75" />
               <span
-                className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
+                className="absolute -top-[6px] left-[calc(100%-6px)] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
                 data-testid="music-player-comment-count"
               >
                 {cmtState.total === null ? '' : fmtCountW(cmtState.total)}
@@ -804,7 +806,8 @@ function TgChatGlyph({ className }: { className?: string }) {
   );
 }
 
-// ---------------- 黑胶视图（第二十六轮美化：白色拟真唱针仿用户截图） ----------------
+// ---------------- 黑胶视图（第二十六轮美化：白色拟真唱针仿用户截图；
+// 第二十七轮：轴承移到盘上方偏右（不再挡住顶部时长文字），针杆颜色调淡） ----------------
 
 function VinylView({
   song,
@@ -826,19 +829,21 @@ function VinylView({
           aria-label="切换到歌词"
           className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 唱针（白色拟真风，仿用户参考截图）：白色圆轴承悬在唱片上方偏右（盘外），
+          {/* 唱针（白色拟真风，仿用户参考截图）：白色圆轴承悬在唱片上方偏右（第二十七轮
+              从中上移到右上，避开居中的「相距/一起听了」时长行，仍悬在盘上方），
               白色针杆从轴心斜搭到盘面纹路上；全百分比定位随唱片尺寸等比缩放。
-              CSS 正角把向下的针臂摆向左——播放用 -21° 让针头落在盘面右上纹路上；
-              暂停 → 抬起 + 顺时针摆开（离开盘面） */}
+              CSS 正角把向下的针臂摆向左——轴承在右上时，播放用 +21° 让针头摆回盘面右上纹路上；
+              暂停 → 抬起 + -26° 摆开（针头离开盘面右侧，靠在盘边）。针杆颜色调淡（半透明白渐变，第二十七轮） */}
           <div
-            className="absolute left-[49.7%] top-[-19%] z-20 h-[59%] w-[2.6%] origin-top rounded-full bg-gradient-to-b from-white via-[#f3f0e8] to-[#dcd7c9] shadow-[0_2px_6px_rgba(0,0,0,0.28)] transition-transform duration-500"
-            style={{ transform: playing ? 'rotate(-21deg)' : 'translateY(-10px) rotate(26deg)' }}
+            className="absolute left-[84.7%] top-[-9.5%] z-20 h-[58%] w-[2.6%] origin-top rounded-full bg-gradient-to-b from-white/90 via-white/60 to-white/40 shadow-[0_2px_5px_rgba(0,0,0,0.18)] transition-transform duration-500"
+            style={{ transform: playing ? 'rotate(21deg)' : 'translateY(-10px) rotate(-26deg)' }}
+            data-testid="music-tonearm-arm"
           >
             {/* 针头（白色唱头，随针臂同角度，落在盘面外圈） */}
-            <div className="absolute -bottom-[5%] left-1/2 h-[8%] w-[260%] -translate-x-1/2 rotate-[4deg] rounded-[3px] bg-gradient-to-b from-white to-[#d5d0c2] shadow-[0_1px_4px_rgba(0,0,0,0.35)] ring-1 ring-black/5" />
+            <div className="absolute -bottom-[5%] left-1/2 h-[8%] w-[260%] -translate-x-1/2 rotate-[4deg] rounded-[3px] bg-gradient-to-b from-white/85 to-white/50 shadow-[0_1px_3px_rgba(0,0,0,0.22)] ring-1 ring-black/5" />
           </div>
           {/* 轴承（白色圆钮，压住针臂轴心，不随播放旋转） */}
-          <div className="absolute left-[46.5%] top-[-23.5%] z-30 h-[9%] w-[9%] rounded-full bg-gradient-to-b from-white to-[#e9e5da] shadow-[0_3px_10px_rgba(0,0,0,0.4)]">
+          <div className="absolute left-[81.5%] top-[-14%] z-30 h-[9%] w-[9%] rounded-full bg-gradient-to-b from-white to-[#e9e5da] shadow-[0_3px_10px_rgba(0,0,0,0.4)]" data-testid="music-tonearm-pivot">
             <div className="absolute left-1/2 top-1/2 h-[38%] w-[38%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#c9c3b4] ring-1 ring-black/10" />
           </div>
 
@@ -881,9 +886,11 @@ function VinylView({
 }
 
 // ---------------- 歌词视图（第二十四轮重做：仿网易云歌词页——
-// 当前行胶囊高亮（行时间+播放键，3 秒后自动淡出第二十六轮），上下行淡出聚焦，逐行滚动；
+// 当前行胶囊高亮（行时间+播放键）仅手动滚动浏览时显示（第二十七轮，自动跟随不显示），
+// 上下行淡出聚焦，逐行滚动；
 // 点行跳播、长按复制、手动滑动浏览松手 3 秒后回当前行、拖进度条歌词跟随；
-// 顶部歌名/歌手头部即顶栏（标题与右上三点同行，第二十六轮）；点歌词以外的任何位置回唱片 ----------------
+// 顶部歌名/歌手头部即顶栏（标题与右上三点同行，第二十六轮；头部底衬不透出歌词第二十七轮）；
+// 点歌词以外的任何位置回唱片 ----------------
 
 /** 剪贴板写入（clipboard API 失败回退 execCommand） */
 async function copyLyricText(t: string): Promise<boolean> {
@@ -954,20 +961,10 @@ function LyricView({
     activeIdxRef.current = activeIdx;
   }, [activeIdx]);
 
-  // 当前行胶囊高亮 3 秒自动淡出（第二十六轮反馈：不要一直显示）——
-  // 行切换时置亮（render 期派生重置，React 官方 adjust-state 模式），3 秒后定时淡出；
+  // 当前行胶囊高亮只在「自己手动滚动浏览」时显示（第二十七轮反馈：自动跟随播放/拖进度条
+  // 时不显示胶囊，自己滑过歌词才亮起）；松手 3 秒无操作自动回当前行并熄灭；
   // 胶囊隐藏后行文字仍保持高亮白，仅背景/时间/播放键淡出（占位不变不跳动）
-  const [capsuleOn, setCapsuleOn] = useState(true);
-  const [capsulePrevIdx, setCapsulePrevIdx] = useState(activeIdx);
-  if (capsulePrevIdx !== activeIdx) {
-    setCapsulePrevIdx(activeIdx);
-    setCapsuleOn(true);
-  }
-  useEffect(() => {
-    if (!capsuleOn) return;
-    const t = setTimeout(() => setCapsuleOn(false), 3000);
-    return () => clearTimeout(t);
-  }, [capsuleOn, activeIdx]);
+  const [capsuleOn, setCapsuleOn] = useState(false);
 
   const scrollToLine = (idx: number, behavior: ScrollBehavior) => {
     const box = boxRef.current;
@@ -1000,6 +997,9 @@ function LyricView({
       clearTimeout(manualTimerRef.current);
       manualTimerRef.current = null;
     }
+    // 拖进度条/点行跳播不算手动浏览：胶囊一并熄灭（第二十七轮）。
+    // queueMicrotask：lint（set-state-in-effect）合规，且微任务在绘制前执行、无可视闪烁
+    queueMicrotask(() => setCapsuleOn(false));
     scrollToLine(activeIdxRef.current, 'smooth');
   }, [position]);
 
@@ -1009,13 +1009,15 @@ function LyricView({
     if (activeIdx >= 0) scrollToLine(activeIdx, 'smooth');
   }, [activeIdx]);
 
-  // 手动浏览标记（触摸/滚轮都算）：刷新 3 秒回跳计时器
+  // 手动浏览标记（触摸/滚轮都算）：亮起胶囊 + 刷新 3 秒回跳计时器
   const markManual = () => {
     manualRef.current = true;
+    setCapsuleOn(true);
     if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
     manualTimerRef.current = setTimeout(() => {
       manualTimerRef.current = null;
       manualRef.current = false;
+      setCapsuleOn(false);
       scrollToLine(activeIdxRef.current, 'smooth');
     }, 3000);
   };
@@ -1047,6 +1049,12 @@ function LyricView({
 
   return (
     <div className="relative h-full w-full" data-testid="music-lyric-view" onClick={onSwitch}>
+      {/* 头部底衬（第二十七轮反馈：歌名后面不要透明）——歌词从标题区域滚过时被底衬压暗遮住，
+          不再和歌名/歌手文字叠在一起；pointer-events-none 不挡点击回唱片 */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[136px] bg-gradient-to-b from-black/85 via-black/55 to-transparent"
+        aria-hidden="true"
+      />
       {/* 顶部歌名/歌手头部（第二十五轮按用户截图；第二十六轮：标题提到最上一行、
           与右上角三点垂直居中对齐，头部自身承担顶部安全区；点头部空白处也回唱片） */}
       <div
@@ -1337,19 +1345,34 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像 + 耳机线（第二十六轮反馈）：一根线从两侧头像底部垂下、中间下垂成弧，
-          末端刚好落在时长行上方——像两只耳机用一根线连着；头像（relative）盖在线上方 */}
+      {/* 双头像 + 耳机线（第二十七轮按用户截图重做）：两根细线各自从头像内侧下缘
+          （两圆相接处）从头像背后钻出、向外分开成「八」字、尾端渐隐——
+          像两只耳机各垂下一根线；头像（relative z-10）盖在线上方 */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <svg
-          viewBox="0 0 118 26"
-          className="pointer-events-none absolute inset-x-0 top-[57px] z-0 h-[26px] w-full"
+          viewBox="0 0 118 72"
+          className="pointer-events-none absolute inset-x-0 top-[52px] z-0 h-[72px] w-full"
           fill="none"
           aria-hidden="true"
         >
+          <defs>
+            <linearGradient id="tg-cable-fade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="rgba(255,255,255,0.9)" />
+              <stop offset="0.55" stopColor="rgba(255,255,255,0.5)" />
+              <stop offset="1" stopColor="rgba(255,255,255,0)" />
+            </linearGradient>
+          </defs>
+          {/* 左线：从左头像内下缘出、向下向外（左）分开渐隐；右线镜像 */}
           <path
-            d="M 32 8 C 35 20, 46 22, 59 22 C 72 22, 83 20, 86 8"
-            stroke="rgba(255,255,255,0.55)"
-            strokeWidth="2.2"
+            d="M 48 0 C 49 24, 44 46, 20 68"
+            stroke="url(#tg-cable-fade)"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+          <path
+            d="M 70 0 C 69 24, 74 46, 98 68"
+            stroke="url(#tg-cable-fade)"
+            strokeWidth="1.8"
             strokeLinecap="round"
           />
         </svg>
@@ -1357,8 +1380,8 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          mt-4 给耳机线下垂留出空间（线末端落在时长行上方，第二十六轮） */}
-      <p className={`mt-4 text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+          mt-[48px] 给耳机线下垂留出空间（线尾渐隐段落在时长行附近，仿用户截图） */}
+      <p className={`mt-[48px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
