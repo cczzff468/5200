@@ -304,8 +304,9 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           data-testid="music-home-daily"
           className="relative mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-3 overflow-hidden rounded-full py-2.5 pl-3 pr-3 text-left active:scale-[0.99]"
         >
-          {/* 毛玻璃胶囊风格（第二十八轮反馈）：全圆角胶囊 + 磨砂玻璃 + 内缘高光描边 */}
-          <span aria-hidden="true" className="absolute inset-0 bg-white/55 backdrop-blur-2xl dark:bg-zinc-800/55" />
+          {/* 毛玻璃胶囊风格（第二十八轮；第二十九轮反馈「模糊一点」）：
+              全圆角胶囊 + 强磨砂（blur-3xl 64px + 饱和度提升）+ 低透明度白底透出下层内容 */}
+          <span aria-hidden="true" className="absolute inset-0 bg-white/40 backdrop-blur-3xl backdrop-saturate-150 dark:bg-zinc-800/50" />
           <span
             aria-hidden="true"
             className="absolute inset-0 rounded-full ring-1 ring-white/80 ring-inset dark:ring-white/10"

@@ -7,10 +7,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Check,
   ChevronLeft,
   Download,
   Loader2,
   Play,
+  Plus,
   Share2,
   Trash2,
   Users,
@@ -218,10 +220,12 @@ export function MusicPlaylist() {
               type="button"
               onClick={() => void toggleSub()}
               data-testid="music-pl-sub"
-              className={`rounded-full border px-3 py-1 text-[11px] ${
+              className={`flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-[11px] ${
                 subbed ? 'border-zinc-300 text-zinc-500' : 'border-[#C20C0C] text-[#C20C0C]'
               }`}
             >
+              {/* 横向胶囊（第二十九轮反馈）：图标 + 文字左右排列，仿网易云「＋收藏 / ✓已收藏」 */}
+              {subbed ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
               {subbed ? '已收藏' : '收藏'}
             </button>
           ) : null}

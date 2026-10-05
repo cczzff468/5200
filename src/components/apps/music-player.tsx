@@ -512,6 +512,7 @@ export function MusicPlayer() {
             <LyricView
               song={current}
               onSwitch={() => setShowLyric(false)}
+              onClose={close}
               onMore={() => setShowMore(true)}
               onToast={setMoreToast}
               topInset={together ? 46 : 58}
@@ -888,8 +889,9 @@ function VinylView({
 // 当前行胶囊高亮（行时间+播放键）仅手动滚动浏览时显示（第二十七轮，自动跟随不显示），
 // 上下行淡出聚焦，逐行滚动；
 // 第二十八轮：点歌词不再跳播（点歌词界面任何位置都回唱片）、行时间默认隐藏
-// 仅自己滚动时显示（悬浮件绝对定位，文字全宽常居中，修复滚动时歌词右移）、
-// 头部底衬改渐进模糊（歌词平滑隐入头部，无黑色条带）；
+// 仅自己滚动时显示（悬浮件绝对定位，文字全宽常居中，修复滚动时歌词右移）；
+// 第二十九轮：头部底衬删黑渐变只留渐进模糊（背景无黑色块）、
+// 左上角箭头改「退出听歌界面」并上移、右上角 ⋮ 上移右移；
 // 长按复制、手动滑动浏览松手 3 秒后回当前行、拖进度条歌词跟随；
 // 顶部歌名/歌手头部即顶栏（标题与右上三点同行，第二十六轮） ----------------
 
@@ -919,12 +921,15 @@ async function copyLyricText(t: string): Promise<boolean> {
 function LyricView({
   song,
   onSwitch,
+  onClose,
   onMore,
   onToast,
   topInset = 58,
 }: {
   song: NcmSong;
   onSwitch: () => void;
+  /** 左上角箭头：退出听歌界面（收起播放器，第二十九轮反馈，原为回唱片） */
+  onClose: () => void;
   /** 右上角更多钮 → 歌曲操作面板（MoreSheet） */
   onMore: () => void;
   onToast: (m: string) => void;
@@ -1049,9 +1054,9 @@ function LyricView({
 
   return (
     <div className="relative h-full w-full" data-testid="music-lyric-view" onClick={onSwitch}>
-      {/* 头部底衬（第二十八轮按用户参考图重做：渐进模糊式遮罩）——歌词滚入标题区域时
-          先被模糊再渐隐消失（backdrop-blur 用 mask 渐变做到「越往上越模糊」），
-          叠一层轻黑渐变压暗，观感是歌词平滑隐入头部而非一条黑色条带；
+      {/* 头部底衬（第二十八轮引入；第二十九轮反馈「背景图为什么有黑色」）——删黑色渐变层，
+          只留 backdrop-blur 渐进模糊：歌词滚入标题区被模糊至看不见（模糊不产生黑色），
+          背景保持封面主色调，与网易云歌词页观感一致；
           pointer-events-none 不挡点击回唱片 */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[170px] backdrop-blur-2xl backdrop-saturate-150"
@@ -1060,10 +1065,6 @@ function LyricView({
           WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 48%, transparent 100%)',
           maskImage: 'linear-gradient(to bottom, black 0%, black 48%, transparent 100%)',
         }}
-      />
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[170px] bg-gradient-to-b from-black/60 via-black/30 to-transparent"
-        aria-hidden="true"
       />
       {/* 顶部歌名/歌手头部（第二十五轮按用户截图；第二十六轮：标题提到最上一行、
           与右上角三点垂直居中对齐，头部自身承担顶部安全区；点头部空白处也回唱片） */}
@@ -1075,11 +1076,11 @@ function LyricView({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onSwitch();
+            onClose();
           }}
-          aria-label="返回黑胶"
+          aria-label="退出听歌界面"
           data-testid="music-lyric-back"
-          className="-ml-1 p-1 text-white/85 active:scale-95"
+          className="-ml-1 -translate-y-1.5 p-1 text-white/85 active:scale-95"
         >
           <ChevronDown className="h-7 w-7" />
         </button>
@@ -1115,7 +1116,7 @@ function LyricView({
           }}
           aria-label="歌曲操作面板"
           data-testid="music-lyric-more"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
+          className="flex h-9 w-9 shrink-0 -translate-y-1.5 translate-x-1 items-center justify-center rounded-full bg-white/10 active:scale-95"
         >
           <MoreVertical className="h-[17px] w-[17px] text-white/90" />
         </button>
@@ -1355,26 +1356,25 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像 + 耳机线（第二十八轮按用户反馈改回「邀请一起听弹窗」同款线形）：
-          两根实色细线各自从头像内下缘（两圆相接的中缝处）从头像背后钻出、
-          向下向中间汇拢（S 弧，与 TogetherInviteLayer.EarphoneWires 同形状同色），
-          不再向外八字分开渐隐；头像（relative z-10）盖在线上方 */}
+      {/* 双头像 + 耳机线（第二十九轮按用户反馈重画）：两根细线位于双头像的两侧
+          （左线在左头像左缘内、右线在右头像右缘内），从头像背后钻出后近乎垂直向下延伸、
+          尾端轻微内收，像两只耳机各垂下一根线；头像（relative z-10）盖在线上方 */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
         <svg
-          viewBox="0 0 118 56"
-          className="pointer-events-none absolute inset-x-0 top-[44px] z-0 h-[56px] w-full"
+          viewBox="0 0 118 60"
+          className="pointer-events-none absolute inset-x-0 top-[40px] z-0 h-[60px] w-full"
           fill="none"
           aria-hidden="true"
         >
-          {/* 左线：从左头像内下缘出、向下向中间汇拢；右线镜像（交汇于中缝下方，同邀请弹窗） */}
+          {/* 左线：左头像左下缘向下延伸；右线镜像（右头像右下缘） */}
           <path
-            d="M 41 0 C 37 20, 44 40, 57 52"
+            d="M 12 0 C 8 18, 9 40, 13 56"
             stroke="rgba(255,255,255,0.9)"
             strokeWidth="1.8"
             strokeLinecap="round"
           />
           <path
-            d="M 77 0 C 81 20, 74 40, 61 52"
+            d="M 106 0 C 110 18, 109 40, 105 56"
             stroke="rgba(255,255,255,0.9)"
             strokeWidth="1.8"
             strokeLinecap="round"

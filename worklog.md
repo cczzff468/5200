@@ -15407,3 +15407,25 @@ Stage Summary:
 - 关键决策：①右移根因=capsuleOn 熄灭后时间/播放键占位保留导致当前行文字偏右 10px，悬浮件绝对定位让「胶囊亮灭/滚动/行切换」三种场景文字中心恒定；②渐进模糊遮罩用 backdrop-blur+mask 渐变而非加深黑色——贴近参考图「歌词隐入头部」观感；③点歌词行语义让位给「返回唱片」（用户明确），长按复制保留且复制后吞点击防误退；④耳机线以邀请弹窗 EarphoneWires 为唯一参照（用户指定基准），TogetherHead 交叠头像几何下按同形状重绘
 - 范围限定遵守：改 4 文件（music-player/music-home/music-store/TogetherInviteLayer）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅绘制与 class）；音乐数据按账号隔离未动
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-home.tsx、src/lib/ios/music-store.ts、src/components/ios/TogetherInviteLayer.tsx
+
+---
+Task ID: 88
+Agent: Z.ai Code（主会话）
+Task: 第二十九轮——①歌词界面背景删黑色块（头部遮罩只留渐进模糊）②左上角箭头改「退出听歌界面」并上移 ③右上角 ⋮ 上移右移 ④一起听耳机线改「从头像两侧向下延伸」 ⑤首页每日推荐毛玻璃更模糊 ⑥推荐歌单详情页收藏按钮变横向（+收藏/✓已收藏）
+
+Work Log:
+- ①歌词背景去黑（LyricView）：删除第二十八轮叠加的黑色渐变层（h-170 from-black/60 via-black/30）——用户反馈「背景图为什么有黑色的那个」即此层；只保留 backdrop-blur-2xl + mask 渐变的渐进模糊层（模糊不产生黑色），头部区域回到封面主色调自然延伸，歌词滚入标题区仍被模糊至看不见（对照网易云歌词页观感）
+- ②左上角箭头（music-lyric-back）：onClick 由 onSwitch（回唱片）改为 onClose（收起播放器=退出听歌界面，与黑胶视图顶栏箭头同语义）；LyricView 新增 onClose prop，调用点传 close；按钮 -translate-y-1.5 上移 6px；aria-label/注释同步
+- ③右上角 ⋮（music-lyric-more）：-translate-y-1.5（上移 6px）+ translate-x-1（右移 4px，更贴屏幕右缘）
+- ④耳机线第四版（TogetherHead）：第二十八轮「中缝汇拢」改「从头像两侧向下延伸」——左线起点藏左头像左缘内（M12,0）、右线镜像（M106,0），C 曲线近乎垂直向下、尾端轻微内收（左 C 8,18 9,40 13,56 / 右镜像），viewBox 118×60 置 top-[40px]，线尾页面 y=96px 在时长行（112px）上方 16px；实色 rgba(255,255,255,0.9) strokeWidth 1.8 不变
+- ⑤每日推荐胶囊更模糊（music-home）：毛玻璃层 backdrop-blur-2xl→backdrop-blur-3xl（40→64px）+ backdrop-saturate-150，白底 bg-white/55→bg-white/40（透出更多下层内容，磨砂感更强）；胶囊形状/描边/内部布局不动
+- ⑥歌单详情页收藏按钮横向化（music-playlist）：纯文字胶囊 → 「＋ 收藏 / ✓ 已收藏」图标+文字横向胶囊（flex items-center gap-1，Plus/Check h-3 w-3，仿网易云同款）；import 增 Plus/Check
+- E2E（agent-browser 420×900 一次性会话）：解锁→音乐 App 游客模式→搜「晴天」播原唱版→展开播放器→切歌词（头部背景无黑色块、歌词在标题区渐进模糊隐入✓ 箭头位于状态栏正下方✓ ⋮ 贴右上✓）→点左上箭头（lyricGone+playerClosed+minibarBack 全 true=退出听歌界面✓）→首页进推荐歌单详情页（右上「+ 收藏」flexDir=row+hasSvg 横向胶囊✓）→IDB 注入 e2e-r29-char+music-together-active:guest→reload→一起听头部（两根线分别从头像左右两侧向下延伸、近垂直微弯，截图✓「相距 950 公里·一起听了 1小时15分钟」）→清理测试数据（复核 e2eLeft=0 tgLeft=0）→关浏览器
+- 每日推荐胶囊（登录态专属）与上轮同口径：JSX 单类名调整（blur-3xl/白底透明度）代码级核验，浏览器不可视验证
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 无应用错误
+
+Stage Summary:
+- 交付：歌词页头部纯渐进模糊（无黑色块）+ 左上箭头退出播放器（上移）+ 右上 ⋮ 上移右移 + 一起听耳机线两侧垂直垂下（第四版）+ 每日推荐强磨砂胶囊 + 歌单收藏「＋收藏」横向胶囊
+- 关键决策：①黑块根因=上一轮为「歌名不透明」叠加的黑渐变层在封面色背景上成块，模糊本身足够遮歌词故删黑留糊；②箭头语义升级为「退出听歌界面」与黑胶视图一致（原「回唱片」与点空白重复）；③耳机线经历 U 形→外八字→中缝汇拢→两侧垂直四版，本轮按用户最新文字描述「从头像两侧向下延伸」实现，线位取双头像组合体外侧
+- 范围限定遵守：改 3 文件（music-player/music-home/music-playlist）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路逻辑未动（仅 SVG 线形）；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-home.tsx、src/components/apps/music-playlist.tsx
