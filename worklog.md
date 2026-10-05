@@ -15937,3 +15937,26 @@ Stage Summary:
 - 修改：HomeScreen.tsx（Tile/Hit/HomeLayout 类型、sanitize/persist、reorder+pruneEmptyFolders、悬停合并 activateMerge/cancelMerge/applyMerge、removeFolderReturnApps/removeAppFromFolder/renameFolder、文件夹图标渲染、合并气泡占位槽、FolderPanel 面板组件、beginDrag/endDrag/onMove/hitTestAt/zoneIndexOf 接入）、globals.css（folder-fade/folder-pop 动画）
 - 决策：悬停 550ms 建夹而非松手即建（保留挤位重排手感）；文件夹不进 Dock；夹内 App 实体存 folders、网格仅留 tile 引用；网格优先去重（sanitize）；不升布局版本号避免重置用户数据
 - 验证：lint 通过；浏览器实测建夹/改名/入夹/拖出/退回/清空自消/持久化/分页/恢复默认/回归全链路通过，无运行时错误（dev.log 仅 Turbopack 编译期 worker 记录）
+
+---
+Task ID: folder-fix-r4
+Agent: 主协调者 (Z.ai Code)
+Task: 桌面文件夹交互改进——即时合并预览（重叠≥一半、纯视觉、松手才入夹）+ 面板长按进编辑 + 防手抖 + 清洞保持
+
+Work Log:
+- 用户反馈 5 项：①编辑模式点击文件夹能开面板 ②长按文件夹面板能编辑 ③App 附在另一 App 一半时立即显示文件夹预览但松手才放进去 ④夹内 App 图标正方形圆角 ⑤保持清洞/压平行为
+- 浏览器实测确认 ①④ 已可用（编辑态轻点文件夹开面板、面板/预览图标均为方圆角），核心改动集中在 ②③
+- 合并预览重写：删除 550ms 悬停计时器（MERGE_HOVER_MS/hoverMerge/activateMerge/cancelMerge），新增纯几何 mergeScan——遍历当前页 App/文件夹 tile，取其当前槽位顶部居中 60×60 图标区与被拖浮动副本图标区求重叠面积
+- 修复关键数学 bug：重叠区间差为负时（目标在远处）负×负=正导致永远选中"最远"目标（camera），Math.max(0, …) 钳位
+- 解决追赶问题：指针刚进目标格时图标重叠仅 ~13%，挤位换位会把目标推走导致永远叠不到一半——现只要与可合并目标有任意重叠(>0)即暂停挤位换位（悬停态），重叠≥50% 出预览，完全拖过（归零）自动恢复
+- 预览改纯视觉：不再把目标 App 从网格移走（旧版会），目标原地渲染文件夹样式的毛玻璃缩略图（folderIconNode 复用：3×2 迷你图标网格）；App→文件夹预览时把被拖 App 的迷你图加进预览（<6 个时）；松手 applyMerge 一次性完成摘除（网格/Dock/来源文件夹）+ 建夹/入夹/并夹
+- FolderPanel 本地编辑态：非编辑态长按面板任意处（除按钮/输入框）420ms 进入（home-jiggle + × 退回 + 提示文案切换）；编辑态点面板内空白退出本地编辑；点面板外任何情况收起面板；编辑态轻点 App 不再冒泡关闭面板
+- endDrag 稳健化：轻点文件夹阈值 8px→12px（容纳触摸抖动）且先复原再开面板；轻点 App/小组件 (<6px) 防手抖复原；悬停暂停挤位后松手按当前指针位置补一次落位（避免落在旧位置）
+- 清洞行为保持并实测：compactPages 进编辑瞬间清隐形洞 + 回收空页；reorderForDrag 每轮预览压平；注入 4 洞+空页实测进编辑后全部清零
+- E2E（agent-browser）：建夹/入夹/并夹/拖出/夹空自消/改名/清洞/翻页/编辑回归全部通过；截图确认预览视觉（毛玻璃+迷你图标）与夹空自消
+- 调试期间发现 dev 服务器 Turbopack worker 崩溃（Unexpected response from worker）导致浏览器跑新旧混杂 chunk——重启 dev server 解决
+
+Stage Summary:
+- 提交待推送：文件夹交互全面对齐用户要求——重叠一半立即出文件夹预览（纯视觉不挪格）、松手才合并、面板长按可整理、防手抖误操作、清洞行为保持
+- 关键产物：src/components/ios/HomeScreen.tsx（mergeScan/showMergePreview/applyMerge 重写 + FolderPanel localEdit + endDrag 稳健化）
+- 教训：几何重叠计算必须钳负值；悬停合并必须暂停挤位否则目标被推走永远追不上；Turbopack worker 崩溃会造成诡异的新旧代码混杂，先重启再排查
