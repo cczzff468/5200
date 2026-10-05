@@ -7,8 +7,8 @@
  *   （audio timeupdate 驱动，与播放页同一状态源，自动跟随）；
  * - 控制键：爱心收藏（Heart，红色实心=已喜欢）+ 上一首/播放暂停/下一首，直接调 useMusic 的
  *   toggle/next/prev/toggleLike（游客态红心走本地持久化，安全）；无歌时爱心/切歌安全 no-op，
- *   播放键可点（有快照队列时直接恢复播放）；播放/暂停为实心圆形主按钮（浅色黑圆白标 /
- *   深色白圆黑标 + 柔和投影），切歌/爱心带圆形按压高亮，全部 200ms 缓动 + 按压缩放；
+ *   播放键可点（有快照队列时直接恢复播放）；控制键为无底色粗壮字形（实心 + 2px 同色
+ *   描边外扩 + 圆角接缝），圆形按压高亮 + 200ms 缓动 + 按压缩放；
  * - 无歌时显示「默认态」：与正常布局完全同构（音符占位封面 + 「音乐」标题 + 空进度条），
  *   不再显示「尚未播放音乐」文案（用户要求）；
  * - 点击小组件空白处打开音乐 App（HomeScreen 的 WIDGET_META.openApp 驱动）；
@@ -109,8 +109,8 @@ export function MusicWidget() {
       </div>
 
       {/* 控制键：爱心（左）+ 上一首/播放暂停/下一首（居中三连；无歌时爱心/切歌 no-op）
-          播放/暂停 = 44px 实心圆主按钮（浅色黑圆白标/深色白圆黑标，柔和投影抬升）；
-          爱心/切歌 = 圆形按压高亮（active:bg），全部 200ms ease-out + 按压缩放反馈 */}
+          无底色纯字形（用户要求去掉黑圆主按钮），图标用「实心 + 2px 同色描边外扩 +
+          圆角接缝」加粗（与播放页同风格）；圆形按压高亮 + 200ms 缓动 + 按压缩放 */}
       <div className="mt-auto grid grid-cols-3 items-center">
         <button
           type="button"
@@ -139,7 +139,7 @@ export function MusicWidget() {
             }}
             className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-full text-[#0c0c0e] transition-all duration-200 ease-out active:scale-90 active:bg-black/[0.06] dark:text-white dark:active:bg-white/[0.12]"
           >
-            <SkipBack className="h-[24px] w-[24px]" fill="currentColor" strokeWidth={0} strokeLinejoin="round" aria-hidden="true" />
+            <SkipBack className="h-[23px] w-[23px]" fill="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -150,12 +150,12 @@ export function MusicWidget() {
               e.stopPropagation();
               useMusic.getState().toggle();
             }}
-            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full bg-[#0c0c0e] text-white shadow-[0_4px_12px_-2px_rgba(0,0,0,0.28)] transition-all duration-200 ease-out active:scale-90 active:bg-black/70 dark:bg-white dark:text-[#0c0c0e] dark:shadow-[0_4px_12px_-2px_rgba(0,0,0,0.65)] dark:active:bg-white/80"
+            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[#0c0c0e] transition-all duration-200 ease-out active:scale-90 active:bg-black/[0.06] dark:text-white dark:active:bg-white/[0.12]"
           >
             {playing ? (
-              <Pause className="h-[22px] w-[22px]" fill="currentColor" strokeWidth={0} aria-hidden="true" />
+              <Pause className="h-[26px] w-[26px]" fill="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true" />
             ) : (
-              <Play className="ml-[2px] h-[22px] w-[22px]" fill="currentColor" strokeWidth={0} aria-hidden="true" />
+              <Play className="ml-[1px] h-[26px] w-[26px]" fill="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true" />
             )}
           </button>
           <button
@@ -169,7 +169,7 @@ export function MusicWidget() {
             }}
             className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-full text-[#0c0c0e] transition-all duration-200 ease-out active:scale-90 active:bg-black/[0.06] dark:text-white dark:active:bg-white/[0.12]"
           >
-            <SkipForward className="h-[24px] w-[24px]" fill="currentColor" strokeWidth={0} strokeLinejoin="round" aria-hidden="true" />
+            <SkipForward className="h-[23px] w-[23px]" fill="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true" />
           </button>
         </div>
         <span aria-hidden="true" />

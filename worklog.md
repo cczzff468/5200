@@ -15879,3 +15879,20 @@ Work Log:
 Stage Summary:
 - 修改：MusicWidget.tsx（放大/默认态/动画）、globals.css（music-wave keyframes）、registry.tsx（preloadHeavyApps）、PhoneShell.tsx（2.5s 空闲预热 effect）
 - 决策：默认态保持完整布局同构避免增删跳动；预热延迟 2.5s 避开首帧；boot/bootMusicAi 均幂等可安全提前调用
+
+---
+Task ID: music-widget-r3
+Agent: main
+Task: 音乐小组件前进/后退/播放暂停按钮美化（第一版：黑圆主按钮；用户反馈后改终版：删黑圆 + 图标加粗）
+
+Work Log:
+- 第一版：播放/暂停改 44px 实心圆主按钮（浅色黑圆白标/深色白圆黑标 + 柔和投影），切歌键热区 34→36px、图标加 strokeLinejoin=round，爱心/切歌加圆形按压高亮（active:bg-black/[0.06] dark:active:bg-white/[0.12]），全部统一 transition-all duration-200 ease-out + active:scale-90
+- E2E 发现真 bug：中列 flex（36+44+36 + gap）总宽超出 grid 中列轨道，flex 默认收缩把 44px 播放圆钮压成 28px 椭圆（getBoundingClientRect w=28）——四个控制键全部补 shrink-0 修复（爱心同样受 grid/flex 影响预防性加上）
+- 用户反馈「把黑色圆形删除，按钮加粗」→ 终版：播放/暂停去掉实心圆底与投影，恢复无底色纯字形；图标全部改「实心 fill + strokeWidth=2 同色描边外扩 + round join/cap 圆角接缝」加粗风格（与音乐播放页控制键同款），播放/暂停 26px、切歌 23px、Play 三角 ml-[1px] 光学居中
+- E2E 全链路验证（agent-browser 430×932，解锁→第 3 页）：toggle 44×44 正圆（修复后）、点播放 aria=暂停且进度 0:11→0:13 实时走动、下一首海屿你→恋人归零、上一首（首次点击=回到当前曲开头，惯例行为；再次点击切回海屿你）、暂停 aria=播放；浏览器 console/errors 无错误
+- 期间踩坑记录：agent-browser mouse 滑动过头会进 App 切换器；HMR/刷新后 UI 回锁屏须重新解锁；锁屏覆盖层存在时点击/翻页全部打在锁屏上（snapshot 里锁屏按钮与主屏混排，须先截图确认所在层）；锁屏解锁用 eval 派发 touch PointerEvent 拖拽（215,500→260）可靠触发
+
+Stage Summary:
+- 修改：MusicWidget.tsx（控制键终版=无底色粗壮字形 + 圆形按压高亮 + shrink-0；第一版黑圆主按钮方案被用户否掉已移除）
+- 决策：加粗采用 lucide 实心图标 + strokeWidth=2 描边外扩（非换粗图标），与播放页视觉语言统一；时长不受 flex/grid 压缩靠 shrink-0 保证
+- 验证：lint 通过；浏览器实测播放/暂停/切歌/进度/爱心全部正常，无运行时错误
