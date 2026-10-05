@@ -34,6 +34,7 @@ import {
   PanelTop,
   ScanEye,
   ScanFace,
+  Smartphone,
   Sun,
   Trash2,
   Type,
@@ -49,8 +50,8 @@ import type { LucideIcon } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import PasscodePad from '@/components/ios/PasscodePad';
 import { APPS, AppIconTile } from './registry';
-import { useUI, useSystemDark } from '@/lib/ios/store';
-import { genId, localDB } from '@/lib/ios/db';
+import { useUI } from '@/lib/ios/store';
+import { genId, localDB, type IOSStoreName } from '@/lib/ios/db';
 import {
   DEFAULT_API_CONFIG,
   WALLPAPER_PRESETS,
@@ -182,12 +183,6 @@ async function readStorageEstimate(): Promise<{ usage: number; quota: number }> 
     // 忽略，返回 0
   }
   return { usage: 0, quota: 0 };
-}
-
-function formatMB(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
-  const mb = bytes / (1024 * 1024);
-  return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
 }
 
 // ---------------- 通用小组件 ----------------
@@ -875,108 +870,211 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
   );
 }
 
-// ---------------- 存储空间（iOS「iPhone 储存空间」：四分类堆叠条 + 按 App 占用列表） ----------------
+// ---------------- 存储空间（真实用量实测 + 毛玻璃胶囊风） ----------------
 
-/** 分类条配色（对齐用户参考截图：红=应用程序 / 橙=照片 / 灰=iOS / 浅灰=系统数据） */
+/** 分类配色（红=应用程序 / 橙=照片 / 浅灰=系统数据） */
 const CAT_APPS_COLOR = '#FF3B30';
 const CAT_PHOTOS_COLOR = '#FF9500';
-const CAT_IOS_COLOR = '#8E8E93';
 
-/** 图例小圆点 */
-function LegendDot({ color, label }: { color: string; label: string }) {
+/** 图例胶囊：圆点 + 标签的毛玻璃小药丸 */
+function LegendChip({ color, label }: { color: string; label: string }) {
   return (
-    <span className="flex items-center gap-1.5">
-      <span aria-hidden="true" className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: color }} />
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/55 px-3 py-1 text-[12px] ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.07] dark:ring-white/[0.1]">
+      <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
       {label}
     </span>
   );
 }
 
-/** 稳定伪随机（种子哈希 → [0,1)）：同一 App 每次进入数值一致，不同 App 分布自然 */
-function hash01(seed: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+let _te: TextEncoder | null = null;
+function strBytes(s: string): number {
+  if (!_te) _te = new TextEncoder();
+  return _te.encode(s).length;
+}
+
+/** 递归估算任意记录的真实字节：Blob 取 size、字符串取 UTF-8 字节数、对象/数组逐字段累加 */
+function valueBytes(v: unknown, depth = 0): number {
+  if (v == null) return 4;
+  if (typeof v === 'string') return strBytes(v);
+  if (typeof v === 'number') return 8;
+  if (typeof v === 'boolean') return 4;
+  if (v instanceof Blob) return v.size;
+  if (v instanceof ArrayBuffer) return v.byteLength;
+  if (ArrayBuffer.isView(v)) return v.byteLength;
+  if (depth >= 5) return 0;
+  if (Array.isArray(v)) {
+    let s = 0;
+    for (const item of v) s += valueBytes(item, depth + 1);
+    return s;
   }
-  return ((h >>> 0) % 100000) / 100000;
+  if (typeof v === 'object') {
+    let s = 0;
+    for (const [k, item] of Object.entries(v as Record<string, unknown>)) {
+      s += k.length + valueBytes(item, depth + 1);
+    }
+    return s;
+  }
+  return 0;
 }
 
-function rangedGB(id: string, min: number, max: number): number {
-  return min + hash01(`size:${id}`) * (max - min);
+interface StoreStat {
+  bytes: number;
+  /** 组内最新一条数据的时间戳（无时间字段 = null） */
+  lastAt: number | null;
 }
 
-/** iOS 风容量格式：≥1 GB → x.xx GB；不足 1 GB → xxx.x MB */
-function formatSizeGB(gb: number): string {
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  const mb = gb * 1024;
-  return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
+const EMPTY_STAT: StoreStat = { bytes: 0, lastAt: null };
+
+function mergeStats(...stats: StoreStat[]): StoreStat {
+  let bytes = 0;
+  let lastAt: number | null = null;
+  for (const s of stats) {
+    bytes += s.bytes;
+    if (s.lastAt != null && (lastAt == null || s.lastAt > lastAt)) lastAt = s.lastAt;
+  }
+  return { bytes, lastAt };
 }
 
-/** 各 App 占用区间（GB）：聊天/媒体类大、工具类小，贴近真实 iPhone 分布；
- *  照片/语音备忘录/音乐在区间基础上叠加 IndexedDB 真实文件字节 */
-const APP_SIZE_RANGE: Partial<Record<AppId, [number, number]>> = {
-  wechat: [14, 24],
-  qq: [7, 13],
-  photos: [2.6, 6.2],
-  music: [1.2, 4],
-  chat: [1.5, 4],
-  browser: [0.8, 2.2],
-  memory: [0.9, 2],
-  appstore: [0.6, 1.6],
-  themes: [0.4, 1.1],
-  worldbook: [0.5, 1.2],
-  camera: [0.25, 0.8],
-  settings: [0.3, 0.8],
-  files: [0.2, 0.6],
-  phone: [0.15, 0.5],
-  notes: [0.12, 0.4],
-  clock: [0.1, 0.3],
-  weather: [0.08, 0.25],
-  calendar: [0.1, 0.3],
-  reminders: [0.08, 0.25],
-  recorder: [0.1, 0.5],
-  contacts: [0.08, 0.2],
-  calculator: [0.05, 0.15],
-};
+/** 扫描一个对象 store：累加真实字节 + 取最新时间戳 */
+async function statStore<K extends IOSStoreName>(
+  store: K,
+  tsField: 'createdAt' | 'updatedAt' = 'createdAt',
+): Promise<StoreStat> {
+  try {
+    const rows = (await localDB.getAll(store)) as unknown as Record<string, unknown>[];
+    let bytes = 0;
+    let lastAt: number | null = null;
+    for (const r of rows) {
+      bytes += valueBytes(r);
+      const ts = r[tsField];
+      if (typeof ts === 'number' && ts > (lastAt ?? 0)) lastAt = ts;
+    }
+    return { bytes, lastAt };
+  } catch {
+    return { bytes: 0, lastAt: null };
+  }
+}
 
-const BYTES_PER_GB = 1024 * 1024 * 1024;
+/** kv 键 → 所属 App 桶（键名前缀规则，与 idb-kv 迁移清单一致） */
+function kvBucketOf(key: string): 'wx' | 'qq' | 'chat' | 'memory' | 'worldbook' | 'music' | 'system' {
+  if (key.startsWith('wx')) return 'wx';
+  if (key.startsWith('qq')) return 'qq';
+  if (key.startsWith('ios-chat') || key.startsWith('sms-chat') || key.startsWith('chat-translate')) return 'chat';
+  if (key.startsWith('mem-')) return 'memory';
+  if (key.startsWith('worldbook') || key.startsWith('wb-bind')) return 'worldbook';
+  if (key.startsWith('music')) return 'music';
+  return 'system';
+}
 
-/** 「上次使用」文案：多任务里还留着的 = 今天，其余按稳定哈希落在 昨天/上周/过去一年内的日期 */
-function lastUsedLabel(id: AppId, openedRecently: boolean): string {
-  if (openedRecently) return '今天';
-  const r = hash01(`last:${id}`);
-  if (r < 0.3) return '昨天';
-  if (r < 0.48) return '上周';
-  const days = Math.floor(20 + r * 300);
-  const d = new Date(Date.now() - days * 86400000);
+type KvBuckets = Record<ReturnType<typeof kvBucketOf>, StoreStat>;
+
+/** 扫描 kv store：按键前缀分组归属（wx-*→微信、qq-*→QQ、mem-*→记忆库…） */
+async function statKv(): Promise<KvBuckets> {
+  const buckets: KvBuckets = {
+    wx: { ...EMPTY_STAT },
+    qq: { ...EMPTY_STAT },
+    chat: { ...EMPTY_STAT },
+    memory: { ...EMPTY_STAT },
+    worldbook: { ...EMPTY_STAT },
+    music: { ...EMPTY_STAT },
+    system: { ...EMPTY_STAT },
+  };
+  try {
+    const rows = await localDB.getAll('kv');
+    for (const r of rows) {
+      const b = buckets[kvBucketOf(r.key)];
+      b.bytes += valueBytes(r.value) + strBytes(r.key);
+    }
+  } catch {
+    // IndexedDB 不可用时全 0
+  }
+  return buckets;
+}
+
+/** 相对时间文案：今天 / 昨天 / N 天前 / YYYY/M/D（iOS「上次使用」同款） */
+function lastUsedFromTs(ts: number): string {
+  const now = new Date();
+  const d = new Date(ts);
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+/** iOS 风容量格式：字节 / KB / MB / GB 自适应 */
+function formatBytes(b: number): string {
+  if (!Number.isFinite(b) || b <= 0) return '0 字节';
+  if (b < 1024) return `${Math.round(b)} 字节`;
+  const kb = b / 1024;
+  if (kb < 1024) return kb >= 100 ? `${Math.round(kb)} KB` : `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+interface AppUsage {
+  id: AppId;
+  name: string;
+  stat: StoreStat;
+}
+
 function StoragePage({ onBack }: { onBack: () => void }) {
-  const dark = useSystemDark();
   const recentApps = useUI((s) => s.recentApps);
-  const [realUsage, setRealUsage] = useState<number | null>(null);
-  const [realQuota, setRealQuota] = useState<number | null>(null);
-  const [mediaBytes, setMediaBytes] = useState({ photos: 0, recordings: 0, music: 0 });
+  const [estimate, setEstimate] = useState<{ usage: number; quota: number } | null>(null);
+  const [appUsage, setAppUsage] = useState<AppUsage[] | null>(null);
+  const [systemStat, setSystemStat] = useState<StoreStat>({ ...EMPTY_STAT });
   const [sortDesc, setSortDesc] = useState(true);
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState('');
 
   const loadStats = useCallback(async () => {
     const est = await readStorageEstimate();
-    setRealUsage(est.usage);
-    setRealQuota(est.quota);
+    setEstimate(est);
     try {
-      const [photos, recordings, music] = await Promise.all([
-        localDB.getAll('photos'),
-        localDB.getAll('recordings'),
-        localDB.getAll('music'),
-      ]);
-      const sum = (rows: { blob: Blob }[]) => rows.reduce((acc, r) => acc + (r.blob?.size ?? 0), 0);
-      setMediaBytes({ photos: sum(photos), recordings: sum(recordings), music: sum(music) });
+      const [photos, albums, recordings, music, notes, events, reminders, sessions, messages, callLogs, voicemails, contacts, alarms, cities, settingsRows, kv] =
+        await Promise.all([
+          statStore('photos'),
+          statStore('albums'),
+          statStore('recordings'),
+          statStore('music'),
+          statStore('notes', 'updatedAt'),
+          statStore('events'),
+          statStore('reminders'),
+          statStore('chat-sessions'),
+          statStore('chat-messages'),
+          statStore('call-logs'),
+          statStore('voicemails'),
+          statStore('contacts'),
+          statStore('alarms'),
+          statStore('cities'),
+          statStore('settings'),
+          statKv(),
+        ]);
+      const byId: Partial<Record<AppId, StoreStat>> = {
+        photos: mergeStats(photos, albums),
+        recorder: recordings,
+        music: mergeStats(music, kv.music),
+        chat: mergeStats(sessions, messages, kv.chat),
+        phone: mergeStats(callLogs, voicemails),
+        contacts,
+        notes,
+        calendar: events,
+        reminders,
+        clock: alarms,
+        weather: cities,
+        settings: settingsRows,
+        wechat: kv.wx,
+        qq: kv.qq,
+        memory: kv.memory,
+        worldbook: kv.worldbook,
+      };
+      setAppUsage(APPS.map((a) => ({ id: a.id, name: a.name, stat: byId[a.id] ?? { ...EMPTY_STAT } })));
+      setSystemStat(kv.system);
     } catch {
-      setMediaBytes({ photos: 0, recordings: 0, music: 0 });
+      setAppUsage(APPS.map((a) => ({ id: a.id, name: a.name, stat: { ...EMPTY_STAT } })));
+      setSystemStat({ ...EMPTY_STAT });
     }
   }, []);
 
@@ -1001,110 +1099,124 @@ function StoragePage({ onBack }: { onBack: () => void }) {
     }
   };
 
-  /** App 占用列表（GB）：哈希基准值 + 媒体类叠加真实文件字节 */
-  const appRows = useMemo(() => {
-    const real = {
-      photos: mediaBytes.photos / BYTES_PER_GB,
-      recorder: mediaBytes.recordings / BYTES_PER_GB,
-      music: mediaBytes.music / BYTES_PER_GB,
-    };
-    return APPS.map((a) => {
-      const [min, max] = APP_SIZE_RANGE[a.id] ?? [0.1, 0.5];
-      let gb = rangedGB(a.id, min, max);
-      if (a.id === 'photos') gb += real.photos;
-      if (a.id === 'recorder') gb += real.recorder;
-      if (a.id === 'music') gb += real.music;
-      return { id: a.id, name: a.name, gb, last: lastUsedLabel(a.id, recentApps.includes(a.id)) };
-    });
-  }, [mediaBytes, recentApps]);
+  const appsTotal = (appUsage ?? []).reduce((acc, r) => acc + r.stat.bytes, 0);
+  const photosBytes = appUsage?.find((r) => r.id === 'photos')?.stat.bytes ?? 0;
+  const appsBytes = appsTotal - photosBytes;
+  /** 系统数据 = 浏览器总用量 − 已归属 App 的部分（杂项 kv / 缓存等真实余量）；
+   *  estimate 不可用时退回 kv 未归属桶 */
+  const systemBytes =
+    estimate && estimate.usage > 0 ? Math.max(0, estimate.usage - appsTotal) : Math.max(systemStat.bytes, 0);
+  const usedBytes = estimate && estimate.usage > 0 ? estimate.usage : appsTotal + systemBytes;
+  const quotaBytes = estimate?.quota ?? 0;
+  const freeBytes = quotaBytes > 0 ? Math.max(0, quotaBytes - usedBytes) : 0;
+  const segPct = (b: number) => `${((b / Math.max(usedBytes, 1)) * 100).toFixed(3)}%`;
 
-  /** 顶部分类堆叠条：应用程序（照片外的全部 App）/ 照片 / iOS / 系统数据，剩余为可用空间 */
-  const CAPACITY_GB = 256;
-  const photosLibGB = appRows.find((r) => r.id === 'photos')?.gb ?? 0;
-  const appsGB = appRows.reduce((acc, r) => (r.id === 'photos' ? acc : acc + r.gb), 0);
-  const iosGB = rangedGB('ios-system', 10.8, 13.6);
-  const systemGB = rangedGB('system-data', 4.2, 8.6);
-  const usedGB = appsGB + photosLibGB + iosGB + systemGB;
-  const freeGB = Math.max(0, CAPACITY_GB - usedGB);
-  const pct = (gb: number) => `${((gb / CAPACITY_GB) * 100).toFixed(3)}%`;
+  const sortedRows = useMemo(() => {
+    const rows = [...(appUsage ?? [])];
+    rows.sort((a, b) => (sortDesc ? b.stat.bytes - a.stat.bytes : a.stat.bytes - b.stat.bytes));
+    return rows;
+  }, [appUsage, sortDesc]);
 
-  const systemDataColor = dark ? '#5A5A5F' : '#D1D1D6';
-  const sortedRows = useMemo(
-    () => [...appRows].sort((a, b) => (sortDesc ? b.gb - a.gb : a.gb - b.gb)),
-    [appRows, sortDesc],
-  );
+  /** 「上次使用」：多任务里还留着的 = 今天；有数据取真实最新时间；只有无时间戳的存量数据 = 早前；否则从未使用 */
+  const lastUsedText = (id: AppId, stat: StoreStat): string => {
+    if (recentApps.includes(id)) return '今天';
+    if (stat.lastAt != null) return lastUsedFromTs(stat.lastAt);
+    if (stat.bytes > 0) return '早前';
+    return '从未使用';
+  };
 
   return (
     <DetailShell title="储存空间" onBack={onBack} gray>
       <GroupCard>
         <div className="p-4">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-[17px] font-semibold">iPhone</span>
-            <span className="text-right text-[15px] tabular-nums text-muted-foreground">
-              已使用 {usedGB.toFixed(2)} GB/{CAPACITY_GB} GB
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/60 px-3 py-1.5 text-[14px] font-semibold ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.12]">
+              <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
+              iPhone
+            </span>
+            <span className="max-w-[62%] truncate rounded-full bg-white/60 px-3 py-1.5 text-[12.5px] tabular-nums text-muted-foreground ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.12]">
+              {estimate === null
+                ? '统计中…'
+                : quotaBytes > 0
+                  ? `已使用 ${formatBytes(usedBytes)} / ${formatBytes(quotaBytes)}`
+                  : `已使用 ${formatBytes(usedBytes)}`}
             </span>
           </div>
-          <div className="mt-3 flex h-[22px] gap-[3px] overflow-hidden rounded-[5px] bg-white ring-1 ring-black/[0.08] dark:bg-white/[0.06] dark:ring-white/[0.12]">
-            <div className="h-full" style={{ width: pct(appsGB), background: CAT_APPS_COLOR }} />
-            <div className="h-full" style={{ width: pct(photosLibGB), background: CAT_PHOTOS_COLOR }} />
-            <div className="h-full" style={{ width: pct(iosGB), background: CAT_IOS_COLOR }} />
-            <div className="h-full" style={{ width: pct(systemGB), background: systemDataColor }} />
-            <div className="flex h-full min-w-0 flex-1 items-center justify-end pr-2 text-[13px] tabular-nums text-foreground/70">
-              {freeGB.toFixed(2)} GB
-            </div>
+
+          <div className="mt-3.5 flex h-[18px] gap-[3px] overflow-hidden rounded-full bg-white/50 ring-1 ring-black/[0.05] dark:bg-white/[0.06] dark:ring-white/[0.1]">
+            <div className="h-full" style={{ width: segPct(appsBytes), background: CAT_APPS_COLOR }} />
+            <div className="h-full" style={{ width: segPct(photosBytes), background: CAT_PHOTOS_COLOR }} />
+            <div className="h-full bg-[#C7C7CC] dark:bg-[#636366]" style={{ width: segPct(systemBytes) }} />
+            {quotaBytes > 0 && (
+              <div className="flex h-full min-w-0 flex-1 items-center justify-end pr-3 text-[11px] tabular-nums text-muted-foreground">
+                可用 {formatBytes(freeBytes)}
+              </div>
+            )}
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px]">
-            <LegendDot color={CAT_APPS_COLOR} label="应用程序" />
-            <LegendDot color={CAT_PHOTOS_COLOR} label="照片" />
-            <LegendDot color={CAT_IOS_COLOR} label="iOS" />
-            <LegendDot color={systemDataColor} label="系统数据" />
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <LegendChip color={CAT_APPS_COLOR} label="应用程序" />
+            <LegendChip color={CAT_PHOTOS_COLOR} label="照片" />
+            <LegendChip color="#C7C7CC" label="系统数据" />
           </div>
         </div>
       </GroupCard>
 
-      <div className="mt-5 flex items-center justify-end">
+      <div className="mt-4 flex items-center justify-end">
         <button
           type="button"
           onClick={() => setSortDesc((v) => !v)}
-          className="flex items-center gap-1 px-1 text-[15px] transition-opacity active:opacity-50"
+          className="inline-flex items-center gap-1 rounded-full bg-white/60 px-3.5 py-1.5 text-[13px] ring-1 ring-white/70 backdrop-blur-xl transition-all active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.12]"
           style={{ color: TONE_BLUE }}
         >
           大小
-          <ChevronsUpDown className={`h-4 w-4 transition-transform ${sortDesc ? '' : 'rotate-180'}`} />
+          <ChevronsUpDown
+            className={`h-3.5 w-3.5 transition-transform ${sortDesc ? '' : 'rotate-180'}`}
+            aria-hidden="true"
+          />
         </button>
       </div>
 
-      <div className="mt-2">
+      <div className="mt-2.5">
         <GroupCard>
-          {sortedRows.map((r) => (
-            <div key={r.id} className="flex h-[62px] items-center gap-3 px-4">
-              <div className="relative h-[46px] w-[46px] shrink-0 overflow-hidden rounded-[11px]">
-                <AppIconTile id={r.id} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[16px] leading-tight">{r.name}</div>
-                <div className="mt-0.5 truncate text-[13px] text-muted-foreground">上次使用：{r.last}</div>
-              </div>
-              <span className="shrink-0 text-[15px] tabular-nums text-muted-foreground">{formatSizeGB(r.gb)}</span>
-              <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
+          {appUsage === null ? (
+            <div className="flex h-[64px] items-center justify-center gap-2 text-[14px] text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              正在统计各 App 真实占用…
             </div>
-          ))}
+          ) : (
+            sortedRows.map((r) => (
+              <div key={r.id} className="flex h-[64px] items-center gap-3 px-4">
+                <div className="relative h-[46px] w-[46px] shrink-0 overflow-hidden rounded-[12px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] ring-1 ring-black/[0.06] dark:ring-white/[0.1]">
+                  <AppIconTile id={r.id} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[15.5px] leading-tight">{r.name}</div>
+                  <div className="mt-0.5 truncate text-[12px] text-muted-foreground">
+                    上次使用：{lastUsedText(r.id, r.stat)}
+                  </div>
+                </div>
+                <span className="shrink-0 text-[14.5px] font-medium tabular-nums text-foreground/80">
+                  {formatBytes(r.stat.bytes)}
+                </span>
+                <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" aria-hidden="true" />
+              </div>
+            ))
+          )}
         </GroupCard>
       </div>
 
-      <div className="mt-6">
-        <GroupCard>
-          <button
-            type="button"
-            onClick={() => void handleClean()}
-            disabled={cleaning}
-            className="flex h-[46px] w-full items-center justify-center gap-2 px-4 text-[16px] transition-colors active:bg-muted/50 disabled:opacity-50"
-            style={{ color: IOS_RED }}
-          >
-            {cleaning && <Loader2 className="h-4 w-4 animate-spin" />}
-            清理媒体缓存
-          </button>
-        </GroupCard>
+      <div className="mt-4">
+        <button
+          type="button"
+          onClick={() => void handleClean()}
+          disabled={cleaning}
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-white/60 text-[15px] font-medium ring-1 ring-white/70 backdrop-blur-xl transition-all active:scale-[0.98] disabled:opacity-50 dark:bg-white/[0.08] dark:ring-white/[0.12]"
+          style={{ color: IOS_RED }}
+        >
+          {cleaning && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+          清理媒体缓存
+        </button>
       </div>
 
       {cleanMsg && (
@@ -1118,13 +1230,7 @@ function StoragePage({ onBack }: { onBack: () => void }) {
         </p>
       )}
       <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
-        清理将删除全部照片、录音与音乐文件，备忘录和日程不受影响。
-        {realUsage !== null && realQuota !== null && (
-          <>
-            <br />
-            浏览器实际占用 {formatMB(realUsage)} / 配额约 {formatMB(realQuota)}；App 占用为模拟数值，照片、语音备忘录与音乐行已叠加真实文件大小。
-          </>
-        )}
+        以上为各 App 在本机的真实数据占用（IndexedDB 实测）。清理将删除全部照片、录音与音乐文件，备忘录和日程不受影响。
       </p>
     </DetailShell>
   );
