@@ -50,6 +50,7 @@ import {
 } from './DialogCard';
 import { NeteaseCardWidget } from './NeteaseCard';
 import { VinylCardWidget } from './VinylCard';
+import { MusicWidget } from './MusicWidget';
 import { WidgetGalleryContent, GALLERY_KINDS, ClockGridWidget, type GalleryKind } from './WidgetGallery';
 import { CalendarCardWidget } from './CalendarCard';
 import { ICityCardWidget, ICityCardEditor, loadICityCard, type ICityCardData, DEFAULT_ICITY_CARD, ICITY_CARD_KEY } from './ICityCard';
@@ -98,7 +99,7 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  *
  * 编辑模式（长按任意图标/小组件或长按空白处进入）：
  * - 全部图标/小组件抖动，左上角出现深色「删除」× 角标；
- * - 左上角「+」→ 小组件画廊浮层（全部 13 种小组件 1:1 预览，点 + 添加回主屏，
+ * - 左上角「+」→ 小组件画廊浮层（全部 14 种小组件 1:1 预览，点 + 添加回主屏，
  *   × 删除过的项从 hidden 找回；与主题 App「小组件」界面同一套画廊）
  *   + 右上角「恢复默认」与白色「完成」胶囊按钮；
  * - 编辑中点按空白处直接退出编辑（用户要求）；
@@ -113,12 +114,12 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - × 删除的项记入 hidden 持久化（刷新不复活），「恢复默认」可找回。
  */
 
-/** 桌面小组件种类：时钟（大数字卡）/ 天气 / 信息卡片（个人名片）/ 气泡（双头像+各自头顶气泡）/ 日记（日记卡）/ 一起听（双人气泡+迷你播放器）/ 网易云（黑胶播放器卡）/ 对话气泡（双头像+交错双气泡）/ 黑胶（大唱片+唱针）/ 日历（月历横版）/ iCity（名字+日期+头像胶囊）/ 表盘时钟（刻度表圈）/ 拍立得（三张胶片照） */
-export type WidgetKind = 'weather' | 'clock' | 'profile' | 'bubble' | 'diary' | 'listen' | 'netease' | 'dialog' | 'vinyl' | 'calendar' | 'icity' | 'tickclock' | 'polaroid';
+/** 桌面小组件种类：时钟（大数字卡）/ 天气 / 信息卡片（个人名片）/ 气泡（双头像+各自头顶气泡）/ 日记（日记卡）/ 一起听（双人气泡+迷你播放器）/ 音乐（封面+进度+控制键，真实播放状态）/ 网易云（黑胶播放器卡）/ 对话气泡（双头像+交错双气泡）/ 黑胶（大唱片+唱针）/ 日历（月历横版）/ iCity（名字+日期+头像胶囊）/ 表盘时钟（刻度表圈）/ 拍立得（三张胶片照） */
+export type WidgetKind = 'weather' | 'clock' | 'profile' | 'bubble' | 'diary' | 'listen' | 'music' | 'netease' | 'dialog' | 'vinyl' | 'calendar' | 'icity' | 'tickclock' | 'polaroid';
 type Tile = { kind: 'widget'; widget: WidgetKind } | { kind: 'app'; id: AppId } | { kind: 'empty' };
 type Zone = 'grid' | 'dock';
 
-const WIDGET_KINDS: WidgetKind[] = ['weather', 'clock', 'profile', 'bubble', 'diary', 'listen', 'netease', 'dialog', 'vinyl', 'calendar', 'icity', 'tickclock', 'polaroid'];
+const WIDGET_KINDS: WidgetKind[] = ['weather', 'clock', 'profile', 'bubble', 'diary', 'listen', 'music', 'netease', 'dialog', 'vinyl', 'calendar', 'icity', 'tickclock', 'polaroid'];
 /** 小组件元信息：× 删除角标文案 + 点击行为（openApp=null 的点击开对应编辑器） */
 const WIDGET_META: Record<WidgetKind, { label: string; openApp: AppId | null }> = {
   weather: { label: '天气小组件', openApp: 'weather' },
@@ -127,6 +128,7 @@ const WIDGET_META: Record<WidgetKind, { label: string; openApp: AppId | null }> 
   bubble: { label: '气泡小组件', openApp: null },
   diary: { label: '日记小组件', openApp: null },
   listen: { label: '一起听小组件', openApp: null },
+  music: { label: '音乐小组件', openApp: 'music' },
   netease: { label: '网易云小组件', openApp: 'music' },
   dialog: { label: '对话气泡小组件', openApp: null },
   vinyl: { label: '黑胶小组件', openApp: 'music' },
@@ -144,6 +146,7 @@ const WIDGET_SPAN: Record<WidgetKind, string> = {
   bubble: 'col-span-2 row-span-2 self-center',
   diary: 'col-span-4 row-span-2',
   listen: 'col-span-2 row-span-3',
+  music: 'col-span-4 row-span-2',
   netease: 'col-span-2 row-span-3',
   dialog: 'col-span-4 row-span-2',
   vinyl: 'col-span-2 row-span-3',
@@ -161,6 +164,7 @@ const WIDGET_SPAN_SIZE: Record<WidgetKind, { c: number; r: number }> = {
   bubble: { c: 2, r: 2 },
   diary: { c: 4, r: 2 },
   listen: { c: 2, r: 3 },
+  music: { c: 4, r: 2 },
   netease: { c: 2, r: 3 },
   dialog: { c: 4, r: 2 },
   vinyl: { c: 2, r: 3 },
@@ -272,11 +276,12 @@ const DOTS_LINGER_MS = 1100;
 /** 页网格行间距（gap-y-[16px]，与渲染处保持一致；行距拟合用） */
 const GRID_GAP_Y = 16;
 
-/** 当前布局版本：v9 = widgets-7 的四个新小组件（iCity/日历/表盘时钟/拍立得）改为默认收起不上屏
+/** 当前布局版本：v10 = 音乐小组件（封面+进度+控制键，真实播放状态）默认上屏第 3 页顶部
+ *  （网易云小组件上方，与音乐 App 同页聚落）——存量旧版本布局直接重置为新默认（保留 hidden 删除记录）；
+ *  v9 = widgets-7 的四个新小组件（iCity/日历/表盘时钟/拍立得）改为默认收起不上屏
  *  （用户要求：新添加的小组件不显示；需要时从「+」画廊或主题 App「小组件」界面一键找回）；
- *  世界书 App 纳入第 3 页默认排布——存量旧版本布局直接重置为新默认（保留 hidden 删除记录）；
- *  日记/一起听/对话气泡/黑胶/iCity/日历/表盘时钟/拍立得均默认收起 */
-const LAYOUT_VERSION = 9;
+ *  世界书 App 纳入第 3 页默认排布；日记/一起听/对话气泡/黑胶/iCity/日历/表盘时钟/拍立得均默认收起 */
+const LAYOUT_VERSION = 10;
 /** 第 1 页 App（用户指定顺序；时钟/天气小组件在其上方；App Store 已移至第 3 页——仍是已移除 App 的唯一恢复入口） */
 const PAGE1_APP_IDS: AppId[] = ['weather', 'themes', 'browser', 'notes', 'camera', 'photos', 'files', 'calculator'];
 /** 第 2 页 App（用户指定顺序；信息卡片/气泡小组件在其上方；音乐/微信移至第 3 页） */
@@ -303,7 +308,11 @@ function defaultLayout(): HomeLayout {
         { kind: 'widget', widget: 'bubble' },
         ...PAGE2_APP_IDS.map((id) => ({ kind: 'app' as const, id })),
       ],
-      [{ kind: 'widget', widget: 'netease' }, ...PAGE3_APP_IDS.map((id) => ({ kind: 'app' as const, id }))],
+      [
+        { kind: 'widget', widget: 'music' },
+        { kind: 'widget', widget: 'netease' },
+        ...PAGE3_APP_IDS.map((id) => ({ kind: 'app' as const, id })),
+      ],
     ],
     dock: DOCK_APPS.map((a) => a.id),
     hidden: DEFAULT_HIDDEN_WIDGETS.map(widgetKey),
@@ -383,6 +392,7 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     bubble: hidden.has(widgetKey('bubble')),
     diary: hidden.has(widgetKey('diary')),
     listen: hidden.has(widgetKey('listen')),
+    music: hidden.has(widgetKey('music')),
     netease: hidden.has(widgetKey('netease')),
     dialog: hidden.has(widgetKey('dialog')),
     vinyl: hidden.has(widgetKey('vinyl')),
@@ -1847,12 +1857,14 @@ export default function HomeScreen() {
             <DiaryCardWidget data={diaryCard} />
           ) : tile.widget === 'listen' ? (
             <ListenCardWidget data={listenCard} />
+          ) : tile.widget === 'music' ? (
+            <MusicWidget />
           ) : tile.widget === 'netease' ? (
             <NeteaseCardWidget />
           ) : tile.widget === 'dialog' ? (
             <DialogCardWidget data={dialogCard} />
           ) : tile.widget === 'vinyl' ? (
-            <VinylCardWidget />
+            <VinylCardWidget light={wallpaperLight} />
           ) : tile.widget === 'calendar' ? (
             <CalendarCardWidget />
           ) : tile.widget === 'icity' ? (

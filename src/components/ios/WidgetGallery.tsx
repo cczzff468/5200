@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * 小组件画廊（主屏全部 13 种小组件 1:1 预览，点击右上角 + 添加到主屏幕）：
- * - 编辑模式顶栏「+」：主屏内弹出画廊浮层（时钟/天气/信息卡片/气泡/日记/一起听/
+ * 小组件画廊（主屏全部 14 种小组件 1:1 预览，点击右上角 + 添加到主屏幕）：
+ * - 编辑模式顶栏「+」：主屏内弹出画廊浮层（时钟/天气/信息卡片/气泡/日记/一起听/音乐/
  *   网易云/对话气泡/黑胶/日历/iCity/表盘时钟/拍立得，全部平铺不分组——用户要求不显示「第几页」），
  *   已添加的显示「已添加」角标不可重复添加；
  *   × 删除过的小组件从 hidden 找回（与「恢复默认」同一数据链路）；
@@ -25,6 +25,7 @@ import { ListenCardWidget, loadListenCard, type ListenCardData } from './ListenC
 import { DialogCardWidget, loadDialogCard, type DialogCardData } from './DialogCard';
 import { NeteaseCardWidget } from './NeteaseCard';
 import { VinylCardWidget } from './VinylCard';
+import { MusicWidget } from './MusicWidget';
 import { ProfileCardWidget, loadProfileCard, type ProfileCardData } from './ProfileCard';
 import { BubbleCardWidget, loadBubbleCard, type BubbleCardData } from './BubbleCard';
 import { ICityCardWidget, loadICityCard, type ICityCardData } from './ICityCard';
@@ -38,7 +39,7 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
   ),
 });
 
-/** 画廊内可添加的小组件种类（主屏全部 13 种，与 HomeScreen 的 WidgetKind 一一对应） */
+/** 画廊内可添加的小组件种类（主屏全部 14 种，与 HomeScreen 的 WidgetKind 一一对应） */
 export type GalleryKind =
   | 'weather'
   | 'clock'
@@ -46,6 +47,7 @@ export type GalleryKind =
   | 'bubble'
   | 'diary'
   | 'listen'
+  | 'music'
   | 'netease'
   | 'dialog'
   | 'vinyl'
@@ -60,6 +62,7 @@ export const GALLERY_KINDS: GalleryKind[] = [
   'bubble',
   'diary',
   'listen',
+  'music',
   'netease',
   'dialog',
   'vinyl',
@@ -77,6 +80,7 @@ const GALLERY_ITEMS: { kind: GalleryKind; span: string; label: string }[] = [
   { kind: 'bubble', span: 'col-span-2 row-span-2 self-center', label: '气泡' },
   { kind: 'diary', span: 'col-span-4 row-span-2', label: '日记' },
   { kind: 'listen', span: 'col-span-2 row-span-3', label: '一起听' },
+  { kind: 'music', span: 'col-span-4 row-span-2', label: '音乐' },
   { kind: 'netease', span: 'col-span-2 row-span-3', label: '网易云' },
   { kind: 'dialog', span: 'col-span-4 row-span-2', label: '对话气泡' },
   { kind: 'vinyl', span: 'col-span-2 row-span-3', label: '黑胶' },
@@ -255,7 +259,7 @@ function GalleryCell({
   );
 }
 
-/** 画廊内容（编辑模式浮层与主题页共用）：全部 13 种小组件平铺 1:1 排布（不分组），点击添加 */
+/** 画廊内容（编辑模式浮层与主题页共用）：全部 14 种小组件平铺 1:1 排布（不分组），点击添加 */
 export function WidgetGalleryContent({
   profileData,
   bubbleData,
@@ -291,6 +295,8 @@ export function WidgetGalleryContent({
         return <DiaryCardWidget data={diaryData} />;
       case 'listen':
         return <ListenCardWidget data={listenData} />;
+      case 'music':
+        return <MusicWidget />;
       case 'netease':
         return <NeteaseCardWidget />;
       case 'dialog':
