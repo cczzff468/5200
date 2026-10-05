@@ -15960,3 +15960,20 @@ Stage Summary:
 - 提交待推送：文件夹交互全面对齐用户要求——重叠一半立即出文件夹预览（纯视觉不挪格）、松手才合并、面板长按可整理、防手抖误操作、清洞行为保持
 - 关键产物：src/components/ios/HomeScreen.tsx（mergeScan/showMergePreview/applyMerge 重写 + FolderPanel localEdit + endDrag 稳健化）
 - 教训：几何重叠计算必须钳负值；悬停合并必须暂停挤位否则目标被推走永远追不上；Turbopack worker 崩溃会造成诡异的新旧代码混杂，先重启再排查
+
+---
+Task ID: setup-1
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取仓库代码到工作目录并恢复运行环境
+
+Work Log:
+- 使用用户提供的 PAT 克隆 https://github.com/cczzff468/5200.git 到 /home/z/repo-5200（main 分支，HEAD=b697ef5 文件夹交互打磨）
+- rsync 同步全部代码到 /home/z/my-project（排除 node_modules/.next），迁移 .git 保留完整历史与 origin remote
+- bun install 补装 idb/jsmediatags/remark-gfm/web-push 等增量依赖
+- 重启主服务（:3000）与 mini-services/netease-api（:3010，node --watch）
+- agent-browser 验证：锁屏渲染正常 → 上滑解锁成功 → 桌面全部 App 图标可见 → 打开信息 App 正常，console 无错误
+- 网关连通性验证：/search?XTransformPort=3010 返回网易云搜索结果正常
+
+Stage Summary:
+- 仓库代码已在 /home/z/my-project 完整恢复并可运行，git 历史与 remote 就绪（后续可直接 commit+push 回 GitHub）
+- 待用户提出具体修改/新增功能需求后继续开发
