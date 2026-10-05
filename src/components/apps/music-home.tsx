@@ -3,13 +3,14 @@
 /**
  * 音乐 App 首页：每日推荐大卡、排行榜横滑、推荐歌单网格、新歌速递。
  * 未登录（游客）：推荐歌单/排行榜/新歌仍可用（公开接口），每日推荐引导登录。
+ * 第三十五轮：下拉刷新（顶部下拉，原「上滑刷新」搞错了）——刷新时全部区块重拉并轮换内容。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CalendarDays,
   ChevronRight,
-  ChevronsUp,
+  ChevronsDown,
   Heart,
   Loader2,
   Menu,
@@ -32,6 +33,16 @@ import { useMusic, getGuestProfile, getGuestAvatar, exitGuestMode } from '@/lib/
 import { useUI } from '@/lib/ios/store';
 import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
 
+/** 洗牌（Fisher–Yates）——下拉刷新时让各区块内容轮换，看起来真的「更新」了 */
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
@@ -53,21 +64,24 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   // 上滑刷新（第十六轮反馈）：nonce 变化强制重拉相似歌
   const [simiNonce, setSimiNonce] = useState(0);
 
-  // 首页各区块数据加载拆成可重复调用的函数（上滑刷新时全部重拉）
+  // 首页各区块数据加载拆成可重复调用的函数（下拉刷新时全部重拉并轮换）
   const loadStatic = useCallback(async () => {
     try {
-      setRecPlaylists(await personalizedPlaylists(9));
+      // 多拉一些再洗牌截取，每次刷新内容真的换一批
+      const all = await personalizedPlaylists(30);
+      setRecPlaylists(shuffle(all).slice(0, 9));
     } catch {
       setRecPlaylists([]);
     }
     try {
       const t = await toplist();
-      setTops(t.slice(0, 6));
+      setTops(shuffle(t).slice(0, 6));
     } catch {
       setTops([]);
     }
     try {
-      setNewSongs(await personalizedNewSongs(6));
+      const ns = await personalizedNewSongs(30);
+      setNewSongs(shuffle(ns).slice(0, 6));
     } catch {
       setNewSongs([]);
     }
@@ -97,6 +111,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   // 根据红心歌推荐：红心变化时以「最近红心的一首」为种子拉相似歌（去掉已红心的）
   // simi/song 需登录（游客返回空）→ 游客兜底用种子歌手的热门歌曲（去掉种子自身）
   // 无红心时不在 effect 里 setState（渲染层直接隐藏区块）
+  // 第三十五轮：多拉一些（20）再洗牌取 6，下拉刷新时内容也跟着换
   const likedSongs = useMusic((s) => s.likedSongs);
   useEffect(() => {
     const ids = [...likedIds];
@@ -107,17 +122,17 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     let on = true;
     void (async () => {
       try {
-        let list = await simiSong(seed, 8);
+        let list = await simiSong(seed, 20);
         if (!list.length) {
           const seedSong = likedSongs[seed];
           const artistId = seedSong?.artists?.[0]?.id;
           if (artistId) {
-            const r = await artistSongs(artistId, 12);
+            const r = await artistSongs(artistId, 30);
             list = r.songs.filter((x) => x.id !== seed);
           }
         }
         if (on && simiSeedRef.current === seed) {
-          setSimiSongs(list.filter((s) => !likedIds.has(s.id)).slice(0, 6));
+          setSimiSongs(shuffle(list.filter((s) => !likedIds.has(s.id))).slice(0, 6));
         }
       } catch {
         // 拉取失败保持现状（区块不展示）
@@ -128,31 +143,31 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
     };
   }, [likedIds, likedSongs, simiNonce]);
 
-  // ---------------- 上滑刷新（第十六轮反馈：滑到底部继续上滑 → 重拉首页全部内容） ----------------
+  // ---------------- 下拉刷新（第三十五轮反馈：原「上滑刷新」搞错了，改为顶部下拉 → 重拉首页全部内容） ----------------
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  /** idle=未在拉取 pulling=上滑中 ready=超过阈值可松手 loading=刷新中 done=刚完成 */
+  /** idle=未在拉取 pulling=下拉中 ready=超过阈值可松手 loading=刷新中 done=刚完成 */
   const [pullState, setPullState] = useState<'idle' | 'pulling' | 'ready' | 'loading' | 'done'>('idle');
   const [pullDist, setPullDist] = useState(0);
-  const gestureRef = useRef<{ startY: number; fromBottom: boolean } | null>(null);
+  const gestureRef = useRef<{ startY: number; fromTop: boolean } | null>(null);
   const PULL_THRESHOLD = 64;
 
-  const atBottomNow = () => {
+  const atTopNow = () => {
     const el = scrollRef.current;
     if (!el) return false;
-    return el.scrollTop + el.clientHeight >= el.scrollHeight - 6;
+    return el.scrollTop <= 0;
   };
 
   const beginPull = (y: number) => {
-    if (pullState === 'loading') return;
-    gestureRef.current = { startY: y, fromBottom: atBottomNow() };
+    if (pullState === 'loading' || pullState === 'done') return;
+    gestureRef.current = { startY: y, fromTop: atTopNow() };
   };
 
   const movePull = (y: number) => {
     const g = gestureRef.current;
     if (!g || pullState === 'loading' || pullState === 'done') return;
-    if (!g.fromBottom) return;
-    const dist = g.startY - y; // 手指向上为正
+    if (!g.fromTop) return;
+    const dist = y - g.startY; // 手指向下为正
     if (dist <= 0) {
       setPullDist(0);
       setPullState('idle');
@@ -165,13 +180,13 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
   const endPull = () => {
     const g = gestureRef.current;
     gestureRef.current = null;
-    if (!g || !g.fromBottom) return;
+    if (!g || !g.fromTop) return;
     if (pullState !== 'ready') {
       setPullDist(0);
       setPullState('idle');
       return;
     }
-    // 触发刷新：首页所有区块（推荐歌单/排行榜/新歌/每日推荐/相似推荐）全部重拉
+    // 触发刷新：首页所有区块（排行榜/推荐歌单/根据你喜爱的歌曲推荐/新歌速递/每日推荐）全部重拉并轮换
     setPullState('loading');
     setPullDist(44);
     simiSeedRef.current = null;
@@ -185,7 +200,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
 
   const today = new Date();
 
-  /** 上滑刷新指示区文案 */
+  /** 下拉刷新指示区文案 */
   const pullHintText =
     pullState === 'ready'
       ? '松开立即刷新'
@@ -193,7 +208,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         ? '刷新中…'
         : pullState === 'done'
           ? '已更新 ✓'
-          : '上滑刷新';
+          : '下拉刷新';
 
   return (
     <div
@@ -217,6 +232,29 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         if (e.pointerType === 'mouse') endPull();
       }}
     >
+      {/* 下拉刷新指示区（第三十五轮：在顶部下拉触发，随下拉距离展开，松手刷新/刷新中/已更新）
+          放在滚动流最顶部：下拉时把整页内容（含 sticky 顶栏）往下推，仿原生拉刷新 */}
+      <div
+        className="flex items-end justify-center gap-1.5 overflow-hidden text-[11px] text-zinc-400 transition-[height] duration-150"
+        style={{
+          height:
+            pullState === 'loading' || pullState === 'done'
+              ? 36
+              : pullDist > 0
+                ? Math.min(pullDist * 0.5, 56)
+                : 0,
+        }}
+        data-testid="music-home-pull-hint"
+        aria-live="polite"
+      >
+        {pullState === 'loading' ? (
+          <Loader2 className="mb-2 h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ChevronsDown className={`mb-2 h-3.5 w-3.5 ${pullState === 'ready' ? 'text-[#C20C0C]' : ''}`} />
+        )}
+        <span className={`mb-2 ${pullState === 'ready' ? 'font-medium text-[#C20C0C]' : ''}`}>{pullHintText}</span>
+      </div>
+
       {/* 顶栏：设置 + 标题 + 右上角头像（游客/登录都可点） */}
       <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
         <button
@@ -482,28 +520,6 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           ))}
         </div>
       )}
-
-      {/* 上滑刷新指示区（第十六轮反馈）：随上滑距离展开，松手刷新/刷新中/已更新 */}
-      <div
-        className="flex items-center justify-center gap-1.5 overflow-hidden text-[11px] text-zinc-400 transition-[height] duration-150"
-        style={{
-          height:
-            pullState === 'loading' || pullState === 'done'
-              ? 36
-              : pullDist > 0
-                ? Math.min(pullDist * 0.5, 56)
-                : 0,
-        }}
-        data-testid="music-home-pull-hint"
-        aria-live="polite"
-      >
-        {pullState === 'loading' ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <ChevronsUp className={`h-3.5 w-3.5 ${pullState === 'ready' ? 'text-[#C20C0C]' : ''}`} />
-        )}
-        <span className={pullState === 'ready' ? 'font-medium text-[#C20C0C]' : ''}>{pullHintText}</span>
-      </div>
     </div>
   );
 }

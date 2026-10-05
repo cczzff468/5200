@@ -15545,3 +15545,24 @@ Stage Summary:
 - 关键决策：①播放键显隐与胶囊高亮解耦——按钮按「是否播放行（activeIdx）」渲染、按「胶囊是否亮（capsuleOn）」显示，浏览态与回跳态行为一致；②版式三选保持既有点击切歌词/一起听头部/底部控制完全复用，仅中间主视图切换，coverFull 放大画幅（300px）与唱片类（256px）区分层次；③版式持久化沿用 playerBg 的按账号 kv 模式（默认值不落盘防脏数据）；④吸顶位取 54px=状态栏高度（与头部 pt-58 同区避让灵动岛）
 - 范围限定遵守：改 3 文件（music-player.tsx / music-comments.tsx / music-store.ts）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动（仅时长 margin）；评论数据接口/排序/翻页逻辑未动；播放器背景上传功能保留（与版式正交组合）
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx、src/lib/ios/music-store.ts
+
+---
+Task ID: 94
+Agent: Z.ai Code（主会话）
+Task: 第三十五轮——①歌词行播放键：浏览未播行显示三角播放键（点击播这一句）②播放器底部控制按钮按参考截图美化（圆环循环箭头/圆角双条暂停/大圆角三角播放/三角+线队列）③修复「AI 一直在发信息」（暂停期反复重排定时器+提示词引导点评歌曲）④音乐首页改下拉刷新（原上滑刷新搞错了）⑤刷新全部区块并轮换内容（排行榜/推荐歌单/根据喜爱推荐/新歌速递）⑥底部迷你播放条内容缩小一号
+
+Work Log:
+- ①行播放键（music-player.tsx LyricView）：渲染条件从「仅播放行（isActive && i===activeIdx）」改为每行都渲染——正在播的行=暂停双条键、其余行（没播到/已播过）=三角播放键（lucide Play）；点击语义统一为「播这一句」：该行时间段在播→暂停/继续，不在播→seek(l.t-0.2)+未播放则恢复播放；胶囊亮起（手动浏览）时可见可点（stopPropagation 防误触返回唱片）；testid 区分 music-lyric-play-toggle（播放行）/music-lyric-row-play（其余行）；E2E：暂停态 42 行全显三角、活动行点击恢复播放显示暂停条、点+8 行三角键→活动行 1:04「我怎么看不见」跳到 1:49「等到放晴的那天」且继续播放、胶囊按进度跳变语义熄灭✓
+- ②底部控制键（music-player.tsx）：新增 4 个自绘 SVG——LoopArrowIcon（圆环弧 M18.13 6.86 A8 8 0 1 1 14.07 4.27 + 实心箭头 polygon，one=true 圆心带「1」=单曲循环）/PauseBarsIcon（两条 rx2.7 圆角竖条）/PlayTriIcon（strokeWidth 2.6 strokeLinejoin round 描边圆角三角）/QueueListIcon（实心三角+三横线）；控制区替换：循环/单曲循环用圆环箭头（repeat 红）、上一首/下一首 SkipBack/SkipForward 加大 h-8+strokeLinejoin round、中央 62px 键删圆形描边改裸图标（h-38px 暂停条/三角）、队列键改 QueueListIcon；删未用 import Repeat/Repeat1；E2E 截图暂停（双圆角条）/播放（大圆角三角）两态均对齐用户参考截图✓
+- ③AI 一直发信息修复（music-ai.ts，根因两个）：a) bindPauseNudge 原实现暂停期间任何 store 变更都重排 3 分钟定时器（40% 概率）→暂停越久消息越多——新增 nudgedThisPause 标记：每段连续暂停至多尝试一次，恢复播放才重置；b) aiSayOnce 原提示词「可以是此刻这首歌的感受、一句联想」→ 每条都是歌曲评价——重写为人设/性格/心情/关系/共同记忆/最近聊天驱动，userBase 明确「不要点评/评价/感想正在听的歌、不要以『这首歌』开头」；另加全局主动消息冷却 PROACTIVE_COOLDOWN_MS=15min（lastProactiveAt，暂停轻问/睡前提醒共用，成功发送才计时）；文件头注释同步
+- ④下拉刷新（music-home.tsx）：删除原「上滑刷新」（滑到底部继续上滑）整体改为顶部下拉——atTopNow()（scrollTop<=0）起手、手指向下 dist>0 展开、阈值 64px 松手触发；指示区从滚动流末尾移到最顶部（第一子元素，items-end 贴底），下拉时把整页内容（含 sticky 顶栏）往下推仿原生；文案「下拉刷新/松开立即刷新/刷新中…/已更新 ✓」，ChevronsUp→ChevronsDown；桌面鼠标 pointer 拖拽保留；E2E：mouse 拖拽 140px→「松开立即刷新」→松手「刷新中…」→完成回 idle h=0✓
+- ⑤刷新全部更新（music-home.tsx）：新增 shuffle（Fisher–Yates）；loadStatic 改为多拉再轮换——推荐歌单 personalizedPlaylists(30)→洗牌取 9、排行榜 toplist()→洗牌取 6、新歌速递 personalizedNewSongs(30)→洗牌取 6；根据你喜爱的歌曲推荐 simiSong(seed,20)（原 8）→滤红心→洗牌取 6（游客兜底 artistSongs(30)）；下拉刷新同时重拉 loadStatic+loadDaily+simiNonce 全区块；E2E：刷新前后榜单 id 序列三次全部不同（10131772880…→60198…→21845217…）✓、推荐歌单 9 张重拉✓
+- ⑥迷你条缩小（music-shared.tsx MiniBar）：容器 h-52→h-42、mb-2→mb-1.5、pl/px 收紧、阴影减弱；封面/一起听双头像 42→34px（重叠 -ml-3→-ml-2.5）；歌名行 14→12px；圆环暂停键 h-9→h-7、border 2.5→2、图标 h-4→h-3；队列键 22→17px；E2E 实测 barH=42/cover=34/toggle=28/textPx=12✓
+- E2E（agent-browser 420×900）：解锁→第 3 页→音乐游客模式→首页（下拉刷新手势全链路+榜单轮换 3 次）→搜索晴天→播放→迷你条展开播放器→底部控制截图暂停/播放两态→歌词页 42 行三角键+活动行暂停键→点未播行跳播→歌词返回→收起→迷你条尺寸实测→errors/console 零应用错误→关浏览器
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 最终代码无应用错误（仅编辑期 Fast Refresh 瞬态一条）
+
+Stage Summary:
+- 交付：歌词浏览态每行播放键（未播行=三角、播放行=暂停条，点击=播这一句）；播放器底部控制四枚自绘图标对齐参考截图（圆环循环箭头含单曲循环「1」、无外圈圆角双条暂停、大圆角三角播放、三角+线队列）；AI 主动消息三重收敛（每段暂停至多一次+全局 15 分钟冷却+提示词人设记忆上下文驱动不再点评歌曲）；音乐首页顶部下拉刷新（修正第十六轮搞错的上滑刷新）；刷新全部区块轮换真实内容；迷你播放条整体缩小一号
+- 关键决策：①AI 刷屏根因是「暂停期间 store 任意变更重排 3 分钟定时器」而非提示词单方面问题——标记位+冷却双保险治本，提示词改写治标（不再产出歌曲乐评）；②下拉刷新指示区放滚动流第一子元素而非 fixed——sticky 顶栏天然被推下，零额外布局代码；③内容轮换用「多拉 30 条+洗牌截取」而非换接口——同一接口每次刷新出不同切片，游客/登录态都可用；④歌词行按钮无条件渲染、透明度受 capsuleOn 控制——与第三十四轮「仅播放行」改为「每行」，保留胶囊熄灭时不可点语义
+- 范围限定遵守：改 4 文件（music-player.tsx / music-ai.ts / music-home.tsx / music-shared.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动；评论/搜索/歌单页未动；聊天 App 主动消息系统（proactive-msg.ts）未动（本轮问题定位在音乐一起听侧）
+- 改动文件：src/components/apps/music-player.tsx、src/lib/ios/music-ai.ts、src/components/apps/music-home.tsx、src/components/apps/music-shared.tsx

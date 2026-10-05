@@ -38,8 +38,6 @@ import {
   Play,
   Plus,
   Radio,
-  Repeat,
-  Repeat1,
   SendHorizonal,
   Shuffle,
   SlidersHorizontal,
@@ -92,6 +90,84 @@ import type { ContactRecord } from '@/lib/contacts';
 import { MINI_MODE_LABELS, useMiniPlayer } from '@/components/ios/MusicGlobalMini';
 import { AddToSongSheet, CoverImg, fmtClock } from './music-shared';
 import { TogetherChat, TogetherChatInput } from './music-together';
+
+// ---------------- 底部控制键自绘图标（第三十五轮，按用户参考截图美化） ----------------
+
+/** 循环圆环箭头（one=true 圆心带「1」= 单曲循环）：圆环右上留缺口 + 顺时针箭头，仿参考截图 */
+function LoopArrowIcon({ one = false, className }: { one?: boolean; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      {/* 圆环弧：从右下侧顺时针画一整圈到顶偏右处，留出箭头缺口 */}
+      <path
+        d="M18.13 6.86 A8 8 0 1 1 14.07 4.27"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      {/* 箭头（实心小三角，指向顺时针切线方向） */}
+      <polygon points="16.97,5.05 13.66,5.82 14.48,2.72" fill="currentColor" />
+      {one && (
+        <text
+          x="12"
+          y="15.6"
+          textAnchor="middle"
+          fontSize="9.5"
+          fontWeight="700"
+          fill="currentColor"
+          stroke="none"
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+        >
+          1
+        </text>
+      )}
+    </svg>
+  );
+}
+
+/** 暂停：两条圆角竖条（无外圈，仿参考截图） */
+function PauseBarsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <rect x="5.4" y="3.4" width="5.4" height="17.2" rx="2.7" />
+      <rect x="13.2" y="3.4" width="5.4" height="17.2" rx="2.7" />
+    </svg>
+  );
+}
+
+/** 播放：大圆角三角（描边圆角技巧，无外圈，仿参考截图） */
+function PlayTriIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path
+        d="M8.9 6.6 L17.2 12 L8.9 17.4 Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** 播放列表：三角 + 三横线（仿参考截图队列图标） */
+function QueueListIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M4.6 5.2 L10.6 8 L4.6 10.8 Z" fill="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M13.9 8 H20.4" />
+      <path d="M4.6 14 H20.4" />
+      <path d="M4.6 18.6 H16.4" />
+    </svg>
+  );
+}
 
 export function MusicPlayer() {
   const close = useMusic((s) => s.closePlayer);
@@ -616,7 +692,8 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 控制区（歌词视图整体上移一点：第二十六轮反馈底部暂停键太贴底） */}
+        {/* 控制区（歌词视图整体上移一点：第二十六轮反馈底部暂停键太贴底）
+            第三十五轮按参考截图美化：圆环循环箭头 / 圆角双条暂停 / 大圆角三角播放 / 三角+线队列 */}
         <div className={`flex items-center justify-between px-8 pt-3 ${showLyric ? 'pb-5' : 'pb-2'}`}>
           <button
             type="button"
@@ -629,27 +706,35 @@ export function MusicPlayer() {
             aria-label="播放模式"
             className="p-1 text-white/80 active:scale-90"
           >
-            {mode === 'order' && <Repeat className="h-[22px] w-[22px]" />}
-            {mode === 'repeat' && <Repeat className="h-[22px] w-[22px] text-[#EC4141]" />}
-            {mode === 'one' && <Repeat1 className="h-[22px] w-[22px] text-[#EC4141]" />}
-            {mode === 'shuffle' && <Shuffle className="h-[22px] w-[22px] text-[#EC4141]" />}
+            {(mode === 'order' || mode === 'repeat') && (
+              <LoopArrowIcon
+                className={`h-[23px] w-[23px] ${mode === 'repeat' ? 'text-[#EC4141]' : ''}`}
+              />
+            )}
+            {mode === 'one' && <LoopArrowIcon one className="h-[23px] w-[23px] text-[#EC4141]" />}
+            {mode === 'shuffle' && <Shuffle className="h-[23px] w-[23px] text-[#EC4141]" />}
           </button>
-          <button type="button" onClick={() => void prev()} aria-label="上一首" className="p-1 active:scale-90">
-            <SkipBack className="h-7 w-7" fill="currentColor" />
+          <button
+            type="button"
+            onClick={() => void prev()}
+            aria-label="上一首"
+            className="p-1 text-white/90 active:scale-90"
+          >
+            <SkipBack className="h-8 w-8" fill="currentColor" strokeLinejoin="round" />
           </button>
           <button
             type="button"
             onClick={toggle}
             data-testid="music-player-toggle"
             aria-label={playing ? '暂停' : '播放'}
-            className="flex h-[62px] w-[62px] items-center justify-center rounded-full border-2 border-white/80 active:scale-95"
+            className="flex h-[62px] w-[62px] items-center justify-center text-white active:scale-95"
           >
             {buffering ? (
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              <span className="h-6 w-6 animate-spin rounded-full border-2 border-white/30 border-t-white" />
             ) : playing ? (
-              <Pause className="h-8 w-8" fill="currentColor" />
+              <PauseBarsIcon className="h-[38px] w-[38px]" />
             ) : (
-              <Play className="ml-1 h-8 w-8" fill="currentColor" />
+              <PlayTriIcon className="h-[38px] w-[38px]" />
             )}
           </button>
           <button
@@ -657,9 +742,9 @@ export function MusicPlayer() {
             onClick={() => void next(false)}
             data-testid="music-player-next"
             aria-label="下一首"
-            className="p-1 active:scale-90"
+            className="p-1 text-white/90 active:scale-90"
           >
-            <SkipForward className="h-7 w-7" fill="currentColor" />
+            <SkipForward className="h-8 w-8" fill="currentColor" strokeLinejoin="round" />
           </button>
           <button
             type="button"
@@ -667,7 +752,7 @@ export function MusicPlayer() {
             aria-label="播放列表"
             className="p-1 text-white/80 active:scale-90"
           >
-            <ListMusic className="h-[22px] w-[22px]" />
+            <QueueListIcon className="h-[23px] w-[23px]" />
           </button>
         </div>
 
@@ -1318,32 +1403,33 @@ function LyricView({
               {showTr && l.tr && (
                 <span className={`relative mt-0.5 block text-[12px] leading-relaxed ${isActive ? 'text-white/70' : 'text-white/60'}`}>{l.tr}</span>
               )}
-              {isActive && i === activeIdx && (
-                /* 播放/暂停小键（右侧悬浮）：仅播放行显示（第三十四轮反馈：滚到没在播的歌词行
-                    不显示播放键），胶囊亮起时才可点（stopPropagation 防误触返回唱片）；
-                    第三十三轮：胶囊后播放键=播这一句——该行时间段（l.t→下一行起点）
-                    不在播放时跳到该行起点播放（seek 后胶囊按进度跳变语义熄灭、歌词跟随
-                    新播放行），已在播该段则维持播放/暂停切换 */
+              {(
+                /* 行播放小键（右侧悬浮，第三十五轮）：每一行都显示——正在播的行=暂停双条键，
+                    其余行（没播到/已播过的行）=三角播放键（点击=从这一句开始播）；
+                    胶囊亮起（手动滚动浏览）时才可见可点（stopPropagation 防误触返回唱片）；
+                    播这一句语义沿用第三十三轮：该行时间段（l.t→下一行起点）不在播放时
+                    seek 到该行起点播放（seek 后胶囊按进度跳变语义熄灭、歌词跟随新播放行），
+                    已在播该段则维持播放/暂停切换 */
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     const nextT = lyricLines[i + 1]?.t;
-                    const inSegment = position >= l.t - 0.3 && (nextT === undefined || position < nextT);
-                    if (!inSegment) {
+                    const inSegment = i === activeIdx && position >= l.t - 0.3 && (nextT === undefined || position < nextT);
+                    if (inSegment) {
+                      toggle();
+                    } else {
                       seek(Math.max(0, l.t - 0.2));
                       if (!playing) toggle();
-                    } else {
-                      toggle();
                     }
                   }}
-                  aria-label={playing ? '暂停' : '播放'}
-                  data-testid="music-lyric-play-toggle"
+                  aria-label={i === activeIdx && playing ? '暂停' : '播放'}
+                  data-testid={i === activeIdx ? 'music-lyric-play-toggle' : 'music-lyric-row-play'}
                   className={`absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-white/85 transition-opacity duration-500 active:scale-90 ${
                     capsuleOn ? 'opacity-100' : 'pointer-events-none opacity-0'
                   }`}
                 >
-                  {playing ? (
+                  {i === activeIdx && playing ? (
                     <Pause className="h-[14px] w-[14px]" fill="currentColor" strokeWidth={0} />
                   ) : (
                     <Play className="h-[14px] w-[14px]" fill="currentColor" strokeWidth={0} />

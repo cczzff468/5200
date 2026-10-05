@@ -13,6 +13,9 @@
  *    - 第二十三轮反馈：修复「AI 回复被音乐带偏，不回应用户的话」——
  *      用户消息永远最高优先（先接住再聊别的），音乐只是背景不能压过用户的话；
  *      一起听与单独播放（所有聊天 App 的音乐动态注入）共用同一套优先级逻辑。
+ *    - 第三十五轮反馈：修复「AI 一直在发信息」——暂停久置轻问每段暂停至多一次
+ *      （原实现暂停期间反复重排定时器）+ 主动消息全局 15 分钟冷却；
+ *      主动消息提示词改为人设/记忆/上下文驱动，明确不点评歌曲。
  * 2. AI 推荐歌曲：LLM 返回 JSON 歌单 → /search 匹配真实曲库 → 消息内歌曲卡（点击播放）；
  * 3. 听歌记忆：一起听中播放的歌写角色记忆（memAddEventFragment, sourceTag='music-play'），
  *    自动参与后续所有聊天 App 的记忆召回——无需改任何聊天代码。
@@ -784,9 +787,17 @@ export function sendTogetherText(text: string): void {
 
 // ---------------- AI 主动说话（F 睡前提醒 + 暂停久置轻问） ----------------
 
-/** AI 主动说一句话（仅供 F 睡前提醒/暂停久置轻问使用；「AI 主动点评歌曲」已按用户要求整体删除） */
+/** AI 主动消息全局冷却（第三十五轮反馈「AI 一直在发信息」）：任意两条主动消息之间至少隔 15 分钟，
+ *  暂停轻问/睡前提醒共用一把闸；用户自己发的消息不受影响 */
+const PROACTIVE_COOLDOWN_MS = 15 * 60_000;
+let lastProactiveAt = 0;
+
+/** AI 主动说一句话（仅供 F 睡前提醒/暂停久置轻问使用）。
+ *  第三十五轮反馈重写：①全局 15 分钟冷却（不再连续发）；②提示词改为人设/记忆/上下文驱动，
+ *  明确不点评正在听的歌（之前「聊聊这首歌的感受」导致 AI 每次都发歌曲评价） */
 async function aiSayOnce(cid: string, hint: string): Promise<void> {
   if (replying) return;
+  if (Date.now() - lastProactiveAt < PROACTIVE_COOLDOWN_MS) return; // 冷却期内不再主动开口
   replying = true;
   useMusic.setState({ tgAiBusy: true });
   try {
@@ -795,13 +806,16 @@ async function aiSayOnce(cid: string, hint: string): Promise<void> {
     const system = await personaSystemFor(
       cid,
       playingBlock(
-        `${hint ? `【情境】${hint}\n` : ''}【聊天记录】\n${history || '（还没聊过）'}\n\n请主动发一条消息（可以是此刻这首歌的感受、一句联想或闲聊），不要重复聊天记录里任何已有的句子。`,
+        `${hint ? `【情境】${hint}\n` : ''}【聊天记录】\n${history || '（还没聊过）'}\n\n请根据你的人设、性格、心情、你们的关系、共同记忆和最近聊过的内容，主动发一条像平时聊天一样的消息（内容由你按人设和当下情境自然决定，一两句话就好）。`,
         who,
         cid,
       ),
     );
-    const { text, controls } = await genUniqueReply(cid, system, '（主动发一条一起听的消息）');
+    const userBase =
+      '（主动发一条消息）。注意：不要点评/评价/感想正在听的这首歌，不要以「这首歌」开头，不要提「这首歌」；就按你的人设和你们平时聊的天，想说什么说什么；不要重复聊天记录里已有的句子。';
+    const { text, controls } = await genUniqueReply(cid, system, userBase);
     if (text) {
+      lastProactiveAt = Date.now();
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     }
     void runTgControls(cid, controls, text);
@@ -920,27 +934,32 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
 
 let pauseNudgeBound = false;
 let pauseNudgeTimer: ReturnType<typeof setTimeout> | null = null;
-/** 第二十二轮审计③：暂停后 AI 不再点评歌曲，但完全无感知也冷场——暂停满 3 分钟仍未恢复时
- *  40% 概率自然问一句（每次暂停至多一次；恢复播放/退出一起听即作废，无需任何开关） */
+let nudgedThisPause = false;
+/** 第二十二轮审计③：暂停久置轻问。第三十五轮反馈修复「AI 一直在发信息」：
+ *  原实现暂停期间任何 store 变更都会重排 3 分钟定时器（40% 概率）→ 暂停越久消息越多；
+ *  现改为每一段连续暂停至多轻问一次（恢复播放才重置），加上 aiSayOnce 全局冷却双保险 */
 function bindPauseNudge(): void {
   if (pauseNudgeBound || typeof window === 'undefined') return;
   pauseNudgeBound = true;
   useMusic.subscribe((s) => {
     if (s.playing) {
+      // 恢复播放：作废本轮定时器，重置「本轮暂停已轻问」标记
+      nudgedThisPause = false;
       if (pauseNudgeTimer) {
         clearTimeout(pauseNudgeTimer);
         pauseNudgeTimer = null;
       }
       return;
     }
-    if (pauseNudgeTimer) return; // 本轮暂停已排程，不重复排
+    if (pauseNudgeTimer || nudgedThisPause) return; // 已排程或本轮暂停已问过：不再排
     pauseNudgeTimer = setTimeout(() => {
       pauseNudgeTimer = null;
       const st = useMusic.getState();
       if (st.playing || !st.current) return;
       const t = loadActiveTogether();
       if (!t) return;
-      if (Math.random() < 0.4) void aiSayOnce(t.contactId, '音乐已经暂停三分钟了，对方还没按播放');
+      nudgedThisPause = true; // 无论是否命中概率，本轮暂停只尝试这一次
+      if (Math.random() < 0.4) void aiSayOnce(t.contactId, '音乐暂停了一会儿，对方还没按播放');
     }, 180_000);
   });
 }
@@ -948,7 +967,8 @@ function bindPauseNudge(): void {
 let sleepWarnBound = false;
 /** F（第二十轮）：睡前提醒——定时关闭剩 1 分钟时（music-store 广播 music-sleep-warning 事件），
  *  一起听中的角色自然说一句「要睡着了？音乐快停了哦」。
- *  第二十一轮：点评功能删除；第二十二轮审计③加回「暂停久置轻问」这一处（唯一主动消息） */
+ *  第二十一轮：点评功能删除；第二十二轮审计③加回「暂停久置轻问」；
+ *  第三十五轮：轻问每段暂停至多一次 + 全局 15 分钟冷却 + 提示词不再引导点评歌曲 */
 function bindSleepWarning(): void {
   if (sleepWarnBound || typeof window === 'undefined') return;
   sleepWarnBound = true;

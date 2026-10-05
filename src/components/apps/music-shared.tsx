@@ -531,36 +531,36 @@ export function MiniBar() {
   if (!current) return null;
   return (
     <div
-      className="pointer-events-auto mx-3 mb-2 flex h-[52px] shrink-0 items-center rounded-full bg-white pl-[5px] pr-2 shadow-[0_4px_18px_rgba(0,0,0,0.13)] dark:bg-zinc-800 dark:shadow-[0_4px_18px_rgba(0,0,0,0.55)]"
+      className="pointer-events-auto mx-3 mb-1.5 flex h-[42px] shrink-0 items-center rounded-full bg-white pl-1 pr-1.5 shadow-[0_4px_16px_rgba(0,0,0,0.12)] dark:bg-zinc-800 dark:shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
       data-testid="music-minibar"
     >
       <button
         type="button"
         onClick={openPlayer}
         data-testid="music-minibar-open"
-        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left"
       >
         {live ? (
           // 一起听：前面显示两个人的头像（重叠）
           <span className="flex shrink-0 items-center" data-testid="music-minibar-tg-avatars">
             <CoverImg
               src={live.avatar}
-              className="h-[42px] w-[42px]"
+              className="h-[34px] w-[34px]"
               rounded="rounded-full"
               alt={live.name}
             />
             <CoverImg
               src={loginUid ? loginAvatar : getGuestAvatar()}
-              className="-ml-3 h-[42px] w-[42px] ring-2 ring-white dark:ring-zinc-800"
+              className="-ml-2.5 h-[34px] w-[34px] ring-2 ring-white dark:ring-zinc-800"
               rounded="rounded-full"
               alt="我"
             />
           </span>
         ) : (
-          <CoverImg src={songCover(current)} className="h-[42px] w-[42px]" rounded="rounded-full" alt={current.name} />
+          <CoverImg src={songCover(current)} className="h-[34px] w-[34px]" rounded="rounded-full" alt={current.name} />
         )}
-        {/* 单行：歌名加粗 + 「 - 歌手」灰字（按截图） */}
-        <span className="min-w-0 flex-1 truncate text-[14px] leading-none">
+        {/* 单行：歌名加粗 + 「 - 歌手」灰字（按截图）；第三十五轮内容整体缩小一号 */}
+        <span className="min-w-0 flex-1 truncate text-[12px] leading-none">
           <span className="font-bold text-zinc-900 dark:text-zinc-100">{current.name}</span>
           <span className="text-zinc-400 dark:text-zinc-500"> - {songArtistText(current)}</span>
         </span>
@@ -570,13 +570,13 @@ export function MiniBar() {
         type="button"
         onClick={toggle}
         data-testid="music-minibar-toggle"
-        className="mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-[2.5px] border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
+        className="mr-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
         aria-label={playing ? '暂停' : '播放'}
       >
         {playing ? (
-          <Pause className="h-4 w-4" fill="currentColor" />
+          <Pause className="h-3 w-3" fill="currentColor" />
         ) : (
-          <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
+          <Play className="ml-0.5 h-3 w-3" fill="currentColor" />
         )}
       </button>
       {/* 播放列表入口 */}
@@ -585,9 +585,9 @@ export function MiniBar() {
         onClick={openPlayer}
         aria-label="播放列表"
         data-testid="music-minibar-queue"
-        className="flex h-9 w-8 shrink-0 items-center justify-center text-zinc-800 active:scale-95 dark:text-zinc-100"
+        className="flex h-7 w-6 shrink-0 items-center justify-center text-zinc-800 active:scale-95 dark:text-zinc-100"
       >
-        <ListMusic className="h-[22px] w-[22px]" />
+        <ListMusic className="h-[17px] w-[17px]" />
       </button>
     </div>
   );
