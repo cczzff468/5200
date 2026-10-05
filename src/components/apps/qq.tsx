@@ -284,6 +284,7 @@ import { triggerInviteFromChat } from '@/lib/ios/together-invite';
 import { sendUserTogetherInvite, TG_CARD_INSERTED_EVENT, type TgCardMsg } from '@/lib/ios/together-flow';
 import { TogetherInviteSheet } from './together-invite-sheet';
 import { songArtistText, songCover } from '@/lib/ios/music-api';
+import { cutUnfinishedMusicTag, runMusicRemote, takeMusicRemote, togetherLiveBlock } from '@/lib/ios/music-remote';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -3653,6 +3654,8 @@ function ChatPage({
   /** [语音通话] 标记本轮是否出现过（流中分段/最后一段/接力回复共用同一 ref）：runAiTurn 开回合时重置，
    *  buildReplyMsgs 解析到标记时置位——原来是回合内局部变量，buildReplyMsgs 提升到组件层后改用 ref 传递 */
   const wantCallSeenRef = useRef(false);
+  // 一起听遥控（第三十七轮）：本轮是否剥出并执行过播控指令（纯指令回复不再落「暂无回复」兑底）
+  const musicActedRef = useRef(false);
   // Task 22 视频通话：[视频通话] 标记本轮是否出现过（与 wantCallSeenRef 同款生命周期：runAiTurn 开回合
   // 重置、buildReplyMsgs 解析到标记置位、maybeTriggerAiCall 消费完即清）
   const wantVideoCallSeenRef = useRef(false);
@@ -3919,6 +3922,8 @@ function ChatPage({
   /** F1 流式分段 carry-over：上一段尾部未闭合的半截照片标签（如「[图片:黄昏的咖」），拼回下一段开头再走管线；
    *  回合开始清空、收尾取走（能闭合则正常识别生图，仍闭合不上则兜底剥除不投递） */
   const photoCarryRef = useRef('');
+  // 一起听遥控（第三十七轮）：流式分段尾部未闭合的半截播控指令（如「[快进:」），下一段拼回（照片标签 carry 同款机制）
+  const musicHoldRef = useRef('');
 
   /**
    * 消费照片任务（微信端同款管线移植）：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落照片消息 +
@@ -4001,6 +4006,14 @@ function ChatPage({
 
   const buildReplyMsgs = useCallback(
     (rawText: string, asSingle: boolean, baseTime: number, idBase: string, idStart: number): { msgs: QQMsg[]; cur: QQMsg[]; dirty: boolean; nextIdx: number } => {
+      // 一起听遥控（第三十七轮）：剥出回复里的播控指令（[切歌]/[暂停]/[放歌:歌:歌手]…）并真实执行；
+      // 仅音乐一起听进行中生效（无会话时原文原样返回），指令不出现在任何气泡里
+      const mrRemote = takeMusicRemote(rawText);
+      if (mrRemote.controls.length > 0) {
+        void runMusicRemote(mrRemote.controls);
+        musicActedRef.current = true; // 本轮执行过播控：正文被剔空时 finalize 不落「暂无回复」兑底
+      }
+      rawText = mrRemote.text;
       // 触发标记全/半角括号变体都认（[语音通话]【语音通话】〔语音通话〕（语音通话）(语音通话)）：
       // 只认半角会导致模型输出全角变体时不来电、且标记原文漏进气泡；剥除用同一套兼容正则
       const wantCall = hasVoiceCallMark(rawText);
@@ -4431,6 +4444,8 @@ function ChatPage({
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,
+      // 一起听实时情境（第三十七轮）：与该角色的一起听进行中时注入歌名/歌手/进度/歌词 + 播控指令说明（发消息瞬间现场构建，非缓存）
+      togetherLiveBlock(peer.id, me.name),
       momentsBlock,
       locBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
@@ -4489,8 +4504,11 @@ function ChatPage({
     wantCallSeenRef.current = false;
     // Task 22 视频通话：[视频通话] 标记同款开回合重置（buildReplyMsgs 解析到标记时置位）
     wantVideoCallSeenRef.current = false;
+    // 一起听遥控：同款开回合重置（buildReplyMsgs 剥出播控指令时置位）
+    musicActedRef.current = false;
     // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用（流中断/换号中止的半截标签不串入新回合）
     photoCarryRef.current = '';
+    musicHoldRef.current = ''; // 一起听遥控：同款回合开始清留存（半截播控指令不串回合）
 
     /** 排队投递一批：首批立即上屏（边接收边显示），后续批先按打字节奏停顿（逐条冒出来） */
     const enqueueBatch = (built: QQMsg[]) => {
@@ -4516,7 +4534,12 @@ function ChatPage({
       const merged = photoCarryRef.current + seg;
       const { send, carry } = splitUnfinishedPhotoTag(merged);
       photoCarryRef.current = carry;
-      const { msgs: built, cur, dirty, nextIdx } = buildReplyMsgs(send, false, Date.now(), aiId, msgIdx);
+      // 一起听遥控：上一段尾部未闭合的半截播控指令拼回本段开头，再留住本段尾部新的半截（防「[快进:」被分段器切一半）
+      const musicMerged = musicHoldRef.current + send;
+      musicHoldRef.current = '';
+      const musicCut = cutUnfinishedMusicTag(musicMerged);
+      musicHoldRef.current = musicCut.held;
+      const { msgs: built, cur, dirty, nextIdx } = buildReplyMsgs(musicCut.text, false, Date.now(), aiId, msgIdx);
       msgIdx = nextIdx;
       if (dirty) saveMsgs(peer.id, cur);
       if (built.length === 0) return;
@@ -4556,6 +4579,9 @@ function ChatPage({
         //（拼回最后一段一起走管线，闭合则正常生图/降级，仍闭合不上则由 buildReplyMsgs 兜底剥除不投递）
         const carry = photoCarryRef.current;
         photoCarryRef.current = '';
+        // 一起听遥控：收尾把留存的半截播控指令拼回（流已结束，不再留；未闭合的残留括号由 buildReplyMsgs 原文透传不执行）
+        const musicHold = musicHoldRef.current;
+        musicHoldRef.current = '';
         if (error) {
           // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
           // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
@@ -4572,14 +4598,14 @@ function ChatPage({
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子；F1：跨段 carry 拼回开头）；
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
-        const { msgs: built, cur, dirty } = buildReplyMsgs(carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), aiId, msgIdx);
+        const { msgs: built, cur, dirty } = buildReplyMsgs(musicHold + carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), aiId, msgIdx);
         if (dirty) saveMsgs(peer.id, cur);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
         const finalBatch: QQMsg[] =
           built.length > 0
             ? built
-            : deliveredAny
+            : deliveredAny || musicActedRef.current
               ? []
               : requestOnly
                 ? []

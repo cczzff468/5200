@@ -15584,3 +15584,30 @@ Stage Summary:
 - 关键决策：①遮罩条方案而非改 sticky top-0——sticky top-0+内衬 padding 会让未吸顶时出现 54px 空档，绝对定位遮罩条零布局影响且 scroll=0 时本来就是空白区；②播放键跟随 focusIdx（高亮行）而非 activeIdx——「滚到哪句亮哪句」的高亮行即用户视线焦点，键随高亮行走，同屏永远至多一个键，正合「不是每一句都有三角形」；③下拉吞 click 用 moved 标记（dist>12px）而非 pullState——轻点（无拖拽）仍正常点击卡片，只有真实拖拽过的手势才吞
 - 范围限定遵守：改 3 文件（music-comments.tsx / music-player.tsx / music-home.tsx）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动；评论数据接口/排序/翻页/点赞/发表逻辑未动；歌词胶囊高亮跟随/5 秒回跳/长按复制语义未动；下拉刷新阈值/全部区块轮换逻辑未动（仅指示区位置+吞 click）
 - 改动文件：src/components/apps/music-comments.tsx、src/components/apps/music-player.tsx、src/components/apps/music-home.tsx
+
+---
+Task ID: 96
+Agent: Z.ai Code（主会话）
+Task: 第三十七轮——①一起听界面时长再上移一点点 ②循环按钮再美化 ③修复「为什么需要点两下才能变成循环」④微信/QQ 聊天里与 AI 一起听：AI 知道歌名/歌手/播放进度/歌词 ⑤AI 可切歌/前进后退/暂停（微信+QQ 私聊播控）
+
+Work Log:
+- ①时长行（music-player.tsx TogetherHead）：mt-[18px]→mt-[14px] 再上移 4px；耳机线尾在容器 y≈75 已完全渐隐为透明，时长行上缘（y≈78）不相交；E2E 实测 gap=14px ✓（相距 1314 公里·一起听了 1小时17分钟 正常展示）
+- ②③循环按钮（music-player.tsx）：
+  - 「点两下才变循环」根因=「顺序播放(order)」与「列表循环(repeat)」共用同一枚圆环箭头、只差白/红颜色——第一下点击图标形状不变，用户感知不到已切到循环；修复=新增 OrderPlayIcon（向右箭头，顺序播放专属），四模式四图形一眼可辨：顺序=右箭头白 / 列表循环=圆环箭头红 / 单曲循环=圆环箭头+「1」红 / 随机=Shuffle 红
+  - LoopArrowIcon 再美化：弧线尾与箭头衔接更顺（缺口收紧，箭头几乎搭上弧线起点 M16.93 6 A8 8 0 1 1 13.11 4.38）、箭头比例收窄更利落、线宽 1.7→1.8
+  - 新增模式浮层提示：每次点击在按钮上方浮出模式名胶囊（列表循环/单曲循环/随机播放/顺序播放），1.4 秒后淡出（transition + modeTip 状态 + 1400ms 定时器）——每次点击都有明确反馈，从感知层面根治「点了两下才发现变了」
+  - E2E：order→repeat→one→shuffle→order 四态图标签名/颜色/浮层文案全验证（点击一次即显「列表循环」opacity=1）+ 2 秒后 opacity=0 淡出 ✓
+- ④⑤微信/QQ 聊天端一起听联动（新模块 src/lib/ios/music-remote.ts + wechat.tsx / qq.tsx 接入）：
+  - togetherLiveBlock(cid, userLabel)：发消息瞬间现场构建（非缓存）注入聊天 system——正在一起听《歌》+歌手、播放进度 X分Y秒/总长（正在播放/已暂停）、VIP 试听提示、正在唱到的歌词窗口（前2句+当前+后1句含翻译）、一起听播放控制指令说明（仅与该角色的一起听会话进行中时注入；会话快照冷启动时 void useMusic.getState().boot() 幂等兜底）
+  - takeMusicRemote(raw)：从 AI 回复剥出播控指令（语法与音乐 App 一起听完全一致：[切歌]/[上一首]/[暂停]/[继续]/[放歌:歌名:歌手]/[快进:秒]/[快退:秒]）；闸门=无进行中的一起听会话时原文原样返回（聊天正文里的方括号文案不吞不执行）
+  - runMusicRemote(controls)：真实作用到 useMusic store（next/prev/toggle/seek 钳制/playSong），选歌复用 music-ai.searchSongMatched（新导出）做歌手一致性校验；单回复最多 3 条；不弹兑底消息（音乐 App 侧才有消息链路）
+  - 接入点（微信/QQ 各五处）：systemFull 注入 liveBlock（crossAppBlock/groupBlock 之后）；buildReplyMsgs 入口剥指令+执行（覆盖分段/收尾/接力拉取全部投递路径）；deliverSegment 流式防撕裂（cutUnfinishedMusicTag 留尾部未闭合半截括号，照片标签 carry 同款机制 + musicHoldRef 回合开始清空）；finalize 拼回留存；纯指令回复（正文剔空）不再落「〔对方暂时没有回复〕」兑底（WxTurnCtx.musicActed / qq musicActedRef，finalize+bg 空段保护两处）
+  - music-store.ts boot：快照恢复的歌同步预载歌词（刷新后没开过音乐 App 直接去聊天，AI 也能看到歌词）
+- E2E（agent-browser 420×900）：注入 e2e-r37 联系人（friendWx/friendQq）+owner+会话 → 一起听视图 gap=14px → 播晴天(RyaVocal 翻唱) seek 70s → 微信聊小柔：「我们在听什么歌」→ AI 回「周杰伦的原唱，但我们现在听的是 RyaVocal 的翻唱版本」+「唱到'你会等待还是离开'这一句啦，下一句应该是'刮风这天我试过握着你手'」（歌名+歌手+当前句+下一句全中）→「帮我把音乐暂停」→ 微信 AI 回复后 mini 条变播放键=真实暂停（[暂停] 剥除+执行）→「换一首《稻香》」→ mini 条变「稻香(治愈版)-周杰伦…」且正在播放（[放歌] 搜歌+播放）→ QQ 聊小柔：「放到哪里了」→「已经放到 1分08秒了，还有 52 秒就结束了」+「你刚才是不是在听《晴天》来着」（精确进度+听歌历史）→ QQ 文本回复指令随机性未复现（管线与微信同代码，微信侧已验证）→ 清理 IDB（contacts=0、16 个 e2e 键+会话键全清）→ errors 无应用错误
+- bun run lint 0 错误；bunx tsc 0 错误；dev server 重启后 dev.log 全 200 无应用错误（重启原因：Turbopack worker 崩溃复发，与第三十三/三十六轮同款）
+
+Stage Summary:
+- 交付：一起听时长再上移 4px（18→14px）；循环圆环箭头美化（弧尾衔接/箭头收窄/线宽加粗）；「点两下才变循环」根修（顺序播放专属图标+四模式四图形+切换浮层报模式名）；微信/QQ 与 AI 一起听时 AI 实时知道歌名/歌手/播放进度/正在唱的歌词（发消息瞬间现场构建注入，非缓存），并可在聊天里真实控制播放——切歌/上一首/暂停/继续/放指定的歌/快进/快退（指令从气泡剔除、会话闸门防误吞正文、流式分段防撕裂、纯指令回复不落兑底）
+- 关键决策：①liveBlock 在 runAiTurn 发消息瞬间构建而非走 crossCtxRef 缓存——跨 App 块每轮才刷新一次会滞后一轮，进度/歌词必须实时；②指令闸门放在 takeMusicRemote 入口（无一起听会话原文原样返回）——聊天正文里「点[切歌]按钮」这类方括号文案永不吞字；③播控执行挂 buildReplyMsgs 入口而非各投递点——分段/收尾/接力拉取/bg 兜底全部路径一处覆盖；④musicActed 标记解决「纯指令回复被误报对方暂无回复」（E2E 实测踩中：AI 回复只有 [放歌:稻香:周杰伦] 时歌切了但落了错误占位）；⑤boot 预载歌词让「刷新后直接聊天」场景 AI 也能引用歌词
+- 范围限定遵守：改 5 文件（music-remote.ts 新增 / music-ai.ts 仅加 export / music-player.tsx / wechat.tsx / qq.tsx / music-store.ts 仅 boot 预载歌词）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话核心逻辑未触碰；音乐 App 内一起听聊天链路未动（music-ai.ts 只加了 searchSongMatched export）；群聊不注入 liveBlock（一起听本就 1 对 1）；评论/搜索/歌单页未动
+- 改动文件：src/lib/ios/music-remote.ts（新增）、src/lib/ios/music-ai.ts、src/lib/ios/music-store.ts、src/components/apps/music-player.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx

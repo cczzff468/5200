@@ -131,6 +131,7 @@ import { triggerInviteFromChat } from '@/lib/ios/together-invite';
 import { sendUserTogetherInvite, TG_CARD_INSERTED_EVENT, type TgCardMsg } from '@/lib/ios/together-flow';
 import { TogetherInviteSheet } from './together-invite-sheet';
 import { songArtistText, songCover } from '@/lib/ios/music-api';
+import { cutUnfinishedMusicTag, runMusicRemote, takeMusicRemote, togetherLiveBlock } from '@/lib/ios/music-remote';
 import {
   acceptBlockReq,
   applyCharBlockAction,
@@ -4370,6 +4371,8 @@ interface WxTurnCtx {
   wantCallSeen: boolean;
   /** [视频通话] 标记是否出现过，与 wantCallSeen 同口径（Task 22 视频通话） */
   wantVideoCallSeen: boolean;
+  /** 一起听遥控（第三十七轮）：本轮回复里剥出并执行过播控指令（纯指令回复不再落「暂无回复」兑底） */
+  musicActed: boolean;
 }
 
 function ChatPage({
@@ -5254,6 +5257,8 @@ function ChatPage({
   const photoJobsRef = useRef<PhotoTag[]>([]);
   /** F1 流式分段 carry-over：上一段尾部未闭合的半截照片标签（如「[图片:黄昏的咖」），拼回下一段开头再走管线；回合开始清空、收尾丢弃 */
   const carryTextRef = useRef('');
+  // 一起听遥控（第三十七轮）：流式分段尾部未闭合的半截播控指令（如「[快进:」），下一段拼回（照片标签 carry 同款机制）
+  const musicHoldRef = useRef('');
 
   /**
    * 消费照片任务：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落照片消息 + 存相册（origin 'ai'）+
@@ -5320,7 +5325,7 @@ function ChatPage({
     const jobs = saved.filter((j): j is PhotoTag => Boolean(j) && typeof (j as PhotoTag).desc === 'string');
     if (jobs.length === 0) return;
     photoJobsRef.current = [...photoJobsRef.current, ...jobs];
-    flushPhotoJobs({ aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false });
+    flushPhotoJobs({ aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false, musicActed: false });
   }, [peer.id, sessionKey]);
 
   /** AI 主动发起语音通话（[语音通话] 标记出现在回复任一分段/整条，标记原文已剥除）：按 5 分钟冷却弹出来电浮层
@@ -5419,6 +5424,14 @@ function ChatPage({
     baseTime: number,
     ctx: WxTurnCtx,
   ): { msgs: WxMsg[]; cur: WxMsg[]; dirty: boolean } => {
+    // 一起听遥控（第三十七轮）：剥出回复里的播控指令（[切歌]/[暂停]/[放歌:歌:歌手]…）并真实执行；
+    // 仅音乐一起听进行中生效（无会话时原文原样返回），指令不出现在任何气泡里
+    const mrRemote = takeMusicRemote(rawText);
+    if (mrRemote.controls.length > 0) {
+      void runMusicRemote(mrRemote.controls);
+      ctx.musicActed = true; // 本轮执行过播控：正文被剔空时 finalize 不落「暂无回复」兑底
+    }
+    rawText = mrRemote.text;
     // 表情包清单/开关（本会话独立，投递时现场读取；关闭后 AI 发的表情包卡片丢弃、emoji 硬性剥除）
     const stickers = loadStickers('wx');
     const stickersOn = getStickersOn(sessionKey);
@@ -5658,7 +5671,7 @@ function ChatPage({
    *  single=false：每项就是一条独立消息文本（deliver 模式，一段一条不再二次切分） */
   const deliverBgItems = (items: BgPendingItem[]) => {
     if (items.length === 0) return;
-    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false };
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false, musicActed: false };
     let queuedAny = false;
     // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与页面内
     // finalize 同语义）——单条(N=1)整条解析，多条(N>1)走稳定细切，不把整段挤成一个气泡
@@ -5681,7 +5694,7 @@ function ChatPage({
     }
     // 空段保护（照 finalize 的兜底写法）：整批拉取都没解析出任何消息 → 给兜底文案，不至于毫无回应
     //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
-    if (!queuedAny && !loadBlock('wx', peer.id).byUser) {
+    if (!queuedAny && !ctx.musicActed && !loadBlock('wx', peer.id).byUser) {
       enqueueBatch([{ id: ctx.aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: Date.now(), error: true }], ctx);
     }
     // 回复原文名带 [语音通话] 标记（剥除后不在气泡里）：同样按 5 分钟冷却弹出来电邀请
@@ -5830,8 +5843,9 @@ function ChatPage({
       });
 
     // 本轮投递上下文（投递管线与接力拉取共用，见组件层 deliverAiMsg/enqueueBatch/buildReplyMsgs）
-    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false };
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false, musicActed: false };
     carryTextRef.current = ''; // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用
+    musicHoldRef.current = ''; // 一起听遥控：同款回合开始清留存（半截播控指令不串回合）
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
     // 结束/失败后由 finalize 写入本角色的聊天记录（与页面是否存活无关）。
     // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）；
@@ -5945,6 +5959,8 @@ function ChatPage({
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,
+      // 一起听实时情境（第三十七轮）：与该角色的一起听进行中时注入歌名/歌手/进度/歌词 + 播控指令说明（发消息瞬间现场构建，非缓存）
+      togetherLiveBlock(peer.id, me.name),
       momentsBlock,
       locBlock,
       actionRules.length > 0 ? actionRules.join('\n\n') : '',
@@ -6003,7 +6019,12 @@ function ChatPage({
       const merged = carryTextRef.current + seg;
       const { send, carry } = splitUnfinishedPhotoTag(merged);
       carryTextRef.current = carry;
-      const { msgs: built, cur, dirty } = buildReplyMsgs(send, false, Date.now(), ctx);
+      // 一起听遥控：上一段尾部未闭合的半截播控指令拼回本段开头，再留住本段尾部新的半截（防「[快进:」被分段器切一半）
+      const musicMerged = musicHoldRef.current + send;
+      musicHoldRef.current = '';
+      const musicCut = cutUnfinishedMusicTag(musicMerged);
+      musicHoldRef.current = musicCut.held;
+      const { msgs: built, cur, dirty } = buildReplyMsgs(musicCut.text, false, Date.now(), ctx);
       if (dirty) saveMsgs(peer.id, cur);
       if (built.length === 0) return;
       deliveredAny = true;
@@ -6042,6 +6063,9 @@ function ChatPage({
         //（拼回最后一段一起走管线，闭合则正常生图/降级，仍闭合不上则由 buildReplyMsgs 内兜底剥除）
         const carry = carryTextRef.current;
         carryTextRef.current = '';
+        // 一起听遥控：收尾把留存的半截播控指令拼回（流已结束，不再留；未闭合的残留括号由 buildReplyMsgs 原文透传不执行）
+        const musicHold = musicHoldRef.current;
+        musicHoldRef.current = '';
         if (error) {
           // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
           // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
@@ -6057,14 +6081,14 @@ function ChatPage({
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条，可能含溢出合并的句子；F1：carry 拼回开头）；
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
-        const { msgs: built, cur, dirty } = buildReplyMsgs(carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), ctx);
+        const { msgs: built, cur, dirty } = buildReplyMsgs(musicHold + carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), ctx);
         if (dirty) saveMsgs(peer.id, cur);
         // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
         //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
         const finalBatch: WxMsg[] =
           built.length > 0
             ? built
-            : deliveredAny
+            : deliveredAny || ctx.musicActed
               ? []
               : requestOnly
                 ? []

@@ -585,8 +585,9 @@ function extractTgControls(raw: string): { text: string; controls: TgControl[] }
 }
 
 /** 带歌手一致性校验的曲库搜索（第二十二轮审计⑤：防止 AI 编的歌名匹配到翻唱/remix/伴奏版）：
- *  取前 5 条结果，优先返回歌手名与要求吻合的第一条；没写歌手或全部不吻合时返回 undefined（调用方按没搜到处理） */
-async function searchSongMatched(title: string, artist: string): Promise<NcmSong | undefined> {
+ *  取前 5 条结果，优先返回歌手名与要求吻合的第一条；没写歌手或全部不吻合时返回 undefined（调用方按没搜到处理）。
+ *  第三十七轮导出：微信/QQ 聊天端的「一起听遥控」（music-remote.ts）复用同一套选歌校验 */
+export async function searchSongMatched(title: string, artist: string): Promise<NcmSong | undefined> {
   let hits: NcmSong[] = [];
   try {
     const r = await search(`${title} ${artist}`.trim(), 1, 5);

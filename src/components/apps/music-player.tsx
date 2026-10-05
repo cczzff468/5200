@@ -93,19 +93,29 @@ import { TogetherChat, TogetherChatInput } from './music-together';
 
 // ---------------- 底部控制键自绘图标（第三十五轮，按用户参考截图美化） ----------------
 
-/** 循环圆环箭头（one=true 圆心带「1」= 单曲循环）：圆环右上留缺口 + 顺时针箭头，仿参考截图 */
+/** 播放模式名（第三十七轮：切换时浮层提示用，让每次点击都有明确反馈） */
+const MODE_LABELS: Record<RepeatMode, string> = {
+  order: '顺序播放',
+  repeat: '列表循环',
+  one: '单曲循环',
+  shuffle: '随机播放',
+};
+
+/** 循环圆环箭头（one=true 圆心带「1」= 单曲循环）：圆环右上留缺口 + 顺时针箭头，仿参考截图。
+ *  第三十七轮美化：弧线尾与箭头衔接更顺（缺口收紧，箭头几乎搭上弧线起点）、
+ *  箭头比例收窄更利落、线宽 1.7→1.8 更饱满 */
 function LoopArrowIcon({ one = false, className }: { one?: boolean; className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      {/* 圆环弧：从右下侧顺时针画一整圈到顶偏右处，留出箭头缺口 */}
+      {/* 圆环弧：从右上缺口处顺时针画一整圈到顶部偏左，缺口由实心箭头补上形成连续循环感 */}
       <path
-        d="M18.13 6.86 A8 8 0 1 1 14.07 4.27"
+        d="M16.93 6 A8 8 0 1 1 13.11 4.38"
         stroke="currentColor"
-        strokeWidth="1.7"
+        strokeWidth="1.8"
         strokeLinecap="round"
       />
-      {/* 箭头（实心小三角，指向顺时针切线方向） */}
-      <polygon points="16.97,5.05 13.66,5.82 14.48,2.72" fill="currentColor" />
+      {/* 箭头（实心小三角，指向顺时针切线方向，与弧尾同向衔接） */}
+      <polygon points="16.48,4.85 12.83,6.36 13.39,2.40" fill="currentColor" />
       {one && (
         <text
           x="12"
@@ -120,6 +130,18 @@ function LoopArrowIcon({ one = false, className }: { one?: boolean; className?: 
           1
         </text>
       )}
+    </svg>
+  );
+}
+
+/** 顺序播放专属图标（第三十七轮新增）：此前「顺序播放」和「列表循环」共用同一枚圆环箭头、
+ *  只差颜色（白/红），点一下看不出变了——用户反馈「为什么需要点两下才能变成循环」的根因。
+ *  顺序播放改为独立的向右箭头，四种模式四种图形，一眼可辨 */
+function OrderPlayIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <path d="M4 12 H17.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <polygon points="17,8.4 21.4,12 17,15.6" fill="currentColor" />
     </svg>
   );
 }
@@ -216,6 +238,17 @@ export function MusicPlayer() {
     if (chatOverride !== null) setChatOverride(null);
   }
   const [moreToast, setMoreToast] = useState('');
+  // 播放模式浮层提示（第三十七轮）：切换时报出模式名，1.4 秒后淡出
+  const [modeTip, setModeTip] = useState('');
+  const modeTipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cycleMode = () => {
+    const order: RepeatMode[] = ['order', 'repeat', 'one', 'shuffle'];
+    const nm = order[(order.indexOf(mode) + 1) % order.length];
+    setMode(nm);
+    setModeTip(MODE_LABELS[nm]);
+    if (modeTipTimer.current) clearTimeout(modeTipTimer.current);
+    modeTipTimer.current = setTimeout(() => setModeTip(''), 1400);
+  };
   // 提示 3 秒自动消失（第十五轮反馈；此前会一直停留在屏幕上）
   useEffect(() => {
     if (!moreToast) return;
@@ -693,27 +726,32 @@ export function MusicPlayer() {
         </div>
 
         {/* 控制区（歌词视图整体上移一点：第二十六轮反馈底部暂停键太贴底）
-            第三十五轮按参考截图美化：圆环循环箭头 / 圆角双条暂停 / 大圆角三角播放 / 三角+线队列 */}
+            第三十五轮按参考截图美化：圆环循环箭头 / 圆角双条暂停 / 大圆角三角播放 / 三角+线队列
+            第三十七轮：顺序播放改独立箭头图标（不再与列表循环共形）+ 切换时浮层提示模式名 */}
         <div className={`flex items-center justify-between px-8 pt-3 ${showLyric ? 'pb-5' : 'pb-2'}`}>
-          <button
-            type="button"
-            onClick={() => {
-              const order: RepeatMode[] = ['order', 'repeat', 'one', 'shuffle'];
-              const idx = order.indexOf(mode);
-              setMode(order[(idx + 1) % order.length]);
-            }}
-            data-testid="music-player-mode"
-            aria-label="播放模式"
-            className="p-1 text-white/80 active:scale-90"
-          >
-            {(mode === 'order' || mode === 'repeat') && (
-              <LoopArrowIcon
-                className={`h-[23px] w-[23px] ${mode === 'repeat' ? 'text-[#EC4141]' : ''}`}
-              />
-            )}
-            {mode === 'one' && <LoopArrowIcon one className="h-[23px] w-[23px] text-[#EC4141]" />}
-            {mode === 'shuffle' && <Shuffle className="h-[23px] w-[23px] text-[#EC4141]" />}
-          </button>
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={cycleMode}
+              data-testid="music-player-mode"
+              aria-label="播放模式"
+              className="block p-1 text-white/80 active:scale-90"
+            >
+              {mode === 'order' && <OrderPlayIcon className="h-[23px] w-[23px]" />}
+              {mode === 'repeat' && <LoopArrowIcon className="h-[23px] w-[23px] text-[#EC4141]" />}
+              {mode === 'one' && <LoopArrowIcon one className="h-[23px] w-[23px] text-[#EC4141]" />}
+              {mode === 'shuffle' && <Shuffle className="h-[23px] w-[23px] text-[#EC4141]" />}
+            </button>
+            {/* 模式浮层提示：每次切换立刻报出模式名（修复「点两下才发现变了」的感知问题），1.4 秒后淡出 */}
+            <span
+              data-testid="music-player-mode-tip"
+              className={`pointer-events-none absolute -top-[26px] left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/60 px-2.5 py-[5px] text-[11px] leading-none text-white shadow-sm backdrop-blur-sm transition-all duration-200 ${
+                modeTip ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'
+              }`}
+            >
+              {modeTip || MODE_LABELS[mode]}
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => void prev()}
@@ -1580,9 +1618,9 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          第三十四轮 mt-[22px]→mt-[18px] 再上移 4px（用户「往上移一点点」），
-          线尾渐隐段（页面 y≈165）仍在时长行上方 ~7px 不相交 */}
-      <p className={`mt-[18px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+          第三十七轮 mt-[18px]→mt-[14px] 再上移 4px（用户「往上移一点点」），
+          耳机线尾在 svg 内 y=43（容器 y≈75）处已完全渐隐为透明，时长行上缘（y≈78）与之不相交 */}
+      <p className={`mt-[14px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——

@@ -447,6 +447,9 @@ export const useMusic = create<MusicState>((set, get) => ({
         quality: snap.quality ?? 'standard',
       });
       if (audio) audio.volume = typeof snap.volume === 'number' ? snap.volume : 1;
+      // 歌词预载（第三十七轮）：快照恢复的歌把歌词也拉好——页面刷新后没开过音乐 App、
+      // 直接去微信/QQ 聊天时，一起听遥控（music-remote.ts）也能带上「正在唱到的歌词」
+      if (queue[idx]) void get().loadLyric(queue[idx].id);
     }
     // 恢复历史
     loadHistoryFor();
