@@ -13,8 +13,10 @@
  *   卡片下方的分享语/邀请语小字已按用户要求整体移除（卡片本身干净无附注）。
  * - 第二十三轮反馈：卡片圆角调小（10→6px，之前太圆）；邀请卡的「邀请你一起听」
  *   从歌名同行拆出，单独放到歌名的上方一行（邀请语小字 / 歌名粗体 / 歌手）。
- * - 第二十四轮：agree（同意一起听卡片）——顶部小字「已同意一起听」，点击同样播放该歌；
- *   第二十五轮修正：同意卡只有「接受方」发一张（我邀请 → 只有 TA 发；TA 邀请被接受 → 只有我发）。
+ * - 第二十四轮：agree（同意一起听卡片）——歌名上方小字，点击同样播放该歌；
+ *   第二十五轮修正：同意卡只有「接受方」发一张（我邀请 → 只有 TA 发；TA 邀请被接受 → 只有我发）；
+ *   第二十六轮：文案按方向区分——我发（我是接受方）＝「你接受了TA的邀请」，
+ *   TA 发（TA 是接受方）＝「TA接受了你的邀请」（不再两边都足「已同意一起听」）。
  */
 
 import { useEffect, useState } from 'react';
@@ -51,7 +53,7 @@ export interface SongMsgBubbleProps {
   artist: string;
   /** 邀请一起听卡：歌名行显示「邀请你一起听歌名」（第二十二轮反馈，不再用卡片下方小字） */
   invite?: boolean;
-  /** 同意一起听卡：歌名行上方小字显示「已同意一起听」（第二十四轮） */
+  /** 同意一起听卡：歌名行上方小字按发送方区分方向（第二十四轮引入，第二十六轮改方向文案） */
   agree?: boolean;
   /** 落库时已知的封面（音乐 App 分享带；AI 标记无则异步解析） */
   cover?: string;
@@ -137,12 +139,13 @@ export default function SongMsgBubble({ msgId, role, name, artist, invite, agree
             </span>
           )}
         </span>
-        {/* 歌名 / 歌手 / 播放钮。invite/agree 卡：小字单独放歌名上方一行（邀请你一起听 / 已同意一起听） */}
+        {/* 歌名 / 歌手 / 播放钮。invite/agree 卡：小字单独放歌名上方一行
+            （邀请你一起听 / 同意卡按发送方分方向：我发=你接受了TA的邀请，TA发=TA接受了你的邀请） */}
         <span className="flex min-w-0 flex-1 items-center gap-1 px-2.5">
           <span className="min-w-0 flex-1">
             {(invite || agree) && (
               <span className="block truncate text-[11px] leading-[14px] text-zinc-400">
-                {agree ? '已同意一起听' : '邀请你一起听'}
+                {agree ? (role === 'me' ? '你接受了TA的邀请' : 'TA接受了你的邀请') : '邀请你一起听'}
               </span>
             )}
             <span className={`block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100 ${invite || agree ? 'mt-[1px]' : ''}`}>

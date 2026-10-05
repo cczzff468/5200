@@ -2,8 +2,9 @@
 
 /**
  * 音乐 App 播放页（仿网易云黑胶）：
- * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 唱针（播放贴合/暂停抬起）
- * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；点空白处回唱片）
+ * - 封面模糊背景 + 黑胶唱片（旋转动画）+ 白色唱针（播放贴盘/暂停抬起，仿网易云截图）
+ * - 封面区点击切换歌词视图（LRC 滚动 + 翻译，当前行高亮自动居中；胶囊 3 秒淡出；
+ *   点歌词以外的任何位置回唱片）
  * - 进度条拖拽 / 循环模式 / 播放暂停 / 上下首 / 播放列表
  * - 右上角更多：仿网易云歌曲面板（为TA心动/收藏/下载/分享/一起听/评论/相似漫游/音质）
  * - 一起听态：顶部双头像 + 累计时长（跨会话永久保存） + 音乐/聊天胶囊切换
@@ -29,7 +30,6 @@ import {
   LogOut,
   MessageCircle,
   MessageCircleMore,
-  MessagesSquare,
   MicVocal,
   MoreVertical,
   Music2,
@@ -212,13 +212,13 @@ export function MusicPlayer() {
   const modeCapsule = together ? (
     <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
       <span className="h-8 w-8 shrink-0" aria-hidden />
-      <div className="flex items-center gap-1 rounded-[14px] bg-white/10 p-1">
+      <div className="flex items-center gap-1 rounded-[10px] bg-white/10 p-1">
         <button
           type="button"
           onClick={() => setChatOverride(false)}
           data-testid="music-tg-tab-music"
           aria-label="音乐视图"
-          className={`flex h-8 w-8 items-center justify-center rounded-[10px] ${
+          className={`flex h-8 w-11 items-center justify-center rounded-[6px] ${
             !showChat ? 'bg-white/25 text-white' : 'text-white/55'
           }`}
         >
@@ -229,7 +229,7 @@ export function MusicPlayer() {
           onClick={() => setChatOverride(true)}
           data-testid="music-tg-open-chat"
           aria-label="聊天视图"
-          className={`flex h-8 w-8 items-center justify-center rounded-[10px] ${
+          className={`flex h-8 w-11 items-center justify-center rounded-[6px] ${
             showChat ? 'bg-white/25 text-white' : 'text-white/55'
           }`}
         >
@@ -247,18 +247,8 @@ export function MusicPlayer() {
       </button>
     </div>
   ) : (
-    // 自己一个人听：居中「邀请好友一起听」+ 右下角三个点（点击打开与一起听一致的歌曲操作面板）
-    <div className="flex shrink-0 items-center justify-between px-6 pb-4 pt-1">
-      <span className="h-8 w-8 shrink-0" aria-hidden />
-      <button
-        type="button"
-        onClick={() => setShowInvite(true)}
-        data-testid="music-tg-invite-solo"
-        className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-2 text-[13px] text-white/85 active:scale-95"
-      >
-        <UserRoundPlus className="h-4 w-4" />
-        邀请好友一起听
-      </button>
+    // 自己一个人听：「邀请好友一起听」已移到顶栏右上角（第二十六轮反馈），底部只留歌曲操作面板三个点
+    <div className="flex shrink-0 items-center justify-end px-6 pb-4 pt-1">
       <button
         type="button"
         onClick={() => setShowMore(true)}
@@ -360,7 +350,8 @@ export function MusicPlayer() {
                   className={`h-[26px] w-[26px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                   fill={liked ? 'currentColor' : 'none'}
                 />
-                <span className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
+                {/* 热度数（第二十六轮按截图：爱心数红色，与评论数灰白区分） */}
+                <span className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
                   {fmtCountW(fakeHotCount(current.id))}
                 </span>
               </button>
@@ -392,13 +383,13 @@ export function MusicPlayer() {
             >
               <Gift className="h-5 w-5" />
             </button>
-            <div className="flex items-center gap-1 rounded-[14px] bg-white/10 p-1">
+            <div className="flex items-center gap-1 rounded-[10px] bg-white/10 p-1">
               <button
                 type="button"
                 onClick={() => setChatOverride(false)}
                 data-testid="music-tg-chat-tab-music"
                 aria-label="切到音乐视图"
-                className="flex h-8 w-8 items-center justify-center rounded-[10px] text-white/55 active:scale-95"
+                className="flex h-8 w-11 items-center justify-center rounded-[6px] text-white/55 active:scale-95"
               >
                 <Music2 className="h-4 w-4" />
               </button>
@@ -407,7 +398,7 @@ export function MusicPlayer() {
                 onClick={() => setChatOverride(true)}
                 data-testid="music-tg-chat-tab-chat"
                 aria-label="聊天视图"
-                className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white/25 text-white"
+                className="flex h-8 w-11 items-center justify-center rounded-[6px] bg-white/25 text-white"
               >
                 <MessageCircle className="h-4 w-4" />
               </button>
@@ -495,25 +486,35 @@ export function MusicPlayer() {
       )}
 
       <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
-        <PlayerTopBar
-          onClose={close}
-          light
-          dense={!!together}
-          // 右上角 ⋮ 仅一起听显示（自己听不显示：用户第十三轮反馈）；聊天视图为一起听专属恒显示
-          onMenu={together ? openTgMenu : undefined}
-        />
+        {/* 歌词视图顶栏隐藏：歌名/歌手头部即顶栏（第二十六轮，标题提到最上一行、与右上三点同行对齐） */}
+        {!showLyric && (
+          <PlayerTopBar
+            onClose={close}
+            light
+            dense={!!together}
+            // 右上角 ⋮ 仅一起听显示（自己听不显示：用户第十三轮反馈）；聊天视图为一起听专属恒显示
+            onMenu={together ? openTgMenu : undefined}
+            // 自己听：邀请好友一起听移到顶栏右上角（第二十六轮反馈）
+            onInviteSolo={!together ? () => setShowInvite(true) : undefined}
+          />
+        )}
 
         {/* 歌词界面隐藏双头像；黑胶界面才展示 */}
         {!showLyric && togetherHead}
 
       {/* 封面/歌词切换区（留出顶部唱针空间；歌词视图加宽到近全宽，仿网易云歌词页） */}
-        <div className={`relative flex min-h-0 flex-1 items-center justify-center pt-4 ${showLyric ? 'px-3' : 'px-8'}`}>
+        <div
+          className={`relative flex min-h-0 flex-1 items-center justify-center pt-4 ${showLyric ? 'px-3' : 'px-8'}`}
+          // 歌词视图：点歌词区以外（左右留白/顶部空隙）也返回唱片界面（第二十六轮反馈）
+          onClick={showLyric ? () => setShowLyric(false) : undefined}
+        >
           {showLyric ? (
             <LyricView
               song={current}
               onSwitch={() => setShowLyric(false)}
               onMore={() => setShowMore(true)}
               onToast={setMoreToast}
+              topInset={together ? 46 : 58}
             />
           ) : (
             <VinylView
@@ -544,16 +545,17 @@ export function MusicPlayer() {
           {/* 信息图标：一起听时点击底部弹出输入框（气泡显示在头像下）；自己听不显示；纯图标无底色 */}
           <div className="flex shrink-0 items-center gap-7 pt-4">
             {together && (
+              // 聊天按钮（第二十六轮按用户截图美化）：半透明圆底 + 实色镂空点气泡（暖白色）
               <button
                 type="button"
                 onClick={() => setShowQuickInput((v) => !v)}
                 data-testid="music-player-chat"
                 aria-label="发消息"
-                className={`flex h-6 w-6 shrink-0 items-center justify-center active:scale-95 ${
-                  showQuickInput ? 'text-white' : 'text-white/75'
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95 ${
+                  showQuickInput ? 'text-white' : 'text-[#EFE8D8]'
                 }`}
               >
-                <MessagesSquare className="h-[22px] w-[22px]" />
+                <TgChatGlyph className="h-[22px] w-[22px]" />
               </button>
             )}
             <button
@@ -567,8 +569,9 @@ export function MusicPlayer() {
                 className={`h-[25px] w-[25px] ${liked ? 'text-[#EC4141]' : 'text-white/75'}`}
                 fill={liked ? 'currentColor' : 'none'}
               />
+              {/* 热度数挂图标右上角（第二十五轮）；第二十六轮改红色（仿网易云截图） */}
               <span
-                className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-white/55 [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
+                className="absolute -right-[7px] -top-[8px] whitespace-nowrap text-[10px] font-medium leading-none tabular-nums text-[#EC4141] [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]"
                 data-testid="music-player-like-count"
               >
                 {fmtCountW(fakeHotCount(current.id))}
@@ -606,8 +609,8 @@ export function MusicPlayer() {
           )}
         </div>
 
-        {/* 控制区 */}
-        <div className="flex items-center justify-between px-8 pb-2 pt-3">
+        {/* 控制区（歌词视图整体上移一点：第二十六轮反馈底部暂停键太贴底） */}
+        <div className={`flex items-center justify-between px-8 pt-3 ${showLyric ? 'pb-5' : 'pb-2'}`}>
           <button
             type="button"
             onClick={() => {
@@ -736,6 +739,7 @@ function PlayerTopBar({
   light,
   onMenu,
   dense,
+  onInviteSolo,
 }: {
   onClose: () => void;
   /** 顶部标题（可选；一起听/播放模式默认不展示） */
@@ -745,6 +749,8 @@ function PlayerTopBar({
   onMenu?: () => void;
   /** 紧凑顶栏（一起听：双头像更贴顶） */
   dense?: boolean;
+  /** 自己听：右上角「邀请好友一起听」（第二十六轮反馈从底部移到顶栏右上角） */
+  onInviteSolo?: () => void;
 }) {
   return (
     <div className={`flex items-center gap-3 px-5 pb-1 ${dense ? 'pt-[46px]' : 'pt-[58px]'}`}>
@@ -766,6 +772,17 @@ function PlayerTopBar({
         >
           <MoreVertical className="h-[19px] w-[19px] text-white/90" />
         </button>
+      ) : onInviteSolo ? (
+        // 自己听：邀请好友一起听胶囊（顶栏右上角）
+        <button
+          type="button"
+          onClick={onInviteSolo}
+          data-testid="music-tg-invite-solo"
+          className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-3 py-[7px] text-[12px] text-white/85 active:scale-95"
+        >
+          <UserRoundPlus className="h-3.5 w-3.5" />
+          邀请好友一起听
+        </button>
       ) : (
         <span className="w-6" />
       )}
@@ -773,7 +790,21 @@ function PlayerTopBar({
   );
 }
 
-// ---------------- 黑胶视图 ----------------
+/** 一起听聊天按钮图标（第二十六轮按用户截图美化）：实色圆气泡 + 三个镂空点（evenodd 挖孔，暖白色） */
+function TgChatGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M12 2.8c-5.1 0-9.2 3.5-9.2 7.9 0 2.5 1.3 4.7 3.4 6.1l-.9 3.6c-.14.5.35.92.8.68l3.9-2.1c.65.12 1.32.18 2 .18 5.1 0 9.2-3.5 9.2-7.9S17.1 2.8 12 2.8zM8.2 9.4a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3zm3.8 0a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3zm3.8 0a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3z"
+      />
+    </svg>
+  );
+}
+
+// ---------------- 黑胶视图（第二十六轮美化：白色拟真唱针仿用户截图） ----------------
 
 function VinylView({
   song,
@@ -787,7 +818,7 @@ function VinylView({
   return (
     <div className="relative flex h-full w-full flex-col items-center">
       <div className="flex min-h-0 w-full flex-1 items-center justify-center">
-        {/* 黑胶（细密纹路 + 立体边缘 + 深色唱针，仿网易云；尺寸随空间自适应不溢出） */}
+        {/* 黑胶（细密纹路 + 立体边缘，仿网易云；尺寸随空间自适应不溢出） */}
         <button
           type="button"
           onClick={onSwitch}
@@ -795,24 +826,25 @@ function VinylView({
           aria-label="切换到歌词"
           className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
         >
-          {/* 唱针（深色金属风，播放贴盘 / 暂停抬起）——轴承固定在唱片右上角边缘：
-              容器右缘超出唱片 6px，轴心（origin 9,9）落在距唱片右缘 ~25px 处（大比例不随唱片尺寸漂移），
-              针杆向右下 18° 自然搭在最外圈纹路上，不再悬在唱片中上方 */}
+          {/* 唱针（白色拟真风，仿用户参考截图）：白色圆轴承悬在唱片上方偏右（盘外），
+              白色针杆从轴心斜搭到盘面纹路上；全百分比定位随唱片尺寸等比缩放。
+              CSS 正角把向下的针臂摆向左——播放用 -21° 让针头落在盘面右上纹路上；
+              暂停 → 抬起 + 顺时针摆开（离开盘面） */}
           <div
-            className="absolute right-[-6px] top-[-12px] z-20 h-[92px] w-[40px] origin-[9px_9px] transition-transform duration-500"
-            style={{ transform: playing ? 'rotate(0deg)' : 'rotate(-24deg)' }}
+            className="absolute left-[49.7%] top-[-19%] z-20 h-[59%] w-[2.6%] origin-top rounded-full bg-gradient-to-b from-white via-[#f3f0e8] to-[#dcd7c9] shadow-[0_2px_6px_rgba(0,0,0,0.28)] transition-transform duration-500"
+            style={{ transform: playing ? 'rotate(-21deg)' : 'translateY(-10px) rotate(26deg)' }}
           >
-            {/* 轴承底座 */}
-            <div className="absolute left-0 top-0 h-[18px] w-[18px] rounded-full bg-[#2c2c30] shadow-[0_2px_6px_rgba(0,0,0,0.55)] ring-1 ring-white/20" />
-            <div className="absolute left-[4.5px] top-[4.5px] h-2 w-2 rounded-full bg-[#525257] ring-1 ring-black/60" />
-            {/* 针杆（细金属臂，向下伸向盘面外缘） */}
-            <div className="absolute left-[8px] top-[8px] h-[62px] w-[2.5px] origin-top rotate-[18deg] rounded-full bg-gradient-to-b from-[#9a9aa2] via-[#5f5f66] to-[#38383d]" />
-            {/* 针头（深色小唱头，落在盘缘最外圈） */}
-            <div className="absolute left-[24px] top-[62px] h-[13px] w-[6.5px] rotate-[18deg] rounded-[3px] bg-[#3a3a40] shadow-[0_1px_3px_rgba(0,0,0,0.6)] ring-1 ring-white/10" />
+            {/* 针头（白色唱头，随针臂同角度，落在盘面外圈） */}
+            <div className="absolute -bottom-[5%] left-1/2 h-[8%] w-[260%] -translate-x-1/2 rotate-[4deg] rounded-[3px] bg-gradient-to-b from-white to-[#d5d0c2] shadow-[0_1px_4px_rgba(0,0,0,0.35)] ring-1 ring-black/5" />
+          </div>
+          {/* 轴承（白色圆钮，压住针臂轴心，不随播放旋转） */}
+          <div className="absolute left-[46.5%] top-[-23.5%] z-30 h-[9%] w-[9%] rounded-full bg-gradient-to-b from-white to-[#e9e5da] shadow-[0_3px_10px_rgba(0,0,0,0.4)]">
+            <div className="absolute left-1/2 top-1/2 h-[38%] w-[38%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#c9c3b4] ring-1 ring-black/10" />
           </div>
 
-          {/* 外缘深黑圈（不随旋转，提供立体边缘） */}
-          <div className="absolute inset-0 rounded-full bg-[#050505] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)]" />
+          {/* 盘后氛围光晕（增加悬浮立体感）+ 外缘深黑圈（不随旋转，提供立体边缘） */}
+          <div className="absolute inset-[-7%] rounded-full bg-black/30 blur-2xl" />
+          <div className="absolute inset-0 rounded-full bg-[#050505] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)] ring-1 ring-white/10" />
           {/* 胶片主体（旋转）：细密同心纹路 */}
           <div
             className="absolute inset-[2.5%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
@@ -833,8 +865,8 @@ function VinylView({
                   }
             }
           >
-            {/* 斜向高光 */}
-            <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_210deg,rgba(255,255,255,0.09),transparent_16%,rgba(255,255,255,0.05)_32%,transparent_55%,rgba(255,255,255,0.07)_74%,transparent_93%)]" />
+            {/* 斜向高光（第二十六轮增强质感） */}
+            <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_210deg,rgba(255,255,255,0.13),transparent_16%,rgba(255,255,255,0.07)_32%,transparent_55%,rgba(255,255,255,0.1)_74%,transparent_93%)]" />
             {/* 封面（占比更大） */}
             <div className="absolute inset-[23.5%] overflow-hidden rounded-full ring-[3px] ring-black/70">
               <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
@@ -849,8 +881,9 @@ function VinylView({
 }
 
 // ---------------- 歌词视图（第二十四轮重做：仿网易云歌词页——
-// 当前行胶囊高亮（行时间+播放键），上下行淡出聚焦，逐行滚动；
-// 点行跳播、长按复制、手动滑动浏览松手 3 秒后回当前行、拖进度条歌词跟随） ----------------
+// 当前行胶囊高亮（行时间+播放键，3 秒后自动淡出第二十六轮），上下行淡出聚焦，逐行滚动；
+// 点行跳播、长按复制、手动滑动浏览松手 3 秒后回当前行、拖进度条歌词跟随；
+// 顶部歌名/歌手头部即顶栏（标题与右上三点同行，第二十六轮）；点歌词以外的任何位置回唱片 ----------------
 
 /** 剪贴板写入（clipboard API 失败回退 execCommand） */
 async function copyLyricText(t: string): Promise<boolean> {
@@ -880,12 +913,15 @@ function LyricView({
   onSwitch,
   onMore,
   onToast,
+  topInset = 58,
 }: {
   song: NcmSong;
   onSwitch: () => void;
   /** 右上角更多钮 → 歌曲操作面板（MoreSheet） */
   onMore: () => void;
   onToast: (m: string) => void;
+  /** 顶部安全区高度（一起听 46 / 自己听 58，与 PlayerTopBar 一致；歌词态顶栏隐藏，头部自担） */
+  topInset?: number;
 }) {
   const lyricLines = useMusic((s) => s.lyricLines);
   const loading = useMusic((s) => s.lyricLoading);
@@ -905,7 +941,6 @@ function LyricView({
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState('');
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const activeIdx = useMemo(() => {
     let idx = -1;
     for (let i = 0; i < lyricLines.length; i++) {
@@ -918,6 +953,21 @@ function LyricView({
   useEffect(() => {
     activeIdxRef.current = activeIdx;
   }, [activeIdx]);
+
+  // 当前行胶囊高亮 3 秒自动淡出（第二十六轮反馈：不要一直显示）——
+  // 行切换时置亮（render 期派生重置，React 官方 adjust-state 模式），3 秒后定时淡出；
+  // 胶囊隐藏后行文字仍保持高亮白，仅背景/时间/播放键淡出（占位不变不跳动）
+  const [capsuleOn, setCapsuleOn] = useState(true);
+  const [capsulePrevIdx, setCapsulePrevIdx] = useState(activeIdx);
+  if (capsulePrevIdx !== activeIdx) {
+    setCapsulePrevIdx(activeIdx);
+    setCapsuleOn(true);
+  }
+  useEffect(() => {
+    if (!capsuleOn) return;
+    const t = setTimeout(() => setCapsuleOn(false), 3000);
+    return () => clearTimeout(t);
+  }, [capsuleOn, activeIdx]);
 
   const scrollToLine = (idx: number, behavior: ScrollBehavior) => {
     const box = boxRef.current;
@@ -996,19 +1046,26 @@ function LyricView({
   };
 
   return (
-    <div className="relative h-full w-full" data-testid="music-lyric-view">
-      {/* 顶部歌名/歌手头部（第二十五轮，按用户截图：左下拉箭头回黑胶 / 中间 VIP+歌名+歌手+关注 / 右侧更多钮开歌曲面板） */}
-      <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-2 px-4">
+    <div className="relative h-full w-full" data-testid="music-lyric-view" onClick={onSwitch}>
+      {/* 顶部歌名/歌手头部（第二十五轮按用户截图；第二十六轮：标题提到最上一行、
+          与右上角三点垂直居中对齐，头部自身承担顶部安全区；点头部空白处也回唱片） */}
+      <div
+        className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-2 px-4"
+        style={{ paddingTop: topInset }}
+      >
         <button
           type="button"
-          onClick={onSwitch}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSwitch();
+          }}
           aria-label="返回黑胶"
           data-testid="music-lyric-back"
-          className="-ml-1 mt-1 p-1 text-white/85 active:scale-95"
+          className="-ml-1 p-1 text-white/85 active:scale-95"
         >
           <ChevronDown className="h-7 w-7" />
         </button>
-        <div className="flex min-w-0 flex-1 flex-col items-center pt-0.5">
+        <div className="flex min-w-0 flex-1 flex-col items-center">
           <div className="flex max-w-full items-center gap-1.5">
             {song.fee === 1 && (
               <span
@@ -1025,7 +1082,7 @@ function LyricView({
               {song.name}
             </h2>
           </div>
-          <div className="mt-1 flex max-w-full items-center gap-2">
+          <div className="mt-1 flex max-w-full items-center gap-2" onClick={(e) => e.stopPropagation()}>
             <p className="min-w-0 truncate text-[13px] text-white/65" data-testid="music-lyric-artist">
               {songArtistText(song)}
             </p>
@@ -1034,10 +1091,13 @@ function LyricView({
         </div>
         <button
           type="button"
-          onClick={onMore}
+          onClick={(e) => {
+            e.stopPropagation();
+            onMore();
+          }}
           aria-label="歌曲操作面板"
           data-testid="music-lyric-more"
-          className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 active:scale-95"
         >
           <MoreVertical className="h-[17px] w-[17px] text-white/90" />
         </button>
@@ -1045,12 +1105,16 @@ function LyricView({
       {/* 翻译开关（头部下方右侧悬浮，不占头部一行；中英对照能力保留） */}
       <button
         type="button"
-        onClick={() => setShowTr(!showTr)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowTr(!showTr);
+        }}
         aria-label="翻译开关"
         data-testid="music-lyric-tr-toggle"
-        className={`absolute right-3 top-[56px] z-20 rounded-full px-2.5 py-1 text-[10px] ${
+        className={`absolute right-3 z-20 rounded-full px-2.5 py-1 text-[10px] ${
           showTr ? 'bg-white/20 text-white' : 'bg-white/5 text-white/40'
         }`}
+        style={{ top: topInset + 52 }}
       >
         译
       </button>
@@ -1116,15 +1180,22 @@ function LyricView({
               onPointerLeave={clearPress}
               onPointerCancel={clearPress}
               onContextMenu={(e) => e.preventDefault()}
-              className={`cursor-pointer select-none transition-all duration-300 ${
+              className={`cursor-pointer select-none ${
                 isActive
-                  ? 'flex items-center gap-2 rounded-[12px] bg-white/[0.08] py-2.5 pl-3 pr-2'
-                  : `px-2 py-2.5 text-center ${dimCls}`
+                  ? `flex items-center gap-2 rounded-[12px] py-2.5 pl-3 pr-2 transition-colors duration-700 ${
+                      capsuleOn ? 'bg-white/[0.08]' : 'bg-transparent'
+                    }`
+                  : `px-2 py-2.5 text-center transition-all duration-300 ${dimCls}`
               }`}
             >
               {isActive ? (
                 <>
-                  <span className="w-[40px] shrink-0 text-left text-[12px] leading-none tabular-nums text-white/75">
+                  {/* 行时间/播放键：胶囊淡出后隐藏但保留占位（布局与滚动位置不跳动） */}
+                  <span
+                    className={`w-[40px] shrink-0 text-left text-[12px] leading-none tabular-nums text-white/75 transition-opacity duration-500 ${
+                      capsuleOn ? 'opacity-100' : 'pointer-events-none opacity-0'
+                    }`}
+                  >
                     {fmtClock(l.t)}
                   </span>
                   <span className="min-w-0 flex-1 text-center">
@@ -1141,7 +1212,9 @@ function LyricView({
                     }}
                     aria-label={playing ? '暂停' : '播放'}
                     data-testid="music-lyric-play-toggle"
-                    className="flex h-6 w-6 shrink-0 items-center justify-center text-white/85 active:scale-90"
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center text-white/85 transition-opacity duration-500 active:scale-90 ${
+                      capsuleOn ? 'opacity-100' : 'pointer-events-none opacity-0'
+                    }`}
                   >
                     {playing ? (
                       <Pause className="h-[14px] w-[14px]" fill="currentColor" strokeWidth={0} />
@@ -1264,13 +1337,28 @@ function TogetherHead({
   const durText = fmtTogetherDur(nowMs - session.since);
   return (
     <div className="relative flex flex-col items-center pt-1 pb-0.5" data-testid="music-tg-head">
-      {/* 双头像（变大，紧贴交叠，无边框/无徽章/无耳机线，干净利落） */}
+      {/* 双头像 + 耳机线（第二十六轮反馈）：一根线从两侧头像底部垂下、中间下垂成弧，
+          末端刚好落在时长行上方——像两只耳机用一根线连着；头像（relative）盖在线上方 */}
       <div className="relative z-10 flex items-center" data-testid="music-tg-avatars">
-        <CoverImg src={session.avatar} className="h-16 w-16" rounded="rounded-full" alt={session.name} />
+        <svg
+          viewBox="0 0 118 26"
+          className="pointer-events-none absolute inset-x-0 top-[57px] z-0 h-[26px] w-full"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M 32 8 C 35 20, 46 22, 59 22 C 72 22, 83 20, 86 8"
+            stroke="rgba(255,255,255,0.55)"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        </svg>
+        <CoverImg src={session.avatar} className="relative h-16 w-16" rounded="rounded-full" alt={session.name} />
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
-      {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动 */}
-      <p className={`mt-1.5 text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+      {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
+          mt-4 给耳机线下垂留出空间（线末端落在时长行上方，第二十六轮） */}
+      <p className={`mt-4 text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——

@@ -281,7 +281,7 @@ import {
 } from '@/lib/chat-rich';
 import SongMsgBubble from './song-msg-bubble';
 import { triggerInviteFromChat } from '@/lib/ios/together-invite';
-import { sendUserTogetherInvite, type TgCardMsg } from '@/lib/ios/together-flow';
+import { sendUserTogetherInvite, TG_CARD_INSERTED_EVENT, type TgCardMsg } from '@/lib/ios/together-flow';
 import { TogetherInviteSheet } from './together-invite-sheet';
 import { songArtistText, songCover } from '@/lib/ios/music-api';
 import {
@@ -3376,6 +3376,22 @@ function ChatPage({
       });
     });
   }, [sessionKey, peer.id]);
+
+  /** 一起听卡片落库监听（第二十六轮）：AI 邀请被接受（全局弹卡 ✓）时同意卡走 kv 直写
+   *  （together-flow），聊天页在场时实时把新增落库消息合并进本地——不用重开聊天才显示 */
+  useEffect(() => {
+    const onTgCard = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'qq') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const ids = new Set(prev.map((m) => m.id));
+        return sortMsgsByTime([...prev, ...saved.filter((m) => !ids.has(m.id))]);
+      });
+    };
+    window.addEventListener(TG_CARD_INSERTED_EVENT, onTgCard);
+    return () => window.removeEventListener(TG_CARD_INSERTED_EVENT, onTgCard);
+  }, [peer.id]);
 
   /** 投递进行中（含排队批次）：标题维持「正在输入中…」，直到最后一条消息发出 */
   const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey));

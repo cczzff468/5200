@@ -66,12 +66,21 @@ export function buildTgCardMsg(role: 'me' | 'peer', kind: 'invite' | 'agree', so
   };
 }
 
-/** kv 直插一张卡片（聊天页不在场时用；在场走 insert 回调实时刷新） */
+/** kv 直插一张卡片（聊天页不在场时用；在场走 insert 回调实时刷新）；
+ *  插入后广播 TG_CARD_INSERTED_EVENT —— 聊天页在场时监听实时合并（第二十六轮：
+ *  修复「开着聊天页点 ✓ 接受 AI 邀请，同意卡落库后要重开聊天才显示」） */
+export const TG_CARD_INSERTED_EVENT = 'music-tg-card-inserted';
+
 function kvInsertCard(cid: string, app: 'wx' | 'qq', msg: TgCardMsg): void {
   const key = app === 'wx' ? `wx-chat-msgs:${cid}` : `qq-chat-msgs:${cid}`;
   try {
     const cur = kvGet<unknown[]>(key) ?? [];
     kvSet(key, [...cur, msg].slice(-100));
+    try {
+      window.dispatchEvent(new CustomEvent(TG_CARD_INSERTED_EVENT, { detail: { cid, app } }));
+    } catch {
+      // 广播失败不影响落库
+    }
   } catch {
     // 落库失败静默（会话仍会建立）
   }

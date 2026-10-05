@@ -128,7 +128,7 @@ import {
 } from '@/lib/chat-rich';
 import SongMsgBubble from './song-msg-bubble';
 import { triggerInviteFromChat } from '@/lib/ios/together-invite';
-import { sendUserTogetherInvite, type TgCardMsg } from '@/lib/ios/together-flow';
+import { sendUserTogetherInvite, TG_CARD_INSERTED_EVENT, type TgCardMsg } from '@/lib/ios/together-flow';
 import { TogetherInviteSheet } from './together-invite-sheet';
 import { songArtistText, songCover } from '@/lib/ios/music-api';
 import {
@@ -4871,6 +4871,22 @@ function ChatPage({
       });
     });
   }, [sessionKey, peer.id]);
+
+  /** 一起听卡片落库监听（第二十六轮）：AI 邀请被接受（全局弹卡 ✓）时同意卡走 kv 直写
+   *  （together-flow），聊天页在场时实时把新增落库消息合并进本地——不用重开聊天才显示 */
+  useEffect(() => {
+    const onTgCard = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'wx') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const ids = new Set(prev.map((m) => m.id));
+        return sortMsgsByTime([...prev, ...saved.filter((m) => !ids.has(m.id))]);
+      });
+    };
+    window.addEventListener(TG_CARD_INSERTED_EVENT, onTgCard);
+    return () => window.removeEventListener(TG_CARD_INSERTED_EVENT, onTgCard);
+  }, [peer.id]);
 
   /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的
    *  过期通知行追加进来；按创建时间排序。与上方投递 tick 同一套合并模式，不丢本地新消息 */

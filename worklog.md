@@ -15339,3 +15339,26 @@ Stage Summary:
 - 关键决策：①同意卡归属=接受方（用户指出邀请方再发同意卡不合常理，邀请卡已表达意愿）；②VIP 徽章沿用 fee===1 判定（与 MoreSheet 同口径，fee=8 低音质免费不显示）；③「译」不进头部行保持截图构图，悬浮在头部下方
 - 范围限定遵守：改 4 文件（music-player/together-flow/together-invite/song-msg-bubble 注释）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项未触碰；一起听记忆写入/邀请记忆逻辑未动
 - 改动文件：src/components/apps/music-player.tsx、src/lib/ios/together-flow.ts、src/lib/ios/together-invite.ts、src/components/apps/song-msg-bubble.tsx（仅头注释）
+
+---
+Task ID: 85
+Agent: Z.ai Code（主会话）
+Task: 第二十六轮——①歌词当前行胶囊高亮 3 秒淡出 ②歌词标题提到最上一行与右上三点对齐（歌词态顶栏隐藏） ③点歌词以外任何位置回唱片 ④唱片美化（白色唱针仿截图） ⑤一起听双头像加耳机线连到时长上方 ⑥独听「邀请好友一起听」移右上角 ⑦爱心数字红色角标（仿截图） ⑧一起听聊天图标圆底美化（仿截图） ⑨歌词态底部暂停键上移 ⑩底部两个 tab 加宽+圆角变小 ⑪切后台/关页兜底 flush 一起听聊天记忆 ⑫聊天页加落库监听（同意卡实时刷新） ⑬recs 推荐卡写记忆 ⑭同意卡文案分方向
+
+Work Log:
+- ①胶囊 3 秒淡出（LyricView）：capsuleOn 状态 + render 期派生重置（React 官方 adjust-state 模式，规避 set-state-in-effect lint），每次当前行变化置亮、3 秒定时淡出；淡出后行文字仍保持高亮白，仅胶囊背景/行时间/播放键 opacity→0 + pointer-events-none（占位保留，布局与滚动位置零跳动）；唱歌行间隔 <3s 时每行重新计时（高亮跟随当前行），长间奏/暂停静置时自动消失（E2E：暂停 3.8s 后 time/btn opacity=0 ✓）
+- ②③歌词头部重做：LyricView 加 topInset prop（一起听 46/独听 58，与 PlayerTopBar 同步），头部 items-center 垂直居中（返回箭头/标题块/⋮ 三者中线对齐，E2E backC=98 moreC=98）；播放器歌词态整体隐藏 PlayerTopBar（歌名/歌手头部即顶栏，不再双行堆叠）；LyricView 根节点 + 父级留白区 onClick=回唱片，歌词行/⋮/译/歌手行 stopPropagation（点行仍=跳播；点标题→回唱片 ✓；译/⋮ 不误触返回）
+- ④唱片美化（VinylView 重写）：深色金属唱针整体换白色拟真风——白色圆轴承（渐变+内点）悬盘上方偏右、白色针杆渐变 shadow、白色唱头；全百分比定位随唱片等比缩放；播放 rotate(-21°) 针头落盘面右上纹路（CSS 正角把向下矢量摆向左，首版方向反了已修），暂停 translateY(-10px)+rotate(26°) 抬起摆开；盘后加黑晕 blur-2xl 悬浮感、外圈 ring-white/10、斜向高光增强（截图对比通过）
+- ⑤⑥⑦⑧⑨⑩播放器布局：TogetherHead 双头像下加 SVG 耳机线（C 曲线从两侧头像底垂下中间下垂，落点在时长行上方 1px，头像 relative 盖线上方，时长行 mt-1.5→mt-4 留出空间）；独听「邀请好友一起听」从底部居中移到顶栏右上角（PlayerTopBar 新 onInviteSolo prop，底部只留 ⋮）；爱心热度数 text-white/55→text-[#EC4141]（仿网易云截图，两处：独听视图+一起听聊天视图；评论数保持灰白）；一起听聊天入口 MessagesSquare→TgChatGlyph 自绘 SVG（evenodd 挖孔三点半透明圆底按钮 h-9 bg-white/10，暖白 #EFE8D8，仿截图）；歌词态控制区 pb-2→pb-5（暂停键上移）；音乐/聊天 tab 按钮 w-8→w-11、rounded-[10px]→rounded-[6px]、容器 rounded-[14px]→rounded-[10px]（两处胶囊同步）
+- ⑪兜底 flush（music-ai.ts）：bindTgLogFlush 挂 pagehide + visibilitychange(hidden)，遍历 tgLogBufs 全量 flushTgChatLog（同步清缓冲再异步落库不写重），bootMusicAi 装载；E2E：发 2 条不足 6 条 → defineProperty(document,'visibilityState','hidden') + dispatchEvent → mem-frag 新增「一起听时聊了这些」（兜底flush测试一/二）✓
+- ⑫落库监听：together-flow kvInsertCard 落库后 window.dispatchEvent(TG_CARD_INSERTED_EVENT='music-tg-card-inserted', {cid,app})；wechat/qq ChatPage 各加监听（cid+app 过滤 → loadMsgs 合并去重 → sortMsgsByTime，与相邻 subscribeAiDelivery 合并同模式）；真实链路 E2E 跑通两轮（AI 发 [邀请一起听] 标记 → 全局弹卡 → ✓ → kvInsertCard + 事件 → 卡片落库 + 通知 toast 即时出现，会话建立进音乐 App）
+- ⑬recs 记忆：togetherRecommend 成功推卡后补写 memAddEventFragment「{char}推荐了《x》《y》」（sourceTag='music-recs'）；E2E：推荐按钮 → recs 卡（稻香(治愈版)）→ mem-frag 含「推荐了《稻香(治愈版)》」✓
+- ⑭同意卡文案分方向（song-msg-bubble）：agree 卡小字按发送方渲染——role='me'（我是接受方）=「你接受了TA的邀请」/ role='peer'（TA 是接受方）=「TA接受了你的邀请」，渲染层派生无需迁移存量；E2E：我邀请→TA 卡显示「TA接受了你的邀请」✓，弹卡✓接受→我卡显示「你接受了TA的邀请」✓（两轮邀请 kv 共 4 张同意卡 id 无重复）
+- E2E（agent-browser 420×900 一次性会话，用完即关）：独听链路（搜匆匆那年王菲→播放→迷你条展开）+ 一起听全链路（IDB 注入 e2e-r26-char/user→wx 登录 e2e26→加号一起听→选晴天Jay→双向卡片→会话建立→黑胶视图耳机线/头像/时长→聊天视图推荐→recs→记忆→兜底 flush→AI 标记邀请→弹卡✓）全部通过；测试数据全清（kv 9 键+contacts 2 条+wx-session LS，复核 e2eLeft=0/togetherActive=0/contactsLeft=0）；console/errors 零应用错误（仅测试数据空头像 src 告警）；dev.log 无应用错误
+- bun run lint 0 错误；bunx tsc 0 错误
+
+Stage Summary:
+- 交付：歌词视图四项交互/布局精修（胶囊 3 秒淡出/标题顶行对齐 ⋮/点歌词以外回唱片/暂停键上移）；唱片白色拟真唱针美化（修复 CSS 旋转方向认知：正角摆左，播放用 -21°）；一起听视觉三件套（头像耳机线/聊天圆钮仿截图/爱心红色角标）+ 独听邀请右上角 + tab 加宽小圆角；一起听数据链路三项（切后台兜底 flush/聊天页落库监听/recs 写记忆）+ 同意卡方向文案
+- 关键决策：①胶囊淡出按「行切换重新计时」实现——唱歌时高亮跟随、长间奏/暂停消失，避免时间/播放键永久不可用；②歌词态隐藏 PlayerTopBar 让歌名头部即顶栏（消除双行堆叠，标题自然与右上 ⋮ 同行）；③AppWindow 切换即卸载非活跃 App（源码确认），落库监听覆盖「聊天页在场收到卡片」的全部场景且与投递 tick 合并幂等（id 去重）；④唱针角度用播放 -21°/暂停 +26°+抬起 10px 表达贴合/离盘
+- 范围限定遵守：改 6 文件（music-player/together-flow/together-invite 未动/wechat/qq/music-ai/song-msg-bubble）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰（wechat/qq 仅新增监听 effect 与 import 各 1 处）；音乐数据按账号隔离未动
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-together.tsx（未改）、src/lib/ios/together-flow.ts、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/ios/music-ai.ts、src/components/apps/song-msg-bubble.tsx

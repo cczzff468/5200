@@ -225,6 +225,22 @@ function flushTgChatLog(cid: string): void {
   })();
 }
 
+let tgFlushBound = false;
+/** 切后台/关页兑底 flush（第二十六轮）：缓冲不足 6 条时原本只靠手动退出一起听落记忆，
+ *  直接杀页面会丢最后几条——pagehide / visibilitychange(hidden) 时立即 flush 全部缓冲
+ *  （flush 同步清缓冲再异步落库，重复触发不会写重） */
+function bindTgLogFlush(): void {
+  if (tgFlushBound || typeof window === 'undefined') return;
+  tgFlushBound = true;
+  const flushAll = () => {
+    for (const cid of Array.from(tgLogBufs.keys())) flushTgChatLog(cid);
+  };
+  window.addEventListener('pagehide', flushAll);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushAll();
+  });
+}
+
 // ---------------- 记忆写入 ----------------
 
 async function ownerName(): Promise<string> {
@@ -878,6 +894,22 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     time: Date.now(),
     songs,
   });
+  // 推荐卡也进聊天记忆（第二十六轮）：appendMsg 只记 me/peer 文本，recs 卡在此补一笔
+  // 「TA推荐了《x》《y》」，后续聊天能接得住「你刚才推荐过什么」
+  void (async () => {
+    try {
+      const c = await getContact(cid);
+      if (!c || c.kind !== 'char') return;
+      memAddEventFragment(
+        cid,
+        'wx',
+        `${c.nickname || c.name}推荐了${songs.map((s) => `《${s.name}》`).join('')}`,
+        { eventTime: Date.now(), sourceTag: 'music-recs' },
+      );
+    } catch {
+      // 静默
+    }
+  })();
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
@@ -927,11 +959,12 @@ function bindSleepWarning(): void {
   });
 }
 
-/** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子（播放记忆/同歌计数/睡前提醒/暂停久置轻问） */
+/** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子（播放记忆/同歌计数/睡前提醒/暂停久置轻问/切后台兑底 flush） */
 export async function bootMusicAi(): Promise<void> {
   installMusicAiHook();
   bindSleepWarning();
   bindPauseNudge();
+  bindTgLogFlush();
   const t = loadActiveTogether();
   if (t) {
     const c = await getContact(t.contactId);
