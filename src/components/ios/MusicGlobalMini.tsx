@@ -164,9 +164,14 @@ function useTapGuard(action: () => void) {
 function GlobalMiniBar({ layerRef }: { layerRef: React.RefObject<HTMLDivElement | null> }) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
+  const position = useMusic((s) => s.position);
+  const duration = useMusic((s) => s.duration);
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
   const live = useTogetherLive();
+  // 播放进度（圆环用）：与音乐 App 内迷你条同款——深色弧段=已播，浅灰整圆=未播轨道
+  const progress = current && duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
+  const CIRC = 2 * Math.PI * 14.5;
   const cycle = useMiniPlayer((s) => s.cycle);
   const barRef = useRef<HTMLDivElement | null>(null);
   useStopPointerBubble(barRef, [current?.id, live]);
@@ -213,9 +218,26 @@ function GlobalMiniBar({ layerRef }: { layerRef: React.RefObject<HTMLDivElement 
         type="button"
         onClick={() => useMusic.getState().toggle()}
         data-testid="music-global-mini-toggle"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
+        className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-800 active:scale-95 dark:text-zinc-100"
         aria-label={playing ? '暂停' : '播放'}
       >
+        {/* 进度环（与音乐 App 迷你条同款）：深色弧段=已播，浅灰整圆=未播轨道，12 点顺时针 */}
+        <svg viewBox="0 0 32 32" aria-hidden="true" className="absolute inset-0 h-full w-full -rotate-90">
+          <circle cx="16" cy="16" r="14.5" fill="none" strokeWidth="2.5" className="stroke-zinc-300 dark:stroke-zinc-600" />
+          {progress > 0 && (
+            <circle
+              cx="16"
+              cy="16"
+              r="14.5"
+              fill="none"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeDasharray={CIRC}
+              strokeDashoffset={CIRC * (1 - progress)}
+              className="stroke-zinc-800 transition-[stroke-dashoffset] duration-300 dark:stroke-zinc-100"
+            />
+          )}
+        </svg>
         {playing ? <Pause className="h-3.5 w-3.5" fill="currentColor" /> : <Play className="ml-0.5 h-3.5 w-3.5" fill="currentColor" />}
       </button>
       <button

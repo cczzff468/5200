@@ -15843,3 +15843,24 @@ Stage Summary:
 - 产出：StoragePage 完整重写（settings.tsx 879-1132 行区域），与用户参考截图版式一致
 - 决策：App 占用为确定性模拟数值 + 媒体类真实字节叠加（页面脚注已注明），排序控件可交互
 - 验证：lint 通过；浏览器实测浅色/深色、升/降序、返回导航全部正常
+
+---
+Task ID: music-widget
+Agent: main
+Task: 新增主屏音乐小组件（iOS 音乐播放器样式，真实播放状态）；其他已添加小组件适配真实音乐；追加需求：迷你条圆形播放按钮显示播放进度环、音乐小组件收藏按钮改爱心
+
+Work Log:
+- 探索确认小组件系统结构：HomeScreen.tsx（WidgetKind/WIDGET_META/WIDGET_SPAN/renderTileContent/布局版本迁移）+ WidgetGallery.tsx（画廊清单）双注册表；音乐状态源 src/lib/ios/music-store.ts（useMusic：current/playing/position/duration/likedIds + toggle/next/prev/toggleLike，audio timeupdate 驱动，模块加载即恢复快照）
+- 新建 src/components/ios/MusicWidget.tsx：4×2 通栏（168px rounded-[24px]），封面 64px + 歌名粗体/歌手 + 右上声波条（播放中变深）、真实进度条（已播/剩余 tabular-nums，时长回退 songDurationMs）、爱心收藏（红色实心=已喜欢）+ 上一首/播放暂停/下一首（实心图标，grid-cols-3 星标位左/三连居中）、空态（圆底音符「尚未播放音乐」）、深浅色 dark: 变体；控制键 pointerdown/click 双重 stopPropagation（不触发开 App/长按编辑/拖拽）
+- HomeScreen.tsx 注册：WidgetKind/WIDGET_KINDS/WIDGET_META(music→openApp music)/WIDGET_SPAN/WIDGET_SPAN_SIZE/renderTileContent 分支；LAYOUT_VERSION 9→10，默认第 3 页顶部插入 music（网易云上方，与音乐 App 同页聚落），widgetSeen 补 music
+- WidgetGallery.tsx 注册：GalleryKind/GALLERY_KINDS/GALLERY_ITEMS('音乐' 4×2)/node() 分支
+- NeteaseCard.tsx 适配真实播放：盘标显示当前歌曲封面（随盘旋转）、唱片仅播放中旋转（animationPlayState）、真实进度/时间（无歌保持 55%/1:15/-2:38 装饰态）、三个控制键真实可用（prev/toggle/next，Pause↔Play）
+- VinylCard.tsx 适配：封面盘标 + 播放态旋转 + 底部歌名-歌手（新增 light prop，HomeScreen 传 wallpaperLight）
+- 追加需求 1：MiniBar（music-shared.tsx，音乐 App 内底部迷你条）与 MusicGlobalMini bar（主屏悬浮条）的圆形播放按钮改为 SVG 进度环（轨道 stroke-zinc-300 + 已播弧段 stroke-zinc-800，-rotate-90 从 12 点顺时针，strokeDasharray/offset 驱动，300ms 过渡；无歌/未知时长退化纯轨道）
+- 追加需求 2：MusicWidget 收藏按钮 Star → Heart（未喜欢灰、已喜欢 iOS 红 #FF3B30/#FF453A）
+- 验证（agent-browser 430×932）：布局 v10 迁移生效（第 3 页音乐小组件上屏）；游客模式播放后小组件实时显示歌名/歌手/进度（0:41→0:23 走动）；切歌/上一首归零/喜欢（颜色+aria 切换）全通过；网易云组件封面/进度/控制键同步；迷你条进度环弧段与 position/duration 吻合（0:02/0:30≈7%），切歌重置；深色模式全套（组件炭黑卡白字、进度环白色弧段）正常；lint 通过；浏览器 console/errors 无错误（dev.log 中 worker 异常为编译期 Turbopack 内部记录，页面 200 正常）
+
+Stage Summary:
+- 新增文件：src/components/ios/MusicWidget.tsx
+- 修改：HomeScreen.tsx（注册+v10 迁移）、WidgetGallery.tsx（注册）、NeteaseCard.tsx（真实播放）、VinylCard.tsx（真实播放+light prop）、music-shared.tsx（MiniBar 进度环）、MusicGlobalMini.tsx（悬浮条进度环）
+- 决策：小组件点击空白开音乐 App 由 WIDGET_META.openApp 驱动，内部控制键 pointerdown+click 双拦截；时长回退歌曲元数据（durationchange 前）；爱心已喜欢态用 iOS 系统红；布局走 v10 重置迁移（保留 hidden）

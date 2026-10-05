@@ -5,7 +5,7 @@
  * - 左上专辑封面 + 歌名（粗体截断）/歌手 + 右上角声波装饰条；
  * - 真实进度条：已播时间 / 进度 / 剩余时间（-m:ss），直连音乐 store 的 position/duration
  *   （audio timeupdate 驱动，与播放页同一状态源，自动跟随）；
- * - 控制键：红心收藏（Star，实心=已喜欢）+ 上一首/播放暂停/下一首，直接调 useMusic 的
+ * - 控制键：爱心收藏（Heart，红色实心=已喜欢）+ 上一首/播放暂停/下一首，直接调 useMusic 的
  *   toggle/next/prev/toggleLike（游客态红心走本地持久化，安全）；
  * - 无歌时显示空态（圆底音符 + 「尚未播放音乐」）；
  * - 点击小组件空白处打开音乐 App（HomeScreen 的 WIDGET_META.openApp 驱动）；
@@ -14,7 +14,7 @@
  * - 深浅主题自适应（dark: 变体；PhoneShell 壳上有 dark class）。
  */
 
-import { Music2, Pause, Play, SkipBack, SkipForward, Star } from 'lucide-react';
+import { Heart, Music2, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { useMusic } from '@/lib/ios/music-store';
 import { songArtistText, songCover, songDurationMs } from '@/lib/ios/music-api';
 
@@ -94,7 +94,7 @@ export function MusicWidget() {
             </span>
           </div>
 
-          {/* 控制键：红心（左）+ 上一首/播放暂停/下一首（居中三连） */}
+          {/* 控制键：爱心（左）+ 上一首/播放暂停/下一首（居中三连） */}
           <div className="mt-auto grid grid-cols-3 items-center">
             <button
               type="button"
@@ -106,10 +106,10 @@ export function MusicWidget() {
                 void useMusic.getState().toggleLike(current);
               }}
               className={`-ml-[4px] flex h-[32px] w-[32px] items-center justify-center justify-self-start transition-transform active:scale-90 ${
-                liked ? 'text-[#0c0c0e] dark:text-white' : 'text-black/25 dark:text-white/30'
+                liked ? 'text-[#FF3B30] dark:text-[#FF453A]' : 'text-black/25 dark:text-white/30'
               }`}
             >
-              <Star className="h-[20px] w-[20px]" fill="currentColor" strokeWidth={0} aria-hidden="true" />
+              <Heart className="h-[20px] w-[20px]" fill="currentColor" strokeWidth={0} aria-hidden="true" />
             </button>
             <div className="flex items-center justify-center gap-[30px]">
               <button

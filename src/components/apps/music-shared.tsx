@@ -522,12 +522,17 @@ export function MusicTabBar() {
 export function MiniBar() {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
+  const position = useMusic((s) => s.position);
+  const duration = useMusic((s) => s.duration);
   const toggle = useMusic((s) => s.toggle);
   const openPlayer = useMusic((s) => s.openPlayer);
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
   // 一起听会话（跟随全局联系人资料）
   const live = useTogetherLive();
+  // 播放进度（圆环用）：深色=已播，浅灰=未播，从 12 点方向顺时针
+  const progress = current && duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
+  const CIRC = 2 * Math.PI * 12.5;
   if (!current) return null;
   return (
     <div
@@ -565,14 +570,31 @@ export function MiniBar() {
           <span className="text-zinc-400 dark:text-zinc-500"> - {songArtistText(current)}</span>
         </span>
       </button>
-      {/* 圆环暂停键（按截图：灰描边圆圈 + 实心暂停图标） */}
+      {/* 圆环暂停键（按截图：进度环包裹 + 实心暂停/播放图标——深色弧段=已播进度，
+          浅灰整圆=未播轨道，从 12 点方向顺时针；无歌/未知时长时退化为纯灰描边圈） */}
       <button
         type="button"
         onClick={toggle}
         data-testid="music-minibar-toggle"
-        className="mr-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-300 text-zinc-800 active:scale-95 dark:border-zinc-600 dark:text-zinc-100"
+        className="relative mr-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-zinc-800 active:scale-95 dark:text-zinc-100"
         aria-label={playing ? '暂停' : '播放'}
       >
+        <svg viewBox="0 0 28 28" aria-hidden="true" className="absolute inset-0 h-full w-full -rotate-90">
+          <circle cx="14" cy="14" r="12.5" fill="none" strokeWidth="2.5" className="stroke-zinc-300 dark:stroke-zinc-600" />
+          {progress > 0 && (
+            <circle
+              cx="14"
+              cy="14"
+              r="12.5"
+              fill="none"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeDasharray={CIRC}
+              strokeDashoffset={CIRC * (1 - progress)}
+              className="stroke-zinc-800 transition-[stroke-dashoffset] duration-300 dark:stroke-zinc-100"
+            />
+          )}
+        </svg>
         {playing ? (
           <Pause className="h-3 w-3" fill="currentColor" />
         ) : (
