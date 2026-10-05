@@ -7,8 +7,9 @@
  *    - 活跃会话持久化 kv music-together-active:{uid}（重启恢复）；
  *    - 消息持久化 kv music-together:{uid}:{cid}（按网易云账号 + 角色隔离）；
  *    - AI 回复走两级 LLM（用户上游 → 内置 SDK），system = 角色人设 + 记忆 + 音乐情境块
- *      （正在听的歌/进度/最近听歌历史/一起听消息）；
- *    - AI 主动评论：切歌触发 + 空闲定时触发（可关）；
+ *      （正在听的歌/进度/歌词/最近听歌历史/一起听消息）；
+ *    - 第二十一轮反馈：删除「AI 主动点评歌曲」（空闲定时唠嗑/切歌点评/暂停搭话全部移除），
+ *      AI 只在用户发消息、用户点推荐、睡前提醒（F）时说话；
  * 2. AI 推荐歌曲：LLM 返回 JSON 歌单 → /search 匹配真实曲库 → 消息内歌曲卡（点击播放）；
  * 3. 听歌记忆：一起听中播放的歌写角色记忆（memAddEventFragment, sourceTag='music-play'），
  *    自动参与后续所有聊天 App 的记忆召回——无需改任何聊天代码。
@@ -56,8 +57,6 @@ export interface TogetherSession {
   since: number;
   /** 本次段落真实开始时间（退出时把这段累加进总数） */
   segStart?: number;
-  /** AI 主动评论开关（会话级） */
-  aiChatter: boolean;
 }
 
 const ACTIVE_KEY_PREFIX = 'music-together-active:';
@@ -137,7 +136,6 @@ export function startTogether(contact: ContactRecord): TogetherSession {
     distanceKm,
     since: now - carriedMs,
     segStart: now,
-    aiChatter: true,
   };
   kvSet(activeKey(), session);
   useMusic.setState({ together: session, togetherMsgs: loadTogetherMsgs(contact.id) });
@@ -150,7 +148,6 @@ export async function stopTogether(): Promise<void> {
     accumulateSegment(s); // 本段时长写入累计总数
     kvDel(activeKey());
     useMusic.setState({ together: null });
-    stopChatterTimer();
     await writeTogetherMemory(
       s.contactId,
       `结束了这次一起听（累计一起听了 ${fmtTogetherDur(Date.now() - s.since)}）`,
@@ -158,18 +155,7 @@ export async function stopTogether(): Promise<void> {
   } else {
     kvDel(activeKey());
     useMusic.setState({ together: null });
-    stopChatterTimer();
   }
-}
-
-export function setTogetherAiChatter(on: boolean): void {
-  const s = loadActiveTogether();
-  if (!s) return;
-  const next = { ...s, aiChatter: on };
-  kvSet(activeKey(), next);
-  useMusic.setState({ together: next });
-  if (on) startChatterTimer();
-  else stopChatterTimer();
 }
 
 export function loadTogetherMsgs(cid: string): TgMsg[] {
@@ -215,7 +201,8 @@ export async function writeTogetherMemory(contactId: string, what: string): Prom
   }
 }
 
-/** 播放钩子：一起听中每次放新歌 → 记忆 + 概率触发 AI 评论；solo 听歌 → 轻量记忆（30 分钟节流） */
+/** 播放钩子：一起听中每次放新歌 → 记忆 + 同歌计数（B）；solo 听歌 → 轻量记忆（30 分钟节流）。
+ *  第二十一轮反馈：切歌不再触发 AI 点评（点评歌曲功能已删除） */
 export function installMusicAiHook(): void {
   let lastSongId = 0;
   let lastWrittenAt = 0;
@@ -236,10 +223,6 @@ export function installMusicAiHook(): void {
           lastWrittenAt = Date.now();
           await writeTogetherMemory(t.contactId, `一起听了《${song.name}》（${artist}）`);
         }
-        if (t.aiChatter && Math.random() < 0.45) {
-          void aiComment(t.contactId, `刚刚切到了《${song.name}》（${artist}）`);
-        }
-        startChatterTimer();
         return;
       }
       // solo 听歌记忆（需求一.4）：非一起听时也给最近聊过的角色留一笔听歌痕迹，
@@ -679,47 +662,10 @@ export function sendTogetherText(text: string): void {
   void togetherReply(t.contactId, text.trim());
 }
 
-// ---------------- AI 主动评论（空闲定时） ----------------
+// ---------------- AI 主动说话（第二十一轮起仅剩 F 睡前提醒一处） ----------------
 
-let chatterTimer: ReturnType<typeof setTimeout> | null = null;
-
-export function startChatterTimer(): void {
-  stopChatterTimer();
-  const t = loadActiveTogether();
-  if (!t || !t.aiChatter) return;
-  const delay = 45_000 + Math.floor(Math.random() * 60_000); // 45~105s
-  chatterTimer = setTimeout(() => {
-    const cur = loadActiveTogether();
-    if (!cur || !cur.aiChatter) return;
-    const st = useMusic.getState();
-    if (!st.current) return;
-    // 反独白：最后一条不是机主发的（AI 刚说过话/刚开始还没人聊）就不再主动接话，
-    // 等用户开口或切歌时再评——避免 AI 自己连发一串（第十五轮反馈截图里连续四条同文消息）
-    const msgs = loadTogetherMsgs(cur.contactId);
-    if (msgs.length > 0 && msgs[msgs.length - 1].role !== 'me') {
-      startChatterTimer();
-      return;
-    }
-    // P7：音乐暂停时不再点评歌曲（穿越感）——35% 概率自然问一句「怎么停了」
-    if (!st.playing) {
-      if (Math.random() < 0.35) void aiComment(cur.contactId, '对方把音乐暂停了');
-      startChatterTimer();
-      return;
-    }
-    void aiComment(cur.contactId, '');
-    startChatterTimer();
-  }, delay);
-}
-
-export function stopChatterTimer(): void {
-  if (chatterTimer) {
-    clearTimeout(chatterTimer);
-    chatterTimer = null;
-  }
-}
-
-/** AI 主动点评（空闲触发 / 切歌触发） */
-async function aiComment(cid: string, hint: string): Promise<void> {
+/** AI 主动说一句话（仅供 F 睡前提醒使用；「AI 主动点评歌曲」已按用户要求整体删除） */
+async function aiSayOnce(cid: string, hint: string): Promise<void> {
   if (replying) return;
   replying = true;
   useMusic.setState({ tgAiBusy: true });
@@ -832,18 +778,19 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
 
 let sleepWarnBound = false;
 /** F（第二十轮）：睡前提醒——定时关闭剩 1 分钟时（music-store 广播 music-sleep-warning 事件），
- *  一起听中的角色自然说一句「要睡着了？音乐快停了哦」 */
+ *  一起听中的角色自然说一句「要睡着了？音乐快停了哦」。
+ *  第二十一轮：点评功能删除后这是 AI 唯一的主动消息，不再受任何开关限制 */
 function bindSleepWarning(): void {
   if (sleepWarnBound || typeof window === 'undefined') return;
   sleepWarnBound = true;
   window.addEventListener('music-sleep-warning', () => {
     const t = loadActiveTogether();
-    if (!t || !t.aiChatter) return;
-    void aiComment(t.contactId, '定时关闭快到了，音乐还有一分钟就要停');
+    if (!t) return;
+    void aiSayOnce(t.contactId, '定时关闭快到了，音乐还有一分钟就要停');
   });
 }
 
-/** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子 + 重启空闲定时 */
+/** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子 */
 export async function bootMusicAi(): Promise<void> {
   installMusicAiHook();
   bindSleepWarning();
@@ -852,7 +799,6 @@ export async function bootMusicAi(): Promise<void> {
     const c = await getContact(t.contactId);
     if (c && c.kind === 'char') {
       useMusic.setState({ together: t, togetherMsgs: loadTogetherMsgs(t.contactId) });
-      startChatterTimer();
     } else {
       await stopTogether();
     }

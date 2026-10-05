@@ -1,14 +1,20 @@
 'use client';
 
 /**
- * 全局迷你播放器（第十六轮反馈，第十八轮修订）：音乐在播时，主屏幕/其他 App 上悬浮的播放控件。
+ * 全局迷你播放器（第十六轮反馈，第十八/二十/二十一轮修订）：音乐在播时，主屏幕/其他 App 上悬浮的播放控件。
  *
- * 三种显示形态（可互相切换，选择持久化在 localStorage）：
+ * 两种显示形态（可互相切换，选择持久化在 localStorage）：
  * - bar    迷你小条（第十八轮反馈：变小+可拖动）：封面 + 歌名 - 歌手 + 播放/暂停 + 列表 + 换样式，
- *          点按条身打开播放页；可在屏幕内任意拖动；右侧唱片图标按钮循环切换样式（条 → 唱片 → 隐藏 → 条）；
- * - record 悬浮圆形唱片：贴右边缘的旋转唱片，点按 = 换样式（切回底部条），
- *          右上角 ✕（第十八轮反馈：更小）点击 = 隐藏，可在屏幕内任意拖动；
- * - hidden 不显示：完全隐藏，可在音乐播放页右上角 ⋮ 面板的「迷你播放器」行重新开启。
+ *          点按条身打开播放页；可在屏幕内任意拖动；右侧唱片图标按钮切换样式（条 ↔ 唱片）；
+ * - record 悬浮圆形唱片：点按 = 换样式（切回底部条），可在屏幕内任意拖动；
+ *
+ * 边缘停靠（第二十一轮反馈：迷你播放器不再有「隐藏」形态，不会消失）：
+ * - 圆形唱片状态下，把它左滑/右滑到屏幕边缘松手（或点 ✕）→ 藏进边缘里只露一条 ~6px 的边框；
+ * - 点按露出的边框（边缘有加宽透明热区）→ 唱片弹回之前的位置；
+ * - 停靠侧持久化（localStorage），刷新后保持（左停靠的精确位置在挂载后补测层宽得出）。
+ *
+ * 实现备注（第二十一轮调试）：子组件 useLayoutEffect 阶段父层 ref 尚未挂上（React 提交顺序），
+ * 层宽测量放在 passive useEffect / 拖停时实时读取 getBoundingClientRect。
  *
  * 显示条件：有正在播放/上次的歌 && 未锁屏 && 未熄屏 && 切换器未打开 && 音乐 App 不在前台
  * （音乐 App 内有自己的迷你条，避免双重显示）。离开显示条件后延迟 350ms 卸载：
@@ -20,40 +26,62 @@
 
 import { create } from 'zustand';
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, type PanInfo } from 'framer-motion';
 import { Disc3, ListMusic, Pause, Play, X } from 'lucide-react';
 import { useUI } from '@/lib/ios/store';
 import { useMusic, getGuestAvatar } from '@/lib/ios/music-store';
 import { useTogetherLive } from '@/lib/ios/music-ai';
 import { songArtistText, songCover } from '@/lib/ios/music-api';
 
-// ---------------- 形态状态（模块级 store：悬浮组件与播放页 ⋮ 面板共用） ----------------
+// ---------------- 形态/停靠状态（模块级 store：悬浮组件与播放页 ⋮ 面板共用） ----------------
 
-export type MiniMode = 'bar' | 'record' | 'hidden';
+export type MiniMode = 'bar' | 'record';
+/** 唱片停靠侧：null = 自由悬浮（第二十一轮反馈） */
+export type MiniDock = 'left' | 'right' | null;
 
 const MODE_KEY = 'music-mini-mode';
-const MODE_ORDER: MiniMode[] = ['bar', 'record', 'hidden'];
+const DOCK_KEY = 'music-mini-dock';
 
 export const MINI_MODE_LABELS: Record<MiniMode, string> = {
   bar: '底部迷你条',
   record: '悬浮唱片',
-  hidden: '不显示',
 };
 
 function readModeFromStorage(): MiniMode {
   try {
     const v = window.localStorage.getItem(MODE_KEY);
-    return v === 'record' || v === 'hidden' ? v : 'bar';
+    // 第二十一轮：hidden 形态已移除（迷你播放器不再消失），旧存档回退为底部条
+    return v === 'record' ? 'record' : 'bar';
   } catch {
     return 'bar';
+  }
+}
+
+function readDockFromStorage(): MiniDock {
+  try {
+    const v = window.localStorage.getItem(DOCK_KEY);
+    return v === 'left' || v === 'right' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDockStorage(d: MiniDock): void {
+  try {
+    if (d) window.localStorage.setItem(DOCK_KEY, d);
+    else window.localStorage.removeItem(DOCK_KEY);
+  } catch {
+    /* 存储不可用仅本次会话生效 */
   }
 }
 
 interface MiniPlayerUiState {
   mode: MiniMode;
   setMode: (m: MiniMode) => void;
-  /** 循环切换：底部条 → 悬浮唱片 → 隐藏 → 底部条 */
+  /** 循环切换：底部条 ↔ 悬浮唱片（第二十一轮：不再有隐藏形态） */
   cycle: () => MiniMode;
+  dock: MiniDock;
+  setDock: (d: MiniDock) => void;
 }
 
 export const useMiniPlayer = create<MiniPlayerUiState>((set, get) => ({
@@ -67,14 +95,19 @@ export const useMiniPlayer = create<MiniPlayerUiState>((set, get) => ({
     set({ mode: m });
   },
   cycle: () => {
-    const next = MODE_ORDER[(MODE_ORDER.indexOf(get().mode) + 1) % MODE_ORDER.length];
+    const next: MiniMode = get().mode === 'bar' ? 'record' : 'bar';
     get().setMode(next);
     return next;
+  },
+  dock: null,
+  setDock: (d) => {
+    writeDockStorage(d);
+    set({ dock: d });
   },
 }));
 
 if (typeof window !== 'undefined') {
-  useMiniPlayer.setState({ mode: readModeFromStorage() });
+  useMiniPlayer.setState({ mode: readModeFromStorage(), dock: readDockFromStorage() });
 }
 
 // ---------------- 组件 ----------------
@@ -192,7 +225,7 @@ function GlobalMiniBar({ layerRef }: { layerRef: React.RefObject<HTMLDivElement 
       >
         <ListMusic className="h-[18px] w-[18px]" />
       </button>
-      {/* 形态切换：底部条 → 悬浮唱片 → 隐藏（点按即换样式） */}
+      {/* 形态切换：底部条 ↔ 悬浮唱片（点按即换样式；第二十一轮：不再切到隐藏） */}
       <button
         type="button"
         onClick={() => cycle()}
@@ -207,12 +240,76 @@ function GlobalMiniBar({ layerRef }: { layerRef: React.RefObject<HTMLDivElement 
   );
 }
 
-/** 悬浮唱片形态：点按 = 换样式（切回底部条），右上角 ✕（更小）点击隐藏，可在屏幕内任意拖动（第十八轮反馈） */
+/** 唱片几何：right-[10px] 锚点 + 56px 直径；停靠后只露 PEEK px 的边框 */
+const RECORD_SIZE = 56;
+const RECORD_INSET = 10;
+const PEEK = 6;
+/** 松手时唱片中心距屏幕左右边缘 <46px 判定为「滑进边缘停靠」 */
+const DOCK_SNAP_PX = 46;
+/** 右停靠位移（相对 right-[10px] 锚点）：10 + 56 - 6，恒定无需测量 */
+const DOCK_X_RIGHT = RECORD_INSET + RECORD_SIZE - PEEK;
+
+/** 悬浮唱片形态（第二十一轮交互重做）：
+ *  - 自由态：可任意拖动；点按 = 换样式（切回底部条）；
+ *  - 拖到屏幕左/右边缘松手（或点 ✕）→ 藏进边缘只露一条边框；
+ *  - 停靠态：点边框（或边缘热区）弹回原位置；不可拖动（避免和「点边框显示」打架）。 */
 function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivElement | null> }) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const setMode = useMiniPlayer((s) => s.setMode);
-  const tap = useTapGuard(() => setMode('bar'));
+  const dock = useMiniPlayer((s) => s.dock);
+  const setDock = useMiniPlayer((s) => s.setDock);
+  // 点按：停靠态 = 弹回；自由态 = 换样式（读 store 避免闭包过期）
+  const tap = useTapGuard(() => {
+    const s = useMiniPlayer.getState();
+    if (s.dock) s.setDock(null);
+    else s.setMode('bar');
+  });
+  // 自由拖拽的落点（x 相对布局锚点偏移；停靠切换由 animate 接管，弹回时回到这个位置）
+  const [freeX, setFreeX] = useState(0);
+  // 左停靠位移（相对锚点）。拖停入左缘时按实时 rect 精确计算（无跳动）；
+  // 刷新恢复时没有拖拽事件，用 passive effect 补测层宽得出（useLayoutEffect 阶段父层 ref 未挂上）
+  const [dockXLeft, setDockXLeft] = useState<number | null>(null);
+  const recRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (dock !== 'left' || dockXLeft !== null) return;
+    // rAF 回调里测量并写入（effect 体内同步 setState 会触发级联渲染告警）；
+    // 测量完成前唱片以 opacity-0 隐藏，不会闪现在锚点位置
+    const raf = requestAnimationFrame(() => {
+      const w = layerRef.current?.clientWidth ?? 0;
+      if (w > 0) setDockXLeft(RECORD_INSET + PEEK - w);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [dock, dockXLeft, layerRef]);
+
+  const x =
+    dock === 'right'
+      ? DOCK_X_RIGHT
+      : dock === 'left'
+        ? (dockXLeft ?? 0)
+        : freeX;
+
+  const onDragEnd = (_e: unknown, info: PanInfo): void => {
+    const rect = recRef.current?.getBoundingClientRect();
+    const lRect = layerRef.current?.getBoundingClientRect();
+    if (rect && lRect) {
+      const cx = rect.left + rect.width / 2;
+      if (cx <= lRect.left + DOCK_SNAP_PX) {
+        // 目标视觉左缘 = -(56-6)；当前视觉左缘 = rect.left - lRect.left
+        // 新位移 = offsetX + (目标 - 当前)，等价于 RECORD_INSET + PEEK - 层宽（无需状态层宽）
+        setDockXLeft(info.offset.x + (-(RECORD_SIZE - PEEK) - (rect.left - lRect.left)));
+        setDock('left');
+        return;
+      }
+      if (cx >= lRect.right - DOCK_SNAP_PX) {
+        setDock('right');
+        return;
+      }
+    }
+    setFreeX(info.offset.x);
+  };
+
   // ✕ 按钮的原生拦截：条身/唱片身用 pointer 位移判定点按（useTapGuard），
   // 必须在 ✕ 的 target 阶段原生拦截 pointer 事件，否则点 ✕ 会同时触发唱片的换样式点按
   const xRef = useRef<HTMLButtonElement | null>(null);
@@ -230,40 +327,65 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
 
   if (!current) return null;
   return (
-    <motion.div
-      drag
-      dragConstraints={layerRef}
-      dragElastic={0.08}
-      dragMomentum={false}
-      onPointerDown={tap.onPointerDown}
-      onPointerUp={tap.onPointerUp}
-      className="pointer-events-auto absolute right-[10px] top-[38%] z-[55] touch-none select-none"
-      data-testid="music-global-mini-record"
-    >
-      <div className="relative h-[56px] w-[56px]">
-        <img
-          src={songCover(current)}
-          alt={current.name}
-          draggable={false}
-          className="h-full w-full rounded-full bg-muted object-cover shadow-[0_6px_20px_rgba(0,0,0,0.35)] ring-2 ring-white/70 dark:ring-white/20"
-          style={{ animation: 'mini-spin 9s linear infinite', animationPlayState: playing ? 'running' : 'paused' }}
+    <>
+      <motion.div
+        ref={recRef}
+        drag={!dock}
+        dragConstraints={layerRef}
+        dragElastic={0.08}
+        dragMomentum={false}
+        onPointerDown={tap.onPointerDown}
+        onPointerUp={tap.onPointerUp}
+        onDragEnd={onDragEnd}
+        animate={{ x }}
+        transition={dock ? { type: 'spring', stiffness: 380, damping: 32 } : { duration: 0.16 }}
+        className={`pointer-events-auto absolute right-[10px] top-[38%] z-[55] touch-none select-none transition-opacity ${
+          dock === 'left' && dockXLeft === null ? 'opacity-0' : 'opacity-100'
+        }`}
+        data-testid="music-global-mini-record"
+      >
+        <div className="relative h-[56px] w-[56px]">
+          <img
+            src={songCover(current)}
+            alt={current.name}
+            draggable={false}
+            className="h-full w-full rounded-full bg-muted object-cover shadow-[0_6px_20px_rgba(0,0,0,0.35)] ring-2 ring-white/70 dark:ring-white/20"
+            style={{ animation: 'mini-spin 9s linear infinite', animationPlayState: playing ? 'running' : 'paused' }}
+          />
+          {/* 右上角 ✕：第二十一轮改为「收到右边缘」（不再隐藏——迷你播放器不会消失）；停靠态一并藏起（只露边框） */}
+          <button
+            ref={xRef}
+            type="button"
+            aria-label="收到屏幕边缘"
+            title="收到屏幕边缘"
+            data-testid="music-global-mini-dock"
+            onClick={(e) => {
+              e.stopPropagation();
+              setDock('right');
+            }}
+            className={`absolute -right-[4px] -top-[4px] flex h-[15px] w-[15px] items-center justify-center rounded-full bg-black/75 text-white shadow ring-1 ring-white/30 transition-opacity active:scale-90 ${
+              dock ? 'pointer-events-none opacity-0' : 'opacity-100'
+            }`}
+          >
+            <X className="h-[9px] w-[9px]" strokeWidth={3} />
+          </button>
+        </div>
+      </motion.div>
+      {/* 停靠态：露出的边框只有 ~6px 宽难点按，叠一条透明加宽热区（只占边缘一小段，点按弹回） */}
+      {dock && (
+        <div
+          role="button"
+          aria-label="展开迷你播放器"
+          data-testid="music-global-mini-docked-hit"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => setDock(null)}
+          className={`pointer-events-auto absolute top-[38%] z-[55] -mt-[6px] h-[68px] w-[18px] ${
+            dock === 'right' ? 'right-0' : 'left-0'
+          }`}
         />
-        {/* 右上角 ✕（第十八轮反馈：更小）：点击隐藏迷你播放器（原生拦截 pointer 冒泡：不触发换样式/拖拽） */}
-        <button
-          ref={xRef}
-          type="button"
-          aria-label="隐藏迷你播放器"
-          data-testid="music-global-mini-hide"
-          onClick={(e) => {
-            e.stopPropagation();
-            setMode('hidden');
-          }}
-          className="absolute -right-[4px] -top-[4px] flex h-[15px] w-[15px] items-center justify-center rounded-full bg-black/75 text-white shadow ring-1 ring-white/30 active:scale-90"
-        >
-          <X className="h-[9px] w-[9px]" strokeWidth={3} />
-        </button>
-      </div>
-    </motion.div>
+      )}
+    </>
   );
 }
 
@@ -277,7 +399,7 @@ export default function MusicGlobalMini() {
   // 拖动约束参照层：整个手机壳内域（唱片只能在本屏内上下拖）
   const layerRef = useRef<HTMLDivElement | null>(null);
 
-  const visible = !!current && mode !== 'hidden' && !locked && !screenOff && !switcherOpen && activeApp !== 'music';
+  const visible = !!current && !locked && !screenOff && !switcherOpen && activeApp !== 'music';
 
   // 点击穿透修复（第二十轮反馈：点条身开播放页时，底下 App/图标也被打开）：
   // 点按 → 打开播放页 → activeApp='music' → visible 立即变 false；若此刻直接卸载，

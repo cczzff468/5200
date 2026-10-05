@@ -1373,7 +1373,7 @@ function MoreSheet({
   const setSurround3d = useMusic((s) => s.setSurround3d);
   const sleepAt = useMusic((s) => s.sleepAt);
   const setSleepAt = useMusic((s) => s.setSleepAt);
-  // 全局迷你播放器形态（第十六轮反馈：底部条/悬浮唱片/隐藏，可在面板里切换）
+  // 全局迷你播放器形态（第十六轮反馈；第二十一轮：隐藏形态移除，唱片可滑入屏幕边缘只露边框）
   const miniMode = useMiniPlayer((s) => s.mode);
   const miniCycle = useMiniPlayer((s) => s.cycle);
   const [showAdd, setShowAdd] = useState(false);
@@ -1679,7 +1679,7 @@ function MoreSheet({
               testid="music-more-mini"
               onClick={() => {
                 const nx = miniCycle();
-                onToast(nx === 'hidden' ? '迷你播放器已隐藏' : `迷你播放器：${MINI_MODE_LABELS[nx]}`);
+                onToast(`迷你播放器：${MINI_MODE_LABELS[nx]}`);
               }}
             >
               迷你播放器：{MINI_MODE_LABELS[miniMode]}

@@ -15191,3 +15191,35 @@ Stage Summary:
 - 关键实现：穿透修复=「卸载时序竞态」经典解法（透明层延迟卸载接住原生 click）；歌词注入复用播放器 lyricFor/position 状态（零新存储）；同歌次数计数挂在「song.id!==lastSongId」分支与记忆写入同频；F 用 window CustomEvent 解耦 music-store→music-ai（避免循环依赖）
 - 范围限定遵守：仅动音乐 App 4 文件（music-ai/music-store/MusicIsland/MusicGlobalMini）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；[快进] 用既有 seek、[红心] 用既有 toggleLike，无新增播放引擎逻辑
 - 改动文件：src/lib/ios/music-ai.ts、src/lib/ios/music-store.ts、src/components/ios/MusicIsland.tsx、src/components/ios/MusicGlobalMini.tsx
+
+---
+Task ID: 80
+Agent: Z.ai Code（主会话）
+Task: 第二十一轮——全局迷你播放器不再消失（移除 hidden 形态）+ 圆形唱片左右滑入屏幕边缘只露边框（点边框恢复）；删除「AI 点评歌曲」功能；规则再审清单（只列不做）
+
+Work Log:
+- 现状确认：二十轮全部改动（P1~P7/A/B/C/D/F + 波形声纹 + 暂停宽限 + 穿透修复）在上下文压缩前已完成，本轮为全新三项需求
+- MusicGlobalMini.tsx 重写：
+  - MiniMode 收敛为 'bar' | 'record'（删 'hidden'）；MODE_ORDER/cycle 改为 bar↔record 二态循环；readModeFromStorage 旧存档 'hidden' 迁移回 'bar'；MusicGlobalMini visible 条件去掉 mode!=='hidden'
+  - 新增 MiniDock 停靠态（useMiniPlayer：dock: 'left'|'right'|null + setDock，localStorage music-mini-dock 持久化）
+  - 唱片拖停入边缘判定：onDragEnd 用 recRef/layerRef 实时 getBoundingClientRect，唱片中心距层左右边缘 <46px（DOCK_SNAP_PX）→ setDock 该侧
+  - 左停靠位移 dockXLeft：拖停时按「offsetX + (-(56-6) - (rect.left-layerRect.left))」精确计算（无跳动）；刷新恢复无拖拽事件 → passive useEffect + requestAnimationFrame 补测层宽（关键调试发现：子组件 useLayoutEffect 阶段父层 ref 尚未挂上，React 提交顺序所致，passive effect 才能读到）→ rAF 同步 setState 规避 react-hooks/set-state-in-effect lint；测量完成前唱片 opacity-0 防闪帧
+  - 右停靠位移恒定 DOCK_X_RIGHT = 10+56-6 = 60（right-[10px] 锚点，无需测量）
+  - 停靠态：drag 关闭（避免与点按弹回打架）、✕ 按钮 opacity-0+pointer-events-none（只露边框）、边缘加宽透明热区（w-[18px] h-[68px]，data-testid=music-global-mini-docked-hit）点按弹回
+  - 唱片点按语义分流（useTapGuard 内读 store 实时态）：停靠态 = setDock(null) 弹回；自由态 = setMode('bar') 换样式
+  - ✕ 按钮（data-testid 改 music-global-mini-dock）：onClick setDock('right')——「收到右边缘」替代原「隐藏」
+  - PEEK=6px：唱片藏进边缘由手机壳 overflow-hidden 自然裁切，视觉=只露一条边框
+- music-ai.ts 删除「AI 点评歌曲」（用户指令「AI 不要点评歌曲了，把这个功能删除」）：
+  - 删 startChatterTimer/stopChatterTimer（45~105s 空闲定时点评，含暂停 35%「怎么停了」分支与反独白逻辑）、切歌 45% aiComment、setTogetherAiChatter 导出、TogetherSession.aiChatter 字段及 startTogether 赋值
+  - aiComment 更名 aiSayOnce，仅剩 F 睡前提醒一个调用点；bindSleepWarning 去掉 aiChatter 开关检查（点评删除后 F 是 AI 唯一主动消息，不再受限）
+  - installMusicAiHook 只保留记忆写入 + B 同歌计数（切歌不再触发点评）；bootMusicAi 去掉 startChatterTimer
+- music-store.ts：TogetherSessionLike 删 aiChatter；music-player.tsx：MoreSheet 迷你播放器行去掉 'hidden' 分支 toast（循环只报「底部迷你条/悬浮唱片」）+ 注释更新
+- E2E（agent-browser，900×1100，用完即关）：游客播放 → bar 形态 → 唱片图标切 record ✓；唱片拖到左边缘松手 → translateX(-350px) 手机壳裁切只露 6px 边框、✕ 隐藏 ✓；点边界热区 → 弹回 transform=none ✓；拖到右边缘 → translateX(60px)+LS=right ✓；点右热区弹回 ✓；点 ✕ → 收到右边缘 ✓；localStorage record/left 刷新+解锁+恢复播放 → 左停靠自动还原（rAF 测量，无闪帧）✓；MoreSheet 迷你行循环「底部迷你条→悬浮唱片→底部迷你条」无「已隐藏」✓；等待 80s 无页面错误；测试后 localStorage 复位 bar/无停靠
+- 一起听 AI 部分未做浏览器端 E2E（游客环境无 AI 角色联系人，创建角色会污染聊天数据踩红线）——以代码级验证代替：ChatterTimer/aiComment/aiChatter 全库引用清零（grep 确认，moments 模块 aiCommentOnMoment 为同名无关函数）+ tsc/lint 0 错误 + 编译通过
+- bun run lint 0 错误（修复 1 处 set-state-in-effect）；dev.log 无新增异常（仅历史 Turbopack worker 噪音）
+
+Stage Summary:
+- 交付：迷你播放器二形态（bar↔record）+ 唱片边缘停靠（左/右滑入边缘只露 ~6px 边框、点边框/热区弹回、✕=收到右边缘、停靠侧持久化、刷新恢复）；「AI 点评歌曲」功能整体删除（空闲定时/切歌/暂停三条主动路径全清），AI 只在用户发消息、用户点推荐、睡前提醒（F）时说话
+- 关键实现：边缘停靠的「拖停实时 rect 计算 + 挂载后 rAF 补测」双路径（React 子组件 layout effect 早于父 ref 挂上的提交顺序坑）；hidden 形态移除后「隐藏」语义由边缘停靠承接（不消失，可收起）
+- 范围限定遵守：仅动 MusicGlobalMini.tsx / music-ai.ts / music-store.ts / music-player.tsx 四文件；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；音乐数据按账号隔离未动
+- 改动文件：src/components/ios/MusicGlobalMini.tsx、src/lib/ios/music-ai.ts、src/lib/ios/music-store.ts、src/components/apps/music-player.tsx

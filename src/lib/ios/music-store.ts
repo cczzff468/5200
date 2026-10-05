@@ -209,7 +209,6 @@ export interface TogetherSessionLike {
   since: number;
   /** 本次段落真实开始时间（用于「这次听过的歌」过滤与退出时累加） */
   segStart?: number;
-  aiChatter: boolean;
 }
 export interface TogetherMsgLike {
   id: string;
