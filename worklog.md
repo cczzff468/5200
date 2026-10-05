@@ -15520,3 +15520,28 @@ Stage Summary:
 - 关键决策：①胶囊播放键=「该行时间段判定」——inSegment 用 l.t→下一行起点区间比较，跳播后沿用既有「进度跳变→胶囊熄灭+歌词跟随」语义不特殊化；②状态栏基调用栈而非单值——评论页/设置页等浮层盖在播放页上时后挂载者优先、卸载自动恢复，且锁屏/切换器/通话层优先级高于屏幕基调（不越界）；③音乐 App 基调集中在 MusicApp 一处按 nav/浮层推导（不在各页面散布 hook），评论/设置浮层状态也在 MusicApp scope；④评论页吸顶行用纯 sticky+白底（与截图一致不加边框），标题栏/歌曲行移入滚动流即可，列表其余逻辑零改动
 - 范围限定遵守：改 5 文件（music-player.tsx / music-comments.tsx / music-search.tsx / music.tsx / foreground.ts）+ 新增 1 文件（status-bar-tone.ts）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动（仅时长 margin）；评论数据接口未动；天气/相机等既有 App 状态栏声明未动（无基调推送时走原逻辑）
 - 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx、src/components/apps/music-search.tsx、src/components/apps/music.tsx、src/lib/ios/foreground.ts、src/lib/ios/status-bar-tone.ts（新增）
+
+---
+Task ID: 93
+Agent: Z.ai Code（主会话）
+Task: 第三十四轮——①滚到未播放歌词行时不显示播放键 ②胶囊高亮停止 5 秒后才回当前行（原 3 秒）③点当前行胶囊高亮不返回唱片界面 ④一起听时长再上移一点点 ⑤设置弹窗播放器样式可选三版式（经典黑胶/全屏封面/唱片封面）⑥修复评论页吸顶行与状态栏/灵动岛重叠
+
+Work Log:
+- ①播放键仅播放行显示（music-player.tsx LyricView）：行播放键渲染条件 isActive → isActive && i===activeIdx——手动滚动浏览到非播放行时按钮整个不渲染（用户「后面的播放按钮应该是关闭的」）；播放行（activeIdx）在胶囊亮起时仍显示且保留第三十三轮语义（未播该段→seek 跳播+恢复、在播→暂停/继续）；E2E：滚到「2:38/等到放晴那天」行 capsuleOn=1 但按钮不存在（no-btn）✓，滚回播放行后按钮存在且点击=暂停（3 个 aria-label 变「播放」）✓
+- ②回跳计时 3000→5000ms（markManual 注释同步）；E2E：wheel 后等 5.6s → 胶囊 opacity=0、焦点回播放行且 activeCenterOffset=0 精确居中 ✓
+- ③点胶囊高亮行不返回唱片（行 onClick）：suppressClickRef 分支保留，新增 isActive && capsuleOn → e.stopPropagation()（胶囊未亮的自动跟播态与非高亮行点击仍冒泡返回唱片）；E2E：胶囊亮时点高亮行 lyricStillOpen=true ✓，点非高亮行 vinylBack=true ✓
+- ④时长行 mt-[22px]→mt-[18px]（第三十四轮再上移 4px）；E2E 注入会话实测 gap=18px ✓
+- ⑤播放器版式（新功能）：
+  - store（music-store.ts）：export type PlayerStyle='vinyl'|'coverFull'|'discCover'；playerStyle state+readPlayerStyle（kv music-player-style:{uid}，vinyl=默认不落盘）+setPlayerStyle action；reloadForAccount/boot 两处随账号恢复
+  - 视图（VinylView）：新增 style prop 三分支——vinyl=原经典黑胶（细纹路+中心 59% 封面，不动）；coverFull=全屏封面（大圆角方形封面 max-h-300 居中，ring-white/15+投影，无唱片）；discCover=唱片封面（外缘深黑胶圈+悬浮光环不动，inset-[2.2%] 整张封面作旋转唱片面+内阴影压厚度，随播放旋转/暂停停转）；E2E 三版式 testid 互斥切换全验证（music-cover-full/music-disc-cover/music-vinyl）+ 截图 ✓
+  - 面板（PlayerStyleSheet）：顶部新增「版式」组三行（Disc2/ImageIcon/Disc3 图标+说明+当前版式红勾，选择即生效+toast+关面板），原两行归入「背景」组（「默认样式」改「默认背景·封面模糊背景（各版式通用）」防歧义）
+- ⑥评论吸顶重叠修复（music-comments.tsx）：吸顶行 sticky top-0 → top-[54px]（用户截图：滚动后「评论(10万)+推荐最热最新」顶到状态栏上与 13:02 重叠）——计数行现停在状态栏/灵动岛正下方，内容从其后穿过；E2E：scrollTop=600 时 stickyRowTop=54 ✓ 截图确认不遮挡
+- 环境：CSS 包确认已含 .mt-\[18px\]/.top-\[54px\]（上轮重启后的 Turbopack 正常增量编译）
+- E2E（agent-browser 420×900 一次性会话）：解锁→音乐游客模式→搜晴天播 Jay→展开播放器（经典黑胶）→solo-dots→MoreSheet 播放器样式→面板结构（版式 3 行+背景 2 行、经典黑胶红勾）→切全屏封面（music-cover-full 独显+toast+截图）→切唱片封面（music-disc-cover 独显+截图）→切回经典黑胶（music-vinyl 恢复+kv music-player-style:guest 已删=默认不落盘）→歌词页 wheel 亮胶囊（远处行无播放键）→点胶囊行不返回 ✓→点非高亮行返回 ✓→5.6s 后胶囊熄灭+焦点精确回播放行（offset=0）✓→播放行按钮点击暂停 ✓→恢复播放→评论页滚 600px 吸顶 y=54 截图 ✓→注入 e2e-r34-char+会话 reload→一起听 gap=18px ✓→清理 IDB（contacts=0、无残留键）→关浏览器
+- bun run lint 0 错误；bunx tsc 0 错误
+
+Stage Summary:
+- 交付：歌词胶囊播放键改「仅播放行显示」（浏览未播放行时按钮关闭）；手动滚动浏览停止 5 秒后才回当前行并熄灭胶囊；点胶囊高亮行不再误触返回唱片（点非高亮行/空白仍返回）；一起听时长再上移 4px；播放器版式三选落地（经典黑胶/全屏封面/唱片封面，设置弹窗播放器样式面板选择、按网易云账号持久化、即时生效）；评论页吸顶行下移到状态栏/灵动岛下方修复重叠
+- 关键决策：①播放键显隐与胶囊高亮解耦——按钮按「是否播放行（activeIdx）」渲染、按「胶囊是否亮（capsuleOn）」显示，浏览态与回跳态行为一致；②版式三选保持既有点击切歌词/一起听头部/底部控制完全复用，仅中间主视图切换，coverFull 放大画幅（300px）与唱片类（256px）区分层次；③版式持久化沿用 playerBg 的按账号 kv 模式（默认值不落盘防脏数据）；④吸顶位取 54px=状态栏高度（与头部 pt-58 同区避让灵动岛）
+- 范围限定遵守：改 3 文件（music-player.tsx / music-comments.tsx / music-store.ts）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话 16 项核心逻辑未触碰；一起听邀请/同意/记忆链路未动（仅时长 margin）；评论数据接口/排序/翻页逻辑未动；播放器背景上传功能保留（与版式正交组合）
+- 改动文件：src/components/apps/music-player.tsx、src/components/apps/music-comments.tsx、src/lib/ios/music-store.ts

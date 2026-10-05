@@ -73,6 +73,17 @@ function readPlayerBg(): string {
   return kvGet<string>(playerBgKey()) ?? '';
 }
 
+/** 播放器版式（第三十四轮反馈）：vinyl=经典黑胶 / coverFull=全屏封面 / discCover=唱片封面（整张封面作旋转唱片面）；按网易云账号隔离 */
+export type PlayerStyle = 'vinyl' | 'coverFull' | 'discCover';
+const PLAYER_STYLE_PREFIX = 'music-player-style:';
+function playerStyleKey(): string {
+  return `${PLAYER_STYLE_PREFIX}${musicUid()}`;
+}
+function readPlayerStyle(): PlayerStyle {
+  const v = kvGet<string>(playerStyleKey());
+  return v === 'coverFull' || v === 'discCover' ? v : 'vinyl';
+}
+
 const HISTORY_PREFIX = 'music-history:';
 const LIKED_PREFIX = 'music-liked:';
 const NOW_KEY = 'music-now';
@@ -238,6 +249,8 @@ interface MusicState {
   // 播放器外观/音质（设置弹窗，第十五轮反馈）
   /** 自定义背景图（dataURL；空 = 默认封面模糊） */
   playerBg: string;
+  /** 播放器版式（经典黑胶/全屏封面/唱片封面，第三十四轮） */
+  playerStyle: PlayerStyle;
   /** 音质（真实作用于 songUrl 的 level） */
   quality: QualityLevel;
   /** 定时关闭截止时间戳（毫秒；null = 未定时；会话级不持久化） */
@@ -292,6 +305,8 @@ interface MusicState {
   setVolume: (v: number) => void;
   setMode: (m: RepeatMode) => void;
   setPlayerBg: (v: string) => void;
+  /** 切换播放器版式（第三十四轮；按网易云账号持久化） */
+  setPlayerStyle: (v: PlayerStyle) => void;
   /** 写入歌手关注状态（内存缓存，服务端为准） */
   setArtistFollowed: (id: number, on: boolean) => void;
   setQuality: (q: QualityLevel) => void;
@@ -357,7 +372,7 @@ function armSleepTimer(min: number): void {
 /** 按当前账号重载播放快照 + 听歌时长 + 播放器外观（登录/退出后「所有数据跟随账号」；正在播放时不打断） */
 function reloadForAccount(): void {
   const st = useMusic.getState();
-  useMusic.setState({ listenSec: readListenSec(), playerBg: readPlayerBg() });
+  useMusic.setState({ listenSec: readListenSec(), playerBg: readPlayerBg(), playerStyle: readPlayerStyle() });
   if (st.playing) return; // 正在播放不打断（退出登录时切歌前先停）
   const snap = readPlayerSnapshot();
   if (snap && Array.isArray(snap.queue) && snap.queue.length) {
@@ -392,6 +407,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   playError: '',
   freeTrial: false,
   playerBg: '',
+  playerStyle: 'vinyl',
   quality: 'standard',
   sleepAt: null,
   lyricLines: [],
@@ -436,8 +452,8 @@ export const useMusic = create<MusicState>((set, get) => ({
     loadHistoryFor();
     // 恢复累计听歌时长（按账号隔离）
     useMusic.setState({ listenSec: readListenSec() });
-    // 恢复播放器自定义背景（按账号隔离）
-    useMusic.setState({ playerBg: readPlayerBg() });
+    // 恢复播放器自定义背景与版式（按账号隔离）
+    useMusic.setState({ playerBg: readPlayerBg(), playerStyle: readPlayerStyle() });
     // 登录态（异步校验）
     void get().refreshLoginUi();
   },
@@ -614,6 +630,13 @@ export const useMusic = create<MusicState>((set, get) => ({
     if (v) kvSet(playerBgKey(), v);
     else kvDel(playerBgKey());
     set({ playerBg: v });
+  },
+
+  // 播放器版式（第三十四轮反馈）：按网易云账号持久化
+  setPlayerStyle: (v) => {
+    if (v === 'vinyl') kvDel(playerStyleKey());
+    else kvSet(playerStyleKey(), v);
+    set({ playerStyle: v });
   },
 
   // 歌手关注状态（内存缓存，服务端为准；关注/取关后各界面即时同步）

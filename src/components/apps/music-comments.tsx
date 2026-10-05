@@ -5,7 +5,8 @@
  * - 头部：返回箭头（←）+ 居中「评论」标题（标题下红色短条）
  * - 歌曲行：圆形封面 + 「歌名 - 歌手」
  * - 排序档：「评论(N)」+ 推荐 | 最热 | 最新（/comment/new sortType 1/2/3，cursor 翻页；
- *   第三十三轮起吸顶不随滚动，标题栏/歌曲行随内容滑走）
+ *   第三十三轮起吸顶不随滚动，标题栏/歌曲行随内容滑走；
+ *   第三十四轮吸顶位改 top-[54px] 停在状态栏/灵动岛下方，不再与状态栏重叠）
  * - 评论流：头像 / 昵称 + VIP·等级徽章 / 日期 + IP 属地 / 内容 / 右侧点赞（大拇指），
  *   楼层回复内联直排（第三十二轮去卡片底色，进视口自动预览前 2 条，仿截图），
  *   「展开N条回复」蓝色链接（第三十三轮，/comment/floor）
@@ -317,8 +318,9 @@ export function CommentsPage() {
           </p>
         </div>
 
-        {/* 排序档（吸顶不随滚动）：评论 (N) + 推荐|最热|最新 */}
-        <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-4 pb-2 pt-2 dark:bg-zinc-950">
+        {/* 排序档（吸顶不随滚动，且停在状态栏/灵动岛下方——第三十四轮修复：
+            原先 top-0 滚动后计数行顶到状态栏上与其重叠，用户截图反馈） */}
+        <div className="sticky top-[54px] z-10 flex items-center justify-between bg-white px-4 pb-2 pt-2 dark:bg-zinc-950">
           <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-comment-total">
             评论{data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
           </p>

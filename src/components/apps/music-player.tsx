@@ -11,7 +11,7 @@
  * - 一起听态：顶部双头像 + 累计时长（跨会话永久保存） + 音乐/聊天胶囊切换
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlarmClock,
   ChevronDown,
@@ -24,6 +24,7 @@ import {
   Forward,
   Heart,
   ImageUp,
+  ImageIcon,
   Info,
   ListMusic,
   Loader2,
@@ -71,6 +72,7 @@ import {
   QUALITY_ORDER,
   type QualityLevel,
   type RepeatMode,
+  type PlayerStyle,
   type TogetherSessionLike,
   type TogetherMsgLike,
 } from '@/lib/ios/music-store';
@@ -146,6 +148,8 @@ export function MusicPlayer() {
   }, [moreToast]);
   // 播放器自定义背景（手机上传；空 = 默认封面模糊）
   const playerBg = useMusic((s) => s.playerBg);
+  // 播放器版式（经典黑胶/全屏封面/唱片封面，第三十四轮）
+  const playerStyle = useMusic((s) => s.playerStyle);
   // 对方信息跟随全局（联系人库里最新头像/昵称）
   const togetherLive = useTogetherLive();
 
@@ -522,6 +526,7 @@ export function MusicPlayer() {
               song={current}
               playing={playing}
               onSwitch={() => setShowLyric(true)}
+              style={playerStyle}
             />
           )}
         </div>
@@ -808,28 +813,78 @@ function TgChatGlyph({ className }: { className?: string }) {
 
 // ---------------- 黑胶视图（第三十一轮按用户参考图再美化：
 // 细密同心纹路 + 纹路明暗带 + 外缘悬浮光环 + 大封面占比；
-// 第三十二轮：白色圆轴承整体删除（用户要求）、盘面斜向高光层删除（泛白块根因）） ----------------
+// 第三十二轮：白色圆轴承整体删除（用户要求）、盘面斜向高光层删除（泛白块根因）；
+// 第三十四轮：播放器版式可选——经典黑胶（原样式）/ 全屏封面 / 唱片封面（整张封面作旋转唱片面）） ----------------
 
 function VinylView({
   song,
   playing,
   onSwitch,
+  style = 'vinyl',
 }: {
   song: NcmSong;
   playing: boolean;
   onSwitch: () => void;
+  /** 播放器版式（设置弹窗可选，第三十四轮） */
+  style: PlayerStyle;
 }) {
+  const spinState = { animationPlayState: playing ? ('running' as const) : ('paused' as const) };
   return (
     <div className="relative flex h-full w-full flex-col items-center">
       <div className="flex min-h-0 w-full flex-1 items-center justify-center">
-        {/* 黑胶（细密纹路 + 立体边缘，仿参考图；尺寸随空间自适应不溢出） */}
-        <button
-          type="button"
-          onClick={onSwitch}
-          data-testid="music-vinyl"
-          aria-label="切换到歌词"
-          className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
-        >
+        {style === 'coverFull' ? (
+          /* 全屏封面：大圆角方形封面居中铺满（无唱片，第三十四轮） */
+          <button
+            type="button"
+            onClick={onSwitch}
+            data-testid="music-cover-full"
+            aria-label="切换到歌词"
+            className="relative aspect-square h-full max-h-[300px] max-w-full shrink-0 overflow-hidden rounded-[18px] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)] ring-1 ring-white/15"
+          >
+            <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
+          </button>
+        ) : style === 'discCover' ? (
+          /* 唱片封面：整张封面作唱片面（图纹唱片），外缘深黑胶圈 + 悬浮光环，随播放旋转（第三十四轮） */
+          <button
+            type="button"
+            onClick={onSwitch}
+            data-testid="music-disc-cover"
+            aria-label="切换到歌词"
+            className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
+          >
+            <div className="absolute inset-[-7%] rounded-full bg-black/30 blur-2xl" aria-hidden />
+            <div
+              className="absolute inset-[-2.5%] rounded-full"
+              style={{
+                background:
+                  'radial-gradient(circle, transparent 0%, transparent 88%, rgba(255,255,255,0.07) 94%, rgba(255,255,255,0.02) 100%)',
+                boxShadow: '0 18px 50px rgba(0,0,0,0.55)',
+              }}
+              aria-hidden
+            />
+            {/* 盘体外缘（深黑圈，不随旋转） */}
+            <div className="absolute inset-0 rounded-full bg-[#060606] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_4px_14px_rgba(0,0,0,0.5)] ring-1 ring-white/10" />
+            {/* 唱片面 = 整张封面（旋转），内阴影压出胶片厚度感 */}
+            <div
+              className="absolute inset-[2.2%] animate-[spin_20s_linear_infinite] overflow-hidden rounded-full"
+              style={spinState}
+            >
+              <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
+              <div
+                className="absolute inset-0 rounded-full shadow-[inset_0_2px_6px_rgba(255,255,255,0.12),inset_0_-6px_16px_rgba(0,0,0,0.55),inset_0_0_50px_rgba(0,0,0,0.35)]"
+                aria-hidden
+              />
+            </div>
+          </button>
+        ) : (
+          /* 经典黑胶（原样式，第三十一轮定版） */
+          <button
+            type="button"
+            onClick={onSwitch}
+            data-testid="music-vinyl"
+            aria-label="切换到歌词"
+            className="relative aspect-square h-full max-h-[256px] max-w-full shrink-0"
+          >
           {/* 盘后氛围光晕（悬浮立体感） */}
           <div className="absolute inset-[-7%] rounded-full bg-black/30 blur-2xl" />
           {/* 外缘悬浮光环（仿参考图盘缘外一圈微光，与盘面留出细缝） */}
@@ -869,7 +924,8 @@ function VinylView({
               <CoverImg src={songCover(song)} className="h-full w-full" alt={song.name} />
             </div>
           </div>
-        </button>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1015,7 +1071,8 @@ function LyricView({
     if (activeIdx >= 0) scrollToLine(activeIdx, 'smooth');
   }, [activeIdx]);
 
-  // 手动浏览标记（触摸/滚轮都算）：亮起胶囊（起点先亮在播放当前行）+ 刷新 3 秒回跳计时器
+  // 手动浏览标记（触摸/滚轮都算）：亮起胶囊（起点先亮在播放当前行）+ 刷新 5 秒回跳计时器
+  // （第三十四轮：停止 5 秒后才回当前行，原 3 秒）
   const markManual = () => {
     manualRef.current = true;
     viewIdxRef.current = activeIdxRef.current;
@@ -1029,7 +1086,7 @@ function LyricView({
       viewIdxRef.current = -1;
       setViewIdx(-1);
       scrollToLine(activeIdxRef.current, 'smooth');
-    }, 3000);
+    }, 5000);
   };
 
   // 滚动中高亮跟随（第三十一轮）：算视口中线最近的歌词行，滚到哪句胶囊亮在哪句；
@@ -1215,13 +1272,15 @@ function LyricView({
               }}
               data-testid={isActive ? 'music-lyric-active' : undefined}
               onClick={(e) => {
-                // 第二十八轮反馈：点歌词行不再跳播进度；点击歌词界面任何位置都返回唱片——
-                // 事件不拦截、自然冒泡到根节点/滚动容器的 onSwitch。
-                // 仅长按复制后吞掉这一次 click（suppress），避免复制完歌词页立即消失
+                // 长按复制后吞掉随后的 click（避免复制完歌词页立即消失）
                 if (suppressClickRef.current) {
                   suppressClickRef.current = false;
                   e.stopPropagation();
+                  return;
                 }
+                // 第三十四轮反馈：点当前行胶囊高亮本身不返回唱片界面
+                if (isActive && capsuleOn) e.stopPropagation();
+                // 其余点击自然冒泡到根节点/滚动容器的 onSwitch（回唱片）
               }}
               onPointerDown={(e) => {
                 if (e.button !== 0) return;
@@ -1259,10 +1318,10 @@ function LyricView({
               {showTr && l.tr && (
                 <span className={`relative mt-0.5 block text-[12px] leading-relaxed ${isActive ? 'text-white/70' : 'text-white/60'}`}>{l.tr}</span>
               )}
-              {isActive && (
-                /* 播放/暂停小键（右侧悬浮）：胶囊亮起时才可点（胶囊内明确的播放控件，
-                    点它不算「点歌词」，stopPropagation 防误触返回唱片）；
-                    第三十三轮反馈：胶囊后播放键=播这一句——该行时间段（l.t→下一行起点）
+              {isActive && i === activeIdx && (
+                /* 播放/暂停小键（右侧悬浮）：仅播放行显示（第三十四轮反馈：滚到没在播的歌词行
+                    不显示播放键），胶囊亮起时才可点（stopPropagation 防误触返回唱片）；
+                    第三十三轮：胶囊后播放键=播这一句——该行时间段（l.t→下一行起点）
                     不在播放时跳到该行起点播放（seek 后胶囊按进度跳变语义熄灭、歌词跟随
                     新播放行），已在播该段则维持播放/暂停切换 */
                 <button
@@ -1434,9 +1493,9 @@ function TogetherHead({
         <CoverImg src={myAvatarOf(loginUid, loginAvatar)} className="relative -ml-2.5 h-16 w-16" rounded="rounded-full" alt="我" />
       </div>
       {/* 时长行常驻占位（有气泡时隐形但保留高度）：气泡出现/消失唱片高度恒定不跳动；
-          第三十三轮 mt-[30px]→mt-[22px] 再上移 8px（用户「时长再往上一点」），
-          线尾渐隐段（页面 y≈165）仍在时长行上方 ~11px 不相交 */}
-      <p className={`mt-[22px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
+          第三十四轮 mt-[22px]→mt-[18px] 再上移 4px（用户「往上移一点点」），
+          线尾渐隐段（页面 y≈165）仍在时长行上方 ~7px 不相交 */}
+      <p className={`mt-[18px] text-[11px] text-white/70 ${hasBubble ? 'invisible' : 'visible'}`}>
         相距 {session.distanceKm} 公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
@@ -2123,12 +2182,39 @@ function compressPlayerBg(file: File): Promise<string> {
   });
 }
 
-/** 播放器样式面板：默认封面模糊背景 / 从手机上传听歌界面背景图 / 恢复默认（按网易云账号持久化） */
+/** 播放器样式面板：版式三选（经典黑胶/全屏封面/唱片封面，第三十四轮）+ 默认封面模糊背景 / 从手机上传听歌界面背景图 / 恢复默认（按网易云账号持久化） */
 function PlayerStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: string) => void }) {
   const playerBg = useMusic((s) => s.playerBg);
   const setPlayerBg = useMusic((s) => s.setPlayerBg);
+  // 播放器版式（第三十四轮）：经典黑胶 / 全屏封面 / 唱片封面
+  const playerStyle = useMusic((s) => s.playerStyle);
+  const setPlayerStyle = useMusic((s) => s.setPlayerStyle);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+
+  const STYLE_ROWS: { key: PlayerStyle; label: string; desc: string; testid: string; icon: ReactNode }[] = [
+    {
+      key: 'vinyl',
+      label: '经典黑胶',
+      desc: '旋转唱片 · 中心小封面',
+      testid: 'music-style-vinyl',
+      icon: <Disc2 className="h-[18px] w-[18px] text-zinc-500 dark:text-zinc-400" />,
+    },
+    {
+      key: 'coverFull',
+      label: '全屏封面',
+      desc: '大幅圆角方形封面铺满听歌界面',
+      testid: 'music-style-cover-full',
+      icon: <ImageIcon className="h-[18px] w-[18px] text-zinc-500 dark:text-zinc-400" />,
+    },
+    {
+      key: 'discCover',
+      label: '唱片封面',
+      desc: '整张封面作旋转唱片面（图纹唱片）',
+      testid: 'music-style-disc-cover',
+      icon: <Disc3 className="h-[18px] w-[18px] text-zinc-500 dark:text-zinc-400" />,
+    },
+  ];
 
   const pick = async (f: File | undefined | null) => {
     if (!f) return;
@@ -2157,6 +2243,32 @@ function PlayerStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: 
         <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
         <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">播放器样式</p>
         <div className="mt-2 px-3">
+          {/* 版式（第三十四轮）：经典黑胶 / 全屏封面 / 唱片封面 */}
+          <p className="px-3.5 pb-1 pt-1.5 text-[11px] font-medium text-zinc-400">版式</p>
+          {STYLE_ROWS.map((row) => (
+            <button
+              key={row.key}
+              type="button"
+              onClick={() => {
+                setPlayerStyle(row.key);
+                onToast(`播放器版式：${row.label}`);
+                onClose();
+              }}
+              data-testid={row.testid}
+              className="flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left text-[14px] text-zinc-800 active:bg-zinc-100 dark:text-zinc-200 dark:active:bg-zinc-800"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800">
+                {row.icon}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block">{row.label}</span>
+                <span className="block text-[11px] text-zinc-400">{row.desc}</span>
+              </span>
+              {playerStyle === row.key && <Check className="h-[18px] w-[18px] shrink-0 text-[#EC4141]" />}
+            </button>
+          ))}
+          {/* 背景（第十五轮）：默认封面模糊 / 上传自定义图 */}
+          <p className="px-3.5 pb-1 pt-2 text-[11px] font-medium text-zinc-400">背景</p>
           <button
             type="button"
             onClick={() => {
@@ -2171,8 +2283,8 @@ function PlayerStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: 
               <Disc2 className="h-[18px] w-[18px] text-zinc-500 dark:text-zinc-400" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block">默认样式</span>
-              <span className="block text-[11px] text-zinc-400">黑胶唱片 · 封面模糊背景</span>
+              <span className="block">默认背景</span>
+              <span className="block text-[11px] text-zinc-400">封面模糊背景（各版式通用）</span>
             </span>
             {!playerBg && <Check className="h-[18px] w-[18px] shrink-0 text-[#EC4141]" />}
           </button>
