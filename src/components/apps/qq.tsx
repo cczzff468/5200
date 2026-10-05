@@ -5977,7 +5977,7 @@ function ChatPage({
                       role={m.role}
                       name={m.song.name}
                       artist={m.song.artist}
-                      note={m.song.note}
+                      invite={m.song.inviteDone}
                       cover={m.song.cover}
                       songId={m.song.songId}
                       autoPlay={m.song.autoPlay}

@@ -15223,3 +15223,32 @@ Stage Summary:
 - 关键实现：边缘停靠的「拖停实时 rect 计算 + 挂载后 rAF 补测」双路径（React 子组件 layout effect 早于父 ref 挂上的提交顺序坑）；hidden 形态移除后「隐藏」语义由边缘停靠承接（不消失，可收起）
 - 范围限定遵守：仅动 MusicGlobalMini.tsx / music-ai.ts / music-store.ts / music-player.tsx 四文件；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项未触碰；音乐数据按账号隔离未动
 - 改动文件：src/components/ios/MusicGlobalMini.tsx、src/lib/ios/music-ai.ts、src/lib/ios/music-store.ts、src/components/apps/music-player.tsx
+
+---
+Task ID: 81
+Agent: Z.ai Code（主会话）
+Task: 第二十二轮——审计 1~8 全做（指令措辞/兑底去重/暂停轻问/相似防复读/歌手校验/换一批/歌词窗口/快退指令）+ 灵动岛展开盖信号图标修复 + 歌曲卡片文案清理（去掉下方小字、邀请卡歌名行变「邀请你一起听xx」）
+
+Work Log:
+- music-ai.ts（审计 1~8）：
+  - ①【播放控制】加规则行：指令异步执行，正文用意图式说法（"我切一下歌"），禁完成时"已经切好了"
+  - ② runTgControls 加 aiText 参数：[放歌] 搜不到时正文已含「没有/找不到/搜不到/听不了/放不了」则跳过兑底消息（不重复道歉）
+  - ③ bindPauseNudge（bootMusicAi 装载）：useMusic 订阅播放跳变，暂停满 3 分钟仍未恢复 → 40% 概率 aiSayOnce「音乐已经暂停三分钟了…」（每次暂停至多一次，恢复/退出即作废；与 F 睡前提醒并列为仅有的两处主动消息）
+  - ④ 防复读升级：similarEnough = 完全相同 / 双方≥6字包含 / 2-gram Jaccard≥0.6（只换标点/换一两个字算复读；不同意思不误伤），isDupOfRecent 逐条相似判定
+  - ⑤ searchSongMatched(title, artist)：search limit 5 + 歌手名一致性校验（互相包含或 token 命中），翻唱/remix/伴奏不命中；[放歌] 与 togetherRecommend 共用
+  - ⑥ togetherRecommend prompt 加「最近推荐过的这些歌不要再推」（取近 12 条里 recs 卡歌名去重前 8）；music-together.tsx recs 卡底部加「换一批」按钮（music-tg-rec-refresh）→ togetherRecommend(cid,'换一批，来点不一样的')，aiBusy 时禁用
+  - ⑦ lyricNowBlock 窗口扩为前 3 句+当前+后 2 句（最多 6 句，▶ 标注正在唱，含翻译）
+  - ⑧ [快退:秒数] 指令（delta 负值，extractTgControls 快进/快退统一解析），快进/快退上限 300→600，prompt 同步
+- 新 9（灵动岛盖信号图标）：根因 = 展开态 348px 宽居中（屏宽 366），z-81 盖住状态栏右侧信号/WiFi/电量（z-70）；修复 = MusicIsland 展开时容器 top 11→58（EXPANDED_TOP，CSS transition-[top] 300ms 下沉到状态栏 h-54 下方），状态栏全程可见；胶囊态不动
+- 新 10/11（歌曲卡片）：SongMsgBubble 删 note 下方小字渲染（分享语/邀请语不再显示）+ 新增 invite prop（歌名行显示「邀请你一起听+歌名」）；wechat/qq 调用点传 invite={m.song.inviteDone} 去掉 note；chat-rich [邀请一起听] 解析不再带 note='邀请你一起听'（存量消息渲染侧同步干净）
+- E2E（agent-browser 900×1100 一次性会话）：
+  - 卡片：IDB 注入测试联系人+两张卡（晴天带 note 分享卡 / 偏爱 inviteDone 邀请卡）→ 微信登录（注入 user 账号 13800000001）→ 会话渲染：晴天卡下方无分享语 ✓、邀请卡歌名行「邀请你一起…」（窄卡 truncate，全名=邀请你一起听偏爱）✓ → 测试数据全部删除
+  - 灵动岛：播「权也是威」→ 展开卡 348px top=198（页面坐标，状态栏 h~194 之下），信号/WiFi/电量图标全程可见 ✓；点别处收起 → 胶囊 156px 回 top=151（屏内 11px 原位）✓
+  - errors 零报错；测试数据清理后关浏览器
+- bunx tsc 0 错误；bun run lint 0 错误；dev.log 无新增异常
+
+Stage Summary:
+- 交付：一起听 AI 审计 8 项全落地（意图式措辞/兑底不重复/暂停久置轻问/相似防复读/歌手校验防串歌/推荐卡换一批+去重/歌词 6 句窗口/快退指令+600s 上限）；灵动岛展开下沉状态栏下方（信号图标不再消失）；聊天歌曲卡片去附注 + 邀请卡歌名行改「邀请你一起听+歌名」
+- 关键实现：展开态下沉用容器 top 切换（CSS transition 与 framer 尺寸 spring 同步过渡）；搜索校验只放宽到「互相包含/token 命中」防误杀；[快退] 复用 seek 负 delta 零新增引擎逻辑
+- 范围限定遵守：改 7 文件（music-ai/music-together/song-msg-bubble/wechat/qq/chat-rich/MusicIsland）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项核心逻辑未触碰（wechat/qq 仅歌曲卡片调用点 2 行）；音乐数据按账号隔离未动
+- 改动文件：src/lib/ios/music-ai.ts、src/components/apps/music-together.tsx、src/components/apps/song-msg-bubble.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/chat-rich.ts、src/components/ios/MusicIsland.tsx

@@ -498,7 +498,8 @@ function parseMarker(kind: string, inner: string, stickers: Sticker[] | null, gr
     case '邀请一起听': {
       const name = (segs[0] ?? '').trim();
       if (!name) return null;
-      return { kind: 'song', name, artist: segs.slice(1).join(':').trim(), invite: true, note: '邀请你一起听' };
+      // 第二十二轮反馈：邀请语不再放在卡片下方小字，改由卡片歌名行显示「邀请你一起听+歌名」
+      return { kind: 'song', name, artist: segs.slice(1).join(':').trim(), invite: true };
     }
     default:
       return null;

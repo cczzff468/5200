@@ -9,6 +9,8 @@
  * - 点击卡片 → useMusic.playSong 直接播放（后台播，不打断聊天；正在播时按钮变暂停可点击暂停）；
  * - autoPlay（AI 点播 [放歌:...]）：卡片投递后自动开始播放——模块级已播 Set 去重 +
  *   90 秒时间窗（历史消息重渲染/重开聊天页不重复触发）；播放失败静默（卡片仍可手点）。
+ * - invite（[邀请一起听:...]，第二十二轮反馈）：歌名行改为「邀请你一起听歌名」；
+ *   卡片下方的分享语/邀请语小字已按用户要求整体移除（卡片本身干净无附注）。
  */
 
 import { useEffect, useState } from 'react';
@@ -43,8 +45,8 @@ export interface SongMsgBubbleProps {
   role: 'me' | 'peer';
   name: string;
   artist: string;
-  /** AI 分享语（卡片下方一行小字） */
-  note?: string;
+  /** 邀请一起听卡：歌名行显示「邀请你一起听歌名」（第二十二轮反馈，不再用卡片下方小字） */
+  invite?: boolean;
   /** 落库时已知的封面（音乐 App 分享带；AI 标记无则异步解析） */
   cover?: string;
   /** 落库时已知的曲库 id（有则免搜索） */
@@ -55,7 +57,7 @@ export interface SongMsgBubbleProps {
   time: number;
 }
 
-export default function SongMsgBubble({ msgId, role, name, artist, note, cover, songId, autoPlay, time }: SongMsgBubbleProps) {
+export default function SongMsgBubble({ msgId, role, name, artist, invite, cover, songId, autoPlay, time }: SongMsgBubbleProps) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
   const playSong = useMusic((s) => s.playSong);
@@ -129,10 +131,12 @@ export default function SongMsgBubble({ msgId, role, name, artist, note, cover, 
             </span>
           )}
         </span>
-        {/* 歌名 / 歌手 / 播放钮 */}
+        {/* 歌名 / 歌手 / 播放钮（invite 卡：歌名行 = 邀请你一起听+歌名，第二十二轮反馈） */}
         <span className="flex min-w-0 flex-1 items-center gap-1 px-2.5">
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100">{name}</span>
+            <span className="block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100">
+              {invite ? `邀请你一起听${name}` : name}
+            </span>
             <span className="mt-0.5 block truncate text-[12px] text-zinc-400">{artist || '未知歌手'}</span>
           </span>
           <span
@@ -150,7 +154,6 @@ export default function SongMsgBubble({ msgId, role, name, artist, note, cover, 
           </span>
         </span>
       </button>
-      {note ? <p className="mt-1 px-1 text-[12px] leading-snug text-zinc-500 dark:text-zinc-400">{note}</p> : null}
     </div>
   );
 }

@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, Loader2, Music4, SendHorizonal, Smile } from 'lucide-react';
+import { AudioLines, Loader2, Music4, RefreshCw, SendHorizonal, Smile } from 'lucide-react';
 import { useMusic, getGuestAvatar } from '@/lib/ios/music-store';
 import { sendTogetherText, togetherRecommend, useTogetherLive } from '@/lib/ios/music-ai';
 import { CoverImg } from './music-shared';
@@ -85,6 +85,17 @@ export function TogetherChat() {
                       </button>
                     ))}
                   </div>
+                  {/* 换一批（第二十二轮审计⑥）：不起新会话，直接让 TA 重新挑（避开最近推荐过的歌） */}
+                  <button
+                    type="button"
+                    data-testid="music-tg-rec-refresh"
+                    onClick={() => togetherRecommend(cid, '换一批，来点不一样的')}
+                    disabled={aiBusy}
+                    className="mt-1.5 flex w-full items-center justify-center gap-1 rounded-xl py-1 text-[11px] text-white/55 active:bg-white/10 disabled:opacity-40"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    换一批
+                  </button>
                 </div>
               ) : (
                 // 双方气泡同款深灰半透明（参考网易云真实一起听界面）；我的右侧、对方左侧

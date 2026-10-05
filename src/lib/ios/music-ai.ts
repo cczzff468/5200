@@ -346,8 +346,9 @@ function historyBlock(): string {
   return `【${'机主'}最近在听的歌】\n${recent.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
 }
 
-/** A（第二十轮）：当前歌词上下文块（正在唱的一句 + 前后各一句，含翻译）——
- *  之前 AI 只知道歌名/进度，看不到歌词，聊不了「这句词好戳」这种细节 */
+/** A（第二十轮）：当前歌词上下文块（含翻译）——
+ *  之前 AI 只知道歌名/进度，看不到歌词，聊不了「这句词好戳」这种细节。
+ *  第二十二轮审计⑦：从「上一句+当前+下一句」扩到最近 4~6 句（前 3 句+当前+后 2 句），「刚才那句词」也接得住 */
 function lyricNowBlock(): string {
   const st = useMusic.getState();
   if (!st.current || st.lyricFor !== st.current.id || st.lyricLines.length === 0) return '';
@@ -363,10 +364,14 @@ function lyricNowBlock(): string {
     if (!l) return '';
     return l.tr ? `${l.text}（${l.tr}）` : l.text;
   };
+  // 第二十二轮审计⑦：窗口 = 前 3 句 + 当前 + 后 2 句（共最多 6 句）
   const parts: string[] = [];
-  if (idx > 0) parts.push(`上一句：${at(idx - 1)}`);
-  parts.push(`正在唱：${at(idx)}`);
-  if (idx + 1 < lines.length) parts.push(`下一句：${at(idx + 1)}`);
+  const from = Math.max(0, idx - 3);
+  const to = Math.min(lines.length - 1, idx + 2);
+  for (let i = from; i <= to; i++) {
+    const tag = i === idx ? '▶ 正在唱' : i < idx ? `前 ${idx - i} 句` : `后 ${i - idx} 句`;
+    parts.push(`${tag}：${at(i)}`);
+  }
   return `【正在唱到的歌词】\n${parts.join('\n')}`;
 }
 
@@ -410,11 +415,12 @@ function playingBlock(extra: string, who: string, cid: string): string {
     '- 不要输出 markdown、不要伪装成系统；直接输出消息正文。',
     '',
     '【播放控制】你在陪对方听歌，可以控制播放（指令写在消息末尾，系统会真实执行，不要在正文里描述指令本身，不要加引号/代码块）：',
+    '- 指令由系统在你发完消息后异步执行：正文用意图式说法（如"我切一下歌""放首X听听"），不要用完成时说"已经切好了/已经放出来了"——万一没放成也不显得说谎；',
     '- 想切下一首：[切歌]；想回上一首：[上一首]；',
     '- 想暂停音乐：[暂停]；想继续放：[继续]；',
     '- 想放一首具体的歌（选歌/换到你们聊到的歌）：[放歌:歌名:歌手]（写真实存在的歌，如 [放歌:晴天:周杰伦]）；',
     '- 觉得这首歌好听、想帮对方收藏：[红心]（把当前歌加进对方红心，同一首歌别重复发）；',
-    '- 想跳过前奏/直接听副歌：[快进:秒数]（如 [快进:30]，最多 300 秒）；',
+    '- 想跳过前奏/直接听副歌：[快进:秒数]（如 [快进:30]）；想倒回去重听：[快退:秒数]（如 [快退:45]）；最多 600 秒；',
     '- 选什么歌、什么时候切，完全按你的人设、你们的聊天内容和这首歌的氛围来；用户随时会手动操作播放器，别抢节奏，不要每条消息都带指令。',
   );
   void who;
@@ -467,7 +473,7 @@ interface TgControl {
   type: 'next' | 'prev' | 'pause' | 'resume' | 'play' | 'like' | 'seek';
   name?: string;
   artist?: string;
-  /** type='seek' 时：快进秒数（最多 300） */
+  /** type='seek' 时：快进/快退秒数（正=快进，负=快退，绝对值最多 600） */
   delta?: number;
 }
 
@@ -493,17 +499,44 @@ function extractTgControls(raw: string): { text: string; controls: TgControl[] }
     controls.push({ type: 'like' });
     return '';
   });
-  // D（第二十轮）：[快进:秒数] 指令——真实拖进度
-  text = text.replace(/\[快进[:：]\s*(\d{1,3})\s*(?:秒|s)?\]/g, (_m, sec) => {
+  // D（第二十轮）：[快进:秒数]/[快退:秒数] 指令——真实拖进度（第二十二轮：加快退，上限放宽到 600）
+  text = text.replace(/\[(快进|快退)[:：]\s*(\d{1,3})\s*(?:秒|s)?\]/g, (_m, kind, sec) => {
     const n = parseInt(String(sec), 10);
-    if (Number.isFinite(n) && n > 0) controls.push({ type: 'seek', delta: Math.min(n, 300) });
+    if (Number.isFinite(n) && n > 0) {
+      controls.push({ type: 'seek', delta: (String(kind) === '快退' ? -1 : 1) * Math.min(n, 600) });
+    }
     return '';
   });
   return { text: text.replace(/[ \t]+$/gm, '').trim(), controls };
 }
 
-/** 执行一起听 AI 的播放控制（直接调 useMusic action；用户随时可手动覆盖，store 层天然以最后操作为准） */
-async function runTgControls(cid: string, controls: TgControl[]): Promise<void> {
+/** 带歌手一致性校验的曲库搜索（第二十二轮审计⑤：防止 AI 编的歌名匹配到翻唱/remix/伴奏版）：
+ *  取前 5 条结果，优先返回歌手名与要求吻合的第一条；没写歌手或全部不吻合时返回 undefined（调用方按没搜到处理） */
+async function searchSongMatched(title: string, artist: string): Promise<NcmSong | undefined> {
+  let hits: NcmSong[] = [];
+  try {
+    const r = await search(`${title} ${artist}`.trim(), 1, 5);
+    hits = r.songs;
+  } catch {
+    return undefined;
+  }
+  if (!hits.length) return undefined;
+  const want = artist.toLowerCase().replace(/\s+/g, '');
+  if (!want) return hits[0];
+  const gotOf = (s: NcmSong): string => songArtistText(s).toLowerCase().replace(/\s+/g, '');
+  const tokens = want.split(/[/、,，]/).map((t) => t.trim()).filter(Boolean);
+  const ok = (s: NcmSong): boolean => {
+    const got = gotOf(s);
+    if (!got) return false;
+    if (got.includes(want) || want.includes(got)) return true;
+    return tokens.some((t) => t.length >= 2 && (got.includes(t) || t.includes(got)));
+  };
+  return hits.find(ok);
+}
+
+/** 执行一起听 AI 的播放控制（直接调 useMusic action；用户随时可手动覆盖，store 层天然以最后操作为准）。
+ *  aiText = 本次回复的正文（第二十二轮审计②：正文已经说过"没有/找不到"时，搜不到的兑底消息不再重复发） */
+async function runTgControls(cid: string, controls: TgControl[], aiText = ''): Promise<void> {
   if (controls.length === 0) return;
   const st = useMusic.getState();
   for (const c of controls.slice(0, 3)) {
@@ -523,17 +556,11 @@ async function runTgControls(cid: string, controls: TgControl[]): Promise<void> 
           st.seek(Math.min(st.duration - 1, Math.max(0, st.position + c.delta)));
         }
       } else if (c.type === 'play' && c.name) {
-        // P2：AI 点歌搜不到时不再静默——自动补一条兑底消息
-        //（规则要求正文不描述指令，静默失败时用户会困惑「说了放歌但什么都没发生」）
-        let hit: NcmSong | undefined;
-        try {
-          const r = await search(`${c.name} ${c.artist ?? ''}`.trim(), 1, 1);
-          hit = r.songs[0];
-        } catch {
-          hit = undefined;
-        }
+        // P2：AI 点歌搜不到时不再静默——自动补一条兑底消息（正文已道歉时跳过，审计②）；
+        // 搜索走歌手一致性校验（审计⑤）
+        const hit = await searchSongMatched(c.name, c.artist ?? '');
         if (hit) await st.playSong(hit, [hit]);
-        else {
+        else if (!/(没有|找不到|搜不到|听不了|放不了)/.test(aiText)) {
           appendMsg(cid, {
             id: genMsgId(),
             role: 'peer',
@@ -591,8 +618,8 @@ export async function togetherReply(cid: string, userText: string): Promise<void
         error: true,
       });
     }
-    // AI 的播放控制指令（切歌/暂停/选歌/红心/快进）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
-    void runTgControls(cid, controls);
+    // AI 的播放控制指令（切歌/暂停/选歌/红心/快进快退）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
+    void runTgControls(cid, controls, text);
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
@@ -621,13 +648,35 @@ function normDup(s: string): string {
   return (s ?? '').replace(/[\s，。！？、,.!?:：;；'"“”「」『』()（）…·\-~～]/g, '').toLowerCase();
 }
 
-/** 是否与最近几条消息重复（同义复读检测；P4：窗口 6→12 条，双方消息都查——AI 复读机主原话同样算重复） */
+/** 2-gram 集合（相似复读判定用） */
+function bigrams(s: string): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out;
+}
+
+/** 相似复读判定（第二十二轮审计④）：完全相同 / 长句包含（双方 ≥6 字）/ 2-gram 重合度 ≥0.6——
+ *  只换标点、只换一两个字的复读也算重复，但「今天好累」vs「今天好开心」这类不同意思不误伤 */
+function similarEnough(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 6 && b.length >= 6 && (a.includes(b) || b.includes(a))) return true;
+  const A = bigrams(a);
+  const B = bigrams(b);
+  if (!A.size || !B.size) return false;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return inter / (A.size + B.size - inter) >= 0.6;
+}
+
+/** 是否与最近几条消息重复（P4：窗口 12 条，双方消息都查——AI 复读机主原话同样算重复；
+ *  第二十二轮审计④：从「完全相同」升级为相似判定 */
 function isDupOfRecent(cid: string, text: string): boolean {
   const n = normDup(text);
   if (!n) return false;
   return loadTogetherMsgs(cid)
     .slice(-12)
-    .some((m) => normDup(m.text) === n);
+    .some((m) => similarEnough(n, normDup(m.text)));
 }
 
 /**
@@ -662,9 +711,9 @@ export function sendTogetherText(text: string): void {
   void togetherReply(t.contactId, text.trim());
 }
 
-// ---------------- AI 主动说话（第二十一轮起仅剩 F 睡前提醒一处） ----------------
+// ---------------- AI 主动说话（F 睡前提醒 + 暂停久置轻问） ----------------
 
-/** AI 主动说一句话（仅供 F 睡前提醒使用；「AI 主动点评歌曲」已按用户要求整体删除） */
+/** AI 主动说一句话（仅供 F 睡前提醒/暂停久置轻问使用；「AI 主动点评歌曲」已按用户要求整体删除） */
 async function aiSayOnce(cid: string, hint: string): Promise<void> {
   if (replying) return;
   replying = true;
@@ -684,7 +733,7 @@ async function aiSayOnce(cid: string, hint: string): Promise<void> {
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     }
-    void runTgControls(cid, controls);
+    void runTgControls(cid, controls, text);
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
@@ -717,9 +766,19 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
       cid,
     ),
   );
+  // 第二十二轮审计⑥（换一批）：最近推荐过的歌不再重复推荐
+  const recentNames = [
+    ...new Set(
+      loadTogetherMsgs(cid)
+        .slice(-12)
+        .flatMap((m) => (m.role === 'recs' && m.songs ? m.songs.map((s) => `《${s.name}》`) : []))
+        .slice(-8),
+    ),
+  ];
+  const avoid = recentNames.length ? `最近推荐过的这些歌不要再推：${recentNames.join('')}。` : '';
   const user = `请严格只输出 JSON 数组（不要解释、不要 markdown 代码块），格式：
 [{"title":"歌名","artist":"歌手","reason":"一句话推荐理由（20字内，用你的口吻）"}]
-共 2~4 项（几首由你定）。理由不要和聊天记录里已说过的句子重复。多样性种子：${varietySeed()}`;
+共 2~4 项（几首由你定）。理由不要和聊天记录里已说过的句子重复。${avoid}多样性种子：${varietySeed()}`;
   const raw = await callLlmTwoTier(system, user);
   const arr = extractJsonArray(raw);
   if (!arr || !arr.length) {
@@ -736,14 +795,10 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     const title = String(item.title ?? '').trim();
     const artist = String(item.artist ?? '').trim();
     if (!title) continue;
-    try {
-      const r = await search(`${title} ${artist}`.trim(), 1, 1);
-      const hit = r.songs[0];
-      if (hit) {
-        songs.push({ id: hit.id, name: hit.name, artist: songArtistText(hit), picUrl: hit.album?.picUrl });
-      }
-    } catch {
-      // 单条失败跳过
+    // 第二十二轮审计⑤：歌手一致性校验——不吻合的版本（翻唱/remix/伴奏）不推
+    const hit = await searchSongMatched(title, artist);
+    if (hit) {
+      songs.push({ id: hit.id, name: hit.name, artist: songArtistText(hit), picUrl: hit.album?.picUrl });
     }
   }
   if (!songs.length) {
@@ -776,10 +831,37 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
 
 // ---------------- 启动恢复 ----------------
 
+let pauseNudgeBound = false;
+let pauseNudgeTimer: ReturnType<typeof setTimeout> | null = null;
+/** 第二十二轮审计③：暂停后 AI 不再点评歌曲，但完全无感知也冷场——暂停满 3 分钟仍未恢复时
+ *  40% 概率自然问一句（每次暂停至多一次；恢复播放/退出一起听即作废，无需任何开关） */
+function bindPauseNudge(): void {
+  if (pauseNudgeBound || typeof window === 'undefined') return;
+  pauseNudgeBound = true;
+  useMusic.subscribe((s) => {
+    if (s.playing) {
+      if (pauseNudgeTimer) {
+        clearTimeout(pauseNudgeTimer);
+        pauseNudgeTimer = null;
+      }
+      return;
+    }
+    if (pauseNudgeTimer) return; // 本轮暂停已排程，不重复排
+    pauseNudgeTimer = setTimeout(() => {
+      pauseNudgeTimer = null;
+      const st = useMusic.getState();
+      if (st.playing || !st.current) return;
+      const t = loadActiveTogether();
+      if (!t) return;
+      if (Math.random() < 0.4) void aiSayOnce(t.contactId, '音乐已经暂停三分钟了，对方还没按播放');
+    }, 180_000);
+  });
+}
+
 let sleepWarnBound = false;
 /** F（第二十轮）：睡前提醒——定时关闭剩 1 分钟时（music-store 广播 music-sleep-warning 事件），
  *  一起听中的角色自然说一句「要睡着了？音乐快停了哦」。
- *  第二十一轮：点评功能删除后这是 AI 唯一的主动消息，不再受任何开关限制 */
+ *  第二十一轮：点评功能删除；第二十二轮审计③加回「暂停久置轻问」这一处（唯一主动消息） */
 function bindSleepWarning(): void {
   if (sleepWarnBound || typeof window === 'undefined') return;
   sleepWarnBound = true;
@@ -790,10 +872,11 @@ function bindSleepWarning(): void {
   });
 }
 
-/** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子 */
+/** 音乐 App 打开时调用：恢复一起听会话 + 装 AI 钩子（播放记忆/同歌计数/睡前提醒/暂停久置轻问） */
 export async function bootMusicAi(): Promise<void> {
   installMusicAiHook();
   bindSleepWarning();
+  bindPauseNudge();
   const t = loadActiveTogether();
   if (t) {
     const c = await getContact(t.contactId);
