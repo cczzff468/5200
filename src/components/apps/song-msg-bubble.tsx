@@ -11,6 +11,8 @@
  *   90 秒时间窗（历史消息重渲染/重开聊天页不重复触发）；播放失败静默（卡片仍可手点）。
  * - invite（[邀请一起听:...]，第二十二轮反馈）：歌名行改为「邀请你一起听歌名」；
  *   卡片下方的分享语/邀请语小字已按用户要求整体移除（卡片本身干净无附注）。
+ * - 第二十三轮反馈：卡片圆角调小（10→6px，之前太圆）；邀请卡的「邀请你一起听」
+ *   从歌名同行拆出，单独放到歌名的上方一行（邀请语小字 / 歌名粗体 / 歌手）。
  */
 
 import { useEffect, useState } from 'react';
@@ -118,7 +120,7 @@ export default function SongMsgBubble({ msgId, role, name, artist, invite, cover
         type="button"
         data-testid={`song-bubble-${role}`}
         onClick={() => resolved && doPlay(resolved)}
-        className="flex w-full items-stretch overflow-hidden rounded-[10px] bg-[#F3F1EC] text-left shadow-[0_1px_2px_rgba(0,0,0,0.06)] active:opacity-80 dark:bg-zinc-800"
+        className="flex w-full items-stretch overflow-hidden rounded-[6px] bg-[#F3F1EC] text-left shadow-[0_1px_2px_rgba(0,0,0,0.06)] active:opacity-80 dark:bg-zinc-800"
         aria-label={`播放《${name}》${artist}`}
       >
         {/* 封面 */}
@@ -131,13 +133,16 @@ export default function SongMsgBubble({ msgId, role, name, artist, invite, cover
             </span>
           )}
         </span>
-        {/* 歌名 / 歌手 / 播放钮（invite 卡：歌名行 = 邀请你一起听+歌名，第二十二轮反馈） */}
+        {/* 歌名 / 歌手 / 播放钮。invite 卡（第二十三轮反馈）：「邀请你一起听」单独放歌名上方一行 */}
         <span className="flex min-w-0 flex-1 items-center gap-1 px-2.5">
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100">
-              {invite ? `邀请你一起听${name}` : name}
+            {invite && (
+              <span className="block truncate text-[11px] leading-[14px] text-zinc-400">邀请你一起听</span>
+            )}
+            <span className={`block truncate text-[14px] font-bold leading-snug text-zinc-900 dark:text-zinc-100 ${invite ? 'mt-[1px]' : ''}`}>
+              {name}
             </span>
-            <span className="mt-0.5 block truncate text-[12px] text-zinc-400">{artist || '未知歌手'}</span>
+            <span className={`block truncate text-[12px] text-zinc-400 ${invite ? 'mt-[1px]' : 'mt-0.5'}`}>{artist || '未知歌手'}</span>
           </span>
           <span
             className={`flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full ${

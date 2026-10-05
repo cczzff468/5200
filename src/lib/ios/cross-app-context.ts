@@ -437,7 +437,13 @@ export async function buildCrossAppBlock(contactId: string, currentApp: CrossApp
             ? readMusicLines(contactId, userLabel, currentApp)
             : readPrivateLines(app, contactId, userLabel);
       if (lines.length === 0) continue; // 空会话的 App 整段跳过
-      sections.push({ header: `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : app === 'music' ? '听歌动态' : '对话'}：`, lines });
+      // 音乐节单独标注背景定位（第二十三轮反馈：修「AI 回复被音乐带偏、不回应用户的话」——
+      // 单独播放时所有聊天 App 共用同一套优先级：用户消息最高，音乐只是背景，对方不聊歌就不聊歌）
+      const header =
+        app === 'music'
+          ? `▶ 音乐 听歌动态（只是背景信息：知道${me}在听什么即可，${me}不主动提歌就不要聊歌，回复永远以${me}刚说的话为先）：`
+          : `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : '对话'}：`;
+      sections.push({ header, lines });
     }
     if (sections.length === 0) return envLine; // 全部其他 App 都无记录：只保留当前环境行
     // fix3-4 块头锚点：「你：」= AI 本人说过的话；「{userLabel}：」= 机主说的（与行前缀实际用字一致）

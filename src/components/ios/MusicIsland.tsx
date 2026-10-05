@@ -13,8 +13,9 @@
  * - 不放音乐（无歌/暂停）时弹窗整体消失（第十八轮反馈），恢复播放后小弹窗回归；
  * - 聊天消息灵动岛通知展示期间 → 音乐弹窗整体消失（通知收起后音乐弹窗恢复）；
  *   来电响铃/熄屏期间同样隐身；设置里关闭状态栏（灵动岛）时一并隐藏。
- * - 展开态下沉（第二十二轮反馈）：大弹窗展开时下移到状态栏下方，状态栏时间/信号/电量
- *   全程可见（此前 348px 宽的展开卡会盖住信号图标，图标要等弹窗收回才出现）。
+ * - 大弹窗不下沉（第二十三轮反馈：撤销第二十二轮的下沉方案，恢复原位 top=11）；
+ * - 弹窗可见时状态栏只隐藏「移动数据」（信号）图标，WiFi/电量保留（真实 iPhone 灵动岛同语义），
+ *   弹窗消失后图标恢复——可见性由本组件写入 music-store.islandVisible，StatusBar 只读。
  *
  * 层级 z-[81]：盖住静态灵动岛（z-80 同位同色无缝接管），低于聊天通知卡（z-93）。
  * 大弹窗的「点击别处」捕获层 z-[80]（展开期间拦截一次点击用于收起，iOS 灵动岛同语义）。
@@ -40,9 +41,8 @@ const SPRING: Transition = { type: 'spring', stiffness: 380, damping: 32, mass: 
 const AUTO_COLLAPSE_MS = 5000;
 /** 暂停/关闭音乐后弹窗延迟消失时长（第二十轮反馈：不立马消失，显示 5 秒再收起） */
 const PAUSE_GRACE_MS = 5000;
-/** 胶囊/展开态的垂直锚位：展开态下沉到状态栏（h-54）下方，状态栏图标全程可见（第二十二轮反馈） */
+/** 胶囊/展开态的垂直锚位（第二十三轮反馈：撤销下沉，大弹窗恢复原位与胶囊同锚） */
 const PILL_TOP = 11;
-const EXPANDED_TOP = 58;
 
 /** 来电展示中（与 IslandNotificationLayer 同口径，只读两个通话 store） */
 function useIncomingCallPresenting(): boolean {
@@ -171,6 +171,14 @@ export default function MusicIsland() {
   const hidden =
     !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !current || (!playing && !pauseGrace);
 
+  // 弹窗可见性 → music-store.islandVisible（StatusBar 据此隐藏/恢复「移动数据」图标）。
+  // 订阅外部派生值（含 pauseGrace 内部态）在回调里 setState，渲染期不碰 store
+  useEffect(() => {
+    if (useMusic.getState().islandVisible !== !hidden) {
+      useMusic.setState({ islandVisible: !hidden });
+    }
+  }, [hidden]);
+
   useEffect(() => {
     expandedRef.current = expanded;
   }, [expanded]);
@@ -281,8 +289,8 @@ export default function MusicIsland() {
         />
       )}
       <div
-        className="pointer-events-none absolute inset-x-0 z-[81] flex flex-col items-center transition-[top] duration-300 ease-out"
-        style={{ top: expanded ? EXPANDED_TOP : PILL_TOP }}
+        className="pointer-events-none absolute inset-x-0 z-[81] flex flex-col items-center"
+        style={{ top: PILL_TOP }}
       >
         <motion.div
           data-testid="music-island"

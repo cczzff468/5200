@@ -272,6 +272,9 @@ interface MusicState {
   // 歌手关注状态（内存缓存；设置弹窗打开时用 artistSublist 与服务端对齐，关注/取关即时写入，
   // 供设置弹窗/一起听聊天胶囊同步显示「关注/已关注」）
   followedArtists: Record<number, boolean>;
+  // 灵动岛音乐弹窗可见性（第二十三轮反馈：弹窗可见时状态栏隐藏「移动数据」图标，
+  // 弹窗消失后恢复；由 MusicIsland 同步写入，StatusBar 只读）
+  islandVisible: boolean;
 
   boot: () => Promise<void>;
   openAppNow: () => void;
@@ -414,6 +417,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   togetherMsgs: [],
   tgAiBusy: false,
   followedArtists: {},
+  islandVisible: false,
 
   boot: async () => {
     if (get().booted) return;

@@ -15252,3 +15252,31 @@ Stage Summary:
 - 关键实现：展开态下沉用容器 top 切换（CSS transition 与 framer 尺寸 spring 同步过渡）；搜索校验只放宽到「互相包含/token 命中」防误杀；[快退] 复用 seek 负 delta 零新增引擎逻辑
 - 范围限定遵守：改 7 文件（music-ai/music-together/song-msg-bubble/wechat/qq/chat-rich/MusicIsland）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项核心逻辑未触碰（wechat/qq 仅歌曲卡片调用点 2 行）；音乐数据按账号隔离未动
 - 改动文件：src/lib/ios/music-ai.ts、src/components/apps/music-together.tsx、src/components/apps/song-msg-bubble.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/lib/chat-rich.ts、src/components/ios/MusicIsland.tsx
+
+---
+Task ID: 82
+Agent: Z.ai Code（主会话）
+Task: 第二十三轮——①歌曲卡片圆角调小 ②全局圆形迷你播放器右上角✕删除 ③灵动岛音乐弹窗可见时状态栏只隐「移动数据」图标（弹窗消失恢复）+大弹窗撤销下沉恢复原位 ④一起听邀请卡「邀请你一起听」移到歌名上方 ⑤修复「AI 回复被音乐带偏、不回应用户的话」（用户消息最高优先，音乐只是背景；一起听与单独播放共用一套逻辑）
+
+Work Log:
+- ⑤音乐优先级修复（本批核心）：
+  - music-ai.ts playingBlock 新增【聊天优先级（最高规则，压倒下面所有规则）】块置于【一起听聊天规则】之前：对方刚发的消息永远最重要必须先接住（回应内容/情绪/问题）、绝对禁止无视对方的话自顾自聊歌、音乐只是背景（对方没提歌没问歌就不主动聊歌）、只有对方主动聊到音乐或话题自然连到歌上才顺着聊（先接话再带歌）
+  - togetherReply userBase 显式包装：「对方（who）刚发来一条消息：「userText」。先直接回应这条消息本身……不要无视它、不要转移话题」（user content 层双保险）
+  - personaSystemFor extraRules 改写：「歌在背景里播着，但聊天跟平时一样——对方说什么就接什么……不要把每个话题都往歌上带」（替换原「聊天围绕正在听的音乐展开」——带偏根源）
+  - cross-app-context.ts buildCrossAppBlock 音乐节头单独标注：▶ 音乐 听歌动态（只是背景信息：知道{me}在听什么即可，{me}不主动提歌就不要聊歌，回复永远以{me}刚说的话为先）——单聊（微信/QQ/信息/电话）正在播歌时共用同一套优先级语义
+- ③灵动岛/状态栏：
+  - MusicIsland.tsx 撤销下沉：删 EXPANDED_TOP（58），容器 top 恒 PILL_TOP=11（大弹窗恢复原位盖状态栏，注释同步）
+  - music-store.ts 新增 islandVisible: boolean（默认 false）；MusicIsland 在 hidden 派生变化时同步写入（effect + 差值判断，pauseGrace 等内部态全含）
+  - StatusBar.tsx SignalBars（移动数据/信号图标）条件渲染：islandVisible 时隐藏，弹窗消失恢复；WiFi/电量/时间不动（真机 iOS 灵动岛同语义）
+- ②MusicGlobalMini.tsx：删除唱片右上角✕按钮（含 xRef 拦截 effect、X import、相对容器 div 简化）；进停靠态只靠拖到边缘松手；停靠手势/热区弹回/持久化不动
+- ④song-msg-bubble.tsx invite 卡布局：「邀请你一起听」从歌名同行拆出，独立放歌名上方一行（邀请语 11px 灰字 / 歌名粗体 / 歌手；间距微调 mt-[1px]）；调用点（wechat/qq inviteDone）无需改动
+- ①song-msg-bubble.tsx 卡片圆角 rounded-[10px] → rounded-[6px]
+- E2E（agent-browser 420×900 一次性会话）：解锁→游客播「晴天(原唱 周杰伦)」→大弹窗自动展开 top=11（不下沉✓）+ 信号格消失（querySelector svg[18x12]=null）+WiFi/电量保留✓；5 秒收回小弹窗 156px top=11 信号仍隐藏✓；点小弹窗展开 348px top=11 信号仍隐藏✓；暂停→宽限期内弹窗仍在信号隐藏✓→5 秒后弹窗消失信号恢复 WiFi 仍在✓（隐藏/恢复全链路闭环）；主屏→迷你条→切唱片形态→recordButtons=0（✕ 已删除）✓；拖右边缘→dockedHit=true+translateX(60) 只露边框✓；点热区弹回 transform=none✓；IDB 注入测试联系人（user+char）+两张歌卡（晴天普通卡/偏爱 inviteDone 卡）→微信登录注入账号→会话渲染：两卡 borderRadius=6px✓、偏爱卡含「邀请你一起听」且在歌名上方（三行结构截图确认）✓；测试数据全部删除（contacts/kv/session 键）+localStorage mini 键复位；errors/console 零应用错误；浏览器已关闭
+- bun run lint 0 错误；bunx tsc 0 错误；dev.log 仅历史 Turbopack worker 噪音（非应用代码）
+- 优先级修复的 AI 链路未做浏览器端 E2E（游客环境无 AI 角色联系人，创建会污染聊天数据踩红线，与 Task 80 同口径）——以代码级验证代替：三处修改（优先级规则块/userBase 包装/单聊音乐节头）grep 全部在位 + 编译通过
+
+Stage Summary:
+- 交付：聊天卡片圆角 6px；邀请卡「邀请你一起听」上移歌名上方；全局唱片✕删除（停靠只靠拖边）；灵动岛音乐弹窗（小/大）可见期间状态栏只隐「移动数据」图标、弹窗消失恢复（islandVisible 桥接）；大弹窗撤销下沉恢复 top=11；「AI 被音乐带偏」根修——用户消息最高优先写入一起听 system 规则+user content 双层，单聊音乐动态注入头同步同语义（共用一套优先级逻辑）
+- 关键实现：状态栏图标隐藏不走重复口径（MusicIsland 唯一真源写 islandVisible，StatusBar 只读）；带偏根因=旧规则明写「聊天围绕音乐展开」+音乐情境块在 system 中权重过高，修复=规则层声明优先级+user 层显式引用用户原话双保险
+- 范围限定遵守：改 6 文件（music-ai/cross-app-context/music-store/MusicIsland/StatusBar/MusicGlobalMini/song-msg-bubble）；单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频通话/查手机 16 项核心逻辑未触碰（cross-app-context 仅音乐节头文案 1 处）；音乐数据按账号隔离未动
+- 改动文件：src/lib/ios/music-ai.ts、src/lib/ios/cross-app-context.ts、src/lib/ios/music-store.ts、src/components/ios/MusicIsland.tsx、src/components/ios/StatusBar.tsx、src/components/ios/MusicGlobalMini.tsx、src/components/apps/song-msg-bubble.tsx

@@ -9,9 +9,10 @@
  * - record 悬浮圆形唱片：点按 = 换样式（切回底部条），可在屏幕内任意拖动；
  *
  * 边缘停靠（第二十一轮反馈：迷你播放器不再有「隐藏」形态，不会消失）：
- * - 圆形唱片状态下，把它左滑/右滑到屏幕边缘松手（或点 ✕）→ 藏进边缘里只露一条 ~6px 的边框；
+ * - 圆形唱片状态下，把它左滑/右滑到屏幕边缘松手 → 藏进边缘里只露一条 ~6px 的边框；
  * - 点按露出的边框（边缘有加宽透明热区）→ 唱片弹回之前的位置；
- * - 停靠侧持久化（localStorage），刷新后保持（左停靠的精确位置在挂载后补测层宽得出）。
+ * - 停靠侧持久化（localStorage），刷新后保持（左停靠的精确位置在挂载后补测层宽得出）；
+ * - 右上角 ✕ 按钮已按第二十三轮反馈删除（进停靠态只靠拖到边缘松手）。
  *
  * 实现备注（第二十一轮调试）：子组件 useLayoutEffect 阶段父层 ref 尚未挂上（React 提交顺序），
  * 层宽测量放在 passive useEffect / 拖停时实时读取 getBoundingClientRect。
@@ -27,7 +28,7 @@
 import { create } from 'zustand';
 import { useEffect, useRef, useState } from 'react';
 import { motion, type PanInfo } from 'framer-motion';
-import { Disc3, ListMusic, Pause, Play, X } from 'lucide-react';
+import { Disc3, ListMusic, Pause, Play } from 'lucide-react';
 import { useUI } from '@/lib/ios/store';
 import { useMusic, getGuestAvatar } from '@/lib/ios/music-store';
 import { useTogetherLive } from '@/lib/ios/music-ai';
@@ -251,8 +252,9 @@ const DOCK_X_RIGHT = RECORD_INSET + RECORD_SIZE - PEEK;
 
 /** 悬浮唱片形态（第二十一轮交互重做）：
  *  - 自由态：可任意拖动；点按 = 换样式（切回底部条）；
- *  - 拖到屏幕左/右边缘松手（或点 ✕）→ 藏进边缘只露一条边框；
- *  - 停靠态：点边框（或边缘热区）弹回原位置；不可拖动（避免和「点边框显示」打架）。 */
+ *  - 拖到屏幕左/右边缘松手 → 藏进边缘只露一条边框；
+ *  - 停靠态：点边框（或边缘热区）弹回原位置；不可拖动（避免和「点边框显示」打架）。
+ *  第二十三轮反馈：右上角 ✕ 按钮删除。 */
 function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivElement | null> }) {
   const current = useMusic((s) => s.current);
   const playing = useMusic((s) => s.playing);
@@ -310,21 +312,6 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
     setFreeX(info.offset.x);
   };
 
-  // ✕ 按钮的原生拦截：条身/唱片身用 pointer 位移判定点按（useTapGuard），
-  // 必须在 ✕ 的 target 阶段原生拦截 pointer 事件，否则点 ✕ 会同时触发唱片的换样式点按
-  const xRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    const el = xRef.current;
-    if (!el) return;
-    const stop = (e: Event) => e.stopPropagation();
-    el.addEventListener('pointerdown', stop);
-    el.addEventListener('pointerup', stop);
-    return () => {
-      el.removeEventListener('pointerdown', stop);
-      el.removeEventListener('pointerup', stop);
-    };
-  }, []);
-
   if (!current) return null;
   return (
     <>
@@ -344,32 +331,13 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
         }`}
         data-testid="music-global-mini-record"
       >
-        <div className="relative h-[56px] w-[56px]">
-          <img
-            src={songCover(current)}
-            alt={current.name}
-            draggable={false}
-            className="h-full w-full rounded-full bg-muted object-cover shadow-[0_6px_20px_rgba(0,0,0,0.35)] ring-2 ring-white/70 dark:ring-white/20"
-            style={{ animation: 'mini-spin 9s linear infinite', animationPlayState: playing ? 'running' : 'paused' }}
-          />
-          {/* 右上角 ✕：第二十一轮改为「收到右边缘」（不再隐藏——迷你播放器不会消失）；停靠态一并藏起（只露边框） */}
-          <button
-            ref={xRef}
-            type="button"
-            aria-label="收到屏幕边缘"
-            title="收到屏幕边缘"
-            data-testid="music-global-mini-dock"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDock('right');
-            }}
-            className={`absolute -right-[4px] -top-[4px] flex h-[15px] w-[15px] items-center justify-center rounded-full bg-black/75 text-white shadow ring-1 ring-white/30 transition-opacity active:scale-90 ${
-              dock ? 'pointer-events-none opacity-0' : 'opacity-100'
-            }`}
-          >
-            <X className="h-[9px] w-[9px]" strokeWidth={3} />
-          </button>
-        </div>
+        <img
+          src={songCover(current)}
+          alt={current.name}
+          draggable={false}
+          className="h-[56px] w-[56px] rounded-full bg-muted object-cover shadow-[0_6px_20px_rgba(0,0,0,0.35)] ring-2 ring-white/70 dark:ring-white/20"
+          style={{ animation: 'mini-spin 9s linear infinite', animationPlayState: playing ? 'running' : 'paused' }}
+        />
       </motion.div>
       {/* 停靠态：露出的边框只有 ~6px 宽难点按，叠一条透明加宽热区（只占边缘一小段，点按弹回） */}
       {dock && (
