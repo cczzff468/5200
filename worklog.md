@@ -16223,3 +16223,26 @@ Stage Summary:
 - 美团 10 屏全部对齐真机截图（登录/首页/购物车/我的/订单列表/外卖详情/团购详情/确认订单/待支付详情/支付弹层），新增团购（特价团）完整购买链路：瀑布流卡片→团购详情（拼团/直接购买双价）→粉色确认订单→支付→券码待使用→到店核销→已完成（消费时间）
 - 订单模型扩展 kind/voucher/consumedAt/pendingUse，30 分钟待付超时，数据向后兼容、按账号隔离不变
 - 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-data.ts、src/lib/ios/meituan-store.ts；eslint 三文件零告警；E2E 全流程 agent-browser 实测通过
+
+---
+Task ID: meituan-3
+Agent: 主协调者 (Z.ai Code)
+Task: 美团 App 第三轮精修——删除弹层后白色面板（下单改真弹窗）、全站图标去 emoji 改彩色 SVG、支付两步式（先微信/QQ 再渠道）、商家详情页订单入口进详情、删除到店使用/券码/核销、全部订单页去底部 tab 加返回键
+
+Work Log:
+- meituan-data.ts：MT_HOME_GRID 每项 emoji → icon key + fg 主色（Bike/Ticket/Building/Zap/Cross/Utensils/Gamepad2/Footprints/Rabbit/Clapperboard/Scissors/Plane/Stethoscope/BookOpen/LayoutGrid，对齐真机彩色拟物图）；MT_CATS 删无用 emoji 字段
+- meituan-store.ts：订单状态删除 pendingUse、MtOrder 删除 voucher；mtLoadOrders 旧数据迁移（待使用+券码 → completed + consumedAt=支付时间，statusLog 补条目）；mtStatusBody 团购完成文案改「团购已完成¥xx」；团购单支付后即完成无自动推进
+- meituan.tsx（~3600 行）：
+  ① 全站图标 SVG 化：首页宫格 GRID_ICONS 映射（fg 着色）；我的页功能/订单/服务宫格+会员卡+账号行全部 Lucide（Crown/Bike/Wallet/Building/Star/Eye/Ticket/Coins/Receipt/ClockIcon/MessageCircleMore/Heart/Handshake/Store/HardHat/Leaf/LayoutGrid/MapPin/Repeat/LogOut）；订单列表空态 ShoppingBag、卡头 Utensils 圆底；配送地图 TreePine/Building/Store/HomeIcon/Bike（商家 pin 用 Store）；进度条节点 Store；TuanMark ⚡ → Zap SVG；FoodImg 占位改渐变+Utensils 图标；支付弹层 TriangleAlert/Wallet/CreditCard/Users；团购确认 Gift；拼团规则 Receipt/PartyPopper；商家头像全部改 FoodImg 封面图（商家页/购物车/确认单/商品费用/团购详情门店）
+  ② 支付两步式：PayMethodSheet 重构——第一步「选择支付方式」展示微信支付/QQ支付两大卡（logo+渠道预览+金额），第二步该平台渠道列表（返回键回第一步；零钱 Wallet/银行卡 CreditCard/亲属卡 Users 图标，余额不足灰显拦截保留）；root openPay(sel=null) 自动打开弹层，选完渠道才进 PayConfirmSheet 确认支付；删除旧的自动预选微信逻辑与 onAutoSelect prop；PayMethodSheet/PayConfirmSheet 加 key={payFor.id} 修复换订单内部状态残留
+  ③ 下单弹窗化：CheckoutPage/DealConfirmPage 独立页面删除 → CheckoutSheet/DealConfirmSheet（framer-motion slide-up + 遮罩 + AnimatePresence 进出场）；团购弹窗对齐截图7：面板外顶部「未成团自动退·过期自动退」黑条+X、面板顶粉横幅「特价团 本单为你额外节省xx元」；外卖弹窗：拖动指示+标题+X+地址/商品/备注+底栏提交；提交后关闭弹窗直接拉起支付
+  ④ 订单列表：顶部加返回键（< 搜索框 筛选 发票），root 在 tab==='orders' 时不渲染 BottomTabBar；删除「查看券码」按钮与 pendingUse 匹配
+  ⑤ 商家详情页：页签扩为 点菜/评价/商家/订单（进行中订单红色角标）；订单页签列本店订单（状态/商品/金额/时间），点击经 openOrder(id,'merchant') 进订单详情，返回按来源栈回商家页（backFromOrder）
+  ⑥ 团购支付成功 → completed + consumedAt=now（订单列表显示「消费时间」）；订单详情删券码卡/核销按钮/申请退款，completed hero「订单已完成」；团购订单信息「核销方式」→「使用规则 随时退·过期自动退」+新增「消费时间」行；待支付使用限制文案统一（30 分钟内支付）
+- 顺手修复预存类型错误：appstore.tsx TAGLINES/CATEGORY 补 meituan、IslandNotification APP_NAME 补 meituan、meituan-store ContactRecord 改从 @/lib/contacts 导入；BottomTabBar「我的」图标加小金星装饰
+- eslint 三文件零告警、全仓 tsc --noEmit 零错误、dev.log 无运行时错误
+
+Stage Summary:
+- E2E（agent-browser 430×932 实测）：首页宫格彩色 SVG ✓；商家页四页签（订单角标）✓；商家订单→详情→返回商家闭环 ✓；加购→结算弹窗（21.60−2+1.50=21.10 正确）✓；提交→支付第一步微信/QQ ✓→微信渠道（零钱不足红字拦截/亲属卡可选）✓→亲属卡确认支付→待接单详情 ✓；团购详情→直接购买→截图7弹窗（黑条+粉横幅）✓→QQ渠道余额不足 ✓→微信亲属卡支付→订单已完成+消费时间+toast「已用小雪支付」✓；订单列表返回键+无底部 tab ✓；旧待使用团购单自动迁移已完成+消费时间 ✓；购物车/我的页对齐截图 ✓；全站 emoji 检测通过（noEmoji:true）
+- 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-data.ts、src/lib/ios/meituan-store.ts、src/components/apps/appstore.tsx、src/components/ios/IslandNotification.tsx
+- 不破坏既有功能：支付链路（微信/QQ 零钱银行卡亲属卡 + recordFcSpend 美团记忆感知）原样复用；MeituanOrderWatcher/island-notify 兼容；单聊/群聊/朋友圈/支付宝等未触碰

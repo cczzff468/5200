@@ -34,7 +34,7 @@ import { useGlobalCall } from '@/lib/ios/global-call';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI } from '@/lib/ios/store';
 
-const APP_NAME: Record<NotifyApp, string> = { wechat: '微信', qq: 'QQ', chat: '信息' };
+const APP_NAME: Record<NotifyApp, string> = { wechat: '微信', qq: 'QQ', chat: '信息', meituan: '美团' };
 
 /** 展开姿态：宽高自适应内容（framer 会测 auto 尺寸做补间） */
 const EXPANDED = { width: 'auto', height: 'auto', borderRadius: 24 } as const;

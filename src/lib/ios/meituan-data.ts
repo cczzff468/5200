@@ -73,46 +73,48 @@ export interface MtMerchant {
 }
 
 /** 商家筛选分类（分类宫格映射到商家池用） */
-export const MT_CATS: { id: string; name: string; emoji: string }[] = [
-  { id: 'waimai', name: '外卖', emoji: '🛵' },
-  { id: 'meishi', name: '美食', emoji: '🍜' },
-  { id: 'chaoshi', name: '超市便利', emoji: '🛒' },
-  { id: 'shuiguo', name: '水果', emoji: '🍓' },
-  { id: 'maiyao', name: '看病买药', emoji: '💊' },
-  { id: 'yinyin', name: '甜点饮品', emoji: '🧋' },
-  { id: 'hamburg', name: '汉堡披萨', emoji: '🍔' },
-  { id: 'mala', name: '麻辣烫', emoji: '🍲' },
-  { id: 'zaocan', name: '早餐', emoji: '🥟' },
+export const MT_CATS: { id: string; name: string }[] = [
+  { id: 'waimai', name: '外卖' },
+  { id: 'meishi', name: '美食' },
+  { id: 'chaoshi', name: '超市便利' },
+  { id: 'shuiguo', name: '水果' },
+  { id: 'maiyao', name: '看病买药' },
+  { id: 'yinyin', name: '甜点饮品' },
+  { id: 'hamburg', name: '汉堡披萨' },
+  { id: 'mala', name: '麻辣烫' },
+  { id: 'zaocan', name: '早餐' },
 ];
 
-/** 首页分类宫格（两页 15 项，对齐真机布局）；filter=null 的频道为演示占位 */
+/** 首页分类宫格（两页 15 项，对齐真机布局）；filter=null 的频道为演示占位。
+ *  icon 为 UI 层 Lucide 图标 key（GRID_ICONS 映射），fg 为图标主色（对齐真机彩色拟物图）。 */
 export interface MtGridCat {
   id: string;
   name: string;
-  emoji: string;
+  icon: string;
+  fg: string;
   tint: string;
   /** 商家筛选分类 id（null = 演示频道，点击提示） */
   filter?: string | null;
 }
 export const MT_HOME_GRID: MtGridCat[][] = [
   [
-    { id: 'waimai', name: '外卖', emoji: '🛵', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: 'waimai' },
-    { id: 'tuangou', name: '团购', emoji: '🎟️', tint: 'from-[#FFE7CC] to-[#FFA24E]', filter: 'tuangou' },
-    { id: 'hotel', name: '酒店/旅行', emoji: '🏨', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
-    { id: 'shangou', name: '闪购', emoji: '⚡', tint: 'from-[#FFF1C0] to-[#FFD24D]', filter: null },
-    { id: 'yao', name: '看病买药', emoji: '💊', tint: 'from-[#FFF0C2] to-[#FFCE54]', filter: 'maiyao' },
-    { id: 'meishi', name: '美食', emoji: '🍴', tint: 'from-[#FFDED2] to-[#FF9E7A]', filter: 'meishi' },
-    { id: 'xiuxian', name: '休闲玩乐', emoji: '🎮', tint: 'from-[#E6DFFF] to-[#AD92FF]', filter: null },
-    { id: 'anmo', name: '按摩足疗', emoji: '💆', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
-    { id: 'paotui', name: '跑腿', emoji: '🏃', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: null },
-    { id: 'dianying', name: '电影演出', emoji: '🎬', tint: 'from-[#FFDCCB] to-[#FF9E6B]', filter: null },
+    { id: 'waimai', name: '外卖', icon: 'Bike', fg: '#F5A700', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: 'waimai' },
+    { id: 'tuangou', name: '团购', icon: 'Ticket', fg: '#FF8A00', tint: 'from-[#FFE7CC] to-[#FFA24E]', filter: 'tuangou' },
+    { id: 'hotel', name: '酒店/旅行', icon: 'Building', fg: '#3E8BFF', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
+    { id: 'shangou', name: '闪购', icon: 'Zap', fg: '#F5A700', tint: 'from-[#FFF1C0] to-[#FFD24D]', filter: null },
+    { id: 'yao', name: '看病买药', icon: 'Cross', fg: '#FF7A45', tint: 'from-[#FFF0C2] to-[#FFCE54]', filter: 'maiyao' },
+    { id: 'meishi', name: '美食', icon: 'Utensils', fg: '#FF6000', tint: 'from-[#FFDED2] to-[#FF9E7A]', filter: 'meishi' },
+    { id: 'xiuxian', name: '休闲玩乐', icon: 'Gamepad2', fg: '#8B5CF6', tint: 'from-[#E6DFFF] to-[#AD92FF]', filter: null },
+    { id: 'anmo', name: '按摩足疗', icon: 'Footprints', fg: '#FF5E9E', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
+    { id: 'paotui', name: '跑腿', icon: 'Rabbit', fg: '#FF8A00', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: null },
+    { id: 'dianying', name: '电影演出', icon: 'Clapperboard', fg: '#FF6F1E', tint: 'from-[#FFDCCB] to-[#FF9E6B]', filter: null },
   ],
   [
-    { id: 'liren', name: '丽人美发', emoji: '💇', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
-    { id: 'jipiao', name: '机票火车票', emoji: '✈️', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
-    { id: 'yiliao', name: '医疗牙科', emoji: '🦷', tint: 'from-[#D9F1FF] to-[#82C4FF]', filter: null },
-    { id: 'xiaoshuo', name: '免费小说', emoji: '📖', tint: 'from-[#FFE9C8] to-[#FFC36B]', filter: null },
-    { id: 'more', name: '更多服务', emoji: '🧭', tint: 'from-[#EEEFF3] to-[#C9CDD6]', filter: null },
+    { id: 'liren', name: '丽人美发', icon: 'Scissors', fg: '#FF5E9E', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
+    { id: 'jipiao', name: '机票火车票', icon: 'Plane', fg: '#3E8BFF', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
+    { id: 'yiliao', name: '医疗牙科', icon: 'Stethoscope', fg: '#4AA3FF', tint: 'from-[#D9F1FF] to-[#82C4FF]', filter: null },
+    { id: 'xiaoshuo', name: '免费小说', icon: 'BookOpen', fg: '#FF9A21', tint: 'from-[#FFE9C8] to-[#FFC36B]', filter: null },
+    { id: 'more', name: '更多服务', icon: 'LayoutGrid', fg: '#6B7280', tint: 'from-[#EEEFF3] to-[#C9CDD6]', filter: null },
   ],
 ];
 

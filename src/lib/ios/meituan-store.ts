@@ -10,7 +10,8 @@
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from '@/lib/ios/accounts';
-import { getContact, listContacts, type ContactRecord } from '@/lib/ios/contacts-store';
+import { getContact, listContacts } from '@/lib/ios/contacts-store';
+import type { ContactRecord } from '@/lib/contacts';
 import { MT_MERCHANTS, mtDishesOf, type MtMerchant } from './meituan-data';
 
 // ---------------- 登录态 ----------------
@@ -262,19 +263,18 @@ export function mtSaveAddresses(uid: string, list: MtAddress[]): void {
 
 // ---------------- 订单 ----------------
 
-export type MtOrderStatus = 'pendingPay' | 'pendingAccept' | 'accepted' | 'delivering' | 'pendingUse' | 'completed' | 'canceled';
+export type MtOrderStatus = 'pendingPay' | 'pendingAccept' | 'accepted' | 'delivering' | 'completed' | 'canceled';
 
 export const MT_STATUS_LABEL: Record<MtOrderStatus, string> = {
   pendingPay: '待支付',
   pendingAccept: '待接单',
   accepted: '商家已接单',
   delivering: '配送中',
-  pendingUse: '待使用',
   completed: '已完成',
   canceled: '已取消',
 };
 
-/** 订单履约类型：外卖配送（默认，兼容旧数据） / 团购到店（券码核销） */
+/** 订单履约类型：外卖配送（默认，兼容旧数据） / 团购到店（支付后直接完成） */
 export type MtOrderKind = 'waimai' | 'tuangou';
 
 export interface MtOrderItem {
@@ -301,12 +301,10 @@ export interface MtOrder {
   /** 实付金额（pendingPay 时为应付金额） */
   total: number;
   note?: string;
-  /** 履约类型（团购单无收货地址，凭券码到店） */
+  /** 履约类型（团购单无收货地址，支付后到店直接消费完成） */
   kind?: MtOrderKind;
   address?: MtAddress;
-  /** 团购券码（支付成功后生成，如 8305 1249 0027） */
-  voucher?: string;
-  /** 到店核销时间 */
+  /** 到店消费完成时间（团购单支付成功即写入） */
   consumedAt?: number;
   /** 支付方式：'wx' | 'qq'（pendingPay 时为空） */
   payIdp?: 'wx' | 'qq';
@@ -332,7 +330,7 @@ const MAX_ORDERS = 60;
 export function mtLoadOrders(uid: string): MtOrder[] {
   const list = kvGet<Partial<MtOrder>[]>(ordersKey(uid));
   if (!Array.isArray(list)) return [];
-  return list
+  const normalized = list
     .filter((o) => o && typeof o.id === 'string' && Array.isArray(o.items))
     .map((o) => ({
       ...o,
@@ -350,7 +348,6 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       note: typeof o.note === 'string' ? o.note : undefined,
       kind: o.kind === 'tuangou' ? 'tuangou' : 'waimai',
       address: (o.address ?? undefined) as MtAddress | undefined,
-      voucher: typeof o.voucher === 'string' ? o.voucher : undefined,
       consumedAt: typeof o.consumedAt === 'number' ? o.consumedAt : undefined,
       payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' ? o.payIdp : undefined,
       payChannelLabel: typeof o.payChannelLabel === 'string' ? o.payChannelLabel : undefined,
@@ -363,6 +360,12 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       etaAt: typeof o.etaAt === 'number' ? o.etaAt : undefined,
       statusLog: Array.isArray(o.statusLog) ? (o.statusLog as MtOrder['statusLog']).filter((s) => s && typeof s.at === 'number') : [],
     })) as MtOrder[];
+  // 旧数据迁移：「待使用+券码」已废弃 → 团购单待使用态直接归档为已完成（消费时间取支付时间）
+  return normalized.map((o) =>
+    (o.status as string) === 'pendingUse'
+      ? { ...o, status: 'completed' as const, consumedAt: o.consumedAt ?? o.paidAt ?? o.createdAt, statusLog: [...o.statusLog, { status: 'completed' as const, at: o.consumedAt ?? o.paidAt ?? Date.now() }] }
+      : o
+  );
 }
 
 export function mtSaveOrders(uid: string, list: MtOrder[]): void {
@@ -375,7 +378,7 @@ export function mtGetOrder(uid: string, id: string): MtOrder | undefined {
 
 // ---------------- 订单状态机（时间戳确定性推进） ----------------
 
-/** 支付后：10s 商家接单 → 26s 骑手取餐/配送中 → 75s 已送达（演示节奏，重启按时间戳补推进）；团购单支付后直接待使用 */
+/** 支付后：10s 商家接单 → 26s 骑手取餐/配送中 → 75s 已送达（演示节奏，重启按时间戳补推进）；团购单支付后即完成 */
 const ACCEPT_MS = 10_000;
 const PICKUP_MS = 26_000;
 const DELIVERED_MS = 75_000;
@@ -452,10 +455,8 @@ export function mtStatusBody(o: MtOrder): string {
       return '商家已接单，正在为您准备餐品';
     case 'delivering':
       return `骑手${o.riderName ?? ''}已取餐，正在火速配送`;
-    case 'pendingUse':
-      return `支付成功¥${o.total.toFixed(2)}，凭券码${o.voucher ?? ''}到店使用`;
     case 'completed':
-      return o.kind === 'tuangou' ? '团购券已核销，感谢光临，欢迎评价' : '订单已送达，感谢您的信任，欢迎评价';
+      return o.kind === 'tuangou' ? `团购已完成¥${o.total.toFixed(2)}，感谢光临，欢迎评价` : '订单已送达，感谢您的信任，欢迎评价';
     case 'canceled':
       return o.cancelReason ?? '订单已取消';
   }
