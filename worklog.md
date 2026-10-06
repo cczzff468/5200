@@ -16095,3 +16095,22 @@ Stage Summary:
 - 交付：src/components/ui/switch.tsx（iOS 大绿开关全局）、src/components/apps/settings.tsx（NotificationPage 删文案 + ToneSheet/ToneSheetContent/CATEGORY_ICON 新组件 + NotifySoundSection 重构：去分类开关/图标行/绿色滑杆/试听音波反馈/enabled 兼容恢复）、src/app/globals.css（.ios-slider 样式）
 - 关键决策：①分类开关移除但数据字段保留（向前兼容 + 静音语义由总开关/音量/免打扰承接），历史关闭自动恢复 ②铃声选择弹窗自实现而非 Radix Sheet/Drawer——portal 到 body 会脱离壳 transform 包含块导致弹窗覆盖整个浏览器视口 ③试听音量沿用分类实际音量（总×分类），弹窗内选铃声给 0.25 下限保证可闻
 - 验证：eslint 0、tsc 0、九项浏览器 E2E 全通过、已推送 50c4356
+
+---
+Task ID: home-fix-5
+Agent: Z.ai Code (主协调者)
+Task: 用户第五轮反馈——①入夹动画外面的白色边框删除 ②APP 放到下面时主界面会上下滑动（禁止）③不要让 APP 放到可视区下方（不是指 Dock，Dock 照常）
+
+Work Log:
+- 白色边框删除：HomeScreen 两处 merge-target-ring span（目标 App/文件夹外圈 border-2 白色圆角方框）整体移除；globals.css .merge-target-ring → .merge-target-pulse，merge-target-breathe 保留 scale 1→1.07 脉动 + opacity 0.92→1 呼吸（无任何白色描边/光晕），脉动改挂在目标图标 span 自身（文件夹合并预览的静态 scale-[1.06] 同步换成呼吸动画）；相关注释同步更新
+- 上下滑动根因：每页分页容器是 overflow-y-auto（D2 时代为让底部小组件可见引入），页内容 ≥7 行（行高 76+行距 16，pt-72+7 行+pb-164=864>844）即出现竖向滚动——小组件跨行+App 混排的页（PAGE_WIDGET_CAP=14 允许 7 行）实测会顶出；实测 agent-browser 会话里页面确实停在 scrollTop≈168 的滚动态
+- 6 行封顶：新增 MAX_PAGE_ROWS=6（可视网格区 608px，6 行 536px 完整可见、7 行 628px 顶进页点/Dock）；rowsOf(tiles)（复用 flowPositions 模拟 flow，end.c===0?end.r:end.r+1）+ pageHasRoom(page, extra, insertingWidget)（行数+格数双校验）两个纯函数；页面容器 overflow-y-auto → overflow-hidden（删 data-page-scroller 标记与拖拽期 overflow 冻结 hack），主屏从机制上不可滚动
+- 落点全链路行数校验（9 处容量判断全部切换/包裹）：reorder 网格落点（原「仅跨页查格数」改为含同页换位在内的 pageHasRoom 整体模拟，垫空占位格可能新开行故同页也校验，超限整体弹回原位）；hitTestAt 空白兜底 targetRow 夹到 min(gridRow, flow 末行, MAX_PAGE_ROWS-1)——指针压在网格下方空白/页点/Dock 区域只落到最后一条可见行，永不新开第 7 行；缺失 App 补位（sanitizeLayout）、dissolveSmallFolders 孤儿回填、removeFolderReturnApps 三处（抽出 roomForNext 按「队首下一个 App」校验）、addWidgetFromGallery（小组件按跨行占位校验，装不下顺延后页/新建页）、moveDraggedToPageEnd（翻页搬运）全部接入
+- 存量超行布局一次性归位：sanitizeLayout 在小组件补回之后、缺失 App 补位之前插入重排步——逐页把 6 行装不下的尾部 tile 摘出（优先摘 App/文件夹，页内只剩小组件仍超行才摘小组件），carry 队列按原顺序回填到来源页之后第一张装得下的页（都不满则新建页）；加载 effect 增加回写条件：next.pages 与 raw.pages JSON 不一致（重排/修复发生）时 persist，保证主题 App 等直读 DB 的场景与屏上一致
+- E2E（agent-browser 430×932 真机流）：①注入 v10「7 行页」布局 reload→页 0 自动裁成 6 行（内容 72→608、页点 776、全部可见），摘出的 music/wechat 落到页 1/2 且 DB 回写 14/8/1 ✓ ②三页 overflowY 全 hidden、scrollH==clientH、wheel 与程序化 scrollTop=999 均停在 0 ✓ ③编辑模式拖天气压主题 800ms→merge-target-ring 计数 0、目标 span merge-target-pulse+animationName=merge-target-breathe+borderWidth 0px、预览图无任何白框 ✓ 松手建夹+网格重排 ✓ ④死区 y=700 松手→夹到末条可见行（bottom≤564）不新开行 ✓ ⑤拖文件进 Dock→插入第 3 位、settings 被挤回网格 ✓ ⑥快拖照片到邻格=换位不建夹、无 tile 丢失 ✓ ⑦文件夹面板开/点外收起 ✓ ⑧布局备份还原、reload 无 console 应用错误（errors 仅存本次调试 eval 自身两条 IDB 残留）✓
+- 踩坑：agent-browser eval 不 await Promise（挂 window 二次读取）；手机数据库实名 ios-phone-db（v8，另有一个无关的 ai-phone-db）；回写比对用 JSON.stringify(next.pages) vs raw.pages——sanitize 产出的 tile 键序与持久化一致，未改动时不会多写
+
+Stage Summary:
+- 交付文件：src/components/ios/HomeScreen.tsx（merge-target-ring 移除+MAX_PAGE_ROWS/rowsOf/pageHasRoom+9 处容量判断切换+存量重排+加载回写+overflow-hidden）、src/app/globals.css（.merge-target-pulse 呼吸脉动，无边框无光晕）
+- 关键决策：①行数封顶是硬约束（页面不可滚动后超出即被页点/Dock 裁切），格数上限（14/20）保留为次级约束 ②存量超行用「尾部摘出顺延后页」而非重置布局——保留用户文件夹/排布，LAYOUT_VERSION 不动 ③Dock 不参与行数模型（独立 4 槽轨道，拖入 Dock 行为原样保留）
+- 验证：eslint 0、tsc 0、八项浏览器 E2E 全通过、已推送 6741a39
