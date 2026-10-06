@@ -266,20 +266,37 @@
   animation: folder-pop 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* 拖拽合并预览：被拖 App 外圈的圆角方呼吸边框（iOS 同款「即将入夹」提示） */
-@keyframes merge-frame {
+/* 拖拽合并预览：目标 App/文件夹外圈的呼吸光环（iOS 同款「即将入夹」提示）——
+   白色圆角方边框 + 白晕呼吸 + 轻微缩放脉动（用户要求光环罩在目标 APP 外面） */
+@keyframes merge-target-breathe {
   0%,
   100% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.28);
+    box-shadow: 0 0 8px 1px rgba(255, 255, 255, 0.25);
+    opacity: 0.82;
   }
   50% {
-    transform: scale(1.06);
-    box-shadow: 0 0 16px 3px rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+    box-shadow: 0 0 20px 5px rgba(255, 255, 255, 0.45);
+    opacity: 1;
   }
 }
-.merge-frame {
-  animation: merge-frame 1.05s ease-in-out infinite;
+.merge-target-ring {
+  animation: merge-target-breathe 1.05s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 合并预览期间被拖 App 轻微收拢（iOS 同款：手指上的图标缩一点，光环在目标上） */
+@keyframes merge-copy-shrink {
+  from {
+    transform: scale(1.08);
+  }
+  to {
+    transform: scale(0.92);
+  }
+}
+.merge-copy-shrink {
+  animation: merge-copy-shrink 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 /* 网易云音乐小组件：黑胶唱片缓慢旋转（播放中） */

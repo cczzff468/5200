@@ -16015,3 +16015,26 @@ Stage Summary:
 - 交付文件：src/components/ios/HomeScreen.tsx（onMove 压住判定重写 + endDrag 清理顺序修复 + hitTestAt Dock 满员下标钳位 + floatingCopy 预览边框 + flyIn 浮层/effects + applyMerge 返回 resKey）、src/app/globals.css（merge-frame 呼吸边框动画）
 - 关键决策：合并预览从「重叠≥50% 立即弹」改为「重叠≥30% 静止 240ms 弹」——移动中换位永远通畅（用户主诉），快速放置=移动、压住=入夹，与 iOS 手感一致；endDrag 的 dragMeta/dragDockRect 清理顺序是本次 Dock 弹回的真正根因
 - 验证：eslint 0 错误、tsc 0 错误、dev.log 无应用错误；九项浏览器 E2E 全通过
+
+---
+Task ID: folder-fix-3
+Agent: Z.ai Code (主协调者)
+Task: 修复用户第三轮反馈——①更简单不易错的拖拽方案 ②入夹目标外圈呼吸白色光环（光晕+缩放脉动）③APP拖到下面移不动/不能换位/卡死截屏问题
+
+Work Log:
+- 定位根因：src/components/ios/HomeScreen.tsx 的 onMove 中 mergeScan 重叠 >0 即全局冻结挤位换位——密集网格里被拖图标几乎处处与邻格图标重叠 → 换位永久冻结 →「拖到下面移不动/不能换位/进不了 Dock」
+- 重写合并检测语义（更简单不易错）：只有「指针压在重叠可合并目标(App/文件夹)的槽位内」(scan.area>0 && hit.zone==='grid' && hit.overId===scan.data.targetKey) 才暂停换位（悬停入夹手势，目标不挪窝才能稳定悬停）；拖到目标下方/旁边/穿过/进 Dock 一律照常换位。hitTestAt 提前到每帧统一计算一次，pinned 分支与其余路径共用
+- 预览切换：预览已弹时若压住对象换成另一个 → showMergePreview 切换目标；拖出目标槽位 → clearMergePreview+恢复换位
+- 删除不再使用的 MERGE_PIN_FRAC/MERGE_PIN_AREA 常量，重写常量注释说明新语义
+- 拖拽保险丝（防卡死截图元凶）：endDrag 全主体包 try/finally——无论是否抛异常，dragId/dragVisual/dragMeta/mergePreview 等 10 项状态强制复位（否则浮动副本永久冻结在半空、后续拖拽全失灵）；merge 分支加 e 存在性判断（blur 兜底路径不误合并）
+- beginDrag 重入防护：dragMeta 残留时先静默复位再开新拖拽
+- 拖拽中 window blur 监听：切标签页/失焦强制收尾防悬挂
+- 入夹光环移到目标（用户要求光环罩在目标 APP 外面）：renderTileContent 文件夹 tile 与 App tile 在 merging/mergingHere 时叠加 <span class="merge-target-ring absolute -inset-[6px] rounded-[21px] border-2 border-white/95">；globals.css 新增 merge-target-breathe keyframes（scale 1→1.05 脉动 + box-shadow 白晕 8px/20px 呼吸 + opacity 0.82→1，1.05s ease-in-out infinite）；删除旧 merge-frame
+- 被拖副本预览期轻微收拢（iOS 同款）：floatingCopy 合并分支外层去掉 scale(1.08)，内层套 merge-copy-shrink（1.08→0.92 单次 0.22s 缓动）；副本白边框光环移除（光环归目标）
+- 浏览器全流程验证（agent-browser，390x844）：长按进编辑 → 拖设置穿越网格到底部落位 ✓；快速压到文件上松手=换位（不建夹）✓；拖文件压住设置 500ms → 呼吸白光环出现在目标外圈（getComputedStyle: animationName=merge-target-breathe, 1.05s）✓ 松手建夹+飞入 ✓；拖备忘录入 Dock=插入第3位+Safari 被挤回网格 ✓；编辑模式轻点文件夹打开面板 ✓；面板 × 移除计算器 → 剩1个自动解体+照片回网格 ✓；面板长按拖出设置到桌面 → 夹内剩1自动解体 ✓；点面板空白收起 ✓；reload 后无 console 错误（早期报错为编辑中间态 HMR 残留，清空+强制重编译后消失）
+
+Stage Summary:
+- 核心修复：换位冻结条件从「任意重叠」收窄为「指针压在重叠目标槽位内」，拖拽在全网格流畅（下/旁/底/Dock 全通），悬停 240ms 稳定出预览，快放=换位、久压=入夹
+- 可靠性：endDrag try/finally + beginDrag 重入防护 + blur 收尾，任何异常/丢事件后拖拽状态都能自愈，不再出现浮动副本冻结半空
+- 视觉：呼吸白色圆角方光环（光晕+缩放脉动）按 iOS 样式罩在目标 App/文件夹外圈，被拖 App 收拢
+- 涉及文件：src/components/ios/HomeScreen.tsx、src/app/globals.css
