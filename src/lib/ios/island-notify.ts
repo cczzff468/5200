@@ -34,8 +34,8 @@ import { playNotifySound } from './notify-sound';
 
 // ---------------- 类型 ----------------
 
-/** 通知归属 App（AppId 的聊天子集） */
-export type NotifyApp = 'wechat' | 'qq' | 'chat';
+/** 通知归属 App（AppId 的聊天/生活服务子集；meituan = 订单状态通知） */
+export type NotifyApp = 'wechat' | 'qq' | 'chat' | 'meituan';
 
 /** 点击跳转目标：单聊给 contactId，群聊给 groupId（群聊宿主在 wechat/qq App 内） */
 export interface NotifyTarget {
@@ -252,6 +252,7 @@ export const NOTIFY_APP_ICON: Record<NotifyApp, string> = {
   wechat: '/icons/wechat.png',
   qq: '/icons/qq.png',
   chat: '/icons/chat.png',
+  meituan: '/icons/meituan.png',
 };
 
 let webPermAsked = false;

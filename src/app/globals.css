@@ -399,3 +399,22 @@
 .dark .ios-slider[data-slot='slider'] [data-slot='slider-thumb'] {
   background: #fff;
 }
+
+/* 美团订单详情：配送小地图骑手巡航（商家 ↔ 家 往返，alternate 往复） */
+@keyframes mt-rider-move {
+  0% {
+    left: 16%;
+    top: 66%;
+  }
+  50% {
+    left: 46%;
+    top: 44%;
+  }
+  100% {
+    left: 78%;
+    top: 22%;
+  }
+}
+.mt-rider {
+  animation: mt-rider-move 9s ease-in-out infinite alternate;
+}

@@ -24,6 +24,7 @@ import {
   Phone as PhoneGlyph,
   Settings as SettingsIcon,
   Store,
+  UtensilsCrossed,
   Users as UsersIcon,
 } from 'lucide-react';
 import type { AppId } from '@/lib/ios/store';
@@ -54,6 +55,7 @@ const QQApp = dynamic(() => import('./qq'), { ssr: false });
 const AppStoreApp = dynamic(() => import('./appstore'), { ssr: false });
 const MemoryBankApp = dynamic(() => import('./memory-bank'), { ssr: false });
 const WorldBookApp = dynamic(() => import('./worldbook'), { ssr: false });
+const MeituanApp = dynamic(() => import('./meituan'), { ssr: false });
 
 export interface AppMeta {
   id: AppId;
@@ -356,6 +358,14 @@ const APP_DEFS: AppDef[] = [
     // 备用线条图（有 image 时不会展示）：书本图案贴近用户提供的实体图标
     glyph: <BookMarked className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: WorldBookApp,
+  },
+  {
+    id: 'meituan',
+    name: '美团',
+    image: '/icons/meituan.png',
+    // 备用线条图（有 image 时不会展示）：外卖袋贴近美团黄袋形象
+    glyph: <UtensilsCrossed className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    component: MeituanApp,
   },
 ];
 

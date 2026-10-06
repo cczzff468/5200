@@ -63,7 +63,7 @@ export interface WxCard {
 
 interface WxBill {
   id: string;
-  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款';
+  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖';
   amount: number; // 正 = 零钱增加
   time: number;
   /** 对方名（红包/转账/亲属卡条目标题与头像解析用；旧数据/群场景缺省） */
@@ -379,6 +379,8 @@ export function recordFcSpend(opts: {
   parts: WxFcPayPart[];
   /** 机主真实名字（记忆句式用；空则跳过记忆只记账） */
   ownerName: string;
+  /** 消费渠道（记忆句式「在{channel}里」用；缺省 '微信'，美团App 传 '美团'——AI 记住的是在哪花的钱） */
+  channel?: string;
 }): void {
   const ts = Date.now();
   const first = opts.parts[0];
@@ -404,7 +406,7 @@ export function recordFcSpend(opts: {
   const note = opts.note?.trim();
   for (const g of byGiver.values()) {
     if (!g.giverId) continue;
-    const text = `机主「${owner}」于${fmtFcWhen(ts)}在微信里用你（AI角色本人）送的亲属卡支付了${opts.where}，金额¥${fmtMoney(g.amount)}${note ? `（备注「${note}」）` : ''}。`;
+    const text = `机主「${owner}」于${fmtFcWhen(ts)}在${opts.channel ?? '微信'}里用你（AI角色本人）送的亲属卡支付了${opts.where}，金额¥${fmtMoney(g.amount)}${note ? `（备注「${note}」）` : ''}。`;
     try {
       // sourceTag 'fc-spend'：同模板的不同消费事件互不相似合并（每笔消费都是独立记忆）
       memAddEventFragment(g.giverId, 'wx', text, { eventTime: ts, sourceTag: 'fc-spend' });
@@ -1068,6 +1070,7 @@ function BillIcon({ kind }: { kind: WxBill['kind'] }) {
     转账: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
     转账退款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
     亲属卡付款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
+    美团外卖: ['#FFB800', <ShoppingBag key="i" className="h-4 w-4" strokeWidth={2.2} />],
   };
   const [color, icon] = map[kind];
   return (
@@ -1143,6 +1146,8 @@ function wxBillDisplayTitle(b: WxBill): string {
       return '转账-退款';
     case '亲属卡付款':
       return `亲属卡-付款给${peer}`;
+    case '美团外卖':
+      return b.amount >= 0 ? '美团外卖-退款' : `美团外卖-${peer}`;
     default:
       return b.kind;
   }
@@ -1178,6 +1183,7 @@ function WxBillEntryIcon({ b }: { b: WxBill }) {
     转账: ['#4D9CF8', <ArrowLeftRight key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
     转账退款: ['#4D9CF8', <ArrowLeftRight key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
     亲属卡付款: ['#F7A500', <Heart key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    美团外卖: ['#FFB800', <ShoppingBag key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
   };
   const [color, icon] = map[b.kind];
   return (

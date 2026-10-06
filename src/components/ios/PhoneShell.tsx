@@ -42,6 +42,7 @@ const ProactiveCallWatcher = dynamic(() => import('./ProactiveCallWatcher'), { s
 
 // AI 主动发消息全局调度（定时/事件/自主/自然语言提醒四类触发，App 不打开也生效）：同样懒加载，挂载即后台运行
 const ProactiveMsgWatcher = dynamic(() => import('./ProactiveMsgWatcher'), { ssr: false });
+const MeituanOrderWatcher = dynamic(() => import('./MeituanOrderWatcher'), { ssr: false });
 
 // Task 68 音乐 App × AI 深度互动：AI 邀请一起听全局卡（任何 App/主屏幕都能弹出）+ 全局调度器
 const TogetherInviteLayer = dynamic(() => import('./TogetherInviteLayer'), { ssr: false });
@@ -387,6 +388,9 @@ export default function PhoneShell() {
 
         {/* AI 主动发消息全局调度：定时/事件/自主/自然语言提醒四类触发，到点 AI 主动给用户发消息（App 不打开也生效） */}
         <ProactiveMsgWatcher />
+
+        {/* 美团订单全局调度：订单状态机按时间戳推进（商家接单/骑手取餐/已送达），变化弹灵动岛通知（App 不打开也生效） */}
+        <MeituanOrderWatcher />
 
         {/* AI 邀请一起听全局卡（仿网易云邀请弹窗：双头像+耳机线+歌名，✕/✓ 接受拒绝；
             触发源 = 聊天里 AI 的 [邀请一起听] 标记 + 全局调度器按人设/听歌数据主动邀约；

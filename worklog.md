@@ -16170,3 +16170,26 @@ Stage Summary:
 - 交付文件：src/components/ios/HomeScreen.tsx（GRID_ROW_CAP 运行时行数上限+实测收敛 effect、页点带/Dock pointer-events 穿透、folderIconNode 按行居中分块、3 处纯函数切换+注释同步）
 - 关键决策：①行数上限用模块变量而非参数穿线（sanitize/pageHasRoom/hitTest 全链路一处收敛，单实例组件安全）②桌面分支直接恒 844 不做 DOM 实测（规避 fit scale 与子组件 layout effect 的时序竞争）③「图标底边不越带顶」而非「整 tile 不越带」——标签允许轻擦带顶，用户现有 4 行布局零重排 ④穿透只给容器，页点/搜索/Dock 图标保留 pointer-events-auto（交互零损失）
 - 验证：eslint 0、tsc 0、三档视口（360×520 矮窗 / 430×932 标准 / 1280×800 桌面缩放）十四项浏览器 E2E 全通过
+
+---
+Task ID: meituan-1
+Agent: 主协调者 (Z.ai Code)
+Task: 开发美团 App——QQ/微信一键登录、首页/商家/下单/订单全链路、微信/QQ 支付（零钱/银行卡/亲属卡）、亲属卡消费写入 AI 记忆、数据按账号隔离
+
+Work Log:
+- 架构决策：沿用项目「本地优先」铁律，美团全部数据存 IndexedDB kv（无 Prisma/服务端）；登录身份复用联系人系统（wx/qq 会话指针 → 机主/档案联系人 → 本地虚拟账号三级回退，一键登录永不失败）；uid=`wx:<contactId>`/`qq:<contactId>`/`ph:<手机号>`，购物车/订单/地址键全部带 uid 实现按账号隔离
+- 新建 src/lib/ios/meituan-data.ts：12 家商家（塔斯汀/蜜雪/杨国福/牛肉面/水果/超市/药房/尊宝/盖浇饭/火锅串串/早餐/华莱士）× 菜单分区 ~70 菜品 + 评价 + 满减标签 + 10 分类入口；菜品图用 image-search OSS 直链（12 组搜索逐张人工核对，milktea/breakfast 换备用图），FoodImg onError 回退 emoji 渐变占位
+- 新建 src/lib/ios/meituan-store.ts：会话持久化（localStorage mt-session）、地址（播种默认地址+默认选中）、购物车（单商家模式）、订单模型与时间戳确定性状态机（支付后 10s 接单/26s 取餐/75s 送达，15min 未付自动取消；重启按时间戳补推进）、满减/新客立减3/满45免配送计算、再来一单
+- 新建 src/lib/ios/meituan-pay.ts：复用现有支付——微信走 wxExecutePayment（零钱/银行卡/亲属卡 fcin-*，含跨月重置+多卡分摊），QQ 走 qq.executePayment；渠道列表带余额预检；亲属卡成功 → recordFcSpend(channel='美团')（消费流水+按赠卡人写记忆碎片 sourceTag fc-spend）+ appendWxChatMsg 赠卡人聊天通知行——AI 下轮聊天经记忆召回知道「用户在美团花钱了」，绝不触发 AI 回合（与微信内商户消费同管线）；钱包模块全部动态 import（美团是懒加载 chunk，全局 watcher 不背 1.4 万行聊天模块）
+- 新建 src/components/apps/meituan.tsx（~2200 行）：登录页（微信绿/QQ蓝一键+授权卡+手机号验证码 246810）、首页（黄头定位/分类/优惠卡/附近商家三排序）、搜索（发现+历史+商家菜品双结果）、商家页（头图信息卡+点菜左类右菜+评价+商家+购物车底栏起送校验）、结算（地址/明细/备注/提交）、支付确认弹层（自动预选渠道+12% 偶发失败→重试/更换 UI）、支付方式弹层（微信/QQ 分组渠道+亲属卡「额度不足」灰显拦截）、订单列表（6 Tab+去支付/取消/查看进度/再来一单）、订单详情（状态 hero+四步进度条+CSS 假地图骑手巡航+催一下/联系商家骑手+订单信息/费用明细+继续支付/取消退款/评价）、地址管理+增改、我的页（订单角标快捷入口+服务列表+切换账号/退出）
+- 新建 src/components/ios/MeituanOrderWatcher.tsx 挂 PhoneShell：全局 4s tick 推进状态机→变化弹灵动岛通知（NotifyApp 扩展 'meituan'+图标，点击 switchToApp+takeNotifyNavigation('meituan') 跳订单详情）+派发 mt-orders-changed
+- 注册：store.ts AppId+'meituan'、registry.tsx dynamic+APP_DEFS（image /icons/meituan.png）、HomeScreen PAGE3 页尾、island-notify NotifyApp/NOTIFY_APP_ICON、PhoneShell 挂 watcher
+- 微信侧增量改动：WxBill kind+'美团外卖'（两处 Record 图标映射+wxBillDisplayTitle 标题）、wxPatchBalance/wxPushBill/wxExecutePayment kind 联合类型+美团外卖、recordFcSpend 加可选 channel（缺省'微信'零破坏，美团传'美团'——记忆句式「在美团里用你送的亲属卡支付了」）
+- 图标：AI 生成黄底白袋鼠 512px，裁边后入 public/icons/meituan.png
+- E2E（agent-browser 430×932）：QQ一键→授权卡→首页 ✓；重启后登录态保持直达首页 ✓；蜜雪加购→结算（14.40-5 优惠+1.50 配送=10.90 数学正确）→提交→微信零钱支付成功（播种 ¥50→扣后 39.10 账单可查）→详情待接单→13s 后全局 watcher 推进「骑手正在送货」+配送地图骑手巡航 ✓；灵动岛「美团外卖·商家已接单」通知弹出 ✓；亲属卡支付（播种 500 额度）→成功 toast「已用小雪支付」→探针五项验证：零钱未动/卡 used=28.4/消费流水/记忆碎片「在美团里…¥28.40」/赠卡人聊天 notice 行 全部落库 ✓；QQ 余额 1.03 不足→渠道标红拦截 toast ✓；支付失败页（重试/更换）✓；手机号登录→订单全空（账号隔离）✓；搜索奶茶→商家+菜品 ✓；取消订单→已取消 ✓；评价/商家 Tab ✓；修复三 bug：mtCheckoutCalc 误删 import、merchant.dishes→mtDishesOf、亲属卡 methodId 双 fcin- 前缀；补空购物车守卫（关支付弹层后空结算页）
+- 踩坑：HMR 改 lib 模块会整页重载回锁屏（每轮验证都要解锁→滑页→重开）；agent-browser eval 不 await Promise（探针用 window.__probe 轮询）；同帧两次 add() stale state 丢商品（改函数式更新 mutateCart）；沙箱后台进程会被杀（z-ai 资源任务改前台跑）；批量 parallel image-search 全挂（串行 stdout 重定向可行，-o 参数不落盘）
+
+Stage Summary:
+- 交付文件：新增 meituan.tsx / meituan-data.ts / meituan-store.ts / meituan-pay.ts / MeituanOrderWatcher.tsx / public/icons/meituan.png；改动 store.ts(AppId)、registry.tsx、HomeScreen.tsx(PAGE3)、island-notify.ts(NotifyApp)、PhoneShell.tsx(watcher)、wechat.tsx(账单 kind)、wechat-wallet.tsx(美团外卖 kind+recordFcSpend channel)
+- 关键决策：uid 键级账号隔离；支付 100% 复用 wx/qq 钱包现有扣款函数；亲属卡感知走 recordFcSpend 既有管线（channel 参数化）；订单状态机时间戳确定性（全局 watcher+App 内 tick 双通道）；钱包模块动态 import 防止拖慢全局启动
+- 验证：eslint 0（13 文件）、E2E 十二项全通过（登录/持久化/隔离/支付三渠道/亲属卡记忆链路五项落库/状态机/灵动岛/搜索/取消/再来一单）
